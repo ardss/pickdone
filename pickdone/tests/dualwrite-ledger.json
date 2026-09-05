@@ -1,0 +1,130 @@
+{
+  "renderer/js/components/DayRail.vue::dayRailCollapsed": {
+    "authority": "local-only",
+    "note": "DayRail折叠态UI偏好,无跨端同步义务"
+  },
+  "renderer/js/components/FeedbackModal.vue::feedbackPending": {
+    "authority": "local-only",
+    "note": "反馈弹窗待提交标记,单机运行时状态"
+  },
+  "renderer/js/components/Onboarding.vue::onboardingDone": {
+    "authority": "sqlite",
+    "note": "首启向导完成标记;DB由markDoneInDb落meta,LS为免重放缓存"
+  },
+  "renderer/js/components/SettingsModal.vue::settingsTab": {
+    "authority": "local-only",
+    "note": "设置页签记忆,单机UI偏好"
+  },
+  "renderer/js/components/SideNav.vue::sidebarCollapsed": {
+    "authority": "local-only",
+    "note": "侧栏折叠UI偏好"
+  },
+  "renderer/js/components/WeatherWidget.vue::geoShape-v2-": {
+    "authority": "local-only",
+    "note": "城市轮廓离线缓存(c2d8320),带版本后缀,无同步语义"
+  },
+  "renderer/js/components/WeatherWidget.vue::weatherCache": {
+    "authority": "local-only",
+    "note": "天气API响应缓存,带at时间戳"
+  },
+  "renderer/js/demo-data.js::demoSeedV3": {
+    "authority": "local-only",
+    "note": "5175演示数据注册表(仅调试宿主),seed/purge幂等用"
+  },
+  "renderer/js/demo-data.js::demoTomatoSeededV4": {
+    "authority": "local-only",
+    "note": "5175演示番茄灌点标记V4(仅调试宿主;seed/purge幂等用,V3改名升级)"
+  },
+  "renderer/js/i18n/index.js::appLocale": {
+    "authority": "local-only",
+    "note": "语言选择;显示层实时翻译,持久化偏好"
+  },
+  "renderer/js/store/auth.js::lastLoginRecord": {
+    "authority": "local-only",
+    "note": "上次登录账号提示,无DB通道"
+  },
+  "renderer/js/store/auth.js::user": {
+    "authority": "local-only",
+    "note": "登录用户缓存(离线单机产品,无远端);genTaskId依赖其userId"
+  },
+  "renderer/js/store/category.js::categoryState": {
+    "authority": "sqlite",
+    "note": "分类;权威=SQLite categories表(init从getAllCategories回填),LS为缓存/灾备(category.js:37)"
+  },
+  "renderer/js/store/habits.js::habitsState": {
+    "authority": "sqlite",
+    "note": "习惯+打卡;权威=meta habitsState(initFromDb),LS为同步回退;双写persist()统一出口"
+  },
+  "renderer/js/store/repeatSettings.js::repeatSettingsV2State": {
+    "authority": "local-only",
+    "note": "重复默认值偏好;无DB镜像,若需跨端收编须先建meta键"
+  },
+  "renderer/js/store/runtimeState.js::runtimeState": {
+    "authority": "local-only",
+    "note": "运行时状态(窗口/视图瞬时),重启即弃"
+  },
+  "renderer/js/store/settings.js::settingsMirrorAt": {
+    "authority": "sqlite",
+    "note": "settings镜像时间戳;伴随settingsState的meta镜像写入,用于漂移诊断"
+  },
+  "renderer/js/store/settings.js::settingsState": {
+    "authority": "sqlite",
+    "note": "设置;权威=config.json(IPC get-settings),LS为缓存+2s去抖镜像(settings.js:146),冲突时config反向覆盖"
+  },
+  "renderer/js/store/todo.js::recycleLastPurgeAt": {
+    "authority": "local-only",
+    "note": "回收站过期清理当日标记(防重复执行)"
+  },
+  "renderer/js/store/tomato.js::tomatoLastPhaseDone": {
+    "authority": "local-only",
+    "note": "相位完成防重放令牌(跨窗口tick协调),单会话生命周期"
+  },
+  "renderer/js/store/tomato.js::tomatoState": {
+    "authority": "sqlite",
+    "note": "番茄计时瞬态+偏好;账本(专注记录)权威=SQLite tomato_records 行表(2026-09-04根修),LS blob 已剔除记录只存计时瞬态,跨窗口同步层"
+  },
+  "renderer/js/store/tomato.js::tomatoSyncPing": {
+    "authority": "local-only",
+    "note": "跨窗口同步ping(同源storage事件),单会话生命周期"
+  },
+  "renderer/js/utils/core.js::#key": {
+    "authority": "local-only",
+    "note": "safeSet包装函数定义本体(透传key),非独立数据键;全部经safeSet的写点各自登记"
+  },
+  "renderer/js/utils/core.js::user": {
+    "authority": "local-only",
+    "note": "safeSet(LS_USER)包装调用点;auth.js::user 已登记,此为同文件工具函数透传"
+  },
+  "renderer/js/utils/leftovers.js::leftoverAskDate": {
+    "authority": "local-only",
+    "note": "昨日剩余弹窗当日已问标记(防重弹),当日失效"
+  },
+  "renderer/js/utils/onboardingTours.js::onboardingToursSeen": {
+    "authority": "local-only",
+    "note": "微引导已看标记;config侧另有持久化副本则以其为准,此处为展示层去抖"
+  },
+  "renderer/js/utils/tomatoEstimate.js::tomatoEstimateState": {
+    "authority": "sqlite",
+    "note": "预计番茄估算;权威=meta tomatoEstimateState(CLI setEstimate 同键同账),LS为首屏缓存;2026-09-03 补 initFromDb 时间戳回填根治 CLI 写入被 LS 反吞"
+  },
+  "renderer/js/utils/tomatoEstimate.js::tomatoEstimateStateAt": {
+    "authority": "sqlite",
+    "note": "估算时间戳(meta 同名At键);渲染端与 CLI 共用的谁新用谁判据,与 tomatoEstimateState 成对写"
+  },
+  "renderer/js/views/CalendarView.vue::mainCalendarView": {
+    "authority": "local-only",
+    "note": "日历月/周视图偏好"
+  },
+  "renderer/js/views/StatisticsView.vue::tlHoverGrid": {
+    "authority": "local-only",
+    "note": "24h时间轴悬停网格开关偏好"
+  },
+  "renderer/js/views/TodayView.vue::todayViewMode": {
+    "authority": "local-only",
+    "note": "今日页视图模式偏好"
+  },
+  "renderer/js/utils/dayPlans.js::dayPlanState": {
+    "authority": "sqlite",
+    "note": "排程芯片根修(2026-09-03):唯一权威=SQLite plan_chips 行;LS 仅一次性兜底导入后删除,永不回写"
+  }
+}

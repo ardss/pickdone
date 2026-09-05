@@ -1,0 +1,114 @@
+// i18n shard (Batch X): zh source chunk - do not edit values here for EN; see i18n/README.md
+export default {
+  "statsD": {
+    "WinControls": {
+      "minimize": "Minimize",
+      "maximize": "Maximize",
+      "restore": "Restore",
+      "close": "Close"
+    },
+    "WeatherWidget": {
+      "wmo0": "Clear",
+      "wmo1": "Mostly clear",
+      "wmo2": "Partly cloudy",
+      "wmo3": "Overcast",
+      "wmo45": "Fog",
+      "wmo48": "Rime fog",
+      "wmo51": "Light drizzle",
+      "wmo53": "Drizzle",
+      "wmo61": "Light rain",
+      "wmo65": "Heavy rain",
+      "wmo71": "Light snow",
+      "wmo75": "Heavy snow",
+      "wmo82": "Violent showers",
+      "wmo95": "Thunderstorm",
+      "wmo96": "Thunderstorm with hail",
+      "wmo99": "Severe thunderstorm",
+      "fetchFailed": "Failed to fetch weather",
+      "fallbackCity": "Beijing",
+      "refresh": "Refresh",
+      "refreshAria": "Refresh weather"
+    },
+    "TomatoPanel": {
+      "phaseIdle": "Ready",
+      "todayRecords": "Today's records",
+      "countN": "{n}",
+      "freeFocus": "Free focus",
+      "minutesN": "{n} min"
+    },
+    "TomatoFocusRecord": {
+      "abandonedLabel": "Abandoned",
+      "abandonReasonLabel": "Abandon reason: ",
+      "close": "Close",
+      "prevDay": "Previous day",
+      "nextDay": "Next day",
+      "todaySuffix": " · Today",
+      "yesterdaySuffix": " · Yesterday",
+      "focusLegend": "Focus",
+      "idleLegend": "Idle",
+      "restBadge": "Rest {n}m",
+      "restDurationLabel": "Rest duration: ",
+      "hoursMinutes": "{h} h {m} min",
+      "minutesOnly": "{m} min",
+      "delete": "Delete",
+      "cancel": "Cancel",
+      "addTitle": "Add Record",
+      "startTime": "Start time",
+      "confirm": "OK"
+    },
+    "QuickAdd": {
+      "ariaLabel": "Quick add task",
+      "clearDateAria": "Clear date {d}",
+      "selectDate": "Pick a date",
+      "scheduledAt": ", scheduled for ",
+      "today": "today"
+    },
+    "DayDateStrip": {
+      "wd0": "Sun",
+      "wd1": "Mon",
+      "wd2": "Tue",
+      "wd3": "Wed",
+      "wd4": "Thu",
+      "wd5": "Fri",
+      "wd6": "Sat",
+      "todaySuffix": " · Today",
+      "today": "Today",
+      "backTodayTitle": "Back to today",
+      "selectDate": "Pick a date"
+    },
+    "RepeatModal": {
+      "close": "Close",
+      "type": "Type",
+      "byDay": "Daily",
+      "byWeek": "Weekly",
+      "byMonth": "Monthly",
+      "byYear": "Yearly",
+      "interval": "Interval",
+      "unitDay": "day(s)",
+      "unitWeek": "week(s)",
+      "unitMonth": "month(s)",
+      "count": "Count",
+      "selectDates": "Select dates",
+      "pickFixedDate": "Pick a fixed date",
+      "gregorian": "(Gregorian)",
+      "lunar": "Lunar (yearly)", "lunarMonthN": "Lunar month {m}", "lunarDayN": "Day {d}",
+      "lunarSkipHint": "Years without that lunar day (e.g. no 30th) are skipped",
+      "skipHolidays": "Skip statutory holidays",
+      "skipWeekends": "Skip weekends",
+      "cancel": "Cancel",
+      "wd1": "Mon",
+      "wd2": "Tue",
+      "wd3": "Wed",
+      "wd4": "Thu",
+      "wd5": "Fri",
+      "wd6": "Sat",
+      "wd7": "Sun"
+    },
+    "RepeatDeleteModal": {
+      "title": "Delete Repeating Task",
+      "close": "Close",
+      "cancel": "Cancel",
+      "delete": "Delete"
+    }
+  }
+}

@@ -1,0 +1,71 @@
+node_modules/
+*.log
+tmp/
+.tmp/
+browser-dev/
+dev-tools/
+# analysis/ 含已解包的原版资源，不入公开仓库
+analysis/
+sop/
+
+# ---- 目录契约（详见 docs/开发规范.md）----
+# analysis/ = 一切不入库的逆向/竞品/内部审查；docs/ = 入库文档；sop/ = 内部流程
+docs/PRD-*.md
+docs/竞品*.md
+docs/audits/
+docs/宣传/
+
+# 临时脚本/产物统一模式：一次性探针放 pickdone 根或 tmp/，禁止入库
+pickdone/.tmp-*
+pickdone/*-probe.mjs
+pickdone/recover-*.cjs
+pickdone/recovered-keys.json
+pickdone/find-*.cjs
+pickdone/fix-*.cjs
+pickdone/scan-*.cjs
+pickdone/patch-migrate.cjs
+pickdone/guard-init.cjs
+pickdone/missing-keys.txt
+pickdone/mk-*.txt
+pickdone/测试报告-*.md
+# 测试截图产物（结构守卫会随时重生成）
+pickdone/tests/.artifacts/
+
+# 调试/一次性产物（2026-08-31 误入库清理）
+pickdone/.artifacts-csschk/
+pickdone/ua_smoke_merge.png
+pickdone/nbs_test.png
+pickdone/scripts/_*.cjs
+pickdone/scripts/_*.mjs
+pickdone/tests/.artifacts/
+
+# 内部素材收集（不入库）
+docs/资源收集/
+pickdone/.account-shot.png
+pickdone/tests/_dbg-*
+tests/*.png
+# pickdone/.dev-data/ 已由 pickdone/.gitignore 的 .dev-data/ 覆盖
+
+.accounts/
+.cdp-profile/
+.playwright-mcp/
+/*.png
+.zcode/
+.agents/
+.claude/
+
+# 根目录无依赖，npm 会生成空 lock；不入库
+/package-lock.json
+skills-lock.json
+
+# 宣发大媒体不入公开仓（本地保留，Release/官网另行挂载）
+docs/media/promo-video*.mp4
+docs/宣传/video-demo/
+tools/promo-remotion/public/*.mp3
+
+# ---- 宣发内部资产（2026-09-03 大扫除:策略/流水线/大媒体不入公开仓,本地在 analysis/宣发/）----
+tools/promo-remotion/
+scripts/promo-media/
+docs/media/promo/
+docs/media/xhs-cover.png
+docs/官网/

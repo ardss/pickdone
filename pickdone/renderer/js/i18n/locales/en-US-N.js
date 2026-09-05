@@ -1,0 +1,43 @@
+/** i18n shard N: first-run onboarding wizard (OnboardingWizard) */
+export default {
+  onboarding: {
+    welcomeTitle: 'Welcome to PickDone',
+    welcomeSub: 'Three quick settings to get started',
+    stepLang: 'Language',
+    stepTheme: 'Color Mode',
+    stepCats: 'Default Lists',
+    langSub: 'Text in the app will use this language. You can change it later in Settings.',
+    themeSub: 'Choose how the app looks',
+    themeLight: 'Light',
+    themeDark: 'Dark',
+    themeSystem: 'Follow System',
+    catsSub: 'Three commonly used lists are pre-created. Rename or remove them anytime in the sidebar.',
+    catsKeep: 'Keep default lists',
+    catsSkip: 'Start empty',
+    catWork: 'Work',
+    catStudy: 'Study',
+    catLife: 'Life',
+    prev: 'Back',
+    next: 'Next',
+    done: 'Get Started',
+    skip: 'Skip Setup'
+  },
+  update: {
+    label: 'Software Update',
+    current: 'Current Version',
+    check: 'Check for Updates',
+    checkNow: 'Check Now',
+    downloading: 'Downloading update…',
+    restartNow: 'Restart to Update',
+    upToDate: 'You are on the latest version',
+    failed: 'Update check failed. Please try again later.',
+    devEnv: 'In-app updates are unavailable in dev/portable mode. Download from GitHub Releases.',
+    readyToast: 'New version downloaded. It will be installed the next time you quit PickDone.',
+    readyBadge: 'Update ready',
+    available: 'New version available',
+    downloadNow: 'Download Now',
+    autoDownload: 'Download updates automatically',
+    openReleases: 'Open Download Page',
+    switchedToEn: 'Language switched to English'
+  }
+}

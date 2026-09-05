@@ -1,0 +1,47 @@
+# 依赖
+node_modules/
+browser-dev/node_modules/
+
+# 构建产物
+dist/
+
+# 日志与临时文件
+*.log
+*.tmp
+tests/.last-matrix.json
+
+# 一次性脚本与备份
+patch-*.cjs
+assets/media.bak/
+*.plain-bak
+dev-tools/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+tests/shot-*.png
+
+# 开发隔离数据目录（app:dev / TODO_USER_DATA_DIR）
+.dev-data/
+
+# pickdone-cli npm 包:发布形态由 build-package.mjs 生成,仓库内只留骨架源码
+cli-package/cli/
+cli-package/src/
+cli-package/node_modules/
+pickdone-backups/
+
+# 测试运行产物(每次运行重新生成,勿追踪)
+tests/.artifacts/
+
+# 本会话验证用打包输出(宿主进程索引器锁文件,会话结束即可删)
+dist-verify/
+dist-final-check/
+
+# Vite 构建产物(打包时由 build:renderer 生成)
+renderer-dist/
+dist-installer/
+
+# tooling caches (2026-09-06 check:all speedup)
+.eslintcache
+*.tsbuildinfo
+tests/.artifacts/*.log

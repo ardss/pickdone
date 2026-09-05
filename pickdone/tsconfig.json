@@ -1,0 +1,37 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "noEmit": true,
+    "allowJs": true,
+    "checkJs": false,
+    "strict": false,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "types": [
+      "node"
+    ]
+  },
+  "include": [
+    "renderer/js/**/*.vue",
+    "renderer/js/**/*.js",
+    "renderer/js/**/*.ts",
+    "vite.config.mjs",
+    "scripts/app-dev.mjs"
+  ],
+  "exclude": [
+    "renderer/js/vue-shim.js",
+    "renderer/dist",
+    "renderer-dist",
+    "node_modules",
+    "browser-dev"
+  ]
+}

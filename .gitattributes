@@ -1,0 +1,14 @@
+# 换行归一：仓库内一律 LF，工作区按平台；二进制明确标记防误改
+* text=auto
+*.sh text eol=lf
+*.py text eol=lf
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.mp3 binary
+*.ogg binary
+*.wav binary
+*.db binary
+*.exe binary

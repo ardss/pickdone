@@ -1,0 +1,88 @@
+# Release pipeline: v* tag push -> version consistency check -> full gates (check:all, same level as CI)
+# -> electron-builder build -> live packaged verification (verify:packaged) -> upload to a GitHub **Draft** Release.
+# Audit decision (2026-09-01): release gates must not be weaker than CI — previously only check ran, so bad code could bypass the full gates via a tag.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    permissions:
+      contents: write # 创建 Release 与上传产物
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: pickdone/package-lock.json
+
+      - name: Cache Electron binaries
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/AppData/Local/electron/Cache
+            ~/AppData/Local/electron-builder/Cache
+          key: electron-${{ runner.os }}-${{ hashFiles('pickdone/package-lock.json') }}
+
+      - name: Verify tag matches package.json version
+        shell: bash
+        run: |
+          V=$(node -p "require('./pickdone/package.json').version")
+          if [ "v$V" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME != package.json version v$V"; exit 1
+          fi
+
+      - name: Install
+        working-directory: pickdone
+        run: npm ci
+
+      - name: Check all gates (must be >= CI level; a tag must not bypass gates)
+        working-directory: pickdone
+        run: npm run check:all
+
+      - name: Clean dist (verify must never run against a stale or mixed build)
+        working-directory: pickdone
+        shell: bash
+        run: rm -rf dist
+
+      - name: Build & publish (draft)
+        working-directory: pickdone
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --win nsis portable --publish always
+
+      - name: Verify packaged artifact (static: asar/resources/skill/cmd)
+        working-directory: pickdone
+        run: node scripts/verify-packaged.cjs
+
+      # Live boot: the exe-instant-exit P0 class (asar missing root package.json, 2026-09-03) is
+      # invisible to static checks — prove the packaged app actually starts and logs readiness.
+      - name: Live-boot packaged exe
+        working-directory: pickdone
+        shell: pwsh
+        run: |
+          $exe = (Get-Item 'dist\win-unpacked\*.exe')[0].FullName
+          $env:TODO_USER_DATA_DIR = "$env:RUNNER_TEMP\boot-ud"
+          $p = Start-Process -FilePath $exe -PassThru
+          Start-Sleep -Seconds 15
+          if ($p.HasExited) { Write-Error "packaged exe exited immediately (code $($p.ExitCode))"; exit 1 }
+          $log = Join-Path $env:RUNNER_TEMP 'boot-ud\logs\main.log'
+          if (-not (Test-Path $log)) { Write-Error 'no main.log written — app never reached ready'; exit 1 }
+          Write-Host "boot OK, log lines: $((Get-Content $log).Count)"
+          Stop-Process -Id $p.Id -Force
+
+      - name: Generate SHA256 checksums & attach to draft release
+        working-directory: pickdone
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          cd dist
+          sha256sum *.exe latest.yml > SHA256SUMS.txt
+          gh release upload "$GITHUB_REF_NAME" SHA256SUMS.txt --clobber
