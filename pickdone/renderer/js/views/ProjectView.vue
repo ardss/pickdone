@@ -26,7 +26,7 @@
         <span>{{ $t('statsB.ProjectView.tasks', { done: stats.doneCount, total: stats.total }) }}</span>
         <span :title="$t('statsB.ProjectView.focusTip')">{{ $t('statsB.ProjectView.focusMin', { n: stats.focusMinutes }) }}</span>
         <span v-if="stats.lastActivity">{{ $t('statsB.ProjectView.lastActive', { d: fmtDate(stats.lastActivity) }) }}</span>
-        <span class="proj-head__trend" :title="$t('statsB.ProjectView.trendTip', { list: trend7.map(d => d.label + ' ' + d.n).join($t('statsI.ProjectView.listSep')) })">
+        <span v-if="trend7.some(d => d.n > 0)" class="proj-head__trend" :title="$t('statsB.ProjectView.trendTip', { list: trend7.map(d => d.label + ' ' + d.n).join($t('statsI.ProjectView.listSep')) })">
           <i v-for="(d, i) in trend7" :key="i" class="proj-trend-bar"
              :style="{height: Math.max(2, Math.min(14, d.n * 3)) + 'px'}" :data-label="d.label"></i>
         </span>

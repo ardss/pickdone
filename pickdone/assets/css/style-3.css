@@ -1566,11 +1566,11 @@
 .proj-ms-row:hover { border-color: var(--brand); box-shadow: 0 2px 10px rgba(17, 121, 121, .08); }
 .proj-ms-row:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 .proj-ms-row--soon { background: linear-gradient(90deg, rgba(230, 162, 60, .08), transparent 55%); }
-.ms-ring { flex-shrink: 0; transform: rotate(-90deg); }
+.ms-ring { flex-shrink: 0; }
 .ms-ring__track { stroke: var(--track-bg, #eef0f2); stroke-width: 3.5; }
-.ms-ring__bar { stroke: var(--brand); stroke-width: 3.5; stroke-linecap: round; transition: stroke-dashoffset var(--dur-slow) ease; }
+.ms-ring__bar { stroke: var(--brand); stroke-width: 3.5; stroke-linecap: round; transition: stroke-dashoffset var(--dur-slow) ease; transform: rotate(-90deg); transform-origin: 18px 18px; }
 .ms-ring__bar--done { stroke: var(--ok, #2e9e44); }
-.ms-ring__num { font-size: var(--fs-2xs); font-weight: 600; fill: var(--text-2); transform: rotate(90deg) translate(0, -18px); transform-origin: 18px 18px; }
+.ms-ring__num { font-size: var(--fs-2xs); font-weight: 600; fill: var(--text-2); }
 .proj-ms-row__main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .proj-ms-row__line { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
 .proj-ms-row__line--sub { font-size: var(--fs-xs); color: var(--text-3); }
