@@ -148,18 +148,7 @@
 .el-input__wrapper.is-focus { box-shadow: 0 0 0 1px var(--brand, #0c8172) inset !important; }
 
 .settings-modal-body { color: var(--text-1); }
-.tab-panel { padding: var(--space-5) var(--space-4); }
-/* 分组卡片:每张卡一个设置组(Notion/Linear 式),替代长列表堆叠 */
-.tab-panel .form {
-  background: var(--panel, #fff);
-  border: 1px solid var(--line-strong, #e4e7ed);
-  border-radius: var(--radius-lg, 10px);
-  padding: 6px 18px 14px;
-  margin-bottom: 16px;
-}
 .form { max-width: 100%; }
-/* 分区标题：节奏走 spacing token（16/12），去掉与 .hr 的双重叠加 */
-.tab-panel .form-label { margin: var(--space-4) 0 var(--space-3); color: var(--brand); font-weight: 500; font-size: var(--fs-base, 14px); }
 /* 控件宽度档位（设置页统一三档，替代原 8 档内联 px） */
 .ctl-sm { width: 110px; }
 .ctl-md { width: 160px; }
@@ -491,15 +480,6 @@ html.widget-preview .tomato--expand-menu { width: 240px; height: 320px; }
 .ob-foot__main { display: flex; gap: var(--space-2, 8px); }
 .ob-link { border: 0; background: none; color: var(--text-3); font-size: var(--fs-sm); cursor: pointer; padding: 6px 4px; }
 .ob-link:hover { color: var(--text-2); text-decoration: underline; }
-.ob-btn {
-  padding: 8px 20px; border: 1px solid var(--line-strong); border-radius: var(--radius-md);
-  background: transparent; color: var(--text-1); font-size: var(--fs-md); cursor: pointer;
-  transition: border-color var(--t-fast), background var(--t-fast), color var(--t-fast);
-}
-.ob-btn:hover { border-color: var(--brand); color: var(--brand); }
-.ob-btn--primary:hover { color: #fff; } /* 实心主按钮白字不被 hover 变色改写(hover 对比度门禁) */
-.ob-btn--primary { background: #0b8276; border-color: #0b8276; color: #fff; } /* 白字4.7:1(axe serious),品牌观感同实心主按钮 */
-.ob-btn--primary:hover { background: var(--brand-hover); color: #fff; }
 
 /* 首旅旅程·拖拽阶段横幅(无遮罩:拖拽需要列表和时间轴两端都可交互) */
 .tour-journey-banner {
@@ -537,19 +517,7 @@ html.widget-preview .tomato--expand-menu { width: 240px; height: 320px; }
   background: url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 14%22><rect x=%221%22 y=%221%22 width=%2214%22 height=%229%22 rx=%221.5%22 fill=%22none%22 stroke=%22%23ccc%22 stroke-width=%221.5%22/><rect x=%225%22 y=%2211%22 width=%226%22 height=%222%22 rx=%221%22 fill=%22%23ccc%22/></svg>') no-repeat 50%;
   background-size: 14px 12px;
 }
-
-/* 快捷键捕获按钮 */
-.sc-capture {
-  min-width: 120px; height: 28px; border: 1px solid var(--line, #ddd); border-radius: var(--radius-sm);
-  background: var(--gray-bg, #f5f5f5); color: var(--text-1); cursor: pointer;
-  display: inline-flex; align-items: center; justify-content: center;
-  font-size: var(--fs-sm); transition: border-color .15s, background .15s;
-}
-.sc-capture:hover { border-color: var(--brand, #008d8e); }
-.sc-capture.listening { border-color: var(--brand, #008d8e); background: var(--brand-light, #e7f7f7); color: var(--brand); }
-.sc-capture.listening .sc-kbd { animation: scBlink 1s infinite; }
 @keyframes scBlink { 50% { opacity: .4 } }
-.sc-capture.conflict { border-color: #f56c6c; }
 .sc-kbd { font-family: monospace; font-size: var(--fs-sm); letter-spacing: 1px; }
 
 /* ============ 设置搜索（跨页签过滤） ============ */

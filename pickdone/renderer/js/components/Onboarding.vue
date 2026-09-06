@@ -128,3 +128,17 @@ export default {
   beforeUnmount () { /* No persistent listeners */ }
 }
 </script>
+<style>
+/* ===== 迁移自全局沉积文件(scripts/css-move.mjs):以下规则随组件生灭 ===== */
+.ob-btn {
+  padding: 8px 20px; border: 1px solid var(--line-strong); border-radius: var(--radius-md);
+  background: transparent; color: var(--text-1); font-size: var(--fs-md); cursor: pointer;
+  transition: border-color var(--t-fast), background var(--t-fast), color var(--t-fast);
+}
+.ob-btn:hover { border-color: var(--brand); color: var(--brand); }
+.ob-btn--primary:hover { color: #fff; }
+/* 实心主按钮白字不被 hover 变色改写(hover 对比度门禁) */
+.ob-btn--primary { background: #0b8276; border-color: #0b8276; color: #fff; }
+/* 白字4.7:1(axe serious),品牌观感同实心主按钮 */
+.ob-btn--primary:hover { background: var(--brand-hover); color: #fff; }
+</style>

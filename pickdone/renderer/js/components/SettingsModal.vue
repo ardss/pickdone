@@ -1011,4 +1011,39 @@ html[data-theme="dark"] .form-item__control select {
 html[data-theme="dark"] .form-item__tip { color: var(--text-3); }
 /* 页签底部分隔线：亮色硬编码 #f3f3f3 在暗色下是刺眼亮白线 */
 html[data-theme="dark"] .modal--settings .setting_tabs .el-tabs__header { border-bottom-color: var(--line); }
+
+/* ===== 迁移自全局沉积文件(scripts/css-move.mjs):以下规则随组件生灭 ===== */
+.tab-panel { padding: var(--space-5) var(--space-4); }
+/* 分组卡片:每张卡一个设置组(Notion/Linear 式),替代长列表堆叠 */
+.tab-panel .form {
+  background: var(--panel, #fff);
+  border: 1px solid var(--line-strong, #e4e7ed);
+  border-radius: var(--radius-lg, 10px);
+  padding: 6px 18px 14px;
+  margin-bottom: 16px;
+}
+/* 分区标题：节奏走 spacing token（16/12），去掉与 .hr 的双重叠加 */
+.tab-panel .form-label { margin: var(--space-4) 0 var(--space-3); color: var(--brand); font-weight: 500; font-size: var(--fs-base, 14px); }
+/* 快捷键捕获按钮 */
+.sc-capture {
+  min-width: 120px; height: 28px; border: 1px solid var(--line, #ddd); border-radius: var(--radius-sm);
+  background: var(--gray-bg, #f5f5f5); color: var(--text-1); cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: var(--fs-sm); transition: border-color .15s, background .15s;
+}
+.sc-capture:hover { border-color: var(--brand, #008d8e); }
+.sc-capture.listening { border-color: var(--brand, #008d8e); background: var(--brand-light, #e7f7f7); color: var(--brand); }
+.sc-capture.listening .sc-kbd { animation: scBlink 1s infinite; }
+.sc-capture.conflict { border-color: #f56c6c; }
+html[data-theme="dark"] .el-cascader-node { color: var(--text-2); }
+html[data-theme="dark"] .el-cascader-node:hover,
+html[data-theme="dark"] .el-cascader-node:focus { background: #2a3038; }
+html[data-theme="dark"] .el-cascader-node.is-active { color: var(--brand); }
+html[data-theme="dark"] .el-cascader-node.in-active-path { color: var(--text-1); }
+html[data-theme="dark"] .el-cascader-node:hover, html[data-theme="dark"] .el-cascader-node:focus { background: var(--el-fill-color-light); }
+html[data-theme="dark"] .el-cascader-node.is-active { color: var(--el-color-primary); }
+/* 关闭按钮：化石的灰圆点 background-image 已删——它盖住 ::after 的 ✕，导致静止态只见圆点不见叉；
+   ✕ 文字色经 html[data-theme="dark"] .modal__close 已适配主题，悬停仅加底色 */
+/* 分组小标题：品牌青暗色提亮 */
+html[data-theme="dark"] .tab-panel .form-label { color: #35c2ae; }
 </style>

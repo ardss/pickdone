@@ -884,4 +884,19 @@ html[data-theme="dark"] .hm-tip--below::after { border-top-color: transparent; b
 html[data-theme="dark"] .review-card { background: var(--panel); border-color: var(--line); }
 html[data-theme="dark"] .review-card::before { opacity: .8; }
 html[data-theme="dark"] .review-card { background: var(--panel); }
+
+/* ===== 迁移自全局沉积文件(scripts/css-move.mjs):以下规则随组件生灭 ===== */
+.stat-hero__headline {
+  margin-top: 14px; padding: 12px 16px;
+  background: linear-gradient(135deg, var(--brand-light, #eef1fe), transparent);
+  border-left: 3px solid var(--brand); border-radius: 0 8px 8px 0;
+  font-size: var(--fs-lg); font-weight: 600; line-height: 1.6; color: var(--text-1);
+}
+/* 复盘卡 headline */
+.stat-hero__headline {
+  padding: 12px 16px; margin-bottom: var(--space-3);
+  background: linear-gradient(135deg, var(--brand-light, #eef1fe), transparent);
+  border-left: 3px solid var(--brand); border-radius: 0 8px 8px 0;
+  font-size: var(--fs-lg); font-weight: 600; line-height: 1.6; color: var(--text-1);
+}
 </style>
