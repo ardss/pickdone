@@ -57,7 +57,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx electron-builder --win nsis portable --publish always
 
-      - name: Verify packaged artifact (static: asar/resources/skill/cmd)
+      - name: Verify packaged artifact (static asar/resources/skill/cmd)
         working-directory: pickdone
         run: node scripts/verify-packaged.cjs
 
