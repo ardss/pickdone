@@ -69,6 +69,28 @@
         </div>
       </div>
 
+      <!-- 任务依赖(实验性,developerMode 门控):前置任务多选,FS 语义——前置全部完成本任务才 ready -->
+      <div v-if="devMode" class="ep-cat-wrap">
+        <div class="ep-row ep-cat-row" role="button" tabindex="0" :aria-expanded="depOpen ? 'true' : 'false'"
+             @click="depOpen=!depOpen" @keydown.enter.prevent="depOpen=!depOpen">
+          <span class="ep-field-label ep-field-ico" :title="$t('statsE.EditPanel.depsLabel')"><app-icon name="link" :size="13"/></span>
+          <span class="ep-cat-name is-placeholder">$t('statsE.EditPanel.depsN', { n: depPreds.length })</span>
+          <span class="ml-auto"></span>
+          <span class="ep-row-arrow" :class="{on: depOpen}">▾</span>
+        </div>
+        <div v-if="depOpen" v-click-outside="() => depOpen = false" class="ep-cat-pop" role="listbox">
+          <div v-for="(name, i) in depPredNames" :key="depPreds[i]" class="ep-cat-opt" role="option">
+            <span class="ep-cat-dot" style="background:var(--brand)"></span> {{ name }}
+            <span class="ml-auto"></span>
+            <button class="close-x" :aria-label="$t('statsE.EditPanel.depsRemove')" @click.stop="rmPred(depPreds[i])"></button>
+          </div>
+          <div v-for="c in depCandidates" :key="c.taskId" class="ep-cat-opt" role="option"
+               tabindex="0" @click="addPred(c.taskId)" @keydown.enter.prevent="addPred(c.taskId)">
+            <span class="ep-cat-dot" style="background:var(--text-4)"></span> + {{ c.taskContent }}
+          </div>
+        </div>
+      </div>
+
       <div class="ep-row ep-tags-row">
         <span class="ep-field-label ep-field-ico" :title="$t('statsE.EditPanel.tagsPlaceholder')"><b class="ep-hash">#</b></span>
         <span v-for="t in taskTags" :key="t" class="ep-tag-chip">
@@ -264,6 +286,7 @@ export default {
       saving: false,
       saveFailed: false,
       catOpen: false,
+      depOpen: false,
       tagInput: '',
       newSub: '',
       subList: [] as any,
@@ -279,6 +302,22 @@ export default {
   created () { this._dirtyFlags = {} },
   computed: {
     task () { return this.$store.state.todo.todoList.find(t => t.taskId === (this.e && this.e.taskId)) || null },
+    devMode () { return !!this.$store.state.settings.developerMode },
+    depPreds () { // parse predecessors of the task under edit
+      try { const a = JSON.parse((this.e && this.e.predecessors) || '[]'); return Array.isArray(a) ? a.filter(Boolean) : [] } catch { return [] }
+    },
+    depPredNames () {
+      const byId = {}
+      for (const t of this.$store.state.todo.todoList) byId[t.taskId] = t
+      return this.depPreds.map(id => (byId[id] && (byId[id].taskContent || byId[id].taskId)) || id)
+    },
+    depCandidates () { // undone tasks (excl. self & existing preds), first 8 by recency
+      const have = new Set(this.depPreds)
+      const self = this.e && this.e.taskId
+      return this.$store.state.todo.todoList
+        .filter(t => !t.delete && !t.complete && t.taskId !== self && !have.has(t.taskId) && t.taskContent)
+        .slice(0, 8)
+    },
     /* Pomodoro estimate/actual (ported from the refactor branch): the estimate is stored in tomatoEstimate, the actual is accumulated by attributing pomodoro records */
     tomatoEstimateN () { return getEstimate(this.e && this.e.taskId) },
     tomatoActual () {
@@ -419,6 +458,7 @@ export default {
       if (this._dirtyFlags.subtasks) all.subtasks = JSON.stringify(this.subList)
       if (this._dirtyFlags.imgs) all.image = JSON.stringify(this.imgList)
       if (this._dirtyFlags.files) all.files = JSON.stringify(this.fileList)
+      if (this._dirtyFlags.preds) all.predecessors = this.e.predecessors
       this._dirtyFlags = {}
       if (Object.keys(all).length) {
         this.$store.dispatch('todo/updateTodoFields', { taskId: e.taskId, patch: all }).catch(() => {})
@@ -599,6 +639,7 @@ export default {
           if (this._dirtyFlags.subtasks) all.subtasks = JSON.stringify(this.subList)
           if (this._dirtyFlags.imgs) all.image = JSON.stringify(this.imgList)
           if (this._dirtyFlags.files) all.files = JSON.stringify(this.fileList)
+          if (this._dirtyFlags.preds) all.predecessors = this.e.predecessors
           this._dirtyFlags = {}
           if (Object.keys(all).length) {
             await this.$store.dispatch('todo/updateTodoFields', { taskId, patch: all })
@@ -742,6 +783,16 @@ export default {
     estDelta (d) { setEstimate(this.e && this.e.taskId, getEstimate(this.e && this.e.taskId) + d) },
     chipCat (c) { this.fieldPatch('categoryId', c.categoryId) }, // reserved: category quick chips
     pickCat (id) { this.fieldPatch('categoryId', id); this.catOpen = false },
+    addPred (id) {
+      if (!id || this.depPreds.includes(id)) return
+      this.e.predecessors = JSON.stringify(this.depPreds.concat(id))
+      this.depOpen = false
+      this.markDirty('preds'); this.queueSave({})
+    },
+    rmPred (id) {
+      this.e.predecessors = JSON.stringify(this.depPreds.filter(x => x !== id))
+      this.markDirty('preds'); this.queueSave({})
+    },
     addTag () {
       const name = (this.tagInput || '').trim().replace(/^#+/, '')
       this.tagInput = ''

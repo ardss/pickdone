@@ -83,6 +83,8 @@ Write commands:
   edit   <taskId|keyword> [--content text] [--desc text] [--date value] [--reminder value] [--remind-offset "10,30"|none] [--remind-extra "D HH:mm,..."|none] [--category name] [--important 0|1] [--urgent 0|1] [--priority 0-3] [--difficulty 0-3] [--deadline date|none] [--estimate 0-20]
          --remind-offset: minutes BEFORE the main reminder (needs --reminder set); --remind-extra: extra absolute datetimes
   sort   <taskId|keyword> top|up|down|bottom|before <task2>|after <task2>   manual order (scoped to the task's own day; edit --date first to co-locate)
+  deps  <task> list|add|rm [predTask]   explicit dependency edges (FS semantics: task is ready when all predecessors are done)
+  ready [--project <name|id>]            undone tasks with all predecessors complete — "what can I do next"
   import <file.csv> [--format auto|ticktick|dida365|todoist] [--dry-run]
          [--category <name>] [--no-lists]      migrate from another app (list names become categories by default)
   delete <taskId|keyword>         move to recycle bin
@@ -190,7 +192,7 @@ async function main () {
   const opts = parseArgs(argv.slice(1))
   if (opts.help) { console.log(HELP); return }
 
-  const WRITE_CMDS = ['add', 'edit', 'done', 'undo', 'delete', 'restore', 'subtask', 'repeat', 'events'] // events 入列让 --dry-run 真预览(原为死分支:永远真跑)
+  const WRITE_CMDS = ['add', 'edit', 'done', 'undo', 'delete', 'restore', 'subtask', 'repeat', 'events', 'deps'] // events 入列让 --dry-run 真预览(原为死分支:永远真跑)
   const dry = !!opts['dry-run'] && WRITE_CMDS.includes(cmd)
   const emit = data => {
     if (opts.json) console.log(JSON.stringify({ ok: true, command: cmd, data }, null, 2))
@@ -440,7 +442,8 @@ async function main () {
         priority: opts.priority != null && opts.priority !== true ? opts.priority : undefined,
         important: opts.important != null && opts.important !== true ? opts.important : undefined,
         urgent: opts.urgent != null && opts.urgent !== true ? opts.urgent : undefined,
-        createTime: opts['created-at'] || null
+        createTime: opts['created-at'] || null,
+        after: opts.after != null && opts.after !== true ? [opts.after] : null
       })
       if (opts.estimate != null && opts.estimate !== true) lib.setEstimate(t.taskId, opts.estimate)
       const hints = [`get ${t.taskId} --json to verify`, `done ${t.taskId} to complete it`, 'list --json to read back']
@@ -450,6 +453,42 @@ async function main () {
         if (!opts.json) console.log('  ! no --date given: task went to the todo box (not on today list); run edit ' + t.taskId + ' --date today to schedule it')
       }
       return okMsg(t, hints)
+    }
+    case 'deps': {
+      // deps <task> list|add|rm [pred] — explicit dependency edges (FS: all preds done -> task ready)
+      const [target, verb, ...rest] = opts._
+      const cur = lib.getTask(target)
+      if (verb === 'list' || !verb) {
+        const ids = lib.parsePredecessors(cur.predecessors)
+        console.log('predecessors of [' + cur.taskContent + ']: ' + ids.length)
+        for (const id of ids) {
+          let p = null
+          try { p = lib.getTask(id) } catch { }
+          console.log('  ' + (p ? (p.complete ? '[x] ' : '[ ] ') : '[?] ') + (p ? p.taskContent : id) + (p ? '' : ' (missing)'))
+        }
+        return null
+      }
+      const pred = rest[0]
+      if (!pred) throw new lib.CliError('deps ' + verb + ' needs a predecessor task id/keyword', 'USAGE')
+      const pt = lib.getTask(pred)
+      const curIds = lib.parsePredecessors(cur.predecessors)
+      let next
+      if (verb === 'add') {
+        if (curIds.includes(pt.taskId)) return okMsg(cur, ['already a predecessor: ' + pt.taskContent])
+        next = curIds.concat(pt.taskId)
+      } else if (verb === 'rm') {
+        next = curIds.filter(x => x !== pt.taskId)
+      } else throw new lib.CliError('unknown deps verb: ' + verb + ' (use list|add|rm)', 'USAGE')
+      const out = lib.patchTodo(cur.taskId, { predecessors: next }, { action: 'deps-' + verb })
+      return okMsg(out, verb === 'add' ? 'pred set: ' + next.join(', ') : 'pred removed: ' + pt.taskContent)
+    }
+    case 'ready': {
+      // ready [--project <name|id>] — undone tasks whose predecessors are all complete (or none); the "what can I do next" read
+      const scope = opts.project != null && opts.project !== true ? lib.resolveCategory(opts.project) : null
+      const items = lib.listReady(scope)
+      console.log('ready: ' + items.length)
+      for (const t of items.slice(0, 50)) console.log('  ' + t.taskContent + ' (' + t.taskId + ')')
+      return null
     }
     case 'sort': {
       const [target, pos, ...rest] = opts._

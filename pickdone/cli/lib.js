@@ -369,7 +369,34 @@ function getProjectDeadline (categoryId) {
   return n
 }
 
-function addTodo ({ content, desc, date, reminder, category, difficulty, priority, important, urgent, repeatId = null, createTime = null }) {
+// ---- Task dependencies (mirror of renderer store/todo.js helpers; both writers bypass each other) ----
+function parsePredecessors (v) {
+  if (Array.isArray(v)) return v.filter(Boolean)
+  try { const a = JSON.parse(v || '[]'); return Array.isArray(a) ? a.filter(Boolean) : [] } catch { return [] }
+}
+function listActive (db) { return db.call('queryTodos', { deleted: 0 }) }
+function wouldCycle (db, taskId, newPreds) {
+  const byId = {}
+  for (const t of listActive(db)) byId[t.taskId] = t
+  byId[taskId] = Object.assign({}, byId[taskId] || { taskId }, { predecessors: JSON.stringify(newPreds) })
+  const done = {}; const visiting = {}
+  const walk = id => {
+    if (done[id]) return false
+    if (visiting[id]) return true
+    visiting[id] = true
+    const t = byId[id]
+    if (t) for (const p of parsePredecessors(t.predecessors)) { if (byId[p] && walk(p)) return true }
+    visiting[id] = false; done[id] = true
+    return false
+  }
+  return walk(taskId)
+}
+function normalizePreds (db, taskId, preds) {
+  const next = (Array.isArray(preds) ? preds : parsePredecessors(preds)).filter(pid => pid && pid !== taskId)
+  if (wouldCycle(db, taskId, next)) throw new CliError('dependency-cycle: this predecessor set closes a loop', 'DEP_CYCLE')
+  return next.length ? JSON.stringify(next) : null
+}
+function addTodo ({ content, desc, date, reminder, category, difficulty, priority, important, urgent, repeatId = null, createTime = null, after = null }) {
   if (!content || !String(content).trim()) throw new CliError('task content required', 'EMPTY_CONTENT')
   const db = open()
   const now = Date.now()
@@ -390,6 +417,7 @@ function addTodo ({ content, desc, date, reminder, category, difficulty, priorit
     important: important != null ? Number(important) : (Number(priority) === 3 ? 1 : 0),
     urgent: urgent != null ? Number(urgent) : 0,
     repeatId, subtasks: null, image: null, files: null,
+    predecessors: (after && after.length) ? JSON.stringify(after) : null,
     categoryId: resolveCategory(category) || 0,
     updateTime: now, syncTime: 0,
     taskContent: String(content).trim(),
@@ -400,12 +428,12 @@ function addTodo ({ content, desc, date, reminder, category, difficulty, priorit
     userId: guessUserId(), status: 'add', version: 0
   }
   db.call('upsert', t)
-  const after = db.call('getById', t.taskId)
-  audit.record({ action: 'add', targets: [t], changes: [{ after }] })
+  const rowAfter = db.call('getById', t.taskId)
+  audit.record({ action: 'add', targets: [t], changes: [{ after: rowAfter }] })
   // Tasks with an explicit time are auto-placed on the day timeline (user-finalized 2026-09-03): the reminder answers "when will you call me", the schedule chip answers "what should I do in this slot" — both are kept
   const mm = dateExplicitTime(date)
   if (mm) { try { planSet(t.taskId, mm) } catch { /* chip write failure must not block task creation */ } }
-  return after
+  return rowAfter
 }
 
 /** Whether the raw --date string carries an explicit time (tomorrow 12:00 / 2026-09-04 09:30); a bare date (tomorrow) returns null */
@@ -420,6 +448,7 @@ function patchTodo (input, patch, { action } = {}) {
   const t = resolveTask(input)
   // status follows this action's semantics: explicit delete/restore uses the patch's target state, other edits use update (aligned with the store)
   const act = patch.delete !== undefined ? (patch.delete ? 'delete' : 'update') : (t.delete ? 'delete' : 'update')
+  if (patch.predecessors !== undefined) patch.predecessors = normalizePreds(db, t.taskId, patch.predecessors)
   const merged = { ...t, ...patch, updateTime: Date.now(), status: act }
   if (patch.todoTime !== undefined) merged.dayStart = dayStartOf(patch.todoTime)
   db.call('upsert', merged)
@@ -1295,9 +1324,24 @@ async function importEvents (events, { onProgress = () => {} } = {}) {
   return { created, skipped, failed, total: events.length, hasRecord }
 }
 
+function getTask (input) { const t = resolveTask(input); if (!t) throw new CliError('task not found: ' + input, 'TASK_NOT_FOUND'); return t }
+// undone tasks whose predecessors are all complete (or none); optional categoryId scope. FS readiness read for humans and AI agents.
+function listReady (categoryId = null) {
+  const db = open()
+  const list = listActive(db)
+  const byId = {}
+  for (const t of list) byId[t.taskId] = t
+  return list.filter(t => {
+    if (t.complete) return false
+    if (categoryId != null && t.categoryId !== categoryId) return false
+    const preds = parsePredecessors(t.predecessors)
+    return preds.every(pid => { const p = byId[pid]; return !p || p.complete })
+  })
+}
 module.exports = {
   CliError, open, parseDate, dayStartOf, launchApp, userDataDir, hasIsolationEnv,
   liveTasks, recycleTasks, resolveTask, resolveCategory,
+  parsePredecessors, getTask, listReady,
   listTodos, getCategories, stats, overview,
   addTodo, patchTodo, toggleComplete, deleteTodo, restoreTodo, purgeRecycleBin, doctor, dateExplicitTime, chipsRemoveTask, chipsRestoreSnapshot,
   parseSubs, addSubtask, checkSubtask, removeSubtask,
