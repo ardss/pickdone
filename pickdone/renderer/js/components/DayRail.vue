@@ -701,3 +701,22 @@ export default {
 
 }
 </script>
+<style>
+/* ===== 迁移自全局沉积文件(scripts/css-move.mjs):以下规则随组件生灭 ===== */
+/* ============ 今日待办日期速选条（设计稿 todo-date-selector） ============ */
+/* 方案A(用户定稿):日期条通栏,右端挂视图切换(pd-view-seg 走 #append 插槽) */
+.today-v1 .day-strip { width: 100%; }
+.today-v1 .day-strip .pd-view-seg { margin-left: auto; }
+/* 窄窗(<920)下日期条内容超出行宽,允许换行让视图切换器落到第二行,否则第三个切换钮被主列右缘裁掉一半,真实点击落不进去(隔离冒烟实例 820px 宽实测) */
+.today-v1 .day-strip { flex-wrap: wrap; row-gap: 6px; }
+/* cal-today-btn 不入 ghost 范式:置灰/隐藏两版用户都读成"没有按钮",终版=恒常显(今天在视图时点击为无害no-op) */
+
+/* ===== 今日页空态居中:无安排的选中日,插画+文案在工具栏下的空牌区域垂直居中(用户定稿) ===== */
+/* min-height 链(非 height)保证长列表滚动行为不变;flex 链只在 :has(.empty-state) 时才产生居中效果 */
+.pd-view-page.today-v1 { min-height: 100%; display: flex; flex-direction: column; }
+.today-v1 .today-body { flex: 1; display: flex; align-items: stretch; }
+.today-v1 .today-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.today-v1 .today-list { flex: 1; display: flex; flex-direction: column; }
+.today-v1 .today-list .td-groups:has(.empty-state) { flex: 1; display: flex; flex-direction: column; justify-content: center; }
+.today-v1 .today-list .empty-state { padding: 0; }
+</style>

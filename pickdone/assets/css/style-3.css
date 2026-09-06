@@ -72,11 +72,6 @@
 .sn-upd-dot { position: absolute; top: 2px; right: 2px; width: 7px; height: 7px; border-radius: 50%;
   background: var(--danger-strong); box-shadow: 0 0 0 2px var(--panel, #fff); pointer-events: none; }
 
-/* 4. 通用按压反馈：所有可点按钮按下轻微缩放（搭配各自 transition） */
-.el-button, .row-btn, button.mini, .sn-ico-btn, .grp-toggle-btn { transition: transform var(--dur-fast); }
-
-.el-button:active, .row-btn:active, button.mini:active, .sn-ico-btn:active { transform: scale(.96); }
-
 /* 11. 待办 meta 徽章（日期/标签）hover 色过渡 */
 .td-meta .td-ico, .td-datetime, .sn-badge { transition: color var(--dur-fast), background-color var(--dur-fast); }
 
@@ -136,15 +131,6 @@
 .sn-sync.spinning { animation: sidebar-profile-spin .6s linear infinite; } /* 0.6s/圈，配合最短旋转 0.9s ≈ 1.5 圈 */
 @keyframes sidebar-profile-spin { to { transform: rotate(1turn); } }
 @keyframes mgr-preview-in { from { opacity: 0; transform: translateY(-4px); } }
-
-/* 日期选择浮层覆盖在日历按钮上（透明触发层）——
-   设计稿做法: .todo-options__item--datetime .mx-datepicker{
-     position:absolute;top:0;right:0;bottom:0;left:0;width:100%;opacity:0} */
-.qa-cal-picker {
-  position: absolute !important; top: 0; right: 0; z-index: 3;
-  width: 40px !important; max-width: 40px; height: 100%;
-  opacity: 0; overflow: hidden;
-}
 .qa-cal-picker .el-input__inner { height: 46px; line-height: 46px; cursor: default; }
 
 /* chip 给右侧按钮留位；✕ 清除 */
@@ -183,18 +169,6 @@
 .tg-head:hover { filter: brightness(.95); }
 .tg-head .arrow.open { transform: rotate(0deg); }
 .tg-head .arrow:not(.open) { transform: rotate(-90deg); }
-
-/* ==================== 5. EditPanel 右侧编辑栏 ==================== */
-/* 分类/日期 chip：设计稿 .todo-options__item[scoped]{padding:4px 12px;color:#595959;
-   font-size: var(--fs-sm);line-height:17px;background:#f5f4f5;border-radius:12.5px}
-   --active{color:#fff;background:var(--brand)}
-
-/* 分组页头部「全部展开/折叠」文字按钮（最近待办等分组视图共用） */
-.grp-toggle-btn {
-  display: inline-flex; align-items: center; gap: var(--space-1);
-  font-size: var(--fs-md); color: var(--text-3); cursor: pointer;
-  transition: color var(--dur-fast);
-}
 .grp-toggle-btn:hover { color: var(--brand); }
 
 /* —— 4. 主列表条目：设计稿 .todo-list-item[scoped]
@@ -216,14 +190,6 @@
 /* 过滤器：侧边栏空态 + 视图头条件摘要 */
 .sn-filter-empty { font-size: var(--fs-xs); color: var(--text-3); /* text-4 不满足对比度(a11y axe color-contrast) */ padding: 4px 12px 6px 22px; }
 .filter-cond-text { font-size: var(--fs-xs); color: var(--text-3); margin-left: var(--space-2); }
-
-/* ============ 搜索框 __clear（设计稿 main-nav-search__clear） ============ */
-.main-nav-search__clear {
-  width: 18px; height: 18px; margin-right: 10px; cursor: pointer;
-  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
-}
-.main-nav-search__clear img { width: 12px; height: 12px; opacity: .55; }
-.main-nav-search__clear:hover img { opacity: 1; }
 
 /* ============ 无边框窗口自绘标题栏（设计稿 ui-titlebar/ui-titlecontrols） ============ */
 .ui-titlebar {
@@ -254,27 +220,6 @@
 @media (max-width: 1080px) {
   .edit-panel { position: absolute; right: 0; top: 0; bottom: 0; z-index: var(--z-panel); box-shadow: -8px 0 24px rgba(0,0,0,.08); }
 }
-
-/* ============ 侧边栏滚动条对齐设计稿 simplebar（6px 圆角细条） ============ */
-
-/* ============ 快捷添加 todo-options 日期选项行（设计稿同类名） ============ */
-.todo-options { display: flex; gap: var(--space-2); align-items: center; margin-top: 10px; flex-wrap: wrap; }
-.todo-options__item {
-  padding: 5px 16px; border-radius: 15px; background: var(--gray-bg); color: var(--text-2);
-  font-size: var(--fs-sm); line-height: 17px; cursor: pointer; position: relative;
-  transition: background var(--dur-fast), color var(--dur-fast);
-}
-.todo-options__item:hover { background: var(--hover-bg); }
-.todo-options__item:active { background: #e1e0e1; }
-.todo-options__item--active { background: var(--brand); color: #fff; }
-.todo-options__item--active:hover { background: #11a1a2; }
-
-/* ============ 今日待办日期速选条（设计稿 todo-date-selector） ============ */
-/* 方案A(用户定稿):日期条通栏,右端挂视图切换(pd-view-seg 走 #append 插槽) */
-.today-v1 .day-strip { width: 100%; }
-.today-v1 .day-strip .pd-view-seg { margin-left: auto; }
-/* 窄窗(<920)下日期条内容超出行宽,允许换行让视图切换器落到第二行,否则第三个切换钮被主列右缘裁掉一半,真实点击落不进去(隔离冒烟实例 820px 宽实测) */
-.today-v1 .day-strip { flex-wrap: wrap; row-gap: 6px; }
 .day-strip {
   position: relative; /* 日历弹窗 .ds-cal-pop 的定位锚点 */
   display: flex; align-items: center; gap: var(--space-1);
@@ -338,39 +283,9 @@
 .vm-item:hover { background: var(--brand-light); color: var(--brand); }
 .vm-item.active { color: var(--brand); }
 .vm-sep { height: 1px; background: var(--line); margin: 5px 8px; }
-
-/* ============ 分类区头部图标按钮（＋ 新建 / ⚙ 管理） ============ */
-.sn-ico-btn {
-  width: 22px; height: 22px; border: 0; background: none; border-radius: var(--radius-sm);
-  display: inline-flex; align-items: center; justify-content: center;
-  color: var(--text-3); cursor: pointer; padding: 0;
-}
-.sn-ico-btn:hover { color: var(--brand); background: var(--hover-bg); }
-
-/* ============ 天气组件（侧边栏） ============ */
-.sn-weather {
-  display: flex; align-items: center; gap: 6px; padding: var(--space-2) 12px 8px 6px; /* 左6=图标重心对齐品牌标中心线(x≈25)：30px大标与16px小图标光学居中 */
-  font-size: var(--fs-sm); color: var(--text-2); cursor: pointer; border-radius: var(--radius-md);
-}
-.sn-weather:hover { background: var(--gray-bg, #f5f5f5); }
-.sn-weather:active { transform: scale(.97); }
 .w-icon { font-size: 16px; font-style: normal; }
-/* 刷新动效反馈：拉取中天气图标旋转 + 数据轻微呼吸，结束自动停 */
-.sn-weather.is-loading .w-icon {
-  display: inline-block;
-  animation: w-spin 1s linear infinite;
-}
-.sn-weather.is-loading .w-temp,
-.sn-weather.is-loading .w-desc,
-.sn-weather.is-loading .w-city {
-  animation: w-breathe 1.2s ease-in-out infinite;
-}
 @keyframes w-spin { to { transform: rotate(360deg); } }
 @keyframes w-breathe { 50% { opacity: .35; } }@media (prefers-reduced-motion: reduce) {
-  .sn-weather.is-loading .w-icon,
-  .sn-weather.is-loading .w-temp,
-  .sn-weather.is-loading .w-desc,
-  .sn-weather.is-loading .w-city { animation: none; }
 }
 .w-temp { font-size: var(--fs-lg); font-weight: 700; color: var(--text-1); }
 .w-desc { color: var(--text-3); }
@@ -447,13 +362,6 @@
 
 /* ============ 分类区折叠 + hover 图标 ============ */
 .sn-sec-fold { cursor: pointer; }
-.sn-sec-foldable:hover .sn-ico-btn { opacity: 1; }
-.sn-ico-btn { opacity: 0; transition: opacity var(--dur-fast); }
-/* 标签等 clickable 分组头的 ＋ 也按同一逻辑 hover 显形 */
-.sn-sec-head.clickable:hover .sn-ico-btn,
-.sn-sec-head.clickable .sn-ico-btn:focus { opacity: 1; }
-.sn-sec-foldable:hover .sn-ico-btn,
-.sn-sec-foldable .sn-ico-btn:focus { opacity: 1; }
 .sn-fold-arrow {
   display: inline-flex; transition: transform var(--dur-mid) ease; color: var(--text-3); font-style: normal;
 }
@@ -561,13 +469,3 @@
 .pd-day-deck__list--overdue .pd-day-deck__title { color: var(--danger, #f56c6c); }
 /* 逾期行内的原定日期徽标：回答「这是哪天拖下来的」 */
 .pd-day-deck__overdue-date { flex-shrink: 0; font-size: var(--fs-2xs); font-variant-numeric: tabular-nums; color: var(--danger, #f56c6c); background: var(--danger-soft, #fdf1f1); border-radius: 4px; padding: 1px 5px; opacity: .85; }
-/* cal-today-btn 不入 ghost 范式:置灰/隐藏两版用户都读成"没有按钮",终版=恒常显(今天在视图时点击为无害no-op) */
-
-/* ===== 今日页空态居中:无安排的选中日,插画+文案在工具栏下的空牌区域垂直居中(用户定稿) ===== */
-/* min-height 链(非 height)保证长列表滚动行为不变;flex 链只在 :has(.empty-state) 时才产生居中效果 */
-.pd-view-page.today-v1 { min-height: 100%; display: flex; flex-direction: column; }
-.today-v1 .today-body { flex: 1; display: flex; align-items: stretch; }
-.today-v1 .today-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.today-v1 .today-list { flex: 1; display: flex; flex-direction: column; }
-.today-v1 .today-list .td-groups:has(.empty-state) { flex: 1; display: flex; flex-direction: column; justify-content: center; }
-.today-v1 .today-list .empty-state { padding: 0; }

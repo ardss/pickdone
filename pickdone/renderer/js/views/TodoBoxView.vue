@@ -238,3 +238,21 @@ export default {
 
 }
 </script>
+<style>
+/* ===== 迁移自全局沉积文件(scripts/css-move.mjs):以下规则随组件生灭 ===== */
+/* ---- I. 工具栏下拉 label（原 DropdownSelect 的 .dropdown-select__label）---- */
+.dropdown-select{display:flex;gap:8px}
+.dropdown-select__label{display:inline-flex;align-items:center;gap:5px;padding:4px 11px;line-height:20px;border-radius:var(--radius-pill);font-size:var(--fs-md);color:var(--text-2);cursor:pointer;transition:background .15s,color .15s}
+.dropdown-select__label:hover{background:var(--gray-bg);color:var(--text-1)}
+.dropdown-select__label:active{background:var(--line)}
+.dropdown-select.is-open .dropdown-select__label{background:var(--gray-bg);color:var(--text-1)}
+.dropdown-select__label:disabled{cursor:not-allowed;opacity:.5}
+.dropdown-select__label:disabled:hover{background:transparent}
+.dropdown-select__label--placeholder{color:var(--text-3)}
+.dropdown-select__label:hover .dd-caret::before{border-color:var(--text-2)}
+.dropdown-select.is-open .dd-caret::before{transform:rotate(225deg) translate(-1px,-1px)}
+/* 其它 */
+html[data-theme="dark"] .dropdown-select__label { color: var(--text-1); }
+html[data-theme="dark"] .dropdown-select__label:hover,
+html[data-theme="dark"] .dropdown-select.is-open .dropdown-select__label { background: var(--hover-bg); color: var(--text-1); }
+</style>

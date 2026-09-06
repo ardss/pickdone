@@ -1089,4 +1089,66 @@ html[data-theme="dark"] .side-nav--collapsed .main-nav-search.sn-search { backgr
 html[data-theme="dark"] .side-nav--collapsed .sn-weather,
 html[data-theme="dark"] .side-nav--collapsed .sn-weather { background: transparent; }
 html[data-theme="dark"] .cat-mgr-del--on:hover { background: rgba(15, 157, 143, .15); }
+
+/* ===== 迁移自全局沉积文件(scripts/css-move.mjs):以下规则随组件生灭 ===== */
+/* ========================= 搜索（SearchView）========================= */
+.main-nav-search{position:relative;display:flex;align-items:center;justify-content:center;width:185px;height:36px;margin:0 0 8px}
+/* 搜索页单一对齐轴：标题/搜索框/结果行同左缘(容器缘,原 12px 标题内缩与 4px 行内缩已清) */
+.search-page .main-nav-search{margin:0}
+.main-nav-search__input{box-sizing:border-box;width:185px;height:36px;padding:0;padding-right:26px;padding-left:39px;font-weight:400;font-size: var(--fs-md);background-color:#f5f4f5;border:1px solid #e7e7e7;border-radius: var(--radius-sm);outline:none;opacity:1;transition:border-color var(--dur-mid) cubic-bezier(.645,.045,.355,1)}
+.main-nav-search__input::placeholder{color:var(--text-4)}
+.main-nav-search__input:focus{border-color:var(--brand)}
+.main-nav-search__icon{position:absolute;top:0;bottom:0;left:0;display:flex;align-items:center;justify-content:center;width:20px;height:20px;margin:auto 10px auto 10px}
+.main-nav-search__icon:after{display:block;width:17px;height:17px;background:url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22><circle cx=%228%22 cy=%228%22 r=%226%22 fill=%22%23ccc%22/></svg>') no-repeat 50%;background-size:contain;content:""}
+.main-nav-search__clear{position:absolute;top:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;width:20px;height:20px;margin:auto 10px auto 10px;cursor:pointer}
+/* 4. 通用按压反馈：所有可点按钮按下轻微缩放（搭配各自 transition） */
+.el-button, .row-btn, button.mini, .sn-ico-btn, .grp-toggle-btn { transition: transform var(--dur-fast); }
+.el-button:active, .row-btn:active, button.mini:active, .sn-ico-btn:active { transform: scale(.96); }
+/* ============ 搜索框 __clear（设计稿 main-nav-search__clear） ============ */
+.main-nav-search__clear {
+  width: 18px; height: 18px; margin-right: 10px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.main-nav-search__clear img { width: 12px; height: 12px; opacity: .55; }
+.main-nav-search__clear:hover img { opacity: 1; }
+/* ============ 分类区头部图标按钮（＋ 新建 / ⚙ 管理） ============ */
+.sn-ico-btn {
+  width: 22px; height: 22px; border: 0; background: none; border-radius: var(--radius-sm);
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--text-3); cursor: pointer; padding: 0;
+}
+.sn-ico-btn:hover { color: var(--brand); background: var(--hover-bg); }
+/* ============ 天气组件（侧边栏） ============ */
+.sn-weather {
+  display: flex; align-items: center; gap: 6px; padding: var(--space-2) 12px 8px 6px; /* 左6=图标重心对齐品牌标中心线(x≈25)：30px大标与16px小图标光学居中 */
+  font-size: var(--fs-sm); color: var(--text-2); cursor: pointer; border-radius: var(--radius-md);
+}
+.sn-weather:hover { background: var(--gray-bg, #f5f5f5); }
+.sn-weather:active { transform: scale(.97); }
+/* 刷新动效反馈：拉取中天气图标旋转 + 数据轻微呼吸，结束自动停 */
+.sn-weather.is-loading .w-icon {
+  display: inline-block;
+  animation: w-spin 1s linear infinite;
+}
+.sn-weather.is-loading .w-temp,
+.sn-weather.is-loading .w-desc,
+.sn-weather.is-loading .w-city {
+  animation: w-breathe 1.2s ease-in-out infinite;
+}
+.sn-sec-foldable:hover .sn-ico-btn { opacity: 1; }
+.sn-ico-btn { opacity: 0; transition: opacity var(--dur-fast); }
+/* 标签等 clickable 分组头的 ＋ 也按同一逻辑 hover 显形 */
+.sn-sec-head.clickable:hover .sn-ico-btn,
+.sn-sec-head.clickable .sn-ico-btn:focus { opacity: 1; }
+.sn-sec-foldable:hover .sn-ico-btn,
+.sn-sec-foldable .sn-ico-btn:focus { opacity: 1; }
+html[data-theme="dark"] .sn-ico-btn:hover { background: rgba(255,255,255,.06); }
+html[data-theme="dark"] .main-nav-search__input { background-color: var(--gray-bg); border-color: var(--line-strong); }
+html[data-theme="dark"] .main-nav-search__input:focus { border-color: var(--brand); }
+@media (prefers-reduced-motion: reduce) {
+  .sn-weather.is-loading .w-icon,
+  .sn-weather.is-loading .w-temp,
+  .sn-weather.is-loading .w-desc,
+  .sn-weather.is-loading .w-city { animation: none; }
+}
 </style>

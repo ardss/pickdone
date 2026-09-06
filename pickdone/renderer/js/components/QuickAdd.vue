@@ -185,4 +185,38 @@ html[data-theme="dark"] .qa-inputwrap:focus-within { background: var(--active-bg
 .todo-input-add__calender:active { background-color: #f3f3f3; }
 .todo-input-add__calender:focus { outline: none; }
 .todo-input-add__calender img { width: 15px; height: 15px; }
+
+/* ===== 迁移自全局沉积文件(scripts/css-move.mjs):以下规则随组件生灭 ===== */
+/* 日期选择浮层覆盖在日历按钮上（透明触发层）——
+   设计稿做法: .todo-options__item--datetime .mx-datepicker{
+     position:absolute;top:0;right:0;bottom:0;left:0;width:100%;opacity:0} */
+.qa-cal-picker {
+  position: absolute !important; top: 0; right: 0; z-index: 3;
+  width: 40px !important; max-width: 40px; height: 100%;
+  opacity: 0; overflow: hidden;
+}
+/* ==================== 5. EditPanel 右侧编辑栏 ==================== */
+/* 分类/日期 chip：设计稿 .todo-options__item[scoped]{padding:4px 12px;color:#595959;
+   font-size: var(--fs-sm);line-height:17px;background:#f5f4f5;border-radius:12.5px}
+   --active{color:#fff;background:var(--brand)}
+
+/* 分组页头部「全部展开/折叠」文字按钮（最近待办等分组视图共用） */
+.grp-toggle-btn {
+  display: inline-flex; align-items: center; gap: var(--space-1);
+  font-size: var(--fs-md); color: var(--text-3); cursor: pointer;
+  transition: color var(--dur-fast);
+}
+/* ============ 侧边栏滚动条对齐设计稿 simplebar（6px 圆角细条） ============ */
+
+/* ============ 快捷添加 todo-options 日期选项行（设计稿同类名） ============ */
+.todo-options { display: flex; gap: var(--space-2); align-items: center; margin-top: 10px; flex-wrap: wrap; }
+.todo-options__item {
+  padding: 5px 16px; border-radius: 15px; background: var(--gray-bg); color: var(--text-2);
+  font-size: var(--fs-sm); line-height: 17px; cursor: pointer; position: relative;
+  transition: background var(--dur-fast), color var(--dur-fast);
+}
+.todo-options__item:hover { background: var(--hover-bg); }
+.todo-options__item:active { background: #e1e0e1; }
+.todo-options__item--active { background: var(--brand); color: #fff; }
+.todo-options__item--active:hover { background: #11a1a2; }
 </style>

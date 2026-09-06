@@ -189,16 +189,6 @@
 .datetime--alert{color:#bd401e}
 .datetime--gray{color:var(--text-dim)}
 
-/* ---- I. 工具栏下拉 label（原 DropdownSelect 的 .dropdown-select__label）---- */
-.dropdown-select{display:flex;gap:8px}
-.dropdown-select__label{display:inline-flex;align-items:center;gap:5px;padding:4px 11px;line-height:20px;border-radius:var(--radius-pill);font-size:var(--fs-md);color:var(--text-2);cursor:pointer;transition:background .15s,color .15s}
-.dropdown-select__label:hover{background:var(--gray-bg);color:var(--text-1)}
-.dropdown-select__label:active{background:var(--line)}
-.dropdown-select.is-open .dropdown-select__label{background:var(--gray-bg);color:var(--text-1)}
-.dropdown-select__label:disabled{cursor:not-allowed;opacity:.5}
-.dropdown-select__label:disabled:hover{background:transparent}
-.dropdown-select__label--placeholder{color:var(--text-3)}
-
 /* ---- J. 提示问号（原 已达成页 .tip-icon）与分组设置按钮（原 __btn-settings cog）---- */
 .tip-icon{color:var(--text-4)}
 .tip-icon>svg,.icon-append>svg{display:block}
@@ -242,8 +232,6 @@
 
 .dd-caret{font-style:normal;font-size:0;line-height:1;flex-shrink:0}
 .dd-caret::before{content:"";display:block;width:6px;height:6px;border-right:1.5px solid var(--text-3);border-bottom:1.5px solid var(--text-3);transform:rotate(45deg) translate(-1px,-1px);transition:transform .18s,border-color .15s}
-.dropdown-select__label:hover .dd-caret::before{border-color:var(--text-2)}
-.dropdown-select.is-open .dd-caret::before{transform:rotate(225deg) translate(-1px,-1px)}
 .dd-q,.tip-q{
   width:16px;height:16px;margin-left:2px;border:1px solid currentColor;border-radius:50%;
   font-size: var(--fs-xs);line-height:15px;text-align:center;text-indent:1px;cursor:pointer;

@@ -699,4 +699,24 @@ html[data-theme="dark"] .cal-fc {
   --fc-page-bg-color: var(--panel);
   --fc-border-color: var(--line);
 }
+
+/* ===== 迁移自全局沉积文件(scripts/css-move.mjs):以下规则随组件生灭 ===== */
+.day-create-btn, .day-expand-btn {
+  width: 20px; height: 20px;
+  display: flex; align-items: center; justify-content: center;
+  border: none; border-radius: var(--radius-sm); cursor: pointer;
+  background: transparent; color: var(--text-3);
+}
+.day-create-btn:hover, .day-expand-btn:hover { background: var(--gray-bg, #f5f7f7); color: var(--brand-text, #0a6f62); }
+.day-create-btn svg, .day-expand-btn svg { display: block; }
+.cal-title-btn {
+  display: inline-flex; align-items: center; gap: var(--space-1); padding: 4px 10px;
+  border: 0; background: none; cursor: pointer; border-radius: var(--radius-md); transition: all var(--dur-fast);
+}
+.cal-title-btn:hover, .cal-title-btn[aria-expanded="true"] { background: var(--gray-bg); }
+.cal-title-btn:hover .cal-title, .cal-title-btn[aria-expanded="true"] .cal-title { color: var(--brand); }
+.cal-title-btn { padding: 4px 8px; }
+/* 日历格子展开钮(深色) */
+html[data-theme="dark"] .day-expand-btn { color: var(--text-3, #8a919c); }
+html[data-theme="dark"] .day-expand-btn:hover { background: var(--gray-bg, #22262e); color: var(--brand-text, #35c2ae); }
 </style>
