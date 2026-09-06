@@ -161,11 +161,11 @@ const V1_CSS = `
 .dr-mini-now { position: absolute; left: 22px; right: 6px; height: 2px; border-radius: 1px; background: var(--brand, #0f9d8f); transform: translateY(-1px); box-shadow: 0 0 0 2px var(--panel, #fff); }
 .day-rail { background: var(--panel, #fff); border: 1px solid var(--line, #f3f3f3); border-radius: var(--radius-lg, 10px); padding: 14px 12px 16px; }
 .day-rail .dr-head { display: flex; align-items: flex-start; gap: 6px; padding: 4px 6px 10px; border-bottom: 1px solid var(--line, #f3f3f3); flex-shrink: 0; cursor: pointer; border-radius: var(--radius-md, 8px); transition: background .15s; }
-.day-rail .dr-head:hover { background: var(--hover-bg, #fbfbfb); }
+.day-rail.collapsed .dr-head:hover { background: var(--hover-bg, #fbfbfb); }
 .day-rail .dr-head:focus-visible { outline: 2px solid var(--brand, #0f9d8f); outline-offset: -2px; }
 .day-rail .dr-head__text { flex: 1; min-width: 0; }
 .day-rail .dr-fold-ico { flex-shrink: 0; margin-top: 1px; color: var(--text-3, #6d7278); transition: color .15s; }
-.day-rail .dr-head:hover .dr-fold-ico { color: var(--brand, #0f9d8f); }
+.day-rail.collapsed .dr-head:hover .dr-fold-ico { color: var(--brand, #0f9d8f); }
 .day-rail .dr-head b { font-size: 13.5px; display: block; }
 .day-rail .dr-head span { font-size: 11px; color: var(--text-3, #6d7278); line-height: 1.5; display: block; margin-top: 2px; }
 /* Elastic timeline: with empty/few schedule entries the 24 slots split evenly to fill the available height; with many entries slots grow with content and scroll past one screen */
