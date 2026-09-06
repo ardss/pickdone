@@ -59,7 +59,7 @@ try {
       }
     } catch { await sleep(600) }
   }
-  assert.ok(ok, 'app not ready within ~24s')
+  assert.ok(ok, 'app not ready within ~60s')
   await sleep(1500)
 
   // 0. 诊断:确认挂在真实 todoAPI 上

@@ -114,7 +114,12 @@ async function runPool (stages, limit, { retry = 0 } = {}) {
       }
       const r = results[i]
       console.log(`  ${r.ok ? '✓' : '✗'} [${i + 1}/${stages.length}] ${r.name} — ${fmtMs(r.ms)}${r.timedOut ? '（超时 15 分钟按红计）' : ''}`)
-      if (!r.ok && r.out.trim()) console.log(r.out.trim().split('\n').slice(-25).map(l => '    ' + l).join('\n'))
+      if (!r.ok && r.out.trim()) {
+        console.log(r.out.trim().split('\n').slice(-25).map(l => '    ' + l).join('\n'))
+        // tail 25 行常吞掉 node:test 的 "not ok N - <name>"（失败名在输出中段），单独抽失败用例行
+        const diag = r.out.split('\n').filter(l => /✖|not ok \d|AssertionError|FAIL:|✗ /.test(l)).slice(0, 20)
+        if (diag.length) console.log('  [diag] failing cases:\n' + diag.map(l => '    ' + l.trim().slice(0, 150)).join('\n'))
+      }
     }
   }
   await Promise.all(Array.from({ length: Math.min(limit, stages.length) }, worker))

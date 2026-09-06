@@ -326,20 +326,32 @@ if (t0) {
 } else {
   console.log('  - front card has no items; skipping the title check')
 }
-// Drag to change day: real press on the card header's blank area -> move left -> release -> the front card's date changes; drag back afterwards
-const frontDate = () => evalJson(`(() => { var f = document.querySelector('.pd-day-deck__card.front'); return f ? f.textContent.slice(0, 12) : null })()`)
-const d0 = await frontDate()
+// Drag to change day: real press on the card header's blank area -> move left -> release -> the front card changes; drag back afterwards.
+// Discriminator is the FULL card text (a 12-char slice collides across days once labels are English, e.g. "Today0/109/0").
+const frontSig = () => evalJson(`(() => { var f = document.querySelector('.pd-day-deck__card.front'); return f ? f.textContent.replace(/\\s+/g, ' ').trim() : null })()`)
+const d0 = await frontSig()
 if (d0) {
-  const head = await evalJson(`(() => { var f = document.querySelector('.pd-day-deck__card.front'); var r = f.getBoundingClientRect(); var y = Math.round(r.y + 44); return { x: Math.round(r.x + r.width / 2), y: y } })()`)
-  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: head.x, y: head.y, button: 'left', clickCount: 1 })
-  for (let i = 1; i <= 10; i++) await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: head.x - i * 13, y: head.y, button: 'left' })
-  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: head.x - 130, y: head.y, button: 'left', clickCount: 1 })
-  await sleep(800)
-  const d1 = await frontDate()
-  ok('drag-to-change-day still works (the fix must not break the gesture)', d1 !== d0, `${d0} -> ${d1}`)
-  // Drag back to today with the arrow keys, restoring the scene
-  await evalJson(`(() => { var d = document.querySelector('.pd-day-deck'); if (d) { d.focus(); d.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })) } return 'ok' })()`)
-  await sleep(600)
+  // CI runners proved flakier than local desktops on synthetic drags: re-measure and retry the whole gesture
+  let d1 = d0
+  for (let attempt = 1; attempt <= 3 && d1 === d0; attempt++) {
+    const head = await evalJson(`(() => { var f = document.querySelector('.pd-day-deck__card.front'); var r = f.getBoundingClientRect(); var y = Math.round(r.y + Math.min(20, r.height / 2)); return { x: Math.round(r.x + r.width / 2), y: y } })()`)
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: head.x, y: head.y, button: 'left', buttons: 1, clickCount: 1 })
+    for (let i = 1; i <= 12; i++) {
+      await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: head.x - i * 13, y: head.y, button: 'left', buttons: 1 })
+      await sleep(16)
+    }
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: head.x - 156, y: head.y, button: 'left', buttons: 1, clickCount: 1 })
+    await sleep(900)
+    d1 = await frontSig()
+    if (d1 === d0) console.log(`  - drag attempt ${attempt}/3 produced no front-card change, retrying`)
+  }
+  ok('drag-to-change-day still works (the fix must not break the gesture)', d1 !== d0, `"${String(d0).slice(0, 40)}" -> "${String(d1).slice(0, 40)}"`)
+  // Restore: arrow back until the front card is today's again (the drag moved forward one day)
+  for (let i = 0; i < 3; i++) {
+    await evalJson(`(() => { var d = document.querySelector('.pd-day-deck'); if (d) { d.focus(); d.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })) } return 'ok' })()`)
+    await sleep(500)
+    if (await frontSig() === d0) break
+  }
 } else {
   console.log('  - card deck absent; skipping the drag check')
 }

@@ -48,10 +48,21 @@ jobs:
           node scripts/build-whitelist.mjs
           git diff --exit-code package.json || (echo '::error::build.files drifted from the lock closure (hand-edited without build-whitelist)' && exit 1)
 
+      # Electron live gates need an X server; ubuntu runners are headless (windows runners have a real desktop)
+      - name: Install xvfb (ubuntu only)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y xvfb libnss3 libasound2t64 || sudo apt-get install -y xvfb libnss3 libasound2
+
       - name: Check all gates (lint + fingerprint + licenses + tokens + i18n + tests + smoke)
         working-directory: pickdone
-        run: npm run check:all
-        # aligned with the local pre-commit hook: catches commits that bypassed hooks via --no-verify (token/fingerprint/i18n discipline)
+        shell: bash
+        # aligned with the local pre-commit hook: catches commits that bypassed hooks via --no-verify
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            xvfb-run -a npm run check:all
+          else
+            npm run check:all
+          fi
 
       # Dependency audit: the npmmirror mirror used in local dev makes npm audit 404, so CI forces the official registry.
       # Non-blocking for now (continue-on-error): remove this line once legacy vulnerable deps are cleaned up, turning it into a hard release gate.
