@@ -9,102 +9,57 @@
    ===================================================================== */
 /* ===== 自 base.css 迁入（番茄记录 tfr-，内容逐字未改；置于头部以保持原级联顺序 base < 本文件）===== */
 
-
-
-
 /* ==================== 番茄专注记录全屏弹窗（对齐.todo-fc 旧版 .tomato-record[scoped-hash]） ==================== */
 .tomato-record { padding: 10px 16px; border-bottom: 1px solid var(--line, #f3f3f3); }
 
-
-
 .tomato-record:last-of-type { border-bottom: 1px solid transparent; }
-
-
 
 .tomato-record:hover { background-color: var(--gray-bg, #f7f8fa); }
 
-
-
 .tomato-record__title { display: flex; align-items: center; justify-content: space-between; color: var(--text-1, #333); font-weight: 400; font-size: var(--fs-base); line-height: 20px; }
-
-
 
 .tomato-record__title__left { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
 .tomato-record__task { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .tomato-record__task--free { color: var(--text-3, #909399); }
 .tomato-record__range { flex-shrink: 0; font-variant-numeric: tabular-nums; font-size: var(--fs-sm); color: var(--text-3, #909399); }
 
-
-
 .tomato-record__title__text { display: flex; align-items: center; }
-
-
 
 .tomato-record__title__text__icon { display: block; flex-shrink: 0; width: 14px; height: 14px; margin-left: 10px; background: url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22><circle cx=%228%22 cy=%228%22 r=%226%22 fill=%22%23ccc%22/></svg>') no-repeat 50%/100% 100%; }
 
-
-
 .tomato-record__date { width: 100px; flex-shrink: 0; }
-
-
 
 .tomato-record__title__interval { flex-shrink: 0; margin-left: 15px; }
 
-
-
 .tomato-record__description { display: flex; align-items: center; margin-top: 10px; }
-
-
 
 .tomato-record__description__icon { display: flex; flex-shrink: 0; width: 14px; height: 14px; margin-right: 10px; background: url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22><circle cx=%228%22 cy=%228%22 r=%226%22 fill=%22%23ccc%22/></svg>') no-repeat 50%/100% 100%; }
 
-
-
 .tomato-record__description__text { display: -webkit-box; overflow: hidden; color: #666; font-size: var(--fs-base); line-height: 20px; text-overflow: ellipsis; word-break: break-all; -webkit-line-clamp: 1; -webkit-box-orient: vertical; }
-
-
-
 
 /* 添加记录表单行 */
 .tfr-form-row { margin-bottom: 16px; }
 
-
-
 .tfr-form-label { display: block; margin-bottom: 6px; color: var(--text-2); font-size: var(--fs-md); }
-
-
 
 .tfr-add-info { margin: 4px 0 0; color: var(--text-3); font-size: var(--fs-sm); }
 
-
-
 .tfr-add-info .text-primary { color: var(--brand, #0c8172); }
-
-
-
 
 /* 番茄专注记录 · 24h 时间轴：灰轨道=全天，青块=专注时段，hover 显示明细 */
 .tfr-timeline { padding: 12px 14px 6px; border-bottom: 1px solid var(--line); }
-
-
 
 .tfr-timeline__head {
   display: flex; justify-content: space-between; align-items: center;
   font-size: var(--fs-sm); color: var(--text-2); margin-bottom: 8px;
 }
 
-
-
 .tfr-timeline__sum { color: var(--brand); }
-
-
 
 .tfr-timeline__bar {
   position: relative; height: 14px; border-radius: var(--radius-md);
   background: #ececec; overflow: hidden;
 }
-
-
 
 .tfr-timeline__seg {
   position: absolute; top: 0; bottom: 0; background: var(--brand);
@@ -112,104 +67,55 @@
   transition: filter .15s, transform .1s;
 }
 
-
-
 .tfr-timeline__seg:hover { filter: brightness(1.15); }
-
-
 
 .tfr-timeline__scale {
   display: flex; justify-content: space-between;
   font-size: var(--fs-2xs); color: var(--text-3); margin-top: 4px;
 }
 
-
-
-
 /* 时间轴小时刻度线与图例 */
 .tfr-timeline__grid { position: absolute; inset: 0; pointer-events: none; }
 
-
-
 .tfr-timeline__grid i { position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(0, 0, 0, .06); }
-
-
 
 .tfr-timeline__legend { display: flex; gap: 14px; font-size: var(--fs-xs); color: var(--text-3); margin-top: 6px; }
 
-
-
 .tfr-timeline__legend .dot { display: inline-block; width: 8px; height: 8px; border-radius: var(--radius-xs); margin-right: 4px; vertical-align: -1px; }
-
-
 
 .tfr-timeline__legend .dot-focus { background: var(--brand); }
 
-
-
 .tfr-timeline__legend .dot-idle { background: #ececec; }
-
-
-
 
 /* 专注记录：行点击展开详情 + 时间轴定位高亮 */
 .tomato-record { cursor: pointer; }
 
-
-
 .tomato-record--open { background: #f3f6f6; }
-
-
 
 .tomato-record--hot { background: var(--brand-light); box-shadow: inset 3px 0 0 var(--brand); }
 
-
-
 .tomato-record__title__interval { display: flex; align-items: center; gap: 6px; }
-
-
 
 .tomato-record .expander { font-style: normal; color: var(--text-3); font-size: var(--fs-2xs); transition: transform .18s; }
 
-
-
 .tomato-record .expander.open { transform: rotate(180deg); }
-
-
 
 .tomato-record__detail {
   padding: 8px 12px 10px 52px; font-size: var(--fs-sm); color: var(--text-2); line-height: 1.9;
   border-top: 1px dashed var(--line); animation: qa-chip-pop .15s cubic-bezier(.2, .8, .2, 1);
 }
 
-
-
 .tomato-record__detail-hint { color: var(--text-3); font-size: var(--fs-xs); }
-
-
 
 /* 时间轴被点中的色块短时高亮 */
 .tfr-timeline__seg--hot { filter: brightness(1.25); box-shadow: 0 0 0 2px rgba(15, 157, 143, .35); }
 
-
-
-
 /* 时间轴休息块（橙）与记录行休息徽标 */
-
-
-
-
-
-
 
 /* 时间轴日期切换 + 空状态 */
 .tfr-timeline__nav { display: inline-flex; align-items: center; gap: 8px; }
 
-
-
 .tfr-timeline__date { min-width: 120px; text-align: center; color: var(--text-1); }
-
-
 
 .tfr-nav-btn {
   width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--line); background: var(--panel, #fff);
@@ -217,15 +123,9 @@
   transition: color .15s, border-color .15s;
 }
 
-
-
 .tfr-nav-btn:hover:not(:disabled) { color: var(--brand); border-color: var(--brand); }
 
-
-
 .tfr-nav-btn:disabled { opacity: .35; cursor: default; }
-
-
 
 .tfr-empty { padding: 26px 0 8px; text-align: center; font-size: var(--fs-sm); color: var(--text-3); }
 btn-play|stop|stop2|close）
@@ -343,11 +243,9 @@ btn-play|stop|stop2|close）
 .tomato-timer__time--rest { color: #f93; }
 
 /* 番茄放弃确认 popover 与浮窗入口 */
-.tt-pop-actions { margin: 0; text-align: right; }
-@media (max-width: 605px) {
+.tt-pop-actions { margin: 0; text-align: right; }@media (max-width: 605px) {
   .tomato-timer__time { margin-right: 0; }
-}
-@media print {
+}@media print {
   .tomato-timer { display: none; }
 }
 
@@ -855,7 +753,6 @@ html.widget-preview .tomato--expand-menu { width: 240px; height: 320px; }
 }
 .tf-menu__bare:hover { border-color: var(--brand); color: var(--brand); }
 
-
 /* 过渡：取消/关闭丝滑淡出 */
 /* 打开=快切（无缩放：transform 会让面板边缘移动，产生跳感）；关闭=纯透明度淡化 */
 .tf-pop-enter-active { transition: opacity .12s ease; }
@@ -878,8 +775,6 @@ html.widget-preview .tomato--expand-menu { width: 240px; height: 320px; }
 }
 .tomato .tf-abandon .mini.danger:hover { background: #fde3e3; }
 .tomato .tf-abandon .abandon-reason-input { background: var(--panel, #fff); color: #2b2f33; }
-
-
 
 /* ====== 设计稿精确布局 ====== */
 .tomato-bar.tomato-timer {
@@ -937,7 +832,6 @@ html.widget-preview .tomato--expand-menu { width: 240px; height: 320px; }
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-pop);
 }
-
 
 /* —— 设置卡片标签行紧凑化（卡片弹窗形态）：行高 50→44、与内容齐平，
       去掉 Element 默认灰底线改用发丝线分隔。需 !important 压过上方全屏版规则 —— */
@@ -1058,7 +952,6 @@ html.widget-preview .tomato--expand-menu { width: 240px; height: 320px; }
 @keyframes scBlink { 50% { opacity: .4 } }
 .sc-capture.conflict { border-color: #f56c6c; }
 .sc-kbd { font-family: monospace; font-size: var(--fs-sm); letter-spacing: 1px; }
-
 
 /* ============ 设置搜索（跨页签过滤） ============ */
 .settings-search {

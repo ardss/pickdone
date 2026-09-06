@@ -389,3 +389,135 @@ export default {
 
 }
 </script>
+<style>
+/* ===== 迁移自全局沉积文件(scripts/css-move.mjs):以下规则随组件生灭 ===== */
+/* ==================== 项目视图（渐进披露：有项目才出现入口与页头） ==================== */
+/* 项目页头：名称/进度百分比/进度条/四问元信息 */
+.proj-head {
+  padding: 14px 28px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--hover-bg);
+}
+.proj-head__title { display: flex; align-items: center; gap: var(--space-2); }
+.proj-head__name { font-size: var(--fs-lg); font-weight: 600; color: var(--text-1); }
+.proj-head__pct { font-style: normal; margin-left: auto; font-size: var(--fs-md); font-weight: 600; color: var(--text-2); }
+.proj-head__bar {
+  height: 4px; margin-top: var(--space-2); border-radius: var(--radius-xs);
+  background: var(--track-bg); overflow: hidden;
+}
+.proj-head__bar i { display: block; height: 100%; border-radius: var(--radius-xs); transition: width var(--t-slow); }
+.proj-head__meta {
+  display: flex; gap: var(--space-4); margin-top: var(--space-2);
+  font-size: var(--fs-xs); color: var(--text-3);
+}
+.proj-card .proj-head__bar { margin-top: 10px; }
+/* 里程碑时间轴（项目详情页头）：起点◇已过实心◆今天高亮未来空心，按日期比例定位 */
+/* ===== 里程碑 v2：时间轴（今天贯穿线/过去实线/未来虚线/节点气泡）+ 卡片（环形进度/倒计时/状态色） ===== */
+.proj-ms { display: flex; align-items: center; gap: 10px; margin-top: var(--space-3); }
+.proj-ms__track { position: relative; flex: 1; height: 22px; }
+.proj-ms__seg { position: absolute; top: 50%; height: 2px; margin-top: -1px; }
+.proj-ms__seg--past { left: 0; background: var(--brand); opacity: .55; }
+.proj-ms__seg--future { right: 0; background: repeating-linear-gradient(90deg, var(--line-strong) 0 6px, transparent 6px 11px); }
+.proj-ms__today { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: var(--brand); border-radius: 1px; }
+.proj-ms__mark {
+  position: absolute; top: 50%; transform: translate(-50%, -50%);
+  font-style: normal; font-size: var(--fs-xs); line-height: 1; cursor: default;
+  color: var(--text-4); transition: color var(--t-fast), transform var(--t-fast), background var(--t-fast);
+  z-index: 1;
+}
+.proj-ms__mark--done { color: var(--ok, #2e9e44); font-weight: 700; }
+.proj-ms__mark--today { color: var(--brand-dark); font-size: var(--fs-md); font-weight: 700; }
+.proj-ms__mark--future { color: var(--text-3); }
+.proj-ms__mark--deadline { color: var(--warn); font-size: var(--fs-md); }
+.proj-ms__mark--focus { color: var(--brand); font-size: var(--fs-md); font-weight: 700; }
+.proj-ms__mark[role="button"] { cursor: pointer; }
+.proj-ms__mark--new { animation: proj-ms-pop .45s cubic-bezier(.34, 1.56, .64, 1) both; }
+/* 悬停提示走标准浮层语言:面板底+描边+阴影(token 管理,深浅色自动适配),弃用旧反色黑底 */
+.proj-ms__mark[role="button"]::after {
+  content: attr(data-tip); position: absolute; bottom: calc(100% + 7px); left: 50%; transform: translateX(-50%) scale(.96);
+  background: var(--panel, #fff); color: var(--text-1, #222); border: 1px solid var(--line, #e6e8eb);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .16); font-size: var(--fs-xs); white-space: nowrap;
+  padding: 4px 9px; border-radius: var(--radius-sm); opacity: 0; pointer-events: none;
+  transition: opacity var(--t-fast), transform var(--t-fast); z-index: 30;
+}
+.proj-ms__mark[role="button"]:hover, .proj-ms__mark[role="button"]:focus-visible { transform: translate(-50%, -50%) scale(1.25); }
+.proj-ms__mark[role="button"]:hover::after, .proj-ms__mark[role="button"]:focus-visible::after { opacity: 1; transform: translateX(-50%) scale(1); }
+.proj-ms__mark[role="button"]:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.proj-tab { padding: 7px 14px; border: none; background: transparent; color: var(--text-2, #555);
+  font-size: var(--fs-sm, 13px); cursor: pointer; border-radius: var(--radius-sm, 6px) var(--radius-sm, 6px) 0 0;
+  border-bottom: 2px solid transparent; transition: all var(--t-fast); }
+.proj-tab:hover { color: var(--text-1, #222); background: var(--hover-bg, #f6f6f6); }
+.proj-tab.on { color: var(--brand); border-bottom-color: var(--brand); font-weight: 600; }
+.proj-tab-body { display: flex; flex-direction: column; min-height: 0; }
+.proj-ms__add {
+  flex-shrink: 0; display: inline-flex; align-items: center; gap: var(--space-1);
+  font-size: var(--fs-xs); color: var(--text-3);
+  padding: 2px 8px; border-radius: var(--radius-sm); transition: all var(--t-fast);
+}
+.proj-ms__add:hover { color: var(--brand); background: var(--brand-light); }
+.proj-ms__empty { margin-top: var(--space-2); font-size: var(--fs-xs); color: var(--text-3); }
+/* 项目详情页编辑件：⋯菜单、截止日徽标、色板、截止旗标 */
+.proj-head__title { position: relative; }
+.proj-head__menu {
+  margin-left: 6px; padding: 3px 6px; border-radius: var(--radius-sm);
+  color: var(--text-3); transition: all var(--t-fast);
+}
+.proj-head__menu:hover { color: var(--brand); background: var(--brand-light); }
+.proj-head__dl {
+  font-size: var(--fs-xs); font-weight: 600; color: var(--brand-dark);
+  padding: 2px 8px; border-radius: var(--radius-pill); background: var(--brand-light);
+}
+.proj-head__dl--over { color: var(--danger); background: var(--danger-soft); }
+.proj-head__colorrow { display: inline-flex; align-items: center; gap: 5px; }
+.proj-head__swatch {
+  width: 11px; height: 11px; border-radius: 50%; cursor: pointer;
+  outline: 2px solid transparent; outline-offset: 1px; transition: outline-color var(--t-fast);
+}
+.proj-head__swatch:hover { transform: scale(1.2); }
+.proj-head__swatch.active { outline-color: var(--text-3); }
+/* 里程碑「当前聚焦」（Linear 式） */
+.proj-ms__mark--focus { color: var(--brand); font-size: var(--fs-md); font-weight: 700; }
+/* 里程碑卡片：环形进度 + 倒计时 + 关联任务数 */
+.proj-ms-list { margin-top: 10px; border-top: 1px dashed var(--line); padding-top: var(--space-2); display: flex; flex-direction: column; gap: 6px; }
+.proj-ms-row {
+  display: flex; align-items: center; gap: var(--space-3); padding: 8px 12px;
+  border: 1px solid var(--line); border-radius: var(--radius-md, 10px); background: var(--panel, #fff);
+  font-size: var(--fs-sm); cursor: pointer; transition: border-color var(--t-fast), box-shadow var(--t-fast);
+}
+.proj-ms-row:hover { border-color: var(--brand); box-shadow: 0 2px 10px rgba(17, 121, 121, .08); }
+.proj-ms-row:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.proj-ms-row--soon { background: linear-gradient(90deg, rgba(230, 162, 60, .08), transparent 55%); }
+.proj-ms-row__main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.proj-ms-row__line { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.proj-ms-row__line--sub { font-size: var(--fs-xs); color: var(--text-3); }
+.proj-ms-row__title { color: var(--text-1); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proj-ms-row__date { flex-shrink: 0; }
+.proj-ms-row__linked { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proj-ms-row__frac { margin-left: auto; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.proj-ms-row__tag { font-style: normal; font-size: var(--fs-2xs); color: var(--brand); background: var(--brand-light); padding: 1px 7px; border-radius: var(--radius-pill); flex-shrink: 0; }
+.proj-ms-row__tag--warn { color: var(--warn); background: rgba(230, 162, 60, .12); }
+.proj-ms-row__tag--danger { color: var(--danger); background: var(--danger-soft, rgba(214, 64, 54, .12)); }
+.proj-ms-row__tag--ok { color: var(--ok, #2e9e44); background: rgba(46, 158, 68, .1); }
+.proj-ms-row__ops { display: flex; align-items: center; gap: var(--space-1); flex-shrink: 0; opacity: 0; transition: opacity var(--t-fast); }
+.proj-ms-row:hover .proj-ms-row__ops, .proj-ms-row:focus-within .proj-ms-row__ops { opacity: 1; }
+.proj-ms-row__link, .proj-ms-row__del {
+  flex-shrink: 0; font-size: var(--fs-xs); color: var(--text-3);
+  padding: 2px 7px; border-radius: var(--radius-sm); transition: all var(--t-fast);
+}
+.proj-ms-row__link:hover, .proj-ms-row__del:hover { color: var(--brand); background: var(--brand-light); }
+.proj-ms-row__del:hover { color: var(--danger); }
+.proj-ms-tasks { padding: 6px 10px 8px; margin: 2px 0 6px; background: var(--gray-bg); border-radius: var(--radius-sm); }
+.proj-ms-tasks__tip { font-size: var(--fs-xs); color: var(--text-3); margin-bottom: 5px; }
+.proj-ms-tasks__item { display: flex; align-items: center; gap: 6px; padding: 2px 0; cursor: pointer; font-size: var(--fs-sm); color: var(--text-2); }
+.proj-ms-tasks__item .done { text-decoration: line-through; color: var(--text-4); }
+/* N4 近 7 天完成迷你趋势（页头元信息行内小柱） */
+.proj-head__trend { display: inline-flex; align-items: flex-end; gap: 2px; height: 14px; }
+.proj-trend-bar { display: inline-block; width: 3px; border-radius: 1px 1px 0 0; background: var(--brand); opacity: .55; }
+.proj-trend-bar:last-child { opacity: 1; }
+html[data-theme="dark"] .proj-head { background: rgba(255, 255, 255, .03); }
+html[data-theme="dark"] .proj-ms__mark--today { color: var(--brand); }
+html[data-theme="dark"] .proj-ms__seg--future { background: repeating-linear-gradient(90deg, #3a4048 0 6px, transparent 6px 11px); }
+html[data-theme="dark"] .proj-head__dl--over { background: rgba(245, 108, 108, .15); }
+html[data-theme="dark"] .proj-ms__mark--focus { color: var(--brand); }
+@keyframes proj-ms-pop { from { transform: translate(-50%, -140%) scale(.4); opacity: 0 } to { transform: translate(-50%, -50%) scale(1); opacity: 1 } }
+</style>

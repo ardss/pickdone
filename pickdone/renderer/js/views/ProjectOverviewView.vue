@@ -119,3 +119,23 @@ export default {
 
 }
 </script>
+<style>
+/* ===== 迁移自全局沉积文件(scripts/css-move.mjs):以下规则随组件生灭 ===== */
+.proj-card {
+  padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--radius-md);
+  background: var(--hover-bg); cursor: pointer; transition: box-shadow var(--t-base), transform var(--t-base);
+}
+.proj-card:hover { box-shadow: 0 4px 16px rgba(0, 0, 0, .08); transform: translateY(-1px); }
+.proj-card__head { display: flex; align-items: center; gap: var(--space-2); }
+.proj-card__name { font-size: var(--fs-base); font-weight: 600; color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proj-card__pct { font-style: normal; margin-left: auto; font-size: var(--fs-md); font-weight: 600; color: var(--text-2); flex-shrink: 0; }
+.proj-card__meta { display: flex; gap: var(--space-3); margin-top: var(--space-2); font-size: var(--fs-xs); color: var(--text-3); flex-wrap: wrap; }
+.proj-card__overdue { color: var(--danger); font-weight: 600; }
+.proj-card__start { margin-left: auto; }
+.proj-card__head .proj-ring { margin-left: auto; flex-shrink: 0; }
+.proj-card__dl { font-weight: 600; color: var(--brand-dark); }
+.proj-card__dl--over { color: var(--danger); }
+/* N3 截止/临近卡片色 */
+.proj-card__dl--soon { color: var(--warn); }
+html[data-theme="dark"] .proj-card { background: rgba(255, 255, 255, .03); }
+</style>

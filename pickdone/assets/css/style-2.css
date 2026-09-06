@@ -103,7 +103,6 @@
 .fc-daygrid-day-bottom{color:var(--text-1);font-size: var(--fs-2xs);margin:2px 3px 0;cursor:pointer}
 .fc-daygrid-day-bottom:hover{color:var(--brand)}
 
-
 /* ========================= 搜索（SearchView）========================= */
 .main-nav-search{position:relative;display:flex;align-items:center;justify-content:center;width:185px;height:36px;margin:0 0 8px}
 /* 搜索页单一对齐轴：标题/搜索框/结果行同左缘(容器缘,原 12px 标题内缩与 4px 行内缩已清) */
@@ -127,7 +126,6 @@
 
 /* 空态（TodoListEmpty 组件样式） */
 
-
 /* ============ 图表容器预占高度（防止 canvas 渲染后布局位移导致滚动回弹） ============ */
 .chart-3__title, .chart-4__title { margin-bottom:var(--space-2); font-size: var(--fs-base); font-weight:600; color:var(--text-1); }
 .chart-3__subtitle, .chart-4__subtitle { margin-bottom:var(--space-4); font-size: var(--fs-sm); color:var(--text-3); }
@@ -139,7 +137,6 @@
   display: block; width: 100% !important; height: 100% !important;
 }
 .single { min-height: 40px; }
-
 
 /* ============ 24 小时时间轴（番茄统计） ============ */
 .tl-card { background: var(--panel, #fff); border-radius: var(--radius-md); padding: 16px 20px; margin-top: 14px; }
@@ -242,7 +239,6 @@ html[data-theme="dark"] .hm-tip--below::after { border-top-color: transparent; b
 @keyframes hm-tip-in { from { opacity: 0; transform: translate(-50%, calc(-100% - 4px)); } to { opacity: 1; transform: translate(-50%, calc(-100% - 8px)); } }
 @keyframes hm-tip-in-below { from { opacity: 0; transform: translate(-50%, 10px); } to { opacity: 1; transform: translate(-50%, 14px); } }
 
-
 /* ============ FullCalendar 轮子皮肤（对齐设计稿 .fc 参数） ============ */
 .cal-fc.fc { font-family: inherit; }
 .cal-fc.fc .fc-toolbar.fc-header-toolbar { display: none; }
@@ -312,7 +308,6 @@ html[data-theme="dark"] .hm-tip--below::after { border-top-color: transparent; b
 .cal-fc.fc .fc-more-popover .fc-popover-close:hover { opacity: 1; }
 .cal-fc.fc .fc-more-popover .fc-popover-body { padding: var(--space-2) 10px; min-width: 160px; }
 .cal-fc.fc .fc-more-popover .fc-daygrid-event { margin: 3px 0; }
-
 
 /* ============ 导出工具栏 ============ */
 .stat-export-bar {
@@ -606,7 +601,6 @@ html[data-theme="dark"] .hm-tip--below::after { border-top-color: transparent; b
 .ach-total__v { font-size: 18px; font-weight: 600; color: var(--brand); line-height: 1.2; }
 .ach-total__u { font-size: var(--fs-md); font-weight: 600; margin-left: 2px; }
 .ach-total__t { font-size: var(--fs-sm); color: var(--text-3); margin-top: var(--space-1); }
-
 
 .stat-hero__headline {
   margin-top: 14px; padding: 12px 16px;

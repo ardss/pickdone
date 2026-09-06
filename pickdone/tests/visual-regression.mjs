@@ -73,6 +73,11 @@ async function hygiene () {
     try { localStorage.setItem('appLocale', 'en-US'); localStorage.setItem('onboardingToursSeen', '1'); localStorage.setItem('onboardingDone', '1') } catch {}
     document.querySelectorAll('.ob-mask, [class*=onboarding]').forEach(e => e.remove())
     window.appUI && window.appUI.$store.commit('ui/toggleSettings', false)
+    // leftover-dialog dismissal (daily "move yesterday's leftover" modal pollutes every capture)
+    const dismiss = ['Stay yesterday', '留在昨天', 'Skip', '跳过', 'Later', '稍后']
+    for (const b of document.querySelectorAll('button')) {
+      if (dismiss.some(t => b.textContent.trim() === t)) b.click()
+    }
     return 'ok'
   })()` })
   await sleep(400)

@@ -6,31 +6,22 @@
 
 /* ===== 自 base.css 迁入（SideNav sn-，内容逐字未改；置于头部以保持原级联顺序 base < 本文件）===== */
 
-
 .sn-fixed { flex-shrink: 0; }
-
 
 .sn-scrollable { flex: 1; overflow-y: auto; min-height: 0; display: flex; flex-direction: column; }
 
-
 .sn-sync { width: 18px; height: 18px; cursor: pointer; opacity: .75; }
 
-
 .sn-sync:hover { opacity: 1; }
-
 
 /* 同步完成态：原位变对勾（描边画出 + 轻缩放），1.4s 后自动还原为同步图标 */
 .sn-sync--done { opacity: 1; animation: sn-sync-pop .22s cubic-bezier(.2, .8, .2, 1); }
 
-
 .sn-sync--done path { stroke-dasharray: 1; stroke-dashoffset: 1; animation: sn-sync-draw .28s cubic-bezier(.2, .8, .2, 1) .05s forwards; }
-
 
 @keyframes sn-sync-pop { from { transform: scale(.6); } 60% { transform: scale(1.15); } }
 
-
 @keyframes sn-sync-draw { to { stroke-dashoffset: 0; } }
-
 
 .sn-search {
   display: flex; align-items: center; gap: var(--space-2); height: 36px; margin: 0 0 10px;
@@ -39,40 +30,28 @@
   transition: background-color var(--dur-slow) cubic-bezier(.2,.8,.2,1), border-color var(--dur-slow) cubic-bezier(.2,.8,.2,1), padding var(--dur-slow) cubic-bezier(.2,.8,.2,1), margin var(--dur-slow) cubic-bezier(.2,.8,.2,1);
 }
 
-
 .sn-search .app-icon--search { transition: width var(--dur-mid) cubic-bezier(.2,.8,.2,1), height var(--dur-mid) cubic-bezier(.2,.8,.2,1), opacity var(--dur-mid) ease; }
-
 
 .sn-search input { transition: opacity var(--dur-fast) ease, transform var(--dur-mid) cubic-bezier(.2,.8,.2,1), padding var(--dur-slow) cubic-bezier(.2,.8,.2,1), flex var(--dur-slow) cubic-bezier(.2,.8,.2,1); }
 
-
 .sn-search i { font-style: normal; font-size: var(--fs-sm); opacity: .5; }
-
 
 .sn-search input { flex: 1; border: 0; background: none; font-size: var(--fs-md); color: var(--text-1); }
 
-
 .sn-search input::placeholder { color: #8a9099; }
 
-
-
 .sn-navs { display: flex; flex-direction: column; margin-bottom: 6px; }
-
 
 .sn-nav-item {
   display: flex; align-items: center; gap: var(--space-3); height: 40px; padding: 0 12px;
   border-radius: var(--radius-md); cursor: pointer; color: var(--text-1); font-size: var(--fs-md); transition: background var(--dur-fast);
 }
 
-
 .sn-nav-item:hover { background: var(--gray-bg); }
-
 
 .sn-nav-item.active { background: var(--brand-light); color: var(--brand); font-weight: 600; }
 
-
 .sn-nav-ico { width: 18px; height: 18px; }
-
 
 /* 计数徽标=灰底圆角 pill（2026-08-28 用户定稿，同.todo-fc 旧版样式），右缘留 4px 不贴高亮边；warn（过期待办）升级为红色 pill */
 .sn-badge { font-variant-numeric: tabular-nums;
@@ -81,50 +60,36 @@
   border-radius: var(--radius-md); padding: 3px 7px;
 }
 
-
 .sn-badge.warn { color: #fff; background: var(--danger-strong); }
 
  /* 4.91:1 白字达标 */
 /* 分节头折叠按钮：容器为普通 div（避免 role=button 内嵌真实按钮的 nested-interactive），按钮自身承载折叠语义 */
 .sn-sec-toggle { background: none; border: none; padding: 0; font: inherit; font-weight: 600; color: var(--text-1); cursor: pointer; display: inline-flex; align-items: center; }
 
-
 .sn-nav-item.active .sn-badge { color: inherit; font-weight: 600; }
 
-
-
 .sn-section { margin-top: var(--space-1); }
-
 
 .sn-sec-head { cursor: pointer;
   display: flex; align-items: center; justify-content: space-between;
   font-size: var(--fs-md); color: var(--text-2); font-weight: 600; padding: 6px 2px 4px;
 }
 
-
 .sn-sec-head.clickable { cursor: pointer; }
 
-
 .sn-sec-tools { display: flex; align-items: center; gap: var(--space-2); }
-
 
 .sn-cat-add {
   width: 46px; border: 0; background: none; text-align: right; font-size: var(--fs-md); color: var(--brand);
 }
 
-
 .sn-cat-add::placeholder { color: var(--brand); }
-
 
 .sn-manage { font-size: var(--fs-xs); color: var(--text-3); cursor: pointer; }
 
-
 .sn-manage:hover { color: var(--brand); }
 
-
 .sn-fold { color: var(--text-3); font-size: var(--fs-sm); }
-
-
 
 .sn-cat-item {
   /* 左 14 + 点 10 + 间距 16：圆点中心对齐导航图标中心(19)，文字起点对齐导航文字(40) */
@@ -132,28 +97,19 @@
   border-radius: var(--radius-md); cursor: pointer; font-size: var(--fs-md); color: var(--text-1);
 }
 
-
 .sn-cat-item:hover { background: var(--gray-bg); }
-
 
 .sn-cat-item.active { background: var(--brand-light); color: var(--brand); }
 
-
 .sn-dot { width: 10px; height: 10px; border-radius: 50%; border: 2px solid transparent; flex-shrink: 0; }
-
 
 .sn-dot.none { border-color: var(--text-4); background: var(--panel, #fff) !important; }
 
-
 .sn-cat-edit { border: 0; border-bottom: 1px solid var(--brand); background: none; flex: 1; font-size: var(--fs-md); }
-
 
 .sn-all-tag { color: var(--brand); font-size: var(--fs-md); }
 
-
 .sn-tags { margin-bottom: 6px; }
-
-
 
 /* 回收站：常态保持灰，hover 才高亮红（危险语义） */
 /* 账户卡片（底部）：头像 + 用户名 + 同步 + 设置，替代原顶部用户行与三点菜单 */
@@ -163,9 +119,7 @@
   background: var(--gray-bg);
 }
 
-
 .sn-account .ml-auto { margin-left: auto; }
-
 
 .sn-avatar {
   width: 26px; height: 26px; border-radius: var(--radius-md); flex-shrink: 0;
@@ -174,12 +128,10 @@
 
 }
 
-
 .sn-account .sn-username {
   font-size: var(--fs-md); font-weight: 600; color: var(--text-1);
   max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-
 
 .sn-account-gear {
   position: relative;
@@ -193,7 +145,6 @@
 .sn-upd-dot { position: absolute; top: 2px; right: 2px; width: 7px; height: 7px; border-radius: 50%;
   background: var(--danger-strong); box-shadow: 0 0 0 2px var(--panel, #fff); pointer-events: none; }
 
-
 .sn-account-gear:hover { background: rgba(0, 0, 0, .06); color: var(--text-1); }
 
 /* 回收站并入账户行(用户定稿):默认灰,hover/拖拽悬停才泛红 */
@@ -202,44 +153,30 @@
 .sn-account-trash.drag-over { outline: 1.5px dashed var(--danger-strong, #c4552d); }
 .sn-account-trash .sn-badge { position: absolute; top: -4px; right: -5px; }
 
-
-
 .sn-account .sn-sync { margin-left: 2px; }
-
-
 
 /* 4. 通用按压反馈：所有可点按钮按下轻微缩放（搭配各自 transition） */
 .el-button, .row-btn, button.mini, .sn-ico-btn, .grp-toggle-btn { transition: transform var(--dur-fast); }
 
-
 .el-button:active, .row-btn:active, button.mini:active, .sn-ico-btn:active { transform: scale(.96); }
-
-
 
 /* 10. 侧边栏分类/标签行高亮过渡（原来 hover/active 是硬切） */
 .sn-cat-item { transition: background var(--dur-fast), color var(--dur-fast); }
 
-
-
 /* 11. 待办 meta 徽章（日期/标签）hover 色过渡 */
 .td-meta .td-ico, .td-datetime, .sn-badge { transition: color var(--dur-fast), background-color var(--dur-fast); }
-
 
 .side-nav--collapsed .sn-brand__text,
 .side-nav--collapsed .sn-section,
 .side-nav--collapsed .sn-account { display: none; }
 
-
 .side-nav--collapsed .sn-navs .sn-nav-item span,
 .side-nav--collapsed .sn-navs .sn-nav-item em { display: none; }
 
-
 .side-nav--collapsed .sn-navs .sn-nav-item { justify-content: center; padding: 0; }
-
 
 /* 品牌标 svg 定尺寸（内联 svg 无宽高时按默认尺寸溢出，被 overflow 裁切成"缺角"） */
 .sn-brand__mark svg { width: 30px; height: 30px; display: block; }
-
 
 /* 折叠态：天气/搜索退化为图标钮（点击展开侧边栏） */
 /* 折叠态几何统一在下方「折叠态退化」区块（40px 图标方格），此处只管内容显隐 */
@@ -248,31 +185,23 @@
   display: flex; align-items: center; cursor: pointer; border-radius: var(--radius-md);
 }
 
-
 .side-nav--collapsed .sn-weather:hover,
 .side-nav--collapsed .sn-search:hover { background: var(--hover-bg); }
-
 
 .side-nav--collapsed .sn-weather .w-temp,
 .side-nav--collapsed .sn-weather .w-desc,
 .side-nav--collapsed .sn-weather .w-shape,
 .side-nav--collapsed .sn-weather .w-city { display: none; }
 
-
 .side-nav--collapsed .sn-search input,
 .side-nav--collapsed .sn-search .main-nav-search__clear { display: none; }
-
-
 
 /* 收起/展开整行可点（用户定稿）：品牌行任意位置点击都切换折叠，「»/«」只作视觉指示 */
 .sn-brand { cursor: pointer; border-radius: var(--radius-md); transition: background var(--dur-fast); }
 
-
 .sn-brand:hover { background: var(--hover-bg); }
 
-
 .sn-brand:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
-
 
 .sn-brand .sn-collapse-btn {
   margin-left: auto; width: 22px; height: 22px; border-radius: var(--radius-md);
@@ -281,18 +210,12 @@
   opacity: 0; transition: opacity var(--dur-fast);
 }
 
-
 .sn-brand:hover .sn-collapse-btn { opacity: 1; }
-
 
 /* 折叠态（48px 图标栏）：品牌行只留 mark，指示符隐藏，点击任意位置展开 */
 .side-nav--collapsed .sn-brand__text { display: none; }
 
-
 .side-nav--collapsed .sn-collapse-btn { display: none; }
-
-
-
 
 /* ==================== 侧边栏品牌头部（拾事 PickDone） ==================== */
 .sn-brand { display: flex; align-items: center; gap: 10px; padding: 14px 12px 10px 0; }
@@ -304,13 +227,9 @@
   display: flex; align-items: center; justify-content: center;
 }
 
-
 .sn-brand__name { font-size: var(--fs-lg); font-weight: 700; color: var(--text-1); line-height: 1.2; }
 
-
 .sn-brand__en { font-size: var(--fs-2xs); letter-spacing: 2.5px; text-transform: uppercase; color: var(--text-3); }
-
-
 
 /* ==================== 折叠态退化（搜索→纯图标 / 天气→纯图标 / 底部⚙设置） ==================== */
 /* 折叠态统一图标格：栏内边距收窄到 4px，品牌/天气/搜索/导航项/底部齿轮均为 40×40 正方形格（用户定稿：hover 高亮必须是方形，不允许异形长条） */
@@ -318,40 +237,30 @@
    注意 sn-fixed 是普通块容器，此 margin 与搜索框的 10px 下边距折叠取较大者，故净补偿 = 17-10 = 7px */
 .side-nav--collapsed { display: flex; flex-direction: column; padding: 12px 4px 10px; }
 
-
 .side-nav--collapsed .sn-navs { margin-top: 17px; }
-
 
 .side-nav--collapsed .sn-brand { height: 40px; padding: 0; justify-content: center; margin-bottom: var(--space-2); }
 
-
 .side-nav--collapsed .sn-weather { height: 40px; padding: 0; justify-content: center; margin-bottom: var(--space-2); } /* 8px 与品牌行下距同节奏(2026-08-31 用户反馈两段间距不一) */
-
 
 /* 展开态搜索行为对齐图标列加了左内边距，折叠态图标钮需重置回居中 */
 .side-nav--collapsed .sn-search { height: 40px; padding: 0; justify-content: center; }
 
-
 .side-nav--collapsed .sn-navs .sn-nav-item { height: 40px; padding: 0; justify-content: center; margin-bottom: var(--space-1); }
-
 
 .side-nav--collapsed .main-nav-search.sn-search:hover { background: var(--hover-bg); }
 
  /* 上面的透明背景同特异性更靠后，会吃掉 hover 高亮，这里补回 */
 .side-nav--collapsed .main-nav-search.sn-search input { flex: 0 0 0px; opacity: 0; transform: scale(.5); padding: 0; pointer-events: none; }
 
-
 .side-nav--collapsed .main-nav-search.sn-search .main-nav-search__clear { display: none; }
-
 
 .side-nav--collapsed .main-nav-search.sn-search .app-icon--search { width: 20px; height: 20px; opacity: .9; transform: translate(2px, 2px); }
 
  /* 放大镜字形画在视框左上角，折叠态无输入框衬托时视觉偏左，向中心补偿 */
 .sn-collapsed-foot { margin-top: auto; display: none; padding: 8px 0 10px; }
 
-
 .side-nav--collapsed .sn-collapsed-foot { display: flex; flex-direction: column; align-items: center; gap: 2px; }
-
 
 /* 折叠态展开把手：平时隐身，悬停侧栏任意区域从右缘中部滑出；半圆角贴边不占布局空间 */
 .side-nav--collapsed { position: relative; }
@@ -362,7 +271,6 @@
 .side-nav--collapsed:hover .sn-expand-hint, .sn-expand-hint:focus-visible { opacity: 1; }
 .sn-expand-hint:hover { background: var(--brand-light, #e2f4f1); color: var(--brand); }
 
-
 /* 展开态镜像把手：同位置同交互，箭头朝左、圆角朝右（与折叠态对称） */
 .side-nav:not(.side-nav--collapsed) { position: relative; }
 .sn-collapse-hint { position: absolute; right: 0; top: 50%; transform: translateY(-50%); width: 18px; height: 44px;
@@ -372,12 +280,10 @@
 .side-nav:not(.side-nav--collapsed):hover .sn-collapse-hint, .sn-collapse-hint:focus-visible { opacity: 1; }
 .sn-collapse-hint:hover { background: var(--brand-light, #e2f4f1); color: var(--brand); }
 
-
 .side-nav--collapsed .sn-cog-btn { width: 40px; height: 40px; padding: 0; justify-content: center; align-items: center; }
 
  /* 缺 align-items 时 svg 顶格，高亮格与图标错位 12px */
 .sn-cog-btn { background: none; border: none; color: var(--text-2); cursor: pointer; padding: 8px; border-radius: var(--radius-md); display: flex; position: relative; }
-
 
 .sn-cog-btn:hover { background: var(--hover-bg, #f5f5f5); color: var(--brand); }
 
@@ -388,7 +294,6 @@
 .side-nav--collapsed .sn-scrollable > *,
 .side-nav--collapsed .sn-collapsed-foot { animation: sn-slide .28s cubic-bezier(.2, .8, .2, 1) both; }
 
-
 @keyframes sn-slide {
   from { opacity: 0; transform: translateX(-10px); }
   to   { opacity: 1; transform: none; }
@@ -396,11 +301,9 @@
 
 /* ===== 自 base.css 迁入（EditPanel ep-，内容逐字未改；置于头部以保持原级联顺序 base < 本文件）===== */
 
-
 /* ============ 三栏骨架 ============ */
 /* position:relative：窄窗下绝对定位的 .edit-panel / .ep-rail 以此锚定（位于 25px 标题栏之下） */
 .app-shell { position: relative; display: flex; height: calc(100vh - 25px); margin-top: 25px; background: var(--bg, #fff); overflow-x: auto; overflow-y: hidden; }
-
 
 /* ============ 右侧编辑栏（right-sidebar） ============ */
 .edit-panel {
@@ -472,7 +375,6 @@
 
 .ep-done-chk .el-checkbox__input.is-checked .el-checkbox__inner,
 .ep-done-chk .el-checkbox__inner { border-radius: 50%; }
-
 
 /* ---- 分类/标签行式控件（2026-08-28 重构：弃 el-select 方框，统一"图标+文字+箭头"行语言） ---- */
 .ep-field-ico { width: 16px; justify-content: center; }
@@ -721,8 +623,6 @@
 
 .mini.danger:hover, .ep-mini.danger:hover, .danger-btn:hover { color: var(--danger-strong); border-color: var(--danger); } /* danger-btn 并入同一 hover(双轨合一) */
 
-
-
 /* 编辑栏图片格子改为可聚焦按钮：继承格子外观 */
 .ep-img-btn {
   display: block; width: 100%; height: 100%; padding: 0;
@@ -730,7 +630,6 @@
 }
 
 .ep-img-btn img { width: 100%; height: 100%; object-fit: cover; display: block; cursor: zoom-in; }
-
 
 /* —— 编辑面板 a11y 补丁：键盘焦点可见 / 伪可点击收敛 —— */
 /* 隐藏清除/删除 ✕ 仅 hover 显现，键盘聚焦时必须可见 */
@@ -755,25 +654,21 @@
 
 .ep-tools .ep-tool.disabled { cursor: default; opacity: .35; }
 
-
 /* ============ 全盘 UI/UX 打磨 v2（12 项） ============ */
 /* 1. 编辑面板内容滑入：选中待办后右栏内容 fade + 右侧 14px 滑入（ep-inner 为 v-if 挂载） */
 .ep-inner { animation: ep-slide-in .2s cubic-bezier(.2, .8, .2, 1) both; }
 
 @keyframes ep-slide-in { from { opacity: 0; transform: translateX(14px); } }
 
-
 /* 2. 编辑面板字段行 hover 微高亮（原来只有文字变色，缺面感） */
 .ep-row { border-radius: var(--radius-md); transition: background var(--dur-fast), color var(--dur-fast); }
 
 .ep-row:hover { background: var(--hover-bg); }
 
-
 /* 3. 编辑面板分类下拉出现动画（v-if 挂载即播） */
 .ep-cat-pop { animation: ep-cat-pop .15s cubic-bezier(.2, .8, .2, 1); transform-origin: top center; }
 
 @keyframes ep-cat-pop { from { opacity: 0; transform: scaleY(.96) translateY(-3px); } }
-
 
 /* 8. 滚动条全局统一：细圆角，hover 加深（main-scroll/page__main/sn-scrollable/ep-inner） */
 .main-scroll::-webkit-scrollbar, .page__main::-webkit-scrollbar,
@@ -790,14 +685,12 @@
 .main-scroll::-webkit-scrollbar-track, .page__main::-webkit-scrollbar-track,
 .sn-scrollable::-webkit-scrollbar-track, .ep-inner::-webkit-scrollbar-track { background: transparent; }
 
-
 /* ============ 交互控件禁选（连点/双击不再拉出选区；任务标题/描述等内容区不受影响） ============ */
 .sn-nav-item, .sn-cat-item, .sn-sec-head, .sn-sec-tools, .sn-user-row, .sn-section,
 .tg-head, .grp-toggle-btn, .todo-list-item-group-head,
 .day-strip, .ds-day, .ds-arrow, .ds-label, .ds-today-ico, .ds-cal-pop,
 .ep-row, .ep-cat-row, .ep-tags-row, .ep-date-chip, .ep-tag-chip, .ep-collapse-btn, .ep-done-row,
 .td-subs, .td-meta, .td-sub, .td-sub-check,
-
 
 /* 滚动到边界不再带动父级/整页（滚动链穿透） */
 .sn-scrollable, .main-scroll, .ep-inner, .ds-cal-pop, .cal-more-pop__body { overscroll-behavior: contain; }
@@ -809,14 +702,12 @@
 
 .ep-prio-btns button.on.prio-3 { background: var(--danger); border-color: var(--danger); color: #fff; }
 
-
 /* 按钮体系 token 统一（btn-mini-tokens）：.mini / .ep-mini / .row-btn 共用圆角/边框/悬停变量 */
 :root { --btn-border: var(--line-strong); --btn-radius: var(--radius-md); --btn-hover-brand: var(--brand); }
 
 .mini, .ep-mini, .row-btn { transition: color var(--dur-fast), border-color var(--dur-fast), background-color var(--dur-fast); }
 
 .ep-mini:hover { border-color: var(--btn-hover-brand); color: var(--btn-hover-brand); }
-
 
 /* 编辑栏多重提醒：每行=日期+时间+✕；+ 添加提醒行 */
 .ep-remind-line { display: flex; align-items: center; gap: var(--space-1); margin-bottom: 6px; }
@@ -1136,7 +1027,6 @@
 .ep-sub-x:hover { color: var(--danger); }
 .ep-sub-drag { color: var(--text-3); cursor: grab; }
 
-
 /* ============ 分类文件夹层级（设计稿 todo-category__folder 族） ============ */
 .sn-cat-folder { font-weight: 500; position: relative; }
 .sn-cat-folder .folder-toggle-icon {
@@ -1187,7 +1077,6 @@
 
 /* ============ 侧边栏滚动条对齐设计稿 simplebar（6px 圆角细条） ============ */
 
-
 /* ============ 快捷添加 todo-options 日期选项行（设计稿同类名） ============ */
 .todo-options { display: flex; gap: var(--space-2); align-items: center; margin-top: 10px; flex-wrap: wrap; }
 .todo-options__item {
@@ -1209,7 +1098,6 @@
 }
 .sn-cat-action .sn-action-ico.plus { color: var(--brand); font-weight: 700; }
 .sn-cat-action:hover { color: var(--brand); }
-
 
 /* ============ 今日待办日期速选条（设计稿 todo-date-selector） ============ */
 /* 方案A(用户定稿):日期条通栏,右端挂视图切换(pd-view-seg 走 #append 插槽) */
@@ -1289,7 +1177,6 @@
 }
 .sn-ico-btn:hover { color: var(--brand); background: var(--hover-bg); }
 
-
 /* ============ 天气组件（侧边栏） ============ */
 .sn-weather {
   display: flex; align-items: center; gap: 6px; padding: var(--space-2) 12px 8px 6px; /* 左6=图标重心对齐品牌标中心线(x≈25)：30px大标与16px小图标光学居中 */
@@ -1309,8 +1196,7 @@
   animation: w-breathe 1.2s ease-in-out infinite;
 }
 @keyframes w-spin { to { transform: rotate(360deg); } }
-@keyframes w-breathe { 50% { opacity: .35; } }
-@media (prefers-reduced-motion: reduce) {
+@keyframes w-breathe { 50% { opacity: .35; } }@media (prefers-reduced-motion: reduce) {
   .sn-weather.is-loading .w-icon,
   .sn-weather.is-loading .w-temp,
   .sn-weather.is-loading .w-desc,
@@ -1331,7 +1217,6 @@
 }
 
 /*（重复声明已并入上方主规则）*/
-
 
 /* 番茄一体控件(2026-09-03用户定稿):开始段+账目段同舱胶囊,替代散装的btn-tomato+td-tomcount
    (旧td-tomcount无样式继承杂色红#D9534F与删除同色太有攻击性)。hover整舱品牌高亮,
@@ -1358,7 +1243,6 @@
 .td-tom-pips i { width: 4px; height: 4px; border-radius: 50%; background: var(--line); }
 .td-tom-pips i.done { background: var(--brand); }
 .td-right .td-tom.ghost { visibility: hidden; pointer-events: none; }
-
 
 /* ============ 日历快速选择弹窗 ============ */
 .ds-cal-btn {
@@ -1391,7 +1275,6 @@
   width: 5px; height: 5px; border-radius: 50%; background: var(--brand);
 }
 
-
 /* ============ 分类区折叠 + hover 图标 ============ */
 .sn-sec-fold { cursor: pointer; }
 .sn-sec-foldable:hover .sn-ico-btn { opacity: 1; }
@@ -1406,7 +1289,6 @@
 }
 .sn-fold-arrow.open { transform: rotate(0deg); }
 .sn-fold-arrow:not(.open) { transform: rotate(-90deg); }
-
 
 /* ============ 右栏覆盖层模式（设计稿行为：滑出覆盖内容，不推挤布局） ============ */
 .edit-panel {
@@ -1435,43 +1317,11 @@
 
 /* 分类名溢出保护：长名不顶飞绝对定位的删除按钮 */
 .sn-cat-item .sn-cat-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-/* ==================== 项目视图（渐进披露：有项目才出现入口与页头） ==================== */
-/* 项目页头：名称/进度百分比/进度条/四问元信息 */
-.proj-head {
-  padding: 14px 28px 12px;
-  border-bottom: 1px solid var(--line);
-  background: var(--hover-bg);
-}
-.proj-head__title { display: flex; align-items: center; gap: var(--space-2); }
-.proj-head__name { font-size: var(--fs-lg); font-weight: 600; color: var(--text-1); }
-.proj-head__pct { font-style: normal; margin-left: auto; font-size: var(--fs-md); font-weight: 600; color: var(--text-2); }
-.proj-head__bar {
-  height: 4px; margin-top: var(--space-2); border-radius: var(--radius-xs);
-  background: var(--track-bg); overflow: hidden;
-}
-.proj-head__bar i { display: block; height: 100%; border-radius: var(--radius-xs); transition: width var(--t-slow); }
-.proj-head__meta {
-  display: flex; gap: var(--space-4); margin-top: var(--space-2);
-  font-size: var(--fs-xs); color: var(--text-3);
-}
 /* 管理分类弹窗：项目标记按钮选中态 */
 .cat-mgr-del--on { color: var(--brand); }
 .cat-mgr-del--on:hover { color: var(--brand-dark); background: var(--brand-light); }
 /* 项目总览页（导航级入口的卡片栅格；渐进披露：无项目时整页不可达） */
 .proj-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: var(--space-3); padding: 16px 28px; }
-.proj-card {
-  padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--radius-md);
-  background: var(--hover-bg); cursor: pointer; transition: box-shadow var(--t-base), transform var(--t-base);
-}
-.proj-card:hover { box-shadow: 0 4px 16px rgba(0, 0, 0, .08); transform: translateY(-1px); }
-.proj-card__head { display: flex; align-items: center; gap: var(--space-2); }
-.proj-card__name { font-size: var(--fs-base); font-weight: 600; color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.proj-card__pct { font-style: normal; margin-left: auto; font-size: var(--fs-md); font-weight: 600; color: var(--text-2); flex-shrink: 0; }
-.proj-card .proj-head__bar { margin-top: 10px; }
-.proj-card__meta { display: flex; gap: var(--space-3); margin-top: var(--space-2); font-size: var(--fs-xs); color: var(--text-3); flex-wrap: wrap; }
-.proj-card__overdue { color: var(--danger); font-weight: 600; }
-.proj-card__start { margin-left: auto; }
 
 /* 项目总览页工具条：说明文案 + 新建项目按钮（入口常驻后的主创建路径） */
 .proj-toolbar {
@@ -1490,133 +1340,19 @@
 .proj-ring__track { fill: none; stroke: var(--track-bg); stroke-width: 3.4; }
 .proj-ring__fill { fill: none; stroke-width: 3.4; stroke-linecap: round; transform: rotate(-90deg); transform-origin: 16px 16px; transition: stroke-dashoffset var(--t-slow); }
 .proj-ring__text { font-size: var(--fs-2xs); font-weight: 600; fill: var(--text-2); }
-.proj-card__head .proj-ring { margin-left: auto; flex-shrink: 0; }
-
-/* 里程碑时间轴（项目详情页头）：起点◇已过实心◆今天高亮未来空心，按日期比例定位 */
-/* ===== 里程碑 v2：时间轴（今天贯穿线/过去实线/未来虚线/节点气泡）+ 卡片（环形进度/倒计时/状态色） ===== */
-.proj-ms { display: flex; align-items: center; gap: 10px; margin-top: var(--space-3); }
-.proj-ms__track { position: relative; flex: 1; height: 22px; }
-.proj-ms__seg { position: absolute; top: 50%; height: 2px; margin-top: -1px; }
-.proj-ms__seg--past { left: 0; background: var(--brand); opacity: .55; }
-.proj-ms__seg--future { right: 0; background: repeating-linear-gradient(90deg, var(--line-strong) 0 6px, transparent 6px 11px); }
-.proj-ms__today { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: var(--brand); border-radius: 1px; }
-.proj-ms__mark {
-  position: absolute; top: 50%; transform: translate(-50%, -50%);
-  font-style: normal; font-size: var(--fs-xs); line-height: 1; cursor: default;
-  color: var(--text-4); transition: color var(--t-fast), transform var(--t-fast), background var(--t-fast);
-  z-index: 1;
-}
-.proj-ms__mark--done { color: var(--ok, #2e9e44); font-weight: 700; }
-.proj-ms__mark--today { color: var(--brand-dark); font-size: var(--fs-md); font-weight: 700; }
-.proj-ms__mark--future { color: var(--text-3); }
-.proj-ms__mark--deadline { color: var(--warn); font-size: var(--fs-md); }
-.proj-ms__mark--focus { color: var(--brand); font-size: var(--fs-md); font-weight: 700; }
-.proj-ms__mark[role="button"] { cursor: pointer; }
-.proj-ms__mark--new { animation: proj-ms-pop .45s cubic-bezier(.34, 1.56, .64, 1) both; }
-@keyframes proj-ms-pop { from { transform: translate(-50%, -140%) scale(.4); opacity: 0 } to { transform: translate(-50%, -50%) scale(1); opacity: 1 } }
-/* 悬停提示走标准浮层语言:面板底+描边+阴影(token 管理,深浅色自动适配),弃用旧反色黑底 */
-.proj-ms__mark[role="button"]::after {
-  content: attr(data-tip); position: absolute; bottom: calc(100% + 7px); left: 50%; transform: translateX(-50%) scale(.96);
-  background: var(--panel, #fff); color: var(--text-1, #222); border: 1px solid var(--line, #e6e8eb);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, .16); font-size: var(--fs-xs); white-space: nowrap;
-  padding: 4px 9px; border-radius: var(--radius-sm); opacity: 0; pointer-events: none;
-  transition: opacity var(--t-fast), transform var(--t-fast); z-index: 30;
-}
-.proj-ms__mark[role="button"]:hover, .proj-ms__mark[role="button"]:focus-visible { transform: translate(-50%, -50%) scale(1.25); }
-.proj-ms__mark[role="button"]:hover::after, .proj-ms__mark[role="button"]:focus-visible::after { opacity: 1; transform: translateX(-50%) scale(1); }
-.proj-ms__mark[role="button"]:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 /* 项目页页签:概览 / 依赖图 / 文档 */
 .proj-tabs { display: flex; gap: 2px; margin-top: 10px; border-bottom: 1px solid var(--line, #e6e8eb); }
-.proj-tab { padding: 7px 14px; border: none; background: transparent; color: var(--text-2, #555);
-  font-size: var(--fs-sm, 13px); cursor: pointer; border-radius: var(--radius-sm, 6px) var(--radius-sm, 6px) 0 0;
-  border-bottom: 2px solid transparent; transition: all var(--t-fast); }
-.proj-tab:hover { color: var(--text-1, #222); background: var(--hover-bg, #f6f6f6); }
-.proj-tab.on { color: var(--brand); border-bottom-color: var(--brand); font-weight: 600; }
-.proj-tab-body { display: flex; flex-direction: column; min-height: 0; }
-.proj-ms__add {
-  flex-shrink: 0; display: inline-flex; align-items: center; gap: var(--space-1);
-  font-size: var(--fs-xs); color: var(--text-3);
-  padding: 2px 8px; border-radius: var(--radius-sm); transition: all var(--t-fast);
-}
-.proj-ms__add:hover { color: var(--brand); background: var(--brand-light); }
-.proj-ms__empty { margin-top: var(--space-2); font-size: var(--fs-xs); color: var(--text-3); }
-
-/* 项目详情页编辑件：⋯菜单、截止日徽标、色板、截止旗标 */
-.proj-head__title { position: relative; }
-.proj-head__menu {
-  margin-left: 6px; padding: 3px 6px; border-radius: var(--radius-sm);
-  color: var(--text-3); transition: all var(--t-fast);
-}
-.proj-head__menu:hover { color: var(--brand); background: var(--brand-light); }
-.proj-head__dl {
-  font-size: var(--fs-xs); font-weight: 600; color: var(--brand-dark);
-  padding: 2px 8px; border-radius: var(--radius-pill); background: var(--brand-light);
-}
-.proj-head__dl--over { color: var(--danger); background: var(--danger-soft); }
-.proj-head__colorrow { display: inline-flex; align-items: center; gap: 5px; }
-.proj-head__swatch {
-  width: 11px; height: 11px; border-radius: 50%; cursor: pointer;
-  outline: 2px solid transparent; outline-offset: 1px; transition: outline-color var(--t-fast);
-}
-.proj-head__swatch:hover { transform: scale(1.2); }
-.proj-head__swatch.active { outline-color: var(--text-3); }
-.proj-card__dl { font-weight: 600; color: var(--brand-dark); }
-.proj-card__dl--over { color: var(--danger); }
-
-/* 里程碑「当前聚焦」（Linear 式） */
-.proj-ms__mark--focus { color: var(--brand); font-size: var(--fs-md); font-weight: 700; }
-
-/* 里程碑卡片：环形进度 + 倒计时 + 关联任务数 */
-.proj-ms-list { margin-top: 10px; border-top: 1px dashed var(--line); padding-top: var(--space-2); display: flex; flex-direction: column; gap: 6px; }
-.proj-ms-row {
-  display: flex; align-items: center; gap: var(--space-3); padding: 8px 12px;
-  border: 1px solid var(--line); border-radius: var(--radius-md, 10px); background: var(--panel, #fff);
-  font-size: var(--fs-sm); cursor: pointer; transition: border-color var(--t-fast), box-shadow var(--t-fast);
-}
-.proj-ms-row:hover { border-color: var(--brand); box-shadow: 0 2px 10px rgba(17, 121, 121, .08); }
-.proj-ms-row:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
-.proj-ms-row--soon { background: linear-gradient(90deg, rgba(230, 162, 60, .08), transparent 55%); }
 .ms-ring { flex-shrink: 0; }
 .ms-ring__track { stroke: var(--track-bg, #eef0f2); stroke-width: 3.5; }
 .ms-ring__bar { stroke: var(--brand); stroke-width: 3.5; stroke-linecap: round; transition: stroke-dashoffset var(--dur-slow) ease; transform: rotate(-90deg); transform-origin: 18px 18px; }
 .ms-ring__bar--done { stroke: var(--ok, #2e9e44); }
 .ms-ring__num { font-size: var(--fs-2xs); font-weight: 600; fill: var(--text-2); }
-.proj-ms-row__main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.proj-ms-row__line { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
-.proj-ms-row__line--sub { font-size: var(--fs-xs); color: var(--text-3); }
-.proj-ms-row__title { color: var(--text-1); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.proj-ms-row__date { flex-shrink: 0; }
-.proj-ms-row__linked { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.proj-ms-row__frac { margin-left: auto; flex-shrink: 0; font-variant-numeric: tabular-nums; }
-.proj-ms-row__tag { font-style: normal; font-size: var(--fs-2xs); color: var(--brand); background: var(--brand-light); padding: 1px 7px; border-radius: var(--radius-pill); flex-shrink: 0; }
-.proj-ms-row__tag--warn { color: var(--warn); background: rgba(230, 162, 60, .12); }
-.proj-ms-row__tag--danger { color: var(--danger); background: var(--danger-soft, rgba(214, 64, 54, .12)); }
-.proj-ms-row__tag--ok { color: var(--ok, #2e9e44); background: rgba(46, 158, 68, .1); }
-.proj-ms-row__ops { display: flex; align-items: center; gap: var(--space-1); flex-shrink: 0; opacity: 0; transition: opacity var(--t-fast); }
-.proj-ms-row:hover .proj-ms-row__ops, .proj-ms-row:focus-within .proj-ms-row__ops { opacity: 1; }
-.proj-ms-row__link, .proj-ms-row__del {
-  flex-shrink: 0; font-size: var(--fs-xs); color: var(--text-3);
-  padding: 2px 7px; border-radius: var(--radius-sm); transition: all var(--t-fast);
-}
-.proj-ms-row__link:hover, .proj-ms-row__del:hover { color: var(--brand); background: var(--brand-light); }
-.proj-ms-row__del:hover { color: var(--danger); }
-.proj-ms-tasks { padding: 6px 10px 8px; margin: 2px 0 6px; background: var(--gray-bg); border-radius: var(--radius-sm); }
-.proj-ms-tasks__tip { font-size: var(--fs-xs); color: var(--text-3); margin-bottom: 5px; }
-.proj-ms-tasks__item { display: flex; align-items: center; gap: 6px; padding: 2px 0; cursor: pointer; font-size: var(--fs-sm); color: var(--text-2); }
-.proj-ms-tasks__item .done { text-decoration: line-through; color: var(--text-4); }
-/* N4 近 7 天完成迷你趋势（页头元信息行内小柱） */
-.proj-head__trend { display: inline-flex; align-items: flex-end; gap: 2px; height: 14px; }
-.proj-trend-bar { display: inline-block; width: 3px; border-radius: 1px 1px 0 0; background: var(--brand); opacity: .55; }
-.proj-trend-bar:last-child { opacity: 1; }
-/* N3 截止/临近卡片色 */
-.proj-card__dl--soon { color: var(--warn); }
 
 /* —— 以下规则自 theme-dark.css 退回（选择器列表首支为浅色规则，不应集中到深色文件）—— */
 .side-nav--collapsed .main-nav-search.sn-search, html[data-theme="dark"] .side-nav--collapsed .main-nav-search.sn-search { height: 40px; padding: 0; justify-content: center; background: transparent; border-color: transparent; }
 
 /* 番茄预估胶囊（自重构分支移植的功能点） */
 .td-right .td-tom-est { display: inline-flex; align-items: center; gap: 2px; font-size: var(--fs-sm); color: var(--brand); background: var(--brand-light); border-radius: var(--radius-pill); padding: 1px 7px; margin-right: 6px; }
-
 
 /* ==================== 今日页 V2：视图切换/时间轨/卡片堆（自重构分支移植；时间轨本体样式由 DayRail.js 内联 V1_CSS 提供） ==================== */
 .pd-view-toolbar { display: flex; align-items: center; gap: var(--space-2); padding: 6px 20px; }
