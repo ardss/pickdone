@@ -1,6 +1,17 @@
 // i18n shard (Batch A): zh source chunk - do not edit values here for EN; see i18n/README.md
 export default {
   statsA: {
+    DepView: {
+      ready: 'Ready',
+      blocked: 'Blocked',
+      done: 'Recently done (48h)',
+      readyEmpty: 'Nothing ready right now',
+      blockedEmpty: 'Nothing is blocked',
+      doneEmpty: 'Nothing done in the last 48h',
+      allProjects: 'All',
+      filterLabel: 'Filter by project',
+      noTitle: 'Untitled'
+    },
     "core": {
     "leftoverMsg": "{n} event(s) left unfinished yesterday ({preview}{more}). Move them to today?",
     "leftoverTitle": "Left over from yesterday",

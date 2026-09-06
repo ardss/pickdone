@@ -245,3 +245,9 @@ export function safeSet (key, value) {
 export function cssVar (name) {
   try { return getComputedStyle(document.documentElement).getPropertyValue(name).trim() } catch { return '' }
 }
+
+/** 任务前置依赖解析:predecessors TEXT 列存 JSON 数组(前置 taskId);依赖功能(实验性,devMode 门控)的唯一渲染端解析口 */
+export function parsePredecessors (v) {
+  if (Array.isArray(v)) return v.filter(Boolean)
+  try { const a = JSON.parse(v || '[]'); return Array.isArray(a) ? a.filter(Boolean) : [] } catch { return [] }
+}

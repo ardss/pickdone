@@ -398,6 +398,7 @@ export default {
   "statsE.SettingsModal.autoRestoreEmpty": "No auto backups yet",
   "statsE.SettingsModal.autoRestoreConfirm": "Merge-restore tasks from the selected auto backup ({f})? Existing data is kept.",
   "statsE.TodayView.deckView": "Deck",
+  "statsE.TodayView.depsView": "Dependencies",
   "statsE.TodayView.deckAria": "Day-card deck view, arrow keys to browse days",
   "statsE.TodayView.overdueSince": "Overdue since {d}","statsE.TodayView.deckOverdue": "{n} overdue incomplete","statsE.TodayView.deckEmpty": "No tasks on this day",
   "statsE.TodayView.untitled": "(untitled)",

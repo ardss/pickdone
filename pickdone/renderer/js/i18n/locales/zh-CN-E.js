@@ -398,6 +398,7 @@ export default {
   "statsE.SettingsModal.autoRestoreEmpty": "暂无自动备份",
   "statsE.SettingsModal.autoRestoreConfirm": "确认按所选自动备份合并恢复任务数据（{f}）？当前已有数据不会被删除。",
   "statsE.TodayView.deckView": "卡片",
+  "statsE.TodayView.depsView": "依赖视图",
   "statsE.TodayView.deckAria": "日卡片堆叠视图，左右方向键翻看日期",
   "statsE.TodayView.overdueSince": "自 {d} 逾期未完成","statsE.TodayView.deckOverdue": "逾期未完成 {n} 项","statsE.TodayView.deckEmpty": "这一天没有任务",
   "statsE.TodayView.untitled": "（无标题）",

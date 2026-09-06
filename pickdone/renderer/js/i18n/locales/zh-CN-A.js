@@ -1,6 +1,17 @@
 // i18n 分片（Batch A）：统计复盘页（StatisticsView/ChartCard/chartConfigs/insights/achievements）+ MatrixGrid
 export default {
   statsA: {
+    DepView: {
+      ready: '可立即做',
+      blocked: '被阻塞',
+      done: '刚完成(48h)',
+      readyEmpty: '没有可立即做的任务',
+      blockedEmpty: '没有被阻塞的任务',
+      doneEmpty: '近 48 小时没有完成',
+      allProjects: '全部',
+      filterLabel: '按项目过滤',
+      noTitle: '无标题'
+    },
     "core": {
     "leftoverMsg": "昨天还剩 {n} 件日程未完成（{preview}{more}）。要把它们移到今天吗？",
     "leftoverTitle": "昨日剩余",

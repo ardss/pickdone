@@ -2,7 +2,7 @@
  * Core todo module — state/action semantics aligned with the reference todo module
  * status: add/update/delete -> sync; local meta.todosVersion acts as the sync cursor
  */
-import { genTaskId, nextSort, dayjs, reportError, DAY_MS, rangeDays } from '../utils/core.js'
+import { genTaskId, nextSort, dayjs, reportError, DAY_MS, rangeDays, parsePredecessors } from '../utils/core.js'
 import { expandRepeatDates } from '../utils/repeat.js'
 import { sortByMode } from '../utils/sortMode.js'
 import { getEstimate } from '../utils/tomatoEstimate.js'
@@ -39,10 +39,7 @@ const DEFAULT_VIEWS = () => ({
 // predecessors: JSON array of predecessor taskId strings, stored in a TEXT column (same pattern as subtasks)
 // FS semantics: a task is ready only when all of its predecessors are complete. Write-time DFS cycle guard — both renderer store and CLI
 // mirror this helper (they bypass each other and share no code).
-function parsePredecessors (v) {
-  if (Array.isArray(v)) return v.filter(Boolean)
-  try { const a = JSON.parse(v || '[]'); return Array.isArray(a) ? a.filter(Boolean) : [] } catch { return [] }
-}
+// parsePredecessors lives in utils/core.js (shared with DepView)
 function wouldCycle (list, taskId, newPreds) {
   const byId = {}
   for (const t of list) { if (!t.delete) byId[t.taskId] = t }
