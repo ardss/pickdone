@@ -9,10 +9,10 @@ const ROOT = require('path').join(__dirname, '..')
 const git = a => execFileSync('git', a, { cwd: ROOT, encoding: 'utf8' }).trim()
 const PERSONAL = /@(qq|foxmail|163|126|sina|gmail|outlook|hotmail|yahoo)\.(com|net|cn)$/i
 const out = git(['log', '-1', '--format=%an|%ae|%cn|%ce'])
-const [an, ae, cn, ce] = out.split('|')
+const [an, ae, , ce] = out.split('|')
 const bad = [ae, ce].filter(e => PERSONAL.test(e))
 if (bad.length) {
-  console.error(`✗ 提交身份门禁:HEAD(${an}) 的提交邮箱是个人邮箱(${[...new Set(bad)].join(',')})——公开仓一律用 GitHub noreply`)
+  console.error(`✗ 提交身份门禁:HEAD(author=${an}) 的提交邮箱是个人邮箱(${[...new Set(bad)].join(',')})——公开仓一律用 GitHub noreply`)
   console.error('  修复: git config user.email "92158419+ardss@users.noreply.github.com" && git commit --amend --reset-author --no-edit && 强推')
   process.exit(1)
 }
