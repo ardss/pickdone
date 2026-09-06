@@ -132,12 +132,21 @@ if (buildRs.some(r => !r.ok)) {
 }
 // ②③ 构建完成后同时起跑:静态池(纯文件分析/类型/单测)与 Electron 活体池互不依赖,
 // 只有 CPU 竞争——两池各自限道(3+3)避免把机器打满;更新链路类时序敏感阶段靠重试1次兜底
-console.log(`\n===== ${GROUPS[1].name} × ${GROUPS[2].name}（两池同时起跑） =====`)
-const [staticRs, liveRs] = await Promise.all([
-  runPool(GROUPS[1].stages, GROUPS[1].parallel),
-  runPool(GROUPS[2].stages, GROUPS[2].parallel, { retry: GROUPS[2].retry || 0 })
-])
-results.push(...staticRs, ...liveRs)
+// CI 自适应降道:GitHub windows runner 仅 4 vCPU,3+3 车道会挤爆多 Electron 实例+单测池
+// (2026-09-06 首次公开 CI 实锤:本地全绿、CI 6 项全红且全是自拉起实例门禁)。CI=静态 2 道+活体 1 道且两池不并发
+const ON_CI = !!(process.env.CI || process.env.GITHUB_ACTIONS)
+if (ON_CI) {
+  console.log('\n===== [CI 模式] 静态池(2 道)与 Electron 活体(1 道)顺序执行,不并发 =====')
+  results.push(...await runPool(GROUPS[1].stages, 2))
+  results.push(...await runPool(GROUPS[2].stages, 1, { retry: 1 }))
+} else {
+  console.log(`\n===== ${GROUPS[1].name} × ${GROUPS[2].name}（两池同时起跑） =====`)
+  const [staticRs, liveRs] = await Promise.all([
+    runPool(GROUPS[1].stages, GROUPS[1].parallel),
+    runPool(GROUPS[2].stages, GROUPS[2].parallel, { retry: GROUPS[2].retry || 0 })
+  ])
+  results.push(...staticRs, ...liveRs)
+}
 for (const g of GROUPS.slice(3)) {
   console.log(`\n===== ${g.name} =====`)
   const rs = await runPool(g.stages, g.parallel, { retry: g.retry || 0 })
