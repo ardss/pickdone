@@ -31,6 +31,7 @@ const DELETE_ALLOWLIST = [
 // R2: files allowed to dispatch todo/updateTodoFields directly (each entry documents why it
 // qualifies under the three-layer rule; new files must go through the same review, not copy-paste)
 const UPDATE_FIELDS_ALLOWLIST = [
+  'DepView.vue', // dependency linking (moveWithUndo undo exit; the edge is drawn by dragging one card onto another)
   'TodoItem.vue', // drag across days (hand-written undo toast) + subtask check persistence (inline visible state)
   'MatrixGrid.vue', // four-quadrant drag to swap cells (drag exemption)
   'DayDeck.vue', // card-stack drag to change day (moveWithUndo)

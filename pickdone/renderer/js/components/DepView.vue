@@ -28,8 +28,11 @@
       <span class="depv-proj__pct">{{ projectInfo.progressLabel }}</span>
     </div>
 
-    <!-- 依赖层级:列 = 依赖深度(拓扑分层),前置永远在左,依赖在右;横向滚动容纳十几条任务 -->
-    <div class="depv-cols" ref="cols">
+    <!-- 依赖层级:列 = 依赖深度(拓扑分层),前置永远在左,依赖在右;横向滚动容纳十几条任务。
+         连线层必须放在滚动内容(track)里:挂在外层的话,拖拽触发的横向滚动会让已画好的线与卡片错位,
+         看起来像"线不消失/挂错地方" -->
+    <div class="depv-cols" ref="viewport">
+     <div class="depv-track" ref="track">
       <div v-for="(col, ci) in cols" :key="ci" class="depv-col">
         <div class="depv-col__head">
           <span class="depv-col__title">{{ $t('statsA.DepView.stage') }} {{ ci + 1 }}</span>
@@ -76,18 +79,19 @@
           <div v-if="!col.length" class="depv-empty">—</div>
         </div>
       </div>
-    </div>
 
-    <!-- 依赖连线层:前置卡右缘 → 依赖卡左缘,恒向右;纯视觉,不挡点击 -->
-    <svg class="depv-wires" :width="wrapW" :height="wrapH" aria-hidden="true">
-      <defs>
-        <marker id="depv-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-          <path d="M0,0 L8,4 L0,8 z" :fill="wireColor"/>
-        </marker>
-      </defs>
-      <path v-for="(w, i) in wires" :key="i" :d="w.d" fill="none" :stroke="wireColor" stroke-width="1.6"
-            stroke-dasharray="5 4" marker-end="url(#depv-arrow)" opacity="0.85"/>
-    </svg>
+      <!-- 依赖连线层:前置卡右缘 → 依赖卡左缘,恒向右;纯视觉,不挡点击;随内容一起滚动 -->
+      <svg class="depv-wires" :width="trackW" :height="trackH" aria-hidden="true">
+        <defs>
+          <marker id="depv-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L8,4 L0,8 z" :fill="wireColor"/>
+          </marker>
+        </defs>
+        <path v-for="(w, i) in wires" :key="i" :d="w.d" fill="none" :stroke="wireColor" stroke-width="1.6"
+              stroke-dasharray="5 4" marker-end="url(#depv-arrow)" opacity="0.85"/>
+      </svg>
+     </div>
+    </div>
   </div>
 </template>
 
@@ -101,14 +105,14 @@
 import { dayjs, FMT, parsePredecessors } from '../utils/core.js'
 import { toggleTomatoAttach } from '../utils/taskRow.js'
 import { toggleCompleteWithUndo } from '../utils/completeAction.js'
-import { deleteWithUndo } from '../utils/confirm.js'
+import { deleteWithUndo, moveWithUndo } from '../utils/confirm.js'
 import { taskContextMenu } from '../utils/taskMenu.js'
 import { loadMilestones } from '../utils/milestones.js'
 
 export default {
   name: 'DepView',
   data () {
-    return { projectId: null, wires: [], wrapW: 0, wrapH: 0, dragTid: '', dropTid: '', msList: [] }
+    return { projectId: null, wires: [], trackW: 0, trackH: 0, dragTid: '', dropTid: '', msList: [] }
   },
   computed: {
     projects () { return this.$store.getters['category/projects'] || [] },
@@ -266,11 +270,15 @@ export default {
         if (p) parsePredecessors(p.predecessors).forEach(x => stack.push(x))
       }
       try {
-        await this.$store.dispatch('todo/updateTodoFields', {
-          taskId: t.taskId,
-          patch: { predecessors: cur.concat(srcId), status: 'update' }
+        var prevDeps = cur.slice()
+        moveWithUndo(this, {
+          label: this.$t('statsA.DepView.depAdded', { a: src.taskContent || '', b: t.taskContent || '' }),
+          apply: () => { this.$store.dispatch('todo/updateTodoFields', { taskId: t.taskId, patch: { predecessors: cur.concat(srcId), status: 'update' } }) },
+          revert: () => {
+            this.$store.dispatch('todo/updateTodoFields', { taskId: t.taskId, patch: { predecessors: prevDeps, status: 'update' } })
+            this.$nextTick(this.drawWires)
+          }
         })
-        this.$message.success(this.$t('statsA.DepView.depAdded', { a: src.taskContent || '', b: t.taskContent || '' }))
         this.$nextTick(this.drawWires)
       } catch (err) {
         this.$message.error(this.$t('statsA.DepView.cycleErr', { b: t.taskContent || '' }))
@@ -278,13 +286,14 @@ export default {
     },
     /** 依赖连线:前置卡右缘 → 依赖卡左缘(分层保证前置恒在左) */
     drawWires () {
-      var wrap = this.$refs.wrap
-      if (!wrap) return
-      var wrect = wrap.getBoundingClientRect()
-      this.wrapW = wrect.width
-      this.wrapH = wrect.height
+      var track = this.$refs.track
+      if (!track) return
+      var wrect = track.getBoundingClientRect()
+      // 以 track(滚动内容)为坐标系:线随内容一起滚动,外层怎么滚都不会错位
+      this.trackW = track.scrollWidth
+      this.trackH = Math.max(track.scrollHeight, wrect.height)
       var wires = []
-      var cards = wrap.querySelectorAll('.depv-task')
+      var cards = track.querySelectorAll('.depv-task')
       var pos = {}
       for (var i = 0; i < cards.length; i++) {
         var r = cards[i].getBoundingClientRect()
@@ -342,8 +351,9 @@ export default {
 .depv-proj__bar i { display: block; height: 100%; background: var(--brand); border-radius: 999px; transition: width .3s; }
 .depv-proj__pct { font-size: 11px; color: var(--text-3, #999); flex-shrink: 0; }
 
-.depv-cols { display: flex; gap: 12px; align-items: stretch; flex: 1; min-height: 0;
-  overflow-x: auto; overflow-y: hidden; }
+.depv-cols { flex: 1; min-height: 0; overflow: auto; }
+.depv-track { position: relative; display: flex; gap: 12px; align-items: stretch;
+  width: max-content; min-width: 100%; min-height: 100%; }
 .depv-col { width: 232px; flex-shrink: 0; display: flex; flex-direction: column;
   background: var(--panel, #fff); border: 1px solid var(--line, #e6e8eb); border-radius: 10px; min-height: 120px; }
 .depv-col__head { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-bottom: 1px solid var(--line, #e6e8eb); }
