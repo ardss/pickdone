@@ -70,7 +70,7 @@ node cli/cli-smoke.js                      # self-test (isolated DB, never touch
 
 20+ commands cover tasks / subtasks / statistics / recycle bin. The installed app ships the same CLI at `resources/cli/pickdone.js`, and `node cli/pickdone.js skill install` registers a `pickdone` skill so local coding agents discover it automatically. Full contract in [pickdone/cli/SKILL.md](pickdone/cli/SKILL.md).
 
-![AI CLI: one sentence and AI runs your day](docs/media/ai-cli-demo.gif)
+![AI CLI: one sentence and AI runs your day](docs/media/en/ai-cli-demo-en.gif)
 
 ## Development
 

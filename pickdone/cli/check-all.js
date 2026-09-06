@@ -40,6 +40,7 @@ const GROUPS = [
       ['ESM 模块图（import/export 匹配——白屏级事故在门禁拦截）', 'node', ['cli/check-esm-graph.cjs']],
       ['i18n 全量', 'node', ['cli/check-i18n.js', '--all']],
       ['i18n 体系（缺失/占位符/双形态/异值/主进程）', 'node', ['renderer/js/i18n/check-i18n.mjs']],
+      ['媒体语言配对（英文侧媒体必须 en 标记命名——中文界面 gif 曾混入英文 README 实锤,SOP-05 §5）', 'node', ['cli/check-media-lang.js']],
       ['hover 对比度（悬浮文字隐形/白字被改写,含负向自测）', 'node', ['cli/check-hover-contrast.cjs'], { HOVER_CONTRAST_SELFTEST: '1' }],
       ['scheduler 修复回归（firedReminders LRU+持久化+二次 fire 防退化）', 'node', ['cli/check-scheduler-lru.mjs']],
       // 直接用 node 起 eslint bin：npx 在部分环境（bash 无 npm 全局 PATH）spawn ENOENT 被误判为门禁红（2026-09-04 实锤）
