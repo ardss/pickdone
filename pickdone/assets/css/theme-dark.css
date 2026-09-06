@@ -44,8 +44,6 @@ html[data-theme="dark"] .sum-card { background: linear-gradient(160deg, var(--pa
 html[data-theme="dark"] .sum-card h2 { color: var(--text-1); }
 html[data-theme="dark"] blockquote { color: var(--text-3); }
 html[data-theme="dark"] .chart-box { background: var(--panel); }
-html[data-theme="dark"] .tomato-bar { background: var(--panel); }
-html[data-theme="dark"] .tomato-bar.running { background: var(--tomato-bg); }
 html[data-theme="dark"] .ring-bg { stroke: var(--line); }
 html[data-theme="dark"] .edit-panel { border-left-color: var(--line); }
 html[data-theme="dark"] .ep-title textarea, html[data-theme="dark"] .ep-desc textarea { color: var(--text-1) !important; }
@@ -241,10 +239,6 @@ html[data-theme="dark"] .el-select__wrapper.is-hovering,
 html[data-theme="dark"] .el-select__wrapper.is-focused { box-shadow: 0 0 0 1px var(--brand) inset; }
 html[data-theme="dark"] .el-select__placeholder { color: var(--text-4); }
 html[data-theme="dark"] .el-select__selected-item { color: var(--text-1); }
-/* 番茄计时数字:--brand-dark 暗底对比不足 */
-html[data-theme="dark"] .tomato-timer__time { color: #35c2ae; }
-html[data-theme="dark"] .tomato-timer__label,
-html[data-theme="dark"] .tomato-timer__count { color: var(--text-3); }
 
 /* 深色模式：已完成任务标题用暗灰（覆盖 base.css 的绿色高亮） */
 html[data-theme="dark"] .is-complete .td-title { color: var(--text-4); }

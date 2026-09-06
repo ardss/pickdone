@@ -230,3 +230,184 @@ export default {
 
 }
 </script>
+<style>
+/* ===== 迁移自全局沉积文件(scripts/css-move.mjs):以下规则随组件生灭 ===== */
+/* =====================================================================
+   style-4.css —— 番茄专注条 / 设置中心 / 重复任务弹窗 / 小组件窗口 / 番茄浮窗
+   本文件样式（沿用既有类名体系）：
+   - 构建产物 A   : .tomato-timer* / .fix1 / .icon-link / .cancel-attach-todo
+                            base-modal（.modal-container/.modal-tablecloth/.modal*）
+                            设置中心（.setting_tabs/.tab-panel/.form-item*）
+                            widget 日历下拉菜单
+   - 构建产物 B : 浮窗（.floating/.tomato* 等浮窗体系类）
+   ===================================================================== */
+/* ===== 自 base.css 迁入（番茄记录 tfr-，内容逐字未改；置于头部以保持原级联顺序 base < 本文件）===== */
+
+/* ==================== 番茄专注记录全屏弹窗（对齐.todo-fc 旧版 .tomato-record[scoped-hash]） ==================== */
+.tomato-record { padding: 10px 16px; border-bottom: 1px solid var(--line, #f3f3f3); }
+btn-play|stop|stop2|close）
+   ===================================================================== */
+
+/* ==================== 1. 底部番茄专注条（tomato-timer） ==================== */
+/*  */
+.tomato-timer {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 100%;
+  padding: 0 25px;
+  background-color: var(--tomato-bg);
+  transition: all .2s;
+}
+.tomato-timer--work { background-color: var(--tomato-bg); }
+.tomato-timer--rest { background-color: #f6e8d1; }
+.tomato-timer__status {
+  position: relative;
+  z-index: 1;
+  max-width: 40%;
+  color: var(--brand-dark);
+  font-weight: 400;
+  font-size: var(--fs-sm);
+  line-height: 18px;
+  transition: all .2s;
+}
+.tomato-timer__status > div { display: flex; align-items: center; }
+.tomato-timer__status > div:first-of-type { margin-bottom: var(--space-1); }
+.tomato-timer__status > div > span { min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.tomato-timer__status > div > div:last-of-type { flex-shrink: 0; }
+.tomato-timer__status--work { color: var(--brand-dark); }
+.tomato-timer__status--rest { color: #f93; }
+/* 右侧操作组：贴右缘排布（关联任务/开始专注/完整面板） */
+.tomato-timer__right {
+  left: auto;
+  right: 14px;
+  justify-content: flex-end;
+  flex-direction: row;
+  gap: 14px;
+  pointer-events: none;
+}
+/* 容器穿透点击，但按钮本身必须可点 */
+.tomato-timer__right > * { pointer-events: auto; }
+.tomato-timer__play,
+.tomato-timer__right {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: auto;
+}
+.tomato-timer__play {
+  right: 25px;
+  width: 138px;
+  height: 48px;
+  padding: 0;
+  color: #fff;
+  font-weight: 400;
+  font-size: var(--fs-lg);
+  line-height: 21px;
+  background-color: #0c8172;
+  border: none;
+  border-radius: var(--radius-sm);
+  transition: all .2s;
+}
+.tomato-timer__play:focus { outline: 0; box-shadow: 0 0 0 3px rgba(0,140,142,.25); }
+.tomato-timer__play:hover { background-color: #008284; }
+.tomato-timer__play:active { background-color: #00787a; }
+.tomato-timer__play:before {
+  display: block;
+  width: 16px;
+  height: 16px;
+  margin-right: 10px;
+  content: "";
+  background: currentColor;
+  -webkit-mask: url('app://app/assets/img/icon-tomato-timer2.svg') center / contain no-repeat;
+  mask: url('app://app/assets/img/icon-tomato-timer2.svg') center / contain no-repeat;
+}
+/* 专注中「■ 放弃专注」品牌青(2026-09-03用户拍板:砖红攻击性太强与品牌不符,放弃语义由文案承载) */
+.tomato-timer__play--work { background-color: #bd401e; }
+.tomato-timer__play--work:focus { outline: 0; box-shadow: 0 0 0 3px rgba(189,64,30,.25); }
+.tomato-timer__play--work:hover { background-color: #b3401e; }
+.tomato-timer__play--work:active { background-color: #a9401e; }
+/* 休息中：橙色按钮 */
+.tomato-timer__play--rest { background-color: #fe9933; }
+.tomato-timer__play--rest:focus { outline: 0; box-shadow: 0 0 0 3px rgba(254,153,51,.25); }
+.tomato-timer__play--rest:hover { background-color: #f49033; }
+.tomato-timer__play--rest:active { background-color: #ea8633; }
+/* 大号青色计时数字：点击 = 暂停/继续（实现交互补充） */
+.tomato-timer__time {
+  color: var(--brand-dark);
+  font-weight: 600;
+  font-size: 26px;
+  line-height: 42px;
+  cursor: pointer;
+  transition: all .2s;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 1px;
+  pointer-events: auto;
+}
+.tomato-timer__time--rest { color: #f93; }
+/* ====== 设计稿精确布局 ====== */
+.tomato-bar.tomato-timer {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 72px;
+  flex-shrink: 0;
+  padding: 0 25px;
+  background-color: var(--tomato-bg);
+  transition: all .2s;
+  overflow: visible;
+}
+.tomato-timer--rest { background-color: #f6e8d1; }
+.tomato-timer__status {
+  position: relative; z-index: 1; max-width: 40%;
+  color: var(--brand-text); font-weight: 400; font-size: var(--fs-sm); line-height: 18px;
+}
+.tomato-timer__status .tb-row {
+  display: flex; align-items: center; gap: var(--space-1);
+}
+.tomato-timer__status .tb-row + .tb-row { margin-top: 5px; }
+.tomato-timer__center {
+  position: absolute; top: 0; bottom: 0; right: 0; left: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  pointer-events: none;
+}
+.tomato-timer__center > * { pointer-events: auto; }
+.tomato-timer__time {
+  color: var(--brand-dark); font-weight: 600; font-size: 26px; line-height: 42px;
+  font-variant-numeric: tabular-nums;
+}
+.tomato-timer__time--rest { color: #fe9933; }
+.tomato-timer__play {
+  position: absolute; right: 25px; top: 0; bottom: 0; margin: auto;
+  width: 138px; height: 48px; padding: 0;
+  color: #fff; font-weight: 400; font-size: var(--fs-lg); line-height: 21px;
+  border: none; border-radius: var(--radius-sm); transition: all .2s;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+}
+/* —— 窄条变体：非今日视图专注/休息进行中的兜底形态（相位+倒计时+放弃，收成/白噪音/小窗已 v-if 收起） —— */
+.tomato-bar--slim { padding: 0 16px; }
+.tomato-bar--slim .tomato-timer__status { max-width: 46%; }
+.tomato-bar--slim .tomato-timer__time { font-size: 18px; line-height: 24px; }
+.tomato-bar--slim .tomato-timer__play { width: 108px; height: 30px; font-size: var(--fs-sm); }
+html[data-theme="dark"] .tomato-bar { background: var(--panel); }
+html[data-theme="dark"] .tomato-bar.running { background: var(--tomato-bg); }
+/* 番茄计时数字:--brand-dark 暗底对比不足 */
+html[data-theme="dark"] .tomato-timer__time { color: #35c2ae; }
+html[data-theme="dark"] .tomato-timer__label,
+html[data-theme="dark"] .tomato-timer__count { color: var(--text-3); }
+@media (max-width: 605px) {
+  .tomato-timer__time { margin-right: 0; }
+}
+@media print {
+  .tomato-timer { display: none; }
+}
+</style>
