@@ -141,3 +141,48 @@ export default {
 
 }
 </script>
+<style>
+/* ===== 迁移自全局沉积文件(scripts/css-move.mjs):以下规则随组件生灭 ===== */
+.qa-inputwrap {
+  position: relative; flex: 1; display: flex; align-items: center;
+  background: var(--gray-bg); border: 1px solid var(--line); border-radius: var(--radius-lg);
+  transition: border-color .2s, box-shadow .2s;
+}
+.qa-inputwrap:focus-within { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(15, 157, 143, .08); background: var(--panel, #fff); }
+/* —— 6. 快捷添加输入条：设计稿 .todo-input-add__input[scoped]
+      padding:10px 17px 字号12px lh17 底#f8f8f8 边1px #f3f3f3 圆角5px —— */
+.qa-inputwrap {
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  transition: border-color var(--dur-mid) cubic-bezier(.645,.045,.355,1);
+}
+.qa-inputwrap:focus-within { box-shadow: none; }
+html[data-theme="dark"] .qa-inputwrap:focus-within { background: var(--active-bg); }
+
+/* ===== 迁移自全局沉积文件(scripts/css-move.mjs):以下规则随组件生灭 ===== */
+.qa-cal .todo-input-add__calender { position: static; width: 100%; height: 100%; }
+/* ==================== 2. QuickAdd 日历按钮与日期 chip ==================== */
+/* 输入框右侧常驻日历按钮：
+   .todo-input-add__calender{
+     position:absolute;top:0;right:0;bottom:0;display:flex;align-items:center;
+     justify-content:center;padding:10px 12px;color:var(--brand-dark);...}
+*/
+.todo-input-add__calender {
+  position: absolute; top: 0; right: 0; bottom: 0; z-index: 2;
+  display: flex; align-items: center; justify-content: center;
+  width: 40px; padding: 0; color: var(--brand-dark); font-weight: 500; font-size: var(--fs-sm);
+  background: none; border: none; cursor: pointer;
+  border-top-right-radius: 5px; border-bottom-right-radius: 5px;
+}
+/* 图标用本项目 assets 的 calendar_month_black_24dp，遮罩着色为 var(--brand-dark) */
+.todo-input-add__calender::before {
+  display: block; width: 16px; height: 16px; content: "";
+  background-color: currentColor;
+  -webkit-mask: url("app://app/assets/img/calendar_month_black_24dp.svg") no-repeat 50% / 16px 16px;
+  mask: url("app://app/assets/img/calendar_month_black_24dp.svg") no-repeat 50% / 16px 16px;
+}
+.todo-input-add__calender:hover,
+.todo-input-add__calender:active { background-color: #f3f3f3; }
+.todo-input-add__calender:focus { outline: none; }
+.todo-input-add__calender img { width: 15px; height: 15px; }
+</style>

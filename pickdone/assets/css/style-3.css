@@ -137,29 +137,6 @@
 @keyframes sidebar-profile-spin { to { transform: rotate(1turn); } }
 @keyframes mgr-preview-in { from { opacity: 0; transform: translateY(-4px); } }
 
-/* ==================== 2. QuickAdd 日历按钮与日期 chip ==================== */
-/* 输入框右侧常驻日历按钮：
-   .todo-input-add__calender{
-     position:absolute;top:0;right:0;bottom:0;display:flex;align-items:center;
-     justify-content:center;padding:10px 12px;color:var(--brand-dark);...} */
-.todo-input-add__calender {
-  position: absolute; top: 0; right: 0; bottom: 0; z-index: 2;
-  display: flex; align-items: center; justify-content: center;
-  width: 40px; padding: 0; color: var(--brand-dark); font-weight: 500; font-size: var(--fs-sm);
-  background: none; border: none; cursor: pointer;
-  border-top-right-radius: 5px; border-bottom-right-radius: 5px;
-}
-/* 图标用本项目 assets 的 calendar_month_black_24dp，遮罩着色为 var(--brand-dark) */
-.todo-input-add__calender::before {
-  display: block; width: 16px; height: 16px; content: "";
-  background-color: currentColor;
-  -webkit-mask: url("app://app/assets/img/calendar_month_black_24dp.svg") no-repeat 50% / 16px 16px;
-  mask: url("app://app/assets/img/calendar_month_black_24dp.svg") no-repeat 50% / 16px 16px;
-}
-.todo-input-add__calender:hover,
-.todo-input-add__calender:active { background-color: #f3f3f3; }
-.todo-input-add__calender:focus { outline: none; }
-
 /* 日期选择浮层覆盖在日历按钮上（透明触发层）——
    设计稿做法: .todo-options__item--datetime .mx-datepicker{
      position:absolute;top:0;right:0;bottom:0;left:0;width:100%;opacity:0} */
@@ -236,15 +213,6 @@
 
 /* —— 5. 右编辑栏：设计稿 .right-sidebar[scoped]{min-width:335px;border-left:#f3f3f3} —— */
 .edit-panel { min-width: 335px; border-left: 1px solid #f3f3f3; }
-
-/* —— 6. 快捷添加输入条：设计稿 .todo-input-add__input[scoped]
-      padding:10px 17px 字号12px lh17 底#f8f8f8 边1px #f3f3f3 圆角5px —— */
-.qa-inputwrap {
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-  transition: border-color var(--dur-mid) cubic-bezier(.645,.045,.355,1);
-}
-.qa-inputwrap:focus-within { box-shadow: none; }
 .qa-input {
   height: auto; min-height: 37px;
   padding: 10px 17px;
@@ -310,7 +278,6 @@
 .todo-options__item:active { background: #e1e0e1; }
 .todo-options__item--active { background: var(--brand); color: #fff; }
 .todo-options__item--active:hover { background: #11a1a2; }
-.todo-input-add__calender img { width: 15px; height: 15px; }
 
 /* ============ 今日待办日期速选条（设计稿 todo-date-selector） ============ */
 /* 方案A(用户定稿):日期条通栏,右端挂视图切换(pd-view-seg 走 #append 插槽) */

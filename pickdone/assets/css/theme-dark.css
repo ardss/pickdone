@@ -29,7 +29,6 @@ html[data-theme="dark"] .td-item { border-bottom-color: var(--gray-bg); }
 html[data-theme="dark"] .td-check { background: var(--panel); border-color: #4a5058; }
 html[data-theme="dark"] .td-check.on { border-color: var(--brand); }
 html[data-theme="dark"] .checkbox { background: var(--panel); }
-html[data-theme="dark"] .qa-inputwrap:focus-within { background: var(--active-bg); }
 html[data-theme="dark"] .qa-btn.primary { background: var(--brand); color: #fff; }
 html[data-theme="dark"] .mini { background: var(--gray-bg); border-color: var(--line-strong); color: var(--text-2); }
 html[data-theme="dark"] .mini:hover { border-color: var(--brand); color: var(--brand); }
