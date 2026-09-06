@@ -15,7 +15,11 @@ function loadList () {
   // Don't persist-overwrite immediately when LS is corrupted: the DB-side init may still have recoverable real data; just let the seeds enter memory for now
   const now = Date.now()
   const mk = (i, name, color) => ({ categoryId: 100000 + i, userId: 840001, categoryName: name, categoryColor: color, createTime: now + i, listSort: 100 * i, folderIs: false, folderId: 0, delete: false })
-  const list = [mk(1, '工作', '#0f9d8f'), mk(2, '学习', '#f2a63b'), mk(3, '生活', '#7ac74f')]
+  // Names follow the UI language so an en-US first boot doesn't grow Chinese categories
+  const en = (function () { try { return (localStorage.getItem('appLocale') || 'zh-CN') === 'en-US' } catch (e) { return false } })()
+  const list = en
+    ? [mk(1, 'Work', '#0f9d8f'), mk(2, 'Study', '#f2a63b'), mk(3, 'Life', '#7ac74f')]
+    : [mk(1, '工作', '#0f9d8f'), mk(2, '学习', '#f2a63b'), mk(3, '生活', '#7ac74f')]
   if (!corrupt) persist(list)
   return list
 }
