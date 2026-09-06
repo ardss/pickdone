@@ -1,15 +1,17 @@
-# Dependency updates: weekly npm + Actions; security patches bypass grouping waits
-version: 2
-updates:
-  - package-ecosystem: npm
-    directory: /pickdone
-    schedule:
-      interval: weekly
-    groups:
-      minor-and-patch:
-        update-types: [minor, patch]
-    open-pull-requests-limit: 5
-  - package-ecosystem: github-actions
-    directory: /
-    schedule:
-      interval: weekly
+# Dependabot 暂停(2026-09-06 用户定稿):0.1.x 发布期手动控依赖,避免每周 PR 噪音;
+# 此前一晚开了 5 个 PR,其 refs/pull/* 会把被替换的提交钉在远端(脱敏发布线的已知坑)。
+# 重新启用方法:去掉本文件各行前的 "# " 前缀并提交。
+# version: 2
+# updates:
+#   - package-ecosystem: npm
+#     directory: /pickdone
+#     schedule:
+#       interval: weekly
+#     groups:
+#       minor-and-patch:
+#         update-types: [minor, patch]
+#     open-pull-requests-limit: 5
+#   - package-ecosystem: github-actions
+#     directory: /
+#     schedule:
+#       interval: weekly
