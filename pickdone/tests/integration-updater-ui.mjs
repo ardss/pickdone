@@ -39,7 +39,7 @@ const evaluate = async expr => {
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pd-upd-'))
 fs.writeFileSync(path.join(tmpDir, 'todos.db'), '')
 const PORT = 9447 // Windows 保留段 9292-9391 之外
-const child = spawn(ELECTRON, ['.', '--no-focus', '--remote-debugging-port=' + PORT], {
+const child = spawn(ELECTRON, ['.', '--no-focus', '--remote-debugging-port=' + PORT, ...(process.platform === 'linux' ? ['--no-sandbox'] : [])], {
   cwd: appCwd,
   env: { ...process.env, TODO_USER_DATA_DIR: tmpDir },
   stdio: ['ignore', fs.openSync(appCwd + '/tests/.artifacts/upd-app.log', 'a'), fs.openSync(appCwd + '/tests/.artifacts/upd-app.log', 'a')]
@@ -58,6 +58,10 @@ try {
         ok = true
       }
     } catch { await sleep(600) }
+  }
+  if (!ok) {
+    console.error('[diag] electron pid', child.pid, 'killed?', child.killed, 'exitCode', child.exitCode)
+    try { console.error('[diag] app log tail:\n' + fs.readFileSync(appCwd + '/tests/.artifacts/upd-app.log', 'utf8').split('\n').slice(-40).join('\n')) } catch {}
   }
   assert.ok(ok, 'app not ready within ~60s')
   await sleep(1500)

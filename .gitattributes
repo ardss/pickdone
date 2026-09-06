@@ -12,3 +12,7 @@
 *.wav binary
 *.db binary
 *.exe binary
+
+# vendored libs must byte-match node_modules on every platform (sfc-gate compares them)
+assets/vendor-lib/* binary
+pickdone/assets/vendor-lib/* binary

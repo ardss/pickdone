@@ -331,8 +331,15 @@ if (t0) {
 const frontSig = () => evalJson(`(() => { var f = document.querySelector('.pd-day-deck__card.front'); return f ? f.textContent.replace(/\\s+/g, ' ').trim() : null })()`)
 const d0 = await frontSig()
 if (d0) {
+  // The previous step opens the EditPanel; on narrow CI layouts it can overlap the card and
+  // swallow the drag's pointerdown. Close any overlay first (Escape + a corner click).
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: 8, y: 8, button: 'left', clickCount: 1 })
+  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: 8, y: 8, button: 'left', clickCount: 1 })
+  await sleep(600)
   // CI runners proved flakier than local desktops on synthetic drags: re-measure and retry the whole gesture
-  let d1 = d0
+  let d1 = await frontSig()
   for (let attempt = 1; attempt <= 3 && d1 === d0; attempt++) {
     const head = await evalJson(`(() => { var f = document.querySelector('.pd-day-deck__card.front'); var r = f.getBoundingClientRect(); var y = Math.round(r.y + Math.min(20, r.height / 2)); return { x: Math.round(r.x + r.width / 2), y: y } })()`)
     await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: head.x, y: head.y, button: 'left', buttons: 1, clickCount: 1 })

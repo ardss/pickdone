@@ -62,7 +62,7 @@ export async function spawnApp (opts = {}) {
   if (autoDir) _tempUserDataDirs.add(userDataDir) // 自建临时目录登记,测试进程退出时统一清(复用外部目录的不动,重启持久化类测试还要读)
   const logFile = path.join(ARTIFACTS, `${opts.name || 'app'}-app.log`)
   const baseArgs = opts.allowFocus ? [] : ['--no-focus']
-  const child = spawn(ELECTRON, ['.', ...baseArgs, '--remote-debugging-port=' + port, ...(opts.appArgs || [])], {
+  const child = spawn(ELECTRON, ['.', ...baseArgs, '--remote-debugging-port=' + port, ...(opts.appArgs || []), ...(process.platform === 'linux' ? ['--no-sandbox'] : [])], {
     cwd: APP_CWD,
     env: { ...process.env, TODO_USER_DATA_DIR: userDataDir },
     // app 输出写文件：node:test 会捕获 hook console，启动日志必须落盘可查

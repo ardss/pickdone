@@ -69,15 +69,22 @@ if (ALLOW_REUSE && await cdpAlive(CDP)) {
   // 按脚本名+pid 分文件:check:all 并行跑多个活体门禁时,共享单 log 会交错成乱码(2026-09-06 并行化配套)
   fs.mkdirSync(appCwd + '/tests/.artifacts', { recursive: true })
   const logFile = appCwd + '/tests/.artifacts/smoke-' + path.basename(SCRIPT).replace(/\W+/g, '-') + '-' + process.pid + '.log'
-  child = spawn(ELECTRON, ['.', '--no-focus', '--remote-debugging-port=' + port], {
+  child = spawn(ELECTRON, ['.', '--no-focus', '--remote-debugging-port=' + port, ...(process.platform === 'linux' ? ['--no-sandbox'] : [])], {
     cwd: appCwd,
     env: { ...process.env, TODO_USER_DATA_DIR: tmpDir },
     stdio: ['ignore', fs.openSync(logFile, 'a'), fs.openSync(logFile, 'a')]
   })
+  let childExit = null
+  child.once('exit', (code, signal) => { childExit = { code, signal } })
   // Wait for the instance to be ready (up to 60s:CI runner 冷启动 Electron 可超 25s,2026-09-06 公开 CI 实锤)
   let up = false
   for (let i = 0; i < 60; i++) { if (await cdpAlive(CDP)) { up = true; break } await new Promise(r => setTimeout(r, 1000)) }
-  if (!up) { console.error('FAIL: isolated instance not ready within 60s'); process.exit(1) }
+  if (!up) {
+    console.error('FAIL: isolated instance not ready within 60s')
+    if (childExit) console.error(`[diag] electron process already exited: ${JSON.stringify(childExit)}`)
+    try { console.error('[diag] app log tail:\n' + fs.readFileSync(logFile, 'utf8').split('\n').slice(-40).join('\n')) } catch {}
+    process.exit(1)
+  }
   await new Promise(r => setTimeout(r, 2000)) // wait for the renderer to boot
 }
 
