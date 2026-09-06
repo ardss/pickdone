@@ -19,6 +19,9 @@
    9999   锁屏（最高，任何浮层不得越过）
    ============================================================ */
 :root {
+  --btn-border: var(--line-strong); --btn-radius: var(--radius-md); --btn-hover-brand: var(--brand);
+  /* FullCalendar light defaults (straggler references in style-2; .cal-fc scope overrides) */
+  --fc-page-bg-color: #fff; --fc-border-color: #ddd; --fc-event-bg-color: #3788d8;
   --dot: var(--brand);
   --brand: #0f9d8f;
   --brand-dark: #0c8172;

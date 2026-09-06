@@ -1059,7 +1059,6 @@ export default {
 .ep-prio-btns button.on.prio-2 { background: #f2a63b; border-color: #f2a63b; color: #fff; }
 .ep-prio-btns button.on.prio-3 { background: var(--danger); border-color: var(--danger); color: #fff; }
 /* 按钮体系 token 统一（btn-mini-tokens）：.mini / .ep-mini / .row-btn 共用圆角/边框/悬停变量 */
-:root { --btn-border: var(--line-strong); --btn-radius: var(--radius-md); --btn-hover-brand: var(--brand); }
 .mini, .ep-mini, .row-btn { transition: color var(--dur-fast), border-color var(--dur-fast), background-color var(--dur-fast); }
 .ep-mini:hover { border-color: var(--btn-hover-brand); color: var(--btn-hover-brand); }
 /* 编辑栏多重提醒：每行=日期+时间+✕；+ 添加提醒行 */
@@ -1086,7 +1085,7 @@ export default {
 .ep-chip.on:active, .ep-date-chip.on:active { color: #fff; background-color: var(--brand); }
 /* 日期 chips 单行排布：收紧水平内边距、禁止换行，选中具体日期超长时截断 */
 .ep-date-chips .ep-date-chip { padding: 4px 9px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-; 清除叉 .icon--close2 仅设置后出现 */
+/* 提醒清除叉 .icon--close2 仅设置后出现 */
 .ep-remind-label { color: var(--text-3); transition: color var(--dur-mid); }
 .ep-remind-label--active { color: var(--brand-dark); }
 .ep-remind:hover .ep-remind-label { color: #919191; }
