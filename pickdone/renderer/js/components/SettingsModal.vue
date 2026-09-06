@@ -901,3 +901,114 @@ export default {
 
 }
 </script>
+<style>
+/* ===== 迁移自全局沉积文件(scripts/css-move.mjs):以下规则随组件生灭 ===== */
+/* ==================== 3. 设置中心（全屏 base-modal + setting_tabs + form） ==================== */
+/* 设计稿设置 = 全屏弹窗：header 为 el-tabs 页签，body 内 .tab-panel>.form>.form-label+.form-item */
+.setting_tabs { height: 100%; width: 100%; }
+.setting_tabs .el-tabs__header { margin: 0 !important; }
+/* EP 的下划线 translateX 按 nav 内 offsetLeft 计算，nav 不能再加 padding（会双重偏移）；内缩改到 header 上 */
+/* 下划线已改为页签自绘 ::after，nav 内边距不再影响对齐，安全 */
+.setting_tabs .el-tabs__nav { padding-left: 20px !important; }
+/* 去掉打开设置时活动标签自带的焦点高亮（element-ui 的蓝色内发光 + 浏览器 outline），激活态由下划线表达 */
+.setting_tabs .el-tabs__item:focus,
+.setting_tabs .el-tabs__item:focus-visible,
+.setting_tabs .el-tabs__item:focus.is-active.is-focus:not(:active) { outline: none !important; box-shadow: none !important; }
+/* EP 下划线由内联 transform 自动对齐页签，无需 element-ui 时代的 left 偏移 */
+/* EP 默认会去掉第 2 个页签的左 padding（nth-child(2)）和最后 1 个页签的右 padding（last-child），
+   导致页签内边距不均匀、自绘下划线除第一个页签外全部错位——设置弹窗内恢复均匀 20px，
+   配合下方对称 ::after（left/right 各 20px），下划线宽度恒等于文字宽度 */
+.setting_tabs .el-tabs__item:nth-child(2) { padding-left: 20px !important; }
+.setting_tabs .el-tabs__item:last-child { padding-right: 20px !important; }
+.setting_tabs .el-tabs__item.is-active,
+.setting_tabs .el-tabs__item:hover { color: var(--brand-dark); }
+/* EP 的活动条 translateX 计算在本布局下恒定偏右 20px（JS 内部测量），弃用之；
+   改用活动页签自身 ::after 画下划线 */
+.setting_tabs .el-tabs__active-bar { display: none !important; }
+.setting_tabs .el-tabs__item { position: relative; }
+.setting_tabs .el-tabs__item.is-active::after {
+  content: ''; position: absolute; left: 20px; right: 20px; bottom: 0;
+  height: 2px; background: var(--brand-dark); border-radius: var(--radius-xs);
+}
+.form-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-4);
+  margin-bottom: 16px;
+}
+/* 标签左对齐自然宽度：原 180px 定宽+右对齐使短标签悬在列中间，观感割裂 */
+.form-item__label {
+  flex: 0 1 auto;
+  min-width: 0;
+  color: var(--text-1);
+  font-weight: 500;
+  font-size: var(--fs-md);
+  line-height: 1.5;
+  text-align: left;
+}
+.form-item__control {
+  display: flex;
+  margin-left: auto;
+  min-width: 0;
+  max-width: 60%;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+}
+.form-item__control input, .form-item__control select {
+  display: block;
+  height: 24px;
+  padding: 0 10px;
+  font-size: var(--fs-base, 14px);
+  line-height: 1;
+  border: 1px solid var(--line-strong, #e4e7ed);
+  border-radius: var(--radius-sm, 4px);
+  background: transparent;
+  color: inherit;
+}
+.form-item__control input:focus, .form-item__control select:focus {
+  border-color: var(--brand);
+  outline: 0;
+  box-shadow: 0 0 0 3px var(--brand-focus-ring, rgba(15, 157, 143, .15));
+}
+.form-item__control__append {
+  flex-shrink: 0;
+  margin-left: 8px;
+  color: var(--text-3);
+  font-weight: 400;
+  font-size: var(--fs-base, 14px);
+  line-height: 1.4;
+}
+.form-item__tip {
+  width: 100%;
+  margin-top: 8px;
+  margin-left: 0;
+  color: var(--text-3);
+  font-size: var(--fs-sm, 12px);
+  line-height: 1.5;
+  word-break: break-word;
+}
+/* —— 设置卡片标签行紧凑化（卡片弹窗形态）：行高 50→44、与内容齐平，
+      去掉 Element 默认灰底线改用发丝线分隔。需 !important 压过上方全屏版规则 —— */
+.modal--settings .setting_tabs .el-tabs__nav { height: 44px !important; }
+.modal--settings .setting_tabs .el-tabs__item { height: 44px !important; line-height: 44px !important; }
+.modal--settings .setting_tabs .el-tabs__nav-wrap::after { display: none; }
+.modal--settings .setting_tabs .el-tabs__header { border-bottom: 1px solid #f3f3f3; }
+.setting_tabs .el-tabs__item { height: 40px; line-height: 40px; text-align: left; padding: 0 18px !important; }
+.setting_tabs .el-tabs__item:nth-child(2) { padding-left: 18px !important; }
+.setting_tabs .el-tabs__item:last-child { padding-right: 18px !important; }
+.setting_tabs .el-tabs__nav { padding-left: 6px !important; }
+.setting_tabs .el-tabs__nav-wrap::after { display: none !important; }
+.setting_tabs .el-tabs__item.is-active::after { left: 0 !important; right: auto !important; top: 9px; bottom: 9px; width: 2px; height: auto; }
+.setting_tabs .el-tabs__active-bar { display: none !important; }
+html[data-theme="dark"] .form-item__label { color: var(--text-1); }
+html[data-theme="dark"] .form-item__control input,
+html[data-theme="dark"] .form-item__control select {
+  background: var(--gray-bg); border-color: var(--line-strong); color: var(--text-1);
+}
+html[data-theme="dark"] .form-item__tip { color: var(--text-3); }
+/* 页签底部分隔线：亮色硬编码 #f3f3f3 在暗色下是刺眼亮白线 */
+html[data-theme="dark"] .modal--settings .setting_tabs .el-tabs__header { border-bottom-color: var(--line); }
+</style>
