@@ -90,10 +90,10 @@ try {
 
   console.log('[5] 今日页视图切换（四象限/卡片）')
   await goto('#/todo-list/today')
-  ok('四象限视图渲染', (await click('button[aria-label="四象限"]')) === 'ok' && (await evalJson(ctx, `document.querySelector('.today-list').innerHTML.includes('matrix')`)))
+  ok('四象限视图渲染', (await click('button[aria-label="Eisenhower matrix"]')) === 'ok' && (await evalJson(ctx, `document.querySelector('.today-list').innerHTML.includes('matrix')`)))
   await sleep(400)
-  ok('卡片视图渲染', (await click('button[aria-label="卡片"]')) === 'ok' && (await exists('.today-list .pd-day-deck, .today-list [class*=day-deck]')))
-  ok('切回列表视图', (await click('button[aria-label="列表"]')) === 'ok' && (await exists('.today-list .td-groups')))
+  ok('卡片视图渲染', (await click('button[aria-label="Deck"]')) === 'ok' && (await exists('.today-list .pd-day-deck, .today-list [class*=day-deck]')))
+  ok('切回列表视图', (await click('button[aria-label="List"]')) === 'ok' && (await exists('.today-list .td-groups')))
 
   console.log('[6] 回收站 UI 流')
   const beforeCnt = await storeGet(`$s.state.todo.todoList.filter(t=>!t.delete).length`)
@@ -102,8 +102,8 @@ try {
   ok('删除后活跃任务 -1', (await storeGet(`$s.state.todo.todoList.filter(t=>!t.delete).length`)) === beforeCnt - 1)
   await goto('#/todo-list/recycle-bin')
   ok('回收站页显示被删任务', await bodyHas('重复模板甲'))
-  ok('回收站提供 移到今天/彻底删除 按钮', await bodyHas('移到今天') && await bodyHas('彻底删除'))
-  ok('回收站行内 移到今天 还原点击', (await clickText('.recycle-page .btn', '移到今天')) === 'ok')
+  ok('回收站提供 移到今天/彻底删除 按钮', await bodyHas('Move to today') && await bodyHas('Delete forever'))
+  ok('回收站行内 移到今天 还原点击', (await clickText('.recycle-page .btn', 'Move to today')) === 'ok')
   await sleep(700)
   ok('还原后活跃任务恢复', (await storeGet(`$s.state.todo.todoList.filter(t=>!t.delete).length`)) === beforeCnt)
 
@@ -116,7 +116,7 @@ try {
   ok('编辑栏打开', await exists('.ep-inner'))
   ok('重复规则弹窗打开', (await click('.ep-repeat-row')) === 'ok' && await exists('.modal-container'))
   await sleep(600)
-  const gen = await evalJson(ctx, `(()=>{const b=[...document.querySelectorAll('.modal-container button')].find(x=>x.textContent.includes('生成'));if(!b)return 'nobtn';if(b.disabled)return 'disabled';b.click();return 'ok'})()`)
+  const gen = await evalJson(ctx, `(()=>{const b=[...document.querySelectorAll('.modal-container button')].find(x=>x.textContent.includes('Generate'));if(!b)return 'nobtn';if(b.disabled)return 'disabled';b.click();return 'ok'})()`)
   await sleep(1500)
   const cntAfterRepeat = await storeGet(`$s.state.todo.todoList.filter(t=>!t.delete).length`)
   ok('重复生成产出新任务', gen === 'ok' && cntAfterRepeat > cntBeforeRepeat, `gen=${gen} ${cntBeforeRepeat}→${cntAfterRepeat}`)
@@ -128,7 +128,7 @@ try {
   await storeRun(`$s.commit('ui/toggleSettings',true)`)
   await sleep(900)
   ok('设置弹窗打开', await exists('.modal-container'))
-  const setLen = await evalJson(ctx, `(()=>{const inp=document.querySelector('input[aria-label="专注时长（分钟）："]');if(!inp)return 'nosel';
+  const setLen = await evalJson(ctx, `(()=>{const inp=document.querySelector('input[aria-label="Focus length (min):"]');if(!inp)return 'nosel';
     const setter=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
     setter.call(inp,'30');inp.dispatchEvent(new Event('input',{bubbles:true}));
     inp.dispatchEvent(new Event('change',{bubbles:true}));inp.blur();return 'ok'})()`)
@@ -145,7 +145,7 @@ try {
   await sleep(500)
   await goto('#/todo-list/habit')
   await typeIn('.habit-add-input', '跑步')
-  ok('习惯「新建」按钮点击', (await clickText('button', '新建')) === 'ok')
+  ok('习惯「新建」按钮点击', (await clickText('button', 'New')) === 'ok')
   await sleep(700)
   ok('新建习惯卡片出现', await bodyHas('跑步') && (await exists('.habit-card')))
   ok('习惯打卡点击', (await clickText('.habit-card span', '✓')) === 'ok')
@@ -167,7 +167,7 @@ try {
   await goto('#/todo-list/today?date=2027-01-01')
   await sleep(400)
   const emptyDetail = await evalJson(ctx, `JSON.stringify({hash:location.hash,sel:window.appUI.$store.state.ui.daySelectedTs,empty:!!document.querySelector('.empty-state'),groups:document.querySelectorAll('.tg-group').length,body:document.body.innerText.replace(/\\s+/g,' ').slice(0,160)})`)
-  ok('无安排日显示空态文案', await bodyHas('这一天没有安排'), emptyDetail)
+  ok('无安排日显示空态文案', await bodyHas('Nothing scheduled'), emptyDetail)
 
   console.log('[12] EditPanel 番茄账目行')
   await goto('#/todo-list/today')

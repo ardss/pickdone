@@ -115,7 +115,7 @@ await evalJson(`(() => { window.__errs = []; window.addEventListener('error', e 
 // Retire every driver.js spotlight tour for this session: the spotlight overlay (body.driver-active) covers
 // the whole page and swallows all real clicks below, and Esc-on-document proved unreliable to dismiss it.
 // Seeding the seen-ledger before any view mounts means maybeRunTour no-ops — deterministic, no overlay at all.
-await evalJson(`(() => { try { localStorage.setItem('onboardingToursSeen', JSON.stringify({ today: 1, editpanel: 1 })) } catch {} ; return 'ok' })()`)
+await evalJson(`(() => { try { localStorage.setItem('onboardingToursSeen', JSON.stringify({ today: 1, editpanel: 1 })); localStorage.setItem('appLocale','en-US') } catch {} ; return 'ok' })()`)
 await send('Page.reload')
 if (!(await waitBoot())) { console.error('FAIL: reload after tour-seeding did not finish within 30s'); try { ws.close() } catch {} process.exit(1) }
 
@@ -139,7 +139,7 @@ if (hasBoxItems) {
   await click('.tb-dot-check'); await sleep(700)
   const n1 = await evalJson(`document.querySelectorAll('.tb-dot-check').length`)
   ok('dot completion takes effect (item leaves the inbox)', n1 === n0 - 1, `${n0} -> ${n1}`)
-  const undo = await evalJson(`(() => { var a = [...document.querySelectorAll('.el-message a')].find(x => x.textContent === '撤销'); if (a) { a.click(); return true } return false })()`)
+  const undo = await evalJson(`(() => { var a = [...document.querySelectorAll('.el-message a')].find(x => x.textContent === 'Undo'); if (a) { a.click(); return true } return false })()`)
   await sleep(700)
   const n2 = await evalJson(`document.querySelectorAll('.tb-dot-check').length`)
   if (undo) ok('undo restores the item', n2 === n0, `${n1} -> ${n2}`)
@@ -158,7 +158,7 @@ if (await evalJson(`!!document.querySelector('.todo-box-list-item')`)) {
   const checked1 = await evalJson(`(document.querySelector('.ep-done-row')||{getAttribute:()=>null}).getAttribute('aria-checked')`)
   ok('edit panel complete switch toggles', checked0 !== checked1, `${checked0} -> ${checked1}`)
   // Restore: click once more to return to the original state, and verify the toast undo link exists along the way
-  const undo = await evalJson(`(() => { var a = [...document.querySelectorAll('.el-message a')].find(x => x.textContent === '撤销'); if (a) { a.click(); return true } return false })()`)
+  const undo = await evalJson(`(() => { var a = [...document.querySelectorAll('.el-message a')].find(x => x.textContent === 'Undo'); if (a) { a.click(); return true } return false })()`)
   if (undo) { await sleep(600); ok('complete-undo link usable', true) } else { await click('.ep-done-row'); await sleep(500); ok('complete-undo link usable', false, 'undo link not found (inconsistent feedback conventions)') }
 } else {
   console.log('  - inbox empty; skipping the edit panel check')
@@ -184,16 +184,16 @@ await click('.stat-period-pill'); await sleep(400)
 // After clicking the first pill the title should change with the period (or match the initial - "title exists and the first pill is highlighted" counts as pass)
 const pillOn = await evalJson(`!!document.querySelector('.stat-period-pill.on')`)
 ok('period pill switching gives highlight feedback', pillOn)
-const viewTab = await evalJson(`[...document.querySelectorAll('.stat-view-tab')].find(b => b.textContent.trim() === '图表')`)
-if (viewTab) { await evalJson(`[...document.querySelectorAll('.stat-view-tab')].find(b => b.textContent.trim() === '图表').click()`); await sleep(800) }
+const viewTab = await evalJson(`[...document.querySelectorAll('.stat-view-tab')].find(b => b.textContent.trim() === 'Charts')`)
+if (viewTab) { await evalJson(`[...document.querySelectorAll('.stat-view-tab')].find(b => b.textContent.trim() === 'Charts').click()`); await sleep(800) }
 ok('chart tab: heatmap renders', await evalJson(`!!document.querySelector('.hm-grid')`))
 
 /* ---- 6. Settings page tab walk-through ---- */
 console.log('\n[6] settings page tabs')
-await click('.sn-account, [aria-label="设置"], .sn-settings'); await sleep(800)
+await click('.sn-account, [aria-label="Settings"], .sn-settings'); await sleep(800)
 const tabCount = await evalJson(`document.querySelectorAll('.settings-tabs .tab, .set-tabs button, [class*=tab]').length`)
 ok('settings page opens and has tab structure', tabCount > 0, 'tabs=' + tabCount)
-await evalJson(`(() => { var b = document.querySelector('.modal-close, [aria-label="关闭"], .set-close'); if (b) b.click(); return 'ok' })()`); await sleep(400)
+await evalJson(`(() => { var b = document.querySelector('.modal-close, [aria-label="Close"], .set-close'); if (b) b.click(); return 'ok' })()`); await sleep(400)
 
 /* ---- 7. Calendar view switching and pagination (cross-check; detailed assertions live in ui-smoke) ---- */
 console.log('\n[7] calendar toolbar')
@@ -217,7 +217,11 @@ if (mt0 > 0) {
   await sleep(800)
   const c1 = await cnt()
   ok('hover completion takes effect (completed count +1)', c1 === c0 + 1, `${c0} -> ${c1}`)
-  const undo = await evalJson(`(() => { var a = [...document.querySelectorAll('.el-message a')].find(x => x.textContent === '撤销'); if (a) { a.click(); return true } return false })()`)
+  const undo = await evalJson(`(() => { var a = [...document.querySelectorAll('.el-message a')].find(x => x.textContent === 'Undo'); if (a) { a.click(); return true } return false })()`)
+  if (!undo) {
+    const dbg = await evalJson(`JSON.stringify({toasts:[...document.querySelectorAll('.el-message')].map(m=>m.innerText.slice(0,60)), links:[...document.querySelectorAll('.el-message a')].map(a=>a.textContent), lang:localStorage.getItem('appLocale')})`)
+    console.log('  [debug] undo probe:', dbg)
+  }
   await sleep(800)
   const c2 = await cnt()
   if (undo) ok('matrix undo restores the completion state', c2 === c0, `${c1} -> ${c2}`)

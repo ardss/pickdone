@@ -74,10 +74,10 @@ if (ALLOW_REUSE && await cdpAlive(CDP)) {
     env: { ...process.env, TODO_USER_DATA_DIR: tmpDir },
     stdio: ['ignore', fs.openSync(logFile, 'a'), fs.openSync(logFile, 'a')]
   })
-  // Wait for the instance to be ready (up to 25s)
+  // Wait for the instance to be ready (up to 60s:CI runner 冷启动 Electron 可超 25s,2026-09-06 公开 CI 实锤)
   let up = false
-  for (let i = 0; i < 25; i++) { if (await cdpAlive(CDP)) { up = true; break } await new Promise(r => setTimeout(r, 1000)) }
-  if (!up) { console.error('FAIL: isolated instance not ready within 25s'); process.exit(1) }
+  for (let i = 0; i < 60; i++) { if (await cdpAlive(CDP)) { up = true; break } await new Promise(r => setTimeout(r, 1000)) }
+  if (!up) { console.error('FAIL: isolated instance not ready within 60s'); process.exit(1) }
   await new Promise(r => setTimeout(r, 2000)) // wait for the renderer to boot
 }
 

@@ -64,6 +64,9 @@ test('E2E precondition: connect CDP and wait for the app to be ready', { skip: !
     if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id) }
   }
   await send('Runtime.enable'); await send('Page.enable')
+  // Locale pin: assertions target the en-US surface — pin before any text-dependent check (CI runners boot en, dev boxes zh)
+  await send('Runtime.evaluate', { expression: "try{localStorage.setItem('appLocale','en-US');localStorage.setItem('onboardingToursSeen', JSON.stringify({today:1,editpanel:1}))}catch(e){}" })
+  await send('Page.reload', { ignoreCache: true })
   let booted = false
   for (let i = 0; i < 30 && !booted; i++) {
     booted = (await evalJson('document.querySelectorAll(".sn-nav-item").length')) > 0
@@ -87,7 +90,7 @@ test('E2E: settings modal opens (regression: an unclosed template div once broke
   assert.equal(st.open, true, 'the settings modal did not appear')
   // The widget tab was removed in an earlier iteration - this assertion rotted unnoticed while e2e was out of the gate (now wired into check:all it cannot rot again)
   // 关于 tab added (2282a78): standalone About+Feedback tab, appended before 数据管理
-  assert.deepEqual(st.tabs, ['通用', '外观', '日历', '快捷键', '番茄钟', '数据管理', '反馈与关于'])
+  assert.deepEqual(st.tabs, ['General', 'Appearance', 'Calendar', 'Shortcuts', 'Pomodoro', 'Data Management', 'Feedback & About'])
 })
 
 test('E2E: settings tab underline strictly aligns with text (regression: EP nth-child(2)/last-child padding misalignment)', { skip: !available || !isolated }, async () => {

@@ -70,7 +70,7 @@ async function shot () {
 // 拍摄前状态消毒:引导遮罩/新手引导会污染所有基线(ui-smoke L130 实锤);统一清理后再进场景循环
 async function hygiene () {
   await send('Runtime.evaluate', { expression: `(() => {
-    try { localStorage.setItem('onboardingToursSeen', '1'); localStorage.setItem('onboardingDone', '1') } catch {}
+    try { localStorage.setItem('appLocale', 'en-US'); localStorage.setItem('onboardingToursSeen', '1'); localStorage.setItem('onboardingDone', '1') } catch {}
     document.querySelectorAll('.ob-mask, [class*=onboarding]').forEach(e => e.remove())
     window.appUI && window.appUI.$store.commit('ui/toggleSettings', false)
     return 'ok'

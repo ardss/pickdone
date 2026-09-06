@@ -67,6 +67,10 @@ async function pressKey (key, code, keyCode) {
 }
 
 await connect()
+// Locale pin: assert the en-US surface deterministically (see SOP: tests pin appLocale before any text-dependent check)
+await evalJson("try{localStorage.setItem('appLocale','en-US');localStorage.setItem('onboardingToursSeen', JSON.stringify({today:1,editpanel:1}))}catch(e){}")
+await send('Page.reload')
+await sleep(2500)
 await evalJson("location.hash='#/todo-list/today'")
 await sleep(1800)
 
@@ -74,7 +78,7 @@ const results = []
 const ok = (name, cond) => { results.push([name, !!cond]); console.log((cond ? '  ✓ ' : '  ✗ ') + name) }
 
 // --- 1. Create a task via keyboard ---
-const quickSel = '[aria-label*="快捷添加"], .quick-add input, .quick-add-bar input, input[placeholder*="回车创建"]'
+const quickSel = '[aria-label*="Quick add"], .quick-add input, .quick-add-bar input, input[placeholder*="回车创建"]'
 const focused = await evalJson(`(()=>{window.focus();const i=document.querySelector('${quickSel}');if(!i)return false;i.focus();return !!document.activeElement && document.activeElement.tagName==='INPUT'})()`)
 if (focused) {
   const name = '键盘端到端样本' + Date.now() % 10000

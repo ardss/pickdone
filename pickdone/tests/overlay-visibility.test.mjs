@@ -20,7 +20,7 @@ test('setup: spawn isolated instance at minimum supported viewport', async () =>
   // 隔离实例=全新首次启动,新手引导浮层(ob-opts)会压在任何弹窗之上——先记账"已看过"并清掉现场,
   // 本门测的是确认框可见性;引导与弹层的先后关系是既有独立约束(引导须等弹层退场)
   await evalJson(ctx, `(() => {
-    localStorage.setItem('onboardingToursSeen', JSON.stringify({ today: true, editpanel: true, pips: true }))
+    localStorage.setItem('onboardingToursSeen', JSON.stringify({ today: true, editpanel: true, pips: true })) localStorage.setItem('appLocale', 'en-US')
     localStorage.setItem('onboardingDone', '1')
     document.querySelectorAll('[class*="driver-js"], [class*="driver-popover"], .ob-opts').forEach(e => e.remove())
     return 'tours dismissed'

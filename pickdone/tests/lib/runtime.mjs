@@ -122,6 +122,18 @@ export async function connectCdp (ctx, tries = 40) {
         ctx._ws = ws
         ctx._send = sendRaw
         ctx.consoleErrors = consoleErrors
+        // 语言钉死 zh-CN:CI runner 系统语言 en-US,应用跟随系统变英文,全套中文选择器/文案断言全哑
+        // (2026-09-06 公开 CI 实锤:body 文本以 "PickDone Completed…" 开头=导航已英文化)。pin appLocale=en-US (product default: en unless system zh) + reload + wait for shell ready.
+        try {
+          await sendRaw('Page.enable')
+          await sendRaw('Runtime.evaluate', { expression: "try{localStorage.setItem('appLocale','en-US')}catch(e){}" })
+          await sendRaw('Page.reload', { ignoreCache: true })
+          for (let i = 0; i < 40; i++) {
+            const rr = await sendRaw('Runtime.evaluate', { expression: '!!window.appUI && !!document.querySelector(.app-shell-INIT)'.replace('.app-shell-INIT', String.fromCharCode(39) + '.app-shell' + String.fromCharCode(39)), returnByValue: true }).catch(() => null)
+            if (rr && rr.result && rr.result.value === true) break
+            await sleep(500)
+          }
+        } catch { /* reload 通道异常时交还脚本自身的等待逻辑 */ }
         return ctx
       }
     } catch { /* app not ready */ }

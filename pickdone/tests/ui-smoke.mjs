@@ -155,7 +155,7 @@ await sleep(800)
 // Retire the driver.js spotlight tours too: the spotlight overlay fires 1.2s after TodayView mounts,
 // covers the whole page and swallows real clicks (flaky by timing — sometimes it lands on [4.5]).
 // Seeding the seen-ledger + reload means maybeRunTour no-ops for the rest of the run.
-await evalJson(`(()=>{try{localStorage.setItem('onboardingToursSeen',JSON.stringify({today:1,editpanel:1}))}catch{};return 'ok'})()`)
+await evalJson(`(()=>{try{localStorage.setItem('onboardingToursSeen',JSON.stringify({today:1,editpanel:1})); localStorage.setItem('appLocale','en-US')}catch{};return 'ok'})()`)
 await send('Page.reload')
 if (!(await waitBoot())) { console.error('FAIL: reload after tour-seeding did not finish within 30s'); try { ws.close() } catch {} process.exit(1) }
 await send('Runtime.evaluate', { expression: `location.hash='#/todo-list/today'` }); await sleep(1500)
@@ -177,7 +177,7 @@ console.log('[2] sidebar single highlight (regression: uncategorized once leaked
 // First switch to the inbox, once the worst-hit area
 await send('Runtime.evaluate', { expression: `location.hash='#/todo-list/todo-box'` }); await sleep(1000)
 const hl2 = await evalJson(`[...document.querySelectorAll('.sn-nav-item.active, .sn-cat-item.active')].map(e => e.textContent.trim())`)
-ok('inbox page has a single highlight', hl2.length === 1 && hl2[0].includes('待办箱'), JSON.stringify(hl2))
+ok('inbox page has a single highlight', hl2.length === 1 && hl2[0].includes('Todo box'), JSON.stringify(hl2))
 
 console.log('[3] data review')
 // Self-seeding defense (same rationale as ui-interactions [9]): the isolated instance is an empty DB and the
@@ -294,7 +294,7 @@ await send('Runtime.evaluate', { expression: `[...document.querySelectorAll('.pd
 const matrix = await evalJson(`({quads: document.querySelectorAll('.matrix-quadrant').length})`)
 ok('quadrant: all four quadrants render', matrix.quads === 4)
 await gotoHash('#/todo-list/calendar', '.cal-seg button')
-await send('Runtime.evaluate', { expression: `[...document.querySelectorAll('.cal-seg button')].find(b => b.textContent.trim() === '时间块')?.click()` })
+await send('Runtime.evaluate', { expression: `[...document.querySelectorAll('.cal-seg button')].find(b => b.textContent.trim() === 'Time blocks')?.click()` })
 for (let i = 0; i < 10; i++) { await sleep(1000); if (await evalJson(`document.querySelectorAll('.cal-tb__cell').length > 0`)) break }
 const tb = await evalJson(`({cells: document.querySelectorAll('.cal-tb__cell').length, pool: !!document.querySelector('.cal-tb__pool')})`)
 ok('time blocks: 7 days x 18 hours = 126 cells', tb.cells === 126, 'got ' + tb.cells)
@@ -302,7 +302,7 @@ ok('time blocks: unscheduled task pool exists', tb.pool)
 // Month-view ‹/› pagination: both the internal date and the visible grid must keep up (regression defense: Vue's reactive proxy wrapping the FC instance made renders never reach the DOM)
 await gotoHash('#/todo-list/calendar', '.cal-nav-group button')
 // Force back to month view first: leftover time-block view from the previous section would send nav() down the tbWeekStart branch without touching the month calendar
-await send('Runtime.evaluate', { expression: `[...document.querySelectorAll('.cal-seg button')].find(b => b.textContent.trim() === '月')?.click()` })
+await send('Runtime.evaluate', { expression: `[...document.querySelectorAll('.cal-seg button')].find(b => b.textContent.trim() === 'Month')?.click()` })
 await sleep(800)
 const navTitle = () => evalJson(`(document.querySelector('.cal-title')||{textContent:''}).textContent.trim()`)
 const t0 = await navTitle()
