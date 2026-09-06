@@ -10,6 +10,7 @@ export default {
       doneEmpty: 'Nothing done in the last 48h',
       allProjects: 'All',
       filterLabel: 'Filter by project',
+      waiting: 'waits for',
       noTitle: 'Untitled'
     },
     "core": {

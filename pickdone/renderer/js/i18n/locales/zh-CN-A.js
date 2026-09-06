@@ -10,6 +10,7 @@ export default {
       doneEmpty: '近 48 小时没有完成',
       allProjects: '全部',
       filterLabel: '按项目过滤',
+      waiting: '等',
       noTitle: '无标题'
     },
     "core": {
