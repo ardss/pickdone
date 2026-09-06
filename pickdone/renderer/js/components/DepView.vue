@@ -28,9 +28,10 @@
       <span class="depv-proj__pct">{{ projectInfo.progressLabel }}</span>
     </div>
 
-    <!-- 依赖层级:列 = 依赖深度(拓扑分层),前置永远在左,依赖在右;横向滚动容纳十几条任务。
-         连线层必须放在滚动内容(track)里:挂在外层的话,拖拽触发的横向滚动会让已画好的线与卡片错位,
-         看起来像"线不消失/挂错地方" -->
+    <!-- Dependency lanes: column = dependency depth (topological layering), predecessors always left,
+         dependents right; horizontal scroll fits a dozen cards. The wire layer must live inside the
+         scroll content (track): mounted outside, drag-triggered horizontal scrolling would offset the
+         drawn wires from their cards (looks like "wires never move / attach to the wrong place"). -->
     <div class="depv-cols" ref="viewport">
      <div class="depv-track" ref="track">
       <div v-for="(col, ci) in cols" :key="ci" class="depv-col">

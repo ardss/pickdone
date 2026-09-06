@@ -31,7 +31,7 @@ const script = `(() => {
       out.push(['[inject:' + id + ']', n0])
       continue
     }
-    const name = (ss.href.split('/').pop() || '').split('?')[0]
+    let name = (ss.href.split('/').pop() || '').split('?')[0]
     if (!name.endsWith('.css')) continue
     let n = 0
     try { n = ss.cssRules.length } catch { n = -1 }
@@ -46,7 +46,9 @@ try {
   await connectCdp(ctx)
   await evalJson(ctx, '1') // warm-up
   await sleep(1200)
-  const sheets = JSON.parse(await evalJson(ctx, script))
+  // Node 侧归一(双保险:页面侧同名规则在模板字符串里,这里兜底)——改样式→哈希变→基线失效的跑步机根治
+  const normName = n => /^index-[\w-]+\.css$/.test(n) ? 'index-built.css' : n
+  const sheets = JSON.parse(await evalJson(ctx, script)).map(([n, c]) => [normName(n), c])
   const live = Object.fromEntries(sheets)
 
   if (UPDATE) {
