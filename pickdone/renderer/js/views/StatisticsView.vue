@@ -12,7 +12,7 @@
             <div class="stat-view-tabs" role="tablist" :aria-label="$t('statsA.StatisticsView.ariaReviewViews')">
               <button v-for="v in views" :key="v.key" class="stat-view-tab"
                       :class="{on: view===v.key}" role="tab" :aria-selected="view===v.key"
-                      tabindex="0" @click="view=v.key" @keydown.enter.prevent="view=v.key">{{ v.text }}</button>
+                      tabindex="0" @click="view=v.key" @keydown.enter.prevent="view=v.key"><app-icon :name="v.icon" :size="13"/>{{ v.text }}</button>
             </div>
             <button class="mini" @click="openShare"><app-icon name="pic" :size="13"/> {{ $t('statsA.StatisticsView.shareCreate') }}</button>
             <button class="mini" @click="exportTable"><app-icon name="file" :size="13"/> {{ $t('statsA.StatisticsView.exportTable') }}</button>
@@ -380,8 +380,8 @@ export default {
     },
     views () {
       return [
-        { key: 'stat', text: this.$t(T + 'viewStat') },
-        { key: 'ach', text: this.$t(T + 'viewAch') }
+        { key: 'stat', icon: 'chart', text: this.$t(T + 'viewStat') },
+        { key: 'ach', icon: 'flag', text: this.$t(T + 'viewAch') }
       ]
     },
     /** Current period bounds (end is an exclusive upper bound; "this week" runs up to now, avoiding comparing a half week against full weeks) */

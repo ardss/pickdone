@@ -519,7 +519,8 @@ html[data-theme="dark"] .hm-tip--below::after { border-top-color: transparent; b
 }
 .stat-view-tab {
   border: 0; background: none; color: var(--text-2); font-size: var(--fs-sm);
-  padding: 5px 18px; border-radius: var(--radius-pill); cursor: pointer;
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 5px 14px; border-radius: var(--radius-pill); cursor: pointer;
   transition: color var(--dur-fast), background-color var(--dur-fast);
 }
 .stat-view-tab.on { background: var(--panel, #fff); color: var(--brand-text); font-weight: 600; box-shadow: 0 1px 4px rgba(31, 56, 88, .12); }
