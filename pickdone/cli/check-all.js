@@ -32,6 +32,7 @@ const GROUPS = [
       ['指纹脱敏', 'node', ['cli/check-fingerprint.js']],
       ['依赖许可证', 'node', ['cli/check-licenses.js']],
       ['token 纪律', 'node', ['cli/check-tokens.js']],
+      ['CSS 冻结(全局沉积文件只删不增,组件吸收重构护栏)', 'node', ['cli/check-css-freeze.mjs']],
       ['缓存戳纪律(?v= 未 bump=已装用户永拿旧缓存,2026-09-05 三笔连漏实锤后立门禁)', 'node', ['cli/check-cache-stamp.js']],
       ['提交身份(HEAD邮箱不得携带个人身份——QQ邮箱上公开仓实锤,SOP-02 §7)', 'node', ['cli/check-commit-identity.js']],
       ['变更操作反馈一致性（完成/删除/移动必须过撤销或确认出口,白名单制）', 'node', ['cli/check-op-feedback.js']],

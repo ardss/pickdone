@@ -19,6 +19,8 @@
     "check:i18n": "node cli/check-i18n.js",
     "check:a11y": "node cli/a11y-scan.js",
     "check:tokens": "node cli/check-tokens.js",
+    "check:css-freeze": "node cli/check-css-freeze.mjs",
+    "css:inventory": "node scripts/css-inventory.mjs",
     "check:all": "node cli/check-all.js",
     "smoke:ui": "node tests/ui-smoke.mjs",
     "visual:baseline": "node tests/visual-regression.mjs --baseline",
