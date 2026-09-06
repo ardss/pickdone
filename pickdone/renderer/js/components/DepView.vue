@@ -8,6 +8,9 @@
           <span class="depv-chip-dot" :style="{background: p.categoryColor}"></span>{{ p.categoryName }}
         </button>
       </div>
+      <button class="depv-chip" @click="tidyUp" :title="$t('statsA.DepView.tidyHint')">
+        <app-icon name="locate" :size="12"/>{{ $t('statsA.DepView.tidy') }}
+      </button>
       <span class="depv-hint">{{ $t('statsA.DepView.dragHint') }}</span>
     </div>
 
@@ -28,32 +31,38 @@
       <span class="depv-proj__pct">{{ projectInfo.progressLabel }}</span>
     </div>
 
-    <!-- Dependency lanes: column = dependency depth (topological layering), predecessors always left,
-         dependents right; horizontal scroll fits a dozen cards. The wire layer must live inside the
-         scroll content (track): mounted outside, drag-triggered horizontal scrolling would offset the
-         drawn wires from their cards (looks like "wires never move / attach to the wrong place"). -->
+    <!-- Free-form canvas (user-finalized 2026-09-06: hard "stage N" columns were too rigid).
+         Cards are absolutely positioned; x/y persist per project in meta (depView.pos.v1) and the
+         topological layering survives only as the auto-layout used for new/orphan cards and the
+         "tidy up" action. Drag the grip dot to move a card; drag the card itself onto another to
+         link a dependency; wires follow card rects. The wire layer must live inside the scroll
+         content (track): mounted outside, scrolling would offset wires from their cards. -->
     <div class="depv-cols" ref="viewport">
-     <div class="depv-track" ref="track">
-      <div v-for="(col, ci) in cols" :key="ci" class="depv-col">
-        <div class="depv-col__head">
-          <span class="depv-col__title">{{ $t('statsA.DepView.stage') }} {{ ci + 1 }}</span>
-          <em class="depv-col__count">{{ col.length }}</em>
-        </div>
-        <div class="depv-col__list">
-          <div v-for="t in col" :key="t.taskId" class="depv-task" tabindex="0" role="button"
-               :data-tid="t.taskId" draggable="true"
-               :class="{
-                 'depv-task--blocked': !t.complete && missingOf(t).length,
-                 'depv-task--ready': !t.complete && !missingOf(t).length,
-                 'depv-task--done': t.complete,
-                 'depv-task--droptarget': dropTid === t.taskId && dragTid && dragTid !== t.taskId,
-                 'depv-task--dragging': dragTid === t.taskId
-               }"
-               @click="openEdit(t)" @keydown.enter.prevent="openEdit(t)"
-               @contextmenu="taskContextMenu(t, $event)"
-               @dragstart="onDragStart(t, $event)" @dragend="onDragEnd"
-               @dragover.prevent="onDragOver(t, $event)" @dragleave="onDragLeave(t)" @drop.prevent="onDrop(t)">
-            <div class="depv-task__main">
+     <div class="depv-track" ref="track" :style="{ width: trackW + 'px', height: trackH + 'px' }">
+      <div v-for="t in inScope" :key="t.taskId" class="depv-task" tabindex="0" role="button"
+           :data-tid="t.taskId" draggable="true"
+           :style="{ left: (posMap[t.taskId] || { x: 0, y: 0 }).x + 'px', top: (posMap[t.taskId] || { x: 0, y: 0 }).y + 'px' }"
+           :class="{
+             'depv-task--blocked': !t.complete && missingOf(t).length,
+             'depv-task--ready': !t.complete && !missingOf(t).length,
+             'depv-task--done': t.complete,
+             'depv-task--droptarget': dropTid === t.taskId && dragTid && dragTid !== t.taskId,
+             'depv-task--dragging': dragTid === t.taskId,
+             'depv-task--moving': movingTid === t.taskId
+           }"
+           @click="openEdit(t)" @keydown.enter.prevent="openEdit(t)"
+           @contextmenu="taskContextMenu(t, $event)"
+           @dragstart="onDragStart(t, $event)" @dragend="onDragEnd"
+           @dragover.prevent="onDragOver(t, $event)" @dragleave="onDragLeave(t)" @drop.prevent="onDrop(t)">
+        <button class="depv-task__grip" draggable="false" tabindex="-1"
+                :title="$t('statsA.DepView.moveHint')" :aria-label="$t('statsA.DepView.moveHint')"
+                @pointerdown.prevent.stop="onGripDown(t, $event)">
+          <svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true">
+            <circle cx="2.5" cy="2.5" r="1.2" fill="currentColor"/><circle cx="7.5" cy="2.5" r="1.2" fill="currentColor"/>
+            <circle cx="2.5" cy="7.5" r="1.2" fill="currentColor"/><circle cx="7.5" cy="7.5" r="1.2" fill="currentColor"/>
+          </svg>
+        </button>
+        <div class="depv-task__main">
               <span class="td-check" :class="{on: !!t.complete}" role="checkbox" :aria-checked="t.complete ? 'true' : 'false'"
                     :aria-label="$t('statsJ.TodoItem.markDone')" tabindex="0"
                     @click.stop="completeTask(t)" @keydown.enter.prevent.stop="completeTask(t)">
@@ -69,19 +78,16 @@
                       @mousedown.stop @click.stop="quickDelete(t)">
                 <app-icon name="trash" :size="13"/>
               </button>
-            </div>
-            <!-- blocked 卡第二行:等谁,一个前置一个 chip,点 chip 跳到该前置 -->
-            <div v-if="!t.complete && missingOf(t).length" class="depv-task__wait">
-              <span class="depv-task__wait-label">{{ $t('statsA.DepView.waiting') }}</span>
-              <span v-for="m in missingOf(t)" :key="m.id" class="depv-miss" :title="m.name"
-                    @click.stop="jumpTo(m.id)">{{ m.name }}</span>
-            </div>
-          </div>
-          <div v-if="!col.length" class="depv-empty">—</div>
+        </div>
+        <!-- blocked card second row: who it waits for, one chip per missing predecessor, click jumps to it -->
+        <div v-if="!t.complete && missingOf(t).length" class="depv-task__wait">
+          <span class="depv-task__wait-label">{{ $t('statsA.DepView.waiting') }}</span>
+          <span v-for="m in missingOf(t)" :key="m.id" class="depv-miss" :title="m.name"
+                @click.stop="jumpTo(m.id)">{{ m.name }}</span>
         </div>
       </div>
 
-      <!-- 依赖连线层:前置卡右缘 → 依赖卡左缘,恒向右;纯视觉,不挡点击;随内容一起滚动 -->
+      <!-- Dependency wires: predecessor right edge -> dependent left edge; visual only, never blocks clicks -->
       <svg class="depv-wires" :width="trackW" :height="trackH" aria-hidden="true">
         <defs>
           <marker id="depv-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -91,7 +97,7 @@
         <path v-for="(w, i) in wires" :key="i" :d="w.d" fill="none" :stroke="wireColor" stroke-width="1.6"
               stroke-dasharray="5 4" marker-end="url(#depv-arrow)" opacity="0.85"/>
       </svg>
-     </div>
+      </div>
     </div>
   </div>
 </template>
@@ -113,7 +119,8 @@ import { loadMilestones } from '../utils/milestones.js'
 export default {
   name: 'DepView',
   data () {
-    return { projectId: null, wires: [], trackW: 0, trackH: 0, dragTid: '', dropTid: '', msList: [] }
+    return { projectId: null, wires: [], trackW: 0, trackH: 0, dragTid: '', dropTid: '', msList: [],
+      posMap: {}, movingTid: '' }
   },
   computed: {
     projects () { return this.$store.getters['category/projects'] || [] },
@@ -126,20 +133,22 @@ export default {
       if (this.projectId == null) return list
       return list.filter(function (t) { return t.categoryId === this.projectId }.bind(this))
     },
-    /** 拓扑分层:level(t)=前置 level 最大值+1(仅计范围内前置);完成任务也参与分层(它们是链条的锚点) */
-    cols () {
+    /** Topological depth: depth(t) = max(depth of predecessors) + 1 (in-scope predecessors only).
+     *  No longer rendered as hard "stage" columns - it is the auto-layout for new/orphan cards
+     *  and for the tidy-up action (user-finalized 2026-09-06: free canvas, not fixed lanes). */
+    depthSeq () {
       var list = this.inScope
       var byId = {}
       for (var i = 0; i < list.length; i++) byId[list[i].taskId] = list[i]
       var memo = {}
       var visiting = {}
-      var levelOf = (t) => {
+      var depthOf = (t) => {
         if (memo[t.taskId] != null) return memo[t.taskId]
-        if (visiting[t.taskId]) return 0 // 环:store 写入时已拦截,这里只保证不死循环
+        if (visiting[t.taskId]) return 0 // cycle: rejected at store write; here just avoid infinite loop
         visiting[t.taskId] = true
         var preds = parsePredecessors(t.predecessors).filter(pid => byId[pid])
         var l = 0
-        for (var k = 0; k < preds.length; k++) l = Math.max(l, levelOf(byId[preds[k]]) + 1)
+        for (var k = 0; k < preds.length; k++) l = Math.max(l, depthOf(byId[preds[k]]) + 1)
         visiting[t.taskId] = false
         memo[t.taskId] = l
         return l
@@ -147,11 +156,10 @@ export default {
       var buckets = []
       for (var j = 0; j < list.length; j++) {
         var t = list[j]
-        var l = levelOf(t)
+        var l = depthOf(t)
         ;(buckets[l] = buckets[l] || []).push(t)
       }
-      if (!buckets.length) buckets = [[]]
-      // 列内排序:未完成在前,可立即做的先于被阻塞的,再按日期
+      // In-lane order: unfinished first, ready before blocked, then by date
       var rank = (t) => (t.complete ? 2 : (this.missingOf(t).length ? 1 : 0))
       return buckets.map(b => b.sort((a, c) =>
         rank(a) - rank(c) || (a.dayStart || 0) - (c.dayStart || 0) || (a.createTime || 0) - (c.createTime || 0)))
@@ -187,24 +195,112 @@ export default {
   watch: {
     projectId () {
       this.loadMs()
+      this.loadPos()
       this.$nextTick(this.drawWires)
     },
-    cols () { this.$nextTick(this.drawWires) }
+    inScope: {
+      deep: false,
+      handler () { this.$nextTick(() => { this.ensurePositions(); this.drawWires() }) }
+    }
   },
   mounted () {
     // 有项目时默认聚焦第一个项目(按项目看整体链路是本视图的主用法)
     if (this.projectId == null && this.projects.length) this.projectId = this.projects[0].categoryId
     this.loadMs()
+    this.loadPos()
     this.$nextTick(this.drawWires)
     window.addEventListener('resize', this.drawWires)
     this._wireTimer = setInterval(this.drawWires, 1500) // 轻量兜底:列表增删/完成联动后重画(不依赖深层 watcher)
   },
   beforeUnmount () {
     window.removeEventListener('resize', this.drawWires)
+    window.removeEventListener('pointermove', this.onGripMove)
+    window.removeEventListener('pointerup', this.onGripUp)
     clearInterval(this._wireTimer)
+    this.flushPos()
   },
   methods: {
     taskContextMenu (t, e) { taskContextMenu(this, t, e) },
+    // —— 画布布局:位置持久化 + 自动整理(自由画布是定稿形态,分层只是布局算法) ——
+    posKey () { return 'depView.pos.v1:' + (this.projectId == null ? 'all' : String(this.projectId)) },
+    loadPos () {
+      this.posMap = {}
+      window.todoAPI.dbCall('getMeta', this.posKey()).then(raw => {
+        try { this.posMap = JSON.parse(raw) || {} } catch (e) { this.posMap = {} }
+        this.ensurePositions()
+        this.$nextTick(this.drawWires)
+      }).catch(() => { this.ensurePositions() })
+    },
+    savePosTimer: null,
+    savePos () {
+      clearTimeout(this.savePosTimer)
+      this.savePosTimer = setTimeout(() => this.flushPos(), 400)
+    },
+    flushPos () {
+      clearTimeout(this.savePosTimer)
+      window.todoAPI.dbCall('setMeta', [this.posKey(), JSON.stringify(this.posMap)]).catch(() => {})
+    },
+    /** Auto-layout coordinates: depth -> x, index within depth -> y. Fills only cards that have
+     *  no user-placed position yet, so rearranging the canvas never fights the user. */
+    autoPosOf (t, idxInLane, laneIdx) {
+      return { x: 24 + laneIdx * 260, y: 20 + idxInLane * 100 }
+    },
+    ensurePositions () {
+      var lanes = this.depthSeq
+      var changed = false
+      for (var li = 0; li < lanes.length; li++) {
+        for (var i = 0; i < lanes[li].length; i++) {
+          var t = lanes[li][i]
+          if (!this.posMap[t.taskId]) {
+            var p = this.autoPosOf(t, i, li)
+            this.posMap[t.taskId] = p
+            changed = true
+          }
+        }
+      }
+      if (changed) this.savePos()
+    },
+    tidyUp () {
+      var lanes = this.depthSeq
+      var map = {}
+      for (var li = 0; li < lanes.length; li++) {
+        for (var i = 0; i < lanes[li].length; i++) map[lanes[li][i].taskId] = this.autoPosOf(lanes[li][i], i, li)
+      }
+      this.posMap = map
+      this.savePos()
+      this.$nextTick(this.drawWires)
+    },
+    /** Grip-drag moves the card (pointer capture); linking stays on the native HTML5 drag of the
+     *  card body, so the two gestures never compete. preventDefault on pointerdown suppresses the
+     *  native drag from the handle. */
+    onGripDown (t, e) {
+      var p = this.posMap[t.taskId]
+      if (!p) { p = { x: 0, y: 0 }; this.posMap[t.taskId] = p }
+      var track = this.$refs.track
+      var tr = track ? track.getBoundingClientRect() : { left: 0, top: 0 }
+      this._mv = { tid: t.taskId, ox: e.clientX - tr.left - p.x, oy: e.clientY - tr.top - p.y, tr }
+      this.movingTid = t.taskId
+      window.addEventListener('pointermove', this.onGripMove)
+      window.addEventListener('pointerup', this.onGripUp)
+    },
+    onGripMove (e) {
+      var mv = this._mv
+      if (!mv) return
+      var p = this.posMap[mv.tid]
+      if (!p) return
+      p.x = Math.max(0, Math.round(e.clientX - mv.tr.left - mv.ox))
+      p.y = Math.max(0, Math.round(e.clientY - mv.tr.top - mv.oy))
+      if (!this._mvRaf) this._mvRaf = requestAnimationFrame(() => { this._mvRaf = 0; this.drawWires() })
+    },
+    onGripUp () {
+      if (!this._mv) return
+      this._mv = null
+      this.movingTid = ''
+      window.removeEventListener('pointermove', this.onGripMove)
+      window.removeEventListener('pointerup', this.onGripUp)
+      this.savePos()
+      this.drawWires()
+    },
     rawOf (t) { return this.$store.state.todo.todoList.find(function (x) { return x.taskId === t.taskId }) || t },
     openEdit (t) { this.$store.commit('ui/openEdit', this.rawOf(t)) },
     jumpTo (id) {
@@ -285,14 +381,20 @@ export default {
         this.$message.error(this.$t('statsA.DepView.cycleErr', { b: t.taskContent || '' }))
       }
     },
-    /** 依赖连线:前置卡右缘 → 依赖卡左缘(分层保证前置恒在左) */
+    /** 依赖连线:前置卡右缘 → 依赖卡左缘(画布上随卡片实时位置走) */
     drawWires () {
       var track = this.$refs.track
       if (!track) return
       var wrect = track.getBoundingClientRect()
-      // 以 track(滚动内容)为坐标系:线随内容一起滚动,外层怎么滚都不会错位
-      this.trackW = track.scrollWidth
-      this.trackH = Math.max(track.scrollHeight, wrect.height)
+      // 画布尺寸 = 卡片位置包围盒 ∪ 视口,绝对定位下 scrollWidth 不再反映内容,必须自算
+      var maxX = wrect.width, maxY = wrect.height
+      for (var b in this.posMap) {
+        var pb = this.posMap[b]
+        maxX = Math.max(maxX, pb.x + 300)
+        maxY = Math.max(maxY, pb.y + 160)
+      }
+      this.trackW = Math.round(maxX)
+      this.trackH = Math.round(maxY)
       var wires = []
       var cards = track.querySelectorAll('.depv-task')
       var pos = {}
@@ -352,18 +454,21 @@ export default {
 .depv-proj__bar i { display: block; height: 100%; background: var(--brand); border-radius: 999px; transition: width .3s; }
 .depv-proj__pct { font-size: 11px; color: var(--text-3, #999); flex-shrink: 0; }
 
-.depv-cols { flex: 1; min-height: 0; overflow: auto; }
-.depv-track { position: relative; display: flex; gap: 12px; align-items: stretch;
-  width: max-content; min-width: 100%; min-height: 100%; }
-.depv-col { width: 232px; flex-shrink: 0; display: flex; flex-direction: column;
-  background: var(--panel, #fff); border: 1px solid var(--line, #e6e8eb); border-radius: 10px; min-height: 120px; }
-.depv-col__head { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-bottom: 1px solid var(--line, #e6e8eb); }
-.depv-col__title { font-weight: 600; font-size: 12px; color: var(--text-2, #555); }
-.depv-col__count { margin-left: auto; font-style: normal; font-size: 12px; color: var(--text-3, #999); }
-.depv-col__list { display: flex; flex-direction: column; gap: 6px; padding: 8px; flex: 1;
-  overflow-y: auto; min-height: 0; }
-.depv-task { border: 1px solid var(--line, #e6e8eb); border-radius: 8px; padding: 6px 8px; cursor: pointer; background: var(--panel, #fff); }
-.depv-task:hover { border-color: var(--brand); }
+.depv-cols { flex: 1; min-height: 0; overflow: auto; border-radius: 10px; border: 1px solid var(--line, #e6e8eb);
+  background: var(--panel, #fff); }
+/* 自由画布:点阵底纹给"这是可摆放的画布"的心智;卡片绝对定位,x/y 持久化在 meta */
+.depv-track { position: relative;
+  background-image: radial-gradient(var(--line, #e6e8eb) 1px, transparent 1px);
+  background-size: 24px 24px; background-position: 12px 12px; }
+.depv-task { position: absolute; width: 236px; border: 1px solid var(--line, #e6e8eb); border-radius: 8px;
+  padding: 6px 8px 6px 6px; cursor: pointer; background: var(--panel, #fff); }
+.depv-task:hover { border-color: var(--brand); box-shadow: 0 2px 8px rgba(0, 0, 0, .08); }
+.depv-task__grip { position: absolute; left: 2px; top: 2px; width: 14px; height: 14px; padding: 0;
+  border: 0; background: none; color: var(--text-3, #999); cursor: grab; opacity: 0; transition: opacity .15s; }
+.depv-task:hover .depv-task__grip, .depv-task--moving .depv-task__grip { opacity: 1; }
+.depv-task__grip:hover { color: var(--brand); }
+.depv-task--moving { cursor: grabbing; box-shadow: 0 8px 20px rgba(0, 0, 0, .22);
+  border-color: var(--brand); z-index: 10; }
 .depv-task--ready { border-left: 3px solid var(--brand, #0f9d8f); }
 .depv-task--blocked { border-left: 3px solid var(--warn, #d9932f); }
 .depv-task--done { opacity: .62; }
