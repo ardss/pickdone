@@ -47,3 +47,14 @@ export default {
 
 }
 </script>
+<style>
+/* ===== 迁移自全局沉积文件(scripts/css-move.mjs):以下规则随组件生灭 ===== */
+/* 独立 BrowserWindow 为 frameless+transparent：页面根须透明（QuickAdd/番茄浮窗在 <html> 上挂 widget-transparent） */
+html.widget-transparent,
+html.widget-transparent body,
+html.widget-transparent #app {
+  background: transparent !important;
+  height: 100%;
+  overflow: hidden;
+}
+</style>

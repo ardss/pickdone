@@ -317,3 +317,45 @@ export default {
 
 }
 </script>
+<style>
+/* ===== 迁移自全局沉积文件(scripts/css-move.mjs):以下规则随组件生灭 ===== */
+/* 番茄专注记录 · 24h 时间轴：灰轨道=全天，青块=专注时段，hover 显示明细 */
+.tfr-timeline { padding: 12px 14px 6px; border-bottom: 1px solid var(--line); }
+.tfr-timeline__head {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: var(--fs-sm); color: var(--text-2); margin-bottom: 8px;
+}
+.tfr-timeline__sum { color: var(--brand); }
+.tfr-timeline__bar {
+  position: relative; height: 14px; border-radius: var(--radius-md);
+  background: #ececec; overflow: hidden;
+}
+.tfr-timeline__seg {
+  position: absolute; top: 0; bottom: 0; background: var(--brand);
+  border-radius: var(--radius-xs); cursor: default;
+  transition: filter .15s, transform .1s;
+}
+.tfr-timeline__seg:hover { filter: brightness(1.15); }
+.tfr-timeline__scale {
+  display: flex; justify-content: space-between;
+  font-size: var(--fs-2xs); color: var(--text-3); margin-top: 4px;
+}
+/* 时间轴小时刻度线与图例 */
+.tfr-timeline__grid { position: absolute; inset: 0; pointer-events: none; }
+.tfr-timeline__grid i { position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(0, 0, 0, .06); }
+.tfr-timeline__legend { display: flex; gap: 14px; font-size: var(--fs-xs); color: var(--text-3); margin-top: 6px; }
+.tfr-timeline__legend .dot { display: inline-block; width: 8px; height: 8px; border-radius: var(--radius-xs); margin-right: 4px; vertical-align: -1px; }
+.tfr-timeline__legend .dot-focus { background: var(--brand); }
+.tfr-timeline__legend .dot-idle { background: #ececec; }
+/* 时间轴被点中的色块短时高亮 */
+.tfr-timeline__seg--hot { filter: brightness(1.25); box-shadow: 0 0 0 2px rgba(15, 157, 143, .35); }
+/* 时间轴休息块（橙）与记录行休息徽标 */
+
+/* 时间轴日期切换 + 空状态 */
+.tfr-timeline__nav { display: inline-flex; align-items: center; gap: 8px; }
+.tfr-timeline__date { min-width: 120px; text-align: center; color: var(--text-1); }
+/* ===== 以下规则自 base/style-2/3/4 迁入（原散落在各浅色文件内，2026-08-30 集中治理）。内容逐字未改 ===== */
+html[data-theme="dark"] .tfr-timeline__bar { background: #2a3038; }
+html[data-theme="dark"] .tfr-timeline__grid i { background: rgba(255, 255, 255, .07); }
+html[data-theme="dark"] .tfr-timeline__legend .dot-idle { background: #2a3038; }
+</style>

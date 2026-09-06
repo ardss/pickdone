@@ -367,3 +367,166 @@ export default {
 
 }
 </script>
+<style>
+/* ===== 迁移自全局沉积文件(scripts/css-move.mjs):以下规则随组件生灭 ===== */
+.corner-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  cursor: pointer;
+  transition: background .15s;
+}
+.corner-btn i { display: block; transform: scale(.75); }
+.corner-btn:hover { background: rgba(15, 157, 143, .12); }
+.corner-btn--on { background: var(--brand-light, #e7f7f7); opacity: 1; }
+/* 放弃确认期间：⋮ 灰色禁用态（不可点） */
+.corner-btn--off {
+  opacity: .35;
+  cursor: default;
+  pointer-events: none;
+}
+.corner-btn--off:hover { background: transparent; }
+.corner-btn--muted { color: var(--text-4, #c0c4cc); }
+/* —— ⋮ 任务菜单：窗口临时放大（220×320）后铺满卡片，选今日待办其一即关联开始 —— */
+.tf-menu {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-float-noise);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 8px 10px 10px;
+  /* 与卡片同款玻璃白（勿用 var(--panel)：暗色主题下会变成深灰，和玻璃卡不协调） */
+  background: rgba(255,255,255,.88);
+  backdrop-filter: blur(10px);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 1px 3px 0 rgba(0,0,0,.1), 0 1px 2px 0 rgba(0,0,0,.06);
+  animation: tt-fade-in .15s ease both;
+}
+.tf-menu__head { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.tf-menu__title { color: var(--brand-dark); font-size: 12px; font-weight: 600; }
+.tf-menu__x { margin-left: auto; }
+/* 叉形/hover 由统一 close-x 体系负责 */
+.tf-menu__list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 2px;
+  scrollbar-width: thin; scrollbar-color: rgba(120,130,140,.35) transparent; }
+.tf-menu__list::-webkit-scrollbar { width: 4px; }
+.tf-menu__list::-webkit-scrollbar-thumb { background: rgba(120,130,140,.35); border-radius: 2px; }
+.tf-menu__list::-webkit-scrollbar-track { background: transparent; }
+.tf-menu__item {
+  border: 0; background: none; text-align: left; cursor: pointer;
+  /* flex-shrink:0 关键：任务多时子项保住自然高度让容器溢出滚动，
+     否则 flex 默认把每个子项等比压扁=间距消失(2026-09-02 用户实拍) */
+  flex-shrink: 0;
+  padding: 6px 8px; border-radius: var(--radius-sm, 4px);
+  color: var(--text-1); font-size: 12px; line-height: 1.4;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.tf-menu__item:hover { background: var(--brand-light, #e7f7f7); color: var(--brand-dark); }
+/* 已关联项高亮：✓ 标记 + 淡青底，选中状态在菜单里一眼可见 */
+.tf-menu__item { display: flex; align-items: center; gap: 4px; }
+.tf-menu__item-text { min-width: 0; flex: 1; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tf-menu__item--on, .tf-menu__item--on:hover { background: var(--brand-light, #e7f7f7); color: var(--brand-dark); font-weight: 600; }
+.tf-menu__tick { flex-shrink: 0; font-style: normal; font-size: 10px; color: var(--brand, #0f9d8f); }
+.tf-menu__empty { color: var(--text-3); font-size: 12px; text-align: center; padding: 16px 0; }
+.tf-menu__bare {
+  flex-shrink: 0; margin-top: 6px; padding: 6px;
+  border: 1px dashed var(--line-strong, #e4e7ed); border-radius: var(--radius-sm, 4px);
+  background: none; color: var(--text-2); font-size: 12px; cursor: pointer;
+}
+.tf-menu__bare:hover { border-color: var(--brand); color: var(--brand); }
+html.dark .corner-btn { color: rgba(232,237,241,.65); }
+html.dark .corner-btn:hover { background: rgba(53,194,174,.18); }
+html.dark .corner-btn--muted { color: rgba(232,237,241,.35); }
+/* ⋮ 菜单深色 */
+html.dark .tf-menu { background: #22262e; box-shadow: 0 8px 24px rgba(0,0,0,.45); }
+html.dark .tf-menu__title { color: #7fd0c7; }
+html.dark .tf-menu__x { color: rgba(232,237,241,.55); }
+html.dark .tf-menu__x:hover { background: rgba(255,255,255,.1); color: #e8edf1; }
+html.dark .tf-menu__item { color: #e8edf1; }
+html.dark .tf-menu__item:hover { background: rgba(53,194,174,.15); color: #7fd0c7; }
+html.dark .tf-menu__item--on, html.dark .tf-menu__item--on:hover { background: rgba(53,194,174,.18); color: #7fd0c7; }
+html.dark .tf-menu__tick { color: #35c2ae; }
+html.dark .tf-menu__empty { color: rgba(232,237,241,.4); }
+html.dark .tf-menu__bare { border-color: rgba(255,255,255,.16); color: rgba(232,237,241,.7); }
+html.dark .tf-menu__bare:hover { border-color: #35c2ae; color: #7fd0c7; }
+/* ⋮ 菜单内：白噪音选择区（音色 chips 实时切换，全局派发器即时生效） */
+.tf-menu__noise { padding-top: 6px; border-top: 1px solid rgba(120, 130, 140, .18); }
+.tf-menu__noise-label { font-size: 9px; color: var(--text-3, #9aa0a6); margin-bottom: 4px; }
+.tf-menu__noise .tf-menu__item { font-size: 10px; padding: 4px 8px; }
+.tf-menu__noise .tf-menu__item--on, .tf-menu__noise .tf-menu__item--on:hover { background: rgba(15, 157, 143, .12); }
+/* 放弃面板内容精简后：卡片 86 → 100px 容纳三行 */
+/* 放弃面板精简后 86px 原尺寸即可容纳：卡片不再生长（用户实测「空间够就不用变大」） */
+
+/* ==================== 浮窗角钮图标 · mask+currentColor（深浅主题自适应） ====================
+   旧版图标=固定灰色背景图：深色卡面上对比度不足（用户实测"三个钮看不到"）。
+   mask 用形状 alpha，颜色走 currentColor 跟随主题；作用域限定浮窗角钮，不波及他处同名类。 */
+.corner-btn { color: #8a9096; }
+html.dark .corner-btn { color: rgba(232, 237, 241, .78); }
+.tomato .corner-btn .btn-min,
+.tomato .corner-btn .btn-close,
+.tomato .corner-btn .btn-dots {
+  background: none;
+  background-color: currentColor;
+  -webkit-mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  mask-position: center;
+  mask-repeat: no-repeat;
+  mask-size: contain;
+}
+.tomato .corner-btn .btn-min {
+  width: 10px;
+  height: 10px;
+  -webkit-mask-image: url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 10 10%22><rect y=%224%22 width=%2210%22 height=%222%22 rx=%221%22/></svg>');
+  mask-image: url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 10 10%22><rect y=%224%22 width=%2210%22 height=%222%22 rx=%221%22/></svg>');
+}
+.tomato .corner-btn .btn-close {
+  width: 10px;
+  height: 10px;
+  -webkit-mask-image: url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 10 10%22><path d=%22M1 1l8 8M9 1l-8 8%22 stroke=%22black%22 stroke-width=%221.6%22 stroke-linecap=%22round%22 fill=%22none%22/></svg>');
+  mask-image: url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 10 10%22><path d=%22M1 1l8 8M9 1l-8 8%22 stroke=%22black%22 stroke-width=%221.6%22 stroke-linecap=%22round%22 fill=%22none%22/></svg>');
+}
+.tomato .corner-btn .btn-dots {
+  width: 4px;
+  height: 12px;
+  -webkit-mask-image: url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 4 14%22><circle cx=%222%22 cy=%222%22 r=%221.5%22/><circle cx=%222%22 cy=%227%22 r=%221.5%22/><circle cx=%222%22 cy=%2212%22 r=%221.5%22/></svg>');
+  mask-image: url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 4 14%22><circle cx=%222%22 cy=%222%22 r=%221.5%22/><circle cx=%222%22 cy=%227%22 r=%221.5%22/><circle cx=%222%22 cy=%2212%22 r=%221.5%22/></svg>');
+}
+/* 音符角钮（mask+currentColor，随主题） */
+.corner-btn .btn-note {
+  width: 12px;
+  height: 12px;
+  background-color: currentColor;
+  -webkit-mask: url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 12 12%22><path d=%22M4.2 10.2V2.4l6-1.2v7.6%22 fill=%22none%22 stroke=%22black%22 stroke-width=%221.3%22 stroke-linejoin=%22round%22/><circle cx=%222.9%22 cy=%2210.2%22 r=%221.7%22/><circle cx=%228.9%22 cy=%228.8%22 r=%221.7%22/></svg>') center / contain no-repeat;
+  mask: url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 12 12%22><path d=%22M4.2 10.2V2.4l6-1.2v7.6%22 fill=%22none%22 stroke=%22black%22 stroke-width=%221.3%22 stroke-linejoin=%22round%22/><circle cx=%222.9%22 cy=%2210.2%22 r=%221.7%22/><circle cx=%228.9%22 cy=%228.8%22 r=%221.7%22/></svg>') center / contain no-repeat;
+}
+/* ==================== 浮窗角钮 · 动效/样式/布局精修（2026-09-01） ====================
+   三段时序各管一环：背景 .15s ease / 按钮缩放 .12s / 图标缩放 .18s 弹性曲线；
+   悬停 = 图标 0.75→0.88 微放大（呼吸感，不加位移防抖）；按压 = 0.88 回弹；
+   键盘焦点环走 outline（不占布局）；禁用态(放弃期间⋮)不出按压。 */
+.corner-btn {
+  transition: background-color .15s ease, transform .12s ease, opacity .15s ease;
+}
+.tomato .corner-btn:active { transform: scale(.88); }
+.corner-btn:focus-visible { outline: 2px solid var(--brand, #0f9d8f); outline-offset: 1px; }
+.tomato .corner-btn i { transition: transform .18s cubic-bezier(.2, .8, .2, 1); }
+.tomato .corner-btn:hover:not(.corner-btn--off) i { transform: scale(.88); }
+.tomato .corner-btn--off:active { transform: none; }
+html.dark .corner-btn:focus-visible { outline-color: #35c2ae; }
+/* ==================== ⋮ 菜单展开 · 动效收尾（2026-09-01） ====================
+   入场已有：卡片 86→320px 0.2s 弹性生长 + 内容 tt-fade-in 同步淡入；
+   出场补齐：tf-pop 过渡 0.18s 淡出（组件层 transition），不再 v-if 硬切。
+   列表滚动条细体化：240px 玻璃卡里默认粗滚动条喧宾夺主。 */
+.tf-menu .tf-menu__list { scrollbar-width: thin; scrollbar-color: rgba(120,130,140,.35) transparent; }
+.tf-menu .tf-menu__list::-webkit-scrollbar { width: 4px; }
+.tf-menu .tf-menu__list::-webkit-scrollbar-thumb { background: rgba(120,130,140,.35); border-radius: 2px; }
+.tf-menu .tf-menu__list::-webkit-scrollbar-track { background: transparent; }
+html.dark .tf-menu .tf-menu__list { scrollbar-color: rgba(232,237,241,.25) transparent; }
+html.dark .tf-menu .tf-menu__list::-webkit-scrollbar-thumb { background: rgba(232,237,241,.25); }
+</style>

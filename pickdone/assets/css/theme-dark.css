@@ -296,11 +296,6 @@ html[data-theme="dark"] .modal__close:hover { background: #2a3038; color: #E5EAF
 
 /* 活跃热力图:深色下 .hm-l0 用的 --gray-bg 与 .hm-card 卡片底同为 #22262e,空格子整个隐形(网格结构不可见)。提亮一档让无数据格与卡片底可区分(2026-08-30 用户报告深色热力图显示不出来) */
 html[data-theme="dark"] .hm-l0 { background: #2d333e; }
-
-/* ===== 以下规则自 base/style-2/3/4 迁入（原散落在各浅色文件内，2026-08-30 集中治理）。内容逐字未改 ===== */
-html[data-theme="dark"] .tfr-timeline__bar { background: #2a3038; }
-html[data-theme="dark"] .tfr-timeline__grid i { background: rgba(255, 255, 255, .07); }
-html[data-theme="dark"] .tfr-timeline__legend .dot-idle { background: #2a3038; }
 html[data-theme="dark"] .abandon-card { background: #22262e; box-shadow: 0 16px 48px rgba(0, 0, 0, .5); }
 html[data-theme="dark"] .abandon-x:hover { background: rgba(255, 255, 255, .07); }
 html[data-theme="dark"] .abandon-btn:hover { background: rgba(255, 255, 255, .07); }
