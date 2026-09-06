@@ -153,3 +153,17 @@ const ChartCard = {
 
 export default ChartCard
 </script>
+<style>
+/* ===== 迁移自全局沉积文件(scripts/css-move.mjs):以下规则随组件生灭 ===== */
+.chart-h{padding:16px;background:var(--panel, #fff);border-radius:var(--radius-md)}
+.chart-h__title{margin-bottom:32px;color:var(--text-1);font-size: var(--fs-base);line-height:2;white-space:pre-line;text-align:center}
+.chart-h__btn,.full{display:flex;align-items:center;justify-content:center}
+.chart-h__btn .base-button{padding:10px 28px;color:#fff;font-size: var(--fs-base);border:none;border-radius: var(--radius-md);background:var(--brand);cursor:pointer;transition:filter var(--dur-fast)}
+.chart-h__btn .base-button:hover{filter:brightness(1.08)}
+.chart-h__btn .base-button:active{filter:brightness(.92)}
+/* —— 数据复盘补遗（对照 构建产物 A 复核追加；chartA/D 白底模式、兜底 pre）—— */
+.chart-h__btn,.full{margin-top:8px}
+/* 图表卡 */
+html[data-theme="dark"] .chart-h { background: var(--panel); }
+html[data-theme="dark"] .chart-h__title { color: var(--text-1); }
+</style>

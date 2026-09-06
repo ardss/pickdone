@@ -809,3 +809,79 @@ export default {
 
 }
 </script>
+<style>
+/* ===== 迁移自全局沉积文件(scripts/css-move.mjs):以下规则随组件生灭 ===== */
+/* 热力图悬浮提示（项目风格深色浮层，替代原生 title）：挂页面根节点，fixed 定位在格子上方居中 */
+.hm-tip {
+  position: fixed; z-index: var(--z-pop); transform: translate(-50%, calc(-100% - 8px));
+  background: var(--text-1, #303133); color: var(--panel, #fff);
+  font-size: var(--fs-xs); line-height: 1.4; padding: 5px 10px; border-radius: var(--radius-md);
+  white-space: nowrap; pointer-events: none; box-shadow: var(--shadow-pop);
+  animation: hm-tip-in .12s ease-out;
+}
+.hm-tip::after {
+  content: ''; position: absolute; left: 50%; top: 100%; transform: translateX(-50%);
+  border: 5px solid transparent; border-top-color: var(--text-1, #303133);
+}
+html[data-theme="dark"] .hm-tip { background: #333a44; color: #e8eaed; border: 1px solid #333a44; }
+html[data-theme="dark"] .hm-tip::after { border-top-color: #333a44; }
+/* 格子贴近屏幕顶部时翻到下方（clampHmTip 切换） */
+.hm-tip--below { transform: translate(-50%, 14px); animation: hm-tip-in-below .12s ease-out; }
+.hm-tip--below::after { top: auto; bottom: 100%; border-top-color: transparent; border-bottom-color: var(--text-1, #303133); }
+html[data-theme="dark"] .hm-tip--below::after { border-top-color: transparent; border-bottom-color: #333a44; }
+/* 复盘叙事卡（合并 324/557 两层定义为单层，品牌顶边） */
+.review-card {
+  max-width: 785px; margin: 0 auto 18px; padding: 24px 28px 22px;
+  background: var(--panel, #fff);
+  border: 1px solid var(--line); border-radius: var(--radius-xl);
+  position: relative; overflow: hidden;
+  box-shadow: 0 4px 18px rgba(31, 56, 88, .08);
+}
+.review-card::before {
+  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 4px;
+  background: var(--brand);
+}
+.review-card__head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+.review-card__head b { font-size: var(--fs-base); letter-spacing: 1px; color: var(--text-1); }
+.review-card__tag { font-size: var(--fs-xs); color: var(--brand); background: var(--brand-light); padding: 2px 8px; border-radius: var(--radius-pill); }
+.review-card__headline {
+  margin: 0 0 14px; padding: 12px 16px;
+  background: color-mix(in srgb, var(--brand) 8%, transparent);
+  border-left: 3px solid var(--brand); border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  font-size: var(--fs-lg); font-weight: 600; line-height: 1.6; color: var(--text-1);
+}
+.review-card__list { margin: 0; padding: 0; list-style: none; }
+.review-card__list li {
+  display: flex; align-items: baseline; gap: var(--space-2);
+  padding: 6px 0; font-size: var(--fs-base); line-height: 1.65; color: var(--text-1);
+}
+/* 叙事卡质感：白底 + 品牌渐变顶边 + 数字强调 */
+.review-card {
+  background: var(--panel, #fff); border: 1px solid var(--line); border-radius: var(--radius-xl);
+  padding: 26px 30px 24px; position: relative; overflow: hidden;
+  box-shadow: 0 4px 18px rgba(31, 56, 88, .08);
+}
+.review-card::before {
+  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 4px;
+  background: var(--brand);
+}
+.review-card__head b { font-size: var(--fs-base); letter-spacing: 1px; }
+.review-card__headline { font-size: 24px; font-weight: 800; margin: 14px 0 16px; letter-spacing: .3px; }
+.review-card__list li { font-size: var(--fs-base); padding: 7px 0; }
+.review-card__advice { margin-top: 18px; }
+.ach-fam { display: flex; align-items: center; gap: var(--space-3); padding: 10px 14px; border: 1px solid var(--line, #e4e7ed); border-radius: var(--radius-md, 10px); }
+.ach-fam--max { border-color: rgba(46, 158, 68, .4); }
+.ach-fam__icon { color: var(--brand); flex-shrink: 0; display: flex; }
+.ach-fam--max .ach-fam__icon { color: var(--ok, #2e9e44); }
+.ach-fam__info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.ach-fam__row1 { display: flex; align-items: baseline; gap: var(--space-2); }
+.ach-fam__name { font-size: var(--fs-sm, 13px); font-weight: 600; color: var(--text-1, #333); }
+.ach-fam__lv { font-size: var(--fs-2xs, 11px); color: var(--brand); font-weight: 600; }
+.ach-fam__lv--max { color: var(--ok, #2e9e44); }
+.ach-fam__num { font-size: var(--fs-xs, 12px); color: var(--text-3, #6d7278); }
+.ach-fam__cur { font-size: var(--fs-lg); font-weight: 700; color: var(--text-1, #333); font-variant-numeric: tabular-nums; }
+.ach-fam__badges { flex-shrink: 0; font-size: var(--fs-2xs, 11px); color: var(--ok, #2e9e44); font-weight: 600; }
+html[data-theme="dark"] .review-card { background: var(--panel); border-color: var(--line); }
+html[data-theme="dark"] .review-card::before { opacity: .8; }
+html[data-theme="dark"] .review-card { background: var(--panel); }
+</style>

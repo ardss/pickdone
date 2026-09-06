@@ -92,10 +92,6 @@ html[data-theme="dark"] .stat-page .navbar { background: var(--panel); border-bo
 html[data-theme="dark"] .stat-page .navbar__item { color: #a6acb6; }
 html[data-theme="dark"] .stat-page .navbar__item--active { color: #5b93da; }
 
-/* 图表卡 */
-html[data-theme="dark"] .chart-h { background: var(--panel); }
-html[data-theme="dark"] .chart-h__title { color: var(--text-1); }
-
 /* 查看更多 / 分类 / 日期弹层 */
 html[data-theme="dark"] .view-more-pop { background: var(--gray-bg); border-color: var(--line); }
 html[data-theme="dark"] .vm-item:hover { background: #26313a; }
@@ -328,10 +324,7 @@ html[data-theme="dark"] .stat-subpage .chart-3.single, html[data-theme="dark"] .
 html[data-theme="dark"] .stat-subpage .chart-5.single, html[data-theme="dark"] .stat-subpage .chart-6.single,
 html[data-theme="dark"] .stat-subpage .kpi-tile { background: #22262e; }
 html[data-theme="dark"] .tl-card b { color: #d5d9e0; }
-html[data-theme="dark"] .review-card { background: var(--panel); border-color: var(--line); }
-html[data-theme="dark"] .review-card::before { opacity: .8; }
 html[data-theme="dark"] .kpi-tile { background: var(--panel); border-color: var(--line); }
-html[data-theme="dark"] .review-card { background: var(--panel); }
 html[data-theme="dark"] .stat-view-tab.on { background: #2a2f3a; }
 html[data-theme="dark"] .ach-total { background: #22262e; }
 html[data-theme="dark"] .qapage__card { box-shadow: 0 8px 32px rgba(0,0,0,.5); }

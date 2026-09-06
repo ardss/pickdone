@@ -38,15 +38,6 @@
 .chart-d{display:flex;flex-direction:column;align-items:center;padding:16px;border-radius:var(--radius-md)}
 .chart-d__count{margin-bottom:var(--space-2);color:#fff;font-size:32px}
 .chart-d__content{color:#fff;font-size: var(--fs-sm);white-space:pre-line;text-align:center}
-.chart-h{padding:16px;background:var(--panel, #fff);border-radius:var(--radius-md)}
-.chart-h__title{margin-bottom:32px;color:var(--text-1);font-size: var(--fs-base);line-height:2;white-space:pre-line;text-align:center}
-.chart-h__btn,.full{display:flex;align-items:center;justify-content:center}
-.chart-h__btn .base-button{padding:10px 28px;color:#fff;font-size: var(--fs-base);border:none;border-radius: var(--radius-md);background:var(--brand);cursor:pointer;transition:filter var(--dur-fast)}
-.chart-h__btn .base-button:hover{filter:brightness(1.08)}
-.chart-h__btn .base-button:active{filter:brightness(.92)}
-
-/* —— 数据复盘补遗（对照 构建产物 A 复核追加；chartA/D 白底模式、兜底 pre）—— */
-.chart-h__btn,.full{margin-top:8px}
 .stat-subpage .none pre{margin:4px 0;padding:0;font-family:inherit}
 /* 实现页容器（本应用布局壳）：占满内容区，顶栏为 page__top 等价物 */
 .cal-page{position:relative;padding:0;height:100%;display:flex;flex-direction:column}
@@ -218,24 +209,6 @@
 .hm-l3 { background: color-mix(in srgb, var(--brand) 80%, var(--gray-bg)); }
 .hm-l4 { background: var(--brand); }
 .hm-legend { display: flex; align-items: center; gap: var(--space-1); margin-top: var(--space-2); font-size: var(--fs-xs); color: var(--text-3); justify-content: flex-end; }
-/* 热力图悬浮提示（项目风格深色浮层，替代原生 title）：挂页面根节点，fixed 定位在格子上方居中 */
-.hm-tip {
-  position: fixed; z-index: var(--z-pop); transform: translate(-50%, calc(-100% - 8px));
-  background: var(--text-1, #303133); color: var(--panel, #fff);
-  font-size: var(--fs-xs); line-height: 1.4; padding: 5px 10px; border-radius: var(--radius-md);
-  white-space: nowrap; pointer-events: none; box-shadow: var(--shadow-pop);
-  animation: hm-tip-in .12s ease-out;
-}
-.hm-tip::after {
-  content: ''; position: absolute; left: 50%; top: 100%; transform: translateX(-50%);
-  border: 5px solid transparent; border-top-color: var(--text-1, #303133);
-}
-html[data-theme="dark"] .hm-tip { background: #333a44; color: #e8eaed; border: 1px solid #333a44; }
-html[data-theme="dark"] .hm-tip::after { border-top-color: #333a44; }
-/* 格子贴近屏幕顶部时翻到下方（clampHmTip 切换） */
-.hm-tip--below { transform: translate(-50%, 14px); animation: hm-tip-in-below .12s ease-out; }
-.hm-tip--below::after { top: auto; bottom: 100%; border-top-color: transparent; border-bottom-color: var(--text-1, #303133); }
-html[data-theme="dark"] .hm-tip--below::after { border-top-color: transparent; border-bottom-color: #333a44; }
 @keyframes hm-tip-in { from { opacity: 0; transform: translate(-50%, calc(-100% - 4px)); } to { opacity: 1; transform: translate(-50%, calc(-100% - 8px)); } }
 @keyframes hm-tip-in-below { from { opacity: 0; transform: translate(-50%, 10px); } to { opacity: 1; transform: translate(-50%, 14px); } }
 
@@ -335,33 +308,6 @@ html[data-theme="dark"] .hm-tip--below::after { border-top-color: transparent; b
 .stat-subpage .chart-empty {
   min-height: 120px; display: flex; align-items: center; justify-content: center;
   color: var(--text-3); font-size: var(--fs-md); border-radius: var(--radius-md);
-}
-
-/* 复盘叙事卡（合并 324/557 两层定义为单层，品牌顶边） */
-.review-card {
-  max-width: 785px; margin: 0 auto 18px; padding: 24px 28px 22px;
-  background: var(--panel, #fff);
-  border: 1px solid var(--line); border-radius: var(--radius-xl);
-  position: relative; overflow: hidden;
-  box-shadow: 0 4px 18px rgba(31, 56, 88, .08);
-}
-.review-card::before {
-  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 4px;
-  background: var(--brand);
-}
-.review-card__head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
-.review-card__head b { font-size: var(--fs-base); letter-spacing: 1px; color: var(--text-1); }
-.review-card__tag { font-size: var(--fs-xs); color: var(--brand); background: var(--brand-light); padding: 2px 8px; border-radius: var(--radius-pill); }
-.review-card__headline {
-  margin: 0 0 14px; padding: 12px 16px;
-  background: color-mix(in srgb, var(--brand) 8%, transparent);
-  border-left: 3px solid var(--brand); border-radius: 0 var(--radius-md) var(--radius-md) 0;
-  font-size: var(--fs-lg); font-weight: 600; line-height: 1.6; color: var(--text-1);
-}
-.review-card__list { margin: 0; padding: 0; list-style: none; }
-.review-card__list li {
-  display: flex; align-items: baseline; gap: var(--space-2);
-  padding: 6px 0; font-size: var(--fs-base); line-height: 1.65; color: var(--text-1);
 }
 .review-dot { flex-shrink: 0; width: 6px; height: 6px; border-radius: 50%; background: var(--brand); transform: translateY(-2px); }
 
@@ -553,21 +499,6 @@ html[data-theme="dark"] .hm-tip--below::after { border-top-color: transparent; b
 .cal-fc.fc .todo-daycell b,
 .cal-fc.fc .todo-daycell .todo-week,
 .cal-fc.fc .todo-daycell .todo-lunar { transition: none; }
-
-/* 叙事卡质感：白底 + 品牌渐变顶边 + 数字强调 */
-.review-card {
-  background: var(--panel, #fff); border: 1px solid var(--line); border-radius: var(--radius-xl);
-  padding: 26px 30px 24px; position: relative; overflow: hidden;
-  box-shadow: 0 4px 18px rgba(31, 56, 88, .08);
-}
-.review-card::before {
-  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 4px;
-  background: var(--brand);
-}
-.review-card__head b { font-size: var(--fs-base); letter-spacing: 1px; }
-.review-card__headline { font-size: 24px; font-weight: 800; margin: 14px 0 16px; letter-spacing: .3px; }
-.review-card__list li { font-size: var(--fs-base); padding: 7px 0; }
-.review-card__advice { margin-top: 18px; }
 .review-advice-chip {
   background: color-mix(in srgb, var(--brand) 8%, transparent);
   border: 1px solid color-mix(in srgb, var(--brand) 25%, transparent);
@@ -622,15 +553,3 @@ html[data-theme="dark"] .hm-tip--below::after { border-top-color: transparent; b
 
 /* 成就系统 v2：每族一张进度卡（当前值/下一级/进度条/已获得数） */
 .ach-fams { display: flex; flex-direction: column; gap: 10px; }
-.ach-fam { display: flex; align-items: center; gap: var(--space-3); padding: 10px 14px; border: 1px solid var(--line, #e4e7ed); border-radius: var(--radius-md, 10px); }
-.ach-fam--max { border-color: rgba(46, 158, 68, .4); }
-.ach-fam__icon { color: var(--brand); flex-shrink: 0; display: flex; }
-.ach-fam--max .ach-fam__icon { color: var(--ok, #2e9e44); }
-.ach-fam__info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-.ach-fam__row1 { display: flex; align-items: baseline; gap: var(--space-2); }
-.ach-fam__name { font-size: var(--fs-sm, 13px); font-weight: 600; color: var(--text-1, #333); }
-.ach-fam__lv { font-size: var(--fs-2xs, 11px); color: var(--brand); font-weight: 600; }
-.ach-fam__lv--max { color: var(--ok, #2e9e44); }
-.ach-fam__num { font-size: var(--fs-xs, 12px); color: var(--text-3, #6d7278); }
-.ach-fam__cur { font-size: var(--fs-lg); font-weight: 700; color: var(--text-1, #333); font-variant-numeric: tabular-nums; }
-.ach-fam__badges { flex-shrink: 0; font-size: var(--fs-2xs, 11px); color: var(--ok, #2e9e44); font-weight: 600; }
