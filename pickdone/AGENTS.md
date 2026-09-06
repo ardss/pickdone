@@ -22,6 +22,7 @@
 - 动态目录/产物：`renderer-dist/assets*` 由构建生成，别手工塞文件；强杀加载中的 Electron 会腐化产物目录（K 盘曾出坏名目，绕障见 `scripts/clean-renderer-dist.mjs`）。
 - 主窗可销毁重建：taskbar/updater/shortcuts 都必须在重建路径 re-init；任何"启动时挂一次"的全局状态都要问一句"重建后还在吗"。
 - 每个可验证里程碑立即分批提交；并行期禁 `git add -u`，提交后 `git show --stat` 核对。
+- **语言纪律（2026-09-06 定稿）**：提交信息/代码注释/标识符一律英文（国际接轨）；中文只允许出现在 `i18n` 语言包文案里。测试断言不得依赖 OS locale——活体门禁已统一钉 `localStorage.appLocale='en-US'` 后用英文断言；新增门禁必须沿用此范式。git 作者邮箱用 GitHub noreply（`92158419+ardss@users.noreply.github.com`），个人邮箱有 identity 门禁拦（`cli/check-commit-identity.js`）。
 
 ## 体检
 
