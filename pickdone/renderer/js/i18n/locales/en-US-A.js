@@ -12,7 +12,7 @@ export default {
       filterLabel: 'Filter by project',
       waiting: 'waits for',
       stage: 'Stage',
-      dragHint: 'Drag A onto B to make A a prerequisite of B',
+      dragHint: 'Drag A onto B: drop LEFT half = A precedes B; drop RIGHT half = B precedes A',
       moveHint: 'Drag the dot to move the card',
       tidy: 'Tidy layout',
       tidyHint: 'Re-arrange all cards by dependency depth',

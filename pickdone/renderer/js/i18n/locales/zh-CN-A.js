@@ -12,7 +12,7 @@ export default {
       filterLabel: '按项目过滤',
       waiting: '等',
       stage: '阶段',
-      dragHint: '拖 A 到 B 上 = A 成为 B 的前置',
+      dragHint: '拖 A 到 B 上：落在左半 = A 是 B 的前置；落在右半 = B 是 A 的前置',
       moveHint: '拖动圆点移动卡片',
       tidy: '整理布局',
       tidyHint: '按依赖层级重新排布所有卡片',

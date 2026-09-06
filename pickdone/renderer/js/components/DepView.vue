@@ -46,14 +46,15 @@
              'depv-task--blocked': !t.complete && missingOf(t).length,
              'depv-task--ready': !t.complete && !missingOf(t).length,
              'depv-task--done': t.complete,
-             'depv-task--droptarget': dropTid === t.taskId && dragTid && dragTid !== t.taskId,
+             'depv-task--drop-left': dropTid === t.taskId && dropSide === 'left',
+             'depv-task--drop-right': dropTid === t.taskId && dropSide === 'right',
              'depv-task--dragging': dragTid === t.taskId,
              'depv-task--moving': movingTid === t.taskId
            }"
            @click="openEdit(t)" @keydown.enter.prevent="openEdit(t)"
            @contextmenu="taskContextMenu(t, $event)"
            @dragstart="onDragStart(t, $event)" @dragend="onDragEnd"
-           @dragover.prevent="onDragOver(t, $event)" @dragleave="onDragLeave(t)" @drop.prevent="onDrop(t)">
+           @dragover.prevent="onDragOver(t, $event)" @dragleave="onDragLeave(t)" @drop.prevent="onDrop(t, $event)">
         <button class="depv-task__grip" draggable="false" tabindex="-1"
                 :title="$t('statsA.DepView.moveHint')" :aria-label="$t('statsA.DepView.moveHint')"
                 @pointerdown.prevent.stop="onGripDown(t, $event)">
@@ -120,7 +121,7 @@ export default {
   name: 'DepView',
   data () {
     return { projectId: null, wires: [], trackW: 0, trackH: 0, dragTid: '', dropTid: '', msList: [],
-      posMap: {}, movingTid: '' }
+      posMap: {}, movingTid: '', dropSide: '' }
   },
   computed: {
     projects () { return this.$store.getters['category/projects'] || [] },
@@ -332,33 +333,49 @@ export default {
     quickDelete (t) { deleteWithUndo(this, this.$store, this.rawOf(t)) },
     toggleTomato (t) { toggleTomatoAttach(this.$store, t) },
     dueLabel (t) { return t.dayStart ? dayjs(t.dayStart).format(FMT.cnDate) : '' },
-    // —— 拖拽建依赖:拖 A 落到 B 上 = A 成为 B 的前置(A 在左,B 在右,与布局语义一致) ——
+    // —— 拖拽建依赖:落到目标卡左半 = 拖的卡成为前置(指向右);落到右半 = 目标卡成为拖卡的前置。
+    // 左/右缘分别高亮,方向一目了然(用户定稿 2026-09-06:整卡高亮分不清谁依赖谁) ——
+    sideOf (t, e) {
+      var rect = e.currentTarget ? e.currentTarget.getBoundingClientRect() : { left: 0, width: 0 }
+      return (e.clientX - rect.left) < rect.width / 2 ? 'left' : 'right'
+    },
     onDragStart (t, e) {
       this.dragTid = t.taskId
       try { e.dataTransfer.setData('text/plain', t.taskId) } catch (err) { /* IE 形态忽略 */ }
       e.dataTransfer.effectAllowed = 'link'
     },
-    onDragEnd () { this.dragTid = ''; this.dropTid = '' },
-    onDragOver (t, e) { if (this.dragTid && this.dragTid !== t.taskId) this.dropTid = t.taskId },
-    onDragLeave (t) { if (this.dropTid === t.taskId) this.dropTid = '' },
-    async onDrop (t) {
+    onDragEnd () { this.dragTid = ''; this.dropTid = ''; this.dropSide = '' },
+    onDragOver (t, e) {
+      if (!this.dragTid || this.dragTid === t.taskId) return
+      this.dropTid = t.taskId
+      this.dropSide = this.sideOf(t, e)
+    },
+    onDragLeave (t) { if (this.dropTid === t.taskId) { this.dropTid = ''; this.dropSide = '' } },
+    onDrop (t, e) {
       var srcId = this.dragTid
+      var side = this.dropSide || this.sideOf(t, e)
       this.dropTid = ''
+      this.dropSide = ''
       this.dragTid = ''
       if (!srcId || srcId === t.taskId) return
-      var src = this.inScope.find(x => x.taskId === srcId)
-      if (!src) return
-      var cur = parsePredecessors(t.predecessors)
-      if (cur.indexOf(srcId) >= 0) return
-      // 成环检测:src 的前置链里若已(直接或间接)依赖 t,再加边就闭环
+      // left: 拖的卡成为目标的前置(A 指向 B);right: 目标卡成为拖卡的前置(B 指向 A)
+      if (side === 'right') this.addDependency(this.inScope.find(x => x.taskId === srcId), t.taskId, t, srcId)
+      else this.addDependency(t, srcId, this.inScope.find(x => x.taskId === srcId), t)
+    },
+    /** target.prerequisites += prereqId(成环拒绝 + 撤销出口);srcNames 仅用于 toast 文案 */
+    addDependency (target, prereqId, prereqTask, dependentTask) {
+      if (!target || !prereqTask) return
+      var cur = parsePredecessors(target.predecessors)
+      if (cur.indexOf(prereqId) >= 0) return
+      // 成环检测:prereq 的前置链里若已(直接或间接)依赖 target,再加边就闭环
       var byId = {}
       this.inScope.forEach(x => { byId[x.taskId] = x })
       var seen = {}
-      var stack = [srcId]
+      var stack = [prereqId]
       while (stack.length) {
         var id = stack.pop()
-        if (id === t.taskId) {
-          this.$message.error(this.$t('statsA.DepView.cycleErr', { b: t.taskContent || '' }))
+        if (id === target.taskId) {
+          this.$message.error(this.$t('statsA.DepView.cycleErr', { b: target.taskContent || '' }))
           return
         }
         if (seen[id]) continue
@@ -366,20 +383,16 @@ export default {
         var p = byId[id]
         if (p) parsePredecessors(p.predecessors).forEach(x => stack.push(x))
       }
-      try {
-        var prevDeps = cur.slice()
-        moveWithUndo(this, {
-          label: this.$t('statsA.DepView.depAdded', { a: src.taskContent || '', b: t.taskContent || '' }),
-          apply: () => { this.$store.dispatch('todo/updateTodoFields', { taskId: t.taskId, patch: { predecessors: cur.concat(srcId), status: 'update' } }) },
-          revert: () => {
-            this.$store.dispatch('todo/updateTodoFields', { taskId: t.taskId, patch: { predecessors: prevDeps, status: 'update' } })
-            this.$nextTick(this.drawWires)
-          }
-        })
-        this.$nextTick(this.drawWires)
-      } catch (err) {
-        this.$message.error(this.$t('statsA.DepView.cycleErr', { b: t.taskContent || '' }))
-      }
+      var prevDeps = cur.slice()
+      moveWithUndo(this, {
+        label: this.$t('statsA.DepView.depAdded', { a: prereqTask.taskContent || '', b: dependentTask.taskContent || '' }),
+        apply: () => { this.$store.dispatch('todo/updateTodoFields', { taskId: target.taskId, patch: { predecessors: cur.concat(prereqId), status: 'update' } }) },
+        revert: () => {
+          this.$store.dispatch('todo/updateTodoFields', { taskId: target.taskId, patch: { predecessors: prevDeps, status: 'update' } })
+          this.$nextTick(this.drawWires)
+        }
+      })
+      this.$nextTick(this.drawWires)
     },
     /** 依赖连线:前置卡右缘 → 依赖卡左缘(画布上随卡片实时位置走) */
     drawWires () {
@@ -473,11 +486,15 @@ export default {
 .depv-task--blocked { border-left: 3px solid var(--warn, #d9932f); }
 .depv-task--done { opacity: .62; }
 /* 拖拽选中态:拖起的卡=品牌青描边+浅底+浮起阴影+微放大(明显选中感,不只是半透明);
-   落点卡=内圈 2px 品牌青+浅底,一眼看出松手会落到谁身上 */
+   落点指示(用户定稿 2026-09-06):只亮目标卡的左缘或右缘——落在左半=拖的卡是前置(A 指向 B),
+   落在右半=目标卡是前置(B 指向 A),方向一目了然;边缘 3px 品牌条+半侧浅底渐变 */
 .depv-task--dragging { opacity: .6; border-color: var(--brand); background: var(--brand-light, rgba(15, 157, 143, .1));
   box-shadow: 0 6px 16px rgba(0, 0, 0, .28); transform: scale(1.015); }
-.depv-task--droptarget { border-color: var(--brand); background: var(--brand-light, rgba(15, 157, 143, .1));
-  box-shadow: 0 0 0 2px var(--brand, #0f9d8f) inset; }
+.depv-task--drop-left, .depv-task--drop-right { border-color: var(--brand); }
+.depv-task--drop-left { box-shadow: inset 3px 0 0 var(--brand, #0f9d8f);
+  background: linear-gradient(90deg, var(--brand-light, rgba(15, 157, 143, .12)) 0%, rgba(15, 157, 143, 0) 45%); }
+.depv-task--drop-right { box-shadow: inset -3px 0 0 var(--brand, #0f9d8f);
+  background: linear-gradient(270deg, var(--brand-light, rgba(15, 157, 143, .12)) 0%, rgba(15, 157, 143, 0) 45%); }
 .depv-task__main { display: flex; align-items: center; gap: 8px; }
 .depv-task__text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--text-1, #222); }
 .depv-task__text--done { text-decoration: line-through; color: var(--text-3, #999); }
