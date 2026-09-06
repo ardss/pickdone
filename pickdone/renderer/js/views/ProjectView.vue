@@ -95,7 +95,18 @@
         </div>
       </div>
     </div>
-    <div class="page__main page__main--flow-top">
+    <div class="proj-tabs" role="tablist">
+      <button class="proj-tab" :class="{on: tab === 'overview'}" role="tab" :aria-selected="tab === 'overview'" @click="tab = 'overview'">{{ $t('statsB.ProjectView.tabOverview') }}</button>
+      <button class="proj-tab" :class="{on: tab === 'deps'}" role="tab" :aria-selected="tab === 'deps'" @click="tab = 'deps'">{{ $t('statsB.ProjectView.tabDeps') }}</button>
+      <button class="proj-tab" :class="{on: tab === 'docs'}" role="tab" :aria-selected="tab === 'docs'" @click="tab = 'docs'">{{ $t('statsB.ProjectView.tabDocs') }}</button>
+    </div>
+    <div v-if="tab === 'deps'" class="page__main page__main--flow-top proj-tab-body">
+      <pd-dep-view :fixed-project-id="catId"/>
+    </div>
+    <div v-else-if="tab === 'docs'" class="page__main page__main--flow-top proj-tab-body">
+      <project-docs :cat-id="catId"/>
+    </div>
+    <div v-else class="page__main page__main--flow-top">
       <div v-if="!groups.length" class="empty">
         <div class="empty__icon"></div>
         <div class="empty__text">{{ $t('statsB.ProjectView.empty') }}</div>
@@ -124,12 +135,15 @@ import { calTitle } from '../utils/buckets.js'
 import { loadMilestones, saveMilestones, parseMilestoneDate, milestoneState, milestoneProgress, dueStateOf } from '../utils/milestones.js'
 import { COLOR_PALETTE } from '../store/category.js'
 import TodoGroupBlock from '../components/TodoGroupBlock.vue'
+import DepView from '../components/DepView.vue'
+import ProjectDocs from '../components/ProjectDocs.vue'
 
 export default {
   name: 'ProjectView',
-  components: { GroupBlock: TodoGroupBlock },
+  components: { GroupBlock: TodoGroupBlock, PdDepView: DepView, ProjectDocs },
   data () {
     return {
+      tab: 'overview',
       collapsedMap: { catExpDone: true, catExpUndo: false, catToday: false, catTomorrow: false, catDat: false, catUpcoming: false, catNoDate: false, projDone: true },
       milestones: [] as any,
       deadlineTs: 0,

@@ -85,7 +85,22 @@ export default {
       "nextMsTip": "Next milestone",
       "empty": "No projects yet — click \"New Project\" at the top right, or mark an existing category as a project in Manage Categories"
     },
+    "ProjectDocs": {
+      "new": "New doc",
+      "empty": "No docs yet. Click \"New doc\" to start a PRD, meeting notes or process spec",
+      "untitled": "Untitled doc",
+      "titlePh": "Doc title",
+      "bodyPh": "Body. A good home for requirements, review conclusions and process specs…",
+      "saved": "Saved {t}",
+      "del": "Delete doc",
+      "delConfirm": "Click again to confirm",
+      "deleted": "Doc deleted",
+      "editorEmpty": "Pick a doc on the left or create one"
+    },
     "ProjectView": {
+      "tabOverview": "Overview",
+      "tabDeps": "Dependencies",
+      "tabDocs": "Docs",
       "dueToday": "Due today",
       "dueTomorrow": "Due tomorrow",
       "daysLeftN": "{n} days left",

@@ -84,7 +84,22 @@ export default {
       nextMsTip: '下一个里程碑',
       empty: '还没有项目——点右上角「新建项目」，或在管理分类中将已有分类设为项目'
     },
+    ProjectDocs: {
+      new: '新建文档',
+      empty: '还没有文档,点「新建文档」开始记录 PRD、会议纪要或流程规范',
+      untitled: '无标题文档',
+      titlePh: '文档标题',
+      bodyPh: '正文。适合放需求说明、评审结论、流程规范等长期沉淀的内容…',
+      saved: '已保存 {t}',
+      del: '删除文档',
+      delConfirm: '再点一次确认删除',
+      deleted: '文档已删除',
+      editorEmpty: '从左侧选择或新建一篇文档'
+    },
     ProjectView: {
+      tabOverview: '概览',
+      tabDeps: '依赖图',
+      tabDocs: '文档',
       today: '今天',
       expDoneTitle: '过往已达成 ({r}内)',
       expUndoTitle: '过期未达成 ({r}内)',

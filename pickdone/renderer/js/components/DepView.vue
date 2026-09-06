@@ -1,7 +1,7 @@
 <template>
   <div class="depv-wrap" ref="wrap">
     <div class="depv-topbar">
-      <div class="depv-filter" role="group" :aria-label="$t('statsA.DepView.filterLabel')">
+      <div v-if="fixedProjectId == null" class="depv-filter" role="group" :aria-label="$t('statsA.DepView.filterLabel')">
         <button class="depv-chip" :class="{on: projectId === null}" @click="projectId = null">{{ $t('statsA.DepView.allProjects') }}</button>
         <button v-for="p in projects" :key="p.categoryId" class="depv-chip" :class="{on: projectId === p.categoryId}"
                 @click="projectId = p.categoryId">
@@ -119,8 +119,12 @@ import { loadMilestones } from '../utils/milestones.js'
 
 export default {
   name: 'DepView',
+  props: {
+    /** 项目页内嵌时固定项目(隐藏项目切换 chips);今日页独立使用时留空 */
+    fixedProjectId: { type: Number, default: null }
+  },
   data () {
-    return { projectId: null, wires: [], trackW: 0, trackH: 0, dragTid: '', dropTid: '', msList: [],
+    return { projectId: this.fixedProjectId != null ? this.fixedProjectId : null, wires: [], trackW: 0, trackH: 0, dragTid: '', dropTid: '', msList: [],
       posMap: {}, movingTid: '', dropSide: '' }
   },
   computed: {
@@ -205,8 +209,8 @@ export default {
     }
   },
   mounted () {
-    // 有项目时默认聚焦第一个项目(按项目看整体链路是本视图的主用法)
-    if (this.projectId == null && this.projects.length) this.projectId = this.projects[0].categoryId
+    // 有项目时默认聚焦第一个项目(按项目看整体链路是本视图的主用法);固定项目(项目页内嵌)时不覆盖
+    if (this.fixedProjectId == null && this.projectId == null && this.projects.length) this.projectId = this.projects[0].categoryId
     this.loadMs()
     this.loadPos()
     this.$nextTick(this.drawWires)

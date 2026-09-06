@@ -1514,15 +1514,25 @@
 .proj-ms__mark[role="button"] { cursor: pointer; }
 .proj-ms__mark--new { animation: proj-ms-pop .45s cubic-bezier(.34, 1.56, .64, 1) both; }
 @keyframes proj-ms-pop { from { transform: translate(-50%, -140%) scale(.4); opacity: 0 } to { transform: translate(-50%, -50%) scale(1); opacity: 1 } }
+/* 悬停提示走标准浮层语言:面板底+描边+阴影(token 管理,深浅色自动适配),弃用旧反色黑底 */
 .proj-ms__mark[role="button"]::after {
   content: attr(data-tip); position: absolute; bottom: calc(100% + 7px); left: 50%; transform: translateX(-50%) scale(.96);
-  background: var(--text-1, #333); color: var(--panel, #fff); font-size: var(--fs-xs); white-space: nowrap;
+  background: var(--panel, #fff); color: var(--text-1, #222); border: 1px solid var(--line, #e6e8eb);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .16); font-size: var(--fs-xs); white-space: nowrap;
   padding: 4px 9px; border-radius: var(--radius-sm); opacity: 0; pointer-events: none;
-  transition: opacity var(--t-fast), transform var(--t-fast);
+  transition: opacity var(--t-fast), transform var(--t-fast); z-index: 30;
 }
 .proj-ms__mark[role="button"]:hover, .proj-ms__mark[role="button"]:focus-visible { transform: translate(-50%, -50%) scale(1.25); }
 .proj-ms__mark[role="button"]:hover::after, .proj-ms__mark[role="button"]:focus-visible::after { opacity: 1; transform: translateX(-50%) scale(1); }
 .proj-ms__mark[role="button"]:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+/* 项目页页签:概览 / 依赖图 / 文档 */
+.proj-tabs { display: flex; gap: 2px; margin-top: 10px; border-bottom: 1px solid var(--line, #e6e8eb); }
+.proj-tab { padding: 7px 14px; border: none; background: transparent; color: var(--text-2, #555);
+  font-size: var(--fs-sm, 13px); cursor: pointer; border-radius: var(--radius-sm, 6px) var(--radius-sm, 6px) 0 0;
+  border-bottom: 2px solid transparent; transition: all var(--t-fast); }
+.proj-tab:hover { color: var(--text-1, #222); background: var(--hover-bg, #f6f6f6); }
+.proj-tab.on { color: var(--brand); border-bottom-color: var(--brand); font-weight: 600; }
+.proj-tab-body { display: flex; flex-direction: column; min-height: 0; }
 .proj-ms__add {
   flex-shrink: 0; display: inline-flex; align-items: center; gap: var(--space-1);
   font-size: var(--fs-xs); color: var(--text-3);
