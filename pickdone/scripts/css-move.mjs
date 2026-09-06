@@ -93,20 +93,36 @@ function processFile (css, out) {
 }
 
 // media-wrapped moved rules need their media header preserved: redo with tracking
+function nextMeaningful (css, from) {
+  // next '{' at top level of text, skipping comments and strings; returns index or -1
+  let i = from
+  while (i < css.length) {
+    if (css.startsWith('/*', i)) { const e = css.indexOf('*/', i + 2); if (e < 0) return -1; i = e + 2; continue }
+    const ch = css[i]
+    if (ch === '"' || ch === "'") { const e = css.indexOf(ch, i + 1); if (e < 0) return -1; i = e + 1; continue }
+    if (ch === '{') return i
+    i++
+  }
+  return -1
+}
+
 function moveFrom (css) {
   const moved = [] // {media, raw}
   function walk (css, media) {
     let result = ''
     let i = 0
     while (i < css.length) {
-      const open = css.indexOf('{', i)
+      const open = nextMeaningful(css, i)
       if (open < 0) { result += css.slice(i); break }
-      // header text between previous boundary and open
+      // header text between previous boundary and open (comments preserved in output)
       const header = css.slice(i, open).trim()
       let depth = 1, j = open + 1
       while (j < css.length && depth > 0) {
-        if (css[j] === '{') depth++
-        else if (css[j] === '}') depth--
+        if (css.startsWith('/*', j)) { const e = css.indexOf('*/', j + 2); if (e < 0) { j = css.length; break } j = e + 2; continue }
+        const ch = css[j]
+        if (ch === '"' || ch === "'") { const e = css.indexOf(ch, j + 1); if (e < 0) { j = css.length; break } j = e + 1; continue }
+        if (ch === '{') depth++
+        else if (ch === '}') depth--
         j++
       }
       const body = css.slice(open + 1, j - 1)

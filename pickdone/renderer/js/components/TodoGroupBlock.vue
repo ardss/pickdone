@@ -64,3 +64,47 @@ export default {
 
 }
 </script>
+<style>
+/* ===== 迁移自全局沉积文件(scripts/css-move.mjs):以下规则随组件生灭 ===== */
+/* ---- E. 分组列表（原 TodoListItemGroup d79a80b2 / GroupList 5f948ac6 / GroupContainer bc3cef5e）---- */
+.todo-list-item-group{padding:6px 0;background-color:var(--panel, #fff);box-shadow:0 2px 4px hsla(0,0%,91.4%,.5);border-top:1px solid var(--line)}
+.todo-list-item-group:focus{outline:0}
+.todo-list-item-group:hover{background-color:var(--hover-bg)}
+.todo-list-item-group:active{background-color:var(--active-bg)}
+.todo-list-item-group__header-container{display:flex;gap:6px;align-items:center;margin:0 18px}
+.todo-list-item-group__header{display:flex;flex-shrink:0;align-items:center;height:26px;padding:0 8px;transition:all .3s cubic-bezier(.23,1,.32,1)}
+.todo-list-item-group__header:hover{filter:brightness(.95)}
+.todo-list-item-group__header-append{display:flex;flex-shrink:0;align-items:center;opacity:0;transition:all .3s cubic-bezier(.23,1,.32,1)}
+.todo-list-item-group__header-container:hover .todo-list-item-group__header-append{opacity:1}
+.todo-list-item-group__btn-settings{color:var(--text-4);cursor:pointer}
+.todo-list-item-group__title{flex:1;margin-right:20px;margin-left:6px;color:var(--text-3);font-size: var(--fs-base)}
+/* 分组标题不可编辑：用默认箭头，禁文字选中（避免 I 型输入光标与双击误选） */
+.todo-list-item-group__header,
+.todo-list-item-group__title { cursor: default; }
+.todo-list-item-group__header-append { cursor: pointer; }
+.todo-list-item-group__count{flex-shrink:0;color:#a0a0a0;font-size: var(--fs-base)}
+.todo-list-item-group__arrow{display:flex;flex-shrink:0;justify-content:center;color:var(--text-4);font-size: var(--fs-sm);transition:all .3s cubic-bezier(.23,1,.32,1)}
+.todo-list-item-group--collapsed{box-shadow:none}
+.todo-list-item-group--collapsed .todo-list-item-group__arrow{transform:rotate(-90deg)}
+.todo-list-item-group--color2 .todo-list-item-group__title{color:var(--danger-strong)}
+.todo-list-item-group--color3 .todo-list-item-group__title{color:#4053d8}
+/* 品牌蓝加深 6.09:1 */
+.todo-list-item-group-list{display:flex;flex-direction:column;min-height:100%;box-sizing:border-box}
+/* 分组列表与今日待办同构:普通文档流滚动,禁用sticky(整组sticky会吞掉高于视口的组,组头sticky则与今日待办行为不一致) */
+.todo-list-item-group-list .todo-list-item-group{position:static}
+.todo-list-item-group-container__list{overflow:hidden;transform-origin:top;transition:all .3s cubic-bezier(.23,1,.32,1)}
+.todo-list-item-group-container__list .todo-list-item:last-child{border-bottom:none}
+/* 分组行展开箭头字符尺寸与垂直居中 */
+.todo-list-item-group__arrow svg{width:12px;height:12px;display:block}
+.todo-list-item-group__btn-settings-char{font-size: var(--fs-base);line-height:1;font-style:normal}
+/* 分组内条目与设计稿一致的「最后一行去底线」规则（我方行类为 .td-item） */
+.todo-list-item-group-container__list .td-item:last-child{border-bottom:none}
+/* ==================== 4. 分组头（今天 周四 N） ==================== */
+/* 设计稿 grep 核实：编译 CSS 中不存在 #7fc5c6；「今天 周四」是一整串标题文本，
+   .todo-list-item-group__title{color:var(--text-3);font-size: var(--fs-base)}；
+   计数 .todo-list-item-group__count{color:#a0a0a0;font-size: var(--fs-base)} */
+.tg-head h3 { color: #5f6368; font-size: var(--fs-base); font-weight: 400; }
+/* 折叠箭头：设计稿 .todo-list-item-group__arrow{color:#c3c3c3;font-size: var(--fs-sm);
+   transition:all var(--dur-slow) cubic-bezier(.23,1,.32,1)} 收起时 rotate(-90deg) */
+.tg-head .arrow { color: var(--text-4); font-size: var(--fs-xs); transition: all var(--dur-slow) cubic-bezier(.23, 1, .32, 1); }
+</style>

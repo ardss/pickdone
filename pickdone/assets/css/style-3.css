@@ -178,19 +178,9 @@
 }
 .td-item:hover .td-meta .td-ico, .td-item.selected .td-meta .td-ico { opacity: .75; }
 .td-item:hover .td-meta .td-snow, .td-item.selected .td-meta .td-snow { opacity: 1; }
-
-/* ==================== 4. 分组头（今天 周四 N） ==================== */
-/* 设计稿 grep 核实：编译 CSS 中不存在 #7fc5c6；「今天 周四」是一整串标题文本，
-   .todo-list-item-group__title{color:var(--text-3);font-size: var(--fs-base)}；
-   计数 .todo-list-item-group__count{color:#a0a0a0;font-size: var(--fs-base)} */
-.tg-head h3 { color: #5f6368; font-size: var(--fs-base); font-weight: 400; }
 .tg-week { color: #5f6368; font-size: var(--fs-base); }
 .tg-head em { color: var(--text-3); font-size: var(--fs-base); }
 .tg-head:hover { filter: brightness(.95); }
-
-/* 折叠箭头：设计稿 .todo-list-item-group__arrow{color:#c3c3c3;font-size: var(--fs-sm);
-   transition:all var(--dur-slow) cubic-bezier(.23,1,.32,1)} 收起时 rotate(-90deg) */
-.tg-head .arrow { color: var(--text-4); font-size: var(--fs-xs); transition: all var(--dur-slow) cubic-bezier(.23, 1, .32, 1); }
 .tg-head .arrow.open { transform: rotate(0deg); }
 .tg-head .arrow:not(.open) { transform: rotate(-90deg); }
 
