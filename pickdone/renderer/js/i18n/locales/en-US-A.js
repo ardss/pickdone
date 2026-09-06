@@ -11,6 +11,13 @@ export default {
       allProjects: 'All',
       filterLabel: 'Filter by project',
       waiting: 'waits for',
+      stage: 'Stage',
+      dragHint: 'Drag A onto B to make A a prerequisite of B',
+      noMilestone: 'No milestone set',
+      deadline: 'Due',
+      progress: '{done}/{total} done',
+      depAdded: 'Set "{a}" as a prerequisite of "{b}"',
+      cycleErr: 'Cycle rejected: "{b}" already depends on it (directly or indirectly)',
       noTitle: 'Untitled'
     },
     "core": {

@@ -11,6 +11,13 @@ export default {
       allProjects: '全部',
       filterLabel: '按项目过滤',
       waiting: '等',
+      stage: '阶段',
+      dragHint: '拖 A 到 B 上 = A 成为 B 的前置',
+      noMilestone: '未设里程碑',
+      deadline: '截止',
+      progress: '{done}/{total} 完成',
+      depAdded: '已把「{a}」设为「{b}」的前置',
+      cycleErr: '不能成环:「{b}」已(直接或间接)依赖它',
       noTitle: '无标题'
     },
     "core": {

@@ -99,7 +99,7 @@ html[data-theme="dark"] .empty-state p { color: var(--text-3); }
 html[data-theme="dark"] .cal-cell { background: var(--panel); }
 html[data-theme="dark"] .cal-cell.out { background: var(--bg); }
 html[data-theme="dark"] .cal-chip { background: var(--gray-bg); color: var(--text-2); }
-html[data-theme="dark"] .sum-card { background: linear-gradient(160deg, var(--panel), #22314f); }
+html[data-theme="dark"] .sum-card { background: linear-gradient(160deg, var(--panel), var(--brand-light)); }
 html[data-theme="dark"] .sum-card h2 { color: var(--text-1); }
 html[data-theme="dark"] blockquote { color: var(--text-3); }
 html[data-theme="dark"] .chart-box { background: var(--panel); }
@@ -173,7 +173,7 @@ html[data-theme="dark"] .sn-nav-item:hover,
 html[data-theme="dark"] .sn-cat-item:hover { background-color: rgba(255,255,255,.06); }
 html[data-theme="dark"] .side-nav .sn-nav-item.active,
 html[data-theme="dark"] .side-nav .sn-cat-item.active {
-  background-color: #22314f; color: #35c2ae;
+  background-color: var(--brand-light); color: #35c2ae;
 }
 
 /* ============================================================
