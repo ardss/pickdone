@@ -27,6 +27,8 @@ export default {
     current: 'Current Version',
     check: 'Check for Updates',
     checkNow: 'Check Now',
+    checking: 'Checking for updates…',
+    failedReason: 'Update check failed: {msg}',
     downloading: 'Downloading update…',
     restartNow: 'Restart to Update',
     upToDate: 'You are on the latest version',

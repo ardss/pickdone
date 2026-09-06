@@ -2,8 +2,11 @@
 
   <aside class="day-rail" :class="{ collapsed: railCollapsed }" :style="{ width: railCollapsed ? '48px' : '236px', padding: railCollapsed ? '26px 4px 10px' : '14px 12px 16px' }" :aria-label="$t('statsG.DayRail.label')" :title="railCollapsed ? $t('statsG.DayRail.label') : ''"
          v-bind="railCollapsed ? { role: 'button', tabindex: 0, 'aria-label': $t('statsG.DayRail.foldAria') } : {}"
-         @click="railCollapsed && toggleRail()" @keydown.enter.prevent="railCollapsed && toggleRail()">
-    <!-- Collapsed state has no separate expand button: the whole rail is the button (role/keyboard on the aside); hover hint handled by CSS -->
+         @click="onRailClick" @keydown.enter.prevent="railCollapsed && toggleRail()">
+    <!-- Collapsed = whole rail is the expand button. Expanded = clicking blank areas (padding/slot gaps/hour labels)
+         also collapses, so the gesture is symmetric; clicks on interactive content (fact segments, plan chips,
+         entry card, the fact axis itself, controls) pass through untouched. While a pomodoro is running the
+         rail never collapses on blank clicks (user-finalized 2026-09-06: the running block must stay visible). -->
     <!-- Collapse action = the whole header block is clickable + hover highlight (aligned with the sidebar brand-row approach, user-finalized); « is only a visual indicator -->
     <div class="dr-head" role="button" tabindex="0" :aria-expanded="!railCollapsed"
          :aria-label="$t('statsG.DayRail.foldAria')" @click.stop="toggleRail" @keydown.enter.prevent="toggleRail">
@@ -460,6 +463,13 @@ export default {
     hourLabel (h) { return String(h).padStart(2, '0') + ':00' },
     toggleRail () {
       this.setRailCollapsed(!this.railCollapsed)
+    },
+    /** 展开态点空白处收起:命中任何交互内容(事实段/计划芯片/编辑卡/事实轴/控件/头部)都不算空白 */
+    onRailClick (e) {
+      if (this.railCollapsed) { this.toggleRail(); return }
+      if (e.target.closest('.dr-seg, .dr-card, .dr-plan, .dr-plan-chk, .dr-plan-name, .dr-plan-tom, .dr-rail, .dr-head, button, input, select, textarea, a, [role="button"]')) return
+      if (this.$store.state.tomato.status === 'startTomatoTime') return // 番茄运行中不收起(保持当前专注块可见)
+      this.setRailCollapsed(true)
     },
     setRailCollapsed (v) {
       this.railCollapsed = v

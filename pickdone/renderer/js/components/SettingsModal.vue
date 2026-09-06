@@ -582,13 +582,16 @@ export default {
     },
     async checkUpdate () {
       if (this.updStatus === 'checking' || this.updStatus === 'downloading') return
+      // 点击即给过程反馈:网络慢时检查可能耗时数秒,不能让按钮看起来"没反应"
+      this.updStatus = 'checking'
+      this.$message.info(this.$t('update.checking'))
       try {
         const r = await window.todoAPI.checkForUpdates()
         if (r) this.applyUpdStatus(r)
         if (r && r.active === false) this.$message.info(this.$t('update.devEnv'))
         if (r && r.status === 'uptodate') this.$message.success(this.$t('update.upToDate'))
-        if (r && r.status === 'error') this.$message.error(this.$t('update.failed'))
-      } catch (e) { this.$message.info(this.$t('update.devEnv')) }
+        if (r && r.status === 'error') this.$message.error(this.$t('update.failedReason', { msg: String((r.info && r.info.message) || '').slice(0, 120) }))
+      } catch (e) { this.updStatus = 'idle'; this.$message.info(this.$t('update.devEnv')) }
     },
     async restartToUpdate () {
       const okq = await window.todoAPI.quitAndInstall()

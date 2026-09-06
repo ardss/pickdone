@@ -27,6 +27,8 @@ export default {
     current: '当前版本',
     check: '检查更新',
     checkNow: '立即检查',
+    checking: '正在检查更新…',
+    failedReason: '检查更新失败：{msg}',
     downloading: '正在下载更新…',
     restartNow: '立即重启更新',
     upToDate: '当前已是最新版本',
