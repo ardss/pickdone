@@ -241,33 +241,97 @@ export default {
       clearTimeout(this.savePosTimer)
       window.todoAPI.dbCall('setMeta', [this.posKey(), JSON.stringify(this.posMap)]).catch(() => {})
     },
-    /** Auto-layout coordinates: depth -> x, index within depth -> y. Fills only cards that have
-     *  no user-placed position yet, so rearranging the canvas never fights the user. */
-    autoPosOf (t, idxInLane, laneIdx) {
-      return { x: 24 + laneIdx * 260, y: 20 + idxInLane * 100 }
+    /** Auto-layout (user feedback 2026-09-07: the naive depth-grid looked messy):
+     *  1) lane = topological depth; 2) order inside each lane by barycenter of already-placed
+     *  neighbours (two passes, left→right then right→left) so wires cross as little as possible;
+     *  3) y stacks by the card's REAL measured height + gap; 4) each lane is vertically centered
+     *  against the tallest lane, keeping predecessors roughly level with their dependents. */
+    computeAutoLayout () {
+      var lanes = this.depthSeq
+      var byLane = {}
+      lanes.forEach((lane, li) => lane.forEach(t => { byLane[t.taskId] = li }))
+      var order = lanes.map(lane => lane.map(t => t.taskId))
+      var predsOf = {}
+      var list = this.inScope
+      for (var i = 0; i < list.length; i++) predsOf[list[i].taskId] = parsePredecessors(list[i].predecessors).filter(id => byLane[id] != null)
+      var succsOf = {}
+      for (var id0 in predsOf) {
+        if (!succsOf[id0]) succsOf[id0] = []
+        for (var p0 = 0; p0 < predsOf[id0].length; p0++) {
+          var up = predsOf[id0][p0]
+          if (!succsOf[up]) succsOf[up] = []
+          succsOf[up].push(id0)
+        }
+      }
+      // 重心排序两轮:前向按前置的平均行位升序,后向按依赖的平均行位降序
+      // (后向必须用后继,否则会把前向排好的顺序整个翻回去)
+      for (var pass = 0; pass < 2; pass++) {
+        var seq = pass === 0 ? order : order.slice().reverse()
+        for (var s = 0; s < seq.length; s++) {
+          var laneArr = seq[s]
+          if (!laneArr || !laneArr.length) continue
+          var li = order.indexOf(laneArr) // backward pass walks a reversed copy; write back via real index
+          if (li < 0) continue
+          var nbsOf = pass === 0 ? predsOf : succsOf
+          var avgOf = function (id) {
+            var nbs = nbsOf[id] || []
+            var ys = []
+            for (var k = 0; k < nbs.length; k++) {
+              var at = order[byLane[nbs[k]]].indexOf(nbs[k])
+              if (at >= 0) ys.push(at)
+            }
+            return ys.length ? ys.reduce(function (a, b) { return a + b }, 0) / ys.length : null
+          }
+          // 无已布邻居的卡保持原相对顺序(稳定),不掺进数值比较;两轮都按平均行位升序
+          order[li] = laneArr
+            .map(function (id, idx) { return { id: id, idx: idx, avg: avgOf(id) } })
+            .sort(function (a, b) {
+              if (a.avg == null && b.avg == null) return a.idx - b.idx
+              if (a.avg == null) return 1
+              if (b.avg == null) return -1
+              return a.avg - b.avg
+            })
+            .map(function (x) { return x.id })
+        }
+      }
+      // 实测卡高(拿不到就回退 84)
+      var heights = {}
+      var cards = this.$refs.track ? this.$refs.track.querySelectorAll('.depv-task') : []
+      for (var c = 0; c < cards.length; c++) heights[cards[c].getAttribute('data-tid')] = cards[c].getBoundingClientRect().height
+      var CARD_W = 236, GAP_X = 24, GAP_Y = 20, TOP = 20, LEFT = 24
+      var map = {}
+      var laneHeight = []
+      for (var li2 = 0; li2 < order.length; li2++) {
+        var y = TOP
+        for (var j = 0; j < order[li2].length; j++) {
+          var h = heights[order[li2][j]] || 84
+          map[order[li2][j]] = { x: LEFT + li2 * (CARD_W + GAP_X), y: Math.round(y), h: h }
+          y += h + GAP_Y
+        }
+        laneHeight[li2] = y - TOP - GAP_Y
+      }
+      var maxLane = Math.max.apply(null, laneHeight.concat([0]))
+      // 各层垂直居中:前置与依赖大致等高,连线更短更平
+      for (var li3 = 0; li3 < order.length; li3++) {
+        var offset = Math.round((maxLane - laneHeight[li3]) / 2)
+        if (offset > 0) for (var j2 = 0; j2 < order[li3].length; j2++) {
+          var id2 = order[li3][j2]
+          map[id2].y += offset
+        }
+      }
+      for (var k2 in map) delete map[k2].h
+      return map
     },
     ensurePositions () {
-      var lanes = this.depthSeq
+      var layout = this.computeAutoLayout()
       var changed = false
-      for (var li = 0; li < lanes.length; li++) {
-        for (var i = 0; i < lanes[li].length; i++) {
-          var t = lanes[li][i]
-          if (!this.posMap[t.taskId]) {
-            var p = this.autoPosOf(t, i, li)
-            this.posMap[t.taskId] = p
-            changed = true
-          }
-        }
+      for (var id in layout) {
+        if (!this.posMap[id]) { this.posMap[id] = layout[id]; changed = true }
       }
       if (changed) this.savePos()
     },
     tidyUp () {
-      var lanes = this.depthSeq
-      var map = {}
-      for (var li = 0; li < lanes.length; li++) {
-        for (var i = 0; i < lanes[li].length; i++) map[lanes[li][i].taskId] = this.autoPosOf(lanes[li][i], i, li)
-      }
-      this.posMap = map
+      this.posMap = this.computeAutoLayout()
       this.savePos()
       this.$nextTick(this.drawWires)
     },
