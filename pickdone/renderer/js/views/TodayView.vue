@@ -40,7 +40,7 @@ import DayRail from '../components/DayRail.vue'
 
 export default {
   name: 'TodayView',
-  components: { TodoGroups, DayDateStrip, PdMatrixGrid: MatrixGrid, PdDayDeck: DayDeck, DepView, DayRail },
+  components: { TodoGroups, DayDateStrip, PdMatrixGrid: MatrixGrid, PdDayDeck: DayDeck, PdDepView: DepView, DayRail },
   data () {
     // View selection persistence: keep the last used view across refresh/restart (fall back to list on missing/invalid value)
     let saved = null
