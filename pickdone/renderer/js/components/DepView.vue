@@ -44,7 +44,7 @@
   </div>
 </template>
 
-<script>
+<script lang="ts">
 /** 依赖泳道视图(实验性,developerMode 门控;今日页第四视图)
  *  一屏回答"现在能做什么、什么被什么挡着":Ready(前置全完成或无前置)/ Blocked(有未完成前置,卡片上摊开缺的前置)/ 刚完成(48h)。
  *  FS 语义与 store/todo.js 的 parsePredecessors/isTaskReady 同源;项目过滤走 category store 的 projects getter。 */
