@@ -140,12 +140,6 @@ html[data-theme="dark"] .el-date-table td,
 html[data-theme="dark"] .el-month-table td .cell,
 html[data-theme="dark"] .el-year-table td .cell { color: var(--text-2); }
 html[data-theme="dark"] .el-switch__core { background: var(--line-strong); }
-
-/* FullCalendar */
-html[data-theme="dark"] .cal-fc {
-  --fc-page-bg-color: var(--panel);
-  --fc-border-color: var(--line);
-}
 html[data-theme="dark"] .fc-daygrid-day-number { color: var(--text-2); }
 html[data-theme="dark"] .fc-more-popover { background: var(--gray-bg); border-color: var(--line); }
 html[data-theme="dark"] .fc-more-popover .fc-popover-body { background: var(--gray-bg); }

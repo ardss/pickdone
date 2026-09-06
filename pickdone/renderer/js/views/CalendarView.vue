@@ -604,3 +604,99 @@ export default {
 
 }
 </script>
+<style>
+/* ===== 迁移自全局沉积文件(scripts/css-move.mjs):以下规则随组件生灭 ===== */
+/* —— FullCalendar 关键皮肤参数（提取自 chunk-vendors 的 .fc 基础规则），套自绘网格 —— */
+.cal-fc{--fc-page-bg-color:#fff;--fc-border-color:#ddd;--fc-today-bg-color:rgba(255,220,40,.15);--fc-event-bg-color:#3788d8;--fc-event-text-color:#fff;display:flex;flex-direction:column;height:100%;font-size:1em;background:var(--fc-page-bg-color)}
+.cal-fc *,
+.cal-fc :after,
+.cal-fc :before{box-sizing:border-box}
+/* ============ FullCalendar 轮子皮肤（对齐设计稿 .fc 参数） ============ */
+.cal-fc.fc { font-family: inherit; }
+.cal-fc.fc .fc-toolbar.fc-header-toolbar { display: none; }
+.cal-fc.fc .fc-col-header-cell-cushion { color: var(--brand-dark); font-size: var(--fs-md); font-weight: 600; padding: 6px 0; text-decoration: none; }
+.cal-fc.fc .fc-daygrid-day { background: var(--panel, #fff); }
+.cal-fc.fc .fc-day-today { background: rgba(255, 220, 40, .15); }
+.cal-fc.fc .fc-daygrid-day-number { color: #333; font-size: var(--fs-sm); padding: 4px 6px; text-decoration: none; }
+.cal-fc.fc .fc-day-today .fc-daygrid-day-number { color: var(--brand); font-weight: 700; }
+.cal-fc.fc .fc-daygrid-day-frame { min-height: 88px; }
+.cal-fc.fc .fc-h-event { background: var(--brand); border: none; border-radius: var(--radius-sm); }
+.cal-fc.fc .fc-h-event .fc-event-main { color: #fff; font-size: var(--fs-xs); padding: 1px 4px; }
+.cal-fc.fc .fc-event.todo-cal-event { cursor: pointer; }
+.cal-fc.fc .fc-daygrid-event { margin: 1px 2px; }
+/* 芯片单行截断:长标题不撑宽;溢出事件在格子内滚动直读(用户定稿,弃折叠+弹窗) */
+.cal-fc.fc .fc-daygrid-event .fc-event-title,
+.cal-fc.fc .fc-daygrid-event .fc-event-title-container { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cal-fc.fc .fc-daygrid-day-events { overflow-y: auto; overflow-x: hidden; max-height: 140px; scrollbar-width: thin; scrollbar-color: var(--line, #d8dde2) transparent; overscroll-behavior: contain; }
+.cal-fc.fc .fc-daygrid-day-events::-webkit-scrollbar { width: 6px; }
+.cal-fc.fc .fc-daygrid-day-events::-webkit-scrollbar-thumb { background: var(--line, #d8dde2); border-radius: 3px; }
+.cal-fc.fc .fc-daygrid-day-events::-webkit-scrollbar-track { background: transparent; }
+/* FC 原生 more-popover 禁用(moreLinkClick 返回 false 拦不住):一律走自绘 cal-more-pop */
+.cal-fc.fc .fc-more-popover { display: none !important; }
+/* "+N 更多"折叠入口:弱化成文字链,悬浮可读 */
+.cal-fc.fc .fc-daygrid-more-link,
+.cal-fc.fc .fc-more-link { color: var(--text-2); font-size: var(--fs-xs); font-weight: 500; padding: 0 4px; }
+.cal-fc.fc .fc-daygrid-more-link:hover { color: var(--brand-text, #0a6f62); background: var(--gray-bg, #f5f7f7); border-radius: var(--radius-sm); }
+/* 浮层内已完成项弱化(浮层始终全量,含被折叠的) */
+.cal-more-pop__item.todo-pop-done { opacity: .55; }
+.cal-fc.fc .fc-daygrid-day-number .todo-daycell b { font-weight: 500; }
+/* 显示已完成=容器开关:不挂 show-done 时已完成事件直接 display:none(数据常驻,防 FC 重排抖动) */
+.cal-fc.fc:not(.show-done) .fc-event.todo-done-strike { display: none; }
+/* 未完成淡化改容器级:settings 开关不再重建 events(防 FC 重排抖动,同 blur) */
+.cal-fc.fc.dim .fc-event:not(.todo-done-strike) { filter: grayscale(1); opacity: .45; }
+/* 模糊日程:容器级滤镜(开关不再触发 FC 重排,见 CalendarView events classNames 注释) */
+.cal-fc.blur .fc-event, .cal-tb.blur .fc-event, .cal-tb.blur .tl-seg, .todo-privacy { filter: blur(3px); }
+/* 事件标题超长时省略号截断，不溢出格子；单格放不下由 dayMaxEvents 折叠进 +N more */
+.cal-fc.fc .fc-event-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cal-fc.fc .fc-daygrid-event { max-width: 100%; }
+.cal-fc.fc .fc-daygrid-event-harness { pointer-events: auto; }
+/* "+N more" 弹层：贴应用风格（圆角+阴影），关闭按钮可点 */
+.cal-fc.fc .fc-more-popover { border: none; border-radius: var(--radius-lg); box-shadow: var(--shadow-pop); overflow: hidden; }
+.cal-fc.fc .fc-more-popover .fc-popover-header { background: var(--gray-bg, #f5f7f7); padding: var(--space-2) 10px; font-size: var(--fs-sm); color: var(--text-2); }
+.cal-fc.fc .fc-more-popover .fc-popover-close { cursor: pointer; opacity: .6; font-size: var(--fs-md); }
+.cal-fc.fc .fc-more-popover .fc-popover-close:hover { opacity: 1; }
+.cal-fc.fc .fc-more-popover .fc-popover-body { padding: var(--space-2) 10px; min-width: 160px; }
+.cal-fc.fc .fc-more-popover .fc-daygrid-event { margin: 3px 0; }
+/* 自绘 "+N more" 弹层（替代 FC 内置弹层，根除 offsetParent 崩溃） */
+.cal-fc { position: relative; }
+.cal-more-pop {
+  position: absolute; z-index: var(--z-pop-top); width: 220px;
+  background: var(--panel, #fff); border-radius: var(--radius-lg); box-shadow: var(--shadow-pop);
+  overflow: hidden;
+}
+.cal-more-pop__head {
+  display: flex; align-items: center; justify-content: space-between;
+  background: var(--gray-bg, #f5f7f7); padding: var(--space-2) 10px; font-size: var(--fs-sm); color: var(--text-2);
+}
+.cal-more-pop__x { cursor: pointer; color: var(--text-3); font-size: var(--fs-sm); }
+.cal-more-pop__x:hover { color: var(--text-1); }
+.cal-more-pop__body { padding: 6px 8px; max-height: 200px; overflow-y: auto; }
+.cal-more-pop__item {
+  border-radius: var(--radius-sm); color: #fff; font-size: var(--fs-xs); padding: 3px 7px;
+  margin: 3px 0; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cal-more-pop__item:hover { filter: brightness(.92); }
+/* 工具栏单行化：窄容器不再把开关挤到第二行(会被误读为弹层)，间距压缩保证 ~490px 下单行 */
+.cal-toolbar { flex-wrap: nowrap; gap: 6px; white-space: nowrap; }
+.cal-toolbar .chk { white-space: nowrap; }
+/* 跨月淡显(a11y):FC 自身的 other-month 灰 #c2c2c2/#d3d5d7 对比度 1.5 不达标,压到 text-3
+   须连 FC 挂色的宿主 A.fc-daygrid-day-number 一起压(axe 对比度按该宿主编造,只改内层不认账) */
+.cal-fc.fc .fc-day-other .fc-daygrid-day-number,
+.cal-fc.fc .fc-day-other .todo-daycell b,
+.cal-fc.fc .fc-day-other .todo-week,
+.cal-fc.fc .fc-day-other .todo-lunar { color: var(--text-3, #6d7278); }
+/* FC 自身把 other-month 的日期头压到 opacity .3(渲染合成后≈#d3d5d7,1.47:1)——颜色调多深都会被
+   这层透明度糊掉,必须摘掉透明度、淡显只交给上面的灰阶颜色承担 */
+.cal-fc.fc .fc-day-other .fc-daygrid-day-top { opacity: 1; }
+/* 今天格奶油底(#fffadf)上的品牌数字改用可读变体 */
+.cal-fc.fc .fc-day-today .todo-daycell b { color: var(--brand-text, #0a6f62); }
+/* 静态数字禁颜色过渡:否则 axe 采样会撞上 .3s 过渡中间帧(测得假低对比) */
+.cal-fc.fc .todo-daycell b,
+.cal-fc.fc .todo-daycell .todo-week,
+.cal-fc.fc .todo-daycell .todo-lunar { transition: none; }
+/* FullCalendar */
+html[data-theme="dark"] .cal-fc {
+  --fc-page-bg-color: var(--panel);
+  --fc-border-color: var(--line);
+}
+</style>
