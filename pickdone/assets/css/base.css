@@ -314,6 +314,23 @@ textarea { font-family: inherit; }
 
 .td-item:hover { background: var(--hover-bg); }
 
+/* 拖拽排序语言(2026-09-06):拖起=半透明+grabbing;落点=2px品牌色插入线+左端圆点
+   (Linear/TickTick范式,替代旧1px边框变色——太细且与行底线混在一起不可见)。
+   above/below 互斥,两伪元素分别承担线与圆点 */
+.td-item.dragging { opacity: .4; cursor: grabbing; }
+.td-item.drag-above::before, .td-item.drag-below::after {
+  content: ''; position: absolute; left: 12px; right: 8px; height: 2px;
+  background: var(--brand, #0f9d8f); border-radius: 1px; z-index: 2; pointer-events: none;
+}
+.td-item.drag-above::before { top: -2px; }
+.td-item.drag-below::after { bottom: -2px; }
+.td-item.drag-above::after, .td-item.drag-below::before {
+  content: ''; position: absolute; left: 7px; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--brand, #0f9d8f); z-index: 2; pointer-events: none;
+}
+.td-item.drag-above::after { top: -4px; }
+.td-item.drag-below::before { bottom: -4px; }
+
 
 
 

@@ -74,7 +74,7 @@
 /**
  * Todo item -- aligned with the todo-list-item reference: square checkbox / relaxed line spacing / thin separators / light gray on hover
  */
-import {dayjs, DEFAULT_CAT_COLOR, formatDayLabel, parseSubtasks, firstImageOfList, subsCompleteTarget, FMT } from '../utils/core.js'
+import {dayjs, formatDayLabel, parseSubtasks, firstImageOfList, subsCompleteTarget, FMT } from '../utils/core.js'
 import { dateBadgeColor } from '../utils/core.js'
 import { extractTags } from '../utils/search.js'
 import { deleteWithUndo, moveWithUndo } from '../utils/confirm.js'
@@ -143,11 +143,12 @@ export default {
       e.dataTransfer.dropEffect = 'move'
       const rect = this.$el.getBoundingClientRect()
       this.dropAfter = (e.clientY - rect.top) > rect.height / 2
-      this.$el.style.borderBottomColor = this.dropAfter ? DEFAULT_CAT_COLOR : 'transparent'
-      this.$el.style.borderTopColor = !this.dropAfter ? DEFAULT_CAT_COLOR : 'transparent'
+      // 插入指示线走伪元素类(见 base.css 拖拽排序语言),不再改边框色
+      this.$el.classList.toggle('drag-below', this.dropAfter)
+      this.$el.classList.toggle('drag-above', !this.dropAfter)
     },
-    onDragLeave () { this.$el.style.borderBottomColor = ''; this.$el.style.borderTopColor = '' },
-    onDragEnd () { this.$el.classList.remove('dragging'); this.dragging = false },
+    onDragLeave () { this.$el.classList.remove('drag-above', 'drag-below') },
+    onDragEnd () { this.$el.classList.remove('drag-above', 'drag-below'); this.dragging = false },
     async onDrop (e) {
       e.preventDefault()
       this.$el.style.borderBottomColor = ''; this.$el.style.borderTopColor = ''
