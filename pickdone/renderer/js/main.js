@@ -62,7 +62,15 @@ app.use(router)
 app.use(i18n)
 // vue-i18n@9 legacy:true only provides $t inside component instances; globalProperties needs explicit injection
 app.config.globalProperties.$t = i18n.global.t
-app.use(ElementPlus, { size: 'small' })
+// EP 组件内部文案（确认框按钮/日期选择器/分页等）跟随界面语言；运行期切换由 app-root.vue 的
+// el-config-provider 响应式接管，这里只定首启值
+const EP_LOCALES = { 'zh-CN': window.ElementPlusLocaleZhCn, 'en-US': window.ElementPlusLocaleEn }
+app.use(ElementPlus, { size: 'small', locale: EP_LOCALES[i18n.global.locale] || EP_LOCALES['zh-CN'] })
+// 服务式组件（MessageBox/Message/Notification）不挂在 el-config-provider 组件树内，读的是 install 时的
+// 模块级 globalConfig 快照——语言切换后须重新注入，否则弹窗按钮停留首启语言（OK/Cancel vs 确定/取消）
+const epLocaleCfg = Vue.computed(() => ({ locale: EP_LOCALES[i18n.global.locale] || EP_LOCALES['zh-CN'] }))
+ElementPlus.provideGlobalConfig(epLocaleCfg, app, true)
+Vue.watch(() => i18n.global.locale, () => { ElementPlus.provideGlobalConfig(epLocaleCfg, app, true) })
 
 // v-click-outside="fn": callback when clicking outside the element (unified capture, auto cleanup, replacing hand-written document listeners in each component)
 app.directive('click-outside', {

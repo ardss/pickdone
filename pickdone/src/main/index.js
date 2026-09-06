@@ -241,6 +241,7 @@ function createMainWindow () {
     minHeight: 520,
     frame: false,                     // the project baseline runs frameless (Win11 auto rounded corners)
     show: false,
+    title: i18nM.mt('appName'),       // taskbar/alt-tab label follows the configured language (index.html <title> is the zh fallback only)
     icon: path.join(__dirname, '../../assets/' + (isTestEnv ? 'icon-test.png' : 'icon.png')),
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
@@ -677,7 +678,7 @@ function registerIpc () {
       delete c.securityLockQuestion
       return c
     },
-    'set-app-locale': (e, locale) => { i18nM.setLocale(locale); const c = writeConfig({ appLocale: locale }); rebuildTrayMenu(); if (tray) { try { tray.setToolTip(i18nM.mt('appName')) } catch (err) { /* empty */ } } return c },
+    'set-app-locale': (e, locale) => { i18nM.setLocale(locale); const c = writeConfig({ appLocale: locale }); rebuildTrayMenu(); if (tray) { try { tray.setToolTip(i18nM.mt('appName')) } catch (err) { /* empty */ } } if (win && !win.isDestroyed()) { try { win.setTitle(i18nM.mt('appName')) } catch (err) { /* empty */ } } return c },
     'notify-settings-updated': (e, patch) => {
       // 写配置限主窗;浮窗白噪音选择是合法写入(浮窗内 settings/update 走此通道),放行浮窗自身(2026-09-05 终审 P1)
       if (!(tomatoFloat.isSelfSender(e.sender) || (getMainWindow() && e.sender === getMainWindow().webContents))) {

@@ -365,7 +365,11 @@ export default {
         dayCellContent (arg) {
           const d = dayjs(arg.date)
           const key = d.format(FMT.date)
-          const lunar = self.lunarMap[key]
+          // 农历/节气徽标只服务中文面：solarlunar 产出是中文词（初一/白露/中秋节），
+          // 英文界面下无法翻译，直接不渲染（2026-09-06 混语言审查）。
+          // getLocale() 读 localStorage（locale 唯一来源），$i18n 在本组件不可达
+          const zhSurface = getLocale() !== 'en-US'
+          const lunar = zhSurface ? self.lunarMap[key] : ''
           const num = arg.dayNumberText
           const week = wdLabel(self.$t.bind(self), d.day())
           return {
