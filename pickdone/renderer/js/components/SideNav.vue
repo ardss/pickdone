@@ -706,3 +706,387 @@ export default {
   created () { /* NAV_* constants are now exposed via computed (non-reactive instance properties once caused the template identifier guard to under-report) */ }
 }
 </script>
+<style>
+/* ===== 迁移自全局沉积文件(scripts/css-move.mjs):以下规则随组件生灭 ===== */
+.sn-scrollable { flex: 1; overflow-y: auto; min-height: 0; display: flex; flex-direction: column; }
+.sn-search {
+  display: flex; align-items: center; gap: var(--space-2); height: 36px; margin: 0 0 10px;
+  background: var(--gray-bg); border: 1px solid var(--line); border-radius: var(--radius-pill); padding: 0 14px 0 7px; /* 左7=框内图标重心对齐品牌标中心线(x≈25)，右14保住占位文字与导航文字同列(x=40) */
+  /* 折叠/展开的形态变形：框收掉↔长出来、图标放大↔缩回框里 */
+  transition: background-color var(--dur-slow) cubic-bezier(.2,.8,.2,1), border-color var(--dur-slow) cubic-bezier(.2,.8,.2,1), padding var(--dur-slow) cubic-bezier(.2,.8,.2,1), margin var(--dur-slow) cubic-bezier(.2,.8,.2,1);
+}
+.sn-search .app-icon--search { transition: width var(--dur-mid) cubic-bezier(.2,.8,.2,1), height var(--dur-mid) cubic-bezier(.2,.8,.2,1), opacity var(--dur-mid) ease; }
+.sn-search input { transition: opacity var(--dur-fast) ease, transform var(--dur-mid) cubic-bezier(.2,.8,.2,1), padding var(--dur-slow) cubic-bezier(.2,.8,.2,1), flex var(--dur-slow) cubic-bezier(.2,.8,.2,1); }
+.sn-search i { font-style: normal; font-size: var(--fs-sm); opacity: .5; }
+.sn-search input { flex: 1; border: 0; background: none; font-size: var(--fs-md); color: var(--text-1); }
+.sn-search input::placeholder { color: #8a9099; }
+.sn-nav-item {
+  display: flex; align-items: center; gap: var(--space-3); height: 40px; padding: 0 12px;
+  border-radius: var(--radius-md); cursor: pointer; color: var(--text-1); font-size: var(--fs-md); transition: background var(--dur-fast);
+}
+.sn-nav-item:hover { background: var(--gray-bg); }
+.sn-nav-item.active { background: var(--brand-light); color: var(--brand); font-weight: 600; }
+.sn-nav-ico { width: 18px; height: 18px; }
+.sn-nav-item.active .sn-badge { color: inherit; font-weight: 600; }
+.sn-cat-add {
+  width: 46px; border: 0; background: none; text-align: right; font-size: var(--fs-md); color: var(--brand);
+}
+.sn-cat-add::placeholder { color: var(--brand); }
+.sn-cat-item {
+  /* 左 14 + 点 10 + 间距 16：圆点中心对齐导航图标中心(19)，文字起点对齐导航文字(40) */
+  display: flex; align-items: center; gap: var(--space-4); height: 36px; padding: 0 12px 0 14px;
+  border-radius: var(--radius-md); cursor: pointer; font-size: var(--fs-md); color: var(--text-1);
+}
+.sn-cat-item:hover { background: var(--gray-bg); }
+.sn-cat-item.active { background: var(--brand-light); color: var(--brand); }
+.sn-cat-edit { border: 0; border-bottom: 1px solid var(--brand); background: none; flex: 1; font-size: var(--fs-md); }
+/* 回收站：常态保持灰，hover 才高亮红（危险语义） */
+/* 账户卡片（底部）：头像 + 用户名 + 同步 + 设置，替代原顶部用户行与三点菜单 */
+.sn-account {
+  display: flex; align-items: center; gap: var(--space-2);
+  margin-top: 10px; padding: 6px 8px; border-radius: var(--radius-lg);
+  background: var(--gray-bg);
+}
+.sn-account .ml-auto { margin-left: auto; }
+.sn-account .sn-username {
+  font-size: var(--fs-md); font-weight: 600; color: var(--text-1);
+  max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sn-account-gear {
+  position: relative;
+  display: flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; border: 0; border-radius: var(--radius-md); padding: 0;
+  background: none; color: var(--text-3); cursor: pointer;
+  transition: background-color var(--dur-mid), color var(--dur-mid);
+}
+.sn-account-gear:hover { background: rgba(0, 0, 0, .06); color: var(--text-1); }
+/* 回收站并入账户行(用户定稿):默认灰,hover/拖拽悬停才泛红 */
+.sn-account-trash { position: relative; }
+.sn-account-trash:hover, .sn-account-trash.drag-over { background: var(--danger-soft, rgba(196,85,45,.1)); color: var(--danger-strong, #c4552d); }
+.sn-account-trash.drag-over { outline: 1.5px dashed var(--danger-strong, #c4552d); }
+.sn-account-trash .sn-badge { position: absolute; top: -4px; right: -5px; }
+.sn-account .sn-sync { margin-left: 2px; }
+/* 10. 侧边栏分类/标签行高亮过渡（原来 hover/active 是硬切） */
+.sn-cat-item { transition: background var(--dur-fast), color var(--dur-fast); }
+.side-nav--collapsed .sn-brand__text,
+.side-nav--collapsed .sn-section,
+.side-nav--collapsed .sn-account { display: none; }
+.side-nav--collapsed .sn-navs .sn-nav-item span,
+.side-nav--collapsed .sn-navs .sn-nav-item em { display: none; }
+.side-nav--collapsed .sn-navs .sn-nav-item { justify-content: center; padding: 0; }
+/* 品牌标 svg 定尺寸（内联 svg 无宽高时按默认尺寸溢出，被 overflow 裁切成"缺角"） */
+.sn-brand__mark svg { width: 30px; height: 30px; display: block; }
+/* 折叠态：天气/搜索退化为图标钮（点击展开侧边栏） */
+/* 折叠态几何统一在下方「折叠态退化」区块（40px 图标方格），此处只管内容显隐 */
+.side-nav--collapsed .sn-weather,
+.side-nav--collapsed .sn-search {
+  display: flex; align-items: center; cursor: pointer; border-radius: var(--radius-md);
+}
+.side-nav--collapsed .sn-weather:hover,
+.side-nav--collapsed .sn-search:hover { background: var(--hover-bg); }
+.side-nav--collapsed .sn-weather .w-temp,
+.side-nav--collapsed .sn-weather .w-desc,
+.side-nav--collapsed .sn-weather .w-shape,
+.side-nav--collapsed .sn-weather .w-city { display: none; }
+.side-nav--collapsed .sn-search input,
+.side-nav--collapsed .sn-search .main-nav-search__clear { display: none; }
+/* 收起/展开整行可点（用户定稿）：品牌行任意位置点击都切换折叠，「»/«」只作视觉指示 */
+.sn-brand { cursor: pointer; border-radius: var(--radius-md); transition: background var(--dur-fast); }
+.sn-brand:hover { background: var(--hover-bg); }
+.sn-brand:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
+.sn-brand .sn-collapse-btn {
+  margin-left: auto; width: 22px; height: 22px; border-radius: var(--radius-md);
+  display: flex; align-items: center; justify-content: center;
+  color: var(--text-3); font-size: var(--fs-md);
+  opacity: 0; transition: opacity var(--dur-fast);
+}
+.sn-brand:hover .sn-collapse-btn { opacity: 1; }
+/* 折叠态（48px 图标栏）：品牌行只留 mark，指示符隐藏，点击任意位置展开 */
+.side-nav--collapsed .sn-brand__text { display: none; }
+.side-nav--collapsed .sn-collapse-btn { display: none; }
+/* ==================== 侧边栏品牌头部（拾事 PickDone） ==================== */
+.sn-brand { display: flex; align-items: center; gap: 10px; padding: 14px 12px 10px 0; }
+/* 左0=导航图标公共列(x=10)：展开态品牌标/天气/搜索/导航同列 */
+/* 用户定稿：图标本体直接展示（30px 满幅），不再垫蓝色底块 */
+.sn-brand__mark {
+  width: 30px; height: 30px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+}
+.sn-brand__name { font-size: var(--fs-lg); font-weight: 700; color: var(--text-1); line-height: 1.2; }
+.sn-brand__en { font-size: var(--fs-2xs); letter-spacing: 2.5px; text-transform: uppercase; color: var(--text-3); }
+/* ==================== 折叠态退化（搜索→纯图标 / 天气→纯图标 / 底部⚙设置） ==================== */
+/* 折叠态统一图标格：栏内边距收窄到 4px，品牌/天气/搜索/导航项/底部齿轮均为 40×40 正方形格（用户定稿：hover 高亮必须是方形，不允许异形长条） */
+/* padding-top 与展开态(12px)对齐 + sn-navs 补 17px：品牌行展开 55px/折叠 40px 的高度差不再让导航图标列整体上浮（用户反馈折叠后图标偏高）。
+   注意 sn-fixed 是普通块容器，此 margin 与搜索框的 10px 下边距折叠取较大者，故净补偿 = 17-10 = 7px */
+.side-nav--collapsed { display: flex; flex-direction: column; padding: 12px 4px 10px; }
+.side-nav--collapsed .sn-navs { margin-top: 17px; }
+.side-nav--collapsed .sn-brand { height: 40px; padding: 0; justify-content: center; margin-bottom: var(--space-2); }
+.side-nav--collapsed .sn-weather { height: 40px; padding: 0; justify-content: center; margin-bottom: var(--space-2); }
+/* 8px 与品牌行下距同节奏(2026-08-31 用户反馈两段间距不一) */
+
+/* 展开态搜索行为对齐图标列加了左内边距，折叠态图标钮需重置回居中 */
+.side-nav--collapsed .sn-search { height: 40px; padding: 0; justify-content: center; }
+.side-nav--collapsed .sn-navs .sn-nav-item { height: 40px; padding: 0; justify-content: center; margin-bottom: var(--space-1); }
+.side-nav--collapsed .main-nav-search.sn-search:hover { background: var(--hover-bg); }
+/* 上面的透明背景同特异性更靠后，会吃掉 hover 高亮，这里补回 */
+.side-nav--collapsed .main-nav-search.sn-search input { flex: 0 0 0px; opacity: 0; transform: scale(.5); padding: 0; pointer-events: none; }
+.side-nav--collapsed .main-nav-search.sn-search .main-nav-search__clear { display: none; }
+.side-nav--collapsed .main-nav-search.sn-search .app-icon--search { width: 20px; height: 20px; opacity: .9; transform: translate(2px, 2px); }
+.side-nav--collapsed .sn-collapsed-foot { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+/* 折叠态展开把手：平时隐身，悬停侧栏任意区域从右缘中部滑出；半圆角贴边不占布局空间 */
+.side-nav--collapsed { position: relative; }
+.side-nav--collapsed:hover .sn-expand-hint, .sn-expand-hint:focus-visible { opacity: 1; }
+/* 展开态镜像把手：同位置同交互，箭头朝左、圆角朝右（与折叠态对称） */
+.side-nav:not(.side-nav--collapsed) { position: relative; }
+.side-nav:not(.side-nav--collapsed):hover .sn-collapse-hint, .sn-collapse-hint:focus-visible { opacity: 1; }
+.side-nav--collapsed .sn-cog-btn { width: 40px; height: 40px; padding: 0; justify-content: center; align-items: center; }
+/* 与折叠格（天气/搜索/导航）同一高亮 token */
+
+/* 折叠向：内容块轻淡入，掩住 display:none 的瞬间跳变（展开向保留宽度过渡本身，用户定稿去掉镜框高亮） */
+.side-nav--collapsed .sn-fixed > *,
+.side-nav--collapsed .sn-scrollable > *,
+.side-nav--collapsed .sn-collapsed-foot { animation: sn-slide .28s cubic-bezier(.2, .8, .2, 1) both; }
+/* 8. 滚动条全局统一：细圆角，hover 加深（main-scroll/page__main/sn-scrollable/ep-inner） */
+.main-scroll::-webkit-scrollbar, .page__main::-webkit-scrollbar,
+.sn-scrollable::-webkit-scrollbar, .ep-inner::-webkit-scrollbar { width: 6px; height: 6px; }
+.main-scroll::-webkit-scrollbar-thumb, .page__main::-webkit-scrollbar-thumb,
+.sn-scrollable::-webkit-scrollbar-thumb, .ep-inner::-webkit-scrollbar-thumb {
+  background: rgba(144, 147, 153, .22); border-radius: var(--radius-sm);
+}
+.main-scroll::-webkit-scrollbar-thumb:hover, .page__main::-webkit-scrollbar-thumb:hover,
+.sn-scrollable::-webkit-scrollbar-thumb:hover, .ep-inner::-webkit-scrollbar-thumb:hover { background: rgba(144, 147, 153, .45); }
+.main-scroll::-webkit-scrollbar-track, .page__main::-webkit-scrollbar-track,
+.sn-scrollable::-webkit-scrollbar-track, .ep-inner::-webkit-scrollbar-track { background: transparent; }
+/* ============ 交互控件禁选（连点/双击不再拉出选区；任务标题/描述等内容区不受影响） ============ */
+.sn-nav-item, .sn-cat-item, .sn-sec-head, .sn-sec-tools, .sn-user-row, .sn-section,
+.tg-head, .grp-toggle-btn, .todo-list-item-group-head,
+.day-strip, .ds-day, .ds-arrow, .ds-label, .ds-today-ico, .ds-cal-pop,
+.ep-row, .ep-cat-row, .ep-tags-row, .ep-date-chip, .ep-tag-chip, .ep-collapse-btn, .ep-done-row,
+.td-subs, .td-meta, .td-sub, .td-sub-check,
+
+/* 滚动到边界不再带动父级/整页（滚动链穿透） */
+.sn-scrollable, .main-scroll, .ep-inner, .ds-cal-pop, .cal-more-pop__body { overscroll-behavior: contain; }
+/* 分类管理弹窗 */
+.cat-mgr-tip { font-size: var(--fs-sm); color: var(--text-3); padding: 0 2px 10px; }
+.cat-mgr-row {
+  display: flex; align-items: center; gap: 10px;
+  height: 42px; padding: 0 8px; font-size: var(--fs-md); color: var(--text-1);
+  border-bottom: 1px solid var(--line); background: var(--panel, #fff); cursor: grab;
+}
+.cat-mgr-row:last-of-type { border-bottom: none; }
+.cat-mgr-row:hover { background: var(--gray-bg); }
+.cat-mgr-row { transition: background var(--dur-fast), transform var(--dur-fast); }
+.cat-mgr-row:hover .cat-mgr-drag { color: var(--brand); }
+.cat-mgr-row--dragging { opacity: .4; transform: scale(.99); cursor: grabbing; }
+/* 拖拽落点指示：独立伪元素横线浮在两行交界的缝隙上（上沿=插到前面，下沿=插到后面），
+   首行上沿/末行下沿同样生效；3px 青色圆角线 + 光晕，确保可见 */
+.cat-mgr-row { position: relative; }
+.cat-mgr-row--over-before::before,
+.cat-mgr-row--over-after::after {
+  content: ''; position: absolute; left: 6px; right: 6px; height: 3px;
+  border-radius: var(--radius-xs); background: var(--brand);
+  box-shadow: 0 0 6px rgba(15, 157, 143, .55);
+  z-index: 2; pointer-events: none;
+}
+.cat-mgr-row--over-before::before { top: -2px; }
+.cat-mgr-row--over-after::after { bottom: -2px; }
+/* 表头：与行同一左右内边距，形成表格感 */
+.cat-mgr-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 0 8px 6px; font-size: var(--fs-xs); color: var(--text-3);
+}
+.cat-mgr-hname { flex: 1; margin-left: 40px; }
+.cat-mgr-hcount { width: 52px; text-align: right; }
+.cat-mgr-hops { width: 40px; text-align: center; }
+/* 条目数 = 预览开关：可点击、带箭头 */
+.cat-mgr-count { cursor: pointer; min-width: 52px; text-align: right; }
+.cat-mgr-count:hover { color: var(--brand); }
+/* 预览区：缩进浅底，展示分类内未完成任务 */
+.cat-mgr-preview {
+  padding: 6px 8px 8px 48px; margin: -1px 0 2px;
+  background: var(--gray-bg); border-radius: var(--radius-md); font-size: var(--fs-sm); color: var(--text-2);
+  animation: mgr-preview-in .15s cubic-bezier(.2, .8, .2, 1);
+}
+.cat-mgr-preview__item { line-height: 22px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cat-mgr-preview__empty { color: var(--text-3); }
+.cat-mgr-preview__more { color: var(--text-3); font-size: var(--fs-xs); }
+.cat-mgr-drag { font-style: normal; color: var(--text-3); font-size: var(--fs-base); cursor: grab; flex-shrink: 0; }
+.cat-mgr-name {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; cursor: text;
+}
+.cat-mgr-name:hover { color: var(--brand); }
+.cat-mgr-count { font-style: normal; flex-shrink: 0; font-size: var(--fs-xs); color: var(--text-3); }
+.cat-mgr-del {
+  flex-shrink: 0; font-size: var(--fs-sm); color: var(--text-3);
+  padding: 3px 8px; border-radius: var(--radius-sm); transition: all var(--dur-fast);
+}
+.cat-mgr-del:hover { color: var(--danger); background: var(--danger-soft); }
+/* ============ 像素级对齐补丁（对照 构建产物 A / index.pretty.js）============ */
+
+/* —— 1. 侧边栏搜索框：设计稿 .main-nav-search__input[scoped]
+      185x36 padding-left:39px 字号13px 底#f5f4f5 边1px #e7e7e7 圆角5px focus 边var(--brand) —— */
+.main-nav-search.sn-search {
+  width: 100%; margin: 0 0 10px;
+  background-color: #f5f4f5;
+  border: 1px solid #e7e7e7;
+  border-radius: var(--radius-sm);
+  transition: border-color var(--dur-mid) cubic-bezier(.645,.045,.355,1);
+}
+.main-nav-search.sn-search:focus-within { border-color: var(--brand); }
+.main-nav-search.sn-search .app-icon { flex-shrink: 0; }
+/* 图标是 flex 子元素（非绝对定位），输入框无需再留 39px 左内边距，
+   否则占位文字「搜索」会被推到中间、看起来没左对齐 */
+.main-nav-search.sn-search input {
+  height: 100%; width: 100%; min-width: 0;
+  padding: 0 9px 0 0;
+  font-weight: 400; font-size: var(--fs-md); line-height: 34px; color: #333;
+}
+.main-nav-search.sn-search input::placeholder { color: var(--text-4); }
+/* 聚焦态：输入框自身不画 outline（默认矩形黑框与 5px 圆角容器不一致），统一由容器 focus-within 描边表达 */
+.main-nav-search.sn-search input:focus,
+.sn-search input:focus { outline: none; }
+/* —— 1b. 侧边栏分类行直接操作：行尾垃圾桶（hover 显现）、拖拽排序指示、
+      拖入底部回收站高亮；未分类为默认固定行，不参与拖拽/删除 —— */
+.sn-cat-item { position: relative; }
+.sn-cat-del {
+  position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+  font-size: var(--fs-md); color: var(--text-4); cursor: pointer;
+  opacity: 0; transition: opacity var(--dur-fast), color var(--dur-fast);
+}
+.sn-cat-item:hover .sn-cat-del, .sn-cat-del:focus { opacity: 1; }
+.sn-cat-del:hover { color: var(--danger); }
+.sn-cat-item.dragging { opacity: .45; }
+.sn-cat-item.drag-over-before { box-shadow: inset 0 2px 0 var(--brand); }
+.sn-cat-item.drag-over-after { box-shadow: inset 0 -2px 0 var(--brand); }
+.sn-cat-item { transition: background-color var(--dur-fast); }
+.sn-cat-edit { min-width: 0; outline: none; }
+/* —— 2. 导航行/分类行：设计稿 .sidebar-nav-item[scoped] 与
+      .todo-category__item[scoped]：高36px 字号13px lh18 圆角5px
+      hover rgba(233,237,237,.5)；激活 #e9eded
+      注：设计稿行宽 220px（250 侧栏 - 2×15 总缩进）；本实现 .side-nav 已有
+      14px 水平 padding，再叠 15px margin 会双重缩进（行宽仅 191px），
+      故 margin 归零，总缩进 14px ≈ 设计稿 —— */
+.sn-nav-item,
+.sn-cat-item {
+  height: 36px; margin: 0; padding: 0;
+  color: #333; font-weight: 400; font-size: var(--fs-md); line-height: 18px;
+  border-radius: var(--radius-sm);
+}
+/* 分类行对齐导航几何（含容器自带 10px 缩进）：圆点中心对齐导航图标中心(19)，文字起点对齐导航文字(40) */
+.sn-cat-item { padding-left: var(--space-1); gap: var(--space-4); }
+.sn-nav-item:hover { background-color: rgba(233,237,237,.5); }
+.sn-cat-item:hover { background-color: rgba(233,237,237,.5); }
+.side-nav .sn-nav-item.active,
+.side-nav .sn-cat-item.active { background-color: #e9eded; color: #333; font-weight: 400; }
+/* ============ 分类文件夹层级（设计稿 todo-category__folder 族） ============ */
+.sn-cat-folder { font-weight: 500; position: relative; }
+.sn-cat-folder .folder-toggle-icon {
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  font-size: var(--fs-2xs); color: var(--text-3); transition: transform var(--dur-mid) ease;
+}
+.sn-cat-child { margin-left: 0; padding-left: 25px; font-size: var(--fs-sm); color: var(--text-2); }
+.sn-cat-child:hover { background-color: rgba(233,237,237,.3); }
+.sn-cat-child .sn-dot { width: 8px; height: 8px; }
+/* ============ 分类「＋新建」「⚙管理」行（设计稿） ============ */
+.sn-cat-action { color: var(--text-2); font-size: var(--fs-md); }
+.sn-cat-action .sn-action-ico {
+  width: 20px; height: 20px; margin: 0 0 0 8px; display: inline-flex; align-items: center;
+  justify-content: center; font-style: normal; font-size: var(--fs-md); color: var(--text-3);
+}
+.sn-cat-action .sn-action-ico.plus { color: var(--brand); font-weight: 700; }
+.sn-cat-action:hover { color: var(--brand); }
+.sn-account-trash.drag-over, .sn-cog-btn.drag-over { animation: trash-pulse .6s ease-in-out infinite; }
+/* 分类名溢出保护：长名不顶飞绝对定位的删除按钮 */
+.sn-cat-item .sn-cat-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 管理分类弹窗：项目标记按钮选中态 */
+.cat-mgr-del--on { color: var(--brand); }
+.cat-mgr-del--on:hover { color: var(--brand-dark); background: var(--brand-light); }
+/* —— 以下规则自 theme-dark.css 退回（选择器列表首支为浅色规则，不应集中到深色文件）—— */
+.side-nav--collapsed .main-nav-search.sn-search, html[data-theme="dark"] .side-nav--collapsed .main-nav-search.sn-search { height: 40px; padding: 0; justify-content: center; background: transparent; border-color: transparent; }
+/* 三栏骨架与主表面 */
+html[data-theme="dark"] .side-nav,
+html[data-theme="dark"] .edit-panel,
+html[data-theme="dark"] .content-area,
+html[data-theme="dark"] .main-col,
+html[data-theme="dark"] .view-head,
+html[data-theme="dark"] .qa-inputwrap,
+html[data-theme="dark"] .quick-add,
+html[data-theme="dark"] .search-bar,
+html[data-theme="dark"] .td-item,
+html[data-theme="dark"] .recycle-row,
+html[data-theme="dark"] .cal-cell,
+html[data-theme="dark"] .chart-box,
+html[data-theme="dark"] .sum-card,
+html[data-theme="dark"] .tomato-panel,
+html[data-theme="dark"] .ctx-menu,
+html[data-theme="dark"] .qa-pop,
+html[data-theme="dark"] .qa-more,
+html[data-theme="dark"] .search-filter,
+html[data-theme="dark"] .day-strip,
+html[data-theme="dark"] .toolbar,
+html[data-theme="dark"] .view-page,
+html[data-theme="dark"] .ep-inner,
+html[data-theme="dark"] .ed-head,
+html[data-theme="dark"] .ed-foot {
+  background-color: var(--panel);
+  color: var(--text-1);
+}
+/* 文本与图标 */
+html[data-theme="dark"] .is-complete .td-title,
+html[data-theme="dark"] .td-title,
+html[data-theme="dark"] .content, html[data-theme="dark"] .tg-head h3,
+html[data-theme="dark"] .sn-username, html[data-theme="dark"] .u-name,
+html[data-theme="dark"] .nav-item, html[data-theme="dark"] .sn-cat-item,
+html[data-theme="dark"] .sn-nav-item, html[data-theme="dark"] .ep-sub-text,
+html[data-theme="dark"] .qa-input, html[data-theme="dark"] .search-bar input,
+html[data-theme="dark"] .ep-title textarea, html[data-theme="dark"] .ep-desc textarea,
+html[data-theme="dark"] .ep-addsub-input, html[data-theme="dark"] .td-title,
+html[data-theme="dark"] .file-row, html[data-theme="dark"] .cat-head h1,
+html[data-theme="dark"] .tag-head, html[data-theme="dark"] .toolbar,
+html[data-theme="dark"] .vm-item, html[data-theme="dark"] .ed-body {
+  color: var(--text-1);
+}
+html[data-theme="dark"] .qa-input::placeholder,
+html[data-theme="dark"] .ep-addsub-input::placeholder,
+html[data-theme="dark"] .sn-search input::placeholder { color: var(--text-4); }
+/* 边线与分隔 */
+html[data-theme="dark"] .td-item, html[data-theme="dark"] .edit-panel,
+html[data-theme="dark"] .side-nav, html[data-theme="dark"] .tg-body,
+html[data-theme="dark"] .ep-tools, html[data-theme="dark"] .ed-head,
+html[data-theme="dark"] .ed-foot, html[data-theme="dark"] .sub-sec,
+html[data-theme="dark"] .att-sec, html[data-theme="dark"] .ai-sec,
+html[data-theme="dark"] .tomato-panel header, html[data-theme="dark"] .tp-records,
+html[data-theme="dark"] .qa-inputwrap, html[data-theme="dark"] .search-bar,
+html[data-theme="dark"] .cal-cell, html[data-theme="dark"] .day-strip,
+html[data-theme="dark"] .ctx-item.sep { border-color: var(--line); }
+html[data-theme="dark"] .sn-account { background: var(--panel); }
+html[data-theme="dark"] .sn-account-gear { color: var(--text-3); }
+html[data-theme="dark"] .sn-account-gear:hover { background: rgba(255, 255, 255, .08); color: var(--text-1); }
+/* 深色模式：侧边栏像素对齐补丁的深色对应值（防浅色硬编码破坏暗色） */
+html[data-theme="dark"] .main-nav-search.sn-search {
+  background-color: var(--gray-bg);
+  border-color: var(--line-strong);
+}
+html[data-theme="dark"] .main-nav-search.sn-search:focus-within { border-color: var(--brand); }
+html[data-theme="dark"] .main-nav-search.sn-search input { color: var(--text-1); }
+html[data-theme="dark"] .main-nav-search.sn-search input::placeholder { color: var(--text-4); }
+html[data-theme="dark"] .sn-nav-item,
+html[data-theme="dark"] .sn-cat-item { color: var(--text-1); }
+html[data-theme="dark"] .sn-nav-item:hover,
+html[data-theme="dark"] .sn-cat-item:hover { background-color: rgba(255,255,255,.06); }
+html[data-theme="dark"] .side-nav .sn-nav-item.active,
+html[data-theme="dark"] .side-nav .sn-cat-item.active {
+  background-color: var(--brand-light); color: #35c2ae;
+}
+/* 侧栏用户菜单 */
+
+/* 分类管理行 / 番茄计时器选项 */
+html[data-theme="dark"] .cat-mgr-row { background: var(--gray-bg); }
+/* 折叠态：搜索/天气退化为独立图标，深色背景下同样去掉框（否则暗色卡片底会露出"框还在"） */
+html[data-theme="dark"] .side-nav--collapsed .main-nav-search.sn-search,
+html[data-theme="dark"] .side-nav--collapsed .main-nav-search.sn-search { background: transparent; border-color: transparent; }
+html[data-theme="dark"] .side-nav--collapsed .sn-weather,
+html[data-theme="dark"] .side-nav--collapsed .sn-weather { background: transparent; }
+html[data-theme="dark"] .cat-mgr-del--on:hover { background: rgba(15, 157, 143, .15); }
+</style>
