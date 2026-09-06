@@ -16,6 +16,7 @@ export default {
     "calMd": "{m}/{d} {w}",
     "doneAnnounce": "Completed: {c}",
     "undoneAnnounce": "Completion undone: {c}",
+    "unlocked": "Unlocked: {list}",
     "done": "Completed",
     "undo": "Undo",
     "movedNToToday": "Moved {n} events to today",

@@ -16,6 +16,7 @@ export default {
     "calMd": "{m}月{d}日 {w}",
     "doneAnnounce": "已完成：{c}",
     "undoneAnnounce": "已撤销完成：{c}",
+    "unlocked": "已解锁：{list}",
     "done": "已完成",
     "undo": "撤销",
     "movedNToToday": "已把 {n} 件日程移到今天",

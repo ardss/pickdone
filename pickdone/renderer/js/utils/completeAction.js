@@ -23,6 +23,12 @@ export function toggleCompleteWithUndo ({ store, message, todo, announce, fromEl
     } catch { /* skip animation if position is unavailable */ }
   }
   const p = store.dispatch('todo/toggleComplete', raw)
+  // dependency unlock feedback: when completion makes dependents ready, surface them once (advisory; dep feature is devMode-gated)
+  Promise.resolve(p).then((merged) => {
+    const names = merged && merged._unlocked
+    if (!names || !names.length || !message) return
+    message({ type: 'success', message: tt('statsA.core.unlocked', { list: names.join('、') }), duration: 4000 })
+  }).catch(() => {})
   if (announce) announce(tt('statsA.core.' + (wasComplete ? 'undoneAnnounce' : 'doneAnnounce'), { c: content }))
   // Paper plane: after completion, fly from the original row position to the sidebar "Achieved" entry (can be disabled via settings/reduced-motion)
   if (fromPoint) Promise.resolve(p).then(() => flyPaperPlane(fromPoint, tt('statsE.DoneEntry.label'))).catch(() => {})

@@ -95,6 +95,7 @@ CREATE TABLE IF NOT EXISTS todos (
   difficulty    INTEGER,
   recurGroupId  TEXT,
   subtasks      TEXT,
+  predecessors  TEXT,
   imageUrls     TEXT,
   fileAttach    TEXT,
   categoryId    INTEGER NOT NULL DEFAULT 0,
@@ -248,6 +249,7 @@ function rowToTodo (r) {
     difficulty: r.difficulty,
     repeatId: r.recurGroupId,
     subtasks: r.subtasks,
+    predecessors: r.predecessors,
     image: r.imageUrls,
     files: r.fileAttach,
     categoryId: r.categoryId,
@@ -301,6 +303,7 @@ function todoToRow (t) {
     difficulty: t.difficulty != null ? t.difficulty : null,
     recurGroupId: t.repeatId != null ? t.repeatId : null,
     subtasks: t.subtasks != null ? t.subtasks : null,
+    predecessors: t.predecessors != null ? t.predecessors : null,
     imageUrls: t.image != null ? t.image : null,
     fileAttach: t.files != null ? t.files : null,
     categoryId: t.categoryId != null ? t.categoryId : 0,
@@ -386,7 +389,8 @@ function init (userDataPath) {
         console.error('[TodoDB] dayPlanState 迁移失败(保留原键,schemaVersion 不推进,下次启动重试):', e)
         return false
       }
-    } }
+    } },
+    { v: 4, fn: d => { const c=d.prepare('PRAGMA table_info(todos)').all().map(x=>x.name); if(!c.includes('predecessors')) d.exec('ALTER TABLE todos ADD COLUMN predecessors TEXT'); return true } },
   ]
   let ver = getVer()
   for (const m of MIGRATIONS) { if (m.v > ver) { if (m.fn(db) === false) continue; ver = m.v } }

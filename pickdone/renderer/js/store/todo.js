@@ -35,6 +35,42 @@ const DEFAULT_VIEWS = () => ({
 /** Unified exit for DB persistence: failures are logged, never producing floating rejections (local/DB mismatch is visible in the console)
  *  JSON round-trip de-proxies: row objects come from reactive state, so nested arrays like reminderOffsets are Proxies
  *  that fail IPC structured cloning (symptom: every task edit logs "An object could not be cloned" and the DB receives no update) */
+// ---- Task dependencies (experimental, developerMode gated) ----
+// predecessors: JSON array of predecessor taskId strings, stored in a TEXT column (same pattern as subtasks)
+// FS semantics: a task is ready only when all of its predecessors are complete. Write-time DFS cycle guard — both renderer store and CLI
+// mirror this helper (they bypass each other and share no code).
+function parsePredecessors (v) {
+  if (Array.isArray(v)) return v.filter(Boolean)
+  try { const a = JSON.parse(v || '[]'); return Array.isArray(a) ? a.filter(Boolean) : [] } catch { return [] }
+}
+function wouldCycle (list, taskId, newPreds) {
+  const byId = {}
+  for (const t of list) { if (!t.delete) byId[t.taskId] = t }
+  byId[taskId] = Object.assign({}, byId[taskId] || { taskId }, { predecessors: JSON.stringify(newPreds) })
+  const done = {}
+  const visiting = {}
+  const walk = id => {
+    if (done[id]) return false
+    if (visiting[id]) return true
+    visiting[id] = true
+    const t = byId[id]
+    if (t) {
+      for (const p of parsePredecessors(t.predecessors)) {
+        if (byId[p] && walk(p)) return true
+      }
+    }
+    visiting[id] = false; done[id] = true
+    return false
+  }
+  return walk(taskId)
+}
+function isTaskReady (list, t) {
+  const preds = parsePredecessors(t.predecessors)
+  if (!preds.length) return true
+  const byId = {}
+  for (const x of list) { if (!x.delete) byId[x.taskId] = x }
+  return preds.every(pid => { const p = byId[pid]; return !p || p.complete })
+}
 function safeUpsert (row) {
   let plain
   try { plain = JSON.parse(JSON.stringify(row)) } catch (e) { plain = row }
@@ -203,7 +239,8 @@ export default {
         fileList = null,
         addToTop = true,
         estimate = 0,
-        dayOverride = null
+        dayOverride = null,
+        predecessors = null
       } = payload
       const now = Date.now()
       // Renewal instance idempotency: skip when the same rid + same dayStart already exists (prevents concurrent multi-window + CLI double-triggering creating two renewals at the same moment)
@@ -234,6 +271,7 @@ export default {
         complete: false, createTime: now, delete: false,
         reminderTime: todoReminderTime, reminderOffsets: Array.isArray(todoReminderOffsets) ? todoReminderOffsets : [], reminderExtra: Array.isArray(todoReminderExtra) ? todoReminderExtra : [], estimate, difficulty: todoDifficultyLevel,
         repeatId, subtasks: todoSublist ? JSON.stringify(todoSublist) : null,
+        predecessors: Array.isArray(predecessors) && predecessors.length ? JSON.stringify(predecessors) : null,
         image: todoImage, files: fileList,
         categoryId, updateTime: now, syncTime: 0,
         taskContent: String(todoContent || '').trim(),
@@ -253,6 +291,15 @@ export default {
     },
 
     async updateTodoFields ({ state, commit, dispatch }, { taskId, patch }) {
+      const unlocked = patch._unlocked; if (unlocked) delete patch._unlocked // advisory payload, never persisted
+      if (patch.predecessors !== undefined) {
+        // write-time cycle guard (dependencies are devMode-gated): a dep set that closes a loop is rejected outright
+        const next = Array.isArray(patch.predecessors)
+          ? patch.predecessors.filter(pid => pid && pid !== taskId)
+          : (() => { try { return parsePredecessors(patch.predecessors) } catch { return [] } })()
+        if (wouldCycle(state.todoList, taskId, next)) throw new Error('dependency-cycle')
+        patch.predecessors = next.length ? JSON.stringify(next) : null
+      }
       const all = [...state.todoList, ...state.recycleList]
       const i = all.findIndex(t => t.taskId === taskId)
       if (i < 0) return
@@ -292,12 +339,21 @@ export default {
         if (_chipSyncChain.size > 64) { for (const k of _chipSyncChain.keys()) { if (k !== taskId) _chipSyncChain.delete(k) } }
       }
       dispatch('writeCriticalBackup')
-      return merged
+      return unlocked ? Object.assign({}, merged, { _unlocked: unlocked }) : merged
     },
 
-    async toggleComplete ({ dispatch, rootState }, todo) {
+    async toggleComplete ({ state, dispatch, rootState }, todo) {
       const target = !todo.complete
       const patch = { complete: target, completedAt: target ? Date.now() : 0 }
+      if (target) {
+        // dependency linkage: completing this task may unlock dependents — attach their names so the completion toast can mention it
+        try {
+          const newlyReady = state.todoList.filter(t => !t.delete && !t.complete &&
+            parsePredecessors(t.predecessors).includes(todo.taskId) &&
+            isTaskReady(state.todoList.map(x => x.taskId === t.taskId ? { ...x } : x), t))
+          if (newlyReady.length) patch._unlocked = newlyReady.map(t => t.taskContent || t.taskId)
+        } catch { /* dep info is advisory; never block completion */ }
+      }
       if (target && root_getCompleteWithSub(rootState)) {
         // Checking the main task complete also checks all subtasks (controlled by the isCompleteWithSubtasks setting)
         try {
