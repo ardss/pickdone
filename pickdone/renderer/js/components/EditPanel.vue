@@ -848,7 +848,7 @@ export default {
 .ep-recycle-banner .mini { margin-left: auto; flex-shrink: 0; }
 /* 编辑栏收起后的展开钮：在页头右缘（原右缘 28px 细条 ep-rail 已废除，2026-08-30 用户定稿顶栏面板开关范式） */
 .ep-expand { cursor: pointer; }
-/* 注意：hover/active 观感被 style-3.css 的像素补丁覆盖为 #595959/#ebeaeb（设计稿红线），此处 hover 品牌色仅作无补丁时的兜底 */
+/* hover/active 用品牌色（style-3 像素补丁已在 2026-09 组件吸收重构中退役） */
 .ep-chip {
   padding: 4px 12px; border-radius: var(--radius-xl); background: var(--gray-bg); font-size: var(--fs-sm);
   color: var(--text-2); cursor: pointer; transition: all var(--dur-fast);
@@ -1147,4 +1147,33 @@ html[data-theme="dark"] .ep-tag-x, html[data-theme="dark"] .ep-sub-x,
 html[data-theme="dark"] .ep-sub-drag, html[data-theme="dark"] .ep-remind-clear { color: var(--text-3); }
 html[data-theme="dark"] .ep-chip:hover, html[data-theme="dark"] .ep-date-chip:hover { background-color: var(--hover-bg); }
 html[data-theme="dark"] .ep-chip:active, html[data-theme="dark"] .ep-date-chip:active { background-color: var(--line-strong); }
+.row-btn:hover{color:var(--brand-hover)}
+.row-btn:active{color:var(--brand-active)}
+.row-btn.danger{color:var(--danger)}
+.row-btn.danger:hover{color:var(--danger-strong)}
+.ep-cats { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; padding-left: 2px; }
+.ep-tags-row { flex-wrap: wrap; row-gap: var(--space-1); border-bottom: 1px solid #f0f0f0; }
+.ep-date-chips { position: relative; display: flex; gap: 6px; flex-wrap: nowrap; margin: 10px 0 4px; }
+.ep-imgs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 8px 0; }
+/* —— 5. 右编辑栏：设计稿 .right-sidebar[scoped]{min-width:335px;border-left:#f3f3f3} —— */
+.edit-panel { min-width: 335px; border-left: 1px solid #f3f3f3; }
+/* 「添加提醒」行：设计稿 .picker__text{color:#9b9b9b;font-size: var(--fs-md)}
+   --active{color:var(--brand-dark)}
+
+/* 过滤器：侧边栏空态 + 视图头条件摘要 */
+.sn-filter-empty { font-size: var(--fs-xs); color: var(--text-3); /* text-4 不满足对比度(a11y axe color-contrast) */ padding: 4px 12px 6px 22px; }
+/* 统一关闭钮:定位壳(尺寸保持 28px 命中区,加载序在 base 后故压过 .close-x 的 18px),
+   叉形/hover(danger 高亮)/按压反馈全部来自统一 .close-x 体系——组件里必须写 class="modal__close close-x",
+   此处不再自造 ::after 叉与自有 hover */
+.modal__close {
+  position: absolute; top: 12px; right: 12px;
+  width: 28px; height: 28px; border: 0; border-radius: var(--radius-md);
+  background: transparent; cursor: pointer; z-index: 3;
+}
+@keyframes ep-img-in { from { opacity: 0; transform: scale(.92); } to { opacity: 1; transform: scale(1); } }
+@keyframes ep-slide-in { from { opacity: 0; transform: translateX(14px); } }
+@keyframes ep-cat-pop { from { opacity: 0; transform: scaleY(.96) translateY(-3px); } }
+@media (max-width: 1080px) {
+  .edit-panel { position: absolute; right: 0; top: 0; bottom: 0; z-index: var(--z-panel); box-shadow: -8px 0 24px rgba(0,0,0,.08); }
+}
 </style>

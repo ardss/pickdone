@@ -14,7 +14,7 @@ const fs = require('fs')
 const path = require('path')
 
 const ROOT = path.join(__dirname, '..')
-const FILES = ['assets/css/base.css', 'assets/css/style-1.css', 'assets/css/style-2.css', 'assets/css/style-3.css', 'assets/css/style-4.css']
+const FILES = ['assets/css/base.css', 'assets/css/theme-dark.css']
 
 // Exemptions: white that is intentional by design (does not flip with the theme). Substring matching.
 const WHITELIST = [
@@ -33,9 +33,8 @@ const RULES = [
   [/background(?:-color)?:\s*#fff(?:fff)?\b/i, 'R1 面板白底硬编码 → var(--panel, #fff)'],
   [/background(?:-color)?:\s*#(fafbfc|f5f7f7|f8f9fa|f5f5f5|f0f2f5)\b/i, 'R2 近白浅底 → var(--gray-bg) 或 var(--panel)'],
   [/color:\s*#(3333?33|000|6d6d6d|606266)\b/i, 'R3 文字灰散值 → var(--text-1)/var(--text-2)/var(--text-3)'],
-  // R4/R5 仅 scope 到 style-2/3.css（2026-09-04 P2 档位归一后的防回潮门禁）；其他文件存量未清，先不拦
-  [/font-size:\s*(?:[0-9]|1[0-5])(?:\.\d+)?px/i, 'R4 正文字号散值 → var(--fs-2xs~lg) 六档（≥16px 展示级不拦）', ['assets/css/style-2.css', 'assets/css/style-3.css']],
-  [/transition:[^;]*\d(?:\.\d+)?s/i, 'R5 动效时长散值 → var(--dur-fast/mid/slow) 三档', ['assets/css/style-2.css', 'assets/css/style-3.css']],
+  // R4/R5 档位纪律（2026-09-04 归一）：原 scope 的 style-2/3.css 已在组件吸收重构中退役，
+  // 存量散值随规则迁入各组件 <style>，全局层不再拦截（component-level 规则由组件作者维护）
 ]
 
 const hits = []

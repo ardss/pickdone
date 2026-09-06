@@ -141,4 +141,69 @@ export default {
 .ob-btn--primary { background: #0b8276; border-color: #0b8276; color: #fff; }
 /* 白字4.7:1(axe serious),品牌观感同实心主按钮 */
 .ob-btn--primary:hover { background: var(--brand-hover); color: #fff; }
+.td-item:hover .td-meta .td-ico, .td-item.selected .td-meta .td-ico { opacity: .75; }
+.td-item:hover .td-meta .td-snow, .td-item.selected .td-meta .td-snow { opacity: 1; }
+.td-tom__start {
+  padding: 2px 3px 2px 7px;
+  display: inline-flex; align-items: center; color: var(--text-3);
+}
+.td-tom__count {
+  display: inline-flex; align-items: center; gap: var(--space-1); padding: 0 7px 0 3px;
+  font-size: var(--fs-xs); color: var(--text-3); border-left: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
+}
+/* ==================== 预览模式（浏览器/主应用访问小组件路由） ====================
+   桌面小组件窗口本体保持深色玻璃（贴桌面壁纸）；浏览器/主应用预览时套用项目 tokens。 */
+
+/* ===== 首启配置向导（OnboardingWizard）===== */
+.ob-mask {
+  position: fixed; inset: 0; z-index: var(--z-notify);
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, .45);
+}
+.ob-card {
+  width: 460px; max-width: calc(100vw - 48px);
+  background: var(--panel, #fff); color: var(--text-1);
+  border-radius: var(--radius-lg, 12px);
+  padding: 32px 36px 24px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, .24);
+}
+.ob-title { margin: 0; font-size: 22px; font-weight: 600; text-align: center; }
+.ob-sub { margin: var(--space-2, 8px) 0 var(--space-5, 20px); font-size: var(--fs-md); color: var(--text-3); text-align: center; }
+.ob-step__title { margin: 0 0 var(--space-1, 4px); font-size: var(--fs-lg); font-weight: 600; }
+.ob-step__sub { margin: 0 0 var(--space-4, 16px); font-size: var(--fs-sm); color: var(--text-3); }
+.ob-opts { display: flex; gap: var(--space-2, 8px); flex-wrap: wrap; }
+.ob-opt {
+  padding: 8px 18px; border: 1px solid var(--line-strong); border-radius: var(--radius-pill);
+  background: transparent; color: var(--text-1); font-size: var(--fs-md); cursor: pointer;
+  transition: border-color var(--t-fast), background var(--t-fast), color var(--t-fast);
+}
+.ob-opt:hover { border-color: var(--brand); }
+.ob-opt--on { border-color: var(--brand); background: var(--brand-light); color: var(--brand-text); font-weight: 600; }
+.ob-cats { display: flex; gap: var(--space-2, 8px); margin-bottom: var(--space-4, 16px); }
+.ob-cat {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 12px; border-radius: var(--radius-pill);
+  background: var(--gray-bg); font-size: var(--fs-sm); color: var(--text-2);
+}
+.ob-cat::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--dot, var(--brand)); }
+.ob-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 28px; }
+.ob-foot__main { display: flex; gap: var(--space-2, 8px); }
+.ob-link { border: 0; background: none; color: var(--text-3); font-size: var(--fs-sm); cursor: pointer; padding: 6px 4px; }
+.ob-link:hover { color: var(--text-2); text-decoration: underline; }
+/* 首旅旅程·拖拽阶段横幅(无遮罩:拖拽需要列表和时间轴两端都可交互) */
+.tour-journey-banner {
+  position: fixed; left: 50%; bottom: 84px; transform: translateX(-50%);
+  z-index: var(--z-modal, 3000);
+  display: inline-flex; align-items: center; gap: 12px;
+  padding: 12px 18px; border-radius: var(--radius-md, 10px);
+  background: var(--brand); color: #fff; font-size: var(--fs-md, 14px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .18);
+}
+.tour-journey-skip {
+  border: 1px solid rgba(255, 255, 255, .6); border-radius: var(--radius-pill, 999px);
+  background: transparent; color: #fff; font-size: var(--fs-sm, 13px);
+  padding: 4px 12px; cursor: pointer; white-space: nowrap;
+}
+.tour-journey-skip:hover { background: rgba(255, 255, 255, .15); }
 </style>

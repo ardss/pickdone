@@ -44,11 +44,20 @@ for (const route of ROUTES) {
   for (const theme of ['light', 'dark']) {
     const name = route.replace(/\//g, '_').replace(/^_/, '') + '-' + theme + '.png'
     setEnv(theme)
-    // wait for reload + route settle
-    const t0 = Date.now()
-    await new Promise(r => setTimeout(r, 4000))
+    // wait for readiness: app mounted + theme applied (fixed sleeps race against vite cold transforms)
+    const readyExpr = `(() => {
+      const themed = document.documentElement.getAttribute('data-theme') === '${theme}'
+      const mounted = !!document.querySelector('#app .side-nav')
+      const overlay = !!document.querySelector('vite-error-overlay')
+      return (themed && mounted && !overlay) ? 'ready' : 'wait'
+    })()`
+    let ready = ''
+    for (let t = 0; t < 40000 && ready !== 'ready'; t += 500) {
+      await new Promise(r => setTimeout(r, 500))
+      try { ready = ab(['--session', SESSION, 'eval', readyExpr]).trim().replace(/"/g, '') } catch (e) { /* retry */ }
+    }
     ab(['--session', SESSION, 'eval', `location.hash='${route}'; 'nav'`])
-    await new Promise(r => setTimeout(r, 3000))
+    await new Promise(r => setTimeout(r, 2500))
     const shotPath = path.join(DIR, '.cur.png')
     ab(['--session', SESSION, 'screenshot', shotPath])
     const buf = fs.readFileSync(shotPath)

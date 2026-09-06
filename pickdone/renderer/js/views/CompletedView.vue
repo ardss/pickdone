@@ -99,3 +99,18 @@ export default {
 
 }
 </script>
+<style>/* ---- C. 页头左侧图标（资源沿用，按视图根类区分）---- */
+.icon-prepend{display:block;width:20px;height:20px;background-repeat:no-repeat;background-position:50%;background-size:contain}
+.completed-page .icon-prepend{background-image:url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22><circle cx=%228%22 cy=%228%22 r=%226%22 fill=%22%23ccc%22/></svg>')}
+/* ---- J. 提示问号（原 已达成页 .tip-icon）与分组设置按钮（原 __btn-settings cog）---- */
+.tip-icon{color:var(--text-4)}
+.tip-icon>svg,.icon-append>svg{display:block}
+.done-row-orig{display:flex;align-items:stretch}
+.done-row-orig>:first-child{flex:1;min-width:0}
+.tip-q{margin-left:8px;color:var(--text-4);border-color:var(--text-4)}
+/* 已达成页提示气泡文案列表（原 TipCompleted 内容，样式按设计稿 tip 12px 灰字） */
+.tip-completed-list{list-style:none;margin:0;padding:0;font-size: var(--fs-sm);color:var(--text-2);line-height:20px}
+.tip-completed-list li{padding:2px 0}
+/* 条目右侧悬停操作按钮的显示时机：悬停所在行时出现 */
+.done-row-orig:hover .row-btn,.todo-box-list-item__tools{opacity:1}
+</style>

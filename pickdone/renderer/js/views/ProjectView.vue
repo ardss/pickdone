@@ -520,4 +520,21 @@ html[data-theme="dark"] .proj-ms__seg--future { background: repeating-linear-gra
 html[data-theme="dark"] .proj-head__dl--over { background: rgba(245, 108, 108, .15); }
 html[data-theme="dark"] .proj-ms__mark--focus { color: var(--brand); }
 @keyframes proj-ms-pop { from { transform: translate(-50%, -140%) scale(.4); opacity: 0 } to { transform: translate(-50%, -50%) scale(1); opacity: 1 } }
+/* ---- B. 页头标题行（原 待办箱 a2d07ad4 / 已达成 7231d7ac / 回收站 12870041 合并）---- */
+.title{display:flex;justify-content:space-between;line-height:28px}
+.title__prepend{display:flex;gap:8px;align-items:center}
+.title__text{font-size:16px}
+.title__append{display:flex;align-items:center;gap:18px}
+.title__append .icon-button>i{font-size:20px}
+.title__prepend{display:flex;gap:var(--space-2);align-items:center}
+.title__text{font-size:16px}
+.title__append{display:flex;align-items:center;gap:18px}
+.title__append .icon-button>i{font-size:20px}
+/* 项目页页签:概览 / 依赖图 / 文档 */
+.proj-tabs { display: flex; gap: 2px; margin-top: 10px; border-bottom: 1px solid var(--line, #e6e8eb); }
+.ms-ring { flex-shrink: 0; }
+.ms-ring__track { stroke: var(--track-bg, #eef0f2); stroke-width: 3.5; }
+.ms-ring__bar { stroke: var(--brand); stroke-width: 3.5; stroke-linecap: round; transition: stroke-dashoffset var(--dur-slow) ease; transform: rotate(-90deg); transform-origin: 18px 18px; }
+.ms-ring__bar--done { stroke: var(--ok, #2e9e44); }
+.ms-ring__num { font-size: var(--fs-2xs); font-weight: 600; fill: var(--text-2); }
 </style>

@@ -197,3 +197,6 @@ export default {
 
 }
 </script>
+<style>.form { max-width: 100%; }
+@keyframes modal-pop { from { opacity: 0; transform: translateY(8px) scale(.96); } }
+</style>

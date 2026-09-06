@@ -159,3 +159,60 @@ export default {
 
 }
 </script>
+<style>.ds-arrow { border: 0; background: none; color: var(--text-3); font-size: var(--fs-lg); padding: 0 2px; }
+.ds-arrow:hover { color: var(--brand); }
+.ds-day {
+  min-width: 40px; height: 28px; border-radius: var(--radius-md); border: 0; background: none;
+  font-size: var(--fs-base); color: var(--text-1); display: inline-flex; align-items: center; justify-content: center;
+}
+.ds-day:hover { background: var(--gray-bg); }
+.ds-day.sel { background: var(--brand); color: #fff; font-weight: 600; box-shadow: 0 2px 8px rgba(15, 157, 143, .35); }
+/* 思路A(用户定稿):单行紧凑——数字+周几横排,28px 与右端视图切换齐平,日期条从56px降到44px */
+.ds-day { gap: var(--space-1); }
+.ds-num { line-height: 1; display: inline-flex; align-items: center; font-variant-numeric: tabular-nums; }
+.ds-wd { font-size: var(--fs-2xs); line-height: 1; color: var(--text-3); }
+.ds-day.sel .ds-wd { color: rgba(255, 255, 255, .9); }
+.ds-today-dot { width: 4px; height: 4px; border-radius: 50%; background: var(--brand); margin-left: 3px; }
+.ds-day.today:not(.sel) { color: var(--brand); font-weight: 600; }
+.ds-day.today:not(.sel) .ds-wd { color: var(--brand); }
+.ds-day.sel .ds-today-dot { background: #fff; }
+/* 跨月/跨年周:月份边界 1px 分缝 + 非选中月整格淡显(与日历弹窗补位日变灰同一语言) */
+.ds-mseam { width: 1px; height: 16px; background: var(--line, #e7e9ee); margin: 0 2px; flex-shrink: 0; }
+.ds-day.dim:not(.sel) { opacity: 1; }
+/* 跨月淡显改实色中灰(opacity .5 混合后对比度不达标,a11y axe color-contrast) */
+.ds-day.dim:not(.sel) .ds-num, .ds-day.dim:not(.sel) .ds-week { color: var(--text-3); }
+.ds-label {
+  display: inline-flex; align-items: center; gap: var(--space-1); margin-left: var(--space-2);
+  font-size: var(--fs-md); font-weight: 600; color: var(--text-1);
+  padding: 4px 10px; border-radius: var(--radius-md); cursor: pointer; transition: all var(--dur-fast);
+}
+.ds-label:hover, .ds-label.on { background: var(--gray-bg); color: var(--brand); }
+.ds-label svg { stroke: currentColor; }
+.ds-label { cursor: pointer; }
+/* 定位今天：常驻图标钮(28px 方,与日期格同高)——今天=品牌色高亮,非今天=灰、点击跳回;宽度恒定,布局零偏移 */
+.ds-today-ico {
+  width: 24px; height: 24px; align-self: center; margin-left: 2px; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 0; border-radius: var(--radius-md); background: none; color: var(--text-3); cursor: pointer;
+  transition: color var(--dur-fast), background-color var(--dur-fast);
+}
+.ds-today-ico:hover { color: var(--brand); background: var(--brand-light); }
+.ds-today-ico.on { color: #fff; background: var(--brand); }
+.ds-cal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-2); }
+.ds-cal-head button { border: 0; background: none; color: var(--text-3); font-size: var(--fs-base); cursor: pointer; padding: 2px 6px; }
+.ds-cal-head b { font-size: var(--fs-md); color: var(--text-1); }
+.ds-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.ds-cal-h { text-align: center; font-size: var(--fs-2xs); color: var(--text-3); padding: 2px 0; font-style: normal; }
+.ds-cal-cell {
+  position: relative; border: 0; background: none; border-radius: var(--radius-md); padding: 4px 0;
+  font-size: var(--fs-sm); color: var(--text-1); cursor: pointer; text-align: center; min-height: 28px; font-variant-numeric: tabular-nums;
+}
+.ds-cal-cell:hover { background: var(--gray-bg); }
+.ds-cal-cell.out { color: var(--text-4); }
+.ds-cal-cell.today { border: 1px solid var(--brand); }
+.ds-cal-cell.sel { background: var(--brand); color: #fff; }
+.ds-cal-dot {
+  position: absolute; bottom: 2px; left: 50%; transform: translateX(-50%);
+  width: 5px; height: 5px; border-radius: 50%; background: var(--brand);
+}
+</style>

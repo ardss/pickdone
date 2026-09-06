@@ -719,4 +719,111 @@ html[data-theme="dark"] .cal-fc {
 /* 日历格子展开钮(深色) */
 html[data-theme="dark"] .day-expand-btn { color: var(--text-3, #8a919c); }
 html[data-theme="dark"] .day-expand-btn:hover { background: var(--gray-bg, #22262e); color: var(--brand-text, #35c2ae); }
+/* 实现页容器（本应用布局壳）：占满内容区，顶栏为 page__top 等价物 */
+.cal-page{position:relative;padding:0;height:100%;display:flex;flex-direction:column}
+.cal-topbar{display:flex;align-items:center;gap:var(--space-2);padding:8px 12px;flex-shrink:0}
+.cal-scrollgrid{flex:1;display:flex;flex-direction:column;min-height:0;border:1px solid #ddd;border:1px solid var(--fc-border-color)}
+.fc-col-header-cell{border-right:1px solid var(--fc-border-color);text-align:center;background:var(--fc-page-bg-color)}
+.fc-col-header-cell:last-child{border-right:none}
+.fc-col-header-cell-cushion{display:inline-block;padding:2px 4px;text-decoration:none}
+.fc-daygrid-body{flex:1;display:flex;flex-direction:column;min-height:0}
+.cal-week-row{flex:1;display:grid;grid-template-columns:repeat(7,1fr);min-height:80px;border-bottom:1px solid var(--fc-border-color)}
+.cal-week-row:last-child{border-bottom:none}
+.fc-daygrid-day{position:relative;border-right:1px solid var(--fc-border-color);cursor:pointer}
+.fc-daygrid-day:last-child{border-right:none}
+.fc-day-today{background-color:rgba(255,220,40,.15);background-color:var(--fc-today-bg-color,rgba(255,220,40,.15))}
+.fc-highlight{background:none;border:1px solid #2cacab}
+.fc-daygrid-day-frame{position:relative;min-height:100%;display:flex;flex-direction:column}
+.fc-daygrid-day-top{display:flex;flex-direction:row-reverse}
+.fc-daygrid-day-events{flex:1;margin-top:2px;padding:0 3px 2px;overflow:hidden}
+.fc-daygrid-event-harness{position:relative;margin-top:1px}
+.fc-event-title-container{line-height:1;cursor:pointer}
+.fc-h-event .fc-event-title,
+.fc .fc-daygrid-day-bottom{font-size: var(--fs-2xs)}
+/* —— 日程事件 chip（vendors .fc-h-event/.fc-event-main/.fc-daygrid-event 参数）—— */
+.fc-event{cursor:pointer;text-decoration:none}
+.fc-daygrid-event{position:relative;white-space:nowrap;border-radius: var(--radius-xs);font-size:.85em;z-index:6;margin-top:1px}
+.fc-h-event{display:block;border:1px solid var(--ev-color,var(--fc-event-bg-color));background-color:var(--ev-color,var(--fc-event-bg-color))}
+.fc-event-main{position:relative;z-index:2;color:var(--ev-text,#fff);height:100%;padding:1px 1px 0}
+.fc-event-title{margin:.5em;padding:1px;display:inline-block;vertical-align:top;max-width:100%;overflow:hidden;font-style:normal;flex-grow:1;flex-shrink:1;min-width:0}
+.fc-day-outside .fc-daygrid-day-number{opacity:.3}
+.fc-daygrid-day-bottom{color:var(--text-1);font-size: var(--fs-2xs);margin:2px 3px 0;cursor:pointer}
+.fc-daygrid-day-bottom:hover{color:var(--brand)}
+/* 格子右上角操作组(新建+/展开):锚定日期头行(视觉=格子右上角)。禁止给 .fc-daygrid-day 加 position:relative——
+   FC 用绝对定位 harness 排芯片,改它的包含块会在重渲染时把行高撑爆(2026-09-04 实测 1242px) */
+.fc-daygrid-day-top { position: relative; }
+.fc-daygrid-day:hover .day-cell-actions, .day-cell-actions:focus-within { opacity: 1; }
+/* 未勾选"显示已完成"：已完成淡化+删除线；勾选后（.cal-show-done）已完成恢复彩色，未完成降灰 */
+.todo-done-strike { opacity: .45; }
+.cal-page.cal-show-done .todo-done-strike { opacity: 1; }
+/* ============ 工具栏重排：左组(定位/移动) | 右组(视角/展示) ============ */
+.cal-nav-group { display: inline-flex; align-items: center; position: relative; }
+.cal-nav-group .mini { border-radius: 0; }
+.cal-nav-group .mini:first-child { border-radius: 6px 0 0 6px; }
+.cal-nav-group .mini:last-child { border-radius: 0 6px 6px 0; }
+.cal-today-btn { border: 1px solid var(--line); }
+.cal-today-btn:hover { border-color: var(--brand); color: var(--brand); }
+/* 月/周分段控件 */
+.cal-seg { display: inline-flex; margin-right: 10px; border: 1px solid var(--line); border-radius: var(--radius-md); overflow: hidden; }
+.cal-seg button {
+  border: 0; background: none; padding: 4px 14px; font-size: var(--fs-sm); color: var(--text-2); cursor: pointer;
+}
+.cal-seg button + button { border-left: 1px solid var(--line); }
+.cal-seg button.on { background: var(--brand); color: #fff; font-weight: 600; }
+.cal-seg button:not(.on):hover { background: var(--gray-bg); color: var(--text-1); }
+/* 年月直达面板 */
+/* 锚定在导航组自身下方(原先 left:251px 写死自页面左缘,侧边栏宽度/页边距变化即右漂) */
+.cal-month-pop {
+  position: absolute; top: calc(100% + 4px); left: 0; z-index: var(--z-pop); width: 236px;
+  background: var(--panel, #fff); border-radius: var(--radius-lg); box-shadow: var(--shadow-pop); overflow: hidden;
+}
+.cal-month-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; padding: 8px; }
+.cal-month-cell {
+  border: 0; background: none; border-radius: var(--radius-md); padding: 8px 0; font-size: var(--fs-sm);
+  color: var(--text-1); cursor: pointer;
+}
+.cal-month-cell:hover { background: var(--gray-bg); }
+.cal-month-cell.sel { background: var(--brand); color: #fff; font-weight: 600; }
+.cal-month-cell.today { color: var(--brand); font-weight: 600; }
+.cal-month-cell.sel.today { color: #fff; }
+.cal-seg button { padding: 4px 10px; }
+/* —— 设计稿对 .fc 的覆盖规则（chunk-common 沿用，剥 [data-v]）—— */
+.fc-scroller::-webkit-scrollbar{width:6px}
+.fc .fc-highlight{background:none;border:1px solid #2cacab}
+.fc .fc-daygrid-day-number{display:flex;flex-direction:row-reverse;justify-content:flex-end;width:100%;padding:2px 2px 1px;font-size: var(--fs-md);line-height:1;text-decoration:none}
+.fc .fc-daygrid-day-number .lunar{margin-left:5px;color:#9b9b9b;font-size:inherit}
+.fc .fc-daygrid-day-number .holiday{color:#fff;background:var(--brand)}
+.fc .fc-daygrid-day-number .work{color:#016d6e;background:#c7e4e4}
+.fc .fc-col-header-cell-cushion{color:var(--brand-dark);font-weight:400;font-size: var(--fs-base);padding:8px}
+.fc .fc-daygrid-more-link{display:block}
+.fc .fc-popover{position:fixed!important;z-index:var(--z-fc-popover)!important}
+.fc .fc-popover-title{font-size: var(--fs-base)}
+.fc .fc-more-popover .fc-popover-body{padding:5px}
+.fc .fc-scrollgrid-section-sticky>*{z-index:1}
+.fc .fc-col-header-cell-cushion{font-size: var(--fs-md)}
+.day-cell-actions {
+  position: absolute; top: 0; right: 0; z-index: 3;
+  display: flex; align-items: center; gap: 1px; opacity: 0; transition: opacity var(--dur-fast) ease;
+}
+.todo-week { display: block; font-size: var(--fs-2xs); color: var(--text-3); line-height: 1.2; }
+.todo-lunar { font-size: var(--fs-2xs); color: var(--text-3); margin-left: 3px; }
+.todo-lunar.todo-festival { color: #f56c6c; }
+.todo-done-strike .fc-event-title { text-decoration: line-through; }
+/* 日历单击选中待建态：虚线品牌色描边 */
+/* 顶部开关胶囊化：替代裸 checkbox */
+.chk { padding: 4px 10px; border-radius: 13px; background: var(--gray-bg, #f2f2f2); cursor: pointer; transition: all var(--dur-fast); }
+.chk:hover { color: var(--brand, #0c8172); }
+.chk input[type="checkbox"] { accent-color: var(--brand, #0c8172); width: 13px; height: 13px; margin: 0; cursor: pointer; }
+.hr { height: 1px; background-color: var(--line); margin: var(--space-2) 0; border: none; }
+/* 限定到番茄钟控制区：裸 .btn 会波及回收站/待办箱的工具按钮 */
+.tomato__control .btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px;
+  font-size: 16px;
+  cursor: pointer;
+  background: none;
+  border: none;
+}
 </style>

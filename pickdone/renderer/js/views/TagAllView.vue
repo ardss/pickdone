@@ -42,3 +42,10 @@ export default {
 
 }
 </script>
+<style>/* ---- 所有标签总览页（侧边栏「所有标签」入口，2026-08-28） ---- */
+.tagall-grid { display: flex; flex-wrap: wrap; gap: var(--space-2); padding-top: 6px; }
+.tagall-chip { cursor: pointer; font-size: var(--fs-md); padding: var(--space-1) 12px; border-radius: 15px; }
+.tagall-chip:hover { color: var(--brand); }
+.tagall-count { font-style: normal; color: var(--text-3); font-size: var(--fs-xs); }
+.tagall-empty { padding-top: var(--space-5); font-size: var(--fs-md); color: var(--text-3); }
+</style>

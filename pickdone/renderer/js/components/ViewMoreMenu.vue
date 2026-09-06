@@ -126,3 +126,22 @@ export default {
 
 }
 </script>
+<style>/* 图标缩到 14:24 方钮与行内其他元素(22px 视图钮/日期格)齐平,不再独自凸出 */
+
+/* ============ 页面 ⋮ 视图设置菜单（设计稿 pure-icon-button--more + custom-menu） ============ */
+.view-more-wrap { position: relative; align-self: flex-start; }
+.view-more-btn {
+  width: 30px; height: 39px; border: 0; background: none; border-radius: var(--radius-md);
+  display: inline-flex; align-items: center; justify-content: center; color: var(--text-2);
+}
+.view-more-btn svg { fill: currentColor; }
+.view-more-btn:hover, .view-more-btn.on { background: var(--gray-bg); color: var(--text-1); }
+.view-more-pop {
+  position: fixed; z-index: var(--z-viewmenu); min-width: 200px; background: var(--panel, #fff);
+  border-radius: var(--radius-md); box-shadow: var(--shadow-pop); padding: 6px;
+}
+.vm-item { padding: 8px 14px; border-radius: var(--radius-md); font-size: var(--fs-sm); color: var(--text-1); cursor: pointer; display: flex; justify-content: space-between; }
+.vm-item:hover { background: var(--brand-light); color: var(--brand); }
+.vm-item.active { color: var(--brand); }
+.vm-sep { height: 1px; background: var(--line); margin: 5px 8px; }
+</style>

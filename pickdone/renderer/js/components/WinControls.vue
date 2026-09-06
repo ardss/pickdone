@@ -48,3 +48,28 @@ export default {
 
 }
 </script>
+<style>/* ============ 无边框窗口自绘标题栏（设计稿 ui-titlebar/ui-titlecontrols） ============ */
+.ui-titlebar {
+  position: fixed; top: 0; right: 0; left: 0; z-index: var(--z-titlebar);
+  display: flex; height: 25px; cursor: pointer;
+
+}
+.ui-titletext { position: relative; flex: 1; color: #fff; font: 12px/20px "Segoe UI", Arial, sans-serif; text-indent: 10px; }
+.ui-title-drag { position: absolute; top: 2px; right: 0; bottom: 0; left: 4px; -webkit-app-region: drag; }
+.ui-titlecontrols { display: flex; flex-shrink: 0; -webkit-app-region: no-drag; }
+.ui-btn {
+  width: 38px; height: 25px; margin: 0; padding: 0; background: transparent;
+  border: 0; outline: 0; display: flex; align-items: center; justify-content: center;
+}
+/* 用户反馈原 10px 过小，放大到 13px（viewBox 等比缩放，笔画同步加粗） */
+.ui-btn svg { width: 13px; height: 13px; }
+/* 跟随主题变量：深色模式下标题栏常悬浮在深色表面上，固定 #333 会不可见 */
+.ui-btn svg path, .ui-btn svg polygon, .ui-btn svg rect { fill: var(--text-1, #333); }
+/* 最小化为直线描边（fill 画不出零面积直线的轮廓），跟随主题色 */
+.ui-btn svg path[stroke] { fill: none; stroke: var(--text-1, #333); }
+.ui-btn:hover { background: rgba(0,0,0,.1); }
+/* 窗口镶边按钮不参与键盘焦点指示：启动时初始焦点常落在最小化钮上，全局 focus-visible 圈会在标题栏凭空亮一个框 */
+.ui-btn:focus-visible { outline: none; }
+.ui-btn.close:hover { background: #e81123; }
+.ui-btn.close:hover svg path, .ui-btn.close:hover svg polygon, .ui-btn.close:hover svg rect { fill: #fff; }
+</style>

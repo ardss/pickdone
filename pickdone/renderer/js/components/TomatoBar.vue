@@ -410,4 +410,67 @@ html[data-theme="dark"] .tomato-timer__count { color: var(--text-3); }
 @media print {
   .tomato-timer { display: none; }
 }
+/* 计数徽标=灰底圆角 pill（2026-08-28 用户定稿，同.todo-fc 旧版样式），右缘留 4px 不贴高亮边；warn（过期待办）升级为红色 pill */
+.sn-badge { font-variant-numeric: tabular-nums;
+  margin-left: auto; margin-right: var(--space-1); font-style: normal; font-size: var(--fs-sm); font-weight: 500;
+  line-height: 1; color: var(--text-2); background: var(--gray-bg);
+  border-radius: var(--radius-md); padding: 3px 7px;
+}
+.modal {
+  flex-shrink: 0;
+  max-height: 100%;
+  max-width: 100%;
+  background-color: var(--panel, #fff);
+  display: flex;
+  flex-direction: column;
+  border: none;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.modal__header {
+  position: relative;
+  display: flex;
+  flex-shrink: 0;
+  gap: var(--space-1);
+  align-items: center;
+  padding: 15px;
+  color: var(--brand-dark);
+  font-size: var(--fs-base);
+  line-height: 18px;
+  border-bottom: 1px solid #f3f3f3;
+}
+.modal__header--header-no-padding { padding: 0; border-bottom: 0 solid #f3f3f3; }
+.modal__body { flex: 1; padding: 15px; overflow: auto; }
+.modal__body--body-no-padding { padding: 0; }
+.modal__footer {
+  flex-shrink: 0;
+  display: flex;
+  gap: 15px;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 15px;
+  border-top: 1px solid #f3f3f3;
+}
+.btn-play {
+  width: 14px;
+  height: 16px;
+  background: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABwAAAAgCAYAAAABtRhCAAACLElEQVRIS73W0WvTUBTH8e8dnU/W+Qf45rMK/lvKHtI0XaqYC4q01cqoqNCHSUEUHIIU9zJ9mBOkyJiCIGMMEZHhgzqxrbo2yZHY1s6ysqZNdiEQEjif/JJ7DlEEK58/QSLxBFEKn1ks4/nf6zEsBSiuFa8zpYxu/Qa+lHFbV7DtnahNhdZHSR4LEp0dKL6G+FlM82mUaAAeJ5lcBXVqn8K7iJTx3ByZzHYUsCKXmyFxZBXF6eEFZQtfOaSNB4BMAo8IdgnhIfgOprkxLhoODBSRbQRNs34Xrd2wcHiwJ4hU8T0Hy3oTBh0f7KTdAcnRaJTQ+vco8GTgv7Q8w2vbZDJrB6HRgJ20dYQSTXUDbXwbBkcH9oV1PNfGspb3Q+MAA6eNSAXPdQYHRlxgJ5zIBoiNaT7upY0X7KAuwjzt3RzZ7Nf4wf5OPodp3D5E0J/FNG8eEij3aLUcbPt9vKDIF5CrNBp3epMoTnAZZI5U6vXefowD/Ij4l9ncrFAutwebPzow2P6K+91v9SHe0SbyDoVNKlWNe3i3QRbwPI1lfT4IC+5P8krX8b1LpNNLo0ATjDb5BcxTrxfQ+nsYLHxCkZeIf4F0eiUsFC5h0MCiCjR/3ELrn+Ni/YTT0y+G/AgH076Kqy4yZ7ydBOonzOeTJBIBeOa/gsInlDjUahUWF70osE7C4CgWS6DOd4sKwiPa2NjGVlRQP2FwViicZCqxAjKDkOJVbSHKVHsf+g/IPxQwDBpbNAAAAABJRU5ErkJggg==') no-repeat 50%;
+  background-size: 14px 16px;
+}
+.modal--settings {
+  width: 680px;
+  height: min(78vh, 620px);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-pop);
+}
+/* —— 弹窗卡片统一进场：fade + 上移 + 轻缩放（180ms 快进慢出）。
+      .modal 均为 v-if 挂载，动画每次打开自动播放；离场不做（v-if 直接卸载） —— */
+.modal { animation: modal-pop .18s cubic-bezier(.2, .8, .2, 1) both; }
+/* ==================== 4.5 设置中心:左侧分类导航版式 ==================== */
+.modal--settings-center { position: relative; flex-direction: row; width: min(1024px, 94vw); height: min(80vh, 680px); align-items: stretch; }
+/* header 曾是 close 的定位锚(position:relative),左导航版式下 header=148px 左列,关闭钮被钉在左列右上角悬在"通用"旁;改锚到整个弹窗,落 dialog 真右上角(主流位置) */
+.modal--settings-center .modal__header { position: static; flex-direction: column; align-items: stretch; width: 148px; flex-shrink: 0; padding: 20px 0 0; height: auto; }
+/* 垂直居中于搜索行(行高33,close高28→top≈2.5):之前 top:12 使钮心比搜索行心低约10px,一高一低 */
+.modal--settings-center .modal__close { position: absolute; top: 3px; right: 12px; margin: 0; z-index: 5; }
+@keyframes scBlink { 50% { opacity: .4 } }
 </style>

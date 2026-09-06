@@ -219,4 +219,56 @@ html[data-theme="dark"] .qa-inputwrap:focus-within { background: var(--active-bg
 .todo-options__item:active { background: #e1e0e1; }
 .todo-options__item--active { background: var(--brand); color: #fff; }
 .todo-options__item--active:hover { background: #11a1a2; }
+.qa-bar { position: relative; display: flex; align-items: flex-start; gap: 8px; }
+/* 日历按钮壳：透明 el-date-picker 铺满按钮，点击即弹标准日历面板 */
+.qa-cal { position: absolute; top: 0; right: 0; bottom: 0; width: 40px; z-index: 2; cursor: pointer; }
+.qa-cal .qa-cal-picker.el-date-editor { position: absolute; top: 0; left: 0; width: 100%; height: 100%; opacity: 0; }
+.qa-cal .qa-cal-picker .el-input__inner { width: 100%; height: 100%; cursor: pointer; }
+.qa-input { flex: 1; height: 46px; border: 0; background: none; padding: 0 16px; font-size: var(--fs-md); color: var(--text-1); border-radius: var(--radius-lg); }
+.qa-input::placeholder { color: #8a9099; }
+.qa-date-chip {
+  display: inline-flex; align-items: center; gap: var(--space-1); margin-right: 12px;
+  color: var(--brand); font-size: var(--fs-sm); cursor: pointer; white-space: nowrap;
+}
+.qa-date-chip img { width: 13px; height: 13px; }
+.qa-dots { display: none; }
+.qa-pop {
+  position: absolute; top: 52px; left: 0; right: 40px; z-index: var(--z-list-pop);
+  background: var(--panel, #fff); border-radius: var(--radius-lg); box-shadow: var(--shadow-pop);
+  padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; font-size: var(--fs-sm); color: var(--text-2);
+}
+.qa-row { display: flex; align-items: center; gap: 8px; }
+/* 6. 快捷添加的日期 chip pop 出场（原为生硬 fade） */
+.qa-date-chip { animation: qa-chip-pop .15s cubic-bezier(.2, .8, .2, 1); }
+/* 「选择日期」按钮内嵌透明 el-date-picker（同 .qa-cal 手法），铺满按钮点击即弹 */
+.todo-list .rc-pick{position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;border:0;padding:0;background:none;cursor:pointer}
+.qa-cal-picker .el-input__inner { height: 46px; line-height: 46px; cursor: default; }
+/* chip 给右侧按钮留位；✕ 清除 */
+.qa-date-chip { margin-right: 46px; }
+.qa-chip-x {
+  font-weight: 400; font-style: normal; font-size: var(--fs-xs); color: inherit;
+  opacity: .55; margin-left: 2px; cursor: pointer;
+}
+.qa-chip-x:hover { opacity: 1; }
+.qa-input {
+  height: auto; min-height: 37px;
+  padding: 10px 17px;
+  font-weight: 400; font-size: var(--fs-sm); line-height: 17px; color: #333;
+  border-radius: var(--radius-sm);
+}
+.page__header{position:relative;z-index:2;display:flex;flex-direction:column;gap:18px;padding:18px;box-shadow:0 2px 4px hsla(0,0%,91.4%,.5)}
+.page__header--no-shadow{box-shadow:none}
+.page__header--has-title-bar{padding-top:30px}
+.page__top{display:flex;flex-shrink:0;gap:18px;align-items:center}
+.page__main{flex:1;height:100%;overflow:auto}
+.page__main--has-padding{padding:0 25px 25px}
+.page__todo-list-multi-select{position:absolute;right:10px;bottom:10px;left:10px;z-index:1}
+.page__todo-list-multi-select-placeholder{height:66px}
+/* 视图根为 .page 时占满滚动区高度（避免 .main-scroll 无高度参照） */
+.main-scroll>.page{min-height:100%}
+/* ========================= 数据复盘（StatisticsView）========================= */
+/* 结构（2026-08-29 对齐全应用）：.page__header(.title 页头) + .stat-subpage 阅读列。
+   历史：本段原为构建产物逆向的 navbar/m-select 体系，页头统一重构时删除。 */
+.stat-page .content{flex:1;overflow:auto;background:var(--bg)}
+@keyframes qa-chip-pop { from { opacity: 0; transform: scale(.85); } }
 </style>

@@ -284,3 +284,109 @@ export default {
 
 }
 </script>
+<style>/* ============================================================
+   CSS 前缀归属（组件级命名空间，新组件先认领前缀再写样式）：
+   sn- SideNav | ep- EditPanel | td- TodoItem/条目行 | ds- DayDateStrip
+   tl- 统计时间轴 | qa- QuickAdd | cal- 日历格 | vm- ViewMoreMenu
+   tg- TodoGroupBlock | rc- RecycleBin | rm- RepeatModal | w- 浮窗(WinControls/悬浮窗)
+   form- SettingsModal | dropdown- 通用下拉 | main-nav- 侧栏主导航区
+   无前缀 = 设计稿沿用区（原版全局类，勿与新组件混用）
+   ============================================================ */
+/* ===== 自 base.css 迁入（QuickAdd qa-，内容逐字未改；置于头部以保持原级联顺序 base < 本文件）===== */
+
+
+
+
+.qa-wrap { flex: 1; }
+/* ============================================================
+   style-1.css —— 列表类页面（最近待办/待办箱/已达成/回收站/标签/清单）基础样式
+   来源: 构建产物 A / 构建产物 B
+   处理: 选择器已去 [data-v-*] 作用域；url(../img/*) 改写为 app://app/assets/img/*；
+         设计稿「TodoBoxListItem」与「RecycleBinItem」编译后共用 .todo-box-list-item 类名
+         但两套规则不同，本文件分别以 .todo-box-list / .todo-list 祖先限定以互不覆盖；
+         K 节为本实现的最小适配补充，其余均为沿用既有规则。
+   ============================================================ */
+
+/* ---- A. 页面骨架（旧 TodoPageLayout）---- */
+.page{display:flex;flex-direction:column;box-sizing:border-box;height:100%;overflow:hidden}
+/* ---- G. 设计稿圆形勾选（原 TodoBoxListItem 多选态 .checkbox）---- */
+.checkbox{position:relative;display:flex;align-items:center;justify-content:center;width:18px;height:20px;color:var(--text-4);font-size:18px;cursor:pointer}
+.checkbox>svg{display:block}
+.checkbox--active{color:#0f9d8f}
+.checkbox svg{width:16px;height:16px;display:block}
+/* 回收站条目完成勾选框：复用 .td-check 形态，勾选后标题删除线弱化 */
+.todo-list .todo-box-list-item__container{display:flex;flex-wrap:wrap;align-items:flex-start;column-gap:10px}
+/* ============================================================
+   style-2.css —— 日程概览 / 数据复盘 / 搜索 三页设计稿样式还原
+   规则来源：第三方来源: 构建产物 A、构建产物 B
+   （[data-v-xxx] 已剥离；url(../img/..) → app://app/assets/img/）
+   FullCalendar 基础皮肤参数提取自 vendors 产物 的 .fc 规则，
+   套用到自绘网格（本应用未挂载 @fullcalendar）。
+   仅服务于 CalendarView / StatisticsView / SearchView。
+   ============================================================ */
+
+/* ========================= 通用：设计稿 title 行（搜索页筛选行用） ========================= */
+.title{display:flex;justify-content:space-between;line-height:28px}
+/* 实现微调：覆盖 base.css 旧 .lunar 字号，农历与日期同尺寸 */
+.fc .fc-daygrid-day-number .holiday,
+.fc .fc-daygrid-day-number .work{position:absolute;top:5px;right:5px;padding:4px;font-size:16px;border-radius:50%;zoom:.6}
+/* 工具栏下拉 label 样式单源于 style-1.css 第 I 节 */
+.search-filter-el.el-select .el-input__inner{height:28px;line-height:28px}
+/* ============================================================
+   style-3.css —— 主界面微交互与细节（对齐设计稿编译 CSS）
+   参考: 第三方来源: 构建产物 A / index.pretty.js
+   选择器均已剥掉 [data-v-xxx]；url(../img/..) 已改为 app://app/assets/img/
+   ============================================================ */
+
+/* ===== 自 base.css 迁入（SideNav sn-，内容逐字未改；置于头部以保持原级联顺序 base < 本文件）===== */
+
+.sn-fixed { flex-shrink: 0; }
+/* ===== 自 base.css 迁入（EditPanel ep-，内容逐字未改；置于头部以保持原级联顺序 base < 本文件）===== */
+
+/* ============ 三栏骨架 ============ */
+/* position:relative：窄窗下绝对定位的 .edit-panel / .ep-rail 以此锚定（位于 25px 标题栏之下） */
+.app-shell { position: relative; display: flex; height: calc(100vh - 25px); margin-top: 25px; background: var(--bg, #fff); overflow-x: auto; overflow-y: hidden; }
+/* --- 卡片堆叠日程视图（DayDeck）：中心对齐轮播,侧卡露 1/3 --- */
+.pd-day-deck { position: relative; padding: 4px 0 0; overflow: clip; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+/* 后排卡扇形偏移禁止越出主列,否则侧边栏折叠时压到把手区 */
+.pd-day-deck__stage { position: relative; flex: 1; min-height: 340px; }
+.pd-day-deck__card { position: absolute; left: 50%; top: 10px; bottom: 0; width: 300px; min-height: 350px; display: flex; flex-direction: column; background: var(--panel, #fff); border: 1px solid var(--line-strong, #e4e7ed); border-radius: var(--radius-lg, 10px); padding: 14px 16px; box-sizing: border-box; }
+.pd-day-deck__card.front { box-shadow: 0 12px 32px rgba(0, 0, 0, .16); }
+.pd-day-deck__head { display: flex; align-items: center; justify-content: space-between; }
+.pd-day-deck__label { font-size: var(--fs-lg); font-weight: 600; color: var(--text-1); }
+.pd-day-deck__count { font-size: var(--fs-sm, 12px); color: var(--text-3); }
+.pd-day-deck__wd { font-size: var(--fs-xs); color: var(--text-3); margin-top: 2px; }
+.pd-day-deck__bar { height: 4px; border-radius: var(--radius-pill); background: var(--line); margin: 8px 0 10px; overflow: hidden; }
+.pd-day-deck__bar i { display: block; height: 100%; background: var(--brand); border-radius: var(--radius-pill); }
+.pd-day-deck__empty { flex: 1; display: flex; align-items: center; justify-content: center; font-size: var(--fs-sm, 12px); color: var(--text-4); }
+.pd-day-deck__list { flex: 1; min-height: 0; overflow-y: auto; list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 9px; align-content: start; }
+.pd-day-deck__list li { display: flex; align-items: center; gap: var(--space-2); font-size: var(--fs-md, 13px); color: var(--text-1); }
+.pd-day-deck__list li:not(.done) { cursor: grab; }
+/* 拖拽改期：任务行拖到目标日卡片上，卡片高亮提示可投放 */
+.pd-day-deck__card.drop-ok { outline: 2px dashed var(--brand); outline-offset: -2px; }
+.pd-day-deck__chk { width: 16px; height: 16px; flex-shrink: 0; border: 1.5px solid var(--text-4); border-radius: 50%; cursor: pointer; background: transparent; padding: 0; position: relative; }
+.pd-day-deck__chk:hover { border-color: var(--brand); }
+.pd-day-deck__list li.done .pd-day-deck__chk { background: var(--brand); border-color: var(--brand); }
+.pd-day-deck__list li.done .pd-day-deck__chk::after { content: '✓'; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #fff; font-size: var(--fs-2xs); line-height: 1; }
+.pd-day-deck__title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.pd-day-deck__list li.done .pd-day-deck__title { color: var(--text-4); text-decoration: line-through; }
+.pd-day-deck__tomato { border: 0; background: none; color: var(--text-3); cursor: pointer; display: inline-flex; padding: 2px; border-radius: var(--radius-sm, 4px); }
+/* 卡片行删除：与列表页同语义（软删+撤销 toast），行 hover 显现、hover 变红 */
+.pd-day-deck__del {
+  border: 0; background: none; color: var(--text-4); cursor: pointer;
+  display: inline-flex; padding: 2px; border-radius: var(--radius-sm, 4px); flex-shrink: 0;
+  width: 19px; height: 19px; align-items: center; justify-content: center;
+  opacity: 0; transition: opacity var(--dur-fast), color var(--dur-fast), background-color var(--dur-fast);
+}
+.pd-day-deck__list li:hover .pd-day-deck__del, .pd-day-deck__del:focus-visible { opacity: 1; }
+.pd-day-deck__del:hover { color: var(--danger); background-color: rgba(245, 108, 108, .1); }
+.pd-day-deck__tomato:hover, .pd-day-deck__tomato.pd-is-active { color: var(--brand); background: var(--brand-light); }
+/* ===== 卡片视图：逾期未完成任务置顶区（deckOverdue） ===== */
+.pd-day-deck__overdue-label { font-size: var(--fs-2xs); color: var(--danger, #f56c6c); padding: 0 2px 4px; font-weight: 600; }
+.pd-day-deck__list--overdue { margin-bottom: 6px; padding-bottom: var(--space-1); border-bottom: 1px dashed var(--line, #e7e9ee); }
+.pd-day-deck__list--overdue .pd-day-deck__title { color: var(--danger, #f56c6c); }
+/* 逾期行内的原定日期徽标：回答「这是哪天拖下来的」 */
+.pd-day-deck__overdue-date { flex-shrink: 0; font-size: var(--fs-2xs); font-variant-numeric: tabular-nums; color: var(--danger, #f56c6c); background: var(--danger-soft, #fdf1f1); border-radius: 4px; padding: 1px 5px; opacity: .85; }
+/* 番茄目标 input-number 纳入 110px 档位（压过 base.css 的 .modal 100px 孤值） */
+.modal--settings .el-input-number--small { width: 110px; }
+</style>

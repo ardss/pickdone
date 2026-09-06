@@ -529,4 +529,111 @@ html.dark .corner-btn:focus-visible { outline-color: #35c2ae; }
 .tf-menu .tf-menu__list::-webkit-scrollbar-track { background: transparent; }
 html.dark .tf-menu .tf-menu__list { scrollbar-color: rgba(232,237,241,.25) transparent; }
 html.dark .tf-menu .tf-menu__list::-webkit-scrollbar-thumb { background: rgba(232,237,241,.25); }
+/* 勾选框选中图标白色（icon-done.svg 源文件为黑色，反相成纯白，
+   对应设计稿 fa check-square 白色图形叠在 #0f9d8f 底上） */
+.td-check img { filter: brightness(0) invert(1); }
+/* —— 浏览器预览模式（番茄浮窗在 5175 调试宿主打开时挂 widget-preview）：
+      卡片按浮窗真实尺寸 240×86 居中呈现，配桌面感深色背景；放大态用类名表达，不再拉满整页 —— */
+html.widget-preview, html.widget-preview body, html.widget-preview #app { height: 100%; }
+html.widget-preview body { overflow: hidden; }
+html.widget-preview .floating {
+  position: static;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background:
+    radial-gradient(1200px 600px at 20% 0%, rgba(15,157,143,.16), transparent 60%),
+    linear-gradient(135deg, #202a38 0%, #171e29 55%, #1d2b33 100%);
+}
+html.widget-preview .tomato {
+  width: 240px;
+  height: 86px;
+  flex: 0 0 auto;
+  transition: width .25s cubic-bezier(.2,.8,.2,1), height .25s cubic-bezier(.2,.8,.2,1);
+}
+/* 同卡展开退役：放弃面板免填原因稳定版 86px 即容纳，卡片不再生长 */
+html.widget-preview .tomato--expand-menu { width: 240px; height: 320px; }
+.btn-close {
+  width: 12px;
+  height: 10px;
+  background: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABgAAAAUCAYAAACXtf2DAAABP0lEQVRIS7VVMU7EMBDcpUyVig9gF1Rp8gDEC+jzB4SAO0TnDnHHnRB/cM8LEA9Ik4pizQeoUqVkkS1HJLnEd5HOLhJF3vHszmzWCH4R0RkivgPAhxDiBgC43TvwjcaYVwC4ZOYrKeW3xaF9VFV1miTJJyKe229m3kop72eQIBG9IOKtx381TXORZdmPIyjLMknT9AkArttsZ5D0Dvf4t7quH/M8bxyBXzuBzLyRUi4ClVjMGhHvphLrEjjJ9gHmJjQkAKXUSVEUNiun54QnY9VutdYLpdRvtyl2CAJyWeOdFES02ZPAv+6BFhwzb+3jrS9T1fWOnKrABXm5Vl0Tu2jbBFrr5VCWQyTqZWGMeQaA5aDalRDiIaCA2wpW0IKjEcSWKKrJo31+lDaN/aNFHRXxhl30cR39wvEDLMqV+QeV7TQk/RFG2gAAAABJRU5ErkJggg==') no-repeat 50%;
+  background-size: 12px 10px;
+}
+.btn-dots {
+  width: 12px; height: 12px;
+  background: url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 4 14%22><circle cx=%222%22 cy=%222%22 r=%221.6%22 fill=%22%23999%22/><circle cx=%222%22 cy=%227%22 r=%221.6%22 fill=%22%23999%22/><circle cx=%222%22 cy=%2212%22 r=%221.6%22 fill=%22%23999%22/></svg>') no-repeat 50%;
+  background-size: 4px 12px;
+}
+.btn-min {
+  width: 8px; height: 8px;
+  background: url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 8 8%22><rect x=%220%22 y=%223.25%22 width=%228%22 height=%221.5%22 rx=%22.75%22 fill=%22%23999%22/></svg>') no-repeat 50%;
+  background-size: 8px 8px;
+}
+/* 遮罩层已删（用户定稿只要卡片本身）：tf-abandon 即弹窗卡片，绝对居中。
+   translate 属性负责居中位移，transform 只做过渡缩放，两者互不打架 */
+.tf-abandon__title { font-size: 11px; font-weight: 600; color: var(--text-1, #2b2f33); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tf-abandon__meta { flex-shrink: 0; font-size: 9px; color: var(--text-3, #9aa0a6); }
+.tf-abandon {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 14px;
+  background: #fff; /* 纯白定稿(白名单) */
+  color: #2b2f33;
+  /* 不再重定义 text/line/brand 全局 token(曾构成第三 token 源,base 改值此处不跟随);
+    子元素颜色直接消费定稿字面量,深色分支由 html[data-theme] 专属规则覆盖 */
+  border-radius: 14px;
+}
+.tf-abandon__q { font-size: 13px; font-weight: 600; color: var(--text-1, #2b2f33); line-height: 16px; }
+.tf-abandon__actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.tf-abandon__actions .mini.primary {
+  background: var(--brand, #0f9d8f);
+  color: #fff;
+  border-color: transparent;
+}
+.tf-abandon__actions .mini.primary:hover { background: var(--brand-dark, #0c8172); }
+.tf-abandon__actions .mini.danger {
+  background: #fef0f0;
+  color: #d9534f;
+  border: 1px solid #f5c8c5;
+}
+.tf-abandon__actions .mini.danger:hover { background: #fde3e3; }
+html.widget-preview .tomato--expand-noise { width: 240px; height: 320px; }
+.tf-noise {
+  position: absolute;
+  inset: 0;
+  z-index: 12;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 8px 10px 10px;
+  background: rgba(255,255,255,.88);
+  backdrop-filter: blur(10px);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 1px 3px 0 rgba(0,0,0,.1), 0 1px 2px 0 rgba(0,0,0,.06);
+}
+.tf-noise__head { font-size: 12px; font-weight: 600; color: var(--brand-dark, #0c8172); padding: 0 4px 6px; }
+.tf-noise__list { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 2px; overflow-y: auto; }
+.tf-noise__item {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  border: 0; background: none; text-align: left; cursor: pointer;
+  padding: 6px 8px; border-radius: var(--radius-sm, 4px);
+  color: var(--text-1, #2b2f33); font-size: 12px; line-height: 1.4;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+
+  flex-shrink: 0; /* 同 tf-menu__item：防任务/条目多时被 flex 压扁 */
+}
+.tf-noise__item:hover { background: var(--brand-light, #e7f7f7); color: var(--brand-dark, #0c8172); }
+.tf-noise__item.on, .tf-noise__item.on:hover { background: var(--brand-light, #e7f7f7); color: var(--brand-dark, #0c8172); font-weight: 600; }
+.tf-noise__name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.tf-noise__tick { flex-shrink: 0; font-style: normal; font-size: 10px; color: var(--brand, #0f9d8f); }
+.tf-noise .tf-noise__list { scrollbar-width: thin; scrollbar-color: rgba(120,130,140,.35) transparent; }
+.tf-noise .tf-noise__list::-webkit-scrollbar { width: 4px; }
+.tf-noise .tf-noise__list::-webkit-scrollbar-thumb { background: rgba(120,130,140,.35); border-radius: 2px; }
+.tf-noise .tf-noise__list::-webkit-scrollbar-track { background: transparent; }
 </style>

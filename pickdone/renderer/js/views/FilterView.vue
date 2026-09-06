@@ -135,3 +135,11 @@ export default {
 
 }
 </script>
+<style>.box-page .icon-prepend{background-image:url(app://app/assets/img/icon-main-nav-todobox.svg)}
+/* 待办箱圆点 = 完成入口（与其他视图勾选圈同语义）：悬停描边高亮，键盘可达 */
+.tb-dot-check { cursor: pointer; border-radius: 50%; transition: transform .15s, box-shadow .15s, opacity .15s; }
+.tb-dot-check:hover { box-shadow: 0 0 0 2px var(--brand-light); opacity: .85; }
+.tb-dot-check:active { transform: scale(.88); }
+.tb-dot-check:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.filter-cond-text { font-size: var(--fs-xs); color: var(--text-3); margin-left: var(--space-2); }
+</style>

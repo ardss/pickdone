@@ -358,4 +358,74 @@ export default {
 html[data-theme="dark"] .tfr-timeline__bar { background: #2a3038; }
 html[data-theme="dark"] .tfr-timeline__grid i { background: rgba(255, 255, 255, .07); }
 html[data-theme="dark"] .tfr-timeline__legend .dot-idle { background: #2a3038; }
+.tomato-record:last-of-type { border-bottom: 1px solid transparent; }
+.tomato-record:hover { background-color: var(--gray-bg, #f7f8fa); }
+.tomato-record__title { display: flex; align-items: center; justify-content: space-between; color: var(--text-1, #333); font-weight: 400; font-size: var(--fs-base); line-height: 20px; }
+.tomato-record__title__left { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
+.tomato-record__task { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.tomato-record__task--free { color: var(--text-3, #909399); }
+.tomato-record__range { flex-shrink: 0; font-variant-numeric: tabular-nums; font-size: var(--fs-sm); color: var(--text-3, #909399); }
+.tomato-record__title__text { display: flex; align-items: center; }
+.tomato-record__title__text__icon { display: block; flex-shrink: 0; width: 14px; height: 14px; margin-left: 10px; background: url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22><circle cx=%228%22 cy=%228%22 r=%226%22 fill=%22%23ccc%22/></svg>') no-repeat 50%/100% 100%; }
+.tomato-record__date { width: 100px; flex-shrink: 0; }
+.tomato-record__title__interval { flex-shrink: 0; margin-left: 15px; }
+.tomato-record__description { display: flex; align-items: center; margin-top: 10px; }
+.tomato-record__description__icon { display: flex; flex-shrink: 0; width: 14px; height: 14px; margin-right: 10px; background: url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22><circle cx=%228%22 cy=%228%22 r=%226%22 fill=%22%23ccc%22/></svg>') no-repeat 50%/100% 100%; }
+.tomato-record__description__text { display: -webkit-box; overflow: hidden; color: #666; font-size: var(--fs-base); line-height: 20px; text-overflow: ellipsis; word-break: break-all; -webkit-line-clamp: 1; -webkit-box-orient: vertical; }
+/* 添加记录表单行 */
+.tfr-form-row { margin-bottom: 16px; }
+.tfr-form-label { display: block; margin-bottom: 6px; color: var(--text-2); font-size: var(--fs-md); }
+.tfr-add-info { margin: 4px 0 0; color: var(--text-3); font-size: var(--fs-sm); }
+.tfr-add-info .text-primary { color: var(--brand, #0c8172); }
+/* 专注记录：行点击展开详情 + 时间轴定位高亮 */
+.tomato-record { cursor: pointer; }
+.tomato-record--open { background: #f3f6f6; }
+.tomato-record--hot { background: var(--brand-light); box-shadow: inset 3px 0 0 var(--brand); }
+.tomato-record__title__interval { display: flex; align-items: center; gap: 6px; }
+.tomato-record .expander { font-style: normal; color: var(--text-3); font-size: var(--fs-2xs); transition: transform .18s; }
+.tomato-record .expander.open { transform: rotate(180deg); }
+.tomato-record__detail {
+  padding: 8px 12px 10px 52px; font-size: var(--fs-sm); color: var(--text-2); line-height: 1.9;
+  border-top: 1px dashed var(--line); animation: qa-chip-pop .15s cubic-bezier(.2, .8, .2, 1);
+}
+.tomato-record__detail-hint { color: var(--text-3); font-size: var(--fs-xs); }
+.tfr-nav-btn {
+  width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--line); background: var(--panel, #fff);
+  color: var(--text-2); font-size: var(--fs-md); line-height: 1; cursor: pointer;
+  transition: color .15s, border-color .15s;
+}
+.tfr-nav-btn:hover:not(:disabled) { color: var(--brand); border-color: var(--brand); }
+.tfr-nav-btn:disabled { opacity: .35; cursor: default; }
+.tfr-empty { padding: 26px 0 8px; text-align: center; font-size: var(--fs-sm); color: var(--text-3); }
+/* —— 白噪音 / 关联任务胶囊：外层相对定位 + 隐藏 el-select 覆盖层 —— */
+/* 待开始态的关联任务胶囊（同款样式族） */
+
+/* ==================== 2. base-modal 弹窗体系（modal-container/modal-tablecloth/modal） ==================== */
+.modal-container {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  /* 低于 Element UI 弹层基线(2000+)：设置内部的 select/date-picker 下拉与 $confirm 才能浮在弹窗之上 */
+  z-index: var(--z-modal) !important;
+  background-color: rgba(0,0,0,.25);
+  animation: tt-fade-in .2s ease both;
+}
+.modal-tablecloth {
+  position: absolute;
+  left: 235px;
+  bottom: 110px;
+  top: 30px;
+  right: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.modal-tablecloth--top { align-items: flex-start; }
+.modal-tablecloth--body { left: 0; right: 0; top: 0; bottom: 0; }
+/* —— 设置中心：全屏式改为居中无边框卡片弹窗。
+      顶边从 25px 开始避开窗口标题栏（蓝色区域），卡片圆角+投影与内容脱钩 —— */
+.modal-container--settings { top: 25px; }
+@keyframes tt-fade-in { from { opacity: 0; } to { opacity: 1; } }
 </style>

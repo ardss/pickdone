@@ -2869,3 +2869,385 @@ img { -webkit-user-drag: none; }
 
 
 .cal-toolbar .cal-today-btn:hover { border-color: var(--brand); color: var(--brand); background: var(--brand-light); }
+
+/* == absorbed:shared == */
+/* ===== 迁移自全局沉积文件(scripts/css-finish.mjs):随组件/分区生灭 ===== */
+/* ---- D. 空状态（原 TodoListEmpty scoped）---- */
+.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;background:transparent}
+.empty__icon{width:200px;height:120px;background:url(app://app/assets/img/todo-list-empty.svg);background-size:200px 120px}
+.empty__text{margin-top:12px;color:var(--text-3); /* text-dim #9b9b9b 白底2.8:1(axe serious) */font-weight:400;font-size: var(--fs-md);line-height:18px}
+.empty--full{position:absolute;top:0;right:0;bottom:0;left:0}
+/* ---- F2. 回收站条目（原 RecycleBinItem scoped，限定于 .todo-list 下）---- */
+.todo-list .todo-box-list-item{position:relative;border-bottom:1px solid var(--line);background-color:var(--panel, #fff);padding:20px 26px;transition:all .3s cubic-bezier(.23,1,.32,1);box-sizing:border-box;display:flex;gap:15px}
+.todo-list .todo-box-list-item__append,.todo-list .todo-box-list-item__prepend{flex-shrink:0}
+.todo-list .todo-box-list-item__container{flex:1}
+.todo-list .todo-box-list-item__content{display:-webkit-box;overflow:hidden;color:var(--text-1);font-weight:400;font-size: var(--fs-base);line-height:20px;white-space:pre-line;text-overflow:ellipsis;overflow-wrap:break-word;-webkit-line-clamp:2;-webkit-box-orient:vertical;margin-bottom:12px}
+.todo-list .todo-box-list-item__content--del{text-decoration:line-through}
+.todo-list .todo-box-list-item__workload{position:absolute;top:8px;left:0;bottom:8px;background-color:transparent;width:3px}
+.todo-list .todo-box-list-item__workload--lv2{background-color:#f49a4f}
+.todo-list .todo-box-list-item__workload--lv3{background-color:var(--danger)}
+.todo-list .todo-box-list-item__tools{display:flex;gap:15px}
+.todo-list .todo-box-list-item:hover{background-color:var(--hover-bg)}
+.todo-list .todo-box-list-item:active{background-color:var(--active-bg)}
+.todo-list .todo-box-list-item--is-drop{pointer-events:none}
+.todo-list .todo-box-list-item--is-drop:active,.todo-list .todo-box-list-item--is-drop:hover{background-color:var(--hover-bg)}
+.todo-list .todo-box-list-item--is-drag{background-color:var(--active-bg)}
+.todo-list .todo-box-list-item--selected,.todo-list .todo-box-list-item--selected:hover{background-color:#f5fafb}
+/* F2 补充（原 bd75649e 作用域，此前抽取遗漏）：日期后缀 12px 灰字 + 药丸操作组 */
+.todo-list .datetime{color:var(--text-dim);font-weight:400;font-size: var(--fs-sm);line-height:30px;white-space:nowrap}
+.todo-list .btn-group{display:flex}
+.todo-list .btn-group>.btn:first-of-type{border-top-left-radius:5px;border-bottom-left-radius:5px}
+.todo-list .btn-group>.btn:last-of-type{border-top-right-radius:5px;border-bottom-right-radius:5px}
+.todo-list .todo-box-list-item__tools .btn{
+  position:relative;overflow:hidden;color:var(--brand-dark);font-size: var(--fs-sm);font-weight:400;line-height:16px;
+  padding:5px 10px;background-color:var(--tomato-bg);border:none;cursor:pointer;
+}
+.todo-list .todo-box-list-item__tools .btn:focus,.todo-list .todo-box-list-item__tools .btn:hover{filter:brightness(.9);outline:0}
+.todo-list .todo-box-list-item__tools .btn:active{filter:brightness(.8)}
+/* 彻底删除（原版无此钮、我方补充）：红字浅红底，与组内药丸同形 */
+.todo-list .btn--danger.rc-danger-btn{color:var(--danger) !important;background-color:#fdecea !important}
+.todo-list .btn--danger.rc-danger-btn:hover{color:var(--danger-strong) !important}
+/* ---- H. 条目日期前缀色（原 .datetime--*）---- */
+.datetime--primary{color:var(--brand-dark)}
+.todo-list .todo-box-list-item__category-dot svg{width:12px;height:12px;display:block}
+.todo-list .todo-box-list-item__tools{flex-basis:100%;margin-top:8px}
+.todo-list .rc-check{flex-shrink:0}
+.todo-list .rc-done{text-decoration:line-through;color:var(--text-3)}
+.todo-list .rc-editable{cursor:pointer;border-radius: var(--radius-md)}
+.todo-list .rc-editable:hover{background:rgba(0,0,0,.04)}
+.chart-d{display:flex;flex-direction:column;align-items:center;padding:16px;border-radius:var(--radius-md)}
+.chart-d__count{margin-bottom:var(--space-2);color:#fff;font-size:32px}
+.chart-d__content{color:#fff;font-size: var(--fs-sm);white-space:pre-line;text-align:center}
+.empty--inline{height:auto;padding:40px 20px}
+/* 空态（TodoListEmpty 组件样式） */
+
+/* ============ 图表容器预占高度（防止 canvas 渲染后布局位移导致滚动回弹） ============ */
+.chart-3__title, .chart-4__title { margin-bottom:var(--space-2); font-size: var(--fs-base); font-weight:600; color:var(--text-1); }
+.chart-3__subtitle, .chart-4__subtitle { margin-bottom:var(--space-4); font-size: var(--fs-sm); color:var(--text-3); }
+.chart-3__footer, .chart-4__footer { margin-top:var(--space-3); font-size: var(--fs-sm); color:var(--text-3); }
+/* Chart.js(maintainAspectRatio:false) 自适应填满固定高容器——此前用 !important 压 canvas 高度,
+   与 Chart.js 按容器算出的位图尺寸打架,位图被压扁(用户反馈'图是扁的') */
+.chart-box { position: relative; height: 260px; }
+.chart-3__chart, .chart-4__chart, .chart-5__chart, .chart-6__chart {
+  display: block; width: 100% !important; height: 100% !important;
+}
+/* ============ 导出工具栏 ============ */
+.stat-export-bar {
+  display: flex; gap: var(--space-2); padding: 8px 24px 0; justify-content: flex-end;
+}
+.stat-export-bar .mini {
+  display: inline-flex; align-items: center; gap: var(--space-1);
+  padding: 4px 12px; border-radius: var(--radius-md); font-size: var(--fs-sm);
+}
+.stat-export-bar .mini:hover { background: var(--brand-light); color: var(--brand); border-color: var(--brand); }
+.review-advice-chip {
+  background: color-mix(in srgb, var(--brand) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--brand) 25%, transparent);
+  border-radius: var(--radius-md); padding: 9px 14px; font-size: var(--fs-md);
+}
+/* 徽章图标（内联 SVG 跟随文字颜色） */
+.ach-badge--on { display: inline-flex; }
+.ach-badge__icon { display: inline-flex; align-items: center; color: var(--brand); }
+.ach-badge--next .ach-badge__icon { color: var(--text-3); }
+.ach-badge--on .ach-badge__icon { color: #b85c00; }
+.sn-manage { font-size: var(--fs-xs); color: var(--text-3); cursor: pointer; }
+.sn-manage:hover { color: var(--brand); }
+.sn-fold { color: var(--text-3); font-size: var(--fs-sm); }
+.sn-all-tag { color: var(--brand); font-size: var(--fs-md); }
+/* ==================== 1. SideNav 账户卡片 ==================== */
+/* 同步旋转：设计稿 .sidebar-profile-item__btn--spin{animation:spin-71299742 2s linear infinite}
+   @keyframes spin-71299742{to{transform:rotate(-1turn)}} */
+.sn-sync.spinning { animation: sidebar-profile-spin .6s linear infinite; }
+/* 子任务行 / 操作图标 hover 才显示：
+   设计稿 .btn-tomato-timer-wrap{opacity:0;transition:all var(--dur-slow) cubic-bezier(.4,0,.2,1)}
+       .todo-list-item:hover .btn-tomato-timer-wrap{opacity:1}
+   子任务进出场对应 subtask-toggle-*:{opacity:0;transform:translateX(-10px) scale(.9)} */
+/* 子任务常显：不随 hover 进出场（用户定稿 2026-08-28），保留圆圈勾选态样式 */
+.td-subs {
+  opacity: 1; transform: none;
+  pointer-events: auto;
+}
+/* ============ 日历快速选择弹窗 ============ */
+.ds-cal-btn {
+  width: 26px; height: 26px; border: 0; background: none; border-radius: var(--radius-sm);
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--text-3); cursor: pointer;
+}
+.ds-cal-btn:hover, .ds-cal-btn.on { background: var(--gray-bg); color: var(--brand); }
+.ds-cal-btn svg { fill: none; stroke: currentColor; stroke-width: 1.8; }
+/* ============ 分类区折叠 + hover 图标 ============ */
+.sn-sec-fold { cursor: pointer; }
+/* ==================== 今日页 V2：视图切换/时间轨/卡片堆（自重构分支移植；时间轨本体样式由 DayRail.js 内联 V1_CSS 提供） ==================== */
+.pd-view-toolbar { display: flex; align-items: center; gap: var(--space-2); padding: 6px 20px; }
+/* 番茄放弃确认 popover 与浮窗入口 */
+.tt-pop-actions { margin: 0; text-align: right; }
+/* 双类选择器提特异性：多轮编辑后规则顺序不再可靠，必须稳压后面 .tomato 块的 height:86px */
+.tomato.tomato--expand-menu { width: 240px; height: 320px; }
+/* ==================== 5. 番茄悬浮窗（floating-tomato，scoped） ==================== */
+.floating {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  /* 窗口与卡片同尺寸：padding 会留出透明边+裁切投影形成脏边，必须为 0（用户实测） */
+  padding: 0;
+  /* 卡片锚定右下：放大窗口时右/下边缘不动，向左上生长（用户定稿的展开方向） */
+  align-items: flex-end;
+  justify-content: flex-end;
+}
+.tomato {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  padding: 0 10px;
+  background-color: var(--panel, #fff);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 1px 3px 0 rgba(0,0,0,.1), 0 1px 2px 0 rgba(0,0,0,.06);
+  cursor: move;
+}
+.tomato__time {
+  flex-shrink: 0;
+  color: var(--text-2);
+  font-weight: 600;
+  font-size: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.tomato__control-group {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+}
+.tomato__control { flex-shrink: 0; -webkit-app-region: no-drag; }
+.tomato--work .tomato__control .btn,
+.tomato--work .tomato__time,
+.tomato__control .btn { color: var(--brand-dark); }
+.tomato--reset .tomato__control .btn,
+.tomato--reset .tomato__time { color: #f93; }
+.tomato__control .btn i { display: block; }
+.tomato__control .btn--muted { color: var(--text-4) !important; }
+.btn-stop {
+  width: 14px;
+  height: 14px;
+  background: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABwAAAAcCAYAAAByDd+UAAAA6UlEQVRIS+2WMWoCQRSGvzdjIcS19jKSyhMkGvYCwWNMrbs5QmqF5AABLTxQIKBN4jpPdlewsJANszbOawZmeO/jfUzxC3UJWTZEdYCaw+kuzCHeYsw32+0G5wrBuQ5JkqO8ItINQ7mYskf9J0UxFWZvj1jWgG0Jdh6rfizk+QvIonVYCaiAs/wJKx83AR70OQLDmo5Kw/oEotKotLGB+GkaK7vWEJVeM9T4/U6UzucTjF021vOfhipEZdkIMV9VGG67PGkZhLv0kndE0lZ5qmv+ftN6K+d6PPRHlLHciwYFG60Zu90K536OrmyPWvmzy2EAAAAASUVORK5CYII=') no-repeat 50%;
+  background-size: 14px 14px;
+}
+.btn-stop2 {
+  width: 14px;
+  height: 14px;
+  background: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABwAAAAcCAYAAAByDd+UAAAA8klEQVRIS+2WPU5CQRRGzzeP4hV2NNBZU/mwJlSswL+8DRhbd/A2QClSWWsCCyCRwhXgMmxM6EwU55oHhaEiQwYb55Yz892TOTPFFYCBGBc9TC2w73otXilD9s7b4kUVK1lFg/bpELgG8nigrU5fYFPQjWxU9MncHMgOBPtta/5CNu5eIT0eHLZ+uxp4X5zh3ORPgN6fJ2Bc00lpXJ9AUpqUBhtInyZY2a5AUrrLUPD+f1HavcTpKVjPPoHN1HYyQG4G0j49gjLel7LqOKfVfECUQeHQw2ZzPq1c38ruOke4fIAsw+rJP2KJjbkPe9bt6/IHVq2dSfbOBrcAAAAASUVORK5CYII=') no-repeat 50%;
+  background-size: 14px 14px;
+}
+/* —— 最终形态（2026-08-31 用户定稿「极淡灰描边+圆环主键」）：内部永远纯白不变色，
+      唯一进度元素 = 右下角圆环主键；极淡灰描边负责圈住卡片 —— */
+.tomato {
+  position: relative;
+  display: block;
+  width: 240px;
+  height: 86px;
+  flex-shrink: 0;
+  /* 尺寸过渡是丝滑的关键：OS 窗口瞬移一次（右下锚定，视觉不变），
+     生长/收回动画全部由这条 GPU 合成的 CSS 过渡完成 */
+  transition: width .2s cubic-bezier(.2, .8, .2, 1), height .2s cubic-bezier(.2, .8, .2, 1);
+  /* 纯白定稿：不随深浅主题变化的内部底色（深色由 html.dark 块整体接管） */
+  background: #fff; /* 纯白定稿(白名单登记,见 check-tokens WHITELIST) */
+  border: 1px solid rgba(120, 130, 140, .22);
+  border-radius: 14px;
+  /* Electron 私有属性：连续曲率圆角（更接近 iOS 的平滑圆角），旧版本自动忽略 */
+  -electron-corner-smoothing: 60%;
+  /* 窗口与卡片同尺寸：任何向外 box-shadow 都会被窗口边界硬裁切成脏边（用户实测），
+     故浮窗卡片禁止外投影，1px 描边即视觉边界 */
+  box-shadow: none;
+  cursor: move;
+}
+.tomato__info {
+  /* 内容锚定卡片底边：卡片向上生长时（展开动画）文字纹丝不动，只有留白区在长——精细化控制 */
+  position: absolute;
+  left: 16px;
+  bottom: 10px;
+  right: 62px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.tomato__time {
+  color: var(--text-1, #2b2f33);
+  font-weight: 700;
+  font-size: 19px;
+  line-height: 20px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 1px;
+  /* 旧版浮窗遗留的 text-align:center 会让时间在整行里居中、与「关联」行错位，强制左对齐 */
+  text-align: left;
+}
+.tomato__time small { font-size: 9px; font-weight: 600; letter-spacing: 0; margin-left: 6px; color: var(--text-3, #9aa0a6); }
+.tomato__task {
+  color: var(--text-3, #9aa0a6);
+  font-size: 9px;
+  line-height: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tomato__task b { color: var(--brand-dark, #0c8172); font-weight: 500; }
+.tomato__task-none { color: var(--text-3, #9aa0a6); }
+.tomato__task-x { margin-left: 2px; }
+/* 叉形/hover 由统一 close-x 体系负责 */
+.tomato__beads { display: flex; gap: 3px; margin-top: 1px; }
+.tomato__beads i { width: 5px; height: 5px; border-radius: 50%; background: rgba(15, 157, 143, .18); }
+.tomato__beads i.done { background: var(--brand, #0f9d8f); }
+/* 右上角迷你钮：最小化/关闭/⋮，淡显、hover 全亮 */
+.tomato__corner {
+  position: absolute;
+  top: 4px;
+  right: 5px;
+  display: flex;
+  gap: 2px;
+  opacity: .3;
+  transition: opacity .15s;
+}
+.floating:hover .tomato__corner,
+.tomato__corner:focus-within { opacity: 1; }
+/* 圆环主键：唯一进度元素 */
+.tomato__knob {
+  position: absolute;
+  right: 10px;
+  bottom: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--panel, #fff);
+  box-shadow: 0 3px 10px rgba(20, 40, 40, .2);
+  cursor: pointer;
+}
+.tomato__knob:hover { box-shadow: 0 3px 14px rgba(15, 157, 143, .4); }
+.tomato__knob svg { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
+.tomato__ring-bg, .tomato__ring-fg { fill: none; stroke-width: 2.5; }
+.tomato__ring-bg { stroke: rgba(15, 157, 143, .15); }
+.tomato__ring-fg { stroke: var(--brand, #0f9d8f); stroke-linecap: round; transition: stroke-dasharray .3s linear, stroke .2s; }
+.tomato--rest .tomato__ring-fg { stroke: #f99333; }
+.tomato__knob-icon { position: relative; z-index: 1; font-size: 10px; line-height: 1; color: var(--brand-dark, #0c8172); font-style: normal; }
+.tomato--rest .tomato__knob-icon { color: #e8862a; }
+/* 休息徽标：从圆环左侧弹出（不占番茄珠行） */
+.tomato__badge {
+  position: absolute;
+  right: 56px;
+  bottom: 10px;
+  z-index: var(--z-float-base);
+  padding: 2px 8px;
+  border-radius: 9px;
+  background: #f99333;
+  color: #fff;
+  font-size: 9px;
+  box-shadow: 0 2px 8px rgba(249, 147, 51, .35);
+  animation: tt-fade-in .2s ease both;
+}
+/* 过渡：取消/关闭丝滑淡出 */
+/* 打开=快切（无缩放：transform 会让面板边缘移动，产生跳感）；关闭=纯透明度淡化 */
+.tf-pop-enter-active { transition: opacity .12s ease; }
+.tf-pop-leave-active { transition: opacity .18s ease; }
+.tf-pop-enter-from, .tf-pop-leave-to { opacity: 0; }
+.tomato .tf-abandon .mini {
+  background: #f5f7f8;
+  color: #2b2f33;
+  border: 1px solid #e0e5e9;
+}
+.tomato .tf-abandon .mini:hover { background: #ecf0f2; }
+.tomato .tf-abandon .mini.danger {
+  background: #fef0f0;
+  color: #d9534f;
+  border-color: transparent;
+}
+.tomato .tf-abandon .mini.danger:hover { background: #fde3e3; }
+.tomato .tf-abandon .abandon-reason-input { background: var(--panel, #fff); color: #2b2f33; }
+/* —— 暂停/继续 + 收起到托盘（新增按钮） —— */
+.btn-pause {
+  width: 12px; height: 14px;
+  background: url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 12 14%22><rect x=%221%22 y=%221%22 width=%224%22 height=%2212%22 rx=%221%22 fill=%22%23ccc%22/><rect x=%227%22 y=%221%22 width=%224%22 height=%2212%22 rx=%221%22 fill=%22%23ccc%22/></svg>') no-repeat 50%;
+  background-size: 12px 14px;
+}
+.btn-resume {
+  width: 14px; height: 14px;
+  background: url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 14 14%22><path d=%22M3 1l10 6-10 6z%22 fill=%22%23ccc%22/></svg>') no-repeat 50%;
+  background-size: 14px 14px;
+}
+.btn-dock {
+  width: 14px; height: 12px;
+  background: url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 14%22><rect x=%221%22 y=%221%22 width=%2214%22 height=%229%22 rx=%221.5%22 fill=%22none%22 stroke=%22%23ccc%22 stroke-width=%221.5%22/><rect x=%225%22 y=%2211%22 width=%226%22 height=%222%22 rx=%221%22 fill=%22%23ccc%22/></svg>') no-repeat 50%;
+  background-size: 14px 12px;
+}
+/* 放弃弹窗深色（带 .tomato 提升特异性，压过浅色强制作用域） */
+html.dark .tomato .tf-abandon {
+  --text-1: #e8edf1; --text-2: rgba(232,237,241,.6); --text-3: rgba(232,237,241,.4);
+  --line: rgba(255,255,255,.08); --line-strong: rgba(255,255,255,.15);
+  --brand: #35c2ae; --brand-dark: #7fd0c7; --brand-light: rgba(53,194,174,.18);
+  background: #22262e;
+  color: #e8edf1;
+  box-shadow: 0 8px 24px rgba(0,0,0,.5);
+}
+/* ==================== 浮窗放弃确认 · 层级终版（2026-09-01 用户定稿） ====================
+   三层各归其位、互不重叠：
+   L1 问句标题（12px semibold）        L0 右上角钮保留（最小化/✕=取消）
+   L2 主行 = 大数字正计时（22px，逐秒向上）+ 放弃/继续按钮（右侧，放弃浅红/继续品牌实心）
+   L3 上下文 = 关联任务名（灰色小字）
+   原时间/任务/珠/圆环在放弃期间整体退场，由本面板接管（无叠层、无白色底板） */
+/* 放弃确认过渡 = 交叉淡化：内容淡出（略延迟，让蒙版先盖住）→ 蒙版淡出时内容已就位，
+   消除「蒙版渐隐 + 内容瞬现」的亮度突变（用户实测闪一下）。硬 display 切换禁用 */
+.tomato--abandoning .tomato__info,
+.tomato--abandoning .tomato__knob {
+  opacity: 0;
+  pointer-events: none;
+  /* 打开方向不 transition：与面板快切同步，避免双重曝光 */
+}
+.tomato--abandoning .tomato__corner { z-index: var(--z-float-abandon); }
+.tomato__info,
+.tomato__knob { transition: opacity .18s ease; }
+/* 关联行 ✕ 与文字行高对齐（消除选中/未选中状态下 1~3px 的布局抖动） */
+.tomato .tomato__task { height: 14px; }
+.tomato .tomato__task-x { width: 12px; height: 12px; }
+/* 白噪音面板：与⋮菜单同一套展开语言（2026-09-01 用户定稿「音乐也改成这种」）——
+   点♪卡片 86→320px 向上生长，玻璃面板 inset:0 铺满卡片，tf-pop 对称淡出；
+   玻璃白/圆角/阴影与 tf-menu 同值（勿用 var(--panel)：暗色下变深灰与玻璃卡不协调） */
+.tomato--expand-noise { width: 240px; height: 320px; }
+/* 布局：四钮(最小化/关闭/⋮/♪) 15px 方格，gap 2→3px 换呼吸感，容器锚点不变 */
+.tomato__corner { gap: 3px; }
+
+/* == absorbed:EP == */
+/* ===== 迁移自全局沉积文件(scripts/css-finish.mjs):随组件/分区生灭 ===== */
+.el-button--danger{background:var(--danger);border-color:var(--danger)}
+.el-button--danger:hover,.el-button--danger:focus{background:var(--danger-strong);border-color:var(--danger-strong)}
+/* 修复输入框“双框”：Element Plus 结构是 wrapper+inner 双层，而全局旧 element-ui 样式
+   会给内层 input 再画一道边框——有 wrapper 时内层一律去边框，聚焦色统一品牌青 */
+.el-input__wrapper .el-input__inner { border: none !important; box-shadow: none !important; background: transparent; }
+.el-input__wrapper.is-focus { box-shadow: 0 0 0 1px var(--brand, #0c8172) inset !important; }
+/* —— 全局确认框(ElMessageBox)可见性加固(2026-09-02 用户实测:窄/矮窗口下昨日剩余弹窗可能溢出视口,
+      遮罩挡全屏却看不见框=整个界面"点不动") ——
+   ①任何视口尺寸下盒子都完整落在屏内 ②浅/深主题都保证实底+描边+投影,不可能"隐形" */
+.el-overlay-message-box { padding: 12px !important; }
+.el-message-box {
+  max-width: min(420px, calc(100vw - 24px));
+  max-height: calc(100vh - 24px);
+  overflow: auto;
+  border: 1px solid var(--line, #e7e9ee);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, .28);
+}
+html[data-theme="dark"] .el-message-box { border-color: var(--line-strong, #3a4150); box-shadow: 0 12px 40px rgba(0, 0, 0, .6); }
+
+/* == absorbed:transition == */
+/* ===== 迁移自全局沉积文件(scripts/css-finish.mjs):随组件/分区生灭 ===== */
+/* —— 批次4 动效 —— */
+/* 弹出菜单过渡：fade + 轻缩放 + 4px 下移，120ms（离场更快） */
+.pop-enter-active { transition: opacity var(--dur-fast), transform var(--dur-fast) cubic-bezier(.2, .8, .2, 1); }
+.pop-leave-active { transition: opacity var(--dur-fast); }
+.pop-enter-from, .pop-leave-to { opacity: 0; transform: scale(.97) translateY(-4px); }

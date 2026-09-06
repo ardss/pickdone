@@ -2,7 +2,7 @@
 /**
  * CSS family mover — one batch of the component-absorption refactor.
  * 用法: node scripts/css-move.mjs --sfc renderer/js/views/ProjectView.vue --family proj-ms --family proj-ms-row
- *   [--src assets/css/style-3.css ...]  默认搬全部五件全局文件
+ *   [--src assets/css/style-3.css ...]  默认搬全部全局文件
  * 行为:
  *   1. 从全局文件中切出「选择器里任一 class 以 --family 前缀开头」的顶层规则/@media 内层规则
  *   2. 追加到 --sfc 的 <style> 块(无则创建;@media 规则按原媒体条件重组)
@@ -23,7 +23,7 @@ for (let i = 0; i < args.length; i++) if (args[i] === '--family') FAMILIES.push(
 if (!FAMILIES.length) { console.error('--family required (repeatable)'); process.exit(1) }
 const SRCS = []
 for (let i = 0; i < args.length; i++) if (args[i] === '--src') SRCS.push(path.join(ROOT, args[i + 1]))
-const DEFAULT_SRCS = ['style-1.css', 'style-2.css', 'style-3.css', 'style-4.css', 'theme-dark.css'].map(f => path.join(ROOT, 'assets', 'css', f))
+const DEFAULT_SRCS = ['theme-dark.css'].map(f => path.join(ROOT, 'assets', 'css', f))
 const files = SRCS.length ? SRCS : DEFAULT_SRCS
 
 const ruleCount = css => (css.replace(/\/\*[\s\S]*?\*\//g, '').match(/\{/g) || []).length

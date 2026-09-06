@@ -57,4 +57,10 @@ html.widget-transparent #app {
   height: 100%;
   overflow: hidden;
 }
+/* —— 全局快速添加小窗（scoped）：悬浮输入条卡片 —— */
+.qapage { width: 100%; height: 100%; display: flex; align-items: flex-start; justify-content: center; }
+.qapage__card {
+  width: 100%; border-radius: var(--radius-lg); background: var(--panel, #fff);
+  box-shadow: 0 8px 32px rgba(0,0,0,.18); padding: 8px 6px;
+}
 </style>

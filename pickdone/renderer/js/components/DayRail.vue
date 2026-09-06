@@ -719,4 +719,16 @@ export default {
 .today-v1 .today-list { flex: 1; display: flex; flex-direction: column; }
 .today-v1 .today-list .td-groups:has(.empty-state) { flex: 1; display: flex; flex-direction: column; justify-content: center; }
 .today-v1 .today-list .empty-state { padding: 0; }
+.day-strip {
+  position: relative; /* 日历弹窗 .ds-cal-pop 的定位锚点 */
+  display: flex; align-items: center; gap: var(--space-1);
+  background: var(--panel, #fff); border: 1px solid var(--line); border-radius: var(--radius-lg);
+  padding: 6px 8px; margin-bottom: var(--space-3); width: fit-content;
+}
+.td-tom-pips { display: inline-flex; align-items: center; gap: 2px; }
+.td-tom-pips i { width: 4px; height: 4px; border-radius: 50%; background: var(--line); }
+.td-tom-pips i.done { background: var(--brand); }
+.pd-view-seg { display: inline-flex; border: 1px solid var(--line-strong, #e4e7ed); border-radius: var(--radius-sm, 4px); overflow: hidden; }
+.pd-view-seg > button { border: 0; background: transparent; padding: 4px 12px; cursor: pointer; color: var(--text-2); font-size: var(--fs-sm, 12px); display: inline-flex; align-items: center; }
+.pd-view-seg > button.on { background: var(--brand); color: #fff; }
 </style>

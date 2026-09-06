@@ -74,3 +74,5 @@ export default {
 
 }
 </script>
+<style>.tg-week { color: #5f6368; font-size: var(--fs-base); }
+</style>

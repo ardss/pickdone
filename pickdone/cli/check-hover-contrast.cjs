@@ -9,7 +9,7 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
-const CSS_FILES = ['base.css', 'style-1.css', 'style-2.css', 'style-3.css', 'style-4.css', 'theme-dark.css']
+const CSS_FILES = ['base.css', 'theme-dark.css']
   .map(f => path.join(ROOT, 'assets', 'css', f));
 
 // 1) Collect static multi-class button combinations from templates; dynamically-bound :class combos (white-text solid-bg variants) are added manually

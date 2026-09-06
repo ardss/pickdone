@@ -138,4 +138,22 @@ export default {
 /* N3 截止/临近卡片色 */
 .proj-card__dl--soon { color: var(--warn); }
 html[data-theme="dark"] .proj-card { background: rgba(255, 255, 255, .03); }
+/* 项目总览页（导航级入口的卡片栅格；渐进披露：无项目时整页不可达） */
+.proj-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: var(--space-3); padding: 16px 28px; }
+/* 项目总览页工具条：说明文案 + 新建项目按钮（入口常驻后的主创建路径） */
+.proj-toolbar {
+  display: flex; align-items: center; gap: var(--space-3);
+  padding: 12px 28px 0;
+}
+.proj-toolbar__tip { font-size: var(--fs-xs); color: var(--text-3); }
+.proj-new-btn {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 5px;
+  font-size: var(--fs-sm); color: #fff; background: var(--brand);
+  padding: 5px 12px; border-radius: var(--radius-sm); transition: background var(--t-fast);
+}
+.proj-new-btn:hover { background: var(--brand-dark); }
+/* 进度环（项目卡片右上角，进度=任务完成比） */
+.proj-ring__track { fill: none; stroke: var(--track-bg); stroke-width: 3.4; }
+.proj-ring__fill { fill: none; stroke-width: 3.4; stroke-linecap: round; transform: rotate(-90deg); transform-origin: 16px 16px; transition: stroke-dashoffset var(--t-slow); }
+.proj-ring__text { font-size: var(--fs-2xs); font-weight: 600; fill: var(--text-2); }
 </style>

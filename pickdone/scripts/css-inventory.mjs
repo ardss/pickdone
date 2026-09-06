@@ -16,7 +16,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
-const FILES = ['style-1.css', 'style-2.css', 'style-3.css', 'style-4.css', 'theme-dark.css']
+const FILES = ['theme-dark.css']
   .map(f => path.join(ROOT, 'assets', 'css', f))
 
 // ---- naive CSS block parser (handles comments, strings, @media nesting) ----

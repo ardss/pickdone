@@ -166,4 +166,17 @@ export default ChartCard
 /* 图表卡 */
 html[data-theme="dark"] .chart-h { background: var(--panel); }
 html[data-theme="dark"] .chart-h__title { color: var(--text-1); }
+/* 图表卡片体系：chart-generic 按 modelType 分发（ChartA~ChartH） */
+.single{margin-bottom:25px}
+.double{display:flex;justify-content:space-between;margin-bottom:25px}
+.double__item{flex:1}
+.chart-a{display:flex;align-items:center;padding:16px;border-radius:var(--radius-md)}
+.chart-a__icon{display:block;width:30px;height:30px;padding-right:var(--space-4);-o-object-fit:contain;object-fit:contain}
+.chart-a__content{color:#fff;font-size: var(--fs-sm);white-space:pre-line}
+.chart-b{padding:16px;border-radius:var(--radius-md)}
+.chart-b__title{margin-bottom:30px;color:#fff;font-size: var(--fs-base)}
+.chart-b__content{display:flex;align-items:center;color:#fff;font-size:26px}
+.chart-b__content__text{margin-right:16px}
+.chart-b__content__subcontent{color:#fff;font-size: var(--fs-sm)}
+.single { min-height: 40px; }
 </style>

@@ -255,4 +255,50 @@ export default {
 html[data-theme="dark"] .dropdown-select__label { color: var(--text-1); }
 html[data-theme="dark"] .dropdown-select__label:hover,
 html[data-theme="dark"] .dropdown-select.is-open .dropdown-select__label { background: var(--hover-bg); color: var(--text-1); }
+.icon-append{display:block;color:var(--text-4);font-size:16px;line-height:20px}
+/* ---- F1. 待办箱条目（原 TodoBoxListItem scoped，限定于 .todo-box-list 下）---- */
+.todo-box-list .todo-box-list-item{position:relative;border-bottom:1px solid var(--line);background-color:var(--panel, #fff);padding:10px 26px;transition:all .3s cubic-bezier(.23,1,.32,1);box-sizing:border-box;display:flex}
+.todo-box-list .todo-box-list-item__append,.todo-box-list .todo-box-list-item__prepend{flex-shrink:0}
+.todo-box-list .todo-box-list-item__category-dot{display:flex;flex-shrink:0;align-items:center;justify-content:center;width:20px;height:20px;margin-right:8px;font-size: var(--fs-sm)}
+.todo-box-list .todo-box-list-item__category-dot>svg{display:block}
+.todo-box-list .todo-box-list-item__container{flex:1;overflow:hidden}
+.todo-box-list .todo-box-list-item__content{display:-webkit-box;overflow:hidden;color:var(--text-1);font-weight:400;font-size: var(--fs-base);line-height:20px;white-space:pre-line;text-overflow:ellipsis;overflow-wrap:break-word;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.todo-box-list .todo-box-list-item__workload{position:absolute;top:8px;left:0;bottom:8px;background-color:transparent;width:3px}
+.todo-box-list .todo-box-list-item__workload--lv2{background-color:#f49a4f}
+.todo-box-list .todo-box-list-item__workload--lv3{background-color:var(--danger)}
+.todo-box-list .todo-box-list-item__tools{display:flex;gap:15px}
+.todo-box-list .todo-box-list-item:hover{background-color:var(--hover-bg)}
+.todo-box-list .todo-box-list-item:active{background-color:var(--active-bg)}
+.todo-box-list .todo-box-list-item--is-drop{pointer-events:none}
+.todo-box-list .todo-box-list-item--is-drop:active,.todo-box-list .todo-box-list-item--is-drop:hover{background-color:var(--hover-bg)}
+.todo-box-list .todo-box-list-item--is-drag{background-color:var(--active-bg)}
+.todo-box-list .todo-box-list-item--selected,.todo-box-list .todo-box-list-item--selected:hover{background-color:#f5fafb}
+/* 裸文字按钮仅限待办箱条目（旧 scoped id）；回收站条目用原版药丸组（见 F2 补充） */
+.todo-box-list .todo-box-list-item__tools .btn{padding:0;color:var(--brand-dark);font-size: var(--fs-sm);background:none;border:none;cursor:pointer;transition:all .2s}
+.todo-box-list .todo-box-list-item__tools .btn:focus{outline:0}
+.todo-box-list .todo-box-list-item__tools .btn:hover{color:var(--brand-hover)}
+.todo-box-list .todo-box-list-item__tools .btn:active{color:var(--brand-active)}
+.todo-box-list .todo-box-list-item__tools .btn--dark{color:#4f4f4f}
+.todo-box-list .todo-box-list-item__tools .btn--dark:focus{outline:0}
+.todo-box-list .todo-box-list-item__tools .btn--dark:hover{color:#474747}
+.todo-box-list .todo-box-list-item__tools .btn--dark:active{color:#3b3b3b}
+/* 工具栏下拉菜单（原 DropdownSelect 的弹出层无独立样式文件，按设计稿设计语言补齐：白底/分隔/主色高亮） */
+.dd-menu{list-style:none;margin:0 -4px;padding:0;font-size: var(--fs-sm);color:var(--text-1)}
+.dd-menu li{padding:7px 16px;cursor:pointer;white-space:nowrap;border-radius: var(--radius-md)}
+.dd-menu li:hover{background:var(--gray-bg, #f5f7fa)}
+.dd-menu li.on{color:var(--brand);font-weight:600}
+/* 下拉面板（popper 挂 body，须 popper-class 钩住）：紧内边距+圆角投影，过渡 120ms 干脆利落 */
+.dd-pop{--el-popover-padding:6px;border-radius:var(--radius-lg) !important;box-shadow:0 10px 32px rgba(0,0,0,.13) !important}
+.dd-menu li{padding:7px 12px}
+.dd-pop.el-fade-in-linear-enter-active{transition:opacity .12s ease,transform .12s ease}
+.dd-pop.el-fade-in-linear-enter-from{opacity:0;transform:translateY(-5px) scale(.97)}
+.dd-pop.el-fade-in-linear-leave-active{transition:opacity .06s ease-out;pointer-events:none}
+.dd-pop.el-fade-in-linear-leave-to{opacity:0}
+.dd-caret{font-style:normal;font-size:0;line-height:1;flex-shrink:0}
+.dd-caret::before{content:"";display:block;width:6px;height:6px;border-right:1.5px solid var(--text-3);border-bottom:1.5px solid var(--text-3);transform:rotate(45deg) translate(-1px,-1px);transition:transform .18s,border-color .15s}
+.dd-q,.tip-q{
+  width:16px;height:16px;margin-left:2px;border:1px solid currentColor;border-radius:50%;
+  font-size: var(--fs-xs);line-height:15px;text-align:center;text-indent:1px;cursor:pointer;
+  color:var(--text-4);flex-shrink:0;
+}
 </style>

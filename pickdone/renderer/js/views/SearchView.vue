@@ -149,3 +149,5 @@ export default {
 
 }
 </script>
+<style>.result-count{color:#9b9b9b;font-size: var(--fs-sm);line-height:28px;white-space:nowrap}
+</style>

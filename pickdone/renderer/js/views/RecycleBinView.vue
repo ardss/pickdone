@@ -158,3 +158,16 @@ export default {
 
 }
 </script>
+<style>.recycle-page .icon-prepend{background-image:url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22><circle cx=%228%22 cy=%228%22 r=%226%22 fill=%22%23ccc%22/></svg>')}
+.datetime--alert{color:#bd401e}
+.datetime--gray{color:var(--text-dim)}
+/* 完成/标签/清单等页在条目右侧的悬停操作（恢复为未完成等），颜色取自设计稿 .btn-group .btn */
+.row-btn{flex-shrink:0;align-self:center;margin-right:14px;padding:0;color:var(--brand-dark);font-size: var(--fs-sm);background:none;border:none;cursor:pointer;transition:all .2s;opacity:0}
+/* 待办箱：分类圆点使用圆形图标（原为 font-awesome far/fas circle），此处由内联 SVG 承担 */
+.todo-box-list-item__category-dot svg{width:12px;height:12px;display:block}
+/* 回收站页头计数与危险按钮微调（颜色取自设计稿 var(--danger) 系） */
+.rc-count{font-size: var(--fs-sm);color:var(--text-dim)}
+.rc-danger-btn{color:var(--danger) !important}
+.rc-danger-btn:hover{color:var(--danger-strong) !important}
+@keyframes trash-pulse { 50% { transform: scale(1.05); } }
+</style>

@@ -1046,4 +1046,40 @@ html[data-theme="dark"] .el-cascader-node.is-active { color: var(--el-color-prim
    ✕ 文字色经 html[data-theme="dark"] .modal__close 已适配主题，悬停仅加底色 */
 /* 分组小标题：品牌青暗色提亮 */
 html[data-theme="dark"] .tab-panel .form-label { color: #35c2ae; }
+.sc { border-radius: var(--radius-xl); padding: 30px 32px; color: #fff; overflow: hidden; }
+.settings-modal-body { color: var(--text-1); }
+/* 控件宽度档位（设置页统一三档，替代原 8 档内联 px） */
+.ctl-sm { width: 110px; }
+.ctl-md { width: 160px; }
+.ctl-lg { width: 260px; }
+.tip { color: var(--text-3); font-size: var(--fs-sm, 12px); word-break: break-word; }
+/* —— 控件高度档位统一（全局）：.mini/.mini-lg/.danger-btn 收敛到 24px 档。
+      base.css 不便改动，此处后加载覆盖生效；全局生效属预期（统一档位正是目的） —— */
+.mini { padding: var(--space-1) var(--space-3); }
+.mini-lg { padding: var(--space-1) var(--space-4); }
+.danger-btn { padding: var(--space-1) var(--space-3); background: var(--danger-soft, #fef0f0); }
+/* ===== 设置页软件更新区块 ===== */
+.upd-version { font-size: var(--fs-sm); color: var(--text-2); }
+.upd-hint { margin-left: var(--space-2, 8px); font-size: var(--fs-sm); color: var(--text-3); }
+.sc-kbd { font-family: monospace; font-size: var(--fs-sm); letter-spacing: 1px; }
+/* ============ 设置搜索（跨页签过滤） ============ */
+.settings-search {
+  display: flex; align-items: center; gap: 8px;
+  margin: 0 0 var(--space-4); padding: 7px 12px;
+  /* 右侧让出关闭钮(close 锚在弹窗右上角,竖直方向与搜索行同高):整条输入带右缩 40px,不钻到钮底下 */
+  margin-right: 40px;
+  background: var(--gray-bg, #f8f8f8); border-radius: var(--radius-md);
+}
+.settings-search .app-icon { color: var(--text-3); flex-shrink: 0; }
+.settings-search__input {
+  flex: 1; border: 0; background: none; outline: none;
+  color: var(--text-1); font-size: var(--fs-md); line-height: 1.5;
+}
+.settings-search__input::placeholder { color: var(--text-3); }
+.settings-search__clear {
+  border: 0; background: none; color: var(--text-3); cursor: pointer;
+  font-size: var(--fs-sm); padding: 2px 6px; border-radius: var(--radius-sm);
+}
+.settings-search__clear:hover { color: var(--text-1); background: var(--hover-bg, rgba(0,0,0,.05)); }
+.settings-search-empty { text-align: center; color: var(--text-3); font-size: var(--fs-md); padding: 40px 0; }
 </style>

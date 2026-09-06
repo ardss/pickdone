@@ -59,7 +59,7 @@ for (const f of walk(demoDir)) {
     .split('"/assets/').join('"./assets/')
     .split("'/assets/").join("'./assets/")
     .split('`/assets/').join('`./assets/')
-    // --ico 自定义属性里的 url() 由外部样式表 style-4.css 的 var(--ico) 消费,
+    // --ico 自定义属性里的 url() 消费外部图标资产,
     // 按样式表目录(assets/css/)解析而非文档,故须退两级
     .split('"--ico":"url(\'./assets/').join('"--ico":"url(\'../../assets/')
   if (next !== text) fs.writeFileSync(f, next)

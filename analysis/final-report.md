@@ -1,4 +1,4 @@
-# CSS 组件吸收重构 — 最终报告(2026-09-07 夜间批次)
+# CSS 组件吸收重构 — 最终报告(2026-09-07 终态:零遗留)
 
 ## 目标与策略
 
@@ -40,6 +40,25 @@ base.css(2867 行,token + 骨架)未动;搬出的 ~2300 行现住各组件 `<sty
 | B10/11 | sn-weather/main-nav-search/sn-ico-btn → SideNav;dropdown-select → TodoBox;todo-options → QuickAdd;today-v1 → DayRail;day-expand/cal-title → Calendar | web 14/14 | ✅ f7b327d |
 | B12 | el-cascader-node/sc-capture/tab-panel → SettingsModal;stat-hero → Statistics;ob-* → Onboarding | web 14/14 + 桌面冒烟 19/19 | ✅ ddd381c |
 
+## 终态(2026-09-07 收官轮:style-1..4 全退役,零遗留)
+
+夜间批次后剩余沉积(~2000 行)已由 `scripts/css-finish.mjs` 一轮全量搬迁完毕:
+
+| 文件 | 终态 |
+|---|---|
+| style-1..4.css | **已删除**(规则 100% 迁出,零删除语义) |
+| base.css | 3253 行 = token 层 + 骨架 + 共享家族(升入 base 统一管理) + EP/过渡/FullCalendar 默认段 |
+| theme-dark.css | 299 行 = 深色补丁(唯一保留的全局文件) |
+
+「死代码候选 55 族」复核结论:**全部为运行时生成类,一律零删除、迁往权威归属地** ——
+`el-*`(Element Plus 运行时)、`pop-*`(Vue transition 名)、`fc-*`/`cal-*`(FullCalendar 生成 DOM)、
+`chart-N`(动态拼接)等分别迁入 base.css EP 段 / 过渡段 / CalendarView.vue。
+
+全局 CSS 架构终态 = **base.css(token+骨架+共享) + theme-dark.css(深色补丁) + 组件 `<style>` 块**。
+台账脚本(css-inventory)文件表已收敛为 theme-dark 单件;冻结门禁、token 门禁、hover 对比度门禁、
+structure var 扫描、CSSOM 基线(重建:base 608 / theme-dark 145 规则)全部同步新架构。
+R4/R5 档位纪律原 scope 的 style-2/3 已退役,纪律转组件级(全局层不再拦截)。
+
 ## 夜间发现并修复的门禁环境问题(均为污染源,非样式回归)
 
 1. 「昨日剩余」每日弹窗污染所有截图 → 门禁自动 dismiss
@@ -50,13 +69,10 @@ base.css(2867 行,token + 骨架)未动;搬出的 ~2300 行现住各组件 `<sty
 5. 真实数据目录任务数漂移 → 隔离 TODO_USER_DATA_DIR 实例
 6. css-move 不识别 CSS 注释导致设计稿注释被拦腰截断(B5 回滚根因)→ 扫描器注释/字符串感知
 
-## 遗留与下一步(未在本夜范围,已排入台账)
+## 剩余债务(终态后唯一在册)
 
-- 死代码候选 55 族(~227 行):inventory 已标零引用,删前需人工复核动态类名拼接
-- 共享家族 75 族:终态应升入 base.css 统一管理
-- dark 规则本轮"原样随迁"(方案 B),终态统一 token 化(方案 A)单独一轮
-- 桌面 CDP 视觉门禁在锁屏态不可用,已由 visual-web 门禁补位;白天可跑桌面门禁双保险
-- 剩余沉积(2164 行)按台账继续,冻结门禁保证只减不增
+- theme-dark.css 299 行深色补丁仍为「原样随迁」(方案 B);统一 token 化(方案 A)留作单独一轮
+- 桌面 CDP 视觉门禁锁屏态不可用,已由 visual-web 门禁补位;白天可跑桌面门禁双保险
 
 ## 验证命令
 

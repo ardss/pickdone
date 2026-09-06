@@ -107,4 +107,8 @@ export default {
 /* 折叠箭头：设计稿 .todo-list-item-group__arrow{color:#c3c3c3;font-size: var(--fs-sm);
    transition:all var(--dur-slow) cubic-bezier(.23,1,.32,1)} 收起时 rotate(-90deg) */
 .tg-head .arrow { color: var(--text-4); font-size: var(--fs-xs); transition: all var(--dur-slow) cubic-bezier(.23, 1, .32, 1); }
+.tg-head em { color: var(--text-3); font-size: var(--fs-base); }
+.tg-head:hover { filter: brightness(.95); }
+.tg-head .arrow.open { transform: rotate(0deg); }
+.tg-head .arrow:not(.open) { transform: rotate(-90deg); }
 </style>

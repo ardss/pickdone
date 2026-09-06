@@ -78,3 +78,5 @@ export default {
 
 }
 </script>
+<style>.ctx-menu { transform-origin: top left; }
+</style>

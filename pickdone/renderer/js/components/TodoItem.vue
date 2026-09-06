@@ -302,3 +302,33 @@ export default {
 
 }
 </script>
+<style>/* 11. 待办 meta 徽章（日期/标签）hover 色过渡 */
+.td-meta .td-ico, .td-datetime, .sn-badge { transition: color var(--dur-fast), background-color var(--dur-fast); }
+/* ==================== 3. TodoItem 条目微交互 ==================== */
+/* 整行选中高亮：设计稿 .todo-list-item--selected{background-color:#f5fafb}
+   （base.css 用的是 brand-light，这里对齐设计稿） */
+.td-item.selected, .td-item.selected:hover { background-color: #f5fafb; }
+.td-meta .td-ico, .td-meta .td-snow {
+  opacity: 0; transition: opacity var(--dur-mid) cubic-bezier(.4, 0, .2, 1);
+}
+/* —— 4. 主列表条目：设计稿 .todo-list-item[scoped]
+      padding:10px 15px 10px 28px transition all .3s cubic-bezier(.23,1,.32,1) —— */
+.td-item { padding: 10px 15px 10px 28px; transition: all var(--dur-slow) cubic-bezier(.23, 1, .32, 1); }
+/*（重复声明已并入上方主规则）*/
+
+/* 番茄一体控件(2026-09-03用户定稿):开始段+账目段同舱胶囊,替代散装的btn-tomato+td-tomcount
+   (旧td-tomcount无样式继承杂色红#D9534F与删除同色太有攻击性)。hover整舱品牌高亮,
+   专注附着中整舱品牌色;账目段显示 pips+0/1 可点开账目弹窗;完成后整舱ghost占位 */
+.td-right .td-tom {
+  display: inline-flex; align-items: stretch;
+  border: 1px solid var(--line); border-radius: var(--radius-pill); background: var(--gray-bg);
+  overflow: hidden; cursor: pointer; user-select: none;
+  transition: border-color var(--dur-fast), background-color var(--dur-fast);
+}
+.td-right .td-tom:hover { border-color: var(--brand); background: var(--brand-light); }
+.td-right .td-tom.active { border-color: var(--brand); background: var(--brand-light); }
+.td-right .td-tom.active .td-tom__start { color: var(--brand); }
+.td-right .td-tom.ghost { visibility: hidden; pointer-events: none; }
+/* 番茄预估胶囊（自重构分支移植的功能点） */
+.td-right .td-tom-est { display: inline-flex; align-items: center; gap: 2px; font-size: var(--fs-sm); color: var(--brand); background: var(--brand-light); border-radius: var(--radius-pill); padding: 1px 7px; margin-right: 6px; }
+</style>

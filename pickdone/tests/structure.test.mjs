@@ -158,7 +158,7 @@ test('structure: CSS has no --x: var(--x) circular self-reference (once broke --
 test('structure: every CSS custom property referenced is defined (:root or dark)', () => {
   const defined = new Set()
   const used = new Set()
-  for (const f of ['base.css', 'theme-dark.css', 'style-1.css', 'style-2.css', 'style-3.css', 'style-4.css']) {
+  for (const f of ['base.css', 'theme-dark.css']) {
     const css = fs.readFileSync(path.join(rel('assets/css'), f), 'utf8')
     for (const m of css.matchAll(/(--[\w-]+)\s*:/g)) defined.add(m[1])
     for (const m of css.matchAll(/var\((--[\w-]+)/g)) used.add(m[1])

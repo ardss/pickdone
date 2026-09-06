@@ -899,4 +899,231 @@ html[data-theme="dark"] .review-card { background: var(--panel); }
   border-left: 3px solid var(--brand); border-radius: 0 8px 8px 0;
   font-size: var(--fs-lg); font-weight: 600; line-height: 1.6; color: var(--text-1);
 }
+.stat-page .container{padding:0 25px 25px}
+/* 统计子页宽度（设计稿 getReportXxx 各子页共用） */
+.stat-subpage{max-width:785px;margin-left:auto;margin-right:auto;padding-top:25px;padding-bottom:25px}
+.stat-subpage .none pre{margin:4px 0;padding:0;font-family:inherit}
+/* ============ 24 小时时间轴（番茄统计） ============ */
+.tl-card { background: var(--panel, #fff); border-radius: var(--radius-md); padding: 16px 20px; margin-top: 14px; }
+.tl-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: var(--space-3); }
+.tl-head b { font-size: var(--fs-base); color: var(--text-1); }
+.tl-sub { font-size: var(--fs-xs); color: var(--text-3); }
+.tl-rows { display: flex; flex-direction: column; gap: 6px; }
+.tl-row { display: flex; align-items: center; gap: 10px; }
+.tl-date { width: 42px; font-size: var(--fs-xs); color: var(--text-2); text-align: right; flex-shrink: 0; }
+.tl-track {
+  position: relative; flex: 1; height: 16px; border-radius: var(--radius-md);
+  background: var(--track-bg); overflow: hidden;
+}
+.tl-seg { position: absolute; top: 0; bottom: 0; border-radius: 2px; }
+/* 专注时段带:连续番茄(间隔<=10min)合并为一条圆角带,带底=休息浅色,带内实心块=专注;
+   消除"一块专注一块休息"的砖块感,hover 带体报整段摘要(块级 hover 保留单番茄明细) */
+.tl-band { position: absolute; top: 0; bottom: 0; border-radius: var(--radius-sm, 4px); background: var(--line, #c9ced6); cursor: default; }
+.tl-band .tl-seg.unit { top: 2px; bottom: 2px; border-radius: 0; background: var(--brand); box-shadow: 1px 0 0 var(--panel, #fff); }
+/* 带内纯品牌色直角相连(圆角会产生接缝);1px 白线仅作番茄分隔刻度 */
+/* 一个番茄=一个单元块：专注主体(品牌绿)+紧连的休息尾巴(灰)，--ff 为专注占比分割点(内联覆盖) */
+.tl-seg.unit { --ff: 80%; background: linear-gradient(to right, var(--brand) var(--ff), #c9ced6 var(--ff)); }
+.tl-seg.unit:hover { filter: brightness(.94); }
+.tl-seg.focus { background: var(--brand); }
+.tl-seg.focus:hover { background: var(--brand-dark); }
+.tl-seg.rest { background: #c9ced6; }
+/* 空行不塌缩:无记录日保持整行轨道高度(压成细线曾显突兀),仅降透明度+日期变淡让注意力给有数据的日子 */
+.tl-row--empty .tl-track { opacity: .45; }
+.tl-row--empty .tl-date { color: var(--text-4); }
+/* 悬停行显示 3 小时虚线分隔(3/6/…/21,即 12.5% 步进):竖线由 mask 切出列,虚线由纵向 repeating-gradient 画出 */
+/* 悬停虚线开关:关闭时不画(::after 仅在非 nogrid 行悬停时出现);开关本体=头部小药丸,默认开 */
+.tl-rows--nogrid .tl-track::after { content: none !important; }
+.tl-grid-toggle {
+  margin-left: auto; border: 1px solid var(--line-strong, #d8dde2); background: transparent; color: var(--text-3);
+  font-size: var(--fs-2xs, 10px); padding: 1px 8px; border-radius: var(--radius-pill); cursor: pointer; flex-shrink: 0;
+}
+.tl-grid-toggle.on { border-color: var(--brand); color: var(--brand-dark); background: var(--brand-light, #e7f7f7); }
+.tl-row:hover .tl-track::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none; z-index: 1;
+  background-image: repeating-linear-gradient(to bottom, transparent 0 2px, var(--text-3, #8a9099) 2px 4px);
+  -webkit-mask-image: repeating-linear-gradient(to right, transparent 0 calc(12.5% - 1px), #000 calc(12.5% - 1px) 12.5%);
+  mask-image: repeating-linear-gradient(to right, transparent 0 calc(12.5% - 1px), #000 calc(12.5% - 1px) 12.5%);
+}
+/* 行尾番茄指标：个数 + 计时器线性图标（AppIcon 统一风格），悬停显示专注时长 */
+.tl-min { margin-left: auto; width: 34px; justify-content: flex-end; font-size: var(--fs-xs); font-weight: 600; color: var(--text-3); flex-shrink: 0; font-variant-numeric: tabular-nums; display: inline-flex; align-items: center; gap: 3px; cursor: default; }
+/* 定宽:位数不同曾使各行轨道右缘参差 */
+.tl-min--ghost { visibility: hidden; }
+/* 空行也占位,轨道右缘全线对齐 */
+.tl-min__n { color: var(--text-1); }
+.tl-min__ico { color: var(--text-3); transition: transform var(--dur-fast); }
+.tl-min:hover .tl-min__ico { transform: scale(1.12); color: var(--brand); }
+/* 色块图例 */
+.tl-chips { display: inline-flex; align-items: center; gap: var(--space-1); font-size: var(--fs-xs); color: var(--text-3); margin-right: 6px; }
+.tl-chip { width: 10px; height: 10px; border-radius: 3px; display: inline-block; margin: 0 2px 0 8px; }
+.tl-chip--focus { background: var(--brand); }
+.tl-chip--rest { background: #c9ced6; }
+.tl-chip--idle { background: var(--track-bg, #ececef); }
+/* 时间刻度尺（行上方，0-24 每 3 小时一刻度） */
+.tl-hours { position: relative; height: 14px; margin-left: 52px; margin-right: 44px; margin-bottom: 6px; }
+/* 右缩=行尾指标列(34px+gap),使 24 刻度与轨道右缘对齐 */
+.tl-hour { position: absolute; transform: translateX(-50%); font-size: var(--fs-2xs); color: var(--text-4); }
+.tl-hour:first-child { transform: none; }
+.tl-hour:last-child { transform: translateX(-100%); }
+/* 段悬浮自定义 tooltip：跟随鼠标，卡片内相对定位由 fixed 实现 */
+.tl-tip {
+  position: fixed; z-index: calc(var(--z-modal, 3000) + 10); pointer-events: none;
+  background: var(--text-1, #303133); color: var(--panel, #fff);
+  font-size: var(--fs-xs); padding: 5px 9px; border-radius: var(--radius-sm);
+  white-space: nowrap; box-shadow: var(--shadow-pop, 0 4px 14px rgba(0,0,0,.18));
+}
+/* ============ GitHub 风格活跃热力图 ============ */
+.hm-card { overflow: hidden; }
+.hm-scroll { overflow-x: auto; padding-bottom: var(--space-1); scrollbar-width: thin; }
+.hm-grid {
+  display: grid; grid-auto-flow: row; gap: var(--space-1); width: 100%;
+  grid-template-rows: repeat(7, auto);
+}
+/* min-width:0:1fr 轨道默认不小于内容宽,整年 53 列会撑出横向滚动条(用户反馈);方形靠 aspect-ratio 保持 */
+.hm-cell { width: 100%; min-width: 0; aspect-ratio: 1 / 1; border-radius: 2.5px; display: inline-block; }
+.hm-l0 { background: var(--gray-bg); }
+.hm-l1 { background: color-mix(in srgb, var(--brand) 30%, var(--gray-bg)); }
+.hm-l2 { background: color-mix(in srgb, var(--brand) 55%, var(--gray-bg)); }
+.hm-l3 { background: color-mix(in srgb, var(--brand) 80%, var(--gray-bg)); }
+.hm-l4 { background: var(--brand); }
+.hm-legend { display: flex; align-items: center; gap: var(--space-1); margin-top: var(--space-2); font-size: var(--fs-xs); color: var(--text-3); justify-content: flex-end; }
+/* ============ 图表卡（合并历史三层覆盖为单层，全 token 化） ============ */
+.stat-subpage .single { margin-bottom: 18px; }
+.stat-subpage .double { display: flex; gap: var(--space-4); margin-bottom: 18px; }
+.stat-subpage .chart-b { flex: 1; border-radius: var(--radius-md); padding: 18px 20px; color: #fff; }
+.stat-subpage .chart-b__title { font-size: var(--fs-md); margin-bottom: var(--space-2); }
+.stat-subpage .chart-b__content__text { font-size: 20px; font-weight: 600; line-height: 1.3; }
+.stat-subpage .chart-b__content__subcontent { display: flex; gap: var(--space-3); font-size: var(--fs-sm); margin-top: var(--space-1); }
+.stat-subpage .chart-a { border-radius: var(--radius-md); padding: 16px 18px; display: flex; align-items: center; gap: 14px; }
+.stat-subpage .chart-a__icon { width: 40px; height: 40px; }
+.stat-subpage .chart-a__content { font-size: var(--fs-md); line-height: 1.6; }
+.stat-subpage .chart-d { border-radius: var(--radius-md); padding: 18px 20px; text-align: center; }
+.stat-subpage .chart-d__count { font-size: 20px; font-weight: 600; }
+.stat-subpage .chart-d__content { font-size: var(--fs-md); margin-top: var(--space-1); }
+.stat-subpage .chart-empty {
+  min-height: 120px; display: flex; align-items: center; justify-content: center;
+  color: var(--text-3); font-size: var(--fs-md); border-radius: var(--radius-md);
+}
+.review-dot { flex-shrink: 0; width: 6px; height: 6px; border-radius: 50%; background: var(--brand); transform: translateY(-2px); }
+/* KPI 对比条（品牌顶线 + 差值胶囊，单层） */
+.kpi-row { display: flex; gap: 14px; max-width: 785px; margin: 0 auto 18px; }
+.kpi-tile {
+  flex: 1; padding: 14px 16px 12px; background: var(--panel, #fff);
+  border: 1px solid var(--line); border-radius: var(--radius-lg);
+}
+.kpi-tile__title { font-size: var(--fs-sm); color: var(--text-3); }
+.kpi-tile__value { margin-top: var(--space-1); font-size: 20px; font-weight: 600; color: var(--text-1); line-height: 1.2; }
+.kpi-tile__sub { margin-top: 6px; font-size: var(--fs-xs); color: var(--text-3); display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.kpi-delta { font-weight: 700; padding: 1px 8px; border-radius: var(--radius-pill); font-size: var(--fs-xs); }
+.kpi-delta.good { color: var(--ok, #1f7a55); background: color-mix(in srgb, var(--ok, #2ba471) 12%, transparent); }
+.kpi-delta.warn { color: var(--warn, #9c6009); background: color-mix(in srgb, var(--warn, #d08b1f) 14%, transparent); }
+.kpi-delta.flat { color: var(--text-3); font-weight: 400; }
+/* 注意力去向（分类条形） */
+.att-rows { display: flex; flex-direction: column; gap: 10px; padding: 14px 4px 8px; }
+.att-row { display: flex; align-items: center; gap: var(--space-3); }
+.att-label { flex-shrink: 0; width: 90px; font-size: var(--fs-sm); color: var(--text-2); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.att-track { flex: 1; height: 14px; background: var(--gray-bg); border-radius: var(--radius-md); overflow: hidden; }
+.att-bar { height: 100%; border-radius: var(--radius-md); background: var(--brand); transition: width var(--dur-slow) ease; }
+.att-value { flex-shrink: 0; width: 72px; font-size: var(--fs-sm); color: var(--text-3); font-variant-numeric: tabular-nums; }
+/* 热力图范围切换 */
+.hm-range-toggle { display: inline-flex; gap: var(--space-1); margin: 0 10px; }
+.hm-range-btn {
+  border: 1px solid var(--line); background: none; color: var(--text-3);
+  font-size: var(--fs-xs); padding: 2px 10px; border-radius: var(--radius-pill); cursor: pointer;
+}
+.hm-range-btn.on { color: var(--brand); border-color: var(--brand); background: var(--brand-light); }
+/* ============ 图表卡工具风统一（token 化，去海报装饰） ============ */
+.stat-subpage .chart-b { border-radius: var(--radius-md); padding: 18px 20px; }
+.stat-subpage .chart-b__title { font-size: var(--fs-md); }
+.stat-subpage .chart-b__content__text { font-size: 20px; font-weight: 600; line-height: 1.3; }
+.stat-subpage .chart-a { border-radius: var(--radius-md); padding: 16px 18px; }
+.stat-subpage .chart-a__content { font-size: var(--fs-md); }
+.stat-subpage .chart-a__icon { width: 40px; height: 40px; }
+.stat-subpage .chart-d { border-radius: var(--radius-md); }
+.stat-subpage .chart-d__count { font-size: 20px; font-weight: 600; }
+.stat-subpage .chart-empty {
+  min-height: 120px; display: flex; align-items: center; justify-content: center;
+  color: var(--text-3); font-size: var(--fs-md);
+  border-radius: var(--radius-md);
+}
+/* 热力图自适应尺寸：半年大格填满卡片、整年紧凑，整体居中消除右侧空白 */
+.hm-grid--half .hm-cell { border-radius: var(--radius-sm); }
+.hm-grid--year .hm-cell { border-radius: var(--radius-xs); }
+/* 极窄窗口兜底：列多时允许横向滚动，格子保持最小可辨识尺寸 */
+.hm-scroll { scrollbar-width: thin; }
+/* ============ 分享卡片（固定浅色渲染，与主题无关） ============ */
+.share-style-tabs { display: flex; gap: 6px; margin-bottom: 14px; }
+.share-dialog__foot { display: flex; justify-content: flex-end; gap: var(--space-2); }
+.share-save { background: var(--brand); color: #fff; border-color: var(--brand); }
+.share-save:hover { background: var(--brand-dark, #3b4bc4); color: #fff; }
+.sc-brand { font-size: var(--fs-sm); letter-spacing: 2px; opacity: .75; }
+.sc-period { font-size: var(--fs-sm); margin-top: var(--space-1); opacity: .85; }
+.sc-headline { font-size: 20px; font-weight: 800; line-height: 1.55; margin: 16px 0 12px; }
+.sc-list { margin: 0; padding: 0; list-style: none; }
+.sc-list li { font-size: var(--fs-md); line-height: 1.8; opacity: .92; padding-left: 14px; position: relative; }
+.sc-list li::before { content: ''; position: absolute; left: 0; top: .8em; width: 5px; height: 5px; border-radius: 50%; background: rgba(255, 255, 255, .8); }
+.sc-foot { margin-top: var(--space-5); font-size: var(--fs-xs); opacity: .6; }
+.sc-narrative { background: var(--brand); min-height: 260px; }
+.sc-data { background: #23324f; min-height: 220px; }
+.sc-kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 18px; }
+.sc-kpi { background: rgba(255, 255, 255, .09); border-radius: var(--radius-lg); padding: 14px 16px; }
+.sc-kpi__v { font-size: 24px; font-weight: 800; }
+.sc-kpi__t { font-size: var(--fs-xs); opacity: .75; margin-top: 3px; }
+.sc-mini { background: #17191e; min-height: 170px; display: flex; flex-direction: column; }
+.sc-mini .sc-headline { flex: 1; }
+.sc-mini__meta { font-size: var(--fs-sm); opacity: .7; }
+/* ============ 复盘页改版二：视图页签 + 周期药丸 + 质感升级（去 emoji，SVG 图标） ============ */
+.stat-view-tabs {
+  display: inline-flex; gap: var(--space-1); padding: 3px;
+  background: var(--gray-bg); border-radius: var(--radius-pill); margin-right: auto;
+}
+.stat-view-tab {
+  border: 0; background: none; color: var(--text-2); font-size: var(--fs-sm);
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 5px 14px; border-radius: var(--radius-pill); cursor: pointer;
+  transition: color var(--dur-fast), background-color var(--dur-fast);
+}
+.stat-view-tab.on { background: var(--panel, #fff); color: var(--brand-text); font-weight: 600; box-shadow: 0 1px 4px rgba(31, 56, 88, .12); }
+.stat-view-tab:not(.on):hover { color: var(--text-1); }
+/* 周期行对齐内容线：药丸靠左接齐各节标题,日期范围推到内容线右端(用户反馈居中悬浮与上下脱节) */
+.stat-period-pills { display: flex; align-items: center; gap: 6px; margin: 0 auto 20px; flex-wrap: wrap; }
+/* 药丸为独立控件，外缘与卡片轴线对齐（696/1481），不再走旧内容线缩进（2026-08-31 用户确认） */
+.stat-period-pills .stat-period-range { margin-left: auto; font-size: var(--fs-sm); color: var(--text-3); cursor: pointer; padding: 2px 6px; border-radius: var(--radius-sm, 4px); transition: color var(--dur-fast), background var(--dur-fast); }
+.stat-period-pills .stat-period-range:hover { color: var(--brand); background: var(--hover-bg, rgba(127,140,153,.1)); }
+.stat-period-pills .stat-period-range.custom { color: var(--brand); font-weight: 600; }
+/* 自定义日期区间浮层（2026-08-31 用户定稿：点日期标签直接弹出，不展开成行） */
+.stat-custom-range { display: flex; flex-direction: column; gap: 10px; }
+.stat-custom-range__actions { display: flex; align-items: center; gap: 10px; }
+.stat-custom-warn { font-size: var(--fs-xs, 11px); color: var(--warn, #d08b1f); }
+.stat-period-pill {
+  border: 1px solid var(--line); background: var(--panel, #fff); color: var(--text-2);
+  font-size: var(--fs-sm); padding: 6px 16px; border-radius: var(--radius-pill); cursor: pointer;
+  transition: color var(--dur-fast), border-color var(--dur-fast), background-color var(--dur-fast);
+}
+.stat-period-pill:hover { color: var(--brand); border-color: var(--brand); }
+.stat-period-pill.on { color: #fff; background: var(--brand-text); border-color: var(--brand-text); font-weight: 600; }
+/* 统一卡片语言（2026-08-31 用户反馈"有的有灰底有的没有"）：复盘页所有块共用同一条左缘轴线——
+   KPI 四格本身是卡，去掉 20px 内容线缩进，外缘与 tl-card 对齐；
+   图表卡(折线/柱状 canvas 类)上同款面板底+16/20 内边距，内容仍落在同一条内容线上；彩色整卡(chart-a/d/h)属卡片层不在此列 */
+.stat-subpage .chart-3.single, .stat-subpage .chart-4.single,
+.stat-subpage .chart-5.single, .stat-subpage .chart-6.single {
+  background: var(--panel, #fff); border-radius: var(--radius-md); padding: 16px 20px;
+}
+/* 周期之最 */
+.best-row { display: flex; gap: 14px; padding: 14px 2px 8px; }
+.best-item { flex: 1; padding: 14px 18px; background: var(--gray-bg); border-radius: var(--radius-md); }
+.best-item__title { font-size: var(--fs-sm); color: var(--text-3); }
+.best-item__value { font-size: 16px; font-weight: 600; color: var(--text-1); margin-top: var(--space-1); }
+.best-item__sub { font-size: var(--fs-xs); color: var(--text-3); margin-top: 3px; }
+/* 成就总览大数字 */
+.ach-totals { display: flex; gap: 14px; padding: 16px 2px 6px; }
+.ach-total { flex: 1; text-align: center; padding: 16px 10px; background: linear-gradient(160deg, rgba(15, 157, 143, .07), rgba(43, 179, 163, .06)); border-radius: var(--radius-md); }
+.ach-total__v { font-size: 18px; font-weight: 600; color: var(--brand); line-height: 1.2; }
+.ach-total__u { font-size: var(--fs-md); font-weight: 600; margin-left: 2px; }
+.ach-total__t { font-size: var(--fs-sm); color: var(--text-3); margin-top: var(--space-1); }
+/* 图例色块保持固定小尺寸（.hm-cell 现为自适应网格格，图例不随行伸缩） */
+.hm-legend .hm-cell { width: 12px; height: 12px; flex-shrink: 0; }
+/* 成就系统 v2：每族一张进度卡（当前值/下一级/进度条/已获得数） */
+.ach-fams { display: flex; flex-direction: column; gap: 10px; }
+@keyframes hm-tip-in { from { opacity: 0; transform: translate(-50%, calc(-100% - 4px)); } to { opacity: 1; transform: translate(-50%, calc(-100% - 8px)); } }
+@keyframes hm-tip-in-below { from { opacity: 0; transform: translate(-50%, 10px); } to { opacity: 1; transform: translate(-50%, 14px); } }
 </style>

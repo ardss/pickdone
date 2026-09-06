@@ -300,3 +300,16 @@ export default {
 
 }
 </script>
+<style>/* 刷新按钮已移除：点击组件任意位置即刷新；w-shape = 城市轮廓小图标（Nominatim 边界简化描边） */
+.w-shape {
+  width: 26px; height: 26px; flex-shrink: 0; margin-left: auto; /* 右对齐且紧贴城市名左侧 */
+}
+.w-shape path {
+  fill: rgba(15, 157, 143, .12);
+  stroke: var(--brand, #0f9d8f);
+  stroke-width: 3; /* viewBox 已归一为 0 0 60 60，3 单位 ≈ 图标上 1.3px */
+  stroke-linejoin: round;
+}
+@keyframes w-spin { to { transform: rotate(360deg); } }
+@keyframes w-breathe { 50% { opacity: .35; } }
+</style>
