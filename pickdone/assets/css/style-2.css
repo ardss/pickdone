@@ -1,0 +1,641 @@
+/* ============================================================
+   style-2.css —— 日程概览 / 数据复盘 / 搜索 三页设计稿样式还原
+   规则来源：第三方来源: 构建产物 A、构建产物 B
+   （[data-v-xxx] 已剥离；url(../img/..) → app://app/assets/img/）
+   FullCalendar 基础皮肤参数提取自 vendors 产物 的 .fc 规则，
+   套用到自绘网格（本应用未挂载 @fullcalendar）。
+   仅服务于 CalendarView / StatisticsView / SearchView。
+   ============================================================ */
+
+/* ========================= 通用：设计稿 title 行（搜索页筛选行用） ========================= */
+.title{display:flex;justify-content:space-between;line-height:28px}
+.title__prepend{display:flex;gap:var(--space-2);align-items:center}
+.title__text{font-size:16px}
+.title__append{display:flex;align-items:center;gap:18px}
+.title__append .icon-button>i{font-size:20px}
+
+/* ========================= 数据复盘（StatisticsView）========================= */
+/* 结构（2026-08-29 对齐全应用）：.page__header(.title 页头) + .stat-subpage 阅读列。
+   历史：本段原为构建产物逆向的 navbar/m-select 体系，页头统一重构时删除。 */
+.stat-page .content{flex:1;overflow:auto;background:var(--bg)}
+.stat-page .container{padding:0 25px 25px}
+
+/* 统计子页宽度（设计稿 getReportXxx 各子页共用） */
+.stat-subpage{max-width:785px;margin-left:auto;margin-right:auto;padding-top:25px;padding-bottom:25px}
+
+/* 图表卡片体系：chart-generic 按 modelType 分发（ChartA~ChartH） */
+.single{margin-bottom:25px}
+.double{display:flex;justify-content:space-between;margin-bottom:25px}
+.double__item{flex:1}
+.chart-a{display:flex;align-items:center;padding:16px;border-radius:var(--radius-md)}
+.chart-a__icon{display:block;width:30px;height:30px;padding-right:var(--space-4);-o-object-fit:contain;object-fit:contain}
+.chart-a__content{color:#fff;font-size: var(--fs-sm);white-space:pre-line}
+.chart-b{padding:16px;border-radius:var(--radius-md)}
+.chart-b__title{margin-bottom:30px;color:#fff;font-size: var(--fs-base)}
+.chart-b__content{display:flex;align-items:center;color:#fff;font-size:26px}
+.chart-b__content__text{margin-right:16px}
+.chart-b__content__subcontent{color:#fff;font-size: var(--fs-sm)}
+.chart-d{display:flex;flex-direction:column;align-items:center;padding:16px;border-radius:var(--radius-md)}
+.chart-d__count{margin-bottom:var(--space-2);color:#fff;font-size:32px}
+.chart-d__content{color:#fff;font-size: var(--fs-sm);white-space:pre-line;text-align:center}
+.chart-h{padding:16px;background:var(--panel, #fff);border-radius:var(--radius-md)}
+.chart-h__title{margin-bottom:32px;color:var(--text-1);font-size: var(--fs-base);line-height:2;white-space:pre-line;text-align:center}
+.chart-h__btn,.full{display:flex;align-items:center;justify-content:center}
+.chart-h__btn .base-button{padding:10px 28px;color:#fff;font-size: var(--fs-base);border:none;border-radius: var(--radius-md);background:var(--brand);cursor:pointer;transition:filter var(--dur-fast)}
+.chart-h__btn .base-button:hover{filter:brightness(1.08)}
+.chart-h__btn .base-button:active{filter:brightness(.92)}
+
+/* —— 数据复盘补遗（对照 构建产物 A 复核追加；chartA/D 白底模式、兜底 pre）—— */
+.chart-h__btn,.full{margin-top:8px}
+.stat-subpage .none pre{margin:4px 0;padding:0;font-family:inherit}
+/* 实现页容器（本应用布局壳）：占满内容区，顶栏为 page__top 等价物 */
+.cal-page{position:relative;padding:0;height:100%;display:flex;flex-direction:column}
+.cal-topbar{display:flex;align-items:center;gap:var(--space-2);padding:8px 12px;flex-shrink:0}
+
+/* —— FullCalendar 关键皮肤参数（提取自 chunk-vendors 的 .fc 基础规则），套自绘网格 —— */
+.cal-fc{--fc-page-bg-color:#fff;--fc-border-color:#ddd;--fc-today-bg-color:rgba(255,220,40,.15);--fc-event-bg-color:#3788d8;--fc-event-text-color:#fff;display:flex;flex-direction:column;height:100%;font-size:1em;background:var(--fc-page-bg-color)}
+.cal-fc *,
+.cal-fc :after,
+.cal-fc :before{box-sizing:border-box}
+.cal-scrollgrid{flex:1;display:flex;flex-direction:column;min-height:0;border:1px solid #ddd;border:1px solid var(--fc-border-color)}
+.fc-col-header-cell{border-right:1px solid var(--fc-border-color);text-align:center;background:var(--fc-page-bg-color)}
+.fc-col-header-cell:last-child{border-right:none}
+.fc-col-header-cell-cushion{display:inline-block;padding:2px 4px;text-decoration:none}
+.fc-daygrid-body{flex:1;display:flex;flex-direction:column;min-height:0}
+.cal-week-row{flex:1;display:grid;grid-template-columns:repeat(7,1fr);min-height:80px;border-bottom:1px solid var(--fc-border-color)}
+.cal-week-row:last-child{border-bottom:none}
+.fc-daygrid-day{position:relative;border-right:1px solid var(--fc-border-color);cursor:pointer}
+.fc-daygrid-day:last-child{border-right:none}
+.fc-day-today{background-color:rgba(255,220,40,.15);background-color:var(--fc-today-bg-color,rgba(255,220,40,.15))}
+.fc-highlight{background:none;border:1px solid #2cacab}
+.fc-daygrid-day-frame{position:relative;min-height:100%;display:flex;flex-direction:column}
+.fc-daygrid-day-top{display:flex;flex-direction:row-reverse}
+.fc-daygrid-day-events{flex:1;margin-top:2px;padding:0 3px 2px;overflow:hidden}
+.fc-daygrid-event-harness{position:relative;margin-top:1px}
+
+/* —— 设计稿对 .fc 的覆盖规则（chunk-common 沿用，剥 [data-v]）—— */
+.fc-scroller::-webkit-scrollbar{width:6px}
+.fc .fc-highlight{background:none;border:1px solid #2cacab}
+.fc .fc-daygrid-day-number{display:flex;flex-direction:row-reverse;justify-content:flex-end;width:100%;padding:2px 2px 1px;font-size: var(--fs-md);line-height:1;text-decoration:none}
+.fc .fc-daygrid-day-number .lunar{margin-left:5px;color:#9b9b9b;font-size:inherit}/* 实现微调：覆盖 base.css 旧 .lunar 字号，农历与日期同尺寸 */
+.fc .fc-daygrid-day-number .holiday,
+.fc .fc-daygrid-day-number .work{position:absolute;top:5px;right:5px;padding:4px;font-size:16px;border-radius:50%;zoom:.6}
+.fc .fc-daygrid-day-number .holiday{color:#fff;background:var(--brand)}
+.fc .fc-daygrid-day-number .work{color:#016d6e;background:#c7e4e4}
+.fc-event-title-container{line-height:1;cursor:pointer}
+.fc-h-event .fc-event-title,
+.fc .fc-daygrid-day-bottom{font-size: var(--fs-2xs)}
+.fc .fc-col-header-cell-cushion{color:var(--brand-dark);font-weight:400;font-size: var(--fs-base);padding:8px}
+.fc .fc-daygrid-more-link{display:block}
+.fc .fc-popover{position:fixed!important;z-index:var(--z-fc-popover)!important}
+.fc .fc-popover-title{font-size: var(--fs-base)}
+.fc .fc-more-popover .fc-popover-body{padding:5px}
+.fc .fc-scrollgrid-section-sticky>*{z-index:1}
+.fc .fc-col-header-cell-cushion{font-size: var(--fs-md)}
+
+/* —— 日程事件 chip（vendors .fc-h-event/.fc-event-main/.fc-daygrid-event 参数）—— */
+.fc-event{cursor:pointer;text-decoration:none}
+.fc-daygrid-event{position:relative;white-space:nowrap;border-radius: var(--radius-xs);font-size:.85em;z-index:6;margin-top:1px}
+.fc-h-event{display:block;border:1px solid var(--ev-color,var(--fc-event-bg-color));background-color:var(--ev-color,var(--fc-event-bg-color))}
+.fc-event-main{position:relative;z-index:2;color:var(--ev-text,#fff);height:100%;padding:1px 1px 0}
+.fc-event-title{margin:.5em;padding:1px;display:inline-block;vertical-align:top;max-width:100%;overflow:hidden;font-style:normal;flex-grow:1;flex-shrink:1;min-width:0}
+.fc-day-outside .fc-daygrid-day-number{opacity:.3}
+.fc-daygrid-day-bottom{color:var(--text-1);font-size: var(--fs-2xs);margin:2px 3px 0;cursor:pointer}
+.fc-daygrid-day-bottom:hover{color:var(--brand)}
+
+
+/* ========================= 搜索（SearchView）========================= */
+.main-nav-search{position:relative;display:flex;align-items:center;justify-content:center;width:185px;height:36px;margin:0 0 8px}
+/* 搜索页单一对齐轴：标题/搜索框/结果行同左缘(容器缘,原 12px 标题内缩与 4px 行内缩已清) */
+.search-page .main-nav-search{margin:0}
+.main-nav-search__input{box-sizing:border-box;width:185px;height:36px;padding:0;padding-right:26px;padding-left:39px;font-weight:400;font-size: var(--fs-md);background-color:#f5f4f5;border:1px solid #e7e7e7;border-radius: var(--radius-sm);outline:none;opacity:1;transition:border-color var(--dur-mid) cubic-bezier(.645,.045,.355,1)}
+.main-nav-search__input::placeholder{color:var(--text-4)}
+.main-nav-search__input:focus{border-color:var(--brand)}
+.main-nav-search__icon{position:absolute;top:0;bottom:0;left:0;display:flex;align-items:center;justify-content:center;width:20px;height:20px;margin:auto 10px auto 10px}
+.main-nav-search__icon:after{display:block;width:17px;height:17px;background:url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22><circle cx=%228%22 cy=%228%22 r=%226%22 fill=%22%23ccc%22/></svg>') no-repeat 50%;background-size:contain;content:""}
+.main-nav-search__clear{position:absolute;top:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;width:20px;height:20px;margin:auto 10px auto 10px;cursor:pointer}
+/* 工具栏下拉 label 样式单源于 style-1.css 第 I 节 */
+.search-filter-el.el-select .el-input__inner{height:28px;line-height:28px}
+
+/* 实现页容器：title 行 + 结果列表滚动区 */
+.search-page{display:flex;flex-direction:column;height:100%;padding-top:10px}
+.search-page .title{padding:0}
+.result-count{color:#9b9b9b;font-size: var(--fs-sm);line-height:28px;white-space:nowrap}
+.search-page .result-list{flex:1;margin-top:10px;padding:0 0 16px;overflow-y:auto}
+.search-page .result-list.empty{overflow:hidden;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.empty--inline{height:auto;padding:40px 20px}
+
+/* 空态（TodoListEmpty 组件样式） */
+
+
+/* ============ 图表容器预占高度（防止 canvas 渲染后布局位移导致滚动回弹） ============ */
+.chart-3__title, .chart-4__title { margin-bottom:var(--space-2); font-size: var(--fs-base); font-weight:600; color:var(--text-1); }
+.chart-3__subtitle, .chart-4__subtitle { margin-bottom:var(--space-4); font-size: var(--fs-sm); color:var(--text-3); }
+.chart-3__footer, .chart-4__footer { margin-top:var(--space-3); font-size: var(--fs-sm); color:var(--text-3); }
+/* Chart.js(maintainAspectRatio:false) 自适应填满固定高容器——此前用 !important 压 canvas 高度,
+   与 Chart.js 按容器算出的位图尺寸打架,位图被压扁(用户反馈'图是扁的') */
+.chart-box { position: relative; height: 260px; }
+.chart-3__chart, .chart-4__chart, .chart-5__chart, .chart-6__chart {
+  display: block; width: 100% !important; height: 100% !important;
+}
+.single { min-height: 40px; }
+
+
+/* ============ 24 小时时间轴（番茄统计） ============ */
+.tl-card { background: var(--panel, #fff); border-radius: var(--radius-md); padding: 16px 20px; margin-top: 14px; }
+.tl-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: var(--space-3); }
+.tl-head b { font-size: var(--fs-base); color: var(--text-1); }
+.tl-sub { font-size: var(--fs-xs); color: var(--text-3); }
+.tl-rows { display: flex; flex-direction: column; gap: 6px; }
+.tl-row { display: flex; align-items: center; gap: 10px; }
+.tl-date { width: 42px; font-size: var(--fs-xs); color: var(--text-2); text-align: right; flex-shrink: 0; }
+.tl-track {
+  position: relative; flex: 1; height: 16px; border-radius: var(--radius-md);
+  background: var(--track-bg); overflow: hidden;
+}
+.tl-seg { position: absolute; top: 0; bottom: 0; border-radius: 2px; }
+/* 专注时段带:连续番茄(间隔<=10min)合并为一条圆角带,带底=休息浅色,带内实心块=专注;
+   消除"一块专注一块休息"的砖块感,hover 带体报整段摘要(块级 hover 保留单番茄明细) */
+.tl-band { position: absolute; top: 0; bottom: 0; border-radius: var(--radius-sm, 4px); background: var(--line, #c9ced6); cursor: default; }
+.tl-band .tl-seg.unit { top: 2px; bottom: 2px; border-radius: 0; background: var(--brand); box-shadow: 1px 0 0 var(--panel, #fff); } /* 带内纯品牌色直角相连(圆角会产生接缝);1px 白线仅作番茄分隔刻度 */
+/* 一个番茄=一个单元块：专注主体(品牌绿)+紧连的休息尾巴(灰)，--ff 为专注占比分割点(内联覆盖) */
+.tl-seg.unit { --ff: 80%; background: linear-gradient(to right, var(--brand) var(--ff), #c9ced6 var(--ff)); }
+.tl-seg.unit:hover { filter: brightness(.94); }
+.tl-seg.focus { background: var(--brand); }
+.tl-seg.focus:hover { background: var(--brand-dark); }
+.tl-seg.rest { background: #c9ced6; }
+/* 空行不塌缩:无记录日保持整行轨道高度(压成细线曾显突兀),仅降透明度+日期变淡让注意力给有数据的日子 */
+.tl-row--empty .tl-track { opacity: .45; }
+.tl-row--empty .tl-date { color: var(--text-4); }
+/* 悬停行显示 3 小时虚线分隔(3/6/…/21,即 12.5% 步进):竖线由 mask 切出列,虚线由纵向 repeating-gradient 画出 */
+/* 悬停虚线开关:关闭时不画(::after 仅在非 nogrid 行悬停时出现);开关本体=头部小药丸,默认开 */
+.tl-rows--nogrid .tl-track::after { content: none !important; }
+.tl-grid-toggle {
+  margin-left: auto; border: 1px solid var(--line-strong, #d8dde2); background: transparent; color: var(--text-3);
+  font-size: var(--fs-2xs, 10px); padding: 1px 8px; border-radius: var(--radius-pill); cursor: pointer; flex-shrink: 0;
+}
+.tl-grid-toggle.on { border-color: var(--brand); color: var(--brand-dark); background: var(--brand-light, #e7f7f7); }
+.tl-row:hover .tl-track::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none; z-index: 1;
+  background-image: repeating-linear-gradient(to bottom, transparent 0 2px, var(--text-3, #8a9099) 2px 4px);
+  -webkit-mask-image: repeating-linear-gradient(to right, transparent 0 calc(12.5% - 1px), #000 calc(12.5% - 1px) 12.5%);
+  mask-image: repeating-linear-gradient(to right, transparent 0 calc(12.5% - 1px), #000 calc(12.5% - 1px) 12.5%);
+}
+/* 行尾番茄指标：个数 + 计时器线性图标（AppIcon 统一风格），悬停显示专注时长 */
+.tl-min { margin-left: auto; width: 34px; justify-content: flex-end; font-size: var(--fs-xs); font-weight: 600; color: var(--text-3); flex-shrink: 0; font-variant-numeric: tabular-nums; display: inline-flex; align-items: center; gap: 3px; cursor: default; } /* 定宽:位数不同曾使各行轨道右缘参差 */
+.tl-min--ghost { visibility: hidden; } /* 空行也占位,轨道右缘全线对齐 */
+.tl-min__n { color: var(--text-1); }
+.tl-min__ico { color: var(--text-3); transition: transform var(--dur-fast); }
+.tl-min:hover .tl-min__ico { transform: scale(1.12); color: var(--brand); }
+/* 色块图例 */
+.tl-chips { display: inline-flex; align-items: center; gap: var(--space-1); font-size: var(--fs-xs); color: var(--text-3); margin-right: 6px; }
+.tl-chip { width: 10px; height: 10px; border-radius: 3px; display: inline-block; margin: 0 2px 0 8px; }
+.tl-chip--focus { background: var(--brand); }
+.tl-chip--rest { background: #c9ced6; }
+.tl-chip--idle { background: var(--track-bg, #ececef); }
+/* 时间刻度尺（行上方，0-24 每 3 小时一刻度） */
+.tl-hours { position: relative; height: 14px; margin-left: 52px; margin-right: 44px; margin-bottom: 6px; } /* 右缩=行尾指标列(34px+gap),使 24 刻度与轨道右缘对齐 */
+.tl-hour { position: absolute; transform: translateX(-50%); font-size: var(--fs-2xs); color: var(--text-4); }
+.tl-hour:first-child { transform: none; }
+.tl-hour:last-child { transform: translateX(-100%); }
+/* 段悬浮自定义 tooltip：跟随鼠标，卡片内相对定位由 fixed 实现 */
+.tl-tip {
+  position: fixed; z-index: calc(var(--z-modal, 3000) + 10); pointer-events: none;
+  background: var(--text-1, #303133); color: var(--panel, #fff);
+  font-size: var(--fs-xs); padding: 5px 9px; border-radius: var(--radius-sm);
+  white-space: nowrap; box-shadow: var(--shadow-pop, 0 4px 14px rgba(0,0,0,.18));
+}
+
+/* ============ GitHub 风格活跃热力图 ============ */
+.hm-card { overflow: hidden; }
+.hm-scroll { overflow-x: auto; padding-bottom: var(--space-1); scrollbar-width: thin; }
+.hm-grid {
+  display: grid; grid-auto-flow: row; gap: var(--space-1); width: 100%;
+  grid-template-rows: repeat(7, auto);
+}
+/* min-width:0:1fr 轨道默认不小于内容宽,整年 53 列会撑出横向滚动条(用户反馈);方形靠 aspect-ratio 保持 */
+.hm-cell { width: 100%; min-width: 0; aspect-ratio: 1 / 1; border-radius: 2.5px; display: inline-block; }
+.hm-l0 { background: var(--gray-bg); }
+.hm-l1 { background: color-mix(in srgb, var(--brand) 30%, var(--gray-bg)); }
+.hm-l2 { background: color-mix(in srgb, var(--brand) 55%, var(--gray-bg)); }
+.hm-l3 { background: color-mix(in srgb, var(--brand) 80%, var(--gray-bg)); }
+.hm-l4 { background: var(--brand); }
+.hm-legend { display: flex; align-items: center; gap: var(--space-1); margin-top: var(--space-2); font-size: var(--fs-xs); color: var(--text-3); justify-content: flex-end; }
+/* 热力图悬浮提示（项目风格深色浮层，替代原生 title）：挂页面根节点，fixed 定位在格子上方居中 */
+.hm-tip {
+  position: fixed; z-index: var(--z-pop); transform: translate(-50%, calc(-100% - 8px));
+  background: var(--text-1, #303133); color: var(--panel, #fff);
+  font-size: var(--fs-xs); line-height: 1.4; padding: 5px 10px; border-radius: var(--radius-md);
+  white-space: nowrap; pointer-events: none; box-shadow: var(--shadow-pop);
+  animation: hm-tip-in .12s ease-out;
+}
+.hm-tip::after {
+  content: ''; position: absolute; left: 50%; top: 100%; transform: translateX(-50%);
+  border: 5px solid transparent; border-top-color: var(--text-1, #303133);
+}
+html[data-theme="dark"] .hm-tip { background: #333a44; color: #e8eaed; border: 1px solid #333a44; }
+html[data-theme="dark"] .hm-tip::after { border-top-color: #333a44; }
+/* 格子贴近屏幕顶部时翻到下方（clampHmTip 切换） */
+.hm-tip--below { transform: translate(-50%, 14px); animation: hm-tip-in-below .12s ease-out; }
+.hm-tip--below::after { top: auto; bottom: 100%; border-top-color: transparent; border-bottom-color: var(--text-1, #303133); }
+html[data-theme="dark"] .hm-tip--below::after { border-top-color: transparent; border-bottom-color: #333a44; }
+@keyframes hm-tip-in { from { opacity: 0; transform: translate(-50%, calc(-100% - 4px)); } to { opacity: 1; transform: translate(-50%, calc(-100% - 8px)); } }
+@keyframes hm-tip-in-below { from { opacity: 0; transform: translate(-50%, 10px); } to { opacity: 1; transform: translate(-50%, 14px); } }
+
+
+/* ============ FullCalendar 轮子皮肤（对齐设计稿 .fc 参数） ============ */
+.cal-fc.fc { font-family: inherit; }
+.cal-fc.fc .fc-toolbar.fc-header-toolbar { display: none; }
+.cal-fc.fc .fc-col-header-cell-cushion { color: var(--brand-dark); font-size: var(--fs-md); font-weight: 600; padding: 6px 0; text-decoration: none; }
+.cal-fc.fc .fc-daygrid-day { background: var(--panel, #fff); }
+.cal-fc.fc .fc-day-today { background: rgba(255, 220, 40, .15); }
+.cal-fc.fc .fc-daygrid-day-number { color: #333; font-size: var(--fs-sm); padding: 4px 6px; text-decoration: none; }
+.cal-fc.fc .fc-day-today .fc-daygrid-day-number { color: var(--brand); font-weight: 700; }
+.cal-fc.fc .fc-daygrid-day-frame { min-height: 88px; }
+.cal-fc.fc .fc-h-event { background: var(--brand); border: none; border-radius: var(--radius-sm); }
+.cal-fc.fc .fc-h-event .fc-event-main { color: #fff; font-size: var(--fs-xs); padding: 1px 4px; }
+.cal-fc.fc .fc-event.todo-cal-event { cursor: pointer; }
+.cal-fc.fc .fc-daygrid-event { margin: 1px 2px; }
+/* 芯片单行截断:长标题不撑宽;溢出事件在格子内滚动直读(用户定稿,弃折叠+弹窗) */
+.cal-fc.fc .fc-daygrid-event .fc-event-title,
+.cal-fc.fc .fc-daygrid-event .fc-event-title-container { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cal-fc.fc .fc-daygrid-day-events { overflow-y: auto; overflow-x: hidden; max-height: 140px; scrollbar-width: thin; scrollbar-color: var(--line, #d8dde2) transparent; overscroll-behavior: contain; }
+.cal-fc.fc .fc-daygrid-day-events::-webkit-scrollbar { width: 6px; }
+.cal-fc.fc .fc-daygrid-day-events::-webkit-scrollbar-thumb { background: var(--line, #d8dde2); border-radius: 3px; }
+.cal-fc.fc .fc-daygrid-day-events::-webkit-scrollbar-track { background: transparent; }
+/* 格子右上角操作组(新建+/展开):锚定日期头行(视觉=格子右上角)。禁止给 .fc-daygrid-day 加 position:relative——
+   FC 用绝对定位 harness 排芯片,改它的包含块会在重渲染时把行高撑爆(2026-09-04 实测 1242px) */
+.fc-daygrid-day-top { position: relative; }
+.day-cell-actions {
+  position: absolute; top: 0; right: 0; z-index: 3;
+  display: flex; align-items: center; gap: 1px; opacity: 0; transition: opacity var(--dur-fast) ease;
+}
+.fc-daygrid-day:hover .day-cell-actions, .day-cell-actions:focus-within { opacity: 1; }
+.day-create-btn, .day-expand-btn {
+  width: 20px; height: 20px;
+  display: flex; align-items: center; justify-content: center;
+  border: none; border-radius: var(--radius-sm); cursor: pointer;
+  background: transparent; color: var(--text-3);
+}
+.day-create-btn:hover, .day-expand-btn:hover { background: var(--gray-bg, #f5f7f7); color: var(--brand-text, #0a6f62); }
+.day-create-btn svg, .day-expand-btn svg { display: block; }
+/* FC 原生 more-popover 禁用(moreLinkClick 返回 false 拦不住):一律走自绘 cal-more-pop */
+.cal-fc.fc .fc-more-popover { display: none !important; }
+/* "+N 更多"折叠入口:弱化成文字链,悬浮可读 */
+.cal-fc.fc .fc-daygrid-more-link,
+.cal-fc.fc .fc-more-link { color: var(--text-2); font-size: var(--fs-xs); font-weight: 500; padding: 0 4px; }
+.cal-fc.fc .fc-daygrid-more-link:hover { color: var(--brand-text, #0a6f62); background: var(--gray-bg, #f5f7f7); border-radius: var(--radius-sm); }
+/* 浮层内已完成项弱化(浮层始终全量,含被折叠的) */
+.cal-more-pop__item.todo-pop-done { opacity: .55; }
+.cal-fc.fc .fc-daygrid-day-number .todo-daycell b { font-weight: 500; }
+.todo-week { display: block; font-size: var(--fs-2xs); color: var(--text-3); line-height: 1.2; }
+.todo-lunar { font-size: var(--fs-2xs); color: var(--text-3); margin-left: 3px; }
+.todo-lunar.todo-festival { color: #f56c6c; }
+.todo-done-strike .fc-event-title { text-decoration: line-through; }
+/* 未勾选"显示已完成"：已完成淡化+删除线；勾选后（.cal-show-done）已完成恢复彩色，未完成降灰 */
+.todo-done-strike { opacity: .45; }
+.cal-page.cal-show-done .todo-done-strike { opacity: 1; }
+/* 显示已完成=容器开关:不挂 show-done 时已完成事件直接 display:none(数据常驻,防 FC 重排抖动) */
+.cal-fc.fc:not(.show-done) .fc-event.todo-done-strike { display: none; }
+/* 未完成淡化改容器级:settings 开关不再重建 events(防 FC 重排抖动,同 blur) */
+.cal-fc.fc.dim .fc-event:not(.todo-done-strike) { filter: grayscale(1); opacity: .45; }
+/* 模糊日程:容器级滤镜(开关不再触发 FC 重排,见 CalendarView events classNames 注释) */
+.cal-fc.blur .fc-event, .cal-tb.blur .fc-event, .cal-tb.blur .tl-seg, .todo-privacy { filter: blur(3px); }
+/* 事件标题超长时省略号截断，不溢出格子；单格放不下由 dayMaxEvents 折叠进 +N more */
+.cal-fc.fc .fc-event-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cal-fc.fc .fc-daygrid-event { max-width: 100%; }
+.cal-fc.fc .fc-daygrid-event-harness { pointer-events: auto; }
+/* "+N more" 弹层：贴应用风格（圆角+阴影），关闭按钮可点 */
+.cal-fc.fc .fc-more-popover { border: none; border-radius: var(--radius-lg); box-shadow: var(--shadow-pop); overflow: hidden; }
+.cal-fc.fc .fc-more-popover .fc-popover-header { background: var(--gray-bg, #f5f7f7); padding: var(--space-2) 10px; font-size: var(--fs-sm); color: var(--text-2); }
+.cal-fc.fc .fc-more-popover .fc-popover-close { cursor: pointer; opacity: .6; font-size: var(--fs-md); }
+.cal-fc.fc .fc-more-popover .fc-popover-close:hover { opacity: 1; }
+.cal-fc.fc .fc-more-popover .fc-popover-body { padding: var(--space-2) 10px; min-width: 160px; }
+.cal-fc.fc .fc-more-popover .fc-daygrid-event { margin: 3px 0; }
+
+
+/* ============ 导出工具栏 ============ */
+.stat-export-bar {
+  display: flex; gap: var(--space-2); padding: 8px 24px 0; justify-content: flex-end;
+}
+.stat-export-bar .mini {
+  display: inline-flex; align-items: center; gap: var(--space-1);
+  padding: 4px 12px; border-radius: var(--radius-md); font-size: var(--fs-sm);
+}
+.stat-export-bar .mini:hover { background: var(--brand-light); color: var(--brand); border-color: var(--brand); }
+
+/* ============ 图表卡（合并历史三层覆盖为单层，全 token 化） ============ */
+.stat-subpage .single { margin-bottom: 18px; }
+.stat-subpage .double { display: flex; gap: var(--space-4); margin-bottom: 18px; }
+.stat-subpage .chart-b { flex: 1; border-radius: var(--radius-md); padding: 18px 20px; color: #fff; }
+.stat-subpage .chart-b__title { font-size: var(--fs-md); margin-bottom: var(--space-2); }
+.stat-subpage .chart-b__content__text { font-size: 20px; font-weight: 600; line-height: 1.3; }
+.stat-subpage .chart-b__content__subcontent { display: flex; gap: var(--space-3); font-size: var(--fs-sm); margin-top: var(--space-1); }
+.stat-subpage .chart-a { border-radius: var(--radius-md); padding: 16px 18px; display: flex; align-items: center; gap: 14px; }
+.stat-subpage .chart-a__icon { width: 40px; height: 40px; }
+.stat-subpage .chart-a__content { font-size: var(--fs-md); line-height: 1.6; }
+.stat-subpage .chart-d { border-radius: var(--radius-md); padding: 18px 20px; text-align: center; }
+.stat-subpage .chart-d__count { font-size: 20px; font-weight: 600; }
+.stat-subpage .chart-d__content { font-size: var(--fs-md); margin-top: var(--space-1); }
+.stat-subpage .chart-empty {
+  min-height: 120px; display: flex; align-items: center; justify-content: center;
+  color: var(--text-3); font-size: var(--fs-md); border-radius: var(--radius-md);
+}
+
+/* 复盘叙事卡（合并 324/557 两层定义为单层，品牌顶边） */
+.review-card {
+  max-width: 785px; margin: 0 auto 18px; padding: 24px 28px 22px;
+  background: var(--panel, #fff);
+  border: 1px solid var(--line); border-radius: var(--radius-xl);
+  position: relative; overflow: hidden;
+  box-shadow: 0 4px 18px rgba(31, 56, 88, .08);
+}
+.review-card::before {
+  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 4px;
+  background: var(--brand);
+}
+.review-card__head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+.review-card__head b { font-size: var(--fs-base); letter-spacing: 1px; color: var(--text-1); }
+.review-card__tag { font-size: var(--fs-xs); color: var(--brand); background: var(--brand-light); padding: 2px 8px; border-radius: var(--radius-pill); }
+.review-card__headline {
+  margin: 0 0 14px; padding: 12px 16px;
+  background: color-mix(in srgb, var(--brand) 8%, transparent);
+  border-left: 3px solid var(--brand); border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  font-size: var(--fs-lg); font-weight: 600; line-height: 1.6; color: var(--text-1);
+}
+.review-card__list { margin: 0; padding: 0; list-style: none; }
+.review-card__list li {
+  display: flex; align-items: baseline; gap: var(--space-2);
+  padding: 6px 0; font-size: var(--fs-base); line-height: 1.65; color: var(--text-1);
+}
+.review-dot { flex-shrink: 0; width: 6px; height: 6px; border-radius: 50%; background: var(--brand); transform: translateY(-2px); }
+
+/* KPI 对比条（品牌顶线 + 差值胶囊，单层） */
+.kpi-row { display: flex; gap: 14px; max-width: 785px; margin: 0 auto 18px; }
+.kpi-tile {
+  flex: 1; padding: 14px 16px 12px; background: var(--panel, #fff);
+  border: 1px solid var(--line); border-radius: var(--radius-lg);
+}
+.kpi-tile__title { font-size: var(--fs-sm); color: var(--text-3); }
+.kpi-tile__value { margin-top: var(--space-1); font-size: 20px; font-weight: 600; color: var(--text-1); line-height: 1.2; }
+.kpi-tile__sub { margin-top: 6px; font-size: var(--fs-xs); color: var(--text-3); display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.kpi-delta { font-weight: 700; padding: 1px 8px; border-radius: var(--radius-pill); font-size: var(--fs-xs); }
+.kpi-delta.good { color: var(--ok, #1f7a55); background: color-mix(in srgb, var(--ok, #2ba471) 12%, transparent); }
+.kpi-delta.warn { color: var(--warn, #9c6009); background: color-mix(in srgb, var(--warn, #d08b1f) 14%, transparent); }
+.kpi-delta.flat { color: var(--text-3); font-weight: 400; }
+
+/* 注意力去向（分类条形） */
+.att-rows { display: flex; flex-direction: column; gap: 10px; padding: 14px 4px 8px; }
+.att-row { display: flex; align-items: center; gap: var(--space-3); }
+.att-label { flex-shrink: 0; width: 90px; font-size: var(--fs-sm); color: var(--text-2); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.att-track { flex: 1; height: 14px; background: var(--gray-bg); border-radius: var(--radius-md); overflow: hidden; }
+.att-bar { height: 100%; border-radius: var(--radius-md); background: var(--brand); transition: width var(--dur-slow) ease; }
+.att-value { flex-shrink: 0; width: 72px; font-size: var(--fs-sm); color: var(--text-3); font-variant-numeric: tabular-nums; }
+
+/* 热力图范围切换 */
+.hm-range-toggle { display: inline-flex; gap: var(--space-1); margin: 0 10px; }
+.hm-range-btn {
+  border: 1px solid var(--line); background: none; color: var(--text-3);
+  font-size: var(--fs-xs); padding: 2px 10px; border-radius: var(--radius-pill); cursor: pointer;
+}
+.hm-range-btn.on { color: var(--brand); border-color: var(--brand); background: var(--brand-light); }
+
+/* ============ 图表卡工具风统一（token 化，去海报装饰） ============ */
+.stat-subpage .chart-b { border-radius: var(--radius-md); padding: 18px 20px; }
+.stat-subpage .chart-b__title { font-size: var(--fs-md); }
+.stat-subpage .chart-b__content__text { font-size: 20px; font-weight: 600; line-height: 1.3; }
+.stat-subpage .chart-a { border-radius: var(--radius-md); padding: 16px 18px; }
+.stat-subpage .chart-a__content { font-size: var(--fs-md); }
+.stat-subpage .chart-a__icon { width: 40px; height: 40px; }
+.stat-subpage .chart-d { border-radius: var(--radius-md); }
+.stat-subpage .chart-d__count { font-size: 20px; font-weight: 600; }
+.stat-subpage .chart-empty {
+  min-height: 120px; display: flex; align-items: center; justify-content: center;
+  color: var(--text-3); font-size: var(--fs-md);
+  border-radius: var(--radius-md);
+}
+
+/* 自绘 "+N more" 弹层（替代 FC 内置弹层，根除 offsetParent 崩溃） */
+.cal-fc { position: relative; }
+.cal-more-pop {
+  position: absolute; z-index: var(--z-pop-top); width: 220px;
+  background: var(--panel, #fff); border-radius: var(--radius-lg); box-shadow: var(--shadow-pop);
+  overflow: hidden;
+}
+.cal-more-pop__head {
+  display: flex; align-items: center; justify-content: space-between;
+  background: var(--gray-bg, #f5f7f7); padding: var(--space-2) 10px; font-size: var(--fs-sm); color: var(--text-2);
+}
+.cal-more-pop__x { cursor: pointer; color: var(--text-3); font-size: var(--fs-sm); }
+.cal-more-pop__x:hover { color: var(--text-1); }
+.cal-more-pop__body { padding: 6px 8px; max-height: 200px; overflow-y: auto; }
+.cal-more-pop__item {
+  border-radius: var(--radius-sm); color: #fff; font-size: var(--fs-xs); padding: 3px 7px;
+  margin: 3px 0; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cal-more-pop__item:hover { filter: brightness(.92); }
+/* 日历单击选中待建态：虚线品牌色描边 */
+/* 顶部开关胶囊化：替代裸 checkbox */
+.chk { padding: 4px 10px; border-radius: 13px; background: var(--gray-bg, #f2f2f2); cursor: pointer; transition: all var(--dur-fast); }
+.chk:hover { color: var(--brand, #0c8172); }
+.chk input[type="checkbox"] { accent-color: var(--brand, #0c8172); width: 13px; height: 13px; margin: 0; cursor: pointer; }
+
+/* ============ 工具栏重排：左组(定位/移动) | 右组(视角/展示) ============ */
+.cal-nav-group { display: inline-flex; align-items: center; position: relative; }
+.cal-nav-group .mini { border-radius: 0; }
+.cal-nav-group .mini:first-child { border-radius: 6px 0 0 6px; }
+.cal-nav-group .mini:last-child { border-radius: 0 6px 6px 0; }
+.cal-title-btn {
+  display: inline-flex; align-items: center; gap: var(--space-1); padding: 4px 10px;
+  border: 0; background: none; cursor: pointer; border-radius: var(--radius-md); transition: all var(--dur-fast);
+}
+.cal-title-btn:hover, .cal-title-btn[aria-expanded="true"] { background: var(--gray-bg); }
+.cal-title-btn:hover .cal-title, .cal-title-btn[aria-expanded="true"] .cal-title { color: var(--brand); }
+.cal-today-btn { border: 1px solid var(--line); }
+.cal-today-btn:hover { border-color: var(--brand); color: var(--brand); }
+/* 月/周分段控件 */
+.cal-seg { display: inline-flex; margin-right: 10px; border: 1px solid var(--line); border-radius: var(--radius-md); overflow: hidden; }
+.cal-seg button {
+  border: 0; background: none; padding: 4px 14px; font-size: var(--fs-sm); color: var(--text-2); cursor: pointer;
+}
+.cal-seg button + button { border-left: 1px solid var(--line); }
+.cal-seg button.on { background: var(--brand); color: #fff; font-weight: 600; }
+.cal-seg button:not(.on):hover { background: var(--gray-bg); color: var(--text-1); }
+/* 年月直达面板 */
+/* 锚定在导航组自身下方(原先 left:251px 写死自页面左缘,侧边栏宽度/页边距变化即右漂) */
+.cal-month-pop {
+  position: absolute; top: calc(100% + 4px); left: 0; z-index: var(--z-pop); width: 236px;
+  background: var(--panel, #fff); border-radius: var(--radius-lg); box-shadow: var(--shadow-pop); overflow: hidden;
+}
+.cal-month-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; padding: 8px; }
+.cal-month-cell {
+  border: 0; background: none; border-radius: var(--radius-md); padding: 8px 0; font-size: var(--fs-sm);
+  color: var(--text-1); cursor: pointer;
+}
+.cal-month-cell:hover { background: var(--gray-bg); }
+.cal-month-cell.sel { background: var(--brand); color: #fff; font-weight: 600; }
+.cal-month-cell.today { color: var(--brand); font-weight: 600; }
+.cal-month-cell.sel.today { color: #fff; }
+
+/* 工具栏单行化：窄容器不再把开关挤到第二行(会被误读为弹层)，间距压缩保证 ~490px 下单行 */
+.cal-toolbar { flex-wrap: nowrap; gap: 6px; white-space: nowrap; }
+.cal-toolbar .chk { white-space: nowrap; }
+.cal-seg button { padding: 4px 10px; }
+.cal-title-btn { padding: 4px 8px; }
+
+/* 热力图自适应尺寸：半年大格填满卡片、整年紧凑，整体居中消除右侧空白 */
+.hm-grid--half .hm-cell { border-radius: var(--radius-sm); }
+.hm-grid--year .hm-cell { border-radius: var(--radius-xs); }
+/* 极窄窗口兜底：列多时允许横向滚动，格子保持最小可辨识尺寸 */
+.hm-scroll { scrollbar-width: thin; }
+
+/* ============ 分享卡片（固定浅色渲染，与主题无关） ============ */
+.share-style-tabs { display: flex; gap: 6px; margin-bottom: 14px; }
+.share-dialog__foot { display: flex; justify-content: flex-end; gap: var(--space-2); }
+.share-save { background: var(--brand); color: #fff; border-color: var(--brand); }
+.share-save:hover { background: var(--brand-dark, #3b4bc4); color: #fff; }
+.sc { border-radius: var(--radius-xl); padding: 30px 32px; color: #fff; overflow: hidden; }
+.sc-brand { font-size: var(--fs-sm); letter-spacing: 2px; opacity: .75; }
+.sc-period { font-size: var(--fs-sm); margin-top: var(--space-1); opacity: .85; }
+.sc-headline { font-size: 20px; font-weight: 800; line-height: 1.55; margin: 16px 0 12px; }
+.sc-list { margin: 0; padding: 0; list-style: none; }
+.sc-list li { font-size: var(--fs-md); line-height: 1.8; opacity: .92; padding-left: 14px; position: relative; }
+.sc-list li::before { content: ''; position: absolute; left: 0; top: .8em; width: 5px; height: 5px; border-radius: 50%; background: rgba(255, 255, 255, .8); }
+.sc-foot { margin-top: var(--space-5); font-size: var(--fs-xs); opacity: .6; }
+.sc-narrative { background: var(--brand); min-height: 260px; }
+.sc-data { background: #23324f; min-height: 220px; }
+.sc-kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 18px; }
+.sc-kpi { background: rgba(255, 255, 255, .09); border-radius: var(--radius-lg); padding: 14px 16px; }
+.sc-kpi__v { font-size: 24px; font-weight: 800; }
+.sc-kpi__t { font-size: var(--fs-xs); opacity: .75; margin-top: 3px; }
+.sc-mini { background: #17191e; min-height: 170px; display: flex; flex-direction: column; }
+.sc-mini .sc-headline { flex: 1; }
+.sc-mini__meta { font-size: var(--fs-sm); opacity: .7; }
+
+/* ============ 复盘页改版二：视图页签 + 周期药丸 + 质感升级（去 emoji，SVG 图标） ============ */
+.stat-view-tabs {
+  display: inline-flex; gap: var(--space-1); padding: 3px;
+  background: var(--gray-bg); border-radius: var(--radius-pill); margin-right: auto;
+}
+.stat-view-tab {
+  border: 0; background: none; color: var(--text-2); font-size: var(--fs-sm);
+  padding: 5px 18px; border-radius: var(--radius-pill); cursor: pointer;
+  transition: color var(--dur-fast), background-color var(--dur-fast);
+}
+.stat-view-tab.on { background: var(--panel, #fff); color: var(--brand-text); font-weight: 600; box-shadow: 0 1px 4px rgba(31, 56, 88, .12); }
+.stat-view-tab:not(.on):hover { color: var(--text-1); }
+
+/* 周期行对齐内容线：药丸靠左接齐各节标题,日期范围推到内容线右端(用户反馈居中悬浮与上下脱节) */
+.stat-period-pills { display: flex; align-items: center; gap: 6px; margin: 0 auto 20px; flex-wrap: wrap; } /* 药丸为独立控件，外缘与卡片轴线对齐（696/1481），不再走旧内容线缩进（2026-08-31 用户确认） */
+.stat-period-pills .stat-period-range { margin-left: auto; font-size: var(--fs-sm); color: var(--text-3); cursor: pointer; padding: 2px 6px; border-radius: var(--radius-sm, 4px); transition: color var(--dur-fast), background var(--dur-fast); }
+.stat-period-pills .stat-period-range:hover { color: var(--brand); background: var(--hover-bg, rgba(127,140,153,.1)); }
+.stat-period-pills .stat-period-range.custom { color: var(--brand); font-weight: 600; }
+
+/* 自定义日期区间浮层（2026-08-31 用户定稿：点日期标签直接弹出，不展开成行） */
+.stat-custom-range { display: flex; flex-direction: column; gap: 10px; }
+.stat-custom-range__actions { display: flex; align-items: center; gap: 10px; }
+.stat-custom-warn { font-size: var(--fs-xs, 11px); color: var(--warn, #d08b1f); }
+.stat-period-pill {
+  border: 1px solid var(--line); background: var(--panel, #fff); color: var(--text-2);
+  font-size: var(--fs-sm); padding: 6px 16px; border-radius: var(--radius-pill); cursor: pointer;
+  transition: color var(--dur-fast), border-color var(--dur-fast), background-color var(--dur-fast);
+}
+.stat-period-pill:hover { color: var(--brand); border-color: var(--brand); }
+.stat-period-pill.on { color: #fff; background: var(--brand-text); border-color: var(--brand-text); font-weight: 600; }
+/* 跨月淡显(a11y):FC 自身的 other-month 灰 #c2c2c2/#d3d5d7 对比度 1.5 不达标,压到 text-3
+   须连 FC 挂色的宿主 A.fc-daygrid-day-number 一起压(axe 对比度按该宿主编造,只改内层不认账) */
+.cal-fc.fc .fc-day-other .fc-daygrid-day-number,
+.cal-fc.fc .fc-day-other .todo-daycell b,
+.cal-fc.fc .fc-day-other .todo-week,
+.cal-fc.fc .fc-day-other .todo-lunar { color: var(--text-3, #6d7278); }
+/* FC 自身把 other-month 的日期头压到 opacity .3(渲染合成后≈#d3d5d7,1.47:1)——颜色调多深都会被
+   这层透明度糊掉,必须摘掉透明度、淡显只交给上面的灰阶颜色承担 */
+.cal-fc.fc .fc-day-other .fc-daygrid-day-top { opacity: 1; }
+/* 今天格奶油底(#fffadf)上的品牌数字改用可读变体 */
+.cal-fc.fc .fc-day-today .todo-daycell b { color: var(--brand-text, #0a6f62); }
+/* 静态数字禁颜色过渡:否则 axe 采样会撞上 .3s 过渡中间帧(测得假低对比) */
+.cal-fc.fc .todo-daycell b,
+.cal-fc.fc .todo-daycell .todo-week,
+.cal-fc.fc .todo-daycell .todo-lunar { transition: none; }
+
+/* 叙事卡质感：白底 + 品牌渐变顶边 + 数字强调 */
+.review-card {
+  background: var(--panel, #fff); border: 1px solid var(--line); border-radius: var(--radius-xl);
+  padding: 26px 30px 24px; position: relative; overflow: hidden;
+  box-shadow: 0 4px 18px rgba(31, 56, 88, .08);
+}
+.review-card::before {
+  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 4px;
+  background: var(--brand);
+}
+.review-card__head b { font-size: var(--fs-base); letter-spacing: 1px; }
+.review-card__headline { font-size: 24px; font-weight: 800; margin: 14px 0 16px; letter-spacing: .3px; }
+.review-card__list li { font-size: var(--fs-base); padding: 7px 0; }
+.review-card__advice { margin-top: 18px; }
+.review-advice-chip {
+  background: color-mix(in srgb, var(--brand) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--brand) 25%, transparent);
+  border-radius: var(--radius-md); padding: 9px 14px; font-size: var(--fs-md);
+}
+
+/* 统一卡片语言（2026-08-31 用户反馈"有的有灰底有的没有"）：复盘页所有块共用同一条左缘轴线——
+   KPI 四格本身是卡，去掉 20px 内容线缩进，外缘与 tl-card 对齐；
+   图表卡(折线/柱状 canvas 类)上同款面板底+16/20 内边距，内容仍落在同一条内容线上；彩色整卡(chart-a/d/h)属卡片层不在此列 */
+.stat-subpage .chart-3.single, .stat-subpage .chart-4.single,
+.stat-subpage .chart-5.single, .stat-subpage .chart-6.single {
+  background: var(--panel, #fff); border-radius: var(--radius-md); padding: 16px 20px;
+}
+
+/* 徽章图标（内联 SVG 跟随文字颜色） */
+.ach-badge--on { display: inline-flex; }
+.ach-badge__icon { display: inline-flex; align-items: center; color: var(--brand); }
+.ach-badge--next .ach-badge__icon { color: var(--text-3); }
+.ach-badge--on .ach-badge__icon { color: #b85c00; }
+
+/* 周期之最 */
+.best-row { display: flex; gap: 14px; padding: 14px 2px 8px; }
+.best-item { flex: 1; padding: 14px 18px; background: var(--gray-bg); border-radius: var(--radius-md); }
+.best-item__title { font-size: var(--fs-sm); color: var(--text-3); }
+.best-item__value { font-size: 16px; font-weight: 600; color: var(--text-1); margin-top: var(--space-1); }
+.best-item__sub { font-size: var(--fs-xs); color: var(--text-3); margin-top: 3px; }
+
+/* 成就总览大数字 */
+.ach-totals { display: flex; gap: 14px; padding: 16px 2px 6px; }
+.ach-total { flex: 1; text-align: center; padding: 16px 10px; background: linear-gradient(160deg, rgba(15, 157, 143, .07), rgba(43, 179, 163, .06)); border-radius: var(--radius-md); }
+.ach-total__v { font-size: 18px; font-weight: 600; color: var(--brand); line-height: 1.2; }
+.ach-total__u { font-size: var(--fs-md); font-weight: 600; margin-left: 2px; }
+.ach-total__t { font-size: var(--fs-sm); color: var(--text-3); margin-top: var(--space-1); }
+
+
+.stat-hero__headline {
+  margin-top: 14px; padding: 12px 16px;
+  background: linear-gradient(135deg, var(--brand-light, #eef1fe), transparent);
+  border-left: 3px solid var(--brand); border-radius: 0 8px 8px 0;
+  font-size: var(--fs-lg); font-weight: 600; line-height: 1.6; color: var(--text-1);
+}
+
+/* 复盘卡 headline */
+.stat-hero__headline {
+  padding: 12px 16px; margin-bottom: var(--space-3);
+  background: linear-gradient(135deg, var(--brand-light, #eef1fe), transparent);
+  border-left: 3px solid var(--brand); border-radius: 0 8px 8px 0;
+  font-size: var(--fs-lg); font-weight: 600; line-height: 1.6; color: var(--text-1);
+}
+
+/* 图例色块保持固定小尺寸（.hm-cell 现为自适应网格格，图例不随行伸缩） */
+.hm-legend .hm-cell { width: 12px; height: 12px; flex-shrink: 0; }
+
+/* 成就系统 v2：每族一张进度卡（当前值/下一级/进度条/已获得数） */
+.ach-fams { display: flex; flex-direction: column; gap: 10px; }
+.ach-fam { display: flex; align-items: center; gap: var(--space-3); padding: 10px 14px; border: 1px solid var(--line, #e4e7ed); border-radius: var(--radius-md, 10px); }
+.ach-fam--max { border-color: rgba(46, 158, 68, .4); }
+.ach-fam__icon { color: var(--brand); flex-shrink: 0; display: flex; }
+.ach-fam--max .ach-fam__icon { color: var(--ok, #2e9e44); }
+.ach-fam__info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.ach-fam__row1 { display: flex; align-items: baseline; gap: var(--space-2); }
+.ach-fam__name { font-size: var(--fs-sm, 13px); font-weight: 600; color: var(--text-1, #333); }
+.ach-fam__lv { font-size: var(--fs-2xs, 11px); color: var(--brand); font-weight: 600; }
+.ach-fam__lv--max { color: var(--ok, #2e9e44); }
+.ach-fam__num { font-size: var(--fs-xs, 12px); color: var(--text-3, #6d7278); }
+.ach-fam__cur { font-size: var(--fs-lg); font-weight: 700; color: var(--text-1, #333); font-variant-numeric: tabular-nums; }
+.ach-fam__badges { flex-shrink: 0; font-size: var(--fs-2xs, 11px); color: var(--ok, #2e9e44); font-weight: 600; }

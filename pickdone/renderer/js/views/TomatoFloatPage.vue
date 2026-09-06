@@ -1,0 +1,369 @@
+<template>
+
+  <div class="floating" @pointerdown="startDrag" @pointerup="stopDrag" @pointercancel="stopDrag" @lostpointercapture="stopDrag" @dblclick="onCardDblClick">
+    <div class="tomato"
+         :class="{'tomato--work': working, 'tomato--rest': resting, 'tomato--abandoning': abandoning,
+                  'tomato--expand-menu': menuOpen, 'tomato--expand-noise': noiseOpen}">
+      <div class="tomato__info">
+        <div v-if="abandoning && working" class="tomato__giveup-label">{{ phaseText }}</div>
+        <div class="tomato__time" :class="{'tomato__time--giveup': abandoning}">{{displayClock}}<small v-if="!abandoning">{{phaseText}}</small></div>
+        <div v-if="st && st.attachTodo" class="tomato__task" :title="st.attachTodo.taskContent">{{ $t('statsB.TomatoFloatPage.attachLabel') }}<b>{{ st.attachTodo.taskContent }}</b>
+          <button type="button" class="tomato__task-x close-x close-x--sm" :title="$t('statsB.TomatoFloatPage.detachTitle')" :aria-label="$t('statsB.TomatoFloatPage.detachTitle')"
+                  @pointerdown.stop @click.stop="cancelAttach"></button>
+        </div>
+        <div v-else class="tomato__task">{{ $t('statsB.TomatoFloatPage.attachLabel') }}<b class="tomato__task-none">{{ $t('statsB.TomatoFloatPage.noAttach') }}</b></div>
+        <div class="tomato__beads" :aria-label="$t('statsB.TomatoFloatPage.beadsAria')">
+          <i v-for="k in beadsTotal" :key="k" :class="{done: k <= beadsDone}"></i>
+        </div>
+      </div>
+
+      <div class="tomato__corner">
+        <button type="button" class="corner-btn" :title="$t('statsP.TomatoFloatPage.titleMin')" @click="minimize"><i class="btn-min"></i></button>
+        <button type="button" class="corner-btn corner-btn--muted" :title="abandoning ? $t('statsB.TomatoFloatPage.close') : $t('statsP.TomatoFloatPage.titleReset')" @click="abandoning ? cancelAbandon() : reset()"><i class="btn-close"></i></button>
+        <button type="button" class="corner-btn" :class="{'corner-btn--on': menuOpen, 'corner-btn--off': abandoning}"
+                :title="$t('statsP.TomatoFloatPage.titleMenu')"
+                :aria-expanded="menuOpen ? 'true' : 'false'"
+                @click="toggleMenu"><i class="btn-dots"></i></button>
+        <button type="button" class="corner-btn corner-btn--note" :class="{'corner-btn--on': noiseOpen}"
+                :title="$t('statsB.TomatoFloatPage.noiseSection')"
+                :aria-expanded="noiseOpen ? 'true' : 'false'"
+                @click="toggleNoisePanel"><i class="btn-note"></i></button>
+      </div>
+      <!-- White noise selector: same expansion language as the ⋮ menu (card growth + glass panel fill + tf-pop symmetric fade-out) -->
+      <transition name="tf-pop">
+        <div v-if="noiseOpen" class="tf-noise" @pointerdown.stop>
+          <div class="tf-noise__head">{{ $t('statsB.TomatoFloatPage.noiseSection') }}</div>
+        <div class="tf-noise__list">
+          <button v-for="c in noiseChips" :key="c.id || 'none'" type="button"
+                  class="tf-noise__item" :class="{on: noiseCurrent === c.id}"
+                  :title="c.label" @click="pickNoise(c.id)">
+            <span class="tf-noise__name">{{ c.label }}</span>
+            <i v-if="noiseCurrent === c.id" class="tf-noise__tick">✓</i>
+          </button>
+        </div>
+        </div>
+      </transition>
+
+      <!-- Ring knob: the only progress element; start / abandon confirm -->
+      <div class="tomato__knob" role="button" tabindex="0"
+           :title="working ? $t('statsE.TomatoBar.giveUpFocusBtn') : (resting ? $t('statsE.TomatoBar.giveUpBreakBtn') : $t('statsP.TomatoFloatPage.titleStart'))"
+           @click="btnMain" @keydown.enter.prevent="btnMain">
+        <svg viewBox="0 0 36 36" aria-hidden="true">
+          <circle class="tomato__ring-bg" cx="18" cy="18" r="16" pathLength="100"/>
+          <circle class="tomato__ring-fg" cx="18" cy="18" r="16" pathLength="100" :stroke-dasharray="ringPct + ' 100'"/>
+        </svg>
+        <span class="tomato__knob-icon">{{knobIcon}}</span>
+      </div>
+
+      <!-- Rest badge: pops out from the left of the ring -->
+      <div v-if="resting" class="tomato__badge">{{ $t('statsB.TomatoFloatPage.restBadge', { n: (st.restTime || 5) }) }}</div>
+
+      <!-- ⋮ task menu: picking one of today's todos attaches it (no auto-start); the transition handles symmetric fade-out (entry is handled by card growth + tt-fade-in) -->
+      <transition name="tf-pop">
+        <div v-if="menuOpen" class="tf-menu" @pointerdown.stop>
+        <div class="tf-menu__head">
+          <span class="tf-menu__title">{{ $t('statsB.TomatoFloatPage.menuTitle') }}</span>
+          <button type="button" class="tf-menu__x close-x close-x--sm" :aria-label="$t('statsB.TomatoFloatPage.close')" @click="closeMenu"></button>
+        </div>
+        <div class="tf-menu__list" role="listbox" :aria-label="$t('statsB.TomatoFloatPage.menuTitle')">
+          <button v-for="t in tasks" :key="t.taskId" type="button" class="tf-menu__item"
+                  :class="{'tf-menu__item--on': st && st.attachTodo && st.attachTodo.taskId === t.taskId}"
+                  role="option" :aria-selected="st && st.attachTodo && st.attachTodo.taskId === t.taskId ? 'true' : 'false'"
+                  :title="t.taskContent" @click="pickTask(t.taskId)">
+            <span class="tf-menu__item-text">{{ t.taskContent }}</span>
+            <i v-if="st && st.attachTodo && st.attachTodo.taskId === t.taskId" class="tf-menu__tick">✓</i>
+          </button>
+          <div v-if="!tasks.length" class="tf-menu__empty">{{ $t('statsB.TomatoFloatPage.menuEmpty') }}</div>
+        </div>
+        <button type="button" class="tf-menu__bare" @click="footerAction">{{ $t('statsB.TomatoFloatPage.menuClear') }}</button>
+        </div>
+      </transition>
+
+      <!-- Abandon confirm: stable no-reason-input version (user-finalized 2026-09-01) — a question + give-up/continue buttons, top-right button retained -->
+      <transition name="tf-pop">
+        <div v-if="abandoning" class="tf-abandon" @pointerdown.stop>
+          <div class="tf-abandon__q">{{ working ? $t('statsB.TomatoFloatPage.giveUpFocusTitle') : $t('statsB.TomatoFloatPage.giveUpRestTitle') }}</div>
+          <div class="tf-abandon__actions">
+            <button type="button" class="mini danger" @click="confirmAbandon">{{ $t('statsB.TomatoFloatPage.giveUp') }}</button>
+            <button type="button" class="mini primary" @click="cancelAbandon">{{ $t('statsB.TomatoFloatPage.continueBtn') }}</button>
+          </div>
+        </div>
+      </transition>
+    </div>
+  </div>
+</template>
+
+<script lang="ts">
+/** Standalone pomodoro float window page — final form (finalized 2026-08-31: "ultra-light gray outline + ring knob"):
+ *  Pure white card face (interior never changes color by phase) + 1px ultra-light gray outline; the only progress element = the ring knob at bottom-right
+ *  (arc = remaining ratio, cyan for focus / orange for rest, ring center ▶/❚❚, click = start / abandon confirm); large time digits + small phase label,
+ *  attached task row (✕ to detach), today's pomodoro beads (settings.dailyTomatoTarget is the total).
+ *  No white flash on completion (user-finalized); during rest the badge pops out from the left of the ring.
+ *  Top-right mini buttons: minimize / close (abandon + reset) / ⋮ task menu (picking a task only attaches it without starting; can rebind at any phase).
+ *  The ⋮ menu and abandon dialog share the "temporarily enlarged window" mechanism; the browser debug host uses widget-preview (class-name enlargement).
+ *  Note: never pop a native dialog on a transparent frameless window — Windows will paint a system title bar onto the host window. */
+import { formatMMSS } from '../utils/tomatoShared.js'
+import { NOISES } from '../utils/mediaRegistry.js'
+
+/** The browser debug host shim's todoAPI carries a version stamp; the real preload does not */
+function isPreviewHost () {
+  return !window.todoAPI || window.todoAPI.version === '0.1.0-browser-shim'
+}
+
+export default {
+  name: 'TomatoFloatPage',
+  data () {
+    return {
+      st: this.read(),
+      remaining: null as any,
+      abandoning: false,
+      abandonReason: '',
+      menuOpen: false,
+      noiseOpen: false,
+      preview: isPreviewHost()
+    }
+  },
+  watch: {
+    menuOpen () { this.syncPanel() },
+    noiseOpen () { this.syncPanel() },
+    abandoning () { this.syncPanel(); setTimeout(() => this.flushGhost(), 260) } // erase after the tf-pop 0.18s transition finishes
+  },
+  computed: {
+    working () { return !!(this.st && this.st.status === 'startTomatoTime') },
+    resting () { return !!(this.st && this.st.status === 'startRestTime') },
+    clock () {
+      if (this.remaining == null) return '--:--'
+      return formatMMSS(this.remaining)
+    },
+    knobIcon () { return this.working ? '❚❚' : '▶' },
+    focusedMinText () {
+      const s = this.st
+      if (!this.working || !s || !s.startedAt) return '0'
+      return String(Math.max(0, Math.floor((Date.now() - s.startedAt) / 60000)))
+    },
+    /* During abandon confirm: another presentation of the same info — the big digits switch
+       from countdown to a forward-counting "focused for", showing the user's decision
+       quantity (this focus session) as live data instead of repeating it in static small text */
+    displayClock () {
+      if (this.abandoning && this.working && this.st && this.st.startedAt) {
+        return formatMMSS(Math.max(0, Math.floor((this.now - this.st.startedAt) / 1000)))
+      }
+      return this.clock
+    },
+    phaseText () {
+      if (this.abandoning && this.working) return this.$t('statsB.TomatoFloatPage.focusMinShort', { n: this.focusedMinText })
+      if (this.working) return this.$t('statsP.TomatoFloatPage.phaseFocus')
+      if (this.resting) return this.$t('statsP.TomatoFloatPage.phaseRest')
+      return this.$t('statsP.TomatoFloatPage.phaseReady')
+    },
+    /* Ring arc remaining ratio 0-100 (ready = full ring); pathLength=100 draws directly by percentage */
+    ringPct () {
+      const s = this.st || {}
+      if (this.working) {
+        const total = (s.tomatoTime || 25) * 60
+        return Math.max(0, Math.min(100, this.remaining / total * 100))
+      }
+      if (this.resting) {
+        const total = (s.restTime || 5) * 60
+        return Math.max(0, Math.min(100, this.remaining / total * 100))
+      }
+      return 100
+    },
+    /* Ready = menu footer is "start now"; running = footer is "clear attachment" */
+    canPickTask () { return !!(this.st && this.st.status === 'default') },
+    /* Today's pomodoro beads: done = completed today, total = daily target (capped 8–12 to prevent overflow) */
+    beadsDone () { return Math.min(this.st ? (this.st.todayTomatoCount || 0) : 0, this.beadsTotal) },
+    beadsTotal () {
+      const target = (this.$store.state.settings && this.$store.state.settings.dailyTomatoTarget) || 8
+      return Math.min(Math.max(Number(target) || 8, 1), 12)
+    },
+    attachName () { return (this.st && this.st.attachTodo) ? this.st.attachTodo.taskContent : '' },
+    /* White noise sound list: first item = no playback (''), shared with the main window's settings.whiteNoiseAudio */
+    noiseChips () {
+      return [{ id: '', label: this.$t('statsB.TomatoFloatPage.noiseNone') }]
+        .concat(NOISES.map(n => ({ id: n.id, label: this.$t(n.labelKey) })))
+    },
+    noiseCurrent () { return (this.$store.state.settings.whiteNoiseAudio || '') },
+    /* Today's todo candidates: same criteria as the main window's tomato bar attachCandidates; computed as fallback when views aren't ready */
+    tasks () {
+      const root = this.$store.state.todo || {}
+      let list = (root.views && root.views.todayTodoList) || []
+      if (!list.length) {
+        const today = window.dayjs ? +window.dayjs().format('YYYYMMDD') : 0
+        list = (root.todoList || []).filter(t => t && !t.delete && t.dayStart === today)
+      }
+      return list.filter(t => t && !t.complete).slice(0, 30)
+    }
+  },
+  methods: {
+    read () { return this.$store.state.tomato },
+    refresh () {
+      this.st = this.read()
+      const s = this.st
+      let remain = (s.tomatoTime || 25) * 60
+      if ((s.status === 'startTomatoTime' || s.status === 'startRestTime') && s.startedAt) {
+        const total = (s.status === 'startRestTime' ? s.restTime : s.tomatoTime) * 60
+        remain = Math.max(0, total - Math.max(0, Math.floor((Date.now() - s.startedAt) / 1000)))
+      }
+      this.remaining = remain
+      // If the dialog is open but focus has already ended elsewhere (finished/ended elsewhere), auto-collapse — otherwise title and body desync
+      if (this.abandoning && s.status !== 'startTomatoTime') this.abandoning = false
+    },
+    /* Window height decision log (second pass, 2026-09-02): constant 240×320; expanding/collapsing the ⋮ menu / ♪ noise / abandon confirm
+       are all pure CSS animations inside the window (GPU-composited = buttery), the OS never resizes. Idle transparent empty areas are
+       handled by main-process polled click-through (click-through whenever the cursor is outside interactive areas, never blocking the desktop);
+       the DWM ghost title is cut off at the root by clearing the window title.
+       (The content-fit approach — 86 idle / 320 expanded — was rejected: every expand/collapse needs an OS-level setBounds,
+       the fade-out gets hard-clipped and races the CSS animation, losing all smoothness — user decided to return to constant height.)
+       syncPanel only reports "an expandable layer exists" so the hit area extends to the full window. */
+    syncPanel () {
+      if (this.preview) return
+      if (!window.todoAPI || !window.todoAPI.tomatoFloatPanel) return
+      window.todoAPI.tomatoFloatPanel(!!(this.menuOpen || this.noiseOpen))
+    },
+    /* Abandon layer open/close = full-window recomposite, which brings DWM right-angle rectangle ghost repaints
+       (confirmed by user screenshots; even after roundedCorners:false removed the native right-angle layer,
+       residue may remain) — wipe once in place after the transition ends (most reliable erasure method tested in this project) */
+    flushGhost () {
+      if (this.preview) return
+      if (window.todoAPI && window.todoAPI.flushTomatoFloat) window.todoAPI.flushTomatoFloat()
+    },
+    btnMain () {
+      const s = this.st
+      if (!s) return
+      if (s.status === 'default') { this.$store.dispatch('tomato/startFocus'); return }
+      // Click while running/resting = abandon confirm (no pause for the pomodoro — user-finalized)
+      this.reset()
+    },
+    reset () {
+      const s = this.st
+      if (!s) return
+      if (s.status === 'default') { this.persist({ status: 'default', startedAt: 0, remainSec: (s.tomatoTime || 25) * 60 }); return }
+      // Abandoning during rest shows no confirm (user-finalized): nothing is logged, no cost, return straight to ready; the confirm dialog is only for focus
+      if (s.status === 'startRestTime') { this.$store.dispatch('tomato/giveUp', { record: false }); return }
+      this.abandonReason = ''
+      this.abandoning = true
+    },
+    persist (patch) { this.$store.commit('tomato/patch', patch); this.st = this.$store.state.tomato },
+    minimize () { if (window.todoAPI) window.todoAPI.hideTomatoFloat() },
+    confirmAbandon () {
+      this.$store.dispatch('tomato/giveUp', { record: this.working, reason: this.abandonReason })
+      this.abandoning = false
+    },
+    cancelAbandon () {
+      this.abandoning = false
+    },
+    /* ⋮ task menu: openable at any phase (running = switch attachment); mutually exclusive with the ♪ noise panel */
+    toggleMenu () {
+      if (this.abandoning) return
+      this.menuOpen = !this.menuOpen
+      if (this.menuOpen) this.noiseOpen = false
+    },
+    /* White noise selector bar: never expands during abandon confirm (avoid stacked states), otherwise openable anytime; mutually exclusive with the task menu */
+    toggleNoisePanel () {
+      if (this.abandoning) return
+      this.noiseOpen = !this.noiseOpen
+      if (this.noiseOpen) this.menuOpen = false
+    },
+    closeMenu () {
+      this.menuOpen = false
+    },
+    /* Picked task: attach only, never start (starting is up to the user via the main knob) */
+    pickTask (taskId) {
+      this.$store.dispatch('tomato/attach', taskId)
+      this.menuOpen = false
+    },
+    /* White noise switch: only writes the sound choice; play/stop is followed automatically by the global dispatcher per focus state; collapse back to the card on selection */
+    pickNoise (id) {
+      // Use the action, not the mutation: only the update action calls todoAPI.updateSettings → config.json; the original mutation keeps the sound choice out of the recovery channel
+      this.$store.dispatch('settings/update', { whiteNoiseAudio: id })
+      this.noiseOpen = false
+    },
+    cancelAttach () {
+      this.$store.dispatch('tomato/attach', null)
+    },
+    footerAction () {
+      /* The footer button is always "detach": only clears the selection, never binds a start (focus belongs solely to the ring knob) */
+      this.cancelAttach()
+      this.menuOpen = false
+    },
+    /* Whole-card drag — left button only, excluding button area/menu/dialog; exclude first, then setPointerCapture
+       (capture redirects subsequent clicks to the captured element, so buttons would never receive the click) */
+    startDrag (e) {
+      if (this._dragging) this.stopDrag()
+      if (e.button !== 0) return
+      const t = e.target
+      if (this._isCardInteractive(t)) return
+      this._dragging = true
+      this._dragPointerId = e.pointerId
+      this._dragTarget = e.currentTarget
+      if (this._dragTarget.setPointerCapture) {
+        try { this._dragTarget.setPointerCapture(this._dragPointerId) } catch (err) { /* already released, etc. */ }
+      }
+      if (window.todoAPI) window.todoAPI.startTomatoFloatDrag()
+      e.preventDefault()
+    },
+    /* Interactive areas on the card (buttons/menu/dialog) — one shared exclusion list for drag and double-click */
+    _isCardInteractive (t) {
+      return !!(t && t.closest && (t.closest('.tomato__corner') || t.closest('.tf-menu') || t.closest('.tomato__knob') || t.closest('.tomato__task-x') || t.closest('.tf-abandon') || t.closest('.tf-noise')))
+    },
+    /* Double-click empty card area = summon main window (added 2026-09-02): the float window is non-activatable (focusable:false),
+       summoning goes through the main process showMainOrLock (covering lock-screen state redirect to the lock window,
+       and all branches for rebuilding a destroyed main window) */
+    onCardDblClick (e) {
+      const t = e.target
+      if (this._isCardInteractive(t)) return
+      if (window.todoAPI && window.todoAPI.showMainFromFloat) window.todoAPI.showMainFromFloat()
+    },
+    stopDrag (e) {
+      if (!this._dragging) return
+      if (e && e.pointerId != null && e.pointerId !== this._dragPointerId) return
+      this._dragging = false
+      const t = this._dragTarget
+      if (t && t.hasPointerCapture && t.hasPointerCapture(this._dragPointerId)) t.releasePointerCapture(this._dragPointerId)
+      this._dragPointerId = null
+      this._dragTarget = null
+      if (window.todoAPI) window.todoAPI.stopTomatoFloatDrag()
+    }
+  },
+  mounted () {
+    if (this.preview) {
+      document.documentElement.classList.add('widget-preview')
+    } else {
+      document.documentElement.classList.add('widget-transparent')
+      // The window title gets overridden by document.title (BrowserWindow's title:'' is only the pre-load default),
+      // and that title text is exactly what DWM ghost repaints draw — the float page must clear it itself to cut it off at the root (2026-09-02)
+      document.title = ''
+      if (window.todoAPI) window.todoAPI.setTomatoFloatBounds()
+    }
+    this.refresh()
+    this._onStorage = () => this.refresh()
+    window.addEventListener('storage', this._onStorage)
+    this._onKey = e => {
+      if (e.key !== 'Escape') return
+      if (this.menuOpen) this.closeMenu()
+      this.noiseOpen = false
+    }
+    window.addEventListener('keydown', this._onKey)
+    this._iv = setInterval(() => this.refresh(), 500)
+    // Route enforcement: the float window may only stay on __tomato-float (abnormal navigation would render the whole app in the tiny window)
+    this._routeGuard = () => {
+      if (this.$route.name !== '__tomato-float') {
+        this.$router.push({ name: '__tomato-float' }).catch(() => {})
+      }
+    }
+    this._unAfterEach = this.$router.afterEach(this._routeGuard)
+    this._routeGuard()
+  },
+  beforeUnmount () {
+    clearInterval(this._iv)
+    if (this._onStorage) window.removeEventListener('storage', this._onStorage)
+    if (this._onKey) window.removeEventListener('keydown', this._onKey)
+    if (this._unAfterEach) this._unAfterEach()
+    this.stopDrag()
+    document.documentElement.classList.remove('widget-transparent')
+    document.documentElement.classList.remove('widget-preview')
+  },
+
+}
+</script>

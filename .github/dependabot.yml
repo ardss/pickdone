@@ -1,0 +1,15 @@
+# Dependency updates: weekly npm + Actions; security patches bypass grouping waits
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /pickdone
+    schedule:
+      interval: weekly
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+    open-pull-requests-limit: 5
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

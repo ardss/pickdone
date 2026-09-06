@@ -1,0 +1,147 @@
+{
+  "pass": 34,
+  "fail": 18,
+  "defects": [
+    {
+      "name": "今日DayTodo:axe严重违规=0",
+      "detail": "labelx2:#el-id-6677-20"
+    },
+    {
+      "name": "最近待办:axe严重违规=0",
+      "detail": "labelx1:#el-id-6677-20"
+    },
+    {
+      "name": "待办箱:axe严重违规=0",
+      "detail": "labelx1:#el-id-6677-20"
+    },
+    {
+      "name": "数据复盘:渲染",
+      "detail": "hash=#/todo-list/statistics"
+    },
+    {
+      "name": "搜索:渲染",
+      "detail": "hash=#/todo-list/search"
+    },
+    {
+      "name": "日程概览:渲染",
+      "detail": "hash=#/todo-list/calendar"
+    },
+    {
+      "name": "已达成:渲染",
+      "detail": "hash=#/todo-list/completed"
+    },
+    {
+      "name": "已达成:axe严重违规=0",
+      "detail": "labelx1:#el-id-6677-27"
+    },
+    {
+      "name": "回收站:渲染",
+      "detail": "hash=#/todo-list/recycle-bin"
+    },
+    {
+      "name": "回收站:axe严重违规=0",
+      "detail": "labelx1:#el-id-6677-27"
+    },
+    {
+      "name": "复盘tab[0]渲染无异常",
+      "detail": "{\"cards\":0,\"errs\":[]}"
+    },
+    {
+      "name": "复盘tab[1]渲染无异常",
+      "detail": "{\"cards\":0,\"errs\":[]}"
+    },
+    {
+      "name": "复盘tab[2]渲染无异常",
+      "detail": "{\"cards\":0,\"errs\":[]}"
+    },
+    {
+      "name": "复盘tab[3]渲染无异常",
+      "detail": "{\"cards\":0,\"errs\":[]}"
+    },
+    {
+      "name": "番茄:放弃弹窗打开",
+      "detail": ""
+    },
+    {
+      "name": "番茄:真放弃→归位",
+      "detail": "startTomatoTime"
+    },
+    {
+      "name": "番茄:放弃落账succeed=false",
+      "detail": ""
+    },
+    {
+      "name": "番茄:原因留空合法",
+      "detail": ""
+    }
+  ],
+  "matrix": [
+    {
+      "name": "今日DayTodo",
+      "rendered": true,
+      "errs": [],
+      "axe": [
+        "labelx2:#el-id-6677-20"
+      ],
+      "axeMinor": []
+    },
+    {
+      "name": "最近待办",
+      "rendered": true,
+      "errs": [],
+      "axe": [
+        "labelx1:#el-id-6677-20"
+      ],
+      "axeMinor": []
+    },
+    {
+      "name": "待办箱",
+      "rendered": true,
+      "errs": [],
+      "axe": [
+        "labelx1:#el-id-6677-20"
+      ],
+      "axeMinor": []
+    },
+    {
+      "name": "数据复盘",
+      "rendered": false,
+      "errs": [],
+      "axe": [],
+      "axeMinor": []
+    },
+    {
+      "name": "搜索",
+      "rendered": false,
+      "errs": [],
+      "axe": [],
+      "axeMinor": []
+    },
+    {
+      "name": "日程概览",
+      "rendered": false,
+      "errs": [],
+      "axe": [],
+      "axeMinor": []
+    },
+    {
+      "name": "已达成",
+      "rendered": false,
+      "errs": [],
+      "axe": [
+        "labelx1:#el-id-6677-27"
+      ],
+      "axeMinor": []
+    },
+    {
+      "name": "回收站",
+      "rendered": false,
+      "errs": [],
+      "axe": [
+        "labelx1:#el-id-6677-27"
+      ],
+      "axeMinor": []
+    }
+  ],
+  "ts": "2026-08-29T02:27:48.802Z"
+}

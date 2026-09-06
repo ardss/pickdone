@@ -1,0 +1,300 @@
+{
+  "name": "pickdone",
+  "version": "0.1.0",
+  "private": true,
+  "description": "PickDone — local-first todos, schedule and pomodoro focus desktop app",
+  "productName": "拾事",
+  "main": "src/main/index.js",
+  "scripts": {
+    "start": "node scripts/app-dev.mjs",
+    "dev": "node scripts/app-dev.mjs --dev",
+    "start:real": "npm run build:renderer && electron .",
+    "app:dev": "node scripts/app-dev.mjs",
+    "clean:env": "node cli/env-clean.js",
+    "test": "node tests/run-all.mjs",
+    "test:e2e": "node --test tests/e2e.test.mjs",
+    "smoke:cli": "node cli/cli-smoke.js",
+    "check:fingerprint": "node cli/check-fingerprint.js",
+    "check:licenses": "node cli/check-licenses.js",
+    "check:i18n": "node cli/check-i18n.js",
+    "check:a11y": "node cli/a11y-scan.js",
+    "check:tokens": "node cli/check-tokens.js",
+    "check:all": "node cli/check-all.js",
+    "smoke:ui": "node tests/ui-smoke.mjs",
+    "visual:baseline": "node tests/visual-regression.mjs --baseline",
+    "visual:check": "node tests/visual-regression.mjs",
+    "it": "node tests/integration-ui.test.mjs",
+    "test:coverage": "node tests/run-all.mjs --experimental-test-coverage --test-coverage-exclude=**/node_modules/** --test-coverage-exclude=**/better-sqlite3-multiple-ciphers/**",
+    "lint": "eslint renderer/js cli src tests --ext .js,.vue,.cjs,.mjs",
+    "lint:fix": "eslint renderer/js cli src tests --ext .js,.vue,.cjs,.mjs --fix",
+    "check": "npm run lint -- --quiet && npm test && npm run smoke:cli",
+    "setup:hooks": "git config core.hooksPath pickdone/.githooks",
+    "prepare": "git config core.hooksPath pickdone/.githooks",
+    "pack": "npm run build:renderer && electron-builder --dir",
+    "dist": "npm run build:renderer && electron-builder --win nsis portable",
+    "whitelist": "node scripts/build-whitelist.mjs",
+    "bump": "node scripts/bump-cache.mjs",
+    "smoke:interact": "node tests/ui-interactions.mjs",
+    "smoke:keyboard": "node tests/keyboard-e2e.mjs",
+    "diff:visual": "node scripts/visual-diff.mjs",
+    "verify:packaged": "node scripts/verify-packaged.cjs",
+    "build:renderer": "node scripts/clean-renderer-dist.mjs && vite build",
+    "build:web-demo": "node scripts/build-web-demo.mjs",
+    "typecheck": "vue-tsc --noEmit --incremental"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "dayjs": "^1.11.13",
+    "electron-log": "^5.2.0",
+    "electron-updater": "^6.8.9",
+    "exceljs": "^4.4.0",
+    "pinyin-pro": "^3.26.0",
+    "solarlunar": "^3.1.0",
+    "sortablejs": "^1.15.7"
+  },
+  "devDependencies": {
+    "@fullcalendar/core": "^6.1.15",
+    "@fullcalendar/daygrid": "^6.1.15",
+    "@fullcalendar/interaction": "^6.1.15",
+    "@types/node": "^26.4.1",
+    "@typescript-eslint/parser": "^8.69.0",
+    "@vitejs/plugin-vue": "^5.2.4",
+    "axe-core": "^4.13.0",
+    "chart.js": "^4.4.4",
+    "electron": "^39.8.10",
+    "electron-builder": "^24.13.3",
+    "element-plus": "^2.14.5",
+    "eslint": "^8.57.0",
+    "eslint-plugin-vue": "^9.33.0",
+    "html2canvas": "^1.4.1",
+    "jsdom": "^29.1.1",
+    "jspdf": "^4.2.1",
+    "pixelmatch": "^5.3.0",
+    "pngjs": "^7.0.0",
+    "vite": "^5.4.21",
+    "vue": "^3.5.42",
+    "vue-router": "^4.6.4",
+    "vue-tsc": "^3.3.11",
+    "vuex": "^4.1.0"
+  },
+  "license": "MIT",
+  "author": "ardss",
+  "build": {
+    "appId": "com.pickdone.app",
+    "productName": "拾事",
+    "directories": {
+      "output": "dist"
+    },
+    "extraResources": [
+      {
+        "from": "cli",
+        "to": "cli",
+        "filter": [
+          "pickdone.js",
+          "lib.js",
+          "import.js",
+          "audit.js",
+          "env-clean.js",
+          "nl-date.cjs",
+          "SKILL.md"
+        ]
+      },
+      {
+        "from": "src/main",
+        "to": "src/main"
+      },
+      {
+        "from": "vendor",
+        "to": "vendor"
+      },
+      {
+        "from": "node_modules/dayjs",
+        "to": "node_modules/dayjs"
+      },
+      {
+        "from": "assets/vendor-lib/dayjs-plugin-isoWeek.js",
+        "to": "assets/vendor-lib/dayjs-plugin-isoWeek.js"
+      },
+      {
+        "from": "scripts/cli-bin",
+        "to": "bin"
+      }
+    ],
+    "publish": {
+      "provider": "github",
+      "owner": "ardss",
+      "repo": "pickdone",
+      "releaseType": "draft"
+    },
+    "files": [
+      "package.json",
+      "src/**",
+      "renderer-dist/index.html",
+      "renderer-dist/assets3/**",
+      "cli/**",
+      "assets/css/**",
+      "assets/fonts/**",
+      "assets/img/**",
+      "assets/media/**",
+      "assets/tray/**",
+      "assets/vendor-lib/*.js",
+      "assets/vendor-lib/*.css",
+      "assets/vendor-lib/*.mjs",
+      "assets/vendor-lib/element-plus/**",
+      "assets/vendor-lib/fullcalendar/**",
+      "assets/icon.png",
+      "assets/icon-test.png",
+      "assets/favicon.ico",
+      "vendor/better-sqlite3-multiple-ciphers/package.json",
+      "vendor/better-sqlite3-multiple-ciphers/lib/**",
+      "vendor/better-sqlite3-multiple-ciphers/prebuilds/win32-x64.node",
+      "!node_modules/exceljs/dist/**",
+      "!node_modules/exceljs/README.md",
+      "!node_modules/exceljs/README_zh.md",
+      "node_modules/@fast-csv/format/**",
+      "node_modules/@fast-csv/parse/**",
+      "node_modules/@types/node/**",
+      "node_modules/archiver/**",
+      "node_modules/archiver-utils/**",
+      "node_modules/argparse/**",
+      "node_modules/async/**",
+      "node_modules/balanced-match/**",
+      "node_modules/base64-js/**",
+      "node_modules/big-integer/**",
+      "node_modules/binary/**",
+      "node_modules/bl/**",
+      "node_modules/bluebird/**",
+      "node_modules/brace-expansion/**",
+      "node_modules/buffer/**",
+      "node_modules/buffer-crc32/**",
+      "node_modules/buffer-indexof-polyfill/**",
+      "node_modules/buffers/**",
+      "node_modules/builder-util-runtime/**",
+      "node_modules/chainsaw/**",
+      "node_modules/compress-commons/**",
+      "node_modules/concat-map/**",
+      "node_modules/crc-32/**",
+      "node_modules/crc32-stream/**",
+      "node_modules/dayjs/**",
+      "node_modules/debug/**",
+      "node_modules/duplexer2/**",
+      "node_modules/electron-log/**",
+      "node_modules/electron-updater/**",
+      "node_modules/end-of-stream/**",
+      "node_modules/exceljs/**",
+      "node_modules/fast-csv/**",
+      "node_modules/fs-constants/**",
+      "node_modules/fs-extra/**",
+      "node_modules/fs.realpath/**",
+      "node_modules/fstream/**",
+      "node_modules/glob/**",
+      "node_modules/graceful-fs/**",
+      "node_modules/ieee754/**",
+      "node_modules/immediate/**",
+      "node_modules/inflight/**",
+      "node_modules/inherits/**",
+      "node_modules/js-yaml/**",
+      "node_modules/jsonfile/**",
+      "node_modules/jszip/**",
+      "node_modules/lazy-val/**",
+      "node_modules/lazystream/**",
+      "node_modules/lie/**",
+      "node_modules/listenercount/**",
+      "node_modules/lodash.defaults/**",
+      "node_modules/lodash.difference/**",
+      "node_modules/lodash.escaperegexp/**",
+      "node_modules/lodash.flatten/**",
+      "node_modules/lodash.groupby/**",
+      "node_modules/lodash.isboolean/**",
+      "node_modules/lodash.isequal/**",
+      "node_modules/lodash.isfunction/**",
+      "node_modules/lodash.isnil/**",
+      "node_modules/lodash.isplainobject/**",
+      "node_modules/lodash.isundefined/**",
+      "node_modules/lodash.union/**",
+      "node_modules/lodash.uniq/**",
+      "node_modules/minimatch/**",
+      "node_modules/minimist/**",
+      "node_modules/mkdirp/**",
+      "node_modules/ms/**",
+      "node_modules/normalize-path/**",
+      "node_modules/once/**",
+      "node_modules/pako/**",
+      "node_modules/path-is-absolute/**",
+      "node_modules/pinyin-pro/**",
+      "node_modules/readable-stream/**",
+      "node_modules/readdir-glob/**",
+      "node_modules/rimraf/**",
+      "node_modules/safe-buffer/**",
+      "node_modules/sax/**",
+      "node_modules/saxes/**",
+      "node_modules/semver/**",
+      "node_modules/setimmediate/**",
+      "node_modules/solarlunar/**",
+      "node_modules/sortablejs/**",
+      "node_modules/string_decoder/**",
+      "node_modules/tar-stream/**",
+      "node_modules/tiny-typed-emitter/**",
+      "node_modules/tmp/**",
+      "node_modules/traverse/**",
+      "node_modules/undici-types/**",
+      "node_modules/universalify/**",
+      "node_modules/unzipper/**",
+      "node_modules/util-deprecate/**",
+      "node_modules/uuid/**",
+      "node_modules/wrappy/**",
+      "node_modules/xmlchars/**",
+      "node_modules/zip-stream/**"
+    ],
+    "asarUnpack": [
+      "vendor/**",
+      "**/*.node"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "PickDone-Setup-${version}.${ext}",
+      "multiLanguageInstaller": true,
+      "installerLanguages": [
+        "zh_CN",
+        "en_US"
+      ]
+    },
+    "portable": {
+      "artifactName": "PickDone-Portable-${version}.${ext}"
+    },
+    "electronLanguages": [
+      "zh-CN",
+      "en-US"
+    ],
+    "compression": "maximum",
+    "afterPack": "build/afterpack.cjs",
+    "copyright": "Copyright © 2026 ardss"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ardss/pickdone.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ardss/pickdone/issues"
+  },
+  "homepage": "https://github.com/ardss/pickdone#readme"
+}

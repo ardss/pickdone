@@ -1,0 +1,9 @@
+Date: 2026/09/01 08:00 +0000
+Version: 3.0
+"List Name","Title","Content","Is Checklist","Start Date","Due Date","Reminder","Repeat","Priority","Status","Completed Time","Order","Timezone","Is All Day"
+"工作","写季度总结","含三个部分的复盘","","2026/09/10","2026/09/12","2026/09/12 09:00","Every month",5,"0","","1","Asia/Shanghai","1"
+"工作","周报","每周五发给团队","","","","","Every week",3,"0","","2","Asia/Shanghai","1"
+"生活","交房租","9月房租 3500","","2026/09/01","2026/09/01","","",1,"1","2026/09/01 10:30","3","Asia/Shanghai","1"
+"生活","给妈妈打电话","","","","","","",0,"0","","4","Asia/Shanghai","1"
+"生活","买牛奶","带糖的那种","","","","","",0,"0","","5","Asia/Shanghai","1"
+"生活","买牛奶","带糖的那种","","","","","",0,"0","","6","Asia/Shanghai","1"

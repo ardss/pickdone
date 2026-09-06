@@ -1,0 +1,43 @@
+/** i18n 分片 N：首启配置向导（OnboardingWizard） */
+export default {
+  onboarding: {
+    welcomeTitle: '欢迎使用拾事',
+    welcomeSub: '三个小设置，马上开始',
+    stepLang: '界面语言',
+    stepTheme: '颜色模式',
+    stepCats: '默认清单',
+    langSub: '应用界面文字使用以下语言显示，之后可在设置中修改',
+    themeSub: '选择应用的外观配色',
+    themeLight: '浅色',
+    themeDark: '深色',
+    themeSystem: '跟随系统',
+    catsSub: '预置三个常用清单，之后可在侧边栏随时改名或删除',
+    catsKeep: '保留默认清单',
+    catsSkip: '先不创建',
+    catWork: '工作',
+    catStudy: '学习',
+    catLife: '生活',
+    prev: '上一步',
+    next: '下一步',
+    done: '开始使用',
+    skip: '跳过引导'
+  },
+  update: {
+    label: '软件更新',
+    current: '当前版本',
+    check: '检查更新',
+    checkNow: '立即检查',
+    downloading: '正在下载更新…',
+    restartNow: '立即重启更新',
+    upToDate: '当前已是最新版本',
+    failed: '检查更新失败，请稍后重试',
+    devEnv: '开发/便携环境不支持应用内更新，请从 GitHub Releases 下载',
+    readyToast: '新版本已下载完成，退出拾事时将自动完成更新',
+    readyBadge: '新版本待更新',
+    available: '发现新版本',
+    downloadNow: '立即下载',
+    autoDownload: '自动下载更新',
+    openReleases: '打开下载页',
+    switchedToEn: 'Language switched to English'
+  }
+}
