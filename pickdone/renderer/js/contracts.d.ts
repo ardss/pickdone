@@ -136,6 +136,8 @@ interface Window {
   html2canvas?: any
   FullCalendar?: any
   Chart?: any
+  ElementPlusLocaleZhCn?: any
+  ElementPlusLocaleEn?: any
   __lastVueErr?: any
   __tomatoFloatTick?: unknown
 }
