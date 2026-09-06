@@ -356,8 +356,12 @@ export default {
 .depv-task--ready { border-left: 3px solid var(--brand, #0f9d8f); }
 .depv-task--blocked { border-left: 3px solid var(--warn, #d9932f); }
 .depv-task--done { opacity: .62; }
-.depv-task--dragging { opacity: .4; }
-.depv-task--droptarget { border-color: var(--brand); box-shadow: 0 0 0 2px var(--brand-light, rgba(15, 157, 143, .25)); }
+/* 拖拽选中态:拖起的卡=品牌青描边+浅底+浮起阴影+微放大(明显选中感,不只是半透明);
+   落点卡=内圈 2px 品牌青+浅底,一眼看出松手会落到谁身上 */
+.depv-task--dragging { opacity: .6; border-color: var(--brand); background: var(--brand-light, rgba(15, 157, 143, .1));
+  box-shadow: 0 6px 16px rgba(0, 0, 0, .28); transform: scale(1.015); }
+.depv-task--droptarget { border-color: var(--brand); background: var(--brand-light, rgba(15, 157, 143, .1));
+  box-shadow: 0 0 0 2px var(--brand, #0f9d8f) inset; }
 .depv-task__main { display: flex; align-items: center; gap: 8px; }
 .depv-task__text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--text-1, #222); }
 .depv-task__text--done { text-decoration: line-through; color: var(--text-3, #999); }
