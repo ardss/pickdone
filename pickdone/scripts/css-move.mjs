@@ -115,7 +115,7 @@ function moveFrom (css) {
       } else if (header.startsWith('@')) {
         result += css.slice(i, j)
       } else if (header) {
-        if (matches(header)) moved.push({ media, raw: css.slice(i, j).trim() })
+        if (matches(header)) moved.push({ media, raw: (media ? '  ' : '') + css.slice(i, j).trim() })
         else result += css.slice(i, j)
       } else {
         result += css.slice(i, open) // whitespace

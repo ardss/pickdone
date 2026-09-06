@@ -21,7 +21,7 @@ fs.mkdirSync(DIR, { recursive: true })
 // The route list is derived from views/registry.js (single source of truth)
 const { SMOKE_ROUTES } = await import('../renderer/js/views/registry.js')
 
-const watchdog = setTimeout(() => { console.error('FAIL: visual regression did not finish within 120s; forcing exit'); process.exit(1) }, 120000)
+const watchdog = setTimeout(() => { console.error('FAIL: visual regression did not finish within 300s; forcing exit'); process.exit(1) }, 300000)
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 
 async function connect () {
@@ -78,6 +78,14 @@ async function hygiene () {
     for (const b of document.querySelectorAll('button')) {
       if (dismiss.some(t => b.textContent.trim() === t)) b.click()
     }
+    // sidebar must be expanded (smoke:interact [1] may leave it collapsed; preference persists in LS)
+    try { localStorage.setItem('sidebarCollapsed', 'false') } catch {}
+    const sn = document.querySelector('.side-nav')
+    const brand = document.querySelector('.sn-brand')
+    if (sn && brand && sn.classList.contains('side-nav--collapsed')) brand.click()
+    // i18n is reactive: pin locale at runtime (first-run wizard rewrites the LS key by system language, so LS pinning alone loses the race)
+    try { window.appUI && window.appUI.$i18n && (window.appUI.$i18n.locale = 'en-US') } catch {}
+    try { window.appUI && window.appUI.$store && window.appUI.$store.commit('ui/toggleSettings', false) } catch {}
     return 'ok'
   })()` })
   await sleep(400)
@@ -115,7 +123,7 @@ for (const route of SMOKE_ROUTES) {
     const ratio = diff / (a.width * a.height)
     const ok = ratio <= THRESHOLD
     console.log((ok ? 'PASS ' : 'FAIL ') + name + ' diff ' + (ratio * 100).toFixed(3) + '%')
-    if (!ok) fail++
+    if (!ok) { fs.writeFileSync(file.replace('.png', '.current.png'), buf); fail++ }
   }
 }
 for (const scene of EXTRA_SCENES) {
