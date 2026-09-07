@@ -400,7 +400,7 @@ btn-play|stop|stop2|close）
 html[data-theme="dark"] .tomato-bar { background: var(--panel); }
 html[data-theme="dark"] .tomato-bar.running { background: var(--tomato-bg); }
 /* 番茄计时数字:--brand-dark 暗底对比不足 */
-html[data-theme="dark"] .tomato-timer__time { color: #35c2ae; }
+html[data-theme="dark"] .tomato-timer__time { color: var(--brand-bright, #35c2ae); }
 html[data-theme="dark"] .tomato-timer__label,
 html[data-theme="dark"] .tomato-timer__count { color: var(--text-3); }
 @media (max-width: 605px) {

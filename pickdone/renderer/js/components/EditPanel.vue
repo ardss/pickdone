@@ -1177,7 +1177,7 @@ html[data-theme="dark"] .ep-chip:active, html[data-theme="dark"] .ep-date-chip:a
 .modal__close {
   position: absolute; top: 12px; right: 12px;
   width: 28px; height: 28px; border: 0; padding: 0; appearance: none; -webkit-appearance: none; border-radius: var(--radius-md);
-  background: transparent; cursor: pointer; z-index: 3;
+  background: transparent; cursor: pointer; z-index: var(--z-row);
 }
 @keyframes ep-img-in { from { opacity: 0; transform: scale(.92); } to { opacity: 1; transform: scale(1); } }
 @keyframes ep-slide-in { from { opacity: 0; transform: translateX(14px); } }

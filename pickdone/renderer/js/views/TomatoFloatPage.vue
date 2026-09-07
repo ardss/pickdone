@@ -431,7 +431,7 @@ export default {
 .tf-menu__item { display: flex; align-items: center; gap: 4px; }
 .tf-menu__item-text { min-width: 0; flex: 1; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tf-menu__item--on, .tf-menu__item--on:hover { background: var(--brand-light, #e7f7f7); color: var(--brand-dark); font-weight: 600; }
-.tf-menu__tick { flex-shrink: 0; font-style: normal; font-size: 10px; color: var(--brand, #0f9d8f); }
+.tf-menu__tick { flex-shrink: 0; font-style: normal; font-size: 10px; color: var(--brand, var(--brand, #0f9d8f)); }
 .tf-menu__empty { color: var(--text-3); font-size: 12px; text-align: center; padding: 16px 0; }
 .tf-menu__bare {
   flex-shrink: 0; margin-top: 6px; padding: 6px;
@@ -450,10 +450,10 @@ html[data-theme="dark"] .tf-menu__x:hover { background: rgba(255,255,255,.1); co
 html[data-theme="dark"] .tf-menu__item { color: #e8edf1; }
 html[data-theme="dark"] .tf-menu__item:hover { background: rgba(53,194,174,.15); color: #7fd0c7; }
 html[data-theme="dark"] .tf-menu__item--on, html[data-theme="dark"] .tf-menu__item--on:hover { background: rgba(53,194,174,.18); color: #7fd0c7; }
-html[data-theme="dark"] .tf-menu__tick { color: #35c2ae; }
+html[data-theme="dark"] .tf-menu__tick { color: var(--brand-bright, #35c2ae); }
 html[data-theme="dark"] .tf-menu__empty { color: rgba(232,237,241,.4); }
 html[data-theme="dark"] .tf-menu__bare { border-color: rgba(255,255,255,.16); color: rgba(232,237,241,.7); }
-html[data-theme="dark"] .tf-menu__bare:hover { border-color: #35c2ae; color: #7fd0c7; }
+html[data-theme="dark"] .tf-menu__bare:hover { border-color: var(--brand-bright, #35c2ae); color: #7fd0c7; }
 /* ⋮ 菜单内：白噪音选择区（音色 chips 实时切换，全局派发器即时生效） */
 .tf-menu__noise { padding-top: 6px; border-top: 1px solid rgba(120, 130, 140, .18); }
 .tf-menu__noise-label { font-size: 9px; color: var(--text-3, #9aa0a6); margin-bottom: 4px; }
@@ -513,11 +513,11 @@ html[data-theme="dark"] .corner-btn { color: rgba(232, 237, 241, .78); }
   transition: background-color .15s ease, transform .12s ease, opacity .15s ease;
 }
 .tomato .corner-btn:active { transform: scale(.88); }
-.corner-btn:focus-visible { outline: 2px solid var(--brand, #0f9d8f); outline-offset: 1px; }
+.corner-btn:focus-visible { outline: 2px solid var(--brand, var(--brand, #0f9d8f)); outline-offset: 1px; }
 .tomato .corner-btn i { transition: transform .18s cubic-bezier(.2, .8, .2, 1); }
 .tomato .corner-btn:hover:not(.corner-btn--off) i { transform: scale(.88); }
 .tomato .corner-btn--off:active { transform: none; }
-html[data-theme="dark"] .corner-btn:focus-visible { outline-color: #35c2ae; }
+html[data-theme="dark"] .corner-btn:focus-visible { outline-color: var(--brand-bright, #35c2ae); }
 /* ==================== ⋮ 菜单展开 · 动效收尾（2026-09-01） ====================
    入场已有：卡片 86→320px 0.2s 弹性生长 + 内容 tt-fade-in 同步淡入；
    出场补齐：tf-pop 过渡 0.18s 淡出（组件层 transition），不再 v-if 硬切。
@@ -529,7 +529,7 @@ html[data-theme="dark"] .corner-btn:focus-visible { outline-color: #35c2ae; }
 html[data-theme="dark"] .tf-menu .tf-menu__list { scrollbar-color: rgba(232,237,241,.25) transparent; }
 html[data-theme="dark"] .tf-menu .tf-menu__list::-webkit-scrollbar-thumb { background: rgba(232,237,241,.25); }
 /* 勾选框选中图标白色（icon-done.svg 源文件为黑色，反相成纯白，
-   对应设计稿 fa check-square 白色图形叠在 #0f9d8f 底上） */
+   对应设计稿 fa check-square 白色图形叠在 var(--brand, #0f9d8f) 底上） */
 .td-check img { filter: brightness(0) invert(1); }
 /* —— 浏览器预览模式（番茄浮窗在 5175 调试宿主打开时挂 widget-preview）：
       卡片按浮窗真实尺寸 240×86 居中呈现，配桌面感深色背景；放大态用类名表达，不再拉满整页 —— */
@@ -591,7 +591,7 @@ html.widget-preview .tomato--expand-menu { width: 240px; height: 320px; }
 .tf-abandon__q { font-size: 13px; font-weight: 600; color: var(--text-1, #2b2f33); line-height: 16px; }
 .tf-abandon__actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
 .tf-abandon__actions .mini.primary {
-  background: var(--brand, #0f9d8f);
+  background: var(--brand, var(--brand, #0f9d8f));
   color: #fff;
   border-color: transparent;
 }
@@ -630,7 +630,7 @@ html.widget-preview .tomato--expand-noise { width: 240px; height: 320px; }
 .tf-noise__item:hover { background: var(--brand-light, #e7f7f7); color: var(--brand-dark, #0c8172); }
 .tf-noise__item.on, .tf-noise__item.on:hover { background: var(--brand-light, #e7f7f7); color: var(--brand-dark, #0c8172); font-weight: 600; }
 .tf-noise__name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.tf-noise__tick { flex-shrink: 0; font-style: normal; font-size: 10px; color: var(--brand, #0f9d8f); }
+.tf-noise__tick { flex-shrink: 0; font-style: normal; font-size: 10px; color: var(--brand, var(--brand, #0f9d8f)); }
 .tf-noise .tf-noise__list { scrollbar-width: thin; scrollbar-color: rgba(120,130,140,.35) transparent; }
 .tf-noise .tf-noise__list::-webkit-scrollbar { width: 4px; }
 .tf-noise .tf-noise__list::-webkit-scrollbar-thumb { background: rgba(120,130,140,.35); border-radius: 2px; }

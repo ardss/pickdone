@@ -716,7 +716,7 @@ html[data-theme="dark"] .cal-fc {
 .cal-title-btn { padding: 4px 8px; }
 /* 日历格子展开钮(深色) */
 html[data-theme="dark"] .day-expand-btn { color: var(--text-3, #8a919c); }
-html[data-theme="dark"] .day-expand-btn:hover { background: var(--gray-bg, #22262e); color: var(--brand-text, #35c2ae); }
+html[data-theme="dark"] .day-expand-btn:hover { background: var(--gray-bg, #22262e); color: var(--brand-text, var(--brand-bright, #35c2ae)); }
 /* 实现页容器（本应用布局壳）：占满内容区，顶栏为 page__top 等价物 */
 .cal-page{position:relative;padding:0;height:100%;display:flex;flex-direction:column}
 .cal-topbar{display:flex;align-items:center;gap:var(--space-2);padding:8px 12px;flex-shrink:0}
@@ -740,7 +740,7 @@ html[data-theme="dark"] .day-expand-btn:hover { background: var(--gray-bg, #2226
 .fc .fc-daygrid-day-bottom{font-size: var(--fs-2xs)}
 /* —— 日程事件 chip（vendors .fc-h-event/.fc-event-main/.fc-daygrid-event 参数）—— */
 .fc-event{cursor:pointer;text-decoration:none}
-.fc-daygrid-event{position:relative;white-space:nowrap;border-radius: var(--radius-xs);font-size:.85em;z-index:6;margin-top:1px}
+.fc-daygrid-event{position:relative;white-space:nowrap;border-radius: var(--radius-xs);font-size:.85em;z-index: var(--z-float-base);margin-top:1px}
 .fc-h-event{display:block;border:1px solid var(--ev-color,var(--fc-event-bg-color));background-color:var(--ev-color,var(--fc-event-bg-color))}
 .fc-event-main{position:relative;z-index:2;color:var(--ev-text,#fff);height:100%;padding:1px 1px 0}
 .fc-event-title{margin:.5em;padding:1px;display:inline-block;vertical-align:top;max-width:100%;overflow:hidden;font-style:normal;flex-grow:1;flex-shrink:1;min-width:0}
@@ -800,7 +800,7 @@ html[data-theme="dark"] .day-expand-btn:hover { background: var(--gray-bg, #2226
 .fc .fc-scrollgrid-section-sticky>*{z-index:1}
 .fc .fc-col-header-cell-cushion{font-size: var(--fs-md)}
 .day-cell-actions {
-  position: absolute; top: 0; right: 0; z-index: 3;
+  position: absolute; top: 0; right: 0; z-index: var(--z-row);
   display: flex; align-items: center; gap: 1px; opacity: 0; transition: opacity var(--dur-fast) ease;
 }
 .todo-week { display: block; font-size: var(--fs-2xs); color: var(--text-3); line-height: 1.2; }

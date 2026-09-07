@@ -306,7 +306,7 @@ export default {
 }
 .w-shape path {
   fill: rgba(15, 157, 143, .12);
-  stroke: var(--brand, #0f9d8f);
+  stroke: var(--brand, var(--brand, #0f9d8f));
   stroke-width: 3; /* viewBox 已归一为 0 0 60 60，3 单位 ≈ 图标上 1.3px */
   stroke-linejoin: round;
 }

@@ -550,7 +550,7 @@ export default {
 .depv-task__grip:hover { color: var(--brand); }
 .depv-task--moving { cursor: grabbing; box-shadow: 0 8px 20px rgba(0, 0, 0, .22);
   border-color: var(--brand); z-index: 10; }
-.depv-task--ready { border-left: 3px solid var(--brand, #0f9d8f); }
+.depv-task--ready { border-left: 3px solid var(--brand, var(--brand, #0f9d8f)); }
 .depv-task--blocked { border-left: 3px solid var(--warn, #d9932f); }
 .depv-task--done { opacity: .62; }
 /* 拖拽选中态:拖起的卡=品牌青描边+浅底+浮起阴影+微放大(明显选中感,不只是半透明);
@@ -559,9 +559,9 @@ export default {
 .depv-task--dragging { opacity: .6; border-color: var(--brand); background: var(--brand-light, rgba(15, 157, 143, .1));
   box-shadow: 0 6px 16px rgba(0, 0, 0, .28); transform: scale(1.015); }
 .depv-task--drop-left, .depv-task--drop-right { border-color: var(--brand); }
-.depv-task--drop-left { box-shadow: inset 3px 0 0 var(--brand, #0f9d8f);
+.depv-task--drop-left { box-shadow: inset 3px 0 0 var(--brand, var(--brand, #0f9d8f));
   background: linear-gradient(90deg, var(--brand-light, rgba(15, 157, 143, .12)) 0%, rgba(15, 157, 143, 0) 45%); }
-.depv-task--drop-right { box-shadow: inset -3px 0 0 var(--brand, #0f9d8f);
+.depv-task--drop-right { box-shadow: inset -3px 0 0 var(--brand, var(--brand, #0f9d8f));
   background: linear-gradient(270deg, var(--brand-light, rgba(15, 157, 143, .12)) 0%, rgba(15, 157, 143, 0) 45%); }
 .depv-task__main { display: flex; align-items: center; gap: 8px; }
 .depv-task__text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--text-1, #222); }

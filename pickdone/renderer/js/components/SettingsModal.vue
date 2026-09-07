@@ -1043,7 +1043,7 @@ html[data-theme="dark"] .el-cascader-node.is-active { color: var(--el-color-prim
 /* 关闭按钮：化石的灰圆点 background-image 已删——它盖住 ::after 的 ✕，导致静止态只见圆点不见叉；
    ✕ 文字色经 html[data-theme="dark"] .modal__close 已适配主题，悬停仅加底色 */
 /* 分组小标题：品牌青暗色提亮 */
-html[data-theme="dark"] .tab-panel .form-label { color: #35c2ae; }
+html[data-theme="dark"] .tab-panel .form-label { color: var(--brand-bright, #35c2ae); }
 .sc { border-radius: var(--radius-xl); padding: 30px 32px; color: #fff; overflow: hidden; }
 .settings-modal-body { color: var(--text-1); }
 /* 控件宽度档位（设置页统一三档，替代原 8 档内联 px） */

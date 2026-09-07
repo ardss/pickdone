@@ -312,7 +312,7 @@ export default {
 /* ---- G. 设计稿圆形勾选（原 TodoBoxListItem 多选态 .checkbox）---- */
 .checkbox{position:relative;display:flex;align-items:center;justify-content:center;width:18px;height:20px;color:var(--text-4);font-size:18px;cursor:pointer}
 .checkbox>svg{display:block}
-.checkbox--active{color:#0f9d8f}
+.checkbox--active{color:var(--brand, #0f9d8f)}
 .checkbox svg{width:16px;height:16px;display:block}
 /* 回收站条目完成勾选框：复用 .td-check 形态，勾选后标题删除线弱化 */
 .todo-list .todo-box-list-item__container{display:flex;flex-wrap:wrap;align-items:flex-start;column-gap:10px}

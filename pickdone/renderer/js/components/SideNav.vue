@@ -1076,7 +1076,7 @@ html[data-theme="dark"] .sn-nav-item:hover,
 html[data-theme="dark"] .sn-cat-item:hover { background-color: rgba(255,255,255,.06); }
 html[data-theme="dark"] .side-nav .sn-nav-item.active,
 html[data-theme="dark"] .side-nav .sn-cat-item.active {
-  background-color: var(--brand-light); color: #35c2ae;
+  background-color: var(--brand-light); color: var(--brand-bright, #35c2ae);
 }
 /* 侧栏用户菜单 */
 
@@ -1227,10 +1227,10 @@ html[data-theme="dark"] .tomato__task-none { color: rgba(232,237,241,.4); }
 html[data-theme="dark"] .tomato__task-x { color: rgba(232,237,241,.5); }
 html[data-theme="dark"] .tomato__task-x:hover { background: rgba(255,255,255,.1); color: #e8edf1; }
 html[data-theme="dark"] .tomato__beads i { background: rgba(53,194,174,.22); }
-html[data-theme="dark"] .tomato__beads i.done { background: #35c2ae; }
+html[data-theme="dark"] .tomato__beads i.done { background: var(--brand-bright, #35c2ae); }
 html[data-theme="dark"] .tomato__knob { background: #22262e; }
 html[data-theme="dark"] .tomato__ring-bg { stroke: rgba(53,194,174,.25); }
-html[data-theme="dark"] .tomato__ring-fg { stroke: #35c2ae; }
+html[data-theme="dark"] .tomato__ring-fg { stroke: var(--brand-bright, #35c2ae); }
 html[data-theme="dark"] .tomato--rest .tomato__ring-fg { stroke: #ffa95c; }
 html[data-theme="dark"] .tomato__knob-icon { color: #7fd0c7; }
 html[data-theme="dark"] .tomato--rest .tomato__knob-icon { color: #ffa95c; }
@@ -1253,7 +1253,7 @@ html[data-theme="dark"] .tf-noise__head { color: #7fd0c7; }
 html[data-theme="dark"] .tf-noise__item { color: #e8edf1; }
 html[data-theme="dark"] .tf-noise__item:hover { background: rgba(53,194,174,.15); color: #7fd0c7; }
 html[data-theme="dark"] .tf-noise__item.on, html[data-theme="dark"] .tf-noise__item.on:hover { background: rgba(53,194,174,.18); color: #7fd0c7; }
-html[data-theme="dark"] .tf-noise__tick { color: #35c2ae; }
+html[data-theme="dark"] .tf-noise__tick { color: var(--brand-bright, #35c2ae); }
 html[data-theme="dark"] .tf-noise .tf-noise__list { scrollbar-color: rgba(232,237,241,.25) transparent; }
 html[data-theme="dark"] .tf-noise .tf-noise__list::-webkit-scrollbar-thumb { background: rgba(232,237,241,.25); }
 @keyframes sn-sync-pop { from { transform: scale(.6); } 60% { transform: scale(1.15); } }
