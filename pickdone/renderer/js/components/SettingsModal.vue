@@ -142,6 +142,7 @@
               <div v-show="st.developerMode === true">
                 <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.habitExperimentalLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.showHabitModule !== false" @change="v=>set({showHabitModule:v})"/></div></div>
                 <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.sProjects') }}</span><div class="form-item__control"><el-switch :model-value="st.showProjectsModule === true" @change="v=>set({showProjectsModule:v})"/></div></div>
+                <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.sDeps') }}</span><div class="form-item__control"><el-switch :model-value="st.showDepsModule === true" @change="v=>set({showDepsModule:v})"/></div></div>
               </div>
               <div class="form-item"><span class="form-item__label"></span><div class="form-item__control"><span class="tip">{{ $t('statsE.SettingsModal.devHint') }}</span></div></div>
             </div>

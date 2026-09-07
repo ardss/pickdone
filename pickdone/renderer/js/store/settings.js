@@ -20,6 +20,7 @@ export const DEFAULT_SETTINGS = {
   autoDownloadUpdates: true, // Auto-update: download in background when a new version is found (off = notify only; manual download on the settings page)
   showHabitModule: false, // habit check-in module (dev-mode gated)
   showProjectsModule: false, // projects module (dev-mode gated)
+  showDepsModule: false, // dependency view (dev-mode gated: today deps mode + project deps tab)
   calendarBackground: 'list', // list|theme|system
   isCalendarBackgroundUserSelected: false,
   enableSecurityLock: false,

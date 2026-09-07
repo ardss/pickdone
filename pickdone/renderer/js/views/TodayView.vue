@@ -11,12 +11,12 @@
               <button :class="{on: viewMode==='list'}" :title="$t('statsE.TodayView.listView')" :aria-label="$t('statsE.TodayView.listView')" :aria-pressed="viewMode==='list' ? 'true' : 'false'" @click="viewMode='list'"><pd-app-icon name="list" :size="14"/></button>
               <button :class="{on: viewMode==='matrix'}" :title="$t('statsE.TodayView.matrixView')" :aria-label="$t('statsE.TodayView.matrixView')" :aria-pressed="viewMode==='matrix' ? 'true' : 'false'" @click="viewMode='matrix'"><pd-app-icon name="matrix" :size="14"/></button>
               <button :class="{on: viewMode==='deck'}" :title="$t('statsE.TodayView.deckView')" :aria-label="$t('statsE.TodayView.deckView')" :aria-pressed="viewMode==='deck' ? 'true' : 'false'" @click="viewMode='deck'"><pd-app-icon name="copy" :size="14"/></button>
-              <button v-if="settings.developerMode" :class="{on: viewMode==='deps'}" :title="$t('statsE.TodayView.depsView')" :aria-label="$t('statsE.TodayView.depsView')" :aria-pressed="viewMode==='deps' ? 'true' : 'false'" @click="viewMode='deps'"><pd-app-icon name="link" :size="14"/></button>
+              <button v-if="settings.developerMode && settings.showDepsModule" :class="{on: viewMode==='deps'}" :title="$t('statsE.TodayView.depsView')" :aria-label="$t('statsE.TodayView.depsView')" :aria-pressed="viewMode==='deps' ? 'true' : 'false'" @click="viewMode='deps'"><pd-app-icon name="link" :size="14"/></button>
             </div>
           </template>
         </day-date-strip>
         <!-- The timeline is shared by all three today-page views: planning context stays coherent across list/matrix/deck (finalized by user 2026-08-31) -->
-        <div v-if="viewMode==='deps' && settings.developerMode" class="today-list"><pd-dep-view/></div>
+        <div v-if="viewMode==='deps' && settings.developerMode && settings.showDepsModule" class="today-list"><pd-dep-view/></div>
         <div v-else-if="viewMode==='matrix'" class="today-list"><pd-matrix-grid :tasks="matrixTasks"/></div>
         <div v-else-if="viewMode==='deck'" class="today-list"><pd-day-deck/></div>
         <div v-else class="today-list"><todo-groups :groups="groups" :empty-text="$t('statsE.TodayView.emptyDay')"/></div>
@@ -46,6 +46,7 @@ export default {
     let saved = null
     try { saved = localStorage.getItem('todayViewMode') } catch {}
     const mode = ['list', 'matrix', 'deck', 'deps'].includes(saved) ? saved : (this.$route.query.matrix ? 'matrix' : 'list')
+    // 实验开关关闭时,残留的 deps 视图偏好回落到列表视图
     return { viewMode: mode }
   },
   mounted () {
