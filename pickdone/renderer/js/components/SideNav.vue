@@ -1201,12 +1201,6 @@ html[data-theme="dark"] .main-nav-search__input:focus { border-color: var(--bran
 /* 缺 align-items 时 svg 顶格，高亮格与图标错位 12px */
 .sn-cog-btn { background: none; border: none; color: var(--text-2); cursor: pointer; padding: 8px; border-radius: var(--radius-md); display: flex; position: relative; }
 .sn-cog-btn:hover { background: var(--hover-bg, #f5f5f5); color: var(--brand); }
-/* ============ 右侧编辑栏（right-sidebar） ============ */
-.edit-panel {
-  position: relative; /* 收起把手的定位锚点 */
-  width: var(--panel-w); flex-shrink: 0; background: var(--panel, #fff);
-  border-left: 1px solid var(--line); display: flex; flex-direction: column;
-}
 .grp-toggle-btn:hover { color: var(--brand); }
 .w-icon { font-size: 16px; font-style: normal; }
 .w-temp { font-size: var(--fs-lg); font-weight: 700; color: var(--text-1); }
@@ -1222,12 +1216,6 @@ html[data-theme="dark"] .main-nav-search__input:focus { border-color: var(--bran
 }
 .sn-fold-arrow.open { transform: rotate(0deg); }
 .sn-fold-arrow:not(.open) { transform: rotate(-90deg); }
-/* ============ 右栏覆盖层模式（设计稿行为：滑出覆盖内容，不推挤布局） ============ */
-.edit-panel {
-  position: fixed !important;
-  right: 0; top: 25px; bottom: 0; z-index: var(--z-panel);
-  box-shadow: -6px 0 20px rgba(0,0,0,.08);
-}
 .sn-cog-btn.drag-ready { border-style: dashed; }
 /* ==================== 6. 浮窗深色主题适配（html[data-theme="dark"] 由 applyColorMode 统一挂载） ==================== */
 html[data-theme="dark"] .tomato { background: #22262e; border-color: rgba(255,255,255,.12); box-shadow: 0 10px 28px rgba(0,0,0,.45); }

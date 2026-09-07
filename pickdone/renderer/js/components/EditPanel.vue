@@ -1155,7 +1155,17 @@ html[data-theme="dark"] .ep-chip:active, html[data-theme="dark"] .ep-date-chip:a
 .ep-date-chips { position: relative; display: flex; gap: 6px; flex-wrap: nowrap; margin: 10px 0 4px; }
 .ep-imgs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 8px 0; }
 /* —— 5. 右编辑栏：设计稿 .right-sidebar[scoped]{min-width:335px;border-left:#f3f3f3} —— */
-.edit-panel { min-width: 335px; border-left: 1px solid #f3f3f3; }
+/* 右侧编辑栏（right-sidebar）：布局+覆盖层模式合一(此前散在 SideNav 两处+此处三条,含一个 !important 对轰)
+   覆盖层模式(设计稿行为:滑出覆盖内容,不推挤布局);收起把手以本面板为定位锚点 */
+.edit-panel {
+  position: fixed;
+  right: 0; top: 25px; bottom: 0; z-index: var(--z-panel);
+  width: var(--panel-w); min-width: 335px; flex-shrink: 0;
+  background: var(--panel, #fff);
+  border-left: 1px solid var(--line);
+  display: flex; flex-direction: column;
+  box-shadow: -6px 0 20px rgba(0,0,0,.08);
+}
 /* 「添加提醒」行：设计稿 .picker__text{color:#9b9b9b;font-size: var(--fs-md)}
    --active{color:var(--brand-dark)}
 
