@@ -51,6 +51,16 @@ jobs:
         shell: bash
         run: rm -rf dist
 
+      # 幂等防护(2026-09-07 实锤:v0.1.1 工作流重跑残留一份重复 draft 挂在页面)——
+      # 打包前先删同 tag 的旧 draft,保证每个 tag 至多一份草稿
+      - name: Delete stale draft for this tag (idempotent re-runs)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          ID=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate -q '.[] | select(.tag_name=="'"$GITHUB_REF_NAME"'") | select(.draft) | .id' | head -1)
+          if [ -n "$ID" ]; then gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$ID"; echo "stale draft $ID deleted"; fi
+
       - name: Build & publish (draft)
         working-directory: pickdone
         env:
@@ -86,3 +96,10 @@ jobs:
           cd dist
           sha256sum *.exe latest.yml > SHA256SUMS.txt
           gh release upload "$GITHUB_REF_NAME" SHA256SUMS.txt --clobber
+          # 空正文=发布页丑闻实锤(v0.1.2 曾整版无说明)——draft 正文必须非空,empty=红
+          BODY_LEN=$(gh api "repos/$GITHUB_REPOSITORY/releases" -q '[.[] | select(.tag_name=="'"$GITHUB_REF_NAME"'") | select(.draft)][0].body // "" | length')
+          echo "draft body length: $BODY_LEN"
+          if [ "${BODY_LEN:-0}" -lt 30 ]; then
+            echo "draft release body is empty/short — fill notes from CHANGELOG before this workflow runs (npm run release:finalize)"
+            exit 1
+          fi

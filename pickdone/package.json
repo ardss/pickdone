@@ -21,6 +21,8 @@
     "check:tokens": "node cli/check-tokens.js",
     "check:css-freeze": "node cli/check-css-freeze.mjs",
     "css:inventory": "node scripts/css-inventory.mjs",
+    "release": "node scripts/release.mjs",
+    "release:finalize": "node scripts/release-finalize.mjs",
     "check:all": "node cli/check-all.js",
     "smoke:ui": "node tests/ui-smoke.mjs",
     "visual:baseline": "node tests/visual-regression.mjs --baseline",
