@@ -29,12 +29,10 @@ html[data-theme="dark"] .td-item { border-bottom-color: var(--gray-bg); }
 html[data-theme="dark"] .td-check { background: var(--panel); border-color: #4a5058; }
 html[data-theme="dark"] .td-check.on { border-color: var(--brand); }
 html[data-theme="dark"] .checkbox { background: var(--panel); }
-html[data-theme="dark"] .qa-btn.primary { background: var(--brand); color: #fff; }
 html[data-theme="dark"] .mini { background: var(--gray-bg); border-color: var(--line-strong); color: var(--text-2); }
 html[data-theme="dark"] .mini:hover { border-color: var(--brand); color: var(--brand); }
 html[data-theme="dark"] .primary.mini, html[data-theme="dark"] .primary.mini:hover { color: #fff; }
 html[data-theme="dark"] .primary { background: var(--brand); color: #fff; }
-html[data-theme="dark"] .tagchip { background: var(--brand-light); color: var(--brand-bright); }
 html[data-theme="dark"] .empty-state p { color: var(--text-3); }
 html[data-theme="dark"] .cal-cell { background: var(--panel); }
 html[data-theme="dark"] .cal-cell.out { background: var(--bg); }
@@ -45,7 +43,6 @@ html[data-theme="dark"] blockquote { color: var(--text-3); }
 html[data-theme="dark"] .chart-box { background: var(--panel); }
 html[data-theme="dark"] .ring-bg { stroke: var(--line); }
 html[data-theme="dark"] .edit-panel { border-left-color: var(--line); }
-html[data-theme="dark"] .repeat-line { background: var(--brand-light); color: var(--brand-bright); }
 html[data-theme="dark"] .tip { color: var(--text-3); }
 html[data-theme="dark"] .vm-sep { background: var(--line); }
 html[data-theme="dark"] .img-cell, html[data-theme="dark"] .add-cell { background: var(--gray-bg); }
@@ -61,7 +58,6 @@ html[data-theme="dark"] .ctx-menu { background: var(--gray-bg); }
 html[data-theme="dark"] .ctx-item:hover { background: #26313a; }
 html[data-theme="dark"] .img-preview-mask { background: rgba(0,0,0,.8); }
 html[data-theme="dark"] .recycle-row { background: var(--panel); }
-html[data-theme="dark"] .rc-main b { color: var(--text-1); }
 
 /* Element 弹层深色（全局 popper） */
 html[data-theme="dark"] .el-popover, html[data-theme="dark"] .el-dialog,
@@ -90,7 +86,6 @@ html[data-theme="dark"] .el-tabs__item.is-active { color: var(--brand); }
 html[data-theme="dark"] .stat-page .content { background: var(--bg); }
 html[data-theme="dark"] .stat-page .navbar { background: var(--panel); border-bottom-color: var(--line); }
 html[data-theme="dark"] .stat-page .navbar__item { color: #a6acb6; }
-html[data-theme="dark"] .stat-page .navbar__item--active { color: #5b93da; }
 
 /* 查看更多 / 分类 / 日期弹层 */
 html[data-theme="dark"] .view-more-pop { background: var(--gray-bg); border-color: var(--line); }
