@@ -439,7 +439,6 @@ export default {
   background: none; color: var(--text-2); font-size: 12px; cursor: pointer;
 }
 .tf-menu__bare:hover { border-color: var(--brand); color: var(--brand); }
-html[data-theme="dark"] .corner-btn { color: rgba(232,237,241,.65); }
 html[data-theme="dark"] .corner-btn:hover { background: rgba(53,194,174,.18); }
 html[data-theme="dark"] .corner-btn--muted { color: rgba(232,237,241,.35); }
 /* ⋮ 菜单深色 */
@@ -635,4 +634,121 @@ html.widget-preview .tomato--expand-noise { width: 240px; height: 320px; }
 .tf-noise .tf-noise__list::-webkit-scrollbar { width: 4px; }
 .tf-noise .tf-noise__list::-webkit-scrollbar-thumb { background: rgba(120,130,140,.35); border-radius: 2px; }
 .tf-noise .tf-noise__list::-webkit-scrollbar-track { background: transparent; }
+/* 放弃专注弹窗 —— 紧凑简约版（布局层独立渲染） */
+.modal.modal--abandon { position: fixed; inset: 0; background: rgba(15, 22, 26, .42); z-index: var(--z-notify); display: flex; align-items: center; justify-content: center; }
+
+
+
+
+.abandon-card { position: relative; width: 320px; max-width: 90vw; box-sizing: border-box; border-radius: var(--radius-xl);
+  background: var(--panel, #fff); box-shadow: 0 16px 48px rgba(10, 20, 24, .22); padding: 18px 20px 14px; }
+
+
+
+
+.abandon-x { position: absolute; top: 10px; right: 10px; width: 26px; height: 26px; border: none; border-radius: var(--radius-md);
+  background: none; color: var(--text-3, #6d7278); display: flex; align-items: center; justify-content: center; cursor: pointer; }
+
+
+
+
+.abandon-x:hover { background: rgba(0, 0, 0, .05); color: var(--text-1, #333); }
+
+
+
+
+.abandon-title { font-size: var(--fs-lg); font-weight: 600; color: var(--text-1, #333); padding-right: 26px; }
+
+
+
+
+.abandon-hint { margin: 8px 0 12px; font-size: var(--fs-sm); line-height: 1.6; color: var(--text-3, #6d7278); }
+
+
+
+
+.abandon-hint b { color: var(--text-1, #333); }
+
+
+
+
+.abandon-reason-input { width: 100%; box-sizing: border-box; padding: 9px 11px; border: 1px solid var(--line-strong, #d8dde2);
+  border-radius: var(--radius-md); font-size: var(--fs-md); font-family: inherit; color: var(--text-1, #333); background: transparent; }
+
+
+
+
+.abandon-reason-input:focus { outline: none; border-color: var(--brand, #0f9d8f); }
+
+
+
+
+.abandon-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+
+
+
+
+.abandon-btn { border: none; border-radius: var(--radius-md); padding: 7px 14px; font-size: var(--fs-md); font-family: inherit; cursor: pointer;
+  background: none; color: var(--text-2, #606266); }
+
+
+
+
+.abandon-btn:hover { background: rgba(0, 0, 0, .05); }
+
+
+
+
+.abandon-btn--giveup { background: var(--danger-strong); color: #fff; }
+
+
+
+
+.abandon-btn--giveup:hover { background: var(--danger-strong); }
+
+/* ==================== 6. 浮窗深色主题适配（html[data-theme="dark"] 由 applyColorMode 统一挂载） ==================== */
+html[data-theme="dark"] .tomato { background: #22262e; border-color: rgba(255,255,255,.12); box-shadow: 0 10px 28px rgba(0,0,0,.45); }
+html[data-theme="dark"] .tomato__time { color: #e8edf1; }
+html[data-theme="dark"] .tomato__time small { color: rgba(232,237,241,.55); }
+html[data-theme="dark"] .tomato__task { color: rgba(232,237,241,.5); }
+html[data-theme="dark"] .tomato__task b { color: #7fd0c7; }
+html[data-theme="dark"] .tomato__task-none { color: rgba(232,237,241,.4); }
+html[data-theme="dark"] .tomato__task-x { color: rgba(232,237,241,.5); }
+html[data-theme="dark"] .tomato__task-x:hover { background: rgba(255,255,255,.1); color: #e8edf1; }
+html[data-theme="dark"] .tomato__beads i { background: rgba(53,194,174,.22); }
+html[data-theme="dark"] .tomato__beads i.done { background: var(--brand-bright, #35c2ae); }
+html[data-theme="dark"] .tomato__knob { background: #22262e; }
+html[data-theme="dark"] .tomato__ring-bg { stroke: rgba(53,194,174,.25); }
+html[data-theme="dark"] .tomato__ring-fg { stroke: var(--brand-bright, #35c2ae); }
+html[data-theme="dark"] .tomato--rest .tomato__ring-fg { stroke: #ffa95c; }
+html[data-theme="dark"] .tomato__knob-icon { color: #7fd0c7; }
+html[data-theme="dark"] .tomato--rest .tomato__knob-icon { color: #ffa95c; }
+html[data-theme="dark"] .tomato__badge { background: #e8862a; }
+html[data-theme="dark"] .tomato .tf-abandon .mini {
+  background: rgba(255,255,255,.08);
+  color: #e8edf1;
+  border: 1px solid rgba(255,255,255,.14);
+}
+html[data-theme="dark"] .tomato .tf-abandon .mini:hover { background: rgba(255,255,255,.14); }
+html[data-theme="dark"] .tomato .tf-abandon .mini.danger {
+  background: rgba(249,83,74,.16);
+  color: #f3837a;
+  border-color: transparent;
+}
+html[data-theme="dark"] .tomato .tf-abandon .mini.danger:hover { background: rgba(249,83,74,.26); }
+/* ♪ 噪音面板深色与细滚动条：完全对齐 tf-menu 同款（2026-09-01） */
+html[data-theme="dark"] .tf-noise { background: #22262e; box-shadow: 0 8px 24px rgba(0,0,0,.45); }
+html[data-theme="dark"] .tf-noise__head { color: #7fd0c7; }
+html[data-theme="dark"] .tf-noise__item { color: #e8edf1; }
+html[data-theme="dark"] .tf-noise__item:hover { background: rgba(53,194,174,.15); color: #7fd0c7; }
+html[data-theme="dark"] .tf-noise__item.on, html[data-theme="dark"] .tf-noise__item.on:hover { background: rgba(53,194,174,.18); color: #7fd0c7; }
+html[data-theme="dark"] .tf-noise__tick { color: var(--brand-bright, #35c2ae); }
+html[data-theme="dark"] .tf-noise .tf-noise__list { scrollbar-color: rgba(232,237,241,.25) transparent; }
+html[data-theme="dark"] .tf-noise .tf-noise__list::-webkit-scrollbar-thumb { background: rgba(232,237,241,.25); }
+@keyframes sn-sync-pop { from { transform: scale(.6); } 60% { transform: scale(1.15); } }
+@keyframes sn-sync-draw { to { stroke-dashoffset: 0; } }
+@keyframes sidebar-profile-spin { to { transform: rotate(1turn); } }
+/* restored 2026-09-07: lost with style-3.css retirement (audit catch — refs above silently no-oped) */
+@keyframes sn-slide { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: none; } }
+@keyframes mgr-preview-in { from { opacity: 0; transform: translateY(-4px); } }
 </style>

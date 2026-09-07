@@ -1003,65 +1003,7 @@ export default {
 .cat-mgr-del--on:hover { color: var(--brand-dark); background: var(--brand-light); }
 /* —— 以下规则自 theme-dark.css 退回（选择器列表首支为浅色规则，不应集中到深色文件）—— */
 .side-nav--collapsed .main-nav-search.sn-search, html[data-theme="dark"] .side-nav--collapsed .main-nav-search.sn-search { height: 40px; padding: 0; justify-content: center; background: transparent; border-color: transparent; }
-/* 三栏骨架与主表面 */
-html[data-theme="dark"] .side-nav,
-html[data-theme="dark"] .edit-panel,
-html[data-theme="dark"] .content-area,
-html[data-theme="dark"] .main-col,
-html[data-theme="dark"] .view-head,
-html[data-theme="dark"] .qa-inputwrap,
-html[data-theme="dark"] .quick-add,
-html[data-theme="dark"] .search-bar,
-html[data-theme="dark"] .td-item,
-html[data-theme="dark"] .recycle-row,
-html[data-theme="dark"] .cal-cell,
-html[data-theme="dark"] .chart-box,
-html[data-theme="dark"] .sum-card,
-html[data-theme="dark"] .tomato-panel,
-html[data-theme="dark"] .ctx-menu,
-html[data-theme="dark"] .qa-pop,
-html[data-theme="dark"] .qa-more,
-html[data-theme="dark"] .search-filter,
-html[data-theme="dark"] .day-strip,
-html[data-theme="dark"] .toolbar,
-html[data-theme="dark"] .view-page,
-html[data-theme="dark"] .ep-inner,
-html[data-theme="dark"] .ed-head,
-html[data-theme="dark"] .ed-foot {
-  background-color: var(--panel);
-  color: var(--text-1);
-}
-/* 文本与图标 */
-html[data-theme="dark"] .is-complete .td-title,
-html[data-theme="dark"] .td-title,
-html[data-theme="dark"] .content, html[data-theme="dark"] .tg-head h3,
-html[data-theme="dark"] .sn-username, html[data-theme="dark"] .u-name,
-html[data-theme="dark"] .nav-item, html[data-theme="dark"] .sn-cat-item,
-html[data-theme="dark"] .sn-nav-item, html[data-theme="dark"] .ep-sub-text,
-html[data-theme="dark"] .qa-input, html[data-theme="dark"] .search-bar input,
-html[data-theme="dark"] .ep-title textarea, html[data-theme="dark"] .ep-desc textarea,
-html[data-theme="dark"] .ep-addsub-input, html[data-theme="dark"] .td-title,
-html[data-theme="dark"] .file-row, html[data-theme="dark"] .cat-head h1,
-html[data-theme="dark"] .tag-head, html[data-theme="dark"] .toolbar,
-html[data-theme="dark"] .vm-item, html[data-theme="dark"] .ed-body {
-  color: var(--text-1);
-}
-html[data-theme="dark"] .qa-input::placeholder,
-html[data-theme="dark"] .ep-addsub-input::placeholder,
-html[data-theme="dark"] .sn-search input::placeholder { color: var(--text-4); }
-/* 边线与分隔 */
-html[data-theme="dark"] .td-item, html[data-theme="dark"] .edit-panel,
-html[data-theme="dark"] .side-nav, html[data-theme="dark"] .tg-body,
-html[data-theme="dark"] .ep-tools, html[data-theme="dark"] .ed-head,
-html[data-theme="dark"] .ed-foot, html[data-theme="dark"] .sub-sec,
-html[data-theme="dark"] .att-sec, html[data-theme="dark"] .ai-sec,
-html[data-theme="dark"] .tomato-panel header, html[data-theme="dark"] .tp-records,
-html[data-theme="dark"] .qa-inputwrap, html[data-theme="dark"] .search-bar,
-html[data-theme="dark"] .cal-cell, html[data-theme="dark"] .day-strip,
-html[data-theme="dark"] .ctx-item.sep { border-color: var(--line); }
-html[data-theme="dark"] .sn-account { background: var(--panel); }
-html[data-theme="dark"] .sn-account-gear { color: var(--text-3); }
-html[data-theme="dark"] .sn-account-gear:hover { background: rgba(255, 255, 255, .08); color: var(--text-1); }
+/* (壳层跨组件深色规则已归位 theme-dark.css;组件自有 sn- 与 cat-mgr- 深色规则保留在本文件) */
 /* 深色模式：侧边栏像素对齐补丁的深色对应值（防浅色硬编码破坏暗色） */
 html[data-theme="dark"] .main-nav-search.sn-search {
   background-color: var(--gray-bg);
@@ -1217,49 +1159,6 @@ html[data-theme="dark"] .main-nav-search__input:focus { border-color: var(--bran
 .sn-fold-arrow.open { transform: rotate(0deg); }
 .sn-fold-arrow:not(.open) { transform: rotate(-90deg); }
 .sn-cog-btn.drag-ready { border-style: dashed; }
-/* ==================== 6. 浮窗深色主题适配（html[data-theme="dark"] 由 applyColorMode 统一挂载） ==================== */
-html[data-theme="dark"] .tomato { background: #22262e; border-color: rgba(255,255,255,.12); box-shadow: 0 10px 28px rgba(0,0,0,.45); }
-html[data-theme="dark"] .tomato__time { color: #e8edf1; }
-html[data-theme="dark"] .tomato__time small { color: rgba(232,237,241,.55); }
-html[data-theme="dark"] .tomato__task { color: rgba(232,237,241,.5); }
-html[data-theme="dark"] .tomato__task b { color: #7fd0c7; }
-html[data-theme="dark"] .tomato__task-none { color: rgba(232,237,241,.4); }
-html[data-theme="dark"] .tomato__task-x { color: rgba(232,237,241,.5); }
-html[data-theme="dark"] .tomato__task-x:hover { background: rgba(255,255,255,.1); color: #e8edf1; }
-html[data-theme="dark"] .tomato__beads i { background: rgba(53,194,174,.22); }
-html[data-theme="dark"] .tomato__beads i.done { background: var(--brand-bright, #35c2ae); }
-html[data-theme="dark"] .tomato__knob { background: #22262e; }
-html[data-theme="dark"] .tomato__ring-bg { stroke: rgba(53,194,174,.25); }
-html[data-theme="dark"] .tomato__ring-fg { stroke: var(--brand-bright, #35c2ae); }
-html[data-theme="dark"] .tomato--rest .tomato__ring-fg { stroke: #ffa95c; }
-html[data-theme="dark"] .tomato__knob-icon { color: #7fd0c7; }
-html[data-theme="dark"] .tomato--rest .tomato__knob-icon { color: #ffa95c; }
-html[data-theme="dark"] .tomato__badge { background: #e8862a; }
-html[data-theme="dark"] .tomato .tf-abandon .mini {
-  background: rgba(255,255,255,.08);
-  color: #e8edf1;
-  border: 1px solid rgba(255,255,255,.14);
-}
-html[data-theme="dark"] .tomato .tf-abandon .mini:hover { background: rgba(255,255,255,.14); }
-html[data-theme="dark"] .tomato .tf-abandon .mini.danger {
-  background: rgba(249,83,74,.16);
-  color: #f3837a;
-  border-color: transparent;
-}
-html[data-theme="dark"] .tomato .tf-abandon .mini.danger:hover { background: rgba(249,83,74,.26); }
-/* ♪ 噪音面板深色与细滚动条：完全对齐 tf-menu 同款（2026-09-01） */
-html[data-theme="dark"] .tf-noise { background: #22262e; box-shadow: 0 8px 24px rgba(0,0,0,.45); }
-html[data-theme="dark"] .tf-noise__head { color: #7fd0c7; }
-html[data-theme="dark"] .tf-noise__item { color: #e8edf1; }
-html[data-theme="dark"] .tf-noise__item:hover { background: rgba(53,194,174,.15); color: #7fd0c7; }
-html[data-theme="dark"] .tf-noise__item.on, html[data-theme="dark"] .tf-noise__item.on:hover { background: rgba(53,194,174,.18); color: #7fd0c7; }
-html[data-theme="dark"] .tf-noise__tick { color: var(--brand-bright, #35c2ae); }
-html[data-theme="dark"] .tf-noise .tf-noise__list { scrollbar-color: rgba(232,237,241,.25) transparent; }
-html[data-theme="dark"] .tf-noise .tf-noise__list::-webkit-scrollbar-thumb { background: rgba(232,237,241,.25); }
-@keyframes sn-sync-pop { from { transform: scale(.6); } 60% { transform: scale(1.15); } }
-@keyframes sn-sync-draw { to { stroke-dashoffset: 0; } }
-@keyframes sidebar-profile-spin { to { transform: rotate(1turn); } }
-/* restored 2026-09-07: lost with style-3.css retirement (audit catch — refs above silently no-oped) */
-@keyframes sn-slide { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: none; } }
-@keyframes mgr-preview-in { from { opacity: 0; transform: translateY(-4px); } }
+
+
 </style>

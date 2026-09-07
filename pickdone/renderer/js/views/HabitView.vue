@@ -229,3 +229,203 @@ export default {
 
 }
 </script>
+
+<style>
+/* 习惯打卡：频率选择 + 月历打卡表 */
+.habit-freq-select { flex: 0 0 auto; width: auto; min-width: 90px; }
+
+
+
+
+.habit-weekday-picker { display: inline-flex; gap: 4px; flex-shrink: 0; }
+
+
+
+
+.habit-wd {
+  width: 24px; height: 24px; border-radius: 50%; border: 1px solid var(--line);
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: var(--fs-xs); color: var(--text-3); cursor: pointer;
+  transition: all .12s;
+}
+
+
+
+
+.habit-wd.on { background: var(--brand); border-color: var(--brand); color: #fff; }
+
+
+
+
+.habit-interval { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; font-size: var(--fs-sm); color: var(--text-2); }
+
+
+
+
+.habit-interval-n { width: 44px; height: 28px; text-align: center; border: 1px solid var(--line); border-radius: var(--radius-sm); }
+
+
+
+
+.habit-freq-label { font-size: var(--fs-xs); color: var(--text-3); flex-shrink: 0; }
+
+
+
+
+
+.habit-cal-sec { margin-top: 18px; }
+
+
+
+
+.habit-cal-nav { display: flex; align-items: center; justify-content: center; gap: 12px; margin-bottom: 8px; }
+
+
+
+
+.habit-cal-label { font-size: var(--fs-base); font-weight: 600; color: var(--text-1); min-width: 100px; text-align: center; }
+
+
+
+
+.habit-cal-grid {
+  display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px;
+  max-width: 320px; margin: 0 auto;
+}
+
+
+
+
+.habit-cal-wd { text-align: center; font-size: var(--fs-xs); color: var(--text-3); padding: 4px 0; }
+
+
+
+
+.habit-cal-day {
+  position: relative; aspect-ratio: 1; display: flex; align-items: center; justify-content: center;
+  font-size: var(--fs-sm); color: var(--text-1); border-radius: 50%; cursor: default;
+}
+
+
+
+
+.habit-cal-day.out { color: var(--text-4); }
+
+
+
+
+.habit-cal-day.today { border: 1.5px solid var(--brand); font-weight: 600; }
+
+
+
+
+.habit-cal-day.checked { background: var(--brand-light); }
+
+
+
+
+.habit-cal-dot {
+  position: absolute; bottom: 2px; left: 50%; transform: translateX(-50%);
+  width: 4px; height: 4px; border-radius: 50%; background: var(--brand);
+}
+
+
+
+
+.habit-cal-legend {
+  display: flex; gap: 14px; justify-content: center; margin-top: 10px;
+  font-size: var(--fs-xs); color: var(--text-3);
+}
+
+
+
+
+.habit-cal-legend .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; vertical-align: -1px; }
+
+/* 习惯打卡页 */
+.habit-add { display: flex; gap: 8px; margin-bottom: 14px; }
+
+
+
+
+.habit-add-input {
+  flex: 1; min-width: 0; height: 34px; padding: 0 12px; font-size: var(--fs-md); color: var(--text-1);
+  background: var(--gray-bg); border: 1px solid var(--line); border-radius: var(--radius-md); outline: none;
+}
+
+
+
+
+.habit-add-input:focus { border-color: var(--brand); }
+
+
+
+
+.habit-card {
+  background: var(--panel, #fff); border: 1px solid var(--line); border-radius: var(--radius-lg);
+  padding: 12px 14px; margin-bottom: 12px;
+}
+
+
+
+
+.habit-card__head { display: flex; align-items: center; gap: 10px; }
+
+
+
+
+.habit-check {
+  width: 26px; height: 26px; border-radius: 50%; border: 2px solid var(--line-strong); background: var(--panel, #fff);
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: var(--fs-md); color: transparent; cursor: pointer; flex-shrink: 0;
+  transition: all .15s, transform .1s;
+}
+
+
+
+
+.habit-check:hover { transform: scale(1.08); }
+
+
+
+
+.habit-check.on { color: #fff; }
+
+
+
+
+.habit-name { font-size: var(--fs-base); color: var(--text-1); cursor: text; }
+
+
+
+
+.habit-rename {
+  flex: 0 0 200px; height: 26px; font-size: var(--fs-md); border: 0; outline: none;
+  border-bottom: 1.5px solid var(--brand); background: none; color: var(--text-1);
+}
+
+
+
+
+.habit-streak { margin-left: auto; font-size: var(--fs-sm); color: #d97706; }
+
+
+
+
+.habit-del { flex-shrink: 0; }
+
+
+
+
+.habit-grid { display: flex; gap: 3px; margin-top: 10px; }
+
+
+
+
+.habit-grid__cell { flex: 1; height: 12px; border-radius: var(--radius-xs); background: var(--gray-bg); }
+
+
+
+
+.habit-grid__cell.on { opacity: 1; }
+</style>

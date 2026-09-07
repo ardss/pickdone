@@ -1080,4 +1080,19 @@ html[data-theme="dark"] .tab-panel .form-label { color: var(--brand-bright, #35c
 }
 .settings-search__clear:hover { color: var(--text-1); background: var(--hover-bg, rgba(0,0,0,.05)); }
 .settings-search-empty { text-align: center; color: var(--text-3); font-size: var(--fs-md); padding: 40px 0; }
+/* 设置弹窗：el-input-number 去步进按钮后统一宽度 */
+.modal .el-input-number--small { width: 100px; }
+
+
+
+
+.modal .el-input-number--small .el-input__inner { text-align: left; }
+
+
+
+
+.side-nav--collapsed .w-temp,
+.side-nav--collapsed .w-desc,
+.side-nav--collapsed .w-shape,
+.side-nav--collapsed .w-city { display: none; }
 </style>

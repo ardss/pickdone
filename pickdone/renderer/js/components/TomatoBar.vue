@@ -244,8 +244,6 @@ export default {
 
 /* ==================== 番茄专注记录全屏弹窗（对齐.todo-fc 旧版 .tomato-record[scoped-hash]） ==================== */
 .tomato-record { padding: 10px 16px; border-bottom: 1px solid var(--line, #f3f3f3); }
-btn-play|stop|stop2|close）
-   ===================================================================== */
 
 /* ==================== 1. 底部番茄专注条（tomato-timer） ==================== */
 /*  */

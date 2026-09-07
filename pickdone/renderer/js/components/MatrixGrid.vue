@@ -148,3 +148,100 @@ export default {
 
 }
 </script>
+
+<style>
+/* 四象限：拖拽态与悬停（坐标轴已弃用避免重叠） */
+.matrix-wrap { position: relative; }
+
+
+
+
+.matrix-task.dragging { opacity: .35; transform: scale(.98); background: var(--brand-light); }
+
+
+
+
+.matrix-task:hover { box-shadow: 0 1px 4px rgba(0, 0, 0, .08); }
+
+/* 四象限视图 */
+.matrix-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+
+
+
+
+.matrix-quadrant {
+  background: var(--panel, #fff); border: 1px solid var(--line); border-radius: var(--radius-lg);
+  min-height: 260px; display: flex; flex-direction: column; overflow: hidden;
+}
+
+
+
+
+.matrix-quadrant__head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 14px; border-bottom: 1px solid var(--line); font-size: var(--fs-md); font-weight: 600;
+}
+
+
+
+
+.q-urgent .matrix-quadrant__title { color: var(--danger); }
+
+
+
+
+.q-plan .matrix-quadrant__title { color: var(--brand); }
+
+
+
+
+.q-delegate .matrix-quadrant__title { color: #f2a63b; }
+
+
+
+
+.q-later .matrix-quadrant__title { color: var(--text-3); }
+
+
+
+
+.matrix-quadrant__count { font-style: normal; font-size: var(--fs-sm); color: var(--text-3); }
+
+
+
+
+.matrix-quadrant__list { flex: 1; padding: 8px; display: flex; flex-direction: column; gap: 6px; overflow-y: auto; min-height: 120px; }
+
+
+
+
+.matrix-task {
+  position: relative; padding: 8px 10px; background: var(--gray-bg); border-radius: var(--radius-md); font-size: var(--fs-md);
+  display: flex; align-items: center; gap: 8px; cursor: pointer; transition: background .15s, transform .1s;
+}
+
+
+
+
+.matrix-task:hover { background: var(--hover-bg); }
+
+
+
+
+.matrix-task:active { transform: scale(.99); }
+
+
+
+
+.matrix-task.dragging { opacity: .45; }
+
+
+
+
+.matrix-task__text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-1); }
+
+
+
+
+.matrix-task__due { font-size: var(--fs-xs); color: var(--text-3); flex-shrink: 0; transition: opacity .15s; }
+</style>

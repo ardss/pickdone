@@ -1072,7 +1072,7 @@ export default {
   color: var(--text-2, #5f6672); cursor: pointer; border-radius: 6px; padding: 3px 6px; }
 .ep-remind-add:hover { color: var(--brand); background: var(--brand-light, #eef1fe); }
 .ep-remind-add-plus { font-weight: 700; }
-*/
+/* 设计稿注释尾(开头行在早年迁移中被误删,恢复语法平衡) */
 .ep-chip, .ep-date-chip {
   padding: 4px 12px; color: var(--text-2); font-size: var(--fs-sm); line-height: 17px;
   background-color: var(--gray-bg); border-radius: var(--radius-pill); transition: all var(--dur-mid);

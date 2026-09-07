@@ -18,11 +18,9 @@ html[data-theme="dark"] {
 html[data-theme="dark"] body { background: var(--bg); color: var(--text-1); }
 html[data-theme="dark"] .content-area { background: var(--bg); }
 html[data-theme="dark"] .app-shell { background: var(--bg); }
-html[data-theme="dark"] .td-desc, html[data-theme="dark"] .td-meta .bdg,
-html[data-theme="dark"] .desc, html[data-theme="dark"] .hint-inline,
-html[data-theme="dark"] .empty-tip, html[data-theme="dark"] .empty-state p,
-html[data-theme="dark"] .tg-head em, html[data-theme="dark"] .sn-badge,
-html[data-theme="dark"] .u-sub { color: var(--text-3); }
+html[data-theme="dark"] .td-desc
+html[data-theme="dark"] .desc, html[data-theme="dark"] .empty-tip, html[data-theme="dark"] .empty-state p,
+html[data-theme="dark"] .tg-head em, html[data-theme="dark"] .sn-badge
 html[data-theme="dark"] .td-item { border-bottom-color: var(--gray-bg); }
 
 /* 组件局部 */
@@ -45,7 +43,7 @@ html[data-theme="dark"] .ring-bg { stroke: var(--line); }
 html[data-theme="dark"] .edit-panel { border-left-color: var(--line); }
 html[data-theme="dark"] .tip { color: var(--text-3); }
 html[data-theme="dark"] .vm-sep { background: var(--line); }
-html[data-theme="dark"] .img-cell, html[data-theme="dark"] .add-cell { background: var(--gray-bg); }
+html[data-theme="dark"] .img-cell { background: var(--gray-bg); }
 html[data-theme="dark"] .el-input__inner, html[data-theme="dark"] .el-textarea__inner,
 html[data-theme="dark"] .el-select .el-input__inner {
   background-color: var(--gray-bg); border-color: var(--line-strong); color: var(--text-1);
@@ -85,7 +83,6 @@ html[data-theme="dark"] .el-tabs__item.is-active { color: var(--brand); }
 /* 统计页外壳 */
 html[data-theme="dark"] .stat-page .content { background: var(--bg); }
 html[data-theme="dark"] .stat-page .navbar { background: var(--panel); border-bottom-color: var(--line); }
-html[data-theme="dark"] .stat-page .navbar__item { color: #a6acb6; }
 
 /* 查看更多 / 分类 / 日期弹层 */
 html[data-theme="dark"] .view-more-pop { background: var(--gray-bg); border-color: var(--line); }
@@ -159,7 +156,6 @@ html[data-theme="dark"] {
 }
 /* 设计稿字面量值的深色对应（值属复刻红线，只补暗色不改浅色源） */
 html[data-theme="dark"] .content { background-color: var(--bg); }
-html[data-theme="dark"] .navbar__item { color: var(--text-2); }
 html[data-theme="dark"] .search-highlight { background: rgba(255, 229, 143, .28); color: var(--text-1); }
 html[data-theme="dark"] .cal-cell.out { background: transparent; }
 /* 2026-08-28 深度审查补漏：回收站药丸/待办箱下拉/条目选中态/日期条未定义 token 防线 */
@@ -230,12 +226,13 @@ html[data-theme="dark"] {
   --el-fill-color-extra-light: #191919;
   --el-fill-color-blank: #141414;
   --el-color-primary: #0f9d8f;
-  --el-color-primary-light-3: #7f8df0;
-  --el-color-primary-light-5: #a5b0f6;
-  --el-color-primary-light-7: #d0d5fb;
-  --el-color-primary-light-8: #dfe3fc;
-  --el-color-primary-light-9: #eef1fe;
-  --el-color-primary-dark-2: #4453cf;
+  /* 暗色梯度:primary 向底色压暗(EP dark 约定),light-9 作悬停/选中软底不再近白 */
+  --el-color-primary-light-3: #0b7a6e;
+  --el-color-primary-light-5: #08574e;
+  --el-color-primary-light-7: #053832;
+  --el-color-primary-light-8: #042b27;
+  --el-color-primary-light-9: #03211e;
+  --el-color-primary-dark-2: #2ab5a5;
   --el-mask-color: rgba(0, 0, 0, .6);
 }
 html[data-theme="dark"] .el-overlay { background-color: rgba(0, 0, 0, .6); }
@@ -292,6 +289,7 @@ html[data-theme="dark"] .ob-opt--on { background: rgba(15, 157, 143, .18); }
 html[data-theme="dark"] .tomato-record { border-bottom-color: #2c2f36; }
 html[data-theme="dark"] .tomato-record:hover { background-color: #23262c; }
 html[data-theme="dark"] .tomato-record__title { color: #d8dce2; }
+html[data-theme="dark"] .tomato-record--open { background: #23262c; }
 
 /* ===== 自 base.css 归位（深色规则唯一住址=本文件或组件同址补丁）===== */
 /* 放弃弹窗深色（带 .tomato 提升特异性，压过浅色强制作用域） */
@@ -304,3 +302,64 @@ html[data-theme="dark"] .tomato .tf-abandon {
   box-shadow: 0 8px 24px rgba(0,0,0,.5);
 }
 html[data-theme="dark"] .el-message-box { border-color: var(--line-strong, #3a4150); box-shadow: 0 12px 40px rgba(0, 0, 0, .6); }
+
+/* ===== 自 SideNav.vue 归位:跨组件壳层深色规则(组件自有深色补丁留在各 SFC 同址) ===== */
+/* 三栏骨架与主表面 */
+html[data-theme="dark"] .side-nav,
+html[data-theme="dark"] .edit-panel,
+html[data-theme="dark"] .content-area,
+html[data-theme="dark"] .main-col,
+html[data-theme="dark"] .view-head,
+html[data-theme="dark"] .qa-inputwrap,
+html[data-theme="dark"] .quick-add,
+html[data-theme="dark"] .search-bar,
+html[data-theme="dark"] .td-item,
+html[data-theme="dark"] .recycle-row,
+html[data-theme="dark"] .cal-cell,
+html[data-theme="dark"] .chart-box,
+html[data-theme="dark"] .sum-card,
+html[data-theme="dark"] .tomato-panel,
+html[data-theme="dark"] .ctx-menu,
+html[data-theme="dark"] .qa-pop,
+html[data-theme="dark"] .qa-more,
+html[data-theme="dark"] .search-filter,
+html[data-theme="dark"] .day-strip,
+html[data-theme="dark"] .toolbar,
+html[data-theme="dark"] .view-page,
+html[data-theme="dark"] .ep-inner,
+html[data-theme="dark"] .ed-head,
+html[data-theme="dark"] .ed-foot {
+  background-color: var(--panel);
+  color: var(--text-1);
+}
+/* 文本与图标 */
+html[data-theme="dark"] .is-complete .td-title,
+html[data-theme="dark"] .td-title,
+html[data-theme="dark"] .content, html[data-theme="dark"] .tg-head h3,
+html[data-theme="dark"] .sn-username, html[data-theme="dark"] .u-name,
+html[data-theme="dark"] .nav-item, html[data-theme="dark"] .sn-cat-item,
+html[data-theme="dark"] .sn-nav-item, html[data-theme="dark"] .ep-sub-text,
+html[data-theme="dark"] .qa-input, html[data-theme="dark"] .search-bar input,
+html[data-theme="dark"] .ep-title textarea, html[data-theme="dark"] .ep-desc textarea,
+html[data-theme="dark"] .ep-addsub-input, html[data-theme="dark"] .td-title,
+html[data-theme="dark"] .file-row, html[data-theme="dark"] .cat-head h1,
+html[data-theme="dark"] .tag-head, html[data-theme="dark"] .toolbar,
+html[data-theme="dark"] .vm-item, html[data-theme="dark"] .ed-body {
+  color: var(--text-1);
+}
+html[data-theme="dark"] .qa-input::placeholder,
+html[data-theme="dark"] .ep-addsub-input::placeholder,
+html[data-theme="dark"] .sn-search input::placeholder { color: var(--text-4); }
+/* 边线与分隔 */
+html[data-theme="dark"] .td-item, html[data-theme="dark"] .edit-panel,
+html[data-theme="dark"] .side-nav, html[data-theme="dark"] .tg-body,
+html[data-theme="dark"] .ep-tools, html[data-theme="dark"] .ed-head,
+html[data-theme="dark"] .ed-foot, html[data-theme="dark"] .sub-sec,
+html[data-theme="dark"] .att-sec, html[data-theme="dark"] .ai-sec,
+html[data-theme="dark"] .tomato-panel header, html[data-theme="dark"] .tp-records,
+html[data-theme="dark"] .qa-inputwrap, html[data-theme="dark"] .search-bar,
+html[data-theme="dark"] .cal-cell, html[data-theme="dark"] .day-strip,
+html[data-theme="dark"] .ctx-item.sep { border-color: var(--line); }
+html[data-theme="dark"] .sn-account { background: var(--panel); }
+html[data-theme="dark"] .sn-account-gear { color: var(--text-3); }
+html[data-theme="dark"] .sn-account-gear:hover { background: rgba(255, 255, 255, .08); color: var(--text-1); }
