@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * CSS freeze gate (component-absorption refactor guardrail).
- * 全局沉积文件(style-1..4.css + theme-dark.css)只许删不许增:
+ * 全局沉积文件(theme-dark.css;style-1..4 已于 2026-09 退役)只许删不许增:
  *   括号数(≈规则数)工作区/暂存版不得多于 git HEAD;迁移批次从全局文件删规则搬进 SFC,天然通过。
  * 需要新增共享样式时,唯一出口是 base.css(token/骨架)或组件自身的 <style> 块。
  * 临时豁免: 环境变量 CSS_FREEZE_OFF=1(仅限当次命令,台账须注明理由)。

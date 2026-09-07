@@ -299,7 +299,7 @@ export default {
 
 .qa-wrap { flex: 1; }
 /* ============================================================
-   style-1.css —— 列表类页面（最近待办/待办箱/已达成/回收站/标签/清单）基础样式
+   原 style-1.css（已退役 2026-09）—— 列表类页面（最近待办/待办箱/已达成/回收站/标签/清单）基础样式
    来源: 构建产物 A / 构建产物 B
    处理: 选择器已去 [data-v-*] 作用域；url(../img/*) 改写为 app://app/assets/img/*；
          设计稿「TodoBoxListItem」与「RecycleBinItem」编译后共用 .todo-box-list-item 类名
@@ -317,7 +317,7 @@ export default {
 /* 回收站条目完成勾选框：复用 .td-check 形态，勾选后标题删除线弱化 */
 .todo-list .todo-box-list-item__container{display:flex;flex-wrap:wrap;align-items:flex-start;column-gap:10px}
 /* ============================================================
-   style-2.css —— 日程概览 / 数据复盘 / 搜索 三页设计稿样式还原
+   原 style-2.css（已退役 2026-09）—— 日程概览 / 数据复盘 / 搜索 三页设计稿样式还原
    规则来源：第三方来源: 构建产物 A、构建产物 B
    （[data-v-xxx] 已剥离；url(../img/..) → app://app/assets/img/）
    FullCalendar 基础皮肤参数提取自 vendors 产物 的 .fc 规则，
@@ -330,10 +330,10 @@ export default {
 /* 实现微调：覆盖 base.css 旧 .lunar 字号，农历与日期同尺寸 */
 .fc .fc-daygrid-day-number .holiday,
 .fc .fc-daygrid-day-number .work{position:absolute;top:5px;right:5px;padding:4px;font-size:16px;border-radius:50%;zoom:.6}
-/* 工具栏下拉 label 样式单源于 style-1.css 第 I 节 */
+/* 工具栏下拉 label 样式源自已退役的 style-1.css 第 I 节 */
 .search-filter-el.el-select .el-input__inner{height:28px;line-height:28px}
 /* ============================================================
-   style-3.css —— 主界面微交互与细节（对齐设计稿编译 CSS）
+   原 style-3.css（已退役 2026-09）—— 主界面微交互与细节（对齐设计稿编译 CSS）
    参考: 第三方来源: 构建产物 A / index.pretty.js
    选择器均已剥掉 [data-v-xxx]；url(../img/..) 已改为 app://app/assets/img/
    ============================================================ */

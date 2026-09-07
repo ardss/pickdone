@@ -139,7 +139,7 @@ function migratePlansShape (d) {
 /* V1 today page styles (time rail / row layout) -- injected inline, can be moved back to a css file later */
 const V1_CSS = `
 .today-v1 .today-body { display: flex; gap: 20px; align-items: flex-start; }
-/* Main column stretch fills the column height: only then does the empty-day placeholder text have a "remaining empty area" to center in (style-3's min-height centering chain depends on this height) */
+/* Main column stretch fills the column height: only then does the empty-day placeholder text have a "remaining empty area" to center in (the min-height centering chain migrated from retired style-3 depends on this height) */
 .today-v1 .today-main { flex: 1; min-width: 0; align-self: stretch; display: flex; flex-direction: column; }
 .today-v1 .today-body .day-rail { width: 236px; flex-shrink: 0; position: sticky; top: 0; height: calc(100vh - 120px); display: flex; flex-direction: column; overflow-y: auto; transition: width .2s cubic-bezier(.2,.8,.2,1); }
 /* Collapsed state = the whole rail is the expand button: no separate expand button; hover uses an outer edge line + a slight background tint to hint clickability */

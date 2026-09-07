@@ -37,6 +37,15 @@ const RULES = [
   // 存量散值随规则迁入各组件 <style>，全局层不再拦截（component-level 规则由组件作者维护）
 ]
 
+// component <style> blocks joined the scan (2026-09-07): the component-absorption refactor moved most CSS
+// surface into SFCs — scanning only the two global files would leave the majority of rules unguarded
+function* vueStyleFiles () {
+  const walk = d => fs.readdirSync(d, { withFileTypes: true }).flatMap(e => {
+    const fp = path.join(d, e.name)
+    return e.isDirectory() ? walk(fp) : (e.name.endsWith('.vue') ? [fp] : [])
+  })
+  yield* walk(path.join(ROOT, 'renderer', 'js'))
+}
 const hits = []
 for (const rel of FILES) {
   const p = path.join(ROOT, rel)
@@ -48,6 +57,23 @@ for (const rel of FILES) {
       if (re.test(line)) {
         // match against the line AND its 8-line look-back context, so selector-scoped exemptions survive upstream line drift
       const ctx = lines.slice(Math.max(0, i - 8), i + 1).join('\n')
+        if (WHITELIST.some(w => line.includes(w) || ctx.includes(w))) continue
+        hits.push(`${rel}:${i + 1}  [${msg}]\n    ${line.trim().slice(0, 120)}`)
+      }
+    }
+  })
+}
+for (const vp of vueStyleFiles()) {
+  const rel = path.relative(ROOT, vp)
+  const lines = fs.readFileSync(vp, 'utf8').split(/\r?\n/)
+  let inStyle = false
+  lines.forEach((line, i) => {
+    if (/^\s*<style[^>]*>/.test(line)) { inStyle = true; return }
+    if (/^\s*<\/style>/.test(line)) { inStyle = false; return }
+    if (!inStyle) return
+    for (const [re, msg] of RULES) {
+      if (re.test(line)) {
+        const ctx = lines.slice(Math.max(0, i - 8), i + 1).join('\n')
         if (WHITELIST.some(w => line.includes(w) || ctx.includes(w))) continue
         hits.push(`${rel}:${i + 1}  [${msg}]\n    ${line.trim().slice(0, 120)}`)
       }

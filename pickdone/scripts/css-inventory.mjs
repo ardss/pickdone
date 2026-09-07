@@ -5,7 +5,7 @@
  * 产出:
  *   - 控制台摘要(--md 时输出 markdown 台账到 stdout,重定向到 analysis/css-迁移台账.md)
  * 规则:
- *   - 解析 assets/css/style-1..4.css + theme-dark.css 的全部顶层规则(含 @media 内层)
+ *   - 解析 assets/css/theme-dark.css 的全部顶层规则(含 @media 内层);style-1..4 已退役
  *   - 家族 = 首个 class 的 BEM block 前缀(首个 `__`/修饰符之前)
  *   - 主归属 = 家族类名在各 .vue 文件(模板+脚本)中出现次数最多的文件;分散(≥3 文件且最大占比 <50%)判为共享
  *   - 死代码 = 家族内全部类名在所有 .vue 中零出现
@@ -177,7 +177,7 @@ const totalLines = FILES.reduce((n, f) => n + fs.readFileSync(f, 'utf8').split('
 const md = []
 md.push('# CSS 迁移台账(组件吸收重构)')
 md.push('')
-md.push(`生成: scripts/css-inventory.mjs · 全局文件总行数: **${totalLines}**(style-1..4 + theme-dark)`)
+md.push(`生成: scripts/css-inventory.mjs · 全局文件总行数: **${totalLines}**(theme-dark)`)
 md.push('')
 md.push(`| 状态 | 家族数 | 行数 | 占比 |`)
 md.push(`|---|---|---|---|`)

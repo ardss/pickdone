@@ -20,7 +20,7 @@
    ============================================================ */
 :root {
   --btn-border: var(--line-strong); --btn-radius: var(--radius-md); --btn-hover-brand: var(--brand);
-  /* FullCalendar light defaults (straggler references in style-2; .cal-fc scope overrides) */
+  /* FullCalendar light defaults (runtime-generated .fc DOM; .cal-fc scope overrides) */
   --fc-page-bg-color: #fff; --fc-border-color: #ddd; --fc-event-bg-color: #3788d8;
   --dot: var(--brand);
   --brand: #0f9d8f;
@@ -524,7 +524,7 @@ textarea { font-family: inherit; }
 
 
 /* 提醒标签：时钟图标 + 具体时间（设计稿 label--icon-clock 形态）。
-   提醒是关键信息，常显——用高优先级压过 style-3.css 的悬停隐藏规则 */
+   提醒是关键信息，常显——用高优先级压过各组件的悬停隐藏规则 */
 .td-remind { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-sm); color: var(--brand); }
 
 
@@ -670,7 +670,7 @@ textarea { font-family: inherit; }
 
 
 /* ============ 底部番茄专注条（tomato-timer） ============ */
-/* 番茄条样式统一由 style-4.css 管理（对齐设计稿 .tomato-timer） */
+/* 番茄条基础段（组件样式见 TomatoBar.vue，对齐设计稿 .tomato-timer） */
 .tb-left { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
 
 
@@ -1762,7 +1762,7 @@ input:focus-visible, textarea:focus-visible, .el-textarea__inner:focus-visible, 
 
 
 
-/* 12. 空状态：外观以 style-1 的插画版（200×120 todo-list-empty.svg）为准，这里只留节奏与动画 */
+/* 12. 空状态：外观以插画版（200×120 todo-list-empty.svg）为准，这里只留节奏与动画 */
 .empty { padding: 56px 0 40px; }
 
 
@@ -2871,7 +2871,7 @@ img { -webkit-user-drag: none; }
 .cal-toolbar .cal-today-btn:hover { border-color: var(--brand); color: var(--brand); background: var(--brand-light); }
 
 /* == absorbed:shared == */
-/* ===== 迁移自全局沉积文件(scripts/css-finish.mjs):随组件/分区生灭 ===== */
+/* ===== 迁移自已退役的 style-1..4(2026-09 组件吸收重构):跨组件共享,居 base 统一管理 ===== */
 /* ---- D. 空状态（原 TodoListEmpty scoped）---- */
 .empty{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;background:transparent}
 .empty__icon{width:200px;height:120px;background:url(app://app/assets/img/todo-list-empty.svg);background-size:200px 120px}
@@ -3224,7 +3224,7 @@ html.dark .tomato .tf-abandon {
 .tomato__corner { gap: 3px; }
 
 /* == absorbed:EP == */
-/* ===== 迁移自全局沉积文件(scripts/css-finish.mjs):随组件/分区生灭 ===== */
+/* ===== 迁移自已退役的 style-1..4(2026-09 组件吸收重构):跨组件共享,居 base 统一管理 ===== */
 .el-button--danger{background:var(--danger);border-color:var(--danger)}
 .el-button--danger:hover,.el-button--danger:focus{background:var(--danger-strong);border-color:var(--danger-strong)}
 /* 修复输入框“双框”：Element Plus 结构是 wrapper+inner 双层，而全局旧 element-ui 样式
@@ -3245,7 +3245,7 @@ html.dark .tomato .tf-abandon {
 html[data-theme="dark"] .el-message-box { border-color: var(--line-strong, #3a4150); box-shadow: 0 12px 40px rgba(0, 0, 0, .6); }
 
 /* == absorbed:transition == */
-/* ===== 迁移自全局沉积文件(scripts/css-finish.mjs):随组件/分区生灭 ===== */
+/* ===== 迁移自已退役的 style-1..4(2026-09 组件吸收重构):跨组件共享,居 base 统一管理 ===== */
 /* —— 批次4 动效 —— */
 /* 弹出菜单过渡：fade + 轻缩放 + 4px 下移，120ms（离场更快） */
 .pop-enter-active { transition: opacity var(--dur-fast), transform var(--dur-fast) cubic-bezier(.2, .8, .2, 1); }

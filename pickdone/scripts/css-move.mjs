@@ -2,7 +2,7 @@
 /**
  * CSS family mover — one batch of the component-absorption refactor.
  * 用法: node scripts/css-move.mjs --sfc renderer/js/views/ProjectView.vue --family proj-ms --family proj-ms-row
- *   [--src assets/css/style-3.css ...]  默认搬全部全局文件
+ *   [--src assets/css/theme-dark.css ...]  默认搬全部全局文件(style-1..4 已退役)
  * 行为:
  *   1. 从全局文件中切出「选择器里任一 class 以 --family 前缀开头」的顶层规则/@media 内层规则
  *   2. 追加到 --sfc 的 <style> 块(无则创建;@media 规则按原媒体条件重组)

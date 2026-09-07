@@ -1273,4 +1273,7 @@ html.dark .tf-noise .tf-noise__list::-webkit-scrollbar-thumb { background: rgba(
 @keyframes sn-sync-pop { from { transform: scale(.6); } 60% { transform: scale(1.15); } }
 @keyframes sn-sync-draw { to { stroke-dashoffset: 0; } }
 @keyframes sidebar-profile-spin { to { transform: rotate(1turn); } }
+/* restored 2026-09-07: lost with style-3.css retirement (audit catch — refs above silently no-oped) */
+@keyframes sn-slide { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: none; } }
+@keyframes mgr-preview-in { from { opacity: 0; transform: translateY(-4px); } }
 </style>

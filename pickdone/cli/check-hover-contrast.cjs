@@ -11,6 +11,22 @@ const path = require('path');
 const ROOT = path.join(__dirname, '..');
 const CSS_FILES = ['base.css', 'theme-dark.css']
   .map(f => path.join(ROOT, 'assets', 'css', f));
+// component <style> blocks joined the scan (2026-09-07): the component-absorption refactor moved most CSS
+// surface (button hover rules included) into SFCs — scanning only global files would miss them
+function collectVueStyleFiles (dir, out = []) {
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) collectVueStyleFiles(p, out);
+    else if (e.name.endsWith('.vue')) out.push(p);
+  }
+  return out;
+}
+const CSS_SOURCES = CSS_FILES.map(f => ({ rel: path.relative(ROOT, f), css: fs.readFileSync(f, 'utf8') }))
+  .concat(collectVueStyleFiles(path.join(ROOT, 'renderer', 'js')).map(f => {
+    const src = fs.readFileSync(f, 'utf8');
+    const css = [...src.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].map(m => m[1]).join('\n');
+    return { rel: path.relative(ROOT, f), css };
+  }));
 
 // 1) Collect static multi-class button combinations from templates; dynamically-bound :class combos (white-text solid-bg variants) are added manually
 const TPL_DIR = path.join(ROOT, 'renderer', 'js');
@@ -44,8 +60,7 @@ const targets = [...combos].filter(c => INTEREST.test(c));
 
 // 2) Parse CSS: supports only .a.b(:hover)? with an optional html[data-theme="dark"] prefix
 const rules = [];
-CSS_FILES.forEach((file, fi) => {
-  const css = fs.readFileSync(file, 'utf8');
+for (const { css } of CSS_SOURCES) {
   const re = /([^{}]+)\{([^{}]*)\}/g;
   let m;
   while ((m = re.exec(css))) {
@@ -68,7 +83,7 @@ CSS_FILES.forEach((file, fi) => {
       rules.push({ dark, hover, classes, decls, spec: classes.length + (hover ? 10 : 0) + (dark ? 100 : 0), order: rules.length });
     }
   }
-});
+}
 
 const normColor = c => {
   if (!c) return null;
