@@ -32,9 +32,27 @@ const ROUTES = [
 import { execSync } from 'node:child_process'
 const ab = (args) => execSync('agent-browser ' + args.map(a => JSON.stringify(a)).join(' '), { encoding: 'utf8', timeout: 120000, shell: true })
 
+// preflight (2026-09-07 review): crash-red mid-route-loop when 5175 is down or agent-browser missing;
+// fail loudly BEFORE any scene runs, with actionable message instead of a cryptic eval error
+try {
+  execSync('agent-browser --version', { encoding: 'utf8', timeout: 30000, shell: true, stdio: 'pipe' })
+} catch {
+  console.error('✗ visual-web: agent-browser 不在 PATH —— 无法截图对比。安装/PATH 修复后重跑。')
+  process.exit(2)
+}
+try {
+  const res = await fetch(BASE, { signal: AbortSignal.timeout(5000) })
+  if (!res.ok) throw new Error('HTTP ' + res.status)
+} catch {
+  console.error('✗ visual-web: 5175 宿主未启动 —— 先在 browser-dev/ 跑 `npm run dev`(vite --port 5175)再重跑。')
+  process.exit(2)
+}
+
 function setEnv (theme) {
   // fresh cache-busted URL: head merge script re-applies demo settings; we override theme afterwards
-  ab(['--session', SESSION, 'open', BASE + '/?' + STAMP + theme + '#/todo-list/today'])
+  // seed=today re-injected per scene: shim tomatoes anchor to yesterday (deterministic all day);
+  // without this, LS holds whatever a previous manual visit seeded and aggregations drift across days
+  ab(['--session', SESSION, 'open', BASE + '/?' + STAMP + theme + '&seed=today#/todo-list/today'])
   ab(['--session', SESSION, 'eval', `(() => { try { localStorage.setItem('appLocale', 'en-US'); localStorage.setItem('sidebarCollapsed', 'false'); localStorage.setItem('onboardingToursSeen', '1'); localStorage.setItem('onboardingDone', '1'); const st = JSON.parse(localStorage.getItem('settingsState') || '{}'); st.colorMode = '${theme}'; localStorage.setItem('settingsState', JSON.stringify(st)) } catch (e) {} const b = [...document.querySelectorAll('button')].find(x => ['Stay yesterday', '留在昨天', 'Skip', '稍后'].includes(x.textContent.trim())); if (b) b.click(); return 'ok' })()`])
   ab(['--session', SESSION, 'eval', `location.reload(); 'r'`])
 }

@@ -940,7 +940,7 @@ export default {
 .main-nav-search.sn-search input {
   height: 100%; width: 100%; min-width: 0;
   padding: 0 9px 0 0;
-  font-weight: 400; font-size: var(--fs-md); line-height: 34px; color: #333;
+  font-weight: 400; font-size: var(--fs-md); line-height: 34px; color: var(--text-1);
 }
 .main-nav-search.sn-search input::placeholder { color: var(--text-4); }
 /* 聚焦态：输入框自身不画 outline（默认矩形黑框与 5px 圆角容器不一致），统一由容器 focus-within 描边表达 */
@@ -970,7 +970,7 @@ export default {
 .sn-nav-item,
 .sn-cat-item {
   height: 36px; margin: 0; padding: 0;
-  color: #333; font-weight: 400; font-size: var(--fs-md); line-height: 18px;
+  color: var(--text-1); font-weight: 400; font-size: var(--fs-md); line-height: 18px;
   border-radius: var(--radius-sm);
 }
 /* 分类行对齐导航几何（含容器自带 10px 缩进）：圆点中心对齐导航图标中心(19)，文字起点对齐导航文字(40) */
@@ -978,7 +978,7 @@ export default {
 .sn-nav-item:hover { background-color: rgba(233,237,237,.5); }
 .sn-cat-item:hover { background-color: rgba(233,237,237,.5); }
 .side-nav .sn-nav-item.active,
-.side-nav .sn-cat-item.active { background-color: #e9eded; color: #333; font-weight: 400; }
+.side-nav .sn-cat-item.active { background-color: #e9eded; color: var(--text-1); font-weight: 400; }
 /* ============ 分类文件夹层级（设计稿 todo-category__folder 族） ============ */
 .sn-cat-folder { font-weight: 500; position: relative; }
 .sn-cat-folder .folder-toggle-icon {

@@ -13,8 +13,13 @@ const git = (args) => execFileSync('git', args, { cwd: ROOT, encoding: 'utf8' })
 
 const dirty = git(['status', '--porcelain', '--', 'assets/css']).split('\n').filter(Boolean)
 if (dirty.length) {
-  console.error('✗ 缓存戳纪律:assets/css 有未提交改动——改 css 必须同笔提交 bump renderer/index.html 的 ?v= 戳:\n  ' + dirty.join('\n  '))
-  process.exit(1)
+  // css 与 index.html 同处改动/暂存态 = bump 与改动同笔在途,放行(门禁语义「同笔提交」的前置形态);
+  // 只有 css 改了而 index.html 没动才是真违规
+  const htmlDirty = git(['status', '--porcelain', '--', 'renderer/index.html']).trim().length > 0
+  if (!htmlDirty) {
+    console.error('✗ 缓存戳纪律:assets/css 有改动但 renderer/index.html 未同步 bump——改 css 必须同笔提交 ?v= 戳:\n  ' + dirty.join('\n  '))
+    process.exit(1)
+  }
 }
 
 const tsOf = (spec) => Number(git(['log', '-1', '--format=%ct', '--', spec])) || 0

@@ -617,7 +617,7 @@ export default {
 .cal-fc.fc .fc-col-header-cell-cushion { color: var(--brand-dark); font-size: var(--fs-md); font-weight: 600; padding: 6px 0; text-decoration: none; }
 .cal-fc.fc .fc-daygrid-day { background: var(--panel, #fff); }
 .cal-fc.fc .fc-day-today { background: rgba(255, 220, 40, .15); }
-.cal-fc.fc .fc-daygrid-day-number { color: #333; font-size: var(--fs-sm); padding: 4px 6px; text-decoration: none; }
+.cal-fc.fc .fc-daygrid-day-number { color: var(--text-1); font-size: var(--fs-sm); padding: 4px 6px; text-decoration: none; }
 .cal-fc.fc .fc-day-today .fc-daygrid-day-number { color: var(--brand); font-weight: 700; }
 .cal-fc.fc .fc-daygrid-day-frame { min-height: 88px; }
 .cal-fc.fc .fc-h-event { background: var(--brand); border: none; border-radius: var(--radius-sm); }

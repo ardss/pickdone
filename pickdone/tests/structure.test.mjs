@@ -410,3 +410,22 @@ test('structure: template bound identifiers all declared on the component (silen
   assert.deepEqual(broken, [], 'template identifiers not declared on component (renders as undefined silently — the SideNav incident class):\n' + broken.join('\n'))
 })
 
+function walkVueRaw (dir) {
+  const out = []
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, e.name)
+    if (e.isDirectory()) out.push(...walkVueRaw(p))
+    else if (e.name.endsWith('.vue')) out.push({ file: p, src: fs.readFileSync(p, 'utf8') })
+  }
+  return out
+}
+
+test('structure: SFC style blocks must never be scoped (global cascade contract — scoped would hash selectors and silently orphan relocated rules)', () => {
+  const bad = []
+  for (const { file, src } of walkVueRaw('renderer/js')) {
+    for (const m of src.matchAll(/<style([^>]*)>/g)) {
+      if (/\sscoped(\b)?/.test(m[1])) bad.push(file)
+    }
+  }
+  assert.deepEqual(bad, [], '<style scoped> found (breaks global cascade contract):\n' + bad.join('\n'))
+})

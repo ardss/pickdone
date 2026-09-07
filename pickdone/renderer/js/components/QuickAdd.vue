@@ -253,7 +253,7 @@ html[data-theme="dark"] .qa-inputwrap:focus-within { background: var(--active-bg
 .qa-input {
   height: auto; min-height: 37px;
   padding: 10px 17px;
-  font-weight: 400; font-size: var(--fs-sm); line-height: 17px; color: #333;
+  font-weight: 400; font-size: var(--fs-sm); line-height: 17px; color: var(--text-1);
   border-radius: var(--radius-sm);
 }
 .page__header{position:relative;z-index:2;display:flex;flex-direction:column;gap:18px;padding:18px;box-shadow:0 2px 4px hsla(0,0%,91.4%,.5)}
