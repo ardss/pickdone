@@ -1,4 +1,4 @@
-# SOP-06 发布流程(Release SOP)
+# SOP-06 发布流程(Release SOP)——可执行形态: npm run release X.Y.Z + npm run release:finalize X.Y.Z(流程已代码化,本文档是它的说明书;两者以脚本为准)
 
 > 依据:2026-09-07 v0.2.0 发布实战教训——v0.1.0 无 Releases 条目、v0.1.1 残留重复 draft、
 > v0.1.2 空正文、视觉门禁在 CI 裸机上不可跑(机器本地基线)。本 SOP 固化正确路径,凡发布照此执行。
