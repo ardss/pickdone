@@ -41,15 +41,9 @@ const RULES = [
   // 存量散值随规则迁入各组件 <style>，全局层不再拦截（component-level 规则由组件作者维护）
 ]
 
-// component <style> blocks joined the scan (2026-09-07): the component-absorption refactor moved most CSS
-// surface into SFCs — scanning only the two global files would leave the majority of rules unguarded
-function* vueStyleFiles () {
-  const walk = d => fs.readdirSync(d, { withFileTypes: true }).flatMap(e => {
-    const fp = path.join(d, e.name)
-    return e.isDirectory() ? walk(fp) : (e.name.endsWith('.vue') ? [fp] : [])
-  })
-  yield* walk(path.join(ROOT, 'renderer', 'js'))
-}
+// component <style> blocks joined the scan via the shared extractor (2026-09-07 convergence:
+// previously four gates each hand-rolled .vue style extraction with divergent behavior)
+const { cssSources } = require('./lib/css-sources.cjs')
 const hits = []
 for (const rel of FILES) {
   const p = path.join(ROOT, rel)
@@ -67,19 +61,14 @@ for (const rel of FILES) {
     }
   })
 }
-for (const vp of vueStyleFiles()) {
-  const rel = path.relative(ROOT, vp)
-  const lines = fs.readFileSync(vp, 'utf8').split(/\r?\n/)
-  let inStyle = false
+for (const { rel, css } of cssSources().filter(src => src.rel.includes("renderer"))) {
+  const lines = css.split(/\r?\n/)
   lines.forEach((line, i) => {
-    if (/^\s*<style[^>]*>/.test(line)) { inStyle = true; return }
-    if (/^\s*<\/style>/.test(line)) { inStyle = false; return }
-    if (!inStyle) return
     for (const [re, msg] of RULES) {
       if (re.test(line)) {
-        const ctx = lines.slice(Math.max(0, i - 8), i + 1).join('\n')
+        const ctx = lines.slice(Math.max(0, i - 8), i + 1).join("\n")
         if (WHITELIST.some(w => line.includes(w) || ctx.includes(w))) continue
-        hits.push(`${rel}:${i + 1}  [${msg}]\n    ${line.trim().slice(0, 120)}`)
+        hits.push(`${rel}:${i + 1}  [${msg}]`)
       }
     }
   })

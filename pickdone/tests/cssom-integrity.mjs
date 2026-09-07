@@ -64,12 +64,35 @@ try {
   }
   const baseline = JSON.parse(fs.readFileSync(BASELINE, 'utf8'))
 
+  // 本地手写样式表升级为「精确比对」(2026-09-07 四路审查:95% 容差可静默吞 77 条规则)——
+  // base.css/theme-dark.css 的 live 规则数必须逐条等于磁盘派生数(注释/字符串感知的顶层 { 计数,
+  // 已验证与浏览器 CSSOM 计数完全一致:608/145)。历史两次吞规则事故正是手写文件。
+  // index-built(vite 压缩产物)的浏览器规范化文本与磁盘无法稳定文本对账,且源侧有构建器+结构门禁兜底,维持基线 95%。
+  const countTopLevel = css => {
+    let depth = 0, n = 0
+    for (let i = 0; i < css.length; i++) {
+      const c = css[i]
+      if (c === '/' && css[i + 1] === '*') { i = css.indexOf('*/', i + 2); if (i < 0) break; i++ ; continue }
+      if (c === '"' || c === "'") { const q = c; for (i++; i < css.length; i++) { if (css[i] === '\\\\') i++; else if (css[i] === q) break } continue }
+      if (c === '{') { if (depth === 0) n++; depth++ }
+      else if (c === '}') depth--
+    }
+    return n
+  }
+  const diskExact = {}
+  diskExact['base.css'] = countTopLevel(fs.readFileSync(path.join(HERE, '..', 'assets', 'css', 'base.css'), 'utf8'))
+  diskExact['theme-dark.css'] = countTopLevel(fs.readFileSync(path.join(HERE, '..', 'assets', 'css', 'theme-dark.css'), 'utf8'))
+
   const problems = []
   for (const [name, n] of sheets) {
     const base = baseline[name]
     if (base === undefined) { problems.push(`${name}: 不在基线中（新样式表？执行 --update 刷新基线）`); continue }
     if (n === -1) { problems.push(`${name}: CSSOM 访问被拒`); continue }
-    if (n < base * 0.95) problems.push(`${name}: CSSOM 规则数 ${n} < 基线 ${base}×95% —— 存在被静默吞掉的规则块`)
+    if (name in diskExact) {
+      if (n !== diskExact[name]) problems.push(`${name}: CSSOM 规则数 ${n} ≠ 磁盘派生 ${diskExact[name]} —— 存在被静默吞掉的规则块(精确比对)`)
+    } else if (n < base * 0.95) {
+      problems.push(`${name}: CSSOM 规则数 ${n} < 基线 ${base}×95% —— 存在被静默吞掉的规则块`)
+    }
   }
   for (const name of Object.keys(baseline)) {
     if (!(name in live)) problems.push(`${name}: 页面未加载该样式表`)

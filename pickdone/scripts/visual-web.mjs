@@ -16,6 +16,7 @@ import pixelmatch from 'pixelmatch'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
 const MODE = process.argv.includes('--baseline') ? 'baseline' : 'check'
+const SPAWN = process.argv.includes('--spawn') // check:all 模式:自拉起 5175 宿主(视觉门禁此前游离门禁外,删单条 SFC 规则无门禁可抓)
 const THRESHOLD = Number(process.env.VISUAL_THRESHOLD || 0.004)
 const DIR = path.join(ROOT, 'tests', '.artifacts', 'visual-web')
 fs.mkdirSync(DIR, { recursive: true })
@@ -29,8 +30,30 @@ const ROUTES = [
   '#/todo-list/recycle-bin'
 ]
 
-import { execSync } from 'node:child_process'
+import { execSync, spawn as cpSpawn } from 'node:child_process'
 const ab = (args) => execSync('agent-browser ' + args.map(a => JSON.stringify(a)).join(' '), { encoding: 'utf8', timeout: 120000, shell: true })
+
+// --spawn: 自拉起 5175 vite 宿主(独占门禁自身生命周期,结束即杀,不依赖外部常驻服务)
+let viteChild = null
+if (SPAWN) {
+  viteChild = cpSpawn('npm', ['run', 'dev'], { cwd: path.join(ROOT, 'browser-dev'), shell: true, stdio: 'ignore' })
+  let up = false
+  for (let t = 0; t < 40000 && !up; t += 500) {
+    await new Promise(r => setTimeout(r, 500))
+    try { if ((await fetch(BASE, { signal: AbortSignal.timeout(2000) })).ok) up = true } catch { /* retry */ }
+  }
+  if (!up) {
+    console.error('✗ visual-web --spawn: 40s 内 5175 宿主未就绪(vite 启动失败?)')
+    killVite()
+    process.exit(2)
+  }
+}
+function killVite () {
+  if (!viteChild) return
+  try { execSync(`taskkill /pid ${viteChild.pid} /T /F`, { shell: true, stdio: 'ignore' }) } catch { /* already gone */ }
+  viteChild = null
+}
+process.on('exit', killVite)
 
 // preflight (2026-09-07 review): crash-red mid-route-loop when 5175 is down or agent-browser missing;
 // fail loudly BEFORE any scene runs, with actionable message instead of a cryptic eval error
@@ -44,7 +67,8 @@ try {
   const res = await fetch(BASE, { signal: AbortSignal.timeout(5000) })
   if (!res.ok) throw new Error('HTTP ' + res.status)
 } catch {
-  console.error('✗ visual-web: 5175 宿主未启动 —— 先在 browser-dev/ 跑 `npm run dev`(vite --port 5175)再重跑。')
+  console.error('✗ visual-web: 5175 宿主未启动 —— 加 --spawn 自拉起,或在 browser-dev/ 跑 `npm run dev`(vite --port 5175)再重跑。')
+  killVite()
   process.exit(2)
 }
 
@@ -97,4 +121,5 @@ for (const route of ROUTES) {
   }
 }
 console.log(fail ? `✗ ${fail} failures` : '✓ all web visual checks passed')
+killVite()
 process.exit(fail ? 1 : 0)

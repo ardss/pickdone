@@ -67,7 +67,16 @@ const GROUPS = [
   },
 ]
 if (WITH_A11Y) GROUPS.push({
-  name: '⑤ a11y（活应用实测）', parallel: 1,
+  {
+    // 2026-09-07 四路审查:视觉门禁此前完全游离 check:all 外——删单条 SFC 规则无任何门禁可抓
+    // (cssom 95% 容差放行 77 条内的丢失,其余门禁只扫存在的规则)。--spawn 自拉起 5175 宿主,无外部依赖。
+    name: '④ Web 视觉回归（14 场景×深浅,0.4% pixelmatch;自拉起 5175 宿主）', parallel: 1,
+    stages: [
+      ['Web 视觉回归（14 场景深浅对照,防"删规则/改样式无门禁可抓"——漂移根因已修:shim 番茄锚昨天）', 'node', ['scripts/visual-web.mjs', '--spawn']],
+    ]
+  },
+  {
+    name: '⑤ a11y（活应用实测）', parallel: 1,
   stages: [['a11y 实测(axe)', 'node', ['cli/a11y-scan.js']]]
 })
 
