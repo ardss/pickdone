@@ -8,7 +8,7 @@
 
 **Goal**: converge on a single `--color-*` token system with a layered utility/structure architecture; each component's styles owned by exactly one module file; dark-mode rules centralized; all legacy CSS files retired.
 
-**Status**: tokenization and dark-mode centralization have landed on main (`base.css` token system + `theme-dark.css` central dark rules; radius/space/chart cssVars gridded). The legacy six-file `style-1~4.css` retirement was completed once on the css-refactor branch (Tailwind v4 static build) but is not merged back. Remaining on main: retiring the old CSS layers, task-row density, three-screen adaptation, legacy token cleanup.
+**Status**: tokenization and dark-mode centralization have landed on main (`base.css` token system + `theme-dark.css` central dark rules; radius/space/chart cssVars gridded). The component-absorption refactor (2026-09-07, commits up to b4dd6f5/2dbc6b1) retired `style-1~4.css` entirely: global CSS is now `base.css` + `theme-dark.css` only, with component rules living in SFC `<style>` blocks. Remaining on main: task-row density, three-screen adaptation, legacy token cleanup.
 
 ## 2. SFC migration
 
