@@ -47,7 +47,8 @@ const { cssSources } = require('./lib/css-sources.cjs')
 const hits = []
 for (const rel of FILES) {
   const p = path.join(ROOT, rel)
-  if (!fs.existsSync(p)) continue
+  // 正向断言:全局文件缺失=扫描面塌缩成 0 依旧恒绿(假绿)——直接红而非静默跳过
+  if (!fs.existsSync(p)) { console.error(`✗ token 扫描目标缺失: ${rel}`); process.exit(1) }
   const lines = fs.readFileSync(p, 'utf8').split(/\r?\n/)
   lines.forEach((line, i) => {
     for (const [re, msg, scope] of RULES) {

@@ -73,12 +73,7 @@ const GROUPS = [
       ['Web 视觉回归（14 场景深浅对照,防"删规则/改样式无门禁可抓"——漂移根因已修:shim 番茄锚昨天）', 'node', ['scripts/visual-web.mjs', '--spawn']],
     ]
   },
-  {
-    name: '④ Web 视觉回归（14 场景×深浅,0.4% pixelmatch;自拉起 5175 宿主）', parallel: 1, retry: 1,
-    stages: [
-      ['Web 视觉回归（14 场景深浅对照,防"删规则/改样式无门禁可抓"——漂移根因已修:shim 番茄锚昨天）', 'node', ['scripts/visual-web.mjs', '--spawn']],
-    ]
-  },
+  
 ]
 if (WITH_A11Y) GROUPS.push({
   name: '⑤ a11y（活应用实测）', parallel: 1,
@@ -102,7 +97,11 @@ function runStage ([name, cmd, args, extraEnv]) {
     const CAP = 16 * 1024 * 1024 // 尾部 25 行足够,但保留较大环形缓冲防大输出丢关键信息
     child.stdout.on('data', d => { out = (out + d).slice(-CAP) })
     child.stderr.on('data', d => { out = (out + d).slice(-CAP) })
-    const timer = setTimeout(() => { try { child.kill('SIGKILL') } catch {} }, 15 * 60 * 1000)
+    const timer = setTimeout(() => {
+      // win32: child 是 shell 包装进程,SIGKILL 只杀壳会孤儿化 node/vite 孙进程——改树杀
+      if (process.platform === 'win32') { try { spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { shell: true, stdio: 'ignore' }) } catch {} }
+      try { child.kill('SIGKILL') } catch {}
+    }, 15 * 60 * 1000)
     child.on('close', (code, signal) => {
       clearTimeout(timer)
       const timedOut = signal === 'SIGKILL'
@@ -163,7 +162,7 @@ if (ON_CI) {
 } else {
   console.log(`\n===== ${GROUPS[1].name} × ${GROUPS[2].name}（两池同时起跑） =====`)
   const [staticRs, liveRs] = await Promise.all([
-    runPool(GROUPS[1].stages, GROUPS[1].parallel),
+    runPool(GROUPS[1].stages, GROUPS[1].parallel, { retry: GROUPS[1].retry || 0 }),
     runPool(GROUPS[2].stages, GROUPS[2].parallel, { retry: GROUPS[2].retry || 0 })
   ])
   results.push(...staticRs, ...liveRs)
