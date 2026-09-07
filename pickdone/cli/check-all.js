@@ -168,6 +168,12 @@ if (ON_CI) {
   results.push(...staticRs, ...liveRs)
 }
 for (const g of GROUPS.slice(3)) {
+  // 视觉回归(第4组)是本机门禁:基线为 gitignored 的机器本地文件,且依赖 agent-browser——
+  // CI 裸机上必然 14 场景全 MISSING-BASELINE,不得入 CI;本地 check:all 照常护航
+  if (ON_CI && /视觉/.test(g.name)) {
+    console.log(`\n===== ${g.name} —— CI 跳过(机器本地基线+agent-browser 依赖;视觉护航在开发者本机执行) =====`)
+    continue
+  }
   console.log(`\n===== ${g.name} =====`)
   const rs = await runPool(g.stages, g.parallel, { retry: g.retry || 0 })
   results.push(...rs)
