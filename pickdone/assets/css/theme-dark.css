@@ -34,7 +34,7 @@ html[data-theme="dark"] .mini { background: var(--gray-bg); border-color: var(--
 html[data-theme="dark"] .mini:hover { border-color: var(--brand); color: var(--brand); }
 html[data-theme="dark"] .primary.mini, html[data-theme="dark"] .primary.mini:hover { color: #fff; }
 html[data-theme="dark"] .primary { background: var(--brand); color: #fff; }
-html[data-theme="dark"] .tagchip { background: var(--brand-light); color: #35c2ae; }
+html[data-theme="dark"] .tagchip { background: var(--brand-light); color: var(--brand-bright); }
 html[data-theme="dark"] .empty-state p { color: var(--text-3); }
 html[data-theme="dark"] .cal-cell { background: var(--panel); }
 html[data-theme="dark"] .cal-cell.out { background: var(--bg); }
@@ -45,7 +45,7 @@ html[data-theme="dark"] blockquote { color: var(--text-3); }
 html[data-theme="dark"] .chart-box { background: var(--panel); }
 html[data-theme="dark"] .ring-bg { stroke: var(--line); }
 html[data-theme="dark"] .edit-panel { border-left-color: var(--line); }
-html[data-theme="dark"] .repeat-line { background: var(--brand-light); color: #35c2ae; }
+html[data-theme="dark"] .repeat-line { background: var(--brand-light); color: var(--brand-bright); }
 html[data-theme="dark"] .tip { color: var(--text-3); }
 html[data-theme="dark"] .vm-sep { background: var(--line); }
 html[data-theme="dark"] .img-cell, html[data-theme="dark"] .add-cell { background: var(--gray-bg); }
@@ -104,7 +104,7 @@ html[data-theme="dark"] .modal__footer { border-color: var(--line); }
 html[data-theme="dark"] .modal__header { color: #5b93da; }
 
 /* 番茄时间轴 / 热点图卡 */
-html[data-theme="dark"] .tl-track { background: #2b3038; }
+html[data-theme="dark"] .tl-track { background: var(--track-bg); }
 html[data-theme="dark"] .tl-date { color: var(--text-2); }
 html[data-theme="dark"] .tl-hour { color: var(--text-4); }
 html[data-theme="dark"] .tl-seg.rest { background: #4a5058; }
@@ -124,8 +124,6 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb { background: #3a414d; }
 
 /* 编辑面板时间条 / 迷你日历 */
 html[data-theme="dark"] .ep-tags-row { border-bottom-color: var(--gray-bg); }
-
-/* AI 弹窗提示区 */
 
 /* 危险操作（暗色红调） */
 html[data-theme="dark"] .mini.danger { border-color: rgba(245,108,108,.4); }
@@ -161,6 +159,8 @@ html[data-theme="dark"] {
   --tt-reached: #6fd078;
   --brand-focus-ring: rgba(147, 160, 245, .22);
   --settings-sep: rgba(147, 160, 245, .16);
+  /* 暗底提亮品牌色(松石青原色在暗底偏暗,var(--brand-bright) 对 --gray-bg 对比达标) */
+  --brand-bright: #35c2ae;
 }
 /* 设计稿字面量值的深色对应（值属复刻红线，只补暗色不改浅色源） */
 html[data-theme="dark"] .content { background-color: var(--bg); }
@@ -168,7 +168,7 @@ html[data-theme="dark"] .navbar__item { color: var(--text-2); }
 html[data-theme="dark"] .search-highlight { background: rgba(255, 229, 143, .28); color: var(--text-1); }
 html[data-theme="dark"] .cal-cell.out { background: transparent; }
 /* 2026-08-28 深度审查补漏：回收站药丸/待办箱下拉/条目选中态/日期条未定义 token 防线 */
-html[data-theme="dark"] .todo-list .todo-box-list-item__tools .btn { background-color: rgba(15, 157, 143, .18); color: #35c2ae; }
+html[data-theme="dark"] .todo-list .todo-box-list-item__tools .btn { background-color: rgba(15, 157, 143, .18); color: var(--brand-bright); }
 html[data-theme="dark"] .todo-list .btn--danger.rc-danger-btn { background-color: rgba(239, 101, 90, .16) !important; color: var(--danger) !important; }
 html[data-theme="dark"] .dd-menu { color: var(--text-2); }
 html[data-theme="dark"] .dd-menu li:hover { background: var(--hover-bg); }
@@ -184,7 +184,7 @@ html[data-theme="dark"] .tomato-record:hover { background-color: var(--hover-bg)
 /* 日历"今天"格:浅色黄高亮在暗色下成土黄块,改品牌冷色弱底 */
 html[data-theme="dark"] .fc { --fc-today-bg-color: rgba(147, 160, 245, .10); }
 /* 星期表头沿用浅色的 --brand-dark,暗底上不可读 */
-html[data-theme="dark"] .fc .fc-col-header-cell-cushion { color: #35c2ae; }
+html[data-theme="dark"] .fc .fc-col-header-cell-cushion { color: var(--brand-bright); }
 /* EP 2.14 新版 el-select 外壳类名是 .el-select__wrapper(旧 .el-input__wrapper 覆盖落空→白块) */
 html[data-theme="dark"] .el-select__wrapper { background-color: var(--gray-bg); box-shadow: 0 0 0 1px var(--line-strong) inset; }
 html[data-theme="dark"] .el-select__wrapper.is-hovering,
@@ -206,12 +206,12 @@ html[data-theme="dark"] .fc .fc-daygrid-day-number .work { color: #9fd8d9; backg
 html[data-theme="dark"] .el-cascader__dropdown,
 html[data-theme="dark"] .el-cascader-panel,
 html[data-theme="dark"] .el-cascader-menu {
-  background: #1c1f26; color: var(--text-2); border-color: #333a44;
+  background: var(--panel); color: var(--text-2); border-color: var(--line-strong);
 }
-html[data-theme="dark"] .el-cascader-menu { border-right-color: #333a44; }
+html[data-theme="dark"] .el-cascader-menu { border-right-color: var(--line-strong); }
 /* el-popper 通用暗色底 */
-html[data-theme="dark"] .el-popper.is-light { background: #1c1f26; border-color: #333a44; }
-html[data-theme="dark"] .el-popper.is-light .el-popper__arrow::before { background: #1c1f26; border-color: #333a44; }
+html[data-theme="dark"] .el-popper.is-light { background: var(--panel); border-color: var(--line-strong); }
+html[data-theme="dark"] .el-popper.is-light .el-popper__arrow::before { background: var(--panel); border-color: var(--line-strong); }
 
 /* ===== Element Plus 暗色变量（html[data-theme="dark"] 一次性覆盖全 EP 组件） =====
    配合 main.js 中 documentElement.classList.toggle('dark', dark) 使用。
@@ -261,34 +261,34 @@ html[data-theme="dark"] .el-switch.is-checked .el-switch__core { background-colo
 html[data-theme="dark"] .el-radio-button__inner { background: var(--el-fill-color); color: var(--el-text-color-regular); border-color: var(--el-border-color); }
 html[data-theme="dark"] .el-radio-button__original-radio:checked + .el-radio-button__inner { background: var(--el-color-primary); color: #fff; }
 html[data-theme="dark"] .el-date-picker__header, html[data-theme="dark"] .el-date-table { color: var(--el-text-color-regular); }
-html[data-theme="dark"] .el-date-table td.today .el-date-table-cell__text { color: #35c2ae; }
+html[data-theme="dark"] .el-date-table td.today .el-date-table-cell__text { color: var(--brand-bright); }
 /* 选中格（含选中=今天）：紫底换品牌蓝底，白字对比达标 */
-html[data-theme="dark"] .el-date-table td.current .el-date-table-cell__text { background-color: #35c2ae; }
+html[data-theme="dark"] .el-date-table td.current .el-date-table-cell__text { background-color: var(--brand-bright); }
 
 /* ==================== 设置中心（SettingsModal）暗色映射补齐 ==================== */
-/* 暗底强调/页签下划线：松石青原色在暗底偏暗，提亮为 #35c2ae */
-html[data-theme="dark"] { --brand-dark: #35c2ae; --brand-text: #4cd4c0; /* 品牌文字变体:暗底(#22262e)对比 ~7:1 */ }
+/* 暗底强调/页签下划线：松石青原色在暗底偏暗，提亮为 var(--brand-bright) */
+html[data-theme="dark"] { --brand-dark: var(--brand-bright); --brand-text: #4cd4c0; /* 品牌文字变体:暗底(var(--gray-bg))对比 ~7:1 */ }
 /* el-slider：暗色轨道/滑块 */
-html[data-theme="dark"] .modal--settings .el-slider__runway { background-color: #333a44; }
+html[data-theme="dark"] .modal--settings .el-slider__runway { background-color: var(--line-strong); }
 html[data-theme="dark"] .modal--settings .el-slider__bar { background-color: var(--brand); }
 html[data-theme="dark"] .modal--settings .el-slider__button { border-color: var(--brand); }
-html[data-theme="dark"] .modal__close { color: #8D9095; }
-html[data-theme="dark"] .modal__close:hover { background: #2a3038; color: #E5EAF3; }
+html[data-theme="dark"] .modal__close { color: var(--el-text-color-placeholder); }
+html[data-theme="dark"] .modal__close:hover { background: #2a3038; color: var(--el-text-color-primary); }
 
-/* 活跃热力图:深色下 .hm-l0 用的 --gray-bg 与 .hm-card 卡片底同为 #22262e,空格子整个隐形(网格结构不可见)。提亮一档让无数据格与卡片底可区分(2026-08-30 用户报告深色热力图显示不出来) */
+/* 活跃热力图:深色下 .hm-l0 用的 --gray-bg 与 .hm-card 卡片底同为 var(--gray-bg),空格子整个隐形(网格结构不可见)。提亮一档让无数据格与卡片底可区分(2026-08-30 用户报告深色热力图显示不出来) */
 html[data-theme="dark"] .hm-l0 { background: #2d333e; }
-html[data-theme="dark"] .abandon-card { background: #22262e; box-shadow: 0 16px 48px rgba(0, 0, 0, .5); }
+html[data-theme="dark"] .abandon-card { background: var(--gray-bg); box-shadow: 0 16px 48px rgba(0, 0, 0, .5); }
 html[data-theme="dark"] .abandon-x:hover { background: rgba(255, 255, 255, .07); }
 html[data-theme="dark"] .abandon-btn:hover { background: rgba(255, 255, 255, .07); }
 /* 复盘页卡片语言统一（2026-08-31）：图表卡与 KPI 格与 tl-card 同一深色面板，消除两种深浅灰混用 */
 html[data-theme="dark"] .hm-card, html[data-theme="dark"] .tl-card,
 html[data-theme="dark"] .stat-subpage .chart-3.single, html[data-theme="dark"] .stat-subpage .chart-4.single,
 html[data-theme="dark"] .stat-subpage .chart-5.single, html[data-theme="dark"] .stat-subpage .chart-6.single,
-html[data-theme="dark"] .stat-subpage .kpi-tile { background: #22262e; }
+html[data-theme="dark"] .stat-subpage .kpi-tile { background: var(--gray-bg); }
 html[data-theme="dark"] .tl-card b { color: #d5d9e0; }
 html[data-theme="dark"] .kpi-tile { background: var(--panel); border-color: var(--line); }
 html[data-theme="dark"] .stat-view-tab.on { background: #2a2f3a; }
-html[data-theme="dark"] .ach-total { background: #22262e; }
+html[data-theme="dark"] .ach-total { background: var(--gray-bg); }
 html[data-theme="dark"] .qapage__card { box-shadow: 0 8px 32px rgba(0,0,0,.5); }
 html[data-theme="dark"] .ob-card { background: #1f2228; }
 html[data-theme="dark"] .ob-opt--on { background: rgba(15, 157, 143, .18); }

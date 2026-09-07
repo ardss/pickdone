@@ -69,10 +69,13 @@ R4/R5 档位纪律原 scope 的 style-2/3 已退役,纪律转组件级(全局层
 5. 真实数据目录任务数漂移 → 隔离 TODO_USER_DATA_DIR 实例
 6. css-move 不识别 CSS 注释导致设计稿注释被拦腰截断(B5 回滚根因)→ 扫描器注释/字符串感知
 
-## 剩余债务(终态后唯一在册)
+## 债务清零(收官加轮 2026-09-07)
 
-- theme-dark.css 299 行深色补丁仍为「原样随迁」(方案 B);统一 token 化(方案 A)留作单独一轮
-- 桌面 CDP 视觉门禁锁屏态不可用,已由 visual-web 门禁补位;白天可跑桌面门禁双保险
+- theme-dark.css 深色补丁 token 化(原方案 A 债务)已完成:重复暗色字面量收编为 token——
+  `--brand-bright`(暗底提亮品牌 #35c2ae,9 处)/#22262e→var(--gray-bg)/#1c1f26→var(--panel)/
+  #333a44→var(--line-strong)/#2b3038→var(--track-bg)/EP 文字灰→var(--el-text-color-*)。
+  同值替换,web 视觉门禁 14/14 PASS(diff ≤0.051%),仅剩 token 定义行持字面量。
+- 至此 CSS 重构无任何在册债务。
 
 ## 验证命令
 

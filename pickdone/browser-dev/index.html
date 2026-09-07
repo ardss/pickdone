@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <link rel="icon" type="image/svg+xml" href="/assets/img/favicon.svg">
+  <title>拾事（浏览器调试）</title>
+  <!-- 与桌面 renderer/index.html 等价的 CSP(app://app→self):让CSP违规在5175就能暴露,不再只炸打包端 -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self'; font-src 'self' data:; connect-src 'self' https:">
+  <link rel="stylesheet" href="/assets/vendor-lib/element-plus/index.css">
+  <link rel="stylesheet" href="/assets/vendor-lib/driver.css">
+  <link rel="stylesheet" href="/assets/css/base.css?v=1788740221727">
+  <link rel="stylesheet" href="/assets/css/theme-dark.css?v=1788740221727">
+  <!-- Vue 3 运行时（纯 Vue3.5 全局构建） -->
+  <script src="/assets/vendor-lib/vue3.global.prod.js?v=1788740221727"></script>
+  <script src="/assets/vendor-lib/vue-i18n.global.prod.js"></script>
+  <script src="/assets/vendor-lib/vuex4.global.prod.js?v=1788740221727"></script>
+  <script src="/assets/vendor-lib/vue-router4.global.prod.js?v=1788740221727"></script>
+  <script src="/assets/vendor-lib/element-plus.full.min.js?v=1788740221727"></script>
+  <script src="/assets/vendor-lib/element-plus/locale-en.min.js"></script>
+  <script src="/assets/vendor-lib/element-plus/locale-zh-cn.min.js"></script>
+  <script src="/assets/vendor-lib/pinyin-pro.umd.js"></script>
+  <script src="/assets/vendor-lib/dayjs.min.js"></script>
+  <script src="/assets/vendor-lib/dayjs-plugin-isoWeek.js"></script>
+  <script>window.dayjs && window.dayjs.extend && window.dayjs.extend(window.dayjs_plugin_isoWeek)</script>
+  <script>window.dayjs = window.dayjs || window.dayJs;</script>
+  <script src="/node_modules/sortablejs/Sortable.min.js"></script>
+  <script src="/assets/vendor-lib/driver.iife.js"></script>
+</head>
+<body>
+  <div id="app"></div>
+  <script>
+// 演示数据注入（仅浏览器调试宿主）：无专注记录时灌入两天拟真数据，便于观察时间轴/列表效果。
+// 2026-09-04 账本迁行表:LS blob 不再承载记录,注入改走 tomatoAppendMany 原子 op(幂等,同 id 不双账)
+;(function () {
+  var poll = function () {
+    window.__pollN = (window.__pollN || 0) + 1
+    if (!window.todoAPI || !window.todoAPI.dbCall) { setTimeout(poll, 300); return }
+    window.todoAPI.dbCall('tomatoAll').then(function (existing) {
+      if ((existing || []).some(function (r) { return String(r.tomatoId || '').indexOf('tmt_demo_') === 0 })) return
+      var mk = function (demoId, baseDay, sh, sm, durMin, focus) {
+        var start = new Date(baseDay); start.setHours(sh, sm, 0, 0)
+        var end = new Date(start.getTime() + durMin * 60000)
+        var p2 = function (n) { return (n < 10 ? '0' : '') + n }
+        var dk = baseDay.getFullYear() + '-' + p2(baseDay.getMonth() + 1) + '-' + p2(baseDay.getDate())
+        return { tomatoId: 'tmt_demo_' + demoId, endTime: end.getTime(),
+          focusDuration: durMin, restDuration: 0, succeed: true, status: 'local', focus: focus, focusTaskId: null, dateKey: dk }
+      }
+      var today = new Date(); today.setHours(0, 0, 0, 0)
+      var yest = new Date(today.getTime() - 86400000)
+      var recs = [
+        mk('d1', today, 9, 0, 25, '晨会跟进'), mk('d2', today, 9, 30, 25, '晨会跟进'),
+        mk('d3', today, 10, 0, 25, '需求梳理'), mk('d4', today, 10, 30, 25, '需求梳理'), mk('d5', today, 11, 0, 25, '需求梳理'),
+        mk('d6', today, 14, 0, 25, '评审 UI 还原度问题清单'), mk('d7', today, 15, 0, 25, '写周报'),
+        mk('d8', today, 16, 30, 25, '背 30 个单词'),
+        mk('d9', today, 20, 0, 25, '阅读《深入浅出 Vue.js》'), mk('d10', today, 20, 30, 25, '阅读《深入浅出 Vue.js》'),
+        mk('e1', yest, 9, 0, 25, '迭代排期'), mk('e2', yest, 9, 35, 25, '迭代排期'),
+        mk('e3', yest, 14, 0, 25, '接口联调'), mk('e4', yest, 14, 40, 25, '接口联调'), mk('e5', yest, 16, 0, 25, '日报')
+      ]
+      window.todoAPI.dbCall('tomatoAppendMany', recs).then(function () {
+        console.log('[demo] 已注入 ' + recs.length + ' 条演示专注记录(行表)')
+      }).catch(function (e) { console.warn('[demo] 注入失败', e) })
+    }).catch(function () { setTimeout(poll, 500) })
+  }
+  setTimeout(poll, 800)
+})()
+
+    // 调试辅助：把运行时报错写进标题栏，便于远程观察
+    window.addEventListener('error', function (e) { document.title = 'ERR: ' + e.message })
+    window.addEventListener('unhandledrejection', function (e) { document.title = 'REJ: ' + ((e.reason && e.reason.message) || e.reason) })
+  </script>
+  <script>
+  // 依赖演示的分类/项目标/开发者模式:document 解析期同步合并(必须早于应用启动读 LS,否则被启动回写竞态覆盖)
+  ;(function () {
+    try {
+      var cats = JSON.parse(localStorage.getItem('appShimCategories') || '[]')
+      var now0 = Date.now()
+      var mkc = function (id, n, c, sort) { return { category_id: id, user_id: 0, category_name: n, category_color: c, create_time: 0, list_sort: sort, folder_is: 0, folder_id: 0, delete_flag: 0 } }
+      // 完整 4 分类表直接落 LS:3 个默认 + 项目「网站改版」,shim 与渲染端迁移路径都不再各自补种(竞态根源)
+      var want = [mkc(100001, '工作', '#0f9d8f', 100), mkc(100002, '学习', '#f2a63b', 200), mkc(100003, '生活', '#7ac74f', 300), mkc(9001, '网站改版', '#7E57C2', 50)]
+      var changed = false
+      for (var i = 0; i < want.length; i++) {
+        var hit = cats.some(function (c) { return c.category_id === want[i].category_id && c.category_name === want[i].category_name })
+        if (!hit) { cats.push(want[i]); changed = true }
+      }
+      if (changed) localStorage.setItem('appShimCategories', JSON.stringify(cats))
+      var meta = {}
+      try { meta = JSON.parse(localStorage.getItem('appBrowserShim.meta') || '{}') } catch (e) {}
+      meta.projectCategoryIds = JSON.stringify([9001])
+      localStorage.setItem('appBrowserShim.meta', JSON.stringify(meta))
+      var st = JSON.parse(localStorage.getItem('settingsState') || '{}')
+      var changed = false
+      if (!st.developerMode) { st.developerMode = true; changed = true }
+      if (!st.showProjectsModule) { st.showProjectsModule = true; changed = true }
+      if (changed) localStorage.setItem('settingsState', JSON.stringify(st))
+      // 调试默认直接落在依赖视图
+      if (localStorage.getItem('todayViewMode') !== 'deps') localStorage.setItem('todayViewMode', 'deps')
+    } catch (e) { window.__headErr = (e && e.message) || 'unknown' }
+    window.__headDone = '1'
+  })()
+  </script>
+  <script src="/browser-dev/todo-browser-shim.js"></script>
+
+<!-- 依赖关系演示数据(实验性 devMode):每次加载幂等合并「网站改版」依赖链 + 独立任务,并打开开发者模式让依赖视图按钮可见 -->
+<!-- 项目依赖演示数据(实验性 devMode):以「拾事 v0.2 开发」真实进度为蓝本,幂等合并任务链 + 里程碑/截止,并打开开发者模式 -->
+<script>
+;(function () {
+  var DAY = 86400000
+  var ts = function (d) { return d.getTime() }
+  var midnight = function (off) { var d = new Date(); d.setHours(0, 0, 0, 0); return new Date(d.getTime() + (off || 0) * DAY) }
+  var PROJ_NAME = '拾事 PickDone'
+  var poll = function () {
+    if (!window.todoAPI || !window.todoAPI.dbCall) { setTimeout(poll, 300); return }
+    // 分类/项目标/设置:自愈合并(含旧演示项目改名;其他标签页可能覆盖回写)
+    try {
+      var cats = JSON.parse(localStorage.getItem('appShimCategories') || '[]')
+      var healed = false
+      var dup = cats.filter(function (c) { return c.category_id === 9001 })
+      if (dup.length !== 1 || dup[0].category_name !== PROJ_NAME) {
+        // 多标签页历史遗留的同 id 重复条目全部清掉,只保留一份规范条目
+        cats = cats.filter(function (c) { return c.category_id !== 9001 })
+        cats.push({ category_id: 9001, user_id: 0, category_name: PROJ_NAME, category_color: '#7E57C2', create_time: 0, list_sort: 50, folder_is: 0, folder_id: 0, delete_flag: 0 })
+        localStorage.setItem('appShimCategories', JSON.stringify(cats))
+        healed = true
+      }
+      var meta0 = {}
+      try { meta0 = JSON.parse(localStorage.getItem('appBrowserShim.meta') || '{}') } catch (e) {}
+      if (meta0.projectCategoryIds !== JSON.stringify([9001])) {
+        meta0.projectCategoryIds = JSON.stringify([9001])
+        localStorage.setItem('appBrowserShim.meta', JSON.stringify(meta0))
+        healed = true
+      }
+      var st0 = JSON.parse(localStorage.getItem('settingsState') || '{}')
+      if (!st0.developerMode || !st0.showProjectsModule || st0.todayViewMode !== 'deps') {
+        st0.developerMode = true; st0.showProjectsModule = true; st0.todayViewMode = 'deps'
+        localStorage.setItem('settingsState', JSON.stringify(st0))
+        healed = true
+      }
+      if (healed && !sessionStorage.getItem('depDemoReloadedB')) {
+        sessionStorage.setItem('depDemoReloadedB', '1')
+        location.reload()
+        return
+      }
+    } catch (e) {}
+    var today = midnight(0)
+    var now = Date.now()
+    var mk = function (id, content, opts) {
+      opts = opts || {}
+      var day = opts.day != null ? midnight(opts.day) : today
+      return { taskId: 'prj_demo_' + id, userId: 0, taskContent: content, taskDescribe: '',
+        complete: !!opts.done, completedAt: opts.done ? ts(day) + 3600000 : 0, delete: false,
+        dayStart: ts(day), todoTime: ts(day), createTime: ts(day) + 3600000,
+        predecessors: opts.preds ? JSON.stringify(opts.preds) : null,
+        categoryId: opts.cat || 0, priority: 0, important: 0, urgent: 0,
+        reminderTime: 0, reminderOffsets: [], reminderExtra: [], subtasks: null,
+        updateTime: now, syncTime: 0, taskSort: 0, status: 'add', version: 0 }
+    }
+    var tasks = [
+      // 阶段1:立项(-38~-35 天,全部完成)
+      mk('kick',  '立项:产品定位与三份前置文档',   { done: true, day: -38, cat: 9001 }),
+      mk('data',  '数据架构:行表迁移与三层环境隔离', { done: true, day: -35, preds: ['prj_demo_kick'], cat: 9001 }),
+      // 阶段2:基座(-28~-14 天,完成)
+      mk('brand', '品牌定稿:拾事 PickDone + 官网域名', { done: true, day: -28, preds: ['prj_demo_kick'], cat: 9001 }),
+      mk('css',   'CSS token 化与深色模式统一',    { done: true, day: -18, preds: ['prj_demo_data'], cat: 9001 }),
+      // 阶段3:重构上线(-10~-1 天,完成)
+      mk('sfc',   '渲染层 SFC 迁移 + 门禁接线',    { done: true, day: -10, preds: ['prj_demo_css', 'prj_demo_brand'], cat: 9001 }),
+      mk('rel',   '提前发布 v0.1.2(官网直链下载)', { done: true, day: -1, preds: ['prj_demo_sfc'], cat: 9001 }),
+      // 阶段4:当前进行中(本周)
+      mk('depmvp','任务依赖 MVP:数据层 + EditPanel + CLI', { preds: ['prj_demo_sfc'], cat: 9001 }),
+      mk('depview','依赖层级视图:泳道 + 连线 + 里程碑头', { preds: ['prj_demo_depmvp'], cat: 9001 }),
+      mk('habits','实验模块:习惯/项目 devMode 门控完善',   { preds: ['prj_demo_sfc'], cat: 9001 }),
+      // 阶段5:发布准备(下周)
+      mk('human', '十平台推文全部过 humanizer 标准',   { preds: ['prj_demo_depview'], cat: 9001 }),
+      mk('seo',   'GSC 提交 pickdone.app + sitemap',   { preds: ['prj_demo_rel'], cat: 9001 }),
+      // 阶段6
+      mk('v02',   'v0.2 正式发布(全平台宣发)',        { preds: ['prj_demo_human', 'prj_demo_seo', 'prj_demo_habits'], cat: 9001 }),
+      // 与项目无关的独立任务
+      mk('paper', '写周报',   {}),
+      mk('shelf', '整理书架', {})
+    ]
+    // 旧版演示任务(网站改版 dep_demo_*)清理,避免残留
+    window.todoAPI.dbCall('getAll').then(function (rows) {
+      var old = rows.filter(function (r) { return String(r.taskId).indexOf('dep_demo_') === 0 }).map(function (r) { return r.taskId })
+      if (old.length) window.todoAPI.dbCall('hardDelete', old)
+    })
+    // 里程碑:与任务进度/日期联动(过去的自动呈完成态,进行中的看关联任务完成度)
+    var ms = [
+      { id: 'ms_m1', title: '立项与品牌定稿', date: midnight(-38).getTime(), taskIds: ['prj_demo_kick', 'prj_demo_data', 'prj_demo_brand'] },
+      { id: 'ms_m2', title: '渲染层重构完成', date: midnight(-14).getTime(), taskIds: ['prj_demo_css', 'prj_demo_sfc'] },
+      { id: 'ms_m3', title: '依赖视图落地', date: midnight(2).getTime(), taskIds: ['prj_demo_depmvp', 'prj_demo_depview', 'prj_demo_habits'] },
+      { id: 'ms_m4', title: 'v0.2 发布', date: midnight(9).getTime(), taskIds: ['prj_demo_human', 'prj_demo_seo', 'prj_demo_v02'] }
+    ]
+    var n = 0
+    window.todoAPI.dbCall('setMeta', ['projectMilestones:9001', JSON.stringify(ms)])
+    window.todoAPI.dbCall('setMeta', ['projectDeadline:9001', String(midnight(9).getTime())])
+    Promise.all(tasks.map(function (t) {
+      return window.todoAPI.dbCall('upsert', t).then(function () { n++ })
+    })).then(function () {
+      window.__depSeed = n
+      // 首次灌数后 reload 一次,让应用启动时就能读到里程碑/截止/任务(store 不做运行期热更)
+      if (n >= tasks.length && !sessionStorage.getItem('depDemoSeededV3')) {
+        sessionStorage.setItem('depDemoSeededV3', '1')
+        location.reload()
+      }
+    }).catch(function (e) { window.__depSeed = 'err:' + e.message })
+  }
+  setTimeout(poll, 1200)
+  setInterval(poll, 8000)
+})()
+</script>
+
+  <script type="module" src="/renderer/js/main.js"></script>
+</body>
+</html>

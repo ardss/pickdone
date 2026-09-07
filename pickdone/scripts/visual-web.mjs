@@ -45,12 +45,8 @@ for (const route of ROUTES) {
     const name = route.replace(/\//g, '_').replace(/^_/, '') + '-' + theme + '.png'
     setEnv(theme)
     // wait for readiness: app mounted + theme applied (fixed sleeps race against vite cold transforms)
-    const readyExpr = `(() => {
-      const themed = document.documentElement.getAttribute('data-theme') === '${theme}'
-      const mounted = !!document.querySelector('#app .side-nav')
-      const overlay = !!document.querySelector('vite-error-overlay')
-      return (themed && mounted && !overlay) ? 'ready' : 'wait'
-    })()`
+    // single-line expr: win32 shell:true routes through cmd.exe, embedded newlines break the quoted arg
+    const readyExpr = `(() => { const themed = document.documentElement.getAttribute('data-theme') === '${theme}'; const mounted = !!document.querySelector('#app .side-nav'); const overlay = !!document.querySelector('vite-error-overlay'); return (themed && mounted && !overlay) ? 'ready' : 'wait' })()`
     let ready = ''
     for (let t = 0; t < 40000 && ready !== 'ready'; t += 500) {
       await new Promise(r => setTimeout(r, 500))
