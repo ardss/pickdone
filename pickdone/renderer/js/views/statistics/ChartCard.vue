@@ -154,7 +154,6 @@ const ChartCard = {
 export default ChartCard
 </script>
 <style>
-/* ===== 迁移自全局沉积文件(scripts/css-move.mjs):以下规则随组件生灭 ===== */
 .chart-h{padding:16px;background:var(--panel, #fff);border-radius:var(--radius-md)}
 .chart-h__title{margin-bottom:32px;color:var(--text-1);font-size: var(--fs-base);line-height:2;white-space:pre-line;text-align:center}
 .chart-h__btn,.full{display:flex;align-items:center;justify-content:center}

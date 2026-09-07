@@ -239,7 +239,6 @@ export default {
 }
 </script>
 <style>
-/* ===== 迁移自全局沉积文件(scripts/css-move.mjs):以下规则随组件生灭 ===== */
 /* ---- I. 工具栏下拉 label（原 DropdownSelect 的 .dropdown-select__label）---- */
 .dropdown-select{display:flex;gap:8px}
 .dropdown-select__label{display:inline-flex;align-items:center;gap:5px;padding:4px 11px;line-height:20px;border-radius:var(--radius-pill);font-size:var(--fs-md);color:var(--text-2);cursor:pointer;transition:background .15s,color .15s}

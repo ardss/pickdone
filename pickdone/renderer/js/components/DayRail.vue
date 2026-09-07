@@ -702,7 +702,6 @@ export default {
 }
 </script>
 <style>
-/* ===== 迁移自全局沉积文件(scripts/css-move.mjs):以下规则随组件生灭 ===== */
 /* ============ 今日待办日期速选条（设计稿 todo-date-selector） ============ */
 /* 方案A(用户定稿):日期条通栏,右端挂视图切换(pd-view-seg 走 #append 插槽) */
 .today-v1 .day-strip { width: 100%; }

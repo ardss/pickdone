@@ -20,44 +20,6 @@ const FILES = ['theme-dark.css']
   .map(f => path.join(ROOT, 'assets', 'css', f))
 
 // ---- naive CSS block parser (handles comments, strings, @media nesting) ----
-function parseBlocks (css) {
-  css = css.replace(/\/\*[\s\S]*?\*\//g, '')
-  const blocks = []
-  let depth = 0, buf = '', sel = '', media = ''
-  for (let i = 0; i < css.length; i++) {
-    const ch = css[i]
-    buf += ch
-    if (ch === '{') {
-      if (depth === 0) {
-        sel = buf.slice(0, -1).trim()
-        if (sel.startsWith('@media')) { media = sel; buf = ''; continue }
-        buf = ''
-      }
-      depth++
-    } else if (ch === '}') {
-      depth--
-      if (depth === 0) {
-        const body = buf.slice(0, -1).trim()
-        if (media) {
-          // media header consumed above; sel captured inner
-          if (sel) blocks.push({ selector: sel, body, media })
-          // handle nested inner rules already emitted at depth transitions
-        } else if (sel) {
-          blocks.push({ selector: sel, body, media: '' })
-        }
-        sel = ''; buf = ''
-      } else if (depth === 1 && media) {
-        // closing a rule inside @media
-        const body = buf.slice(0, -1).trim()
-        if (sel) blocks.push({ selector: sel, body, media })
-        sel = ''; buf = ''
-      }
-    }
-  }
-  // second pass is unreliable for nested @media; do a stricter scan below
-  return blocks
-}
-
 // Stricter: tokenize top-level; for @media recurse one level.
 function extractRules (css, media = '') {
   css = css.replace(/\/\*[\s\S]*?\*\//g, '')

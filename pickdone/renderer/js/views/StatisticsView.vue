@@ -810,7 +810,6 @@ export default {
 }
 </script>
 <style>
-/* ===== 迁移自全局沉积文件(scripts/css-move.mjs):以下规则随组件生灭 ===== */
 /* 热力图悬浮提示（项目风格深色浮层，替代原生 title）：挂页面根节点，fixed 定位在格子上方居中 */
 .hm-tip {
   position: fixed; z-index: var(--z-pop); transform: translate(-50%, calc(-100% - 8px));
@@ -885,7 +884,6 @@ html[data-theme="dark"] .review-card { background: var(--panel); border-color: v
 html[data-theme="dark"] .review-card::before { opacity: .8; }
 html[data-theme="dark"] .review-card { background: var(--panel); }
 
-/* ===== 迁移自全局沉积文件(scripts/css-move.mjs):以下规则随组件生灭 ===== */
 .stat-hero__headline {
   margin-top: 14px; padding: 12px 16px;
   background: linear-gradient(135deg, var(--brand-light, #eef1fe), transparent);

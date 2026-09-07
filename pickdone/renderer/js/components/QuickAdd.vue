@@ -142,7 +142,6 @@ export default {
 }
 </script>
 <style>
-/* ===== 迁移自全局沉积文件(scripts/css-move.mjs):以下规则随组件生灭 ===== */
 .qa-inputwrap {
   position: relative; flex: 1; display: flex; align-items: center;
   background: var(--gray-bg); border: 1px solid var(--line); border-radius: var(--radius-lg);
@@ -159,7 +158,6 @@ export default {
 .qa-inputwrap:focus-within { box-shadow: none; }
 html[data-theme="dark"] .qa-inputwrap:focus-within { background: var(--active-bg); }
 
-/* ===== 迁移自全局沉积文件(scripts/css-move.mjs):以下规则随组件生灭 ===== */
 .qa-cal .todo-input-add__calender { position: static; width: 100%; height: 100%; }
 /* ==================== 2. QuickAdd 日历按钮与日期 chip ==================== */
 /* 输入框右侧常驻日历按钮：
@@ -186,7 +184,6 @@ html[data-theme="dark"] .qa-inputwrap:focus-within { background: var(--active-bg
 .todo-input-add__calender:focus { outline: none; }
 .todo-input-add__calender img { width: 15px; height: 15px; }
 
-/* ===== 迁移自全局沉积文件(scripts/css-move.mjs):以下规则随组件生灭 ===== */
 /* 日期选择浮层覆盖在日历按钮上（透明触发层）——
    设计稿做法: .todo-options__item--datetime .mx-datepicker{
      position:absolute;top:0;right:0;bottom:0;left:0;width:100%;opacity:0} */

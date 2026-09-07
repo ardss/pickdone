@@ -120,7 +120,6 @@ export default {
 }
 </script>
 <style>
-/* ===== 迁移自全局沉积文件(scripts/css-move.mjs):以下规则随组件生灭 ===== */
 .proj-card {
   padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--radius-md);
   background: var(--hover-bg); cursor: pointer; transition: box-shadow var(--t-base), transform var(--t-base);

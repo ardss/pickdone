@@ -605,7 +605,6 @@ export default {
 }
 </script>
 <style>
-/* ===== 迁移自全局沉积文件(scripts/css-move.mjs):以下规则随组件生灭 ===== */
 /* —— FullCalendar 关键皮肤参数（提取自 chunk-vendors 的 .fc 基础规则），套自绘网格 —— */
 .cal-fc{--fc-page-bg-color:#fff;--fc-border-color:#ddd;--fc-today-bg-color:rgba(255,220,40,.15);--fc-event-bg-color:#3788d8;--fc-event-text-color:#fff;display:flex;flex-direction:column;height:100%;font-size:1em;background:var(--fc-page-bg-color)}
 .cal-fc *,
@@ -700,7 +699,6 @@ html[data-theme="dark"] .cal-fc {
   --fc-border-color: var(--line);
 }
 
-/* ===== 迁移自全局沉积文件(scripts/css-move.mjs):以下规则随组件生灭 ===== */
 .day-create-btn, .day-expand-btn {
   width: 20px; height: 20px;
   display: flex; align-items: center; justify-content: center;

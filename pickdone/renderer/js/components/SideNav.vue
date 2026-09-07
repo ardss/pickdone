@@ -707,7 +707,6 @@ export default {
 }
 </script>
 <style>
-/* ===== 迁移自全局沉积文件(scripts/css-move.mjs):以下规则随组件生灭 ===== */
 .sn-scrollable { flex: 1; overflow-y: auto; min-height: 0; display: flex; flex-direction: column; }
 .sn-search {
   display: flex; align-items: center; gap: var(--space-2); height: 36px; margin: 0 0 10px;
@@ -1090,7 +1089,6 @@ html[data-theme="dark"] .side-nav--collapsed .sn-weather,
 html[data-theme="dark"] .side-nav--collapsed .sn-weather { background: transparent; }
 html[data-theme="dark"] .cat-mgr-del--on:hover { background: rgba(15, 157, 143, .15); }
 
-/* ===== 迁移自全局沉积文件(scripts/css-move.mjs):以下规则随组件生灭 ===== */
 /* ========================= 搜索（SearchView）========================= */
 .main-nav-search{position:relative;display:flex;align-items:center;justify-content:center;width:185px;height:36px;margin:0 0 8px}
 /* 搜索页单一对齐轴：标题/搜索框/结果行同左缘(容器缘,原 12px 标题内缩与 4px 行内缩已清) */

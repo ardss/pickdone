@@ -368,7 +368,6 @@ export default {
 }
 </script>
 <style>
-/* ===== 迁移自全局沉积文件(scripts/css-move.mjs):以下规则随组件生灭 ===== */
 .corner-btn {
   display: flex;
   align-items: center;

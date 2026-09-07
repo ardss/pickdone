@@ -815,7 +815,6 @@ export default {
 }
 </script>
 <style>
-/* ===== 迁移自全局沉积文件(scripts/css-move.mjs):以下规则随组件生灭 ===== */
 .ep-inner { flex: 1; display: flex; flex-direction: column; padding: var(--space-4) var(--space-5) 14px; overflow-y: auto; }
 /* 字段小图标统一 16px 列宽居中，与下方 .ep-row 的 16px 图标（x=+2）纵向对齐 */
 .ep-cats .ep-field-label { width: 16px; justify-content: center; flex-shrink: 0; }

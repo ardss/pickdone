@@ -64,34 +64,6 @@ function topSegments (css) {
   return segs
 }
 
-function processFile (css, out) {
-  const segs = topSegments(css)
-  let result = ''
-  for (const s of segs) {
-    if (s.type === 'rule') {
-      if (matches(s.header)) out.moved.push(s.raw.trim()) 
-      else result += s.raw
-    } else if (s.type === 'media') {
-      // recurse one level: split inner rules
-      const inner = topSegments(s.body)
-      let keep = '', movedAny = false
-      for (const t of inner) {
-        if (t.type === 'rule' && matches(t.header)) { out.moved.push(t.raw.trim()); movedAny = true }
-        else if (t.type === 'media') { // nested media (rare) — keep as-is
-          keep += t.raw
-        } else keep += (t.raw || '')
-      }
-      if (movedAny && keep.trim()) result += s.header + ' {' + keep + '}'
-      else if (movedAny) out.movedMedia.push({ header: s.header, rules: [] }) // fully moved; inner rules already pushed raw
-      else result += s.raw
-    } else {
-      result += (s.raw || '')
-    }
-  }
-  // collapse 3+ blank lines left by removals
-  return result.replace(/\n{3,}/g, '\n\n')
-}
-
 // media-wrapped moved rules need their media header preserved: redo with tracking
 function nextMeaningful (css, from) {
   // next '{' at top level of text, skipping comments and strings; returns index or -1

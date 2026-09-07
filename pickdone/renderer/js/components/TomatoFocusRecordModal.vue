@@ -318,7 +318,6 @@ export default {
 }
 </script>
 <style>
-/* ===== 迁移自全局沉积文件(scripts/css-move.mjs):以下规则随组件生灭 ===== */
 /* 番茄专注记录 · 24h 时间轴：灰轨道=全天，青块=专注时段，hover 显示明细 */
 .tfr-timeline { padding: 12px 14px 6px; border-bottom: 1px solid var(--line); }
 .tfr-timeline__head {

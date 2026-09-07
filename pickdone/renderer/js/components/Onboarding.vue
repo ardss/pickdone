@@ -129,7 +129,6 @@ export default {
 }
 </script>
 <style>
-/* ===== 迁移自全局沉积文件(scripts/css-move.mjs):以下规则随组件生灭 ===== */
 .ob-btn {
   padding: 8px 20px; border: 1px solid var(--line-strong); border-radius: var(--radius-md);
   background: transparent; color: var(--text-1); font-size: var(--fs-md); cursor: pointer;

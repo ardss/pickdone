@@ -902,7 +902,6 @@ export default {
 }
 </script>
 <style>
-/* ===== 迁移自全局沉积文件(scripts/css-move.mjs):以下规则随组件生灭 ===== */
 /* ==================== 3. 设置中心（全屏 base-modal + setting_tabs + form） ==================== */
 /* 设计稿设置 = 全屏弹窗：header 为 el-tabs 页签，body 内 .tab-panel>.form>.form-label+.form-item */
 .setting_tabs { height: 100%; width: 100%; }
@@ -1012,7 +1011,6 @@ html[data-theme="dark"] .form-item__tip { color: var(--text-3); }
 /* 页签底部分隔线：亮色硬编码 #f3f3f3 在暗色下是刺眼亮白线 */
 html[data-theme="dark"] .modal--settings .setting_tabs .el-tabs__header { border-bottom-color: var(--line); }
 
-/* ===== 迁移自全局沉积文件(scripts/css-move.mjs):以下规则随组件生灭 ===== */
 .tab-panel { padding: var(--space-5) var(--space-4); }
 /* 分组卡片:每张卡一个设置组(Notion/Linear 式),替代长列表堆叠 */
 .tab-panel .form {

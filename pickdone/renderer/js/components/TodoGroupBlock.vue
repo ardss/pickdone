@@ -65,7 +65,6 @@ export default {
 }
 </script>
 <style>
-/* ===== 迁移自全局沉积文件(scripts/css-move.mjs):以下规则随组件生灭 ===== */
 /* ---- E. 分组列表（原 TodoListItemGroup d79a80b2 / GroupList 5f948ac6 / GroupContainer bc3cef5e）---- */
 .todo-list-item-group{padding:6px 0;background-color:var(--panel, #fff);box-shadow:0 2px 4px hsla(0,0%,91.4%,.5);border-top:1px solid var(--line)}
 .todo-list-item-group:focus{outline:0}
