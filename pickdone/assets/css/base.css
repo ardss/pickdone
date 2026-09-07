@@ -262,27 +262,22 @@ textarea { font-family: inherit; }
 
 
 
-.tg-head .arrow.open { transform: rotate(0deg); }
 
 
 
 
-.tg-head .arrow:not(.open) { transform: rotate(-90deg); }
 
 
 
 
-.tg-head h3 { font-size: 14.5px; color: var(--text-1); font-weight: 600; }
 
 
 
 
-.tg-head h3.brand { color: var(--brand-text); }
 
 
 
 
-.tg-week { font-size: var(--fs-sm); color: #00767a; }
 
 
 
@@ -373,7 +368,6 @@ textarea { font-family: inherit; }
 
 
 
-.td-item.selected { background: var(--brand-light); }
 
 
 
@@ -702,7 +696,6 @@ textarea { font-family: inherit; }
 
 
 
-.result-count { font-size: var(--fs-sm); }
 
 
 
@@ -1310,7 +1303,6 @@ button:focus-visible, [role="button"]:focus-visible, [role="checkbox"]:focus-vis
 
 
 /* 原关闭按钮为 div + 背景图，改成 <button> 后抹平浏览器默认外观 */
-.modal__close { border: none; padding: 0; appearance: none; -webkit-appearance: none; background-color: transparent; }
 
 
 
@@ -2100,7 +2092,6 @@ img { -webkit-user-drag: none; }
 
 
 
-.row-btn:hover { color: var(--btn-hover-brand); }
 
 
 
@@ -2444,8 +2435,6 @@ img { -webkit-user-drag: none; }
 .todo-list .todo-box-list-item__tools .btn:focus,.todo-list .todo-box-list-item__tools .btn:hover{filter:brightness(.9);outline:0}
 .todo-list .todo-box-list-item__tools .btn:active{filter:brightness(.8)}
 /* 彻底删除（原版无此钮、我方补充）：红字浅红底，与组内药丸同形 */
-.todo-list .btn--danger.rc-danger-btn{color:var(--danger) !important;background-color:#fdecea !important}
-.todo-list .btn--danger.rc-danger-btn:hover{color:var(--danger-strong) !important}
 .todo-list .todo-box-list-item__category-dot svg{width:12px;height:12px;display:block}
 .todo-list .todo-box-list-item__tools{flex-basis:100%;margin-top:8px}
 .todo-list .rc-check{flex-shrink:0}

@@ -1166,7 +1166,7 @@ html[data-theme="dark"] .ep-chip:active, html[data-theme="dark"] .ep-date-chip:a
    此处不再自造 ::after 叉与自有 hover */
 .modal__close {
   position: absolute; top: 12px; right: 12px;
-  width: 28px; height: 28px; border: 0; border-radius: var(--radius-md);
+  width: 28px; height: 28px; border: 0; padding: 0; appearance: none; -webkit-appearance: none; border-radius: var(--radius-md);
   background: transparent; cursor: pointer; z-index: 3;
 }
 @keyframes ep-img-in { from { opacity: 0; transform: scale(.92); } to { opacity: 1; transform: scale(1); } }

@@ -103,6 +103,7 @@ export default {
    .todo-list-item-group__title{color:var(--text-3);font-size: var(--fs-base)}；
    计数 .todo-list-item-group__count{color:#a0a0a0;font-size: var(--fs-base)} */
 .tg-head h3 { color: #5f6368; font-size: var(--fs-base); font-weight: 400; }
+.tg-head h3.brand { color: var(--brand-text); }
 /* 折叠箭头：设计稿 .todo-list-item-group__arrow{color:#c3c3c3;font-size: var(--fs-sm);
    transition:all var(--dur-slow) cubic-bezier(.23,1,.32,1)} 收起时 rotate(-90deg) */
 .tg-head .arrow { color: var(--text-4); font-size: var(--fs-xs); transition: all var(--dur-slow) cubic-bezier(.23, 1, .32, 1); }

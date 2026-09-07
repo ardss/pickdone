@@ -167,7 +167,7 @@ export default {
 .todo-box-list-item__category-dot svg{width:12px;height:12px;display:block}
 /* 回收站页头计数与危险按钮微调（颜色取自设计稿 var(--danger) 系） */
 .rc-count{font-size: var(--fs-sm);color:var(--text-dim)}
-.rc-danger-btn{color:var(--danger) !important}
+.rc-danger-btn{color:var(--danger) !important;background-color:#fdecea !important}
 .rc-danger-btn:hover{color:var(--danger-strong) !important}
 @keyframes trash-pulse { 50% { transform: scale(1.05); } }
 </style>
