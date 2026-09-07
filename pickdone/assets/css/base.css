@@ -2528,7 +2528,7 @@ img { -webkit-user-drag: none; }
   /* 尺寸过渡是丝滑的关键：OS 窗口瞬移一次（右下锚定，视觉不变），
      生长/收回动画全部由这条 GPU 合成的 CSS 过渡完成 */
   transition: width .2s cubic-bezier(.2, .8, .2, 1), height .2s cubic-bezier(.2, .8, .2, 1);
-  /* 纯白定稿：不随深浅主题变化的内部底色（深色由 html.dark 块整体接管） */
+  /* 纯白定稿：不随深浅主题变化的内部底色（深色由 html[data-theme="dark"] 块整体接管） */
   background: #fff; /* 纯白定稿(白名单登记,见 check-tokens WHITELIST) */
   border: 1px solid rgba(120, 130, 140, .22);
   border-radius: 14px;
@@ -2643,15 +2643,6 @@ img { -webkit-user-drag: none; }
 }
 .tomato .tf-abandon .mini.danger:hover { background: #fde3e3; }
 .tomato .tf-abandon .abandon-reason-input { background: var(--panel, #fff); color: #2b2f33; }
-/* 放弃弹窗深色（带 .tomato 提升特异性，压过浅色强制作用域） */
-html.dark .tomato .tf-abandon {
-  --text-1: #e8edf1; --text-2: rgba(232,237,241,.6); --text-3: rgba(232,237,241,.4);
-  --line: rgba(255,255,255,.08); --line-strong: rgba(255,255,255,.15);
-  --brand: #35c2ae; --brand-dark: #7fd0c7; --brand-light: rgba(53,194,174,.18);
-  background: #22262e;
-  color: #e8edf1;
-  box-shadow: 0 8px 24px rgba(0,0,0,.5);
-}
 /* ==================== 浮窗放弃确认 · 层级终版（2026-09-01 用户定稿） ====================
    三层各归其位、互不重叠：
    L1 问句标题（12px semibold）        L0 右上角钮保留（最小化/✕=取消）
@@ -2698,7 +2689,6 @@ html.dark .tomato .tf-abandon {
   border: 1px solid var(--line, #e7e9ee);
   box-shadow: 0 12px 40px rgba(0, 0, 0, .28);
 }
-html[data-theme="dark"] .el-message-box { border-color: var(--line-strong, #3a4150); box-shadow: 0 12px 40px rgba(0, 0, 0, .6); }
 
 /* == absorbed:transition == */
 /* ===== 迁移自已退役的 style-1..4(2026-09 组件吸收重构):跨组件共享,居 base 统一管理 ===== */

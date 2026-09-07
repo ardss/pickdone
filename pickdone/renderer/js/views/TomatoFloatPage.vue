@@ -439,21 +439,21 @@ export default {
   background: none; color: var(--text-2); font-size: 12px; cursor: pointer;
 }
 .tf-menu__bare:hover { border-color: var(--brand); color: var(--brand); }
-html.dark .corner-btn { color: rgba(232,237,241,.65); }
-html.dark .corner-btn:hover { background: rgba(53,194,174,.18); }
-html.dark .corner-btn--muted { color: rgba(232,237,241,.35); }
+html[data-theme="dark"] .corner-btn { color: rgba(232,237,241,.65); }
+html[data-theme="dark"] .corner-btn:hover { background: rgba(53,194,174,.18); }
+html[data-theme="dark"] .corner-btn--muted { color: rgba(232,237,241,.35); }
 /* ⋮ 菜单深色 */
-html.dark .tf-menu { background: #22262e; box-shadow: 0 8px 24px rgba(0,0,0,.45); }
-html.dark .tf-menu__title { color: #7fd0c7; }
-html.dark .tf-menu__x { color: rgba(232,237,241,.55); }
-html.dark .tf-menu__x:hover { background: rgba(255,255,255,.1); color: #e8edf1; }
-html.dark .tf-menu__item { color: #e8edf1; }
-html.dark .tf-menu__item:hover { background: rgba(53,194,174,.15); color: #7fd0c7; }
-html.dark .tf-menu__item--on, html.dark .tf-menu__item--on:hover { background: rgba(53,194,174,.18); color: #7fd0c7; }
-html.dark .tf-menu__tick { color: #35c2ae; }
-html.dark .tf-menu__empty { color: rgba(232,237,241,.4); }
-html.dark .tf-menu__bare { border-color: rgba(255,255,255,.16); color: rgba(232,237,241,.7); }
-html.dark .tf-menu__bare:hover { border-color: #35c2ae; color: #7fd0c7; }
+html[data-theme="dark"] .tf-menu { background: #22262e; box-shadow: 0 8px 24px rgba(0,0,0,.45); }
+html[data-theme="dark"] .tf-menu__title { color: #7fd0c7; }
+html[data-theme="dark"] .tf-menu__x { color: rgba(232,237,241,.55); }
+html[data-theme="dark"] .tf-menu__x:hover { background: rgba(255,255,255,.1); color: #e8edf1; }
+html[data-theme="dark"] .tf-menu__item { color: #e8edf1; }
+html[data-theme="dark"] .tf-menu__item:hover { background: rgba(53,194,174,.15); color: #7fd0c7; }
+html[data-theme="dark"] .tf-menu__item--on, html[data-theme="dark"] .tf-menu__item--on:hover { background: rgba(53,194,174,.18); color: #7fd0c7; }
+html[data-theme="dark"] .tf-menu__tick { color: #35c2ae; }
+html[data-theme="dark"] .tf-menu__empty { color: rgba(232,237,241,.4); }
+html[data-theme="dark"] .tf-menu__bare { border-color: rgba(255,255,255,.16); color: rgba(232,237,241,.7); }
+html[data-theme="dark"] .tf-menu__bare:hover { border-color: #35c2ae; color: #7fd0c7; }
 /* ⋮ 菜单内：白噪音选择区（音色 chips 实时切换，全局派发器即时生效） */
 .tf-menu__noise { padding-top: 6px; border-top: 1px solid rgba(120, 130, 140, .18); }
 .tf-menu__noise-label { font-size: 9px; color: var(--text-3, #9aa0a6); margin-bottom: 4px; }
@@ -466,7 +466,7 @@ html.dark .tf-menu__bare:hover { border-color: #35c2ae; color: #7fd0c7; }
    旧版图标=固定灰色背景图：深色卡面上对比度不足（用户实测"三个钮看不到"）。
    mask 用形状 alpha，颜色走 currentColor 跟随主题；作用域限定浮窗角钮，不波及他处同名类。 */
 .corner-btn { color: #8a9096; }
-html.dark .corner-btn { color: rgba(232, 237, 241, .78); }
+html[data-theme="dark"] .corner-btn { color: rgba(232, 237, 241, .78); }
 .tomato .corner-btn .btn-min,
 .tomato .corner-btn .btn-close,
 .tomato .corner-btn .btn-dots {
@@ -517,7 +517,7 @@ html.dark .corner-btn { color: rgba(232, 237, 241, .78); }
 .tomato .corner-btn i { transition: transform .18s cubic-bezier(.2, .8, .2, 1); }
 .tomato .corner-btn:hover:not(.corner-btn--off) i { transform: scale(.88); }
 .tomato .corner-btn--off:active { transform: none; }
-html.dark .corner-btn:focus-visible { outline-color: #35c2ae; }
+html[data-theme="dark"] .corner-btn:focus-visible { outline-color: #35c2ae; }
 /* ==================== ⋮ 菜单展开 · 动效收尾（2026-09-01） ====================
    入场已有：卡片 86→320px 0.2s 弹性生长 + 内容 tt-fade-in 同步淡入；
    出场补齐：tf-pop 过渡 0.18s 淡出（组件层 transition），不再 v-if 硬切。
@@ -526,8 +526,8 @@ html.dark .corner-btn:focus-visible { outline-color: #35c2ae; }
 .tf-menu .tf-menu__list::-webkit-scrollbar { width: 4px; }
 .tf-menu .tf-menu__list::-webkit-scrollbar-thumb { background: rgba(120,130,140,.35); border-radius: 2px; }
 .tf-menu .tf-menu__list::-webkit-scrollbar-track { background: transparent; }
-html.dark .tf-menu .tf-menu__list { scrollbar-color: rgba(232,237,241,.25) transparent; }
-html.dark .tf-menu .tf-menu__list::-webkit-scrollbar-thumb { background: rgba(232,237,241,.25); }
+html[data-theme="dark"] .tf-menu .tf-menu__list { scrollbar-color: rgba(232,237,241,.25) transparent; }
+html[data-theme="dark"] .tf-menu .tf-menu__list::-webkit-scrollbar-thumb { background: rgba(232,237,241,.25); }
 /* 勾选框选中图标白色（icon-done.svg 源文件为黑色，反相成纯白，
    对应设计稿 fa check-square 白色图形叠在 #0f9d8f 底上） */
 .td-check img { filter: brightness(0) invert(1); }

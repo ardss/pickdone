@@ -292,3 +292,15 @@ html[data-theme="dark"] .ob-opt--on { background: rgba(15, 157, 143, .18); }
 html[data-theme="dark"] .tomato-record { border-bottom-color: #2c2f36; }
 html[data-theme="dark"] .tomato-record:hover { background-color: #23262c; }
 html[data-theme="dark"] .tomato-record__title { color: #d8dce2; }
+
+/* ===== 自 base.css 归位（深色规则唯一住址=本文件或组件同址补丁）===== */
+/* 放弃弹窗深色（带 .tomato 提升特异性，压过浅色强制作用域） */
+html[data-theme="dark"] .tomato .tf-abandon {
+  --text-1: #e8edf1; --text-2: rgba(232,237,241,.6); --text-3: rgba(232,237,241,.4);
+  --line: rgba(255,255,255,.08); --line-strong: rgba(255,255,255,.15);
+  --brand: #35c2ae; --brand-dark: #7fd0c7; --brand-light: rgba(53,194,174,.18);
+  background: #22262e;
+  color: #e8edf1;
+  box-shadow: 0 8px 24px rgba(0,0,0,.5);
+}
+html[data-theme="dark"] .el-message-box { border-color: var(--line-strong, #3a4150); box-shadow: 0 12px 40px rgba(0, 0, 0, .6); }

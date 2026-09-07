@@ -1229,45 +1229,45 @@ html[data-theme="dark"] .main-nav-search__input:focus { border-color: var(--bran
   box-shadow: -6px 0 20px rgba(0,0,0,.08);
 }
 .sn-cog-btn.drag-ready { border-style: dashed; }
-/* ==================== 6. 浮窗深色主题适配（html.dark 由 applyColorMode 统一挂载） ==================== */
-html.dark .tomato { background: #22262e; border-color: rgba(255,255,255,.12); box-shadow: 0 10px 28px rgba(0,0,0,.45); }
-html.dark .tomato__time { color: #e8edf1; }
-html.dark .tomato__time small { color: rgba(232,237,241,.55); }
-html.dark .tomato__task { color: rgba(232,237,241,.5); }
-html.dark .tomato__task b { color: #7fd0c7; }
-html.dark .tomato__task-none { color: rgba(232,237,241,.4); }
-html.dark .tomato__task-x { color: rgba(232,237,241,.5); }
-html.dark .tomato__task-x:hover { background: rgba(255,255,255,.1); color: #e8edf1; }
-html.dark .tomato__beads i { background: rgba(53,194,174,.22); }
-html.dark .tomato__beads i.done { background: #35c2ae; }
-html.dark .tomato__knob { background: #22262e; }
-html.dark .tomato__ring-bg { stroke: rgba(53,194,174,.25); }
-html.dark .tomato__ring-fg { stroke: #35c2ae; }
-html.dark .tomato--rest .tomato__ring-fg { stroke: #ffa95c; }
-html.dark .tomato__knob-icon { color: #7fd0c7; }
-html.dark .tomato--rest .tomato__knob-icon { color: #ffa95c; }
-html.dark .tomato__badge { background: #e8862a; }
-html.dark .tomato .tf-abandon .mini {
+/* ==================== 6. 浮窗深色主题适配（html[data-theme="dark"] 由 applyColorMode 统一挂载） ==================== */
+html[data-theme="dark"] .tomato { background: #22262e; border-color: rgba(255,255,255,.12); box-shadow: 0 10px 28px rgba(0,0,0,.45); }
+html[data-theme="dark"] .tomato__time { color: #e8edf1; }
+html[data-theme="dark"] .tomato__time small { color: rgba(232,237,241,.55); }
+html[data-theme="dark"] .tomato__task { color: rgba(232,237,241,.5); }
+html[data-theme="dark"] .tomato__task b { color: #7fd0c7; }
+html[data-theme="dark"] .tomato__task-none { color: rgba(232,237,241,.4); }
+html[data-theme="dark"] .tomato__task-x { color: rgba(232,237,241,.5); }
+html[data-theme="dark"] .tomato__task-x:hover { background: rgba(255,255,255,.1); color: #e8edf1; }
+html[data-theme="dark"] .tomato__beads i { background: rgba(53,194,174,.22); }
+html[data-theme="dark"] .tomato__beads i.done { background: #35c2ae; }
+html[data-theme="dark"] .tomato__knob { background: #22262e; }
+html[data-theme="dark"] .tomato__ring-bg { stroke: rgba(53,194,174,.25); }
+html[data-theme="dark"] .tomato__ring-fg { stroke: #35c2ae; }
+html[data-theme="dark"] .tomato--rest .tomato__ring-fg { stroke: #ffa95c; }
+html[data-theme="dark"] .tomato__knob-icon { color: #7fd0c7; }
+html[data-theme="dark"] .tomato--rest .tomato__knob-icon { color: #ffa95c; }
+html[data-theme="dark"] .tomato__badge { background: #e8862a; }
+html[data-theme="dark"] .tomato .tf-abandon .mini {
   background: rgba(255,255,255,.08);
   color: #e8edf1;
   border: 1px solid rgba(255,255,255,.14);
 }
-html.dark .tomato .tf-abandon .mini:hover { background: rgba(255,255,255,.14); }
-html.dark .tomato .tf-abandon .mini.danger {
+html[data-theme="dark"] .tomato .tf-abandon .mini:hover { background: rgba(255,255,255,.14); }
+html[data-theme="dark"] .tomato .tf-abandon .mini.danger {
   background: rgba(249,83,74,.16);
   color: #f3837a;
   border-color: transparent;
 }
-html.dark .tomato .tf-abandon .mini.danger:hover { background: rgba(249,83,74,.26); }
+html[data-theme="dark"] .tomato .tf-abandon .mini.danger:hover { background: rgba(249,83,74,.26); }
 /* ♪ 噪音面板深色与细滚动条：完全对齐 tf-menu 同款（2026-09-01） */
-html.dark .tf-noise { background: #22262e; box-shadow: 0 8px 24px rgba(0,0,0,.45); }
-html.dark .tf-noise__head { color: #7fd0c7; }
-html.dark .tf-noise__item { color: #e8edf1; }
-html.dark .tf-noise__item:hover { background: rgba(53,194,174,.15); color: #7fd0c7; }
-html.dark .tf-noise__item.on, html.dark .tf-noise__item.on:hover { background: rgba(53,194,174,.18); color: #7fd0c7; }
-html.dark .tf-noise__tick { color: #35c2ae; }
-html.dark .tf-noise .tf-noise__list { scrollbar-color: rgba(232,237,241,.25) transparent; }
-html.dark .tf-noise .tf-noise__list::-webkit-scrollbar-thumb { background: rgba(232,237,241,.25); }
+html[data-theme="dark"] .tf-noise { background: #22262e; box-shadow: 0 8px 24px rgba(0,0,0,.45); }
+html[data-theme="dark"] .tf-noise__head { color: #7fd0c7; }
+html[data-theme="dark"] .tf-noise__item { color: #e8edf1; }
+html[data-theme="dark"] .tf-noise__item:hover { background: rgba(53,194,174,.15); color: #7fd0c7; }
+html[data-theme="dark"] .tf-noise__item.on, html[data-theme="dark"] .tf-noise__item.on:hover { background: rgba(53,194,174,.18); color: #7fd0c7; }
+html[data-theme="dark"] .tf-noise__tick { color: #35c2ae; }
+html[data-theme="dark"] .tf-noise .tf-noise__list { scrollbar-color: rgba(232,237,241,.25) transparent; }
+html[data-theme="dark"] .tf-noise .tf-noise__list::-webkit-scrollbar-thumb { background: rgba(232,237,241,.25); }
 @keyframes sn-sync-pop { from { transform: scale(.6); } 60% { transform: scale(1.15); } }
 @keyframes sn-sync-draw { to { stroke-dashoffset: 0; } }
 @keyframes sidebar-profile-spin { to { transform: rotate(1turn); } }
