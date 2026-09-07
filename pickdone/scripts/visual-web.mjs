@@ -90,15 +90,24 @@ for (const route of ROUTES) {
     // single-line expr: win32 shell:true routes through cmd.exe, embedded newlines break the quoted arg
     const readyExpr = `(() => { const themed = document.documentElement.getAttribute('data-theme') === '${theme}'; const mounted = !!document.querySelector('#app .side-nav'); const overlay = !!document.querySelector('vite-error-overlay'); return (themed && mounted && !overlay) ? 'ready' : 'wait' })()`
     let ready = ''
-    for (let t = 0; t < 40000 && ready !== 'ready'; t += 500) {
+    for (let t = 0; t < 90000 && ready !== 'ready'; t += 500) {
       await new Promise(r => setTimeout(r, 500))
       try { ready = ab(['--session', SESSION, 'eval', readyExpr]).trim().replace(/"/g, '') } catch (e) { /* retry */ }
     }
     ab(['--session', SESSION, 'eval', `location.hash='${route}'; 'nav'`])
     await new Promise(r => setTimeout(r, 2500))
     const shotPath = path.join(DIR, '.cur.png')
-    ab(['--session', SESSION, 'screenshot', shotPath])
-    const buf = fs.readFileSync(shotPath)
+    // load-burst robustness: a wedged shot returns an unchanged/blank frame; retry once after re-wait
+    let buf = null
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        ab(['--session', SESSION, 'screenshot', shotPath])
+        const b = fs.readFileSync(shotPath)
+        if (b.length > 10000) { buf = b; break }
+      } catch (e) { /* retry */ }
+      await new Promise(r => setTimeout(r, 2000))
+    }
+    if (!buf) { console.log('FAIL ' + name + ' (screenshot twice unavailable under load)'); fail++; continue }
     const file = path.join(DIR, name)
     if (MODE === 'baseline') {
       fs.writeFileSync(file, buf)

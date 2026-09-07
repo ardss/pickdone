@@ -77,6 +77,35 @@ R4/R5 档位纪律原 scope 的 style-2/3 已退役,纪律转组件级(全局层
   同值替换,web 视觉门禁 14/14 PASS(diff ≤0.051%),仅剩 token 定义行持字面量。
 - 至此 CSS 重构无任何在册债务。
 
+## 两轮子代理审查与债务清偿(2026-09-07 当日,7 笔 commit)
+
+第一轮(三代理:迁移零丢失/门禁一致性/SFC 运行时):抓到真 P0——`@keyframes sn-slide`、
+`mgr-preview-in` 随 style-3 退役丢失(SideNav 引用静默 no-op),按 git 原文逐字恢复;token/hover
+门禁扩扫 .vue `<style>`;一次性脚本退役;过时注释清理。
+
+第二轮(四代理:CSS 坏味道/反模式专岗/架构一致性/门禁覆盖),清偿记录:
+
+| 债务 | 处置 | commit |
+|---|---|---|
+| token 门禁 R3 从未匹配 #333(恒绿护栏) | 修正则+新增对 RULES 本体的负向自检;5 处真命中 #333→var(--text-1) | f2f12c0 |
+| cache-stamp 门禁"改 css 必须先提交才绿"死锁 | css+index.html 同处改动=同笔 bump 在途,放行 | f2f12c0 |
+| `<style scoped>` 误加风险无门禁 | structure test 新增禁令 | f2f12c0 |
+| visual-web 缺环境半路 crash | 预检 5175/agent-browser,exit 2 带指引 | f2f12c0 |
+| 统计页视觉门禁随时间漂移 | 根因=shim 番茄记录锚"今天",凌晨跑全在"未来";锚改昨天+门禁每场景重灌;14/14 全 0.000% | f2f12c0 |
+| cssom 95% 容差可静默吞 77 条 | base/theme-dark 改磁盘派生**精确比对**(扫描器与浏览器计数验证一致 608/145) | e1ff8c4 |
+| 视觉门禁完全游离 check:all 外 | visual-web --spawn 自拉起 5175,入列 check:all 第④组 | e1ff8c4 |
+| 四份 .vue 样式提取器实现分叉 | 收敛为 cli/lib/css-sources.cjs 唯一实现 | e1ff8c4 |
+| 17 条"迁移自全局沉积文件"横幅注释 | 全删(git 历史即出处);css-move 不再叠横幅;工具死码清除 | d521baf |
+| base.css 死规则簇 | 逐类零引用验证后删 113 条(3253→2720);过渡类/el-/fc- 前缀豁免 | 715d400 |
+| base.css 陈旧副本(被吸收规则的旧一份) | .tg-head 族/.td-item.selected/.result-count/.row-btn:hover/.modal__close/rc-danger-btn 等删 base 侧,缺失声明并入组件所有者 | 1af29e7 |
+| 深色权威分裂(base 漏 2 条+html.dark 旧前缀 50 处) | 漏入规则归 theme-dark;前缀统一 html[data-theme="dark"];组件同址深色补丁为定稿架构(浅深混写选择器列表不可集中) | fe089a0 |
+| .edit-panel 三方 !important 对轰 | SideNav 越界两条归位 EditPanel 所有者规则,!important 拆除 | 6d306b3 |
+| SFC 品牌绿/z-index 散值 | #0f9d8f→var(--brand,…)/#35c2ae→var(--brand-bright,…) 双模式恒等;z-index 精确匹配 --z-* 栈 | 386f4b3 |
+
+**剩余非债说明**:SFC 中余下 hex 为无 token 对应的一次性设计色(图表盘色/0c8172 色系/渐变),
+按架构属于组件内设计常量;组件同址深色补丁为架构定稿而非遗留;视觉门禁 14 场景为基线护拦,
+基线按机器本地维护(gitignored)属设计内。
+
 ## 验证命令
 
 ```
