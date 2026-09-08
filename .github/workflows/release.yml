@@ -96,10 +96,25 @@ jobs:
           cd dist
           sha256sum *.exe latest.yml > SHA256SUMS.txt
           gh release upload "$GITHUB_REF_NAME" SHA256SUMS.txt --clobber
-          # 空正文=发布页丑闻实锤(v0.1.2 曾整版无说明)——draft 正文必须非空,empty=红
+          # 空正文=发布页丑闻实锤(v0.1.2 曾整版无说明)——draft 正文必须非空。
+          # 2026-09-08 修鸡生蛋:本 job 的"Delete stale draft"会重建空 draft,而 rerun 只重跑失败 job,
+          # 所以"要求正文已填否则红"永远过不了;改为空时自动从仓库内 CHANGELOG 提取本版本段填充,
+          # 再保留 >=30 字符红线(CHANGELOG 里也没写=红,防整版无说明)。
           BODY_LEN=$(gh api "repos/$GITHUB_REPOSITORY/releases" -q '[.[] | select(.tag_name=="'"$GITHUB_REF_NAME"'") | select(.draft)][0].body // "" | length')
           echo "draft body length: $BODY_LEN"
           if [ "${BODY_LEN:-0}" -lt 30 ]; then
-            echo "draft release body is empty/short — fill notes from CHANGELOG before this workflow runs (npm run release:finalize)"
+            VER="${GITHUB_REF_NAME#v}"
+            node -e "
+              const cl = require('fs').readFileSync('CHANGELOG.md','utf8');
+              const m = cl.match(new RegExp('## \\\\[' + process.argv[1] + '\\\\][^\\\\n]*\\\\n([\\\\s\\\\S]*?)(?=\\\\n## \\\\['));
+              if (!m || !m[1].trim()) { console.error('CHANGELOG has no section for ' + process.argv[1]); process.exit(1); }
+              require('fs').writeFileSync(process.env.RUNNER_TEMP + '/notes.md', m[1].trim());
+            " "$VER"
+            gh release edit "$GITHUB_REF_NAME" --draft --notes-file "$RUNNER_TEMP/notes.md"
+            BODY_LEN=$(gh api "repos/$GITHUB_REPOSITORY/releases" -q '[.[] | select(.tag_name=="'"$GITHUB_REF_NAME"'") | select(.draft)][0].body // "" | length')
+            echo "draft body auto-filled from CHANGELOG, length: $BODY_LEN"
+          fi
+          if [ "${BODY_LEN:-0}" -lt 30 ]; then
+            echo "draft release body still empty/short after auto-fill — CHANGELOG section missing or too short"
             exit 1
           fi
