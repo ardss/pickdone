@@ -208,33 +208,34 @@ export default {
       handler () { this.$nextTick(() => { this.ensurePositions(); this.drawWires() }) }
     }
   },
-  mounted () {
-    // 有项目时默认聚焦第一个项目(按项目看整体链路是本视图的主用法);固定项目(项目页内嵌)时不覆盖
-    if (this.fixedProjectId == null && this.projectId == null && this.projects.length) this.projectId = this.projects[0].categoryId
-    this.loadMs()
-    this.loadPos()
-    this.$nextTick(this.drawWires)
-    window.addEventListener('resize', this.drawWires)
-    this._wireTimer = setInterval(this.drawWires, 1500) // 轻量兜底:列表增删/完成联动后重画(不依赖深层 watcher)
-  },
-  beforeUnmount () {
-    window.removeEventListener('resize', this.drawWires)
-    window.removeEventListener('pointermove', this.onGripMove)
-    window.removeEventListener('pointerup', this.onGripUp)
-    clearInterval(this._wireTimer)
-    this.flushPos()
-  },
+    mounted () {
+      // 有项目时默认聚焦第一个项目(按项目看整体链路是本视图的主用法);固定项目(项目页内嵌)时不覆盖
+      if (this.fixedProjectId == null && this.projectId == null && this.projects.length) this.projectId = this.projects[0].categoryId
+      this.loadMs()
+      this.loadPos()
+      this.$nextTick(this.drawWires)
+      window.addEventListener('resize', this.drawWires)
+    },
+    beforeUnmount () {
+      window.removeEventListener('resize', this.drawWires)
+      window.removeEventListener('pointermove', this.onGripMove)
+      window.removeEventListener('pointerup', this.onGripUp)
+      this.flushPos()
+    },
   methods: {
     taskContextMenu (t, e) { taskContextMenu(this, t, e) },
     // —— 画布布局:位置持久化 + 自动整理(自由画布是定稿形态,分层只是布局算法) ——
     posKey () { return 'depView.pos.v1:' + (this.projectId == null ? 'all' : String(this.projectId)) },
     loadPos () {
       this.posMap = {}
+      // Sequence token: on rapid project switches, a stale response must not overwrite the newer posMap
+      const seq = this._posSeq = (this._posSeq || 0) + 1
       window.todoAPI.dbCall('getMeta', this.posKey()).then(raw => {
+        if (seq !== this._posSeq) return
         try { this.posMap = JSON.parse(raw) || {} } catch (e) { this.posMap = {} }
         this.ensurePositions()
         this.$nextTick(this.drawWires)
-      }).catch(() => { this.ensurePositions() })
+      }).catch(() => { if (seq === this._posSeq) this.ensurePositions() })
     },
     savePosTimer: null,
     savePos () {

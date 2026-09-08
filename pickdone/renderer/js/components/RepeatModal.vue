@@ -181,7 +181,8 @@ export default {
             todoReminderOffsets: Array.isArray(tpl.reminderOffsets) ? tpl.reminderOffsets : [],
             todoDifficultyLevel: tpl.difficulty || 0,
             repeatId,
-            todoSublist: (function(){ try { return JSON.parse(tpl.subtasks || 'null') } catch (e) { return null } })(),
+            // Generated instances always start unchecked, matching the store's ensureNextRepeatInstance semantics
+            todoSublist: (function(){ try { const list = JSON.parse(tpl.subtasks || 'null'); return Array.isArray(list) ? list.map(x => ({ ...x, checked: false })) : list } catch (e) { return null } })(),
             todoImage: tpl.image,
             fileList: tpl.files,
             addToTop: false
