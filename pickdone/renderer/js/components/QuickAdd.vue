@@ -43,10 +43,8 @@ export default {
       pickedDate: null as any
     }
   },
-  watch: {
-    // A manually picked date is sticky once set: editing the text does not destroy it (destroying on text change would silently drop the user's chosen date)
-    text () { if (!this.text) this.pickedDate = null }
-  },
+  // pickedDate is intentionally NOT reset when text is cleared: the chip stays until the user
+  // explicitly clears it via the chip ✕ (pickedDate = 0) or submits (onEnter resets both)
   computed: {
     parsed () {
       const r = parseNaturalDate(this.text)
@@ -181,7 +179,8 @@ html[data-theme="dark"] .qa-inputwrap:focus-within { background: var(--active-bg
 }
 .todo-input-add__calender:hover,
 .todo-input-add__calender:active { background-color: #f3f3f3; }
-.todo-input-add__calender:focus { outline: none; }
+/* Keyboard focus ring for the calendar trigger (was outline: none, which made focus invisible) */
+.todo-input-add__calender:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
 .todo-input-add__calender img { width: 15px; height: 15px; }
 
 /* 日期选择浮层覆盖在日历按钮上（透明触发层）——
