@@ -142,7 +142,8 @@ test('todo action: deleteTodo - sets the local deleted state + deletedAt and per
   assert.equal(local.delete, true)
   assert.ok(local.deletedAt > 0)
   assert.equal(local.status, 'delete')
-  assert.equal(committed[0][0], 'upsertLocal')
+  // historyBreakMerge may commit first (discrete ops break the undo merge window); the upsert itself is what matters
+  assert.ok(committed.some(([n]) => n === 'upsertLocal'))
   assert.ok(upserts.length > 0)
 })
 

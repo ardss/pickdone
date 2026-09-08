@@ -545,7 +545,7 @@ function registerIpc () {
   // hardDelete is a dangerous write, but the renderer's recycle-bin "delete permanently" uses it for single items, so it stays on the whitelist;
   // purgeRecycleBin/purgeSeedTodos go through dedicated main-process channels below, not through this whitelist.
   const ALLOWED_RENDERER_OPS = new Set([
-    'getById', 'getAll', 'queryTodos', 'getMeta',
+    'getById', 'getAll', 'queryTodos', 'getMeta', 'deleteMeta',
     'upsert', 'upsertMany', 'hardDelete', 'hardDeleteMany', 'setMeta',
     'getAllCategories', 'upsertCategory',
     // Filter CRUD (filterUpsert/filterDelete are user-level safe writes, same as upsertCategory) + count reads
@@ -562,7 +562,7 @@ function registerIpc () {
   // Dangerous DB ops: batch write/batch delete/arbitrary meta write. Capability-wise aligned with "dangerous channels main-window only" —
   // a compromised float/lock-screen window could previously wipe the whole database in bulk or change any meta via todo-db:call (audit 2026-09-01).
   // The renderer's real call surface has been verified: all three only occur in the main window (store/utils/main.js); auxiliary windows have no legitimate callers.
-  const MAIN_WINDOW_ONLY_OPS = new Set(['upsertMany', 'hardDeleteMany', 'setMeta'])
+  const MAIN_WINDOW_ONLY_OPS = new Set(['upsertMany', 'hardDeleteMany', 'setMeta', 'deleteMeta'])
 
   // Lock-screen password brute-force throttling: after 5 failures, trip for 60s (guards against dictionary attacks)
   const LOCK_FAIL_LIMIT = 5
