@@ -315,6 +315,8 @@ export default {
   "statsE.SettingsModal.floatingWindowLabel": "桌面悬浮窗：",
   "statsE.SettingsModal.focusLengthLabel": "专注时长（分钟）：",
   "statsE.SettingsModal.panelSyncHint": "与番茄面板实时同步",
+  "statsE.SettingsModal.finalConfirmMsg": "此操作不可恢复，确认继续？",
+  "statsE.SettingsModal.finalConfirmBtn": "确认执行",
   "statsE.SettingsModal.breakLengthLabel": "休息时长（分钟）：",
   "statsE.SettingsModal.customSoundLabel": "自定义提示音文件：",
   "statsE.SettingsModal.noiseVolumeLabel": "白噪音音量",

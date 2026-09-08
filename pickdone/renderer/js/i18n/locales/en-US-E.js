@@ -315,6 +315,8 @@ export default {
   "statsE.SettingsModal.floatingWindowLabel": "Desktop floating window:",
   "statsE.SettingsModal.focusLengthLabel": "Focus length (min):",
   "statsE.SettingsModal.panelSyncHint": "Synced live with the tomato panel",
+  "statsE.SettingsModal.finalConfirmMsg": "This action cannot be undone. Continue?",
+  "statsE.SettingsModal.finalConfirmBtn": "Confirm",
   "statsE.SettingsModal.breakLengthLabel": "Break length (min):",
   "statsE.SettingsModal.customSoundLabel": "Custom notification sound:",
   "statsE.SettingsModal.noiseVolumeLabel": "White noise volume",
