@@ -52,6 +52,7 @@ const makeCtx = (todoState, settingsPatch = {}) => {
       else if (n === 'setViews') todo.mutations.setViews(todoState, p)
       else if (n === 'setMeta') todo.mutations.setMeta(todoState, p)
       else if (n === 'historyPush') todo.mutations.historyPush(todoState, p)
+      else if (n === 'historyPushKeepRedo') todo.mutations.historyPushKeepRedo(todoState, p)
       else if (n === 'historyRestore') todo.mutations.historyRestore(todoState, p)
       else if (n === 'historyRedoPop') todo.mutations.historyRedoPop(todoState)
       else if (n === 'historyUndoPop') todo.mutations.historyUndoPop(todoState)
@@ -161,6 +162,26 @@ test('todo action: redo - redo restores after undo', async () => {
   const r = await todo.actions.redo.call(fakeThis, ctx)
   assert.equal(r.ok, true)
   assert.equal(st.todoList[0].taskContent, '原')
+})
+
+test('todo action: redo - multi-step redo keeps the remaining redo entries (regression: historyPush reset redoStack so only the first Ctrl+Y worked)', async () => {
+  const st = freshState([T({ taskId: 'r1', taskContent: 's0' })])
+  st.undoStack = []
+  // Two pending redo steps: bottom = 's1', top = 's2'; current state = 's0'
+  st.redoStack = [
+    JSON.stringify({ todoList: [T({ taskId: 'r1', taskContent: 's1' })], recycleList: [] }),
+    JSON.stringify({ todoList: [T({ taskId: 'r1', taskContent: 's2' })], recycleList: [] })
+  ]
+  const { ctx, fakeThis } = makeCtx(st)
+  const r1 = await todo.actions.redo.call(fakeThis, ctx)
+  assert.equal(r1.ok, true)
+  assert.equal(st.todoList[0].taskContent, 's2')
+  assert.equal(st.redoStack.length, 1, 'the remaining redo step must survive the first redo')
+  const r2 = await todo.actions.redo.call(fakeThis, ctx)
+  assert.equal(r2.ok, true, 'a second redo must still find its step')
+  assert.equal(st.todoList[0].taskContent, 's1')
+  assert.equal(st.redoStack.length, 0)
+  assert.equal(st.undoStack.length, 2, 'both post-redo states were pushed onto the undo stack')
 })
 
 test('todo mutations: setMeta / removeLocal / hardRemove', () => {

@@ -181,6 +181,13 @@ test('todo action: toggleComplete - completion writes completedAt and the main t
   assert.ok(parent.completedAt > 0)
   const after = JSON.parse(parent.subtasks)
   assert.ok(after.every(s => s.checked), 'isCompleteWithSubtasks defaults on: completing the main task cascades checking subtasks')
+  // Symmetric un-check: un-completing the parent unchecks all subs; without this, subsCompleteTarget
+  // in core.js instantly re-completes a manually un-completed parent whose subs are all checked
+  await todo.actions.toggleComplete.call(fakeThis, ctx, parent)
+  assert.equal(parent.complete, false)
+  assert.equal(parent.completedAt, 0)
+  const reverted = JSON.parse(parent.subtasks)
+  assert.ok(reverted.every(s => !s.checked), 'un-completing the main task symmetrically unchecks subtasks')
 })
 
 test('todo action: history stack - undo rolls content back after push', async () => {
