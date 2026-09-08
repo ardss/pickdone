@@ -18,6 +18,7 @@ const { handleAppProtocol } = require('./protocol')
 const dbRecovery = require('./dbRecovery.cjs')
 const scheduler = require('./scheduler')
 const i18nM = require('./i18n')
+const closeBehavior = require('./close-behavior')
 const tomatoFloat = require('./tomato-float')
 const tomatoTaskbar = require('./tomato-taskbar')
 const quickAdd = require('./quick-add')
@@ -307,8 +308,13 @@ function createMainWindow () {
       if (!s || process.argv.includes('--dev')) showMainOrLock()
     })
   win.on('close', e => {
-    if (!quitByUser && readConfig().closeActionMinimize !== false) {
+    if (!quitByUser && closeBehavior.isCloseToTray(readConfig())) {
       e.preventDefault(); win.hide()
+      const cfg = readConfig()
+      if (closeBehavior.shouldShowTrayNotice(cfg)) {
+        writeConfig({ closeTrayNotified: true })
+        try { if (tray && process.platform === 'win32') tray.displayBalloon({ iconType: 'info', title: i18nM.mt('appName'), content: i18nM.mt('closeTrayNotice') }) } catch (err) { /* balloon is best-effort */ }
+      }
     } else {
       writeConfig({ winBounds: win.getBounds() })
     }

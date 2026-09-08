@@ -69,10 +69,10 @@ import i18n, { setLocale, SUPPORTED } from '../i18n/index.js'
 import dialogA11y from '../utils/dialogA11y.js'
 /** First-run setup wizard: language -> color mode -> default categories -> close-button behavior (triggered only on fresh installs; existing data silently skips and backfills the flag) */
 const LS_ONBOARD = 'onboardingDone'
-/* Re-enabled 2026-09-08: the v0.1 disable reason (auto-tour handoff polish) is gone — AUTO_TOURS_ENABLED=false
-   already gates the auto tour, and the explicit runJourney handoff is TDZ-safe. A close-behavior step was added
-   (tray vs quit): close-to-tray is invisible to new users and caused the NSIS "uninstall old files: 2" update trap. */
-const ONBOARDING_ENABLED = true
+/* Kept disabled (2026-09-08 user call): the settings switch + a one-shot tray balloon on first
+   close-to-tray cover the close-behavior discovery without a first-run wizard. The close-action
+   step below stays as dead-until-enabled code so re-enabling is a one-line flip. */
+const ONBOARDING_ENABLED = false
 
 export default {
   name: 'OnboardingWizard',
