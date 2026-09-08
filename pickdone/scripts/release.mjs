@@ -21,6 +21,10 @@ const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 const sh = (cmd, opts = {}) => execFileSync(cmd[0], cmd.slice(1), { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...opts }).trim()
 const die = msg => { console.error('✗ release: ' + msg); process.exit(1) }
 const say = msg => console.log('• ' + msg)
+// Windows 上 npm 只有 npm.cmd(Node ≥18.20 禁止无 shell 生成 .cmd,直接 spawnSync 必 ENOENT/EINVAL)——借 cmd.exe 转发
+const npm = (args, opts = {}) => process.platform === 'win32'
+  ? sh(['cmd', '/d', '/s', '/c', 'npm ' + args.join(' ')], opts)
+  : sh(['npm', ...args], opts)
 
 const version = process.argv[2]
 if (!/^\d+\.\d+\.\d+$/.test(version || '')) die('用法: npm run release X.Y.Z')
@@ -57,10 +61,10 @@ say('[Unreleased] 非空,待归版')
 
 // 4. 缓存戳 + 全量门禁(视觉第④组只在本机跑,CI 跑不了——这就是为什么 tag 前必须本机过)
 say('npm run bump …')
-sh(['npm', 'run', 'bump'], { stdio: 'inherit' })
+npm(['run', 'bump'], { stdio: 'inherit' })
 say('npm run check:all(29 项,约 4-8 分钟;中止=Ctrl+C)…')
 try {
-  sh(['npm', 'run', 'check:all'], { stdio: 'inherit' })
+  npm(['run', 'check:all'], { stdio: 'inherit' })
 } catch {
   die('check:all 未全绿——修完再跑 npm run release(不会推任何东西)')
 }
