@@ -334,7 +334,11 @@
         for (const raw of list) {
           if (!raw || !raw.tomatoId || !raw.endTime) throw new Error('tomatoAppendMany: tomatoId/endTime required')
           const rec = Object.assign({ dateKey: '', succeed: true, manual: false, rest: 0, restDuration: 0, focus: '', focusTaskId: null, status: 'local', abandonReason: '' }, raw)
-          if (!/^\d{4}-\d{2}-\d{2}$/.test(String(rec.dateKey))) throw new Error('tomatoAppendMany: dateKey must be YYYY-MM-DD')
+          // dateKey 无条件由 endTime 重导(与桌面端 db.js tomatoAppendMany 同款):调用方传入值不再被信任,跨午夜记录才不会与统计/时间轴 endTime 口径分裂
+          const _d = new Date(rec.endTime)
+          const _p = n => String(n).padStart(2, '0')
+          rec.dateKey = `${_d.getFullYear()}-${_p(_d.getMonth() + 1)}-${_p(_d.getDate())}`
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(String(rec.dateKey))) throw new Error('tomatoAppendMany: dateKey derive failed')
           byId[rec.tomatoId] = Object.assign(byId[rec.tomatoId] || {}, rec) // UPSERT 语义:后写胜,未知字段保全
         }
         m.__shimTomatoRecords = Object.values(byId)
