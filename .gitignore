@@ -54,6 +54,12 @@ tests/*.png
 .agents/
 .claude/
 
+# 机器本地产物目录（2026-09-08 发版门禁:untracked 目录会卡 release 的 clean 判定;本地保留不入库）
+pickdone-backups/
+.tmp-daily-report/
+.tmp-cssrefactor-user/
+pickdone/.dev-data-visual/
+
 # 根目录无依赖，npm 会生成空 lock；不入库
 /package-lock.json
 skills-lock.json
