@@ -3,7 +3,7 @@
   "version": "0.2.1",
   "private": true,
   "description": "PickDone — local-first todos, schedule and pomodoro focus desktop app",
-  "productName": "拾事",
+  "productName": "PickDone",
   "main": "src/main/index.js",
   "scripts": {
     "start": "node scripts/app-dev.mjs",
@@ -87,7 +87,7 @@
   "author": "ardss",
   "build": {
     "appId": "com.pickdone.app",
-    "productName": "拾事",
+    "productName": "PickDone",
     "directories": {
       "output": "dist"
     },
