@@ -463,12 +463,24 @@ export default {
     onSearchInput (v) {
       this.$store.commit('todo/setSearch', v)
       const w = String(v || '').trim()
-      if (w && this.$route.name !== 'todo-list-search') this.go('todo-list-search')
-      if (!w && this.$route.name === 'todo-list-search') this.$router.back()
+      // Snapshot the view we are leaving when entering search, so clearing can navigate back deterministically ($router.back() is unreliable: empty history stack misfires)
+      if (w && this.$route.name !== 'todo-list-search') {
+        this._searchReturnRoute = { name: this.$route.name, params: { ...this.$route.params } }
+        this.go('todo-list-search')
+      }
+      if (!w && this.$route.name === 'todo-list-search') this._returnFromSearch()
     },
     clearSearch () {
       this.$store.commit('todo/setSearch', '')
-      if (this.$route.name === 'todo-list-search') this.$router.back()
+      if (this.$route.name === 'todo-list-search') this._returnFromSearch()
+    },
+    /* Deterministic exit from the search page: router.replace to the snapshotted source view (today as the fallback),
+       then re-sync the active nav key the same way go() does */
+    _returnFromSearch () {
+      const r = this._searchReturnRoute && this._searchReturnRoute.name ? this._searchReturnRoute : { name: 'todo-list-today' }
+      this.$router.replace(r).catch(() => {})
+      this.$store.commit('ui/setNav', navKeyOfRoute(r.name) || ('category:' + (r.params && r.params.id)))
+      this._searchReturnRoute = null
     },
     createCategory () {
       const name = this.$t('statsE.SideNav.newCategory')
