@@ -716,7 +716,8 @@ export default {
     /** Unified double confirmation for dangerous operations: a regular confirm first, then an irreversible final confirm */
     async confirmDanger (msg, title, type) {
       await this.$confirm(msg, title, { type: type || 'warning' })
-      await this.$confirm(this.$t('statsE.SettingsModal.panelSyncHint'), title, { type: 'error', confirmButtonText: this.$t('statsE.SettingsModal.breakLengthLabel') })
+      // Final confirm must use its own copy, not unrelated settings labels (P1: was panelSyncHint/breakLengthLabel)
+      await this.$confirm(this.$t('statsE.SettingsModal.finalConfirmMsg'), title, { type: 'error', confirmButtonText: this.$t('statsE.SettingsModal.finalConfirmBtn') })
     },
     // CSV one-click migration (other todo apps → Pickdone): main process picks file + preview, executes on confirm; repeating tasks deduped by engine fingerprint
     async importFromCsv () {
@@ -820,7 +821,7 @@ export default {
             if (b.categoryState) { const c = JSON.parse(b.categoryState); if (c.list) this.$store.commit('category/setList', c.list) }
             await this.restoreTomatoLedger(b)
             this.$store.dispatch('_rt/refreshFromDb')
-            this.$store.dispatch('tomato/recordsReload')
+            this.$store.dispatch('tomato/recordsReload').catch(e => console.error('[settings] tomato/recordsReload after restore failed:', e))
             this.$message.success(this.$t('statsH.SettingsModal.restoredCount', { n: rows.length }))
           } catch (e) { this.$message.error(this.$t('statsE.SettingsModal.backupParseFailedMsg') + e.message) }
         }).catch(() => {})
@@ -863,7 +864,7 @@ export default {
           // 回收站行与专注账本同份同回(此前 UI 恢复只进 todoList,同一份 dump 走启动灾备却能全回——两端语义割裂)
           await this.restoreTomatoLedger(b)
           this.$store.dispatch('_rt/refreshFromDb')
-          this.$store.dispatch('tomato/recordsReload')
+          this.$store.dispatch('tomato/recordsReload').catch(e => console.error('[settings] tomato/recordsReload after restore failed:', e))
           this.$message.success(this.$t('statsH.SettingsModal.restoredCount', { n: rows.length }))
         } catch (e) { this.$message.error(this.$t('statsE.SettingsModal.backupParseFailedMsg') + e.message) }
       }).catch(() => {})
