@@ -244,7 +244,15 @@ export default {
     /** Remove records by tomatoId prefix (for clearing demo data)。
      *  先从 DB 重载再筛 id:内存副本可能落后于行表(广播未达/竞态),按旧副本筛会漏删 DB 行(2026-09-04 审查 P2-5) */
     async removeRecordsByIdPrefix ({ state, commit }, prefix) {
-      commit('recordsReplace', await window.todoAPI.dbCall('tomatoAll'))
+      let rows = null
+      try {
+        rows = await window.todoAPI.dbCall('tomatoAll')
+      } catch (e) {
+        // 与 recordsReload 同口径:重载失败时保留内存副本并中止删除(避免按陈旧副本漏删 DB 行/误删内存行)
+        console.error('[tomato] ledger reload failed, skip prefix removal:', e)
+        return
+      }
+      commit('recordsReplace', rows)
       const ids = (state.tomatoRecordList || [])
         .filter(r => String((r && r.tomatoId) || '').startsWith(prefix))
         .map(r => r.tomatoId)
