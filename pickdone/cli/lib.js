@@ -220,7 +220,7 @@ function projectStatus (c) {
   const done = list.filter(t => t.complete)
   // 真实专注口径:聚合挂在本项目任务上的 actual 专注记录(与 stats/tomato list 同源,预计番茄口径退役)
   const idset = new Set(list.map(t => t.taskId))
-  const actualFocus = tomatoRecords().reduce((s, r) => s + (r.focusTaskId && idset.has(r.focusTaskId) ? (Number(r.focusDuration) || 0) : 0), 0)
+  const actualFocus = tomatoRecords().reduce((s, r) => s + (r.succeed !== false && r.focusTaskId && idset.has(r.focusTaskId) ? (Number(r.focusDuration) || 0) : 0), 0)
   const today0 = +dayjs().startOf('day')
   const week24 = +dayjs().add(7, 'day').endOf('day')
   const started = list.reduce((m, t) => Math.min(m, t.createTime || m), Infinity)
@@ -462,11 +462,27 @@ function patchTodo (input, patch, { action } = {}) {
  * - On complete, writes completedAt and, per isCompleteWithSubtasks (default on), also checks all subtasks
  * - When completing the latest instance in a repeat group (repeatId), renews per the meta 'repeatRule:<rid>' rule to generate the next instance
  */
-function toggleComplete (input, target, { withSubtasks = true, completedAt } = {}) {
+function toggleComplete (input, target, { withSubtasks, completedAt } = {}) {
   const db = open()
   const t = resolveTask(input)
-  if (!target) return patchTodo(t.taskId, { complete: false, completedAt: 0 }, { action: 'undo' })
-  const patch = core.completePatch(t, { withSubtasks, completedAt })
+  // isCompleteWithSubtasks gate (default on) — same gate as the renderer's toggleComplete (store/todo.js);
+  // an explicit caller override (--no-sub-cascade) wins over the setting
+  const cascade = withSubtasks != null ? !!withSubtasks : settingsDoc().isCompleteWithSubtasks !== false
+  if (!target) {
+    // Undo unchecks all subtasks too (symmetric with the complete cascade): without this, the UI's
+    // subsCompleteTarget would instantly re-complete a parent whose subs are all checked (same as store/todo.js)
+    const undoPatch = { complete: false, completedAt: 0 }
+    if (cascade) {
+      try {
+        const subs = JSON.parse(t.subtasks || '[]')
+        if (Array.isArray(subs) && subs.length && subs.some(s => s.checked)) {
+          undoPatch.subtasks = JSON.stringify(subs.map(s => ({ ...s, checked: false })))
+        }
+      } catch { /* skip the cascade when subtask JSON is malformed */ }
+    }
+    return patchTodo(t.taskId, undoPatch, { action: 'undo' })
+  }
+  const patch = core.completePatch(t, { withSubtasks: cascade, completedAt })
   const merged = { ...t, ...patch, updateTime: Date.now(), status: 'update' }
   db.call('upsert', merged)
 
@@ -570,11 +586,23 @@ function restoreTodo (input) {
 function purgeRecycleBin () {
   const db = open()
   const rows = recycleTasks()
+  // Delete attachment files BEFORE clearing rows (files/<taskId>_<ts>_<name>, same prefix rule as the
+  // App's purgeAttachmentFiles in src/main/index.js): purging rows only once left private attachments on disk
+  let filesRemoved = 0
+  try {
+    const dir = path.join(userDataDir(), 'files')
+    const prefixes = rows.map(r => `${r.taskId}_`)
+    for (const f of fs.readdirSync(dir)) {
+      if (prefixes.some(p => f.startsWith(p))) {
+        try { fs.unlinkSync(path.join(dir, f)); filesRemoved++ } catch { /* best-effort, never block the purge */ }
+      }
+    }
+  } catch { /* no files dir is fine */ }
   db.call('purgeRecycleBin')
   audit.record({
     action: 'purge',
     changes: rows.map(r => ({ before: r })),
-    note: `purged ${rows.length} item(s) (irreversible)`
+    note: `purged ${rows.length} item(s) (irreversible), ${filesRemoved} attachment file(s) removed`
   })
   return true
 }
@@ -707,7 +735,9 @@ function buildRepeatRule (opts) {
   const rule = Object.assign({}, core.REPEAT_DEFAULTS)
   const type = opts.type || 'daily'
   const interval = Math.max(1, parseInt(opts.interval, 10) || 1)
-  const count = Math.max(1, parseInt(opts.count, 10) || 0)
+  // count: 0 = unspecified → keep the engine defaults (day 90 / week 52 / month 24 / year 5, same as the renderer's RepeatModal form);
+  // the old Math.max(1, …) coerced an absent --count to repeatDayCount=1, so `repeat on --type daily` generated ZERO future instances
+  const count = parseInt(opts.count, 10) || 0
   if (type === 'daily') { rule.repeatType = 'day'; rule.repeatInterval = interval; if (count) rule.repeatDayCount = count }
   else if (type === 'weekly') {
     rule.repeatType = 'week'; rule.repeatInterval = 1
@@ -735,7 +765,11 @@ function repeatOn (input, rule, count) {
   db.call('upsert', Object.assign({}, t, { repeatId: rid, updateTime: Date.now(), status: 'update' }))
   // Generate subsequent instances (the first day is the current task itself), reusing the todo-core engine's expansion
   const base = t.todoTime || t.dayStart || +dayjs().startOf('day')
-  const cap = count > 0 ? count : 24
+  // Generation cap: explicit --count wins; otherwise the App's maxRepeat setting (default 2), same as RepeatModal
+  const cap = count > 0 ? count : (parseInt(settingsDoc().maxRepeat, 10) || 2)
+  // Template reminder keeps its wall-clock time on each instance (dayjs(ts).hour().minute() re-derive per instance,
+  // same as RepeatModal) — copying the raw timestamp made reminders fire on the template's original date
+  const tplRem = t.reminderTime > 0 ? dayjs(t.reminderTime) : null
   let made = 0
   for (const ts of core.expandRepeatDates(base, rule).map(d => +d).filter(ts => ts > base).slice(0, cap)) {
     const sameDay = db.call('queryTodos', { deleted: 0 }).filter(x => x.dayStart === dayStartOf(ts))
@@ -746,7 +780,8 @@ function repeatOn (input, rule, count) {
     const now = Date.now()
     db.call('upsert', {
       complete: false, createTime: now, delete: false,
-      reminderTime: t.reminderTime || 0, reminderOffsets: Array.isArray(t.reminderOffsets) ? t.reminderOffsets : [], reminderExtra: Array.isArray(t.reminderExtra) ? t.reminderExtra : [],
+      reminderTime: tplRem ? +dayjs(ts).hour(tplRem.hour()).minute(tplRem.minute()).second(0).millisecond(0) : 0,
+      reminderOffsets: Array.isArray(t.reminderOffsets) ? t.reminderOffsets : [], reminderExtra: Array.isArray(t.reminderExtra) ? t.reminderExtra : [],
       priority: t.priority || 0, deadlineTs: t.deadlineTs || 0, important: t.important || 0, urgent: t.urgent || 0,
       estimate: 0, difficulty: t.difficulty || 0,
       repeatId: rid, subtasks: subs ? JSON.stringify(subs.map(x => ({ ...x, checked: false }))) : null,
@@ -1012,7 +1047,12 @@ function resolveRecord (ref) {
 function recordFix (ref, { minutes, date, at, rest, succeed, task, free }) {
   const rec = resolveRecord(ref)
   const patch = {}
-  if (minutes != null) patch.focusDuration = Math.max(1, Math.min(720, parseInt(minutes, 10) || 0))
+  // 600 is the DB-layer clamp (db.js _recToRow): accepting 720 used to report success while 600 landed (audit drift)
+  if (minutes != null) {
+    const n = parseInt(minutes, 10) || 0
+    if (n > 600) throw new CliError('focus duration max is 600 minutes (DB-layer clamp); got ' + n, 'USAGE')
+    patch.focusDuration = Math.max(1, n)
+  }
   if (rest != null) patch.restDuration = Math.max(0, Math.min(120, parseInt(rest, 10) || 0))
   if (succeed != null && succeed !== true) patch.succeed = !/^(false|no|0)$/i.test(String(succeed))
   if (date || at) {

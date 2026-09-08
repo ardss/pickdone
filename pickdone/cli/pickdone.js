@@ -506,7 +506,8 @@ async function main () {
       if (!opts._[0]) throw new lib.CliError('usage: done <taskId|keyword>', 'USAGE')
       if (dry) return emitNext({ dryRun: true, taskId: lib.resolveTask(opts._[0]).taskId, would: 'complete (with subtask cascade / repeat renewal)' }, ['remove --dry-run to actually run'])
       const at = opts.at ? lib.parseDate(opts.at) : null // done --at "YYYY-MM-DD HH:mm": backdated completion for backfill/reconstruction
-      const r = lib.toggleComplete(opts._[0], true, { withSubtasks: !opts['no-sub-cascade'], completedAt: at })
+      // Only the explicit override reaches lib; absent flag defers to the isCompleteWithSubtasks setting (lib default)
+      const r = lib.toggleComplete(opts._[0], true, { withSubtasks: opts['no-sub-cascade'] ? false : undefined, completedAt: at })
       if (opts.json) {
         // JSON contract: renewed always present (null when no renewal); smoke/agents rely on this field
         console.log(JSON.stringify({ ok: true, command: cmd, data: r.completed, renewed: r.renewed ?? null, next: ['undo ' + r.completed.taskId + ' to revert', 'stats --json to see today completions'] }, null, 2))
