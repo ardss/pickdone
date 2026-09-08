@@ -156,7 +156,9 @@ export default {
     async onDrop (e) {
       e.preventDefault()
       dragActive = false
-      this.$el.style.borderBottomColor = ''; this.$el.style.borderTopColor = ''
+      // dragend only fires on the dragged source row: the drop-target row must clear its own
+      // insertion-indicator classes here, or the line stays on the list until the next dragover
+      this.$el.classList.remove('drag-above', 'drag-below')
       const draggedId = e.dataTransfer.getData('text/plain')
       if (!draggedId || draggedId === this.todo.taskId) return
       const st = this.$store.state.todo

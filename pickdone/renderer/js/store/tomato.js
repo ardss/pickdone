@@ -173,7 +173,9 @@ export default {
       if (patch.endTime != null) rec.endTime = Math.max(0, Math.round(patch.endTime))
       // After changing endTime, re-derive dateKey: the rail/stats both bucket by dateKey; without re-deriving, it becomes ghost data that "vanishes from the day it was moved away from"
       if (patch.endTime != null && rec.endTime > 0) rec.dateKey = dayjs(rec.endTime).format(FMT.date)
-      if (patch.focusDuration != null) rec.focusDuration = Math.max(1, Math.min(720, Math.round(patch.focusDuration)))
+      // clamp 1..600 = the DB-layer single source (db.js _recToRow): a UI-side cap above it would show
+      // values the DB silently drops on next reload (memory says 720, ledger says 600)
+      if (patch.focusDuration != null) rec.focusDuration = Math.max(1, Math.min(600, Math.round(patch.focusDuration)))
       if (patch.restDuration != null) rec.restDuration = Math.max(0, Math.min(120, Math.round(patch.restDuration)))
       if (patch.succeed != null) rec.succeed = !!patch.succeed
       s.tomatoRecordList = [...s.tomatoRecordList]

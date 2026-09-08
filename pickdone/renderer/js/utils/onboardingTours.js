@@ -150,9 +150,10 @@ export function runJourney (force = false) {
     return true // stageCreate is relayed by the poll above
   }
   let ending = false // × close = exit the whole journey (no relaying to the next stage); next-step/auto-advance is the only way forward
+  let advancing = false // guards driver.js onDestroy firing synchronously during a poll-driven stage switch: without it, destroy() → onDestroy → onDone re-enters the next stage, double-advancing and leaking a duplicate driver
   const singleStep = (step, onDone, { doneLabel = false } = {}) => {
     clearWatch()
-    if (drv) { try { drv.destroy() } catch (e) { /* empty */ } }
+    if (drv) { const d = drv; drv = null; advancing = true; try { d.destroy() } catch (e) { /* empty */ } advancing = false }
     // Mid-journey stages always show "Next" as the advance button: showing "Done" once made users think the journey had ended
     drv = factory({
       steps: [step],
@@ -162,7 +163,7 @@ export function runJourney (force = false) {
       doneBtnText: doneLabel ? tt(T('done')) : tt(T('next')),
       onDestroy: () => {
         clearWatch()
-        if (!ending && onDone) onDone()
+        if (!ending && !advancing && onDone) onDone()
       },
       onNextClick: () => { drv.moveNext() },
       onCloseClick: () => finishAll()
@@ -197,7 +198,8 @@ export function runJourney (force = false) {
     clearWatch()
     watch = poll(() => !!document.querySelector('.td-tom'), () => {
       clearWatch()
-      if (drv) drv.destroy()
+      // Same reentry guard as singleStep: destroying here must not relay onDestroy → onDone
+      if (drv) { const d = drv; drv = null; advancing = true; try { d.destroy() } catch (e) { /* empty */ } advancing = false }
       singleStep({ element: '.td-tom', popover: { title: tt(T('jPickTitle')), description: tt(T('jPickDesc')), side: 'top', align: 'center' } }, stageDrag)
       watch = poll(() => !!document.querySelector('.td-tom.active'), () => { clearWatch(); stageDrag() })
     })

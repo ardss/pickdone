@@ -195,6 +195,18 @@ export default {
       s.redoStack = []
       s._histRedoBytes = 0
     },
+    // redo()'s post-restore push: same eviction budget as historyPush but keeps the remaining redo
+    // entries alive (historyPush resets redoStack, which used to kill every redo step after the first),
+    // and breaks the merge window so a following edit starts a fresh undo step instead of fusing
+    historyPushKeepRedo (s, snapRaw) {
+      s._histLastPushAt = 0
+      s.undoStack.push(snapRaw)
+      s._histBytes = (s._histBytes || 0) + snapRaw.length
+      while (s.undoStack.length > 1 && (s.undoStack.length > HISTORY_LIMIT || s._histBytes > HISTORY_BYTES)) {
+        s._histBytes -= s.undoStack[0].length
+        s.undoStack.shift()
+      }
+    },
     historyRestore (s, snap) {
       s.todoList = snap.todoList
       s.recycleList = snap.recycleList
@@ -325,6 +337,7 @@ export default {
       const all = [...state.todoList, ...state.recycleList]
       const i = all.findIndex(t => t.taskId === taskId)
       if (i < 0) return
+      const prevDayStart = all[i].dayStart // capture BEFORE upsertLocal mutates the row in place: the chip-sync job runs in a microtask and must migrate from the day the task is leaving
       const merged = { ...all[i], ...patch, updateTime: Date.now(), status: 'update' }
       delete merged.deleting
       // When the due date changes, sync the derived field dayStart, consistent with the main process's persistence logic (db.js:124);
@@ -353,7 +366,7 @@ export default {
           try {
             const toDay = patch.delete === true ? null : (merged.dayStart ? dayjs(merged.dayStart).format('YYYY-MM-DD') : null)
             if (toDay === null) { await snapshotForDelete(taskId); await clearTaskChips(taskId); return }
-            const fromDay = all[i].dayStart ? dayjs(all[i].dayStart).format('YYYY-MM-DD') : null
+            const fromDay = prevDayStart ? dayjs(prevDayStart).format('YYYY-MM-DD') : null
             await moveTaskChips(taskId, fromDay, toDay)
           } catch (e) { console.warn('[todo] schedule chip sync failed (task updated, chip will converge on next op):', e) }
         })
@@ -557,7 +570,7 @@ export default {
       const nextRaw = state.redoStack[state.redoStack.length - 1]
       commit('historyRedoPop')
       const cur = { todoList: state.todoList, recycleList: state.recycleList }
-      commit('historyPush', JSON.stringify(cur))
+      commit('historyPushKeepRedo', JSON.stringify(cur))
       const next = JSON.parse(nextRaw)
       commit('historyRestore', next)
       const changedRows = (await dispatch('persistSnapshotDiff', { from: cur, to: next })) || []
