@@ -36,7 +36,8 @@ say('工作区干净')
 
 // 2. CHANGELOG:Unreleased 非空、目标段落不存在
 const clPath = path.join(ROOT, '..', 'CHANGELOG.md')
-let cl = fs.readFileSync(clPath, 'utf8')
+// 工作区可能是 CRLF(autocrlf=true 检出会 smudge)——归一后匹配,写回统一 LF,否则正则永不命中
+let cl = fs.readFileSync(clPath, 'utf8').replace(/\r\n/g, '\n')
 const unreleased = cl.match(/## \[Unreleased\]\n([\s\S]*?)(?=\n## \[)/)
 if (!unreleased) die('CHANGELOG 缺 [Unreleased] 段')
 if (!unreleased[1].trim()) die('[Unreleased] 是空的——没东西可发就别发版')

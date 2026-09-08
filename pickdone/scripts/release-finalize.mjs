@@ -49,7 +49,7 @@ say(`四产物齐全(${names.length} 个 assets)`)
 if ((rel.body || '').trim().length < 30) {
   const extract = (file, ver) => {
     if (!fs.existsSync(file)) return null
-    const m = fs.readFileSync(file, 'utf8').match(new RegExp(`## \\[${ver}\\][^\\n]*\\n([\\s\\S]*?)(?=\\n## \\[)`))
+    const m = fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n').match(new RegExp(`## \\[${ver}\\][^\\n]*\\n([\\s\\S]*?)(?=\\n## \\[)`))
     return (m && m[1].trim()) ? m[1].trim() : null
   }
   const en = extract(path.join(ROOT, '..', 'CHANGELOG.md'), version)
