@@ -93,7 +93,7 @@ html[data-theme="dark"] .ds-cal-pop { background: var(--gray-bg); }
 html[data-theme="dark"] .modal { background-color: var(--panel); }
 html[data-theme="dark"] .modal__header,
 html[data-theme="dark"] .modal__footer { border-color: var(--line); }
-html[data-theme="dark"] .modal__header { color: #5b93da; }
+html[data-theme="dark"] .modal__header { color: var(--brand-bright, #35c2ae); }
 
 /* 番茄时间轴 / 热点图卡 */
 html[data-theme="dark"] .tl-track { background: var(--track-bg); }
