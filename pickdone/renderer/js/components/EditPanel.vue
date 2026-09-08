@@ -460,9 +460,17 @@ export default {
       if (this._dirtyFlags.imgs) all.image = JSON.stringify(this.imgList)
       if (this._dirtyFlags.files) all.files = JSON.stringify(this.fileList)
       if (this._dirtyFlags.preds) all.predecessors = this.e.predecessors
+      // Snapshot the keys being flushed before clearing, so a failed dispatch can restore them (same semantics as queueSave)
+      const flushedKeys = Object.keys(all)
       this._dirtyFlags = {}
-      if (Object.keys(all).length) {
-        this.$store.dispatch('todo/updateTodoFields', { taskId: e.taskId, patch: all }).catch(() => {})
+      if (flushedKeys.length) {
+        this.$store.dispatch('todo/updateTodoFields', { taskId: e.taskId, patch: all }).catch(() => {
+          // Restore the dirty flags for the keys that failed to persist and surface the failure banner
+          const restored: any = {}
+          for (const k of flushedKeys) restored[k] = true
+          this._dirtyFlags = Object.assign(restored, this._dirtyFlags || {})
+          this.saveFailed = true
+        })
       }
     },
     hydrate () {
