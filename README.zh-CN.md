@@ -10,12 +10,13 @@
 你的数据只属于你:一个本机 SQLite 文件,零账号、零联网、启动即用。
 
 [![CI](https://github.com/ardss/pickdone/actions/workflows/ci.yml/badge.svg)](https://github.com/ardss/pickdone/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/ardss/pickdone)](https://github.com/ardss/pickdone/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-5568e8.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-5568e8.svg)]()
-[![Electron](https://img.shields.io/badge/Electron-39-5568e8.svg)]()
-[![Vue](https://img.shields.io/badge/Vue-3.5-5568e8.svg)]()
+[![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-5568e8.svg)](https://www.microsoft.com/windows)
+[![Electron](https://img.shields.io/badge/Electron-39-5568e8.svg)](https://www.electronjs.org/)
+[![Vue](https://img.shields.io/badge/Vue-3.5-5568e8.svg)](https://vuejs.org/)
 
-**[⬇️ 下载最新版](https://github.com/ardss/pickdone/releases)** · [问题反馈](https://github.com/ardss/pickdone/issues) · [参与贡献](CONTRIBUTING.md) · [行为准则](CODE_OF_CONDUCT.md)
+**[⬇️ 下载最新版](https://github.com/ardss/pickdone/releases)** · [🌐 官网 pickdone.app](https://pickdone.app) · [问题反馈](https://github.com/ardss/pickdone/issues) · [参与贡献](CONTRIBUTING.md) · [行为准则](CODE_OF_CONDUCT.md)
 
 </div>
 
@@ -76,13 +77,13 @@ node cli/pickdone.js stats                 # 统计概要
 node cli/cli-smoke.js                      # 自测(隔离库,不碰真实数据)
 ```
 
-20+ 命令覆盖任务 / 子任务 / 统计 / 回收站全域。CLI 是纯 JavaScript,由系统 Node.js 运行——请先安装 [Node.js](https://nodejs.org/)(任意较新版本均可,开发环境要求 ≥ 20)。安装版应用自带同一套 CLI(默认位于 `resources\cli\pickdone.js`,同目录 `resources\bin\pickdone.cmd` 是等价 shim),`node cli/pickdone.js skill install` 会把 pickdone 技能注册到本机 AI 编码工具可发现的技能目录。完整契约见 [pickdone/cli/SKILL.md](pickdone/cli/SKILL.md)。
+20+ 命令覆盖任务 / 子任务 / 统计 / 回收站全域。CLI 是纯 JavaScript,由系统 Node.js 运行——请先安装 [Node.js](https://nodejs.org/)(开发环境要求 ≥ 22)。安装版应用自带同一套 CLI(默认位于 `resources\cli\pickdone.js`,同目录 `resources\bin\pickdone.cmd` 是等价 shim),`node cli/pickdone.js skill install` 会把 pickdone 技能注册到本机 AI 编码工具可发现的技能目录。完整契约见 [pickdone/cli/SKILL.md](pickdone/cli/SKILL.md)。
 
 ![AI CLI:一句话让 AI 替你排一天](docs/media/ai-cli-demo-zh.gif)
 
 ## 开发
 
-要求:Node.js ≥ 20(推荐 22)、Windows 10/11(macOS / Linux 未验证)。
+要求:Node.js ≥ 22、Windows 10/11(macOS / Linux 未验证)。
 
 ```bash
 git clone https://github.com/ardss/pickdone.git
@@ -97,14 +98,14 @@ npm run check      # ESLint + 单元测试 + CLI 冒烟
 
 数据存储在 `%APPDATA%/pickdone/todos.db`(SQLite,加密),自动备份默认位于 `%APPDATA%/pickdone-backups/`(与数据目录分离,位置可配置);卸载应用不会删除数据目录。
 
-## Roadmap:两大重构
+## Roadmap:两大重构(已完成)
 
-下一阶段的两项架构级重构,计划与进展记录在 [docs/refactor-plan.md](docs/refactor-plan.md):
+两项架构级重构均已落地,历史记录见 [docs/refactor-plan.md](docs/refactor-plan.md):
 
-- [ ] **样式体系统一** — 从多套历史 CSS 收敛为单一 token + 工具类体系,清空沉积层与双命名冲突
-- [ ] **组件层 SFC 化** — 从 JS 模板字符串迁移到 `.vue` 单文件组件,引入构建层,打通 ESLint 对模板的检查能力
+- [x] **样式体系统一** — 从多套历史 CSS 收敛为单一 token + 工具类体系,清空沉积层与双命名冲突
+- [x] **组件层 SFC 化** — 从 JS 模板字符串迁移到 `.vue` 单文件组件,引入构建层,打通 ESLint 对模板的检查能力(2026-09-05 完成,详见 `pickdone/README.md`)
 
-欢迎在这两项上讨论或贡献,动手前请先读重构计划文档并对齐方案。
+欢迎讨论与贡献。
 
 欢迎提 Issue 与 PR,贡献流程见 [CONTRIBUTING.md](CONTRIBUTING.md);更新日志见 [CHANGELOG.md](CHANGELOG.md)。
 

@@ -10,12 +10,13 @@ A built-in CLI lets you — and your AI assistant — manage the same tasks with
 Your data belongs to you: a single local SQLite file, zero accounts, zero network, ready the moment you launch it.
 
 [![CI](https://github.com/ardss/pickdone/actions/workflows/ci.yml/badge.svg)](https://github.com/ardss/pickdone/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/ardss/pickdone)](https://github.com/ardss/pickdone/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-5568e8.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-5568e8.svg)]()
-[![Electron](https://img.shields.io/badge/Electron-39-5568e8.svg)]()
-[![Vue](https://img.shields.io/badge/Vue-3.5-5568e8.svg)]()
+[![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-5568e8.svg)](https://www.microsoft.com/windows)
+[![Electron](https://img.shields.io/badge/Electron-39-5568e8.svg)](https://www.electronjs.org/)
+[![Vue](https://img.shields.io/badge/Vue-3.5-5568e8.svg)](https://vuejs.org/)
 
-**[⬇️ Download latest](https://github.com/ardss/pickdone/releases)** · [Issues](https://github.com/ardss/pickdone/issues) · [Contributing](CONTRIBUTING.md) · [Code of Conduct](CODE_OF_CONDUCT.md)
+**[⬇️ Download latest](https://github.com/ardss/pickdone/releases)** · [🌐 pickdone.app](https://pickdone.app) · [Issues](https://github.com/ardss/pickdone/issues) · [Contributing](CONTRIBUTING.md) · [Code of Conduct](CODE_OF_CONDUCT.md)
 
 </div>
 
@@ -68,13 +69,13 @@ node cli/pickdone.js stats                 # focus summary
 node cli/cli-smoke.js                      # self-test (isolated DB, never touches real data)
 ```
 
-20+ commands cover tasks / subtasks / statistics / recycle bin. The CLI is plain JavaScript run by your system Node.js — have [Node.js](https://nodejs.org/) installed (any recent LTS works; the dev setup asks for ≥ 20). The installed app ships the same CLI at `resources/cli/pickdone.js`, and `node cli/pickdone.js skill install` registers a `pickdone` skill so local coding agents discover it automatically. Full contract in [pickdone/cli/SKILL.md](pickdone/cli/SKILL.md).
+20+ commands cover tasks / subtasks / statistics / recycle bin. The CLI is plain JavaScript run by your system Node.js — have [Node.js](https://nodejs.org/) installed (≥ 22 required by the dev setup). The installed app ships the same CLI at `resources/cli/pickdone.js`, and `node cli/pickdone.js skill install` registers a `pickdone` skill so local coding agents discover it automatically. Full contract in [pickdone/cli/SKILL.md](pickdone/cli/SKILL.md).
 
 ![AI CLI: one sentence and AI runs your day](docs/media/en/ai-cli-demo-en.gif)
 
 ## Development
 
-Requirements: Node.js ≥ 20 (22 recommended), Windows 10/11 (macOS / Linux unverified).
+Requirements: Node.js ≥ 22, Windows 10/11 (macOS / Linux unverified).
 
 ```bash
 git clone https://github.com/ardss/pickdone.git
