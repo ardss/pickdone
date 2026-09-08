@@ -26,4 +26,4 @@
 
 ## 体检
 
-- `npm run check:all`（25 项）是唯一合入门槛；a11y 加 `--a11y`；UI 实测用隔离实例（`TODO_USER_DATA_DIR`）。
+- `npm run check:all`（全维度）是唯一合入门槛；a11y 加 `--a11y`；UI 实测用隔离实例（`TODO_USER_DATA_DIR`）。

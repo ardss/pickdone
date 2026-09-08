@@ -47,7 +47,7 @@
     "typecheck": "vue-tsc --noEmit --incremental"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "dependencies": {
     "dayjs": "^1.11.13",

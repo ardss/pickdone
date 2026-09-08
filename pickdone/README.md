@@ -20,7 +20,7 @@
 | `npm run lint` | ESLint(.js+.vue,vue3-essential+@typescript-eslint/parser) |
 | `npm run typecheck` | vue-tsc 全量类型检查(0 错误为绿) |
 | `npm run build:renderer` | 仅构建渲染层 |
-| `npm run check:all` | 25 项体检(含 build、typecheck、单测、UI 冒烟、e2e) |
+| `npm run check:all` | 全维度体检(构建、typecheck、单测、UI 冒烟、e2e、打包白名单等) |
 | `npm run bump` | 同步 bump 两个宿主 index.html 的 `?v=`(改 vendor/css 后) |
 
 ## 铁律(迁移事故沉淀)

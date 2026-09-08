@@ -38,7 +38,9 @@ function migratePlainToEncrypted (dir, file, key) {
   const encFile = path.join(dir, 'todos-encrypted.tmp')
   try {
     fs.rmSync(encFile, { force: true })
-    db.exec(`ATTACH DATABASE '${encFile.replace(/'/g, "''")}' AS enc KEY '${key}'`)
+    // ATTACH 的 KEY 是 SQL 字面量(参数化不支持),必须双写单引号——加密 key 是唯一触碰 SQL 字符串的敏感值
+    const keyLiteral = String(key).replace(/'/g, "''")
+    db.exec(`ATTACH DATABASE '${encFile.replace(/'/g, "''")}' AS enc KEY '${keyLiteral}'`)
     const encSchema = SCHEMA.replace(/CREATE TABLE IF NOT EXISTS /g, 'CREATE TABLE IF NOT EXISTS enc.')
       .replace(/CREATE INDEX IF NOT EXISTS /g, 'CREATE INDEX IF NOT EXISTS enc.')
     db.exec(encSchema)
