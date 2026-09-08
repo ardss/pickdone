@@ -36,6 +36,11 @@
         <todo-item v-for="t in results" :key="t.taskId" :todo="t" :query="q" show-date-badge/>
       </transition-group>
 
+      <!-- Render cap is 200 for DOM cost; the count chip above shows the total, this row makes the truncation explicit -->
+      <div v-if="matched.length > results.length" class="search-truncated" role="note">
+        {{ $t('statsE.SearchView.truncatedNotice', { shown: results.length, n: matched.length }) }}
+      </div>
+
       <!-- reference: todo-list-empty structure -->
       <div v-if="!results.length" class="empty empty--inline">
         <div class="empty__icon"></div>
@@ -152,4 +157,5 @@ export default {
 }
 </script>
 <style>.result-count{color:var(--text-3);font-size: var(--fs-sm);line-height:28px;white-space:nowrap}
+.search-truncated{color:var(--text-3);font-size: var(--fs-sm);line-height:32px;text-align:center;padding:6px 0}
 </style>
