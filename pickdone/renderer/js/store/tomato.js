@@ -96,19 +96,30 @@ function persistState (state) {
  *  失败留在重试队列,下一次任意账本写时重放(锁屏/瞬时 IO 失败自愈)。 */
 const _pendingLedger = []
 let _flushHooked = false
+/** Replay still-pending entries; each is only removed from the queue on success (ledger ops are idempotent upserts, so a duplicate in-flight retry is safe) */
+function replayPendingLedger () {
+  for (const entry of [..._pendingLedger]) {
+    Promise.resolve(window.todoAPI && window.todoAPI.dbCall(entry.op, entry.params))
+      .then(() => { const i = _pendingLedger.indexOf(entry); if (i >= 0) _pendingLedger.splice(i, 1) })
+      .catch(e => console.error('[tomato] ledger DB write failed (queued for retry):', entry.op, e))
+  }
+}
 function ledgerWrite (op, params) {
   const entry = { op, params }
   _pendingLedger.push(entry)
-  Promise.resolve(window.todoAPI && window.todoAPI.dbCall(op, params))
-    .then(() => { const i = _pendingLedger.indexOf(entry); if (i >= 0) _pendingLedger.splice(i, 1) })
-    .catch(e => console.error('[tomato] ledger DB write failed (queued for retry):', op, e))
+  // Retry queue: replay any still-pending entries (incl. this one) before/with the new write
+  replayPendingLedger()
   hookQuitFlush()
 }
 function flushPendingLedger () {
   const list = _pendingLedger.splice(0, _pendingLedger.length)
   for (const it of list) {
     Promise.resolve(window.todoAPI && window.todoAPI.dbCall(it.op, it.params))
-      .catch(e => console.error('[tomato] ledger flush failed at quit:', it.op, e))
+      .catch(e => {
+        console.error('[tomato] ledger flush failed at quit:', it.op, e)
+        // Put the failed entry back at the queue head so the next ledger write replays it (no silent loss)
+        _pendingLedger.unshift(it)
+      })
   }
 }
 function hookQuitFlush () {
@@ -214,7 +225,14 @@ export default {
     },
     /** 收到 tomato-records-changed 广播:从 DB 重载账本(其他窗/CLI 落了账) */
     async recordsReload ({ commit }) {
-      const rows = await window.todoAPI.dbCall('tomatoAll')
+      let rows = null
+      try {
+        rows = await window.todoAPI.dbCall('tomatoAll')
+      } catch (e) {
+        // Keep the in-memory copy untouched on failure instead of silently discarding the reload
+        console.error('[tomato] ledger reload failed:', e)
+        return
+      }
       commit('recordsReplace', rows)
       // todayTomatoCount 是 blob 残留计数器(本窗 completeFocus 与 Modal saveAdd 都会写)——重载时按账本重算收敛口径,派生态不手写
       const today = dayjs().format(FMT.date)
@@ -276,7 +294,7 @@ export default {
           // Accounting basis = endTime (unified with completeFocus/stats/rail)
           tomatoId: 'tmt_a_' + s.startedAt, endTime: Date.now(), dateKey: dayjs(Date.now()).format(FMT.date),
           focus: s.attachTodo ? s.attachTodo.taskContent : '', focusTaskId: s.attachTodo ? s.attachTodo.taskId : null,
-          focusDuration: focusedMin, rest: s.restTime, restDuration: s.restTime, succeed: false, status: 'local',
+          focusDuration: focusedMin, rest: s.restTime, restDuration: 0, succeed: false, status: 'local',
           abandonReason: (reason || '').trim()
         })
         dispatch('todo/writeCriticalBackup', null, { root: true })
@@ -285,10 +303,13 @@ export default {
     },
     completeFocus ({ state, commit, rootState, dispatch }) {
       const s = state
+      // State precheck (mirrors startFocus): an anomalous call with no running focus must not mint a free tomato
+      if (s.status !== 'startTomatoTime' || !s.startedAt) return
       // Idempotency token: only one set of side effects per focus. Cross-window claim (including the give-up side) + deterministic id as double insurance
       if (!claimPhase('startTomatoTime', s.startedAt)) return
-      const focusMin = s.tomatoTime
       const endTs = Date.now()
+      // Measured duration, not the current setting: a mid-focus duration change would otherwise skew the ledger (unified with giveUp's elapsed basis)
+      const focusMin = Math.max(1, Math.min(600, Math.round((endTs - s.startedAt) / 60000)))
       commit('addRecord', {
         // Accounting basis unified = endTime: stats (metrics)/rail (railSegs)/entry-card corrections (updateRecord) all use endTime
         tomatoId: 'tmt_f_' + s.startedAt, endTime: endTs, dateKey: dayjs(endTs).format(FMT.date),
