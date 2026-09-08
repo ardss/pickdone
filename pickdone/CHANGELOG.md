@@ -4,7 +4,7 @@ All notable changes to PickDone are documented here. Format: [Keep a Changelog](
 
 Generated per release from the real commit range (`git log vPREV..vNEW`), split into user-facing vs internal. Never invent entries; if a release has no user-facing changes, say so plainly.
 
-## [0.2.0] - Unreleased
+## [Unreleased]
 
 ### Fixed
 
