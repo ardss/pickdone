@@ -6,6 +6,23 @@ and versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- First-run onboarding tour crashed (TDZ reference) and leaked a poller when no task existed yet; "replay journey" from Settings was reliably broken on an empty workspace. Stage drivers no longer double-advance via a synchronous destroy callback.
+- Dangerous-operation double-confirm dialogs (backup restore / demo-data purge) showed unrelated texts — body read "syncs with the pomodoro panel in real time" and the confirm button read "Break length (minutes):"; both now use dedicated copy (en/zh).
+- Startup meta garbage collection never ran since launch: it called a nonexistent DB op and swallowed the error, so orphan meta keys (deleted repeat rules, removed categories) accumulated forever; failed schema migrations are no longer skipped forever by a later migration advancing the version.
+- White-noise player could play two sources simultaneously when switching quickly; the focus timer no longer accepts a stray completion with a zero start time; abandoned sessions no longer book the full planned rest as if it happened.
+- Give-up accounting records zero actual rest; completed focus records the actually elapsed minutes instead of the current setting; per-day focus totals in CLI `stats` exclude abandoned pomodoros, matching the in-app statistics page.
+- Pomodoro ledger writes are retried (pending queue + quit-flush restore) instead of being silently dropped on transient DB failures; task edits gained the same pending-queue reliability; a failing save in the edit panel no longer clears its dirty flags silently.
+- Attachment uploads can no longer land on a different task when switching tasks mid-upload; the float-window toggle reflects the real shown state instead of an optimistic flip.
+- Drag-and-drop now inserts at the position the drop indicator promised, and the indicator no longer lingers on the drop-target row; sub-task checkboxes keep identity on duplicate names; the quick-delete button is keyboard-reachable; search filter values no longer stick forever; a manually picked quick-add date survives clearing the text.
+- Multi-step redo works again (every redo step after the first was killed by a stack reset); rescheduling a task now actually moves its schedule chips to the new day instead of leaving them behind.
+- Stale-response race fixed in the dependency view (rapid project switches applied the previous project's layout); two always-on polling timers (dependency-view redraw, day-rail fit) removed — idle CPU drop.
+- Data safety: permanently deleted tasks no longer leak their schedule-snapshot meta keys (the GC that should have caught them was the one that never ran); habit/moment ids no longer collide within the same millisecond; the shortcut-conflict fallback no longer calls the electron-log object as a function (main-process crash dialog).
+- Dark theme: settings dialog titles use the brand color instead of a hardcoded blue; recycle-bin header icon is visible on dark backgrounds.
+- Scheduled single-task writes no longer rebuild the whole reminder schedule on every save; CLI `tomato start -m N` no longer permanently rewrites your focus-length preference.
+- Repeating-task instances generated in bulk start with unchecked subtasks (matching auto-renewal); un-completing a parent no longer bounces back to completed when its subtasks are all checked; deleting the last instance of a repeat group no longer strands the rule silently.
+- Misc: valid `autocomplete="off"`, focus-visible outlines where `outline: none` killed keyboard navigation, real search-result count behind the 200-item render cap, updater notice no longer depends on an unrelated API being present.
+
 ## [0.2.0] - 2026-09-07
 
 ### Added
