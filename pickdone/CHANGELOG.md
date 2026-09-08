@@ -4,6 +4,29 @@ All notable changes to PickDone are documented here. Format: [Keep a Changelog](
 
 Generated per release from the real commit range (`git log vPREV..vNEW`), split into user-facing vs internal. Never invent entries; if a release has no user-facing changes, say so plainly.
 
+## [0.2.0] - Unreleased
+
+### Fixed
+
+- First-run onboarding tour crashed (TDZ reference) and leaked a poller when no task existed yet; "replay journey" from Settings was reliably broken on an empty workspace.
+- Dangerous-operation double-confirm dialogs (backup restore / demo-data purge) showed unrelated texts — body read "syncs with the pomodoro panel in real time" and the confirm button read "Break length (minutes):"; both now use dedicated copy (en/zh).
+- Meta garbage collection never ran since launch: the startup routine called a nonexistent DB op, so orphan meta keys (deleted repeat rules, removed categories) accumulated forever; failed schema migrations no longer get skipped forever by a later migration advancing the version.
+- White-noise player could play two sources simultaneously when switching quickly; focus timer no longer accepts a stray completion with a zero start time, and abandoned sessions no longer book the full planned rest as if it happened.
+- Give-up accounting now records zero actual rest; completed focus records the actually elapsed minutes instead of whatever the current setting says; per-day focus totals in CLI `stats` now exclude abandoned pomodoros, matching the in-app statistics page.
+- Pomodoro ledger writes are retried (pending queue + quit-flush restore) instead of being silently dropped on transient DB failures; task edits gained the same pending-queue reliability; a failing save in the edit panel no longer clears its dirty flags silently.
+- Attachments/uploads can no longer land on a different task when switching tasks mid-upload; float-window toggle reflects the real shown state instead of an optimistic flip.
+- Drag-and-drop now inserts at the position the drop indicator promised; sub-task checkboxes keep identity on duplicate names; quick-delete button is keyboard-reachable; search filter values no longer stick forever; manually picked quick-add date survives clearing the text.
+- Fixed the stale job applying an old project's dependency layout to the newly selected one; removed two always-on polling timers (dependency-view redraw, day-rail fit) that burned CPU while idle.
+- Data safety: permanently deleted tasks no longer leak their schedule-snapshot meta keys (the GC that should have caught them was the one that never ran); habit/moment ids no longer collide within the same millisecond.
+- Dark theme: settings dialog titles use the brand color instead of a hardcoded blue; recycle-bin header icon is visible on dark backgrounds.
+- Scheduled single-task writes no longer rebuild the whole reminder schedule on every save; CLI `tomato start -m N` no longer permanently rewrites your focus-length preference.
+- Repeating-task instances generated in bulk start with unchecked subtasks (matching auto-renewal); un-completing a parent no longer bounces back to completed when its subtasks are all checked; deleting the last instance of a repeat group no longer strands the rule silently.
+- Misc: valid `autocomplete="off"`, focus-visible outlines where `outline: none` killed keyboard navigation, real search-result count behind the 200-item render cap, updater notice no longer depends on an unrelated API being present.
+
+### Changed
+
+- Developer-mode experiment gating hardened (dependencies/projects modules stay hidden by default); internal reliability hardening across renderer stores and the main process; cache stamps bumped.
+
 ## [0.1.2] - 2026-09-06
 
 Internal quality release; no user-facing feature changes.
