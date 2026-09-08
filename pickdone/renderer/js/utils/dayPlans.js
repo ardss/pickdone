@@ -101,6 +101,12 @@ export async function snapshotForDelete (taskId) {
   } catch { /* Snapshot failure doesn't block deletion; chips left in the library as orphans can still be converged by planPrune */ }
 }
 
+/** Permanently deleted task: drop its chip snapshot meta row (restoreSnapshot only empties it; purge must remove
+ *  the row, otherwise planChipsSnapshot:<id> keys accumulate in meta forever). Best-effort, never blocks purging. */
+export async function clearSnapshot (taskId) {
+  try { await dbCall('deleteMeta', 'planChipsSnapshot:' + taskId) } catch { /* orphan meta row is harmless */ }
+}
+
 /** Write back snapshot chips when restoring a task */
 export async function restoreSnapshot (taskId) {
   try {
