@@ -32,8 +32,9 @@ export default {
   'statsJ.EditPanel.setDeadline': '设置截止日期',
 
   'statsJ.TodoItem.movedTo': '已移到 {d}',
-  'statsJ.TodoItem.moveDownAnnounce': '下移：{t}',
-  'statsJ.TodoItem.moveUpAnnounce': '上移：{t}',
+  'statsJ.TodoItem.moveDownAnnounce': '已下移：{t}',
+  'statsJ.TodoItem.moveUpAnnounce': '已上移：{t}',
+  'statsJ.TodoItem.movedToQuadrant': '已移动到「{q}」',
   'statsJ.TodoItem.movedToTomorrow': '已移到明天',
   'statsJ.TodoItem.backfilled': '已补录 {n} 分钟专注至「{name}」',  'statsJ.TodoItem.movedToToday': '已移到今天',
   'statsJ.TodoItem.markDone': '标记完成',

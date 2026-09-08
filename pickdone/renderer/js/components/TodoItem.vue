@@ -11,7 +11,7 @@
        aria-keyshortcuts="Control+ArrowUp Control+ArrowDown Shift+Delete">
     <span class="td-check" :class="{on:todo.complete}" :style="todo.complete?{background:checkboxColor,borderColor:checkboxColor}:{}"
           role="checkbox" :aria-checked="todo.complete ? 'true' : 'false'" :aria-label="$t('statsE.TodoItem.markComplete')"
-          tabindex="0" @click.stop="onCheckClick" @keydown.enter.prevent.stop="onCheckClick($event)">
+          tabindex="0" @click.stop="onCheckClick" @keydown.enter.prevent.stop="onCheckClick($event)" @keydown.space.prevent.stop="onCheckClick($event)">
       <svg v-if="todo.complete" class="td-check-svg" viewBox="0 0 12 12" aria-hidden="true">
         <polyline points="2,6.2 5,9 10,3" fill="none" stroke="#fff" stroke-width="1.8"
                   stroke-linecap="round" stroke-linejoin="round" pathLength="1"/>
@@ -23,7 +23,7 @@
       <div v-if="subtasks.length" class="td-subs">
         <div v-for="(s, si) in subtasks" :key="s.text + '#' + si" class="td-sub" role="checkbox"
              :aria-checked="s.checked ? 'true' : 'false'" tabindex="0"
-             @click.stop="toggleSub(s)" @keydown.enter.prevent.stop="toggleSub(s)">
+             @click.stop="toggleSub(s)" @keydown.enter.prevent.stop="toggleSub(s)" @keydown.space.prevent.stop="toggleSub(s)">
           <span class="td-sub-check" :class="{on:s.checked}">✓</span>
           <span :class="{strike:s.checked}">{{s.text}}</span>
         </div>
@@ -216,7 +216,8 @@ export default {
       if (i < 0 || j < 0 || j >= list.length) return
       list.splice(j, 0, list.splice(i, 1)[0])
       this._writeSort(list)
-      if (this.$announce) this.$announce(this.$t('statsE.TodoItem.donePrefix') + (dir > 0 ? this.$t('statsJ.TodoItem.moveDownAnnounce', { t: raw.taskContent || '' }) : this.$t('statsJ.TodoItem.moveUpAnnounce', { t: raw.taskContent || '' })))
+      // Standalone complete sentence (moving is not a completion): concatenating donePrefix produced the English malapropism "Completed Moved down: xxx"
+      if (this.$announce) this.$announce(this.$t(dir > 0 ? 'statsJ.TodoItem.moveDownAnnounce' : 'statsJ.TodoItem.moveUpAnnounce', { t: raw.taskContent || '' }))
     },
     onCheckClick (e) {
       e.stopPropagation()

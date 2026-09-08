@@ -34,6 +34,7 @@ export default {
   'statsJ.TodoItem.movedTo': 'Moved to {d}',
   'statsJ.TodoItem.moveDownAnnounce': 'Moved down: {t}',
   'statsJ.TodoItem.moveUpAnnounce': 'Moved up: {t}',
+  'statsJ.TodoItem.movedToQuadrant': 'Moved to "{q}"',
   'statsJ.TodoItem.movedToTomorrow': 'Moved to tomorrow',
   'statsJ.TodoItem.backfilled': 'Logged {n} min of focus for "{name}"',
   'statsJ.TodoItem.movedToToday': 'Moved to today',
