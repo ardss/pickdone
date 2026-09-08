@@ -280,7 +280,8 @@
       "installerLanguages": [
         "zh_CN",
         "en_US"
-      ]
+      ],
+      "include": "build/installer.nsh"
     },
     "portable": {
       "artifactName": "PickDone-Portable-${version}.${ext}"
