@@ -105,10 +105,20 @@ jobs:
           if [ "${BODY_LEN:-0}" -lt 30 ]; then
             VER="${GITHUB_REF_NAME#v}"
             node -e "
-              const cl = require('fs').readFileSync('CHANGELOG.md','utf8');
-              const m = cl.match(new RegExp('## \\\\[' + process.argv[1] + '\\\\][^\\\\n]*\\\\n([\\\\s\\\\S]*?)(?=\\\\n## \\\\['));
-              if (!m || !m[1].trim()) { console.error('CHANGELOG has no section for ' + process.argv[1]); process.exit(1); }
-              require('fs').writeFileSync(process.env.RUNNER_TEMP + '/notes.md', m[1].trim());
+              const fs = require('fs');
+              // 发布页双语(2026-09-08 用户定稿):中文段在前(CHANGELOG.zh.md)+ 分隔线 + 英文段(CHANGELOG.md);
+              // 中文版缺失时降级纯英文并提示——单语发布不算红,但属于流程违规(见 CHANGELOG.zh.md 头部纪律)
+              const extract = (file, ver) => {
+                if (!fs.existsSync(file)) return null;
+                const m = fs.readFileSync(file, 'utf8').match(new RegExp('## \\\\[' + ver + '\\\\][^\\\\n]*\\\\n([\\\\s\\\\S]*?)(?=\\\\n## \\\\['));
+                return (m && m[1].trim()) ? m[1].trim() : null;
+              };
+              const en = extract('CHANGELOG.md', process.argv[1]);
+              if (!en) { console.error('CHANGELOG has no section for ' + process.argv[1]); process.exit(1); }
+              const zh = extract('../CHANGELOG.zh.md', process.argv[1]);
+              const body = zh ? (zh + '\\n\\n---\\n\\n' + en) : en;
+              console.log(zh ? 'bilingual notes: zh + en' : 'WARNING: no zh section in CHANGELOG.zh.md — publishing en only');
+              fs.writeFileSync(process.env.RUNNER_TEMP + '/notes.md', body);
             " "$VER"
             gh release edit "$GITHUB_REF_NAME" --draft --notes-file "$RUNNER_TEMP/notes.md"
             BODY_LEN=$(gh api "repos/$GITHUB_REPOSITORY/releases" -q '[.[] | select(.tag_name=="'"$GITHUB_REF_NAME"'") | select(.draft)][0].body // "" | length')
