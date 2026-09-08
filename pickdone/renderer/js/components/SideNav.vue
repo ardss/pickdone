@@ -24,7 +24,7 @@
          @click="onSearchClick"
          @keydown.enter.prevent="expandAndFocusSearch">
       <app-icon name="search" :size="14"/>
-      <input ref="searchInput" :value="$store.state.todo.search" :placeholder="$t('statsG.SideNav.searchPlaceholder')" spellcheck="false" autocomplete="false"
+      <input ref="searchInput" :value="$store.state.todo.search" :placeholder="$t('statsG.SideNav.searchPlaceholder')" spellcheck="false" autocomplete="off"
              :aria-label="$t('statsG.SideNav.searchAria')"
              @input="onSearchInputEvt"
              @keydown.esc.prevent="onSearchEsc"/>
