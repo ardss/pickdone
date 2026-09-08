@@ -228,14 +228,28 @@ async function bootstrap () {
         if (!cmd.at || Date.now() - cmd.at > 60000) { console.warn('[cli-tomato] ignoring stale command (>60s):', cmd.action, 'seq=' + cmd.seq); return }
         const t = store.state.tomato
         if (cmd.action === 'start') {
-          if (cmd.minutes > 0 && cmd.minutes !== t.tomatoTime) store.commit('tomato/patch', { tomatoTime: cmd.minutes })
+          if (cmd.minutes > 0 && cmd.minutes !== t.tomatoTime) {
+            // One-shot CLI minutes must not permanently rewrite the user's focus-length setting: remember the original
+            // (only if not already remembered by an earlier CLI start) and restore it when the CLI session stops
+            if (!window.__cliTomatoPrevMinutes) window.__cliTomatoPrevMinutes = t.tomatoTime
+            store.commit('tomato/patch', { tomatoTime: cmd.minutes })
+          }
           if (t.status === 'startTomatoTime' || t.status === 'startRestTime') {
             store.dispatch('tomato/giveUp', { record: true, reason: 'cli' }) // Already running: record the previous segment first (per account-keeping closeout, never discard focused time without record) then start a new one
           }
           store.dispatch('tomato/startFocus')
           if (cmd.taskId) store.dispatch('tomato/attach', cmd.taskId)
         } else if (cmd.action === 'stop') {
-          if (t.status !== 'default') store.dispatch('tomato/giveUp', { record: cmd.record !== false, reason: cmd.reason || 'cli' }) /* Stable marker, translated at the display layer */
+          const stopP = t.status !== 'default'
+            ? store.dispatch('tomato/giveUp', { record: cmd.record !== false, reason: cmd.reason || 'cli' }) /* Stable marker, translated at the display layer */
+            : Promise.resolve()
+          // CLI session ended: give the closeout persist a chance to finish, then put the user's own focus length back
+          stopP.catch(() => {}).then(() => {
+            if (window.__cliTomatoPrevMinutes > 0) {
+              store.commit('tomato/patch', { tomatoTime: window.__cliTomatoPrevMinutes })
+              window.__cliTomatoPrevMinutes = 0
+            }
+          })
         } else if (cmd.action === 'attach') {
           store.dispatch('tomato/attach', cmd.taskId || null)
         }
@@ -340,10 +354,12 @@ async function bootstrap () {
         window.ElementPlus.ElMessage({ type: 'warning', message: msg, duration: 6000, showClose: true })
       } catch { /* Silent if toast fails; don't add errors on top of the notice */ }
     })
-    // Browser shim fallback Proxy may return a non-function; verify before unsubscribing
-    if (typeof offConflict !== 'function') { try { window.todoAPI.onShortcutConflict = undefined } catch {} }
+    // Browser shim fallback Proxy may return a non-function: nothing was really subscribed then, and nuking the API property wouldn't unsubscribe — just leave it
+    if (typeof offConflict !== 'function') { /* nothing to unsubscribe */ }
+  }
 
-  // Global update-ready notice: users shouldn't have to open settings to learn an update finished — a long-lived toast says quitting installs it (the button in SettingsModal can still restart-update immediately)
+  // Global update-ready notice: users shouldn't have to open settings to learn an update finished — a long-lived toast says quitting installs it (the button in SettingsModal can still restart-update immediately).
+  // Kept outside the shortcut-conflict block: it was wrongly nested inside that if, so in environments without the conflict API the updater subscription never ran at all
   if (typeof window.todoAPI.onUpdaterEvent === 'function') {
     let _readyToasted = false
     window.todoAPI.onUpdaterEvent(d => {
@@ -355,7 +371,6 @@ async function bootstrap () {
         } catch { /* Silent if toast fails; the update still installs on quit */ }
       }
     })
-  }
   }
 
   // Shortcut action dispatch (deleteEvent/pinEvent/startPomodoro/switchTo* etc., aligned with the reference shortcutKeySettings)
@@ -413,7 +428,7 @@ async function bootstrap () {
       window.dispatchEvent(new CustomEvent('todo:focus-quickadd'))
     } else if (e.ctrlKey && e.key.toLowerCase() === 's') {
       e.preventDefault()
-      store.dispatch('todo/syncTodos')
+      store.dispatch('todo/syncTodos').catch(e => console.error('[todo] manual sync failed', e))
     } else if (!inEditor && e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === 'z') {
       e.preventDefault()
       store.dispatch('todo/undo').then(r => {
