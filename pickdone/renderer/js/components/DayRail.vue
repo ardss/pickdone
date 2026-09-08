@@ -267,7 +267,6 @@ export default {
     // Measure the rail height: CSS constants (100vh-N) cannot cover the real height taken by the app shell + page header,
     // any hardcoded constant overflows on one side; use the scroll container's clientHeight; sticky top stays 0 so the pinned position equals the flow position (a nonzero threshold made the rail jump on view switches)
     this.fitRail()
-    this._fitTimer = setInterval(() => { this.fitRail(); this.measureAxis() }, 2000)
     window.addEventListener('resize', this._onResize = () => { this.fitRail(); this.measureAxis() })
     this.$nextTick(() => this.measureAxis())
     // Cross-component linkage: store (schedule/calendar/edit panel) reschedules/removes/deletes a task → dayPlans.js broadcast → timeline reloads in real time
@@ -298,7 +297,6 @@ export default {
   },
   beforeUnmount () {
     clearInterval(this._tick)
-    clearInterval(this._fitTimer)
     window.removeEventListener('resize', this._onResize)
     window.removeEventListener('day-plans-changed', this._onPlansChanged)
     if (this._offTodosChanged) this._offTodosChanged()
@@ -440,7 +438,7 @@ export default {
     /* Cross-highlight: hovering a fact block or a plan chip highlights everything of that task (list rows react via ui.hoverTaskId) */
     hoverTask (id) { this.$store.commit('ui/setHoverTask', id) },
     unhoverTask () { this.$store.commit('ui/setHoverTask', '') },
-    /* Measured axis: row heights are uneven due to plan content/min-height; segment pixels interpolate from the actually rendered rows (data-vrange = the row's virtual minute range); fitRail timer + plansByHour watcher keep it fresh */
+    /* Measured axis: row heights are uneven due to plan content/min-height; segment pixels interpolate from the actually rendered rows (data-vrange = the row's virtual minute range); resize listener + plansByHour watcher keep it fresh */
     measureAxis () {
       if (!this.$el) return
       // Collapsed state: don't measure and clear stale values: the mini rail (dr-mini) is a whole-day proportional container; reusing expanded-state pixel positioning would misalign and never self-correct while collapsed
