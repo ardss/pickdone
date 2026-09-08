@@ -250,7 +250,7 @@
     </div>
 
     <div v-if="previewImg" ref="previewMask" tabindex="-1" class="img-preview-mask" role="dialog" aria-modal="true" :aria-label="$t('statsE.EditPanel.imagePreview')" @click.self="previewImg=null" @keydown.esc="previewImg=null">
-      <img :src="previewImg"><button class="close-x" :aria-label="$t('statsE.EditPanel.removeImage')" @click.stop="previewImg=null"></button>
+      <img :src="previewImg"><button class="close-x" :aria-label="$t('statsE.SettingsModal.closeBtn')" @click.stop="previewImg=null"></button>
     </div>
   </aside>
   </transition>
