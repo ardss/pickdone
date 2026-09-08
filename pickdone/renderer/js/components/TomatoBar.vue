@@ -52,7 +52,7 @@
 /**
  * Bottom pomodoro focus bar -- bottom pomodoro focus bar
  * Structure: __status (left 40% z1) | __right (absolute full-width column = timer + noise centered) | __play (right 25px 138x48)
- * Three states: default -> pomodoro focus (teal) | startTomatoTime -> abandon focus (#bd401e) | startRestTime -> abandon break (#fe9933)
+ * Three states: default -> pomodoro focus (teal) | startTomatoTime -> abandon focus (teal, 2026-09-03 user decision; the copy carries the abandon semantics) | startRestTime -> abandon break (#fe9933)
  */
 import {dayjs, FMT } from '../utils/core.js'
 import { formatMMSS } from '../utils/tomatoShared.js'
@@ -331,27 +331,26 @@ export default {
   -webkit-mask: url('app://app/assets/img/icon-tomato-timer2.svg') center / contain no-repeat;
   mask: url('app://app/assets/img/icon-tomato-timer2.svg') center / contain no-repeat;
 }
-/* 专注中「■ 放弃专注」品牌青(2026-09-03用户拍板:砖红攻击性太强与品牌不符,放弃语义由文案承载) */
-.tomato-timer__play--work { background-color: #bd401e; }
-.tomato-timer__play--work:focus { outline: 0; box-shadow: 0 0 0 3px rgba(189,64,30,.25); }
-.tomato-timer__play--work:hover { background-color: #b3401e; }
-.tomato-timer__play--work:active { background-color: #a9401e; }
+/* 专注中「■ 放弃专注」同为品牌青(2026-09-03用户拍板:砖红攻击性太强与品牌不符,放弃语义由文案承载) */
+.tomato-timer__play--work { background-color: #0c8172; }
+.tomato-timer__play--work:focus { outline: 0; box-shadow: 0 0 0 3px rgba(0,140,142,.25); }
+.tomato-timer__play--work:hover { background-color: #008284; }
+.tomato-timer__play--work:active { background-color: #00787a; }
 /* 休息中：橙色按钮 */
 .tomato-timer__play--rest { background-color: #fe9933; }
 .tomato-timer__play--rest:focus { outline: 0; box-shadow: 0 0 0 3px rgba(254,153,51,.25); }
 .tomato-timer__play--rest:hover { background-color: #f49033; }
 .tomato-timer__play--rest:active { background-color: #ea8633; }
-/* 大号青色计时数字：点击 = 暂停/继续（实现交互补充） */
+/* 大号青色计时数字：纯展示（番茄无暂停语义，129 行注释），不响应指针 */
 .tomato-timer__time {
   color: var(--brand-dark);
   font-weight: 600;
   font-size: 26px;
   line-height: 42px;
-  cursor: pointer;
   transition: all .2s;
   font-variant-numeric: tabular-nums;
   letter-spacing: 1px;
-  pointer-events: auto;
+  pointer-events: none;
 }
 .tomato-timer__time--rest { color: #f93; }
 /* ====== 设计稿精确布局 ====== */
