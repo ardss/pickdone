@@ -19,7 +19,8 @@
           <span>{{ $t('statsE.TomatoBar.readyStatus') }}</span>
         </template>
       </div>
-      <div class="tb-row tb-row--harvest" v-if="!slim" style="cursor:pointer;display:flex;align-items:center;gap:8px">
+      <!-- Only the inner span is clickable; no row-level cursor (a cursor here advertised a dead click area) -->
+      <div class="tb-row tb-row--harvest" v-if="!slim" style="display:flex;align-items:center;gap:8px">
         <span role="button" tabindex="0" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px"
               :title="$t('statsE.TomatoBar.viewRecordsBtn')" @click="showRecordList" @keydown.enter.prevent="showRecordList">
           <app-icon name="list" :size="12" style="opacity:.6"/>
