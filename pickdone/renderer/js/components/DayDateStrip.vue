@@ -61,6 +61,13 @@
 import { dayjs, DAY_MS } from '../utils/core.js'
 import store from '../store/index.js'
 
+// [component-fixes] pure-start (extracted verbatim by tests/component-fixes-renderer.test.mjs)
+/** Leading-blank offset for a week-based grid honoring the week-start setting (Mon default / Sun optional) */
+function calGridOffset (dayOfWeek, weekFromSun) { return weekFromSun ? dayOfWeek : (dayOfWeek + 6) % 7 }
+/** Column order mapped to the wd0(Sun)..wd6(Sat) i18n keys for the chosen week start */
+function weekHeaderOrder (weekFromSun) { return weekFromSun ? [0, 1, 2, 3, 4, 5, 6] : [1, 2, 3, 4, 5, 6, 0] }
+// [component-fixes] pure-end
+
 export default {
   name: 'DayDateStrip',
   data () {
@@ -80,10 +87,10 @@ export default {
       const base = this.selectedTs
       const d = dayjs(base)
       const weekFromSun = this.$store.state.settings.weekStartDay === 'sun'
-      const off = weekFromSun ? d.day() : (d.day() + 6) % 7
+      const off = calGridOffset(d.day(), weekFromSun)
       const start = +d.subtract(off, 'day').startOf('day')
       // Map week start order to the wd0(Sun)..wd6(Sat) i18n keys
-      const order = weekFromSun ? [0, 1, 2, 3, 4, 5, 6] : [1, 2, 3, 4, 5, 6, 0]
+      const order = weekHeaderOrder(weekFromSun)
       return Array.from({ length: 7 }, (_, i) => {
         const ts = start + i * DAY_MS
         const dd = dayjs(ts)
@@ -103,10 +110,11 @@ export default {
       const key = d.year() === dayjs().year() ? 'labelPattern' : 'labelPatternYear'
       return this.$t('statsD.DayDateStrip.' + key, { y: d.year(), m: d.month() + 1, d: d.date(), w: this.$t('statsD.DayDateStrip.wd' + d.day()) })
     },
-    /** Month grid of the calendar popover */
+    /** Month grid of the calendar popover (start weekday honors settings.weekStartDay, same as the date strip above) */
     calCells () {
       const first = dayjs(this.calMonth + '-01')
-      const offset = (first.day() + 6) % 7 // Monday start
+      const weekFromSun = this.$store.state.settings.weekStartDay === 'sun'
+      const offset = calGridOffset(first.day(), weekFromSun)
       const cells = []
       for (let i = offset; i > 0; i--) cells.push(this.calCell(first.subtract(i, 'day'), false))
       for (let d = 1; d <= first.daysInMonth(); d++) cells.push(this.calCell(first.date(d), true))
@@ -121,9 +129,9 @@ export default {
       }
       return set
     },
-    /** Calendar popover header (Mon..Sun) */
+    /** Calendar popover header (rotated to the same week start as calCells) */
     calWeekHeaders () {
-      return [1, 2, 3, 4, 5, 6, 0].map(i => this.$t('statsD.DayDateStrip.wd' + i))
+      return weekHeaderOrder(this.$store.state.settings.weekStartDay === 'sun').map(i => this.$t('statsD.DayDateStrip.wd' + i))
     }
   },
   methods: {
