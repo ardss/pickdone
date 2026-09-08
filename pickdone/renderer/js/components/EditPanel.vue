@@ -109,7 +109,7 @@
       </div>
 
       <div v-if="!inRecycle" class="ep-row ep-done-row" role="checkbox" :aria-checked="(task&&task.complete)?'true':'false'" tabindex="0"
-           @click="toggleComplete" @keydown.enter.prevent="toggleComplete">
+           @click="toggleComplete" @keydown.enter.prevent="toggleComplete" @keydown.space.prevent.stop="toggleComplete">
         <span class="ep-field-label ep-field-ico" :title="$t('statsE.EditPanel.doneBtn')"><app-icon name="check" :size="13"/></span>
         <span class="ep-done-label">{{ $t('statsE.EditPanel.doneBtn') }}</span>
         <span class="ml-auto"></span>
@@ -170,7 +170,7 @@
       <div class="ep-subs" ref="subList">
         <div v-for="(s,i) in subList" :key="i" class="ep-sub">
           <span class="ep-sub-check" :class="{on:s.checked}" role="checkbox" :aria-checked="s.checked ? 'true' : 'false'"
-                tabindex="0" @click.stop="toggleSub(s)" @keydown.enter.prevent.stop="toggleSub(s)">{{ s.checked ? '✓' : '' }}</span>
+                tabindex="0" @click.stop="toggleSub(s)" @keydown.enter.prevent.stop="toggleSub(s)" @keydown.space.prevent.stop="toggleSub(s)">{{ s.checked ? '✓' : '' }}</span>
           <span class="ep-sub-text" :class="{strike:s.checked}">{{s.text}}</span>
           <b class="ep-sub-x close-x close-x--sm" role="button" tabindex="0" :aria-label="$t('statsE.EditPanel.deleteSubtask')"
              @click.stop="delSub(i)" @keydown.enter.prevent.stop="delSub(i)"></b>
@@ -220,7 +220,7 @@
               :class="{ 'ep-deadline-pill--set': !!(e&&e.deadlineTs) }">
           {{ e&&e.deadlineTs ? dayjs(e.deadlineTs).format('M/D') : $t('statsE.EditPanel.pickDueDate') }}
         </span>
-        <b v-if="e&&e.deadlineTs" class="ep-remind-clear close-x" role="button" tabindex="0" :title="$t('statsE.EditPanel.clearDueDate')" @click.stop="fieldPatch('deadlineTs',0)"></b>
+        <b v-if="e&&e.deadlineTs" class="ep-remind-clear close-x" role="button" tabindex="0" :title="$t('statsE.EditPanel.clearDueDate')" :aria-label="$t('statsE.EditPanel.clearDueDate')" @click.stop="fieldPatch('deadlineTs',0)"></b>
         <el-date-picker ref="deadlinePick" size="small" value-format="x" type="date"
                         style="width:0;height:0;border:0;padding:0;position:absolute;opacity:0" class="ep-deadline-pick"
                         :aria-label="$t('statsJ.EditPanel.setDeadline')" popper-class="ep-date-popper"
@@ -394,7 +394,8 @@ export default {
       if (this.previewImg) { this.previewImg = null; return }
       // When an upper modal (settings/recurring rule/feedback dialog) is open, Esc belongs to it; do not close the edit panel through the wall
       const ui = this.$store.state.ui
-      if (ui.showSettingsModal || ui.showRepeatModalFor || ui.showFeedbackModal) return
+      if (ui.showSettingsModal || ui.showRepeatModalFor || ui.showFeedbackModal ||
+          ui.showRepeatDeleteConfirm || ui.accountTaskId || ui.tomatoAbandonVisible || ui.tomatoFocusRecordVisible) return
       const st = this.$store.state.ui.rightSidebarTodoEdit
       if (st && st.visible) this.$store.commit('ui/closeEdit')
     }
