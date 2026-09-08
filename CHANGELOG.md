@@ -4,7 +4,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versioning follows [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.2.1] - 2026-09-08
 
 ### Fixed
 - First-run onboarding tour crashed (TDZ reference) and leaked a poller when no task existed yet; "replay journey" from Settings was reliably broken on an empty workspace. Stage drivers no longer double-advance via a synchronous destroy callback.
