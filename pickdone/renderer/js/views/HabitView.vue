@@ -40,12 +40,12 @@
                 :aria-checked="h.records && h.records[todayKey] ? 'true' : 'false'"
                 :class="{ on: h.records && h.records[todayKey] }"
                 :style="h.records && h.records[todayKey] ? { background: h.color, borderColor: h.color } : {}"
-                @click="check(h)" @keydown.enter.prevent="check(h)">✓</span>
+                @click="check(h)" @keydown.enter.prevent="check(h)" @keydown.space.prevent.stop="check(h)">✓</span>
           <template v-if="editingId === h.id">
             <input v-model="editName" class="habit-rename" @keyup.enter="saveRename(h)" @blur="saveRename(h)"/>
           </template>
           <template v-else>
-            <span class="habit-name">{{ h.name }}</span>
+            <span class="habit-name" role="button" tabindex="0" :title="$t('statsE.HabitView.renameTip')" @click="startRename(h)" @keydown.enter.prevent="startRename(h)">{{ h.name }}</span>
           </template>
           <span class="habit-freq-label">{{ freqLabel(h) }}</span>
           <span class="habit-streak" :title="$t('statsB.HabitView.streakTip')"><app-icon name="flame" :size="12"/> {{ $t('statsB.HabitView.streak', { n: streakOf(h.id) }) }}</span>
@@ -173,9 +173,20 @@ export default {
     addHabit () {
       const n = this.newHabit.trim()
       if (!n) return
+      // Validate the frequency form before committing: an empty weekday set or an out-of-range interval (keyboard can type 0/99) must not become a habit config
+      if (this.freqType === 'weekdays' && !this.freqWeekdays.length) {
+        this.$message.warning(this.$t('statsE.HabitView.freqWeekdaysRequired'))
+        return
+      }
       const freq: any = { type: this.freqType }
       if (this.freqType === 'weekdays') freq.weekdays = this.freqWeekdays
-      if (this.freqType === 'interval') freq.intervalN = this.freqIntervalN
+      if (this.freqType === 'interval') {
+        freq.intervalN = Math.min(30, Math.max(2, Number(this.freqIntervalN) || 2))
+        if (freq.intervalN !== this.freqIntervalN) {
+          this.freqIntervalN = freq.intervalN
+          this.$message.warning(this.$t('statsE.HabitView.freqIntervalClamped', { min: 2, max: 30 }))
+        }
+      }
       this.$store.commit('habits/addHabit', { name: n, frequency: freq })
       this.newHabit = ''
     },

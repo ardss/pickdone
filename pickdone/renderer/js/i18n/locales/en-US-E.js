@@ -406,4 +406,8 @@ export default {
   "statsE.TodayView.deckAria": "Day-card deck view, arrow keys to browse days",
   "statsE.TodayView.overdueSince": "Overdue since {d}","statsE.TodayView.deckOverdue": "{n} overdue incomplete","statsE.TodayView.deckEmpty": "No tasks on this day",
   "statsE.TodayView.untitled": "(untitled)",
+  "statsE.HabitView.freqWeekdaysRequired": "Pick at least one weekday for the weekly schedule",
+  "statsE.HabitView.freqIntervalClamped": "Interval must be between {min} and {max} days",
+  "statsE.HabitView.renameTip": "Click to rename",
+  "statsE.SearchView.truncatedNotice": "Showing the first {shown} of {n} results",
 }

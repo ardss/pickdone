@@ -406,4 +406,8 @@ export default {
   "statsE.TodayView.deckAria": "日卡片堆叠视图，左右方向键翻看日期",
   "statsE.TodayView.overdueSince": "自 {d} 逾期未完成","statsE.TodayView.deckOverdue": "逾期未完成 {n} 项","statsE.TodayView.deckEmpty": "这一天没有任务",
   "statsE.TodayView.untitled": "（无标题）",
+  "statsE.HabitView.freqWeekdaysRequired": "按周重复至少需选择一天",
+  "statsE.HabitView.freqIntervalClamped": "间隔天数需在 {min} 到 {max} 之间",
+  "statsE.HabitView.renameTip": "点击重命名",
+  "statsE.SearchView.truncatedNotice": "结果较多，仅显示前 {shown} 条，共 {n} 条",
 }
