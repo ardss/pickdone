@@ -74,7 +74,7 @@
         <div class="ep-row ep-cat-row" role="button" tabindex="0" :aria-expanded="depOpen ? 'true' : 'false'"
              @click="depOpen=!depOpen" @keydown.enter.prevent="depOpen=!depOpen">
           <span class="ep-field-label ep-field-ico" :title="$t('statsE.EditPanel.depsLabel')"><app-icon name="link" :size="13"/></span>
-          <span class="ep-cat-name is-placeholder">$t('statsE.EditPanel.depsN', { n: depPreds.length })</span>
+          <span class="ep-cat-name is-placeholder">{{ $t('statsE.EditPanel.depsN', { n: depPreds.length }) }}</span>
           <span class="ml-auto"></span>
           <span class="ep-row-arrow" :class="{on: depOpen}">▾</span>
         </div>
