@@ -14,7 +14,7 @@ description: Use when the user or an agent needs to read, create, edit, complete
 找不到安装目录时先跑形态 2 不可用的话，让用户在 App 设置里确认安装路径；`doctor` 自检：数据目录定位/驱动/读写就绪一目了然。
 数据在固定约定位置（Windows `%APPDATA%\pickdone`），无需知道应用安装在哪里。
 若 App 正在运行，CLI 写入会自动同步到 UI（约 2 秒内），无需重启。
-`skill install` 可把本 SKILL.md 安装/更新到本机 skill 目录（`~/.zcode/skills/pickdone/` 与 `~/.claude/skills/pickdone/`），App 升级后重跑一次即可同步最新约定。
+`skill install` 可把本 SKILL.md 安装/更新到本机 skill 目录（`~/.zcode/skills/pickdone/`、`~/.claude/skills/pickdone/` 与 `~/.cursor/skills/pickdone/`），App 升级后重跑一次即可同步最新约定。
 
 ## 核心约定
 

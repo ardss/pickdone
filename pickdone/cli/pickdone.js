@@ -120,7 +120,7 @@ Version & updates:
   update                          check GitHub for a newer release (installing stays in the App's updater)
 Skills (AI agent integration):
   skill install                   install the PickDone SKILL.md into the local skill dirs
-                                  (~/.zcode/skills/pickdone/ and ~/.claude/skills/pickdone/), so coding
+                                  (~/.zcode, ~/.claude and ~/.cursor skill dirs), so coding
                                   agents discover how to drive this CLI. Re-run after App updates.
   -h       help
 
@@ -1061,7 +1061,8 @@ async function main () {
       const home = process.env.USERPROFILE || process.env.HOME
       const targets = [
         path.join(home, '.zcode', 'skills', 'pickdone', 'SKILL.md'),
-        path.join(home, '.claude', 'skills', 'pickdone', 'SKILL.md')
+        path.join(home, '.claude', 'skills', 'pickdone', 'SKILL.md'),
+        path.join(home, '.cursor', 'skills', 'pickdone', 'SKILL.md')
       ]
       const results = targets.map(dest => {
         const exists = fs.existsSync(dest) && fs.readFileSync(dest, 'utf8') === content
