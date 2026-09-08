@@ -639,7 +639,16 @@ function registerIpc () {
       // Write-op determination lives in db.js's explicit WRITE_OPS list (do not fall back to regex: hardDeleteMany and others were once missed, leaving cross-window data stale)
       // setMeta writes only the meta table, not todos: skip reloadAll (settings/tomato/dayPlan mirrors are high-frequency writes; the previous full-reload path caused a reload storm); still broadcast so peer windows sync
       if (op === 'setMeta') { broadcastTodosChanged(op, e.sender); return r }
-      if (dbm.isWriteOp(op)) scheduler.reloadAll(dbApi())
+      if (dbm.isWriteOp(op)) {
+        // Single-task writes (upsert/bumpSnow) reschedule only that task's timers via scheduleOne instead of a
+        // full reloadAll (whole-table scan + all timers torn down and rebuilt on every write). Fall back to
+        // reloadAll for bulk ops, when the row is gone, or when any reminder time is already past — scheduleOne
+        // skips past times, while reloadAll owns the missed-reminder catch-up path (watermark + re-fire).
+        const tid = (params || {}).taskId
+        const t = (op === 'upsert' || op === 'bumpSnow') && tid != null ? dbm.call('getById', String(tid)) : null
+        if (t && !scheduler.reminderInstances(t).some(([, ts]) => ts <= Date.now())) scheduler.scheduleOne(t)
+        else scheduler.reloadAll(dbApi())
+      }
       // 账本行写:调度器不依赖番茄记录;广播由 db 层 setLedgerChangedHook 统一发(CLI 直写同样触发),此处只跳过 todos 全量重载
       if (op === 'tomatoAppendMany' || op === 'tomatoUpdateById' || op === 'tomatoRemoveByIds' || op === 'tomatoMigrateFromMeta') return r
       if (dbm.isWriteOp(op)) broadcastTodosChanged(op, e.sender) // exclude the originating sender, so optimistic updates are not clobbered by the echo
