@@ -45,15 +45,22 @@ for (const need of [`PickDone-Setup-${version}.exe`, `PickDone-Portable-${versio
 }
 say(`四产物齐全(${names.length} 个 assets)`)
 
-// 3. 正文非空——空则自动从 CHANGELOG 提取
+// 3. 正文非空——空则自动从 CHANGELOG 提取(双语:CHANGELOG.zh.md 中文段在前,缺中文降级单语并告警)
 if ((rel.body || '').trim().length < 30) {
-  const cl = fs.readFileSync(path.join(ROOT, '..', 'CHANGELOG.md'), 'utf8')
-  const m = cl.match(new RegExp(`## \\[${version}\\][^\\n]*\\n([\\s\\S]*?)(?=\\n## \\[)`))
-  if (!m || !m[1].trim()) die(`CHANGELOG 缺 [${version}] 段正文,请手工填写 release notes`)
+  const extract = (file, ver) => {
+    if (!fs.existsSync(file)) return null
+    const m = fs.readFileSync(file, 'utf8').match(new RegExp(`## \\[${ver}\\][^\\n]*\\n([\\s\\S]*?)(?=\\n## \\[)`))
+    return (m && m[1].trim()) ? m[1].trim() : null
+  }
+  const en = extract(path.join(ROOT, '..', 'CHANGELOG.md'), version)
+  if (!en) die(`CHANGELOG 缺 [${version}] 段正文,请手工填写 release notes`)
+  const zh = extract(path.join(ROOT, '..', 'CHANGELOG.zh.md'), version)
+  const body = zh ? (zh + '\n\n---\n\n' + en) : en
+  if (!zh) say('WARNING: CHANGELOG.zh.md 无对应段——本次发布单语(英文),补中文版属流程违规')
   const tmp = path.join(os.tmpdir(), `rel-notes-${version}.md`)
-  fs.writeFileSync(tmp, "## What's Changed\n\n" + m[1].trim() + '\n')
+  fs.writeFileSync(tmp, "## What's Changed\n\n" + body + '\n')
   gh(['release', 'edit', TAG, '--notes-file', tmp])
-  say(`正文为空,已自动从 CHANGELOG 填入(${m[1].trim().length} 字符)`)
+  say(`正文为空,已自动从 CHANGELOG 填入(${body.length} 字符${zh ? ',双语' : ',仅英文'})`)
 } else {
   say(`正文已有(${(rel.body || '').length} 字符)`)
 }
