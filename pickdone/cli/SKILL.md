@@ -8,7 +8,7 @@ description: Use when the user or an agent needs to read, create, edit, complete
 通过 CLI 读写用户的本地待办应用「拾事」（Electron + SQLite，单机版）。
 命令形态（按可用性依次尝试，`--json` 等参数同）：
 
-1. `node <安装目录>\resources\cli\pickdone.js <command> [args]` —— 装了桌面 App 就有 CLI（Windows 默认安装位：`%LOCALAPPDATA%\Programs\拾事\resources\cli\pickdone.js`；同目录 `resources\bin\pickdone.cmd` 是等价 shim）
+1. `node <安装目录>\resources\cli\pickdone.js <command> [args]` —— 装了桌面 App 就有 CLI（需系统已安装 Node.js；Windows 默认安装位：`%LOCALAPPDATA%\Programs\拾事\resources\cli\pickdone.js`；同目录 `resources\bin\pickdone.cmd` 是等价 shim）
 2. `node cli/pickdone.js <command> [args]` —— 在应用源码仓库的 `pickdone/` 目录下时（开发者）
 
 找不到安装目录时先跑形态 2 不可用的话，让用户在 App 设置里确认安装路径；`doctor` 自检：数据目录定位/驱动/读写就绪一目了然。

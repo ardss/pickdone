@@ -76,7 +76,7 @@ node cli/pickdone.js stats                 # 统计概要
 node cli/cli-smoke.js                      # 自测(隔离库,不碰真实数据)
 ```
 
-20+ 命令覆盖任务 / 子任务 / 统计 / 回收站全域,详见 [pickdone/cli/SKILL.md](pickdone/cli/SKILL.md)。
+20+ 命令覆盖任务 / 子任务 / 统计 / 回收站全域。CLI 是纯 JavaScript,由系统 Node.js 运行——请先安装 [Node.js](https://nodejs.org/)(任意较新版本均可,开发环境要求 ≥ 20)。安装版应用自带同一套 CLI(默认位于 `resources\cli\pickdone.js`,同目录 `resources\bin\pickdone.cmd` 是等价 shim),`node cli/pickdone.js skill install` 会把 pickdone 技能注册到本机 AI 编码工具可发现的技能目录。完整契约见 [pickdone/cli/SKILL.md](pickdone/cli/SKILL.md)。
 
 ![AI CLI:一句话让 AI 替你排一天](docs/media/ai-cli-demo-zh.gif)
 

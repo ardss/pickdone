@@ -68,7 +68,7 @@ node cli/pickdone.js stats                 # focus summary
 node cli/cli-smoke.js                      # self-test (isolated DB, never touches real data)
 ```
 
-20+ commands cover tasks / subtasks / statistics / recycle bin. The installed app ships the same CLI at `resources/cli/pickdone.js`, and `node cli/pickdone.js skill install` registers a `pickdone` skill so local coding agents discover it automatically. Full contract in [pickdone/cli/SKILL.md](pickdone/cli/SKILL.md).
+20+ commands cover tasks / subtasks / statistics / recycle bin. The CLI is plain JavaScript run by your system Node.js — have [Node.js](https://nodejs.org/) installed (any recent LTS works; the dev setup asks for ≥ 20). The installed app ships the same CLI at `resources/cli/pickdone.js`, and `node cli/pickdone.js skill install` registers a `pickdone` skill so local coding agents discover it automatically. Full contract in [pickdone/cli/SKILL.md](pickdone/cli/SKILL.md).
 
 ![AI CLI: one sentence and AI runs your day](docs/media/en/ai-cli-demo-en.gif)
 

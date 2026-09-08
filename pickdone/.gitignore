@@ -24,10 +24,6 @@ tests/shot-*.png
 # 开发隔离数据目录（app:dev / TODO_USER_DATA_DIR）
 .dev-data/
 
-# pickdone-cli npm 包:发布形态由 build-package.mjs 生成,仓库内只留骨架源码
-cli-package/cli/
-cli-package/src/
-cli-package/node_modules/
 pickdone-backups/
 
 # 测试运行产物(每次运行重新生成,勿追踪)
