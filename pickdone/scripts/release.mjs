@@ -18,7 +18,11 @@ import { fileURLToPath } from 'node:url'
 import { execFileSync } from 'node:child_process'
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
-const sh = (cmd, opts = {}) => execFileSync(cmd[0], cmd.slice(1), { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...opts }).trim()
+// stdio:'inherit' 时 execFileSync 返回 null(无捕获输出)——不能一律 .trim()
+const sh = (cmd, opts = {}) => {
+  const out = execFileSync(cmd[0], cmd.slice(1), { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...opts })
+  return typeof out === 'string' ? out.trim() : ''
+}
 const die = msg => { console.error('✗ release: ' + msg); process.exit(1) }
 const say = msg => console.log('• ' + msg)
 // Windows 上 npm 只有 npm.cmd(Node ≥18.20 禁止无 shell 生成 .cmd,直接 spawnSync 必 ENOENT/EINVAL)——借 cmd.exe 转发
