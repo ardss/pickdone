@@ -23,7 +23,7 @@
             <button class="tx-giveup" @click="askGiveUp">{{ $t('statsE.TodayX.giveUp') }}</button>
           </template>
           <template v-else>
-            <div class="tx-now__timer tx-now__timer--idle">25:00</div>
+            <div class="tx-now__timer tx-now__timer--idle">{{ idleTimerLabel }}</div>
             <button class="tx-startbtn" @click="startSelected">{{ $t('statsE.TodayX.startBtn') }}</button>
           </template>
         </div>
@@ -87,7 +87,7 @@ const X_CSS = `
 .tx-now__side{text-align:center;flex-shrink:0}
 .tx-now__timer{font-size:40px;font-weight:700;font-variant-numeric:tabular-nums}
 .tx-giveup{margin-top:10px;background:rgba(0,0,0,.18);color:#fff;border:0;border-radius:9px;padding:8px 18px;font-size:12px;cursor:pointer}
-.tx-giveup:hover{background:rgba(229,72,77,.85)}
+.tx-giveup:hover{background:var(--danger, #e9484d)}
 .tx-now__idle{font-size:13px;margin-top:6px}
 .tx-settled{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 14px}
 .tx-settled__row{display:flex;align-items:center;gap:9px;font-size:12px;color:var(--text-2);padding:3px 0}
@@ -135,6 +135,8 @@ export default {
       return remainSecOf(s.status, s.startedAt, s.tomatoTime, s.restTime) || 0
     },
     timerLabel () { return formatMMSS(Math.max(0, this.remainSec)) },
+    /* Idle state previews the configured focus length instead of a hardcoded 25:00 (aligned with TomatoBar) */
+    idleTimerLabel () { return formatMMSS((this.tomato.tomatoTime || 25) * 60) },
     nowRound () { return this.tomatoActualOf(this.nowTask && this.nowTask.taskId) + 1 },
     /* ---- Settled ---- */
     settled () {
