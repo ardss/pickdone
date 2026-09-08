@@ -7,7 +7,7 @@ import { expandRepeatDates } from '../utils/repeat.js'
 import { sortByMode } from '../utils/sortMode.js'
 import { getEstimate } from '../utils/tomatoEstimate.js'
 import { saveRuntime } from './runtimeState.js'
-import { moveTaskChips, clearTaskChips, snapshotForDelete, restoreSnapshot } from '../utils/dayPlans.js'
+import { moveTaskChips, clearTaskChips, snapshotForDelete, restoreSnapshot, clearSnapshot } from '../utils/dayPlans.js'
 
 /** Chip-sync serial chain: when a task's reschedule fires in bursts, guarantees planMoveTask arrival order matches operation order */
 const _chipSyncChain = new Map()
@@ -68,10 +68,29 @@ function isTaskReady (list, t) {
   for (const x of list) { if (!x.delete) byId[x.taskId] = x }
   return preds.every(pid => { const p = byId[pid]; return !p || p.complete })
 }
+// ---- DB write pending queue (mirrors tomato.js's _pendingLedger): a failed task upsert stays queued and replays on the next quit flush, so a transient IPC/db failure can't silently drop a task edit ----
+const _pendingUpserts = []
+let _todoFlushHooked = false
 function safeUpsert (row) {
   let plain
   try { plain = JSON.parse(JSON.stringify(row)) } catch (e) { plain = row }
-  window.todoAPI.dbCall('upsert', plain).catch(err => console.error('[todo] persist failed:', err))
+  const entry = { op: 'upsert', params: plain }
+  _pendingUpserts.push(entry)
+  Promise.resolve(window.todoAPI.dbCall('upsert', plain))
+    .then(() => { const i = _pendingUpserts.indexOf(entry); if (i >= 0) _pendingUpserts.splice(i, 1) })
+    .catch(err => console.error('[todo] persist failed (queued for quit-flush retry):', err))
+  hookQuitFlush()
+}
+function hookQuitFlush () {
+  if (_todoFlushHooked || !window.todoAPI || !window.todoAPI.onAppQuittingFlush) return
+  _todoFlushHooked = true
+  window.todoAPI.onAppQuittingFlush(() => {
+    const list = _pendingUpserts.splice(0, _pendingUpserts.length)
+    for (const it of list) {
+      Promise.resolve(window.todoAPI.dbCall(it.op, it.params))
+        .catch(e => console.error('[todo] pending upsert flush failed at quit:', e))
+    }
+  })
 }
 
 function daysRangeTs (settings) {
@@ -181,6 +200,9 @@ export default {
       s.recycleList = snap.recycleList
     },
     historyClear (s) { s.undoStack = []; s.redoStack = []; s._histLastPushAt = 0; s._histBytes = 0; s._histRedoBytes = 0 },
+    // Break the 400ms chained merge: discrete ops (add/delete/purge) call this so the next push starts a fresh undo step,
+    // keeping those ops undoable on their own instead of fusing into a following EditPanel edit
+    historyBreakMerge (s) { s._histLastPushAt = 0 },
     historyUndoPop (s) {
       const popped = s.undoStack.pop()
       if (popped) s._histBytes = Math.max(0, (s._histBytes || 0) - popped.length)
@@ -239,6 +261,8 @@ export default {
         dayOverride = null,
         predecessors = null
       } = payload
+      // Discrete op: break the 400ms undo merge so following edits don't fuse into the add step
+      commit('historyBreakMerge')
       const now = Date.now()
       // Renewal instance idempotency: skip when the same rid + same dayStart already exists (prevents concurrent multi-window + CLI double-triggering creating two renewals at the same moment)
       if (repeatId) {
@@ -289,6 +313,7 @@ export default {
 
     async updateTodoFields ({ state, commit, dispatch }, { taskId, patch }) {
       const unlocked = patch._unlocked; if (unlocked) delete patch._unlocked // advisory payload, never persisted
+      const deferViews = patch._deferViews; if (deferViews) delete patch._deferViews // advisory: caller batches the view rebuild (bulk reschedule/migration)
       if (patch.predecessors !== undefined) {
         // write-time cycle guard (dependencies are devMode-gated): a dep set that closes a loop is rejected outright
         const next = Array.isArray(patch.predecessors)
@@ -312,7 +337,7 @@ export default {
       // plain-text/metadata edits take the lightweight path: the row object is already reactively updated, so the component itself refreshes the UI in place;
       // the full computeViews (O(n) rebuild of 8 groups + purgeExpiredRecycle) is debounced/merged,
       // otherwise every 350ms-debounced title save in EditPanel would trigger the whole chain, making typing a full recompute at thousand-task scale
-      if (VIEW_AFFECTING_FIELDS.some(f => patch[f] !== undefined)) {
+      if (!deferViews && VIEW_AFFECTING_FIELDS.some(f => patch[f] !== undefined)) {
         clearTimeout(this._viewsDebounceTimer)
         dispatch('computeViews')
       } else {
@@ -357,6 +382,16 @@ export default {
           const subs = JSON.parse(todo.subtasks || '[]')
           if (Array.isArray(subs) && subs.length && subs.some(s => !s.checked)) {
             patch.subtasks = JSON.stringify(subs.map(s => ({ ...s, checked: true })))
+          }
+        } catch { /* skip the cascade when subtask JSON is malformed */ }
+      }
+      if (!target && root_getCompleteWithSub(rootState)) {
+        // Un-checking the main task also unchecks all subtasks (symmetric with the complete cascade above, same setting gate);
+        // without this, subsCompleteTarget in core.js would instantly re-complete a manually un-completed parent whose subs are all checked
+        try {
+          const subs = JSON.parse(todo.subtasks || '[]')
+          if (Array.isArray(subs) && subs.length && subs.some(s => s.checked)) {
+            patch.subtasks = JSON.stringify(subs.map(s => ({ ...s, checked: false })))
           }
         } catch { /* skip the cascade when subtask JSON is malformed */ }
       }
@@ -420,6 +455,8 @@ export default {
 
     /** Move into the recycle bin (soft delete) */
     async deleteTodo ({ commit, dispatch, rootState }, todo) {
+      // Discrete op: break the 400ms undo merge so following edits don't fuse into the delete step
+      commit('historyBreakMerge')
       const all = [...this.state.todo.todoList, ...this.state.todo.recycleList]
       const raw = all.find(t => t.taskId === todo.taskId)
       if (!raw) return
@@ -446,6 +483,8 @@ export default {
     },
 
     async purgeIds ({ commit, dispatch, rootState }, ids) {
+      // Discrete op: break the 400ms undo merge so following edits don't fuse into the purge step
+      commit('historyBreakMerge')
       if (ids.length) await dispatch('writeEventBackup', 'purge') // snapshot before permanent deletion
       // Permanently deleted tasks still bound by focus: detach (same as deleteTodo)
       const at = rootState.tomato && rootState.tomato.attachTodo
@@ -453,7 +492,7 @@ export default {
       // Delete per id and remove locally only the successful ones: Promise.all swallowing errors then hardRemove-ing the whole batch once let failed ids "revive" back into the recycle bin after restart
       const done = []
       for (const id of ids) {
-        try { await window.todoAPI.dbCall('hardDelete', id); done.push(id) } catch (err) { reportError('hardDelete', err) }
+        try { await window.todoAPI.dbCall('hardDelete', id); done.push(id); clearSnapshot(id) } catch (err) { reportError('hardDelete', err) }
       }
       try { for (const id of done) await window.todoAPI.deleteTodoFilesRelevant?.(id) } catch {}
       if (done.length) commit('hardRemove', done)
@@ -463,11 +502,15 @@ export default {
     async purgeAllRecycle ({ commit, dispatch, state }) {
       const ids = state.recycleList.map(t => t.taskId)
       if (!ids.length) return
+      // Discrete op: break the 400ms undo merge so following edits don't fuse into the purge step
+      commit('historyBreakMerge')
       await dispatch('writeEventBackup', 'purge-all') // snapshot before emptying the recycle bin
       // DB rows first, then attachment files: the other order leaves rows pointing at deleted files if the file purge fails
       try { await window.todoAPI.purgeRecycleBin() } catch (err) { reportError('purgeRecycleBin', err) }
       // Attachment cleanup aligned with per-item permanent deletion (the main process's purgeRecycleBin only deletes rows, not files/)
       try { for (const id of ids) await window.todoAPI.deleteTodoFilesRelevant?.(id) } catch {}
+      // Drop the pre-delete chip snapshot meta too (rows are gone, the snapshot can never be restored)
+      for (const id of ids) clearSnapshot(id)
       commit('hardRemove', ids)
       dispatch('computeViews')
       dispatch('writeCriticalBackup')
@@ -660,8 +703,10 @@ export default {
       try {
         commit('bumpVersion')
         const serverV = state.version
-        // Snapshot only the rows being synced; during the await, the user's new edits (status='update') aren't wrongly marked synced
-        const snapshot = [...state.todoList, ...state.recycleList]
+        // Snapshot only dirty rows (status !== 'sync'); during the await, the user's new edits (status='update') aren't wrongly marked synced.
+        // An already-synced whole table skips the wholesale upsertMany write entirely (Ctrl+S with no changes = no write)
+        const snapshot = [...state.todoList, ...state.recycleList].filter(t => t.status !== 'sync')
+        if (!snapshot.length) return
         const snapshotIds = new Set(snapshot.map(t => t.taskId))
         await window.todoAPI.dbCall('upsertMany', snapshot)
         await window.todoAPI.dbCall('setMeta', ['todosVersion', String(serverV)])
@@ -669,7 +714,7 @@ export default {
         ;[...state.todoList, ...state.recycleList]
           .filter(t => snapshotIds.has(t.taskId) && t.status !== 'update' && t.status !== 'delete')
           .forEach(t => { t.status = 'sync'; t.version = serverV })
-      } finally { commit('setSyncing', false) }
+      } catch (err) { reportError('syncTodos', err) } finally { commit('setSyncing', false) }
       // Stay quiet on sync success (per common practice, auto sync doesn't disturb the user); the version number is an implementation detail and goes into no copy
       dispatch('writeCriticalBackup')
     },
