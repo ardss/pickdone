@@ -270,7 +270,8 @@
             "x64"
           ]
         }
-      ]
+      ],
+      "sign": "./build/signpath-sign.cjs"
     },
     "nsis": {
       "oneClick": false,
