@@ -242,6 +242,7 @@ export default {
   "statsE.SettingsModal.launchAtStartupLabel": "开机自启动：",
   "statsE.SettingsModal.hideOnLaunchLabel": "启动时隐藏主窗口：",
   "statsE.SettingsModal.closeToTrayLabel": "关闭按钮最小化到托盘：",
+  "statsE.SettingsModal.closeToTrayHint": "开启：点 × 最小化到托盘（提醒照常）；关闭：点 × 直接退出应用",
   "statsE.SettingsModal.hardwareAccelLabel": "硬件加速（重启生效）：",
   "statsE.SettingsModal.parentChecksSubtasksLabel": "完成父任务时连带勾选子任务：",
   "statsE.SettingsModal.languageLabel": "界面语言：",

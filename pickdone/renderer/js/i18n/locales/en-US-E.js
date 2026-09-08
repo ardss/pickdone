@@ -242,6 +242,7 @@ export default {
   "statsE.SettingsModal.launchAtStartupLabel": "Launch at startup:",
   "statsE.SettingsModal.hideOnLaunchLabel": "Hide main window on launch:",
   "statsE.SettingsModal.closeToTrayLabel": "Close button minimizes to tray:",
+  "statsE.SettingsModal.closeToTrayHint": "On: × minimizes to tray (reminders keep running). Off: × quits the app",
   "statsE.SettingsModal.hardwareAccelLabel": "Hardware acceleration (restart required):",
   "statsE.SettingsModal.parentChecksSubtasksLabel": "Completing parent checks subtasks:",
   "statsE.SettingsModal.languageLabel": "Language:",

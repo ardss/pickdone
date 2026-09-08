@@ -40,12 +40,23 @@
         </div>
       </div>
 
+      <div v-show="step === 3" class="ob-step">
+        <h2 class="ob-step__title">{{ $t('onboarding.stepClose') }}</h2>
+        <p class="ob-step__sub">{{ $t('onboarding.closeSub') }}</p>
+        <div class="ob-opts" role="group" :aria-label="$t('onboarding.stepClose')">
+          <button type="button" class="ob-opt" :class="{ 'ob-opt--on': closeAction === 'tray' }"
+            :aria-pressed="closeAction === 'tray'" @click="pickClose('tray')">{{ $t('onboarding.closeTray') }}</button>
+          <button type="button" class="ob-opt" :class="{ 'ob-opt--on': closeAction === 'exit' }"
+            :aria-pressed="closeAction === 'exit'" @click="pickClose('exit')">{{ $t('onboarding.closeExit') }}</button>
+        </div>
+      </div>
+
       <div class="ob-foot">
         <button type="button" class="ob-link" @click="finish">{{ $t('onboarding.skip') }}</button>
         <div class="ob-foot__main">
           <button v-if="step > 0" type="button" class="ob-btn" @click="prev">{{ $t('onboarding.prev') }}</button>
           <button type="button" class="ob-btn ob-btn--primary" @click="next">
-            {{ step < 2 ? $t('onboarding.next') : $t('onboarding.done') }}
+            {{ step < 3 ? $t('onboarding.next') : $t('onboarding.done') }}
           </button>
         </div>
       </div>
@@ -56,15 +67,17 @@
 <script lang="ts">
 import i18n, { setLocale, SUPPORTED } from '../i18n/index.js'
 import dialogA11y from '../utils/dialogA11y.js'
-/** First-run setup wizard: language -> color mode -> default categories (triggered only on fresh installs; existing data silently skips and backfills the flag) */
+/** First-run setup wizard: language -> color mode -> default categories -> close-button behavior (triggered only on fresh installs; existing data silently skips and backfills the flag) */
 const LS_ONBOARD = 'onboardingDone'
-/* v0.1 release decision: the first-run wizard is disabled entirely (auto tour handoff still needs polish). To restore, flip back to true; all logic is retained */
-const ONBOARDING_ENABLED = false
+/* Re-enabled 2026-09-08: the v0.1 disable reason (auto-tour handoff polish) is gone — AUTO_TOURS_ENABLED=false
+   already gates the auto tour, and the explicit runJourney handoff is TDZ-safe. A close-behavior step was added
+   (tray vs quit): close-to-tray is invisible to new users and caused the NSIS "uninstall old files: 2" update trap. */
+const ONBOARDING_ENABLED = true
 
 export default {
   name: 'OnboardingWizard',
   mixins: [dialogA11y],
-  data: () => ({ visible: false, step: 0, locale: 'zh-CN', colorMode: 'light', seedCats: true, langs: SUPPORTED }),
+  data: () => ({ visible: false, step: 0, locale: 'zh-CN', colorMode: 'light', seedCats: true, closeAction: 'tray', langs: SUPPORTED }),
   async mounted () {
     if (!ONBOARDING_ENABLED) { try { localStorage.setItem(LS_ONBOARD, '1') } catch (e) { /* ignore */ } return }
     // When partitioned storage/privacy mode disables LS, getItem throws: same try wrapper as SettingsModal so wizard mounting never crashes
@@ -89,13 +102,15 @@ export default {
     try { await this.$store.dispatch('category/init') } catch (e) { /* Load failure must not block the wizard */ }
     this.locale = i18n.global.locale
     this.colorMode = this.$store.state.settings.colorMode || 'light'
+    this.closeAction = this.$store.state.settings.closeActionMinimize === false ? 'exit' : 'tray'
     this.visible = true
   },
   methods: {
     pickLocale (l) { this.locale = l; setLocale(l) },
     pickTheme (m) { this.colorMode = m; this.$store.dispatch('settings/update', { colorMode: m }) },
+    pickClose (v) { this.closeAction = v; this.$store.dispatch('settings/update', { closeActionMinimize: v === 'tray' }) },
     prev () { if (this.step > 0) this.step-- },
-    next () { this.step < 2 ? this.step++ : this.finish() },
+    next () { this.step < 3 ? this.step++ : this.finish() },
     finish () {
       this.visible = false
       localStorage.setItem(LS_ONBOARD, '1')
