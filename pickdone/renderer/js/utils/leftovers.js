@@ -43,8 +43,10 @@ export async function maybeAskLeftovers (store) {
     const todayStart = +dayjs().startOf('day')
     const snap = list.map(t => ({ id: t.taskId, dayStart: t.dayStart, todoTime: t.todoTime }))
     for (const t of list) {
-      await store.dispatch('todo/updateTodoFields', { taskId: t.taskId, patch: { todoTime: todayStart } })
+      // _deferViews: one view rebuild after the loop instead of one per row (each was an O(n) computeViews)
+      await store.dispatch('todo/updateTodoFields', { taskId: t.taskId, patch: { todoTime: todayStart, _deferViews: true } })
     }
+    store.dispatch('todo/computeViews')
     // Batch move = reversible op: success toast carries group undo (plain success before; consolidated 2026-09-01)
     batchMoveWithUndo(vm, {
       label: tt('statsA.core.movedNToToday', { n: list.length }),

@@ -94,10 +94,12 @@ export async function rescheduleExpired (dispatch, todos, todayTs) {
   for (const t of todos) {
     if (!t.complete && t.dayStart && t.dayStart < todayTs) {
       snap.push({ id: t.taskId, dayStart: t.dayStart, todoTime: t.todoTime })
-      await dispatch('todo/updateTodoFields', { taskId: t.taskId, patch: { dayStart: todayTs, todoTime: todayTs } })
+      // _deferViews: one view rebuild after the loop instead of one per row (each was an O(n) computeViews)
+      await dispatch('todo/updateTodoFields', { taskId: t.taskId, patch: { dayStart: todayTs, todoTime: todayTs, _deferViews: true } })
       n++
     }
   }
+  if (n) await dispatch('todo/computeViews')
   return { n, snap }
 }
 export function parseSubtasks (jsonText) {
