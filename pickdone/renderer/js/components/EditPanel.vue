@@ -116,9 +116,10 @@
         <span class="ep-sub-check" :class="{on: task&&task.complete}">{{ (task&&task.complete) ? '✓' : '' }}</span>
       </div>
 
-      <div class="ep-row ep-remind" @click="toggleRemind">
-        <span class="ep-remind-main" role="button" tabindex="0" :aria-expanded="remindOpen ? 'true' : 'false'"
-              @click.stop="toggleRemind" @keydown.enter.prevent="toggleRemind">
+      <!-- Row-level button semantics (same pattern as the deadline/repeat rows) to avoid a double click target with a nested inner button -->
+      <div class="ep-row ep-remind" role="button" tabindex="0" :aria-expanded="remindOpen ? 'true' : 'false'"
+           @click="toggleRemind" @keydown.enter.prevent="toggleRemind">
+        <span class="ep-remind-main">
           <img class="ep-ico" src="app://app/assets/img/icon-clock.svg">
           <span class="ep-remind-label" :class="{'ep-remind-label--active': e.remindTs>0}">{{e.remindTs? remindMainLabel : $t('statsJ.EditPanel.addReminder')}}</span>
         </span>
