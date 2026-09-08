@@ -4,7 +4,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versioning follows [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.2.2] - 2026-09-08
 
 ### Added
 - Close-button behavior is now a choice: Settings → General exposes "minimize to tray instead of quitting", the first-run wizard gains a matching step, and the first close-to-tray shows a one-shot Windows tray notice explaining where the app went.
