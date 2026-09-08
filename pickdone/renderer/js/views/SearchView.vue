@@ -6,7 +6,7 @@
         <!-- reference: MainNavSearch-isomorphic keyword input -->
         <div class="main-nav-search">
           <div class="main-nav-search__icon"></div>
-          <input ref="inp" v-model="q" spellcheck="false" autocomplete="false"
+          <input ref="inp" v-model="q" spellcheck="false" autocomplete="off"
                  class="main-nav-search__input" type="text" :placeholder="$t('statsC.Search.searchPlaceholder')"/>
           <div v-if="q.trim()!==''" class="main-nav-search__clear close-x close-x--sm" role="button" tabindex="0" :aria-label="$t('statsC.Search.clearAria')" @click="q=''"></div>
         </div>
@@ -28,7 +28,7 @@
         </el-select>
         <el-button type="text" size="small" @click="resetFilter">{{ $t('statsC.Search.resetFilter') }}</el-button>
       </div>
-      <span class="result-count">{{ $t('statsC.Search.resultCount', { n: results.length }) }}</span>
+      <span class="result-count">{{ $t('statsC.Search.resultCount', { n: matched.length }) }}</span>
     </div>
 
     <div class="result-list" :class="{empty:!results.length&&!q}">
@@ -108,7 +108,7 @@ export default {
         .concat(this.$store.state.category.list.filter(c => !c.delete)
           .map(c => ({ value: String(c.categoryId), label: c.categoryName })))
     },
-    results () {
+    matched () {
       const pool = [...this.$store.state.todo.todoList]
       const st = this.settings
       const range = st.searchDateRange
@@ -134,8 +134,10 @@ export default {
         return true
       })
       if (this.q.trim()) list.sort((a, b) => b.todoTime - a.todoTime) // reference: sort((a,b)=>b.todoTime-a.todoTime)
-      return list.slice(0, 200)
-    }
+      return list
+    },
+    // Render list is capped at 200 for DOM cost, but the count reflects the real total
+    results () { return this.matched.slice(0, 200) },
   },
   mounted () { this.$refs.inp && this.$refs.inp.focus() },
   methods: {
@@ -149,5 +151,5 @@ export default {
 
 }
 </script>
-<style>.result-count{color:#9b9b9b;font-size: var(--fs-sm);line-height:28px;white-space:nowrap}
+<style>.result-count{color:var(--text-3);font-size: var(--fs-sm);line-height:28px;white-space:nowrap}
 </style>
