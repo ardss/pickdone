@@ -435,14 +435,14 @@ async function bootstrap () {
         const ok = r && r.ok
         const label = ok && r.label ? i18n.global.t('statsH.main.undone') + '：' + r.label : i18n.global.t(ok ? 'statsH.main.undone' : 'statsH.main.undoEmpty')
         window.appUI.$message[ok ? 'success' : 'info'](label)
-      })
+      }).catch(e => console.error('[todo] undo failed:', e))
     } else if (!inEditor && ((e.ctrlKey && e.key.toLowerCase() === 'y') || (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'z'))) {
       e.preventDefault()
       store.dispatch('todo/redo').then(r => {
         const ok = r && r.ok
         const label = ok && r.label ? i18n.global.t('statsH.main.redone') + '：' + r.label : i18n.global.t(ok ? 'statsH.main.redone' : 'statsH.main.redoEmpty')
         window.appUI.$message[ok ? 'success' : 'info'](label)
-      })
+      }).catch(e => console.error('[todo] redo failed:', e))
     }
   })
 
