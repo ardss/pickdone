@@ -107,23 +107,24 @@ jobs:
           BODY_LEN=$(gh api "repos/$GITHUB_REPOSITORY/releases" -q '[.[] | select(.tag_name=="'"$GITHUB_REF_NAME"'") | select(.draft)][0].body // "" | length')
           echo "draft body length: $BODY_LEN"
           if [ "${BODY_LEN:-0}" -lt 30 ]; then
-            VER="${GITHUB_REF_NAME#v}"
-            node -e "
+            # quoted heredoc → bash 零转义,JS 原样到达(v0.2.2 实锤:内联 node -e 双层转义把正则吃了闭括号,此步从未成功过,v0.2.1 的红同根因)
+            VER="${GITHUB_REF_NAME#v}" WORKSPACE="$GITHUB_WORKSPACE" node <<'NODEEOF'
               const fs = require('fs');
-              // 发布页双语(2026-09-08 用户定稿):中文段在前(CHANGELOG.zh.md)+ 分隔线 + 英文段(CHANGELOG.md);
-              // 中文版缺失时降级纯英文并提示——单语发布不算红,但属于流程违规(见 CHANGELOG.zh.md 头部纪律)
-              const extract = (file, ver) => {
+              // 发布页双语:中文段在前(CHANGELOG.zh.md)+ 分隔线 + 英文段;缺中文降级单语并告警(见 CHANGELOG.zh.md 头部纪律)
+              // 锚定 WORKSPACE:本步骤已 cd dist,相对路径永远读不到根目录的 CHANGELOG
+              const ver = process.env.VER, ws = process.env.WORKSPACE;
+              const extract = (file, v) => {
                 if (!fs.existsSync(file)) return null;
-                const m = fs.readFileSync(file, 'utf8').match(new RegExp('## \\\\[' + ver + '\\\\][^\\\\n]*\\\\n([\\\\s\\\\S]*?)(?=\\\\n## \\\\['));
+                const m = fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n').match(new RegExp('## \\[' + v + '\\][^\\n]*\\n([\\s\\S]*?)(?=\\n## \\[)'));
                 return (m && m[1].trim()) ? m[1].trim() : null;
               };
-              const en = extract('CHANGELOG.md', process.argv[1]);
-              if (!en) { console.error('CHANGELOG has no section for ' + process.argv[1]); process.exit(1); }
-              const zh = extract('../CHANGELOG.zh.md', process.argv[1]);
-              const body = zh ? (zh + '\\n\\n---\\n\\n' + en) : en;
+              const en = extract(ws + '/CHANGELOG.md', ver);
+              if (!en) { console.error('CHANGELOG has no section for ' + ver); process.exit(1); }
+              const zh = extract(ws + '/CHANGELOG.zh.md', ver);
+              const body = zh ? (zh + '\n\n---\n\n' + en) : en;
               console.log(zh ? 'bilingual notes: zh + en' : 'WARNING: no zh section in CHANGELOG.zh.md — publishing en only');
               fs.writeFileSync(process.env.RUNNER_TEMP + '/notes.md', body);
-            " "$VER"
+          NODEEOF
             gh release edit "$GITHUB_REF_NAME" --draft --notes-file "$RUNNER_TEMP/notes.md"
             BODY_LEN=$(gh api "repos/$GITHUB_REPOSITORY/releases" -q '[.[] | select(.tag_name=="'"$GITHUB_REF_NAME"'") | select(.draft)][0].body // "" | length')
             echo "draft body auto-filled from CHANGELOG, length: $BODY_LEN"
