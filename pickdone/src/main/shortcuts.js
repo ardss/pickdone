@@ -29,7 +29,7 @@ function createShortcuts ({ getMainWindow, showMainOrLock, quickAdd, i18n, log }
             const win = getMainWindow()
             if (win && !win.isDestroyed()) {
               win.webContents.send('shortcut-conflict', { msg: i18n.mt('shortcutConflict', { key: keyLabel }) })
-            } else if (log) log('[shortcut] conflict and main window unavailable, notification skipped: ' + keyLabel)
+            } else if (log) log.warn('[shortcut] conflict and main window unavailable, notification skipped: ' + keyLabel)
           }
         }, d)
         retryTimers.add(t)

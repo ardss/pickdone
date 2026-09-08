@@ -592,8 +592,9 @@ const OPS = {
     const fKey = f == null ? null : dayjs(f).format('YYYY-MM-DD')
     const tKey = t == null ? null : dayjs(t).format('YYYY-MM-DD')
     // 2026-09-04 根修:账本迁 tomato_records 行表后聚合一跳完成
+    // succeed=1 only: abandoned pomodoros are not focus time — same filter as the renderer's StatisticsView
     const rows = db.prepare(`SELECT dateKey ds, SUM(focusDuration) focus FROM tomato_records
-      WHERE dateKey BETWEEN ? AND ? GROUP BY dateKey`).all(
+      WHERE succeed = 1 AND dateKey BETWEEN ? AND ? GROUP BY dateKey`).all(
         fKey ? fKey : '0000-00-00', tKey ? tKey : '9999-99-99')
     return rows.map(r => ({ ds: r.ds, focus: r.focus || 0 }))
   },
@@ -650,7 +651,9 @@ const OPS = {
     const o = { tomatoId: String(r.tomatoId) }
     for (const k of OPS._REC_COLS) {
       let v = r[k]
-      if (k === 'endTime' || k === 'focusDuration' || k === 'rest' || k === 'restDuration') v = Math.max(0, Math.round(Number(v) || 0))
+      if (k === 'endTime' || k === 'rest') v = Math.max(0, Math.round(Number(v) || 0))
+      else if (k === 'focusDuration') v = Math.min(600, Math.max(1, Math.round(Number(v) || 0))) // clamp at the DB layer: renderer clamps 720, bumpSnow clamps 600 — this path used to be unbounded
+      else if (k === 'restDuration') v = Math.min(600, Math.max(0, Math.round(Number(v) || 0)))
       else if (k === 'succeed') v = v === false ? 0 : 1
       else if (k === 'manual') v = v ? 1 : 0
       o[k] = v == null ? null : v
