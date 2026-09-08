@@ -393,7 +393,10 @@ function init (userDataPath) {
     { v: 4, fn: d => { const c=d.prepare('PRAGMA table_info(todos)').all().map(x=>x.name); if(!c.includes('predecessors')) d.exec('ALTER TABLE todos ADD COLUMN predecessors TEXT'); return true } },
   ]
   let ver = getVer()
-  for (const m of MIGRATIONS) { if (m.v > ver) { if (m.fn(db) === false) continue; ver = m.v } }
+  // Failed migration must abort the loop (not `continue`): advancing past a failed migration would stamp the
+  // higher version and the failed migration would never be retried — breaking the retry contract the v3
+  // migration's error comment promises. Stop here; version stays put and the next launch re-runs from it.
+  for (const m of MIGRATIONS) { if (m.v > ver) { if (m.fn(db) === false) break; ver = m.v } }
   if (ver !== getVer()) setVer(ver)
   // SCHEMA/MIGRATIONS dual-manifest decoupling backstop: if a future SCHEMA column addition is forgotten in MIGRATIONS, CREATE TABLE IF NOT EXISTS is
   // a no-op for existing tables and the upsert prepare dies at startup referencing the missing column. Here, probe and add columns uniformly via PRAGMA

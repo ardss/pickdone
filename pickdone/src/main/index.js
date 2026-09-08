@@ -479,7 +479,7 @@ if (!app.requestSingleInstanceLock()) { app.quit() } else {
     try {
       const live = new Set((dbm.call('getAllCategories') || []).map(c => String(c.id || c.categoryId)))
       const liveRids = new Set((dbm.call('getAll', { deleted: null }) || []).map(t => t.repeatId).filter(Boolean))
-      for (const k of dbm.call('listMeta') || []) {
+      for (const k of dbm.call('listMetaKeys') || []) {
         let m = k.match(/^repeatRule:(.+)$/)
         if (m && !liveRids.has(m[1])) { dbm.call('deleteMeta', k); continue }
         m = k.match(/^(?:projectDeadline|projectMilestones):(.+)$/)
