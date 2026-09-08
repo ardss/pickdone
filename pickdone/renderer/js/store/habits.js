@@ -99,8 +99,10 @@ export default {
       try { localStorage.setItem(LS_KEY, JSON.stringify(blob)) } catch {}
     },
     addHabit (s, { name, frequency }) {
+      // Millisecond-precision Date.now() alone can collide (rapid double-add), breaking delete/check-in by id
+      const id = Date.now() + '-' + Math.random().toString(36).slice(2, 7)
       s.habits.push({
-        id: Date.now(),
+        id,
         name,
         color: PALETTE[s.habits.length % PALETTE.length],
         createdAt: Date.now(),
@@ -124,7 +126,8 @@ export default {
       persist(s)
     },
     addMoment (s, { name, date, kind }) {
-      s.moments.push({ id: Date.now(), name, date, kind })
+      // Same collision guard as addHabit
+      s.moments.push({ id: Date.now() + '-' + Math.random().toString(36).slice(2, 7), name, date, kind })
       persist(s)
     },
     delMoment (s, id) {
