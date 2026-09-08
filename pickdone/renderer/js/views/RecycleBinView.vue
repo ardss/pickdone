@@ -25,7 +25,7 @@
             <span class="td-check rc-check" :class="{on:t.complete}"
                   :style="t.complete ? { background: 'var(--brand)', borderColor: 'var(--brand)' } : {}"
                   role="checkbox" :aria-checked="t.complete ? 'true' : 'false'" :aria-label="$t('statsC.RecycleBin.ariaMarkComplete')"
-                  tabindex="0" @click.stop="toggleComplete(t)" @keydown.enter.prevent.stop="toggleComplete(t)">
+                  tabindex="0" @click.stop="toggleComplete(t)" @keydown.enter.prevent.stop="toggleComplete(t)" @keydown.space.prevent.stop="toggleComplete(t)">
               <svg v-if="t.complete" class="td-check-svg" viewBox="0 0 12 12" aria-hidden="true">
                 <polyline points="2,6.2 5,9 10,3" fill="none" stroke="#fff" stroke-width="1.8"
                           stroke-linecap="round" stroke-linejoin="round" pathLength="1"/>

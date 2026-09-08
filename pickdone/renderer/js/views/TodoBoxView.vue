@@ -53,11 +53,11 @@
         <div v-for="t in list" :key="t.taskId" class="todo-box-list-item"
              :class="{ 'todo-box-list-item--selected': selectedId === t.taskId, 'todo-box-list-item--checked': batchMode && checkedIds.includes(t.taskId) }"
              @click="batchMode ? toggleCheck(t) : openEdit(t)" @contextmenu.prevent="ctxMenu(t, $event)">
-          <span v-if="batchMode" class="tb-batch-check" :class="{ on: checkedIds.includes(t.taskId) }" role="checkbox"
-                :aria-checked="checkedIds.includes(t.taskId) ? 'true' : 'false'" :aria-label="$t('statsC.TodoBox.ariaCheck')" @click.stop="toggleCheck(t)">✓</span>
+          <span v-if="batchMode" class="tb-batch-check" :class="{ on: checkedIds.includes(t.taskId) }" role="checkbox" tabindex="0"
+                :aria-checked="checkedIds.includes(t.taskId) ? 'true' : 'false'" :aria-label="$t('statsC.TodoBox.ariaCheck')" @click.stop="toggleCheck(t)" @keydown.enter.prevent.stop="toggleCheck(t)" @keydown.space.prevent.stop="toggleCheck(t)">✓</span>
           <span class="todo-box-list-item__category-dot tb-dot-check" :style="{ color: dotColor(t) }" role="checkbox"
                 :aria-checked="t.complete ? 'true' : 'false'" :aria-label="$t('statsC.TodoBox.ariaComplete')" :title="$t('statsC.TodoBox.titleComplete', { name: t.taskContent })" tabindex="0"
-                @click.stop="completeItem(t)" @keydown.enter.prevent.stop="completeItem(t)">
+                @click.stop="completeItem(t)" @keydown.enter.prevent.stop="completeItem(t)" @keydown.space.prevent.stop="completeItem(t)">
             <svg viewBox="0 0 512 512"><path fill="currentColor" d="M256 8C119 8 8 119 8 256s111 248 248 248 248-111 248-248S393 8 256 8zm0 448c-110.5 0-200-89.5-200-200S145.5 56 256 56s200 89.5 200 200-89.5 200-200 200z"/></svg>
           </span>
           <div class="todo-box-list-item__container">
