@@ -1,6 +1,6 @@
 /**
  * 渲染端全局契约(window 注入面 + 关键数据形状)——SSOT 是 src/main:
- *  - DbCallOp 联合类型来自 src/main/index.js ALLOWED_RENDERER_OPS(30 op,与 cli/check-ipc-op-coverage 同源;
+ *  - DbCallOp 联合类型来自 src/main/index.js ALLOWED_RENDERER_OPS(31 op,与 cli/check-ipc-op-coverage 同源;
  *    新增 op 时同步更新本文件,否则渲染端调用处 vue-tsc 报错=白名单变更被类型层强制可见)
  *  - TodoAPI 通道面为 preload 实际暴露的事件/方法(显式枚举,禁止再加索引签名逃生口)
  *  - TomatoRecord: 番茄账本行表(src/main/db.js tomato_records)唯一事实源形状
@@ -40,7 +40,7 @@ interface TomatoRecord {
   [key: string]: unknown
 }
 
-type DbCallOp = 'getById' | 'getAll' | 'queryTodos' | 'getMeta' | 'upsert' | 'upsertMany' | 'hardDelete' | 'hardDeleteMany' | 'setMeta' | 'getAllCategories' | 'upsertCategory' | 'filterList' | 'filterUpsert' | 'filterDelete' | 'countAll' | 'countSeedTodos' | 'bumpSnow' | 'planAll' | 'planAddMany' | 'planUpdateChip' | 'planRemoveIds' | 'planMoveTask' | 'planDeleteTask' | 'planDeleteTaskDay' | 'planPrune' | 'tomatoAll' | 'tomatoAppendMany' | 'tomatoUpdateById' | 'tomatoRemoveByIds' | 'tomatoMigrateFromMeta'
+type DbCallOp = 'getById' | 'getAll' | 'queryTodos' | 'getMeta' | 'deleteMeta' | 'upsert' | 'upsertMany' | 'hardDelete' | 'hardDeleteMany' | 'setMeta' | 'getAllCategories' | 'upsertCategory' | 'filterList' | 'filterUpsert' | 'filterDelete' | 'countAll' | 'countSeedTodos' | 'bumpSnow' | 'planAll' | 'planAddMany' | 'planUpdateChip' | 'planRemoveIds' | 'planMoveTask' | 'planDeleteTask' | 'planDeleteTaskDay' | 'planPrune' | 'tomatoAll' | 'tomatoAppendMany' | 'tomatoUpdateById' | 'tomatoRemoveByIds' | 'tomatoMigrateFromMeta'
 
 interface TodoAPI {
   /** DB 白名单调用面:渲染端所有持久化读写必须经此(db.call);op 联合与主进程白名单同源 */
