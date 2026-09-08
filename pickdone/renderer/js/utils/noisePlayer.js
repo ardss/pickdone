@@ -8,6 +8,7 @@ import { noiseUrl } from './mediaRegistry.js'
 const decoded = new Map() // key → AudioBuffer (after seamless processing)
 let current = null // { key, src, gain }
 let ctx = null
+let startToken = 0 // Monotonic token guarding concurrent startNoise calls across awaits
 
 const clamp01 = v => Math.min(1, Math.max(0, Number(v) || 0))
 
@@ -59,10 +60,14 @@ async function getBuffer (key) {
 export async function startNoise (key, volume = .55) {
   if (current && current.key === key) { current.gain.gain.value = clamp01(volume); return } // Same sound: sync volume only, don't replay
   stopNoise()
+  // Bump the token: a concurrent call that was awaiting before us becomes stale and must not start
+  const token = ++startToken
   let buf
   try { buf = await getBuffer(key) } catch (e) { console.warn('[noise] load failed:', key, e && e.message); return }
   if (!buf) return
+  if (token !== startToken || current) return // A newer call (or one that finished while we awaited) owns playback
   const c = await audioCtx()
+  if (token !== startToken || current) return // Re-check after the second await
   const src = c.createBufferSource()
   src.buffer = buf
   src.loop = true

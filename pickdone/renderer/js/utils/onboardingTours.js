@@ -127,6 +127,9 @@ export function runJourney (force = false) {
   const inp = document.querySelector('.qa-input')
   if (!inp) return false // The journey can only run on the Today page (where the quick-add box exists)
   markSeen('journey')
+  let drv = null
+  let watch = null
+  const clearWatch = () => { if (watch) { clearInterval(watch); watch = null } }
   // Preset sample task (default schedule): created via the real input chain so the drag/tomato steps in focus have a real target; auto-retried once if it doesn't land
   const seedOnce = () => {
     inp.value = J_SEED_TEXT()
@@ -146,9 +149,6 @@ export function runJourney (force = false) {
     }, 2400)
     return true // stageCreate is relayed by the poll above
   }
-  let drv = null
-  let watch = null
-  const clearWatch = () => { if (watch) { clearInterval(watch); watch = null } }
   let ending = false // × close = exit the whole journey (no relaying to the next stage); next-step/auto-advance is the only way forward
   const singleStep = (step, onDone, { doneLabel = false } = {}) => {
     clearWatch()
