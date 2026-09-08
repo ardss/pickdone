@@ -13,6 +13,7 @@ const fs = require('fs')
 const log = require('electron-log')
 
 const dbm = require('./db')
+const fixUtil = require('./fix-util')
 const { handleAppProtocol } = require('./protocol')
 // The .cjs extension must be spelled out: require's resolution algorithm does not include .cjs (once threw Cannot find module at startup)
 const dbRecovery = require('./dbRecovery.cjs')
@@ -85,7 +86,7 @@ function showMainOrLock () {
 const { createSecurityLock } = require('./security-lock')
 const { createShortcuts } = require('./shortcuts')
 const { createExporter } = require('./export-xlsx')
-const securityLock = createSecurityLock({ getMainWindow, showMainOrLock, readConfig, i18n: i18nM, log })
+const securityLock = createSecurityLock({ getMainWindow, showMainOrLock, readConfig, writeConfig, i18n: i18nM, log })
 const { isLocked, lockAppNow, unlockAppNow, verifyLockPassword, isLockWindow } = securityLock
 quickAdd.setLockProbe(isLocked) // the global quick-add shortcut does not summon while the screen is locked (summoning = input silently lost)
 const shortcuts = createShortcuts({ getMainWindow, showMainOrLock, quickAdd, i18n: i18nM, log })
@@ -296,8 +297,26 @@ function createMainWindow () {
     else log.info('[Renderer]', msg)
   })
   // Renderer/child process crashes land in the log (electron-log is main-process-only; the crash scene must be preserved for post-mortem attribution)
+  // + self-heal (2026-09-09): a non-clean renderer crash used to leave a dead/blank main window forever.
+  // Reload up to 3 times (counter resets on each successful did-finish-load); beyond the cap, relaunch the app —
+  // a relaunched instance is strictly better than a zombie window the user must kill by hand.
+  let crashReloadCount = 0
+  win.webContents.on('did-finish-load', () => { crashReloadCount = 0 })
   win.webContents.on('render-process-gone', (_e, details) => {
     log.error('[Crash] render-process-gone:', details && details.reason, 'exitCode=', details && details.exitCode)
+    if (quitting) return // a quit in progress kills renderers as a side effect; do not fight it
+    const reason = details && details.reason
+    if (!reason || reason === 'clean-exit') return
+    if (crashReloadCount < 3) {
+      crashReloadCount++
+      log.warn('[Crash] 渲染进程崩溃,自动重载', crashReloadCount, '/3')
+      setTimeout(() => { const w = getMainWindow(); if (w) { try { w.webContents.reload() } catch (e2) { log.warn('[Crash] reload failed', e2) } } }, 300)
+    } else {
+      log.error('[Crash] 重载超限,relaunch 应用')
+      try { shortcuts.unregisterAll() } catch {}
+      app.relaunch()
+      app.exit(1)
+    }
   })
   win.webContents.on('child-process-gone', (_e, details) => {
     log.error('[Crash] child-process-gone:', details && details.type, details && details.reason, 'exitCode=', details && details.exitCode)
@@ -424,6 +443,13 @@ if (!app.requestSingleInstanceLock()) { app.quit() } else {
         }
       }
     } catch (e0) { log.warn('[Init] plain-bak 预检失败', e0) }
+    // 上次「重置数据」时被占用而改名挂起的文件(pending-delete-<ts>-*),本次启动句柄已释放,统一清扫
+    try {
+      const ud0s = app.getPath('userData')
+      for (const f of fs.readdirSync(ud0s)) {
+        if (f.startsWith('pending-delete-')) { try { fs.rmSync(path.join(ud0s, f), { force: true, recursive: true }) } catch {} }
+      }
+    } catch (e0s) { log.warn('[Init] pending-delete 清扫失败', e0s) }
     try {
       dbm.init(app.getPath('userData'))
     } catch (e) {
@@ -452,9 +478,30 @@ if (!app.requestSingleInstanceLock()) { app.quit() } else {
       else if (choice === 0) { shell.openPath(ud); app.quit() }
       else if (choice === 1 && recoveredFrom) { app.quit() }
       else if (choice === 1) {
-        // plain-bak 一并删除:否则下次启动的迁移中断预检会把用户明确放弃的旧库整库复活(2026-09-04 二轮深审 P1)
+        // Reset-data-and-relaunch. Root cause fixed (2026-09-09): unlink on an open SQLite file always
+        // fails with EPERM on Windows and the blanket `catch {}` swallowed it — the user was told the
+        // data was destroyed while todos.db survived intact. Close our handle first, then delete;
+        // files that still cannot be unlinked are renamed aside (pending-delete-<ts>-*, swept at next
+        // startup), and any residual failure is reported to the user instead of silently "succeeding".
+        try { dbm.close() } catch {}
+        const ts = Date.now()
+        const failures = []
         for (const f of ['todos.db', 'todos.db-wal', 'todos.db-shm', 'db.key', 'todos.db.plain-bak']) {
-          try { fs.unlinkSync(path.join(ud, f)) } catch {}
+          const p = path.join(ud, f)
+          try {
+            fs.unlinkSync(p)
+          } catch (err) {
+            try {
+              fs.renameSync(p, path.join(ud, fixUtil.pendingDeleteName(f, ts)))
+              log.warn('[Reset] 文件被占用无法直接删除,已改名挂起(下次启动清理):', f, err.message)
+            } catch (err2) {
+              failures.push(f + ': ' + (err2 && err2.message || err2))
+            }
+          }
+        }
+        if (failures.length) {
+          // Never claim success when files survived: hand the list back to the dialog flow
+          dialog.showErrorBox(i18nM.mt('appName'), i18nM.mt('dbFailMessage') + '\n\n' + failures.join('\n'))
         }
         relaunchClean()
       } else { app.quit() }
@@ -528,17 +575,34 @@ function proxyDb () {
 
 function dbApi () { return { queryTodos: p => dbm.call('queryTodos', p), ...proxyDb() } }
 
+let quitting = false // re-entrancy guard for the will-quit flush window (see below)
 app.on('before-quit', () => {
   quitByUser = true
   // Before quitting, broadcast the renderer flush of debounced mirrors (the last write within dbMirror's 2s / disaster-snapshot 800ms window would be silently lost)
   try { if (win && !win.isDestroyed()) win.webContents.send('app-quitting-flush') } catch {}
 })
 app.on('window-all-closed', e => { /* stay resident in the tray, do not quit */ })
-app.on('will-quit', () => {
-  shortcuts.unregisterAll()
-  // Persist the reminder dedup ledger synchronously (quitting inside the 60s debounce window → reminders resent after restart) + close the db handle (avoids losing one checkpoint and late handle release on Windows)
-  try { scheduler.flushFiredNow() } catch {}
-  try { if (dbm && dbm.close) dbm.close() } catch {}
+app.on('will-quit', (event) => {
+  /* P0 quit-flush race (2026-09-09): before-quit only fire-and-forgets 'app-quitting-flush' while the
+     old will-quit closed the DB immediately — renderer invokes still inside the dbMirror 2s debounce
+     (pending edits / pomodoro ledger) arrived after dbm.close() and were silently dropped.
+     Fix: hold the quit open for a bounded 500ms flush window, THEN flush scheduler state and close the DB.
+     Re-entrancy: preventDefault cancels this quit; the ONLY exit is app.exit(0) inside the timer (app.exit
+     does not re-emit will-quit), and a second will-quit (e.g. another app.quit() during the window) is
+     ignored via the `quitting` guard — no loop, single clean exit.
+     Verification path: tray → quit and window-X → quit both run before-quit → will-quit(preventDefault) →
+     500ms window → flush+close+app.exit(0); process must exit exactly once with no lingering tray icon
+     (tests/main-fixes-*.test.mjs documents the pure helpers; the event wiring is exercised in the e2e smoke quit step). */
+  if (quitting) { event.preventDefault(); return }
+  quitting = true
+  event.preventDefault()
+  setTimeout(() => {
+    try { shortcuts.unregisterAll() } catch {}
+    // Persist the reminder dedup ledger synchronously (quitting inside the 60s debounce window → reminders resent after restart) + close the db handle (avoids losing one checkpoint and late handle release on Windows)
+    try { scheduler.flushFiredNow() } catch {}
+    try { if (dbm && dbm.close) dbm.close() } catch {}
+    app.exit(0)
+  }, 500)
 })
 
 /* ================= Full IPC registration (channel names aligned with the project baseline) ================= */
@@ -624,14 +688,19 @@ function registerIpc () {
       if (isLocked() && !isLockWindow(e.sender)) {
         // 浮窗到点落番茄账是合法后台行为:锁屏期间放行浮窗自身的番茄追加类写(只挡读/危险写,威胁模型针对绕锁读写)
         let floatLedger = tomatoFloat.isSelfSender(e.sender) && /^(tomatoAppendMany|tomatoUpdateById|bumpSnow)$/.test(op) // bumpSnow=挂任务送专注积分,同属到点落账
-        // tomatoUpdateById 收窄:浮窗锁屏期只许改"今天"的账本行,历史行一律拒绝(否则被陷浮窗可静默篡改任意历史账,二轮深审 P1-3)
-        if (floatLedger && op === 'tomatoUpdateById') {
+        if (floatLedger && (op === 'tomatoUpdateById' || op === 'tomatoAppendMany')) {
           // 本地时区当天(dateKey 按本地 dayjs 导出,UTC 串会在 0-8 点误判跨天)
-          const n0 = new Date()
-          const todayKey = n0.getFullYear() + '-' + String(n0.getMonth() + 1).padStart(2, '0') + '-' + String(n0.getDate()).padStart(2, '0')
-          // dateKey 由 endTime 强制导出(db 层),校验目标行当天即够;查不到的行让 db 层自己返回 false
-          const cur = dbm.call('tomatoAll', {}).find(r => r && String(r.tomatoId) === String((params || {}).tomatoId))
-          floatLedger = !!cur && cur.dateKey === todayKey
+          const todayKey = fixUtil.localDayKey(Date.now())
+          if (op === 'tomatoUpdateById') {
+            // dateKey 由 endTime 强制导出(db 层),校验目标行当天即够;查不到的行让 db 层自己返回 false
+            const cur = dbm.call('tomatoAll', {}).find(r => r && String(r.tomatoId) === String((params || {}).tomatoId))
+            floatLedger = !!cur && cur.dateKey === todayKey
+          } else {
+            // tomatoAppendMany 同款收窄(2026-09-09 P2):此前批量追加无时间约束,被陷浮窗锁屏期可
+            // 伪造任意历史日期的账本行;现要求所有行的 endTime 都落在本地当天
+            const rows = Array.isArray(params) ? params : [params]
+            floatLedger = rows.every(r => r && r.endTime && fixUtil.localDayKey(r.endTime) === todayKey)
+          }
         }
         if (!floatLedger) throw new Error('app is locked')
       }
@@ -855,23 +924,35 @@ function registerIpc () {
         return { ok: true, file: name }
       } catch (err) { return { ok: false, error: String(err && err.message || err) } }
     },
+    // 备份读取(2026-09-09 P2):此前三层 catch 全静默——「目录不存在(正常空态)」与「读取失败(权限/IO)」
+    // 同样返回 ''/[],设置页永远不知道读不了。改为结构化结果:ok/missing/error,渲染端对应展示错误态
     'read-auto-backup': (e, backupDir, fileName) => {
       if (!win || e.sender !== win.webContents) throw new Error('main-window-only')
       if (isLocked()) throw new Error('app is locked')
+      const name = path.basename(String(fileName || ''))
+      if (!/^(auto|evt)-.+.json$/.test(name)) return { ok: false, error: 'invalid backup file name' } // whitelisted naming, prevents path traversal
+      const dir = resolveBackupDir(backupDir)
       try {
-        const dir = resolveBackupDir(backupDir)
-        const name = path.basename(String(fileName || ''))
-        if (!/^(auto|evt)-.+.json$/.test(name)) return '' // whitelisted naming, prevents path traversal
-        return fs.readFileSync(path.join(dir, name), 'utf8')
-      } catch { return '' }
+        return { ok: true, text: fs.readFileSync(path.join(dir, name), 'utf8') }
+      } catch (err) {
+        return fixUtil.classifyBackupError(err) === 'missing'
+          ? { ok: false, error: 'backup file not found' }
+          : { ok: false, error: String(err && err.message || err) }
+      }
     },
     'list-auto-backups': (e, backupDir) => {
       if (!win || e.sender !== win.webContents) throw new Error('main-window-only')
       if (isLocked()) throw new Error('app is locked')
+      const dir = resolveBackupDir(backupDir)
+      let names
       try {
-        const dir = resolveBackupDir(backupDir)
-        return fs.readdirSync(dir).filter(f => /^(auto|evt)-/.test(f)).sort().reverse()
-      } catch { return [] }
+        names = fs.readdirSync(dir)
+      } catch (err) {
+        // 目录不存在 = 正常空态(用户尚未选过备份目录),不算错误;其余读取失败必须上报
+        if (fixUtil.classifyBackupError(err) === 'missing') return { ok: true, missing: true, files: [] }
+        return { ok: false, files: [], error: String(err && err.message || err) }
+      }
+      return { ok: true, files: names.filter(f => /^(auto|evt)-/.test(f)).sort().reverse() }
     },
     'read-critical-state-backup': () => {
       if (isLocked()) throw new Error('app is locked')
@@ -888,6 +969,9 @@ function registerIpc () {
       if (r.canceled || !r.filePaths[0]) return null
       const file = r.filePaths[0]
       lastPickedImportPath = file // import:run only allows executing the most recent dialog-picked path (prevents the renderer passing arbitrary paths to read files)
+      // 同步 readFileSync 无上限曾把整个主进程(全部窗口/定时器)卡死在大 CSV 上:先 statSync 限 20MB 超限报错(2026-09-09 P2)
+      const tooBig = fixUtil.checkImportFileSize(fs.statSync(file).size)
+      if (tooBig) throw new Error(tooBig)
       const text = fs.readFileSync(file, 'utf8')
       const format = importer.detectFormat(text)
       const items = importer.rowsToItems(text, format)
@@ -897,7 +981,12 @@ function registerIpc () {
       const f = String(file || '')
       // Arbitrary-path read primitive sealed off: only the path most recently returned by the main-process dialog is accepted
       if (!lastPickedImportPath || f !== lastPickedImportPath) throw new Error('import: path not granted by picker')
-      return require('../../cli/import.js').importFile(f, { dryRun: false })
+      const r = require('../../cli/import.js').importFile(f, { dryRun: false })
+      // 与 todo-db:call 写路径对齐(2026-09-09 P2):导入落库后必须刷新调度器并广播,否则应用内导入后
+      // 主窗口列表陈旧、已导入的提醒全部静默丢失
+      try { scheduler.reloadAll(dbApi()) } catch (err) { log.warn('[Import] reloadAll failed', err) }
+      broadcastTodosChanged('import', e)
+      return r
     },
 
     // --- Global quick-add mini window ---
@@ -994,7 +1083,9 @@ function registerIpc () {
     // Custom white noise: copied into userData/files right after picking (reachable via the local:// protocol with Range support, so it can actually play during focus;
     // the old version returned only an absolute path, which the app:// page could not load → picking was equivalent to not picking). Fixed-name overwrite; the directory keeps only the latest file.
     'select-user-white-noise-audio-file': async () => {
-      const r = await dialog.showOpenDialog(win, { properties: ['openFile'], filters: [{ name: i18nM.mt('pickAudio'), extensions: ['mp3', 'wav', 'ogg'] }] })
+      // win 模块级引用在主窗销毁重建后可能是 null/已销毁:dialog 收到死引用会抛,改 getMainWindow 守卫,
+      // 无窗时传 undefined(dialog 以无父窗模式打开,2026-09-09 P2)
+      const r = await dialog.showOpenDialog(getMainWindow() || undefined, { properties: ['openFile'], filters: [{ name: i18nM.mt('pickAudio'), extensions: ['mp3', 'wav', 'ogg'] }] })
       if (r.canceled || !r.filePaths[0]) return null
       const src = r.filePaths[0]
       const ext = path.extname(src).toLowerCase()

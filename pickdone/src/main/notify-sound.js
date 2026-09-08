@@ -19,6 +19,10 @@ function sound (file) {
     const { spawn } = require('child_process')
     if (process.platform === 'win32') {
       spawn('powershell.exe', ['-c', '[console]::beep(880,180)'], { detached: true, stdio: 'ignore' }).unref()
+    } else {
+      // 非 win32 兜底(2026-09-09 P2):此前 macOS/Linux 上无存活主窗时提醒完全无声;
+      // Electron shell.beep() 是同步系统蜂鸣,无窗/无文件场景下保证提醒可闻
+      try { require('electron').shell.beep() } catch (e) { /* no shell available */ }
     }
   } catch (e) { /* ignore */ }
 }

@@ -4,6 +4,25 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versioning follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- Undo/redo (Ctrl+Z/Ctrl+Y) now replays schedule chips correctly: undoing a soft delete restores the pre-delete chip snapshot, undoing a create clears/snapshots its chips, and undoing a reschedule migrates chips back with the task (previously snapshot replay bypassed the chip-sync chain, leaving chips stranded on the wrong day); a corrupt history snapshot no longer vanishes into an unhandled rejection (parse-before-pop, shortcut handler catches failures).
+- Critical-state backup: float/quick-add windows no longer spam unhandled rejections on every pomodoro completion (backup is main-window-only by design and now guarded); manual sync with nothing to write no longer skips the backup.
+- Clearing demo data by id-prefix no longer wipes the in-memory ledger when the DB reload fails.
+- Quit-time data-loss race: quitting closed the database immediately after asking the renderer to flush its debounced writes, so edits/pomodoro ledger entries still inside the 2s debounce window were silently dropped. Quit now holds a bounded 500ms flush window before persisting and closing.
+- "Reset data and relaunch" silently failed on Windows: deleting the open SQLite file always hit EPERM which was swallowed, so the data survived while the app reported a reset. The handle is now closed first, undeletable files are renamed aside for next-start cleanup, and residual failures are reported instead of hidden.
+- Renderer crashes no longer leave a dead main window: the window reloads automatically (up to 3 times) after a non-clean render-process-gone, and relaunches the app beyond that; the pomodoro float window destroys-and-recreates on crash too.
+- Auto-backup list/read failures are no longer silent: the settings dialog now distinguishes "no backup directory yet" from a real read failure and shows an error hint.
+- A failed security-lock window load used to lock the app permanently (blank lock window with `isLocked()` always true); it now falls back to disabling the lock and forcing a password reset.
+- Purging demo data now also cascades its plan-chip rows (previously left ghost chips on the timeline).
+- Pomodoro ledger appends from the float window during lock screen are restricted to records ending today, matching the update path (no forging historical ledger rows).
+- CSV import preview now rejects files over 20MB before a synchronous read could freeze the whole app; running an in-app import now refreshes reminders and the task list immediately.
+- Attachment uploads validate base64 strictly (charset, length, decode roundtrip) instead of silently decoding corrupted payloads.
+- Reminder sound no longer stays silent on macOS/Linux when no live window exists (system beep fallback).
+- The white-noise file picker survives a destroyed/recreated main window instead of throwing on a stale reference.
+- CLI/browser-debug fixes: `pickdone done` now honors the `isCompleteWithSubtasks` setting (and `undo` unchecks subtasks symmetrically, so the app no longer instantly re-completes an undone parent); repeat generation re-derives each instance's reminder time onto its own day instead of copying the template timestamp (reminders no longer fire on the wrong date), defaults its generation cap to the `maxRepeat` setting (was a hardcoded 24), and no longer collapses an absent `--count` to a single occurrence; recycle-bin purge now also deletes the purged tasks' attachment files from `files/`; focus-record fix rejects durations over the DB's 600-minute clamp with a usage error instead of reporting 720 while storing 600; project focus stats exclude abandoned pomodoros; the browser debug shim re-derives the ledger `dateKey` from `endTime` like the desktop DB; the renderer `DbCallOp` type now includes `deleteMeta`.
+
 ## [0.2.2] - 2026-09-08
 
 ### Added

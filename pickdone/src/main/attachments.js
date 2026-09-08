@@ -18,7 +18,14 @@ async function saveAttachment ({ taskId, name, dataBase64 }) {
   const cleanName = String(name || '').replace(/[. ]+$/, '')
   const ext = path.extname(cleanName).slice(1).toLowerCase()
   if (!ext || !ALLOWED_EXT.has(ext)) throw new Error('attachment: extension not allowed')
-  const raw = Buffer.from(dataBase64 || '', 'base64')
+  // Strict base64 validation (2026-09-09 P2): Buffer.from(b64) is lenient — it decodes whatever prefix is
+  // valid and never throws, so corrupted/truncated payloads used to land on disk silently. Require the
+  // canonical charset/length AND a decode→re-encode roundtrip match before accepting.
+  const { strictBase64 } = require('./fix-util')
+  const stripped = strictBase64(dataBase64)
+  if (!stripped) throw new Error('attachment: invalid base64 payload')
+  const raw = Buffer.from(stripped, 'base64')
+  if (raw.toString('base64') !== stripped) throw new Error('attachment: base64 roundtrip mismatch')
   if (!raw.length) throw new Error('attachment: empty')
   if (raw.length > MAX_BYTES) throw new Error('attachment: too large (max 50MB)')
   const safe = `${String(taskId).replace(/[\\/:*?"<>|]/g, '_').replace(/\.\./g, '_')}_${Date.now()}_${cleanName.replace(/[\\/:*?"<>|]/g, '_')}`

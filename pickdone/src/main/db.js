@@ -336,6 +336,10 @@ function init (userDataPath) {
   if (hadKeyFile) db.pragma(`key='${key}'`)
   // Protection: explicit read probe (journal_mode does not necessarily throw on a wrong key — actual decryption happens on the first page read)
   try { db.prepare('SELECT count(*) FROM sqlite_master').get() } catch (e) {
+    // Close the half-open handle before surfacing the error: the reset-data flow closes+unlinks the DB files
+    // and an open handle made unlink fail with EPERM on Windows, silently skipping the data destruction (2026-09-09)
+    try { db.close() } catch {}
+    db = null
     if (!hadKeyFile) throw new Error(i18nM.mt('dbEncNoKey'))
     throw new Error(i18nM.mt('dbEncMismatch', { msg: e.message }))
   }
@@ -535,7 +539,14 @@ const OPS = {
       db.prepare('DELETE FROM todos WHERE deleted = 1').run()
     }); tr(); return true
   },
-  purgeSeedTodos: () => { db.prepare("DELETE FROM todos WHERE substr(id, 1, 5) = 'seed_'").run(); return true },
+  // Cascade plan_chips too (same contract as hardDelete/purgeRecycleBin): purging demo rows without removing
+  // their chips left ghost chips on the timeline with the task gone (2026-09-09 P2, transactional like its siblings)
+  purgeSeedTodos: () => {
+    const tr = db.transaction(() => {
+      db.prepare("DELETE FROM plan_chips WHERE taskId IN (SELECT id FROM todos WHERE substr(id, 1, 5) = 'seed_')").run()
+      db.prepare("DELETE FROM todos WHERE substr(id, 1, 5) = 'seed_'").run()
+    }); tr(); return true
+  },
   countSeedTodos: () => db.prepare("SELECT COUNT(*) n FROM todos WHERE substr(id, 1, 5) = 'seed_'").get().n,
   upsertCategory: (c) => {
     db.prepare(`INSERT INTO categories (id,userId,name,color,createdAt,sort,isFolder,parentId,deleted)

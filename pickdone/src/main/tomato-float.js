@@ -153,6 +153,18 @@ function create () {
       }, 400 * loadRetries)
     }
   })
+  // 渲染进程崩溃自愈(2026-09-09,与主窗 render-process-gone 同类):did-fail-load 只覆盖加载失败,
+  // 渲染进程崩溃后浮窗从此白屏/无响应且永不恢复。崩溃时销毁重建;若崩溃前可见(番茄进行中)则延迟重开。
+  win.webContents.on('render-process-gone', (_e, details) => {
+    const reason = details && details.reason
+    log.error('[TomatoFloat] render-process-gone:', reason, 'exitCode=', details && details.exitCode)
+    if (!reason || reason === 'clean-exit') return
+    const wasVisible = !!(win && !win.isDestroyed() && win.isVisible())
+    stopDrag()
+    stopHitPoll()
+    try { if (win && !win.isDestroyed()) win.destroy() } catch (e) { /* already gone */ } // 'closed' 会复位 win=null
+    if (wasVisible) setTimeout(() => { try { module.exports.show() } catch (e) { log.warn('[TomatoFloat] 崩溃重建失败', e) } }, 500)
+  })
   win.webContents.on('will-navigate', (e, url) => {
     if (!String(url).includes('__tomato-float')) e.preventDefault()
   })

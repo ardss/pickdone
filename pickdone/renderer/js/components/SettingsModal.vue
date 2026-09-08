@@ -801,7 +801,10 @@ export default {
     },
     async loadAutoBackupList () {
       try {
-        this.autoBackupFiles = (await window.todoAPI.listAutoBackups(this.st.backupDir || '')) || []
+        const r = await window.todoAPI.listAutoBackups(this.st.backupDir || '')
+        this.autoBackupFiles = (r && r.files) || []
+        // 主进程区分了「目录不存在(正常空态)」与「读取失败」:失败时不再静默清空,一行提示告知用户
+        if (r && r.ok === false) this.$message.error(this.$t('statsH.SettingsModal.backupFailed') + ': ' + (r.error || ''))
         if (!this.autoBackupPick && this.autoBackupFiles.length) this.autoBackupPick = this.autoBackupFiles[0]
       } catch { this.autoBackupFiles = [] }
     },
@@ -810,9 +813,10 @@ export default {
       await this.confirmDanger(this.$t('statsE.SettingsModal.autoRestoreConfirm', { f: this.autoBackupPick }), this.$t('statsH.SettingsModal.restoreTitle'), 'warning')
         .then(async () => {
           try {
-            const txt = await window.todoAPI.readAutoBackup(this.st.backupDir || '', this.autoBackupPick)
-            if (!txt) return this.$message.error(this.$t('statsE.SettingsModal.backupFileNotFoundMsg'))
-            const d = JSON.parse(txt); const b = d.backup || {}
+            const r = await window.todoAPI.readAutoBackup(this.st.backupDir || '', this.autoBackupPick)
+            // read-auto-backup 现在返回 { ok, text?, error? }:读取失败显式报错,不再与「文件不存在」混为空串
+            if (!r || !r.ok) return this.$message.error(this.$t('statsE.SettingsModal.backupFileNotFoundMsg') + ((r && r.error) ? ': ' + r.error : ''))
+            const d = JSON.parse(r.text); const b = d.backup || {}
             await this.$store.dispatch('todo/writeEventBackup', 'restore')
             const rows = []
             if (b.todoState) { const td = this.parseTodoState(b.todoState); (td.todoList || []).forEach(r => rows.push(r)); (td.recycleList || []).forEach(r => rows.push(r)) }

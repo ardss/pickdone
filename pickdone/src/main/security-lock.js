@@ -3,11 +3,25 @@
 const path = require('path')
 const { BrowserWindow } = require('electron')
 
-function createSecurityLock ({ getMainWindow, showMainOrLock, readConfig, i18n, log }) {
+function createSecurityLock ({ getMainWindow, showMainOrLock, readConfig, writeConfig, i18n, log }) {
   let lockWin = null
 
   function isLocked () {
     try { return readConfig().enableSecurityLock === true && lockWin && !lockWin.isDestroyed() } catch { return false }
+  }
+
+  /** 锁屏窗加载失败回退(2026-09-09 P2):data: URL 加载失败此前被静默吞掉,lockWin 残留(空窗)而
+   *  readConfig().enableSecurityLock 仍为 true → isLocked() 恒真,主窗永久隐藏、托盘只弹空锁窗,用户被锁死。
+   *  回退:销毁锁窗 + 禁用锁 + 清空密码(下次启用必须重设),并把主窗放回来 —— 可用性优先于锁。 */
+  function lockLoadFailedFallback (why) {
+    log.error('[SecurityLock] 锁屏窗加载失败,回退到禁用锁+强制重设密码:', why)
+    try { if (lockWin && !lockWin.isDestroyed()) lockWin.destroy() } catch { /* already gone */ }
+    lockWin = null
+    try {
+      // 禁用锁并清掉口令/问题(原子写),verifyLockPassword 对空口令恒真,不会再锁死
+      writeConfig({ enableSecurityLock: false, securityLockPassword: '', securityLockQuestion: '' })
+    } catch (e) { log.error('[SecurityLock] 回退写配置失败', e) }
+    try { showMainOrLock() } catch (e) { log.error('[SecurityLock] 回退显示主窗失败', e) }
   }
 
   function lockAppNow () {
@@ -57,7 +71,11 @@ function createSecurityLock ({ getMainWindow, showMainOrLock, readConfig, i18n, 
       pw.focus()
     </script>
   </body></html>`
-    lockWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html)).catch(() => { /* data: URL 无网络依赖 */ })
+    // 加载失败双保险:loadURL promise reject + did-fail-load 事件,任一触发都走禁用锁回退(幂等)
+    let lockLoadFailed = false
+    const onLockLoadFail = (why) => { if (lockLoadFailed) return; lockLoadFailed = true; lockLoadFailedFallback(why) }
+    lockWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html)).catch(e => onLockLoadFail('loadURL: ' + (e && e.message)))
+    lockWin.webContents.on('did-fail-load', (_e, code, desc) => onLockLoadFail('did-fail-load: ' + code + ' ' + desc))
     lockWin.on('closed', () => { lockWin = null })
   }
 
