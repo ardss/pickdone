@@ -101,7 +101,8 @@ export default {
       return String(Math.max(0, Math.floor((Date.now() - this.s.startedAt) / 60000)))
     },
     attachCandidates () {
-      return [...this.$store.state.todo.views.todayTodoList].filter(t => !t.complete).slice(0, 30)
+      // No cap: the list is already in memory and truncating silently made tasks beyond the limit unattachable
+      return [...this.$store.state.todo.views.todayTodoList].filter(t => !t.complete)
     },
     playText () {
       if (this.isWork) return this.$t('statsE.TomatoBar.giveUpFocusBtn')
@@ -219,12 +220,14 @@ export default {
 
 
     async toggleFloat () {
-      if (!window.todoAPI) return
-      if (this.floatOn) { window.todoAPI.hideTomatoFloat() } else { window.todoAPI.showTomatoFloat() }
-      this.floatOn = !this.floatOn
-      // Calibrated against the main process's real visibility (after the tray closes the float, a local optimistic flip once drifted into a reversed no-op)
-      await new Promise(r => setTimeout(r, 300))
-      try { this.floatOn = !!(await window.todoAPI.tomatoFloatShown()) } catch { /* keep optimistic */ }
+      if (!window.todoAPI || this._floatToggling) return // busy guard: rapid clicks must not fire multiple IPC toggles
+      this._floatToggling = true
+      try {
+        if (this.floatOn) { window.todoAPI.hideTomatoFloat() } else { window.todoAPI.showTomatoFloat() }
+        // Give the main process a beat to apply the change, then write back from its real visibility
+        await new Promise(r => setTimeout(r, 300))
+        this.floatOn = !!(await window.todoAPI.tomatoFloatShown())
+      } catch { /* keep the previous state on error */ } finally { this._floatToggling = false }
     },
 
   },
