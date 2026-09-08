@@ -21,7 +21,7 @@
       <div class="td-title" :class="{'td-title--empty': !todo.taskContent}">{{ todo.taskContent || $t('statsE.TodoItem.untitled') }}</div>
       <div v-if="todo.taskDescribe" class="td-desc">{{todo.taskDescribe}}</div>
       <div v-if="subtasks.length" class="td-subs">
-        <div v-for="s in subtasks" :key="s.text" class="td-sub" role="checkbox"
+        <div v-for="(s, si) in subtasks" :key="s.text + '#' + si" class="td-sub" role="checkbox"
              :aria-checked="s.checked ? 'true' : 'false'" tabindex="0"
              @click.stop="toggleSub(s)" @keydown.enter.prevent.stop="toggleSub(s)">
           <span class="td-sub-check" :class="{on:s.checked}">✓</span>
@@ -61,7 +61,7 @@
         <span v-if="tomatoEstimateN>0" class="td-tom__count"><span class="td-tom-pips" aria-hidden="true"><i v-for="n in Math.min(tomatoEstimateN,6)" :key="n" :class="{done: n<=tomatoActualN}"></i></span><span class="td-tom-n">{{ Math.min(tomatoActualN,tomatoEstimateN) }}/{{ tomatoEstimateN }}</span></span>
       </span>
       <button class="td-quick-del" :title="$t('statsE.TodoItem.moveToRecycleBin')" :aria-label="$t('statsE.TodoItem.moveToRecycleBin')"
-              tabindex="-1" @click.stop.prevent="quickDelete">
+              @click.stop.prevent="quickDelete">
         <app-icon name="trash" :size="14"/>
       </button>
       <div class="td-datetime" :style="{color:badgeColor}">{{dateLabel}}</div>
@@ -82,9 +82,12 @@ import { toggleCompleteWithUndo } from '../utils/completeAction.js'
 import { chkColor } from '../utils/taskRow.js'
 import { getEstimate } from '../utils/tomatoEstimate.js'
 
+// Module-level drag-in-progress flag: a document.querySelector('.td-item.dragging') on every
+// dragover is O(document); this is set on dragstart and cleared on dragend/drop.
+let dragActive = false
+
 export default {
-  name: 'TodoItem',
-  props: {
+  name: 'TodoItem',  props: {
     todo: { type: Object, required: true },
     groupKey: { type: String, default: '' },
     query: { type: String, default: '' },
@@ -136,9 +139,10 @@ export default {
       e.dataTransfer.effectAllowed = 'move'
       e.dataTransfer.setData('text/plain', this.todo.taskId)
       this.dragging = true
+      dragActive = true
     },
     onDragOver (e) {
-      if (!this._draggingGlobal()) return
+      if (!dragActive) return
       e.preventDefault()
       e.dataTransfer.dropEffect = 'move'
       const rect = this.$el.getBoundingClientRect()
@@ -148,9 +152,10 @@ export default {
       this.$el.classList.toggle('drag-above', !this.dropAfter)
     },
     onDragLeave () { this.$el.classList.remove('drag-above', 'drag-below') },
-    onDragEnd () { this.$el.classList.remove('drag-above', 'drag-below'); this.dragging = false },
+    onDragEnd () { this.$el.classList.remove('drag-above', 'drag-below'); this.dragging = false; dragActive = false },
     async onDrop (e) {
       e.preventDefault()
+      dragActive = false
       this.$el.style.borderBottomColor = ''; this.$el.style.borderTopColor = ''
       const draggedId = e.dataTransfer.getData('text/plain')
       if (!draggedId || draggedId === this.todo.taskId) return
@@ -177,7 +182,13 @@ export default {
       const from = list.findIndex(t => t.taskId === draggedId)
       const to = list.findIndex(t => t.taskId === target.taskId)
       if (from < 0 || to < 0) return
-      list.splice(to, 0, list.splice(from, 1)[0])
+      // dropAfter draws the "insert below" indicator, so honor it: arguments evaluate left-to-right,
+      // the inner splice(at `from`) runs first — when `from` < `to` the target shifts up by one, so
+      // plain `to` already lands after it; otherwise offset by +1/-1 explicitly.
+      const insertAt = this.dropAfter
+        ? (from < to ? to : to + 1)
+        : (from < to ? to - 1 : to)
+      list.splice(insertAt, 0, list.splice(from, 1)[0])
       this._writeSort(list)
     },
     /** Batch midpoint write of taskSort in the new order */
@@ -205,7 +216,6 @@ export default {
       this._writeSort(list)
       if (this.$announce) this.$announce(this.$t('statsE.TodoItem.donePrefix') + (dir > 0 ? this.$t('statsJ.TodoItem.moveDownAnnounce', { t: raw.taskContent || '' }) : this.$t('statsJ.TodoItem.moveUpAnnounce', { t: raw.taskContent || '' })))
     },
-    _draggingGlobal () { return !!document.querySelector('.td-item.dragging') },
     onCheckClick (e) {
       e.stopPropagation()
       this.$el.classList.add('pop')
