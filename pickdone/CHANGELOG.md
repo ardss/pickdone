@@ -8,6 +8,12 @@ Generated per release from the real commit range (`git log vPREV..vNEW`), split 
 
 ### Fixed
 
+- Edit panel Esc no longer closes it through an open top-level overlay (repeat-delete confirm / account modal / abandon-focus / focus-record dialogs); the pomodoro bar's give-up button is brand teal per the 2026-09-03 decision, and the countdown text no longer pretends to be clickable.
+- Habits can be renamed again (the rename entry was never reachable from the template); frequency forms reject an empty weekday set and clamp the every-N-days interval to 2-30.
+- Tomato account edit form gained the "abandoned" toggle so a record can be corrected back and forth; matrix-grid quadrant drops now show an undo toast (with a full important/urgent/priority snapshot revert) instead of silently rewriting three fields.
+- Calendar popover in the date strip now honors the week-start setting (headers and leading blanks rotate with it) instead of always hardcoding Monday; collapsed expired-day groups no longer leak dead `expired-<ts>` keys into settings forever.
+- Search results past the 200-item render cap show an explicit "showing first 200 of N" notice; clearing search returns to the originating view via deterministic navigation instead of a history-dependent `$router.back()`.
+- Mobile move announcements are standalone sentences (no more English "Completed Moved down: xxx"); every `role="checkbox"` toggle in the task views responds to Space as well as Enter, and the todo-box batch check is keyboard-focusable; the due-date clear button gained an accessible name.
 - First-run onboarding tour crashed (TDZ reference) and leaked a poller when no task existed yet; "replay journey" from Settings was reliably broken on an empty workspace.
 - Dangerous-operation double-confirm dialogs (backup restore / demo-data purge) showed unrelated texts — body read "syncs with the pomodoro panel in real time" and the confirm button read "Break length (minutes):"; both now use dedicated copy (en/zh).
 - Meta garbage collection never ran since launch: the startup routine called a nonexistent DB op, so orphan meta keys (deleted repeat rules, removed categories) accumulated forever; failed schema migrations no longer get skipped forever by a later migration advancing the version.
