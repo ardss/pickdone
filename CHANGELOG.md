@@ -4,6 +4,21 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versioning follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- Close-button behavior is now a choice: Settings → General exposes "minimize to tray instead of quitting", the first-run wizard gains a matching step, and the first close-to-tray shows a one-shot Windows tray notice explaining where the app went.
+- `pickdone skill install` now also registers the skill into `~/.cursor/skills/pickdone/` — Cursor reads Agent Skills natively, so one command covers ZCode, Claude Code and Cursor.
+- The website gains a dedicated "Connect AI" page: a copy-paste prompt your AI assistant executes to self-install the CLI contract, plus per-platform guides (Claude Code, ZCode, Cursor, Codex CLI, OpenCode, Gemini CLI).
+
+### Changed
+- Install location and executable name are now ASCII: the app installs to `%LOCALAPPDATA%\Programs\PickDone` as `PickDone.exe`. The previous Chinese directory name (`...\Programs\拾事`) broke AI-agent shells on non-Chinese codepages and read as a bug. Your data is untouched (`%APPDATA%\pickdone`, pinned independently of the program dir); the installer removes the orphaned old program directory. Users on ≤ 0.2.1 should simply run the 0.2.2 installer over the existing install.
+- Release builds are pre-wired for free SignPath code signing (activates automatically once the maintainer certificate is approved; this release ships unsigned as before).
+
+### Fixed
+- Updating 0.2.0 → 0.2.1 failed with "Failed to uninstall old application files" when the app was resident in the tray; the installer now stops the running instance (both old and new exe names) before install/uninstall.
+- The encrypted-backup ATTACH statement escapes quote characters in key/path values instead of breaking on them.
+
 ## [0.2.1] - 2026-09-08
 
 ### Fixed

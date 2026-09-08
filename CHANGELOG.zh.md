@@ -3,7 +3,20 @@
 与根目录 [CHANGELOG.md](CHANGELOG.md)（英文，单一事实源）逐版本对应；本文件供发布页中英双语展示（中文在前）与中文用户阅读。发布时由工作流/finalize 自动拼接：`[X.Y.Z] 中文段 + --- + 英文段`。
 **纪律：两份 CHANGELOG 必须同版本同发布；只改英文版不补中文版 = 发布页缺中文 = 门禁不拦但属于违规。**
 
-## [Unreleased]
+## [0.2.2] - 2026-09-08
+
+### 新增
+- 关闭按钮行为可选择了：设置 → 通用新增「关闭时最小化到托盘而非退出」开关，首启向导增加对应一步；第一次关闭到托盘时弹一次性 Windows 气泡，告诉用户程序去了哪里。
+- `pickdone skill install` 现在同时注册到 `~/.cursor/skills/pickdone/`——Cursor 原生支持 Agent Skills，一条命令覆盖 ZCode、Claude Code、Cursor。
+- 官网新增「AI 接入」页：一段可复制的提示词交给你的 AI 即可自动完成接入，另附 Claude Code / ZCode / Cursor / Codex CLI / OpenCode / Gemini CLI 分平台指南。
+
+### 变更
+- 安装目录与主程序名改为 ASCII：应用安装到 `%LOCALAPPDATA%\Programs\PickDone`，主程序为 `PickDone.exe`。原中文目录名（`...\Programs\拾事`）在非中文代码页下会让 AI 代理的 shell 无法调用、看起来像个 bug。数据不受影响（`%APPDATA%\pickdone`，与程序目录相互独立）；安装器会清理残留的旧程序目录。≤ 0.2.1 用户直接运行 0.2.2 安装包覆盖安装即可。
+- 发布产物已预接 SignPath 免费代码签名（维护者证书批准后自动生效；本版本照旧未签名）。
+
+### 修复
+- 应用驻留托盘时 0.2.0 → 0.2.1 升级会报「Failed to uninstall old application files」；安装器现在会在安装/卸载前先结束运行中的实例（新旧程序名都处理）。
+- 加密备份的 ATTACH 语句现在会转义键/路径中的引号字符，不再因此失败。
 
 ## [0.2.1] - 2026-09-08
 
