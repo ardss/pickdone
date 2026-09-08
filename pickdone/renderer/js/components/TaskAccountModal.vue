@@ -29,6 +29,8 @@
                 <el-input-number size="small" :min="1" :max="720" :step="5" controls-position="right" :model-value="draft.dur" @update:model-value="v => { draft.dur = v }"/></div>
               <div v-if="!draft.abandoned" class="ta-edit-row"><span>{{ $t('statsK.TomatoAccount.restMin') }}</span>
                 <el-input-number size="small" :min="0" :max="120" :step="5" controls-position="right" :model-value="draft.rest" @update:model-value="v => { draft.rest = v }"/></div>
+              <div class="ta-edit-row"><span>{{ $t('statsK.TomatoAccount.givenUp') }}</span>
+                <el-switch size="small" :model-value="draft.abandoned" @update:model-value="v => { draft.abandoned = !!v }"/></div>
               <div class="ta-btns">
                 <button class="ta-btn-save" @click="saveEdit">{{ $t('statsK.TomatoAccount.save') }}</button>
                 <button class="ta-btn-del" @click="delRecord(r)">{{ $t('statsK.TomatoAccount.delete') }}</button>
