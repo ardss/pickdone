@@ -17,7 +17,7 @@
              tabindex="0" role="button" :title="taskTip(t)" :aria-label="$t('statsA.MatrixGrid.taskPrefix')+(t.taskContent||$t('statsA.MatrixGrid.noTitle'))">
           <span class="td-check" :class="{on: isComplete(t)}" :style="isComplete(t) ? { background: chkColor(t), borderColor: chkColor(t) } : {}" role="checkbox"
                 :aria-checked="isComplete(t) ? 'true' : 'false'" :aria-label="$t('statsJ.TodoItem.markDone')"
-                tabindex="0" @click.stop="completeTask(t)" @keydown.enter.prevent.stop="completeTask(t)">
+                tabindex="0" @click.stop="completeTask(t)" @keydown.enter.prevent.stop="completeTask(t)" @keydown.space.prevent.stop="completeTask(t)">
             <svg v-if="isComplete(t)" class="td-check-svg" viewBox="0 0 12 12" aria-hidden="true">
               <polyline points="2,6.2 5,9 10,3" fill="none" stroke="#fff" stroke-width="1.8"
                         stroke-linecap="round" stroke-linejoin="round" pathLength="1"/>
@@ -50,7 +50,7 @@
 import { dayjs, FMT } from '../utils/core.js'
 import { chkColor, toggleTomatoAttach } from '../utils/taskRow.js'
 import { toggleCompleteWithUndo } from '../utils/completeAction.js'
-import { deleteWithUndo } from '../utils/confirm.js'
+import { deleteWithUndo, moveWithUndo } from '../utils/confirm.js'
 import { taskContextMenu } from '../utils/taskMenu.js'
 
 /* Quadrant titles store i18n keys (statsA.MatrixGrid.*), resolved with $t at render time (no component instance at module level) */
@@ -129,8 +129,15 @@ export default {
       this.overKey = null
       const t = this.tasks.find(x => x.taskId === id)
       if (!t || ((t.important || 0) === q.important && (t.urgent || 0) === q.urgent)) return
+      // Drag-to-move contract: any field rewrite goes through moveWithUndo (undoable toast), never silent.
+      // Snapshot the three affected fields (important/urgent/priority) so the revert restores the exact prior quadrant mapping.
+      const snap = { important: t.important || 0, urgent: t.urgent || 0, priority: t.priority }
       // Connect the ledgers: dragging to change quadrant syncs priority (important⇒high, non-important⇒low), consistent with EditPanel's reverse priority⇒important mapping
-      this.$store.dispatch('todo/updateTodoFields', { taskId: id, patch: { important: q.important, urgent: q.urgent, priority: q.important ? 3 : 1 } })
+      moveWithUndo(this, {
+        label: this.$t('statsJ.TodoItem.movedToQuadrant', { q: this.$t(q.titleKey) }),
+        apply: () => this.$store.dispatch('todo/updateTodoFields', { taskId: id, patch: { important: q.important, urgent: q.urgent, priority: q.important ? 3 : 1 } }),
+        revert: () => this.$store.dispatch('todo/updateTodoFields', { taskId: id, patch: { important: snap.important, urgent: snap.urgent, priority: snap.priority } })
+      })
     },
     taskTip (t) {
       const parts = [t.taskContent || this.$t('statsA.MatrixGrid.noTitle')]
