@@ -4,7 +4,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versioning follows [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.2.3] - 2026-09-09
 
 ### Fixed
 - Undo/redo (Ctrl+Z/Ctrl+Y) now replays schedule chips correctly: undoing a soft delete restores the pre-delete chip snapshot, undoing a create clears/snapshots its chips, and undoing a reschedule migrates chips back with the task (previously snapshot replay bypassed the chip-sync chain, leaving chips stranded on the wrong day); a corrupt history snapshot no longer vanishes into an unhandled rejection (parse-before-pop, shortcut handler catches failures).
