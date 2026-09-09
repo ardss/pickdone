@@ -104,6 +104,7 @@
  *  Plan data lives in SQLite plan_chips rows (2026-09-03 root fix), all writes via utils/dayPlans.js atomic ops; bucketed by date, pruned outside [-7d,+31d] */
 import { FMT, dayjs } from '../utils/core.js'
 import { toggleCompleteWithUndo } from '../utils/completeAction.js'
+import { removeWithUndo } from '../utils/confirm.js'
 import { taskContextMenu } from '../utils/taskMenu.js'
 import * as dayPlans from '../utils/dayPlans.js'
 const DAY_START_H = 0
@@ -405,7 +406,7 @@ export default {
           const h = parseInt(String(e.mm).split(':')[0], 10)
           if (isNaN(h)) return
           if (!map[h]) map[h] = []
-          map[h].push({ taskId, mm: e.mm, planId: e.id, idx, count: list.length, name: t ? t.taskContent : taskId, done: !!(t && t.complete) })
+          map[h].push({ taskId, mm: e.mm, planId: e.id, idx, count: list.length, name: t ? t.taskContent : this.$t('statsG.DayRail.planDeleted'), done: !!(t && t.complete) })
         })
       }
       return map
@@ -533,12 +534,26 @@ export default {
     onChipDragEnd () { this._dragPlan = null },
     removePlan (p) {
       const day = this.plans[this.today]
-      if (day && Array.isArray(day[p.taskId])) {
-        const i = day[p.taskId].findIndex(e => e.id === p.planId) // Delete by planId (idx may have drifted due to async reloads)
-        if (i >= 0) day[p.taskId].splice(i, 1)
-        if (!day[p.taskId].length) delete day[p.taskId]
-        dayPlans.removeChips([p.planId]).catch(() => this._onPlansChanged())
-      }
+      if (!day || !Array.isArray(day[p.taskId])) return
+      const i = day[p.taskId].findIndex(e => e.id === p.planId) // Delete by planId (idx may have drifted due to async reloads)
+      if (i < 0) return
+      const entry = day[p.taskId][i]
+      // Global contract "delete = 5s undo toast" (same as utils/confirm.js): the chip removal gets an undo window
+      removeWithUndo(this,
+        () => {
+          const d = this.plans[this.today]
+          if (!d || !Array.isArray(d[p.taskId])) return
+          const j = d[p.taskId].findIndex(e => e.id === p.planId)
+          if (j >= 0) d[p.taskId].splice(j, 1)
+          if (!d[p.taskId].length) delete d[p.taskId]
+          dayPlans.removeChips([p.planId]).catch(() => this._onPlansChanged())
+        },
+        () => {
+          const d = this.plans[this.today] || (this.plans[this.today] = {})
+          if (!Array.isArray(d[p.taskId])) d[p.taskId] = []
+          d[p.taskId].push(entry)
+          dayPlans.addChips([{ taskId: p.taskId, day: this.today, mm: entry.mm, id: entry.id }]).catch(() => this._onPlansChanged())
+        })
     },
     /* Consistent plan-chip interactions: check to complete (reusing the undo chain) / select to start (tomato attach) / click the name to open the edit panel */
     planDone (p) {
