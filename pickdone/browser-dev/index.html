@@ -6,6 +6,59 @@
   <title>拾事（浏览器调试）</title>
   <!-- 与桌面 renderer/index.html 等价的 CSP(app://app→self):让CSP违规在5175就能暴露,不再只炸打包端 -->
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self'; font-src 'self' data:; connect-src 'self' https:">
+  <script>
+  // 视觉门禁冻结时钟:?pdFreeze=<本地ISO或ms> 把页面可见时钟钉在固定时刻——today 日期条/月历今天高亮/
+  // 统计周窗口/演示记录的"成熟度"全部随之定格,基线跨真实日期不再漂移(2026-09-09 翻日 6 图全红实锤)。
+  // 必须是全页第一个脚本:shim 种子/dayjs/应用读到同一偏移;带时钟流逝(偏移恒定),计时器照常走。
+  // 手动访问不带参数 = 完全不受影响。
+  ;(function () {
+    var q = new URLSearchParams(location.search).get('pdFreeze')
+    if (!q) return
+    var frozen = new Date(/^\d+$/.test(q) ? Number(q) : q)
+    if (isNaN(frozen.getTime())) return
+    var Real = Date
+    var shift = Real.now() - frozen.getTime()
+    var PD = function (...a) {
+      if (!(this instanceof PD)) return new Real(Real.now() - shift).toString()
+      if (a.length === 0) return new Real(Real.now() - shift)
+      return new Real(...a)
+    }
+    PD.prototype = Real.prototype
+    PD.now = function () { return Real.now() - shift }
+    PD.parse = Real.parse
+    PD.UTC = Real.UTC
+    window.Date = PD
+  })()
+  </script>
+  <script>
+  // 视觉门禁主题注入:?pdTheme=<light|dark> 在应用启动前把 colorMode 写进 LS。
+  // 不能用「在上一个页面世界里 eval 改 LS 再 reload」:旧世界的设置回写(beforeunload/防抖冲刷)
+  // 会竞态覆盖成它内存里的旧值——2026-09-09 实锤前 4 个 dark 场景 100% 被改回 light。
+  ;(function () {
+    window.__pdBootId = String(Math.random()).slice(2) // 文档纪元:视觉脚本据此识别 reload 级联
+    try {
+      var pt = new URLSearchParams(location.search).get('pdTheme')
+      if (pt !== 'light' && pt !== 'dark') return
+      var st = JSON.parse(localStorage.getItem('settingsState') || '{}')
+      st.colorMode = pt
+      localStorage.setItem('settingsState', JSON.stringify(st))
+      // 盖镜像戳让 LS 必赢(initFromDb 按 _savedAt <= settingsMirrorAt 仲裁)。戳必须恒远未来:
+      // 冻结时钟(pdFreeze)把 Date.now() 钉死,而 shim 播种用真实时钟写 DB 镜像——冻结戳+1h 一旦
+      // 落后于真实镜像时间戳,主题就被仲裁翻回旧值(2026-09-09 复跑实锤:每轮随机一个 dark 场景翻 light)。
+      // 捕获宿主生命周期内不存在"合法的更晚镜像",远未来戳无副作用。
+      localStorage.setItem('settingsMirrorAt', String(Date.now() + 31536000000))
+      // 冻结一切动画:空态插画等无限循环动画让像素永不静止("no stable frame" 连环实锤)。
+      // 解析期即暂停 → 动画定格第 0 帧,确定性成立。SVG SMIL 不吃 CSS,用 pauseAnimations 兜底。
+      var animPause = document.createElement('style')
+      animPause.textContent = '*,*::before,*::after{animation-play-state:paused !important}'
+      document.head.appendChild(animPause)
+      setInterval(function () {
+        var svgs = document.querySelectorAll('svg')
+        for (var i = 0; i < svgs.length; i++) { if (svgs[i].pauseAnimations) try { svgs[i].pauseAnimations() } catch (e) {} }
+      }, 800)
+    } catch (e) {}
+  })()
+  </script>
   <link rel="stylesheet" href="/assets/vendor-lib/element-plus/index.css">
   <link rel="stylesheet" href="/assets/vendor-lib/driver.css">
   <link rel="stylesheet" href="/assets/css/base.css?v=1788887217308">
@@ -196,6 +249,7 @@
       return window.todoAPI.dbCall('upsert', t).then(function () { n++ })
     })).then(function () {
       window.__depSeed = n
+      window.__depSeedDone = (n >= tasks.length)
       // 首次灌数后 reload 一次,让应用启动时就能读到里程碑/截止/任务(store 不做运行期热更)
       if (n >= tasks.length && !sessionStorage.getItem('depDemoSeededV3')) {
         sessionStorage.setItem('depDemoSeededV3', '1')
@@ -204,7 +258,17 @@
     }).catch(function (e) { window.__depSeed = 'err:' + e.message })
   }
   setTimeout(poll, 1200)
-  setInterval(poll, 8000)
+  // 视觉门禁场景(pdTheme)不做 8s 常驻重播种:每 8s 全量 upsert 持续搅动 store,"no stable frame" 实锤。
+  // 但单次播种有竞态:1200ms 时 dbCall 未就绪则演示任务永久缺失(日历/回收站 3-4% 随机缺内容实锤)
+  // → 成功前每 2s 重试,__depSeedDone 后即停,页面归静。
+  if (new URLSearchParams(location.search).get('pdTheme')) {
+    var seedTimer = setInterval(function () {
+      if (window.__depSeedDone) { clearInterval(seedTimer); return }
+      poll()
+    }, 2000)
+  } else {
+    setInterval(poll, 8000)
+  }
 })()
 </script>
 
