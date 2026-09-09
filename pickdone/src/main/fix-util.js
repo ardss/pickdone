@@ -51,4 +51,56 @@ function classifyBackupError (err) {
   return 'read-failed'
 }
 
-module.exports = { localDayKey, strictBase64, checkImportFileSize, pendingDeleteName, classifyBackupError, IMPORT_MAX_BYTES }
+module.exports = { localDayKey, strictBase64, checkImportFileSize, pendingDeleteName, classifyBackupError, IMPORT_MAX_BYTES, formatLogLines, nextAvailableName, backupNameTs, sortBackupNamesNewestFirst, parseTomatoMetaBlob }
+
+/* ---- 2026-09-10 main-fixes round ---- */
+
+/** Format renderer log entries into plain text lines (log:write previously did `lines + NL` where
+ *  lines was an array — array+string coerces via join(','), corrupting entries containing commas
+ *  and merging all entries into one line). Exported pure so node --test can cover it. */
+function formatLogLines (entries) {
+  const NL = String.fromCharCode(10)
+  return (Array.isArray(entries) ? entries : []).map(x => `[${x.ts}] [${x.level}] ${String(x.msg).slice(0, 4000).split(NL).join(' ')}` + (x.stack ? NL + String(x.stack).slice(0, 4000).split(String.fromCharCode(13)).join('').split(NL).map(l => '  ' + l).join(NL) : '')).join(NL)
+}
+
+/** First non-conflicting name in dir: appends " (n)" before the extension when the target exists
+ *  (save-upload-file-to-download previously copyFileSync'd silently over an existing download).
+ *  existsFn is injected for pure testing. */
+function nextAvailableName (dir, fileName, existsFn) {
+  const path = require('path')
+  const exists = typeof existsFn === 'function' ? existsFn : (p) => { try { return require('fs').existsSync(p) } catch { return false } }
+  let candidate = path.join(dir, fileName)
+  if (!exists(candidate)) return candidate
+  const ext = path.extname(fileName)
+  const stem = fileName.slice(0, fileName.length - ext.length)
+  for (let i = 1; i < 1000; i++) {
+    candidate = path.join(dir, stem + ' (' + i + ')' + ext)
+    if (!exists(candidate)) return candidate
+  }
+  // 999 collisions: give up deterministically rather than loop forever
+  return path.join(dir, stem + ' (' + Date.now() + ')' + ext)
+}
+
+/** Newest-first backup name ordering by the embedded timestamp segment (auto-YYYYMMDD-HHMMSS.json /
+ *  evt-<reason>-YYYYMMDD-HHMMSS.json). Lexical .sort() put 'auto-' before 'evt-…' with the same date
+ *  prefix and misjudged dedup against a stale file. Mirrors autoBackup.nameToTs (kept inline so this
+ *  module stays dependency-free). */
+function backupNameTs (name) {
+  const m = /^(?:auto-|evt-[a-z0-9-]+-)(\d{8})-(\d{6})\.json$/.exec(String(name))
+  if (!m) return 0
+  const s = m[1]; const t = m[2]
+  return Date.UTC(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8), +t.slice(0, 2), +t.slice(2, 4), +t.slice(4, 6))
+}
+function sortBackupNamesNewestFirst (names) {
+  return (Array.isArray(names) ? names : []).slice().sort((a, b) => backupNameTs(b) - backupNameTs(a))
+}
+
+/** Parse the legacy tomato meta blob: returns { ok:true, list } on success, { ok:false } when the
+ *  blob is corrupted JSON. Callers must NOT delete the blob on ok:false (the records would be lost
+ *  forever) — previously a parse failure fell back to {} → empty list → delBlob wiped the ledger. */
+function parseTomatoMetaBlob (text) {
+  let st
+  try { st = JSON.parse(text || '{}') } catch { return { ok: false, list: [] } }
+  const list = Array.isArray(st && st.tomatoRecordList) ? st.tomatoRecordList.filter(r => r && r.tomatoId && r.endTime) : []
+  return { ok: true, list }
+}

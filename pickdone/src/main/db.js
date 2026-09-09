@@ -737,9 +737,13 @@ const OPS = {
     const delBlob = () => { try { db.prepare('DELETE FROM meta WHERE key = ?').run('db.tomatoState') } catch { /* 清理失败不阻断 */ } }
     const n = db.prepare('SELECT COUNT(*) c FROM tomato_records').get().c
     if (n > 0) { delBlob(); return 0 }
-    let st = {}
-    try { st = JSON.parse(stmts.getMeta.get('db.tomatoState')?.value || '{}') } catch (e) { st = {} }
-    const list = Array.isArray(st.tomatoRecordList) ? st.tomatoRecordList.filter(r => r && r.tomatoId && r.endTime) : []
+    // 损坏 blob 不删(2026-09-10 P2):此前 JSON.parse 失败 catch 成 {} → list 空 → delBlob 直接把
+    // 旧账本 blob 抹掉,记录永久丢失(可能只是磁盘位翻转/半截写入)。parse 失败 = warn + 返回 0
+    // 保留 blob,下次(比如从备份恢复后)还有迁移机会;只有成功解析才走迁移/清理。
+    // 纯解析逻辑抽到 fix-util.parseTomatoMetaBlob 便于 node --test 覆盖。
+    const parsed = require('./fix-util').parseTomatoMetaBlob(stmts.getMeta.get('db.tomatoState')?.value)
+    if (!parsed.ok) { log.warn('[TodoDB] tomatoMigrateFromMeta: 旧 meta blob 损坏(JSON 解析失败),保留 blob 不迁移不删除'); return 0 }
+    const list = parsed.list
     if (!list.length) { delBlob(); return 0 }
     OPS.tomatoAppendMany(list)
     delBlob()

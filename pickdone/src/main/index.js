@@ -289,8 +289,21 @@ function createMainWindow () {
     win.webContents.on('will-navigate', (e, url) => {
       if (!/^app:\/\/app\//i.test(url)) { e.preventDefault(); if (/^https?:/i.test(url)) shell.openExternal(url) }
     })
-  win.webContents.on('did-fail-load', (_e, code, desc, url) => {
+  // 加载失败自愈(2026-09-10 P2,与浮窗 5 次重试同类):此前主窗 did-fail-load 只 log,加载失败后
+  // 用户面对白屏/错误页永不恢复。对主框架、非 -3(ERR_ABORTED 良性中断)做 3 次退避 reload,
+  // did-finish-load 成功即复位计数。
+  let loadRetryCount = 0
+  win.webContents.on('did-finish-load', () => { loadRetryCount = 0 })
+  win.webContents.on('did-fail-load', (_e, code, desc, url, isMainFrame) => {
     log.error('[Window] 加载失败:', code, desc, url)
+    if (!isMainFrame || code === -3 || quitting) return
+    if (loadRetryCount >= 3) return
+    loadRetryCount++
+    const delay = 400 * loadRetryCount
+    log.warn('[Window] 主框架加载失败,退避重试', loadRetryCount, 'in', delay, 'ms')
+    setTimeout(() => {
+      try { if (win && !win.isDestroyed()) win.webContents.loadURL('app://app/renderer-dist/index.html').catch(() => {}) } catch { /* gone */ }
+    }, delay)
   })
   win.webContents.on('console-message', (_e, level, msg, line, src) => {
     if (level >= 2) log.warn('[Renderer]', msg, `(${path.basename(String(src))}:${line})`)
@@ -586,7 +599,12 @@ let flushDone = false // flush window finished; second will-quit passes through 
 app.on('before-quit', () => {
   quitByUser = true
   // Before quitting, broadcast the renderer flush of debounced mirrors (the last write within dbMirror's 2s / disaster-snapshot 800ms window would be silently lost)
-  try { if (win && !win.isDestroyed()) win.webContents.send('app-quitting-flush') } catch {}
+  // 2026-09-10 P1: previously only the main window was notified — the float window's pending pomodoro
+  // ledger (and the whole broadcast when the main window was already destroyed, e.g. X-close→tray→quit)
+  // was silently lost. Broadcast to every live window with an isDestroyed guard.
+  for (const w of BrowserWindow.getAllWindows()) {
+    try { if (w && !w.isDestroyed()) w.webContents.send('app-quitting-flush') } catch {}
+  }
 })
 app.on('window-all-closed', e => { /* stay resident in the tray, do not quit */ })
 app.on('will-quit', (event) => {
@@ -835,7 +853,18 @@ function registerIpc () {
       const rawName = String(targetName || '').replace(/[/]/g, '_')
       if (/^\.+$/.test(rawName)) throw new Error('bad target name')
       const safeName = path.basename(rawName) || path.basename(attachmentPath(url.slice(8)))
-      if (url.startsWith('local://')) { const src = attachmentPath(url.slice(8)); const dst = path.join(app.getPath('downloads'), safeName); fs.copyFileSync(src, dst); return dst }
+      // 同名不静默覆盖(2026-09-10 P2):copyFileSync 直接覆盖用户已有的同名下载;改为 " (n)" 后缀,
+      // 并包 try 返回结构化错误(磁盘满/权限等此前抛裸异常,渲染端只能拿到笼统 invoke reject)
+      if (url.startsWith('local://')) {
+        try {
+          const src = attachmentPath(url.slice(8))
+          const dst = fixUtil.nextAvailableName(app.getPath('downloads'), safeName, p => fs.existsSync(p))
+          fs.copyFileSync(src, dst)
+          return dst
+        } catch (err) {
+          throw new Error('save-to-download failed: ' + String((err && err.message) || err))
+        }
+      }
       return null
     },
     'delete-file': (e, url) => { if (isLocked()) throw new Error('locked'); try { if (url.startsWith('local://')) fs.unlinkSync(attachmentPath(url.slice(8))) } catch {} return true },
@@ -895,7 +924,7 @@ function registerIpc () {
     },
     'pick-backup-dir': async () => {
       const { dialog } = require('electron')
-      const r = await dialog.showOpenDialog(BrowserWindow.getAllWindows()[0], { title: i18nM.mt('pickBackupDir'), properties: ['openDirectory', 'createDirectory'] })
+      const r = await dialog.showOpenDialog(getMainWindow() || undefined, { title: i18nM.mt('pickBackupDir'), properties: ['openDirectory', 'createDirectory'] })
       if (r.canceled || !r.filePaths[0]) return null
       loadAllowedBackupDirs()
       allowedBackupDirs.add(path.resolve(r.filePaths[0])) // only user-explicitly-picked directories enter the whitelist
@@ -919,7 +948,9 @@ function registerIpc () {
         const tmp = path.join(dir, '.tmp-' + name)
         // Content dedup: only compare against the newest file. (The original implementation compared against any old file — when the data was changed back to its original state
         // it would return dedup without writing the new snapshot, yet prune would delete that old snapshot → that point in time ends up with no backup)
-        const existing = fs.readdirSync(dir).filter(f => /^(auto|evt)-/.test(f)).sort()
+        // 排序按名字内嵌时间戳(2026-09-10 P2):字典序 sort() 让 'auto-' 排在同日 'evt-…' 之后/之前错位,
+        // 去重会拿一个陈旧文件当"最新"比对 → 误判 dedup 丢快照。复用 fix-util 的纯排序(与 autoBackup.nameToTs 同规则)。
+        const existing = fixUtil.sortBackupNamesNewestFirst(fs.readdirSync(dir).filter(f => /^(auto|evt)-/.test(f)))
         if (existing.length) {
           try {
             if (fs.readFileSync(path.join(dir, existing[existing.length - 1]), 'utf8') === jsonText) {
@@ -963,7 +994,8 @@ function registerIpc () {
         if (fixUtil.classifyBackupError(err) === 'missing') return { ok: true, missing: true, files: [] }
         return { ok: false, files: [], error: String(err && err.message || err) }
       }
-      return { ok: true, files: names.filter(f => /^(auto|evt)-/.test(f)).sort().reverse() }
+      // 新→旧展示排序也按内嵌时间戳(字典序会把 evt-/auto- 前缀排在时间之前,同日错位)
+      return { ok: true, files: fixUtil.sortBackupNamesNewestFirst(names.filter(f => /^(auto|evt)-/.test(f))) }
     },
     'read-critical-state-backup': () => {
       if (isLocked()) throw new Error('app is locked')
@@ -974,7 +1006,7 @@ function registerIpc () {
     // --- CSV import (migrating from other apps): reuses the CLI's cli/import.js engine; both preview and execution go through the main process ---
     'import:pick-preview': async () => {
       const importer = require('../../cli/import.js')
-      const r = await dialog.showOpenDialog(BrowserWindow.getAllWindows()[0], {
+      const r = await dialog.showOpenDialog(getMainWindow() || undefined, {
         title: i18nM.mt('importPickCsv'), properties: ['openFile'], filters: [{ name: 'CSV', extensions: ['csv'] }]
       })
       if (r.canceled || !r.filePaths[0]) return null
@@ -996,7 +1028,9 @@ function registerIpc () {
       // 与 todo-db:call 写路径对齐(2026-09-09 P2):导入落库后必须刷新调度器并广播,否则应用内导入后
       // 主窗口列表陈旧、已导入的提醒全部静默丢失
       try { scheduler.reloadAll(dbApi()) } catch (err) { log.warn('[Import] reloadAll failed', err) }
-      broadcastTodosChanged('import', e)
+      // 2026-09-10 P2:传 e.sender(IpcMainInvokeEvent 本身不是 webContents,exclude 永不命中,
+      // 发起导入的窗会被自己的广播打断撤销栈);其余窗照常刷新
+      broadcastTodosChanged('import', e.sender)
       return r
     },
 
@@ -1060,10 +1094,8 @@ function registerIpc () {
         const dir = path.join(app.getPath('userData'), 'logs')
         fsx.mkdirSync(dir, { recursive: true })
         const file = path.join(dir, 'renderer.log')
-        const NL = String.fromCharCode(10)
         // Cap guard: a compromised renderer could write to disk without bound and fill the disk (dual limits on entry count/entry length; truncate when exceeded)
         const capped = entries.slice(0, 200)
-        const lines = capped.map(x => `[${x.ts}] [${x.level}] ${String(x.msg).slice(0, 4000).split(NL).join(' ')}` + (x.stack ? NL + String(x.stack).slice(0, 4000).split(String.fromCharCode(13)).join('').split(NL).map(l => '  ' + l).join(NL) : ''))
         // 轮转:超 2MB 归档为 renderer.old.log(单副本)。无轮转时被攻陷渲染端可持续刷盘(2026-09-05 终审 P2)
         try {
           const st = fsx.statSync(file)
@@ -1073,7 +1105,9 @@ function registerIpc () {
             fsx.renameSync(file, old)
           }
         } catch { /* 首次写入文件尚不存在 */ }
-        fsx.appendFileSync(file, lines + NL, 'utf8')
+        // 2026-09-10 P2:lines 是数组,此前 `lines + NL` 走 array+string 的 join(',') —— 含逗号条目被
+        // 拆散、整批挤成一行。改为显式换行连接(纯逻辑抽到 fix-util.formatLogLines 便于测试)
+        fsx.appendFileSync(file, fixUtil.formatLogLines(capped) + String.fromCharCode(10), 'utf8')
         return true
       } catch (err) { console.error('[log:write]', err); return false }
     },
@@ -1102,6 +1136,11 @@ function registerIpc () {
       const ext = path.extname(src).toLowerCase()
       const key = 'noise-custom' + ext
       await fs.promises.copyFile(src, path.join(attachments.attachDir(), key))
+      // 2026-09-10 P2:保存自定义白噪音后广播所有存活窗(渲染端另一代理会加监听,通道名固定);
+      // 此前只更新发起窗的本地状态,其他窗(如浮窗)的噪音列表不刷新
+      for (const w of BrowserWindow.getAllWindows()) {
+        try { if (w && !w.isDestroyed()) w.webContents.send('white-noise-updated') } catch {}
+      }
       return { name: path.basename(src), key }
     },
 
