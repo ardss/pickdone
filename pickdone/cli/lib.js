@@ -184,10 +184,15 @@ function stats ({ from, to } = {}) {
   const focusByDay = Object.fromEntries(tomato.map(r => [Number(String(r.ds).replace(/-/g, "")), r.focus])) // 归一 YYYYMMDD 整数键
   // 并集:有任务的日(按 scheduledDay) ∪ 有完成记录的日 ∪ 有专注记录的日——只专注没建任务的天不能消失
   const days = new Map()
-  for (const r of plan.rows) days.set(msToYmd(r.ds), { total: r.total, done: r.done || 0 })
-  for (const d of plan.doneByCompletionDay) { const k = Number(d.ds); if (!days.has(k)) days.set(k, { total: 0, done: d.n }) }
-  for (const t of tomato) { const k = Number(String(t.ds).replace(/-/g, "")); if (!days.has(k)) days.set(k, { total: 0, done: 0 }) }
-  return [...days.entries()].map(([day, v]) => ({ day, total: v.total, done: v.done, focusMinutes: focusByDay[day] || 0 }))
+  for (const r of plan.rows) days.set(msToYmd(r.ds), { total: r.total, done: r.done || 0, doneCompleted: 0 })
+  // done 口径分裂修复:done=按 scheduledDay(计划日)的完成;doneCompleted=按 completedAt(完成日)的完成,与 db.js doneByCompletionDay / 渲染端 metrics.js 的完成日口径对齐
+  for (const d of plan.doneByCompletionDay) {
+    const k = Number(d.ds)
+    if (days.has(k)) days.get(k).doneCompleted = d.n
+    else days.set(k, { total: 0, done: 0, doneCompleted: d.n })
+  }
+  for (const t of tomato) { const k = Number(String(t.ds).replace(/-/g, "")); if (!days.has(k)) days.set(k, { total: 0, done: 0, doneCompleted: 0 }) }
+  return [...days.entries()].map(([day, v]) => ({ day, total: v.total, done: v.done, doneCompleted: v.doneCompleted, focusMinutes: focusByDay[day] || 0 }))
     .sort((a, b) => a.day - b.day)
 }
 
@@ -200,7 +205,9 @@ function overview () {
   return {
     today: {
       total: all.filter(t => t.dayStart >= today0 && t.dayStart <= today24).length,
-      done: all.filter(t => t.dayStart >= today0 && t.dayStart <= today24 && t.complete).length
+      done: all.filter(t => t.dayStart >= today0 && t.dayStart <= today24 && t.complete).length,
+      // 口径对齐 App(metrics.js doneTsOf):按 completedAt 落在今天计完成,旧 done(按 dayStart)保留兼容
+      doneToday: all.filter(t => t.complete && t.completedAt >= today0 && t.completedAt <= today24).length
     },
     overdue: all.filter(t => !t.complete && t.dayStart > 0 && t.dayStart < today0).length,
     noDate: all.filter(t => !t.dayStart).length,
@@ -409,6 +416,11 @@ function addTodo ({ content, desc, date, reminder, category, difficulty, priorit
     const existing = db.call('queryTodos', { deleted: 0, repeatId, dayStartFrom: targetDay, dayStartTo: targetDay })
     if (Array.isArray(existing) && existing.length) return existing[0]
   }
+  // Top-insert sort (renderer todo.js nextSort semantics): take min-100 within the target day's pool (or the no-date pool) so new tasks land on top
+  const targetDay = todoTime ? +dayjs(todoTime).startOf('day') : 0
+  const daySorts = db.call('queryTodos', { deleted: 0 })
+    .filter(x => (x.dayStart || 0) === targetDay)
+    .map(x => x.taskSort).filter(v => v != null)
   const t = {
     complete: false, createTime: createdTs, delete: false,
     reminderTime: reminder ? parseDate(reminder) : 0,
@@ -423,7 +435,7 @@ function addTodo ({ content, desc, date, reminder, category, difficulty, priorit
     taskContent: String(content).trim(),
     taskDescribe: desc ? String(desc) : '',
     taskId: genTaskId(guessUserId(), now),
-    taskSort: 0,
+    taskSort: daySorts.length ? Math.fround(Math.min(...daySorts) - 100) : 0,
     todoTime,
     userId: guessUserId(), status: 'add', version: 0
   }
@@ -814,7 +826,8 @@ function repeatOff (input, all) {
     const now = Date.now()
     for (const x of open().call('queryTodos', { deleted: 0 })) {
       if (x.repeatId === rid && x.taskId !== t.taskId && !x.complete) {
-        open().call('upsert', Object.assign({}, x, { delete: 1, updateTime: now, status: 'delete' }))
+        open().call('upsert', Object.assign({}, x, { delete: 1, deletedAt: now, updateTime: now, status: 'delete' }))
+        chipsSnapshotForDelete(x.taskId) // same snapshot→clear cascade as deleteTodo: soft-deleted instances must not leave orphan chips
         removed++
       }
     }
@@ -944,7 +957,10 @@ function tomatoRecords () {
 /** Backfill one manual focus record: CLI 直写账本行(不再经 App 命令通道,App 关闭也可用)。
  *  tomatoId 与渲染端手动补录同形(幂等:重复导入同槽位不产生第二条)。 */
 function backfillRecord ({ taskId = null, content = '', date, at = '20:00', minutes = 25 }) {
-  const min = Math.max(1, Math.min(240, parseInt(minutes, 10) || 25))
+  // 600 = the DB-layer clamp (db.js _recToRow): silently truncating 720 to 240/600 reported success while a different duration landed
+  const raw = parseInt(minutes, 10) || 25
+  if (raw > 600) throw new CliError('backfill duration max is 600 minutes (DB-layer clamp); got ' + raw, 'USAGE')
+  const min = Math.max(1, raw)
   const base = dayjs(date)
   if (!base || !base.isValid()) throw new CliError('bad backfill date: ' + date, 'USAGE')
   const m = /^(\d{1,2}):(\d{2})$/.exec(String(at))
@@ -1106,17 +1122,23 @@ function setReminderOffsets (input, csv) {
   const t = resolveTask(input, liveTasks())
   if (!t.reminderTime) throw new CliError('task has no main reminder — set it first with edit --reminder <time>', 'NEEDS_MAIN_REMINDER')
   let offsets
+  let zeroAbsorbed = false
   if (String(csv).trim().toLowerCase() === 'none') offsets = []
   else {
     offsets = String(csv).split(/[,，\s]+/).filter(Boolean).map(s => {
       const v = parseInt(s, 10)
       if (isNaN(v)) throw new CliError(`bad offset "${s}" (minutes before the main reminder, e.g. "10,30"; 0=on-time; none=clear)`, 'USAGE')
-      return v === 0 ? 0 : -Math.abs(v)
+      // "0" (on-time) is explicitly absorbed: db normOffsets filters 0 out, so writing [0] would silently vanish — map to "no offset" instead
+      return v === 0 ? null : -Math.abs(v)
     })
-    offsets = [...new Set(offsets)].sort((a, b) => a - b)
+    zeroAbsorbed = offsets.includes(null)
+    offsets = [...new Set(offsets.filter(v => v != null))].sort((a, b) => a - b)
   }
   patchTodo(t.taskId, { reminderOffsets: offsets }, { action: 'edit' })
-  return { taskId: t.taskId, reminderTime: t.reminderTime, reminderOffsets: offsets }
+  return {
+    taskId: t.taskId, reminderTime: t.reminderTime, reminderOffsets: offsets,
+    ...(zeroAbsorbed ? { note: '"0" (on-time) absorbed — no offset row written since the main reminder itself fires on time' } : {})
+  }
 }
 /** Set extra absolute reminders (on top of the main one): comma-separated datetimes, same formats as --date; "none" clears */
 function setReminderExtra (input, csv) {

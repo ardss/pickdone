@@ -105,6 +105,9 @@ function rowsToItems (text, format) {
       const content = cell(r, m, 'content')
       if (!content) continue
       const indent = parseInt(cell(r, m, 'indent'), 10) || 1
+      // Completion column passthrough (same as the dida/TickTick path): Todoist exports use "checked" (x/1/true/yes = done)
+      const checkedRaw = cell(r, m, 'checked').toLowerCase()
+      const checked = ['x', '1', 'true', 'yes'].includes(checkedRaw)
       if (type === 'note') { // note rows belong to the preceding task (Todoist CSV has no note column)
         if (lastTask) lastTask.notes = (lastTask.notes ? lastTask.notes + '\n' : '') + content
         continue
@@ -113,12 +116,12 @@ function rowsToItems (text, format) {
       const item = {
         list: '', title: content, notes: '', tags: [],
         due: dateRaw ? parseCsvDate(dateRaw) : 0,
-        reminder: 0, done: false, completedAt: 0,
+        reminder: 0, done: checked, completedAt: 0,
         priority: normPriority(cell(r, m, 'priority'), 'todoist')
       }
       if (indent >= 2 && lastTask) { // INDENT 2..n = subtasks (we support one level; deeper ones are flattened)
         const subs = lastTask.subs || (lastTask.subs = [])
-        subs.push({ text: content, checked: false })
+        subs.push({ text: content, checked })
         continue
       }
       items.push(item)
@@ -220,11 +223,18 @@ function importItems (items, { dryRun = false, format, category = null, useLists
 
   const audit = require('./audit')
   const createdRows = []
-  for (const { it, title, categoryId } of pending) {
+  for (const { it, title, dayStart, categoryId } of pending) {
     const now = Date.now() + createdRows.length
+    // Top-insert sort within the target day's pool (renderer todo.js nextSort semantics), so imports don't all pile at taskSort 0
+    const daySorts = db.call('queryTodos', { deleted: 0 })
+      .filter(x => (x.dayStart || 0) === dayStart)
+      .map(x => x.taskSort).filter(v => v != null)
+    // Completed tasks without a source completion timestamp fall back to the due date (then createTime):
+    // stamping every row with "import moment" inflated the import day's done stats
+    const completedAt = it.done ? (it.completedAt || it.due || now) : 0
     const t = {
       complete: !!it.done,
-      completedAt: it.done ? (it.completedAt || now) : 0,
+      completedAt,
       createTime: now, delete: false,
       reminderTime: it.reminder || 0, reminderOffsets: [], reminderExtra: [],
       estimate: 0, difficulty: 0,
@@ -237,7 +247,7 @@ function importItems (items, { dryRun = false, format, category = null, useLists
       taskContent: title,
       taskDescribe: it.notes || '',
       taskId: core.genTaskId(userId, now),
-      taskSort: 0,
+      taskSort: daySorts.length ? Math.fround(Math.min(...daySorts) - 100) : 0,
       todoTime: it.due || 0,
       userId, status: 'add', version: 0
     }
