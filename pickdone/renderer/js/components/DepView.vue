@@ -66,7 +66,7 @@
         <div class="depv-task__main">
               <span class="td-check" :class="{on: !!t.complete}" role="checkbox" :aria-checked="t.complete ? 'true' : 'false'"
                     :aria-label="$t('statsJ.TodoItem.markDone')" tabindex="0"
-                    @click.stop="completeTask(t)" @keydown.enter.prevent.stop="completeTask(t)" @keydown.space.prevent.stop="completeTask(t)">
+                    @click.stop="completeTask(t)" @keydown.enter.prevent.stop="completeTask(t)">
                 <svg v-if="t.complete" class="td-check-svg" viewBox="0 0 12 12" aria-hidden="true">
                   <polyline points="2,6.2 5,9 10,3" fill="none" stroke="#fff" stroke-width="1.8"
                             stroke-linecap="round" stroke-linejoin="round" pathLength="1"/>

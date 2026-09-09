@@ -109,7 +109,7 @@
       </div>
 
       <div v-if="!inRecycle" class="ep-row ep-done-row" role="checkbox" :aria-checked="(task&&task.complete)?'true':'false'" tabindex="0"
-           @click="toggleComplete" @keydown.enter.prevent="toggleComplete" @keydown.space.prevent.stop="toggleComplete">
+           @click="toggleComplete" @keydown.enter.prevent="toggleComplete">
         <span class="ep-field-label ep-field-ico" :title="$t('statsE.EditPanel.doneBtn')"><app-icon name="check" :size="13"/></span>
         <span class="ep-done-label">{{ $t('statsE.EditPanel.doneBtn') }}</span>
         <span class="ml-auto"></span>
@@ -170,7 +170,7 @@
       <div class="ep-subs" ref="subList">
         <div v-for="(s,i) in subList" :key="i" class="ep-sub">
           <span class="ep-sub-check" :class="{on:s.checked}" role="checkbox" :aria-checked="s.checked ? 'true' : 'false'"
-                tabindex="0" @click.stop="toggleSub(s)" @keydown.enter.prevent.stop="toggleSub(s)" @keydown.space.prevent.stop="toggleSub(s)">{{ s.checked ? '✓' : '' }}</span>
+                tabindex="0" @click.stop="toggleSub(s)" @keydown.enter.prevent.stop="toggleSub(s)">{{ s.checked ? '✓' : '' }}</span>
           <span class="ep-sub-text" :class="{strike:s.checked}">{{s.text}}</span>
           <b class="ep-sub-x close-x close-x--sm" role="button" tabindex="0" :aria-label="$t('statsE.EditPanel.deleteSubtask')"
              @click.stop="delSub(i)" @keydown.enter.prevent.stop="delSub(i)"></b>

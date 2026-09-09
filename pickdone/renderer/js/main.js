@@ -127,7 +127,10 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault()
     t.click()
   }
-}, true) // Capture phase runs before in-component @keydown handlers, avoiding double triggering
+}, true) // Capture phase runs before in-component keydown handlers. NOTE: preventDefault does NOT stop
+// propagation, so role-bearing elements must NOT also bind @keydown.space — handler + this global click()
+// would toggle twice and cancel out (2026-09-09 review found exactly that across 14 spots; real <button>s
+// are safe because this preventDefault cancels their native Space keyup activation).
 
 // Lets deep logic call UI capabilities (assigned as the root instance proxy in bootstrap after mount, with $store/$message/$confirm)
 window.appUI = null

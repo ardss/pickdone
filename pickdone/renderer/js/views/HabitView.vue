@@ -40,7 +40,7 @@
                 :aria-checked="h.records && h.records[todayKey] ? 'true' : 'false'"
                 :class="{ on: h.records && h.records[todayKey] }"
                 :style="h.records && h.records[todayKey] ? { background: h.color, borderColor: h.color } : {}"
-                @click="check(h)" @keydown.enter.prevent="check(h)" @keydown.space.prevent.stop="check(h)">✓</span>
+                @click="check(h)" @keydown.enter.prevent="check(h)">✓</span>
           <template v-if="editingId === h.id">
             <input v-model="editName" class="habit-rename" @keyup.enter="saveRename(h)" @blur="saveRename(h)"/>
           </template>

@@ -76,7 +76,7 @@
                @contextmenu="taskContextMenu(p, $event)"
                @mouseenter="hoverTask(p.taskId)" @mouseleave="unhoverTask">
             <span class="dr-plan-chk" role="checkbox" :aria-checked="p.done ? 'true' : 'false'" :aria-label="$t('statsE.TodoItem.markComplete')"
-                  tabindex="0" :class="{ done: p.done }" @click.stop="planDone(p)" @keydown.enter.prevent.stop="planDone(p)" @keydown.space.prevent.stop="planDone(p)"></span>
+                  tabindex="0" :class="{ done: p.done }" @click.stop="planDone(p)" @keydown.enter.prevent.stop="planDone(p)"></span>
             <!-- Exact minutes are already expressed by the hour slot's ticks; no repeated time inside the block (redundant info, user-finalized); with multiple instances per task the badge = the Nth estimated pomodoro -->
             <span class="dr-plan-name" role="button" tabindex="0"
                   :aria-label="$t('statsE.TodoItem.openEditor')" @click.stop="openTask(p)" @keydown.enter.prevent.stop="openTask(p)">{{ p.name }}<i v-if="p.count > 1" class="dr-plan-seq">{{ $t('statsG.DayRail.planSeq', { n: p.idx + 1 }) }}</i></span>

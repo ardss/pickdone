@@ -127,7 +127,12 @@ test('MatrixGrid: quadrant drop goes through moveWithUndo with a three-field sna
   assert.ok(!/dropOn[\s\S]*updateTodoFields[\s\S]*patch:\s*\{ important: q\.important/.test(src.split('moveWithUndo')[0]), 'no direct silent update left in dropOn')
 })
 
-test('a11y: every role="checkbox" in the component domain binds space alongside enter', () => {
+test('a11y: role="checkbox" elements must NOT bind @keydown.space — the global main.js capture handler covers Space, and a per-element binding would double-toggle and cancel out', () => {
+  // 2026-09-09 release review: main.js document-level capture listener (role=checkbox/button/switch/...)
+  // already activates Space via t.click(); preventDefault does not stop propagation, so an element-local
+  // @keydown.space handler fires a SECOND toggle — the two cancel out and keyboard checking appears dead.
+  // Real <button>s (SideNav sections) may keep theirs: the global handler skips the BUTTON tag and the
+  // preventDefault cancels the native keyup activation, so exactly one toggle remains.
   const files = [
     'renderer/js/components/TodoItem.vue',
     'renderer/js/components/DayDeck.vue',
@@ -143,14 +148,17 @@ test('a11y: every role="checkbox" in the component domain binds space alongside 
   const bad = []
   for (const f of files) {
     const src = read(f)
-    // Scan per tag: a role="checkbox" tag whose event list lacks keydown.space is a regression
     const re = /<(?:span|div)[^>]*role="checkbox"[\s\S]*?>/g
     let m
     while ((m = re.exec(src))) {
-      if (!m[0].includes('@keydown.space')) bad.push(`${f}: ${m[0].slice(0, 80)}...`)
+      if (m[0].includes('@keydown.space')) bad.push(`${f}: ${m[0].slice(0, 80)}...`)
     }
+    assert.ok(src.includes('role="checkbox"'), `${f} should still declare role=checkbox entries (sanity)`)
   }
-  assert.deepEqual(bad, [], 'role=checkbox tags missing space binding:\n' + bad.join('\n'))
+  assert.deepEqual(bad, [], 'role=checkbox tags must not bind local @keydown.space (double toggle):\n' + bad.join('\n'))
+  // The global handler itself must stay in place — it is the single Space activation path now
+  const mainjs = read('renderer/js/main.js')
+  assert.ok(mainjs.includes("role === 'checkbox'") && mainjs.includes("t.click()"), 'main.js global Space activation handler must remain')
 })
 
 test('a11y: TodoBoxView batch check is keyboard-focusable', () => {

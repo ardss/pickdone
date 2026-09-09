@@ -519,7 +519,8 @@ async function main () {
     case 'undo': {
       if (dry) return emitNext({ dryRun: true, taskId: lib.resolveTask(opts._[0]).taskId, would: 'undo complete' }, ['remove --dry-run to actually run'])
       if (!opts._[0]) throw new lib.CliError('usage: undo <taskId|keyword>', 'USAGE')
-      return okMsg(lib.toggleComplete(opts._[0], false))
+      // Pass the explicit override through like `done` does; absent flag defers to the setting (lib default)
+      return okMsg(lib.toggleComplete(opts._[0], false, { withSubtasks: opts['no-sub-cascade'] ? false : undefined }))
 
     }
     case 'edit': {
