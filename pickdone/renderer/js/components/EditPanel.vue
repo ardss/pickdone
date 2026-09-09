@@ -88,6 +88,10 @@
                tabindex="0" @click="addPred(c.taskId)" @keydown.enter.prevent="addPred(c.taskId)">
             <span class="ep-cat-dot" style="background:var(--text-4)"></span> + {{ c.taskContent }}
           </div>
+          <!-- Candidate list is capped (render cost); make the truncation explicit instead of silently hiding the rest -->
+          <div v-if="depTotal > depCandidates.length" class="ep-dep-truncated" role="note">
+            {{ $t('statsE.EditPanel.depsTruncated', { shown: depCandidates.length, total: depTotal }) }}
+          </div>
         </div>
       </div>
 
@@ -171,7 +175,7 @@
         <div v-for="(s,i) in subList" :key="i" class="ep-sub">
           <span class="ep-sub-check" :class="{on:s.checked}" role="checkbox" :aria-checked="s.checked ? 'true' : 'false'"
                 tabindex="0" @click.stop="toggleSub(s)" @keydown.enter.prevent.stop="toggleSub(s)">{{ s.checked ? '✓' : '' }}</span>
-          <span class="ep-sub-text" :class="{strike:s.checked}">{{s.text}}</span>
+          <span class="ep-sub-text" :class="{strike:s.checked}" @click="toggleSub(s)">{{s.text}}</span>
           <b class="ep-sub-x close-x close-x--sm" role="button" tabindex="0" :aria-label="$t('statsE.EditPanel.deleteSubtask')"
              @click.stop="delSub(i)" @keydown.enter.prevent.stop="delSub(i)"></b>
           <b class="ep-sub-drag">≡</b>
@@ -199,9 +203,9 @@
         <!-- Integrated ledger control (user-finalized 2026-09-03): estimate stepper segment + actual segment share one equal-height housing, whole housing highlights on selection, clicking the actual segment opens the ledger dialog -->
         <span class="ep-tom-account" :class="{gain: tomatoActual > 0}">
           <span class="ep-tom-seg ep-tom-seg--est">
-            <button class="ep-tom-step" :aria-label="$t('statsG.EpTomato.estTip')" @click.stop="estDelta(-1)">−</button>
+            <button class="ep-tom-step" :aria-label="$t('statsG.EpTomato.estDecrease')" @click.stop="estDelta(-1)">−</button>
             <span class="ep-tom-num">{{ tomatoEstimateN }}</span>
-            <button class="ep-tom-step" :aria-label="$t('statsG.EpTomato.estTip')" @click.stop="estDelta(1)">+</button>
+            <button class="ep-tom-step" :aria-label="$t('statsG.EpTomato.estIncrease')" @click.stop="estDelta(1)">+</button>
             <img class="ep-tom-ico" src="app://app/assets/img/icon-tomato-timer2.svg" alt="">
           </span>
           <span class="ep-tom-seg ep-tom-seg--act" role="button" tabindex="0"
@@ -279,6 +283,21 @@ const FIELD_MAP = {
 // Priority has two tiers (user-finalized): high/low; connected with the quadrant's important — high⇔important=1, low⇔important=0 (see fieldPatch)
 const PRIOS = [{ v: 3, l: 'statsE.EditPanel.priorityHigh' }, { v: 1, l: 'statsJ.EditPanel.prioLow' }]
 
+// [component-fixes] pure-start (extracted verbatim by tests/component-fixes-a11y.test.mjs)
+/** True when the attachment url is still referenced by the task row's image/files JSON.
+ *  Malformed JSON counts as present (fail-safe: never delete a disk file on a parse error). */
+function attachmentUrlPresent (row, url) {
+  if (!row || !url) return false
+  for (const k of ['image', 'files']) {
+    try {
+      const a = JSON.parse(row[k] || '[]')
+      if (Array.isArray(a) && a.some(x => x && x.url === url)) return true
+    } catch (e) { return true }
+  }
+  return false
+}
+// [component-fixes] pure-end
+
 export default {
   name: 'EditPanel',
   data () {
@@ -313,11 +332,10 @@ export default {
       return this.depPreds.map(id => (byId[id] && (byId[id].taskContent || byId[id].taskId)) || id)
     },
     depCandidates () { // undone tasks (excl. self & existing preds), first 8 by recency
-      const have = new Set(this.depPreds)
-      const self = this.e && this.e.taskId
-      return this.$store.state.todo.todoList
-        .filter(t => !t.delete && !t.complete && t.taskId !== self && !have.has(t.taskId) && t.taskContent)
-        .slice(0, 8)
+      return this.allDepCandidates().slice(0, 8)
+    },
+    depTotal () { // full candidate count before the render cap (drives the truncation notice)
+      return this.allDepCandidates().length
     },
     /* Pomodoro estimate/actual (ported from the refactor branch): the estimate is stored in tomatoEstimate, the actual is accumulated by attributing pomodoro records */
     tomatoEstimateN () { return getEstimate(this.e && this.e.taskId) },
@@ -427,6 +445,12 @@ export default {
     if (this._sortable) { try { this._sortable.destroy() } catch (err) { /* already destroyed */ } this._sortable = null }
   },
   methods: {
+    allDepCandidates () {
+      const have = new Set(this.depPreds)
+      const self = this.e && this.e.taskId
+      return this.$store.state.todo.todoList
+        .filter(t => !t.delete && !t.complete && t.taskId !== self && !have.has(t.taskId) && t.taskContent)
+    },
     tt (k) { const s = String(k || ''); return (s.startsWith('statsE.') || s.startsWith('statsJ.')) ? this.$t(s) : s },
     onImgErr (e) { (e.target as HTMLElement).classList.add('ep-img-broken') },
     /** Subtask drag sorting (sortablejs library; Up/Down buttons kept as a keyboard-accessible fallback).
@@ -771,7 +795,15 @@ export default {
           this.markDirty(arrName === 'imgList' ? 'imgs' : 'files')
           this.queueSave({})
           // Delay disk file deletion until after the undo window: an accidental delete can be reverted losslessly within 5 seconds
-          diskTimer = setTimeout(() => { if (item.url) window.todoAPI.deleteFile(item.url) }, 5500)
+          diskTimer = setTimeout(() => {
+            if (!item.url) return
+            // Data-safety guard: re-check the latest task row in the store before touching the disk.
+            // If the JSON update never landed (save failed / panel unmounted mid-write), the row still
+            // references the url — deleting the file then would corrupt the task's attachments.
+            const row = this.$store.state.todo.todoList.find(t => t.taskId === (this.e && this.e.taskId))
+            if (attachmentUrlPresent(row, item.url)) return
+            window.todoAPI.deleteFile(item.url)
+          }, 5500)
         },
         () => {
           clearTimeout(diskTimer)
@@ -894,6 +926,8 @@ export default {
   font-size: var(--fs-sm); color: var(--text-2);
 }
 .ep-tag-x { color: var(--text-3); cursor: pointer; font-size: var(--fs-xs); }
+/* Dependency candidate truncation notice (list is render-capped at 8) */
+.ep-dep-truncated { padding: 6px 8px 2px; font-size: var(--fs-xs); color: var(--text-3); }
 /* 行内小操作 hover 显现（删除交互统一规范）：误触面大的 chip 内 X 不常驻 */
 .ep-tag-chip .ep-tag-x { opacity: 0; transition: opacity var(--dur-fast); }
 .ep-tag-chip:hover .ep-tag-x, .ep-tag-chip:focus-within .ep-tag-x, .ep-tag-x:focus-visible { opacity: 1; }
@@ -956,8 +990,10 @@ export default {
 .ep-sub-x { color: var(--text-3); font-weight: 400; cursor: pointer; }
 .ep-sub-x:hover { color: var(--danger); }
 .ep-sub-drag { color: var(--text-3); font-weight: 400; cursor: grab; }
-.ep-sub-move { display: none; }
-.ep-sub:hover .ep-sub-move { display: inline; }
+/* Up/Down keyboard fallback buttons: opacity (not display:none) keeps them in the Tab chain —
+   visible on row hover AND whenever focus is anywhere inside the subtask row */
+.ep-sub-move { opacity: 0; pointer-events: none; transition: opacity var(--dur-mid); }
+.ep-sub:hover .ep-sub-move, .ep-sub:focus-within .ep-sub-move { opacity: 1; pointer-events: auto; }
 .ep-sub-move i { font-style: normal; color: var(--text-3); cursor: pointer; margin-left: 3px; font-size: var(--fs-xs); }
 .ep-addsub-input { flex: 1; border: 0; background: none; font-size: var(--fs-md); color: var(--text-1); }
 .ep-addsub-input::placeholder { color: #8a9099; }
