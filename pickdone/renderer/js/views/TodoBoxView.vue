@@ -18,7 +18,7 @@
                 <li v-for="m in sortMethodOptions" :key="m.value" tabindex="0"
                     :class="{ on: m.value === settings.todoBoxSortMethod }" @click="setSort(m.value)" @keydown.enter.prevent="setSort(m.value)">{{ m.label }}</li>
               </ul>
-              <template #reference><span class="dropdown-select__label" role="button" tabindex="0" @keydown.enter.prevent="$event.currentTarget.click()">{{ sortMethodLabel }}<i class="dd-caret">&#9662;</i></span></template>
+              <template #reference><span class="dropdown-select__label" role="button" tabindex="0" @keydown.enter.prevent="($event.currentTarget as HTMLElement).click()">{{ sortMethodLabel }}<i class="dd-caret">&#9662;</i></span></template>
             </el-popover>
           </div>
           <div class="dropdown-select" :class="{ 'is-open': openDd === 'order' }">
@@ -27,7 +27,7 @@
                 <li v-for="o in sortOrderOptions" :key="o.value" tabindex="0"
                     :class="{ on: o.value === settings.todoBoxSortOrder }" @click="setOrder(o.value)" @keydown.enter.prevent="setOrder(o.value)">{{ o.label }}</li>
               </ul>
-              <template #reference><span class="dropdown-select__label" role="button" tabindex="0" @keydown.enter.prevent="$event.currentTarget.click()">{{ sortOrderLabel }}<i class="dd-caret">&#9662;</i></span></template>
+              <template #reference><span class="dropdown-select__label" role="button" tabindex="0" @keydown.enter.prevent="($event.currentTarget as HTMLElement).click()">{{ sortOrderLabel }}<i class="dd-caret">&#9662;</i></span></template>
             </el-popover>
           </div>
           <div class="dropdown-select" :class="{ 'is-open': openDd === 'cat' }">
@@ -37,7 +37,7 @@
                 <li v-for="c in cats" :key="c.categoryId" tabindex="0"
                     :class="{ on: c.categoryId === settings.todoBoxCategoryId }" @click="setCat(c.categoryId)" @keydown.enter.prevent="setCat(c.categoryId)">{{ c.categoryName }}</li>
               </ul>
-              <template #reference><span class="dropdown-select__label" role="button" tabindex="0" @keydown.enter.prevent="$event.currentTarget.click()">{{ settings.todoBoxCategoryId === -1 ? $t('statsC.TodoBox.allCats') : catNameOf(settings.todoBoxCategoryId) }}<i class="dd-caret">&#9662;</i></span></template>
+              <template #reference><span class="dropdown-select__label" role="button" tabindex="0" @keydown.enter.prevent="($event.currentTarget as HTMLElement).click()">{{ settings.todoBoxCategoryId === -1 ? $t('statsC.TodoBox.allCats') : catNameOf(settings.todoBoxCategoryId) }}<i class="dd-caret">&#9662;</i></span></template>
             </el-popover>
           </div>
           <button class="mini" :class="{ primary: batchMode }" @click="toggleBatch">{{ batchMode ? $t('statsC.TodoBox.batchExit') : $t('statsC.TodoBox.batchManage') }}</button>

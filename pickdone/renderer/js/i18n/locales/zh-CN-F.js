@@ -15,8 +15,6 @@ export default {
       "labelPattern": "{m}月{d}日 {w}",
       "calTitle": "{y}年{m}月",
       "labelPatternYear": "{y}年{m}月{d}日 {w}",
-      "prevYear": "上一年",
-      "nextYear": "下一年"
     },
     "QuickAdd": {
       "noDate": "未安排日期",

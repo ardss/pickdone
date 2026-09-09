@@ -5,8 +5,6 @@ export default {
       "labelPattern": "{w}, {m}/{d}",
       "calTitle": "{m}/{y}",
       "labelPatternYear": "{w}, {m}/{d}/{y}",
-      "prevYear": "Previous year",
-      "nextYear": "Next year"
     },
     "QuickAdd": {
       "placeholder": "Type a task, press Enter to create",
