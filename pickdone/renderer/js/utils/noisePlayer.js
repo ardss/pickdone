@@ -84,5 +84,18 @@ export function stopNoise () {
 
 export function setNoiseVolume (v) { if (current) current.gain.gain.value = clamp01(v) }
 
+/** Drop the cached decode for a key (undefined/null = all keys): the user replaced a custom white-noise file,
+ *  and the permanent decoded cache would keep playing the old audio until restart. Passing the key that is
+ *  currently playing also stops it so the next startNoise re-decodes. */
+export function invalidateNoise (key) {
+  if (key == null) {
+    decoded.clear()
+    if (current) stopNoise()
+    return
+  }
+  decoded.delete(key)
+  if (current && current.key === key) stopNoise()
+}
+
 // Default export = for main.js's `import noisePlayer from ...` usage (with only named exports, that import blows up the whole chain into a white screen under browser ESM)
-export default { startNoise, stopNoise, setNoiseVolume }
+export default { startNoise, stopNoise, setNoiseVolume, invalidate: invalidateNoise }

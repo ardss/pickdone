@@ -330,6 +330,17 @@ async function bootstrap () {
       if (mutation.type === 'tomato/patch' || (sp && ('whiteNoiseAudio' in sp || 'whiteNoiseVolume' in sp))) applyNoise()
     })
     applyNoise()
+
+    // Custom white-noise file replaced on disk: the main process broadcasts 'white-noise-updated' after the user
+    // picks a new file (channel name fixed main-process-side); drop the player's permanent decode cache so the
+    // new audio actually plays. Preload exposes onWhiteNoiseUpdated — guarded because older preload builds may
+    // not whitelist the channel yet (in that case nothing subscribes and behavior is the old status quo).
+    if (typeof window.todoAPI.onWhiteNoiseUpdated === 'function') {
+      window.todoAPI.onWhiteNoiseUpdated(d => {
+        noisePlayer.invalidate(d && d.key)
+        applyNoise() // was playing the replaced sound: restart so it re-decodes the new file immediately
+      })
+    }
   }
 
   // Shared tomato tick: main window drives + float window is a fallback heartbeat (2026-09-04 deep review P0: main window can be closed/rebuilt (tray minimization),
