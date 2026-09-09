@@ -50,6 +50,20 @@ function create () {
   })
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   win.loadURL('app://app/renderer-dist/index.html#/__quick-add').catch(e => { try { log.warn('[QuickAdd] loadURL failed', e) } catch {} })
+  // 首次唤起 focus 早于页面加载必丢(2026-09-10 P2):toggle 在 loadURL 尚未完成时就 send('quick-add-focus'),
+  // 渲染端监听器还没注册 → 第一次按快捷键输入框不聚焦。did-finish-load 后若窗仍可见则补发一次。
+  win.webContents.on('did-finish-load', () => {
+    try { if (win && !win.isDestroyed() && win.isVisible()) win.webContents.send('quick-add-focus') } catch { /* gone */ }
+  })
+  // 渲染进程崩溃自愈(2026-09-10 P1,仿 tomato-float):崩溃后 quick-add 窗白屏且永不恢复,
+  // toggle 的复用分支(win.isVisible())还会对死窗 send → 静默失败。销毁即可,'closed' 复位 win=null,
+  // toggle 的 `if (!win || win.isDestroyed()) create()` 分支天然惰性重建,无需额外状态。
+  win.webContents.on('render-process-gone', (_e, details) => {
+    const reason = details && details.reason
+    log.error('[QuickAdd] render-process-gone:', reason, 'exitCode=', details && details.exitCode)
+    if (!reason || reason === 'clean-exit') return
+    try { if (win && !win.isDestroyed()) win.destroy() } catch { /* already gone */ } // 'closed' 复位 win=null
+  })
   // Auto-collapse on blur (disappears when the user clicks back to work, without interrupting flow)
   win.on('blur', () => {
     if (ignoreBlur) { ignoreBlur = false; return }
