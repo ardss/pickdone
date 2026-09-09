@@ -32,11 +32,11 @@
       <div v-if="showCal" v-click-outside="() => showCal = false" class="ds-cal-pop" @click.stop
            @mouseenter="calEnter" @mouseleave="calLeave">
         <div class="ds-cal-head">
-          <button @click="calNav(-12)" :title="$t('statsD.DayDateStrip.prevYear')">«</button>
-          <button @click="calNav(-1)">‹</button>
+          <button @click="calNav(-12)" :title="$t('statsD.DayDateStrip.prevYear')" :aria-label="$t('statsD.DayDateStrip.prevYear')">«</button>
+          <button @click="calNav(-1)" :title="$t('statsD.DayDateStrip.prevMonth')" :aria-label="$t('statsD.DayDateStrip.prevMonth')">‹</button>
           <b>{{ $t('statsD.DayDateStrip.calTitle', { y: calMonth.split('-')[0], m: Number(calMonth.split('-')[1]) }) }}</b>
-          <button @click="calNav(1)">›</button>
-          <button @click="calNav(12)" :title="$t('statsD.DayDateStrip.nextYear')">»</button>
+          <button @click="calNav(1)" :title="$t('statsD.DayDateStrip.nextMonth')" :aria-label="$t('statsD.DayDateStrip.nextMonth')">›</button>
+          <button @click="calNav(12)" :title="$t('statsD.DayDateStrip.nextYear')" :aria-label="$t('statsD.DayDateStrip.nextYear')">»</button>
         </div>
         <div class="ds-cal-grid">
           <i v-for="h in calWeekHeaders" :key="'h'+h" class="ds-cal-h">{{h}}</i>

@@ -8,7 +8,9 @@
        @click.stop="openEdit" @keydown.enter.prevent="openEdit" @contextmenu.stop.prevent="ctxMenu($event)"
        @keydown.ctrl.up.prevent="keyboardMove(-1)" @keydown.ctrl.down.prevent="keyboardMove(1)"
        @keydown.shift.delete.prevent="quickDelete"
-       aria-keyshortcuts="Control+ArrowUp Control+ArrowDown Shift+Delete">
+       :aria-keyshortcuts="todo.dayStart ? 'Control+ArrowUp Control+ArrowDown Shift+Delete' : 'Shift+Delete'">
+       <!-- Ctrl+Up/Down only reorders within the same day (keyboardMove no-ops for undated tasks), so the
+            shortcut is only announced for dated tasks; Shift+Delete always applies -->
     <span class="td-check" :class="{on:todo.complete}" :style="todo.complete?{background:checkboxColor,borderColor:checkboxColor}:{}"
           role="checkbox" :aria-checked="todo.complete ? 'true' : 'false'" :aria-label="$t('statsE.TodoItem.markComplete')"
           tabindex="0" @click.stop="onCheckClick" @keydown.enter.prevent.stop="onCheckClick($event)">

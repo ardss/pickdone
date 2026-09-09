@@ -100,8 +100,9 @@ const X_CSS = `
 .tx-startbtn{border:0;background:var(--panel, #fff);color:var(--brand-dark);font-weight:600;border-radius:9px;padding:9px 20px;font-size:12px;cursor:pointer}
 .tx-startbtn:hover{background:var(--brand-light);color:var(--brand-dark)}
 .tx-empty{padding:8px 2px;font-size:12px;color:var(--text-4)}
-.tx-drawer{width:0;overflow:hidden;transition:width .3s cubic-bezier(.2,.8,.2,1);flex-shrink:0}
-.tx-drawer.open{width:340px}
+/* Collapsed drawer keeps its inner content out of the Tab chain: visibility:hidden (delayed so the width transition finishes before it clips) */
+.tx-drawer{width:0;overflow:hidden;visibility:hidden;transition:width .3s cubic-bezier(.2,.8,.2,1),visibility 0s .3s;flex-shrink:0}
+.tx-drawer.open{width:340px;visibility:visible;transition:width .3s cubic-bezier(.2,.8,.2,1),visibility 0s 0s}
 .tx-drawer__head{font-size:12px;color:var(--text-3);padding:2px 0 8px}
 .today-x .day-rail{position:static;height:auto;display:flex}
 `

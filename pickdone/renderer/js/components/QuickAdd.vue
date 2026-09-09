@@ -14,7 +14,7 @@
       </transition>
       <span class="qa-cal" :title="$t('statsD.QuickAdd.selectDate')">
         <span class="todo-input-add__calender"></span>
-        <el-date-picker class="qa-cal-picker" size="small" value-format="x" type="date"
+        <el-date-picker ref="calPick" class="qa-cal-picker" size="small" value-format="x" type="date"
                         :aria-label="$t('statsD.QuickAdd.selectDate')"
                         :clearable="true" :model-value="effDate && effDate !== 0 ? effDate : null"
                         @update:model-value="onCalPick"/>
@@ -75,6 +75,14 @@ export default {
   },
   mounted () {
     window.addEventListener('todo:focus-quickadd', this.focusInput)
+    // The hidden calendar picker input stays out of the Tab focus chain (invoked programmatically by the calendar
+    // button only) — same fix as EditPanel's hidden date/deadline pickers; $el may be a comment node, so fall back
+    // to the parent element defensively
+    this.$nextTick(() => {
+      const pickEl = this.$refs.calPick && this.$refs.calPick.$el
+      const inp = pickEl && typeof pickEl.querySelector === 'function' ? pickEl.querySelector('input') : (pickEl && pickEl.parentElement ? pickEl.parentElement.querySelector('input') : null)
+      if (inp) inp.setAttribute('tabindex', '-1')
+    })
   },
   beforeUnmount () {
     window.removeEventListener('todo:focus-quickadd', this.focusInput)

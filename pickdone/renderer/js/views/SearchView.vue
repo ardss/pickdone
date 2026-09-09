@@ -8,7 +8,7 @@
           <div class="main-nav-search__icon"></div>
           <input ref="inp" v-model="q" spellcheck="false" autocomplete="off"
                  class="main-nav-search__input" type="text" :placeholder="$t('statsC.Search.searchPlaceholder')"/>
-          <div v-if="q.trim()!==''" class="main-nav-search__clear close-x close-x--sm" role="button" tabindex="0" :aria-label="$t('statsC.Search.clearAria')" @click="q=''"></div>
+          <div v-if="q.trim()!==''" class="main-nav-search__clear close-x close-x--sm" role="button" tabindex="0" :aria-label="$t('statsC.Search.clearAria')" @click="q=''" @keydown.enter.prevent="q=''"></div>
         </div>
         <!-- filters (correspond to the project baseline's three dropdown-selects) -->
         <el-select size="small" class="search-filter-el" style="width:110px"
