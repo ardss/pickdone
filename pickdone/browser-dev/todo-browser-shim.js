@@ -226,6 +226,12 @@
       }
       case 'getAll':
         return clone(todos)
+      case 'getById': {
+        // 对齐桌面 db.js getById:按 taskId 查单行,无则 null(渲染端 getById 调用方依赖 null 判缺失)
+        const id = typeof params === 'string' ? params : (params && params.taskId)
+        const row = todos.find(t => t.taskId === String(id))
+        return row ? clone(row) : null
+      }
       case 'queryTodos': {
         const q = typeof params === 'string' ? {} : (params || {})
         let rows = todos.filter(r => !r.delete)
@@ -271,6 +277,16 @@
         let m = {}
         try { m = JSON.parse(localStorage.getItem(META_KEY)) || {} } catch {}
         m[key] = String(value) // 与主进程 setMeta 的 String(v) 落库语义对齐
+        localStorage.setItem(META_KEY, JSON.stringify(m))
+        return true
+      }
+      case 'deleteMeta': {
+        // 对齐 ALLOWED_RENDERER_OPS:clearSnapshot 等路径会调 deleteMeta,此前被静默吞掉返回 null
+        const { key } = normalizeMetaArgs(params)
+        if (!key) return false
+        let m = {}
+        try { m = JSON.parse(localStorage.getItem(META_KEY)) || {} } catch {}
+        delete m[key]
         localStorage.setItem(META_KEY, JSON.stringify(m))
         return true
       }
