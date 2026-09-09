@@ -81,7 +81,8 @@ function createSecurityLock ({ getMainWindow, showMainOrLock, readConfig, writeC
     })
     // Only real main-frame failures may disable the lock: ERR_ABORTED (-3) is a benign interruption
     // (window destroyed / superseded mid-load, e.g. quit race) and must not wipe the user's password.
-    lockWin.webContents.on('did-fail-load', (_e, code, desc, isMainFrame) => {
+    // Signature: (event, errorCode, errorDescription, validatedURL, isMainFrame) — isMainFrame is the 5th.
+    lockWin.webContents.on('did-fail-load', (_e, code, desc, _url, isMainFrame) => {
       if (!isMainFrame || code === -3) return
       onLockLoadFail('did-fail-load: ' + code + ' ' + desc)
     })
