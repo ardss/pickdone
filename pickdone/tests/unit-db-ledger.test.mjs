@@ -73,13 +73,15 @@ test('ledger: tomatoByDay aggregates focus by dateKey within bounds (isolated db
   assert.equal(rows.some(r => r.ds === '2026-10-01'), false, '10月记录不落在9月边界内')
 })
 
-test('ledger: 迁移对损坏 JSON blob 容错(不抛错、不落行、blob 清理)', () => {
+test('ledger: 迁移对损坏 JSON blob 容错(不抛错、不落行、blob 保留——2026-09-10 起损坏源不再被销毁)', () => {
   const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'tomato-ledger-corrupt-'))
   db.init(fresh)
   db.call('setMeta', ['db.tomatoState', '{"tomatoRecordList": [broken'])
   assert.equal(db.call('tomatoMigrateFromMeta'), 0, '损坏 blob 迁移必须静默容错返回 0')
   assert.equal(db.call('tomatoAll').length, 0)
-  assert.equal(db.call('getMeta', 'db.tomatoState'), null, '容错分支同样清 blob,防止之后被复活')
+  // 契约变更(第四轮挖掘 #6):损坏 blob 可能只是半截写入,里面仍可能是可恢复的历史账——
+  // 迁移不得销毁迁移源,保留 blob 供人工/后续版本抢救;只有成功解析才允许清理
+  assert.notEqual(db.call('getMeta', 'db.tomatoState'), null, '损坏 blob 必须保留(不再 delBlob)')
 })
 
 test('ledger: migration imports meta blob once, skips when table non-empty', () => {
