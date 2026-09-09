@@ -62,11 +62,18 @@ export function buildTaskMenu (vm, t, caps = {}, extra = []) {
     // One-step backfill (user feedback: "actual" in the panel is read-only, missed focus needs an entry point) — creates a real record already linked to this task; actual tomatoes +1 and reconcilable on the timeline
     const backfill = (min) => {
       const cur = raw()
-      const min2 = Math.max(1, Math.min(240, min))
+      // clamp 1..600 = the DB-layer single source (db.js _recToRow clamps 600): a renderer-side cap of 240 used to
+      // silently drop the tail of any focus longer than 4h on next reload
+      const min2 = Math.max(1, Math.min(600, min))
       const startTs = Math.max(+dayjs().startOf('day'), Date.now() - min2 * 60000)
+      const endTime = startTs + min2 * 60000
+      // Idempotent id shape unified with CLI lib.js backfillRecord: same slot never mints a second row
       vm.$store.commit('tomato/addRecord', {
-        tomatoId: 'tmt_m_' + startTs + '_' + min2, endTime: startTs + min2 * 60000,
-        dateKey: dayjs(startTs).format(FMT.date),
+        tomatoId: 'tmt_m_' + startTs + '_' + min2 + '_' + String(cur.taskId || 'free').slice(-8),
+        endTime,
+        // dateKey derives from endTime: the DB layer unconditionally re-derives it from endTime (tomatoAppendMany /
+        // tomatoUpdateById), so deriving from startTs here split the two across midnight backfills
+        dateKey: dayjs(endTime).format(FMT.date),
         focus: cur.taskContent || '', focusTaskId: cur.taskId, focusDuration: min2, rest: 0, restDuration: 0,
         succeed: true, status: 'local', manual: true
       })
