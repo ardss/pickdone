@@ -112,7 +112,10 @@ function createSecurityLock ({ getMainWindow, showMainOrLock, readConfig, writeC
       } else if (stored.startsWith('plain:')) {
         expected = stored.slice(6) // plaintext fallback when safeStorage is unavailable: unlocking must symmetrically strip the prefix (P0-3 fix)
       }
-    } catch (e) { log.error('[SecurityLock] 解密失败', e) }
+    // 解密失败按"无密码"放行(2026-09-10 P1):catch 后 expected 仍持有 'enc1:...' 密文串,
+    // 下方 `if (!expected)` 不命中、比较恒 false → 用户被永久锁死(任何输入都解不开)。
+    // 与本文件 avoid-permanent-lockout 哲学一致:可用性优先于锁,解密失败等同未设密码。
+    } catch (e) { log.error('[SecurityLock] 解密失败', e); expected = '' }
     // When no password has ever been set, any input unlocks (avoid a permanent lockout)
     if (!expected) return true
     return String(plain) === expected
