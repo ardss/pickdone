@@ -333,6 +333,11 @@ export default {
       dispatch('auth/saveSnowGain', focusMin, { root: true })
       if (s.attachTodo && s.attachTodo.taskId) {
         window.todoAPI?.dbCall?.('bumpSnow', { taskId: s.attachTodo.taskId, minutes: focusMin })?.catch?.(() => {})
+        // bumpSnow is a todo-row write issued as a raw dbCall outside the todo/* actions, so store/index.js's
+        // WRITE_ACTIONS stamping never fires for it → the todos-changed broadcast echo of this write misses the
+        // 1500ms echo-suppression window and todo/init's historyClear wipes the undo stack. Stamp it here,
+        // same as the subscribeAction after-hook does for todo/* writes.
+        try { this.state.todo._lastLocalWriteAt = Date.now() } catch (e) { /* store unavailable in tests */ }
       }
       dispatch('todo/writeCriticalBackup', null, { root: true })
       try { new Audio(confirmUrl(rootState.settings.completeSound)).play().catch(() => {}) } catch (e) { /* empty */ }
