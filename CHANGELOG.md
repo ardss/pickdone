@@ -27,6 +27,8 @@ and versioning follows [Semantic Versioning](https://semver.org/).
 - Habits & records: habits can finally be renamed (the rename handler existed but was never wired); the frequency form rejects empty-weekday or out-of-range interval configs instead of silently creating never-firing habits; the pomodoro account dialog can correct an accidental "abandoned" state directly.
 - Calendar & a11y: the date-strip calendar popover honors the week-start setting instead of hardcoded Monday; every self-drawn role=checkbox now responds to Space in addition to Enter; the due-date clear button has an aria-label; keyboard-move screen-reader announcements are standalone sentences (no more "Completed Moved down: ..."); stale expired-group fold keys no longer accumulate forever in settings.
 
+- Release-review hardening: quitting after the flush window now re-issues a normal quit so auto-updates still install on exit (the previous fix's app.exit() skipped the quit event); tray → quit no longer crashes when the main window was already destroyed (close-to-tray = off); redoing a delete re-snapshots schedule chips so delete/undo/redo/undo round-trips no longer lose them; Space activation on role=checkbox elements no longer double-toggles (a local binding fought the global handler and cancelled out, making keyboard checking look dead); `pickdone undo --no-sub-cascade` is honored; the security-lock fallback no longer triggers on benign load interruptions.
+
 ## [0.2.2] - 2026-09-08
 
 ### Added
