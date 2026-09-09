@@ -314,6 +314,8 @@ function createMainWindow () {
     } else {
       log.error('[Crash] 重载超限,relaunch 应用')
       try { shortcuts.unregisterAll() } catch {}
+      // Best-effort dedup-ledger persist so the relaunch doesn't re-fire reminders from the last 60s
+      try { scheduler.flushFiredNow() } catch {}
       app.relaunch()
       app.exit(1)
     }
@@ -392,7 +394,11 @@ function rebuildTrayMenu () {
   tpl.push({ type: 'separator' })
   tpl.push({ label: i18nM.mt('trayQuit'), click: () => {
     quitByUser = true
-    if (win) writeConfig({ winBounds: win.getBounds() })
+    // win can be a DESTROYED instance here (closeActionMinimize=false destroys the window on X but only
+    // createMainWindow reassigns the module var) — getBounds on it throws "Object has been destroyed" and
+    // kills the whole quit chain. Route through the live-window guard.
+    const qw = getMainWindow()
+    if (qw) writeConfig({ winBounds: qw.getBounds() })
     // Destroy the tray icon first: the icon only disappears on Windows when the process exits,
     // while the quit path (renderer flush + scheduler persist + WAL close) can take seconds — without this, the icon lingers and reads as "quit is slow"
     if (tray) { try { tray.destroy() } catch (e) { /* empty */ } tray = null }
@@ -576,6 +582,7 @@ function proxyDb () {
 function dbApi () { return { queryTodos: p => dbm.call('queryTodos', p), ...proxyDb() } }
 
 let quitting = false // re-entrancy guard for the will-quit flush window (see below)
+let flushDone = false // flush window finished; second will-quit passes through so the native quit event (updater autoInstallOnAppQuit) fires
 app.on('before-quit', () => {
   quitByUser = true
   // Before quitting, broadcast the renderer flush of debounced mirrors (the last write within dbMirror's 2s / disaster-snapshot 800ms window would be silently lost)
@@ -586,13 +593,15 @@ app.on('will-quit', (event) => {
   /* P0 quit-flush race (2026-09-09): before-quit only fire-and-forgets 'app-quitting-flush' while the
      old will-quit closed the DB immediately — renderer invokes still inside the dbMirror 2s debounce
      (pending edits / pomodoro ledger) arrived after dbm.close() and were silently dropped.
-     Fix: hold the quit open for a bounded 500ms flush window, THEN flush scheduler state and close the DB.
-     Re-entrancy: preventDefault cancels this quit; the ONLY exit is app.exit(0) inside the timer (app.exit
-     does not re-emit will-quit), and a second will-quit (e.g. another app.quit() during the window) is
-     ignored via the `quitting` guard — no loop, single clean exit.
+     Fix: first will-quit preventDefaults and holds the quit open for a bounded 500ms flush window; the
+     timer flushes scheduler state and closes the DB, then re-issues app.quit() with flushDone=true so the
+     second will-quit is NOT prevented — the native `quit` event must fire because electron-updater's
+     autoInstallOnAppQuit installs on quit, and app.exit() would skip it entirely (2026-09-09 review).
+     app.exit(0) below is only a hang fallback if the re-issued quit is somehow swallowed again.
      Verification path: tray → quit and window-X → quit both run before-quit → will-quit(preventDefault) →
-     500ms window → flush+close+app.exit(0); process must exit exactly once with no lingering tray icon
-     (tests/main-fixes-*.test.mjs documents the pure helpers; the event wiring is exercised in the e2e smoke quit step). */
+     500ms window → flush+close → app.quit() → will-quit(passthrough) → quit event; process must exit
+     exactly once with no lingering tray icon. */
+  if (flushDone) return // passthrough: let the native quit (and updater install) proceed
   if (quitting) { event.preventDefault(); return }
   quitting = true
   event.preventDefault()
@@ -601,7 +610,9 @@ app.on('will-quit', (event) => {
     // Persist the reminder dedup ledger synchronously (quitting inside the 60s debounce window → reminders resent after restart) + close the db handle (avoids losing one checkpoint and late handle release on Windows)
     try { scheduler.flushFiredNow() } catch {}
     try { if (dbm && dbm.close) dbm.close() } catch {}
-    app.exit(0)
+    flushDone = true
+    app.quit()
+    setTimeout(() => { try { app.exit(0) } catch {} }, 3000) // hang fallback only; normally unreachable
   }, 500)
 })
 

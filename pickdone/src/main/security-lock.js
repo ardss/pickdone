@@ -74,8 +74,17 @@ function createSecurityLock ({ getMainWindow, showMainOrLock, readConfig, writeC
     // 加载失败双保险:loadURL promise reject + did-fail-load 事件,任一触发都走禁用锁回退(幂等)
     let lockLoadFailed = false
     const onLockLoadFail = (why) => { if (lockLoadFailed) return; lockLoadFailed = true; lockLoadFailedFallback(why) }
-    lockWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html)).catch(e => onLockLoadFail('loadURL: ' + (e && e.message)))
-    lockWin.webContents.on('did-fail-load', (_e, code, desc) => onLockLoadFail('did-fail-load: ' + code + ' ' + desc))
+    lockWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html)).catch(e => {
+      const msg = (e && e.message) || ''
+      if (/(-3|ERR_ABORTED|aborted)/i.test(msg)) return // benign interruption, see did-fail-load filter
+      onLockLoadFail('loadURL: ' + msg)
+    })
+    // Only real main-frame failures may disable the lock: ERR_ABORTED (-3) is a benign interruption
+    // (window destroyed / superseded mid-load, e.g. quit race) and must not wipe the user's password.
+    lockWin.webContents.on('did-fail-load', (_e, code, desc, isMainFrame) => {
+      if (!isMainFrame || code === -3) return
+      onLockLoadFail('did-fail-load: ' + code + ' ' + desc)
+    })
     lockWin.on('closed', () => { lockWin = null })
   }
 
