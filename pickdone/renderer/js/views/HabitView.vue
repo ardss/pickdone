@@ -18,12 +18,13 @@
           <option value="weekdays">{{ $t('statsB.HabitView.freqWeekdays') }}</option>
           <option value="interval">{{ $t('statsB.HabitView.freqInterval') }}</option>
         </select>
-        <span v-if="freqType==='weekdays'" class="habit-weekday-picker">
-          <label v-for="(w,i) in WD" :key="i" class="habit-wd" :class="{on: freqWeekdays.includes(i)}"
-                 @click="freqWeekdays.includes(i) ? freqWeekdays=freqWeekdays.filter(x=>x!==i) : freqWeekdays.push(i)">{{ w }}</label>
+        <span v-if="freqType==='weekdays'" class="habit-weekday-picker" role="group" :aria-label="$t('statsB.HabitView.freqWeekdays')">
+          <button v-for="(w,i) in WD" :key="i" type="button" class="habit-wd" :class="{on: freqWeekdays.includes(i)}"
+                 :aria-pressed="freqWeekdays.includes(i) ? 'true' : 'false'"
+                 @click="freqWeekdays.includes(i) ? freqWeekdays=freqWeekdays.filter(x=>x!==i) : freqWeekdays.push(i)">{{ w }}</button>
         </span>
         <span v-if="freqType==='interval'" class="habit-interval">{{ $t('statsB.HabitView.everyN') }}
-          <input v-model.number="freqIntervalN" type="number" min="2" max="30" class="habit-interval-n"/>
+          <input v-model.number="freqIntervalN" type="number" min="2" max="30" class="habit-interval-n" :aria-label="$t('statsE.HabitView.intervalAria')"/>
         </span>
         <button class="mini primary" @click="addHabit">{{ $t('statsB.HabitView.create') }}</button>
       </div>
@@ -53,7 +54,7 @@
         </div>
         <div class="habit-grid" aria-hidden="true">
           <i v-for="d in last30(h.id)" :key="d.key" class="habit-grid__cell" :class="{ on: d.on }"
-             :style="d.on ? { background: h.color } : {}" :title="d.key + (d.on ? ' ✓' : '')"></i>
+             :style="d.on ? { background: h.color } : {}" :title="gridTip(d)"></i>
         </div>
       </div>
 
@@ -161,6 +162,8 @@ export default {
   },
   methods: {
     streakOf (id) { return this.$store.getters['habits/streakOf'](id) },
+    /** 30-day grid tooltip: localized date (dayjs) instead of the raw YYYY-MM-DD key, check mark appended when checked */
+    gridTip (d) { return dayjs(d.key).format(FMT.cnDate) + (d.on ? ' ✓' : '') },
     last30 (id) { return this.$store.getters['habits/last30'](id) },
     isDueToday (h) { return this.$store.getters['habits/isDue'](h.id, this.todayKey) },
     isDueOn (h, dateKey) { return this.$store.getters['habits/isDue'](h.id, dateKey) },
@@ -257,8 +260,9 @@ export default {
   width: 24px; height: 24px; border-radius: 50%; border: 1px solid var(--line);
   display: inline-flex; align-items: center; justify-content: center;
   font-size: var(--fs-xs); color: var(--text-3); cursor: pointer;
-  transition: all .12s;
+  transition: all .12s; appearance: none; padding: 0; background: transparent; font-family: inherit;
 }
+.habit-wd:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
 
 
 
