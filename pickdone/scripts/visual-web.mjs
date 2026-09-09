@@ -104,10 +104,9 @@ async function setEnv (theme) {
   // seed=today re-injected per scene: shim tomatoes anchor to yesterday (deterministic all day);
   // pdFreeze pins the page clock so baselines stop drifting across real dates.
   const url = BASE + '/?' + STAMP + theme + '&seed=today&pdTheme=' + theme + '&pdFreeze=' + encodeURIComponent(FREEZE) + '#/todo-list/today'
-  // agent-browser 的 open 偶发静默不导航(命令成功、页面没换,场景继承上一场景的主题/URL,
-  // 2026-09-09 run B 12 连败实锤)——先去 about:blank 强制离场,再对「文档纪元已变化」逐环断言
-  ab(['--session', SESSION, 'open', 'about:blank'])
-  await new Promise(r => setTimeout(r, 500))
+  // 场景级浏览器重启:eval/DOM 校验与截图必须同世界——实测存在跨标签/陈旧合成层串台
+  // (settle 验过 hash=today,截图却是 calendar 残帧,2026-09-09 基线实锤),整浏览器重启一锤定音
+  ab(['--session', SESSION, 'close'])
   let boot = ''
   for (let i = 0; i < 3 && (!boot || boot === 'undefined'); i++) {
     ab(['--session', SESSION, 'open', url])
@@ -152,6 +151,9 @@ async function runAll () {
       let ready = ''
       for (let t = 0; t < 90000 && ready !== 'ready'; t += 500) {
         await new Promise(r => setTimeout(r, 500))
+        // 主题 10s 仍不就位 = open 静默未导航(纪元断言被旧页面的 reload 骗过,URL 还是上一场景的)
+        // ——重开整场景 URL 自愈,只靠重导航 hash 治不了错 URL(2026-09-09 验证轮实锤:整批主题错位)
+        if (t > 0 && t % 10000 === 0) { await setEnv(theme) }
         try { ready = ab(['--session', SESSION, 'eval', readyExpr]).trim().replace(/"/g, '') } catch (e) { /* retry */ }
       }
       ab(['--session', SESSION, 'eval', `location.hash='${route}'; 'nav'`])
@@ -180,9 +182,12 @@ async function runAll () {
       const shotPath = path.join(DIR, '.cur.png')
       let buf = null
       let prev = null
-      for (let attempt = 0; attempt < 5 && !buf; attempt++) {
-        try {
-          ab(['--session', SESSION, 'screenshot', shotPath])
+    for (let attempt = 0; attempt < 5 && !buf; attempt++) {
+      try {
+        // 绘制栅栏:高负载下 DOM 就绪但合成滞后,截图会拿到陈旧帧(空白/上一场景残影实锤)。
+        // 双 rAF 等一次真实出帧;5s 兜底防止 rAF 被节流时挂死。
+        ab(['--session', SESSION, 'eval', `new Promise(r => { const t = setTimeout(() => r('timeout'), 5000); requestAnimationFrame(() => requestAnimationFrame(() => { clearTimeout(t); r('painted') })) })`])
+        ab(['--session', SESSION, 'screenshot', shotPath])
           const b = fs.readFileSync(shotPath)
           if (b.length > 10000) {
             if (prev) {
