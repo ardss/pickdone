@@ -113,6 +113,13 @@ contextBridge.exposeInMainWorld('todoAPI', {
   // ---- Misc ----
   openExternal: url => invoke('open-external-url', url),
   pickAudioFile: () => invoke('select-user-white-noise-audio-file'),
+  // Main process broadcasts this after a custom white-noise file is (re)saved, so the renderer
+  // can drop its decoded-audio cache (otherwise the old file keeps playing until restart)
+  onWhiteNoiseUpdated: cb => {
+    const h = () => cb()
+    ipcRenderer.on('white-noise-updated', h)
+    return () => ipcRenderer.removeListener('white-noise-updated', h)
+  },
   mimeByType: n => invoke('mime-get-type', n),
 
   onShortcutConflict: fn => {
