@@ -40,6 +40,7 @@ export default {
       opsHeader: '操作',
       dragSortTitle: '拖动排序',
       clickRenameTitle: '点击重命名',
+      dblclickRenameTip: '双击可重命名',
       previewTitle: '预览内容',
       countItems: '{n} 条',
       setProjectBtn: '设为项目',
@@ -56,7 +57,9 @@ export default {
       act: '实际番茄',
       tomatoAccountTip: '已专注 {a} / 预估 {e} 个番茄',
       estTip: '预计需要的番茄数，点 +/− 调整；列表行上会显示进度点',
-      actTip: '实际番茄由专注记录自动归账（只读）；漏记的专注可在任务右键「补录专注」补上'
+      actTip: '实际番茄由专注记录自动归账（只读）；漏记的专注可在任务右键「补录专注」补上',
+      estDecrease: '减少预估番茄数',
+      estIncrease: '增加预估番茄数',
     },
     DayRail: {
       label: '今日时间轴',
@@ -66,6 +69,7 @@ export default {
       rest: '休息',
       planTip: '拖动可调整时间，移除',
       remove: '移除规划',
+      planDeleted: '（已删除的计划）',
       planSeq: '第{n}个',
       focusPill: '今日焦点',
       focusHm: '{h} 小时 {m} 分钟',

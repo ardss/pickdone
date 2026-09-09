@@ -410,4 +410,6 @@ export default {
   "statsE.HabitView.freqIntervalClamped": "Interval must be between {min} and {max} days",
   "statsE.HabitView.renameTip": "Click to rename",
   "statsE.SearchView.truncatedNotice": "Showing the first {shown} of {n} results",
+  "statsE.HabitView.intervalAria": "Interval days",
+  "statsE.EditPanel.depsTruncated": "More candidates — showing the first {shown} of {total}",
 }

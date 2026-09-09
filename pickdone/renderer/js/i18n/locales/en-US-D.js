@@ -74,7 +74,11 @@ export default {
       "todaySuffix": " · Today",
       "today": "Today",
       "backTodayTitle": "Back to today",
-      "selectDate": "Pick a date"
+      "selectDate": "Pick a date",
+      "prevMonth": "Previous month",
+      "nextMonth": "Next month",
+      "prevYear": "Previous year",
+      "nextYear": "Next year"
     },
     "RepeatModal": {
       "close": "Close",

@@ -410,4 +410,6 @@ export default {
   "statsE.HabitView.freqIntervalClamped": "间隔天数需在 {min} 到 {max} 之间",
   "statsE.HabitView.renameTip": "点击重命名",
   "statsE.SearchView.truncatedNotice": "结果较多，仅显示前 {shown} 条，共 {n} 条",
+  "statsE.HabitView.intervalAria": "间隔天数",
+  "statsE.EditPanel.depsTruncated": "候选较多，仅显示前 {shown} 条，共 {total} 条",
 }

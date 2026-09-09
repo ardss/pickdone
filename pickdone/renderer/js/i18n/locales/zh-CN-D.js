@@ -77,7 +77,11 @@ export default {
       "todaySuffix": " · 今天",
       "today": "今天",
       "backTodayTitle": "回到今天",
-      "selectDate": "选择日期"
+      "selectDate": "选择日期",
+      "prevMonth": "上个月",
+      "nextMonth": "下个月",
+      "prevYear": "上一年",
+      "nextYear": "下一年"
     },
     "RepeatModal": {
       "close": "关闭",

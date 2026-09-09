@@ -40,6 +40,7 @@ export default {
       opsHeader: 'Actions',
       dragSortTitle: 'Drag to reorder',
       clickRenameTitle: 'Click to rename',
+      dblclickRenameTip: 'Double-click to rename',
       previewTitle: 'Preview contents',
       countItems: '{n} items',
       setProjectBtn: 'Set as project',
@@ -56,7 +57,9 @@ export default {
       act: 'Actual tomatoes',
       tomatoAccountTip: '{a} of {e} estimated focus rounds done',
       estTip: 'Estimated pomodoros — adjust with +/−; progress shows on the task row',
-      actTip: 'Actual pomodoros are attributed from focus records (read-only); to log a missed session use right-click → Log focus'
+      actTip: 'Actual pomodoros are attributed from focus records (read-only); to log a missed session use right-click → Log focus',
+      estDecrease: 'Decrease estimated pomodoros',
+      estIncrease: 'Increase estimated pomodoros',
     },
     DayRail: {
       label: 'Today timeline',
@@ -66,6 +69,7 @@ export default {
       rest: 'Break',
       planTip: 'Drag to reschedule, × to remove',
       remove: 'Remove plan',
+      planDeleted: '(deleted plan)',
       planSeq: 'No.{n}',
       focusPill: 'Focus of the day',
       focusHm: '{h} h {m} min',
