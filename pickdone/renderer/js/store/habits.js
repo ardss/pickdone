@@ -10,11 +10,22 @@ const META_KEY = 'habitsState'
 const SCHEMA_V = 1
 const PALETTE = ['#0f9d8f', '#f76e6e', '#f2a63b', '#7ac74f', '#5aa9e6', '#9d8df1', '#eb96c3']
 
+/** Records-map normalization: habits restored from old backups may lack the records field entirely; the
+ *  streakOf/last30/toggleCheck getters assume it exists (`h.records[k]` throws → render crash). Coerce every
+ *  habit to a plain object map on load. */
+export function normalizeHabitRecords (habits) {
+  for (const h of (Array.isArray(habits) ? habits : [])) {
+    if (!h || typeof h !== 'object') continue
+    if (!h.records || typeof h.records !== 'object') h.records = {}
+  }
+  return habits
+}
+
 function readLs () {
   try {
     const d = JSON.parse(localStorage.getItem(LS_KEY))
     // Format-version tolerance: old unstamped data treated as v1 (behavior unchanged)
-    if (d && Array.isArray(d.habits) && (d.schemaV || 1) <= SCHEMA_V) return d
+    if (d && Array.isArray(d.habits) && (d.schemaV || 1) <= SCHEMA_V) { normalizeHabitRecords(d.habits); return d }
   } catch {}
   return null
 }
@@ -93,6 +104,7 @@ export default {
     replaceAll (s, blob) {
       if (!blob || !Array.isArray(blob.habits)) return
       if ((blob.savedAt || 0) < (s.savedAt || 0)) return
+      normalizeHabitRecords(blob.habits) // DB archive is the restore path for old backups — same missing-records guard as readLs
       s.habits = blob.habits
       s.moments = blob.moments || []
       s.savedAt = blob.savedAt || 0
