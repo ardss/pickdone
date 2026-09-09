@@ -2,9 +2,9 @@
 
   <div class="matrix-wrap">
     <div class="matrix-grid">
-    <div v-for="q in quadrants" :key="q.key" class="matrix-quadrant" :class="q.cls"
+    <div v-for="q in quadrants" :key="q.key" class="matrix-quadrant" :class="[q.cls, { 'over': overKey===q.key }]"
          @dragover.prevent="overKey=q.key" @dragleave="overKey===q.key&&(overKey=null)" @drop.prevent="dropOn(q)">
-      <div class="matrix-quadrant__head" :class="{'over': overKey===q.key}">
+      <div class="matrix-quadrant__head">
         <span class="matrix-quadrant__title">{{ q.title }}</span>
         <em class="matrix-quadrant__count">{{ q.tasks.length }}</em>
       </div>
@@ -188,6 +188,10 @@ export default {
   display: flex; align-items: center; justify-content: space-between;
   padding: 10px 14px; border-bottom: 1px solid var(--line); font-size: var(--fs-md); font-weight: 600;
 }
+
+
+/* Drag-over target highlight: whole-quadrant outline (root-level `over` class) so the drop zone is unmistakable */
+.matrix-quadrant.over { outline: 2px solid var(--brand); outline-offset: -2px; }
 
 
 
