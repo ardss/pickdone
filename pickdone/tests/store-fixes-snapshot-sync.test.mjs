@@ -89,11 +89,13 @@ test('planSnapshotRowSync: dayStart change plans a chip migration with raw times
   assert.deepEqual(eff, [{ op: 'moveTaskChips', taskId: 'C', fromTs: MON, toTs: WED }])
 })
 
-test('planSnapshotRowSync: date removed / active->deleted plans clearTaskChips', () => {
+test('planSnapshotRowSync: date removed plans clearTaskChips; active->deleted plans snapshotForDelete', () => {
   assert.deepEqual(planSnapshotRowSync(row('D', { dayStart: MON }), row('D', { dayStart: 0, updateTime: 2 })),
     [{ op: 'clearTaskChips', taskId: 'D' }])
+  // snapshotForDelete (photo+clear), not bare clearTaskChips: redo of a delete must re-snapshot because the
+  // preceding undo already consumed the meta — otherwise the next undo restores nothing (chip loss)
   assert.deepEqual(planSnapshotRowSync(row('D'), row('D', { delete: true, deletedAt: 9, updateTime: 2 })),
-    [{ op: 'clearTaskChips', taskId: 'D' }])
+    [{ op: 'snapshotForDelete', taskId: 'D' }])
 })
 
 test('planSnapshotRowSync: untouched or plain-text-changed rows plan nothing', () => {
@@ -230,4 +232,17 @@ test('writeCriticalBackup: main window arms the debounced write and swallows IPC
   await new Promise(r => setTimeout(r, 900)) // 800ms debounce fires; rejection must be caught, not unhandled
   assert.equal(writeAttempts, 1)
   clearTimeout(self._cbTimer)
+})
+
+test('planSnapshotRowSync: delete/undo/redo/undo cycle keeps re-snapshotting so chips survive every round-trip', () => {
+  const live = () => row('X', { dayStart: MON })
+  const dead = () => row('X', { delete: true, deletedAt: 9 })
+  // delete → snapshot (photo+clear)
+  assert.deepEqual(planSnapshotRowSync(live(), dead()), [{ op: 'snapshotForDelete', taskId: 'X' }])
+  // undo → restore (consumes the snapshot meta)
+  assert.deepEqual(planSnapshotRowSync(dead(), live()), [{ op: 'restoreSnapshot', taskId: 'X' }])
+  // redo of the delete → MUST re-snapshot (meta was consumed); bare clear would strand the next undo
+  assert.deepEqual(planSnapshotRowSync(live(), dead()), [{ op: 'snapshotForDelete', taskId: 'X' }])
+  // second undo → restore again, chips still intact
+  assert.deepEqual(planSnapshotRowSync(dead(), live()), [{ op: 'restoreSnapshot', taskId: 'X' }])
 })

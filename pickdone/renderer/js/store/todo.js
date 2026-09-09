@@ -48,7 +48,11 @@ export function planSnapshotRowSync (before, after) {
   if (!after) return [{ op: 'snapshotForDelete', taskId }] // undone create → replay soft-delete must snapshot+clear chips like deleteTodo
   if (before && before.delete === true && !after.delete) return [{ op: 'restoreSnapshot', taskId }] // undone soft-delete → write back the pre-delete chip snapshot like restoreFromRecycle
   const wasLive = !before || before.delete !== true
-  if (wasLive && after.delete === true) return [{ op: 'clearTaskChips', taskId }] // active→deleted: chips must not survive (deleteTodo already took the snapshot)
+  if (wasLive && after.delete === true) return [{ op: 'snapshotForDelete', taskId }]
+  // active→deleted: snapshotForDelete (photo + clear) is exactly deleteTodo's semantics. This branch also
+  // serves REDO of a delete whose preceding undo already consumed the snapshot meta (restoreSnapshot empties
+  // it) — clearing alone would leave nothing for the NEXT undo to restore, losing chips permanently
+  // (2026-09-09 release review).
   if (wasLive && !after.delete && before && (before.dayStart || 0) !== (after.dayStart || 0)) {
     if (!after.dayStart) return [{ op: 'clearTaskChips', taskId }] // date removed → clear, same as updateTodoFields
     return [{ op: 'moveTaskChips', taskId, fromTs: before.dayStart || 0, toTs: after.dayStart }] // date change → migrate like updateTodoFields
