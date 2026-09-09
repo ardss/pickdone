@@ -68,6 +68,7 @@
         <div v-if="o.folderIs" class="sn-cat-item sn-cat-folder"
              :class="{'drag-over-before': dragOverId===o.categoryId && dragPos==='before', 'drag-over-after': dragOverId===o.categoryId && dragPos==='after', dragging: catDragId===o.categoryId}"
              role="button" tabindex="0" draggable="true"
+             :title="$t('statsG.SideNav.dblclickRenameTip')"
              :aria-expanded="isFolderExpanded(o.categoryId) ? 'true' : 'false'"
              @click="toggleFolder(o.categoryId)" @keydown.enter.prevent="toggleFolder(o.categoryId)"
              @dblclick.stop="startCatEdit(o)"
@@ -85,6 +86,7 @@
         <template v-if="o.folderIs && o.children && o.children.length && isFolderExpanded(o.categoryId)">
           <div v-for="ch in o.children" :key="'c'+ch.categoryId"
                class="sn-cat-item sn-cat-child" role="link" tabindex="0"
+               :title="$t('statsG.SideNav.dblclickRenameTip')"
                :class="{active: $route.params && $route.params.id == ch.categoryId}"
                @click="go('todo-list-category',{id:ch.categoryId})"
                @dblclick.stop="startCatEdit(ch)"
@@ -100,6 +102,7 @@
         </template>
         <div v-if="!o.folderIs"
              class="sn-cat-item" role="link" tabindex="0" draggable="true"
+             :title="$t('statsG.SideNav.dblclickRenameTip')"
              :class="{active: $route.params && $route.params.id == o.categoryId,
                       'drag-over-before': dragOverId===o.categoryId && dragPos==='before', 'drag-over-after': dragOverId===o.categoryId && dragPos==='after', dragging: catDragId===o.categoryId}"
              @click="go('todo-list-category',{id:o.categoryId})"
