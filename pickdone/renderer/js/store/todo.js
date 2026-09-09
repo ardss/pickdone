@@ -136,14 +136,26 @@ function safeUpsert (row) {
 function hookQuitFlush () {
   if (_todoFlushHooked || !window.todoAPI || !window.todoAPI.onAppQuittingFlush) return
   _todoFlushHooked = true
-  window.todoAPI.onAppQuittingFlush(() => {
-    const list = _pendingUpserts.splice(0, _pendingUpserts.length)
-    for (const it of list) {
-      Promise.resolve(window.todoAPI.dbCall(it.op, it.params))
-        .catch(e => console.error('[todo] pending upsert flush failed at quit:', e))
-    }
-  })
+  window.todoAPI.onAppQuittingFlush(() => flushPendingUpserts())
 }
+/** Exit flush: send every pending upsert; a failed entry is put back at the queue head so the next write
+ *  replays it (mirrors tomato.js flushPendingLedger — previously failures were only logged and silently lost) */
+function flushPendingUpserts () {
+  const list = _pendingUpserts.splice(0, _pendingUpserts.length)
+  for (const it of list) {
+    Promise.resolve(window.todoAPI.dbCall(it.op, it.params))
+      .catch(e => {
+        console.error('[todo] pending upsert flush failed at quit (requeued):', e)
+        _pendingUpserts.unshift(it)
+      })
+  }
+}
+/** Strip Vue reactive proxies before IPC: rows come straight from reactive state, and a shallow spread
+ *  ({ ...raw }) only unwraps the top level — nested arrays (reminderOffsets/reminderExtra/subtasks JSON is a
+ *  string, but reminderOffsets etc. stay Proxies) still fail the structured clone inside invoke
+ *  ("An object could not be cloned" = the whole upsertMany batch silently dropped, same root cause
+ *  safeUpsert's JSON round-trip at :87-89 documents for single rows) */
+function deproxyRows (rows) { return JSON.parse(JSON.stringify(rows)) }
 
 function daysRangeTs (settings) {
   // "today/yesterday" are semantic options and can't be resolved by extracting digits (would NaN-fallback to 7): today = current day only (1), yesterday = from yesterday (2)
@@ -418,7 +430,7 @@ export default {
       return unlocked ? Object.assign({}, merged, { _unlocked: unlocked }) : merged
     },
 
-    async toggleComplete ({ state, dispatch, rootState }, todo) {
+    async toggleComplete ({ state, commit, dispatch, rootState }, todo) {
       const target = !todo.complete
       const patch = { complete: target, completedAt: target ? Date.now() : 0 }
       if (target) {
@@ -450,7 +462,10 @@ export default {
         } catch { /* skip the cascade when subtask JSON is malformed */ }
       }
       if (target && todo.repeatId) dispatch('ensureNextRepeatInstance', { ...todo, complete: true })
-      return dispatch('updateTodoFields', { taskId: todo.taskId, patch })
+      const r = await dispatch('updateTodoFields', { taskId: todo.taskId, patch })
+      // Discrete op: break the 400ms undo merge so a following edit doesn't fuse into the check step
+      commit('historyBreakMerge')
+      return r
     },
 
     /** Repeat-group renewal: when the last incomplete instance in a group is completed, generate the next instance per the group rule */
@@ -502,7 +517,9 @@ export default {
         rows.push(merged)
       }
       if (!rows.length) return
-      try { await window.todoAPI.dbCall('upsertMany', rows) } catch (err) { reportError('upsertMany', err) }
+      try { await window.todoAPI.dbCall('upsertMany', deproxyRows(rows)) } catch (err) { reportError('upsertMany', err) }
+      // Discrete op: break the 400ms undo merge so a following edit doesn't fuse into the drag step
+      commit('historyBreakMerge')
       dispatch('computeViews')
       dispatch('writeCriticalBackup')
     },
@@ -533,7 +550,10 @@ export default {
     async restoreFromRecycle ({ commit, dispatch }, todo) {
       // Write back the pre-delete schedule chip snapshot when restoring (eliminates the "delete→restore loses schedule" regression)
       try { await restoreSnapshot(todo.taskId) } catch { /* No snapshot = originally unscheduled */ }
-      return dispatch('updateTodoFields', { taskId: todo.taskId, patch: { delete: false, deletedAt: 0, status: 'update' } })
+      const r = await dispatch('updateTodoFields', { taskId: todo.taskId, patch: { delete: false, deletedAt: 0, status: 'update' } })
+      // Discrete op: break the 400ms undo merge so a following edit doesn't fuse into the restore step
+      commit('historyBreakMerge')
+      return r
     },
 
     async purgeIds ({ commit, dispatch, rootState }, ids) {
@@ -549,7 +569,13 @@ export default {
         try { await window.todoAPI.dbCall('hardDelete', id); done.push(id); clearSnapshot(id) } catch (err) { reportError('hardDelete', err) }
       }
       try { for (const id of done) await window.todoAPI.deleteTodoFilesRelevant?.(id) } catch {}
-      if (done.length) commit('hardRemove', done)
+      if (done.length) {
+        commit('hardRemove', done)
+        // Rows are physically gone (hardDelete + attachment files + chip snapshot meta): any later undo replaying a
+        // pre-purge snapshot would safeUpsert the deleted rows straight back from the dead. Void history so undo
+        // can never cross the purge generation.
+        commit('historyClear')
+      }
       dispatch('computeViews')
       dispatch('writeCriticalBackup')
     },
@@ -566,6 +592,8 @@ export default {
       // Drop the pre-delete chip snapshot meta too (rows are gone, the snapshot can never be restored)
       for (const id of ids) clearSnapshot(id)
       commit('hardRemove', ids)
+      // Same resurrect guard as purgeIds: rows + files + snapshots are gone, undo must not cross this generation
+      commit('historyClear')
       dispatch('computeViews')
       dispatch('writeCriticalBackup')
     },
@@ -791,7 +819,7 @@ export default {
         const snapshot = [...state.todoList, ...state.recycleList].filter(t => t.status !== 'sync')
         if (!snapshot.length) return
         const snapshotIds = new Set(snapshot.map(t => t.taskId))
-        await window.todoAPI.dbCall('upsertMany', snapshot)
+        await window.todoAPI.dbCall('upsertMany', deproxyRows(snapshot))
         await window.todoAPI.dbCall('setMeta', ['todosVersion', String(serverV)])
         // Only rows in the snapshot that weren't re-edited during the await are marked synced (can't do a wholesale markSyncedAll)
         ;[...state.todoList, ...state.recycleList]
@@ -886,3 +914,6 @@ function showNoDateFilter (arr, settings) {
 
 /* Calendar view data: for the current month's span (±half a year), the daily set can render directly from raw todoList rows */
 function buildCalendarList (live) { return live.slice() }
+
+/** Test seams (unit-tested in tests/store-fixes-domain.test.mjs): pending-write requeue and the de-proxy round-trip */
+export const _testInternals = { pendingUpserts: _pendingUpserts, safeUpsert, flushPendingUpserts, deproxyRows }
