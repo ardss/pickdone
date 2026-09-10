@@ -89,6 +89,7 @@ const { createShortcuts } = require('./shortcuts')
 const { createExporter } = require('./export-xlsx')
 const securityLock = createSecurityLock({ getMainWindow, showMainOrLock, readConfig, writeConfig, i18n: i18nM, log })
 const { isLocked, lockAppNow, unlockAppNow, verifyLockPassword, isLockWindow } = securityLock
+const { allowWithinRate } = require('./security-lock') // pure sliding-window limiter for the notification channel
 quickAdd.setLockProbe(isLocked) // the global quick-add shortcut does not summon while the screen is locked (summoning = input silently lost)
 const shortcuts = createShortcuts({ getMainWindow, showMainOrLock, quickAdd, i18n: i18nM, log })
 const { applyShortcuts } = shortcuts
@@ -118,6 +119,8 @@ function attemptDbRecovery (ud) { return dbRecovery.attemptDbRecovery(ud) }
 function restoreTasksFromCriticalBackup (ud) { return dbRecovery.restoreTasksFromCriticalBackup(ud, list => dbm.call('upsertMany', list), c => dbm.call('upsertCategory', c), rows => dbm.call('tomatoAppendMany', rows)) }
 
 /* ---------------- External-write listener: when the CLI writes the DB directly, the running App refreshes automatically ---------------- */
+let resyncDbWatch = null // set by watchDbForExternalWrites: re-baselines lastMtime after OUR OWN db writes (P1 2026-09-11)
+let stopDbWatch = null // set by watchDbForExternalWrites: unwatchFile both files on the quit chain (P2 2026-09-11)
 function watchDbForExternalWrites () {
   const ud = app.getPath('userData')
   const dbFile = path.join(ud, 'todos.db')
@@ -125,7 +128,10 @@ function watchDbForExternalWrites () {
   // In WAL mode CLI writes only land in -wal and the main DB's mtime stays unchanged (once broke the 2s broadcast, leaving stale UI data); watch both files
   // Stat the baseline once first: starting lastMtime at 0 would make the first poll always kick, falsely reporting an "external write" right at startup
   let lastMtime = 0
-  try { lastMtime = Math.max(fs.statSync(dbFile).mtimeMs, fs.existsSync(walFile) ? fs.statSync(walFile).mtimeMs : 0) } catch {}
+  const readWatchMtime = () => {
+    try { return Math.max(fs.statSync(dbFile).mtimeMs, fs.existsSync(walFile) ? fs.statSync(walFile).mtimeMs : 0) } catch { return null }
+  }
+  lastMtime = readWatchMtime() || 0
   let lastTomatoCmdRaw = null
   let lastTomatoSeq = 0
   // CLI settings hot-sync baseline: the first poll only builds the baseline and does not push (otherwise startup would push a full diff by mistake)
@@ -176,7 +182,11 @@ function watchDbForExternalWrites () {
             if (Object.keys(patch).length) {
               delete patch.securityLockPassword
               delete patch.securityLockQuestion
-              win.webContents.send('external-settings-changed', patch)
+              // P2 2026-09-11: hot-sync used to push only the main window — the float/quick-add windows
+              // kept pre-CLI-change settings until restart (same all-windows pattern as the quit flush)
+              for (const w of BrowserWindow.getAllWindows()) {
+                try { if (w && !w.isDestroyed()) w.webContents.send('external-settings-changed', patch) } catch {}
+              }
               log.info('[CLI] 设置变更热同步:', Object.keys(patch).join(','))
             }
           }
@@ -199,15 +209,14 @@ function watchDbForExternalWrites () {
         log.info('[TodoDB] 检测到外部写入（CLI），已刷新调度器并通知渲染端')
         // Resync the mtime baseline: reloadAll itself writes reminderLastSeenAt (touching -wal); without this
         // the next poll sees our own write as "another external write" → reload → write again = a self-sustaining loop
-        try {
-          lastMtime = Math.max(fs.statSync(dbFile).mtimeMs, fs.existsSync(walFile) ? fs.statSync(walFile).mtimeMs : 0)
-        } catch {}
+        lastMtime = readWatchMtime() ?? lastMtime
       } catch (e) { log.warn('[TodoDB] 外部写入刷新失败', e) }
     }, 500)
   }
   const onChange = () => {
     try {
-      const m = Math.max(fs.statSync(dbFile).mtimeMs, fs.existsSync(walFile) ? fs.statSync(walFile).mtimeMs : 0)
+      const m = readWatchMtime()
+      if (m == null) return
       if (m === lastMtime) { forwardTomatoCmd(); return } // check commands even when mtime is unchanged (guards against watchFile dropping events)
       lastMtime = m
       kick()
@@ -216,6 +225,18 @@ function watchDbForExternalWrites () {
   }
   fs.watchFile(dbFile, { interval: 2000 }, onChange)
   fs.watchFile(walFile, { interval: 2000 }, onChange)
+  // P1 2026-09-11: App's own todo-db:call writes touch the -wal too, but the 500ms-debounced kick above
+  // only re-baselines for the EXTERNAL-write path. Our own IPC writes left the baseline stale → the next
+  // poll read them as "external" → full reload + undo-stack wipe ~3s after every local write (the
+  // renderer's 1.5s suppression window cannot cover the 2-3s watcher latency). Re-baseline immediately
+  // after every write-type todo-db:call so the next poll sees mtime === baseline.
+  resyncDbWatch = () => { const m = readWatchMtime(); if (m != null) lastMtime = m }
+  // P2 2026-09-11: fs.watchFile never unwatched — poll timers kept the quit chain alive/lint-y; release them on quit
+  stopDbWatch = () => {
+    try { fs.unwatchFile(dbFile, onChange) } catch {}
+    try { fs.unwatchFile(walFile, onChange) } catch {}
+    resyncDbWatch = null
+  }
 }
 
 /* ---------------- External-link safety: only http/https allowed ---------------- */
@@ -286,6 +307,16 @@ function createMainWindow () {
       if (/^https?:/i.test(url)) { shell.openExternal(url) }
       return { action: 'deny' }
     })
+    // The allowed about:blank child had NO navigation guard (2026-09-11 P1): injected script could
+    // navigate it anywhere (or chain another window.open). Clamp it: navigation denied, external http(s)
+    // handed to the system browser, nested window.open denied outright.
+    win.webContents.on('did-create-window', (child) => {
+      child.webContents.on('will-navigate', (e2, u) => {
+        e2.preventDefault()
+        if (/^https?:/i.test(u)) { try { shell.openExternal(u) } catch { /* best-effort */ } }
+      })
+      try { child.webContents.setWindowOpenHandler(() => ({ action: 'deny' })) } catch { /* older Electron */ }
+    })
     // Intercept navigation to non-app:// protocols; XSS cross-origin guard
     win.webContents.on('will-navigate', (e, url) => {
       if (!/^app:\/\/app\//i.test(url)) { e.preventDefault(); if (/^https?:/i.test(url)) shell.openExternal(url) }
@@ -298,7 +329,17 @@ function createMainWindow () {
   win.webContents.on('did-fail-load', (_e, code, desc, url, isMainFrame) => {
     log.error('[Window] 加载失败:', code, desc, url)
     if (!isMainFrame || code === -3 || quitting) return
-    if (loadRetryCount >= 3) return
+    // P2 2026-09-11: the startup lock (enableSecurityLock) used to hook ONLY did-finish-load — if the
+    // load chain failed completely (retries exhausted), the app came up unlocked and silent. Prefer the
+    // locked-white-screen over an unlocked app (layered with lockLoadFailedFallback, which only disables
+    // the lock when even the lock window cannot open).
+    if (loadRetryCount >= 3) {
+      if (readConfig().enableSecurityLock && !isLocked()) {
+        log.warn('[SecurityLock] 主窗加载彻底失败,按锁定态兜底')
+        try { lockAppNow() } catch (e) { log.error('[SecurityLock] 兜底锁定失败', e) }
+      }
+      return
+    }
     loadRetryCount++
     const delay = 400 * loadRetryCount
     log.warn('[Window] 主框架加载失败,退避重试', loadRetryCount, 'in', delay, 'ms')
@@ -347,11 +388,14 @@ function createMainWindow () {
       e.preventDefault(); win.hide()
       const cfg = readConfig()
       if (closeBehavior.shouldShowTrayNotice(cfg)) {
-        writeConfig({ closeTrayNotified: true })
+        // P2 2026-09-11: writeConfig in the close path used to run unguarded — a config write failure
+        // (disk full/permissions) threw straight out of the close handler and killed the quit chain
+        try { writeConfig({ closeTrayNotified: true }) } catch (err) { log.warn('[Window] closeTrayNotified 写入失败', err) }
         try { if (tray && process.platform === 'win32') tray.displayBalloon({ iconType: 'info', title: i18nM.mt('appName'), content: i18nM.mt('closeTrayNotice') }) } catch (err) { /* balloon is best-effort */ }
       }
     } else {
-      writeConfig({ winBounds: win.getBounds() })
+      // Same guard as above: resize path already wraps writeConfig in try (debounced), close must not be able to break the quit chain either
+      try { writeConfig({ winBounds: win.getBounds() }) } catch (err) { log.warn('[Window] winBounds 写入失败(close)', err) }
     }
   })
   let _resizeTimer = null
@@ -597,6 +641,15 @@ function dbApi () { return { queryTodos: p => dbm.call('queryTodos', p), ...prox
 
 let quitting = false // re-entrancy guard for the will-quit flush window (see below)
 let flushDone = false // flush window finished; second will-quit passes through so the native quit event (updater autoInstallOnAppQuit) fires
+// Flush-ack handshake (2026-09-11 P1): the old fixed 500ms window raced the renderer's fire-and-forget
+// dbMirror invokes (.catch(()=>{})) — late writes were silently dropped after dbm.close(). before-quit
+// broadcasts 'app-quitting-flush' with a token; the renderer acks via 'app-quitting-flush-ack' after its
+// flush invokes are dispatched; will-quit holds the quit until every live window acked or ≤2s elapsed
+// (bounded, so a hung renderer can never block quitting). The two-phase will-quit (flushDone passthrough
+// for updater's autoInstallOnAppQuit) is unchanged.
+let flushAckToken = 0
+const flushAckedSenders = new Set()
+let flushExpectAcks = 0 // live windows we are waiting on (0 → no window was online, skip waiting)
 app.on('before-quit', () => {
   // Second pass (the re-issued app.quit() below): the DB is already closed, re-broadcasting the flush
   // would only be a dead letter — renderer invokes would fail against a closed handle.
@@ -606,8 +659,11 @@ app.on('before-quit', () => {
   // 2026-09-10 P1: previously only the main window was notified — the float window's pending pomodoro
   // ledger (and the whole broadcast when the main window was already destroyed, e.g. X-close→tray→quit)
   // was silently lost. Broadcast to every live window with an isDestroyed guard.
+  flushAckToken = Date.now()
+  flushAckedSenders.clear()
+  flushExpectAcks = 0
   for (const w of BrowserWindow.getAllWindows()) {
-    try { if (w && !w.isDestroyed()) w.webContents.send('app-quitting-flush') } catch {}
+    try { if (w && !w.isDestroyed()) { w.webContents.send('app-quitting-flush', { token: flushAckToken }); flushExpectAcks++ } } catch {}
   }
 })
 app.on('window-all-closed', e => { /* stay resident in the tray, do not quit */ })
@@ -615,19 +671,27 @@ app.on('will-quit', (event) => {
   /* P0 quit-flush race (2026-09-09): before-quit only fire-and-forgets 'app-quitting-flush' while the
      old will-quit closed the DB immediately — renderer invokes still inside the dbMirror 2s debounce
      (pending edits / pomodoro ledger) arrived after dbm.close() and were silently dropped.
-     Fix: first will-quit preventDefaults and holds the quit open for a bounded 500ms flush window; the
-     timer flushes scheduler state and closes the DB, then re-issues app.quit() with flushDone=true so the
+     Fix: first will-quit preventDefaults and holds the quit open for a bounded flush window; when done it
+     flushes scheduler state and closes the DB, then re-issues app.quit() with flushDone=true so the
      second will-quit is NOT prevented — the native `quit` event must fire because electron-updater's
      autoInstallOnAppQuit installs on quit, and app.exit() would skip it entirely (2026-09-09 review).
      app.exit(0) below is only a hang fallback if the re-issued quit is somehow swallowed again.
+     2026-09-11 P1: the window is no longer a fixed 500ms — we wait for the renderer's flush ack
+     ('app-quitting-flush-ack', sent after its flush invokes are dispatched) from every live window,
+     capped at 2s total so a hung renderer cannot block quitting. 500ms remains the floor (renderer
+     needs a beat to dispatch the debounced writes at all).
      Verification path: tray → quit and window-X → quit both run before-quit → will-quit(preventDefault) →
-     500ms window → flush+close → app.quit() → will-quit(passthrough) → quit event; process must exit
+     flush window → flush+close → app.quit() → will-quit(passthrough) → quit event; process must exit
      exactly once with no lingering tray icon. */
   if (flushDone) return // passthrough: let the native quit (and updater install) proceed
   if (quitting) { event.preventDefault(); return }
   quitting = true
   event.preventDefault()
-  setTimeout(() => {
+  const FLUSH_FLOOR_MS = 500
+  const FLUSH_ACK_CAP_MS = 2000
+  const startedAt = Date.now()
+  const flushNow = () => {
+    try { if (stopDbWatch) stopDbWatch() } catch {} // release the fs.watchFile poll timers before closing
     try { shortcuts.unregisterAll() } catch {}
     // Persist the reminder dedup ledger synchronously (quitting inside the 60s debounce window → reminders resent after restart) + close the db handle (avoids losing one checkpoint and late handle release on Windows)
     try { scheduler.flushFiredNow() } catch {}
@@ -643,11 +707,21 @@ app.on('will-quit', (event) => {
       try { if (updater.getStatus().status === 'ready' && updater.quitAndInstall()) return } catch { /* fall through to the hard exit */ }
       try { app.exit(0) } catch {}
     }, 3000)
-  }, 500)
+  }
+  // All acks already in (or no live window to wait for): keep the old fast path
+  const allAcked = () => flushExpectAcks === 0 || flushAckedSenders.size >= flushExpectAcks
+  if (allAcked()) { setTimeout(flushNow, FLUSH_FLOOR_MS); return }
+  const poll = setInterval(() => {
+    if (allAcked() || Date.now() - startedAt >= FLUSH_ACK_CAP_MS) {
+      clearInterval(poll)
+      if (!flushDone) flushNow()
+    }
+  }, 50)
 })
 
 /* ================= Full IPC registration (channel names aligned with the project baseline) ================= */
 let lastPickedImportPath = '' // the only legitimate path source for import:run (the import:pick-preview dialog)
+const notificationSendTimes = [] // sliding window for the notification channel rate limit (10 per 10s)
 function registerIpc () {
   // App-side audit trail (src/main/audit.js) resolves its JSONL path lazily; wire it to the real userData
   // here so app.setPath('userData', TODO_USER_DATA_DIR) test isolation is honored
@@ -761,6 +835,9 @@ function registerIpc () {
         try { auditBefore = dbm.call('getById', String(params.taskId)) } catch { /* null → coarse action */ }
       }
       const r = dbm.call(op, params)
+      // Our own write just touched the DB/-wal: re-baseline the external-write watcher immediately,
+      // otherwise the next poll mistakes our write for an external one (full reload + undo-stack wipe)
+      if (dbm.isWriteOp(op)) { try { if (resyncDbWatch) resyncDbWatch() } catch { /* best-effort */ } }
       // App-side audit: renderer-initiated writes append to the same JSONL trail the CLI writes
       // (userData/cli-audit.jsonl). No double-logging: CLI write commands hit db.js directly inside the
       // CLI process and never pass through this IPC handler. The settings mirror blob (setMeta
@@ -818,7 +895,7 @@ function registerIpc () {
       delete c.securityLockQuestion
       return c
     },
-    'set-app-locale': (e, locale) => { i18nM.setLocale(locale); const c = writeConfig({ appLocale: locale }); rebuildTrayMenu(); if (tray) { try { tray.setToolTip(i18nM.mt('appName')) } catch (err) { /* empty */ } } if (win && !win.isDestroyed()) { try { win.setTitle(i18nM.mt('appName')) } catch (err) { /* empty */ } } return c },
+    'set-app-locale': (e, locale) => { i18nM.setLocale(locale); const c = writeConfig({ appLocale: locale }); rebuildTrayMenu(); if (tray) { try { tray.setToolTip(i18nM.mt('appName')) } catch (err) { /* empty */ } } if (win && !win.isDestroyed()) { try { win.setTitle(i18nM.mt('appName')) } catch (err) { /* empty */ } } try { tomatoTaskbar.setBaseTitle(i18nM.mt('appName')) } catch (err) { /* taskbar module keeps its previous base */ } return c },
     'notify-settings-updated': (e, patch) => {
       // 写配置限主窗;浮窗白噪音选择是合法写入(浮窗内 settings/update 走此通道),放行浮窗自身(2026-09-05 终审 P1)
       if (!(tomatoFloat.isSelfSender(e.sender) || (getMainWindow() && e.sender === getMainWindow().webContents))) {
@@ -842,6 +919,13 @@ function registerIpc () {
 
     // --- Reminders ---
     'notification': (e, opt) => {
+      // Locked-state gate, symmetric with upload-attachment/export/delete-file (2026-09-11 P1: this was
+      // the only remaining data-bearing channel without it) + rate limit against notification spam
+      if (isLocked()) throw new Error('locked')
+      if (!allowWithinRate(notificationSendTimes, Date.now())) {
+        log.warn('[IPC] notification 频控拦截, sender:', e.sender.id)
+        return false
+      }
       // Same sanitization as scheduler.fire: renderer-supplied title/body goes straight to system notifications; control characters/RTL override characters must be stripped
       // eslint-disable-next-line no-control-regex -- control characters are exactly the target of this sanitization; the rule does not apply here
       const clean = v => require('./sanitize').sanitizeText(v, 200)
@@ -863,6 +947,13 @@ function registerIpc () {
       aboutWin.removeMenu()
       aboutWin.loadURL('data:text/html,' + encodeURIComponent('<body style="font-family:system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;height:88vh;color:#303133;margin:0"><img src="app://app/assets/icon.png" width="72" style="margin-bottom:10px"><div style="display:flex;align-items:baseline;gap:8px"><span style="font-size:20px;font-weight:700">' + i18nM.mt('appName') + '</span><span style="font-size:10px;letter-spacing:2.5px;color:#909399">PICKDONE</span></div><p style="color:#909399;font-size:12px;margin:6px 0 0">' + i18nM.mt('aboutSlogan') + '</p><p style="color:#c0c4cc;font-size:12px;margin:8px 0 0">' + i18nM.mt('aboutVersion', { v: app.getVersion() }) + '</p></body>'))
       aboutWin.once('ready-to-show', () => aboutWin.show())
+      // P2 2026-09-11: a failed load used to leave a zombie blank window the user had to close by hand —
+      // destroy it on main-frame load failure (the window reference is local, nothing else to release)
+      aboutWin.webContents.on('did-fail-load', (_e2, code, _desc, _u, isMainFrame) => {
+        if (!isMainFrame || code === -3) return
+        log.warn('[About] 加载失败,销毁窗口:', code)
+        try { aboutWin.destroy() } catch { /* already gone */ }
+      })
       return true
     },
     'notify-data-changed': () => { broadcastTodosChanged('notify-data-changed'); return true },
@@ -894,11 +985,28 @@ function registerIpc () {
       }
       return null
     },
-    'delete-file': (e, url) => { if (isLocked()) throw new Error('locked'); try { if (url.startsWith('local://')) fs.unlinkSync(attachmentPath(url.slice(8))) } catch {} return true },
+    // P2 2026-09-11: deletion failures used to be swallowed and true returned regardless — the user was
+    // told the attachment was gone while the file stayed on disk. Throw a structured error instead (the
+    // renderer's existing invoke catch/reportError displays it); no renderer caller changes needed.
+    'delete-file': (e, url) => {
+      if (isLocked()) throw new Error('locked')
+      if (url.startsWith('local://')) {
+        try { fs.unlinkSync(attachmentPath(url.slice(8))) } catch (err) {
+          // Already-gone is success (idempotent delete); anything else is a real failure
+          if ((err && err.code) !== 'ENOENT') throw new Error('delete-file failed: ' + String((err && err.message) || err))
+        }
+      }
+      return true
+    },
     'delete-todo-files': (e, taskId) => {
       if (isLocked()) throw new Error('locked')
       const dir = attachDir()
-      for (const f of fs.readdirSync(dir)) if (f.startsWith(taskId + '_')) { try { fs.unlinkSync(path.join(dir, f)) } catch {} }
+      const failures = []
+      for (const f of fs.readdirSync(dir)) {
+        if (!f.startsWith(taskId + '_')) continue
+        try { fs.unlinkSync(path.join(dir, f)) } catch (err) { if ((err && err.code) !== 'ENOENT') failures.push(f + ': ' + String((err && err.message) || err)) }
+      }
+      if (failures.length) throw new Error('delete-todo-files failed: ' + failures.join('; '))
       return true
     },
 
@@ -908,7 +1016,7 @@ function registerIpc () {
     // --- Backup (critical-state aligned) ---
     'write-critical-state-backup': (e, jsonText) => {
       // 灾备唯一源通道:主窗限定+锁定态拒绝(被攻陷的浮窗/快加窗可覆写 critical JSON 投毒恢复源,三轮安全深审 C-2)
-      if (!win || e.sender !== win.webContents) throw new Error('main-window-only')
+      assertMainWindow(e) // main-window guard via getMainWindow (isDestroyed-safe; bare module var win threw "Object has been destroyed" after X-close→tray)
       if (isLocked()) throw new Error('app is locked')
       // External default root (userData parent dir / pickdone-backups): separated from todos.db, so disaster backup remains recoverable even if userData is wiped
       dbRecovery.writeCriticalStateBackupAtomic(defaultBackupRoot(), String(jsonText))
@@ -918,7 +1026,7 @@ function registerIpc () {
     // --- Secure storage: sensitive values like securityLockPassword encrypted with safeStorage (DPAPI/Keychain) ---
     // Main window only: encrypt/decrypt primitives serve only the main window's settings page and lock-screen flow; a compromised float/quick-add window must not use them to recover plaintext
     'encrypt-secret': (e, plain) => {
-      if (!win || e.sender !== win.webContents) throw new Error('main-window-only')
+      assertMainWindow(e) // main-window guard via getMainWindow (isDestroyed-safe; bare module var win threw "Object has been destroyed" after X-close→tray)
       // When encryption is unavailable, refuse rather than persist plaintext (storing the lock password in plaintext contradicts "secure storage"; open-source audits would flag it).
       // Windows DPAPI is always available; this branch realistically only appears in anomalous environments.
       const { safeStorage } = require('electron')
@@ -927,7 +1035,7 @@ function registerIpc () {
       return 'enc1:' + safeStorage.encryptString(String(plain)).toString('base64')
     },
     'decrypt-secret': (e, stored) => {
-      if (!win || e.sender !== win.webContents) throw new Error('main-window-only')
+      assertMainWindow(e) // main-window guard via getMainWindow (isDestroyed-safe; bare module var win threw "Object has been destroyed" after X-close→tray)
       try {
         const { safeStorage } = require('electron')
         if (!stored) return ''
@@ -960,7 +1068,7 @@ function registerIpc () {
     },
     // --- Auto backup (GFS tiered retention: recent N + daily anchors + weekly anchors; content dedup; atomic write) ---
     'run-auto-backup': (e, jsonText, opts) => {
-      if (!win || e.sender !== win.webContents) throw new Error('main-window-only')
+      assertMainWindow(e) // main-window guard via getMainWindow (isDestroyed-safe; bare module var win threw "Object has been destroyed" after X-close→tray)
       if (isLocked()) throw new Error('app is locked')
       try {
         const o = typeof opts === 'number' ? { recent: opts } : (opts || {})
@@ -990,6 +1098,15 @@ function registerIpc () {
         // Atomic write: temp file + rename, prevents corruption on interruption
         fs.writeFileSync(tmp, jsonText)
         fs.renameSync(tmp, path.join(dir, name))
+        // P2 2026-09-11: sweep interrupted .tmp-* residue — a crash between writeFileSync and renameSync
+        // used to accumulate temp files in the backup dir forever (the prune filter below only matches
+        // ^(auto|evt)-). Only files older than 1h are swept, so a concurrent in-flight write is safe.
+        try {
+          const stale = autoBackup.selectStaleTmp(fs.readdirSync(dir).map(f => {
+            try { return { name: f, mtimeMs: fs.statSync(path.join(dir, f)).mtimeMs } } catch { return null }
+          }))
+          for (const dead of stale) { try { fs.rmSync(path.join(dir, dead), { force: true }) } catch {} }
+        } catch { /* sweep is best-effort */ }
         const files = fs.readdirSync(dir).filter(f => (o.tag ? /^evt-/.test(f) : /^(auto|evt)-/.test(f)))
         for (const dead of autoBackup.selectPrunes(files, o)) { try { fs.unlinkSync(path.join(dir, dead)) } catch {} }
         return { ok: true, file: name }
@@ -998,7 +1115,7 @@ function registerIpc () {
     // 备份读取(2026-09-09 P2):此前三层 catch 全静默——「目录不存在(正常空态)」与「读取失败(权限/IO)」
     // 同样返回 ''/[],设置页永远不知道读不了。改为结构化结果:ok/missing/error,渲染端对应展示错误态
     'read-auto-backup': (e, backupDir, fileName) => {
-      if (!win || e.sender !== win.webContents) throw new Error('main-window-only')
+      assertMainWindow(e) // main-window guard via getMainWindow (isDestroyed-safe; bare module var win threw "Object has been destroyed" after X-close→tray)
       if (isLocked()) throw new Error('app is locked')
       const name = path.basename(String(fileName || ''))
       if (!/^(auto|evt)-.+.json$/.test(name)) return { ok: false, error: 'invalid backup file name' } // whitelisted naming, prevents path traversal
@@ -1012,7 +1129,7 @@ function registerIpc () {
       }
     },
     'list-auto-backups': (e, backupDir) => {
-      if (!win || e.sender !== win.webContents) throw new Error('main-window-only')
+      assertMainWindow(e) // main-window guard via getMainWindow (isDestroyed-safe; bare module var win threw "Object has been destroyed" after X-close→tray)
       if (isLocked()) throw new Error('app is locked')
       const dir = resolveBackupDir(backupDir)
       let names
@@ -1024,6 +1141,7 @@ function registerIpc () {
         return { ok: false, files: [], error: String(err && err.message || err) }
       }
       // 新→旧展示排序也按内嵌时间戳(字典序会把 evt-/auto- 前缀排在时间之前,同日错位)
+      // ^(auto|evt)- 白名单天然排除 .tmp-* 原子写残留(2026-09-11 与 run-auto-backup 的清扫同策略)
       return { ok: true, files: fixUtil.sortBackupNamesNewestFirst(names.filter(f => /^(auto|evt)-/.test(f))) }
     },
     'read-critical-state-backup': () => {
@@ -1182,6 +1300,18 @@ function registerIpc () {
     'updater:quit-and-install': () => updater.quitAndInstall(),
     'updater:status': () => updater.getStatus()
   }
+  // Flush-ack handshake receiver (see will-quit): renderer sends this after dispatching its debounced
+  // flush writes on app-quitting-flush. fire-and-forget (ipcMain.on, not handle) — the main process is
+  // on its way out and must not throw back into a dying renderer.
+  ipcMain.on('app-quitting-flush-ack', (e, payload) => {
+    try {
+      // Stale token acks (from a previous quit attempt that was aborted) must not satisfy this round
+      if (payload && payload.token === flushAckToken && e && e.sender && !flushAckedSenders.has(e.sender.id)) {
+        flushAckedSenders.add(e.sender.id)
+        log.info('[Quit] flush ack received', flushAckedSenders.size + '/' + flushExpectAcks)
+      }
+    } catch { /* dying process — best effort */ }
+  })
   // Unified error logging: handler throws are rethrown as-is (the renderer's invoke still rejects) while the main process leaves a trace —
   // previously, handlers throwing silently left no trace in main-process logs, making cross-window issues impossible to diagnose
   for (const [ch, fn] of Object.entries(handlers)) {
