@@ -105,6 +105,31 @@ function parseDate (s) {
 /** Deadline → 00:00 of that day (consistent with the renderer's dayjs(todoTime).startOf('day')) */
 function dayStartOf (ts) { return ts ? +dayjs(ts).startOf('day') : 0 }
 
+/* ---------------- Lunar annotation (solarlunar, same ISC dependency the App's calendar/repeat use) ---------------- */
+let _solarlunar = null
+function solarlunar () {
+  if (!_solarlunar) _solarlunar = (r => (r && r.default) ? r.default : r)(require('solarlunar'))
+  return _solarlunar
+}
+
+/** Short lunar annotation for a task's displayed date: "七月廿九" (null when the task has no date or the lib is missing) */
+function lunarOf (t) {
+  const ts = t && (t.todoTime || t.dayStart)
+  if (!ts) return null
+  try {
+    const d = dayjs(ts)
+    const l = solarlunar().solar2lunar(d.year(), d.month() + 1, d.date())
+    return l && l.monthCn && l.dayCn ? l.monthCn + l.dayCn : null
+  } catch { return null }
+}
+
+/** Full annotation for --json rows: "YYYY-MM-DD · 七月廿九" (null for undated tasks) */
+function lunarAnnotate (t) {
+  const short = lunarOf(t)
+  if (!short) return null
+  return dayjs(t.todoTime || t.dayStart).format('YYYY-MM-DD') + ' · ' + short
+}
+
 /* ================= Task resolution ================= */
 function liveTasks () { return open().call('queryTodos', { deleted: 0, orderBy: 'scheduledDay ASC, sort ASC' }) }
 function recycleTasks () { return open().call('queryTodos', { deleted: 1, orderBy: 'updatedAt DESC' }) }
@@ -240,7 +265,9 @@ function projectStatus (c) {
     lastActivity: done.reduce((m, t) => Math.max(m, t.completedAt || 0), 0),
     overdue: list.filter(t => !t.complete && t.dayStart > 0 && t.dayStart < today0).length,
     next7days: list.filter(t => !t.complete && t.dayStart >= today0 && t.dayStart <= week24).length,
-    deadline: getProjectDeadline(c.categoryId)
+    deadline: getProjectDeadline(c.categoryId),
+    // explicit user-set status (see setProjectStatus) — separate concern from the derived progress stats above
+    status: explicitStatus(c.categoryId)
   }
 }
 
@@ -374,6 +401,35 @@ function getProjectDeadline (categoryId) {
   const v = open().call('getMeta', 'projectDeadline:' + categoryId)
   const n = Number(v) || 0
   return n
+}
+
+/* ---------------- Project explicit status (meta projectStatus:<categoryId>; same key the App reads; absent = 'active') ----------------
+   This is a user-set lifecycle field, distinct from the derived progress stats in projectStatus() above. */
+const PROJECT_STATUS_VALUES = ['active', 'paused', 'done', 'cancelled']
+const projectStatusKey = id => 'projectStatus:' + id
+
+/** Explicit project status; absent/invalid meta value falls back to 'active' */
+function explicitStatus (categoryId) {
+  const v = open().call('getMeta', projectStatusKey(categoryId))
+  return PROJECT_STATUS_VALUES.includes(v) ? v : 'active'
+}
+
+/** Set the explicit project status; 'none' deletes the meta key so both ends fall back to 'active' */
+function setProjectStatus (input, status) {
+  const id = resolveCategory(input)
+  const cat = open().call('getAllCategories').find(c => c.categoryId === id)
+  const name = cat ? cat.categoryName : String(id)
+  const before = explicitStatus(id)
+  if (String(status || '').toLowerCase() === 'none' || status == null || status === '') {
+    open().call('deleteMeta', projectStatusKey(id))
+    audit.record({ action: 'project.status', targets: [{ taskId: 'cat:' + id, content: name }], changes: [{ before: { status: before }, after: { status: 'active' } }], note: 'project status cleared (falls back to active)' })
+    return { categoryId: id, name, status: 'active', cleared: true }
+  }
+  const next = String(status).toLowerCase()
+  if (!PROJECT_STATUS_VALUES.includes(next)) throw new CliError(`--status accepts ${PROJECT_STATUS_VALUES.join('|')}|none (got "${status}")`, 'USAGE')
+  open().call('setMeta', [projectStatusKey(id), next])
+  audit.record({ action: 'project.status', targets: [{ taskId: 'cat:' + id, content: name }], changes: [{ before: { status: before }, after: { status: next } }], note: 'project status → ' + next })
+  return { categoryId: id, name, status: next }
 }
 
 // ---- Task dependencies (mirror of renderer store/todo.js helpers; both writers bypass each other) ----
@@ -568,6 +624,18 @@ function chipsSnapshotForDelete (taskId) {
 /** Clear a task's schedule chips across all days (hardDelete/purge paths; db layer cascades inline — this is a defensive explicit call) */
 function chipsRemoveTask (taskId) {
   try { open().call('planDeleteTask', taskId); return 1 } catch { return 0 }
+}
+
+/** Day-change chip migration (same semantics as the UI's moveTaskChips and the `edit --date` follow-up):
+ *  existing chips keep their times and follow the task to the new day. Best-effort — never blocks the patch. */
+function migrateChipsOnDayChange (taskId, oldDay, newDay) {
+  if (!oldDay || !newDay || oldDay === newDay) return 0
+  try {
+    const ymd = ts => { const d = new Date(ts); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') }
+    if (ymd(oldDay) === ymd(newDay)) return 0
+    open().call('planMoveTask', { taskId, fromDay: ymd(oldDay), toDay: ymd(newDay) })
+    return 1
+  } catch { return 0 }
 }
 
 /** Restore a task: backfill the schedule chips snapshotted before deletion */
@@ -856,24 +924,27 @@ function catToRow (c) {
     isFolder: c.folderIs ? 1 : 0, parentId: c.folderId || 0, deleted: c.delete ? 1 : 0
   }
 }
-function addCategory (name, { color, parent } = {}) {
+function addCategory (name, { color, parent, folder } = {}) {
   const db = open()
   const cats = db.call('getAllCategories')
   if (cats.some(c => c.categoryName === name)) throw new CliError('category "' + name + '" already exists (names must stay unique so the CLI can address them)', 'CATEGORY_EXISTS')
   let parentId = 0
   if (parent != null && parent !== true) {
-    const p = resolveCategory(parent)
-    if (!p.folderIs) throw new CliError('parent "' + parent + '" is not a folder', 'CATEGORY_NOT_FOLDER')
-    parentId = p.categoryId
+    // resolveCategory returns the bare id — look the row back up before the folder check
+    // (was: p.folderIs on a number, always undefined → `category add --parent` rejected every parent)
+    const pid = resolveCategory(parent)
+    const p = cats.find(c => c.categoryId === pid)
+    if (!p || !p.folderIs) throw new CliError('parent "' + parent + '" is not a folder', 'CATEGORY_NOT_FOLDER')
+    parentId = pid
   }
   const cat = {
     categoryId: Date.now() * 1000 + Math.floor(Math.random() * 1000), userId: 840001,
     categoryName: String(name), categoryColor: color && CAT_COLORS.includes(color) ? color : CAT_COLORS[cats.length % CAT_COLORS.length],
     createTime: Date.now(), listSort: Math.max(0, ...cats.map(c => c.listSort)) + 100,
-    folderIs: false, folderId: parentId, delete: false
+    folderIs: !!folder, folderId: parentId, delete: false
   }
   db.call('upsertCategory', catToRow(cat))
-  audit.record({ action: 'category.add', targets: [], changes: [{ after: { name, id: cat.categoryId } }], note: 'category created' })
+  audit.record({ action: 'category.add', targets: [], changes: [{ after: { name, id: cat.categoryId } }], note: (folder ? 'folder' : 'category') + ' created' })
   return cat
 }
 function renameCategory (input, nextName) {
@@ -904,6 +975,76 @@ function deleteCategory (input) {
   for (const v of victims) { try { db.call('deleteMeta', 'projectDeadline:' + v.categoryId) } catch { /* absent is fine */ } }
   audit.record({ action: 'category.delete', targets: [], changes: [{ before: { names: victims.map(v => v.categoryName) } }], note: 'category soft-deleted (recoverable in UI), tasks kept' })
   return { deleted: victims.map(v => ({ id: v.categoryId, name: v.categoryName })) }
+}
+
+/** Move a category under a folder or back to root ('root'). Parity note: the App's hierarchy getter
+ *  (renderer/js/store/category.js `hierarchical`) renders folders as roots and only nests non-folder
+ *  children — a nested folder would be silently dropped from the sidebar — so folder→folder moves are rejected. */
+function moveCategory (input, parentInput) {
+  const db = open()
+  const id = resolveCategory(input)
+  const all = db.call('getAllCategories')
+  const cat = all.find(c => c.categoryId === id)
+  if (!cat) throw new CliError(`category not found: "${input}"`, 'CATEGORY_NOT_FOUND')
+  const raw = String(parentInput == null ? '' : parentInput).trim().toLowerCase()
+  let parentId = 0
+  let parent = null
+  if (raw && raw !== 'root' && raw !== 'none') {
+    const pid = resolveCategory(parentInput)
+    if (pid === id) throw new CliError('cannot move a category under itself', 'CATEGORY_CYCLE')
+    parent = all.find(c => c.categoryId === pid)
+    if (!parent) throw new CliError(`category not found: "${parentInput}"`, 'CATEGORY_NOT_FOUND')
+    // Cycle guard first (more specific error): walk up from the parent; landing on the moved category closes a loop
+    let cur = parent
+    const seen = new Set()
+    while (cur && cur.folderId && !seen.has(cur.categoryId)) {
+      seen.add(cur.categoryId)
+      if (cur.folderId === id) throw new CliError(`cannot move "${cat.categoryName}" into its own descendant (cycle)`, 'CATEGORY_CYCLE')
+      cur = all.find(c => c.categoryId === cur.folderId)
+    }
+    if (!parent.folderIs) throw new CliError(`"${parent.categoryName}" is not a folder — the App only nests categories inside folders`, 'CATEGORY_NOT_FOLDER')
+    if (cat.folderIs) throw new CliError(`"${cat.categoryName}" is a folder: the App renders folders as roots only (nested folders are dropped from the sidebar), so folder→folder moves are rejected`, 'CATEGORY_NESTED_FOLDER')
+    parentId = pid
+  }
+  db.call('upsertCategory', catToRow(Object.assign({}, cat, { folderId: parentId })))
+  audit.record({
+    action: 'category.move',
+    targets: [{ taskId: 'cat:' + id, content: cat.categoryName }],
+    changes: [{ before: { parent: cat.folderId }, after: { parent: parentId } }],
+    note: parent ? 'moved under folder "' + parent.categoryName + '"' : 'moved to root'
+  })
+  return { categoryId: id, name: cat.categoryName, folderId: parentId, parentName: parent ? parent.categoryName : null }
+}
+
+/** Flat rows for `categories --json`: getAllCategories rows (order unchanged) + additive parentName */
+function categoryRows () {
+  const cats = open().call('getAllCategories')
+  const byId = new Map(cats.map(c => [c.categoryId, c]))
+  return cats.map(c => ({
+    ...c,
+    folderIs: !!c.folderIs,
+    parentName: c.folderId && byId.get(c.folderId) ? byId.get(c.folderId).categoryName : null
+  }))
+}
+
+/** Display order for the `categories` text listing: folders are roots with their children indented under
+ *  them (mirrors the App's `hierarchical` getter); orphans render at root level rather than vanishing. */
+function categoryHierarchy () {
+  const cats = categoryRows()
+  const out = []
+  const printed = new Set()
+  for (const c of cats) {
+    if (c.folderIs) {
+      out.push({ row: c, depth: 0 })
+      printed.add(c.categoryId)
+      for (const ch of cats.filter(x => !x.folderIs && x.folderId === c.categoryId)) {
+        out.push({ row: ch, depth: 1 })
+        printed.add(ch.categoryId)
+      }
+    }
+  }
+  for (const c of cats) if (!printed.has(c.categoryId)) out.push({ row: c, depth: 0 })
+  return out
 }
 
 /* ---------------- Tags (derived from #tag in content/description; rename/remove rewrite text across tasks — same regex semantics as SideNav) ---------------- */
@@ -944,6 +1085,175 @@ function rewriteTag (name, next, { remove } = {}) {
     if (Object.keys(patch).length) { patchTodo(todo.taskId, patch, { action: 'tag.' + (remove ? 'remove' : 'rename') }); touched++ }
   }
   return touched
+}
+
+/* ---------------- Batch operations (explicit taskIds only — no keyword matching; per-task failures never abort the run) ---------------- */
+/** Exact-id resolution for batch: batch is explicit by design, so the keyword/ambiguity path of resolveTask is deliberately absent */
+function resolveTaskExact (id, pool) {
+  const t = (pool || liveTasks()).find(x => x.taskId === String(id))
+  if (!t) throw new CliError(`task not found: "${id}" (batch takes exact taskIds only, no keyword matching)`, 'TASK_NOT_FOUND')
+  return t
+}
+
+/** Add/remove one #tag on a single task — same title/description rewrite path as `tag rename`/`tag rm`
+ *  (TAG_RE boundary regex); add appends " #name" to the title like the App's EditPanel.addTag. */
+function batchTagOne (t, name, remove) {
+  const esc = tagEsc(name)
+  if (remove) {
+    const re = new RegExp('\\s*#' + esc + '(?=\\s|$)', 'g')
+    const patch = {}
+    if (t.taskContent) { const v = t.taskContent.replace(re, '').trim(); if (v !== t.taskContent) patch.taskContent = v }
+    if (t.taskDescribe) { const v = t.taskDescribe.replace(re, '').trim(); if (v !== t.taskDescribe) patch.taskDescribe = v }
+    if (!Object.keys(patch).length) throw new CliError(`tag #${name} not present on this task`, 'TAG_NOT_PRESENT')
+    return patchTodo(t.taskId, patch, { action: 'tag.remove' })
+  }
+  if (new RegExp('#' + esc + '(?=\\s|$)').test(t.taskContent || '')) throw new CliError(`tag #${name} already on this task`, 'TAG_PRESENT')
+  return patchTodo(t.taskId, { taskContent: (t.taskContent || '').replace(/\s+$/, '') + ' #' + name }, { action: 'tag.add' })
+}
+
+/**
+ * Run a batch op over explicit taskIds. Returns { op, matched, changed, failures, outcomes } where
+ * outcomes carries the per-task line info for text rendering; failures never abort the remaining tasks.
+ * Audit: one entry per task change (inherent — every op routes through patchTodo/toggleComplete).
+ */
+function batchRun (op, ids, { to, add, rm, dryRun } = {}) {
+  const entries = (Array.isArray(ids) ? ids : [ids]).map(String).filter(Boolean)
+  if (!entries.length) throw new CliError(`batch ${op} needs at least one taskId`, 'USAGE')
+  let toTs = null
+  let catId = null
+  let tagName = null
+  let removing = false
+  if (op === 'date') {
+    if (!to || to === true) throw new CliError('batch date needs --to <today|tomorrow|+Nd|YYYY-MM-DD[ HH:mm]>', 'USAGE')
+    toTs = parseDate(to) // same parser as `edit --date`; throws on bad input before anything is written
+  } else if (op === 'category') {
+    if (!to || to === true) throw new CliError('batch category needs --to <name|id>', 'USAGE')
+    catId = resolveCategory(to)
+  } else if (op === 'tag') {
+    const hasAdd = add != null && add !== true
+    const hasRm = rm != null && rm !== true
+    if (hasAdd === hasRm) throw new CliError('batch tag needs exactly one of --add <tag> | --rm <tag>', 'USAGE')
+    tagName = String(hasAdd ? add : rm).replace(/^#/, '')
+    if (!tagName) throw new CliError('tag name required (--add <tag> | --rm <tag>)', 'USAGE')
+    removing = hasRm
+  } else if (op !== 'done') {
+    throw new CliError(`unknown batch op "${op}" (valid: done/date/category/tag)`, 'USAGE')
+  }
+  const pool = liveTasks()
+  const describe = t => op === 'done' ? `complete "${t.taskContent}" (subtask cascade / repeat renewal apply)`
+    : op === 'date' ? `reschedule "${t.taskContent}" → ${to}`
+      : op === 'category' ? `recategorize "${t.taskContent}" → ${to}`
+        : `${removing ? 'remove' : 'add'} #${tagName} ${removing ? 'on' : 'to'} "${t.taskContent}"`
+  const exec = {
+    done: t => toggleComplete(t.taskId, true),
+    date: t => {
+      const after = patchTodo(t.taskId, { todoTime: toTs }, { action: 'edit' })
+      migrateChipsOnDayChange(t.taskId, t.dayStart, after.dayStart)
+      return after
+    },
+    category: t => patchTodo(t.taskId, { categoryId: catId }, { action: 'edit' }),
+    tag: t => batchTagOne(t, tagName, removing)
+  }
+  const failures = []
+  const outcomes = []
+  let changed = 0
+  for (const id of entries) {
+    let t = null
+    try { t = resolveTaskExact(id, pool) } catch (e) {
+      failures.push({ taskId: id, error: e.message })
+      outcomes.push({ taskId: id, ok: false, error: e.message })
+      continue
+    }
+    if (dryRun) { outcomes.push({ taskId: t.taskId, ok: true, dryRun: true, label: describe(t) }); continue }
+    try {
+      exec[op](t)
+      changed++
+      outcomes.push({ taskId: t.taskId, ok: true, label: describe(t) })
+    } catch (e) {
+      failures.push({ taskId: t.taskId, error: String(e.message || e) })
+      outcomes.push({ taskId: t.taskId, ok: false, error: String(e.message || e) })
+    }
+  }
+  if (dryRun) return { op, matched: entries.length, dryRun: true, plan: outcomes.filter(o => o.ok), failures, outcomes }
+  return { op, matched: entries.length, changed, failures, outcomes }
+}
+
+/* ---------------- Saved views (smart lists): the same SQLite `filters` table the App's FilterModal writes / FilterView consumes ----------------
+   conds contract is pinned by db.js normConds (both ends' read path): { catId: -1|categoryId, priority: -1|N, dateMode: 'all'|'today'|'week'|'overdue'|'none' }
+   with -1/'all' = condition off. Any other key would be stripped on read, so the CLI maps flags onto exactly this shape. */
+function viewsList () { return open().call('filterList') }
+
+function resolveView (input) {
+  const rows = viewsList()
+  const byId = rows.find(v => String(v.id) === String(input))
+  if (byId) return byId
+  const hits = rows.filter(v => v.name === input)
+  if (hits.length === 1) return hits[0]
+  if (hits.length > 1) throw new CliError(`view "${input}" is ambiguous (${hits.length} saved views share this name); use the view id (view list --json)`, 'AMBIGUOUS_MATCH')
+  throw new CliError(`view not found: "${input}" (view list to browse)`, 'VIEW_NOT_FOUND')
+}
+
+/** English one-line conds summary (the same conditions the App's FilterView header shows) */
+function viewCondsSummary (conds) {
+  const c = conds || {}
+  const parts = []
+  if (c.catId != null && c.catId !== -1) {
+    const cat = open().call('getAllCategories').find(x => x.categoryId === c.catId)
+    parts.push(cat ? 'cat:' + cat.categoryName : 'cat #' + c.catId)
+  }
+  if (c.priority != null && c.priority !== -1) parts.push('priority ' + c.priority)
+  if (c.dateMode && c.dateMode !== 'all') parts.push(c.dateMode)
+  return parts.join(' · ') || 'all undone tasks'
+}
+
+/** Create a saved view from CLI flags (duplicate names rejected). The conds shape always carries all
+ *  three keys — that IS the renderer's parseConds output shape (-1/'all' = off). */
+function viewAdd (name, { category, priority, overdue, nodate } = {}) {
+  const clean = String(name || '').trim()
+  if (!clean) throw new CliError('view add needs a name', 'USAGE')
+  if (viewsList().some(v => v.name === clean)) throw new CliError(`view "${clean}" already exists (view list to browse)`, 'VIEW_EXISTS')
+  const conds = { catId: -1, priority: -1, dateMode: 'all' }
+  if (category != null && category !== true) conds.catId = resolveCategory(category)
+  if (priority != null && priority !== true) {
+    const p = parseInt(priority, 10)
+    if (!(p >= 0 && p <= 3) || String(p) !== String(priority).trim()) throw new CliError('--priority accepts 0-3 (got "' + priority + '")', 'USAGE')
+    conds.priority = p
+  }
+  const modes = [overdue ? 'overdue' : null, nodate ? 'none' : null].filter(Boolean)
+  if (modes.length > 1) throw new CliError('--overdue and --nodate are mutually exclusive (both set the date condition)', 'USAGE')
+  if (modes.length) conds.dateMode = modes[0]
+  const id = open().call('filterUpsert', { name: clean, conds, sort: 0 })
+  audit.record({ action: 'view.add', targets: [], changes: [{ after: { id, name: clean, conds } }], note: 'saved view created (same filters table as the App smart lists)' })
+  return { id, name: clean, conds, sort: 0 }
+}
+
+/** Remove a saved view by name or id */
+function viewRm (input) {
+  const v = resolveView(input)
+  open().call('filterDelete', v.id)
+  audit.record({ action: 'view.rm', targets: [], changes: [{ before: { id: v.id, name: v.name, conds: v.conds } }], note: 'saved view removed' })
+  return { id: v.id, name: v.name }
+}
+
+/** Apply a saved view's conds to a task pool — mirrors renderer FilterView.list exactly:
+ *  undone only, catId/priority equality (-1 = off), dateMode today/isoWeek/overdue/none windows. */
+function applyViewConds (conds, tasks) {
+  const c = conds || {}
+  const today0 = +dayjs().startOf('day')
+  const weekEnd = +dayjs().endOf('isoWeek') // isoWeek plugin is extended by todo-core (shared dayjs instance)
+  return tasks.filter(t => {
+    if (t.delete || t.complete) return false
+    if (c.catId != null && c.catId !== -1 && (t.categoryId || 0) !== c.catId) return false
+    if (c.priority != null && c.priority !== -1 && (t.priority || 0) !== c.priority) return false
+    if (c.dateMode && c.dateMode !== 'all') {
+      const d = t.dayStart || 0
+      if (c.dateMode === 'today' && d !== today0) return false
+      if (c.dateMode === 'week' && !(d >= today0 && d <= weekEnd)) return false
+      if (c.dateMode === 'overdue' && !(d && d < today0)) return false
+      if (c.dateMode === 'none' && d !== 0) return false
+    }
+    return true
+  })
 }
 
 /* ---------------- Focus ledger (唯一事实源 = SQLite tomato_records 行表,同统计页/时间轴;CLI 直连 DB,无需 App 运行) ---------------- */
@@ -1409,11 +1719,15 @@ module.exports = {
   parseSubs, addSubtask, checkSubtask, removeSubtask,
   audit, readAuditLog: audit.readEntries,
   getProjects, getProjectIds, setProjectFlag, projectStatus, parseMilestoneDate,
+  PROJECT_STATUS_VALUES, explicitStatus, setProjectStatus,
   getMilestones, addMilestone, removeMilestone, linkMilestone, msProgress,
   setProjectDeadline, getProjectDeadline,
   writeTomatoCmd, readTomatoState, waitForTomatoAck, tomatoLiveRemainSec, backfillRecord,
   buildRepeatRule, repeatOn, repeatOff, repeatRuleInfo,
-  addCategory, renameCategory, deleteCategory, listTags, rewriteTag, tomatoRecords,
+  addCategory, renameCategory, deleteCategory, moveCategory, categoryRows, categoryHierarchy, listTags, rewriteTag, tomatoRecords,
+  resolveTaskExact, batchRun, batchTagOne, migrateChipsOnDayChange,
+  viewsList, resolveView, viewAdd, viewRm, applyViewConds, viewCondsSummary,
+  lunarOf, lunarAnnotate,
   setEstimate, sortTask, listOn, resolveRecord, recordFix, recordRemove, moveSubtask,
   setReminderOffsets, setReminderExtra, addAttachment, listAttachments, removeAttachment,
   settingsList, settingsSet, planSet, planList, planRemove,

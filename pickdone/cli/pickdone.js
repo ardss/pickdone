@@ -54,17 +54,24 @@ Read commands:
         filters: --done --undone --no-date --category <name|id> --keyword <word>
         --quad q1|q2|q3|q4               four-quadrant filter (q1 important+urgent, q2 important, q3 urgent, q4 neither)
         --on <date>                      what's scheduled on one specific day, with times (scheduling view)
+        --view <name|id>                 apply a saved view's conditions first (as in the App: undone tasks only); inline filters narrow it further
+        --lunar                          append the lunar date annotation (· 七月廿九) to each displayed date
   search <keyword>                search by content/description
   get    <taskId|keyword>         show full fields of one task
-  categories                      list categories
-  category add <name> [--color hex] [--parent <folder>]   create a category (names stay unique)
+  categories                      list categories (folders first-class, children indented)
+  category add <name> [--color hex] [--parent <folder>] [--folder]   create a category or folder (names stay unique)
   category rename <name|id> <newName>                     rename a category
+  category move <name|id> --parent <folder|root>          move a category under a folder or back to root (folder→folder rejected: the App renders folders as roots only)
   category rm <name|id> [--yes]   soft-delete a category (--dry-run to preview; tasks kept, recoverable in App)
   tag    [list]                   list tags (derived from #tag in titles/descriptions)
   tag rename <old> <new>          rewrite #old → #new across all tasks
   tag rm <name>                   strip a tag from all tasks
-  projects                        list projects (progress/focus minutes/overdue/next 7 days)
-  project <name|id> [--on|--off] [--deadline date|none]  details / set project / set deadline (days-left warn)
+  projects [--status active|paused|done|cancelled]        list projects (progress/focus minutes/overdue/next 7 days)
+  project <name|id> [--on|--off] [--deadline date|none] [--status active|paused|done|cancelled|none]  details / set project / set deadline / set lifecycle status (none clears)
+  view list                       saved smart lists (same filters table the App's filter views use)
+  view add <name> [--category <name|id>] [--priority 0-3] [--overdue] [--nodate]
+                                  create a saved view (conds = category/priority/date only — the shared contract; use list --view + inline filters for more)
+  view rm <name|id>               delete a saved view
   milestone <project> [list|add <title> <date>|rm <n>|link <n> <task>|unlink <n> <task>]   project milestones (date: YYYY-MM-DD/MM-DD/today/+14d)
   stats  [--from YYYY-MM-DD --to YYYY-MM-DD]  daily done/focus stats (default: last 7 days)
   recycle                         list recycle bin
@@ -76,6 +83,12 @@ Read commands:
   log    [--n 20] [--action x]    external write audit trail (every AI change is traceable)
 
 Write commands:
+  batch done <id> [<id>...]                       complete many (ids only; subtask cascade / repeat renewal apply)
+  batch date <id>... --to <date>                  reschedule many (today/tomorrow/+Nd/YYYY-MM-DD[ HH:mm], same parser as edit)
+  batch category <id>... --to <name|id>           recategorize many
+  batch tag <id>... (--add <tag> | --rm <tag>)    add/remove a #tag on many tasks (same rewrite path as tag rename)
+          common: --dry-run (print the per-task plan, writes nothing); --json (data: {op, matched, changed, failures})
+          batch takes exact taskIds only — unknown ids land in failures[] and never abort the remaining tasks
   add    <content> [--desc text] [--date today|tomorrow|+3d|YYYY-MM-DD[ HH:mm]] [--created-at "YYYY-MM-DD HH:mm"]
          [--reminder same as date] [--category name] [--difficulty 0-3] [--estimate 0-20]
   done   <taskId|keyword>         complete a task (--no-sub-cascade to skip subtasks; --at "YYYY-MM-DD HH:mm" backdates completedAt)
@@ -134,16 +147,15 @@ function fmtDay (t) {
   if (!t.dayStart && !t.todoTime) return NO_DATE
   return dayjs(t.todoTime || t.dayStart).format('MM-DD HH:mm').replace(' 00:00', '')
 }
-function fmtTodoLine (t) {
+function fmtTodoLine (t, lunarOf) {
   const mark = t.complete ? '[x]' : '[ ]'
   const due = fmtDay(t)
   const parts = [mark, t.taskContent]
   if (t.taskDescribe) parts.push('— ' + t.taskDescribe.split('\n')[0].slice(0, 40))
   if (t.reminderTime) parts.push('⏰' + dayjs(t.reminderTime).format('MM-DD HH:mm'))
-  if (due !== NO_DATE) parts.push('(' + due + ')')
+  if (due !== NO_DATE) parts.push(lunarOf && lunarOf(t) ? `(${due} · ${lunarOf(t)})` : '(' + due + ')')
   return parts.join('  ')
 }
-function fmtCat (c) { return `${c.categoryId}\t${c.categoryName}${c.categoryColor ? '\t' + c.categoryColor : ''}` }
 
 /** audit changes summary: list changed semantic fields (before→after) */
 const FIELD_LABEL = { taskContent: 'title', taskDescribe: 'desc', complete: 'complete', completedAt: 'completedAt', todoTime: 'date', reminderTime: 'reminder', categoryId: 'category', repeatId: 'repeatGroup', subtasks: 'subtasks', delete: 'delete', status: 'status' }
@@ -192,7 +204,7 @@ async function main () {
   const opts = parseArgs(argv.slice(1))
   if (opts.help) { console.log(HELP); return }
 
-  const WRITE_CMDS = ['add', 'edit', 'done', 'undo', 'delete', 'restore', 'subtask', 'repeat', 'events', 'deps'] // events 入列让 --dry-run 真预览(原为死分支:永远真跑)
+  const WRITE_CMDS = ['add', 'edit', 'done', 'undo', 'delete', 'restore', 'subtask', 'repeat', 'events', 'deps', 'batch'] // events 入列让 --dry-run 真预览(原为死分支:永远真跑)
   const dry = !!opts['dry-run'] && WRITE_CMDS.includes(cmd)
   const emit = data => {
     if (opts.json) console.log(JSON.stringify({ ok: true, command: cmd, data }, null, 2))
@@ -202,10 +214,10 @@ async function main () {
     if (opts.json) console.log(JSON.stringify({ ok: true, command: cmd, data, next }, null, 2))
     else console.log(data)
   }
-  const emitList = rows => {
+  const emitList = (rows, lunarOf) => {
     if (opts.json) return emit(rows)
     if (!rows.length) return console.log('(no tasks)')
-    console.log(rows.map(t => fmtTodoLine(t)).join('\n'))
+    console.log(rows.map(t => fmtTodoLine(t, lunarOf)).join('\n'))
     console.log(`-- ${rows.length} task(s)`)
   }
   const okMsg = (t, next) => {
@@ -229,7 +241,11 @@ async function main () {
     }
     case 'list': {
       const first = opts._[0]
-      const range = ['today', 'tomorrow', 'week', 'overdue', 'future'].includes(first) ? first : (opts.all ? null : 'today')
+      // --view <name|id>: saved smart-list conditions applied first (same semantics as the App's FilterView: undone tasks
+      // only); any inline filters below narrow it further. With --view the absent range no longer defaults to 'today' —
+      // the saved view owns the date window (an overdue/no-date view must not be clipped to today).
+      const view = opts.view != null && opts.view !== true ? lib.resolveView(opts.view) : null
+      const range = ['today', 'tomorrow', 'week', 'overdue', 'future'].includes(first) ? first : (opts.all || view ? null : 'today')
       if (first && !range && !opts.all && !opts.on) throw new lib.CliError(`unknown range "${first}" (valid: today/tomorrow/week/overdue/future or --all or --on <date>)`)
       // --on <date>: what's scheduled on one specific day (with times) — the "what should I slot at 11am tomorrow" view
       if (opts.on != null && opts.on !== true) {
@@ -247,11 +263,15 @@ async function main () {
         if (!['1', '2', '3', '4'].includes(q)) throw new lib.CliError('--quad accepts q1|q2|q3|q4', 'USAGE')
         quad = { important: q === '1' || q === '2' ? 1 : 0, urgent: q === '1' || q === '3' ? 1 : 0 }
       }
-      emitList(lib.listTodos({
+      let rows = lib.listTodos({
         range: quad ? null : range, done: opts.done === 'false' ? false : opts.done, noDate: opts.noDate,
         category: opts.category != null ? lib.resolveCategory(opts.category) : null,
         keyword: opts.keyword, limit: opts.limit, quad
-      }))
+      })
+      if (view) rows = lib.applyViewConds(view.conds, rows)
+      // --lunar: additive only — JSON rows gain `lunar: "YYYY-MM-DD · 七月廿九"`, text dates gain "· 七月廿九"
+      if (opts.lunar) rows = rows.map(t => ({ ...t, lunar: lib.lunarAnnotate(t) }))
+      emitList(rows, opts.lunar ? lib.lunarOf : null)
       return
     }
     case 'search': {
@@ -268,9 +288,15 @@ async function main () {
       return
     }
     case 'categories': {
-      const cats = lib.getCategories()
-      if (opts.json) return emit(cats)
-      console.log(cats.length ? cats.map(fmtCat).join('\n') : '(no categories)')
+      // JSON stays the flat db row list (additive parentName only); text renders the hierarchy like the App's sidebar
+      if (opts.json) return emit(lib.categoryRows())
+      const tree = lib.categoryHierarchy()
+      if (!tree.length) return console.log('(no categories)')
+      console.log(tree.map(({ row: c, depth }) => {
+        const pad = '  '.repeat(depth)
+        const mark = c.folderIs ? '[folder] ' : ''
+        return `${pad}${c.categoryId}\t${mark}${c.categoryName}${c.categoryColor ? '\t' + c.categoryColor : ''}`
+      }).join('\n'))
       return
     }
     /* ---- category CRUD: same SQLite categories table as the UI (upsertCategory), writes show up after ~2s db watch ---- */
@@ -278,10 +304,17 @@ async function main () {
       const [op, ...rest] = opts._
       if (op === 'add') {
         const name = rest[0]
-        if (!name) throw new lib.CliError('usage: category add <name> [--color #0f9d8f|teal-palette-name] [--parent <folder>]', 'USAGE')
-        const c = lib.addCategory(name, { color: opts.color !== true ? opts.color : undefined, parent: opts.parent !== true ? opts.parent : undefined })
-        if (opts.json) return emit({ categoryId: c.categoryId, name: c.categoryName, color: c.categoryColor, parent: c.folderId }, ['add <task> --category "' + c.categoryName + '" to file tasks into it'])
-        return console.log(`✓ category created: ${c.categoryName}  (id ${c.categoryId}, color ${c.categoryColor})`)
+        if (!name) throw new lib.CliError('usage: category add <name> [--color #0f9d8f] [--parent <folder>] [--folder]', 'USAGE')
+        const c = lib.addCategory(name, { color: opts.color !== true ? opts.color : undefined, parent: opts.parent !== true ? opts.parent : undefined, folder: !!opts.folder })
+        if (opts.json) return emit({ categoryId: c.categoryId, name: c.categoryName, color: c.categoryColor, parent: c.folderId, folderIs: c.folderIs }, ['add <task> --category "' + c.categoryName + '" to file tasks into it'])
+        return console.log(`✓ ${c.folderIs ? 'folder' : 'category'} created: ${c.categoryName}  (id ${c.categoryId}, color ${c.categoryColor})`)
+      }
+      if (op === 'move') {
+        const target = rest[0]
+        if (!target || opts.parent == null || opts.parent === true) throw new lib.CliError('usage: category move <name|id> --parent <folder name|id|root>', 'USAGE')
+        const r = lib.moveCategory(target, opts.parent)
+        if (opts.json) return emit(r)
+        return console.log(`✓ "${r.name}" moved to ${r.parentName ? 'folder "' + r.parentName + '"' : 'root'}`)
       }
       if (op === 'rename') {
         const [target, next] = rest
@@ -305,7 +338,7 @@ async function main () {
         if (opts.json) return emit(r)
         return console.log('✓ deleted: ' + r.deleted.map(v => v.name).join(', '))
       }
-      throw new lib.CliError('unknown sub-operation "' + op + '" (valid: add/rename/rm; plain `categories` lists)', 'UNKNOWN_ARG')
+      throw new lib.CliError('unknown sub-operation "' + op + '" (valid: add/rename/move/rm; plain `categories` lists)', 'UNKNOWN_ARG')
     }
     /* ---- tags: derived from #tag in content/description; rename/rm rewrite text across all tasks ---- */
     case 'tag': {
@@ -334,20 +367,30 @@ async function main () {
       throw new lib.CliError('unknown sub-operation "' + op + '" (valid: list/rename/rm)', 'UNKNOWN_ARG')
     }
     case 'projects': {
-      const ps = lib.getProjects()
+      let ps = lib.getProjects()
+      if (opts.status != null && opts.status !== true) {
+        if (!lib.PROJECT_STATUS_VALUES.includes(opts.status)) throw new lib.CliError('--status accepts ' + lib.PROJECT_STATUS_VALUES.join('|'), 'USAGE')
+        ps = ps.filter(p => p.status === opts.status)
+      }
       if (opts.json) return emit(ps)
       if (!ps.length) return console.log('(no projects — use "set as project" in category manager, or project <category> --on)')
-      console.log('Name\tProgress\tTasks\tFocus (min)\tOverdue\tNext 7 days\tStarted')
-      ps.forEach(p => console.log(`${p.name}\t${p.progress}%\t${p.done}/${p.total}\t${p.focusMinutes}\t${p.overdue}\t${p.next7days}\t${p.startedAt ? dayjs(p.startedAt).format('YYYY-MM-DD') : '—'}`))
+      console.log('Name\tProgress\tTasks\tFocus (min)\tOverdue\tNext 7 days\tStatus\tStarted')
+      ps.forEach(p => console.log(`${p.name}\t${p.progress}%\t${p.done}/${p.total}\t${p.focusMinutes}\t${p.overdue}\t${p.next7days}\t${p.status}\t${p.startedAt ? dayjs(p.startedAt).format('YYYY-MM-DD') : '—'}`))
       return
     }
     case 'project': {
       const name = opts._[0]
-      if (!name) throw new lib.CliError('usage: project <name|id> [--on|--off] [--deadline YYYY-MM-DD|none]; no flag shows details', 'USAGE')
+      if (!name) throw new lib.CliError('usage: project <name|id> [--on|--off] [--deadline YYYY-MM-DD|none] [--status active|paused|done|cancelled|none]; no flag shows details', 'USAGE')
       if (opts.on || opts.off) {
         const r = lib.setProjectFlag(name, !!opts.on)
         if (opts.json) return emit(r)
         return console.log(`✓ "${r.name}" ${r.isProject ? 'is now a project' : 'restored to plain category'}`)
+      }
+      if (opts.status !== undefined) {
+        if (opts.status === true) throw new lib.CliError('--status needs a value: ' + lib.PROJECT_STATUS_VALUES.join('|') + '|none', 'USAGE')
+        const r = lib.setProjectStatus(name, String(opts.status))
+        if (opts.json) return emit(r)
+        return console.log(r.cleared ? `✓ "${r.name}" status cleared (falls back to active)` : `✓ "${r.name}" status → ${r.status}`)
       }
       if (opts.deadline !== undefined) {
         const r = lib.setProjectDeadline(name, opts.deadline)
@@ -359,7 +402,7 @@ async function main () {
       const p = lib.projectStatus(c)
       if (opts.json) return emit(p)
       const dl = p.deadline ? `   deadline ${dayjs(p.deadline).format('YYYY-MM-DD')} (${Math.ceil((p.deadline - Date.now()) / 864e5)} days left)` : ''
-      console.log(`${p.name}  ${p.progress}%  (${p.done}/${p.total})${dl}`)
+      console.log(`${p.name}  ${p.progress}%  (${p.done}/${p.total})   status ${p.status}${dl}`)
       console.log(`Started ${p.startedAt ? dayjs(p.startedAt).format('YYYY-MM-DD') : '—'}   Focus ${p.focusMinutes} min   Overdue ${p.overdue}   Next 7 days ${p.next7days}`)
       const list = lib.listTodos({ category: id, limit: 100 })
       console.log(list.length ? '\n' + list.map(t => fmtTodoLine(t)).join('\n') : '\n(no tasks)')
@@ -415,6 +458,37 @@ async function main () {
       if (opts.json) return emit(rows)
       console.log(rows.length ? rows.map(t => `${t.taskContent}  (deleted at ${dayjs(t.updateTime).format('YYYY-MM-DD HH:mm')})`).join('\n') : '(recycle bin is empty)')
       return
+    }
+    /* ---- saved views (smart lists): the same filters table + conds shape the App's FilterModal writes / FilterView consumes ---- */
+    case 'view': {
+      const [op, ...rest] = opts._
+      if (!op || op === 'list') {
+        const rows = lib.viewsList()
+        if (opts.json) return emit(rows)
+        if (!rows.length) return console.log('(no saved views — view add <name> [--category ..] [--priority 0-3] [--overdue] [--nodate] creates one)')
+        console.log(rows.map(v => `${v.id}\t${v.name}\t${lib.viewCondsSummary(v.conds)}`).join('\n'))
+        return
+      }
+      if (op === 'add') {
+        const name = rest[0]
+        if (!name) throw new lib.CliError('usage: view add <name> [--category <name|id>] [--priority 0-3] [--overdue] [--nodate]', 'USAGE')
+        // Flags the shared conds contract cannot persist (db.js normConds keeps catId/priority/dateMode only):
+        // reject instead of silently storing a condition the App's FilterView would never apply
+        for (const bad of ['keyword', 'important', 'urgent', 'complete']) {
+          if (opts[bad] != null) throw new lib.CliError(`--${bad} is not part of the saved-view conds contract (catId/priority/dateMode only); narrow inline instead: list --view <name> --${bad} ..`, 'USAGE')
+        }
+        const v = lib.viewAdd(name, { category: opts.category, priority: opts.priority, overdue: !!opts.overdue, nodate: !!opts.nodate })
+        if (opts.json) return emitNext(v, ['list --view ' + v.id + ' --json to read it back'])
+        return console.log(`✓ view created: ${v.name}  (id ${v.id}, ${lib.viewCondsSummary(v.conds)})`)
+      }
+      if (op === 'rm' || op === 'delete') {
+        const target = rest[0]
+        if (!target) throw new lib.CliError('usage: view rm <name|id>', 'USAGE')
+        const r = lib.viewRm(target)
+        if (opts.json) return emit(r)
+        return console.log('✓ view removed: ' + r.name)
+      }
+      throw new lib.CliError('unknown sub-operation "' + op + '" (valid: list/add/rm)', 'UNKNOWN_ARG')
     }
     case 'log': {
       const entries = lib.readAuditLog({ n: Math.min(parseInt(opts.n, 10) || 20, 200), action: opts.action })
@@ -490,6 +564,28 @@ async function main () {
       for (const t of items.slice(0, 50)) console.log('  ' + t.taskContent + ' (' + t.taskId + ')')
       return null
     }
+    /* ---- batch: explicit taskIds only (no keyword matching); per-task failures never abort the remaining tasks ---- */
+    case 'batch': {
+      const [op, ...ids] = opts._
+      if (!op) throw new lib.CliError('usage: batch <done|date|category|tag> <taskId...> [--to <date|name|id>] [--add <tag>|--rm <tag>] [--dry-run]', 'USAGE')
+      if (dry) {
+        const r = lib.batchRun(op, ids, { to: opts.to, add: opts.add, rm: opts.rm, dryRun: true })
+        if (opts.json) return emitNext(r, ['remove --dry-run to actually run'])
+        if (!r.outcomes.length) return console.log('(no tasks)')
+        for (const o of r.outcomes) o.ok ? console.log('= would ' + o.label + '  (' + o.taskId + ')') : console.log('✗ ' + o.taskId + ' ' + o.error)
+        console.log(`-- dry run: ${r.plan.length} task(s) would change, ${r.failures.length} failure(s), nothing written`)
+        return
+      }
+      const r = lib.batchRun(op, ids, { to: opts.to, add: opts.add, rm: opts.rm })
+      // Partial-failure contract mirrors `events import`: ok flag in JSON + exit code 2 so script pipelines notice
+      const ok = !r.failures.length
+      if (!ok) process.exitCode = 2
+      if (opts.json) return emitNext({ op: r.op, matched: r.matched, changed: r.changed, failures: r.failures, ok }, ok ? ['log --n 20 to audit the changes'] : ['some tasks failed — see failures[] for per-task errors'])
+      for (const o of r.outcomes) o.ok ? console.log('✓ ' + o.taskId + '  ' + o.label) : console.log('✗ ' + o.taskId + ' ' + o.error)
+      console.log(`-- ${r.changed} changed, ${r.failures.length} failed (${r.matched} total)`)
+      return
+    }
+
     case 'sort': {
       const [target, pos, ...rest] = opts._
       if (!target || !pos) throw new lib.CliError('usage: sort <taskId|keyword> top|up|down|bottom|before <task2>|after <task2>  (order is scoped to the task\'s own day; use edit --date first to co-locate)', 'USAGE')
