@@ -1,6 +1,7 @@
 /**
- * Renderer UI fixes locked to the 2026-09-10 nav-gate doctrine (projects = own switch only;
- * deps = developerMode && showDepsModule) plus the P1/P2 behavior fixes from the same review:
+ * Renderer UI fixes locked to the 2026-09-10 nav-gate doctrine (all experimental surfaces =
+ * developerMode && their own module switch; the same-day projects-graduation attempt was
+ * reverted by user verdict) plus the P1/P2 behavior fixes from the same review:
  *   - DayDeck accepts a pre-filtered tasks prop (project filter now works in card view)
  *   - Today view restores a gated-off 'deps' preference back to 'list'
  *   - Todo box batch delete diverts recurring tasks to the scope-confirm modal and routes the
@@ -67,7 +68,8 @@ test('TodoItem: projCat resolver gates on showProjectsModule; goProject inherits
   const item = read('renderer/js/components/TodoItem.vue')
   assert.ok(/projCat \(\) \{\s*\n\s*if \(!this\.\$store\.state\.settings\.showProjectsModule\) return null/.test(item),
     'badge resolution returns null when the module is off')
-  assert.ok(item.includes('goProject () {\n      if (!this.projCat) return'), 'goProject still early-returns without a resolved project')
+  // Regex, not a literal: CI runners check out CRLF (autocrlf) — a '\n'-only pattern is env-flaky
+  assert.ok(/goProject \(\) \{\s*\n\s*if \(!this\.projCat\) return/.test(item), 'goProject still early-returns without a resolved project')
 })
 
 /* ---------- #3 deps two-layer gate in ProjectView and EditPanel ---------- */
