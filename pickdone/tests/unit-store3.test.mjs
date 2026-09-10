@@ -33,6 +33,9 @@ globalThis.window.todoAPI = {
     }
   },
   deleteTodoFilesRelevant: async () => true,
+  // preload's real shape exposes purgeRecycleBin directly (src/preload/index.js:19) — it was missing
+  // here and the old purge flow's ignore-failure hardRemove masked that; the success-gated flow needs it
+  purgeRecycleBin: async () => true,
   writeCriticalStateBackup: async () => true,
   // Note: preload has no writeEventBackup - it is a todo store action that internally goes through runAutoBackup;
   // the stub only exposes preload's real shape, otherwise it would mask regressions like "the renderer calling a nonexistent IPC channel"
