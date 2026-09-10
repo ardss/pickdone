@@ -28,6 +28,8 @@ function loadDriver () {
 
 let db = null
 const stmts = {}
+/** Drop every cached prepared statement (they belong to the closed handle; re-init prepares fresh ones) */
+function stmtsClearAll () { for (const k of Object.keys(stmts)) delete stmts[k] }
 
 /** Database encryption key (stored at userData/db.key, same directory as the DB so it travels with migrations).
  *  Threat model: prevents the single todos.db file from being read directly by sync drives/copies/forensic tools;
@@ -319,6 +321,24 @@ function todoToRow (t) {
 }
 
 function init (userDataPath) {
+  // Re-entry guard (P2 2026-09-11, per the comment below): a second init while a handle is open is
+  // forbidden — rebuilding it on the same file would orphan prepared statements mid-write. The guard is
+  // safe because init() cleans up (close + null) on its own failure, so the recovery re-init path
+  // (index.js db-fail dialog → attemptDbRecovery → init again) still works.
+  if (db) throw new Error('db already initialized in this process — close() before init() again')
+  try {
+    initInner(userDataPath)
+  } catch (e) {
+    // Never leave a half-open handle behind: the reset-data flow and recovery flow both rely on
+    // unlinking/reopening after a failed init (an open handle made unlink EPERM on Windows before)
+    try { if (db) db.close() } catch {}
+    db = null
+    stmtsClearAll()
+    throw e
+  }
+}
+
+function initInner (userDataPath) {
   const file = path.join(userDataPath, 'todos.db')
   fs.mkdirSync(userDataPath, { recursive: true })
   // Open in plaintext first to complete schema migration, then switch to encryption at the end (see "encryption finalization" at the end of init)
@@ -779,9 +799,14 @@ const WRITE_OPS = new Set([
 ])
 const isWriteOp = op => WRITE_OPS.has(op)
 
-/** Explicitly close the handle (for tests switching directories / graceful process exit); silent when uninitialized or already closed */
+/** Explicitly close the handle (for tests switching directories / graceful process exit); silent when uninitialized or already closed.
+ *  P2 2026-09-11: close() used to leave the module var set, so isOpen() kept returning true after close
+ *  and nothing distinguished "closed" from "open". Null it (and drop the dead prepared statements) so
+ *  isOpen() is truthful and a guarded re-init becomes possible. */
 function close () {
-  try { db.close() } catch {}
+  try { if (db) db.close() } catch {}
+  db = null
+  stmtsClearAll()
 }
 
 // Initialized probe: within the same process (the main process's CSV import), reuse the existing connection; a second init rebuilding the handle on the same file is forbidden
