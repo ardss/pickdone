@@ -40,6 +40,8 @@ export default {
       "checkTodayAria": "Check in today",
       "renameTip": "Click to rename",
       "streakTip": "Consecutive check-in days",
+      "prevMonthAria": "Previous month",
+      "nextMonthAria": "Next month",
       "freqDaily": "Every day",
       "freqWeekdays": "Specific days",
       "freqInterval": "Every N days",

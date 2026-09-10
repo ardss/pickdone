@@ -43,7 +43,8 @@
                 :style="h.records && h.records[todayKey] ? { background: h.color, borderColor: h.color } : {}"
                 @click="check(h)" @keydown.enter.prevent="check(h)">✓</span>
           <template v-if="editingId === h.id">
-            <input v-model="editName" class="habit-rename" @keyup.enter="saveRename(h)" @blur="saveRename(h)"/>
+            <input v-model="editName" class="habit-rename" @keyup.enter="saveRename(h)" @blur="saveRename(h)"
+                   @keydown.esc.prevent="cancelRename(h)"/>
           </template>
           <template v-else>
             <span class="habit-name" role="button" tabindex="0" :title="$t('statsE.HabitView.renameTip')" @click="startRename(h)" @keydown.enter.prevent="startRename(h)">{{ h.name }}</span>
@@ -61,9 +62,9 @@
       <!-- Monthly check-in calendar -->
       <div class="habit-cal-sec">
         <div class="habit-cal-nav">
-          <button class="mini" @click="calOffset--">‹</button>
+          <button class="mini" :title="$t('statsB.HabitView.prevMonthAria')" :aria-label="$t('statsB.HabitView.prevMonthAria')" @click="calOffset--">‹</button>
           <span class="habit-cal-label">{{ calLabel }}</span>
-          <button class="mini" @click="calOffset++">›</button>
+          <button class="mini" :title="$t('statsB.HabitView.nextMonthAria')" :aria-label="$t('statsB.HabitView.nextMonthAria')" @click="calOffset++">›</button>
         </div>
         <div class="habit-cal-grid">
           <span v-for="w in WD" :key="w" class="habit-cal-wd">{{ w }}</span>
@@ -194,6 +195,8 @@ export default {
       this.newHabit = ''
     },
     startRename (h) { this.editingId = h.id; this.editName = h.name },
+    // [component-r5] Esc restores the original name and leaves edit mode (blur-save semantics kept; cancel channel added)
+    cancelRename (h) { this.editName = h.name; this.editingId = null },
     saveRename (h) {
       const n = this.editName.trim()
       if (n) this.$store.commit('habits/renameHabit', { id: h.id, name: n })

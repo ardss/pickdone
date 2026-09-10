@@ -41,6 +41,8 @@ export default {
       checkTodayAria: '今日打卡',
       renameTip: '点击重命名',
       streakTip: '连续打卡天数',
+      prevMonthAria: '上个月',
+      nextMonthAria: '下个月',
       freqDaily: '每天', freqWeekdays: '指定星期', freqInterval: '每 N 天',
       freqEveryN: '每 {n} 天',
       everyN: '每 {n} 天',
