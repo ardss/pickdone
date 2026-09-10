@@ -20,7 +20,7 @@
         <div v-show="isOpen(g.key)" class="tg-body">
           <transition-group name="listfade" tag="div">
             <todo-item v-for="t in g.todos" :key="t.taskId" :todo="t" :group-key="g.key"
-                       :show-date-badge="showDateBadge" :query="query"/>
+                       :show-date-badge="showDateBadge" :query="query" :project-badge="projectBadge"/>
           </transition-group>
         </div>
       </transition>
@@ -52,7 +52,9 @@ export default {
     groups: { type: Array as any, required: true },
     showDateBadge: { type: Boolean, default: true },
     query: { type: String, default: '' },
-    emptyText: { type: String, default: '' }
+    emptyText: { type: String, default: '' },
+    // Opt-in project badge on rows (today view only; other TodoGroups consumers keep the default off)
+    projectBadge: { type: Boolean, default: false }
   },
   computed: {
     folded () { return this.$store.state.settings.foldedTodoList },

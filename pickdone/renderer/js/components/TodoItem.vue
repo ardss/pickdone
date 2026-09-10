@@ -38,6 +38,13 @@
           <app-icon name="list" :size="12"/>{{subDone}}/{{subtasks.length}}
         </span>
         <button v-for="tg in tags.slice(0,4)" :key="tg" class="td-tag" @click.stop="goTag(tg)">#{{tg}}</button>
+        <!-- Project badge (today view only, opt-in via project-badge): colored dot + project name, click navigates to the project detail view -->
+        <button v-if="projCat" class="td-proj" :style="{ '--proj-c': projCat.categoryColor }"
+                :title="$t('todayT.badgeTip', { name: projCat.categoryName })"
+                :aria-label="$t('todayT.badgeTip', { name: projCat.categoryName })"
+                @click.stop="goProject">
+          <i class="td-proj-dot" aria-hidden="true"></i><span class="td-proj-name">{{ projCat.categoryName }}</span>
+        </button>
         <img v-if="isRepeat" class="td-ico" src="app://app/assets/img/icon-repeat.svg" :title="$t('statsE.TodoItem.repeatLabel')" alt="">
         <img v-if="fileCount" class="td-ico" src="app://app/assets/img/icon-file.svg" :title="fileCount+$t('statsE.TodoItem.attachmentsUnit')" alt="">
         <span v-if="(todo.estimate||0)>0" class="td-snow" :title="$t('statsE.TodoItem.pomodoroInvested')"><app-icon name="snow" :size="12"/>{{todo.estimate}}</span>
@@ -93,7 +100,9 @@ export default {
     todo: { type: Object, required: true },
     groupKey: { type: String, default: '' },
     query: { type: String, default: '' },
-    showDateBadge: { type: Boolean, default: true } // most list views in the project baseline show the date in the right column
+    showDateBadge: { type: Boolean, default: true }, // most list views in the project baseline show the date in the right column
+    // Project association badge: opt-in (today view only) so every other list renders exactly as before
+    projectBadge: { type: Boolean, default: false }
   },
   data () { return { dragging: false, dropAfter: false, entering: false } },
   watch: {
@@ -112,6 +121,12 @@ export default {
   beforeUnmount () { clearTimeout(this._enterTimer) },
   computed: {
     cat () { return this.$store.getters['category/byId'](this.todo.categoryId) },
+    // Resolved project for this task's category (null unless the category is flagged as a project and the badge is enabled)
+    projCat () {
+      if (!this.projectBadge || !this.todo.categoryId) return null
+      const projects = this.$store.getters['category/projects'] || []
+      return projects.find(p => p.categoryId === this.todo.categoryId) || null
+    },
     tomatoEstimateN () { return getEstimate(this.todo.taskId) },
     /* Pomodoro ledger: pomodoros already invested in this task (attributed by record, abandoned excluded) — list item = unit of outcome, tomato = currency of workload (design-final) */
     tomatoActualN () {
@@ -303,6 +318,11 @@ export default {
       deleteWithUndo(this, this.$store, this.rawOf())
     },
     goTag (t) { this.$router.push({ name: 'todo-list-tag', params: { id: t } }).catch(() => {}) },
+    // Project badge click -> project detail view (route param id = categoryId, ProjectView reads Number(params.id))
+    goProject () {
+      if (!this.projCat) return
+      this.$router.push({ name: 'todo-list-project', params: { id: this.projCat.categoryId } }).catch(() => {})
+    },
     toggleSub (s) {
       s.checked = !s.checked
       this.$store.dispatch('todo/updateTodoFields', { taskId: this.todo.taskId, patch: { subtasks: JSON.stringify(this.subtasks) } })
@@ -346,4 +366,16 @@ export default {
 .td-right .td-tom.ghost { visibility: hidden; pointer-events: none; }
 /* 番茄预估胶囊（自重构分支移植的功能点） */
 .td-right .td-tom-est { display: inline-flex; align-items: center; gap: 2px; font-size: var(--fs-sm); color: var(--brand); background: var(--brand-light); border-radius: var(--radius-pill); padding: 1px 7px; margin-right: 6px; }
+/* ===== Project badge (today view only, opt-in via project-badge prop): chip in the row's meta
+   strip following the existing td-tag/td-deadline pill language — project color dot + truncated name,
+   hover tints with the project color (color-mix pattern already used in DayRail) ===== */
+.td-proj {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 140px;
+  border: 0; border-radius: var(--radius-sm); padding: 1px 6px;
+  font-size: var(--fs-xs); color: var(--text-2); background: var(--gray-bg); cursor: pointer;
+  transition: background-color var(--dur-fast), color var(--dur-fast);
+}
+.td-proj:hover { color: var(--text-1); background: color-mix(in srgb, var(--proj-c, var(--brand)) 14%, transparent); }
+.td-proj-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--proj-c, var(--brand)); flex-shrink: 0; }
+.td-proj-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 </style>
