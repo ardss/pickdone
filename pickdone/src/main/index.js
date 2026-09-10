@@ -24,6 +24,7 @@ const tomatoFloat = require('./tomato-float')
 const tomatoTaskbar = require('./tomato-taskbar')
 const quickAdd = require('./quick-add')
 const updater = require('./updater')
+const appAudit = require('./audit')
 
 app.setName('pickdone') // standalone userData directory, does not affect the project baseline
 // Windows toast notifications resolve the app name/icon via the AppUserModelID; without this they show "electron.app".
@@ -637,6 +638,9 @@ app.on('will-quit', (event) => {
 /* ================= Full IPC registration (channel names aligned with the project baseline) ================= */
 let lastPickedImportPath = '' // the only legitimate path source for import:run (the import:pick-preview dialog)
 function registerIpc () {
+  // App-side audit trail (src/main/audit.js) resolves its JSONL path lazily; wire it to the real userData
+  // here so app.setPath('userData', TODO_USER_DATA_DIR) test isolation is honored
+  appAudit.setDirResolver(() => app.getPath('userData'))
   // Whitelist of DB ops callable by the renderer: only reads + safe writes pass.
   // Unlike dbm.isWriteOp: this whitelist governs "callable from any renderer window", while isWriteOp governs "whether reloadAll/broadcast is triggered".
   // ⚠️ The whitelist must cover the renderer's real call surface: the cli/check-ipc-op-coverage.cjs gate statically cross-checks
@@ -739,7 +743,19 @@ function registerIpc () {
         throw new Error('DB op not allowed: ' + String(op))
       }
       if (MAIN_WINDOW_ONLY_OPS.has(op)) assertMainWindow(e)
+      // Pre-write snapshot for upsert only (single indexed read): the audit trail needs the previous row to
+      // tell done/undo/delete/restore/subtask apart. Must run BEFORE dbm.call overwrites the row; best-effort.
+      let auditBefore = null
+      if (op === 'upsert' && params && params.taskId != null) {
+        try { auditBefore = dbm.call('getById', String(params.taskId)) } catch { /* null → coarse action */ }
+      }
       const r = dbm.call(op, params)
+      // App-side audit: renderer-initiated writes append to the same JSONL trail the CLI writes
+      // (userData/cli-audit.jsonl). No double-logging: CLI write commands hit db.js directly inside the
+      // CLI process and never pass through this IPC handler. The settings mirror blob (setMeta
+      // db.settingsState, persisted debounced on every settings change) is skipped as noise.
+      // Fire-and-forget: audit failures must never break the IPC path.
+      try { appAudit.recordAppOp(op, params, { before: auditBefore, result: r }) } catch { /* best-effort */ }
       // Write-op determination lives in db.js's explicit WRITE_OPS list (do not fall back to regex: hardDeleteMany and others were once missed, leaving cross-window data stale)
       // setMeta writes only the meta table, not todos: skip reloadAll (settings/tomato/dayPlan mirrors are high-frequency writes; the previous full-reload path caused a reload storm); still broadcast so peer windows sync
       if (op === 'setMeta') { broadcastTodosChanged(op, e.sender); return r }
