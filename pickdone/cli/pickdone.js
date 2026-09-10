@@ -680,22 +680,11 @@ async function main () {
       // Apply the main patch before reminder/tomato branches: with --reminder + --remind-offset in one command, the main reminder must be written first (offsets anchor to it)
       const before = lib.resolveTask(opts._[0])
       // Reschedule re-anchor (review P1 2026-09-10; renderer parity: EditPanel.applyDate) — moving the date must
-      // carry reminders along: the main reminder re-anchors to the new date at its original time-of-day (stays 0
-      // when there was none) and reminderExtra rows shift by the same day-diff. An explicit --reminder on the same
-      // command owns the reminders and suppresses the re-anchor.
+      // carry reminders along. The rule lives in lib.dateChangeReminderPatch, shared with `batch date` (review P1
+      // 2026-09-11: the batch channel used to bypass this and leave the main reminder on the old day). An explicit
+      // --reminder on the same command owns the reminders and suppresses the re-anchor.
       if (patch.todoTime && opts.reminder === undefined) {
-        if (before.reminderTime) {
-          // EditPanel.applyDate takes hour/minute from the OLD reminder; seconds/millis too, so the CLI's
-          // relative date parses (which carry the current clock's seconds) stay deterministic
-          const r = dayjs(before.reminderTime)
-          patch.reminderTime = +dayjs(patch.todoTime).hour(r.hour()).minute(r.minute()).second(r.second()).millisecond(r.millisecond())
-        }
-        const extras = Array.isArray(before.reminderExtra) ? before.reminderExtra : []
-        const oldDay = before.todoTime ? +dayjs(before.todoTime).startOf('day') : 0
-        if (extras.length && oldDay) {
-          const shift = +dayjs(patch.todoTime).startOf('day').diff(oldDay, 'day')
-          if (shift) patch.reminderExtra = extras.map(x => +dayjs(x).add(shift, 'day'))
-        }
+        Object.assign(patch, lib.dateChangeReminderPatch(before, patch.todoTime))
       }
       if (Object.keys(patch).length) lib.patchTodo(opts._[0], patch)
       const tid2 = lib.resolveTask(opts._[0]).taskId

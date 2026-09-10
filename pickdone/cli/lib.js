@@ -47,6 +47,13 @@ function open () {
   if (dbm.isOpen && dbm.isOpen()) { opened = true; return dbm }
   const dir = userDataDir()
   dbm.init(dir)
+  // One-shot tomato ledger migration (review P2 2026-09-11): the App runs tomatoMigrateFromMeta on startup,
+  // but a CLI-only session after the ledger-schema upgrade used to read an empty ledger — and worse, a CLI
+  // backfill landing rows first made the migration's table-not-empty guard throw the old meta blob ledger
+  // away forever (the blob-deletion sentinel runs regardless). Running the migration sentinel here, BEFORE
+  // any CLI write, keeps both ends converging on the same row table. Idempotent by design: "meta blob
+  // absent" is the migrated marker, so repeat calls on already-migrated DBs are no-ops.
+  try { dbm.call('tomatoMigrateFromMeta') } catch (e) { /* migration failure must not block the CLI (same tolerance as the App's startup call) */ }
   opened = true
   return dbm
 }
@@ -134,20 +141,37 @@ function lunarAnnotate (t) {
 function liveTasks () { return open().call('queryTodos', { deleted: 0, orderBy: 'scheduledDay ASC, sort ASC' }) }
 function recycleTasks () { return open().call('queryTodos', { deleted: 1, orderBy: 'updatedAt DESC' }) }
 
-/** Resolve user input into a task: exact match on a full taskId → otherwise unique substring match on content (case-insensitive) */
+/** Resolve user input into a task: exact match on a full taskId → otherwise unique substring match on content (case-insensitive).
+ *  Default pool (review P2 2026-09-11): live tasks only. A soft-deleted (recycle-bin) task is still returned when it is the
+ *  UNIQUE match, but with an explicit stderr warning — `done`/`edit` silently mutating recycled rows was the bug; dropping
+ *  the fallback entirely would break existing keyword workflows against a task the user just deleted by mistake. Explicit
+ *  intent keeps working: restore/delete pass an explicit recycle pool, so they never hit this warning path. */
 function resolveTask (input, pool) {
-  const list = pool || [...liveTasks(), ...recycleTasks()]
-  const byId = list.find(t => t.taskId === input)
-  if (byId) return byId
   // Strip zero-width/full-width whitespace (IME candidates occasionally contain zero-width chars)
   // Same normalization on both sides: stripping it only from the input made any multi-word keyword unmatchable
   const norm = v => String(v).toLowerCase().replace(/[\s\u00A0\u3000\u200B\u2003]/g, '')
-  const kw = norm(input)
-  const hits = list.filter(t => norm(t.taskContent || '').includes(kw))
-  if (hits.length === 1) return hits[0]
-  if (hits.length > 1) {
-    throw new CliError(`"${input}" matched ${hits.length} tasks; use a more specific keyword or the full taskId:\n` +
-      hits.slice(0, 10).map(t => `  - ${t.taskContent} (${t.taskId})`).join('\n'), 'AMBIGUOUS_MATCH')
+  const matchIn = list => {
+    const byId = list.find(t => t.taskId === input)
+    if (byId) return [byId]
+    const kw = norm(input)
+    return list.filter(t => norm(t.taskContent || '').includes(kw))
+  }
+  const liveHits = matchIn(pool || liveTasks())
+  if (liveHits.length === 1) return liveHits[0]
+  if (liveHits.length > 1) {
+    throw new CliError(`"${input}" matched ${liveHits.length} tasks; use a more specific keyword or the full taskId:\n` +
+      liveHits.slice(0, 10).map(t => `  - ${t.taskContent} (${t.taskId})`).join('\n'), 'AMBIGUOUS_MATCH')
+  }
+  if (pool) throw new CliError(`task not found: "${input}"`, 'TASK_NOT_FOUND')
+  const recHits = matchIn(recycleTasks())
+  if (recHits.length === 1) {
+    const t = recHits[0]
+    console.error(`warning: "${input}" matched a soft-deleted task in the recycle bin (${t.taskId}) — run "restore ${t.taskId}" first if it should be live`)
+    return t
+  }
+  if (recHits.length > 1) {
+    throw new CliError(`"${input}" matched ${recHits.length} soft-deleted tasks in the recycle bin; restore them first or use the full taskId:\n` +
+      recHits.slice(0, 10).map(t => `  - ${t.taskContent} (${t.taskId})`).join('\n'), 'AMBIGUOUS_MATCH')
   }
   throw new CliError(`task not found: "${input}"`, 'TASK_NOT_FOUND')
 }
@@ -517,6 +541,30 @@ function dateExplicitTime (s) {
   return m ? m[1].padStart(2, '0') + ':' + m[2] : null
 }
 
+/** Reminder re-anchor on a reschedule (review P1 2026-09-11; renderer parity: EditPanel.applyDate).
+ *  Shared by `edit --date` (pickdone.js) and `batch date` (batchRun) — the two channels used to diverge:
+ *  batch bypassed the entry-layer re-anchor and left the main reminder on the old day. Moving the date
+ *  carries reminders along: the main reminder re-anchors to the new date at its original time-of-day
+ *  (stays absent when there was none) and reminderExtra rows shift by the same day-diff. Returns the
+ *  fields to merge into the patch; empty object when there is nothing to carry. */
+function dateChangeReminderPatch (before, newTodoTime) {
+  const patch = {}
+  if (!newTodoTime || !before) return patch
+  if (before.reminderTime) {
+    // EditPanel.applyDate takes hour/minute from the OLD reminder; seconds/millis too, so relative date
+    // parses (which carry the current clock's seconds) stay deterministic
+    const r = dayjs(before.reminderTime)
+    patch.reminderTime = +dayjs(newTodoTime).hour(r.hour()).minute(r.minute()).second(r.second()).millisecond(r.millisecond())
+  }
+  const extras = Array.isArray(before.reminderExtra) ? before.reminderExtra : []
+  const oldDay = before.todoTime ? +dayjs(before.todoTime).startOf('day') : 0
+  if (extras.length && oldDay) {
+    const shift = +dayjs(newTodoTime).startOf('day').diff(oldDay, 'day')
+    if (shift) patch.reminderExtra = extras.map(x => +dayjs(x).add(shift, 'day'))
+  }
+  return patch
+}
+
 /** patch + audit. action explicitly states the semantics (edit/delete/restore/undo/subtask); defaults to edit */
 function patchTodo (input, patch, { action, note } = {}) {
   const db = open()
@@ -704,6 +752,10 @@ function purgeRecycleBin () {
       }
     }
   } catch { /* no files dir is fine */ }
+  // Snapshot meta must die with the rows (review P2 2026-09-11): the App's purge path clears
+  // planChipsSnapshot:<id>, the CLI purge left the meta behind — a later task-id collision could
+  // backfill a purged task with someone else's chips, and the meta rows just leaked.
+  for (const r of rows) { try { db.call('deleteMeta', 'planChipsSnapshot:' + r.taskId) } catch { /* absent is fine */ } }
   db.call('purgeRecycleBin')
   audit.record({
     action: 'purge',
@@ -999,7 +1051,12 @@ function deleteCategory (input) {
   // A deleted category must not linger as a project (UI comment: the caller removes the flag first when a category is deleted)
   const ids = getProjectIds().filter(x => !victims.some(v => v.categoryId === x))
   if (ids.length !== getProjectIds().length) db.call('setMeta', [PROJECT_IDS_KEY, JSON.stringify(ids)])
-  for (const v of victims) { try { db.call('deleteMeta', 'projectDeadline:' + v.categoryId) } catch { /* absent is fine */ } }
+  for (const v of victims) {
+    try { db.call('deleteMeta', 'projectDeadline:' + v.categoryId) } catch { /* absent is fine */ }
+    // same lifecycle cleanup for the explicit status meta (review P2 2026-09-11): a later category id
+    // reuse would inherit the deleted project's stale status on both ends (key = projectStatus:<id>)
+    try { db.call('deleteMeta', projectStatusKey(v.categoryId)) } catch { /* absent is fine */ }
+  }
   audit.record({ action: 'category.delete', targets: [], changes: [{ before: { names: victims.map(v => v.categoryName) } }], note: 'category soft-deleted (recoverable in UI), tasks kept' })
   return { deleted: victims.map(v => ({ id: v.categoryId, name: v.categoryName })) }
 }
@@ -1174,7 +1231,10 @@ function batchRun (op, ids, { to, add, rm, dryRun } = {}) {
   const exec = {
     done: t => toggleComplete(t.taskId, true),
     date: t => {
-      const after = patchTodo(t.taskId, { todoTime: toTs }, { action: 'edit' })
+      // Same reminder re-anchor as `edit --date` (dateChangeReminderPatch): batch date used to patch
+      // todoTime bare and leave the main reminder on the old day (semantic split between the channels)
+      const patch = { todoTime: toTs, ...dateChangeReminderPatch(t, toTs) }
+      const after = patchTodo(t.taskId, patch, { action: 'edit' })
       migrateChipsOnDayChange(t.taskId, t.dayStart, after.dayStart)
       return after
     },
@@ -1565,7 +1625,13 @@ function removeAttachment (input, kind, n) {
    Manifest mirrors renderer store/settings.js DEFAULT_SETTINGS/SETTING_ENUMS (keep in sync; security keys are never settable here). */
 const SETTINGS_MANIFEST = {
   boolean: ['autoDownloadUpdates', 'enableTomatoFloating', 'weatherEnabled', 'taskFlyAnimation', 'closeActionMinimize', 'isCompleteWithSubtasks', 'isTodoEditModalCloseAutoSave', 'isCompleteCheckboxColorFollow', 'runWhenComputerStart', 'hideMainWindowOnStartup', 'enableHardwareAcceleration', 'showNoDate', 'showCompleteNoDate', 'showComplete', 'developerMode', 'showTodayXModule', 'showHabitModule', 'showProjectsModule', 'showDepsModule', 'isShowSubTask', 'isCalendarDimUncompleted', 'isShowCalendarPrivacyMode', 'isDefaultSubTaskFolded', 'showHolidayMarkers', 'showTodoCheckboxOrder', 'enableSecurityLock', 'autoBackupEnabled', 'isCalendarBackgroundUserSelected'],
-  number: ['dailyTomatoTarget', 'dailyLoadWarnThreshold', 'recycleBinAutoDeleteDays', 'notificationTimeoutInterval', 'todoDescriptionDisplayLineNumber', 'autoBackupIntervalMin', 'autoBackupKeep', 'whiteNoiseVolume', 'tomatoTimeDefault', 'restTimeDefault'],
+  number: ['dailyTomatoTarget', 'dailyLoadWarnThreshold', 'recycleBinAutoDeleteDays', 'notificationTimeoutInterval', 'todoDescriptionDisplayLineNumber', 'autoBackupIntervalMin', 'autoBackupKeep', 'whiteNoiseVolume', 'tomatoTimeDefault', 'restTimeDefault',
+    // Category-id settings are NUMBERS on the App side (renderer store/settings.js DEFAULT_SETTINGS: newTodoCategoryId: 0,
+    // todoBoxCategoryId: -1) and the render path filters with strict equality (store/todo.js todoBoxCategoryId !== -1,
+    // TodoBoxView c.categoryId === settings.todoBoxCategoryId) — the CLI used to declare them string and write back
+    // "5" (string), which silently failed every strict-equality filter. Type fixed here; the renderer load path gets a
+    // coeresion guard in parallel (double insurance, independent).
+    'newTodoCategoryId', 'todoBoxCategoryId'],
   enum: {
     colorMode: ['light', 'dark', 'system'],
     calendarFontSize: ['small', 'medium', 'large'],
@@ -1778,6 +1844,6 @@ module.exports = {
   lunarOf, lunarAnnotate,
   setEstimate, sortTask, listOn, resolveRecord, recordFix, recordRemove, moveSubtask,
   setReminderOffsets, setReminderExtra, addAttachment, listAttachments, removeAttachment,
-  settingsList, settingsSet, planSet, planList, planRemove,
+  settingsList, settingsSet, planSet, planList, planRemove, dateChangeReminderPatch,
   importEvents, eventFocusMinutes, eventKey
 }
