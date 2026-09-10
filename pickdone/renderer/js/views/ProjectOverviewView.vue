@@ -6,8 +6,15 @@
       <button class="proj-new-btn" @click="createProject"><app-icon name="plus" :size="12"/> {{ $t('statsB.ProjectsView.newProject') }}</button>
     </div>
     <div class="page__main page__main--flow-top">
-      <div v-if="projects.length" class="proj-grid">
-        <div v-for="p in projects" :key="p.cat.categoryId" class="proj-card" role="link" tabindex="0"
+      <!-- Status filter chips (client-side filter; default All) -->
+      <div v-if="projects.length" class="proj-filter" role="group" :aria-label="$t('projQ.filterAria')">
+        <button v-for="f in statusFilters" :key="f" type="button" class="proj-filter__chip"
+                :class="{ on: filter === f }" :aria-pressed="filter === f" @click="filter = f">
+          {{ $t(filterKey(f)) }}
+        </button>
+      </div>
+      <div v-if="filteredProjects.length" class="proj-grid">
+        <div v-for="p in filteredProjects" :key="p.cat.categoryId" class="proj-card" role="link" tabindex="0"
              :title="$t('statsB.ProjectsView.enterProject', { name: p.cat.categoryName })"
              @click="open(p.cat.categoryId)" @keydown.enter.prevent="open(p.cat.categoryId)">
           <div class="proj-card__head">
@@ -23,8 +30,15 @@
             </svg>
           </div>
           <div class="proj-card__meta">
+            <span class="proj-status" :class="'proj-status--' + p.status" role="button" tabindex="0"
+                  :title="$t('projQ.statusChangeTip', { s: $t(statusKey(p.status)) })"
+                  :aria-label="$t('projQ.statusAria', { s: $t(statusKey(p.status)) })"
+                  @click.stop="cycleStatus(p.cat.categoryId, p.status)"
+                  @keydown.enter.prevent.stop="cycleStatus(p.cat.categoryId, p.status)">{{ $t(statusKey(p.status)) }}</span>
             <span>{{ $t('statsB.ProjectsView.tasks', { done: p.stats.doneCount, total: p.stats.total }) }}</span>
             <span :title="$t('statsB.ProjectsView.focusTip')">{{ $t('statsB.ProjectsView.focusMin', { n: p.stats.focusMinutes }) }}</span>
+            <span v-if="loadThreshold > 0" class="proj-load" :class="{'proj-load--warn': p.loadWarn}"
+                  :title="$t('projQ.loadTip', { n: p.load, t: loadThreshold })">{{ $t('projQ.loadChip', { n: p.load }) }}</span>
             <span v-if="p.stats.overdue" class="proj-card__overdue">{{ $t('statsB.ProjectsView.overdueCount', { n: p.stats.overdue }) }}</span>
             <span v-if="p.deadline" class="proj-card__dl" :class="deadlineClass(p.deadline)"
                   :title="$t('statsB.ProjectsView.deadlineTip', { d: fmtDate(p.deadline) })">{{deadlineText(p.deadline)}}</span>
@@ -35,7 +49,7 @@
           </div>
         </div>
       </div>
-      <div v-if="!projects.length" class="empty">
+      <div v-if="!filteredProjects.length" class="empty">
         <div class="empty__icon"></div>
         <div class="empty__text">{{ $t('statsB.ProjectsView.empty') }}</div>
       </div>
@@ -51,6 +65,9 @@
  */
 import { dayjs, FMT } from '../utils/core.js'
 import { dueStateOf } from '../utils/milestones.js'
+import { dayPlannedLoad, loadLevel } from '../utils/loadWarn.js'
+import { getEstimate } from '../utils/tomatoEstimate.js'
+import { PROJECT_STATUSES, normalizeStatus, statusI18nKey, STATUS_FILTER_I18N_KEYS } from '../utils/projectStatus.js'
 
 /** Project stats sharing the same semantics as ProjectView/stats and the CLI's projectStatus */
 function projectStats (list, today0) {
@@ -70,20 +87,45 @@ function projectStats (list, today0) {
 
 export default {
   name: 'ProjectOverviewView',
+  data () {
+    return {
+      filter: 'all' // status filter chip: 'all' | one of PROJECT_STATUSES
+    }
+  },
   computed: {
+    statusFilters () { return ['all', ...PROJECT_STATUSES] },
+    loadThreshold () { return Number(this.$store.state.settings.dailyLoadWarnThreshold) || 0 },
     projects () {
+      const today0 = this.$store.state.todo.todayTimestamp || +dayjs().startOf('day')
+      const threshold = this.loadThreshold
       return this.$store.getters['category/projects'].map(c => {
         const meta = (this.$store.getters['category/projectMeta'])[c.categoryId] || {}
+        const todos = this.$store.state.todo.todoList.filter(t => t.categoryId === c.categoryId)
+        // Today-load badge: only tasks scheduled for today; estimates come from the shared tomatoEstimate map
+        const load = dayPlannedLoad(todos.filter(t => t.dayStart === today0), t => getEstimate(t.taskId))
         return {
           cat: c,
-          stats: projectStats(this.$store.state.todo.todoList.filter(t => t.categoryId === c.categoryId), this.$store.state.todo.todayTimestamp),
+          stats: projectStats(todos, this.$store.state.todo.todayTimestamp),
           deadline: meta.deadline || 0,
-          nextMs: meta.nextMilestone || null
+          nextMs: meta.nextMilestone || null,
+          status: this.$store.getters['category/projectStatus'](c.categoryId),
+          load,
+          loadWarn: loadLevel(load, threshold) === 'warn'
         }
       })
+    },
+    filteredProjects () {
+      return this.filter === 'all' ? this.projects : this.projects.filter(p => p.status === this.filter)
     }
   },
   methods: {
+    statusKey (s) { return statusI18nKey(s) },
+    filterKey (f) { return STATUS_FILTER_I18N_KEYS[f] || STATUS_FILTER_I18N_KEYS.all },
+    /** Status pill on the card cycles through the lifecycle (compact card layout beats a dropdown here) */
+    cycleStatus (id, cur) {
+      const i = PROJECT_STATUSES.indexOf(normalizeStatus(cur))
+      this.$store.commit('category/setProjectStatus', { id, status: PROJECT_STATUSES[(i + 1) % PROJECT_STATUSES.length] })
+    },
     fmtDate (ts) { return ts ? dayjs(ts).format(FMT.date) : '—' },
     deadlineText (ts) {
       const d = Math.ceil((ts - Date.now()) / 864e5)
@@ -155,4 +197,30 @@ html[data-theme="dark"] .proj-card { background: rgba(255, 255, 255, .03); }
 .proj-ring__track { fill: none; stroke: var(--track-bg); stroke-width: 3.4; }
 .proj-ring__fill { fill: none; stroke-width: 3.4; stroke-linecap: round; transform: rotate(-90deg); transform-origin: 16px 16px; transition: stroke-dashoffset var(--t-slow); }
 .proj-ring__text { font-size: var(--fs-2xs); font-weight: 600; fill: var(--text-2); }
+/* ---- Project status: filter chips above the grid + status pill / today-load chip on each card ---- */
+.proj-filter { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); padding: 12px 28px 0; }
+.proj-filter__chip {
+  font-size: var(--fs-xs); color: var(--text-2); background: var(--gray-bg);
+  padding: 3px 12px; border: 1px solid transparent; border-radius: var(--radius-pill);
+  transition: all var(--t-fast);
+}
+.proj-filter__chip:hover { color: var(--brand-text); background: var(--brand-light); }
+.proj-filter__chip.on { color: var(--brand-text); border-color: var(--brand); background: var(--brand-light); font-weight: 600; }
+.proj-filter__chip:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.proj-status {
+  font-style: normal; font-size: var(--fs-2xs); font-weight: 600; line-height: 1;
+  padding: 3px 8px; border-radius: var(--radius-pill); cursor: pointer; flex-shrink: 0;
+  transition: transform var(--t-fast);
+}
+.proj-status:hover { transform: scale(1.06); }
+.proj-status:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.proj-status--active { color: var(--brand-text); background: var(--brand-light); }
+.proj-status--paused { color: var(--warn); background: rgba(230, 162, 60, .12); }
+.proj-status--done { color: var(--ok, #2e9e44); background: rgba(46, 158, 68, .1); }
+.proj-status--cancelled { color: var(--text-3); background: var(--gray-bg); }
+.proj-load {
+  font-variant-numeric: tabular-nums; color: var(--text-3); background: var(--gray-bg);
+  padding: 1px 7px; border-radius: var(--radius-pill);
+}
+.proj-load--warn { color: var(--warn); background: rgba(230, 162, 60, .12); font-weight: 600; }
 </style>

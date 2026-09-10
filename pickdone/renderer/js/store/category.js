@@ -1,5 +1,6 @@
 import { safeSet, dayjs } from '../utils/core.js'
 import { loadMilestones } from '../utils/milestones.js'
+import { normalizeStatus } from '../utils/projectStatus.js'
 /** Category module (offline persistence via localStorage; cloud APIs like getCategoryList reserved) */
 const LS_KEY = 'categoryState'
 export const COLOR_PALETTE = ['#0f9d8f', '#f76e6e', '#f2a63b', '#7ac74f', '#5aa9e6', '#9d8df1', '#eb96c3', '#98a4ae']
@@ -55,6 +56,8 @@ function nextId () {
 /** Meta key for project flags: value is a JSON array of categoryIds. A project = a flagged category, zero schema changes */
 const PROJECT_IDS_KEY = 'projectCategoryIds'
 const deadlineKey = id => 'projectDeadline:' + id
+/** Project lifecycle status (contract shared with the CLI): string active|paused|done|cancelled, absent = 'active' */
+const statusKey = id => 'projectStatus:' + id
 
 export default {
   namespaced: true,
@@ -65,8 +68,10 @@ export default {
     projects: s => s.list
       .filter(c => !c.delete && s.projectIds.includes(c.categoryId))
       .sort((a, b) => a.listSort - b.listSort),
-    /** Project metadata (deadline/nextMilestone), loaded uniformly by loadProjectMeta; views read-only to avoid each racing */
+    /** Project metadata (deadline/nextMilestone/status), loaded uniformly by loadProjectMeta; views read-only to avoid each racing */
     projectMeta: s => s.projectMeta,
+    /** Lifecycle status of one project (normalized: absent/invalid = 'active') */
+    projectStatus: s => id => normalizeStatus((s.projectMeta[id] || {}).status),
     roots: s => s.list.filter(c => !c.folderIs && !c.folderId && !c.delete).sort((a, b) => a.listSort - b.listSort),
     // All non-deleted categories sorted by listSort (shared by EditPanel category dropdown etc.)
     sortedAll: s => s.list.filter(c => !c.delete).sort((a, b) => a.listSort - b.listSort),
@@ -118,17 +123,29 @@ export default {
       } catch (e) { /* in-memory only when the browser debug host degrades */ }
     },
     setProjectIds (state, ids) { state.projectIds = Array.isArray(ids) ? ids : [] },
-    setProjectMeta (state, meta) { state.projectMeta = meta || {} }
+    setProjectMeta (state, meta) { state.projectMeta = meta || {} },
+    /** Set project lifecycle status: memory + meta persistence (same degradation as setProject) */
+    setProjectStatus (state, { id, status }) {
+      const norm = normalizeStatus(status)
+      const meta = { ...state.projectMeta, [id]: { ...(state.projectMeta[id] || {}), status: norm } }
+      state.projectMeta = meta
+      try {
+        window.todoAPI.dbCall('setMeta', [statusKey(id), norm]).catch(() => {})
+      } catch (e) { /* in-memory only when the browser debug host degrades */ }
+    }
   },
   actions: {
     async add ({ commit }, payload) { commit('addCategory', payload); return true }, // reserved: api.addCategoryList
-    /** Unified loading of project metadata: deadline + next milestone (views/sidebar read only via this getter) */
+    /** Unified loading of project metadata: status + deadline + next milestone (views/sidebar read only via this getter) */
     async loadProjectMeta ({ state, commit }) {
       if (!state.projectIds.length || !window.todoAPI || !window.todoAPI.dbCall) return
       const meta = { ...state.projectMeta }
       const today0 = +dayjs().startOf('day')
       for (const id of state.projectIds) {
         const cur = meta[id] || {}
+        if (cur.status === undefined) {
+          try { cur.status = normalizeStatus(await window.todoAPI.dbCall('getMeta', statusKey(id))) } catch { cur.status = 'active' }
+        }
         if (cur.deadline === undefined) {
           try { cur.deadline = Number(await window.todoAPI.dbCall('getMeta', deadlineKey(id))) || 0 } catch { cur.deadline = 0 }
         }

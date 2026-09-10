@@ -7,6 +7,10 @@
         <span class="proj-head__name">{{cat.categoryName}}</span>
         <span v-if="deadlineTs" class="proj-head__dl" :class="{'proj-head__dl--over': daysLeft < 0}"
               :title="$t('statsB.ProjectView.deadlineTip', { d: fmtDate(deadlineTs) })">{{daysLeft >= 0 ? $t('statsB.ProjectView.daysLeftText', { n: daysLeft }) : $t('statsB.ProjectView.overdueDays', { n: -daysLeft })}}</span>
+        <el-select class="proj-head__status" size="small" :model-value="projStatus"
+                   :aria-label="$t('projQ.statusAria', { s: $t(statusKey(projStatus)) })" @change="setStatus">
+          <el-option v-for="s in statusOptions" :key="s" :value="s" :label="$t(statusKey(s))"/>
+        </el-select>
         <em class="proj-head__pct">{{stats.progress}}%</em>
         <el-dropdown trigger="click" @command="cmd => cmd && cmd()">
           <button class="proj-head__menu" :title="$t('statsB.ProjectView.settingsTip')" :aria-label="$t('statsB.ProjectView.settingsTip')"><app-icon name="dots" :size="15"/></button>
@@ -134,6 +138,7 @@ import { batchMoveWithUndo } from '../utils/confirm.js'
 import { calTitle } from '../utils/buckets.js'
 import { loadMilestones, saveMilestones, parseMilestoneDate, milestoneState, milestoneProgress, dueStateOf } from '../utils/milestones.js'
 import { COLOR_PALETTE } from '../store/category.js'
+import { PROJECT_STATUSES, statusI18nKey } from '../utils/projectStatus.js'
 import TodoGroupBlock from '../components/TodoGroupBlock.vue'
 import DepView from '../components/DepView.vue'
 import ProjectDocs from '../components/ProjectDocs.vue'
@@ -158,6 +163,9 @@ export default {
     cat () { return this.$store.getters['category/byId'](this.catId) },
     settings () { return this.$store.state.settings },
     todayTs () { return this.$store.state.todo.todayTimestamp },
+    /* ---- Lifecycle status (meta projectStatus:<id>, contract shared with the CLI); selector sits next to the deadline pill ---- */
+    statusOptions () { return PROJECT_STATUSES },
+    projStatus () { return this.$store.getters['category/projectStatus'](this.catId) },
     /* ---- Deadline (meta projectDeadline:<id>, same source as the CLI); daysLeft<0 means overdue ---- */
     daysLeft () {
       if (!this.deadlineTs) return null
@@ -284,6 +292,11 @@ export default {
   },
   methods: {
     calTitle (ts) { return calTitle(ts) },
+    statusKey (s) { return statusI18nKey(s) },
+    setStatus (status) {
+      if (!status) return
+      this.$store.commit('category/setProjectStatus', { id: this.catId, status })
+    },
     /** Countdown in plain words: due today / due tomorrow / N days left / overdue by N days; returns empty when done (the card shows the done state) */
     countdownOf (m, state) {
       if (state === 'done') return { text: this.$t('statsB.ProjectView.done'), tone: 'done', days: 0 }
@@ -467,6 +480,8 @@ export default {
   padding: 2px 8px; border-radius: var(--radius-pill); background: var(--brand-light);
 }
 .proj-head__dl--over { color: var(--danger); background: var(--danger-soft); }
+/* Lifecycle status selector (header, next to the deadline pill); width fixed so long labels don't shift the row */
+.proj-head__status { width: 96px; flex-shrink: 0; }
 .proj-head__colorrow { display: inline-flex; align-items: center; gap: 5px; }
 .proj-head__swatch {
   width: 11px; height: 11px; border-radius: 50%; cursor: pointer;
