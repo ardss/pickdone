@@ -48,7 +48,6 @@ const MENUS = {
     { labelKey: 'viewMore.checkFollowColor', toggle: 'isCompleteCheckboxColorFollow' }
   ],
   'todo-list-calendar': [
-    { labelKey: 'statsE.ViewMoreMenu.monthViewMenuItem', info: true },
     { sep: true },
     { labelKey: 'statsE.ViewMoreMenu.showCompletedMenuItem', toggle: 'isShowCalendarCompleted' },
     { labelKey: 'statsE.ViewMoreMenu.privacyBlurMenuItem', toggle: 'isShowCalendarPrivacyMode' },
@@ -106,7 +105,6 @@ export default {
       return false
     },
     click (it) {
-      if (it.info) { this.$message.info(it.label); return }
       if (it.toggle) {
         this.$store.commit('settings/updateSettings', { [it.toggle]: !this.$store.state.settings[it.toggle] })
         this.$store.dispatch('todo/computeViews')
