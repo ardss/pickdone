@@ -8,6 +8,7 @@
  *  API: https://signpath.io/docs (submit signing request → poll → download)。
  *  注意:Foundation 批准并建项目后,ProjectKey/SigningPolicyKey 按其分配值核对。 */
 const crypto = require('crypto')
+const path = require('path')
 
 const API_BASE = 'https://app.signpath.io/api/v1'
 const PROJECT_KEY = process.env.SIGNPATH_PROJECT_KEY || 'PickDone'
