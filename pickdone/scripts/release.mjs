@@ -101,7 +101,9 @@ try {
 // have touched; a blanket add would sweep unrelated local debris (stray test artifacts, editor
 // droppings) into the release commit. Paths are relative to ROOT (sh() cwd = pickdone/); the changelogs
 // live one level above it, inside the same repo.
-sh(['git', 'add', 'package.json', 'renderer/index.html', 'browser-dev/index.html', '../CHANGELOG.md', '../CHANGELOG.zh.md'])
+sh(['git', 'add', 'package.json', 'renderer/index.html', '../CHANGELOG.md', '../CHANGELOG.zh.md'])
+// browser-dev/ is gitignore-listed (the tracked index.html was force-added historically) — plain add refuses it
+sh(['git', 'add', '-f', 'browser-dev/index.html'])
 try {
   sh(['git', 'commit', '-m', `chore(release): ${TAG}`])
 } catch { /* 无变更可提交也允许(stamps 可能已同笔) */ }
