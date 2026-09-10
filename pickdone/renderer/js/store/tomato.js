@@ -27,6 +27,19 @@ function claimPhase (status, startedAt) {
   return true
 }
 
+/** Pure resolver (unit-tested): is the attached task still live at accounting time? The attach happens at
+ *  focus start, but the task can be soft-deleted / purged before the focus ends (CLI delete, another window,
+ *  an external-write reload) — booking the minutes to a dead taskId loses them on the task side (bumpSnow
+ *  writes a row the renderer then ignores/never shows, i.e. silently dropped focus minutes). A dead or
+ *  missing target resolves to null = the focus is accounted as free (no task association, no bumpSnow),
+ *  removing any dependency on the main process's bumpSnow return value. */
+export function resolveFocusedTask (attachTodo, todoRows) {
+  if (!attachTodo || !attachTodo.taskId) return null
+  const row = (todoRows || []).find(t => t && t.taskId === attachTodo.taskId)
+  if (!row || row.delete === true) return null
+  return { taskId: attachTodo.taskId, taskContent: row.taskContent != null ? row.taskContent : attachTodo.taskContent }
+}
+
 const DEF = {
   status: 'default', attachTodo: null, todayTomatoCount: 0, tomatoRecordList: [],
   tomatoTime: 25, restTime: 5, enableNotification: true, enableBeep: true,
@@ -299,11 +312,12 @@ export default {
       }
       if (running && record) {
         const focusedMin = Math.max(1, Math.min(s.tomatoTime, Math.floor((Date.now() - s.startedAt) / 60000)))
+        const focused = resolveFocusedTask(s.attachTodo, [...this.state.todo.todoList, ...this.state.todo.recycleList])
         commit('addRecord', {
           // Deterministic id: cross-window dedupe as a backstop so the same give-up records only once
           // Accounting basis = endTime (unified with completeFocus/stats/rail)
           tomatoId: 'tmt_a_' + s.startedAt, endTime: Date.now(), dateKey: dayjs(Date.now()).format(FMT.date),
-          focus: s.attachTodo ? s.attachTodo.taskContent : '', focusTaskId: s.attachTodo ? s.attachTodo.taskId : null,
+          focus: focused ? focused.taskContent : '', focusTaskId: focused ? focused.taskId : null,
           focusDuration: focusedMin, rest: s.restTime, restDuration: 0, succeed: false, status: 'local',
           abandonReason: (reason || '').trim()
         })
@@ -320,10 +334,14 @@ export default {
       const endTs = Date.now()
       // Measured duration, not the current setting: a mid-focus duration change would otherwise skew the ledger (unified with giveUp's elapsed basis)
       const focusMin = Math.max(1, Math.min(600, Math.round((endTs - s.startedAt) / 60000)))
+      // Accounting-time attach validation (root fix): a task deleted after focus start resolves to null →
+      // the focus is booked as free (no focusTaskId, no bumpSnow) instead of firing a fire-and-forget
+      // bumpSnow at a dead taskId whose minutes silently vanish
+      const focused = resolveFocusedTask(s.attachTodo, [...this.state.todo.todoList, ...this.state.todo.recycleList])
       commit('addRecord', {
         // Accounting basis unified = endTime: stats (metrics)/rail (railSegs)/entry-card corrections (updateRecord) all use endTime
         tomatoId: 'tmt_f_' + s.startedAt, endTime: endTs, dateKey: dayjs(endTs).format(FMT.date),
-        focus: s.attachTodo ? s.attachTodo.taskContent : '', focusTaskId: s.attachTodo ? s.attachTodo.taskId : null,
+        focus: focused ? focused.taskContent : '', focusTaskId: focused ? focused.taskId : null,
         focusDuration: focusMin, rest: s.restTime, restDuration: s.restTime, succeed: true, status: 'local'
       })
       {
@@ -331,8 +349,8 @@ export default {
         commit('patch', { todayTomatoCount: (s.todayTomatoCount || 0) + 1, _countDate: dayjs(endTs).format(FMT.date) })
       }
       dispatch('auth/saveSnowGain', focusMin, { root: true })
-      if (s.attachTodo && s.attachTodo.taskId) {
-        window.todoAPI?.dbCall?.('bumpSnow', { taskId: s.attachTodo.taskId, minutes: focusMin })?.catch?.(() => {})
+      if (focused) {
+        window.todoAPI?.dbCall?.('bumpSnow', { taskId: focused.taskId, minutes: focusMin })?.catch?.(() => {})
         // bumpSnow is a todo-row write issued as a raw dbCall outside the todo/* actions, so store/index.js's
         // WRITE_ACTIONS stamping never fires for it → the todos-changed broadcast echo of this write misses the
         // 1500ms echo-suppression window and todo/init's historyClear wipes the undo stack. Stamp it here,
