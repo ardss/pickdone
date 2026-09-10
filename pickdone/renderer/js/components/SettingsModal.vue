@@ -209,7 +209,7 @@
                     <button type="button" class="sc-capture" :class="{listening: capturing===sc.key, conflict: hasConflict(sc.key)}"
                             tabindex="0"
                             @click="startCapture(sc.key)" @blur="onCaptureBlur">
-                      <span class="sc-kbd">{{ capturing===sc.key ? $t('statsE.SettingsModal.scPressKey') : formatShortcut(shortcutForm[sc.key]) }}</span>
+                      <span class="sc-kbd">{{ capturing===sc.key ? $t('statsE.SettingsModal.scPressKey') : (shortcutsLoaded ? formatShortcut(shortcutForm[sc.key]) : $t('statsE.SettingsModal.loadingPlaceholder')) }}</span>
                     </button>
                     <span v-if="capturing!==sc.key" class="tip">{{ $t('statsE.SettingsModal.scClickToEdit') }}</span>
                   </div>
@@ -405,6 +405,8 @@ export default {
       langOptions: SUPPORTED,
       // Empty skeleton before the async response arrives: the template (shortcuts tab) renders before created's getSettings resolves; null would blow up with "reading 'toggleMainWindow'"
       shortcutForm: { sync: '', toggleMainWindow: '', quickAddGlobal: '', addEvent: '', deleteEvent: '' },
+      // [component-r5] false until created's getSettings resolves: kbd slots show the loading placeholder instead of a blank skeleton
+      shortcutsLoaded: false,
       capturing: null as any,
       exporting: false,
       importing: false,
@@ -479,7 +481,8 @@ export default {
     window.todoAPI.getSettings().then(c => {
       this.shortcutForm = Object.assign({ sync: '', toggleMainWindow: '', quickAddGlobal: '', addEvent: '', deleteEvent: '' }, c.shortcutKeySettings)
       this._shortcutSnapshot = JSON.stringify(this.shortcutForm)
-    }).catch(e => console.error('[SettingsModal] getSettings', e))
+      this.shortcutsLoaded = true
+    }).catch(e => { this.shortcutsLoaded = true; console.error('[SettingsModal] getSettings', e) })
   },
   beforeUnmount () {
     this._isDestroyed = true
