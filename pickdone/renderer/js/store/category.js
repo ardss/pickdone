@@ -58,6 +58,19 @@ const PROJECT_IDS_KEY = 'projectCategoryIds'
 const deadlineKey = id => 'projectDeadline:' + id
 /** Project lifecycle status (contract shared with the CLI): string active|paused|done|cancelled, absent = 'active' */
 const statusKey = id => 'projectStatus:' + id
+/** Pure helper (unit-tested): the ids a cascade delete of `id` will mark deleted — the category itself plus,
+ *  mirroring markCascade, folder descendants recursively and their non-folder children. Lets softDelete clean
+ *  project meta for every victim, matching the CLI delete path. */
+function collectCascadeIds (state, id) {
+  const out = []
+  const walk = cid => {
+    out.push(cid)
+    state.list.filter(x => x.folderId === cid && x.categoryId !== cid).forEach(x => { if (x.folderIs) walk(x.categoryId); else out.push(x.categoryId) })
+  }
+  walk(id)
+  return out
+}
+export { collectCascadeIds }
 
 export default {
   namespaced: true,
@@ -95,7 +108,21 @@ export default {
       if (i >= 0) { state.list[i] = { ...state.list[i], ...patch }; persist(state.list) }
     },
     softDelete (state, id) {
+      // Meta cleanup aligned with the CLI delete path (cli/lib.js deletes projectDeadline:<id> and prunes
+      // projectCategoryIds for every victim): the renderer only flipped the delete flag, so a deleted project
+      // category kept haunting projectStatus:<id>/projectDeadline:<id> meta and the projectIds flag
+      const victims = collectCascadeIds(state, id)
       this.commit('category/markCascade', id)
+      const ids = state.projectIds.filter(x => !victims.includes(x))
+      if (ids.length !== state.projectIds.length) {
+        state.projectIds = ids
+        try { window.todoAPI.dbCall('setMeta', [PROJECT_IDS_KEY, JSON.stringify(ids)]).catch(() => {}) } catch (e) { /* degraded host */ }
+      }
+      for (const vid of victims) {
+        try { window.todoAPI.dbCall('deleteMeta', statusKey(vid)).catch(() => {}) } catch (e) { /* absent is fine */ }
+        try { window.todoAPI.dbCall('deleteMeta', deadlineKey(vid)).catch(() => {}) } catch (e) { /* absent is fine */ }
+        delete state.projectMeta[vid]
+      }
       persist(state.list)
     },
     markCascade (state, id) {
