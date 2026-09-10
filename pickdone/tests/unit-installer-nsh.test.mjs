@@ -34,3 +34,23 @@ test('no taskkill line may carry /T — tree-kill reaches the updater-spawned in
 test('post-kill settle window stays (file handles release before the install section)', () => {
   assert.match(nsh, /Sleep 800/, 'Sleep 800 after taskkill must stay')
 })
+
+test('install progress must be visible during the silent phases (2026-09-11 frozen-bar wave)', () => {
+  // On a HDD with real-time AV the assisted installer sat minutes on a motionless bar and
+  // read as a hang (0.3.1 manual install, 2026-09-10 night): electron-builder opens the
+  // install section with `SetDetailsPrint none` and the details box is hidden by default,
+  // so the silent old-version uninstall plus extraction show a frozen bar and zero text.
+  assert.match(nsh, /ShowInstDetails show/, 'the details box must open by default')
+  assert.match(nsh, /!macro customCheckAppRunning/, 'stock CHECK_APP_RUNNING must be replaced so output can be re-enabled before uninstall+extract')
+  assert.match(nsh, /SetDetailsPrint both/, 'detail output must be re-enabled — the template silences it with SetDetailsPrint none')
+  assert.match(nsh, /DetailPrint "\$\(nsUninstallingOld\)"/, 'the silent old-version uninstall must carry a phase label')
+  assert.match(nsh, /DetailPrint "\$\(nsFinishingInstall\)"/, 'the legacy-dir migration must carry a phase label')
+  // Labels must exist for both installerLanguages (1033 en-US / 2052 zh-CN); a missing
+  // LangString for an inserted language is a compile warning, not an error — assert both.
+  for (const lang of ['1033', '2052']) {
+    assert.match(nsh, new RegExp(`LangString nsUninstallingOld ${lang} `), `nsUninstallingOld needs a LangString for LANGID ${lang}`)
+    assert.match(nsh, new RegExp(`LangString nsFinishingInstall ${lang} `), `nsFinishingInstall needs a LangString for LANGID ${lang}`)
+  }
+  // The replacement check keeps the same bounded kill semantics — no retry loops.
+  assert.match(nsh, /!macro customCheckAppRunning[\s\S]*?!insertmacro KillRunningInstance "PickDone\.exe" checkA/, 'customCheckAppRunning must re-verify PickDone.exe via the bounded kill macro')
+})
