@@ -4,6 +4,21 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versioning follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- Module switches restructured: the Today Lab view gets its own switch (default off, completing the two-layer doctrine with the developer-mode master gate), and the projects module graduates from the developer-mode master gate — it now rides on its own switch alone, so turning developer mode off no longer hides shipped project features. The nav gate logic is extracted into a pure, unit-tested helper.
+
+### Fixed
+- Today page: the project filter now also applies to the card/deck view (it previously affected only list and matrix, letting other projects' tasks flow back while the toolbar claimed otherwise); the project filter dropdown and row badges honor the projects module switch, and a stale `?project=` deep link can no longer set an unremovable filter.
+- Dependency-view gates unified to the two-layer doctrine: the project page's deps tab and the EditPanel dependency row previously ignored the module switch.
+- Batch delete in the todo box now routes repeating tasks through the same scope confirmation as single delete (it used to silently delete only the picked instances) and goes through the unified undo exit.
+- CLI `edit --date` rescheduling now re-anchors the main reminder to the new date (same time of day) and shifts extra reminders by the day delta, matching the app — previously reminders silently stayed on the old date and fired in the past.
+- CLI hardening: `project --deadline` accepts the same date vocabulary as `edit --deadline`; `edit --reminder none` clears the reminder; `--date ""` takes the full clear cascade; batch `--dry-run` reports failures via exit code 2; text-mode dry-run no longer prints "[object Object]".
+- Update flow: pending renderer writes are flushed as soon as an update finishes downloading, so the installer's forced app termination can no longer outrun the quit-flush window; a pre-install kill that cannot close a locked or elevated instance now shows a visible bilingual message and aborts instead of failing silently downstream.
+- Reliability: audit rotation archives are timestamped and pruned so concurrent app+CLI rotation can no longer delete each other's history; a corrupted config.json is preserved as `config.json.bad` instead of being silently replaced by defaults (which used to wipe window bounds, locale and the lock password on the next write); a failed second-pass quit no longer broadcasts a dead-letter flush after the database is closed; the quit watchdog now installs a ready update instead of hard-exiting past it.
+- Release pipeline: the packaging whitelist closure check now also runs on tag builds (it was CI-only, letting a tag bypass the only guard against dependency drift); a failed gate run restores the working tree so the release can simply be re-run; release notes lookup matches the workflow by file and the repository by git remote instead of hardcoded names.
+
 ## [0.3.1] - 2026-09-10
 
 ### Fixed
