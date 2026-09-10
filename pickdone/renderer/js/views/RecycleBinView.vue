@@ -74,6 +74,14 @@ export default {
   computed: {
     list () { return this.$store.state.todo.views.recycleBin }
   },
+  mounted () {
+    // [component-r5] Hidden inline date pickers stay out of the Tab focus chain (opened via the pick button only)
+    // — same placement as QuickAdd.vue's hidden calendar input
+    this.$nextTick(() => {
+      if (!this.$el || typeof this.$el.querySelectorAll !== 'function') return
+      this.$el.querySelectorAll('.rc-pick input').forEach(inp => inp.setAttribute('tabindex', '-1'))
+    })
+  },
   methods: {
     isOverdue (t) {
       return t.dayStart && dayjs(t.dayStart).startOf('day').valueOf() < dayjs().startOf('day').valueOf()
