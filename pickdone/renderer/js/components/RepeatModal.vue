@@ -61,7 +61,7 @@
 
           <div class="rm-row" v-if="form.repeatType==='year' && form.repeatYearType!=='lunar'">
             <span class="rl">{{ $t('statsD.RepeatModal.yearly') }}</span>
-            <el-date-picker size="small" type="date" :placeholder="$t('statsD.RepeatModal.pickFixedDate')" value-format="x"
+            <el-date-picker size="small" type="date" :placeholder="$t('statsD.RepeatModal.pickFixedDate')" value-format="x" :clearable="false"
                             :model-value="new Date(2026, form.repeatYearMonth-1, form.repeatYearMonthDay).getTime()"
                             @update:model-value="ts=>{const d=new Date(ts);patch({repeatYearMonth:d.getMonth()+1,repeatYearMonthDay:d.getDate()})}"/>
           </div>
