@@ -34,6 +34,13 @@ async function saveAttachment ({ taskId, name, dataBase64 }) {
   const url = `local://${encodeURIComponent(safe)}`
   return { url, key: safe, name, size: fs.statSync(dest).size, ext }
 }
-function attachmentPath (key) { return path.join(attachDir(), path.basename(decodeURIComponent(key))) }
+function attachmentPath (key) {
+  // Malformed percent-encoding (e.g. 'a%zz.png') made decodeURIComponent throw URIError; protocol.js
+  // already maps the handler-level throw to a 404 — fall back to the raw key so both layers agree and
+  // a weird-but-harmless key can still resolve to a real file instead of hard-failing the request.
+  let decoded = key
+  try { decoded = decodeURIComponent(key) } catch { decoded = key }
+  return path.join(attachDir(), path.basename(decoded))
+}
 
 module.exports = { attachDir, saveAttachment, attachmentPath }
