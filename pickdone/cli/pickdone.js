@@ -93,7 +93,8 @@ Write commands:
          [--reminder same as date] [--category name] [--difficulty 0-3] [--estimate 0-20]
   done   <taskId|keyword>         complete a task (--no-sub-cascade to skip subtasks; --at "YYYY-MM-DD HH:mm" backdates completedAt)
   undo   <taskId|keyword>         undo completion
-  edit   <taskId|keyword> [--content text] [--desc text] [--date value] [--reminder value] [--remind-offset "10,30"|none] [--remind-extra "D HH:mm,..."|none] [--category name] [--important 0|1] [--urgent 0|1] [--priority 0-3] [--difficulty 0-3] [--deadline date|none] [--estimate 0-20]
+  edit   <taskId|keyword> [--content text] [--desc text] [--date value|none] [--reminder value] [--remind-offset "10,30"|none] [--remind-extra "D HH:mm,..."|none] [--category name] [--important 0|1] [--urgent 0|1] [--priority 0-3] [--difficulty 0-3] [--deadline date|none] [--estimate 0-20]
+         --date none|clear: clear the date — task moves back to the todo box (main reminder drops with the date and that day's schedule chips are removed, same as the App; no-op with changed:0 if already undated)
          --remind-offset: minutes BEFORE the main reminder (needs --reminder set); --remind-extra: extra absolute datetimes
   sort   <taskId|keyword> top|up|down|bottom|before <task2>|after <task2>   manual order (scoped to the task's own day; edit --date first to co-locate)
   deps  <task> list|add|rm [predTask]   explicit dependency edges (FS semantics: task is ready when all predecessors are done)
@@ -143,6 +144,8 @@ Environment:
 
 /* ================= formatting ================= */
 const NO_DATE = 'no date'
+/** `--date none|clear` = clear the date (task moves back to the todo box) — exact words, case-insensitive */
+const isDateClear = v => v != null && v !== true && /^(none|clear)$/.test(String(v).trim().toLowerCase())
 function fmtDay (t) {
   if (!t.dayStart && !t.todoTime) return NO_DATE
   return dayjs(t.todoTime || t.dayStart).format('MM-DD HH:mm').replace(' 00:00', '')
@@ -263,12 +266,20 @@ async function main () {
         if (!['1', '2', '3', '4'].includes(q)) throw new lib.CliError('--quad accepts q1|q2|q3|q4', 'USAGE')
         quad = { important: q === '1' || q === '2' ? 1 : 0, urgent: q === '1' || q === '3' ? 1 : 0 }
       }
+      // --view pushes its conds into the fetch (dateMode/category/done/limit-500) so the row cap can't
+      // truncate matching tasks before filtering; applyViewConds remains the authoritative post-filter.
+      const viewOpts = view ? lib.viewFetchOpts(view.conds) : null
       let rows = lib.listTodos({
-        range: quad ? null : range, done: opts.done === 'false' ? false : opts.done, noDate: opts.noDate,
-        category: opts.category != null ? lib.resolveCategory(opts.category) : null,
-        keyword: opts.keyword, limit: opts.limit, quad
+        range: view ? viewOpts.range : (quad ? null : range),
+        done: view ? viewOpts.done : (opts.done === 'false' ? false : opts.done),
+        noDate: view ? viewOpts.noDate : opts.noDate,
+        category: opts.category != null ? lib.resolveCategory(opts.category) : (view ? viewOpts.category : null),
+        keyword: opts.keyword, limit: view ? viewOpts.limit : opts.limit, quad
       })
-      if (view) rows = lib.applyViewConds(view.conds, rows)
+      if (view) {
+        rows = lib.applyViewConds(view.conds, rows)
+        if (opts.limit != null) rows = rows.slice(0, Number(opts.limit))
+      }
       // --lunar: additive only — JSON rows gain `lunar: "YYYY-MM-DD · 七月廿九"`, text dates gain "· 七月廿九"
       if (opts.lunar) rows = rows.map(t => ({ ...t, lunar: lib.lunarAnnotate(t) }))
       emitList(rows, opts.lunar ? lib.lunarOf : null)
@@ -623,18 +634,19 @@ async function main () {
       if (dry) {
         const patch = {}
         if (opts.content) patch.taskContent = opts.content
-        if (opts.date) patch.todoTime = lib.parseDate(opts.date)
+        if (opts.date) patch.todoTime = isDateClear(opts.date) ? 0 : lib.parseDate(opts.date)
         if (opts.important != null) patch.important = parseInt(opts.important, 10) ? 1 : 0
         if (opts.urgent != null) patch.urgent = parseInt(opts.urgent, 10) ? 1 : 0
         if (opts.priority != null) patch.priority = parseInt(opts.priority, 10)
         if (opts.deadline) patch.deadlineTs = opts.deadline === 'none' ? 0 : lib.parseDate(opts.deadline)
         return emitNext({ dryRun: true, taskId: lib.resolveTask(opts._[0]).taskId, patch }, ['remove --dry-run to actually run'])
       }
-      if (!opts._[0]) throw new lib.CliError('usage: edit <taskId|keyword> [--content ..] [--desc ..] [--date ..] [--reminder ..] [--category ..] [--important 0|1] [--urgent 0|1] [--priority 0-3] [--deadline date|none] [--estimate 0-20] [--difficulty 0-3]', 'USAGE')
+      if (!opts._[0]) throw new lib.CliError('usage: edit <taskId|keyword> [--content ..] [--desc ..] [--date ..|none] [--reminder ..] [--category ..] [--important 0|1] [--urgent 0|1] [--priority 0-3] [--deadline date|none] [--estimate 0-20] [--difficulty 0-3]', 'USAGE')
+      const dateClear = isDateClear(opts.date)
       const patch = {}
       if (opts.content) patch.taskContent = opts.content
       if (opts.desc) patch.taskDescribe = opts.desc
-      if (opts.date !== undefined) patch.todoTime = lib.parseDate(opts.date)
+      if (opts.date !== undefined && !dateClear) patch.todoTime = lib.parseDate(opts.date)
       if (opts.reminder !== undefined) patch.reminderTime = lib.parseDate(opts.reminder)
       if (opts.category !== undefined) patch.categoryId = lib.resolveCategory(opts.category) || 0
       if (opts.important != null) patch.important = parseInt(opts.important, 10) ? 1 : 0
@@ -646,15 +658,17 @@ async function main () {
       if (opts.important != null && opts.priority == null) patch.priority = parseInt(opts.important, 10) ? 3 : 1
       if (opts.deadline) patch.deadlineTs = opts.deadline === 'none' ? 0 : lib.parseDate(opts.deadline)
       if (opts.difficulty != null && opts.difficulty !== true) patch.difficulty = parseInt(opts.difficulty, 10) || 0
-      if (!Object.keys(patch).length && opts.estimate == null && opts['remind-offset'] == null && opts['remind-extra'] == null) throw new lib.CliError('edit requires at least one field')
+      if (!Object.keys(patch).length && !dateClear && opts.estimate == null && opts['remind-offset'] == null && opts['remind-extra'] == null) throw new lib.CliError('edit requires at least one field')
       // Apply the main patch before reminder/tomato branches: with --reminder + --remind-offset in one command, the main reminder must be written first (offsets anchor to it)
       const before = lib.resolveTask(opts._[0])
       if (Object.keys(patch).length) lib.patchTodo(opts._[0], patch)
       const tid2 = lib.resolveTask(opts._[0]).taskId
+      // --date none|clear: move the task back to the todo box (renderer-parity field shape + chip cleanup inside clearTodoDate)
+      const cleared = dateClear ? lib.clearTodoDate(opts._[0]) : null
       const updated = lib.open().call('getById', tid2)
       // Timeline chips follow the task (same semantics as the UI's moveTaskChips, finalized in the 2026-09-03 review):
       // day change → all chips migrate with the task (times unchanged, user-arranged extra chips are not collapsed); a task with no chips and an explicit time → add one
-      if (opts.date !== undefined) {
+      if (opts.date !== undefined && !dateClear) {
         const mm = lib.dateExplicitTime(opts.date)
         const dayStr = ts => { const d = new Date(ts); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') }
         const oldDay = before && before.dayStart ? dayStr(before.dayStart) : null
@@ -666,10 +680,19 @@ async function main () {
           }
         } catch (e) { console.error('[plan] chip follow-up failed (non-blocking):', e.message) }
       }
+      // Documented no-op semantics: `--date none` on an already undated task = changed:0 (nothing written, no audit entry);
+      // only short-circuits when no trailing sub-op (remind-offset/extra/estimate) still needs processing
+      if (cleared && !cleared.changed && opts['remind-offset'] == null && opts['remind-extra'] == null && opts.estimate == null) {
+        if (opts.json) return emitNext({ taskId: tid2, changed: 0, dateCleared: false, note: 'already undated — nothing written' }, ['get ' + tid2 + ' --json to read back'])
+        console.log('= no change: task already has no date (still in the todo box)')
+        return
+      }
       if (opts['remind-offset'] != null && opts['remind-offset'] !== true) return okMsg(lib.setReminderOffsets(opts._[0], opts['remind-offset']))
       if (opts['remind-extra'] != null && opts['remind-extra'] !== true) return okMsg(lib.setReminderExtra(opts._[0], opts['remind-extra']))
       if (opts.estimate != null) return okMsg(lib.setEstimate(opts._[0], opts.estimate), ['get ' + tid2 + ' --json to read back'])
-      return okMsg(updated || { taskId: tid2 }, ['get ' + tid2 + ' --json to read back'])
+      return okMsg(updated || { taskId: tid2 }, cleared
+        ? ['task is back in the todo box (list --no-date)', 'get ' + tid2 + ' --json to read back']
+        : ['get ' + tid2 + ' --json to read back'])
     }
     case 'delete': {
       if (dry) return emitNext({ dryRun: true, taskId: lib.resolveTask(opts._[0]).taskId, would: 'soft delete → recycle bin' }, ['remove --dry-run to actually run'])

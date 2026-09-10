@@ -511,7 +511,7 @@ function dateExplicitTime (s) {
 }
 
 /** patch + audit. action explicitly states the semantics (edit/delete/restore/undo/subtask); defaults to edit */
-function patchTodo (input, patch, { action } = {}) {
+function patchTodo (input, patch, { action, note } = {}) {
   const db = open()
   const t = resolveTask(input)
   // status follows this action's semantics: explicit delete/restore uses the patch's target state, other edits use update (aligned with the store)
@@ -521,8 +521,27 @@ function patchTodo (input, patch, { action } = {}) {
   if (patch.todoTime !== undefined) merged.dayStart = dayStartOf(patch.todoTime)
   db.call('upsert', merged)
   const after = db.call('getById', t.taskId)
-  audit.record({ action: action || 'edit', targets: [t], changes: [{ before: t, after }] })
+  audit.record({ action: action || 'edit', targets: [t], changes: [{ before: t, after }], note })
   return after
+}
+
+/** Clear a task's date → back to the todo box (`edit --date none|clear`). Field shape mirrors the App's
+ *  date-removed path exactly (EditPanel.setDate('none') → applyDate(0) → queueSave → store/todo.js
+ *  updateTodoFields): todoTime=0 with derived dayStart=0, and the main reminder drops to 0 along with the
+ *  date (the App's applyDate(0) zeroes remindTs; reminders are date-anchored — scheduleReminder gates on
+ *  dayStart); reminderExtra rows are kept as-is, same as the App. Schedule chips cannot survive without a
+ *  day to live on: same snapshot→clear cascade as the App's rowChipSync date-removed branch
+ *  (snapshotForDelete + clearTaskChips = snapshot to meta, then planDeleteTask) — the snapshot stays in
+ *  meta so a later `restore` can still backfill. Already-undated task → no-op ({changed:false}, nothing
+ *  written, no audit entry). */
+function clearTodoDate (input) {
+  const t = resolveTask(input, liveTasks())
+  if (!t.todoTime && !t.dayStart) return { task: t, changed: false }
+  const patch = { todoTime: 0 }
+  if (t.reminderTime) patch.reminderTime = 0 // same as the App: the main reminder cannot outlive its date
+  const after = patchTodo(t.taskId, patch, { action: 'edit', note: 'date cleared → todo box' })
+  chipsSnapshotForDelete(t.taskId)
+  return { task: after, changed: true }
 }
 
 /**
@@ -1256,6 +1275,22 @@ function applyViewConds (conds, tasks) {
   })
 }
 
+/** listTodos fetch options for a saved view: push the view's dateMode/category down into the QUERY so the
+ *  row cap (500) can no longer truncate away matching tasks before applyViewConds runs (review P1 2026-09-10:
+ *  a 200-cap fetch filtered afterwards hid valid rows for >cap libraries). applyViewConds stays as the
+ *  authoritative post-filter so the semantics remain byte-identical to the app's FilterView. */
+function viewFetchOpts (conds) {
+  const c = conds || {}
+  const mode = c.dateMode
+  return {
+    range: mode === 'today' || mode === 'week' || mode === 'overdue' ? mode : null,
+    noDate: mode === 'none',
+    done: false, // views are undone-only (FilterView parity, same as applyViewConds)
+    category: c.catId != null && c.catId !== -1 ? c.catId : null,
+    limit: 500 // fetch max; user --limit narrows AFTER applyViewConds
+  }
+}
+
 /* ---------------- Focus ledger (唯一事实源 = SQLite tomato_records 行表,同统计页/时间轴;CLI 直连 DB,无需 App 运行) ---------------- */
 function tomatoRecords () {
   try {
@@ -1715,7 +1750,7 @@ module.exports = {
   liveTasks, recycleTasks, resolveTask, resolveCategory,
   parsePredecessors, getTask, listReady,
   listTodos, getCategories, stats, overview,
-  addTodo, patchTodo, toggleComplete, deleteTodo, restoreTodo, purgeRecycleBin, doctor, dateExplicitTime, chipsRemoveTask, chipsRestoreSnapshot,
+  addTodo, patchTodo, clearTodoDate, toggleComplete, deleteTodo, restoreTodo, purgeRecycleBin, doctor, dateExplicitTime, chipsRemoveTask, chipsRestoreSnapshot,
   parseSubs, addSubtask, checkSubtask, removeSubtask,
   audit, readAuditLog: audit.readEntries,
   getProjects, getProjectIds, setProjectFlag, projectStatus, parseMilestoneDate,
@@ -1726,7 +1761,7 @@ module.exports = {
   buildRepeatRule, repeatOn, repeatOff, repeatRuleInfo,
   addCategory, renameCategory, deleteCategory, moveCategory, categoryRows, categoryHierarchy, listTags, rewriteTag, tomatoRecords,
   resolveTaskExact, batchRun, batchTagOne, migrateChipsOnDayChange,
-  viewsList, resolveView, viewAdd, viewRm, applyViewConds, viewCondsSummary,
+  viewsList, resolveView, viewAdd, viewRm, applyViewConds, viewFetchOpts, viewCondsSummary,
   lunarOf, lunarAnnotate,
   setEstimate, sortTask, listOn, resolveRecord, recordFix, recordRemove, moveSubtask,
   setReminderOffsets, setReminderExtra, addAttachment, listAttachments, removeAttachment,
