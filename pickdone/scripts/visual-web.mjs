@@ -22,6 +22,10 @@ const DIR = path.join(ROOT, 'tests', '.artifacts', 'visual-web')
 fs.mkdirSync(DIR, { recursive: true })
 const BASE = 'http://127.0.0.1:5175'
 const SESSION = 'vweb'
+// 专用浏览器 profile(每次 run 开跑前清空重建):--session 只隔离会话不隔离 profile,
+// 默认 profile 的 localStorage 跨运行持久——并行会话的探针标签页在同 profile 写 colorMode/showNoDate
+// 等设置,轻则主题翻转重则内容缺失(2026-09-10 实锤:早间并行会话把 6 张基线拍成同主题 + box 整列空)。
+const PROFILE_DIR = path.join(DIR, 'browser-profile')
 const STAMP = 'v' + Date.now()
 // 冻结时刻(本地时区):宿主 index.html 的 ?pdFreeze 会把页面时钟钉死在此。
 // 2026-09-09 实锤:种子/视图全按真实「今天」渲染,本地过午夜必红 6 图(today/calendar/statistics)。
@@ -36,7 +40,12 @@ const ROUTES = [
 
 import { execSync, spawn as cpSpawn } from 'node:child_process'
 // agent-browser 偶发 ETIMEDOUT(浏览器实例跨 vite 重启后坏连接,实际命令已生效)——重试兜底,别让单点抖动掀翻整道门禁
-const abOnce = (args) => execSync('agent-browser ' + args.map(a => JSON.stringify(a)).join(' '), { encoding: 'utf8', timeout: 120000, shell: true })
+// --profile: 所有调用统一挂专用 profile(全局选项,附着已启动实例时被忽略),把门禁与默认 profile 彻底隔离开
+const abOnce = (args) => {
+  const out = execSync('agent-browser ' + args.map(a => JSON.stringify(a)).join(' ') + ' --profile ' + JSON.stringify(PROFILE_DIR), { encoding: 'utf8', timeout: 120000, shell: true })
+  // 附着到已按专用 profile 启动的 daemon 时每次都告警——纯噪音(探针已确保 profile 正确),滤掉
+  return out.split('\n').filter(l => !l.includes('--profile ignored')).join('\n')
+}
 const ab = (args) => {
   let lastErr
   for (let i = 0; i < 2; i++) {
@@ -104,9 +113,9 @@ async function setEnv (theme) {
   // seed=today re-injected per scene: shim tomatoes anchor to yesterday (deterministic all day);
   // pdFreeze pins the page clock so baselines stop drifting across real dates.
   const url = BASE + '/?' + STAMP + theme + '&seed=today&pdTheme=' + theme + '&pdFreeze=' + encodeURIComponent(FREEZE) + '#/todo-list/today'
-  // 场景级浏览器重启:eval/DOM 校验与截图必须同世界——实测存在跨标签/陈旧合成层串台
-  // (settle 验过 hash=today,截图却是 calendar 残帧,2026-09-09 基线实锤),整浏览器重启一锤定音
-  ab(['--session', SESSION, 'close'])
+  // 浏览器跨场景常驻(专用 profile 隔离兜底):2026-09-10 实测逐场景 close→open 冷启动握手会随机
+  // 挂满 120s 超时(每场景拖到 3min,20min 期限只够 7 张)。纪元断言+双 rAF 屏障+稳定帧双拍兜住
+  // 陈旧帧风险;close 仍保留在 run 级清理里。
   let boot = ''
   for (let i = 0; i < 3 && (!boot || boot === 'undefined'); i++) {
     ab(['--session', SESSION, 'open', url])
@@ -133,11 +142,49 @@ async function setEnv (theme) {
 // 连续第三轮 check 10/14 崩)——run 级隔离比场景内补丁更治本
 const resetBrowser = () => { try { execSync('agent-browser close', { shell: true, stdio: 'ignore', timeout: 30000 }) } catch { /* 首次无实例 */ } }
 resetBrowser()
+// 专用 profile 清空重建:daemon 存活时 --profile 会被静默忽略(实测 2026-09-10),必须先 close --all
+// 让 daemon 退场,下一次 open 才会带着新 profile 重启。探针开 about:blank 校验,没带上就红——
+// 宁可门禁红也不拿污染 profile 比出假差异。
+try { execSync('agent-browser close --all', { shell: true, stdio: 'ignore', timeout: 30000 }) } catch { /* 无实例 */ }
+// daemon(agent-browser-win32-x64.exe,专属二进制,误伤不了用户 Chrome)存活时 profile 目录被锁、
+// --profile 也会被忽略——必须整段杀掉让下一次 open 以专用 profile 重启(机器独占门禁,与 5175 清场同级)
+try { execSync('taskkill /IM agent-browser-win32-x64.exe /T /F', { shell: true, stdio: 'ignore', timeout: 30000 }) } catch { /* 无实例 */ }
+// 孤儿托管 chrome(crashpad/gpu 子进程靠继承句柄锁 profile,命令行里没有 profile 字样,/T 也可能
+// 因父已死够不着)——按 .agent-browser 自带浏览器路径特征补杀;用户 Chrome 装在别处,绝不误伤
+{
+  const ps = `Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" | Where-Object { $_.CommandLine -like '*agent-browser*browsers*' } | ForEach-Object { taskkill /pid $($_.ProcessId) /T /F }`
+  const enc = Buffer.from(ps, 'utf16le').toString('base64')
+  try { execSync(`powershell -NoProfile -EncodedCommand ${enc}`, { shell: true, stdio: 'ignore', timeout: 60000 }) } catch { /* 无实例 */ }
+}
+// Crashpad 等后台线程滞后退出会短暂锁目录(ENOTEMPTY 实锤,实测可超 10s),重试清空
+let wiped = false
+for (let i = 0; i < 10 && !wiped; i++) {
+  await new Promise(r => setTimeout(r, 3000))
+  try { fs.rmSync(PROFILE_DIR, { recursive: true, force: true }); wiped = true } catch { /* lock lag, retry */ }
+}
+if (!wiped) {
+  // 尽力而为:目录已专用,外部污染进不来;自己 run 之间残留是良性的(幂等种子+pdTheme 每次 boot 重写设置)。
+  // 真正的硬失败是探针里的 "--profile ignored"(挂到了别人的 daemon 上)。
+  console.log('⚠ 专用 profile 目录未清空(后台进程仍占用)——继续使用。')
+}
+let probe = ''
+try {
+  probe = execSync(`agent-browser --session ${SESSION} open "about:blank" --profile ${JSON.stringify(PROFILE_DIR)}`, { encoding: 'utf8', timeout: 60000, shell: true })
+} catch (e) {
+  // daemon 首启回执可 ETIMEDOUT 而命令实际已生效(与 ab() 同款容忍),stdout 里照样有判定信息
+  probe = (e.stdout || '') + '\n' + (e.stderr || '')
+}
+if (probe.includes('--profile ignored')) {
+  console.error('✗ visual-web: agent-browser daemon 未按专用 profile 重启(--profile ignored)——再跑一次 `agent-browser close --all` 后重试。')
+  killVite()
+  process.exit(2)
+}
+ab(['--session', SESSION, 'close'])
 
 async function runAll () {
   // 硬期限:自愈(宿主重生/场景重试)必须让位于 check:all 的看门狗——超 20min 自断,
   // 否则"看门狗杀宿主→ensureHost 救活"无限循环,阶段永不出裁决(2026-09-09 实锤)
-  const deadline = Date.now() + 20 * 60 * 1000
+  const deadline = Date.now() + Number(process.env.VISUAL_DEADLINE_MIN || 20) * 60 * 1000
   let fail = 0
   for (const route of ROUTES) {
     for (const theme of ['light', 'dark']) {
@@ -153,11 +200,12 @@ async function runAll () {
       // single-line expr: win32 shell:true routes through cmd.exe, embedded newlines break the quoted arg
       const readyExpr = `(() => { const themed = document.documentElement.getAttribute('data-theme') === '${theme}'; const mounted = !!document.querySelector('#app .side-nav'); const overlay = !!document.querySelector('vite-error-overlay'); return (themed && mounted && !overlay) ? 'ready' : 'wait' })()`
       let ready = ''
-      for (let t = 0; t < 90000 && ready !== 'ready'; t += 500) {
+      const readyDl = Date.now() + 90000 // wall-clock: ab() hang of 120s must not multiply the budget (2026-09-10 daemon-degradation lesson)
+      while (Date.now() < readyDl && ready !== 'ready') {
         await new Promise(r => setTimeout(r, 500))
         // 主题 10s 仍不就位 = open 静默未导航(纪元断言被旧页面的 reload 骗过,URL 还是上一场景的)
         // ——重开整场景 URL 自愈,只靠重导航 hash 治不了错 URL(2026-09-09 验证轮实锤:整批主题错位)
-        if (t > 0 && t % 10000 === 0) { await setEnv(theme) }
+        if ((readyDl - Date.now()) % 10000 < 600) { await setEnv(theme) }
         try { ready = ab(['--session', SESSION, 'eval', readyExpr]).trim().replace(/"/g, '') } catch (e) { /* retry */ }
       }
       ab(['--session', SESSION, 'eval', `location.hash='${route}'; 'nav'`])
@@ -171,7 +219,8 @@ async function runAll () {
       }
       let lastBoot = null
       let stable = 0
-      for (let t = 0; t < 60000 && stable < 8; t += 500) {
+      const settleDl = Date.now() + 60000 // wall-clock bound, same reason as readyDl
+      while (Date.now() < settleDl && stable < 8) {
         await new Promise(r => setTimeout(r, 500))
         try {
           const s = readSettle()
@@ -247,14 +296,10 @@ async function runAll () {
   return fail
 }
 
-// run 级重试:活体宿主残存随机单场景翻车(主题偶发翻回/空态帧,每轮 ≤1-2 图、不可复现定位)。
-// 真回归两次都红照常拦;环境抖动重试即绿。VISUAL_NO_RETRY=1 关闭(调试用)。
-let fail = await runAll()
-if (fail && MODE === 'check' && !process.env.VISUAL_NO_RETRY) {
-  console.log('↻ run-level retry(整轮重跑一次)')
-  resetBrowser()
-  fail = await runAll()
-}
+// run 级重试已移除(2026-09-10):两轮 20min 硬期限叠出来 44.6min,必吃 check:all 的阶段超时红。
+// 抗抖动职责收敛在场景级重试 + 专用 profile 隔离上;真回归一轮就该红。
+const fail = await runAll()
 console.log(fail ? `✗ ${fail} failures` : '✓ all web visual checks passed')
+try { ab(['--session', SESSION, 'close']) } catch { /* 收尾关浏览器,别让常驻实例占着 profile */ }
 killVite()
 process.exit(fail ? 1 : 0)

@@ -117,7 +117,7 @@ function runStage (stage) {
     child.on('close', (code, signal) => {
       clearTimeout(timer)
       const timedOut = signal === 'SIGKILL'
-      resolve({ name, ok: code === 0 && !timedOut, timedOut, out, ms: Date.now() - t0 })
+      resolve({ name, ok: code === 0 && !timedOut, timedOut, out, ms: Date.now() - t0, budget: timeoutMin || 15 })
     })
   })
 }
@@ -140,7 +140,7 @@ async function runPool (stages, limit, { retry = 0 } = {}) {
         results[i] = r2
       }
       const r = results[i]
-      console.log(`  ${r.ok ? '✓' : '✗'} [${i + 1}/${stages.length}] ${r.name} — ${fmtMs(r.ms)}${r.timedOut ? '（超时 15 分钟按红计）' : ''}`)
+      console.log(`  ${r.ok ? '✓' : '✗'} [${i + 1}/${stages.length}] ${r.name} — ${fmtMs(r.ms)}${r.timedOut ? `（超时 ${r.budget} 分钟按红计）` : ''}`)
       if (!r.ok && r.out.trim()) {
         console.log(r.out.trim().split('\n').slice(-25).map(l => '    ' + l).join('\n'))
         // tail 25 行常吞掉 node:test 的 "not ok N - <name>"（失败名在输出中段），单独抽失败用例行
