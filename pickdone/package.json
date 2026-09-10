@@ -1,6 +1,6 @@
 {
   "name": "pickdone",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "private": true,
   "description": "PickDone — local-first todos, schedule and pomodoro focus desktop app",
   "productName": "PickDone",

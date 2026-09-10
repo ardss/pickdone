@@ -4,7 +4,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versioning follows [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.3.0] - 2026-09-10
 
 ### Added
 - Projects gain an explicit status field (active / paused / done / cancelled), replacing the name-prefix habit: overview cards carry a click-cycle status pill with All/Active/Paused/Done/Cancelled filter chips, the project detail header gets a selector, and the CLI mirrors the same field via `project <name> --status` (with a `--status` filter on `projects`).
