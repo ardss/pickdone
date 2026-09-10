@@ -65,4 +65,17 @@ function selectPrunes (names, o = {}) {
   return prunes
 }
 
-module.exports = { selectPrunes, RE_AUTO, RE_EVT }
+/** Stale atomic-write residue picker (pure, unit-testable): a crash between writeFileSync('.tmp-X') and
+ *  renameSync used to leave .tmp-* files in the backup dir forever (run-auto-backup's prune filter only
+ *  matches ^(auto|evt)-). An entry is stale when it starts with '.tmp-' AND its mtime is older than
+ *  maxAgeMs (1h default — a concurrent in-flight write must never be swept). Caller supplies mtimes.
+ *  @param {{name: string, mtimeMs: number}[]} entries
+ *  @returns {string[]} stale temp file names */
+function selectStaleTmp (entries, { now = Date.now(), maxAgeMs = 60 * 60 * 1000 } = {}) {
+  return (entries || [])
+    .filter(e => e && typeof e.name === 'string' && e.name.startsWith('.tmp-') &&
+      Number.isFinite(e.mtimeMs) && now - e.mtimeMs > maxAgeMs)
+    .map(e => e.name)
+}
+
+module.exports = { selectPrunes, selectStaleTmp, RE_AUTO, RE_EVT }
