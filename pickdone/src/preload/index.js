@@ -177,10 +177,13 @@ contextBridge.exposeInMainWorld('todoAPI', {
   },
   // Pre-quit flush signal: broadcast by the main process on before-quit; the renderer's debounced mirror flushes to disk immediately
   onAppQuittingFlush: fn => {
-    const h = () => fn()
+    const h = (_e, p) => fn(p)
     ipcRenderer.on('app-quitting-flush', h)
     return () => ipcRenderer.removeListener('app-quitting-flush', h)
   },
+  // Flush-ack handshake: the renderer calls this after dispatching its flush writes so the main process
+  // can wait for them (bounded) instead of a blind fixed delay before closing the DB
+  notifyQuitFlushDone: payload => ipcRenderer.send('app-quitting-flush-ack', payload),
   // CLI tomato command channel: forwarded by the main process after detecting meta cliTomatoCmd changes (pickdone tomato start/stop/attach)
   onCliTomatoCmd: fn => {
     const h = (_e, p) => fn(p)

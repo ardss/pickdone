@@ -217,6 +217,18 @@ async function bootstrap () {
       } catch (e) { console.error('[cli-settings] hot-apply failed', e) }    })
   }
 
+  // Quit-flush ack handshake (main waits for this before closing the DB, ≤2s cap): dbMirror/store flush
+  // handlers registered this channel EARLIER (their modules load before main.js), so by the time our
+  // listener runs their flush invokes are already dispatched — a short defer just lets the queued IPC
+  // messages actually leave before we ack. Payload echoes the token so the main process can drop stale acks.
+  if (window.todoAPI.onAppQuittingFlush && window.todoAPI.notifyQuitFlushDone) {
+    window.todoAPI.onAppQuittingFlush(payload => {
+      setTimeout(() => {
+        try { window.todoAPI.notifyQuitFlushDone({ token: payload && payload.token }) } catch (e) { /* app is quitting */ }
+      }, 60)
+    })
+  }
+
   // CLI tomato command channel (pickdone tomato start/stop/attach): dispatches existing store/tomato actions,
   // reusing idempotency tokens/cross-window claims/record-keeping/project focus minutes; on completion the state is written back to meta cliTomatoState for CLI status to read
   // 浮窗不消费 CLI 命令:双窗各 dispatch start/stop 且都写回执,回执内容由最后写完的窗决定=非确定性(2026-09-04 二轮深审 P2)
@@ -228,7 +240,13 @@ async function bootstrap () {
         window.__cliTomatoLastSeq = cmd.seq
         // Stale-command replay protection: the cmd in meta survives App crashes/exits; on next start the first external write would execute it as a new
         // command (an old start would suddenly kick off a focus session). 60s TTL; CLI includes at when writing commands
-        if (!cmd.at || Date.now() - cmd.at > 60000) { console.warn('[cli-tomato] ignoring stale command (>60s):', cmd.action, 'seq=' + cmd.seq); return }
+        // 2026-09-11 P1: rejection used to be silent — the main process had already marked the command consumed, so no receipt was
+        // ever written and the CLI's waitForTomatoAck polled to its full timeout. Write an 'expired' receipt (seq ≥ cmd.seq) so the CLI unblocks.
+        if (!cmd.at || Date.now() - cmd.at > 60000) {
+          console.warn('[cli-tomato] ignoring stale command (>60s):', cmd.action, 'seq=' + cmd.seq)
+          window.todoAPI.dbCall('setMeta', ['cliTomatoState', JSON.stringify({ seq: cmd.seq, status: 'expired', error: 'stale command (>60s)', at: Date.now() })]).catch(() => {})
+          return
+        }
         const t = store.state.tomato
         if (cmd.action === 'start') {
           if (cmd.minutes > 0 && cmd.minutes !== t.tomatoTime) {
