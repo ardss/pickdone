@@ -376,7 +376,11 @@ export default {
         taskId: genTaskId(userId), taskSort: Math.fround(sort),
         todoTime: Number(todoTime) || Number(todoDate) || 0,
         userId, status: 'add', version: 0,
-        dayStart: dayOverride != null ? dayOverride : (todoDate ? +dayjs(todoDate).startOf('day') : 0)
+        // dayStart derivation mirrors the DB rule (db.js re-derives unconditionally from todoTime): when only
+        // todoTime is given (time-block cell without an explicit date), todoTime>0 while todoDate is missing —
+        // deriving dayStart from todoDate alone split memory (dayStart=0 → todo box) from DB (scheduled day),
+        // and the task switched groups after restart
+        dayStart: dayOverride != null ? dayOverride : (todoDate ? +dayjs(todoDate).startOf('day') : (Number(todoTime) > 0 ? +dayjs(Number(todoTime)).startOf('day') : 0))
       }
       commit('upsertLocal', t)
       commit('setRecentlyAdded', t.taskId)
@@ -517,7 +521,16 @@ export default {
         rows.push(merged)
       }
       if (!rows.length) return
-      try { await window.todoAPI.dbCall('upsertMany', deproxyRows(rows)) } catch (err) { reportError('upsertMany', err) }
+      // Same pending-queue guarantee as safeUpsert: a transient IPC/db failure must not silently drop the
+      // whole batch (the rows were already re-sorted in memory, so a lost write resurfaces as a wrong order
+      // after restart). flushPendingUpserts replays any queued op verbatim, 'upsertMany' included.
+      try {
+        await window.todoAPI.dbCall('upsertMany', deproxyRows(rows))
+      } catch (err) {
+        reportError('upsertMany', err)
+        try { _pendingUpserts.push({ op: 'upsertMany', params: deproxyRows(rows) }) } catch { /* keep the UI flow alive even if cloning fails */ }
+        hookQuitFlush()
+      }
       // Discrete op: break the 400ms undo merge so a following edit doesn't fuse into the drag step
       commit('historyBreakMerge')
       dispatch('computeViews')
@@ -548,9 +561,14 @@ export default {
     },
 
     async restoreFromRecycle ({ commit, dispatch }, todo) {
-      // Write back the pre-delete schedule chip snapshot when restoring (eliminates the "delete→restore loses schedule" regression)
-      try { await restoreSnapshot(todo.taskId) } catch { /* No snapshot = originally unscheduled */ }
+      // Row first, snapshot second (verify-then-commit): restoreSnapshot empties the snapshot meta as a side
+      // effect, so consuming it before the row update was confirmed meant a mid-way failure (row missing,
+      // updateTodoFields throwing) left the snapshot permanently lost and/or a ghost chip on the timeline.
+      // The row update alone is harmless to retry; only after it succeeds do we spend the one-shot snapshot.
       const r = await dispatch('updateTodoFields', { taskId: todo.taskId, patch: { delete: false, deletedAt: 0, status: 'update' } })
+      if (r) {
+        try { await restoreSnapshot(todo.taskId) } catch { /* No snapshot = originally unscheduled */ }
+      }
       // Discrete op: break the 400ms undo merge so a following edit doesn't fuse into the restore step
       commit('historyBreakMerge')
       return r
@@ -585,8 +603,13 @@ export default {
       // Discrete op: break the 400ms undo merge so following edits don't fuse into the purge step
       commit('historyBreakMerge')
       await dispatch('writeEventBackup', 'purge-all') // snapshot before emptying the recycle bin
-      // DB rows first, then attachment files: the other order leaves rows pointing at deleted files if the file purge fails
-      try { await window.todoAPI.purgeRecycleBin() } catch (err) { reportError('purgeRecycleBin', err) }
+      // DB rows first, then attachment files: the other order leaves rows pointing at deleted files if the file purge fails.
+      // Converge only on success (aligned with purgeIds' per-id guard): when the purge IPC fails we keep the local
+      // rows untouched — the old flow hardRemoved locally + cleared the undo stack anyway, so the rows "revived"
+      // back into the recycle bin after restart while the user had been told they were gone for good
+      let purged = false
+      try { purged = await window.todoAPI.purgeRecycleBin() === true } catch (err) { reportError('purgeRecycleBin', err) }
+      if (!purged) { dispatch('computeViews'); return }
       // Attachment cleanup aligned with per-item permanent deletion (the main process's purgeRecycleBin only deletes rows, not files/)
       try { for (const id of ids) await window.todoAPI.deleteTodoFilesRelevant?.(id) } catch {}
       // Drop the pre-delete chip snapshot meta too (rows are gone, the snapshot can never be restored)
