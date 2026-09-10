@@ -139,9 +139,11 @@
             <div class="form">
               <div class="form-label">{{ $t('statsE.SettingsModal.devSection') }}</div>
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.sDev') }}</span><div class="form-item__control"><el-switch :model-value="st.developerMode === true" @change="v=>set({developerMode:v})"/></div></div>
+              <!-- Projects has graduated from the developer-mode master gate (2026-09-10): its switch stays visible with developer mode off, so hiding experiments no longer hides shipped project features -->
+              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.sProjects') }}</span><div class="form-item__control"><el-switch :model-value="st.showProjectsModule === true" @change="v=>set({showProjectsModule:v})"/></div></div>
               <div v-show="st.developerMode === true">
+                <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.sTodayX') }}</span><div class="form-item__control"><el-switch :model-value="st.showTodayXModule === true" @change="v=>set({showTodayXModule:v})"/></div></div>
                 <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.habitExperimentalLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.showHabitModule !== false" @change="v=>set({showHabitModule:v})"/></div></div>
-                <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.sProjects') }}</span><div class="form-item__control"><el-switch :model-value="st.showProjectsModule === true" @change="v=>set({showProjectsModule:v})"/></div></div>
                 <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.sDeps') }}</span><div class="form-item__control"><el-switch :model-value="st.showDepsModule === true" @change="v=>set({showDepsModule:v})"/></div></div>
               </div>
               <div class="form-item"><span class="form-item__label"></span><div class="form-item__control"><span class="tip">{{ $t('statsE.SettingsModal.devHint') }}</span></div></div>

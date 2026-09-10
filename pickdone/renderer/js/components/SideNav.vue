@@ -276,6 +276,7 @@
 <script lang="ts">
 /** Left sidebar -- structure/icons/styles aligned with the reference: user row, search, 5 main nav items, categories, tags, bottom buttons */
 import { extractTags } from '../utils/search.js'
+import { visibleNavRoutes } from '../utils/nav-gate.js'
 import i18n from '../i18n/index.js'
 import WeatherWidget from './WeatherWidget.vue'
 import { NAV_ITEMS, navKeyOfRoute } from '../views/registry.js'
@@ -330,13 +331,10 @@ export default {
        out of flow) to cover the overflow P0; the collapse-once-on-narrow logic is in mounted/_onNarrow */
     collapsed () { return this.userCollapsed },
     filteredNavOrder () {
-      const st = this.$store.state.settings
-      let list = NAV_ORDER
-      // Developer mode is the master gate: unfinished/structural experiments only surface when it is on
-      if (!st.developerMode) list = list.filter(n => n !== 'todo-list-today-x')
-      if (!st.developerMode || !st.showHabitModule) list = list.filter(n => n !== 'todo-list-habit')
-      if (!st.developerMode || !st.showProjectsModule) list = list.filter(n => n !== 'todo-list-projects')
-      return list
+      // Gate doctrine lives in utils/nav-gate.js (pure + unit-tested): developer mode is the
+      // master gate for experiments, each of which also has its own module switch; projects
+      // has graduated and rides on its own switch alone.
+      return visibleNavRoutes(this.$store.state.settings, NAV_ORDER)
     },
     user () { return this.$store.state.auth.user },
     todoBoxCount () { return this.$store.state.todo.views.todoBoxCount },

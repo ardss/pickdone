@@ -90,6 +90,7 @@ export default {
   "statsE.SettingsModal.irreversibleConfirmMsg": "This cannot be undone. Continue?",
   "statsE.SettingsModal.understandContinueBtn": "I understand, continue",
   "statsE.SettingsModal.sProjects": "Projects (experimental — not recommended for daily use)",
+  "statsE.SettingsModal.sTodayX": "Today Lab (experimental — not recommended for daily use)",
   "statsE.SettingsModal.sDeps": "Dependency view (experimental — task dependency graph)",
   "statsE.SettingsModal.createdMsg": "Created",
   "statsE.SettingsModal.calendarWidgetOpenedMsg": "Calendar widget opened",
