@@ -2,6 +2,8 @@
 
   <div class="td-item" :class="{'is-complete':todo.complete, selected, dragging, 'td-item--enter': entering, 'pd-hoverlink': $store.state.ui.hoverTaskId === todo.taskId, ['prio-'+(todo.priority||0)]: (todo.priority||0)>0}"
        draggable="true"
+       role="button"
+       :aria-label="$t('statsE.TodoItem.openTaskAria', { name: todo.taskContent || $t('statsE.TodoItem.untitled') })"
        tabindex="0"
        @dragstart.stop="onDragStart" @dragover.stop.prevent="onDragOver" @dragleave.stop="onDragLeave"
        @drop.stop="onDrop" @dragend="onDragEnd"
@@ -38,6 +40,11 @@
           <app-icon name="list" :size="12"/>{{subDone}}/{{subtasks.length}}
         </span>
         <button v-for="tg in tags.slice(0,4)" :key="tg" class="td-tag" @click.stop="goTag(tg)">#{{tg}}</button>
+        <!-- [component-r5] +N overflow badge for tags beyond the first 4 (title lists the hidden ones) -->
+        <button v-if="tags.length>4" class="td-tag td-tag--more"
+                :title="$t('statsE.TodoItem.moreTagsTip', { tags: tags.slice(4).join(', ') })"
+                :aria-label="$t('statsE.TodoItem.moreTagsTip', { tags: tags.slice(4).join(', ') })"
+                @click.stop="goTag(tags[4])">+{{ tags.length - 4 }}</button>
         <!-- Project badge (today view only, opt-in via project-badge): colored dot + project name, click navigates to the project detail view -->
         <button v-if="projCat" class="td-proj" :style="{ '--proj-c': projCat.categoryColor }"
                 :title="$t('todayT.badgeTip', { name: projCat.categoryName })"
@@ -49,7 +56,7 @@
         <img v-if="fileCount" class="td-ico" src="app://app/assets/img/icon-file.svg" :title="fileCount+$t('statsE.TodoItem.attachmentsUnit')" alt="">
         <span v-if="(todo.estimate||0)>0" class="td-snow" :title="$t('statsE.TodoItem.pomodoroInvested')"><app-icon name="snow" :size="12"/>{{todo.estimate}}</span>
         <span v-if="(todo.priority||0)>0" class="td-prio" :class="'p'+todo.priority" :title="$t('statsE.TodoItem.priorityPrefix')+['',$t('statsJ.TodoItem.prioLow'),$t('statsJ.TodoItem.prioMedium'),$t('statsJ.TodoItem.prioHigh')][todo.priority||0]">
-          <i class="prio-flag"></i>{{['',$t('statsE.TodoItem.priorityLow'),$t('statsJ.TodoItem.prioMedium'),$t('statsJ.TodoItem.prioHigh')][todo.priority||0]}}
+          <i class="prio-flag"></i>{{['',$t('statsJ.TodoItem.prioLow'),$t('statsJ.TodoItem.prioMedium'),$t('statsJ.TodoItem.prioHigh')][todo.priority||0]}}
         </span>
         <span v-if="todo.deadlineTs>0 && !todo.complete" class="td-deadline" :class="{overdue: todo.deadlineTs < Date.now()}" :title="$t('statsJ.TodoItem.deadlineColon', { d: dayjs(todo.deadlineTs).format(FMT.dateTime) })">
           {{ $t('statsJ.TodoItem.deadlineSpace', { d: dayjs(todo.deadlineTs).format(FMT.cnDate) }) }}
