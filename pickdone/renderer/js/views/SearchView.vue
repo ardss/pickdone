@@ -6,7 +6,7 @@
         <!-- reference: MainNavSearch-isomorphic keyword input -->
         <div class="main-nav-search">
           <div class="main-nav-search__icon"></div>
-          <input ref="inp" v-model="q" spellcheck="false" autocomplete="off"
+          <input ref="inp" v-model="q" spellcheck="false" autocomplete="off" :aria-label="$t('statsC.Search.searchAria')"
                  class="main-nav-search__input" type="text" :placeholder="$t('statsC.Search.searchPlaceholder')"/>
           <div v-if="q.trim()!==''" class="main-nav-search__clear close-x close-x--sm" role="button" tabindex="0" :aria-label="$t('statsC.Search.clearAria')" @click="q=''" @keydown.enter.prevent="q=''"></div>
         </div>
