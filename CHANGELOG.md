@@ -4,7 +4,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versioning follows [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.3.1] - 2026-09-10
 
 ### Fixed
 - The in-app "restart to update" action silently did nothing: the installer's pre-flight cleanup force-killed the app's whole process tree, but the updater spawns the installer as a child of the running app, so the installer terminated itself before the install ever started. The cleanup now matches by image name only, which still covers the main process and its Chromium helpers but can no longer reach the installer.
