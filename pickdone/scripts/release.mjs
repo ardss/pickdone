@@ -108,10 +108,27 @@ try {
   sh(['git', 'commit', '-m', `chore(release): ${TAG}`])
 } catch { /* 无变更可提交也允许(stamps 可能已同笔) */ }
 say('commit chore(release) 完成')
-sh(['git', 'push', 'origin', 'main'])
+// Step-5 git-chain rollback (2026-09-11 P2): a push failure used to strand the release — the commit sat
+// on local main and every re-run died on the "CHANGELOG 已存在 [X.Y.Z] 段" gate from step 2. Rewind the
+// LOCAL commit (mixed: working tree keeps the renamed changelogs so nothing is re-edited) and print the
+// exact recovery path. Once `push main` has succeeded, no rewind — only the tag leg may be retried.
+try {
+  sh(['git', 'push', 'origin', 'main'])
+} catch (e) {
+  try { sh(['git', 'reset', '--mixed', 'HEAD~1']) } catch (e2) { console.error('自动回退 commit 失败,请手动: git reset --mixed HEAD~1 —', e2 && e2.message) }
+  die(`git push main 失败(${(e && e.message) || e})。已回退本地 release commit(工作区保留 CHANGELOG 归版)。
+  补救: ①修复网络/权限后重新 npm run release ${version}(CHANGELOG 段已归版,先手动把两份 CHANGELOG 的 [${version}] 段改回 [Unreleased],或直接恢复 [Unreleased] 标题)
+  ②或仅重跑第 5 步: git push origin main && git tag ${TAG} && git push origin ${TAG}`)
+}
 say('main 已推送')
-sh(['git', 'tag', TAG])
-sh(['git', 'push', 'origin', TAG])
+try {
+  sh(['git', 'tag', TAG])
+  sh(['git', 'push', 'origin', TAG])
+} catch (e) {
+  die(`tag 阶段失败(${(e && e.message) || e})。main 已推送、本地 commit 保留,勿重跑 npm run release(会撞 CHANGELOG 闸)。
+  补救: ①tag 已存在: git tag -d ${TAG} && git push origin :refs/tags/${TAG} 后重试
+       ②仅推送失败: git push origin ${TAG}`)
+}
 say(`${TAG} 已推送,Release 工作流已触发`)
 
 // 6. 收尾指引
