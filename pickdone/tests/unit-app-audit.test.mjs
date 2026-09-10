@@ -2,7 +2,9 @@
  * Unit tests for the app-side audit trail (src/main/audit.js).
  * Verifies:
  *  1. recordAppOp appends a valid JSONL line with the exact CLI audit schema fields
- *  2. rotation triggers at the injected (tiny) threshold and rolls to cli-audit.jsonl.1
+ *  2. rotation triggers at the injected (tiny) threshold and rolls to timestamped cli-audit.jsonl.<ms>
+ *     archives, previous archives survive later rotations (dual-writer fix), and pruning keeps only
+ *     the newest 4
  *  3. the op→action mapping matches the CLI audit vocabulary; reads are filtered by shouldAudit
  *  4. the db.settingsState settings-mirror blob is skipped (renderer persists it on every change)
  *  5. upsert refinement via the pre-write row: add/done/undo/delete/restore/subtask/edit
@@ -35,6 +37,19 @@ function readLines () {
   const file = path.join(tmpDir, 'cli-audit.jsonl')
   if (!fs.existsSync(file)) return []
   return fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l))
+}
+
+/** Timestamped rotation archives (cli-audit.jsonl.<ms>), sorted oldest → newest */
+function archiveNames () {
+  const prefix = 'cli-audit.jsonl.'
+  return fs.readdirSync(tmpDir)
+    .filter(n => n.startsWith(prefix) && /^\d+$/.test(n.slice(prefix.length)))
+    .sort((a, b) => Number(a.slice(prefix.length)) - Number(b.slice(prefix.length)))
+}
+
+function readArchiveFirstTarget (name) {
+  const lines = fs.readFileSync(path.join(tmpDir, name), 'utf8').split('\n').filter(Boolean)
+  return JSON.parse(lines[0]).targets[0].taskId
 }
 
 test('auditFile resolves inside the injected directory with the CLI file name', () => {
@@ -176,23 +191,38 @@ test('category and filter ops keep the CLI target conventions', () => {
   assert.deepEqual(lines[3].targets, [{ taskId: 'a' }, { taskId: 'b' }])
 })
 
-test('rotation triggers at the injected tiny threshold and rolls to .1', () => {
+test('rotation triggers at the injected tiny threshold and rolls to a timestamped archive', () => {
   appAudit.setMaxBytes(1) // any content exceeds 1 byte
   appAudit.recordAppOp('hardDelete', 'first') // no file yet → appended directly
   assert.equal(readLines().length, 1)
-  assert.equal(fs.existsSync(path.join(tmpDir, 'cli-audit.jsonl.1')), false)
+  assert.equal(archiveNames().length, 0)
 
   appAudit.recordAppOp('hardDelete', 'second') // size > threshold → roll, then append
-  const rolled = fs.readFileSync(path.join(tmpDir, 'cli-audit.jsonl.1'), 'utf8').split('\n').filter(Boolean)
-  const current = fs.readFileSync(path.join(tmpDir, 'cli-audit.jsonl'), 'utf8').split('\n').filter(Boolean)
-  assert.equal(rolled.length, 1)
-  assert.equal(JSON.parse(rolled[0]).targets[0].taskId, 'first')
-  assert.equal(current.length, 1)
-  assert.equal(JSON.parse(current[0]).targets[0].taskId, 'second')
+  let archives = archiveNames()
+  assert.equal(archives.length, 1)
+  assert.equal(readArchiveFirstTarget(archives[0]), 'first') // the rolled file holds the old content
+  assert.equal(readLines()[0].targets[0].taskId, 'second')
+  assert.equal(readLines().length, 1)
 
-  appAudit.recordAppOp('hardDelete', 'third') // rolls again, previous .1 replaced
-  const rolled2 = fs.readFileSync(path.join(tmpDir, 'cli-audit.jsonl.1'), 'utf8').split('\n').filter(Boolean)
-  assert.equal(JSON.parse(rolled2[0]).targets[0].taskId, 'second')
+  // Dual-writer regression (2026-09-10 P2): a later rotation must NOT destroy the previous archive.
+  // The old fixed `.1` target unlinked it here — the 5MB archive the other process had just renamed.
+  appAudit.recordAppOp('hardDelete', 'third')
+  archives = archiveNames()
+  assert.equal(archives.length, 2)
+  assert.equal(readArchiveFirstTarget(archives[0]), 'first')
+  assert.equal(readArchiveFirstTarget(archives[1]), 'second')
+  assert.equal(readLines().length, 1)
+})
+
+test('rotation pruning keeps at most the 4 newest timestamped archives', () => {
+  appAudit.setMaxBytes(1)
+  for (const label of ['a', 'b', 'c', 'd', 'e', 'f']) appAudit.recordAppOp('hardDelete', label)
+  // 6 appends → 5 rotations (every append after the first sees size > 1 byte) → pruned to 4
+  const archives = archiveNames()
+  assert.equal(archives.length, 4)
+  // the two oldest rotations ('a', 'b') were pruned; the newest four survive in order
+  assert.deepEqual(archives.map(readArchiveFirstTarget), ['b', 'c', 'd', 'e'])
+  assert.equal(readLines()[0].targets[0].taskId, 'f')
 })
 
 test('audit is best-effort: garbage args never throw and never corrupt the trail', () => {

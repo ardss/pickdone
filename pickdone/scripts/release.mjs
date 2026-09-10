@@ -59,7 +59,13 @@ say('[Unreleased] 非空,待归版')
     say(`package.json version -> ${version}`)
   }
   const today = sh(['node', '-p', 'new Date().toISOString().slice(0,10)'])
-  cl = cl.replace('## [Unreleased]', `## [${version}] - ${today}`)
+  const promote = (text) => {
+    // Rename [Unreleased] -> [X.Y.Z] and re-seed an empty [Unreleased] above it (keep-a-changelog
+    // convention): without the seed the next release dies on "缺 [Unreleased] 段" or, worse, new
+    // entries get appended directly under the released version header (0.3.1 实锤:发完即无段).
+    return text.replace('## [Unreleased]', `## [Unreleased]\n\n## [${version}] - ${today}`)
+  }
+  cl = promote(cl)
   fs.writeFileSync(clPath, cl, 'utf8')
   say(`CHANGELOG [Unreleased] -> [${version}] - ${today}`)
 
@@ -70,7 +76,7 @@ say('[Unreleased] 非空,待归版')
   if (!zhUnreleased) die('CHANGELOG.zh.md 缺 [Unreleased] 段——双语纪律:两份必须同版本同发布')
   if (!zhUnreleased[1].trim()) die('CHANGELOG.zh.md [Unreleased] 是空的——中文镜像没跟上英文版')
   if (clZh.includes(`## [${version}]`)) die(`CHANGELOG.zh.md 已存在 [${version}] 段——重复发版?`)
-  clZh = clZh.replace('## [Unreleased]', `## [${version}] - ${today}`)
+  clZh = promote(clZh)
   fs.writeFileSync(clZhPath, clZh, 'utf8')
   say(`CHANGELOG.zh.md [Unreleased] -> [${version}] - ${today}`)
 }
@@ -82,11 +88,20 @@ say('npm run check:all(29 项,约 4-8 分钟;中止=Ctrl+C)…')
 try {
   npm(['run', 'check:all'], { stdio: 'inherit' })
 } catch {
+  // Best-effort rewind of exactly the files this script modified before the gate ran (version bump,
+  // cache stamps, changelog section renames) so a red check:all doesn't leave a dirty tree or renamed
+  // [X.Y.Z] sections that block the re-run ("CHANGELOG 已存在 [X.Y.Z] 段"). Errors are swallowed on
+  // purpose: the gate failure itself is what must be reported.
+  try { sh(['git', 'checkout', '--', 'package.json', 'renderer/index.html', 'browser-dev/index.html', '../CHANGELOG.md', '../CHANGELOG.zh.md']) } catch { /* best-effort */ }
   die('check:all 未全绿——修完再跑 npm run release(不会推任何东西)')
 }
 
 // 5. 提交 → push main → tag → push tag
-sh(['git', 'add', '-A'])
+// Explicit file list instead of `add -A`: these are the only files this script (and npm run bump) may
+// have touched; a blanket add would sweep unrelated local debris (stray test artifacts, editor
+// droppings) into the release commit. Paths are relative to ROOT (sh() cwd = pickdone/); the changelogs
+// live one level above it, inside the same repo.
+sh(['git', 'add', 'package.json', 'renderer/index.html', 'browser-dev/index.html', '../CHANGELOG.md', '../CHANGELOG.zh.md'])
 try {
   sh(['git', 'commit', '-m', `chore(release): ${TAG}`])
 } catch { /* 无变更可提交也允许(stamps 可能已同笔) */ }

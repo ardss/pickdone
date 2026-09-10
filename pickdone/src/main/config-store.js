@@ -18,12 +18,23 @@ function readConfig () {
     // 旧默认值一次性迁移:存量化配置里还钉着冲突键 ctrl+shift+a 的搬到新默认
     if (c.shortcutKeySettings.quickAddGlobal === 'ctrl+shift+a') c.shortcutKeySettings.quickAddGlobal = DEFAULT_SHORTCUTS.quickAddGlobal
     return c
-  } catch { return { shortcutKeySettings: { ...DEFAULT_SHORTCUTS } } }
+  } catch (e) {
+    // Only a genuinely missing file is a first install — return defaults silently.
+    if (e && e.code === 'ENOENT') return { shortcutKeySettings: { ...DEFAULT_SHORTCUTS } }
+    // 2026-09-10 P2: any OTHER failure (JSON parse error from a truncated write, EACCES/EBUSY IO) used to
+    // fall through to the same fresh-install default — and the next writeConfig() persisted that amputated
+    // object, permanently resetting winBounds/locale/lockPassword. Keep the evidence instead: rename the
+    // bad file to config.json.bad (best-effort, swallow errors) so it can be inspected or recovered by
+    // hand; those keys are lost from the live config but NOT destroyed.
+    try { fs.renameSync(configFile(), configFile() + '.bad') } catch { /* best-effort */ }
+    return { shortcutKeySettings: { ...DEFAULT_SHORTCUTS } }
+  }
 }
 function writeConfig (patch) {
   const c = Object.assign(readConfig(), patch)
   fs.mkdirSync(path.dirname(configFile()), { recursive: true })
-  // Atomic write (tmp+rename): a truncated config.json makes readConfig silently fall back to defaults, losing winBounds/locale/security-lock password
+  // Atomic write (tmp+rename): a truncated config.json used to make readConfig silently fall back to
+  // defaults (readConfig now quarantines it as config.json.bad instead), losing winBounds/locale/security-lock password
   const tmp = configFile() + '.tmp'
   fs.writeFileSync(tmp, JSON.stringify(c, null, '\t'))
   fs.renameSync(tmp, configFile())

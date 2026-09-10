@@ -15,10 +15,21 @@ import { fileURLToPath } from 'node:url'
 import { execFileSync } from 'node:child_process'
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
-const REPO = 'ardss/pickdone'
 const sh = (cmd) => execFileSync(cmd[0], cmd.slice(1), { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
 const die = msg => { console.error('✗ finalize: ' + msg); process.exit(1) }
 const say = msg => console.log('• ' + msg)
+// owner/repo derived from the actual origin remote instead of hardcoded, so a repo rename/transfer (or a
+// fork checkout) keeps working; fall back to the historical location when git/origin is unavailable.
+// Covers https://github.com/owner/repo(.git) and git@github.com:owner/repo(.git); anything more exotic
+// (ssh:// with a port) fails to parse and lands on the fallback too.
+function repoFromOrigin () {
+  try {
+    const url = sh(['git', 'remote', 'get-url', 'origin'])
+    const m = url.match(/github\.com[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i)
+    return m ? `${m[1]}/${m[2]}` : null
+  } catch { return null }
+}
+const REPO = repoFromOrigin() || 'ardss/pickdone'
 const ghApi = (path) => sh(['gh', 'api', path])           // api 调用:repo 写在路径里
 const gh = (args) => sh(['gh', ...args, '--repo', REPO])  // 人类命令(release view/edit 等)
 
@@ -27,8 +38,11 @@ if (!/^\d+\.\d+\.\d+$/.test(version || '')) die('用法: npm run release:finaliz
 const TAG = 'v' + version
 
 // 1. 工作流状态
-const runs = JSON.parse(ghApi(`repos/${REPO}/actions/runs?per_page=10`))
-const run = (runs.workflow_runs || []).find(r => r.name === 'Release' && r.head_branch === TAG)
+// Match runs by workflow FILE name (release.yml), not the human display name: renaming `name:` in the
+// YAML used to silently break an `r.name === 'Release'` match and made finalize a no-op. The
+// workflows/release.yml/runs endpoint is the API equivalent of `gh run list --workflow release.yml`.
+const runs = JSON.parse(ghApi(`repos/${REPO}/actions/workflows/release.yml/runs?per_page=10`))
+const run = (runs.workflow_runs || []).find(r => r.head_branch === TAG)
 if (!run) die(`${TAG} 的 Release 工作流不存在——tag 推了吗?`)
 if (run.status !== 'completed') die(`工作流还在 ${run.status}——稍等再跑 finalize`)
 if (run.conclusion !== 'success') die(`工作流结论 ${run.conclusion}——修 main 重发(见 SOP-06 §2.4),日志: gh run view ${run.id} --log-failed`)

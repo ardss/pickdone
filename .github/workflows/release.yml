@@ -56,14 +56,27 @@ jobs:
         run: rm -rf dist
 
       # 幂等防护(2026-09-07 实锤:v0.1.1 工作流重跑残留一份重复 draft 挂在页面)——
-      # 打包前先删同 tag 的旧 draft,保证每个 tag 至多一份草稿
-      - name: Delete stale draft for this tag (idempotent re-runs)
+      # 打包前先删同 tag 的全部旧 draft。2026-09-10:曾用 head -1 只删一份,重跑两次即漏;
+      # 改为循环删除该 tag 的全部 draft,保证每个 tag 至多一份草稿
+      - name: Delete stale drafts for this tag (idempotent re-runs)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          ID=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate -q '.[] | select(.tag_name=="'"$GITHUB_REF_NAME"'") | select(.draft) | .id' | head -1)
-          if [ -n "$ID" ]; then gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$ID"; echo "stale draft $ID deleted"; fi
+          IDS=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate -q '.[] | select(.tag_name=="'"$GITHUB_REF_NAME"'") | select(.draft) | .id')
+          if [ -n "$IDS" ]; then
+            while read -r ID; do
+              gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$ID" && echo "stale draft $ID deleted"
+            done <<< "$IDS"
+          fi
+
+      # 与 ci.yml 同款(2026-09-10):tag 构建此前绕过了白名单漂移检查——release 门禁不得弱于 CI。
+      # 照抄 ci.yml 的"Build packaging whitelist"步骤,保证 hand-edit package.json 的 build.files 漂移在打包前变红
+      - name: Build packaging whitelist (from lock closure; prevents manual files drift)
+        working-directory: pickdone
+        run: |
+          node scripts/build-whitelist.mjs
+          git diff --exit-code package.json || (echo '::error::build.files drifted from the lock closure (hand-edited without build-whitelist)' && exit 1)
 
       - name: Build & publish (draft)
         working-directory: pickdone

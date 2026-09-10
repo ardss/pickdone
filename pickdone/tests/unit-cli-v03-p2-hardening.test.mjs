@@ -85,6 +85,10 @@ test('P2-5: audit recordCustom lands and survives a rotation window', () => {
   assert.equal(lines.length, 1, 'the first line rotated away')
   assert.equal(lines[0].note, 'imported 3 task(s)')
   assert.equal(lines[0].actor, 'app')
-  const rolled = JSON.parse(fs.readFileSync(file + '.1', 'utf8').trim().split('\n')[0])
+  // Rotation archives are timestamped (cross-process safe, 2026-09-10 review): find any archive of the active file
+  const base = path.basename(file)
+  const archives = fs.readdirSync(path.dirname(file)).filter(f => f.startsWith(base + '.') && f !== base)
+  assert.equal(archives.length, 1, 'exactly one timestamped archive')
+  const rolled = JSON.parse(fs.readFileSync(path.join(path.dirname(file), archives[0]), 'utf8').trim().split('\n')[0])
   assert.equal(rolled.note, 'imported 7 task(s)')
 })

@@ -3,6 +3,11 @@
  *  dev builds / portable versions have no app-update.yml, isUpdaterActive()=false, and all entry points degrade safely.
  *  Process convention: CI builds on tag → GitHub Draft Release → manually add changelog then Publish →
  *  installed users get a silent check at startup, background download, and auto-install on quit (or manual "restart to update" from settings).
+ *
+ *  2026-09-10 P1 — early exit-flush on 'update-downloaded' (see flushOnceOnReady below): the NSIS
+ *  installer's customInit taskkill /F-kills any running instance, so once the installer is spawned the
+ *  will-quit 500ms flush window ALWAYS loses that race — the debounced dbMirror writes and the reminder
+ *  dedup ledger must already be on disk before the installer starts, not while it is killing us.
  */
 const { autoUpdater } = require('electron-updater')
 const log = require('electron-log')
@@ -26,6 +31,28 @@ function broadcast () {
   try { if (win && !win.isDestroyed()) win.webContents.send('updater:event', { ...state }) } catch (e) { /* window closed */ }
 }
 
+// Fires ONCE per downloaded update (the app restarts into the new version after install, so one shot per
+// process = one shot per downloaded update): an early, equivalent round of the exit flush that index.js
+// runs in before-quit/will-quit. Chosen as the least invasive hook — updater.js talks to the renderer via
+// the same 'app-quitting-flush' channel and lazily requires ./scheduler for flushFiredNow, so index.js
+// needs no exported symbol and no require cycle is created at load time.
+let _flushedOnReady = false
+function flushOnceOnReady () {
+  if (_flushedOnReady) return
+  _flushedOnReady = true
+  // Renderer side: same channel as the before-quit path — the renderer immediately flushes whatever is
+  // still sitting in the dbMirror debounce (pending edits / pomodoro ledger) to disk.
+  try {
+    const { BrowserWindow } = require('electron')
+    for (const w of BrowserWindow.getAllWindows()) {
+      try { if (w && !w.isDestroyed()) w.webContents.send('app-quitting-flush') } catch { /* dead window */ }
+    }
+  } catch { /* electron unavailable (unit tests) */ }
+  // Main-process side: same scheduler flush the will-quit path runs (persist the reminder dedup ledger
+  // now instead of losing whatever sits inside its 60s debounce when the installer /F-kills us).
+  try { require('./scheduler').flushFiredNow() } catch { /* best-effort, never blocks the update */ }
+}
+
 let _inited = false
 function init (mainWin) {
   win = mainWin
@@ -38,7 +65,7 @@ function init (mainWin) {
   autoUpdater.on('update-available', i => { state.status = autoUpdater.autoDownload ? 'downloading' : 'available'; state.info = i; broadcast() })
   autoUpdater.on('update-not-available', i => { state.status = 'uptodate'; state.info = i; broadcast() })
   autoUpdater.on('download-progress', p => { state.status = 'downloading'; state.info = { percent: Math.round(p.percent || 0) }; broadcast() })
-  autoUpdater.on('update-downloaded', i => { state.status = 'ready'; state.info = i; broadcast() })
+  autoUpdater.on('update-downloaded', i => { state.status = 'ready'; state.info = i; broadcast(); flushOnceOnReady() })
   // Error handling: besides broadcasting, schedule a single backoff retry (checkForUpdates after 30s).
   // Only one retry: transient network/proxy jitter self-heals; persistent failures (e.g. 404, certificate issues) are not retried, avoiding a request storm every 30s. During the retry window, a new error overwrites the state directly without queuing.
   let _retryTimer = null

@@ -14,14 +14,32 @@
 ; therefore lived in %LOCALAPPDATA%\Programs\拾事 — the customInstall migration removes
 ; that orphaned directory after a successful install (user data in %APPDATA%\pickdone
 ; is never touched; it was ASCII-safe all along).
+;
+; 2026-09-10 P2: the nsExec exit code is no longer ignored. nsExec::Exec pushes exactly ONE
+; value — the bare decimal exit code, or "error"/"timeout" if the process could not be run at
+; all (see Contrib/nsExec/nsExec.txt; the two-value output+code push belongs to ExecToStack).
+; taskkill codes: 0 = matching process terminated, 128 = no matching process (nothing running).
+; Both pass. Anything else (1/5 access denied: elevated instance, AV file lock, ...) used to
+; continue silently and the install then died downstream with NSIS error :2 or a half-updated
+; tree ("clicking the installer does nothing"). The MessageBox deliberately has NO /SD so it is
+; visible even in silent installs; Abort stops before any file is touched.
+!macro KillRunningInstance IMAGE ID
+  nsExec::Exec 'taskkill /IM "${IMAGE}" /F'
+  Pop $R0
+  StrCmp $R0 "0" kill_ok_${ID}
+  StrCmp $R0 "128" kill_ok_${ID}
+    MessageBox MB_OK|MB_ICONEXCLAMATION "PickDone 正在运行，但无法自动关闭（退出码 $R0）。请手动退出 PickDone 后重试。$\n$\nA running PickDone instance could not be closed automatically (exit code: $R0). Please exit PickDone manually and try again."
+    Abort
+  kill_ok_${ID}:
+!macroend
 !macro customInit
-  nsExec::Exec 'taskkill /IM "PickDone.exe" /F'
-  nsExec::Exec 'taskkill /IM "拾事.exe" /F'
+  !insertmacro KillRunningInstance "PickDone.exe" initA
+  !insertmacro KillRunningInstance "拾事.exe" initB
   Sleep 800
 !macroend
 !macro customUnInit
-  nsExec::Exec 'taskkill /IM "PickDone.exe" /F'
-  nsExec::Exec 'taskkill /IM "拾事.exe" /F'
+  !insertmacro KillRunningInstance "PickDone.exe" uninitA
+  !insertmacro KillRunningInstance "拾事.exe" uninitB
   Sleep 800
 !macroend
 !macro customInstall

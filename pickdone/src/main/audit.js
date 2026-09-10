@@ -1,6 +1,7 @@
 /**
  * App-side audit log — appends renderer-initiated writes to the SAME JSONL trail the CLI writes
- * (userData/cli-audit.jsonl, 5MB rotation to .1, line schema { ts, time, actor, action, argv, targets, changes, note }).
+ * (userData/cli-audit.jsonl, 5MB rotation to timestamped archives cli-audit.jsonl.<ms> with the newest 4 kept,
+ * line schema { ts, time, actor, action, argv, targets, changes, note }).
  *
  * actor is 'app' (vs the CLI's 'cli') so the existing CLI `log` command renders both origins from one file.
  * No double-logging by construction: CLI write commands hit db.js directly inside the CLI process
@@ -262,6 +263,31 @@ function noteFor (op, params, result) {
 
 /* ================= append (mirrors cli/audit.js: rotation before append, sync write) ================= */
 
+/** Keep at most the 4 newest timestamped archives of `file`; delete the rest (best-effort). */
+function pruneArchives (file) {
+  const prefix = path.basename(file) + '.'
+  const archives = fs.readdirSync(path.dirname(file))
+    .filter(n => n.startsWith(prefix) && /^\d+$/.test(n.slice(prefix.length)))
+    .sort((a, b) => Number(a.slice(prefix.length)) - Number(b.slice(prefix.length)))
+  for (const name of archives.slice(0, Math.max(0, archives.length - 4))) {
+    try { fs.unlinkSync(path.join(path.dirname(file), name)) } catch { /* best-effort */ }
+  }
+}
+
+/** Rotate `file` to a timestamped archive name (cli-audit.jsonl.<ms>), then prune old archives.
+ *  2026-09-10 P2: the old fixed `.1` target let the two writers (App + CLI rotate the SAME JSONL
+ *  from different processes) destroy each other's data — A's unlinkSync('.1') could delete the 5MB
+ *  file B had JUST renamed into '.1'. Timestamped targets make both renames non-destructive (a
+ *  same-millisecond collision bumps the stamp instead of overwriting), and pruning keeps the
+ *  archive set bounded at 4. */
+function rotateArchive (file) {
+  let stamp = Date.now()
+  let rolled = file + '.' + stamp
+  while (fs.existsSync(rolled)) rolled = file + '.' + (++stamp)
+  fs.renameSync(file, rolled)
+  pruneArchives(file)
+}
+
 function appendEntry (entry) {
   const file = auditFile()
   fs.mkdirSync(path.dirname(file), { recursive: true })
@@ -272,11 +298,7 @@ function appendEntry (entry) {
     try {
       try {
         const st = fs.statSync(file)
-        if (st.size > maxBytes) {
-          const rolled = file + '.1'
-          if (fs.existsSync(rolled)) fs.unlinkSync(rolled)
-          fs.renameSync(file, rolled)
-        }
+        if (st.size > maxBytes) rotateArchive(file)
       } catch (e) { /* no file on first write */ }
       fs.appendFileSync(file, JSON.stringify(entry) + '\n')
       return

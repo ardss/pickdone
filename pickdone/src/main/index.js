@@ -598,6 +598,9 @@ function dbApi () { return { queryTodos: p => dbm.call('queryTodos', p), ...prox
 let quitting = false // re-entrancy guard for the will-quit flush window (see below)
 let flushDone = false // flush window finished; second will-quit passes through so the native quit event (updater autoInstallOnAppQuit) fires
 app.on('before-quit', () => {
+  // Second pass (the re-issued app.quit() below): the DB is already closed, re-broadcasting the flush
+  // would only be a dead letter — renderer invokes would fail against a closed handle.
+  if (flushDone) return
   quitByUser = true
   // Before quitting, broadcast the renderer flush of debounced mirrors (the last write within dbMirror's 2s / disaster-snapshot 800ms window would be silently lost)
   // 2026-09-10 P1: previously only the main window was notified — the float window's pending pomodoro
@@ -631,7 +634,15 @@ app.on('will-quit', (event) => {
     try { if (dbm && dbm.close) dbm.close() } catch {}
     flushDone = true
     app.quit()
-    setTimeout(() => { try { app.exit(0) } catch {} }, 3000) // hang fallback only; normally unreachable
+    setTimeout(() => {
+      // Hang fallback only; normally unreachable. 2026-09-10 P2: app.exit() bypasses the quit event
+      // entirely, so electron-updater's autoInstallOnAppQuit would silently SKIP a pending update.
+      // When an update is ready, hand off to quitAndInstall() instead — it quits, installs and
+      // relaunches by itself; only hard-exit when nothing is pending (or the handoff is refused,
+      // e.g. portable builds where quitAndInstall returns false without doing anything).
+      try { if (updater.getStatus().status === 'ready' && updater.quitAndInstall()) return } catch { /* fall through to the hard exit */ }
+      try { app.exit(0) } catch {}
+    }, 3000)
   }, 500)
 })
 
