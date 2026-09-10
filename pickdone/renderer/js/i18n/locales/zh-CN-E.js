@@ -90,7 +90,7 @@ export default {
   "statsE.SettingsModal.shortcutConflictMsg": "快捷键与其他操作冲突，未写入",
   "statsE.SettingsModal.irreversibleConfirmMsg": "此操作不可撤销，确定继续？",
   "statsE.SettingsModal.understandContinueBtn": "我知道后果，继续",
-  "statsE.SettingsModal.sProjects": "项目（实验性 · 不建议日常使用）",
+  "statsE.SettingsModal.sProjects": "项目模块",
   "statsE.SettingsModal.sTodayX": "今日·实验（实验性 · 不建议日常使用）",
   "statsE.SettingsModal.sDeps": "依赖视图（实验性 · 任务依赖关系图）",
   "statsE.SettingsModal.calendarWidgetOpenedMsg": "已打开日历小组件",

@@ -384,8 +384,15 @@ function setProjectDeadline (input, dateInput) {
   const key = 'projectDeadline:' + id
   let deadline = 0
   if (dateInput != null && dateInput !== '' && !/^(none|clear|清除|取消)$/i.test(dateInput)) {
-    deadline = parseMilestoneDate(dateInput)
-    if (!deadline) throw new CliError(`cannot parse date: "${dateInput}" (supported: YYYY-MM-DD / MM-DD / today / +14d / none to clear)`, 'BAD_DATE')
+    // review P2 (2026-09-10): delegate to the same parser as `edit --deadline` (parseDate) — the milestone
+    // parser rejected "tomorrow"/"+3d 09:00" here while `edit --deadline` accepted them. Deadlines stay
+    // day-granular via startOf('day'). (parseMilestoneDate remains milestone-command-only.)
+    try {
+      deadline = dayStartOf(parseDate(dateInput))
+    } catch (e) {
+      throw new CliError(`cannot parse date: "${dateInput}" (supported: YYYY-MM-DD / today / tomorrow / +14d / none to clear)`, 'BAD_DATE')
+    }
+    if (!deadline) throw new CliError(`cannot parse date: "${dateInput}" (supported: YYYY-MM-DD / today / tomorrow / +14d / none to clear)`, 'BAD_DATE')
   }
   open().call('setMeta', [key, String(deadline)])
   audit.record({

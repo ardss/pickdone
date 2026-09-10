@@ -89,7 +89,7 @@ export default {
   "statsE.SettingsModal.shortcutConflictMsg": "Shortcut conflicts with another action, not saved",
   "statsE.SettingsModal.irreversibleConfirmMsg": "This cannot be undone. Continue?",
   "statsE.SettingsModal.understandContinueBtn": "I understand, continue",
-  "statsE.SettingsModal.sProjects": "Projects (experimental — not recommended for daily use)",
+  "statsE.SettingsModal.sProjects": "Projects module",
   "statsE.SettingsModal.sTodayX": "Today Lab (experimental — not recommended for daily use)",
   "statsE.SettingsModal.sDeps": "Dependency view (experimental — task dependency graph)",
   "statsE.SettingsModal.createdMsg": "Created",

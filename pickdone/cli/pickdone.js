@@ -93,7 +93,7 @@ Write commands:
          [--reminder same as date] [--category name] [--difficulty 0-3] [--estimate 0-20]
   done   <taskId|keyword>         complete a task (--no-sub-cascade to skip subtasks; --at "YYYY-MM-DD HH:mm" backdates completedAt)
   undo   <taskId|keyword>         undo completion
-  edit   <taskId|keyword> [--content text] [--desc text] [--date value|none] [--reminder value] [--remind-offset "10,30"|none] [--remind-extra "D HH:mm,..."|none] [--category name] [--important 0|1] [--urgent 0|1] [--priority 0-3] [--difficulty 0-3] [--deadline date|none] [--estimate 0-20]
+  edit   <taskId|keyword> [--content text] [--desc text] [--date value|none] [--reminder value|none] [--remind-offset "10,30"|none] [--remind-extra "D HH:mm,..."|none] [--category name] [--important 0|1] [--urgent 0|1] [--priority 0-3] [--difficulty 0-3] [--deadline date|none] [--estimate 0-20]
          --date none|clear: clear the date — task moves back to the todo box (main reminder drops with the date and that day's schedule chips are removed, same as the App; no-op with changed:0 if already undated)
          --remind-offset: minutes BEFORE the main reminder (needs --reminder set); --remind-extra: extra absolute datetimes
   sort   <taskId|keyword> top|up|down|bottom|before <task2>|after <task2>   manual order (scoped to the task's own day; edit --date first to co-locate)
@@ -144,8 +144,13 @@ Environment:
 
 /* ================= formatting ================= */
 const NO_DATE = 'no date'
-/** `--date none|clear` = clear the date (task moves back to the todo box) — exact words, case-insensitive */
-const isDateClear = v => v != null && v !== true && /^(none|clear)$/.test(String(v).trim().toLowerCase())
+/** `--date none|clear` = clear the date (task moves back to the todo box) — exact words, case-insensitive.
+ *  '' is accepted too (review P2 2026-09-10): `--date ""` used to slip past this into parseDate('')=0, a
+ *  partial todoTime-only write the App can never produce (no reminder drop, no chip cascade). */
+const isDateClear = v => v != null && v !== true && /^(none|clear)?$/.test(String(v).trim().toLowerCase())
+/** `--reminder none|clear` clears the main reminder — same clear words as --date (review P2 2026-09-10:
+ *  it used to go straight to parseDate and throw, unlike --remind-offset/--remind-extra which accept none) */
+const isReminderClear = v => v != null && v !== true && /^(none|clear)$/.test(String(v).trim().toLowerCase())
 function fmtDay (t) {
   if (!t.dayStart && !t.todoTime) return NO_DATE
   return dayjs(t.todoTime || t.dayStart).format('MM-DD HH:mm').replace(' 00:00', '')
@@ -215,7 +220,8 @@ async function main () {
   }
   const emitNext = (data, next) => {
     if (opts.json) console.log(JSON.stringify({ ok: true, command: cmd, data, next }, null, 2))
-    else console.log(data)
+    // review P2 (2026-09-10): non-JSON dry-run previews pass objects here — printing them raw produced "[object Object]"
+    else console.log(typeof data === 'object' && data !== null ? JSON.stringify(data, null, 2) : data)
   }
   const emitList = (rows, lunarOf) => {
     if (opts.json) return emit(rows)
@@ -589,6 +595,9 @@ async function main () {
       if (!op) throw new lib.CliError('usage: batch <done|date|category|tag> <taskId...> [--to <date|name|id>] [--add <tag>|--rm <tag>] [--dry-run]', 'USAGE')
       if (dry) {
         const r = lib.batchRun(op, ids, { to: opts.to, add: opts.add, rm: opts.rm, dryRun: true })
+        // review P2 (2026-09-10): exit-code parity with the real run below — a dry-run with failures must be
+        // visible to script pipelines too (it used to always exit 0)
+        if (r.failures.length) process.exitCode = 2
         if (opts.json) return emitNext(r, ['remove --dry-run to actually run'])
         if (!r.outcomes.length) return console.log('(no tasks)')
         for (const o of r.outcomes) o.ok ? console.log('= would ' + o.label + '  (' + o.taskId + ')') : console.log('✗ ' + o.taskId + ' ' + o.error)
@@ -642,7 +651,8 @@ async function main () {
       if (dry) {
         const patch = {}
         if (opts.content) patch.taskContent = opts.content
-        if (opts.date) patch.todoTime = isDateClear(opts.date) ? 0 : lib.parseDate(opts.date)
+        if (opts.date !== undefined) patch.todoTime = isDateClear(opts.date) ? 0 : lib.parseDate(opts.date)
+        if (opts.reminder !== undefined) patch.reminderTime = isReminderClear(opts.reminder) ? 0 : lib.parseDate(opts.reminder)
         if (opts.important != null) patch.important = parseInt(opts.important, 10) ? 1 : 0
         if (opts.urgent != null) patch.urgent = parseInt(opts.urgent, 10) ? 1 : 0
         if (opts.priority != null) patch.priority = parseInt(opts.priority, 10)
@@ -655,7 +665,7 @@ async function main () {
       if (opts.content) patch.taskContent = opts.content
       if (opts.desc) patch.taskDescribe = opts.desc
       if (opts.date !== undefined && !dateClear) patch.todoTime = lib.parseDate(opts.date)
-      if (opts.reminder !== undefined) patch.reminderTime = lib.parseDate(opts.reminder)
+      if (opts.reminder !== undefined) patch.reminderTime = isReminderClear(opts.reminder) ? 0 : lib.parseDate(opts.reminder)
       if (opts.category !== undefined) patch.categoryId = lib.resolveCategory(opts.category) || 0
       if (opts.important != null) patch.important = parseInt(opts.important, 10) ? 1 : 0
       if (opts.urgent != null) patch.urgent = parseInt(opts.urgent, 10) ? 1 : 0
@@ -669,6 +679,24 @@ async function main () {
       if (!Object.keys(patch).length && !dateClear && opts.estimate == null && opts['remind-offset'] == null && opts['remind-extra'] == null) throw new lib.CliError('edit requires at least one field')
       // Apply the main patch before reminder/tomato branches: with --reminder + --remind-offset in one command, the main reminder must be written first (offsets anchor to it)
       const before = lib.resolveTask(opts._[0])
+      // Reschedule re-anchor (review P1 2026-09-10; renderer parity: EditPanel.applyDate) — moving the date must
+      // carry reminders along: the main reminder re-anchors to the new date at its original time-of-day (stays 0
+      // when there was none) and reminderExtra rows shift by the same day-diff. An explicit --reminder on the same
+      // command owns the reminders and suppresses the re-anchor.
+      if (patch.todoTime && opts.reminder === undefined) {
+        if (before.reminderTime) {
+          // EditPanel.applyDate takes hour/minute from the OLD reminder; seconds/millis too, so the CLI's
+          // relative date parses (which carry the current clock's seconds) stay deterministic
+          const r = dayjs(before.reminderTime)
+          patch.reminderTime = +dayjs(patch.todoTime).hour(r.hour()).minute(r.minute()).second(r.second()).millisecond(r.millisecond())
+        }
+        const extras = Array.isArray(before.reminderExtra) ? before.reminderExtra : []
+        const oldDay = before.todoTime ? +dayjs(before.todoTime).startOf('day') : 0
+        if (extras.length && oldDay) {
+          const shift = +dayjs(patch.todoTime).startOf('day').diff(oldDay, 'day')
+          if (shift) patch.reminderExtra = extras.map(x => +dayjs(x).add(shift, 'day'))
+        }
+      }
       if (Object.keys(patch).length) lib.patchTodo(opts._[0], patch)
       const tid2 = lib.resolveTask(opts._[0]).taskId
       // --date none|clear: move the task back to the todo box (renderer-parity field shape + chip cleanup inside clearTodoDate)

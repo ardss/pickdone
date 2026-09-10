@@ -124,6 +124,14 @@ export default {
     },
     setProjectIds (state, ids) { state.projectIds = Array.isArray(ids) ? ids : [] },
     setProjectMeta (state, meta) { state.projectMeta = meta || {} },
+    /** Merge loaded meta into state per id/key (review P2 2026-09-10): the old snapshot-then-whole-replace
+     *  commit rolled optimistic writes (setProjectStatus) back to stale reads that landed inside the await
+     *  window — merging only touches the ids/keys actually read; loaded values win over existing ones. */
+    mergeProjectMeta (state, patch) {
+      const next = { ...state.projectMeta }
+      for (const id of Object.keys(patch || {})) next[id] = Object.assign({}, next[id], patch[id])
+      state.projectMeta = next
+    },
     /** Set project lifecycle status: memory + meta persistence (same degradation as setProject) */
     setProjectStatus (state, { id, status }) {
       const norm = normalizeStatus(status)
@@ -139,22 +147,25 @@ export default {
     /** Unified loading of project metadata: status + deadline + next milestone (views/sidebar read only via this getter) */
     async loadProjectMeta ({ state, commit }) {
       if (!state.projectIds.length || !window.todoAPI || !window.todoAPI.dbCall) return
-      const meta = { ...state.projectMeta }
+      const patch = {}
       const today0 = +dayjs().startOf('day')
       for (const id of state.projectIds) {
-        const cur = meta[id] || {}
+        const entry = {}
         // Status/deadline re-read UNCONDITIONALLY (review P1 2026-09-10): an `undefined` guard made both
         // sticky after the first load — a CLI `project --status/--deadline` write never reached a running
         // app through the external-write reload path, silently breaking CLI→app parity. Cheap meta reads.
-        try { cur.status = normalizeStatus(await window.todoAPI.dbCall('getMeta', statusKey(id))) } catch { cur.status = 'active' }
-        try { cur.deadline = Number(await window.todoAPI.dbCall('getMeta', deadlineKey(id))) || 0 } catch { cur.deadline = 0 }
-        if (!cur.nextMilestone) {
+        try { entry.status = normalizeStatus(await window.todoAPI.dbCall('getMeta', statusKey(id))) } catch { entry.status = 'active' }
+        try { entry.deadline = Number(await window.todoAPI.dbCall('getMeta', deadlineKey(id))) || 0 } catch { entry.deadline = 0 }
+        // Milestone re-read UNCONDITIONALLY too (review P1 2026-09-10): the `if (!cur.nextMilestone)` guard
+        // cached it for the app's lifetime, so CLI `milestone add/rm` writes never reached a running app and
+        // a rolled-over date kept showing a stale milestone. Read failure falls back to null.
+        try {
           const ms = await loadMilestones(id)
-          cur.nextMilestone = ms.filter(m => m.date >= today0)[0] || null
-        }
-        meta[id] = cur
+          entry.nextMilestone = ms.filter(m => m.date >= today0)[0] || null
+        } catch { entry.nextMilestone = null }
+        patch[id] = entry
       }
-      commit('setProjectMeta', meta)
+      commit('mergeProjectMeta', patch)
     },
     /** Startup loading: SQLite is authoritative; when the table is empty and a local cache exists, perform a one-time migration (LS → SQLite) */
     async init ({ commit }) {
