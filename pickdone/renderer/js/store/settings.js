@@ -118,6 +118,20 @@ export const SETTING_ENUMS = {
   ]
 }
 
+/** Numeric-setting coercion (pure, unit-tested): the CLI settings manifest historically typed some numeric
+ *  fields (categoryId / durations / counts) as strings; strict-equality consumers in todo.js then broke
+ *  (t.categoryId === settings.todoBoxCategoryId never matched; new tasks got "3" written as categoryId).
+ *  Coercion is declaration-driven, not a blanket cast: a field is corrected only when DEFAULT_SETTINGS
+ *  declares it as a number AND the incoming value is a string that parses to a finite number. */
+export function coerceNumericSettings (merged) {
+  for (const k of Object.keys(merged)) {
+    if (typeof DEFAULT_SETTINGS[k] !== 'number') continue
+    const v = merged[k]
+    if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) merged[k] = Number(v)
+  }
+  return merged
+}
+
 function load () {
   // Corrupted-JSON fallback: this module executes at top level; a throw = the whole store chain's import fails and white-screens; falling back to {} lets the DB restore path (initFromDb) take over
   let raw = {}
@@ -127,6 +141,7 @@ function load () {
   const merged = { ...DEFAULT_SETTINGS, ...raw }
   // Strip volatile keys already migrated to runtimeState (leftovers in old localStorage)
   delete merged.autoBackupLastAt; delete merged.tomatoRecordAddCount; delete merged.tomatoRecordAddDate
+  coerceNumericSettings(merged)
   // No existing users pre-release: the legacy enum normalization table (LEGACY) was removed together with the old compat code
   // Completed groups folded by default (finalized by users 2026-08-30). Old users' saves with foldedTodoList=[] would override the new default,
   // so a one-time migration backfills it; afterwards the user's manual expand/collapse wins (removal from the list counts as expressed intent, no re-backfill).
@@ -171,7 +186,7 @@ export default {
       persist(state)
     },
     restore (state, saved) {
-      Object.assign(state, { ...DEFAULT_SETTINGS, ...(saved || {}) })
+      Object.assign(state, coerceNumericSettings({ ...DEFAULT_SETTINGS, ...(saved || {}) }))
       persist(state)
     }
   },
@@ -200,6 +215,7 @@ export default {
         if (k === '_savedAt') continue
         if (JSON.stringify(db[k]) !== JSON.stringify(state[k])) patch[k] = db[k]
       }
+      coerceNumericSettings(patch)
       if (Object.keys(patch).length) commit('updateSettings', patch)
       else mirrorToDb('db.settingsState', { ...state, _savedAt: db._savedAt, schemaV: SETTINGS_SCHEMA_V })
     }
