@@ -249,6 +249,7 @@ async function main () {
       // the saved view owns the date window (an overdue/no-date view must not be clipped to today).
       const view = opts.view != null && opts.view !== true ? lib.resolveView(opts.view) : null
       const range = ['today', 'tomorrow', 'week', 'overdue', 'future'].includes(first) ? first : (opts.all || view ? null : 'today')
+      if (view && opts.on != null && opts.on !== true) throw new lib.CliError('--view and --on are mutually exclusive (--view owns the date window)', 'USAGE')
       if (first && !range && !opts.all && !opts.on) throw new lib.CliError(`unknown range "${first}" (valid: today/tomorrow/week/overdue/future or --all or --on <date>)`)
       // --on <date>: what's scheduled on one specific day (with times) — the "what should I slot at 11am tomorrow" view
       if (opts.on != null && opts.on !== true) {
@@ -397,16 +398,23 @@ async function main () {
         if (opts.json) return emit(r)
         return console.log(`✓ "${r.name}" ${r.isProject ? 'is now a project' : 'restored to plain category'}`)
       }
-      if (opts.status !== undefined) {
+      // review P2 (2026-09-10): --status and --deadline used to early-return per flag, silently dropping
+      // the second flag on combined invocations; both now apply in one call
+      if (opts.status !== undefined || opts.deadline !== undefined) {
         if (opts.status === true) throw new lib.CliError('--status needs a value: ' + lib.PROJECT_STATUS_VALUES.join('|') + '|none', 'USAGE')
-        const r = lib.setProjectStatus(name, String(opts.status))
+        let r = {}
+        const parts = []
+        if (opts.status !== undefined) {
+          r = lib.setProjectStatus(name, String(opts.status))
+          parts.push(r.cleared ? 'status cleared (falls back to active)' : `status → ${r.status}`)
+        }
+        if (opts.deadline !== undefined) {
+          const rd = lib.setProjectDeadline(name, opts.deadline)
+          r = { ...r, deadline: rd.deadline, name: rd.name }
+          parts.push(rd.deadline ? `deadline → ${dayjs(rd.deadline).format('YYYY-MM-DD')}` : 'deadline cleared')
+        }
         if (opts.json) return emit(r)
-        return console.log(r.cleared ? `✓ "${r.name}" status cleared (falls back to active)` : `✓ "${r.name}" status → ${r.status}`)
-      }
-      if (opts.deadline !== undefined) {
-        const r = lib.setProjectDeadline(name, opts.deadline)
-        if (opts.json) return emit(r)
-        return console.log(r.deadline ? `✓ "${r.name}" deadline → ${dayjs(r.deadline).format('YYYY-MM-DD')}` : `✓ "${r.name}" deadline cleared`)
+        return console.log(`✓ "${r.name}" ` + parts.join(', '))
       }
       const id = lib.resolveCategory(name)
       const c = lib.getCategories().find(x => x.categoryId === id)

@@ -954,6 +954,7 @@ function addCategory (name, { color, parent, folder } = {}) {
     const pid = resolveCategory(parent)
     const p = cats.find(c => c.categoryId === pid)
     if (!p || !p.folderIs) throw new CliError('parent "' + parent + '" is not a folder', 'CATEGORY_NOT_FOLDER')
+    if (folder) throw new CliError('nested folders are not supported — the App renders folders as roots only (same guard as category move)', 'CATEGORY_NESTED_FOLDER')
     parentId = pid
   }
   const cat = {
@@ -1181,6 +1182,11 @@ function batchRun (op, ids, { to, add, rm, dryRun } = {}) {
     try { t = resolveTaskExact(id, pool) } catch (e) {
       failures.push({ taskId: id, error: e.message })
       outcomes.push({ taskId: id, ok: false, error: e.message })
+      continue
+    }
+    if (op === 'done' && t.complete) {
+      // review P2 (2026-09-10): batch done used to rewrite completedAt and count the row as changed
+      outcomes.push({ taskId: t.taskId, ok: true, skipped: true, label: `already complete "${t.taskContent}"` })
       continue
     }
     if (dryRun) { outcomes.push({ taskId: t.taskId, ok: true, dryRun: true, label: describe(t) }); continue }

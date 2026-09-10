@@ -265,15 +265,25 @@ function noteFor (op, params, result) {
 function appendEntry (entry) {
   const file = auditFile()
   fs.mkdirSync(path.dirname(file), { recursive: true })
-  try {
-    const st = fs.statSync(file)
-    if (st.size > maxBytes) {
-      const rolled = file + '.1'
-      if (fs.existsSync(rolled)) fs.unlinkSync(rolled)
-      fs.renameSync(file, rolled)
+  // review P2 (2026-09-10): the CLI rotates the same file concurrently — an append landing inside the
+  // other process's rename window used to throw and the line was lost (fire-and-forget). Retry once with
+  // a fresh stat; the retry lands on the post-rotation file.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      try {
+        const st = fs.statSync(file)
+        if (st.size > maxBytes) {
+          const rolled = file + '.1'
+          if (fs.existsSync(rolled)) fs.unlinkSync(rolled)
+          fs.renameSync(file, rolled)
+        }
+      } catch (e) { /* no file on first write */ }
+      fs.appendFileSync(file, JSON.stringify(entry) + '\n')
+      return
+    } catch (e) {
+      if (attempt > 0) throw e
     }
-  } catch (e) { /* no file on first write */ }
-  fs.appendFileSync(file, JSON.stringify(entry) + '\n')
+  }
 }
 
 /**
@@ -300,8 +310,26 @@ function recordAppOp (op, params, opts) {
   } catch (e) { /* audit failure never affects business writes */ }
 }
 
+/** Record a main-process write that does NOT flow through todo-db:call (e.g. import:run's bulk insert) —
+ *  same line schema, explicit action. Fire-and-forget by the caller's contract. */
+function recordCustom (action, argv, targets, changes, note) {
+  try {
+    appendEntry({
+      ts: Date.now(),
+      time: dayjs().format('YYYY-MM-DD HH:mm:ss'),
+      actor: 'app',
+      action,
+      argv,
+      targets: targets || [],
+      changes: changes || [],
+      note
+    })
+  } catch (e) { /* audit failure never affects business writes */ }
+}
+
 module.exports = {
   recordAppOp,
+  recordCustom,
   shouldAudit,
   actionFor,
   auditFile,

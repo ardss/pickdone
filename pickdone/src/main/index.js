@@ -1043,6 +1043,9 @@ function registerIpc () {
       // Arbitrary-path read primitive sealed off: only the path most recently returned by the main-process dialog is accepted
       if (!lastPickedImportPath || f !== lastPickedImportPath) throw new Error('import: path not granted by picker')
       const r = require('../../cli/import.js').importFile(f, { dryRun: false })
+      // review P2 (2026-09-10): bulk import writes straight through the main process and bypassed the
+      // todo-db:call audit hook — land one explicit line so app-side imports are traceable like CLI imports
+      try { appAudit.recordCustom('import', ['import:run', f], [], [], 'imported ' + ((r && r.imported) || 0) + ' task(s)') } catch { /* best-effort */ }
       // 与 todo-db:call 写路径对齐(2026-09-09 P2):导入落库后必须刷新调度器并广播,否则应用内导入后
       // 主窗口列表陈旧、已导入的提醒全部静默丢失
       try { scheduler.reloadAll(dbApi()) } catch (err) { log.warn('[Import] reloadAll failed', err) }
