@@ -75,6 +75,10 @@ description: Use when the user or an agent needs to read, create, edit, complete
 | 手动排序（"把这个任务置顶/移到XX后面"） | `sort <taskId\|关键词> top\|up\|down\|bottom` 或 `sort <A> before\|after <B> --json`（同一天内排序；跨天先 edit --date） | JSON `dayOrder` 数组回读顺序 |
 | 设预计番茄（"这个任务大概要3个番茄"） | `add ... --estimate 3` 或 `edit <taskId> --estimate 0-20 --json`（0=清除） | `get --json` 读 `tomatoEstimate` 需经 estimate map；用 `edit --estimate 3 --json` 响应回读 |
 | 新建分类（"建个分类叫XX"） | `category add <名> [--color hex] [--parent 文件夹] --json` | `categories --json` 回读 |
+| 批量操作（"这5条都勾掉/都改到明天"） | `batch done\|date\|category\|tag <taskId...> [--dry-run]`（只收精确 id） | JSON `data.matched/changed/failures` 回读 |
+| 保存的筛选视图（"建个视图叫XX"） | `view add <名> [--category/--priority/--overdue/--nodate]`；`view list`/`view rm`；`list --view <名>` | `view list` 回读 |
+| 项目状态（"项目XX暂停了/做完了"） | `project <名\|id> --status active\|paused\|done\|cancelled\|none`；`projects [--status <v>]` | `projects --json` 看 `status` |
+| 农历注记 | `list ... --lunar`（文本附注+JSON `lunar` 字段） | — |
 | 分类改名 | `category rename <名\|id> <新名> --json` | `categories --json` |
 | 删除分类 | `category rm <名\|id> --yes --json`（软删，App内可恢复；任务保留仅脱离分类；**须用户明确要求**） | `categories --json` 应无此项 |
 | 标签管理（"把#work全改成#工作""我的标签有哪些"） | `tag list` / `tag rename <旧> <新>` / `tag rm <名>` --json | `tag list` 回读；标签来自标题/描述里的 #tag，无独立存储 |
@@ -83,8 +87,8 @@ description: Use when the user or an agent needs to read, create, edit, complete
 
 ## 能力边界（2026-09-02 复核，明确不支持——直说，不要瞎试）
 
-以下能力暂无 CLI 等价命令，用户提出时明确告知"请在 App 中操作"：手动拖拽排序（但 `sort` 命令已覆盖同日内排序语义）、侧边栏天气/日历视图等纯 UI 功能。实验性模块按定稿不入 CLI：习惯打卡、保存过滤器（智能清单）。
-注意（已支持，别再说不行）：**设置读写（`settings list/get/set`，备份目录/主题/每日番茄目标/开机自启/回收站保留天数等，热同步到运行中App；锁屏密码类保护键除外）**、**分类增删改（`category add/rename/rm`）**、**标签管理（`tag list/rename/rm`）**、**专注记录查询（`tomato list`）**、**专注记录修正/删除（`tomato record fix/rm`）**、**手动排序（`sort`，同日内 top/up/down/bottom/before/after）**、**预计番茄（`--estimate 0-20`）**、**单日排程视图（`list --on <date>`）**、**时间轴排程芯片（`plan <任务> HH:mm`，与今日页24h轨道同库，`plan list`/`plan rm`）。**铁律（2026-09-03用户定稿）：提醒时刻≠排程芯片，两者独立——`add/edit --date` 写了具体时刻（如 `tomorrow 12:00`）时 CLI 已自动同步一枚芯片上时间轴；纯日期（`tomorrow`）不自动排。edit 改期带时刻时旧日芯片自动迁到新日；delete 任务时芯片自动清。若要把纯日期任务排上时间轴，手动 `plan <任务> HH:mm`**、**多重提醒（`edit --remind-offset "10,30"`=主提醒前提前10/30分；`edit --remind-extra "2026-09-05 09:00,..."`=额外绝对时刻；none 清除，offset 需先设主提醒）**、**附件（`attachment add/list/rm`，50MB 上限扩展名白名单，与 UI 上传同库）**、四象限过滤（`list --quad q1..q4`）与四象限字段（`edit --important/--urgent`）、优先级（`--priority`）、难度（`--difficulty 0-3`）、截止日期（`--deadline`）、重复规则创建/修改（`repeat on/off`，完成重复任务自动续期）、子任务含排序（`subtask`，`move` 支持上/下/顶/底/到第N）、项目与里程碑（`project`/`milestone`）、番茄专注（`tomato start/stop/attach/status`）、**专注补录到指定日期（`tomato backfill`，可指定日期/时刻/时长，可 --free 不关联任务）**、跨应用导入（`import`）、唤起应用窗口（`open`）。
+以下能力暂无 CLI 等价命令，用户提出时明确告知"请在 App 中操作"：手动拖拽排序（但 `sort` 命令已覆盖同日内排序语义）、侧边栏天气/日历视图等纯 UI 功能。实验性模块按定稿不入 CLI：习惯打卡。（2026-09-10 更新：保存过滤器已升级为「保存视图」双端共享，见 `view` 命令。）
+注意（已支持，别再说不行）：**设置读写（`settings list/get/set`，备份目录/主题/每日番茄目标/开机自启/回收站保留天数等，热同步到运行中App；锁屏密码类保护键除外）**、**分类增删改（`category add/rename/rm`）**、**标签管理（`tag list/rename/rm`）**、**专注记录查询（`tomato list`）**、**专注记录修正/删除（`tomato record fix/rm`）**、**手动排序（`sort`，同日内 top/up/down/bottom/before/after）**、**预计番茄（`--estimate 0-20`）**、**单日排程视图（`list --on <date>`）**、**时间轴排程芯片（`plan <任务> HH:mm`，与今日页24h轨道同库，`plan list`/`plan rm`）。**铁律（2026-09-03用户定稿）：提醒时刻≠排程芯片，两者独立——`add/edit --date` 写了具体时刻（如 `tomorrow 12:00`）时 CLI 已自动同步一枚芯片上时间轴；纯日期（`tomorrow`）不自动排。edit 改期带时刻时旧日芯片自动迁到新日；delete 任务时芯片自动清。若要把纯日期任务排上时间轴，手动 `plan <任务> HH:mm`**、**多重提醒（`edit --remind-offset "10,30"`=主提醒前提前10/30分；`edit --remind-extra "2026-09-05 09:00,..."`=额外绝对时刻；none 清除，offset 需先设主提醒）**、**附件（`attachment add/list/rm`，50MB 上限扩展名白名单，与 UI 上传同库）**、四象限过滤（`list --quad q1..q4`）与四象限字段（`edit --important/--urgent`）、优先级（`--priority`）、难度（`--difficulty 0-3`）、截止日期（`--deadline`）、重复规则创建/修改（`repeat on/off`，完成重复任务自动续期）、子任务含排序（`subtask`，`move` 支持上/下/顶/底/到第N）、项目与里程碑（`project`/`milestone`）、番茄专注（`tomato start/stop/attach/status`）、**专注补录到指定日期（`tomato backfill`，可指定日期/时刻/时长，可 --free 不关联任务）**、**跨应用导入（`import`）**、**批量操作（`batch done/date/category/tag`，只收精确 taskId，`--dry-run` 预览，逐条失败不中断）**、**保存视图（`view add/list/rm` + `list --view <名>`，与 App 筛选视图同库双端共享；条件仅支持 分类/优先级/日期模式 三维）**、**项目状态（`project --status`，与 App 项目面板同字段）**、**农历（`list --lunar`）**、唤起应用窗口（`open`）。
 
 ## 日期参数说明
 
@@ -114,20 +118,24 @@ description: Use when the user or an agent needs to read, create, edit, complete
 读（零风险，可随时用）：
 ```
 overview                          # 今日完成度/逾期/无日期/回收站计数
-list [--all|today|tomorrow|week|overdue|future] [--done|--undone] [--no-date] [--category 名称] [--keyword 词] [--quad q1-q4] [--limit N]
+list [--all|today|tomorrow|week|overdue|future] [--done|--undone] [--no-date] [--category 名称] [--keyword 词] [--quad q1-q4] [--view 视图名] [--lunar] [--limit N]
 search <关键词> [--all]           # 全库内容/描述搜索
 get <taskId|关键词>               # 单任务完整字段
-categories                        # 分类列表（id + 名称）
-category add <名> [--color hex] [--parent 文件夹]   # 新建分类（写操作，名称须唯一）
+categories                        # 分类列表（树状缩进，[folder] 标记；--json 增 folderIs/folderId/parentName）
+category add <名> [--color hex] [--parent 文件夹] [--folder]   # 新建分类（--folder 建文件夹型；名称须唯一）
+category move <名|id> --parent <文件夹|root>        # 移动到文件夹下/根（写；环守卫：文件夹不可挂进自己后代）
 category rename <名|id> <新名>                      # 分类改名（写）
 category rm <名|id> [--yes]                         # 软删分类（任务保留；须用户明确要求）
 tag [list]                        # 标签列表（来自标题/描述的 #tag，带任务计数）
 tag rename <旧> <新>               # 全库改写 #旧 → #新
 tag rm <名>                        # 全库剥离某标签
-projects                          # 项目列表（进度/专注分钟/逾期/未来7天；项目=被标记的分类）
-project <名称|id> [--on|--off]    # 项目详情；--on 设为项目 / --off 取消（写操作）
+projects [--status <v>]           # 项目列表（进度/专注分钟/逾期/未来7天/状态；项目=被标记的分类）
+project <名称|id> [--on|--off] [--status active|paused|done|cancelled|none]   # 项目详情/设项目/改状态（写；none=清除回退active）
 stats [--from YYYY-MM-DD --to YYYY-MM-DD]   # 每日完成量+专注分钟（默认近7天）
 recycle                           # 回收站列表
+view list                         # 保存视图列表（id/名称/条件摘要；与 App「保存的筛选视图」同库）
+view add <名> [--category 名|id] [--priority 0-3] [--overdue] [--nodate]   # 新建视图（写，名称唯一）
+view rm <名|id>                   # 删除视图（写）
 tomato list [--date today|yesterday|YYYY-MM-DD] [<任务关键词>] [--n 30]   # 专注记录查询（只读；manual=补录）
 log [--n 20] [--action add|edit|done|undo|delete|restore|purge|subtask|project.set|category.add|category.rename|category.delete|tag.rename|tag.remove|repeat.on|milestone.add|tomato.backfill]   # 外部写操作审计流水
 doctor                            # 环境自检
@@ -143,6 +151,11 @@ edit <taskId|关键词> [--content 新标题] [--desc 文本] [--date tomorrow] 
 delete <taskId|关键词>            # → 回收站
 restore <taskId|关键词>           # 从回收站恢复
 purge --yes                       # 清空回收站（危险，需显式确认）
+batch done <taskId>...                        # 批量完成（写；只收精确 id）
+batch date <taskId>... --to <日期>            # 批量改期（写；日程块随迁）
+batch category <taskId>... --to <分类|id>     # 批量归类（写）
+batch tag <taskId>... (--add <tag> | --rm <tag>)  # 批量加/摘标签（写）
+batch <...> --dry-run                         # 任何 batch 先预览，不落库
 import <file.csv> [--format auto|ticktick|dida365|todoist] [--dry-run] [--category 名称] [--no-lists]
                                   # 从其他应用迁移（滴答清单/TickTick/Todoist 备份 CSV）。默认自动识别格式，
                                   # 识别失败再手动 --format；清单名默认建成分类（--no-lists 关闭）；
