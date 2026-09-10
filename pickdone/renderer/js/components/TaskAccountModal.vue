@@ -26,7 +26,7 @@
               <div class="ta-edit-row"><span>{{ $t('statsK.TomatoAccount.start') }}</span>
                 <el-time-picker size="small" format="HH:mm" :clearable="false" :model-value="minToDate(draft.startMin)" @update:model-value="v => { draft.startMin = dateToMin(v) }"/></div>
               <div class="ta-edit-row"><span>{{ $t('statsK.TomatoAccount.focusMin') }}</span>
-                <el-input-number size="small" :min="1" :max="720" :step="5" controls-position="right" :model-value="draft.dur" @update:model-value="v => { draft.dur = v }"/></div>
+                <el-input-number size="small" :min="1" :max="600" :step="5" controls-position="right" :model-value="draft.dur" @update:model-value="v => { draft.dur = v }"/></div>
               <div v-if="!draft.abandoned" class="ta-edit-row"><span>{{ $t('statsK.TomatoAccount.restMin') }}</span>
                 <el-input-number size="small" :min="0" :max="120" :step="5" controls-position="right" :model-value="draft.rest" @update:model-value="v => { draft.rest = v }"/></div>
               <div class="ta-edit-row"><span>{{ $t('statsK.TomatoAccount.givenUp') }}</span>
@@ -43,7 +43,7 @@
             <div class="ta-edit-row"><span>{{ $t('statsK.TomatoAccount.start') }}</span>
               <el-time-picker size="small" format="HH:mm" :clearable="false" :model-value="minToDate(draft.startMin)" @update:model-value="v => { draft.startMin = dateToMin(v) }"/></div>
             <div class="ta-edit-row"><span>{{ $t('statsK.TomatoAccount.focusMin') }}</span>
-              <el-input-number size="small" :min="1" :max="720" :step="5" controls-position="right" :model-value="draft.dur" @update:model-value="v => { draft.dur = v }"/></div>
+              <el-input-number size="small" :min="1" :max="600" :step="5" controls-position="right" :model-value="draft.dur" @update:model-value="v => { draft.dur = v }"/></div>
             <div class="ta-edit-row"><span>{{ $t('statsK.TomatoAccount.restMin') }}</span>
               <el-input-number size="small" :min="0" :max="120" :step="5" controls-position="right" :model-value="draft.rest" @update:model-value="v => { draft.rest = v }"/></div>
             <div class="ta-hint">{{ $t('statsK.TomatoAccount.addHint') }}</div>
