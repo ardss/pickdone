@@ -22,6 +22,8 @@ import zhJ from './locales/zh-CN-J.js'
 import zhK from './locales/zh-CN-K.js'
 import zhN from './locales/zh-CN-N.js'
 import zhP from './locales/zh-CN-P.js'
+import zhQ from './locales/zh-CN-Q.js'
+import zhR from './locales/zh-CN-R.js'
 import enA from './locales/en-US-A.js'
 import enB from './locales/en-US-B.js'
 import enC from './locales/en-US-C.js'
@@ -35,6 +37,8 @@ import enJ from './locales/en-US-J.js'
 import enK from './locales/en-US-K.js'
 import enN from './locales/en-US-N.js'
 import enP from './locales/en-US-P.js'
+import enQ from './locales/en-US-Q.js'
+import enR from './locales/en-US-R.js'
 
 function mergeDeep (base, extra) {
   for (const k of Object.keys(extra)) {
@@ -43,8 +47,8 @@ function mergeDeep (base, extra) {
   }
   return base
 }
-const zhAll = [zhMaster, zhA, zhB, zhC, zhD, zhE, zhF, zhG, zhH, zhI, zhJ, zhK, zhN, zhP].reduce((m, x) => mergeDeep(m, x), {})
-const enAll = [enMaster, enA, enB, enC, enD, enE, enF, enG, enH, enI, enJ, enK, enN, enP].reduce((m, x) => mergeDeep(m, x), {})
+const zhAll = [zhMaster, zhA, zhB, zhC, zhD, zhE, zhF, zhG, zhH, zhI, zhJ, zhK, zhN, zhP, zhQ, zhR].reduce((m, x) => mergeDeep(m, x), {})
+const enAll = [enMaster, enA, enB, enC, enD, enE, enF, enG, enH, enI, enJ, enK, enN, enP, enQ, enR].reduce((m, x) => mergeDeep(m, x), {})
 
 const LS_KEY = 'appLocale'
 export const SUPPORTED = [['zh-CN', '简体中文'], ['en-US', 'English']]

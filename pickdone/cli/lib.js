@@ -1207,7 +1207,7 @@ function removeAttachment (input, kind, n) {
    Manifest mirrors renderer store/settings.js DEFAULT_SETTINGS/SETTING_ENUMS (keep in sync; security keys are never settable here). */
 const SETTINGS_MANIFEST = {
   boolean: ['autoDownloadUpdates', 'enableTomatoFloating', 'weatherEnabled', 'taskFlyAnimation', 'closeActionMinimize', 'isCompleteWithSubtasks', 'isTodoEditModalCloseAutoSave', 'isCompleteCheckboxColorFollow', 'runWhenComputerStart', 'hideMainWindowOnStartup', 'enableHardwareAcceleration', 'showNoDate', 'showCompleteNoDate', 'showComplete', 'developerMode', 'showHabitModule', 'showProjectsModule', 'showDepsModule', 'isShowSubTask', 'isCalendarDimUncompleted', 'isShowCalendarPrivacyMode', 'isDefaultSubTaskFolded', 'showHolidayMarkers', 'showTodoCheckboxOrder', 'enableSecurityLock', 'autoBackupEnabled', 'isCalendarBackgroundUserSelected'],
-  number: ['dailyTomatoTarget', 'recycleBinAutoDeleteDays', 'notificationTimeoutInterval', 'todoDescriptionDisplayLineNumber', 'autoBackupIntervalMin', 'autoBackupKeep', 'whiteNoiseVolume', 'tomatoTimeDefault', 'restTimeDefault'],
+  number: ['dailyTomatoTarget', 'dailyLoadWarnThreshold', 'recycleBinAutoDeleteDays', 'notificationTimeoutInterval', 'todoDescriptionDisplayLineNumber', 'autoBackupIntervalMin', 'autoBackupKeep', 'whiteNoiseVolume', 'tomatoTimeDefault', 'restTimeDefault'],
   enum: {
     colorMode: ['light', 'dark', 'system'],
     calendarFontSize: ['small', 'medium', 'large'],

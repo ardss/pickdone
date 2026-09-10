@@ -33,6 +33,7 @@ export const DEFAULT_SETTINGS = {
   weekStartDay: 'mon', // mon|sun
   newTodoDefaultSort: 'top', // top|bottom
   dailyTomatoTarget: 8, // daily tomato target (user-changeable; the product doesn't bake in a "normal amount" judgment)
+  dailyLoadWarnThreshold: 10, // per-day planned-tomato load warning (0 = off); consumed by the Today capacity band and project-panel load badges
   showHolidayMarkers: true,
   todoDescriptionDisplayLineNumber: 3,
   notificationTimeoutInterval: 300000,
