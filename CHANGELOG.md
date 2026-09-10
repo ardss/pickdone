@@ -7,7 +7,7 @@ and versioning follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
-- Module switches restructured: the Today Lab view gets its own switch (default off, completing the two-layer doctrine with the developer-mode master gate), and the projects module graduates from the developer-mode master gate — it now rides on its own switch alone, so turning developer mode off no longer hides shipped project features. The nav gate logic is extracted into a pure, unit-tested helper.
+- The Today Lab view gets its own module switch (default off): it previously hung on the developer-mode master switch alone, so leaving developer mode on from experiment reviews kept the lab entry permanently in the sidebar. The gate logic is extracted into a pure, unit-tested helper; projects/habit/deps keep their existing two-layer gates.
 
 ### Fixed
 - Today page: the project filter now also applies to the card/deck view (it previously affected only list and matrix, letting other projects' tasks flow back while the toolbar claimed otherwise); the project filter dropdown and row badges honor the projects module switch, and a stale `?project=` deep link can no longer set an unremovable filter.
