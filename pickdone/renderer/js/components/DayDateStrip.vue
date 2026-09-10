@@ -186,9 +186,8 @@ export default {
 .ds-day.sel .ds-today-dot { background: #fff; }
 /* 跨月/跨年周:月份边界 1px 分缝 + 非选中月整格淡显(与日历弹窗补位日变灰同一语言) */
 .ds-mseam { width: 1px; height: 16px; background: var(--line, #e7e9ee); margin: 0 2px; flex-shrink: 0; }
-.ds-day.dim:not(.sel) { opacity: 1; }
-/* 跨月淡显改实色中灰(opacity .5 混合后对比度不达标,a11y axe color-contrast) */
-.ds-day.dim:not(.sel) .ds-num, .ds-day.dim:not(.sel) .ds-week { color: var(--text-3); }
+/* 跨月淡显改实色中灰(opacity .5 混合后对比度不达标,a11y axe color-contrast);周名与数字同规则(ds-wd 为实际 DOM 类名,先前选择器笔误周名永不置灰) */
+.ds-day.dim:not(.sel) .ds-num, .ds-day.dim:not(.sel) .ds-wd { color: var(--text-3); }
 .ds-label {
   display: inline-flex; align-items: center; gap: var(--space-1); margin-left: var(--space-2);
   font-size: var(--fs-md); font-weight: 600; color: var(--text-1);

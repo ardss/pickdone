@@ -104,9 +104,28 @@
 import { taskContextMenu } from '../utils/taskMenu.js'
 import { DEFAULT_CAT_COLOR } from '../utils/core.js'
 import { toggleCompleteWithUndo } from '../utils/completeAction.js'
-import { batchMoveWithUndo } from '../utils/confirm.js'
-import { showUndoToast } from '../utils/undoToast.js'
+import { batchMoveWithUndo, deleteWithUndo } from '../utils/confirm.js'
 import { getEstimate } from '../utils/tomatoEstimate.js'
+
+// [navgate-fix] pure-start (extracted by tests/unit-navgate-fix-ui.test.mjs)
+/** Split a batch selection for deletion (same repeat criterion as utils/confirm.js deleteWithUndo:
+ *  repeatId is a valid repeatId). Recurring instances must not bypass the dedicated scope-confirm
+ *  modal, and the modal handles one repeat group per pass, so only the first returns as repeatAsk
+ *  and the rest return as repeatRest (the view keeps them checked for the next pass). Plain rows
+ *  all go through the unified deleteWithUndo exit, semantics identical to single-item delete. */
+function splitBatchDelete (rows) {
+  const isRepeat = t => !!(t && t.repeatId && t.repeatId !== 'null')
+  const plain = []
+  let repeatAsk = null
+  const repeatRest = []
+  for (const t of rows || []) {
+    if (!isRepeat(t)) plain.push(t)
+    else if (!repeatAsk) repeatAsk = t
+    else repeatRest.push(t)
+  }
+  return { plain, repeatAsk, repeatRest }
+}
+// [navgate-fix] pure-end
 
 export default {
   name: 'TodoBoxView',
@@ -212,26 +231,18 @@ export default {
     async batchDelete () {
       const n = this.checkedIds.length
       try { await this.$confirm(this.$t('statsC.TodoBox.confirmDelete', { n }), this.$t('statsC.TodoBox.confirmTitle'), { type: 'warning' }) } catch { return }
-      // Snapshot the ids first: checkedIds is cleared right after deletion, so reading it later in the undo closure would always be empty (root cause of the dead undo button)
-      const ids = [...this.checkedIds]
-      for (const id of ids) {
-        const raw = this.$store.state.todo.todoList.find(x => x.taskId === id)
-        if (raw) await this.$store.dispatch('todo/deleteTodo', raw)
-      }
-      // Undo: batch-restore from the recycle bin (after soft delete the rows are no longer in todoList, so recycleList must be queried)
-      const undoDelete = async () => {
-        for (const id of ids) {
-          const raw = this.$store.state.todo.recycleList.find(x => x.taskId === id)
-          if (raw) await this.$store.dispatch('todo/updateTodoFields', { taskId: id, patch: { delete: false, deletedAt: 0, status: 'update' } })
-        }
-        this.$message.closeAll()
-      }
-      // Unified exit showUndoToast (hover pauses / ✕ closes); the hand-rolled $message version was removed (interaction contract ①)
-      showUndoToast(this.$message.bind(this), [
-        this.$t('statsC.TodoBox.msgDeleted', { n }) + '　',
-        this.$createElement('a', { style: { color: 'var(--brand)', cursor: 'pointer' }, onClick: undoDelete }, this.$t('statsC.TodoBox.undoDelete'))
-      ])
-      this.checkedIds = []
+      // Resolve against the live list first (dead ids deleted elsewhere during batching are excluded),
+      // then split: recurring instances divert to ui/askRepeatDelete (RepeatDeleteModal owns their
+      // deletion), plain tasks go through the unified deleteWithUndo exit -- no hand-rolled undo here
+      const rows = this.checkedIds
+        .map(id => this.$store.state.todo.todoList.find(x => x.taskId === id))
+        .filter(Boolean)
+      const { plain, repeatAsk, repeatRest } = splitBatchDelete(rows)
+      // Keep the recurring selections that did not get a modal this pass checked, so "delete" asks
+      // about the next repeat group when the user confirms again
+      this.checkedIds = repeatRest.map(t => t.taskId)
+      for (const raw of plain) await deleteWithUndo(this, this.$store, raw)
+      if (repeatAsk) this.$store.commit('ui/askRepeatDelete', repeatAsk.taskId)
     },
     ctxMenu (t, e) {
       // Unified task context menu (2026-08-31 consistency consolidation): one set of semantics for edit/complete/move date/pomodoro/copy/recycle bin

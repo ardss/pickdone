@@ -14,8 +14,9 @@
               <button v-if="settings.developerMode && settings.showDepsModule" :class="{on: viewMode==='deps'}" :title="$t('statsE.TodayView.depsView')" :aria-label="$t('statsE.TodayView.depsView')" :aria-pressed="viewMode==='deps' ? 'true' : 'false'" @click="viewMode='deps'"><pd-app-icon name="link" :size="14"/></button>
             </div>
             <!-- Project filter (today-page project association): compact dropdown in the same TodoBox dropdown-select language,
-                 mounted at the right end of the date strip so the existing toolbar structure stays untouched -->
-            <div v-if="projects.length" class="dropdown-select pd-proj-filter" :class="{ 'is-open': openDd === 'proj' }">
+                 mounted at the right end of the date strip so the existing toolbar structure stays untouched.
+                 Gated on the projects module switch (nav-gate authority: projects ride on their own switch alone) -->
+            <div v-if="settings.showProjectsModule && projects.length" class="dropdown-select pd-proj-filter" :class="{ 'is-open': openDd === 'proj' }">
               <el-popover placement="bottom-end" width="180" trigger="click" :hide-after="0" popper-class="dd-pop" @show="openDd = 'proj'" @hide="openDd = null">
                 <ul class="dd-menu">
                   <li :class="{ on: !projFilter }" tabindex="0" @click="setProjFilter(0)" @keydown.enter.prevent="setProjFilter(0)">{{ $t('todayT.filterAll') }}</li>
@@ -36,8 +37,8 @@
         <!-- The timeline is shared by all three today-page views: planning context stays coherent across list/matrix/deck (finalized by user 2026-08-31) -->
         <div v-if="viewMode==='deps' && settings.developerMode && settings.showDepsModule" class="today-list"><pd-dep-view/></div>
         <div v-else-if="viewMode==='matrix'" class="today-list"><pd-matrix-grid :tasks="matrixTasks"/></div>
-        <div v-else-if="viewMode==='deck'" class="today-list"><pd-day-deck/></div>
-        <div v-else class="today-list"><todo-groups :groups="groups" :empty-text="emptyText" project-badge/></div>
+        <div v-else-if="viewMode==='deck'" class="today-list"><pd-day-deck :tasks="deckTasks"/></div>
+        <div v-else class="today-list"><todo-groups :groups="groups" :empty-text="emptyText" :project-badge="!!settings.showProjectsModule"/></div>
       </div>
     </div>
   </div>
@@ -56,6 +57,17 @@ import DayDeck from '../components/DayDeck.vue'
 import DepView from '../components/DepView.vue'
 import DayRail from '../components/DayRail.vue'
 
+// [navgate-fix] pure-start (extracted by tests/unit-navgate-fix-ui.test.mjs)
+/** Restore the persisted today view mode: unknown/missing values fall back (matrix deep link
+ *  honored), and a residual 'deps' preference must not resurrect a gated-off view — with
+ *  developerMode/showDepsModule off the segment button is hidden, which would leave the
+ *  switch without any active state, so 'deps' falls back to 'list' */
+function pickViewMode (saved, wantsMatrix, depsAllowed) {
+  const mode = ['list', 'matrix', 'deck', 'deps'].includes(saved) ? saved : (wantsMatrix ? 'matrix' : 'list')
+  return mode === 'deps' && !depsAllowed ? 'list' : mode
+}
+// [navgate-fix] pure-end
+
 export default {
   name: 'TodayView',
   components: { TodoGroups, DayDateStrip, PdMatrixGrid: MatrixGrid, PdDayDeck: DayDeck, PdDepView: DepView, DayRail },
@@ -63,8 +75,8 @@ export default {
     // View selection persistence: keep the last used view across refresh/restart (fall back to list on missing/invalid value)
     let saved = null
     try { saved = localStorage.getItem('todayViewMode') } catch {}
-    const mode = ['list', 'matrix', 'deck', 'deps'].includes(saved) ? saved : (this.$route.query.matrix ? 'matrix' : 'list')
-    // 实验开关关闭时,残留的 deps 视图偏好回落到列表视图
+    const s = this.$store.state.settings
+    const mode = pickViewMode(saved, !!this.$route.query.matrix, !!(s.developerMode && s.showDepsModule))
     // projFilter: project categoryId the today list is filtered by (0 = All); openDd: which toolbar dropdown is open
     return { viewMode: mode, projFilter: 0, openDd: null }
   },
@@ -83,10 +95,11 @@ export default {
   methods: {
     /** Route query -> filter state. Accepts a project categoryId; unknown ids fall back to All and the
      *  stale param is stripped from the URL. The byId fallback covers cold-start deep links, where category
-     *  rows are already in memory (synchronous state init) while the project flags still load asynchronously. */
+     *  rows are already in memory (synchronous state init) while the project flags still load asynchronously.
+     *  With the projects module off the filter is inert too (no dropdown to clear it otherwise). */
     syncProjFromRoute (v) {
       const id = Number(v) || 0
-      const valid = !!(id && (this.projects.some(p => p.categoryId === id) || this.$store.getters['category/byId'](id)))
+      const valid = !!(id && this.settings.showProjectsModule && (this.projects.some(p => p.categoryId === id) || this.$store.getters['category/byId'](id)))
       const next = valid ? id : 0
       if (next !== this.projFilter) this.projFilter = next
       if (v != null && !valid) {
@@ -131,6 +144,11 @@ export default {
   computed: {
     matrixTasks () {
       return this.groups.flatMap(g => g.todos)
+    },
+    deckTasks () {
+      // The card view buckets across the ±7d window, so it needs the full non-deleted list with the
+      // project filter applied; DayDeck still applies its own delete/dayStart filters internally
+      return this.fitProj(this.$store.state.todo.todoList)
     },
     v () { return this.$store.state.todo.views },
     settings () { return this.$store.state.settings },
@@ -185,7 +203,11 @@ export default {
 
       const done = this.fitProj(this.v.todayDoneList || [])
       const undone = this.fitProj(this.v.todayTodoList.filter(t => !t.complete))
-      g.push({ key: 'today-today', label: this.$t('statsA.core.today'), weekOf: dayjs().valueOf(), brand: true, todos: undone, count: undone.length })
+      // Same avoidance as the selected-day branch above: an all-empty today must not render a
+      // 0-count "Today" header next to the empty-state illustration
+      if (undone.length) {
+        g.push({ key: 'today-today', label: this.$t('statsA.core.today'), weekOf: dayjs().valueOf(), brand: true, todos: undone, count: undone.length })
+      }
       // Completed group always present (collapsed by default, finalized by user on 2026-08-30: a hide toggle adds mental burden)
       if (done.length) {
         g.push({ key: 'today-done', label: this.$t('statsE.TodayView.completedToday'), todos: done, count: done.length })

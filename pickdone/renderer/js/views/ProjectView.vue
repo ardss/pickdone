@@ -117,10 +117,11 @@
     </div>
     <div class="proj-tabs" role="tablist">
       <button class="proj-tab" :class="{on: tab === 'overview'}" role="tab" :aria-selected="tab === 'overview'" @click="tab = 'overview'">{{ $t('statsB.ProjectView.tabOverview') }}</button>
-      <button class="proj-tab" :class="{on: tab === 'deps'}" role="tab" :aria-selected="tab === 'deps'" @click="tab = 'deps'">{{ $t('statsB.ProjectView.tabDeps') }}</button>
+      <!-- Deps tab rides the same two-layer gate as the today deps view (developerMode && showDepsModule) -->
+      <button v-if="settings.developerMode && settings.showDepsModule" class="proj-tab" :class="{on: tab === 'deps'}" role="tab" :aria-selected="tab === 'deps'" @click="tab = 'deps'">{{ $t('statsB.ProjectView.tabDeps') }}</button>
       <button class="proj-tab" :class="{on: tab === 'docs'}" role="tab" :aria-selected="tab === 'docs'" @click="tab = 'docs'">{{ $t('statsB.ProjectView.tabDocs') }}</button>
     </div>
-    <div v-if="tab === 'deps'" class="page__main page__main--flow-top proj-tab-body">
+    <div v-if="tab === 'deps' && settings.developerMode && settings.showDepsModule" class="page__main page__main--flow-top proj-tab-body">
       <pd-dep-view :fixed-project-id="catId"/>
     </div>
     <div v-else-if="tab === 'docs'" class="page__main page__main--flow-top proj-tab-body">
@@ -152,12 +153,21 @@
 import {dayjs, DAY_MS, rescheduleExpired, FMT, rangeLabel , rangeDays } from '../utils/core.js'
 import { batchMoveWithUndo } from '../utils/confirm.js'
 import { calTitle } from '../utils/buckets.js'
-import { loadMilestones, saveMilestones, parseMilestoneDate, milestoneState, milestoneProgress, dueStateOf } from '../utils/milestones.js'
+import { loadMilestones, saveMilestones, parseMilestoneDate, milestoneState, milestoneProgress, dueStateOf, newMilestoneId } from '../utils/milestones.js'
 import { COLOR_PALETTE } from '../store/category.js'
 import { PROJECT_STATUSES, statusI18nKey } from '../utils/projectStatus.js'
 import TodoGroupBlock from '../components/TodoGroupBlock.vue'
 import DepView from '../components/DepView.vue'
 import ProjectDocs from '../components/ProjectDocs.vue'
+
+// [navgate-fix] pure-start (extracted by tests/unit-navgate-fix-ui.test.mjs)
+/** Entrance-animation target for a freshly added milestone: saveMilestones returns the list sorted
+ *  by date, so "last of saved" can be an older entry — resolve the new node by its own
+ *  pre-generated id instead, and degrade to null if the save dropped it */
+function resolveMsNewId (entryId, saved) {
+  return (Array.isArray(saved) && saved.some(m => m && m.id === entryId)) ? entryId : null
+}
+// [navgate-fix] pure-end
 
 export default {
   name: 'ProjectView',
@@ -174,6 +184,15 @@ export default {
     }
   },
   created () { this.reloadMilestones(); this.reloadDeadline() },
+  watch: {
+    // Navigating project -> project reuses this component instance: the root :key re-keys a plain
+    // div only (no remount), so created() never runs again and the per-project data would go stale
+    '$route.params.id' (nval) {
+      if (!nval) return
+      this.reloadMilestones()
+      this.reloadDeadline()
+    }
+  },
   computed: {
     catId () { return Number(this.$route.params.id) || 0 },
     cat () { return this.$store.getters['category/byId'](this.catId) },
@@ -350,9 +369,12 @@ export default {
         const { value: dateInput } = await this.$prompt(this.$t('statsB.ProjectView.datePrompt'), this.$t('statsB.ProjectView.datePromptTitle'), { inputValue: '', inputPattern: /\S/, inputErrorMessage: this.$t('statsB.ProjectView.dateRequired') })
         const date = parseMilestoneDate(dateInput)
         if (!date) return this.$message.warning(this.$t('statsB.ProjectView.badDateAdd'))
-        const saved = saveMilestones(this.catId, [...this.milestones, { title: title.trim(), date }])
+        // Pre-generate the id (saveMilestones keeps caller-supplied ids): the entrance animation must
+        // target the just-added entry, not whichever entry happens to carry the latest date
+        const entry = { id: newMilestoneId(), title: title.trim(), date }
+        const saved = saveMilestones(this.catId, [...this.milestones, entry])
         this.milestones = saved
-        this.msNewId = saved[saved.length - 1] && saved[saved.length - 1].id // entrance animation for the new node
+        this.msNewId = resolveMsNewId(entry.id, saved) // entrance animation for the new node
         setTimeout(() => { this.msNewId = null }, 1200)
         this.$message.success(this.$t('statsB.ProjectView.msAdded'))
       } catch { /* cancelled */ }

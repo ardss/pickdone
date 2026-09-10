@@ -121,8 +121,11 @@ export default {
   beforeUnmount () { clearTimeout(this._enterTimer) },
   computed: {
     cat () { return this.$store.getters['category/byId'](this.todo.categoryId) },
-    // Resolved project for this task's category (null unless the category is flagged as a project and the badge is enabled)
+    // Resolved project for this task's category (null unless the category is flagged as a project and the badge is enabled).
+    // Module gate first (nav-gate authority: projects ride on showProjectsModule alone) — with the
+    // module off there is no badge, and goProject's !projCat guard keeps the row un-navigable
     projCat () {
+      if (!this.$store.state.settings.showProjectsModule) return null
       if (!this.projectBadge || !this.todo.categoryId) return null
       const projects = this.$store.getters['category/projects'] || []
       return projects.find(p => p.categoryId === this.todo.categoryId) || null

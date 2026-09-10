@@ -39,8 +39,7 @@ const MENUS = {
     { sep: true },
     { labelKey: 'viewMore.showCompleted', toggle: 'showComplete' },
     { labelKey: 'viewMore.showNoDate', toggle: 'showNoDate' },
-    { labelKey: 'viewMore.checkFollowColor', toggle: 'isCompleteCheckboxColorFollow' },
-    { sep: true },
+    { labelKey: 'viewMore.checkFollowColor', toggle: 'isCompleteCheckboxColorFollow' }
   ],
   // [Removed todo-list-recent]: the view does not exist in the route table so this menu block never matches (dead key, cleaned up along with views/registry.js consolidation)
   'todo-list-category': [

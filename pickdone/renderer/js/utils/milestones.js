@@ -9,6 +9,12 @@ import { dayjs } from './core.js'
 
 const keyOf = categoryId => 'projectMilestones:' + categoryId
 
+/** Fresh milestone id (saveMilestones keeps caller-supplied ids, so pre-generating one lets the
+ *  caller reference the just-added entry after the date-sorted save, e.g. for an entrance animation) */
+export function newMilestoneId () {
+  return 'ms_' + Date.now() + Math.random().toString(36).slice(2, 6)
+}
+
 export async function loadMilestones (categoryId) {
   try {
     const raw = await window.todoAPI.dbCall('getMeta', keyOf(categoryId))
@@ -20,7 +26,7 @@ export async function loadMilestones (categoryId) {
 export function saveMilestones (categoryId, list) {
   const clean = (list || []).filter(m => m && m.title && m.date)
     .map(m => ({
-      id: m.id || ('ms_' + Date.now() + Math.random().toString(36).slice(2, 6)),
+      id: m.id || newMilestoneId(),
       title: String(m.title),
       date: Number(m.date),
       taskIds: Array.isArray(m.taskIds) ? m.taskIds.filter(Boolean) : []

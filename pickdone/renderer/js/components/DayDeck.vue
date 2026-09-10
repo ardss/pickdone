@@ -101,6 +101,13 @@ const DAY = 86400000
 const SPAN = 7 // 7 days on each side of today
 const VISIBLE = 3 // Number of layers revealed on each side of the center
 
+// [navgate-fix] pure-start (extracted by tests/unit-navgate-fix-ui.test.mjs)
+/** Source list for card bucketing: only a real array (pre-filtered by the parent view, e.g. the
+ *  today page's project filter) overrides the store list; anything else falls back so standalone
+ *  usages keep reading the store unchanged */
+function deckSource (tasks, fallback) { return Array.isArray(tasks) ? tasks : fallback }
+// [navgate-fix] pure-end
+
 /* Card width adapts to the stage: after the timeline shares the main column the stage got narrower, and fixed 300px cards would clump together;
  * percentage width + a cap; the fan spacing (pos*33%) is percentage-of-card-width so it scales naturally. Style injected for now, can move back to a css file later (same precedent as DayRail V1_CSS) */
 /* isolation keeps the cards' z-index scoped inside the component: bare z values once leaked to the page level, covering normal flow content / the settings entry */
@@ -117,12 +124,18 @@ try {
 
 export default {
   name: 'DayDeck',
+  props: {
+    /** Optional pre-filtered task list (parent decides the scope, same contract as MatrixGrid);
+     *  when omitted the component keeps reading the store's full todoList (backward compatible) */
+    tasks: { type: Array as any, default: null }
+  },
   data () {
     return { front: SPAN, dragX: 0, dragging: false, dropHover: null, nowTs: Date.now() }
   },
   computed: {
     dayjs () { return window.dayjs },
     FMT () { return FMT },
+    source () { return deckSource(this.tasks, this.$store.state.todo.todoList) },
     days () {
       // Depends on nowTs (30s tick): the window is recomputed after crossing midnight, otherwise the computed cache freezes at mount time
       void this.nowTs
@@ -131,7 +144,7 @@ export default {
     },
     today0 () { void this.nowTs; return +this.dayjs().startOf('day') },
     cards () {
-      const list = this.$store.state.todo.todoList
+      const list = this.source
       return this.days.map(ts => {
         const card = { ts, all: list.filter(t => !t.delete && t.dayStart === ts), overdue: [] }
         // Overdue incomplete tasks are grouped at the top of the "today" card (otherwise the card view would show a sudden drop in count, making users think tasks were lost)

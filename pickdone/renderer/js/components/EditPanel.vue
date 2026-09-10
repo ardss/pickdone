@@ -69,7 +69,7 @@
         </div>
       </div>
 
-      <!-- 任务依赖(实验性,developerMode 门控):前置任务多选,FS 语义——前置全部完成本任务才 ready -->
+      <!-- Task dependencies (experimental; gated by devMode = developerMode && showDepsModule): predecessor multi-select, FS semantics -- task becomes ready only when all predecessors are done -->
       <div v-if="devMode" class="ep-cat-wrap">
         <div class="ep-row ep-cat-row" role="button" tabindex="0" :aria-expanded="depOpen ? 'true' : 'false'"
              @click="depOpen=!depOpen" @keydown.enter.prevent="depOpen=!depOpen">
@@ -322,7 +322,9 @@ export default {
   created () { this._dirtyFlags = {} },
   computed: {
     task () { return this.$store.state.todo.todoList.find(t => t.taskId === (this.e && this.e.taskId)) || null },
-    devMode () { return !!this.$store.state.settings.developerMode },
+    // Deps surface gate, same two-layer doctrine as the today deps view (TodayView seg button):
+    // the developer-mode master switch AND the module's own switch must both be on
+    devMode () { const s = this.$store.state.settings; return !!s.developerMode && !!s.showDepsModule },
     depPreds () { // parse predecessors of the task under edit
       try { const a = JSON.parse((this.e && this.e.predecessors) || '[]'); return Array.isArray(a) ? a.filter(Boolean) : [] } catch { return [] }
     },
