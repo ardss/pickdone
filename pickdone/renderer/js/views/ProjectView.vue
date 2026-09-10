@@ -60,6 +60,22 @@
         </div>
         <button class="proj-ms__add" :title="$t('statsB.ProjectView.addMsTip')" @click="addMilestone"><app-icon name="plus" :size="11"/> {{ $t('statsB.ProjectView.milestone') }}</button>
       </div>
+      <!-- Milestone strip: slim rail at the bottom edge of the timeline, one dot per milestone ordered by date (past filled/dimmed, upcoming hollow); hover popover = date + linked-task progress; click = edit (same as timeline nodes) -->
+      <div v-if="msStrip.length" class="proj-ms-strip" role="group" :aria-label="$t('projQ.stripAria')">
+        <i v-for="r in msStrip" :key="r.m.id" class="proj-ms-strip__dot" :class="['proj-ms-strip__dot--' + r.state, { 'proj-ms-strip__dot--focus': r.focus }]"
+           role="button" tabindex="0" :aria-label="r.m.title + ' · ' + fmtDate(r.m.date)"
+           @click="editMilestone(r.m)" @keydown.enter.prevent="editMilestone(r.m)">
+          <span class="proj-ms-strip__pop" role="tooltip">
+            <b class="proj-ms-strip__title">{{r.m.title}}</b>
+            <span class="proj-ms-strip__date">{{fmtDate(r.m.date)}}</span>
+            <span v-if="r.progress" class="proj-ms-strip__prog">{{ $t('projQ.stripProgress', { done: r.progress.done, total: r.progress.total }) }}</span>
+            <span v-else class="proj-ms-strip__prog proj-ms-strip__prog--none">{{ $t('projQ.stripNoTasks') }}</span>
+            <span v-for="(t, ti) in r.titles" :key="ti" class="proj-ms-strip__task">{{t}}</span>
+            <span v-if="r.moreN" class="proj-ms-strip__more">{{ $t('projQ.stripMore', { n: r.moreN }) }}</span>
+            <span class="proj-ms-strip__hint">{{ $t('projQ.stripEditHint') }}</span>
+          </span>
+        </i>
+      </div>
       <div v-if="!milestones.length" class="proj-ms__empty">{{ $t('statsB.ProjectView.msEmptyTip') }}</div>
       <!-- Milestone card: ring progress (linked task completion ratio) + plain-words countdown + status color; click card = edit -->
       <div v-if="milestoneRows.length" class="proj-ms-list">
@@ -190,6 +206,20 @@ export default {
           linkedN: (m.taskIds || []).length
         }
       })
+    },
+    /* ---- Milestone strip (bottom rail under the timeline): dots ordered by date; reuses milestoneRows state/progress/linked tasks, no extra fetches ---- */
+    msStrip () {
+      if (!this.milestoneRows.length) return []
+      return [...this.milestoneRows]
+        .sort((a, b) => a.m.date - b.m.date)
+        .map(r => ({
+          m: r.m,
+          state: r.state,
+          focus: r.focus,
+          progress: r.progress,
+          titles: r.linked.slice(0, 5).map(t => t.taskContent),
+          moreN: Math.max(0, r.linked.length - 5)
+        }))
     },
     /* ---- N3 proximity alert: deadline within 3 days turns warning color ---- */
     deadlineState () { return this.deadlineTs ? dueStateOf(this.deadlineTs, this.todayTs) : 'ok' },
@@ -468,6 +498,43 @@ export default {
 }
 .proj-ms__add:hover { color: var(--brand); background: var(--brand-light); }
 .proj-ms__empty { margin-top: var(--space-2); font-size: var(--fs-xs); color: var(--text-3); }
+/* ===== 里程碑横条（时间轴下沿）：一排按日期排序的细点，过去实心半透明/当天品牌色光环/未来空心；悬停 CSS 浮层显示日期+关联任务进度（复用既有浮层语言：面板底+描边+阴影） ===== */
+.proj-ms-strip {
+  position: relative; display: flex; align-items: center; justify-content: space-evenly;
+  height: 16px; margin-top: var(--space-2); padding: 0 var(--space-2);
+}
+.proj-ms-strip::before { content: ''; position: absolute; left: 0; right: 0; top: 50%; height: 1px; margin-top: -1px; background: var(--line); }
+.proj-ms-strip__dot {
+  position: relative; display: block; width: 9px; height: 9px; border-radius: 50%;
+  cursor: pointer; z-index: 1;
+  transition: transform var(--t-fast), box-shadow var(--t-fast), opacity var(--t-fast);
+}
+.proj-ms-strip__dot--done { background: var(--ok, #2e9e44); opacity: .55; }
+.proj-ms-strip__dot--today { background: var(--brand); box-shadow: 0 0 0 3px var(--brand-light); }
+.proj-ms-strip__dot--future { background: transparent; border: 1.5px solid var(--text-4, #98a0a8); }
+.proj-ms-strip__dot--focus { border-color: var(--brand); }
+.proj-ms-strip__dot:hover, .proj-ms-strip__dot:focus-visible { transform: scale(1.35); opacity: 1; }
+.proj-ms-strip__dot:focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; }
+.proj-ms-strip__pop {
+  position: absolute; bottom: calc(100% + 9px); left: 50%;
+  display: flex; flex-direction: column; gap: 3px; width: max-content; max-width: 240px;
+  padding: 8px 10px; border: 1px solid var(--line, #e6e8eb); border-radius: var(--radius-sm, 6px);
+  background: var(--panel, #fff); box-shadow: 0 4px 14px rgba(0, 0, 0, .16);
+  font-style: normal; font-size: var(--fs-xs); color: var(--text-2); text-align: left;
+  opacity: 0; visibility: hidden; pointer-events: none;
+  transform: translateX(-50%) translateY(3px);
+  transition: opacity var(--t-fast), transform var(--t-fast), visibility var(--t-fast);
+  z-index: 30;
+}
+.proj-ms-strip__dot:hover .proj-ms-strip__pop, .proj-ms-strip__dot:focus-visible .proj-ms-strip__pop { opacity: 1; visibility: visible; transform: translateX(-50%) translateY(0); }
+.proj-ms-strip__title { font-weight: 600; color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proj-ms-strip__date { color: var(--text-3); font-variant-numeric: tabular-nums; }
+.proj-ms-strip__prog { color: var(--text-2); font-variant-numeric: tabular-nums; }
+.proj-ms-strip__prog--none { color: var(--text-4); }
+.proj-ms-strip__task { color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proj-ms-strip__task::before { content: '· '; }
+.proj-ms-strip__more, .proj-ms-strip__hint { color: var(--text-4); }
+.proj-ms-strip__hint { border-top: 1px dashed var(--line); padding-top: 4px; margin-top: 2px; }
 /* 项目详情页编辑件：⋯菜单、截止日徽标、色板、截止旗标 */
 .proj-head__title { position: relative; }
 .proj-head__menu {

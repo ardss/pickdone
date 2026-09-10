@@ -14,6 +14,11 @@ export default {
     statusChangeTip: '状态：{s}（点击切换）',
     statusAria: '项目状态：{s}',
     loadChip: '负荷 {n}',
-    loadTip: '今日计划负荷：{n} / 阈值 {t}'
+    loadTip: '今日计划负荷：{n} / 阈值 {t}',
+    stripAria: '里程碑横条',
+    stripProgress: '关联任务 {done}/{total}',
+    stripNoTasks: '未关联任务',
+    stripMore: '还有 {n} 项',
+    stripEditHint: '点击编辑'
   }
 }

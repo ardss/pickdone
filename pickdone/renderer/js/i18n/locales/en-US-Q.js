@@ -14,6 +14,11 @@ export default {
     statusChangeTip: 'Status: {s} (click to change)',
     statusAria: 'Project status: {s}',
     loadChip: 'Load {n}',
-    loadTip: 'Today planned load: {n} / threshold {t}'
+    loadTip: 'Today planned load: {n} / threshold {t}',
+    stripAria: 'Milestone strip',
+    stripProgress: 'Linked tasks {done}/{total}',
+    stripNoTasks: 'No linked tasks',
+    stripMore: '{n} more',
+    stripEditHint: 'Click to edit'
   }
 }
