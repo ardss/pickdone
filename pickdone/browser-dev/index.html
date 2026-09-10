@@ -144,6 +144,10 @@
       var changed = false
       if (!st.developerMode) { st.developerMode = true; changed = true }
       if (!st.showProjectsModule) { st.showProjectsModule = true; changed = true }
+      // today-x now carries its own module switch (default off, 2026-09-10 two-layer gate) — the lab
+      // host deliberately turns it on so the Today (Lab) entry stays visible here (this host exists to
+      // exercise the experiments); the shipped app still hides it by default.
+      if (st.showTodayXModule !== true) { st.showTodayXModule = true; changed = true }
       if (changed) localStorage.setItem('settingsState', JSON.stringify(st))
       // 调试默认直接落在依赖视图
       if (localStorage.getItem('todayViewMode') !== 'deps') localStorage.setItem('todayViewMode', 'deps')
