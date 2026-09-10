@@ -62,6 +62,17 @@ say('[Unreleased] 非空,待归版')
   cl = cl.replace('## [Unreleased]', `## [${version}] - ${today}`)
   fs.writeFileSync(clPath, cl, 'utf8')
   say(`CHANGELOG [Unreleased] -> [${version}] - ${today}`)
+
+  // 中文镜像同步归版——release.yml 按 [X.Y.Z] 从 CHANGELOG.zh.md 提中文段,漏归版=发布页永远只有英文(0.3.0 实锤)
+  const clZhPath = path.join(ROOT, '..', 'CHANGELOG.zh.md')
+  let clZh = fs.readFileSync(clZhPath, 'utf8').replace(/\r\n/g, '\n')
+  const zhUnreleased = clZh.match(/## \[Unreleased\]\n([\s\S]*?)(?=\n## \[)/)
+  if (!zhUnreleased) die('CHANGELOG.zh.md 缺 [Unreleased] 段——双语纪律:两份必须同版本同发布')
+  if (!zhUnreleased[1].trim()) die('CHANGELOG.zh.md [Unreleased] 是空的——中文镜像没跟上英文版')
+  if (clZh.includes(`## [${version}]`)) die(`CHANGELOG.zh.md 已存在 [${version}] 段——重复发版?`)
+  clZh = clZh.replace('## [Unreleased]', `## [${version}] - ${today}`)
+  fs.writeFileSync(clZhPath, clZh, 'utf8')
+  say(`CHANGELOG.zh.md [Unreleased] -> [${version}] - ${today}`)
 }
 
 // 4. 缓存戳 + 全量门禁(视觉第④组只在本机跑,CI 跑不了——这就是为什么 tag 前必须本机过)
