@@ -240,6 +240,12 @@
                                    @change="v=>set({dailyTomatoTarget:v})"/>
                   <span class="tip">{{ $t('statsE.SettingsModal.harvestGoalHint') }}</span>
                 </div></div>
+              <div class="form-item"><span class="form-item__label">{{ $t('loadR.thresholdLabel') }}</span>
+                <div class="form-item__control">
+                  <el-input-number size="small" class="ctl-sm" :controls="false" :min="0" :max="50" :model-value="Number(st.dailyLoadWarnThreshold)||0" :aria-label="$t('loadR.thresholdLabel')"
+                                   @change="v=>set({dailyLoadWarnThreshold:v||0})"/>
+                  <span class="tip">{{ $t('loadR.thresholdHint') }}</span>
+                </div></div>
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.focusLengthLabel') }}</span>
                 <div class="form-item__control">
                   <el-input-number size="small" class="ctl-sm" :min="5" :max="180" :model-value="Number(st.tomatoTime)||25" :aria-label="$t('statsE.SettingsModal.focusLengthLabel')"

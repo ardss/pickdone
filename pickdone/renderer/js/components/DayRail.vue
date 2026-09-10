@@ -13,6 +13,9 @@
       <div class="dr-head__text">
         <b>{{ headLabel }}</b>
         <span>{{ $t('statsG.DayRail.hint') }}</span>
+        <!-- Schedule-load warning (v0.2): same task selection the capacity band documents (today's + overdue
+             incomplete), so the warning and the band can never disagree. Threshold 0 = 'off' -> no warning UI. -->
+        <span v-if="loadWarn.active" class="dr-load-warn" :title="loadWarn.tip" :aria-label="loadWarn.tip">{{ loadWarn.badge }}</span>
       </div>
       <i class="dr-fold-ico" aria-hidden="true"><app-icon name="chevron-left" :size="14"/></i>
     </div>
@@ -107,6 +110,8 @@ import { toggleCompleteWithUndo } from '../utils/completeAction.js'
 import { removeWithUndo } from '../utils/confirm.js'
 import { taskContextMenu } from '../utils/taskMenu.js'
 import * as dayPlans from '../utils/dayPlans.js'
+import { dayPlannedLoad, loadLevel } from '../utils/loadWarn.js'
+import { getEstimate } from '../utils/tomatoEstimate.js'
 const DAY_START_H = 0
 const DAY_END_H = 23
 
@@ -213,6 +218,8 @@ const V1_CSS = `
 .td-tom-pips i { width: 5px; height: 5px; border-radius: 50%; background: var(--line, #f3f3f3); }
 .td-tom-pips i.done { background: var(--brand, #0f9d8f); }
 .td-tom-n { font-weight: 600; }
+/* Schedule-load warning pill (v0.2 loadWarn): amber = today's planned load above the threshold; tokens only (--warn), translucent tint adapts to both themes */
+.day-rail .dr-load-warn { display: inline-flex; align-items: center; margin-top: 3px; font-size: 10.5px; font-weight: 600; color: var(--warn, #e6a23c); background: color-mix(in srgb, var(--warn, #e6a23c) 14%, transparent); border-radius: 6px; padding: 1.5px 7px; font-variant-numeric: tabular-nums; cursor: default; }
 /* Entry card: unified correction panel for fact entries (single-click block / double-click or right-click empty rail to summon), minute-level editing */
 .day-rail .dr-card-hint { font-size: 10.5px; color: var(--text-4, #c0c4cc); line-height: 1.5; }
 .day-rail .dr-card { position: absolute; left: 18px; right: 6px; z-index: 30; background: var(--panel, #fff); border: 1px solid var(--line, #f3f3f3); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.14); padding: 10px 12px; display: flex; flex-direction: column; gap: 7px; font-size: 11px; }
@@ -428,6 +435,23 @@ export default {
       const m = new Map()
       for (const t of this.$store.state.todo.todoList) m.set(t.taskId, t)
       return m
+    },
+    /* Schedule-load warning (v0.2 loadWarn util): planned = estimated tomatoes of today's + overdue incomplete
+       tasks (views.todayTodoList + views.recent.expiredUncompleted — the same selection the Today groups and the
+       capacity band concept use). Level 'warn' only when planned is strictly above the threshold; threshold 0
+       ('off') or browsing another day renders no warning UI at all. */
+    loadWarn () {
+      if (!this.isViewingToday) return { active: false, badge: '', tip: '' }
+      const v = this.$store.state.todo.views || {}
+      const todos = [].concat(v.todayTodoList || [], (v.recent && v.recent.expiredUncompleted) || [])
+      const planned = dayPlannedLoad(todos, t => getEstimate(t.taskId))
+      const th = Math.round(Number(this.$store.state.settings.dailyLoadWarnThreshold) || 0)
+      if (loadLevel(planned, th) !== 'warn') return { active: false, badge: '', tip: '' }
+      return {
+        active: true,
+        badge: this.$t('loadR.warnBadge', { x: planned, y: th }),
+        tip: this.$t('loadR.warnTooltip', { x: planned, y: th })
+      }
     }
   },
   watch: {
