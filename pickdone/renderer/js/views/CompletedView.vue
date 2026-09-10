@@ -6,12 +6,16 @@
         <div class="title__prepend">
           <i class="icon-prepend"></i>
           <div class="title__text"> {{ $t('statsC.Completed.title') }} </div>
-          <el-popover placement="bottom-start" width="320" trigger="hover">
+          <!-- [component-r5] click trigger + focusable reference: keyboard (Enter/Space) and touch can open the tip too; default (closed) rendering unchanged -->
+          <el-popover placement="bottom-start" width="320" trigger="click">
             <ul class="tip-completed-list">
               <li>{{ $t('statsC.Completed.tip1') }}</li>
               <li>{{ $t('statsC.Completed.tip2') }}</li>
             </ul>
-            <template #reference><span class="tip-icon tip-q">?</span></template>
+            <template #reference>
+              <span class="tip-icon tip-q" role="button" tabindex="0" :aria-label="$t('statsC.Completed.tipAria')"
+                    @keydown.enter.prevent="e => e.target.click()">?</span>
+            </template>
           </el-popover>
         </div>
         <div class="title__append">

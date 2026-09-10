@@ -40,6 +40,7 @@ export default {
       collapseAll: 'Collapse all',
       empty: 'No events',
       ariaGroup: 'Expand or collapse group {name}',
+      tipAria: 'View completed-page tips',
       undone: 'Restored to incomplete',
       btnUndo: '↩ Incomplete'
     },
@@ -57,6 +58,7 @@ export default {
     },
     Search: {
       searchPlaceholder: 'Search',
+      searchAria: 'Search tasks',
       clearAria: 'Clear search keyword',
       dateRangeLabel: 'Date range',
       last7: 'Last 7 days',

@@ -40,6 +40,7 @@ export default {
       collapseAll: '全部折叠',
       empty: '暂无日程',
       ariaGroup: '展开或收起分组 {name}',
+      tipAria: '查看已达成页说明',
       undone: '已恢复为未完成',
       btnUndo: '↩ 未完成'
     },
@@ -57,6 +58,7 @@ export default {
     },
     Search: {
       searchPlaceholder: '搜索',
+      searchAria: '搜索任务',
       clearAria: '清除搜索关键词',
       dateRangeLabel: '日期范围',
       last7: '最近7天',
