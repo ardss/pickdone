@@ -143,12 +143,11 @@ export default {
       const today0 = +dayjs().startOf('day')
       for (const id of state.projectIds) {
         const cur = meta[id] || {}
-        if (cur.status === undefined) {
-          try { cur.status = normalizeStatus(await window.todoAPI.dbCall('getMeta', statusKey(id))) } catch { cur.status = 'active' }
-        }
-        if (cur.deadline === undefined) {
-          try { cur.deadline = Number(await window.todoAPI.dbCall('getMeta', deadlineKey(id))) || 0 } catch { cur.deadline = 0 }
-        }
+        // Status/deadline re-read UNCONDITIONALLY (review P1 2026-09-10): an `undefined` guard made both
+        // sticky after the first load — a CLI `project --status/--deadline` write never reached a running
+        // app through the external-write reload path, silently breaking CLI→app parity. Cheap meta reads.
+        try { cur.status = normalizeStatus(await window.todoAPI.dbCall('getMeta', statusKey(id))) } catch { cur.status = 'active' }
+        try { cur.deadline = Number(await window.todoAPI.dbCall('getMeta', deadlineKey(id))) || 0 } catch { cur.deadline = 0 }
         if (!cur.nextMilestone) {
           const ms = await loadMilestones(id)
           cur.nextMilestone = ms.filter(m => m.date >= today0)[0] || null

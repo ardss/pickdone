@@ -969,8 +969,10 @@ function registerIpc () {
         const existing = fixUtil.sortBackupNamesNewestFirst(fs.readdirSync(dir).filter(f => /^(auto|evt)-/.test(f)))
         if (existing.length) {
           try {
-            if (fs.readFileSync(path.join(dir, existing[existing.length - 1]), 'utf8') === jsonText) {
-              return { ok: true, file: existing[existing.length - 1], dedup: true }
+            // newest-first sort → the dedup twin is existing[0]; the tail was the OLDEST file (review P1 2026-09-10:
+            // dedup never fired in the common case, and a stale snapshot could be returned as "the" backup)
+            if (fs.readFileSync(path.join(dir, existing[0]), 'utf8') === jsonText) {
+              return { ok: true, file: existing[0], dedup: true }
             }
           } catch {}
         }
