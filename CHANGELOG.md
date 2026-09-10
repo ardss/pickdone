@@ -6,6 +6,8 @@ and versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-09-10
+
 ### Added
 - The Today Lab view gets its own module switch (default off): it previously hung on the developer-mode master switch alone, so leaving developer mode on from experiment reviews kept the lab entry permanently in the sidebar. The gate logic is extracted into a pure, unit-tested helper; projects/habit/deps keep their existing two-layer gates.
 
