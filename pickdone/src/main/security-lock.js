@@ -3,8 +3,30 @@
 const path = require('path')
 const { BrowserWindow } = require('electron')
 
+/** Pure decision for the lock window's render-process-gone self-heal (unit-testable, mirrors the
+ *  main-window/tomato-float/quick-add crash self-heal family):
+ *  - 'ignore'   : clean-exit / unknown reason (also fires on quit tearing renderers down) — do nothing
+ *  - 'rebuild'  : rebuild the lock window (crash must not leave a white-screen lockWin while isLocked() stays true)
+ *  - 'fallback' : rebuild cap exhausted → same disable-lock fallback as a failed load (availability beats lock) */
+function crashSelfHealAction ({ reason, rebuilds, maxRebuilds = 3 } = {}) {
+  if (!reason || reason === 'clean-exit') return 'ignore'
+  if (rebuilds < maxRebuilds) return 'rebuild'
+  return 'fallback'
+}
+
+/** Sliding-window rate limiter (pure, unit-testable). Guards the renderer-supplied 'notification'
+ *  channel: a compromised/forked renderer could otherwise spam system notifications without bound.
+ *  Mutates `timestamps` in place (oldest first). Returns true when the send is allowed. */
+function allowWithinRate (timestamps, now, { limit = 10, windowMs = 10000 } = {}) {
+  while (timestamps.length && now - timestamps[0] > windowMs) timestamps.shift()
+  if (timestamps.length >= limit) return false
+  timestamps.push(now)
+  return true
+}
+
 function createSecurityLock ({ getMainWindow, showMainOrLock, readConfig, writeConfig, i18n, log }) {
   let lockWin = null
+  let lockCrashRebuilds = 0 // rebuild counter since the last successful load; caps the crash→rebuild loop
 
   function isLocked () {
     try { return readConfig().enableSecurityLock === true && lockWin && !lockWin.isDestroyed() } catch { return false }
@@ -86,6 +108,28 @@ function createSecurityLock ({ getMainWindow, showMainOrLock, readConfig, writeC
       if (!isMainFrame || code === -3) return
       onLockLoadFail('did-fail-load: ' + code + ' ' + desc)
     })
+    lockWin.webContents.on('did-finish-load', () => { lockCrashRebuilds = 0 })
+    // Renderer-crash self-heal (2026-09-11 P1): the main window (index.js:319), float (tomato-float.js:158)
+    // and quick-add (quick-add.js:61) all self-heal a crashed renderer — the lock window was the only one
+    // without it. A crashed lock renderer used to leave a white-screen lockWin with isLocked() stuck true
+    // and the main window hidden forever. Rebuild the lock window (up to 3×); beyond the cap, take the same
+    // disable-lock fallback as a failed load — availability beats the lock.
+    lockWin.webContents.on('render-process-gone', (_e, details) => {
+      const act = crashSelfHealAction({ reason: details && details.reason, rebuilds: lockCrashRebuilds })
+      if (act === 'ignore') return
+      log.error('[SecurityLock] 锁屏窗渲染进程崩溃:', details && details.reason, '→', act)
+      try { if (lockWin && !lockWin.isDestroyed()) lockWin.destroy() } catch { /* already gone */ }
+      lockWin = null
+      if (act === 'rebuild') {
+        lockCrashRebuilds++
+        setTimeout(() => {
+          try { lockAppNow() } catch (e) { log.error('[SecurityLock] 锁窗重建失败', e) }
+        }, 300)
+      } else {
+        lockCrashRebuilds = 0
+        lockLoadFailedFallback('lock window renderer crashed beyond rebuild cap')
+      }
+    })
     lockWin.on('closed', () => { lockWin = null })
   }
 
@@ -134,4 +178,4 @@ function createSecurityLock ({ getMainWindow, showMainOrLock, readConfig, writeC
   return { isLocked, lockAppNow, unlockAppNow, verifyLockPassword, isLockWindow, focusLock }
 }
 
-module.exports = { createSecurityLock }
+module.exports = { createSecurityLock, crashSelfHealAction, allowWithinRate }
