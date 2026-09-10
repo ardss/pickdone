@@ -116,6 +116,17 @@ module.exports = {
     last = { mode: 'none', title: '' }
     try { baseTitle = (win.getTitle() || '').trim() } catch (e) { baseTitle = '' }
   },
+  /** Base title refreshed on language switch (set-app-locale): without this the countdown kept the old
+   *  language's app name as its suffix/base until the next window re-init */
+  setBaseTitle (t) {
+    baseTitle = String(t == null ? '' : t).trim()
+    last.title = '' // force the next update() to re-apply the title with the new base
+    // If idle right now, apply the new plain title immediately (no per-second push will come)
+    if (mainWin && !mainWin.isDestroyed() && last.mode === 'none') {
+      try { mainWin.setTitle(baseTitle) } catch (e) { /* */ }
+      last.title = baseTitle
+    }
+  },
   update,
   /** Tray icon hookup: redraw the progress ring while a pomodoro runs, restore the original icon when idle */
   attachTray (trayRef, iconPath) {
