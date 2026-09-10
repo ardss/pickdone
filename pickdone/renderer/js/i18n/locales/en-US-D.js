@@ -75,6 +75,8 @@ export default {
       "today": "Today",
       "backTodayTitle": "Back to today",
       "selectDate": "Pick a date",
+      "prevDay": "Previous day",
+      "nextDay": "Next day",
       "prevMonth": "Previous month",
       "nextMonth": "Next month",
       "prevYear": "Previous year",

@@ -78,6 +78,8 @@ export default {
       "today": "今天",
       "backTodayTitle": "回到今天",
       "selectDate": "选择日期",
+      "prevDay": "前一天",
+      "nextDay": "后一天",
       "prevMonth": "上个月",
       "nextMonth": "下个月",
       "prevYear": "上一年",

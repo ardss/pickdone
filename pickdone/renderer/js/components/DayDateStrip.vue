@@ -1,15 +1,15 @@
 <template>
 
   <div class="day-strip">
-    <button class="ds-arrow" @click="shift(-1)">‹</button>
+    <button class="ds-arrow" :title="$t('statsD.DayDateStrip.prevDay')" :aria-label="$t('statsD.DayDateStrip.prevDay')" @click="shift(-1)">‹</button>
     <template v-for="d in days" :key="d.ts">
       <i v-if="d.newMonth" class="ds-mseam" aria-hidden="true"></i>
-      <button class="ds-day" :class="{sel:d.isSel, today:d.isToday, dim:d.dim}" @click="pickDay(d.ts)">
+      <button class="ds-day" :class="{sel:d.isSel, today:d.isToday, dim:d.dim}" :aria-current="d.isSel ? 'date' : null" @click="pickDay(d.ts)">
         <span class="ds-num">{{ d.n }}<i v-if="d.isToday" class="ds-today-dot"></i></span>
         <span class="ds-wd">{{ d.wd }}</span>
       </button>
     </template>
-    <button class="ds-arrow" @click="shift(1)">›</button>
+    <button class="ds-arrow" :title="$t('statsD.DayDateStrip.nextDay')" :aria-label="$t('statsD.DayDateStrip.nextDay')" @click="shift(1)">›</button>
 
     <!-- Date label: click to open the calendar (replaces the standalone 📅 button); "back to today" only appears when not today -->
     <span class="ds-label" :class="{on:showCal}" role="button" tabindex="0" :title="$t('statsD.DayDateStrip.selectDate')"
@@ -30,6 +30,7 @@
     <!-- Calendar popover -->
     <transition name="fade">
       <div v-if="showCal" v-click-outside="() => showCal = false" class="ds-cal-pop" @click.stop
+           @keydown.esc.prevent="showCal = false"
            @mouseenter="calEnter" @mouseleave="calLeave">
         <div class="ds-cal-head">
           <button @click="calNav(-12)" :title="$t('statsD.DayDateStrip.prevYear')" :aria-label="$t('statsD.DayDateStrip.prevYear')">«</button>
