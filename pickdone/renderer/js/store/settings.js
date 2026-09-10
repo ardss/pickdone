@@ -16,11 +16,11 @@ export const DEFAULT_SETTINGS = {
   showNoDate: true,
   showCompleteNoDate: true,
   showComplete: true,
-  developerMode: false, // developer mode: master gate for unfinished/structural experiments (today-x, habit, deps); projects has graduated to its own switch
+  developerMode: false, // developer mode: master gate for unfinished/structural experiments (today-x, habit, projects, deps)
   showTodayXModule: false, // today experimental view (two-layer gate: developerMode && this)
   autoDownloadUpdates: true, // Auto-update: download in background when a new version is found (off = notify only; manual download on the settings page)
   showHabitModule: false, // habit check-in module (two-layer gate: developerMode && this)
-  showProjectsModule: false, // projects module (own gate only — graduated from the developer-mode master switch, 2026-09-10)
+  showProjectsModule: false, // projects module (two-layer gate: developerMode && this — still experimental, not graduated)
   showDepsModule: false, // dependency view (two-layer gate: developerMode && this; today deps mode + project deps tab)
   calendarBackground: 'list', // list|theme|system
   isCalendarBackgroundUserSelected: false,

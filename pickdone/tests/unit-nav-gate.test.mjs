@@ -5,8 +5,9 @@ import assert from 'node:assert/strict'
 // - today-x previously had NO module switch of its own (developerMode was the only gate),
 //   so users with developer mode left on from experiment reviews saw the Today Lab entry
 //   permanently in the sidebar with no way to hide it short of dropping developer mode.
-// - projects was still coupled to the developer-mode master switch even though the module
-//   has shipped (status field / milestones / CLI parity), so hiding experiments hid it too.
+// - A same-day attempt to graduate projects onto its own switch alone was REVERTED by user
+//   verdict (the module is still experimental): all of habit/projects/today-x stay under the
+//   developer-mode master gate, each with its own module switch on top.
 import { visibleNavRoutes } from '../renderer/js/utils/nav-gate.js'
 
 const ORDER = ['todo-list-today', 'todo-list-today-x', 'todo-list-habit', 'todo-list-projects', 'todo-list-stats']
@@ -24,9 +25,10 @@ test('today-x requires BOTH the master gate and its own module switch (two-layer
   assert.ok(nav({ developerMode: true, showTodayXModule: true }).includes('todo-list-today-x'))
 })
 
-test('projects rides on its own switch alone — developer mode off no longer hides it', () => {
-  assert.ok(nav({ developerMode: false, showProjectsModule: true }).includes('todo-list-projects'),
-    'graduated module must survive developerMode=false')
+test('projects keeps the two-layer gate — graduation was reverted (module still experimental)', () => {
+  assert.ok(!nav({ developerMode: false, showProjectsModule: true }).includes('todo-list-projects'),
+    'projects must NOT survive developerMode=false')
+  assert.ok(nav({ developerMode: true, showProjectsModule: true }).includes('todo-list-projects'))
   assert.ok(!nav({ developerMode: true, showProjectsModule: false }).includes('todo-list-projects'))
 })
 
