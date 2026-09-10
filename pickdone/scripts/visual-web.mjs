@@ -135,9 +135,13 @@ const resetBrowser = () => { try { execSync('agent-browser close', { shell: true
 resetBrowser()
 
 async function runAll () {
+  // 硬期限:自愈(宿主重生/场景重试)必须让位于 check:all 的看门狗——超 20min 自断,
+  // 否则"看门狗杀宿主→ensureHost 救活"无限循环,阶段永不出裁决(2026-09-09 实锤)
+  const deadline = Date.now() + 20 * 60 * 1000
   let fail = 0
   for (const route of ROUTES) {
     for (const theme of ['light', 'dark']) {
+      if (Date.now() > deadline) { console.log('✗ hard 20min deadline — aborting remaining scenes'); fail++; return fail }
       const name = route.replace(/\//g, '_').replace(/^_/, '') + '-' + theme + '.png'
       const file = path.join(DIR, name)
     // 场景级重试:偶发一帧抖动/一次数据未及 hydrate,整个场景重来一次即可自愈

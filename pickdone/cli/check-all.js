@@ -70,7 +70,8 @@ const GROUPS = [
     // (cssom 95% 容差放行 77 条内的丢失,其余门禁只扫存在的规则)。--spawn 自拉起 5175 宿主,无外部依赖。
     name: '④ Web 视觉回归（14 场景×深浅,0.4% pixelmatch;自拉起 5175 宿主）', parallel: 1, retry: 1,
     stages: [
-      ['Web 视觉回归（14 场景深浅对照,防"删规则/改样式无门禁可抓"——漂移根因已修:shim 番茄锚昨天）', 'node', ['scripts/visual-web.mjs', '--spawn']],
+      // 第 5 元=超时分钟覆盖:视觉组带场景重试+浏览器逐场景重启,30 分钟预算(2026-09-09 曾撞 15min 默认超时按红计;满载重试实测 22-40min)
+      ['Web 视觉回归（14 场景深浅对照,防"删规则/改样式无门禁可抓"——漂移根因已修:shim 番茄锚昨天）', 'node', ['scripts/visual-web.mjs', '--spawn'], null, 30],
     ]
   },
   
@@ -83,8 +84,9 @@ if (WITH_A11Y) GROUPS.push({
 const T0 = Date.now()
 const fmtMs = ms => ms >= 60000 ? `${(ms / 60000).toFixed(1)}min` : `${(ms / 1000).toFixed(0)}s`
 
-// 单阶段执行:异步 spawn + 15 分钟硬超时(挂死=红,不阻塞其他并行阶段)
-function runStage ([name, cmd, args, extraEnv]) {
+// 单阶段执行:异步 spawn + 硬超时(默认 15 分钟,挂死=红,不阻塞其他并行阶段;门禁元组第 5 位可覆盖分钟数)
+function runStage (stage) {
+  const [name, cmd, args, extraEnv, timeoutMin] = stage
   return new Promise(resolve => {
     const t0 = Date.now()
     const child = spawn(cmd, args, {
@@ -98,10 +100,20 @@ function runStage ([name, cmd, args, extraEnv]) {
     child.stdout.on('data', d => { out = (out + d).slice(-CAP) })
     child.stderr.on('data', d => { out = (out + d).slice(-CAP) })
     const timer = setTimeout(() => {
-      // win32: child 是 shell 包装进程,SIGKILL 只杀壳会孤儿化 node/vite 孙进程——改树杀
-      if (process.platform === 'win32') { try { spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { shell: true, stdio: 'ignore' }) } catch {} }
+      // win32: child 是 shell 包装进程,可能先退 handing off 孙进程——树杀 + 按特征端口补杀双保险
+      // (2026-09-09 实锤:仅杀包装 pid 时孤儿 visual-web 永挂,'close' 永不触发,整池卡死)
+      if (process.platform === 'win32') {
+        try { spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { shell: true, stdio: 'ignore' }) } catch {}
+        try {
+          const { execSync } = require('node:child_process')
+          const out = execSync('netstat -ano | findstr :5175 | findstr LISTENING', { encoding: 'utf8', shell: true, stdio: ['ignore', 'pipe', 'ignore'] })
+          for (const pid of [...new Set(out.split(/\r?\n/).map(l => l.trim().split(/\s+/).pop()).filter(p => /^\d+$/.test(p)))]) {
+            try { spawn('taskkill', ['/pid', pid, '/T', '/F'], { shell: true, stdio: 'ignore' }) } catch {}
+          }
+        } catch { /* 端口本就空闲 */ }
+      }
       try { child.kill('SIGKILL') } catch {}
-    }, 15 * 60 * 1000)
+    }, (timeoutMin || 15) * 60 * 1000)
     child.on('close', (code, signal) => {
       clearTimeout(timer)
       const timedOut = signal === 'SIGKILL'
