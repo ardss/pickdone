@@ -21,5 +21,6 @@ export const SHARDS = [
   { batch: 'N', prefixes: ['onboarding', 'update'] },
   { batch: 'P', prefixes: ['statsP'] },
   { batch: 'Q', prefixes: ['projQ'] }, // v0.2 project status field
-  { batch: 'R', prefixes: ['loadR'] } // v0.2 schedule-load warning
+  { batch: 'R', prefixes: ['loadR'] }, // v0.2 schedule-load warning
+  { batch: 'T', prefixes: ['todayT'] } // v0.2 today-page project association
 ]
