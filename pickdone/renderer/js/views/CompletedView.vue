@@ -14,7 +14,7 @@
             </ul>
             <template #reference>
               <span class="tip-icon tip-q" role="button" tabindex="0" :aria-label="$t('statsC.Completed.tipAria')"
-                    @keydown.enter.prevent="e => e.target.click()">?</span>
+                    @keydown.enter.prevent="triggerTip($event)">?</span>
             </template>
           </el-popover>
         </div>
@@ -90,6 +90,8 @@ export default {
   },
   methods: {
     isCol (key) { return !!this.collapsedMap[key] },
+    // TS cast lives here: the structure guard rejects `as` expressions inside templates
+    triggerTip (e) { (e.currentTarget as HTMLElement).click() },
     toggleCol (key) { this.collapsedMap = { ...this.collapsedMap, [key]: !this.collapsedMap[key] } },
     toggleAllGroups () {
       const expand = this.anyCollapsed

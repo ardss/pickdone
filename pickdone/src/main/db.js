@@ -321,11 +321,12 @@ function todoToRow (t) {
 }
 
 function init (userDataPath) {
-  // Re-entry guard (P2 2026-09-11, per the comment below): a second init while a handle is open is
-  // forbidden — rebuilding it on the same file would orphan prepared statements mid-write. The guard is
-  // safe because init() cleans up (close + null) on its own failure, so the recovery re-init path
-  // (index.js db-fail dialog → attemptDbRecovery → init again) still works.
-  if (db) throw new Error('db already initialized in this process — close() before init() again')
+  // Re-entry policy (P2 2026-09-11): a second init while a handle is open closes the old handle
+  // cleanly first instead of throwing — rebuilding against a live handle would orphan prepared
+  // statements mid-write, and an abrupt throw broke the same-process restart idiom used across the
+  // unit tests (init without close = simulated restart). Closing first leaves no stale stmts and
+  // keeps the recovery re-init path (index.js db-fail dialog → attemptDbRecovery) working.
+  if (db) { try { db.close() } catch {} db = null; stmtsClearAll() }
   try {
     initInner(userDataPath)
   } catch (e) {

@@ -40,6 +40,14 @@ export function resolveFocusedTask (attachTodo, todoRows) {
   return { taskId: attachTodo.taskId, taskContent: row.taskContent != null ? row.taskContent : attachTodo.taskContent }
 }
 
+/** Todo-module row pool for accounting-time attach validation. In a real Vuex action `this` is the
+ *  store, so the todo module lives on `rootState`; fake-ctx tests (and defensive symmetry) may only
+ *  carry it on `state`. Missing module or lists resolve to an empty pool = attach fails as free focus. */
+export function focusTodoPool (storeLike) {
+  const todoMod = (storeLike.rootState && storeLike.rootState.todo) || (storeLike.state && storeLike.state.todo) || {}
+  return [...(todoMod.todoList || []), ...(todoMod.recycleList || [])]
+}
+
 const DEF = {
   status: 'default', attachTodo: null, todayTomatoCount: 0, tomatoRecordList: [],
   tomatoTime: 25, restTime: 5, enableNotification: true, enableBeep: true,
@@ -312,7 +320,7 @@ export default {
       }
       if (running && record) {
         const focusedMin = Math.max(1, Math.min(s.tomatoTime, Math.floor((Date.now() - s.startedAt) / 60000)))
-        const focused = resolveFocusedTask(s.attachTodo, [...this.state.todo.todoList, ...this.state.todo.recycleList])
+        const focused = resolveFocusedTask(s.attachTodo, focusTodoPool(this))
         commit('addRecord', {
           // Deterministic id: cross-window dedupe as a backstop so the same give-up records only once
           // Accounting basis = endTime (unified with completeFocus/stats/rail)
@@ -337,7 +345,7 @@ export default {
       // Accounting-time attach validation (root fix): a task deleted after focus start resolves to null →
       // the focus is booked as free (no focusTaskId, no bumpSnow) instead of firing a fire-and-forget
       // bumpSnow at a dead taskId whose minutes silently vanish
-      const focused = resolveFocusedTask(s.attachTodo, [...this.state.todo.todoList, ...this.state.todo.recycleList])
+      const focused = resolveFocusedTask(s.attachTodo, focusTodoPool(this))
       commit('addRecord', {
         // Accounting basis unified = endTime: stats (metrics)/rail (railSegs)/entry-card corrections (updateRecord) all use endTime
         tomatoId: 'tmt_f_' + s.startedAt, endTime: endTs, dateKey: dayjs(endTs).format(FMT.date),

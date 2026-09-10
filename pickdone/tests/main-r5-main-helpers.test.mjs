@@ -47,8 +47,8 @@ test('selectStaleTmp: custom maxAge respected, empty input safe', () => {
   assert.deepEqual(selectStaleTmp(null), [])
 })
 
-/* ---- db.js close/null + init re-entry guard (P2-9) ---- */
-test('db: isOpen is false after close; double init throws; failed init cleans up', { skip: !fs.existsSync(path.resolve(import.meta.dirname, '../vendor/better-sqlite3-multiple-ciphers')) && 'vendor driver missing' }, () => {
+/* ---- db.js close/null + init re-init policy (P2-9) ---- */
+test('db: isOpen is false after close; re-init while open rebuilds cleanly; failed init cleans up', { skip: !fs.existsSync(path.resolve(import.meta.dirname, '../vendor/better-sqlite3-multiple-ciphers')) && 'vendor driver missing' }, () => {
   const dbm = require('../src/main/db.js')
   const ud = fs.mkdtempSync(path.join(os.tmpdir(), 'pickdone-r5-db-'))
   try {
@@ -60,9 +60,11 @@ test('db: isOpen is false after close; double init throws; failed init cleans up
     // re-init after close is legal (tests/CLI switch directories this way)
     dbm.init(ud)
     assert.equal(dbm.isOpen(), true)
-    // double init while open is forbidden (comment semantics now enforced)
-    assert.throws(() => dbm.init(ud), /already initialized/)
-    assert.equal(dbm.call('getMeta', 'k'), 'v', 'data intact after guarded re-init attempt')
+    // re-init while open closes the old handle first and rebuilds (same-process restart idiom;
+    // an abrupt throw here broke 16 unit tests that simulate restart via init-without-close)
+    dbm.init(ud)
+    assert.equal(dbm.isOpen(), true, 're-init while open rebuilds a live handle')
+    assert.equal(dbm.call('getMeta', 'k'), 'v', 'data intact after re-init rebuild')
   } finally {
     dbm.close()
     fs.rmSync(ud, { recursive: true, force: true })
