@@ -79,6 +79,7 @@ description: Use when the user or an agent needs to read, create, edit, complete
 | 保存的筛选视图（"建个视图叫XX"） | `view add <名> [--category/--priority/--overdue/--nodate]`；`view list`/`view rm`；`list --view <名>` | `view list` 回读 |
 | 项目状态（"项目XX暂停了/做完了"） | `project <名\|id> --status active\|paused\|done\|cancelled\|none`；`projects [--status <v>]` | `projects --json` 看 `status` |
 | 农历注记 | `list ... --lunar`（文本附注+JSON `lunar` 字段） | — |
+| 移回待办箱（"这条不排日期了"） | `edit <taskId> --date none`（等价 `clear`；主提醒随日期清、日程块移除；已无日期=友好 no-op） | `get --json` 看 `todoTime: 0` |
 | 分类改名 | `category rename <名\|id> <新名> --json` | `categories --json` |
 | 删除分类 | `category rm <名\|id> --yes --json`（软删，App内可恢复；任务保留仅脱离分类；**须用户明确要求**） | `categories --json` 应无此项 |
 | 标签管理（"把#work全改成#工作""我的标签有哪些"） | `tag list` / `tag rename <旧> <新>` / `tag rm <名>` --json | `tag list` 回读；标签来自标题/描述里的 #tag，无独立存储 |
@@ -147,7 +148,7 @@ clean [--all] [--dry-run]         # 清理测试/开发残留(临时userData+测
 add <内容> [--desc 文本] [--date tomorrow] [--reminder "2026-09-01 09:00"] [--category 工作] [--difficulty 0-3]
 done <taskId|关键词>              # 完成（写 completedAt）
 undo <taskId|关键词>              # 撤销完成
-edit <taskId|关键词> [--content 新标题] [--desc 文本] [--date tomorrow] [--reminder 时间] [--category 名称]
+edit <taskId|关键词> [--content 新标题] [--desc 文本] [--date tomorrow|none] [--reminder 时间] [--category 名称]   # --date none|clear = 清空日期移回待办箱
 delete <taskId|关键词>            # → 回收站
 restore <taskId|关键词>           # 从回收站恢复
 purge --yes                       # 清空回收站（危险，需显式确认）
