@@ -158,7 +158,9 @@ test('TodoBoxView: dropdown triggers are focusable and open via Enter; menu item
   const src = read('renderer/js/views/TodoBoxView.vue')
   const triggers = src.match(/dropdown-select__label" role="button" tabindex="0"/g) || []
   assert.equal(triggers.length, 3, 'all three triggers focusable')
-  assert.match(src, /@keydown\.enter\.prevent="\$event\.currentTarget\.click\(\)"/)
+  assert.match(src, /@keydown\.enter\.prevent="tbTriggerKey"/)
+  // the TS cast lives in the tbTriggerKey method (structure guard rejects `as` in templates)
+  assert.match(src, /tbTriggerKey \(e\) { \(e\.currentTarget as HTMLElement\)\.click\(\) }/)
   assert.ok(!/class="dd-menu">\s*<li[^>]*@click="setSort\(m\.value\)"[^>]*>\{\{ m\.label \}\}<\/li>\s*<\/ul>\s*<template #reference><span class="dropdown-select__label">{{/.test(src.replace(/\n\s+/g, ' ')), 'sort li lacks keyboard') // sanity regex
   assert.match(src, /@keydown\.enter\.prevent="setSort\(m\.value\)"/)
   assert.match(src, /@keydown\.enter\.prevent="setOrder\(o\.value\)"/)
