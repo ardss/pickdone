@@ -6,70 +6,15 @@ import { genTaskId, nextSort, dayjs, reportError, DAY_MS, rangeDays, parsePredec
 import { expandRepeatDates } from '../utils/repeat.js'
 import { sortByMode } from '../utils/sortMode.js'
 import { getEstimate } from '../utils/tomatoEstimate.js'
-import { saveRuntime } from './runtimeState.js'
-import { moveTaskChips, clearTaskChips, snapshotForDelete, restoreSnapshot, clearSnapshot } from '../utils/dayPlans.js'
+import { clearSnapshot } from '../utils/dayPlans.js'
+// Cross-cutting concerns, physically split out of this module (pure relocation — the store's action
+// semantics are unchanged; the actions/mutations below delegate to these extracted implementations):
+import { enqueueChipSync, rowChipSync, planSnapshotRowSync, snapshotForDelete, restoreSnapshot } from './planChips.js'
+import { historyPush, historyPushKeepRedo, historyClear, historyBreakMerge, historyUndoPop, historyRedoPop, historyRedoPush, undoStep, redoStep, persistSnapshotDiffCore } from './undo.js'
+import { writeEventBackupCore, writeAutoBackupCore, writeCriticalBackupCore } from './todoBackup.js'
 
-/** Chip-sync serial chain: when a task's reschedule fires in bursts, guarantees planMoveTask arrival order matches operation order */
-const _chipSyncChain = new Map()
-
-/** Serialize chip ops per taskId (shared by updateTodoFields and undo/redo snapshot replay, so both channels
- *  can never interleave planMoveTask/planDeleteTask for the same task out of order) */
-function enqueueChipSync (taskId, fn) {
-  const prev = _chipSyncChain.get(taskId) || Promise.resolve()
-  const next = prev.catch(() => {}).then(fn)
-  _chipSyncChain.set(taskId, next)
-  if (_chipSyncChain.size > 64) { for (const k of _chipSyncChain.keys()) { if (k !== taskId) _chipSyncChain.delete(k) } }
-  return next
-}
-
-const fmtChipDay = ts => dayjs(ts).format('YYYY-MM-DD')
-
-/** Common chip-sync body for a row mutation (shared: updateTodoFields direct edits and persistSnapshotDiff replay
- *  must run the identical migration logic, otherwise the two write channels drift apart) */
-async function rowChipSync (taskId, prevDayStart, nextRow) {
-  try {
-    const toDay = nextRow.delete === true ? null : (nextRow.dayStart ? fmtChipDay(nextRow.dayStart) : null)
-    if (toDay === null) { await snapshotForDelete(taskId); await clearTaskChips(taskId); return }
-    const fromDay = prevDayStart ? fmtChipDay(prevDayStart) : null
-    await moveTaskChips(taskId, fromDay, toDay)
-  } catch (e) { console.warn('[todo] schedule chip sync failed (task updated, chip will converge on next op):', e) }
-}
-
-/** Pure planner for snapshot-replay side effects (unit-testable, no dayjs/window — day values stay raw timestamps).
- *  Root cause it addresses: undo/redo replays snapshot rows via safeUpsert, bypassing updateTodoFields' chip-sync /
- *  snapshot-restore chain; this decides which effects each changed row must re-run.
- *  @param before row in the snapshot we came FROM (null = row absent there)
- *  @param after  row in the snapshot we move TO (null = row absent there → replay soft-deletes it as an undone create)
- *  @returns list of effects: {op: 'snapshotForDelete'|'restoreSnapshot'|'clearTaskChips'|'moveTaskChips', taskId, fromTs?, toTs?} */
-export function planSnapshotRowSync (before, after) {
-  const row = after || before
-  if (!row) return []
-  const taskId = row.taskId
-  if (!after) return [{ op: 'snapshotForDelete', taskId }] // undone create → replay soft-delete must snapshot+clear chips like deleteTodo
-  if (before && before.delete === true && !after.delete) return [{ op: 'restoreSnapshot', taskId }] // undone soft-delete → write back the pre-delete chip snapshot like restoreFromRecycle
-  const wasLive = !before || before.delete !== true
-  if (wasLive && after.delete === true) return [{ op: 'snapshotForDelete', taskId }]
-  // active→deleted: snapshotForDelete (photo + clear) is exactly deleteTodo's semantics. This branch also
-  // serves REDO of a delete whose preceding undo already consumed the snapshot meta (restoreSnapshot empties
-  // it) — clearing alone would leave nothing for the NEXT undo to restore, losing chips permanently
-  // (2026-09-09 release review).
-  if (wasLive && !after.delete && before && (before.dayStart || 0) !== (after.dayStart || 0)) {
-    if (!after.dayStart) return [{ op: 'clearTaskChips', taskId }] // date removed → clear, same as updateTodoFields
-    return [{ op: 'moveTaskChips', taskId, fromTs: before.dayStart || 0, toTs: after.dayStart }] // date change → migrate like updateTodoFields
-  }
-  if (!before && !after.delete && after.dayStart) {
-    // redo of an undone create: its soft-delete phase snapshotted+cleared chips; write them back (no-op when no snapshot meta exists)
-    return [{ op: 'restoreSnapshot', taskId }]
-  }
-  return []
-}
-
-/** Persistence blob format version (shared by the todoState/categoryState/habitsState segments in backup dumps);
- *  note this is unrelated to state.version (the sync counter). The restore side refuses to import segments >1 (preventing downgrade misreads). */
-const SCHEMA_V = 1
-
-/** Feedback summary for undo/redo moved into persistSnapshotDiff's returned changedRows (2026-09-02:
-    the original diffLabel did two more rounds of full stringify over both snapshots just to extract one title; removed with the string-snapshot refactor) */
+// planSnapshotRowSync stays a named export of this module (tests import it from here)
+export { planSnapshotRowSync }
 
 
 const DEFAULT_VIEWS = () => ({
@@ -167,9 +112,6 @@ function daysRangeTs (settings) {
   }
 }
 
-const HISTORY_LIMIT = 50 // undo stack cap (entries)
-const HISTORY_BYTES = 24 * 1024 * 1024 // undo stack byte-budget hard cap: one snapshot ~1MB with a thousand tasks; 50 entries once sat resident ~50MB unbounded
-
 // Fields affecting a view's group membership (one-to-one with computeViews' grouping criteria):
 // delete/deletedAt (active/recycle bin), todoTime/dayStart (date grouping), complete/completedAt (completed grouping), categoryId (todo-box category filter)
 // Only writes to these fields need an immediate full view rebuild; the rest (title/description/subtask plain-text edits) take the lightweight path
@@ -235,59 +177,18 @@ export default {
 
 
 /* ---------- Undo/redo (snapshots pushed by index.js's subscribeAction before mutation-type actions) ---------- */
-    /* Snapshot = JSON string: stringify once on the push side, parse only at undo time; byte budget hard-caps stack memory (with a thousand tasks, 50 full snapshots once sat ~50MB unbounded) */
-    historyPush (s, snapRaw) {
-      // Chained changes within 400ms (EditPanel 350ms debounced saves, batch loops) merge into the stack top
-      const now = Date.now()
-      if (now - (s._histLastPushAt || 0) < 400 && s.undoStack.length) {
-        const top = s.undoStack.length - 1
-        s._histBytes = Math.max(0, (s._histBytes || 0) + snapRaw.length - s.undoStack[top].length)
-        s.undoStack[top] = snapRaw
-        s._histLastPushAt = now
-        s.redoStack = []
-        s._histRedoBytes = 0
-        return
-      }
-      s._histLastPushAt = now
-      s.undoStack.push(snapRaw)
-      s._histBytes = (s._histBytes || 0) + snapRaw.length
-      // Dual limits: entry cap (old) + byte budget; evicted from the oldest end
-      while (s.undoStack.length > 1 && (s.undoStack.length > HISTORY_LIMIT || s._histBytes > HISTORY_BYTES)) {
-        s._histBytes -= s.undoStack[0].length
-        s.undoStack.shift()
-      }
-      s.redoStack = []
-      s._histRedoBytes = 0
-    },
-    // redo()'s post-restore push: same eviction budget as historyPush but keeps the remaining redo
-    // entries alive (historyPush resets redoStack, which used to kill every redo step after the first),
-    // and breaks the merge window so a following edit starts a fresh undo step instead of fusing
-    historyPushKeepRedo (s, snapRaw) {
-      s._histLastPushAt = 0
-      s.undoStack.push(snapRaw)
-      s._histBytes = (s._histBytes || 0) + snapRaw.length
-      while (s.undoStack.length > 1 && (s.undoStack.length > HISTORY_LIMIT || s._histBytes > HISTORY_BYTES)) {
-        s._histBytes -= s.undoStack[0].length
-        s.undoStack.shift()
-      }
-    },
+/* History bookkeeping lives in undo.js (pure state-transform functions); these mutations are thin adapters. */
+    historyPush (s, snapRaw) { historyPush(s, snapRaw) },
+    historyPushKeepRedo (s, snapRaw) { historyPushKeepRedo(s, snapRaw) },
     historyRestore (s, snap) {
       s.todoList = snap.todoList
       s.recycleList = snap.recycleList
     },
-    historyClear (s) { s.undoStack = []; s.redoStack = []; s._histLastPushAt = 0; s._histBytes = 0; s._histRedoBytes = 0 },
-    // Break the 400ms chained merge: discrete ops (add/delete/purge) call this so the next push starts a fresh undo step,
-    // keeping those ops undoable on their own instead of fusing into a following EditPanel edit
-    historyBreakMerge (s) { s._histLastPushAt = 0 },
-    historyUndoPop (s) {
-      const popped = s.undoStack.pop()
-      if (popped) s._histBytes = Math.max(0, (s._histBytes || 0) - popped.length)
-    },
-    historyRedoPop (s) { s.redoStack.pop() },
-    historyRedoPush (s, snap) {
-      s.redoStack.push(snap)
-      if (s.redoStack.length > HISTORY_LIMIT) s.redoStack.shift()
-    },
+    historyClear (s) { historyClear(s) },
+    historyBreakMerge (s) { historyBreakMerge(s) },
+    historyUndoPop (s) { historyUndoPop(s) },
+    historyRedoPop (s) { historyRedoPop(s) },
+    historyRedoPush (s, snap) { historyRedoPush(s, snap) },
     viewsClean (s) { s.viewsDirty = false },
     setSyncing (s, v) { s.isSyncing = v },
     setViews (s, views) { s.views = views },
@@ -643,88 +544,10 @@ export default {
     },
 
     /* ---------- Undo/redo ---------- */
-    async undo ({ state, commit, dispatch }) {
-      if (!state.undoStack.length) return false
-      // Parse-before-pop: a corrupt snapshot used to be popped first and only then JSON.parse'd — the step vanished
-      // into an unhandled rejection (main.js had no .catch) while the stack had already been mutated.
-      const prevRaw = state.undoStack[state.undoStack.length - 1]
-      let prev
-      try { prev = JSON.parse(prevRaw) } catch (e) {
-        console.error('[todo] undo snapshot corrupted, dropping the corrupt step:', e)
-        commit('historyUndoPop') // dispose the unreadable entry so older (valid) undo steps stay reachable
-        return false
-      }
-      commit('historyUndoPop')
-      const cur = { todoList: state.todoList, recycleList: state.recycleList }
-      commit('historyRedoPush', JSON.stringify(cur)) // stringify once here only, on the push side
-      commit('historyRestore', prev)
-      const changedRows = (await dispatch('persistSnapshotDiff', { from: cur, to: prev })) || []
-      dispatch('computeViews')
-      dispatch('writeCriticalBackup')
-      // label reuses the diff result; no more two rounds of full stringify over both snapshots
-      return { ok: true, label: changedRows.length === 1 ? (changedRows[0].taskContent || '') : '' }
-    },
-    async redo ({ state, commit, dispatch }) {
-      if (!state.redoStack.length) return false
-      // Parse-before-pop (same corruption guard as undo)
-      const nextRaw = state.redoStack[state.redoStack.length - 1]
-      let next
-      try { next = JSON.parse(nextRaw) } catch (e) {
-        console.error('[todo] redo snapshot corrupted, dropping the corrupt step:', e)
-        commit('historyRedoPop')
-        return false
-      }
-      commit('historyRedoPop')
-      const cur = { todoList: state.todoList, recycleList: state.recycleList }
-      commit('historyPushKeepRedo', JSON.stringify(cur))
-      commit('historyRestore', next)
-      const changedRows = (await dispatch('persistSnapshotDiff', { from: cur, to: next })) || []
-      dispatch('computeViews')
-      dispatch('writeCriticalBackup')
-      return { ok: true, label: changedRows.length === 1 ? (changedRows[0].taskContent || '') : '' }
-    },
-    /** Persist the diff after a snapshot switch: rows present in "after" but missing/different in "before" are upserted;
-        rows present in "before" but missing in "after" (undoing a "create") are soft-deleted, guaranteeing they can be restored again.
-        Returns the changed-rows list (reused for the undo toast's label). Row-change detection uses the updateTime invariant (all writes bump it uniformly via updateTodoFields/reorder/delete). */
-    async persistSnapshotDiff ({ commit }, { from, to }) {
-      const fromMap = new Map(from.todoList.concat(from.recycleList).map(t => [t.taskId, t]))
-      const toRows = to.todoList.concat(to.recycleList)
-      const toIds = new Set(toRows.map(t => t.taskId))
-      const changedRows = []
-      const effects = []
-      for (const row of toRows) {
-        const before = fromMap.get(row.taskId)
-        if (!before || before.updateTime !== row.updateTime) {
-          commit('upsertLocal', row)
-          safeUpsert({ ...row, status: 'update' })
-          changedRows.push(row)
-          // Snapshot replay bypasses updateTodoFields' chip-sync/snapshot-restore chain — plan the equivalent side effects
-          for (const eff of planSnapshotRowSync(before || null, row)) effects.push(eff)
-        }
-      }
-      for (const row of from.todoList.concat(from.recycleList)) {
-        if (!toIds.has(row.taskId)) {
-          const merged = { ...row, delete: true, updateTime: Date.now(), status: 'delete' }
-          commit('upsertLocal', merged)
-          safeUpsert(merged)
-          changedRows.push(merged)
-          // Undone create → replay soft-delete: snapshot+clear schedule chips like deleteTodo does
-          for (const eff of planSnapshotRowSync(row, null)) effects.push(eff)
-        }
-      }
-      // Run the planned side effects through the same per-taskId serial chain as direct edits
-      for (const eff of effects) {
-        enqueueChipSync(eff.taskId, async () => {
-          try {
-            if (eff.op === 'snapshotForDelete') await snapshotForDelete(eff.taskId)
-            else if (eff.op === 'restoreSnapshot') await restoreSnapshot(eff.taskId)
-            else if (eff.op === 'clearTaskChips') await clearTaskChips(eff.taskId)
-            else if (eff.op === 'moveTaskChips') await moveTaskChips(eff.taskId, eff.fromTs ? fmtChipDay(eff.fromTs) : null, fmtChipDay(eff.toTs))
-          } catch (e) { console.warn('[todo] snapshot-replay chip sync failed (will converge on next op):', e) }
-        })
-      }
-      return changedRows
-    },
+    async undo (ctx) { return undoStep(ctx) },
+    async redo (ctx) { return redoStep(ctx) },
+    /** Persist the diff after a snapshot switch (implementation in undo.js; safeUpsert injected) */
+    persistSnapshotDiff (ctx, payload) { return persistSnapshotDiffCore(ctx, payload, safeUpsert) },
 
     scheduleReminder (_, todo) {/* the main process rebuilds the schedule automatically after dbCall */},
 
@@ -857,74 +680,10 @@ export default {
     },
 
     /** Event snapshot before dangerous operations: reason such as purge/import/restore, filename evt-<reason>-*.json */
-    async writeEventBackup ({ state, rootState }, reason) {
-      try {
-        if (!window.todoAPI || !window.todoAPI.runAutoBackup) return false
-        const dump = buildBackupDump(rootState, state)
-        await window.todoAPI.runAutoBackup(JSON.stringify(dump), { tag: String(reason || 'op').toLowerCase(), eventKeep: 10, backupDir: rootState.settings.backupDir || '' })
-      } catch (e) { console.error('[event-backup] failed:', e && e.message) }
-    },
+    writeEventBackup ({ state, rootState }, reason) { return writeEventBackupCore(this, { state, rootState }, reason) },
     /** Auto backup: same structure as critical-state, written to userData/backups/auto-*.json with rolling cleanup */
-    async writeAutoBackup ({ state, rootState }) {
-      try {
-        if (!window.todoAPI || !window.todoAPI.runAutoBackup) return
-        const dump = buildBackupDump(rootState, state, { stripVolatileSettings: true })
-        const r = await window.todoAPI.runAutoBackup(JSON.stringify(dump), { recent: rootState.settings.autoBackupKeep || 24, backupDir: rootState.settings.backupDir || '' })
-        if (r && r.ok) saveRuntime({ autoBackupLastAt: Date.now() })
-        else saveRuntime({ autoBackupLastAt: 0 }) // retry next time on failure
-        return !!r && !!(r.ok)
-      } catch (e) { console.error('[auto-backup] failed:', e && e.message) }
-    },
-    async writeCriticalBackup ({ state, rootState }) {
-      // Main-window-only op: the main process throws 'main-window-only' for aux windows, which used to leave an
-      // unhandled rejection on every debounced fire in the float/quick-add window and never wrote the backup there.
-      // Aux windows don't back up (the main window's timer covers the shared state); early-return, mirroring dbMirror.js.
-      try {
-        if (typeof window !== 'undefined' && window.location && window.location.hash && /__tomato-float|__quick-add/.test(window.location.hash)) return
-      } catch { /* non-browser env */ }
-      const buildDump = () => buildBackupDump(rootState, state)
-      const writeNow = () => {
-        try {
-          const p = window.todoAPI.writeCriticalStateBackup(JSON.stringify(buildDump()))
-          if (p && typeof p.catch === 'function') p.catch(e => console.error('[todo] critical backup write failed:', e))
-        } catch {}
-      }
-      // Quit flush: main process before-quit broadcast; pending debounced snapshots flush to disk immediately (state/rootState are live references, so flush reads the latest values)
-      if (!this._flushHooked && window.todoAPI && window.todoAPI.onAppQuittingFlush) {
-        this._flushHooked = true
-        window.todoAPI.onAppQuittingFlush(() => { if (this._cbTimer) { clearTimeout(this._cbTimer); this._cbTimer = null; writeNow() } })
-      }
-      // Debounced backup: structure matches the reference critical-state-backup.json
-      clearTimeout(this._cbTimer)
-      // 5s debounce: full stringify + IPC disk write is expensive with thousands of tasks; 800ms would fire on nearly every continuous edit
-      this._cbTimer = setTimeout(writeNow, 800)
-    }
-  }
-}
-
-/* Single source for every backup dump (event/auto/critical). Previously hand-copied 3× and already drifting —
-   a recovery dump missing a field means silently losing data on restore, so any new store goes here once. */
-function buildBackupDump (rootState, state, { stripVolatileSettings = false } = {}) {
-  const settings = { ...rootState.settings }
-  if (stripVolatileSettings) { settings.autoBackupLastAt = 0; settings.tomatoRecordAddCount = 0; settings.tomatoRecordAddDate = 0 } // strip volatile timestamps so content dedupe stays effective
-  return {
-    backup: {
-      settingsState: JSON.stringify(settings),
-      user: JSON.stringify(rootState.auth.user),
-      lastLoginRecord: JSON.stringify(rootState.auth.lastLoginRecord),
-      todoState: JSON.stringify({
-        schemaV: SCHEMA_V,
-        search: state.search, todoList: state.todoList, recycleList: state.recycleList, version: state.version,
-        remoteVersion: state.remoteVersion, todayTimestamp: state.todayTimestamp,
-        ignoreReminder: state.ignoreReminder, todosVersion: state.todosVersion, isSyncing: false,
-        views: {}
-      }),
-      tomatoState: localStorage.getItem('tomatoState') || '{}',
-      // 账本行集随份走(blob 已被掏空,不含记录;恢复端按行表幂等回灌)——无它则 JSON 灾备恢复任务回而专注账全丢
-      tomatoRecords: JSON.stringify(rootState.tomato && rootState.tomato.tomatoRecordList || []),
-      categoryState: JSON.stringify({ schemaV: SCHEMA_V, list: rootState.category.list }),
-      habitsState: JSON.stringify({ schemaV: SCHEMA_V, habits: rootState.habits.habits, moments: rootState.habits.moments, savedAt: rootState.habits.savedAt || 0 })
-    }
+    writeAutoBackup ({ state, rootState }) { return writeAutoBackupCore(this, { state, rootState }) },
+    writeCriticalBackup ({ state, rootState }) { writeCriticalBackupCore(this, { state, rootState }) }
   }
 }
 
