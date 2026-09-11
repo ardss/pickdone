@@ -161,8 +161,11 @@ function parseDateCore (text, base, cnFullFormat = 'YYYY年M月D日') {
     }
   }
 
-  // M月D日 (standalone)
-  m = trimmed.match(new RegExp(`^${NUM_RE}\\s*月\\s*${NUM_RE}\\s*[日号]$`))
+  // M月D日 (standalone) — may be followed by a time-of-day phrase ("8月30日15:00", "9月20日早上8点"):
+  // the old end-anchor `$` rejected those, the date was dropped and the time fell through to the
+  // time-only branch landing on today. The matched time text is returned as restText so
+  // parseChineseNaturalDate applies it to the parsed date (same flow as "周五下午3点").
+  m = trimmed.match(new RegExp(`^${NUM_RE}\\s*月\\s*${NUM_RE}\\s*[日号](?:\\s*(${TIME_RE_NC}))?$`))
   if (m) {
     const mo = cnToNum(m[1]); const da = cnToNum(m[2])
     if (!Number.isNaN(mo) && !Number.isNaN(da)) {
@@ -177,7 +180,7 @@ function parseDateCore (text, base, cnFullFormat = 'YYYY年M月D日') {
       return {
         date: target.startOf('day'),
         label: `${mo}月${da}日`,
-        restText: ''
+        restText: (m[3] || '').trim()
       }
     }
   }
@@ -185,8 +188,10 @@ function parseDateCore (text, base, cnFullFormat = 'YYYY年M月D日') {
   return { date: null, label: '', restText: trimmed }
 }
 
-/** Time-of-day phrase: "(上午|下午|晚上…)? X点[半|Y分]" / "HH:MM" */
-const TIME_RE = /(上午|早上|凌晨|中午|下午|午后|晚上|今晚)?\s*(\d{1,2})[点时:：]\s*(半|[0-5]?\d)?\s*分?/
+/** Time-of-day phrase: "(上午|下午|晚上…)? X点[半|Y分]" / "HH:MM" — group shape pinned: 1=period, 2=hour, 3=minute */
+const TIME_RE = /(上午|早上|凌晨|中午|下午|午后|晚上|晚|今晚)?\s*(\d{1,2})[点时:：]\s*(半|[0-5]?\d)?\s*分?/
+/** Non-capturing source of the same phrase, for embedding into larger regexes (e.g. the M月D日+time branch below) */
+const TIME_RE_NC = '(?:上午|早上|凌晨|中午|下午|午后|晚上|晚|今晚)?\\s*\\d{1,2}[点时:：]\\s*(?:半|[0-5]?\\d)?\\s*分?'
 
 /**
  * Public entry: core date parsing + time-of-day phrase extraction ("周五下午3点" → date + 15:00)
@@ -202,7 +207,7 @@ function parseChineseNaturalDate (text, base, cnFullFormat = 'YYYY年M月D日') 
   const min = m[3] === '半' ? 30 : (m[3] != null ? parseInt(m[3], 10) : 0)
   if (Number.isNaN(h) || h > 23 || Number.isNaN(min) || min > 59) return core
   const period = m[1]
-  if ((period === '下午' || period === '午后' || period === '晚上') && h < 12) h += 12
+  if ((period === '下午' || period === '午后' || period === '晚上' || period === '晚' || period === '今晚') && h < 12) h += 12
   // 中午1点 = 13:00 (not forced to 12:00); 中午11/12点 keep the original hour
   if (period === '中午' && h >= 1 && h <= 3) h += 12
   const date = core.date ? core.date.hour(h).minute(min).second(0) : (function () {
