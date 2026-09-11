@@ -14,13 +14,25 @@ module.exports = function attachmentHandlers (ctx) {
     // --- Attachments (offline localization) ---
     'upload-attachment': (e, payload) => { if (isLocked()) throw new Error('locked'); return saveAttachment(payload) },
     'open-file': async (e, url) => {
+      // P2 2026-09-12 locked-state gate: this channel used to open/download even while locked —
+      // asymmetric with upload/delete/notification, so a locked app still exfiltrated attachments
       const { shell } = require('electron')
+      if (isLocked()) throw new Error('locked')
       if (url.startsWith('local://')) { shell.openPath(attachmentPath(url.slice(8))); return true }
       if (isSafeExternal(url)) return shell.openExternal(url)
       return false
     },
-    'download-file-and-open': (e, url) => { const { shell } = require('electron'); if (url.startsWith('local://')) { shell.openPath(attachmentPath(url.slice(8))); return true } if (isSafeExternal(url)) shell.openExternal(url); return true },
+    'download-file-and-open': (e, url) => {
+      const { shell } = require('electron')
+      if (isLocked()) throw new Error('locked')
+      // P2 2026-09-12: the trailing unconditional `return true` lied — unknown URL schemes reported
+      // success. Return per branch: local opened → true, safe external handled → true, else false.
+      if (url.startsWith('local://')) { shell.openPath(attachmentPath(url.slice(8))); return true }
+      if (isSafeExternal(url)) { shell.openExternal(url); return true }
+      return false
+    },
     'save-upload-file-to-download': (e, url, targetName) => {
+      if (isLocked()) throw new Error('locked')
       // Security check: force basename on the target name and strip path segments, preventing path traversal writes to arbitrary locations
       const rawName = String(targetName || '').replace(/[/]/g, '_')
       if (/^\.+$/.test(rawName)) throw new Error('bad target name')

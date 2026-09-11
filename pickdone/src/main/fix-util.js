@@ -51,7 +51,42 @@ function classifyBackupError (err) {
   return 'read-failed'
 }
 
-module.exports = { localDayKey, strictBase64, checkImportFileSize, pendingDeleteName, classifyBackupError, IMPORT_MAX_BYTES, formatLogLines, nextAvailableName, backupNameTs, sortBackupNamesNewestFirst, parseTomatoMetaBlob }
+/* ---- 2026-09-12 round-6 fixes ---- */
+
+/** Consistent double-read: keep reading until two consecutive reads return the SAME value (bounded
+ *  by `tries` re-reads), so callers sampling fast-changing pairs (db + wal mtimes) never absorb a
+ *  torn half-write. Returns the agreed value, or null when values keep changing (caller skips this
+ *  sample; the next poll re-reads). */
+function stableRead (readFn, tries = 4) {
+  let prev
+  try { prev = readFn() } catch { return null }
+  for (let i = 0; i < tries; i++) {
+    let cur
+    try { cur = readFn() } catch { return null }
+    if (cur === prev) return cur
+    prev = cur
+  }
+  return null
+}
+
+/** First non-existing "stem-N.ext" sibling in dir (saveAttachment previously wrote straight onto
+ *  Date.now() name — two uploads within the same millisecond with the same task/name silently
+ *  overwrote each other). existsFn injected for pure testing. */
+function nextFreePath (dir, fileName, existsFn) {
+  const path = require('path')
+  const exists = typeof existsFn === 'function' ? existsFn : (p) => { try { return require('fs').existsSync(p) } catch { return false } }
+  const candidate = path.join(dir, fileName)
+  if (!exists(candidate)) return candidate
+  const ext = path.extname(fileName)
+  const stem = fileName.slice(0, fileName.length - ext.length)
+  for (let i = 1; i < 1000; i++) {
+    const p = path.join(dir, stem + '-' + i + ext)
+    if (!exists(p)) return p
+  }
+  return path.join(dir, stem + '-' + Date.now() + ext)
+}
+
+module.exports = { localDayKey, strictBase64, checkImportFileSize, pendingDeleteName, classifyBackupError, IMPORT_MAX_BYTES, formatLogLines, nextAvailableName, backupNameTs, sortBackupNamesNewestFirst, parseTomatoMetaBlob, stableRead, nextFreePath }
 
 /* ---- 2026-09-10 main-fixes round ---- */
 

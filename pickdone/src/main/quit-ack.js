@@ -14,6 +14,13 @@ function createQuitAckTracker () {
       expected = liveWindows
       return token
     },
+    /** Strictly increasing token generator (P2 2026-09-12): Date.now() collides within the same
+     *  millisecond, and a colliding stale ack from an aborted round would then pass the token guard
+     *  and satisfy the current round prematurely. Max(prev+1, now) guarantees monotonicity. */
+    nextToken () {
+      token = Math.max(token + 1, Date.now())
+      return token
+    },
     /** Record an ack; false when stale-token, sender-less, or a duplicate from the same sender. */
     ack (t, senderId) {
       if (t !== token || senderId == null || acked.has(senderId)) return false

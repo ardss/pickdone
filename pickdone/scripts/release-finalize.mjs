@@ -72,8 +72,17 @@ if ((rel.body || '').trim().length < 30) {
   const body = zh ? (zh + '\n\n---\n\n' + en) : en
   if (!zh) say('WARNING: CHANGELOG.zh.md 无对应段——本次发布单语(英文),补中文版属流程违规')
   const tmp = path.join(os.tmpdir(), `rel-notes-${version}.md`)
+  // P2 2026-09-12: the tmp notes file used to leak in os.tmpdir() on every run; remove it after use
+  // (also on failure) and wrap the bare gh call so a gh failure prints a readable message + remedy
+  // instead of a raw execFileSync stack trace.
   fs.writeFileSync(tmp, "## What's Changed\n\n" + body + '\n')
-  gh(['release', 'edit', TAG, '--notes-file', tmp])
+  try {
+    gh(['release', 'edit', TAG, '--notes-file', tmp])
+  } catch (e) {
+    die(`gh release edit 失败(${(e && e.message) || e})。正文已备在 ${tmp},可手工执行:\n  gh release edit ${TAG} --repo ${REPO} --notes-file "${tmp}"`)
+  } finally {
+    try { fs.rmSync(tmp, { force: true }) } catch {}
+  }
   say(`正文为空,已自动从 CHANGELOG 填入(${body.length} 字符${zh ? ',双语' : ',仅英文'})`)
 } else {
   say(`正文已有(${(rel.body || '').length} 字符)`)
@@ -81,7 +90,13 @@ if ((rel.body || '').trim().length < 30) {
 
 // 4. 标题规范
 if (rel.name !== `PickDone ${version}`) {
-  gh(['release', 'edit', TAG, '--title', `PickDone ${version}`])
+  // P2 2026-09-12: bare gh call — a gh auth/network failure printed a raw execFileSync stack; wrap
+  // with a readable error and the manual remedy command.
+  try {
+    gh(['release', 'edit', TAG, '--title', `PickDone ${version}`])
+  } catch (e) {
+    die(`gh release edit --title 失败(${(e && e.message) || e})。可手工执行:\n  gh release edit ${TAG} --repo ${REPO} --title "PickDone ${version}"`)
+  }
   say(`标题统一为 PickDone ${version}`)
 }
 

@@ -111,8 +111,17 @@ function createWindowManager (ctx) {
       loadRetryCount++
       const delay = 400 * loadRetryCount
       log.warn('[Window] 主框架加载失败,退避重试', loadRetryCount, 'in', delay, 'ms')
+      // P2 2026-09-12: the deferred reload closed over the module-level `win` — by the time it fired,
+      // the window may have been destroyed and recreated (X-close→tray→showMainOrLock). Reload then
+      // hit the NEW window mid-load. Capture the exact webContents and verify it is still the live
+      // one of the still-current window before reloading.
+      const wcAtFail = win.webContents
       setTimeout(() => {
-        try { if (win && !win.isDestroyed()) win.webContents.loadURL('app://app/renderer-dist/index.html').catch(() => {}) } catch { /* gone */ }
+        try {
+          if (win && !win.isDestroyed() && win.webContents === wcAtFail && !wcAtFail.isDestroyed()) {
+            wcAtFail.loadURL('app://app/renderer-dist/index.html').catch(() => {})
+          }
+        } catch { /* gone */ }
       }, delay)
     })
     win.webContents.on('console-message', (_e, level, msg, line, src) => {

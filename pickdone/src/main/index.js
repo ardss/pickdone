@@ -141,8 +141,13 @@ function watchDbForExternalWrites () {
   // In WAL mode CLI writes only land in -wal and the main DB's mtime stays unchanged (once broke the 2s broadcast, leaving stale UI data); watch both files
   // Stat the baseline once first: starting lastMtime at 0 would make the first poll always kick, falsely reporting an "external write" right at startup
   let lastMtime = 0
+  // P2 2026-09-12 torn read: two independent statSync calls raced a concurrent CLI wal write — the
+  // baseline absorbed half a write (missed event) or saw a transient value (false external-write
+  // reload). Take the value only when two consecutive reads agree (fix-util.stableRead); persistent
+  // disagreement (extremely rare) yields null and this poll is skipped, the next one re-reads.
   const readWatchMtime = () => {
-    try { return Math.max(fs.statSync(dbFile).mtimeMs, fs.existsSync(walFile) ? fs.statSync(walFile).mtimeMs : 0) } catch { return null }
+    const statOne = () => Math.max(fs.statSync(dbFile).mtimeMs, fs.existsSync(walFile) ? fs.statSync(walFile).mtimeMs : 0)
+    return fixUtil.stableRead(statOne)
   }
   lastMtime = readWatchMtime() || 0
   let lastTomatoCmdRaw = null
@@ -290,7 +295,10 @@ function rebuildTrayMenu () {
     // createMainWindow reassigns the module var) — getBounds on it throws "Object has been destroyed" and
     // kills the whole quit chain. Route through the live-window guard.
     const qw = getMainWindow()
-    if (qw) writeConfig({ winBounds: qw.getBounds() })
+    // P1 2026-09-12: writeConfig here used to run bare — a disk-full/locked config.json threw straight
+    // out of the tray-menu click handler. The tray was already destroyed below, so the quit died
+    // mid-chain leaving a zombie process (no window, no tray). Same try-wrap as windows.js close path.
+    if (qw) { try { writeConfig({ winBounds: qw.getBounds() }) } catch (err) { log.warn('[Tray] winBounds 写入失败(退出路径)', err) } }
     // Destroy the tray icon first: the icon only disappears on Windows when the process exits,
     // while the quit path (renderer flush + scheduler persist + WAL close) can take seconds — without this, the icon lingers and reads as "quit is slow"
     if (tray) { try { tray.destroy() } catch (e) { /* empty */ } tray = null }
@@ -372,7 +380,16 @@ if (!app.requestSingleInstanceLock()) { app.quit() } else {
       })
       // app.exit does not trigger will-quit: the relaunch path must explicitly unregister system hotkeys (otherwise the new instance misreports registration conflicts)
       const relaunchClean = () => { app.relaunch(); shortcuts.unregisterAll(); app.exit(0) }
-      if (choice === 0 && recoveredFrom) { relaunchClean() }
+      if (choice === 0 && recoveredFrom) {
+        // P2 2026-09-12: the recovery-succeeded relaunch branch skipped the plain-bak cleanup that the
+        // init-success path below does — after recovery the plaintext copy stayed in userData forever,
+        // defeating at-rest encryption. Clear it before relaunching (same semantics, best-effort).
+        try {
+          const pb = path.join(ud, 'todos.db.plain-bak')
+          if (fs.existsSync(pb)) { fs.rmSync(pb, { force: true }); log.info('[Init] 恢复成功重启前清除明文残留 todos.db.plain-bak') }
+        } catch (e0) { log.warn('[Init] plain-bak 清理失败(relaunch 前)', e0) }
+        relaunchClean()
+      }
       else if (choice === 0) { shell.openPath(ud); app.quit() }
       else if (choice === 1 && recoveredFrom) { app.quit() }
       else if (choice === 1) {
@@ -494,7 +511,10 @@ app.on('before-quit', () => {
   // ledger (and the whole broadcast when the main window was already destroyed, e.g. X-close→tray→quit)
   // was silently lost. Broadcast to every live window with an isDestroyed guard.
   let liveWindows = 0
-  const roundToken = Date.now()
+  // P2 2026-09-12: Date.now() tokens collide within the same millisecond — a stale ack from a previous
+  // round could then satisfy (token !== prevToken no longer holds) and cut the flush window short.
+  // quit-ack now guarantees strictly increasing tokens across rounds.
+  const roundToken = quitAck.nextToken()
   for (const w of BrowserWindow.getAllWindows()) {
     try { if (w && !w.isDestroyed()) { w.webContents.send('app-quitting-flush', { token: roundToken }); liveWindows++ } } catch {}
   }

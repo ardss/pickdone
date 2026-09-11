@@ -64,7 +64,16 @@ module.exports = function systemHandlers (ctx) {
           if (st.size > 2 * 1024 * 1024) {
             const old = path.join(dir, 'renderer.old.log')
             try { fsx.rmSync(old, { force: true }) } catch {}
-            fsx.renameSync(file, old)
+            // P2 2026-09-12: renameSync can fail on Windows (renderer.old.log held open by an editor/
+            // AV scanner). The old code let that throw into the outer catch → append was skipped →
+            // the file grew past 2MB forever (cap semantics lost). Degrade to truncating the current
+            // file instead: we lose the archived copy once but keep the hard 2MB bound.
+            try {
+              fsx.renameSync(file, old)
+            } catch (rerr) {
+              try { log.warn('[log:write] renderer.log 轮转改名失败,降级截断', rerr) } catch {}
+              try { fsx.writeFileSync(file, '', 'utf8') } catch {}
+            }
           }
         } catch { /* 首次写入文件尚不存在 */ }
         // 2026-09-10 P2:lines 是数组,此前 `lines + NL` 走 array+string 的 join(',') —— 含逗号条目被

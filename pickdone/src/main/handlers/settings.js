@@ -16,7 +16,8 @@ module.exports = function settingsHandlers (ctx) {
       delete c.securityLockQuestion
       return c
     },
-    'set-app-locale': (e, locale) => { i18nM.setLocale(locale); const c = writeConfig({ appLocale: locale }); rebuildTrayMenu(); const tray = getTray(); if (tray) { try { tray.setToolTip(i18nM.mt('appName')) } catch (err) { /* empty */ } } const win = getMainWindow(); if (win && !win.isDestroyed()) { try { win.setTitle(i18nM.mt('appName')) } catch (err) { /* empty */ } } try { tomatoTaskbar.setBaseTitle(i18nM.mt('appName')) } catch (err) { /* taskbar module keeps its previous base */ } return c },
+    'set-app-locale': (e, locale) => { i18nM.setLocale(locale); const c = writeConfig({ appLocale: locale }); rebuildTrayMenu(); const tray = getTray(); if (tray) { try { tray.setToolTip(i18nM.mt('appName')) } catch (err) { /* empty */ } } // P2 2026-09-12: only the main window was retitle — the float/lock windows kept the old language until restart. Retitle every live window; windows created afterwards naturally pick up the new locale (title comes from i18n.mt at creation time in windows.js, no extra work needed).
+      for (const w of require('electron').BrowserWindow.getAllWindows()) { try { if (!w.isDestroyed()) w.setTitle(i18nM.mt('appName')) } catch (err) { /* dying window */ } } try { tomatoTaskbar.setBaseTitle(i18nM.mt('appName')) } catch (err) { /* taskbar module keeps its previous base */ } return c },
     'notify-settings-updated': (e, patch) => {
       // 写配置限主窗;浮窗白噪音选择是合法写入(浮窗内 settings/update 走此通道),放行浮窗自身(2026-09-05 终审 P1)
       if (!(tomatoFloat.isSelfSender(e.sender) || (getMainWindow() && e.sender === getMainWindow().webContents))) {
