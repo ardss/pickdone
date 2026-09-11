@@ -26,6 +26,13 @@ export function showUndoToast (messageFn, children, { type = 'success' } = {}) {
     if (el) {
       el.addEventListener('mouseenter', () => { if (timer) { clearTimeout(timer); timer = null } })
       el.addEventListener('mouseleave', () => { if (!timer) arm() })
+      // Keyboard/screen-reader parity (2026-09-12): hover alone could not pause the timer, so keyboard users
+      // never got the full 5s to reach the Undo button. Any key held/pressed pauses; keyup resumes. The toast
+      // is also announced politely via role="status" (live region). No visual change.
+      el.setAttribute('role', 'status')
+      const pause = () => { if (timer) { clearTimeout(timer); timer = null } }
+      document.addEventListener('keydown', pause)
+      document.addEventListener('keyup', () => { if (!timer) arm() })
     }
   } catch { /* hover-pause unavailable; toast just auto-dismisses */ }
   return msg
