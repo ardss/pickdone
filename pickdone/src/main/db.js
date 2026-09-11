@@ -6,6 +6,7 @@ const path = require('path')
 const i18nM = require('./i18n')
 const fs = require('fs')
 const crypto = require('crypto')
+const LIMITS = require('../../shared/limits.cjs') // focus-duration clamp constants (single source, audit item 4)
 // electron-log only exists inside the packaged App; the standalone CLI (extraResources bundle) has no
 // node_modules/electron-log, so fall back to a no-op logger instead of crashing at require time
 let log
@@ -543,7 +544,7 @@ const OPS = {
   upsertMany: list => { stmts.upsertMany(list.map(todoToRow)); return true },
   bumpSnow: ({ taskId, minutes }) => {
     // Server-side clamping: arbitrary/negative values from the renderer (including the float window) must not tamper with the focus ledger (a single focus session capped at 600 minutes)
-    const m = Math.max(0, Math.min(600, Math.floor(Number(minutes) || 0)))
+    const m = Math.max(0, Math.min(LIMITS.FOCUS_MAX_MINUTES, Math.floor(Number(minutes) || 0)))
     const r = stmts.bumpSnow.run({ taskId, minutes: m, now: Date.now() }); return r.changes > 0
   },
   getById: id => rowToTodo(stmts.getById.get(id)),
@@ -698,7 +699,7 @@ const OPS = {
     for (const k of OPS._REC_COLS) {
       let v = r[k]
       if (k === 'endTime' || k === 'rest') v = Math.max(0, Math.round(Number(v) || 0))
-      else if (k === 'focusDuration') v = Math.min(600, Math.max(1, Math.round(Number(v) || 0))) // clamp at the DB layer: renderer clamps 720, bumpSnow clamps 600 — this path used to be unbounded
+      else if (k === 'focusDuration') v = Math.min(LIMITS.FOCUS_MAX_MINUTES, Math.max(1, Math.round(Number(v) || 0))) // clamp at the DB layer: renderer clamps 720, bumpSnow clamps 600 — this path used to be unbounded
       else if (k === 'restDuration') v = Math.min(600, Math.max(0, Math.round(Number(v) || 0)))
       else if (k === 'succeed') v = v === false ? 0 : 1
       else if (k === 'manual') v = v ? 1 : 0

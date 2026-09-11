@@ -9,6 +9,7 @@ const { spawn } = require('child_process')
 const dayjs = require('dayjs')
 require('dayjs/locale/zh-cn')
 dayjs.locale('zh-cn')
+const { FOCUS_MAX_MINUTES } = require('../shared/limits.cjs') // focus-duration clamp constants (single source with db.js / renderer, audit item 4)
 
 // The CLI runs in pure Node; silence electron-log to keep logs out of the stdout JSON output
 try {
@@ -1382,9 +1383,9 @@ function tomatoRecords () {
 /** Backfill one manual focus record: CLI 直写账本行(不再经 App 命令通道,App 关闭也可用)。
  *  tomatoId 与渲染端手动补录同形(幂等:重复导入同槽位不产生第二条)。 */
 function backfillRecord ({ taskId = null, content = '', date, at = '20:00', minutes = 25 }) {
-  // 600 = the DB-layer clamp (db.js _recToRow): silently truncating 720 to 240/600 reported success while a different duration landed
+  // FOCUS_MAX_MINUTES = the DB-layer clamp (shared/limits.cjs, db.js _recToRow): silently truncating 720 to 240/600 reported success while a different duration landed
   const raw = parseInt(minutes, 10) || 25
-  if (raw > 600) throw new CliError('backfill duration max is 600 minutes (DB-layer clamp); got ' + raw, 'USAGE')
+  if (raw > FOCUS_MAX_MINUTES) throw new CliError('backfill duration max is ' + FOCUS_MAX_MINUTES + ' minutes (DB-layer clamp); got ' + raw, 'USAGE')
   const min = Math.max(1, raw)
   const base = dayjs(date)
   if (!base || !base.isValid()) throw new CliError('bad backfill date: ' + date, 'USAGE')
@@ -1488,10 +1489,10 @@ function resolveRecord (ref) {
 function recordFix (ref, { minutes, date, at, rest, succeed, task, free }) {
   const rec = resolveRecord(ref)
   const patch = {}
-  // 600 is the DB-layer clamp (db.js _recToRow): accepting 720 used to report success while 600 landed (audit drift)
+  // FOCUS_MAX_MINUTES is the DB-layer clamp (shared/limits.cjs, db.js _recToRow): accepting 720 used to report success while 600 landed (audit drift)
   if (minutes != null) {
     const n = parseInt(minutes, 10) || 0
-    if (n > 600) throw new CliError('focus duration max is 600 minutes (DB-layer clamp); got ' + n, 'USAGE')
+    if (n > FOCUS_MAX_MINUTES) throw new CliError('focus duration max is ' + FOCUS_MAX_MINUTES + ' minutes (DB-layer clamp); got ' + n, 'USAGE')
     patch.focusDuration = Math.max(1, n)
   }
   if (rest != null) patch.restDuration = Math.max(0, Math.min(120, parseInt(rest, 10) || 0))

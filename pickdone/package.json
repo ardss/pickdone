@@ -106,6 +106,10 @@
         ]
       },
       {
+        "from": "shared",
+        "to": "shared"
+      },
+      {
         "from": "src/main",
         "to": "src/main"
       },
@@ -135,6 +139,7 @@
     "files": [
       "package.json",
       "src/**",
+      "shared/**",
       "renderer-dist/index.html",
       "renderer-dist/assets3/**",
       "cli/**",
