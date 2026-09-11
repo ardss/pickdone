@@ -40,8 +40,10 @@
            @drop.stop="onSegDrop(s, $event)" @dblclick.stop
            :class="{ 'pd-is-over': dragOverSeg === s.tomatoId, 'pd-is-dim': hoverTaskId && s.taskId !== hoverTaskId }"></i>
       </div>
-      <!-- Entry card: unified correction panel for fact entries (start-end/duration/status/attachment/delete) -->
-      <div v-if="entryDraft" class="dr-card" :style="{ top: cardTop }" @dblclick.stop @contextmenu.prevent.stop>
+      <!-- Entry card: unified correction panel for fact entries (start-end/duration/status/attachment/delete);
+           Esc closes without saving (focus card on open so a single Esc works from anywhere in the panel) -->
+      <div v-if="entryDraft" class="dr-card" :style="{ top: cardTop }" tabindex="-1" ref="drCard"
+           @dblclick.stop @contextmenu.prevent.stop @keydown.esc.stop.prevent="entryDraft = null">
         <button class="close-x close-x--sm dr-card-x" :aria-label="$t('statsG.DayRail.cardEdit')" @click="entryDraft = null"></button>
         <b>{{ entryDraft.create ? $t('statsG.DayRail.cardCreate') : $t('statsG.DayRail.cardEdit') }}</b>
         <div class="dr-card-row"><span>{{ $t('statsG.DayRail.cardStart') }}</span>
@@ -604,47 +606,8 @@ export default {
       const t = this.taskById.get(p.taskId)
       if (t) this.$store.commit('ui/openEdit', t)
     },
-    /* Record segment click/right-click = change the linked task: the menu lists today's tasks (current link pinned and checked), rather than opening the task editor */
-    changeLinkedTask (s, e) {
-      if (e && e.preventDefault) e.preventDefault()
-      const items = []
-      const cur = s.taskId && this.taskById.get(s.taskId)
-      const today = this.today
-      const cands = this.$store.state.todo.todoList.filter(t => {
-        if (t.delete) return false
-        return t.taskId === s.taskId || t.dayStart === today || (t.todoTime ? dayjs(t.todoTime).format(FMT.date) === today : false)
-      })
-      // Incomplete first, the rest in stable list order; the currently linked task is kept in the list regardless
-      const rank = t => (t.complete ? 1 : 0)
-      cands.sort((a, b) => rank(a) - rank(b))
-      if (cur && !cands.some(t => t.taskId === cur.taskId)) cands.unshift(cur)
-      const MENU_CAP = 12
-      for (const t of cands.slice(0, MENU_CAP)) {
-        const isCur = t.taskId === s.taskId
-        items.push({
-          icon: isCur ? 'check' : 'timer',
-          label: (t.taskContent || this.$t('statsE.TodayView.untitled')) + (isCur ? ' · ' + this.$t('statsG.DayRail.curLink') : ''),
-          fn: () => {
-            this.$store.commit('tomato/updateRecordTask', { tomatoId: s.tomatoId, focusTaskId: isCur ? s.taskId : t.taskId })
-            // Menu commit shares the seg-drop feedback (silent before; consolidated 2026-09-01)
-            if (!isCur) this.$message.success(this.$t('statsG.DayRail.relinked', { n: t.taskContent || this.$t('statsE.TodayView.untitled') }))
-          }
-        })
-      }
-      if (s.taskId) {
-        items.push({ sep: true })
-        items.push({
-          icon: 'x', danger: true,
-          label: this.$t('statsG.DayRail.unlink'),
-          fn: () => {
-            this.$store.commit('tomato/updateRecordTask', { tomatoId: s.tomatoId, focusTaskId: null })
-            this.$message.success(this.$t('statsG.DayRail.unlinkedToast'))
-          }
-        })
-      }
-      if (!items.length) return
-      this.$store.commit('ui/openMenu', { x: e.clientX + 2, y: e.clientY + 2, items })
-    },
+    /* Record segment click/right-click = openEntry (unified correction panel); the old changeLinkedTask
+       right-click menu was removed (zero callers repo-wide after the seg-drop linkage fix) */
     /* Entry card unified entry: single-click block = edit; double-click/right-click empty rail = backfill at this moment; start/end precise to the minute, no more snapping to whole hours */
     minToHHmm (m) { const v = Math.max(0, Math.min(1439, Math.round(m))); return String(Math.floor(v / 60)).padStart(2, '0') + ':' + String(v % 60).padStart(2, '0') },
     minToDate (m) { const d = new Date(); d.setHours(0, 0, 0, 0); d.setMinutes(Math.max(0, Math.min(1439, Math.round(m)))); return d },
@@ -666,6 +629,7 @@ export default {
         dur, rest: Number(rec.restDuration || 0),
         succeed: rec.succeed !== false, taskId: rec.focusTaskId || '', manual: !!rec.manual
       }
+      this.focusCard()
     },
     openCreateAt (e) {
       if (e && e.stopPropagation) e.stopPropagation()
@@ -673,7 +637,10 @@ export default {
       let startMin = this.railMinuteFromEvent(e)
       if (this.isViewingToday && startMin > this.nowMinutes() - 1) startMin = Math.max(0, this.nowMinutes() - 30)
       this.entryDraft = { create: true, tomatoId: null, startMin, dur: 25, rest: 5, succeed: true, taskId: '', manual: true }
+      this.focusCard()
     },
+    /** 补录卡打开即聚焦自身(不抢内部控件焦点,tabindex=-1),让 Esc 关闭无需先点一下卡片 */
+    focusCard () { this.$nextTick(() => { const el = this.$refs.drCard; if (el && el.focus) el.focus({ preventScroll: true }) }) },
     nowMinutes () { const n = new Date(); return n.getHours() * 60 + n.getMinutes() },
     saveEntry () {
       const d = this.entryDraft
