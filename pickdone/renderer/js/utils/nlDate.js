@@ -1,7 +1,7 @@
 import { FMT } from './core.js'
 /**
  * Natural-language date parsing — the Chinese rule set is single-sourced in
- * shared/nl-date-core.cjs (also used by cli/nl-date.cjs; architecture review
+ * shared/nl-date-core.mjs (also used by cli/nl-date.cjs; architecture review
  * item 5). This file keeps only the renderer-side extras: the English NL
  * branch and the Chinese/English dispatch.
  */

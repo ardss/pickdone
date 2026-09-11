@@ -81,8 +81,15 @@ module.exports = function todoHandlers (ctx) {
       // recordsReload echo could clobber in-flight state (2026-09-11 audit P2, todos-echo same shape)
       const isLedgerOp = dbm.LEDGER_WRITE_OPS.has(op)
       const unsuppress = isLedgerOp ? dbm.suppressLedgerHook() : null
-      const r = dbm.call(op, params)
-      if (unsuppress) { unsuppress(); broadcastTomatoRecordsChanged(op, e.sender) }
+      // finally is mandatory: if dbm.call throws (DB busy / constraint), a leaked suppression count
+      // would silently mute ALL ledger broadcasts (incl. CLI writes) until process restart
+      let r
+      try {
+        r = dbm.call(op, params)
+      } finally {
+        if (unsuppress) unsuppress()
+      }
+      if (unsuppress) broadcastTomatoRecordsChanged(op, e.sender)
       // Our own write just touched the DB/-wal: re-baseline the external-write watcher immediately,
       // otherwise the next poll mistakes our write for an external one (full reload + undo-stack wipe)
       if (dbm.isWriteOp(op)) { try { const rw = resyncDbWatch(); if (rw) rw() } catch { /* best-effort */ } }

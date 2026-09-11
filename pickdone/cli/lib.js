@@ -1383,7 +1383,7 @@ function tomatoRecords () {
 /** Backfill one manual focus record: CLI 直写账本行(不再经 App 命令通道,App 关闭也可用)。
  *  tomatoId 与渲染端手动补录同形(幂等:重复导入同槽位不产生第二条)。 */
 function backfillRecord ({ taskId = null, content = '', date, at = '20:00', minutes = 25 }) {
-  // FOCUS_MAX_MINUTES = the DB-layer clamp (shared/limits.cjs, db.js _recToRow): silently truncating 720 to 240/600 reported success while a different duration landed
+  // FOCUS_MAX_MINUTES = the DB-layer clamp (shared/limits.mjs, db.js _recToRow): silently truncating 720 to 240/600 reported success while a different duration landed
   const raw = parseInt(minutes, 10) || 25
   if (raw > FOCUS_MAX_MINUTES) throw new CliError('backfill duration max is ' + FOCUS_MAX_MINUTES + ' minutes (DB-layer clamp); got ' + raw, 'USAGE')
   const min = Math.max(1, raw)
@@ -1489,7 +1489,7 @@ function resolveRecord (ref) {
 function recordFix (ref, { minutes, date, at, rest, succeed, task, free }) {
   const rec = resolveRecord(ref)
   const patch = {}
-  // FOCUS_MAX_MINUTES is the DB-layer clamp (shared/limits.cjs, db.js _recToRow): accepting 720 used to report success while 600 landed (audit drift)
+  // FOCUS_MAX_MINUTES is the DB-layer clamp (shared/limits.mjs, db.js _recToRow): accepting 720 used to report success while 600 landed (audit drift)
   if (minutes != null) {
     const n = parseInt(minutes, 10) || 0
     if (n > FOCUS_MAX_MINUTES) throw new CliError('focus duration max is ' + FOCUS_MAX_MINUTES + ' minutes (DB-layer clamp); got ' + n, 'USAGE')

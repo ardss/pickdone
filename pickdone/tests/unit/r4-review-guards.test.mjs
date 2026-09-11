@@ -43,10 +43,10 @@ test('watch baseline wiring: the todo-db:call handler re-baselines after dbm.cal
   // R4 split moved the handler into handlers/todo.js; watcher setup (and the pure core) stay in index.js.
   let src = fs.readFileSync(path.join(here, '../../src/main/index.js'), 'utf8')
   try { src += fs.readFileSync(path.join(here, '../../src/main/handlers/todo.js'), 'utf8') } catch {}
-  const callIdx = src.indexOf("const r = dbm.call(op, params)")
+  const callIdx = src.indexOf("r = dbm.call(op, params)")
   assert.ok(callIdx > 0, 'db:call handler found')
   const after = src.slice(callIdx, callIdx + 600)
-  assert.match(after, /isWriteOp\(op\)[\s\S]{0,200}resyncDbWatch\(\)/, 'resync must be gated by isWriteOp after the write')
+  assert.match(after, /isWriteOp\(op\)[\s\S]{0,400}resyncDbWatch\(\)/, 'resync must be gated by isWriteOp after the write')
   assert.match(src, /lastMtime = nextWatchBaseline\(lastMtime, readWatchMtime\)/, 'resync must go through the tested pure core')
 })
 
