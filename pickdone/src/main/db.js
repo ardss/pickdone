@@ -14,9 +14,21 @@ try { log = require('electron-log') } catch { log = { info () {}, warn () {}, er
 let Database = null
 function loadDriver () {
   if (Database) return Database
+  // Packaged layout: the driver lives in extraResources (resources/vendor, all platform prebuilds) —
+  // NOT in app.asar. The asar copy was pruned per-arch by electron-builder's smart filtering, and the
+  // bundled CLI already resolves this same resources/vendor copy via its own relative require, so the
+  // app aligning onto it keeps one authoritative driver per package. Dev runs fall back to the
+  // repo-relative path.
+  let vendorRoot = path.join(__dirname, '..', '..', 'vendor', 'better-sqlite3-multiple-ciphers')
+  try {
+    const { app } = require('electron')
+    if (app && app.isPackaged && process.resourcesPath) {
+      vendorRoot = path.join(process.resourcesPath, 'vendor', 'better-sqlite3-multiple-ciphers')
+    }
+  } catch { /* plain-node callers (tests, CLI dev mode): repo-relative path is correct */ }
   // Prefer the embedded official N-API prebuilt driver (no compilation needed)
   try {
-    Database = require('../../vendor/better-sqlite3-multiple-ciphers')
+    Database = require(vendorRoot)
     log.info('[TodoDB] 使用 vendor better-sqlite3-multiple-ciphers')
     return Database
   } catch (e) {

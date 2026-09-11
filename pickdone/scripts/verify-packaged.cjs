@@ -81,9 +81,21 @@ for (const pkgName of [...wantedPkgs].sort()) {
   if (!hit) missing.push(pkgName)
 }
 
-// 关键运行时资产
-const mustAssets = ['vendor', 'assets/vendor-lib', 'assets/fonts', 'assets/img']
+// 关键运行时资产（vendor 已移出 asar：driver 走 extraResources resources/vendor，下方单独校验）
+const mustAssets = ['assets/vendor-lib', 'assets/fonts', 'assets/img']
 const missingAssets = mustAssets.filter(a => ![...entrySet].some(e => e.startsWith(a)))
+
+// vendor driver 校验移到 unpacked resources 层：app 与打包 CLI 都从 resources/vendor 加载
+// （2026-09-11 Linux 实锤：asar 内副本被 electron-builder 按 arch 智能剪枝，arm64 包里只剩
+// win32-x64.node → DB 初始化失败。resources/vendor 是 extraResources 全量副本，含全平台 prebuild）
+const platMap = { win32: 'win32', linux: 'linux', darwin: 'darwin' }
+const archMap = { x64: 'x64', arm64: 'arm64' }
+const platformPrebuild = `prebuilds/${platMap[process.platform]}-${archMap[process.arch]}.node`
+const vendorPrebuilds = path.join('dist', process.platform === 'win32' ? 'win-unpacked' : `${process.platform}-unpacked`, 'resources', 'vendor', 'better-sqlite3-multiple-ciphers', platformPrebuild)
+if (!fs.existsSync(vendorPrebuilds)) {
+  console.error(`FAIL: ${vendorPrebuilds} 不存在（resources/vendor 驱动副本缺本平台 prebuild，打包版 DB 初始化必失败）`)
+  process.exit(1)
+}
 
 // 逐文件校验：两个 index.html 引用的每个 assets/ 静态文件必须真实在 asar 内
 // （历史 P1 模式：目录前缀检查发现不了单文件缺失——driver.css 白名单漏 glob 即此形态）
