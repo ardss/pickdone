@@ -6,6 +6,16 @@ and versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- Linux support: the app now ships as AppImage (x64 + arm64) and deb (arm64), with the same encrypted database, tray, reminders and CLI as Windows. Updates for Linux arrive through the same in-app updater channel from this release on.
+
+### Fixed
+- Linux packaging: the renderer bundle and the per-architecture sqlite driver are verified present in every Linux package before release (an earlier build shipped a window that only said "not found", and an arm64 package carrying the wrong prebuilt driver failed to open its database).
+- CLI on Linux/macOS: the default data directory now follows each platform's convention (matching where the desktop app stores its data) instead of a Windows-only path that left the CLI looking at an empty database.
+- Security: navigation from the floating-timer, quick-add and lock windows is now restricted to the app's own origin (the previous substring check let any URL carrying a route marker through); the lock window additionally denies all popups; ledger records ignore `__proto__`-style keys in stored extras.
+- Reliability: a failed ledger write no longer permanently silences ledger change broadcasts for the rest of the session; category saves surface write failures instead of silently diverging from the database; removing dead settings/window channels that nothing could trigger.
+- Maintenance: the store, main-process and test suites were reorganized for maintainability (undo/backup/plan-chip concerns extracted from the task store; tests grouped by functional domain with a fast suite filter; duplicated 600/720-minute limits and the Chinese date parser unified into single shared sources). No behavior changes.
+
 ## [0.3.3] - 2026-09-11
 
 ### Fixed
