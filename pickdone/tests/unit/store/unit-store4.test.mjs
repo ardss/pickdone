@@ -33,14 +33,15 @@ test('todo: syncTodos - version written to meta, rows marked synced, rows edited
   const metas = []
   globalThis.window.todoAPI = Object.assign(globalThis.window.todoAPI || {}, {
     dbCall: async (op, p) => {
-      if (op === 'upsertMany') {
-        saved.push(...p)
+      // W3 2026-09-12: the two-step upsertMany + setMeta collapsed into the atomic commitSyncBatch
+      if (op === 'commitSyncBatch') {
+        saved.push(...p.rows)
+        metas.push(['todosVersion', String(p.version)])
         // Simulate the user editing a again during the await: the row's status flips back to update (the core scenario named in the todo.js:516 comment)
         rows[0].status = 'update'
         return true
       }
       if (op === 'getMeta') return '0'
-      if (op === 'setMeta') { metas.push(p); return true }
       return null
     },
     writeCriticalStateBackup: async () => true

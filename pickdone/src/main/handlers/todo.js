@@ -23,7 +23,7 @@ module.exports = function todoHandlers (ctx) {
   // purgeRecycleBin/purgeSeedTodos go through dedicated main-process channels below, not through this whitelist.
   const ALLOWED_RENDERER_OPS = new Set([
     'getById', 'getAll', 'queryTodos', 'getMeta', 'deleteMeta',
-    'upsert', 'upsertMany', 'hardDelete', 'hardDeleteMany', 'setMeta',
+    'upsert', 'upsertMany', 'commitSyncBatch', 'hardDelete', 'hardDeleteMany', 'setMeta',
     'getAllCategories', 'upsertCategory',
     // Filter CRUD (filterUpsert/filterDelete are user-level safe writes, same as upsertCategory) + count reads
     'filterList', 'filterUpsert', 'filterDelete', 'countAll', 'countSeedTodos',
@@ -39,7 +39,7 @@ module.exports = function todoHandlers (ctx) {
   // Dangerous DB ops: batch write/batch delete/arbitrary meta write. Capability-wise aligned with "dangerous channels main-window only" —
   // a compromised float/lock-screen window could previously wipe the whole database in bulk or change any meta via todo-db:call (audit 2026-09-01).
   // The renderer's real call surface has been verified: all three only occur in the main window (store/utils/main.js); auxiliary windows have no legitimate callers.
-  const MAIN_WINDOW_ONLY_OPS = new Set(['upsertMany', 'hardDeleteMany', 'setMeta', 'deleteMeta'])
+  const MAIN_WINDOW_ONLY_OPS = new Set(['upsertMany', 'commitSyncBatch', 'hardDeleteMany', 'setMeta', 'deleteMeta'])
 
   return {
     // --- DB ---

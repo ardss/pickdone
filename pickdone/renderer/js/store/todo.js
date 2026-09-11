@@ -665,8 +665,15 @@ export default {
         const snapshot = [...state.todoList, ...state.recycleList].filter(t => t.status !== 'sync')
         if (!snapshot.length) return
         const snapshotIds = new Set(snapshot.map(t => t.taskId))
-        await window.todoAPI.dbCall('upsertMany', deproxyRows(snapshot))
-        await window.todoAPI.dbCall('setMeta', ['todosVersion', String(serverV)])
+        // Atomic commit (W3 2026-09-12): rows + todosVersion cursor go to the DB in ONE transaction
+        // (commitSyncBatch) instead of two separate dbCalls. Crash safety: previously a crash between the
+        // upsertMany and the setMeta left rows at 'add'/'update' (harmless — they were just re-sent), but
+        // writing status='sync' into the DB without atomicity would create a fatal intermediate state —
+        // rows marked 'sync' with the cursor behind get skipped by the dirty-row filter and the cursor
+        // never advances again = silent permanent non-convergence. Inside one transaction there is no
+        // intermediate state: after a crash the batch is either fully re-sent (old dirty semantics) or
+        // fully acknowledged (new semantics). The db layer forces status='sync' on every row.
+        await window.todoAPI.dbCall('commitSyncBatch', { rows: deproxyRows(snapshot), version: serverV })
         // Only rows in the snapshot that weren't re-edited during the await are marked synced (can't do a wholesale markSyncedAll)
         ;[...state.todoList, ...state.recycleList]
           .filter(t => snapshotIds.has(t.taskId) && t.status !== 'update' && t.status !== 'delete')

@@ -542,6 +542,22 @@ function queryTodos ({ deleted = 0, complete = null, categoryId = null, repeatId
 const OPS = {
   upsert: t => { stmts.upsert.run(todoToRow(t)); return true },
   upsertMany: list => { stmts.upsertMany(list.map(todoToRow)); return true },
+  // Atomic sync-commit (W3 2026-09-12): row upserts + todosVersion cursor advance in ONE transaction.
+  // Why atomic: writing rows with status='sync' non-atomically and crashing between the upserts and the
+  // setMeta would leave rows marked 'sync' in the DB while todosVersion stayed behind — the dirty-row
+  // filter (status !== 'sync') would then skip them forever and the cursor would never advance again =
+  // silent permanent non-convergence. Inside one transaction the crash outcome is all-or-nothing:
+  // either the whole batch is re-sent on restart (old dirty semantics) or fully acknowledged (new
+  // semantics) — no intermediate state. Rows arrive in store shape; the DB layer forces status='sync'
+  // so a compromised renderer cannot write arbitrary status values through this op.
+  commitSyncBatch: ({ rows, version }) => {
+    const tr = db.transaction(list => {
+      for (const t of list) stmts.upsert.run(todoToRow({ ...t, status: 'sync', version: version || 0 }))
+      stmts.setMeta.run('todosVersion', String(version))
+    })
+    tr(Array.isArray(rows) ? rows : [])
+    return true
+  },
   bumpSnow: ({ taskId, minutes }) => {
     // Server-side clamping: arbitrary/negative values from the renderer (including the float window) must not tamper with the focus ledger (a single focus session capped at 600 minutes)
     const m = Math.max(0, Math.min(LIMITS.FOCUS_MAX_MINUTES, Math.floor(Number(minutes) || 0)))
@@ -824,7 +840,7 @@ function call (op, params) {
 // Do not guess with regexes — write ops like hardDeleteMany/filterDelete/clearCategories were once missed, leaving cross-window data stale.
 
 const WRITE_OPS = new Set([
-  'upsert', 'upsertMany', 'bumpSnow', 'hardDelete', 'hardDeleteMany', 'setMeta',
+  'upsert', 'upsertMany', 'commitSyncBatch', 'bumpSnow', 'hardDelete', 'hardDeleteMany', 'setMeta',
   'purgeRecycleBin', 'purgeSeedTodos', 'upsertCategory',
   'filterUpsert', 'filterDelete',
   'planAddMany', 'planUpdateChip', 'planRemoveIds', 'planMoveTask',
