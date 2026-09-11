@@ -43,8 +43,25 @@ export default {
     window.todoAPI.isMaximized().then(v => { this.maxed = !!v }).catch(() => {})
     this._onMax = () => window.todoAPI.isMaximized().then(v => { this.maxed = !!v })
     window.addEventListener('resize', this._onMax)
+    // focus-visible 恢复:启动首帧初始焦点常落在最小化钮上,直接开 outline 会在标题栏凭空亮一个框。
+    // 规避:默认抑制;用户一旦用键盘(Tab/方向键等)切换焦点即进入 key 模式启用 outline,mouse 活动则回到抑制。
+    this._onFirstKey = (e) => {
+      if (e.key === 'Tab' || e.key.startsWith('Arrow')) {
+        this.$el.setAttribute('data-focus-mode', 'key')
+        window.removeEventListener('keydown', this._onFirstKey, true)
+      }
+    }
+    this._onMouse = () => {
+      if (this.$el.getAttribute('data-focus-mode') === 'key') this.$el.setAttribute('data-focus-mode', 'mouse')
+    }
+    window.addEventListener('keydown', this._onFirstKey, true)
+    window.addEventListener('pointerdown', this._onMouse, true)
   },
-  beforeUnmount () { window.removeEventListener('resize', this._onMax) },
+  beforeUnmount () {
+    window.removeEventListener('resize', this._onMax)
+    window.removeEventListener('keydown', this._onFirstKey, true)
+    window.removeEventListener('pointerdown', this._onMouse, true)
+  },
 
 }
 </script>
@@ -68,8 +85,10 @@ export default {
 /* 最小化为直线描边（fill 画不出零面积直线的轮廓），跟随主题色 */
 .ui-btn svg path[stroke] { fill: none; stroke: var(--text-1, #333); }
 .ui-btn:hover { background: rgba(0,0,0,.1); }
-/* 窗口镶边按钮不参与键盘焦点指示：启动时初始焦点常落在最小化钮上，全局 focus-visible 圈会在标题栏凭空亮一个框 */
+/* 窗口镶边按钮的键盘焦点指示:默认抑制(启动首帧初始焦点常落在最小化钮上,凭空亮框),
+   键盘输入(Tab/方向键)把根节点切到 data-focus-mode="key" 后给品牌色 1px 替代 outline */
 .ui-btn:focus-visible { outline: none; }
+.ui-titlebar[data-focus-mode="key"] .ui-btn:focus-visible { outline: 1px solid var(--brand, #0f9d8f); outline-offset: -1px; }
 .ui-btn.close:hover { background: #e81123; }
 .ui-btn.close:hover svg path, .ui-btn.close:hover svg polygon, .ui-btn.close:hover svg rect { fill: #fff; }
 </style>
