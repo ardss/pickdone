@@ -44,9 +44,11 @@ function create () {
   })
   win.setAlwaysOnTop(true, 'screen-saver', 2)
   win.setMenu(null)
-  // The quick-add window only serves __quick-add: block all page-level navigation and popups
+  // The quick-add window only serves app://app (route #/__quick-add): block all other navigation.
+  // Same-origin prefix guard aligned with the main window — the old substring check let any scheme
+  // through via the route marker (e.g. https://evil.com/#__quick-add)
   win.webContents.on('will-navigate', (e, url) => {
-    if (!String(url).includes('__quick-add')) e.preventDefault()
+    if (!/^app:\/\/app\//.test(String(url))) e.preventDefault()
   })
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   win.loadURL('app://app/renderer-dist/index.html#/__quick-add').catch(e => { try { log.warn('[QuickAdd] loadURL failed', e) } catch {} })

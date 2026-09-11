@@ -706,8 +706,9 @@ const OPS = {
     }
     // Preserve unknown/future fields as a JSON blob (won't be lost when writing back after forward-compatible reads)
     const known = new Set(['tomatoId', ...OPS._REC_COLS])
+    const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
     const extra = {}
-    for (const k of Object.keys(r || {})) if (!known.has(k)) extra[k] = r[k]
+    for (const k of Object.keys(r || {})) if (!known.has(k) && !UNSAFE_KEYS.has(k)) extra[k] = r[k]
     o.extra = Object.keys(extra).length ? JSON.stringify(extra) : null
     if (!o.succeed && o.succeed !== 0) o.succeed = 1
     return o
@@ -719,7 +720,17 @@ const OPS = {
       focusDuration: r.focusDuration || 0, rest: r.rest || 0, restDuration: r.restDuration || 0,
       succeed: !!r.succeed, manual: !!r.manual, status: r.status || 'local', abandonReason: r.abandonReason || ''
     }
-    if (r.extra) { try { Object.assign(rec, JSON.parse(r.extra)) } catch (e) { /* corrupted extra fields do not block the main fields */ } }
+    if (r.extra) {
+      try {
+        // Key-filtered copy instead of Object.assign: JSON.parse materializes a "__proto__" own key
+        // and assign's [[Set]] would turn it into a prototype swap on rec (security review 2026-09-11)
+        const extra = JSON.parse(r.extra)
+        for (const k of Object.keys(extra)) {
+          if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue
+          rec[k] = extra[k]
+        }
+      } catch (e) { /* corrupted extra fields do not block the main fields */ }
+    }
     return rec
   },
   tomatoAll: () => db.prepare('SELECT * FROM tomato_records ORDER BY endTime DESC').all().map(OPS._rowToRec),

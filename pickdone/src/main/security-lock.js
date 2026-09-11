@@ -96,6 +96,11 @@ function createSecurityLock ({ getMainWindow, showMainOrLock, readConfig, writeC
     // 加载失败双保险:loadURL promise reject + did-fail-load 事件,任一触发都走禁用锁回退(幂等)
     let lockLoadFailed = false
     const onLockLoadFail = (why) => { if (lockLoadFailed) return; lockLoadFailed = true; lockLoadFailedFallback(why) }
+    // Navigation lockdown (depth defense, 2026-09-11 security review): the lock page is a one-shot
+    // data: URL — no navigation or popup may ever originate from it. The other three windows all have
+    // guards; this one was the gap.
+    lockWin.webContents.on('will-navigate', e => e.preventDefault())
+    lockWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
     lockWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html)).catch(e => {
       const msg = (e && e.message) || ''
       if (/(-3|ERR_ABORTED|aborted)/i.test(msg)) return // benign interruption, see did-fail-load filter

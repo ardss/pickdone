@@ -1,4 +1,4 @@
-<!-- Release notes template: after release.cjs produces the Draft, paste this into the Release body and fill in the version number and highlights -->
+<!-- Release notes template: after the release pipeline produces the Draft, paste this into the Release body and fill in the version number and highlights -->
 <!-- Maintenance rule: every release must fill in "Installation notes" and "Known issues"; the body must not expose implementation details (redaction red line) -->
 
 ## PickDone vX.Y.Z

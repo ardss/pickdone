@@ -5,7 +5,8 @@
  *   1. 主程序与 app.asar 存在
  *   2. package.json build.files 白名单中每个 node_modules 顶层包在 asar 内真实存在
  *      （历史 P1：白名单漏 exceljs/node-schedule，dev 正常、打包版导出/调度当场崩）
- *   3. 关键运行时资产（vendor、vendor-lib、字体）在 asar 内
+ *   3. 关键运行时资产（vendor-lib、字体）在 asar 内；vendor 驱动在 unpacked resources/vendor
+ *      （2026-09-11 起 asar 不再含 vendor：驱动走 extraResources 全量副本，见 db.js loadDriver）
  * 用法: node scripts/verify-packaged.cjs [--dir dist/win-unpacked]
  * 依赖: 打包已执行（npm run pack）。未找到产物目录时输出 SKIP 退出 0。
  */
@@ -91,7 +92,10 @@ const missingAssets = mustAssets.filter(a => ![...entrySet].some(e => e.startsWi
 const platMap = { win32: 'win32', linux: 'linux', darwin: 'darwin' }
 const archMap = { x64: 'x64', arm64: 'arm64' }
 const platformPrebuild = `prebuilds/${platMap[process.platform]}-${archMap[process.arch]}.node`
-const vendorPrebuilds = path.join('dist', process.platform === 'win32' ? 'win-unpacked' : `${process.platform}-unpacked`, 'resources', 'vendor', 'better-sqlite3-multiple-ciphers', platformPrebuild)
+// electron-builder names unpacked dirs with an arch suffix on linux (linux-arm64-unpacked)
+const dirName = process.platform === 'win32' ? 'win-unpacked'
+  : `${process.platform}${process.arch === 'arm64' ? '-arm64' : ''}-unpacked`
+const vendorPrebuilds = path.join('dist', dirName, 'resources', 'vendor', 'better-sqlite3-multiple-ciphers', platformPrebuild)
 if (!fs.existsSync(vendorPrebuilds)) {
   console.error(`FAIL: ${vendorPrebuilds} 不存在（resources/vendor 驱动副本缺本平台 prebuild，打包版 DB 初始化必失败）`)
   process.exit(1)

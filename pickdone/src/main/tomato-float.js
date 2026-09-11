@@ -166,7 +166,9 @@ function create () {
     if (wasVisible) setTimeout(() => { try { module.exports.show() } catch (e) { log.warn('[TomatoFloat] 崩溃重建失败', e) } }, 500)
   })
   win.webContents.on('will-navigate', (e, url) => {
-    if (!String(url).includes('__tomato-float')) e.preventDefault()
+    // Same-origin prefix guard, aligned with the main window (index.js): a substring match would let
+    // any scheme through via the route marker (e.g. https://evil.com/#__tomato-float)
+    if (!/^app:\/\/app\//.test(String(url))) e.preventDefault()
   })
   // The page <title> writes back to the window title after load (index.html's "拾事…" is shared across
   // all pages); once the window title is non-empty, the DWM ghost repaint has text to draw again (the

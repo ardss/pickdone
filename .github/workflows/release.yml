@@ -207,11 +207,36 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx electron-builder --linux AppImage --arm64 --x64 --publish always && npx electron-builder --linux deb --arm64 --publish always
 
-      - name: Verify renderer entry landed in both asars
+      - name: Verify packaged artifacts (renderer + smoke trio, parity with the manual test workflow)
         working-directory: pickdone
         run: |
-          npx --yes @electron/asar list dist/linux-arm64-unpacked/resources/app.asar | grep -q "renderer-dist/index.html" || { echo '::error::renderer-dist/index.html missing from arm64 asar'; exit 1; }
-          npx --yes @electron/asar list dist/linux-x64-unpacked/resources/app.asar | grep -q "renderer-dist/index.html" || { echo '::error::renderer-dist/index.html missing from x64 asar'; exit 1; }
+          for ARCH in arm64 x64; do
+            npx --yes @electron/asar list dist/linux-$ARCH-unpacked/resources/app.asar | grep -q "renderer-dist/index.html" || { echo "::error::renderer-dist/index.html missing from $ARCH asar"; exit 1; }
+            test -f dist/linux-$ARCH-unpacked/resources/vendor/better-sqlite3-multiple-ciphers/prebuilds/linux-$ARCH.node || { echo "::error::linux-$ARCH sqlite prebuild missing ($ARCH package)"; exit 1; }
+            test -f dist/linux-$ARCH-unpacked/resources/bin/pickdone || { echo "::error::cli unix shim missing ($ARCH package)"; exit 1; }
+            test -x dist/linux-$ARCH-unpacked/resources/bin/pickdone || { echo "::error::cli unix shim not executable ($ARCH package)"; exit 1; }
+            test -f dist/linux-$ARCH-unpacked/resources/cli/pickdone.js || { echo "::error::bundled cli missing ($ARCH package)"; exit 1; }
+          done
+
+      # Live boot parity with the windows job: the exe-instant-exit class (missing renderer entry,
+      # driver load failure) is invisible to static checks. xvfb gives the app a display; the boot is
+      # proven by main.log reaching app-ready.
+      - name: Live-boot packaged arm64 app (xvfb)
+        working-directory: pickdone
+        env:
+          TODO_USER_DATA_DIR: /tmp/boot-ud
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq xvfb > /dev/null
+          rm -rf /tmp/boot-ud
+          xvfb-run -a ./dist/linux-arm64-unpacked/pickdone --no-sandbox > /tmp/boot-stdout.log 2>&1 &
+          BOOT_PID=$!
+          sleep 25
+          if ! kill -0 $BOOT_PID 2>/dev/null; then echo "::error::packaged app exited immediately"; tail -20 /tmp/boot-stdout.log; exit 1; fi
+          LOG=$(find /tmp/boot-ud -name main.log | head -1)
+          if [ -z "$LOG" ]; then echo "::error::no main.log written — app never reached ready"; tail -20 /tmp/boot-stdout.log; exit 1; fi
+          grep -q "数据库初始化完成" "$LOG" || { echo "::error::DB init never completed"; grep -E "error|初始化" "$LOG" | tail -5; exit 1; }
+          echo "boot OK (arm64, DB initialized)"
+          kill $BOOT_PID 2>/dev/null || true
 
       - name: Linux SHA256 checksums & attach
         working-directory: pickdone
@@ -219,5 +244,5 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cd dist
-          sha256sum *.AppImage *.deb latest-linux.yml > SHA256SUMS-linux.txt
+          sha256sum *.AppImage *.deb latest-linux.yml latest-linux-arm64.yml > SHA256SUMS-linux.txt
           gh release upload "$GITHUB_REF_NAME" SHA256SUMS-linux.txt --clobber

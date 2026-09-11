@@ -249,10 +249,6 @@
       "node_modules/xmlchars/**",
       "node_modules/zip-stream/**"
     ],
-    "asarUnpack": [
-      "vendor/**",
-      "**/*.node"
-    ],
     "win": {
       "target": [
         {

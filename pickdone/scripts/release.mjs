@@ -124,7 +124,9 @@ try {
     try { sh(['git', 'reset', '--mixed', preCommitHead]) } catch (e2) { console.error('自动回退 commit 失败,请手动: git reset --mixed ' + preCommitHead + ' —', e2 && e2.message) }
   }
   die(`git push main 失败(${(e && e.message) || e})。${rewound ? '已回退本地 release commit(工作区保留 CHANGELOG 归版)。' : '无 release commit 需要回退。'}
-  补救: ①修复网络/权限后重新 npm run release ${version}(CHANGELOG 段已归版,先手动把两份 CHANGELOG 的 [${version}] 段改回 [Unreleased],或直接恢复 [Unreleased] 标题)
+  ⚠ push 报 TLS/RPC 错误但可能已实际落远端(响应侧断连)——先核实再补救: git ls-remote origin main
+  补救: ⓪若远端已有 release commit: git pull --rebase origin main 对齐,然后只重跑 git tag ${TAG} && git push origin ${TAG}
+  ①否则修复网络/权限后重新 npm run release ${version}(CHANGELOG 段已归版,先手动把两份 CHANGELOG 的 [${version}] 段改回 [Unreleased],或直接恢复 [Unreleased] 标题)
   ②或仅重跑第 5 步: git push origin main && git tag ${TAG} && git push origin ${TAG}`)
 }
 say('main 已推送')
