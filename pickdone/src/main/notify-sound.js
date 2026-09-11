@@ -3,6 +3,21 @@
  *  Falls back to the system beep when there is no live window, so notifications are never silent.
  *  The renderer page runs on the app:// origin, so the absolute disk path must be converted to an app:// URL —
  *  a raw Windows path resolves as a relative app:// URL and the Audio silently fails (reminders played muted, 2026-09-03). */
+/** Pure URL mapping (exported for plain-node tests): file → app://app/<rel> when inside appRoot,
+ *  otherwise a file:// URL. The old fallback had two broken branches: (1) cross-drive path.relative
+ *  on Windows returns an ABSOLUTE path that does not start with '..' → a malformed 'app://app/K:/...'
+ *  URL; (2) a real '..' escape fell back to the raw Windows path, which the app:// page cannot
+ *  resolve. The renderer can play file:// audio, so out-of-root files go there. */
+function toSoundUrl (file, appRoot) {
+  const path = require('path')
+  const rel = path.relative(appRoot, file)
+  if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) {
+    return 'app://app/' + rel.split(path.sep).join('/')
+  }
+  const norm = encodeURI(file.split(path.sep).join('/'))
+  return 'file://' + (norm.startsWith('/') ? norm : '/' + norm)
+}
+
 function sound (file) {
   try {
     if (file) {
@@ -10,9 +25,7 @@ function sound (file) {
       if (win) {
         const path = require('path')
         const appRoot = path.join(__dirname, '..', '..')
-        const rel = path.relative(appRoot, file).split(path.sep).join('/')
-        const url = rel.startsWith('..') ? file : 'app://app/' + rel
-        win.webContents.send('play-sound', url)
+        win.webContents.send('play-sound', toSoundUrl(file, appRoot))
         return
       }
     }
@@ -26,4 +39,4 @@ function sound (file) {
     }
   } catch (e) { /* ignore */ }
 }
-module.exports = { sound }
+module.exports = { sound, toSoundUrl }

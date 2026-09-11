@@ -31,10 +31,14 @@ async function fileResponse (file, mime, request, extraHeaders) {
     }
     const buf = Buffer.allocUnsafe(end - start + 1)
     const fh = await fs.promises.open(file, 'r')
-    try { await fh.read(buf, 0, buf.length, start) } finally { await fh.close() }
-    headers['Content-Range'] = 'bytes ' + start + '-' + end + '/' + total
-    headers['Content-Length'] = String(buf.length)
-    return new Response(buf, { status: 206, headers })
+    // P2 2026-09-12 TOCTOU: stat-then-read raced a concurrent truncation — read()'s bytesRead was
+    // discarded and the tail of buf was UNINITIALIZED heap memory sent straight to the renderer.
+    let bytesRead = 0
+    try { bytesRead = (await fh.read(buf, 0, buf.length, start)).bytesRead } finally { await fh.close() }
+    const out = buf.subarray(0, bytesRead)
+    headers['Content-Range'] = 'bytes ' + start + '-' + (start + bytesRead - 1) + '/' + total
+    headers['Content-Length'] = String(out.length)
+    return new Response(out, { status: 206, headers })
   }
   const data = await fs.promises.readFile(file)
   headers['Content-Length'] = String(total)
@@ -83,9 +87,18 @@ function handleAppProtocol () {
       if (!(resolved === attachRoot || resolved.startsWith(attachRoot + path.sep))) return new Response('forbidden', { status: 403 }) // 带尾分隔符,防同前缀兄弟目录(2026-09-05 终审 hardening)
       const extMime = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', bmp: 'image/bmp', ico: 'image/x-icon', pdf: 'application/pdf', txt: 'text/plain', mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', mp4: 'video/mp4', webm: 'video/webm' }
       const mime = extMime[path.extname(resolved).slice(1).toLowerCase()] || 'application/octet-stream'
-      if (/\.(ogg|mp3|wav|mp4|webm)$/i.test(resolved)) return await fileResponse(resolved, mime, req)
+      // P1 2026-09-12 hardening: local:// serves user-uploaded files, including attacker-shaped SVG
+      // (script-bearing). Rendered as <img> SVG never executes script, but a top-level/iframe
+      // navigation to local://…svg ran it on a same-app-origin-ish document with fetch access to
+      // every other attachment. Kill the script surface on ALL local:// responses; image/media/pdf
+      // display is unaffected (those load paths do not execute script). nosniff blocks MIME confusion.
+      const secureHeaders = {
+        'Content-Security-Policy': "default-src 'none'; script-src 'none'",
+        'X-Content-Type-Options': 'nosniff'
+      }
+      if (/\.(ogg|mp3|wav|mp4|webm)$/i.test(resolved)) return await fileResponse(resolved, mime, req, secureHeaders)
       const data = await fs.promises.readFile(resolved)
-      return new Response(data, { headers: { 'Content-Type': mime } })
+      return new Response(data, { headers: { 'Content-Type': mime, ...secureHeaders } })
     } catch { return new Response('nf', { status: 404 }) }
   })
 }

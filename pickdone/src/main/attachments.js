@@ -1,6 +1,7 @@
 /** Attachment localization (remote attachment → userData/files) — moved verbatim from index.js (content unchanged) */
 const path = require('path')
 const fs = require('fs')
+const fixUtil = require('./fix-util')
 const { app } = require('electron')
 
 function attachDir () {
@@ -29,10 +30,14 @@ async function saveAttachment ({ taskId, name, dataBase64 }) {
   if (!raw.length) throw new Error('attachment: empty')
   if (raw.length > MAX_BYTES) throw new Error('attachment: too large (max 50MB)')
   const safe = `${String(taskId).replace(/[\\/:*?"<>|]/g, '_').replace(/\.\./g, '_')}_${Date.now()}_${cleanName.replace(/[\\/:*?"<>|]/g, '_')}`
-  const dest = path.join(attachDir(), safe)
+  // P2 2026-09-12: two uploads in the same millisecond with the same task/name produced the same
+  // Date.now() filename and writeFileSync silently overwrote the first attachment. Suffix -1/-2…
+  // (pure helper in fix-util, testable) so every upload lands on its own file.
+  const dest = fixUtil.nextFreePath(attachDir(), safe, p => fs.existsSync(p))
   fs.writeFileSync(dest, raw)
-  const url = `local://${encodeURIComponent(safe)}`
-  return { url, key: safe, name, size: fs.statSync(dest).size, ext }
+  const finalName = path.basename(dest)
+  const url = `local://${encodeURIComponent(finalName)}`
+  return { url, key: finalName, name, size: fs.statSync(dest).size, ext }
 }
 function attachmentPath (key) {
   // Malformed percent-encoding (e.g. 'a%zz.png') made decodeURIComponent throw URIError; protocol.js

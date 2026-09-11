@@ -35,7 +35,11 @@ function icon (kind) {
 }
 
 function clearButtons () {
-  if (!mainWin || mainWin.isDestroyed() || process.platform !== 'win32') return
+  // P1 2026-09-12: the dead-window early return used to leave buttonsSet true (and init never reset
+  // it either) — after the main window was destroyed and recreated, update() saw buttonsSet=true and
+  // never re-attached the thumbnail toolbar; it stayed lost until restart. Every exit path here must
+  // converge on buttonsSet=false so the next live window re-arms.
+  if (!mainWin || mainWin.isDestroyed() || process.platform !== 'win32') { buttonsSet = false; return }
   try { mainWin.setThumbarButtons([]) } catch (e) { /* early windows may not support it */ }
   buttonsSet = false
 }
@@ -114,6 +118,7 @@ module.exports = {
   init (win) {
     mainWin = win
     last = { mode: 'none', title: '' }
+    buttonsSet = false // P1 2026-09-12: a new window never has the old toolbar — re-arm for update()
     try { baseTitle = (win.getTitle() || '').trim() } catch (e) { baseTitle = '' }
   },
   /** Base title refreshed on language switch (set-app-locale): without this the countdown kept the old
@@ -144,8 +149,16 @@ module.exports = {
     if (mainWin && !mainWin.isDestroyed()) {
       try { mainWin.setProgressBar(-1) } catch (e) { /* */ }
       try { mainWin.setOverlayIcon(null, '') } catch (e) { /* */ }
-      clearButtons()
     }
+    // P1 2026-09-12: call unconditionally — clearButtons is dead-window-safe now and must converge
+    // buttonsSet=false even when the window is already gone (stale flag = toolbar lost after rebuild)
+    clearButtons()
     badgeSig = ''
+  },
+  /** Test-only state probe (plain-node tests cannot construct a BrowserWindow) */
+  __test: {
+    get buttonsSet () { return buttonsSet },
+    set buttonsSet (v) { buttonsSet = !!v },
+    set mainWin (w) { mainWin = w }
   }
 }
