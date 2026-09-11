@@ -40,11 +40,13 @@ jobs:
 
       # Cross-arch is safe: electron arm64 is a prebuilt download and the sqlite vendor driver ships
       # linux-arm64/linux-x64 .node prebuilds — nothing compiles from source.
+      # --publish never: the builder picks up the publish config from package.json and demands a token
+      # even for artifact-only runs; this workflow must never touch Releases/updater feeds.
       - name: Build arm64 AppImage + deb
         working-directory: pickdone
         run: |
-          npx electron-builder --linux AppImage --arm64
-          npx electron-builder --linux deb --arm64
+          npx electron-builder --linux AppImage --arm64 --publish never
+          npx electron-builder --linux deb --arm64 --publish never
 
       - name: Smoke-check the unpacked app tree
         working-directory: pickdone
