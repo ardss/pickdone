@@ -14,7 +14,10 @@
         </button>
       </div>
       <div v-if="filteredProjects.length" class="proj-grid">
-        <div v-for="p in filteredProjects" :key="p.cat.categoryId" class="proj-card" role="link" tabindex="0"
+        <!-- No role=link wrapper: a link role with an interactive role=button nested inside breaks the
+             a11y tree; the card stays keyboard-openable via tabindex+enter while the status pill is an
+             independently reachable button -->
+        <div v-for="p in filteredProjects" :key="p.cat.categoryId" class="proj-card" tabindex="0"
              :title="$t('statsB.ProjectsView.enterProject', { name: p.cat.categoryName })"
              @click="open(p.cat.categoryId)" @keydown.enter.prevent="open(p.cat.categoryId)">
           <div class="proj-card__head">
@@ -51,7 +54,12 @@
       </div>
       <div v-if="!filteredProjects.length" class="empty">
         <div class="empty__icon"></div>
-        <div class="empty__text">{{ $t('statsB.ProjectsView.empty') }}</div>
+        <!-- 过滤无结果 ≠ 真没项目:区分文案 + 一键清除筛选出口;filter=all 仍走原有"暂无项目"空态 -->
+        <template v-if="filter !== 'all' && projects.length">
+          <div class="empty__text">{{ $t('projQ.filteredEmpty') }}</div>
+          <button type="button" class="proj-filter__clear" @click="filter = 'all'">{{ $t('projQ.clearFilter') }}</button>
+        </template>
+        <div v-else class="empty__text">{{ $t('statsB.ProjectsView.empty') }}</div>
       </div>
     </div>
   </div>
@@ -121,10 +129,20 @@ export default {
   methods: {
     statusKey (s) { return statusI18nKey(s) },
     filterKey (f) { return STATUS_FILTER_I18N_KEYS[f] || STATUS_FILTER_I18N_KEYS.all },
-    /** Status pill on the card cycles through the lifecycle (compact card layout beats a dropdown here) */
+    /** Status pill on the card cycles through the lifecycle (compact card layout beats a dropdown here).
+     *  Every switch toasts the new status; landing on 'cancelled' asks for confirmation first — a single
+     *  accidental click must not silently kill a project's status. */
     cycleStatus (id, cur) {
       const i = PROJECT_STATUSES.indexOf(normalizeStatus(cur))
-      this.$store.commit('category/setProjectStatus', { id, status: PROJECT_STATUSES[(i + 1) % PROJECT_STATUSES.length] })
+      const next = PROJECT_STATUSES[(i + 1) % PROJECT_STATUSES.length]
+      const apply = () => {
+        this.$store.commit('category/setProjectStatus', { id, status: next })
+        if (this.$message) this.$message.success(this.$t('projQ.statusChanged', { s: this.$t(statusI18nKey(next)) }))
+      }
+      if (next === 'cancelled') {
+        this.$confirm(this.$t('projQ.cancelConfirmText'), this.$t('projQ.cancelConfirmTitle'), { type: 'warning' })
+          .then(apply).catch(() => {})
+      } else apply()
     },
     fmtDate (ts) { return ts ? dayjs(ts).format(FMT.date) : '—' },
     deadlineText (ts) {
@@ -150,9 +168,13 @@ export default {
         })
         const name = (value || '').trim()
         if (!name) return
+        // Exact-match the created entity by id delta + name, not `list[list.length-1]`: sort/order changes
+        // or a concurrent add could make the last row a different category.
+        const before = new Set(this.$store.state.category.list.map(c => c.categoryId))
         this.$store.commit('category/addCategory', { categoryName: name })
-        const list = this.$store.state.category.list
-        const created = list[list.length - 1]
+        const created = this.$store.state.category.list
+          .find(c => !before.has(c.categoryId) && c.categoryName === name)
+        if (!created) return
         this.$store.commit('category/setProject', { id: created.categoryId, flag: true })
         this.$message.success(this.$t('statsB.ProjectsView.created', { name }))
       } catch { /* cancelled */ }
@@ -207,6 +229,13 @@ html[data-theme="dark"] .proj-card { background: rgba(255, 255, 255, .03); }
 .proj-filter__chip:hover { color: var(--brand-text); background: var(--brand-light); }
 .proj-filter__chip.on { color: var(--brand-text); border-color: var(--brand); background: var(--brand-light); font-weight: 600; }
 .proj-filter__chip:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+/* 过滤空态的"清除筛选"出口(过滤无结果 ≠ 暂无项目,要能一键回到全部) */
+.proj-filter__clear {
+  margin-top: var(--space-2); font-size: var(--fs-xs); color: var(--brand-text);
+  background: var(--brand-light); border: 1px solid var(--brand); border-radius: var(--radius-pill);
+  padding: 3px 12px; cursor: pointer; transition: all var(--t-fast);
+}
+.proj-filter__clear:hover { background: var(--brand); color: #fff; }
 .proj-status {
   font-style: normal; font-size: var(--fs-2xs); font-weight: 600; line-height: 1;
   padding: 3px 8px; border-radius: var(--radius-pill); cursor: pointer; flex-shrink: 0;

@@ -115,11 +115,15 @@
         </div>
       </div>
     </div>
-    <div class="proj-tabs" role="tablist">
-      <button class="proj-tab" :class="{on: tab === 'overview'}" role="tab" :aria-selected="tab === 'overview'" @click="tab = 'overview'">{{ $t('statsB.ProjectView.tabOverview') }}</button>
+    <!-- Downgraded from role=tablist to a plain button group: the tab roles promised a keyboard
+         contract (arrow-key navigation, roving tabindex) the component never implemented. Without
+         a controlled tab panel relationship, aria-selected/tab roles are lies to AT; toggled buttons
+         with aria-pressed keep the state honest. -->
+    <div class="proj-tabs" role="group" :aria-label="$t('statsB.ProjectView.tabsAria')">
+      <button class="proj-tab" :class="{on: tab === 'overview'}" type="button" :aria-pressed="tab === 'overview'" @click="tab = 'overview'">{{ $t('statsB.ProjectView.tabOverview') }}</button>
       <!-- Deps tab rides the same two-layer gate as the today deps view (developerMode && showDepsModule) -->
-      <button v-if="settings.developerMode && settings.showDepsModule" class="proj-tab" :class="{on: tab === 'deps'}" role="tab" :aria-selected="tab === 'deps'" @click="tab = 'deps'">{{ $t('statsB.ProjectView.tabDeps') }}</button>
-      <button class="proj-tab" :class="{on: tab === 'docs'}" role="tab" :aria-selected="tab === 'docs'" @click="tab = 'docs'">{{ $t('statsB.ProjectView.tabDocs') }}</button>
+      <button v-if="settings.developerMode && settings.showDepsModule" class="proj-tab" :class="{on: tab === 'deps'}" type="button" :aria-pressed="tab === 'deps'" @click="tab = 'deps'">{{ $t('statsB.ProjectView.tabDeps') }}</button>
+      <button class="proj-tab" :class="{on: tab === 'docs'}" type="button" :aria-pressed="tab === 'docs'" @click="tab = 'docs'">{{ $t('statsB.ProjectView.tabDocs') }}</button>
     </div>
     <div v-if="tab === 'deps' && settings.developerMode && settings.showDepsModule" class="page__main page__main--flow-top proj-tab-body">
       <pd-dep-view :fixed-project-id="catId"/>
