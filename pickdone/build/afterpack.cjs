@@ -11,4 +11,9 @@ module.exports = async function afterPack (context) {
   const dest = path.join(context.appOutDir, 'resources', 'package.json')
   fs.mkdirSync(path.dirname(dest), { recursive: true })
   fs.copyFileSync(src, dest)
+  // The unix CLI shim must ship executable: electron-builder's extraResources copy does not preserve
+  // the git mode bit (known upstream behavior), so the shim landed 644 and `./pickdone` failed on Linux.
+  // Windows ignores the mode bit entirely, so restoring it unconditionally is safe.
+  const shim = path.join(context.appOutDir, 'resources', 'bin', 'pickdone')
+  if (fs.existsSync(shim)) fs.chmodSync(shim, 0o755)
 }
