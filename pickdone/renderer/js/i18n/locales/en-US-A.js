@@ -23,6 +23,7 @@ export default {
       cycleErr: 'Cycle rejected: "{b}" already depends on it (directly or indirectly)',
       depRemoved: 'Removed "{a}" as a prerequisite of "{b}"',
       removeDep: 'Remove prerequisite: {a}',
+      connectHint: 'Connect mode: "{a}" selected as the prerequisite candidate. Tab or arrow keys to switch the target card, Enter to create the dependency, Esc to cancel',
       emptyHint: 'Nothing here yet. Drag tasks in from the task list on the right, or create tasks and come back to wire dependencies',
       msLoading: 'Loading milestones…',
       noTitle: 'Untitled'

@@ -15,6 +15,13 @@
       <span class="depv-hint">{{ $t('statsA.DepView.dragHint') }}</span>
     </div>
 
+    <!-- Connect mode status line: keyboard-only dependency wiring (2026-09-12).
+         Always keyed to the mode so screen readers announce it via role="status"; hidden entirely
+         (v-if) in normal mode so the default rendering is unchanged. -->
+    <div v-if="connectSrc" class="depv-connect" role="status" aria-live="polite">
+      {{ $t('statsA.DepView.connectHint', { a: connectSrcName }) }}
+    </div>
+
     <!-- 项目头:里程碑/截止/进度(里程碑与截止来自 projectMeta,进度从任务算) -->
     <div v-if="projectId != null && projectInfo" class="depv-proj">
       <span class="depv-chip-dot" :style="{background: projectInfo.color}"></span>
@@ -38,7 +45,7 @@
          "tidy up" action. Drag the grip dot to move a card; drag the card itself onto another to
          link a dependency; wires follow card rects. The wire layer must live inside the scroll
          content (track): mounted outside, scrolling would offset wires from their cards. -->
-    <div class="depv-cols" ref="viewport">
+    <div class="depv-cols" ref="viewport" @keydown.esc="cancelConnect">
      <div class="depv-track" ref="track" :style="{ width: trackW + 'px', height: trackH + 'px' }">
       <!-- Empty scope: guide users to pull tasks in (dead .depv-empty CSS finally wired to a real state) -->
       <div v-if="!inScope.length" class="depv-empty">{{ $t('statsA.DepView.emptyHint') }}</div>
@@ -52,9 +59,11 @@
              'depv-task--drop-left': dropTid === t.taskId && dropSide === 'left',
              'depv-task--drop-right': dropTid === t.taskId && dropSide === 'right',
              'depv-task--dragging': dragTid === t.taskId,
-             'depv-task--moving': movingTid === t.taskId
+             'depv-task--moving': movingTid === t.taskId,
+             'depv-task--connect-src': connectSrc === t.taskId,
+             'depv-task--connect-target': !!connectSrc && connectSrc !== t.taskId && connectTargetId === t.taskId
            }"
-           @click="openEdit(t)" @keydown.enter.prevent="openEdit(t)"
+           @click="onCardClick(t)" @keydown="onCardKeydown(t, $event)"
            @contextmenu="taskContextMenu(t, $event)"
            @dragstart="onDragStart(t, $event)" @dragend="onDragEnd"
            @dragover.prevent="onDragOver(t, $event)" @dragleave="onDragLeave(t)" @drop.prevent="onDrop(t, $event)">
@@ -128,7 +137,9 @@ export default {
   },
   data () {
     return { projectId: this.fixedProjectId != null ? this.fixedProjectId : null, wires: [], trackW: 0, trackH: 0, dragTid: '', dropTid: '', msList: [], msLoaded: true,
-      posMap: {}, movingTid: '', dropSide: '' }
+      posMap: {}, movingTid: '', dropSide: '',
+    // Connect mode (keyboard dependency wiring): source card id + index into connectTargets()
+    connectSrc: '', connectTargetIdx: 0 }
   },
   computed: {
     projects () { return this.$store.getters['category/projects'] || [] },
@@ -198,6 +209,22 @@ export default {
         pct: total ? Math.round(done / total * 100) : 0,
         progressLabel: this.$t('statsA.DepView.progress', { done: done, total: total })
       }
+    },
+    /** Connect mode: candidate target cards (every in-scope card except the source) */
+    connectTargets () {
+      if (!this.connectSrc) return []
+      return this.inScope.filter(t => t.taskId !== this.connectSrc)
+    },
+    /** Currently highlighted target card id (wraps around; '' when not in connect mode) */
+    connectTargetId () {
+      var tg = this.connectTargets()
+      if (!tg.length) return ''
+      var i = ((this.connectTargetIdx % tg.length) + tg.length) % tg.length
+      return tg[i].taskId
+    },
+    connectSrcName () {
+      var s = this.inScope.find(x => x.taskId === this.connectSrc)
+      return (s && (s.taskContent || s.taskId)) || ''
     }
   },
   watch: {
@@ -208,7 +235,7 @@ export default {
     },
     inScope: {
       deep: false,
-      handler () { this.$nextTick(() => { this.ensurePositions(); this.drawWires() }) }
+      handler () { this.$nextTick(() => { this.ensurePositions(); this.drawWires() }); if (this.connectSrc && !this.inScope.some(x => x.taskId === this.connectSrc)) this.cancelConnect() }
     }
   },
     mounted () {
@@ -415,6 +442,62 @@ export default {
     },
     rawOf (t) { return this.$store.state.todo.todoList.find(function (x) { return x.taskId === t.taskId }) || t },
     openEdit (t) { this.$store.commit('ui/openEdit', this.rawOf(t)) },
+    onCardClick (t) { if (this.connectSrc) { this.cancelConnect(); return } this.openEdit(t) },
+    // —— Connect mode: keyboard-only dependency wiring (2026-09-12).
+    // Focused card + `c` (or Ctrl/Cmd+Enter) = enter connect mode with the card as SOURCE;
+    // Tab / arrows move a visual target highlight (component state, focus never leaves the
+    // source card); Enter confirms; Esc always cancels. Confirmation reuses addDependency,
+    // the exact same write path (incl. cycle rejection) as the mouse drag-drop onDrop. ——
+    startConnect (t) {
+      this.connectSrc = t.taskId
+      this.connectTargetIdx = 0
+    },
+    cancelConnect () {
+      this.connectSrc = ''
+      this.connectTargetIdx = 0
+    },
+    moveConnectTarget (delta) {
+      var n = this.connectTargets().length
+      if (!n) return
+      this.connectTargetIdx = ((this.connectTargetIdx + delta) % n + n) % n
+    },
+    confirmConnect () {
+      var id = this.connectTargetId
+      var src = this.inScope.find(x => x.taskId === this.connectSrc)
+      var tg = id && this.inScope.find(x => x.taskId === id)
+      this.cancelConnect()
+      if (!src || !tg) return
+      // Same semantics as dropping onto the target's LEFT half: source becomes the target's prerequisite
+      this.addDependency(tg, src.taskId, src, tg)
+    },
+    onCardKeydown (t, e) {
+      if (this.connectSrc) {
+        var k = e.key
+        if (k === 'Escape') { e.preventDefault(); this.cancelConnect(); return }
+        if (k === 'Tab') { e.preventDefault(); this.moveConnectTarget(e.shiftKey ? -1 : 1); return }
+        if (k === 'ArrowRight' || k === 'ArrowDown') { e.preventDefault(); this.moveConnectTarget(1); return }
+        if (k === 'ArrowLeft' || k === 'ArrowUp') { e.preventDefault(); this.moveConnectTarget(-1); return }
+        if (k === 'Enter') { e.preventDefault(); this.confirmConnect(); return }
+        return
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        if (e.ctrlKey || e.metaKey) this.startConnect(t)
+        else this.openEdit(t)
+        return
+      }
+      if ((e.key === 'c' || e.key === 'C') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault()
+        this.startConnect(t)
+        return
+      }
+      // Keyboard context menu (Shift+F10 also fires native contextmenu in Chromium; explicit
+      // handling keeps the "remove prerequisite" entries reachable even where it doesn't)
+      if (e.key === 'F10' && e.shiftKey) {
+        e.preventDefault()
+        this.taskContextMenu(t, e)
+      }
+    },
     jumpTo (id) {
       var p = this.$store.state.todo.todoList.find(function (x) { return x.taskId === id })
       if (p) this.$store.commit('ui/openEdit', p)
@@ -631,4 +714,10 @@ export default {
 .depv-task__due { flex-shrink: 0; font-size: 11px; color: var(--text-3, #999); }
 .depv-empty { padding: 18px 10px; text-align: center; font-size: 12px; color: var(--text-3, #999); }
 .depv-wires { position: absolute; inset: 0; pointer-events: none; overflow: visible; z-index: 5; }
+/* Connect mode (keyboard wiring): additive styles only - normal rendering untouched */
+.depv-connect { padding: 4px 12px; border-radius: 8px; border: 1px solid var(--brand);
+  background: var(--brand-light, rgba(15, 157, 143, .08)); color: var(--brand); font-size: 12px; }
+.depv-task--connect-src { border-color: var(--brand); box-shadow: 0 0 0 2px var(--brand);
+  background: var(--brand-light, rgba(15, 157, 143, .1)); z-index: 6; }
+.depv-task--connect-target { outline: 2px dashed var(--brand); outline-offset: 2px; }
 </style>
