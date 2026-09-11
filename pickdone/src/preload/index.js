@@ -138,16 +138,6 @@ contextBridge.exposeInMainWorld('todoAPI', {
     ipcRenderer.on('play-sound', h)
     return () => ipcRenderer.removeListener('play-sound', h)
   },
-  onSelectTodo: fn => {
-    const h = (_e, taskId) => fn(taskId)
-    ipcRenderer.on('select-todo', h)
-    return () => ipcRenderer.removeListener('select-todo', h)
-  },
-  onOpenSettings: fn => {
-    const h = () => fn()
-    ipcRenderer.on('open-settings', h)
-    return () => ipcRenderer.removeListener('open-settings', h)
-  },
   onSecurityLock: fn => {
     const h = () => fn()
     ipcRenderer.on('security-lock-on', h)

@@ -834,7 +834,13 @@ function registerIpc () {
       if (op === 'upsert' && params && params.taskId != null) {
         try { auditBefore = dbm.call('getById', String(params.taskId)) } catch { /* null → coarse action */ }
       }
+      // Renderer-originated ledger writes: suppress the db-layer hook broadcast (no sender info there)
+      // and broadcast here with sender exclusion instead — otherwise the writing window's own
+      // recordsReload echo could clobber in-flight state (2026-09-11 audit P2, todos-echo same shape)
+      const isLedgerOp = dbm.LEDGER_WRITE_OPS.has(op)
+      const unsuppress = isLedgerOp ? dbm.suppressLedgerHook() : null
       const r = dbm.call(op, params)
+      if (unsuppress) { unsuppress(); broadcastTomatoRecordsChanged(op, e.sender) }
       // Our own write just touched the DB/-wal: re-baseline the external-write watcher immediately,
       // otherwise the next poll mistakes our write for an external one (full reload + undo-stack wipe)
       if (dbm.isWriteOp(op)) { try { if (resyncDbWatch) resyncDbWatch() } catch { /* best-effort */ } }
@@ -942,21 +948,6 @@ function registerIpc () {
     // show-todo-list/focus-main-window/open-settings-modal/user-logout/get-memory-metrics/
     // downloadUpdate/critical-state:*/app-initialization-completed/get-window-bounds etc. had no renderer callers and were deleted
     // The old checkForUpdates/quitAndInstall stubs were also removed: preload actually uses updater:check / updater:quit-and-install
-    'show-about-window': () => {
-      const aboutWin = new BrowserWindow({ width: 360, height: 240, resizable: false, minimizable: false, maximizable: false, frame: true, show: false })
-      aboutWin.removeMenu()
-      aboutWin.loadURL('data:text/html,' + encodeURIComponent('<body style="font-family:system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;height:88vh;color:#303133;margin:0"><img src="app://app/assets/icon.png" width="72" style="margin-bottom:10px"><div style="display:flex;align-items:baseline;gap:8px"><span style="font-size:20px;font-weight:700">' + i18nM.mt('appName') + '</span><span style="font-size:10px;letter-spacing:2.5px;color:#909399">PICKDONE</span></div><p style="color:#909399;font-size:12px;margin:6px 0 0">' + i18nM.mt('aboutSlogan') + '</p><p style="color:#c0c4cc;font-size:12px;margin:8px 0 0">' + i18nM.mt('aboutVersion', { v: app.getVersion() }) + '</p></body>'))
-      aboutWin.once('ready-to-show', () => aboutWin.show())
-      // P2 2026-09-11: a failed load used to leave a zombie blank window the user had to close by hand —
-      // destroy it on main-frame load failure (the window reference is local, nothing else to release)
-      aboutWin.webContents.on('did-fail-load', (_e2, code, _desc, _u, isMainFrame) => {
-        if (!isMainFrame || code === -3) return
-        log.warn('[About] 加载失败,销毁窗口:', code)
-        try { aboutWin.destroy() } catch { /* already gone */ }
-      })
-      return true
-    },
-    'notify-data-changed': () => { broadcastTodosChanged('notify-data-changed'); return true },
 
     // --- Attachments (offline localization) ---
     'upload-attachment': (e, payload) => { if (isLocked()) throw new Error('locked'); return saveAttachment(payload) },

@@ -447,7 +447,6 @@ async function bootstrap () {
       case 'switchToInbox': router.push({ name: 'todo-list-todo-box' }).catch(() => {}); break
     }
   })
-  window.todoAPI.onOpenSettings(() => store.commit('ui/toggleSettings', true))
   window.todoAPI.onSecurityLock(() => store.commit('ui/setLocked', true))
   if (window.todoAPI.onSecurityUnlock) window.todoAPI.onSecurityUnlock(() => store.commit('ui/setLocked', false))
 

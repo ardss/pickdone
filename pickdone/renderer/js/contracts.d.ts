@@ -56,7 +56,6 @@ interface TodoAPI {
   saveToDownloads: (...args: any[]) => any
   syncNow: (...args: any[]) => any
   mimeByType: (...args: any[]) => any
-  onSelectTodo: (...args: any[]) => any
   checkForUpdates: (...args: any[]) => any
   closeRequest: (...args: any[]) => any
   deleteFile: (...args: any[]) => any
@@ -81,7 +80,6 @@ interface TodoAPI {
   onAppQuittingFlush: (...args: any[]) => any
   onCliTomatoCmd: (...args: any[]) => any
   onExternalSettingsChanged: (...args: any[]) => any
-  onOpenSettings: (...args: any[]) => any
   onPlaySound: (...args: any[]) => any
   onQuickAddFocus: (...args: any[]) => any
   onSecurityLock: (...args: any[]) => any

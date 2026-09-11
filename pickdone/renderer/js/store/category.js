@@ -43,7 +43,13 @@ function toRow (c) {
 function persist (list) {
   safeSet(LS_KEY, JSON.stringify({ list }))
   try {
-    for (const c of list) window.todoAPI.dbCall('upsertCategory', toRow(c)).catch(e => console.error('[category] save failed:', e))
+    // Failures must be visible: LS is already updated above, so a silent per-row catch meant the user
+    // believed categories were saved while SQLite (the CLI-visible authority) silently diverged
+    const jobs = list.map(c => window.todoAPI.dbCall('upsertCategory', toRow(c)).catch(e => ({ err: e })))
+    Promise.all(jobs).then(results => {
+      const failed = results.filter(r => r && r.err)
+      if (failed.length) console.error('[category] save failed for', failed.length, 'of', list.length, 'rows:', failed[0].err)
+    }).catch(e => console.error('[category] save failed:', e))
   } catch (e) { console.warn('[category] SQLite write failed (cached locally only):', e) }
 }
 

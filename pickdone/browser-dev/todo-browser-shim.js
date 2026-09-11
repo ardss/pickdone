@@ -232,6 +232,10 @@
         const row = todos.find(t => t.taskId === String(id))
         return row ? clone(row) : null
       }
+      case 'countAll': {
+        // 对齐桌面 db.js countAll:全表行数含软删(Onboarding 向导计数调用,2026-09-11 审计补)
+        return todos.length
+      }
       case 'queryTodos': {
         const q = typeof params === 'string' ? {} : (params || {})
         let rows = todos.filter(r => !r.delete)

@@ -32,9 +32,16 @@ let opened = false
 //                          at its top level, so the CLI can reuse it directly. Priority: TODO_DB_DIR > TODO_USER_DATA_DIR > %APPDATA%/pickdone.
 // Neither var set means the real user database — scripts that spawn the App MUST fail fast instead (see e2e-walkthrough.js / ui-smoke.js).
 function userDataDir () {
-  return process.env.TODO_DB_DIR ||
-    process.env.TODO_USER_DATA_DIR ||
-    path.join(process.env.APPDATA || '', 'pickdone')
+  if (process.env.TODO_DB_DIR) return process.env.TODO_DB_DIR
+  if (process.env.TODO_USER_DATA_DIR) return process.env.TODO_USER_DATA_DIR
+  // Platform default must mirror Electron's app.getPath('userData') (~/.config/pickdone on Linux,
+  // ~/Library/Application Support/pickdone on macOS) — APPDATA-only resolved to CWD-relative
+  // './pickdone' on Linux, so CLI and App each opened a different database (2026-09-11 audit P1)
+  if (process.platform === 'darwin') return path.join(process.env.HOME || '', 'Library', 'Application Support', 'pickdone')
+  if (process.platform === 'linux') {
+    return path.join(process.env.XDG_CONFIG_HOME || path.join(process.env.HOME || '', '.config'), 'pickdone')
+  }
+  return path.join(process.env.APPDATA || '', 'pickdone')
 }
 /** True when an explicit isolation dir (TODO_DB_DIR or TODO_USER_DATA_DIR) is set */
 function hasIsolationEnv () {
@@ -1647,7 +1654,7 @@ const SETTINGS_MANIFEST = {
     todoBoxSortMethod: ['created', 'due', 'difficulty'],
     todoBoxSortOrder: ['desc', 'asc']
   },
-  string: ['backupDir', 'whiteNoiseAudio', 'weatherCity', 'calendarCategory', 'searchDateRange', 'searchComplete', 'searchCategory', 'newTodoCategoryId', 'todoBoxCategoryId', 'maxRepeat']
+  string: ['backupDir', 'whiteNoiseAudio', 'weatherCity', 'calendarCategory', 'searchDateRange', 'searchComplete', 'searchCategory', 'maxRepeat']
 }
 const SETTINGS_DENIED = new Set(['securityLockPassword', 'securityLockQuestion', 'schemaV', '_savedAt'])
 

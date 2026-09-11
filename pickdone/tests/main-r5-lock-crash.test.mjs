@@ -37,7 +37,9 @@ test('createSecurityLock: render-process-gone on the lock window rebuilds it (is
       on: (ev, fn) => { (handlers[ev] = handlers[ev] || []).push(fn) },
       once: (ev, fn) => { (handlers[ev] = handlers[ev] || []).push(fn) },
       send: (ch) => calls.sent.push(ch),
-      emit: (ev, ...a) => { for (const fn of handlers[ev] || []) fn(...a) }
+      emit: (ev, ...a) => { for (const fn of handlers[ev] || []) fn(...a) },
+      // navigation lockdown guards (2026-09-11 security review) install this on the lock webContents
+      setWindowOpenHandler: () => ({ action: 'deny' })
     }
   }
   const electron = {

@@ -801,12 +801,21 @@ const OPS = {
 const LEDGER_WRITE_OPS = new Set(['tomatoAppendMany', 'tomatoUpdateById', 'tomatoRemoveByIds', 'tomatoMigrateFromMeta'])
 let ledgerChangedHook = null
 function setLedgerChangedHook (fn) { ledgerChangedHook = typeof fn === 'function' ? fn : null }
+// Echo suppression (2026-09-11 audit P2): renderer-originated ledger writes must not echo back to the
+// writing window through the hook broadcast (recordsReload clobber, same shape as the todos echo).
+// The IPC handler wraps the call with this and re-broadcasts with sender exclusion instead.
+let ledgerHookSuppressCount = 0
+function suppressLedgerHook () {
+  ledgerHookSuppressCount++
+  let done = false
+  return () => { if (!done) { done = true; ledgerHookSuppressCount-- } }
+}
 
 function call (op, params) {
   const fn = OPS[op]
   if (!fn) throw new Error('[TodoDB] 未知操作: ' + op)
   const r = fn(params)
-  if (ledgerChangedHook && LEDGER_WRITE_OPS.has(op)) { try { ledgerChangedHook(op) } catch { /* 广播失败不阻断落库 */ } }
+  if (ledgerChangedHook && !ledgerHookSuppressCount && LEDGER_WRITE_OPS.has(op)) { try { ledgerChangedHook(op) } catch { /* 广播失败不阻断落库 */ } }
   return r
 }
 
@@ -836,4 +845,4 @@ function close () {
 // Initialized probe: within the same process (the main process's CSV import), reuse the existing connection; a second init rebuilding the handle on the same file is forbidden
 function isOpen () { return !!db }
 
-module.exports = { init, call, queryTodos, normalizeContent, isWriteOp, isOpen, close, setLedgerChangedHook, SCHEMA }
+module.exports = { init, call, queryTodos, normalizeContent, isWriteOp, isOpen, close, setLedgerChangedHook, suppressLedgerHook, LEDGER_WRITE_OPS, SCHEMA }

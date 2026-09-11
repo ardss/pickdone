@@ -23,7 +23,11 @@ let maxBytes = MAX_BYTES_DEFAULT
 const defaultDirResolver = () => (
   process.env.TODO_DB_DIR ||
   process.env.TODO_USER_DATA_DIR ||
-  path.join(process.env.APPDATA || '', 'pickdone')
+  (process.platform === 'darwin'
+    ? path.join(process.env.HOME || '', 'Library', 'Application Support', 'pickdone')
+    : process.platform === 'linux'
+      ? path.join(process.env.XDG_CONFIG_HOME || path.join(process.env.HOME || '', '.config'), 'pickdone')
+      : path.join(process.env.APPDATA || '', 'pickdone'))
 )
 let resolveDir = defaultDirResolver
 
