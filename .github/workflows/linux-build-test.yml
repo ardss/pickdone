@@ -42,6 +42,10 @@ jobs:
       # linux-arm64/linux-x64 .node prebuilds — nothing compiles from source.
       # --publish never: the builder picks up the publish config from package.json and demands a token
       # even for artifact-only runs; this workflow must never touch Releases/updater feeds.
+      - name: Build renderer bundle (gitignored artifact — electron-builder's files whitelist expects it on disk)
+        working-directory: pickdone
+        run: npm run build:renderer
+
       - name: Build arm64 AppImage + deb
         working-directory: pickdone
         run: |
@@ -55,6 +59,9 @@ jobs:
           test -f dist/linux-arm64-unpacked/resources/bin/pickdone || { echo '::error::cli unix shim missing'; exit 1; }
           test -x dist/linux-arm64-unpacked/resources/bin/pickdone || { echo '::error::cli unix shim not executable'; exit 1; }
           test -f dist/linux-arm64-unpacked/resources/cli/pickdone.js || { echo '::error::bundled cli missing'; exit 1; }
+          # renderer entry must be inside app.asar (2026-09-11 board incident: a package without
+          # build:renderer produced a window that only said "not found")
+          npx --yes @electron/asar list dist/linux-arm64-unpacked/resources/app.asar | grep -q "renderer-dist/index.html" || { echo '::error::renderer-dist/index.html missing from app.asar (renderer bundle was not built before packaging)'; exit 1; }
 
       - name: Upload test artifacts
         uses: actions/upload-artifact@v4

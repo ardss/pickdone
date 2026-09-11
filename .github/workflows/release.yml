@@ -194,11 +194,24 @@ jobs:
 
       # Cross-arch from x64 runner is safe: electron arm64 binaries are downloaded prebuilt and the
       # sqlite vendor driver ships linux-arm64/linux-x64 .node prebuilds — nothing compiles from source.
+      # renderer bundle is a gitignored build artifact: the windows job produces it inside check:all,
+      # this job runs standalone afterwards, so it must build explicitly before packaging
+      # (2026-09-11 board incident: packaging without it shipped a "not found" white window)
+      - name: Build renderer bundle
+        working-directory: pickdone
+        run: npm run build:renderer
+
       - name: Build & publish (draft)
         working-directory: pickdone
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx electron-builder --linux AppImage --arm64 --x64 --publish always && npx electron-builder --linux deb --arm64 --publish always
+
+      - name: Verify renderer entry landed in both asars
+        working-directory: pickdone
+        run: |
+          npx --yes @electron/asar list dist/linux-arm64-unpacked/resources/app.asar | grep -q "renderer-dist/index.html" || { echo '::error::renderer-dist/index.html missing from arm64 asar'; exit 1; }
+          npx --yes @electron/asar list dist/linux-x64-unpacked/resources/app.asar | grep -q "renderer-dist/index.html" || { echo '::error::renderer-dist/index.html missing from x64 asar'; exit 1; }
 
       - name: Linux SHA256 checksums & attach
         working-directory: pickdone
