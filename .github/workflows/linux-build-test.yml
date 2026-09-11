@@ -51,7 +51,7 @@ jobs:
       - name: Smoke-check the unpacked app tree
         working-directory: pickdone
         run: |
-          test -d dist/linux-arm64-unpacked/resources/vendor/better-sqlite3-multiple-ciphers/prebuilds/linux-arm64 || { echo '::error::arm64 sqlite prebuild missing from the package'; exit 1; }
+          test -f dist/linux-arm64-unpacked/resources/vendor/better-sqlite3-multiple-ciphers/prebuilds/linux-arm64.node || { echo '::error::arm64 sqlite prebuild missing from the package'; exit 1; }
           test -f dist/linux-arm64-unpacked/resources/bin/pickdone || { echo '::error::cli unix shim missing'; exit 1; }
           test -x dist/linux-arm64-unpacked/resources/bin/pickdone || { echo '::error::cli unix shim not executable'; exit 1; }
           test -f dist/linux-arm64-unpacked/resources/cli/pickdone.js || { echo '::error::bundled cli missing'; exit 1; }
