@@ -94,12 +94,15 @@ export default {
       "titlePh": "Doc title",
       "bodyPh": "Body. A good home for requirements, review conclusions and process specs…",
       "saved": "Saved {t}",
+      "titleAria": "Doc title",
+      "bodyAria": "Doc body",
       "del": "Delete doc",
       "delConfirm": "Click again to confirm",
       "deleted": "Doc deleted",
       "editorEmpty": "Pick a doc on the left or create one"
     },
     "ProjectView": {
+      "tabsAria": "Project content sections",
       "tabOverview": "Overview",
       "tabDeps": "Dependencies",
       "tabDocs": "Docs",

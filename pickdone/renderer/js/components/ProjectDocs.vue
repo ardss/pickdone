@@ -11,14 +11,12 @@
     </div>
     <div v-if="active" class="pjdocs__editor">
       <input class="pjdocs__title" v-model="active.title" :placeholder="$t('statsB.ProjectDocs.titlePh')"
-             @input="queueSave"/>
+             :aria-label="$t('statsB.ProjectDocs.titleAria')" @input="queueSave"/>
       <textarea class="pjdocs__body" v-model="active.body" :placeholder="$t('statsB.ProjectDocs.bodyPh')"
-                @input="queueSave"></textarea>
+                :aria-label="$t('statsB.ProjectDocs.bodyAria')" @input="queueSave"></textarea>
       <div class="pjdocs__foot">
         <span class="pjdocs__status">{{ statusText }}</span>
-        <button class="pjdocs__del" :class="{arm: delArmed}" @click="delDoc">
-          {{ delArmed ? $t('statsB.ProjectDocs.delConfirm') : $t('statsB.ProjectDocs.del') }}
-        </button>
+        <button class="pjdocs__del" @click="delDoc">{{ $t('statsB.ProjectDocs.del') }}</button>
       </div>
     </div>
     <div v-else class="pjdocs__editor pjdocs__editor--empty">{{ $t('statsB.ProjectDocs.editorEmpty') }}</div>
@@ -29,8 +27,10 @@
 /** 项目文档(实验性,project/:id 页"文档"页签)
  *  每个项目一组轻量文档(PRD/会议纪要/标准化流程记录),存 meta `projectDocs:<categoryId>`,
  *  结构 [{id,title,body,createdAt,updatedAt}];与里程碑同套路:meta 持久化,零 schema 变更,CLI 可读写同一 key。
- *  编辑自动保存(600ms 防抖);删除走两段确认(先点变红确认,再点执行),避免引入弹窗打断。 */
+ *  编辑自动保存(600ms 防抖);切换页签/项目或卸载前先把挂起的防抖保存立即落盘,不丢最后 600ms 输入。
+ *  删除走全局撤销契约:5s undo toast(utils/confirm.js 的 removeWithUndo),不再用两段红字确认。 */
 import { dayjs, FMT } from '../utils/core.js'
+import { removeWithUndo } from '../utils/confirm.js'
 
 const keyOf = (catId: number) => 'projectDocs:' + catId
 const genId = () => 'doc_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
@@ -39,7 +39,7 @@ export default {
   name: 'ProjectDocs',
   props: { catId: { type: Number, required: true } },
   data () {
-    return { docs: [] as any, activeId: '' as any, delArmed: false, savedAt: 0, saveTimer: 0 as any }
+    return { docs: [] as any, activeId: '' as any, savedAt: 0, saveTimer: 0 as any }
   },
   computed: {
     sortedDocs () {
@@ -54,11 +54,19 @@ export default {
     }
   },
   watch: {
-    catId () { this.load() }
+    catId () { this.flushPending(); this.load() }
   },
   mounted () { this.load() },
-  beforeUnmount () { clearTimeout(this.saveTimer) },
+  beforeUnmount () { this.flushPending() },
   methods: {
+    /** 切页签/切项目/卸载前把挂起的 600ms 防抖保存立即落盘,否则最后一次编辑会丢。
+     *  catId watcher 触发时 prop 已是新项目,必须用 queueSave 时抓的 key,避免把旧项目文档写进新项目。 */
+    flushPending () {
+      if (!this.saveTimer) return
+      clearTimeout(this.saveTimer)
+      this.saveTimer = 0
+      this.persist(this._pendingKey || keyOf(this.catId))
+    },
     fmtDate (ts) { return ts ? dayjs(ts).format(FMT.cnDate) : '' },
     async load () {
       this.docs = []
@@ -69,15 +77,15 @@ export default {
         if (Array.isArray(arr)) this.docs = arr
       } catch (e) { this.docs = [] }
     },
-    persist () {
+    persist (keyOverride) {
       try {
-        window.todoAPI.dbCall('setMeta', [keyOf(this.catId), JSON.stringify(this.docs)]).catch(() => {})
+        window.todoAPI.dbCall('setMeta', [keyOverride || keyOf(this.catId), JSON.stringify(this.docs)]).catch(() => {})
       } catch (e) { /* 无桥环境仅内存 */ }
       this.savedAt = Date.now()
     },
     queueSave () {
-      this.delArmed = false
       if (this.active) this.active.updatedAt = Date.now()
+      this._pendingKey = keyOf(this.catId)
       clearTimeout(this.saveTimer)
       this.saveTimer = setTimeout(this.persist, 600)
     },
@@ -87,15 +95,24 @@ export default {
       this.activeId = d.id
       this.persist()
     },
-    openDoc (d) { this.activeId = d.id; this.delArmed = false },
+    openDoc (d) { this.activeId = d.id },
+    /** 删除走全局撤销契约:立即删 + 5s undo toast(removeWithUndo),撤销时按原位置还原并落盘 */
     delDoc () {
-      if (!this.active) return
-      if (!this.delArmed) { this.delArmed = true; setTimeout(() => { this.delArmed = false }, 3000); return }
-      this.docs = this.docs.filter(d => d.id !== this.activeId)
-      this.activeId = ''
-      this.delArmed = false
-      this.persist()
-      if (this.$message) this.$message({ type: 'success', message: this.$t('statsB.ProjectDocs.deleted') })
+      const doc = this.active
+      if (!doc) return
+      const idx = this.docs.indexOf(doc)
+      const catId = this.catId
+      removeWithUndo(this, () => {
+        this.docs = this.docs.filter(d => d.id !== doc.id)
+        if (this.activeId === doc.id) this.activeId = ''
+        this.persist()
+      }, () => {
+        // 撤销可能发生在切到别的项目之后:恢复前先确认还在原项目的文档组里
+        if (this.catId !== catId) return
+        this.docs.splice(Math.min(idx, this.docs.length), 0, doc)
+        this.activeId = doc.id
+        this.persist()
+      })
     }
   }
 }
@@ -130,5 +147,5 @@ export default {
 .pjdocs__status { flex: 1; font-size: var(--fs-2xs, 11px); color: var(--text-3); }
 .pjdocs__del { padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line, #e6e8eb);
   background: transparent; color: var(--text-3); cursor: pointer; font-size: var(--fs-xs, 12px); transition: all var(--t-fast); }
-.pjdocs__del:hover, .pjdocs__del.arm { border-color: var(--danger, #c25649); color: var(--danger, #c25649); }
+.pjdocs__del:hover { border-color: var(--danger, #c25649); color: var(--danger, #c25649); }
 </style>

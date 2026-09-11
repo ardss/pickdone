@@ -93,12 +93,15 @@ export default {
       titlePh: '文档标题',
       bodyPh: '正文。适合放需求说明、评审结论、流程规范等长期沉淀的内容…',
       saved: '已保存 {t}',
+      titleAria: '文档标题',
+      bodyAria: '文档正文',
       del: '删除文档',
       delConfirm: '再点一次确认删除',
       deleted: '文档已删除',
       editorEmpty: '从左侧选择或新建一篇文档'
     },
     ProjectView: {
+      tabsAria: '项目内容区切换',
       tabOverview: '概览',
       tabDeps: '依赖图',
       tabDocs: '文档',
