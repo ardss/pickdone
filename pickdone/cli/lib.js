@@ -9,6 +9,10 @@ const { spawn } = require('child_process')
 const dayjs = require('dayjs')
 require('dayjs/locale/zh-cn')
 dayjs.locale('zh-cn')
+// Explicit isoWeek extension (hardening, 2026-09-12): applyViewConds' week window uses endOf('isoWeek') but used
+// to rely on todo-core's require side effect extending the shared instance. Extend our own instance so the CLI
+// keeps correct 本周 semantics even if that import chain ever changes (same degrade as cli/nl-date.cjs).
+try { dayjs.extend(require('../assets/vendor-lib/dayjs-plugin-isoWeek.js')) } catch (e) { /* degrade to default week start when the plugin is missing */ }
 const { FOCUS_MAX_MINUTES } = require('../shared/limits.mjs') // focus-duration clamp constants (single source with db.js / renderer, audit item 4); require(esm) — Node >= 22.12
 
 // The CLI runs in pure Node; silence electron-log to keep logs out of the stdout JSON output
@@ -374,10 +378,14 @@ function addMilestone (categoryInput, title, dateInput) {
   const date = parseMilestoneDate(dateInput)
   if (!date) throw new CliError(`cannot parse date: "${dateInput}" (supported: YYYY-MM-DD / MM-DD / today / +14d)`, 'BAD_DATE')
   const cat = open().call('getAllCategories').find(c => c.categoryId === categoryId)
-  const list = msNormalize(getMilestones(categoryId).milestones.concat([{ title: String(title).trim(), date }]))
+  const added = { title: String(title).trim(), date }
+  const list = msNormalize(getMilestones(categoryId).milestones.concat([added]))
   open().call('setMeta', [MS_KEY(categoryId), JSON.stringify(list)])
   audit.record({ action: 'milestone.add', targets: [{ taskId: 'cat:' + categoryId, content: cat ? cat.categoryName : String(categoryId) }], note: `milestone "${title.trim()}" → ${dayjs(date).format('YYYY-MM-DD')}` })
-  return { categoryId, milestones: list }
+  // `added` echoes the milestone this call actually inserted (the list is date-sorted, so the CLI used to
+  // echo milestones.at(-1) — a different row whenever the new date was not the latest)
+  const stored = list.find(m => m.title === added.title && m.date === added.date) || added
+  return { categoryId, milestones: list, added: stored }
 }
 
 function removeMilestone (categoryInput, index) {
@@ -1336,13 +1344,17 @@ function viewRm (input) {
 }
 
 /** Apply a saved view's conds to a task pool — mirrors renderer FilterView.list exactly:
- *  undone only, catId/priority equality (-1 = off), dateMode today/isoWeek/overdue/none windows. */
-function applyViewConds (conds, tasks) {
+ *  undone only, catId/priority equality (-1 = off), dateMode today/isoWeek/overdue/none windows.
+ *  opts.done override (review P1 2026-09-12): an explicit `list --view X --done/--undone` owns the completion
+ *  filter — default false keeps the FilterView undone-only parity, true skips the complete check (the fetch
+ *  already filtered by the explicit flag) so done tasks are no longer silently dropped. */
+function applyViewConds (conds, tasks, { done = false } = {}) {
   const c = conds || {}
   const today0 = +dayjs().startOf('day')
-  const weekEnd = +dayjs().endOf('isoWeek') // isoWeek plugin is extended by todo-core (shared dayjs instance)
+  const weekEnd = +dayjs().endOf('isoWeek') // isoWeek plugin extended explicitly at the top of this file
   return tasks.filter(t => {
-    if (t.delete || t.complete) return false
+    if (t.delete) return false
+    if (done === false && t.complete) return false
     if (c.catId != null && c.catId !== -1 && (t.categoryId || 0) !== c.catId) return false
     if (c.priority != null && c.priority !== -1 && (t.priority || 0) !== c.priority) return false
     if (c.dateMode && c.dateMode !== 'all') {
@@ -1468,7 +1480,7 @@ function listOn (date) {
   return liveTasks()
     .filter(t => t.dayStart === day)
     .sort((a, b) => (a.todoTime || a.dayStart) - (b.todoTime || b.dayStart) || (a.taskSort || 0) - (b.taskSort || 0))
-    .map(t => ({ taskId: t.taskId, content: t.taskContent, time: t.todoTime ? dayjs(t.todoTime).format('HH:mm') : null, complete: t.complete, tomatoEstimate: getEstimateOf(t.taskId) }))
+    .map(t => ({ taskId: t.taskId, content: t.taskContent, time: t.todoTime ? dayjs(t.todoTime).format('HH:mm') : null, complete: t.complete, tomatoEstimate: getEstimateOf(t.taskId), dayStart: t.dayStart }))
 }
 
 /** Resolve a focus record by full tomatoId or unique prefix (tomatoIds are long; prefix is the human/AI-friendly handle) */

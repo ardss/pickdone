@@ -90,7 +90,7 @@ Write commands:
           common: --dry-run (print the per-task plan, writes nothing); --json (data: {op, matched, changed, failures})
           batch takes exact taskIds only — unknown ids land in failures[] and never abort the remaining tasks
   add    <content> [--desc text] [--date today|tomorrow|+3d|YYYY-MM-DD[ HH:mm]] [--created-at "YYYY-MM-DD HH:mm"]
-         [--reminder same as date] [--category name] [--difficulty 0-3] [--estimate 0-20]
+         [--after <taskId|keyword>] [--reminder same as date] [--category name] [--difficulty 0-3] [--estimate 0-20]
   done   <taskId|keyword>         complete a task (--no-sub-cascade to skip subtasks; --at "YYYY-MM-DD HH:mm" backdates completedAt)
   undo   <taskId|keyword>         undo completion
   edit   <taskId|keyword> [--content text] [--desc text] [--date value|none] [--reminder value|none] [--remind-offset "10,30"|none] [--remind-extra "D HH:mm,..."|none] [--category name] [--important 0|1] [--urgent 0|1] [--priority 0-3] [--difficulty 0-3] [--deadline date|none] [--estimate 0-20]
@@ -259,10 +259,12 @@ async function main () {
       if (first && !range && !opts.all && !opts.on) throw new lib.CliError(`unknown range "${first}" (valid: today/tomorrow/week/overdue/future or --all or --on <date>)`)
       // --on <date>: what's scheduled on one specific day (with times) — the "what should I slot at 11am tomorrow" view
       if (opts.on != null && opts.on !== true) {
-        const rows = lib.listOn(opts.on)
+        let rows = lib.listOn(opts.on)
+        // --lunar parity with the main list path (was silently ignored here) — additive JSON field only
+        if (opts.lunar) rows = rows.map(t => ({ ...t, lunar: lib.lunarAnnotate(t) }))
         if (opts.json) return emit(rows)
         if (!rows.length) return console.log('(nothing scheduled on ' + opts.on + ')')
-        console.log(rows.map(t => `${t.time ? t.time : 'all-day'}  [${t.complete ? 'x' : ' '}] ${t.content}${t.tomatoEstimate ? '  (est ' + t.tomatoEstimate + '🍅)' : ''}`).join('\n'))
+        console.log(rows.map(t => `${t.time ? t.time : 'all-day'}  [${t.complete ? 'x' : ' '}] ${t.content}${t.tomatoEstimate ? '  (est ' + t.tomatoEstimate + '🍅)' : ''}${t.lunar ? '  (' + t.lunar + ')' : ''}`).join('\n'))
         console.log(`-- ${rows.length} task(s) on ${opts.on}`)
         return
       }
@@ -275,17 +277,24 @@ async function main () {
       }
       // --view pushes its conds into the fetch (dateMode/category/done/limit-500) so the row cap can't
       // truncate matching tasks before filtering; applyViewConds remains the authoritative post-filter.
+      // Explicit inline flags win over the view's presets (a saved view is undone-only, but
+      // `list --view X --done` must show done tasks, not silently re-apply the view's done:false).
       const viewOpts = view ? lib.viewFetchOpts(view.conds) : null
+      const doneOpt = opts.done !== undefined ? (opts.done === 'false' ? false : opts.done) : (view ? viewOpts.done : undefined)
+      const noDateOpt = opts.noDate != null ? opts.noDate : (view ? viewOpts.noDate : undefined)
+      // --limit normalization: a bare/invalid --limit used to coerce to 1 row via Number(true)=NaN→slice(0,NaN)
+      // or 50 via parseInt(true); invalid values now fall back to the default cap on both paths
+      const limitN = Number.isFinite(parseInt(opts.limit, 10)) && parseInt(opts.limit, 10) > 0 ? parseInt(opts.limit, 10) : null
       let rows = lib.listTodos({
         range: view ? viewOpts.range : (quad ? null : range),
-        done: view ? viewOpts.done : (opts.done === 'false' ? false : opts.done),
-        noDate: view ? viewOpts.noDate : opts.noDate,
+        done: doneOpt,
+        noDate: noDateOpt,
         category: opts.category != null ? lib.resolveCategory(opts.category) : (view ? viewOpts.category : null),
-        keyword: opts.keyword, limit: view ? viewOpts.limit : opts.limit, quad
+        keyword: opts.keyword, limit: limitN != null ? limitN : (view ? viewOpts.limit : undefined), quad
       })
       if (view) {
-        rows = lib.applyViewConds(view.conds, rows)
-        if (opts.limit != null) rows = rows.slice(0, Number(opts.limit))
+        rows = lib.applyViewConds(view.conds, rows, { done: doneOpt === undefined ? false : doneOpt })
+        if (limitN != null) rows = rows.slice(0, limitN)
       }
       // --lunar: additive only — JSON rows gain `lunar: "YYYY-MM-DD · 七月廿九"`, text dates gain "· 七月廿九"
       if (opts.lunar) rows = rows.map(t => ({ ...t, lunar: lib.lunarAnnotate(t) }))
@@ -295,7 +304,10 @@ async function main () {
     case 'search': {
       const kw = opts._[0]
       if (!kw) throw new lib.CliError('usage: search <keyword>', 'USAGE')
-      emitList(lib.listTodos({ keyword: kw, done: opts.done === 'false' ? false : opts.done, range: opts.all ? null : undefined, limit: opts.limit }))
+      let rows = lib.listTodos({ keyword: kw, done: opts.done === 'false' ? false : opts.done, range: opts.all ? null : undefined, limit: opts.limit })
+      // --lunar parity with `list` (was silently ignored on this path)
+      if (opts.lunar) rows = rows.map(t => ({ ...t, lunar: lib.lunarAnnotate(t) }))
+      emitList(rows, opts.lunar ? lib.lunarOf : null)
       return
     }
     case 'get': {
@@ -456,7 +468,7 @@ async function main () {
         const dateInput = rest.slice(1).join(' ')
         const r = lib.addMilestone(name, title, dateInput)
         if (opts.json) return emit(r)
-        return console.log(`✓ milestone added: ${title} → ${dayjs(r.milestones[r.milestones.length - 1].date).format('YYYY-MM-DD')}`)
+        return console.log(`✓ milestone added: ${r.added.title} → ${dayjs(r.added.date).format('YYYY-MM-DD')}`)
       }
       if (op === 'rm') {
         const r = lib.removeMilestone(name, rest[0])
@@ -535,6 +547,11 @@ async function main () {
       // Preview must match real semantics: without --date, addTodo creates a no-date task (not today) — this previously misled AI decisions
       if (dry) return emitNext({ dryRun: true, content: opts._.join(' '), date: opts.date || null, category: opts.category || null }, ['remove --dry-run to actually create'])
       const content = opts._.join(' ')
+      // --after <taskId|keyword>: resolve to a real taskId up front (FS dependency edge). The raw string used
+      // to land in predecessors verbatim — a keyword or typo created a predecessor id that can never resolve,
+      // so the task read as "ready" forever. Unknown refs fail fast with a non-zero exit.
+      const afterRef = opts.after != null && opts.after !== true ? opts.after : null
+      const afterIds = afterRef ? [lib.resolveTask(afterRef).taskId] : null
       const t = lib.addTodo({
         content, desc: opts.desc, date: opts.date, reminder: opts.reminder,
         category: opts.category, difficulty: opts.difficulty,
@@ -542,7 +559,7 @@ async function main () {
         important: opts.important != null && opts.important !== true ? opts.important : undefined,
         urgent: opts.urgent != null && opts.urgent !== true ? opts.urgent : undefined,
         createTime: opts['created-at'] || null,
-        after: opts.after != null && opts.after !== true ? [opts.after] : null
+        after: afterIds
       })
       if (opts.estimate != null && opts.estimate !== true) lib.setEstimate(t.taskId, opts.estimate)
       const hints = [`get ${t.taskId} --json to verify`, `done ${t.taskId} to complete it`, 'list --json to read back']
@@ -559,12 +576,15 @@ async function main () {
       const cur = lib.getTask(target)
       if (verb === 'list' || !verb) {
         const ids = lib.parsePredecessors(cur.predecessors)
-        console.log('predecessors of [' + cur.taskContent + ']: ' + ids.length)
-        for (const id of ids) {
+        const preds = ids.map(id => {
           let p = null
           try { p = lib.getTask(id) } catch { }
-          console.log('  ' + (p ? (p.complete ? '[x] ' : '[ ] ') : '[?] ') + (p ? p.taskContent : id) + (p ? '' : ' (missing)'))
-        }
+          return { taskId: id, content: p ? p.taskContent : null, complete: p ? !!p.complete : null, missing: !p }
+        })
+        // --json parity with the other read commands (was text-only regardless of the flag)
+        if (opts.json) return emit({ taskId: cur.taskId, content: cur.taskContent, predecessors: preds })
+        console.log('predecessors of [' + cur.taskContent + ']: ' + ids.length)
+        for (const p of preds) console.log('  ' + (p.missing ? '[?] ' : (p.complete ? '[x] ' : '[ ] ')) + (p.content || p.taskId) + (p.missing ? ' (missing)' : ''))
         return null
       }
       const pred = rest[0]
@@ -585,6 +605,8 @@ async function main () {
       // ready [--project <name|id>] — undone tasks whose predecessors are all complete (or none); the "what can I do next" read
       const scope = opts.project != null && opts.project !== true ? lib.resolveCategory(opts.project) : null
       const items = lib.listReady(scope)
+      // --json parity (was text-only regardless of the flag); default stays the compact text form for backward compat
+      if (opts.json) return emit(items)
       console.log('ready: ' + items.length)
       for (const t of items.slice(0, 50)) console.log('  ' + t.taskContent + ' (' + t.taskId + ')')
       return null
@@ -678,7 +700,12 @@ async function main () {
       if (opts.difficulty != null && opts.difficulty !== true) patch.difficulty = parseInt(opts.difficulty, 10) || 0
       if (!Object.keys(patch).length && !dateClear && opts.estimate == null && opts['remind-offset'] == null && opts['remind-extra'] == null) throw new lib.CliError('edit requires at least one field')
       // Apply the main patch before reminder/tomato branches: with --reminder + --remind-offset in one command, the main reminder must be written first (offsets anchor to it)
+      // Resolve exactly ONCE for the whole command (review P2 2026-09-12): the main patch used to commit with the
+      // pre-rename task while --remind-offset/--remind-extra/--estimate re-resolved the keyword afterwards — a
+      // --content rename could leave those trailing sub-ops mutating a different (or ambiguous) match. taskId is
+      // immutable, so every sub-op below reuses the same id.
       const before = lib.resolveTask(opts._[0])
+      const tid2 = before.taskId
       // Reschedule re-anchor (review P1 2026-09-10; renderer parity: EditPanel.applyDate) — moving the date must
       // carry reminders along. The rule lives in lib.dateChangeReminderPatch, shared with `batch date` (review P1
       // 2026-09-11: the batch channel used to bypass this and leave the main reminder on the old day). An explicit
@@ -686,10 +713,9 @@ async function main () {
       if (patch.todoTime && opts.reminder === undefined) {
         Object.assign(patch, lib.dateChangeReminderPatch(before, patch.todoTime))
       }
-      if (Object.keys(patch).length) lib.patchTodo(opts._[0], patch)
-      const tid2 = lib.resolveTask(opts._[0]).taskId
-      // --date none|clear: move the task back to the todo box (renderer-parity field shape + chip cleanup inside clearTodoDate)
-      const cleared = dateClear ? lib.clearTodoDate(opts._[0]) : null
+      if (Object.keys(patch).length) lib.patchTodo(tid2, patch)
+      // cleared/sub-ops reuse the same taskId — no re-resolution after a possible --content rename
+      const cleared = dateClear ? lib.clearTodoDate(tid2) : null
       const updated = lib.open().call('getById', tid2)
       // Timeline chips follow the task (same semantics as the UI's moveTaskChips, finalized in the 2026-09-03 review):
       // day change → all chips migrate with the task (times unchanged, user-arranged extra chips are not collapsed); a task with no chips and an explicit time → add one
@@ -712,9 +738,9 @@ async function main () {
         console.log('= no change: task already has no date (still in the todo box)')
         return
       }
-      if (opts['remind-offset'] != null && opts['remind-offset'] !== true) return okMsg(lib.setReminderOffsets(opts._[0], opts['remind-offset']))
-      if (opts['remind-extra'] != null && opts['remind-extra'] !== true) return okMsg(lib.setReminderExtra(opts._[0], opts['remind-extra']))
-      if (opts.estimate != null) return okMsg(lib.setEstimate(opts._[0], opts.estimate), ['get ' + tid2 + ' --json to read back'])
+      if (opts['remind-offset'] != null && opts['remind-offset'] !== true) return okMsg(lib.setReminderOffsets(tid2, opts['remind-offset']))
+      if (opts['remind-extra'] != null && opts['remind-extra'] !== true) return okMsg(lib.setReminderExtra(tid2, opts['remind-extra']))
+      if (opts.estimate != null) return okMsg(lib.setEstimate(tid2, opts.estimate), ['get ' + tid2 + ' --json to read back'])
       return okMsg(updated || { taskId: tid2 }, cleared
         ? ['task is back in the todo box (list --no-date)', 'get ' + tid2 + ' --json to read back']
         : ['get ' + tid2 + ' --json to read back'])
