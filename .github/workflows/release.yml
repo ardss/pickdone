@@ -210,12 +210,14 @@ jobs:
       - name: Verify packaged artifacts (renderer + smoke trio, parity with the manual test workflow)
         working-directory: pickdone
         run: |
-          for ARCH in arm64 x64; do
-            npx --yes @electron/asar list dist/linux-$ARCH-unpacked/resources/app.asar | grep -q "renderer-dist/index.html" || { echo "::error::renderer-dist/index.html missing from $ARCH asar"; exit 1; }
-            test -f dist/linux-$ARCH-unpacked/resources/vendor/better-sqlite3-multiple-ciphers/prebuilds/linux-$ARCH.node || { echo "::error::linux-$ARCH sqlite prebuild missing ($ARCH package)"; exit 1; }
-            test -f dist/linux-$ARCH-unpacked/resources/bin/pickdone || { echo "::error::cli unix shim missing ($ARCH package)"; exit 1; }
-            test -x dist/linux-$ARCH-unpacked/resources/bin/pickdone || { echo "::error::cli unix shim not executable ($ARCH package)"; exit 1; }
-            test -f dist/linux-$ARCH-unpacked/resources/cli/pickdone.js || { echo "::error::bundled cli missing ($ARCH package)"; exit 1; }
+          # electron-builder names the x64 unpacked dir WITHOUT an arch suffix (linux-unpacked)
+          for PAIR in "arm64 linux-arm64-unpacked" "x64 linux-unpacked"; do
+            set -- $PAIR; ARCH=$1; DIR=$2
+            npx --yes @electron/asar list dist/$DIR/resources/app.asar | grep -q "renderer-dist/index.html" || { echo "::error::renderer-dist/index.html missing from $ARCH asar"; exit 1; }
+            test -f dist/$DIR/resources/vendor/better-sqlite3-multiple-ciphers/prebuilds/linux-$ARCH.node || { echo "::error::linux-$ARCH sqlite prebuild missing ($ARCH package)"; exit 1; }
+            test -f dist/$DIR/resources/bin/pickdone || { echo "::error::cli unix shim missing ($ARCH package)"; exit 1; }
+            test -x dist/$DIR/resources/bin/pickdone || { echo "::error::cli unix shim not executable ($ARCH package)"; exit 1; }
+            test -f dist/$DIR/resources/cli/pickdone.js || { echo "::error::bundled cli missing ($ARCH package)"; exit 1; }
           done
 
       # Live boot parity with the windows job: the exe-instant-exit class (missing renderer entry,
