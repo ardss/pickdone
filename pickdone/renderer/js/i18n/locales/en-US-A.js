@@ -21,6 +21,10 @@ export default {
       progress: '{done}/{total} done',
       depAdded: 'Set "{a}" as a prerequisite of "{b}"',
       cycleErr: 'Cycle rejected: "{b}" already depends on it (directly or indirectly)',
+      depRemoved: 'Removed "{a}" as a prerequisite of "{b}"',
+      removeDep: 'Remove prerequisite: {a}',
+      emptyHint: 'Nothing here yet. Drag tasks in from the task list on the right, or create tasks and come back to wire dependencies',
+      msLoading: 'Loading milestones…',
       noTitle: 'Untitled'
     },
     "core": {

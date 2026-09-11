@@ -21,6 +21,10 @@ export default {
       progress: '{done}/{total} 完成',
       depAdded: '已把「{a}」设为「{b}」的前置',
       cycleErr: '不能成环:「{b}」已(直接或间接)依赖它',
+      depRemoved: '已把「{a}」从「{b}」的前置中移除',
+      removeDep: '移除前置:{a}',
+      emptyHint: '这里还没有任务。从右侧任务列表把任务拖进来,或新建任务后再回到本页编排依赖',
+      msLoading: '里程碑加载中…',
       noTitle: '无标题'
     },
     "core": {

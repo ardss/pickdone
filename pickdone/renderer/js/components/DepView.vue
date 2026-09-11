@@ -2,8 +2,9 @@
   <div class="depv-wrap" ref="wrap">
     <div class="depv-topbar">
       <div v-if="fixedProjectId == null" class="depv-filter" role="group" :aria-label="$t('statsA.DepView.filterLabel')">
-        <button class="depv-chip" :class="{on: projectId === null}" @click="projectId = null">{{ $t('statsA.DepView.allProjects') }}</button>
+        <button class="depv-chip" :class="{on: projectId === null}" :aria-pressed="projectId === null" @click="projectId = null">{{ $t('statsA.DepView.allProjects') }}</button>
         <button v-for="p in projects" :key="p.categoryId" class="depv-chip" :class="{on: projectId === p.categoryId}"
+                :aria-pressed="projectId === p.categoryId"
                 @click="projectId = p.categoryId">
           <span class="depv-chip-dot" :style="{background: p.categoryColor}"></span>{{ p.categoryName }}
         </button>
@@ -21,7 +22,7 @@
       <span class="depv-proj__ms" :class="'depv-proj__ms--' + projectInfo.msState" v-if="projectInfo.msTitle">
         M{{ projectInfo.msIndex + 1 }} · {{ projectInfo.msTitle }} · {{ projectInfo.msDateLabel }}
       </span>
-      <span class="depv-proj__noms" v-else>{{ $t('statsA.DepView.noMilestone') }}</span>
+      <span class="depv-proj__noms" v-else>{{ msLoaded ? $t('statsA.DepView.noMilestone') : $t('statsA.DepView.msLoading') }}</span>
       <span class="depv-proj__dl" :class="{'depv-proj__dl--over': projectInfo.dlOver}" v-if="projectInfo.deadline">
         {{ $t('statsA.DepView.deadline') }} {{ projectInfo.dlLabel }}
       </span>
@@ -39,6 +40,8 @@
          content (track): mounted outside, scrolling would offset wires from their cards. -->
     <div class="depv-cols" ref="viewport">
      <div class="depv-track" ref="track" :style="{ width: trackW + 'px', height: trackH + 'px' }">
+      <!-- Empty scope: guide users to pull tasks in (dead .depv-empty CSS finally wired to a real state) -->
+      <div v-if="!inScope.length" class="depv-empty">{{ $t('statsA.DepView.emptyHint') }}</div>
       <div v-for="t in inScope" :key="t.taskId" class="depv-task" tabindex="0" role="button"
            :data-tid="t.taskId" draggable="true"
            :style="{ left: (posMap[t.taskId] || { x: 0, y: 0 }).x + 'px', top: (posMap[t.taskId] || { x: 0, y: 0 }).y + 'px' }"
@@ -124,7 +127,7 @@ export default {
     fixedProjectId: { type: Number, default: null }
   },
   data () {
-    return { projectId: this.fixedProjectId != null ? this.fixedProjectId : null, wires: [], trackW: 0, trackH: 0, dragTid: '', dropTid: '', msList: [],
+    return { projectId: this.fixedProjectId != null ? this.fixedProjectId : null, wires: [], trackW: 0, trackH: 0, dragTid: '', dropTid: '', msList: [], msLoaded: true,
       posMap: {}, movingTid: '', dropSide: '' }
   },
   computed: {
@@ -223,7 +226,39 @@ export default {
       this.flushPos()
     },
   methods: {
-    taskContextMenu (t, e) { taskContextMenu(this, t, e) },
+    /** 右键菜单 = 共享任务菜单 + 每条前置一个"移除前置"入口(带 5s 撤销),删除依赖不再只能靠拖拽逆向操作 */
+    taskContextMenu (t, e) {
+      var extra = []
+      var preds = parsePredecessors(t.predecessors)
+      var all = this.allLiveById()
+      for (var i = 0; i < preds.length; i++) {
+        const pid = preds[i]
+        const p = all[pid]
+        const name = (p && p.taskContent) || pid
+        extra.push({
+          icon: 'x',
+          danger: true,
+          label: this.$t('statsA.DepView.removeDep', { a: name }),
+          fn: () => this.removeDependency(t, pid, name)
+        })
+      }
+      taskContextMenu(this, t, e, null, extra)
+    },
+    /** target.predecessors -= prereqId(带 5s 撤销 toast,与 addDependency 同一撤销出口) */
+    removeDependency (target, prereqId, name) {
+      var cur = parsePredecessors(target.predecessors)
+      if (cur.indexOf(prereqId) < 0) return
+      var prevDeps = cur.slice()
+      moveWithUndo(this, {
+        label: this.$t('statsA.DepView.depRemoved', { a: name || prereqId, b: target.taskContent || '' }),
+        apply: () => { this.$store.dispatch('todo/updateTodoFields', { taskId: target.taskId, patch: { predecessors: cur.filter(x => x !== prereqId), status: 'update' } }) },
+        revert: () => {
+          this.$store.dispatch('todo/updateTodoFields', { taskId: target.taskId, patch: { predecessors: prevDeps, status: 'update' } })
+          this.$nextTick(this.drawWires)
+        }
+      })
+      this.$nextTick(this.drawWires)
+    },
     // —— 画布布局:位置持久化 + 自动整理(自由画布是定稿形态,分层只是布局算法) ——
     posKey () { return 'depView.pos.v1:' + (this.projectId == null ? 'all' : String(this.projectId)) },
     loadPos () {
@@ -329,7 +364,14 @@ export default {
     },
     ensurePositions () {
       var layout = this.computeAutoLayout()
+      // 死键清理:posMap 只保留当前 scope 内还存在的任务,否则删除/移走的卡片位置永远留在 meta 里
+      var live = {}
+      var list = this.inScope
+      for (var n = 0; n < list.length; n++) live[list[n].taskId] = true
       var changed = false
+      for (var dead in this.posMap) {
+        if (!live[dead]) { delete this.posMap[dead]; changed = true }
+      }
       for (var id in layout) {
         if (!this.posMap[id]) { this.posMap[id] = layout[id]; changed = true }
       }
@@ -379,14 +421,22 @@ export default {
     },
     loadMs () {
       this.msList = []
+      // 加载中与空态区分:避免异步里程碑未返回时闪"未设里程碑"假态
+      this.msLoaded = this.projectId == null
       if (this.projectId == null) return
       var pid = this.projectId
-      loadMilestones(pid).then(ms => { if (this.projectId === pid) this.msList = ms || [] })
+      loadMilestones(pid).then(ms => { if (this.projectId === pid) { this.msList = ms || []; this.msLoaded = true } }).catch(() => { if (this.projectId === pid) this.msLoaded = true })
+    },
+    /** 阻塞/ready 判定的任务表:必须用全量未删任务(含 scope 外/跨项目前置),
+     *  否则前置在别的项目时 byId 查不到,依赖卡会被误判为 ready */
+    allLiveById () {
+      var byId = {}
+      var list = this.$store.state.todo.todoList.filter(function (t) { return !t.delete })
+      for (var i = 0; i < list.length; i++) byId[list[i].taskId] = list[i]
+      return byId
     },
     missingOf (t) {
-      var byId = {}
-      var list = this.inScope
-      for (var i = 0; i < list.length; i++) byId[list[i].taskId] = list[i]
+      var byId = this.allLiveById()
       return parsePredecessors(t.predecessors)
         .map(function (id) { return { id: id, p: byId[id] } })
         .filter(function (x) { return x.p && !x.p.complete })
@@ -470,7 +520,12 @@ export default {
       var wrect = track.getBoundingClientRect()
       // 画布尺寸 = 卡片位置包围盒 ∪ 视口,绝对定位下 scrollWidth 不再反映内容,必须自算
       var maxX = wrect.width, maxY = wrect.height
+      // 包围盒只统计现存卡片的位置(posMap 里的死键不应把画布越撑越大)
+      var cards0 = track.querySelectorAll('.depv-task')
+      var liveIds = {}
+      for (var b0 = 0; b0 < cards0.length; b0++) liveIds[cards0[b0].getAttribute('data-tid')] = true
       for (var b in this.posMap) {
+        if (!liveIds[b]) continue
         var pb = this.posMap[b]
         maxX = Math.max(maxX, pb.x + 300)
         maxY = Math.max(maxY, pb.y + 160)
