@@ -245,7 +245,9 @@ async function bootstrap () {
         // ever written and the CLI's waitForTomatoAck polled to its full timeout. Write an 'expired' receipt (seq ≥ cmd.seq) so the CLI unblocks.
         if (isStaleTomatoCmd(cmd, Date.now())) {
           console.warn('[cli-tomato] ignoring stale command (>60s):', cmd.action, 'seq=' + cmd.seq)
-          window.todoAPI.dbCall('setMeta', ['cliTomatoState', JSON.stringify(expiredTomatoReceipt(cmd, Date.now()))]).catch(() => {})
+          // 2026-09-12: the expired receipt is what unblocks the CLI's waitForTomatoAck — a failed write leaves
+          // the CLI polling to its full timeout with no trace, so surface the error.
+          window.todoAPI.dbCall('setMeta', ['cliTomatoState', JSON.stringify(expiredTomatoReceipt(cmd, Date.now()))]).catch(e => console.error('[cli-tomato] failed to write expired receipt (CLI will wait until timeout):', e))
           return
         }
         const t = store.state.tomato

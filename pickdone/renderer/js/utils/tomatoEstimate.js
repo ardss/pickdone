@@ -31,8 +31,10 @@ function persist () {
   } catch (e) { /* ignore quota exceeded */ }
   try {
     if (window.todoAPI && window.todoAPI.dbCall) {
-      window.todoAPI.dbCall('setMeta', [LS_KEY, JSON.stringify(state)]).catch(() => {})
-      window.todoAPI.dbCall('setMeta', [TS_KEY, now]).catch(() => {})
+      // 2026-09-12: silent .catch(() => {}) hid meta write failures — a failing setMeta meant the CLI/other
+      // windows kept a stale estimate with no trace. Log it.
+      window.todoAPI.dbCall('setMeta', [LS_KEY, JSON.stringify(state)]).catch(e => console.error('[tomatoEstimate] setMeta(%s) failed:', LS_KEY, e))
+      window.todoAPI.dbCall('setMeta', [TS_KEY, now]).catch(e => console.error('[tomatoEstimate] setMeta(%s) failed:', TS_KEY, e))
     }
   } catch (e) { /* degraded debug host */ }
 }

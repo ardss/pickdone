@@ -42,7 +42,8 @@ function persist (state) {
   const blob = { schemaV: SCHEMA_V, habits: state.habits, moments: state.moments || [], savedAt: Date.now() }
   state.savedAt = blob.savedAt
   try { localStorage.setItem(LS_KEY, JSON.stringify(blob)) } catch {}
-  try { window.todoAPI && window.todoAPI.dbCall && window.todoAPI.dbCall('setMeta', [META_KEY, JSON.stringify(blob)]).catch(() => {}) } catch {}
+  // 2026-09-12: silent .catch(() => {}) hid meta write failures (DB is the durable source of truth) — log them
+  try { window.todoAPI && window.todoAPI.dbCall && window.todoAPI.dbCall('setMeta', [META_KEY, JSON.stringify(blob)]).catch(e => console.error('[habits] setMeta failed:', e)) } catch {}
 }
 
 // Uses dayjs+FMT.date uniformly like the rest of the app (previously hand-rolled concatenation could disagree with HabitView's dayjs convention at day boundaries)
