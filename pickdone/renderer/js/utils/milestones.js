@@ -19,7 +19,9 @@ export async function loadMilestones (categoryId) {
   try {
     const raw = await window.todoAPI.dbCall('getMeta', keyOf(categoryId))
     const list = JSON.parse(raw || '[]')
-    return Array.isArray(list) ? list.filter(m => m && m.title && m.date) : []
+    // Number(m.date) parseable only — aligns with the CLI side's tolerance so a corrupt/legacy
+    // non-numeric date can never poison the sort (`NaN` comparisons) downstream
+    return Array.isArray(list) ? list.filter(m => m && m.title && m.date && !Number.isNaN(Number(m.date))) : []
   } catch { return [] }
 }
 
@@ -32,9 +34,15 @@ export function saveMilestones (categoryId, list) {
       taskIds: Array.isArray(m.taskIds) ? m.taskIds.filter(Boolean) : []
     }))
     .sort((a, b) => a.date - b.date)
+  // Write failure is now observable: the resolved boolean lands on clean.savePromise (existing callers keep
+  // receiving the plain sorted array; JSON.stringify of an array ignores the extra property).
+  // 2026-09-12: the old `.catch(() => {})` swallowed setMeta failures, so a failed save silently lost edits.
+  let savePromise = Promise.resolve(false)
   try {
-    window.todoAPI.dbCall('setMeta', [keyOf(categoryId), JSON.stringify(clean)]).catch(() => {})
-  } catch { /* in-memory only when running in a debug host without the DB bridge */ }
+    savePromise = window.todoAPI.dbCall('setMeta', [keyOf(categoryId), JSON.stringify(clean)])
+      .then(() => true, e => { console.error('[milestones] saveMilestones setMeta failed for', categoryId, e); return false })
+  } catch (e) { console.error('[milestones] saveMilestones db bridge unavailable:', e) } // in-memory only when running in a debug host without the DB bridge
+  clean.savePromise = savePromise
   return clean
 }
 
