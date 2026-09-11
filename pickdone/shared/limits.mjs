@@ -10,11 +10,13 @@
  * accepts up to 720 in the input field but values above 600 are clamped to
  * FOCUS_MAX_MINUTES on save (memory must never diverge from the ledger).
  *
+ * Format: ESM (.mjs) — single file consumed by CJS consumers (src/main/db.js,
+ * cli/lib.js) via require(esm) (Node >= 22.12; CI pins node 22, Electron 39
+ * embeds node 22.x) and by the renderer through renderer/js/utils/limits.js.
+ *
  * Note: renderer/js/store/tomato.js still carries an inline 600 clamp
  * (outside this refactor's file scope) — migrating it to
  * renderer/js/utils/limits.js is a deliberate follow-up.
  */
-module.exports = {
-  FOCUS_MAX_MINUTES: 600,
-  FOCUS_INPUT_MAX_MINUTES: 720
-}
+export const FOCUS_MAX_MINUTES = 600
+export const FOCUS_INPUT_MAX_MINUTES = 720

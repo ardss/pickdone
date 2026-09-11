@@ -9,7 +9,7 @@ const { spawn } = require('child_process')
 const dayjs = require('dayjs')
 require('dayjs/locale/zh-cn')
 dayjs.locale('zh-cn')
-const { FOCUS_MAX_MINUTES } = require('../shared/limits.cjs') // focus-duration clamp constants (single source with db.js / renderer, audit item 4)
+const { FOCUS_MAX_MINUTES } = require('../shared/limits.mjs') // focus-duration clamp constants (single source with db.js / renderer, audit item 4); require(esm) — Node >= 22.12
 
 // The CLI runs in pure Node; silence electron-log to keep logs out of the stdout JSON output
 try {

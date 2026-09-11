@@ -6,7 +6,7 @@ const path = require('path')
 const i18nM = require('./i18n')
 const fs = require('fs')
 const crypto = require('crypto')
-const LIMITS = require('../../shared/limits.cjs') // focus-duration clamp constants (single source, audit item 4)
+const LIMITS = require('../../shared/limits.mjs') // focus-duration clamp constants (single source, audit item 4); require(esm) — Node >= 22.12
 // electron-log only exists inside the packaged App; the standalone CLI (extraResources bundle) has no
 // node_modules/electron-log, so fall back to a no-op logger instead of crashing at require time
 let log
