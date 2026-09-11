@@ -5,6 +5,8 @@
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-09-11
+
 ### 新增
 - Linux 支持：应用现以 AppImage（x64 + arm64）与 deb（arm64）发行，加密数据库、托盘、提醒与 CLI 与 Windows 完全一致。自本版起 Linux 用户走同样的应用内更新通道。
 

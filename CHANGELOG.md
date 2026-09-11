@@ -6,6 +6,8 @@ and versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-09-11
+
 ### Added
 - Linux support: the app now ships as AppImage (x64 + arm64) and deb (arm64), with the same encrypted database, tray, reminders and CLI as Windows. Updates for Linux arrive through the same in-app updater channel from this release on.
 
