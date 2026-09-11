@@ -22,9 +22,12 @@ function walk (dir, acc) {
   return acc
 }
 
-const idxSrc = fs.readFileSync(path.join(root, 'src/main/index.js'), 'utf8')
+// R4 refactor: ALLOWED_RENDERER_OPS lives in handlers/todo.js (split out of index.js)
+const idxSrc = fs.existsSync(path.join(root, 'src/main/handlers/todo.js'))
+  ? fs.readFileSync(path.join(root, 'src/main/handlers/todo.js'), 'utf8')
+  : fs.readFileSync(path.join(root, 'src/main/index.js'), 'utf8')
 const wlMatch = idxSrc.match(/ALLOWED_RENDERER_OPS = new Set\(\[([\s\S]*?)\]\)/)
-if (!wlMatch) { bad('index.js 中找不到 ALLOWED_RENDERER_OPS'); process.exit(1) }
+if (!wlMatch) { bad('handlers/todo.js 中找不到 ALLOWED_RENDERER_OPS'); process.exit(1) }
 const allowed = new Set([...wlMatch[1].matchAll(/'([A-Za-z]+)'/g)].map(x => x[1]))
 
 // Renderer call surface: both dbCall('op' and dbCall?.('op' forms must be captured (the optional-chain form was once missed).

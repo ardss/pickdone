@@ -12,9 +12,12 @@ function tmpDir () { return fs.mkdtempSync(path.join(os.tmpdir(), 'todo-ipc-')) 
 
 /** 真实白名单(从 src/main/index.js 源码提取,防手工副本与真实集合脱钩——2026-09-05 终审 P2) */
 function realAllowedOps () {
-  const src = fs.readFileSync(path.join(process.cwd(), 'src', 'main', 'index.js'), 'utf8')
+  const wlPath = fs.existsSync(path.join(process.cwd(), 'src', 'main', 'handlers', 'todo.js'))
+    ? path.join(process.cwd(), 'src', 'main', 'handlers', 'todo.js')
+    : path.join(process.cwd(), 'src', 'main', 'index.js')
+  const src = fs.readFileSync(wlPath, 'utf8')
   const m = src.match(/const ALLOWED_RENDERER_OPS = new Set\(\[([\s\S]*?)\]\)/)
-  assert.ok(m, 'ALLOWED_RENDERER_OPS 必须存在于 src/main/index.js')
+  assert.ok(m, 'ALLOWED_RENDERER_OPS 必须存在于 handlers/todo.js')
   return new Set([...m[1].matchAll(/'([^']+)'/g)].map(x => x[1]))
 }
 const ALLOWED_RENDERER_OPS = realAllowedOps()

@@ -37,10 +37,12 @@ test('watch baseline gate: the resync fires on write ops and only on write ops (
   }
 })
 
-test('watch baseline wiring: index.js re-baselines inside the todo-db:call handler after dbm.call', () => {
+test('watch baseline wiring: the todo-db:call handler re-baselines after dbm.call', () => {
   // Static guard for the wiring itself (index.js is not requireable outside Electron): the resync call
   // must sit in the db:call handler AFTER dbm.call, gated by isWriteOp, and resync must use the pure core.
-  const src = fs.readFileSync(path.join(here, '../../src/main/index.js'), 'utf8')
+  // R4 split moved the handler into handlers/todo.js; watcher setup (and the pure core) stay in index.js.
+  let src = fs.readFileSync(path.join(here, '../../src/main/index.js'), 'utf8')
+  try { src += fs.readFileSync(path.join(here, '../../src/main/handlers/todo.js'), 'utf8') } catch {}
   const callIdx = src.indexOf("const r = dbm.call(op, params)")
   assert.ok(callIdx > 0, 'db:call handler found')
   const after = src.slice(callIdx, callIdx + 600)

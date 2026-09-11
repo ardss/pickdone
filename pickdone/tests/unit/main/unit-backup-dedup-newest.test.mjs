@@ -12,7 +12,11 @@ import { createRequire } from 'module'
 const require_ = createRequire(import.meta.url)
 const fixUtil = require_('../../../src/main/fix-util.js')
 const ROOT = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '../../..')
-const indexSrc = fs.readFileSync(path.join(ROOT, 'src', 'main', 'index.js'), 'utf8')
+// R4 split: the auto-backup dedup block lives in handlers/backup.js (fallback: index.js)
+const backupSrcPath = fs.existsSync(path.join(ROOT, 'src', 'main', 'handlers', 'backup.js'))
+  ? path.join(ROOT, 'src', 'main', 'handlers', 'backup.js')
+  : path.join(ROOT, 'src', 'main', 'index.js')
+const indexSrc = fs.readFileSync(backupSrcPath, 'utf8')
 
 test('sortBackupNamesNewestFirst puts the newest snapshot first (dedup twin = index 0)', () => {
   const sorted = fixUtil.sortBackupNamesNewestFirst([

@@ -4,7 +4,7 @@
  * Window lifecycle lives in windows.js; IPC handlers live in handlers/*.js — this file stays the
  * assembly point (wiring + unified handler error-wrap loop + tray + quit chain).
  */
-const { app, BrowserWindow, ipcMain, Tray, Menu, dialog, shell } = require('electron')
+const { app, BrowserWindow, ipcMain, Tray, Menu, dialog } = require('electron')
 // globalShortcut is required by quick-add/pomodoro-float and other modules (avoid duplicates)
 const path = require('path')
 // The renderer has no nodeIntegration; pass the real version to preload via env var (todoAPI.version)

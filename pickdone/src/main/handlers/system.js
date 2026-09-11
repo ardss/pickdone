@@ -2,7 +2,6 @@
 const fs = require('fs')
 const path = require('path')
 const log = require('electron-log')
-const i18nM = require('../i18n')
 const fixUtil = require('../fix-util')
 const updater = require('../updater')
 const { createExporter } = require('../export-xlsx')

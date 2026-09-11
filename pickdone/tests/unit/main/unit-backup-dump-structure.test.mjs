@@ -18,10 +18,13 @@ const read = p => fs.readFileSync(path.join(HERE, '../../..', p), 'utf8')
 // 恢复端实际消费的段 = 必含段(user/lastLoginRecord 由主进程恢复语义持有,渲染端两套恢复不消费,不列入)
 const REQUIRED_SEGMENTS = ['settingsState', 'user', 'lastLoginRecord', 'todoState', 'tomatoState', 'tomatoRecords', 'categoryState', 'habitsState']
 
+// R1 refactor: buildBackupDump 与三处备份动作迁至 store/todoBackup.js（todo.js 只留 action 壳）
+const dumpSrc = () => read('renderer/js/store/todoBackup.js')
+
 test('backup dump 单一来源含全部必含段', () => {
-  const src = read('renderer/js/store/todo.js')
+  const src = dumpSrc()
   const m = src.match(/function buildBackupDump[\s\S]*?\n\}/)
-  assert.ok(m, 'todo.js 必须定义 buildBackupDump(三处备份的唯一来源)')
+  assert.ok(m, 'todoBackup.js 必须定义 buildBackupDump(三处备份的唯一来源)')
   const body = m[0]
   for (const seg of REQUIRED_SEGMENTS) {
     assert.ok(body.includes(seg + ':'), `buildBackupDump 缺少段: ${seg}——新增 store 段必须进备份,否则灾备恢复静默丢数据`)
@@ -29,7 +32,7 @@ test('backup dump 单一来源含全部必含段', () => {
 })
 
 test('三处备份动作全部走 buildBackupDump,不允许手写 dump 拷贝', () => {
-  const src = read('renderer/js/store/todo.js')
+  const src = dumpSrc()
   for (const action of ['writeEventBackup', 'writeAutoBackup', 'writeCriticalBackup']) {
     assert.ok(src.includes('buildBackupDump(rootState, state'), `${action} 必须调用 buildBackupDump 单一来源`)
   }

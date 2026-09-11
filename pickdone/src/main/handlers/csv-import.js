@@ -6,7 +6,7 @@ const scheduler = require('../scheduler')
 const appAudit = require('../audit')
 
 module.exports = function importHandlers (ctx) {
-  const { getMainWindow, dbApi, broadcastTodosChanged } = ctx
+  const { getMainWindow, dbApi, broadcastTodosChanged, log } = ctx
 
   let lastPickedImportPath = '' // the only legitimate path source for import:run (the import:pick-preview dialog)
 
