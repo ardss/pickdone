@@ -6,6 +6,8 @@ and versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-09-11
+
 ### Fixed
 - Security lock: a crash of the lock window's renderer no longer leaves the app permanently hidden behind an empty white lock (the lock window now self-heals like the main/float/quick-add windows, with a rebuild cap that falls back to unlocked rather than bricked); a main-window load that fails completely now still arms the lock instead of silently skipping it for the session.
 - Recycle bin: "empty recycle bin" no longer hard-deletes rows locally when the purge IPC fails (a locked DB used to leave the UI empty while the rows came back after restart); permanent delete of a recycled task now consumes the schedule-chip snapshot only after the row restore actually succeeds.
