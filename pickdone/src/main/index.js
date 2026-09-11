@@ -1,14 +1,14 @@
 /**
  * Main process entry — PickDone offline implementation
  * IPC channel names stay aligned with the project baseline, easing a later swap to a real cloud backend
+ * Window lifecycle lives in windows.js; IPC handlers live in handlers/*.js — this file stays the
+ * assembly point (wiring + unified handler error-wrap loop + tray + quit chain).
  */
-const { app, BrowserWindow, ipcMain, Tray, Menu, dialog, shell, Notification } = require('electron')
+const { app, BrowserWindow, ipcMain, Tray, Menu, dialog, shell } = require('electron')
 // globalShortcut is required by quick-add/pomodoro-float and other modules (avoid duplicates)
 const path = require('path')
 // The renderer has no nodeIntegration; pass the real version to preload via env var (todoAPI.version)
 process.env.APP_VERSION = app.getVersion()
-const autoBackup = require('./autoBackup')
-const { resolveBackupDir, defaultBackupRoot, saveAllowedBackupDirs, allowedBackupDirs, loadAllowedBackupDirs } = require('./backup-dirs')
 const fs = require('fs')
 const log = require('electron-log')
 
@@ -59,13 +59,10 @@ try {
   if (c.enableHardwareAcceleration === false) app.disableHardwareAcceleration()
 } catch (e) { /* no config on first launch */ }
 
-let win = null // main window
 let tray = null
-let quitByUser = false
+const state = { quitByUser: false } // shared with windows.js close handler (was a module var in the pre-split index.js)
 
 const { readConfig, writeConfig } = require('./config-store')
-
-function getMainWindow () { return win && !win.isDestroyed() ? win : null }
 
 // Submodules like scheduler/notify-sound get the main window via window-ref, avoiding a reverse require('./index') dependency
 const windowRef = require('./window-ref')
@@ -86,7 +83,6 @@ function showMainOrLock () {
 
 const { createSecurityLock } = require('./security-lock')
 const { createShortcuts } = require('./shortcuts')
-const { createExporter } = require('./export-xlsx')
 const securityLock = createSecurityLock({ getMainWindow, showMainOrLock, readConfig, writeConfig, i18n: i18nM, log })
 const { isLocked, lockAppNow, unlockAppNow, verifyLockPassword, isLockWindow } = securityLock
 const { allowWithinRate } = require('./security-lock') // pure sliding-window limiter for the notification channel
@@ -94,7 +90,18 @@ const { nextWatchBaseline } = require('./watch-baseline') // pure baseline updat
 quickAdd.setLockProbe(isLocked) // the global quick-add shortcut does not summon while the screen is locked (summoning = input silently lost)
 const shortcuts = createShortcuts({ getMainWindow, showMainOrLock, quickAdd, i18n: i18nM, log })
 const { applyShortcuts } = shortcuts
-const { exportTodosToXlsx } = createExporter({ getMainWindow, i18n: i18nM, log })
+
+/* ---------------- Main window (factory lives in windows.js; this file wires shared deps) ---------------- */
+const { createWindowManager } = require('./windows')
+const windowManager = createWindowManager({
+  readConfig, writeConfig, i18n: i18nM, log, windowRef, closeBehavior,
+  tomatoTaskbar, updater, applyShortcuts, shortcuts, scheduler,
+  isLocked, lockAppNow, showMainOrLock,
+  isQuitting: () => quitting, getState: () => state, getTray: () => tray
+})
+const createMainWindow = windowManager.createMainWindow
+function getMainWindow () { return windowManager.getMainWindow() }
+
 /* ---------------- Broadcast DB changes to all windows (reference: todos-changed) ---------------- */
 function broadcastTomatoRecordsChanged (reason, excludeWebContents) {
   for (const w of BrowserWindow.getAllWindows()) {
@@ -112,6 +119,11 @@ function broadcastTodosChanged (reason, excludeWebContents) {
       if (excludeWebContents && w.webContents === excludeWebContents) continue
       w.webContents.send('todos-changed', { reason, at: Date.now() })
     } catch {}
+  }
+}
+function broadcastWhiteNoiseUpdated () {
+  for (const w of BrowserWindow.getAllWindows()) {
+    try { if (w && !w.isDestroyed()) w.webContents.send('white-noise-updated') } catch {}
   }
 }
 
@@ -151,14 +163,14 @@ function watchDbForExternalWrites () {
       const raw = dbm.call('getMeta', 'cliTomatoCmd')
       // 守卫只包转发段,不得 return 整函数——函数后半段还承担 CLI 设置热同步(2026-09-04 二轮深审 P0:提前 return 曾短路设置推送)。
       // 锁屏态不转发也不标记已消费:锁定时 todo-db:call 全拒,转发了会'半执行'(计时启动但回执被拒),解锁后 onChange 自然补发。
-      const winOk = win && !win.isDestroyed()
+      const winOk = getMainWindow() != null
       if (raw && raw !== lastTomatoCmdRaw && winOk && !isLocked()) {
         const cmd = JSON.parse(raw)
         lastTomatoCmdRaw = raw
         if (cmd && cmd.seq && cmd.seq > lastTomatoSeq) {
           lastTomatoSeq = cmd.seq
           // 账本类命令已退役为 CLI 直写行表(渲染端经 tomato-records-changed 回灌),本通道只剩状态类 start/stop/attach,只发主窗
-          win.webContents.send('cli-tomato-cmd', cmd)
+          getMainWindow().webContents.send('cli-tomato-cmd', cmd)
           log.info('[CLI] 番茄命令已转发渲染端:', cmd.action, 'seq=' + cmd.seq)
         }
       }
@@ -174,7 +186,8 @@ function watchDbForExternalWrites () {
           const prev = lastSettingsDoc
           lastSettingsSavedAt = at
           lastSettingsDoc = doc
-          if (prev && win && !win.isDestroyed()) {
+          const win = getMainWindow()
+          if (prev && win) {
             const patch = {}
             for (const k of Object.keys(doc)) {
               if (k === '_savedAt' || k === 'schemaV') continue
@@ -245,188 +258,8 @@ function isSafeExternal (url) {
   return typeof url === 'string' && /^https?:\/\//i.test(url)
 }
 
-const { saveAttachment, attachDir, attachmentPath } = require('./attachments')
 const attachments = require('./attachments')
-
-/* ---------------- Excel export (column headers follow common practice) ---------------- */
-/* ================= Main window ================= */
-function createMainWindow () {
-  const conf = readConfig()
-  const bounds = conf.winBounds
-  // minWidth=750(2026-09-03 用户定稿渐进折叠): 日期条视图切换行单行自然宽 614px,全折临界 732(实测 1120/1140 为
-  // 侧栏250+抽屉236 全展开的临界;折叠态临界 732)。<1140 渲染端自动折抽屉、<920 折侧栏(DayRail/SideNav 各自
-  // matchMedia,两级递进,加宽自动恢复),因此任何宽度下该行都单行。旧 winBounds 小于 750 须钳制。
-  // Visual distinction for test instances (users confirmed "couldn't tell which is the real one"): isolated-environment instance = orange icon + [TEST] title + top-left badge
-  const isTestEnv = !!process.env.TODO_USER_DATA_DIR
-  win = new BrowserWindow({
-    width: Math.max(750, (bounds && bounds.width) || 1000),
-    height: (bounds && bounds.height) || 560,
-    x: bounds && bounds.x, y: bounds && bounds.y,
-    minWidth: 750,
-    minHeight: 520,
-    frame: false,                     // the project baseline runs frameless (Win11 auto rounded corners)
-    show: false,
-    title: i18nM.mt('appName'),       // taskbar/alt-tab label follows the configured language (index.html <title> is the zh fallback only)
-    icon: path.join(__dirname, '../../assets/' + (isTestEnv ? 'icon-test.png' : 'icon.png')),
-    webPreferences: {
-      preload: path.join(__dirname, '../preload/index.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      backgroundThrottling: false
-    }
-  })
-  windowRef.setMainWindow(win)
-  // Re-inject the live window into modules that captured it at startup: the main window can be
-  // destroyed and recreated (close-then-tray path via showMainOrLock), and stale refs would make
-  // updater events / taskbar progress silently stop reaching the new window.
-  try { tomatoTaskbar.init(win) } catch (e) { log.warn('[Taskbar] re-init failed', e) }
-  try { updater.init(win) } catch (e) { log.warn('[Updater] re-init failed', e) }
-  // 应用内快捷键(before-input-event)挂在主窗 webContents 上:主窗销毁重建后必须重放,
-  // 否则 ctrl+n/ctrl+1… 静默失效直到下次改快捷键设置(2026-09-05 终审 P1,与 taskbar/updater 同类)
-  try { applyShortcuts(readConfig().shortcutKeySettings) } catch (e) { log.warn('[Shortcuts] re-init failed', e) }
-    win.loadURL('app://app/renderer-dist/index.html').catch(e => log.error('[Window] loadURL failed', e))
-    if (isTestEnv) {
-      win.setTitle(i18nM.mt('appName') + ' [TEST]')
-      win.webContents.on('did-finish-load', () => {
-        win.setTitle(i18nM.mt('appName') + ' [TEST]')
-        win.webContents.executeJavaScript(`{
-          if (!document.getElementById('test-env-badge')) {
-            const b = document.createElement('div')
-            b.id = 'test-env-badge'
-            b.textContent = 'TEST'
-            b.style.cssText = 'position:fixed;top:0;left:0;z-index:99999;background:#f2a63b;color:#fff;font:bold 11px/1 sans-serif;padding:4px 8px;border-radius:0 0 6px 0;pointer-events:none;letter-spacing:1px'
-            document.body.appendChild(b)
-          }
-          document.title = ${JSON.stringify(i18nM.mt('appName'))} + ' [TEST]'
-        }`).catch(() => {})
-      })
-    }
-    // Reject window.open child windows; only external-link protocols go to the system browser
-    win.webContents.setWindowOpenHandler(({ url }) => {
-      // The blank print window (printList's window.open('', '_blank') followed by document.write injecting print content, no navigation) was once wrongly killed by the blanket deny
-      if (!url || url === 'about:blank') return { action: 'allow' }
-      if (/^https?:/i.test(url)) { shell.openExternal(url) }
-      return { action: 'deny' }
-    })
-    // The allowed about:blank child had NO navigation guard (2026-09-11 P1): injected script could
-    // navigate it anywhere (or chain another window.open). Clamp it: navigation denied, external http(s)
-    // handed to the system browser, nested window.open denied outright.
-    win.webContents.on('did-create-window', (child) => {
-      child.webContents.on('will-navigate', (e2, u) => {
-        e2.preventDefault()
-        if (/^https?:/i.test(u)) { try { shell.openExternal(u) } catch { /* best-effort */ } }
-      })
-      try { child.webContents.setWindowOpenHandler(() => ({ action: 'deny' })) } catch { /* older Electron */ }
-    })
-    // Intercept navigation to non-app:// protocols; XSS cross-origin guard
-    win.webContents.on('will-navigate', (e, url) => {
-      if (!/^app:\/\/app\//i.test(url)) { e.preventDefault(); if (/^https?:/i.test(url)) shell.openExternal(url) }
-    })
-  // 加载失败自愈(2026-09-10 P2,与浮窗 5 次重试同类):此前主窗 did-fail-load 只 log,加载失败后
-  // 用户面对白屏/错误页永不恢复。对主框架、非 -3(ERR_ABORTED 良性中断)做 3 次退避 reload,
-  // did-finish-load 成功即复位计数。
-  let loadRetryCount = 0
-  win.webContents.on('did-finish-load', () => { loadRetryCount = 0 })
-  win.webContents.on('did-fail-load', (_e, code, desc, url, isMainFrame) => {
-    log.error('[Window] 加载失败:', code, desc, url)
-    if (!isMainFrame || code === -3 || quitting) return
-    // P2 2026-09-11: the startup lock (enableSecurityLock) used to hook ONLY did-finish-load — if the
-    // load chain failed completely (retries exhausted), the app came up unlocked and silent. Prefer the
-    // locked-white-screen over an unlocked app (layered with lockLoadFailedFallback, which only disables
-    // the lock when even the lock window cannot open).
-    if (loadRetryCount >= 3) {
-      if (readConfig().enableSecurityLock && !isLocked()) {
-        log.warn('[SecurityLock] 主窗加载彻底失败,按锁定态兜底')
-        try { lockAppNow() } catch (e) { log.error('[SecurityLock] 兜底锁定失败', e) }
-      }
-      return
-    }
-    loadRetryCount++
-    const delay = 400 * loadRetryCount
-    log.warn('[Window] 主框架加载失败,退避重试', loadRetryCount, 'in', delay, 'ms')
-    setTimeout(() => {
-      try { if (win && !win.isDestroyed()) win.webContents.loadURL('app://app/renderer-dist/index.html').catch(() => {}) } catch { /* gone */ }
-    }, delay)
-  })
-  win.webContents.on('console-message', (_e, level, msg, line, src) => {
-    if (level >= 2) log.warn('[Renderer]', msg, `(${path.basename(String(src))}:${line})`)
-    else log.info('[Renderer]', msg)
-  })
-  // Renderer/child process crashes land in the log (electron-log is main-process-only; the crash scene must be preserved for post-mortem attribution)
-  // + self-heal (2026-09-09): a non-clean renderer crash used to leave a dead/blank main window forever.
-  // Reload up to 3 times (counter resets on each successful did-finish-load); beyond the cap, relaunch the app —
-  // a relaunched instance is strictly better than a zombie window the user must kill by hand.
-  let crashReloadCount = 0
-  win.webContents.on('did-finish-load', () => { crashReloadCount = 0 })
-  win.webContents.on('render-process-gone', (_e, details) => {
-    log.error('[Crash] render-process-gone:', details && details.reason, 'exitCode=', details && details.exitCode)
-    if (quitting) return // a quit in progress kills renderers as a side effect; do not fight it
-    const reason = details && details.reason
-    if (!reason || reason === 'clean-exit') return
-    if (crashReloadCount < 3) {
-      crashReloadCount++
-      log.warn('[Crash] 渲染进程崩溃,自动重载', crashReloadCount, '/3')
-      setTimeout(() => { const w = getMainWindow(); if (w) { try { w.webContents.reload() } catch (e2) { log.warn('[Crash] reload failed', e2) } } }, 300)
-    } else {
-      log.error('[Crash] 重载超限,relaunch 应用')
-      try { shortcuts.unregisterAll() } catch {}
-      // Best-effort dedup-ledger persist so the relaunch doesn't re-fire reminders from the last 60s
-      try { scheduler.flushFiredNow() } catch {}
-      app.relaunch()
-      app.exit(1)
-    }
-  })
-  win.webContents.on('child-process-gone', (_e, details) => {
-    log.error('[Crash] child-process-gone:', details && details.type, details && details.reason, 'exitCode=', details && details.exitCode)
-  })
-
-    win.once('ready-to-show', () => {
-      const s = readConfig().hideMainWindowOnStartup
-      if (!s || process.argv.includes('--dev')) showMainOrLock()
-    })
-  win.on('close', e => {
-    if (!quitByUser && closeBehavior.isCloseToTray(readConfig())) {
-      e.preventDefault(); win.hide()
-      const cfg = readConfig()
-      if (closeBehavior.shouldShowTrayNotice(cfg)) {
-        // P2 2026-09-11: writeConfig in the close path used to run unguarded — a config write failure
-        // (disk full/permissions) threw straight out of the close handler and killed the quit chain
-        try { writeConfig({ closeTrayNotified: true }) } catch (err) { log.warn('[Window] closeTrayNotified 写入失败', err) }
-        try { if (tray && process.platform === 'win32') tray.displayBalloon({ iconType: 'info', title: i18nM.mt('appName'), content: i18nM.mt('closeTrayNotice') }) } catch (err) { /* balloon is best-effort */ }
-      }
-    } else {
-      // Same guard as above: resize path already wraps writeConfig in try (debounced), close must not be able to break the quit chain either
-      try { writeConfig({ winBounds: win.getBounds() }) } catch (err) { log.warn('[Window] winBounds 写入失败(close)', err) }
-    }
-  })
-  let _resizeTimer = null
-  win.on('resize', () => { // high-frequency synchronous writes while dragging cause jank; debounce 400ms (close/quit already save as backstop)
-    clearTimeout(_resizeTimer)
-    _resizeTimer = setTimeout(() => { try { writeConfig({ winBounds: win.getBounds() }) } catch {} }, 400)
-  })
-  // Clamp the window back onto a visible screen on restore/show (fixes the "disappeared" window after multi-monitor changes/power loss)
-  const clampIntoView = () => {
-    try {
-      const { screen } = require('electron')
-      const displays = screen.getAllDisplays()
-      const b = win.getBounds()
-      const cx = b.x + b.width / 2
-      const cy = b.y + b.height / 2
-      const onScreen = displays.some(d =>
-        cx >= d.workArea.x && cx <= d.workArea.x + d.workArea.width &&
-        cy >= d.workArea.y && cy <= d.workArea.y + d.workArea.height)
-      if (!onScreen) {
-        const wa = screen.getPrimaryDisplay().workArea
-        const w = Math.min(b.width, wa.width - 40)
-        const h = Math.min(b.height, wa.height - 40)
-        win.setBounds({ x: wa.x + (wa.width - w) / 2, y: wa.y + (wa.height - h) / 3, width: w, height: h })
-        log.info('[Window] 窗口位置越界，已钳制回主屏')
-      }
-    } catch (e) { /* ignore */ }
-  }
-  win.on('restore', clampIntoView)
-  win.on('show', clampIntoView)
-}
+const { attachDir } = attachments
 
 /* ================= Tray ================= */
 function createTray () {
@@ -452,7 +285,7 @@ function rebuildTrayMenu () {
   tpl.push({ label: i18nM.mt('trayOpen'), click: () => { showMainOrLock() } })
   tpl.push({ type: 'separator' })
   tpl.push({ label: i18nM.mt('trayQuit'), click: () => {
-    quitByUser = true
+    state.quitByUser = true
     // win can be a DESTROYED instance here (closeActionMinimize=false destroys the window on X but only
     // createMainWindow reassigns the module var) — getBounds on it throws "Object has been destroyed" and
     // kills the whole quit chain. Route through the live-window guard.
@@ -580,6 +413,7 @@ if (!app.requestSingleInstanceLock()) { app.quit() } else {
     } catch (e0) { log.warn('[Init] plain-bak 清理失败', e0) }
     handleAppProtocol()
     createMainWindow()
+    const win = getMainWindow()
     tomatoTaskbar.init(win) // taskbar progress/title countdown/thumbnail toolbar (pomodoro, Windows native)
     // Temporary demo data injection (enabled with --seed-tomato)
     // Guard: TODO_USER_DATA_DIR unset = connected directly to the real database (%APPDATA%\pickdone); demo data must never pollute real user data
@@ -654,7 +488,7 @@ app.on('before-quit', () => {
   // Second pass (the re-issued app.quit() below): the DB is already closed, re-broadcasting the flush
   // would only be a dead letter — renderer invokes would fail against a closed handle.
   if (flushDone) return
-  quitByUser = true
+  state.quitByUser = true
   // Before quitting, broadcast the renderer flush of debounced mirrors (the last write within dbMirror's 2s / disaster-snapshot 800ms window would be silently lost)
   // 2026-09-10 P1: previously only the main window was notified — the float window's pending pomodoro
   // ledger (and the whole broadcast when the main window was already destroyed, e.g. X-close→tray→quit)
@@ -719,578 +553,37 @@ app.on('will-quit', (event) => {
   }, 50)
 })
 
-/* ================= Full IPC registration (channel names aligned with the project baseline) ================= */
-let lastPickedImportPath = '' // the only legitimate path source for import:run (the import:pick-preview dialog)
-const notificationSendTimes = [] // sliding window for the notification channel rate limit (10 per 10s)
+/* ================= Full IPC registration (channel names aligned with the project baseline) =================
+   Handlers are split by domain into handlers/*.js modules; each exports (ctx) => ({ channel: fn }).
+   This file stays the assembly point: ctx injection + Object.assign merge + the unified error-wrap loop. */
 function registerIpc () {
   // App-side audit trail (src/main/audit.js) resolves its JSONL path lazily; wire it to the real userData
   // here so app.setPath('userData', TODO_USER_DATA_DIR) test isolation is honored
   appAudit.setDirResolver(() => app.getPath('userData'))
-  // Whitelist of DB ops callable by the renderer: only reads + safe writes pass.
-  // Unlike dbm.isWriteOp: this whitelist governs "callable from any renderer window", while isWriteOp governs "whether reloadAll/broadcast is triggered".
-  // ⚠️ The whitelist must cover the renderer's real call surface: the cli/check-ipc-op-coverage.cjs gate statically cross-checks
-  // (the full set of dbCall/dbCall?.( ops in the renderer ⊆ this list); two missed checks once silently broke features entirely (filterList/bumpSnow).
-  // hardDelete is a dangerous write, but the renderer's recycle-bin "delete permanently" uses it for single items, so it stays on the whitelist;
-  // purgeRecycleBin/purgeSeedTodos go through dedicated main-process channels below, not through this whitelist.
-  const ALLOWED_RENDERER_OPS = new Set([
-    'getById', 'getAll', 'queryTodos', 'getMeta', 'deleteMeta',
-    'upsert', 'upsertMany', 'hardDelete', 'hardDeleteMany', 'setMeta',
-    'getAllCategories', 'upsertCategory',
-    // Filter CRUD (filterUpsert/filterDelete are user-level safe writes, same as upsertCategory) + count reads
-    'filterList', 'filterUpsert', 'filterDelete', 'countAll', 'countSeedTodos',
-    // Atomic accumulation of pomodoro focus minutes (a safe write preventing concurrent overwrites; missing it once silently lost pomodoro credit)
-    'bumpSnow',
-    // Plan-chip row storage (2026-09-03 root fix): read/write at atomic-operation granularity, single-field validation at the db layer, no whole-package overwrite surface
-    'planAll', 'planAddMany', 'planUpdateChip', 'planRemoveIds',
-    'planMoveTask', 'planDeleteTask', 'planDeleteTaskDay', 'planPrune',
-    // 番茄账本行存储(2026-09-04 根修):主窗/浮窗/CLI 同表同 op,账本无整包覆盖面
-    'tomatoAll', 'tomatoAppendMany', 'tomatoUpdateById', 'tomatoRemoveByIds', 'tomatoMigrateFromMeta'
-  ])
 
-  // Dangerous DB ops: batch write/batch delete/arbitrary meta write. Capability-wise aligned with "dangerous channels main-window only" —
-  // a compromised float/lock-screen window could previously wipe the whole database in bulk or change any meta via todo-db:call (audit 2026-09-01).
-  // The renderer's real call surface has been verified: all three only occur in the main window (store/utils/main.js); auxiliary windows have no legitimate callers.
-  const MAIN_WINDOW_ONLY_OPS = new Set(['upsertMany', 'hardDeleteMany', 'setMeta', 'deleteMeta'])
-
-  // Lock-screen password brute-force throttling: after 5 failures, trip for 60s (guards against dictionary attacks)
-  const LOCK_FAIL_LIMIT = 5
-  const LOCK_FAIL_WINDOW = 60 * 1000
-  const LOCK_COOLDOWN = 60 * 1000
-  const lockFailCount = { n: 0, firstAt: 0, lockedUntil: 0 }
-  function checkLockRateLimit (plain) {
-    const now = Date.now()
-    if (now < lockFailCount.lockedUntil) return false // currently tripped
-    if (now - lockFailCount.firstAt > LOCK_FAIL_WINDOW) {
-      lockFailCount.n = 0; lockFailCount.firstAt = now
-    }
-    const ok = verifyLockPassword(plain)
-    if (!ok) {
-      lockFailCount.n += 1
-      if (lockFailCount.n >= LOCK_FAIL_LIMIT) {
-        lockFailCount.lockedUntil = now + LOCK_COOLDOWN
-        log.warn('[SecurityLock] 失败 ' + lockFailCount.n + ' 次，熔断 60s')
-      }
-    } else {
-      lockFailCount.n = 0; lockFailCount.firstAt = 0; lockFailCount.lockedUntil = 0
-    }
-    return ok
+  // Shared context injected into every handler domain (argument injection only — handler modules never require index.js)
+  const hctx = {
+    app, readConfig, writeConfig, i18n: i18nM, log,
+    dbm, dbApi, scheduler,
+    getMainWindow, showMainOrLock,
+    isLocked, isLockWindow, lockAppNow, unlockAppNow, verifyLockPassword, allowWithinRate,
+    isSafeExternal, attachDir,
+    resyncDbWatch: () => resyncDbWatch,
+    broadcastTomatoRecordsChanged, broadcastTodosChanged, broadcastWhiteNoiseUpdated,
+    rebuildTrayMenu, getTray: () => tray, updateTomatoTray,
+    applyShortcuts, getState: () => state
   }
 
-  // Dangerous-channel guard: only the main window may call (lock-screen/float/quick-add and all other renderer windows are rejected)
-  const assertMainWindow = (e) => {
-    const w = getMainWindow()
-    if (!w || e.sender !== w.webContents) {
-      log.warn('[IPC] 拒绝非主窗调用危险通道, sender:', e.sender.id)
-      throw new Error('forbidden: main window only')
-    }
-  }
-
-  /** Purge disk attachments after hard delete (filename prefix = taskId_, same rule as saveAttachment): warn-only on failure, never blocking */
-  function purgeAttachmentFiles (ids) {
-    if (!ids || !ids.length) return
-    try {
-      const dir = attachDir()
-      const prefixes = ids.map(id => `${id}_`)
-      for (const f of fs.readdirSync(dir)) {
-        if (prefixes.some(p => f.startsWith(p))) {
-          try { fs.unlinkSync(path.join(dir, f)) } catch (err) { log.warn('[Purge] 附件删除失败:', f, err.message) }
-        }
-      }
-    } catch (err) { log.warn('[Purge] 附件目录遍历失败:', err.message) }
-  }
-
-  const handlers = {
-    // --- DB ---
-    'todo-db:call': (e, op, params) => {
-      // While the security lock is active: only the lock-screen window may write (prevents the pomodoro float/injected windows from reading or writing data around the lock)
-      if (isLocked() && !isLockWindow(e.sender)) {
-        // 浮窗到点落番茄账是合法后台行为:锁屏期间放行浮窗自身的番茄追加类写(只挡读/危险写,威胁模型针对绕锁读写)
-        let floatLedger = tomatoFloat.isSelfSender(e.sender) && /^(tomatoAppendMany|tomatoUpdateById|bumpSnow)$/.test(op) // bumpSnow=挂任务送专注积分,同属到点落账
-        if (floatLedger && (op === 'tomatoUpdateById' || op === 'tomatoAppendMany')) {
-          // 本地时区当天(dateKey 按本地 dayjs 导出,UTC 串会在 0-8 点误判跨天)
-          const todayKey = fixUtil.localDayKey(Date.now())
-          if (op === 'tomatoUpdateById') {
-            // dateKey 由 endTime 强制导出(db 层),校验目标行当天即够;查不到的行让 db 层自己返回 false
-            const cur = dbm.call('tomatoAll', {}).find(r => r && String(r.tomatoId) === String((params || {}).tomatoId))
-            floatLedger = !!cur && cur.dateKey === todayKey
-          } else {
-            // tomatoAppendMany 同款收窄(2026-09-09 P2):此前批量追加无时间约束,被陷浮窗锁屏期可
-            // 伪造任意历史日期的账本行;现要求所有行的 endTime 都落在本地当天
-            const rows = Array.isArray(params) ? params : [params]
-            floatLedger = rows.every(r => r && r.endTime && fixUtil.localDayKey(r.endTime) === todayKey)
-          }
-        }
-        if (!floatLedger) throw new Error('app is locked')
-      }
-      // Write-op whitelist: callable by the renderer; other ops must go through main-process methods (prevents XSS injecting arbitrary ops)
-      if (!ALLOWED_RENDERER_OPS.has(op)) {
-        log.warn('[IPC] 拒绝渲染端 op:', op, 'from sender:', e.sender.id)
-        throw new Error('DB op not allowed: ' + String(op))
-      }
-      if (MAIN_WINDOW_ONLY_OPS.has(op)) assertMainWindow(e)
-      // Pre-write snapshot for upsert only (single indexed read): the audit trail needs the previous row to
-      // tell done/undo/delete/restore/subtask apart. Must run BEFORE dbm.call overwrites the row; best-effort.
-      let auditBefore = null
-      if (op === 'upsert' && params && params.taskId != null) {
-        try { auditBefore = dbm.call('getById', String(params.taskId)) } catch { /* null → coarse action */ }
-      }
-      // Renderer-originated ledger writes: suppress the db-layer hook broadcast (no sender info there)
-      // and broadcast here with sender exclusion instead — otherwise the writing window's own
-      // recordsReload echo could clobber in-flight state (2026-09-11 audit P2, todos-echo same shape)
-      const isLedgerOp = dbm.LEDGER_WRITE_OPS.has(op)
-      const unsuppress = isLedgerOp ? dbm.suppressLedgerHook() : null
-      const r = dbm.call(op, params)
-      if (unsuppress) { unsuppress(); broadcastTomatoRecordsChanged(op, e.sender) }
-      // Our own write just touched the DB/-wal: re-baseline the external-write watcher immediately,
-      // otherwise the next poll mistakes our write for an external one (full reload + undo-stack wipe)
-      if (dbm.isWriteOp(op)) { try { if (resyncDbWatch) resyncDbWatch() } catch { /* best-effort */ } }
-      // App-side audit: renderer-initiated writes append to the same JSONL trail the CLI writes
-      // (userData/cli-audit.jsonl). No double-logging: CLI write commands hit db.js directly inside the
-      // CLI process and never pass through this IPC handler. The settings mirror blob (setMeta
-      // db.settingsState, persisted debounced on every settings change) is skipped as noise.
-      // Fire-and-forget: audit failures must never break the IPC path.
-      try { appAudit.recordAppOp(op, params, { before: auditBefore, result: r }) } catch { /* best-effort */ }
-      // Write-op determination lives in db.js's explicit WRITE_OPS list (do not fall back to regex: hardDeleteMany and others were once missed, leaving cross-window data stale)
-      // setMeta writes only the meta table, not todos: skip reloadAll (settings/tomato/dayPlan mirrors are high-frequency writes; the previous full-reload path caused a reload storm); still broadcast so peer windows sync
-      if (op === 'setMeta') { broadcastTodosChanged(op, e.sender); return r }
-      if (dbm.isWriteOp(op)) {
-        // Single-task writes (upsert/bumpSnow) reschedule only that task's timers via scheduleOne instead of a
-        // full reloadAll (whole-table scan + all timers torn down and rebuilt on every write). Fall back to
-        // reloadAll for bulk ops, when the row is gone, or when any reminder time is already past — scheduleOne
-        // skips past times, while reloadAll owns the missed-reminder catch-up path (watermark + re-fire).
-        const tid = (params || {}).taskId
-        const t = (op === 'upsert' || op === 'bumpSnow') && tid != null ? dbm.call('getById', String(tid)) : null
-        if (t && !scheduler.reminderInstances(t).some(([, ts]) => ts <= Date.now())) scheduler.scheduleOne(t)
-        else scheduler.reloadAll(dbApi())
-      }
-      // 账本行写:调度器不依赖番茄记录;广播由 db 层 setLedgerChangedHook 统一发(CLI 直写同样触发),此处只跳过 todos 全量重载
-      if (op === 'tomatoAppendMany' || op === 'tomatoUpdateById' || op === 'tomatoRemoveByIds' || op === 'tomatoMigrateFromMeta') return r
-      if (dbm.isWriteOp(op)) broadcastTodosChanged(op, e.sender) // exclude the originating sender, so optimistic updates are not clobbered by the echo
-      return r
-    },
-
-    // --- Dangerous purge: dedicated channels (bypassing the todo-db:call whitelist); only the main window may call (UI already double-confirms),
-    //     float/quick-add/lock-screen and all other renderer windows are rejected ---
-    'db:purge-recycle-bin': (e) => {
-      assertMainWindow(e)
-      if (isLocked()) throw new Error('locked')
-      // Collect rows to delete and clean attachment files first (files before rows): deleting only rows once left private attachments on disk after "permanent wipe"
-      let ids = []
-      try {
-        ids = dbm.call('queryTodos', { deleted: 1 }).map(t => t.taskId)
-      } catch (err) { log.warn('[Purge] 收集回收站行失败，仅删行:', err) }
-      const r = dbm.call('purgeRecycleBin')
-      purgeAttachmentFiles(ids)
-      scheduler.reloadAll(dbApi()); broadcastTodosChanged('purgeRecycleBin', e.sender)
-      return r
-    },
-    'db:purge-seed-todos': (e) => {
-      assertMainWindow(e)
-      if (isLocked()) throw new Error('locked')
-      const r = dbm.call('purgeSeedTodos')
-      // Symmetric with purge-recycle-bin: purging demo data also refreshes the scheduler + broadcasts (once missing → other windows kept stale seed records and scheduled reminders still fired)
-      scheduler.reloadAll(dbApi()); broadcastTodosChanged('purgeSeedTodos', e.sender)
-      return r
-    },
-
-    // --- Settings / config ---
-    // Sensitive-key stripping: the security-lock ciphertext in config must never be sent down to any renderer window (a compromised auxiliary window could pair with decrypt-secret to recover the lock-screen plaintext password)
-    'get-settings': () => {
-      const c = readConfig()
-      delete c.securityLockPassword
-      delete c.securityLockQuestion
-      return c
-    },
-    'set-app-locale': (e, locale) => { i18nM.setLocale(locale); const c = writeConfig({ appLocale: locale }); rebuildTrayMenu(); if (tray) { try { tray.setToolTip(i18nM.mt('appName')) } catch (err) { /* empty */ } } if (win && !win.isDestroyed()) { try { win.setTitle(i18nM.mt('appName')) } catch (err) { /* empty */ } } try { tomatoTaskbar.setBaseTitle(i18nM.mt('appName')) } catch (err) { /* taskbar module keeps its previous base */ } return c },
-    'notify-settings-updated': (e, patch) => {
-      // 写配置限主窗;浮窗白噪音选择是合法写入(浮窗内 settings/update 走此通道),放行浮窗自身(2026-09-05 终审 P1)
-      if (!(tomatoFloat.isSelfSender(e.sender) || (getMainWindow() && e.sender === getMainWindow().webContents))) {
-        log.warn('[IPC] 拒绝非主窗/浮窗写配置, sender:', e.sender.id)
-        throw new Error('forbidden: main window or float only')
-      }
-      // Symmetric hardening of the write side with the read side: strip security keys and never send them down, and likewise never accept renderer writes for them
-      // (a compromised auxiliary window could previously change the lock password / disable the lock via this channel — isLocked() reads config in real time, so the lock would fail on the next check cycle)
-      const clean = Object.assign({}, patch)
-      delete clean.securityLockPassword
-      delete clean.securityLockQuestion
-      delete clean.schemaV
-      const c = writeConfig(clean)
-      applyShortcuts(c.shortcutKeySettings)
-      // Make launch-at-login actually take effect (aligned with the reference runWhenComputerStart)
-      if ('runWhenComputerStart' in clean) {
-        try { app.setLoginItemSettings({ openAtLogin: !!clean.runWhenComputerStart }) } catch (err) { log.warn(err) }
-      }
-      return c
-    },
-
-    // --- Reminders ---
-    'notification': (e, opt) => {
-      // Locked-state gate, symmetric with upload-attachment/export/delete-file (2026-09-11 P1: this was
-      // the only remaining data-bearing channel without it) + rate limit against notification spam
-      if (isLocked()) throw new Error('locked')
-      if (!allowWithinRate(notificationSendTimes, Date.now())) {
-        log.warn('[IPC] notification 频控拦截, sender:', e.sender.id)
-        return false
-      }
-      // Same sanitization as scheduler.fire: renderer-supplied title/body goes straight to system notifications; control characters/RTL override characters must be stripped
-      // eslint-disable-next-line no-control-regex -- control characters are exactly the target of this sanitization; the rule does not apply here
-      const clean = v => require('./sanitize').sanitizeText(v, 200)
-      const n = new Notification({ title: clean(opt.title) || i18nM.mt('notifyDefault'), body: clean(opt.body), silent: !!opt.silent })
-      n.show(); return true
-    },
-
-    // --- External links ---
-    'open-external-url': (e, url) => {
-      if (!isSafeExternal(url)) return
-      if (isSafeExternal(url)) shell.openExternal(url)
-    },
-    // [IPC dead channels cleaned] download-file/open-file-in-viewer/goto-main-window-and-select-todo/
-    // show-todo-list/focus-main-window/open-settings-modal/user-logout/get-memory-metrics/
-    // downloadUpdate/critical-state:*/app-initialization-completed/get-window-bounds etc. had no renderer callers and were deleted
-    // The old checkForUpdates/quitAndInstall stubs were also removed: preload actually uses updater:check / updater:quit-and-install
-
-    // --- Attachments (offline localization) ---
-    'upload-attachment': (e, payload) => { if (isLocked()) throw new Error('locked'); return saveAttachment(payload) },
-    'open-file': async (e, url) => {
-      if (url.startsWith('local://')) { shell.openPath(attachmentPath(url.slice(8))); return true }
-      if (isSafeExternal(url)) return shell.openExternal(url)
-      return false
-    },
-    'download-file-and-open': (e, url) => { if (url.startsWith('local://')) { shell.openPath(attachmentPath(url.slice(8))); return true } if (isSafeExternal(url)) shell.openExternal(url); return true },
-    'save-upload-file-to-download': (e, url, targetName) => {
-      // Security check: force basename on the target name and strip path segments, preventing path traversal writes to arbitrary locations
-      const rawName = String(targetName || '').replace(/[/]/g, '_')
-      if (/^\.+$/.test(rawName)) throw new Error('bad target name')
-      const safeName = path.basename(rawName) || path.basename(attachmentPath(url.slice(8)))
-      // 同名不静默覆盖(2026-09-10 P2):copyFileSync 直接覆盖用户已有的同名下载;改为 " (n)" 后缀,
-      // 并包 try 返回结构化错误(磁盘满/权限等此前抛裸异常,渲染端只能拿到笼统 invoke reject)
-      if (url.startsWith('local://')) {
-        try {
-          const src = attachmentPath(url.slice(8))
-          const dst = fixUtil.nextAvailableName(app.getPath('downloads'), safeName, p => fs.existsSync(p))
-          fs.copyFileSync(src, dst)
-          return dst
-        } catch (err) {
-          throw new Error('save-to-download failed: ' + String((err && err.message) || err))
-        }
-      }
-      return null
-    },
-    // P2 2026-09-11: deletion failures used to be swallowed and true returned regardless — the user was
-    // told the attachment was gone while the file stayed on disk. Throw a structured error instead (the
-    // renderer's existing invoke catch/reportError displays it); no renderer caller changes needed.
-    'delete-file': (e, url) => {
-      if (isLocked()) throw new Error('locked')
-      if (url.startsWith('local://')) {
-        try { fs.unlinkSync(attachmentPath(url.slice(8))) } catch (err) {
-          // Already-gone is success (idempotent delete); anything else is a real failure
-          if ((err && err.code) !== 'ENOENT') throw new Error('delete-file failed: ' + String((err && err.message) || err))
-        }
-      }
-      return true
-    },
-    'delete-todo-files': (e, taskId) => {
-      if (isLocked()) throw new Error('locked')
-      const dir = attachDir()
-      const failures = []
-      for (const f of fs.readdirSync(dir)) {
-        if (!f.startsWith(taskId + '_')) continue
-        try { fs.unlinkSync(path.join(dir, f)) } catch (err) { if ((err && err.code) !== 'ENOENT') failures.push(f + ': ' + String((err && err.message) || err)) }
-      }
-      if (failures.length) throw new Error('delete-todo-files failed: ' + failures.join('; '))
-      return true
-    },
-
-    // --- Export ---
-    'export-todos-to-xlsx': (e, payload) => { if (isLocked()) throw new Error('locked'); return exportTodosToXlsx(payload) },
-
-    // --- Backup (critical-state aligned) ---
-    'write-critical-state-backup': (e, jsonText) => {
-      // 灾备唯一源通道:主窗限定+锁定态拒绝(被攻陷的浮窗/快加窗可覆写 critical JSON 投毒恢复源,三轮安全深审 C-2)
-      assertMainWindow(e) // main-window guard via getMainWindow (isDestroyed-safe; bare module var win threw "Object has been destroyed" after X-close→tray)
-      if (isLocked()) throw new Error('app is locked')
-      // External default root (userData parent dir / pickdone-backups): separated from todos.db, so disaster backup remains recoverable even if userData is wiped
-      dbRecovery.writeCriticalStateBackupAtomic(defaultBackupRoot(), String(jsonText))
-      return true
-    },
-    'get-default-backup-dir': () => defaultBackupRoot(),
-    // --- Secure storage: sensitive values like securityLockPassword encrypted with safeStorage (DPAPI/Keychain) ---
-    // Main window only: encrypt/decrypt primitives serve only the main window's settings page and lock-screen flow; a compromised float/quick-add window must not use them to recover plaintext
-    'encrypt-secret': (e, plain) => {
-      assertMainWindow(e) // main-window guard via getMainWindow (isDestroyed-safe; bare module var win threw "Object has been destroyed" after X-close→tray)
-      // When encryption is unavailable, refuse rather than persist plaintext (storing the lock password in plaintext contradicts "secure storage"; open-source audits would flag it).
-      // Windows DPAPI is always available; this branch realistically only appears in anomalous environments.
-      const { safeStorage } = require('electron')
-      if (!plain) return ''
-      if (!safeStorage.isEncryptionAvailable()) throw new Error('secure-encryption-unavailable')
-      return 'enc1:' + safeStorage.encryptString(String(plain)).toString('base64')
-    },
-    'decrypt-secret': (e, stored) => {
-      assertMainWindow(e) // main-window guard via getMainWindow (isDestroyed-safe; bare module var win threw "Object has been destroyed" after X-close→tray)
-      try {
-        const { safeStorage } = require('electron')
-        if (!stored) return ''
-        if (!stored.startsWith('enc1:')) return stored // backward compatible with historical plaintext
-        if (!safeStorage.isEncryptionAvailable()) return ''
-        return safeStorage.decryptString(Buffer.from(stored.slice(5), 'base64'))
-      } catch { return '' }
-    },
-
-    // --- Security lock (verification happens entirely in the main process; the plaintext password is never returned to the renderer) ---
-    'lock-app': () => { lockAppNow() },
-    // Unlock may only be initiated by the lock-screen window itself (prevents the float/other windows from calling without a password)
-    'unlock-app': (e) => { if (isLockWindow(e.sender)) unlockAppNow() },
-    // Password verification: (1) must be initiated by the lock-screen window (prevents brute force from any renderer window) (2) 5 failures trip a 60s cooldown (prevents dictionary attacks)
-    'verify-lock-password': (e, plain) => {
-      if (!isLockWindow(e.sender)) {
-        log.warn('[SecurityLock] 拒绝 verify-lock-password from non-lock window, sender:', e.sender.id)
-        return false
-      }
-      return checkLockRateLimit(plain)
-    },
-    'pick-backup-dir': async () => {
-      const { dialog } = require('electron')
-      const r = await dialog.showOpenDialog(getMainWindow() || undefined, { title: i18nM.mt('pickBackupDir'), properties: ['openDirectory', 'createDirectory'] })
-      if (r.canceled || !r.filePaths[0]) return null
-      loadAllowedBackupDirs()
-      allowedBackupDirs.add(path.resolve(r.filePaths[0])) // only user-explicitly-picked directories enter the whitelist
-      saveAllowedBackupDirs()
-      return r.filePaths[0]
-    },
-    // --- Auto backup (GFS tiered retention: recent N + daily anchors + weekly anchors; content dedup; atomic write) ---
-    'run-auto-backup': (e, jsonText, opts) => {
-      assertMainWindow(e) // main-window guard via getMainWindow (isDestroyed-safe; bare module var win threw "Object has been destroyed" after X-close→tray)
-      if (isLocked()) throw new Error('app is locked')
-      try {
-        const o = typeof opts === 'number' ? { recent: opts } : (opts || {})
-        const dir = resolveBackupDir(o.backupDir)
-        fs.mkdirSync(dir, { recursive: true })
-        const d = new Date()
-        const pad = n => String(n).padStart(2, '0')
-        const stamp = d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '-' + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds())
-        // Lowercase uniformly: keeps evt snapshot naming consistent with autoBackup's case-sensitive RE_EVT (no i flag)
-        const tag = o.tag ? ('evt-' + String(o.tag).toLowerCase().replace(/[^a-z0-9-]/g, '') + '-') : 'auto-'
-        const name = tag + stamp + '.json'
-        const tmp = path.join(dir, '.tmp-' + name)
-        // Content dedup: only compare against the newest file. (The original implementation compared against any old file — when the data was changed back to its original state
-        // it would return dedup without writing the new snapshot, yet prune would delete that old snapshot → that point in time ends up with no backup)
-        // 排序按名字内嵌时间戳(2026-09-10 P2):字典序 sort() 让 'auto-' 排在同日 'evt-…' 之后/之前错位,
-        // 去重会拿一个陈旧文件当"最新"比对 → 误判 dedup 丢快照。复用 fix-util 的纯排序(与 autoBackup.nameToTs 同规则)。
-        const existing = fixUtil.sortBackupNamesNewestFirst(fs.readdirSync(dir).filter(f => /^(auto|evt)-/.test(f)))
-        if (existing.length) {
-          try {
-            // newest-first sort → the dedup twin is existing[0]; the tail was the OLDEST file (review P1 2026-09-10:
-            // dedup never fired in the common case, and a stale snapshot could be returned as "the" backup)
-            if (fs.readFileSync(path.join(dir, existing[0]), 'utf8') === jsonText) {
-              return { ok: true, file: existing[0], dedup: true }
-            }
-          } catch {}
-        }
-        // Atomic write: temp file + rename, prevents corruption on interruption
-        fs.writeFileSync(tmp, jsonText)
-        fs.renameSync(tmp, path.join(dir, name))
-        // P2 2026-09-11: sweep interrupted .tmp-* residue — a crash between writeFileSync and renameSync
-        // used to accumulate temp files in the backup dir forever (the prune filter below only matches
-        // ^(auto|evt)-). Only files older than 1h are swept, so a concurrent in-flight write is safe.
-        try {
-          const stale = autoBackup.selectStaleTmp(fs.readdirSync(dir).map(f => {
-            try { return { name: f, mtimeMs: fs.statSync(path.join(dir, f)).mtimeMs } } catch { return null }
-          }))
-          for (const dead of stale) { try { fs.rmSync(path.join(dir, dead), { force: true }) } catch {} }
-        } catch { /* sweep is best-effort */ }
-        const files = fs.readdirSync(dir).filter(f => (o.tag ? /^evt-/.test(f) : /^(auto|evt)-/.test(f)))
-        for (const dead of autoBackup.selectPrunes(files, o)) { try { fs.unlinkSync(path.join(dir, dead)) } catch {} }
-        return { ok: true, file: name }
-      } catch (err) { return { ok: false, error: String(err && err.message || err) } }
-    },
-    // 备份读取(2026-09-09 P2):此前三层 catch 全静默——「目录不存在(正常空态)」与「读取失败(权限/IO)」
-    // 同样返回 ''/[],设置页永远不知道读不了。改为结构化结果:ok/missing/error,渲染端对应展示错误态
-    'read-auto-backup': (e, backupDir, fileName) => {
-      assertMainWindow(e) // main-window guard via getMainWindow (isDestroyed-safe; bare module var win threw "Object has been destroyed" after X-close→tray)
-      if (isLocked()) throw new Error('app is locked')
-      const name = path.basename(String(fileName || ''))
-      if (!/^(auto|evt)-.+.json$/.test(name)) return { ok: false, error: 'invalid backup file name' } // whitelisted naming, prevents path traversal
-      const dir = resolveBackupDir(backupDir)
-      try {
-        return { ok: true, text: fs.readFileSync(path.join(dir, name), 'utf8') }
-      } catch (err) {
-        return fixUtil.classifyBackupError(err) === 'missing'
-          ? { ok: false, error: 'backup file not found' }
-          : { ok: false, error: String(err && err.message || err) }
-      }
-    },
-    'list-auto-backups': (e, backupDir) => {
-      assertMainWindow(e) // main-window guard via getMainWindow (isDestroyed-safe; bare module var win threw "Object has been destroyed" after X-close→tray)
-      if (isLocked()) throw new Error('app is locked')
-      const dir = resolveBackupDir(backupDir)
-      let names
-      try {
-        names = fs.readdirSync(dir)
-      } catch (err) {
-        // 目录不存在 = 正常空态(用户尚未选过备份目录),不算错误;其余读取失败必须上报
-        if (fixUtil.classifyBackupError(err) === 'missing') return { ok: true, missing: true, files: [] }
-        return { ok: false, files: [], error: String(err && err.message || err) }
-      }
-      // 新→旧展示排序也按内嵌时间戳(字典序会把 evt-/auto- 前缀排在时间之前,同日错位)
-      // ^(auto|evt)- 白名单天然排除 .tmp-* 原子写残留(2026-09-11 与 run-auto-backup 的清扫同策略)
-      return { ok: true, files: fixUtil.sortBackupNamesNewestFirst(names.filter(f => /^(auto|evt)-/.test(f))) }
-    },
-    'read-critical-state-backup': () => {
-      if (isLocked()) throw new Error('app is locked')
-      // Same source of truth as dbRecovery.cjs: external root first, with fallback to legacy files inside userData
-      try { return fs.readFileSync(dbRecovery.criticalBackupPath(app.getPath('userData')), 'utf8') } catch { return null }
-    },
-
-    // --- CSV import (migrating from other apps): reuses the CLI's cli/import.js engine; both preview and execution go through the main process ---
-    'import:pick-preview': async () => {
-      const importer = require('../../cli/import.js')
-      const r = await dialog.showOpenDialog(getMainWindow() || undefined, {
-        title: i18nM.mt('importPickCsv'), properties: ['openFile'], filters: [{ name: 'CSV', extensions: ['csv'] }]
-      })
-      if (r.canceled || !r.filePaths[0]) return null
-      const file = r.filePaths[0]
-      lastPickedImportPath = file // import:run only allows executing the most recent dialog-picked path (prevents the renderer passing arbitrary paths to read files)
-      // 同步 readFileSync 无上限曾把整个主进程(全部窗口/定时器)卡死在大 CSV 上:先 statSync 限 20MB 超限报错(2026-09-09 P2)
-      const tooBig = fixUtil.checkImportFileSize(fs.statSync(file).size)
-      if (tooBig) throw new Error(tooBig)
-      const text = fs.readFileSync(file, 'utf8')
-      const format = importer.detectFormat(text)
-      const items = importer.rowsToItems(text, format)
-      return { file, report: importer.importItems(items, { format, dryRun: true }) }
-    },
-    'import:run': (e, file) => {
-      const f = String(file || '')
-      // Arbitrary-path read primitive sealed off: only the path most recently returned by the main-process dialog is accepted
-      if (!lastPickedImportPath || f !== lastPickedImportPath) throw new Error('import: path not granted by picker')
-      const r = require('../../cli/import.js').importFile(f, { dryRun: false })
-      // review P2 (2026-09-10): bulk import writes straight through the main process and bypassed the
-      // todo-db:call audit hook — land one explicit line so app-side imports are traceable like CLI imports
-      try { appAudit.recordCustom('import', ['import:run', f], [], [], 'imported ' + ((r && r.imported) || 0) + ' task(s)') } catch { /* best-effort */ }
-      // 与 todo-db:call 写路径对齐(2026-09-09 P2):导入落库后必须刷新调度器并广播,否则应用内导入后
-      // 主窗口列表陈旧、已导入的提醒全部静默丢失
-      try { scheduler.reloadAll(dbApi()) } catch (err) { log.warn('[Import] reloadAll failed', err) }
-      // 2026-09-10 P2:传 e.sender(IpcMainInvokeEvent 本身不是 webContents,exclude 永不命中,
-      // 发起导入的窗会被自己的广播打断撤销栈);其余窗照常刷新
-      broadcastTodosChanged('import', e.sender)
-      return r
-    },
-
-    // --- Global quick-add mini window ---
-    'quick-add-hide': () => quickAdd.hide(),
-
-    // --- Pomodoro float window (aligned with the reference show/hide-tomato-floating IPCs) ---
-    // --no-focus test instances never auto-show the float: it would cover the user's foreground work
-    'show-tomato-float': () => { if (!process.argv.includes('--no-focus')) { tomatoFloat.show(); rebuildTrayMenu() } },
-    'hide-tomato-float': () => tomatoFloat.hide(),
-    'tomato-float-shown': () => tomatoFloat.isVisible(),
-    'flush-tomato-float': () => tomatoFloat.flushNow(),
-    'set-tomato-float-bounds': () => tomatoFloat.setBounds(),
-    'start-tomato-float-drag': (e) => tomatoFloat.dragStart(e.sender),
-    'stop-tomato-float-drag': () => tomatoFloat.dragStop(),
-    'ensure-window-width': (e, w) => {
-      const need = Math.max(900, Number(w) || 0)
-      if (!win || win.isDestroyed()) return
-      const b = win.getBounds()
-      if (b.width >= need) return
-      const { screen } = require('electron')
-      const wa = screen.getDisplayMatching(b).workArea
-      const width = Math.min(need, wa.width)
-      const x = Math.max(wa.x, Math.min(b.x, wa.x + wa.width - width))
-      win.setBounds({ x, y: b.y, width, height: b.height })
-    },
-    'set-tomato-float-panel': (e, open) => tomatoFloat.setPanelOpen(open),
-    // Double-click the float card to summon the main window: accepts only the float's own sender; showMainOrLock already handles the lock-screen redirect and main-window recreation branches
-    'show-main-from-float': (e) => { if (tomatoFloat.isSelfSender(e.sender)) showMainOrLock() },
-    'undock-tomato-float': () => { tomatoFloat.undock(); rebuildTrayMenu() },
-    // Pomodoro state pushed every second → carried by the taskbar five-piece set + tray tooltip together (single tooltip writer)
-    'update-tomato-taskbar': (e, p) => {
-      if (!p || typeof p !== 'object') return
-      tomatoTaskbar.update(p)
-      const status = p.status || 'default'
-      const running = status === 'startTomatoTime' || status === 'startRestTime' || p.paused
-      if (!running) { updateTomatoTray(''); return }
-      const mm = String(Math.floor((p.remainSec || 0) / 60)).padStart(2, '0')
-      const ss = String((p.remainSec || 0) % 60).padStart(2, '0')
-      updateTomatoTray(`${p.phaseText || ''} ${mm}:${ss}`)
-    },
-
-    // --- Version-sync task set (offline no-op reserved channel) ---
-    'sync-todos-to-server': () => ({ offline: true }),
-
-    // --- Window controls (win may be destroyed: null-guarded via getMainWindow, avoiding throws after destruction) ---
-    'minimize-main-window': () => { const w = getMainWindow(); if (w) w.minimize(); return true },
-    'maximize-main-window': () => { const w = getMainWindow(); if (!w) return false; w.isMaximized() ? w.unmaximize() : w.maximize(); return true },
-    'is-maximized': () => { const w = getMainWindow(); return w ? w.isMaximized() : false },
-    'hide-main-window': () => { const w = getMainWindow(); if (w) w.hide(); return true },
-    'close-main-window-request': () => { const w = getMainWindow(); if (w) w.close(); return true },
-
-    // --- Diagnostic logs (renderer logs to a separate file; export diagnostics bundle) ---
-    'log:write': (e, entries) => {
-      try {
-        if (!Array.isArray(entries)) return false
-        const rlog = require('electron-log')
-        rlog.scope('renderer')
-        // Write to a separate renderer.log (reuses electron-log's transports.file mechanism, scope isolated to a subdirectory)
-        const fsx = require('fs')
-        const dir = path.join(app.getPath('userData'), 'logs')
-        fsx.mkdirSync(dir, { recursive: true })
-        const file = path.join(dir, 'renderer.log')
-        // Cap guard: a compromised renderer could write to disk without bound and fill the disk (dual limits on entry count/entry length; truncate when exceeded)
-        const capped = entries.slice(0, 200)
-        // 轮转:超 2MB 归档为 renderer.old.log(单副本)。无轮转时被攻陷渲染端可持续刷盘(2026-09-05 终审 P2)
-        try {
-          const st = fsx.statSync(file)
-          if (st.size > 2 * 1024 * 1024) {
-            const old = path.join(dir, 'renderer.old.log')
-            try { fsx.rmSync(old, { force: true }) } catch {}
-            fsx.renameSync(file, old)
-          }
-        } catch { /* 首次写入文件尚不存在 */ }
-        // 2026-09-10 P2:lines 是数组,此前 `lines + NL` 走 array+string 的 join(',') —— 含逗号条目被
-        // 拆散、整批挤成一行。改为显式换行连接(纯逻辑抽到 fix-util.formatLogLines 便于测试)
-        fsx.appendFileSync(file, fixUtil.formatLogLines(capped) + String.fromCharCode(10), 'utf8')
-        return true
-      } catch (err) { console.error('[log:write]', err); return false }
-    },
-    'log:open-dir': () => {
-      try {
-        const dir = path.join(app.getPath('userData'), 'logs')
-        fs.mkdirSync(dir, { recursive: true })
-        shell.openPath(dir)
-        return true
-      } catch (err) { console.error('[log:open-dir]', err); return false }
-    },
-    // --- Misc ---
-    'mime-get-type': (e, name) => {
-      const ext = String(name).split('.').pop().toLowerCase()
-      const t = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', pdf: 'application/pdf', mp3: 'audio/mpeg', ogg: 'audio/ogg' }
-      return t[ext] || 'application/octet-stream'
-    },
-    // Custom white noise: copied into userData/files right after picking (reachable via the local:// protocol with Range support, so it can actually play during focus;
-    // the old version returned only an absolute path, which the app:// page could not load → picking was equivalent to not picking). Fixed-name overwrite; the directory keeps only the latest file.
-    'select-user-white-noise-audio-file': async () => {
-      // win 模块级引用在主窗销毁重建后可能是 null/已销毁:dialog 收到死引用会抛,改 getMainWindow 守卫,
-      // 无窗时传 undefined(dialog 以无父窗模式打开,2026-09-09 P2)
-      const r = await dialog.showOpenDialog(getMainWindow() || undefined, { properties: ['openFile'], filters: [{ name: i18nM.mt('pickAudio'), extensions: ['mp3', 'wav', 'ogg'] }] })
-      if (r.canceled || !r.filePaths[0]) return null
-      const src = r.filePaths[0]
-      const ext = path.extname(src).toLowerCase()
-      const key = 'noise-custom' + ext
-      await fs.promises.copyFile(src, path.join(attachments.attachDir(), key))
-      // 2026-09-10 P2:保存自定义白噪音后广播所有存活窗(渲染端另一代理会加监听,通道名固定);
-      // 此前只更新发起窗的本地状态,其他窗(如浮窗)的噪音列表不刷新
-      for (const w of BrowserWindow.getAllWindows()) {
-        try { if (w && !w.isDestroyed()) w.webContents.send('white-noise-updated') } catch {}
-      }
-      return { name: path.basename(src), key }
-    },
-
-    // --- Auto-update ---
-    'updater:check': () => updater.check(),
-    'updater:download': () => updater.downloadUpdate(),
-    'updater:quit-and-install': () => updater.quitAndInstall(),
-    'updater:status': () => updater.getStatus()
-  }
+  const handlers = Object.assign({},
+    require('./handlers/todo')(hctx),
+    require('./handlers/settings')(hctx),
+    require('./handlers/security')(hctx),
+    require('./handlers/backup')(hctx),
+    require('./handlers/attachments')(hctx),
+    require('./handlers/csv-import')(hctx),
+    require('./handlers/tomato')(hctx),
+    require('./handlers/system')(hctx)
+  )
   // Flush-ack handshake receiver (see will-quit): renderer sends this after dispatching its debounced
   // flush writes on app-quitting-flush. fire-and-forget (ipcMain.on, not handle) — the main process is
   // on its way out and must not throw back into a dying renderer.
