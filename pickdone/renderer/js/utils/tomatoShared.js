@@ -39,3 +39,18 @@ export function formatMMSS (sec) {
   const s = Math.max(0, Math.floor(Number(sec) || 0))
   return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
 }
+
+/** CLI tomato command staleness + expired receipt (extracted 2026-09-11 so the rejection path is
+ *  unit-testable; renderer/js/main.js consumes both). A command whose `at` is missing or older than
+ *  the TTL must never execute (crash-replay protection), but — before the receipt existed — the main
+ *  process had already marked it consumed, so the CLI's waitForTomatoAck polled to its full timeout.
+ *  The receipt's seq (≥ cmd.seq, identical here) lets the CLI unblock; `at` is the receipt time. */
+export const TOMATO_CMD_TTL_MS = 60000
+
+export function isStaleTomatoCmd (cmd, now) {
+  return !cmd || !cmd.at || now - cmd.at > TOMATO_CMD_TTL_MS
+}
+
+export function expiredTomatoReceipt (cmd, now) {
+  return { seq: (cmd && cmd.seq) || 0, status: 'expired', error: 'stale command (>60s)', at: now }
+}

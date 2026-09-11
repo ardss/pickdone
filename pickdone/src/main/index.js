@@ -90,6 +90,7 @@ const { createExporter } = require('./export-xlsx')
 const securityLock = createSecurityLock({ getMainWindow, showMainOrLock, readConfig, writeConfig, i18n: i18nM, log })
 const { isLocked, lockAppNow, unlockAppNow, verifyLockPassword, isLockWindow } = securityLock
 const { allowWithinRate } = require('./security-lock') // pure sliding-window limiter for the notification channel
+const { nextWatchBaseline } = require('./watch-baseline') // pure baseline update for the external-write watcher resync
 quickAdd.setLockProbe(isLocked) // the global quick-add shortcut does not summon while the screen is locked (summoning = input silently lost)
 const shortcuts = createShortcuts({ getMainWindow, showMainOrLock, quickAdd, i18n: i18nM, log })
 const { applyShortcuts } = shortcuts
@@ -230,7 +231,7 @@ function watchDbForExternalWrites () {
   // poll read them as "external" → full reload + undo-stack wipe ~3s after every local write (the
   // renderer's 1.5s suppression window cannot cover the 2-3s watcher latency). Re-baseline immediately
   // after every write-type todo-db:call so the next poll sees mtime === baseline.
-  resyncDbWatch = () => { const m = readWatchMtime(); if (m != null) lastMtime = m }
+  resyncDbWatch = () => { lastMtime = nextWatchBaseline(lastMtime, readWatchMtime) }
   // P2 2026-09-11: fs.watchFile never unwatched — poll timers kept the quit chain alive/lint-y; release them on quit
   stopDbWatch = () => {
     try { fs.unwatchFile(dbFile, onChange) } catch {}
@@ -647,9 +648,8 @@ let flushDone = false // flush window finished; second will-quit passes through 
 // flush invokes are dispatched; will-quit holds the quit until every live window acked or ≤2s elapsed
 // (bounded, so a hung renderer can never block quitting). The two-phase will-quit (flushDone passthrough
 // for updater's autoInstallOnAppQuit) is unchanged.
-let flushAckToken = 0
-const flushAckedSenders = new Set()
-let flushExpectAcks = 0 // live windows we are waiting on (0 → no window was online, skip waiting)
+const { createQuitAckTracker } = require('./quit-ack')
+const quitAck = createQuitAckTracker()
 app.on('before-quit', () => {
   // Second pass (the re-issued app.quit() below): the DB is already closed, re-broadcasting the flush
   // would only be a dead letter — renderer invokes would fail against a closed handle.
@@ -659,12 +659,12 @@ app.on('before-quit', () => {
   // 2026-09-10 P1: previously only the main window was notified — the float window's pending pomodoro
   // ledger (and the whole broadcast when the main window was already destroyed, e.g. X-close→tray→quit)
   // was silently lost. Broadcast to every live window with an isDestroyed guard.
-  flushAckToken = Date.now()
-  flushAckedSenders.clear()
-  flushExpectAcks = 0
+  let liveWindows = 0
+  const roundToken = Date.now()
   for (const w of BrowserWindow.getAllWindows()) {
-    try { if (w && !w.isDestroyed()) { w.webContents.send('app-quitting-flush', { token: flushAckToken }); flushExpectAcks++ } } catch {}
+    try { if (w && !w.isDestroyed()) { w.webContents.send('app-quitting-flush', { token: roundToken }); liveWindows++ } } catch {}
   }
+  quitAck.beginRound(liveWindows, roundToken)
 })
 app.on('window-all-closed', e => { /* stay resident in the tray, do not quit */ })
 app.on('will-quit', (event) => {
@@ -709,7 +709,7 @@ app.on('will-quit', (event) => {
     }, 3000)
   }
   // All acks already in (or no live window to wait for): keep the old fast path
-  const allAcked = () => flushExpectAcks === 0 || flushAckedSenders.size >= flushExpectAcks
+  const allAcked = () => quitAck.allAcked()
   if (allAcked()) { setTimeout(flushNow, FLUSH_FLOOR_MS); return }
   const poll = setInterval(() => {
     if (allAcked() || Date.now() - startedAt >= FLUSH_ACK_CAP_MS) {
@@ -1306,9 +1306,8 @@ function registerIpc () {
   ipcMain.on('app-quitting-flush-ack', (e, payload) => {
     try {
       // Stale token acks (from a previous quit attempt that was aborted) must not satisfy this round
-      if (payload && payload.token === flushAckToken && e && e.sender && !flushAckedSenders.has(e.sender.id)) {
-        flushAckedSenders.add(e.sender.id)
-        log.info('[Quit] flush ack received', flushAckedSenders.size + '/' + flushExpectAcks)
+      if (payload && e && e.sender && quitAck.ack(payload.token, e.sender.id)) {
+        log.info('[Quit] flush ack received', quitAck.progress())
       }
     } catch { /* dying process — best effort */ }
   })

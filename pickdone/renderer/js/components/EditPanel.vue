@@ -804,7 +804,9 @@ export default {
             // references the url — deleting the file then would corrupt the task's attachments.
             const row = this.$store.state.todo.todoList.find(t => t.taskId === (this.e && this.e.taskId))
             if (attachmentUrlPresent(row, item.url)) return
-            window.todoAPI.deleteFile(item.url)
+            // .catch: delete-file now surfaces structured errors instead of swallowing them (2026-09-11);
+            // this call is a fire-and-forget sweep — a failure must not become an unhandled rejection
+            window.todoAPI.deleteFile(item.url).catch(() => {})
           }, 5500)
         },
         () => {

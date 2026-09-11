@@ -104,6 +104,10 @@ try {
 sh(['git', 'add', 'package.json', 'renderer/index.html', '../CHANGELOG.md', '../CHANGELOG.zh.md'])
 // browser-dev/ is gitignore-listed (the tracked index.html was force-added historically) — plain add refuses it
 sh(['git', 'add', '-f', 'browser-dev/index.html'])
+// Anchor the pre-commit HEAD (2026-09-11 review P2): if the commit step took its "nothing to commit"
+// catch branch, a blind HEAD~1 rewind would pull back the PREVIOUS unrelated commit and scatter its
+// changes into the working tree. Reset to the anchor instead — a no-op unless our commit actually landed.
+const preCommitHead = sh(['git', 'rev-parse', 'HEAD']).trim()
 try {
   sh(['git', 'commit', '-m', `chore(release): ${TAG}`])
 } catch { /* 无变更可提交也允许(stamps 可能已同笔) */ }
@@ -115,8 +119,11 @@ say('commit chore(release) 完成')
 try {
   sh(['git', 'push', 'origin', 'main'])
 } catch (e) {
-  try { sh(['git', 'reset', '--mixed', 'HEAD~1']) } catch (e2) { console.error('自动回退 commit 失败,请手动: git reset --mixed HEAD~1 —', e2 && e2.message) }
-  die(`git push main 失败(${(e && e.message) || e})。已回退本地 release commit(工作区保留 CHANGELOG 归版)。
+  const rewound = sh(['git', 'rev-parse', 'HEAD']).trim() !== preCommitHead
+  if (rewound) {
+    try { sh(['git', 'reset', '--mixed', preCommitHead]) } catch (e2) { console.error('自动回退 commit 失败,请手动: git reset --mixed ' + preCommitHead + ' —', e2 && e2.message) }
+  }
+  die(`git push main 失败(${(e && e.message) || e})。${rewound ? '已回退本地 release commit(工作区保留 CHANGELOG 归版)。' : '无 release commit 需要回退。'}
   补救: ①修复网络/权限后重新 npm run release ${version}(CHANGELOG 段已归版,先手动把两份 CHANGELOG 的 [${version}] 段改回 [Unreleased],或直接恢复 [Unreleased] 标题)
   ②或仅重跑第 5 步: git push origin main && git tag ${TAG} && git push origin ${TAG}`)
 }

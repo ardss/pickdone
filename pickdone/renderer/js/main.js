@@ -11,6 +11,7 @@ import router from './router.js'
 import App from './app-root.vue'
 import { setLunarLib } from './utils/repeat.js'
 import { getHolidayList } from './utils/holidays.js'
+import { isStaleTomatoCmd, expiredTomatoReceipt } from './utils/tomatoShared.js'
 
 // Vue2 compat layer (@vue/compat) fully removed: our own code has completed migration to Vue3 semantics,
 // running entirely on Vue3 behavior (Element Plus is a native Vue3 library, modelValue/update:modelValue communication)
@@ -242,9 +243,9 @@ async function bootstrap () {
         // command (an old start would suddenly kick off a focus session). 60s TTL; CLI includes at when writing commands
         // 2026-09-11 P1: rejection used to be silent — the main process had already marked the command consumed, so no receipt was
         // ever written and the CLI's waitForTomatoAck polled to its full timeout. Write an 'expired' receipt (seq ≥ cmd.seq) so the CLI unblocks.
-        if (!cmd.at || Date.now() - cmd.at > 60000) {
+        if (isStaleTomatoCmd(cmd, Date.now())) {
           console.warn('[cli-tomato] ignoring stale command (>60s):', cmd.action, 'seq=' + cmd.seq)
-          window.todoAPI.dbCall('setMeta', ['cliTomatoState', JSON.stringify({ seq: cmd.seq, status: 'expired', error: 'stale command (>60s)', at: Date.now() })]).catch(() => {})
+          window.todoAPI.dbCall('setMeta', ['cliTomatoState', JSON.stringify(expiredTomatoReceipt(cmd, Date.now()))]).catch(() => {})
           return
         }
         const t = store.state.tomato

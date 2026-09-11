@@ -367,12 +367,12 @@ export default {
       }
       dispatch('todo/writeCriticalBackup', null, { root: true })
       try { new Audio(confirmUrl(rootState.settings.completeSound)).play().catch(() => {}) } catch (e) { /* empty */ }
-      if (s.enableNotification !== false) window.todoAPI.notification({ title: tt('statsA.core.tomatoDoneTitle'), body: tt('statsA.core.tomatoDoneBody', { n: focusMin }) })
+      if (s.enableNotification !== false) { try { window.todoAPI.notification({ title: tt('statsA.core.tomatoDoneTitle'), body: tt('statsA.core.tomatoDoneBody', { n: focusMin }) }) } catch (e) { /* locked screen rejects the channel — fire-and-forget */ } }
       commit('patch', { status: 'startRestTime', startedAt: Date.now(), remainSec: s.restTime * 60, _countDate: dayjs().format(FMT.date) })
     },
     finishRest ({ state, commit }) {
       if (!claimPhase('startRestTime', state.startedAt)) return
-      if (state.enableNotification !== false) window.todoAPI.notification({ title: tt('statsA.core.restOverTitle'), body: tt('statsA.core.restOverBody') })
+      if (state.enableNotification !== false) { try { window.todoAPI.notification({ title: tt('statsA.core.restOverTitle'), body: tt('statsA.core.restOverBody') }) } catch (e) { /* locked screen rejects the channel — fire-and-forget */ } }
       commit('patch', { status: 'default', startedAt: 0, remainSec: state.tomatoTime * 60 })
     },
     attach ({ commit }, taskId) {
