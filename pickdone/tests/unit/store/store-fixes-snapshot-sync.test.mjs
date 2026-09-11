@@ -89,9 +89,11 @@ test('planSnapshotRowSync: dayStart change plans a chip migration with raw times
   assert.deepEqual(eff, [{ op: 'moveTaskChips', taskId: 'C', fromTs: MON, toTs: WED }])
 })
 
-test('planSnapshotRowSync: date removed plans clearTaskChips; active->deleted plans snapshotForDelete', () => {
+test('planSnapshotRowSync: date removed plans snapshot+clear; active->deleted plans snapshotForDelete', () => {
+  // snapshotForDelete precedes clearTaskChips (2026-09-12 F6): undoing the date-clear needs the snapshot
+  // meta to restore from — a bare clear left nothing and the schedule chips were lost permanently
   assert.deepEqual(planSnapshotRowSync(row('D', { dayStart: MON }), row('D', { dayStart: 0, updateTime: 2 })),
-    [{ op: 'clearTaskChips', taskId: 'D' }])
+    [{ op: 'snapshotForDelete', taskId: 'D' }, { op: 'clearTaskChips', taskId: 'D' }])
   // snapshotForDelete (photo+clear), not bare clearTaskChips: redo of a delete must re-snapshot because the
   // preceding undo already consumed the meta — otherwise the next undo restores nothing (chip loss)
   assert.deepEqual(planSnapshotRowSync(row('D'), row('D', { delete: true, deletedAt: 9, updateTime: 2 })),

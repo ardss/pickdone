@@ -6,16 +6,25 @@
 import { dayjs } from '../utils/core.js'
 import { moveTaskChips, clearTaskChips, snapshotForDelete, restoreSnapshot } from '../utils/dayPlans.js'
 
-/** Chip-sync serial chain: when a task's reschedule fires in bursts, guarantees planMoveTask arrival order matches operation order */
+/** Chip-sync serial chain: when a task's reschedule fires in bursts, guarantees planMoveTask arrival order matches operation order.
+ *  Values are {promise, settled} entries: the chain deletes itself once settled, and the size cap below only evicts
+ *  already-settled entries (2026-09-12: blindly deleting a pending entry used to detach the queued tail from its
+ *  predecessor, so the next enqueue started a fresh Promise.resolve() chain and the two chains ran in parallel
+ *  out of order). */
 const _chipSyncChain = new Map()
 
 /** Serialize chip ops per taskId (shared by updateTodoFields and undo/redo snapshot replay, so both channels
  *  can never interleave planMoveTask/planDeleteTask for the same task out of order) */
 export function enqueueChipSync (taskId, fn) {
-  const prev = _chipSyncChain.get(taskId) || Promise.resolve()
-  const next = prev.catch(() => {}).then(fn)
-  _chipSyncChain.set(taskId, next)
-  if (_chipSyncChain.size > 64) { for (const k of _chipSyncChain.keys()) { if (k !== taskId) _chipSyncChain.delete(k) } }
+  const prev = _chipSyncChain.get(taskId) || { promise: Promise.resolve() }
+  const next = prev.promise.catch(() => {}).then(fn)
+  const entry = { promise: next, settled: false }
+  next.then(() => { entry.settled = true }, () => { entry.settled = true })
+    .then(() => { if (_chipSyncChain.get(taskId) === entry) _chipSyncChain.delete(taskId) })
+  _chipSyncChain.set(taskId, entry)
+  if (_chipSyncChain.size > 64) {
+    for (const [k, e] of _chipSyncChain) { if (k !== taskId && e.settled) _chipSyncChain.delete(k) }
+  }
   return next
 }
 
@@ -53,7 +62,10 @@ export function planSnapshotRowSync (before, after) {
   // it) — clearing alone would leave nothing for the NEXT undo to restore, losing chips permanently
   // (2026-09-09 release review).
   if (wasLive && !after.delete && before && (before.dayStart || 0) !== (after.dayStart || 0)) {
-    if (!after.dayStart) return [{ op: 'clearTaskChips', taskId }] // date removed → clear, same as updateTodoFields
+    // date removed → snapshot+clear (2026-09-12: previously cleared without snapshotting, so an undo of the
+    // date-clear had no snapshot meta to restore and the schedule chips were lost permanently — rowChipSync's
+    // same-scenario path already snapshotted via updateTodoFields' delete-branch parity)
+    if (!after.dayStart) return [{ op: 'snapshotForDelete', taskId }, { op: 'clearTaskChips', taskId }]
     return [{ op: 'moveTaskChips', taskId, fromTs: before.dayStart || 0, toTs: after.dayStart }] // date change → migrate like updateTodoFields
   }
   if (!before && !after.delete && after.dayStart) {
