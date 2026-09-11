@@ -146,3 +146,65 @@ jobs:
             echo "draft release body still empty/short after auto-fill — CHANGELOG section missing or too short"
             exit 1
           fi
+
+  # Linux support (2026-09-11): AppImage (x64+arm64) + deb (arm64, LubanCat/Rockchip board).
+  # Runs AFTER the windows job on purpose: the windows job owns the release gates (check:all) and the
+  # idempotent stale-draft cleanup — a parallel linux job would race that cleanup and could delete the
+  # draft the windows job just created. Gates are tag-scoped, so they are enforced exactly once, and
+  # this job only builds and attaches artifacts to the existing draft.
+  release-linux:
+    runs-on: ubuntu-latest
+    needs: release
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: pickdone/package-lock.json
+
+      - name: Cache Electron binaries
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-builder
+          key: electron-${{ runner.os }}-${{ hashFiles('pickdone/package-lock.json') }}
+
+      - name: Verify tag matches package.json version
+        run: |
+          V=$(node -p "require('./pickdone/package.json').version")
+          if [ "v$V" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME != package.json version v$V"; exit 1
+          fi
+
+      - name: Install
+        working-directory: pickdone
+        run: npm ci
+
+      - name: Build packaging whitelist (parity with ci.yml / windows release job)
+        working-directory: pickdone
+        run: |
+          node scripts/build-whitelist.mjs
+          git diff --exit-code package.json || (echo '::error::build.files drifted from the lock closure (hand-edited without build-whitelist)' && exit 1)
+
+      # Cross-arch from x64 runner is safe: electron arm64 binaries are downloaded prebuilt and the
+      # sqlite vendor driver ships linux-arm64/linux-x64 .node prebuilds — nothing compiles from source.
+      - name: Build & publish (draft)
+        working-directory: pickdone
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --linux AppImage --arm64 --x64 --publish always && npx electron-builder --linux deb --arm64 --publish always
+
+      - name: Linux SHA256 checksums & attach
+        working-directory: pickdone
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd dist
+          sha256sum *.AppImage *.deb latest-linux.yml > SHA256SUMS-linux.txt
+          gh release upload "$GITHUB_REF_NAME" SHA256SUMS-linux.txt --clobber

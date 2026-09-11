@@ -1,0 +1,4 @@
+#!/bin/sh
+# PickDone CLI shim - lives at <install>/resources/bin, runs the bundled CLI next to it
+# (unix counterpart of pickdone.cmd; both are shipped via extraResources scripts/cli-bin -> bin)
+exec node "$(dirname "$0")/../cli/pickdone.js" "$@"

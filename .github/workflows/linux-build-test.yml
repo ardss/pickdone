@@ -1,0 +1,64 @@
+# Manual Linux build for on-device testing (e.g. LubanCat aarch64 board) — NOT part of the release
+# pipeline. Builds arm64 AppImage + deb from whatever branch is dispatched and uploads them as
+# workflow artifacts only: it never touches GitHub Releases, drafts or the updater feed.
+# Tag releases stay gated by release.yml (windows job runs check:all; linux job attaches artifacts).
+name: Linux build (test artifact)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: pickdone/package-lock.json
+
+      - name: Cache Electron binaries
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-builder
+          key: electron-${{ runner.os }}-${{ hashFiles('pickdone/package-lock.json') }}
+
+      - name: Install
+        working-directory: pickdone
+        run: npm ci
+
+      - name: Build packaging whitelist (parity with ci.yml)
+        working-directory: pickdone
+        run: |
+          node scripts/build-whitelist.mjs
+          git diff --exit-code package.json || (echo '::error::build.files drifted from the lock closure' && exit 1)
+
+      # Cross-arch is safe: electron arm64 is a prebuilt download and the sqlite vendor driver ships
+      # linux-arm64/linux-x64 .node prebuilds — nothing compiles from source.
+      - name: Build arm64 AppImage + deb
+        working-directory: pickdone
+        run: |
+          npx electron-builder --linux AppImage --arm64
+          npx electron-builder --linux deb --arm64
+
+      - name: Smoke-check the unpacked app tree
+        working-directory: pickdone
+        run: |
+          test -d dist/linux-arm64-unpacked/resources/vendor/better-sqlite3-multiple-ciphers/prebuilds/linux-arm64 || { echo '::error::arm64 sqlite prebuild missing from the package'; exit 1; }
+          test -f dist/linux-arm64-unpacked/resources/bin/pickdone || { echo '::error::cli unix shim missing'; exit 1; }
+          test -x dist/linux-arm64-unpacked/resources/bin/pickdone || { echo '::error::cli unix shim not executable'; exit 1; }
+          test -f dist/linux-arm64-unpacked/resources/cli/pickdone.js || { echo '::error::bundled cli missing'; exit 1; }
+
+      - name: Upload test artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pickdone-linux-arm64
+          path: |
+            pickdone/dist/*.AppImage
+            pickdone/dist/*.deb
+          if-no-files-found: error

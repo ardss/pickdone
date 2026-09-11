@@ -273,6 +273,26 @@
       ],
       "sign": "./build/signpath-sign.cjs"
     },
+    "linux": {
+      "icon": "build/icon-512.png",
+      "category": "Office",
+      "maintainer": "ardss",
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ]
+    },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
