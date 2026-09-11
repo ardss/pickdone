@@ -1,6 +1,7 @@
 # Daily CI: quality gates on push/PR (complements the release build in release.yml)
 # Audit decision (2026-09-01): windows = release artifact, must run; ubuntu = regression value only, optional; macos = no artifact, skipped.
-# Job-level timeout backstop (the 360-minute default would burn fully); failure logs uploaded to diagnose Electron launch flakiness.
+# Job-level timeout backstop (the 360-minute default would burn fully; 60min covers the full suite comfortably since the
+# 2026-09-11 tests/ reorganization added per-layer --suite filtering); failure logs uploaded to diagnose Electron launch flakiness.
 name: CI
 
 on:
@@ -18,7 +19,7 @@ jobs:
       matrix:
         os: [windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
