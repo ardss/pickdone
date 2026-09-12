@@ -449,7 +449,9 @@ export default {
       if (rootState.tomato && rootState.tomato.attachTodo && rootState.tomato.attachTodo.taskId === todo.taskId) {
         dispatch('tomato/attach', null, { root: true })
       }
-      const merged = { ...raw, delete: true, deleting: true, deletedAt: Date.now(), updateTime: Date.now(), status: 'delete' }
+      // version reset to 0: a re-delete after restore must re-enter the sync snapshot (syncTodos
+      // excludes delete rows already acked with version > 0 — P3 2026-09-12)
+      const merged = { ...raw, delete: true, deleting: true, deletedAt: Date.now(), updateTime: Date.now(), status: 'delete', version: 0 }
       commit('upsertLocal', merged)
       // Cleanup of related attachments is left to manual action (on permanent deletion from the recycle bin)
       // deleting is a local-dialect UI flag, not a schema column: strip it before persisting, otherwise the dirty field spreads forever via undo snapshots/sync
@@ -669,8 +671,12 @@ export default {
         commit('bumpVersion')
         serverV = state.version
         // Snapshot only dirty rows (status !== 'sync'); during the await, the user's new edits (status='update') aren't wrongly marked synced.
+        // A recycle-bin row already acked (version > 0, stamped by a previous syncTodos success) is
+        // excluded — otherwise it re-entered the snapshot and the commitSyncBatch write on EVERY sync
+        // (P3 2026-09-12). A fresh delete resets version to 0 and is sent once.
         // An already-synced whole table skips the wholesale upsertMany write entirely (Ctrl+S with no changes = no write)
-        snapshot = [...state.todoList, ...state.recycleList].filter(t => t.status !== 'sync')
+        snapshot = [...state.todoList, ...state.recycleList]
+          .filter(t => t.status !== 'sync' && !(t.status === 'delete' && t.version > 0))
         if (!snapshot.length) return
         const snapshotIds = new Set(snapshot.map(t => t.taskId))
         // Atomic commit (W3 2026-09-12): rows + todosVersion cursor go to the DB in ONE transaction
@@ -682,10 +688,12 @@ export default {
         // intermediate state: after a crash the batch is either fully re-sent (old dirty semantics) or
         // fully acknowledged (new semantics). The db layer forces status='sync' on every row.
         await window.todoAPI.dbCall('commitSyncBatch', { rows: deproxyRows(snapshot), version: serverV })
-        // Only rows in the snapshot that weren't re-edited during the await are marked synced (can't do a wholesale markSyncedAll)
+        // Only rows in the snapshot that weren't re-edited during the await are marked synced (can't do a wholesale markSyncedAll).
+        // Recycle-bin rows (status==='delete' in memory) keep that status — but get the server version
+        // stamped so they stop re-entering the dirty snapshot on every sync (P3 2026-09-12)
         ;[...state.todoList, ...state.recycleList]
-          .filter(t => snapshotIds.has(t.taskId) && t.status !== 'update' && t.status !== 'delete')
-          .forEach(t => { t.status = 'sync'; t.version = serverV })
+          .filter(t => snapshotIds.has(t.taskId) && t.status !== 'update')
+          .forEach(t => { t.status = t.status === 'delete' ? 'delete' : 'sync'; t.version = serverV })
       } catch (err) {
         reportError('syncTodos', err)
         // Enqueue for retry like reorderTodos/safeUpsert (round-6 leftover): rows stay dirty in memory,
