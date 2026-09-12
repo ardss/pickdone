@@ -27,7 +27,11 @@ function runImportParse (text, format = 'auto') {
     const timer = setTimeout(() => finish(reject, new Error('import: parse worker timed out after ' + IMPORT_WORKER_TIMEOUT_MS + 'ms')), IMPORT_WORKER_TIMEOUT_MS)
     worker.on('message', m => {
       if (m && m.ok) finish(resolve, m)
-      else finish(reject, new Error((m && m.error) || 'import: parse worker failed'))
+      else {
+        const perr = new Error((m && m.error) || 'import: parse worker failed')
+        if (m && m.code) perr.code = m.code // ImportError code (FORMAT_UNKNOWN/EMPTY_FILE/USAGE) for renderer branching
+        finish(reject, perr)
+      }
     })
     worker.on('error', err => finish(reject, err))
     worker.on('exit', code => { if (code !== 0) finish(reject, new Error('import: parse worker exited with code ' + code)) })

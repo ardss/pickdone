@@ -19,5 +19,5 @@ try {
   const items = importer.rowsToItems(text, fmt)
   parentPort.postMessage({ ok: true, format: fmt, items })
 } catch (err) {
-  parentPort.postMessage({ ok: false, error: (err && err.message) || String(err) })
+  parentPort.postMessage({ ok: false, error: (err && err.message) || String(err), code: err && err.code })
 }

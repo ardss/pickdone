@@ -28,7 +28,7 @@ test('w1 DepView: card keydown is routed through a single handler (no bare enter
 })
 
 test('w1 DepView: connect mode entered via `c` or Ctrl/Cmd+Enter; plain Enter still opens edit', () => {
-  const fn = depVue.match(/onCardKeydown \(t, e\) \{[\s\S]*?\n    \},/)[0]
+  const fn = depVue.match(/onCardKeydown \(t, e\) \{[\s\S]*?\n {4}\},/)[0]
   // entry keys
   assert.match(fn, /e\.key === 'c' \|\| e\.key === 'C'/)
   assert.match(fn, /e\.ctrlKey \|\| e\.metaKey\) this\.startConnect\(t\)/)
@@ -38,7 +38,7 @@ test('w1 DepView: connect mode entered via `c` or Ctrl/Cmd+Enter; plain Enter st
 })
 
 test('w1 DepView: in connect mode Enter confirms / Tab+arrows move target / Esc cancels', () => {
-  const fn = depVue.match(/onCardKeydown \(t, e\) \{[\s\S]*?\n    \},/)[0]
+  const fn = depVue.match(/onCardKeydown \(t, e\) \{[\s\S]*?\n {4}\},/)[0]
   const connectBranch = fn.slice(0, fn.indexOf("if (this.connectSrc)") + 900)
   assert.match(fn, /k === 'Escape'\) \{ e\.preventDefault\(\); this\.cancelConnect\(\)/)
   assert.match(fn, /k === 'Tab'\) \{ e\.preventDefault\(\); this\.moveConnectTarget\(e\.shiftKey \? -1 : 1\)/)
@@ -51,11 +51,11 @@ test('w1 DepView: in connect mode Enter confirms / Tab+arrows move target / Esc 
 /* ---------------- reuse of the drag-drop write path (incl. cycle rejection) ---------------- */
 
 test('w1 DepView: confirmConnect reuses addDependency - the same method onDrop calls', () => {
-  const confirm = depVue.match(/confirmConnect \(\) \{[\s\S]*?\n    \},/)[0]
+  const confirm = depVue.match(/confirmConnect \(\) \{[\s\S]*?\n {4}\},/)[0]
   assert.match(confirm, /this\.addDependency\(tg, src\.taskId, src, tg\)/,
     'keyboard confirm must reuse addDependency, not duplicate the write logic')
   // addDependency itself carries the cycle check and is shared with onDrop
-  const add = depVue.match(/addDependency \(target, prereqId, prereqTask, dependentTask\) \{[\s\S]*?\n    \},/)[0]
+  const add = depVue.match(/addDependency \(target, prereqId, prereqTask, dependentTask\) \{[\s\S]*?\n {4}\},/)[0]
   assert.match(add, /cycleErr/, 'cycle rejection lives inside the shared addDependency')
   assert.match(depVue, /side === 'right'\) this\.addDependency/, 'mouse drop path unchanged')
   assert.match(depVue, /else this\.addDependency/, 'mouse drop path unchanged (left half)')
@@ -63,7 +63,7 @@ test('w1 DepView: confirmConnect reuses addDependency - the same method onDrop c
 
 test('w1 DepView: Esc can always exit - card handler + wrap-level fallback + cancel resets state', () => {
   assert.match(depVue, /@keydown\.esc="cancelConnect"/, 'wrap-level Esc fallback')
-  const cancel = depVue.match(/cancelConnect \(\) \{[\s\S]*?\n    \},/)[0]
+  const cancel = depVue.match(/cancelConnect \(\) \{[\s\S]*?\n {4}\},/)[0]
   assert.match(cancel, /this\.connectSrc = ''/)
   assert.match(cancel, /this\.connectTargetIdx = 0/)
 })
@@ -91,16 +91,16 @@ test('w1 DepView: connect mode hint is announced (role=status + aria-live=polite
 })
 
 test('w1 DepView: connect-mode target navigation wraps and never targets the source itself', () => {
-  const move = depVue.match(/moveConnectTarget \(delta\) \{[\s\S]*?\n    \},/)[0]
+  const move = depVue.match(/moveConnectTarget \(delta\) \{[\s\S]*?\n {4}\},/)[0]
   assert.match(move, /% n/, 'index math must wrap')
-  const targets = depVue.match(/connectTargets \(\) \{[\s\S]*?\n    \},/)[0]
+  const targets = depVue.match(/connectTargets \(\) \{[\s\S]*?\n {4}\},/)[0]
   assert.match(targets, /t\.taskId !== this\.connectSrc/, 'source card excluded from targets')
-  const id = depVue.match(/connectTargetId \(\) \{[\s\S]*?\n    \},/)[0]
+  const id = depVue.match(/connectTargetId \(\) \{[\s\S]*?\n {4}\},/)[0]
   assert.match(id, /% tg\.length/, 'target id lookup is bounds-safe')
 })
 
 test('w1 DepView: keyboard context menu (Shift+F10) reaches the same taskContextMenu with remove-dep extras', () => {
-  const fn = depVue.match(/onCardKeydown \(t, e\) \{[\s\S]*?\n    \},/)[0]
+  const fn = depVue.match(/onCardKeydown \(t, e\) \{[\s\S]*?\n {4}\},/)[0]
   assert.match(fn, /e\.key === 'F10' && e\.shiftKey/)
   assert.match(fn, /this\.taskContextMenu\(t, e\)/)
   assert.match(depVue, /@contextmenu="taskContextMenu\(t, \$event\)"/, 'mouse contextmenu binding intact')

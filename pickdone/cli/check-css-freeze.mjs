@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* eslint-env node */
 /**
  * CSS freeze gate (component-absorption refactor guardrail).
  * 全局沉积文件(theme-dark.css;style-1..4 已于 2026-09 退役)只许删不许增:

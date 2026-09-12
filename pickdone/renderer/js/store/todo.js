@@ -657,12 +657,15 @@ export default {
     async syncTodos ({ state, commit, dispatch }) {
       if (state.isSyncing) return
       commit('setSyncing', true)
+      // Declared out here (not in the try) so the catch's retry-enqueue can reach it — a `const`
+      // inside the try block is invisible to catch, which silently killed the whole compensation
+      let snapshot = []
       try {
         commit('bumpVersion')
         const serverV = state.version
         // Snapshot only dirty rows (status !== 'sync'); during the await, the user's new edits (status='update') aren't wrongly marked synced.
         // An already-synced whole table skips the wholesale upsertMany write entirely (Ctrl+S with no changes = no write)
-        const snapshot = [...state.todoList, ...state.recycleList].filter(t => t.status !== 'sync')
+        snapshot = [...state.todoList, ...state.recycleList].filter(t => t.status !== 'sync')
         if (!snapshot.length) return
         const snapshotIds = new Set(snapshot.map(t => t.taskId))
         // Atomic commit (W3 2026-09-12): rows + todosVersion cursor go to the DB in ONE transaction
@@ -678,7 +681,12 @@ export default {
         ;[...state.todoList, ...state.recycleList]
           .filter(t => snapshotIds.has(t.taskId) && t.status !== 'update' && t.status !== 'delete')
           .forEach(t => { t.status = 'sync'; t.version = serverV })
-      } catch (err) { reportError('syncTodos', err) } finally {
+      } catch (err) {
+        reportError('syncTodos', err)
+        // Enqueue for retry like reorderTodos/safeUpsert (round-6 leftover): rows stay dirty in memory,
+        // but the quit-flush replay needs the op verbatim to survive a close-before-retry
+        try { _pendingUpserts.push({ op: 'commitSyncBatch', params: { rows: deproxyRows(snapshot), version: state.version } }) } catch { /* keep the UI flow alive */ }
+      } finally {
         commit('setSyncing', false)
         // In the finally block: the empty-snapshot early return used to skip the critical backup entirely
         dispatch('writeCriticalBackup')
