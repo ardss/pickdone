@@ -5,12 +5,14 @@
 function createQuitAckTracker () {
   let token = 0
   const acked = new Set()
+  const abandoned = new Set()
   let expected = 0
   return {
     /** Open a new round; returns the token to broadcast. liveWindows = count of windows we sent to. */
     beginRound (liveWindows, roundToken) {
       token = roundToken
       acked.clear()
+      abandoned.clear()
       expected = liveWindows
       return token
     },
@@ -25,6 +27,17 @@ function createQuitAckTracker () {
     ack (t, senderId) {
       if (t !== token || senderId == null || acked.has(senderId)) return false
       acked.add(senderId)
+      return true
+    },
+    /** P2 2026-09-12: a window destroyed between the send and its ack can never ack — without this
+     *  the quit path waited out the full 2s cap every time the window closed mid-handshake. Drops the
+     *  sender from the expected count (idempotent; a sender that already acked is a no-op, since its
+     *  ack is what satisfies allAcked). Returns true when expected was actually decremented. */
+    abandon (senderId) {
+      if (senderId == null || abandoned.has(senderId)) return false
+      abandoned.add(senderId)
+      if (acked.has(senderId)) return false
+      expected = Math.max(0, expected - 1)
       return true
     },
     /** True when nobody was expected (fast path) or every live window has acked. */

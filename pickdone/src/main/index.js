@@ -516,7 +516,21 @@ app.on('before-quit', () => {
   // quit-ack now guarantees strictly increasing tokens across rounds.
   const roundToken = quitAck.nextToken()
   for (const w of BrowserWindow.getAllWindows()) {
-    try { if (w && !w.isDestroyed()) { w.webContents.send('app-quitting-flush', { token: roundToken }); liveWindows++ } } catch {}
+    try {
+      if (w && !w.isDestroyed()) {
+        w.webContents.send('app-quitting-flush', { token: roundToken })
+        liveWindows++
+        // P2 2026-09-12: a window destroyed between this send and its ack can never ack, so the
+        // flush window previously waited out the full 2s cap every time a window died mid-handshake.
+        // When the webContents is destroyed (window closed) or its renderer process is gone (crash —
+        // it can never ack either), abandon the sender so allAcked() can go true early. Idempotent
+        // via the tracker's abandoned set; acks from still-live windows are unaffected.
+        const senderId = w.webContents.id
+        const onGone = () => { try { quitAck.abandon(senderId) } catch { /* dying process */ } }
+        w.webContents.once('destroyed', onGone)
+        w.webContents.once('render-process-gone', onGone)
+      }
+    } catch {}
   }
   quitAck.beginRound(liveWindows, roundToken)
 })

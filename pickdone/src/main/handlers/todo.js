@@ -89,7 +89,11 @@ module.exports = function todoHandlers (ctx) {
       } finally {
         if (unsuppress) unsuppress()
       }
-      if (unsuppress) broadcastTomatoRecordsChanged(op, e.sender)
+      // P2 2026-09-12: the broadcast must never throw past this point — a synchronous send failure
+      // (half-destroyed peer window) would reject the IPC invoke even though the DB write succeeded,
+      // making the renderer treat a landed write as failed (retry paths / wrong UI state). Aligns with
+      // the db.js setLedgerChangedHook contract: broadcast failure must not block the write; log only.
+      if (unsuppress) { try { broadcastTomatoRecordsChanged(op, e.sender) } catch (err) { log.warn('[IPC] tomato-records broadcast failed (write already landed):', op, err) } }
       // Our own write just touched the DB/-wal: re-baseline the external-write watcher immediately,
       // otherwise the next poll mistakes our write for an external one (full reload + undo-stack wipe)
       if (dbm.isWriteOp(op)) { try { const rw = resyncDbWatch(); if (rw) rw() } catch { /* best-effort */ } }
