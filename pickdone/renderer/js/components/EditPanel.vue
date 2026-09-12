@@ -62,7 +62,7 @@
 
       <!-- Task dependencies (experimental; gated by devMode = developerMode && showDepsModule): predecessor multi-select, FS semantics -- task becomes ready only when all predecessors are done -->
       <div v-if="devMode" class="ep-cat-wrap">
-        <ep-dependencies :task="e" @patch="patchPreds"/>
+        <ep-dependencies ref="depBlock" :task="e" @patch="patchPreds"/>
       </div>
 
       <div class="ep-row ep-tags-row">
@@ -90,7 +90,7 @@
         <span class="ep-sub-check" :class="{on: task&&task.complete}">{{ (task&&task.complete) ? '✓' : '' }}</span>
       </div>
 
-      <ep-reminders :task="e" @commit="onRemindersCommit" @clear="onRemindersClear" @offsets="onRemindersOffsets"/>
+      <ep-reminders ref="remindBlock" :task="e" @commit="onRemindersCommit" @clear="onRemindersClear" @offsets="onRemindersOffsets"/>
 
       <div v-if="!inRecycle" class="ep-row ep-repeat-row" role="button" tabindex="0"
            :aria-label="isRepeat ? $t('statsJ.EditPanel.editRepeatRule') : $t('statsJ.EditPanel.setRepeat')"
@@ -241,9 +241,11 @@ export default {
     // (same guard as the original `_dirtyFlags` initialization).
     this._save = createSaveQueue(this.$store, {
       getTaskId: () => this.e && this.e.taskId,
-      // Dirty list-style fields are serialized lazily at drain time (callback-time values)
+      // Dirty list-style fields are serialized lazily at drain time (callback-time values).
+      // Subtask rows carry a render-only `_key` (stable v-for key) — stripped here so it never
+      // leaks into the persisted subtasks JSON.
       dirtyPatchFor: (k) => ({
-        subtasks: { subtasks: JSON.stringify(this.subList) },
+        subtasks: { subtasks: JSON.stringify(this.subList.map(({ _key, ...rest }) => rest)) },
         imgs: { image: JSON.stringify(this.imgList) },
         files: { files: JSON.stringify(this.fileList) },
         preds: { predecessors: this.e && this.e.predecessors }
@@ -253,6 +255,8 @@ export default {
       onFail: () => { this.saveFailed = true }
     })
     this._save.boot()
+    // Auto-increment sequence for stable subtask row keys (render-only, stripped at save time)
+    this._subKeySeq = 0
   },
   computed: {
     task () { return this.$store.state.todo.todoList.find(t => t.taskId === (this.e && this.e.taskId)) || null },
@@ -318,9 +322,15 @@ export default {
 
     // First open of the edit panel: spotlight tour for the attachment toolbar (in-context teaching)
     this.$nextTick(() => { import('../utils/onboardingTours.js').then(mod => mod.maybeRunTour('editpanel', 600)).catch(() => {}) })
-    // Esc closes the topmost overlay: image preview first, then the edit panel itself
+    // Esc closes the topmost overlay: inner popovers first (category / reminders / dependencies),
+    // then the image preview, then the edit panel itself
     this._onKeydown = (e) => {
       if (e.key !== 'Escape') return
+      if (this.catOpen) { this.catOpen = false; return }
+      const rem = this.$refs.remindBlock
+      if (rem && rem.remindOpen) { rem.remindOpen = false; return }
+      const dep = this.$refs.depBlock
+      if (dep && dep.depOpen) { dep.depOpen = false; return }
       if (this.previewImg) { this.previewImg = null; return }
       // When an upper modal (settings/recurring rule/feedback dialog) is open, Esc belongs to it; do not close the edit panel through the wall
       const ui = this.$store.state.ui
@@ -388,6 +398,8 @@ export default {
       if (!s.visible || !s.taskId) return
       this.flushSave()
       this.subList = JSON.parse(JSON.stringify(s.sublist))
+      // Mint stable render keys for rows imported from the store (persisted subtasks carry no _key)
+      for (const sub of this.subList) { if (sub && sub._key == null) sub._key = ++this._subKeySeq }
       this.imgList = JSON.parse(JSON.stringify(s.todoImageList))
       this.fileList = JSON.parse(JSON.stringify(s.fileList))
       this.e = JSON.parse(JSON.stringify(s))
@@ -507,7 +519,7 @@ export default {
     /* ===== Subtasks: EpSubtasks emits; subList + the toggle-complete linkage stay here ===== */
     addSub (text) {
       if (!text || !this.e) return
-      this.subList.push({ text, checked: false })
+      this.subList.push({ text, checked: false, _key: ++this._subKeySeq })
       this.markDirty('subtasks'); this.queueSave({})
     },
     toggleSub (s) {

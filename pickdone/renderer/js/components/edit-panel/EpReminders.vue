@@ -50,6 +50,14 @@
 import { dayjs, FMT } from '../../utils/core.js'
 import { removeWithUndo } from '../../utils/confirm.js'
 
+// [h7-fixes] pure-start
+/** Undo re-insert index: the index captured at delete time can be stale after concurrent
+ *  removals — clamp it to the current list length instead of blindly reusing it. */
+function clampInsertIndex (len, i) { return Math.max(0, Math.min(i, len)) }
+/** Undo must not cross tasks: only re-insert when the panel still edits the same task. */
+function sameTask (currentId, capturedId) { return !!currentId && currentId === capturedId }
+// [h7-fixes] pure-end
+
 export default {
   name: 'EpReminders',
   props: {
@@ -57,6 +65,13 @@ export default {
     task: { type: Object as any, default: null }
   },
   emits: ['commit', 'clear', 'offsets'],
+  watch: {
+    // The panel stays open across a task switch (hydrate replaces the task prop without
+    // unmounting this child): stale local editing state -- the open popover and the rows
+    // of the previous task -- must be reset, otherwise the old rows get committed into
+    // the new task on the next commitReminders.
+    'task.taskId' () { this.reset() }
+  },
   data () {
     return {
       remindOpen: false,
@@ -97,13 +112,26 @@ export default {
     },
     removeRemindRow (i) {
       const row = this.remindRows[i]
+      const tid = this.task && this.task.taskId
       removeWithUndo(this,
         () => {
           this.remindRows.splice(i, 1)
           if (!this.remindRows.length) { this.clearRemind(); return }
           this.commitReminders()
         },
-        () => { this.remindRows.splice(i, 0, row); this.commitReminders() })
+        () => {
+          // Undo must not cross tasks: if the panel switched tasks while the undo toast
+          // was pending, the deleted reminder belongs to the previous task — drop it.
+          if (!sameTask(this.task && this.task.taskId, tid)) return
+          // The captured index may be stale after concurrent removals — clamp, don't reuse blindly
+          this.remindRows.splice(clampInsertIndex(this.remindRows.length, i), 0, row)
+          this.commitReminders()
+        })
+    },
+    /** Task switch: collapse the popover and drop uncommitted local rows. */
+    reset () {
+      this.remindOpen = false
+      this.remindRows = []
     },
     /** Sort the edited rows into absolute timestamps and hand them to the parent for persistence. */
     commitReminders () {

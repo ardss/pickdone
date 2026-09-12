@@ -6,13 +6,15 @@
     <span class="ml-auto"></span>
     <span class="ep-row-arrow" :class="{on: depOpen}">▾</span>
   </div>
-  <div v-if="depOpen" v-click-outside="() => depOpen = false" class="ep-cat-pop" role="listbox">
-    <div v-for="(name, i) in depPredNames" :key="depPreds[i]" class="ep-cat-opt" role="option">
+  <!-- ARIA: group (not listbox) — the rows are not selectable options, and the existing-pred
+       row embeds a remove button, which would be invalid nesting inside an option -->
+  <div v-if="depOpen" v-click-outside="() => depOpen = false" class="ep-cat-pop" role="group">
+    <div v-for="(name, i) in depPredNames" :key="depPreds[i]" class="ep-cat-opt">
       <span class="ep-cat-dot" style="background:var(--brand)"></span> {{ name }}
       <span class="ml-auto"></span>
       <button class="close-x" :aria-label="$t('statsJ.EditPanel.depsRemove')" @click.stop="rmPred(depPreds[i])"></button>
     </div>
-    <div v-for="c in depCandidates" :key="c.taskId" class="ep-cat-opt" role="option"
+    <div v-for="c in depCandidates" :key="c.taskId" class="ep-cat-opt" role="button"
          tabindex="0" @click="addPred(c.taskId)" @keydown.enter.prevent="addPred(c.taskId)">
       <span class="ep-cat-dot" style="background:var(--text-4)"></span> + {{ c.taskContent }}
     </div>
@@ -68,7 +70,8 @@ export default {
     },
     addPred (id) {
       if (!id || this.depPreds.includes(id)) return
-      this.depOpen = false
+      // Stay expanded after adding (symmetric with rmPred): multi-select workflows add several
+      // predecessors in a row; force-collapsing made that a repeated reopen dance
       this.$emit('patch', JSON.stringify(this.depPreds.concat(id)))
     },
     rmPred (id) {

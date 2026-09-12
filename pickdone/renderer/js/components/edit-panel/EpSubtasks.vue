@@ -1,6 +1,8 @@
 <template>
   <div class="ep-subs" ref="subList">
-    <div v-for="(s,i) in subs" :key="i" class="ep-sub">
+    <!-- Stable per-row key (`_key` minted by the parent on hydrate/add): the index key desynced
+         rows after Sortable moved DOM nodes / concurrent removals -->
+    <div v-for="(s,i) in subs" :key="s._key != null ? s._key : s.text + '_' + i" class="ep-sub">
       <span class="ep-sub-check" :class="{on:s.checked}" role="checkbox" :aria-checked="s.checked ? 'true' : 'false'"
             tabindex="0" @click.stop="toggleSub(s)" @keydown.enter.prevent.stop="toggleSub(s)">{{ s.checked ? '✓' : '' }}</span>
       <span class="ep-sub-text" :class="{strike:s.checked}" @click="toggleSub(s)">{{s.text}}</span>
