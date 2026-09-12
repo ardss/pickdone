@@ -70,7 +70,7 @@
     "electron": "^39.8.10",
     "electron-builder": "^24.13.3",
     "element-plus": "^2.14.5",
-    "eslint": "^8.57.0",
+    "eslint": "^10.10.0",
     "eslint-plugin-vue": "^9.33.0",
     "html2canvas": "^1.4.1",
     "jsdom": "^29.1.1",
