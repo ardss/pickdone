@@ -123,7 +123,14 @@ export default {
         await this.$store.dispatch('_rt/refreshFromDb')
         this.$message.success(this.$t('statsH.SettingsModal.importDone', { n: done.imported, d: done.duplicates }))
       } catch (e) {
-        this.$message.error(this.$t('statsE.SettingsModal.importFailedMsg') + (e && e.message ? e.message : String(e)))
+        // H8 (2026-09-12): worker error codes (FORMAT_UNKNOWN/EMPTY_FILE/USAGE) arrive as a
+        // '[CODE] message' prefix — Electron's invoke() rejection strips custom Error props,
+        // so the message prefix is the only channel that survives the context bridge.
+        const msg = (e && e.message) || String(e)
+        const code = (msg.match(/^\[(FORMAT_UNKNOWN|EMPTY_FILE|USAGE)\]/) || [])[1]
+        if (code === 'FORMAT_UNKNOWN') this.$message.error(this.$t('statsE.SettingsModal.importErrFormatUnknown'))
+        else if (code === 'EMPTY_FILE') this.$message.error(this.$t('statsE.SettingsModal.importErrEmptyFile'))
+        else this.$message.error(this.$t('statsE.SettingsModal.importFailedMsg') + msg)
       } finally { this.importing = false }
     },
     async pickBackupDir () {
@@ -229,23 +236,29 @@ export default {
             if (!r || !r.ok) return this.$message.error(this.$t('statsE.SettingsModal.backupFileNotFoundMsg') + ((r && r.error) ? ': ' + r.error : ''))
             const d = JSON.parse(r.text); const b = d.backup || {}
             await this.$store.dispatch('todo/writeEventBackup', 'restore')
-            const rows = []
-            if (b.todoState) { const td = this.parseTodoState(b.todoState); (td.todoList || []).forEach(r => rows.push(r)); (td.recycleList || []).forEach(r => rows.push(r)) }
-            if (rows.length) await window.todoAPI.dbCall('upsertMany', rows)
-            // 字段级对齐 critical 恢复:settings/habits/分类与专注账本同份同回,否则"恢复"后
-            // 设置/习惯/分类消失或专注账全丢(两端恢复路径字段集必须一致)
-            if (b.settingsState) this.$store.commit('settings/restore', JSON.parse(b.settingsState))
-            if (b.categoryState) { const c = JSON.parse(b.categoryState); if (c.list) this.$store.commit('category/setList', c.list) }
-            if (b.habitsState) {
+            // H8 (2026-09-12): each segment is isolated — a failure in one (e.g. parseTodoState
+            // rejecting a newer schemaV) no longer aborts the rest AFTER earlier segments were
+            // already committed (partial restore was reported as total failure). The heaviest
+            // segment (todo rows) runs LAST; failed segments are reported honestly in the toast.
+            const failed = []
+            const seg = (name, fn) => { try { fn() } catch (e) { console.error('[settings] restore segment failed: ' + name, e); failed.push(name) } }
+            if (b.settingsState) seg('settings', () => this.$store.commit('settings/restore', JSON.parse(b.settingsState)))
+            if (b.categoryState) seg('category', () => { const c = JSON.parse(b.categoryState); if (c.list) this.$store.commit('category/setList', c.list) })
+            if (b.habitsState) seg('habits', () => {
+              const hb = JSON.parse(b.habitsState)
+              if (hb && Array.isArray(hb.habits)) this.$store.commit('habits/replaceAll', hb)
+            })
+            let rows = []
+            if (b.todoState) {
               try {
-                const hb = JSON.parse(b.habitsState)
-                if (hb && Array.isArray(hb.habits)) this.$store.commit('habits/replaceAll', hb)
-              } catch {}
+                const td = this.parseTodoState(b.todoState); (td.todoList || []).forEach(r => rows.push(r)); (td.recycleList || []).forEach(r => rows.push(r))
+                if (rows.length) await window.todoAPI.dbCall('upsertMany', rows)
+              } catch (e) { console.error('[settings] restore segment failed: todo', e); failed.push('todo'); rows = [] }
             }
-            await this.restoreTomatoLedger(b)
+            try { await this.restoreTomatoLedger(b) } catch (e) { console.error('[settings] restore segment failed: tomato', e); failed.push('tomato') }
             this.$store.dispatch('_rt/refreshFromDb')
             this.$store.dispatch('tomato/recordsReload').catch(e => console.error('[settings] tomato/recordsReload after restore failed:', e))
-            this.$message.success(this.$t('statsH.SettingsModal.restoredCount', { n: rows.length }))
+            this.reportRestoreResult(rows.length, failed)
           } catch (e) { this.$message.error(this.$t('statsE.SettingsModal.backupParseFailedMsg') + e.message) }
         }).catch(() => {})
     },
@@ -254,6 +267,12 @@ export default {
       const td = typeof raw === 'string' ? JSON.parse(raw) : raw
       if (td && Number(td.schemaV) > 1) throw new Error('schemaV ' + td.schemaV + ' > 1 (backup from a newer app version)')
       return td || {}
+    },
+    // H8 (2026-09-12): honest completion toast — every failed segment is named instead of a
+    // blanket "parse failed" after other segments already committed
+    reportRestoreResult (n, failed) {
+      if (failed && failed.length) this.$message.error(this.$t('statsE.SettingsModal.restorePartialFail', { n, s: failed.join(', ') }))
+      else this.$message.success(this.$t('statsH.SettingsModal.restoredCount', { n }))
     },
     // 账本回灌:行表幂等 UPSERT,缺 tomatoId/endTime 的行跳过不拖批(与主进程 dbRecovery 同规则)
     async restoreTomatoLedger (b) {
@@ -270,25 +289,28 @@ export default {
         if (!txt) return this.$message.error(this.$t('statsE.SettingsModal.backupFileNotFoundMsg'))
         try {
           const d = JSON.parse(txt); const b = d.backup || {}
-          if (b.settingsState) this.$store.commit('settings/restore', JSON.parse(b.settingsState))
-          if (b.categoryState) { const c = JSON.parse(b.categoryState); if (c.list) this.$store.commit('category/setList', c.list) }
-          if (b.habitsState) {
+          // H8 (2026-09-12): same per-segment isolation + todo-LAST ordering as restoreFromAutoBackup
+          const failed = []
+          const seg = (name, fn) => { try { fn() } catch (e) { console.error('[settings] restore segment failed: ' + name, e); failed.push(name) } }
+          if (b.settingsState) seg('settings', () => this.$store.commit('settings/restore', JSON.parse(b.settingsState)))
+          if (b.categoryState) seg('category', () => { const c = JSON.parse(b.categoryState); if (c.list) this.$store.commit('category/setList', c.list) })
+          if (b.habitsState) seg('habits', () => {
+            // Single writer via the store only: replaceAll already dual-writes LS+meta; writing LS directly from the component would create a second writer (dual-write ledger discipline)
+            const hb = JSON.parse(b.habitsState)
+            if (hb && Array.isArray(hb.habits)) this.$store.commit('habits/replaceAll', hb)
+          })
+          let rows = []
+          if (b.todoState) {
             try {
-              const hb = JSON.parse(b.habitsState)
-              if (hb && Array.isArray(hb.habits)) {
-                // Single writer via the store only: replaceAll already dual-writes LS+meta; writing LS directly from the component would create a second writer (dual-write ledger discipline)
-                this.$store.commit('habits/replaceAll', hb)
-              }
-            } catch {}
+              const td = this.parseTodoState(b.todoState); (td.todoList || []).forEach(r => rows.push(r)); (td.recycleList || []).forEach(r => rows.push(r))
+              if (rows.length) await window.todoAPI.dbCall('upsertMany', rows)
+            } catch (e) { console.error('[settings] restore segment failed: todo', e); failed.push('todo'); rows = [] }
           }
-          const rows = []
-          if (b.todoState) { const td = this.parseTodoState(b.todoState); (td.todoList || []).forEach(r => rows.push(r)); (td.recycleList || []).forEach(r => rows.push(r)) }
-          if (rows.length) await window.todoAPI.dbCall('upsertMany', rows)
           // 回收站行与专注账本同份同回(此前 UI 恢复只进 todoList,同一份 dump 走启动灾备却能全回——两端语义割裂)
-          await this.restoreTomatoLedger(b)
+          try { await this.restoreTomatoLedger(b) } catch (e) { console.error('[settings] restore segment failed: tomato', e); failed.push('tomato') }
           this.$store.dispatch('_rt/refreshFromDb')
           this.$store.dispatch('tomato/recordsReload').catch(e => console.error('[settings] tomato/recordsReload after restore failed:', e))
-          this.$message.success(this.$t('statsH.SettingsModal.restoredCount', { n: rows.length }))
+          this.reportRestoreResult(rows.length, failed)
         } catch (e) { this.$message.error(this.$t('statsE.SettingsModal.backupParseFailedMsg') + e.message) }
       }).catch(() => {})
     },

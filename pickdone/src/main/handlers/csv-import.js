@@ -46,8 +46,13 @@ function runImportParse (text, format = 'auto') {
     worker.on('message', m => {
       if (m && m.ok) finish(resolve, m)
       else {
-        const perr = new Error((m && m.error) || 'import: parse worker failed')
-        if (m && m.code) perr.code = m.code // ImportError code (FORMAT_UNKNOWN/EMPTY_FILE/USAGE) for renderer branching
+        // H8 (2026-09-12): Electron's invoke() rejection serialization strips custom Error props
+        // (only name+message survive the context bridge), so a bare perr.code never reaches the
+        // renderer. Encode the code INTO the message ('[CODE] original') — the renderer branches
+        // on the prefix to show friendly copy (FORMAT_UNKNOWN / EMPTY_FILE).
+        const raw = (m && m.error) || 'import: parse worker failed'
+        const perr = (m && m.code) ? new Error('[' + m.code + '] ' + raw) : new Error(raw)
+        if (m && m.code) perr.code = m.code // kept for in-process consumers (main-process tests)
         finish(reject, perr)
       }
     })
