@@ -239,31 +239,8 @@ export default {
             const r = await window.todoAPI.readAutoBackup(this.st.backupDir || '', this.autoBackupPick)
             // read-auto-backup 现在返回 { ok, text?, error? }:读取失败显式报错,不再与「文件不存在」混为空串
             if (!r || !r.ok) return this.$message.error(this.$t('statsE.SettingsModal.backupFileNotFoundMsg') + ((r && r.error) ? ': ' + r.error : ''))
-            const d = JSON.parse(r.text); const b = d.backup || {}
             await this.$store.dispatch('todo/writeEventBackup', 'restore')
-            // H8 (2026-09-12): each segment is isolated — a failure in one (e.g. parseTodoState
-            // rejecting a newer schemaV) no longer aborts the rest AFTER earlier segments were
-            // already committed (partial restore was reported as total failure). The heaviest
-            // segment (todo rows) runs LAST; failed segments are reported honestly in the toast.
-            const failed = []
-            const seg = (name, fn) => { try { fn() } catch (e) { console.error('[settings] restore segment failed: ' + name, e); failed.push(name) } }
-            if (b.settingsState) seg('settings', () => this.$store.commit('settings/restore', JSON.parse(b.settingsState)))
-            if (b.categoryState) seg('category', () => { const c = JSON.parse(b.categoryState); if (c.list) this.$store.commit('category/setList', c.list) })
-            if (b.habitsState) seg('habits', () => {
-              const hb = JSON.parse(b.habitsState)
-              if (hb && Array.isArray(hb.habits)) this.$store.commit('habits/replaceAll', hb)
-            })
-            let rows = []
-            if (b.todoState) {
-              try {
-                const td = this.parseTodoState(b.todoState); (td.todoList || []).forEach(r => rows.push(r)); (td.recycleList || []).forEach(r => rows.push(r))
-                if (rows.length) await window.todoAPI.dbCall('upsertMany', rows)
-              } catch (e) { console.error('[settings] restore segment failed: todo', e); failed.push('todo'); rows = [] }
-            }
-            try { await this.restoreTomatoLedger(b) } catch (e) { console.error('[settings] restore segment failed: tomato', e); failed.push('tomato') }
-            this.$store.dispatch('_rt/refreshFromDb')
-            this.$store.dispatch('tomato/recordsReload').catch(e => console.error('[settings] tomato/recordsReload after restore failed:', e))
-            this.reportRestoreResult(rows.length, failed)
+            await this.applyRestoreDump(JSON.parse(r.text))
           } catch (e) { this.$message.error(this.$t('statsE.SettingsModal.backupParseFailedMsg') + e.message) }
         }).catch(() => {})
     },
@@ -279,6 +256,34 @@ export default {
       if (failed && failed.length) this.$message.error(this.$t('statsE.SettingsModal.restorePartialFail', { n, s: failed.join(', ') }))
       else this.$message.success(this.$t('statsH.SettingsModal.restoredCount', { n }))
     },
+    /** Shared restore pipeline for both paths (auto-backup file and critical-state): per-segment
+     *  isolation — a failure in one (e.g. parseTodoState rejecting a newer schemaV) no longer
+     *  aborts the rest AFTER earlier segments were already committed. The heaviest segment (todo
+     *  rows) runs LAST; failed segments are reported honestly in the toast. */
+    async applyRestoreDump (dump) {
+      const b = (dump && dump.backup) || {}
+      const failed = []
+      const seg = (name, fn) => { try { fn() } catch (e) { console.error('[settings] restore segment failed: ' + name, e); failed.push(name) } }
+      if (b.settingsState) seg('settings', () => this.$store.commit('settings/restore', JSON.parse(b.settingsState)))
+      if (b.categoryState) seg('category', () => { const c = JSON.parse(b.categoryState); if (c.list) this.$store.commit('category/setList', c.list) })
+      if (b.habitsState) seg('habits', () => {
+        // Single writer via the store only: replaceAll already dual-writes LS+meta; writing LS directly from the component would create a second writer (dual-write ledger discipline)
+        const hb = JSON.parse(b.habitsState)
+        if (hb && Array.isArray(hb.habits)) this.$store.commit('habits/replaceAll', hb)
+      })
+      let rows = []
+      if (b.todoState) {
+        try {
+          const td = this.parseTodoState(b.todoState); (td.todoList || []).forEach(r => rows.push(r)); (td.recycleList || []).forEach(r => rows.push(r))
+          if (rows.length) await window.todoAPI.dbCall('upsertMany', rows)
+        } catch (e) { console.error('[settings] restore segment failed: todo', e); failed.push('todo'); rows = [] }
+      }
+      // 回收站行与专注账本同份同回(此前 UI 恢复只进 todoList,同一份 dump 走启动灾备却能全回——两端语义割裂)
+      try { await this.restoreTomatoLedger(b) } catch (e) { console.error('[settings] restore segment failed: tomato', e); failed.push('tomato') }
+      this.$store.dispatch('_rt/refreshFromDb')
+      this.$store.dispatch('tomato/recordsReload').catch(e => console.error('[settings] tomato/recordsReload after restore failed:', e))
+      this.reportRestoreResult(rows.length, failed)
+    },
     // 账本回灌:行表幂等 UPSERT,缺 tomatoId/endTime 的行跳过不拖批(与主进程 dbRecovery 同规则)
     async restoreTomatoLedger (b) {
       if (!b.tomatoRecords) return
@@ -293,29 +298,7 @@ export default {
         try { txt = await window.todoAPI.readCriticalStateBackup() } catch (e) { return this.$message.error(this.$t('statsE.SettingsModal.backupParseFailedMsg') + e.message) }
         if (!txt) return this.$message.error(this.$t('statsE.SettingsModal.backupFileNotFoundMsg'))
         try {
-          const d = JSON.parse(txt); const b = d.backup || {}
-          // H8 (2026-09-12): same per-segment isolation + todo-LAST ordering as restoreFromAutoBackup
-          const failed = []
-          const seg = (name, fn) => { try { fn() } catch (e) { console.error('[settings] restore segment failed: ' + name, e); failed.push(name) } }
-          if (b.settingsState) seg('settings', () => this.$store.commit('settings/restore', JSON.parse(b.settingsState)))
-          if (b.categoryState) seg('category', () => { const c = JSON.parse(b.categoryState); if (c.list) this.$store.commit('category/setList', c.list) })
-          if (b.habitsState) seg('habits', () => {
-            // Single writer via the store only: replaceAll already dual-writes LS+meta; writing LS directly from the component would create a second writer (dual-write ledger discipline)
-            const hb = JSON.parse(b.habitsState)
-            if (hb && Array.isArray(hb.habits)) this.$store.commit('habits/replaceAll', hb)
-          })
-          let rows = []
-          if (b.todoState) {
-            try {
-              const td = this.parseTodoState(b.todoState); (td.todoList || []).forEach(r => rows.push(r)); (td.recycleList || []).forEach(r => rows.push(r))
-              if (rows.length) await window.todoAPI.dbCall('upsertMany', rows)
-            } catch (e) { console.error('[settings] restore segment failed: todo', e); failed.push('todo'); rows = [] }
-          }
-          // 回收站行与专注账本同份同回(此前 UI 恢复只进 todoList,同一份 dump 走启动灾备却能全回——两端语义割裂)
-          try { await this.restoreTomatoLedger(b) } catch (e) { console.error('[settings] restore segment failed: tomato', e); failed.push('tomato') }
-          this.$store.dispatch('_rt/refreshFromDb')
-          this.$store.dispatch('tomato/recordsReload').catch(e => console.error('[settings] tomato/recordsReload after restore failed:', e))
-          this.reportRestoreResult(rows.length, failed)
+          await this.applyRestoreDump(JSON.parse(txt))
         } catch (e) { this.$message.error(this.$t('statsE.SettingsModal.backupParseFailedMsg') + e.message) }
       }).catch(() => {})
     },
