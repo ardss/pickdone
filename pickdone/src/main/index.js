@@ -501,6 +501,8 @@ let flushDone = false // flush window finished; second will-quit passes through 
 // for updater's autoInstallOnAppQuit) is unchanged.
 const { createQuitAckTracker } = require('./quit-ack')
 const quitAck = createQuitAckTracker()
+// webContents -> latest 'destroyed'/'render-process-gone' abandon closure (WeakMap: dying senders GC freely)
+const quitAckGone = new WeakMap()
 app.on('before-quit', () => {
   // Second pass (the re-issued app.quit() below): the DB is already closed, re-broadcasting the flush
   // would only be a dead letter — renderer invokes would fail against a closed handle.
@@ -526,7 +528,17 @@ app.on('before-quit', () => {
         // it can never ack either), abandon the sender so allAcked() can go true early. Idempotent
         // via the tracker's abandoned set; acks from still-live windows are unaffected.
         const senderId = w.webContents.id
+        // P3 2026-09-12: before-quit can fire more than once (aborted round → re-issued quit), and
+        // blind once() attaches then accumulated one dead closure pair per round on long-lived
+        // webContents. Keep the latest onGone per webContents in a WeakMap and remove it before
+        // re-attaching, so each sender holds at most one live pair.
+        const prev = quitAckGone.get(w.webContents)
+        if (prev) {
+          w.webContents.removeListener('destroyed', prev)
+          w.webContents.removeListener('render-process-gone', prev)
+        }
         const onGone = () => { try { quitAck.abandon(senderId) } catch { /* dying process */ } }
+        quitAckGone.set(w.webContents, onGone)
         w.webContents.once('destroyed', onGone)
         w.webContents.once('render-process-gone', onGone)
       }
