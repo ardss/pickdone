@@ -133,11 +133,8 @@ test('(4) cancelling the second confirmation -> no dispatch', async () => {
 })
 
 test('i18n keys: the clear-recycle-bin keyword is symmetric between zh/en', () => {
-  const fs = require_('node:fs')
-  const path = require_('node:path')
-  const root = path.resolve('renderer/js/i18n/locales')
-  const zhText = fs.readFileSync(path.join(root, 'zh-CN-C.js'), 'utf8')
-  const enText = fs.readFileSync(path.join(root, 'en-US-C.js'), 'utf8')
+  const zhText = readAnchor('i18nZhC')
+  const enText = readAnchor('i18nEnC')
   assert.ok(/clearKeyword:\s*'清空回收站'/.test(zhText), 'zh clearKeyword should equal "清空回收站"')
   assert.ok(/clearKeyword:\s*'empty recycle bin'/.test(enText), 'en clearKeyword should equal "empty recycle bin"')
   assert.ok(/clearKeywordMismatch:/.test(zhText) && /clearKeywordMismatch:/.test(enText), 'clearKeywordMismatch exists on both sides')
@@ -150,8 +147,7 @@ test('i18n keys: the clear-recycle-bin keyword is symmetric between zh/en', () =
 
 test('RecycleBinView.clearAll must check the list emptiness before confirm (prevents three popups on an empty bin)', () => {
   // Static check: the first line of the source should be if (!list.length) return - avoiding a mock stand-in
-  const fs = require_('node:fs')
-  const src = fs.readFileSync('renderer/js/views/RecycleBinView.vue', 'utf8')
+  const src = readAnchor('recycleBinView')
   const m = src.match(/clearAll\s*\(\s*\)\s*\{([\s\S]*?)\n\s{4}\}/)
   assert.ok(m, 'the clearAll function was not found')
   const body = m[1]
@@ -162,5 +158,4 @@ test('RecycleBinView.clearAll must check the list emptiness before confirm (prev
   assert.ok(confirmIdx > emptyCheckIdx, '$confirm must come after the empty-list short-circuit')
 })
 
-import { createRequire } from 'module'
-const require_ = createRequire(import.meta.url)
+import { readAnchor } from '../../lib/source-anchors.mjs'

@@ -7,12 +7,12 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
+import { ANCHORS, REPO_ROOT } from '../../lib/source-anchors.mjs'
 
-const ROOT = process.cwd()
-const read = p => fs.readFileSync(path.join(ROOT, p), 'utf8')
+const read = p => fs.readFileSync(path.join(REPO_ROOT, p), 'utf8')
 
 function manifestKeys () {
-  const src = read('cli/lib.js')
+  const src = read(ANCHORS.cliLib)
   const m = src.match(/const SETTINGS_MANIFEST = \{[\s\S]*?\n\}/)
   assert.ok(m, 'SETTINGS_MANIFEST 必须存在于 cli/lib.js')
   const keys = new Set()
@@ -24,7 +24,7 @@ function manifestKeys () {
 }
 
 function defaultKeys () {
-  const src = read('renderer/js/store/settings.js')
+  const src = read(ANCHORS.settingsStore)
   const m = src.match(/export const DEFAULT_SETTINGS = \{[\s\S]*?\n\}/)
   assert.ok(m, 'DEFAULT_SETTINGS 必须存在于 renderer/js/store/settings.js')
   const keys = new Set()

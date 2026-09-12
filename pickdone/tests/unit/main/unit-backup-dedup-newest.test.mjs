@@ -8,14 +8,14 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { createRequire } from 'module'
+import { ANCHORS, REPO_ROOT } from '../../lib/source-anchors.mjs'
 
 const require_ = createRequire(import.meta.url)
 const fixUtil = require_('../../../src/main/fix-util.js')
-const ROOT = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '../../..')
 // R4 split: the auto-backup dedup block lives in handlers/backup.js (fallback: index.js)
-const backupSrcPath = fs.existsSync(path.join(ROOT, 'src', 'main', 'handlers', 'backup.js'))
-  ? path.join(ROOT, 'src', 'main', 'handlers', 'backup.js')
-  : path.join(ROOT, 'src', 'main', 'index.js')
+const backupSrcPath = fs.existsSync(path.join(REPO_ROOT, ANCHORS.handlersBackup))
+  ? path.join(REPO_ROOT, ANCHORS.handlersBackup)
+  : path.join(REPO_ROOT, ANCHORS.mainIndex)
 const indexSrc = fs.readFileSync(backupSrcPath, 'utf8')
 
 test('sortBackupNamesNewestFirst puts the newest snapshot first (dedup twin = index 0)', () => {

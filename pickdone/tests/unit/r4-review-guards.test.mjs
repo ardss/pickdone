@@ -12,12 +12,10 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
-import path from 'node:path'
 import { createRequire } from 'node:module'
+import { readAnchor } from '../lib/source-anchors.mjs'
 
 const require_ = createRequire(import.meta.url)
-const here = import.meta.dirname
 
 test('watch baseline: a failed mtime read (null) never clobbers the current baseline', () => {
   const { nextWatchBaseline } = require_( '../../src/main/watch-baseline.js')
@@ -41,8 +39,8 @@ test('watch baseline wiring: the todo-db:call handler re-baselines after dbm.cal
   // Static guard for the wiring itself (index.js is not requireable outside Electron): the resync call
   // must sit in the db:call handler AFTER dbm.call, gated by isWriteOp, and resync must use the pure core.
   // R4 split moved the handler into handlers/todo.js; watcher setup (and the pure core) stay in index.js.
-  let src = fs.readFileSync(path.join(here, '../../src/main/index.js'), 'utf8')
-  try { src += fs.readFileSync(path.join(here, '../../src/main/handlers/todo.js'), 'utf8') } catch {}
+  let src = readAnchor('mainIndex')
+  try { src += readAnchor('handlersTodo') } catch {}
   const callIdx = src.indexOf("r = dbm.call(op, params)")
   assert.ok(callIdx > 0, 'db:call handler found')
   const after = src.slice(callIdx, callIdx + 600)
@@ -78,7 +76,7 @@ test('quit ack tracker: zero live windows takes the fast path; a new round reset
 })
 
 test('quit ack wiring: index.js broadcast/ack/allAcked all route through the tracker', () => {
-  const src = fs.readFileSync(path.join(here, '../../src/main/index.js'), 'utf8')
+  const src = readAnchor('mainIndex')
   assert.match(src, /quitAck\.beginRound\(liveWindows, roundToken\)/, 'before-quit opens a tracker round')
   assert.match(src, /quitAck\.ack\(payload\.token, e\.sender\.id\)/, 'ack IPC handler feeds the tracker')
   assert.match(src, /allAcked = \(\) => quitAck\.allAcked\(\)/, 'will-quit polls the tracker')
@@ -104,7 +102,7 @@ test('cli tomato: expired receipt keeps the command seq so waitForTomatoAck can 
 })
 
 test('cli tomato wiring: renderer main.js writes the receipt (not a silent return) on stale commands', () => {
-  const src = fs.readFileSync(path.join(here, '../../renderer/js/main.js'), 'utf8')
+  const src = readAnchor('rendererMain')
   const idx = src.indexOf('isStaleTomatoCmd(cmd, Date.now())')
   assert.ok(idx > 0, 'stale check routed through the tested pure helper')
   const block = src.slice(idx, idx + 500)

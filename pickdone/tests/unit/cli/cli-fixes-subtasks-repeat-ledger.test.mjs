@@ -6,6 +6,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import os from 'node:os'
 import path from 'node:path'
+import { ANCHORS, REPO_ROOT } from '../../lib/source-anchors.mjs'
 import fs from 'node:fs'
 import vm from 'node:vm'
 import { createRequire } from 'module'
@@ -138,7 +139,7 @@ test('#8 browser shim tomatoAppendMany re-derives dateKey from endTime (desktop 
   const window = { dayjs, console }
   const sandbox = { window, localStorage, console, URLSearchParams, setTimeout, clearTimeout, location: { search: '', href: 'http://localhost:5175/' } }
   vm.createContext(sandbox)
-  const code = fs.readFileSync(new URL('../../../browser-dev/todo-browser-shim.js', import.meta.url), 'utf8')
+  const code = fs.readFileSync(path.join(REPO_ROOT, ANCHORS.browserShim), 'utf8')
   vm.runInContext(code, sandbox)
   // 22:50 on day D plus a 25min focus ends 23:15 same day; feed a WRONG caller dateKey (next day) and expect the derived one
   const endTime = +dayjs('2026-06-01 23:15')

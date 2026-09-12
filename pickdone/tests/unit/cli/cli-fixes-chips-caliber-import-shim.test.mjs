@@ -10,7 +10,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import vm from 'node:vm'
 import { createRequire } from 'module'
-import { fileURLToPath } from 'node:url'
+import { ANCHORS, REPO_ROOT } from '../../lib/source-anchors.mjs'
 
 process.env.TODO_DB_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'todo-cli-domain-'))
 const require_ = createRequire(import.meta.url)
@@ -171,7 +171,7 @@ test('#9 browser shim implements getById and deleteMeta ops (aligned with ALLOWE
   }
   sandbox.globalThis = sandbox
   vm.createContext(sandbox)
-  const code = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '../../..', 'browser-dev', 'todo-browser-shim.js'), 'utf8')
+  const code = fs.readFileSync(path.join(REPO_ROOT, ANCHORS.browserShim), 'utf8')
   vm.runInContext(code, sandbox)
   const dbCall = sandbox.window.todoAPI.dbCall
 

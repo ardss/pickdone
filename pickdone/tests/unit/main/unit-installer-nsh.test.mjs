@@ -1,8 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { readAnchor } from '../../lib/source-anchors.mjs'
 
 // Regression for the 0.3.0 in-app update failure ("restart to update" silently did
 // nothing): customInit killed the app with `taskkill /T`, but electron-updater spawns
@@ -11,8 +9,7 @@ import { fileURLToPath } from 'node:url'
 // taskkill reported "terminated PID <installer> (child of PID <app>)".
 // Guard: the pre-flight kill must stay image-name based (/IM ... /F) and never carry /T.
 
-const here = path.dirname(fileURLToPath(import.meta.url))
-const nsh = fs.readFileSync(path.join(here, '../../..', 'build', 'installer.nsh'), 'utf8')
+const nsh = readAnchor('installerNsh')
 
 test('customInit/customUnInit kill both historic product images (via the KillRunningInstance macro)', () => {
   assert.match(nsh, /!macro KillRunningInstance IMAGE ID[\s\S]*?taskkill \/IM "\$\{IMAGE\}" \/F/, 'the kill macro must use an image-name /F taskkill')
