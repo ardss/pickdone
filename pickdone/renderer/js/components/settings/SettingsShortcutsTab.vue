@@ -62,6 +62,10 @@ export default {
       ]
     },
     shortcutDirty () {
+      // Snapshot not yet resolved (getSettings pending/failed): there is no discardable state,
+      // so isDirty must be false — otherwise confirm-discard JSON.parses undefined and throws,
+      // leaving the settings modal impossible to close
+      if (this._shortcutSnapshot === undefined) return false
       return !!this.shortcutForm && this._shortcutSnapshot !== JSON.stringify(this.shortcutForm)
     }
   },
@@ -105,7 +109,8 @@ export default {
       const combo = parts.concat(main).join('+')
       // Conflict detection: if it duplicates another shortcut, warn and do not write
       if (this.shortcutDefs.some(d => d.key !== key && this.shortcutForm[d.key] === combo)) {
-        this.$message.warning(this.$t('statsE.SettingsModal.shortcutConflictTitle') + '：' + combo)
+        // The colon lives inside the i18n value: each locale punctuates with its own glyph
+        this.$message.warning(this.$t('statsE.SettingsModal.shortcutConflictMsg', { combo }))
         this.stopCapture()
         return
       }
@@ -124,9 +129,12 @@ export default {
       this.shortcutForm = { sync: 'ctrl+s', addEvent: 'ctrl+n', deleteEvent: 'ctrl+d', toggleMainWindow: 'ctrl+alt+t', quickAddGlobal: 'alt+shift+t', pinEvent: 'ctrl+p', unpinEvent: 'ctrl+shift+p', toggleAllSubtasks: 'ctrl+shift+s', startPomodoro: 'ctrl+alt+p', switchToDaytodo: 'ctrl+1', switchToRecentTodos: 'ctrl+2', switchToSchedule: 'ctrl+3', switchToInbox: 'ctrl+4' }
     },
     saveShortcuts () {
-      // same ledger as the parent's set({}): sync through the settings/update action to the main-process config.json
-      this.$store.dispatch('settings/update', {})
-      window.todoAPI.updateSettings({ shortcutKeySettings: JSON.parse(JSON.stringify(this.shortcutForm)) })
+      // Same ledger as the parent's set(): go through the settings/update action in one hop so
+      // the store's shortcutKeySettings is committed AND config.json is written. A bare
+      // todoAPI.updateSettings left the store stale and the dbMirror debounce then wrote the
+      // old value back over it (old shortcuts resurfaced on the next launch).
+      const snap = JSON.parse(JSON.stringify(this.shortcutForm))
+      this.$store.dispatch('settings/update', { shortcutKeySettings: snap })
       this._shortcutSnapshot = JSON.stringify(this.shortcutForm)
       this.$message.success(this.$t('statsE.SettingsModal.shortcutSavedMsg'))
       if (this.$announce) this.$announce(this.$t('statsE.SettingsModal.shortcutSavedMsg'))
@@ -134,7 +142,10 @@ export default {
     /* Parent-facing dirty contract: the modal's close() warns about unsaved shortcut edits
        and discards them on confirm (behavior preserved from the pre-split monolith). */
     isDirty () { return this.shortcutDirty },
-    discard () { this.shortcutForm = JSON.parse(this._shortcutSnapshot) }
+    discard () {
+      if (this._shortcutSnapshot === undefined) return // snapshot never loaded: nothing to discard
+      this.shortcutForm = JSON.parse(this._shortcutSnapshot)
+    }
   }
 }
 </script>

@@ -38,10 +38,11 @@ test('w5 SettingsModal split: shortcuts capture suite lives in the child, not th
     assert.match(shortcutsTab, new RegExp('\\b' + fn + ' \\('), `child missing ${fn}`)
     assert.ok(!new RegExp('\\b' + fn + ' \\(').test(parent), `parent still carries ${fn}`)
   }
-  // conflict detection + save ledger preserved verbatim
+  // conflict detection preserved verbatim; save ledger goes through the settings/update action
+  // (H7: a bare todoAPI.updateSettings left the store stale and dbMirror wrote old shortcuts back)
   assert.match(shortcutsTab, /shortcutDefs\.some\(d => d\.key !== key && this\.shortcutForm\[d\.key\] === combo\)/)
-  assert.match(shortcutsTab, /window\.todoAPI\.updateSettings\(\{ shortcutKeySettings: JSON\.parse\(JSON\.stringify\(this\.shortcutForm\)\) \}\)/)
-  assert.match(shortcutsTab, /this\.\$store\.dispatch\('settings\/update', \{\}\)/)
+  assert.match(shortcutsTab, /this\.\$store\.dispatch\('settings\/update', \{ shortcutKeySettings: snap \}\)/)
+  assert.ok(!/window\.todoAPI\.updateSettings\(\{ shortcutKeySettings/.test(shortcutsTab), 'child must not bypass the store action')
 })
 
 test('w5 SettingsModal split: fc970da loading-placeholder logic preserved in the shortcuts child', () => {
@@ -66,7 +67,7 @@ test('w5 SettingsModal split: close() dirty contract delegated to the shortcuts 
   assert.match(parent, /sc\.discard\(\)/)
   assert.match(parent, /this\.\$store\.commit\('ui\/toggleSettings', false\)/)
   assert.match(shortcutsTab, /isDirty \(\) \{ return this\.shortcutDirty \}/)
-  assert.match(shortcutsTab, /discard \(\) \{ this\.shortcutForm = JSON\.parse\(this\._shortcutSnapshot\) \}/)
+  assert.match(shortcutsTab, /discard \(\) \{[\s\S]*?if \(this\._shortcutSnapshot === undefined\) return[\s\S]*?JSON\.parse\(this\._shortcutSnapshot\)/)
 })
 
 test('w5 SettingsModal split: side-effect lifecycles stay in the parent', () => {

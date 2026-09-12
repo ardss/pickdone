@@ -42,7 +42,7 @@
         <div class="form-item__control"><button class="mini-lg" :disabled="importing" @click="importFromCsv">{{ $t('statsE.SettingsModal.importCsvBtn') }}</button></div></div>
       <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.snapshotWriteLabel') }}</span>
         <div class="form-item__control">
-          <button class="mini-lg" @click="writeBackupNow">{{ $t('statsE.SettingsModal.snapshotBackUpNowBtn') }}</button>
+          <button class="mini-lg" :disabled="backingUp" @click="writeBackupNow">{{ $t('statsE.SettingsModal.snapshotBackUpNowBtn') }}</button>
           <span class="tip">{{ $t('statsE.SettingsModal.snapshotStructureHint') }}</span>
         </div></div>
     </div>
@@ -83,6 +83,7 @@ export default {
     return {
       exporting: false,
       importing: false,
+      backingUp: false,
       backupDirDefault: '',
       autoBackupLastAt: 0,
       backupDirShown: '',
@@ -163,7 +164,7 @@ export default {
           t.dayStart ? dayjs(t.dayStart).format(FMT.date) : '',
           catName(t.categoryId),
           t.taskContent, t.taskDescribe || '',
-          (JSON.parse(t.subtasks || '[]')).map(s => (s.checked ? '[x] ' : '[ ] ') + s.text).join('\n'),
+          this.subtaskLines(t.subtasks),
           t.complete ? this.$t('statsE.SettingsModal.yesLabel') : this.$t('statsH.SettingsModal.exportNo'),
           String(t.estimate || 0),
           t.reminderTime ? dayjs(t.reminderTime).format(FMT.dateTime) : '',
@@ -177,16 +178,37 @@ export default {
         const r = await window.todoAPI.exportXlsx({ fileName: this.$t('statsH.SettingsModal.exportFileName', { ts: dayjs().format('YYYYMMDD_HHmmss') }), rows })
         if (!r.canceled && !r.error) this.$message.success(this.$t('statsE.SettingsModal.exportedPrefix') + r.filePath)
         else if (r.error) this.$message.error(r.error)
+      } catch (e) {
+        // Dirty subtask JSON / IPC failure must not escape as an unhandled rejection (same contract as importFromCsv)
+        this.$message.error(this.$t('statsE.SettingsModal.exportFailedMsg') + (e && e.message ? e.message : String(e)))
       } finally { this.exporting = false }
     },
-    writeBackupNow () {
-      // Trigger a critical-state backup immediately and point out its location
-      this.$store.dispatch('todo/writeCriticalBackup')
-      setTimeout(() => {
-        window.todoAPI.readCriticalStateBackup().then(txt => {
-          this.$message.success(txt ? this.$t('statsE.SettingsModal.criticalBackupWrittenMsg') : this.$t('statsH.SettingsModal.backupFailed'))
-        }).catch(() => { this.$message.error(this.$t('statsH.SettingsModal.backupFailed')) })
-      }, 1200)
+    /** Dirty subtask JSON must not kill the whole export: a broken row exports without its checklist */
+    subtaskLines (raw) {
+      try { return (JSON.parse(raw || '[]')).map(s => (s.checked ? '[x] ' : '[ ] ') + s.text).join('\n') } catch { return '' }
+    },
+    async writeBackupNow () {
+      // Trigger a critical-state backup immediately and point out its location.
+      // Poll for the snapshot actually changing instead of a blind 1200ms sleep: slow disks took
+      // longer (false failure) and identical content never changed at all; the busy flag also
+      // blocks double-click re-entry.
+      if (this.backingUp) return
+      this.backingUp = true
+      try {
+        const before = await window.todoAPI.readCriticalStateBackup().catch(() => null)
+        this.$store.dispatch('todo/writeCriticalBackup')
+        const deadline = Date.now() + 5000
+        let txt = null
+        while (Date.now() < deadline) {
+          await new Promise(r => setTimeout(r, 200))
+          txt = await window.todoAPI.readCriticalStateBackup().catch(() => null)
+          // done as soon as the snapshot differs from the pre-write content
+          if (txt && txt !== before) break
+        }
+        txt && txt !== before
+          ? this.$message.success(this.$t('statsE.SettingsModal.criticalBackupWrittenMsg'))
+          : this.$message.error(this.$t('statsH.SettingsModal.backupFailed'))
+      } finally { this.backingUp = false }
     },
     async loadAutoBackupList () {
       try {
@@ -210,8 +232,16 @@ export default {
             const rows = []
             if (b.todoState) { const td = this.parseTodoState(b.todoState); (td.todoList || []).forEach(r => rows.push(r)); (td.recycleList || []).forEach(r => rows.push(r)) }
             if (rows.length) await window.todoAPI.dbCall('upsertMany', rows)
-            // 字段级对齐 critical 恢复:分类与专注账本同份同回,否则"恢复"后分类消失/专注账全丢(二轮深审 P1-2)
+            // 字段级对齐 critical 恢复:settings/habits/分类与专注账本同份同回,否则"恢复"后
+            // 设置/习惯/分类消失或专注账全丢(两端恢复路径字段集必须一致)
+            if (b.settingsState) this.$store.commit('settings/restore', JSON.parse(b.settingsState))
             if (b.categoryState) { const c = JSON.parse(b.categoryState); if (c.list) this.$store.commit('category/setList', c.list) }
+            if (b.habitsState) {
+              try {
+                const hb = JSON.parse(b.habitsState)
+                if (hb && Array.isArray(hb.habits)) this.$store.commit('habits/replaceAll', hb)
+              } catch {}
+            }
             await this.restoreTomatoLedger(b)
             this.$store.dispatch('_rt/refreshFromDb')
             this.$store.dispatch('tomato/recordsReload').catch(e => console.error('[settings] tomato/recordsReload after restore failed:', e))

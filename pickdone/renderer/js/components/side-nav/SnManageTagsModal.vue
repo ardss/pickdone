@@ -2,14 +2,14 @@
   <!-- Extracted verbatim from SideNav.vue (2026-09-12 split, zero behavior change): manage-tags dialog;
        rename/delete = rewriting the #tag across all task content and descriptions in sync.
        Stays mounted with the sidebar so el-dialog keeps its native open/close transition -->
-  <el-dialog :title="$t('statsG.SideNav.manageTagTitle')" v-model="visible" width="420px" append-to-body class="cat-mgr-dialog" @closed="$emit('close')">
+  <el-dialog :title="$t('statsG.SideNav.manageTagTitle')" v-model="visible" width="420px" append-to-body class="cat-mgr-dialog tag-mgr-dialog" @closed="$emit('close')">
     <div class="cat-mgr-tip">{{ $t('statsG.SideNav.tagMgrTip') }}</div>
     <div v-for="t in tags" :key="t.name" class="cat-mgr-row cat-mgr-row--tag">
       <i class="cat-mgr-drag" :title="$t('statsG.SideNav.tagTitle')"><app-icon name="tag" :size="13"/></i>
       <input v-if="tagMgrEditing===t.name" v-model="tagMgrName" class="sn-cat-edit"
              @keyup.enter="renameTag(t)" @blur="renameTag(t)"/>
       <span v-else class="cat-mgr-name" role="button" tabindex="0" :title="$t('statsG.SideNav.clickRenameTitle')"
-            @click="tagMgrEditing=t.name; tagMgrName=t.name" @keydown.enter.prevent="tagMgrEditing=t.name">{{t.name}}</span>
+            @click="startTagEdit(t)" @keydown.enter.prevent="startTagEdit(t)">{{t.name}}</span>
       <em class="cat-mgr-count">{{ $t('statsG.SideNav.countItems', { n: t.count }) }}</em>
       <button class="cat-mgr-del" @click="removeTag(t)">{{ $t('statsG.SideNav.deleteBtn') }}</button>
     </div>
@@ -59,6 +59,20 @@ export default defineComponent({
     }
   },
   methods: {
+    /* Enter-to-rename used to only flip the editing flag without prefilling tagMgrName, so the
+       keyboard path opened an empty editor (and lost the mouse path's select-all). Shared entry
+       for both activation paths, mirroring the categories modal's select() behavior. */
+    startTagEdit (t) {
+      this.tagMgrEditing = t.name
+      this.tagMgrName = t.name
+      this.$nextTick(() => {
+        // append-to-body: the dialog DOM lives under document.body, not this.$el — query at
+        // document level (same defensive pattern as SnManageCategoriesModal.startMgrEdit)
+        const inp = document.querySelector('.tag-mgr-dialog input.sn-cat-edit')
+        if (inp) { inp.focus(); inp.select() }
+      })
+    },
+
     /* ===== Manage tags: rename/delete = rewrite the #tag across all task content and descriptions in sync ===== */
     tagTodos (name): any[] {
       return this.$store.state.todo.todoList.filter(t =>

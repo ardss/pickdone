@@ -253,7 +253,10 @@
             </div>
           </div>
 
-          <!-- Data management -->
+          <!-- Data management tab (child component); the DOM order matches the tab order: tomato → data → about -->
+          <settings-data-tab v-show="searching || tab==='data'"/>
+
+          <!-- About / feedback (kept last in the DOM to match the visual tab order: ...tomato → data → about) -->
           <div v-show="searching || tab==='about'" class="tab-panel">
             <div class="form">
               <div class="form-label">{{ $t('statsE.SettingsModal.feedbackAboutSection') }}</div>
@@ -286,7 +289,6 @@
                 <div class="form-item__control"><span class="tip">{{ $t('statsE.SettingsModal.aboutPrivacy') }}</span></div></div>
             </div>
           </div>
-          <settings-data-tab v-show="searching || tab==='data'"/>
 
         </div>
       </div>

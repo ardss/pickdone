@@ -22,7 +22,9 @@
       <span v-else class="cat-mgr-name" role="button" tabindex="0" :title="$t('statsG.SideNav.clickRenameTitle')"
             @click="startMgrEdit(c)" @keydown.enter.prevent="startMgrEdit(c)">{{c.categoryName}}</span>
       <em class="cat-mgr-count" role="button" tabindex="0" :title="$t('statsG.SideNav.previewTitle')"
-          @click="toggleMgrPreview(c.categoryId)">{{ $t('statsG.SideNav.countItems', { n: countOf(c.categoryId) }) }}
+          @click="toggleMgrPreview(c.categoryId)"
+          @keydown.enter.prevent="toggleMgrPreview(c.categoryId)"
+          @keydown.space.prevent="toggleMgrPreview(c.categoryId)">{{ $t('statsG.SideNav.countItems', { n: countOf(c.categoryId) }) }}
         <app-icon :name="mgrExpanded[c.categoryId] ? 'chevron-up' : 'chevron-down'" :size="11"/></em>
       <button class="cat-mgr-del" :class="{'cat-mgr-del--on': isProject(c.categoryId)}" @click="toggleProject(c)">{{isProject(c.categoryId) ? $t('statsE.SideNav.cancelProject') : $t('statsG.SideNav.setProjectBtn')}}</button>
       <button class="cat-mgr-del" @click="removeMgrCat(c)">{{ $t('statsG.SideNav.deleteBtn') }}</button>
@@ -69,7 +71,9 @@ export default defineComponent({
   },
   methods: {
     countOf (id) {
-      return this.$store.state.todo.todoList.filter(t => t.categoryId === id && !t.complete).length
+      // Exclude recycle-bin rows: previewOf already filters !t.delete — the badge and the
+      // preview must agree (the badge used to count deleted rows and read inflated)
+      return this.$store.state.todo.todoList.filter(t => t.categoryId === id && !t.complete && !t.delete).length
     },
     isProject (id) { return this.$store.state.category.projectIds.includes(id) },
     /** Set/unset as project (secondary path; the primary entry is "New Project" on the project overview page) */
@@ -82,7 +86,9 @@ export default defineComponent({
       this.mgrEditing = c.categoryId
       this.mgrName = c.categoryName
       this.$nextTick(() => {
-        const inp = this.$el.querySelector('.cat-mgr-row input')
+        // append-to-body moves the dialog DOM under document.body, so component-root queries
+        // miss it — query at document level (defensive pattern per EditPanel's datePick ref)
+        const inp = document.querySelector('.cat-mgr-dialog input.sn-cat-edit')
         if (inp) { inp.focus(); inp.select() }
       })
     },
