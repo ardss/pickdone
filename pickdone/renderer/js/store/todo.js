@@ -87,13 +87,17 @@ function hookQuitFlush () {
  *  replays it (mirrors tomato.js flushPendingLedger — previously failures were only logged and silently lost) */
 function flushPendingUpserts () {
   const list = _pendingUpserts.splice(0, _pendingUpserts.length)
+  const failed = []
   for (const it of list) {
     Promise.resolve(window.todoAPI.dbCall(it.op, it.params))
       .catch(e => {
         console.error('[todo] pending upsert flush failed at quit (requeued):', e)
-        _pendingUpserts.unshift(it)
+        failed.push(it)
       })
   }
+  // Re-add failed entries preserving original order (splicing per-failure inside the loop
+  // re-ordered the queue by completion order — same bug 7deda05 fixed in tomato.js)
+  Promise.resolve().then(() => { for (const it of failed) _pendingUpserts.unshift(it) })
 }
 /** Strip Vue reactive proxies before IPC: rows come straight from reactive state, and a shallow spread
  *  ({ ...raw }) only unwraps the top level — nested arrays (reminderOffsets/reminderExtra/subtasks JSON is a

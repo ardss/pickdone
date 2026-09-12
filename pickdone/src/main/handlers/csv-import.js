@@ -72,8 +72,8 @@ module.exports = function importHandlers (ctx) {
     // P3 (2026-09-12): expected failures return { ok:false, code, message } instead of throwing —
     // invoke() rejections lose custom Error props across the context bridge, so a thrown code only
     // survived via the '[CODE] message' text hack. null still means "user canceled".
-    'import:pick-preview': async () => {
-      assertMainWindow('import:pick-preview') // H7 2026-09-12 P2: dialog needs a live parent; aligned with the backup domain
+    'import:pick-preview': async (e) => {
+      assertMainWindow(e) // H7→H8 fix: must pass the IPC event, not a string label (the string made the guard always-true-reject, killing all CSV imports)
       const importer = require('../../../cli/import.js')
       const { dialog } = require('electron')
       const r = await dialog.showOpenDialog(getMainWindow() || undefined, {
@@ -97,6 +97,7 @@ module.exports = function importHandlers (ctx) {
       }
     },
     'import:run': async (e, file) => {
+      assertMainWindow(e)
       const importer = require('../../../cli/import.js')
       const f = String(file || '')
       // Arbitrary-path read primitive sealed off: only the path most recently returned by the main-process dialog is accepted

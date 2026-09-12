@@ -560,6 +560,11 @@ const OPS = {
       // writing zero rows — dirty rows after it would never be re-sent (silent non-convergence)
       throw new Error('[TodoDB] commitSyncBatch: rows must be an array, got ' + typeof rows)
     }
+    // Version monotonic fence (round-8 audit P1): a stale retry batch (lower v) must not roll back
+    // the cursor or re-ack rows that a newer batch already confirmed — otherwise edits made between
+    // the two attempts get frozen as stale 'sync' content (B3 P1 scenario)
+    const cur = Number(stmts.getMeta.run('todosVersion') || 0)
+    if (v < cur) throw new Error('[TodoDB] commitSyncBatch: version ' + v + ' < current todosVersion ' + cur + ' — stale batch rejected')
     const tr = db.transaction(list => {
       for (const t of list) stmts.upsert.run(todoToRow({ ...t, status: 'sync', version: v }))
       stmts.setMeta.run('todosVersion', String(v))
