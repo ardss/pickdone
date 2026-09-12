@@ -100,6 +100,25 @@ if (rel.name !== `PickDone ${version}`) {
   say(`标题统一为 PickDone ${version}`)
 }
 
+// 官网元数据同步(2026-09-12,第六防护维度纪律):pickdone-site 的 JSON-LD 版本/日期/系统行
+// 若不随发版更新,搜索引擎看到的产品信息就会停在旧版(0.2.1 停了三个版本才被发现)。
+// 这里只做机械补丁+提醒;改动是否提交、是否 wrangler 部署由发布者决定(SOP-11 §6)。
+const SITE = path.join(ROOT, '..', 'pickdone-site')
+if (fs.existsSync(SITE)) {
+  try {
+    let patched = 0
+    for (const page of ['index.html', 'en-index.html']) {
+      const f = path.join(SITE, page)
+      let h = fs.readFileSync(f, 'utf8')
+      const before = h
+      h = h.replace(/"softwareVersion": "[^"]*"/, `"softwareVersion": "${version}"`)
+      h = h.replace(/"dateModified": "[^"]*"/, `"dateModified": new Date().toISOString().slice(0, 10)`)
+      if (h !== before) { fs.writeFileSync(f, h); patched++ }
+    }
+    say(patched ? `官网元数据已补丁 ${patched} 页(版本 ${version})——记得 commit + npx wrangler pages deploy(SOP-11 §6)` : '官网元数据无需补丁(已是当前版本)')
+  } catch (e) { console.log(`• 官网元数据补丁失败(不影响发布,手工补): ${e.message}`) }
+}
+
 console.log(`
 ✓ finalize 完成。剩最后一步(刻意保留人工): 
   gh release view ${TAG} --repo ${REPO}   # 过目正文与产物
