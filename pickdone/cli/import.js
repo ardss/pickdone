@@ -249,7 +249,9 @@ function importItems (items, { dryRun = false, format, category = null, useLists
     const ts = now + i
     const prevMin = dayNextSort.get(dayStart)
     const taskSort = prevMin === undefined ? 0 : Math.fround(prevMin - 100)
-    if (prevMin !== undefined) dayNextSort.set(dayStart, taskSort)
+    // Always write back, including the first row of an empty day (sort=0): otherwise every row of
+    // that day stays at 0 (parallel tie instead of the historical 0/-100/-200 top-insert chain)
+    dayNextSort.set(dayStart, taskSort)
     // Completed tasks without a source completion timestamp fall back to the due date (then createTime):
     // stamping every row with "import moment" inflated the import day's done stats
     const completedAt = it.done ? (it.completedAt || it.due || ts) : 0
