@@ -135,14 +135,17 @@ function ledgerWrite (op, params) {
 }
 function flushPendingLedger () {
   const list = _pendingLedger.splice(0, _pendingLedger.length)
-  for (const it of list) {
+  // P3 2026-09-12: failed entries splice back at their ORIGINAL index — the previous per-entry
+  // unshift ran in failure-completion order, reversing the queue so replayed ops (delete → re-add
+  // of the same record family) could land out of causal order. Ledger ops are idempotent upserts,
+  // but order preservation keeps the replay semantics obviously correct.
+  list.forEach((it, idx) => {
     Promise.resolve(window.todoAPI && window.todoAPI.dbCall(it.op, it.params))
       .catch(e => {
         console.error('[tomato] ledger flush failed at quit:', it.op, e)
-        // Put the failed entry back at the queue head so the next ledger write replays it (no silent loss)
-        _pendingLedger.unshift(it)
+        _pendingLedger.splice(Math.min(idx, _pendingLedger.length), 0, it)
       })
-  }
+  })
 }
 function hookQuitFlush () {
   if (_flushHooked || !window.todoAPI || !window.todoAPI.onAppQuittingFlush) return
