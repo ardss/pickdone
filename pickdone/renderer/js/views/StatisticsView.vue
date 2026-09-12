@@ -20,48 +20,12 @@
         </div>
       </div>
 
-      <!-- Share card dialog: three styles -->
-      <el-dialog :title="$t('statsA.StatisticsView.shareCreate')" v-model="shareOpen" width="420px" append-to-body class="share-dialog">
-        <div class="share-style-tabs" role="radiogroup" :aria-label="$t('statsA.StatisticsView.ariaCardStyles')">
-          <button v-for="s in shareStyles" :key="s.key" class="hm-range-btn"
-                  :class="{on: shareStyle===s.key}" role="radio" :aria-checked="shareStyle===s.key"
-                  @click="shareStyle=s.key">{{ s.label }}</button>
-        </div>
-        <!-- Preview area (fixed light rendering; share appearance is theme-independent) -->
-        <div ref="shareCard">
-          <div v-if="shareStyle==='narrative'" class="sc sc-narrative">
-            <div class="sc-brand">{{ $t('statsA.StatisticsView.shareBrand') }}</div>
-            <div class="sc-period">{{ metrics.label }} · {{ periodRangeLabel }}</div>
-            <p class="sc-headline">{{ reviewHeadline }}</p>
-            <ul class="sc-list">
-              <li v-for="i in shareTopInsights" :key="i.id">{{ insightText(i) }}</li>
-            </ul>
-            <div class="sc-foot">{{ shareDate }}</div>
-          </div>
-          <div v-else-if="shareStyle==='data'" class="sc sc-data">
-            <div class="sc-brand">{{ $t('statsA.StatisticsView.shareBrand') }}</div>
-            <div class="sc-period">{{ metrics.label }} · {{ periodRangeLabel }}</div>
-            <div class="sc-kpis">
-              <div v-for="k in kpis" :key="k.key" class="sc-kpi">
-                <div class="sc-kpi__v">{{ k.value }}</div>
-                <div class="sc-kpi__t">{{ k.title }}</div>
-              </div>
-            </div>
-            <div class="sc-foot">{{ shareDate }}</div>
-          </div>
-          <div v-else class="sc sc-mini">
-            <div class="sc-brand">{{ $t('statsA.StatisticsView.shareBrandMini') }}</div>
-            <p class="sc-headline">{{ reviewHeadline }}</p>
-            <div class="sc-mini__meta">{{ $t('statsA.StatisticsView.shareMiniMeta', { n: heatmap.streak, date: shareDate }) }}</div>
-          </div>
-        </div>
-        <template #footer>
-          <div class="share-dialog__foot">
-            <button class="mini" @click="shareOpen=false">{{ $t('statsA.StatisticsView.cancel') }}</button>
-            <button class="mini share-save" @click="saveShareCard">{{ $t('statsA.StatisticsView.saveImage') }}</button>
-          </div>
-        </template>
-      </el-dialog>
+      <!-- Share card dialog: three styles (extracted to statistics/StatsShareCard.vue, markup verbatim) -->
+      <stats-share-card :open="shareOpen" @close="shareOpen=false"
+                        :period-label="metrics.label" :period-range="periodRangeLabel"
+                        :review-headline="reviewHeadline" :insights="shareTopInsights"
+                        :kpis="kpis" :heatmap-streak="heatmap.streak"
+                        :share-date="shareDate" :period="period"/>
 
 
       <div class="page__main">
@@ -253,43 +217,8 @@
             </template>
             
             <template v-else>
-            <!-- 7. Achievements wall -->
-            <div class="tl-card ach-card">
-              <div class="tl-head"><b>{{ $t('statsA.StatisticsView.achTitle') }}</b><span class="tl-sub">{{ $t('statsA.StatisticsView.achSub', { n: achievements.earnedCount }) }}</span></div>
-              <div class="ach-totals">
-                <div class="ach-total">
-                  <div class="ach-total__v">{{ achievements.totals.done }}</div>
-                  <div class="ach-total__t">{{ $t('statsA.StatisticsView.achTotalDone') }}</div>
-                </div>
-                <div class="ach-total">
-                  <div class="ach-total__v">{{ achievements.totals.focusHours }}<span class="ach-total__u">{{ $t('statsA.StatisticsView.unitHour') }}</span></div>
-                  <div class="ach-total__t">{{ $t('statsA.StatisticsView.achTotalFocus') }}</div>
-                </div>
-                <div class="ach-total">
-                  <div class="ach-total__v">{{ achievements.totals.streak }}<span class="ach-total__u">{{ $t('statsA.StatisticsView.unitDay') }}</span></div>
-                  <div class="ach-total__t">{{ $t('statsA.StatisticsView.achTotalStreak') }}</div>
-                </div>
-              </div>
-              <div class="ach-fams">
-                <div v-for="f in achievements.families" :key="f.id" class="ach-fam" :class="{'ach-fam--max': f.maxed}">
-                  <span class="ach-fam__icon" v-html="f.icon"></span>
-                  <div class="ach-fam__info">
-                    <div class="ach-fam__row1">
-                      <span class="ach-fam__name">{{ $t(f.famNameKey) }}</span>
-                      <span class="ach-fam__lv" :class="{'ach-fam__lv--max': f.maxed}">Lv.{{ f.level }}<template v-if="f.maxed"> MAX</template></span>
-                    </div>
-                    <div class="ach-fam__num">
-                      <span class="ach-fam__cur">{{ f.cur }}</span>
-                      <span class="ach-fam__next">/ {{ f.nextV }} {{ $t(f.unitKey) }} · {{ $t(f.nextNameKey || 'statsA.Achievements.achMax') }}</span>
-                    </div>
-                    <div class="ach-progress"><div class="ach-progress__bar" :style="{width: f.pct+'%'}"></div></div>
-                  </div>
-                  <span class="ach-fam__badges" :title="$t('statsA.Achievements.achEarnedN', { n: f.earnedBadgesOfFam })">
-                    <template v-if="f.earnedBadgesOfFam">✓×{{ f.earnedBadgesOfFam }}</template>
-                  </span>
-                </div>
-              </div>
-            </div>
+              <!-- 7. Achievements wall (extracted to statistics/StatsAchievements.vue, markup verbatim) -->
+              <stats-achievements :achievements="achievements"/>
             </template>
           </div>
         </div>
@@ -313,14 +242,16 @@
  * All copy goes through vue-i18n (statsA.* namespace); internal state like period/heatmap range uses stable keys,
  * display text is resolved via $t (the insights/achievements pure-function layer returns key+params, resolved in computeds/methods).
  */
-import { dayjs, DAY_MS, FMT } from '../utils/core.js'
+import { dayjs, DAY_MS } from '../utils/core.js'
 import ChartCard from './statistics/ChartCard.vue'
 import EmptyState from '../components/EmptyState.vue'
+import StatsShareCard from './statistics/StatsShareCard.vue'
+import StatsAchievements from './statistics/StatsAchievements.vue'
 
 import { buildReviewMetrics } from './statistics/metrics.js'
 import { composeReview, kpiDelta } from './statistics/insights.js'
 import { buildAchievements } from './statistics/achievements.js'
-import { loadScript, VENDOR } from '../utils/lazy-script.js'
+import { periodBounds, buildHeatmap, countGiveUps7, buildWeekdayModel, buildTrendModel, buildFocusTrendModel, buildTimelineRows } from './statistics/chartModels.js'
 
 // Periods: named calendar periods take priority (finalized by user); span periods remain as a supplement (internal keys, display copy in periodOptions)
 // Custom date range (finalized by user 2026-08-31): no standalone pill; clicking the date-range label on the right opens the picker; the period internal key stays 'custom', route persists from/to
@@ -334,9 +265,9 @@ export default {
     return false
   },
   name: 'StatisticsView',
-  components: { ChartCard, EmptyState },
+  components: { ChartCard, EmptyState, StatsShareCard, StatsAchievements },
   data () {
-    return { view: 'stat', period: 'thisWeek', heatRange: 'halfYear', shareOpen: false, shareStyle: 'narrative', tlTip: null, customRange: null, customDraft: null, tlGrid: (() => { try { return localStorage.getItem('tlHoverGrid') !== '0' } catch { return true } })(), hmTip: { show: false, text: '', x: 0, y: 0 } as any, nowTick: Date.now() }
+    return { view: 'stat', period: 'thisWeek', heatRange: 'halfYear', shareOpen: false, tlTip: null, customRange: null, customDraft: null, tlGrid: (() => { try { return localStorage.getItem('tlHoverGrid') !== '0' } catch { return true } })(), hmTip: { show: false, text: '', x: 0, y: 0 } as any, nowTick: Date.now() }
   },
   /* Period/view state is written to route query (matching the calendar page convention): refresh/back-forward keeps the selection */
   watch: {
@@ -382,30 +313,9 @@ export default {
         { key: 'ach', icon: 'flag', text: this.$t(T + 'viewAch') }
       ]
     },
-    /** Current period bounds (end is an exclusive upper bound; "this week" runs up to now, avoiding comparing a half week against full weeks) */
+    /** Current period bounds (end is an exclusive upper bound; "this week" runs up to now) — shaping in statistics/chartModels.js */
     periodBounds () {
-      const now = dayjs(this.nowTick) // read the reactive clock so the computed re-evaluates as time advances (see created comment)
-      switch (this.period) {
-        case 'lastWeek': {
-          const s = now.subtract(1, 'week').startOf('isoWeek')
-          return { start: +s, end: +s.add(7, 'day'), label: this.$t(T + 'period_lastWeek') }
-        }
-        case 'thisMonth': return { start: +now.startOf('month'), end: +now, label: this.$t(T + 'period_thisMonth') }
-        case 'lastMonth': {
-          const s = +now.subtract(1, 'month').startOf('month')
-          const e = +now.startOf('month')
-          return { start: s, end: e, label: this.$t(T + 'period_lastMonth') }
-        }
-        case 'last7': return { start: +now.subtract(7, 'day').startOf('day'), end: +now, label: this.$t(T + 'period_last7') }
-        case 'last30': return { start: +now.subtract(30, 'day').startOf('day'), end: +now, label: this.$t(T + 'period_last30') }
-        case 'custom': {
-          if (!this.customRange) return { start: +now.subtract(7, 'day').startOf('day'), end: +now, label: this.$t(T + 'period_custom') }
-          const s = +dayjs(this.customRange[0]).startOf('day')
-          const e = +dayjs(this.customRange[1]).add(1, 'day').startOf('day') // end is an exclusive upper bound, covering the whole selected final day
-          return { start: s, end: e, label: this.$t(T + 'period_custom') }
-        }
-        default: return { start: +now.startOf('isoWeek'), end: +now, label: this.$t(T + 'period_thisWeek') }
-      }
+      return periodBounds(this.period, this.customRange, this.nowTick, (k, p) => this.$t(k, p))
     },
     periodRangeLabel () {
       const { start, end } = this.periodBounds
@@ -433,13 +343,7 @@ export default {
     shareDate () { return dayjs().format('YYYY.MM.DD') },
     /** Compact data shared by share cards */
     shareTopInsights () { return this.review.insights.slice(0, 3) },
-    shareStyles () {
-      return [
-        { key: 'narrative', label: this.$t(T + 'shareStyleNarrative') },
-        { key: 'data', label: this.$t(T + 'shareStyleData') },
-        { key: 'mini', label: this.$t(T + 'shareStyleMini') }
-      ]
-    },
+    shareDate () { return dayjs().format('YYYY.MM.DD') },
     hasAnyData () { return this.todoList.length > 0 || this.tomatoRecordList.length > 0 },
     /* Four KPI tiles: the main number is the period total, delta vs baseline daily average x days (equal-length conversion) */
     kpis () {
@@ -481,46 +385,12 @@ export default {
       ]
       return bests
     },
-    /** Weekday distribution (Monday-Sunday, dual axis: bars = completed events / line = focus minutes; the right axis uses real minutes, no longer normalized) */
-    weekdayModel () {
-      const m = this.metrics
-      const labels = ['wd1', 'wd2', 'wd3', 'wd4', 'wd5', 'wd6', 'wd7'].map(k => this.$t(T + k))
-      return {
-        modelType: 4,
-        title: this.$t(T + 'weekdayTitle'),
-        subTitle: this.$t(T + 'weekdaySubtitle'),
-        chartList: labels.map((l, i) => ({ label: l, value: m.doneByWeekday[i] })),
-        overlayList: labels.map((l, i) => ({ label: l, value: m.focusByWeekday[i] })),
-        summary: this.$t(T + 'weekdaySummary', { d: labels[m.focusByWeekday.indexOf(Math.max(...m.focusByWeekday))] || '—' })
-      }
-    },
-    /* Completion trend + baseline reference band (chart-c extended with a baselineValue dashed line) */
-    trendModel () {
-      const m = this.metrics
-      const baseDaily = m.baseline.done
-      return {
-        modelType: 3,
-        title: this.$t(T + 'trendTitle'),
-        subTitle: this.periodRangeLabel,
-        chartList: m.doneByDay,
-        baselineValue: baseDaily == null ? null : +baseDaily.toFixed(2), // daily-average reference line
-        summary: baseDaily == null ? this.$t(T + 'trendSummaryEmpty') : this.$t(T + 'trendSummaryBase', { n: baseDaily.toFixed(1) })
-      }
-    },
-    /* Focus trend (minutes): the second half of "event caliber + focus caliber" side by side, baseline same as focus KPI */
-    focusTrendModel () {
-      const m = this.metrics
-      const baseDaily = m.baseline.focus
-      return {
-        modelType: 3,
-        title: this.$t(T + 'focusTrendTitle'),
-        subTitle: this.periodRangeLabel,
-        chartList: m.focusByDay,
-        legendLabel: this.$t(T + 'legendFocusMins'),
-        baselineValue: baseDaily == null ? null : +baseDaily.toFixed(1),
-        summary: baseDaily == null ? this.$t(T + 'trendSummaryEmpty') : this.$t(T + 'focusTrendSummary', { n: baseDaily.toFixed(1) })
-      }
-    },
+    /** Weekday distribution (Monday-Sunday, dual axis) — shaping in statistics/chartModels.js */
+    weekdayModel () { return buildWeekdayModel(this.metrics, (k, p) => this.$t(k, p)) },
+    /* Completion trend + baseline reference band — shaping in statistics/chartModels.js */
+    trendModel () { return buildTrendModel(this.metrics, (k, p) => this.$t(k, p), this.periodRangeLabel) },
+    /* Focus trend (minutes) — shaping in statistics/chartModels.js */
+    focusTrendModel () { return buildFocusTrendModel(this.metrics, (k, p) => this.$t(k, p), this.periodRangeLabel) },
     /* Where focus went: task-level focus duration ranking (unlinked = free focus, listed separately) */
     taskFocusRows () {
       const m = this.metrics
@@ -539,54 +409,12 @@ export default {
         }
       })
     },
-    /* ---------- Heatmap (half year 26 weeks / full year 52 weeks) ---------- */
+    /* ---------- Heatmap (half year 26 weeks / full year 52 weeks) — shaping in statistics/chartModels.js ---------- */
     heatWeeks () { return this.heatRange === 'year' ? 52 : 26 },
     heatmap () {
-      const day = DAY_MS
-      // 用响应式时钟 nowTick 而非 dayjs():跨零点停留时热力图窗口不冻结(同 periodBounds)
-      const today = dayjs(this.nowTick).startOf('day')
-      const end = +today.add(6 - ((today.day() + 6) % 7), 'day')
-      const start = +dayjs(end).subtract(this.heatWeeks * 7 - 1, 'day')
-      const doneByDay = new Map(); const focusByDay = new Map()
-      this.todoList.forEach(t => {
-        if (!t.complete || t.delete) return
-        const ts = t.completedAt || t.updateTime
-        if (!ts) return
-        const k = dayjs(ts).format(FMT.date)
-        doneByDay.set(k, (doneByDay.get(k) || 0) + 1)
-      })
-      this.tomatoRecordList.forEach(r => {
-        if (r.succeed === false) return
-        const k = dayjs(Number(r.endTime)).format(FMT.date)
-        focusByDay.set(k, (focusByDay.get(k) || 0) + (r.focusDuration || 0))
-      })
-      const maxDone = Math.max(1, ...doneByDay.values())
-      const cells = []
-      for (let ts = start; ts <= end; ts += day) {
-        const d = dayjs(ts)
-        const k = d.format(FMT.date)
-        const done = doneByDay.get(k) || 0
-        const focus = focusByDay.get(k) || 0
-        let level = 0
-        if (done > 0) level = 1
-        if (done >= maxDone * 0.34 || (done > 0 && focus >= 25)) level = 2
-        if (done >= maxDone * 0.67 || (done > 0 && focus >= 50)) level = 3
-        if (done >= maxDone || (done > 0 && focus >= 100)) level = 4
-        cells.push({ key: k, date: d.format(FMT.cnFull), done, focus, level,
-          col: Math.floor((ts - start) / day / 7), dow: (d.day() + 6) % 7 })
-      }
-      const totalDone = cells.reduce((s, c) => s + c.done, 0)
-      const streak = (() => {
-        let n = 0
-        for (let i = cells.length - 1; i >= 0; i--) { if (cells[i].done > 0) n++; else if (i !== cells.length - 1) break }
-        return n
-      })()
-      return { cells, weeks: this.heatWeeks, totalDone, streak }
+      return buildHeatmap({ todos: this.todoList, records: this.tomatoRecordList, weeks: this.heatWeeks, nowTick: this.nowTick })
     },
-    giveUps7 () {
-      const since = +dayjs().subtract(7, 'day').startOf('day')
-      return this.tomatoRecordList.filter(r => r.succeed === false && Number(r.endTime) >= since).length
-    },
+    giveUps7 () { return countGiveUps7(this.tomatoRecordList) },
     /** Review headline: insights.js returns key+params, resolved here via $t (including localized focus duration format) */
     reviewHeadline () {
       const h = this.review.headline
@@ -597,88 +425,13 @@ export default {
       const tail = h.toneKey ? this.$t(h.toneKey) : ''
       return this.$t(h.key, Object.assign({}, h.params, { focus })) + tail
     },
-    /* 24-hour timeline: last 7 days. Empty rows compressed (4px thin line), segment boundaries clamped to the day, fully duplicated records deduplicated */
+    /* 24-hour timeline: last 7 days — shaping in statistics/chartModels.js (translation injected, keys stay in the statsA shard) */
     timelineRows () {
-      const recs = this.tomatoRecordList
-      const byDay = new Map()
-      for (const r of recs) {
-        const end = Number(r.endTime) || 0
-        if (!end) continue
-        const key = dayjs(end).format(FMT.date)
-        if (!byDay.has(key)) byDay.set(key, [])
-        byDay.get(key).push(r)
-      }
-      const rows = []
-      for (let d = 6; d >= 0; d--) {
-        const dayStart = dayjs().startOf('day').valueOf() - d * DAY_MS
-        const key = dayjs(dayStart).format(FMT.date)
-        const segs = []
-        let count = 0
-        const seen = new Set() // fully identical records (same start/end, duration, task) drawn once: dirty historical data from multi-window races no longer stacks up
-        let minutes = 0
-        // Completed events that day (completion time falls on that date, same semantics as the heatmap)
-        const done = this.todoList.reduce((n, t) => {
-          if (!t.complete || t.delete) return n
-          const ts = t.completedAt || t.updateTime
-          return ts && dayjs(ts).format(FMT.date) === key ? n + 1 : n
-        }, 0)
-        const list = (byDay.get(key) || []).sort((a, b) => a.endTime - b.endTime)
-        // Focus session aggregation: consecutive pomodoros with gaps <=10min merge into one session band (visually turns "alternating light/dark bricks" into "one work session";
-        // dark within a band = focus, light = rest; band-level hover reports the whole session summary, block-level hover keeps per-pomodoro detail)
-        const bands = []
-        let bandCursor = null
-        for (const r of list) {
-          const end = Number(r.endTime)
-          const focusMs = (Number(r.focusDuration) || 0) * 60000
-          const restMs = (Number(r.restDuration) || 0) * 60000
-          const fStart = end - focusMs
-          if (r.succeed !== false) { minutes += Number(r.focusDuration) || 0; count++ }
-          const dupKey = fStart + '|' + end + '|' + (r.focusDuration || 0) + '|' + (r.focus || '')
-          if (seen.has(dupKey)) continue
-          seen.add(dupKey)
-          // One pomodoro = one integral unit: the focus body plus the adjacent rest tail (finalized by user: rest and focus belong to the same moment; splitting them hurts readability)
-          const clamp = (v, w) => Math.max(0, Math.min(v, 100 - Math.min(w, 100)))
-          const restW = restMs > 0 ? Math.min(restMs, 5 * 60000) / DAY_MS * 100 : 0
-          const focusW = focusMs / DAY_MS * 100
-          const uLeft = clamp((fStart - dayStart) / DAY_MS * 100, focusW + restW)
-          const uWidth = focusW + restW
-          const GAP = 10 * 60000 / DAY_MS * 100 // session split threshold: 10 minutes
-          if (focusMs > 0) {
-            // The hover explains what this focus session was about: report the linked task's name, otherwise show placeholder copy (finalized by user)
-            const what = r.focus ? this.$t(T + 'segAttach', { name: r.focus }) : this.$t(T + 'segFree')
-            const title = this.$t(T + 'segFocus', { time: dayjs(fStart).format('HH:mm') + '–' + dayjs(end).format('HH:mm'), n: r.focusDuration }) + ' · ' + what + (restW ? ' + ' + this.$t(T + 'segRest') : '')
-            const seg = { key: r.tomatoId + '_u', kind: 'unit',
-              left: uLeft, width: uWidth, ff: uWidth ? focusW / uWidth * 100 : 100,
-              title, focus: r.focus || '' }
-            segs.push(seg)
-            if (bandCursor && uLeft - (bandCursor.left + bandCursor.width) <= GAP) {
-              bandCursor.width = Math.max(bandCursor.width, uLeft + uWidth - bandCursor.left)
-              bandCursor.segs.push(seg)
-              bandCursor.n += 1
-              if (!bandCursor.tasks.includes(r.focus || '')) bandCursor.tasks.push(r.focus || '')
-              bandCursor.endMin = Math.max(bandCursor.endMin, end)
-            } else {
-              bandCursor = { left: uLeft, width: uWidth, segs: [seg], n: 1, tasks: [r.focus || ''], endMin: end, startMin: fStart }
-              bands.push(bandCursor)
-            }
-          } else if (restW > 0) {
-            segs.push({ key: r.tomatoId + '_r', kind: 'rest',
-              left: clamp((end - dayStart) / DAY_MS * 100, restW), width: restW, title: this.$t(T + 'segRest') })
-          }
-        }
-        // Band-level summary: hovering a band reveals the whole work session (N pomodoros / start-end / deduped linked tasks)
-        for (const b of bands) {
-          const tasks = b.tasks.filter(Boolean)
-          const what = tasks.length
-            ? tasks.map(n => this.$t(T + 'segAttach', { name: n })).join('、')
-            : this.$t(T + 'segFree')
-          b.title = this.$t(T + 'segFocus', {
-            time: dayjs(b.startMin).format('HH:mm') + '–' + dayjs(b.endMin).format('HH:mm'), n: b.n
-          }) + ' · ' + what
-        }
-        rows.push({ dateKey: key, segments: segs, bands, count, minutes, done, empty: segs.length === 0 })
-      }
-      return rows
+      return buildTimelineRows({
+        records: this.tomatoRecordList,
+        todos: this.todoList,
+        t: (k, p) => this.$t(k, p)
+      })
     },
     tlActiveCount () {
       return this.timelineRows.filter(r => !r.empty).length
@@ -761,22 +514,8 @@ export default {
       const py = below ? t.y + (t.ch || 0) + 8 : t.y
       if (px !== t.px || below !== t.below || py !== t.py) this.hmTip = { ...t, px, py, below }
     },
-    /* Share card: three style templates -> html2canvas PNG export (fixed light background for consistent share appearance) */
+    /* Share card dialog (statistics/StatsShareCard.vue): open state stays here, export moved into the child */
     openShare () { this.shareOpen = true },
-    async saveShareCard () {
-      try {
-        const el = this.$refs.shareCard
-        if (!el) return this.$message.error(this.$t(T + 'msgNoCardContent'))
-        // html2canvas lazy load (2026-09-02 startup optimization): injected only when exporting the share card
-        if (!window.html2canvas) await loadScript(VENDOR.html2canvas)
-        const canvas = await window.html2canvas(el, { scale: 2, backgroundColor: null, useCORS: true })
-        const a = document.createElement('a')
-        a.href = canvas.toDataURL('image/png')
-        a.download = `${this.$t(T + 'fileShareCard')}_${this.period}_${dayjs().format('YYYYMMDD_HHmmss')}.png`
-        a.click()
-        this.$message.success(this.$t(T + 'msgShareSaved'))
-      } catch (e) { this.$message.error(this.$t(T + 'msgExportFailed', { msg: e.message })) }
-    },
     exportTable () {
       const m = this.metrics
       const rows = [[this.$t(T + 'csvPeriod'), m.label]]
