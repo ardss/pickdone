@@ -148,14 +148,7 @@
         <button type="button" class="sn-sec-toggle" :aria-expanded="showTagPanel ? 'true' : 'false'" :aria-label="$t('statsG.SideNav.tagSectionAria')"
                 @click.stop="showTagPanel=!showTagPanel" @keydown.enter.prevent.stop="showTagPanel=!showTagPanel" @keydown.space.prevent.stop="showTagPanel=!showTagPanel"><span>{{ $t('statsG.SideNav.tagSection') }}</span></button><span class="sn-sec-tools"><button class="sn-ico-btn" :title="$t('statsG.SideNav.newTagBtnTitle')" @click.stop="createTag"><app-icon name="plus" :size="12"/></button><button class="sn-ico-btn" :title="$t('statsG.SideNav.manageTagTitle')" @click.stop="tagMgrVisible = true"><app-icon name="gear" :size="12"/></button><i class="sn-fold-arrow" :class="{open:showTagPanel}"><app-icon name="chevron-down" :size="11"/></i></span>
       </div>
-      <template v-if="showTagPanel">
-        <div v-for="t in tags.slice(0,10)" :key="t.name" class="sn-cat-item" role="link" tabindex="0"
-             :class="{active:$route.params&&$route.params.id===t.name}"
-             @click="go('todo-list-tag',{id:t.name})"
-             @keydown.enter.prevent="go('todo-list-tag',{id:t.name})">
-          <span class="sn-dot none"></span><span>{{t.name}}</span><em class="sn-badge">{{t.count}}</em>
-        </div>
-      </template>
+      <sn-tag-panel v-if="showTagPanel"/>
     </div>
 
     </div>
@@ -218,57 +211,11 @@
       <app-icon name="chevron-left" :size="14"/>
     </button>
 
-    <el-dialog :title="$t('statsG.SideNav.manageCatTitle')" v-model="manageVisible" width="460px" append-to-body class="cat-mgr-dialog">
-      <div class="cat-mgr-tip">{{ $t('statsG.SideNav.catMgrTip') }}</div>
-      <div class="cat-mgr-head" aria-hidden="true">
-        <span class="cat-mgr-hname">{{ $t('statsG.SideNav.catSection') }}</span><span class="cat-mgr-hcount">{{ $t('statsG.SideNav.unfinishedHeader') }}</span><span class="cat-mgr-hops">{{ $t('statsG.SideNav.opsHeader') }}</span>
-      </div>
-      <template v-for="c in categories" :key="c.categoryId">
-      <div class="cat-mgr-row"
-           :class="{ 'cat-mgr-row--dragging': mgrDragId === c.categoryId,
-                     'cat-mgr-row--over-before': mgrDragOverId === c.categoryId && mgrDragPos === 'before',
-                     'cat-mgr-row--over-after': mgrDragOverId === c.categoryId && mgrDragPos === 'after' }"
-           draggable="true"
-           @dragstart="dragMgrStart(c,$event)" @dragover.prevent="dragMgrOver(c,$event)" @drop.prevent="dropMgrOn(c)" @dragend="mgrDragId=null; mgrDragOverId=null; mgrDragPos=null">
-        <i class="cat-mgr-drag" :title="$t('statsG.SideNav.dragSortTitle')"><app-icon name="dots" :size="13"/></i>
-        <span class="sn-dot" :style="{borderColor:c.categoryColor, background:c.categoryColor}"></span>
-        <input v-if="mgrEditing===c.categoryId" v-model="mgrName" class="sn-cat-edit"
-               @keyup.enter="saveMgrEdit(c)" @blur="saveMgrEdit(c)"/>
-        <span v-else class="cat-mgr-name" role="button" tabindex="0" :title="$t('statsG.SideNav.clickRenameTitle')"
-              @click="startMgrEdit(c)" @keydown.enter.prevent="startMgrEdit(c)">{{c.categoryName}}</span>
-        <em class="cat-mgr-count" role="button" tabindex="0" :title="$t('statsG.SideNav.previewTitle')"
-            @click="toggleMgrPreview(c.categoryId)">{{ $t('statsG.SideNav.countItems', { n: countOf(c.categoryId) }) }}
-          <app-icon :name="mgrExpanded[c.categoryId] ? 'chevron-up' : 'chevron-down'" :size="11"/></em>
-        <button class="cat-mgr-del" :class="{'cat-mgr-del--on': isProject(c.categoryId)}" @click="toggleProject(c)">{{isProject(c.categoryId) ? $t('statsE.SideNav.cancelProject') : $t('statsG.SideNav.setProjectBtn')}}</button>
-        <button class="cat-mgr-del" @click="removeMgrCat(c)">{{ $t('statsG.SideNav.deleteBtn') }}</button>
-      </div>
-      <div v-if="mgrExpanded[c.categoryId]" class="cat-mgr-preview">
-        <div v-for="(title,i) in previewOf(c.categoryId)" :key="i" class="cat-mgr-preview__item">· {{title}}</div>
-        <div v-if="!previewOf(c.categoryId).length" class="cat-mgr-preview__item cat-mgr-preview__empty">{{ $t('statsG.SideNav.noUnfinished') }}</div>
-        <div v-if="countOf(c.categoryId) > 5" class="cat-mgr-preview__more">{{ $t('statsG.SideNav.moreItems', { n: countOf(c.categoryId) }) }}</div>
-      </div>
-      </template>
-      <template #footer>
-        <el-button size="small" type="primary" @click="manageVisible=false">{{ $t('statsG.SideNav.doneBtn') }}</el-button>
-      </template>
-    </el-dialog>
-
-    <el-dialog :title="$t('statsG.SideNav.manageTagTitle')" v-model="tagMgrVisible" width="420px" append-to-body class="cat-mgr-dialog">
-      <div class="cat-mgr-tip">{{ $t('statsG.SideNav.tagMgrTip') }}</div>
-      <div v-for="t in tags" :key="t.name" class="cat-mgr-row cat-mgr-row--tag">
-        <i class="cat-mgr-drag" :title="$t('statsG.SideNav.tagTitle')"><app-icon name="tag" :size="13"/></i>
-        <input v-if="tagMgrEditing===t.name" v-model="tagMgrName" class="sn-cat-edit"
-               @keyup.enter="renameTag(t)" @blur="renameTag(t)"/>
-        <span v-else class="cat-mgr-name" role="button" tabindex="0" :title="$t('statsG.SideNav.clickRenameTitle')"
-              @click="tagMgrEditing=t.name; tagMgrName=t.name" @keydown.enter.prevent="tagMgrEditing=t.name">{{t.name}}</span>
-        <em class="cat-mgr-count">{{ $t('statsG.SideNav.countItems', { n: t.count }) }}</em>
-        <button class="cat-mgr-del" @click="removeTag(t)">{{ $t('statsG.SideNav.deleteBtn') }}</button>
-      </div>
-      <div v-if="!tags.length" class="cat-mgr-tip" style="padding:12px 2px">{{ $t('statsG.SideNav.noTagsTip') }}</div>
-      <template #footer>
-        <el-button size="small" type="primary" @click="tagMgrVisible=false">{{ $t('statsG.SideNav.doneBtn') }}</el-button>
-      </template>
-    </el-dialog>
+    <!-- Manage-categories / manage-tags dialogs and the tag list panel extracted verbatim to
+         components/side-nav/ (2026-09-12 split); dialogs stay mounted and take an `open` prop
+         so el-dialog keeps its native transition, closing back via `close` -->
+    <sn-manage-categories-modal :open="manageVisible" @close="manageVisible=false"/>
+    <sn-manage-tags-modal :open="tagMgrVisible" @close="tagMgrVisible=false"/>
     <filter-modal v-if="filterEditVisible" @close="filterEditVisible=false" @saved="onFilterSaved"/>
   </aside>
 </template>
@@ -279,6 +226,9 @@ import { extractTags } from '../utils/search.js'
 import { visibleNavRoutes } from '../utils/nav-gate.js'
 import i18n from '../i18n/index.js'
 import WeatherWidget from './WeatherWidget.vue'
+import SnTagPanel from './side-nav/SnTagPanel.vue'
+import SnManageCategoriesModal from './side-nav/SnManageCategoriesModal.vue'
+import SnManageTagsModal from './side-nav/SnManageTagsModal.vue'
 import { NAV_ITEMS, navKeyOfRoute } from '../views/registry.js'
 
 // Icons/copy/order are all derived from views/registry.js (single source of truth); labelKey is resolved via navLabel() at render time --
@@ -289,7 +239,7 @@ const NAV_ORDER = NAV_ITEMS.map(n => n.route)
 
 export default {
   name: 'SideNav',
-  components: { WeatherWidget, FilterModal: () => import('./FilterModal.vue') },
+  components: { WeatherWidget, SnTagPanel, SnManageCategoriesModal, SnManageTagsModal, FilterModal: () => import('./FilterModal.vue') },
   data () {
     return {
       // User's manual collapse preference (localStorage); forced collapse on narrow viewports, see also the narrow/collapsed computed
@@ -303,18 +253,11 @@ export default {
       // Sync button spin flag (reference: sidebar-profile-item__btn--spin)
       spinning: false,
       syncDone: false, // the icon briefly turns into a checkmark after sync completes
-      // Manage categories modal: inline rename / delete (with confirmation) / item count / drag sorting
+      // Manage categories / manage tags dialogs: extracted to side-nav/SnManageCategoriesModal.vue
+      // and side-nav/SnManageTagsModal.vue (2026-09-12 split); only the open flags stay here
       manageVisible: false,
-      mgrEditing: null as any,
-      mgrName: '',
-      mgrDragId: null as any,
-      mgrDragOverId: null as any,
-      mgrDragPos: null,      // drop position: 'before' | 'after' (gap-level indicator)
-      mgrExpanded: {},       // expanded state of the category content preview
-      // Manage tags modal: renaming/deleting a tag = rewriting the #tag in all task content
+      // Manage tags modal: rename/delete lives in the extracted dialog; only the open flag stays
       tagMgrVisible: false,
-      tagMgrEditing: null as any,
-      tagMgrName: '',
       catFold: false,
       showFilterPanel: true,
       filterEditVisible: false,
@@ -529,111 +472,11 @@ export default {
         if (inp) { inp.focus(); inp.select() }
       })
     },
-    /* ===== Manage categories modal (batch management entry) ===== */
-    countOf (id) {
-      return this.$store.state.todo.todoList.filter(t => t.categoryId === id && !t.complete).length
-    },
+    /* ===== Manage categories / manage tags dialogs: moved to side-nav/SnManageCategoriesModal.vue
+       and side-nav/SnManageTagsModal.vue (2026-09-12 split, incl. the mgrDrag* sort state machine
+       and the tag rename/delete rewrite). The sidebar's own delCat below stays: rows and the
+       recycle-bin drop target still use it ===== */
     isProject (id) { return this.$store.state.category.projectIds.includes(id) },
-    /** Set/unset as project (secondary path; the primary entry is "New Project" on the project overview page) */
-    toggleProject (c) {
-      const flag = !this.isProject(c.categoryId)
-      this.$store.commit('category/setProject', { id: c.categoryId, flag })
-      this.$message.success(flag ? this.$t('statsG.SideNav.setProject', { name: c.categoryName }) : this.$t('statsG.SideNav.unsetProject', { name: c.categoryName }))
-    },
-    startMgrEdit (c) {
-      this.mgrEditing = c.categoryId
-      this.mgrName = c.categoryName
-      this.$nextTick(() => {
-        const inp = this.$el.querySelector('.cat-mgr-row input')
-        if (inp) { inp.focus(); inp.select() }
-      })
-    },
-    saveMgrEdit (c) {
-      if (this.mgrEditing !== c.categoryId) return
-      this.$store.commit('category/updateCategory', { categoryId: c.categoryId, categoryName: this.mgrName.trim() || c.categoryName })
-      this.mgrEditing = null
-    },
-    dragMgrStart (c, e) {
-      this.mgrDragId = c.categoryId
-      e.dataTransfer.effectAllowed = 'move'
-      e.dataTransfer.setData('text/plain', String(c.categoryId))
-    },
-    dragMgrOver (c, e) {
-      if (this.mgrDragId == null || this.mgrDragId === c.categoryId) return
-      const rect = e.currentTarget.getBoundingClientRect()
-      this.mgrDragPos = (e.clientY - rect.top) < rect.height / 2 ? 'before' : 'after'
-      this.mgrDragOverId = c.categoryId
-    },
-    dropMgrOn (c) {
-      const from = this.mgrDragId
-      const pos = this.mgrDragPos
-      this.mgrDragId = null
-      this.mgrDragOverId = null
-      this.mgrDragPos = null
-      if (from == null || from === c.categoryId) return
-      const ids = this.categories.map(x => x.categoryId)
-      const fi = ids.indexOf(from)
-      let ti = ids.indexOf(c.categoryId)
-      if (fi < 0 || ti < 0) return
-      ids.splice(fi, 1)
-      if (fi < ti) ti -= 1 // remove before inserting; the drop index is corrected for the visual position
-      ids.splice(pos === 'after' ? ti + 1 : ti, 0, from)
-      this.$store.commit('category/reorder', ids)
-    },
-    /** Category content preview: first 5 incomplete task titles */
-    previewOf (id) {
-      return this.$store.state.todo.todoList
-        .filter(t => t.categoryId === id && !t.complete && !t.delete)
-        .slice(0, 5).map(t => t.taskContent)
-    },
-    toggleMgrPreview (id) { this.mgrExpanded = { ...this.mgrExpanded, [id]: !this.mgrExpanded[id] } },
-    async removeMgrCat (c) { await this.delCat(c) },
-    /* ===== Manage tags: rename/delete = rewrite the #tag across all task content and descriptions in sync ===== */
-    tagTodos (name): any[] {
-      return this.$store.state.todo.todoList.filter(t =>
-        extractTags(t.taskContent, t.taskDescribe).includes(name))
-    },
-    async renameTag (t) {
-      const next = this.tagMgrName.trim().replace(/^#/, '')
-      this.tagMgrEditing = null
-      if (!next || next === t.name) return
-      if (this.tags.some(x => x.name === next)) return this.$message.warning(this.$t('statsG.SideNav.tagExists', { name: next }))
-      const esc = t.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-      const re = new RegExp('#' + esc + '(?=\\s|$)', 'g')
-      for (const todo of this.tagTodos(t.name)) {
-        const patch: any = {}
-        if (todo.taskContent) {
-          const v = todo.taskContent.replace(re, '#' + next)
-          if (v !== todo.taskContent) patch.taskContent = v
-        }
-        if (todo.taskDescribe) {
-          const v = todo.taskDescribe.replace(re, '#' + next)
-          if (v !== todo.taskDescribe) patch.taskDescribe = v
-        }
-        if (Object.keys(patch).length) await this.$store.dispatch('todo/updateTodoFields', { taskId: todo.taskId, patch })
-      }
-      this.$message.success(this.$t('statsG.SideNav.tagRenamed', { name: next }))
-    },
-    async removeTag (t) {
-      try {
-        await this.$confirm(this.$t('statsG.SideNav.delTagConfirm', { name: t.name, count: this.tagTodos(t.name).length }), this.$t('statsE.SideNav.tipTitle'), { type: 'warning' })
-      } catch { return }
-      const esc = t.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-      const re = new RegExp('\\s*#' + esc + '(?=\\s|$)', 'g')
-      for (const todo of this.tagTodos(t.name)) {
-        const patch: any = {}
-        if (todo.taskContent) {
-          const v = todo.taskContent.replace(re, '').trim()
-          if (v !== todo.taskContent) patch.taskContent = v
-        }
-        if (todo.taskDescribe) {
-          const v = todo.taskDescribe.replace(re, '').trim()
-          if (v !== todo.taskDescribe) patch.taskDescribe = v
-        }
-        if (Object.keys(patch).length) await this.$store.dispatch('todo/updateTodoFields', { taskId: todo.taskId, patch })
-      }
-      this.$message.success(this.$t('statsG.SideNav.tagDeleted', { name: t.name }))
-    },
     async delCat (c) {
       try {
         await this.$confirm(this.$t('statsG.SideNav.delCatConfirm', { name: c.categoryName }), this.$t('statsE.SideNav.tipTitle'), { type: 'warning' })
@@ -878,62 +721,8 @@ export default {
 
 /* 滚动到边界不再带动父级/整页（滚动链穿透） */
 .sn-scrollable, .main-scroll, .ep-inner, .ds-cal-pop, .cal-more-pop__body { overscroll-behavior: contain; }
-/* 分类管理弹窗 */
-.cat-mgr-tip { font-size: var(--fs-sm); color: var(--text-3); padding: 0 2px 10px; }
-.cat-mgr-row {
-  display: flex; align-items: center; gap: 10px;
-  height: 42px; padding: 0 8px; font-size: var(--fs-md); color: var(--text-1);
-  border-bottom: 1px solid var(--line); background: var(--panel, #fff); cursor: grab;
-}
-.cat-mgr-row:last-of-type { border-bottom: none; }
-.cat-mgr-row:hover { background: var(--gray-bg); }
-.cat-mgr-row { transition: background var(--dur-fast), transform var(--dur-fast); }
-.cat-mgr-row:hover .cat-mgr-drag { color: var(--brand); }
-.cat-mgr-row--dragging { opacity: .4; transform: scale(.99); cursor: grabbing; }
-/* 拖拽落点指示：独立伪元素横线浮在两行交界的缝隙上（上沿=插到前面，下沿=插到后面），
-   首行上沿/末行下沿同样生效；3px 青色圆角线 + 光晕，确保可见 */
-.cat-mgr-row { position: relative; }
-.cat-mgr-row--over-before::before,
-.cat-mgr-row--over-after::after {
-  content: ''; position: absolute; left: 6px; right: 6px; height: 3px;
-  border-radius: var(--radius-xs); background: var(--brand);
-  box-shadow: 0 0 6px rgba(15, 157, 143, .55);
-  z-index: 2; pointer-events: none;
-}
-.cat-mgr-row--over-before::before { top: -2px; }
-.cat-mgr-row--over-after::after { bottom: -2px; }
-/* 表头：与行同一左右内边距，形成表格感 */
-.cat-mgr-head {
-  display: flex; align-items: center; gap: 10px;
-  padding: 0 8px 6px; font-size: var(--fs-xs); color: var(--text-3);
-}
-.cat-mgr-hname { flex: 1; margin-left: 40px; }
-.cat-mgr-hcount { width: 52px; text-align: right; }
-.cat-mgr-hops { width: 40px; text-align: center; }
-/* 条目数 = 预览开关：可点击、带箭头 */
-.cat-mgr-count { cursor: pointer; min-width: 52px; text-align: right; }
-.cat-mgr-count:hover { color: var(--brand); }
-/* 预览区：缩进浅底，展示分类内未完成任务 */
-.cat-mgr-preview {
-  padding: 6px 8px 8px 48px; margin: -1px 0 2px;
-  background: var(--gray-bg); border-radius: var(--radius-md); font-size: var(--fs-sm); color: var(--text-2);
-  animation: mgr-preview-in .15s cubic-bezier(.2, .8, .2, 1);
-}
-.cat-mgr-preview__item { line-height: 22px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cat-mgr-preview__empty { color: var(--text-3); }
-.cat-mgr-preview__more { color: var(--text-3); font-size: var(--fs-xs); }
-.cat-mgr-drag { font-style: normal; color: var(--text-3); font-size: var(--fs-base); cursor: grab; flex-shrink: 0; }
-.cat-mgr-name {
-  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
-  white-space: nowrap; cursor: text;
-}
-.cat-mgr-name:hover { color: var(--brand); }
-.cat-mgr-count { font-style: normal; flex-shrink: 0; font-size: var(--fs-xs); color: var(--text-3); }
-.cat-mgr-del {
-  flex-shrink: 0; font-size: var(--fs-sm); color: var(--text-3);
-  padding: 3px 8px; border-radius: var(--radius-sm); transition: all var(--dur-fast);
-}
-.cat-mgr-del:hover { color: var(--danger); background: var(--danger-soft); }
+/* 分类管理弹窗样式已随弹窗拆分迁往 components/side-nav/SnManageCategoriesModal.vue
+   （SnManageTagsModal.vue 持有共用行规则的副本；两者均为常驻挂载组件，样式不丢失） */
 /* ============ 像素级对齐补丁（对照 构建产物 A / index.pretty.js）============ */
 
 /* —— 1. 侧边栏搜索框：设计稿 .main-nav-search__input[scoped]
@@ -1011,12 +800,9 @@ export default {
 .sn-account-trash.drag-over, .sn-cog-btn.drag-over { animation: trash-pulse .6s ease-in-out infinite; }
 /* 分类名溢出保护：长名不顶飞绝对定位的删除按钮 */
 .sn-cat-item .sn-cat-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* 管理分类弹窗：项目标记按钮选中态 */
-.cat-mgr-del--on { color: var(--brand); }
-.cat-mgr-del--on:hover { color: var(--brand-dark); background: var(--brand-light); }
 /* —— 以下规则自 theme-dark.css 退回（选择器列表首支为浅色规则，不应集中到深色文件）—— */
 .side-nav--collapsed .main-nav-search.sn-search, html[data-theme="dark"] .side-nav--collapsed .main-nav-search.sn-search { height: 40px; padding: 0; justify-content: center; background: transparent; border-color: transparent; }
-/* (壳层跨组件深色规则已归位 theme-dark.css;组件自有 sn- 与 cat-mgr- 深色规则保留在本文件) */
+/* (壳层跨组件深色规则已归位 theme-dark.css;cat-mgr- 深色规则已随弹窗拆分迁往 side-nav/ 子组件) */
 /* 深色模式：侧边栏像素对齐补丁的深色对应值（防浅色硬编码破坏暗色） */
 html[data-theme="dark"] .main-nav-search.sn-search {
   background-color: var(--gray-bg);
@@ -1035,14 +821,11 @@ html[data-theme="dark"] .side-nav .sn-cat-item.active {
 }
 /* 侧栏用户菜单 */
 
-/* 分类管理行 / 番茄计时器选项 */
-html[data-theme="dark"] .cat-mgr-row { background: var(--gray-bg); }
 /* 折叠态：搜索/天气退化为独立图标，深色背景下同样去掉框（否则暗色卡片底会露出"框还在"） */
 html[data-theme="dark"] .side-nav--collapsed .main-nav-search.sn-search,
 html[data-theme="dark"] .side-nav--collapsed .main-nav-search.sn-search { background: transparent; border-color: transparent; }
 html[data-theme="dark"] .side-nav--collapsed .sn-weather,
 html[data-theme="dark"] .side-nav--collapsed .sn-weather { background: transparent; }
-html[data-theme="dark"] .cat-mgr-del--on:hover { background: rgba(15, 157, 143, .15); }
 
 /* ========================= 搜索（SearchView）========================= */
 .main-nav-search{position:relative;display:flex;align-items:center;justify-content:center;width:185px;height:36px;margin:0 0 8px}
