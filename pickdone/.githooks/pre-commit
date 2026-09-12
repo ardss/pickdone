@@ -18,6 +18,7 @@ echo "  ✓ 通过"
 echo "[pre-commit] 2/4 token 纪律（写死浅色背景=深色白块元凶）"
 node cli/check-tokens.js || exit 1
 node cli/check-css-freeze.mjs || exit 1
+node cli/check-file-size.cjs --staged || exit 1
 echo "  ✓ 通过"
 
 echo "[pre-commit] 2.5/4 ESM 模块图（import/export 匹配——白屏级事故在提交时拦截）"
