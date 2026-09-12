@@ -14,8 +14,10 @@
  *   drained keys are restored into the dirty map so a later queueSave/flush retries them.
  * - markDirty(k): flag a list-style field (subtasks/imgs/files/preds) whose value is collected
  *   lazily via opts.dirtyPatchFor at drain time.
- * - takeDirty(keysFilter): drain ALL flags but snapshot patch fragments only for the listed keys
- *   (used by restoreFromBin, which clears every flag yet only persists subtasks/imgs/files).
+ * - takeDirty(keysFilter): drain ONLY the listed keys' flags and return their patch fragments
+ *   (used by restoreFromBin, which persists subtasks/imgs/files). Unlisted dirty flags survive so
+ *   a later queueSave/flushSave still persists them — draining all flags while returning only a
+ *   subset silently dropped edits (2026-09-12 S5 fix).
  * - boot(): dirty state becomes live. The panel's immediate watchers fire before created(), so
  *   flush calls before boot are silent no-ops (same guard as the original `_dirtyFlags` check).
  */
@@ -36,11 +38,16 @@ export function createSaveQueue (store, opts) {
     return patch
   }
 
-  /** Drain every flag; snapshot patch fragments for the given key subset (all when omitted). */
+  /** Drain flags; with keysFilter only the listed keys are drained and returned (others stay dirty). */
   const drain = (keysFilter) => {
     const keys = Object.keys(dirty)
-    dirty = {}
-    return { keys, patch: snapshot(keysFilter ? keys.filter(k => keysFilter.includes(k)) : keys) }
+    if (!keysFilter) {
+      dirty = {}
+      return { keys, patch: snapshot(keys) }
+    }
+    const taken = keys.filter(k => keysFilter.includes(k))
+    for (const k of taken) delete dirty[k]
+    return { keys: taken, patch: snapshot(taken) }
   }
 
   /** Re-mark drained keys after a failed flush, merged with anything marked since (same merge order as the original). */
@@ -91,7 +98,7 @@ export function createSaveQueue (store, opts) {
     queueSave,
     flushSave,
     markDirty,
-    /** Drain all flags, returning the patch fragments for `keysFilter` only. */
+    /** Drain only `keysFilter` flags, returning their patch fragments (other flags stay dirty). */
     takeDirty: (keysFilter) => drain(keysFilter).patch,
     clearTimer: () => clearTimeout(timer),
     boot: () => { booted = true }

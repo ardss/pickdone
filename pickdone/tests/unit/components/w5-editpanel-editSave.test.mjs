@@ -106,15 +106,19 @@ test('flushSave dispatches dirty fields only; failure restores the drained keys 
   assert.equal(flags.failed, false, 'onDone clears the failure banner')
 })
 
-test('takeDirty(keysFilter) drains ALL flags but snapshots only the listed keys (restoreFromBin semantics)', () => {
+test('takeDirty(keysFilter) drains ONLY the listed keys; unlisted flags survive for a later flush (S5 fix)', () => {
   const store = makeStore()
   const { q } = makeQueue(store, { taskId: () => 'task-1' })
   q.markDirty('subtasks')
   q.markDirty('preds')
   const patch = q.takeDirty(['subtasks', 'imgs', 'files'])
-  assert.deepEqual(patch, { subtasks: JSON.stringify(['a']) }, 'preds excluded but still drained')
+  assert.deepEqual(patch, { subtasks: JSON.stringify(['a']) }, 'preds excluded from the restore patch')
+  // preds flag must survive: a later flush persists it instead of silently dropping the edit
   q.flushSave()
-  return sleep(5).then(() => assert.equal(store.calls.length, 0, 'all flags were drained'))
+  return sleep(5).then(() => {
+    assert.equal(store.calls.length, 1, 'surviving preds flag reached the store on the next flush')
+    assert.deepEqual(store.calls[0].payload.patch, { predecessors: '["t1"]' })
+  })
 })
 
 test('flush before boot is a silent no-op (immediate watchers fire before created)', () => {
