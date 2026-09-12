@@ -3,64 +3,64 @@
   <transition name="slide-right" appear>
   <aside v-if="e" class="edit-panel" @click.stop>
     <div class="ep-inner">
-        <div v-if="saveFailed" class="ep-save-failed" role="alert">{{ $t('statsE.EditPanel.saveFailed') }}</div>
+        <div v-if="saveFailed" class="ep-save-failed" role="alert">{{ $t('statsJ.EditPanel.saveFailed') }}</div>
       <div class="ep-title-row">
-        <el-input type="textarea" :autosize="{minRows:1,maxRows:4}" :placeholder="$t('statsE.EditPanel.addTitlePlaceholder')"
+        <el-input type="textarea" :autosize="{minRows:1,maxRows:4}" :placeholder="$t('statsJ.EditPanel.addTitlePlaceholder')"
                   :model-value="e.title" @input="v=>fieldPatch('title',v)" class="ep-title"/>
         <!-- Persistent equal-width placeholder (ghost): with v-if the title textarea's usable width would jump at the start/end of every autosave -->
         <span class="ep-saving" :class="{ghost: !saving}" aria-live="polite" :aria-hidden="!saving">…</span>
-        <span class="ep-collapse-btn" :title="$t('statsE.EditPanel.collapseEditor')" role="button" tabindex="0"
-              :aria-label="$t('statsE.EditPanel.collapseEditor')" @click="collapse" @keydown.enter.prevent="collapse">
+        <span class="ep-collapse-btn" :title="$t('statsJ.EditPanel.collapseEditor')" role="button" tabindex="0"
+              :aria-label="$t('statsJ.EditPanel.collapseEditor')" @click="collapse" @keydown.enter.prevent="collapse">
           <svg viewBox="0 0 16 16"><path d="M6 3.5 L11 8 L6 12.5" fill="none" stroke="currentColor"
             stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </span>
       </div>
 
-      <el-input type="textarea" :autosize="{minRows:3,maxRows:8}" :placeholder="$t('statsE.EditPanel.descPlaceholder')"
+      <el-input type="textarea" :autosize="{minRows:3,maxRows:8}" :placeholder="$t('statsJ.EditPanel.descPlaceholder')"
                 :model-value="e.desc" @input="v=>fieldPatch('desc',v)" class="ep-desc"
                 @paste="onDescPaste" @dragover.prevent @drop.prevent="onDescDrop"/>
       <!-- Content toolbar: image/attachment entries unified on the description area (the standalone "upload image" row was merged in, Option B) -->
       <div class="ep-attach-bar">
-        <span class="ep-attach-btn" role="button" tabindex="0" :aria-label="$t('statsE.EditPanel.imagesLabel')"
+        <span class="ep-attach-btn" role="button" tabindex="0" :aria-label="$t('statsJ.EditPanel.imagesLabel')"
               @click="pickFiles('img')" @keydown.enter.prevent="pickFiles('img')">
-          <img class="ep-ico" src="app://app/assets/img/icon-pic.svg">{{ $t('statsE.EditPanel.imagesLabel') }}<b v-if="imgList.length" class="ep-attach-n">{{ imgList.length }}</b>
+          <img class="ep-ico" src="app://app/assets/img/icon-pic.svg">{{ $t('statsJ.EditPanel.imagesLabel') }}<b v-if="imgList.length" class="ep-attach-n">{{ imgList.length }}</b>
         </span>
-        <span class="ep-attach-btn" role="button" tabindex="0" :aria-label="$t('statsE.EditPanel.attachmentsLabel')"
+        <span class="ep-attach-btn" role="button" tabindex="0" :aria-label="$t('statsJ.EditPanel.attachmentsLabel')"
               @click="pickFiles('file')" @keydown.enter.prevent="pickFiles('file')">
-          <app-icon name="file" :size="12"/>{{ $t('statsE.EditPanel.attachmentsLabel') }}<b v-if="fileList.length" class="ep-attach-n">{{ fileList.length }}</b>
+          <app-icon name="file" :size="12"/>{{ $t('statsJ.EditPanel.attachmentsLabel') }}<b v-if="fileList.length" class="ep-attach-n">{{ fileList.length }}</b>
         </span>
       </div>
 
       <div class="ep-date-chips">
         <span class="ep-date-chip" role="button" tabindex="0" :class="{on: dateChip===todayLabel}"
-              @click="setDate('today')" @keydown.enter.prevent="setDate('today')"><app-icon name="sun" :size="12"/>{{ $t('statsE.EditPanel.todayOption') }}</span>
+              @click="setDate('today')" @keydown.enter.prevent="setDate('today')"><app-icon name="sun" :size="12"/>{{ $t('statsJ.EditPanel.todayOption') }}</span>
         <span class="ep-date-chip" role="button" tabindex="0" :class="{on: dateChip===tomorrowLabel}"
-              @click="setDate('tomorrow')" @keydown.enter.prevent="setDate('tomorrow')"><app-icon name="calendar" :size="12"/>{{ $t('statsE.EditPanel.tomorrowOption') }}</span>
+              @click="setDate('tomorrow')" @keydown.enter.prevent="setDate('tomorrow')"><app-icon name="calendar" :size="12"/>{{ $t('statsJ.EditPanel.tomorrowOption') }}</span>
         <span class="ep-date-chip" role="button" tabindex="0" :class="{on: dateChip && dateChip!==todayLabel && dateChip!==tomorrowLabel}"
               @click="setDate('pick')" @keydown.enter.prevent="setDate('pick')"><app-icon name="calendar" :size="12"/>
           {{dateChip && dateChip!==todayLabel && dateChip!==tomorrowLabel ? dateChip : $t('statsJ.EditPanel.pickDate')}} ▾</span>
         <span class="ep-date-chip" role="button" tabindex="0" :class="{on: !e.dateTs}"
-              @click="setDate('none')" @keydown.enter.prevent="setDate('none')">{{ $t('statsE.EditPanel.noDateOption') }}</span>
+              @click="setDate('none')" @keydown.enter.prevent="setDate('none')">{{ $t('statsJ.EditPanel.noDateOption') }}</span>
         <!-- The picker sits outside the chip, avoiding ARIA nesting of an input inside a button -->
         <el-date-picker ref="datePick" size="small" value-format="x" type="date"
                         style="width:0;height:0;border:0;padding:0;position:absolute;opacity:0" class="ep-date-pick"
-                        :aria-label="$t('statsE.EditPanel.pickDate')" popper-class="ep-date-popper"
+                        :aria-label="$t('statsJ.EditPanel.pickDateAria')" popper-class="ep-date-popper"
                         :model-value="e.dateTs||null" @update:model-value="onPickDate"/>
       </div>
 
       <div class="ep-cat-wrap">
         <div class="ep-row ep-cat-row" role="button" tabindex="0" :aria-expanded="catOpen ? 'true' : 'false'"
              @click="catOpen=!catOpen" @keydown.enter.prevent="catOpen=!catOpen">
-          <span class="ep-field-label ep-field-ico" :title="$t('statsE.EditPanel.categoryLabel')"><app-icon name="tag" :size="13"/></span>
+          <span class="ep-field-label ep-field-ico" :title="$t('statsJ.EditPanel.categoryLabel')"><app-icon name="tag" :size="13"/></span>
           <span v-if="curCat" class="ep-cat-dot" :style="{background: curCat.categoryColor}"></span>
-          <span class="ep-cat-name" :class="{'is-placeholder': !curCat}">{{ curCat ? curCat.categoryName : $t('statsE.EditPanel.uncategorized') }}</span>
+          <span class="ep-cat-name" :class="{'is-placeholder': !curCat}">{{ curCat ? curCat.categoryName : $t('statsJ.EditPanel.uncategorized') }}</span>
           <span class="ml-auto"></span>
           <span class="ep-row-arrow" :class="{on: catOpen}">▾</span>
         </div>
         <div v-if="catOpen" v-click-outside="() => catOpen = false" class="ep-cat-pop" role="listbox">
           <div class="ep-cat-opt" role="option" :class="{on: !e.categoryId}" :aria-selected="(!e.categoryId)?'true':'false'"
                tabindex="0" @click="pickCat(0)" @keydown.enter.prevent="pickCat(0)">
-            <span class="ep-cat-dot" style="background:var(--text-4)"></span>{{ $t('statsE.EditPanel.uncategorizedOption') }}</div>
+            <span class="ep-cat-dot" style="background:var(--text-4)"></span>{{ $t('statsJ.EditPanel.uncategorizedOption') }}</div>
           <div v-for="c in cats" :key="c.categoryId" class="ep-cat-opt" role="option"
                :class="{on: e.categoryId===c.categoryId}" :aria-selected="(e.categoryId===c.categoryId)?'true':'false'"
                tabindex="0" @click="pickCat(c.categoryId)" @keydown.enter.prevent="pickCat(c.categoryId)">
@@ -73,8 +73,8 @@
       <div v-if="devMode" class="ep-cat-wrap">
         <div class="ep-row ep-cat-row" role="button" tabindex="0" :aria-expanded="depOpen ? 'true' : 'false'"
              @click="depOpen=!depOpen" @keydown.enter.prevent="depOpen=!depOpen">
-          <span class="ep-field-label ep-field-ico" :title="$t('statsE.EditPanel.depsLabel')"><app-icon name="link" :size="13"/></span>
-          <span class="ep-cat-name is-placeholder">{{ $t('statsE.EditPanel.depsN', { n: depPreds.length }) }}</span>
+          <span class="ep-field-label ep-field-ico" :title="$t('statsJ.EditPanel.depsLabel')"><app-icon name="link" :size="13"/></span>
+          <span class="ep-cat-name is-placeholder">{{ $t('statsJ.EditPanel.depsN', { n: depPreds.length }) }}</span>
           <span class="ml-auto"></span>
           <span class="ep-row-arrow" :class="{on: depOpen}">▾</span>
         </div>
@@ -82,7 +82,7 @@
           <div v-for="(name, i) in depPredNames" :key="depPreds[i]" class="ep-cat-opt" role="option">
             <span class="ep-cat-dot" style="background:var(--brand)"></span> {{ name }}
             <span class="ml-auto"></span>
-            <button class="close-x" :aria-label="$t('statsE.EditPanel.depsRemove')" @click.stop="rmPred(depPreds[i])"></button>
+            <button class="close-x" :aria-label="$t('statsJ.EditPanel.depsRemove')" @click.stop="rmPred(depPreds[i])"></button>
           </div>
           <div v-for="c in depCandidates" :key="c.taskId" class="ep-cat-opt" role="option"
                tabindex="0" @click="addPred(c.taskId)" @keydown.enter.prevent="addPred(c.taskId)">
@@ -90,32 +90,32 @@
           </div>
           <!-- Candidate list is capped (render cost); make the truncation explicit instead of silently hiding the rest -->
           <div v-if="depTotal > depCandidates.length" class="ep-dep-truncated" role="note">
-            {{ $t('statsE.EditPanel.depsTruncated', { shown: depCandidates.length, total: depTotal }) }}
+            {{ $t('statsJ.EditPanel.depsTruncated', { shown: depCandidates.length, total: depTotal }) }}
           </div>
         </div>
       </div>
 
       <div class="ep-row ep-tags-row">
-        <span class="ep-field-label ep-field-ico" :title="$t('statsE.EditPanel.tagsPlaceholder')"><b class="ep-hash">#</b></span>
+        <span class="ep-field-label ep-field-ico" :title="$t('statsJ.EditPanel.tagsPlaceholder')"><b class="ep-hash">#</b></span>
         <span v-for="t in taskTags" :key="t" class="ep-tag-chip">
           #{{ t }}
-          <span class="ep-tag-x close-x" role="button" tabindex="0" :title="$t('statsE.EditPanel.removePrefix') + t" :aria-label="$t('statsJ.EditPanel.removeTag', { t: t })"
+          <span class="ep-tag-x close-x" role="button" tabindex="0" :title="$t('statsJ.EditPanel.removePrefix') + t" :aria-label="$t('statsJ.EditPanel.removeTag', { t: t })"
                 @click.stop="removeTag(t)" @keydown.enter.prevent.stop="removeTag(t)"></span>
         </span>
-        <input class="ep-tag-input" v-model="tagInput" :placeholder="$t('statsE.EditPanel.addTagHint')" :aria-label="$t('statsE.EditPanel.addTag')"
+        <input class="ep-tag-input" v-model="tagInput" :placeholder="$t('statsJ.EditPanel.addTagHint')" :aria-label="$t('statsJ.EditPanel.addTag')"
                @keydown.enter.prevent="addTag" @blur="addTag"/>
       </div>
 
       <div v-if="inRecycle" class="ep-recycle-banner">
         <i class="ico" style="--ico:url('app://app/assets/img/delete_black_48dp.svg');width:16px;height:16px"></i>
-        <span>{{ $t('statsE.EditPanel.recycleBinEditTip') }}</span>
-        <button class="mini" @click="restoreFromBin">{{ $t('statsE.EditPanel.restoreBtn') }}</button>
+        <span>{{ $t('statsJ.EditPanel.recycleBinEditTip') }}</span>
+        <button class="mini" @click="restoreFromBin">{{ $t('statsJ.EditPanel.restoreBtn') }}</button>
       </div>
 
       <div v-if="!inRecycle" class="ep-row ep-done-row" role="checkbox" :aria-checked="(task&&task.complete)?'true':'false'" tabindex="0"
            @click="toggleComplete" @keydown.enter.prevent="toggleComplete">
-        <span class="ep-field-label ep-field-ico" :title="$t('statsE.EditPanel.doneBtn')"><app-icon name="check" :size="13"/></span>
-        <span class="ep-done-label">{{ $t('statsE.EditPanel.doneBtn') }}</span>
+        <span class="ep-field-label ep-field-ico" :title="$t('statsJ.EditPanel.doneBtn')"><app-icon name="check" :size="13"/></span>
+        <span class="ep-done-label">{{ $t('statsJ.EditPanel.doneBtn') }}</span>
         <span class="ml-auto"></span>
         <span class="ep-sub-check" :class="{on: task&&task.complete}">{{ (task&&task.complete) ? '✓' : '' }}</span>
       </div>
@@ -129,20 +129,20 @@
         </span>
         <span class="ml-auto"></span>
         <transition name="fade">
-          <b v-if="e.remindTs>0" class="ep-remind-clear close-x close-x--sm" :title="$t('statsE.EditPanel.clearReminder')" role="button" tabindex="0"
-             :aria-label="$t('statsE.EditPanel.clearReminder')" @click.stop="clearRemind" @keydown.enter.prevent.stop="clearRemind"></b>
+          <b v-if="e.remindTs>0" class="ep-remind-clear close-x close-x--sm" :title="$t('statsJ.EditPanel.clearReminder')" role="button" tabindex="0"
+             :aria-label="$t('statsJ.EditPanel.clearReminder')" @click.stop="clearRemind" @keydown.enter.prevent.stop="clearRemind"></b>
         </transition>
       </div>
       <transition name="collapse">
         <div v-show="remindOpen" class="ep-remind-pop" @click.stop>
           <div v-for="(r, i) in remindRows" :key="i" class="ep-remind-line">
-            <el-date-picker size="small" value-format="x" type="date" :placeholder="$t('statsE.EditPanel.dateLabel')"
+            <el-date-picker size="small" value-format="x" type="date" :placeholder="$t('statsJ.EditPanel.dateLabel')"
                             v-model="r.date" @update:model-value="commitReminders" style="width:118px"/>
-            <el-time-picker size="small" value-format="HH:mm" format="HH:mm" :placeholder="$t('statsE.EditPanel.timeLabel')"
+            <el-time-picker size="small" value-format="HH:mm" format="HH:mm" :placeholder="$t('statsJ.EditPanel.timeLabel')"
                             v-model="r.time" @update:model-value="commitReminders" style="width:90px"/>
             <span v-if="i === 0" class="ep-remind-line-tag">{{ $t('statsJ.EditPanel.remindMain') }}</span>
             <b v-else class="ep-remind-line-x close-x close-x--sm" role="button" tabindex="0"
-               :aria-label="$t('statsE.EditPanel.clearReminder')" @click.stop="removeRemindRow(i)"
+               :aria-label="$t('statsJ.EditPanel.clearReminder')" @click.stop="removeRemindRow(i)"
                @keydown.enter.prevent.stop="removeRemindRow(i)"></b>
           </div>
           <div class="ep-remind-add" role="button" tabindex="0" :aria-label="$t('statsJ.EditPanel.addReminder')"
@@ -160,14 +160,14 @@
       </transition>
 
       <div v-if="!inRecycle" class="ep-row ep-repeat-row" role="button" tabindex="0"
-           :aria-label="isRepeat ? $t('statsE.EditPanel.editRepeatRule') : $t('statsJ.EditPanel.setRepeat')"
+           :aria-label="isRepeat ? $t('statsJ.EditPanel.editRepeatRule') : $t('statsJ.EditPanel.setRepeat')"
            @click="askRepeatEdit" @keydown.enter.prevent="askRepeatEdit">
         <span class="ep-field-label ep-field-ico" :title="$t('statsE.TodoItem.repeatLabel')"><app-icon name="repeat" :size="13"/></span>
-        <span class="ep-remind-label" :class="{'ep-remind-label--active': isRepeat}">{{ isRepeat ? $t('statsE.EditPanel.repeatPrefix') + $t('statsJ.EditPanel.repeatN', { n: repeatCount }) : $t('statsJ.EditPanel.setRepeat') }}</span>
+        <span class="ep-remind-label" :class="{'ep-remind-label--active': isRepeat}">{{ isRepeat ? $t('statsJ.EditPanel.repeatPrefix') + $t('statsJ.EditPanel.repeatN', { n: repeatCount }) : $t('statsJ.EditPanel.setRepeat') }}</span>
         <span class="ml-auto"></span>
         <template v-if="isRepeat">
-          <button class="ep-mini" @click.stop="askRepeatEdit">{{ $t('statsE.EditPanel.ruleLabel') }}</button>
-          <button class="ep-mini danger" @click.stop="askRepeatDelete">{{ $t('statsE.EditPanel.deleteEllipsis') }}</button>
+          <button class="ep-mini" @click.stop="askRepeatEdit">{{ $t('statsJ.EditPanel.ruleLabel') }}</button>
+          <button class="ep-mini danger" @click.stop="askRepeatDelete">{{ $t('statsJ.EditPanel.deleteEllipsis') }}</button>
         </template>
       </div>
 
@@ -176,22 +176,22 @@
           <span class="ep-sub-check" :class="{on:s.checked}" role="checkbox" :aria-checked="s.checked ? 'true' : 'false'"
                 tabindex="0" @click.stop="toggleSub(s)" @keydown.enter.prevent.stop="toggleSub(s)">{{ s.checked ? '✓' : '' }}</span>
           <span class="ep-sub-text" :class="{strike:s.checked}" @click="toggleSub(s)">{{s.text}}</span>
-          <b class="ep-sub-x close-x close-x--sm" role="button" tabindex="0" :aria-label="$t('statsE.EditPanel.deleteSubtask')"
+          <b class="ep-sub-x close-x close-x--sm" role="button" tabindex="0" :aria-label="$t('statsJ.EditPanel.deleteSubtask')"
              @click.stop="delSub(i)" @keydown.enter.prevent.stop="delSub(i)"></b>
           <b class="ep-sub-drag">≡</b>
           <span class="ep-sub-move">
-            <i role="button" tabindex="0" :aria-label="$t('statsE.EditPanel.moveSubtaskUp')" @click.stop="moveSub(i,-1)" @keydown.enter.prevent.stop="moveSub(i,-1)">↑</i><i role="button" tabindex="0" :aria-label="$t('statsE.EditPanel.moveSubtaskDown')" @click.stop="moveSub(i,1)" @keydown.enter.prevent.stop="moveSub(i,1)">↓</i>
+            <i role="button" tabindex="0" :aria-label="$t('statsJ.EditPanel.moveSubtaskUp')" @click.stop="moveSub(i,-1)" @keydown.enter.prevent.stop="moveSub(i,-1)">↑</i><i role="button" tabindex="0" :aria-label="$t('statsJ.EditPanel.moveSubtaskDown')" @click.stop="moveSub(i,1)" @keydown.enter.prevent.stop="moveSub(i,1)">↓</i>
           </span>
         </div>
         <div class="ep-row ep-addsub">
           <img class="ep-ico" src="app://app/assets/img/icon-sublist.svg">
-          <input v-model="newSub" :placeholder="$t('statsE.EditPanel.addSubtaskAria')+subDoneText" :aria-label="$t('statsE.EditPanel.addSubtask')" @keyup.enter="addSub" class="ep-addsub-input"/>
+          <input v-model="newSub" :placeholder="$t('statsJ.EditPanel.addSubtaskAria')+subDoneText" :aria-label="$t('statsJ.EditPanel.addSubtask')" @keyup.enter="addSub" class="ep-addsub-input"/>
         </div>
       </div>
 
       <div class="ep-row ep-prio">
         <img class="ep-ico" src="app://app/assets/img/icon-tune.svg" style="opacity:.6">
-        <span class="ep-diff-label">{{ $t('statsE.EditPanel.priorityLabel') }}</span><span class="hint-q" :title="$t('statsE.EditPanel.urgencyHint')">?</span>
+        <span class="ep-diff-label">{{ $t('statsJ.EditPanel.priorityLabel') }}</span><span class="hint-q" :title="$t('statsJ.EditPanel.urgencyHint')">?</span>
         <span class="ep-diff-btns ep-prio-btns">
           <button v-for="pr in PRIOS" :key="pr.v" :class="['prio-'+pr.v, {on:((task&&task.priority)||0)===pr.v}]" @click="fieldPatch('priority', ((task&&task.priority)||0)===pr.v?0:pr.v)">{{ tt(pr.l) }}</button>
         </span>
@@ -222,9 +222,9 @@
         <!-- Right date pill demoted to a purely visual indicator (clicks land on the whole row); the hidden-selector calendar pop pattern is unchanged -->
         <span class="ep-deadline-pill"
               :class="{ 'ep-deadline-pill--set': !!(e&&e.deadlineTs) }">
-          {{ e&&e.deadlineTs ? dayjs(e.deadlineTs).format('M/D') : $t('statsE.EditPanel.pickDueDate') }}
+          {{ e&&e.deadlineTs ? dayjs(e.deadlineTs).format('M/D') : $t('statsJ.EditPanel.pickDueDate') }}
         </span>
-        <b v-if="e&&e.deadlineTs" class="ep-remind-clear close-x" role="button" tabindex="0" :title="$t('statsE.EditPanel.clearDueDate')" :aria-label="$t('statsE.EditPanel.clearDueDate')" @click.stop="fieldPatch('deadlineTs',0)"></b>
+        <b v-if="e&&e.deadlineTs" class="ep-remind-clear close-x" role="button" tabindex="0" :title="$t('statsJ.EditPanel.clearDueDate')" :aria-label="$t('statsJ.EditPanel.clearDueDate')" @click.stop="fieldPatch('deadlineTs',0)"></b>
         <el-date-picker ref="deadlinePick" size="small" value-format="x" type="date"
                         style="width:0;height:0;border:0;padding:0;position:absolute;opacity:0" class="ep-deadline-pick"
                         :aria-label="$t('statsJ.EditPanel.setDeadline')" popper-class="ep-date-popper"
@@ -233,27 +233,27 @@
 
       <div class="ep-imgs" v-if="imgList.length">
         <div v-for="(im,i) in imgList" :key="i" class="ep-img-cell">
-          <button type="button" class="ep-img-btn" :aria-label="$t('statsE.EditPanel.zoomImage') + (Number(i)+1)" @click="previewImg=im.url">
+          <button type="button" class="ep-img-btn" :aria-label="$t('statsJ.EditPanel.zoomImage') + (Number(i)+1)" @click="previewImg=im.url">
             <img :src="im.url" alt="" loading="lazy" @error="onImgErr($event)">
           </button>
-          <b class="x close-x close-x--sm" role="button" tabindex="0" :aria-label="$t('statsE.EditPanel.removeImage')" @click.stop="removeFile('imgList',i)" @keydown.enter.prevent.stop="removeFile('imgList',i)"></b>
+          <b class="x close-x close-x--sm" role="button" tabindex="0" :aria-label="$t('statsJ.EditPanel.removeImage')" @click.stop="removeFile('imgList',i)" @keydown.enter.prevent.stop="removeFile('imgList',i)"></b>
         </div>
       </div>
       <div v-for="(f,i) in fileList" :key="'f'+i" class="ep-file">
-        <app-icon name="file" :size="12" style="opacity:.6"/> {{f.name}} <a role="button" tabindex="0" @click.prevent.stop="openFileUrl(f)" @keydown.enter.prevent.stop="openFileUrl(f)">{{ $t('statsE.EditPanel.openBtn') }}</a> <b class="x close-x close-x--sm" role="button" tabindex="0" :aria-label="$t('statsE.EditPanel.removeFile')" @click.stop="removeFile('fileList',i)" @keydown.enter.prevent.stop="removeFile('fileList',i)"></b>
+        <app-icon name="file" :size="12" style="opacity:.6"/> {{f.name}} <a role="button" tabindex="0" @click.prevent.stop="openFileUrl(f)" @keydown.enter.prevent.stop="openFileUrl(f)">{{ $t('statsJ.EditPanel.openBtn') }}</a> <b class="x close-x close-x--sm" role="button" tabindex="0" :aria-label="$t('statsJ.EditPanel.removeFile')" @click.stop="removeFile('fileList',i)" @keydown.enter.prevent.stop="removeFile('fileList',i)"></b>
       </div>
 
       <div class="ep-flex"></div>
 
       <div class="ep-tools">
         <span class="ml-auto"></span>
-        <span class="ep-tool danger" role="button" tabindex="0" :title="$t('statsE.EditPanel.deleteBtn')" :aria-label="$t('statsE.EditPanel.deleteTask')" @click="delTask" @keydown.enter.prevent="delTask">
+        <span class="ep-tool danger" role="button" tabindex="0" :title="$t('statsJ.EditPanel.deleteBtn')" :aria-label="$t('statsJ.EditPanel.deleteTask')" @click="delTask" @keydown.enter.prevent="delTask">
           <i class="ico" style="--ico:url('app://app/assets/img/delete_black_48dp.svg');width:16px;height:16px"></i>
         </span>
       </div>
     </div>
 
-    <div v-if="previewImg" ref="previewMask" tabindex="-1" class="img-preview-mask" role="dialog" aria-modal="true" :aria-label="$t('statsE.EditPanel.imagePreview')" @click.self="previewImg=null" @keydown.esc="previewImg=null">
+    <div v-if="previewImg" ref="previewMask" tabindex="-1" class="img-preview-mask" role="dialog" aria-modal="true" :aria-label="$t('statsJ.EditPanel.imagePreview')" @click.self="previewImg=null" @keydown.esc="previewImg=null">
       <img :src="previewImg"><button class="close-x" :aria-label="$t('statsE.SettingsModal.closeBtn')" @click.stop="previewImg=null"></button>
     </div>
   </aside>
@@ -281,7 +281,7 @@ const FIELD_MAP = {
   deadlineTs: 'deadlineTs'
 }
 // Priority has two tiers (user-finalized): high/low; connected with the quadrant's important — high⇔important=1, low⇔important=0 (see fieldPatch)
-const PRIOS = [{ v: 3, l: 'statsE.EditPanel.priorityHigh' }, { v: 1, l: 'statsJ.EditPanel.prioLow' }]
+const PRIOS = [{ v: 3, l: 'statsJ.EditPanel.priorityHigh' }, { v: 1, l: 'statsJ.EditPanel.prioLow' }]
 
 // [component-fixes] pure-start (extracted verbatim by tests/component-fixes-a11y.test.mjs)
 /** True when the attachment url is still referenced by the task row's image/files JSON.
@@ -629,7 +629,7 @@ export default {
       const mainChanged = list[0] !== this.e.remindTs
       this.e.remindTs = list[0]
       this.e.reminderExtra = list.slice(1)
-      if (mainChanged && list[0] < Date.now()) this.$message.warning(this.$t('statsE.EditPanel.reminderPastTip'))
+      if (mainChanged && list[0] < Date.now()) this.$message.warning(this.$t('statsJ.EditPanel.reminderPastTip'))
       if (!this.e.dateTs) this.e.dateTs = dayjs(list[0]).startOf('day').valueOf()
       this.queueSave({ reminderTime: this.e.remindTs, reminderExtra: this.e.reminderExtra, todoTime: this.e.dateTs })
     },
@@ -704,7 +704,7 @@ export default {
       all.delete = false
       all.status = 'update'
       await this.$store.dispatch('todo/updateTodoFields', { taskId: this.e.taskId, patch: all })
-      this.$message.success(this.$t('statsE.EditPanel.restoredMsg'))
+      this.$message.success(this.$t('statsJ.EditPanel.restoredMsg'))
       this.hydrate()
     },
     addSub () {
@@ -776,7 +776,7 @@ export default {
     async uploadOne (kind, f) {
       try {
         await this._uploadOne(kind, f)
-      } catch (err) { reportError('upload:' + f.name, err); this.$message.error(this.$t('statsE.EditPanel.uploadFailedMsg') + f.name) }
+      } catch (err) { reportError('upload:' + f.name, err); this.$message.error(this.$t('statsJ.EditPanel.uploadFailedMsg') + f.name) }
     },
     async _uploadOne (kind, f) {
       const buf = new Uint8Array(await f.arrayBuffer())

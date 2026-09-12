@@ -42,16 +42,17 @@ test('i18n: component-r5 keys exist in both languages with matching placeholders
   const load = async f => (await import(pathToFileURL(path.join(dir, f)).href)).default
   for (const [en, zh] of [['en-US-E.js', 'zh-CN-E.js']]) {
     const e = await load(en); const z = await load(zh)
-    for (const k of ['statsE.TodoItem.openTaskAria', 'statsE.TodoItem.moreTagsTip']) {
-      assert.ok(e[k] && z[k], k)
+    // E shard re-nested on 2026-09-12 (flat dotted keys -> nested statsE object)
+    for (const k of ['openTaskAria', 'moreTagsTip']) {
+      assert.ok(e.statsE.TodoItem[k] && z.statsE.TodoItem[k], 'statsE.TodoItem.' + k)
     }
-    assert.match(e['statsE.TodoItem.openTaskAria'], /\{name\}/)
-    assert.match(z['statsE.TodoItem.openTaskAria'], /\{name\}/)
-    assert.match(e['statsE.TodoItem.moreTagsTip'], /\{tags\}/)
-    assert.match(z['statsE.TodoItem.moreTagsTip'], /\{tags\}/)
+    assert.match(e.statsE.TodoItem.openTaskAria, /\{name\}/)
+    assert.match(z.statsE.TodoItem.openTaskAria, /\{name\}/)
+    assert.match(e.statsE.TodoItem.moreTagsTip, /\{tags\}/)
+    assert.match(z.statsE.TodoItem.moreTagsTip, /\{tags\}/)
     // dead placeholder key removed along with the fake menu item
-    assert.equal(e['statsE.ViewMoreMenu.monthViewMenuItem'], undefined)
-    assert.equal(z['statsE.ViewMoreMenu.monthViewMenuItem'], undefined)
+    assert.equal(e.statsE.ViewMoreMenu.monthViewMenuItem, undefined)
+    assert.equal(z.statsE.ViewMoreMenu.monthViewMenuItem, undefined)
   }
   const enD = await load('en-US-D.js'); const zhD = await load('zh-CN-D.js')
   for (const k of ['statsD.DayDateStrip.prevDay', 'statsD.DayDateStrip.nextDay']) {

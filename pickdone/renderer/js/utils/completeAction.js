@@ -31,7 +31,7 @@ export function toggleCompleteWithUndo ({ store, message, todo, announce, fromEl
   }).catch(() => {})
   if (announce) announce(tt('statsA.core.' + (wasComplete ? 'undoneAnnounce' : 'doneAnnounce'), { c: content }))
   // Paper plane: after completion, fly from the original row position to the sidebar "Achieved" entry (can be disabled via settings/reduced-motion)
-  if (fromPoint) Promise.resolve(p).then(() => flyPaperPlane(fromPoint, tt('statsE.DoneEntry.label'))).catch(() => {})
+  if (fromPoint) Promise.resolve(p).then(() => flyPaperPlane(fromPoint, tt('statsJ.DoneEntry.label'))).catch(() => {})
   if (message) {
     // Complete → "Undo" (un-complete); un-complete → "Restore completion". Symmetric in both directions, unified 5s duration (same as delete undo)
     const undo = () => {

@@ -54,8 +54,11 @@ test('i18n: newly added fix keys exist in both languages with matching placehold
   const enD = await load('en-US-D.js')
   const zhD = await load('zh-CN-D.js')
 
-  assert.ok(en['statsE.HabitView.intervalAria'] && zh['statsE.HabitView.intervalAria'])
-  for (const [e, z] of [[en['statsE.EditPanel.depsTruncated'], zh['statsE.EditPanel.depsTruncated']]]) {
+  assert.ok(en.statsE.HabitView.intervalAria && zh.statsE.HabitView.intervalAria)
+  // EditPanel keys moved to shard J on 2026-09-12 (mixed-stage E dismantle)
+  const enJ = await load('en-US-J.js')
+  const zhJ = await load('zh-CN-J.js')
+  for (const [e, z] of [[enJ['statsJ.EditPanel.depsTruncated'], zhJ['statsJ.EditPanel.depsTruncated']]]) {
     assert.match(e, /\{shown\}/); assert.match(e, /\{total\}/)
     assert.match(z, /\{shown\}/); assert.match(z, /\{total\}/)
   }

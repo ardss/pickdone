@@ -9,7 +9,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const read = p => fs.readFileSync(path.join(ROOT, p), 'utf8')
@@ -77,7 +77,7 @@ test('EditPanel: Esc exemption list covers all top-level overlays', () => {
 test('EditPanel: deadline clear button has an aria-label (parity with reminder clear)', () => {
   const src = read('renderer/js/components/EditPanel.vue')
   const m = src.match(/<b v-if="e&&e\.deadlineTs"[^>]*>/)
-  assert.ok(m && m[0].includes(':aria-label="$t(\'statsE.EditPanel.clearDueDate\')"'), 'deadline clear lacks aria-label')
+  assert.ok(m && m[0].includes(':aria-label="$t(\'statsJ.EditPanel.clearDueDate\')"'), 'deadline clear lacks aria-label')
 })
 
 test('TomatoBar: work (give-up) button uses the brand teal family, no brick red left', () => {
@@ -167,16 +167,23 @@ test('a11y: TodoBoxView batch check is keyboard-focusable', () => {
   assert.ok(m && m[0].includes('tabindex="0"'), 'batch check must have tabindex="0"')
 })
 
-test('i18n: new keys exist in both languages', () => {
+test('i18n: new keys exist in both languages', async () => {
+  const dir = path.join(ROOT, 'renderer/js/i18n/locales')
+  const load = async f => (await import(pathToFileURL(path.join(dir, f)).href)).default
+  // shards may hold keys flat (dotted literal keys) or nested — compare on the flattened key set
+  const flat = (o, pre = '') => Object.entries(o).flatMap(([k, v]) =>
+    v && typeof v === 'object' ? flat(v, `${pre}${k}.`) : [`${pre}${k}`])
   const pairs = [
-    ['statsE.HabitView.freqWeekdaysRequired', 'renderer/js/i18n/locales/zh-CN-E.js', 'renderer/js/i18n/locales/en-US-E.js'],
-    ['statsE.HabitView.freqIntervalClamped', 'renderer/js/i18n/locales/zh-CN-E.js', 'renderer/js/i18n/locales/en-US-E.js'],
-    ['statsE.HabitView.renameTip', 'renderer/js/i18n/locales/zh-CN-E.js', 'renderer/js/i18n/locales/en-US-E.js'],
-    ['statsE.SearchView.truncatedNotice', 'renderer/js/i18n/locales/zh-CN-E.js', 'renderer/js/i18n/locales/en-US-E.js'],
-    ['statsJ.TodoItem.movedToQuadrant', 'renderer/js/i18n/locales/zh-CN-J.js', 'renderer/js/i18n/locales/en-US-J.js']
+    ['statsE.HabitView.freqWeekdaysRequired', 'zh-CN-E.js', 'en-US-E.js'],
+    ['statsE.HabitView.freqIntervalClamped', 'zh-CN-E.js', 'en-US-E.js'],
+    ['statsE.HabitView.renameTip', 'zh-CN-E.js', 'en-US-E.js'],
+    ['statsE.SearchView.truncatedNotice', 'zh-CN-E.js', 'en-US-E.js'],
+    ['statsJ.TodoItem.movedToQuadrant', 'zh-CN-J.js', 'en-US-J.js']
   ]
   for (const [key, zh, en] of pairs) {
-    assert.ok(read(zh).includes(`'${key}'`) || read(zh).includes(`"${key}"`), `${key} missing in ${zh}`)
-    assert.ok(read(en).includes(`'${key}'`) || read(en).includes(`"${key}"`), `${key} missing in ${en}`)
+    const zhKeys = flat(await load(zh))
+    const enKeys = flat(await load(en))
+    assert.ok(zhKeys.includes(key), `${key} missing in ${zh}`)
+    assert.ok(enKeys.includes(key), `${key} missing in ${en}`)
   }
 })

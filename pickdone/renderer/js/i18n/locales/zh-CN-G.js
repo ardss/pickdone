@@ -2,6 +2,8 @@
 export default {
   statsG: {
     SideNav: {
+    collapseSidebar: '收起侧边栏',
+    expandSidebar: '展开侧边栏',
       newTagTitle: '新建标签',
       setProject: '「{name}」已设为项目',
       unsetProject: '「{name}」已恢复为普通分类',

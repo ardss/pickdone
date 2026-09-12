@@ -14,7 +14,7 @@ export const SHARDS = [
   { batch: 'B', prefixes: ['statsB'] }, // owner: statsB — tomato float page, habit view, projects list/detail/docs
   { batch: 'C', prefixes: ['statsC'] }, // owner: statsC — todo-box undo-delete / mark-done-again strings
   { batch: 'D', prefixes: ['statsD'] }, // owner: statsD — window controls, weather widget, tomato panel, quick add, repeat modals, day-date strip (absorbed shard F on 2026-09-12)
-  { batch: 'E', prefixes: ['statsE', 'statsA.core', 'statsG.SideNav', 'statsE.layout'] }, // mixed-content shard: conflict keys were migrated here; do not add new ones
+  { batch: 'E', prefixes: ['statsE'] }, // owner: statsE — SettingsModal shortcuts, TodoItem/TodoGroups/TodayView/ViewMoreMenu and other mixed-stage keys re-homed here (re-nested 2026-09-12; DoneEntry/EditPanel moved to J, SideNav keys moved to G)
   { batch: 'G', prefixes: ['statsG'] }, // owner: statsG — SideNav, EpTomato, DayRail
   { batch: 'H', prefixes: ['statsH'] }, // owner: statsH — SettingsModal / TomatoBar / main shell / layout / TodoGroups (per shard file header)
   { batch: 'I', prefixes: ['statsI'] }, // owner: statsI — category view, project view

@@ -2,6 +2,8 @@
 export default {
   statsG: {
     SideNav: {
+    collapseSidebar: 'Collapse sidebar',
+    expandSidebar: 'Expand sidebar',
       newTagTitle: 'New Tag',
       setProject: '"{name}" has been set as a project',
       unsetProject: '"{name}" has been restored to a normal category',
