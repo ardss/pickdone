@@ -19,10 +19,8 @@ const read = p => readFileSync(path.join(ROOT, 'renderer/js', p), 'utf8')
 
 test('i18n: every en-US shard has a zh-CN twin with identical key sets', async () => {
   const dir = path.join(ROOT, 'renderer/js/i18n/locales')
-  // NOTE: D and F are skipped — they carry a pre-existing cross-shard key split
-  // (RepeatModal/QuickAdd/WeatherWidget keys land in F on en side, D on zh side) that
-  // predates this wave and is left untouched to keep the fix scoped.
-  const enFiles = readdirSync(dir).filter(f => f.startsWith('en-US-') && !/^en-US-[DF]\.js$/.test(f))
+  // 2026-09-12: shard F merged into D and deleted — no shard is skipped anymore
+  const enFiles = readdirSync(dir).filter(f => f.startsWith('en-US-'))
   for (const f of enFiles) {
     const zf = f.replace('en-US', 'zh-CN')
     const e = (await import(pathToFileURL(path.join(dir, f)).href)).default

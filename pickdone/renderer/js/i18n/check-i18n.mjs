@@ -124,7 +124,7 @@ function loadLang (lang) {
     const obj = (new Function('return ' + body))()
     deepFlat(m, obj, '', lang + '.js')
   } catch (e) { console.error('[i18n] 主语言文件读取失败(空表会让 diff 全等假绿):', e.message) }
-  const ORDER = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'N', 'P', 'Q', 'R', 'T'] // matches index.js import order, keeping "later shard wins" semantics identical to runtime
+  const ORDER = ['A', 'B', 'C', 'D', 'E', 'G', 'H', 'I', 'J', 'K', 'N', 'P', 'Q', 'R', 'T'] // matches index.js import order, keeping "later shard wins" semantics identical to runtime
   for (const f of fs.readdirSync(LOCALES).filter(x => x.startsWith(lang)).sort((a, b) => {
     const ra = ORDER.indexOf(a.match(/-([A-Z])\.js$/)?.[1] || '')
     const rb = ORDER.indexOf(b.match(/-([A-Z])\.js$/)?.[1] || '')

@@ -1,4 +1,5 @@
-// i18n shard (Batch X): zh source chunk - do not edit values here for EN; see i18n/README.md
+/** i18n shard D: statsD namespace (en-US) — win controls, weather widget, quick add, repeat modals, tomato panel/records, day-date strip.
+ *  2026-09-12: shard F (which also held statsD keys) was merged into this shard key-level; F no longer exists. */
 export default {
   "statsD": {
     "WinControls": {
@@ -6,6 +7,7 @@ export default {
       "maximize": "Maximize",
       "restore": "Restore",
       "close": "Close"
+
     },
     "WeatherWidget": {
       "wmo0": "Clear",
@@ -27,14 +29,31 @@ export default {
       "fetchFailed": "Failed to fetch weather",
       "fallbackCity": "Beijing",
       "refresh": "Refresh",
-      "refreshAria": "Refresh weather"
+      "refreshAria": "Refresh weather",
+      "cityNotFound": "City not found: {city}",
+      "wmo55": "Heavy drizzle",
+      "wmo63": "Rain",
+      "wmo73": "Snow",
+      "wmo80": "Light showers",
+      "wmo81": "Showers"
+
     },
     "TomatoPanel": {
       "phaseIdle": "Ready",
       "todayRecords": "Today's records",
       "countN": "{n}",
       "freeFocus": "Free focus",
-      "minutesN": "{n} min"
+      "minutesN": "{n} min",
+      "title": "Pomodoro",
+      "phaseWork": "Focusing",
+      "phaseRest": "Resting",
+      "focusMinutes": "Focus {n} min",
+      "restMinutes": "Rest {n} min",
+      "float": "Pomodoro floating window",
+      "floatTitle": "Pomodoro floating window",
+      "today": "Today",
+      "emptyTip": "No records yet"
+
     },
     "TomatoFocusRecord": {
       "abandonedLabel": "Abandoned",
@@ -54,14 +73,50 @@ export default {
       "cancel": "Cancel",
       "addTitle": "Add Record",
       "startTime": "Start time",
-      "confirm": "OK"
+      "confirm": "OK",
+      "title": "Focus Records",
+      "manualAdd": "Add manually",
+      "startLabel": "Start",
+      "endLabel": "End",
+      "focusDurationLabel": "Focus duration (min)",
+      "restDurationVal": "{n} min",
+      "linkEvent": "Link schedule",
+      "linkedTask": "Linked task",
+      "linkedTaskLabel": "Linked task",
+      "freeFocusPlaceholder": "Free focus",
+      "pickDateTime": "Pick date & time",
+      "pickEvent": "Pick a task",
+      "addInfoA": "Manual records are for offline focus sessions",
+      "addInfoB": "Up to 3 per day",
+      "addQuota": "3 per day",
+      "addLimitReached": "Daily manual-add limit reached",
+      "addSuccess": "Record added",
+      "confirmDelete": "Delete this focus record?",
+      "deleteSuccess": "Deleted",
+      "empty": "No focus records yet",
+      "detailHint": "Tip: right-click to delete a record",
+      "tip": "View focus records",
+      "pomosSummary": "{n} pomodoros · {d}",
+      "focusMinutes": "Focus {n} min",
+      "restMinutes": "Rest {n} min",
+      "restTitle": "Rest session",
+      "segFocus": "Focus",
+      "segRest": "Rest",
+      "recordAria": "Record details",
+      "locate": "Locate record"
+
     },
     "QuickAdd": {
       "ariaLabel": "Quick add task",
       "clearDateAria": "Clear date {d}",
       "selectDate": "Pick a date",
       "scheduledAt": ", scheduled for ",
-      "today": "today"
+      "today": "today",
+      "placeholder": "Type a task, press Enter to create",
+      "noDate": "no date",
+      "movedToInbox": ", moved to inbox",
+      "created": "Task added: {c}"
+
     },
     "DayDateStrip": {
       "wd0": "Sun",
@@ -80,7 +135,11 @@ export default {
       "prevMonth": "Previous month",
       "nextMonth": "Next month",
       "prevYear": "Previous year",
-      "nextYear": "Next year"
+      "nextYear": "Next year",
+      "labelPattern": "{w}, {m}/{d}",
+      "calTitle": "{m}/{y}",
+      "labelPatternYear": "{w}, {m}/{d}/{y}"
+
     },
     "RepeatModal": {
       "close": "Close",
@@ -97,7 +156,9 @@ export default {
       "selectDates": "Select dates",
       "pickFixedDate": "Pick a fixed date",
       "gregorian": "(Gregorian)",
-      "lunar": "Lunar (yearly)", "lunarMonthN": "Lunar month {m}", "lunarDayN": "Day {d}",
+      "lunar": "Lunar (yearly)",
+      "lunarMonthN": "Lunar month {m}",
+      "lunarDayN": "Day {d}",
       "lunarSkipHint": "Years without that lunar day (e.g. no 30th) are skipped",
       "skipHolidays": "Skip statutory holidays",
       "skipWeekends": "Skip weekends",
@@ -108,13 +169,47 @@ export default {
       "wd4": "Thu",
       "wd5": "Fri",
       "wd6": "Sat",
-      "wd7": "Sun"
+      "wd7": "Sun",
+      "title": "Repeat Rule",
+      "aria": "Repeat rule settings",
+      "intervalHint": "The task repeats automatically every selected unit",
+      "every": "every",
+      "countHint": "Repeats within the selected range, stops automatically after",
+      "inDays": "days",
+      "inWeeks": "weeks",
+      "inMonths": "months",
+      "inYears": "years",
+      "weekly": "Weekly on",
+      "monthly": "Monthly on",
+      "yearly": "Yearly on",
+      "wd0": "Sun",
+      "dayN": "{d}",
+      "workdaysOnly": "Workdays only (incl. adjusted)",
+      "workdayHint": "Repeat dates fall on workdays only; holidays and weekends are shifted",
+      "generate": "Generate",
+      "baseEvent": "Base event",
+      "noBase": "Base event not found",
+      "noDate": "No date",
+      "previewPrefix": "Repeat preview: ",
+      "previewSuffix": "",
+      "generated": "Repeat instances generated",
+      "truncated": "(partial)"
+
     },
     "RepeatDeleteModal": {
       "title": "Delete Repeating Task",
       "close": "Close",
       "cancel": "Cancel",
-      "delete": "Delete"
+      "delete": "Delete",
+      "chooseScope": "Choose scope",
+      "onlyThis": "This event only",
+      "thisAndAfter": "This and following",
+      "allEvents": "All events",
+      "confirmAria": "Confirm delete scope",
+      "groupInfo": "\"{c}\" belongs to a repeat group (multiple events share one rule).",
+      "notFound": "Repeat group not found"
+
     }
+
   }
 }
