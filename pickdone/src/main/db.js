@@ -551,9 +551,13 @@ const OPS = {
   // semantics) — no intermediate state. Rows arrive in store shape; the DB layer forces status='sync'
   // so a compromised renderer cannot write arbitrary status values through this op.
   commitSyncBatch: ({ rows, version }) => {
+    // The cursor is the convergence lynchpin — a non-numeric value (String(undefined) etc.) would
+    // poison state.version with NaN on the next boot's parseInt. Fail closed at the DB layer.
+    const v = Number(version)
+    if (!Number.isFinite(v) || v < 0) throw new Error('[TodoDB] commitSyncBatch: invalid version ' + String(version))
     const tr = db.transaction(list => {
-      for (const t of list) stmts.upsert.run(todoToRow({ ...t, status: 'sync', version: version || 0 }))
-      stmts.setMeta.run('todosVersion', String(version))
+      for (const t of list) stmts.upsert.run(todoToRow({ ...t, status: 'sync', version: v }))
+      stmts.setMeta.run('todosVersion', String(v))
     })
     tr(Array.isArray(rows) ? rows : [])
     return true

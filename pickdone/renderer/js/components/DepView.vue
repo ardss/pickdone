@@ -229,6 +229,9 @@ export default {
   },
   watch: {
     projectId () {
+      // Switching projects resets connect mode: the surviving source would silently re-target the new
+      // scope's cards ("switched candidates but kept connecting"), idempotent-safe but semantically loose
+      this.cancelConnect()
       this.loadMs()
       this.loadPos()
       this.$nextTick(this.drawWires)
