@@ -111,18 +111,19 @@ test('EditPanel: estimate −/+ buttons have distinct decrease/increase aria-lab
 /* ---------------- EditPanel: subtask row a11y/UX ---------------- */
 
 test('EditPanel: subtask ↑/↓ buttons stay reachable (opacity, not display:none)', () => {
-  const src = read('renderer/js/components/EditPanel.vue')
+  // 2026-09-12 S4 split: subtask block lives in edit-panel/EpSubtasks.vue
+  const src = read('renderer/js/components/edit-panel/EpSubtasks.vue')
   assert.ok(!/\.ep-sub-move\s*\{\s*display:\s*none/.test(src), 'display:none removed')
   assert.match(src, /\.ep-sub:focus-within \.ep-sub-move\s*\{\s*opacity:\s*1/)
 })
 
 test('EditPanel: subtask text click toggles the subtask (cursor:pointer now honest)', () => {
-  const src = read('renderer/js/components/EditPanel.vue')
+  const src = read('renderer/js/components/edit-panel/EpSubtasks.vue')
   assert.match(src, /class="ep-sub-text"[^>]*@click="toggleSub\(s\)"/)
 })
 
 test('EditPanel: dependency candidate truncation is announced', () => {
-  const src = read('renderer/js/components/EditPanel.vue')
+  const src = read('renderer/js/components/edit-panel/EpDependencies.vue')
   assert.match(src, /depsTruncated/, 'truncation notice rendered')
   assert.match(src, /depTotal \(\)/, 'depTotal computed present')
 })
