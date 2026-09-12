@@ -88,7 +88,7 @@ export default defineComponent({
       this.$nextTick(() => {
         // append-to-body moves the dialog DOM under document.body, so component-root queries
         // miss it — query at document level (defensive pattern per EditPanel's datePick ref)
-        const inp = document.querySelector('.cat-mgr-dialog input.sn-cat-edit')
+        const inp = document.querySelector('.cat-mgr-dialog input.sn-cat-edit') as HTMLInputElement | null
         if (inp) { inp.focus(); inp.select() }
       })
     },

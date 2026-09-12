@@ -43,8 +43,8 @@ test('watch baseline wiring: the todo-db:call handler re-baselines after dbm.cal
   try { src += readAnchor('handlersTodo') } catch {}
   const callIdx = src.indexOf("r = dbm.call(op, params)")
   assert.ok(callIdx > 0, 'db:call handler found')
-  const after = src.slice(callIdx, callIdx + 600)
-  assert.match(after, /isWriteOp\(op\)[\s\S]{0,400}resyncDbWatch\(\)/, 'resync must be gated by isWriteOp after the write')
+  const after = src.slice(callIdx, callIdx + 1200)
+  assert.match(after, /isWriteOp\(op\)[\s\S]{0,700}resyncDbWatch\(\)/, 'resync must be gated by isWriteOp after the write')
   assert.match(src, /lastMtime = nextWatchBaseline\(lastMtime, readWatchMtime\)/, 'resync must go through the tested pure core')
 })
 

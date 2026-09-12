@@ -555,11 +555,16 @@ const OPS = {
     // poison state.version with NaN on the next boot's parseInt. Fail closed at the DB layer.
     const v = Number(version)
     if (!Number.isFinite(v) || v < 0) throw new Error('[TodoDB] commitSyncBatch: invalid version ' + String(version))
+    if (!Array.isArray(rows)) {
+      // fail-closed (round-7 audit P0): rows=null slipping through would advance the cursor while
+      // writing zero rows — dirty rows after it would never be re-sent (silent non-convergence)
+      throw new Error('[TodoDB] commitSyncBatch: rows must be an array, got ' + typeof rows)
+    }
     const tr = db.transaction(list => {
       for (const t of list) stmts.upsert.run(todoToRow({ ...t, status: 'sync', version: v }))
       stmts.setMeta.run('todosVersion', String(v))
     })
-    tr(Array.isArray(rows) ? rows : [])
+    tr(rows)
     return true
   },
   bumpSnow: ({ taskId, minutes }) => {

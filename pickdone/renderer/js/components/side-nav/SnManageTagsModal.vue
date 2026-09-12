@@ -68,7 +68,7 @@ export default defineComponent({
       this.$nextTick(() => {
         // append-to-body: the dialog DOM lives under document.body, not this.$el — query at
         // document level (same defensive pattern as SnManageCategoriesModal.startMgrEdit)
-        const inp = document.querySelector('.tag-mgr-dialog input.sn-cat-edit')
+        const inp = document.querySelector('.tag-mgr-dialog input.sn-cat-edit') as HTMLInputElement | null
         if (inp) { inp.focus(); inp.select() }
       })
     },
