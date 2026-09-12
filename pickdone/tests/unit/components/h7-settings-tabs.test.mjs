@@ -86,10 +86,16 @@ test('h7 data tab: exportXlsx catches failures and tolerates dirty subtasks JSON
   assert.ok(!/\(JSON\.parse\(t\.subtasks/.test(dataTab), 'raw subtask parse must go through the guarded helper')
 })
 
-test('h7 data tab: restoreFromAutoBackup field set matches restoreFromBackup (settings + habits + category)', () => {
-  const auto = dataTab.match(/async restoreFromAutoBackup \(\) \{[\s\S]*?\.then\(async \(\) => \{([\s\S]*?)\n\s{8}\}\)/)[1]
+test('h7 data tab: restore field set (settings + habits + category) — deduped into the shared applyRestoreDump', () => {
+  // P3 (2026-09-12): both restore paths funnel through one shared applyRestoreDump; the segment
+  // set is asserted there once instead of in two hand-copied method bodies
+  for (const caller of ['restoreFromAutoBackup', 'restoreFromBackup']) {
+    const m = dataTab.match(new RegExp('(async )?' + caller + ' \\(\\) \\{[\\s\\S]*?\\n {4}\\}'))
+    assert.ok(m && m[0].includes('applyRestoreDump'), caller + ' must funnel through applyRestoreDump')
+  }
+  const dump = dataTab.match(/async applyRestoreDump \(dump\) \{([\s\S]*?)\n {4}\}/)[1]
   for (const seg of ["commit('settings/restore'", "commit('category/setList'", "commit('habits/replaceAll'", 'restoreTomatoLedger(b)', 'parseTodoState(b.todoState)']) {
-    assert.ok(auto.includes(seg), `auto-backup restore missing ${seg}`)
+    assert.ok(dump.includes(seg), `shared restore pipeline missing ${seg}`)
   }
 })
 
