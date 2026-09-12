@@ -205,10 +205,18 @@ function importItems (items, { dryRun = false, format, category = null, useLists
 
   const report = { format, total: items.length, imported: 0, wouldImport: 0, duplicates: 0, skipped: 0, categoriesCreated: createdCats, tasks: [] }
   const pending = []
+  // dayStart cache: repeated due timestamps (very common in vendor exports) must not re-run dayjs per row
+  const dayStartCache = new Map()
+  const dayStartOf = due => {
+    if (dayStartCache.has(due)) return dayStartCache.get(due)
+    const v = due ? +dayjs(due).startOf('day') : 0
+    dayStartCache.set(due, v)
+    return v
+  }
   for (const it of items) {
     const title = String(it.title || '').trim()
     if (!title) { report.skipped++; report.tasks.push({ title: it.title, action: 'skipped', reason: 'empty title' }); continue }
-    const dayStart = it.due ? +dayjs(it.due).startOf('day') : 0
+    const dayStart = dayStartOf(it.due)
     const key = title + '|' + dayStart
     if (existing.has(key)) { report.duplicates++; report.tasks.push({ title, action: 'duplicate' }); continue }
     existing.add(key) // identical rows inside one file are deduped too
@@ -222,20 +230,33 @@ function importItems (items, { dryRun = false, format, category = null, useLists
   if (dryRun || !pending.length) return report
 
   const audit = require('./audit')
-  const createdRows = []
-  for (const { it, title, dayStart, categoryId } of pending) {
-    const now = Date.now() + createdRows.length
-    // Top-insert sort within the target day's pool (renderer todo.js nextSort semantics), so imports don't all pile at taskSort 0
-    const daySorts = db.call('queryTodos', { deleted: 0 })
-      .filter(x => (x.dayStart || 0) === dayStart)
-      .map(x => x.taskSort).filter(v => v != null)
+  // H7 (2026-09-12 P1): the write loop used to call queryTodos for EVERY row to recompute the day's
+  // min taskSort — an O(N²) full-table scan that made ten-thousand-row imports take minutes. Build a
+  // dayStart → nextSort snapshot pool ONCE and decrement it per insert (preserves the top-insert
+  // min-100 chain semantics exactly, including "empty day → sort 0").
+  const dayNextSort = new Map()
+  for (const x of db.call('queryTodos', { deleted: 0 })) {
+    if (x.taskSort == null) continue
+    const day = x.dayStart || 0
+    const cur = dayNextSort.get(day)
+    if (cur === undefined || x.taskSort < cur) dayNextSort.set(day, x.taskSort)
+  }
+  // H7 (2026-09-12 P1): rows now land through the transactional upsertMany op (db.transaction in db.js)
+  // instead of per-row upsert — a crash mid-import used to leave a half-imported database with no audit
+  // line; now the whole batch commits atomically (all-or-nothing).
+  const now = Date.now()
+  const rows = pending.map(({ it, title, dayStart, categoryId }, i) => {
+    const ts = now + i
+    const prevMin = dayNextSort.get(dayStart)
+    const taskSort = prevMin === undefined ? 0 : Math.fround(prevMin - 100)
+    if (prevMin !== undefined) dayNextSort.set(dayStart, taskSort)
     // Completed tasks without a source completion timestamp fall back to the due date (then createTime):
     // stamping every row with "import moment" inflated the import day's done stats
-    const completedAt = it.done ? (it.completedAt || it.due || now) : 0
-    const t = {
+    const completedAt = it.done ? (it.completedAt || it.due || ts) : 0
+    return {
       complete: !!it.done,
       completedAt,
-      createTime: now, delete: false,
+      createTime: ts, delete: false,
       reminderTime: it.reminder || 0, reminderOffsets: [], reminderExtra: [],
       estimate: 0, difficulty: 0,
       priority: it.priority || 0, deadlineTs: 0, important: 0, urgent: 0,
@@ -243,17 +264,18 @@ function importItems (items, { dryRun = false, format, category = null, useLists
       subtasks: it.subs && it.subs.length ? JSON.stringify(it.subs.map(s => ({ text: s.text, checked: !!s.checked }))) : null,
       image: null, files: null,
       categoryId: categoryId || 0,
-      updateTime: now, syncTime: 0,
+      updateTime: ts, syncTime: 0,
       taskContent: title,
       taskDescribe: it.notes || '',
-      taskId: core.genTaskId(userId, now),
-      taskSort: daySorts.length ? Math.fround(Math.min(...daySorts) - 100) : 0,
+      taskId: core.genTaskId(userId, ts),
+      taskSort,
       todoTime: it.due || 0,
       userId, status: 'add', version: 0
     }
-    db.call('upsert', t)
-    createdRows.push(db.call('getById', t.taskId))
-    report.imported++  }
+  })
+  db.call('upsertMany', rows)
+  const createdRows = rows.map(r => db.call('getById', r.taskId))
+  report.imported = rows.length
   audit.record({
     action: 'import',
     targets: createdRows.slice(0, 50),

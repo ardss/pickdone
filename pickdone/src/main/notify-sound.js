@@ -14,8 +14,11 @@ function toSoundUrl (file, appRoot) {
   if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) {
     return 'app://app/' + rel.split(path.sep).join('/')
   }
-  const norm = encodeURI(file.split(path.sep).join('/'))
-  return 'file://' + (norm.startsWith('/') ? norm : '/' + norm)
+  // H7 (2026-09-12 P2): hand-rolled encodeURI left '#', '?' and '%' unescaped — a sound file named
+  // "ring#1.mp3" produced 'file:///...ring#1.mp3' where '#1.mp3' parsed as a fragment and Audio played
+  // nothing. Node's built-in pathToFileURL percent-encodes every reserved character.
+  const { pathToFileURL } = require('url')
+  return pathToFileURL(file).href
 }
 
 function sound (file) {

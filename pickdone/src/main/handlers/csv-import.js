@@ -6,12 +6,17 @@ const i18nM = require('../i18n')
 const fixUtil = require('../fix-util')
 const scheduler = require('../scheduler')
 const appAudit = require('../audit')
+const { makeAssertMainWindow } = require('./shared')
 
 // Parsing (detectFormat + rowsToItems) of a <=20MB CSV can freeze the main thread
 // for seconds on six-figure-row exports (all window IPC + reminder scheduling stall).
 // The parse runs in a worker thread; importItems (DB writes) stays in the main
 // process because it shares the app database via cli/lib.js.
 const IMPORT_WORKER_TIMEOUT_MS = 30000
+
+function logTerminationFailure (err) {
+  try { require('electron-log').warn('[Import] parse worker terminate() failed', err) } catch { /* no logger available */ }
+}
 
 function runImportParse (text, format = 'auto') {
   return new Promise((resolve, reject) => {
@@ -20,10 +25,16 @@ function runImportParse (text, format = 'auto') {
       if (settled) return
       settled = true
       clearTimeout(timer)
-      try { worker.terminate() } catch { /* already dead */ }
+      // H7 (2026-09-12): terminate() is async and can reject (e.g. while the worker is stuck in a
+      // structured-clone of a huge buffer) — an unhandled rejection here would crash the main process.
+      // It still cannot FORCE-reclaim such a worker (structural V8 limitation: a clone in flight is not
+      // interruptible; the 30s timeout abandons the thread to the OS at app exit) — logged, not hidden.
+      try { Promise.resolve(worker.terminate()).catch(err => logTerminationFailure(err)) } catch (err) { logTerminationFailure(err) }
       fn(arg)
     }
-    const worker = new Worker(path.join(__dirname, '..', 'import-worker.js'), { workerData: { text, format } })
+    const worker = new Worker((process.resourcesPath
+        ? path.join(process.resourcesPath, 'src', 'main', 'import-worker.js')
+        : path.join(__dirname, '..', 'import-worker.js')), { workerData: { text, format } })
     const timer = setTimeout(() => finish(reject, new Error('import: parse worker timed out after ' + IMPORT_WORKER_TIMEOUT_MS + 'ms')), IMPORT_WORKER_TIMEOUT_MS)
     worker.on('message', m => {
       if (m && m.ok) finish(resolve, m)
@@ -39,13 +50,15 @@ function runImportParse (text, format = 'auto') {
 }
 
 module.exports = function importHandlers (ctx) {
-  const { getMainWindow, dbApi, broadcastTodosChanged, log } = ctx
+  const { getMainWindow, dbApi, broadcastTodosChanged, log, resyncDbWatch } = ctx
+  const assertMainWindow = makeAssertMainWindow(getMainWindow)
 
   let lastPickedImportPath = '' // the only legitimate path source for import:run (the import:pick-preview dialog)
 
   return {
     // --- CSV import (migrating from other apps): reuses the CLI's cli/import.js engine; both preview and execution go through the main process ---
     'import:pick-preview': async () => {
+      assertMainWindow('import:pick-preview') // H7 2026-09-12 P2: dialog needs a live parent; aligned with the backup domain
       const importer = require('../../../cli/import.js')
       const { dialog } = require('electron')
       const r = await dialog.showOpenDialog(getMainWindow() || undefined, {
@@ -67,6 +80,10 @@ module.exports = function importHandlers (ctx) {
       const f = String(file || '')
       // Arbitrary-path read primitive sealed off: only the path most recently returned by the main-process dialog is accepted
       if (!lastPickedImportPath || f !== lastPickedImportPath) throw new Error('import: path not granted by picker')
+      // H7 2026-09-12 P2: re-stat at run time — the file could have been swapped for a bigger one
+      // between import:pick-preview and import:run (TOCTOU on the 20MB cap)
+      const tooBig = fixUtil.checkImportFileSize(fs.statSync(f).size)
+      if (tooBig) throw new Error(tooBig)
       // same pipeline as importer.importFile, but the text->items parse runs in the worker thread
       const text = fs.readFileSync(f, 'utf8')
       const { format, items } = await runImportParse(text)
@@ -77,6 +94,11 @@ module.exports = function importHandlers (ctx) {
       // review P2 (2026-09-10): bulk import writes straight through the main process and bypassed the
       // todo-db:call audit hook — land one explicit line so app-side imports are traceable like CLI imports
       try { appAudit.recordCustom('import', ['import:run', f], [], [], 'imported ' + ((r && r.imported) || 0) + ' task(s)') } catch { /* best-effort */ }
+      // H7 (2026-09-12 P1): bulk writes through dbm bypass the todo-db:call write path, so the db-watch
+      // baseline was never re-synced — the next watch poll saw the mtime jump, misread OUR OWN import as
+      // an EXTERNAL write and triggered a full reload + undo-stack clear (user lost undo history after
+      // every import). Re-baseline exactly like handlers/todo.js does after its write ops.
+      try { const rw = resyncDbWatch && resyncDbWatch(); if (rw) rw() } catch (err) { log.warn('[Import] resyncDbWatch failed', err) }
       // 与 todo-db:call 写路径对齐(2026-09-09 P2):导入落库后必须刷新调度器并广播,否则应用内导入后
       // 主窗口列表陈旧、已导入的提醒全部静默丢失
       try { scheduler.reloadAll(dbApi()) } catch (err) { log.warn('[Import] reloadAll failed', err) }

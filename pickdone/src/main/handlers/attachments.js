@@ -33,23 +33,28 @@ module.exports = function attachmentHandlers (ctx) {
     },
     'save-upload-file-to-download': (e, url, targetName) => {
       if (isLocked()) throw new Error('locked')
-      // Security check: force basename on the target name and strip path segments, preventing path traversal writes to arbitrary locations
-      const rawName = String(targetName || '').replace(/[/]/g, '_')
+      // H7 2026-09-12 P2: exact 'local://' prefix check BEFORE slicing (a non-local url used to have
+      // its first 8 characters sliced off and fed to attachmentPath)
+      if (typeof url !== 'string' || !url.startsWith('local://')) return null
+      // Security check: force basename on the target name and strip path segments (both separators,
+      // Windows treats '\' as a path separator too), preventing path traversal writes to arbitrary locations
+      const rawName = String(targetName || '').replace(/[\\/]/g, '_')
       if (/^\.+$/.test(rawName)) throw new Error('bad target name')
-      const safeName = path.basename(rawName) || path.basename(attachmentPath(url.slice(8)))
+      let base = path.basename(rawName)
+      // Windows reserved device names (CON, NUL, COM1..9, LPT1..9, with or without extension) are
+      // unusable/unpredictable as download filenames — prefix them instead of failing the save
+      if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i.test(base)) base = '_' + base
+      const safeName = base || path.basename(attachmentPath(url.slice(8)))
       // 同名不静默覆盖(2026-09-10 P2):copyFileSync 直接覆盖用户已有的同名下载;改为 " (n)" 后缀,
       // 并包 try 返回结构化错误(磁盘满/权限等此前抛裸异常,渲染端只能拿到笼统 invoke reject)
-      if (url.startsWith('local://')) {
-        try {
-          const src = attachmentPath(url.slice(8))
-          const dst = fixUtil.nextAvailableName(app.getPath('downloads'), safeName, p => fs.existsSync(p))
-          fs.copyFileSync(src, dst)
-          return dst
-        } catch (err) {
-          throw new Error('save-to-download failed: ' + String((err && err.message) || err))
-        }
+      try {
+        const src = attachmentPath(url.slice(8))
+        const dst = fixUtil.nextAvailableName(app.getPath('downloads'), safeName, p => fs.existsSync(p))
+        fs.copyFileSync(src, dst)
+        return dst
+      } catch (err) {
+        throw new Error('save-to-download failed: ' + String((err && err.message) || err))
       }
-      return null
     },
     // P2 2026-09-11: deletion failures used to be swallowed and true returned regardless — the user was
     // told the attachment was gone while the file stayed on disk. Throw a structured error instead (the
