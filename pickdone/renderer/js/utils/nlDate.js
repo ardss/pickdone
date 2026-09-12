@@ -90,9 +90,13 @@ function parseEnglishDate (text, base) {
         if (m) {
           const mo = EN_MONTHS[m[1]]
           const d = +m[2]
-          const y = m[3] ? +m[3] : base.year()
+          const explicitYear = m[3] != null
+          const y = explicitYear ? +m[3] : base.year()
           if (mo != null && d >= 1 && d <= base.year(y).month(mo).daysInMonth()) {
             date = base.year(y).month(mo).date(d).startOf('day')
+            // A bare "Jan 15" (no year) that already passed this year rolls to next year,
+            // same as the Chinese core's M月D日 rule
+            if (!explicitYear && date.isBefore(base, 'day')) date = date.add(1, 'year')
             label = `${m[1]} ${d}${m[3] ? ' ' + m[3] : ''}`
           }
         } else {
@@ -124,9 +128,15 @@ function parseEnglishDate (text, base) {
     }
   }
 
-  // Time was already extracted in step 1; below only applies h/min onto date
-
-  if (!date) return { date: null, label: '', restText: text }
+  // Time was already extracted in step 1; below only applies h/min onto date.
+  // Time-only input ("3pm" / "15:00") has no date part: land on today, rolling to
+  // tomorrow when the time already passed — same semantics as the Chinese core's
+  // time-only branch ("3点").
+  if (!date) {
+    if (!hasTime) return { date: null, label: '', restText: text }
+    date = base.startOf('day')
+    label = 'today'
+  }
   if (hasTime) {
     if (h > 23 || min > 59) return { date, label, restText: text }
     let d = date.hour(h).minute(min).second(0)
@@ -154,6 +164,43 @@ export function parseNaturalDate (text, base = dayjs()) {
   if (hasLatin && !hasCJK) {
     return parseEnglishDate(raw, base)
   }
+  if (hasCJK && hasLatin) {
+    // Mixed input ("明天3pm", "周五 15:00 吃饭"): the Chinese core's TIME_RE does not
+    // know English time phrases, so the English time word would be silently dropped.
+    // Peel the English time phrase off first, parse the remaining CJK text with the
+    // shared core, then apply the peeled time onto the parsed date.
+    const peeled = peelEnglishTime(raw)
+    const cnResult = parseChineseNaturalDate(peeled.text, base, FMT.cnFull)
+    if (!peeled.hasTime) return cnResult
+    if (peeled.h > 23 || peeled.min > 59) return cnResult
+    const d = cnResult.date || base.startOf('day')
+    let withTime = d.hour(peeled.h).minute(peeled.min).second(0)
+    if (withTime.isBefore(base)) withTime = withTime.add(1, 'day')
+    return {
+      date: withTime,
+      label: (cnResult.label ? cnResult.label + ' ' : '') + `${String(peeled.h).padStart(2, '0')}:${String(peeled.min).padStart(2, '0')}`,
+      restText: cnResult.restText
+    }
+  }
   // Chinese path: shared core; the full-date label format stays locale-aware via FMT.cnFull
   return parseChineseNaturalDate(raw, base, FMT.cnFull)
+}
+
+/** Extract an English time phrase (3pm / 3:30pm / 15:00) from mixed CJK text,
+ * returning {h, min, hasTime, text} where text is the input minus the phrase. */
+function peelEnglishTime (text) {
+  const m12 = text.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i)
+  if (m12) {
+    let h = parseInt(m12[1], 10)
+    const min = m12[2] != null ? parseInt(m12[2], 10) : 0
+    const pm = /pm/i.test(m12[3])
+    if (pm && h < 12) h += 12
+    if (!pm && h === 12) h = 0
+    return { h, min, hasTime: true, text: text.replace(m12[0], '').trim() }
+  }
+  const m24 = text.match(/([01]?\d|2[0-3]):([0-5]\d)/)
+  if (m24) {
+    return { h: parseInt(m24[1], 10), min: parseInt(m24[2], 10), hasTime: true, text: text.replace(m24[0], '').trim() }
+  }
+  return { h: 0, min: 0, hasTime: false, text }
 }

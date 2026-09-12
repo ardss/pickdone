@@ -73,8 +73,9 @@ test('English full numeric dates: YYYY-MM-DD / YYYY/M/D / YYYY.M.D', () => {
 })
 
 test('English month names: Jan 15 / January 15 / Jan 15 2026 / Jan 15, 2026', () => {
-  assert.equal(d('Jan 15').format('YYYY-MM-DD'), '2026-01-15')
-  assert.equal(d('january 15').format('YYYY-MM-DD'), '2026-01-15')
+  // Bare "Jan 15" with no year: base is 2026-09-15, so 2026-01-15 already passed → rolls to next year (aligned with the Chinese core's M月D日 rule)
+  assert.equal(d('Jan 15').format('YYYY-MM-DD'), '2027-01-15')
+  assert.equal(d('january 15').format('YYYY-MM-DD'), '2027-01-15')
   assert.equal(d('Jan 15 2027').format('YYYY-MM-DD'), '2027-01-15')
   assert.equal(d('Jan 15, 2027').format('YYYY-MM-DD'), '2027-01-15')
   // English month forms must reject nonexistent dates like Feb 30
