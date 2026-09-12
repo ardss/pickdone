@@ -605,7 +605,10 @@ function registerIpc () {
     resyncDbWatch: () => resyncDbWatch,
     broadcastTomatoRecordsChanged, broadcastTodosChanged, broadcastWhiteNoiseUpdated,
     rebuildTrayMenu, getTray: () => tray, updateTomatoTray,
-    applyShortcuts, getState: () => state
+    applyShortcuts
+    // NOTE: no `getState` here — none of the 9 handler modules read app state
+    // (verified 2026-09-12); windowManager keeps its own getState for tray-close
+    // behavior. Re-add only with a concrete handler consumer.
   }
 
   const handlers = Object.assign({},

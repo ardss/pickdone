@@ -3,9 +3,11 @@ const log = require('electron-log')
 const i18nM = require('../i18n')
 const tomatoFloat = require('../tomato-float')
 const tomatoTaskbar = require('../tomato-taskbar')
+const { makeAssertMainWindow } = require('./shared')
 
 module.exports = function settingsHandlers (ctx) {
   const { readConfig, writeConfig, app, getMainWindow, applyShortcuts, rebuildTrayMenu, getTray } = ctx
+  const assertMainWindow = makeAssertMainWindow(getMainWindow)
 
   return {
     // --- Settings / config ---
@@ -22,11 +24,8 @@ module.exports = function settingsHandlers (ctx) {
     // fires there too; it is a redundant re-notify of a change the main window already persisted).
     // Changing the app-wide language must not be triggerable by an auxiliary window.
     'set-app-locale': (e, locale) => {
+      assertMainWindow(e)
       const main = getMainWindow()
-      if (!main || e.sender !== main.webContents) {
-        log.warn('[IPC] 拒绝非主窗改语言, sender:', e.sender && e.sender.id)
-        throw new Error('forbidden: main window only')
-      }
       i18nM.setLocale(locale); const c = writeConfig({ appLocale: locale }); rebuildTrayMenu(); const tray = getTray(); if (tray) { try { tray.setToolTip(i18nM.mt('appName')) } catch (err) { /* empty */ } }
       // P2 2026-09-12: previously this looped EVERY live window and setTitle(appName), flattening
       // semantic titles (float window task title, lock window title). Auxiliary windows pick up the
