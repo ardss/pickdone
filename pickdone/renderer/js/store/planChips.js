@@ -2,6 +2,11 @@
  * Plan-chip sync concern, physically split out of store/todo.js (pure relocation, no semantic change):
  * the per-taskId serial chip-sync chain, the row-mutation chip-sync body, and the pure snapshot-replay
  * side-effect planner used by undo/redo (persistSnapshotDiff).
+ *
+ * SINGLE FACADE (2026-09-12 convergence): moveTaskChips / clearTaskChips / snapshotForDelete /
+ * restoreSnapshot have exactly one implementation (utils/dayPlans.js) and are re-exported from here.
+ * Store consumers (undo.js / todo.js) must import these names from THIS module, never from
+ * utils/dayPlans.js directly — guarded by tests/unit/store/w4-plan-chips-facade.test.mjs.
  */
 import { dayjs } from '../utils/core.js'
 import { moveTaskChips, clearTaskChips, snapshotForDelete, restoreSnapshot } from '../utils/dayPlans.js'
@@ -41,6 +46,7 @@ export async function rowChipSync (taskId, prevDayStart, nextRow) {
   } catch (e) { console.warn('[todo] schedule chip sync failed (task updated, chip will converge on next op):', e) }
 }
 
+/** Facade re-exports: the four chip ops above (single impl in utils/dayPlans.js) + fmtChipDay */
 export { fmtChipDay, snapshotForDelete, restoreSnapshot, clearTaskChips, moveTaskChips }
 
 /** Pure planner for snapshot-replay side effects (unit-testable, no dayjs/window — day values stay raw timestamps).
