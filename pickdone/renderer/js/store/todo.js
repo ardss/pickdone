@@ -660,9 +660,14 @@ export default {
       // Declared out here (not in the try) so the catch's retry-enqueue can reach it — a `const`
       // inside the try block is invisible to catch, which silently killed the whole compensation
       let snapshot = []
+      // Hoisted like `snapshot` (same try-scoped `const` trap): the catch's retry-enqueue must reuse the
+      // snapshot-time version. Using live `state.version` there would push the quit-flush replay cursor past
+      // rows the user edited during the await, letting the db layer mark that newer content status='sync'
+      // even though it was never sent.
+      let serverV = state.version
       try {
         commit('bumpVersion')
-        const serverV = state.version
+        serverV = state.version
         // Snapshot only dirty rows (status !== 'sync'); during the await, the user's new edits (status='update') aren't wrongly marked synced.
         // An already-synced whole table skips the wholesale upsertMany write entirely (Ctrl+S with no changes = no write)
         snapshot = [...state.todoList, ...state.recycleList].filter(t => t.status !== 'sync')
@@ -685,7 +690,7 @@ export default {
         reportError('syncTodos', err)
         // Enqueue for retry like reorderTodos/safeUpsert (round-6 leftover): rows stay dirty in memory,
         // but the quit-flush replay needs the op verbatim to survive a close-before-retry
-        try { _pendingUpserts.push({ op: 'commitSyncBatch', params: { rows: deproxyRows(snapshot), version: state.version } }) } catch { /* keep the UI flow alive */ }
+        try { _pendingUpserts.push({ op: 'commitSyncBatch', params: { rows: deproxyRows(snapshot), version: serverV } }) } catch { /* keep the UI flow alive */ }
       } finally {
         commit('setSyncing', false)
         // In the finally block: the empty-snapshot early return used to skip the critical backup entirely

@@ -17,19 +17,34 @@ const dir = path.dirname(fileURLToPath(import.meta.url))
 // integration-ui spawns its own Electron instance (~60s) and stays out of the quick regression - run by a dedicated check:all stage / npm run it
 const EXCLUDE = new Set(['e2e.test.mjs', 'integration-ui.test.mjs'])
 
+const KNOWN_SUITES = new Set(['unit', 'integration', 'visual'])
+
 function discover(root, acc = []) {
   for (const e of readdirSync(root, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
     const p = path.join(root, e.name)
-    if (e.isDirectory()) discover(p, acc)
+    if (e.isDirectory()) {
+      // fixtures/ holds shared test data, not runnable specs — skip it recursively so a stray
+      // *.test.mjs dropped there is never picked up as a suite member
+      if (e.name === 'fixtures') continue
+      discover(p, acc)
+    }
     else if (e.name.endsWith('.test.mjs') && !EXCLUDE.has(e.name)) acc.push(p)
   }
   return acc
 }
 
-function suiteOf(file) {
+function topOf(file) {
   const rel = path.relative(dir, file).split(path.sep)
-  const top = rel.length > 1 ? rel[0] : 'integration' // tests/ root entrypoints = integration-flavored
-  return ['unit', 'integration', 'visual'].includes(top) ? top : 'integration'
+  return rel.length > 1 ? rel[0] : 'integration' // tests/ root entrypoints = integration-flavored
+}
+
+// Fail-closed classification (H6 2026-09-12): a test file under an unknown top-level directory
+// (e.g. tests/lib/**) used to be silently lumped into 'integration' and could run with the wrong
+// environment expectations. Such files are now an error: they must be moved into a known suite
+// directory or the directory added to KNOWN_SUITES explicitly.
+function suiteOf(file) {
+  const top = topOf(file)
+  return KNOWN_SUITES.has(top) ? top : 'integration'
 }
 
 const suites = process.argv
@@ -39,6 +54,14 @@ const suites = process.argv
 // drop the --suite args before forwarding the rest to node --test
 const forwardArgs = process.argv.slice(2).filter(a => !a.startsWith('--suite='))
 const all = discover(dir)
+// Fail-closed: refuse to run (instead of silently misclassifying) when a test file lives under an
+// unknown top-level directory — force an explicit suite classification.
+const unclassified = all.filter(f => !KNOWN_SUITES.has(topOf(f)))
+if (unclassified.length) {
+  console.error(`✗ [run-all] ${unclassified.length} test file(s) under unknown suite director(ies) — classify them explicitly:`)
+  unclassified.forEach(f => console.error(`  ${path.relative(dir, f)}`))
+  process.exit(1)
+}
 const files = suites.length ? all.filter(f => suites.includes(suiteOf(f))) : all
 
 if (!files.length) { console.error(`✗ no *.test.mjs found under tests/${suites.length ? ` (suite=${suites.join(',')})` : ''}`); process.exit(1) }
