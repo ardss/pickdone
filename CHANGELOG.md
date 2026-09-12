@@ -6,8 +6,6 @@ and versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [Unreleased]
-
 ### Added
 - Dependency canvas connect mode with full keyboard support.
 - Large CSV imports now run off the main thread (the app stays interactive; a stuck import aborts cleanly after 30 seconds with a clear error).
