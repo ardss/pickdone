@@ -216,7 +216,7 @@ export function buildTimelineRows ({ records, todos, t, now = Date.now() }) {
           if (!bandCursor.tasks.includes(r.focus || '')) bandCursor.tasks.push(r.focus || '')
           bandCursor.endMin = Math.max(bandCursor.endMin, end)
         } else {
-          bandCursor = { left: uLeft, width: uWidth, segs: [seg], n: 1, tasks: [r.focus || ''], endMin: end, startMin: fStart }
+          bandCursor = { left: uLeft, width: uWidth, segs: [seg], n: 1, tasks: [r.focus || ''], endMin: end, startMin: fStart, title: '' }
           bands.push(bandCursor)
         }
       } else if (restW > 0) {

@@ -54,6 +54,8 @@ import { loadScript, VENDOR } from '../../utils/lazy-script.js'
 
 const T = 'statsA.StatisticsView.'
 
+import type { PropType } from 'vue'
+
 export default {
   name: 'StatsShareCard',
   props: {
@@ -64,8 +66,8 @@ export default {
     periodRange: { type: String, default: '' },
     reviewHeadline: { type: String, default: '' },
     /** top insights (key+params, resolved in template) */
-    insights: { type: Array, default: () => [] },
-    kpis: { type: Array, default: () => [] },
+    insights: { type: Array as unknown as PropType<{ id: string; mainKey: string; mainParams: Record<string, string> }[]>, default: () => [] },
+    kpis: { type: Array as unknown as PropType<{ key: string; value: string; title: string }[]>, default: () => [] },
     heatmapStreak: { type: Number, default: 0 },
     shareDate: { type: String, default: '' },
     /** period key, used only in the exported file name */

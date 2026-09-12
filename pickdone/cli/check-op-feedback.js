@@ -32,6 +32,8 @@ const DELETE_ALLOWLIST = [
 // qualifies under the three-layer rule; new files must go through the same review, not copy-paste)
 const UPDATE_FIELDS_ALLOWLIST = [
   'DepView.vue', // dependency linking (moveWithUndo undo exit; the edge is drawn by dragging one card onto another)
+  'SnManageCategoriesModal.vue', // manage-categories dialog: rename/limit edits (dialog has confirm flows for destructive ops)
+  'SnManageTagsModal.vue', // manage-tags dialog: rename/delete rewrites #tags with confirm flows
   'TodoItem.vue', // drag across days (hand-written undo toast) + subtask check persistence (inline visible state)
   'MatrixGrid.vue', // four-quadrant drag to swap cells (drag exemption)
   'DayDeck.vue', // card-stack drag to change day (moveWithUndo)

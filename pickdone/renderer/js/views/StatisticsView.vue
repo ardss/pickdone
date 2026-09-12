@@ -343,7 +343,6 @@ export default {
     shareDate () { return dayjs().format('YYYY.MM.DD') },
     /** Compact data shared by share cards */
     shareTopInsights () { return this.review.insights.slice(0, 3) },
-    shareDate () { return dayjs().format('YYYY.MM.DD') },
     hasAnyData () { return this.todoList.length > 0 || this.tomatoRecordList.length > 0 },
     /* Four KPI tiles: the main number is the period total, delta vs baseline daily average x days (equal-length conversion) */
     kpis () {
