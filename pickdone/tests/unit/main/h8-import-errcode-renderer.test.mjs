@@ -73,18 +73,18 @@ test('h8-1e: friendly-copy i18n keys exist bilingually', () => {
 })
 
 /* ---- 2: restore per-segment isolation, todo LAST, honest toast ---- */
-test('h8-2: both restore paths isolate segments, order todo last, and report failures via restorePartialFail', () => {
+test('h8-2: restore pipeline is shared (applyRestoreDump), isolates segments, orders todo last, reports via restorePartialFail', () => {
   const vue = readSrc('renderer/js/components/settings/SettingsDataTab.vue')
-  const nPaths = (vue.match(/reportRestoreResult\(rows\.length, failed\)/g) || []).length
-  assert.equal(nPaths, 2, 'both restore paths must funnel through reportRestoreResult')
-  // todo segment runs after settings/category/habits in BOTH paths
-  for (const m of vue.matchAll(/seg\('settings'.*?(?=reportRestoreResult)/gs)) {
-    const body = m[0]
-    const iTodo = body.indexOf("failed.push('todo')")
-    assert.ok(iTodo > body.indexOf("seg('settings'"), 'todo must run after settings')
-    assert.ok(iTodo > body.indexOf("seg('category'"))
-    assert.ok(iTodo > body.indexOf("seg('habits'"))
-  }
+  // P3 (2026-09-12) dedup: both paths funnel through ONE applyRestoreDump pipeline
+  assert.equal((vue.match(/applyRestoreDump\s*\(/g) || []).length, 3, 'declaration + two call sites')
+  assert.equal((vue.match(/reportRestoreResult\(rows\.length, failed\)/g) || []).length, 1, 'single report funnel')
+  // todo segment runs after settings/category/habits inside the shared pipeline
+  const body = (vue.match(/seg\('settings'.*?(?=reportRestoreResult)/s) || [])[0] || ''
+  assert.ok(body, 'shared pipeline contains the segment chain')
+  const iTodo = body.indexOf("failed.push('todo')")
+  assert.ok(iTodo > body.indexOf("seg('settings'"), 'todo must run after settings')
+  assert.ok(iTodo > body.indexOf("seg('category'"))
+  assert.ok(iTodo > body.indexOf("seg('habits'"))
   assert.match(vue, /restorePartialFail', \{ n, s: failed\.join\(', '\) \}/)
 })
 

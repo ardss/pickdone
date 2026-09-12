@@ -116,6 +116,15 @@ export default {
       try {
         const picked = await window.todoAPI.importCsvPickPreview()
         if (!picked) return // user canceled the file dialog
+        // P3 (2026-09-12): expected failures arrive as { ok:false, code, message } instead of an
+        // invoke() rejection (whose custom Error props never survive the context bridge). The
+        // catch below keeps the '[CODE]' message-regex as a legacy-format fallback.
+        if (picked.ok === false) {
+          if (picked.code === 'FORMAT_UNKNOWN') this.$message.error(this.$t('statsE.SettingsModal.importErrFormatUnknown'))
+          else if (picked.code === 'EMPTY_FILE') this.$message.error(this.$t('statsE.SettingsModal.importErrEmptyFile'))
+          else this.$message.error(this.$t('statsE.SettingsModal.importFailedMsg') + (picked.message || ''))
+          return
+        }
         const r = picked.report
         const msg = this.$t('statsE.SettingsModal.importPreviewMsg', { f: r.format, n: r.wouldImport, d: r.duplicates, s: r.skipped })
         try { await this.$confirm(msg, this.$t('statsH.SettingsModal.importTitle'), { type: 'info' }) } catch { return }

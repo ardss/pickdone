@@ -69,6 +69,9 @@ module.exports = function importHandlers (ctx) {
 
   return {
     // --- CSV import (migrating from other apps): reuses the CLI's cli/import.js engine; both preview and execution go through the main process ---
+    // P3 (2026-09-12): expected failures return { ok:false, code, message } instead of throwing —
+    // invoke() rejections lose custom Error props across the context bridge, so a thrown code only
+    // survived via the '[CODE] message' text hack. null still means "user canceled".
     'import:pick-preview': async () => {
       assertMainWindow('import:pick-preview') // H7 2026-09-12 P2: dialog needs a live parent; aligned with the backup domain
       const importer = require('../../../cli/import.js')
@@ -81,11 +84,17 @@ module.exports = function importHandlers (ctx) {
       lastPickedImportPath = file // import:run only allows executing the most recent dialog-picked path (prevents the renderer passing arbitrary paths to read files)
       // 同步 readFileSync 无上限曾把整个主进程(全部窗口/定时器)卡死在大 CSV 上:先 statSync 限 20MB 超限报错(2026-09-09 P2)
       const tooBig = fixUtil.checkImportFileSize(fs.statSync(file).size)
-      if (tooBig) throw new Error(tooBig)
-      const text = fs.readFileSync(file, 'utf8')
-      // rowsToItems 在数十万行时同步阻塞主进程数秒:解析移入 worker 线程(2026-09-12 W1)
-      const { format, items } = await runImportParse(text)
-      return { file, report: importer.importItems(items, { format, dryRun: true }) }
+      if (tooBig) return { ok: false, code: 'USAGE', message: tooBig }
+      try {
+        const text = fs.readFileSync(file, 'utf8')
+        // rowsToItems 在数十万行时同步阻塞主进程数秒:解析移入 worker 线程(2026-09-12 W1)
+        const { format, items } = await runImportParse(text)
+        return { ok: true, file, report: importer.importItems(items, { format, dryRun: true }) }
+      } catch (err) {
+        // code (FORMAT_UNKNOWN/EMPTY_FILE) rides along when the worker supplied one; undefined code
+        // falls back to the renderer's generic import-failed copy
+        return { ok: false, code: err && err.code, message: (err && err.message) || String(err) }
+      }
     },
     'import:run': async (e, file) => {
       const importer = require('../../../cli/import.js')
