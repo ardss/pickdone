@@ -5,11 +5,13 @@
  * Covers: categories/project folders/today's multi tasks (time+subtasks+tags+priority+estimated tomatoes)/future schedule/
  *       overdue incomplete/30-day completed history/todo box/recycle bin/30 days of tomato focus records (incl. give-ups)/habit check-in history.
  */
+import { FMT } from './renderer/js/utils/core.js'
+
 const DAY = 86400000
 const REG_KEY = 'demoSeedV3'
 const TOMATO_FLAG = 'demoTomatoSeededV4'
 
-const dkey = ts => window.dayjs(ts).format('YYYY-MM-DD')
+const dkey = ts => window.dayjs(ts).format(FMT.date)
 
 async function purgeOld (store, reg) {
   const ids = reg.taskIds || []

@@ -8,7 +8,7 @@
  * Store consumers (undo.js / todo.js) must import these names from THIS module, never from
  * utils/dayPlans.js directly — guarded by tests/unit/store/w4-plan-chips-facade.test.mjs.
  */
-import { dayjs } from '../utils/core.js'
+import { dayjs, FMT } from '../utils/core.js'
 import { moveTaskChips, clearTaskChips, snapshotForDelete, restoreSnapshot } from '../utils/dayPlans.js'
 
 /** Chip-sync serial chain: when a task's reschedule fires in bursts, guarantees planMoveTask arrival order matches operation order.
@@ -33,7 +33,7 @@ export function enqueueChipSync (taskId, fn) {
   return next
 }
 
-const fmtChipDay = ts => dayjs(ts).format('YYYY-MM-DD')
+const fmtChipDay = ts => dayjs(ts).format(FMT.date)
 
 /** Common chip-sync body for a row mutation (shared: updateTodoFields direct edits and persistSnapshotDiff replay
  *  must run the identical migration logic, otherwise the two write channels drift apart) */
