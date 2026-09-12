@@ -119,6 +119,11 @@ export default {
         const r = picked.report
         const msg = this.$t('statsE.SettingsModal.importPreviewMsg', { f: r.format, n: r.wouldImport, d: r.duplicates, s: r.skipped })
         try { await this.$confirm(msg, this.$t('statsH.SettingsModal.importTitle'), { type: 'info' }) } catch { return }
+        // S4 (2026-09-12): event snapshot before the bulk import, same renderer-side channel as
+        // purge/purge-all (store/todo.js writeEventBackup). Main-process-side dumping would need a
+        // second dump builder and risk diverging from the restore format; this reuses
+        // buildBackupDump verbatim so the snapshot restores identically.
+        await this.$store.dispatch('todo/writeEventBackup', 'import')
         const done = await window.todoAPI.importCsvRun(picked.file)
         await this.$store.dispatch('_rt/refreshFromDb')
         this.$message.success(this.$t('statsH.SettingsModal.importDone', { n: done.imported, d: done.duplicates }))
