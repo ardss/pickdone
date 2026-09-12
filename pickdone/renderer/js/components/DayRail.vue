@@ -50,7 +50,7 @@
           <el-time-picker size="small" format="HH:mm" :model-value="minToDate(entryDraft.startMin)"
                           :clearable="false" @update:model-value="v => { entryDraft.startMin = dateToMin(v) }"/></div>
         <div class="dr-card-row"><span>{{ $t('statsG.DayRail.cardFocusMin') }}</span>
-          <el-input-number size="small" :model-value="entryDraft.dur" :min="1" :max="720" :step="5" controls-position="right"
+          <el-input-number size="small" :model-value="entryDraft.dur" :min="1" :max="focusInputMax" :step="5" controls-position="right"
                            @update:model-value="v => { entryDraft.dur = v }"/></div>
         <div v-if="entryDraft.succeed" class="dr-card-row"><span>{{ $t('statsG.DayRail.cardRestMin') }}</span>
           <el-input-number size="small" :model-value="entryDraft.rest" :min="0" :max="120" :step="5" controls-position="right"
@@ -108,6 +108,7 @@
  *  (2) Pre-planning: dragging a todo from the right list onto the rail = "planned for around this time"; temporary, draggable to adjust, deletable
  *  Plan data lives in SQLite plan_chips rows (2026-09-03 root fix), all writes via utils/dayPlans.js atomic ops; bucketed by date, pruned outside [-7d,+31d] */
 import { FMT, dayjs } from '../utils/core.js'
+import { FOCUS_INPUT_MAX_MINUTES } from '../../../shared/limits.mjs'
 import { toggleCompleteWithUndo } from '../utils/completeAction.js'
 import { removeWithUndo } from '../utils/confirm.js'
 import { taskContextMenu } from '../utils/taskMenu.js'
@@ -253,7 +254,7 @@ function injectV1Style () {
 
 export default {
   name: 'DayRail',
-  data: () => ({ plans: {}, dragOverHour: -1, dragOverSeg: null, axisPx: null, entryDraft: null, activePlanId: null, nowH: new Date().getHours(), nowTs: Date.now(), railCollapsed: localStorage.getItem('dayRailCollapsed') === '1' }),
+  data: () => ({ plans: {}, dragOverHour: -1, dragOverSeg: null, axisPx: null, entryDraft: null, activePlanId: null, nowH: new Date().getHours(), nowTs: Date.now(), railCollapsed: localStorage.getItem('dayRailCollapsed') === '1', focusInputMax: FOCUS_INPUT_MAX_MINUTES }),
   async mounted () {
     injectV1Style()
     // Storage-layer root fix (2026-09-03): chips = SQLite plan_chips rows, reads = planAll atomic read, writes = atomic ops (see dayPlans.js).

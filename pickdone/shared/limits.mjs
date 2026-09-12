@@ -14,9 +14,12 @@
  * cli/lib.js) via require(esm) (Node >= 22.12; CI pins node 22, Electron 39
  * embeds node 22.x) and by the renderer through renderer/js/utils/limits.js.
  *
- * Note: renderer/js/store/tomato.js now clamps through FOCUS_MAX_MINUTES
- * (imported via renderer/js/utils/limits.js) — the last inline 600 in the
- * renderer is gone (2026-09-12 migration).
+ * Note: the last inline 600/720 in the product code is gone (2026-09-12
+ * migration): renderer/js/store/tomato.js clamps through FOCUS_MAX_MINUTES
+ * (imported via renderer/js/utils/limits.js), utils/taskMenu.js backfill and
+ * components/DayRail.vue input ceiling import the constants directly. Any new
+ * inline 600/720 in the renderer, main, or CLI is a regression — extend this
+ * module instead.
  */
 export const FOCUS_MAX_MINUTES = 600
 export const FOCUS_INPUT_MAX_MINUTES = 720

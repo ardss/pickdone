@@ -4,6 +4,7 @@
  * Inline action semantics all go through the unified utils-layer exits: deleteWithUndo (includes repeating-task confirmation) / tomato attach.
  */
 import { dayjs, FMT } from './core.js'
+import { FOCUS_MAX_MINUTES } from '../../../shared/limits.mjs'
 import { deleteWithUndo, moveWithUndo } from './confirm.js'
 import { toggleCompleteWithUndo } from './completeAction.js'
 
@@ -64,7 +65,7 @@ export function buildTaskMenu (vm, t, caps = {}, extra = []) {
       const cur = raw()
       // clamp 1..600 = the DB-layer single source (db.js _recToRow clamps 600): a renderer-side cap of 240 used to
       // silently drop the tail of any focus longer than 4h on next reload
-      const min2 = Math.max(1, Math.min(600, min))
+      const min2 = Math.max(1, Math.min(FOCUS_MAX_MINUTES, min))
       const startTs = Math.max(+dayjs().startOf('day'), Date.now() - min2 * 60000)
       const endTime = startTs + min2 * 60000
       // Idempotent id shape unified with CLI lib.js backfillRecord: same slot never mints a second row
