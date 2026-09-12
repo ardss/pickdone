@@ -29,10 +29,7 @@
       </div>
     </div>
     <div class="page__main page__main--flow-top">
-      <div v-if="!groups.length" class="empty">
-        <div class="empty__icon"></div>
-        <div class="empty__text">{{ $t('statsC.Completed.empty') }}</div>
-      </div>
+      <empty-state v-if="!groups.length"><template #text>{{ $t('statsC.Completed.empty') }}</template></empty-state>
       <div v-for="g in groups" :key="g.key" class="todo-list-item-group" :class="{'todo-list-item-group--collapsed': isCol(g.key)}">
         <div class="todo-list-item-group__header-container">
           <div class="todo-list-item-group__header" role="button" tabindex="0"
@@ -73,13 +70,14 @@
  * Rows still reuse the shared <todo-item> component; "restore to incomplete" reuses the toggleComplete logic.
  */
 import TodoItem from '../components/TodoItem.vue'
+import EmptyState from '../components/EmptyState.vue'
 import { buildCompletedBuckets } from '../utils/buckets.js'
 
 import { toggleCompleteWithUndo } from '../utils/completeAction.js'
 
 export default {
   name: 'CompletedView',
-  components: { TodoItem },
+  components: { TodoItem, EmptyState },
   data () {
     return { collapsedMap: {} }
   },

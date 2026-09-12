@@ -2,10 +2,7 @@
 
   <div class="page category-page" :key="catId">
     <div class="page__main page__main--flow-top">
-      <div v-if="!groups.length" class="empty">
-        <div class="empty__icon"></div>
-        <div class="empty__text">{{ $t('statsI.CategoryView.empty') }}</div>
-      </div>
+      <empty-state v-if="!groups.length"><template #text>{{ $t('statsI.CategoryView.empty') }}</template></empty-state>
       <div v-else class="todo-list-item-group-list">
         <group-block v-for="g in groups" :key="g.key"
            :title="$t(g.titleKey || g.title)" :count="g.todos.length" :todos="g.todos"
@@ -31,10 +28,11 @@ import { batchMoveWithUndo } from '../utils/confirm.js'
 import { calTitle } from '../utils/buckets.js'
 import { DAY_MS, rescheduleExpired, rangeLabel } from '../utils/core.js'
 import TodoGroupBlock from '../components/TodoGroupBlock.vue'
+import EmptyState from '../components/EmptyState.vue'
 
 export default {
   name: 'CategoryView',
-  components: { GroupBlock: TodoGroupBlock },
+  components: { GroupBlock: TodoGroupBlock, EmptyState },
   data () {
     return {
       collapsedMap: { catExpDone: true, catExpUndo: false, catToday: false, catTomorrow: false, catDat: false, catUpcoming: false, catNoDate: false }

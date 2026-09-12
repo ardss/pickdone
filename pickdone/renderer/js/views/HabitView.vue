@@ -29,10 +29,7 @@
         <button class="mini primary" @click="addHabit">{{ $t('statsB.HabitView.create') }}</button>
       </div>
 
-      <div v-if="!habits.length" class="empty">
-        <div class="empty__icon"></div>
-        <div class="empty__text">{{ $t('statsB.HabitView.empty') }}</div>
-      </div>
+      <empty-state v-if="!habits.length"><template #text>{{ $t('statsB.HabitView.empty') }}</template></empty-state>
 
       <!-- Habit cards -->
       <div v-for="h in habits" :key="h.id" class="habit-card">
@@ -114,12 +111,14 @@
  *  3. Countdown/anniversary moments */
 import { dayjs, FMT } from '../utils/core.js'
 import { showUndoToast } from '../utils/undoToast.js'
+import EmptyState from '../components/EmptyState.vue'
 
 // Monday-first weekday keys (labels via statsP.HabitView.wd1..wd7)
 const WD_KEYS = ['wd1', 'wd2', 'wd3', 'wd4', 'wd5', 'wd6', 'wd7']
 
 export default {
   name: 'HabitView',
+  components: { EmptyState },
   data () {
     return {
       newHabit: '', editingId: null, editName: '',

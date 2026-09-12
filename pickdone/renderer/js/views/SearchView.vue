@@ -42,10 +42,7 @@
       </div>
 
       <!-- reference: todo-list-empty structure -->
-      <div v-if="!results.length" class="empty empty--inline">
-        <div class="empty__icon"></div>
-        <div class="empty__text">{{ q ? $t('statsC.Search.notFound', { q: esc(q) }) : $t('statsC.Search.empty') }}</div>
-      </div>
+      <empty-state v-if="!results.length" inline><template #text>{{ q ? $t('statsC.Search.notFound', { q: esc(q) }) : $t('statsC.Search.empty') }}</template></empty-state>
     </div>
   </div>
 </template>
@@ -64,6 +61,7 @@
 import { matchTodo, highlightHTML, escapeHtml } from '../utils/search.js'
 import { dayjs } from '../utils/core.js'
 import TodoItem from '../components/TodoItem.vue'
+import EmptyState from '../components/EmptyState.vue'
 
 // Option value is the persisted stable key (previously persisted Chinese words were used as enum values, which mismatched every logic branch under an English UI — audit S1 fix);
 // label stores an i18n key resolved via $t at render time
@@ -87,7 +85,7 @@ const LEGACY_VALUE_MAP = {
 
 export default {
   name: 'SearchView',
-  components: { TodoItem },
+  components: { TodoItem, EmptyState },
   data () {
     return {}
   },

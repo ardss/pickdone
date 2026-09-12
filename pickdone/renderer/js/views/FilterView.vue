@@ -16,8 +16,8 @@
       </div>
     </div>
     <div class="page__main page__main--flow-top">
-      <div v-if="!filter" class="empty"><div class="empty__icon"></div><div class="empty__text">{{ $t('statsJ.FilterView.notFound') }}</div></div>
-      <div v-else-if="!list.length" class="empty"><div class="empty__icon"></div><div class="empty__text">{{ $t('statsC.TodoBox.empty') }}</div></div>
+      <empty-state v-if="!filter"><template #text>{{ $t('statsJ.FilterView.notFound') }}</template></empty-state>
+      <empty-state v-else-if="!list.length"><template #text>{{ $t('statsC.TodoBox.empty') }}</template></empty-state>
       <div v-else class="todo-box-list">
         <div v-for="t in list" :key="t.taskId" class="todo-box-list-item"
              :class="{ 'todo-box-list-item--selected': selectedId === t.taskId }"
@@ -50,10 +50,11 @@ import { DEFAULT_CAT_COLOR, dayjs } from '../utils/core.js'
 import { toggleCompleteWithUndo } from '../utils/completeAction.js'
 import { getEstimate } from '../utils/tomatoEstimate.js'
 import FilterModal from '../components/FilterModal.vue'
+import EmptyState from '../components/EmptyState.vue'
 
 export default {
   name: 'FilterView',
-  components: { FilterModal },
+  components: { FilterModal, EmptyState },
   data () { return { editVisible: false } },
   computed: {
     filter () {

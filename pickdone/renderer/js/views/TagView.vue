@@ -2,10 +2,7 @@
 
   <div class="page tag-page">
     <div class="page__main page__main--flow-top">
-      <div v-if="!groups.length" class="empty">
-        <div class="empty__icon"></div>
-        <div class="empty__text">{{ $t('statsC.Tag.empty') }}</div>
-      </div>
+      <empty-state v-if="!groups.length"><template #text>{{ $t('statsC.Tag.empty') }}</template></empty-state>
       <div v-else class="todo-list-item-group-list">
         <group-block v-for="g in groups" :key="g.key"
            :title="$t(g.titleKey || g.title)" :count="g.todos.length" :todos="g.todos"
@@ -31,10 +28,11 @@ import { DAY_MS, rescheduleExpired, rangeLabel } from '../utils/core.js'
 import { batchMoveWithUndo } from '../utils/confirm.js'
 import { extractTags } from '../utils/search.js'
 import TodoGroupBlock from '../components/TodoGroupBlock.vue'
+import EmptyState from '../components/EmptyState.vue'
 
 export default {
   name: 'TagView',
-  components: { GroupBlock: TodoGroupBlock },
+  components: { GroupBlock: TodoGroupBlock, EmptyState },
   data () {
     return {
       collapsedMap: { tagExpDone: true, tagExpUndo: false, tagToday: false, tagTomorrow: false, tagDat: false, tagUpcoming: false, tagNoDate: false }

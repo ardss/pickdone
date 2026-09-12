@@ -52,15 +52,16 @@
           </div>
         </div>
       </div>
-      <div v-if="!filteredProjects.length" class="empty">
-        <div class="empty__icon"></div>
-        <!-- 过滤无结果 ≠ 真没项目:区分文案 + 一键清除筛选出口;filter=all 仍走原有"暂无项目"空态 -->
-        <template v-if="filter !== 'all' && projects.length">
-          <div class="empty__text">{{ $t('projQ.filteredEmpty') }}</div>
-          <button type="button" class="proj-filter__clear" @click="filter = 'all'">{{ $t('projQ.clearFilter') }}</button>
+      <!-- 过滤无结果 ≠ 真没项目:区分文案 + 一键清除筛选出口;filter=all 仍走原有"暂无项目"空态 -->
+      <empty-state v-if="!filteredProjects.length">
+        <template #text>
+          <template v-if="filter !== 'all' && projects.length">{{ $t('projQ.filteredEmpty') }}</template>
+          <template v-else>{{ $t('statsB.ProjectsView.empty') }}</template>
         </template>
-        <div v-else class="empty__text">{{ $t('statsB.ProjectsView.empty') }}</div>
-      </div>
+        <template #action>
+          <button v-if="filter !== 'all' && projects.length" type="button" class="proj-filter__clear" @click="filter = 'all'">{{ $t('projQ.clearFilter') }}</button>
+        </template>
+      </empty-state>
     </div>
   </div>
 </template>
@@ -76,6 +77,7 @@ import { dueStateOf } from '../utils/milestones.js'
 import { dayPlannedLoad, loadLevel } from '../utils/loadWarn.js'
 import { getEstimate } from '../utils/tomatoEstimate.js'
 import { PROJECT_STATUSES, normalizeStatus, statusI18nKey, STATUS_FILTER_I18N_KEYS } from '../utils/projectStatus.js'
+import EmptyState from '../components/EmptyState.vue'
 
 /** Project stats sharing the same semantics as ProjectView/stats and the CLI's projectStatus */
 function projectStats (list, today0) {
@@ -95,6 +97,7 @@ function projectStats (list, today0) {
 
 export default {
   name: 'ProjectOverviewView',
+  components: { EmptyState },
   data () {
     return {
       filter: 'all' // status filter chip: 'all' | one of PROJECT_STATUSES

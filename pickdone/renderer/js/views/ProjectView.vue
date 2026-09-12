@@ -132,10 +132,7 @@
       <project-docs :cat-id="catId"/>
     </div>
     <div v-else class="page__main page__main--flow-top">
-      <div v-if="!groups.length" class="empty">
-        <div class="empty__icon"></div>
-        <div class="empty__text">{{ $t('statsB.ProjectView.empty') }}</div>
-      </div>
+      <empty-state v-if="!groups.length"><template #text>{{ $t('statsB.ProjectView.empty') }}</template></empty-state>
       <div v-else class="todo-list-item-group-list">
         <group-block v-for="g in groups" :key="g.key"
            :title="$t(g.titleKey || g.title)" :count="g.todos.length" :todos="g.todos"
@@ -163,6 +160,7 @@ import { PROJECT_STATUSES, statusI18nKey } from '../utils/projectStatus.js'
 import TodoGroupBlock from '../components/TodoGroupBlock.vue'
 import DepView from '../components/DepView.vue'
 import ProjectDocs from '../components/ProjectDocs.vue'
+import EmptyState from '../components/EmptyState.vue'
 
 // [navgate-fix] pure-start (extracted by tests/unit-navgate-fix-ui.test.mjs)
 /** Entrance-animation target for a freshly added milestone: saveMilestones returns the list sorted
@@ -175,7 +173,7 @@ function resolveMsNewId (entryId, saved) {
 
 export default {
   name: 'ProjectView',
-  components: { GroupBlock: TodoGroupBlock, PdDepView: DepView, ProjectDocs },
+  components: { GroupBlock: TodoGroupBlock, PdDepView: DepView, ProjectDocs, EmptyState },
   data () {
     return {
       tab: 'overview',

@@ -14,10 +14,7 @@
       </div>
     </div>
     <div class="page__main page__main--flow-top">
-      <div v-if="!list.length" class="empty">
-        <div class="empty__icon"></div>
-        <div class="empty__text">{{ $t('statsC.RecycleBin.empty') }}</div>
-      </div>
+      <empty-state v-if="!list.length"><template #text>{{ $t('statsC.RecycleBin.empty') }}</template></empty-state>
       <div v-else class="todo-list">
         <div v-for="t in list" :key="t.taskId" class="todo-box-list-item" @contextmenu.prevent="rowCtx(t, $event)">
           <div class="todo-box-list-item__container">
@@ -68,9 +65,11 @@
 import {dayjs, FMT } from '../utils/core.js'
 import { taskContextMenu } from '../utils/taskMenu.js'
 import { toggleCompleteWithUndo } from '../utils/completeAction.js'
+import EmptyState from '../components/EmptyState.vue'
 
 export default {
   name: 'RecycleBinView',
+  components: { EmptyState },
   computed: {
     list () { return this.$store.state.todo.views.recycleBin }
   },

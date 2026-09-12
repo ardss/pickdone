@@ -66,10 +66,7 @@
 
       <div class="page__main">
         <div class="container">
-          <div v-if="!hasAnyData" class="empty">
-            <div class="empty__icon"></div>
-            <div class="empty__text">{{ $t('statsA.StatisticsView.emptyState') }}</div>
-          </div>
+          <empty-state v-if="!hasAnyData"><template #text>{{ $t('statsA.StatisticsView.emptyState') }}</template></empty-state>
 
           <div v-else class="stat-subpage">
             <!-- Period switcher: segmented pills (shared by review and charts) -->
@@ -318,6 +315,7 @@
  */
 import { dayjs, DAY_MS, FMT } from '../utils/core.js'
 import ChartCard from './statistics/ChartCard.vue'
+import EmptyState from '../components/EmptyState.vue'
 
 import { buildReviewMetrics } from './statistics/metrics.js'
 import { composeReview, kpiDelta } from './statistics/insights.js'
@@ -336,7 +334,7 @@ export default {
     return false
   },
   name: 'StatisticsView',
-  components: { ChartCard },
+  components: { ChartCard, EmptyState },
   data () {
     return { view: 'stat', period: 'thisWeek', heatRange: 'halfYear', shareOpen: false, shareStyle: 'narrative', tlTip: null, customRange: null, customDraft: null, tlGrid: (() => { try { return localStorage.getItem('tlHoverGrid') !== '0' } catch { return true } })(), hmTip: { show: false, text: '', x: 0, y: 0 } as any, nowTick: Date.now() }
   },

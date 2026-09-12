@@ -45,10 +45,7 @@
       </div>
     </div>
     <div class="page__main page__main--flow-top">
-      <div v-if="!list.length" class="empty">
-        <div class="empty__icon"></div>
-        <div class="empty__text">{{ $t('statsC.TodoBox.empty') }}</div>
-      </div>
+      <empty-state v-if="!list.length"><template #text>{{ $t('statsC.TodoBox.empty') }}</template></empty-state>
       <div v-else class="todo-box-list">
         <div v-for="t in list" :key="t.taskId" class="todo-box-list-item"
              :class="{ 'todo-box-list-item--selected': selectedId === t.taskId, 'todo-box-list-item--checked': batchMode && checkedIds.includes(t.taskId) }"
@@ -106,6 +103,7 @@ import { DEFAULT_CAT_COLOR } from '../utils/core.js'
 import { toggleCompleteWithUndo } from '../utils/completeAction.js'
 import { batchMoveWithUndo, deleteWithUndo } from '../utils/confirm.js'
 import { getEstimate } from '../utils/tomatoEstimate.js'
+import EmptyState from '../components/EmptyState.vue'
 
 // [navgate-fix] pure-start (extracted by tests/unit-navgate-fix-ui.test.mjs)
 /** Split a batch selection for deletion (same repeat criterion as utils/confirm.js deleteWithUndo:
@@ -129,6 +127,7 @@ function splitBatchDelete (rows) {
 
 export default {
   name: 'TodoBoxView',
+  components: { EmptyState },
   data () {
     return { batchMode: false, checkedIds: [], openDd: null }
   },
