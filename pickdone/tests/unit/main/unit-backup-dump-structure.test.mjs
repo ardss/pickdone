@@ -42,7 +42,7 @@ test('三处备份动作全部走 buildBackupDump,不允许手写 dump 拷贝', 
 })
 
 test('两套恢复路径消费必含段(写入面↔消费面对账)', () => {
-  const uiRestore = read('renderer/js/components/SettingsModal.vue')
+  const uiRestore = read('renderer/js/components/settings/SettingsDataTab.vue') // W5 wave 1: data tab (restore paths) extracted from SettingsModal.vue
   for (const seg of ['settingsState', 'categoryState', 'habitsState', 'todoState', 'tomatoRecords']) {
     assert.ok(uiRestore.includes('b.' + seg), `SettingsModal UI 恢复未消费备份段 ${seg}——恢复后该数据会"消失"`)
   }

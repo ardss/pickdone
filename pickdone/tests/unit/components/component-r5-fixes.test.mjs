@@ -156,7 +156,7 @@ test('SearchView: search input has aria-label (not placeholder-only)', () => {
 /* ---------------- #10 SettingsModal ---------------- */
 
 test('SettingsModal: shortcuts tab shows loading placeholder until getSettings resolves', () => {
-  const src = read('components/SettingsModal.vue')
+  const src = read('components/settings/SettingsShortcutsTab.vue') // W5 wave 1: shortcuts tab extracted from SettingsModal.vue
   assert.match(src, /shortcutsLoaded: false/)
   assert.match(src, /shortcutsLoaded \? formatShortcut\(shortcutForm\[sc\.key\]\) : \$t\('statsE\.SettingsModal\.loadingPlaceholder'\)/)
   assert.match(src, /this\.shortcutsLoaded = true/)

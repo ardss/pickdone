@@ -198,30 +198,8 @@
             </div>
           </div>
 
-          <!-- Shortcuts: key capture controls -->
-          <div v-show="searching || tab==='shortcuts'" class="tab-panel">
-            <div class="form">
-              <div class="form-label">{{ $t('statsE.SettingsModal.shortcutsSection') }}</div>
-              <template v-for="sc in shortcutDefs" :key="sc.key">
-                <div class="form-item">
-                  <span class="form-item__label">{{ sc.label }}</span>
-                  <div class="form-item__control">
-                    <button type="button" class="sc-capture" :class="{listening: capturing===sc.key, conflict: hasConflict(sc.key)}"
-                            tabindex="0"
-                            @click="startCapture(sc.key)" @blur="onCaptureBlur">
-                      <span class="sc-kbd">{{ capturing===sc.key ? $t('statsE.SettingsModal.scPressKey') : (shortcutsLoaded ? formatShortcut(shortcutForm[sc.key]) : $t('statsE.SettingsModal.loadingPlaceholder')) }}</span>
-                    </button>
-                    <span v-if="capturing!==sc.key" class="tip">{{ $t('statsE.SettingsModal.scClickToEdit') }}</span>
-                  </div>
-                </div>
-              </template>
-              <div class="form-item" v-if="capturing"><span class="form-item__hint">{{ $t('statsE.SettingsModal.scCaptureHint') }}</span></div>
-              <div class="form-item"><span class="form-item__label"></span>
-                <div class="form-item__control"><button class="primary mini-lg" @click="saveShortcuts">{{ $t('statsE.SettingsModal.saveShortcutBtn') }}</button></div></div>
-              <div class="form-item"><span class="form-item__label"></span>
-                <div class="form-item__control"><button class="mini" @click="resetShortcuts">{{ $t('statsE.SettingsModal.resetDefaultBtn') }}</button></div></div>
-            </div>
-          </div>
+          <!-- Shortcuts: key capture controls (child component, W5 wave 1; v-show stays here so tab switching/search visibility is unchanged) -->
+          <settings-shortcuts-tab v-show="searching || tab==='shortcuts'" ref="shortcutsTab"/>
 
           <!-- Pomodoro -->
           <div v-show="searching || tab==='tomato'" class="tab-panel">
@@ -308,69 +286,7 @@
                 <div class="form-item__control"><span class="tip">{{ $t('statsE.SettingsModal.aboutPrivacy') }}</span></div></div>
             </div>
           </div>
-          <div v-show="searching || tab==='data'" class="tab-panel">
-            <div class="form">
-              <div class="form-label">{{ $t('statsE.SettingsModal.autoBackupSection') }}</div>
-              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.autoBackupLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.autoBackupEnabled !== false" @change="v=>set({autoBackupEnabled:v})"/></div></div>
-              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.backupIntervalLabel') }}</span>
-                <div class="form-item__control">
-                  <el-radio-group size="small" :model-value="String(st.autoBackupIntervalMin || 30)" @change="v=>set({autoBackupIntervalMin:+v})" :aria-label="$t('statsE.SettingsModal.backupIntervalLabel')">
-                    <el-radio-button v-for="o in ['10','30','60','180','360']" :key="o" :value="o">{{ (Number(o)>=60 ? (Number(o)/60)+$t('statsE.SettingsModal.hoursUnit') : $t('statsH.SettingsModal.minutesUnit', { n: o })) }}</el-radio-button>
-                  </el-radio-group>
-                </div></div>
-              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.recentCopiesLabel') }}</span>
-                <div class="form-item__control">
-                  <el-select size="small" :model-value="String(st.autoBackupKeep || 10)" @change="v=>set({autoBackupKeep:+v})" class="ctl-sm">
-                    <el-option v-for="o in ['5','10','20','30']" :key="o" :label="o+$t('statsE.SettingsModal.copiesUnit')" :value="o"/>
-                  </el-select>
-                </div></div>
-              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.autoPurgeBinLabel') }}</span>
-                <div class="form-item__control">
-                  <el-radio-group size="small" :model-value="String(st.recycleBinAutoDeleteDays)" @change="v=>set({recycleBinAutoDeleteDays:+v})" :aria-label="$t('statsE.SettingsModal.autoPurgeBinLabel')">
-                    <el-radio-button v-for="o in [7,15,30,60,90,0]" :key="o" :value="String(o)">{{ o===0 ? $t('statsH.SettingsModal.never') : $t('statsH.SettingsModal.dayUnit', { n: o }) }}</el-radio-button>
-                  </el-radio-group>
-                </div></div>
-              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.backupLocationLabel') }}</span>
-                <div class="form-item__control">
-                  <span class="tip">{{ backupDirDisplay }}</span>
-                  <button class="mini" @click="pickBackupDir">{{ $t('statsE.SettingsModal.changeBtn') }}</button>
-                  <button v-if="st.backupDir" class="mini" @click="resetBackupDir">{{ $t('statsE.SettingsModal.resetDefaultBtn') }}</button>
-                </div></div>
-              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.backUpNowLabel') }}</span>
-                <div class="form-item__control">
-                  <button class="mini" @click="runAutoBackupNow">{{ $t('statsE.SettingsModal.autoBackUpNowBtn') }}</button>
-                  <span class="tip">{{ autoBackupLastAt ? $t('statsE.SettingsModal.lastRunPrefix') + dfmt(autoBackupLastAt) : $t('statsH.SettingsModal.notRunYet') }} · {{ $t('statsH.SettingsModal.backupRetentionTip') }}</span>
-                </div></div>
-            </div>
-            <div class="form">
-              <div class="form-label">{{ $t('statsE.SettingsModal.dataManagementSection') }}</div>
-              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.exportExcelLabel') }}</span>
-                <div class="form-item__control"><button class="primary mini-lg" :disabled="exporting" @click="exportXlsx">{{ $t('statsE.SettingsModal.exportXlsxBtn') }}</button></div></div>
-              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.importCsvLabel') }}</span>
-                <div class="form-item__control"><button class="mini-lg" :disabled="importing" @click="importFromCsv">{{ $t('statsE.SettingsModal.importCsvBtn') }}</button></div></div>
-              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.snapshotWriteLabel') }}</span>
-                <div class="form-item__control">
-                  <button class="mini-lg" @click="writeBackupNow">{{ $t('statsE.SettingsModal.snapshotBackUpNowBtn') }}</button>
-                  <span class="tip">{{ $t('statsE.SettingsModal.snapshotStructureHint') }}</span>
-                </div></div>
-            </div>
-            <div class="form">
-              <div class="form-label">{{ $t('statsE.SettingsModal.dangerZone') }}</div>
-              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.restoreSnapshotLabel') }}</span>
-                <div class="form-item__control"><button class="danger-btn" @click="restoreFromBackup">{{ $t('statsE.SettingsModal.restoreEllipsis') }}</button></div></div>
-              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.autoRestoreLabel') }}</span>
-                <div class="form-item__control" style="display:flex;gap:8px">
-                  <el-select size="small" v-model="autoBackupPick" filterable style="max-width:260px" @focus="loadAutoBackupList" @visible-change="v => v && loadAutoBackupList()">
-                    <el-option v-for="f in autoBackupFiles" :key="f" :label="f" :value="f" />
-                  </el-select>
-                  <button class="mini" @click="restoreFromAutoBackup">{{ $t('statsE.SettingsModal.autoRestoreBtn') }}</button>
-                </div></div>
-              <div class="form-item danger-row"><span class="form-item__label">{{ $t('statsE.SettingsModal.clearDemoDataLabel') }}</span>
-                <div class="form-item__control"><button class="danger-btn" @click="purgeSeed">{{ $t('statsE.SettingsModal.clearBtn') }}</button></div></div>
-              <div class="form-item danger-row"><span class="form-item__label">{{ $t('statsE.SettingsModal.emptyBinLabel') }}</span>
-                <div class="form-item__control"><button class="danger-btn" @click="purgeRecycle">{{ $t('statsE.SettingsModal.emptyBinBtn') }}</button></div></div>
-            </div>
-          </div>
+          <settings-data-tab v-show="searching || tab==='data'"/>
 
         </div>
       </div>
@@ -382,18 +298,20 @@
 /** Settings center -- structure aligned with the reference: full-screen base-modal (modal-container/modal-tablecloth--body)
  *  + el-tabs.setting_tabs tabs in the header + .tab-panel>.form>.form-label+.form-item rows in the body.
  *  All feature bindings are preserved (visual rework only, no functional change). */
-import {dayjs , FMT , appVersion} from '../utils/core.js'
-import { confirmRecycleClear } from '../utils/confirm.js'
+import { appVersion } from '../utils/core.js'
 import { CONFIRM_SOUNDS, confirmUrl } from '../utils/mediaRegistry.js'
 import { SETTING_ENUMS } from '../store/settings.js'
 import dialogA11y from '../utils/dialogA11y.js'
-import { loadRuntime } from '../store/runtimeState.js'
 import { CITY_OPTIONS, CITY_PATH_MAP } from '../utils/chinaRegions.js'
 import { SUPPORTED, getLocale, setLocale } from '../i18n/index.js'
+import SettingsShortcutsTab from './settings/SettingsShortcutsTab.vue'
+import SettingsDataTab from './settings/SettingsDataTab.vue'
+import { filterSettingsPanels } from './settings/settingsSearch.js'
 
 export default {
   name: 'SettingsModal',
   mixins: [dialogA11y],
+  components: { SettingsShortcutsTab, SettingsDataTab },
   data () {
     let tab0 = 'general'
     try { tab0 = localStorage.getItem('settingsTab') || 'general' } catch (e) { /* privacy mode etc. */ }
@@ -403,18 +321,6 @@ export default {
       searching: false,
       searchEmpty: false,
       langOptions: SUPPORTED,
-      // Empty skeleton before the async response arrives: the template (shortcuts tab) renders before created's getSettings resolves; null would blow up with "reading 'toggleMainWindow'"
-      shortcutForm: { sync: '', toggleMainWindow: '', quickAddGlobal: '', addEvent: '', deleteEvent: '' },
-      // [component-r5] false until created's getSettings resolves: kbd slots show the loading placeholder instead of a blank skeleton
-      shortcutsLoaded: false,
-      capturing: null as any,
-      exporting: false,
-      importing: false,
-      backupDirDefault: '',
-      autoBackupLastAt: 0,
-      backupDirShown: '',
-      autoBackupFiles: [] as any,
-      autoBackupPick: '',
       nameDraft: '',
       updStatus: 'idle',
       updVersion: '',
@@ -437,27 +343,9 @@ export default {
     st () { return this.$store.state.settings },
     cityOptions () { return CITY_OPTIONS },
     cityPath () { return CITY_PATH_MAP[this.st.weatherCity] || [] },
-    backupDirDisplay () { return this.backupDirShown || this.$t('statsE.SettingsModal.loadingPlaceholder') },
     userName () {
       const u = this.$store.state.auth.user || {}
       return u.userNameDefault ? this.$t('statsA.core.offlineUser') : (u.userName || '')
-    },
-    shortcutDefs () {
-      return [
-        { key: 'toggleMainWindow', label: this.$t('statsE.SettingsModal.scToggleWin') },
-        { key: 'quickAddGlobal', label: this.$t('statsE.SettingsModal.scQuickAddGlobal') },
-        { key: 'addEvent', label: this.$t('statsE.SettingsModal.scAddEvent') },
-        { key: 'deleteEvent', label: this.$t('statsE.SettingsModal.scDeleteEvent') },
-        { key: 'pinEvent', label: this.$t('statsE.SettingsModal.scPin') },
-        { key: 'unpinEvent', label: this.$t('statsE.SettingsModal.scUnpin') },
-        { key: 'toggleAllSubtasks', label: this.$t('statsE.SettingsModal.scSubtasks') },
-        { key: 'startPomodoro', label: this.$t('statsE.SettingsModal.scPomodoro') },
-        { key: 'sync', label: this.$t('statsE.SettingsModal.scSync') },
-        { key: 'switchToDaytodo', label: this.$t('statsE.SettingsModal.scNavToday') },
-        { key: 'switchToRecentTodos', label: this.$t('statsE.SettingsModal.scNavRecent') },
-        { key: 'switchToSchedule', label: this.$t('statsE.SettingsModal.scNavCalendar') },
-        { key: 'switchToInbox', label: this.$t('statsE.SettingsModal.scNavInbox') }
-      ]
     },
     tabs () { return [['general', this.$t('statsE.SettingsModal.generalTab')], ['appearance', this.$t('statsH.SettingsModal.tabAppearance')], ['calendar', this.$t('statsH.SettingsModal.tabCalendar')], ['shortcuts', this.$t('statsH.SettingsModal.tabShortcuts')], ['tomato', this.$t('statsH.SettingsModal.tabTomato')], ['data', this.$t('statsH.SettingsModal.tabData')], ['about', this.$t('statsE.SettingsModal.aboutTab')]] },
     localDescLines: {
@@ -472,24 +360,13 @@ export default {
       if (f && f.startsWith('file:')) return decodeURIComponent(f.slice(5))
       if (f && f.startsWith('local:')) return this._customNoiseName || this.$t('statsE.SettingsModal.selectedCount')
       return ''
-    },
-    shortcutDirty () {
-      return !!this.shortcutForm && this._shortcutSnapshot !== JSON.stringify(this.shortcutForm)
     }
-  },
-  created () {
-    window.todoAPI.getSettings().then(c => {
-      this.shortcutForm = Object.assign({ sync: '', toggleMainWindow: '', quickAddGlobal: '', addEvent: '', deleteEvent: '' }, c.shortcutKeySettings)
-      this._shortcutSnapshot = JSON.stringify(this.shortcutForm)
-      this.shortcutsLoaded = true
-    }).catch(e => { this.shortcutsLoaded = true; console.error('[SettingsModal] getSettings', e) })
   },
   beforeUnmount () {
     this._isDestroyed = true
     if (this._updUn) { this._updUn(); this._updUn = null }
     if (this._maskTimer) clearTimeout(this._maskTimer)
     document.removeEventListener('click', this.maskClickHide)
-    this.stopCapture()
   },
   methods: {
     /* Replay onboarding: clear the ledger flag and re-run the today-page spotlight */
@@ -501,44 +378,15 @@ export default {
         setTimeout(() => m.runJourney(true), 600)
       })
     },
-    dfmt (ts) { return dayjs(ts).format(FMT.dateTime) },
     /* Settings search: filters setting rows across all tabs (aligned with the VS Code/TickTick settings-search convention).
        Implementation = DOM-level filtering: while searching, all tab panels are expanded and rows are matched on "label + control text + owning section";
-       clearing restores the current tab view. */
+       clearing restores the current tab view. The pure filtering core lives in settings/settingsSearch.js. */
     applySearchFilter () {
       const q = String(this.searchQ || '').trim().toLowerCase()
       this.searching = q.length > 0
       this.$nextTick(() => {
         const panels = document.querySelectorAll('.settings-modal-body .tab-panel')
-        let totalHits = 0
-        panels.forEach(p => {
-          const kids: any[] = [...p.querySelectorAll('.form-item, .form-label, .hr')]
-          // First pass: a form-item hits if "its owning section title + its own text" matches
-          let sectionText = ''
-          const kind = kids.map(function (el) {
-            if (el.classList.contains('form-label')) { sectionText = el.textContent.trim(); return 'label' }
-            if (el.classList.contains('hr')) return 'hr'
-            return (sectionText + ' ' + el.textContent).toLowerCase().indexOf(q) >= 0 ? 'hit' : 'miss'
-          })
-          // Second pass: a section title is visible only if a hit exists between it and the next title
-          kids.forEach(function (el, idx) {
-            if (kind[idx] === 'label') {
-              let has = false
-              for (let j = idx + 1; j < kids.length && kind[j] !== 'label'; j++) if (kind[j] === 'hit') { has = true; break }
-              el.style.display = has ? '' : 'none'
-            } else if (kind[idx] === 'hr') {
-              el.style.display = 'none'
-            } else {
-              el.style.display = kind[idx] === 'hit' ? '' : 'none'
-              if (kind[idx] === 'hit') totalHits++
-            }
-          })
-          // Third pass: a form shell with no visible rows left collapses too (otherwise search leaves empty card strips behind)
-          p.querySelectorAll(':scope > .form').forEach(function (shell: any) {
-            const any = [...shell.querySelectorAll('.form-item, .form-label')].some((el: any) => el.style.display !== 'none')
-            shell.style.display = any ? '' : 'none'
-          })
-        })
+        const totalHits = filterSettingsPanels(panels, q)
         this.searchEmpty = this.searching && totalHits === 0
       })
     },
@@ -548,10 +396,12 @@ export default {
       this.applySearchFilter()
     },
     close () {
-      if (this.shortcutDirty) {
+      // Shortcut dirty-state lives in the child tab (always mounted via v-show, so the ref is stable after mount)
+      const sc = this.$refs.shortcutsTab
+      if (sc && sc.isDirty()) {
         this.$confirm(this.$t('statsE.SettingsModal.scDiscardConfirm'), this.$t('statsH.SettingsModal.tabShortcuts'), { type: 'warning' })
           .then(() => {
-            this.shortcutForm = JSON.parse(this._shortcutSnapshot)
+            sc.discard()
             this.$store.commit('ui/toggleSettings', false)
           }).catch(() => {})
         return
@@ -662,245 +512,12 @@ export default {
         this.$message.success(this.$t('statsE.SettingsModal.selectedPrefix') + r.name)
       })
     },
-    // -- Shortcut capture (control-ized: click to enter listening state, document capture phase takes over the keyboard) --
-    startCapture (key) {
-      if (this.capturing === key) { this.stopCapture(); return } // clicking again cancels
-      this.stopCapture()
-      this.capturing = key
-      this._docKeyHandler = e => this.handleCaptureKey(e, key)
-      document.addEventListener('keydown', this._docKeyHandler, true) // capture: true
-    },
-    stopCapture () {
-      if (this._docKeyHandler) { document.removeEventListener('keydown', this._docKeyHandler, true); this._docKeyHandler = null }
-      this.capturing = null
-    },
-    cancelCapture () { this.stopCapture() },
-    handleCaptureKey (e, key) {
-      if (this.capturing !== key) return
-      e.preventDefault()
-      e.stopPropagation()
-      const k = (e.key || '').toLowerCase()
-      if (k === 'escape') { this.stopCapture(); return } // Esc = cancel capture
-      if (!k || k === 'control' || k === 'alt' || k === 'shift' || k === 'meta') return // do not commit when only modifier keys are pressed
-      const parts = []
-      if (e.ctrlKey) parts.push('ctrl')
-      if (e.altKey) parts.push('alt')
-      if (e.shiftKey) parts.push('shift')
-      const map = { ' ': 'space', delete: 'delete' }
-      const main = map[k] || k
-      const combo = parts.concat(main).join('+')
-      // Conflict detection: if it duplicates another shortcut, warn and do not write
-      if (this.shortcutDefs.some(d => d.key !== key && this.shortcutForm[d.key] === combo)) {
-        this.$message.warning(this.$t('statsE.SettingsModal.shortcutConflictTitle') + '：' + combo)
-        this.stopCapture()
-        return
-      }
-      this.shortcutForm[key] = combo
-      this.stopCapture()
-    },
-    onCaptureBlur () { this.stopCapture() },
-    hasConflict (key) {
-      if (!this.shortcutForm) return false // the template renders before created's async response arrives
-      const val = this.shortcutForm[key]
-      if (!val) return false
-      return this.shortcutDefs.some(d => d.key !== key && this.shortcutForm[d.key] === val)
-    },
-    formatShortcut (v) { return v || this.$t('statsE.SettingsModal.scEmpty') },
-    resetShortcuts () {
-      this.shortcutForm = { sync: 'ctrl+s', addEvent: 'ctrl+n', deleteEvent: 'ctrl+d', toggleMainWindow: 'ctrl+alt+t', quickAddGlobal: 'alt+shift+t', pinEvent: 'ctrl+p', unpinEvent: 'ctrl+shift+p', toggleAllSubtasks: 'ctrl+shift+s', startPomodoro: 'ctrl+alt+p', switchToDaytodo: 'ctrl+1', switchToRecentTodos: 'ctrl+2', switchToSchedule: 'ctrl+3', switchToInbox: 'ctrl+4' }
-    },
-    saveShortcuts () {
-      this.set({})
-      window.todoAPI.updateSettings({ shortcutKeySettings: JSON.parse(JSON.stringify(this.shortcutForm)) })
-      this._shortcutSnapshot = JSON.stringify(this.shortcutForm)
-      this.$message.success(this.$t('statsE.SettingsModal.shortcutSavedMsg'))
-      if (this.$announce) this.$announce(this.$t('statsE.SettingsModal.shortcutSavedMsg'))
-    },
     previewCompleteSound () {
       const st = this.$store.state.settings
       // Preview sound = the actual completion sound (settings.completeSound); the previously hardcoded, nonexistent tomato_ok.mp3 was always silent
       let src = confirmUrl(st.completeSound)
       if (st.whiteNoiseAudio && st.whiteNoiseAudio.startsWith('file:')) src = st.whiteNoiseAudio
       try { new Audio(src).play().catch(() => {}) } catch (e) { /* no-op */ }
-    },
-    /** Unified double confirmation for dangerous operations: a regular confirm first, then an irreversible final confirm */
-    async confirmDanger (msg, title, type) {
-      await this.$confirm(msg, title, { type: type || 'warning' })
-      // Final confirm must use its own copy, not unrelated settings labels (P1: was panelSyncHint/breakLengthLabel)
-      await this.$confirm(this.$t('statsE.SettingsModal.finalConfirmMsg'), title, { type: 'error', confirmButtonText: this.$t('statsE.SettingsModal.finalConfirmBtn') })
-    },
-    // CSV one-click migration (other todo apps → Pickdone): main process picks file + preview, executes on confirm; repeating tasks deduped by engine fingerprint
-    async importFromCsv () {
-      if (this.importing) return
-      this.importing = true
-      try {
-        const picked = await window.todoAPI.importCsvPickPreview()
-        if (!picked) return // user canceled the file dialog
-        const r = picked.report
-        const msg = this.$t('statsE.SettingsModal.importPreviewMsg', { f: r.format, n: r.wouldImport, d: r.duplicates, s: r.skipped })
-        try { await this.$confirm(msg, this.$t('statsH.SettingsModal.importTitle'), { type: 'info' }) } catch { return }
-        const done = await window.todoAPI.importCsvRun(picked.file)
-        await this.$store.dispatch('_rt/refreshFromDb')
-        this.$message.success(this.$t('statsH.SettingsModal.importDone', { n: done.imported, d: done.duplicates }))
-      } catch (e) {
-        this.$message.error(this.$t('statsE.SettingsModal.importFailedMsg') + (e && e.message ? e.message : String(e)))
-      } finally { this.importing = false }
-    },
-    async pickBackupDir () {
-      const dir = await window.todoAPI.pickBackupDir()
-      if (!dir) return
-      this.set({ backupDir: dir })
-      this.loadBackupDirDisplay()
-      this.$message.success(this.$t('statsE.SettingsModal.backupLocationUpdatedMsg'))
-    },
-    resetBackupDir () {
-      this.set({ backupDir: '' })
-      this.loadBackupDirDisplay()
-    },
-    async loadBackupDirDisplay () {
-      this.autoBackupLastAt = loadRuntime().autoBackupLastAt || 0
-      try {
-        const def = await window.todoAPI.getDefaultBackupDir()
-        this.backupDirDefault = def
-        this.backupDirShown = this.st.backupDir || def
-      } catch {}
-    },
-    async runAutoBackupNow () {
-      const ok = await this.$store.dispatch('todo/writeAutoBackup')
-      this.autoBackupLastAt = loadRuntime().autoBackupLastAt || Date.now()
-      // Failures must be reported honestly (an unwritable backupDir / an offline disk once silently faked success for a long time)
-      ok === false ? this.$message.error(this.$t('statsE.SettingsModal.backupFail')) : this.$message.success(this.$t('statsE.SettingsModal.autoBackupWrittenMsg'))
-    },
-    async exportXlsx () {
-      if (this.exporting) return
-      this.exporting = true
-      try {
-        // Export active tasks only: recycle bin rows mixed in would lack the deleted marker (and would inevitably revive on a future import)
-        const list = this.$store.state.todo.todoList
-        if (!list.length) return this.$message.info(this.$t('statsE.SettingsModal.noDataYet'))
-        const catName = id => (this.$store.state.category.list.find(c => c.categoryId === id) || {}).categoryName || ''
-        const rows = list.map(t => [
-          t.taskId,
-          t.dayStart ? dayjs(t.dayStart).format(FMT.date) : '',
-          catName(t.categoryId),
-          t.taskContent, t.taskDescribe || '',
-          (JSON.parse(t.subtasks || '[]')).map(s => (s.checked ? '[x] ' : '[ ] ') + s.text).join('\n'),
-          t.complete ? this.$t('statsE.SettingsModal.yesLabel') : this.$t('statsH.SettingsModal.exportNo'),
-          String(t.estimate || 0),
-          t.reminderTime ? dayjs(t.reminderTime).format(FMT.dateTime) : '',
-          (t.reminderOffsets || []).join(','),
-          t.repeatId || '',
-          t.deadlineTs ? dayjs(t.deadlineTs).format(FMT.date) : '',
-          t.important === 1 || t.important === true ? 'Y' : 'N',
-          t.urgent === 1 || t.urgent === true ? 'Y' : 'N',
-          t.todoDifficultyLevel || 0
-        ])
-        const r = await window.todoAPI.exportXlsx({ fileName: this.$t('statsH.SettingsModal.exportFileName', { ts: dayjs().format('YYYYMMDD_HHmmss') }), rows })
-        if (!r.canceled && !r.error) this.$message.success(this.$t('statsE.SettingsModal.exportedPrefix') + r.filePath)
-        else if (r.error) this.$message.error(r.error)
-      } finally { this.exporting = false }
-    },
-    writeBackupNow () {
-      // Trigger a critical-state backup immediately and point out its location
-      this.$store.dispatch('todo/writeCriticalBackup')
-      setTimeout(() => {
-        window.todoAPI.readCriticalStateBackup().then(txt => {
-          this.$message.success(txt ? this.$t('statsE.SettingsModal.criticalBackupWrittenMsg') : this.$t('statsH.SettingsModal.backupFailed'))
-        }).catch(() => { this.$message.error(this.$t('statsH.SettingsModal.backupFailed')) })
-      }, 1200)
-    },
-    async loadAutoBackupList () {
-      try {
-        const r = await window.todoAPI.listAutoBackups(this.st.backupDir || '')
-        this.autoBackupFiles = (r && r.files) || []
-        // 主进程区分了「目录不存在(正常空态)」与「读取失败」:失败时不再静默清空,一行提示告知用户
-        if (r && r.ok === false) this.$message.error(this.$t('statsH.SettingsModal.backupFailed') + ': ' + (r.error || ''))
-        if (!this.autoBackupPick && this.autoBackupFiles.length) this.autoBackupPick = this.autoBackupFiles[0]
-      } catch { this.autoBackupFiles = [] }
-    },
-    async restoreFromAutoBackup () {
-      if (!this.autoBackupPick) return this.$message.info(this.$t('statsE.SettingsModal.autoRestoreEmpty'))
-      await this.confirmDanger(this.$t('statsE.SettingsModal.autoRestoreConfirm', { f: this.autoBackupPick }), this.$t('statsH.SettingsModal.restoreTitle'), 'warning')
-        .then(async () => {
-          try {
-            const r = await window.todoAPI.readAutoBackup(this.st.backupDir || '', this.autoBackupPick)
-            // read-auto-backup 现在返回 { ok, text?, error? }:读取失败显式报错,不再与「文件不存在」混为空串
-            if (!r || !r.ok) return this.$message.error(this.$t('statsE.SettingsModal.backupFileNotFoundMsg') + ((r && r.error) ? ': ' + r.error : ''))
-            const d = JSON.parse(r.text); const b = d.backup || {}
-            await this.$store.dispatch('todo/writeEventBackup', 'restore')
-            const rows = []
-            if (b.todoState) { const td = this.parseTodoState(b.todoState); (td.todoList || []).forEach(r => rows.push(r)); (td.recycleList || []).forEach(r => rows.push(r)) }
-            if (rows.length) await window.todoAPI.dbCall('upsertMany', rows)
-            // 字段级对齐 critical 恢复:分类与专注账本同份同回,否则"恢复"后分类消失/专注账全丢(二轮深审 P1-2)
-            if (b.categoryState) { const c = JSON.parse(b.categoryState); if (c.list) this.$store.commit('category/setList', c.list) }
-            await this.restoreTomatoLedger(b)
-            this.$store.dispatch('_rt/refreshFromDb')
-            this.$store.dispatch('tomato/recordsReload').catch(e => console.error('[settings] tomato/recordsReload after restore failed:', e))
-            this.$message.success(this.$t('statsH.SettingsModal.restoredCount', { n: rows.length }))
-          } catch (e) { this.$message.error(this.$t('statsE.SettingsModal.backupParseFailedMsg') + e.message) }
-        }).catch(() => {})
-    },
-    // dump.todoState 解析 + 版本守卫:schemaV 高于本版支持的备份静默误读=降级导入事故,显式报错
-    parseTodoState (raw) {
-      const td = typeof raw === 'string' ? JSON.parse(raw) : raw
-      if (td && Number(td.schemaV) > 1) throw new Error('schemaV ' + td.schemaV + ' > 1 (backup from a newer app version)')
-      return td || {}
-    },
-    // 账本回灌:行表幂等 UPSERT,缺 tomatoId/endTime 的行跳过不拖批(与主进程 dbRecovery 同规则)
-    async restoreTomatoLedger (b) {
-      if (!b.tomatoRecords) return
-      const recs = typeof b.tomatoRecords === 'string' ? JSON.parse(b.tomatoRecords) : b.tomatoRecords
-      const ok = (Array.isArray(recs) ? recs : []).filter(r => r && r.tomatoId && r.endTime)
-      if (ok.length) await window.todoAPI.dbCall('tomatoAppendMany', ok)
-    },
-    restoreFromBackup () {
-      this.confirmDanger(this.$t('statsE.SettingsModal.criticalRestoreConfirmMsg'), this.$t('statsH.SettingsModal.restoreTitle'), 'warning').then(async () => {
-        this.$store.dispatch('todo/writeEventBackup', 'restore')
-        let txt = null
-        try { txt = await window.todoAPI.readCriticalStateBackup() } catch (e) { return this.$message.error(this.$t('statsE.SettingsModal.backupParseFailedMsg') + e.message) }
-        if (!txt) return this.$message.error(this.$t('statsE.SettingsModal.backupFileNotFoundMsg'))
-        try {
-          const d = JSON.parse(txt); const b = d.backup || {}
-          if (b.settingsState) this.$store.commit('settings/restore', JSON.parse(b.settingsState))
-          if (b.categoryState) { const c = JSON.parse(b.categoryState); if (c.list) this.$store.commit('category/setList', c.list) }
-          if (b.habitsState) {
-            try {
-              const hb = JSON.parse(b.habitsState)
-              if (hb && Array.isArray(hb.habits)) {
-                // Single writer via the store only: replaceAll already dual-writes LS+meta; writing LS directly from the component would create a second writer (dual-write ledger discipline)
-                this.$store.commit('habits/replaceAll', hb)
-              }
-            } catch {}
-          }
-          const rows = []
-          if (b.todoState) { const td = this.parseTodoState(b.todoState); (td.todoList || []).forEach(r => rows.push(r)); (td.recycleList || []).forEach(r => rows.push(r)) }
-          if (rows.length) await window.todoAPI.dbCall('upsertMany', rows)
-          // 回收站行与专注账本同份同回(此前 UI 恢复只进 todoList,同一份 dump 走启动灾备却能全回——两端语义割裂)
-          await this.restoreTomatoLedger(b)
-          this.$store.dispatch('_rt/refreshFromDb')
-          this.$store.dispatch('tomato/recordsReload').catch(e => console.error('[settings] tomato/recordsReload after restore failed:', e))
-          this.$message.success(this.$t('statsH.SettingsModal.restoredCount', { n: rows.length }))
-        } catch (e) { this.$message.error(this.$t('statsE.SettingsModal.backupParseFailedMsg') + e.message) }
-      }).catch(() => {})
-    },
-    purgeRecycle () {
-      const n = this.$store.state.todo.recycleList.length
-      // Same strength as the recycle bin page: unified triple confirm confirmRecycleClear (previously only single confirm, inconsistent protection)
-      confirmRecycleClear(this, n).then(() => {
-        this.$store.dispatch('todo/purgeAllRecycle')
-        this.$message.success(this.$t('statsC.RecycleBin.cleared', { n }))
-      }).catch(() => {})
-    },
-    async purgeSeed () {
-      try {
-        const n = await window.todoAPI.dbCall('countSeedTodos')
-        if (!n) return this.$message.info(this.$t('statsE.SettingsModal.noDemoDataMsg'))
-        await this.confirmDanger(this.$t('statsH.SettingsModal.purgeSeedConfirm', { n }), this.$t('statsE.SettingsModal.clearDemoDataMsg'), 'warning')
-        await window.todoAPI.purgeSeedTodos()
-        this.$store.dispatch('tomato/removeRecordsByIdPrefix', 'seed_')
-        this.$store.dispatch('_rt/refreshFromDb')
-        this.$message.success(this.$t('statsE.SettingsModal.demoDataClearedMsg'))
-      } catch (e) { /* cancelled */ }
     },
     feedback () {
       if (window.todoAPI.openExternal) window.todoAPI.openExternal('https://github.com/ardss/pickdone/issues')
@@ -910,7 +527,7 @@ export default {
     }
   },
   mounted () {
-    this.bindMaskOnce(); this.loadBackupDirDisplay()
+    this.bindMaskOnce()
     this.loadUpdStatus()
     if (window.todoAPI.onUpdaterEvent) this._updUn = window.todoAPI.onUpdaterEvent(d => this.applyUpdStatus({ status: d.status, info: d.info }))
   },
