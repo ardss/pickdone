@@ -6,6 +6,25 @@ and versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [Unreleased]
+
+### Added
+- Dependency canvas connect mode with full keyboard support.
+- Large CSV imports now run off the main thread (the app stays interactive; a stuck import aborts cleanly after 30 seconds with a clear error).
+
+### Fixed
+- Importing a large CSV no longer freezes the whole app: windows, reminders and the timer keep responding during import; import failures are reported clearly instead of hanging silently, and imports are now written atomically (a crash mid-import no longer leaves half-imported tasks).
+- Typing dates is now equally smart in both languages: time-only entries ("15:30"), past "month-day" dates, and mixed Chinese+English input are all interpreted correctly.
+- Task relationships (dependencies): the canvas is now fully keyboard-operable, including a dedicated connect mode that resets properly when you switch projects; empty/dead-end states, remove-dependency menu entries and loading indicators were all repaired.
+- Reliability around quitting and saving: closing the app no longer hangs on a dead window; task/pomodoro saves that fail are retried or reported instead of being silently dropped; search-filter values and connection states no longer stick after switching projects.
+- Chinese date phrases that include a time keep the intended date instead of jumping to today; milestone lists ignore malformed dates and tell you when a save failed.
+- Small but noticeable fixes: the window control buttons regained a visible keyboard-focus ring (without the startup phantom ring); the undo toast dismisses identically by mouse and keyboard; the taskbar progress flag no longer goes stale; the notification sound respects your custom URL; deleted documents now join the 5-second undo window; project overview got clearer empty states, status feedback and accessibility labels.
+- CLI: subcommand edge cases (deps/after/view/lunar/limit/edit) are more forgiving and report errors properly.
+
+### Changed
+- Under-the-hood reorganization of the task editor, settings and statistics screens for maintainability; no intended behavior changes beyond the fixes above.
+
+
 ## [0.3.4] - 2026-09-11
 
 ### Added

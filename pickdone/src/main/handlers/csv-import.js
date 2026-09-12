@@ -2,6 +2,9 @@
 const fs = require('fs')
 const path = require('path')
 const { Worker } = require('worker_threads')
+// electron is unavailable when this module is loaded outside Electron (unit tests) — tolerate
+let app = null
+try { ({ app } = require('electron')) } catch { /* plain node */ }
 const i18nM = require('../i18n')
 const fixUtil = require('../fix-util')
 const scheduler = require('../scheduler')
@@ -32,9 +35,13 @@ function runImportParse (text, format = 'auto') {
       try { Promise.resolve(worker.terminate()).catch(err => logTerminationFailure(err)) } catch (err) { logTerminationFailure(err) }
       fn(arg)
     }
-    const worker = new Worker((process.resourcesPath
-        ? path.join(process.resourcesPath, 'src', 'main', 'import-worker.js')
-        : path.join(__dirname, '..', 'import-worker.js')), { workerData: { text, format } })
+    // Packaged: prefer the extraResources copy (worker bootstrap from inside asar is a historical
+    // minefield). Dev: process.resourcesPath points at node_modules/electron/dist/resources which has
+    // no src/main — resolve from the source tree instead (2026-09-12 release review P2).
+    const workerEntry = process.resourcesPath && app.isPackaged
+      ? path.join(process.resourcesPath, 'src', 'main', 'import-worker.js')
+      : path.join(__dirname, '..', 'import-worker.js')
+    const worker = new Worker(workerEntry, { workerData: { text, format } })
     const timer = setTimeout(() => finish(reject, new Error('import: parse worker timed out after ' + IMPORT_WORKER_TIMEOUT_MS + 'ms')), IMPORT_WORKER_TIMEOUT_MS)
     worker.on('message', m => {
       if (m && m.ok) finish(resolve, m)
