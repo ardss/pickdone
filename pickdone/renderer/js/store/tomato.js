@@ -4,6 +4,7 @@ import { dayjs, safeSet, FMT } from '../utils/core.js'
 import { remainSecOf } from '../utils/tomatoShared.js'
 import { confirmUrl } from '../utils/mediaRegistry.js'
 import { tt } from '../utils/core.js'
+import { FOCUS_MAX_MINUTES } from '../utils/limits.js'
 
 const LS_KEY = 'tomatoState'
 /** Persistence blob format version: incremented on future incompatible field semantics; readers tolerate old unstamped data as v1 */
@@ -194,9 +195,9 @@ export default {
       if (patch.endTime != null) rec.endTime = Math.max(0, Math.round(patch.endTime))
       // After changing endTime, re-derive dateKey: the rail/stats both bucket by dateKey; without re-deriving, it becomes ghost data that "vanishes from the day it was moved away from"
       if (patch.endTime != null && rec.endTime > 0) rec.dateKey = dayjs(rec.endTime).format(FMT.date)
-      // clamp 1..600 = the DB-layer single source (db.js _recToRow): a UI-side cap above it would show
-      // values the DB silently drops on next reload (memory says 720, ledger says 600)
-      if (patch.focusDuration != null) rec.focusDuration = Math.max(1, Math.min(600, Math.round(patch.focusDuration)))
+      // clamp 1..FOCUS_MAX_MINUTES = the DB-layer single source (db.js _recToRow via shared/limits.mjs):
+      // a UI-side cap above it would show values the DB silently drops on next reload (memory says 720, ledger says 600)
+      if (patch.focusDuration != null) rec.focusDuration = Math.max(1, Math.min(FOCUS_MAX_MINUTES, Math.round(patch.focusDuration)))
       if (patch.restDuration != null) rec.restDuration = Math.max(0, Math.min(120, Math.round(patch.restDuration)))
       if (patch.succeed != null) rec.succeed = !!patch.succeed
       s.tomatoRecordList = [...s.tomatoRecordList]
@@ -341,7 +342,7 @@ export default {
       if (!claimPhase('startTomatoTime', s.startedAt)) return
       const endTs = Date.now()
       // Measured duration, not the current setting: a mid-focus duration change would otherwise skew the ledger (unified with giveUp's elapsed basis)
-      const focusMin = Math.max(1, Math.min(600, Math.round((endTs - s.startedAt) / 60000)))
+      const focusMin = Math.max(1, Math.min(FOCUS_MAX_MINUTES, Math.round((endTs - s.startedAt) / 60000)))
       // Accounting-time attach validation (root fix): a task deleted after focus start resolves to null →
       // the focus is booked as free (no focusTaskId, no bumpSnow) instead of firing a fire-and-forget
       // bumpSnow at a dead taskId whose minutes silently vanish

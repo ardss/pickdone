@@ -14,9 +14,9 @@
  * cli/lib.js) via require(esm) (Node >= 22.12; CI pins node 22, Electron 39
  * embeds node 22.x) and by the renderer through renderer/js/utils/limits.js.
  *
- * Note: renderer/js/store/tomato.js still carries an inline 600 clamp
- * (outside this refactor's file scope) — migrating it to
- * renderer/js/utils/limits.js is a deliberate follow-up.
+ * Note: renderer/js/store/tomato.js now clamps through FOCUS_MAX_MINUTES
+ * (imported via renderer/js/utils/limits.js) — the last inline 600 in the
+ * renderer is gone (2026-09-12 migration).
  */
 export const FOCUS_MAX_MINUTES = 600
 export const FOCUS_INPUT_MAX_MINUTES = 720
