@@ -15,6 +15,7 @@
  * 宿主 vite 由本脚本自拉起(独占生命周期,结束即杀),端口默认 5175,可用 SMOKE_PORT 覆盖。
  */
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn as cpSpawn } from 'node:child_process'
@@ -35,16 +36,23 @@ const ROUTES = [
 const LIMIT = Number(process.env.SMOKE_SCENES || 0) // 0 = all
 
 // --- 自拉起 5175 宿主(同 visual-web --spawn,但跨平台:不 netstat/taskkill,CI 是干净环境) ---
-const viteChild = cpSpawn('npm', ['run', 'dev'], { cwd: path.join(ROOT, 'browser-dev'), shell: true, stdio: 'ignore' })
+// vite 输出写入日志文件而非 ignore——宿主起不来时把日志倾倒出来,否则 CI 上死因不可见
+const VITE_LOG = path.join(os.tmpdir(), `visual-smoke-vite-${process.pid}.log`)
+const viteLogFd = fs.openSync(VITE_LOG, 'w')
+const viteChild = cpSpawn('npm', ['run', 'dev'], { cwd: path.join(ROOT, 'browser-dev'), shell: true, stdio: ['ignore', viteLogFd, viteLogFd] })
 process.on('exit', () => { try { viteChild.kill() } catch { /* gone */ } })
 
+const BASE_ALT = BASE.replace('//localhost:', '//127.0.0.1:') // ubuntu 上 localhost 可能先解析 ::1
 let up = false
 for (let t = 0; t < 60000 && !up; t += 500) {
   await new Promise(r => setTimeout(r, 500))
-  try { if ((await fetch(BASE, { signal: AbortSignal.timeout(2000) })).ok) up = true } catch { /* retry */ }
+  for (const u of [BASE, BASE_ALT]) {
+    try { if ((await fetch(u, { signal: AbortSignal.timeout(2000) })).ok) { up = true; break } } catch { /* retry */ }
+  }
 }
 if (!up) {
   console.error('✗ visual-smoke: 60s 内宿主未就绪(vite 启动失败?)')
+  try { console.error('--- vite log tail ---\n' + fs.readFileSync(VITE_LOG, 'utf8').slice(-2000)) } catch { /* no log */ }
   process.exit(2)
 }
 
