@@ -1,0 +1,20 @@
+{
+  "name": "pickdone-browser-dev",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "拾事 PickDone 渲染层的浏览器调试宿主（Vite），与 Electron 主工程隔离",
+  "scripts": {
+    "dev": "vite --port 5175"
+  },
+  "devDependencies": {
+    "sirv": "^3.0.2",
+    "vite": "^5.4.11",
+    "@vitejs/plugin-vue": "^5.0.0"
+  },
+  "dependencies": {
+    "html2canvas-pro": "^2.4.0",
+    "jspdf": "^4.2.1",
+    "vue-i18n": "^9.14.4"
+  }
+}
