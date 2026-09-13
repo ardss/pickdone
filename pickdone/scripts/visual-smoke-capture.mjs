@@ -12,7 +12,7 @@
  *   node scripts/visual-smoke-capture.mjs              # 全部 14 场景
  *   SMOKE_SCENES=2 node ...                            # 只截前 2 个场景(本地调试)
  * 前置: playwright 已安装(npm i --no-save playwright && npx playwright install chromium)。
- * 宿主 vite 由本脚本自拉起(独占生命周期,结束即杀),端口默认 5175,可用 SMOKE_PORT 覆盖。
+ * 宿主 vite 由本脚本自拉起(独占生命周期,结束即树杀),端口固定 5175(browser-dev dev 脚本硬编码,SMOKE_PORT 覆盖是虚假功能已删——G2 实测:改 env 只改探测端口,vite 仍在 5175,180s 假等)。
  */
 import fs from 'node:fs'
 import os from 'node:os'
@@ -22,7 +22,7 @@ import { spawn as cpSpawn } from 'node:child_process'
 import { chromium } from 'playwright'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
-const PORT = process.env.SMOKE_PORT || '5175'
+const PORT = '5175' // browser-dev dev 脚本硬编码同值;此处不得改成可配置除非同步改 browser-dev
 const BASE = `http://127.0.0.1:${PORT}`
 const DIR = path.join(ROOT, 'tests', '.artifacts', 'visual-smoke')
 // 与 visual-web.mjs 保持同源:同一冻结时刻,基线跨真实日期不漂移
@@ -44,12 +44,23 @@ try {
   process.exit(2)
 } catch { /* port free — expected */ }
 
-// --- 自拉起 5175 宿主(同 visual-web --spawn,但跨平台:不 netstat/taskkill,CI 是干净环境) ---
+// --- 自拉起 5175 宿主(同 visual-web --spawn,但 CI 是干净环境无需 netstat 抢占) ---
 // vite 输出写入日志文件而非 ignore——宿主起不来时把日志倾倒出来,否则 CI 上死因不可见
 const VITE_LOG = path.join(os.tmpdir(), `visual-smoke-vite-${process.pid}.log`)
 const viteLogFd = fs.openSync(VITE_LOG, 'w')
 const viteChild = cpSpawn('npm', ['run', 'dev'], { cwd: path.join(ROOT, 'browser-dev'), shell: true, stdio: ['ignore', viteLogFd, viteLogFd] })
-process.on('exit', () => { try { viteChild.kill() } catch { /* gone */ } })
+// kill() 只杀 npm/shell 包装进程,vite 孙进程在 Windows 上存活继续占 5175(G2 实测两次泄漏,
+// 下次运行被自己的端口预检拒绝)——树杀:win32 taskkill /T /F,POSIX detached 进程组信号
+function killViteTree () {
+  try {
+    if (process.platform === 'win32') {
+      cpSpawn('taskkill', ['/pid', String(viteChild.pid), '/T', '/F'], { shell: true, stdio: 'ignore' })
+    } else {
+      try { process.kill(-viteChild.pid, 'SIGKILL') } catch { viteChild.kill('SIGKILL') }
+    }
+  } catch { /* already gone */ }
+}
+process.on('exit', killViteTree)
 
 // 双探测:localhost 与 127.0.0.1(ubuntu 上 localhost 可能先解析 ::1,vite 只绑其中之一)
 const BASES = [`http://localhost:${PORT}`, BASE]

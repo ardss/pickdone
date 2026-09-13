@@ -72,6 +72,8 @@ test('toSoundUrl: file outside appRoot (.. escape) becomes a playable file:// UR
   assert.ok(/^file:\/\/\//.test(url), 'file:// URL: ' + url)
   assert.ok(url.includes('other/a.wav'))
 })
+// WIN-only by design: cross-drive file:// semantics are a Windows path concept; the skip is
+// counted by cli/check-test-summary.cjs's linux/darwin skip baseline (keep both in sync)
 ;(WIN ? test : test.skip)('toSoundUrl: cross-drive relative (absolute result, no .. prefix) becomes file:// not app://', () => {
   const url = toSoundUrl('C:\\Users\\x\\n.mp3', 'K:\\app\\pickdone')
   assert.ok(url.startsWith('file:///C:'), 'malformed app://app/C:/... must never be produced: ' + url)
