@@ -1,6 +1,10 @@
 <template>
 
   <div class="page project-page" :key="catId">
+    <!-- Whole page scrolls as one column: the header (milestone timeline/strip/cards) grows with
+         project data, and pinning it above the scroller used to starve the tab body down to ~0px
+         so nothing could scroll. Single scroller keeps header + tabs + body reachable. -->
+    <div class="page__main proj-scroll">
     <div v-if="cat" class="proj-head">
       <div class="proj-head__title">
         <span class="sn-dot" :style="{borderColor:cat.categoryColor, background:cat.categoryColor}"></span>
@@ -41,8 +45,11 @@
              :aria-label="$t('statsB.ProjectView.swatchAria', { c })" @click="setColor(c)" @keydown.enter.prevent="setColor(c)"></i>
         </span>
       </div>
-      <!-- Milestone timeline v2: solid past / dashed future + today line across + node bubbles (hover/focus reveals title and date); click node = edit, deletion in the card below -->
+      <!-- Milestone timeline v2: solid past / dashed future + today line across + node bubbles (hover/focus reveals title and date); click node = edit, deletion in the card below.
+           The strip rail lives in the SAME column as the track (proj-ms__main) so both share one
+           width and the date->percent scale lines up pixel-for-pixel. -->
       <div class="proj-ms">
+        <div class="proj-ms__main">
         <div class="proj-ms__track">
           <i class="proj-ms__seg proj-ms__seg--past" :style="{ left: 0, width: timeline.todayPct + '%' }" aria-hidden="true"></i>
           <i class="proj-ms__seg proj-ms__seg--future" :style="{ left: timeline.todayPct + '%', right: 0 }" aria-hidden="true"></i>
@@ -58,12 +65,11 @@
             <template v-else>◆</template>
           </i>
         </div>
-        <button class="proj-ms__add" :title="$t('statsB.ProjectView.addMsTip')" @click="addMilestone"><app-icon name="plus" :size="11"/> {{ $t('statsB.ProjectView.milestone') }}</button>
-      </div>
-      <!-- Milestone strip: slim rail at the bottom edge of the timeline, one dot per milestone ordered by date (past filled/dimmed, upcoming hollow); hover popover = date + linked-task progress; click = edit (same as timeline nodes) -->
-      <div v-if="msStrip.length" class="proj-ms-strip" role="group" :aria-label="$t('projQ.stripAria')">
+        <!-- Milestone strip: slim rail under the track, one dot per milestone at its exact
+             timeline position (past filled/dimmed, upcoming hollow); hover popover = date + linked-task progress; click = edit (same as timeline nodes) -->
+        <div v-if="msStrip.length" class="proj-ms-strip" role="group" :aria-label="$t('projQ.stripAria')">
         <i v-for="r in msStrip" :key="r.m.id" class="proj-ms-strip__dot" :class="['proj-ms-strip__dot--' + r.state, { 'proj-ms-strip__dot--focus': r.focus }]"
-           role="button" tabindex="0" :aria-label="r.m.title + ' · ' + fmtDate(r.m.date)"
+           :style="{ left: r.pct + '%' }" role="button" tabindex="0" :aria-label="r.m.title + ' · ' + fmtDate(r.m.date)"
            @click="editMilestone(r.m)" @keydown.enter.prevent="editMilestone(r.m)">
           <span class="proj-ms-strip__pop" role="tooltip">
             <b class="proj-ms-strip__title">{{r.m.title}}</b>
@@ -75,6 +81,9 @@
             <span class="proj-ms-strip__hint">{{ $t('projQ.stripEditHint') }}</span>
           </span>
         </i>
+        </div>
+        </div>
+        <button class="proj-ms__add" :title="$t('statsB.ProjectView.addMsTip')" @click="addMilestone"><app-icon name="plus" :size="11"/> {{ $t('statsB.ProjectView.milestone') }}</button>
       </div>
       <div v-if="!milestones.length" class="proj-ms__empty">{{ $t('statsB.ProjectView.msEmptyTip') }}</div>
       <!-- Milestone card: ring progress (linked task completion ratio) + plain-words countdown + status color; click card = edit -->
@@ -115,30 +124,31 @@
         </div>
       </div>
     </div>
-    <!-- Downgraded from role=tablist to a plain button group: the tab roles promised a keyboard
-         contract (arrow-key navigation, roving tabindex) the component never implemented. Without
-         a controlled tab panel relationship, aria-selected/tab roles are lies to AT; toggled buttons
-         with aria-pressed keep the state honest. -->
-    <div class="proj-tabs" role="group" :aria-label="$t('statsB.ProjectView.tabsAria')">
-      <button class="proj-tab" :class="{on: tab === 'overview'}" type="button" :aria-pressed="tab === 'overview'" @click="tab = 'overview'">{{ $t('statsB.ProjectView.tabOverview') }}</button>
-      <!-- Deps tab rides the same two-layer gate as the today deps view (developerMode && showDepsModule) -->
-      <button v-if="settings.developerMode && settings.showDepsModule" class="proj-tab" :class="{on: tab === 'deps'}" type="button" :aria-pressed="tab === 'deps'" @click="tab = 'deps'">{{ $t('statsB.ProjectView.tabDeps') }}</button>
-      <button class="proj-tab" :class="{on: tab === 'docs'}" type="button" :aria-pressed="tab === 'docs'" @click="tab = 'docs'">{{ $t('statsB.ProjectView.tabDocs') }}</button>
-    </div>
-    <div v-if="tab === 'deps' && settings.developerMode && settings.showDepsModule" class="page__main page__main--flow-top proj-tab-body">
-      <pd-dep-view :fixed-project-id="catId"/>
-    </div>
-    <div v-else-if="tab === 'docs'" class="page__main page__main--flow-top proj-tab-body">
-      <project-docs :cat-id="catId"/>
-    </div>
-    <div v-else class="page__main page__main--flow-top">
-      <empty-state v-if="!groups.length"><template #text>{{ $t('statsB.ProjectView.empty') }}</template></empty-state>
-      <div v-else class="todo-list-item-group-list">
-        <group-block v-for="g in groups" :key="g.key"
-           :title="$t(g.titleKey || g.title)" :count="g.todos.length" :todos="g.todos"
-          :color="g.color || ''" :show-date="!!g.showDate"
-          :has-settings="!!g.hasSettings" :has-recomplete="!!g.hasRecomplete"
-          :collapsed="collapsedMap[g.key]" @update:collapsed="v => setCol(g.key, v)" @recomplete="recomplete"/>
+      <!-- Downgraded from role=tablist to a plain button group: the tab roles promised a keyboard
+           contract (arrow-key navigation, roving tabindex) the component never implemented. Without
+           a controlled tab panel relationship, aria-selected/tab roles are lies to AT; toggled buttons
+           with aria-pressed keep the state honest. -->
+      <div class="proj-tabs" role="group" :aria-label="$t('statsB.ProjectView.tabsAria')">
+        <button class="proj-tab" :class="{on: tab === 'overview'}" type="button" :aria-pressed="tab === 'overview'" @click="tab = 'overview'">{{ $t('statsB.ProjectView.tabOverview') }}</button>
+        <!-- Deps tab rides the same two-layer gate as the today deps view (developerMode && showDepsModule) -->
+        <button v-if="settings.developerMode && settings.showDepsModule" class="proj-tab" :class="{on: tab === 'deps'}" type="button" :aria-pressed="tab === 'deps'" @click="tab = 'deps'">{{ $t('statsB.ProjectView.tabDeps') }}</button>
+        <button class="proj-tab" :class="{on: tab === 'docs'}" type="button" :aria-pressed="tab === 'docs'" @click="tab = 'docs'">{{ $t('statsB.ProjectView.tabDocs') }}</button>
+      </div>
+      <div v-if="tab === 'deps' && settings.developerMode && settings.showDepsModule" class="proj-body proj-body--deps">
+        <pd-dep-view :fixed-project-id="catId"/>
+      </div>
+      <div v-else-if="tab === 'docs'" class="proj-body">
+        <project-docs :cat-id="catId"/>
+      </div>
+      <div v-else class="proj-body">
+        <empty-state v-if="!groups.length"><template #text>{{ $t('statsB.ProjectView.empty') }}</template></empty-state>
+        <div v-else class="todo-list-item-group-list">
+          <group-block v-for="g in groups" :key="g.key"
+             :title="$t(g.titleKey || g.title)" :count="g.todos.length" :todos="g.todos"
+            :color="g.color || ''" :show-date="!!g.showDate"
+            :has-settings="!!g.hasSettings" :has-recomplete="!!g.hasRecomplete"
+            :collapsed="collapsedMap[g.key]" @update:collapsed="v => setCol(g.key, v)" @recomplete="recomplete"/>
+        </div>
       </div>
     </div>
   </div>
@@ -229,6 +239,9 @@ export default {
       })
     },
     /* ---- Milestone strip (bottom rail under the timeline): dots ordered by date; reuses milestoneRows state/progress/linked tasks, no extra fetches ---- */
+    /* ---- Milestone strip (bottom rail under the timeline): dots share the timeline's exact
+         date->percent scale (same bounds/clamp), so the two axes line up; evenly-spread dots
+         used to disagree with the track above them ---- */
     msStrip () {
       if (!this.milestoneRows.length) return []
       return [...this.milestoneRows]
@@ -239,7 +252,8 @@ export default {
           focus: r.focus,
           progress: r.progress,
           titles: r.linked.slice(0, 5).map(t => t.taskContent),
-          moreN: Math.max(0, r.linked.length - 5)
+          moreN: Math.max(0, r.linked.length - 5),
+          pct: this.msScale.pos(r.m.date)
         }))
     },
     /* ---- N3 proximity alert: deadline within 3 days turns warning color ---- */
@@ -263,14 +277,19 @@ export default {
       const t = this.todayTs
       return this.milestones.filter(m => m.date >= t)[0] || null
     },
-    timeline () {
-      const ms = this.milestones
+    /* ---- Shared date->percent scale for both the timeline track and the strip rail ---- */
+    msScale () {
       const start = this.stats.startedAt || this.todayTs
-      const bounds = [this.todayTs, start, this.deadlineTs].filter(Boolean).concat(ms.map(m => m.date))
+      const bounds = [this.todayTs, start, this.deadlineTs].filter(Boolean).concat(this.milestones.map(m => m.date))
       const lo = Math.min(...bounds)
       const hi = Math.max(...bounds)
       const span = Math.max(hi - lo, DAY_MS) // span of at least one day to avoid division by zero
-      const pos = ts => Math.min(98, Math.max(2, (ts - lo) / span * 100))
+      return { pos: ts => Math.min(98, Math.max(2, (ts - lo) / span * 100)) }
+    },
+    timeline () {
+      const ms = this.milestones
+      const start = this.stats.startedAt || this.todayTs
+      const pos = this.msScale.pos
       const cur = this.currentMilestone
       return {
         todayPct: pos(this.todayTs),
@@ -480,6 +499,7 @@ export default {
 /* 里程碑时间轴（项目详情页头）：起点◇已过实心◆今天高亮未来空心，按日期比例定位 */
 /* ===== 里程碑 v2：时间轴（今天贯穿线/过去实线/未来虚线/节点气泡）+ 卡片（环形进度/倒计时/状态色） ===== */
 .proj-ms { display: flex; align-items: center; gap: 10px; margin-top: var(--space-3); }
+.proj-ms__main { flex: 1; min-width: 0; }
 .proj-ms__track { position: relative; flex: 1; height: 22px; }
 .proj-ms__seg { position: absolute; top: 50%; height: 2px; margin-top: -1px; }
 .proj-ms__seg--past { left: 0; background: var(--brand); opacity: .55; }
@@ -514,7 +534,11 @@ export default {
   border-bottom: 2px solid transparent; transition: all var(--t-fast); }
 .proj-tab:hover { color: var(--text-1, #222); background: var(--hover-bg, #f6f6f6); }
 .proj-tab.on { color: var(--brand); border-bottom-color: var(--brand); font-weight: 600; }
-.proj-tab-body { display: flex; flex-direction: column; min-height: 0; }
+.proj-body { padding-top: 18px; }
+/* Deps canvas is a fixed-viewport board (depv-cols owns internal scrolling); give it a definite
+   height = window minus titlebar/quick-add/header/tabs chrome, floored so small windows still get a usable board */
+.proj-body--deps { display: flex; flex-direction: column; }
+.proj-body--deps .depv-wrap { height: calc(100vh - 500px); min-height: 420px; }
 .proj-ms__add {
   flex-shrink: 0; display: inline-flex; align-items: center; gap: var(--space-1);
   font-size: var(--fs-xs); color: var(--text-3);
@@ -524,12 +548,11 @@ export default {
 .proj-ms__empty { margin-top: var(--space-2); font-size: var(--fs-xs); color: var(--text-3); }
 /* ===== 里程碑横条（时间轴下沿）：一排按日期排序的细点，过去实心半透明/当天品牌色光环/未来空心；悬停 CSS 浮层显示日期+关联任务进度（复用既有浮层语言：面板底+描边+阴影） ===== */
 .proj-ms-strip {
-  position: relative; display: flex; align-items: center; justify-content: space-evenly;
-  height: 16px; margin-top: var(--space-2); padding: 0 var(--space-2);
+  position: relative; height: 16px; margin-top: var(--space-2);
 }
 .proj-ms-strip::before { content: ''; position: absolute; left: 0; right: 0; top: 50%; height: 1px; margin-top: -1px; background: var(--line); }
 .proj-ms-strip__dot {
-  position: relative; display: block; width: 9px; height: 9px; border-radius: 50%;
+  position: absolute; top: 50%; margin: -4.5px 0 0 -4.5px; display: block; width: 9px; height: 9px; border-radius: 50%;
   cursor: pointer; z-index: 1;
   transition: transform var(--t-fast), box-shadow var(--t-fast), opacity var(--t-fast);
 }

@@ -113,7 +113,7 @@ export default {
       done: '已完成',
       startWith: '开始 {d}',
       currentTag: '【当前】',
-      msEditHint: '（双击编辑，点按删除）',
+      msEditHint: '（点击编辑；删除在下方卡片）',
       deadlineWith: '截止 {d}',
       msPrompt: '里程碑要达成什么？',
       msAddTitle: '新增里程碑',
