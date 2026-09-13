@@ -44,7 +44,8 @@ process.on('exit', () => { try { viteChild.kill() } catch { /* gone */ } })
 
 const BASE_ALT = BASE.replace('//localhost:', '//127.0.0.1:') // ubuntu 上 localhost 可能先解析 ::1
 let up = false
-for (let t = 0; t < 60000 && !up; t += 500) {
+// CI 冷缓存时 vite 依赖预构建能跑 60s 以上(实测卡在 computing gzip 阶段),给足 3 分钟
+for (let t = 0; t < 180000 && !up; t += 500) {
   await new Promise(r => setTimeout(r, 500))
   for (const u of [BASE, BASE_ALT]) {
     try { if ((await fetch(u, { signal: AbortSignal.timeout(2000) })).ok) { up = true; break } } catch { /* retry */ }
