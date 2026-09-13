@@ -39,9 +39,9 @@ export default defineConfig({
   build: {
     outDir: path.resolve(__dirname, 'renderer-dist'),
     // assetsDir=assets2:2026-09-05 K盘出现坏名目目录 renderer-dist/assets(ACL损坏,重启前删不掉),
-    // emptyOutDir 对它 rimraf 整体失败 → 产物子目录换到 assets3 绕开(assets/assets2 两个坏名目并存,正则已通配);清理由 scripts/clean-renderer-dist.mjs 尽力而为
+    // emptyOutDir 对它 rimraf 整体失败 → 产物子目录换到 assets4 绕开(assets/assets2/assets3 三个坏名目并存,正则已通配);清理由 scripts/clean-renderer-dist.mjs 尽力而为
     emptyOutDir: false,
-    assetsDir: 'assets3',
+    assetsDir: 'assets4',
     // 明日待办:再评估 code-split 策略;当前单入口+动态 import 分包即可
     sourcemap: false
   }

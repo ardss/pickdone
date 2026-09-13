@@ -20,10 +20,5 @@ export default {
     clearFilter: 'Clear filter',
     loadChip: 'Load {n}',
     loadTip: 'Today planned load: {n} / threshold {t}',
-    stripAria: 'Milestone strip',
-    stripProgress: 'Linked tasks {done}/{total}',
-    stripNoTasks: 'No linked tasks',
-    stripMore: '{n} more',
-    stripEditHint: 'Click to edit'
   }
 }

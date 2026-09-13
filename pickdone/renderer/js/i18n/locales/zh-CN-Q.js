@@ -20,10 +20,5 @@ export default {
     clearFilter: '清除筛选',
     loadChip: '负荷 {n}',
     loadTip: '今日计划负荷：{n} / 阈值 {t}',
-    stripAria: '里程碑横条',
-    stripProgress: '关联任务 {done}/{total}',
-    stripNoTasks: '未关联任务',
-    stripMore: '还有 {n} 项',
-    stripEditHint: '点击编辑'
   }
 }

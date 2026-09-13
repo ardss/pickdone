@@ -187,7 +187,7 @@ test('resolveMsNewId: resolves by the pre-generated id even when it does not sor
 
 test('ProjectView: addMilestone pre-generates the id; route param swap reloads project data', () => {
   const src = read('renderer/js/views/ProjectView.vue')
-  assert.ok(src.includes('const entry = { id: newMilestoneId(), title: title.trim(), date }'), 'entry id generated before saving')
+  assert.ok(src.includes('const entry = { id: newMilestoneId(), title, date: parsed }'), 'entry id generated before saving')
   assert.ok(!src.includes('saved[saved.length - 1]'), 'last-of-saved heuristic removed')
   const watch = src.match(/'\$route\.params\.id' \(nval\) \{[\s\S]*?\r?\n {2}\}/)
   assert.ok(watch, 'route param watcher present')
