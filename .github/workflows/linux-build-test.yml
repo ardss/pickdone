@@ -64,7 +64,7 @@ jobs:
           npx --yes @electron/asar list dist/linux-arm64-unpacked/resources/app.asar | grep -q "renderer-dist/index.html" || { echo '::error::renderer-dist/index.html missing from app.asar (renderer bundle was not built before packaging)'; exit 1; }
 
       - name: Upload test artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pickdone-linux-arm64
           path: |
