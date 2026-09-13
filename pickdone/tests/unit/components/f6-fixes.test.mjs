@@ -65,6 +65,10 @@ test('f6 i18n: new fix keys exist in both languages with matching placeholders',
 /* ---------------- #1/#3/#4 ProjectDocs ---------------- */
 
 test('f6 ProjectDocs: pending debounced save is flushed (not dropped) on catId switch and unmount', () => {
+  // STRUCTURAL LOCK: debounced-save-dropped-on-catid-switch — refactor will false-red, real bugs stay green; candidate for behavior conversion
+  // (guards a real incident: switching category or unmounting used to only clearTimeout, silently dropping a queued
+  // doc save. ProjectDocs.vue is an options-API SFC with no mount harness in this repo, so the flush wiring cannot be
+  // exercised behaviorally without new infra; kept as a regex lock on the wiring until then.)
   const src = read('components/ProjectDocs.vue')
   assert.match(src, /flushPending \(/, 'flushPending method exists')
   assert.match(src, /catId \(\) \{ this\.flushPending\(\); this\.load\(\) \}/, 'catId watcher flushes before reload')

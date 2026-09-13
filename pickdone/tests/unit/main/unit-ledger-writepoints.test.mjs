@@ -6,6 +6,11 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createRequire } from 'node:module'
+import { mkdtempSync, rmSync } from 'node:fs'
+import os from 'node:os'
+
+const require = createRequire(import.meta.url) // cli/lib.js and src/main/db.js are CJS; requirable from this ESM test
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const read = p => fs.readFileSync(path.join(ROOT, p), 'utf8')
@@ -42,19 +47,51 @@ test('write-point: cliTomatoCmd 通道只留状态机命令(start/stop/attach),�
   }
 })
 
-test('write-point: CLI 账本操作直写行表 op,不经命令通道', () => {
+/* 2026-09-13 改造:原实现对 cli/lib.js 做 indexOf+slice 函数体定位再 includes 断言 ——
+ * slice 边界一旦失配(函数改名/顺序调整)会得到空串,负向断言恒真(假绿通道)。
+ * cli/lib.js 是可 require 的纯 Node 模块,故改为行为断言:在 TODO_DB_DIR 隔离临时库上
+ * 真实调用 backfillRecord/recordFix/recordRemove/tomatoRecords,断言行表读写走正确通道
+ * (App 不在场时仍可写 = 没有经过 App 命令通道;读到的就是写入的行 = 走行表而非 meta 镜像)。 */
+test('write-point: CLI 账本操作直写行表 op(隔离临时库行为验证,不经命令通道)', () => {
+  const tmp = mkdtempSync(path.join(os.tmpdir(), 'ledger-writepoint-'))
+  process.env.TODO_DB_DIR = tmp // must point at the data dir that contains todos.db (see cli/lib.js userDataDir)
+  // 隔离 require:避免吃到其他测试进程态(同文件内首此 require;防御性清缓存)
+  for (const m of Object.keys(require.cache)) {
+    if (m.endsWith('cli/lib.js') || m.endsWith('src/main/db.js')) delete require.cache[m]
+  }
+  try {
+    const lib = require(path.join(ROOT, 'cli/lib.js'))
+    // 1. backfill:App 关闭(纯 CLI、临时库)即写成功 → 证明没走 App 命令通道,而是直写行表
+    const rec = lib.backfillRecord({ content: 'wp-test', date: '2026-09-13', at: '10:00', minutes: 25 })
+    assert.ok(rec.tomatoId && rec.tomatoId.startsWith('tmt_m_'), 'backfillRecord returns a manual ledger row id')
+    let rows = lib.tomatoRecords()
+    assert.equal(rows.length, 1, 'tomatoRecords reads the row the backfill wrote (row table is the truth)')
+    assert.equal(rows[0].tomatoId, rec.tomatoId)
+    // 2. fix:更新走行表 op,改动真实落行
+    const fixed = lib.recordFix(rec.tomatoId, { minutes: 40 })
+    assert.equal(fixed.rec.focusDuration, 40)
+    rows = lib.tomatoRecords()
+    assert.equal(rows[0].focusDuration, 40, 'recordFix patch landed in the row table')
+    // 3. remove:删除走行表 op,行真的消失(删除复活事故的反向防御)
+    lib.recordRemove(rec.tomatoId)
+    assert.equal(lib.tomatoRecords().length, 0, 'recordRemove deletes the ledger row')
+    // 4. 时长钳制走 DB 层共享常量(720 静默截断事故):超限必须 USAGE 报错,而不是写进去一个别的值
+    assert.throws(() => lib.backfillRecord({ date: '2026-09-13', minutes: 9999 }),
+      e => e.code === 'USAGE', 'over-max backfill must be rejected, not clamped silently')
+  } finally {
+    try { require(path.join(ROOT, 'src/main/db.js')).close() } catch { /* already closed */ }
+    delete process.env.TODO_DB_DIR
+    try { rmSync(tmp, { recursive: true, force: true, maxRetries: 3 }) } catch { /* temp best-effort */ }
+  }
+})
+
+/* 负向字符串门禁(完整源码级,非 slice,无空 slice 恒真通道):
+ * - 'db.tomatoState' 回读 → CLI 重新读取已退役的 meta 镜像(统计对不上/删除复活)。
+ * (账本写不经 App 命令通道这一条已由上面的隔离库行为测试证明——App 不在场时写入仍成功;
+ *  writeTomatoCmd 定义/导出本身合法——start/stop 状态机命令通道仍在用,不做全文件负向。) */
+test('write-point: cli/lib.js 无 meta 镜像回读(全源码负向门禁)', () => {
   const lib = read('cli/lib.js')
-  const backfillFn = lib.slice(lib.indexOf('function backfillRecord'), lib.indexOf('/* ---------------- Tomato estimate'))
-  assert.ok(backfillFn.includes("call('tomatoAppendMany'"), 'backfillRecord must append the row directly')
-  assert.ok(!backfillFn.includes('writeTomatoCmd'), 'backfillRecord must not go through the command channel')
-  const fixFn = lib.slice(lib.indexOf('function recordFix'), lib.indexOf('function recordRemove'))
-  assert.ok(fixFn.includes("call('tomatoUpdateById'"), 'recordFix must update the row directly')
-  const rmFn = lib.slice(lib.indexOf('function recordRemove'), lib.indexOf('function moveSubtask'))
-  assert.ok(rmFn.includes("call('tomatoRemoveByIds'"), 'recordRemove must delete the row directly')
-  // 查询也必须走行表,不得回读 meta 旧镜像
-  const qFn = lib.slice(lib.indexOf('function tomatoRecords'), lib.indexOf('function backfillRecord'))
-  assert.ok(qFn.includes("call('tomatoAll'"))
-  assert.ok(!qFn.includes('db.tomatoState'), 'tomatoRecords must not read the retired meta mirror')
+  assert.ok(!lib.includes('db.tomatoState'), 'CLI must never read the retired meta mirror')
 })
 
 test('write-point: db.tomatoByDay 聚合自行表,不回读 meta blob', () => {

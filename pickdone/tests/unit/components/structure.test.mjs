@@ -196,6 +196,8 @@ test('structure: both index.html files share the same local vendor/css script se
 /* ---------- 5. shape guards for known incidents ---------- */
 
 test('structure: settings modal Data Management tab not duplicated (parallel merges once produced twin panels)', () => {
+  // STRUCTURAL LOCK: twin-data-panel merge incident — refactor will false-red, real bugs stay green; candidate for
+  // behavior conversion (needs a Vue mount harness; counting `tab==='data'` occurrences is the cheapest reliable guard)
   const src = fs.readFileSync(rel('renderer/js/components/SettingsModal.vue'), 'utf8')
   const count = (src.match(/tab==='data'/g) || []).length
   assert.ok(count <= 2, `Data Management appears ${count} times; suspected duplicated template merge`)
@@ -204,6 +206,9 @@ test('structure: settings modal Data Management tab not duplicated (parallel mer
 /* ---------- 6. main-process environment fault-tolerance guard (2026-08-30 EPIPE P0: parent shell exit took the stdout pipe,
    electron-log writes raised uncaught exceptions popping the main-process error dialog. This protection must not be removed) ---------- */
 test('structure: main process keeps stdout/stderr EPIPE tolerance and uncaughtException pipe-error filtering', () => {
+  // STRUCTURAL LOCK: 2026-08-30 EPIPE P0 (parent shell exit took the stdout pipe; electron-log writes raised uncaught
+  // exceptions popping the main-process error dialog) — refactor will false-red, real bugs stay green; candidate for
+  // behavior conversion (would require spawning the packaged Electron binary against a closed pipe; no such harness today)
   const src = fs.readFileSync(rel('src/main/index.js'), 'utf8')
   assert.ok(src.includes("stream.on('error'"), 'stdout/stderr missing error swallowing - a broken pipe will crash the main process')
   assert.ok(src.includes("uncaughtException"), 'missing uncaughtException filter')
