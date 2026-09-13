@@ -14,8 +14,10 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const dir = path.dirname(fileURLToPath(import.meta.url))
-// integration-ui spawns its own Electron instance (~60s) and stays out of the quick regression - run by a dedicated check:all stage / npm run it
-const EXCLUDE = new Set(['e2e.test.mjs', 'integration-ui.test.mjs'])
+// Live-Electron tests spawn their own instance (~30-60s each) and depend on the shared 5175
+// host's runtime state — they stay out of the quick regression (and out of pre-commit, which
+// must never be hostage to dev-host state); each runs as a dedicated check:all ③ live stage.
+const EXCLUDE = new Set(['e2e.test.mjs', 'integration-ui.test.mjs', 'overlay-visibility.test.mjs'])
 
 const KNOWN_SUITES = new Set(['unit', 'integration', 'visual'])
 

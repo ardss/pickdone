@@ -12,6 +12,11 @@ on:
 permissions:
   contents: read
 
+# superseded pushes on the same branch cancel the older run instead of queueing behind it
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
     strategy:
@@ -20,6 +25,11 @@ jobs:
         os: [windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    # OS split (2026-09-13 perf pass): the xvfb-driven Electron live pool is the slowest segment —
+    # ubuntu runs static gates + unit tests only (CHECK_ALL_SKIP_LIVE), windows carries the full
+    # live pool. Wall clock takes the max instead of both OSes running everything.
+    env:
+      CHECK_ALL_SKIP_LIVE: ${{ matrix.os == 'ubuntu-latest' && '1' || '0' }}
     steps:
       - uses: actions/checkout@v4
 

@@ -25,8 +25,8 @@ echo "[pre-commit] 2.5/4 ESM 模块图（import/export 匹配——白屏级事�
 node cli/check-esm-graph.cjs || exit 1
 echo "  ✓ 通过"
 
-echo "[pre-commit] 3/4 ESLint（0 error 才放行，warning 不阻塞）"
-npx eslint renderer/js cli src tests --quiet || exit 1
+echo "[pre-commit] 3/4 ESLint（0 error 才放行，warning 不阻塞；--cache 热跑秒级,与 check:all 共用 .eslintcache）"
+npx eslint renderer/js cli src tests --quiet --cache || exit 1
 echo "  ✓ 通过"
 
 echo "[pre-commit] 4/4 单元测试（全量 11 文件——只跑单文件会放过 store/utils 等核心回归）"

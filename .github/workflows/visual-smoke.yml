@@ -18,6 +18,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: vsmoke-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   smoke:
     runs-on: ubuntu-latest
@@ -38,10 +42,21 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Install playwright chromium (not a repo dependency)
+      - name: Install playwright (not a repo dependency)
         run: |
           npm i --no-save playwright
-          npx playwright install --with-deps chromium
+          PW_VERSION=$(node -p "require('playwright/package.json').version")
+          echo "PW_VERSION=$PW_VERSION" >> "$GITHUB_ENV"
+
+      - name: Cache playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ env.PW_VERSION }}
+
+      # skips the ~130MB download when the cache above restored the matching browser build
+      - name: Install playwright chromium
+        run: npx playwright install --with-deps chromium
 
       - name: Capture 14 scene screenshots
         run: node scripts/visual-smoke-capture.mjs
