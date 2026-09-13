@@ -38,6 +38,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # the :5175 host is browser-dev's own Vite install (separate package.json) — without
+      # this, `npm run dev` in browser-dev fails and the capture script times out at 60s
+      - name: Install browser-dev host dependencies
+        working-directory: pickdone/browser-dev
+        run: npm ci
+
       - name: Install playwright chromium (not a repo dependency)
         run: |
           npm i --no-save playwright
