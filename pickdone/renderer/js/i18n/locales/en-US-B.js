@@ -119,7 +119,7 @@ export default {
       "done": "Completed",
       "startWith": "Start {d}",
       "currentTag": "[Current] ",
-      "msEditHint": " (double-click to edit, click to remove)",
+      "msEditHint": " (click to edit; remove in the card below)",
       "deadlineWith": "Due {d}",
       "msPrompt": "What should this milestone achieve?",
       "msAddTitle": "Add Milestone",
