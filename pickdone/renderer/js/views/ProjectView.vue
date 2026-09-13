@@ -188,6 +188,10 @@ export default {
     // div only (no remount), so created() never runs again and the per-project data would go stale
     '$route.params.id' (nval) {
       if (!nval) return
+      // per-project UI state resets too: landing on B's deps tab because A's was open is confusing
+      this.tab = 'overview'
+      this.msExpanded = {}
+      this.msModal = null
       this.reloadMilestones()
       this.reloadDeadline()
     }
