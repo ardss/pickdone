@@ -17,6 +17,7 @@ const dir = path.dirname(fileURLToPath(import.meta.url))
 // Live-Electron tests spawn their own instance (~30-60s each) and depend on the shared 5175
 // host's runtime state — they stay out of the quick regression (and out of pre-commit, which
 // must never be hostage to dev-host state); each runs as a dedicated check:all ③ live stage.
+// NOTE: exclusion is by bare FILENAME across all suites — never reuse these names elsewhere.
 const EXCLUDE = new Set(['e2e.test.mjs', 'integration-ui.test.mjs', 'overlay-visibility.test.mjs'])
 
 const KNOWN_SUITES = new Set(['unit', 'integration', 'visual'])

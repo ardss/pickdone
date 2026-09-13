@@ -35,6 +35,15 @@ const ROUTES = [
 ]
 const LIMIT = Number(process.env.SMOKE_SCENES || 0) // 0 = all
 
+// --- 端口预检:5175 已被占说明有残留宿主(visual-web/上次泄漏的 vite),继续跑会拍到旧代码的
+// 截图被误当新基线(2026-09-09 visual-web "假就绪" 14 连败同款陷阱)。CI 是干净环境不会触发;
+// 本地必须先清场(visual-web --spawn 有 taskkill /T /F 清场,这里保守拒绝而不是误用旧宿主)。---
+try {
+  await fetch(BASE, { signal: AbortSignal.timeout(1500) })
+  console.error(`✗ visual-smoke: 端口 ${PORT} 已被占用(残留宿主)。先清掉再跑,否则截图反映的不是当前代码。`)
+  process.exit(2)
+} catch { /* port free — expected */ }
+
 // --- 自拉起 5175 宿主(同 visual-web --spawn,但跨平台:不 netstat/taskkill,CI 是干净环境) ---
 // vite 输出写入日志文件而非 ignore——宿主起不来时把日志倾倒出来,否则 CI 上死因不可见
 const VITE_LOG = path.join(os.tmpdir(), `visual-smoke-vite-${process.pid}.log`)
@@ -42,12 +51,13 @@ const viteLogFd = fs.openSync(VITE_LOG, 'w')
 const viteChild = cpSpawn('npm', ['run', 'dev'], { cwd: path.join(ROOT, 'browser-dev'), shell: true, stdio: ['ignore', viteLogFd, viteLogFd] })
 process.on('exit', () => { try { viteChild.kill() } catch { /* gone */ } })
 
-const BASE_ALT = BASE.replace('//localhost:', '//127.0.0.1:') // ubuntu 上 localhost 可能先解析 ::1
+// 双探测:localhost 与 127.0.0.1(ubuntu 上 localhost 可能先解析 ::1,vite 只绑其中之一)
+const BASES = [`http://localhost:${PORT}`, BASE]
 let up = false
 // CI 冷缓存时 vite 依赖预构建能跑 60s 以上,给足 3 分钟;每 10s 打一次进度防止黑等
 for (let t = 0; t < 180000 && !up; t += 500) {
   await new Promise(r => setTimeout(r, 500))
-  for (const u of [BASE, BASE_ALT]) {
+  for (const u of BASES) {
     try { if ((await fetch(u, { signal: AbortSignal.timeout(2000) })).ok) { console.error(`visual-smoke: host ready via ${u} after ${t}ms`); up = true; break } } catch { /* retry */ }
   }
   if (t > 0 && t % 10000 === 0 && !up) console.error(`visual-smoke: waiting for host, ${t}ms elapsed, vite alive=${viteChild.exitCode === null}`)
@@ -57,6 +67,7 @@ if (!up) {
   try { console.error('--- vite log FULL ---\n' + fs.readFileSync(VITE_LOG, 'utf8').slice(-12000)) } catch { /* no log */ }
   process.exit(2)
 }
+try { fs.unlinkSync(VITE_LOG) } catch { /* keep on failure paths only */ }
 
 fs.mkdirSync(DIR, { recursive: true })
 const browser = await chromium.launch()

@@ -17,10 +17,11 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 
-// skip 棘轮基线 —— 2026-09-13,实测 `npm test`(node --test TAP): win32 # pass 853 / # fail 0 / # skipped 0
-// linux 基线 1: main-r5-main-helpers 的 vendor better-sqlite3 测试在没有 win32 预编译驱动的平台上合理跳过
-// 新增 skip 需在提交说明中给出理由并手动下调此数;上调此数 = 放行更多 skip,门禁会拦
-const PLATFORM_SKIP_BASELINE = { win32: 0, linux: 1, darwin: 1 }
+// skip 棘轮基线 —— 2026-09-13 收紧为全平台 0:复审发现此前 linux:1 的依据不成立(vendor
+// better-sqlite3 prebuilds 8 平台全部入库,main-r5 的 skip 谓词只查目录存在性、完整 checkout
+// 上恒为真,那个 skip 不可能来自它)。任何 skip 出现都会红,并会打印 skip 用例名辅助定位。
+// 确属环境性合理 skip 时:修谓词让它显式声明理由,或在此处带注释地给单平台加基线。
+const PLATFORM_SKIP_BASELINE = { win32: 0, linux: 0, darwin: 0 }
 const SKIP_BASELINE = Number(
   process.env.CHECK_TEST_SUMMARY_SKIP_BASELINE ?? PLATFORM_SKIP_BASELINE[process.platform] ?? 0
 )
@@ -70,15 +71,22 @@ if (arg) {
 // 校验一: exit code(不再被管道丢弃)
 if (exitCode !== 0) red(`单测进程 exit code = ${exitCode}(非 0 即红,不看摘要)`, tapFile)
 
-// 校验二: TAP 摘要 fail=0 且 skip ≤ 基线
+// 校验二: TAP 摘要 fail=0, cancelled=0, skip ≤ 基线
 const tap = fs.readFileSync(tapFile, 'utf8')
 const { fail, skip } = parseSummary(tap)
+const cancelled = Number(/# cancelled\s+(\d+)/.exec(tap)?.[1] ?? 0)
 if (fail == null || skip == null) {
   red(`TAP 摘要解析失败(fail=${fail} skip=${skip})——reporter 可能不是 TAP 或输出被截断,不得假绿放行`, tapFile)
 }
 if (fail > 0) red(`# fail = ${fail}(要求 0)`, tapFile)
+if (cancelled > 0) red(`# cancelled = ${cancelled}(要求 0——被取消的用例既非 pass 也非 fail,不得静默)`, tapFile)
 if (skip > SKIP_BASELINE) {
+  // 打出 skip 用例名,定位是哪条测试在跳
+  const skipNames = tap.split(/\r?\n/).filter(l => /# SKIP|# skipped/i.test(l) && /^ok\b/.test(l)).slice(0, 10)
+  if (skipNames.length) console.error('  [skip cases]\n' + skipNames.map(l => `    ${l.trim().slice(0, 150)}`).join('\n'))
   red(`# skipped = ${skip} > 棘轮基线 ${SKIP_BASELINE}——新增 skip 需要说明+降基线(改 cli/check-test-summary.cjs 的 SKIP_BASELINE)`, tapFile)
 }
 
-console.log(`✓ [check-test-summary] # pass ${/# pass\s+(\d+)/.exec(tap)?.[1] ?? '?'} / # fail ${fail} / # skipped ${skip} ≤ 基线 ${SKIP_BASELINE}`)
+console.log(`✓ [check-test-summary] # pass ${/# pass\s+(\d+)/.exec(tap)?.[1] ?? '?'} / # fail ${fail} / # cancelled ${cancelled} / # skipped ${skip} ≤ 基线 ${SKIP_BASELINE}`)
+// 临时 TAP 落盘只为失败回放,校验完即清(否则每次提交都在 tmpdir 积累数百 KB)
+if (!arg) { try { fs.unlinkSync(tapFile) } catch { /* already gone */ } }
