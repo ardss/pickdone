@@ -42,11 +42,11 @@ const PORT = 9447 // Windows 保留段 9292-9391 之外
 // 2026-09-13: this script is standalone and used to rely on the unit-pool overlay test (runtime.mjs
 // import side effect) having created tests/.artifacts first — moving that test out of the unit pool
 // broke it on fresh checkouts. Create the dir instead of depending on another script's side effect.
-fs.mkdirSync(appCwd + '/tests/.artifacts', { recursive: true })
+fs.mkdirSync(path.join(appCwd, 'tests', '.artifacts'), { recursive: true })
 const child = spawn(ELECTRON, ['.', '--no-focus', '--remote-debugging-port=' + PORT, ...(process.platform === 'linux' ? ['--no-sandbox'] : [])], {
   cwd: appCwd,
   env: { ...process.env, TODO_USER_DATA_DIR: tmpDir },
-  stdio: ['ignore', fs.openSync(appCwd + '/tests/.artifacts/upd-app.log', 'a'), fs.openSync(appCwd + '/tests/.artifacts/upd-app.log', 'a')]
+  stdio: ['ignore', fs.openSync(path.join(appCwd, 'tests', '.artifacts', 'upd-app.log'), 'a'), fs.openSync(path.join(appCwd, 'tests', '.artifacts', 'upd-app.log'), 'a')]
 })
 try {
   const CDP = `http://127.0.0.1:${PORT}`

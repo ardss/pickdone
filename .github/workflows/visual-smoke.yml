@@ -13,6 +13,8 @@ on:
     branches: [main]
     paths:
       - 'pickdone/renderer/**'
+      - 'pickdone/scripts/visual-smoke-capture.mjs'
+      - 'pickdone/browser-dev/**'
       - '.github/workflows/visual-smoke.yml'
 
 permissions:
