@@ -30,7 +30,9 @@ npx eslint renderer/js cli src tests --quiet || exit 1
 echo "  ✓ 通过"
 
 echo "[pre-commit] 4/4 单元测试（全量 11 文件——只跑单文件会放过 store/utils 等核心回归）"
-npm test --silent 2>&1 | grep -qE "# fail 0" # 匹配 TAP 摘要；若换 --test-reporter spec 该行会恒失败(假红) || { echo "  ✗ 单测失败（npm test 查看详情）"; exit 1; }
+# 2026-09-13 堵假绿:不再 `npm test | grep "# fail 0"`(管道吞 exit code + 任意来源字符串即假绿)。
+# 改由 cli/check-test-summary.cjs 统一校验:exit code 非 0 即红 + TAP 摘要 fail=0 + skip 棘轮(≤基线,超线提示"新增 skip 需要说明+降基线")
+node cli/check-test-summary.cjs || exit 1
 echo "  ✓ 通过"
 
 echo "[pre-commit] 全部通过 ✓"
