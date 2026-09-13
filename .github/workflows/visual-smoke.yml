@@ -1,0 +1,56 @@
+# Visual smoke shots — observation, NOT a gate (do not merge into ci.yml).
+# Audit gap (2026-09-13): visual-web.mjs (14 scenes, pixelmatch 0.4%) only runs on a local
+# Windows machine (agent-browser daemon + gitignored baselines), so a green CI says nothing
+# about rendering. This workflow archives CI screenshots of the same 14 scenes (7 routes ×
+# light/dark) as an artifact for manual diff. No comparison, no threshold, never blocks.
+# Capture mechanism: scripts/visual-smoke-capture.mjs (playwright chromium against the same
+# browser-dev Vite host on :5175, same pdTheme/seed/pdFreeze URL contract as visual-web.mjs).
+name: Visual Smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'pickdone/renderer/**'
+      - '.github/workflows/visual-smoke.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: true # observation equipment: failure must never block anything
+    defaults:
+      run:
+        working-directory: pickdone
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: pickdone/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install playwright chromium (not a repo dependency)
+        run: |
+          npm i --no-save playwright
+          npx playwright install --with-deps chromium
+
+      - name: Capture 14 scene screenshots
+        run: node scripts/visual-smoke-capture.mjs
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-smoke-shots
+          path: pickdone/tests/.artifacts/visual-smoke/*.png
+          retention-days: 14
+          if-no-files-found: warn
