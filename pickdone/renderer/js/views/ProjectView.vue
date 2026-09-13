@@ -4,8 +4,8 @@
     <!-- Whole page scrolls as one column: the header (milestone timeline/strip/cards) grows with
          project data, and pinning it above the scroller used to starve the tab body down to ~0px
          so nothing could scroll. Single scroller keeps header + tabs + body reachable. -->
-    <div class="page__main proj-scroll">
-    <div v-if="cat" class="proj-head">
+    <div ref="scrollEl" class="page__main proj-scroll">
+    <div v-if="cat" ref="headEl" class="proj-head">
       <div class="proj-head__title">
         <span class="sn-dot" :style="{borderColor:cat.categoryColor, background:cat.categoryColor}"></span>
         <span class="proj-head__name">{{cat.categoryName}}</span>
@@ -117,7 +117,7 @@
         <button v-if="settings.developerMode && settings.showDepsModule" class="proj-tab" :class="{on: tab === 'deps'}" type="button" :aria-pressed="tab === 'deps'" @click="tab = 'deps'">{{ $t('statsB.ProjectView.tabDeps') }}</button>
         <button class="proj-tab" :class="{on: tab === 'docs'}" type="button" :aria-pressed="tab === 'docs'" @click="tab = 'docs'">{{ $t('statsB.ProjectView.tabDocs') }}</button>
       </div>
-      <div v-if="tab === 'deps' && settings.developerMode && settings.showDepsModule" class="proj-body proj-body--deps">
+      <div v-if="tab === 'deps' && settings.developerMode && settings.showDepsModule" ref="boardEl" class="proj-body proj-body--deps">
         <pd-dep-view :fixed-project-id="catId"/>
       </div>
       <div v-else-if="tab === 'docs'" class="proj-body">
@@ -183,6 +183,22 @@ export default {
     }
   },
   created () { this.reloadMilestones(); this.reloadDeadline() },
+  mounted () {
+    // Deps board height = measured, not a magic viewport constant (G3 P2): the header is
+    // data-driven (milestone strip/cards grow it), so a hardcoded `100vh - 500px` starved the
+    // board back as the header grew. Re-measure whenever the header or the window resizes and
+    // publish --depv-board-h for the CSS below.
+    this.measureBoard()
+    if (typeof ResizeObserver !== 'undefined' && this.$refs.headEl) {
+      this._boardRo = new ResizeObserver(() => this.measureBoard())
+      this._boardRo.observe(this.$refs.headEl)
+    }
+    window.addEventListener('resize', this.measureBoard)
+  },
+  beforeUnmount () {
+    if (this._boardRo) this._boardRo.disconnect()
+    window.removeEventListener('resize', this.measureBoard)
+  },
   watch: {
     // Navigating project -> project reuses this component instance: the root :key re-keys a plain
     // div only (no remount), so created() never runs again and the per-project data would go stale
@@ -335,6 +351,13 @@ export default {
     }
   },
   methods: {
+    measureBoard () {
+      const sc = this.$refs.scrollEl; const bd = this.$refs.boardEl
+      if (!sc || !bd || !bd.offsetHeight) return
+      const top = bd.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop
+      const h = Math.max(420, Math.round(sc.clientHeight - top - 25)) // 25 = page bottom padding
+      bd.style.setProperty('--depv-board-h', h + 'px')
+    },
     calTitle (ts) { return calTitle(ts) },
     statusKey (s) { return statusI18nKey(s) },
     setStatus (status) {
@@ -509,7 +532,10 @@ export default {
 /* Deps canvas is a fixed-viewport board (depv-cols owns internal scrolling); give it a definite
    height = window minus titlebar/quick-add/header/tabs chrome, floored so small windows still get a usable board */
 .proj-body--deps { display: flex; flex-direction: column; }
-.proj-body--deps .depv-wrap { height: calc(100vh - 500px); min-height: 420px; }
+/* Board height is measured at runtime (--depv-board-h, set by measureBoard from the real header
+   extent) so a growing header eats the board instead of pushing it below the fold; the calc is
+   only the pre-JS fallback and 420px floors small windows. */
+.proj-body--deps .depv-wrap { height: var(--depv-board-h, calc(100vh - 500px)); min-height: 420px; }
 .proj-ms__add {
   flex-shrink: 0; display: inline-flex; align-items: center; gap: var(--space-1);
   font-size: var(--fs-xs); color: var(--text-3);
