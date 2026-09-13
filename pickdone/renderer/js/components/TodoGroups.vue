@@ -38,9 +38,15 @@ import { dayjs } from '../utils/core.js'
  *  start can never match a group again (the timestamp drifts daily) and would accumulate forever
  *  in settings.foldedTodoList. Non-expired keys pass through untouched. */
 function pruneExpiredFoldKeys (list, todayStart0) {
+  // 2026-09-12 fix: the original version pruned ALL expired-* keys before today, which made it
+  // impossible to collapse recent expired groups (toggle added the key → prune immediately
+  // removed it → group stayed expanded forever). The pruning now uses a 7-day grace period:
+  // only keys for dates >7 days old are pruned, so users can still collapse yesterday's and
+  // last week's groups. Keys older than 7 days are stale enough to safely drop.
+  const cutoff = todayStart0 - 7 * 86400000
   return (list || []).filter(k => {
     const s = String(k)
-    return !(s.startsWith('expired-') && Number(s.slice('expired-'.length)) < todayStart0)
+    return !(s.startsWith('expired-') && Number(s.slice('expired-'.length)) < cutoff)
   })
 }
 // [component-fixes] pure-end
