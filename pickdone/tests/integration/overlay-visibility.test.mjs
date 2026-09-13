@@ -9,7 +9,7 @@
  */
 import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
-import { spawnApp, stopApp, connectCdp, evalJson, send, sleep } from '../../lib/runtime.mjs'
+import { spawnApp, stopApp, connectCdp, evalJson, send, sleep } from '../lib/runtime.mjs'
 
 let ctx
 

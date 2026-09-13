@@ -54,17 +54,28 @@ test('project page: deps board gets a definite height (depv-cols owns internal s
   assert.match(src, /\.proj-body--deps \.depv-wrap \{ height: calc\(100vh - 500px\); min-height: 420px; \}/)
 })
 
-test('project page: strip rail shares the timeline column and its exact date->percent scale', () => {
-  assert.match(src, /<div class="proj-ms__main">/)
-  const mainOpen = src.indexOf('<div class="proj-ms__main">')
-  const mainClose = src.indexOf('<button class="proj-ms__add"')
-  const trackIdx = src.indexOf('class="proj-ms__track"')
-  const stripIdx = src.indexOf('class="proj-ms-strip"')
-  assert.ok(mainOpen >= 0 && mainOpen < trackIdx && trackIdx < stripIdx && stripIdx < mainClose,
-    'track and strip must both live inside .proj-ms__main')
-  assert.match(src, /pct: this\.msScale\.pos\(r\.m\.date\)/, 'strip dot percent must come from msScale.pos')
-  assert.match(src, /const pos = this\.msScale\.pos/, 'timeline marks must use the same msScale.pos')
-  assert.ok(!/justify-content: space-evenly/.test(src), 'strip must not fall back to even spreading')
+test('project page: no duplicate milestone rail — one axis only', () => {
+  // The bottom strip duplicated the timeline (same dates, same click-to-edit) and the cards
+  // below already carry progress — removed per the duplicate-feature rule. Lock the removal.
+  assert.ok(!src.includes('proj-ms-strip'), 'strip rail must stay deleted')
+  assert.ok(!/justify-content: space-evenly/.test(src), 'no evenly-spread second axis')
+  assert.match(src, /<div class="proj-ms__main">/, 'track keeps its own column next to the add button')
+  const zhQ = readFileSync(join(ROOT, 'renderer/js/i18n/locales/zh-CN-Q.js'), 'utf8')
+  const enQ = readFileSync(join(ROOT, 'renderer/js/i18n/locales/en-US-Q.js'), 'utf8')
+  for (const f of [zhQ, enQ]) assert.ok(!f.includes('stripAria'), 'strip i18n keys removed')
+})
+
+test('project page: milestone add/edit is ONE dialog (title + date together, no prompt chain)', () => {
+  const modal = readFileSync(join(ROOT, 'renderer/js/components/MilestoneEditModal.vue'), 'utf8')
+  assert.ok(modal.includes('msm-title') && modal.includes('el-date-picker'),
+    'dialog carries title input and date picker together')
+  assert.ok(!modal.includes('$prompt'), 'no ElMessageBox.prompt in the editor')
+  // the view no longer chains two $prompt steps for milestones; only rename/deadline/unproject prompts remain
+  const promptCount = (src.match(/\$prompt\(/g) || []).length
+  assert.equal(promptCount, 2, `rename + deadline prompts only, got ${promptCount}`)
+  assert.match(src, /<milestone-edit-modal v-if="msModal"/, 'modal wired into the view')
+  assert.match(src, /addMilestone \(\) \{ this\.msModal = \{ mode: 'add' \} \}/)
+  assert.match(src, /editMilestone \(m\) \{ this\.msModal = \{ mode: 'edit', ms: m \} \}/)
 })
 
 test('project page: milestone hint copy tells the truth (click edits, removal lives in the card)', () => {

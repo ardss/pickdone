@@ -5,8 +5,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 const dir = path.resolve('renderer-dist')
 for (const name of fs.existsSync(dir) ? fs.readdirSync(dir) : []) {
-  if (/^assets(2)?$/.test(name)) continue // 坏名目:留着,重启后清
+  if (/^assets(2|3)?$/.test(name)) continue // 坏名目:留着,重启后清
   fs.rmSync(path.join(dir, name), { recursive: true, force: true })
 }
 // 兜底:若 assets 可删(重启后),顺手删掉
-for (const bad of ['assets', 'assets2']) { try { fs.rmSync(path.join(dir, bad), { recursive: true, force: true }) } catch {} }
+for (const bad of ['assets', 'assets2', 'assets3']) { try { fs.rmSync(path.join(dir, bad), { recursive: true, force: true }) } catch {} }

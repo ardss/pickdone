@@ -27,7 +27,8 @@ const GROUPS = [
     ]
   },
   {
-    name: '② 静态门禁+类型+单元（并行 3 道,与③池同时起跑;重试1次抗负载抖动）', parallel: 3, retry: 1,
+    // 静态门禁红=确定性红(纯文件分析/类型/单测,无时序因素),重试没有意义只会翻倍耗时——不设 retry
+    name: '② 静态门禁+类型+单元（并行 3 道,与③池同时起跑）', parallel: 3, retry: 0,
     stages: [
       ['指纹脱敏', 'node', ['cli/check-fingerprint.js']],
       ['依赖许可证', 'node', ['cli/check-licenses.js']],
@@ -64,6 +65,8 @@ const GROUPS = [
       ['键盘端到端（真实按键事件,自拉起实例）', 'node', ['tests/run-interactions-gated.mjs', 'tests/keyboard-e2e.mjs']],
       ['CSSOM 完整性（规则数对照入库基线,防静默吞规则——两次实锤后立门禁）', 'node', ['tests/run-interactions-gated.mjs', 'tests/cssom-integrity.mjs']],
       ['全功能覆盖走查（用户可达面业务语义:搜索/达成/标签/视图/回收站/重复/设置生效/习惯/项目/空态/账目）', 'node', ['tests/run-interactions-gated.mjs', 'tests/ui-coverage.mjs']],
+      // 2026-09-13 从单测池挪入:活体测试不得进 pre-commit(pre-commit 须零环境依赖,不被 5175 宿主实时状态劫持)
+      ['视口/遮挡活体（最小视口不可见遮挡+confirm 命中,自拉起实例;leftover-ask 弹窗回归）', 'node', ['tests/run-interactions-gated.mjs', 'tests/integration/overlay-visibility.test.mjs']],
       ['CLI 冒烟', 'node', ['cli/cli-smoke.js']],
     ]
   },
@@ -169,10 +172,18 @@ if (buildRs.some(r => !r.ok)) {
 // CI 自适应降道:GitHub windows runner 仅 4 vCPU,3+3 车道会挤爆多 Electron 实例+单测池
 // (2026-09-06 首次公开 CI 实锤:本地全绿、CI 6 项全红且全是自拉起实例门禁)。CI=静态 2 道+活体 1 道且两池不并发
 const ON_CI = !!(process.env.CI || process.env.GITHUB_ACTIONS)
+// CHECK_ALL_SKIP_LIVE=1: 跳过③活体池(双 OS 分工——ubuntu runner 靠 xvfb 拉 Electron 最慢,
+// 让它只跑静态池+单测,活体全量由 windows job 独扛;墙钟取 max 而非两 OS 各跑全套)
+const SKIP_LIVE = process.env.CHECK_ALL_SKIP_LIVE === '1'
 if (ON_CI) {
-  console.log('\n===== [CI 模式] 静态池(2 道)与 Electron 活体(1 道)顺序执行,不并发 =====')
-  results.push(...await runPool(GROUPS[1].stages, 2))
-  results.push(...await runPool(GROUPS[2].stages, 1, { retry: 1 }))
+  if (SKIP_LIVE) {
+    console.log('\n===== [CI 模式+SKIP_LIVE] 只跑静态池(2 道),活体池由另一 OS job 独扛 =====')
+    results.push(...await runPool(GROUPS[1].stages, 2))
+  } else {
+    console.log('\n===== [CI 模式] 静态池(2 道)与 Electron 活体(1 道)顺序执行,不并发 =====')
+    results.push(...await runPool(GROUPS[1].stages, 2))
+    results.push(...await runPool(GROUPS[2].stages, 1, { retry: 1 }))
+  }
 } else {
   console.log(`\n===== ${GROUPS[1].name} × ${GROUPS[2].name}（两池同时起跑） =====`)
   const [staticRs, liveRs] = await Promise.all([
