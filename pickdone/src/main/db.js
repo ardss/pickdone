@@ -563,7 +563,12 @@ const OPS = {
     // Version monotonic fence (round-8 audit P1): a stale retry batch (lower v) must not roll back
     // the cursor or re-ack rows that a newer batch already confirmed — otherwise edits made between
     // the two attempts get frozen as stale 'sync' content (B3 P1 scenario)
-    const cur = Number(stmts.getMeta.run('todosVersion') || 0)
+    // Version monotonic fence (round-8 audit P1→P0 fix): a stale retry batch (lower v) must not
+    // roll back the cursor or re-ack rows that a newer batch already confirmed. Uses .get() (SELECT
+    // returns {value} shape) — the original .run() returned a write-result object whose Number() was
+    // NaN → || 0 → cur was always 0 and the fence was dead code (Z2 probe confirmed).
+    const curRow = stmts.getMeta.get('todosVersion')
+    const cur = Number((curRow && curRow.value) || 0)
     if (v < cur) throw new Error('[TodoDB] commitSyncBatch: version ' + v + ' < current todosVersion ' + cur + ' — stale batch rejected')
     const tr = db.transaction(list => {
       for (const t of list) stmts.upsert.run(todoToRow({ ...t, status: 'sync', version: v }))

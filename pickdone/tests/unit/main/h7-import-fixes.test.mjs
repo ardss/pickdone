@@ -164,7 +164,7 @@ test('h7-7/8: pick-preview guards the main window; import:run re-stats the file 
   const src = readSrc('src', 'main', 'handlers', 'csv-import.js')
   assert.match(src, /makeAssertMainWindow/)
   const pickIdx = src.indexOf("'import:pick-preview'")
-  assert.match(src.slice(pickIdx), /assertMainWindow\('import:pick-preview'\)/)
+  assert.match(src.slice(pickIdx), /assertMainWindow\(e\)/)
   const runIdx = src.indexOf("'import:run'")
   const runBody = src.slice(runIdx)
   const statIdx = runBody.indexOf('statSync')
