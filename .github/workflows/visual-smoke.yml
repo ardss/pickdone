@@ -42,7 +42,8 @@ jobs:
       # this, `npm run dev` in browser-dev fails and the capture script times out at 60s
       - name: Install browser-dev host dependencies
         working-directory: pickdone/browser-dev
-        run: npm ci
+        # npm ci is too strict for the host lock (drifted from package.json); install is fine for this throwaway host
+        run: npm install --no-audit --no-fund
 
       - name: Install playwright chromium (not a repo dependency)
         run: |
