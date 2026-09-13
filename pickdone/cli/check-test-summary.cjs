@@ -17,9 +17,13 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 
-// skip 棘轮基线 —— 2026-09-13,实测 `npm test`(node --test TAP): # tests 849 / # pass 849 / # fail 0 / # skipped 0
+// skip 棘轮基线 —— 2026-09-13,实测 `npm test`(node --test TAP): win32 # pass 853 / # fail 0 / # skipped 0
+// linux 基线 1: main-r5-main-helpers 的 vendor better-sqlite3 测试在没有 win32 预编译驱动的平台上合理跳过
 // 新增 skip 需在提交说明中给出理由并手动下调此数;上调此数 = 放行更多 skip,门禁会拦
-const SKIP_BASELINE = Number(process.env.CHECK_TEST_SUMMARY_SKIP_BASELINE ?? 0)
+const PLATFORM_SKIP_BASELINE = { win32: 0, linux: 1, darwin: 1 }
+const SKIP_BASELINE = Number(
+  process.env.CHECK_TEST_SUMMARY_SKIP_BASELINE ?? PLATFORM_SKIP_BASELINE[process.platform] ?? 0
+)
 const TAIL_LINES = 30
 
 function parseSummary (tap) {
