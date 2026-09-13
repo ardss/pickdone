@@ -19,6 +19,7 @@ const path = require('node:path')
 
 // skip 棘轮基线 —— 2026-09-13 全平台收紧并由 CI 实证校准:
 //   linux:1 = f6-round6-fixes 的跨盘符 file:// 语义测试(纯 Windows 概念,`WIN ? test : test.skip`)
+//   darwin:1 = 推断值(WIN 条件在 darwin 同为 false 必跳这条),无 darwin CI 实证——门禁只在 ubuntu+windows 跑
 //   win32:0 = windows 实测 0 skip
 // 新增 skip 会被棘轮拦下并打印用例名;确属平台性合理 skip 时,在此处带注释给对应平台加基线。
 const PLATFORM_SKIP_BASELINE = { win32: 0, linux: 1, darwin: 1 }
@@ -28,13 +29,24 @@ const SKIP_BASELINE = Number(
 const TAIL_LINES = 30
 
 function parseSummary (tap) {
-  let fail, skip
-  for (const line of tap.split(/\r?\n/)) {
+  const lines = tap.split(/\r?\n/)
+  // 结构锚定(2026-09-13 红队 G1):摘要行只认「最后一个 TAP plan(1..N)之后」的区段——
+  // 之前只按"最后出现"取值,测试进程 stdout 与摘要共信道,任何输出里混入 `# fail 0`
+  // 都能覆盖真实摘要(5 种注入变体实测全部绕过)。锚定后 plan 之前的所有 `#` 行都是普通输出。
+  // 仍无法防御 run-all.mjs 本身被篡改(门禁解释器与被检代码同仓,结构性上限),那层防线在 CI+分支保护。
+  let planIdx = -1
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (/^1\.\.\d+\s*$/.test(lines[i])) { planIdx = i; break }
+  }
+  if (planIdx === -1) return { fail: undefined, skip: undefined, cancelled: undefined }
+  let fail, skip, cancelled
+  for (const line of lines.slice(planIdx + 1)) {
     let m
     if ((m = /^# fail(?:ed)?\s+(\d+)\s*$/.exec(line))) fail = Number(m[1])
     else if ((m = /^# skip(?:ped)?\s+(\d+)\s*$/.exec(line))) skip = Number(m[1])
+    else if ((m = /^# cancel(?:l)?ed\s+(\d+)\s*$/.exec(line))) cancelled = Number(m[1])
   }
-  return { fail, skip }
+  return { fail, skip, cancelled }
 }
 
 function red (msg, tapFile) {
@@ -73,10 +85,9 @@ if (exitCode !== 0) red(`单测进程 exit code = ${exitCode}(非 0 即红,不�
 
 // 校验二: TAP 摘要 fail=0, cancelled=0, skip ≤ 基线
 const tap = fs.readFileSync(tapFile, 'utf8')
-const { fail, skip } = parseSummary(tap)
-const cancelled = Number(/# cancelled\s+(\d+)/.exec(tap)?.[1] ?? 0)
-if (fail == null || skip == null) {
-  red(`TAP 摘要解析失败(fail=${fail} skip=${skip})——reporter 可能不是 TAP 或输出被截断,不得假绿放行`, tapFile)
+const { fail, skip, cancelled } = parseSummary(tap)
+if (fail == null || skip == null || cancelled == null) {
+  red(`TAP 摘要解析失败(fail=${fail} skip=${skip} cancelled=${cancelled})——未见 plan 行(1..N)或摘要不全,reporter 可能不是 TAP 或输出被截断,不得假绿放行`, tapFile)
 }
 if (fail > 0) red(`# fail = ${fail}(要求 0)`, tapFile)
 if (cancelled > 0) red(`# cancelled = ${cancelled}(要求 0——被取消的用例既非 pass 也非 fail,不得静默)`, tapFile)
@@ -88,5 +99,5 @@ if (skip > SKIP_BASELINE) {
 }
 
 console.log(`✓ [check-test-summary] # pass ${/# pass\s+(\d+)/.exec(tap)?.[1] ?? '?'} / # fail ${fail} / # cancelled ${cancelled} / # skipped ${skip} ≤ 基线 ${SKIP_BASELINE}`)
-// 临时 TAP 落盘只为失败回放,校验完即清(否则每次提交都在 tmpdir 积累数百 KB)
+// 临时 TAP:成功即清;失败路径经 red() exit 保留在 tmpdir 供人工回放(有意为之)
 if (!arg) { try { fs.unlinkSync(tapFile) } catch { /* already gone */ } }

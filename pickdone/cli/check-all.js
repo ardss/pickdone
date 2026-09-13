@@ -175,6 +175,7 @@ const ON_CI = !!(process.env.CI || process.env.GITHUB_ACTIONS)
 // CHECK_ALL_SKIP_LIVE=1: 跳过③活体池(双 OS 分工——ubuntu runner 靠 xvfb 拉 Electron 最慢,
 // 让它只跑静态池+单测,活体全量由 windows job 独扛;墙钟取 max 而非两 OS 各跑全套)
 const SKIP_LIVE = process.env.CHECK_ALL_SKIP_LIVE === '1'
+if (SKIP_LIVE && !ON_CI) console.warn('  [warn] 本地环境忽略 CHECK_ALL_SKIP_LIVE——活体池只在 CI 的双 OS 分工下跳过(红队 G1:防该 env 未来被误用成本地静默降级开关)')
 if (ON_CI) {
   if (SKIP_LIVE) {
     console.log('\n===== [CI 模式+SKIP_LIVE] 只跑静态池(2 道),活体池由另一 OS job 独扛 =====')

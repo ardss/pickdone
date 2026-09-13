@@ -65,7 +65,7 @@ try {
   }
   if (!ok) {
     console.error('[diag] electron pid', child.pid, 'killed?', child.killed, 'exitCode', child.exitCode)
-    try { console.error('[diag] app log tail:\n' + fs.readFileSync(appCwd + '/tests/.artifacts/upd-app.log', 'utf8').split('\n').slice(-40).join('\n')) } catch {}
+    try { console.error('[diag] app log tail:\n' + fs.readFileSync(path.join(appCwd, 'tests', '.artifacts', 'upd-app.log'), 'utf8').split('\n').slice(-40).join('\n')) } catch {}
   }
   assert.ok(ok, 'app not ready within ~60s')
   await sleep(1500)
