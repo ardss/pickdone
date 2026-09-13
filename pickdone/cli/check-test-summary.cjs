@@ -17,11 +17,11 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 
-// skip 棘轮基线 —— 2026-09-13 收紧为全平台 0:复审发现此前 linux:1 的依据不成立(vendor
-// better-sqlite3 prebuilds 8 平台全部入库,main-r5 的 skip 谓词只查目录存在性、完整 checkout
-// 上恒为真,那个 skip 不可能来自它)。任何 skip 出现都会红,并会打印 skip 用例名辅助定位。
-// 确属环境性合理 skip 时:修谓词让它显式声明理由,或在此处带注释地给单平台加基线。
-const PLATFORM_SKIP_BASELINE = { win32: 0, linux: 0, darwin: 0 }
+// skip 棘轮基线 —— 2026-09-13 全平台收紧并由 CI 实证校准:
+//   linux:1 = f6-round6-fixes 的跨盘符 file:// 语义测试(纯 Windows 概念,`WIN ? test : test.skip`)
+//   win32:0 = windows 实测 0 skip
+// 新增 skip 会被棘轮拦下并打印用例名;确属平台性合理 skip 时,在此处带注释给对应平台加基线。
+const PLATFORM_SKIP_BASELINE = { win32: 0, linux: 1, darwin: 1 }
 const SKIP_BASELINE = Number(
   process.env.CHECK_TEST_SUMMARY_SKIP_BASELINE ?? PLATFORM_SKIP_BASELINE[process.platform] ?? 0
 )
