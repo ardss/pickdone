@@ -25,18 +25,35 @@ function pureFns (file, names) {
 
 /* ---------- #13 TodoGroups: expired fold-key pruning ---------- */
 
-test('pruneExpiredFoldKeys: drops expired-<ts> keys from before today, keeps the rest', () => {
+/* Contract (user-observable): a recently expired group (within 7 days) MUST keep its persisted
+ * fold state — otherwise every toggle on an expired group is silently undone (the 2026-09-09
+ * regression where expired groups could never collapse). Only keys older than the 7-day grace
+ * window are stale enough to drop. */
+const GRACE_MS = 7 * 86400000
+
+test('pruneExpiredFoldKeys: fold state for recent expired groups survives (collapse works)', () => {
   const { pruneExpiredFoldKeys } = pureFns('renderer/js/components/TodoGroups.vue', ['pruneExpiredFoldKeys'])
   const today0 = 1000000000000 // 2001-09-09, fixed anchor
   const yesterday = today0 - 86400000
   const tomorrow = today0 + 86400000
   assert.deepEqual(
     pruneExpiredFoldKeys([`expired-${yesterday}`, 'today-today', 'day-done', `expired-${tomorrow}`], today0),
-    ['today-today', 'day-done', `expired-${tomorrow}`] // future/typo-free keys survive, yesterday's is dead weight
+    [`expired-${yesterday}`, 'today-today', 'day-done', `expired-${tomorrow}`] // nothing recent is dropped
   )
-  assert.deepEqual(pruneExpiredFoldKeys([`expired-${yesterday}`], today0), [])
+  assert.deepEqual(pruneExpiredFoldKeys([`expired-${yesterday}`], today0), [`expired-${yesterday}`])
   assert.deepEqual(pruneExpiredFoldKeys([], today0), [])
   assert.deepEqual(pruneExpiredFoldKeys(undefined, today0), []) // defensive: unset settings value
+})
+
+test('pruneExpiredFoldKeys: keys older than the 7-day grace window are dropped (no unbounded growth)', () => {
+  const { pruneExpiredFoldKeys } = pureFns('renderer/js/components/TodoGroups.vue', ['pruneExpiredFoldKeys'])
+  const today0 = 1000000000000
+  const ancient = today0 - GRACE_MS - 1
+  const edge = today0 - GRACE_MS // exactly at the cutoff counts as still-recent
+  assert.deepEqual(
+    pruneExpiredFoldKeys([`expired-${ancient}`, `expired-${edge}`], today0),
+    [`expired-${edge}`]
+  )
 })
 
 test('pruneExpiredFoldKeys: boundary — a key exactly at today start is not expired', () => {
