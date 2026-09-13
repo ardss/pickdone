@@ -44,16 +44,17 @@ process.on('exit', () => { try { viteChild.kill() } catch { /* gone */ } })
 
 const BASE_ALT = BASE.replace('//localhost:', '//127.0.0.1:') // ubuntu 上 localhost 可能先解析 ::1
 let up = false
-// CI 冷缓存时 vite 依赖预构建能跑 60s 以上(实测卡在 computing gzip 阶段),给足 3 分钟
+// CI 冷缓存时 vite 依赖预构建能跑 60s 以上,给足 3 分钟;每 10s 打一次进度防止黑等
 for (let t = 0; t < 180000 && !up; t += 500) {
   await new Promise(r => setTimeout(r, 500))
   for (const u of [BASE, BASE_ALT]) {
-    try { if ((await fetch(u, { signal: AbortSignal.timeout(2000) })).ok) { up = true; break } } catch { /* retry */ }
+    try { if ((await fetch(u, { signal: AbortSignal.timeout(2000) })).ok) { console.error(`visual-smoke: host ready via ${u} after ${t}ms`); up = true; break } } catch { /* retry */ }
   }
+  if (t > 0 && t % 10000 === 0 && !up) console.error(`visual-smoke: waiting for host, ${t}ms elapsed, vite alive=${!viteChild.kill('0')}`)
 }
 if (!up) {
-  console.error('✗ visual-smoke: 60s 内宿主未就绪(vite 启动失败?)')
-  try { console.error('--- vite log tail ---\n' + fs.readFileSync(VITE_LOG, 'utf8').slice(-2000)) } catch { /* no log */ }
+  console.error('✗ visual-smoke: 180s 内宿主未就绪(vite 启动失败?)')
+  try { console.error('--- vite log FULL ---\n' + fs.readFileSync(VITE_LOG, 'utf8').slice(-12000)) } catch { /* no log */ }
   process.exit(2)
 }
 
