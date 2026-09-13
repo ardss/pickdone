@@ -49,7 +49,8 @@ const GROUPS = [
       // --cache:热跑只 lint 变更文件,2.2min→秒级(缓存文件 .eslintcache 已 gitignore)
       ['ESLint', 'node', ['node_modules/eslint/bin/eslint.js', 'renderer/js', 'cli', 'src', 'tests', '--quiet', '--cache']],
       ['vue-tsc 类型检查(SFC script lang=ts + 全局契约)', 'npm', ['run', 'typecheck']],
-      ['单元测试（run-all 自动发现，勿手写清单）', 'node', ['tests/run-all.mjs']],
+      // 经 check-test-summary.cjs 跑同一套 fail=0 + skip 棘轮校验(与 pre-commit 单一实现,防两处分叉)
+      ['单元测试（run-all 自动发现,fail=0+skip棘轮,勿手写清单）', 'node', ['cli/check-test-summary.cjs']],
     ]
   },
   {
