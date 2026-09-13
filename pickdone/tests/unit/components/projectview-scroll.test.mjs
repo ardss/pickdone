@@ -32,7 +32,7 @@ const src = readFileSync(join(ROOT, 'renderer/js/views/ProjectView.vue'), 'utf8'
 const tpl = src.match(/<template>[\s\S]*<\/template>/)[0]
 
 test('project page: header and tabs live INSIDE the single scroller (whole page scrolls)', () => {
-  const scrollerOpen = tpl.indexOf('<div class="page__main proj-scroll">')
+  const scrollerOpen = tpl.indexOf('class="page__main proj-scroll"')
   assert.ok(scrollerOpen >= 0, 'scroller .page__main.proj-scroll must exist')
   const headOpen = tpl.indexOf('class="proj-head"')
   const tabsOpen = tpl.indexOf('class="proj-tabs"')
@@ -50,8 +50,15 @@ test('project page: tab bodies are plain .proj-body, never a nested scrollable p
   assert.match(src, /\.proj-body \{ padding-top: 18px; \}/)
 })
 
-test('project page: deps board gets a definite height (depv-cols owns internal scrolling)', () => {
-  assert.match(src, /\.proj-body--deps \.depv-wrap \{ height: calc\(100vh - 500px\); min-height: 420px; \}/)
+test('project page: deps board height is measured from the real header extent (no magic viewport constant)', () => {
+  // G3 P2: `calc(100vh - 500px)` hardcoded the chrome height — every pixel the data-driven
+  // header grew pushed the board below the fold again. Contract: measureBoard() publishes
+  // --depv-board-h from live header measurements; the calc only remains as pre-JS fallback.
+  assert.match(src, /\.proj-body--deps \.depv-wrap \{ height: var\(--depv-board-h, calc\(100vh - 500px\)\); min-height: 420px; \}/)
+  assert.match(src, /measureBoard \(\) \{/, 'measureBoard method present')
+  assert.match(src, /setProperty\('--depv-board-h'/, 'board height published as a CSS var')
+  assert.match(src, /new ResizeObserver\(\(\) => this\.measureBoard\(\)\)/, 'header growth re-measures the board')
+  assert.match(src, /ref="boardEl"/, 'board element is referenced for measurement')
 })
 
 test('project page: no duplicate milestone rail — one axis only', () => {
