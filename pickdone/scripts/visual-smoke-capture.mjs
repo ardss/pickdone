@@ -50,7 +50,7 @@ for (let t = 0; t < 180000 && !up; t += 500) {
   for (const u of [BASE, BASE_ALT]) {
     try { if ((await fetch(u, { signal: AbortSignal.timeout(2000) })).ok) { console.error(`visual-smoke: host ready via ${u} after ${t}ms`); up = true; break } } catch { /* retry */ }
   }
-  if (t > 0 && t % 10000 === 0 && !up) console.error(`visual-smoke: waiting for host, ${t}ms elapsed, vite alive=${!viteChild.kill('0')}`)
+  if (t > 0 && t % 10000 === 0 && !up) console.error(`visual-smoke: waiting for host, ${t}ms elapsed, vite alive=${viteChild.exitCode === null}`)
 }
 if (!up) {
   console.error('✗ visual-smoke: 180s 内宿主未就绪(vite 启动失败?)')
