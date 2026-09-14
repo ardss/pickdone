@@ -3,6 +3,7 @@
  * status: add/update/delete -> sync; local meta.todosVersion acts as the sync cursor
  */
 import { genTaskId, nextSort, dayjs, reportError, DAY_MS, rangeDays, parsePredecessors } from '../utils/core.js'
+import { wouldCycle, isTaskReady } from '../utils/deps.js'
 import { expandRepeatDates } from '../utils/repeat.js'
 import { sortByMode } from '../utils/sortMode.js'
 import { getEstimate } from '../utils/tomatoEstimate.js'
@@ -32,39 +33,6 @@ const DEFAULT_VIEWS = () => ({
 /** Unified exit for DB persistence: failures are logged, never producing floating rejections (local/DB mismatch is visible in the console)
  *  JSON round-trip de-proxies: row objects come from reactive state, so nested arrays like reminderOffsets are Proxies
  *  that fail IPC structured cloning (symptom: every task edit logs "An object could not be cloned" and the DB receives no update) */
-// ---- Task dependencies (experimental, developerMode gated) ----
-// predecessors: JSON array of predecessor taskId strings, stored in a TEXT column (same pattern as subtasks)
-// FS semantics: a task is ready only when all of its predecessors are complete. Write-time DFS cycle guard — both renderer store and CLI
-// mirror this helper (they bypass each other and share no code).
-// parsePredecessors lives in utils/core.js (shared with DepView)
-function wouldCycle (list, taskId, newPreds) {
-  const byId = {}
-  for (const t of list) { if (!t.delete) byId[t.taskId] = t }
-  byId[taskId] = Object.assign({}, byId[taskId] || { taskId }, { predecessors: JSON.stringify(newPreds) })
-  const done = {}
-  const visiting = {}
-  const walk = id => {
-    if (done[id]) return false
-    if (visiting[id]) return true
-    visiting[id] = true
-    const t = byId[id]
-    if (t) {
-      for (const p of parsePredecessors(t.predecessors)) {
-        if (byId[p] && walk(p)) return true
-      }
-    }
-    visiting[id] = false; done[id] = true
-    return false
-  }
-  return walk(taskId)
-}
-function isTaskReady (list, t) {
-  const preds = parsePredecessors(t.predecessors)
-  if (!preds.length) return true
-  const byId = {}
-  for (const x of list) { if (!x.delete) byId[x.taskId] = x }
-  return preds.every(pid => { const p = byId[pid]; return !p || p.complete })
-}
 // ---- DB write pending queue (mirrors tomato.js's _pendingLedger): a failed task upsert stays queued and replays on the next quit flush, so a transient IPC/db failure can't silently drop a task edit ----
 const _pendingUpserts = []
 let _todoFlushHooked = false
