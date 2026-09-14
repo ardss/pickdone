@@ -18,6 +18,7 @@ module.exports = function attachmentHandlers (ctx) {
       // asymmetric with upload/delete/notification, so a locked app still exfiltrated attachments
       const { shell } = require('electron')
       if (isLocked()) throw new Error('locked')
+      if (typeof url !== 'string') return false // F2 2026-09-15: 非字符串 url 此前在 startsWith 处 TypeError;与 save-upload-file-to-download 守卫同款
       if (url.startsWith('local://')) { shell.openPath(attachmentPath(url.slice(8))); return true }
       if (isSafeExternal(url)) return shell.openExternal(url)
       return false
@@ -27,6 +28,7 @@ module.exports = function attachmentHandlers (ctx) {
       if (isLocked()) throw new Error('locked')
       // P2 2026-09-12: the trailing unconditional `return true` lied — unknown URL schemes reported
       // success. Return per branch: local opened → true, safe external handled → true, else false.
+      if (typeof url !== 'string') return false // F2 2026-09-15: 同上 typeof 守卫(三通道家族一致性)
       if (url.startsWith('local://')) { shell.openPath(attachmentPath(url.slice(8))); return true }
       if (isSafeExternal(url)) { shell.openExternal(url); return true }
       return false
@@ -61,6 +63,7 @@ module.exports = function attachmentHandlers (ctx) {
     // renderer's existing invoke catch/reportError displays it); no renderer caller changes needed.
     'delete-file': (e, url) => {
       if (isLocked()) throw new Error('locked')
+      if (typeof url !== 'string') return false // F2 2026-09-15: 同 open-file/download-file 的 typeof 守卫(此前 startsWith TypeError)
       if (url.startsWith('local://')) {
         try { fs.unlinkSync(attachmentPath(url.slice(8))) } catch (err) {
           // Already-gone is success (idempotent delete); anything else is a real failure
