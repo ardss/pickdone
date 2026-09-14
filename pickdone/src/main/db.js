@@ -539,9 +539,17 @@ function queryTodos ({ deleted = 0, complete = null, categoryId = null, repeatId
   return db.prepare(sql).all(p).map(rowToTodo)
 }
 
+// F2 2026-09-15:SQLite TEXT PRIMARY KEY 不隐含 NOT NULL — taskId:null/undefined/'' 一路落到这里
+// 会写成 NULL-id 幽灵行(全部幽灵行互相冲突覆盖,还可能挤掉正常 id='null' 的数据)。fail-fast 优于静默。
+function assertHasTaskId (t) {
+  if (!t || t.taskId == null || t.taskId === '') {
+    throw new Error('[TodoDB] upsert: taskId is required, refusing to write a NULL-id ghost row (got ' + JSON.stringify(t && t.taskId) + ')')
+  }
+}
+
 const OPS = {
-  upsert: t => { stmts.upsert.run(todoToRow(t)); return true },
-  upsertMany: list => { stmts.upsertMany(list.map(todoToRow)); return true },
+  upsert: t => { assertHasTaskId(t); stmts.upsert.run(todoToRow(t)); return true },
+  upsertMany: list => { (Array.isArray(list) ? list : []).forEach(assertHasTaskId); stmts.upsertMany(list.map(todoToRow)); return true },
   // Atomic sync-commit (W3 2026-09-12): row upserts + todosVersion cursor advance in ONE transaction.
   // Why atomic: writing rows with status='sync' non-atomically and crashing between the upserts and the
   // setMeta would leave rows marked 'sync' in the DB while todosVersion stayed behind — the dirty-row
@@ -571,7 +579,7 @@ const OPS = {
     const cur = Number((curRow && curRow.value) || 0)
     if (v < cur) throw new Error('[TodoDB] commitSyncBatch: version ' + v + ' < current todosVersion ' + cur + ' — stale batch rejected')
     const tr = db.transaction(list => {
-      for (const t of list) stmts.upsert.run(todoToRow({ ...t, status: 'sync', version: v }))
+      for (const t of list) { assertHasTaskId(t); stmts.upsert.run(todoToRow({ ...t, status: 'sync', version: v })) }
       stmts.setMeta.run('todosVersion', String(v))
     })
     tr(rows)

@@ -46,6 +46,28 @@ test('F1: 全好行时 rejected 为空,行为与旧版一致(幂等 upsert)', ()
   assert.equal(db.call('tomatoAll').filter(x => x.tomatoId === 'f1_idem').length, 1)
 })
 
+/* ---- F2: upsert/upsertMany 对缺 taskId fail-fast(NULL-id 幽灵行防线) ---- */
+test('F2: upsert 缺 taskId 抛明确错误,不落 NULL-id 幽灵行', () => {
+  process.env.TODO_DB_DIR = tmpDir()
+  const db = require_('../../../src/main/db.js')
+  db.init(process.env.TODO_DB_DIR)
+  for (const bad of [null, {}, { taskId: null }, { taskId: '' }]) {
+    assert.throws(() => db.call('upsert', bad), /taskId is required/, 'taskId=' + JSON.stringify(bad))
+  }
+  assert.equal(db.call('queryTodos', {}).length, 0, '幽灵行不得落库')
+  // 合法行不受影响
+  db.call('upsert', { taskId: 'f2_t1', taskContent: 'ok' })
+  assert.ok(db.call('getById', 'f2_t1'))
+})
+
+test('F2: upsertMany 批内含坏行整批抛错且不落任何行(事务原子性保持)', () => {
+  process.env.TODO_DB_DIR = tmpDir()
+  const db = require_('../../../src/main/db.js')
+  db.init(process.env.TODO_DB_DIR)
+  assert.throws(() => db.call('upsertMany', [{ taskId: 'f2_a', taskContent: 'x' }, { taskContent: 'no id' }]), /taskId is required/)
+  assert.equal(db.call('queryTodos', {}).length, 0, '事务回滚,好行也不落(单任务 upsert 语义是 fail-fast,批量走整批原子)')
+})
+
 /* ---- F3: notification handler 形状守卫 ---- */
 function loadSystemHandlers () {
   const Module = require_('module')
