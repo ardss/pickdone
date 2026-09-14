@@ -144,7 +144,9 @@ function rowsToItems (text, format) {
       due: parseCsvDate(cell(r, m, 'due date')) || parseCsvDate(cell(r, m, 'start date')),
       reminder: parseCsvDate(cell(r, m, 'reminder')),
       priority: normPriority(cell(r, m, 'priority'), 'ticktick'),
-      done: status === '1' || status === '2',
+      // dida365 marks completed rows with status -1 (0 = undone, 1/2 = TickTick done variants) —
+      // missing -1 silently imported finished tasks as open
+      done: status === '1' || status === '2' || status === '-1',
       completedAt: parseCsvDate(cell(r, m, 'completed time'))
     }
     all.push(item)

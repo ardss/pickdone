@@ -13,6 +13,7 @@ const require_ = createRequire(import.meta.url)
 const db = require_('../../../src/main/db.js')
 const lib = require_('../../../cli/lib.js')
 const core = require_('../../../src/main/core/todo-core.js')
+const imp = require_('../../../cli/import.js')
 
 db.init(process.env.TODO_DB_DIR)
 
@@ -117,4 +118,15 @@ test('fix6: addAttachment does not overwrite an existing same-name file (nextFre
   assert.equal(listed.length, 2, 'both attachments land in the list with distinct files')
   assert.equal(new Set(keys).size, 2, 'stored keys are distinct')
   assert.equal(first.size, second.size)
+})
+
+/* ---------- Fix 3: dida/TickTick status -1 imports as completed ---------- */
+test('fix3: dida365 completed rows (status -1) map to done, not open', () => {
+  const csv = '任务清单\r\nTitle,List Name,Content,Tags,Status,Priority,Due Date,Start Date,Reminder,Completed Time,TaskId,ParentId\r\n' +
+    '已完成甲,收件箱,,,-1,,,,,,\r\n' +
+    '进行中乙,收件箱,,,0,,,,,,\r\n'
+  const items = imp.rowsToItems(csv, 'dida365')
+  assert.equal(items.length, 2)
+  assert.equal(items[0].done, true, 'status -1 = completed (dida365 export dialect)')
+  assert.equal(items[1].done, false, 'status 0 stays open')
 })
