@@ -193,7 +193,8 @@ export default {
       return {
         temp: Math.round(+cur.temp_C),
         code: +cur.weatherCode,
-        city: (area && (area.areaName[0].value || area.region[0].value)) || cityQuery
+        // wttr occasionally returns nearest_area with empty areaName/region arrays — guard every index access, fall back to the queried city
+        city: (area && ((area.areaName && area.areaName[0] && area.areaName[0].value) || (area.region && area.region[0] && area.region[0].value))) || cityQuery
       }
     },
     /** Open-Meteo current weather */
