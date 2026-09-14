@@ -333,7 +333,11 @@ export default {
         this.$store.dispatch('tomato/removeRecordsByIdPrefix', 'seed_')
         this.$store.dispatch('_rt/refreshFromDb')
         this.$message.success(this.$t('statsE.SettingsModal.demoDataClearedMsg'))
-      } catch (e) { /* cancelled */ }
+      } catch (e) {
+        // Element confirm rejects with the 'cancel'/'close' string on user cancel — only those mean "cancelled";
+        // anything else is a real failure (countSeed/purgeSeed/refresh) and must not be reported as a silent success
+        if (e !== 'cancel' && e !== 'close') this.$message.error(this.$t('statsE.SettingsModal.purgeFailedMsg') + (e && e.message ? e.message : e))
+      }
     }
   }
 }
