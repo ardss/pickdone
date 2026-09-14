@@ -6,6 +6,9 @@ import { FMT } from '../utils/core.js'
 
 const LS_KEY = 'habitsState'
 const META_KEY = 'habitsState'
+/** Aux→main relay ping: aux windows can't call setMeta (MAIN_WINDOW_ONLY_OP); they write LS + this ping,
+ *  and the main window's storage listener below re-persists the blob to the DB on its behalf. */
+const SYNC_KEY = 'habitsSyncPing'
 /** Persistence blob format version: readers treat old unstamped data as v1 (behavior unchanged) */
 const SCHEMA_V = 1
 const PALETTE = ['#0f9d8f', '#f76e6e', '#f2a63b', '#7ac74f', '#5aa9e6', '#9d8df1', '#eb96c3']
@@ -43,10 +46,6 @@ function load () {
 export function isAuxWindow () {
   try { return !!(typeof window !== 'undefined' && window.location && window.location.hash && /__tomato-float|__quick-add/.test(window.location.hash)) } catch (e) { return false }
 }
-
-/** Aux→main relay ping: aux windows can't call setMeta (MAIN_WINDOW_ONLY_OP); they write LS + this ping,
- *  and the main window's storage listener below re-persists the blob to the DB on their behalf. */
-const SYNC_KEY = 'habitsSyncPing'
 
 /** Dual write: localStorage (synchronous fallback) + main DB meta table (source of truth, included in auto backup).
  *  Aux windows: LS write + relay ping only — the main window's storage listener persists to the DB on their behalf. */
@@ -109,10 +108,15 @@ export default {
       if (!h) return 0
       let streak = 0
       const d = new Date()
-      if (!h.records[todayKey()]) d.setDate(d.getDate() - 1)
+      // Walk back day by day; non-due days (frequency filter) are skipped without breaking the streak.
+      // P2 root fix: the loop used to ignore isDueOn, so a Mon/Wed/Fri habit "broke" on an idle Sunday.
+      // Today being due-but-unchecked doesn't break either (same lenient semantics as before).
+      const createdKey = h.createdAt ? window.dayjs(h.createdAt).format(FMT.date) : null
       for (;;) {
         const k = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0')
-        if (h.records[k]) { streak++; d.setDate(d.getDate() - 1) } else break
+        if (h.records[k]) { streak++ } else if (k !== todayKey() && isDueOn(h, k)) break
+        if (createdKey && k < createdKey) break // walked back before the habit's creation: nothing earlier can be due (loop guard)
+        d.setDate(d.getDate() - 1)
       }
       return streak
     },
