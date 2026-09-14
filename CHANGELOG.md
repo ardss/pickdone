@@ -7,6 +7,7 @@ and versioning follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- Project milestones with a past date now show as **overdue** (red marker, overdue-days label) unless their linked tasks are actually all completed — previously any past date silently rendered as done, hiding missed milestones.
 - Expired task groups (yesterday's, last week's completed items) can be collapsed again — a cleanup routine was silently undoing every collapse click on them.
 - Project view: the dependency board's height now adapts to the actual header size instead of assuming a fixed one, so a header that grows with milestones no longer pushes the board below the fold.
 - Project view: switching between projects no longer keeps the previous project's active tab, expanded milestone rows or a leftover edit dialog.

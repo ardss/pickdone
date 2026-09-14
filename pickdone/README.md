@@ -23,9 +23,11 @@
 | `npm run check:all` | 全维度体检(构建、typecheck、单测、UI 冒烟、e2e、打包白名单等) |
 | `npm run bump` | 同步 bump 两个宿主 index.html 的 `?v=`(改 vendor/css 后) |
 
+> 测试目录新语义:`tests/unit/` 为纯单元测试、`tests/integration/` 为集成测试;活体测试(起真实宿主的 UI 冒烟/截图类)不进单测门禁,由 `check:all` 的 ③ 池统一调度。
+
 ## 铁律(迁移事故沉淀)
 
-1. **不得回引 `template:` 字符串组件**——运行时 Vue 无编译器,SFC 是唯一模板载体(`tests/unit-render-gates.test.mjs` 会拦)。
+1. **不得回引 `template:` 字符串组件**——运行时 Vue 无编译器,SFC 是唯一模板载体(`tests/unit/components/unit-render-gates.test.mjs` 会拦，测试已按 unit/ 与 integration/ 分层，活体/UI 冒烟类测试归入 `check:all` ③ 池)。
 2. **模板/脚本不得重新引入 `unsafe-eval`**;新依赖若需运行时编译直接否决。
 3. **`contracts.d.ts` 的 `TodoAPI` 不加索引签名**;新 IPC 通道显式声明,op 联合与主进程白名单双向同步。
 4. `renderer-dist/` 不进 git(构建产物),但**必须**进 electron-builder `files` 白名单;`renderer/**` 源码不随包分发。

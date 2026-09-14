@@ -59,10 +59,29 @@ export function parseMilestoneDate (input) {
   return d.isValid() ? +d.startOf('day') : null
 }
 
-export function milestoneState (ms, today0 = +dayjs().startOf('day')) {
-  if (ms.date < today0) return 'done'
+/**
+ * Lifecycle state. Achievement semantics (2026-09-14 fix for "overdue milestones always showed done"):
+ *  - date < today + linked tasks present in `tasks`: done only when ALL linked tasks are complete;
+ *    otherwise 'overdue' (red styling, overdue-days tag) — a past date alone is not achievement.
+ *  - date < today with NO linked tasks (or none of the linked tasks exist anymore): 'done'.
+ *    Decision: date-driven milestones keep the legacy "achievement = date passed" contract (see the
+ *    module docstring — that was the user's explicit call), and there is no other signal to judge
+ *    them by; introducing a manual complete flag would be a schema change beyond this fix.
+ *  - `tasks` omitted → legacy behavior (every past date is 'done'), so existing callers that don't
+ *    have the task list at hand stay backward-compatible.
+ * tasks: all tasks under this project (including completed, excluding deleted), same as milestoneProgress.
+ */
+export function milestoneState (ms, today0 = +dayjs().startOf('day'), tasks) {
   if (ms.date === today0) return 'today'
-  return 'future'
+  if (ms.date > today0) return 'future'
+  if (Array.isArray(tasks)) {
+    const ids = new Set(ms.taskIds || [])
+    if (ids.size) {
+      const linked = tasks.filter(t => ids.has(t.taskId))
+      if (linked.length && !linked.every(t => t.complete)) return 'overdue'
+    }
+  }
+  return 'done'
 }
 
 /**
