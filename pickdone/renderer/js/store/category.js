@@ -78,6 +78,17 @@ function collectCascadeIds (state, id) {
 }
 export { collectCascadeIds }
 
+/** Deleted categories cannot come back through getAllCategories (WHERE deleted = 0), so they are mirrored
+ *  in the LS cache by persist() and re-merged here on startup. Without this a soft-deleted category
+ *  vanished from state on restart: visibleCount dropped to 0 and the recover-in-place entry went blind,
+ *  contradicting the CLI's "recoverable in App" promise. Entries already re-added (same id, live in DB) win. */
+function deletedFromLs () {
+  try {
+    const d = JSON.parse(localStorage.getItem(LS_KEY))
+    return ((d && Array.isArray(d.list)) ? d.list : []).filter(c => c && c.delete)
+  } catch { return [] }
+}
+
 export default {
   namespaced: true,
   state: () => ({ list: loadList(), projectIds: [], projectMeta: {} }),
@@ -215,7 +226,13 @@ export default {
         if (Array.isArray(ids)) commit('setProjectIds', ids)
       } catch (e) { /* stays empty when no project flags */ }
       await this.dispatch('category/loadProjectMeta')
-      if (rows.length) { commit('setList', rows); return rows.length }
+      if (rows.length) {
+        // Re-attach soft-deleted rows mirrored in LS (getAllCategories is live-only) so the in-app
+        // recovery entry survives a restart; live DB rows win over a stale LS tombstone of the same id
+        const dels = deletedFromLs().filter(d => !rows.some(r => r.categoryId === d.categoryId))
+        commit('setList', rows.concat(dels))
+        return rows.length
+      }
       // One-time migration flag: otherwise "migrate only when the table is empty" would resurrect old localStorage caches after the user deletes all categories
       let migrated = false
       try { migrated = (await window.todoAPI.dbCall('getMeta', 'categoryLsMigrated')) === '1' } catch (e) { /* empty */ }
