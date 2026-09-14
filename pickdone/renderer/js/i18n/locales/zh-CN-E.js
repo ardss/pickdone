@@ -65,6 +65,7 @@ export default {
       "noDemoDataMsg": "没有演示数据",
       "clearDemoDataMsg": "清除演示数据",
       "demoDataClearedMsg": "演示数据已清除，当前为纯真实数据",
+      "purgeFailedMsg": "操作失败：",
       "customOption": "自定义",
       "rangeToday": "今天",
       "rangeLastWeek": "近7天",
