@@ -257,6 +257,10 @@ function importItems (items, { dryRun = false, format, category = null, useLists
     // Completed tasks without a source completion timestamp fall back to the due date (then createTime):
     // stamping every row with "import moment" inflated the import day's done stats
     const completedAt = it.done ? (it.completedAt || it.due || ts) : 0
+    // Vendor tags have no dedicated column in this app — tags live as #tag in the title/description
+    // (cli/pickdone.js `tag` op, listTags). The parsed tags column used to be dropped wholesale;
+    // append them to taskContent so they survive as real tags.
+    const tagSuffix = (it.tags || []).filter(Boolean).map(t => `#${String(t).replace(/\s+/g, '')}`).join(' ')
     return {
       complete: !!it.done,
       completedAt,
@@ -269,7 +273,7 @@ function importItems (items, { dryRun = false, format, category = null, useLists
       image: null, files: null,
       categoryId: categoryId || 0,
       updateTime: ts, syncTime: 0,
-      taskContent: title,
+      taskContent: tagSuffix ? `${title} ${tagSuffix}` : title,
       taskDescribe: it.notes || '',
       taskId: core.genTaskId(userId, ts),
       taskSort,

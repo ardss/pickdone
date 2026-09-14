@@ -130,3 +130,22 @@ test('fix3: dida365 completed rows (status -1) map to done, not open', () => {
   assert.equal(items[0].done, true, 'status -1 = completed (dida365 export dialect)')
   assert.equal(items[1].done, false, 'status 0 stays open')
 })
+
+/* ---------- Fix 2: CSV import tags column lands as #tag in taskContent ---------- */
+test('fix2: imported rows carry the tags column as #tag suffixes in taskContent', () => {
+  const csv = '任务清单\r\nTitle,List Name,Content,Tags,Status,Priority,Due Date,Start Date,Reminder,Completed Time,TaskId,ParentId\r\n' +
+    '带标签任务,收件箱,,"工作,紧急",0,,,,,,,\r\n' +
+    '无标签任务,收件箱,,,0,,,,,,,\r\n'
+  const items = imp.rowsToItems(csv, 'dida365')
+  const report = imp.importItems(items, { format: 'dida365', useLists: true })
+  assert.equal(report.imported, 2)
+  const all = lib.listTodos({ range: null, done: null, limit: 500 })
+  const tagged = all.find(t => t.taskContent.startsWith('带标签任务'))
+  assert.ok(tagged, 'tagged task imported')
+  assert.ok(/带标签任务 #工作 #紧急/.test(tagged.taskContent), 'tags appended as #tag suffix (got: ' + tagged.taskContent + ')')
+  const plain = all.find(t => t.taskContent === '无标签任务')
+  assert.ok(plain, 'untagged task imports with a clean title (no trailing whitespace)')
+  // tags are then discoverable via the app's own tag index (semantics: #tag in content)
+  const tagNames = lib.listTags().map(x => x.name)
+  assert.ok(tagNames.includes('工作') && tagNames.includes('紧急'), 'imported tags appear in listTags')
+})
