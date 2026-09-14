@@ -697,7 +697,10 @@ function toggleComplete (input, target, { withSubtasks, completedAt } = {}) {
 
 /** Soft delete → recycle bin (deletedAt drives the 30-day auto hard-delete and recycle-bin ordering, aligned with the renderer) */
 function deleteTodo (input) {
-  const after = patchTodo(input, { delete: true, deletedAt: Date.now() }, { action: 'delete' })
+  // version reset to 0 (renderer parity: store/todo.js deleteTodo, P3 2026-09-12): syncTodos excludes
+  // delete rows already acked with version > 0, so keeping the old version meant a re-delete after
+  // restore never re-entered the sync snapshot and the deletion silently never propagated.
+  const after = patchTodo(input, { delete: true, deletedAt: Date.now(), version: 0 }, { action: 'delete' })
   chipsSnapshotForDelete(after.taskId) // snapshot chips → meta before clearing rows: prevents orphan chips while keeping restore backfill capability
   return after
 }

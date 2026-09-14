@@ -58,3 +58,12 @@ test('fix1: restoreTodo writes the row BEFORE consuming the snapshot (upsert fai
   const backfilled = db.call('planAll', []).filter(r => r.taskId === t.taskId)
   assert.equal(backfilled.length, chips.length, 'chips are backfilled on the successful path')
 })
+
+/* ---------- Fix 4: deleteTodo resets version to 0 so a re-delete re-enters the sync snapshot ---------- */
+test('fix4: deleteTodo writes version:0 (syncTodos excludes acked delete rows with version > 0)', () => {
+  const t = seed({ taskContent: 'f1删除任务', version: 7 })
+  const after = lib.deleteTodo(String(t.taskId))
+  assert.equal(after.delete, true)
+  assert.equal(after.version, 0, 'deleted row must carry version:0, matching renderer deleteTodo (store/todo.js)')
+  assert.equal(after.status, 'delete')
+})
