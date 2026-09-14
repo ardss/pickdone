@@ -86,7 +86,7 @@ function nextFreePath (dir, fileName, existsFn) {
   return path.join(dir, stem + '-' + Date.now() + ext)
 }
 
-module.exports = { localDayKey, strictBase64, checkImportFileSize, pendingDeleteName, classifyBackupError, IMPORT_MAX_BYTES, formatLogLines, nextAvailableName, backupNameTs, sortBackupNamesNewestFirst, parseTomatoMetaBlob, stableRead, nextFreePath }
+module.exports = { localDayKey, strictBase64, checkImportFileSize, pendingDeleteName, classifyBackupError, IMPORT_MAX_BYTES, formatLogLines, nextAvailableName, backupNameTs, sortBackupNamesNewestFirst, parseTomatoMetaBlob, stableRead, nextFreePath, tryForwardTomatoCmd }
 
 /* ---- 2026-09-10 main-fixes round ---- */
 
@@ -138,4 +138,35 @@ function parseTomatoMetaBlob (text) {
   try { st = JSON.parse(text || '{}') } catch { return { ok: false, list: [] } }
   const list = Array.isArray(st && st.tomatoRecordList) ? st.tomatoRecordList.filter(r => r && r.tomatoId && r.endTime) : []
   return { ok: true, list }
+}
+
+/* ---- 2026-09-15 F2 round ---- */
+
+/** Tomato command forwarding, single-step pure logic (extracted from index.js's polling closure so it is
+ *  unit-testable with a mock window). Fixes the lost-command race: previously lastTomatoSeq advanced
+ *  BEFORE webContents.send, with no isDestroyed recheck — a send failure during the window
+ *  destroy/recreate gap was swallowed by the outer catch as a warn and the command was lost forever
+ *  (seq already consumed → never re-sent).
+ *  Contract:
+ *  - raw missing / already consumed / locked / window or webContents missing-or-destroyed → state untouched, sent:false (next poll retries)
+ *  - seq <= lastTomatoSeq (already delivered) → raw marked consumed, sent:false
+ *  - send() succeeds → lastTomatoSeq advances to cmd.seq and raw is consumed; send throwing propagates to the caller's catch without advancing anything
+ *  Returns { lastTomatoCmdRaw, lastTomatoSeq, sent, cmd }. */
+function tryForwardTomatoCmd ({ raw, lastTomatoCmdRaw, lastTomatoSeq, getMainWindow, isLocked }) {
+  const untouched = { lastTomatoCmdRaw, lastTomatoSeq, sent: false, cmd: null }
+  if (!raw || raw === lastTomatoCmdRaw) return untouched
+  if (typeof isLocked === 'function' && isLocked()) return untouched
+  const win = typeof getMainWindow === 'function' ? getMainWindow() : null
+  const wc = win && win.webContents
+  // send 前复查 isDestroyed:winOk 判定后窗口可能即刻销毁;mock/真实 BrowserWindow 都要兼容缺方法的情况
+  const winOk = win != null &&
+    (typeof win.isDestroyed !== 'function' || !win.isDestroyed()) &&
+    wc != null &&
+    (typeof wc.isDestroyed !== 'function' || !wc.isDestroyed())
+  if (!winOk) return untouched
+  let cmd
+  try { cmd = JSON.parse(raw) } catch { return untouched } // 解析失败不消费 raw(与旧行为一致,外层 catch 记 warn)
+  if (!cmd || !cmd.seq || cmd.seq <= lastTomatoSeq) return { lastTomatoCmdRaw: raw, lastTomatoSeq, sent: false, cmd: null }
+  wc.send('cli-tomato-cmd', cmd) // 可能 throw(半销毁 peer):抛给调用方,seq/raw 均不推进 → 下轮轮询重投
+  return { lastTomatoCmdRaw: raw, lastTomatoSeq: cmd.seq, sent: true, cmd }
 }
