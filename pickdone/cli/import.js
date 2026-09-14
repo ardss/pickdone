@@ -219,12 +219,16 @@ function importItems (items, { dryRun = false, format, category = null, useLists
     const title = String(it.title || '').trim()
     if (!title) { report.skipped++; report.tasks.push({ title: it.title, action: 'skipped', reason: 'empty title' }); continue }
     const dayStart = dayStartOf(it.due)
-    const key = title + '|' + dayStart
+    // Tag suffix must be part of the dedup key: dedupKeyOf fingerprints stored taskContent, which
+    // now carries the '#tag' tail — comparing against the bare title would re-import every rerun.
+    const tagSuffix = (it.tags || []).filter(Boolean).map(t => `#${String(t).replace(/\s+/g, '')}`).join(' ')
+    const content = tagSuffix ? `${title} ${tagSuffix}` : title
+    const key = content + '|' + dayStart
     if (existing.has(key)) { report.duplicates++; report.tasks.push({ title, action: 'duplicate' }); continue }
     existing.add(key) // identical rows inside one file are deduped too
     const categoryId = fixedCategoryId != null ? fixedCategoryId
       : useLists && it.list ? resolveCat(it.list) : 0
-    pending.push({ it, title, dayStart, categoryId })
+    pending.push({ it, title, content, dayStart, categoryId })
     report.wouldImport++
     report.tasks.push({ title, action: 'create', list: it.list || null, due: dayStart ? dayjs(dayStart).format('YYYY-MM-DD') : null, subtasks: (it.subs || []).length })
   }
@@ -247,7 +251,7 @@ function importItems (items, { dryRun = false, format, category = null, useLists
   // instead of per-row upsert — a crash mid-import used to leave a half-imported database with no audit
   // line; now the whole batch commits atomically (all-or-nothing).
   const now = Date.now()
-  const rows = pending.map(({ it, title, dayStart, categoryId }, i) => {
+  const rows = pending.map(({ it, title, content, dayStart, categoryId }, i) => {
     const ts = now + i
     const prevMin = dayNextSort.get(dayStart)
     const taskSort = prevMin === undefined ? 0 : Math.fround(prevMin - 100)
@@ -257,10 +261,6 @@ function importItems (items, { dryRun = false, format, category = null, useLists
     // Completed tasks without a source completion timestamp fall back to the due date (then createTime):
     // stamping every row with "import moment" inflated the import day's done stats
     const completedAt = it.done ? (it.completedAt || it.due || ts) : 0
-    // Vendor tags have no dedicated column in this app — tags live as #tag in the title/description
-    // (cli/pickdone.js `tag` op, listTags). The parsed tags column used to be dropped wholesale;
-    // append them to taskContent so they survive as real tags.
-    const tagSuffix = (it.tags || []).filter(Boolean).map(t => `#${String(t).replace(/\s+/g, '')}`).join(' ')
     return {
       complete: !!it.done,
       completedAt,
@@ -273,7 +273,10 @@ function importItems (items, { dryRun = false, format, category = null, useLists
       image: null, files: null,
       categoryId: categoryId || 0,
       updateTime: ts, syncTime: 0,
-      taskContent: tagSuffix ? `${title} ${tagSuffix}` : title,
+      // Vendor tags have no dedicated column in this app — tags live as #tag in the title/description
+      // (cli/pickdone.js `tag` op, listTags). The parsed tags column used to be dropped wholesale;
+      // append them to taskContent so they survive as real tags (and as dedup-fingerprinted content).
+      taskContent: content,
       taskDescribe: it.notes || '',
       taskId: core.genTaskId(userId, ts),
       taskSort,
