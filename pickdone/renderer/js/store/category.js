@@ -82,7 +82,12 @@ export default {
   namespaced: true,
   state: () => ({ list: loadList(), projectIds: [], projectMeta: {} }),
   getters: {
-    byId: s => id => s.list.find(c => c.categoryId === id) || null,
+    /** Views' single name/color lookup: a soft-deleted (or missing) categoryId resolves to null so every
+     *  consumer (taskRow color-follow, name chips, …) falls back to the uncategorized default. Matches the
+     *  CLI contract (cli/lib.js deleteCategory: "tasks keep categoryId and fall back to the default
+     *  (uncategorized) in views") — previously a deleted category kept answering byId within the session,
+     *  so its name/color haunted rows that the EditPanel dropdown (sortedAll) already excluded. */
+    byId: s => id => s.list.find(c => c.categoryId === id && !c.delete) || null,
     /** Project-type categories (sorted by listSort) — progressive disclosure: empty array when no projects, sidebar renders no entry */
     projects: s => s.list
       .filter(c => !c.delete && s.projectIds.includes(c.categoryId))
