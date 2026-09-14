@@ -37,13 +37,47 @@ function load () {
   return { habits: [], moments: [], savedAt: 0 }
 }
 
-/** Dual write: localStorage (synchronous fallback) + main DB meta table (source of truth, included in auto backup) */
+/** Aux-window detection: same judgment as dbMirror's writeNow (float / quick-add hashes).
+ *  setMeta is a MAIN_WINDOW_ONLY_OP — an aux window's direct dbCall is rejected by the main process,
+ *  which previously left the aux window's LS edit never reaching the durable DB copy. */
+export function isAuxWindow () {
+  try { return !!(typeof window !== 'undefined' && window.location && window.location.hash && /__tomato-float|__quick-add/.test(window.location.hash)) } catch (e) { return false }
+}
+
+/** Aux→main relay ping: aux windows can't call setMeta (MAIN_WINDOW_ONLY_OP); they write LS + this ping,
+ *  and the main window's storage listener below re-persists the blob to the DB on their behalf. */
+const SYNC_KEY = 'habitsSyncPing'
+
+/** Dual write: localStorage (synchronous fallback) + main DB meta table (source of truth, included in auto backup).
+ *  Aux windows: LS write + relay ping only — the main window's storage listener persists to the DB on their behalf. */
 function persist (state) {
   const blob = { schemaV: SCHEMA_V, habits: state.habits, moments: state.moments || [], savedAt: Date.now() }
   state.savedAt = blob.savedAt
   try { localStorage.setItem(LS_KEY, JSON.stringify(blob)) } catch {}
-  // 2026-09-12: silent .catch(() => {}) hid meta write failures (DB is the durable source of truth) — log them
-  try { window.todoAPI && window.todoAPI.dbCall && window.todoAPI.dbCall('setMeta', [META_KEY, JSON.stringify(blob)]).catch(e => console.error('[habits] setMeta failed:', e)) } catch {}
+  try {
+    if (!window.todoAPI || !window.todoAPI.dbCall) return
+    if (isAuxWindow()) {
+      try { localStorage.setItem(SYNC_KEY, String(Date.now()) + ':' + Math.random().toString(36).slice(2)) } catch (e) { /* empty */ }
+      return
+    }
+    // 2026-09-12: silent .catch(() => {}) hid meta write failures (DB is the durable source of truth) — log them
+    window.todoAPI.dbCall('setMeta', [META_KEY, JSON.stringify(blob)]).catch(e => console.error('[habits] setMeta failed:', e))
+  } catch (e) { /* empty environment */ }
+}
+
+// Main window relay: an aux window's habits edit arrives via LS + ping; the main window re-reads the
+// blob and writes the durable DB meta row on its behalf (storage events only fire in the OTHER windows,
+// so the writer never relays itself). Module-level like dbMirror's quit-flush hook.
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function' && !isAuxWindow()) {
+  window.addEventListener('storage', e => {
+    if (!e || e.key !== SYNC_KEY) return
+    try {
+      const d = readLs()
+      if (d && window.todoAPI && window.todoAPI.dbCall) {
+        window.todoAPI.dbCall('setMeta', [META_KEY, JSON.stringify(d)]).catch(err => console.error('[habits] relay setMeta failed:', err))
+      }
+    } catch (err) { /* empty */ }
+  })
 }
 
 // Uses dayjs+FMT.date uniformly like the rest of the app (previously hand-rolled concatenation could disagree with HabitView's dayjs convention at day boundaries)
