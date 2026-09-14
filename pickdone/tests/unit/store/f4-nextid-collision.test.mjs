@@ -20,7 +20,7 @@ test('F4: two "windows" (fresh modules in the same millisecond) never derive the
     // "Window A" draws its ids while the clock is pinned to one millisecond
     Date.now = () => 1700000000000
     Math.random = () => 0.42
-    const a = []
+    const a = [] // eslint-disable-line no-unused-vars
     // Access the private nextId through addCategory on a scratch state
     const stateA = { list: [], projectIds: [], projectMeta: {} }
     for (let i = 0; i < 5; i++) {
