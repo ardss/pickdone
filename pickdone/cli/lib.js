@@ -742,12 +742,16 @@ function chipsRestoreSnapshot (taskId) {
 
 /** Restore from the recycle bin */
 function restoreTodo (input) {
-  if (input) { try { chipsRestoreSnapshot(resolveTask(input, recycleTasks()).taskId) } catch { /* no snapshot = originally had no schedule */ } }
+  // Row first, snapshot second (verify-then-commit, renderer parity: store/todo.js restoreFromRecycle):
+  // chipsRestoreSnapshot clears the one-shot snapshot meta as a side effect, so consuming it before the
+  // resolve+upsert was confirmed meant a mid-way failure (re-resolve throwing, upsert failing) permanently
+  // lost the snapshot. The row update alone is harmless to retry; only after it succeeds do we spend it.
   const db = open()
   const t = resolveTask(input, recycleTasks())
   const merged = { ...t, delete: false, deletedAt: 0, updateTime: Date.now(), status: 'update' }
   db.call('upsert', merged)
   const after = db.call('getById', t.taskId)
+  try { chipsRestoreSnapshot(t.taskId) } catch { /* no snapshot = originally had no schedule */ }
   audit.record({ action: 'restore', targets: [t], changes: [{ before: t, after }] })
   return after
 }
