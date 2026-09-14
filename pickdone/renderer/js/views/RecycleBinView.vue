@@ -103,13 +103,18 @@ export default {
           { icon: 'trash', label: this.$t('statsC.RecycleBin.btnPurge'), danger: true, fn: () => this.purge(t) }
         ])
     },
-    restore (t, patchToToday) {
+    async restore (t, patchToToday) {
       const today = +dayjs().startOf('day')
-      this.$store.dispatch('todo/updateTodoFields', {
-        taskId: t.taskId,
-        patch: patchToToday ? { delete: false, status: 'update', dayStart: today, todoTime: today } : { delete: false, status: 'update' }
-      })
-      this.$message.success(patchToToday ? this.$t('statsC.RecycleBin.restoredToToday') : this.$t('statsC.RecycleBin.restored'))
+      try {
+        // dispatch 必须等待成功再报喜:异步恢复可能失败(db 写入错误),失败走 catch 提示而非假成功
+        await this.$store.dispatch('todo/updateTodoFields', {
+          taskId: t.taskId,
+          patch: patchToToday ? { delete: false, status: 'update', dayStart: today, todoTime: today } : { delete: false, status: 'update' }
+        })
+        this.$message.success(patchToToday ? this.$t('statsC.RecycleBin.restoredToToday') : this.$t('statsC.RecycleBin.restored'))
+      } catch (e) {
+        this.$message.error(this.$t('statsC.RecycleBin.restoreFailedMsg') + (e && e.message ? e.message : e))
+      }
     },
     /** Earlier-version "pick date": a transparent date picker embedded in the button; picking restores to that date */
     pickDate (t, ts) {

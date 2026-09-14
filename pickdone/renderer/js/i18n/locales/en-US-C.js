@@ -11,6 +11,7 @@ export default {
       noDate: 'No date',
       overdue: 'Overdue ',
       restoredToToday: 'Restored and scheduled to today',
+      restoreFailedMsg: 'Restore failed: ',
       restored: 'Restored',
       restoredToDate: 'Restored to the selected date',
       markedComplete: 'Marked as complete',
