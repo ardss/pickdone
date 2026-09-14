@@ -318,6 +318,12 @@ export default {
       if (s.status === 'default') {
         const fresh = loadState(false)
         if (fresh.status === 'startTomatoTime' && fresh.startedAt) s = fresh
+        else if (fresh.status === 'startRestTime' && fresh.startedAt) {
+          // 他窗已进入休息而本窗副本还是 default:giveUp 的"取消专注"意图已失效,不能盲写 default
+          // 杀掉刚开的休息(与下方 claimed 分支同款竞态,此前只修了 startTomatoTime 一半)——跟随共享状态返回
+          commit('patch', { status: fresh.status, startedAt: fresh.startedAt, remainSec: fresh.remainSec })
+          return
+        }
       }
       const running = s.status === 'startTomatoTime' && s.startedAt
       // Cross-window claim: when the user clicks "give up" at the exact expiry moment while the shared tick is completing, only the side that claimed first records (prevents succeed+abandon double records for the same focus)
