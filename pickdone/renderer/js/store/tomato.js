@@ -197,9 +197,16 @@ export default {
     updateRecord (s, { tomatoId, patch }) {
       const rec = (s.tomatoRecordList || []).find(r => r && r.tomatoId === tomatoId)
       if (!rec) return
-      if (patch.endTime != null) rec.endTime = Math.max(0, Math.round(patch.endTime))
-      // After changing endTime, re-derive dateKey: the rail/stats both bucket by dateKey; without re-deriving, it becomes ghost data that "vanishes from the day it was moved away from"
-      if (patch.endTime != null && rec.endTime > 0) rec.dateKey = dayjs(rec.endTime).format(FMT.date)
+      // Invalid endTime (<=0/NaN) rejects that field outright: the DB layer unconditionally derives
+      // dateKey from endTime, so a 0 would fall into the 1970 bucket (ghost data in every stat)
+      if (patch.endTime != null) {
+        const t = Math.round(Number(patch.endTime))
+        if (Number.isFinite(t) && t > 0) {
+          rec.endTime = t
+          // After changing endTime, re-derive dateKey: the rail/stats both bucket by dateKey; without re-deriving, it becomes ghost data that "vanishes from the day it was moved away from"
+          rec.dateKey = dayjs(t).format(FMT.date)
+        }
+      }
       // clamp 1..FOCUS_MAX_MINUTES = the DB-layer single source (db.js _recToRow via shared/limits.mjs):
       // a UI-side cap above it would show values the DB silently drops on next reload (memory says 720, ledger says 600)
       if (patch.focusDuration != null) rec.focusDuration = Math.max(1, Math.min(FOCUS_MAX_MINUTES, Math.round(patch.focusDuration)))
