@@ -67,3 +67,27 @@ test('fix4: deleteTodo writes version:0 (syncTodos excludes acked delete rows wi
   assert.equal(after.version, 0, 'deleted row must carry version:0, matching renderer deleteTodo (store/todo.js)')
   assert.equal(after.status, 'delete')
 })
+
+/* ---------- Fix 5: removeAttachment collapses the key to a basename (path traversal) ---------- */
+test('fix5: removeAttachment with a local://..%2F.. traversal key cannot delete files outside userData/files', () => {
+  const t = seed({ taskContent: 'f1穿越任务' })
+  const victimDir = fs.mkdtempSync(path.join(os.tmpdir(), 'f1-victim-'))
+  const victim = path.join(victimDir, 'db.key')
+  fs.writeFileSync(victim, 'secret')
+  // Row carries an encoded traversal key; removeAttachment must refuse to resolve it outside files/
+  lib.patchTodo(t.taskId, { files: JSON.stringify([{ url: 'local://' + encodeURIComponent('../../' + path.basename(victimDir) + '/db.key'), name: 'db.key', size: 6 }]) }, { action: 'edit' })
+  const res = lib.removeAttachment(String(t.taskId), 'file', 1)
+  assert.equal(res.removed, 'db.key', 'the list entry itself is removed')
+  assert.ok(fs.existsSync(victim), 'the file outside userData/files must survive')
+  // Empty/unresolvable key is rejected instead of silently guessed
+  lib.patchTodo(t.taskId, { files: JSON.stringify([{ url: '', name: 'ghost', size: 0 }]) }, { action: 'edit' })
+  assert.throws(() => lib.removeAttachment(String(t.taskId), 'file', 1), e => e.code === 'ATTACH_KEY_INVALID')
+  // A normal key still unlinks as before
+  const dir = path.join(process.env.TODO_DB_DIR, 'files')
+  fs.mkdirSync(dir, { recursive: true })
+  const inside = path.join(dir, 'normal.txt')
+  fs.writeFileSync(inside, 'x')
+  lib.patchTodo(t.taskId, { files: JSON.stringify([{ url: 'local://' + encodeURIComponent('normal.txt'), name: 'normal.txt', size: 1 }]) }, { action: 'edit' })
+  lib.removeAttachment(String(t.taskId), 'file', 1)
+  assert.ok(!fs.existsSync(inside), 'a well-formed attachment key still unlinks the physical file')
+})

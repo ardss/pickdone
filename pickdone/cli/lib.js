@@ -1603,7 +1603,9 @@ const ATTACH_MAX_BYTES = 50 * 1024 * 1024
 const ATTACH_IMG_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico'])
 // Allowlist kept in sync with attachments.js (a blocklist was once bypassed via Windows trailing dots; here we reuse the allowlist and trailing-dot stripping rules)
 const ATTACH_ALLOWED_EXT = new Set([...ATTACH_IMG_EXT, 'pdf', 'txt', 'md', 'csv', 'xlsx', 'xls', 'docx', 'doc', 'pptx', 'ppt', 'zip', 'mp3', 'wav', 'ogg', 'mp4', 'webm', 'json'])
-const attachKeyOf = item => { try { return decodeURIComponent(String(item.url || '').replace(/^local:\/\//, '')) } catch { return '' } }
+// Key resolution collapses to a basename (renderer/main parity: attachments.js attachmentPath) — a
+// crafted `local://..%2F..%2Fdb.key` row must not resolve outside userData/files when unlinking.
+const attachKeyOf = item => { try { return path.basename(decodeURIComponent(String(item.url || '').replace(/^local:\/\//, ''))) } catch { return '' } }
 
 function addAttachment (input, file) {
   const t = resolveTask(input, liveTasks())
@@ -1644,7 +1646,9 @@ function removeAttachment (input, kind, n) {
   if (!(idx >= 0 && idx < list.length)) throw new CliError(`attachment #${n} not found (${list.length} total)`, 'ATTACH_NOT_FOUND')
   const [item] = list.splice(idx, 1)
   patchTodo(t.taskId, { [field]: JSON.stringify(list) }, { action: 'attachment.remove' })
-  try { require('fs').unlinkSync(path.join(userDataDir(), 'files', attachKeyOf(item))) } catch { /* already gone is fine */ }
+  const key = attachKeyOf(item)
+  if (!key) throw new CliError('attachment has no resolvable file name (refusing to guess)', 'ATTACH_KEY_INVALID')
+  try { require('fs').unlinkSync(path.join(userDataDir(), 'files', key)) } catch { /* already gone is fine */ }
   return { taskId: t.taskId, removed: item.name }
 }
 
