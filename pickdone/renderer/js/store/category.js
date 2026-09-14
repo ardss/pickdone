@@ -54,8 +54,13 @@ function persist (list) {
 }
 
 let idSeed = null
+/** NOT globally unique — each window keeps its own seed. The seed starts at Date.now() plus a random
+ *  offset (±5ms window, ~1e5 slots): two windows creating a category in the same millisecond used to
+ *  derive identical ++Date.now() ids and silently overwrite each other's row; the random start slot
+ *  makes that collision probability negligible (≈1e-5 per same-ms pair) while ids stay plain numbers
+ *  compatible with the existing === comparisons and the numeric id column. */
 function nextId () {
-  if (!idSeed) idSeed = Date.now()
+  if (!idSeed) idSeed = Date.now() + Math.floor(Math.random() * 100000)
   return ++idSeed
 }
 
