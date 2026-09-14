@@ -8,14 +8,34 @@ const DEBOUNCE_MS = 2000
 const timers = {}
 const pendings = {} // Blobs pending within the debounce window (used by quit flush)
 
+function enqueueRetry (metaKey, blob) {
+  // Failed setMeta must not be silently lost (disk full / locked DB / window quitting mid-write):
+  // re-queue the blob and retry on the next debounce tick (or the next mirrorToDb call, whichever
+  // comes first). The latest blob for a key wins, mirroring the debounce semantics.
+  pendings[metaKey] = blob
+  console.warn('[dbMirror] setMeta failed, re-queued for retry:', metaKey)
+  if (!timers[metaKey]) {
+    timers[metaKey] = setTimeout(() => {
+      delete timers[metaKey]
+      const b = pendings[metaKey]
+      delete pendings[metaKey]
+      if (b !== undefined) writeNow(metaKey, b)
+    }, DEBOUNCE_MS)
+  }
+}
+
 function writeNow (metaKey, blob) {
   try {
     if (!window.todoAPI?.dbCall) return
     // setMeta is now a main-window-only op (to prevent a compromised aux window from batch-modifying meta); aux windows (float/quick-add) don't write the DB directly —
     // LS is the cross-window sync channel; after the main window receives state via the storage event, the main window's mirror persists it
     if (window.location.hash && /__tomato-float|__quick-add/.test(window.location.hash)) return
-    window.todoAPI.dbCall('setMeta', [metaKey, JSON.stringify(blob)]).catch(() => {})
-  } catch { /* empty environment */ }
+    window.todoAPI.dbCall('setMeta', [metaKey, JSON.stringify(blob)]).catch(() => enqueueRetry(metaKey, blob))
+  } catch (e) {
+    // degraded host (no todoAPI): previously swallowed too — surface it at least
+    console.warn('[dbMirror] setMeta threw, re-queued for retry:', metaKey, e)
+    enqueueRetry(metaKey, blob)
+  }
 }
 
 export function mirrorToDb (metaKey, blob, immediate = false) {
