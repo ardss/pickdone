@@ -60,6 +60,7 @@
              @click="m.ms && editMilestone(m.ms)"
              @keydown.enter.prevent="m.ms && editMilestone(m.ms)">
             <template v-if="m.type==='done' || (m.ms && m.state==='done')">✓</template>
+            <template v-else-if="m.ms && m.state==='overdue'">✗</template>
             <template v-else-if="m.type==='deadline'">⚑</template>
             <template v-else-if="m.type==='start' || m.type==='today'">◦</template>
             <template v-else>◆</template>
@@ -76,7 +77,7 @@
           <svg class="ms-ring" viewBox="0 0 36 36" width="30" height="30" role="img"
                :aria-label="$t('statsB.ProjectView.linkProgress', { done: r.progress ? r.progress.done : 0, total: r.progress ? r.progress.total : 0 })">
             <circle class="ms-ring__track" cx="18" cy="18" r="15.5" fill="none"/>
-            <circle class="ms-ring__bar" :class="{'ms-ring__bar--done': r.state === 'done'}" cx="18" cy="18" r="15.5" fill="none"
+            <circle class="ms-ring__bar" :class="{'ms-ring__bar--done': r.state === 'done', 'ms-ring__bar--overdue': r.state === 'overdue'}" cx="18" cy="18" r="15.5" fill="none"
                     :stroke-dasharray="String(2 * Math.PI * 15.5)" :stroke-dashoffset="String(2 * Math.PI * 15.5 * (1 - r.ringPct / 100))"/>
             <text x="18" y="22" text-anchor="middle" class="ms-ring__num">{{ r.ringPct }}%</text>
           </svg>
@@ -229,7 +230,8 @@ export default {
     milestoneRows () {
       const live = this.inCat.filter(t => !t.delete)
       return this.milestones.map(m => {
-        const state = milestoneState(m, this.todayTs)
+        // Pass live tasks so an overdue milestone with unfinished linked tasks is 'overdue', not 'done'
+        const state = milestoneState(m, this.todayTs, live)
         const progress = milestoneProgress(m, live)
         return {
           m,
@@ -286,7 +288,7 @@ export default {
         marks: [
           { type: 'start', pct: pos(start), label: this.$t('statsB.ProjectView.startWith', { d: this.fmtDate(start) }) },
           ...ms.map(m => {
-            const state = milestoneState(m, this.todayTs)
+            const state = milestoneState(m, this.todayTs, this.inCat.filter(t => !t.delete))
             const focus = cur && cur.id === m.id && state !== 'done'
             return {
               type: focus ? 'focus' : state,
@@ -506,6 +508,7 @@ export default {
   z-index: 1;
 }
 .proj-ms__mark--done { color: var(--ok, #2e9e44); font-weight: 700; }
+.proj-ms__mark--overdue { color: var(--danger); font-weight: 700; }
 .proj-ms__mark--today { color: var(--brand-dark); font-size: var(--fs-md); font-weight: 700; }
 .proj-ms__mark--future { color: var(--text-3); }
 .proj-ms__mark--deadline { color: var(--warn); font-size: var(--fs-md); }
@@ -516,7 +519,9 @@ export default {
 .proj-ms__mark[role="button"]::after {
   content: attr(data-tip); position: absolute; bottom: calc(100% + 7px); left: 50%; transform: translateX(-50%) scale(.96);
   background: var(--panel, #fff); color: var(--text-1, #222); border: 1px solid var(--line, #e6e8eb);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, .16); font-size: var(--fs-xs); white-space: nowrap;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .16); font-size: var(--fs-xs);
+  /* 长标题防贴边溢出:限宽并允许换行(G3),颜色仍走 token,深浅色主题自动适配 */
+  max-width: 240px; white-space: normal; text-align: center; overflow-wrap: anywhere;
   padding: 4px 9px; border-radius: var(--radius-sm); opacity: 0; pointer-events: none;
   transition: opacity var(--t-fast), transform var(--t-fast); z-index: 30;
 }
@@ -624,6 +629,7 @@ html[data-theme="dark"] .proj-ms__mark--focus { color: var(--brand); }
 .ms-ring { flex-shrink: 0; }
 .ms-ring__track { stroke: var(--track-bg, #eef0f2); stroke-width: 3.5; }
 .ms-ring__bar { stroke: var(--brand); stroke-width: 3.5; stroke-linecap: round; transition: stroke-dashoffset var(--dur-slow) ease; transform: rotate(-90deg); transform-origin: 18px 18px; }
+.ms-ring__bar--overdue { stroke: var(--danger); }
 .ms-ring__bar--done { stroke: var(--ok, #2e9e44); }
 .ms-ring__num { font-size: var(--fs-2xs); font-weight: 600; fill: var(--text-2); }
 </style>

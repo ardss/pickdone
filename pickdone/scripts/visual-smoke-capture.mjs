@@ -78,6 +78,18 @@ if (!up) {
   try { console.error('--- vite log FULL ---\n' + fs.readFileSync(VITE_LOG, 'utf8').slice(-12000)) } catch { /* no log */ }
   process.exit(2)
 }
+// 宿主指纹(G1):就绪探测只看端口通,毫秒级竞态窗口内可能是陌生进程占着 5175——
+// 拉一次首页 HTML,断言含本仓 browser-dev 宿主特有标记(pdFreeze 冻结时钟脚本),不符即 exit 2
+try {
+  const html = await (await fetch(BASES.find(b => b === BASE) || BASES[0], { signal: AbortSignal.timeout(3000) })).text()
+  if (!html.includes('pdFreeze')) {
+    console.error('✗ visual-smoke: 5175 响应不含本仓宿主标记(pdFreeze)——疑似陌生进程冒充 vite,拒绝拍摄')
+    process.exit(2)
+  }
+} catch (e) {
+  console.error('✗ visual-smoke: 宿主指纹拉取失败: ' + (e && e.message ? e.message.split('\n')[0] : e))
+  process.exit(2)
+}
 try { fs.unlinkSync(VITE_LOG) } catch { /* keep on failure paths only */ }
 
 fs.mkdirSync(DIR, { recursive: true })

@@ -140,7 +140,7 @@
       "src/**",
       "shared/**",
       "renderer-dist/index.html",
-      "renderer-dist/assets3/**",
+      "renderer-dist/assets*/**",
       "cli/**",
       "assets/css/**",
       "assets/fonts/**",
