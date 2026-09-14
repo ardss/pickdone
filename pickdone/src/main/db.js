@@ -777,18 +777,30 @@ const OPS = {
       ON CONFLICT(tomatoId) DO UPDATE SET endTime=excluded.endTime, dateKey=excluded.dateKey, focus=excluded.focus, focusTaskId=excluded.focusTaskId,
         focusDuration=excluded.focusDuration, rest=excluded.rest, restDuration=excluded.restDuration, succeed=excluded.succeed, manual=excluded.manual,
         status=excluded.status, abandonReason=excluded.abandonReason, extra=excluded.extra`)
-    const tr = db.transaction(() => list.forEach(raw => {
-      if (!raw || !raw.tomatoId) throw new Error('tomatoAppendMany: tomatoId required')
-      if (!raw.endTime) throw new Error('tomatoAppendMany: endTime required')
+    // F2 2026-09-15 行级容错(架构根因:批量接口的失败粒度应是"行级"而非"批级"):
+    // 此前任一行缺 tomatoId/endTime 抛错回滚整批 → 渲染端 pending 队列被一条坏行劫持无限重试,
+    // 同批合法账本行永不落库。现改为事务内跳过无效行并记入返回值 rejected,合法行照常落库;
+    // handler 原样透传返回结构,渲染端按 rejected 索引剔除/上报坏行。
+    const rejected = []
+    let accepted = 0
+    const tr = db.transaction(() => list.forEach((raw, index) => {
+      const reject = reason => rejected.push({
+        index,
+        tomatoId: raw && raw.tomatoId != null ? String(raw.tomatoId) : null,
+        reason
+      })
+      if (!raw || !raw.tomatoId) { reject('tomatoId required'); return }
+      if (!raw.endTime) { reject('endTime required'); return }
       const r = OPS._recToRow(Object.assign({ dateKey: '', succeed: true, manual: false }, raw))
       // dateKey 无条件由 endTime 重导(2026-09-04 深审 P0:三补录入口曾各按 startTs 落 dateKey,跨午夜记录与统计/时间轴 endTime 口径分裂)
       // dateKey 从调用方传入值起不再被信任,格式校验降级为派生后的防御断言
       r.dateKey = dayjs(r.endTime).format('YYYY-MM-DD')
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(r.dateKey))) throw new Error('tomatoAppendMany: dateKey derive failed')
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(r.dateKey))) { reject('dateKey derive failed'); return }
       ins.run(r)
+      accepted++
     }))
     tr()
-    return true
+    return { accepted, rejected }
   },
   tomatoUpdateById: ({ tomatoId, patch }) => {
     const cur = db.prepare('SELECT * FROM tomato_records WHERE tomatoId = ?').get(String(tomatoId))
