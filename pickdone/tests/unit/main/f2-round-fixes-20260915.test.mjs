@@ -138,6 +138,18 @@ test('F4: open-file / download-file-and-open / delete-file 对非字符串 url �
   } finally { restore() }
 })
 
+/* ---- F5: _dayBounds NaN 判定(垃圾日期抛 USAGE 错误而非静默空统计) ---- */
+test('F5: statsByDay/tomatoByDay 收到无法解析的日期必须抛错,不得 BETWEEN NaN 静默空结果', () => {
+  process.env.TODO_DB_DIR = tmpDir()
+  const db = require_('../../../src/main/db.js')
+  db.init(process.env.TODO_DB_DIR)
+  assert.throws(() => db.call('statsByDay', { from: '垃圾', to: 20260915 }), /not a parseable date/)
+  assert.throws(() => db.call('tomatoByDay', { from: 20260901, to: 'n/a' }), /not a parseable date/)
+  // 合法 YYYYMMDD 与毫秒入参不受影响
+  assert.doesNotThrow(() => db.call('statsByDay', { from: 20260901, to: 20260915 }))
+  assert.doesNotThrow(() => db.call('tomatoByDay', { from: Date.now() - 86400000, to: Date.now() }))
+})
+
 /* ---- F6: forwardTomatoCmd 命令丢失竞态(纯逻辑抽到 fix-util.tryForwardTomatoCmd) ---- */
 const { tryForwardTomatoCmd } = require_('../../../src/main/fix-util.js')
 const cmdRaw = seq => JSON.stringify({ action: 'stop', seq })

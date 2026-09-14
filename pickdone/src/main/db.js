@@ -658,6 +658,11 @@ const OPS = {
     }
     const f = conv(from)
     const t = conv(to)
+    // F2 2026-09-15:new Date('垃圾').getTime()=NaN 可通过 == null 检查,SQL BETWEEN NaN 绑定成 NULL
+    // → 静默恒空统计(CLI stats 场景下"空结果"比报错更骗人)。NaN = 调用方传了无法解析的日期,USAGE 错误如实上抛。
+    for (const [name, v] of [['from', f], ['to', t]]) {
+      if (v != null && Number.isNaN(v)) throw new Error('[TodoDB] _dayBounds: ' + name + ' is not a parseable date, refusing to run BETWEEN NaN (silent empty stats)')
+    }
     // 终点=to 当日本地日末:用 dayjs 加一天再减 1ms,夏令时切换日(23/25h)不错位 1 小时(2026-09-05 终审 P2;固定 +86400000 只对中国时区成立)
     return [f == null ? null : f, t == null ? null : +dayjs(t).add(1, 'day').startOf('day') - 1]
   },
