@@ -16,15 +16,17 @@ const PING_KEY = 'tomatoSyncPing'
 const CLAIM_KEY = 'tomatoLastPhaseDone'
 
 /** Cross-window phase claiming: for the same startedAt, only the first writer produces side effects (notification/audio/accounting).
- *  Value shape phase|ms: same phase within 1.5s is considered already claimed (narrowing the dual-window get→set race window), otherwise the claim is overwritten. */
+ *  P2 root fix (was a 1.5s time window): the claim is a state slot — the exact phase string is written into the
+ *  shared LS key and any later claimer of the SAME phase loses, regardless of elapsed time. The old
+ *  `Date.now() - ts < 1500` window let a background-throttled window's late tick (>1.5s) re-claim the same
+ *  completed phase → double snow gain + double notification. startedAt = Date.now() never repeats, so a
+ *  permanent per-phase mark can never block a legitimate new phase. */
 function claimPhase (status, startedAt) {
   const phase = status + ':' + (startedAt || 0)
   try {
-    const cur = String(localStorage.getItem(CLAIM_KEY) || '')
-    const i = cur.lastIndexOf('|')
-    if (i > 0 && cur.slice(0, i) === phase && Date.now() - Number(cur.slice(i + 1) || 0) < 1500) return false
+    if (localStorage.getItem(CLAIM_KEY) === phase) return false
   } catch (e) { /* empty */ }
-  try { localStorage.setItem(CLAIM_KEY, phase + '|' + Date.now()) } catch (e) { /* empty */ }
+  try { localStorage.setItem(CLAIM_KEY, phase) } catch (e) { /* empty */ }
   return true
 }
 
