@@ -39,8 +39,9 @@ export default {
   name: 'ProjectDocs',
   props: { catId: { type: Number, required: true } },
   data () {
-    return { docs: [] as any, activeId: '' as any, savedAt: 0, saveTimer: 0 as any }
+    return { docs: [] as any, activeId: '' as any, savedAt: 0, saveTimer: 0 as any, loadToken: 0 }
   },
+  created () { this._docsCatId = this.catId },
   computed: {
     sortedDocs () {
       return this.docs.slice().sort((a, b) => b.updatedAt - a.updatedAt)
@@ -69,17 +70,26 @@ export default {
     },
     fmtDate (ts) { return ts ? dayjs(ts).format(FMT.cnDate) : '' },
     async load () {
+      // 竞态守卫:快速切项目时旧请求可能后到,序号不匹配即丢弃,避免旧项目 docs 覆盖新项目
+      const token = ++this.loadToken
+      const catId = this.catId
       this.docs = []
       this.activeId = ''
       try {
-        const raw = await window.todoAPI.dbCall('getMeta', keyOf(this.catId))
+        const raw = await window.todoAPI.dbCall('getMeta', keyOf(catId))
+        if (token !== this.loadToken) return // 响应已过期:更新的项目切换接管了显示
         const arr = JSON.parse(raw || '[]')
         if (Array.isArray(arr)) this.docs = arr
-      } catch (e) { this.docs = [] }
+        this._docsCatId = catId // docs 归属与当前 catId 绑定,persist 据此再校验
+      } catch (e) { if (token === this.loadToken) this.docs = [] }
     },
     persist (keyOverride) {
+      const key = keyOverride || keyOf(this.catId)
+      // 归属再校验:key 指向的项目与当前 docs 的归属项目不一致(防抖跨越了项目切换)时放弃本次写,防止 A 项目文档写进 B 项目 meta
+      const keyCat = Number(String(key).slice('projectDocs:'.length))
+      if (this._docsCatId != null && !Number.isNaN(keyCat) && keyCat !== this._docsCatId) return
       try {
-        window.todoAPI.dbCall('setMeta', [keyOverride || keyOf(this.catId), JSON.stringify(this.docs)]).catch(() => {})
+        window.todoAPI.dbCall('setMeta', [key, JSON.stringify(this.docs)]).catch(() => {})
       } catch (e) { /* 无桥环境仅内存 */ }
       this.savedAt = Date.now()
     },
