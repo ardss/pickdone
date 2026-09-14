@@ -71,7 +71,7 @@ test('queueSave snapshots the taskId at enqueue time (task switch within the deb
   assert.equal(store.calls[0].payload.taskId, 'task-A', 'commits to the enqueue-time task')
 })
 
-test('queueSave dispatch failure surfaces onFail and does NOT restore the flags (original semantics)', async () => {
+test('queueSave dispatch failure surfaces onFail and restores the drained flags (F4 2026-09-15: failed batches retry like flushSave)', async () => {
   const store = makeStore()
   const { q, flags } = makeQueue(store, { taskId: () => 'task-1' })
   store.failNext = true
@@ -79,10 +79,11 @@ test('queueSave dispatch failure surfaces onFail and does NOT restore the flags 
   q.queueSave({})
   await sleep(10)
   assert.equal(flags.failed, true)
-  // flags were drained before dispatch and not restored -> a flush sends nothing
+  // flags were drained before dispatch but restored on failure -> a later flush retries them
   q.flushSave()
   await sleep(5)
-  assert.equal(store.calls.length, 1)
+  assert.equal(store.calls.length, 2, 'the failed batch is retried, not dropped')
+  assert.equal(store.calls[1].payload.patch.files, JSON.stringify([]))
 })
 
 test('flushSave dispatches dirty fields only; failure restores the drained keys for a later retry', async () => {

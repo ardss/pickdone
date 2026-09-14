@@ -8,8 +8,8 @@
  * - queueSave(patch): debounce 350ms; on fire, merge the immediate patch with all dirty-flag
  *   fields (read at callback time), drain the flags, then dispatch todo/updateTodoFields once.
  *   The taskId is snapshotted at ENQUEUE time so switching tasks within the debounce window can
- *   never write A's edits onto B. Dispatch failure surfaces the failure banner (flags are NOT
- *   restored here -- same as the original).
+ *   never write A's edits onto B. Dispatch failure restores the drained keys into the dirty map
+ *   (same retry semantics as flushSave) and surfaces the failure banner.
  * - flushSave(): immediate drain + dispatch of dirty fields only (no extra patch); on failure the
  *   drained keys are restored into the dirty map so a later queueSave/flush retries them.
  * - markDirty(k): flag a list-style field (subtasks/imgs/files/preds) whose value is collected
@@ -64,14 +64,20 @@ export function createSaveQueue (store, opts) {
     timer = setTimeout(async () => {
       if (!taskId) return
       if (opts.onSaving) opts.onSaving(true)
+      let drainedKeys = []
       try {
-        const { patch: dirtyPatch } = drain()
+        const { keys: drained, patch: dirtyPatch } = drain()
+        drainedKeys = drained
         const all = Object.assign({}, patch || {}, dirtyPatch)
         if (Object.keys(all).length) {
           await store.dispatch('todo/updateTodoFields', { taskId, patch: all })
         }
         if (opts.onDone) opts.onDone()
       } catch (e) {
+        // The dispatch failed: re-mark the drained keys (merged with anything marked since, same order
+        // as flushSave) so a later queueSave/flushSave retries them. Without this the drained batch was
+        // gone for good -- onFail surfaced the banner but the edits were silently never persisted.
+        restore(drainedKeys)
         if (opts.onFail) opts.onFail()
       } finally {
         if (opts.onSaving) opts.onSaving(false)
