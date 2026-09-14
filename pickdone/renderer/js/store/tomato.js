@@ -352,7 +352,7 @@ export default {
       }
       commit('patch', { status: 'default', startedAt: 0, remainSec: s.tomatoTime * 60 })
     },
-    completeFocus ({ state, commit, rootState, dispatch }) {
+    async completeFocus ({ state, commit, rootState, dispatch }) {
       const s = state
       // State precheck (mirrors startFocus): an anomalous call with no running focus must not mint a free tomato
       if (s.status !== 'startTomatoTime' || !s.startedAt) return
@@ -364,7 +364,16 @@ export default {
       // Accounting-time attach validation (root fix): a task deleted after focus start resolves to null →
       // the focus is booked as free (no focusTaskId, no bumpSnow) instead of firing a fire-and-forget
       // bumpSnow at a dead taskId whose minutes silently vanish
-      const focused = resolveFocusedTask(s.attachTodo, focusTodoPool(this))
+      let focused = resolveFocusedTask(s.attachTodo, focusTodoPool(this))
+      // 本窗 todoList 池可能陈旧(他窗/CLI 删除未同步到本窗):db 层 bumpSnow 的 `AND deleted=0` 会
+      // changes=0 静默丢积分。用廉价读 op getById(任意窗可调、含已删行)二次核验;已删/不存在按
+      // free focus 记账。核验通道本身失败则保持本窗判定(不因 IPC 故障丢记账)。
+      if (focused && window.todoAPI && window.todoAPI.dbCall) {
+        try {
+          const live = await window.todoAPI.dbCall('getById', focused.taskId)
+          if (!live || live.delete === true) focused = null
+        } catch (e) { /* empty */ }
+      }
       commit('addRecord', {
         // Accounting basis unified = endTime: stats (metrics)/rail (railSegs)/entry-card corrections (updateRecord) all use endTime
         tomatoId: 'tmt_f_' + s.startedAt, endTime: endTs, dateKey: dayjs(endTs).format(FMT.date),
