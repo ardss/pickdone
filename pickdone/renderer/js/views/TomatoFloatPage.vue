@@ -635,7 +635,7 @@ html.widget-preview .tomato--expand-noise { width: 240px; height: 320px; }
 .tf-noise .tf-noise__list::-webkit-scrollbar-thumb { background: rgba(120,130,140,.35); border-radius: 2px; }
 .tf-noise .tf-noise__list::-webkit-scrollbar-track { background: transparent; }
 /* 放弃专注弹窗 —— 紧凑简约版（布局层独立渲染） */
-.modal.modal--abandon { position: fixed; inset: 0; background: rgba(15, 22, 26, .42); z-index: var(--z-notify); display: flex; align-items: center; justify-content: center; }
+.modal.modal--abandon { position: fixed; inset: 0; background: rgba(15, 22, 26, .42); z-index: var(--z-overlay); display: flex; align-items: center; justify-content: center; }
 
 
 

@@ -171,7 +171,7 @@ export default {
 
 /* ===== 首启配置向导（OnboardingWizard）===== */
 .ob-mask {
-  position: fixed; inset: 0; z-index: var(--z-notify);
+  position: fixed; inset: 0; z-index: var(--z-overlay);
   display: flex; align-items: center; justify-content: center;
   background: rgba(0, 0, 0, .45);
 }
