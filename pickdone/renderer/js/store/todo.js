@@ -280,7 +280,14 @@ export default {
         categoryId, updateTime: now, syncTime: 0,
         taskContent: String(todoContent || '').trim(),
         taskDescribe: todoDescription || '',
-        taskId: genTaskId(userId), taskSort: Math.fround(sort),
+        // Sort-jitter mitigation (P2, root cause documented): same-day taskSort is computed from each
+        // window's possibly-stale in-memory min/max, so two windows adding to the same day can derive the
+        // IDENTICAL sort value; with equal keys the list order then flips depending on which row the DB
+        // returns first. A real fix needs an atomic DB-side next-sort channel (cross-module design, main
+        // process) -- recorded on the skip list. Low-risk mitigation here: a sub-half-step jitter
+        // (< 512/2 so top/bottom insertion semantics survive) keeps colliding rows distinct and orders
+        // them by actual arrival.
+        taskId: genTaskId(userId), taskSort: Math.fround(sort + (Math.random() - 0.5) * 256),
         todoTime: Number(todoTime) || Number(todoDate) || 0,
         userId, status: 'add', version: 0,
         // dayStart derivation mirrors the DB rule (db.js re-derives unconditionally from todoTime): when only
