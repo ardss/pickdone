@@ -58,7 +58,7 @@ jobs:
           echo "PW_VERSION=$PW_VERSION" >> "$GITHUB_ENV"
 
       - name: Cache playwright browsers
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-chromium-${{ env.PW_VERSION }}
