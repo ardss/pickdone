@@ -6,6 +6,18 @@ and versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- Expired task groups (yesterday's, last week's completed items) can be collapsed again — a cleanup routine was silently undoing every collapse click on them.
+- Project view: the dependency board's height now adapts to the actual header size instead of assuming a fixed one, so a header that grows with milestones no longer pushes the board below the fold.
+- Project view: switching between projects no longer keeps the previous project's active tab, expanded milestone rows or a leftover edit dialog.
+- Task saves queued at quit are retried in their original order if a write fails, so edits made in quick succession can no longer be re-applied out of order.
+- Recycle-bin rows no longer loop-syncing against themselves; quit-time listener accumulation and a dropped dirty-flag on rapid edits were fixed.
+
+### Changed
+- Milestone editing consolidated into a single dialog (title + date together), replacing the old two-step prompt chain; the project page scrolls as one column so header, tabs and body all stay reachable.
+- CSV imports take an automatic event-snapshot backup beforehand, and the import preview reports structured error codes instead of leaking internal messages.
+- Test infrastructure: the unit-test gate now fails on skipped or cancelled tests; live Electron tests moved out of the quick regression so pre-commit runs in about 45 seconds with no environment dependencies; CI splits live tests onto the Windows runner (the ubuntu job finishes in about a minute).
+
 ## [0.3.5] - 2026-09-12
 
 ### Added
