@@ -17,7 +17,7 @@
 1. **CHANGELOG.md**: `[Unreleased]` 内容整理成 `## [x.y.z] - YYYY-MM-DD` 段落(Added/Changed/Fixed 三段式,用户语言,不写内部术语);`[Unreleased]` 清空。
 2. **package.json**: `version` 字段与目标 tag **严格一致**(release.yml 第一步会校验 `v$version == tag`,不一致直接红)。
 3. **缓存戳**:凡动了 `assets/css/**` 或 index.html 直引资源,`npm run bump` 且与 css 改动同笔提交(check-cache-stamp 门禁)。
-4. **全量门禁**:`npm run check:all` 本机 29 项全绿(含本机专属的视觉回归第④组)。
+4. **全量门禁**:`npm run check:all` 本机全绿(②③ 两池 + 本机专属的视觉回归第④组;门禁数量随池内条目演进,以脚本输出汇总为准)。
 5. **实验功能口径**:新增/变更的实验功能在 CHANGELOG 标注 `(experimental, off by default)`,默认值必须为关。
 6. **工作区干净**:`git status --short` 无未提交变更。
 
