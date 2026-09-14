@@ -26,6 +26,7 @@ try {
 
 const dbm = require('../src/main/db.js')
 const core = require('../src/main/core/todo-core.js')
+const fixUtil = require('../src/main/fix-util.js') // pure helpers (no electron/IO): nextFreePath for attachment collisions
 const audit = require('./audit.js')
 const nlDate = require('./nl-date.cjs')
 
@@ -1620,7 +1621,10 @@ function addAttachment (input, file) {
   if (raw.length > ATTACH_MAX_BYTES) throw new CliError('file too large (max 50MB)', 'FILE_TOO_LARGE')
   const dir = path.join(userDataDir(), 'files')
   fs.mkdirSync(dir, { recursive: true })
-  const safe = `${t.taskId.replace(/[\\/:*?"<>|]/g, '_').replace(/\.\./g, '_')}_${Date.now()}_${cleanName.replace(/[\\/:*?"<>|]/g, '_')}`
+  const base = `${t.taskId.replace(/[\\/:*?"<>|]/g, '_').replace(/\.\./g, '_')}_${Date.now()}_${cleanName.replace(/[\\/:*?"<>|]/g, '_')}`
+  // Same-millisecond same-name uploads used to silently overwrite each other via writeFileSync; reuse the
+  // main process's fix (pure helper, src/main/fix-util.js nextFreePath) so every upload lands on its own file.
+  const safe = path.basename(fixUtil.nextFreePath(dir, base, p => fs.existsSync(p)))
   fs.writeFileSync(path.join(dir, safe), raw)
   const item = { url: 'local://' + encodeURIComponent(safe), name: cleanName, size: raw.length }
   const field = ATTACH_IMG_EXT.has(ext) ? 'image' : 'files'

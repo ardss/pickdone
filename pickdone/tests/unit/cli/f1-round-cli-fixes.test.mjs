@@ -91,3 +91,30 @@ test('fix5: removeAttachment with a local://..%2F.. traversal key cannot delete 
   lib.removeAttachment(String(t.taskId), 'file', 1)
   assert.ok(!fs.existsSync(inside), 'a well-formed attachment key still unlinks the physical file')
 })
+
+/* ---------- Fix 6: addAttachment uses nextFreePath (no same-millisecond overwrite) ---------- */
+test('fix6: addAttachment does not overwrite an existing same-name file (nextFreePath suffixing)', () => {
+  const t = seed({ taskContent: 'f1附件任务' })
+  const srcDir = fs.mkdtempSync(path.join(os.tmpdir(), 'f1-src-'))
+  const src = path.join(srcDir, 'note.txt')
+  fs.writeFileSync(src, 'first')
+  const first = lib.addAttachment(String(t.taskId), src)
+  // Freeze the clock and pre-create the exact filename the second upload would produce (same-millisecond
+  // same-name collision; the old `${Date.now()}_${name}` writeFileSync silently overwrote it)
+  const filesDir = path.join(process.env.TODO_DB_DIR, 'files')
+  const fixed = Date.now()
+  const collision = path.join(filesDir, `${t.taskId}_${fixed}_note.txt`)
+  fs.writeFileSync(collision, 'do-not-clobber')
+  const origNow = Date.now
+  Date.now = () => fixed
+  let second
+  try { second = lib.addAttachment(String(t.taskId), src) } finally { Date.now = origNow }
+  assert.equal(second.name, 'note.txt')
+  const listed = lib.listAttachments(String(t.taskId)).files
+  const keys = listed.map(x => decodeURIComponent(x.url.replace(/^local:\/\//, '')))
+  assert.ok(!keys.includes(path.basename(collision)), 'the pre-existing collision file is never silently reused/clobbered')
+  assert.equal(fs.readFileSync(collision, 'utf8'), 'do-not-clobber', 'pre-existing file content untouched')
+  assert.equal(listed.length, 2, 'both attachments land in the list with distinct files')
+  assert.equal(new Set(keys).size, 2, 'stored keys are distinct')
+  assert.equal(first.size, second.size)
+})
