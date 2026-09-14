@@ -588,7 +588,13 @@ const OPS = {
   bumpSnow: ({ taskId, minutes }) => {
     // Server-side clamping: arbitrary/negative values from the renderer (including the float window) must not tamper with the focus ledger (a single focus session capped at 600 minutes)
     const m = Math.max(0, Math.min(LIMITS.FOCUS_MAX_MINUTES, Math.floor(Number(minutes) || 0)))
-    const r = stmts.bumpSnow.run({ taskId, minutes: m, now: Date.now() }); return r.changes > 0
+    const r = stmts.bumpSnow.run({ taskId, minutes: m, now: Date.now() })
+    // Structured result: changes=0 used to collapse "missing" and "soft-deleted" into a bare false, so callers silently dropped focus credit; name the reason
+    if (r.changes === 0) {
+      const row = stmts.getById.get(taskId)
+      return { ok: false, reason: row ? 'deleted' : 'missing' }
+    }
+    return { ok: true, minutes: m }
   },
   getById: id => rowToTodo(stmts.getById.get(id)),
   getAll: ({ deleted = null } = {}) => {
