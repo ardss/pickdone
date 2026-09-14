@@ -462,19 +462,23 @@ async function bootstrap () {
       window.dispatchEvent(new CustomEvent('todo:focus-quickadd'))
     } else if (e.ctrlKey && e.key.toLowerCase() === 's') {
       e.preventDefault()
-      store.dispatch('todo/syncTodos').catch(e => console.error('[todo] manual sync failed', e))
+      // Same feedback surface as the SideNav sync icon: success/error notify, never silent
+      store.dispatch('todo/syncTodos').then(
+        () => window.appUI.$notify({ title: i18n.global.t('statsE.SideNav.syncCompleteMsg'), message: i18n.global.t('statsG.SideNav.syncDoneMsg'), type: 'success', duration: 2000 }),
+        e => window.appUI.$notify({ title: i18n.global.t('statsE.SideNav.syncFailedMsg'), message: (e && e.message) || i18n.global.t('statsG.SideNav.syncFailMsg'), type: 'error', duration: 4000 })
+      )
     } else if (!inEditor && e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === 'z') {
       e.preventDefault()
       store.dispatch('todo/undo').then(r => {
         const ok = r && r.ok
-        const label = ok && r.label ? i18n.global.t('statsH.main.undone') + '：' + r.label : i18n.global.t(ok ? 'statsH.main.undone' : 'statsH.main.undoEmpty')
+        const label = ok && r.label ? i18n.global.t('statsH.main.undoneLabel', { label: r.label }) : i18n.global.t(ok ? 'statsH.main.undone' : 'statsH.main.undoEmpty')
         window.appUI.$message[ok ? 'success' : 'info'](label)
       }).catch(e => console.error('[todo] undo failed:', e))
     } else if (!inEditor && ((e.ctrlKey && e.key.toLowerCase() === 'y') || (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'z'))) {
       e.preventDefault()
       store.dispatch('todo/redo').then(r => {
         const ok = r && r.ok
-        const label = ok && r.label ? i18n.global.t('statsH.main.redone') + '：' + r.label : i18n.global.t(ok ? 'statsH.main.redone' : 'statsH.main.redoEmpty')
+        const label = ok && r.label ? i18n.global.t('statsH.main.redoneLabel', { label: r.label }) : i18n.global.t(ok ? 'statsH.main.redone' : 'statsH.main.redoEmpty')
         window.appUI.$message[ok ? 'success' : 'info'](label)
       }).catch(e => console.error('[todo] redo failed:', e))
     }

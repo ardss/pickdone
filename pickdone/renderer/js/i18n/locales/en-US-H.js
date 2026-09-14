@@ -97,8 +97,10 @@ export default {
       toTarget: '{n} more to reach your target'
     },
     main: {
+      undoneLabel: 'Undone: {label}',
       undone: 'Undone',
       undoEmpty: 'Nothing to undo',
+      redoneLabel: 'Redone: {label}',
       redone: 'Redone',
       redoEmpty: 'Nothing to redo'
     },
