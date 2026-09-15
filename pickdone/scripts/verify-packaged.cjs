@@ -108,7 +108,7 @@ const platformPrebuild = `prebuilds/${platMap[process.platform]}-${archMap[proce
 // electron-builder names unpacked dirs with an arch suffix on linux (linux-arm64-unpacked)
 const dirName = process.platform === 'win32' ? 'win-unpacked'
   : `${process.platform}${process.arch === 'arm64' ? '-arm64' : ''}-unpacked`
-const vendorPrebuilds = path.join('dist', dirName, 'resources', 'vendor', 'better-sqlite3-multiple-ciphers', platformPrebuild)
+const vendorPrebuilds = path.join(unpacked, 'resources', 'vendor', 'better-sqlite3-multiple-ciphers', platformPrebuild)
 if (!fs.existsSync(vendorPrebuilds)) {
   console.error(`FAIL: ${vendorPrebuilds} 不存在（resources/vendor 驱动副本缺本平台 prebuild，打包版 DB 初始化必失败）`)
   process.exit(1)
