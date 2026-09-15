@@ -443,7 +443,9 @@ function queryTodos ({ deleted = 0, complete = null, categoryId = null, repeatId
     if (!cols.has(part[0]) || (part[1] && !/^(ASC|DESC)$/i.test(part[1]))) throw new Error('queryTodos: 非法 orderBy: ' + orderBy)
   }
   sql += ` ORDER BY ${orderBy}`
-  if (limit) { const n = Number(limit); if (!Number.isFinite(n) || n < 0) throw new Error('queryTodos: 非法 limit'); sql += ' LIMIT ' + n }
+  // F2 fix: `if (limit)` made limit=0 fail-open (0 === unlimited, while negatives threw) — validate on
+  // presence (null/undefined only), so 0 is an explicit "zero rows" and all invalid values fail closed.
+  if (limit !== null && limit !== undefined) { const n = Number(limit); if (!Number.isFinite(n) || n < 0) throw new Error('queryTodos: 非法 limit'); sql += ' LIMIT ' + n }
   return db.prepare(sql).all(p).map(rowToTodo)
 }
 
