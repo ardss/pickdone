@@ -1538,7 +1538,9 @@ function recordFix (ref, { minutes, date, at, rest, succeed, task, free }) {
     if (n > FOCUS_MAX_MINUTES) throw new CliError('focus duration max is ' + FOCUS_MAX_MINUTES + ' minutes (DB-layer clamp); got ' + n, 'USAGE')
     patch.focusDuration = Math.max(1, n)
   }
-  if (rest != null) patch.restDuration = Math.max(0, Math.min(120, parseInt(rest, 10) || 0))
+  // restDuration clamp = the same 600 the db layer applies (_recToRow: Math.min(600, ...)); the old CLI-only
+  // 120 clamp silently rewrote a legitimate 300-min rest to 120 while a direct db append kept 600.
+  if (rest != null) patch.restDuration = Math.max(0, Math.min(600, parseInt(rest, 10) || 0))
   if (succeed != null && succeed !== true) patch.succeed = !/^(false|no|0)$/i.test(String(succeed))
   if (date || at) {
     // endTime reposition: endTime defines placement; dateKey re-derived here (was App-side)

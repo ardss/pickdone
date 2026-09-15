@@ -149,3 +149,11 @@ test('h3-8: --range week is the ISO week; next7d keeps the rolling 7-day window'
   if (+dayjs().endOf('isoWeek') < rollEnd) assert.ok([...next7].some(d => !week.has(d)), 'next7d must extend beyond the iso week when the week ends first')
 })
 
+/* ---- fix 9: restDuration clamp ---- */
+test('h3-9: recordFix rest clamp is 600 (db-layer parity), not 120', () => {
+  const rec = lib.backfillRecord({ content: 'h3rest', date: ymdOf(-1), at: '20:00', minutes: 25 })
+  const fixed = lib.recordFix(rec.tomatoId, { rest: 400 })
+  assert.equal(fixed.rec.restDuration, 400, 'a legitimate 400-min rest must not be clamped to 120')
+  const clamped = lib.recordFix(rec.tomatoId, { rest: 700 })
+  assert.equal(clamped.rec.restDuration, 600, 'over-limit rest clamps to the same 600 the db layer enforces')
+})
