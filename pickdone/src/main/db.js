@@ -44,7 +44,10 @@ function loadDriver () {
 let db = null
 const stmts = {}
 /** Drop every cached prepared statement (they belong to the closed handle; re-init prepares fresh ones) */
-function stmtsClearAll () { for (const k of Object.keys(stmts)) delete stmts[k] }
+function stmtsClearAll () { for (const k of Object.keys(stmts)) delete stmts[k]; oplogReset() }
+
+/** Oplog statements cache the old handle after close/re-init — reset them with the rest */
+function oplogReset () { oplogInsert = null; oplogCount = null; oplogOpCount = 0 }
 
 /** Database encryption key (stored at userData/db.key, same directory as the DB so it travels with migrations).
  *  Threat model: prevents the single todos.db file from being read directly by sync drives/copies/forensic tools;
@@ -140,14 +143,19 @@ CREATE TABLE IF NOT EXISTS categories (
   sort          INTEGER,
   isFolder      INTEGER DEFAULT 0,
   parentId      INTEGER DEFAULT 0,
-  deleted       INTEGER DEFAULT 0
+  deleted       INTEGER DEFAULT 0,
+  deletedAt     INTEGER NOT NULL DEFAULT 0,
+  updatedAt     INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS filters (
   id        INTEGER PRIMARY KEY AUTOINCREMENT,
   name      TEXT,
   conds     TEXT,
   sort      INTEGER NOT NULL DEFAULT 0,
-  createdAt INTEGER
+  createdAt INTEGER,
+  deleted   INTEGER NOT NULL DEFAULT 0,
+  deletedAt INTEGER NOT NULL DEFAULT 0,
+  updatedAt INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS meta (
   key   TEXT PRIMARY KEY,
@@ -158,7 +166,10 @@ CREATE TABLE IF NOT EXISTS plan_chips (
   taskId TEXT NOT NULL,
   day    TEXT NOT NULL,
   mm     TEXT NOT NULL,
-  sort   INTEGER NOT NULL DEFAULT 0
+  sort   INTEGER NOT NULL DEFAULT 0,
+  deleted   INTEGER NOT NULL DEFAULT 0,
+  deletedAt INTEGER NOT NULL DEFAULT 0,
+  updatedAt INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_plan_chips_day  ON plan_chips (day);
 CREATE INDEX IF NOT EXISTS idx_plan_chips_task ON plan_chips (taskId);
@@ -175,9 +186,22 @@ CREATE TABLE IF NOT EXISTS tomato_records (
   manual        INTEGER NOT NULL DEFAULT 0,
   status        TEXT,
   abandonReason TEXT,
-  extra         TEXT
+  extra         TEXT,
+  deleted       INTEGER NOT NULL DEFAULT 0,
+  deletedAt     INTEGER NOT NULL DEFAULT 0,
+  updatedAt     INTEGER NOT NULL DEFAULT 0
 );
-CREATE INDEX IF NOT EXISTS idx_tomato_records_date ON tomato_records (dateKey);`
+CREATE INDEX IF NOT EXISTS idx_tomato_records_date ON tomato_records (dateKey);
+-- Change-capture log (P1 sync groundwork 2026-09-15): one row per successful write op, appended in
+-- call() next to the ledger hook. Ring-buffered (see appendOplog); consumers read deltas via the
+-- syncOplogSince op and GC coverage comes from periodic full snapshots. commitSyncBatch is the
+-- sync-ack echo path and deliberately does NOT log (a real sync engine must not feed itself).
+CREATE TABLE IF NOT EXISTS sync_oplog (
+  seq      INTEGER PRIMARY KEY AUTOINCREMENT,
+  entity   TEXT NOT NULL,
+  entityId TEXT NOT NULL,
+  ts       INTEGER NOT NULL
+);`
 
 
 const FILTER_DATE_MODES = new Set(['all', 'today', 'week', 'overdue', 'none'])
@@ -296,6 +320,25 @@ function initInner (userDataPath) {
       }
     } },
     { v: 4, fn: d => { const c=d.prepare('PRAGMA table_info(todos)').all().map(x=>x.name); if(!c.includes('predecessors')) d.exec('ALTER TABLE todos ADD COLUMN predecessors TEXT'); return true } },
+    { v: 5, fn: d => {
+      // P1 sync groundwork (2026-09-15): tombstone + updatedAt columns on every synced table.
+      // Only todos carried updatedAt/deletedAt before; filters/plan_chips/tomato_records deletes were
+      // physical (unpropagatable) and categories had no change timestamp. Defaults keep existing rows.
+      const want = {
+        categories: ['deletedAt INTEGER NOT NULL DEFAULT 0', 'updatedAt INTEGER NOT NULL DEFAULT 0'],
+        filters: ['deleted INTEGER NOT NULL DEFAULT 0', 'deletedAt INTEGER NOT NULL DEFAULT 0', 'updatedAt INTEGER NOT NULL DEFAULT 0'],
+        plan_chips: ['deleted INTEGER NOT NULL DEFAULT 0', 'deletedAt INTEGER NOT NULL DEFAULT 0', 'updatedAt INTEGER NOT NULL DEFAULT 0'],
+        tomato_records: ['deleted INTEGER NOT NULL DEFAULT 0', 'deletedAt INTEGER NOT NULL DEFAULT 0', 'updatedAt INTEGER NOT NULL DEFAULT 0']
+      }
+      for (const [table, cols] of Object.entries(want)) {
+        const have = new Set(d.prepare('PRAGMA table_info(' + table + ')').all().map(c => c.name))
+        for (const col of cols) {
+          const name = col.split(' ')[0]
+          if (!have.has(name)) d.exec(`ALTER TABLE ${table} ADD COLUMN ${col}`)
+        }
+      }
+      return true
+    } },
   ]
   let ver = getVer()
   // Failed migration must abort the loop (not `continue`): advancing past a failed migration would stamp the
@@ -497,27 +540,33 @@ const OPS = {
   },
   countSeedTodos: () => db.prepare("SELECT COUNT(*) n FROM todos WHERE substr(id, 1, 5) = 'seed_'").get().n,
   upsertCategory: (c) => {
-    db.prepare(`INSERT INTO categories (id,userId,name,color,createdAt,sort,isFolder,parentId,deleted)
-      VALUES (@id,@userId,@name,@color,@createdAt,@sort,@isFolder,@parentId,@deleted)
+    const now = Date.now()
+    const row = { ...c, deletedAt: (c && c.deletedAt) || 0, updatedAt: (c && c.updatedAt) || now }
+    db.prepare(`INSERT INTO categories (id,userId,name,color,createdAt,sort,isFolder,parentId,deleted,deletedAt,updatedAt)
+      VALUES (@id,@userId,@name,@color,@createdAt,@sort,@isFolder,@parentId,@deleted,@deletedAt,@updatedAt)
       ON CONFLICT(id) DO UPDATE SET name=excluded.name, color=excluded.color, createdAt=excluded.createdAt,
-        sort=excluded.sort, isFolder=excluded.isFolder, parentId=excluded.parentId, deleted=excluded.deleted
-      `).run(c) // 全字段 DO UPDATE:漏 isFolder/parentId 曾致拖入/拖出文件夹静默打回(2026-09-04 深审 P0);userId 不更新(行属不变)
+        sort=excluded.sort, isFolder=excluded.isFolder, parentId=excluded.parentId, deleted=excluded.deleted,
+        deletedAt=excluded.deletedAt, updatedAt=excluded.updatedAt
+      `).run(row) // 全字段 DO UPDATE:漏 isFolder/parentId 曾致拖入/拖出文件夹静默打回(2026-09-04 深审 P0);userId 不更新(行属不变)
     return true
   },
   getAllCategories: () => db.prepare('SELECT * FROM categories WHERE deleted = 0 ORDER BY sort').all().map(rowToCategory),
   // ===== Saved filters (smart lists): conds stores the condition JSON (catId/priority/dateMode) =====
-  filterList: () => db.prepare('SELECT * FROM filters ORDER BY sort, id').all().map(r => ({ id: r.id, name: r.name, conds: parseConds(r.conds), sort: r.sort })),
+  // Deletes are tombstones (P1 sync groundwork): a soft-deleted filter row must survive to propagate
+  // to other devices; the recycle semantics stay invisible because filterList filters deleted=0.
+  filterList: () => db.prepare('SELECT * FROM filters WHERE deleted = 0 ORDER BY sort, id').all().map(r => ({ id: r.id, name: r.name, conds: parseConds(r.conds), sort: r.sort })),
   filterUpsert: f => {
     const name = String(f && f.name || '').slice(0, 50)
     const conds = JSON.stringify(normConds(f && f.conds))
     if (f.id) {
-      db.prepare('UPDATE filters SET name=?, conds=?, sort=? WHERE id=?').run(name, conds, f.sort || 0, f.id)
+      // Un-deletes on conflict: re-saving a tombstoned id intentionally resurrects it
+      db.prepare('UPDATE filters SET name=?, conds=?, sort=?, deleted=0, deletedAt=0, updatedAt=? WHERE id=?').run(name, conds, f.sort || 0, Date.now(), f.id)
       return f.id
     }
-    const r = db.prepare('INSERT INTO filters (name, conds, sort, createdAt) VALUES (?, ?, ?, ?)').run(name, conds, f.sort || 0, Date.now())
+    const r = db.prepare('INSERT INTO filters (name, conds, sort, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?)').run(name, conds, f.sort || 0, Date.now(), Date.now())
     return Number(r.lastInsertRowid)
   },
-  filterDelete: id => { db.prepare('DELETE FROM filters WHERE id = ?').run(id); return true },
+  filterDelete: id => { db.prepare('UPDATE filters SET deleted=1, deletedAt=?, updatedAt=? WHERE id = ?').run(Date.now(), Date.now(), id); return true },
   // Per-day task total/completed counts (by due date), plus completion counts by "completion day" (unaffected by due date)
   // scheduledDay stores millisecond timestamps; callers may pass a YYYYMMDD integer (CLI), uniformly converted to a millisecond range
   _dayBounds: ({ from, to }) => {
@@ -560,14 +609,17 @@ const OPS = {
     // 2026-09-04 根修:账本迁 tomato_records 行表后聚合一跳完成
     // succeed=1 only: abandoned pomodoros are not focus time — same filter as the renderer's StatisticsView
     const rows = db.prepare(`SELECT dateKey ds, SUM(focusDuration) focus FROM tomato_records
-      WHERE succeed = 1 AND dateKey BETWEEN ? AND ? GROUP BY dateKey`).all(
+      WHERE succeed = 1 AND deleted = 0 AND dateKey BETWEEN ? AND ? GROUP BY dateKey`).all(
         fKey ? fKey : '0000-00-00', tKey ? tKey : '9999-99-99')
     return rows.map(r => ({ ds: r.ds, focus: r.focus || 0 }))
   },
   // ===== Plan chips (timeline planning layer) formal row storage (2026-09-03 root fix) =====
   // Previously meta.dayPlanState JSON whole-package + LS dual-write with three-way concurrency — the architectural root of four data-loss incidents;
   // with row storage there is a single write channel (SQLite serialized) + write-op broadcast + cascading cleanup on task deletion, so the race is structurally eliminated.
-  planAll: () => db.prepare('SELECT id, taskId, day, mm FROM plan_chips ORDER BY day, mm, sort').all(),
+  // plan_chips deletes are tombstones (P1 sync groundwork): user-facing chip removals must propagate
+  // to other devices. planPrune is time-based GC (old days fall off) and stays physical — devices
+  // reconcile pruned history via periodic full snapshots, so tombstoning it would only grow the table.
+  planAll: () => db.prepare('SELECT id, taskId, day, mm FROM plan_chips WHERE deleted = 0 ORDER BY day, mm, sort').all(),
   planAddMany: chips => {
     const list = (Array.isArray(chips) ? chips : [chips]).map(c => ({
       id: (c && c.id) || 'pl_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
@@ -578,30 +630,32 @@ const OPS = {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(c.day)) throw new Error('planAddMany: day 必须 YYYY-MM-DD')
       if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(c.mm)) throw new Error('planAddMany: mm 必须 HH:mm')
     }
-    const ins = db.prepare('INSERT INTO plan_chips (id, taskId, day, mm, sort) VALUES (@id,@taskId,@day,@mm,@sort) ON CONFLICT(id) DO UPDATE SET taskId=excluded.taskId, day=excluded.day, mm=excluded.mm, sort=excluded.sort')
-    const tr = db.transaction(() => list.forEach(c => ins.run(c))); tr()
+    const ins = db.prepare('INSERT INTO plan_chips (id, taskId, day, mm, sort, deleted, deletedAt, updatedAt) VALUES (@id,@taskId,@day,@mm,@sort,0,0,@updatedAt) ON CONFLICT(id) DO UPDATE SET taskId=excluded.taskId, day=excluded.day, mm=excluded.mm, sort=excluded.sort, deleted=0, deletedAt=0, updatedAt=excluded.updatedAt')
+    const now = Date.now()
+    const tr = db.transaction(() => list.forEach(c => ins.run({ ...c, updatedAt: now }))); tr()
     return list.map(c => c.id)
   },
   planUpdateChip: ({ id, day, mm }) => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(String(day))) throw new Error('planUpdateChip: day 必须 YYYY-MM-DD')
     if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(String(mm))) throw new Error('planUpdateChip: mm 必须 HH:mm')
-    const r = db.prepare('UPDATE plan_chips SET day=?, mm=? WHERE id=?').run(String(day), String(mm), String(id))
+    const r = db.prepare('UPDATE plan_chips SET day=?, mm=?, updatedAt=? WHERE id=? AND deleted=0').run(String(day), String(mm), Date.now(), String(id))
     return r.changes > 0
   },
   planRemoveIds: ids => {
     const list = Array.isArray(ids) ? ids : [ids]
-    const del = db.prepare('DELETE FROM plan_chips WHERE id = ?')
-    const tr = db.transaction(() => list.forEach(i => del.run(String(i)))); tr()
+    const del = db.prepare('UPDATE plan_chips SET deleted=1, deletedAt=?, updatedAt=? WHERE id = ?')
+    const now = Date.now()
+    const tr = db.transaction(() => list.forEach(i => del.run(now, now, String(i)))); tr()
     return true
   },
   planMoveTask: ({ taskId, fromDay, toDay }) => {
     const okDay = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v))
     if (!okDay(fromDay) || !okDay(toDay)) return 0 // reject malformed day keys outright, preventing chips from landing in invisible buckets
-    const r = db.prepare('UPDATE plan_chips SET day=? WHERE taskId=? AND day=?').run(String(toDay), String(taskId), String(fromDay))
+    const r = db.prepare('UPDATE plan_chips SET day=?, updatedAt=? WHERE taskId=? AND day=? AND deleted=0').run(String(toDay), Date.now(), String(taskId), String(fromDay))
     return r.changes
   },
-  planDeleteTask: taskId => { db.prepare('DELETE FROM plan_chips WHERE taskId=?').run(String(taskId)); return true },
-  planDeleteTaskDay: ({ taskId, day }) => { db.prepare('DELETE FROM plan_chips WHERE taskId=? AND day=?').run(String(taskId), String(day)); return true },
+  planDeleteTask: taskId => { db.prepare('UPDATE plan_chips SET deleted=1, deletedAt=?, updatedAt=? WHERE taskId=?').run(Date.now(), Date.now(), String(taskId)); return true },
+  planDeleteTaskDay: ({ taskId, day }) => { db.prepare('UPDATE plan_chips SET deleted=1, deletedAt=?, updatedAt=? WHERE taskId=? AND day=?').run(Date.now(), Date.now(), String(taskId), String(day)); return true },
   planPrune: ({ keepDays }) => {
     const keep = Array.isArray(keepDays) ? keepDays.filter(d => /^\d{4}-\d{2}-\d{2}$/.test(String(d))) : []
     if (!keep.length) return 0
@@ -653,14 +707,14 @@ const OPS = {
     }
     return rec
   },
-  tomatoAll: () => db.prepare('SELECT * FROM tomato_records ORDER BY endTime DESC').all().map(OPS._rowToRec),
+  tomatoAll: () => db.prepare('SELECT * FROM tomato_records WHERE deleted = 0 ORDER BY endTime DESC').all().map(OPS._rowToRec),
   tomatoAppendMany: rows => {
     const list = Array.isArray(rows) ? rows : [rows]
-    const ins = db.prepare(`INSERT INTO tomato_records (tomatoId, endTime, dateKey, focus, focusTaskId, focusDuration, rest, restDuration, succeed, manual, status, abandonReason, extra)
-      VALUES (@tomatoId, @endTime, @dateKey, @focus, @focusTaskId, @focusDuration, @rest, @restDuration, @succeed, @manual, @status, @abandonReason, @extra)
+    const ins = db.prepare(`INSERT INTO tomato_records (tomatoId, endTime, dateKey, focus, focusTaskId, focusDuration, rest, restDuration, succeed, manual, status, abandonReason, extra, deleted, deletedAt, updatedAt)
+      VALUES (@tomatoId, @endTime, @dateKey, @focus, @focusTaskId, @focusDuration, @rest, @restDuration, @succeed, @manual, @status, @abandonReason, @extra, 0, 0, @updatedAt)
       ON CONFLICT(tomatoId) DO UPDATE SET endTime=excluded.endTime, dateKey=excluded.dateKey, focus=excluded.focus, focusTaskId=excluded.focusTaskId,
         focusDuration=excluded.focusDuration, rest=excluded.rest, restDuration=excluded.restDuration, succeed=excluded.succeed, manual=excluded.manual,
-        status=excluded.status, abandonReason=excluded.abandonReason, extra=excluded.extra`)
+        status=excluded.status, abandonReason=excluded.abandonReason, extra=excluded.extra, deleted=0, deletedAt=0, updatedAt=excluded.updatedAt`)
     // F2 2026-09-15 行级容错(架构根因:批量接口的失败粒度应是"行级"而非"批级"):
     // 此前任一行缺 tomatoId/endTime 抛错回滚整批 → 渲染端 pending 队列被一条坏行劫持无限重试,
     // 同批合法账本行永不落库。现改为事务内跳过无效行并记入返回值 rejected,合法行照常落库;
@@ -681,7 +735,7 @@ const OPS = {
       // dateKey 从调用方传入值起不再被信任,格式校验降级为派生后的防御断言
       r.dateKey = dayjs(r.endTime).format('YYYY-MM-DD')
       if (!/^\d{4}-\d{2}-\d{2}$/.test(String(r.dateKey))) { reject('dateKey derive failed'); return }
-      ins.run(r)
+      ins.run({ ...r, updatedAt: Date.now() })
       accepted++
     }))
     tr()
@@ -697,13 +751,16 @@ const OPS = {
     const r = OPS._recToRow(rec)
     const res = db.prepare(`UPDATE tomato_records SET endTime=@endTime, dateKey=@dateKey, focus=@focus, focusTaskId=@focusTaskId,
       focusDuration=@focusDuration, rest=@rest, restDuration=@restDuration, succeed=@succeed, manual=@manual,
-      status=@status, abandonReason=@abandonReason, extra=@extra WHERE tomatoId=@tomatoId`).run(Object.assign({ tomatoId: String(tomatoId) }, r))
+      status=@status, abandonReason=@abandonReason, extra=@extra, updatedAt=@updatedAt WHERE tomatoId=@tomatoId`).run(Object.assign({ tomatoId: String(tomatoId), updatedAt: Date.now() }, r))
     return res.changes > 0
   },
+  // Tombstone delete (P1 sync groundwork): ledger removals must propagate to other devices; every
+  // reader (tomatoAll/tomatoByDay) filters deleted=0, so behaviour matches the old physical delete.
   tomatoRemoveByIds: ids => {
     const list = Array.isArray(ids) ? ids : [ids]
-    const del = db.prepare('DELETE FROM tomato_records WHERE tomatoId = ?')
-    const tr = db.transaction(() => list.forEach(i => del.run(String(i))))
+    const del = db.prepare('UPDATE tomato_records SET deleted=1, deletedAt=?, updatedAt=? WHERE tomatoId = ?')
+    const now = Date.now()
+    const tr = db.transaction(() => list.forEach(i => del.run(now, now, String(i))))
     tr()
     return true
   },
@@ -725,6 +782,13 @@ const OPS = {
     OPS.tomatoAppendMany(list)
     delBlob()
     return list.length
+  },
+  // Delta read for the (future) sync engine and tests: oplog rows strictly after sinceSeq, oldest first.
+  // limit guards the first pull on a large existing log; callers page through via the returned max seq.
+  syncOplogSince: ({ sinceSeq = 0, limit = 2000 } = {}) => {
+    const s = Number(sinceSeq) || 0
+    const n = Math.max(1, Math.min(10000, Math.floor(Number(limit) || 2000)))
+    return db.prepare('SELECT seq, entity, entityId, ts FROM sync_oplog WHERE seq > ? ORDER BY seq ASC LIMIT ?').all(s, n)
   },
 }
 
@@ -749,6 +813,7 @@ function call (op, params) {
   if (!fn) throw new Error('[TodoDB] 未知操作: ' + op)
   const r = fn(params)
   if (ledgerChangedHook && !ledgerHookSuppressCount && LEDGER_WRITE_OPS.has(op)) { try { ledgerChangedHook(op) } catch { /* 广播失败不阻断落库 */ } }
+  if (op !== 'commitSyncBatch' && WRITE_OPS.has(op)) appendOplog(oplogEntriesFor(op, params, r))
   return r
 }
 
@@ -765,6 +830,65 @@ const WRITE_OPS = new Set([
 ])
 const isWriteOp = op => WRITE_OPS.has(op)
 
+/* ---------- Change-capture oplog (P1 sync groundwork, 2026-09-15) ---------- */
+// One sync_oplog row per successful write op. Appended in call() (db layer, like the ledger hook) so
+// IPC, aux windows and the CLI are all captured. commitSyncBatch is excluded — it is the sync-ack
+// echo path and a real sync engine must not re-capture the rows it just acknowledged. The log is a
+// ring buffer (SYNC_OPLOG_KEEP): long-range history gaps are covered by periodic full snapshots, not
+// by unbounded log retention.
+const SYNC_OPLOG_KEEP = 10000
+// entity + affected ids per write op (batch ops expand to one row per id so deltas are row-granular)
+function oplogEntriesFor (op, params, result) {
+  const now = Date.now()
+  const one = (entity, entityId) => ({ entity, entityId: String(entityId), ts: now })
+  const arr = (entity, ids) => (Array.isArray(ids) ? ids : [ids]).filter(v => v != null && v !== '').map(id => one(entity, id))
+  switch (op) {
+    case 'upsert': return [one('todo', params && params.taskId)]
+    case 'upsertMany': return arr('todo', (params || []).map(t => t && t.taskId))
+    case 'bumpSnow': return [one('todo', params && params.taskId)]
+    case 'hardDelete': case 'hardDeleteMany': return arr('todo', params)
+    case 'purgeRecycleBin': case 'purgeSeedTodos': return [one('todo', '*gc*')]
+    case 'upsertCategory': return [one('category', params && params.id)]
+    case 'filterUpsert': return [one('filter', result)]
+    case 'filterDelete': return [one('filter', params)]
+    case 'planAddMany': return arr('plan', result)
+    case 'planUpdateChip': return [one('plan', params && params.id)]
+    case 'planRemoveIds': return arr('plan', params)
+    case 'planMoveTask': return [one('plan', params && params.taskId)]
+    case 'planDeleteTask': case 'planDeleteTaskDay': return [one('plan', params && params.taskId)]
+    case 'planPrune': return [one('plan', '*gc*')]
+    case 'setMeta': return [one('meta', Array.isArray(params) ? params[0] : params)]
+    case 'tomatoAppendMany': {
+      const ids = (Array.isArray(params) ? params : [params]).map(r => r && r.tomatoId).filter(Boolean)
+      return arr('tomato', ids)
+    }
+    case 'tomatoUpdateById': return [one('tomato', params && params.tomatoId)]
+    case 'tomatoRemoveByIds': return arr('tomato', params)
+    case 'tomatoMigrateFromMeta': return [one('tomato', '*gc*')]
+    default: return []
+  }
+}
+
+let oplogInsert = null
+let oplogCount = null
+let oplogOpCount = 0
+function appendOplog (entries) {
+  if (!entries.length) return
+  try {
+    if (!oplogInsert) {
+      oplogInsert = db.prepare('INSERT INTO sync_oplog (entity, entityId, ts) VALUES (?, ?, ?)')
+      oplogCount = db.prepare('SELECT COUNT(*) n FROM sync_oplog')
+    }
+    const tr = db.transaction(() => entries.forEach(e => oplogInsert.run(e.entity, e.entityId, e.ts)))
+    tr()
+    // Cheap amortized ring-buffer trim: check every 200 appends, not every write
+    if (++oplogOpCount % 200 === 0) {
+      const n = oplogCount.get().n
+      if (n > SYNC_OPLOG_KEEP) db.prepare('DELETE FROM sync_oplog WHERE seq <= (SELECT MAX(seq) FROM sync_oplog) - ?').run(SYNC_OPLOG_KEEP)
+    }
+  } catch (e) { log.warn('[TodoDB] oplog append failed (write itself is unaffected):', e.message) }
+}
+
 /** Explicitly close the handle (for tests switching directories / graceful process exit); silent when uninitialized or already closed.
  *  P2 2026-09-11: close() used to leave the module var set, so isOpen() kept returning true after close
  *  and nothing distinguished "closed" from "open". Null it (and drop the dead prepared statements) so
@@ -778,4 +902,4 @@ function close () {
 // Initialized probe: within the same process (the main process's CSV import), reuse the existing connection; a second init rebuilding the handle on the same file is forbidden
 function isOpen () { return !!db }
 
-module.exports = { init, call, queryTodos, normalizeContent, isWriteOp, isOpen, close, setLedgerChangedHook, suppressLedgerHook, LEDGER_WRITE_OPS, SCHEMA }
+module.exports = { init, call, queryTodos, normalizeContent, isWriteOp, isOpen, close, setLedgerChangedHook, suppressLedgerHook, LEDGER_WRITE_OPS, WRITE_OPS, SCHEMA }
