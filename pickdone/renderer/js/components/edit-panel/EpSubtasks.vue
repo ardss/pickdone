@@ -15,7 +15,7 @@
     </div>
     <div class="ep-row ep-addsub">
       <img class="ep-ico" src="app://app/assets/img/icon-sublist.svg">
-      <input v-model="newSub" :placeholder="$t('statsJ.EditPanel.addSubtaskAria')+subDoneText" :aria-label="$t('statsJ.EditPanel.addSubtask')" @keyup.enter="addSub" class="ep-addsub-input"/>
+      <input v-model="newSub" :placeholder="$t('statsJ.EditPanel.addSubtaskAria')+subDoneText" :aria-label="$t('statsJ.EditPanel.addSubtask')" @keydown.enter="onSubEnter" class="ep-addsub-input"/>
     </div>
   </div>
 </template>
@@ -46,6 +46,12 @@ export default {
     }
   },
   methods: {
+    // IME guard: keyup.enter can't see the 229 composition flag, so listen on keydown and
+    // skip the Enter that commits an IME composition
+    onSubEnter (e) {
+      if (e.isComposing || e.keyCode === 229) return
+      this.addSub()
+    },
     addSub () {
       const text = this.newSub.trim()
       if (!text) return
