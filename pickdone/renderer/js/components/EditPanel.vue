@@ -73,7 +73,7 @@
                 @click.stop="removeTag(t)" @keydown.enter.prevent.stop="removeTag(t)"></span>
         </span>
         <input class="ep-tag-input" v-model="tagInput" :placeholder="$t('statsJ.EditPanel.addTagHint')" :aria-label="$t('statsJ.EditPanel.addTag')"
-               @keydown.enter.prevent="addTag" @blur="addTag"/>
+               @keydown.enter.prevent="onTagEnter" @blur="addTag"/>
       </div>
 
       <div v-if="inRecycle" class="ep-recycle-banner">
@@ -641,6 +641,11 @@ export default {
       this.markDirty('preds'); this.queueSave({})
     },
     tt (k) { const s = String(k || ''); return (s.startsWith('statsE.') || s.startsWith('statsJ.')) ? this.$t(s) : s },
+    // IME guard: the Enter that commits a composition (keyCode 229) must not add a half-typed tag
+    onTagEnter (e) {
+      if (e.isComposing || e.keyCode === 229) return
+      this.addTag()
+    },
     addTag () {
       const name = (this.tagInput || '').trim().replace(/^#+/, '')
       this.tagInput = ''
