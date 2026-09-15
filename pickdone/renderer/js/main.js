@@ -6,6 +6,7 @@ const Vue = window.Vue // vue3 global build (includes createApp and the runtime 
 const ElementPlus = window.ElementPlus
 
 import store from './store/index.js'
+import { onExternalHabitBlob } from './store/habits.js'
 import { loadRuntime } from './store/runtimeState.js'
 import router from './router.js'
 import App from './app-root.vue'
@@ -59,6 +60,8 @@ app.config.globalProperties.$announce = function (m) {
 import i18n from './i18n/index.js'
 
 app.use(store)
+// Aux-window habit edits must feed back into main-window Vuex state, or the next main-window persist overwrites them with a stale copy (LWW)
+onExternalHabitBlob(blob => store.commit('habits/applyExternal', blob))
 app.use(router)
 app.use(i18n)
 // vue-i18n@9 legacy:true only provides $t inside component instances; globalProperties needs explicit injection
