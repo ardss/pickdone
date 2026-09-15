@@ -1659,7 +1659,7 @@ function settingsList () {
   for (const [key, info] of all) rows.push({ key, type: info.type, options: info.options || null, value: key in doc ? doc[key] : null })
   return rows
 }
-function settingsSet (key, value) {
+function settingsSet (key, value, { force = false } = {}) {
   if (SETTINGS_DENIED.has(key)) throw new CliError('"' + key + '" is a protected key and cannot be set via CLI', 'DENIED_KEY')
   const info = settingsKnown(key)
   if (!info) throw new CliError('unknown setting "' + key + '" — settings list to browse keys', 'UNKNOWN_KEY')
@@ -1675,8 +1675,17 @@ function settingsSet (key, value) {
     if (!info.options.includes(String(value))) throw new CliError(`"${key}" expects one of: ${info.options.join(' | ')} (got "${value}")`, 'USAGE')
     v = String(value)
   }
+  // CAS guard (fix 2026-09-16): settingsSet is a read-modify-write of the WHOLE settingsState package and the
+  // write refreshes _savedAt — if the App wrote settings between our read and write, the CLI used to overwrite
+  // the App's newer package with a stale one (and the App would then mirror that stale package back on next
+  // launch, washing the user's newer settings away). Snapshot _savedAt at entry, re-read the meta just before
+  // the write, and refuse on drift. --force bypasses the check deliberately.
+  const savedAtSnapshot = settingsDoc()._savedAt || 0
   const doc = settingsDoc()
   const before = key in doc ? doc[key] : null
+  if (!force && (settingsDoc()._savedAt || 0) !== savedAtSnapshot) {
+    throw new CliError('settings changed in App since read; re-run or use --force', 'SETTINGS_STALE')
+  }
   doc[key] = v
   doc._savedAt = Date.now()
   doc.schemaV = doc.schemaV || 1

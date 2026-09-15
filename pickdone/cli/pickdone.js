@@ -960,7 +960,7 @@ async function main () {
       if (op === 'set') {
         const value = srest.join(' ')
         if (!key || !value) throw new lib.CliError('usage: settings set <key> <value>   e.g. settings set backupDir "D:\\backups" / settings set colorMode dark', 'USAGE')
-        return okMsg(lib.settingsSet(key, value), ['settings list --json to verify', 'a running App applies it within ~2s'])
+        return okMsg(lib.settingsSet(key, value, { force: !!opts.force }), ['settings list --json to verify', 'a running App applies it within ~2s'])
       }
       throw new lib.CliError('unknown sub-operation "' + op + '" (valid: list/get/set)', 'UNKNOWN_ARG')
     }
