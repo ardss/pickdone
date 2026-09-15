@@ -414,7 +414,7 @@ function assertHasTaskId (t) {
 
 const OPS = {
   upsert: t => { assertHasTaskId(t); stmts.upsert.run(todoToRow(t)); return true },
-  upsertMany: list => { (Array.isArray(list) ? list : []).forEach(assertHasTaskId); stmts.upsertMany(list.map(todoToRow)); return true },
+  upsertMany: list => { if (!Array.isArray(list)) throw new Error('[TodoDB] upsertMany: list must be an array, got ' + typeof list); list.forEach(assertHasTaskId); stmts.upsertMany(list.map(todoToRow)); return true },
   // Atomic sync-commit (W3 2026-09-12): row upserts + todosVersion cursor advance in ONE transaction.
   // Why atomic: writing rows with status='sync' non-atomically and crashing between the upserts and the
   // setMeta would leave rows marked 'sync' in the DB while todosVersion stayed behind — the dirty-row
