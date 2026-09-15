@@ -15,7 +15,9 @@ import assert from 'node:assert/strict'
 import os from 'node:os'
 import path from 'node:path'
 import fs from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { createRequire } from 'module'
+import { fileURLToPath } from 'node:url'
 
 process.env.TODO_DB_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'todo-cli-h3-'))
 const require_ = createRequire(import.meta.url)
@@ -25,6 +27,7 @@ const dayjs = require_('dayjs')
 
 db.init(process.env.TODO_DB_DIR)
 
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 
 const ymdOf = offset => dayjs().add(offset, 'day').format('YYYY-MM-DD')
 
@@ -85,5 +88,28 @@ test("h3-3: expiredUncompletedTodoRange rejects 'today' (renderer enum parity)",
   assert.throws(() => lib.settingsSet('expiredUncompletedTodoRange', 'today'), e => e.code === 'USAGE')
   const r = lib.settingsSet('expiredUncompletedTodoRange', '30d')
   assert.equal(r.value, '30d')
+})
+
+/* ---- fix 4: guessUserId fallback ---- */
+test('h3-4: empty-DB userId fallback is 840001 (renderer parity), applied to created tasks', () => {
+  // fresh DB in a subprocess: the shared test DB already has rows (userId 1), so the fallback is unreachable here
+  const script = `
+    const assert = require('assert')
+    process.env.TODO_DB_DIR = ${JSON.stringify(fs.mkdtempSync(path.join(os.tmpdir(), 'todo-cli-h3-fresh-')))}
+    const lib = require(${JSON.stringify(path.join(ROOT, 'cli/lib.js'))})
+    assert.equal(lib.guessUserId(), 840001)
+    const t = lib.addTodo({ content: 'h3uid', date: 'today' })
+    const row = lib.open().call('getById', t.taskId)
+    assert.equal(row.userId, 840001, 'task created on an empty DB must carry the renderer userId, not 0')
+    console.log('OK')
+  `
+  const out = execFileSync(process.execPath, ['-e', script], {
+    encoding: 'utf8',
+    cwd: ROOT,
+    env: { ...process.env, NODE_PATH: path.join(ROOT, 'node_modules') },
+    // the -e script needs assert + a module resolver anchored at the repo
+    stdio: ['ignore', 'pipe', 'pipe']
+  })
+  assert.ok(out.includes('OK'))
 })
 

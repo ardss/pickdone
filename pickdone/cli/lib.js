@@ -188,11 +188,14 @@ function resolveTask (input, pool) {
   throw new CliError(`task not found: "${input}"`, 'TASK_NOT_FOUND')
 }
 
-/** userId: take user_id from any row in the DB (consistent with the UI's login state) */
+/** userId: take user_id from any row in the DB (consistent with the UI's login state).
+ *  Empty-DB fallback is 840001 — the same hard-coded userId the renderer uses (renderer/js/utils/core.js
+ *  userId: 840001, demo-data.js alike). The old fallback 0 created tasks the App could not associate with
+ *  the logged-in user. (todo-core.js genTaskId takes the userId as a parameter; no shared constant exists.) */
 function guessUserId () {
   const row = open().call('queryTodos', { deleted: 0, limit: 1 })[0] ||
     open().call('queryTodos', { deleted: 1, limit: 1 })[0]
-  return row ? row.userId : 0
+  return row ? row.userId : 840001
 }
 
 const genTaskId = core.genTaskId
@@ -1831,7 +1834,7 @@ function listReady (categoryId = null) {
 const attachApi = require('./lib-attachments.cjs')
 const { addAttachment, listAttachments, removeAttachment } = attachApi({ resolveTask, liveTasks, patchTodo, userDataDir, CliError })
 module.exports = {
-  CliError, open, parseDate, dayStartOf, launchApp, userDataDir, hasIsolationEnv,
+  CliError, open, parseDate, dayStartOf, launchApp, userDataDir, hasIsolationEnv, guessUserId,
   liveTasks, recycleTasks, resolveTask, resolveCategory,
   parsePredecessors, getTask, listReady,
   listTodos, getCategories, stats, overview,
