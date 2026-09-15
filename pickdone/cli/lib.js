@@ -1515,7 +1515,13 @@ function resolveRecord (ref) {
   return hits[0]
 }
 
-/** Fix an existing focus record (wrong duration/time/task). Routed through the App command channel — the CLI never rewrites the ledger in parallel. */
+/** Fix an existing focus record (wrong duration/time/task). The CLI writes the ledger row DIRECTLY via
+ *  db.tomatoUpdateById — it does NOT route through the (retired) App command channel. Consequence: the
+ *  running App does not learn about this write in-process. Convergence on the App side relies on external
+ *  DB-write detection: db.js fires the ledger-changed hook for LEDGER_WRITE_OPS in the writer process
+ *  (main/index.js setLedgerChangedHook → 'tomato-records-changed' broadcast), and external CLI writes are
+ *  picked up by the main-process watcher / renderer store re-read (the same path that hot-applies
+ *  `settings set`), or at worst on next launch. */
 function recordFix (ref, { minutes, date, at, rest, succeed, task, free }) {
   const rec = resolveRecord(ref)
   const patch = {}
