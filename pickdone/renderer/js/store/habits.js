@@ -65,18 +65,36 @@ function persist (state) {
 }
 
 // Main window relay: an aux window's habits edit arrives via LS + ping; the main window re-reads the
-// blob and writes the durable DB meta row on its behalf (storage events only fire in the OTHER windows,
-// so the writer never relays itself). Module-level like dbMirror's quit-flush hook.
+// blob, feeds it into the main window's Vuex state (applyExternal — otherwise the next main-window
+// persist would overwrite the aux edit with stale state) and writes the durable DB meta row on its
+// behalf (storage events only fire in the OTHER windows, so the writer never relays itself).
+let externalApplier = null
+/** Hook for main.js: register a callback receiving every external (aux-window) habits blob so it can
+ *  be applied to the main window's Vuex store, e.g. `onExternalHabitBlob(b => store.commit('habits/applyExternal', b))`. */
+export function onExternalHabitBlob (fn) { externalApplier = typeof fn === 'function' ? fn : null }
+
+function relayAuxBlob () {
+  try {
+    const d = readLs()
+    try { localStorage.removeItem(SYNC_KEY) } catch (e) { /* empty */ }
+    if (!d) return
+    if (externalApplier) {
+      try { externalApplier(d) } catch (e) { console.error('[habits] external blob apply failed:', e) }
+    }
+    if (typeof window !== 'undefined' && window.todoAPI && window.todoAPI.dbCall) {
+      window.todoAPI.dbCall('setMeta', [META_KEY, JSON.stringify(d)]).catch(err => console.error('[habits] relay setMeta failed:', err))
+    }
+  } catch (err) { /* empty */ }
+}
+
 if (typeof window !== 'undefined' && typeof window.addEventListener === 'function' && !isAuxWindow()) {
   window.addEventListener('storage', e => {
     if (!e || e.key !== SYNC_KEY) return
-    try {
-      const d = readLs()
-      if (d && window.todoAPI && window.todoAPI.dbCall) {
-        window.todoAPI.dbCall('setMeta', [META_KEY, JSON.stringify(d)]).catch(err => console.error('[habits] relay setMeta failed:', err))
-      }
-    } catch (err) { /* empty */ }
+    relayAuxBlob()
   })
+  // Residual delivery: a ping written while no main window was listening (main window was closed/
+  // reloading when the aux window saved) is relayed once at registration, then cleared.
+  try { if (localStorage.getItem(SYNC_KEY)) relayAuxBlob() } catch (e) { /* empty */ }
 }
 
 // Uses dayjs+FMT.date uniformly like the rest of the app (previously hand-rolled concatenation could disagree with HabitView's dayjs convention at day boundaries)
@@ -112,7 +130,10 @@ export default {
       // P2 root fix: the loop used to ignore isDueOn, so a Mon/Wed/Fri habit "broke" on an idle Sunday.
       // Today being due-but-unchecked doesn't break either (same lenient semantics as before).
       const createdKey = h.createdAt ? window.dayjs(h.createdAt).format(FMT.date) : null
-      for (;;) {
+      // G1 hard cap: `frequency:{type:'weekdays',weekdays:[]}` with a missing createdAt used to make both
+      // loop-exit conditions unreachable (no due day ever breaks, no createdKey guard) → infinite loop,
+      // frozen renderer. Two years of look-back is far beyond any meaningful streak.
+      for (let guard = 0; guard < 730; guard++) {
         const k = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0')
         if (h.records[k]) { streak++ } else if (k !== todayKey() && isDueOn(h, k)) break
         if (createdKey && k < createdKey) break // walked back before the habit's creation: nothing earlier can be due (loop guard)
@@ -148,6 +169,17 @@ export default {
       s.moments = blob.moments || []
       s.savedAt = blob.savedAt || 0
       try { localStorage.setItem(LS_KEY, JSON.stringify(blob)) } catch {}
+    },
+    /** G1: an aux window's habits edit relayed through the main window — update the main window's Vuex
+     *  state so its next persist doesn't resurrect stale data and clobber the aux edit (LS already holds
+     *  the blob; no persist here to avoid an echo loop). Same last-write-wins guard as replaceAll. */
+    applyExternal (s, blob) {
+      if (!blob || !Array.isArray(blob.habits)) return
+      if ((blob.savedAt || 0) < (s.savedAt || 0)) return
+      normalizeHabitRecords(blob.habits)
+      s.habits = blob.habits
+      s.moments = blob.moments || []
+      s.savedAt = blob.savedAt || 0
     },
     addHabit (s, { name, frequency }) {
       // Millisecond-precision Date.now() alone can collide (rapid double-add), breaking delete/check-in by id
