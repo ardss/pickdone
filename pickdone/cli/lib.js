@@ -1423,7 +1423,12 @@ function backfillRecord ({ taskId = null, content = '', date, at = '20:00', minu
     focusDuration: min, rest: 0, restDuration: 0,
     succeed: true, status: 'local', manual: true
   }
-  open().call('tomatoAppendMany', rec)
+  // Single-row CLI path fails fast: a rejected row (bad at → NaN endTime etc.) must not print success
+  // or write audit. Row-level tolerance ({accepted, rejected}) is for the renderer's batch queue.
+  const res = open().call('tomatoAppendMany', rec)
+  if (res && Array.isArray(res.rejected) && res.rejected.length) {
+    throw new CliError('backfill rejected: ' + res.rejected.map(r => r.reason).join(', '), 'LEDGER_REJECT')
+  }
   audit.record({ action: 'tomato.backfill', targets: taskId ? [{ taskId }] : [], changes: [], note: 'CLI backfill ' + min + 'min @ ' + rec.dateKey + ' ' + at + ' (ledger row direct)' })
   return rec
 }
