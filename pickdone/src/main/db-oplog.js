@@ -32,7 +32,8 @@ module.exports = ({ getDb, log }) => {
       case 'bumpSnow': return [one('todo', params && params.taskId)]
       case 'hardDelete': case 'hardDeleteMany': return arr('todo', params)
       case 'purgeRecycleBin': case 'purgeSeedTodos': return [one('todo', '*gc*')]
-      case 'upsertCategory': return [one('category', params && params.id)]
+      // H2 2026-09-16: an identical no-change upsert returns false — it must not produce a fake delta
+      case 'upsertCategory': return result === false ? [] : [one('category', params && params.id)]
       case 'filterUpsert': return [one('filter', result)]
       case 'filterDelete': return [one('filter', params)]
       case 'planAddMany': return arr('plan', result)

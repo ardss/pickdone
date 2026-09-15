@@ -543,9 +543,38 @@ const OPS = {
   countSeedTodos: () => db.prepare("SELECT COUNT(*) n FROM todos WHERE substr(id, 1, 5) = 'seed_'").get().n,
   upsertCategory: (c) => {
     const now = Date.now()
+    // H2 2026-09-16 root fix (startup dirty-write storm): the renderer re-upserts every category on
+    // each boot; the old path rewrote all N rows with updatedAt=now and re-stamped tombstone
+    // deletedAt, producing N fake oplog deltas per launch. Now: existing row is compared field by
+    // field and an identical upsert is a no-op returning false (oplog produces no delta for it).
+    const cur = db.prepare('SELECT * FROM categories WHERE id = ?').get(c && c.id)
     // Stamp deletedAt at tombstone time: callers never pass it, and a tombstone without a timestamp
-    // can never be time-ordered or reconciled by a sync engine (review V1-F5)
-    const row = { ...c, deletedAt: (c && c.deletedAt) || (c && c.delete ? now : 0), updatedAt: (c && c.updatedAt) || now }
+    // can never be time-ordered or reconciled by a sync engine (review V1-F5). An already-tombstoned
+    // row keeps its original deletedAt (re-upserting the same deleted category must not re-stamp it).
+    const deletedAt = (c && c.deletedAt) || (c && c.delete ? ((cur && cur.deletedAt) || now) : 0)
+    const row = {
+      id: c && c.id,
+      userId: c && c.userId,
+      name: c && c.name,
+      color: c && c.color,
+      createdAt: c && c.createdAt,
+      sort: c && c.sort,
+      isFolder: (c && c.isFolder) ? 1 : 0,
+      parentId: c && c.parentId,
+      // callers may flag deletion via `delete` (renderer shape) or `deleted` (row shape); normalize to 1/0
+      deleted: (c && (c.deleted != null ? c.deleted : c.delete)) ? 1 : 0,
+      deletedAt,
+      updatedAt: (c && c.updatedAt) || now
+    }
+    if (cur) {
+      const eq = (a, b) => (a == null ? null : a) === (b == null ? null : b)
+      const same = ['id', 'userId', 'name', 'color', 'createdAt', 'sort', 'isFolder', 'parentId', 'deleted', 'deletedAt']
+        .every(k => eq(row[k], cur[k])) &&
+        // updatedAt only counts as a diff when the caller explicitly supplied one (otherwise it is
+        // just our own now-stamp and would make every no-op upsert look like a change)
+        (c.updatedAt == null || eq(row.updatedAt, cur.updatedAt))
+      if (same) return false
+    }
     db.prepare(`INSERT INTO categories (id,userId,name,color,createdAt,sort,isFolder,parentId,deleted,deletedAt,updatedAt)
       VALUES (@id,@userId,@name,@color,@createdAt,@sort,@isFolder,@parentId,@deleted,@deletedAt,@updatedAt)
       ON CONFLICT(id) DO UPDATE SET name=excluded.name, color=excluded.color, createdAt=excluded.createdAt,
