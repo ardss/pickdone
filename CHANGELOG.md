@@ -14,6 +14,7 @@ and versioning follows [Semantic Versioning](https://semver.org/).
 - Categories: deleting a category no longer leaves tasks pointing at a ghost; soft-deleted categories reappear in the recycle bin after a restart; hard-deleted ones no longer resurrect as ghosts.
 - Attachments (CLI): removing an attachment can no longer delete files outside the app folder via a crafted path; same-millisecond uploads no longer overwrite each other.
 - CSV imports: the tags column is no longer dropped (imported as #tag suffixes), and Did completions (status -1) import as completed.
+- Note for CSV re-imports: duplicate detection now keys on the content including #tag suffixes, so rows imported by a previous version (stored without tags) will be imported once more.
 - CLI: restoring from the recycle bin can no longer lose the one-shot undo snapshot on failure; deleting repeat instances propagates the deletion correctly; `backfill` fails loudly instead of reporting success for a rejected record.
 - Reliability: failed database writes are retried instead of silently dropped (settings mirror, task-edit queue, quit-flush), and batch pomodoro imports no longer get one bad row blocking the whole batch.
 - Crash-proofing: malformed dates in statistics/CLI report clear errors; malformed notifications, attachment opens and reminder commands no longer throw; a habits streak with an unusual schedule can no longer freeze rendering.
