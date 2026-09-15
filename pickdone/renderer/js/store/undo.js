@@ -133,7 +133,10 @@ export async function persistSnapshotDiffCore ({ commit }, { from, to }, safeUps
   }
   for (const row of from.todoList.concat(from.recycleList)) {
     if (!toIds.has(row.taskId)) {
-      const merged = { ...row, delete: true, updateTime: Date.now(), status: 'delete' }
+      // version reset to 0 (same as deleteTodo): a re-delete after restore must re-enter the sync
+      // snapshot — syncTodos excludes delete rows already acked with version > 0, so without the
+      // reset the undo-of-create soft delete never propagated
+      const merged = { ...row, delete: true, updateTime: Date.now(), status: 'delete', version: 0 }
       commit('upsertLocal', merged)
       safeUpsert(merged)
       changedRows.push(merged)
