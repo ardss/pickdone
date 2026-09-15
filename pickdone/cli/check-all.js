@@ -76,7 +76,7 @@ const GROUPS = [
     name: '④ Web 视觉回归（14 场景×深浅,0.4% pixelmatch;自拉起 5175 宿主）', parallel: 1, retry: 1,
     stages: [
       // 第 5 元=超时分钟覆盖:视觉组带场景重试+浏览器逐场景重启,30 分钟预算(2026-09-09 曾撞 15min 默认超时按红计;满载重试实测 22-40min)
-      ['Web 视觉回归（14 场景深浅对照,防"删规则/改样式无门禁可抓"——漂移根因已修:shim 番茄锚昨天）', 'node', ['scripts/visual-web.mjs', '--spawn'], null, 30],
+      ['Web 视觉回归（14 场景深浅对照,防"删规则/改样式无门禁可抓"——漂移根因已修:shim 番茄锚昨天）', 'node', ['scripts/visual-web.mjs', '--spawn', '--port=6175'], null, 30],
     ]
   },
   
