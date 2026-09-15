@@ -27,6 +27,9 @@ export default {
   watch: {
     'm.visible' (v) {
       if (v) {
+        // Focus restore (a11y): remember the trigger so keyboard focus can return here on close
+        const ae = document.activeElement
+        this._lastTrigger = ae && typeof ae.focus === 'function' ? ae : null
         // Place at the original coordinates first, then clamp back into the viewport once the menu's real size is measured: otherwise menus near the bottom/right edge would overflow the screen and become unselectable
         this.pos = { x: this.m.x, y: this.m.y }
         this.$nextTick(() => {
@@ -40,6 +43,8 @@ export default {
           const first = el.querySelector('.ctx-item[tabindex="0"]')
           if (first) first.focus()
         })
+      } else {
+        this.restoreFocus()
       }
     }
   },
@@ -63,6 +68,14 @@ export default {
   },
   methods: {
     exec (it) { it.fn && it.fn(); this.$store.commit('ui/closeMenu') },
+    // Return keyboard focus to the element that opened the menu (no-op if it was removed from the DOM)
+    restoreFocus () {
+      const t = this._lastTrigger
+      this._lastTrigger = null
+      if (t && document.contains(t)) {
+        try { t.focus() } catch (e) { /* element may be unfocusable */ }
+      }
+    },
     onKeydown (e) {
       const items = [...this.$el.querySelectorAll('.ctx-item[tabindex="0"]')]
       const idx = items.indexOf(document.activeElement)
