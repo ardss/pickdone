@@ -190,7 +190,7 @@ html[data-theme="dark"] .qa-inputwrap:focus-within { background: var(--active-bg
   mask: url("app://app/assets/img/calendar_month_black_24dp.svg") no-repeat 50% / 16px 16px;
 }
 .todo-input-add__calender:hover,
-.todo-input-add__calender:active { background-color: #f3f3f3; }
+.todo-input-add__calender:active { background-color: var(--hover-bg); }
 /* Keyboard focus ring for the calendar trigger (was outline: none, which made focus invisible) */
 .todo-input-add__calender:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
 .todo-input-add__calender img { width: 15px; height: 15px; }
