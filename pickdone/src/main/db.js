@@ -13,6 +13,7 @@ const dayjs = require('dayjs')
 // node_modules/electron-log, so fall back to a no-op logger instead of crashing at require time
 let log
 try { log = require('electron-log') } catch { log = { info () {}, warn () {}, error () {} } }
+const oplog = require('./db-oplog')({ getDb: () => db, log })
 
 let Database = null
 function loadDriver () {
@@ -44,10 +45,9 @@ function loadDriver () {
 let db = null
 const stmts = {}
 /** Drop every cached prepared statement (they belong to the closed handle; re-init prepares fresh ones) */
-function stmtsClearAll () { for (const k of Object.keys(stmts)) delete stmts[k]; oplogReset() }
+function stmtsClearAll () { for (const k of Object.keys(stmts)) delete stmts[k]; oplog.oplogReset() }
 
 /** Oplog statements cache the old handle after close/re-init — reset them with the rest */
-function oplogReset () { oplogInsert = null; oplogCount = null; oplogOpCount = 0 }
 
 /** Database encryption key (stored at userData/db.key, same directory as the DB so it travels with migrations).
  *  Threat model: prevents the single todos.db file from being read directly by sync drives/copies/forensic tools;
@@ -813,7 +813,7 @@ function call (op, params) {
   if (!fn) throw new Error('[TodoDB] 未知操作: ' + op)
   const r = fn(params)
   if (ledgerChangedHook && !ledgerHookSuppressCount && LEDGER_WRITE_OPS.has(op)) { try { ledgerChangedHook(op) } catch { /* 广播失败不阻断落库 */ } }
-  if (op !== 'commitSyncBatch' && WRITE_OPS.has(op)) appendOplog(oplogEntriesFor(op, params, r))
+  if (op !== 'commitSyncBatch' && WRITE_OPS.has(op)) oplog.appendOplog(oplog.oplogEntriesFor(op, params, r))
   return r
 }
 
@@ -829,65 +829,6 @@ const WRITE_OPS = new Set([
   'planDeleteTask', 'planDeleteTaskDay', 'planPrune'
 ])
 const isWriteOp = op => WRITE_OPS.has(op)
-
-/* ---------- Change-capture oplog (P1 sync groundwork, 2026-09-15) ---------- */
-// One sync_oplog row per successful write op. Appended in call() (db layer, like the ledger hook) so
-// IPC, aux windows and the CLI are all captured. commitSyncBatch is excluded — it is the sync-ack
-// echo path and a real sync engine must not re-capture the rows it just acknowledged. The log is a
-// ring buffer (SYNC_OPLOG_KEEP): long-range history gaps are covered by periodic full snapshots, not
-// by unbounded log retention.
-const SYNC_OPLOG_KEEP = 10000
-// entity + affected ids per write op (batch ops expand to one row per id so deltas are row-granular)
-function oplogEntriesFor (op, params, result) {
-  const now = Date.now()
-  const one = (entity, entityId) => ({ entity, entityId: String(entityId), ts: now })
-  const arr = (entity, ids) => (Array.isArray(ids) ? ids : [ids]).filter(v => v != null && v !== '').map(id => one(entity, id))
-  switch (op) {
-    case 'upsert': return [one('todo', params && params.taskId)]
-    case 'upsertMany': return arr('todo', (params || []).map(t => t && t.taskId))
-    case 'bumpSnow': return [one('todo', params && params.taskId)]
-    case 'hardDelete': case 'hardDeleteMany': return arr('todo', params)
-    case 'purgeRecycleBin': case 'purgeSeedTodos': return [one('todo', '*gc*')]
-    case 'upsertCategory': return [one('category', params && params.id)]
-    case 'filterUpsert': return [one('filter', result)]
-    case 'filterDelete': return [one('filter', params)]
-    case 'planAddMany': return arr('plan', result)
-    case 'planUpdateChip': return [one('plan', params && params.id)]
-    case 'planRemoveIds': return arr('plan', params)
-    case 'planMoveTask': return [one('plan', params && params.taskId)]
-    case 'planDeleteTask': case 'planDeleteTaskDay': return [one('plan', params && params.taskId)]
-    case 'planPrune': return [one('plan', '*gc*')]
-    case 'setMeta': return [one('meta', Array.isArray(params) ? params[0] : params)]
-    case 'tomatoAppendMany': {
-      const ids = (Array.isArray(params) ? params : [params]).map(r => r && r.tomatoId).filter(Boolean)
-      return arr('tomato', ids)
-    }
-    case 'tomatoUpdateById': return [one('tomato', params && params.tomatoId)]
-    case 'tomatoRemoveByIds': return arr('tomato', params)
-    case 'tomatoMigrateFromMeta': return [one('tomato', '*gc*')]
-    default: return []
-  }
-}
-
-let oplogInsert = null
-let oplogCount = null
-let oplogOpCount = 0
-function appendOplog (entries) {
-  if (!entries.length) return
-  try {
-    if (!oplogInsert) {
-      oplogInsert = db.prepare('INSERT INTO sync_oplog (entity, entityId, ts) VALUES (?, ?, ?)')
-      oplogCount = db.prepare('SELECT COUNT(*) n FROM sync_oplog')
-    }
-    const tr = db.transaction(() => entries.forEach(e => oplogInsert.run(e.entity, e.entityId, e.ts)))
-    tr()
-    // Cheap amortized ring-buffer trim: check every 200 appends, not every write
-    if (++oplogOpCount % 200 === 0) {
-      const n = oplogCount.get().n
-      if (n > SYNC_OPLOG_KEEP) db.prepare('DELETE FROM sync_oplog WHERE seq <= (SELECT MAX(seq) FROM sync_oplog) - ?').run(SYNC_OPLOG_KEEP)
-    }
-  } catch (e) { log.warn('[TodoDB] oplog append failed (write itself is unaffected):', e.message) }
-}
 
 /** Explicitly close the handle (for tests switching directories / graceful process exit); silent when uninitialized or already closed.
  *  P2 2026-09-11: close() used to leave the module var set, so isOpen() kept returning true after close
