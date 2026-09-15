@@ -1627,7 +1627,7 @@ const SETTINGS_MANIFEST = {
     calendarFontColor: ['white', 'black'],
     sortMode: ['custom', 'created', 'difficulty'],
     expiredCompletedTodoRange: ['today', '7d', '15d', '30d'],
-    expiredUncompletedTodoRange: ['today', '7d', '30d', '90d'],
+    expiredUncompletedTodoRange: ['7d', '30d', '90d'], // no 'today' — the renderer's SETTING_ENUMS (store/settings.js) has no 'today' option; a CLI-written 'today' would fail the renderer's coerce and fall back to the default (no migration needed; historical 'today' values just coerce back on the App side)
     upcomingTodoRange: ['7d', '30d'],
     weatherSource: ['open-meteo', 'wttr'],
     todoBoxSortMethod: ['created', 'due', 'difficulty'],
