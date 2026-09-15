@@ -112,7 +112,11 @@ jobs:
         run: |
           cd dist
           sha256sum *.exe latest.yml > SHA256SUMS.txt
-          gh release upload "$GITHUB_REF_NAME" SHA256SUMS.txt --clobber
+          # 2026-09-15 实锤:按 tag 名 upload 会新建第二个 draft(electron-builder 的 draft 挂在未发布 tag 上,
+  # gh 按 git ref 解析不到它)——SHA256SUMS 落进空 draft,正文校验读错对象必红。改为按 draft id 上传。
+  DRAFT_ID=$(gh api "repos/$GITHUB_REPOSITORY/releases" -q '[.[] | select(.tag_name=="'"$GITHUB_REF_NAME"'") | select(.draft)][0].id')
+  if [ -z "$DRAFT_ID" ]; then echo "no draft found for $GITHUB_REF_NAME"; exit 1; fi
+  gh api --method POST "repos/$GITHUB_REPOSITORY/releases/$DRAFT_ID/assets?name=SHA256SUMS.txt" --input SHA256SUMS.txt -H "Content-Type: application/octet-stream" -q '.name'
           # 空正文=发布页丑闻实锤(v0.1.2 曾整版无说明)——draft 正文必须非空。
           # 2026-09-08 修鸡生蛋:本 job 的"Delete stale draft"会重建空 draft,而 rerun 只重跑失败 job,
           # 所以"要求正文已填否则红"永远过不了;改为空时自动从仓库内 CHANGELOG 提取本版本段填充,
@@ -138,8 +142,8 @@ jobs:
               console.log(zh ? 'bilingual notes: zh + en' : 'WARNING: no zh section in CHANGELOG.zh.md — publishing en only');
               fs.writeFileSync(process.env.RUNNER_TEMP + '/notes.md', body);
           NODEEOF
-            gh release edit "$GITHUB_REF_NAME" --draft --notes-file "$RUNNER_TEMP/notes.md"
-            BODY_LEN=$(gh api "repos/$GITHUB_REPOSITORY/releases" -q '[.[] | select(.tag_name=="'"$GITHUB_REF_NAME"'") | select(.draft)][0].body // "" | length')
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$DRAFT_ID" -F "body=@$RUNNER_TEMP/notes.md" -q '.html_url'
+            BODY_LEN=$(gh api "repos/$GITHUB_REPOSITORY/releases/$DRAFT_ID" -q '.body | length')
             echo "draft body auto-filled from CHANGELOG, length: $BODY_LEN"
           fi
           if [ "${BODY_LEN:-0}" -lt 30 ]; then
@@ -249,4 +253,7 @@ jobs:
         run: |
           cd dist
           sha256sum *.AppImage *.deb latest-linux.yml latest-linux-arm64.yml > SHA256SUMS-linux.txt
-          gh release upload "$GITHUB_REF_NAME" SHA256SUMS-linux.txt --clobber
+          # same-draft-id upload as the win step (2026-09-15): by-tag upload forks a second draft
+          DRAFT_ID=$(gh api "repos/$GITHUB_REPOSITORY/releases" -q '[.[] | select(.tag_name=="'"$GITHUB_REF_NAME"'") | select(.draft)][0].id')
+          if [ -z "$DRAFT_ID" ]; then echo "no draft found for $GITHUB_REF_NAME"; exit 1; fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/releases/$DRAFT_ID/assets?name=SHA256SUMS-linux.txt" --input SHA256SUMS-linux.txt -H "Content-Type: application/octet-stream" -q '.name'
