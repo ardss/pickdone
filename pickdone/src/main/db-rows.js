@@ -88,7 +88,6 @@ function rowToTodo (r) {
 }
 
 /** Category row -> app object */
-/** Category row -> app object */
 function rowToCategory (r) {
   if (!r) return null
   return {
