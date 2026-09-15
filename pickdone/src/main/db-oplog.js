@@ -11,6 +11,9 @@
  *   commits loses the delta row (accepted window at synchronous=NORMAL).
  * - planMoveTask/planDeleteTask log ('plan', taskId) while other plan ops log chip ids — consumers
  *   of those two must reconcile via planAll until the granularity is unified.
+ * - tomatoMigrateFromMeta logs ('tomato', '*gc*') — the one-time meta-blob migration appends N ledger
+ *   rows under a single GC marker; delta consumers must reconcile the tomato ledger via a full
+ *   snapshot/tomatoAll instead of treating the marker as one record.
  */
 
 module.exports = ({ getDb, log }) => {
