@@ -155,8 +155,8 @@ export default {
     markCascade (state, id) {
       const mark = cid => {
         const c = state.list.find(x => x.categoryId === cid)
-        if (c) { c.delete = true }
-        state.list.filter(x => x.folderId === cid).forEach(x => { if (x.folderIs) mark(x.categoryId); else x.delete = true })
+        if (c && !c.delete) { c.delete = true; c.deletedAt = Date.now() }
+        state.list.filter(x => x.folderId === cid).forEach(x => { if (x.folderIs) mark(x.categoryId); else if (!x.delete) { x.delete = true; x.deletedAt = Date.now() } })
       }
       mark(id)
     },
@@ -222,7 +222,7 @@ export default {
       commit('mergeProjectMeta', patch)
     },
     /** Startup loading: SQLite is authoritative; when the table is empty and a local cache exists, perform a one-time migration (LS → SQLite) */
-    async init ({ commit }) {
+    async init ({ commit, rootState }) {
       let rows = []
       try { rows = (await window.todoAPI.dbCall('getAllCategories')) || [] } catch (e) { console.warn('[category] SQLite read failed, using local cache', e) }
       try {
@@ -234,7 +234,16 @@ export default {
       if (rows.length) {
         // Re-attach soft-deleted rows mirrored in LS (getAllCategories is live-only) so the in-app
         // recovery entry survives a restart; live DB rows win over a stale LS tombstone of the same id
-        const dels = deletedFromLs().filter(d => !rows.some(r => r.categoryId === d.categoryId))
+        // G1 tombstone expiry: a tombstone whose category was already PURGED (hard-deleted from the
+        // recycle bin) is invisible to the live-rows check above and used to be re-merged forever —
+        // the "permanently deleted" category resurrected as a ghost on every restart. Only re-attach
+        // tombstones inside the recycle-bin retention window; old tombstones without deletedAt are
+        // conservatively kept (pre-dates the stamp, may still be within an unknown window).
+        const retentionDays = Number(rootState && rootState.settings && rootState.settings.recycleBinAutoDeleteDays) || 30
+        const cutoff = Date.now() - retentionDays * 86400000
+        const dels = deletedFromLs().filter(d =>
+          !rows.some(r => r.categoryId === d.categoryId) &&
+          (!d.deletedAt || d.deletedAt > cutoff))
         commit('setList', rows.concat(dels))
         return rows.length
       }
