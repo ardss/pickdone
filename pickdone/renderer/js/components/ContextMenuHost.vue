@@ -3,12 +3,14 @@
   <transition name="pop">
     <div v-if="m.visible" class="ctx-menu" role="menu" :style="{left:pos.x+'px', top:pos.y+'px'}"
          @keydown.esc="$store.commit('ui/closeMenu')" @keydown.down="onKeydown" @keydown.up="onKeydown">
-      <div v-for="(it,i) in m.items" :key="i"
-           class="ctx-item" :class="{danger:it.danger, sep:it.sep}"
-           role="menuitem" tabindex="0"
-           @click.stop="!it.sep&&exec(it)"
-           @keydown.enter.prevent="!it.sep&&exec(it)">
-      <app-icon v-if="it.icon" :name="it.icon" :size="13" class="ctx-ico"/>{{it.label}}</div>
+      <template v-for="(it,i) in m.items" :key="i">
+        <div v-if="it.sep" class="ctx-item sep" role="separator" aria-disabled="true"></div>
+        <div v-else class="ctx-item" :class="{danger:it.danger}"
+             role="menuitem" tabindex="0"
+             @click.stop="exec(it)"
+             @keydown.enter.prevent="exec(it)">
+          <app-icon v-if="it.icon" :name="it.icon" :size="13" class="ctx-ico"/>{{it.label}}</div>
+      </template>
     </div>
   </transition>
 </template>
