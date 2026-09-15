@@ -630,7 +630,9 @@ const OPS = {
   // plan_chips deletes are tombstones (P1 sync groundwork): user-facing chip removals must propagate
   // to other devices. planPrune is time-based GC (old days fall off) and stays physical — devices
   // reconcile pruned history via periodic full snapshots, so tombstoning it would only grow the table.
-  planAll: () => db.prepare('SELECT id, taskId, day, mm FROM plan_chips WHERE deleted = 0 ORDER BY day, mm, sort').all(),
+  // H2 2026-09-16: sort was missing from the snapshot SELECT — the snapshot/restore round-trip lost
+  // chip ordering and restore's ON CONFLICT upsert then overwrote sort with 0.
+  planAll: () => db.prepare('SELECT id, taskId, day, mm, sort FROM plan_chips WHERE deleted = 0 ORDER BY day, mm, sort').all(),
   planAddMany: chips => {
     const list = (Array.isArray(chips) ? chips : [chips]).map(c => ({
       id: (c && c.id) || 'pl_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
