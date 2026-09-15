@@ -1792,11 +1792,20 @@ async function importEvents (events, { onProgress = () => {} } = {}) {
       })
       seen.add(key)
       if (e.estimate) { try { setEstimate(t.taskId, Math.min(20, Number(e.estimate) || 0)) } catch (er) { /* non-fatal */ } }
-      toggleComplete(t.taskId, true, { completedAt: parseDate(e.date + ' ' + endClamp) })
-      const focusMin = eventFocusMinutes(mins)
-      backfillRecord({ taskId: t.taskId, content: e.title, date: e.date, at: e.start, minutes: focusMin })
-      created++
-      onProgress({ label, status: 'created', focusMin })
+      // Behavior fix (2026-09-16): a FUTURE event used to be imported as completed + with a backfilled focus
+      // record — importing next week's schedule fabricated "done + accounted" history for work not yet done.
+      // Future events now only create the task; completion and the ledger row are left to the real day.
+      const future = String(e.date) > dayjs().format('YYYY-MM-DD')
+      if (!future) {
+        toggleComplete(t.taskId, true, { completedAt: parseDate(e.date + ' ' + endClamp) })
+        const focusMin = eventFocusMinutes(mins)
+        backfillRecord({ taskId: t.taskId, content: e.title, date: e.date, at: e.start, minutes: focusMin })
+        created++
+        onProgress({ label, status: 'created', focusMin })
+      } else {
+        created++
+        onProgress({ label, status: 'created-future', focusMin: null })
+      }
     } catch (er) {
       failed.push({ label, error: String(er.message || er) })
       onProgress({ label, status: 'failed', error: String(er.message || er) })

@@ -21,10 +21,12 @@ process.env.TODO_DB_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'todo-cli-h3-'))
 const require_ = createRequire(import.meta.url)
 const db = require_('../../../src/main/db.js')
 const lib = require_('../../../cli/lib.js')
+const dayjs = require_('dayjs')
 
 db.init(process.env.TODO_DB_DIR)
 
 
+const ymdOf = offset => dayjs().add(offset, 'day').format('YYYY-MM-DD')
 
 /* ---- fix 1: settingsSet CAS guard ---- */
 test('h3-1: settingsSet refuses the whole-package write when the App changed settings since read', () => {
@@ -57,5 +59,31 @@ test('h3-1: settingsSet refuses the whole-package write when the App changed set
 test('h3-1b: settingsSet without interleaved writes still succeeds (no false stale)', () => {
   const r = lib.settingsSet('calendarFontSize', 'large')
   assert.equal(r.value, 'large')
+})
+
+/* ---- fix 2: importEvents future events ---- */
+test('h3-2: future-dated event creates the task only — no complete toggle, no ledger backfill', async () => {
+  const before = db.call('tomatoAll').length
+  const res = await lib.importEvents([
+    { date: ymdOf(7), start: '09:00', end: '10:00', title: 'h3未来事件' },
+    { date: ymdOf(-1), start: '09:00', end: '10:00', title: 'h3过去事件' }
+  ])
+  assert.equal(res.created, 2)
+  assert.equal(res.failed.length, 0)
+  const tasks = lib.liveTasks().filter(t => String(t.taskContent).startsWith('h3'))
+  const future = tasks.find(t => t.taskContent === 'h3未来事件')
+  const past = tasks.find(t => t.taskContent === 'h3过去事件')
+  assert.ok(future && past)
+  assert.equal(future.complete, false, 'a future event must not be imported as already done')
+  assert.equal(past.complete, true, 'past events keep the backfill reconstruction behavior')
+  const after = db.call('tomatoAll').length
+  assert.equal(after - before, 1, 'exactly one focus record (the past event); the future event fabricates none')
+})
+
+/* ---- fix 3: enum drift ---- */
+test("h3-3: expiredUncompletedTodoRange rejects 'today' (renderer enum parity)", () => {
+  assert.throws(() => lib.settingsSet('expiredUncompletedTodoRange', 'today'), e => e.code === 'USAGE')
+  const r = lib.settingsSet('expiredUncompletedTodoRange', '30d')
+  assert.equal(r.value, '30d')
 })
 
