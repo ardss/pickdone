@@ -42,6 +42,9 @@ module.exports = ({ getDb, log }) => {
       case 'planDeleteTask': case 'planDeleteTaskDay': return [one('plan', params && params.taskId)]
       case 'planPrune': return [one('plan', '*gc*')]
       case 'setMeta': return [one('meta', Array.isArray(params) ? params[0] : params)]
+      // H2 2026-09-16: meta deletions were never captured (not in WRITE_OPS, no case here) — a removed
+      // meta key could never propagate to other devices. Accepts ('k') or (['k']) argument forms.
+      case 'deleteMeta': return [one('meta', Array.isArray(params) ? params[0] : params)]
       case 'tomatoAppendMany': {
         const ids = (Array.isArray(params) ? params : [params]).map(r => r && r.tomatoId).filter(Boolean)
         return arr('tomato', ids)
