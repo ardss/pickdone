@@ -120,3 +120,12 @@ test('h3-6: stats accepts keyword dates (--from today) and rejects garbage with 
   assert.throws(() => lib.stats({ from: 'not-a-date' }), e => /cannot parse date/.test(e.message))
 })
 
+/* ---- fix 7: number setting validation ---- */
+test('h3-7: settings set rejects non-finite and negative numbers', () => {
+  assert.throws(() => lib.settingsSet('dailyTomatoTarget', 'Infinity'), e => e.code === 'USAGE')
+  assert.throws(() => lib.settingsSet('autoBackupIntervalMin', '-5'), e => e.code === 'USAGE' && />= 0/.test(e.message))
+  assert.throws(() => lib.settingsSet('dailyTomatoTarget', 'abc'), e => e.code === 'USAGE')
+  const r = lib.settingsSet('dailyTomatoTarget', '12')
+  assert.equal(r.value, 12)
+})
+

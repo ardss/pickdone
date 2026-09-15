@@ -1682,7 +1682,11 @@ function settingsSet (key, value, { force = false } = {}) {
     else throw new CliError('"' + key + '" expects true|false', 'USAGE')
   } else if (info.type === 'number') {
     v = Number(value)
-    if (isNaN(v)) throw new CliError('"' + key + '" expects a number', 'USAGE')
+    // Fix (2026-09-16): the old isNaN check caught NaN but let Infinity through — JSON.stringify then stored
+    // null in the settings blob. Negative values are meaningless for every numeric setting (targets,
+    // thresholds, intervals, volumes, counts), so both are rejected now.
+    if (!Number.isFinite(v)) throw new CliError('"' + key + '" expects a finite number (got "' + value + '")', 'USAGE')
+    if (v < 0) throw new CliError('"' + key + '" must be >= 0 (got "' + value + '")', 'USAGE')
   } else if (info.type === 'enum') {
     if (!info.options.includes(String(value))) throw new CliError(`"${key}" expects one of: ${info.options.join(' | ')} (got "${value}")`, 'USAGE')
     v = String(value)
