@@ -578,7 +578,14 @@ const OPS = {
       if (v == null) return null
       if (v >= 1e11) return v // already in milliseconds
       const s = String(v)
-      return new Date(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8)).getTime()
+      const y = +s.slice(0, 4); const mo = +s.slice(4, 6); const d = +s.slice(6, 8)
+      // F2/H2: digit-slicing a 9-11 digit Unix-seconds value (e.g. 1758000000) yields a
+      // "valid but wrong" date (year 1757, month 00) that is NOT NaN and silently poisons stats.
+      // Validate the sliced calendar fields; anything outside month 1-12 / day 1-31 is a USAGE error.
+      if (!(mo >= 1 && mo <= 12) || !(d >= 1 && d <= 31)) {
+        throw new Error('[TodoDB] _dayBounds: ' + v + ' is not a parseable date (YYYYMMDD slices to month ' + mo + ', day ' + d + '), refusing to run BETWEEN a bogus range')
+      }
+      return new Date(y, mo - 1, d).getTime()
     }
     const f = conv(from)
     const t = conv(to)
