@@ -6,4 +6,4 @@
  * this re-export and import shared/limits.mjs directly — both paths stay
  * single-source. See shared/limits.mjs header.
  */
-export { FOCUS_MAX_MINUTES, FOCUS_INPUT_MAX_MINUTES } from '../../../shared/limits.mjs'
+export { FOCUS_MAX_MINUTES, FOCUS_INPUT_MAX_MINUTES, REST_MAX_MINUTES } from '../../../shared/limits.mjs'

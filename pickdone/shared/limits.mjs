@@ -23,3 +23,4 @@
  */
 export const FOCUS_MAX_MINUTES = 600
 export const FOCUS_INPUT_MAX_MINUTES = 720
+export const REST_MAX_MINUTES = 600 // rest-duration storage clamp (db.js _recToRow restDuration; same cap as focus)

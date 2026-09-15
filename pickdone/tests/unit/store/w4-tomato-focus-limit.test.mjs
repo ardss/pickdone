@@ -8,7 +8,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import '../../setup.mjs'
-import { FOCUS_MAX_MINUTES, FOCUS_INPUT_MAX_MINUTES } from '../../../shared/limits.mjs'
+import { FOCUS_MAX_MINUTES, FOCUS_INPUT_MAX_MINUTES, REST_MAX_MINUTES } from '../../../shared/limits.mjs'
 
 const ROOT = path.resolve(import.meta.dirname, '../../..')
 const read = p => fs.readFileSync(path.join(ROOT, p), 'utf8')
@@ -16,6 +16,7 @@ const read = p => fs.readFileSync(path.join(ROOT, p), 'utf8')
 test('shared limits export the documented dual-cap constants', () => {
   assert.equal(FOCUS_MAX_MINUTES, 600)
   assert.equal(FOCUS_INPUT_MAX_MINUTES, 720)
+  assert.equal(REST_MAX_MINUTES, 600)
 })
 
 test('tomato.js clamps through FOCUS_MAX_MINUTES, no inline 600 literal remains', () => {
