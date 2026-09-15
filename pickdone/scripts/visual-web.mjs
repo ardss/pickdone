@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* eslint-env node */
 /**
  * Web-host visual regression — occlusion-proof variant of tests/visual-regression.mjs.
  * 夜间/锁屏时 Electron 窗口停止绘制,CaptureScreenshot 会挂死;本脚本改打 5175 浏览器调试宿主
@@ -16,11 +17,13 @@ import pixelmatch from 'pixelmatch'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
 const MODE = process.argv.includes('--baseline') ? 'baseline' : 'check'
-const SPAWN = process.argv.includes('--spawn') // check:all 模式:自拉起 5175 宿主(视觉门禁此前游离门禁外,删单条 SFC 规则无门禁可抓)
+const SPAWN = process.argv.includes('--spawn')
+// --port=N: bind the self-spawned host on another port (5175 can land in a Windows WinNAT excluded range -> EACCES); pixels are port-independent so baselines stay valid
+const PORT = (process.argv.find(a => /^--port=\d+$/.test(a)) || '--port=5175').split('=')[1] // check:all 模式:自拉起 5175 宿主(视觉门禁此前游离门禁外,删单条 SFC 规则无门禁可抓)
 const THRESHOLD = Number(process.env.VISUAL_THRESHOLD || 0.004)
 const DIR = path.join(ROOT, 'tests', '.artifacts', 'visual-web')
 fs.mkdirSync(DIR, { recursive: true })
-const BASE = 'http://127.0.0.1:5175'
+const BASE = 'http://127.0.0.1:' + PORT
 const SESSION = 'vweb'
 // 专用浏览器 profile(每次 run 开跑前清空重建):--session 只隔离会话不隔离 profile,
 // 默认 profile 的 localStorage 跨运行持久——并行会话的探针标签页在同 profile 写 colorMode/showNoDate
@@ -64,20 +67,20 @@ if (SPAWN) {
   // 端口独占:5175 被残留宿主占用时,新 vite 绑不上、脚本却探测到旧宿主"就绪",
   // 旧宿主一死整轮全崩(2026-09-09 实锤 14 连败)——spawn 模式先清场再拉起
   try {
-    const out = execSync('netstat -ano | findstr :5175 | findstr LISTENING', { encoding: 'utf8', shell: true, stdio: ['ignore', 'pipe', 'ignore'] })
+    const out = execSync('netstat -ano | findstr :' + PORT + ' | findstr LISTENING', { encoding: 'utf8', shell: true, stdio: ['ignore', 'pipe', 'ignore'] })
     for (const pid of [...new Set(out.split(/\r?\n/).map(l => l.trim().split(/\s+/).pop()).filter(p => /^\d+$/.test(p)))]) {
       execSync(`taskkill /pid ${pid} /T /F`, { shell: true, stdio: 'ignore' })
     }
     await new Promise(r => setTimeout(r, 1000))
   } catch { /* 端口空闲 */ }
-  viteChild = cpSpawn('npm', ['run', 'dev'], { cwd: path.join(ROOT, 'browser-dev'), shell: true, stdio: 'ignore' })
+  viteChild = cpSpawn('npm', ['run', 'dev', '--', '--port', PORT, '--strictPort'], { cwd: path.join(ROOT, 'browser-dev'), shell: true, stdio: 'ignore' })
   let up = false
   for (let t = 0; t < 40000 && !up; t += 500) {
     await new Promise(r => setTimeout(r, 500))
     try { if ((await fetch(BASE, { signal: AbortSignal.timeout(2000) })).ok) up = true } catch { /* retry */ }
   }
   if (!up) {
-    console.error('✗ visual-web --spawn: 40s 内 5175 宿主未就绪(vite 启动失败?)')
+    console.error('✗ visual-web --spawn: 40s 内 port '+PORT+' 宿主未就绪(vite 启动失败?)')
     killVite()
     process.exit(2)
   }
@@ -101,7 +104,7 @@ try {
   const res = await fetch(BASE, { signal: AbortSignal.timeout(5000) })
   if (!res.ok) throw new Error('HTTP ' + res.status)
 } catch {
-  console.error('✗ visual-web: 5175 宿主未启动 —— 加 --spawn 自拉起,或在 browser-dev/ 跑 `npm run dev`(vite --port 5175)再重跑。')
+  console.error('✗ visual-web: 宿主未启动(port '+PORT+') —— 加 --spawn 自拉起,或在 browser-dev/ 跑 `npm run dev`(vite --port '+PORT+')再重跑。')
   killVite()
   process.exit(2)
 }
