@@ -66,10 +66,35 @@ export async function initFromDb () {
 
 export function getEstimate (taskId) { return state[taskId] || 0 }
 
+/** Capacity bound for the estimate map (H2 2026-09-16): the map used to grow forever — tasks purged
+ *  via the recycle bin left their keys behind and a recycled numeric id could resurrect a stale
+ *  estimate. Main-process MetaGC (src/main/index.js) owns the DB-meta cleanup; this module bounds
+ *  its own state. Callers that know the live id set should use pruneEstimates. */
+const MAX_KEYS = 5000
+
+/** Drop every estimate whose taskId is not in `aliveIds` (task purge/merge callers). Returns true
+ *  when anything was removed (state changed). */
+export function pruneEstimates (aliveIds) {
+  const alive = new Set(aliveIds || [])
+  let removed = 0
+  for (const k of Object.keys(state)) {
+    if (!alive.has(k)) { delete state[k]; removed++ }
+  }
+  if (removed) persist()
+  return removed > 0
+}
+
+/** Keep the map bounded: drop the oldest entries (insertion order) once over capacity. */
+function trimToCapacity () {
+  const keys = Object.keys(state)
+  for (let i = 0; i < keys.length - MAX_KEYS; i++) delete state[keys[i]]
+}
+
 export function setEstimate (taskId, n) {
   if (!taskId) return
   n = Math.max(MIN, Math.min(MAX, Math.round(n || 0)))
   if (n > 0) state[taskId] = n
   else delete state[taskId]
+  trimToCapacity()
   persist()
 }
