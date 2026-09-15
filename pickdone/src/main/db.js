@@ -664,7 +664,8 @@ const OPS = {
     // F2 2026-09-15 行级容错(架构根因:批量接口的失败粒度应是"行级"而非"批级"):
     // 此前任一行缺 tomatoId/endTime 抛错回滚整批 → 渲染端 pending 队列被一条坏行劫持无限重试,
     // 同批合法账本行永不落库。现改为事务内跳过无效行并记入返回值 rejected,合法行照常落库;
-    // handler 原样透传返回结构,渲染端按 rejected 索引剔除/上报坏行。
+    // renderer acknowledges the batch on fulfilment and logs rejected rows, then drops them from its
+    // pending queue (报错以 console.error 上报,行按 rejected 索引剔除)。
     const rejected = []
     let accepted = 0
     const tr = db.transaction(() => list.forEach((raw, index) => {
