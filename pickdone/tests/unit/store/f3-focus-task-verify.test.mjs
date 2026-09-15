@@ -11,6 +11,7 @@ import assert from 'node:assert/strict'
 import tomato from '../../../renderer/js/store/tomato.js'
 
 const CLAIM_KEY = 'tomatoLastPhaseDone'
+const LS_KEY = 'tomatoState'
 
 function makeCtx (getByIdResult, statePatch = {}) {
   const calls = { getById: [], bumpSnow: [] }
@@ -28,6 +29,10 @@ function makeCtx (getByIdResult, statePatch = {}) {
     attachTodo: { taskId: 't1', taskContent: '写周报' },
     tomatoRecordList: [], todayTomatoCount: 0
   }, statePatch)
+  // G1 (R2-4): completeFocus re-verifies the shared LS transient after the getById await window
+  // (give-up race). Production keeps LS in sync with the running focus via persistState — seed it
+  // here so the re-verification sees the live phase instead of an empty LS (= default).
+  globalThis.localStorage.setItem(LS_KEY, JSON.stringify({ schemaV: 1, status: 'startTomatoTime', startedAt: state.startedAt, tomatoTime: 25, restTime: 5 }))
   const ctx = {
     state,
     rootState: { todo: { todoList: [{ taskId: 't1', taskContent: '写周报' }] }, settings: {} },
