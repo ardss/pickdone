@@ -50,7 +50,7 @@ Usage: node cli/pickdone.js <command> [args] [options]
 Read commands:
   overview                        today/overdue/no-date/recycle summary
   list   [range|--all]            list tasks (default: today)
-        range: today (default) tomorrow week overdue future
+        range: today (default) tomorrow week (this ISO week) next7d (rolling 7 days) overdue future
         filters: --done --undone --no-date --category <name|id> --keyword <word>
         --quad q1|q2|q3|q4               four-quadrant filter (q1 important+urgent, q2 important, q3 urgent, q4 neither)
         --on <date>                      what's scheduled on one specific day, with times (scheduling view)
@@ -254,9 +254,9 @@ async function main () {
       // only); any inline filters below narrow it further. With --view the absent range no longer defaults to 'today' —
       // the saved view owns the date window (an overdue/no-date view must not be clipped to today).
       const view = opts.view != null && opts.view !== true ? lib.resolveView(opts.view) : null
-      const range = ['today', 'tomorrow', 'week', 'overdue', 'future'].includes(first) ? first : (opts.all || view ? null : 'today')
+      const range = ['today', 'tomorrow', 'week', 'next7d', 'overdue', 'future'].includes(first) ? first : (opts.all || view ? null : 'today')
       if (view && opts.on != null && opts.on !== true) throw new lib.CliError('--view and --on are mutually exclusive (--view owns the date window)', 'USAGE')
-      if (first && !range && !opts.all && !opts.on) throw new lib.CliError(`unknown range "${first}" (valid: today/tomorrow/week/overdue/future or --all or --on <date>)`)
+      if (first && !range && !opts.all && !opts.on) throw new lib.CliError(`unknown range "${first}" (valid: today/tomorrow/week/next7d/overdue/future or --all or --on <date>)`)
       // --on <date>: what's scheduled on one specific day (with times) — the "what should I slot at 11am tomorrow" view
       if (opts.on != null && opts.on !== true) {
         let rows = lib.listOn(opts.on)

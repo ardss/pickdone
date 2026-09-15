@@ -213,7 +213,11 @@ function listTodos (opts = {}) {
   if (opts.quad) { q.important = opts.quad.important; q.urgent = opts.quad.urgent }
   if (opts.range === 'today') { q.dayStartFrom = +now.startOf('day'); q.dayStartTo = +now.endOf('day') }
   else if (opts.range === 'tomorrow') { const t = now.add(1, 'day'); q.dayStartFrom = +t.startOf('day'); q.dayStartTo = +t.endOf('day') }
-  else if (opts.range === 'week') { q.dayStartFrom = +now.startOf('day'); q.dayStartTo = +now.add(7, 'day').endOf('day') }
+  // Fix (2026-09-16): `week` now means the ISO week (Mon..Sun, same window as saved views' dateMode 'week' /
+  // FilterView applyViewConds endOf('isoWeek')) instead of a rolling 7 days; the rolling semantics moved to
+  // the new `next7d` range so nothing is lost.
+  else if (opts.range === 'week') { q.dayStartFrom = +now.startOf('day'); q.dayStartTo = +now.endOf('isoWeek') }
+  else if (opts.range === 'next7d') { q.dayStartFrom = +now.startOf('day'); q.dayStartTo = +now.add(7, 'day').endOf('day') }
   else if (opts.range === 'overdue') { q.dayStartTo = +now.subtract(1, 'day').endOf('day') }
   else if (opts.range === 'future') { q.dayStartFrom = +now.add(1, 'day').startOf('day') }
   return open().call('queryTodos', q)

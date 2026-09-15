@@ -129,3 +129,23 @@ test('h3-7: settings set rejects non-finite and negative numbers', () => {
   assert.equal(r.value, 12)
 })
 
+/* ---- fix 8: week vs next7d ranges ---- */
+test('h3-8: --range week is the ISO week; next7d keeps the rolling 7-day window', () => {
+  for (let d = 0; d <= 9; d++) {
+    lib.addTodo({ content: 'h3range' + d, date: ymdOf(d) })
+  }
+  const today0 = +dayjs().startOf('day')
+  const weekEnd = +dayjs().endOf('isoWeek')
+  const rollEnd = +dayjs().add(7, 'day').endOf('day')
+  const inRange = rows => new Set(rows.filter(t => String(t.taskContent).startsWith('h3range')).map(t => Number(t.taskContent.slice(7))))
+  const week = inRange(lib.listTodos({ range: 'week', limit: 500 }))
+  const next7 = inRange(lib.listTodos({ range: 'next7d', limit: 500 }))
+  for (let d = 0; d <= 9; d++) {
+    const day0 = +dayjs().add(d, 'day').startOf('day')
+    assert.equal(week.has(d), day0 >= today0 && day0 <= weekEnd, `week membership for +${d}d must match the isoWeek window`)
+    assert.equal(next7.has(d), day0 >= today0 && day0 <= rollEnd, `next7d membership for +${d}d must match the rolling window`)
+  }
+  // the two windows genuinely differ (there is always a day inside rolling-7 but outside the iso week on Mon-Sat)
+  if (+dayjs().endOf('isoWeek') < rollEnd) assert.ok([...next7].some(d => !week.has(d)), 'next7d must extend beyond the iso week when the week ends first')
+})
+
