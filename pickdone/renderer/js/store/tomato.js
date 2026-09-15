@@ -120,11 +120,41 @@ function persistState (state) {
  *  失败留在重试队列,下一次任意账本写时重放(锁屏/瞬时 IO 失败自愈)。 */
 const _pendingLedger = []
 let _flushHooked = false
+/** H1 (2026-09-16): db 层 tomatoAppendMany 现在返回 {accepted,rejected} 行级容错结果,rejected 行
+ *  (缺 tomatoId/endTime 等)曾被静默丢弃——这里按契约逐条 console.error 上报。 */
+function logRejectedRows (res, params) {
+  if (!res || !Array.isArray(res.rejected) || !res.rejected.length) return
+  const list = Array.isArray(params) ? params : [params]
+  for (const r of res.rejected) {
+    let row
+    try { row = JSON.stringify(list[r && r.index]) } catch (e) { row = String(list[r && r.index]) }
+    console.error('[tomato] ledger row rejected:', r && r.reason, 'row:', row)
+  }
+}
+
+/** H1 (2026-09-16): remove 落库成功后,清掉 pending 队列里同 tomatoId 的旧 append——db 层
+ *  tomatoAppendMany 的 ON CONFLICT DO UPDATE SET deleted=0 会把已删行复活,旧 append 重放等于
+ *  撤销删除。params 是 tomatoRemoveByIds 的 id 数组。 */
+function purgePendingAppends (ids) {
+  const dead = new Set(ids || [])
+  if (!dead.size) return
+  for (let i = _pendingLedger.length - 1; i >= 0; i--) {
+    const e = _pendingLedger[i]
+    if (!e || e.op !== 'tomatoAppendMany') continue
+    const recs = Array.isArray(e.params) ? e.params : [e.params]
+    if (recs.some(r => r && dead.has(r.tomatoId))) _pendingLedger.splice(i, 1)
+  }
+}
+
 /** Replay still-pending entries; each is only removed from the queue on success (ledger ops are idempotent upserts, so a duplicate in-flight retry is safe) */
 function replayPendingLedger () {
   for (const entry of [..._pendingLedger]) {
     Promise.resolve(window.todoAPI && window.todoAPI.dbCall(entry.op, entry.params))
-      .then(() => { const i = _pendingLedger.indexOf(entry); if (i >= 0) _pendingLedger.splice(i, 1) })
+      .then(res => {
+        const i = _pendingLedger.indexOf(entry); if (i >= 0) _pendingLedger.splice(i, 1)
+        logRejectedRows(res, entry.params)
+        if (entry.op === 'tomatoRemoveByIds') purgePendingAppends(entry.params)
+      })
       .catch(e => console.error('[tomato] ledger DB write failed (queued for retry):', entry.op, e))
   }
 }
@@ -143,6 +173,10 @@ function flushPendingLedger () {
   // but order preservation keeps the replay semantics obviously correct.
   list.forEach((it, idx) => {
     Promise.resolve(window.todoAPI && window.todoAPI.dbCall(it.op, it.params))
+      .then(res => {
+        logRejectedRows(res, it.params)
+        if (it.op === 'tomatoRemoveByIds') purgePendingAppends(it.params)
+      })
       .catch(e => {
         console.error('[tomato] ledger flush failed at quit:', it.op, e)
         _pendingLedger.splice(Math.min(idx, _pendingLedger.length), 0, it)
