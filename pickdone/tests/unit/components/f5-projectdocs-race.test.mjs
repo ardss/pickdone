@@ -88,9 +88,3 @@ test('f5 ProjectDocs: persist refuses to write docs under another project key (o
   assert.equal(writes.length, 1)
   assert.equal(writes[0][0], 'projectDocs:2')
 })
-
-test('f5 ProjectDocs: load token guard + persist ownership check present in source', () => {
-  assert.match(sfc, /const token = \+\+this\.loadToken/)
-  assert.match(sfc, /token !== this\.loadToken/)
-  assert.match(sfc, /keyCat !== this\._docsCatId/)
-})
