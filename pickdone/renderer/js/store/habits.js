@@ -76,13 +76,18 @@ export function onExternalHabitBlob (fn) { externalApplier = typeof fn === 'func
 function relayAuxBlob () {
   try {
     const d = readLs()
-    try { localStorage.removeItem(SYNC_KEY) } catch (e) { /* empty */ }
-    if (!d) return
+    if (!d) { try { localStorage.removeItem(SYNC_KEY) } catch (e) { /* empty */ } return }
     if (externalApplier) {
       try { externalApplier(d) } catch (e) { console.error('[habits] external blob apply failed:', e) }
     }
+    // The ping is consumed only after the durable DB write settles: consuming it up front let one
+    // failed IPC drop the aux edit from the retry channel entirely (the next main-window persist
+    // would paper over it at best, or lose it on quit at worst).
     if (typeof window !== 'undefined' && window.todoAPI && window.todoAPI.dbCall) {
-      window.todoAPI.dbCall('setMeta', [META_KEY, JSON.stringify(d)]).catch(err => console.error('[habits] relay setMeta failed:', err))
+      window.todoAPI.dbCall('setMeta', [META_KEY, JSON.stringify(d)]).then(
+        () => { try { localStorage.removeItem(SYNC_KEY) } catch (e) { /* empty */ } },
+        err => console.error('[habits] relay setMeta failed — ping kept for retry:', err)
+      )
     }
   } catch (err) { /* empty */ }
 }

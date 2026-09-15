@@ -375,7 +375,13 @@ export default {
       // Accounting-time attach validation (root fix): a task deleted after focus start resolves to null →
       // the focus is booked as free (no focusTaskId, no bumpSnow) instead of firing a fire-and-forget
       // bumpSnow at a dead taskId whose minutes silently vanish
-      let focused = resolveFocusedTask(s.attachTodo, focusTodoPool(this))
+      // G1 (N1): resolveFocusedTask/loadState sit between the claim and the guarded try below — a throw
+      // here (malformed attachTodo / corrupted LS) would hold the claim forever, exactly the stuck-tomato
+      // bug this fix wave eliminated. Wrap the whole verification stretch in the same release-on-failure guard.
+      let focused = null
+      try {
+        focused = resolveFocusedTask(s.attachTodo, focusTodoPool(this))
+      } catch (e) { releaseClaim(); throw e }
       // 本窗 todoList 池可能陈旧(他窗/CLI 删除未同步到本窗):db 层 bumpSnow 的 `AND deleted=0` 会
       // changes=0 静默丢积分。用廉价读 op getById(任意窗可调、含已删行)二次核验;已删/不存在按
       // free focus 记账。核验通道本身失败则保持本窗判定(不因 IPC 故障丢记账)。
@@ -384,6 +390,7 @@ export default {
           const live = await window.todoAPI.dbCall('getById', focused.taskId)
           if (!live || live.delete === true) focused = null
         } catch (e) { /* empty */ }
+        try {
         // G1 (R2-4): the await window lets a concurrent giveUp(record=false) flip the shared phase back to
         // default. Re-verify against the shared transient before booking; if this window no longer owns the
         // phase, abandon the completion (release the claim, follow the give-up side — no rest, no points).
@@ -393,6 +400,7 @@ export default {
           console.info('[tomato] completeFocus aborted after verify await: phase was given up concurrently (startedAt', startedAt + ')')
           return
         }
+        } catch (e) { releaseClaim(); throw e }
       }
       try {
         commit('addRecord', {
