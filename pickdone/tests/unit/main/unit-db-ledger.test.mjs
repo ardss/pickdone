@@ -119,9 +119,15 @@ test('ledger: update 只改 endTime 时 dateKey 自动随行重导(幽灵行防�
   assert.equal(r.dateKey, '2026-09-25', 'dateKey 必须等于 endTime 所在日,否则按日聚合/时间轴分桶分裂')
 })
 
-test('ledger: append 缺 tomatoId/endTime 必须抛错(脏行入表防线);dateKey 由 DB 层重导不受调用方支配', () => {
-  assert.throws(() => db.call('tomatoAppendMany', { endTime: Date.now(), dateKey: '2026-09-10' }), /tomatoId/)
-  assert.throws(() => db.call('tomatoAppendMany', { tomatoId: 'x', dateKey: '2026-09-10' }), /endTime/)
+test('ledger: append 缺 tomatoId/endTime 行级拒绝(rejected 上报,不再整批一票否决);dateKey 由 DB 层重导不受调用方支配', () => {
+  // F2 2026-09-15:失败粒度从"批级"改为"行级"——坏行记入 rejected,不再抛错回滚整批
+  const r1 = db.call('tomatoAppendMany', { endTime: Date.now(), dateKey: '2026-09-10' })
+  assert.equal(r1.accepted, 0)
+  assert.equal(r1.rejected.length, 1)
+  assert.match(r1.rejected[0].reason, /tomatoId/)
+  const r2 = db.call('tomatoAppendMany', { tomatoId: 'x', dateKey: '2026-09-10' })
+  assert.equal(r2.accepted, 0)
+  assert.match(r2.rejected[0].reason, /endTime/)
   // 调用方传错 dateKey(如 UTC 偏移/跨午夜 startTs 口径)不再抛错也不落错桶——按 endTime 重导
   db.call('tomatoAppendMany', { tomatoId: 'tmt_dk_1', endTime: new Date('2026-09-20T08:00:00').getTime(), dateKey: '1999-01-01' })
   assert.equal(db.call('tomatoAll').find(x => x.tomatoId === 'tmt_dk_1').dateKey, '2026-09-20')

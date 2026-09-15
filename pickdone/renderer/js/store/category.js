@@ -54,8 +54,13 @@ function persist (list) {
 }
 
 let idSeed = null
+/** NOT globally unique — each window keeps its own seed. The seed starts at Date.now() plus a random
+ *  offset (±5ms window, ~1e5 slots): two windows creating a category in the same millisecond used to
+ *  derive identical ++Date.now() ids and silently overwrite each other's row; the random start slot
+ *  makes that collision probability negligible (≈1e-5 per same-ms pair) while ids stay plain numbers
+ *  compatible with the existing === comparisons and the numeric id column. */
 function nextId () {
-  if (!idSeed) idSeed = Date.now()
+  if (!idSeed) idSeed = Date.now() + Math.floor(Math.random() * 100000)
   return ++idSeed
 }
 
@@ -78,11 +83,27 @@ function collectCascadeIds (state, id) {
 }
 export { collectCascadeIds }
 
+/** Deleted categories cannot come back through getAllCategories (WHERE deleted = 0), so they are mirrored
+ *  in the LS cache by persist() and re-merged here on startup. Without this a soft-deleted category
+ *  vanished from state on restart: visibleCount dropped to 0 and the recover-in-place entry went blind,
+ *  contradicting the CLI's "recoverable in App" promise. Entries already re-added (same id, live in DB) win. */
+function deletedFromLs () {
+  try {
+    const d = JSON.parse(localStorage.getItem(LS_KEY))
+    return ((d && Array.isArray(d.list)) ? d.list : []).filter(c => c && c.delete)
+  } catch { return [] }
+}
+
 export default {
   namespaced: true,
   state: () => ({ list: loadList(), projectIds: [], projectMeta: {} }),
   getters: {
-    byId: s => id => s.list.find(c => c.categoryId === id) || null,
+    /** Views' single name/color lookup: a soft-deleted (or missing) categoryId resolves to null so every
+     *  consumer (taskRow color-follow, name chips, …) falls back to the uncategorized default. Matches the
+     *  CLI contract (cli/lib.js deleteCategory: "tasks keep categoryId and fall back to the default
+     *  (uncategorized) in views") — previously a deleted category kept answering byId within the session,
+     *  so its name/color haunted rows that the EditPanel dropdown (sortedAll) already excluded. */
+    byId: s => id => s.list.find(c => c.categoryId === id && !c.delete) || null,
     /** Project-type categories (sorted by listSort) — progressive disclosure: empty array when no projects, sidebar renders no entry */
     projects: s => s.list
       .filter(c => !c.delete && s.projectIds.includes(c.categoryId))
@@ -134,8 +155,8 @@ export default {
     markCascade (state, id) {
       const mark = cid => {
         const c = state.list.find(x => x.categoryId === cid)
-        if (c) { c.delete = true }
-        state.list.filter(x => x.folderId === cid).forEach(x => { if (x.folderIs) mark(x.categoryId); else x.delete = true })
+        if (c && !c.delete) { c.delete = true; c.deletedAt = Date.now() }
+        state.list.filter(x => x.folderId === cid).forEach(x => { if (x.folderIs) mark(x.categoryId); else if (!x.delete) { x.delete = true; x.deletedAt = Date.now() } })
       }
       mark(id)
     },
@@ -201,7 +222,7 @@ export default {
       commit('mergeProjectMeta', patch)
     },
     /** Startup loading: SQLite is authoritative; when the table is empty and a local cache exists, perform a one-time migration (LS → SQLite) */
-    async init ({ commit }) {
+    async init ({ commit, rootState }) {
       let rows = []
       try { rows = (await window.todoAPI.dbCall('getAllCategories')) || [] } catch (e) { console.warn('[category] SQLite read failed, using local cache', e) }
       try {
@@ -210,7 +231,22 @@ export default {
         if (Array.isArray(ids)) commit('setProjectIds', ids)
       } catch (e) { /* stays empty when no project flags */ }
       await this.dispatch('category/loadProjectMeta')
-      if (rows.length) { commit('setList', rows); return rows.length }
+      if (rows.length) {
+        // Re-attach soft-deleted rows mirrored in LS (getAllCategories is live-only) so the in-app
+        // recovery entry survives a restart; live DB rows win over a stale LS tombstone of the same id
+        // G1 tombstone expiry: a tombstone whose category was already PURGED (hard-deleted from the
+        // recycle bin) is invisible to the live-rows check above and used to be re-merged forever —
+        // the "permanently deleted" category resurrected as a ghost on every restart. Only re-attach
+        // tombstones inside the recycle-bin retention window; old tombstones without deletedAt are
+        // conservatively kept (pre-dates the stamp, may still be within an unknown window).
+        const retentionDays = Number(rootState && rootState.settings && rootState.settings.recycleBinAutoDeleteDays) || 30
+        const cutoff = Date.now() - retentionDays * 86400000
+        const dels = deletedFromLs().filter(d =>
+          !rows.some(r => r.categoryId === d.categoryId) &&
+          (!d.deletedAt || d.deletedAt > cutoff))
+        commit('setList', rows.concat(dels))
+        return rows.length
+      }
       // One-time migration flag: otherwise "migrate only when the table is empty" would resurrect old localStorage caches after the user deletes all categories
       let migrated = false
       try { migrated = (await window.todoAPI.dbCall('getMeta', 'categoryLsMigrated')) === '1' } catch (e) { /* empty */ }

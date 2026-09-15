@@ -168,17 +168,14 @@ function watchDbForExternalWrites () {
       const raw = dbm.call('getMeta', 'cliTomatoCmd')
       // 守卫只包转发段,不得 return 整函数——函数后半段还承担 CLI 设置热同步(2026-09-04 二轮深审 P0:提前 return 曾短路设置推送)。
       // 锁屏态不转发也不标记已消费:锁定时 todo-db:call 全拒,转发了会'半执行'(计时启动但回执被拒),解锁后 onChange 自然补发。
-      const winOk = getMainWindow() != null
-      if (raw && raw !== lastTomatoCmdRaw && winOk && !isLocked()) {
-        const cmd = JSON.parse(raw)
-        lastTomatoCmdRaw = raw
-        if (cmd && cmd.seq && cmd.seq > lastTomatoSeq) {
-          lastTomatoSeq = cmd.seq
-          // 账本类命令已退役为 CLI 直写行表(渲染端经 tomato-records-changed 回灌),本通道只剩状态类 start/stop/attach,只发主窗
-          getMainWindow().webContents.send('cli-tomato-cmd', cmd)
-          log.info('[CLI] 番茄命令已转发渲染端:', cmd.action, 'seq=' + cmd.seq)
-        }
-      }
+      // F2 2026-09-15 竞态根修:此前 lastTomatoSeq 在 send 之前推进且 send 前无 isDestroyed 复查——窗口销毁/
+      // 重建间隙 send 抛错被外层 catch 成 warn,但 seq 已消费 → 命令永久丢失。现抽为纯逻辑
+      // fixUtil.tryForwardTomatoCmd:send 成功才推进 seq,失败/窗口未就绪均不消费(下轮轮询重投)。
+      const st = fixUtil.tryForwardTomatoCmd({ raw, lastTomatoCmdRaw, lastTomatoSeq, getMainWindow, isLocked })
+      lastTomatoCmdRaw = st.lastTomatoCmdRaw
+      lastTomatoSeq = st.lastTomatoSeq
+      // 账本类命令已退役为 CLI 直写行表(渲染端经 tomato-records-changed 回灌),本通道只剩状态类 start/stop/attach,只发主窗
+      if (st.sent) log.info('[CLI] 番茄命令已转发渲染端:', st.cmd.action, 'seq=' + st.cmd.seq)
     } catch (e) { log.warn('[CLI] 番茄命令转发失败', e) }
     // CLI settings set: mirror changes to db.settingsState's _savedAt → diff and push to the renderer for hot application
     // (renderer dispatches settings/update → IPC notify-settings-updated → main-process config.json/shortcuts/login item sync accordingly)

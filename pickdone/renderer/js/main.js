@@ -6,6 +6,7 @@ const Vue = window.Vue // vue3 global build (includes createApp and the runtime 
 const ElementPlus = window.ElementPlus
 
 import store from './store/index.js'
+import { onExternalHabitBlob } from './store/habits.js'
 import { loadRuntime } from './store/runtimeState.js'
 import router from './router.js'
 import App from './app-root.vue'
@@ -59,6 +60,8 @@ app.config.globalProperties.$announce = function (m) {
 import i18n from './i18n/index.js'
 
 app.use(store)
+// Aux-window habit edits must feed back into main-window Vuex state, or the next main-window persist overwrites them with a stale copy (LWW)
+onExternalHabitBlob(blob => store.commit('habits/applyExternal', blob))
 app.use(router)
 app.use(i18n)
 // vue-i18n@9 legacy:true only provides $t inside component instances; globalProperties needs explicit injection
@@ -462,19 +465,23 @@ async function bootstrap () {
       window.dispatchEvent(new CustomEvent('todo:focus-quickadd'))
     } else if (e.ctrlKey && e.key.toLowerCase() === 's') {
       e.preventDefault()
-      store.dispatch('todo/syncTodos').catch(e => console.error('[todo] manual sync failed', e))
+      // Same feedback surface as the SideNav sync icon: success/error notify, never silent
+      store.dispatch('todo/syncTodos').then(
+        () => window.appUI.$notify({ title: i18n.global.t('statsE.SideNav.syncCompleteMsg'), message: i18n.global.t('statsG.SideNav.syncDoneMsg'), type: 'success', duration: 2000 }),
+        e => window.appUI.$notify({ title: i18n.global.t('statsE.SideNav.syncFailedMsg'), message: (e && e.message) || i18n.global.t('statsG.SideNav.syncFailMsg'), type: 'error', duration: 4000 })
+      )
     } else if (!inEditor && e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === 'z') {
       e.preventDefault()
       store.dispatch('todo/undo').then(r => {
         const ok = r && r.ok
-        const label = ok && r.label ? i18n.global.t('statsH.main.undone') + '：' + r.label : i18n.global.t(ok ? 'statsH.main.undone' : 'statsH.main.undoEmpty')
+        const label = ok && r.label ? i18n.global.t('statsH.main.undoneLabel', { label: r.label }) : i18n.global.t(ok ? 'statsH.main.undone' : 'statsH.main.undoEmpty')
         window.appUI.$message[ok ? 'success' : 'info'](label)
       }).catch(e => console.error('[todo] undo failed:', e))
     } else if (!inEditor && ((e.ctrlKey && e.key.toLowerCase() === 'y') || (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'z'))) {
       e.preventDefault()
       store.dispatch('todo/redo').then(r => {
         const ok = r && r.ok
-        const label = ok && r.label ? i18n.global.t('statsH.main.redone') + '：' + r.label : i18n.global.t(ok ? 'statsH.main.redone' : 'statsH.main.redoEmpty')
+        const label = ok && r.label ? i18n.global.t('statsH.main.redoneLabel', { label: r.label }) : i18n.global.t(ok ? 'statsH.main.redone' : 'statsH.main.redoEmpty')
         window.appUI.$message[ok ? 'success' : 'info'](label)
       }).catch(e => console.error('[todo] redo failed:', e))
     }

@@ -33,12 +33,6 @@ function releaseKeyListeners () {
 
 export function showUndoToast (messageFn, children, { type = 'success' } = {}) {
   const h = window.Vue.h
-  const msg = messageFn({
-    type,
-    duration: 0, // timer is managed below so it can pause on hover
-    showClose: true,
-    message: h('span', children)
-  })
   let timer = null
   const arm = () => {
     timer = setTimeout(() => {
@@ -46,18 +40,32 @@ export function showUndoToast (messageFn, children, { type = 'success' } = {}) {
       try { msg.close() } catch { /* already gone */ }
     }, UNDO_TOAST_MS)
   }
-  arm()
   const controller = {
     pause: () => { if (timer) { clearTimeout(timer); timer = null } },
     resume: () => { if (!timer) arm() }
   }
+  /** Single idempotent unregister path: patched close (auto-dismiss / ✕ / programmatic) AND the
+   *  Element Plus Message onClose callback both land here. onClose matters because a route change
+   *  unmounts the whole tree: EP destroys the Message without anyone calling msg.close(), which used
+   *  to leave the controller in activeToasts forever and leaked the shared keydown/keyup listeners. */
+  const unregister = () => {
+    if (controller.pause) controller.pause = null // mark dead so late hover events can't re-arm
+    if (activeToasts.delete(controller)) releaseKeyListeners()
+  }
+  // Registered before messageFn so even an immediate onClose can't miss it
   activeToasts.add(controller)
-  // Detach this toast's controller when it closes (auto-dismiss, ✕ button, or programmatic close)
+  const msg = messageFn({
+    type,
+    duration: 0, // timer is managed below so it can pause on hover
+    showClose: true,
+    message: h('span', children),
+    onClose: unregister
+  })
+  // Patch close as well: plain-object message mocks and older EP builds may not honor onClose
   const origClose = msg && typeof msg.close === 'function' ? msg.close.bind(msg) : null
   if (origClose) {
     msg.close = (...args) => {
-      activeToasts.delete(controller)
-      releaseKeyListeners()
+      unregister()
       return origClose(...args)
     }
   }
@@ -73,5 +81,6 @@ export function showUndoToast (messageFn, children, { type = 'success' } = {}) {
       installKeyListeners()
     }
   } catch { /* hover-pause unavailable; toast just auto-dismisses */ }
+  arm() // start the owned 5s timer once the message exists (arm's close needs msg)
   return msg
 }

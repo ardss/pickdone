@@ -49,7 +49,8 @@
       <div v-else class="todo-box-list">
         <div v-for="t in list" :key="t.taskId" class="todo-box-list-item"
              :class="{ 'todo-box-list-item--selected': selectedId === t.taskId, 'todo-box-list-item--checked': batchMode && checkedIds.includes(t.taskId) }"
-             @click="batchMode ? toggleCheck(t) : openEdit(t)" @contextmenu.prevent="ctxMenu(t, $event)">
+             role="button" tabindex="0" :aria-label="t.taskContent"
+             @click="batchMode ? toggleCheck(t) : openEdit(t)" @keydown.enter.prevent="batchMode ? toggleCheck(t) : openEdit(t)" @contextmenu.prevent="ctxMenu(t, $event)">
           <span v-if="batchMode" class="tb-batch-check" :class="{ on: checkedIds.includes(t.taskId) }" role="checkbox" tabindex="0"
                 :aria-checked="checkedIds.includes(t.taskId) ? 'true' : 'false'" :aria-label="$t('statsC.TodoBox.ariaCheck')" @click.stop="toggleCheck(t)" @keydown.enter.prevent.stop="toggleCheck(t)">✓</span>
           <span class="todo-box-list-item__category-dot tb-dot-check" :style="{ color: dotColor(t) }" role="checkbox"
@@ -281,6 +282,8 @@ html[data-theme="dark"] .dropdown-select.is-open .dropdown-select__label { backg
 .todo-box-list .todo-box-list-item__tools{display:flex;gap:15px}
 .todo-box-list .todo-box-list-item:hover{background-color:var(--hover-bg)}
 .todo-box-list .todo-box-list-item:active{background-color:var(--active-bg)}
+/* 键盘可达:行可聚焦,焦点环与 hover 同语义(对照 TodoItem.vue 行 / RecycleBinView .row-btn:focus-visible) */
+.todo-box-list .todo-box-list-item:focus-visible{outline:2px solid var(--brand);outline-offset:-2px;background-color:var(--hover-bg)}
 .todo-box-list .todo-box-list-item--is-drop{pointer-events:none}
 .todo-box-list .todo-box-list-item--is-drop:active,.todo-box-list .todo-box-list-item--is-drop:hover{background-color:var(--hover-bg)}
 .todo-box-list .todo-box-list-item--is-drag{background-color:var(--active-bg)}

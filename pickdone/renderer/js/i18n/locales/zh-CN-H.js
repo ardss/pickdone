@@ -97,8 +97,10 @@ export default {
       toTarget: '距离目标还有 {n} 个'
     },
     main: {
+      undoneLabel: '已撤销：{label}',
       undone: '已撤销',
       undoEmpty: '没有可撤销的操作',
+      redoneLabel: '已重做：{label}',
       redone: '已重做',
       redoEmpty: '没有可重做的操作'
     },

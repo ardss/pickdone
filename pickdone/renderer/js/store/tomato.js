@@ -16,15 +16,17 @@ const PING_KEY = 'tomatoSyncPing'
 const CLAIM_KEY = 'tomatoLastPhaseDone'
 
 /** Cross-window phase claiming: for the same startedAt, only the first writer produces side effects (notification/audio/accounting).
- *  Value shape phase|ms: same phase within 1.5s is considered already claimed (narrowing the dual-window get→set race window), otherwise the claim is overwritten. */
+ *  P2 root fix (was a 1.5s time window): the claim is a state slot — the exact phase string is written into the
+ *  shared LS key and any later claimer of the SAME phase loses, regardless of elapsed time. The old
+ *  `Date.now() - ts < 1500` window let a background-throttled window's late tick (>1.5s) re-claim the same
+ *  completed phase → double snow gain + double notification. startedAt = Date.now() never repeats, so a
+ *  permanent per-phase mark can never block a legitimate new phase. */
 function claimPhase (status, startedAt) {
   const phase = status + ':' + (startedAt || 0)
   try {
-    const cur = String(localStorage.getItem(CLAIM_KEY) || '')
-    const i = cur.lastIndexOf('|')
-    if (i > 0 && cur.slice(0, i) === phase && Date.now() - Number(cur.slice(i + 1) || 0) < 1500) return false
+    if (localStorage.getItem(CLAIM_KEY) === phase) return false
   } catch (e) { /* empty */ }
-  try { localStorage.setItem(CLAIM_KEY, phase + '|' + Date.now()) } catch (e) { /* empty */ }
+  try { localStorage.setItem(CLAIM_KEY, phase) } catch (e) { /* empty */ }
   return true
 }
 
@@ -195,9 +197,19 @@ export default {
     updateRecord (s, { tomatoId, patch }) {
       const rec = (s.tomatoRecordList || []).find(r => r && r.tomatoId === tomatoId)
       if (!rec) return
-      if (patch.endTime != null) rec.endTime = Math.max(0, Math.round(patch.endTime))
-      // After changing endTime, re-derive dateKey: the rail/stats both bucket by dateKey; without re-deriving, it becomes ghost data that "vanishes from the day it was moved away from"
-      if (patch.endTime != null && rec.endTime > 0) rec.dateKey = dayjs(rec.endTime).format(FMT.date)
+      // Invalid endTime (<=0/NaN) rejects that field outright: the DB layer unconditionally derives
+      // dateKey from endTime, so a 0 would fall into the 1970 bucket (ghost data in every stat)
+      if (patch.endTime != null) {
+        const t = Math.round(Number(patch.endTime))
+        if (Number.isFinite(t) && t > 0) {
+          rec.endTime = t
+          // After changing endTime, re-derive dateKey: the rail/stats both bucket by dateKey; without re-deriving, it becomes ghost data that "vanishes from the day it was moved away from"
+          rec.dateKey = dayjs(t).format(FMT.date)
+        } else {
+          // G1: a rejected field must not pass silently — the caller believes the whole patch applied
+          console.warn('[tomato] updateRecord: invalid endTime ignored (field skipped, rest applied) tomatoId=' + tomatoId + ' endTime=' + String(patch.endTime))
+        }
+      }
       // clamp 1..FOCUS_MAX_MINUTES = the DB-layer single source (db.js _recToRow via shared/limits.mjs):
       // a UI-side cap above it would show values the DB silently drops on next reload (memory says 720, ledger says 600)
       if (patch.focusDuration != null) rec.focusDuration = Math.max(1, Math.min(FOCUS_MAX_MINUTES, Math.round(patch.focusDuration)))
@@ -309,6 +321,12 @@ export default {
       if (s.status === 'default') {
         const fresh = loadState(false)
         if (fresh.status === 'startTomatoTime' && fresh.startedAt) s = fresh
+        else if (fresh.status === 'startRestTime' && fresh.startedAt) {
+          // 他窗已进入休息而本窗副本还是 default:giveUp 的"取消专注"意图已失效,不能盲写 default
+          // 杀掉刚开的休息(与下方 claimed 分支同款竞态,此前只修了 startTomatoTime 一半)——跟随共享状态返回
+          commit('patch', { status: fresh.status, startedAt: fresh.startedAt, remainSec: fresh.remainSec })
+          return
+        }
       }
       const running = s.status === 'startTomatoTime' && s.startedAt
       // Cross-window claim: when the user clicks "give up" at the exact expiry moment while the shared tick is completing, only the side that claimed first records (prevents succeed+abandon double records for the same focus)
@@ -337,42 +355,83 @@ export default {
       }
       commit('patch', { status: 'default', startedAt: 0, remainSec: s.tomatoTime * 60 })
     },
-    completeFocus ({ state, commit, rootState, dispatch }) {
+    async completeFocus ({ state, commit, rootState, dispatch }) {
       const s = state
       // State precheck (mirrors startFocus): an anomalous call with no running focus must not mint a free tomato
       if (s.status !== 'startTomatoTime' || !s.startedAt) return
       // Idempotency token: only one set of side effects per focus. Cross-window claim (including the give-up side) + deterministic id as double insurance
       if (!claimPhase('startTomatoTime', s.startedAt)) return
+      // G1: once claimed, any failure between here and addRecord/saveSnowGain would otherwise leave the
+      // phase permanently claimed with no record — the tomato is lost with no retry possible. On failure
+      // release the claim (only if still ours) so the next tick can re-complete.
+      const startedAt = s.startedAt
+      const phase = 'startTomatoTime:' + (startedAt || 0)
+      const releaseClaim = () => {
+        try { if (localStorage.getItem(CLAIM_KEY) === phase) localStorage.removeItem(CLAIM_KEY) } catch (e) { /* empty */ }
+      }
       const endTs = Date.now()
       // Measured duration, not the current setting: a mid-focus duration change would otherwise skew the ledger (unified with giveUp's elapsed basis)
-      const focusMin = Math.max(1, Math.min(FOCUS_MAX_MINUTES, Math.round((endTs - s.startedAt) / 60000)))
+      const focusMin = Math.max(1, Math.min(FOCUS_MAX_MINUTES, Math.round((endTs - startedAt) / 60000)))
       // Accounting-time attach validation (root fix): a task deleted after focus start resolves to null →
       // the focus is booked as free (no focusTaskId, no bumpSnow) instead of firing a fire-and-forget
       // bumpSnow at a dead taskId whose minutes silently vanish
-      const focused = resolveFocusedTask(s.attachTodo, focusTodoPool(this))
-      commit('addRecord', {
-        // Accounting basis unified = endTime: stats (metrics)/rail (railSegs)/entry-card corrections (updateRecord) all use endTime
-        tomatoId: 'tmt_f_' + s.startedAt, endTime: endTs, dateKey: dayjs(endTs).format(FMT.date),
-        focus: focused ? focused.taskContent : '', focusTaskId: focused ? focused.taskId : null,
-        focusDuration: focusMin, rest: s.restTime, restDuration: s.restTime, succeed: true, status: 'local'
-      })
-      {
-        // 计入完成时刻所在日,与 stats/时间轴的 endTime 口径一致(2026-09-04 清理:原跨午夜判断是 endTs 与自身比较的恒真式,已删)
-        commit('patch', { todayTomatoCount: (s.todayTomatoCount || 0) + 1, _countDate: dayjs(endTs).format(FMT.date) })
+      // G1 (N1): resolveFocusedTask/loadState sit between the claim and the guarded try below — a throw
+      // here (malformed attachTodo / corrupted LS) would hold the claim forever, exactly the stuck-tomato
+      // bug this fix wave eliminated. Wrap the whole verification stretch in the same release-on-failure guard.
+      let focused = null
+      try {
+        focused = resolveFocusedTask(s.attachTodo, focusTodoPool(this))
+      } catch (e) { releaseClaim(); throw e }
+      // 本窗 todoList 池可能陈旧(他窗/CLI 删除未同步到本窗):db 层 bumpSnow 的 `AND deleted=0` 会
+      // changes=0 静默丢积分。用廉价读 op getById(任意窗可调、含已删行)二次核验;已删/不存在按
+      // free focus 记账。核验通道本身失败则保持本窗判定(不因 IPC 故障丢记账)。
+      if (focused && window.todoAPI && window.todoAPI.dbCall) {
+        try {
+          const live = await window.todoAPI.dbCall('getById', focused.taskId)
+          if (!live || live.delete === true) focused = null
+        } catch (e) { /* empty */ }
+        try {
+        // G1 (R2-4): the await window lets a concurrent giveUp(record=false) flip the shared phase back to
+        // default. Re-verify against the shared transient before booking; if this window no longer owns the
+        // phase, abandon the completion (release the claim, follow the give-up side — no rest, no points).
+        const fresh = loadState(false)
+        if (!fresh || fresh.status !== 'startTomatoTime' || fresh.startedAt !== startedAt) {
+          releaseClaim()
+          console.info('[tomato] completeFocus aborted after verify await: phase was given up concurrently (startedAt', startedAt + ')')
+          return
+        }
+        } catch (e) { releaseClaim(); throw e }
       }
-      dispatch('auth/saveSnowGain', focusMin, { root: true })
-      if (focused) {
-        window.todoAPI?.dbCall?.('bumpSnow', { taskId: focused.taskId, minutes: focusMin })?.catch?.(() => {})
-        // bumpSnow is a todo-row write issued as a raw dbCall outside the todo/* actions, so store/index.js's
-        // WRITE_ACTIONS stamping never fires for it → the todos-changed broadcast echo of this write misses the
-        // 1500ms echo-suppression window and todo/init's historyClear wipes the undo stack. Stamp it here,
-        // same as the subscribeAction after-hook does for todo/* writes.
-        try { this.state.todo._lastLocalWriteAt = Date.now() } catch (e) { /* store unavailable in tests */ }
+      try {
+        commit('addRecord', {
+          // Accounting basis unified = endTime: stats (metrics)/rail (railSegs)/entry-card corrections (updateRecord) all use endTime
+          tomatoId: 'tmt_f_' + startedAt, endTime: endTs, dateKey: dayjs(endTs).format(FMT.date),
+          focus: focused ? focused.taskContent : '', focusTaskId: focused ? focused.taskId : null,
+          focusDuration: focusMin, rest: s.restTime, restDuration: s.restTime, succeed: true, status: 'local'
+        })
+        {
+          // 计入完成时刻所在日,与 stats/时间轴的 endTime 口径一致(2026-09-04 清理:原跨午夜判断是 endTs 与自身比较的恒真式,已删)
+          commit('patch', { todayTomatoCount: (s.todayTomatoCount || 0) + 1, _countDate: dayjs(endTs).format(FMT.date) })
+        }
+        dispatch('auth/saveSnowGain', focusMin, { root: true })
+        if (focused) {
+          window.todoAPI?.dbCall?.('bumpSnow', { taskId: focused.taskId, minutes: focusMin })?.catch?.(() => {})
+          // bumpSnow is a todo-row write issued as a raw dbCall outside the todo/* actions, so store/index.js's
+          // WRITE_ACTIONS stamping never fires for it → the todos-changed broadcast echo of this write misses the
+          // 1500ms echo-suppression window and todo/init's historyClear wipes the undo stack. Stamp it here,
+          // same as the subscribeAction after-hook does for todo/* writes.
+          try { this.state.todo._lastLocalWriteAt = Date.now() } catch (e) { /* store unavailable in tests */ }
+        }
+        dispatch('todo/writeCriticalBackup', null, { root: true })
+        try { new Audio(confirmUrl(rootState.settings.completeSound)).play().catch(() => {}) } catch (e) { /* empty */ }
+        if (s.enableNotification !== false) { try { window.todoAPI.notification({ title: tt('statsA.core.tomatoDoneTitle'), body: tt('statsA.core.tomatoDoneBody', { n: focusMin }) }) } catch (e) { /* locked screen rejects the channel — fire-and-forget */ } }
+        commit('patch', { status: 'startRestTime', startedAt: Date.now(), remainSec: s.restTime * 60, _countDate: dayjs().format(FMT.date) })
+      } catch (e) {
+        // G1: booking failed mid-transition — release the phase claim so the next tick can retry the
+        // completion instead of the tomato being lost forever behind a permanent claim mark.
+        releaseClaim()
+        console.error('[tomato] completeFocus failed after claiming; claim released for retry:', e)
       }
-      dispatch('todo/writeCriticalBackup', null, { root: true })
-      try { new Audio(confirmUrl(rootState.settings.completeSound)).play().catch(() => {}) } catch (e) { /* empty */ }
-      if (s.enableNotification !== false) { try { window.todoAPI.notification({ title: tt('statsA.core.tomatoDoneTitle'), body: tt('statsA.core.tomatoDoneBody', { n: focusMin }) }) } catch (e) { /* locked screen rejects the channel — fire-and-forget */ } }
-      commit('patch', { status: 'startRestTime', startedAt: Date.now(), remainSec: s.restTime * 60, _countDate: dayjs().format(FMT.date) })
     },
     finishRest ({ state, commit }) {
       if (!claimPhase('startRestTime', state.startedAt)) return

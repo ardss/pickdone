@@ -7,10 +7,13 @@ const i18nM = require('./i18n')
 const fs = require('fs')
 const crypto = require('crypto')
 const LIMITS = require('../../shared/limits.mjs') // focus-duration clamp constants (single source, audit item 4); require(esm) — Node >= 22.12
+const { normalizeContent, rowToTodo, rowToCategory, todoToRow } = require('./db-rows')
+const dayjs = require('dayjs')
 // electron-log only exists inside the packaged App; the standalone CLI (extraResources bundle) has no
 // node_modules/electron-log, so fall back to a no-op logger instead of crashing at require time
 let log
 try { log = require('electron-log') } catch { log = { info () {}, warn () {}, error () {} } }
+const oplog = require('./db-oplog')({ getDb: () => db, log })
 
 let Database = null
 function loadDriver () {
@@ -42,7 +45,9 @@ function loadDriver () {
 let db = null
 const stmts = {}
 /** Drop every cached prepared statement (they belong to the closed handle; re-init prepares fresh ones) */
-function stmtsClearAll () { for (const k of Object.keys(stmts)) delete stmts[k] }
+function stmtsClearAll () { for (const k of Object.keys(stmts)) delete stmts[k]; oplog.oplogReset() }
+
+/** Oplog statements cache the old handle after close/re-init — reset them with the rest */
 
 /** Database encryption key (stored at userData/db.key, same directory as the DB so it travels with migrations).
  *  Threat model: prevents the single todos.db file from being read directly by sync drives/copies/forensic tools;
@@ -138,14 +143,19 @@ CREATE TABLE IF NOT EXISTS categories (
   sort          INTEGER,
   isFolder      INTEGER DEFAULT 0,
   parentId      INTEGER DEFAULT 0,
-  deleted       INTEGER DEFAULT 0
+  deleted       INTEGER DEFAULT 0,
+  deletedAt     INTEGER NOT NULL DEFAULT 0,
+  updatedAt     INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS filters (
   id        INTEGER PRIMARY KEY AUTOINCREMENT,
   name      TEXT,
   conds     TEXT,
   sort      INTEGER NOT NULL DEFAULT 0,
-  createdAt INTEGER
+  createdAt INTEGER,
+  deleted   INTEGER NOT NULL DEFAULT 0,
+  deletedAt INTEGER NOT NULL DEFAULT 0,
+  updatedAt INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS meta (
   key   TEXT PRIMARY KEY,
@@ -156,7 +166,10 @@ CREATE TABLE IF NOT EXISTS plan_chips (
   taskId TEXT NOT NULL,
   day    TEXT NOT NULL,
   mm     TEXT NOT NULL,
-  sort   INTEGER NOT NULL DEFAULT 0
+  sort   INTEGER NOT NULL DEFAULT 0,
+  deleted   INTEGER NOT NULL DEFAULT 0,
+  deletedAt INTEGER NOT NULL DEFAULT 0,
+  updatedAt INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_plan_chips_day  ON plan_chips (day);
 CREATE INDEX IF NOT EXISTS idx_plan_chips_task ON plan_chips (taskId);
@@ -173,19 +186,23 @@ CREATE TABLE IF NOT EXISTS tomato_records (
   manual        INTEGER NOT NULL DEFAULT 0,
   status        TEXT,
   abandonReason TEXT,
-  extra         TEXT
+  extra         TEXT,
+  deleted       INTEGER NOT NULL DEFAULT 0,
+  deletedAt     INTEGER NOT NULL DEFAULT 0,
+  updatedAt     INTEGER NOT NULL DEFAULT 0
 );
-CREATE INDEX IF NOT EXISTS idx_tomato_records_date ON tomato_records (dateKey);`
+CREATE INDEX IF NOT EXISTS idx_tomato_records_date ON tomato_records (dateKey);
+-- Change-capture log (P1 sync groundwork 2026-09-15): one row per successful write op, appended in
+-- call() next to the ledger hook. Ring-buffered (see appendOplog); consumers read deltas via the
+-- syncOplogSince op and GC coverage comes from periodic full snapshots. commitSyncBatch is the
+-- sync-ack echo path and deliberately does NOT log (a real sync engine must not feed itself).
+CREATE TABLE IF NOT EXISTS sync_oplog (
+  seq      INTEGER PRIMARY KEY AUTOINCREMENT,
+  entity   TEXT NOT NULL,
+  entityId TEXT NOT NULL,
+  ts       INTEGER NOT NULL
+);`
 
-// Normalize whitespace in titles (common practice: collapse line breaks/tabs into spaces)
-function normalizeContent (s) {
-  if (typeof s !== 'string') return s
-  // Control chars + RTL/LTR/RLO override sanitization (guards against spoofing via notifications/export/system clipboard and line-break breakage),
-  // including the newer LRI/RLI/FSI/PDI (2066-2069) plus LRM/RLM/BOM — the older 202A-202E set no longer covers the spoofing surface.
-  // Then collapse multiple whitespace + truncate to 5000 chars (consistent with the editor/DB column constraints).
-  // eslint-disable-next-line no-control-regex -- control characters are exactly the target of this sanitization
-  return require('./sanitize').sanitizeText(s)
-}
 
 const FILTER_DATE_MODES = new Set(['all', 'today', 'week', 'overdue', 'none'])
 /** Filter-condition normalization: whitelist validation for dateMode/catId/priority, falling back on invalid values (an unknown dateMode makes filtering silently degrade to "all") */
@@ -204,134 +221,6 @@ function parseConds (s) {
   try { const v = JSON.parse(s || '{}'); return v && typeof v === 'object' ? normConds(v) : normConds(null) } catch { return normConds(null) }
 }
 
-/** Extra reminder offsets (minutes, negative = earlier) JSON parsing; fault tolerance: invalid/out-of-range values are dropped outright.
- *  The reminders column has two shapes: old = [offset...] numeric array; new = {o:[offsets], x:[absolute ts...]} (multiple reminders) */
-function parseOffsets (s) {
-  const v = parseReminders(s)
-  return v.o
-}
-
-function parseReminders (s) {
-  const empty = { o: [], x: [] }
-  if (!s) return empty
-  try {
-    const a = JSON.parse(s)
-    if (Array.isArray(a)) return { o: normOffsets(a), x: [] }
-    if (a && typeof a === 'object') return { o: normOffsets(a.o), x: normAbs(a.x) }
-    return empty
-  } catch { return empty }
-}
-
-function normOffsets (a) {
-  if (!Array.isArray(a)) return []
-  return [...new Set(a.filter(v => Number.isFinite(v) && v !== 0 && v >= -43200 && v <= 43200).map(Number))].sort((x, y) => x - y)
-}
-
-function normAbs (a) {
-  if (!Array.isArray(a)) return []
-  return [...new Set(a.filter(v => Number.isFinite(v) && v > 0).map(Number))].sort((x, y) => x - y)
-}
-
-/** Pack the reminders column: offsets only → keep the old array shape (readable by older versions); extra absolute reminders present → object shape */
-function packReminders (offsets, extra) {
-  const o = Array.isArray(offsets) ? offsets.filter(v => Number.isFinite(v) && v !== 0) : []
-  const x = Array.isArray(extra) ? extra.filter(v => Number.isFinite(v) && v > 0) : []
-  if (!o.length && !x.length) return null
-  if (!x.length) return JSON.stringify(o)
-  return JSON.stringify({ o, x })
-}
-
-/** Row -> app object */
-function rowToTodo (r) {
-  if (!r) return null
-  return {
-    taskId: r.id,
-    userId: r.userId,
-    taskContent: r.content,
-    taskDescribe: r.description,
-    complete: !!r.complete,
-    completedAt: r.completedAt || 0,
-    deletedAt: r.deletedAt || 0,
-    delete: !!r.deleted,
-    createTime: r.createdAt,
-    updateTime: r.updatedAt,
-    syncTime: r.syncTime,
-    todoTime: r.scheduledAt,
-    dayStart: r.scheduledDay,
-    reminderTime: r.remindAt || 0,
-    reminderOffsets: parseOffsets(r.reminders),
-    reminderExtra: parseReminders(r.reminders).x,
-    taskSort: r.sort,
-    estimate: r.focusMinutes,
-    difficulty: r.difficulty,
-    repeatId: r.recurGroupId,
-    subtasks: r.subtasks,
-    predecessors: r.predecessors,
-    image: r.imageUrls,
-    files: r.fileAttach,
-    categoryId: r.categoryId,
-    priority: r.priority || 0,
-    deadlineTs: r.deadlineTs || 0,
-    important: r.important || 0,
-    urgent: r.urgent || 0,
-    status: r.status,
-    version: r.version
-  }
-}
-
-/** Category row -> app object */
-/** Category row -> app object */
-function rowToCategory (r) {
-  if (!r) return null
-  return {
-    categoryId: r.id,
-    userId: r.userId,
-    categoryName: r.name,
-    categoryColor: r.color,
-    createTime: r.createdAt,
-    listSort: r.sort,
-    folderIs: !!r.isFolder,
-    folderId: r.parentId || 0,
-    delete: !!r.deleted
-  }
-}
-
-const dayjs = require('dayjs')
-function todoToRow (t) {
-  const todoTime = t.todoTime || 0
-  return {
-    id: t.taskId,
-    userId: t.userId != null ? t.userId : null,
-    content: t.taskContent != null ? normalizeContent(String(t.taskContent)) : '',
-    description: t.taskDescribe != null ? String(t.taskDescribe) : null,
-    complete: t.complete ? 1 : 0,
-    completedAt: t.completedAt || 0,
-    deletedAt: t.deletedAt || 0,
-    deleted: t.delete ? 1 : 0,
-    createdAt: t.createTime || 0,
-    updatedAt: t.updateTime || 0,
-    syncTime: t.syncTime || 0,
-    scheduledAt: todoTime,
-    scheduledDay: todoTime ? +dayjs(todoTime).startOf('day') : 0,
-    remindAt: t.reminderTime || 0,
-    reminders: packReminders(t.reminderOffsets, t.reminderExtra),
-    sort: t.taskSort != null ? t.taskSort : 0,
-    focusMinutes: t.estimate || 0,
-    difficulty: t.difficulty != null ? t.difficulty : null,
-    recurGroupId: t.repeatId != null ? t.repeatId : null,
-    subtasks: t.subtasks != null ? t.subtasks : null,
-    predecessors: t.predecessors != null ? t.predecessors : null,
-    imageUrls: t.image != null ? t.image : null,
-    fileAttach: t.files != null ? t.files : null,
-    categoryId: t.categoryId != null ? t.categoryId : 0,
-    priority: t.priority != null ? t.priority : 0,
-    deadlineTs: t.deadlineTs != null ? t.deadlineTs : 0,
-    important: t.important != null ? t.important : 0,
-    urgent: t.urgent != null ? t.urgent : 0,
-    status: t.status || 'add',
-    version: t.version || 0
-  }
-}
 
 function init (userDataPath) {
   // Re-entry policy (P2 2026-09-11): a second init while a handle is open closes the old handle
@@ -431,6 +320,25 @@ function initInner (userDataPath) {
       }
     } },
     { v: 4, fn: d => { const c=d.prepare('PRAGMA table_info(todos)').all().map(x=>x.name); if(!c.includes('predecessors')) d.exec('ALTER TABLE todos ADD COLUMN predecessors TEXT'); return true } },
+    { v: 5, fn: d => {
+      // P1 sync groundwork (2026-09-15): tombstone + updatedAt columns on every synced table.
+      // Only todos carried updatedAt/deletedAt before; filters/plan_chips/tomato_records deletes were
+      // physical (unpropagatable) and categories had no change timestamp. Defaults keep existing rows.
+      const want = {
+        categories: ['deletedAt INTEGER NOT NULL DEFAULT 0', 'updatedAt INTEGER NOT NULL DEFAULT 0'],
+        filters: ['deleted INTEGER NOT NULL DEFAULT 0', 'deletedAt INTEGER NOT NULL DEFAULT 0', 'updatedAt INTEGER NOT NULL DEFAULT 0'],
+        plan_chips: ['deleted INTEGER NOT NULL DEFAULT 0', 'deletedAt INTEGER NOT NULL DEFAULT 0', 'updatedAt INTEGER NOT NULL DEFAULT 0'],
+        tomato_records: ['deleted INTEGER NOT NULL DEFAULT 0', 'deletedAt INTEGER NOT NULL DEFAULT 0', 'updatedAt INTEGER NOT NULL DEFAULT 0']
+      }
+      for (const [table, cols] of Object.entries(want)) {
+        const have = new Set(d.prepare('PRAGMA table_info(' + table + ')').all().map(c => c.name))
+        for (const col of cols) {
+          const name = col.split(' ')[0]
+          if (!have.has(name)) d.exec(`ALTER TABLE ${table} ADD COLUMN ${col}`)
+        }
+      }
+      return true
+    } },
   ]
   let ver = getVer()
   // Failed migration must abort the loop (not `continue`): advancing past a failed migration would stamp the
@@ -539,9 +447,17 @@ function queryTodos ({ deleted = 0, complete = null, categoryId = null, repeatId
   return db.prepare(sql).all(p).map(rowToTodo)
 }
 
+// F2 2026-09-15:SQLite TEXT PRIMARY KEY 不隐含 NOT NULL — taskId:null/undefined/'' 一路落到这里
+// 会写成 NULL-id 幽灵行(全部幽灵行互相冲突覆盖,还可能挤掉正常 id='null' 的数据)。fail-fast 优于静默。
+function assertHasTaskId (t) {
+  if (!t || t.taskId == null || t.taskId === '') {
+    throw new Error('[TodoDB] upsert: taskId is required, refusing to write a NULL-id ghost row (got ' + JSON.stringify(t && t.taskId) + ')')
+  }
+}
+
 const OPS = {
-  upsert: t => { stmts.upsert.run(todoToRow(t)); return true },
-  upsertMany: list => { stmts.upsertMany(list.map(todoToRow)); return true },
+  upsert: t => { assertHasTaskId(t); stmts.upsert.run(todoToRow(t)); return true },
+  upsertMany: list => { if (!Array.isArray(list)) throw new Error('[TodoDB] upsertMany: list must be an array, got ' + typeof list); list.forEach(assertHasTaskId); stmts.upsertMany(list.map(todoToRow)); return true },
   // Atomic sync-commit (W3 2026-09-12): row upserts + todosVersion cursor advance in ONE transaction.
   // Why atomic: writing rows with status='sync' non-atomically and crashing between the upserts and the
   // setMeta would leave rows marked 'sync' in the DB while todosVersion stayed behind — the dirty-row
@@ -571,7 +487,7 @@ const OPS = {
     const cur = Number((curRow && curRow.value) || 0)
     if (v < cur) throw new Error('[TodoDB] commitSyncBatch: version ' + v + ' < current todosVersion ' + cur + ' — stale batch rejected')
     const tr = db.transaction(list => {
-      for (const t of list) stmts.upsert.run(todoToRow({ ...t, status: 'sync', version: v }))
+      for (const t of list) { assertHasTaskId(t); stmts.upsert.run(todoToRow({ ...t, status: 'sync', version: v })) }
       stmts.setMeta.run('todosVersion', String(v))
     })
     tr(rows)
@@ -580,7 +496,13 @@ const OPS = {
   bumpSnow: ({ taskId, minutes }) => {
     // Server-side clamping: arbitrary/negative values from the renderer (including the float window) must not tamper with the focus ledger (a single focus session capped at 600 minutes)
     const m = Math.max(0, Math.min(LIMITS.FOCUS_MAX_MINUTES, Math.floor(Number(minutes) || 0)))
-    const r = stmts.bumpSnow.run({ taskId, minutes: m, now: Date.now() }); return r.changes > 0
+    const r = stmts.bumpSnow.run({ taskId, minutes: m, now: Date.now() })
+    // Structured result: changes=0 used to collapse "missing" and "soft-deleted" into a bare false, so callers silently dropped focus credit; name the reason
+    if (r.changes === 0) {
+      const row = stmts.getById.get(taskId)
+      return { ok: false, reason: row ? 'deleted' : 'missing' }
+    }
+    return { ok: true, minutes: m }
   },
   getById: id => rowToTodo(stmts.getById.get(id)),
   getAll: ({ deleted = null } = {}) => {
@@ -618,27 +540,35 @@ const OPS = {
   },
   countSeedTodos: () => db.prepare("SELECT COUNT(*) n FROM todos WHERE substr(id, 1, 5) = 'seed_'").get().n,
   upsertCategory: (c) => {
-    db.prepare(`INSERT INTO categories (id,userId,name,color,createdAt,sort,isFolder,parentId,deleted)
-      VALUES (@id,@userId,@name,@color,@createdAt,@sort,@isFolder,@parentId,@deleted)
+    const now = Date.now()
+    // Stamp deletedAt at tombstone time: callers never pass it, and a tombstone without a timestamp
+    // can never be time-ordered or reconciled by a sync engine (review V1-F5)
+    const row = { ...c, deletedAt: (c && c.deletedAt) || (c && c.delete ? now : 0), updatedAt: (c && c.updatedAt) || now }
+    db.prepare(`INSERT INTO categories (id,userId,name,color,createdAt,sort,isFolder,parentId,deleted,deletedAt,updatedAt)
+      VALUES (@id,@userId,@name,@color,@createdAt,@sort,@isFolder,@parentId,@deleted,@deletedAt,@updatedAt)
       ON CONFLICT(id) DO UPDATE SET name=excluded.name, color=excluded.color, createdAt=excluded.createdAt,
-        sort=excluded.sort, isFolder=excluded.isFolder, parentId=excluded.parentId, deleted=excluded.deleted
-      `).run(c) // 全字段 DO UPDATE:漏 isFolder/parentId 曾致拖入/拖出文件夹静默打回(2026-09-04 深审 P0);userId 不更新(行属不变)
+        sort=excluded.sort, isFolder=excluded.isFolder, parentId=excluded.parentId, deleted=excluded.deleted,
+        deletedAt=excluded.deletedAt, updatedAt=excluded.updatedAt
+      `).run(row) // 全字段 DO UPDATE:漏 isFolder/parentId 曾致拖入/拖出文件夹静默打回(2026-09-04 深审 P0);userId 不更新(行属不变)
     return true
   },
   getAllCategories: () => db.prepare('SELECT * FROM categories WHERE deleted = 0 ORDER BY sort').all().map(rowToCategory),
   // ===== Saved filters (smart lists): conds stores the condition JSON (catId/priority/dateMode) =====
-  filterList: () => db.prepare('SELECT * FROM filters ORDER BY sort, id').all().map(r => ({ id: r.id, name: r.name, conds: parseConds(r.conds), sort: r.sort })),
+  // Deletes are tombstones (P1 sync groundwork): a soft-deleted filter row must survive to propagate
+  // to other devices; the recycle semantics stay invisible because filterList filters deleted=0.
+  filterList: () => db.prepare('SELECT * FROM filters WHERE deleted = 0 ORDER BY sort, id').all().map(r => ({ id: r.id, name: r.name, conds: parseConds(r.conds), sort: r.sort })),
   filterUpsert: f => {
     const name = String(f && f.name || '').slice(0, 50)
     const conds = JSON.stringify(normConds(f && f.conds))
     if (f.id) {
-      db.prepare('UPDATE filters SET name=?, conds=?, sort=? WHERE id=?').run(name, conds, f.sort || 0, f.id)
+      // Un-deletes on conflict: re-saving a tombstoned id intentionally resurrects it
+      db.prepare('UPDATE filters SET name=?, conds=?, sort=?, deleted=0, deletedAt=0, updatedAt=? WHERE id=?').run(name, conds, f.sort || 0, Date.now(), f.id)
       return f.id
     }
-    const r = db.prepare('INSERT INTO filters (name, conds, sort, createdAt) VALUES (?, ?, ?, ?)').run(name, conds, f.sort || 0, Date.now())
+    const r = db.prepare('INSERT INTO filters (name, conds, sort, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?)').run(name, conds, f.sort || 0, Date.now(), Date.now())
     return Number(r.lastInsertRowid)
   },
-  filterDelete: id => { db.prepare('DELETE FROM filters WHERE id = ?').run(id); return true },
+  filterDelete: id => { db.prepare('UPDATE filters SET deleted=1, deletedAt=?, updatedAt=? WHERE id = ?').run(Date.now(), Date.now(), id); return true },
   // Per-day task total/completed counts (by due date), plus completion counts by "completion day" (unaffected by due date)
   // scheduledDay stores millisecond timestamps; callers may pass a YYYYMMDD integer (CLI), uniformly converted to a millisecond range
   _dayBounds: ({ from, to }) => {
@@ -650,6 +580,11 @@ const OPS = {
     }
     const f = conv(from)
     const t = conv(to)
+    // F2 2026-09-15:new Date('垃圾').getTime()=NaN 可通过 == null 检查,SQL BETWEEN NaN 绑定成 NULL
+    // → 静默恒空统计(CLI stats 场景下"空结果"比报错更骗人)。NaN = 调用方传了无法解析的日期,USAGE 错误如实上抛。
+    for (const [name, v] of [['from', f], ['to', t]]) {
+      if (v != null && Number.isNaN(v)) throw new Error('[TodoDB] _dayBounds: ' + name + ' is not a parseable date, refusing to run BETWEEN NaN (silent empty stats)')
+    }
     // 终点=to 当日本地日末:用 dayjs 加一天再减 1ms,夏令时切换日(23/25h)不错位 1 小时(2026-09-05 终审 P2;固定 +86400000 只对中国时区成立)
     return [f == null ? null : f, t == null ? null : +dayjs(t).add(1, 'day').startOf('day') - 1]
   },
@@ -676,14 +611,17 @@ const OPS = {
     // 2026-09-04 根修:账本迁 tomato_records 行表后聚合一跳完成
     // succeed=1 only: abandoned pomodoros are not focus time — same filter as the renderer's StatisticsView
     const rows = db.prepare(`SELECT dateKey ds, SUM(focusDuration) focus FROM tomato_records
-      WHERE succeed = 1 AND dateKey BETWEEN ? AND ? GROUP BY dateKey`).all(
+      WHERE succeed = 1 AND deleted = 0 AND dateKey BETWEEN ? AND ? GROUP BY dateKey`).all(
         fKey ? fKey : '0000-00-00', tKey ? tKey : '9999-99-99')
     return rows.map(r => ({ ds: r.ds, focus: r.focus || 0 }))
   },
   // ===== Plan chips (timeline planning layer) formal row storage (2026-09-03 root fix) =====
   // Previously meta.dayPlanState JSON whole-package + LS dual-write with three-way concurrency — the architectural root of four data-loss incidents;
   // with row storage there is a single write channel (SQLite serialized) + write-op broadcast + cascading cleanup on task deletion, so the race is structurally eliminated.
-  planAll: () => db.prepare('SELECT id, taskId, day, mm FROM plan_chips ORDER BY day, mm, sort').all(),
+  // plan_chips deletes are tombstones (P1 sync groundwork): user-facing chip removals must propagate
+  // to other devices. planPrune is time-based GC (old days fall off) and stays physical — devices
+  // reconcile pruned history via periodic full snapshots, so tombstoning it would only grow the table.
+  planAll: () => db.prepare('SELECT id, taskId, day, mm FROM plan_chips WHERE deleted = 0 ORDER BY day, mm, sort').all(),
   planAddMany: chips => {
     const list = (Array.isArray(chips) ? chips : [chips]).map(c => ({
       id: (c && c.id) || 'pl_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
@@ -694,30 +632,32 @@ const OPS = {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(c.day)) throw new Error('planAddMany: day 必须 YYYY-MM-DD')
       if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(c.mm)) throw new Error('planAddMany: mm 必须 HH:mm')
     }
-    const ins = db.prepare('INSERT INTO plan_chips (id, taskId, day, mm, sort) VALUES (@id,@taskId,@day,@mm,@sort) ON CONFLICT(id) DO UPDATE SET taskId=excluded.taskId, day=excluded.day, mm=excluded.mm, sort=excluded.sort')
-    const tr = db.transaction(() => list.forEach(c => ins.run(c))); tr()
+    const ins = db.prepare('INSERT INTO plan_chips (id, taskId, day, mm, sort, deleted, deletedAt, updatedAt) VALUES (@id,@taskId,@day,@mm,@sort,0,0,@updatedAt) ON CONFLICT(id) DO UPDATE SET taskId=excluded.taskId, day=excluded.day, mm=excluded.mm, sort=excluded.sort, deleted=0, deletedAt=0, updatedAt=excluded.updatedAt')
+    const now = Date.now()
+    const tr = db.transaction(() => list.forEach(c => ins.run({ ...c, updatedAt: now }))); tr()
     return list.map(c => c.id)
   },
   planUpdateChip: ({ id, day, mm }) => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(String(day))) throw new Error('planUpdateChip: day 必须 YYYY-MM-DD')
     if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(String(mm))) throw new Error('planUpdateChip: mm 必须 HH:mm')
-    const r = db.prepare('UPDATE plan_chips SET day=?, mm=? WHERE id=?').run(String(day), String(mm), String(id))
+    const r = db.prepare('UPDATE plan_chips SET day=?, mm=?, updatedAt=? WHERE id=? AND deleted=0').run(String(day), String(mm), Date.now(), String(id))
     return r.changes > 0
   },
   planRemoveIds: ids => {
     const list = Array.isArray(ids) ? ids : [ids]
-    const del = db.prepare('DELETE FROM plan_chips WHERE id = ?')
-    const tr = db.transaction(() => list.forEach(i => del.run(String(i)))); tr()
+    const del = db.prepare('UPDATE plan_chips SET deleted=1, deletedAt=?, updatedAt=? WHERE id = ?')
+    const now = Date.now()
+    const tr = db.transaction(() => list.forEach(i => del.run(now, now, String(i)))); tr()
     return true
   },
   planMoveTask: ({ taskId, fromDay, toDay }) => {
     const okDay = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v))
     if (!okDay(fromDay) || !okDay(toDay)) return 0 // reject malformed day keys outright, preventing chips from landing in invisible buckets
-    const r = db.prepare('UPDATE plan_chips SET day=? WHERE taskId=? AND day=?').run(String(toDay), String(taskId), String(fromDay))
+    const r = db.prepare('UPDATE plan_chips SET day=?, updatedAt=? WHERE taskId=? AND day=? AND deleted=0').run(String(toDay), Date.now(), String(taskId), String(fromDay))
     return r.changes
   },
-  planDeleteTask: taskId => { db.prepare('DELETE FROM plan_chips WHERE taskId=?').run(String(taskId)); return true },
-  planDeleteTaskDay: ({ taskId, day }) => { db.prepare('DELETE FROM plan_chips WHERE taskId=? AND day=?').run(String(taskId), String(day)); return true },
+  planDeleteTask: taskId => { db.prepare('UPDATE plan_chips SET deleted=1, deletedAt=?, updatedAt=? WHERE taskId=?').run(Date.now(), Date.now(), String(taskId)); return true },
+  planDeleteTaskDay: ({ taskId, day }) => { db.prepare('UPDATE plan_chips SET deleted=1, deletedAt=?, updatedAt=? WHERE taskId=? AND day=?').run(Date.now(), Date.now(), String(taskId), String(day)); return true },
   planPrune: ({ keepDays }) => {
     const keep = Array.isArray(keepDays) ? keepDays.filter(d => /^\d{4}-\d{2}-\d{2}$/.test(String(d))) : []
     if (!keep.length) return 0
@@ -769,26 +709,39 @@ const OPS = {
     }
     return rec
   },
-  tomatoAll: () => db.prepare('SELECT * FROM tomato_records ORDER BY endTime DESC').all().map(OPS._rowToRec),
+  tomatoAll: () => db.prepare('SELECT * FROM tomato_records WHERE deleted = 0 ORDER BY endTime DESC').all().map(OPS._rowToRec),
   tomatoAppendMany: rows => {
     const list = Array.isArray(rows) ? rows : [rows]
-    const ins = db.prepare(`INSERT INTO tomato_records (tomatoId, endTime, dateKey, focus, focusTaskId, focusDuration, rest, restDuration, succeed, manual, status, abandonReason, extra)
-      VALUES (@tomatoId, @endTime, @dateKey, @focus, @focusTaskId, @focusDuration, @rest, @restDuration, @succeed, @manual, @status, @abandonReason, @extra)
+    const ins = db.prepare(`INSERT INTO tomato_records (tomatoId, endTime, dateKey, focus, focusTaskId, focusDuration, rest, restDuration, succeed, manual, status, abandonReason, extra, deleted, deletedAt, updatedAt)
+      VALUES (@tomatoId, @endTime, @dateKey, @focus, @focusTaskId, @focusDuration, @rest, @restDuration, @succeed, @manual, @status, @abandonReason, @extra, 0, 0, @updatedAt)
       ON CONFLICT(tomatoId) DO UPDATE SET endTime=excluded.endTime, dateKey=excluded.dateKey, focus=excluded.focus, focusTaskId=excluded.focusTaskId,
         focusDuration=excluded.focusDuration, rest=excluded.rest, restDuration=excluded.restDuration, succeed=excluded.succeed, manual=excluded.manual,
-        status=excluded.status, abandonReason=excluded.abandonReason, extra=excluded.extra`)
-    const tr = db.transaction(() => list.forEach(raw => {
-      if (!raw || !raw.tomatoId) throw new Error('tomatoAppendMany: tomatoId required')
-      if (!raw.endTime) throw new Error('tomatoAppendMany: endTime required')
+        status=excluded.status, abandonReason=excluded.abandonReason, extra=excluded.extra, deleted=0, deletedAt=0, updatedAt=excluded.updatedAt`)
+    // F2 2026-09-15 行级容错(架构根因:批量接口的失败粒度应是"行级"而非"批级"):
+    // 此前任一行缺 tomatoId/endTime 抛错回滚整批 → 渲染端 pending 队列被一条坏行劫持无限重试,
+    // 同批合法账本行永不落库。现改为事务内跳过无效行并记入返回值 rejected,合法行照常落库;
+    // renderer acknowledges the batch on fulfilment and logs rejected rows, then drops them from its
+    // pending queue (报错以 console.error 上报,行按 rejected 索引剔除)。
+    const rejected = []
+    let accepted = 0
+    const tr = db.transaction(() => list.forEach((raw, index) => {
+      const reject = reason => rejected.push({
+        index,
+        tomatoId: raw && raw.tomatoId != null ? String(raw.tomatoId) : null,
+        reason
+      })
+      if (!raw || !raw.tomatoId) { reject('tomatoId required'); return }
+      if (!raw.endTime) { reject('endTime required'); return }
       const r = OPS._recToRow(Object.assign({ dateKey: '', succeed: true, manual: false }, raw))
       // dateKey 无条件由 endTime 重导(2026-09-04 深审 P0:三补录入口曾各按 startTs 落 dateKey,跨午夜记录与统计/时间轴 endTime 口径分裂)
       // dateKey 从调用方传入值起不再被信任,格式校验降级为派生后的防御断言
       r.dateKey = dayjs(r.endTime).format('YYYY-MM-DD')
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(r.dateKey))) throw new Error('tomatoAppendMany: dateKey derive failed')
-      ins.run(r)
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(r.dateKey))) { reject('dateKey derive failed'); return }
+      ins.run({ ...r, updatedAt: Date.now() })
+      accepted++
     }))
     tr()
-    return true
+    return { accepted, rejected }
   },
   tomatoUpdateById: ({ tomatoId, patch }) => {
     const cur = db.prepare('SELECT * FROM tomato_records WHERE tomatoId = ?').get(String(tomatoId))
@@ -798,15 +751,20 @@ const OPS = {
     rec.dateKey = dayjs(rec.endTime).format('YYYY-MM-DD')
     if (!/^\d{4}-\d{2}-\d{2}$/.test(String(rec.dateKey))) throw new Error('tomatoUpdateById: bad endTime produces invalid dateKey')
     const r = OPS._recToRow(rec)
+    // `AND deleted = 0`: a tombstoned (removed) record is invisible to every reader — reporting success
+    // on it would tell the caller a patch landed that nobody can ever see (review V1-F2)
     const res = db.prepare(`UPDATE tomato_records SET endTime=@endTime, dateKey=@dateKey, focus=@focus, focusTaskId=@focusTaskId,
       focusDuration=@focusDuration, rest=@rest, restDuration=@restDuration, succeed=@succeed, manual=@manual,
-      status=@status, abandonReason=@abandonReason, extra=@extra WHERE tomatoId=@tomatoId`).run(Object.assign({ tomatoId: String(tomatoId) }, r))
+      status=@status, abandonReason=@abandonReason, extra=@extra, updatedAt=@updatedAt WHERE tomatoId=@tomatoId AND deleted = 0`).run(Object.assign({ tomatoId: String(tomatoId), updatedAt: Date.now() }, r))
     return res.changes > 0
   },
+  // Tombstone delete (P1 sync groundwork): ledger removals must propagate to other devices; every
+  // reader (tomatoAll/tomatoByDay) filters deleted=0, so behaviour matches the old physical delete.
   tomatoRemoveByIds: ids => {
     const list = Array.isArray(ids) ? ids : [ids]
-    const del = db.prepare('DELETE FROM tomato_records WHERE tomatoId = ?')
-    const tr = db.transaction(() => list.forEach(i => del.run(String(i))))
+    const del = db.prepare('UPDATE tomato_records SET deleted=1, deletedAt=?, updatedAt=? WHERE tomatoId = ?')
+    const now = Date.now()
+    const tr = db.transaction(() => list.forEach(i => del.run(now, now, String(i))))
     tr()
     return true
   },
@@ -828,6 +786,16 @@ const OPS = {
     OPS.tomatoAppendMany(list)
     delBlob()
     return list.length
+  },
+  // Delta read for the (future) sync engine and tests: oplog rows strictly after sinceSeq, oldest first.
+  // limit guards the first pull on a large existing log; callers page through via the returned max seq.
+  // Main-process/CLI-only op by design: the future sync engine lives in the main process and reads the
+  // db layer directly. Deliberately NOT in the renderer IPC whitelist or contracts.d.ts DbCallOp —
+  // adding a renderer caller without whitelisting it would be the filterList/bumpSnow silent-outage shape.
+syncOplogSince: ({ sinceSeq = 0, limit = 2000 } = {}) => {
+    const s = Number(sinceSeq) || 0
+    const n = Math.max(1, Math.min(10000, Math.floor(Number(limit) || 2000)))
+    return db.prepare('SELECT seq, entity, entityId, ts FROM sync_oplog WHERE seq > ? ORDER BY seq ASC LIMIT ?').all(s, n)
   },
 }
 
@@ -852,6 +820,7 @@ function call (op, params) {
   if (!fn) throw new Error('[TodoDB] 未知操作: ' + op)
   const r = fn(params)
   if (ledgerChangedHook && !ledgerHookSuppressCount && LEDGER_WRITE_OPS.has(op)) { try { ledgerChangedHook(op) } catch { /* 广播失败不阻断落库 */ } }
+  if (op !== 'commitSyncBatch' && WRITE_OPS.has(op)) oplog.appendOplog(oplog.oplogEntriesFor(op, params, r))
   return r
 }
 
@@ -881,4 +850,4 @@ function close () {
 // Initialized probe: within the same process (the main process's CSV import), reuse the existing connection; a second init rebuilding the handle on the same file is forbidden
 function isOpen () { return !!db }
 
-module.exports = { init, call, queryTodos, normalizeContent, isWriteOp, isOpen, close, setLedgerChangedHook, suppressLedgerHook, LEDGER_WRITE_OPS, SCHEMA }
+module.exports = { init, call, queryTodos, normalizeContent, isWriteOp, isOpen, close, setLedgerChangedHook, suppressLedgerHook, LEDGER_WRITE_OPS, WRITE_OPS, SCHEMA }

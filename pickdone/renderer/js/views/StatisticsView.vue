@@ -248,15 +248,12 @@ import EmptyState from '../components/EmptyState.vue'
 import StatsShareCard from './statistics/StatsShareCard.vue'
 import StatsAchievements from './statistics/StatsAchievements.vue'
 
-import { buildReviewMetrics } from './statistics/metrics.js'
+import { buildReviewMetrics, PERIODS, CUSTOM_MAX_DAYS } from './statistics/metrics.js'
 import { composeReview, kpiDelta } from './statistics/insights.js'
+import { csvField } from './statistics/csv.js'
 import { buildAchievements } from './statistics/achievements.js'
 import { periodBounds, buildHeatmap, countGiveUps7, buildWeekdayModel, buildTrendModel, buildFocusTrendModel, buildTimelineRows } from './statistics/chartModels.js'
 
-// Periods: named calendar periods take priority (finalized by user); span periods remain as a supplement (internal keys, display copy in periodOptions)
-// Custom date range (finalized by user 2026-08-31): no standalone pill; clicking the date-range label on the right opens the picker; the period internal key stays 'custom', route persists from/to
-const PERIODS = ['thisWeek', 'lastWeek', 'thisMonth', 'lastMonth', 'last7', 'last30']
-const CUSTOM_MAX_DAYS = 366 // cap the custom span so the per-day trend series stays readable
 const T = 'statsA.StatisticsView.'
 
 export default {
@@ -533,7 +530,8 @@ export default {
       rows.push([])
       rows.push([this.$t(T + 'csvDate'), this.$t(T + 'csvDoneCount'), this.$t(T + 'csvFocusMins')])
       m.doneByDay.forEach((d, i) => rows.push([d.label, d.value, m.focusByDay[i] ? m.focusByDay[i].value : 0]))
-      const csv = '﻿' + rows.map(r => r.map(c => '"' + String(c == null ? '' : c).replace(/"/g, '""') + '"').join(',')).join('\n')
+      // csvField neutralizes formula-injection prefixes (=+-@) in user text before quoting (OWASP)
+      const csv = '﻿' + rows.map(r => r.map(c => csvField(c)).join(',')).join('\n')
       const a = document.createElement('a')
       a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
       a.download = `${this.$t(T + 'fileDataReview')}_${this.period}_${dayjs().format('YYYYMMDD')}.csv`

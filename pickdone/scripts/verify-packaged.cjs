@@ -54,6 +54,19 @@ if (fs.existsSync(resCli)) {
   const txt = cmdBuf.toString('latin1')
   if (/(^|[^\r])\n/.test(txt)) { console.error('FAIL: pickdone.cmd 含裸 LF（cmd.exe 只认 CRLF）'); process.exit(1) }
 }
+  // CLI 模块完整性：cli/*.cjs 里的顶层 require('./x') 必须都能在 resources/cli 落地——
+  // extraResources filter 漏条目 = 打包版 CLI 全命令灭（2026-09-15 实锤 lib-attachments.cjs 漏登记）
+  for (const f of fs.readdirSync(resCli).filter(n => /\.c?js$/.test(n))) {
+    const src = fs.readFileSync(path.join(resCli, f), 'utf8')
+    for (const m of src.matchAll(/require\(['"]\.\/([^'"]+)['"]\)/g)) {
+      const rel = m[1]
+      const ok = ['.js', '.cjs', ''].some(ext => fs.existsSync(path.join(resCli, rel + ext)))
+      if (!ok) {
+        console.error(`FAIL: resources/cli 缺 ${rel}（${f} 依赖它）——extraResources filter 漏条目,打包版 CLI 全命令灭`)
+        process.exit(1)
+      }
+    }
+  }
 
 const pkg = JSON.parse(fs.readFileSync(path.resolve('package.json'), 'utf8'))
 const globs = pkg.build && pkg.build.files || []
@@ -95,7 +108,7 @@ const platformPrebuild = `prebuilds/${platMap[process.platform]}-${archMap[proce
 // electron-builder names unpacked dirs with an arch suffix on linux (linux-arm64-unpacked)
 const dirName = process.platform === 'win32' ? 'win-unpacked'
   : `${process.platform}${process.arch === 'arm64' ? '-arm64' : ''}-unpacked`
-const vendorPrebuilds = path.join('dist', dirName, 'resources', 'vendor', 'better-sqlite3-multiple-ciphers', platformPrebuild)
+const vendorPrebuilds = path.join(unpacked, 'resources', 'vendor', 'better-sqlite3-multiple-ciphers', platformPrebuild)
 if (!fs.existsSync(vendorPrebuilds)) {
   console.error(`FAIL: ${vendorPrebuilds} 不存在（resources/vendor 驱动副本缺本平台 prebuild，打包版 DB 初始化必失败）`)
   process.exit(1)

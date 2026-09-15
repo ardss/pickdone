@@ -329,14 +329,17 @@
       }
       case 'bumpSnow':
         // 桌面端写SQLite雪球分钟;5175按已有taskSnow聚合累计存meta,保证统计页不与桌面分叉
+        // Return shape stays in sync with src/main/db.js bumpSnow: { ok:true, minutes } /
+        // { ok:false, reason:'missing'|'deleted' }. The shim has no real DB row to probe,
+        // so the missing/deleted branch is not simulated here — every write resolves ok.
         {
           const p = (Array.isArray(params) ? params[0] : params) || {}
-          if (!p.taskId) return true
+          if (!p.taskId) return { ok: true, minutes: Number(p.minutes) || 0 }
           let m = {}
           try { m = JSON.parse(localStorage.getItem(META_KEY)) || {} } catch {}
           m['__shimSnow'] = Object.assign({}, m.__shimSnow, { [p.taskId]: (m.__shimSnow?.[p.taskId] || 0) + (Number(p.minutes) || 0) })
           localStorage.setItem(META_KEY, JSON.stringify(m))
-          return true
+          return { ok: true, minutes: Math.max(0, Math.floor(Number(p.minutes) || 0)) }
         }
       case 'tomatoAll':
         // 账本行表 shim:LS meta 桶存行集(桌面端为 SQLite tomato_records;5175 只求调试语义一致)

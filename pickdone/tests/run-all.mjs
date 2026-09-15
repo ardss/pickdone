@@ -29,6 +29,9 @@ function discover(root, acc = []) {
       // fixtures/ holds shared test data, not runnable specs — skip it recursively so a stray
       // *.test.mjs dropped there is never picked up as a suite member
       if (e.name === 'fixtures') continue
+      // dot-dirs (e.g. tests/.artifacts with the visual gate's locked Chromium profile) are
+      // state, not specs — scanning them crashes on EPERM (scandir of Crashpad attachments)
+      if (e.name.startsWith('.')) continue
       discover(p, acc)
     }
     else if (e.name.endsWith('.test.mjs') && !EXCLUDE.has(e.name)) acc.push(p)

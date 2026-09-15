@@ -55,6 +55,7 @@
   --z-modal: 1500;     /* 设置类半屏弹窗 */
   --z-titlebar: 2000;  /* 自绘标题栏 */
   --z-notify: 3000;    /* 全局通知 */
+  --z-overlay: 3500;   /* 整屏模态遮罩(介于通知与查看菜单/右键菜单之间,防止模态被通知盖住) */
   --z-viewmenu: 4500;  /* 查看更多菜单 */
   --z-ctxmenu: 5000;   /* 右键菜单 */
   --z-fc-popover: 6000;/* FC 日历弹层 */
@@ -433,7 +434,9 @@ textarea { font-family: inherit; }
 
 
 
-.td-title { font-size: var(--fs-base); color: var(--text-1); line-height: 20px; word-break: break-all; position: relative; transition: color .3s ease; }
+.td-title { font-size: var(--fs-base); color: var(--text-1); line-height: 20px; word-break: break-all; position: relative; transition: color .3s ease;
+  /* 长标题最多两行截断(写法与 .td-desc 的既有 clamp 保持一致),全文靠模板 :title 提示 */
+  display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; -webkit-line-clamp: 2; }
 
 
 

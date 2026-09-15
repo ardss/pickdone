@@ -6,6 +6,9 @@ import { FMT } from '../utils/core.js'
 
 const LS_KEY = 'habitsState'
 const META_KEY = 'habitsState'
+/** Aux→main relay ping: aux windows can't call setMeta (MAIN_WINDOW_ONLY_OP); they write LS + this ping,
+ *  and the main window's storage listener below re-persists the blob to the DB on its behalf. */
+const SYNC_KEY = 'habitsSyncPing'
 /** Persistence blob format version: readers treat old unstamped data as v1 (behavior unchanged) */
 const SCHEMA_V = 1
 const PALETTE = ['#0f9d8f', '#f76e6e', '#f2a63b', '#7ac74f', '#5aa9e6', '#9d8df1', '#eb96c3']
@@ -37,13 +40,66 @@ function load () {
   return { habits: [], moments: [], savedAt: 0 }
 }
 
-/** Dual write: localStorage (synchronous fallback) + main DB meta table (source of truth, included in auto backup) */
+/** Aux-window detection: same judgment as dbMirror's writeNow (float / quick-add hashes).
+ *  setMeta is a MAIN_WINDOW_ONLY_OP — an aux window's direct dbCall is rejected by the main process,
+ *  which previously left the aux window's LS edit never reaching the durable DB copy. */
+export function isAuxWindow () {
+  try { return !!(typeof window !== 'undefined' && window.location && window.location.hash && /__tomato-float|__quick-add/.test(window.location.hash)) } catch (e) { return false }
+}
+
+/** Dual write: localStorage (synchronous fallback) + main DB meta table (source of truth, included in auto backup).
+ *  Aux windows: LS write + relay ping only — the main window's storage listener persists to the DB on their behalf. */
 function persist (state) {
   const blob = { schemaV: SCHEMA_V, habits: state.habits, moments: state.moments || [], savedAt: Date.now() }
   state.savedAt = blob.savedAt
   try { localStorage.setItem(LS_KEY, JSON.stringify(blob)) } catch {}
-  // 2026-09-12: silent .catch(() => {}) hid meta write failures (DB is the durable source of truth) — log them
-  try { window.todoAPI && window.todoAPI.dbCall && window.todoAPI.dbCall('setMeta', [META_KEY, JSON.stringify(blob)]).catch(e => console.error('[habits] setMeta failed:', e)) } catch {}
+  try {
+    if (!window.todoAPI || !window.todoAPI.dbCall) return
+    if (isAuxWindow()) {
+      try { localStorage.setItem(SYNC_KEY, String(Date.now()) + ':' + Math.random().toString(36).slice(2)) } catch (e) { /* empty */ }
+      return
+    }
+    // 2026-09-12: silent .catch(() => {}) hid meta write failures (DB is the durable source of truth) — log them
+    window.todoAPI.dbCall('setMeta', [META_KEY, JSON.stringify(blob)]).catch(e => console.error('[habits] setMeta failed:', e))
+  } catch (e) { /* empty environment */ }
+}
+
+// Main window relay: an aux window's habits edit arrives via LS + ping; the main window re-reads the
+// blob, feeds it into the main window's Vuex state (applyExternal — otherwise the next main-window
+// persist would overwrite the aux edit with stale state) and writes the durable DB meta row on its
+// behalf (storage events only fire in the OTHER windows, so the writer never relays itself).
+let externalApplier = null
+/** Hook for main.js: register a callback receiving every external (aux-window) habits blob so it can
+ *  be applied to the main window's Vuex store, e.g. `onExternalHabitBlob(b => store.commit('habits/applyExternal', b))`. */
+export function onExternalHabitBlob (fn) { externalApplier = typeof fn === 'function' ? fn : null }
+
+function relayAuxBlob () {
+  try {
+    const d = readLs()
+    if (!d) { try { localStorage.removeItem(SYNC_KEY) } catch (e) { /* empty */ } return }
+    if (externalApplier) {
+      try { externalApplier(d) } catch (e) { console.error('[habits] external blob apply failed:', e) }
+    }
+    // The ping is consumed only after the durable DB write settles: consuming it up front let one
+    // failed IPC drop the aux edit from the retry channel entirely (the next main-window persist
+    // would paper over it at best, or lose it on quit at worst).
+    if (typeof window !== 'undefined' && window.todoAPI && window.todoAPI.dbCall) {
+      window.todoAPI.dbCall('setMeta', [META_KEY, JSON.stringify(d)]).then(
+        () => { try { localStorage.removeItem(SYNC_KEY) } catch (e) { /* empty */ } },
+        err => console.error('[habits] relay setMeta failed — ping kept for retry:', err)
+      )
+    }
+  } catch (err) { /* empty */ }
+}
+
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function' && !isAuxWindow()) {
+  window.addEventListener('storage', e => {
+    if (!e || e.key !== SYNC_KEY) return
+    relayAuxBlob()
+  })
+  // Residual delivery: a ping written while no main window was listening (main window was closed/
+  // reloading when the aux window saved) is relayed once at registration, then cleared.
+  try { if (localStorage.getItem(SYNC_KEY)) relayAuxBlob() } catch (e) { /* empty */ }
 }
 
 // Uses dayjs+FMT.date uniformly like the rest of the app (previously hand-rolled concatenation could disagree with HabitView's dayjs convention at day boundaries)
@@ -75,10 +131,18 @@ export default {
       if (!h) return 0
       let streak = 0
       const d = new Date()
-      if (!h.records[todayKey()]) d.setDate(d.getDate() - 1)
-      for (;;) {
+      // Walk back day by day; non-due days (frequency filter) are skipped without breaking the streak.
+      // P2 root fix: the loop used to ignore isDueOn, so a Mon/Wed/Fri habit "broke" on an idle Sunday.
+      // Today being due-but-unchecked doesn't break either (same lenient semantics as before).
+      const createdKey = h.createdAt ? window.dayjs(h.createdAt).format(FMT.date) : null
+      // G1 hard cap: `frequency:{type:'weekdays',weekdays:[]}` with a missing createdAt used to make both
+      // loop-exit conditions unreachable (no due day ever breaks, no createdKey guard) → infinite loop,
+      // frozen renderer. Two years of look-back is far beyond any meaningful streak.
+      for (let guard = 0; guard < 730; guard++) {
         const k = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0')
-        if (h.records[k]) { streak++; d.setDate(d.getDate() - 1) } else break
+        if (h.records[k]) { streak++ } else if (k !== todayKey() && isDueOn(h, k)) break
+        if (createdKey && k < createdKey) break // walked back before the habit's creation: nothing earlier can be due (loop guard)
+        d.setDate(d.getDate() - 1)
       }
       return streak
     },
@@ -110,6 +174,17 @@ export default {
       s.moments = blob.moments || []
       s.savedAt = blob.savedAt || 0
       try { localStorage.setItem(LS_KEY, JSON.stringify(blob)) } catch {}
+    },
+    /** G1: an aux window's habits edit relayed through the main window — update the main window's Vuex
+     *  state so its next persist doesn't resurrect stale data and clobber the aux edit (LS already holds
+     *  the blob; no persist here to avoid an echo loop). Same last-write-wins guard as replaceAll. */
+    applyExternal (s, blob) {
+      if (!blob || !Array.isArray(blob.habits)) return
+      if ((blob.savedAt || 0) < (s.savedAt || 0)) return
+      normalizeHabitRecords(blob.habits)
+      s.habits = blob.habits
+      s.moments = blob.moments || []
+      s.savedAt = blob.savedAt || 0
     },
     addHabit (s, { name, frequency }) {
       // Millisecond-precision Date.now() alone can collide (rapid double-add), breaking delete/check-in by id

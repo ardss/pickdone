@@ -697,7 +697,10 @@ function toggleComplete (input, target, { withSubtasks, completedAt } = {}) {
 
 /** Soft delete → recycle bin (deletedAt drives the 30-day auto hard-delete and recycle-bin ordering, aligned with the renderer) */
 function deleteTodo (input) {
-  const after = patchTodo(input, { delete: true, deletedAt: Date.now() }, { action: 'delete' })
+  // version reset to 0 (renderer parity: store/todo.js deleteTodo, P3 2026-09-12): syncTodos excludes
+  // delete rows already acked with version > 0, so keeping the old version meant a re-delete after
+  // restore never re-entered the sync snapshot and the deletion silently never propagated.
+  const after = patchTodo(input, { delete: true, deletedAt: Date.now(), version: 0 }, { action: 'delete' })
   chipsSnapshotForDelete(after.taskId) // snapshot chips → meta before clearing rows: prevents orphan chips while keeping restore backfill capability
   return after
 }
@@ -742,12 +745,16 @@ function chipsRestoreSnapshot (taskId) {
 
 /** Restore from the recycle bin */
 function restoreTodo (input) {
-  if (input) { try { chipsRestoreSnapshot(resolveTask(input, recycleTasks()).taskId) } catch { /* no snapshot = originally had no schedule */ } }
+  // Row first, snapshot second (verify-then-commit, renderer parity: store/todo.js restoreFromRecycle):
+  // chipsRestoreSnapshot clears the one-shot snapshot meta as a side effect, so consuming it before the
+  // resolve+upsert was confirmed meant a mid-way failure (re-resolve throwing, upsert failing) permanently
+  // lost the snapshot. The row update alone is harmless to retry; only after it succeeds do we spend it.
   const db = open()
   const t = resolveTask(input, recycleTasks())
   const merged = { ...t, delete: false, deletedAt: 0, updateTime: Date.now(), status: 'update' }
   db.call('upsert', merged)
   const after = db.call('getById', t.taskId)
+  try { chipsRestoreSnapshot(t.taskId) } catch { /* no snapshot = originally had no schedule */ }
   audit.record({ action: 'restore', targets: [t], changes: [{ before: t, after }] })
   return after
 }
@@ -988,7 +995,10 @@ function repeatOff (input, all) {
     const now = Date.now()
     for (const x of open().call('queryTodos', { deleted: 0 })) {
       if (x.repeatId === rid && x.taskId !== t.taskId && !x.complete) {
-        open().call('upsert', Object.assign({}, x, { delete: 1, deletedAt: now, updateTime: now, status: 'delete' }))
+        // version: 0 (deleteTodo parity, 2026-09-12 P3): syncTodos excludes delete rows already acked
+        // with version > 0, so keeping the old version meant the soft-deleted repeat instances never
+        // re-entered the sync snapshot and the deletion silently never propagated.
+        open().call('upsert', Object.assign({}, x, { delete: 1, deletedAt: now, updateTime: now, version: 0, status: 'delete' }))
         chipsSnapshotForDelete(x.taskId) // same snapshot→clear cascade as deleteTodo: soft-deleted instances must not leave orphan chips
         removed++
       }
@@ -1413,7 +1423,12 @@ function backfillRecord ({ taskId = null, content = '', date, at = '20:00', minu
     focusDuration: min, rest: 0, restDuration: 0,
     succeed: true, status: 'local', manual: true
   }
-  open().call('tomatoAppendMany', rec)
+  // Single-row CLI path fails fast: a rejected row (bad at → NaN endTime etc.) must not print success
+  // or write audit. Row-level tolerance ({accepted, rejected}) is for the renderer's batch queue.
+  const res = open().call('tomatoAppendMany', rec)
+  if (res && Array.isArray(res.rejected) && res.rejected.length) {
+    throw new CliError('backfill rejected: ' + res.rejected.map(r => r.reason).join(', '), 'LEDGER_REJECT')
+  }
   audit.record({ action: 'tomato.backfill', targets: taskId ? [{ taskId }] : [], changes: [], note: 'CLI backfill ' + min + 'min @ ' + rec.dateKey + ' ' + at + ' (ledger row direct)' })
   return rec
 }
@@ -1591,55 +1606,6 @@ function setReminderExtra (input, csv) {
   return { taskId: t.taskId, reminderExtra: extras.map(ts => dayjs(ts).format('YYYY-MM-DD HH:mm')) }
 }
 
-/* ---------------- Attachments (userData/files + image/4 JSON — replicates main/attachments.js saveAttachment) ---------------- */
-const ATTACH_MAX_BYTES = 50 * 1024 * 1024
-const ATTACH_IMG_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico'])
-// Allowlist kept in sync with attachments.js (a blocklist was once bypassed via Windows trailing dots; here we reuse the allowlist and trailing-dot stripping rules)
-const ATTACH_ALLOWED_EXT = new Set([...ATTACH_IMG_EXT, 'pdf', 'txt', 'md', 'csv', 'xlsx', 'xls', 'docx', 'doc', 'pptx', 'ppt', 'zip', 'mp3', 'wav', 'ogg', 'mp4', 'webm', 'json'])
-const attachKeyOf = item => { try { return decodeURIComponent(String(item.url || '').replace(/^local:\/\//, '')) } catch { return '' } }
-
-function addAttachment (input, file) {
-  const t = resolveTask(input, liveTasks())
-  const fs = require('fs')
-  const path = require('path')
-  if (!file || !fs.existsSync(file)) throw new CliError('file not found: ' + file, 'FILE_NOT_FOUND')
-  const cleanName = path.basename(file).replace(/[. ]+$/, '')
-  const ext = path.extname(cleanName).slice(1).toLowerCase()
-  if (!ext || !ATTACH_ALLOWED_EXT.has(ext)) throw new CliError('extension not allowed: ' + (ext || '(none)'), 'EXT_NOT_ALLOWED')
-  const raw = fs.readFileSync(file)
-  if (!raw.length) throw new CliError('file is empty', 'EMPTY_FILE')
-  if (raw.length > ATTACH_MAX_BYTES) throw new CliError('file too large (max 50MB)', 'FILE_TOO_LARGE')
-  const dir = path.join(userDataDir(), 'files')
-  fs.mkdirSync(dir, { recursive: true })
-  const safe = `${t.taskId.replace(/[\\/:*?"<>|]/g, '_').replace(/\.\./g, '_')}_${Date.now()}_${cleanName.replace(/[\\/:*?"<>|]/g, '_')}`
-  fs.writeFileSync(path.join(dir, safe), raw)
-  const item = { url: 'local://' + encodeURIComponent(safe), name: cleanName, size: raw.length }
-  const field = ATTACH_IMG_EXT.has(ext) ? 'image' : 'files'
-  let list = []
-  try { list = JSON.parse(t[field] || '[]'); if (!Array.isArray(list)) list = [] } catch { list = [] }
-  list.push(item)
-  patchTodo(t.taskId, { [field]: JSON.stringify(list) }, { action: 'attachment.add' })
-  return { taskId: t.taskId, kind: field === 'image' ? 'image' : 'file', name: item.name, size: item.size, index: list.length }
-}
-function listAttachments (input) {
-  const t = resolveTask(input, liveTasks())
-  const parse = s => { try { const a = JSON.parse(s || '[]'); return Array.isArray(a) ? a : [] } catch { return [] } }
-  return { taskId: t.taskId, images: parse(t.image), files: parse(t.files) }
-}
-/** Remove the n-th image or file attachment (1-based). Unlinks the physical file best-effort (same as the UI delete flow). */
-function removeAttachment (input, kind, n) {
-  const t = resolveTask(input, liveTasks())
-  const field = /^(img|image|i)$/i.test(kind) ? 'image' : /^(file|f)$/i.test(kind) ? 'files' : null
-  if (!field) throw new CliError('kind must be img|file', 'USAGE')
-  let list = []
-  try { list = JSON.parse(t[field] || '[]'); if (!Array.isArray(list)) list = [] } catch { list = [] }
-  const idx = parseInt(n, 10) - 1
-  if (!(idx >= 0 && idx < list.length)) throw new CliError(`attachment #${n} not found (${list.length} total)`, 'ATTACH_NOT_FOUND')
-  const [item] = list.splice(idx, 1)
-  patchTodo(t.taskId, { [field]: JSON.stringify(list) }, { action: 'attachment.remove' })
-  try { require('fs').unlinkSync(path.join(userDataDir(), 'files', attachKeyOf(item))) } catch { /* already gone is fine */ }
-  return { taskId: t.taskId, removed: item.name }
-}
 
 /* ---------------- Settings (meta db.settingsState mirror; hot-synced to a running App via the main-process watcher) ----------------
    Manifest mirrors renderer store/settings.js DEFAULT_SETTINGS/SETTING_ENUMS (keep in sync; security keys are never settable here). */
@@ -1844,6 +1810,8 @@ function listReady (categoryId = null) {
     return preds.every(pid => { const p = byId[pid]; return !p || p.complete })
   })
 }
+const attachApi = require('./lib-attachments.cjs')
+const { addAttachment, listAttachments, removeAttachment } = attachApi({ resolveTask, liveTasks, patchTodo, userDataDir, CliError })
 module.exports = {
   CliError, open, parseDate, dayStartOf, launchApp, userDataDir, hasIsolationEnv,
   liveTasks, recycleTasks, resolveTask, resolveCategory,

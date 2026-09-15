@@ -65,6 +65,7 @@ export default {
       "noDemoDataMsg": "No demo data",
       "clearDemoDataMsg": "Clear demo data",
       "demoDataClearedMsg": "Demo data cleared; only real data remains",
+      "purgeFailedMsg": "Operation failed: ",
       "customOption": "Custom",
       "rangeToday": "Today",
       "rangeLastWeek": "Last 7 days",

@@ -214,3 +214,8 @@ export function pctDiff (cur, base) {
   if (base == null || base === 0) return null
   return Math.max(-199, Math.min(199, Math.round((cur - base) / base * 100)))
 }
+
+/** Named calendar periods take priority (finalized by user); span periods remain as a supplement (internal keys, display copy in periodOptions) */
+export const PERIODS = ['thisWeek', 'lastWeek', 'thisMonth', 'lastMonth', 'last7', 'last30']
+/** Cap the custom span so the per-day trend series stays readable */
+export const CUSTOM_MAX_DAYS = 366

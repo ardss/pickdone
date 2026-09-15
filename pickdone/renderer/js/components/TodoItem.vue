@@ -22,7 +22,7 @@
       </svg>
     </span>
     <div class="td-body">
-      <div class="td-title" :class="{'td-title--empty': !todo.taskContent}">{{ todo.taskContent || $t('statsE.TodoItem.untitled') }}</div>
+      <div class="td-title" :class="{'td-title--empty': !todo.taskContent}" :title="todo.taskContent">{{ todo.taskContent || $t('statsE.TodoItem.untitled') }}</div>
       <div v-if="todo.taskDescribe" class="td-desc">{{todo.taskDescribe}}</div>
       <div v-if="subtasks.length" class="td-subs">
         <div v-for="(s, si) in subtasks" :key="s.text + '#' + si" class="td-sub" role="checkbox"

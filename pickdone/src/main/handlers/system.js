@@ -18,6 +18,9 @@ module.exports = function systemHandlers (ctx) {
       // Locked-state gate, symmetric with upload-attachment/export/delete-file (2026-09-11 P1: this was
       // the only remaining data-bearing channel without it) + rate limit against notification spam
       if (isLocked()) throw new Error('locked')
+      // F2 2026-09-15 形状守卫:opt undefined/非对象时 `opt.title` 曾直接 TypeError(invoke reject 成裸异常);
+      // 缺 title 时走 i18n 安全默认,非字符串字段按空串清洗 —— 通知通道永不因坏入参崩溃。
+      const o = (opt && typeof opt === 'object') ? opt : {}
       if (!allowWithinRate(notificationSendTimes, Date.now())) {
         log.warn('[IPC] notification 频控拦截, sender:', e.sender.id)
         return false
@@ -25,7 +28,7 @@ module.exports = function systemHandlers (ctx) {
       // Same sanitization as scheduler.fire: renderer-supplied title/body goes straight to system notifications; control characters/RTL override characters must be stripped
       // eslint-disable-next-line no-control-regex -- control characters are exactly the target of this sanitization; the rule does not apply here
       const clean = v => require('../sanitize').sanitizeText(v, 200)
-      const n = new Notification({ title: clean(opt.title) || i18n.mt('notifyDefault'), body: clean(opt.body), silent: !!opt.silent })
+      const n = new Notification({ title: clean(typeof o.title === 'string' ? o.title : '') || i18n.mt('notifyDefault'), body: clean(typeof o.body === 'string' ? o.body : ''), silent: !!o.silent })
       n.show(); return true
     },
 

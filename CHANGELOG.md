@@ -6,7 +6,21 @@ and versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-09-15
+
 ### Fixed
+- Pomodoro bookkeeping is race-proof across windows: a finished focus can no longer be claimed twice by a throttled float window (no double credit/double notify), a stale window can no longer kill a rest phase another window just started, and credit is no longer silently lost when the focused task was deleted elsewhere.
+- Habits: streaks respect custom schedules (a Mon/Wed/Fri habit no longer breaks over the weekend), and edits made from a float/quick window now reliably reach the database instead of being silently rejected.
+- Categories: deleting a category no longer leaves tasks pointing at a ghost; soft-deleted categories reappear in the recycle bin after a restart; hard-deleted ones no longer resurrect as ghosts.
+- Attachments (CLI): removing an attachment can no longer delete files outside the app folder via a crafted path; same-millisecond uploads no longer overwrite each other.
+- CSV imports: the tags column is no longer dropped (imported as #tag suffixes), and Did completions (status -1) import as completed.
+- Note for CSV re-imports: duplicate detection now keys on the content including #tag suffixes, so rows imported by a previous version (stored without tags) will be imported once more.
+- CLI: restoring from the recycle bin can no longer lose the one-shot undo snapshot on failure; deleting repeat instances propagates the deletion correctly; `backfill` fails loudly instead of reporting success for a rejected record.
+- Reliability: failed database writes are retried instead of silently dropped (settings mirror, task-edit queue, quit-flush), and batch pomodoro imports no longer get one bad row blocking the whole batch.
+- Crash-proofing: malformed dates in statistics/CLI report clear errors; malformed notifications, attachment opens and reminder commands no longer throw; a habits streak with an unusual schedule can no longer freeze rendering.
+- Undo/redo and sync toasts now show real success/failure feedback (including keyboard-only flows); the undo toast controller no longer leaks listeners on route changes.
+- UI: task titles clamp to two lines with a tooltip; recycle-bin and data-purge actions give honest success/failure toasts; statistics CSV export neutralizes formula injection; TodoBox rows and completed-row actions are keyboard-reachable with visible focus; fullscreen modals (pomodoro abandon, onboarding) layer above notifications.
+
 - Project milestones with a past date now show as **overdue** (red marker, overdue-days label) unless their linked tasks are actually all completed — previously any past date silently rendered as done, hiding missed milestones.
 - Expired task groups (yesterday's, last week's completed items) can be collapsed again — a cleanup routine was silently undoing every collapse click on them.
 - Project view: the dependency board's height now adapts to the actual header size instead of assuming a fixed one, so a header that grows with milestones no longer pushes the board below the fold.
@@ -15,6 +29,7 @@ and versioning follows [Semantic Versioning](https://semver.org/).
 - Recycle-bin rows no longer loop-syncing against themselves; quit-time listener accumulation and a dropped dirty-flag on rapid edits were fixed.
 
 ### Changed
+- Sync groundwork (internal): physical-delete paths (recycle-bin purge, hard delete, plan prune) are not yet change-captured — multi-device reconciliation for those relies on periodic full snapshots in a future sync release.
 - Milestone editing consolidated into a single dialog (title + date together), replacing the old two-step prompt chain; the project page scrolls as one column so header, tabs and body all stay reachable.
 - CSV imports take an automatic event-snapshot backup beforehand, and the import preview reports structured error codes instead of leaking internal messages.
 - Test infrastructure: the unit-test gate now fails on skipped or cancelled tests; live Electron tests moved out of the quick regression so pre-commit runs in about 45 seconds with no environment dependencies; CI splits live tests onto the Windows runner (the ubuntu job finishes in about a minute).

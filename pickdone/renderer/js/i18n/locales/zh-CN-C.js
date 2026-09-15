@@ -11,6 +11,7 @@ export default {
       noDate: '没有日期',
       overdue: '过期 ',
       restoredToToday: '已恢复并安排到今天',
+      restoreFailedMsg: '恢复失败：',
       restored: '已恢复',
       restoredToDate: '已恢复到所选日期',
       markedComplete: '已标记完成',

@@ -5,35 +5,91 @@
  * A one-time migration achieves durability: after the first mirror write the DB is the persistent copy, so data survives even if LS is cleared.
  */
 const DEBOUNCE_MS = 2000
+/** Exponential backoff for failed setMeta retries: 2s → 4s → … capped at 60s, abandoned after maxAttempts */
+const RETRY_BASE_MS = 2000
+const RETRY_MAX_MS = 60000
+const RETRY_MAX_ATTEMPTS = 10
+/** Test hook: unit tests shrink the delays to keep the suite fast (prod code never touches this) */
+export const _timing = { debounceMs: DEBOUNCE_MS, retryBaseMs: RETRY_BASE_MS, retryMaxMs: RETRY_MAX_MS, maxAttempts: RETRY_MAX_ATTEMPTS }
+
 const timers = {}
 const pendings = {} // Blobs pending within the debounce window (used by quit flush)
+const newest = {} // Newest blob ever queued per key — a late rejection of an older write must never clobber it
+const attempts = {} // Consecutive failure count per key (drives the backoff and the give-up)
 
+function scheduleTimer (metaKey, delay) {
+  if (timers[metaKey]) return
+  timers[metaKey] = setTimeout(() => { delete timers[metaKey]; flushKey(metaKey) }, delay)
+}
+
+/** One flush attempt for a key: hand the pending blob to writeNow; the pending slot is only released
+ *  once the write could actually be initiated (early-exit environments keep the blob queued). */
+function flushKey (metaKey) {
+  const b = pendings[metaKey]
+  if (b === undefined) return
+  if (writeNow(metaKey, b)) {
+    delete pendings[metaKey]
+  } else {
+    // Degraded host / aux window: keep the blob pending; a later mirrorToDb call will retry it.
+    // No retry timer here — that environment never becomes writable on its own.
+  }
+}
+
+function scheduleRetry (metaKey, blob) {
+  // Stale-rejection guard: if a NEWER blob has been queued for this key since this write was issued,
+  // the newer blob already represents the current state — re-queueing the old one would roll the
+  // mirror back (write#1 rejects after write#2 landed). Drop the stale failure instead.
+  if (newest[metaKey] !== blob) {
+    console.info('[dbMirror] stale setMeta failure ignored (a newer blob already superseded it):', metaKey)
+    return
+  }
+  const n = (attempts[metaKey] || 0) + 1
+  if (n > _timing.maxAttempts) {
+    // Give up after 10 consecutive failures: infinite no-backoff hammering otherwise spins forever
+    delete pendings[metaKey]; delete newest[metaKey]; delete attempts[metaKey]
+    console.error('[dbMirror] setMeta for', metaKey, 'failed', _timing.maxAttempts, 'times — giving up on this blob (data still live in localStorage)')
+    return
+  }
+  attempts[metaKey] = n
+  const delay = Math.min(_timing.retryMaxMs, _timing.retryBaseMs * 2 ** (n - 1))
+  pendings[metaKey] = blob
+  console.warn('[dbMirror] setMeta failed (attempt', n, '), retrying in', delay, 'ms:', metaKey)
+  scheduleTimer(metaKey, delay)
+}
+
+/** Initiate one DB write; returns true when the write was actually handed to the DB bridge
+ *  (the promise may still reject later — scheduleRetry handles that), false when the environment
+ *  made writing impossible (blob stays queued in pendings). */
 function writeNow (metaKey, blob) {
+  newest[metaKey] = blob
   try {
-    if (!window.todoAPI?.dbCall) return
+    if (!window.todoAPI?.dbCall) return false
     // setMeta is now a main-window-only op (to prevent a compromised aux window from batch-modifying meta); aux windows (float/quick-add) don't write the DB directly —
     // LS is the cross-window sync channel; after the main window receives state via the storage event, the main window's mirror persists it
-    if (window.location.hash && /__tomato-float|__quick-add/.test(window.location.hash)) return
-    window.todoAPI.dbCall('setMeta', [metaKey, JSON.stringify(blob)]).catch(() => {})
-  } catch { /* empty environment */ }
+    if (window.location.hash && /__tomato-float|__quick-add/.test(window.location.hash)) return false
+    window.todoAPI.dbCall('setMeta', [metaKey, JSON.stringify(blob)])
+      .then(() => { delete attempts[metaKey] }) // success resets the backoff/give-up counter
+      .catch(() => scheduleRetry(metaKey, blob))
+    return true
+  } catch (e) {
+    // degraded host (no todoAPI): previously swallowed too — surface it at least
+    console.warn('[dbMirror] setMeta threw:', metaKey, e)
+    return false
+  }
 }
 
 export function mirrorToDb (metaKey, blob, immediate = false) {
   pendings[metaKey] = blob
+  newest[metaKey] = blob
+  attempts[metaKey] = 0 // a fresh user write gets a fresh retry budget
   if (immediate) {
     // Compensation path (LS write failure etc.): skip the debounce and persist immediately, otherwise failing again within the 2s window = data exists only in memory
     clearTimeout(timers[metaKey]); delete timers[metaKey]
-    const b = pendings[metaKey]; delete pendings[metaKey]
-    if (b !== undefined) writeNow(metaKey, b)
+    flushKey(metaKey)
     return
   }
   clearTimeout(timers[metaKey])
-  timers[metaKey] = setTimeout(() => {
-    delete timers[metaKey]
-    const b = pendings[metaKey]
-    delete pendings[metaKey]
-    if (b !== undefined) writeNow(metaKey, b)
-  }, DEBOUNCE_MS)
+  timers[metaKey] = setTimeout(() => { delete timers[metaKey]; flushKey(metaKey) }, _timing.debounceMs)
 }
 
 // Quit flush: main process before-quit broadcast (mirrors pending in the debounce window are flushed to disk immediately, otherwise quit/crash loses the last write)
@@ -43,7 +99,7 @@ if (typeof window !== 'undefined' && window.todoAPI && window.todoAPI.onAppQuitt
     for (const k of Object.keys(pendings)) {
       const b = pendings[k]
       delete pendings[k]
-      if (b !== undefined) writeNow(k, b)
+      if (b !== undefined) writeNow(k, b) // best effort at quit: hand it to the bridge even if it may reject
     }
   })
 }
