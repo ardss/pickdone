@@ -28,7 +28,7 @@ export default {
     'm.visible' (v) {
       if (v) {
         // Focus restore (a11y): remember the trigger so keyboard focus can return here on close
-        const ae = document.activeElement
+        const ae = document.activeElement as HTMLElement | null
         this._lastTrigger = ae && typeof ae.focus === 'function' ? ae : null
         // Place at the original coordinates first, then clamp back into the viewport once the menu's real size is measured: otherwise menus near the bottom/right edge would overflow the screen and become unselectable
         this.pos = { x: this.m.x, y: this.m.y }

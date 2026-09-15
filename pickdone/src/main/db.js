@@ -18,11 +18,7 @@ const oplog = require('./db-oplog')({ getDb: () => db, log })
 let Database = null
 function loadDriver () {
   if (Database) return Database
-  // Packaged layout: the driver lives in extraResources (resources/vendor, all platform prebuilds) —
-  // NOT in app.asar. The asar copy was pruned per-arch by electron-builder's smart filtering, and the
-  // bundled CLI already resolves this same resources/vendor copy via its own relative require, so the
-  // app aligning onto it keeps one authoritative driver per package. Dev runs fall back to the
-  // repo-relative path.
+  // Packaged layout: the driver lives in extraResources (resources/vendor, all platform prebuilds) — NOT in app.asar. The asar copy was pruned per-arch by electron-builder's smart filtering, and the bundled CLI already resolves this same resources/vendor copy via its own relative require, so the app aligning onto it keeps one authoritative driver per package. Dev runs fall back to the repo-relative path.
   let vendorRoot = path.join(__dirname, '..', '..', 'vendor', 'better-sqlite3-multiple-ciphers')
   try {
     const { app } = require('electron')
@@ -203,7 +199,6 @@ CREATE TABLE IF NOT EXISTS sync_oplog (
   ts       INTEGER NOT NULL
 );`
 
-
 const FILTER_DATE_MODES = new Set(['all', 'today', 'week', 'overdue', 'none'])
 /** Filter-condition normalization: whitelist validation for dateMode/catId/priority, falling back on invalid values (an unknown dateMode makes filtering silently degrade to "all") */
 function normConds (c) {
@@ -221,13 +216,8 @@ function parseConds (s) {
   try { const v = JSON.parse(s || '{}'); return v && typeof v === 'object' ? normConds(v) : normConds(null) } catch { return normConds(null) }
 }
 
-
 function init (userDataPath) {
-  // Re-entry policy (P2 2026-09-11): a second init while a handle is open closes the old handle
-  // cleanly first instead of throwing — rebuilding against a live handle would orphan prepared
-  // statements mid-write, and an abrupt throw broke the same-process restart idiom used across the
-  // unit tests (init without close = simulated restart). Closing first leaves no stale stmts and
-  // keeps the recovery re-init path (index.js db-fail dialog → attemptDbRecovery) working.
+  // Re-entry policy (P2 2026-09-11): a second init while a handle is open closes the old handle cleanly first instead of throwing — rebuilding against a live handle would orphan prepared statements mid-write, and an abrupt throw broke the same-process restart idiom used across the unit tests (init without close = simulated restart). Closing first leaves no stale stmts and keeps the recovery re-init path (index.js db-fail dialog → attemptDbRecovery) working.
   if (db) { try { db.close() } catch {} db = null; stmtsClearAll() }
   try {
     initInner(userDataPath)
@@ -460,14 +450,8 @@ function assertHasTaskId (t) {
 const OPS = {
   upsert: t => { assertHasTaskId(t); stmts.upsert.run(todoToRow(t)); return true },
   upsertMany: list => { if (!Array.isArray(list)) throw new Error('[TodoDB] upsertMany: list must be an array, got ' + typeof list); list.forEach(assertHasTaskId); stmts.upsertMany(list.map(todoToRow)); return true },
-  // Atomic sync-commit (W3 2026-09-12): row upserts + todosVersion cursor advance in ONE transaction.
-  // Why atomic: writing rows with status='sync' non-atomically and crashing between the upserts and the
-  // setMeta would leave rows marked 'sync' in the DB while todosVersion stayed behind — the dirty-row
-  // filter (status !== 'sync') would then skip them forever and the cursor would never advance again =
-  // silent permanent non-convergence. Inside one transaction the crash outcome is all-or-nothing:
-  // either the whole batch is re-sent on restart (old dirty semantics) or fully acknowledged (new
-  // semantics) — no intermediate state. Rows arrive in store shape; the DB layer forces status='sync'
-  // so a compromised renderer cannot write arbitrary status values through this op.
+  // Atomic sync-commit (W3 2026-09-12): row upserts + todosVersion cursor advance in ONE transaction. Why atomic: writing rows with status='sync' non-atomically and crashing between the upserts and the setMeta would leave rows marked 'sync' in the DB while todosVersion stayed behind — the dirty-row filter (status !== 'sync') would then skip them forever and the cursor would never advance again =
+  // silent permanent non-convergence. Inside one transaction the crash outcome is all-or-nothing: either the whole batch is re-sent on restart (old dirty semantics) or fully acknowledged (new semantics) — no intermediate state. Rows arrive in store shape; the DB layer forces status='sync' so a compromised renderer cannot write arbitrary status values through this op.
   commitSyncBatch: ({ rows, version }) => {
     // The cursor is the convergence lynchpin — a non-numeric value (String(undefined) etc.) would
     // poison state.version with NaN on the next boot's parseInt. Fail closed at the DB layer.
@@ -715,7 +699,7 @@ const OPS = {
       let v = r[k]
       if (k === 'endTime' || k === 'rest') v = Math.max(0, Math.round(Number(v) || 0))
       else if (k === 'focusDuration') v = Math.min(LIMITS.FOCUS_MAX_MINUTES, Math.max(1, Math.round(Number(v) || 0))) // clamp at the DB layer: renderer clamps 720, bumpSnow clamps 600 — this path used to be unbounded
-      else if (k === 'restDuration') v = Math.min(600, Math.max(0, Math.round(Number(v) || 0)))
+      else if (k === 'restDuration') v = Math.min(LIMITS.REST_MAX_MINUTES, Math.max(0, Math.round(Number(v) || 0)))
       else if (k === 'succeed') v = v === false ? 0 : 1
       else if (k === 'manual') v = v ? 1 : 0
       o[k] = v == null ? null : v

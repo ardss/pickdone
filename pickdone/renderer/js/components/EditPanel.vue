@@ -170,15 +170,7 @@
 
 <script lang="ts">
 /**
- * Right edit panel -- aligned with the right-sidebar reference:
- * Category chips / complete + expand / title / description / date chips (today, tomorrow, pick a date, no date) /
- * add reminder / subtasks (x, drag handle) / add subtask (n/20) / three difficulty levels / upload images / bottom tool row
- *
- * S4 split (2026-09-12): reminders/subtasks/attachments/dependencies views moved to
- * ./edit-panel/Ep*.vue -- children only EMIT change events; this component owns the
- * state (e/subList/imgList/fileList) and funnels every mutation through the unified
- * queueSave pipeline (utils/editSave.js). The save pipeline is the global lifeline:
- * it is the only place that dispatches todo/updateTodoFields for panel edits.
+ * Right edit panel -- aligned with the right-sidebar reference: Category chips / complete + expand / title / description / date chips (today, tomorrow, pick a date, no date) / add reminder / subtasks (x, drag handle) / add subtask (n/20) / three difficulty levels / upload images / bottom tool row S4 split (2026-09-12): reminders/subtasks/attachments/dependencies views moved to ./edit-panel/Ep*.vue -- children only EMIT change events; this component owns the state (e/subList/imgList/fileList) and funnels every mutation through the unified queueSave pipeline (utils/editSave.js). The save pipeline is the global lifeline: it is the only place that dispatches todo/updateTodoFields for panel edits.
  */
 import {dayjs, DAY_MS, FMT } from '../utils/core.js'
 import { extractTags } from '../utils/search.js'
@@ -236,14 +228,10 @@ export default {
     }
   },
   created () {
-    // Save pipeline (utils/editSave.js). boot() flips it live: the immediate watchers below
-    // fire BEFORE created(), and pre-boot flush calls must stay silent no-ops
-    // (same guard as the original `_dirtyFlags` initialization).
+    // Save pipeline (utils/editSave.js). boot() flips it live: the immediate watchers below fire BEFORE created(), and pre-boot flush calls must stay silent no-ops (same guard as the original `_dirtyFlags` initialization).
     this._save = createSaveQueue(this.$store, {
       getTaskId: () => this.e && this.e.taskId,
-      // Dirty list-style fields are serialized lazily at drain time (callback-time values).
-      // Subtask rows carry a render-only `_key` (stable v-for key) — stripped here so it never
-      // leaks into the persisted subtasks JSON.
+      // Dirty list-style fields are serialized lazily at drain time (callback-time values). Subtask rows carry a render-only `_key` (stable v-for key) — stripped here so it never leaks into the persisted subtasks JSON.
       dirtyPatchFor: (k) => ({
         subtasks: { subtasks: JSON.stringify(this.subList.map(({ _key, ...rest }) => rest)) },
         imgs: { image: JSON.stringify(this.imgList) },
@@ -260,8 +248,7 @@ export default {
   },
   computed: {
     task () { return this.$store.state.todo.todoList.find(t => t.taskId === (this.e && this.e.taskId)) || null },
-    // Deps surface gate, same two-layer doctrine as the today deps view (TodayView seg button):
-    // the developer-mode master switch AND the module's own switch must both be on
+    // Deps surface gate, same two-layer doctrine as the today deps view (TodayView seg button): the developer-mode master switch AND the module's own switch must both be on
     devMode () { const s = this.$store.state.settings; return !!s.developerMode && !!s.showDepsModule },
     /* Pomodoro estimate/actual (ported from the refactor branch): the estimate is stored in tomatoEstimate, the actual is accumulated by attributing pomodoro records */
     tomatoEstimateN () { return getEstimate(this.e && this.e.taskId) },
@@ -310,8 +297,7 @@ export default {
         }
       }
     },
-    // The task was fully deleted by another window/sync/auto-cleanup (in neither the active nor the recycle list): close the panel automatically.
-    // Otherwise it becomes a "zombie editor" -- displaying the hydrated snapshot while all saves are silently lost (updateTodoFields is a no-op for a nonexistent id)
+    // The task was fully deleted by another window/sync/auto-cleanup (in neither the active nor the recycle list): close the panel automatically. Otherwise it becomes a "zombie editor" -- displaying the hydrated snapshot while all saves are silently lost (updateTodoFields is a no-op for a nonexistent id)
     task (t) {
       if (!t && !this.inRecycle && this.$store.state.ui.rightSidebarTodoEdit.visible) {
         this.$store.commit('ui/closeEdit')
@@ -322,8 +308,7 @@ export default {
 
     // First open of the edit panel: spotlight tour for the attachment toolbar (in-context teaching)
     this.$nextTick(() => { import('../utils/onboardingTours.js').then(mod => mod.maybeRunTour('editpanel', 600)).catch(() => {}) })
-    // Esc closes the topmost overlay: inner popovers first (category / reminders / dependencies),
-    // then the image preview, then the edit panel itself
+    // Esc closes the topmost overlay: inner popovers first (category / reminders / dependencies), then the image preview, then the edit panel itself
     this._onKeydown = (e) => {
       if (e.key !== 'Escape') return
       if (this.catOpen) { this.catOpen = false; return }
@@ -344,8 +329,7 @@ export default {
     this.$nextTick(() => {
       this.$el.querySelectorAll('textarea, input').forEach(el => el.setAttribute('spellcheck', 'false'))
     })
-    // Inputs created dynamically later (subtasks etc.) get spell check disabled on focus too
-    // Named handler: must be removed in beforeUnmount (listener accumulation when nodes are replaced after hydrate)
+    // Inputs created dynamically later (subtasks etc.) get spell check disabled on focus too Named handler: must be removed in beforeUnmount (listener accumulation when nodes are replaced after hydrate)
     this._onFocusin = e => {
       const t = e.target
       if (t && (t.tagName === 'TEXTAREA' || t.tagName === 'INPUT') && t.hasAttribute('spellcheck')) t.setAttribute('spellcheck', 'false')
@@ -421,16 +405,15 @@ export default {
     collapse () {
       if (!this.autoSave) this.queueSave({})
       this.$store.commit('ui/collapseEdit')
-      // Hand focus back to the task row being edited (keyboard users would otherwise drop to <body>);
-      // rows don't carry data-id yet, so fall back to the scroll container (focusable via tabindex=-1)
+      // Hand focus back to the task row being edited (keyboard users would otherwise drop to <body>); rows don't carry data-id yet, so fall back to the scroll container (focusable via tabindex=-1)
       this.$nextTick(() => {
         const id = this.e && this.e.taskId
         let row = null
         if (id != null) {
           row = document.querySelector('.td-item[data-id="' + id + '"], .td-item[data-task-id="' + id + '"]')
         }
-        if (row) { row.focus(); return }
-        const list = document.querySelector('.main-scroll')
+        if (row) { (row as HTMLElement).focus(); return }
+        const list = document.querySelector<HTMLElement>('.main-scroll')
         if (list) {
           if (!list.hasAttribute('tabindex')) list.setAttribute('tabindex', '-1')
           list.focus()
@@ -622,13 +605,10 @@ export default {
           // Delay disk file deletion until after the undo window: an accidental delete can be reverted losslessly within 5 seconds
           diskTimer = setTimeout(() => {
             if (!item.url) return
-            // Data-safety guard: re-check the latest task row in the store before touching the disk.
-            // If the JSON update never landed (save failed / panel unmounted mid-write), the row still
-            // references the url — deleting the file then would corrupt the task's attachments.
+            // Data-safety guard: re-check the latest task row in the store before touching the disk. If the JSON update never landed (save failed / panel unmounted mid-write), the row still references the url — deleting the file then would corrupt the task's attachments.
             const row = this.$store.state.todo.todoList.find(t => t.taskId === (this.e && this.e.taskId))
             if (attachmentUrlPresent(row, item.url)) return
-            // .catch: delete-file now surfaces structured errors instead of swallowing them (2026-09-11);
-            // this call is a fire-and-forget sweep — a failure must not become an unhandled rejection
+            // .catch: delete-file now surfaces structured errors instead of swallowing them (2026-09-11); this call is a fire-and-forget sweep — a failure must not become an unhandled rejection
             window.todoAPI.deleteFile(item.url).catch(() => {})
           }, 5500)
         },

@@ -13,7 +13,7 @@ dayjs.locale('zh-cn')
 // to rely on todo-core's require side effect extending the shared instance. Extend our own instance so the CLI
 // keeps correct 本周 semantics even if that import chain ever changes (same degrade as cli/nl-date.cjs).
 try { dayjs.extend(require('../assets/vendor-lib/dayjs-plugin-isoWeek.js')) } catch (e) { /* degrade to default week start when the plugin is missing */ }
-const { FOCUS_MAX_MINUTES } = require('../shared/limits.mjs') // focus-duration clamp constants (single source with db.js / renderer, audit item 4); require(esm) — Node >= 22.12
+const { FOCUS_MAX_MINUTES, REST_MAX_MINUTES } = require('../shared/limits.mjs') // focus-duration clamp constants (single source with db.js / renderer, audit item 4); require(esm) — Node >= 22.12
 
 // The CLI runs in pure Node; silence electron-log to keep logs out of the stdout JSON output
 try {
@@ -30,12 +30,7 @@ const audit = require('./audit.js')
 const nlDate = require('./nl-date.cjs')
 
 let opened = false
-// Single source of truth for the userData directory name (a result of app.setName('pickdone'); audit.js reuses this export, do not assemble a third copy)
-// Env var relationship (backward compatible):
-//   TODO_DB_DIR          — legacy CLI-only override; points DIRECTLY at the data directory that contains todos.db (behavior unchanged)
-//   TODO_USER_DATA_DIR   — the main-process isolation var (src/main/index.js); treated as the userData root, which also contains todos.db
-//                          at its top level, so the CLI can reuse it directly. Priority: TODO_DB_DIR > TODO_USER_DATA_DIR > %APPDATA%/pickdone.
-// Neither var set means the real user database — scripts that spawn the App MUST fail fast instead (see e2e-walkthrough.js / ui-smoke.js).
+// Single source of truth for the userData directory name (a result of app.setName('pickdone'); audit.js reuses this export, do not assemble a third copy) Env var relationship (backward compatible): TODO_DB_DIR          — legacy CLI-only override; points DIRECTLY at the data directory that contains todos.db (behavior unchanged) TODO_USER_DATA_DIR   — the main-process isolation var (src/main/index.js); treated as the userData root, which also contains todos.db at its top level, so the CLI can reuse it directly. Priority: TODO_DB_DIR > TODO_USER_DATA_DIR > %APPDATA%/pickdone. Neither var set means the real user database — scripts that spawn the App MUST fail fast instead (see e2e-walkthrough.js / ui-smoke.js).
 function userDataDir () {
   if (process.env.TODO_DB_DIR) return process.env.TODO_DB_DIR
   if (process.env.TODO_USER_DATA_DIR) return process.env.TODO_USER_DATA_DIR
@@ -59,12 +54,7 @@ function open () {
   if (dbm.isOpen && dbm.isOpen()) { opened = true; return dbm }
   const dir = userDataDir()
   dbm.init(dir)
-  // One-shot tomato ledger migration (review P2 2026-09-11): the App runs tomatoMigrateFromMeta on startup,
-  // but a CLI-only session after the ledger-schema upgrade used to read an empty ledger — and worse, a CLI
-  // backfill landing rows first made the migration's table-not-empty guard throw the old meta blob ledger
-  // away forever (the blob-deletion sentinel runs regardless). Running the migration sentinel here, BEFORE
-  // any CLI write, keeps both ends converging on the same row table. Idempotent by design: "meta blob
-  // absent" is the migrated marker, so repeat calls on already-migrated DBs are no-ops.
+  // One-shot tomato ledger migration (review P2 2026-09-11): the App runs tomatoMigrateFromMeta on startup, but a CLI-only session after the ledger-schema upgrade used to read an empty ledger — and worse, a CLI backfill landing rows first made the migration's table-not-empty guard throw the old meta blob ledger away forever (the blob-deletion sentinel runs regardless). Running the migration sentinel here, BEFORE any CLI write, keeps both ends converging on the same row table. Idempotent by design: "meta blob absent" is the migrated marker, so repeat calls on already-migrated DBs are no-ops.
   try { dbm.call('tomatoMigrateFromMeta') } catch (e) { /* migration failure must not block the CLI (same tolerance as the App's startup call) */ }
   opened = true
   return dbm
@@ -1538,9 +1528,9 @@ function recordFix (ref, { minutes, date, at, rest, succeed, task, free }) {
     if (n > FOCUS_MAX_MINUTES) throw new CliError('focus duration max is ' + FOCUS_MAX_MINUTES + ' minutes (DB-layer clamp); got ' + n, 'USAGE')
     patch.focusDuration = Math.max(1, n)
   }
-  // restDuration clamp = the same 600 the db layer applies (_recToRow: Math.min(600, ...)); the old CLI-only
+  // restDuration clamp = REST_MAX_MINUTES, the same cap the db layer applies (_recToRow); the old CLI-only
   // 120 clamp silently rewrote a legitimate 300-min rest to 120 while a direct db append kept 600.
-  if (rest != null) patch.restDuration = Math.max(0, Math.min(600, parseInt(rest, 10) || 0))
+  if (rest != null) patch.restDuration = Math.max(0, Math.min(REST_MAX_MINUTES, parseInt(rest, 10) || 0))
   if (succeed != null && succeed !== true) patch.succeed = !/^(false|no|0)$/i.test(String(succeed))
   if (date || at) {
     // endTime reposition: endTime defines placement; dateKey re-derived here (was App-side)
@@ -1623,7 +1613,6 @@ function setReminderExtra (input, csv) {
   patchTodo(t.taskId, { reminderExtra: extras }, { action: 'edit' })
   return { taskId: t.taskId, reminderExtra: extras.map(ts => dayjs(ts).format('YYYY-MM-DD HH:mm')) }
 }
-
 
 /* ---------------- Settings (meta db.settingsState mirror; hot-synced to a running App via the main-process watcher) ----------------
    Manifest mirrors renderer store/settings.js DEFAULT_SETTINGS/SETTING_ENUMS (keep in sync; security keys are never settable here). */
@@ -1768,7 +1757,6 @@ function planRemove (input, { date, at } = {}) {
   audit.record({ action: 'plan.remove', targets: [t], changes: [{ before: { day, removed: ids.length } }], note: 'timeline chips removed' })
   return { taskId: t.taskId, day, removed: ids.length }
 }
-
 
 /* ---------------- Events import: rebuild a whole day's schedule from a structured event list (backfill/reconstruction scenarios) ----------------
    Event shape: { date:'YYYY-MM-DD', start:'HH:mm', end:'HH:mm'|'24:00', title, category:'工作|学习|生活|发布|<id>',
