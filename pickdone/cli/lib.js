@@ -239,8 +239,11 @@ function resolveCategory (input) {
 function stats ({ from, to } = {}) {
   const now = dayjs()
   const fmt = d => parseInt(d.format('YYYYMMDD'), 10)
-  const f = from ? fmt(dayjs(from)) : fmt(now.subtract(6, 'day'))
-  const t = to ? fmt(dayjs(to)) : fmt(now)
+  // Fix (2026-09-16): --from/--to go through the same parseDate as add/edit, so `stats --from today` /
+  // `--from +7d` work; the old bare dayjs(from) turned keywords into Invalid Date and died inside the db
+  // layer as an opaque USAGE error.
+  const f = from ? fmt(dayjs(parseDate(from))) : fmt(now.subtract(6, 'day'))
+  const t = to ? fmt(dayjs(parseDate(to))) : fmt(now)
   const db = open()
   const plan = db.call('statsByDay', { from: f, to: t })
   const tomato = db.call('tomatoByDay', { from: f, to: t })

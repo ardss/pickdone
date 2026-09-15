@@ -113,3 +113,10 @@ test('h3-4: empty-DB userId fallback is 840001 (renderer parity), applied to cre
   assert.ok(out.includes('OK'))
 })
 
+/* ---- fix 6: stats date parsing ---- */
+test('h3-6: stats accepts keyword dates (--from today) and rejects garbage with a CLI error', () => {
+  const rows = lib.stats({ from: 'today', to: 'today' })
+  assert.ok(Array.isArray(rows))
+  assert.throws(() => lib.stats({ from: 'not-a-date' }), e => /cannot parse date/.test(e.message))
+})
+
