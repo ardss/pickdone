@@ -116,7 +116,10 @@ jobs:
           # gh 按 git ref 解析不到它)——SHA256SUMS 落进空 draft,正文校验读错对象必红。改为按 draft id 上传。
           DRAFT_ID=$(gh api "repos/$GITHUB_REPOSITORY/releases" -q '[.[] | select(.tag_name=="'"$GITHUB_REF_NAME"'") | select(.draft)][0].id')
           if [ -z "$DRAFT_ID" ]; then echo "no draft found for $GITHUB_REF_NAME"; exit 1; fi
-          gh api --method POST "repos/$GITHUB_REPOSITORY/releases/$DRAFT_ID/assets?name=SHA256SUMS.txt" --input SHA256SUMS.txt -H "Content-Type: application/octet-stream" -q '.name'
+          # gh api 不路由 uploads.github.com(资产上传 404,2026-09-15 实锤)——按 release 自带 upload_url 用 curl 直传
+          UP_URL=$(gh api "repos/$GITHUB_REPOSITORY/releases/$DRAFT_ID" -q '.upload_url' | sed 's/{.*}//')
+          CODE=$(curl -sS -o /dev/null -w "%{http_code}" -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Content-Type: application/octet-stream" --data-binary @SHA256SUMS.txt "$UP_URL?name=SHA256SUMS.txt")
+          if [ "$CODE" != "201" ]; then echo "asset upload HTTP $CODE"; exit 1; fi
           # 空正文=发布页丑闻实锤(v0.1.2 曾整版无说明)——draft 正文必须非空。
           # 2026-09-08 修鸡生蛋:本 job 的"Delete stale draft"会重建空 draft,而 rerun 只重跑失败 job,
           # 所以"要求正文已填否则红"永远过不了;改为空时自动从仓库内 CHANGELOG 提取本版本段填充,
@@ -256,4 +259,6 @@ jobs:
           # same-draft-id upload as the win step (2026-09-15): by-tag upload forks a second draft
           DRAFT_ID=$(gh api "repos/$GITHUB_REPOSITORY/releases" -q '[.[] | select(.tag_name=="'"$GITHUB_REF_NAME"'") | select(.draft)][0].id')
           if [ -z "$DRAFT_ID" ]; then echo "no draft found for $GITHUB_REF_NAME"; exit 1; fi
-          gh api --method POST "repos/$GITHUB_REPOSITORY/releases/$DRAFT_ID/assets?name=SHA256SUMS-linux.txt" --input SHA256SUMS-linux.txt -H "Content-Type: application/octet-stream" -q '.name'
+          UP_URL=$(gh api "repos/$GITHUB_REPOSITORY/releases/$DRAFT_ID" -q '.upload_url' | sed 's/{.*}//')
+          CODE=$(curl -sS -o /dev/null -w "%{http_code}" -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Content-Type: application/octet-stream" --data-binary @SHA256SUMS-linux.txt "$UP_URL?name=SHA256SUMS-linux.txt")
+          if [ "$CODE" != "201" ]; then echo "asset upload HTTP $CODE"; exit 1; fi
