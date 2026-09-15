@@ -280,6 +280,11 @@
             <div class="form">
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.aboutLabel') }}</span>
                 <div class="form-item__control"><span class="tip">{{ $t('statsE.SettingsModal.aboutLead', { v: appVersion }) }}</span></div></div>
+              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.syncSurveyLabel') }}</span>
+                <div class="form-item__control">
+                  <button class="mini" @click="openSyncSurvey">{{ $t('statsE.SettingsModal.syncSurveyBtn') }}</button>
+                  <div><span class="tip">{{ $t('statsE.SettingsModal.syncSurveyTip') }}</span></div>
+                </div></div>
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.aboutSiteLabel') }}</span>
                 <div class="form-item__control">
                   <button class="mini" @click="openOfficialSite">{{ $t('statsE.SettingsModal.aboutSiteBtn') }}</button>
@@ -466,6 +471,9 @@ export default {
     },
     openReleases () {
       if (window.todoAPI.openExternal) window.todoAPI.openExternal('https://github.com/ardss/pickdone/releases/latest')
+    },
+    openSyncSurvey () {
+      if (window.todoAPI.openExternal) window.todoAPI.openExternal('https://github.com/ardss/pickdone/discussions/38')
     },
     openOfficialSite () {
       if (window.todoAPI.openExternal) window.todoAPI.openExternal('https://pickdone.app')
