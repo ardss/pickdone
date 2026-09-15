@@ -247,7 +247,12 @@ export default {
       // clamp 1..FOCUS_MAX_MINUTES = the DB-layer single source (db.js _recToRow via shared/limits.mjs):
       // a UI-side cap above it would show values the DB silently drops on next reload (memory says 720, ledger says 600)
       if (patch.focusDuration != null) rec.focusDuration = Math.max(1, Math.min(FOCUS_MAX_MINUTES, Math.round(patch.focusDuration)))
-      if (patch.restDuration != null) rec.restDuration = Math.max(0, Math.min(120, Math.round(patch.restDuration)))
+      // H1 (2026-09-16): rest cap unified to 600, same source as the DB layer's clamp
+      // (src/main/db.js _recToRow: `k === 'restDuration' → Math.min(600, ...)`). The old inline
+      // 120 silently truncated a 300-minute rest on any entry-card patch — memory said 120, ledger
+      // said 600, next reload diverged. shared/limits.mjs has no rest constant yet; extend it there
+      // (not here) when one is added.
+      if (patch.restDuration != null) rec.restDuration = Math.max(0, Math.min(600, Math.round(patch.restDuration)))
       if (patch.succeed != null) rec.succeed = !!patch.succeed
       s.tomatoRecordList = [...s.tomatoRecordList]
       ledgerWrite('tomatoUpdateById', {
