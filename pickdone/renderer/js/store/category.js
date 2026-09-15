@@ -74,7 +74,12 @@ const statusKey = id => 'projectStatus:' + id
  *  project meta for every victim, matching the CLI delete path. */
 function collectCascadeIds (state, id) {
   const out = []
+  // H1 (2026-09-16): A↔B mutual-parent cycles (corrupted data / cross-window race) used to recurse
+  // forever → RangeError. A visited set truncates the cycle; each id is emitted once.
+  const visited = new Set()
   const walk = cid => {
+    if (visited.has(cid)) return
+    visited.add(cid)
     out.push(cid)
     state.list.filter(x => x.folderId === cid && x.categoryId !== cid).forEach(x => { if (x.folderIs) walk(x.categoryId); else out.push(x.categoryId) })
   }
@@ -153,7 +158,12 @@ export default {
       persist(state.list)
     },
     markCascade (state, id) {
+      // H1 (2026-09-16): visited set — same cycle truncation as collectCascadeIds (A↔B mutual
+      // parents recursed to a RangeError instead of marking anything).
+      const visited = new Set()
       const mark = cid => {
+        if (visited.has(cid)) return
+        visited.add(cid)
         const c = state.list.find(x => x.categoryId === cid)
         if (c && !c.delete) { c.delete = true; c.deletedAt = Date.now() }
         state.list.filter(x => x.folderId === cid).forEach(x => { if (x.folderIs) mark(x.categoryId); else if (!x.delete) { x.delete = true; x.deletedAt = Date.now() } })
