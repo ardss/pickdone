@@ -16,15 +16,17 @@ const remove = (type, fn) => { doc.map.get(type)?.delete(fn) }
 const count = type => (doc.map.get(type) || new Set()).size
 globalThis.document = { addEventListener: add, removeEventListener: remove }
 
-/** Message factory WITHOUT a close() method: models the EP destroy path where nothing ever calls
- * msg.close(), but the onClose option is still honored after the instance unmounts. */
-const makeFactory = () => {
-  const captured = { opts: null }
+/** Message factory. Without `withClose` the instance has NO close() method (models the EP destroy
+ * path where nothing ever calls msg.close()). With `withClose` the instance exposes a real base
+ * close() (like EP's) that the toast util can patch — lets us exercise the close+onClose double path. */
+const makeFactory = (withClose = false) => {
+  const captured = { opts: null, baseCloseCalls: 0 }
   const messageFn = opts => {
     captured.opts = opts
     const st = { el: new EventTarget(), $el: null }
     st.el.setAttribute = () => {}
     st.$el = st.el
+    if (withClose) st.close = () => { captured.baseCloseCalls++ }
     Object.assign(st, opts)
     return st
   }
@@ -51,12 +53,17 @@ test('F4: tree unmount (EP destroy, no msg.close call) still releases the contro
   assert.equal(count('keydown'), 0, 'still released (idempotent)')
 })
 
-test('F4: patched close and onClose share one idempotent unregister path', () => {
-  const { messageFn, captured } = makeFactory()
-  showUndoToast(messageFn, 'y')
+test('F4: both patched close and onClose firing still unregisters exactly once (idempotent)', () => {
+  const { messageFn, captured } = makeFactory(true)
+  const msg = showUndoToast(messageFn, 'y')
+  assert.equal(count('keydown'), 1, 'listeners installed while the toast is alive')
+  assert.equal(typeof msg.close, 'function', 'close() is patched onto the message instance')
+  // Real-world sequence: EP fires close (✕ / auto-dismiss), then onClose after destroy
+  msg.close()
+  assert.equal(captured.baseCloseCalls, 1, 'patched close delegates to the base close exactly once')
+  assert.equal(count('keydown'), 0, 'close() released the listeners')
   captured.opts.onClose()
-  if (typeof captured.opts.close !== 'function') {
-    // nothing further to call (factory had no close); unregister already happened
-  }
-  assert.equal(count('keydown'), 0)
+  assert.equal(count('keydown'), 0, 'late onClose is a no-op — unregister is idempotent, never re-armed')
+  assert.equal(captured.baseCloseCalls, 1, 'base close not re-invoked')
+  assert.equal(count('keyup'), 0)
 })
