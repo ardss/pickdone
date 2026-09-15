@@ -141,6 +141,10 @@ export default {
       this.$message.success(msg)
       if (this.$announce) this.$announce(msg)
       this.$emit('created', { content, date: d })
+      } catch (err) {
+        // Failure must be visible and retryable: toast + keep the input so the user can resubmit
+        console.error('[quick-add] addTodo failed:', err)
+        this.$message.error(this.$t('statsD.QuickAdd.createFailed'))
       } finally { this._submitting = false }
     }
   },
