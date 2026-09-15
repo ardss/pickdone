@@ -6,7 +6,7 @@ import { genTaskId, nextSort, dayjs, reportError, DAY_MS, rangeDays, parsePredec
 import { wouldCycle, isTaskReady } from '../utils/deps.js'
 import { expandRepeatDates } from '../utils/repeat.js'
 import { sortByMode } from '../utils/sortMode.js'
-import { getEstimate } from '../utils/tomatoEstimate.js'
+import { getEstimate, setEstimate } from '../utils/tomatoEstimate.js'
 import { clearSnapshot } from '../utils/dayPlans.js'
 // Cross-cutting concerns, physically split out of this module (pure relocation — the store's action
 // semantics are unchanged; the actions/mutations below delegate to these extracted implementations):
@@ -471,6 +471,10 @@ export default {
         try { await window.todoAPI.dbCall('hardDelete', id); done.push(id); clearSnapshot(id) } catch (err) { reportError('hardDelete', err) }
       }
       try { for (const id of done) await window.todoAPI.deleteTodoFilesRelevant?.(id) } catch {}
+      // Drop the purged tasks' pomodoro-estimate meta keys (setEstimate(id,0) deletes the key):
+      // MetaGC covers the DB side, this covers the renderer mirror so a recycled numeric id cannot
+      // resurrect a stale estimate (review M-C5)
+      try { for (const id of done) setEstimate(id, 0) } catch {}
       if (done.length) {
         commit('hardRemove', done)
         // Rows are physically gone (hardDelete + attachment files + chip snapshot meta): any later undo replaying a
