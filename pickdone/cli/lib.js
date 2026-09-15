@@ -995,7 +995,10 @@ function repeatOff (input, all) {
     const now = Date.now()
     for (const x of open().call('queryTodos', { deleted: 0 })) {
       if (x.repeatId === rid && x.taskId !== t.taskId && !x.complete) {
-        open().call('upsert', Object.assign({}, x, { delete: 1, deletedAt: now, updateTime: now, status: 'delete' }))
+        // version: 0 (deleteTodo parity, 2026-09-12 P3): syncTodos excludes delete rows already acked
+        // with version > 0, so keeping the old version meant the soft-deleted repeat instances never
+        // re-entered the sync snapshot and the deletion silently never propagated.
+        open().call('upsert', Object.assign({}, x, { delete: 1, deletedAt: now, updateTime: now, version: 0, status: 'delete' }))
         chipsSnapshotForDelete(x.taskId) // same snapshot→clear cascade as deleteTodo: soft-deleted instances must not leave orphan chips
         removed++
       }
