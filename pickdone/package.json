@@ -97,6 +97,7 @@
         "filter": [
           "pickdone.js",
           "lib.js",
+          "lib-attachments.cjs",
           "import.js",
           "audit.js",
           "env-clean.js",
