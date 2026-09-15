@@ -55,9 +55,12 @@ module.exports = ({ resolveTask, liveTasks, patchTodo, userDataDir, CliError }) 
     const idx = parseInt(n, 10) - 1
     if (!(idx >= 0 && idx < list.length)) throw new CliError(`attachment #${n} not found (${list.length} total)`, 'ATTACH_NOT_FOUND')
     const [item] = list.splice(idx, 1)
-    patchTodo(t.taskId, { [field]: JSON.stringify(list) }, { action: 'attachment.remove' })
+    // Validate before write: attach-key resolution must happen BEFORE patchTodo — an unresolvable url
+    // used to mutate the row (attachment dropped from the JSON) and only then error, so a retry hit
+    // ATTACH_NOT_FOUND with the row already changed (non-atomic, 2026-09-15). unlink stays best-effort.
     const key = attachKeyOf(item)
     if (!key) throw new CliError('attachment has no resolvable file name (refusing to guess)', 'ATTACH_KEY_INVALID')
+    patchTodo(t.taskId, { [field]: JSON.stringify(list) }, { action: 'attachment.remove' })
     try { require('fs').unlinkSync(path.join(userDataDir(), 'files', key)) } catch { /* already gone is fine */ }
     return { taskId: t.taskId, removed: item.name }
   }
