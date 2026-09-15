@@ -117,5 +117,6 @@ export default {
 .tip-completed-list li{padding:2px 0}
 /* 条目右侧悬停操作按钮的显示时机：悬停所在行时出现；键盘聚焦到按钮时同样可见（对照 RecycleBinView .row-btn:focus-visible） */
 .done-row-orig:hover .row-btn,.todo-box-list-item__tools{opacity:1}
+.done-row-orig:focus-within .row-btn{opacity:1}
 .done-row-orig .row-btn:focus-visible{opacity:1;outline:2px solid var(--brand);outline-offset:2px}
 </style>

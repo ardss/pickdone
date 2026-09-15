@@ -421,6 +421,21 @@ export default {
     collapse () {
       if (!this.autoSave) this.queueSave({})
       this.$store.commit('ui/collapseEdit')
+      // Hand focus back to the task row being edited (keyboard users would otherwise drop to <body>);
+      // rows don't carry data-id yet, so fall back to the scroll container (focusable via tabindex=-1)
+      this.$nextTick(() => {
+        const id = this.e && this.e.taskId
+        let row = null
+        if (id != null) {
+          row = document.querySelector('.td-item[data-id="' + id + '"], .td-item[data-task-id="' + id + '"]')
+        }
+        if (row) { row.focus(); return }
+        const list = document.querySelector('.main-scroll')
+        if (list) {
+          if (!list.hasAttribute('tabindex')) list.setAttribute('tabindex', '-1')
+          list.focus()
+        }
+      })
     },
     fieldPatch (key, val) {
       this.e[key] = val
