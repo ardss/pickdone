@@ -29,6 +29,7 @@ and versioning follows [Semantic Versioning](https://semver.org/).
 - Recycle-bin rows no longer loop-syncing against themselves; quit-time listener accumulation and a dropped dirty-flag on rapid edits were fixed.
 
 ### Changed
+- Sync groundwork (internal): physical-delete paths (recycle-bin purge, hard delete, plan prune) are not yet change-captured — multi-device reconciliation for those relies on periodic full snapshots in a future sync release.
 - Milestone editing consolidated into a single dialog (title + date together), replacing the old two-step prompt chain; the project page scrolls as one column so header, tabs and body all stay reachable.
 - CSV imports take an automatic event-snapshot backup beforehand, and the import preview reports structured error codes instead of leaking internal messages.
 - Test infrastructure: the unit-test gate now fails on skipped or cancelled tests; live Electron tests moved out of the quick regression so pre-commit runs in about 45 seconds with no environment dependencies; CI splits live tests onto the Windows runner (the ubuntu job finishes in about a minute).

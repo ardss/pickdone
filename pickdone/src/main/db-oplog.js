@@ -2,6 +2,15 @@
  * One sync_oplog row per successful write op, appended from call(). Factory-injected getDb keeps this
  * module decoupled from the db handle lifecycle (init/close reassign it). commitSyncBatch is excluded
  * at the call site -- the sync-ack echo path must not re-capture what it just acknowledged.
+ *
+ * Known gaps until the sync engine lands (declared 2026-09-15, review V1):
+ * - Physical deletes (hardDelete/purgeRecycleBin/purgeSeedTodos/planPrune) physically remove tombstoned
+ *   plan_chips and log only the todo entity — chip deletions in those paths are NOT captured, so
+ *   multi-device chip state needs a periodic full snapshot (not yet implemented).
+ * - The oplog append is a separate transaction from the business write: a crash between the two
+ *   commits loses the delta row (accepted window at synchronous=NORMAL).
+ * - planMoveTask/planDeleteTask log ('plan', taskId) while other plan ops log chip ids — consumers
+ *   of those two must reconcile via planAll until the granularity is unified.
  */
 
 module.exports = ({ getDb, log }) => {

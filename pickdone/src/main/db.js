@@ -541,7 +541,9 @@ const OPS = {
   countSeedTodos: () => db.prepare("SELECT COUNT(*) n FROM todos WHERE substr(id, 1, 5) = 'seed_'").get().n,
   upsertCategory: (c) => {
     const now = Date.now()
-    const row = { ...c, deletedAt: (c && c.deletedAt) || 0, updatedAt: (c && c.updatedAt) || now }
+    // Stamp deletedAt at tombstone time: callers never pass it, and a tombstone without a timestamp
+    // can never be time-ordered or reconciled by a sync engine (review V1-F5)
+    const row = { ...c, deletedAt: (c && c.deletedAt) || (c && c.delete ? now : 0), updatedAt: (c && c.updatedAt) || now }
     db.prepare(`INSERT INTO categories (id,userId,name,color,createdAt,sort,isFolder,parentId,deleted,deletedAt,updatedAt)
       VALUES (@id,@userId,@name,@color,@createdAt,@sort,@isFolder,@parentId,@deleted,@deletedAt,@updatedAt)
       ON CONFLICT(id) DO UPDATE SET name=excluded.name, color=excluded.color, createdAt=excluded.createdAt,
@@ -749,9 +751,11 @@ const OPS = {
     rec.dateKey = dayjs(rec.endTime).format('YYYY-MM-DD')
     if (!/^\d{4}-\d{2}-\d{2}$/.test(String(rec.dateKey))) throw new Error('tomatoUpdateById: bad endTime produces invalid dateKey')
     const r = OPS._recToRow(rec)
+    // `AND deleted = 0`: a tombstoned (removed) record is invisible to every reader — reporting success
+    // on it would tell the caller a patch landed that nobody can ever see (review V1-F2)
     const res = db.prepare(`UPDATE tomato_records SET endTime=@endTime, dateKey=@dateKey, focus=@focus, focusTaskId=@focusTaskId,
       focusDuration=@focusDuration, rest=@rest, restDuration=@restDuration, succeed=@succeed, manual=@manual,
-      status=@status, abandonReason=@abandonReason, extra=@extra, updatedAt=@updatedAt WHERE tomatoId=@tomatoId`).run(Object.assign({ tomatoId: String(tomatoId), updatedAt: Date.now() }, r))
+      status=@status, abandonReason=@abandonReason, extra=@extra, updatedAt=@updatedAt WHERE tomatoId=@tomatoId AND deleted = 0`).run(Object.assign({ tomatoId: String(tomatoId), updatedAt: Date.now() }, r))
     return res.changes > 0
   },
   // Tombstone delete (P1 sync groundwork): ledger removals must propagate to other devices; every
@@ -785,7 +789,10 @@ const OPS = {
   },
   // Delta read for the (future) sync engine and tests: oplog rows strictly after sinceSeq, oldest first.
   // limit guards the first pull on a large existing log; callers page through via the returned max seq.
-  syncOplogSince: ({ sinceSeq = 0, limit = 2000 } = {}) => {
+  // Main-process/CLI-only op by design: the future sync engine lives in the main process and reads the
+  // db layer directly. Deliberately NOT in the renderer IPC whitelist or contracts.d.ts DbCallOp —
+  // adding a renderer caller without whitelisting it would be the filterList/bumpSnow silent-outage shape.
+syncOplogSince: ({ sinceSeq = 0, limit = 2000 } = {}) => {
     const s = Number(sinceSeq) || 0
     const n = Math.max(1, Math.min(10000, Math.floor(Number(limit) || 2000)))
     return db.prepare('SELECT seq, entity, entityId, ts FROM sync_oplog WHERE seq > ? ORDER BY seq ASC LIMIT ?').all(s, n)
