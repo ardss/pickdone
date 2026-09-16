@@ -389,9 +389,7 @@ function initInner (userDataPath) {
   }
 
   const cols = Object.keys(todoToRow({ taskId: '' }))
-  stmts.upsert = db.prepare(
-    `INSERT INTO todos (${cols.join(', ')}) VALUES (${cols.map(c => '@' + c).join(', ')})
-     ON CONFLICT(id) DO UPDATE SET ${cols.filter(c => c !== 'id').map(c => `${c} = excluded.${c}`).join(', ')}`)
+  stmts.upsert = db.prepare(`INSERT INTO todos (${cols.join(', ')}) VALUES (${cols.map(c => '@' + c).join(', ')}) ON CONFLICT(id) DO UPDATE SET ${cols.filter(c => c !== 'id').map(c => `${c} = excluded.${c}`).join(', ')}`)
   stmts.getById = db.prepare('SELECT * FROM todos WHERE id = ?')
   stmts.hardDelete = db.prepare('DELETE FROM todos WHERE id = ?')
   stmts.getMeta = db.prepare('SELECT value FROM meta WHERE key = ?')
@@ -822,11 +820,13 @@ const OPS = {
   settingsRowPut: p => syncSchema.rowPut(p),
   settingsRowPutMany: p => syncSchema.rowPutMany(p),
   settingsRowDelete: p => syncSchema.rowDelete(p),
-syncOplogSince: ({ sinceSeq = 0, limit = 2000 } = {}) => {
-    const s = Number(sinceSeq) || 0
-    const n = Math.max(1, Math.min(10000, Math.floor(Number(limit) || 2000)))
-    return db.prepare('SELECT seq, entity, entityId, ts FROM sync_oplog WHERE seq > ? ORDER BY seq ASC LIMIT ?').all(s, n)
-  },
+syncOplogSince: ({ sinceSeq = 0, limit = 2000 } = {}) => db.prepare('SELECT seq, entity, entityId, ts FROM sync_oplog WHERE seq > ? ORDER BY seq ASC LIMIT ?').all(Number(sinceSeq) || 0, Math.max(1, Math.min(10000, Math.floor(Number(limit) || 2000)))),
+  // P3a LAN sync ops (2026-09-16): delegates into db-sync-ops.js (gate: ops must exist here; impl lives in lan-sync-bootstrap.js)
+  syncGetSettings: p => require('./db-sync-ops').dispatch('syncGetSettings', p),
+  syncSetEnabled: p => require('./db-sync-ops').dispatch('syncSetEnabled', p),
+  syncGetStatus: p => require('./db-sync-ops').dispatch('syncGetStatus', p),
+  syncGetPairingCode: p => require('./db-sync-ops').dispatch('syncGetPairingCode', p),
+  syncSetName: p => require('./db-sync-ops').dispatch('syncSetName', p),
 }
 
 /** 账本变更钩子:任何进程(App 主进程 IPC / CLI 直连)经 call() 落账本写 op 后触发。

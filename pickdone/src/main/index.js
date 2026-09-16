@@ -454,6 +454,8 @@ if (!app.requestSingleInstanceLock()) { app.quit() } else {
     } catch (e) { log.warn('[MetaGC] skipped:', e && e.message) }
     registerIpc()
     watchDbForExternalWrites()
+    // P3a LAN sync (lazy; never auto-enables — see lan-sync-bootstrap.js header)
+    require('./lan-sync-bootstrap').initLanSync({ db: dbm, getWindowSenders: () => BrowserWindow.getAllWindows().filter(w => !w.isDestroyed()).map(w => w.webContents) })
 
     // Auto-update: init the event bridge + delayed silent check (does not compete with startup; degrades automatically in non-update environments)
     updater.init(win)

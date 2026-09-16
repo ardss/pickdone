@@ -28,7 +28,7 @@ const searchJs = read('renderer/js/components/settings/settingsSearch.js')
 test('w5 SettingsModal split: parent imports and registers both tab children', () => {
   assert.match(parent, /import SettingsShortcutsTab from '\.\/settings\/SettingsShortcutsTab\.vue'/)
   assert.match(parent, /import SettingsDataTab from '\.\/settings\/SettingsDataTab\.vue'/)
-  assert.match(parent, /components: \{ SettingsShortcutsTab, SettingsDataTab \}/)
+  assert.match(parent, /components: \{ SettingsShortcutsTab, SettingsDataTab, SettingsSyncTab \}/)
   assert.match(parent, /<settings-shortcuts-tab v-show="searching \|\| tab==='shortcuts'" ref="shortcutsTab"\/>/)
   assert.match(parent, /<settings-data-tab v-show="searching \|\| tab==='data'"\/>/)
 })
