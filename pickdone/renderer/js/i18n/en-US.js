@@ -62,5 +62,30 @@ export default {
     "scNavCalendar": "Switch to Calendar",
     "scNavInbox": "Switch to Todo Box"
   
+  },
+"sync": {
+    "tab": "Sync",
+    "freeForever": "Local features are free forever.",
+    "section": "LAN sync",
+    "enableLabel": "Enable LAN sync",
+    "enableTip": "Devices on the same LAN discover each other and sync task data peer-to-peer; off by default.",
+    "deviceNameLabel": "Device name",
+    "statusLabel": "Status",
+    "statusDisabled": "LAN sync is off",
+    "statusStarting": "Starting…",
+    "deviceIdShort": "Device {id}",
+    "peersCount": "Peers: {n}",
+    "lastRound": "Last round {time}",
+    "neverRan": "Never synced",
+    "errorPrefix": "Error: {msg}",
+    "pairingLabel": "Pairing code",
+    "pairingBtn": "Show code",
+    "pairingExpiresIn": "Expires in {n}s",
+    "enabledMsg": "LAN sync enabled",
+    "disabledMsg": "LAN sync disabled",
+    "toggleFailed": "Failed to change LAN sync setting",
+    "nameSavedMsg": "Device name saved",
+    "nameSaveFailed": "Failed to save device name",
+    "pairingUnavailable": "Pairing code unavailable"
   }
 }
