@@ -91,10 +91,15 @@ test('G1 dbMirror: gives up after maxAttempts with a one-time console.error', as
   _timing.debounceMs = 5; _timing.retryBaseMs = 5; _timing.maxAttempts = 3
   impl = () => { calls.push([]); return Promise.reject(new Error('dead')) }
   mirrorToDb('k4', { v: 1 }, true)
-  await new Promise(r => setTimeout(r, 60))
+  // Poll until the give-up report fires instead of a fixed sleep — a loaded CI box can stretch the
+  // 5->10->20ms backoff chain past any hardcoded wait, so more writes would land after it (observed flake).
+  const deadline = Date.now() + 5000
+  while (Date.now() < deadline && !errors.some(e => e.includes('k4') && e.includes('giving up'))) {
+    await new Promise(r => setTimeout(r, 10))
+  }
   const writes = calls.length // initial + retries
   assert.ok(writes >= 3, 'initial write + retries happened')
-  await new Promise(r => setTimeout(r, 40))
-  assert.equal(calls.length, writes, 'no further writes after the give-up (no infinite retry)')
   assert.equal(errors.filter(e => e.includes('k4') && e.includes('giving up')).length, 1, 'exactly one give-up report for this key')
+  await new Promise(r => setTimeout(r, 60))
+  assert.equal(calls.length, writes, 'no further writes after the give-up (no infinite retry)')
 }))
