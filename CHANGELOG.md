@@ -6,6 +6,17 @@ and versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.7] - 2026-09-16
+
+### Fixed
+- Data safety: a `limit=0` query now returns nothing instead of everything (fail-closed); restoring plan chips from a snapshot no longer zeroes their sort order; malformed date inputs in statistics are rejected instead of poisoning the day buckets.
+- Categories: renaming a category to identical values no longer emits fake sync deltas on every startup, and re-creating a category with the same name keeps its recycle-bin tombstone intact.
+- Pomodoro ledger: a 300-minute rest is no longer silently truncated to 120 minutes (UI/CLI now match the database cap, unified through a shared constant); a rejected ledger row is now reported instead of vanishing; deleting tasks also clears their stored pomodoro estimates so a recycled id cannot resurrect a stale one; rapid edits no longer lose the pending part of a debounced save.
+- CLI: `settings set` now detects concurrent app writes (stale-guard with `--force` override) and rejects non-finite/negative numbers; `import` no longer fabricates completed history for future-dated events; `stats --from/--to` accept keyword dates and fail fast on bad input; `list --range week` matches the ISO week; `record --rest` accepts up to 600 minutes like the app.
+- Keyboard/IME: pressing Enter inside a Chinese/Japanese IME composition no longer accidentally commits category renames, subtasks, tags or the pomodoro abandon dialog.
+- Accessibility: context-menu separators are no longer focus stops; closing a context menu or collapsing the edit panel returns keyboard focus to where it came from; QuickAdd shows an error toast and keeps your input when a task fails to save (was silent); the calendar button no longer flashes white in dark mode.
+- Reliability internals: metadata deletions are now captured for future sync propagation; task descriptions reaching the CLI are sanitized; the float window's credit path can no longer target soft-deleted tasks.
+
 ## [0.3.6] - 2026-09-15
 
 ### Fixed
