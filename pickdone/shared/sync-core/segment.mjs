@@ -81,7 +81,7 @@ export function pack(rows, { fromSeq, toSeq, deviceId, schemaVersion = SYNC_SCHE
  * increasing — the server-side monotonicity contract, mirrored client-side).
  */
 export function unpack(body, { schemaVersion = SYNC_SCHEMA_VERSION } = {}) {
-  let raw = codecHooks.decrypt ? codecHooks.decrypt(body) : body
+  const raw = codecHooks.decrypt ? codecHooks.decrypt(body) : body
   let envelope
   try {
     envelope = typeof raw === 'string' ? JSON.parse(raw) : JSON.parse(new TextDecoder().decode(raw))
