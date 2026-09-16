@@ -48,9 +48,10 @@ module.exports = function todoHandlers (ctx) {
       if (isLocked() && !isLockWindow(e.sender)) {
         // 浮窗到点落番茄账是合法后台行为:锁屏期间放行浮窗自身的番茄追加类写(只挡读/危险写,威胁模型针对绕锁读写)
         let floatLedger = tomatoFloat.isSelfSender(e.sender) && /^(tomatoAppendMany|tomatoUpdateById|bumpSnow)$/.test(op) // bumpSnow=挂任务送专注积分,同属到点落账
-        // H2 2026-09-16: bumpSnow 此前是三种浮窗放行 op 中唯一零收窄的——被陷浮窗锁屏期可对任意
-        // taskId(含软删/不存在行,虽 changes=0 但存在行会被无限膨胀 focusMinutes)反复送积分。
-        // 与 tomatoAppendMany/tomatoUpdateById 同款收窄:目标行必须真实存在且未软删。
+        // H2 2026-09-16: bumpSnow was the only one of the three float-ledger ops with zero narrowing —
+        // a trapped float window could re-credit any taskId (incl. soft-deleted/nonexistent rows; a live
+        // row inflates focusMinutes unboundedly). Same narrowing as tomatoAppendMany/tomatoUpdateById:
+        // the target row must really exist and not be soft-deleted.
         if (floatLedger && op === 'bumpSnow') {
           const tid = (params || {}).taskId
           const t = tid != null ? dbm.call('getById', String(tid)) : null

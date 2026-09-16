@@ -120,8 +120,8 @@ function persistState (state) {
  *  失败留在重试队列,下一次任意账本写时重放(锁屏/瞬时 IO 失败自愈)。 */
 const _pendingLedger = []
 let _flushHooked = false
-/** H1 (2026-09-16): db 层 tomatoAppendMany 现在返回 {accepted,rejected} 行级容错结果,rejected 行
- *  (缺 tomatoId/endTime 等)曾被静默丢弃——这里按契约逐条 console.error 上报。 */
+/** H1 (2026-09-16): the db layer's tomatoAppendMany now returns a row-tolerant {accepted,rejected}
+ *  result; rejected rows (missing tomatoId/endTime etc.) used to vanish silently — report each per contract. */
 function logRejectedRows (res, params) {
   if (!res || !Array.isArray(res.rejected) || !res.rejected.length) return
   const list = Array.isArray(params) ? params : [params]
@@ -132,9 +132,9 @@ function logRejectedRows (res, params) {
   }
 }
 
-/** H1 (2026-09-16): remove 落库成功后,清掉 pending 队列里同 tomatoId 的旧 append——db 层
- *  tomatoAppendMany 的 ON CONFLICT DO UPDATE SET deleted=0 会把已删行复活,旧 append 重放等于
- *  撤销删除。params 是 tomatoRemoveByIds 的 id 数组。 */
+/** H1 (2026-09-16): after a remove persists, drop pending appends for the same tomatoIds — the db
+ *  layer's ON CONFLICT DO UPDATE SET deleted=0 would resurrect the deleted row, so replaying the old
+ *  append equals undoing the delete. params is the tomatoRemoveByIds id array. */
 function purgePendingAppends (ids) {
   const dead = new Set(ids || [])
   if (!dead.size) return

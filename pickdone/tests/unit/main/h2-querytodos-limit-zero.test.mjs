@@ -29,6 +29,6 @@ test('limit=null/undefined stay unlimited; positive limit still truncates', () =
 })
 
 test('negative and non-finite limit still throw', () => {
-  assert.throws(() => db.call('queryTodos', { limit: -1 }), /非法 limit/)
-  assert.throws(() => db.call('queryTodos', { limit: 'abc' }), /非法 limit/)
+  assert.throws(() => db.call('queryTodos', { limit: -1 }), /invalid limit/)
+  assert.throws(() => db.call('queryTodos', { limit: 'abc' }), /invalid limit/)
 })

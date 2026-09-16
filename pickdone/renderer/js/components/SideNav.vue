@@ -76,7 +76,7 @@
           <app-icon name="folder" :size="14" v-if="!isFolderExpanded(o.categoryId)" :style="{color:o.categoryColor}"/>
           <app-icon name="folder" :size="14" v-else :style="{color:o.categoryColor}"/>
           <template v-if="catEditing===o.categoryId">
-            <input v-model="newCatName" class="sn-cat-edit" @keydown.enter="onCatEditEnter($event, o)" @blur="saveCatEdit(o)"/>
+            <input v-model="newCatName" class="sn-cat-edit" @keydown.enter.prevent="onCatEditEnter($event, o)" @blur="saveCatEdit(o)"/>
           </template>
           <template v-else><span class="sn-cat-name">{{o.categoryName}}</span></template>
           <i class="folder-toggle-icon"><app-icon :name="isFolderExpanded(o.categoryId)?'chevron-down':'chevron-right'" :size="11"/></i>
@@ -93,7 +93,7 @@
                @keydown.enter.prevent="go('todo-list-category',{id:ch.categoryId})">
             <span class="sn-dot" :style="{background:ch.categoryColor}"></span>
             <template v-if="catEditing===ch.categoryId">
-              <input v-model="newCatName" class="sn-cat-edit" @keydown.enter="onCatEditEnter($event, ch)" @blur="saveCatEdit(ch)"/>
+              <input v-model="newCatName" class="sn-cat-edit" @keydown.enter.prevent="onCatEditEnter($event, ch)" @blur="saveCatEdit(ch)"/>
             </template>
             <template v-else><span>{{ch.categoryName}}</span></template>
             <i class="sn-cat-del" role="button" tabindex="0" :aria-label="$t('statsG.SideNav.delCatAria')" style="display:inline-flex"
@@ -111,7 +111,7 @@
              @dragstart="dragStartCat(o,$event)" @dragover.prevent="dragOverCat(o,$event)" @drop.prevent="dropOnCat(o,$event)" @dragend="dragEndCat">
           <span class="sn-dot" :style="{borderColor:o.categoryColor, background:o.categoryColor}"></span>
           <template v-if="catEditing===o.categoryId">
-            <input v-model="newCatName" class="sn-cat-edit" @keydown.enter="onCatEditEnter($event, o)" @blur="saveCatEdit(o)"/>
+            <input v-model="newCatName" class="sn-cat-edit" @keydown.enter.prevent="onCatEditEnter($event, o)" @blur="saveCatEdit(o)"/>
           </template>
           <template v-else><span>{{o.categoryName}}</span></template>
           <i class="sn-cat-del" role="button" tabindex="0" :aria-label="$t('statsG.SideNav.delCatAria')" style="display:inline-flex"

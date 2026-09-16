@@ -435,7 +435,7 @@ function queryTodos ({ deleted = 0, complete = null, categoryId = null, repeatId
   sql += ` ORDER BY ${orderBy}`
   // F2 fix: `if (limit)` made limit=0 fail-open (0 === unlimited, while negatives threw) — validate on
   // presence (null/undefined only), so 0 is an explicit "zero rows" and all invalid values fail closed.
-  if (limit !== null && limit !== undefined) { const n = Number(limit); if (!Number.isFinite(n) || n < 0) throw new Error('queryTodos: 非法 limit'); sql += ' LIMIT ' + n }
+  if (limit !== null && limit !== undefined) { const n = Number(limit); if (!Number.isFinite(n) || n < 0) throw new Error('queryTodos: invalid limit'); sql += ' LIMIT ' + n }
   return db.prepare(sql).all(p).map(rowToTodo)
 }
 

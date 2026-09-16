@@ -68,14 +68,14 @@ test('h3-1b: settingsSet without interleaved writes still succeeds (no false sta
 test('h3-2: future-dated event creates the task only — no complete toggle, no ledger backfill', async () => {
   const before = db.call('tomatoAll').length
   const res = await lib.importEvents([
-    { date: ymdOf(7), start: '09:00', end: '10:00', title: 'h3未来事件' },
-    { date: ymdOf(-1), start: '09:00', end: '10:00', title: 'h3过去事件' }
+    { date: ymdOf(7), start: '09:00', end: '10:00', title: 'h3-future-event' },
+    { date: ymdOf(-1), start: '09:00', end: '10:00', title: 'h3-past-event' }
   ])
   assert.equal(res.created, 2)
   assert.equal(res.failed.length, 0)
   const tasks = lib.liveTasks().filter(t => String(t.taskContent).startsWith('h3'))
-  const future = tasks.find(t => t.taskContent === 'h3未来事件')
-  const past = tasks.find(t => t.taskContent === 'h3过去事件')
+  const future = tasks.find(t => t.taskContent === 'h3-future-event')
+  const past = tasks.find(t => t.taskContent === 'h3-past-event')
   assert.ok(future && past)
   assert.equal(future.complete, false, 'a future event must not be imported as already done')
   assert.equal(past.complete, true, 'past events keep the backfill reconstruction behavior')
