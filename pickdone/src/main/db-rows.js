@@ -86,7 +86,8 @@ function rowToTodo (r) {
     important: r.important || 0,
     urgent: r.urgent || 0,
     status: r.status,
-    version: r.version
+    version: r.version,
+    tz: r.tz || null
   }
 }
 
@@ -107,6 +108,18 @@ function rowToCategory (r) {
 }
 
 const dayjs = require('dayjs')
+
+// Device IANA timezone (docs/sync §5): stamped onto every todo row at write time so a receiving
+// device can reinterpret the creator-local scheduledDay. NULL means pre-tz "local history".
+// Cached: resolvedOptions() is stable for the process lifetime.
+let cachedTz = null
+function deviceTz () {
+  if (cachedTz == null) {
+    try { cachedTz = Intl.DateTimeFormat().resolvedOptions().timeZone || '' } catch { cachedTz = '' }
+  }
+  return cachedTz || null
+}
+
 function todoToRow (t) {
   const todoTime = t.todoTime || 0
   return {
@@ -142,7 +155,10 @@ function todoToRow (t) {
     important: t.important != null ? t.important : 0,
     urgent: t.urgent != null ? t.urgent : 0,
     status: t.status || 'add',
-    version: t.version || 0
+    version: t.version || 0,
+    // Caller-supplied tz wins (sync echo / LWW winner keeps its origin tz); otherwise stamp the
+    // current device timezone (P2 2026-09-16, docs/sync §5)
+    tz: t.tz != null && t.tz !== '' ? String(t.tz) : deviceTz()
   }
 }
 

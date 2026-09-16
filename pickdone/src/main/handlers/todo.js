@@ -33,7 +33,10 @@ module.exports = function todoHandlers (ctx) {
     'planAll', 'planAddMany', 'planUpdateChip', 'planRemoveIds',
     'planMoveTask', 'planDeleteTask', 'planDeleteTaskDay', 'planPrune',
     // 番茄账本行存储(2026-09-04 根修):主窗/浮窗/CLI 同表同 op,账本无整包覆盖面
-    'tomatoAll', 'tomatoAppendMany', 'tomatoUpdateById', 'tomatoRemoveByIds', 'tomatoMigrateFromMeta'
+    'tomatoAll', 'tomatoAppendMany', 'tomatoUpdateById', 'tomatoRemoveByIds', 'tomatoMigrateFromMeta',
+    // Settings/habits row table (P2 2026-09-16, docs/sync §4.2 blob split): per-key rows + tombstones;
+    // whitelisted ahead of the Wave-2 renderer switch so the coverage gate's renderer⊆whitelist direction holds
+    'settingsRowsAll', 'settingsRowPut', 'settingsRowPutMany', 'settingsRowDelete'
   ])
 
   // Dangerous DB ops: batch write/batch delete/arbitrary meta write. Capability-wise aligned with "dangerous channels main-window only" —

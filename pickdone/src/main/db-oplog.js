@@ -49,6 +49,11 @@ module.exports = ({ getDb, log }) => {
       // H2 2026-09-16: meta deletions were never captured (not in WRITE_OPS, no case here) — a removed
       // meta key could never propagate to other devices. Accepts ('k') or (['k']) argument forms.
       case 'deleteMeta': return [one('meta', Array.isArray(params) ? params[0] : params)]
+      // P2 settings_rows (docs/sync §4.2): row-granular deltas; a no-change put (result false)
+      // emits nothing, PutMany's result is the list of keys that actually changed
+      case 'settingsRowPut': return result === false ? [] : [one('setting', params && params.key)]
+      case 'settingsRowPutMany': return arr('setting', result)
+      case 'settingsRowDelete': return [one('setting', params && typeof params === 'object' ? params.key : params)]
       case 'tomatoAppendMany': {
         const ids = (Array.isArray(params) ? params : [params]).map(r => r && r.tomatoId).filter(Boolean)
         return arr('tomato', ids)

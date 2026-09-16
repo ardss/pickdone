@@ -13,7 +13,7 @@ const dayjs = require('dayjs')
 // node_modules/electron-log, so fall back to a no-op logger instead of crashing at require time
 let log
 try { log = require('electron-log') } catch { log = { info () {}, warn () {}, error () {} } }
-const oplog = require('./db-oplog')({ getDb: () => db, log })
+const oplog = require('./db-oplog')({ getDb: () => db, log }), syncSchema = require('./db-sync-schema')({ getDb: () => db, log })
 
 let Database = null
 function loadDriver () {
@@ -122,7 +122,8 @@ CREATE TABLE IF NOT EXISTS todos (
   important     INTEGER NOT NULL DEFAULT 0,
   urgent        INTEGER NOT NULL DEFAULT 0,
   status        TEXT NOT NULL DEFAULT 'add',
-  version       INTEGER NOT NULL DEFAULT 0
+  version       INTEGER NOT NULL DEFAULT 0,
+  tz            TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_todos_day       ON todos (deleted, scheduledDay);
 CREATE INDEX IF NOT EXISTS idx_todos_status    ON todos (status);
@@ -197,7 +198,7 @@ CREATE TABLE IF NOT EXISTS sync_oplog (
   entity   TEXT NOT NULL,
   entityId TEXT NOT NULL,
   ts       INTEGER NOT NULL
-);`
+);` + syncSchema.DDL
 
 const FILTER_DATE_MODES = new Set(['all', 'today', 'week', 'overdue', 'none'])
 /** Filter-condition normalization: whitelist validation for dateMode/catId/priority, falling back on invalid values (an unknown dateMode makes filtering silently degrade to "all") */
@@ -329,6 +330,7 @@ function initInner (userDataPath) {
       }
       return true
     } },
+    { v: 6, fn: d => syncSchema.migrateV6(d) },
   ]
   let ver = getVer()
   // Failed migration must abort the loop (not `continue`): advancing past a failed migration would stamp the
@@ -816,6 +818,10 @@ const OPS = {
   // Main-process/CLI-only op by design: the future sync engine lives in the main process and reads the
   // db layer directly. Deliberately NOT in the renderer IPC whitelist or contracts.d.ts DbCallOp —
   // adding a renderer caller without whitelisting it would be the filterList/bumpSnow silent-outage shape.
+  settingsRowsAll: () => syncSchema.rowsAll(), // settings/habits row table (P2, docs/sync §4.2)
+  settingsRowPut: p => syncSchema.rowPut(p),
+  settingsRowPutMany: p => syncSchema.rowPutMany(p),
+  settingsRowDelete: p => syncSchema.rowDelete(p),
 syncOplogSince: ({ sinceSeq = 0, limit = 2000 } = {}) => {
     const s = Number(sinceSeq) || 0
     const n = Math.max(1, Math.min(10000, Math.floor(Number(limit) || 2000)))
@@ -857,9 +863,10 @@ const WRITE_OPS = new Set([
   'filterUpsert', 'filterDelete',
   'planAddMany', 'planUpdateChip', 'planRemoveIds', 'planMoveTask',
   'tomatoAppendMany', 'tomatoUpdateById', 'tomatoRemoveByIds', 'tomatoMigrateFromMeta',
-  'planDeleteTask', 'planDeleteTaskDay', 'planPrune'
+  'planDeleteTask', 'planDeleteTaskDay', 'planPrune', 'settingsRowPut', 'settingsRowPutMany', 'settingsRowDelete'
 ])
 const isWriteOp = op => WRITE_OPS.has(op)
+syncSchema.registerOps(OPS, WRITE_OPS, oplog)
 
 /** Explicitly close the handle (for tests switching directories / graceful process exit); silent when uninitialized or already closed.
  *  P2 2026-09-11: close() used to leave the module var set, so isOpen() kept returning true after close

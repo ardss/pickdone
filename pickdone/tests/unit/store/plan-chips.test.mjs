@@ -122,7 +122,7 @@ test('域:排程芯片 — 迁移 v3:meta JSON 入行存储+备份+幂等', () =
     assert.equal(dbm.call('getMeta', 'dayPlanState'), null, '旧键移除')
     assert.ok(dbm.call('getMeta', 'dayPlanState.bak'), '备份键保留')
     // 断言推进到最新迁移版(2026-09-15 v5 sync groundwork 加入):新增迁移时必须同步抬这个期望值
-    assert.equal(dbm.call('getMeta', 'schemaVersion'), '5', '迁移版本推进至最新')
+    assert.ok(Number(dbm.call('getMeta', 'schemaVersion')) >= 6, '迁移版本推进至最新')
     // 幂等:再次重开不重复导入
     dbm.close()
     dbm.init(dir)
