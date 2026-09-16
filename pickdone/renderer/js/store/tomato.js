@@ -4,7 +4,7 @@ import { dayjs, safeSet, FMT } from '../utils/core.js'
 import { remainSecOf } from '../utils/tomatoShared.js'
 import { confirmUrl } from '../utils/mediaRegistry.js'
 import { tt } from '../utils/core.js'
-import { FOCUS_MAX_MINUTES } from '../utils/limits.js'
+import { FOCUS_MAX_MINUTES, REST_MAX_MINUTES } from '../utils/limits.js'
 
 const LS_KEY = 'tomatoState'
 /** Persistence blob format version: incremented on future incompatible field semantics; readers tolerate old unstamped data as v1 */
@@ -120,11 +120,41 @@ function persistState (state) {
  *  失败留在重试队列,下一次任意账本写时重放(锁屏/瞬时 IO 失败自愈)。 */
 const _pendingLedger = []
 let _flushHooked = false
+/** H1 (2026-09-16): the db layer's tomatoAppendMany now returns a row-tolerant {accepted,rejected}
+ *  result; rejected rows (missing tomatoId/endTime etc.) used to vanish silently — report each per contract. */
+function logRejectedRows (res, params) {
+  if (!res || !Array.isArray(res.rejected) || !res.rejected.length) return
+  const list = Array.isArray(params) ? params : [params]
+  for (const r of res.rejected) {
+    let row
+    try { row = JSON.stringify(list[r && r.index]) } catch (e) { row = String(list[r && r.index]) }
+    console.error('[tomato] ledger row rejected:', r && r.reason, 'row:', row)
+  }
+}
+
+/** H1 (2026-09-16): after a remove persists, drop pending appends for the same tomatoIds — the db
+ *  layer's ON CONFLICT DO UPDATE SET deleted=0 would resurrect the deleted row, so replaying the old
+ *  append equals undoing the delete. params is the tomatoRemoveByIds id array. */
+function purgePendingAppends (ids) {
+  const dead = new Set(ids || [])
+  if (!dead.size) return
+  for (let i = _pendingLedger.length - 1; i >= 0; i--) {
+    const e = _pendingLedger[i]
+    if (!e || e.op !== 'tomatoAppendMany') continue
+    const recs = Array.isArray(e.params) ? e.params : [e.params]
+    if (recs.some(r => r && dead.has(r.tomatoId))) _pendingLedger.splice(i, 1)
+  }
+}
+
 /** Replay still-pending entries; each is only removed from the queue on success (ledger ops are idempotent upserts, so a duplicate in-flight retry is safe) */
 function replayPendingLedger () {
   for (const entry of [..._pendingLedger]) {
     Promise.resolve(window.todoAPI && window.todoAPI.dbCall(entry.op, entry.params))
-      .then(() => { const i = _pendingLedger.indexOf(entry); if (i >= 0) _pendingLedger.splice(i, 1) })
+      .then(res => {
+        const i = _pendingLedger.indexOf(entry); if (i >= 0) _pendingLedger.splice(i, 1)
+        logRejectedRows(res, entry.params)
+        if (entry.op === 'tomatoRemoveByIds') purgePendingAppends(entry.params)
+      })
       .catch(e => console.error('[tomato] ledger DB write failed (queued for retry):', entry.op, e))
   }
 }
@@ -143,6 +173,10 @@ function flushPendingLedger () {
   // but order preservation keeps the replay semantics obviously correct.
   list.forEach((it, idx) => {
     Promise.resolve(window.todoAPI && window.todoAPI.dbCall(it.op, it.params))
+      .then(res => {
+        logRejectedRows(res, it.params)
+        if (it.op === 'tomatoRemoveByIds') purgePendingAppends(it.params)
+      })
       .catch(e => {
         console.error('[tomato] ledger flush failed at quit:', it.op, e)
         _pendingLedger.splice(Math.min(idx, _pendingLedger.length), 0, it)
@@ -213,7 +247,10 @@ export default {
       // clamp 1..FOCUS_MAX_MINUTES = the DB-layer single source (db.js _recToRow via shared/limits.mjs):
       // a UI-side cap above it would show values the DB silently drops on next reload (memory says 720, ledger says 600)
       if (patch.focusDuration != null) rec.focusDuration = Math.max(1, Math.min(FOCUS_MAX_MINUTES, Math.round(patch.focusDuration)))
-      if (patch.restDuration != null) rec.restDuration = Math.max(0, Math.min(120, Math.round(patch.restDuration)))
+      // H1 (2026-09-16): rest cap unified to REST_MAX_MINUTES (shared/limits.mjs), same source as
+      // the DB layer's clamp (_recToRow restDuration). The old inline 120 silently truncated a
+      // 300-minute rest on any entry-card patch — memory said 120, ledger said 600, reload diverged.
+      if (patch.restDuration != null) rec.restDuration = Math.max(0, Math.min(REST_MAX_MINUTES, Math.round(patch.restDuration)))
       if (patch.succeed != null) rec.succeed = !!patch.succeed
       s.tomatoRecordList = [...s.tomatoRecordList]
       ledgerWrite('tomatoUpdateById', {

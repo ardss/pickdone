@@ -115,7 +115,8 @@ export default {
       "placeholder": "Type a task, press Enter to create",
       "noDate": "no date",
       "movedToInbox": ", moved to inbox",
-      "created": "Task added: {c}"
+      "created": "Task added: {c}",
+      "createFailed": "Failed to create task, please retry"
 
     },
     "DayDateStrip": {

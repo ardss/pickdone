@@ -53,8 +53,13 @@ test('tomatoRemoveByIds is a tombstone: excluded from tomatoAll AND tomatoByDay 
   const t0 = Date.now()
   const rec = { tomatoId: 'gw_tmt', endTime: t0, focus: 'gw', focusDuration: 25, succeed: true }
   db.call('tomatoAppendMany', [rec])
-  // tomatoByDay bounds are millisecond timestamps (or YYYYMMDD ints) — not ISO strings
-  const dayStart = new Date(new Date(t0).toISOString().slice(0, 10) + 'T00:00:00').getTime()
+  // tomatoByDay bounds are millisecond timestamps (or YYYYMMDD ints) — not ISO strings.
+  // Bounds must be the record's LOCAL day (dateKey is derived locally via dayjs, db layer):
+  // the old toISOString().slice(0,10) + 'T00:00:00' mixed a UTC calendar date with a LOCAL
+  // midnight parse, so between 00:00 and 08:00 in UTC+8 the range landed on the previous day
+  // and the freshly appended record summed to 0 (timezone-dependent flake).
+  const d0 = new Date(t0)
+  const dayStart = new Date(d0.getFullYear(), d0.getMonth(), d0.getDate()).getTime()
   const range = { from: dayStart, to: dayStart + 86400000 - 1 }
   const sumBefore = db.call('tomatoByDay', range).reduce((a, r) => a + r.focus, 0)
   assert.equal(sumBefore, 25, 'ledger counts the record before delete')

@@ -76,7 +76,7 @@
           <app-icon name="folder" :size="14" v-if="!isFolderExpanded(o.categoryId)" :style="{color:o.categoryColor}"/>
           <app-icon name="folder" :size="14" v-else :style="{color:o.categoryColor}"/>
           <template v-if="catEditing===o.categoryId">
-            <input v-model="newCatName" class="sn-cat-edit" @keyup.enter="saveCatEdit(o)" @blur="saveCatEdit(o)"/>
+            <input v-model="newCatName" class="sn-cat-edit" @keydown.enter.prevent="onCatEditEnter($event, o)" @blur="saveCatEdit(o)"/>
           </template>
           <template v-else><span class="sn-cat-name">{{o.categoryName}}</span></template>
           <i class="folder-toggle-icon"><app-icon :name="isFolderExpanded(o.categoryId)?'chevron-down':'chevron-right'" :size="11"/></i>
@@ -93,7 +93,7 @@
                @keydown.enter.prevent="go('todo-list-category',{id:ch.categoryId})">
             <span class="sn-dot" :style="{background:ch.categoryColor}"></span>
             <template v-if="catEditing===ch.categoryId">
-              <input v-model="newCatName" class="sn-cat-edit" @keyup.enter="saveCatEdit(ch)" @blur="saveCatEdit(ch)"/>
+              <input v-model="newCatName" class="sn-cat-edit" @keydown.enter.prevent="onCatEditEnter($event, ch)" @blur="saveCatEdit(ch)"/>
             </template>
             <template v-else><span>{{ch.categoryName}}</span></template>
             <i class="sn-cat-del" role="button" tabindex="0" :aria-label="$t('statsG.SideNav.delCatAria')" style="display:inline-flex"
@@ -111,7 +111,7 @@
              @dragstart="dragStartCat(o,$event)" @dragover.prevent="dragOverCat(o,$event)" @drop.prevent="dropOnCat(o,$event)" @dragend="dragEndCat">
           <span class="sn-dot" :style="{borderColor:o.categoryColor, background:o.categoryColor}"></span>
           <template v-if="catEditing===o.categoryId">
-            <input v-model="newCatName" class="sn-cat-edit" @keyup.enter="saveCatEdit(o)" @blur="saveCatEdit(o)"/>
+            <input v-model="newCatName" class="sn-cat-edit" @keydown.enter.prevent="onCatEditEnter($event, o)" @blur="saveCatEdit(o)"/>
           </template>
           <template v-else><span>{{o.categoryName}}</span></template>
           <i class="sn-cat-del" role="button" tabindex="0" :aria-label="$t('statsG.SideNav.delCatAria')" style="display:inline-flex"
@@ -231,8 +231,7 @@ import SnManageCategoriesModal from './side-nav/SnManageCategoriesModal.vue'
 import SnManageTagsModal from './side-nav/SnManageTagsModal.vue'
 import { NAV_ITEMS, navKeyOfRoute } from '../views/registry.js'
 
-// Icons/copy/order are all derived from views/registry.js (single source of truth); labelKey is resolved via navLabel() at render time --
-// there is no component context at module top level, calling this.$t directly would blow up the whole module (white screen)
+// Icons/copy/order are all derived from views/registry.js (single source of truth); labelKey is resolved via navLabel() at render time -- there is no component context at module top level, calling this.$t directly would blow up the whole module (white screen)
 const NAV_ICON = Object.fromEntries(NAV_ITEMS.map(n => [n.route, n.icon]))
 const NAV_LABEL = Object.fromEntries(NAV_ITEMS.map(n => [n.route, { i18n: n.labelKey }]))
 const NAV_ORDER = NAV_ITEMS.map(n => n.route)
@@ -242,8 +241,7 @@ export default {
   components: { WeatherWidget, SnTagPanel, SnManageCategoriesModal, SnManageTagsModal, FilterModal: () => import('./FilterModal.vue') },
   data () {
     return {
-      // User's manual collapse preference (localStorage); forced collapse on narrow viewports, see also the narrow/collapsed computed
-      // Value is JSON.stringify(boolean); on corruption/tampering fall back to false instead of throwing and blowing up the whole sidebar mount
+      // User's manual collapse preference (localStorage); forced collapse on narrow viewports, see also the narrow/collapsed computed Value is JSON.stringify(boolean); on corruption/tampering fall back to false instead of throwing and blowing up the whole sidebar mount
       userCollapsed: localStorage.getItem('sidebarCollapsed') === 'true',
       narrow: false,
       catEditing: null as any,
@@ -253,8 +251,7 @@ export default {
       // Sync button spin flag (reference: sidebar-profile-item__btn--spin)
       spinning: false,
       syncDone: false, // the icon briefly turns into a checkmark after sync completes
-      // Manage categories / manage tags dialogs: extracted to side-nav/SnManageCategoriesModal.vue
-      // and side-nav/SnManageTagsModal.vue (2026-09-12 split); only the open flags stay here
+      // Manage categories / manage tags dialogs: extracted to side-nav/SnManageCategoriesModal.vue and side-nav/SnManageTagsModal.vue (2026-09-12 split); only the open flags stay here
       manageVisible: false,
       // Manage tags modal: rename/delete lives in the extracted dialog; only the open flag stays
       tagMgrVisible: false,
@@ -274,9 +271,7 @@ export default {
        out of flow) to cover the overflow P0; the collapse-once-on-narrow logic is in mounted/_onNarrow */
     collapsed () { return this.userCollapsed },
     filteredNavOrder () {
-      // Gate doctrine lives in utils/nav-gate.js (pure + unit-tested): developer mode is the
-      // master gate for experiments, each of which also has its own module switch; projects
-      // has graduated and rides on its own switch alone.
+      // Gate doctrine lives in utils/nav-gate.js (pure + unit-tested): developer mode is the master gate for experiments, each of which also has its own module switch; projects has graduated and rides on its own switch alone.
       return visibleNavRoutes(this.$store.state.settings, NAV_ORDER)
     },
     user () { return this.$store.state.auth.user },
@@ -337,8 +332,7 @@ export default {
         try { const l = JSON.parse(v || '[]'); if (Array.isArray(l)) this.$store.commit('ui/setUserTags', l) } catch { /* no-op */ }
       }).catch(() => {})
     }
-    // Collapse once when entering a narrow viewport (breakpoint = drawer breakpoint 920px; the expanded state uses the CSS drawer overlay, no longer locked);
-    // the user preference is restored automatically when the window is widened back
+    // Collapse once when entering a narrow viewport (breakpoint = drawer breakpoint 920px; the expanded state uses the CSS drawer overlay, no longer locked); the user preference is restored automatically when the window is widened back
     this._narrowMql = window.matchMedia('(max-width: 919px)')
     this._onNarrow = e => {
       const was = this.narrow
@@ -459,6 +453,11 @@ export default {
       const name = this.newCatName.trim() || (this.$t('statsE.SideNav.categoriesLabel') + (this.categories.length + 1))
       this.$store.commit('category/addCategory', { categoryName: name })
       this.newCatName = ''
+    },
+    // IME guard: keyup.enter can't see the 229 composition flag, so listen on keydown and skip the Enter that commits an IME composition; blur-save stays intact (composition never blurs)
+    onCatEditEnter (e, c) {
+      if (e.isComposing || e.keyCode === 229) return
+      this.saveCatEdit(c)
     },
     saveCatEdit (c) {
       this.$store.commit('category/updateCategory', { categoryId: c.categoryId, categoryName: this.newCatName.trim() || c.categoryName })
@@ -955,6 +954,5 @@ html[data-theme="dark"] .main-nav-search__input:focus { border-color: var(--bran
 .sn-fold-arrow.open { transform: rotate(0deg); }
 .sn-fold-arrow:not(.open) { transform: rotate(-90deg); }
 .sn-cog-btn.drag-ready { border-style: dashed; }
-
 
 </style>

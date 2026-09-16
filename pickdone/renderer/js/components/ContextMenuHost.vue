@@ -3,12 +3,14 @@
   <transition name="pop">
     <div v-if="m.visible" class="ctx-menu" role="menu" :style="{left:pos.x+'px', top:pos.y+'px'}"
          @keydown.esc="$store.commit('ui/closeMenu')" @keydown.down="onKeydown" @keydown.up="onKeydown">
-      <div v-for="(it,i) in m.items" :key="i"
-           class="ctx-item" :class="{danger:it.danger, sep:it.sep}"
-           role="menuitem" tabindex="0"
-           @click.stop="!it.sep&&exec(it)"
-           @keydown.enter.prevent="!it.sep&&exec(it)">
-      <app-icon v-if="it.icon" :name="it.icon" :size="13" class="ctx-ico"/>{{it.label}}</div>
+      <template v-for="(it,i) in m.items" :key="i">
+        <div v-if="it.sep" class="ctx-item sep" role="separator" aria-disabled="true"></div>
+        <div v-else class="ctx-item" :class="{danger:it.danger}"
+             role="menuitem" tabindex="0"
+             @click.stop="exec(it)"
+             @keydown.enter.prevent="exec(it)">
+          <app-icon v-if="it.icon" :name="it.icon" :size="13" class="ctx-ico"/>{{it.label}}</div>
+      </template>
     </div>
   </transition>
 </template>
@@ -25,6 +27,9 @@ export default {
   watch: {
     'm.visible' (v) {
       if (v) {
+        // Focus restore (a11y): remember the trigger so keyboard focus can return here on close
+        const ae = document.activeElement as HTMLElement | null
+        this._lastTrigger = ae && typeof ae.focus === 'function' ? ae : null
         // Place at the original coordinates first, then clamp back into the viewport once the menu's real size is measured: otherwise menus near the bottom/right edge would overflow the screen and become unselectable
         this.pos = { x: this.m.x, y: this.m.y }
         this.$nextTick(() => {
@@ -38,6 +43,8 @@ export default {
           const first = el.querySelector('.ctx-item[tabindex="0"]')
           if (first) first.focus()
         })
+      } else {
+        this.restoreFocus()
       }
     }
   },
@@ -61,6 +68,14 @@ export default {
   },
   methods: {
     exec (it) { it.fn && it.fn(); this.$store.commit('ui/closeMenu') },
+    // Return keyboard focus to the element that opened the menu (no-op if it was removed from the DOM)
+    restoreFocus () {
+      const t = this._lastTrigger
+      this._lastTrigger = null
+      if (t && document.contains(t)) {
+        try { t.focus() } catch (e) { /* element may be unfocusable */ }
+      }
+    },
     onKeydown (e) {
       const items = [...this.$el.querySelectorAll('.ctx-item[tabindex="0"]')]
       const idx = items.indexOf(document.activeElement)

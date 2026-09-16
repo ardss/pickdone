@@ -48,6 +48,15 @@ module.exports = function todoHandlers (ctx) {
       if (isLocked() && !isLockWindow(e.sender)) {
         // 浮窗到点落番茄账是合法后台行为:锁屏期间放行浮窗自身的番茄追加类写(只挡读/危险写,威胁模型针对绕锁读写)
         let floatLedger = tomatoFloat.isSelfSender(e.sender) && /^(tomatoAppendMany|tomatoUpdateById|bumpSnow)$/.test(op) // bumpSnow=挂任务送专注积分,同属到点落账
+        // H2 2026-09-16: bumpSnow was the only one of the three float-ledger ops with zero narrowing —
+        // a trapped float window could re-credit any taskId (incl. soft-deleted/nonexistent rows; a live
+        // row inflates focusMinutes unboundedly). Same narrowing as tomatoAppendMany/tomatoUpdateById:
+        // the target row must really exist and not be soft-deleted.
+        if (floatLedger && op === 'bumpSnow') {
+          const tid = (params || {}).taskId
+          const t = tid != null ? dbm.call('getById', String(tid)) : null
+          floatLedger = !!t && !t.delete
+        }
         if (floatLedger && (op === 'tomatoUpdateById' || op === 'tomatoAppendMany')) {
           // 本地时区当天(dateKey 按本地 dayjs 导出,UTC 串会在 0-8 点误判跨天)
           const todayKey = fixUtil.localDayKey(Date.now())

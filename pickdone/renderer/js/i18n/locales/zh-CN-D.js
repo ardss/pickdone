@@ -115,7 +115,8 @@ export default {
       "movedToInbox": "，已放入待办箱",
       "noDate": "未安排日期",
       "scheduledAt": "，已安排在",
-      "created": "已添加任务：{c}"
+      "created": "已添加任务：{c}",
+      "createFailed": "创建失败，请重试"
 
     },
     "DayDateStrip": {

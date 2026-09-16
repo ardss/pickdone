@@ -12,6 +12,9 @@ function normalizeContent (s) {
   return require('./sanitize').sanitizeText(s)
 }
 
+// Named accessor for callers needing the truncating form (todoToRow description, H2 2026-09-16)
+function sanitizeText (s, maxLen) { return require('./sanitize').sanitizeText(s, maxLen) }
+
 /** Extra reminder offsets (minutes, negative = earlier) JSON parsing; fault tolerance: invalid/out-of-range values are dropped outright.
  *  The reminders column has two shapes: old = [offset...] numeric array; new = {o:[offsets], x:[absolute ts...]} (multiple reminders) */
 function parseOffsets (s) {
@@ -110,7 +113,10 @@ function todoToRow (t) {
     id: t.taskId,
     userId: t.userId != null ? t.userId : null,
     content: t.taskContent != null ? normalizeContent(String(t.taskContent)) : '',
-    description: t.taskDescribe != null ? String(t.taskDescribe) : null,
+    // H2 2026-09-16: description was stored raw while the title went through normalizeContent —
+    // control chars/RTL overrides reached the CLI list/audit output unfiltered. Sanitize + truncate
+    // at the same 5000 cap as the title (sanitizeText default).
+    description: t.taskDescribe != null ? sanitizeText(String(t.taskDescribe), 5000) : null,
     complete: t.complete ? 1 : 0,
     completedAt: t.completedAt || 0,
     deletedAt: t.deletedAt || 0,

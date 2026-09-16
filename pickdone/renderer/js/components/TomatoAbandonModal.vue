@@ -7,7 +7,7 @@
       </button>
       <div class="abandon-title">{{ $t('statsK.TomatoAbandonModal.title') }}</div>
       <p class="abandon-hint" v-html="$t('statsK.TomatoAbandonModal.hint', { min: '<b>' + focusedMin + '</b>' })"></p>
-      <input v-model="reason" class="abandon-reason-input" maxlength="100" :placeholder="$t('statsP.TomatoAbandonModal.reasonPh')" @keydown.enter.prevent="confirmAbandon"/>
+      <input v-model="reason" class="abandon-reason-input" maxlength="100" :placeholder="$t('statsP.TomatoAbandonModal.reasonPh')" @keydown.enter.prevent="onReasonEnter"/>
       <div class="abandon-actions">
         <button type="button" class="abandon-btn" @click="cancelAbandon">{{ $t('statsK.TomatoAbandonModal.continue') }}</button>
         <button type="button" class="abandon-btn abandon-btn--giveup" @click="confirmAbandon">{{ $t('statsK.TomatoAbandonModal.giveUp') }}</button>
@@ -38,6 +38,11 @@ export default {
     }
   },
   methods: {
+    // IME guard: the Enter that commits a composition (keyCode 229) must not abandon the focus session
+    onReasonEnter (e) {
+      if (e.isComposing || e.keyCode === 229) return
+      this.confirmAbandon()
+    },
     confirmAbandon () {
       this.$store.dispatch('tomato/giveUp', { record: true, reason: this.reason })
       this.$store.commit('ui/closeTomatoAbandon')

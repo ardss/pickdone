@@ -10,7 +10,9 @@
  *   The taskId is snapshotted at ENQUEUE time so switching tasks within the debounce window can
  *   never write A's edits onto B. Dispatch failure restores the drained keys into the dirty map
  *   (same retry semantics as flushSave) and surfaces the failure banner.
- * - flushSave(): immediate drain + dispatch of dirty fields only (no extra patch); on failure the
+ * - flushSave(): immediate drain + dispatch of dirty fields MERGED with the still-pending debounce
+ *   patch (H1 2026-09-16: clearTimeout used to discard the queued patch — edits made <350ms before
+ *   a flush were silently lost); on failure the
  *   drained keys are restored into the dirty map so a later queueSave/flush retries them.
  * - markDirty(k): flag a list-style field (subtasks/imgs/files/preds) whose value is collected
  *   lazily via opts.dirtyPatchFor at drain time.
@@ -57,20 +59,32 @@ export function createSaveQueue (store, opts) {
     dirty = Object.assign(restored, dirty)
   }
 
+  /** Pending debounce-window patch. H1 fix (2026-09-16): the queued immediate patch (fieldPatch/
+   *  applyDate/onRemindersCommit go through queueSave but do NOT markDirty) used to live only in the
+   *  timer closure — flushSave's clearTimeout discarded it wholesale, so editing a title and closing
+   *  the panel (or switching tasks) inside 350ms silently lost the edit. The patch (with its
+   *  enqueue-time taskId snapshot) is now retained so flushSave can commit it. */
+  let pending = null
+
   const queueSave = (patch) => {
     clearTimeout(timer)
     // Race protection: snapshot the task id at enqueue time; the callback commits to the task "at enqueue time"
     const taskId = getTaskId()
+    pending = (pending && pending.taskId === taskId)
+      ? { taskId, patch: Object.assign({}, pending.patch, patch || {}) }
+      : { taskId, patch: Object.assign({}, patch || {}) }
     timer = setTimeout(async () => {
-      if (!taskId) return
+      const queued = pending
+      pending = null
+      if (!queued || !queued.taskId) return
       if (opts.onSaving) opts.onSaving(true)
       let drainedKeys = []
       try {
         const { keys: drained, patch: dirtyPatch } = drain()
         drainedKeys = drained
-        const all = Object.assign({}, patch || {}, dirtyPatch)
+        const all = Object.assign({}, queued.patch, dirtyPatch)
         if (Object.keys(all).length) {
-          await store.dispatch('todo/updateTodoFields', { taskId, patch: all })
+          await store.dispatch('todo/updateTodoFields', { taskId: queued.taskId, patch: all })
         }
         if (opts.onDone) opts.onDone()
       } catch (e) {
@@ -88,10 +102,30 @@ export function createSaveQueue (store, opts) {
   const flushSave = () => {
     if (!booted) return // the immediate watcher fires before created; the dirty state is not yet initialized
     clearTimeout(timer)
+    const queued = pending
+    pending = null
     const taskId = getTaskId()
-    if (!taskId) return
     const { keys, patch } = drain()
-    if (keys.length) {
+    if (queued && queued.taskId && queued.taskId === taskId) {
+      // Same task: merge the pending debounce patch with the dirty fields into one dispatch (H1 fix —
+      // previously clearTimeout here dropped `queued.patch` entirely).
+      const all = Object.assign({}, queued.patch, patch)
+      if (Object.keys(all).length) {
+        store.dispatch('todo/updateTodoFields', { taskId, patch: all }).catch(() => {
+          restore(keys)
+          if (opts.onFail) opts.onFail()
+        })
+      }
+      return
+    }
+    if (queued && queued.taskId) {
+      // Task switched inside the debounce window: the queued edits still commit to their enqueue-time
+      // task (same snapshot semantics as the debounce callback); dirty fields go to the current task.
+      store.dispatch('todo/updateTodoFields', { taskId: queued.taskId, patch: queued.patch }).catch(() => {
+        if (opts.onFail) opts.onFail()
+      })
+    }
+    if (taskId && keys.length) {
       store.dispatch('todo/updateTodoFields', { taskId, patch }).catch(() => {
         // Restore the dirty flags for the keys that failed to persist and surface the failure banner
         restore(keys)

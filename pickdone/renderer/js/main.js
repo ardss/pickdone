@@ -456,6 +456,7 @@ async function bootstrap () {
   if (window.todoAPI.onSecurityUnlock) window.todoAPI.onSecurityUnlock(() => store.commit('ui/setLocked', false))
 
   // Shortcuts: ctrl+n focuses quick-add / ctrl+s sync / ctrl+z undo / ctrl+y·ctrl+shift+z redo (offline = local archive)
+  let syncInFlight = false
   window.addEventListener('keydown', e => {
     // Inside inputs/textareas, leave Ctrl+Z to text-level undo; don't steal it
     const ae = document.activeElement
@@ -465,11 +466,14 @@ async function bootstrap () {
       window.dispatchEvent(new CustomEvent('todo:focus-quickadd'))
     } else if (e.ctrlKey && e.key.toLowerCase() === 's') {
       e.preventDefault()
+      // Key auto-repeat and in-flight sync would stack identical notifications: ignore re-triggers
+      if (e.repeat || syncInFlight) return
+      syncInFlight = true
       // Same feedback surface as the SideNav sync icon: success/error notify, never silent
       store.dispatch('todo/syncTodos').then(
         () => window.appUI.$notify({ title: i18n.global.t('statsE.SideNav.syncCompleteMsg'), message: i18n.global.t('statsG.SideNav.syncDoneMsg'), type: 'success', duration: 2000 }),
         e => window.appUI.$notify({ title: i18n.global.t('statsE.SideNav.syncFailedMsg'), message: (e && e.message) || i18n.global.t('statsG.SideNav.syncFailMsg'), type: 'error', duration: 4000 })
-      )
+      ).finally(() => { syncInFlight = false })
     } else if (!inEditor && e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === 'z') {
       e.preventDefault()
       store.dispatch('todo/undo').then(r => {

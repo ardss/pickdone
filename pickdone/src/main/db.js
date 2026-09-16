@@ -18,11 +18,7 @@ const oplog = require('./db-oplog')({ getDb: () => db, log })
 let Database = null
 function loadDriver () {
   if (Database) return Database
-  // Packaged layout: the driver lives in extraResources (resources/vendor, all platform prebuilds) —
-  // NOT in app.asar. The asar copy was pruned per-arch by electron-builder's smart filtering, and the
-  // bundled CLI already resolves this same resources/vendor copy via its own relative require, so the
-  // app aligning onto it keeps one authoritative driver per package. Dev runs fall back to the
-  // repo-relative path.
+  // Packaged layout: the driver lives in extraResources (resources/vendor, all platform prebuilds) — NOT in app.asar. The asar copy was pruned per-arch by electron-builder's smart filtering, and the bundled CLI already resolves this same resources/vendor copy via its own relative require, so the app aligning onto it keeps one authoritative driver per package. Dev runs fall back to the repo-relative path.
   let vendorRoot = path.join(__dirname, '..', '..', 'vendor', 'better-sqlite3-multiple-ciphers')
   try {
     const { app } = require('electron')
@@ -203,7 +199,6 @@ CREATE TABLE IF NOT EXISTS sync_oplog (
   ts       INTEGER NOT NULL
 );`
 
-
 const FILTER_DATE_MODES = new Set(['all', 'today', 'week', 'overdue', 'none'])
 /** Filter-condition normalization: whitelist validation for dateMode/catId/priority, falling back on invalid values (an unknown dateMode makes filtering silently degrade to "all") */
 function normConds (c) {
@@ -221,13 +216,8 @@ function parseConds (s) {
   try { const v = JSON.parse(s || '{}'); return v && typeof v === 'object' ? normConds(v) : normConds(null) } catch { return normConds(null) }
 }
 
-
 function init (userDataPath) {
-  // Re-entry policy (P2 2026-09-11): a second init while a handle is open closes the old handle
-  // cleanly first instead of throwing — rebuilding against a live handle would orphan prepared
-  // statements mid-write, and an abrupt throw broke the same-process restart idiom used across the
-  // unit tests (init without close = simulated restart). Closing first leaves no stale stmts and
-  // keeps the recovery re-init path (index.js db-fail dialog → attemptDbRecovery) working.
+  // Re-entry policy (P2 2026-09-11): a second init while a handle is open closes the old handle cleanly first instead of throwing — rebuilding against a live handle would orphan prepared statements mid-write, and an abrupt throw broke the same-process restart idiom used across the unit tests (init without close = simulated restart). Closing first leaves no stale stmts and keeps the recovery re-init path (index.js db-fail dialog → attemptDbRecovery) working.
   if (db) { try { db.close() } catch {} db = null; stmtsClearAll() }
   try {
     initInner(userDataPath)
@@ -443,7 +433,9 @@ function queryTodos ({ deleted = 0, complete = null, categoryId = null, repeatId
     if (!cols.has(part[0]) || (part[1] && !/^(ASC|DESC)$/i.test(part[1]))) throw new Error('queryTodos: 非法 orderBy: ' + orderBy)
   }
   sql += ` ORDER BY ${orderBy}`
-  if (limit) { const n = Number(limit); if (!Number.isFinite(n) || n < 0) throw new Error('queryTodos: 非法 limit'); sql += ' LIMIT ' + n }
+  // F2 fix: `if (limit)` made limit=0 fail-open (0 === unlimited, while negatives threw) — validate on
+  // presence (null/undefined only), so 0 is an explicit "zero rows" and all invalid values fail closed.
+  if (limit !== null && limit !== undefined) { const n = Number(limit); if (!Number.isFinite(n) || n < 0) throw new Error('queryTodos: invalid limit'); sql += ' LIMIT ' + n }
   return db.prepare(sql).all(p).map(rowToTodo)
 }
 
@@ -458,14 +450,8 @@ function assertHasTaskId (t) {
 const OPS = {
   upsert: t => { assertHasTaskId(t); stmts.upsert.run(todoToRow(t)); return true },
   upsertMany: list => { if (!Array.isArray(list)) throw new Error('[TodoDB] upsertMany: list must be an array, got ' + typeof list); list.forEach(assertHasTaskId); stmts.upsertMany(list.map(todoToRow)); return true },
-  // Atomic sync-commit (W3 2026-09-12): row upserts + todosVersion cursor advance in ONE transaction.
-  // Why atomic: writing rows with status='sync' non-atomically and crashing between the upserts and the
-  // setMeta would leave rows marked 'sync' in the DB while todosVersion stayed behind — the dirty-row
-  // filter (status !== 'sync') would then skip them forever and the cursor would never advance again =
-  // silent permanent non-convergence. Inside one transaction the crash outcome is all-or-nothing:
-  // either the whole batch is re-sent on restart (old dirty semantics) or fully acknowledged (new
-  // semantics) — no intermediate state. Rows arrive in store shape; the DB layer forces status='sync'
-  // so a compromised renderer cannot write arbitrary status values through this op.
+  // Atomic sync-commit (W3 2026-09-12): row upserts + todosVersion cursor advance in ONE transaction. Why atomic: writing rows with status='sync' non-atomically and crashing between the upserts and the setMeta would leave rows marked 'sync' in the DB while todosVersion stayed behind — the dirty-row filter (status !== 'sync') would then skip them forever and the cursor would never advance again =
+  // silent permanent non-convergence. Inside one transaction the crash outcome is all-or-nothing: either the whole batch is re-sent on restart (old dirty semantics) or fully acknowledged (new semantics) — no intermediate state. Rows arrive in store shape; the DB layer forces status='sync' so a compromised renderer cannot write arbitrary status values through this op.
   commitSyncBatch: ({ rows, version }) => {
     // The cursor is the convergence lynchpin — a non-numeric value (String(undefined) etc.) would
     // poison state.version with NaN on the next boot's parseInt. Fail closed at the DB layer.
@@ -541,9 +527,38 @@ const OPS = {
   countSeedTodos: () => db.prepare("SELECT COUNT(*) n FROM todos WHERE substr(id, 1, 5) = 'seed_'").get().n,
   upsertCategory: (c) => {
     const now = Date.now()
+    // H2 2026-09-16 root fix (startup dirty-write storm): the renderer re-upserts every category on
+    // each boot; the old path rewrote all N rows with updatedAt=now and re-stamped tombstone
+    // deletedAt, producing N fake oplog deltas per launch. Now: existing row is compared field by
+    // field and an identical upsert is a no-op returning false (oplog produces no delta for it).
+    const cur = db.prepare('SELECT * FROM categories WHERE id = ?').get(c && c.id)
     // Stamp deletedAt at tombstone time: callers never pass it, and a tombstone without a timestamp
-    // can never be time-ordered or reconciled by a sync engine (review V1-F5)
-    const row = { ...c, deletedAt: (c && c.deletedAt) || (c && c.delete ? now : 0), updatedAt: (c && c.updatedAt) || now }
+    // can never be time-ordered or reconciled by a sync engine (review V1-F5). An already-tombstoned
+    // row keeps its original deletedAt (re-upserting the same deleted category must not re-stamp it).
+    const deletedAt = (c && c.deletedAt) || (c && c.delete ? ((cur && cur.deletedAt) || now) : 0)
+    const row = {
+      id: c && c.id,
+      userId: c && c.userId,
+      name: c && c.name,
+      color: c && c.color,
+      createdAt: c && c.createdAt,
+      sort: c && c.sort,
+      isFolder: (c && c.isFolder) ? 1 : 0,
+      parentId: c && c.parentId,
+      // callers may flag deletion via `delete` (renderer shape) or `deleted` (row shape); normalize to 1/0
+      deleted: (c && (c.deleted != null ? c.deleted : c.delete)) ? 1 : 0,
+      deletedAt,
+      updatedAt: (c && c.updatedAt) || now
+    }
+    if (cur) {
+      const eq = (a, b) => (a == null ? null : a) === (b == null ? null : b)
+      const same = ['id', 'userId', 'name', 'color', 'createdAt', 'sort', 'isFolder', 'parentId', 'deleted', 'deletedAt']
+        .every(k => eq(row[k], cur[k])) &&
+        // updatedAt only counts as a diff when the caller explicitly supplied one (otherwise it is
+        // just our own now-stamp and would make every no-op upsert look like a change)
+        (c.updatedAt == null || eq(row.updatedAt, cur.updatedAt))
+      if (same) return false
+    }
     db.prepare(`INSERT INTO categories (id,userId,name,color,createdAt,sort,isFolder,parentId,deleted,deletedAt,updatedAt)
       VALUES (@id,@userId,@name,@color,@createdAt,@sort,@isFolder,@parentId,@deleted,@deletedAt,@updatedAt)
       ON CONFLICT(id) DO UPDATE SET name=excluded.name, color=excluded.color, createdAt=excluded.createdAt,
@@ -576,7 +591,14 @@ const OPS = {
       if (v == null) return null
       if (v >= 1e11) return v // already in milliseconds
       const s = String(v)
-      return new Date(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8)).getTime()
+      const y = +s.slice(0, 4); const mo = +s.slice(4, 6); const d = +s.slice(6, 8)
+      // F2/H2: digit-slicing a 9-11 digit Unix-seconds value (e.g. 1758000000) yields a
+      // "valid but wrong" date (year 1757, month 00) that is NOT NaN and silently poisons stats.
+      // Validate the sliced calendar fields; anything outside month 1-12 / day 1-31 is a USAGE error.
+      if (!(mo >= 1 && mo <= 12) || !(d >= 1 && d <= 31)) {
+        throw new Error('[TodoDB] _dayBounds: ' + v + ' is not a parseable date (YYYYMMDD slices to month ' + mo + ', day ' + d + '), refusing to run BETWEEN a bogus range')
+      }
+      return new Date(y, mo - 1, d).getTime()
     }
     const f = conv(from)
     const t = conv(to)
@@ -621,7 +643,9 @@ const OPS = {
   // plan_chips deletes are tombstones (P1 sync groundwork): user-facing chip removals must propagate
   // to other devices. planPrune is time-based GC (old days fall off) and stays physical — devices
   // reconcile pruned history via periodic full snapshots, so tombstoning it would only grow the table.
-  planAll: () => db.prepare('SELECT id, taskId, day, mm FROM plan_chips WHERE deleted = 0 ORDER BY day, mm, sort').all(),
+  // H2 2026-09-16: sort was missing from the snapshot SELECT — the snapshot/restore round-trip lost
+  // chip ordering and restore's ON CONFLICT upsert then overwrote sort with 0.
+  planAll: () => db.prepare('SELECT id, taskId, day, mm, sort FROM plan_chips WHERE deleted = 0 ORDER BY day, mm, sort').all(),
   planAddMany: chips => {
     const list = (Array.isArray(chips) ? chips : [chips]).map(c => ({
       id: (c && c.id) || 'pl_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
@@ -675,7 +699,7 @@ const OPS = {
       let v = r[k]
       if (k === 'endTime' || k === 'rest') v = Math.max(0, Math.round(Number(v) || 0))
       else if (k === 'focusDuration') v = Math.min(LIMITS.FOCUS_MAX_MINUTES, Math.max(1, Math.round(Number(v) || 0))) // clamp at the DB layer: renderer clamps 720, bumpSnow clamps 600 — this path used to be unbounded
-      else if (k === 'restDuration') v = Math.min(600, Math.max(0, Math.round(Number(v) || 0)))
+      else if (k === 'restDuration') v = Math.min(LIMITS.REST_MAX_MINUTES, Math.max(0, Math.round(Number(v) || 0)))
       else if (k === 'succeed') v = v === false ? 0 : 1
       else if (k === 'manual') v = v ? 1 : 0
       o[k] = v == null ? null : v
@@ -828,7 +852,7 @@ function call (op, params) {
 // Do not guess with regexes — write ops like hardDeleteMany/filterDelete/clearCategories were once missed, leaving cross-window data stale.
 
 const WRITE_OPS = new Set([
-  'upsert', 'upsertMany', 'commitSyncBatch', 'bumpSnow', 'hardDelete', 'hardDeleteMany', 'setMeta',
+  'upsert', 'upsertMany', 'commitSyncBatch', 'bumpSnow', 'hardDelete', 'hardDeleteMany', 'setMeta', 'deleteMeta',
   'purgeRecycleBin', 'purgeSeedTodos', 'upsertCategory',
   'filterUpsert', 'filterDelete',
   'planAddMany', 'planUpdateChip', 'planRemoveIds', 'planMoveTask',

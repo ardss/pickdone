@@ -13,7 +13,7 @@ dayjs.locale('zh-cn')
 // to rely on todo-core's require side effect extending the shared instance. Extend our own instance so the CLI
 // keeps correct 本周 semantics even if that import chain ever changes (same degrade as cli/nl-date.cjs).
 try { dayjs.extend(require('../assets/vendor-lib/dayjs-plugin-isoWeek.js')) } catch (e) { /* degrade to default week start when the plugin is missing */ }
-const { FOCUS_MAX_MINUTES } = require('../shared/limits.mjs') // focus-duration clamp constants (single source with db.js / renderer, audit item 4); require(esm) — Node >= 22.12
+const { FOCUS_MAX_MINUTES, REST_MAX_MINUTES } = require('../shared/limits.mjs') // focus-duration clamp constants (single source with db.js / renderer, audit item 4); require(esm) — Node >= 22.12
 
 // The CLI runs in pure Node; silence electron-log to keep logs out of the stdout JSON output
 try {
@@ -30,12 +30,7 @@ const audit = require('./audit.js')
 const nlDate = require('./nl-date.cjs')
 
 let opened = false
-// Single source of truth for the userData directory name (a result of app.setName('pickdone'); audit.js reuses this export, do not assemble a third copy)
-// Env var relationship (backward compatible):
-//   TODO_DB_DIR          — legacy CLI-only override; points DIRECTLY at the data directory that contains todos.db (behavior unchanged)
-//   TODO_USER_DATA_DIR   — the main-process isolation var (src/main/index.js); treated as the userData root, which also contains todos.db
-//                          at its top level, so the CLI can reuse it directly. Priority: TODO_DB_DIR > TODO_USER_DATA_DIR > %APPDATA%/pickdone.
-// Neither var set means the real user database — scripts that spawn the App MUST fail fast instead (see e2e-walkthrough.js / ui-smoke.js).
+// Single source of truth for the userData directory name (a result of app.setName('pickdone'); audit.js reuses this export, do not assemble a third copy) Env var relationship (backward compatible): TODO_DB_DIR          — legacy CLI-only override; points DIRECTLY at the data directory that contains todos.db (behavior unchanged) TODO_USER_DATA_DIR   — the main-process isolation var (src/main/index.js); treated as the userData root, which also contains todos.db at its top level, so the CLI can reuse it directly. Priority: TODO_DB_DIR > TODO_USER_DATA_DIR > %APPDATA%/pickdone. Neither var set means the real user database — scripts that spawn the App MUST fail fast instead (see e2e-walkthrough.js / ui-smoke.js).
 function userDataDir () {
   if (process.env.TODO_DB_DIR) return process.env.TODO_DB_DIR
   if (process.env.TODO_USER_DATA_DIR) return process.env.TODO_USER_DATA_DIR
@@ -59,12 +54,7 @@ function open () {
   if (dbm.isOpen && dbm.isOpen()) { opened = true; return dbm }
   const dir = userDataDir()
   dbm.init(dir)
-  // One-shot tomato ledger migration (review P2 2026-09-11): the App runs tomatoMigrateFromMeta on startup,
-  // but a CLI-only session after the ledger-schema upgrade used to read an empty ledger — and worse, a CLI
-  // backfill landing rows first made the migration's table-not-empty guard throw the old meta blob ledger
-  // away forever (the blob-deletion sentinel runs regardless). Running the migration sentinel here, BEFORE
-  // any CLI write, keeps both ends converging on the same row table. Idempotent by design: "meta blob
-  // absent" is the migrated marker, so repeat calls on already-migrated DBs are no-ops.
+  // One-shot tomato ledger migration (review P2 2026-09-11): the App runs tomatoMigrateFromMeta on startup, but a CLI-only session after the ledger-schema upgrade used to read an empty ledger — and worse, a CLI backfill landing rows first made the migration's table-not-empty guard throw the old meta blob ledger away forever (the blob-deletion sentinel runs regardless). Running the migration sentinel here, BEFORE any CLI write, keeps both ends converging on the same row table. Idempotent by design: "meta blob absent" is the migrated marker, so repeat calls on already-migrated DBs are no-ops.
   try { dbm.call('tomatoMigrateFromMeta') } catch (e) { /* migration failure must not block the CLI (same tolerance as the App's startup call) */ }
   opened = true
   return dbm
@@ -188,11 +178,14 @@ function resolveTask (input, pool) {
   throw new CliError(`task not found: "${input}"`, 'TASK_NOT_FOUND')
 }
 
-/** userId: take user_id from any row in the DB (consistent with the UI's login state) */
+/** userId: take user_id from any row in the DB (consistent with the UI's login state).
+ *  Empty-DB fallback is 840001 — the same hard-coded userId the renderer uses (renderer/js/utils/core.js
+ *  userId: 840001, demo-data.js alike). The old fallback 0 created tasks the App could not associate with
+ *  the logged-in user. (todo-core.js genTaskId takes the userId as a parameter; no shared constant exists.) */
 function guessUserId () {
   const row = open().call('queryTodos', { deleted: 0, limit: 1 })[0] ||
     open().call('queryTodos', { deleted: 1, limit: 1 })[0]
-  return row ? row.userId : 0
+  return row ? row.userId : 840001
 }
 
 const genTaskId = core.genTaskId
@@ -210,7 +203,11 @@ function listTodos (opts = {}) {
   if (opts.quad) { q.important = opts.quad.important; q.urgent = opts.quad.urgent }
   if (opts.range === 'today') { q.dayStartFrom = +now.startOf('day'); q.dayStartTo = +now.endOf('day') }
   else if (opts.range === 'tomorrow') { const t = now.add(1, 'day'); q.dayStartFrom = +t.startOf('day'); q.dayStartTo = +t.endOf('day') }
-  else if (opts.range === 'week') { q.dayStartFrom = +now.startOf('day'); q.dayStartTo = +now.add(7, 'day').endOf('day') }
+  // Fix (2026-09-16): `week` now means the ISO week (Mon..Sun, same window as saved views' dateMode 'week' /
+  // FilterView applyViewConds endOf('isoWeek')) instead of a rolling 7 days; the rolling semantics moved to
+  // the new `next7d` range so nothing is lost.
+  else if (opts.range === 'week') { q.dayStartFrom = +now.startOf('day'); q.dayStartTo = +now.endOf('isoWeek') }
+  else if (opts.range === 'next7d') { q.dayStartFrom = +now.startOf('day'); q.dayStartTo = +now.add(7, 'day').endOf('day') }
   else if (opts.range === 'overdue') { q.dayStartTo = +now.subtract(1, 'day').endOf('day') }
   else if (opts.range === 'future') { q.dayStartFrom = +now.add(1, 'day').startOf('day') }
   return open().call('queryTodos', q)
@@ -236,8 +233,11 @@ function resolveCategory (input) {
 function stats ({ from, to } = {}) {
   const now = dayjs()
   const fmt = d => parseInt(d.format('YYYYMMDD'), 10)
-  const f = from ? fmt(dayjs(from)) : fmt(now.subtract(6, 'day'))
-  const t = to ? fmt(dayjs(to)) : fmt(now)
+  // Fix (2026-09-16): --from/--to go through the same parseDate as add/edit, so `stats --from today` /
+  // `--from +7d` work; the old bare dayjs(from) turned keywords into Invalid Date and died inside the db
+  // layer as an opaque USAGE error.
+  const f = from ? fmt(dayjs(parseDate(from))) : fmt(now.subtract(6, 'day'))
+  const t = to ? fmt(dayjs(parseDate(to))) : fmt(now)
   const db = open()
   const plan = db.call('statsByDay', { from: f, to: t })
   const tomato = db.call('tomatoByDay', { from: f, to: t })
@@ -1512,7 +1512,13 @@ function resolveRecord (ref) {
   return hits[0]
 }
 
-/** Fix an existing focus record (wrong duration/time/task). Routed through the App command channel — the CLI never rewrites the ledger in parallel. */
+/** Fix an existing focus record (wrong duration/time/task). The CLI writes the ledger row DIRECTLY via
+ *  db.tomatoUpdateById — it does NOT route through the (retired) App command channel. Consequence: the
+ *  running App does not learn about this write in-process. Convergence on the App side relies on external
+ *  DB-write detection: db.js fires the ledger-changed hook for LEDGER_WRITE_OPS in the writer process
+ *  (main/index.js setLedgerChangedHook → 'tomato-records-changed' broadcast), and external CLI writes are
+ *  picked up by the main-process watcher / renderer store re-read (the same path that hot-applies
+ *  `settings set`), or at worst on next launch. */
 function recordFix (ref, { minutes, date, at, rest, succeed, task, free }) {
   const rec = resolveRecord(ref)
   const patch = {}
@@ -1522,7 +1528,9 @@ function recordFix (ref, { minutes, date, at, rest, succeed, task, free }) {
     if (n > FOCUS_MAX_MINUTES) throw new CliError('focus duration max is ' + FOCUS_MAX_MINUTES + ' minutes (DB-layer clamp); got ' + n, 'USAGE')
     patch.focusDuration = Math.max(1, n)
   }
-  if (rest != null) patch.restDuration = Math.max(0, Math.min(120, parseInt(rest, 10) || 0))
+  // restDuration clamp = REST_MAX_MINUTES, the same cap the db layer applies (_recToRow); the old CLI-only
+  // 120 clamp silently rewrote a legitimate 300-min rest to 120 while a direct db append kept 600.
+  if (rest != null) patch.restDuration = Math.max(0, Math.min(REST_MAX_MINUTES, parseInt(rest, 10) || 0))
   if (succeed != null && succeed !== true) patch.succeed = !/^(false|no|0)$/i.test(String(succeed))
   if (date || at) {
     // endTime reposition: endTime defines placement; dateKey re-derived here (was App-side)
@@ -1606,7 +1614,6 @@ function setReminderExtra (input, csv) {
   return { taskId: t.taskId, reminderExtra: extras.map(ts => dayjs(ts).format('YYYY-MM-DD HH:mm')) }
 }
 
-
 /* ---------------- Settings (meta db.settingsState mirror; hot-synced to a running App via the main-process watcher) ----------------
    Manifest mirrors renderer store/settings.js DEFAULT_SETTINGS/SETTING_ENUMS (keep in sync; security keys are never settable here). */
 const SETTINGS_MANIFEST = {
@@ -1627,7 +1634,7 @@ const SETTINGS_MANIFEST = {
     calendarFontColor: ['white', 'black'],
     sortMode: ['custom', 'created', 'difficulty'],
     expiredCompletedTodoRange: ['today', '7d', '15d', '30d'],
-    expiredUncompletedTodoRange: ['today', '7d', '30d', '90d'],
+    expiredUncompletedTodoRange: ['7d', '30d', '90d'], // no 'today' — the renderer's SETTING_ENUMS (store/settings.js) has no 'today' option; a CLI-written 'today' would fail the renderer's coerce and fall back to the default (no migration needed; historical 'today' values just coerce back on the App side)
     upcomingTodoRange: ['7d', '30d'],
     weatherSource: ['open-meteo', 'wttr'],
     todoBoxSortMethod: ['created', 'due', 'difficulty'],
@@ -1659,7 +1666,7 @@ function settingsList () {
   for (const [key, info] of all) rows.push({ key, type: info.type, options: info.options || null, value: key in doc ? doc[key] : null })
   return rows
 }
-function settingsSet (key, value) {
+function settingsSet (key, value, { force = false } = {}) {
   if (SETTINGS_DENIED.has(key)) throw new CliError('"' + key + '" is a protected key and cannot be set via CLI', 'DENIED_KEY')
   const info = settingsKnown(key)
   if (!info) throw new CliError('unknown setting "' + key + '" — settings list to browse keys', 'UNKNOWN_KEY')
@@ -1670,13 +1677,26 @@ function settingsSet (key, value) {
     else throw new CliError('"' + key + '" expects true|false', 'USAGE')
   } else if (info.type === 'number') {
     v = Number(value)
-    if (isNaN(v)) throw new CliError('"' + key + '" expects a number', 'USAGE')
+    // Fix (2026-09-16): the old isNaN check caught NaN but let Infinity through — JSON.stringify then stored
+    // null in the settings blob. Negative values are meaningless for every numeric setting (targets,
+    // thresholds, intervals, volumes, counts), so both are rejected now.
+    if (!Number.isFinite(v)) throw new CliError('"' + key + '" expects a finite number (got "' + value + '")', 'USAGE')
+    if (v < 0) throw new CliError('"' + key + '" must be >= 0 (got "' + value + '")', 'USAGE')
   } else if (info.type === 'enum') {
     if (!info.options.includes(String(value))) throw new CliError(`"${key}" expects one of: ${info.options.join(' | ')} (got "${value}")`, 'USAGE')
     v = String(value)
   }
+  // CAS guard (fix 2026-09-16): settingsSet is a read-modify-write of the WHOLE settingsState package and the
+  // write refreshes _savedAt — if the App wrote settings between our read and write, the CLI used to overwrite
+  // the App's newer package with a stale one (and the App would then mirror that stale package back on next
+  // launch, washing the user's newer settings away). Snapshot _savedAt at entry, re-read the meta just before
+  // the write, and refuse on drift. --force bypasses the check deliberately.
+  const savedAtSnapshot = settingsDoc()._savedAt || 0
   const doc = settingsDoc()
   const before = key in doc ? doc[key] : null
+  if (!force && (settingsDoc()._savedAt || 0) !== savedAtSnapshot) {
+    throw new CliError('settings changed in App since read; re-run or use --force', 'SETTINGS_STALE')
+  }
   doc[key] = v
   doc._savedAt = Date.now()
   doc.schemaV = doc.schemaV || 1
@@ -1738,7 +1758,6 @@ function planRemove (input, { date, at } = {}) {
   return { taskId: t.taskId, day, removed: ids.length }
 }
 
-
 /* ---------------- Events import: rebuild a whole day's schedule from a structured event list (backfill/reconstruction scenarios) ----------------
    Event shape: { date:'YYYY-MM-DD', start:'HH:mm', end:'HH:mm'|'24:00', title, category:'工作|学习|生活|发布|<id>',
                   important:0|1, urgent:0|1, tags:['a','b'], estimate:N }
@@ -1783,11 +1802,20 @@ async function importEvents (events, { onProgress = () => {} } = {}) {
       })
       seen.add(key)
       if (e.estimate) { try { setEstimate(t.taskId, Math.min(20, Number(e.estimate) || 0)) } catch (er) { /* non-fatal */ } }
-      toggleComplete(t.taskId, true, { completedAt: parseDate(e.date + ' ' + endClamp) })
-      const focusMin = eventFocusMinutes(mins)
-      backfillRecord({ taskId: t.taskId, content: e.title, date: e.date, at: e.start, minutes: focusMin })
-      created++
-      onProgress({ label, status: 'created', focusMin })
+      // Behavior fix (2026-09-16): a FUTURE event used to be imported as completed + with a backfilled focus
+      // record — importing next week's schedule fabricated "done + accounted" history for work not yet done.
+      // Future events now only create the task; completion and the ledger row are left to the real day.
+      const future = String(e.date) > dayjs().format('YYYY-MM-DD')
+      if (!future) {
+        toggleComplete(t.taskId, true, { completedAt: parseDate(e.date + ' ' + endClamp) })
+        const focusMin = eventFocusMinutes(mins)
+        backfillRecord({ taskId: t.taskId, content: e.title, date: e.date, at: e.start, minutes: focusMin })
+        created++
+        onProgress({ label, status: 'created', focusMin })
+      } else {
+        created++
+        onProgress({ label, status: 'created-future', focusMin: null })
+      }
     } catch (er) {
       failed.push({ label, error: String(er.message || er) })
       onProgress({ label, status: 'failed', error: String(er.message || er) })
@@ -1813,7 +1841,7 @@ function listReady (categoryId = null) {
 const attachApi = require('./lib-attachments.cjs')
 const { addAttachment, listAttachments, removeAttachment } = attachApi({ resolveTask, liveTasks, patchTodo, userDataDir, CliError })
 module.exports = {
-  CliError, open, parseDate, dayStartOf, launchApp, userDataDir, hasIsolationEnv,
+  CliError, open, parseDate, dayStartOf, launchApp, userDataDir, hasIsolationEnv, guessUserId,
   liveTasks, recycleTasks, resolveTask, resolveCategory,
   parsePredecessors, getTask, listReady,
   listTodos, getCategories, stats, overview,
