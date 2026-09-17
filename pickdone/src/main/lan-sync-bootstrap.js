@@ -193,26 +193,27 @@ function applyRowSafe (incoming) {
 function applyRowInner (incoming) {
   if (!incoming || !SYNCABLE_ENTITIES.has(incoming.entity)) return false
   const entity = incoming.entity
-  // Locate the local counterpart for LWW comparison
+  // Locate the local counterpart for LWW comparison (cached: one entity-list read per ingest pass)
+  const cache = state.applyCache || createHydrationCache()
   let localRow = null
   if (entity === 'todo') {
-    const t = state.db.call('getById', incoming.id)
+    const t = cache.todo(incoming.id)
     if (t) localRow = { updatedAt: t.updateTime || 0, deleted: !!t.delete, deletedAt: t.deletedAt || 0, data: t }
   } else if (entity === 'setting') {
     if (String(incoming.id).startsWith('sync.')) return false
-    const r = state.db.call('settingsRowsAll', {}).find(x => x.key === incoming.id)
+    const r = cache.setting(incoming.id)
     if (r && !r.deleted) localRow = { updatedAt: r.updatedAt, deleted: false, deletedAt: 0, data: { key: r.key, value: r.value } }
   } else if (entity === 'tomato') {
-    const r = state.db.call('tomatoAll', {}).find(x => x.tomatoId === incoming.id)
+    const r = cache.tomato(incoming.id)
     if (r) localRow = { updatedAt: r.updatedAt || 0, deleted: false, deletedAt: 0, data: r }
   } else if (entity === 'category') {
-    const c = state.db.call('getAllCategories', {}).find(x => String(x.categoryId) === String(incoming.id))
+    const c = cache.category(incoming.id)
     if (c) localRow = { updatedAt: c.updatedAt || 0, deleted: false, deletedAt: 0, data: c }
   } else if (entity === 'plan') {
-    const c = state.db.call('planAll', {}).find(x => x.id === incoming.id)
+    const c = cache.plan(incoming.id)
     if (c) localRow = { updatedAt: 0, deleted: false, deletedAt: 0, data: c }
   } else if (entity === 'filter') {
-    const f = state.db.call('filterList', {}).find(x => String(x.id) === String(incoming.id))
+    const f = cache.filter(incoming.id)
     if (f) localRow = { updatedAt: 0, deleted: false, deletedAt: 0, data: f }
   }
   if (!incoming.deleted && !incoming.data) return false // payload-less pointer, nothing to merge
@@ -331,9 +332,15 @@ function startSync () {
     verifyPairingCode: code => !!state.pairingCode && state.pairingCode.expiresAt > Date.now() &&
       (() => { const a = Buffer.from(String(code)); const b = Buffer.from(String(state.pairingCode.code)); return a.length === b.length && timingSafeEqual(a, b) })(),
     ingestSegment: body => {
-      const r = state.engine.ingestSegment(body)
-      flushPendingWrites()
-      return r
+      // One lookup cache per segment message: a peer's first-sync push carries thousands of rows
+      // and applyRowInner must not re-read a full entity list per row (same O(n^2) trap as
+      // hydration — 2026-09-18 drill: server handlers ran 30-60s and starved every round).
+      state.applyCache = createHydrationCache()
+      try {
+        const r = state.engine.ingestSegment(body)
+        flushPendingWrites()
+        return r
+      } finally { state.applyCache = null }
     },
     ingestSnapshot: body => state.engine.applySnapshot(body),
     buildSegments: buildSegmentsWrapped,
