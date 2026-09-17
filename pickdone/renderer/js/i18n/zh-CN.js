@@ -62,5 +62,30 @@ export default {
     "scNavCalendar": "切换到日程概览",
     "scNavInbox": "切换到待办箱"
   
+  },
+"sync": {
+    "tab": "同步",
+    "freeForever": "本地功能永久免费",
+    "section": "局域网同步",
+    "enableLabel": "启用局域网同步",
+    "enableTip": "同一局域网内的设备互相发现并点对点同步任务数据，默认关闭。",
+    "deviceNameLabel": "设备名称",
+    "statusLabel": "状态",
+    "statusDisabled": "局域网同步未开启",
+    "statusStarting": "启动中…",
+    "deviceIdShort": "设备 {id}",
+    "peersCount": "对端：{n}",
+    "lastRound": "上次同步 {time}",
+    "neverRan": "尚未同步",
+    "errorPrefix": "错误：{msg}",
+    "pairingLabel": "配对码",
+    "pairingBtn": "显示配对码",
+    "pairingExpiresIn": "{n} 秒后刷新",
+    "enabledMsg": "局域网同步已开启",
+    "disabledMsg": "局域网同步已关闭",
+    "toggleFailed": "同步设置修改失败",
+    "nameSavedMsg": "设备名称已保存",
+    "nameSaveFailed": "设备名称保存失败",
+    "pairingUnavailable": "配对码暂不可用"
   }
 }

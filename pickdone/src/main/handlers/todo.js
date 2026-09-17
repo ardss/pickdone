@@ -33,13 +33,19 @@ module.exports = function todoHandlers (ctx) {
     'planAll', 'planAddMany', 'planUpdateChip', 'planRemoveIds',
     'planMoveTask', 'planDeleteTask', 'planDeleteTaskDay', 'planPrune',
     // 番茄账本行存储(2026-09-04 根修):主窗/浮窗/CLI 同表同 op,账本无整包覆盖面
-    'tomatoAll', 'tomatoAppendMany', 'tomatoUpdateById', 'tomatoRemoveByIds', 'tomatoMigrateFromMeta'
+    'tomatoAll', 'tomatoAppendMany', 'tomatoUpdateById', 'tomatoRemoveByIds', 'tomatoMigrateFromMeta',
+    // Settings/habits row table (P2 2026-09-16, docs/sync §4.2 blob split): per-key rows + tombstones;
+    // whitelisted ahead of the Wave-2 renderer switch so the coverage gate's renderer⊆whitelist direction holds
+    'settingsRowsAll', 'settingsRowPut', 'settingsRowPutMany', 'settingsRowDelete',
+    // P3a LAN sync settings/status (2026-09-16): implemented in lan-sync-bootstrap.js, dispatched via
+    // db-sync-ops.js; identity writes are main-window-only (same capability class as setMeta)
+    'syncGetSettings', 'syncSetEnabled', 'syncGetStatus', 'syncGetPairingCode', 'syncSetName'
   ])
 
   // Dangerous DB ops: batch write/batch delete/arbitrary meta write. Capability-wise aligned with "dangerous channels main-window only" —
   // a compromised float/lock-screen window could previously wipe the whole database in bulk or change any meta via todo-db:call (audit 2026-09-01).
   // The renderer's real call surface has been verified: all three only occur in the main window (store/utils/main.js); auxiliary windows have no legitimate callers.
-  const MAIN_WINDOW_ONLY_OPS = new Set(['upsertMany', 'commitSyncBatch', 'hardDeleteMany', 'setMeta', 'deleteMeta'])
+  const MAIN_WINDOW_ONLY_OPS = new Set(['upsertMany', 'commitSyncBatch', 'hardDeleteMany', 'setMeta', 'deleteMeta', 'syncSetEnabled', 'syncSetName'])
 
   return {
     // --- DB ---
