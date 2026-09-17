@@ -40,6 +40,9 @@ for (const stream of [process.stdout, process.stderr]) {
 process.on('uncaughtException', (e) => {
   // Fully tolerate pipe/stream-destroyed errors (a broken log stream does not affect functionality); rethrow everything else through the default dialog without masking real bugs
   if (e && (e.code === 'EPIPE' || e.code === 'ERR_STREAM_DESTROYED' || e.code === 'ERR_STREAM_WRITE_AFTER_END')) return
+  // P2 2026-09-17: leave a breadcrumb before the rethrow — the default dialog can be dismissed/skipped
+  // and the crash then leaves no trace in the log file for post-mortem diagnosis
+  try { log.error('[uncaughtException]', e && e.stack || e) } catch {}
   throw e
 })
 // Promise 侧兜底:只记日志不退出(与 uncaughtException 的 rethrow 不同——rejection 多为单点 IO 失败,

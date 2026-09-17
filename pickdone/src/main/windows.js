@@ -179,8 +179,15 @@ function createWindowManager (ctx) {
     let _resizeTimer = null
     win.on('resize', () => { // high-frequency synchronous writes while dragging cause jank; debounce 400ms (close/quit already save as backstop)
       clearTimeout(_resizeTimer)
-      _resizeTimer = setTimeout(() => { try { writeConfig({ winBounds: win.getBounds() }) } catch {} }, 400)
+      // P2 2026-09-17: a timer firing after the window closed used to call getBounds on a destroyed
+      // window (throw inside the timer) and the timer itself leaked across window re-creation
+      _resizeTimer = setTimeout(() => {
+        if (win.isDestroyed()) { _resizeTimer = null; return }
+        try { writeConfig({ winBounds: win.getBounds() }) } catch {}
+        _resizeTimer = null
+      }, 400)
     })
+    win.on('closed', () => { clearTimeout(_resizeTimer); _resizeTimer = null })
     // Clamp the window back onto a visible screen on restore/show (fixes the "disappeared" window after multi-monitor changes/power loss)
     const clampIntoView = () => {
       try {

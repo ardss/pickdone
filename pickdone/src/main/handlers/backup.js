@@ -8,6 +8,27 @@ const fixUtil = require('../fix-util')
 const { resolveBackupDir, defaultBackupRoot, saveAllowedBackupDirs, allowedBackupDirs, loadAllowedBackupDirs } = require('../backup-dirs')
 const { makeAssertMainWindow } = require('./shared')
 
+let log
+try { log = require('electron-log') } catch { log = { warn () {}, error () {} } }
+
+/** Atomic JSON write (tmp + rename) with temp-file cleanup on failure (P2 2026-09-17: a failed
+ *  writeFileSync/renameSync used to leave .tmp-* residue until the 1h sweep at best — and if the
+ *  process died before any later backup run, forever). fs is injected so the unit tests can drive
+ *  failure injection; returns { ok } and never throws. */
+function atomicWriteJson (fsMod, dir, name, text) {
+  const tmp = path.join(dir, '.tmp-' + name)
+  try {
+    fsMod.writeFileSync(tmp, text)
+    fsMod.renameSync(tmp, path.join(dir, name))
+    return { ok: true, file: name }
+  } catch (err) {
+    try { if (fsMod.existsSync(tmp)) fsMod.unlinkSync(tmp) } catch (e2) { log.warn('[Backup] tmp cleanup failed:', tmp, e2 && e2.message) }
+    log.warn('[Backup] auto backup write failed:', err && err.message || err)
+    return { ok: false, error: String(err && err.message || err) }
+  }
+}
+
+
 module.exports = function backupHandlers (ctx) {
   const { isLocked, app, getMainWindow } = ctx
   const assertMainWindow = makeAssertMainWindow(getMainWindow)
@@ -46,7 +67,6 @@ module.exports = function backupHandlers (ctx) {
         // Lowercase uniformly: keeps evt snapshot naming consistent with autoBackup's case-sensitive RE_EVT (no i flag)
         const tag = o.tag ? ('evt-' + String(o.tag).toLowerCase().replace(/[^a-z0-9-]/g, '') + '-') : 'auto-'
         const name = tag + stamp + '.json'
-        const tmp = path.join(dir, '.tmp-' + name)
         // Content dedup: only compare against the newest file. (The original implementation compared against any old file — when the data was changed back to its original state
         // it would return dedup without writing the new snapshot, yet prune would delete that old snapshot → that point in time ends up with no backup)
         // 排序按名字内嵌时间戳(2026-09-10 P2):字典序 sort() 让 'auto-' 排在同日 'evt-…' 之后/之前错位,
@@ -61,9 +81,10 @@ module.exports = function backupHandlers (ctx) {
             }
           } catch {}
         }
-        // Atomic write: temp file + rename, prevents corruption on interruption
-        fs.writeFileSync(tmp, jsonText)
-        fs.renameSync(tmp, path.join(dir, name))
+        // Atomic write: temp file + rename, prevents corruption on interruption; on failure the temp
+        // file is cleaned up inline (P2 2026-09-17) and the structured error is returned
+        const w = atomicWriteJson(fs, dir, name, jsonText)
+        if (!w.ok) return { ok: false, error: w.error }
         // P2 2026-09-11: sweep interrupted .tmp-* residue — a crash between writeFileSync and renameSync
         // used to accumulate temp files in the backup dir forever (the prune filter below only matches
         // ^(auto|evt)-). Only files older than 1h are swept, so a concurrent in-flight write is safe.
@@ -117,3 +138,4 @@ module.exports = function backupHandlers (ctx) {
     }
   }
 }
+module.exports.atomicWriteJson = atomicWriteJson
