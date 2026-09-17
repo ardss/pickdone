@@ -37,6 +37,7 @@ const K_DEVICE_ID = 'sync.deviceId'
 const K_DEVICE_NAME = 'sync.deviceName'
 const K_PAIRING_SECRET = 'sync.pairingSecret'
 const K_ENABLED = 'sync.enabled'
+const K_MANUAL_PEERS = 'sync.manualPeers' // [{host,port}] — survives restarts (node peers are memory-only)
 const CURSOR_META_KEY = 'sync.pushCursor' // persisted in meta (not settings_rows): per-device bookkeeping, no sync obligation
 const START_DELAY_MS = 10 * 1000
 const ROUND_INTERVAL_MS = 5 * 60 * 1000
@@ -235,6 +236,16 @@ async function runRound () {
   } catch (e) { log.warn('[LanSync] round failed:', e.message); return null }
 }
 
+function manualPeers () {
+  try { return JSON.parse(settingGet(K_MANUAL_PEERS) || '[]') || [] } catch { return [] }
+}
+
+function persistManualPeer (entry) {
+  const list = manualPeers().filter(x => !(x.host === entry.host && Number(x.port) === Number(entry.port)))
+  list.push(entry)
+  settingPut(K_MANUAL_PEERS, JSON.stringify(list))
+}
+
 function startSync () {
   if (state.node) return
   const { deviceId, deviceName } = ensureIdentity()
@@ -254,6 +265,10 @@ function startSync () {
   })
   state.node.on('round-error', info => { log.warn('[LanSync] round error:', info && info.error); notifyRenderers('round-error') })
   state.node.on('peer-unauthorized', info => log.warn('[LanSync] unauthorized peer rejected:', info && info.deviceId))
+  // restore manually added peers (node peer table is memory-only; settings_rows is the authority)
+  for (const mp of manualPeers()) {
+    try { state.node.addPeer({ deviceId: 'manual-' + mp.host + ':' + mp.port, host: mp.host, port: Number(mp.port) }) } catch (e) { log.warn('[LanSync] manual peer restore failed:', e.message) }
+  }
   state.node.start()
   state.pendingToSeq = 0
   // Auto round: 10s after enable/boot, then every 5 minutes (only while enabled)
@@ -335,6 +350,7 @@ function registerOps () {
       if (!host || !/^[.:\w-]+$/.test(host)) throw new Error('syncAddPeer: host is required')
       if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('syncAddPeer: invalid port')
       if (!state.node) throw new Error('syncAddPeer: sync is not enabled')
+      persistManualPeer({ host, port })
       // placeholder id until the first authenticated hello reveals the peer's real identity
       return state.node.addPeer({ deviceId: 'manual-' + host + ':' + port, host, port, name: (p && p.name) || undefined })
     },
