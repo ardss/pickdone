@@ -845,24 +845,13 @@ syncOplogSince: ({ sinceSeq = 0, limit = 2000 } = {}) => db.prepare('SELECT seq,
   // One-time bootstrap: rows created before the oplog existed (any user enabling sync on an
   // existing database) have no change-capture pointers and would never propagate. Idempotent via
   // the sync.seedDone meta flag; NOT renderer-callable (main-internal, like the meta GC ops).
-  seedSyncOplog: () => {
-    if (db.prepare("SELECT value FROM meta WHERE key = 'sync.seedDone'").get()) return { seeded: 0 }
+  seedSyncOplog: p => require('./db-sync-ops').dispatch('seedSyncOplog', p),
+  // Main-internal: bare oplog pointer backfill for legacy rows (used by the seedSyncOplog seed).
+  appendOplogPointers: rows => {
     const now = Date.now()
     const ins = db.prepare('INSERT INTO sync_oplog (entity, entityId, ts) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM sync_oplog WHERE entity = ? AND entityId = ?)')
     let seeded = 0
-    const seedAll = (entity, sql, idCol) => {
-      for (const r of db.prepare(sql).all()) {
-        const id = String(r[idCol])
-        if (ins.run(entity, id, now, entity, id).changes > 0) seeded += 1
-      }
-    }
-    seedAll('todo', 'SELECT id FROM todos WHERE deleted = 0', 'id')
-    seedAll('setting', "SELECT key FROM settings_rows WHERE deleted = 0 AND key NOT LIKE 'sync.%'", 'key')
-    seedAll('category', 'SELECT id FROM categories', 'id')
-    seedAll('plan', 'SELECT id FROM plan_chips', 'id')
-    seedAll('filter', 'SELECT id FROM filters', 'id')
-    seedAll('tomato', 'SELECT tomatoId FROM tomato_records', 'tomatoId')
-    stmts.setMeta.run('sync.seedDone', '1')
+    for (const r of rows || []) seeded += ins.run(r.entity, String(r.id), now, r.entity, String(r.id)).changes
     return { seeded }
   },
 }

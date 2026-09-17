@@ -161,7 +161,7 @@
       </div>
     </div>
 
-    <div v-if="previewImg" ref="previewMask" tabindex="-1" class="img-preview-mask" role="dialog" aria-modal="true" :aria-label="$t('statsJ.EditPanel.imagePreview')" @click.self="previewImg=null" @keydown.esc="previewImg=null" @keydown.tab.prevent="$event.currentTarget.focus()">
+    <div v-if="previewImg" ref="previewMask" tabindex="-1" class="img-preview-mask" role="dialog" aria-modal="true" :aria-label="$t('statsJ.EditPanel.imagePreview')" @click.self="previewImg=null" @keydown.esc="previewImg=null" @keydown.tab.prevent="$refs.previewMask.focus()">
       <img :src="previewImg"><button class="close-x" :aria-label="$t('statsE.SettingsModal.closeBtn')" @click.stop="previewImg=null"></button>
     </div>
   </aside>
@@ -351,7 +351,7 @@ export default {
     if (this._sortable) { try { this._sortable.destroy() } catch (err) { /* already destroyed */ } this._sortable = null }
   },
   methods: {
-    /* ===== Save pipeline wrappers (implementation: utils/editSave.js) ===== */
+    /* ===== Save pipeline wrappers (impl: utils/editSave.js) ===== */
     queueSave (patch) { if (this._save) this._save.queueSave(patch) },
     /** Immediately commit pending saves (must be called before switching tasks, so A's edits do not land on B) */
     flushSave () { if (this._save) this._save.flushSave() },

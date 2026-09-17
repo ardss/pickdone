@@ -458,6 +458,20 @@ function getStatusPayload () {
 
 function registerOps () {
   syncOps.register({
+    // main-internal (not renderer-callable): one-time legacy-row oplog backfill, see startSync.
+    seedSyncOplog: () => {
+      if (settingGet('sync.seedDone')) return { seeded: 0 }
+      // bare pointers only: content already lives locally; hydration on push reads the live rows.
+      const seen = new Set()
+      const rows = []
+      for (const r of createLocalStoreAdapter().allRows()) {
+        const k = r.entity + ':' + r.id
+        if (!seen.has(k)) { seen.add(k); rows.push({ entity: r.entity, id: r.id }) }
+      }
+      const res = state.db.call('appendOplogPointers', rows)
+      settingPut('sync.seedDone', '1')
+      return res
+    },
     syncGetSettings: () => getSettingsPayload(),
     syncGetStatus: () => getStatusPayload(),
     syncSetEnabled: p => {

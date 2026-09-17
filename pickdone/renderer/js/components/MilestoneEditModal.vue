@@ -36,6 +36,12 @@
  */
 import dialogA11y from '../utils/dialogA11y.js'
 
+function tsToDate (ts) {
+  const d = new Date(ts)
+  const p = n => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+
 export default {
   name: 'MilestoneEditModal',
   mixins: [dialogA11y],
@@ -46,7 +52,7 @@ export default {
   data () {
     return {
       title: this.milestone ? this.milestone.title : '',
-      date: this.milestone ? this.tsToDate(this.milestone.date) : ''
+      date: this.milestone ? tsToDate(this.milestone.date) : ''
     }
   },
   computed: {
@@ -56,11 +62,6 @@ export default {
     this.$nextTick(() => { try { this.$refs.titleInput.focus() } catch { /* headless */ } })
   },
   methods: {
-    tsToDate (ts) {
-      const d = new Date(ts)
-      const p = n => String(n).padStart(2, '0')
-      return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
-    },
     close () { this.$emit('close') },
     save () {
       if (!this.title.trim() || !this.date) return
