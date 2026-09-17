@@ -404,6 +404,10 @@ html[data-theme="dark"] .tomato-bar.running { background: var(--tomato-bg); }
 html[data-theme="dark"] .tomato-timer__time { color: var(--brand-bright, #35c2ae); }
 html[data-theme="dark"] .tomato-timer__label,
 html[data-theme="dark"] .tomato-timer__count { color: var(--text-3); }
+/* 休息态暗色:米黄底/橙字在暗底刺眼,沿用 --work 暗色思路 -- 暖色低透明底 + 提亮暖橙文字 */
+html[data-theme="dark"] .tomato-timer--rest { background-color: rgba(254, 153, 51, .12); }
+html[data-theme="dark"] .tomato-timer__status--rest,
+html[data-theme="dark"] .tomato-timer__time--rest { color: #ffb066; }
 @media (max-width: 605px) {
   .tomato-timer__time { margin-right: 0; }
 }
