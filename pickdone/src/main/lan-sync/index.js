@@ -44,6 +44,14 @@ function createLanSyncNode(opts) {
   const host = opts.host
   const em = new EventEmitter()
 
+  // Optional injector: local max oplog seq. The server role answers with `appliedToSeq` (its own
+  // local max oplog seq after the round's ingest+flush), which the client records as that peer's
+  // push watermark so the next round ships only the unconfirmed delta instead of a full re-push.
+  const getMaxSeq = typeof opts.getMaxSeq === 'function' ? opts.getMaxSeq : null
+  const currentMaxSeq = () => {
+    try { return Number(getMaxSeq()) || 0 } catch { return 0 }
+  }
+
   const peers = new Map() // deviceId -> {deviceId, name, host, port}
   const backoffMs = new Map() // deviceId -> current backoff delay
   const retryTimers = new Map() // deviceId -> timer
@@ -106,6 +114,8 @@ function createLanSyncNode(opts) {
     roundsRunning += 1
     return new Promise((resolve) => {
       let settled = false
+      // Round deadline timer; cleared in finish() so a fast ack does not leak it past round end.
+      let done = null
       const client = connect(peer.host, peer.port, {
         deviceId,
         authCode,
@@ -118,6 +128,7 @@ function createLanSyncNode(opts) {
       const finish = (err) => {
         if (settled) return
         settled = true
+        if (done) clearTimeout(done)
         roundsRunning -= 1
         client.close()
         if (err) {
@@ -147,7 +158,7 @@ function createLanSyncNode(opts) {
             client.send({ type: 'ack', applied: msg.segments.length, rejected: 0 })
           } else if (msg.type === 'snapshot' && msg.snapshot) {
             ingestSnapshot(msg.snapshot)
-            client.send({ type: 'ack', applied: 1, rejected: 0 })
+            client.send({ type: 'ack', applied: 1, rejected: 0, appliedToSeq: currentMaxSeq() })
           } else if (msg.type === 'ack') {
             // Peer's ack is the round's success criterion: it confirms our push AND proves the
             // peer finished building its own response. Timing the round out as "success" here
@@ -163,7 +174,7 @@ function createLanSyncNode(opts) {
       // No ack before the deadline = the round failed (push cursor stays put; next round re-pushes).
       // The budget covers a FIRST sync between two real devices: tens of thousands of oplog rows
       // ingested on both sides before either ack can be produced (2026-09-17 drill measured >30s).
-      const done = setTimeout(() => finish(new Error('round timed out waiting for peer ack')), 120000)
+      done = setTimeout(() => finish(new Error('round timed out waiting for peer ack')), 120000)
       done.unref?.()
     })
   }
@@ -179,10 +190,16 @@ function createLanSyncNode(opts) {
       getHandler: () => (msg, socket) => {
         try {
           if (msg.type === 'segments' && Array.isArray(msg.segments)) {
+            // appliedToSeq = our local max oplog seq after this round's ingest+flush is committed.
+            // Without it the client's push watermark never advances and every round re-pushes the
+            // full backlog. Read before AND after ingest (rows may re-capture into our oplog) and
+            // take the max, so an empty ingest still reports an honest, monotonic high-water value.
+            const seqBefore = currentMaxSeq()
             for (const seg of msg.segments) ingestSegment(seg)
+            const appliedToSeq = Math.max(seqBefore, currentMaxSeq())
             const mine = buildSegments ? buildSegments() : []
             sendVia(socket, { type: 'segments', segments: mine })
-            sendVia(socket, { type: 'ack', applied: msg.segments.length, rejected: 0 })
+            sendVia(socket, { type: 'ack', applied: msg.segments.length, rejected: 0, appliedToSeq })
           } else if (msg.type === 'snapshot-request') {
             sendVia(socket, { type: 'snapshot', snapshot: buildSnapshot ? buildSnapshot() : null })
           }
@@ -216,11 +233,18 @@ function createLanSyncNode(opts) {
     if (!peer || !peer.host || !peer.port) return Promise.reject(new Error('pairWith: no discovered peer'))
     return new Promise((resolve, reject) => {
       const client = connect(peer.host, peer.port, { deviceId, pairCode: String(code), protoVer: PROTO_VER, timeoutMs: 5000 })
-      const done = (fn, v) => { try { client.close() } catch { /* noop */ } fn(v) }
+      // 6s fallback deadline: cleared+unref'd so a settled pair neither leaks the timer
+      // nor keeps the process alive for it.
+      const deadline = setTimeout(() => done(reject, new Error('pairing timeout')), 6000)
+      deadline.unref?.()
+      const done = (fn, v) => {
+        clearTimeout(deadline)
+        try { client.close() } catch { /* noop */ }
+        fn(v)
+      }
       client.on('paired', (r) => { em.emit('paired-outbound', { peer: peer.deviceId }); done(resolve, { secret: r.secret, peer }) })
       client.on('rejected', () => done(reject, new Error('pairing code rejected by peer')))
       client.on('error', (err) => done(reject, err))
-      setTimeout(() => done(reject, new Error('pairing timeout')), 6000)
     })
   }
 

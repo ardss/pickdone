@@ -151,3 +151,64 @@ test('transport: EADDRINUSE degrades to an ephemeral port (second same-host inst
     await first.close()
   }
 })
+
+test('transport: pair-request brute force is rate limited per IP across reconnects', async () => {
+  // Regression: the pair-attempt counter was per-connection, so every reconnect reset it and
+  // online guessing of the 6-digit code was one attempt per TCP connect for free.
+  const CODE = '123456'
+  const paired = []
+  const server = createLanServer({
+    port: 0,
+    host: '127.0.0.1',
+    deviceId: SERVER_DEVICE,
+    pairingSecret: SECRET,
+    verifyPairingCode: (code) => code === CODE,
+    onPaired: (info) => paired.push(info),
+  })
+  const port = await listen(server)
+  const tryPair = () => new Promise((resolve) => {
+    const c = connect('127.0.0.1', port, { deviceId: CLIENT_DEVICE, pairCode: CODE, timeoutMs: 2000 })
+    c.on('paired', () => { c.close(); resolve('accepted') })
+    c.on('rejected', () => { c.close(); resolve('rejected') })
+    c.on('error', () => resolve('error'))
+  })
+  try {
+    const results = []
+    for (let i = 0; i < 7; i++) results.push(await tryPair())
+    // First 5 attempts pass the gate (correct code -> accepted); attempts 6+ are refused by the
+    // server-level sliding window even though the code is correct.
+    assert.deepEqual(results.slice(0, 5), ['accepted', 'accepted', 'accepted', 'accepted', 'accepted'])
+    assert.ok(results[5] !== 'accepted', 'attempt 6 must not yield the secret')
+    assert.ok(results[6] !== 'accepted', 'attempt 7 must not yield the secret')
+    assert.equal(paired.length, 5)
+  } finally {
+    await server.close()
+  }
+})
+
+test('transport: pre-auth lines over 4KB are dropped before authentication', async () => {
+  // Regression: the 16MB post-auth line cap applied to UNAUTHENTICATED traffic too, letting any
+  // LAN peer buffer megabytes (or gigabytes, drip-fed) before proving it knows the secret.
+  const handled = []
+  const server = createLanServer({
+    port: 0,
+    host: '127.0.0.1',
+    deviceId: SERVER_DEVICE,
+    pairingSecret: SECRET,
+    getHandler: () => (msg) => handled.push(msg),
+  })
+  const port = await listen(server)
+  try {
+    const client = connect('127.0.0.1', port, { deviceId: CLIENT_DEVICE, authCode: 'nope', timeoutMs: 2000 })
+    // Do NOT authenticate: blast a >4KB line straight away on a fresh connection.
+    const fresh = connect('127.0.0.1', port, { deviceId: CLIENT_DEVICE, authCode: 'nope', timeoutMs: 2000 })
+    const closed = new Promise((resolve) => fresh.on('close', resolve))
+    fresh._socket.write(JSON.stringify({ type: 'segments', pad: 'x'.repeat(8 * 1024) }) + '\n')
+    await closed
+    await new Promise((r) => setTimeout(r, 50))
+    assert.equal(handled.length, 0, 'oversized pre-auth line must never reach the handler')
+    await client.close()
+  } finally {
+    await server.close()
+  }
+})
