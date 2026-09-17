@@ -2,14 +2,14 @@
   <transition name="fade">
     <div class="modal-container" @click.self="close">
       <div class="modal-tablecloth" @click.self="close">
-        <div class="modal" role="dialog" aria-modal="true" :aria-label="title" style="width:420px;max-width:min(420px,92vw)">
+        <div class="modal" role="dialog" aria-modal="true" :aria-label="title" style="width:420px;max-width:min(420px,92vw)" @keydown.esc="close">
           <div class="modal__header"><span>{{ title }}</span><div class="modal__close close-x" role="button" tabindex="0" :aria-label="title" @click="close" @keydown.enter.prevent="close"></div></div>
           <div class="modal__body">
             <div class="msm-field">
               <label class="msm-label" for="msm-title">{{ $t('statsB.ProjectView.msContent') }}</label>
               <input id="msm-title" ref="titleInput" v-model="title" class="msm-input" maxlength="60"
                      :placeholder="$t('statsB.ProjectView.msPhExample')" :aria-label="$t('statsB.ProjectView.msContent')"
-                     @keydown.enter.prevent="save"/>
+                     @keydown.enter.prevent="e => { if (e.isComposing || e.keyCode === 229) return; save() }"/>
             </div>
             <div class="msm-field">
               <label class="msm-label" for="msm-date">{{ $t('statsB.ProjectView.msDateField') }}</label>
@@ -34,8 +34,11 @@
  * ElMessageBox.prompt flow, which made date editing look broken). Parent v-if controls visibility;
  * `milestone` null = add mode, otherwise pre-fills for edit. Emits save({title, date: 'YYYY-MM-DD'}).
  */
+import dialogA11y from '../utils/dialogA11y.js'
+
 export default {
   name: 'MilestoneEditModal',
+  mixins: [dialogA11y],
   props: {
     milestone: { type: Object, default: null }
   },
