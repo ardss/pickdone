@@ -161,7 +161,10 @@ export default {
         .then(() => {
           this.$store.commit('tomato/removeRecord', r.tomatoId)
           this.$message.success(this.$t('statsK.TomatoAccount.deleted'))
-        }).catch(() => {})
+        }).catch((e) => {
+          // Element confirm 以 'cancel'/'close' 字符串拒绝表示用户取消 —— 仅静默这两种,其余异常要报出来
+          if (e !== 'cancel' && e !== 'close') this.$message.error(this.$t('statsK.TomatoAccount.deleteFailed'))
+        })
     },
     openAdd () {
       const now = new Date()
