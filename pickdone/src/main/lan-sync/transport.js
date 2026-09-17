@@ -24,7 +24,11 @@ const { verifyAuthCode } = require('./pairing')
 
 const PROTO_VER = 1
 const DEFAULT_PORT = 58471
-const MAX_LINE_BYTES = 512 * 1024
+// A round carries the sender's whole pending backlog as ONE 'segments' JSON line, so the cap must
+// cover a first sync between real devices (tens of MB of rows), not just a heartbeat. Pre-auth
+// abuse is bounded by the hello/pair gate below — only peers holding the pairing secret can push
+// large lines, and a 16MB buffer spike from a LAN peer is acceptable for the beta.
+const MAX_LINE_BYTES = 16 * 1024 * 1024
 
 class ProtocolError extends Error {
   constructor(message) {
