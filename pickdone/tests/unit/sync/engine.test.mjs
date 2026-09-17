@@ -175,3 +175,19 @@ test('engine rejects bad construction and invalid snapshots', () => {
   )
   assert.throws(() => ea.markPushed(-1), /invalid seq/)
 })
+
+test('engine: ingestSegment accepts both the packed body string and the {body} envelope', async () => {
+  // Live-drill regression (2026-09-17): transports carry the {body} envelope object; feeding it
+  // verbatim used to throw 'segment body is not decodable JSON' inside the server handler.
+  const storeA = makeStore('env-a')
+  const a = createEngine({ deviceId: 'env-a', localStore: storeA })
+  const b = createEngine({ deviceId: 'env-b', localStore: makeStore('env-b') })
+  storeA.append({ id: 't1', title: 'hello', updatedAt: 10 })
+  const built = a.buildSegments()
+  assert.ok(built.segments.length >= 1, 'fixture produced a segment')
+  const seg = built.segments[0]
+  const asEnvelope = typeof seg === 'string' ? { body: seg } : seg
+  const r = b.ingestSegment(asEnvelope)
+  assert.equal(r.rejected, 0, 'envelope-object ingest must not reject rows')
+  assert.equal(r.applied > 0, true, 'envelope-object ingest applies rows')
+})

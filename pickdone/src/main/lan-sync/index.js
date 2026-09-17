@@ -158,14 +158,21 @@ function createLanSyncNode(opts) {
       host,
       deviceId,
       pairingSecret,
+      verifyPairingCode: opts.verifyPairingCode,
+      onPaired: (info) => em.emit('paired-inbound', info),
       getHandler: () => (msg, socket) => {
-        if (msg.type === 'segments' && Array.isArray(msg.segments)) {
-          for (const seg of msg.segments) ingestSegment(seg)
-          const mine = buildSegments ? buildSegments() : []
-          sendVia(socket, { type: 'segments', segments: mine })
-          sendVia(socket, { type: 'ack', applied: msg.segments.length, rejected: 0 })
-        } else if (msg.type === 'snapshot-request') {
-          sendVia(socket, { type: 'snapshot', snapshot: buildSnapshot ? buildSnapshot() : null })
+        try {
+          if (msg.type === 'segments' && Array.isArray(msg.segments)) {
+            for (const seg of msg.segments) ingestSegment(seg)
+            const mine = buildSegments ? buildSegments() : []
+            sendVia(socket, { type: 'segments', segments: mine })
+            sendVia(socket, { type: 'ack', applied: msg.segments.length, rejected: 0 })
+          } else if (msg.type === 'snapshot-request') {
+            sendVia(socket, { type: 'snapshot', snapshot: buildSnapshot ? buildSnapshot() : null })
+          }
+        } catch (err) {
+          try { require('electron-log').warn('[LanSync] server handler failed:', err && err.message) } catch { /* noop */ }
+          em.emit('server-error', err)
         }
       },
       onPeer: (peer) => em.emit('peer-connected', peer),
@@ -184,7 +191,25 @@ function createLanSyncNode(opts) {
     if (socket && socket.writable) socket.write(JSON.stringify(msg) + '\n')
   }
 
+  /**
+   * Manual pairing with a known peer: exchange our 6-digit code for the peer's persisted
+   * pairing secret. Resolves {secret, peer}; rejects on reject/error/timeout.
+   */
+  function pairWith(peerDeviceId, code) {
+    const peer = peers.get(peerDeviceId) || [...peers.values()][0]
+    if (!peer || !peer.host || !peer.port) return Promise.reject(new Error('pairWith: no discovered peer'))
+    return new Promise((resolve, reject) => {
+      const client = connect(peer.host, peer.port, { deviceId, pairCode: String(code), protoVer: PROTO_VER, timeoutMs: 5000 })
+      const done = (fn, v) => { try { client.close() } catch { /* noop */ } fn(v) }
+      client.on('paired', (r) => { em.emit('paired-outbound', { peer: peer.deviceId }); done(resolve, { secret: r.secret, peer }) })
+      client.on('rejected', () => done(reject, new Error('pairing code rejected by peer')))
+      client.on('error', (err) => done(reject, err))
+      setTimeout(() => done(reject, new Error('pairing timeout')), 6000)
+    })
+  }
+
   return {
+    pairWith,
     on: em.on.bind(em),
 
     /** Start advertising, discovery, and the TCP server. */
