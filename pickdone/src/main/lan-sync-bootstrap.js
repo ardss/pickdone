@@ -323,6 +323,10 @@ function startSync () {
   const { deviceId, deviceName } = ensureIdentity()
   const pairingSecret = settingGet(K_PAIRING_SECRET)
   if (!pairingSecret) { log.warn('[LanSync] enabled but no pairing secret — generating one'); settingPut(K_PAIRING_SECRET, generatePairingSecret()) }
+  // Legacy-data bootstrap: rows written before the oplog existed have no capture pointers and
+  // would never propagate to peers. Seed once per database on first sync start (2026-09-18 drill:
+  // three legacy rows stayed unsynced forever while every captured row converged).
+  try { const seeded = state.db.call('seedSyncOplog', {}); if (seeded && seeded.seeded > 0) log.info('[LanSync] seeded', seeded.seeded, 'legacy rows into the oplog') } catch (e) { log.warn('[LanSync] legacy seed failed:', e.message) }
   state.engine = createEngine({ localStore: createLocalStoreAdapter(), deviceId })
   state.node = createLanSyncNode({
     deviceId,
