@@ -83,7 +83,13 @@ export default {
     "pairingExpiresIn": "{n} 秒后刷新",
 
     "pairInputLabel": "输入对端配对码",
-    "pairTargetLabel": "配对目标设备",
+
+    "addPeerLabel": "按 IP 添加设备",
+    "addPeerHostPh": "如 192.168.1.64（端口默认 58471）",
+    "addPeerBtn": "添加",
+    "addPeerTip": "自动发现被路由器/防火墙拦截时使用",
+    "addPeerOkMsg": "设备已添加",
+    "addPeerFailMsg": "添加设备失败",    "pairTargetLabel": "配对目标设备",
     "pairInputPh": "6 位配对码",
     "pairSubmitBtn": "配对",
     "pairOkMsg": "配对成功，开始同步",

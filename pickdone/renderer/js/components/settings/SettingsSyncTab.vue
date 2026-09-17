@@ -27,6 +27,12 @@
           <button class="mini" :disabled="busy" @click="showPairing">{{ pairingCode || $t('sync.pairingBtn') }}</button>
           <span class="tip" v-if="pairingCode">{{ $t('sync.pairingExpiresIn', { n: pairingLeftSec }) }}</span>
         </div></div>
+      <div class="form-item" v-if="enabled"><span class="form-item__label">{{ $t('sync.addPeerLabel') }}</span>
+        <div class="form-item__control">
+          <el-input size="small" class="ctl-sm" :placeholder="$t('sync.addPeerHostPh')" :aria-label="$t('sync.addPeerLabel')" v-model="addPeerHost"/>
+          <button class="mini" :disabled="busy || !addPeerHost" @click="submitAddPeer">{{ $t('sync.addPeerBtn') }}</button>
+          <span class="tip">{{ $t('sync.addPeerTip') }}</span>
+        </div></div>
       <div class="form-item" v-if="enabled"><span class="form-item__label">{{ $t('sync.pairInputLabel') }}</span>
         <div class="form-item__control">
           <select v-if="peers.length" class="ctl-sm" v-model="pairTarget" :aria-label="$t('sync.pairTargetLabel')">
@@ -43,7 +49,7 @@
 <script lang="ts">
 /** LAN sync settings tab: master toggle (off by default), device name, status line, pairing code.
  *  All state lives in settings_rows (main-process DB authority) — no localStorage writes here. */
-import { getSyncSettings, getSyncStatus, setSyncEnabled, getPairingCode, setSyncDeviceName, pairWithCode } from '../../utils/lanSync.js'
+import { getSyncSettings, getSyncStatus, setSyncEnabled, getPairingCode, setSyncDeviceName, pairWithCode, addSyncPeer } from '../../utils/lanSync.js'
 
 export default {
   name: 'SettingsSyncTab',
@@ -57,6 +63,7 @@ export default {
       pairingCode: '',
       pairDraft: '',
       pairTarget: '',
+      addPeerHost: '',
       pairingExpiresAt: 0,
       pairingLeftSec: 0,
       _pairTimer: null
@@ -78,6 +85,15 @@ export default {
     pairDraftOk () { return /^\d{6}$/.test(String(this.pairDraft || '')) }
   },
   methods: {
+    async submitAddPeer () {
+      this.busy = true
+      try {
+        await addSyncPeer(this.addPeerHost.trim())
+        this.$message.success(this.$t('sync.addPeerOkMsg'))
+        this.addPeerHost = ''
+        this.status = await getSyncStatus()
+      } catch (e) { this.$message.error(this.$t('sync.addPeerFailMsg')) } finally { this.busy = false }
+    },
     async submitPairing () {
       this.busy = true
       try {

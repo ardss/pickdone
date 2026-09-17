@@ -329,6 +329,15 @@ function registerOps () {
       runRound()
       return { ...getSettingsPayload(), peer: r.peer }
     },
+    syncAddPeer: p => {
+      const host = String((p && p.host) || '').trim()
+      const port = Number((p && p.port) || 58471)
+      if (!host || !/^[.:\w-]+$/.test(host)) throw new Error('syncAddPeer: host is required')
+      if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('syncAddPeer: invalid port')
+      if (!state.node) throw new Error('syncAddPeer: sync is not enabled')
+      // placeholder id until the first authenticated hello reveals the peer's real identity
+      return state.node.addPeer({ deviceId: 'manual-' + host + ':' + port, host, port, name: (p && p.name) || undefined })
+    },
     syncGetPairingCode: () => {
       const secret = settingGet(K_PAIRING_SECRET)
       if (!secret) return { code: null, expiresAt: 0 }
