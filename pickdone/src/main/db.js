@@ -394,7 +394,10 @@ function initInner (userDataPath) {
   stmts.setMeta = db.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
   stmts.upsertMany = db.transaction(rows => { for (const r of rows) stmts.upsert.run(r) })
   // Atomic field increment: a whole-row overwrite from a stale cross-window row loses concurrent increments (estimate from two windows in the same tick); DB-side += avoids the race
-  stmts.bumpSnow = db.prepare('UPDATE todos SET focusMinutes = focusMinutes + @minutes, updatedAt = @now WHERE id = @taskId AND deleted = 0')
+  // P1 2026-09-17: focus increments must also flip status to 'update' — the renderer's snapshot
+  // filter drops rows with status='sync', so a bump on an already-synced row used to leave the
+  // focus delta invisible to the cloud sync path (commitSyncBatch) forever.
+  stmts.bumpSnow = db.prepare("UPDATE todos SET focusMinutes = focusMinutes + @minutes, status = 'update', updatedAt = @now WHERE id = @taskId AND deleted = 0")
   log.info('[TodoDB] 数据库初始化完成:', file)
   return file
 }
@@ -505,7 +508,9 @@ const OPS = {
   // Monotonic sequence number for CLI tomato commands: UPDATE...RETURNING 单语句原子(两语句版在双 CLI 并发时读回同值→重号→App seq 去重丢命令,2026-09-04 深审 P1)
   nextCliTomatoSeq: () => Number(db.prepare("INSERT INTO meta (key, value) VALUES ('cliTomatoSeq', '1') ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT) RETURNING value").get().value),
   deleteMeta: k => { db.prepare('DELETE FROM meta WHERE key = ?').run(k); return true },
-  countAll: () => db.prepare('SELECT COUNT(*) n FROM todos').get().n,
+  // P3 2026-09-17: recycle-bin rows are logically gone — counting them made the onboarding
+  // "is this a fresh library" check false-positive on a library whose only rows were deleted ones.
+  countAll: () => db.prepare('SELECT COUNT(*) n FROM todos WHERE deleted = 0').get().n,
   purgeRecycleBin: () => {
     // Cascade: plan chips belonging to recycle-bin rows are removed too (otherwise the timeline shows ghost chips after emptying the recycle bin, with no way to remove them)
     // 两表删除包事务(2026-09-05 终审 P1):非原子路径在两语句间崩溃会留幽灵行
@@ -574,7 +579,11 @@ const OPS = {
     const name = String(f && f.name || '').slice(0, 50)
     const conds = JSON.stringify(normConds(f && f.conds))
     if (f.id) {
-      // Un-deletes on conflict: re-saving a tombstoned id intentionally resurrects it
+      // P2 2026-09-17 no-op suppression (same rule as upsertCategory): re-saving identical content
+      // used to overwrite updatedAt=now (faking LWW freshness) and emit a fake oplog delta per save.
+      // Un-deletes on conflict are intentional, so a resurrected tombstone still writes.
+      const cur = db.prepare('SELECT name, conds, sort, deleted FROM filters WHERE id = ?').get(f.id)
+      if (cur && cur.deleted === 0 && cur.name === name && cur.conds === conds && cur.sort === (f.sort || 0)) return false
       db.prepare('UPDATE filters SET name=?, conds=?, sort=?, deleted=0, deletedAt=0, updatedAt=? WHERE id=?').run(name, conds, f.sort || 0, Date.now(), f.id)
       return f.id
     }
@@ -610,11 +619,17 @@ const OPS = {
   },
   statsByDay: ({ from, to }) => {
     const [f, t] = OPS._dayBounds({ from, to })
+    // P2 2026-09-17: null bounds used to bind SQL BETWEEN NULL → silently always-empty, unlike
+    // tomatoByDay which substitutes open-ended sentinels. scheduledDay is a millisecond timestamp;
+    // 0 / 8.64e15 bracket every representable day (same sentinel semantics as tomatoByDay's
+    // '0000-00-00'/'9999-99-99'). The completion-day keys are YYYYMMDD integers: 0 / 99991231.
+    const fLo = f == null ? 0 : f
+    const tHi = t == null ? 8640000000000000 : t
     const rows = db.prepare(`SELECT scheduledDay ds, SUM(complete) done, COUNT(*) total FROM todos
-      WHERE deleted=0 AND scheduledDay BETWEEN ? AND ? GROUP BY scheduledDay`).all(f, t)
+      WHERE deleted=0 AND scheduledDay BETWEEN ? AND ? GROUP BY scheduledDay`).all(fLo, tHi)
     // 完成日查询的边界须与 strftime 产出的 YYYYMMDD 同单位(2026-09-05 终审 P1:与毫秒边界 BETWEEN 恒假→恒空)
-    const fKey = f == null ? null : Number(dayjs(f).format('YYYYMMDD'))
-    const tKey = t == null ? null : Number(dayjs(t).format('YYYYMMDD'))
+    const fKey = f == null ? 0 : Number(dayjs(f).format('YYYYMMDD'))
+    const tKey = t == null ? 99991231 : Number(dayjs(t).format('YYYYMMDD'))
     const doneByCompletionDay = db.prepare(`SELECT CAST(strftime('%Y%m%d', completedAt/1000, 'unixepoch', 'localtime') AS INTEGER) ds, COUNT(*) n
       FROM todos
       WHERE deleted=0 AND complete=1 AND completedAt > 0
@@ -696,7 +711,7 @@ const OPS = {
     for (const k of OPS._REC_COLS) {
       let v = r[k]
       if (k === 'endTime' || k === 'rest') v = Math.max(0, Math.round(Number(v) || 0))
-      else if (k === 'focusDuration') v = Math.min(LIMITS.FOCUS_MAX_MINUTES, Math.max(1, Math.round(Number(v) || 0))) // clamp at the DB layer: renderer clamps 720, bumpSnow clamps 600 — this path used to be unbounded
+      else if (k === 'focusDuration') v = Math.min(LIMITS.FOCUS_MAX_MINUTES, Math.max(0, Math.round(Number(v) || 0))) // clamp at the DB layer; P3 2026-09-17: lower bound is 0, not 1 — a bad value (0/NaN/garbage) must not be inflated into a phantom focus minute that LAN merge "max" then amplifies
       else if (k === 'restDuration') v = Math.min(LIMITS.REST_MAX_MINUTES, Math.max(0, Math.round(Number(v) || 0)))
       else if (k === 'succeed') v = v === false ? 0 : 1
       else if (k === 'manual') v = v ? 1 : 0
