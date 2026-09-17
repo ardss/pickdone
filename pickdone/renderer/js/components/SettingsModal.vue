@@ -498,7 +498,12 @@ export default {
     },
     async saveLockPassword (v) {
       // When encryption is unavailable the main process refuses — never fall back to storing plaintext (the old catch once wrote plaintext into config.json); the feature stays off
-      try { const enc = await window.todoAPI.encryptSecret(v); this.set({ securityLockPassword: enc }) } catch (e) { console.error('[Settings] secure encryption unavailable, lock password not saved', e) }
+      try { const enc = await window.todoAPI.encryptSecret(v); this.set({ securityLockPassword: enc }) }
+    catch (e) {
+      // 加密服务不可用时主进程拒绝 —— 功能保持关闭,但不能静默:必须告知用户密码未保存
+      console.error('[Settings] secure encryption unavailable, lock password not saved', e)
+      this.$message.error(this.$t('statsE.SettingsModal.lockPasswordSaveFailed'))
+    }
     },
     setLockTest () {
       // Real lock: the main process hides the main window and shows the lock screen (validation happens in the main process)

@@ -114,6 +114,7 @@ export default {
       "securityPrivacySection": "Security & privacy",
       "securityLockLabel": "Security lock:",
       "lockPasswordLabel": "Security lock password:",
+      "lockPasswordSaveFailed": "Encryption service unavailable — lock password not saved",
       "lockNowBtn": "Lock now",
       "feedbackAboutSection": "Feedback & about",
       "feedbackLabel": "Feedback:",
