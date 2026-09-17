@@ -41,7 +41,10 @@ async function fileResponse (file, mime, request, extraHeaders) {
     return new Response(out, { status: 206, headers })
   }
   const data = await fs.promises.readFile(file)
-  headers['Content-Length'] = String(total)
+  // P2 2026-09-17 TOCTOU: Content-Length must come from the bytes actually read, not the earlier
+  // stat — a concurrent truncate/append between stat and readFile made the header disagree with
+  // the body (truncated media / hung downloads). Same fix as the 206 path above.
+  headers['Content-Length'] = String(data.length)
   return new Response(data, { status: 200, headers })
 }
 
@@ -103,4 +106,4 @@ function handleAppProtocol () {
   })
 }
 
-module.exports = { handleAppProtocol }
+module.exports = { handleAppProtocol, fileResponse } // fileResponse exported for unit tests (Content-Length invariant)

@@ -75,9 +75,12 @@ module.exports = function attachmentHandlers (ctx) {
     'delete-todo-files': (e, taskId) => {
       if (isLocked()) throw new Error('locked')
       const dir = attachDir()
+      const { ownsAttachmentFile } = require('./shared')
       const failures = []
       for (const f of fs.readdirSync(dir)) {
-        if (!f.startsWith(taskId + '_')) continue
+        // P2 2026-09-17: exact ownership via the timestamp segment — a bare taskId+'_' prefix let
+        // task 'a' delete task 'a_b''s attachments when the ids were prefix-related
+        if (!ownsAttachmentFile(f, String(taskId))) continue
         try { fs.unlinkSync(path.join(dir, f)) } catch (err) { if ((err && err.code) !== 'ENOENT') failures.push(f + ': ' + String((err && err.message) || err)) }
       }
       if (failures.length) throw new Error('delete-todo-files failed: ' + failures.join('; '))

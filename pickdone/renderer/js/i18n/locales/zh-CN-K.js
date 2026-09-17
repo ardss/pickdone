@@ -18,6 +18,7 @@ export default {
       delete: '删除记录',
       deleteConfirm: '删除这条专注记录？实际收成会随之减少。',
       deleted: '记录已删除',
+      deleteFailed: '删除失败，请重试',
       saved: '记录已更新',
       addBtn: '+ 补一条番茄',
       addSave: '入账',

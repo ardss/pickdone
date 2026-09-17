@@ -132,8 +132,9 @@ export default {
       for (const [id, key] of seeds) {
         const c = this.$store.state.category.list.find(x => x.categoryId === id)
         if (!c) continue
-        const initialZh = { 'onboarding.catWork': '工作', 'onboarding.catStudy': '学习', 'onboarding.catLife': '生活' }[key]
-        if (c.categoryName === initialZh || c.categoryName === this.$t(key)) {
+        // 兼容 en 首启(category.js 按语言播 'Work'/'Study'/'Life' 种子名),之后切回中文也能识别为初始名
+        const initialNames = { 'onboarding.catWork': ['工作', 'Work'], 'onboarding.catStudy': ['学习', 'Study'], 'onboarding.catLife': ['生活', 'Life'] }[key]
+        if (initialNames.includes(c.categoryName) || c.categoryName === this.$t(key)) {
           this.$store.commit('category/updateCategory', { categoryId: id, categoryName: this.$t(key) })
         }
       }

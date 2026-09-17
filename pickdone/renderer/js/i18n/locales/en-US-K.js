@@ -18,6 +18,7 @@ export default {
       delete: 'Delete record',
       deleteConfirm: 'Delete this focus record? Actual pomodoros will decrease accordingly.',
       deleted: 'Record deleted',
+      deleteFailed: 'Delete failed, please retry',
       saved: 'Record updated',
       addBtn: '+ Log a pomodoro',
       addSave: 'Add',

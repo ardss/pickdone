@@ -72,6 +72,11 @@ module.exports = ({ getDb, log }) => {
     const cols = d.prepare('PRAGMA table_info(todos)').all().map(c => c.name)
     if (!cols.includes('tz')) d.exec('ALTER TABLE todos ADD COLUMN tz TEXT')
     d.exec(DDL)
+    // P1 2026-09-17: a corrupted blob must keep the schemaVersion from advancing (return false →
+    // the migrator in db.js breaks before stamping ver, so this migration re-runs next boot and
+    // retries the blob — the "retry next boot" promise in the old comment was dead because this
+    // function unconditionally returned true after `continue`).
+    let pendingRetry = 0
     for (const blobKey of SYNC_BLOB_KEYS) {
       const blob = d.prepare('SELECT value FROM meta WHERE key = ?').get(blobKey)
       if (!blob) continue // never written on this device: nothing to split
@@ -83,13 +88,14 @@ module.exports = ({ getDb, log }) => {
         // Corrupted blob: keep it and retry next boot (same policy as the tomato blob migration) —
         // deleting or tombstoning rows off an unparseable blob could destroy recoverable data
         log.warn('[TodoDB] settings blob migration: unparseable JSON, kept for retry:', blobKey)
+        pendingRetry++
         continue
       }
       mergeDoc(doc)
       d.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
         .run(snapKey, blob.value)
     }
-    return true
+    return pendingRetry === 0
   }
 
   // Bridge wiring called once from db.js after OPS/WRITE_OPS exist: wraps setMeta so legacy blob
@@ -105,7 +111,9 @@ module.exports = ({ getDb, log }) => {
         try { doc = JSON.parse(v) } catch (e) { /* bridge mirrors parseable docs only */ }
         const changed = doc ? mergeDoc(doc) : []
         const snapKey = 'settingsRows.src.' + k
-        getDb().prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(snapKey, String(v))
+        // P1 2026-09-17: only stamp the snapshot for PARSEABLE docs — stamping an unparseable blob
+        // made migrateV6's "already migrated in this exact shape" guard skip the corruption retry.
+        if (doc) getDb().prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(snapKey, String(v))
         // Row-granular change capture for the mirrored fields (the ('meta', key) delta from the
         // setMeta op itself is emitted separately by call(); both belong in the log)
         if (changed.length) oplog.appendOplog(changed.map(id => ({ entity: 'setting', entityId: id, ts: Date.now() })))

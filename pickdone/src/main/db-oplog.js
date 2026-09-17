@@ -32,12 +32,16 @@ module.exports = ({ getDb, log }) => {
     switch (op) {
       case 'upsert': return [one('todo', params && params.taskId)]
       case 'upsertMany': return arr('todo', (params || []).map(t => t && t.taskId))
-      case 'bumpSnow': return [one('todo', params && params.taskId)]
+      // P2 2026-09-17: a failed bump (missing/deleted task → { ok:false }) must not emit a delta —
+      // the oplog row would point delta consumers at a row that never changed (ghost pointer).
+      case 'bumpSnow': return (result && result.ok === false) ? [] : [one('todo', params && params.taskId)]
       case 'hardDelete': case 'hardDeleteMany': return arr('todo', params)
       case 'purgeRecycleBin': case 'purgeSeedTodos': return [one('todo', '*gc*')]
       // H2 2026-09-16: an identical no-change upsert returns false — it must not produce a fake delta
       case 'upsertCategory': return result === false ? [] : [one('category', params && params.id)]
-      case 'filterUpsert': return [one('filter', result)]
+      // P2 2026-09-17: a no-change re-save returns false — it must not emit a delta (the old path
+      // logged entity 'filter' with entityId 'false')
+      case 'filterUpsert': return result === false ? [] : [one('filter', result)]
       case 'filterDelete': return [one('filter', params)]
       case 'planAddMany': return arr('plan', result)
       case 'planUpdateChip': return [one('plan', params && params.id)]

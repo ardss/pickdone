@@ -29,7 +29,7 @@
             <li v-for="t in c.overdue" :key="t.taskId" class="overdue"
                 draggable="true" @dragstart="onDragStart(t, $event)"
                 @contextmenu="taskContextMenu(t, $event)"
-                tabindex="0" @keydown.shift.delete.prevent.stop="del(t)">
+                @keydown.shift.delete.prevent.stop="del(t)">
               <span class="pd-day-deck__chk td-check" :class="{on: t.complete}" :style="chkStyleOf(t)" role="checkbox" :aria-checked="t.complete ? 'true' : 'false'"
                  :aria-label="$t('statsE.TodoItem.markComplete')"
                  tabindex="0" @click.stop="toggle(t, $event)" @keydown.enter.prevent.stop="toggle(t, $event)"><svg v-if="t.complete" class="td-check-svg" viewBox="0 0 12 12" aria-hidden="true"><polyline points="2,6.2 5,9 10,3" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" pathLength="1"/></svg></span>
@@ -55,7 +55,7 @@
               :class="{ done: t.complete }"
               draggable="true" @dragstart="onDragStart(t, $event)"
               @contextmenu="taskContextMenu(t, $event)"
-              tabindex="0" @keydown.shift.delete.prevent.stop="del(t)">
+              @keydown.shift.delete.prevent.stop="del(t)">
             <span class="pd-day-deck__chk td-check" :class="{on: t.complete}" :style="chkStyleOf(t)" role="checkbox" :aria-checked="t.complete ? 'true' : 'false'"
                :aria-label="$t('statsE.TodoItem.markComplete')"
                tabindex="0" @click.stop="toggle(t, $event)" @keydown.enter.prevent.stop="toggle(t, $event)"><svg v-if="t.complete" class="td-check-svg" viewBox="0 0 12 12" aria-hidden="true"><polyline points="2,6.2 5,9 10,3" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" pathLength="1"/></svg></span>

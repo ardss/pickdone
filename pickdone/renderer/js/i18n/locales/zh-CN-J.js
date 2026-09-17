@@ -92,6 +92,7 @@ export default {
   'statsJ.FilterModal.date': '日期',
   'statsJ.FilterModal.save': '保存',
   'statsJ.FilterModal.saved': '过滤器已保存',
+  'statsJ.FilterModal.saveFailed': '保存失败，请重试',
   'statsJ.DoneEntry.label': '已达成',
   'statsJ.EditPanel.saveFailed': '保存失败 · 更改未写入，请重试',
   'statsJ.EditPanel.priorityNormal': '一般',

@@ -352,7 +352,7 @@ export default {
 /* ==================== 3. TodoItem 条目微交互 ==================== */
 /* 整行选中高亮：设计稿 .todo-list-item--selected{background-color:#f5fafb}
    （base.css 用的是 brand-light，这里对齐设计稿） */
-.td-item.selected, .td-item.selected:hover { background-color: #f5fafb; }
+.td-item.selected, .td-item.selected:hover { background-color: var(--hover-bg, #f5fafb); }
 .td-meta .td-ico, .td-meta .td-snow {
   opacity: 0; transition: opacity var(--dur-mid) cubic-bezier(.4, 0, .2, 1);
 }

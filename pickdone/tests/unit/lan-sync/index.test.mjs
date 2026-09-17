@@ -32,7 +32,7 @@ test('glue: two nodes exchange segments + acks via injected peers', async () => 
     discoverFn: fakeDiscovery(),
     ingestSegment: (seg) => ingestedA.push(seg),
     ingestSnapshot: () => {},
-    buildSegments: () => [{ fromSeq: 1, toSeq: 2, deviceId: 'node-a', rows: [{ id: 'a1', seq: 1 }, { id: 'a2', seq: 2 }] }],
+    buildSegments: (since = 0) => [{ fromSeq: 1, toSeq: 2, deviceId: 'node-a', rows: [{ id: 'a1', seq: 1 }, { id: 'a2', seq: 2 }].filter(r => r.seq > since) }],
   })
   const nodeB = createLanSyncNode({
     deviceId: 'node-b',
@@ -43,7 +43,7 @@ test('glue: two nodes exchange segments + acks via injected peers', async () => 
     discoverFn: fakeDiscovery(),
     ingestSegment: (seg) => ingestedB.push(seg),
     ingestSnapshot: () => {},
-    buildSegments: () => [{ fromSeq: 5, toSeq: 5, deviceId: 'node-b', rows: [{ id: 'b1', seq: 5 }] }],
+    buildSegments: (since = 0) => [{ fromSeq: 5, toSeq: 5, deviceId: 'node-b', rows: [{ id: 'b1', seq: 5 }].filter(r => r.seq > since) }],
   })
 
   // Start both, learn ephemeral ports, cross-inject as peers. whenListening()
@@ -160,4 +160,76 @@ test('glue: server-side ingest path accepts inbound segments from authenticated 
 
   await node.stop()
   await serverNode.close()
+})
+
+test('glue: peer ack appliedToSeq advances the push watermark; second round ships only the delta', async () => {
+  // Regression (2026-09): the server role acked {applied, rejected} WITHOUT appliedToSeq, so the
+  // client's per-peer watermark stayed 0 forever and every round re-pushed the full oplog.
+  const SECRET2 = SECRET
+  let bMaxSeq = 0 // peer B's local max oplog seq (what its ack must report)
+  const ingestedByB = []
+  const pushedToB = [] // one entry per round: the row seqs A actually shipped
+
+  const rowsA = [
+    { id: 'a1', seq: 1 },
+    { id: 'a2', seq: 2 },
+    { id: 'a3', seq: 3 },
+  ]
+  const nodeA = createLanSyncNode({
+    deviceId: 'node-a',
+    pairingSecret: SECRET2,
+    port: 0,
+    host: '127.0.0.1',
+    discoverFn: fakeDiscovery(),
+    ingestSegment: () => {},
+    ingestSnapshot: () => {},
+    // Honors the explicit sinceSeq watermark (engine.buildSegments contract).
+    buildSegments: (since = 0) => {
+      const rows = rowsA.filter(r => r.seq > (Number(since) || 0))
+      pushedToB.push(rows.map(r => r.seq))
+      if (!rows.length) return []
+      return [{ fromSeq: rows[0].seq, toSeq: rows[rows.length - 1].seq, deviceId: 'node-a', rows }]
+    },
+  })
+  const nodeB = createLanSyncNode({
+    deviceId: 'node-b',
+    pairingSecret: SECRET2,
+    port: 0,
+    host: '127.0.0.1',
+    discoverFn: fakeDiscovery(),
+    ingestSegment: (seg) => {
+      ingestedByB.push(seg)
+      for (const r of seg.rows || []) bMaxSeq = Math.max(bMaxSeq, Number(r.seq) || 0)
+    },
+    ingestSnapshot: () => {},
+    getMaxSeq: () => bMaxSeq,
+    buildSegments: () => [],
+  })
+
+  nodeA.start()
+  nodeB.start()
+  const [, portB] = await Promise.all([nodeA.whenListening(), nodeB.whenListening()])
+  nodeA.addPeer({ deviceId: 'node-b', host: '127.0.0.1', port: portB, name: 'Node B' })
+
+  // Round 1: watermark 0 -> full backlog (seq 1..3) is shipped; B acks appliedToSeq=3.
+  const ok1 = await nodeA.startSyncRound()
+  assert.equal(ok1.confirmed, 1)
+  assert.deepEqual(pushedToB, [[1, 2, 3]])
+  assert.equal(ingestedByB.length, 1)
+  assert.deepEqual(ingestedByB[0].rows.map(r => r.seq), [1, 2, 3])
+
+  // Round 2 with no new rows: the watermark advanced, so NOTHING is re-pushed.
+  await nodeA.startSyncRound()
+  assert.deepEqual(pushedToB, [[1, 2, 3], []], 'watermark advanced: round 2 shipped nothing')
+  assert.equal(ingestedByB.length, 1, 'no delta -> no second push')
+
+  // A new local row (seq 4) appears: round 3 ships ONLY the delta.
+  rowsA.push({ id: 'a4', seq: 4 })
+  await nodeA.startSyncRound()
+  assert.equal(ingestedByB.length, 2)
+  assert.deepEqual(ingestedByB[1].rows.map(r => r.seq), [4])
+  assert.equal(bMaxSeq, 4)
+
+  await nodeA.stop()
+  await nodeB.stop()
 })

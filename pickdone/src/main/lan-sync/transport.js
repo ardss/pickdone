@@ -29,6 +29,10 @@ const DEFAULT_PORT = 58471
 // abuse is bounded by the hello/pair gate below — only peers holding the pairing secret can push
 // large lines, and a 16MB buffer spike from a LAN peer is acceptable for the beta.
 const MAX_LINE_BYTES = 16 * 1024 * 1024
+// Pre-auth lines (before hello-ack / pair-accept) are bounded to 4KB: hello and pair-request are
+// heartbeat-sized, so an unauthenticated peer has no reason to stream megabytes into our buffers.
+// After auth the cap is raised to MAX_LINE_BYTES (a round carries a whole first-sync backlog).
+const PRE_AUTH_LINE_BYTES = 4 * 1024
 
 class ProtocolError extends Error {
   constructor(message) {
@@ -37,10 +41,15 @@ class ProtocolError extends Error {
   }
 }
 
-/** Line-framing reader: buffers socket data, emits parsed JSON objects. */
+/** Line-framing reader: buffers socket data, emits parsed JSON objects.
+ *  The line cap is dynamic (setLimit): 4KB until the peer authenticates, 16MB after. Buffer size
+ *  is tracked by byte ACCUMULATION (chunk bytes in, consumed line bytes out) instead of a full
+ *  Buffer.byteLength rescan per chunk, so a slow-loris drip of small chunks stays O(n) total. */
 class LineReader {
-  constructor(socket, onMessage, onError) {
+  constructor(socket, onMessage, onError, limit = PRE_AUTH_LINE_BYTES) {
     this.buffer = ''
+    this.bufferBytes = 0
+    this.limit = limit
     this.socket = socket
     this.onMessage = onMessage
     this.onError = onError
@@ -48,15 +57,27 @@ class LineReader {
     socket.on('data', (chunk) => this.#feed(chunk))
   }
 
+  setLimit(limit) {
+    this.limit = limit
+    if (this.bufferBytes > limit) this.#overLimit()
+  }
+
+  #overLimit() {
+    this.onError(new ProtocolError(`line exceeds ${this.limit} byte cap`))
+    this.socket.destroy()
+  }
+
   #feed(chunk) {
+    const chunkBytes = Buffer.byteLength(chunk, 'utf8')
+    this.bufferBytes += chunkBytes
     this.buffer += chunk
     let idx
     while ((idx = this.buffer.indexOf('\n')) !== -1) {
       const line = this.buffer.slice(0, idx)
       this.buffer = this.buffer.slice(idx + 1)
-      if (Buffer.byteLength(line, 'utf8') > MAX_LINE_BYTES) {
-        this.onError(new ProtocolError(`line exceeds ${MAX_LINE_BYTES} byte cap`))
-        this.socket.destroy()
+      this.bufferBytes -= Buffer.byteLength(line, 'utf8') + 1 // + the consumed '\n'
+      if (Buffer.byteLength(line, 'utf8') > this.limit) {
+        this.#overLimit()
         return
       }
       if (line.length === 0) continue
@@ -68,10 +89,7 @@ class LineReader {
         return
       }
     }
-    if (Buffer.byteLength(this.buffer, 'utf8') > MAX_LINE_BYTES) {
-      this.onError(new ProtocolError(`line exceeds ${MAX_LINE_BYTES} byte cap`))
-      this.socket.destroy()
-    }
+    if (this.bufferBytes > this.limit) this.#overLimit()
   }
 }
 
@@ -79,10 +97,11 @@ function send(socket, msg) {
   if (!socket.destroyed && socket.writable) socket.write(JSON.stringify(msg) + '\n')
 }
 
-/** Shared server-side connection state machine (auth gate + dispatch). */
-function wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, onUnauthorized, verifyPairingCode, onPaired }) {
+/** Shared server-side connection state machine (auth gate + dispatch).
+ *  pairGate(remoteAddress) -> boolean: server-level sliding-window rate limiter for pair-request
+ *  attempts (see createLanServer); when absent, no IP-level limiting is applied. */
+function wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, onUnauthorized, verifyPairingCode, onPaired, pairGate }) {
   const state = { peer: null, authorized: false }
-  let pairAttempts = 0
   const finish = () => {
     if (state.peer) socket.emit('peer-closed', state.peer)
   }
@@ -99,9 +118,11 @@ function wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, o
         // receives the persisted pairing secret (same threat model as WPS push-button: the LAN +
         // the short-lived code are the gate). Rate-limited to blunt online guessing.
         if (msg.type === 'pair-request') {
-          pairAttempts += 1
+          // Rate limit is SERVER-level per remoteAddress (sliding 10-minute window), not
+          // per-connection: a per-connection counter resets on every reconnect, making online
+          // code guessing trivially cheap.
           const code = typeof msg.code === 'string' ? msg.code : ''
-          if (pairAttempts > 5 || !verifyPairingCode || !verifyPairingCode(code)) {
+          if ((pairGate && !pairGate(socket.remoteAddress)) || !verifyPairingCode || !verifyPairingCode(code)) {
             send(socket, { type: 'pair-ack', ok: false })
             socket.destroy()
             return
@@ -125,6 +146,8 @@ function wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, o
         }
         state.peer = { deviceId: claimed, host: socket.remoteAddress, protoVer: msg.protoVer || PROTO_VER }
         state.authorized = true
+        // Authenticated peers may stream full sync rounds: raise the line cap from 4KB to 16MB.
+        reader.setLimit(MAX_LINE_BYTES)
         send(socket, { type: 'hello-ack', ok: true, protoVer: PROTO_VER })
         if (onPeer) onPeer(state.peer, socket)
         return
@@ -150,11 +173,30 @@ function createLanServer(opts) {
   const port = Number.isInteger(opts.port) ? opts.port : DEFAULT_PORT
   const em = new EventEmitter()
   const sockets = new Set()
+  // Server-level pair-attempt rate limiter: Map<remoteAddress, timestamp[]> of pair-request
+  // attempts inside the sliding window. >5 attempts per IP per 10 minutes = refuse + destroy.
+  // Lives at server scope so reconnecting cannot reset the counter (the old per-connection
+  // counter made online code guessing free: one attempt per TCP connect).
+  const pairAttemptsByIp = new Map()
+  const PAIR_WINDOW_MS = 10 * 60 * 1000
+  const PAIR_MAX_ATTEMPTS = 5
+  const pairGate = (ip) => {
+    const now = Date.now()
+    const key = String(ip || 'unknown')
+    const recent = (pairAttemptsByIp.get(key) || []).filter((t) => now - t < PAIR_WINDOW_MS)
+    if (recent.length >= PAIR_MAX_ATTEMPTS) {
+      pairAttemptsByIp.set(key, recent)
+      return false
+    }
+    recent.push(now)
+    pairAttemptsByIp.set(key, recent)
+    return true
+  }
 
   const server = net.createServer((socket) => {
     sockets.add(socket)
     socket.on('close', () => sockets.delete(socket))
-    wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, onUnauthorized, verifyPairingCode, onPaired })
+    wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, onUnauthorized, verifyPairingCode, onPaired, pairGate })
   })
   server.on('error', (err) => {
     // Fixed port taken (second instance on the same machine, or a stale process): degrade to an
@@ -217,13 +259,15 @@ function connect(host, port, opts) {
     em.emit('close')
   })
 
-  new LineReader(
+  const reader = new LineReader(
     socket,
     (msg) => {
       if (!msg || typeof msg !== 'object') return
+      if (msg.type === 'ping') { send(socket, { type: 'pong' }); return }
       if (!em.ready) {
         if (pairCode !== undefined) {
           if (msg.type === 'pair-accept' && typeof msg.secret === 'string' && msg.secret) {
+            reader.setLimit(MAX_LINE_BYTES)
             em.emit('paired', { secret: msg.secret })
           } else {
             em.emit('rejected', msg)
@@ -233,6 +277,8 @@ function connect(host, port, opts) {
         }
         if (msg.type === 'hello-ack' && msg.ok) {
           em.ready = true
+          // Authenticated: raise the pre-auth 4KB line cap to the full 16MB round cap.
+          reader.setLimit(MAX_LINE_BYTES)
           em.emit('ready', msg)
         } else {
           if (msg.type === 'hello-ack' && onUnauthorized) {
@@ -256,4 +302,4 @@ function connect(host, port, opts) {
   return em
 }
 
-module.exports = { createLanServer, connect, ProtocolError, PROTO_VER, DEFAULT_PORT, MAX_LINE_BYTES }
+module.exports = { createLanServer, connect, ProtocolError, PROTO_VER, DEFAULT_PORT, MAX_LINE_BYTES, PRE_AUTH_LINE_BYTES }

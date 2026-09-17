@@ -93,6 +93,7 @@ export default {
   'statsJ.FilterModal.date': 'Date',
   'statsJ.FilterModal.save': 'Save',
   'statsJ.FilterModal.saved': 'Filter saved',
+  'statsJ.FilterModal.saveFailed': 'Save failed, please retry',
   'statsJ.DoneEntry.label': 'Completed',
   'statsJ.EditPanel.saveFailed': 'Save failed · changes not written, please retry',
   'statsJ.EditPanel.priorityNormal': 'Low',

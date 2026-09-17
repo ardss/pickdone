@@ -228,15 +228,26 @@ function applyIgnore (ignore) {
   }
 }
 
+// P2 2026-09-17: while the window is hidden/destroyed the poll used to spin forever (40ms interval,
+// no work). Count consecutive hidden ticks and self-stop after ~1s; startHitPoll resets the counter.
+const HITPOLL_MAX_HIDDEN_TICKS = 25 // 25 × 40ms ≈ 1s
+let hitHiddenTicks = 0
+
 function stopHitPoll () {
   if (hitTimer) { clearInterval(hitTimer); hitTimer = null }
+  hitHiddenTicks = 0
 }
 
 function startHitPoll () {
-  if (hitTimer) return
+  if (hitTimer) { hitHiddenTicks = 0; return }
   let ticks = 0
+  hitHiddenTicks = 0
   hitTimer = setInterval(() => {
-    if (!win || win.isDestroyed() || !win.isVisible()) return
+    if (!win || win.isDestroyed() || !win.isVisible()) {
+      if (++hitHiddenTicks >= HITPOLL_MAX_HIDDEN_TICKS) stopHitPoll()
+      return
+    }
+    hitHiddenTicks = 0
     try {
       // Every ~4s flush the bounds in place: even with the trigger chain blocked, DWM ghost repaint
       // (black frame/right-angle rectangle/title text) can still be brought in by occasional compositor

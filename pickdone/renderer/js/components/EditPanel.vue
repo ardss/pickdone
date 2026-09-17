@@ -161,7 +161,7 @@
       </div>
     </div>
 
-    <div v-if="previewImg" ref="previewMask" tabindex="-1" class="img-preview-mask" role="dialog" aria-modal="true" :aria-label="$t('statsJ.EditPanel.imagePreview')" @click.self="previewImg=null" @keydown.esc="previewImg=null">
+    <div v-if="previewImg" ref="previewMask" tabindex="-1" class="img-preview-mask" role="dialog" aria-modal="true" :aria-label="$t('statsJ.EditPanel.imagePreview')" @click.self="previewImg=null" @keydown.esc="previewImg=null" @keydown.tab.prevent="$refs.previewMask.focus()">
       <img :src="previewImg"><button class="close-x" :aria-label="$t('statsE.SettingsModal.closeBtn')" @click.stop="previewImg=null"></button>
     </div>
   </aside>
@@ -351,7 +351,7 @@ export default {
     if (this._sortable) { try { this._sortable.destroy() } catch (err) { /* already destroyed */ } this._sortable = null }
   },
   methods: {
-    /* ===== Save pipeline wrappers (implementation: utils/editSave.js) ===== */
+    /* ===== Save pipeline wrappers (impl: utils/editSave.js) ===== */
     queueSave (patch) { if (this._save) this._save.queueSave(patch) },
     /** Immediately commit pending saves (must be called before switching tasks, so A's edits do not land on B) */
     flushSave () { if (this._save) this._save.flushSave() },
@@ -740,7 +740,7 @@ export default {
   flex: 1; min-width: 110px; border: 0; background: none; outline: none;
   font-size: var(--fs-md); color: var(--text-1); font-family: inherit;
 }
-.ep-tag-input::placeholder { color: #8a9099; }
+.ep-tag-input::placeholder { color: var(--text-4); }
 .ep-title textarea { font-size: var(--fs-lg); font-weight: 600; color: var(--text-1); border: 0 !important; padding: 10px 0 2px !important; resize: none; }
 /* Element Plus 输入框边框走 box-shadow + 自带圆角/背景，这里全部抹平回到 element-ui 时代的裸文本域观感 */
 .ep-title .el-textarea__inner,

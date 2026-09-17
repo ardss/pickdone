@@ -114,6 +114,7 @@ export default {
       "securityPrivacySection": "安全与隐私",
       "securityLockLabel": "安全锁：",
       "lockPasswordLabel": "安全锁密码：",
+      "lockPasswordSaveFailed": "加密服务不可用，锁屏密码未保存",
       "lockNowBtn": "立即锁定",
       "feedbackAboutSection": "反馈与关于",
       "feedbackLabel": "反馈与建议：",
