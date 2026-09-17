@@ -83,7 +83,13 @@ export default {
     "pairingExpiresIn": "Expires in {n}s",
 
     "pairInputLabel": "Enter peer code",
-    "pairTargetLabel": "Pair with device",
+
+    "addPeerLabel": "Add device by IP",
+    "addPeerHostPh": "e.g. 192.168.1.64 (port defaults to 58471)",
+    "addPeerBtn": "Add",
+    "addPeerTip": "Use when auto-discovery is blocked by the router/firewall",
+    "addPeerOkMsg": "Device added",
+    "addPeerFailMsg": "Failed to add device",    "pairTargetLabel": "Pair with device",
     "pairInputPh": "6-digit code",
     "pairSubmitBtn": "Pair",
     "pairOkMsg": "Paired — syncing now",

@@ -221,9 +221,13 @@ function createLanSyncNode(opts) {
     /** Resolves with the bound port once the TCP server is listening. */
     whenListening: () => whenListening,
 
-    /** Inject a peer directly (tests / manual entry). */
+    /** Inject a peer directly (tests / manual entry / mDNS-free networks).
+     *  Returns the stored entry and resets backoff so the next round dials it immediately. */
     addPeer(peer) {
       rememberPeer(peer)
+      const id = peer && peer.deviceId
+      if (id) resetBackoff(id)
+      return peers.get(id)
     },
 
     /** Run one sync round against every known peer (sequentially). */

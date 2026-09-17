@@ -24,3 +24,6 @@ export function setSyncDeviceName (name) { return call('syncSetName', { name }) 
 
 /** Manual pairing: exchange the peer's 6-digit code for the shared pairing secret, then resync. */
 export function pairWithCode (code, deviceId) { return call('syncPairWithCode', { code, deviceId }) }
+
+/** Manual peer entry for mDNS-free networks (host may be an IPv4/IPv6/hostname). */
+export function addSyncPeer (host, port) { return call('syncAddPeer', { host, port }) }
