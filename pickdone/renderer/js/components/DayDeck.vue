@@ -32,12 +32,12 @@
                 @keydown.shift.delete.prevent.stop="del(t)">
               <span class="pd-day-deck__chk td-check" :class="{on: t.complete}" :style="chkStyleOf(t)" role="checkbox" :aria-checked="t.complete ? 'true' : 'false'"
                  :aria-label="$t('statsE.TodoItem.markComplete')"
-                 tabindex="0" @click.stop="toggle(t, $event)" @keydown.enter.prevent.stop="toggle(t, $event)".stop="toggle(t, $event)"><svg v-if="t.complete" class="td-check-svg" viewBox="0 0 12 12" aria-hidden="true"><polyline points="2,6.2 5,9 10,3" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" pathLength="1"/></svg></span>
+                 tabindex="0" @click.stop="toggle(t, $event)" @keydown.enter.prevent.stop="toggle(t, $event)"><svg v-if="t.complete" class="td-check-svg" viewBox="0 0 12 12" aria-hidden="true"><polyline points="2,6.2 5,9 10,3" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" pathLength="1"/></svg></span>
               <span class="pd-day-deck__overdue-date">{{ dayjs(t.dayStart).format('M/D') }}</span>
               <span class="pd-day-deck__title" role="button" tabindex="0"
                     :title="$t('statsE.TodayView.overdueSince', { d: dayjs(t.dayStart).format(FMT.cnDate) })"
                     :aria-label="$t('statsE.TodoItem.openEditor')"
-                    @click.stop="openEdit(t)" @keydown.enter.prevent.stop="openEdit(t)".stop="openEdit(t)">{{ t.taskContent || $t('statsE.TodayView.untitled') }}</span>
+                    @click.stop="openEdit(t)" @keydown.enter.prevent.stop="openEdit(t)">{{ t.taskContent || $t('statsE.TodayView.untitled') }}</span>
               <button class="pd-day-deck__tomato" :class="{ghost: t.complete}"
                       :tabindex="t.complete?-1:0"
                       :title="$t('statsE.TodoItem.togglePomodoroFocus')" :aria-label="$t('statsE.TodoItem.togglePomodoroFocus')"
@@ -58,10 +58,10 @@
               @keydown.shift.delete.prevent.stop="del(t)">
             <span class="pd-day-deck__chk td-check" :class="{on: t.complete}" :style="chkStyleOf(t)" role="checkbox" :aria-checked="t.complete ? 'true' : 'false'"
                :aria-label="$t('statsE.TodoItem.markComplete')"
-               tabindex="0" @click.stop="toggle(t, $event)" @keydown.enter.prevent.stop="toggle(t, $event)".stop="toggle(t, $event)"><svg v-if="t.complete" class="td-check-svg" viewBox="0 0 12 12" aria-hidden="true"><polyline points="2,6.2 5,9 10,3" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" pathLength="1"/></svg></span>
+               tabindex="0" @click.stop="toggle(t, $event)" @keydown.enter.prevent.stop="toggle(t, $event)"><svg v-if="t.complete" class="td-check-svg" viewBox="0 0 12 12" aria-hidden="true"><polyline points="2,6.2 5,9 10,3" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" pathLength="1"/></svg></span>
             <span class="pd-day-deck__title" role="button" tabindex="0"
                   :aria-label="$t('statsE.TodoItem.openEditor')"
-                  @click.stop="openEdit(t)" @keydown.enter.prevent.stop="openEdit(t)".stop="openEdit(t)">{{ t.taskContent || $t('statsE.TodayView.untitled') }}</span>
+                  @click.stop="openEdit(t)" @keydown.enter.prevent.stop="openEdit(t)">{{ t.taskContent || $t('statsE.TodayView.untitled') }}</span>
             <button class="pd-day-deck__tomato"
                     :class="{ ghost: t.complete, 'pd-is-active': $store.state.tomato.attachTodo && $store.state.tomato.attachTodo.taskId === t.taskId }"
                     :tabindex="t.complete?-1:0"

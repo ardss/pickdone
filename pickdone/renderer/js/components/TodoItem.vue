@@ -7,7 +7,7 @@
        tabindex="0"
        @dragstart.stop="onDragStart" @dragover.stop.prevent="onDragOver" @dragleave.stop="onDragLeave"
        @drop.stop="onDrop" @dragend="onDragEnd"
-       @click.stop="openEdit" @keydown.enter.prevent="openEdit"="openEdit" @contextmenu.stop.prevent="ctxMenu($event)"
+       @click.stop="openEdit" @keydown.enter.prevent="openEdit" @contextmenu.stop.prevent="ctxMenu($event)"
        @keydown.ctrl.up.prevent="keyboardMove(-1)" @keydown.ctrl.down.prevent="keyboardMove(1)"
        @keydown.shift.delete.prevent="quickDelete"
        :aria-keyshortcuts="todo.dayStart ? 'Control+ArrowUp Control+ArrowDown Shift+Delete' : 'Shift+Delete'">
