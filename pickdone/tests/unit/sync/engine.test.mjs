@@ -191,3 +191,34 @@ test('engine: ingestSegment accepts both the packed body string and the {body} e
   assert.equal(r.rejected, 0, 'envelope-object ingest must not reject rows')
   assert.equal(r.applied > 0, true, 'envelope-object ingest applies rows')
 })
+
+test('buildSegments(fromSeq) overrides the global cursor for per-peer pushes', () => {
+  // Live-drill regression (2026-09-18): per-peer watermarks need an explicit push start; a global
+  // cursor would skip rows a lagging peer still needs.
+  const storeA = makeStore('wm-a')
+  const ea = createEngine({ localStore: storeA, deviceId: 'wm-a' })
+  for (let i = 1; i <= 5; i++) storeA.append({ id: `w${i}`, title: 'row', updatedAt: i })
+  const full = ea.buildSegments()
+  assert.equal(full.toSeq, 5)
+  ea.markPushed(5)
+  const afterCursor = ea.buildSegments()
+  assert.equal(afterCursor.toSeq, 0, 'cursor says everything is pushed')
+  const since3 = ea.buildSegments(3)
+  assert.equal(since3.toSeq, 5, 'explicit fromSeq reaches past the cursor')
+  assert.ok(since3.segments.length >= 1, 'rows 4-5 are re-packed')
+})
+
+test('flush sheds rows off an oversize batch instead of failing the whole push', () => {
+  // Live-drill regression (2026-09-18): the per-row byte estimate undershot the packed size
+  // (263257 > 262144 at the receiving peer) and the whole round died on the segment gate.
+  const storeA = makeStore('shed-a')
+  const ea = createEngine({ localStore: storeA, deviceId: 'shed-a' })
+  // rows whose JSON-escaped size differs from their raw length to skew the estimate upward gap
+  const title = 'x'.repeat(30 * 1024) + 'ééé' // multibyte chars: estimate vs packed bytes diverge
+  for (let i = 0; i < 40; i++) storeA.append({ id: `s${i}`, title, updatedAt: i })
+  const { segments } = ea.buildSegments()
+  assert.ok(segments.length >= 2, 'large backlog splits')
+  for (const seg of segments) {
+    assert.ok(seg.body.length <= 256 * 1024, `segment within cap (got ${seg.body.length})`)
+  }
+})

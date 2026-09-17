@@ -60,8 +60,8 @@ export function createEngine({ localStore, deviceId, clock = monotonicClock() })
    * @returns {{ segments: Array<{body, fromSeq, toSeq}>, toSeq: number }}
    *   toSeq = highest included seq (0 when nothing to push).
    */
-  function buildSegments() {
-    const cursor = localStore.getCursor() ?? 0
+  function buildSegments(fromSeq) {
+    const cursor = Number.isInteger(fromSeq) ? fromSeq : (localStore.getCursor() ?? 0)
     const rows = localStore.getRowsSince(cursor)
     const segments = []
     // Pack budget: leave headroom for the segment header + JSON overhead;
@@ -70,24 +70,41 @@ export function createEngine({ localStore, deviceId, clock = monotonicClock() })
     const budget = MAX_SEGMENT_LEN - 512
     let batch = []
     let batchBytes = 0
-    let fromSeq = 0
+    let batchFromSeq = 0
     let toSeq = 0
     const flush = () => {
       if (!batch.length) return
-      segments.push({ body: pack(batch, { fromSeq, toSeq, deviceId }), fromSeq, toSeq })
-      batch = []
-      batchBytes = 0
+      // The byte estimate is advisory: JSON escaping and header overhead can push a packed batch a
+      // few hundred bytes over the cap (2026-09-18 drill: 263257 > 262144 - the receiving peer's
+      // segment gate rejected it and the whole round died). On SegmentTooLarge, shed rows off the
+      // tail into a carry-over batch and repack; only a single oversized row is a real error.
+      let carry = null
+      while (batch.length) {
+        try {
+          segments.push({ body: pack(batch, { fromSeq: batchFromSeq, toSeq, deviceId }), fromSeq: batchFromSeq, toSeq })
+          batch = carry ? [carry] : []
+          batchBytes = carry ? canonicalStringify(carry).length : 0
+          if (batch.length) batchFromSeq = carry.seq
+          carry = null
+          return
+        } catch (e) {
+          if (!(e && e.name === 'SegmentTooLarge') || batch.length < 2) throw e
+          carry = batch.pop()
+          toSeq = batch.length ? batch[batch.length - 1].seq : batchFromSeq
+        }
+      }
     }
     for (const row of rows) {
       const s = row.seq
       const rowBytes = canonicalStringify(row).length
       if (batch.length && batchBytes + rowBytes > budget) flush()
-      if (!batch.length) fromSeq = s
+      if (!batch.length) batchFromSeq = s
       batch.push(row)
       batchBytes += rowBytes
       toSeq = s
     }
     flush()
+    while (batch.length) flush()
     return { segments, toSeq }
   }
 
