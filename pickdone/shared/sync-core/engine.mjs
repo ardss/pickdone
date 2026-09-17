@@ -51,7 +51,9 @@ export function createEngine({ localStore, deviceId, clock = monotonicClock() })
   if (!deviceId) throw new Error('createEngine: deviceId is required')
 
   /**
-   * PUSH — pack all oplog rows since the persisted cursor into segments.
+   * PUSH — pack all oplog rows since the persisted cursor into segments. An explicit fromSeq
+   * (per-peer push watermark, see lan-sync) overrides the global cursor: dead/stale peers must not
+   * gate what a reachable peer receives, and a global cursor would skip rows a lagging peer needs.
    * Greedy size-bounded packing: rows accumulate until the next row would
    * overflow the 256KB cap, then the segment is flushed. Does NOT advance the
    * cursor; the transport calls markPushed(toSeq) after confirmed delivery.
