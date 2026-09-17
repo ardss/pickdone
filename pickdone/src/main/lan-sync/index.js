@@ -105,7 +105,9 @@ function createLanSyncNode(opts) {
         deviceId,
         authCode,
         protoVer: PROTO_VER,
-        timeoutMs: 5000,
+        // socket inactivity timeout: a peer answering a fresh-cursor round must build and stream a
+        // full-oplog segment batch, which takes far longer than a heartbeat-sized exchange
+        timeoutMs: 30000,
         onUnauthorized: (info) => em.emit('peer-unauthorized', info),
       })
       const finish = (err) => {
@@ -140,14 +142,17 @@ function createLanSyncNode(opts) {
             ingestSnapshot(msg.snapshot)
             client.send({ type: 'ack', applied: 1, rejected: 0 })
           } else if (msg.type === 'ack') {
-            // Peer confirmed our push; nothing further needed this round.
+            // Peer's ack is the round's success criterion: it confirms our push AND proves the
+            // peer finished building its own response. Timing the round out as "success" here
+            // would advance the push cursor over undelivered segments (2026-09-17 live drill).
+            finish(null)
           }
         } catch (err) {
           finish(err)
         }
       })
-      // Give the peer a moment to send everything, then close the round.
-      const done = setTimeout(() => finish(null), 1500)
+      // No ack before the deadline = the round failed (push cursor stays put; next round re-pushes).
+      const done = setTimeout(() => finish(new Error('round timed out waiting for peer ack')), 30000)
       done.unref?.()
     })
   }
