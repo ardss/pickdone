@@ -84,7 +84,12 @@ function createDiscovery() {
         upsertPeer(JSON.parse(buf.toString('utf8')))
       } catch { /* malformed broadcast */ }
     })
-    udp.on('error', () => { /* best-effort fallback */ })
+    udp.on('error', (err) => {
+      // Best-effort fallback, but never silent: an unlogged bind/send failure made the whole
+      // discovery channel look healthy while discovering nothing. Keep the socket alive (a later
+      // EADDRINUSE from a second instance must not kill the app); just leave a trace.
+      try { require('electron-log').warn(`[LanSync] UDP discovery fallback error${err && err.code ? ' (' + err.code + ')' : ''}:`, err && err.message) } catch { /* electron-log unavailable in pure-node contexts */ }
+    })
     udp.bind(FALLBACK_PORT, () => {
       udp.setBroadcast(true)
       udpTimer = setInterval(() => {

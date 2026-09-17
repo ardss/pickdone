@@ -1,0 +1,170 @@
+/**
+ * Regression tests for the lan-sync-bootstrap apply/flush layer (driven through the __test hook
+ * with a mock db.call surface):
+ *   - remote tombstone winners actually land (todo via the bulk buffer, setting/tomato via their
+ *     dedicated tombstone ops) — previously a tombstone winner matched no write branch and the
+ *     peer's deletion never landed;
+ *   - a local tombstone is not resurrected by an older remote live row (delete-wins must hold);
+ *   - flushPendingWrites never silently drops a buffered batch when a bulk op throws.
+ */
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { createRequire } from 'node:module'
+
+const require = createRequire(import.meta.url)
+const { __test } = require('../../../src/main/lan-sync-bootstrap.js')
+
+const EMPTY_TABLES = {
+  getAll: () => [],
+  settingsRowsAll: () => [],
+  tomatoAll: () => [],
+  getAllCategories: () => [],
+  planAll: () => [],
+  filterList: () => [],
+}
+
+/** Mock state: db records every call; table read ops come from `tables`, write ops are recorded. */
+function mockState(tables = {}, writeImpl = {}) {
+  const calls = []
+  const pendingWrites = { todos: [], settings: [], tomatoes: [] }
+  const db = {
+    calls,
+    call (op, params) {
+      calls.push({ op, params })
+      if (tables[op]) return tables[op](params)
+      if (writeImpl[op]) return writeImpl[op](params)
+      return null
+    },
+  }
+  const state = {
+    db,
+    pendingWrites,
+    applyCache: null,
+    engine: null,
+    node: null,
+    timers: [],
+    peerWatermarks: new Map(),
+    pendingToSeq: 0,
+    getWindowSenders: () => [],
+  }
+  return { state, calls, pendingWrites }
+}
+
+function fresh(tables, writeImpl) {
+  const m = mockState(tables, writeImpl)
+  __test.setState(m.state)
+  return m
+}
+
+test('bootstrap apply: remote todo tombstone winner lands as a buffered tombstone row', () => {
+  const m = fresh({ ...EMPTY_TABLES })
+  const ok = __test.applyRow({ entity: 'todo', id: 't1', seq: 7, ts: 100, deleted: true, deletedAt: 99, data: null })
+  assert.equal(ok, true, 'tombstone winner must report applied')
+  assert.equal(m.pendingWrites.todos.length, 1)
+  assert.equal(m.pendingWrites.todos[0].taskId, 't1')
+  assert.equal(m.pendingWrites.todos[0].delete, 1)
+  assert.equal(m.pendingWrites.todos[0].deletedAt, 99)
+})
+
+test('bootstrap apply: remote todo tombstone beats an older local live row (delete-wins)', () => {
+  // local live row updatedAt=50 vs tombstone deletedAt=99 -> delete must win and land
+  const m = fresh({ ...EMPTY_TABLES, getAll: () => [{ taskId: 't1', updateTime: 50, delete: false, deletedAt: 0 }] })
+  const ok = __test.applyRow({ entity: 'todo', id: 't1', seq: 7, ts: 100, deleted: true, deletedAt: 99, data: null })
+  assert.equal(ok, true)
+  assert.equal(m.pendingWrites.todos.length, 1)
+  assert.equal(m.pendingWrites.todos[0].delete, 1)
+})
+
+test('bootstrap apply: remote setting tombstone lands via settingsRowDelete, not a resurrecting put', () => {
+  // Regression: the tombstone arrives hydrated WITH data; the old code pushed it through
+  // settingsRowPut, whose putRow clears `deleted` — the deletion resurrected the row.
+  const m = fresh({
+    ...EMPTY_TABLES,
+    settingsRowsAll: () => [{ key: 'theme', value: 'dark', updatedAt: 50, deleted: false, deletedAt: 0 }],
+  })
+  const ok = __test.applyRow({ entity: 'setting', id: 'theme', seq: 8, ts: 100, updatedAt: 100, deleted: true, deletedAt: 100, data: { key: 'theme', value: 'dark' } })
+  assert.equal(ok, true)
+  const del = m.calls.find(c => c.op === 'settingsRowDelete')
+  assert.ok(del, 'settingsRowDelete must be called')
+  assert.deepEqual(del.params, { key: 'theme' })
+  assert.equal(m.pendingWrites.settings.length, 0, 'tombstone must not go through the put buffer')
+})
+
+test('bootstrap apply: local setting tombstone is not revived by an older remote live row', () => {
+  // Regression: localRow skipped tombstones, so merge saw "missing local" and the remote stale
+  // active row won, resurrecting the locally deleted setting.
+  const m = fresh({
+    ...EMPTY_TABLES,
+    settingsRowsAll: () => [{ key: 'theme', value: 'dark', updatedAt: 10, deleted: true, deletedAt: 100 }],
+  })
+  const ok = __test.applyRow({ entity: 'setting', id: 'theme', seq: 3, ts: 50, updatedAt: 50, deleted: false, deletedAt: 0, data: { key: 'theme', value: 'dark' } })
+  assert.equal(ok, false, 'local tombstone (deletedAt 100) must beat remote live (updatedAt 50)')
+  assert.equal(m.pendingWrites.settings.length, 0)
+  assert.equal(m.calls.find(c => c.op === 'settingsRowDelete'), undefined)
+})
+
+test('bootstrap apply: remote tomato tombstone lands via tomatoRemoveByIds', () => {
+  const m = fresh({ ...EMPTY_TABLES })
+  const ok = __test.applyRow({ entity: 'tomato', id: 'tm1', seq: 4, ts: 10, deleted: true, deletedAt: 9, data: null })
+  assert.equal(ok, true)
+  const del = m.calls.find(c => c.op === 'tomatoRemoveByIds')
+  assert.ok(del, 'tomatoRemoveByIds must be called')
+  assert.deepEqual(del.params, ['tm1'])
+  assert.equal(m.pendingWrites.tomatoes.length, 0)
+})
+
+test('bootstrap flush: a failing bulk op throws AND keeps the buffer (never silently drops the batch)', () => {
+  // Regression: flushPendingWrites cleared the buffers in a `finally`, so when upsertMany threw
+  // the engine had already counted the rows applied and the peer got acked — the batch was gone
+  // for good. Now the throw propagates (round fails, peer cursor stays, next round re-pushes).
+  let threw = false
+  const m = fresh(
+    { ...EMPTY_TABLES },
+    { upsertMany: () => { threw = true; throw new Error('disk full') } },
+  )
+  m.pendingWrites.todos.push({ taskId: 't1', taskContent: 'hello' })
+  m.pendingWrites.settings.push({ key: 'k', value: 'v' })
+  m.pendingWrites.tomatoes.push({ tomatoId: 'tm1' })
+  assert.throws(() => __test.flushPendingWrites(), /disk full/)
+  assert.equal(threw, true)
+  assert.equal(m.pendingWrites.todos.length, 1, 'todo batch must be preserved for re-push')
+  // Settings/tomatoes are flushed after todos; since upsertMany threw first they were never
+  // attempted, so they must ALSO still be buffered.
+  assert.equal(m.pendingWrites.settings.length, 1, 'settings batch must be preserved')
+  assert.equal(m.pendingWrites.tomatoes.length, 1, 'tomato batch must be preserved')
+})
+
+test('bootstrap apply: plan live-row edit is SKIPPED when local LWW age is unknown (cross-domain guard)', () => {
+  // planAll does not SELECT updatedAt, so the local age is unknowable. Treating it as 0 let every
+  // remote row win, making two devices clobber each other's plan edits every round. Conservative
+  // fix: refuse the live-row write; only tombstones land.
+  const m = fresh({ ...EMPTY_TABLES, planAll: () => [{ id: 'p1', taskId: 't1', day: '2026-09-18', mm: '09:00' }] })
+  const ok = __test.applyRow({ entity: 'plan', id: 'p1', seq: 9, ts: 200, updatedAt: 200, deleted: false, deletedAt: 0, data: { id: 'p1', taskId: 't1', day: '2026-09-19', mm: '10:00' } })
+  assert.equal(ok, false, 'live plan write must be refused when local age is unknown')
+  assert.equal(m.calls.find(c => c.op === 'planAddMany'), undefined)
+})
+
+test('bootstrap apply: plan TOMBSTONE still lands through the cross-domain guard', () => {
+  const m = fresh({ ...EMPTY_TABLES, planAll: () => [{ id: 'p1', taskId: 't1', day: '2026-09-18', mm: '09:00' }] })
+  const ok = __test.applyRow({ entity: 'plan', id: 'p1', seq: 9, ts: 200, deleted: true, deletedAt: 200, data: null })
+  assert.equal(ok, true, 'tombstone must land even when local age is unknown')
+  const del = m.calls.find(c => c.op === 'planRemoveIds')
+  assert.ok(del, 'planRemoveIds must be called')
+  assert.deepEqual(del.params, ['p1'])
+})
+
+test('bootstrap apply: filter live-row edit is SKIPPED when local LWW age is unknown', () => {
+  const m = fresh({ ...EMPTY_TABLES, filterList: () => [{ id: '5', name: 'work', conds: {}, sort: 0 }] })
+  const ok = __test.applyRow({ entity: 'filter', id: '5', seq: 9, ts: 200, updatedAt: 200, deleted: false, deletedAt: 0, data: { id: 5, name: 'renamed', conds: {}, sort: 0 } })
+  assert.equal(ok, false)
+  assert.equal(m.calls.find(c => c.op === 'filterUpsert'), undefined)
+})
+
+test('bootstrap flush: a fully committed buffer is cleared', () => {
+  const m = fresh({ ...EMPTY_TABLES })
+  m.pendingWrites.todos.push({ taskId: 't1', taskContent: 'hello' })
+  m.pendingWrites.settings.push({ key: 'k', value: 'v' })
+  __test.flushPendingWrites()
+  assert.equal(m.pendingWrites.todos.length, 0)
+  assert.equal(m.pendingWrites.settings.length, 0)
+})

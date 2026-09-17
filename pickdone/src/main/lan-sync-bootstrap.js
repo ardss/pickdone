@@ -202,19 +202,31 @@ function applyRowInner (incoming) {
   } else if (entity === 'setting') {
     if (String(incoming.id).startsWith('sync.')) return false
     const r = cache.setting(incoming.id)
-    if (r && !r.deleted) localRow = { updatedAt: r.updatedAt, deleted: false, deletedAt: 0, data: { key: r.key, value: r.value } }
+    // settingsRowsAll (deliberately) includes tombstones: a LOCAL tombstone must take part in the
+    // merge as a real row, otherwise an older remote live row wins LWW against "missing" and
+    // resurrects what the user deleted here (delete-wins never gets a chance to hold).
+    if (r) localRow = { updatedAt: r.updatedAt, deleted: !!r.deleted, deletedAt: r.deletedAt || 0, data: { key: r.key, value: r.value } }
   } else if (entity === 'tomato') {
     const r = cache.tomato(incoming.id)
+    // tomatoAll filters deleted=0 (db.js), so a local tomato tombstone reads as "absent" here;
+    // localRow stays null and the incoming row (including its tombstone) wins and is landed via
+    // the tomatoRemoveByIds branch below — the tombstone still takes effect, idempotently.
     if (r) localRow = { updatedAt: r.updatedAt || 0, deleted: false, deletedAt: 0, data: r }
   } else if (entity === 'category') {
     const c = cache.category(incoming.id)
     if (c) localRow = { updatedAt: c.updatedAt || 0, deleted: false, deletedAt: 0, data: c }
   } else if (entity === 'plan') {
+    // planAll/filterList do not SELECT updatedAt (db.js - outside this fix file scope), so the
+    // local LWW age is UNKNOWN, not 0. An honest LWW is impossible across that domain: treating
+    // unknown as 0 makes every remote row (ts > 0) win, so two devices ping-pong plan/filter
+    // edits every round, each clobbering the other newer state. ageUnknown rows are therefore
+    // SKIPPED for live-row writes (conservative); tombstones still land (deletion propagation is
+    // strictly safer than a divergent resurrect).
     const c = cache.plan(incoming.id)
-    if (c) localRow = { updatedAt: 0, deleted: false, deletedAt: 0, data: c }
+    if (c) localRow = { updatedAt: 0, deleted: false, deletedAt: 0, ageUnknown: true, data: c }
   } else if (entity === 'filter') {
     const f = cache.filter(incoming.id)
-    if (f) localRow = { updatedAt: 0, deleted: false, deletedAt: 0, data: f }
+    if (f) localRow = { updatedAt: 0, deleted: false, deletedAt: 0, ageUnknown: true, data: f }
   }
   if (!incoming.deleted && !incoming.data) return false // payload-less pointer, nothing to merge
   // Merge rules come from sync-core only (adapter boundary). Todos/chips/ledger have dedicated
@@ -232,19 +244,45 @@ function applyRowInner (incoming) {
   // Todos/settings/tomato go through the per-segment write buffer: a first sync applies thousands of
   // rows and one transaction commit per row (~14ms each measured 2026-09-17) starves the round past
   // any sane budget, while the bulk ops commit in one transaction (upsertMany 3000 rows = ~110ms).
-  if (entity === 'todo' && winner.data) {
+  if (entity === 'todo') {
+    if (winner.deleted && !winner.data) {
+      // Remote tombstone winner: without this branch no write fired and the peer's deletion NEVER
+      // landed here (every branch required winner.data). Land it through the buffered bulk path —
+      // todoToRow normalizes `delete:1` into a deleted=1 tombstone row on upsertMany.
+      state.pendingWrites.todos.push({ taskId: incoming.id, delete: 1, deletedAt: winner.deletedAt || incoming.deletedAt || 0 })
+      return true
+    }
+    if (!winner.data) return false
     state.pendingWrites.todos.push({ ...winner.data, taskId: winner.data.taskId != null ? winner.data.taskId : incoming.id })
   } else if (entity === 'setting') {
+    if (winner.deleted) {
+      // Tombstone winner (delete-wins). settingsRowPut/putRow clears `deleted` on write, so pushing
+      // the (data-carrying) tombstone through the buffer would RESURRECT the row; land the
+      // deletion through the dedicated tombstone op instead. Direct sync call: deletes are rare
+      // and tiny, no bulk buffering needed.
+      state.db.call('settingsRowDelete', { key: incoming.id })
+      return true
+    }
+    if (!winner.data) return false
     state.pendingWrites.settings.push({ key: incoming.id, value: winner.data.value })
-  } else if (entity === 'tomato' && winner.data) {
+  } else if (entity === 'tomato') {
+    if (winner.deleted && !winner.data) {
+      // Tomato tombstone winner (hydrated from a pointer whose row is gone locally): land it via
+      // the tombstone op. Direct sync call, same reasoning as settingsRowDelete above.
+      state.db.call('tomatoRemoveByIds', [incoming.id])
+      return true
+    }
+    if (!winner.data) return false
     state.pendingWrites.tomatoes.push(winner.data)
   } else if (entity === 'category' && winner.data) {
     state.db.call('upsertCategory', { ...winner.data, id: winner.data.categoryId })
   } else if (entity === 'plan') {
     if (incoming.deleted) state.db.call('planRemoveIds', [incoming.id])
+    else if (localRow && localRow.ageUnknown) return false // cross-domain LWW: local age unknown, refuse to clobber
     else state.db.call('planAddMany', [winner.data])
   } else if (entity === 'filter') {
     if (incoming.deleted) state.db.call('filterDelete', Number(incoming.id))
+    else if (localRow && localRow.ageUnknown) return false // cross-domain LWW: local age unknown, refuse to clobber
     else state.db.call('filterUpsert', { ...winner.data, id: Number(incoming.id) })
   } else {
     return false
@@ -260,15 +298,32 @@ function applyRowInner (incoming) {
  */
 function flushPendingWrites () {
   const buf = state.pendingWrites
-  try {
-    if (buf.todos.length) state.db.call('upsertMany', buf.todos)
-    if (buf.settings.length) state.db.call('settingsRowPutMany', buf.settings)
-    if (buf.tomatoes.length) state.db.call('tomatoAppendMany', buf.tomatoes)
-  } finally {
-    buf.todos = []
-    buf.settings = []
-    buf.tomatoes = []
+  if (buf.todos.length) state.db.call('upsertMany', buf.todos)
+  if (buf.settings.length) state.db.call('settingsRowPutMany', buf.settings)
+  if (buf.tomatoes.length) state.db.call('tomatoAppendMany', buf.tomatoes)
+  // Clear ONLY after every bulk op committed. A throw here must propagate to the round: the engine
+  // has already recorded the rows applied and the peer will be acked, so silently dropping the
+  // buffer (the old `finally` clear) lost those rows forever. Letting the exception escape fails
+  // the round, the peer's cursor stays put, and the next round re-pushes (idempotent, §4.1).
+  buf.todos = []
+  buf.settings = []
+  buf.tomatoes = []
+}
+
+/**
+ * Local max oplog seq — reported to peers as `ack.appliedToSeq` so their per-peer push watermarks
+ * can advance and rounds ship deltas instead of re-pushing the full backlog every time.
+ * syncOplogSince is ascending-only with a clamped limit, so page forward; the ring buffer keeps
+ * ~10k rows, so this is one query in practice (two at most right after a trim boundary).
+ */
+function readMaxOplogSeq () {
+  let since = 0
+  for (let i = 0; i < 10000; i++) {
+    const rows = state.db.call('syncOplogSince', { sinceSeq: since, limit: 10000 }) || []
+    if (rows.length < 10000) return rows.length ? rows[rows.length - 1].seq : since
+    since = rows[rows.length - 1].seq
   }
+  return since
 }
 
 /* ---------- engine + node lifecycle (lazy; only while enabled) ---------- */
@@ -343,6 +398,7 @@ function startSync () {
       } finally { state.applyCache = null }
     },
     ingestSnapshot: body => state.engine.applySnapshot(body),
+    getMaxSeq: () => readMaxOplogSeq(),
     buildSegments: buildSegmentsWrapped,
     buildSnapshot: () => state.engine.buildSnapshot()
   })
@@ -469,3 +525,11 @@ function initLanSync ({ db, getWindowSenders }) {
 }
 
 module.exports = { initLanSync }
+
+// Test-only hooks: applyRowInner/flushPendingWrites operate on the module-level `state` singleton;
+// unit tests swap in a mock state via __test.setState. Production paths never touch __test.
+module.exports.__test = {
+  setState: s => { state = s },
+  applyRow: row => applyRowSafe(row),
+  flushPendingWrites,
+}
