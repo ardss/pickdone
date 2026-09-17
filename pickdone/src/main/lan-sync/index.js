@@ -95,9 +95,10 @@ function createLanSyncNode(opts) {
     retryTimers.set(peerId, t)
   }
 
-  /** Run one exchange with a peer: push my segments, pull theirs, ack. */
+  /** Run one exchange with a peer: push my segments, pull theirs, ack. Resolves true only when
+ *  the peer acked — the caller must not advance the push cursor over an unconfirmed round. */
   function syncWithPeer(peer) {
-    if (stopped) return Promise.resolve()
+    if (stopped) return Promise.resolve(false)
     roundsRunning += 1
     return new Promise((resolve) => {
       let settled = false
@@ -107,7 +108,7 @@ function createLanSyncNode(opts) {
         protoVer: PROTO_VER,
         // socket inactivity timeout: a peer answering a fresh-cursor round must build and stream a
         // full-oplog segment batch, which takes far longer than a heartbeat-sized exchange
-        timeoutMs: 30000,
+        timeoutMs: 120000,
         onUnauthorized: (info) => em.emit('peer-unauthorized', info),
       })
       const finish = (err) => {
@@ -119,13 +120,14 @@ function createLanSyncNode(opts) {
           lastError = `${peer.deviceId}: ${err.message}`
           em.emit('round-error', { peer: peer.deviceId, error: err })
           scheduleRetry(peer.deviceId)
+          resolve(false)
         } else {
           lastRoundAt = Date.now()
           lastError = null
           resetBackoff(peer.deviceId)
           em.emit('round-done', { peer: peer.deviceId })
+          resolve(true)
         }
-        resolve()
       }
       client.on('error', (err) => finish(err))
       client.on('rejected', () => finish(new Error('auth rejected by peer')))
@@ -152,7 +154,9 @@ function createLanSyncNode(opts) {
         }
       })
       // No ack before the deadline = the round failed (push cursor stays put; next round re-pushes).
-      const done = setTimeout(() => finish(new Error('round timed out waiting for peer ack')), 30000)
+      // The budget covers a FIRST sync between two real devices: tens of thousands of oplog rows
+      // ingested on both sides before either ack can be produced (2026-09-17 drill measured >30s).
+      const done = setTimeout(() => finish(new Error('round timed out waiting for peer ack')), 120000)
       done.unref?.()
     })
   }
@@ -238,10 +242,15 @@ function createLanSyncNode(opts) {
     /** Run one sync round against every known peer (sequentially). */
     async startSyncRound() {
       const targets = Array.from(peers.values())
+      let confirmed = 0
       for (const peer of targets) {
-        if (!stopped) await syncWithPeer(peer)
+        if (stopped) break
+        if (await syncWithPeer(peer)) confirmed += 1
       }
-      return { peers: targets.length, lastRoundAt }
+      // confirmed === targets.length is the only safe condition for the caller to markPushed:
+      // advancing the cursor because SOME peer answered used to drop the backlog of the peers
+      // that had not confirmed yet (silent data loss, 2026-09-17 drill)
+      return { peers: targets.length, confirmed, allConfirmed: confirmed === targets.length, lastRoundAt }
     },
 
     getStatus() {
