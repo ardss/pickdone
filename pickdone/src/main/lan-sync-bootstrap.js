@@ -46,7 +46,7 @@ const ROUND_INTERVAL_MS = 5 * 60 * 1000
 // in P3a, so its cadence is UX, not security; no mid-session surprise refresh)
 const PAIRING_CODE_TTL_MS = 10 * 60 * 1000
 
-let state = null // { db, getWindowSenders, node, engine, timers }
+let state = null // { db, getWindowSenders, node, engine, timers, pendingWrites }
 
 /* ---------- settings_rows helpers (deleted rows treated as absent) ---------- */
 function settingGet (key) {
@@ -165,7 +165,10 @@ function createLocalStoreAdapter () {
       return out
     },
     /** Fresh-device path. P3a: merge-apply (non-destructive) — see header scope cuts. */
-    replaceAll (rows) { for (const r of rows || []) applyRowSafe(r) }
+    replaceAll (rows) {
+      for (const r of rows || []) applyRowSafe(r)
+      flushPendingWrites()
+    }
   }
 }
 
@@ -223,13 +226,16 @@ function applyRowInner (incoming) {
     log.warn('[LanSync] conflict on', entity, incoming.id, '— local copy superseded (conflict-copy UI deferred)')
   }
   // Write the winner through the regular write ops (re-captured into the local oplog, which is what
-  // propagates the acknowledged state back to the peer — idempotent under the same merge rules)
+  // propagates the acknowledged state back to the peer — idempotent under the same merge rules).
+  // Todos/settings/tomato go through the per-segment write buffer: a first sync applies thousands of
+  // rows and one transaction commit per row (~14ms each measured 2026-09-17) starves the round past
+  // any sane budget, while the bulk ops commit in one transaction (upsertMany 3000 rows = ~110ms).
   if (entity === 'todo' && winner.data) {
-    state.db.call('upsert', { ...winner.data, taskId: winner.data.taskId != null ? winner.data.taskId : incoming.id })
+    state.pendingWrites.todos.push({ ...winner.data, taskId: winner.data.taskId != null ? winner.data.taskId : incoming.id })
   } else if (entity === 'setting') {
-    state.db.call('settingsRowPut', { key: incoming.id, value: winner.data.value })
+    state.pendingWrites.settings.push({ key: incoming.id, value: winner.data.value })
   } else if (entity === 'tomato' && winner.data) {
-    state.db.call('tomatoAppendMany', [winner.data])
+    state.pendingWrites.tomatoes.push(winner.data)
   } else if (entity === 'category' && winner.data) {
     state.db.call('upsertCategory', { ...winner.data, id: winner.data.categoryId })
   } else if (entity === 'plan') {
@@ -244,6 +250,25 @@ function applyRowInner (incoming) {
   return true
 }
 
+/**
+ * Flush the buffered bulk writes. Called after every ingested segment, after buildSnapshot-driven
+ * replaceAll, and before the transport sends its round ack — a peer's push cursor may only advance
+ * over rows that are already committed here (crash mid-buffer = rows unapplied, cursor stays, the
+ * next round re-pushes; same crash semantics as commitSyncBatch §4.1).
+ */
+function flushPendingWrites () {
+  const buf = state.pendingWrites
+  try {
+    if (buf.todos.length) state.db.call('upsertMany', buf.todos)
+    if (buf.settings.length) state.db.call('settingsRowPutMany', buf.settings)
+    if (buf.tomatoes.length) state.db.call('tomatoAppendMany', buf.tomatoes)
+  } finally {
+    buf.todos = []
+    buf.settings = []
+    buf.tomatoes = []
+  }
+}
+
 /* ---------- engine + node lifecycle (lazy; only while enabled) ---------- */
 function buildSegmentsWrapped () {
   const r = state.engine.buildSegments()
@@ -255,7 +280,10 @@ async function runRound () {
   if (!state || !state.node) return null
   try {
     const r = await state.node.startSyncRound()
-    if (state.pendingToSeq > 0) state.engine.markPushed(state.pendingToSeq) // crash-safe: re-push is idempotent (§4.1)
+    // Advance the push cursor ONLY when every peer confirmed the round (ack implies our segments
+    // are committed peer-side). Marking pushed after a partial/failed round silently dropped the
+    // backlog from all future pushes (2026-09-17 drill: cursor jumped while peers had nothing).
+    if (r && r.allConfirmed && state.pendingToSeq > 0) state.engine.markPushed(state.pendingToSeq) // crash-safe: re-push is idempotent (§4.1)
     notifyRenderers('round-done')
     return r
   } catch (e) { log.warn('[LanSync] round failed:', e.message); return null }
@@ -283,7 +311,11 @@ function startSync () {
     pairingSecret: settingGet(K_PAIRING_SECRET),
     verifyPairingCode: code => !!state.pairingCode && state.pairingCode.expiresAt > Date.now() &&
       (() => { const a = Buffer.from(String(code)); const b = Buffer.from(String(state.pairingCode.code)); return a.length === b.length && timingSafeEqual(a, b) })(),
-    ingestSegment: body => state.engine.ingestSegment(body),
+    ingestSegment: body => {
+      const r = state.engine.ingestSegment(body)
+      flushPendingWrites()
+      return r
+    },
     ingestSnapshot: body => state.engine.applySnapshot(body),
     buildSegments: buildSegmentsWrapped,
     buildSnapshot: () => state.engine.buildSnapshot()
@@ -402,7 +434,7 @@ function registerOps () {
 
 /** Called once from src/main/index.js after db init. Never auto-enables sync. */
 function initLanSync ({ db, getWindowSenders }) {
-  state = { db, getWindowSenders, node: null, engine: null, timers: [], pendingToSeq: 0 }
+  state = { db, getWindowSenders, node: null, engine: null, timers: [], pendingToSeq: 0, pendingWrites: { todos: [], settings: [], tomatoes: [] } }
   registerOps()
   try {
     if (settingGet(K_ENABLED) === true) startSync()
