@@ -107,7 +107,7 @@ function createLanSyncNode(opts) {
         protoVer: PROTO_VER,
         // socket inactivity timeout: a peer answering a fresh-cursor round must build and stream a
         // full-oplog segment batch, which takes far longer than a heartbeat-sized exchange
-        timeoutMs: 30000,
+        timeoutMs: 120000,
         onUnauthorized: (info) => em.emit('peer-unauthorized', info),
       })
       const finish = (err) => {
@@ -152,7 +152,9 @@ function createLanSyncNode(opts) {
         }
       })
       // No ack before the deadline = the round failed (push cursor stays put; next round re-pushes).
-      const done = setTimeout(() => finish(new Error('round timed out waiting for peer ack')), 30000)
+      // The budget covers a FIRST sync between two real devices: tens of thousands of oplog rows
+      // ingested on both sides before either ack can be produced (2026-09-17 drill measured >30s).
+      const done = setTimeout(() => finish(new Error('round timed out waiting for peer ack')), 120000)
       done.unref?.()
     })
   }
