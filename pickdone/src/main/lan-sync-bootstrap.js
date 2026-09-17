@@ -74,39 +74,63 @@ function ensureIdentity () {
 /* ---------- localStore adapter (shared/sync-core engine.mjs contract) ---------- */
 const SYNCABLE_ENTITIES = new Set(['todo', 'setting', 'tomato', 'category', 'plan', 'filter'])
 
+/**
+ * Per-hydration-pass entity caches. The first buildSegments after a fresh cursor re-hydrates the
+ * whole oplog (thousands of pointers); without these caches every pointer re-scanned a full entity
+ * list (O(n²)) and the peer's round response starved past the transport's round timer, so the
+ * cursor never advanced and every later round rebuilt the same backlog (2026-09-17 live drill).
+ * A cache instance is valid for ONE getRowsSince call: rows applied between calls must re-read.
+ */
+function createHydrationCache () {
+  const caches = {}
+  const load = (key, op, idOf) => {
+    if (!caches[key]) caches[key] = new Map((state.db.call(op, {}) || []).map(r => [idOf(r), r]))
+    return caches[key]
+  }
+  return {
+    todo: id => load('todo', 'getAll', r => String(r.taskId)).get(String(id)),
+    setting: key => load('setting', 'settingsRowsAll', r => r.key).get(key),
+    tomato: id => load('tomato', 'tomatoAll', r => String(r.tomatoId)).get(String(id)),
+    category: id => load('category', 'getAllCategories', r => String(r.categoryId)).get(String(id)),
+    plan: id => load('plan', 'planAll', r => String(r.id)).get(String(id)),
+    filter: id => load('filter', 'filterList', r => String(r.id)).get(String(id)),
+  }
+}
+
 /** Hydrate one oplog pointer row into a merge-ready payload row (null = not syncable). */
-function hydrateRow (ptr) {
+function hydrateRow (ptr, cache) {
   if (!SYNCABLE_ENTITIES.has(ptr.entity)) return null
+  const c = cache || createHydrationCache()
   const base = { seq: ptr.seq, entity: ptr.entity, id: ptr.entityId, ts: ptr.ts }
   try {
     if (ptr.entity === 'todo') {
-      const t = state.db.call('getById', ptr.entityId)
+      const t = c.todo(ptr.entityId)
       if (!t) return { ...base, deleted: true, deletedAt: ptr.ts, data: null }
       return { ...base, updatedAt: t.updateTime || ptr.ts, deleted: !!t.delete, deletedAt: t.deletedAt || 0, data: t }
     }
     if (ptr.entity === 'setting') {
       if (String(ptr.entityId).startsWith('sync.')) return null // identity namespace stays local
-      const r = state.db.call('settingsRowsAll', {}).find(x => x.key === ptr.entityId)
+      const r = c.setting(ptr.entityId)
       if (!r) return null
       return { ...base, updatedAt: r.updatedAt, deleted: !!r.deleted, deletedAt: r.deletedAt || 0, data: { key: r.key, value: r.value } }
     }
     if (ptr.entity === 'tomato') {
-      const r = state.db.call('tomatoAll', {}).find(x => x.tomatoId === ptr.entityId)
+      const r = c.tomato(ptr.entityId)
       if (!r) return { ...base, deleted: true, deletedAt: ptr.ts, data: null }
       return { ...base, updatedAt: r.updatedAt || ptr.ts, deleted: false, deletedAt: 0, data: r }
     }
     if (ptr.entity === 'category') {
-      const c = state.db.call('getAllCategories', {}).find(x => String(x.categoryId) === String(ptr.entityId))
-      if (!c) return { ...base, deleted: true, deletedAt: ptr.ts, data: null } // tombstone hydration gap (see header)
-      return { ...base, updatedAt: c.updatedAt || ptr.ts, deleted: false, deletedAt: 0, data: c }
+      const cat = c.category(ptr.entityId)
+      if (!cat) return { ...base, deleted: true, deletedAt: ptr.ts, data: null } // tombstone hydration gap (see header)
+      return { ...base, updatedAt: cat.updatedAt || ptr.ts, deleted: false, deletedAt: 0, data: cat }
     }
     if (ptr.entity === 'plan') {
-      const c = state.db.call('planAll', {}).find(x => x.id === ptr.entityId)
-      if (!c) return { ...base, deleted: true, deletedAt: ptr.ts, data: null }
-      return { ...base, updatedAt: ptr.ts, deleted: false, deletedAt: 0, data: c }
+      const p = c.plan(ptr.entityId)
+      if (!p) return { ...base, deleted: true, deletedAt: ptr.ts, data: null }
+      return { ...base, updatedAt: ptr.ts, deleted: false, deletedAt: 0, data: p }
     }
     if (ptr.entity === 'filter') {
-      const f = state.db.call('filterList', {}).find(x => String(x.id) === String(ptr.entityId))
+      const f = c.filter(ptr.entityId)
       if (!f) return { ...base, deleted: true, deletedAt: ptr.ts, data: null }
       return { ...base, updatedAt: ptr.ts, deleted: false, deletedAt: 0, data: f }
     }
@@ -118,7 +142,8 @@ function createLocalStoreAdapter () {
   return {
     getRowsSince (seq) {
       const ptrs = state.db.call('syncOplogSince', { sinceSeq: seq, limit: 10000 }) || []
-      return ptrs.map(hydrateRow).filter(Boolean)
+      const cache = createHydrationCache()
+      return ptrs.map(ptr => hydrateRow(ptr, cache)).filter(Boolean)
     },
     getCursor () { const v = state.db.call('getMeta', CURSOR_META_KEY); const n = Number(v); return Number.isFinite(n) && n > 0 ? n : 0 },
     setCursor (seq) { state.db.call('setMeta', [CURSOR_META_KEY, String(seq)]) },
