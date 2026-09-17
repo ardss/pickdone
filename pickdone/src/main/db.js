@@ -843,7 +843,7 @@ syncOplogSince: ({ sinceSeq = 0, limit = 2000 } = {}) => db.prepare('SELECT seq,
     }
     seedAll('todo', 'SELECT id FROM todos WHERE deleted = 0', 'id')
     seedAll('setting', "SELECT key FROM settings_rows WHERE deleted = 0 AND key NOT LIKE 'sync.%'", 'key')
-    seedAll('category', 'SELECT categoryId FROM categories', 'categoryId')
+    seedAll('category', 'SELECT id FROM categories', 'id')
     seedAll('plan', 'SELECT id FROM plan_chips', 'id')
     seedAll('filter', 'SELECT id FROM filters', 'id')
     seedAll('tomato', 'SELECT tomatoId FROM tomato_records', 'tomatoId')
