@@ -7,7 +7,7 @@
         <div class="modal__body">
           <div class="rm-row">
             <span class="rl">{{ $t('statsJ.FilterModal.name') }}</span>
-            <el-input v-model="name" size="small" style="width:240px" :placeholder="$t('statsJ.FilterModal.namePh')" maxlength="30" @keyup.enter="save"/>
+            <el-input v-model="name" size="small" style="width:240px" :placeholder="$t('statsJ.FilterModal.namePh')" maxlength="30" @keydown.enter="e => { if (e.isComposing || e.keyCode === 229) return; save() }"/>
           </div>
           <div class="rm-row">
             <span class="rl">{{ $t('statsJ.FilterModal.cat') }}</span>
@@ -68,14 +68,20 @@ export default {
     async save () {
       const name = String(this.name || '').trim()
       if (!name) { this.$message.warning(this.$t('statsJ.FilterModal.nameRequired')); return }
-      const id = await this.$store.dispatch('filters/save', {
-        id: this.filter && this.filter.id,
-        name,
-        conds: { catId: this.catId, priority: this.priority, dateMode: this.dateMode },
-        sort: (this.filter && this.filter.sort) || 0
-      })
-      this.$message.success(this.$t('statsJ.FilterModal.saved'))
-      this.$emit('saved', id)
+      try {
+        const id = await this.$store.dispatch('filters/save', {
+          id: this.filter && this.filter.id,
+          name,
+          conds: { catId: this.catId, priority: this.priority, dateMode: this.dateMode },
+          sort: (this.filter && this.filter.sort) || 0
+        })
+        this.$message.success(this.$t('statsJ.FilterModal.saved'))
+        this.$emit('saved', id)
+      } catch (e) {
+        // 保存失败保持弹窗打开，让用户可以重试而不是丢输入
+        console.error('[FilterModal] save failed', e)
+        this.$message.error(this.$t('statsJ.FilterModal.saveFailed'))
+      }
     },
     close () { this.$emit('close') }
   },
