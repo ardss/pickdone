@@ -333,9 +333,8 @@ function initInner (userDataPath) {
     { v: 6, fn: d => syncSchema.migrateV6(d) },
   ]
   let ver = getVer()
-  // Failed migration must abort the loop (not `continue`): advancing past a failed migration would stamp the
-  // higher version and the failed migration would never be retried — breaking the retry contract the v3
-  // migration's error comment promises. Stop here; version stays put and the next launch re-runs from it.
+  // Failed migration must abort the loop (not `continue`): advancing would stamp the higher version so
+  // the failed migration never retries — breaking the v3 retry contract. Stop; next launch re-runs it.
   for (const m of MIGRATIONS) { if (m.v > ver) { if (m.fn(db) === false) break; ver = m.v } }
   if (ver !== getVer()) setVer(ver)
   // SCHEMA/MIGRATIONS dual-manifest decoupling backstop: if a future SCHEMA column addition is forgotten in MIGRATIONS, CREATE TABLE IF NOT EXISTS is
@@ -827,6 +826,7 @@ syncOplogSince: ({ sinceSeq = 0, limit = 2000 } = {}) => db.prepare('SELECT seq,
   syncGetStatus: p => require('./db-sync-ops').dispatch('syncGetStatus', p),
   syncGetPairingCode: p => require('./db-sync-ops').dispatch('syncGetPairingCode', p),
   syncSetName: p => require('./db-sync-ops').dispatch('syncSetName', p),
+  syncPairWithCode: p => require('./db-sync-ops').dispatch('syncPairWithCode', p),
 }
 
 /** 账本变更钩子:任何进程(App 主进程 IPC / CLI 直连)经 call() 落账本写 op 后触发。

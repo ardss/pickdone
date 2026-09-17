@@ -27,6 +27,15 @@
           <button class="mini" :disabled="busy" @click="showPairing">{{ pairingCode || $t('sync.pairingBtn') }}</button>
           <span class="tip" v-if="pairingCode">{{ $t('sync.pairingExpiresIn', { n: pairingLeftSec }) }}</span>
         </div></div>
+      <div class="form-item" v-if="enabled"><span class="form-item__label">{{ $t('sync.pairInputLabel') }}</span>
+        <div class="form-item__control">
+          <select v-if="peers.length" class="ctl-sm" v-model="pairTarget" :aria-label="$t('sync.pairTargetLabel')">
+            <option v-for="p in peers" :key="p.deviceId" :value="p.deviceId">{{ p.name }}</option>
+          </select>
+          <el-input size="small" class="ctl-sm" maxlength="6" :placeholder="$t('sync.pairInputPh')"
+                    :aria-label="$t('sync.pairInputLabel')" v-model="pairDraft"/>
+          <button class="mini" :disabled="busy || !pairDraftOk" @click="submitPairing">{{ $t('sync.pairSubmitBtn') }}</button>
+        </div></div>
     </div>
   </div>
 </template>
@@ -34,7 +43,7 @@
 <script lang="ts">
 /** LAN sync settings tab: master toggle (off by default), device name, status line, pairing code.
  *  All state lives in settings_rows (main-process DB authority) — no localStorage writes here. */
-import { getSyncSettings, getSyncStatus, setSyncEnabled, getPairingCode, setSyncDeviceName } from '../../utils/lanSync.js'
+import { getSyncSettings, getSyncStatus, setSyncEnabled, getPairingCode, setSyncDeviceName, pairWithCode } from '../../utils/lanSync.js'
 
 export default {
   name: 'SettingsSyncTab',
@@ -46,6 +55,8 @@ export default {
       nameDraft: '',
       busy: false,
       pairingCode: '',
+      pairDraft: '',
+      pairTarget: '',
       pairingExpiresAt: 0,
       pairingLeftSec: 0,
       _pairTimer: null
@@ -62,9 +73,20 @@ export default {
       parts.push(s.lastRoundAt ? this.$t('sync.lastRound', { time: this.fmt(s.lastRoundAt) }) : this.$t('sync.neverRan'))
       if (s.lastError) parts.push(this.$t('sync.errorPrefix', { msg: String(s.lastError).slice(0, 60) }))
       return parts.join(' · ')
-    }
+    },
+    peers () { return (this.status && this.status.peers) || [] },
+    pairDraftOk () { return /^\d{6}$/.test(String(this.pairDraft || '')) }
   },
   methods: {
+    async submitPairing () {
+      this.busy = true
+      try {
+        await pairWithCode(this.pairDraft, this.pairTarget || (this.peers[0] && this.peers[0].deviceId))
+        this.$message.success(this.$t('sync.pairOkMsg'))
+        this.pairDraft = ''
+        this.status = await getSyncStatus()
+      } catch (e) { this.$message.error(this.$t('sync.pairFailMsg')) } finally { this.busy = false }
+    },
     fmt (ts) {
       try { return window.dayjs ? window.dayjs(ts).format('HH:mm') : new Date(ts).toLocaleTimeString() } catch (e) { return '' }
     },

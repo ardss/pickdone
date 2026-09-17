@@ -21,3 +21,6 @@ export function getPairingCode () { return call('syncGetPairingCode') }
 
 /** Rename this device (re-advertises via mDNS when the node is running). */
 export function setSyncDeviceName (name) { return call('syncSetName', { name }) }
+
+/** Manual pairing: exchange the peer's 6-digit code for the shared pairing secret, then resync. */
+export function pairWithCode (code, deviceId) { return call('syncPairWithCode', { code, deviceId }) }
