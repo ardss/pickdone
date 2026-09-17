@@ -224,16 +224,16 @@ html[data-theme="dark"] .qa-inputwrap:focus-within { background: var(--active-bg
   transition: background var(--dur-fast), color var(--dur-fast);
 }
 .todo-options__item:hover { background: var(--hover-bg); }
-.todo-options__item:active { background: #e1e0e1; }
+.todo-options__item:active { background: var(--hover-bg); }
 .todo-options__item--active { background: var(--brand); color: #fff; }
-.todo-options__item--active:hover { background: #11a1a2; }
+.todo-options__item--active:hover { background: var(--brand-hover); }
 .qa-bar { position: relative; display: flex; align-items: flex-start; gap: 8px; }
 /* 日历按钮壳：透明 el-date-picker 铺满按钮，点击即弹标准日历面板 */
 .qa-cal { position: absolute; top: 0; right: 0; bottom: 0; width: 40px; z-index: 2; cursor: pointer; }
 .qa-cal .qa-cal-picker.el-date-editor { position: absolute; top: 0; left: 0; width: 100%; height: 100%; opacity: 0; }
 .qa-cal .qa-cal-picker .el-input__inner { width: 100%; height: 100%; cursor: pointer; }
 .qa-input { flex: 1; height: 46px; border: 0; background: none; padding: 0 16px; font-size: var(--fs-md); color: var(--text-1); border-radius: var(--radius-lg); }
-.qa-input::placeholder { color: #8a9099; }
+.qa-input::placeholder { color: var(--text-4); }
 .qa-date-chip {
   display: inline-flex; align-items: center; gap: var(--space-1); margin-right: 12px;
   color: var(--brand); font-size: var(--fs-sm); cursor: pointer; white-space: nowrap;
