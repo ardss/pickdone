@@ -39,6 +39,7 @@ const K_PAIRING_SECRET = 'sync.pairingSecret'
 const K_ENABLED = 'sync.enabled'
 const K_MANUAL_PEERS = 'sync.manualPeers' // [{host,port}] — survives restarts (node peers are memory-only)
 const CURSOR_META_KEY = 'sync.pushCursor' // persisted in meta (not settings_rows): per-device bookkeeping, no sync obligation
+const K_PEER_WATERMARKS = 'sync.peerWatermarks' // {deviceId: highestSeqThatPeerAcked} — per-peer push progress (survives restarts)
 const START_DELAY_MS = 10 * 1000
 const ROUND_INTERVAL_MS = 5 * 60 * 1000
 // Pairing code validity: issued on first request and stable for 10 minutes (the LAN transport
@@ -192,26 +193,27 @@ function applyRowSafe (incoming) {
 function applyRowInner (incoming) {
   if (!incoming || !SYNCABLE_ENTITIES.has(incoming.entity)) return false
   const entity = incoming.entity
-  // Locate the local counterpart for LWW comparison
+  // Locate the local counterpart for LWW comparison (cached: one entity-list read per ingest pass)
+  const cache = state.applyCache || createHydrationCache()
   let localRow = null
   if (entity === 'todo') {
-    const t = state.db.call('getById', incoming.id)
+    const t = cache.todo(incoming.id)
     if (t) localRow = { updatedAt: t.updateTime || 0, deleted: !!t.delete, deletedAt: t.deletedAt || 0, data: t }
   } else if (entity === 'setting') {
     if (String(incoming.id).startsWith('sync.')) return false
-    const r = state.db.call('settingsRowsAll', {}).find(x => x.key === incoming.id)
+    const r = cache.setting(incoming.id)
     if (r && !r.deleted) localRow = { updatedAt: r.updatedAt, deleted: false, deletedAt: 0, data: { key: r.key, value: r.value } }
   } else if (entity === 'tomato') {
-    const r = state.db.call('tomatoAll', {}).find(x => x.tomatoId === incoming.id)
+    const r = cache.tomato(incoming.id)
     if (r) localRow = { updatedAt: r.updatedAt || 0, deleted: false, deletedAt: 0, data: r }
   } else if (entity === 'category') {
-    const c = state.db.call('getAllCategories', {}).find(x => String(x.categoryId) === String(incoming.id))
+    const c = cache.category(incoming.id)
     if (c) localRow = { updatedAt: c.updatedAt || 0, deleted: false, deletedAt: 0, data: c }
   } else if (entity === 'plan') {
-    const c = state.db.call('planAll', {}).find(x => x.id === incoming.id)
+    const c = cache.plan(incoming.id)
     if (c) localRow = { updatedAt: 0, deleted: false, deletedAt: 0, data: c }
   } else if (entity === 'filter') {
-    const f = state.db.call('filterList', {}).find(x => String(x.id) === String(incoming.id))
+    const f = cache.filter(incoming.id)
     if (f) localRow = { updatedAt: 0, deleted: false, deletedAt: 0, data: f }
   }
   if (!incoming.deleted && !incoming.data) return false // payload-less pointer, nothing to merge
@@ -270,20 +272,30 @@ function flushPendingWrites () {
 }
 
 /* ---------- engine + node lifecycle (lazy; only while enabled) ---------- */
-function buildSegmentsWrapped () {
-  const r = state.engine.buildSegments()
+function buildSegmentsWrapped (sinceSeq) {
+  const r = state.engine.buildSegments(sinceSeq)
   state.pendingToSeq = r.toSeq
   return r.segments
+}
+
+/** Load persisted per-peer push watermarks into the live Map the node reads on every round. */
+function loadPeerWatermarks () {
+  try { return JSON.parse(settingGet(K_PEER_WATERMARKS) || '{}') || {} } catch { return {} }
+}
+
+function persistPeerWatermarks () {
+  try { settingPut(K_PEER_WATERMARKS, JSON.stringify(state.peerWatermarks.raw())) } catch (e) { log.warn('[LanSync] watermark persist failed:', e.message) }
 }
 
 async function runRound () {
   if (!state || !state.node) return null
   try {
     const r = await state.node.startSyncRound()
-    // Advance the push cursor ONLY when every peer confirmed the round (ack implies our segments
-    // are committed peer-side). Marking pushed after a partial/failed round silently dropped the
-    // backlog from all future pushes (2026-09-17 drill: cursor jumped while peers had nothing).
-    if (r && r.allConfirmed && state.pendingToSeq > 0) state.engine.markPushed(state.pendingToSeq) // crash-safe: re-push is idempotent (§4.1)
+    // Push progress is per-peer (the node records each peer's acked seq into state.peerWatermarks);
+    // persist the map so watermarks survive restarts. There is no global cursor advance: a dead or
+    // stale peer must never gate what a reachable peer receives, and each round only ships a
+    // peer's unconfirmed delta (crash between ack and persist = re-push, idempotent §4.1).
+    persistPeerWatermarks()
     notifyRenderers('round-done')
     return r
   } catch (e) { log.warn('[LanSync] round failed:', e.message); return null }
@@ -299,6 +311,13 @@ function persistManualPeer (entry) {
   settingPut(K_MANUAL_PEERS, JSON.stringify(list))
 }
 
+/** Map wrapper exposing .raw() for persistence; seeded from settings_rows so progress survives restarts. */
+function createTrackedWatermarks () {
+  const m = new Map(Object.entries(loadPeerWatermarks()).map(([k, v]) => [k, Number(v) || 0]))
+  m.raw = () => Object.fromEntries(m)
+  return m
+}
+
 function startSync () {
   if (state.node) return
   const { deviceId, deviceName } = ensureIdentity()
@@ -307,14 +326,21 @@ function startSync () {
   state.engine = createEngine({ localStore: createLocalStoreAdapter(), deviceId })
   state.node = createLanSyncNode({
     deviceId,
+    peerProgress: state.peerWatermarks,
     name: settingGet(K_DEVICE_NAME) || deviceName,
     pairingSecret: settingGet(K_PAIRING_SECRET),
     verifyPairingCode: code => !!state.pairingCode && state.pairingCode.expiresAt > Date.now() &&
       (() => { const a = Buffer.from(String(code)); const b = Buffer.from(String(state.pairingCode.code)); return a.length === b.length && timingSafeEqual(a, b) })(),
     ingestSegment: body => {
-      const r = state.engine.ingestSegment(body)
-      flushPendingWrites()
-      return r
+      // One lookup cache per segment message: a peer's first-sync push carries thousands of rows
+      // and applyRowInner must not re-read a full entity list per row (same O(n^2) trap as
+      // hydration — 2026-09-18 drill: server handlers ran 30-60s and starved every round).
+      state.applyCache = createHydrationCache()
+      try {
+        const r = state.engine.ingestSegment(body)
+        flushPendingWrites()
+        return r
+      } finally { state.applyCache = null }
     },
     ingestSnapshot: body => state.engine.applySnapshot(body),
     buildSegments: buildSegmentsWrapped,
@@ -398,7 +424,7 @@ function registerOps () {
       state.pairingCode = null // consumed; issue a fresh code on next click
       await stopSync()
       startSync()
-      runRound()
+      runRound().then(persistPeerWatermarks)
       return { ...getSettingsPayload(), peer: r.peer }
     },
     syncAddPeer: p => {
@@ -434,7 +460,8 @@ function registerOps () {
 
 /** Called once from src/main/index.js after db init. Never auto-enables sync. */
 function initLanSync ({ db, getWindowSenders }) {
-  state = { db, getWindowSenders, node: null, engine: null, timers: [], pendingToSeq: 0, pendingWrites: { todos: [], settings: [], tomatoes: [] } }
+  const peerWatermarks = createTrackedWatermarks()
+  state = { db, getWindowSenders, node: null, engine: null, timers: [], pendingToSeq: 0, peerWatermarks, pendingWrites: { todos: [], settings: [], tomatoes: [] } }
   registerOps()
   try {
     if (settingGet(K_ENABLED) === true) startSync()

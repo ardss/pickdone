@@ -48,6 +48,10 @@ function createLanSyncNode(opts) {
   const backoffMs = new Map() // deviceId -> current backoff delay
   const retryTimers = new Map() // deviceId -> timer
   const authCode = deriveAuthCode(pairingSecret, deviceId)
+  // Per-peer push watermarks: deviceId -> highest seq that peer has acked. Injected (a live Map) by
+  // the bootstrap, which owns persistence; dead peers holding stale entries can no longer gate
+  // other peers' rounds, and each round only ships a peer's unconfirmed delta.
+  const peerProgress = opts.peerProgress || new Map()
 
   // Resolved once the TCP server is listening. Callers may await this at any
   // time (even after the event already fired) — unlike the 'listening' event,
@@ -132,7 +136,8 @@ function createLanSyncNode(opts) {
       client.on('error', (err) => finish(err))
       client.on('rejected', () => finish(new Error('auth rejected by peer')))
       client.on('ready', () => {
-        const mine = buildSegments ? buildSegments() : []
+        // push only what this peer has not confirmed yet (per-peer watermark; 0 = first contact)
+        const mine = buildSegments ? buildSegments(peerProgress.get(peer.deviceId) || 0) : []
         client.send({ type: 'segments', segments: mine })
       })
       client.on('message', (msg) => {
@@ -147,6 +152,8 @@ function createLanSyncNode(opts) {
             // Peer's ack is the round's success criterion: it confirms our push AND proves the
             // peer finished building its own response. Timing the round out as "success" here
             // would advance the push cursor over undelivered segments (2026-09-17 live drill).
+            const seq = Number(msg.appliedToSeq) || 0
+            if (seq > (peerProgress.get(peer.deviceId) || 0)) peerProgress.set(peer.deviceId, seq)
             finish(null)
           }
         } catch (err) {
