@@ -76,8 +76,9 @@ function send(socket, msg) {
 }
 
 /** Shared server-side connection state machine (auth gate + dispatch). */
-function wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, onUnauthorized }) {
+function wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, onUnauthorized, verifyPairingCode, onPaired }) {
   const state = { peer: null, authorized: false }
+  let pairAttempts = 0
   const finish = () => {
     if (state.peer) socket.emit('peer-closed', state.peer)
   }
@@ -90,6 +91,22 @@ function wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, o
       if (!msg || typeof msg !== 'object') return
       if (msg.type === 'ping') { send(socket, { type: 'pong' }); return }
       if (!state.authorized) {
+        // Manual pairing: the peer proves knowledge of our currently displayed 6-digit code and
+        // receives the persisted pairing secret (same threat model as WPS push-button: the LAN +
+        // the short-lived code are the gate). Rate-limited to blunt online guessing.
+        if (msg.type === 'pair-request') {
+          pairAttempts += 1
+          const code = typeof msg.code === 'string' ? msg.code : ''
+          if (pairAttempts > 5 || !verifyPairingCode || !verifyPairingCode(code)) {
+            send(socket, { type: 'pair-ack', ok: false })
+            socket.destroy()
+            return
+          }
+          send(socket, { type: 'pair-accept', secret: pairingSecret })
+          if (onPaired) onPaired({ deviceId: typeof msg.deviceId === 'string' ? msg.deviceId : '', host: socket.remoteAddress })
+          socket.destroy()
+          return
+        }
         if (msg.type !== 'hello') {
           send(socket, { type: 'hello-ack', ok: false, protoVer: PROTO_VER, error: 'hello required' })
           socket.destroy()
@@ -125,7 +142,7 @@ function wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, o
  * @returns EventEmitter with .port (after 'listening'), .close()
  */
 function createLanServer(opts) {
-  const { deviceId, pairingSecret, getHandler, onPeer, onUnauthorized, host } = opts
+  const { deviceId, pairingSecret, getHandler, onPeer, onUnauthorized, verifyPairingCode, onPaired, host } = opts
   const port = Number.isInteger(opts.port) ? opts.port : DEFAULT_PORT
   const em = new EventEmitter()
   const sockets = new Set()
@@ -133,7 +150,7 @@ function createLanServer(opts) {
   const server = net.createServer((socket) => {
     sockets.add(socket)
     socket.on('close', () => sockets.delete(socket))
-    wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, onUnauthorized })
+    wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, onUnauthorized, verifyPairingCode, onPaired })
   })
   server.on('error', (err) => {
     // Fixed port taken (second instance on the same machine, or a stale process): degrade to an
@@ -173,7 +190,7 @@ function createLanServer(opts) {
  *   'ready' (hello-ack ok), 'rejected' (auth failed), 'message', 'error', 'close'
  */
 function connect(host, port, opts) {
-  const { deviceId, authCode, onUnauthorized } = opts
+  const { deviceId, authCode, onUnauthorized, pairCode } = opts
   const protoVer = opts.protoVer || PROTO_VER
   const timeoutMs = opts.timeoutMs || 5000
   const em = new EventEmitter()
@@ -183,6 +200,7 @@ function connect(host, port, opts) {
   socket.setTimeout(timeoutMs)
 
   socket.on('connect', () => {
+    if (pairCode !== undefined) { send(socket, { type: 'pair-request', deviceId, code: String(pairCode) }); return }
     send(socket, { type: 'hello', deviceId, protoVer, authCode })
   })
   socket.on('timeout', () => {
@@ -200,6 +218,15 @@ function connect(host, port, opts) {
     (msg) => {
       if (!msg || typeof msg !== 'object') return
       if (!em.ready) {
+        if (pairCode !== undefined) {
+          if (msg.type === 'pair-accept' && typeof msg.secret === 'string' && msg.secret) {
+            em.emit('paired', { secret: msg.secret })
+          } else {
+            em.emit('rejected', msg)
+          }
+          socket.destroy()
+          return
+        }
         if (msg.type === 'hello-ack' && msg.ok) {
           em.ready = true
           em.emit('ready', msg)

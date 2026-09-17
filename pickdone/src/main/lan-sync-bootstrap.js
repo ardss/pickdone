@@ -22,7 +22,7 @@
  *   - applySnapshot/replaceAll is implemented as merge-apply (non-destructive) because the round
  *     protocol never sends snapshot-request in P3a; a true destructive reset is deferred.
  */
-const { randomUUID } = require('node:crypto')
+const { randomUUID, timingSafeEqual } = require('node:crypto')
 const os = require('node:os')
 const log = require('electron-log')
 const { createEngine } = require('../../shared/sync-core/engine.mjs')
@@ -121,6 +121,7 @@ function createLocalStoreAdapter () {
     },
     getCursor () { const v = state.db.call('getMeta', CURSOR_META_KEY); const n = Number(v); return Number.isFinite(n) && n > 0 ? n : 0 },
     setCursor (seq) { state.db.call('setMeta', [CURSOR_META_KEY, String(seq)]) },
+    applyRow: row => applyRowSafe(row),
     /** Current live rows incl. tombstones, for buildSnapshot (seq-less; engine sorts by id). */
     allRows () {
       const out = []
@@ -244,6 +245,8 @@ function startSync () {
     deviceId,
     name: settingGet(K_DEVICE_NAME) || deviceName,
     pairingSecret: settingGet(K_PAIRING_SECRET),
+    verifyPairingCode: code => !!state.pairingCode && state.pairingCode.expiresAt > Date.now() &&
+      (() => { const a = Buffer.from(String(code)); const b = Buffer.from(String(state.pairingCode.code)); return a.length === b.length && timingSafeEqual(a, b) })(),
     ingestSegment: body => state.engine.ingestSegment(body),
     ingestSnapshot: body => state.engine.applySnapshot(body),
     buildSegments: buildSegmentsWrapped,
@@ -312,6 +315,19 @@ function registerOps () {
       }
       notifyRenderers('enabled-changed')
       return getSettingsPayload()
+    },
+    syncPairWithCode: async p => {
+      const code = String((p && p.code) || '').trim()
+      if (!/^\d{6}$/.test(code)) throw new Error('syncPairWithCode: 6-digit code required')
+      if (!state.node) throw new Error('syncPairWithCode: sync is not enabled')
+      const r = await state.node.pairWith(p && p.deviceId || undefined, code)
+      settingPut(K_PAIRING_SECRET, String(r.secret))
+      log.info('[LanSync] paired with peer', r.peer && r.peer.deviceId, '- shared secret adopted, restarting node')
+      state.pairingCode = null // consumed; issue a fresh code on next click
+      await stopSync()
+      startSync()
+      runRound()
+      return { ...getSettingsPayload(), peer: r.peer }
     },
     syncGetPairingCode: () => {
       const secret = settingGet(K_PAIRING_SECRET)

@@ -103,8 +103,10 @@ export function createEngine({ localStore, deviceId, clock = monotonicClock() })
    * originated by this device are ignored wholesale (loopback echo).
    * @returns {{ applied: number, rejected: number }}
    */
-  function ingestSegment(body) {
-    const envelope = unpack(body)
+  function ingestSegment(input) {
+    // Accept either the packed body string or the {body} envelope as delivered by a transport
+    // (transports carry the envelope object; the 2026-09-17 live drill caught the mismatch).
+    const envelope = unpack(input && typeof input === 'object' && typeof input.body === 'string' ? input.body : input)
     if (envelope.deviceId === deviceId) return { applied: 0, rejected: 0 }
     let applied = 0
     let rejected = 0
