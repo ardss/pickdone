@@ -40,9 +40,10 @@ const K_ENABLED = 'sync.enabled'
 const CURSOR_META_KEY = 'sync.pushCursor' // persisted in meta (not settings_rows): per-device bookkeeping, no sync obligation
 const START_DELAY_MS = 10 * 1000
 const ROUND_INTERVAL_MS = 5 * 60 * 1000
-// Time-boxed pairing code: deterministic derivation over a 5-minute window (peer verifies with the
-// same window once manual code exchange lands; the code is display/compare material in P3a)
-const PAIRING_CODE_WINDOW_MS = 5 * 60 * 1000
+// Pairing code validity: issued on first request and stable for 10 minutes (the LAN transport
+// authenticates with the persisted pairing secret — the displayed code is compare-only material
+// in P3a, so its cadence is UX, not security; no mid-session surprise refresh)
+const PAIRING_CODE_TTL_MS = 10 * 60 * 1000
 
 let state = null // { db, getWindowSenders, node, engine, timers }
 
@@ -315,9 +316,11 @@ function registerOps () {
     syncGetPairingCode: () => {
       const secret = settingGet(K_PAIRING_SECRET)
       if (!secret) return { code: null, expiresAt: 0 }
+      if (state.pairingCode && state.pairingCode.expiresAt > Date.now()) return state.pairingCode
       const { deviceId } = ensureIdentity()
-      const expiresAt = (Math.floor(Date.now() / PAIRING_CODE_WINDOW_MS) + 1) * PAIRING_CODE_WINDOW_MS
-      return { code: derivePairingCode(secret, deviceId + ':' + Math.floor(Date.now() / PAIRING_CODE_WINDOW_MS)), expiresAt }
+      const expiresAt = Date.now() + PAIRING_CODE_TTL_MS
+      state.pairingCode = { code: derivePairingCode(secret, deviceId + ':' + expiresAt), expiresAt }
+      return state.pairingCode
     },
     syncSetName: p => {
       const name = String((p && p.name) || '').trim().slice(0, 40)
