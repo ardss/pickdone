@@ -135,7 +135,20 @@ function createLanServer(opts) {
     socket.on('close', () => sockets.delete(socket))
     wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, onUnauthorized })
   })
-  server.on('error', (err) => em.emit('error', err))
+  server.on('error', (err) => {
+    // Fixed port taken (second instance on the same machine, or a stale process): degrade to an
+    // ephemeral port instead of dying — discovery advertises the RESOLVED port, so peers still
+    // find us. The fixed port is only a rendezvous convenience, never a correctness requirement.
+    if (err && err.code === 'EADDRINUSE' && em.port === null && port !== 0) {
+      em.port = -1 // guard: only retry once
+      server.listen(0, host, () => {
+        em.port = server.address().port
+        em.emit('listening', em.port)
+      })
+      return
+    }
+    em.emit('error', err)
+  })
   server.listen(port, host, () => {
     em.port = server.address().port
     em.emit('listening', em.port)

@@ -137,3 +137,17 @@ test('transport: hello-before-data is enforced and pairing verifies symmetricall
   assert.ok(!verifyAuthCode(SECRET, 'other-device', code))
   assert.ok(!verifyAuthCode('other-secret', CLIENT_DEVICE, code))
 })
+
+test('transport: EADDRINUSE degrades to an ephemeral port (second same-host instance)', async () => {
+  const first = createLanServer({ deviceId: 'dev1', pairingSecret: SECRET, getHandler: () => {} })
+  await new Promise((res, rej) => { first.on('listening', res); first.on('error', rej) })
+  const second = createLanServer({ deviceId: 'dev2', pairingSecret: SECRET, getHandler: () => {} })
+  try {
+    const p = await new Promise((res, rej) => { second.on('listening', res); second.on('error', rej) })
+    assert.ok(Number.isInteger(p) && p > 0, 'second server bound to an ephemeral port: ' + p)
+    assert.notEqual(p, first.port, 'must not reuse the taken fixed port')
+  } finally {
+    await second.close()
+    await first.close()
+  }
+})
