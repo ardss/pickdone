@@ -263,9 +263,16 @@ function applyRowInner (state, incoming) {
     conflictCopy = m.conflictCopy
   }
   if (localRow && winner !== incoming) return false // local version stands
-  // Identical-content no-op (prevents apply/push ping-pong) — LIVE rows only: a tombstone winner
-  // must still land even when the payload text matches, because the deletion itself is semantic.
+  // Identical-content no-op (prevents apply/push ping-pong):
+  //   - LIVE rows: identical content (userId-insensitive) is a no-op.
+  //   - BOTH-DEAD rows (2026-09-19 live storm): the local row is already a tombstone, so the
+  //     deletion has landed; re-writing the same dead row re-captured it into the oplog EVERY
+  //     round, and tombstones dominate the retained window — the whole window churned per round
+  //     on both peers (70-220s rounds that never shrank). Only a strictly newer deletion
+  //     (deletedAt advanced past ours) is worth landing.
   if (localRow && winner === incoming && !localRow.deleted && !incoming.deleted && !rowContentDiffers(localRow, incoming)) return false
+  if (localRow && winner === incoming && localRow.deleted && incoming.deleted &&
+      (incoming.deletedAt || 0) <= (localRow.deletedAt || 0)) return false
   if (conflictCopy) {
     // Surface the losing edit (merge.mjs contract: the loser is never silently dropped).
     // Round-3 review: materialize it as a TOMBSTONED todo row so the recycle bin can restore

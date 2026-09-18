@@ -60,3 +60,53 @@ test('filter ghost tombstone is a no-op too (same echo path)', () => {
   assert.equal(applied, false, 'a delete for a filter we never had must not report applied')
   assert.ok(!calls.some(([op]) => op === 'filterDelete'), 'filterDelete must not fire for a ghost filter')
 })
+
+/* ---------- todo tombstone re-write churn (2026-09-19 live storm) ---------- */
+
+function todoState (row) {
+  const { state, pendingWrites, calls } = mockState({ getAll: () => (row ? [row] : []) })
+  __test.setState(state)
+  return { state, pendingWrites, calls }
+}
+
+const DEAD_ROW = {
+  taskId: 'tid_dead_1', userId: 840001, taskContent: 'done+deleted', complete: true, completedAt: T,
+  delete: 1, deletedAt: T + 1000, createTime: T, updateTime: T + 1000, syncTime: 0, status: 'sync',
+}
+
+test('inbound tombstone identical to the local tombstone is a no-op (no re-write churn)', () => {
+  const { pendingWrites } = todoState(DEAD_ROW)
+  const inbound = {
+    entity: 'todo', id: 'tid_dead_1', seq: 9, ts: T + 5000, updatedAt: T + 1000,
+    deleted: true, deletedAt: T + 1000,
+    data: { taskId: 'tid_dead_1', taskContent: 'done+deleted', complete: true, completedAt: T, delete: 1, deletedAt: T + 1000, createTime: T, updateTime: T + 1000, status: 'sync', userId: 999 },
+  }
+  const applied = __test.applyRow(inbound)
+  assert.equal(applied, false, 'an already-dead row with equal-or-older deletedAt must be a no-op (both-dead guard)')
+  assert.equal(pendingWrites.todos.length, 0, 'no re-write may be buffered')
+})
+
+test('inbound tombstone with a strictly newer deletedAt still lands (delete propagation intact)', () => {
+  const { pendingWrites } = todoState(DEAD_ROW)
+  const inbound = {
+    entity: 'todo', id: 'tid_dead_1', seq: 9, ts: T + 9000, updatedAt: T + 9000,
+    deleted: true, deletedAt: T + 8000,
+    data: { taskId: 'tid_dead_1', taskContent: 'edited then deleted later', complete: true, completedAt: T, delete: 1, deletedAt: T + 8000, createTime: T, updateTime: T + 9000, status: 'sync', userId: 999 },
+  }
+  const applied = __test.applyRow(inbound)
+  assert.equal(applied, true, 'a strictly newer deletion must land')
+  assert.ok(pendingWrites.todos.some(t => t.taskId === 'tid_dead_1' && (t.delete === 1 || t.deletedAt === T + 8000)), 'the newer tombstone is buffered for write')
+})
+
+test('live tombstone landing (local live row, inbound deleted) still works — delete-wins intact', () => {
+  const LIVE = { taskId: 'tid_live_1', userId: 840001, taskContent: 'alive', complete: false, delete: 0, deletedAt: 0, createTime: T, updateTime: T, syncTime: 0 }
+  const { pendingWrites } = todoState(LIVE)
+  const inbound = {
+    entity: 'todo', id: 'tid_live_1', seq: 9, ts: T + 5000, updatedAt: T + 5000,
+    deleted: true, deletedAt: T + 5000,
+    data: { taskId: 'tid_live_1', taskContent: 'alive', complete: false, delete: 1, deletedAt: T + 5000, createTime: T, updateTime: T + 5000, status: 'sync', userId: 999 },
+  }
+  const applied = __test.applyRow(inbound)
+  assert.equal(applied, true, 'live->deleted must land')
+  assert.ok(pendingWrites.todos.some(t => t.taskId === 'tid_live_1'), 'the tombstone is buffered')
+})
