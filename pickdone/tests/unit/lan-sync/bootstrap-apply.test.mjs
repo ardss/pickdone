@@ -190,6 +190,47 @@ test('bootstrap apply: inbound ts >10min in the future is clamped to now and los
   assert.equal(landed.taskContent, 'future content', 'payload semantics are never mutated by the clamp')
 })
 
+test('bootstrap apply: clamp BOUNDARY — exactly now+10min is NOT clamped (strict >), +1ms is', () => {
+  // The guard is `updatedAt > now + 10min`: a row stamped EXACTLY at the tolerance edge is
+  // inside the tolerance and must keep its (winning) future timestamp; one millisecond past
+  // the edge must be clamped back to now and lose. The clock is FROZEN for the duration so
+  // the boundary is exact (clampSkew reads Date.now() internally — a live clock makes "+1ms"
+  // race the tester's own capture of `now`).
+  const realNow = Date.now
+  const t = realNow()
+  const boundary = t + 10 * 60 * 1000
+  Date.now = () => t
+  try {
+    // (a) exactly AT the boundary: no clamp -> the inbound row beats a local `t` row.
+    fresh({
+      ...EMPTY_TABLES,
+      getAll: () => [{ taskId: 't1', updateTime: t, delete: false, deletedAt: 0 }],
+    })
+    const ok = __test.applyRow({
+      entity: 'todo', id: 't1', seq: 21, ts: boundary,
+      updatedAt: boundary, deleted: false, deletedAt: 0,
+      data: { taskId: 't1', taskContent: 'edge is tolerated' },
+    })
+    assert.equal(ok, true, 'exactly now+10min is NOT clamped (strict >): the remote row wins LWW')
+
+    // (b) one ms PAST the boundary: clamped to now (= t, < boundary) -> loses to a local
+    // row stamped at the boundary itself.
+    const m2 = fresh({
+      ...EMPTY_TABLES,
+      getAll: () => [{ taskId: 't1', updateTime: boundary, delete: false, deletedAt: 0 }],
+    })
+    const ok2 = __test.applyRow({
+      entity: 'todo', id: 't1', seq: 22, ts: boundary + 1,
+      updatedAt: boundary + 1, deleted: false, deletedAt: 0,
+      data: { taskId: 't1', taskContent: 'one ms too far' },
+    })
+    assert.equal(ok2, false, 'now+10min+1ms IS clamped to now and loses to the local boundary row')
+    assert.equal(m2.pendingWrites.todos.length, 0, 'no over-the-edge future write may land')
+  } finally {
+    Date.now = realNow
+  }
+})
+
 test('bootstrap flush: a fully committed buffer is cleared', () => {
   const m = fresh({ ...EMPTY_TABLES })
   m.pendingWrites.todos.push({ taskId: 't1', taskContent: 'hello' })
