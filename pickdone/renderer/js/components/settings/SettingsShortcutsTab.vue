@@ -9,7 +9,7 @@
           <div class="form-item__control">
             <button type="button" class="sc-capture" :class="{listening: capturing===sc.key, conflict: hasConflict(sc.key)}"
                     tabindex="0"
-                    @click="startCapture(sc.key)" @blur="onCaptureBlur">
+                    @click="startCapture(sc.key, $event)" @blur="onCaptureBlur">
               <span class="sc-kbd">{{ capturing===sc.key ? $t('statsE.SettingsModal.scPressKey') : (shortcutsLoaded ? formatShortcut(shortcutForm[sc.key]) : $t('statsE.SettingsModal.loadingPlaceholder')) }}</span>
             </button>
             <span v-if="capturing!==sc.key" class="tip">{{ $t('statsE.SettingsModal.scClickToEdit') }}</span>
@@ -26,6 +26,36 @@
 </template>
 
 <script lang="ts">
+/** [component-fixes] pure-start — shortcut-capture pure helpers (unit-tested in tests/unit/components/d4-shortcuts-tab.test.mjs) */
+
+/** Build the stored combo string from a captured keydown. Meta (Cmd) used to be dropped —
+ *  Cmd+X was recorded as plain "x". Modifier order: ctrl, alt, shift, cmd. */
+function captureCombo (e, k) {
+  const parts = []
+  if (e.ctrlKey) parts.push('ctrl')
+  if (e.altKey) parts.push('alt')
+  if (e.shiftKey) parts.push('shift')
+  if (e.metaKey) parts.push('cmd')
+  const map = { ' ': 'space', delete: 'delete' }
+  return parts.concat(map[k] || k).join('+')
+}
+
+/** Blur-race guard for startCapture: a blur-triggered stopCapture followed by a click in the
+ *  same tick (BLUR_GUARD_MS) must not re-arm a stray capture — unless the click lands on a
+ *  focusable control (activeElement is the button itself), which is the legit re-click path. */
+const BLUR_GUARD_MS = 150
+function shouldBlockCaptureStart ({ now, lastBlurAt, hasFocus }) {
+  if (!lastBlurAt) return false
+  if (hasFocus) return false
+  return (now - lastBlurAt) < BLUR_GUARD_MS
+}
+
+/** Display form: stored tokens stay lowercase except cmd → ⌘ (meta was previously invisible). */
+function formatShortcutText (v) {
+  return v ? String(v).replace(/(^|\+)cmd(?=\+|$)/g, '$1⌘') : ''
+}
+// [component-fixes] pure-end
+
 /** Shortcuts tab of the settings center: the full key-capture suite
  *  (startCapture/handleCaptureKey/conflict detection/dirty/save) plus the fc970da
  *  loading-placeholder logic (kbd slots show a placeholder until getSettings resolves).
@@ -81,8 +111,16 @@ export default {
   },
   methods: {
     // -- Shortcut capture (control-ized: click to enter listening state, document capture phase takes over the keyboard) --
-    startCapture (key) {
+    startCapture (key, ev) {
       if (this.capturing === key) { this.stopCapture(); return } // clicking again cancels
+      // Blur-race guard: a blur-triggered stopCapture followed by a stray click in the same tick
+      // used to re-arm a capture nobody asked for. If a blur stop just happened and the click did
+      // NOT land on this capture button itself (no focus moved to it), do not re-arm.
+      const focused = !!(ev && ev.currentTarget && document.activeElement === ev.currentTarget)
+      if (shouldBlockCaptureStart({ now: Date.now(), lastBlurAt: this._lastBlurStopAt || 0, hasFocus: focused })) {
+        this._lastBlurStopAt = 0
+        return
+      }
       this.stopCapture()
       this.capturing = key
       this._docKeyHandler = e => this.handleCaptureKey(e, key)
@@ -100,13 +138,7 @@ export default {
       const k = (e.key || '').toLowerCase()
       if (k === 'escape') { this.stopCapture(); return } // Esc = cancel capture
       if (!k || k === 'control' || k === 'alt' || k === 'shift' || k === 'meta') return // do not commit when only modifier keys are pressed
-      const parts = []
-      if (e.ctrlKey) parts.push('ctrl')
-      if (e.altKey) parts.push('alt')
-      if (e.shiftKey) parts.push('shift')
-      const map = { ' ': 'space', delete: 'delete' }
-      const main = map[k] || k
-      const combo = parts.concat(main).join('+')
+      const combo = captureCombo(e, k)
       // Conflict detection: if it duplicates another shortcut, warn and do not write
       if (this.shortcutDefs.some(d => d.key !== key && this.shortcutForm[d.key] === combo)) {
         // The colon lives inside the i18n value: each locale punctuates with its own glyph
@@ -117,14 +149,14 @@ export default {
       this.shortcutForm[key] = combo
       this.stopCapture()
     },
-    onCaptureBlur () { this.stopCapture() },
+    onCaptureBlur () { this._lastBlurStopAt = Date.now(); this.stopCapture() },
     hasConflict (key) {
       if (!this.shortcutForm) return false // the template renders before created's async response arrives
       const val = this.shortcutForm[key]
       if (!val) return false
       return this.shortcutDefs.some(d => d.key !== key && this.shortcutForm[d.key] === val)
     },
-    formatShortcut (v) { return v || this.$t('statsE.SettingsModal.scEmpty') },
+    formatShortcut (v) { return formatShortcutText(v) || this.$t('statsE.SettingsModal.scEmpty') },
     resetShortcuts () {
       this.shortcutForm = { sync: 'ctrl+s', addEvent: 'ctrl+n', deleteEvent: 'ctrl+d', toggleMainWindow: 'ctrl+alt+t', quickAddGlobal: 'alt+shift+t', pinEvent: 'ctrl+p', unpinEvent: 'ctrl+shift+p', toggleAllSubtasks: 'ctrl+shift+s', startPomodoro: 'ctrl+alt+p', switchToDaytodo: 'ctrl+1', switchToRecentTodos: 'ctrl+2', switchToSchedule: 'ctrl+3', switchToInbox: 'ctrl+4' }
     },
