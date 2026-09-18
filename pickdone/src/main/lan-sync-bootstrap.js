@@ -325,7 +325,7 @@ function startSync () {
   state.node.on('pair-rejected', info => emitSyncEvent('pair-rejected', { host: info && info.host, port: info && info.port, reason: info && info.reason }))
   // Inbound pairing completed (manual code or confirmed): tell the renderer it succeeded.
   state.node.on('paired-inbound', info => emitSyncEvent('pair-accepted', { deviceId: info && info.deviceId, host: info && info.host }))
-  state.node.on('peer-unauthorized', info => log.warn('[LanSync] unauthorized peer rejected:', info && info.deviceId))
+  state.node.on('peer-unauthorized', info => log.warn('[LanSync] unauthorized peer rejected:', info && info.deviceId, 'from', info && info.host, info && info.error))
   // restore manually added peers (node peer table is memory-only; settings_rows is the authority)
   for (const mp of manualPeers()) {
     try { state.node.addPeer({ deviceId: 'manual-' + mp.host + ':' + mp.port, host: mp.host, port: Number(mp.port) }) } catch (e) { log.warn('[LanSync] manual peer restore failed:', e.message) }
