@@ -177,6 +177,25 @@ function scheduleSecurityPersist () {
   securityPersistTimer.unref?.()
 }
 
+/* Change-triggered sync: local writes kick a debounced immediate round instead of waiting up
+ * ROUND_INTERVAL_MS for the next periodic one. Floor-guarded so bulk imports fire one round,
+ * not one per write. */
+const KICK_DEBOUNCE_MS = 2500
+const KICK_FLOOR_MS = 10000
+let kickTimer = null
+let lastKickRoundAt = 0
+function kickSyncRound (reason) {
+  if (!state || !state.node) return
+  const since = Date.now() - lastKickRoundAt
+  const delay = Math.max(KICK_DEBOUNCE_MS, since < KICK_FLOOR_MS ? KICK_FLOOR_MS - since : 0)
+  clearTimeout(kickTimer)
+  kickTimer = setTimeout(() => {
+    kickTimer = null
+    lastKickRoundAt = Date.now()
+    runRound()
+  }, delay)
+  kickTimer.unref?.()
+}
 async function runRound () {
   if (!state || !state.node) return null
   try {
@@ -560,7 +579,7 @@ function initLanSync ({ db, getWindowSenders }) {
   } catch (e) { log.warn('[LanSync] startup enable failed:', e.message) }
 }
 
-module.exports = { initLanSync, stopSyncForQuit }
+module.exports = { initLanSync, stopSyncForQuit, kickSyncRound }
 
 // Test-only hooks: applyRowInner/flushPendingWrites operate on the module-level `state` singleton;
 // unit tests swap in a mock state via __test.setState. Production paths never touch __test.
