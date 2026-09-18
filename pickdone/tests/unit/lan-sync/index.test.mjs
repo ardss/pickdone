@@ -233,3 +233,164 @@ test('glue: peer ack appliedToSeq advances the push watermark; second round ship
   await nodeA.stop()
   await nodeB.stop()
 })
+
+test('watermark: ack stays in the SENDER seq space even when the receiver oplog runs far ahead (relay overshoot)', async () => {
+  // Regression (2026-09-18, P1): the receiver acked its OWN local max oplog seq, but the sender
+  // feeds appliedToSeq into buildSegments(fromSeq) against the SENDER's oplog. A receiver that
+  // relayed another peer's high-seq rows (>=3 devices) pushed the sender's cursor past its own
+  // fresh rows — they were skipped EVERY round, permanently (watermark persisted).
+  const rowsA = [
+    { id: 'a1', seq: 1 },
+    { id: 'a2', seq: 2 },
+    { id: 'a3', seq: 3 },
+  ]
+  const pushedToA = []
+  const ingestedByB = []
+  const nodeA = createLanSyncNode({
+    deviceId: 'node-a',
+    pairingSecret: SECRET,
+    port: 0,
+    host: '127.0.0.1',
+    discoverFn: fakeDiscovery(),
+    ingestSegment: () => {},
+    ingestSnapshot: () => {},
+    buildSegments: (since = 0) => {
+      const rows = rowsA.filter(r => r.seq > (Number(since) || 0))
+      pushedToA.push(rows.map(r => r.seq))
+      if (!rows.length) return []
+      return [{ fromSeq: rows[0].seq, toSeq: rows[rows.length - 1].seq, deviceId: 'node-a', rows }]
+    },
+  })
+  const nodeB = createLanSyncNode({
+    deviceId: 'node-b',
+    pairingSecret: SECRET,
+    port: 0,
+    host: '127.0.0.1',
+    discoverFn: fakeDiscovery(),
+    // B's local oplog is FAR ahead (it relayed peer C's rows up to seq 1000).
+    getMaxSeq: () => 1000,
+    ingestSegment: (seg) => ingestedByB.push(seg),
+    ingestSnapshot: () => {},
+    buildSegments: () => [],
+  })
+
+  nodeA.start()
+  nodeB.start()
+  const [, portB] = await Promise.all([nodeA.whenListening(), nodeB.whenListening()])
+  nodeA.addPeer({ deviceId: 'node-b', host: '127.0.0.1', port: portB, name: 'Node B' })
+
+  await nodeA.startSyncRound()
+  assert.equal(ingestedByB.length, 1)
+  // The ack must report 3 (max seq among A's delivered rows), NEVER 1000 (B's local max).
+  assert.equal(nodeA.getStatus().peers[0].watermark, 3, 'watermark = sender-space seq of applied rows')
+
+  await nodeA.startSyncRound()
+  assert.deepEqual(pushedToA, [[1, 2, 3], []], 'no overshoot: round 2 re-ships nothing')
+
+  rowsA.push({ id: 'a4', seq: 4 })
+  await nodeA.startSyncRound()
+  assert.deepEqual(pushedToA, [[1, 2, 3], [], [4]], 'fresh sender rows are never skipped by an overshot cursor')
+
+  await nodeA.stop()
+  await nodeB.stop()
+})
+
+test('watermark: 3-node chain A -> B -> C, B relays — A cursor never overshoots and C converges', async () => {
+  // B's oplog already holds rows relayed from C (in B's OWN seq space: real relaying re-captures
+  // through B's oplog). A then joins with low seqs; the old receiver-local-max ack would report
+  // B's oplog max and overshoot A's cursor.
+  const rowsA = [
+    { id: 'a1', seq: 1 },
+    { id: 'a2', seq: 2 },
+  ]
+  let bSeq = 99 // B's own oplog assigns fresh seqs to everything it ingests
+  const bRows = [{ id: 'c1', seq: bSeq }] // already relayed from C
+  const receivedByC = [] // row ids
+  const pushedToA = []
+
+  const nodeA = createLanSyncNode({
+    deviceId: 'node-a',
+    pairingSecret: SECRET,
+    port: 0,
+    host: '127.0.0.1',
+    discoverFn: fakeDiscovery(),
+    ingestSegment: () => {},
+    ingestSnapshot: () => {},
+    buildSegments: (since = 0) => {
+      const rows = rowsA.filter(r => r.seq > (Number(since) || 0))
+      pushedToA.push(rows.map(r => r.seq))
+      if (!rows.length) return []
+      return [{ fromSeq: rows[0].seq, toSeq: rows[rows.length - 1].seq, deviceId: 'node-a', rows }]
+    },
+  })
+  const nodeB = createLanSyncNode({
+    deviceId: 'node-b',
+    pairingSecret: SECRET,
+    port: 0,
+    host: '127.0.0.1',
+    discoverFn: fakeDiscovery(),
+    getMaxSeq: () => bRows.reduce((m, r) => Math.max(m, r.seq), 0),
+    getOldestSeq: () => 1,
+    ingestSegment: (seg) => {
+      // Re-capture into B's oplog: new B-space seq per row (real engine behavior).
+      const fresh = []
+      for (const r of seg.rows || []) {
+        if (bRows.some(x => x.id === r.id)) continue
+        const row = { id: r.id, seq: ++bSeq }
+        bRows.push(row)
+        fresh.push(row)
+      }
+      return { applied: fresh.length, rejected: 0 }
+    },
+    ingestSnapshot: () => {},
+    buildSegments: (since = 0) => {
+      const rows = bRows.filter(r => r.seq > (Number(since) || 0))
+      if (!rows.length) return []
+      return [{ fromSeq: rows[0].seq, toSeq: rows[rows.length - 1].seq, deviceId: 'node-b', rows }]
+    },
+  })
+  const nodeC = createLanSyncNode({
+    deviceId: 'node-c',
+    pairingSecret: SECRET,
+    port: 0,
+    host: '127.0.0.1',
+    discoverFn: fakeDiscovery(),
+    getMaxSeq: () => 500,
+    ingestSegment: (seg) => {
+      for (const r of seg.rows || []) receivedByC.push(r.id)
+      return { applied: (seg.rows || []).length, rejected: 0 }
+    },
+    ingestSnapshot: () => {},
+    buildSegments: () => [],
+  })
+
+  nodeA.start()
+  nodeB.start()
+  nodeC.start()
+  const [, portB, portC] = await Promise.all([nodeA.whenListening(), nodeB.whenListening(), nodeC.whenListening()])
+  nodeA.addPeer({ deviceId: 'node-b', host: '127.0.0.1', port: portB, name: 'Node B' })
+  nodeB.addPeer({ deviceId: 'node-c', host: '127.0.0.1', port: portC, name: 'Node C' })
+
+  // B relays its backlog (C's earlier rows) to C.
+  await nodeB.startSyncRound()
+  assert.ok(receivedByC.includes('c1'), "C got B's relayed backlog")
+
+  // A joins: pushes seq 1..2 to B; B's ack must stay in A's space (2), not jump to B's own max.
+  await nodeA.startSyncRound()
+  assert.equal(nodeA.getStatus().peers[0].watermark, 2, "A's cursor advanced to exactly its own max seq")
+
+  // B relays A's rows to C.
+  await nodeB.startSyncRound()
+  assert.ok(receivedByC.includes('a1') && receivedByC.includes('a2'), 'C received the relayed A rows')
+
+  // A's fresh row: the next round ships exactly the delta — no overshoot hole, no full re-push.
+  rowsA.push({ id: 'a3', seq: 3 })
+  await nodeA.startSyncRound()
+  await nodeB.startSyncRound()
+  assert.deepEqual(pushedToA, [[1, 2], [3]], "A's push history never overshoots its own oplog")
+  assert.ok(receivedByC.includes('a3'), 'the fresh row reached C through the chain')
+
+  await nodeA.stop()
+  await nodeB.stop()
+  await nodeC.stop()
+})

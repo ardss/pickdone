@@ -40,7 +40,11 @@ const K_PAIRING_SECRET = 'sync.pairingSecret'
 const K_ENABLED = 'sync.enabled'
 const K_MANUAL_PEERS = 'sync.manualPeers' // [{host,port}] — survives restarts (node peers are memory-only)
 const CURSOR_META_KEY = 'sync.pushCursor' // persisted in meta (not settings_rows): per-device bookkeeping, no sync obligation
-const K_PEER_WATERMARKS = 'sync.peerWatermarks' // {deviceId: highestSeqThatPeerAcked} — per-peer push progress (survives restarts)
+// v2 (2026-09-18): the pre-v2 values were persisted in the RECEIVER's local seq space (its own
+// max oplog seq) while buildSegments(fromSeq) consumes the SENDER's space — feeding those back
+// overshot the cursor and skipped the sender's fresh rows. v2 starts empty once: the worst case
+// of dropping a watermark is a re-push of already-applied rows, which is idempotent (§4.1).
+const K_PEER_WATERMARKS = 'sync.peerWatermarks.v2'
 const START_DELAY_MS = 10 * 1000
 const ROUND_INTERVAL_MS = 5 * 60 * 1000
 // Pairing code validity: issued on first request and stable for 10 minutes (the LAN transport

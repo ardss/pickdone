@@ -62,9 +62,9 @@ function createLanSyncNode(opts) {
   const host = opts.host
   const em = new EventEmitter()
 
-  // Optional injector: local max oplog seq. The server role answers with `appliedToSeq` (its own
-  // local max oplog seq after the round's ingest+flush), which the client records as that peer's
-  // push watermark so the next round ships only the unconfirmed delta instead of a full re-push.
+  // Optional injector: local max oplog seq. Used ONLY as a sanity clamp on the peer's acked
+  // appliedToSeq (never as the ack value itself — see the server handler: the ack is expressed in
+  // the SENDER's seq space, which is the only space buildSegments(fromSeq) can consume).
   const getMaxSeq = typeof opts.getMaxSeq === 'function' ? opts.getMaxSeq : null
   const currentMaxSeq = () => {
     try { return Number(getMaxSeq()) || 0 } catch { return 0 }
@@ -202,8 +202,9 @@ function createLanSyncNode(opts) {
     return new Promise((resolve) => {
       let settled = false
       let ackApplied = null // segments the peer acked (surfaces into the recent ring)
-      let ackSeq = 0 // peer's advertised appliedToSeq (its local max oplog seq)
+      let ackSeq = 0 // peer-reported appliedToSeq: max seq among OUR rows the peer applied (OUR seq space)
       let ackOldestSeq = null // peer's advertised oldest RETAINED seq (undefined for old peers)
+      let peerMaxSeqSeen = 0 // max seq observed in the PEER's segments this round (PEER's seq space)
       let roundApplied = 0 // rows the peer's segments changed locally this round (0 = no pull progress)
       let awaitingSnapshot = false // snapshot-request sent; the round ends at snapshot-end, not ack
       const chunkBuf = new Map() // snapshot-chunk index -> rows (assembled at snapshot-end)
@@ -272,7 +273,10 @@ function createLanSyncNode(opts) {
         }
         const oldest = Number(ackOldestSeq)
         if (!Number.isFinite(oldest) || oldest <= 0) return // peer did not advertise; nothing to act on
-        if (ackSeq <= wm) return // fully caught up with the peer's max seq
+        // Fully caught up pulling (peer has nothing past our watermark)? Peer-space comparison
+        // only: peerMaxSeqSeen comes from the peer's own segment seqs — NEVER mix it with the
+        // sender-space appliedToSeq (the 2026-09-18 watermark-overshoot bug was exactly that).
+        if (peerMaxSeqSeen > 0 && peerMaxSeqSeen <= wm) return
         if (snapshotFatal.has(peer.deviceId)) return // peer cannot serve a snapshot (snapshot-error)
         if (oldest > wm + 1 && !clientSnapshotBusy.has(peer.deviceId)) needSnapshot.add(peer.deviceId)
       }
@@ -300,6 +304,7 @@ function createLanSyncNode(opts) {
       client.on('message', (msg) => {
         try {
           if (msg.type === 'segments' && Array.isArray(msg.segments)) {
+            let pullAckSeq = 0 // max seq among the rows the peer just pushed to us (PEER's seq space)
             for (const seg of msg.segments) {
               const r = ingestSegment(seg)
               roundApplied += (r && Number(r.applied)) || 0
@@ -312,9 +317,18 @@ function createLanSyncNode(opts) {
               if (Number.isFinite(from) && Number.isFinite(to)) {
                 const wm = pullWatermarkBy.get(peer.deviceId) || 0
                 if (from <= wm + 1 && to > wm) pullWatermarkBy.set(peer.deviceId, to)
+                if (to > peerMaxSeqSeen) peerMaxSeqSeen = to
+              }
+              for (const row of (seg && seg.rows) || []) {
+                const s = Number(row && row.seq)
+                if (Number.isFinite(s) && s > pullAckSeq) pullAckSeq = s
               }
             }
-            client.send({ type: 'ack', applied: msg.segments.length, rejected: 0 })
+            // appliedToSeq in the PEER's seq space (the rows' own seq): the peer feeds it into
+            // buildSegments(fromSeq) against ITS oplog. Reporting our own local max here (the old
+            // behavior) overshot the peer's cursor whenever our oplog ran ahead and silently
+            // skipped its fresh rows every round.
+            client.send({ type: 'ack', applied: msg.segments.length, rejected: 0, ...(pullAckSeq > 0 ? { appliedToSeq: pullAckSeq } : {}) })
           } else if (msg.type === 'snapshot-chunk' && Array.isArray(msg.rows)) {
             if (!awaitingSnapshot) throw new Error('unsolicited snapshot-chunk')
             chunkTotal = Number(msg.totalChunks) || chunkTotal
@@ -391,7 +405,12 @@ function createLanSyncNode(opts) {
             ackApplied = Number(msg.applied) || 0
             ackSeq = Number(msg.appliedToSeq) || 0
             ackOldestSeq = msg.oldestSeq
-            const seq = ackSeq
+            // ackSeq is in OUR seq space (max seq among our rows the peer applied). Defensive
+            // clamp to our own max oplog seq: a misbehaving/legacy peer (reporting its own local
+            // seq space — the pre-2026-09-18 bug) must never push our cursor past our own oplog,
+            // which would permanently skip our fresh rows.
+            let seq = ackSeq
+            if (getMaxSeq) seq = Math.min(seq, currentMaxSeq())
             if (seq > (peerProgress.get(peer.deviceId) || 0)) peerProgress.set(peer.deviceId, seq)
             evaluateSnapshotTrigger()
             // With a snapshot-request in flight the round's finish waits for snapshot-end (the
@@ -430,18 +449,27 @@ function createLanSyncNode(opts) {
       getHandler: (peer) => (msg, socket) => {
         try {
           if (msg.type === 'segments' && Array.isArray(msg.segments)) {
-            // appliedToSeq = our local max oplog seq after this round's ingest+flush is committed.
-            // Without it the client's push watermark never advances and every round re-pushes the
-            // full backlog. Read before AND after ingest (rows may re-capture into our oplog) and
-            // take the max, so an empty ingest still reports an honest, monotonic high-water value.
-            // oldestSeq advertises the oldest oplog seq we still RETAIN: a peer below it sees
-            // pruned history and knows it must request a snapshot (see the client trigger).
-            const seqBefore = currentMaxSeq()
-            for (const seg of msg.segments) ingestSegment(seg)
-            const appliedToSeq = Math.max(seqBefore, currentMaxSeq())
+            // appliedToSeq is expressed in the SENDER's seq space: the max seq among the rows
+            // the sender just pushed (segment rows carry the sender's oplog seq — engine
+            // buildSegments contract). The sender feeds this into buildSegments(fromSeq) against
+            // ITS OWN oplog, so reporting OUR local max seq here (the old behavior) overshot the
+            // sender's cursor whenever our oplog ran ahead of theirs — their fresh rows were then
+            // skipped every round (permanent hole with >=3 devices, watermark persisted).
+            // Empty push -> omit the field: the sender keeps its cursor (monotonic guard).
+            // oldestSeq advertises the oldest oplog seq we still RETAIN (our space): a peer whose
+            // pull watermark is below it knows its increments are pruned here and must request a
+            // snapshot (see the client trigger).
+            let appliedToSeq = 0
+            for (const seg of msg.segments) {
+              ingestSegment(seg)
+              for (const row of (seg && seg.rows) || []) {
+                const s = Number(row && row.seq)
+                if (Number.isFinite(s) && s > appliedToSeq) appliedToSeq = s
+              }
+            }
             const mine = buildSegments ? buildSegments() : []
             sendVia(socket, { type: 'segments', segments: mine })
-            sendVia(socket, { type: 'ack', applied: msg.segments.length, rejected: 0, appliedToSeq, oldestSeq: getOldestSeq ? currentOldestSeq() : undefined })
+            sendVia(socket, { type: 'ack', applied: msg.segments.length, rejected: 0, ...(appliedToSeq > 0 ? { appliedToSeq } : {}), oldestSeq: getOldestSeq ? currentOldestSeq() : undefined })
           } else if (msg.type === 'snapshot-request') {
             // Snapshot-request protocol: stream the live state as bounded snapshot-chunk messages
             // + a snapshot-end trailer carrying OUR current cursor, so the peer records it as its
