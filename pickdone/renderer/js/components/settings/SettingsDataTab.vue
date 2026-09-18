@@ -77,6 +77,16 @@ import { dayjs, FMT } from '../../utils/core.js'
 import { confirmRecycleClear } from '../../utils/confirm.js'
 import { loadRuntime } from '../../store/runtimeState.js'
 
+/** Restore = the user wants the backup's data to win. Backup rows carry their backup-time
+ *  updateTime + status:'sync', so LAN LWW instantly reverts the restore against any peer
+ *  holding newer rows, and the cloud dirty filter skips status:'sync' rows. Stamping each
+ *  restored row dirty ('update') with a fresh updateTime preserves "old data wins".
+ *  (Only todo rows carry the sync ledger; settings/category/habits restore via store commits.) */
+function restoreStampRow (row, now = null) {
+  if (!row || typeof row !== 'object') return row
+  return { ...row, status: 'update', updateTime: now || Date.now() }
+}
+
 export default {
   name: 'SettingsDataTab',
   data () {
@@ -283,7 +293,7 @@ export default {
       let rows = []
       if (b.todoState) {
         try {
-          const td = this.parseTodoState(b.todoState); (td.todoList || []).forEach(r => rows.push(r)); (td.recycleList || []).forEach(r => rows.push(r))
+          const td = this.parseTodoState(b.todoState); (td.todoList || []).forEach(r => rows.push(restoreStampRow(r))); (td.recycleList || []).forEach(r => rows.push(restoreStampRow(r)))
           if (rows.length) await window.todoAPI.dbCall('upsertMany', rows)
         } catch (e) { console.error('[settings] restore segment failed: todo', e); failed.push('todo'); rows = [] }
       }
