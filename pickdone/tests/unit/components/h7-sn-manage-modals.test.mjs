@@ -26,11 +26,13 @@ test('h7 categories: countOf excludes recycle-bin rows like previewOf', () => {
   assert.match(catModal, /previewOf \(id\) \{[\s\S]*?!t\.complete && !t\.delete/)
 })
 
-test('h7 categories: count badge activates on Enter and Space', () => {
+test('h7 categories: count badge activates on Enter (Space via the global role-element handler)', () => {
   const badge = catModal.match(/<em class="cat-mgr-count"[\s\S]*?<\/em>/)[0]
   assert.match(badge, /role="button"/)
   assert.match(badge, /@keydown\.enter\.prevent="toggleMgrPreview\(c\.categoryId\)"/)
-  assert.match(badge, /@keydown\.space\.prevent="toggleMgrPreview\(c\.categoryId\)"/)
+  // d4 fix (701b0ba class): NO local @keydown.space — main.js's global Space capture already
+  // clicks role-bearing elements, so a local binding double-toggled (open+close)
+  assert.ok(!badge.includes('@keydown.space'), 'local Space binding must stay deleted')
 })
 
 test('h7 categories: rename focus queries at document level (append-to-body)', () => {
