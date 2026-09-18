@@ -3,8 +3,8 @@
 /**
  * LAN sync transport: TCP JSON-line framing (node:net), one JSON object per
  * `\n`-delimited line, hard-capped at 512KB per line. Peers must authenticate
- * with a pairing-derived authCode (`hello` / `hello-ack`) before `segments`
- * or `snapshot` messages are accepted; anything else is rejected and the
+ * with a pairing-derived authCode (`hello` / `hello-ack`) before `segments-chunk`
+ * or `snapshot-*` messages are accepted; anything else is rejected and the
  * socket destroyed.
  *
  * Message types:
@@ -62,6 +62,15 @@ class ProtocolError extends Error {
     super(message)
     this.name = 'ProtocolError'
   }
+}
+
+/** Sanitize a wire-supplied deviceName (round-3 review): strip control characters (terminal
+ *  escape / log-forging injection) and clamp to 40 chars — mirrors the bootstrap's syncSetName
+ *  rules. Anything non-string collapses to ''. */
+function cleanDeviceName(value) {
+  if (typeof value !== 'string') return ''
+  // eslint-disable-next-line no-control-regex -- control characters are exactly what we strip
+  return value.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 40)
 }
 
 /** Line-framing reader: buffers socket data, emits parsed JSON objects.
@@ -304,7 +313,7 @@ function wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, o
               sendEnc(socket, hsKey, { type: 'pair-accept', secret: pairingSecret })
               if (onPaired) onPaired({
                 deviceId: typeof msg.deviceId === 'string' ? msg.deviceId : '',
-                deviceName: typeof msg.deviceName === 'string' ? msg.deviceName : '',
+                deviceName: cleanDeviceName(msg.deviceName),
                 host: socket.remoteAddress,
                 confirmed: true,
               })
@@ -318,7 +327,7 @@ function wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, o
           if (!onPairRequest) { finish(false); return }
           onPairRequest({
             deviceId: typeof msg.deviceId === 'string' ? msg.deviceId : '',
-            deviceName: typeof msg.deviceName === 'string' ? msg.deviceName : '',
+            deviceName: cleanDeviceName(msg.deviceName),
             host: socket.remoteAddress,
             respond: finish,
           })
@@ -418,23 +427,23 @@ function createLanServer(opts) {
     wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, onUnauthorized, verifyPairingCode, onPaired, pairGate, onPairRequest, onPairThrottled, pairConfirmTimeoutMs, seenPairNonces })
   })
   server.on('error', (err) => {
-    // Fixed port taken (second instance on the same machine, or a stale process): degrade to an
-    // ephemeral port instead of dying — discovery advertises the RESOLVED port, so peers still
-    // find us. The fixed port is only a rendezvous convenience, never a correctness requirement.
+    // Fixed port taken (round-3 review): FAIL LOUDLY instead of silently degrading to an
+    // ephemeral port. An ephemeral bind is undiscoverable via the fixed-port rendezvous (manual
+    // peers, firewall rules, existing saved peers all target the fixed port), so a second app
+    // instance or a foreign squatter must surface as a visible sync error, not a silent
+    // half-working node. Port 0 (explicitly ephemeral config) can never hit EADDRINUSE.
     if (err && err.code === 'EADDRINUSE' && em.port === null && port !== 0) {
-      em.port = -1 // guard: only retry once
-      server.listen(0, host, () => {
-        em.port = server.address().port
-        em.emit('listening', em.port)
-      })
-      return
+      try { require('electron-log').error(`[LanSync] fixed sync port ${port} is in use — sync is NOT discoverable (EADDRINUSE)`) } catch { /* electron-log unavailable in pure-node contexts */ }
     }
     em.emit('error', err)
   })
-  server.listen(port, host, () => {
+  // Listen on next tick: on Windows a same-tick EADDRINUSE fires the 'error' event
+  // SYNCHRONOUSLY, before the caller can attach an 'error' listener — the unhandled 'error'
+  // event would crash the process instead of surfacing through the documented API.
+  process.nextTick(() => server.listen(port, host, () => {
     em.port = server.address().port
     em.emit('listening', em.port)
-  })
+  }))
 
   em.port = null
   em.close = () => new Promise((resolve) => {
@@ -581,4 +590,4 @@ function connect(host, port, opts) {
   return em
 }
 
-module.exports = { createLanServer, connect, ProtocolError, PROTO_VER, DEFAULT_PORT, MAX_LINE_BYTES, PRE_AUTH_LINE_BYTES, PAIR_CONFIRM_TIMEOUT_MS }
+module.exports = { createLanServer, connect, ProtocolError, PROTO_VER, DEFAULT_PORT, MAX_LINE_BYTES, PRE_AUTH_LINE_BYTES, PAIR_CONFIRM_TIMEOUT_MS, cleanDeviceName }

@@ -84,7 +84,15 @@ export function createEngine({ localStore, deviceId, clock = monotonicClock() })
           segments.push({ body: pack(batch, { fromSeq: batchFromSeq, toSeq, deviceId }), fromSeq: batchFromSeq, toSeq })
           batch = carry ? [carry] : []
           batchBytes = carry ? canonicalStringify(carry).length : 0
-          if (batch.length) batchFromSeq = carry.seq
+          if (batch.length) {
+            batchFromSeq = carry.seq
+            // The carry is now the whole batch: toSeq must follow it. The stale value left by the
+            // shedding catch below (carry.seq - 1 or older) made the carry's own flush call
+            // pack({fromSeq > toSeq}) -> SegmentRangeError, so buildSegments failed EVERY round
+            // whenever a shed carry landed as the terminal segment (permanent sync outage for
+            // large backlogs; regression-tested in tests/unit/sync/engine.test.mjs).
+            toSeq = carry.seq
+          }
           carry = null
           return
         } catch (e) {
