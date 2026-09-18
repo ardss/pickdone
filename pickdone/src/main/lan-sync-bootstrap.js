@@ -84,7 +84,7 @@ function ensureIdentity () {
 /* The apply/hydration/flush pipeline lives in ./sync-apply.js (line ratchet, round-3 review);
  * the delegates below bind the bootstrap's module-level `state` singleton to it. */
 const syncApply = require('./sync-apply')
-const { SECURITY_LOCK_KEY } = syncApply
+const { isMachineLocalSettingKey } = syncApply
 const createHydrationCache = () => syncApply.createHydrationCache(state)
 const hydrateRow = (ptr, cache) => syncApply.hydrateRow(state, ptr, cache)
 const localUserId = () => syncApply.localUserId(state)
@@ -112,7 +112,7 @@ function createLocalStoreAdapter () {
         // 'sync.' = identity namespace; 'securityLock*' = password/question ciphertext — both
         // must never leave this device (round-3 review: the settingsState bridge mirrors
         // securityLock rows into settings_rows).
-        if (String(r.key).startsWith('sync.') || SECURITY_LOCK_KEY.test(String(r.key))) continue
+        if (isMachineLocalSettingKey(r.key)) continue
         out.push({ entity: 'setting', id: r.key, updatedAt: r.updatedAt, deleted: !!r.deleted, deletedAt: r.deletedAt || 0, data: { key: r.key, value: r.value } })
       }
       for (const r of state.db.call('tomatoAll', {}) || []) out.push({ entity: 'tomato', id: r.tomatoId, updatedAt: r.updatedAt || 0, deleted: false, deletedAt: 0, data: r })

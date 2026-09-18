@@ -22,6 +22,15 @@ const SYNCABLE_ENTITIES = new Set(['todo', 'setting', 'tomato', 'category', 'pla
 // settings_rows keys holding password/question CIPHERTEXT — never egress, never ingress (round-3).
 const SECURITY_LOCK_KEY = /^securityLock/
 
+// Machine-local bookkeeping keys: CLI last-seen/save stamps are per-device state, not user
+// data — syncing them made the two hosts fight over them every round (log noise, LWW churn).
+const isMachineLocalSettingKey = id => {
+  const k = String(id)
+  // 'sync.' namespace = identity/pairing state (strictly local); 'securityLock*' = password
+  // ciphertext (round-3 review: never egresses); leading underscore = CLI bookkeeping stamps.
+  return k.startsWith('sync.') || /^securityLock/.test(k) || k.startsWith('_')
+}
+
 /**
  * Per-hydration-pass entity caches. The first buildSegments after a fresh cursor re-hydrates the
  * whole oplog (thousands of pointers); without these caches every pointer re-scanned a full entity
@@ -63,7 +72,7 @@ function hydrateRow (state, ptr, cache) {
     if (ptr.entity === 'setting') {
       // 'sync.' namespace stays local (identity); 'securityLock*' rows hold password/question
       // CIPHERTEXT that must never egress to peers (round-3 review).
-      if (String(ptr.entityId).startsWith('sync.') || SECURITY_LOCK_KEY.test(String(ptr.entityId))) return null
+      if (isMachineLocalSettingKey(ptr.entityId)) return null
       const r = c.setting(ptr.entityId)
       if (!r) return null
       return { ...base, updatedAt: r.updatedAt, deleted: !!r.deleted, deletedAt: r.deletedAt || 0, data: { key: r.key, value: r.value } }
@@ -210,7 +219,7 @@ function applyRowInner (state, incoming) {
   } else if (entity === 'setting') {
     // Egress gate mirrored on ingress (round-3 review): a peer must never WRITE securityLock*
     // rows here — the password/question ciphertext is strictly local.
-    if (String(incoming.id).startsWith('sync.') || SECURITY_LOCK_KEY.test(String(incoming.id))) return false
+    if (isMachineLocalSettingKey(incoming.id)) return false
     const r = cache.setting(incoming.id)
     // settingsRowsAll (deliberately) includes tombstones: a LOCAL tombstone must take part in the
     // merge as a real row, otherwise an older remote live row wins LWW against "missing" and
