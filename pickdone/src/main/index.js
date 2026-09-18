@@ -226,6 +226,7 @@ function watchDbForExternalWrites () {
         // store/tomato actions (idempotency token/cross-window claim/ledger/project estimate all reused; the CLI never writes state in parallel)
         forwardTomatoCmd()
         log.info('[TodoDB] 检测到外部写入（CLI），已刷新调度器并通知渲染端')
+        try { require('./lan-sync-bootstrap').kickSyncRound('external-db-write') } catch { /* sync lazy-not-init */ }
         // Resync the mtime baseline: reloadAll itself writes reminderLastSeenAt (touching -wal); without this
         // the next poll sees our own write as "another external write" → reload → write again = a self-sustaining loop
         lastMtime = readWatchMtime() ?? lastMtime
@@ -622,6 +623,7 @@ function registerIpc () {
     isLocked, isLockWindow, lockAppNow, unlockAppNow, verifyLockPassword, allowWithinRate,
     isSafeExternal, attachDir,
     resyncDbWatch: () => resyncDbWatch,
+    notifySyncChange: op => { try { require('./lan-sync-bootstrap').kickSyncRound('local-write:' + op) } catch { /* sync lazy-not-init */ } },
     broadcastTomatoRecordsChanged, broadcastTodosChanged, broadcastWhiteNoiseUpdated,
     rebuildTrayMenu, getTray: () => tray, updateTomatoTray,
     applyShortcuts

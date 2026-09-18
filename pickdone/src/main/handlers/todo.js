@@ -10,7 +10,8 @@ const { makeAssertMainWindow, purgeAttachmentFiles } = require('./shared')
 module.exports = function todoHandlers (ctx) {
   const {
     isLocked, isLockWindow, getMainWindow,
-    resyncDbWatch, broadcastTomatoRecordsChanged, broadcastTodosChanged, dbApi, attachDir
+    resyncDbWatch, broadcastTomatoRecordsChanged, broadcastTodosChanged, dbApi, attachDir,
+    notifySyncChange,
   } = ctx
 
   const assertMainWindow = makeAssertMainWindow(getMainWindow)
@@ -137,6 +138,7 @@ module.exports = function todoHandlers (ctx) {
       // 账本行写:调度器不依赖番茄记录;广播由 db 层 setLedgerChangedHook 统一发(CLI 直写同样触发),此处只跳过 todos 全量重载
       if (op === 'tomatoAppendMany' || op === 'tomatoUpdateById' || op === 'tomatoRemoveByIds' || op === 'tomatoMigrateFromMeta') return r
       if (dbm.isWriteOp(op)) broadcastTodosChanged(op, e.sender) // exclude the originating sender, so optimistic updates are not clobbered by the echo
+      if (notifySyncChange) notifySyncChange(op)
       return r
     },
 
