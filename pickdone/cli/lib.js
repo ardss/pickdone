@@ -34,8 +34,7 @@ let opened = false
 function userDataDir () {
   if (process.env.TODO_DB_DIR) return process.env.TODO_DB_DIR
   if (process.env.TODO_USER_DATA_DIR) return process.env.TODO_USER_DATA_DIR
-  // Platform default must mirror Electron's app.getPath('userData') (~/.config/pickdone on Linux,
-  // ~/Library/Application Support/pickdone on macOS) — APPDATA-only resolved to CWD-relative
+  // Platform default must mirror Electron's app.getPath('userData') (~/.config/pickdone on Linux, ~/Library/Application Support/pickdone on macOS) — APPDATA-only resolved to CWD-relative
   // './pickdone' on Linux, so CLI and App each opened a different database (2026-09-11 audit P1)
   if (process.platform === 'darwin') return path.join(process.env.HOME || '', 'Library', 'Application Support', 'pickdone')
   if (process.platform === 'linux') {
@@ -149,8 +148,7 @@ function recycleTasks () { return open().call('queryTodos', { deleted: 1, orderB
  *  the fallback entirely would break existing keyword workflows against a task the user just deleted by mistake. Explicit
  *  intent keeps working: restore/delete pass an explicit recycle pool, so they never hit this warning path. */
 function resolveTask (input, pool) {
-  // Strip zero-width/full-width whitespace (IME candidates occasionally contain zero-width chars)
-  // Same normalization on both sides: stripping it only from the input made any multi-word keyword unmatchable
+  // Strip zero-width/full-width whitespace (IME candidates occasionally contain zero-width chars) Same normalization on both sides: stripping it only from the input made any multi-word keyword unmatchable
   const norm = v => String(v).toLowerCase().replace(/[\s\u00A0\u3000\u200B\u2003]/g, '')
   const matchIn = list => {
     const byId = list.find(t => t.taskId === input)
@@ -204,8 +202,7 @@ function listTodos (opts = {}) {
   if (opts.range === 'today') { q.dayStartFrom = +now.startOf('day'); q.dayStartTo = +now.endOf('day') }
   else if (opts.range === 'tomorrow') { const t = now.add(1, 'day'); q.dayStartFrom = +t.startOf('day'); q.dayStartTo = +t.endOf('day') }
   // Fix (2026-09-16): `week` now means the ISO week (Mon..Sun, same window as saved views' dateMode 'week' /
-  // FilterView applyViewConds endOf('isoWeek')) instead of a rolling 7 days; the rolling semantics moved to
-  // the new `next7d` range so nothing is lost.
+  // FilterView applyViewConds endOf('isoWeek')) instead of a rolling 7 days; the rolling semantics moved to the new `next7d` range so nothing is lost.
   else if (opts.range === 'week') { q.dayStartFrom = +now.startOf('day'); q.dayStartTo = +now.endOf('isoWeek') }
   else if (opts.range === 'next7d') { q.dayStartFrom = +now.startOf('day'); q.dayStartTo = +now.add(7, 'day').endOf('day') }
   else if (opts.range === 'overdue') { q.dayStartTo = +now.subtract(1, 'day').endOf('day') }
@@ -234,8 +231,7 @@ function stats ({ from, to } = {}) {
   const now = dayjs()
   const fmt = d => parseInt(d.format('YYYYMMDD'), 10)
   // Fix (2026-09-16): --from/--to go through the same parseDate as add/edit, so `stats --from today` /
-  // `--from +7d` work; the old bare dayjs(from) turned keywords into Invalid Date and died inside the db
-  // layer as an opaque USAGE error.
+  // `--from +7d` work; the old bare dayjs(from) turned keywords into Invalid Date and died inside the db layer as an opaque USAGE error.
   const f = from ? fmt(dayjs(parseDate(from))) : fmt(now.subtract(6, 'day'))
   const t = to ? fmt(dayjs(parseDate(to))) : fmt(now)
   const db = open()
@@ -382,8 +378,7 @@ function addMilestone (categoryInput, title, dateInput) {
   const list = msNormalize(getMilestones(categoryId).milestones.concat([added]))
   open().call('setMeta', [MS_KEY(categoryId), JSON.stringify(list)])
   audit.record({ action: 'milestone.add', targets: [{ taskId: 'cat:' + categoryId, content: cat ? cat.categoryName : String(categoryId) }], note: `milestone "${title.trim()}" → ${dayjs(date).format('YYYY-MM-DD')}` })
-  // `added` echoes the milestone this call actually inserted (the list is date-sorted, so the CLI used to
-  // echo milestones.at(-1) — a different row whenever the new date was not the latest)
+  // `added` echoes the milestone this call actually inserted (the list is date-sorted, so the CLI used to echo milestones.at(-1) — a different row whenever the new date was not the latest)
   const stored = list.find(m => m.title === added.title && m.date === added.date) || added
   return { categoryId, milestones: list, added: stored }
 }
@@ -425,8 +420,7 @@ function setProjectDeadline (input, dateInput) {
   let deadline = 0
   if (dateInput != null && dateInput !== '' && !/^(none|clear|清除|取消)$/i.test(dateInput)) {
     // review P2 (2026-09-10): delegate to the same parser as `edit --deadline` (parseDate) — the milestone
-    // parser rejected "tomorrow"/"+3d 09:00" here while `edit --deadline` accepted them. Deadlines stay
-    // day-granular via startOf('day'). (parseMilestoneDate remains milestone-command-only.)
+    // parser rejected "tomorrow"/"+3d 09:00" here while `edit --deadline` accepted them. Deadlines stay day-granular via startOf('day'). (parseMilestoneDate remains milestone-command-only.)
     try {
       deadline = dayStartOf(parseDate(dateInput))
     } catch (e) {
@@ -1775,29 +1769,18 @@ function planRemove (input, { date, at } = {}) {
   return { taskId: t.taskId, day, removed: ids.length }
 }
 
+const evu = require('./event-utils.cjs')
+const { eventFocusMinutes, eventEnd } = evu
+
 /* ---------------- Events import: rebuild a whole day's schedule from a structured event list (backfill/reconstruction scenarios) ----------------
-   Event shape: { date:'YYYY-MM-DD', start:'HH:mm', end:'HH:mm'|'24:00', title, category:'工作|学习|生活|发布|<id>',
-                  important:0|1, urgent:0|1, tags:['a','b'], estimate:N }
+   Event shape: { date, start, end|24:00, title, category, important, urgent, tags, estimate }
    Idempotent: dedupe by (dayStart, title); tasks already existing are skipped and not created again. */
-function eventFocusMinutes (mins) {
-  // Focus duration = wall-clock duration ×0.75 (reserving breaks), rounded to 25-min whole tomatoes, minimum one tomato
-  return Math.max(25, Math.round(mins * 0.75 / 25) * 25)
-}
-function eventEnd (e) {
-  let [h2, m2] = String(e.end || '').split(':').map(Number)
-  if (h2 === 24) { h2 = 23; m2 = 59 }
-  return { h: h2, m: m2 }
-}
-function eventKey (e) {
-  return dayStartOf(parseDate(e.date + ' ' + e.start)) + '|' + String(e.title || '').trim()
-}
+
 async function importEvents (events, { onProgress = () => {} } = {}) {
   if (!Array.isArray(events) || !events.length) throw new CliError('events file must be a non-empty JSON array', 'EMPTY_EVENTS')
   const existing = liveTasks()
   const seen = new Set(existing.map(t => t.dayStart + '|' + String(t.taskContent || '').trim()))
-  // Fix (2026-09-19): hasRecord used to close over the PRE-import records snapshot, so it was always
-  // false for tasks the import itself had just created (their backfilled ledger rows landed after the
-  // snapshot). Re-read inside the predicate so just-created tasks are seen as having records.
+  // Fix (2026-09-19): re-read records inside the predicate — a pre-import snapshot never saw rows the import itself just created.
   const hasRecord = tid => (tomatoRecords() || []).some(r => r.manual && r.focusTaskId === tid)
   let created = 0, skipped = 0
   const failed = []
@@ -1805,7 +1788,7 @@ async function importEvents (events, { onProgress = () => {} } = {}) {
     const label = (e.date || '?') + ' ' + (e.start || '') + ' ' + (e.title || '').slice(0, 24)
     try {
       if (!e.date || !e.start || !e.end || !e.title) throw new CliError('missing date/start/end/title', 'BAD_EVENT')
-      const key = eventKey(e)
+      const key = evu.eventKey(e, dayStartOf, parseDate)
       if (seen.has(key)) { skipped++; onProgress({ label, status: 'skipped-task' }); continue }
       const { h: h1, m: m1 } = (() => { const [a, b] = String(e.start).split(':').map(Number); return { h: a, m: b } })()
       const { h: h2, m: m2 } = eventEnd(e)
@@ -1842,6 +1825,8 @@ async function importEvents (events, { onProgress = () => {} } = {}) {
   }
   return { created, skipped, failed, total: events.length, hasRecord }
 }
+
+const eventKey = (e) => evu.eventKey(e, dayStartOf, parseDate)
 
 function getTask (input) { const t = resolveTask(input); if (!t) throw new CliError('task not found: ' + input, 'TASK_NOT_FOUND'); return t }
 // undone tasks whose predecessors are all complete (or none); optional categoryId scope. FS readiness read for humans and AI agents.

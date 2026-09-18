@@ -127,8 +127,7 @@ export default {
     return { cal: null, cursorTs: 0, lunarMap: {}, view: 'dayGridMonth', tbWeekStart: 0, tbDragTask: null, morePop: null, busyDays: null, monthPop: false, popYear: dayjs().year(), selMonthTs: 0, todayInView: true }
   },
   computed: {
-    /* ===== Time block view ===== */
-    tbDays () {
+    /* ===== Time block view ===== */ tbDays () {
       const start = this.tbWeekStart || +dayjs().startOf('week')
       const today = +dayjs().startOf('day')
       return Array.from({ length: 7 }, (_, i) => {
