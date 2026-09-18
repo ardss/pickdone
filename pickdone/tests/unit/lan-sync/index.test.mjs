@@ -135,9 +135,9 @@ test('glue: server-side ingest path accepts inbound segments from authenticated 
     getHandler: () => (msg, socket) => {
       if (msg.type === 'segments') {
         serverIngested.push(...msg.segments)
-        socket.write(JSON.stringify({ type: 'ack', applied: msg.segments.length, rejected: 0 }) + '\n')
+        socket._lanSend({ type: 'ack', applied: msg.segments.length, rejected: 0 })
       } else if (msg.type === 'snapshot-request') {
-        socket.write(JSON.stringify({ type: 'snapshot', snapshot: { tasks: 3 } }) + '\n')
+        socket._lanSend({ type: 'snapshot', snapshot: { tasks: 3 } })
       }
     },
   })

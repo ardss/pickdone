@@ -23,7 +23,9 @@ function fakeDiscovery() {
   return { startAdvertising() {}, discover() {}, stop() {}, getPeers: () => [] }
 }
 
-function line(socket, obj) { socket.write(JSON.stringify(obj) + '\n') }
+// Post-auth replies MUST go through the encrypted send path (socket._lanSend is attached
+// by transport.js and frames under the session key); raw plaintext writes are refused.
+function line(socket, obj) { socket._lanSend(obj) }
 
 /** Raw peer server: counts snapshot-requests, scriptable per-request behavior. */
 function rawPeerServer({ ack = { appliedToSeq: 100, oldestSeq: 50 }, onRequest, buildSegmentsRows = [] }) {
