@@ -186,9 +186,10 @@ test('snapshot: sender side streams bounded chunks + end trailer over TCP and ne
   assert.equal(nodeA.getStatus().peers[0].pullWatermark, 1000, 'A records B\'s cursor (max seq) as its pull watermark')
 
   const sentEntry = nodeB.getStatus().recent.find(e => e.kind === 'snapshot')
-  assert.ok(sentEntry && sentEntry.detail.direction === 'sent')
-  assert.equal(sentEntry.detail.rows, 3000)
-  assert.ok(sentEntry.detail.label.includes('对端请求全量快照'), 'Device Center label present')
+  // Round-3 review: the snapshot "sent" recent entry carries a locale-neutral STRING detail —
+  // the renderer interpolates it verbatim into the Device Center feed.
+  assert.ok(typeof sentEntry.detail === 'string', 'detail is a plain string (rendered verbatim)')
+  assert.equal(sentEntry.detail, 'snapshot: 3000 rows')
   assert.deepEqual(sentEvents, [{ peer: 'node-a', direction: 'sent', rows: 3000, cursor: 1000 }])
 
   // Round 3: incremental, no second snapshot.
