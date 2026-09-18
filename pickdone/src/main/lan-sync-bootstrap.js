@@ -18,7 +18,8 @@
  *   - Category/plan/filter tombstones cannot be hydrated (no read op returns them), so deletions of
  *     those entities propagate only as seq-advancing pointers that peers skip; full snapshot
  *     reconciliation covers them once snapshot exchange is wired into the round protocol.
- *   - conflictCopy from merge.mjs is logged, not materialized (renderer has no conflict-copy UI yet).
+ *   - conflictCopy from merge.mjs is materialized for todos only (tombstoned recycle-bin row,
+ *     see sync-apply.js); other entities log the loser (no conflict-copy UI yet).
  *   - applySnapshot/replaceAll is implemented as merge-apply (non-destructive) because the round
  *     protocol never sends snapshot-request in P3a; a true destructive reset is deferred.
  */
@@ -26,7 +27,6 @@ const { randomUUID, timingSafeEqual } = require('node:crypto')
 const os = require('node:os')
 const log = require('electron-log')
 const { createEngine } = require('../../shared/sync-core/engine.mjs')
-const mergeCore = require('../../shared/sync-core/merge.mjs')
 const { SYNC_SCHEMA_VERSION } = require('../../shared/sync-core/merge.mjs')
 const { generatePairingSecret, derivePairingCode } = require('../../shared/sync-core/pairing.mjs')
 const { createLanSyncNode } = require('./lan-sync/index')
@@ -81,75 +81,16 @@ function ensureIdentity () {
 }
 
 /* ---------- localStore adapter (shared/sync-core engine.mjs contract) ---------- */
-const SYNCABLE_ENTITIES = new Set(['todo', 'setting', 'tomato', 'category', 'plan', 'filter'])
-
-/**
- * Per-hydration-pass entity caches. The first buildSegments after a fresh cursor re-hydrates the
- * whole oplog (thousands of pointers); without these caches every pointer re-scanned a full entity
- * list (O(n²)) and the peer's round response starved past the transport's round timer, so the
- * cursor never advanced and every later round rebuilt the same backlog (2026-09-17 live drill).
- * A cache instance is valid for ONE getRowsSince call: rows applied between calls must re-read.
- */
-function createHydrationCache () {
-  const caches = {}
-  const load = (key, op, idOf) => {
-    if (!caches[key]) caches[key] = new Map((state.db.call(op, {}) || []).map(r => [idOf(r), r]))
-    return caches[key]
-  }
-  return {
-    todo: id => load('todo', 'getAll', r => String(r.taskId)).get(String(id)),
-    setting: key => load('setting', 'settingsRowsAll', r => r.key).get(key),
-    tomato: id => load('tomato', 'tomatoAll', r => String(r.tomatoId)).get(String(id)),
-    category: id => load('category', 'getAllCategories', r => String(r.categoryId)).get(String(id)),
-    plan: id => load('plan', 'planAll', r => String(r.id)).get(String(id)),
-    filter: id => load('filter', 'filterList', r => String(r.id)).get(String(id)),
-  }
-}
-
-/** Hydrate one oplog pointer row into a merge-ready payload row (null = not syncable). */
-function hydrateRow (ptr, cache) {
-  if (!SYNCABLE_ENTITIES.has(ptr.entity)) return null
-  // Defensive GC-marker guard: legacy ('*gc*') oplog pointers (planPrune / tomatoMigrateFromMeta,
-  // and pre-2026-09-18 purge rows) are ring-buffer bookkeeping, not records — hydrating one used
-  // to materialize a ghost tombstone with taskId '*gc*' on peers.
-  if (String(ptr.entityId) === '*gc*') return null
-  const c = cache || createHydrationCache()
-  const base = { seq: ptr.seq, entity: ptr.entity, id: ptr.entityId, ts: ptr.ts }
-  try {
-    if (ptr.entity === 'todo') {
-      const t = c.todo(ptr.entityId)
-      if (!t) return { ...base, deleted: true, deletedAt: ptr.ts, data: null }
-      return { ...base, updatedAt: t.updateTime || ptr.ts, deleted: !!t.delete, deletedAt: t.deletedAt || 0, data: t }
-    }
-    if (ptr.entity === 'setting') {
-      if (String(ptr.entityId).startsWith('sync.')) return null // identity namespace stays local
-      const r = c.setting(ptr.entityId)
-      if (!r) return null
-      return { ...base, updatedAt: r.updatedAt, deleted: !!r.deleted, deletedAt: r.deletedAt || 0, data: { key: r.key, value: r.value } }
-    }
-    if (ptr.entity === 'tomato') {
-      const r = c.tomato(ptr.entityId)
-      if (!r) return { ...base, deleted: true, deletedAt: ptr.ts, data: null }
-      return { ...base, updatedAt: r.updatedAt || ptr.ts, deleted: false, deletedAt: 0, data: r }
-    }
-    if (ptr.entity === 'category') {
-      const cat = c.category(ptr.entityId)
-      if (!cat) return { ...base, deleted: true, deletedAt: ptr.ts, data: null } // tombstone hydration gap (see header)
-      return { ...base, updatedAt: cat.updatedAt || ptr.ts, deleted: false, deletedAt: 0, data: cat }
-    }
-    if (ptr.entity === 'plan') {
-      const p = c.plan(ptr.entityId)
-      if (!p) return { ...base, deleted: true, deletedAt: ptr.ts, data: null }
-      return { ...base, updatedAt: ptr.ts, deleted: false, deletedAt: 0, data: p }
-    }
-    if (ptr.entity === 'filter') {
-      const f = c.filter(ptr.entityId)
-      if (!f) return { ...base, deleted: true, deletedAt: ptr.ts, data: null }
-      return { ...base, updatedAt: ptr.ts, deleted: false, deletedAt: 0, data: f }
-    }
-  } catch (e) { log.warn('[LanSync] hydrate failed for', ptr.entity, ptr.entityId, e.message) }
-  return null
-}
+/* The apply/hydration/flush pipeline lives in ./sync-apply.js (line ratchet, round-3 review);
+ * the delegates below bind the bootstrap's module-level `state` singleton to it. */
+const syncApply = require('./sync-apply')
+const { SECURITY_LOCK_KEY } = syncApply
+const createHydrationCache = () => syncApply.createHydrationCache(state)
+const hydrateRow = (ptr, cache) => syncApply.hydrateRow(state, ptr, cache)
+const localUserId = () => syncApply.localUserId(state)
+const applyRowSafe = row => syncApply.applyRowSafe(state, row)
+const flushPendingWrites = () => syncApply.flushPendingWrites(state)
+const readMaxOplogSeq = () => syncApply.readMaxOplogSeq(state)
 
 function createLocalStoreAdapter () {
   return {
@@ -168,7 +109,10 @@ function createLocalStoreAdapter () {
         out.push({ entity: 'todo', id: t.taskId, updatedAt: t.updateTime || 0, deleted: !!t.delete, deletedAt: t.deletedAt || 0, data: t })
       }
       for (const r of state.db.call('settingsRowsAll', {}) || []) {
-        if (String(r.key).startsWith('sync.')) continue
+        // 'sync.' = identity namespace; 'securityLock*' = password/question ciphertext — both
+        // must never leave this device (round-3 review: the settingsState bridge mirrors
+        // securityLock rows into settings_rows).
+        if (String(r.key).startsWith('sync.') || SECURITY_LOCK_KEY.test(String(r.key))) continue
         out.push({ entity: 'setting', id: r.key, updatedAt: r.updatedAt, deleted: !!r.deleted, deletedAt: r.deletedAt || 0, data: { key: r.key, value: r.value } })
       }
       for (const r of state.db.call('tomatoAll', {}) || []) out.push({ entity: 'tomato', id: r.tomatoId, updatedAt: r.updatedAt || 0, deleted: false, deletedAt: 0, data: r })
@@ -183,190 +127,6 @@ function createLocalStoreAdapter () {
       flushPendingWrites()
     }
   }
-}
-
-/* ---------- apply: run merge rules, write the winner through regular db ops ---------- */
-/** Content equality mirroring merge.mjs's contentDiffers (not exported there): bookkeeping fields
- *  (id/updatedAt/seq/deviceId/deletedAt markers + `deleted`) are excluded. */
-function rowContentDiffers (a, b) {
-  const SKIP = new Set(['id', 'updatedAt', 'seq', 'deviceId', 'deletedAt', 'deleted', 'entity', 'ts'])
-  const keys = new Set([...Object.keys(a), ...Object.keys(b)])
-  for (const k of keys) {
-    if (SKIP.has(k)) continue
-    if (a[k] !== b[k]) return true
-  }
-  return false
-}
-
-function applyRowSafe (incoming) {
-  try { return applyRowInner(incoming) } catch (e) { log.warn('[LanSync] apply failed for', incoming && incoming.entity, incoming && incoming.id, e.message); return false }
-}
-
-/**
- * LWW clock-skew clamp (single choke point for ALL inbound rows: increments and snapshot chunks
- * both land here). A peer whose clock runs far ahead would otherwise stamp every future conflict
- * in its favor forever. Clamp only the comparison keys (updatedAt/deletedAt) to `now` when they
- * are more than SKEW_CLAMP into the future; the stored payload (`data`) is never touched.
- */
-const SKEW_CLAMP_MS = 10 * 60 * 1000
-function clampSkew (row) {
-  if (!row || typeof row !== 'object') return row
-  const now = Date.now()
-  const limit = now + SKEW_CLAMP_MS
-  const future = (row.updatedAt > limit) || (row.deletedAt > limit)
-  if (!future) return row
-  return {
-    ...row,
-    updatedAt: row.updatedAt > limit ? now : row.updatedAt,
-    deletedAt: row.deletedAt > limit ? now : row.deletedAt,
-  }
-}
-
-function applyRowInner (incoming) {
-  if (!incoming || !SYNCABLE_ENTITIES.has(incoming.entity)) return false
-  // Defensive: a '*gc*' oplog marker must never surface as an appliable row id (see hydrateRow).
-  if (String(incoming.id) === '*gc*') return false
-  incoming = clampSkew(incoming)
-  const entity = incoming.entity
-  // Locate the local counterpart for LWW comparison (cached: one entity-list read per ingest pass)
-  const cache = state.applyCache || createHydrationCache()
-  let localRow = null
-  if (entity === 'todo') {
-    const t = cache.todo(incoming.id)
-    if (t) localRow = { updatedAt: t.updateTime || 0, deleted: !!t.delete, deletedAt: t.deletedAt || 0, data: t }
-  } else if (entity === 'setting') {
-    if (String(incoming.id).startsWith('sync.')) return false
-    const r = cache.setting(incoming.id)
-    // settingsRowsAll (deliberately) includes tombstones: a LOCAL tombstone must take part in the
-    // merge as a real row, otherwise an older remote live row wins LWW against "missing" and
-    // resurrects what the user deleted here (delete-wins never gets a chance to hold).
-    if (r) localRow = { updatedAt: r.updatedAt, deleted: !!r.deleted, deletedAt: r.deletedAt || 0, data: { key: r.key, value: r.value } }
-  } else if (entity === 'tomato') {
-    const r = cache.tomato(incoming.id)
-    // tomatoAll filters deleted=0 (db.js), so a local tomato tombstone reads as "absent" here;
-    // localRow stays null and the incoming row (including its tombstone) wins and is landed via
-    // the tomatoRemoveByIds branch below — the tombstone still takes effect, idempotently.
-    if (r) localRow = { updatedAt: r.updatedAt || 0, deleted: false, deletedAt: 0, data: r }
-  } else if (entity === 'category') {
-    const c = cache.category(incoming.id)
-    if (c) localRow = { updatedAt: c.updatedAt || 0, deleted: false, deletedAt: 0, data: c }
-  } else if (entity === 'plan') {
-    // planAll/filterList do not SELECT updatedAt (db.js - outside this fix file scope), so the
-    // local LWW age is UNKNOWN, not 0. An honest LWW is impossible across that domain: treating
-    // unknown as 0 makes every remote row (ts > 0) win, so two devices ping-pong plan/filter
-    // edits every round, each clobbering the other newer state. ageUnknown rows are therefore
-    // SKIPPED for live-row writes (conservative); tombstones still land (deletion propagation is
-    // strictly safer than a divergent resurrect).
-    const c = cache.plan(incoming.id)
-    if (c) localRow = { updatedAt: 0, deleted: false, deletedAt: 0, ageUnknown: true, data: c }
-  } else if (entity === 'filter') {
-    const f = cache.filter(incoming.id)
-    if (f) localRow = { updatedAt: 0, deleted: false, deletedAt: 0, ageUnknown: true, data: f }
-  }
-  if (!incoming.deleted && !incoming.data) return false // payload-less pointer, nothing to merge
-  // Merge rules come from sync-core only (adapter boundary). Todos/chips/ledger have dedicated
-  // rules; the remaining entities use the generic LWW shape.
-  let winner
-  if (entity === 'tomato') winner = mergeCore.mergeTomatoRows(localRow, incoming).row
-  else winner = mergeCore.mergeTodoRows(localRow, incoming).row
-  if (localRow && winner !== incoming) return false // local version stands
-  if (localRow && winner === incoming && !rowContentDiffers(localRow, incoming)) return false // identical content: no-op, prevents apply/push ping-pong
-  if (localRow && winner === incoming && mergeCore.mergeTodoRows(localRow, incoming).conflictCopy) {
-    log.warn('[LanSync] conflict on', entity, incoming.id, '— local copy superseded (conflict-copy UI deferred)')
-  }
-  // Write the winner through the regular write ops (re-captured into the local oplog, which is what
-  // propagates the acknowledged state back to the peer — idempotent under the same merge rules).
-  // Todos/settings/tomato go through the per-segment write buffer: a first sync applies thousands of
-  // rows and one transaction commit per row (~14ms each measured 2026-09-17) starves the round past
-  // any sane budget, while the bulk ops commit in one transaction (upsertMany 3000 rows = ~110ms).
-  if (entity === 'todo') {
-    if (winner.deleted && !winner.data) {
-      // Remote tombstone winner: without this branch no write fired and the peer's deletion NEVER
-      // landed here (every branch required winner.data). Land it through the buffered bulk path —
-      // todoToRow normalizes `delete:1` into a deleted=1 tombstone row on upsertMany.
-      state.pendingWrites.todos.push({ taskId: incoming.id, delete: 1, deletedAt: winner.deletedAt || incoming.deletedAt || 0 })
-      return true
-    }
-    if (!winner.data) return false
-    state.pendingWrites.todos.push({ ...winner.data, taskId: winner.data.taskId != null ? winner.data.taskId : incoming.id })
-  } else if (entity === 'setting') {
-    if (winner.deleted) {
-      // Tombstone winner (delete-wins). settingsRowPut/putRow clears `deleted` on write, so pushing
-      // the (data-carrying) tombstone through the buffer would RESURRECT the row; land the
-      // deletion through the dedicated tombstone op instead. Direct sync call: deletes are rare
-      // and tiny, no bulk buffering needed.
-      state.db.call('settingsRowDelete', { key: incoming.id })
-      return true
-    }
-    if (!winner.data) return false
-    state.pendingWrites.settings.push({ key: incoming.id, value: winner.data.value })
-  } else if (entity === 'tomato') {
-    if (winner.deleted && !winner.data) {
-      // Tomato tombstone winner (hydrated from a pointer whose row is gone locally): land it via
-      // the tombstone op. Direct sync call, same reasoning as settingsRowDelete above.
-      state.db.call('tomatoRemoveByIds', [incoming.id])
-      return true
-    }
-    if (!winner.data) return false
-    state.pendingWrites.tomatoes.push(winner.data)
-  } else if (entity === 'category' && winner.data) {
-    // Bulk-buffered (2026-09-18): a first-sync snapshot can carry hundreds of categories —
-    // one commit per row starved rounds the same way todos did before the write buffer.
-    state.pendingWrites.categories.push({ ...winner.data, id: winner.data.categoryId })
-  } else if (entity === 'plan') {
-    if (incoming.deleted) state.db.call('planRemoveIds', [incoming.id])
-    else if (localRow && localRow.ageUnknown) return false // cross-domain LWW: local age unknown, refuse to clobber
-    else state.pendingWrites.plans.push(winner.data) // bulk-buffered via planAddMany at flush
-  } else if (entity === 'filter') {
-    if (incoming.deleted) state.db.call('filterDelete', Number(incoming.id))
-    else if (localRow && localRow.ageUnknown) return false // cross-domain LWW: local age unknown, refuse to clobber
-    else state.pendingWrites.filters.push({ ...winner.data, id: Number(incoming.id) }) // bulk-buffered
-  } else {
-    return false
-  }
-  return true
-}
-
-/**
- * Flush the buffered bulk writes. Called after every ingested segment, after buildSnapshot-driven
- * replaceAll, and before the transport sends its round ack — a peer's push cursor may only advance
- * over rows that are already committed here (crash mid-buffer = rows unapplied, cursor stays, the
- * next round re-pushes; same crash semantics as commitSyncBatch §4.1).
- */
-function flushPendingWrites () {
-  const buf = state.pendingWrites
-  if (buf.todos.length) state.db.call('upsertMany', buf.todos)
-  if (buf.settings.length) state.db.call('settingsRowPutMany', buf.settings)
-  if (buf.tomatoes.length) state.db.call('tomatoAppendMany', buf.tomatoes)
-  if (buf.categories && buf.categories.length) state.db.call('upsertCategoryMany', buf.categories)
-  if (buf.plans && buf.plans.length) state.db.call('planAddMany', buf.plans)
-  if (buf.filters && buf.filters.length) state.db.call('filterUpsertMany', buf.filters)
-  // Clear ONLY after every bulk op committed. A throw here must propagate to the round: the engine
-  // has already recorded the rows applied and the peer will be acked, so silently dropping the
-  // buffer (the old `finally` clear) lost those rows forever. Letting the exception escape fails
-  // the round, the peer's cursor stays put, and the next round re-pushes (idempotent, §4.1).
-  buf.todos = []
-  buf.settings = []
-  buf.tomatoes = []
-  if (buf.categories) buf.categories = []
-  if (buf.plans) buf.plans = []
-  if (buf.filters) buf.filters = []
-}
-
-/**
- * Local max oplog seq — reported to peers as `ack.appliedToSeq` so their per-peer push watermarks
- * can advance and rounds ship deltas instead of re-pushing the full backlog every time.
- * syncOplogSince is ascending-only with a clamped limit, so page forward; the ring buffer keeps
- * ~10k rows, so this is one query in practice (two at most right after a trim boundary).
- */
-function readMaxOplogSeq () {
-  let since = 0
-  for (let i = 0; i < 10000; i++) {
-    const rows = state.db.call('syncOplogSince', { sinceSeq: since, limit: 10000 }) || []
-    if (rows.length < 10000) return rows.length ? rows[rows.length - 1].seq : since
-    since = rows[rows.length - 1].seq
-  }
-  return since
 }
 
 /* ---------- engine + node lifecycle (lazy; only while enabled) ---------- */
@@ -518,6 +278,14 @@ function startSync () {
     emitSyncEvent('round-error', { deviceId: info && info.peer, detail: info && info.error && info.error.message })
     notifyRenderers('round-error')
   })
+  // Server-role failures (round-3 review, loud EADDRINUSE): a fixed-port collision or another
+  // listener-level error must be VISIBLE — log.error + Device Center syncEvent + status
+  // lastError (the node already records err.message into its getStatus().lastError).
+  state.node.on('server-error', err => {
+    log.error('[LanSync] server error:', err && err.message)
+    emitSyncEvent('server-error', { detail: err && err.message, code: err && err.code })
+    notifyRenderers('round-error')
+  })
   state.node.on('round-done', info => emitSyncEvent('round-done', { deviceId: info && info.peer, applied: info && info.applied }))
   // Snapshot-request protocol activity for the Device Center feed (sent = we served a peer's
   // snapshot-request; received = we recovered via a peer's full snapshot).
@@ -614,6 +382,28 @@ function emitSyncEvent (type, payload) {
 }
 
 /* ---------- IPC op handlers (registered into db.OPS via db-sync-ops) ---------- */
+/**
+ * Enable/disable the node. ASYNC, and the stop MUST be awaited before a start (round-3 review):
+ * syncSetEnabled(off) without awaiting left the old TCP server still bound while startSync()
+ * immediately re-listened on the fixed port -> EADDRINUSE -> (pre-fix) silent ephemeral fallback
+ * -> an undiscoverable node. The op is IPC-dispatched, so returning a promise is fine.
+ */
+async function syncSetEnabledOp (p) {
+  const enabled = !!(p && p.enabled)
+  const wasEnabled = settingGet(K_ENABLED) === true
+  if (enabled === wasEnabled && state.node === null && enabled === false) return getSettingsPayload()
+  settingPut(K_ENABLED, enabled)
+  if (enabled) {
+    if (!settingGet(K_PAIRING_SECRET)) settingPut(K_PAIRING_SECRET, generatePairingSecret())
+    if (state.node) await stopSync() // rapid off->on: release the old server/port BEFORE rebinding
+    startSync()
+  } else {
+    await stopSync()
+  }
+  notifyRenderers('enabled-changed')
+  return getSettingsPayload()
+}
+
 function getSettingsPayload () {
   const { deviceId, deviceName } = ensureIdentity()
   return {
@@ -669,20 +459,7 @@ function registerOps () {
     },
     syncGetSettings: () => getSettingsPayload(),
     syncGetStatus: () => getStatusPayload(),
-    syncSetEnabled: p => {
-      const enabled = !!(p && p.enabled)
-      const wasEnabled = settingGet(K_ENABLED) === true
-      if (enabled === wasEnabled && state.node === null && enabled === false) return getSettingsPayload()
-      settingPut(K_ENABLED, enabled)
-      if (enabled) {
-        if (!settingGet(K_PAIRING_SECRET)) settingPut(K_PAIRING_SECRET, generatePairingSecret())
-        startSync()
-      } else {
-        stopSync()
-      }
-      notifyRenderers('enabled-changed')
-      return getSettingsPayload()
-    },
+    syncSetEnabled: syncSetEnabledOp,
     syncPairWithCode: async p => {
       const code = String((p && p.code) || '').trim()
       if (!/^\d{6}$/.test(code)) throw new Error('syncPairWithCode: 6-digit code required')
@@ -757,8 +534,13 @@ function registerOps () {
 /** Called once from src/main/index.js after db init. Never auto-enables sync. */
 function initLanSync ({ db, getWindowSenders }) {
   const peerWatermarks = createTrackedWatermarks()
-  state = { db, getWindowSenders, node: null, engine: null, timers: [], pendingToSeq: 0, peerWatermarks, pendingWrites: { todos: [], settings: [], tomatoes: [], categories: [], plans: [], filters: [] }, pendingPair: null }
+  state = { db, getWindowSenders, node: null, engine: null, timers: [], pendingToSeq: 0, peerWatermarks, localUserId: null, pendingWrites: { todos: [], settings: [], tomatoes: [], categories: [], plans: [], filters: [] }, pendingPair: null }
   registerOps()
+  // v1 watermark cleanup (round-3 review): the pre-v2 'sync.peerWatermarks' row is dead data in
+  // the RECEIVER's seq space (v2 lives under 'sync.peerWatermarks.v2'); delete it once.
+  try {
+    if (settingGet('sync.peerWatermarks') != null) state.db.call('settingsRowDelete', { key: 'sync.peerWatermarks' })
+  } catch (e) { log.warn('[LanSync] v1 watermark cleanup failed:', e.message) }
   try {
     if (settingGet(K_ENABLED) === true) startSync()
   } catch (e) { log.warn('[LanSync] startup enable failed:', e.message) }
@@ -772,4 +554,6 @@ module.exports.__test = {
   setState: s => { state = s },
   applyRow: row => applyRowSafe(row),
   flushPendingWrites,
+  syncSetEnabled: syncSetEnabledOp,
+  localUserId,
 }

@@ -18,20 +18,23 @@ function freshDb () {
   return dir
 }
 
-test('域:排程芯片 — planAddMany 校验与原子写入', () => {
+test('域:排程芯片 — planAddMany 跳过畸形行(毒丸不阻塞整批)并原子写入合法行', () => {
   const dir = freshDb()
   try {
-    assert.throws(() => dbm.call('planAddMany', [{ taskId: '', day: '2026-09-04', mm: '12:00' }]), 'taskId 必填')
-    assert.throws(() => dbm.call('planAddMany', [{ taskId: 't1', day: '20260904', mm: '12:00' }]), 'day 必须 YYYY-MM-DD')
-    assert.throws(() => dbm.call('planAddMany', [{ taskId: 't1', day: '2026-09-04', mm: '24:00' }]), 'mm 必须 HH:mm')
+    // Round-3 review: one malformed chip used to throw for the WHOLE batch — a poison pill in
+    // the sync flush wedged plan ingestion forever. Invalid rows are skipped; valid rows commit.
     const ids = dbm.call('planAddMany', [
-      { taskId: 't1', day: '2026-09-04', mm: '12:00' },
-      { taskId: 't2', day: '2026-09-04', mm: '09:30' }
+      { taskId: '', day: '2026-09-04', mm: '12:00' },        // skipped: taskId required
+      { taskId: 't1', day: '20260904', mm: '12:00' },        // skipped: bad day
+      { taskId: 't1', day: '2026-09-04', mm: '24:00' },      // skipped: bad mm
+      { taskId: 't2', day: '2026-09-04', mm: '09:30' },      // VALID
+      { taskId: 't3', day: '2026-09-04', mm: '12:00' }       // VALID
     ])
-    assert.equal(ids.length, 2, '每个芯片返回一个 id')
+    assert.equal(ids.length, 2, 'only valid chips are inserted and returned')
     const rows = dbm.call('planAll', [])
-    assert.equal(rows.length, 2)
+    assert.equal(rows.length, 2, 'malformed rows never landed')
     assert.deepEqual(rows.map(r => r.mm), ['09:30', '12:00'], 'planAll 按 day,mm 排序')
+    assert.deepEqual(rows.map(r => r.taskId), ['t2', 't3'])
   } finally { dbm.close(); fs.rmSync(dir, { recursive: true, force: true }) }
 })
 

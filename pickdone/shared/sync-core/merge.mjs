@@ -55,8 +55,21 @@ function compareRecency(a, b) {
   return 0
 }
 
-/** Content identity: every field except bookkeeping (updatedAt/seq/deletedAt markers/deviceId/id). */
-const BOOKKEEPING = new Set(['id', 'updatedAt', 'seq', 'deviceId', 'deletedAt'])
+/** Content identity: every field except bookkeeping (updatedAt/seq/deletedAt markers/deviceId/id)
+ *  and `userId` (an account identifier, not user content — peers stamp rows with their own local
+ *  account id, so a userId-only difference must never count as a content conflict). */
+const BOOKKEEPING = new Set(['id', 'updatedAt', 'seq', 'deviceId', 'deletedAt', 'userId'])
+/** Key-order-insensitive JSON: peers build the payload object with different key insertion
+ *  orders, so a content compare must sort keys recursively (round-3 fix). */
+export function stableStringify(v) {
+  if (Array.isArray(v)) return `[${v.map(stableStringify).join(',')}]`
+  if (v && typeof v === 'object') {
+    const keys = Object.keys(v).sort()
+    return `{${keys.map(k => `${JSON.stringify(k)}:${stableStringify(v[k])}`).join(',')}}`
+  }
+  return JSON.stringify(v)
+}
+
 function contentDiffers(a, b) {
   const keys = new Set([...Object.keys(a), ...Object.keys(b)])
   for (const k of keys) {
@@ -64,7 +77,17 @@ function contentDiffers(a, b) {
     // `deleted` is part of state but not user content; skipping it here means
     // a stale tombstone losing to a live edit still yields no conflict copy.
     if (k === 'deleted') continue
-    if (a[k] !== b[k]) return true
+    const va = a[k]
+    const vb = b[k]
+    if (va === vb) continue
+    // Payload objects (row.data) compare by CONTENT, not reference or key order —
+    // transport adapters rebuild the payload object per ingest, so reference
+    // equality would report a conflict for byte-identical content (round-3 fix).
+    if (va && vb && typeof va === 'object' && typeof vb === 'object') {
+      if (stableStringify(va) !== stableStringify(vb)) return true
+      continue
+    }
+    return true
   }
   return false
 }

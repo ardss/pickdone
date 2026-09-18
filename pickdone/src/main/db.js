@@ -665,15 +665,15 @@ const OPS = {
   // chip ordering and restore's ON CONFLICT upsert then overwrote sort with 0.
   planAll: () => db.prepare('SELECT id, taskId, day, mm, sort FROM plan_chips WHERE deleted = 0 ORDER BY day, mm, sort').all(),
   planAddMany: chips => {
-    const list = (Array.isArray(chips) ? chips : [chips]).map(c => ({
-      id: (c && c.id) || 'pl_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
-      taskId: String(c.taskId || ''), day: String(c.day || ''), mm: String(c.mm || ''), sort: Number(c.sort) || 0
-    }))
-    for (const c of list) {
-      if (!c.taskId) throw new Error('planAddMany: taskId required')
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(c.day)) throw new Error('planAddMany: day 必须 YYYY-MM-DD')
-      if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(c.mm)) throw new Error('planAddMany: mm 必须 HH:mm')
-    }
+    // Skip-and-collect (round-3 review): one malformed chip used to throw for the WHOLE batch —
+    // a poison pill in the sync flush wedged plan ingestion forever. Invalid rows are skipped
+    // (never applied); the valid rows commit and their ids are returned.
+    const list = (Array.isArray(chips) ? chips : [chips]).filter(c => c && c.taskId &&
+      /^\d{4}-\d{2}-\d{2}$/.test(String(c.day)) && /^([01]\d|2[0-3]):[0-5]\d$/.test(String(c.mm)))
+      .map(c => ({
+        id: (c && c.id) || 'pl_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+        taskId: String(c.taskId || ''), day: String(c.day || ''), mm: String(c.mm || ''), sort: Number(c.sort) || 0
+      }))
     const ins = db.prepare('INSERT INTO plan_chips (id, taskId, day, mm, sort, deleted, deletedAt, updatedAt) VALUES (@id,@taskId,@day,@mm,@sort,0,0,@updatedAt) ON CONFLICT(id) DO UPDATE SET taskId=excluded.taskId, day=excluded.day, mm=excluded.mm, sort=excluded.sort, deleted=0, deletedAt=0, updatedAt=excluded.updatedAt')
     const now = Date.now()
     const tr = db.transaction(() => list.forEach(c => ins.run({ ...c, updatedAt: now }))); tr()
