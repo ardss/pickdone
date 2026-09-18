@@ -32,7 +32,10 @@ const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const ymdOf = offset => dayjs().add(offset, 'day').format('YYYY-MM-DD')
 
 /* ---- fix 1: settingsSet CAS guard ---- */
-test('h3-1: settingsSet refuses the whole-package write when the App changed settings since read', () => {
+test('h3-1: settingsSet merges the single key onto a FRESH doc when the App changed settings in the race window', () => {
+  // Reworked 2026-09-19 (maint/d4): the old SETTINGS_STALE abort compared two synchronous reads
+  // microseconds apart (protection theater) and was replaced by merge-on-fresh — the CLI applies its
+  // ONE key onto the doc as it exists immediately before setMeta, so the App's concurrent write survives.
   // App baseline in the meta store
   db.call('setMeta', ['db.settingsState', JSON.stringify({ colorMode: 'light', _savedAt: 1000, schemaV: 1 })])
   const orig = db.call
@@ -40,23 +43,25 @@ test('h3-1: settingsSet refuses the whole-package write when the App changed set
   try {
     db.call = function (op, p) {
       const r = orig.call(db, op, p)
-      // after the 2nd internal read (snapshot + working doc), simulate an App-side write bumping _savedAt
-      if (op === 'getMeta' && p === 'db.settingsState' && ++reads === 2) {
+      // after the 1st internal read (working doc), before the fresh re-read, simulate an App-side write
+      if (op === 'getMeta' && p === 'db.settingsState' && ++reads === 1) {
         orig.call(db, 'setMeta', ['db.settingsState', JSON.stringify({ colorMode: 'dark', whiteNoiseVolume: 0.7, _savedAt: 2000, schemaV: 1 })])
       }
       return r
     }
-    assert.throws(() => lib.settingsSet('colorMode', 'dark'), e => e.code === 'SETTINGS_STALE' && /--force/.test(e.message))
+    const r = lib.settingsSet('colorMode', 'dark') // must NOT throw and NOT clobber the App's package
+    assert.equal(r.value, 'dark')
   } finally {
     db.call = orig
   }
   const after = JSON.parse(db.call('getMeta', 'db.settingsState'))
-  assert.equal(after._savedAt, 2000, 'the CLI must not clobber the App-side package')
-  assert.equal(after.whiteNoiseVolume, 0.7, "the App's concurrent setting survives")
+  assert.equal(after.colorMode, 'dark', 'the CLI key lands')
+  assert.equal(after.whiteNoiseVolume, 0.7, "the App's concurrent setting survives the merge")
+  assert.ok(after._savedAt >= 2000, '_savedAt refreshed on write')
 
-  // --force bypasses the guard deliberately
-  const r = lib.settingsSet('colorMode', 'dark', { force: true })
-  assert.equal(r.value, 'dark')
+  // --force remains accepted (no-op: the merge is already the non-destructive path)
+  const r = lib.settingsSet('colorMode', 'light', { force: true })
+  assert.equal(r.value, 'light')
 })
 
 test('h3-1b: settingsSet without interleaved writes still succeeds (no false stale)', () => {

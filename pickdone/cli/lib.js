@@ -546,7 +546,14 @@ function addTodo ({ content, desc, date, reminder, category, difficulty, priorit
   const rowAfter = db.call('getById', t.taskId)
   audit.record({ action: 'add', targets: [t], changes: [{ after: rowAfter }] })
   // Tasks with an explicit time are auto-placed on the day timeline (user-finalized 2026-09-03): the reminder answers "when will you call me", the schedule chip answers "what should I do in this slot" — both are kept
-  const mm = dateExplicitTime(date)
+  // Fix (2026-09-19): the HH:mm raw-string regex missed natural-language times like 明天9点 / 后天下午3点 —
+  // parseDate resolved them to a timed todoTime but no chip was placed. When the raw string carries a
+  // natural-language time marker but no HH:mm, derive HH:mm from the resolved todoTime (chip-less guard:
+  // a bare 明天/tomorrow also resolves with a time-of-day, and a bare date must not fabricate a chip).
+  let mm = dateExplicitTime(date)
+  if (!mm && todoTime && NL_TIME_MARKER_RE.test(String(date || '')) && !dayjs(todoTime).startOf('day').isSame(dayjs(todoTime))) {
+    mm = dayjs(todoTime).format('HH:mm')
+  }
   if (mm) { try { planSet(t.taskId, mm) } catch { /* chip write failure must not block task creation */ } }
   return rowAfter
 }
@@ -556,6 +563,9 @@ function dateExplicitTime (s) {
   const m = /(\d{1,2}):(\d{2})/.exec(String(s || ''))
   return m ? m[1].padStart(2, '0') + ':' + m[2] : null
 }
+
+/** Natural-language time markers (明天9点 / 下午3点 / 9点半 / 3pm): the raw string carries a time of day even without HH:mm */
+const NL_TIME_MARKER_RE = /(\d{1,2}\s*[点:：]|\d{1,2}\s*[:：]\s*\d{1,2}|[上午下午晚上早上凌晨中午]|半|\d{1,2}\s*(?:am|pm)\b)/i
 
 /** Reminder re-anchor on a reschedule (review P1 2026-09-11; renderer parity: EditPanel.applyDate).
  *  Shared by `edit --date` (pickdone.js) and `batch date` (batchRun) — the two channels used to diverge:
@@ -921,7 +931,8 @@ function buildRepeatRule (opts) {
   const count = parseInt(opts.count, 10) || 0
   if (type === 'daily') { rule.repeatType = 'day'; rule.repeatInterval = interval; if (count) rule.repeatDayCount = count }
   else if (type === 'weekly') {
-    rule.repeatType = 'week'; rule.repeatInterval = 1
+    // Fix (2026-09-19): --interval was ignored for weekly (hardcoded 1) while daily/monthly honored it
+    rule.repeatType = 'week'; rule.repeatInterval = interval
     if (opts.weekdays) rule.repeatWeekDays = String(opts.weekdays).split(/[,，]/).map(n => parseInt(n, 10)).filter(n => n >= 1 && n <= 7)
     if (count) rule.repeatWeekCount = count
   } else if (type === 'monthly') {
@@ -942,6 +953,18 @@ function repeatOn (input, rule, count) {
   if (t.complete) throw new CliError('task already completed; undo it before setting a repeat', 'INVALID_STATE')
   if (t.repeatId && String(t.repeatId).startsWith('repeat_')) throw new CliError('task already in a repeat group (' + t.repeatId + '); repeat off first, then re-set', 'ALREADY_REPEAT')
   const rid = 'repeat_' + t.userId + Date.now().toString(36) + Math.floor(Math.random() * 1e4)
+  // Fix (2026-09-19): a yearly repeat used to anchor to the engine defaults (Jan 1) because the CLI
+  // exposes no --yearmonth/--yearmonthday flags — `repeat on` on a May-20 task generated Jan-1
+  // instances. When the rule still carries the REPEAT_DEFAULTS Jan-1 anchor, derive it from the task's
+  // own todoTime instead. An explicitly provided anchor (repeatYearMonth/Day differing from defaults)
+  // stays authoritative.
+  if (rule.repeatType === 'year' && t.todoTime &&
+      rule.repeatYearMonth === core.REPEAT_DEFAULTS.repeatYearMonth &&
+      rule.repeatYearMonthDay === core.REPEAT_DEFAULTS.repeatYearMonthDay) {
+    const anchor = dayjs(t.todoTime)
+    rule.repeatYearMonth = anchor.month() + 1
+    rule.repeatYearMonthDay = anchor.date()
+  }
   db.call('setMeta', ['repeatRule:' + rid, JSON.stringify(rule)])
   db.call('upsert', Object.assign({}, t, { repeatId: rid, updateTime: Date.now(), status: 'update' }))
   // Generate subsequent instances (the first day is the current task itself), reusing the todo-core engine's expansion
@@ -1003,7 +1026,9 @@ function repeatOff (input, all) {
         removed++
       }
     }
-    open().call('setMeta', ['repeatRule:' + rid, ''])
+    // Fix (2026-09-19): write '' → deleteMeta (the convention used everywhere else in this file) so the
+    // rule row is actually removed instead of lingering as an empty string (mirror skip-list/bridge noise)
+    open().call('deleteMeta', 'repeatRule:' + rid)
   }
   open().call('upsert', Object.assign({}, t, { repeatId: null, updateTime: Date.now(), status: 'update' }))
   audit.record({ action: 'repeat.off', targets: [t], changes: [{ before: { rid } }], note: all ? 'repeat group dissolved (soft-deleted ' + removed + ' future instance(s))' : 'left repeat group (this instance only)' })
@@ -1647,6 +1672,10 @@ const SETTINGS_DENIED = new Set(['securityLockPassword', 'securityLockQuestion',
 function settingsDoc () {
   try { const d = JSON.parse(open().call('getMeta', 'db.settingsState') || 'null'); return d && typeof d === 'object' ? d : {} } catch { return {} }
 }
+/** Test-only seam (2026-09-19): hook invoked inside settingsSet between its first settingsDoc() read and
+ *  the fresh re-read, simulating a concurrent App-side settings write in the race window. */
+let settingsRaceHook = null
+function setSettingsRaceHookForTests (fn) { settingsRaceHook = typeof fn === 'function' ? fn : null }
 function settingsKnown (key) {
   if (SETTINGS_MANIFEST.boolean.includes(key)) return { type: 'boolean' }
   if (SETTINGS_MANIFEST.number.includes(key)) return { type: 'number' }
@@ -1686,21 +1715,24 @@ function settingsSet (key, value, { force = false } = {}) {
     if (!info.options.includes(String(value))) throw new CliError(`"${key}" expects one of: ${info.options.join(' | ')} (got "${value}")`, 'USAGE')
     v = String(value)
   }
-  // CAS guard (fix 2026-09-16): settingsSet is a read-modify-write of the WHOLE settingsState package and the
-  // write refreshes _savedAt — if the App wrote settings between our read and write, the CLI used to overwrite
-  // the App's newer package with a stale one (and the App would then mirror that stale package back on next
-  // launch, washing the user's newer settings away). Snapshot _savedAt at entry, re-read the meta just before
-  // the write, and refuse on drift. --force bypasses the check deliberately.
-  const savedAtSnapshot = settingsDoc()._savedAt || 0
+  // Concurrency guard (fix 2026-09-16, reworked 2026-09-19): settingsSet is a read-modify-write of the
+  // WHOLE settingsState package and the write refreshes _savedAt. The old guard compared two synchronous
+  // settingsDoc() reads microseconds apart — drift could never be observed, so the protection was
+  // theater. Root fix: re-read the doc immediately before setMeta and apply the SINGLE key onto the
+  // fresh doc (the intent is a one-key write, not a whole-package overwrite). When _savedAt drifted
+  // (the App wrote between our first read and the write), the App's concurrent change survives — we
+  // merge our one key into its package instead of clobbering it. --force is still accepted (no-op:
+  // the merge is already the non-destructive path).
   const doc = settingsDoc()
   const before = key in doc ? doc[key] : null
-  if (!force && (settingsDoc()._savedAt || 0) !== savedAtSnapshot) {
-    throw new CliError('settings changed in App since read; re-run or use --force', 'SETTINGS_STALE')
-  }
-  doc[key] = v
-  doc._savedAt = Date.now()
-  doc.schemaV = doc.schemaV || 1
-  open().call('setMeta', ['db.settingsState', JSON.stringify(doc)])
+  // Test seam: inject a concurrent mutation into the race window (first read → fresh re-read) so unit
+  // tests can deterministically exercise the merge-on-fresh behavior. Null outside tests.
+  if (typeof settingsRaceHook === 'function') settingsRaceHook()
+  const fresh = settingsDoc()
+  fresh[key] = v
+  fresh._savedAt = Date.now()
+  fresh.schemaV = fresh.schemaV || 1
+  open().call('setMeta', ['db.settingsState', JSON.stringify(fresh)])
   audit.record({ action: 'settings.set', targets: [], changes: [{ before: { [key]: before }, after: { [key]: v } }], note: 'setting "' + key + '" changed (hot-synced to running App, applied on launch otherwise)' })
   return { key, value: v, previous: before }
 }
@@ -1778,8 +1810,10 @@ async function importEvents (events, { onProgress = () => {} } = {}) {
   if (!Array.isArray(events) || !events.length) throw new CliError('events file must be a non-empty JSON array', 'EMPTY_EVENTS')
   const existing = liveTasks()
   const seen = new Set(existing.map(t => t.dayStart + '|' + String(t.taskContent || '').trim()))
-  const recs = tomatoRecords() || []
-  const hasRecord = tid => recs.some(r => r.manual && r.focusTaskId === tid)
+  // Fix (2026-09-19): hasRecord used to close over the PRE-import records snapshot, so it was always
+  // false for tasks the import itself had just created (their backfilled ledger rows landed after the
+  // snapshot). Re-read inside the predicate so just-created tasks are seen as having records.
+  const hasRecord = tid => (tomatoRecords() || []).some(r => r.manual && r.focusTaskId === tid)
   let created = 0, skipped = 0
   const failed = []
   for (const e of events) {
@@ -1860,6 +1894,6 @@ module.exports = {
   lunarOf, lunarAnnotate,
   setEstimate, sortTask, listOn, resolveRecord, recordFix, recordRemove, moveSubtask,
   setReminderOffsets, setReminderExtra, addAttachment, listAttachments, removeAttachment,
-  settingsList, settingsSet, planSet, planList, planRemove, dateChangeReminderPatch,
+  settingsList, settingsSet, setSettingsRaceHookForTests, planSet, planList, planRemove, dateChangeReminderPatch,
   importEvents, eventFocusMinutes, eventKey
 }
