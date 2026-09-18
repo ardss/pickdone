@@ -542,9 +542,10 @@ function startSync () {
       const { Notification } = require('electron')
       if (Notification.isSupported()) {
         const who = [info && info.deviceName, info && info.host].filter(Boolean).join(' · ')
+        const i18nM = require('./i18n')
         const n = new Notification({
-          title: 'PickDone — 新设备配对请求',
-          body: who ? `${who} 请求同步配对，请在设置中确认` : '有设备请求同步配对，请在设置中确认',
+          title: i18nM.mt('pairNotifyTitle'),
+          body: who ? i18nM.mt('pairNotifyBody', { who }) : i18nM.mt('pairNotifyBodyUnknown'),
           silent: false,
         })
         n.on('click', () => { try { notifyRenderers('pair-request-focus') } catch { /* noop */ } })

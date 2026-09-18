@@ -448,6 +448,7 @@ function assertHasTaskId (t) {
   }
 }
 
+const makeBulkOps = require('./db-bulk-ops')(db, () => OPS)
 const OPS = {
   upsert: t => { assertHasTaskId(t); stmts.upsert.run(todoToRow(t)); return true },
   upsertMany: list => { if (!Array.isArray(list)) throw new Error('[TodoDB] upsertMany: list must be an array, got ' + typeof list); list.forEach(assertHasTaskId); stmts.upsertMany(list.map(todoToRow)); return true },
@@ -514,9 +515,7 @@ const OPS = {
   purgeRecycleBin: () => {
     // Cascade: plan chips belonging to recycle-bin rows are removed too (otherwise the timeline shows ghost chips after emptying the recycle bin, with no way to remove them)
     // 两表删除包事务(2026-09-05 终审 P1):非原子路径在两语句间崩溃会留幽灵行
-    // Returns the purged todo ids: the sync oplog expands them into per-id tombstone pointers
-    // (the old ('todo','*gc*') marker hydrated as a ghost tombstone on peers and left purged
-    // rows without individual tombstones, so snapshots/merge could resurrect them).
+    // Returns purged ids: the oplog expands them into per-id tombstone pointers (replaces the ghost-prone ('todo','*gc*') marker).
     let ids = []
     const tr = db.transaction(() => {
       ids = db.prepare('SELECT id FROM todos WHERE deleted = 1').all().map(r => r.id)
@@ -524,9 +523,7 @@ const OPS = {
       db.prepare('DELETE FROM todos WHERE deleted = 1').run()
     }); tr(); return ids
   },
-  // Cascade plan_chips too (same contract as hardDelete/purgeRecycleBin): purging demo rows without removing
-  // their chips left ghost chips on the timeline with the task gone (2026-09-09 P2, transactional like its siblings)
-  // Returns the purged ids for per-id sync tombstone pointers (see purgeRecycleBin).
+  // Cascade plan_chips too (same contract as hardDelete/purgeRecycleBin, transactional); returns purged ids for per-id sync tombstones.
   purgeSeedTodos: () => {
     let ids = []
     const tr = db.transaction(() => {
@@ -841,24 +838,8 @@ const OPS = {
   settingsRowPut: p => syncSchema.rowPut(p),
   settingsRowPutMany: p => syncSchema.rowPutMany(p),
   settingsRowDelete: p => syncSchema.rowDelete(p),
-  // Main-internal bulk variants for the LAN-sync apply path (2026-09-18): a first-sync snapshot
-  // can carry hundreds of categories/plans/filters and the per-row ops (upsertCategory /
-  // filterUpsert) commit one transaction per row, starving sync rounds the same way per-row todo
-  // commits did. Same no-op suppression semantics as their single-row counterparts; the result is
-  // the list of ids that actually changed (feeds the oplog's row-granular deltas). NOT
-  // renderer-callable (not in ALLOWED_RENDERER_OPS) — reachable only via main-internal db.call.
-  upsertCategoryMany: list => {
-    if (!Array.isArray(list)) throw new Error('[TodoDB] upsertCategoryMany: list must be an array, got ' + typeof list)
-    const changed = []
-    const tr = db.transaction(() => { for (const c of list) if (OPS.upsertCategory(c) !== false) changed.push(c && c.id) })
-    tr(); return changed
-  },
-  filterUpsertMany: list => {
-    if (!Array.isArray(list)) throw new Error('[TodoDB] filterUpsertMany: list must be an array, got ' + typeof list)
-    const changed = []
-    const tr = db.transaction(() => { for (const f of list) { const r = OPS.filterUpsert(f); if (r !== false) changed.push(r) } })
-    tr(); return changed
-  },
+  upsertCategoryMany: makeBulkOps.upsertCategoryMany,
+  filterUpsertMany: makeBulkOps.filterUpsertMany,
 syncOplogSince: ({ sinceSeq = 0, limit = 2000 } = {}) => db.prepare('SELECT seq, entity, entityId, ts FROM sync_oplog WHERE seq > ? ORDER BY seq ASC LIMIT ?').all(Number(sinceSeq) || 0, Math.max(1, Math.min(10000, Math.floor(Number(limit) || 2000)))),
   // P3a LAN sync ops (2026-09-16): delegates into db-sync-ops.js (gate: ops must exist here; impl lives in lan-sync-bootstrap.js)
   syncGetSettings: p => require('./db-sync-ops').dispatch('syncGetSettings', p),
