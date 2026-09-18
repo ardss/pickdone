@@ -231,7 +231,7 @@ function watchDbForExternalWrites () {
         // the next poll sees our own write as "another external write" → reload → write again = a self-sustaining loop
         lastMtime = readWatchMtime() ?? lastMtime
       } catch (e) { log.warn('[TodoDB] 外部写入刷新失败', e) }
-    }, 500)
+    }, 150)
   }
   const onChange = () => {
     try {
@@ -243,8 +243,8 @@ function watchDbForExternalWrites () {
       forwardTomatoCmd()
     } catch {}
   }
-  fs.watchFile(dbFile, { interval: 2000 }, onChange)
-  fs.watchFile(walFile, { interval: 2000 }, onChange)
+  fs.watchFile(dbFile, { interval: 500 }, onChange)
+  fs.watchFile(walFile, { interval: 500 }, onChange)
   // P1 2026-09-11: App's own todo-db:call writes touch the -wal too, but the 500ms-debounced kick above
   // only re-baselines for the EXTERNAL-write path. Our own IPC writes left the baseline stale → the next
   // poll read them as "external" → full reload + undo-stack wipe ~3s after every local write (the
