@@ -402,8 +402,29 @@ function startSync () {
         return r
       } finally { state.applyCache = null }
     },
-    ingestSnapshot: body => state.engine.applySnapshot(body),
+    ingestSnapshot: body => {
+      // Snapshot-request protocol receiver (assembled {schemaVersion, deviceId, rows} from the
+      // node): apply the rows through the SAME applyRowInner pipeline as increments (merge rules,
+      // tombstones, per-pass applyCache, buffered bulk writes). Chunk-merge-apply is idempotent,
+      // so a partial snapshot leaves a consistent DB; the node advances the pull watermark ONLY
+      // on snapshot-end, so a failed/partial transfer never skips missed increments. Deliberately
+      // NOT engine.applySnapshot: that is the fresh-device replaceAll path and resets the global
+      // push cursor to 0, which would cause a full oplog re-push to every peer.
+      const rows = Array.isArray(body && body.rows) ? body.rows : []
+      state.applyCache = createHydrationCache()
+      try {
+        for (const r of rows) applyRowSafe(r)
+        flushPendingWrites()
+      } finally { state.applyCache = null }
+      return { rows: rows.length }
+    },
     getMaxSeq: () => readMaxOplogSeq(),
+    // Oldest oplog seq still retained (the ring prunes from the front): advertised in the round
+    // ack so a watermark-behind peer can tell its increments were pruned on our side.
+    getOldestSeq: () => {
+      const rows = state.db.call('syncOplogSince', { sinceSeq: 0, limit: 1 }) || []
+      return rows.length ? rows[0].seq : 0
+    },
     buildSegments: buildSegmentsWrapped,
     buildSnapshot: () => state.engine.buildSnapshot()
   })
@@ -413,6 +434,11 @@ function startSync () {
     notifyRenderers('round-error')
   })
   state.node.on('round-done', info => emitSyncEvent('round-done', { deviceId: info && info.peer, applied: info && info.applied }))
+  // Snapshot-request protocol activity for the Device Center feed (sent = we served a peer's
+  // snapshot-request; received = we recovered via a peer's full snapshot).
+  state.node.on('snapshot-sync', info => emitSyncEvent('snapshot-sync', {
+    deviceId: info && info.peer, direction: info && info.direction, rows: info && info.rows,
+  }))
   state.node.on('peer-online', p => emitSyncEvent('peer-online', { deviceId: p.deviceId, deviceName: p.name, host: p.host }))
   state.node.on('peer-offline', p => emitSyncEvent('peer-offline', { deviceId: p.deviceId, deviceName: p.name, host: p.host }))
   state.node.on('pair-throttled', info => emitSyncEvent('pair-throttled', { ip: info && info.ip }))

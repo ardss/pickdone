@@ -7,7 +7,9 @@
  * Round protocol (both directions, over transport.js after auth):
  *   A -> B: segments {segments: buildSegments()}   push my pending segments
  *   B -> A: ack {applied, rejected} + B's own segments (pull)
- *   B -> A: snapshot {snapshot} when the peer requests a full state
+ *   A -> B: snapshot-request {requesterMaxSeq?} when B pruned past A's watermark
+ *   B -> A: snapshot-chunk* {index, totalChunks, rows} + snapshot-end {totalRows, cursor}
+ *   B -> A: snapshot {snapshot} (legacy whole-snapshot reply, kept for compat)
  *
  * Merge semantics are NOT implemented here — ingestSegment/ingestSnapshot are
  * caller callbacks that feed shared/sync-core (merge.mjs / segment.mjs), per
@@ -24,6 +26,7 @@ const { EventEmitter } = require('node:events')
 const { createDiscovery, PROTO_VER } = require('./discovery')
 const { createLanServer, connect, DEFAULT_PORT } = require('./transport')
 const { deriveAuthCode } = require('./pairing')
+const { chunkSnapshot } = require('./snapshot')
 
 const BACKOFF_BASE_MS = 5000
 const BACKOFF_MAX_MS = 60 * 1000
@@ -62,6 +65,13 @@ function createLanSyncNode(opts) {
   const currentMaxSeq = () => {
     try { return Number(getMaxSeq()) || 0 } catch { return 0 }
   }
+  // Optional injector: oldest oplog seq still RETAINED locally (the ring buffer prunes from the
+  // front). Advertised in the server role's ack; a peer whose watermark is below oldestSeq-1 can
+  // never converge from increments (the rows it needs are gone) and must request a snapshot.
+  const getOldestSeq = typeof opts.getOldestSeq === 'function' ? opts.getOldestSeq : null
+  const currentOldestSeq = () => {
+    try { return Number(getOldestSeq()) || 0 } catch { return 0 }
+  }
 
   const peers = new Map() // deviceId -> {deviceId, name, host, port}
   const backoffMs = new Map() // deviceId -> current backoff delay
@@ -71,6 +81,16 @@ function createLanSyncNode(opts) {
   // the bootstrap, which owns persistence; dead peers holding stale entries can no longer gate
   // other peers' rounds, and each round only ships a peer's unconfirmed delta.
   const peerProgress = opts.peerProgress || new Map()
+
+  // Snapshot-request bookkeeping (all in-memory, per peer):
+  //   pullWatermarkBy — highest seq I have definitively received from that peer (advanced to the
+  //     sender's cursor only after a COMPLETE snapshot; increments carry it via trigger checks).
+  //   needSnapshot — the trigger fired (peer pruned past my watermark and my state is not
+  //     progressing): the NEXT round opens with a snapshot-request instead of failing silently.
+  //   snapshotBusy — one snapshot transfer in flight per peer, both roles (never overlap).
+  const pullWatermarkBy = new Map() // deviceId -> seq
+  const needSnapshot = new Set()
+  const snapshotBusy = new Set()
 
   // Resolved once the TCP server is listening. Callers may await this at any
   // time (even after the event already fired) — unlike the 'listening' event,
@@ -171,6 +191,12 @@ function createLanSyncNode(opts) {
     return new Promise((resolve) => {
       let settled = false
       let ackApplied = null // segments the peer acked (surfaces into the recent ring)
+      let ackSeq = 0 // peer's advertised appliedToSeq (its local max oplog seq)
+      let ackOldestSeq = null // peer's advertised oldest RETAINED seq (undefined for old peers)
+      let roundApplied = 0 // rows the peer's segments changed locally this round (0 = no pull progress)
+      let awaitingSnapshot = false // snapshot-request sent; the round ends at snapshot-end, not ack
+      const chunkBuf = new Map() // snapshot-chunk index -> rows (assembled at snapshot-end)
+      let chunkTotal = 0 // chunk count as advertised by the chunk messages
       // Round deadline timer; cleared in finish() so a fast ack does not leak it past round end.
       let done = null
       const client = connect(peer.host, peer.port, {
@@ -187,8 +213,13 @@ function createLanSyncNode(opts) {
         settled = true
         if (done) clearTimeout(done)
         roundsRunning -= 1
+        snapshotBusy.delete(peer.deviceId)
         client.close()
         if (err) {
+          // A round that died MID-snapshot re-arms the trigger deterministically: the pull
+          // watermark did not advance, so the next round must re-request (an RST can also
+          // discard the ack that would otherwise have re-armed it).
+          if (awaitingSnapshot) needSnapshot.add(peer.deviceId)
           lastError = `${peer.deviceId}: ${err.message}`
           errorBy.set(peer.deviceId, lastError)
           pushRecent({ at: Date.now(), kind: 'error', peer: peer.deviceId, detail: { error: err.message } })
@@ -211,29 +242,97 @@ function createLanSyncNode(opts) {
           resolve(true)
         }
       }
+
+      /** Snapshot trigger, evaluated on every successful round end: the peer pruned its oplog
+       *  PAST my pull watermark (oldestSeq > wm + 1) AND this round gave me nothing new — the
+       *  increments I need are gone forever, so the next round must open with a snapshot-request
+       *  instead of silently never converging. A progressing round (roundApplied > 0) always
+       *  clears the flag: never snapshot a peer whose watermark is moving. */
+      function evaluateSnapshotTrigger() {
+        const wm = pullWatermarkBy.get(peer.deviceId) || 0
+        if (roundApplied > 0) { needSnapshot.delete(peer.deviceId); return }
+        const oldest = Number(ackOldestSeq)
+        if (!Number.isFinite(oldest) || oldest <= 0) return // peer did not advertise; nothing to act on
+        if (ackSeq <= wm) return // fully caught up with the peer's max seq
+        if (oldest > wm + 1 && !snapshotBusy.has(peer.deviceId)) needSnapshot.add(peer.deviceId)
+      }
       client.on('error', (err) => finish(err))
       client.on('rejected', () => finish(new Error('auth rejected by peer')))
+      // A socket death MID-snapshot must fail the round promptly (pull watermark stays put, the
+      // next round re-requests) instead of idling to the 120s deadline. Post-finish closes are
+      // no-ops (settled guard).
+      client.on('close', () => { if (awaitingSnapshot && !settled) finish(new Error('connection closed during snapshot transfer')) })
       client.on('ready', () => {
         // push only what this peer has not confirmed yet (per-peer watermark; 0 = first contact)
         const mine = buildSegments ? buildSegments(peerProgress.get(peer.deviceId) || 0) : []
         client.send({ type: 'segments', segments: mine })
+        // Deterministic trigger from the previous round: my increments are gone on the peer —
+        // request a full snapshot INSTEAD of another futile incremental round. One transfer per
+        // peer at a time (snapshotBusy); the round now ends at snapshot-end, not at the ack.
+        if (needSnapshot.has(peer.deviceId) && !snapshotBusy.has(peer.deviceId)) {
+          needSnapshot.delete(peer.deviceId)
+          snapshotBusy.add(peer.deviceId)
+          awaitingSnapshot = true
+          chunkBuf.clear()
+          client.send({ type: 'snapshot-request' })
+        }
       })
       client.on('message', (msg) => {
         try {
           if (msg.type === 'segments' && Array.isArray(msg.segments)) {
-            for (const seg of msg.segments) ingestSegment(seg)
+            for (const seg of msg.segments) {
+              const r = ingestSegment(seg)
+              roundApplied += (r && Number(r.applied)) || 0
+              if (seg && Number.isFinite(Number(seg.toSeq))) {
+                pullWatermarkBy.set(peer.deviceId, Math.max(pullWatermarkBy.get(peer.deviceId) || 0, Number(seg.toSeq)))
+              }
+            }
             client.send({ type: 'ack', applied: msg.segments.length, rejected: 0 })
           } else if (msg.type === 'snapshot' && msg.snapshot) {
             ingestSnapshot(msg.snapshot)
             client.send({ type: 'ack', applied: 1, rejected: 0, appliedToSeq: currentMaxSeq() })
+          } else if (msg.type === 'snapshot-chunk' && Array.isArray(msg.rows)) {
+            chunkTotal = Number(msg.totalChunks) || chunkTotal
+            chunkBuf.set(Number(msg.index) || 0, msg.rows)
+          } else if (msg.type === 'snapshot-end') {
+            // All-or-nothing finalization: the chunks must tile exactly [0..n) and sum to
+            // totalRows, and ingestSnapshot must succeed — ONLY then does the pull watermark
+            // advance to the sender's cursor. A partial/failed snapshot fails the round, leaves
+            // the DB at the per-chunk committed state (merge-apply is idempotent), and the next
+            // round re-requests (the trigger re-fires because the watermark did not advance).
+            const chunkCount = Number(msg.totalChunks) || chunkTotal // chunk count rides on snapshot-chunk
+            const totalRows = Number(msg.totalRows) || 0
+            const okShape = Number.isInteger(chunkCount) && chunkCount > 0 && chunkBuf.size === chunkCount &&
+              Array.from({ length: chunkCount }, (_, i) => chunkBuf.has(i)).every(Boolean)
+            const rows = okShape ? Array.from({ length: chunkCount }, (_, i) => chunkBuf.get(i)).flat() : null
+            chunkBuf.clear()
+            if (!rows || rows.length !== totalRows) {
+              throw new Error(`incomplete snapshot: ${rows ? rows.length : 'bad chunk set'} of ${totalRows} rows`)
+            }
+            ingestSnapshot({ schemaVersion: Number(msg.schemaVersion) || 1, deviceId: peer.deviceId, rows })
+            const cursor = Number(msg.cursor) || 0
+            pullWatermarkBy.set(peer.deviceId, cursor) // watermark advances ONLY here
+            snapshotBusy.delete(peer.deviceId)
+            pushRecent({
+              at: Date.now(), kind: 'snapshot', peer: peer.deviceId,
+              detail: { direction: 'received', rows: rows.length, cursor },
+            })
+            em.emit('snapshot-sync', { peer: peer.deviceId, direction: 'received', rows: rows.length, cursor })
+            awaitingSnapshot = false
+            finish(null)
           } else if (msg.type === 'ack') {
             // Peer's ack is the round's success criterion: it confirms our push AND proves the
             // peer finished building its own response. Timing the round out as "success" here
             // would advance the push cursor over undelivered segments (2026-09-17 live drill).
             ackApplied = Number(msg.applied) || 0
-            const seq = Number(msg.appliedToSeq) || 0
+            ackSeq = Number(msg.appliedToSeq) || 0
+            ackOldestSeq = msg.oldestSeq
+            const seq = ackSeq
             if (seq > (peerProgress.get(peer.deviceId) || 0)) peerProgress.set(peer.deviceId, seq)
-            finish(null)
+            evaluateSnapshotTrigger()
+            // With a snapshot-request in flight the round's finish waits for snapshot-end (the
+            // ack only proves the peer got MY push, not that the snapshot stream completed).
+            if (!awaitingSnapshot) finish(null)
           }
         } catch (err) {
           finish(err)
@@ -264,21 +363,42 @@ function createLanSyncNode(opts) {
         pushRecent({ at: Date.now(), kind: 'pair', peer: info && info.deviceId || (info && info.host) || '', detail: { host: info && info.host, inbound: true, confirmed: !!(info && info.confirmed) } })
         em.emit('paired-inbound', info)
       },
-      getHandler: () => (msg, socket) => {
+      getHandler: (peer) => (msg, socket) => {
         try {
           if (msg.type === 'segments' && Array.isArray(msg.segments)) {
             // appliedToSeq = our local max oplog seq after this round's ingest+flush is committed.
             // Without it the client's push watermark never advances and every round re-pushes the
             // full backlog. Read before AND after ingest (rows may re-capture into our oplog) and
             // take the max, so an empty ingest still reports an honest, monotonic high-water value.
+            // oldestSeq advertises the oldest oplog seq we still RETAIN: a peer below it sees
+            // pruned history and knows it must request a snapshot (see the client trigger).
             const seqBefore = currentMaxSeq()
             for (const seg of msg.segments) ingestSegment(seg)
             const appliedToSeq = Math.max(seqBefore, currentMaxSeq())
             const mine = buildSegments ? buildSegments() : []
             sendVia(socket, { type: 'segments', segments: mine })
-            sendVia(socket, { type: 'ack', applied: msg.segments.length, rejected: 0, appliedToSeq })
+            sendVia(socket, { type: 'ack', applied: msg.segments.length, rejected: 0, appliedToSeq, oldestSeq: getOldestSeq ? currentOldestSeq() : undefined })
           } else if (msg.type === 'snapshot-request') {
-            sendVia(socket, { type: 'snapshot', snapshot: buildSnapshot ? buildSnapshot() : null })
+            // Snapshot-request protocol: stream the live state as bounded snapshot-chunk messages
+            // + a snapshot-end trailer carrying OUR current cursor, so the peer records it as its
+            // pull watermark and the next round is incremental. One transfer per peer at a time;
+            // sends are synchronous, so the busy flag is a documented invariant guard, not a queue.
+            if (!buildSnapshot || snapshotBusy.has(peer.deviceId)) return
+            snapshotBusy.add(peer.deviceId)
+            try {
+              const { chunks, totalRows, schemaVersion, cursor } = chunkSnapshot(buildSnapshot(), { cursor: currentMaxSeq() })
+              for (const c of chunks) {
+                sendVia(socket, { type: 'snapshot-chunk', index: c.index, totalChunks: chunks.length, schemaVersion, rows: c.rows })
+              }
+              sendVia(socket, { type: 'snapshot-end', totalRows, cursor, schemaVersion })
+              pushRecent({
+                at: Date.now(), kind: 'snapshot', peer: peer.deviceId,
+                detail: { direction: 'sent', rows: totalRows, cursor, label: `对端请求全量快照 / 已发送 ${totalRows} 行` },
+              })
+              em.emit('snapshot-sync', { peer: peer.deviceId, direction: 'sent', rows: totalRows, cursor })
+            } finally {
+              snapshotBusy.delete(peer.deviceId)
+            }
           }
         } catch (err) {
           try { require('electron-log').warn('[LanSync] server handler failed:', err && err.message) } catch { /* noop */ }
@@ -421,6 +541,9 @@ function createLanSyncNode(opts) {
             lastRoundAt: lr || null,
             lastError: errorBy.get(p.deviceId) || null,
             watermark: wm,
+            // Pull-side watermark: the sender cursor I recorded after my last COMPLETE snapshot
+            // from this peer (increments carry it forward between snapshots via the trigger).
+            pullWatermark: pullWatermarkBy.get(p.deviceId) ?? null,
             // How many of my oplog rows this peer has NOT confirmed yet (null when unknown:
             // no getMaxSeq injector means no honest local max seq to diff against).
             pendingCount: getMaxSeq && wm != null ? Math.max(0, currentMaxSeq() - wm) : null,
