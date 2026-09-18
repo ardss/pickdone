@@ -27,9 +27,18 @@ function allowWithinRate (timestamps, now, { limit = 10, windowMs = 10000 } = {}
 function createSecurityLock ({ getMainWindow, showMainOrLock, readConfig, writeConfig, i18n, log }) {
   let lockWin = null
   let lockCrashRebuilds = 0 // rebuild counter since the last successful load; caps the crash→rebuild loop
+  // P2 2026-09-19: locking intent is held INDEPENDENTLY of the lock window's liveness. The crash
+  // self-heal destroys the window and rebuilds it 300ms later — during that gap lockWin is null and
+  // the old isLocked() returned false, briefly opening every shortcut/IPC gate while the app was
+  // still logically locked. Intent is set when the lock engages and only cleared on unlock or the
+  // disable-lock fallback.
+  let lockingIntent = false
 
   function isLocked () {
-    try { return readConfig().enableSecurityLock === true && lockWin && !lockWin.isDestroyed() } catch { return false }
+    try {
+      if (lockingIntent) return true
+      return readConfig().enableSecurityLock === true && !!lockWin && !lockWin.isDestroyed()
+    } catch { return false }
   }
 
   /** 锁屏窗加载失败回退(2026-09-09 P2):data: URL 加载失败此前被静默吞掉,lockWin 残留(空窗)而
@@ -37,6 +46,7 @@ function createSecurityLock ({ getMainWindow, showMainOrLock, readConfig, writeC
    *  回退:销毁锁窗 + 禁用锁 + 清空密码(下次启用必须重设),并把主窗放回来 —— 可用性优先于锁。 */
   function lockLoadFailedFallback (why) {
     log.error('[SecurityLock] 锁屏窗加载失败,回退到禁用锁+强制重设密码:', why)
+    lockingIntent = false // availability beats the lock: the app is genuinely unlocked from here on
     try { if (lockWin && !lockWin.isDestroyed()) lockWin.destroy() } catch { /* already gone */ }
     lockWin = null
     try {
@@ -47,6 +57,7 @@ function createSecurityLock ({ getMainWindow, showMainOrLock, readConfig, writeC
   }
 
   function lockAppNow () {
+    lockingIntent = true // engaged BEFORE the window exists: no unlock gate opens during the build/rebuild gap
     const win = getMainWindow()
     if (win) win.hide()
     // Broadcast the locked state to the renderer (ui.isLocked) — this was never sent before; the renderer's subscription was a dead channel
@@ -139,6 +150,7 @@ function createSecurityLock ({ getMainWindow, showMainOrLock, readConfig, writeC
   }
 
   function unlockAppNow () {
+    lockingIntent = false
     if (lockWin && !lockWin.isDestroyed()) { try { lockWin.destroy() } catch {} }
     lockWin = null
     // Symmetric unlock broadcast: locking sends security-lock-on; unlocking also notifies the renderer to clear ui.isLocked (previously a one-way dead state)

@@ -149,7 +149,12 @@ function createWindowManager (ctx) {
         // Best-effort dedup-ledger persist so the relaunch doesn't re-fire reminders from the last 60s
         try { scheduler.flushFiredNow() } catch {}
         app.relaunch()
-        app.exit(1)
+        // P1 2026-09-19: app.exit(1) here bypassed before-quit/will-quit entirely — the quit-flush
+        // chain (stopSyncForQuit + scheduler persist + dbm.close WAL checkpoint) never ran, leaving a
+        // torn WAL for the relaunched instance to trip over. app.quit() runs the full flush chain
+        // (will-quit preventDefault → renderer ack window → flushNow → re-issued quit), exactly like
+        // the tray-quit path; the 3s hang fallback inside will-quit bounds it.
+        app.quit()
       }
     })
     win.webContents.on('child-process-gone', (_e, details) => {

@@ -55,6 +55,11 @@ function create () {
   // 首次唤起 focus 早于页面加载必丢(2026-09-10 P2):toggle 在 loadURL 尚未完成时就 send('quick-add-focus'),
   // 渲染端监听器还没注册 → 第一次按快捷键输入框不聚焦。did-finish-load 后若窗仍可见则补发一次。
   win.webContents.on('did-finish-load', () => {
+    // P2 2026-09-19: ignoreBlur used to be a strict one-shot consumed by the next blur — summoned
+    // with --no-focus (parkForTest, never focused → no blur ever fires) it latched true forever and
+    // swallowed the FIRST REAL blur after a focus summons too. Reset here and via a short timer in
+    // toggle: the flag must only cover the in-flight show/focus window, nothing longer.
+    ignoreBlur = false
     try { if (win && !win.isDestroyed() && win.isVisible()) win.webContents.send('quick-add-focus') } catch { /* gone */ }
   })
   // 渲染进程崩溃自愈(2026-09-10 P1,仿 tomato-float):崩溃后 quick-add 窗白屏且永不恢复,
@@ -83,6 +88,9 @@ function toggle () {
     if (!win || win.isDestroyed()) create()
     win.setBounds(defaultBounds())
     ignoreBlur = true // prevent the first press's in-flight show/focus blur from self-hiding when the shortcut is pressed twice quickly
+    // P2 2026-09-19: the flag must not latch when no blur follows (e.g. a --no-focus summon never
+    // blurs). Time-box the latch: after it expires the next blur is a real one and must hide.
+    setTimeout(() => { ignoreBlur = false }, 1000).unref?.()
     // --no-focus test instances: park inactive on the secondary display / off-screen (same policy as the main window)
     if (process.argv.includes('--no-focus')) {
       require('./window-ref').parkForTest(win, { screen })

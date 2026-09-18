@@ -142,7 +142,8 @@ function create () {
   win.webContents.on('did-finish-load', () => { loadRetries = 0 })
   win.webContents.on('did-fail-load', (e, code, desc, url, isMain) => {
     if (!isMain) return
-    if (String(url).includes('__tomato-float') && loadRetries < 5) {
+    if (!String(url).includes('__tomato-float')) return
+    if (loadRetries < 5) {
       loadRetries++
       stopHitPoll()
       log.warn('[TomatoFloat] 页面加载失败，重试', loadRetries, code, desc)
@@ -151,7 +152,16 @@ function create () {
           win.loadURL('app://app/renderer-dist/index.html#/__tomato-float').catch(() => {})
         }
       }, 400 * loadRetries)
+      return
     }
+    // P2 2026-09-19: retries exhausted used to leave the dead/error-page window alive — invisible
+    // to the user yet still click-through-polled and always-on-top (a dead click-through window
+    // blocking the bottom-right corner until restart). Destroy it: 'closed' resets win=null and the
+    // next show()/undock() lazily recreates a fresh window (same self-heal as quick-add.js).
+    log.error('[TomatoFloat] 页面加载重试耗尽，销毁浮窗等待下次 show() 重建', code, desc)
+    stopDrag()
+    stopHitPoll()
+    try { if (win && !win.isDestroyed()) win.destroy() } catch (e2) { /* already gone */ }
   })
   // 渲染进程崩溃自愈(2026-09-09,与主窗 render-process-gone 同类):did-fail-load 只覆盖加载失败,
   // 渲染进程崩溃后浮窗从此白屏/无响应且永不恢复。崩溃时销毁重建;若崩溃前可见(番茄进行中)则延迟重开。

@@ -1,6 +1,17 @@
 /** Global + in-window shortcuts — moved from index.js with dependency injection */
 const { globalShortcut } = require('electron')
 
+/** P2 2026-09-19: normalize keyboard-event key names to the Accelerator vocabulary the saved
+ *  config uses. The old `key === 'delete' ? 'delete' : key` ternary was a dead no-op that lost the
+ *  intended mapping, so saved config variants ('del'/'ins'/'esc', as users and older builds wrote
+ *  them) never matched the before-input-event combo. Class fix: any future variant only needs a row
+ *  here, in one place. */
+const KEY_ALIASES = { del: 'delete', ins: 'insert', esc: 'escape' }
+function normalizeKey (key) {
+  const k = String(key || '').toLowerCase()
+  return KEY_ALIASES[k] || k
+}
+
 function createShortcuts ({ getMainWindow, showMainOrLock, quickAdd, i18n, log }) {
   // Register a single global shortcut: returns false when the key is taken. On failure, retry once after a delay (typical case: our own old instance
   // during restart or an isolated integration-test instance briefly holds the key and releases it on exit); only if that still fails show the conflict dialog.
@@ -79,9 +90,9 @@ function createShortcuts ({ getMainWindow, showMainOrLock, quickAdd, i18n, log }
       if (input.control) parts.push('ctrl')
       if (input.alt) parts.push('alt')
       if (input.shift) parts.push('shift')
-      const key = (input.key || '').toLowerCase()
+      const key = normalizeKey(input.key)
       if (!key) return
-      parts.push(key === 'delete' ? 'delete' : key)
+      parts.push(key)
       const combo = parts.join('+')
       for (const [action] of Object.entries(inApp)) {
         const accNorm = String((s[action] || '')).toLowerCase()
@@ -97,4 +108,4 @@ function createShortcuts ({ getMainWindow, showMainOrLock, quickAdd, i18n, log }
   return { applyShortcuts, unregisterAll: () => globalShortcut.unregisterAll() }
 }
 
-module.exports = { createShortcuts }
+module.exports = { createShortcuts, normalizeKey, KEY_ALIASES }

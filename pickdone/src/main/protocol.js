@@ -35,6 +35,12 @@ async function fileResponse (file, mime, request, extraHeaders) {
     // discarded and the tail of buf was UNINITIALIZED heap memory sent straight to the renderer.
     let bytesRead = 0
     try { bytesRead = (await fh.read(buf, 0, buf.length, start)).bytesRead } finally { await fh.close() }
+    // P2 2026-09-19: the file shrank between stat and read (concurrent truncate/replace) — bytesRead
+    // is 0, and the previous header math produced the invalid range "bytes start-(start-1)/total"
+    // with an empty 206 body. Range semantics say the request is no longer satisfiable: 416.
+    if (bytesRead === 0) {
+      return new Response('range not satisfiable', { status: 416, headers: { 'Content-Range': 'bytes */' + total } })
+    }
     const out = buf.subarray(0, bytesRead)
     headers['Content-Range'] = 'bytes ' + start + '-' + (start + bytesRead - 1) + '/' + total
     headers['Content-Length'] = String(out.length)

@@ -162,11 +162,11 @@ function rebuildFingerprint (todos) {
  *  Missed catch-up: reminders that came due while the app was closed (last run's watermark < reminder time ≤ now) fire once immediately,
  *  watermark stored in meta as reminderLastSeenAt; completed tasks are neither re-fired nor scheduled. */
 function reloadAll (db) {
-  for (const h of jobs.values()) clearTimeout(h)
-  jobs.clear()
-  // Restore firedReminders from meta (prevents "already-fired reminders being re-fired by the catch-up path after restart")
-  loadFiredFromMeta(db)
-  const now = Date.now()
+  // P0 2026-09-19: the fingerprint check MUST run before any teardown. The previous order cleared
+  // every live reminder timer, THEN computed the fingerprint and early-returned when unchanged —
+  // every no-op rebuild killed all live future reminder timers (silent reminder loss until some
+  // later input change rebuilt them). Now: read inputs -> fingerprint -> return untouched on a
+  // no-op; only a real change tears jobs down and rebuilds.
   // Sharp-review fix: on first run (no watermark) do not catch up — prevents a one-time bombardment of historical reminders from old databases;
   // firedReminders dedups at runtime — write-triggered reloadAll will not re-notify already-fired reminders.
   let lastSeen = 0
@@ -176,7 +176,6 @@ function reloadAll (db) {
     if (raw == null) firstRun = true
     lastSeen = parseInt(raw || '0', 10) || 0
   } catch { /* read failure treated as first run */ }
-  if (firstRun) { try { db.setMeta(['reminderLastSeenAt', String(now)]) } catch {} }
   const todos = db.queryTodos({ deleted: 0, orderBy: 'remindAt ASC' })
   // Edge-trigger: unchanged reminder inputs -> the current timers are still correct; skip the
   // teardown AND the watermark write (the write is what re-touches the DB and fed the watcher
@@ -184,6 +183,12 @@ function reloadAll (db) {
   const fingerprint = rebuildFingerprint(todos)
   if (lastRebuildFingerprint !== null && fingerprint === lastRebuildFingerprint) return
   lastRebuildFingerprint = fingerprint
+  for (const h of jobs.values()) clearTimeout(h)
+  jobs.clear()
+  // Restore firedReminders from meta (prevents "already-fired reminders being re-fired by the catch-up path after restart")
+  loadFiredFromMeta(db)
+  const now = Date.now()
+  if (firstRun) { try { db.setMeta(['reminderLastSeenAt', String(now)]) } catch {} }
   let future = 0
   let missed = 0
   for (const t of todos) {
@@ -211,9 +216,23 @@ function scheduleOne (todo) {
   for (const [offset, ts] of reminderInstances(todo)) scheduleTask(todo, offset, ts)
 }
 
+/** P1 2026-09-19 (fast-path gate for handlers/todo.js): true only when the task has a PAST reminder
+ *  instance that has NOT been recorded as fired — i.e. reloadAll's catch-up path (watermark +
+ *  re-fire) is still needed for it. A past instance already in firedReminders (fired at runtime or
+ *  caught up after restart; the set is meta-persisted) is fully deduped, so a single-task
+ *  scheduleOne is sufficient and the full reloadAll (whole-table scan + all timers torn down) can
+ *  be skipped. */
+function needsCatchUp (todo, now = Date.now()) {
+  if (!todo || todo.complete || todo.delete) return false
+  for (const [offset, ts] of reminderInstances(todo)) {
+    if (ts <= now && !firedReminders.has(todo.taskId + ':' + (offset || 0))) return true
+  }
+  return false
+}
+
 module.exports = {
   init: () => {}, reloadAll, scheduleOne, fire, setSoundFile, flushFiredNow,
-  reminderInstances,
+  reminderInstances, needsCatchUp,
   setFireForTest,
   _jobs: jobs,
   _fired: firedReminders,
