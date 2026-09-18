@@ -26,8 +26,10 @@ const walkVue = (dir, acc = []) => {
     if (fs.statSync(rel(p)).isDirectory()) walkVue(p, acc)
     else if (f.endsWith('.vue')) {
       const src = fs.readFileSync(rel(p), 'utf8')
-      const tplM = src.match(/<template>\n([\s\S]*?)\n<\/template>/)
-      const scM = src.match(/<script[^>]*>\n([\s\S]*?)\n<\/script>/)
+      // \r?\n (2026-09-19 ubuntu 实锤):写死 \n 时 CRLF 工作树里 tpl/script 永远取不到 → 守卫在
+      // Windows 上空转(假绿),linux CI(LF 检出)才真正执行并爆出真问题
+      const tplM = src.match(/<template>\r?\n([\s\S]*?)\r?\n<\/template>/)
+      const scM = src.match(/<script[^>]*>\r?\n([\s\S]*?)\r?\n<\/script>/)
       acc.push({ file: p, tpl: tplM ? tplM[1] : '', script: scM ? scM[1] : '' })
     }
   }
@@ -345,7 +347,11 @@ const GLOBAL_TEMPLATE_OK = new Set([
 /** 从组件源码收集声明集：computed/methods 键、data 返回键、props 键（各形态）、import 绑定、模块级名字 */
 function collectDeclared (src) {
   const declared = new Set()
-  for (const m of src.matchAll(/^\s{2,}(?:async\s+)?([a-zA-Z_$][\w$]*)\s*\(/gm)) declared.add(m[1])
+  // 行尾块注释形态(2026-09-19): `/* ===== 段落注释 ===== */ tbDays () {` —— 压缩叙事注释后
+  // 声明键与注释同行的写法合法,正则必须认账,否则 ubuntu CI 假红(CalendarView tbDays 实锤)。
+  // 缩进用 [^\S\r\n](仅水平空白):\s 会跨行,注释组 [\s\S]*? 一旦跨行会把整个区段吞进一个 match
+  for (const m of src.matchAll(/^[^\S\r\n]{2,}(?:async\s+)?([a-zA-Z_$][\w$]*)\s*\(/gm)) declared.add(m[1])
+  for (const m of src.matchAll(/^[^\S\r\n]{2,}\/\*[^\n]*?\*\/[^\S\r\n]*(?:async\s+)?([a-zA-Z_$][\w$]*)\s*\(/gm)) declared.add(m[1])
   for (const m of src.matchAll(/^\s{2,}([a-zA-Z_$][\w$]*)\s*:[^:]/gm)) declared.add(m[1])
   for (const m of src.matchAll(/(?:const|let|var|function)\s+([a-zA-Z_$][\w$]*)/g)) declared.add(m[1])
   for (const m of src.matchAll(/import\s+(?:\{([^}]*)\}|(\w+))[^\n]*from/g)) {
