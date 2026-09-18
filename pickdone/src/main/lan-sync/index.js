@@ -146,7 +146,10 @@ function createLanSyncNode(opts) {
     if (arr.length > cap) arr.splice(0, arr.length - cap)
   }
   const pushRecent = (entry) => pushRing(recent, RECENT_CAP, entry)
-  const pushSecurity = (entry) => pushRing(security, SECURITY_CAP, entry)
+  // security ring: seeded from the persisted log (opts.securityLog, owned by the bootstrap —
+  // the ephemeral process used to lose pair-throttle/auth-reject history on every restart)
+  if (Array.isArray(opts.securityLog)) for (const e of opts.securityLog.slice(-SECURITY_CAP)) pushRing(security, SECURITY_CAP, e)
+  const pushSecurity = (entry) => { pushRing(security, SECURITY_CAP, entry); em.emit('security-entry', entry) }
 
   function computeOnline(id) {
     const now = Date.now()

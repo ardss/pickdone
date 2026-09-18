@@ -841,6 +841,24 @@ const OPS = {
   settingsRowPut: p => syncSchema.rowPut(p),
   settingsRowPutMany: p => syncSchema.rowPutMany(p),
   settingsRowDelete: p => syncSchema.rowDelete(p),
+  // Main-internal bulk variants for the LAN-sync apply path (2026-09-18): a first-sync snapshot
+  // can carry hundreds of categories/plans/filters and the per-row ops (upsertCategory /
+  // filterUpsert) commit one transaction per row, starving sync rounds the same way per-row todo
+  // commits did. Same no-op suppression semantics as their single-row counterparts; the result is
+  // the list of ids that actually changed (feeds the oplog's row-granular deltas). NOT
+  // renderer-callable (not in ALLOWED_RENDERER_OPS) — reachable only via main-internal db.call.
+  upsertCategoryMany: list => {
+    if (!Array.isArray(list)) throw new Error('[TodoDB] upsertCategoryMany: list must be an array, got ' + typeof list)
+    const changed = []
+    const tr = db.transaction(() => { for (const c of list) if (OPS.upsertCategory(c) !== false) changed.push(c && c.id) })
+    tr(); return changed
+  },
+  filterUpsertMany: list => {
+    if (!Array.isArray(list)) throw new Error('[TodoDB] filterUpsertMany: list must be an array, got ' + typeof list)
+    const changed = []
+    const tr = db.transaction(() => { for (const f of list) { const r = OPS.filterUpsert(f); if (r !== false) changed.push(r) } })
+    tr(); return changed
+  },
 syncOplogSince: ({ sinceSeq = 0, limit = 2000 } = {}) => db.prepare('SELECT seq, entity, entityId, ts FROM sync_oplog WHERE seq > ? ORDER BY seq ASC LIMIT ?').all(Number(sinceSeq) || 0, Math.max(1, Math.min(10000, Math.floor(Number(limit) || 2000)))),
   // P3a LAN sync ops (2026-09-16): delegates into db-sync-ops.js (gate: ops must exist here; impl lives in lan-sync-bootstrap.js)
   syncGetSettings: p => require('./db-sync-ops').dispatch('syncGetSettings', p),
@@ -900,7 +918,8 @@ const WRITE_OPS = new Set([
   'filterUpsert', 'filterDelete',
   'planAddMany', 'planUpdateChip', 'planRemoveIds', 'planMoveTask',
   'tomatoAppendMany', 'tomatoUpdateById', 'tomatoRemoveByIds', 'tomatoMigrateFromMeta',
-  'planDeleteTask', 'planDeleteTaskDay', 'planPrune', 'settingsRowPut', 'settingsRowPutMany', 'settingsRowDelete'
+  'planDeleteTask', 'planDeleteTaskDay', 'planPrune', 'settingsRowPut', 'settingsRowPutMany', 'settingsRowDelete',
+  'upsertCategoryMany', 'filterUpsertMany'
 ])
 const isWriteOp = op => WRITE_OPS.has(op)
 syncSchema.registerOps(OPS, WRITE_OPS, oplog)

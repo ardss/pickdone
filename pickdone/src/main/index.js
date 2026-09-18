@@ -510,6 +510,11 @@ app.on('before-quit', () => {
   // would only be a dead letter — renderer invokes would fail against a closed handle.
   if (flushDone) return
   state.quitByUser = true
+  // Stop the LAN sync node (round timers + TCP server + retry timers) BEFORE the quit-flush window
+  // closes the DB. Fire-and-forget: stopSync kicks the async server close off immediately and the
+  // bootstrap's settings persists (peer watermarks / security log) run synchronously via db.call,
+  // so nothing of sync's outlives the will-quit DB close (2026-09-18 P2 lifecycle fix).
+  try { require('./lan-sync-bootstrap').stopSyncForQuit() } catch { /* sync never initialized */ }
   // Before quitting, broadcast the renderer flush of debounced mirrors (the last write within dbMirror's 2s / disaster-snapshot 800ms window would be silently lost)
   // 2026-09-10 P1: previously only the main window was notified — the float window's pending pomodoro
   // ledger (and the whole broadcast when the main window was already destroyed, e.g. X-close→tray→quit)

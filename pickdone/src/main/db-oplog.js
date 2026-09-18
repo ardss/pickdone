@@ -47,6 +47,10 @@ module.exports = ({ getDb, log }) => {
       // P2 2026-09-17: a no-change re-save returns false — it must not emit a delta (the old path
       // logged entity 'filter' with entityId 'false')
       case 'filterUpsert': return result === false ? [] : [one('filter', result)]
+      // Bulk sync-apply variants (2026-09-18): result = ids that actually changed (same
+      // row-granular delta shape as their single-row counterparts).
+      case 'upsertCategoryMany': return arr('category', result)
+      case 'filterUpsertMany': return arr('filter', result)
       case 'filterDelete': return [one('filter', params)]
       case 'planAddMany': return arr('plan', result)
       case 'planUpdateChip': return [one('plan', params && params.id)]

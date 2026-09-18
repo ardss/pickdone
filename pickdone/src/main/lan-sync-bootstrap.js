@@ -45,7 +45,9 @@ const CURSOR_META_KEY = 'sync.pushCursor' // persisted in meta (not settings_row
 // max oplog seq) while buildSegments(fromSeq) consumes the SENDER's space — feeding those back
 // overshot the cursor and skipped the sender's fresh rows. v2 starts empty once: the worst case
 // of dropping a watermark is a re-push of already-applied rows, which is idempotent (§4.1).
-const K_PEER_WATERMARKS = 'sync.peerWatermarks.v2'
+const K_PEER_WATERMARKS = 'sync.peerWatermarks.v2' // {deviceId: highestSeqThatPeerAcked} — per-peer push progress (survives restarts)
+const K_SECURITY_LOG = 'sync.securityLog' // last 20 security-ring entries (pair-throttled / auth-rejected), JSON — survives restarts
+const SECURITY_PERSIST_MIN_MS = 1000 // write-throttle: at most one security-log write per second
 const START_DELAY_MS = 10 * 1000
 const ROUND_INTERVAL_MS = 5 * 60 * 1000
 // Pairing code validity: issued on first request and stable for 10 minutes (the LAN transport
@@ -308,15 +310,17 @@ function applyRowInner (incoming) {
     if (!winner.data) return false
     state.pendingWrites.tomatoes.push(winner.data)
   } else if (entity === 'category' && winner.data) {
-    state.db.call('upsertCategory', { ...winner.data, id: winner.data.categoryId })
+    // Bulk-buffered (2026-09-18): a first-sync snapshot can carry hundreds of categories —
+    // one commit per row starved rounds the same way todos did before the write buffer.
+    state.pendingWrites.categories.push({ ...winner.data, id: winner.data.categoryId })
   } else if (entity === 'plan') {
     if (incoming.deleted) state.db.call('planRemoveIds', [incoming.id])
     else if (localRow && localRow.ageUnknown) return false // cross-domain LWW: local age unknown, refuse to clobber
-    else state.db.call('planAddMany', [winner.data])
+    else state.pendingWrites.plans.push(winner.data) // bulk-buffered via planAddMany at flush
   } else if (entity === 'filter') {
     if (incoming.deleted) state.db.call('filterDelete', Number(incoming.id))
     else if (localRow && localRow.ageUnknown) return false // cross-domain LWW: local age unknown, refuse to clobber
-    else state.db.call('filterUpsert', { ...winner.data, id: Number(incoming.id) })
+    else state.pendingWrites.filters.push({ ...winner.data, id: Number(incoming.id) }) // bulk-buffered
   } else {
     return false
   }
@@ -334,6 +338,9 @@ function flushPendingWrites () {
   if (buf.todos.length) state.db.call('upsertMany', buf.todos)
   if (buf.settings.length) state.db.call('settingsRowPutMany', buf.settings)
   if (buf.tomatoes.length) state.db.call('tomatoAppendMany', buf.tomatoes)
+  if (buf.categories && buf.categories.length) state.db.call('upsertCategoryMany', buf.categories)
+  if (buf.plans && buf.plans.length) state.db.call('planAddMany', buf.plans)
+  if (buf.filters && buf.filters.length) state.db.call('filterUpsertMany', buf.filters)
   // Clear ONLY after every bulk op committed. A throw here must propagate to the round: the engine
   // has already recorded the rows applied and the peer will be acked, so silently dropping the
   // buffer (the old `finally` clear) lost those rows forever. Letting the exception escape fails
@@ -341,6 +348,9 @@ function flushPendingWrites () {
   buf.todos = []
   buf.settings = []
   buf.tomatoes = []
+  if (buf.categories) buf.categories = []
+  if (buf.plans) buf.plans = []
+  if (buf.filters) buf.filters = []
 }
 
 /**
@@ -373,6 +383,25 @@ function loadPeerWatermarks () {
 
 function persistPeerWatermarks () {
   try { settingPut(K_PEER_WATERMARKS, JSON.stringify(state.peerWatermarks.raw())) } catch (e) { log.warn('[LanSync] watermark persist failed:', e.message) }
+}
+
+/* ---------- security ring persistence (survives restarts; recent ring stays ephemeral) ---------- */
+function loadSecurityLog () {
+  try { const v = JSON.parse(settingGet(K_SECURITY_LOG) || '[]'); return Array.isArray(v) ? v.slice(-20) : [] } catch { return [] }
+}
+let securityPersistTimer = null
+function scheduleSecurityPersist () {
+  // Write-throttled to <=1 write/sec: an attacker spraying pair-requests must not turn the
+  // settings table into a write amplifier.
+  if (securityPersistTimer) return
+  securityPersistTimer = setTimeout(() => {
+    securityPersistTimer = null
+    try {
+      if (!state.node) return
+      settingPut(K_SECURITY_LOG, JSON.stringify(state.node.getStatus().security.slice(-20)))
+    } catch (e) { log.warn('[LanSync] security log persist failed:', e.message) }
+  }, SECURITY_PERSIST_MIN_MS)
+  securityPersistTimer.unref?.()
 }
 
 async function runRound () {
@@ -421,6 +450,7 @@ function startSync () {
     peerProgress: state.peerWatermarks,
     name: settingGet(K_DEVICE_NAME) || deviceName,
     pairingSecret: settingGet(K_PAIRING_SECRET),
+    securityLog: loadSecurityLog(),
     verifyPairingCode: code => !!state.pairingCode && state.pairingCode.expiresAt > Date.now() &&
       (() => { const a = Buffer.from(String(code)); const b = Buffer.from(String(state.pairingCode.code)); return a.length === b.length && timingSafeEqual(a, b) })(),
     ingestSegment: body => {
@@ -497,11 +527,30 @@ function startSync () {
   state.node.on('peer-online', p => emitSyncEvent('peer-online', { deviceId: p.deviceId, deviceName: p.name, host: p.host }))
   state.node.on('peer-offline', p => emitSyncEvent('peer-offline', { deviceId: p.deviceId, deviceName: p.name, host: p.host }))
   state.node.on('pair-throttled', info => emitSyncEvent('pair-throttled', { ip: info && info.ip }))
+  // Security-ring persistence: pair-throttled / auth-rejected entries survive restarts via
+  // settings_rows (bounded to the node's 20-entry ring, write-throttled).
+  state.node.on('security-entry', () => scheduleSecurityPersist())
   // Inbound two-way confirm request: hold it for the human (respond callback comes from the
   // transport, which owns the 60s auto-reject timer) and surface it to the renderer.
   state.node.on('pair-request', info => {
-    state.pendingPair = info
+    state.pendingPair = { ...info, at: Date.now() }
     emitSyncEvent('pair-request', { deviceId: info && info.deviceId, deviceName: info && info.deviceName, host: info && info.host })
+    notifyRenderers('pair-request')
+    // OS-level notification: the user must notice a pairing request even with the settings
+    // page (or the whole window) closed. Best-effort and capability-guarded.
+    try {
+      const { Notification } = require('electron')
+      if (Notification.isSupported()) {
+        const who = [info && info.deviceName, info && info.host].filter(Boolean).join(' · ')
+        const n = new Notification({
+          title: 'PickDone — 新设备配对请求',
+          body: who ? `${who} 请求同步配对，请在设置中确认` : '有设备请求同步配对，请在设置中确认',
+          silent: false,
+        })
+        n.on('click', () => { try { notifyRenderers('pair-request-focus') } catch { /* noop */ } })
+        n.show()
+      }
+    } catch (e) { log.warn('[LanSync] pair-request notification failed:', e.message) }
   })
   state.node.on('pair-accepted', info => emitSyncEvent('pair-accepted', { host: info && info.host, port: info && info.port }))
   state.node.on('pair-rejected', info => emitSyncEvent('pair-rejected', { host: info && info.host, port: info && info.port, reason: info && info.reason }))
@@ -514,9 +563,11 @@ function startSync () {
   }
   state.node.start()
   state.pendingToSeq = 0
-  // Auto round: 10s after enable/boot, then every 5 minutes (only while enabled)
-  state.timers.push(setTimeout(() => { runRound() }, START_DELAY_MS))
-  state.timers.push(setInterval(() => { runRound() }, ROUND_INTERVAL_MS))
+  // Auto round: 10s after enable/boot, then every 5 minutes (only while enabled). unref'd:
+  // the round timers must never keep the process alive past quit (item 2026-09-18 P2).
+  const startTimer = setTimeout(() => { runRound() }, START_DELAY_MS); startTimer.unref?.()
+  const roundTimer = setInterval(() => { runRound() }, ROUND_INTERVAL_MS); roundTimer.unref?.()
+  state.timers.push(startTimer, roundTimer)
   log.info('[LanSync] node started for', deviceId)
 }
 
@@ -524,12 +575,20 @@ async function stopSync () {
   if (!state.node) return
   for (const t of state.timers) { clearTimeout(t); clearInterval(t) }
   state.timers = []
+  if (securityPersistTimer) { clearTimeout(securityPersistTimer); securityPersistTimer = null }
   const n = state.node
   state.node = null
   state.engine = null
   state.pendingPair = null
   try { await n.stop() } catch (e) { log.warn('[LanSync] stop failed:', e.message) }
   log.info('[LanSync] node stopped')
+}
+
+/** Quit-chain hook (src/main/index.js before-quit): stop the node + round timers so they never
+ *  outlive the DB handle. Fire-and-forget async — the watermark/security persists happen
+ *  synchronously via db.call inside startSyncRound/stop ordering, before the server close await. */
+function stopSyncForQuit () {
+  try { if (state && state.node) stopSync().catch(() => {}) } catch { /* sync never initialized */ }
 }
 
 function notifyRenderers (reason) {
@@ -564,12 +623,21 @@ function getSettingsPayload () {
   }
 }
 
+/** Pending inbound pair request surfaced to the renderer (contract: renderer reads
+ *  status.pendingPair on mount and shows the confirm dialog; syncPairRespond answers it). */
+function pendingPairPayload () {
+  const p = state.pendingPair
+  if (!p || typeof p.respond !== 'function') return null
+  return { deviceId: p.deviceId || null, deviceName: p.deviceName || null, host: p.host || null, at: p.at || Date.now() }
+}
+
 function getStatusPayload () {
   const s = getSettingsPayload()
+  const pendingPair = pendingPairPayload()
   if (!state.node) {
     return {
       ...s, listening: false, port: null, peers: [], recent: [], security: [],
-      lastRoundAt: null, lastError: null,
+      lastRoundAt: null, lastError: null, pendingPair,
       self: { deviceId: s.deviceId, deviceName: s.deviceName, port: null },
     }
   }
@@ -577,7 +645,7 @@ function getStatusPayload () {
   return {
     ...s, listening: st.listening, port: st.port,
     peers: st.peers, recent: st.recent, security: st.security,
-    lastRoundAt: st.lastRoundAt, lastError: st.lastError,
+    lastRoundAt: st.lastRoundAt, lastError: st.lastError, pendingPair,
     self: st.self || { deviceId: s.deviceId, deviceName: s.deviceName, port: st.port },
   }
 }
@@ -688,14 +756,14 @@ function registerOps () {
 /** Called once from src/main/index.js after db init. Never auto-enables sync. */
 function initLanSync ({ db, getWindowSenders }) {
   const peerWatermarks = createTrackedWatermarks()
-  state = { db, getWindowSenders, node: null, engine: null, timers: [], pendingToSeq: 0, peerWatermarks, pendingWrites: { todos: [], settings: [], tomatoes: [] }, pendingPair: null }
+  state = { db, getWindowSenders, node: null, engine: null, timers: [], pendingToSeq: 0, peerWatermarks, pendingWrites: { todos: [], settings: [], tomatoes: [], categories: [], plans: [], filters: [] }, pendingPair: null }
   registerOps()
   try {
     if (settingGet(K_ENABLED) === true) startSync()
   } catch (e) { log.warn('[LanSync] startup enable failed:', e.message) }
 }
 
-module.exports = { initLanSync }
+module.exports = { initLanSync, stopSyncForQuit }
 
 // Test-only hooks: applyRowInner/flushPendingWrites operate on the module-level `state` singleton;
 // unit tests swap in a mock state via __test.setState. Production paths never touch __test.
