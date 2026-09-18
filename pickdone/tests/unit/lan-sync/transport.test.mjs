@@ -30,7 +30,7 @@ test('transport: authenticated peers exchange segments and acks', async () => {
     getHandler: () => (msg, socket) => {
       if (msg.type === 'segments') {
         received.push(...msg.segments)
-        socket.write(JSON.stringify({ type: 'ack', applied: msg.segments.length, rejected: 0 }) + '\n')
+        socket._lanSend({ type: 'ack', applied: msg.segments.length, rejected: 0 })
       }
     },
   })
@@ -39,6 +39,7 @@ test('transport: authenticated peers exchange segments and acks', async () => {
     const client = connect('127.0.0.1', port, {
       deviceId: CLIENT_DEVICE,
       authCode: deriveAuthCode(SECRET, CLIENT_DEVICE),
+      pairingSecret: SECRET,
     })
     await new Promise((resolve, reject) => {
       client.on('ready', resolve)
@@ -110,6 +111,7 @@ test('transport: oversized line (>512KB) is rejected, connection destroyed', asy
     const client = connect('127.0.0.1', port, {
       deviceId: CLIENT_DEVICE,
       authCode: deriveAuthCode(SECRET, CLIENT_DEVICE),
+      pairingSecret: SECRET,
     })
     await new Promise((resolve) => client.on('ready', resolve))
 
@@ -122,6 +124,7 @@ test('transport: oversized line (>512KB) is rejected, connection destroyed', asy
     await new Promise((r) => setTimeout(r, 50))
     assert.equal(received.length, 0)
     assert.equal(serverSawError, null) // protocol kill is not a server crash
+    await client.close()
     await server.close()
   } catch (err) {
     await server.close()

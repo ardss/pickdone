@@ -8,17 +8,26 @@
  * socket destroyed.
  *
  * Message types:
- *   hello        {deviceId, protoVer, authCode}
- *   hello-ack    {ok, protoVer, error?}
- *   segments     {segments:[...]}   sync-core packed segment envelopes
- *   snapshot     {snapshot}
- *   ack          {applied, rejected}
- *   ping / pong  {}
- *   pair-request {deviceId, code?}          pre-auth: with code = manual 6-digit mode,
- *                                           without code = two-way confirmed pairing
- *   pair-accept  {secret}                   pairing succeeded (either mode)
- *   pair-reject  {error}                    two-way mode: rejected / pair-throttled
- *   pair-ack     {ok}                       manual mode: ok=false on bad code
+ *   hello          {deviceId, protoVer, authCode, enc:1, salt}   salt = 16B b64 session-key salt
+ *   hello-ack      {ok, protoVer, enc?, error?}                  enc:1 echoes encryption support
+ *   segments       {segments:[...]}   sync-core packed segment envelopes  -- ENCRYPTED
+ *   snapshot       {snapshot}                                          -- ENCRYPTED
+ *   ack            {applied, rejected}                                 -- ENCRYPTED
+ *   ping / pong    {}
+ *   pair-request   {deviceId, code?, nonce}   pre-auth: with code = manual 6-digit mode,
+ *                                             without code = two-way confirmed pairing
+ *   pair-challenge {challenge}                server's 16B random, pre-accept handshake material
+ *   pair-accept    {secret}                   pairing succeeded (either mode); ENCRYPTED under
+ *                                             the ephemeral pair handshake key (see cipher.js)
+ *   pair-reject    {error}                    two-way mode: rejected / pair-throttled (plaintext)
+ *   pair-ack       {ok}                       manual mode: ok=false on bad code (plaintext)
+ *
+ * Encryption (cipher.js): after a successful hello/hello-ack BOTH sides derive the session key
+ * HKDF-SHA256(pairingSecret, salt) and every further message in EITHER direction is framed as
+ * `{"enc":1,"iv","tag","data"}` (AES-256-GCM). Encrypted frames before a session key exists, or
+ * plaintext data messages after auth, sever the connection. Both sides ship together in this
+ * repo, so a peer that does not advertise `enc:1` is REFUSED (hello-ack ok:false
+ * 'encryption required') rather than falling back to plaintext — PROTO_VER bumped 1 -> 2.
  *
  * Pure Node (node:net + node:crypto), no Electron imports. CommonJS.
  */
@@ -26,14 +35,17 @@
 const { EventEmitter } = require('node:events')
 const net = require('node:net')
 const { verifyAuthCode } = require('./pairing')
+const cipher = require('./cipher')
 
-const PROTO_VER = 1
+const PROTO_VER = 2
 const DEFAULT_PORT = 58471
 // A round carries the sender's whole pending backlog as ONE 'segments' JSON line, so the cap must
 // cover a first sync between real devices (tens of MB of rows), not just a heartbeat. Pre-auth
 // abuse is bounded by the hello/pair gate below — only peers holding the pairing secret can push
-// large lines, and a 16MB buffer spike from a LAN peer is acceptable for the beta.
-const MAX_LINE_BYTES = 16 * 1024 * 1024
+// large lines, and a buffer spike from a LAN peer is acceptable for the beta. Since 2026-09-18
+// the wire line is an AES-GCM frame: base64 inflates the payload ~4/3, so the WIRE cap is 32MB
+// to keep the ~16MB plaintext backlog well inside it (the cap is enforced on the raw line).
+const MAX_LINE_BYTES = 32 * 1024 * 1024
 // Pre-auth lines (before hello-ack / pair-accept) are bounded to 4KB: hello and pair-request are
 // heartbeat-sized, so an unauthenticated peer has no reason to stream megabytes into our buffers.
 // After auth the cap is raised to MAX_LINE_BYTES (a round carries a whole first-sync backlog).
@@ -102,15 +114,79 @@ class LineReader {
 }
 
 function send(socket, msg) {
-  if (!socket.destroyed && socket.writable) socket.write(JSON.stringify(msg) + '\n')
+  if (!socket.destroyed && socket.writable) {
+    // Post-auth (and post-pair-challenge where applicable) traffic is encrypted under the
+    // connection's key; socket._lanKey is null until a session/handshake key is established.
+    // Each encrypted frame carries a per-DIRECTION sequence number (starts at 0 on every
+    // connection; the peer enforces strictly-increasing — see unwrapInbound) so a captured
+    // frame cannot be replayed into the same connection.
+    const key = socket._lanKey
+    let line
+    if (key) {
+      const seq = socket._lanSendSeq || 0
+      socket._lanSendSeq = seq + 1
+      line = cipher.encryptFrame(key, msg, seq)
+    } else {
+      line = JSON.stringify(msg)
+    }
+    socket.write(line + '\n')
+  }
+}
+
+/** Send one message as an encrypted frame under an explicit key (pair-accept handshake). */
+function sendEnc(socket, key, msg) {
+  if (!socket.destroyed && socket.writable) socket.write(cipher.encryptFrame(key, msg) + '\n')
+}
+
+/** Decrypt an inbound encrypted frame under the connection's key (session key when
+ *  established, else the pair handshake key), enforcing: encrypted frames require an
+ *  established key (else sever), post-auth plaintext data messages are refused (else
+ *  sever), and session frames carry a STRICTLY-INCREASING per-direction seq (replay or
+ *  seq regression severs — conn.recvSeq starts at -1 per connection). ping/pong stays
+ *  plaintext in both phases. Returns the decrypted message, or null when the connection
+ *  was/should be severed. */
+function unwrapInbound(socket, conn, raw) {
+  if (!raw || typeof raw !== 'object') return raw
+  if (cipher.isEncFrame(raw)) {
+    const key = conn.sessionKey || conn.hsKey || null
+    if (!key) { socket.destroy(); return null } // encrypted before any key was established
+    try {
+      const msg = cipher.decryptFrame(key, raw)
+      if (conn.sessionKey) {
+        // Replay protection: session frames must be strictly increasing per direction. A
+        // replayed captured frame (or one with a regressed/missing seq) is rejected by the
+        // GCM-bound seq field — an attacker cannot re-stamp a frame without breaking the tag.
+        const seq = Number(raw.seq)
+        if (!Number.isInteger(seq) || seq <= conn.recvSeq) { socket.destroy(); return null }
+        conn.recvSeq = seq
+      }
+      return msg
+    } catch {
+      socket.destroy() // GCM tag failure = tampering or key mismatch
+      return null
+    }
+  }
+  if (conn.authorized && raw.type !== 'ping' && raw.type !== 'pong') {
+    socket.destroy() // post-auth traffic must be encrypted
+    return null
+  }
+  return raw
 }
 
 /** Shared server-side connection state machine (auth gate + dispatch).
- *  pairGate(remoteAddress) -> boolean: server-level sliding-window rate limiter for pair-request
- *  attempts (see createLanServer); when absent, no IP-level limiting is applied. */
-function wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, onUnauthorized, verifyPairingCode, onPaired, pairGate, onPairRequest, onPairThrottled, pairConfirmTimeoutMs }) {
-  const state = { peer: null, authorized: false }
+ *  pairGate(remoteAddress) -> boolean: server-level sliding-window rate limiter, applied to
+ *  BOTH pair-request attempts and FAILED hello auth attempts (see createLanServer); when
+ *  absent, no IP-level limiting is applied.
+ *  seenPairNonces: server-level Set of client pair-request nonces — a nonce is single-use
+ *  per server, so a captured pair-request cannot be replayed into a fresh accept. */
+function wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, onUnauthorized, verifyPairingCode, onPaired, pairGate, onPairRequest, onPairThrottled, pairConfirmTimeoutMs, seenPairNonces }) {
+  const state = { peer: null, authorized: false, sessionKey: null, pairHs: null, recvSeq: -1 }
+  socket._lanSend = (msg) => send(socket, msg) // encrypted send for server-side handlers (index.js sendVia)
   const finish = () => {
+    // Best-effort zeroization of the derived session key on socket close (GC copies inside
+    // node:crypto internals are unreachable — documented in cipher.js).
+    cipher.zeroize(state.sessionKey)
+    state.sessionKey = null
     if (state.peer) socket.emit('peer-closed', state.peer)
   }
   socket.on('close', finish)
@@ -118,7 +194,8 @@ function wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, o
 
   const reader = new LineReader(
     socket,
-    (msg) => {
+    (raw) => {
+      const msg = unwrapInbound(socket, state, raw)
       if (!msg || typeof msg !== 'object') return
       if (msg.type === 'ping') { send(socket, { type: 'pong' }); return }
       if (!state.authorized) {
@@ -132,6 +209,22 @@ function wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, o
           // two-way confirmed) — a throttled attempt answers pair-reject/pair-ack and is
           // surfaced via onPairThrottled so the Device Center security ring can show it.
           const code = typeof msg.code === 'string' && msg.code ? msg.code : null
+          // Client half of the pair handshake key material (cipher.js): random 16B from the
+          // requester. Empty string when absent (legacy shape) — the challenge still applies.
+          const pairNonce = cipher.isValidToken(msg.nonce, cipher.SALT_BYTES) ? msg.nonce : ''
+          // Single-use nonce: a captured pair-request transcript must not be replayable into a
+          // fresh pair-accept on a later connection (server-level, survives reconnects).
+          if (pairNonce && seenPairNonces) {
+            if (seenPairNonces.has(pairNonce)) {
+              if (code !== null) send(socket, { type: 'pair-ack', ok: false })
+              else send(socket, { type: 'pair-reject', error: 'nonce reuse' })
+              socket.destroy()
+              return
+            }
+            // Bounded memory: a flood of pair-requests cannot grow the set without limit.
+            if (seenPairNonces.size >= 4096) seenPairNonces.clear()
+            seenPairNonces.add(pairNonce)
+          }
           if (pairGate && !pairGate(socket.remoteAddress)) {
             if (onPairThrottled) onPairThrottled({ ip: socket.remoteAddress, reason: 'pair-throttled' })
             if (code !== null) send(socket, { type: 'pair-ack', ok: false })
@@ -142,13 +235,17 @@ function wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, o
           if (code !== null) {
             // Manual pairing: the peer proves knowledge of our currently displayed 6-digit code
             // and receives the persisted pairing secret (same threat model as WPS push-button:
-            // the LAN + the short-lived code are the gate).
+            // the LAN + the short-lived code are the gate). The secret reply is ENCRYPTED under
+            // the ephemeral handshake key HKDF(code|nonce|challenge) — the long-lived secret
+            // never rides the wire in plaintext (see cipher.js for the honest threat scope).
             if (!verifyPairingCode || !verifyPairingCode(code)) {
               send(socket, { type: 'pair-ack', ok: false })
               socket.destroy()
               return
             }
-            send(socket, { type: 'pair-accept', secret: pairingSecret })
+            const challenge = cipher.randomToken()
+            send(socket, { type: 'pair-challenge', challenge })
+            sendEnc(socket, cipher.deriveHandshakeKey({ code, nonce: pairNonce, challenge }), { type: 'pair-accept', secret: pairingSecret })
             if (onPaired) onPaired({ deviceId: typeof msg.deviceId === 'string' ? msg.deviceId : '', host: socket.remoteAddress })
             socket.destroy()
             return
@@ -156,15 +253,21 @@ function wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, o
           // Two-way confirmed pairing: an unpaired client asks {type:'pair-request', deviceName,
           // deviceId} BEFORE auth; a human decides via respond(accept) within the confirm window
           // (auto-reject + close on timeout, timer unref'd so it never holds the process open).
-          // Accept hands out the persisted pairing secret, exactly like the manual code path —
-          // the client derives its authCode from it and the next round authenticates normally.
+          // Accept hands out the persisted pairing secret, encrypted under the ephemeral
+          // handshake key HKDF(nonce|challenge): the challenge goes out NOW (pre-decision) so
+          // both sides can derive the key before the human answers — the secret is never
+          // plaintext on the wire (see cipher.js for the honest threat scope).
+          const challenge = cipher.randomToken()
+          state.pairHs = { nonce: pairNonce, challenge }
+          send(socket, { type: 'pair-challenge', challenge })
           let settled = false
           const finish = (accept) => {
             if (settled) return
             settled = true
             clearTimeout(confirmTimer)
             if (accept) {
-              send(socket, { type: 'pair-accept', secret: pairingSecret })
+              const hs = state.pairHs || { nonce: pairNonce, challenge }
+              sendEnc(socket, cipher.deriveHandshakeKey(hs), { type: 'pair-accept', secret: pairingSecret })
               if (onPaired) onPaired({
                 deviceId: typeof msg.deviceId === 'string' ? msg.deviceId : '',
                 deviceName: typeof msg.deviceName === 'string' ? msg.deviceName : '',
@@ -192,18 +295,42 @@ function wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, o
           socket.destroy()
           return
         }
+        // Encryption capability gate (PROTO_VER 2): both sides ship together in this repo, so
+        // a peer that does not advertise enc support is refused instead of silently falling
+        // back to plaintext sync data. Checked BEFORE auth so old peers get a clear reason.
+        if (msg.enc !== 1 || !cipher.isValidToken(msg.salt, cipher.SALT_BYTES)) {
+          send(socket, { type: 'hello-ack', ok: false, protoVer: PROTO_VER, error: 'encryption required' })
+          socket.destroy()
+          return
+        }
         const claimed = typeof msg.deviceId === 'string' ? msg.deviceId : ''
         if (claimed === deviceId || !verifyAuthCode(pairingSecret, claimed, msg.authCode)) {
           if (onUnauthorized) onUnauthorized({ deviceId: claimed, host: socket.remoteAddress })
+          // Online-guessing throttle: FAILED hello attempts feed the same server-level
+          // per-IP sliding window as pair-requests (count only failures — a successful auth
+          // never touches the counter, matching the pairGate "count every allowed attempt"
+          // semantics from the failure side). 5 failures per IP per 10 minutes, then refuse.
+          if (pairGate && !pairGate(socket.remoteAddress)) {
+            if (onPairThrottled) onPairThrottled({ ip: socket.remoteAddress, reason: 'auth-throttled' })
+            send(socket, { type: 'hello-ack', ok: false, protoVer: PROTO_VER, error: 'auth throttled' })
+            socket.destroy()
+            return
+          }
           send(socket, { type: 'hello-ack', ok: false, protoVer: PROTO_VER, error: 'auth failed' })
           socket.destroy()
           return
         }
         state.peer = { deviceId: claimed, host: socket.remoteAddress, protoVer: msg.protoVer || PROTO_VER }
         state.authorized = true
-        // Authenticated peers may stream full sync rounds: raise the line cap from 4KB to 16MB.
+        // Session key: HKDF-SHA256(pairingSecret, client salt from this hello). Every further
+        // message in BOTH directions is now an encrypted frame (cipher.js).
+        state.sessionKey = cipher.deriveSessionKey(pairingSecret, msg.salt)
+        // hello-ack itself stays PLAINTEXT (handshake boundary) — the send key is attached
+        // only after it, so the ack goes out unencrypted and both sides key up from it.
+        send(socket, { type: 'hello-ack', ok: true, protoVer: PROTO_VER, enc: 1 })
+        socket._lanKey = state.sessionKey
+        // Authenticated peers may stream full sync rounds: raise the line cap from 4KB to 32MB.
         reader.setLimit(MAX_LINE_BYTES)
-        send(socket, { type: 'hello-ack', ok: true, protoVer: PROTO_VER })
         if (onPeer) onPeer(state.peer, socket)
         return
       }
@@ -233,6 +360,9 @@ function createLanServer(opts) {
   // Lives at server scope so reconnecting cannot reset the counter (the old per-connection
   // counter made online code guessing free: one attempt per TCP connect).
   const pairAttemptsByIp = new Map()
+  // Server-level set of client pair-request nonces (single-use per server): a captured
+  // pair-request replayed on a fresh connection cannot mint a fresh pair-accept.
+  const seenPairNonces = new Set()
   const PAIR_WINDOW_MS = 10 * 60 * 1000
   const PAIR_MAX_ATTEMPTS = 5
   const pairGate = (ip) => {
@@ -251,7 +381,7 @@ function createLanServer(opts) {
   const server = net.createServer((socket) => {
     sockets.add(socket)
     socket.on('close', () => sockets.delete(socket))
-    wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, onUnauthorized, verifyPairingCode, onPaired, pairGate, onPairRequest, onPairThrottled, pairConfirmTimeoutMs })
+    wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, onUnauthorized, verifyPairingCode, onPaired, pairGate, onPairRequest, onPairThrottled, pairConfirmTimeoutMs, seenPairNonces })
   })
   server.on('error', (err) => {
     // Fixed port taken (second instance on the same machine, or a stale process): degrade to an
@@ -286,56 +416,74 @@ function createLanServer(opts) {
  * Connect to a LAN peer and authenticate.
  * @param {string} host
  * @param {number} port
- * @param {object} opts {deviceId, authCode, protoVer=1, timeoutMs=5000, onUnauthorized}
+ * @param {object} opts {deviceId, authCode, pairingSecret, protoVer=2, timeoutMs=5000,
+ *   onUnauthorized, pairCode?, pairOpen?, deviceName?}
+ *   pairingSecret is REQUIRED for authenticated rounds: the session key is derived from it
+ *   (HKDF over the salt this client generates and sends in `hello`).
  * @returns EventEmitter with .send(msg), .close(), events:
- *   'ready' (hello-ack ok), 'rejected' (auth failed), 'message', 'error', 'close'
+ *   'ready' (hello-ack ok), 'rejected' (auth failed / peer lacks encryption), 'message',
+ *   'paired' {secret} (pair flows; secret decrypted under the pair handshake key),
+ *   'error', 'close'
  */
 function connect(host, port, opts) {
-  const { deviceId, authCode, onUnauthorized, pairCode, pairOpen, deviceName } = opts
+  const { deviceId, authCode, pairingSecret, onUnauthorized, pairCode, pairOpen, deviceName } = opts
   const protoVer = opts.protoVer || PROTO_VER
   const timeoutMs = opts.timeoutMs || 5000
   const em = new EventEmitter()
   em.ready = false
+  // Connection crypto state: session key (post-auth, HKDF over pairingSecret + our salt), the
+  // ephemeral pair handshake key (pre-pairing pair-accept decryption only), and the per-direction
+  // replay-protection receive counter (strictly-increasing seq; -1 = nothing received yet).
+  const conn = { sessionKey: null, hsKey: null, authorized: false, recvSeq: -1 }
+  const salt = cipher.randomToken() // client-chosen per-connection session-key salt (in hello)
+  const pairNonce = cipher.randomToken() // client half of the pair-accept handshake key
 
   const socket = net.createConnection({ host, port })
   socket.setTimeout(timeoutMs)
+  socket._lanSend = (msg) => send(socket, msg)
 
   socket.on('connect', () => {
-    if (pairCode !== undefined) { send(socket, { type: 'pair-request', deviceId, code: String(pairCode) }); return }
+    if (pairCode !== undefined) { send(socket, { type: 'pair-request', deviceId, code: String(pairCode), nonce: pairNonce }); return }
     // Two-way confirmed pairing (no code): ask the peer; the human there accepts or rejects.
-    if (pairOpen) { send(socket, { type: 'pair-request', deviceId, deviceName: deviceName || '' }); return }
-    send(socket, { type: 'hello', deviceId, protoVer, authCode })
+    if (pairOpen) { send(socket, { type: 'pair-request', deviceId, deviceName: deviceName || '', nonce: pairNonce }); return }
+    send(socket, { type: 'hello', deviceId, protoVer, authCode, enc: cipher.ENC_VER, salt })
   })
   socket.on('timeout', () => {
-    em.emit('error', new Error(`connect timeout to ${host}:${port}`))
+    const err = new Error(`connect timeout to ${host}:${port}`)
+    // A caller without an 'error' listener must not turn the deadline into an uncaught
+    // exception — the close signal is the contract every caller already handles.
+    if (em.listenerCount('error') > 0) em.emit('error', err)
+    else em.emit('close')
     socket.destroy()
   })
   socket.on('error', (err) => em.emit('error', err))
   socket.on('close', () => {
+    // Best-effort zeroization of derived keys (see cipher.js for the GC-copy caveat).
+    cipher.zeroize(conn.sessionKey)
+    cipher.zeroize(conn.hsKey)
+    conn.sessionKey = null
+    conn.hsKey = null
     em.ready = false
     em.emit('close')
   })
 
   const reader = new LineReader(
     socket,
-    (msg) => {
+    (raw) => {
+      const msg = unwrapInbound(socket, conn, raw)
       if (!msg || typeof msg !== 'object') return
       if (msg.type === 'ping') { send(socket, { type: 'pong' }); return }
+      if (msg.type === 'pair-challenge') {
+        // Server half of the pair-accept handshake key; the encrypted pair-accept follows.
+        conn.hsKey = cipher.deriveHandshakeKey({
+          code: pairCode !== undefined ? String(pairCode) : '',
+          nonce: pairNonce,
+          challenge: cipher.isValidToken(msg.challenge, cipher.SALT_BYTES) ? msg.challenge : '',
+        })
+        return
+      }
       if (!em.ready) {
-        if (pairCode !== undefined) {
-          if (msg.type === 'pair-accept' && typeof msg.secret === 'string' && msg.secret) {
-            reader.setLimit(MAX_LINE_BYTES)
-            em.emit('paired', { secret: msg.secret })
-          } else {
-            em.emit('rejected', msg)
-          }
-          socket.destroy()
-          return
-        }
-        if (pairOpen) {
-          // Two-way confirm outcome: accept carries the peer's pairing secret (the client
-          // adopts it and derives its authCode from it, same as the manual code path);
-          // reject/timeout surfaces as 'rejected' with the peer's reason.
+        if (pairCode !== undefined || pairOpen) {
           if (msg.type === 'pair-accept' && typeof msg.secret === 'string' && msg.secret) {
             reader.setLimit(MAX_LINE_BYTES)
             em.emit('paired', { secret: msg.secret })
@@ -346,8 +494,24 @@ function connect(host, port, opts) {
           return
         }
         if (msg.type === 'hello-ack' && msg.ok) {
+          // Refuse plaintext peers (option a, both sides ship together): the ack MUST echo
+          // enc support, else syncing over an unencrypted link would be silent.
+          if (msg.enc !== 1) {
+            em.emit('rejected', { type: 'hello-ack', ok: false, error: 'peer does not support encryption' })
+            if (onUnauthorized) onUnauthorized({ deviceId, host, error: 'peer does not support encryption' })
+            socket.destroy()
+            return
+          }
+          if (typeof pairingSecret !== 'string' || !pairingSecret) {
+            em.emit('error', new Error('connect: pairingSecret is required for authenticated rounds'))
+            socket.destroy()
+            return
+          }
           em.ready = true
-          // Authenticated: raise the pre-auth 4KB line cap to the full 16MB round cap.
+          conn.authorized = true
+          conn.sessionKey = cipher.deriveSessionKey(pairingSecret, salt)
+          socket._lanKey = conn.sessionKey
+          // Authenticated: raise the pre-auth 4KB line cap to the full 32MB round cap.
           reader.setLimit(MAX_LINE_BYTES)
           em.emit('ready', msg)
         } else {
