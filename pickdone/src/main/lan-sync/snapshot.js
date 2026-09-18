@@ -59,4 +59,65 @@ function chunkSnapshot (body, opts = {}) {
   return { chunks, totalRows: snap.rows.length, schemaVersion, cursor }
 }
 
-module.exports = { chunkSnapshot, SNAPSHOT_CHUNK_BYTES }
+/**
+ * Stream bounded chunks directly from a ROWS ARRAY without ever materializing the full
+ * snapshot JSON (2026-09-18): buildSnapshot() string -> JSON.parse -> re-stringify held
+ * ~3x the whole dataset in memory on the sender. The LAN-sync sender path uses this
+ * generator over the allRows() array (sorted by entity/id like buildSnapshot) — peak
+ * memory is one copy of the rows array plus one chunk.
+ * @param {Array} rows merge rows (already sorted by the caller, mirroring engine.buildSnapshot)
+ * @param {{ maxChunkBytes?: number }} opts
+ * @yields {{ rows: Array }} successive bounded batches
+ */
+function* rowChunks (rows, opts = {}) {
+  const maxChunkBytes = opts.maxChunkBytes || SNAPSHOT_CHUNK_BYTES
+  if (!Array.isArray(rows)) throw new Error('rowChunks: rows must be an array')
+  let batch = []
+  let batchBytes = 0
+  for (const row of rows) {
+    const rowBytes = Buffer.byteLength(JSON.stringify(row), 'utf8')
+    if (rowBytes > maxChunkBytes) throw new Error('rowChunks: single row exceeds chunk budget')
+    if (batch.length && batchBytes + rowBytes > maxChunkBytes) {
+      yield { rows: batch }
+      batch = []
+      batchBytes = 0
+    }
+    batch.push(row)
+    batchBytes += rowBytes
+  }
+  if (batch.length) yield { rows: batch }
+}
+
+/**
+ * Validate + finalize a received snapshot at snapshot-end (client side of the
+ * snapshot-request protocol). Two receiver modes:
+ *   - streaming (chunkRowCounts populated): chunks were applied on arrival; only the tiling
+ *     and totalRows are validated here — `rows` stays null (never re-materialized).
+ *   - fallback (chunkBuf populated): the buffered chunks are validated AND assembled into
+ *     the full rows array for a single ingestSnapshot call.
+ * @returns {{ ok: boolean, chunkCount: number, rows?: Array|null, reason?: string }}
+ */
+function finalizeSnapshot ({ declaredChunks, chunkTotal, totalRows, chunkBuf, chunkRowCounts }) {
+  const chunkCount = Number.isInteger(declaredChunks) && declaredChunks >= 0 ? declaredChunks : chunkTotal
+  const streaming = !!(chunkRowCounts && chunkRowCounts.size)
+  if (chunkCount === 0) {
+    const extra = (chunkBuf && chunkBuf.size) || (chunkRowCounts && chunkRowCounts.size) || 0
+    if (totalRows !== 0 || extra) {
+      return { ok: false, chunkCount, reason: 'incomplete snapshot: empty trailer but chunks/rows were advertised' }
+    }
+    return { ok: true, chunkCount, rows: [] }
+  }
+  const indices = streaming ? chunkRowCounts : chunkBuf
+  const okShape = Number.isInteger(chunkCount) && chunkCount > 0 && indices.size === chunkCount &&
+    Array.from({ length: chunkCount }, (_, i) => indices.has(i)).every(Boolean)
+  const receivedRows = streaming
+    ? Array.from(chunkRowCounts.values()).reduce((a, b) => a + b, 0)
+    : (okShape ? Array.from({ length: chunkCount }, (_, i) => chunkBuf.get(i)).flat().length : 0)
+  if (!okShape || receivedRows !== totalRows) {
+    return { ok: false, chunkCount, reason: `incomplete snapshot: ${okShape ? receivedRows : 'bad chunk set'} of ${totalRows} rows` }
+  }
+  const rows = streaming ? null : Array.from({ length: chunkCount }, (_, i) => chunkBuf.get(i)).flat()
+  return { ok: true, chunkCount, rows }
+}
+
+module.exports = { chunkSnapshot, rowChunks, finalizeSnapshot, SNAPSHOT_CHUNK_BYTES }

@@ -11,10 +11,14 @@
  *   4. session key derived from a wrong secret cannot decrypt -> severed
  *   5. line caps still enforced on the encrypted framing (oversize encrypted line severed)
  *   6. the pair-accept `secret` is never plaintext on the wire (raw bytes sniffed)
+ *   7. pair-accept handshake key v2 (ephemeral ECDH): the transcript's PUBLIC material
+ *      (code, both ephemeral pubs, nonce, challenge — everything a passive sniffer sees)
+ *      does NOT derive the accept key; the legacy v1 derivation no longer decrypts either
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import net from 'node:net'
+import crypto from 'node:crypto'
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
@@ -170,7 +174,7 @@ test('encryption: tampered GCM tag severs the connection and the message is neve
     const raw = await openRaw(port, deriveAuthCode(SECRET, CLIENT_DEVICE))
     assert.equal(raw.ack && raw.ack.ok, true, 'handshake ok')
     const key = cipher.deriveSessionKey(SECRET, raw.salt)
-    const frame = JSON.parse(cipher.encryptFrame(key, { type: 'segments', segments: [{ evil: true }] }, 0))
+    const frame = JSON.parse(cipher.encryptFrame(key, { type: 'segments-chunk', segments: [{ evil: true }] }, 0))
     // Flip one character of the auth tag: GCM verification must fail server-side.
     const flipped = frame.tag[0] === 'A' ? 'B' : 'A'
     frame.tag = flipped + frame.tag.slice(1)
@@ -194,7 +198,7 @@ test('encryption: plaintext data message where encryption is expected closes the
   try {
     const raw = await openRaw(port, deriveAuthCode(SECRET, CLIENT_DEVICE))
     assert.equal(raw.ack && raw.ack.ok, true)
-    raw.write(JSON.stringify({ type: 'segments', segments: [{ plaintext: true }] }) + '\n')
+    raw.write(JSON.stringify({ type: 'segments-chunk', segments: [{ plaintext: true }] }) + '\n')
     await raw.closed
     await settle()
     assert.equal(handled.length, 0, 'plaintext post-auth message refused')
@@ -207,7 +211,7 @@ test('encryption: plaintext data message where encryption is expected closes the
   const server2 = createLanServer({
     port: 0, host: '127.0.0.1', deviceId: SERVER_DEVICE, pairingSecret: SECRET,
     getHandler: () => (msg, socket) => {
-      if (msg.type === 'segments') socket.write(JSON.stringify({ type: 'ack', applied: 1, rejected: 0 }) + '\n')
+      if (msg.type === 'segments-chunk') socket.write(JSON.stringify({ type: 'ack', applied: 1, rejected: 0 }) + '\n')
     },
   })
   const port2 = await listen(server2)
@@ -218,7 +222,7 @@ test('encryption: plaintext data message where encryption is expected closes the
     await new Promise((resolve) => client.on('ready', resolve))
     const msgs = []
     client.on('message', (m) => msgs.push(m))
-    client.send({ type: 'segments', segments: [{ fromSeq: 1, toSeq: 1, deviceId: CLIENT_DEVICE, rows: [] }] })
+    client.send({ type: 'segments-chunk', segments: [{ fromSeq: 1, toSeq: 1, deviceId: CLIENT_DEVICE, rows: [] }] })
     await new Promise((resolve) => client.on('close', resolve))
     await settle()
     assert.equal(msgs.length, 0, 'plaintext server reply is not parsed as a message')
@@ -242,7 +246,7 @@ test('encryption: session key derived from a wrong secret cannot decrypt — con
     const raw = await openRaw(port, deriveAuthCode(SECRET, CLIENT_DEVICE))
     assert.equal(raw.ack && raw.ack.ok, true)
     const wrongKey = cipher.deriveSessionKey('a-totally-different-secret', raw.salt)
-    raw.write(cipher.encryptFrame(wrongKey, { type: 'segments', segments: [{ x: 1 }] }, 0) + '\n')
+    raw.write(cipher.encryptFrame(wrongKey, { type: 'segments-chunk', segments: [{ x: 1 }] }, 0) + '\n')
     await raw.closed
     await settle()
     assert.equal(handled.length, 0, 'wrong-key frame never reaches the handler')
@@ -266,7 +270,7 @@ test('encryption: line caps still enforced on the encrypted framing (oversize en
     const key = cipher.deriveSessionKey(SECRET, raw.salt)
     // Legitimately encrypted frame (right key, intact tag) but the resulting WIRE line
     // exceeds MAX_LINE_BYTES: the cap must sever the connection regardless of validity.
-    const frame = cipher.encryptFrame(key, { type: 'segments', pad: 'x'.repeat(25 * 1024 * 1024) }, 0)
+    const frame = cipher.encryptFrame(key, { type: 'segments-chunk', pad: 'x'.repeat(25 * 1024 * 1024) }, 0)
     assert.ok(Buffer.byteLength(frame, 'utf8') > MAX_LINE_BYTES)
     raw.write(frame + '\n')
     await raw.closed
@@ -315,7 +319,7 @@ test('encryption: pre-auth encrypted frames (no session key) and plaintext peers
     const sock = net.createConnection({ host: '127.0.0.1', port })
     await new Promise((resolve, reject) => { sock.once('connect', resolve); sock.once('error', reject) })
     const closed = new Promise((resolve) => sock.once('close', resolve))
-    sock.write(cipher.encryptFrame(cipher.deriveSessionKey(SECRET, cipher.randomToken()), { type: 'segments' }) + '\n')
+    sock.write(cipher.encryptFrame(cipher.deriveSessionKey(SECRET, cipher.randomToken()), { type: 'segments-chunk' }) + '\n')
     await closed
   } finally {
     await server.close()
@@ -342,7 +346,7 @@ test('encryption: replaying a captured frame or regressing the per-direction seq
   const handled = []
   const server = createLanServer({
     port: 0, host: '127.0.0.1', deviceId: SERVER_DEVICE, pairingSecret: SECRET,
-    getHandler: () => (msg) => { if (msg.type === 'segments') handled.push(msg) },
+    getHandler: () => (msg) => { if (msg.type === 'segments-chunk') handled.push(msg) },
   })
   const port = await listen(server)
   try {
@@ -350,7 +354,7 @@ test('encryption: replaying a captured frame or regressing the per-direction seq
     const raw = await openRaw(port, deriveAuthCode(SECRET, CLIENT_DEVICE))
     assert.equal(raw.ack && raw.ack.ok, true)
     const key = cipher.deriveSessionKey(SECRET, raw.salt)
-    const line = cipher.encryptFrame(key, { type: 'segments', segments: [{ replay: 1 }] }, 0) + '\n'
+    const line = cipher.encryptFrame(key, { type: 'segments-chunk', segments: [{ replay: 1 }] }, 0) + '\n'
     raw.write(line)
     await settle()
     assert.equal(handled.length, 1, 'the first (valid) delivery is handled')
@@ -363,10 +367,10 @@ test('encryption: replaying a captured frame or regressing the per-direction seq
     // strictly increasing — the second frame severs before the handler runs.
     const raw2 = await openRaw(port, deriveAuthCode(SECRET, CLIENT_DEVICE))
     const key2 = cipher.deriveSessionKey(SECRET, raw2.salt)
-    raw2.write(cipher.encryptFrame(key2, { type: 'segments', segments: [{ n: 1 }] }, 7) + '\n')
+    raw2.write(cipher.encryptFrame(key2, { type: 'segments-chunk', segments: [{ n: 1 }] }, 7) + '\n')
     await settle()
     assert.equal(handled.length, 2)
-    raw2.write(cipher.encryptFrame(key2, { type: 'segments', segments: [{ n: 2 }] }, 3) + '\n')
+    raw2.write(cipher.encryptFrame(key2, { type: 'segments-chunk', segments: [{ n: 2 }] }, 3) + '\n')
     await raw2.closed
     await settle()
     assert.equal(handled.length, 2, 'a seq regression severs the connection')
@@ -374,7 +378,7 @@ test('encryption: replaying a captured frame or regressing the per-direction seq
     // (c) a session frame WITHOUT a seq is refused outright.
     const raw3 = await openRaw(port, deriveAuthCode(SECRET, CLIENT_DEVICE))
     const key3 = cipher.deriveSessionKey(SECRET, raw3.salt)
-    raw3.write(cipher.encryptFrame(key3, { type: 'segments', segments: [{ n: 3 }] }) + '\n')
+    raw3.write(cipher.encryptFrame(key3, { type: 'segments-chunk', segments: [{ n: 3 }] }) + '\n')
     await raw3.closed
     await settle()
     assert.equal(handled.length, 2, 'seq-less session frame refused')
@@ -428,5 +432,70 @@ test('encryption: a peer whose hello-ack lacks enc:1 is refused client-side with
     await client.close()
   } finally {
     await new Promise((resolve) => fakeOldPeer.close(resolve))
+  }
+})
+
+test('encryption: pair-accept handshake key v2 — passive-sniffer transcript cannot derive the accept key', async () => {
+  // Regression (2026-09-18, P1): the v1 key was HKDF(code|nonce|challenge) — ALL of it public
+  // on the wire, so a passive sniffer could decrypt the pair-accept (two-way mode) or brute
+  // force the 10^6 code space offline (manual mode). v2 mixes in ephemeral ECDH: the sniffer
+  // sees both PUBLIC keys but neither private half.
+  const CODE = '246810'
+  const server = createLanServer({
+    port: 0, host: '127.0.0.1', deviceId: SERVER_DEVICE, pairingSecret: SECRET,
+    verifyPairingCode: (c) => c === CODE,
+  })
+  const proxy = sniffProxy(await listen(server))
+  const sniffPort = await proxy.listen()
+  try {
+    // Raw manual-mode client through the proxy: pair-request {nonce, pub} -> pair-challenge
+    // {challenge, pub} -> encrypted pair-accept.
+    const sock = net.createConnection({ host: '127.0.0.1', port: sniffPort })
+    await new Promise((resolve, reject) => { sock.once('connect', resolve); sock.once('error', reject) })
+    const lines = []
+    let buf = ''
+    sock.setEncoding('utf8')
+    sock.on('data', (d) => {
+      buf += d
+      let i
+      while ((i = buf.indexOf('\n')) !== -1) { lines.push(buf.slice(0, i)); buf = buf.slice(i + 1) }
+    })
+    const nextLine = (ms = 4000) => new Promise((resolve) => {
+      const tick = () => resolve(lines.length ? lines.shift() : null)
+      if (lines.length) return tick()
+      setTimeout(tick, ms).unref?.()
+    })
+    const clientEph = cipher.createPairEphemeral()
+    const nonce = cipher.randomToken()
+    sock.write(JSON.stringify({ type: 'pair-request', deviceId: CLIENT_DEVICE, code: CODE, nonce, pub: clientEph.pub }) + '\n')
+    const challengeLine = JSON.parse(await nextLine())
+    assert.equal(challengeLine.type, 'pair-challenge', 'server sent its challenge')
+    const acceptLine = await nextLine()
+    assert.ok(cipher.isEncFrame(JSON.parse(acceptLine)), 'the pair-accept rode an encrypted frame')
+
+    // (a) The legacy v1 derivation — everything from the public transcript — must NOT decrypt
+    // the accept frame (old captured transcripts are dead).
+    const v1Ikm = Buffer.from(`${CODE}|${nonce}|${challengeLine.challenge}`, 'utf8')
+    const v1Key = Buffer.from(crypto.hkdfSync('sha256', v1Ikm, Buffer.from('pickdone-pair-hs-salt-v1', 'utf8'), Buffer.from('pickdone-lan-sync-pair-v1', 'utf8'), 32))
+    assert.throws(() => cipher.decryptFrame(v1Key, JSON.parse(acceptLine)), 'v1 transcript-derived key must fail')
+
+    // (b) Even mixing ALL public v2 transcript material (both ephemeral PUBLIC keys included)
+    // must not produce the accept key — a passive sniffer has exactly this and nothing more.
+    const pubIkm = Buffer.from(`${CODE}|${clientEph.pub}|${challengeLine.pub}|${nonce}|${challengeLine.challenge}`, 'utf8')
+    const pubKey = Buffer.from(crypto.hkdfSync('sha256', pubIkm, Buffer.from('pickdone-pair-hs-salt-v2', 'utf8'), Buffer.from('pickdone-lan-sync-pair-v2', 'utf8'), 32))
+    assert.throws(() => cipher.decryptFrame(pubKey, JSON.parse(acceptLine)), 'all-public-material key must fail')
+
+    // (c) The legitimate client — holding its ephemeral PRIVATE key — decrypts the secret.
+    const goodKey = cipher.deriveHandshakeKey({
+      code: CODE, ecdh: clientEph.ecdh, peerPub: challengeLine.pub, nonce, challenge: challengeLine.challenge,
+    })
+    const accept = cipher.decryptFrame(goodKey, JSON.parse(acceptLine))
+    assert.equal(accept.secret, SECRET, 'the ECDH handshake key opens the accept')
+
+    assert.ok(!proxy.text().includes(SECRET), 'secret never plaintext on the wire')
+    sock.destroy()
+  } finally {
+    await proxy.close()
+    await server.close()
   }
 })

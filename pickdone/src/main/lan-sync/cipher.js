@@ -19,23 +19,26 @@
  *     (pair-accept) omit `seq`: they are single-message handshakes on a connection that
  *     closes immediately after. Line-based framing and the dynamic line caps in
  *     transport.js are untouched (caps apply to the whole wire line, encrypted or not).
- *   - Pair-accept handshake key: pre-pairing there is no shared high-entropy material, so
- *     the `pair-accept {secret}` reply is encrypted under HKDF-SHA256 over
- *     `<code>|<clientNonce>|<serverChallenge>` (info 'pickdone-lan-sync-pair-v1', fixed
- *     salt). The client nonce rides the pair-request; the server sends a random 16B
- *     `pair-challenge` before accepting (challenge is generated per request and bound to
- *     that one connection; the accept reply is only ever written back on the same socket).
- *     HONEST LIMITATION (do not oversell): the nonce, the challenge and, in manual mode,
- *     the 6-digit code all transit in plaintext. In TWO-WAY mode the key material is then
- *     entirely public — a passive sniffer recording the transcript can derive the key and
- *     read the secret. In MANUAL mode the transcript allows an OFFLINE brute force over
- *     the 10^6 code space. Single-use server nonces (transport.js) and the connection-bound
- *     challenge stop trivial replay of a captured accept, but nothing here protects against
- *     an active sniffer. This is confidentiality-against-casual-scraping, NOT protection
- *     against a determined adversary; the real fix is a PAKE (e.g. SPAKE2+) or TLS/Noise —
- *     tracked as a known follow-up, out of scope here. It is still strictly better than
- *     the prior plaintext secret: the long-lived pairing secret never appears verbatim on
- *     the wire, and each capture must be brute-forced per handshake.
+ *   - Pair-accept handshake key (v2, 2026-09-18): pre-pairing there is no shared long-lived
+ *     secret, so the `pair-accept {secret}` reply is encrypted under HKDF-SHA256 over EPHEMERAL
+ *     ECDH (NIST P-256) plus the transcript nonces:
+ *       client pair-request: {nonce, pub = client ephemeral P-256 public key (b64)}
+ *       server pair-challenge: {challenge, pub = server ephemeral P-256 public key (b64)}
+ *       ikm = <code> | ECDH(clientPriv, serverPub) | <nonce> | <challenge>   (utf8, '|' joined)
+ *       info 'pickdone-lan-sync-pair-v2', fixed salt. The code is '' in two-way mode; in MANUAL
+ *       (6-digit) mode it is mixed in so an offline brute force must go through ECDH per guess.
+ *     A PASSIVE sniffer sees both public keys, the nonce and the challenge — all public — but
+ *     not either ephemeral private key, so it can NOT derive the shared secret (the v1 scheme
+ *     HKDF(code|nonce|challenge) was fully derivable from the transcript, and in manual mode
+ *     fell to a 10^6 offline brute force). Replay of an OLD captured accept under v1 keys also
+ *     fails: the v1 derivation no longer matches anything.
+ *     HONEST LIMITATION (do not oversell): the handshake is UNAUTHENTICATED. An ACTIVE
+ *     machine-in-the-middle can substitute its own ephemeral keys on both legs, learn the
+ *     secret (and, in manual mode, verify code guesses online). Stopping that requires
+ *     authenticating the ephemeral keys (a PAKE such as SPAKE2+, or TLS/Noise with a shared
+ *     verification string) — tracked as a known follow-up, out of scope here. Single-use server
+ *     nonces (transport.js) and the connection-bound challenge still stop trivial replay of a
+ *     captured accept. The long-lived pairing secret still never appears verbatim on the wire.
  *   - Zeroize: buffers are overwritten in place on socket close (best-effort — GC copies
  *     of key material inside node:crypto internals cannot be reached).
  *
@@ -45,12 +48,13 @@
 const crypto = require('node:crypto')
 
 const HKDF_INFO_SESSION = 'pickdone-lan-sync-v1'
-const HKDF_INFO_PAIR = 'pickdone-lan-sync-pair-v1'
-const HKDF_SALT_PAIR = 'pickdone-pair-hs-salt-v1'
+const HKDF_INFO_PAIR = 'pickdone-lan-sync-pair-v2'
+const HKDF_SALT_PAIR = 'pickdone-pair-hs-salt-v2'
 const SALT_BYTES = 16
 const IV_BYTES = 12
 const KEY_BYTES = 32
 const ENC_VER = 1
+const ECDH_CURVE = 'prime256v1' // NIST P-256
 
 /** HKDF-SHA256 -> 32-byte key Buffer. */
 function hkdf(ikm, salt, info) {
@@ -75,12 +79,38 @@ function deriveSessionKey(pairingSecret, saltB64) {
 }
 
 /**
- * Derive the ephemeral pair-accept handshake key from whatever low-entropy material the
- * two pre-pairing sides share: the 6-digit code (manual mode, '' in two-way mode), the
- * client's pair-request nonce and the server's pair-challenge.
+ * Generate one ephemeral ECDH (P-256) keypair for the pair-accept handshake.
+ * @returns {{ ecdh: object, pub: string }} the node:crypto ECDH object and our
+ *   public key as b64 (goes on the wire; the private half never leaves the process)
  */
-function deriveHandshakeKey({ code = '', nonce = '', challenge = '' }) {
-  const ikm = Buffer.from(`${String(code)}|${String(nonce)}|${String(challenge)}`, 'utf8')
+function createPairEphemeral() {
+  const ecdh = crypto.createECDH(ECDH_CURVE)
+  return { ecdh, pub: ecdh.generateKeys('base64') }
+}
+
+/**
+ * Derive the ephemeral pair-accept handshake key (v2): HKDF over the ECDH shared
+ * secret with the two sides' ephemeral keys, mixed with the 6-digit code (manual
+ * mode, '' in two-way mode), the client nonce and the server challenge.
+ * @param {{ code?: string, ecdh: object, peerPub: string, nonce?: string, challenge?: string }} p
+ *   ecdh = OUR ephemeral (createPairEphemeral), peerPub = the PEER's wire `pub` (b64).
+ * @returns {Buffer} 32-byte AES-256 key
+ * @throws when the peer's `pub` is missing or not a point on the curve (caller must
+ *   treat the pairing attempt as failed — it is not a valid handshake peer).
+ */
+function deriveHandshakeKey({ code = '', ecdh, peerPub, nonce = '', challenge = '' }) {
+  if (!ecdh || typeof ecdh.computeSecret !== 'function') {
+    throw new Error('deriveHandshakeKey: ephemeral ECDH keypair required')
+  }
+  if (typeof peerPub !== 'string' || peerPub.length === 0) {
+    throw new Error('deriveHandshakeKey: peer ephemeral public key required')
+  }
+  const shared = ecdh.computeSecret(Buffer.from(peerPub, 'base64')) // throws on a bad point
+  const ikm = Buffer.concat([
+    Buffer.from(`${String(code)}|`, 'utf8'),
+    shared,
+    Buffer.from(`|${String(nonce)}|${String(challenge)}`, 'utf8'),
+  ])
   return hkdf(ikm, Buffer.from(HKDF_SALT_PAIR, 'utf8'), HKDF_INFO_PAIR)
 }
 
@@ -168,7 +198,7 @@ function zeroize(buf) {
 
 module.exports = {
   ENC_VER, SALT_BYTES, IV_BYTES, KEY_BYTES,
-  deriveSessionKey, deriveHandshakeKey,
+  deriveSessionKey, createPairEphemeral, deriveHandshakeKey,
   randomToken, isValidToken, isEncFrame,
   encryptFrame, decryptFrame, zeroize,
 }

@@ -26,7 +26,7 @@ const EMPTY_TABLES = {
 /** Mock state: db records every call; table read ops come from `tables`, write ops are recorded. */
 function mockState(tables = {}, writeImpl = {}) {
   const calls = []
-  const pendingWrites = { todos: [], settings: [], tomatoes: [] }
+  const pendingWrites = { todos: [], settings: [], tomatoes: [], categories: [], plans: [], filters: [] }
   const db = {
     calls,
     call (op, params) {
@@ -238,4 +238,48 @@ test('bootstrap flush: a fully committed buffer is cleared', () => {
   __test.flushPendingWrites()
   assert.equal(m.pendingWrites.todos.length, 0)
   assert.equal(m.pendingWrites.settings.length, 0)
+})
+
+/* ---------- 2026-09-18: category/plan/filter bulk apply path ---------- */
+
+test('bootstrap apply: category/plan/filter live rows are bulk-buffered, not committed per row', () => {
+  // Regression (2026-09-18): upsertCategory/filterUpsert committed one transaction per applied
+  // row — a first-sync snapshot with hundreds of them starved the round past any sane budget.
+  const m = fresh({ ...EMPTY_TABLES })
+  const okCat = __test.applyRow({ entity: 'category', id: 'c1', seq: 1, ts: 10, updatedAt: 10, deleted: false, deletedAt: 0, data: { categoryId: 'c1', name: 'Work', color: '#fff' } })
+  const okPlan = __test.applyRow({ entity: 'plan', id: 'p9', seq: 2, ts: 20, updatedAt: 20, deleted: false, deletedAt: 0, data: { id: 'p9', taskId: 't1', day: '2026-09-18', mm: '09:00' } })
+  const okFilter = __test.applyRow({ entity: 'filter', id: '4', seq: 3, ts: 30, updatedAt: 30, deleted: false, deletedAt: 0, data: { id: 4, name: 'work', conds: {}, sort: 0 } })
+  assert.equal(okCat, true)
+  assert.equal(okPlan, true)
+  assert.equal(okFilter, true)
+  assert.equal(m.pendingWrites.categories.length, 1)
+  assert.equal(m.pendingWrites.categories[0].id, 'c1')
+  assert.equal(m.pendingWrites.plans.length, 1)
+  assert.equal(m.pendingWrites.plans[0].taskId, 't1')
+  assert.equal(m.pendingWrites.filters.length, 1)
+  assert.equal(m.pendingWrites.filters[0].id, 4)
+  // Nothing was committed directly during apply.
+  assert.equal(m.calls.find(c => c.op === 'upsertCategory'), undefined)
+  assert.equal(m.calls.find(c => c.op === 'filterUpsert'), undefined)
+  assert.equal(m.calls.find(c => c.op === 'planAddMany'), undefined)
+})
+
+test('bootstrap flush: bulk-buffered categories/plans/filters land through their bulk ops', () => {
+  const m = fresh(
+    { ...EMPTY_TABLES },
+    {
+      upsertCategoryMany: list => { bulkOps.push(['upsertCategoryMany', list]); return list.map(c => c.id) },
+      planAddMany: list => { bulkOps.push(['planAddMany', list]); return list.map(c => c.id) },
+      filterUpsertMany: list => { bulkOps.push(['filterUpsertMany', list]); return list.map(c => c.id) },
+    },
+  )
+  const bulkOps = []
+  m.pendingWrites.categories.push({ id: 'c1', name: 'Work' })
+  m.pendingWrites.plans.push({ id: 'p1', taskId: 't1', day: '2026-09-18', mm: '09:00' })
+  m.pendingWrites.filters.push({ id: 4, name: 'work', conds: {}, sort: 0 })
+  __test.flushPendingWrites()
+  assert.deepEqual(bulkOps.map(b => b[0]), ['upsertCategoryMany', 'planAddMany', 'filterUpsertMany'])
+  assert.equal(m.pendingWrites.categories.length, 0)
+  assert.equal(m.pendingWrites.plans.length, 0)
+  assert.equal(m.pendingWrites.filters.length, 0)
 })

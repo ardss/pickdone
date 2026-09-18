@@ -50,7 +50,7 @@ test('device-center: getStatus exposes watermark + pendingCount + online per pee
     deviceId: 'peer',
     pairingSecret: SECRET,
     getHandler: () => (msg, socket) => {
-      if (msg.type === 'segments') {
+      if (msg.type === 'segments-chunk') {
         socket._lanSend({ type: 'ack', applied: msg.segments.length, rejected: 0, appliedToSeq: 4 })
       }
     },
@@ -207,4 +207,37 @@ test('device-center: recent ring is capped at 50 entries', async () => {
   assert.equal(st.security.length, 0, 'round errors are activity, not security events')
 
   await node.stop()
+})
+
+test('device-center: security ring is seeded from the persisted log and emits security-entry', async () => {
+  // 2026-09-18: the security ring used to die on restart (memory-only). The bootstrap now
+  // seeds the node's ring from settings_rows and persists new entries (write-throttled) —
+  // node-level contract: opts.securityLog seeds, pushSecurity appends + emits 'security-entry'.
+  const serverNode = makeNode({
+    deviceId: 'server-side',
+    securityLog: [{ at: 1, ip: '10.0.0.9', reason: 'auth-rejected' }],
+  })
+  const entries = []
+  serverNode.on('security-entry', (e) => entries.push(e))
+  serverNode.start()
+  const serverPort = await serverNode.whenListening()
+
+  const st = serverNode.getStatus()
+  assert.equal(st.security.length, 1, 'persisted history is visible right after start')
+  assert.equal(st.security[0].ip, '10.0.0.9')
+
+  // A live pair-throttle appends to the ring AND emits the persist hook event.
+  for (let i = 0; i < 6; i++) {
+    await new Promise((resolve) => {
+      const client = connect('127.0.0.1', serverPort, { deviceId: 'guesser', pairCode: '000000', timeoutMs: 3000 })
+      client.on('rejected', () => resolve())
+      client.on('error', () => resolve())
+      client.on('close', () => resolve())
+    })
+  }
+  assert.ok(entries.some(e => e.reason === 'pair-throttled'), 'security-entry emitted for persistence')
+  const sec = serverNode.getStatus().security
+  assert.ok(sec.some(s => s.reason === 'pair-throttled' && s.ip === '127.0.0.1'), 'live entry joined the seeded ring')
+
+  await serverNode.stop()
 })

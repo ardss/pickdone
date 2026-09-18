@@ -448,6 +448,7 @@ function assertHasTaskId (t) {
   }
 }
 
+const makeBulkOps = require('./db-bulk-ops')(db, () => OPS)
 const OPS = {
   upsert: t => { assertHasTaskId(t); stmts.upsert.run(todoToRow(t)); return true },
   upsertMany: list => { if (!Array.isArray(list)) throw new Error('[TodoDB] upsertMany: list must be an array, got ' + typeof list); list.forEach(assertHasTaskId); stmts.upsertMany(list.map(todoToRow)); return true },
@@ -514,18 +515,22 @@ const OPS = {
   purgeRecycleBin: () => {
     // Cascade: plan chips belonging to recycle-bin rows are removed too (otherwise the timeline shows ghost chips after emptying the recycle bin, with no way to remove them)
     // 两表删除包事务(2026-09-05 终审 P1):非原子路径在两语句间崩溃会留幽灵行
+    // Returns purged ids: the oplog expands them into per-id tombstone pointers (replaces the ghost-prone ('todo','*gc*') marker).
+    let ids = []
     const tr = db.transaction(() => {
+      ids = db.prepare('SELECT id FROM todos WHERE deleted = 1').all().map(r => r.id)
       db.prepare('DELETE FROM plan_chips WHERE taskId IN (SELECT id FROM todos WHERE deleted = 1)').run()
       db.prepare('DELETE FROM todos WHERE deleted = 1').run()
-    }); tr(); return true
+    }); tr(); return ids
   },
-  // Cascade plan_chips too (same contract as hardDelete/purgeRecycleBin): purging demo rows without removing
-  // their chips left ghost chips on the timeline with the task gone (2026-09-09 P2, transactional like its siblings)
+  // Cascade plan_chips too (same contract as hardDelete/purgeRecycleBin, transactional); returns purged ids for per-id sync tombstones.
   purgeSeedTodos: () => {
+    let ids = []
     const tr = db.transaction(() => {
+      ids = db.prepare("SELECT id FROM todos WHERE substr(id, 1, 5) = 'seed_'").all().map(r => r.id)
       db.prepare("DELETE FROM plan_chips WHERE taskId IN (SELECT id FROM todos WHERE substr(id, 1, 5) = 'seed_')").run()
       db.prepare("DELETE FROM todos WHERE substr(id, 1, 5) = 'seed_'").run()
-    }); tr(); return true
+    }); tr(); return ids
   },
   countSeedTodos: () => db.prepare("SELECT COUNT(*) n FROM todos WHERE substr(id, 1, 5) = 'seed_'").get().n,
   upsertCategory: (c) => {
@@ -833,6 +838,8 @@ const OPS = {
   settingsRowPut: p => syncSchema.rowPut(p),
   settingsRowPutMany: p => syncSchema.rowPutMany(p),
   settingsRowDelete: p => syncSchema.rowDelete(p),
+  upsertCategoryMany: makeBulkOps.upsertCategoryMany,
+  filterUpsertMany: makeBulkOps.filterUpsertMany,
 syncOplogSince: ({ sinceSeq = 0, limit = 2000 } = {}) => db.prepare('SELECT seq, entity, entityId, ts FROM sync_oplog WHERE seq > ? ORDER BY seq ASC LIMIT ?').all(Number(sinceSeq) || 0, Math.max(1, Math.min(10000, Math.floor(Number(limit) || 2000)))),
   // P3a LAN sync ops (2026-09-16): delegates into db-sync-ops.js (gate: ops must exist here; impl lives in lan-sync-bootstrap.js)
   syncGetSettings: p => require('./db-sync-ops').dispatch('syncGetSettings', p),
@@ -892,7 +899,8 @@ const WRITE_OPS = new Set([
   'filterUpsert', 'filterDelete',
   'planAddMany', 'planUpdateChip', 'planRemoveIds', 'planMoveTask',
   'tomatoAppendMany', 'tomatoUpdateById', 'tomatoRemoveByIds', 'tomatoMigrateFromMeta',
-  'planDeleteTask', 'planDeleteTaskDay', 'planPrune', 'settingsRowPut', 'settingsRowPutMany', 'settingsRowDelete'
+  'planDeleteTask', 'planDeleteTaskDay', 'planPrune', 'settingsRowPut', 'settingsRowPutMany', 'settingsRowDelete',
+  'upsertCategoryMany', 'filterUpsertMany'
 ])
 const isWriteOp = op => WRITE_OPS.has(op)
 syncSchema.registerOps(OPS, WRITE_OPS, oplog)

@@ -10,13 +10,17 @@
  * Message types:
  *   hello          {deviceId, protoVer, authCode, enc:1, salt}   salt = 16B b64 session-key salt
  *   hello-ack      {ok, protoVer, enc?, error?}                  enc:1 echoes encryption support
- *   segments       {segments:[...]}   sync-core packed segment envelopes  -- ENCRYPTED
- *   snapshot       {snapshot}                                          -- ENCRYPTED
+ *   segments-chunk {segments:[...], final}   sync-core packed segment envelopes, bounded chunk of
+ *                                            a round's push (final:true on the last chunk) -- ENCRYPTED
+ *   snapshot       {snapshot}                                          -- ENCRYPTED (removed: unused)
  *   ack            {applied, rejected}                                 -- ENCRYPTED
  *   ping / pong    {}
- *   pair-request   {deviceId, code?, nonce}   pre-auth: with code = manual 6-digit mode,
- *                                             without code = two-way confirmed pairing
- *   pair-challenge {challenge}                server's 16B random, pre-accept handshake material
+ *   pair-request   {deviceId, code?, nonce, pub}  pre-auth: with code = manual 6-digit mode,
+ *                                             without code = two-way confirmed pairing;
+ *                                             pub = client ephemeral ECDH P-256 key (b64)
+ *   pair-challenge {challenge, pub}            server's 16B random + server ephemeral ECDH key;
+ *                                             the pair-accept is encrypted under the v2
+ *                                             ECDH-based handshake key (see cipher.js)
  *   pair-accept    {secret}                   pairing succeeded (either mode); ENCRYPTED under
  *                                             the ephemeral pair handshake key (see cipher.js)
  *   pair-reject    {error}                    two-way mode: rejected / pair-throttled (plaintext)
@@ -39,12 +43,11 @@ const cipher = require('./cipher')
 
 const PROTO_VER = 2
 const DEFAULT_PORT = 58471
-// A round carries the sender's whole pending backlog as ONE 'segments' JSON line, so the cap must
-// cover a first sync between real devices (tens of MB of rows), not just a heartbeat. Pre-auth
-// abuse is bounded by the hello/pair gate below — only peers holding the pairing secret can push
-// large lines, and a buffer spike from a LAN peer is acceptable for the beta. Since 2026-09-18
-// the wire line is an AES-GCM frame: base64 inflates the payload ~4/3, so the WIRE cap is 32MB
-// to keep the ~16MB plaintext backlog well inside it (the cap is enforced on the raw line).
+// A round's push travels as bounded `segments-chunk` lines (~1MB payload each, see
+// segments-chunk.js) since 2026-09-18: one whole-backlog line used to exceed this cap once
+// AES-GCM base64 framing inflated it, destroying first-sync rounds permanently. The cap stays
+// as abuse/oversize protection, not as the transfer mechanism. Pre-auth abuse is bounded by
+// the hello/pair gate below — only peers holding the pairing secret can push large lines.
 const MAX_LINE_BYTES = 32 * 1024 * 1024
 // Pre-auth lines (before hello-ack / pair-accept) are bounded to 4KB: hello and pair-request are
 // heartbeat-sized, so an unauthenticated peer has no reason to stream megabytes into our buffers.
@@ -210,8 +213,10 @@ function wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, o
           // surfaced via onPairThrottled so the Device Center security ring can show it.
           const code = typeof msg.code === 'string' && msg.code ? msg.code : null
           // Client half of the pair handshake key material (cipher.js): random 16B from the
-          // requester. Empty string when absent (legacy shape) — the challenge still applies.
+          // requester, plus the requester's EPHEMERAL ECDH public key (v2, 2026-09-18) — without
+          // it the accept key would be derivable by a passive sniffer from the transcript alone.
           const pairNonce = cipher.isValidToken(msg.nonce, cipher.SALT_BYTES) ? msg.nonce : ''
+          const peerPub = typeof msg.pub === 'string' && msg.pub ? msg.pub : null
           // Single-use nonce: a captured pair-request transcript must not be replayable into a
           // fresh pair-accept on a later connection (server-level, survives reconnects).
           if (pairNonce && seenPairNonces) {
@@ -232,42 +237,71 @@ function wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, o
             socket.destroy()
             return
           }
+          if (!peerPub) {
+            // v2 handshake (2026-09-18): both sides ship together — a pair-request without an
+            // ephemeral ECDH key cannot produce a sniffer-safe accept, so it is refused outright
+            // instead of falling back to the transcript-derivable v1 scheme.
+            if (code !== null) send(socket, { type: 'pair-ack', ok: false })
+            else send(socket, { type: 'pair-reject', error: 'ephemeral key required' })
+            socket.destroy()
+            return
+          }
           if (code !== null) {
             // Manual pairing: the peer proves knowledge of our currently displayed 6-digit code
             // and receives the persisted pairing secret (same threat model as WPS push-button:
             // the LAN + the short-lived code are the gate). The secret reply is ENCRYPTED under
-            // the ephemeral handshake key HKDF(code|nonce|challenge) — the long-lived secret
-            // never rides the wire in plaintext (see cipher.js for the honest threat scope).
+            // the ephemeral handshake key HKDF(code | ECDH(clientPriv,serverPub) | nonce |
+            // challenge) — see cipher.js for the honest threat scope (passive-sniffer safe;
+            // active MITM remains possible and is documented there).
             if (!verifyPairingCode || !verifyPairingCode(code)) {
               send(socket, { type: 'pair-ack', ok: false })
               socket.destroy()
               return
             }
+            const serverEph = cipher.createPairEphemeral()
             const challenge = cipher.randomToken()
-            send(socket, { type: 'pair-challenge', challenge })
-            sendEnc(socket, cipher.deriveHandshakeKey({ code, nonce: pairNonce, challenge }), { type: 'pair-accept', secret: pairingSecret })
+            send(socket, { type: 'pair-challenge', challenge, pub: serverEph.pub })
+            let hsKey
+            try {
+              hsKey = cipher.deriveHandshakeKey({ code, ecdh: serverEph.ecdh, peerPub, nonce: pairNonce, challenge })
+            } catch {
+              // Not a valid curve point: not a handshake peer (also blunts invalid-key probing).
+              send(socket, { type: 'pair-ack', ok: false })
+              socket.destroy()
+              return
+            }
+            sendEnc(socket, hsKey, { type: 'pair-accept', secret: pairingSecret })
             if (onPaired) onPaired({ deviceId: typeof msg.deviceId === 'string' ? msg.deviceId : '', host: socket.remoteAddress })
             socket.destroy()
             return
           }
           // Two-way confirmed pairing: an unpaired client asks {type:'pair-request', deviceName,
-          // deviceId} BEFORE auth; a human decides via respond(accept) within the confirm window
-          // (auto-reject + close on timeout, timer unref'd so it never holds the process open).
-          // Accept hands out the persisted pairing secret, encrypted under the ephemeral
-          // handshake key HKDF(nonce|challenge): the challenge goes out NOW (pre-decision) so
-          // both sides can derive the key before the human answers — the secret is never
-          // plaintext on the wire (see cipher.js for the honest threat scope).
+          // deviceId, pub} BEFORE auth; a human decides via respond(accept) within the confirm
+          // window (auto-reject + close on timeout, timer unref'd so it never holds the process
+          // open). Accept hands out the persisted pairing secret, encrypted under the ephemeral
+          // ECDH handshake key HKDF(ECDH | nonce | challenge): the challenge AND our ephemeral
+          // pub go out NOW (pre-decision) so both sides can derive the key before the human
+          // answers — the secret is never plaintext on the wire (see cipher.js for the honest
+          // threat scope).
+          const serverEph = cipher.createPairEphemeral()
           const challenge = cipher.randomToken()
-          state.pairHs = { nonce: pairNonce, challenge }
-          send(socket, { type: 'pair-challenge', challenge })
+          state.pairHs = { ecdh: serverEph.ecdh, peerPub, nonce: pairNonce, challenge }
+          send(socket, { type: 'pair-challenge', challenge, pub: serverEph.pub })
           let settled = false
           const finish = (accept) => {
             if (settled) return
             settled = true
             clearTimeout(confirmTimer)
             if (accept) {
-              const hs = state.pairHs || { nonce: pairNonce, challenge }
-              sendEnc(socket, cipher.deriveHandshakeKey(hs), { type: 'pair-accept', secret: pairingSecret })
+              const hs = state.pairHs || { ecdh: serverEph.ecdh, peerPub, nonce: pairNonce, challenge }
+              let hsKey
+              try {
+                hsKey = cipher.deriveHandshakeKey(hs)
+              } catch {
+                socket.destroy()
+                return
+              }
+              sendEnc(socket, hsKey, { type: 'pair-accept', secret: pairingSecret })
               if (onPaired) onPaired({
                 deviceId: typeof msg.deviceId === 'string' ? msg.deviceId : '',
                 deviceName: typeof msg.deviceName === 'string' ? msg.deviceName : '',
@@ -437,15 +471,16 @@ function connect(host, port, opts) {
   const conn = { sessionKey: null, hsKey: null, authorized: false, recvSeq: -1 }
   const salt = cipher.randomToken() // client-chosen per-connection session-key salt (in hello)
   const pairNonce = cipher.randomToken() // client half of the pair-accept handshake key
+  const pairEph = cipher.createPairEphemeral() // client ephemeral ECDH half (v2 handshake)
 
   const socket = net.createConnection({ host, port })
   socket.setTimeout(timeoutMs)
   socket._lanSend = (msg) => send(socket, msg)
 
   socket.on('connect', () => {
-    if (pairCode !== undefined) { send(socket, { type: 'pair-request', deviceId, code: String(pairCode), nonce: pairNonce }); return }
+    if (pairCode !== undefined) { send(socket, { type: 'pair-request', deviceId, code: String(pairCode), nonce: pairNonce, pub: pairEph.pub }); return }
     // Two-way confirmed pairing (no code): ask the peer; the human there accepts or rejects.
-    if (pairOpen) { send(socket, { type: 'pair-request', deviceId, deviceName: deviceName || '', nonce: pairNonce }); return }
+    if (pairOpen) { send(socket, { type: 'pair-request', deviceId, deviceName: deviceName || '', nonce: pairNonce, pub: pairEph.pub }); return }
     send(socket, { type: 'hello', deviceId, protoVer, authCode, enc: cipher.ENC_VER, salt })
   })
   socket.on('timeout', () => {
@@ -474,12 +509,22 @@ function connect(host, port, opts) {
       if (!msg || typeof msg !== 'object') return
       if (msg.type === 'ping') { send(socket, { type: 'pong' }); return }
       if (msg.type === 'pair-challenge') {
-        // Server half of the pair-accept handshake key; the encrypted pair-accept follows.
-        conn.hsKey = cipher.deriveHandshakeKey({
-          code: pairCode !== undefined ? String(pairCode) : '',
-          nonce: pairNonce,
-          challenge: cipher.isValidToken(msg.challenge, cipher.SALT_BYTES) ? msg.challenge : '',
-        })
+        // Server half of the pair-accept handshake key: the server's EPHEMERAL ECDH pub (v2)
+        // plus its challenge. The encrypted pair-accept follows on the same connection.
+        try {
+          conn.hsKey = cipher.deriveHandshakeKey({
+            code: pairCode !== undefined ? String(pairCode) : '',
+            ecdh: pairEph.ecdh,
+            peerPub: typeof msg.pub === 'string' ? msg.pub : '',
+            nonce: pairNonce,
+            challenge: cipher.isValidToken(msg.challenge, cipher.SALT_BYTES) ? msg.challenge : '',
+          })
+        } catch {
+          // Peer sent no/invalid ephemeral key: not a v2 handshake peer — refuse.
+          em.emit('rejected', { type: 'pair-challenge', error: 'peer ephemeral key missing or invalid' })
+          socket.destroy()
+          return
+        }
         return
       }
       if (!em.ready) {

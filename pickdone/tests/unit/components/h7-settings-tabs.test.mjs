@@ -105,3 +105,23 @@ test('h7 data tab: both restore confirm copies state the merge semantics (biling
   assert.match(zhE, /"criticalRestoreConfirmMsg": "[^"]*合并恢复[^"]*"/)
   assert.match(zhE, /"autoRestoreConfirm": "[^"]*合并恢复[^"]*"/)
 })
+
+test('sync-hardening: restored todo rows are stamped dirty so LAN LWW / cloud filter cannot self-revert the restore', () => {
+  // Backup rows carry backup-time updateTime + status:'sync': peers holding newer rows would
+  // win LWW within one round, and the cloud dirty filter skips status:'sync' — the restore
+  // silently reverted itself. Every restored row must be re-stamped status:'update' + fresh
+  // updateTime (restore = the user wants the backup's data to win).
+  assert.match(dataTab, /function restoreStampRow \(row, now = null\) \{[\s\S]*?status: 'update', updateTime: now \|\| Date\.now\(\)/)
+  const dump = dataTab.match(/async applyRestoreDump \(dump\) \{([\s\S]*?)\n {4}\}/)[1]
+  assert.ok(dump.includes('rows.push(restoreStampRow(r))'),
+    'both todoList and recycleList rows must go through restoreStampRow before upsertMany')
+  assert.ok(!dump.includes('rows.push(r))\n'), 'no unstamped row may reach upsertMany')
+  // behavioral check on the extracted helper
+  const fn = new Function(dataTab.match(/function restoreStampRow[\s\S]*?\n\}/)[0] + '\nreturn restoreStampRow')()
+  const now = 1700000000000
+  const stamped = fn({ taskId: 't1', status: 'sync', updateTime: 123 }, now)
+  assert.equal(stamped.status, 'update')
+  assert.equal(stamped.updateTime, now)
+  assert.equal(stamped.taskId, 't1') // rest of the row carried over
+  assert.equal(fn(null, now), null) // defensive
+})

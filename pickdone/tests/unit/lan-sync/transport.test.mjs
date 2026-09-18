@@ -28,7 +28,7 @@ test('transport: authenticated peers exchange segments and acks', async () => {
     deviceId: SERVER_DEVICE,
     pairingSecret: SECRET,
     getHandler: () => (msg, socket) => {
-      if (msg.type === 'segments') {
+      if (msg.type === 'segments-chunk') {
         received.push(...msg.segments)
         socket._lanSend({ type: 'ack', applied: msg.segments.length, rejected: 0 })
       }
@@ -48,7 +48,7 @@ test('transport: authenticated peers exchange segments and acks', async () => {
     })
     const ack = await new Promise((resolve) => {
       client.on('message', (msg) => { if (msg.type === 'ack') resolve(msg) })
-      client.send({ type: 'segments', segments: [{ fromSeq: 1, toSeq: 2, deviceId: CLIENT_DEVICE, rows: [{ id: 't1', seq: 1 }, { id: 't2', seq: 2 }] }] })
+      client.send({ type: 'segments-chunk', segments: [{ fromSeq: 1, toSeq: 2, deviceId: CLIENT_DEVICE, rows: [{ id: 't1', seq: 1 }, { id: 't2', seq: 2 }] }] })
     })
     assert.equal(ack.applied, 1) // one segment envelope pushed
     assert.equal(received.length, 1)
@@ -69,7 +69,7 @@ test('transport: wrong authCode is rejected and data messages never delivered', 
     host: '127.0.0.1',
     deviceId: SERVER_DEVICE,
     pairingSecret: SECRET,
-    getHandler: () => (msg) => { if (msg.type === 'segments') received.push(...(msg.segments || [])) },
+    getHandler: () => (msg) => { if (msg.type === 'segments-chunk') received.push(...(msg.segments || [])) },
     onUnauthorized: (info) => { unauthorized = info },
   })
   const port = await listen(server)
@@ -103,7 +103,7 @@ test('transport: oversized line (>512KB) is rejected, connection destroyed', asy
     host: '127.0.0.1',
     deviceId: SERVER_DEVICE,
     pairingSecret: SECRET,
-    getHandler: () => (msg) => { if (msg.type === 'segments') received.push(msg) },
+    getHandler: () => (msg) => { if (msg.type === 'segments-chunk') received.push(msg) },
   })
   server.on('error', (e) => { serverSawError = e })
   const port = await listen(server)
@@ -206,7 +206,7 @@ test('transport: pre-auth lines over 4KB are dropped before authentication', asy
     // Do NOT authenticate: blast a >4KB line straight away on a fresh connection.
     const fresh = connect('127.0.0.1', port, { deviceId: CLIENT_DEVICE, authCode: 'nope', timeoutMs: 2000 })
     const closed = new Promise((resolve) => fresh.on('close', resolve))
-    fresh._socket.write(JSON.stringify({ type: 'segments', pad: 'x'.repeat(8 * 1024) }) + '\n')
+    fresh._socket.write(JSON.stringify({ type: 'segments-chunk', pad: 'x'.repeat(8 * 1024) }) + '\n')
     await closed
     await new Promise((r) => setTimeout(r, 50))
     assert.equal(handled.length, 0, 'oversized pre-auth line must never reach the handler')
