@@ -4,16 +4,18 @@
  * at the call site -- the sync-ack echo path must not re-capture what it just acknowledged.
  *
  * Known gaps until the sync engine lands (declared 2026-09-15, review V1):
- * - Physical deletes (hardDelete/purgeRecycleBin/purgeSeedTodos/planPrune) physically remove tombstoned
- *   plan_chips and log only the todo entity — chip deletions in those paths are NOT captured, so
- *   multi-device chip state needs a periodic full snapshot (not yet implemented).
+ * - Physical deletes (hardDelete/purgeRecycleBin/purgeSeedTodos/planPrune) physically remove
+ *   tombstoned plan_chips and log only the todo entity — chip deletions in those paths are NOT
+ *   captured, so multi-device chip state needs a periodic full snapshot (not yet implemented).
+ *   (purgeRecycleBin/purgeSeedTodos DO capture per-id todo tombstones since 2026-09-18.)
  * - The oplog append is a separate transaction from the business write: a crash between the two
  *   commits loses the delta row (accepted window at synchronous=NORMAL).
  * - planMoveTask/planDeleteTask log ('plan', taskId) while other plan ops log chip ids — consumers
  *   of those two must reconcile via planAll until the granularity is unified.
- * - tomatoMigrateFromMeta logs ('tomato', '*gc*') — the one-time meta-blob migration appends N ledger
- *   rows under a single GC marker; delta consumers must reconcile the tomato ledger via a full
- *   snapshot/tomatoAll instead of treating the marker as one record.
+ * - planPrune ('plan','*gc*') and tomatoMigrateFromMeta ('tomato','*gc*') keep their single GC
+ *   marker (their results feed count-shaped consumers — audit "pruned N chip row(s)"); delta
+ *   consumers must skip '*gc*' ids (lan-sync hydration guards against them) and reconcile via a
+ *   full snapshot/tomatoAll instead of treating the marker as one record.
  */
 
 module.exports = ({ getDb, log }) => {
@@ -36,7 +38,10 @@ module.exports = ({ getDb, log }) => {
       // the oplog row would point delta consumers at a row that never changed (ghost pointer).
       case 'bumpSnow': return (result && result.ok === false) ? [] : [one('todo', params && params.taskId)]
       case 'hardDelete': case 'hardDeleteMany': return arr('todo', params)
-      case 'purgeRecycleBin': case 'purgeSeedTodos': return [one('todo', '*gc*')]
+      // 2026-09-18: both purge ops return the purged ids — expanded into per-id tombstone
+      // pointers so purges propagate as real deletions (the old single ('todo','*gc*') marker
+      // hydrated as a ghost tombstone on peers and could not stop snapshot/merge resurrection).
+      case 'purgeRecycleBin': case 'purgeSeedTodos': return arr('todo', result)
       // H2 2026-09-16: an identical no-change upsert returns false — it must not produce a fake delta
       case 'upsertCategory': return result === false ? [] : [one('category', params && params.id)]
       // P2 2026-09-17: a no-change re-save returns false — it must not emit a delta (the old path

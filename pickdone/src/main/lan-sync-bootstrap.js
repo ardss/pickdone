@@ -107,6 +107,10 @@ function createHydrationCache () {
 /** Hydrate one oplog pointer row into a merge-ready payload row (null = not syncable). */
 function hydrateRow (ptr, cache) {
   if (!SYNCABLE_ENTITIES.has(ptr.entity)) return null
+  // Defensive GC-marker guard: legacy ('*gc*') oplog pointers (planPrune / tomatoMigrateFromMeta,
+  // and pre-2026-09-18 purge rows) are ring-buffer bookkeeping, not records — hydrating one used
+  // to materialize a ghost tombstone with taskId '*gc*' on peers.
+  if (String(ptr.entityId) === '*gc*') return null
   const c = cache || createHydrationCache()
   const base = { seq: ptr.seq, entity: ptr.entity, id: ptr.entityId, ts: ptr.ts }
   try {
@@ -218,6 +222,8 @@ function clampSkew (row) {
 
 function applyRowInner (incoming) {
   if (!incoming || !SYNCABLE_ENTITIES.has(incoming.entity)) return false
+  // Defensive: a '*gc*' oplog marker must never surface as an appliable row id (see hydrateRow).
+  if (String(incoming.id) === '*gc*') return false
   incoming = clampSkew(incoming)
   const entity = incoming.entity
   // Locate the local counterpart for LWW comparison (cached: one entity-list read per ingest pass)

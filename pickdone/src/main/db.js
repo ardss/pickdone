@@ -514,18 +514,26 @@ const OPS = {
   purgeRecycleBin: () => {
     // Cascade: plan chips belonging to recycle-bin rows are removed too (otherwise the timeline shows ghost chips after emptying the recycle bin, with no way to remove them)
     // 两表删除包事务(2026-09-05 终审 P1):非原子路径在两语句间崩溃会留幽灵行
+    // Returns the purged todo ids: the sync oplog expands them into per-id tombstone pointers
+    // (the old ('todo','*gc*') marker hydrated as a ghost tombstone on peers and left purged
+    // rows without individual tombstones, so snapshots/merge could resurrect them).
+    let ids = []
     const tr = db.transaction(() => {
+      ids = db.prepare('SELECT id FROM todos WHERE deleted = 1').all().map(r => r.id)
       db.prepare('DELETE FROM plan_chips WHERE taskId IN (SELECT id FROM todos WHERE deleted = 1)').run()
       db.prepare('DELETE FROM todos WHERE deleted = 1').run()
-    }); tr(); return true
+    }); tr(); return ids
   },
   // Cascade plan_chips too (same contract as hardDelete/purgeRecycleBin): purging demo rows without removing
   // their chips left ghost chips on the timeline with the task gone (2026-09-09 P2, transactional like its siblings)
+  // Returns the purged ids for per-id sync tombstone pointers (see purgeRecycleBin).
   purgeSeedTodos: () => {
+    let ids = []
     const tr = db.transaction(() => {
+      ids = db.prepare("SELECT id FROM todos WHERE substr(id, 1, 5) = 'seed_'").all().map(r => r.id)
       db.prepare("DELETE FROM plan_chips WHERE taskId IN (SELECT id FROM todos WHERE substr(id, 1, 5) = 'seed_')").run()
       db.prepare("DELETE FROM todos WHERE substr(id, 1, 5) = 'seed_'").run()
-    }); tr(); return true
+    }); tr(); return ids
   },
   countSeedTodos: () => db.prepare("SELECT COUNT(*) n FROM todos WHERE substr(id, 1, 5) = 'seed_'").get().n,
   upsertCategory: (c) => {
