@@ -63,21 +63,8 @@ function migratePlainToEncrypted (dir, file, key) {
     // 表清单动态枚举,禁手工维护:2026-09-04 深审实锤硬编码四表漏了 plan_chips/tomato_records,行表化用户的账本会在迁移中被清空(P0)
     const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all().map(r => r.name)
     for (const table of tables) {
-      // Root fix (2026-09-19, maint/d4): `INSERT INTO enc.t SELECT * FROM main.t` copies BY POSITION.
-      // Legacy DBs got important/urgent/reminders/predecessors appended via ALTER TABLE in positions
-      // that differ from the current SCHEMA string order — a positional copy silently shifted those
-      // values into the wrong columns on the user's first encrypted launch (per-column corruption of
-      // every pre-v2 row). Build an explicit shared column list from PRAGMA table_info of BOTH sides
-      // and copy by NAME; column order no longer matters.
-      const qt = '"' + String(table).replace(/"/g, '""') + '"'
-      // Column names via LIMIT-0 statements' .columns() (schema-qualified PRAGMA table_info isn't
-      // accepted by this driver build's parser)
-      const mainCols = db.prepare('SELECT * FROM main.' + qt + ' LIMIT 0').columns().map(c => c.name)
-      const encCols = new Set(db.prepare('SELECT * FROM enc.' + qt + ' LIMIT 0').columns().map(c => c.name))
-      const shared = mainCols.filter(c => encCols.has(c)).map(c => '"' + c.replace(/"/g, '""') + '"')
-      if (!shared.length) throw new Error('migration: table "' + table + '" has no columns shared with the current schema')
-      db.exec('INSERT INTO enc.' + qt + ' (' + shared.join(', ') + ') SELECT ' + shared.join(', ') + ' FROM main.' + qt)
-    }
+      // Copy by NAME (see db-enc-copy.js): positional SELECT * shifted ALTER-appended columns on legacy DBs.
+      require('./db-enc-copy')(db, table)    }
     db.exec('DETACH DATABASE enc')
     // Explicit wal_checkpoint(TRUNCATE) before closing: ensure the plaintext WAL tail writes have landed in the main file before the WAL can be safely deleted (otherwise .plain-bak may miss tail data)
     db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
@@ -741,11 +728,7 @@ const OPS = {
     const extra = {}
     for (const k of Object.keys(r || {})) if (!known.has(k) && !UNSAFE_KEYS.has(k)) extra[k] = r[k]
     o.extra = Object.keys(extra).length ? JSON.stringify(extra) : null
-    // (2026-09-19) The old `if (!o.succeed && o.succeed !== 0) o.succeed = 1` re-default here was dead
-    // code: the loop above already coerces succeed to exactly 0 (false) or 1 (everything else, including
-    // undefined/garbage) via `v = v === false ? 0 : 1`, so the branch could never fire. Deleted instead of
-    // "fixed" — every caller (cli/lib.js backfill/record ops, sync-apply, index.js restore) funnels rows
-    // through this function, so no separate validation layer is needed.
+    // (2026-09-19) Deleted the old dead re-default here: the loop above already coerces succeed to 0/1
     return o
   },
   _rowToRec (r) {

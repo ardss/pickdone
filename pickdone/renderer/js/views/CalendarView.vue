@@ -792,8 +792,7 @@ html[data-theme="dark"] .day-expand-btn:hover { background: var(--gray-bg, #2226
 .fc .fc-daygrid-day-number .lunar{margin-left:5px;color:#9b9b9b;font-size:inherit}
 .fc .fc-daygrid-day-number .holiday{color:#fff;background:var(--brand)}
 .fc .fc-daygrid-day-number .work{color:#016d6e;background:#c7e4e4}
-/* 调休"班"徽标暗色覆盖：浅青底在暗色下刺眼，改半透明品牌色（同 09-18 #f5fafb 修法） */
-html[data-theme="dark"] .fc .fc-daygrid-day-number .work{color:var(--brand-bright, #35c2ae);background:rgba(15, 157, 143, .18)}
+/* 调休班徽标暗色:半透明品牌色(同09-18 #f5fafb 修法) */ html[data-theme="dark"] .fc .fc-daygrid-day-number .work{color:var(--brand-bright, #35c2ae);background:rgba(15, 157, 143, .18)}
 .fc .fc-col-header-cell-cushion{color:var(--brand-dark);font-weight:400;font-size: var(--fs-base);padding:8px}
 .fc .fc-daygrid-more-link{display:block}
 .fc .fc-popover{position:fixed!important;z-index:var(--z-fc-popover)!important}

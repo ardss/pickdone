@@ -546,10 +546,7 @@ function addTodo ({ content, desc, date, reminder, category, difficulty, priorit
   const rowAfter = db.call('getById', t.taskId)
   audit.record({ action: 'add', targets: [t], changes: [{ after: rowAfter }] })
   // Tasks with an explicit time are auto-placed on the day timeline (user-finalized 2026-09-03): the reminder answers "when will you call me", the schedule chip answers "what should I do in this slot" — both are kept
-  // Fix (2026-09-19): the HH:mm raw-string regex missed natural-language times like 明天9点 / 后天下午3点 —
-  // parseDate resolved them to a timed todoTime but no chip was placed. When the raw string carries a
-  // natural-language time marker but no HH:mm, derive HH:mm from the resolved todoTime (chip-less guard:
-  // a bare 明天/tomorrow also resolves with a time-of-day, and a bare date must not fabricate a chip).
+  // Fix (2026-09-19): NL times (明天9点/下午3点) resolved a timed todoTime but no chip — derive HH:mm from todoTime when the raw string has an NL marker and no HH:mm (bare dates must not fabricate chips).
   let mm = dateExplicitTime(date)
   if (!mm && todoTime && NL_TIME_MARKER_RE.test(String(date || '')) && !dayjs(todoTime).startOf('day').isSame(dayjs(todoTime))) {
     mm = dayjs(todoTime).format('HH:mm')
@@ -953,11 +950,7 @@ function repeatOn (input, rule, count) {
   if (t.complete) throw new CliError('task already completed; undo it before setting a repeat', 'INVALID_STATE')
   if (t.repeatId && String(t.repeatId).startsWith('repeat_')) throw new CliError('task already in a repeat group (' + t.repeatId + '); repeat off first, then re-set', 'ALREADY_REPEAT')
   const rid = 'repeat_' + t.userId + Date.now().toString(36) + Math.floor(Math.random() * 1e4)
-  // Fix (2026-09-19): a yearly repeat used to anchor to the engine defaults (Jan 1) because the CLI
-  // exposes no --yearmonth/--yearmonthday flags — `repeat on` on a May-20 task generated Jan-1
-  // instances. When the rule still carries the REPEAT_DEFAULTS Jan-1 anchor, derive it from the task's
-  // own todoTime instead. An explicitly provided anchor (repeatYearMonth/Day differing from defaults)
-  // stays authoritative.
+  // Fix (2026-09-19): no CLI flags for the yearly anchor — a Jan-1 default rule is re-anchored from the task's todoTime (explicit anchors stay authoritative).
   if (rule.repeatType === 'year' && t.todoTime &&
       rule.repeatYearMonth === core.REPEAT_DEFAULTS.repeatYearMonth &&
       rule.repeatYearMonthDay === core.REPEAT_DEFAULTS.repeatYearMonthDay) {
@@ -1026,8 +1019,7 @@ function repeatOff (input, all) {
         removed++
       }
     }
-    // Fix (2026-09-19): write '' → deleteMeta (the convention used everywhere else in this file) so the
-    // rule row is actually removed instead of lingering as an empty string (mirror skip-list/bridge noise)
+    // Fix (2026-09-19): '' → deleteMeta (file-wide convention) so the rule row is actually removed.
     open().call('deleteMeta', 'repeatRule:' + rid)
   }
   open().call('upsert', Object.assign({}, t, { repeatId: null, updateTime: Date.now(), status: 'update' }))
@@ -1672,8 +1664,7 @@ const SETTINGS_DENIED = new Set(['securityLockPassword', 'securityLockQuestion',
 function settingsDoc () {
   try { const d = JSON.parse(open().call('getMeta', 'db.settingsState') || 'null'); return d && typeof d === 'object' ? d : {} } catch { return {} }
 }
-/** Test-only seam (2026-09-19): hook invoked inside settingsSet between its first settingsDoc() read and
- *  the fresh re-read, simulating a concurrent App-side settings write in the race window. */
+/** Test-only seam: invoked inside settingsSet between the first settingsDoc() read and the fresh re-read (simulates a concurrent App-side write). */
 let settingsRaceHook = null
 function setSettingsRaceHookForTests (fn) { settingsRaceHook = typeof fn === 'function' ? fn : null }
 function settingsKnown (key) {
@@ -1715,13 +1706,7 @@ function settingsSet (key, value, { force = false } = {}) {
     if (!info.options.includes(String(value))) throw new CliError(`"${key}" expects one of: ${info.options.join(' | ')} (got "${value}")`, 'USAGE')
     v = String(value)
   }
-  // Concurrency guard (fix 2026-09-16, reworked 2026-09-19): settingsSet is a read-modify-write of the
-  // WHOLE settingsState package and the write refreshes _savedAt. The old guard compared two synchronous
-  // settingsDoc() reads microseconds apart — drift could never be observed, so the protection was
-  // theater. Root fix: re-read the doc immediately before setMeta and apply the SINGLE key onto the
-  // fresh doc (the intent is a one-key write, not a whole-package overwrite). When _savedAt drifted
-  // (the App wrote between our first read and the write), the App's concurrent change survives — we
-  // merge our one key into its package instead of clobbering it. --force is still accepted (no-op:
+  // Concurrency guard (2026-09-16, reworked 2026-09-19): settingsSet is a read-modify-write of the WHOLE settingsState package. The old guard compared two synchronous reads — drift could never be observed. Root fix: re-read the doc immediately before setMeta and apply the SINGLE key onto the fresh doc, so a concurrent App change survives instead of being clobbered. --force still accepted (no-op:
   // the merge is already the non-destructive path).
   const doc = settingsDoc()
   const before = key in doc ? doc[key] : null
