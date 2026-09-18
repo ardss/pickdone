@@ -179,5 +179,19 @@ contextBridge.exposeInMainWorld('todoAPI', {
     const h = (_e, p) => fn(p)
     ipcRenderer.on('cli-tomato-cmd', h)
     return () => ipcRenderer.removeListener('cli-tomato-cmd', h)
-  }
+  },
+
+  // ---- Device Center / LAN sync ----
+  // Single event channel from the LAN sync node; payload is self-describing: {type, at, ...}
+  // with type ∈ peer-online | peer-offline | pair-request | pair-accepted | pair-rejected |
+  // round-done | round-error | pair-throttled
+  onSyncEvent: fn => {
+    const h = (_e, p) => fn(p)
+    ipcRenderer.on('syncEvent', h)
+    return () => ipcRenderer.removeListener('syncEvent', h)
+  },
+  // Two-way confirmed pairing: answer a pending inbound request ({accept: boolean}) or
+  // dial a peer and ask ({host, port?}). Both dispatch through the db-op whitelist.
+  syncPairRespond: payload => invoke('todo-db:call', 'syncPairRespond', payload || {}),
+  syncPairRequest: payload => invoke('todo-db:call', 'syncPairRequest', payload || {})
 })

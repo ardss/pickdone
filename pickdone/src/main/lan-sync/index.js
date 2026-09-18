@@ -27,6 +27,17 @@ const { deriveAuthCode } = require('./pairing')
 
 const BACKOFF_BASE_MS = 5000
 const BACKOFF_MAX_MS = 60 * 1000
+// Device Center: a peer counts as "online" while mDNS saw it (or its last round succeeded)
+// within this window; a 30s sweep flips stale peers offline and emits peer-offline.
+const ONLINE_WINDOW_MS = 90 * 1000
+const SWEEP_INTERVAL_MS = 30 * 1000
+// In-memory rings surfaced by getStatus(): recent sync activity (last 50) and security
+// events (pair throttling / auth rejections, last 20).
+const RECENT_CAP = 50
+const SECURITY_CAP = 20
+// Client-side deadline for an outbound two-way pair request: the peer's own confirm window is
+// 60s, so we outlast it slightly before declaring a timeout ourselves.
+const PAIR_CONFIRM_TIMEOUT_CLIENT_MS = 63 * 1000
 
 /**
  * @param {object} opts
@@ -73,6 +84,49 @@ function createLanSyncNode(opts) {
   let lastRoundAt = null
   let lastError = null
   let roundsRunning = 0
+  // Device Center bookkeeping (all in-memory, per peer):
+  const lastSeenBy = new Map() // deviceId -> last mDNS/discovery sighting (ms epoch)
+  const lastRoundBy = new Map() // deviceId -> last confirmed round (ms epoch)
+  const errorBy = new Map() // deviceId -> last round error message
+  const onlineNow = new Set() // deviceId set tracking online transitions for peer-online/offline events
+  let sweepTimer = null
+  const recent = [] // ring of {at, kind:'push'|'pull'|'error'|'pair', peer, detail}
+  const security = [] // ring of {at, ip, reason:'pair-throttled'|'auth-rejected'}
+
+  function pushRing(arr, cap, entry) {
+    arr.push(entry)
+    if (arr.length > cap) arr.splice(0, arr.length - cap)
+  }
+  const pushRecent = (entry) => pushRing(recent, RECENT_CAP, entry)
+  const pushSecurity = (entry) => pushRing(security, SECURITY_CAP, entry)
+
+  function computeOnline(id) {
+    const now = Date.now()
+    const seen = lastSeenBy.get(id)
+    const lastRound = lastRoundBy.get(id)
+    return (!!seen && now - seen < ONLINE_WINDOW_MS) || (!!lastRound && now - lastRound < ONLINE_WINDOW_MS)
+  }
+
+  /** Emit peer-online / peer-offline on offline<->online transitions (sweep + discovery driven). */
+  function refreshOnline(id) {
+    const nowOnline = computeOnline(id)
+    const was = onlineNow.has(id)
+    if (nowOnline && !was) {
+      onlineNow.add(id)
+      const p = peers.get(id)
+      if (p) em.emit('peer-online', p)
+    } else if (!nowOnline && was) {
+      onlineNow.delete(id)
+      const p = peers.get(id)
+      if (p) em.emit('peer-offline', p)
+    }
+  }
+
+  function startSweep() {
+    if (sweepTimer) return
+    sweepTimer = setInterval(() => { for (const id of peers.keys()) refreshOnline(id) }, SWEEP_INTERVAL_MS)
+    sweepTimer.unref?.()
+  }
 
   function rememberPeer(peer) {
     if (!peer || !peer.deviceId || peer.deviceId === deviceId) return
@@ -84,6 +138,8 @@ function createLanSyncNode(opts) {
       port: Number.isInteger(peer.port) ? peer.port : prev && prev.port,
       protoVer: peer.protoVer || (prev && prev.protoVer) || PROTO_VER,
     })
+    lastSeenBy.set(peer.deviceId, Date.now())
+    refreshOnline(peer.deviceId)
     em.emit('peer', peers.get(peer.deviceId))
   }
 
@@ -114,6 +170,7 @@ function createLanSyncNode(opts) {
     roundsRunning += 1
     return new Promise((resolve) => {
       let settled = false
+      let ackApplied = null // segments the peer acked (surfaces into the recent ring)
       // Round deadline timer; cleared in finish() so a fast ack does not leak it past round end.
       let done = null
       const client = connect(peer.host, peer.port, {
@@ -133,14 +190,24 @@ function createLanSyncNode(opts) {
         client.close()
         if (err) {
           lastError = `${peer.deviceId}: ${err.message}`
+          errorBy.set(peer.deviceId, lastError)
+          pushRecent({ at: Date.now(), kind: 'error', peer: peer.deviceId, detail: { error: err.message } })
+          refreshOnline(peer.deviceId)
           em.emit('round-error', { peer: peer.deviceId, error: err })
           scheduleRetry(peer.deviceId)
           resolve(false)
         } else {
           lastRoundAt = Date.now()
           lastError = null
+          lastRoundBy.set(peer.deviceId, lastRoundAt)
+          errorBy.delete(peer.deviceId)
+          pushRecent({
+            at: lastRoundAt, kind: 'push', peer: peer.deviceId,
+            detail: { applied: ackApplied, appliedToSeq: peerProgress.get(peer.deviceId) ?? null },
+          })
+          refreshOnline(peer.deviceId)
           resetBackoff(peer.deviceId)
-          em.emit('round-done', { peer: peer.deviceId })
+          em.emit('round-done', { peer: peer.deviceId, applied: ackApplied })
           resolve(true)
         }
       }
@@ -163,6 +230,7 @@ function createLanSyncNode(opts) {
             // Peer's ack is the round's success criterion: it confirms our push AND proves the
             // peer finished building its own response. Timing the round out as "success" here
             // would advance the push cursor over undelivered segments (2026-09-17 live drill).
+            ackApplied = Number(msg.applied) || 0
             const seq = Number(msg.appliedToSeq) || 0
             if (seq > (peerProgress.get(peer.deviceId) || 0)) peerProgress.set(peer.deviceId, seq)
             finish(null)
@@ -186,7 +254,16 @@ function createLanSyncNode(opts) {
       deviceId,
       pairingSecret,
       verifyPairingCode: opts.verifyPairingCode,
-      onPaired: (info) => em.emit('paired-inbound', info),
+      onPairRequest: (info) => em.emit('pair-request', info),
+      onPairThrottled: (info) => {
+        pushSecurity({ at: Date.now(), ip: info && info.ip, reason: 'pair-throttled' })
+        em.emit('pair-throttled', info)
+      },
+      pairConfirmTimeoutMs: opts.pairConfirmTimeoutMs,
+      onPaired: (info) => {
+        pushRecent({ at: Date.now(), kind: 'pair', peer: info && info.deviceId || (info && info.host) || '', detail: { host: info && info.host, inbound: true, confirmed: !!(info && info.confirmed) } })
+        em.emit('paired-inbound', info)
+      },
       getHandler: () => (msg, socket) => {
         try {
           if (msg.type === 'segments' && Array.isArray(msg.segments)) {
@@ -209,7 +286,10 @@ function createLanSyncNode(opts) {
         }
       },
       onPeer: (peer) => em.emit('peer-connected', peer),
-      onUnauthorized: (info) => em.emit('peer-unauthorized', info),
+      onUnauthorized: (info) => {
+        pushSecurity({ at: Date.now(), ip: info && info.host, reason: 'auth-rejected' })
+        em.emit('peer-unauthorized', info)
+      },
     })
     server.on('error', (err) => { lastError = err.message; em.emit('server-error', err) })
     server.on('listening', (p) => {
@@ -248,14 +328,53 @@ function createLanSyncNode(opts) {
     })
   }
 
+  /**
+   * Two-way confirmed outbound pairing: connect to host:port, send a code-less pair-request,
+   * and wait for the human on the other side. Resolves {secret, host} on pair-accept (the
+   * caller adopts the secret, exactly like pairWith); rejects on pair-reject/error/timeout
+   * and emits 'pair-rejected' so the renderer can surface the refusal.
+   */
+  function requestPair(host, port) {
+    if (!host) return Promise.reject(new Error('requestPair: host is required'))
+    const targetPort = Number.isInteger(port) ? port : DEFAULT_PORT
+    return new Promise((resolve, reject) => {
+      const client = connect(host, targetPort, {
+        deviceId, pairOpen: true, deviceName: name, protoVer: PROTO_VER,
+        // The peer holds the request open for its own 60s confirm window; outlast it slightly.
+        timeoutMs: PAIR_CONFIRM_TIMEOUT_CLIENT_MS,
+      })
+      const deadline = setTimeout(() => done(reject, new Error('pairing request timed out')), PAIR_CONFIRM_TIMEOUT_CLIENT_MS)
+      deadline.unref?.()
+      const done = (fn, v) => {
+        clearTimeout(deadline)
+        try { client.close() } catch { /* noop */ }
+        fn(v)
+      }
+      client.on('paired', (r) => {
+        em.emit('pair-accepted', { host, port: targetPort })
+        done(resolve, { secret: r.secret, host, port: targetPort })
+      })
+      client.on('rejected', (msg) => {
+        const reason = (msg && msg.error) || 'rejected'
+        em.emit('pair-rejected', { host, port: targetPort, reason })
+        const err = new Error('pairing rejected by peer: ' + reason)
+        err.reason = reason
+        done(reject, err)
+      })
+      client.on('error', (err) => done(reject, err))
+    })
+  }
+
   return {
     pairWith,
+    requestPair,
     on: em.on.bind(em),
 
     /** Start advertising, discovery, and the TCP server. */
     start() {
       stopped = false
       startServer()
+      startSweep()
     },
 
     /** Resolves with the bound port once the TCP server is listening. */
@@ -285,11 +404,30 @@ function createLanSyncNode(opts) {
     },
 
     getStatus() {
+      const now = Date.now()
       return {
         deviceId,
+        name,
         listening: !!(server && server.port),
         port: server ? server.port : null,
-        peers: Array.from(peers.values()),
+        self: { deviceId, deviceName: name, port: server ? server.port : null },
+        peers: Array.from(peers.values()).map((p) => {
+          const wm = peerProgress.has(p.deviceId) ? peerProgress.get(p.deviceId) : null
+          const seen = lastSeenBy.get(p.deviceId)
+          const lr = lastRoundBy.get(p.deviceId)
+          return {
+            ...p,
+            online: (!!seen && now - seen < ONLINE_WINDOW_MS) || (!!lr && now - lr < ONLINE_WINDOW_MS),
+            lastRoundAt: lr || null,
+            lastError: errorBy.get(p.deviceId) || null,
+            watermark: wm,
+            // How many of my oplog rows this peer has NOT confirmed yet (null when unknown:
+            // no getMaxSeq injector means no honest local max seq to diff against).
+            pendingCount: getMaxSeq && wm != null ? Math.max(0, currentMaxSeq() - wm) : null,
+          }
+        }),
+        recent: recent.slice(),
+        security: security.slice(),
         lastRoundAt,
         lastError,
         roundsRunning,
@@ -298,6 +436,8 @@ function createLanSyncNode(opts) {
 
     async stop() {
       stopped = true
+      if (sweepTimer) { clearInterval(sweepTimer); sweepTimer = null }
+      onlineNow.clear()
       for (const t of retryTimers.values()) clearTimeout(t)
       retryTimers.clear()
       try { discovery.stop() } catch { /* noop */ }
