@@ -10,8 +10,9 @@
  * Message types:
  *   hello          {deviceId, protoVer, authCode, enc:1, salt}   salt = 16B b64 session-key salt
  *   hello-ack      {ok, protoVer, enc?, error?}                  enc:1 echoes encryption support
- *   segments       {segments:[...]}   sync-core packed segment envelopes  -- ENCRYPTED
- *   snapshot       {snapshot}                                          -- ENCRYPTED
+ *   segments-chunk {segments:[...], final}   sync-core packed segment envelopes, bounded chunk of
+ *                                            a round's push (final:true on the last chunk) -- ENCRYPTED
+ *   snapshot       {snapshot}                                          -- ENCRYPTED (removed: unused)
  *   ack            {applied, rejected}                                 -- ENCRYPTED
  *   ping / pong    {}
  *   pair-request   {deviceId, code?, nonce}   pre-auth: with code = manual 6-digit mode,
@@ -39,12 +40,11 @@ const cipher = require('./cipher')
 
 const PROTO_VER = 2
 const DEFAULT_PORT = 58471
-// A round carries the sender's whole pending backlog as ONE 'segments' JSON line, so the cap must
-// cover a first sync between real devices (tens of MB of rows), not just a heartbeat. Pre-auth
-// abuse is bounded by the hello/pair gate below — only peers holding the pairing secret can push
-// large lines, and a buffer spike from a LAN peer is acceptable for the beta. Since 2026-09-18
-// the wire line is an AES-GCM frame: base64 inflates the payload ~4/3, so the WIRE cap is 32MB
-// to keep the ~16MB plaintext backlog well inside it (the cap is enforced on the raw line).
+// A round's push travels as bounded `segments-chunk` lines (~1MB payload each, see
+// segments-chunk.js) since 2026-09-18: one whole-backlog line used to exceed this cap once
+// AES-GCM base64 framing inflated it, destroying first-sync rounds permanently. The cap stays
+// as abuse/oversize protection, not as the transfer mechanism. Pre-auth abuse is bounded by
+// the hello/pair gate below — only peers holding the pairing secret can push large lines.
 const MAX_LINE_BYTES = 32 * 1024 * 1024
 // Pre-auth lines (before hello-ack / pair-accept) are bounded to 4KB: hello and pair-request are
 // heartbeat-sized, so an unauthenticated peer has no reason to stream megabytes into our buffers.

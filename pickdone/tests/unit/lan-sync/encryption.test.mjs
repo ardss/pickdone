@@ -170,7 +170,7 @@ test('encryption: tampered GCM tag severs the connection and the message is neve
     const raw = await openRaw(port, deriveAuthCode(SECRET, CLIENT_DEVICE))
     assert.equal(raw.ack && raw.ack.ok, true, 'handshake ok')
     const key = cipher.deriveSessionKey(SECRET, raw.salt)
-    const frame = JSON.parse(cipher.encryptFrame(key, { type: 'segments', segments: [{ evil: true }] }, 0))
+    const frame = JSON.parse(cipher.encryptFrame(key, { type: 'segments-chunk', segments: [{ evil: true }] }, 0))
     // Flip one character of the auth tag: GCM verification must fail server-side.
     const flipped = frame.tag[0] === 'A' ? 'B' : 'A'
     frame.tag = flipped + frame.tag.slice(1)
@@ -194,7 +194,7 @@ test('encryption: plaintext data message where encryption is expected closes the
   try {
     const raw = await openRaw(port, deriveAuthCode(SECRET, CLIENT_DEVICE))
     assert.equal(raw.ack && raw.ack.ok, true)
-    raw.write(JSON.stringify({ type: 'segments', segments: [{ plaintext: true }] }) + '\n')
+    raw.write(JSON.stringify({ type: 'segments-chunk', segments: [{ plaintext: true }] }) + '\n')
     await raw.closed
     await settle()
     assert.equal(handled.length, 0, 'plaintext post-auth message refused')
@@ -207,7 +207,7 @@ test('encryption: plaintext data message where encryption is expected closes the
   const server2 = createLanServer({
     port: 0, host: '127.0.0.1', deviceId: SERVER_DEVICE, pairingSecret: SECRET,
     getHandler: () => (msg, socket) => {
-      if (msg.type === 'segments') socket.write(JSON.stringify({ type: 'ack', applied: 1, rejected: 0 }) + '\n')
+      if (msg.type === 'segments-chunk') socket.write(JSON.stringify({ type: 'ack', applied: 1, rejected: 0 }) + '\n')
     },
   })
   const port2 = await listen(server2)
@@ -218,7 +218,7 @@ test('encryption: plaintext data message where encryption is expected closes the
     await new Promise((resolve) => client.on('ready', resolve))
     const msgs = []
     client.on('message', (m) => msgs.push(m))
-    client.send({ type: 'segments', segments: [{ fromSeq: 1, toSeq: 1, deviceId: CLIENT_DEVICE, rows: [] }] })
+    client.send({ type: 'segments-chunk', segments: [{ fromSeq: 1, toSeq: 1, deviceId: CLIENT_DEVICE, rows: [] }] })
     await new Promise((resolve) => client.on('close', resolve))
     await settle()
     assert.equal(msgs.length, 0, 'plaintext server reply is not parsed as a message')
@@ -242,7 +242,7 @@ test('encryption: session key derived from a wrong secret cannot decrypt — con
     const raw = await openRaw(port, deriveAuthCode(SECRET, CLIENT_DEVICE))
     assert.equal(raw.ack && raw.ack.ok, true)
     const wrongKey = cipher.deriveSessionKey('a-totally-different-secret', raw.salt)
-    raw.write(cipher.encryptFrame(wrongKey, { type: 'segments', segments: [{ x: 1 }] }, 0) + '\n')
+    raw.write(cipher.encryptFrame(wrongKey, { type: 'segments-chunk', segments: [{ x: 1 }] }, 0) + '\n')
     await raw.closed
     await settle()
     assert.equal(handled.length, 0, 'wrong-key frame never reaches the handler')
@@ -266,7 +266,7 @@ test('encryption: line caps still enforced on the encrypted framing (oversize en
     const key = cipher.deriveSessionKey(SECRET, raw.salt)
     // Legitimately encrypted frame (right key, intact tag) but the resulting WIRE line
     // exceeds MAX_LINE_BYTES: the cap must sever the connection regardless of validity.
-    const frame = cipher.encryptFrame(key, { type: 'segments', pad: 'x'.repeat(25 * 1024 * 1024) }, 0)
+    const frame = cipher.encryptFrame(key, { type: 'segments-chunk', pad: 'x'.repeat(25 * 1024 * 1024) }, 0)
     assert.ok(Buffer.byteLength(frame, 'utf8') > MAX_LINE_BYTES)
     raw.write(frame + '\n')
     await raw.closed
@@ -315,7 +315,7 @@ test('encryption: pre-auth encrypted frames (no session key) and plaintext peers
     const sock = net.createConnection({ host: '127.0.0.1', port })
     await new Promise((resolve, reject) => { sock.once('connect', resolve); sock.once('error', reject) })
     const closed = new Promise((resolve) => sock.once('close', resolve))
-    sock.write(cipher.encryptFrame(cipher.deriveSessionKey(SECRET, cipher.randomToken()), { type: 'segments' }) + '\n')
+    sock.write(cipher.encryptFrame(cipher.deriveSessionKey(SECRET, cipher.randomToken()), { type: 'segments-chunk' }) + '\n')
     await closed
   } finally {
     await server.close()
@@ -342,7 +342,7 @@ test('encryption: replaying a captured frame or regressing the per-direction seq
   const handled = []
   const server = createLanServer({
     port: 0, host: '127.0.0.1', deviceId: SERVER_DEVICE, pairingSecret: SECRET,
-    getHandler: () => (msg) => { if (msg.type === 'segments') handled.push(msg) },
+    getHandler: () => (msg) => { if (msg.type === 'segments-chunk') handled.push(msg) },
   })
   const port = await listen(server)
   try {
@@ -350,7 +350,7 @@ test('encryption: replaying a captured frame or regressing the per-direction seq
     const raw = await openRaw(port, deriveAuthCode(SECRET, CLIENT_DEVICE))
     assert.equal(raw.ack && raw.ack.ok, true)
     const key = cipher.deriveSessionKey(SECRET, raw.salt)
-    const line = cipher.encryptFrame(key, { type: 'segments', segments: [{ replay: 1 }] }, 0) + '\n'
+    const line = cipher.encryptFrame(key, { type: 'segments-chunk', segments: [{ replay: 1 }] }, 0) + '\n'
     raw.write(line)
     await settle()
     assert.equal(handled.length, 1, 'the first (valid) delivery is handled')
@@ -363,10 +363,10 @@ test('encryption: replaying a captured frame or regressing the per-direction seq
     // strictly increasing — the second frame severs before the handler runs.
     const raw2 = await openRaw(port, deriveAuthCode(SECRET, CLIENT_DEVICE))
     const key2 = cipher.deriveSessionKey(SECRET, raw2.salt)
-    raw2.write(cipher.encryptFrame(key2, { type: 'segments', segments: [{ n: 1 }] }, 7) + '\n')
+    raw2.write(cipher.encryptFrame(key2, { type: 'segments-chunk', segments: [{ n: 1 }] }, 7) + '\n')
     await settle()
     assert.equal(handled.length, 2)
-    raw2.write(cipher.encryptFrame(key2, { type: 'segments', segments: [{ n: 2 }] }, 3) + '\n')
+    raw2.write(cipher.encryptFrame(key2, { type: 'segments-chunk', segments: [{ n: 2 }] }, 3) + '\n')
     await raw2.closed
     await settle()
     assert.equal(handled.length, 2, 'a seq regression severs the connection')
@@ -374,7 +374,7 @@ test('encryption: replaying a captured frame or regressing the per-direction seq
     // (c) a session frame WITHOUT a seq is refused outright.
     const raw3 = await openRaw(port, deriveAuthCode(SECRET, CLIENT_DEVICE))
     const key3 = cipher.deriveSessionKey(SECRET, raw3.salt)
-    raw3.write(cipher.encryptFrame(key3, { type: 'segments', segments: [{ n: 3 }] }) + '\n')
+    raw3.write(cipher.encryptFrame(key3, { type: 'segments-chunk', segments: [{ n: 3 }] }) + '\n')
     await raw3.closed
     await settle()
     assert.equal(handled.length, 2, 'seq-less session frame refused')

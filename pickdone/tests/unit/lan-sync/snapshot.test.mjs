@@ -36,9 +36,9 @@ function rawPeerServer({ ack = { appliedToSeq: 100, oldestSeq: 50 }, onRequest, 
     deviceId: 'peer',
     pairingSecret: SECRET,
     getHandler: () => (msg, socket) => {
-      if (msg.type === 'segments') {
+      if (msg.type === 'segments-chunk') {
         seen.rounds += 1
-        line(socket, { type: 'segments', segments: buildSegmentsRows })
+        line(socket, { type: 'segments-chunk', segments: buildSegmentsRows })
         line(socket, { type: 'ack', applied: msg.segments.length, rejected: 0, ...ack })
       } else if (msg.type === 'snapshot-request') {
         seen.snapshotRequests += 1
@@ -438,8 +438,8 @@ test('snapshot: snapshot-end with cursor 0 must NOT regress an already-advanced 
   const server = createLanServer({
     port: 0, host: '127.0.0.1', deviceId: 'peer', pairingSecret: SECRET,
     getHandler: () => (msg, socket) => {
-      if (msg.type === 'segments') {
-        line(socket, { type: 'segments', segments: [] })
+      if (msg.type === 'segments-chunk') {
+        line(socket, { type: 'segments-chunk', segments: [] })
         line(socket, { type: 'ack', applied: 0, rejected: 0, ...ack })
       } else if (msg.type === 'snapshot-request') {
         line(socket, { type: 'snapshot-chunk', index: 0, totalChunks: 1, schemaVersion: 1, rows: [{ entity: 'todo', id: 'a', seq: 1 }] })
@@ -475,8 +475,8 @@ test('snapshot: unsolicited snapshot-end (no request in flight) fails the round'
   const server = createLanServer({
     port: 0, host: '127.0.0.1', deviceId: 'peer', pairingSecret: SECRET,
     getHandler: () => (msg, socket) => {
-      if (msg.type === 'segments') {
-        line(socket, { type: 'segments', segments: [] })
+      if (msg.type === 'segments-chunk') {
+        line(socket, { type: 'segments-chunk', segments: [] })
         line(socket, { type: 'snapshot-end', totalChunks: 0, totalRows: 0, cursor: 100, schemaVersion: 1 }) // NEVER requested
         line(socket, { type: 'ack', applied: 1, rejected: 0 })
       }

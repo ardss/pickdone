@@ -133,7 +133,7 @@ test('glue: server-side ingest path accepts inbound segments from authenticated 
     deviceId: 'srv-node',
     pairingSecret: SECRET,
     getHandler: () => (msg, socket) => {
-      if (msg.type === 'segments') {
+      if (msg.type === 'segments-chunk') {
         serverIngested.push(...msg.segments)
         socket._lanSend({ type: 'ack', applied: msg.segments.length, rejected: 0 })
       }

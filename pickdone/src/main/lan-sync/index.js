@@ -5,8 +5,12 @@
  * sync-round state machine.
  *
  * Round protocol (both directions, over transport.js after auth):
- *   A -> B: segments {segments: buildSegments()}   push my pending segments
- *   B -> A: ack {applied, rejected} + B's own segments (pull)
+ *   A -> B: segments-chunk* {segments, final}    push my pending segments (bounded chunks;
+ *                                                the last chunk carries final:true and the
+ *                                                receiver acks ONCE at final)
+ *   B -> A: segments-chunk* {segments, final}    B's own segments (pull, same chunking)
+ *   B -> A: ack {applied, rejected, appliedToSeq?, oldestSeq?}
+ *   A -> B: ack {applied, rejected, appliedToSeq?}   acks B's response chunks
  *   A -> B: snapshot-request {requesterMaxSeq?} when B pruned past A's watermark
  *   B -> A: snapshot-chunk* {index, totalChunks, rows} + snapshot-end {totalChunks, totalRows, cursor}
  *           (snapshot-end with totalChunks:0/totalRows:0 is a VALID terminal: empty live state)
@@ -31,6 +35,7 @@ const { createDiscovery, PROTO_VER } = require('./discovery')
 const { createLanServer, connect, DEFAULT_PORT } = require('./transport')
 const { deriveAuthCode } = require('./pairing')
 const { chunkSnapshot } = require('./snapshot')
+const { packSegmentChunks } = require('./segments-chunk')
 
 const BACKOFF_BASE_MS = 5000
 const BACKOFF_MAX_MS = 60 * 1000
@@ -287,23 +292,33 @@ function createLanSyncNode(opts) {
       // no-ops (settled guard).
       client.on('close', () => { if (awaitingSnapshot && !settled) finish(new Error('connection closed during snapshot transfer')) })
       client.on('ready', () => {
-        // push only what this peer has not confirmed yet (per-peer watermark; 0 = first contact)
-        const mine = buildSegments ? buildSegments(peerProgress.get(peer.deviceId) || 0) : []
-        client.send({ type: 'segments', segments: mine })
-        // Deterministic trigger from the previous round: my increments are gone on the peer —
-        // request a full snapshot INSTEAD of another futile incremental round. One transfer per
-        // peer at a time (clientSnapshotBusy); the round now ends at snapshot-end, not at the ack.
-        if (needSnapshot.has(peer.deviceId) && !clientSnapshotBusy.has(peer.deviceId)) {
-          needSnapshot.delete(peer.deviceId)
-          clientSnapshotBusy.add(peer.deviceId)
-          awaitingSnapshot = true
-          chunkBuf.clear()
-          client.send({ type: 'snapshot-request' })
+        try {
+          // push only what this peer has not confirmed yet (per-peer watermark; 0 = first contact).
+          // The backlog travels as bounded segments-chunk messages: one huge `segments` line blew
+          // past the 32MB wire cap on first sync and the round retried forever (segments-chunk.js).
+          const mine = buildSegments ? buildSegments(peerProgress.get(peer.deviceId) || 0) : []
+          for (const chunk of packSegmentChunks(mine)) {
+            client.send({ type: 'segments-chunk', segments: chunk.segments, final: chunk.final })
+          }
+          // Deterministic trigger from the previous round: my increments are gone on the peer —
+          // request a full snapshot INSTEAD of another futile incremental round. One transfer per
+          // peer at a time (clientSnapshotBusy); the round now ends at snapshot-end, not at the ack.
+          if (needSnapshot.has(peer.deviceId) && !clientSnapshotBusy.has(peer.deviceId)) {
+            needSnapshot.delete(peer.deviceId)
+            clientSnapshotBusy.add(peer.deviceId)
+            awaitingSnapshot = true
+            chunkBuf.clear()
+            client.send({ type: 'snapshot-request' })
+          }
+        } catch (err) {
+          // A throw inside 'ready' used to propagate into the transport's line reader and leave
+          // the round hanging until the deadline with no diagnostic — fail the round loudly.
+          finish(err)
         }
       })
       client.on('message', (msg) => {
         try {
-          if (msg.type === 'segments' && Array.isArray(msg.segments)) {
+          if (msg.type === 'segments-chunk' && Array.isArray(msg.segments)) {
             let pullAckSeq = 0 // max seq among the rows the peer just pushed to us (PEER's seq space)
             for (const seg of msg.segments) {
               const r = ingestSegment(seg)
@@ -324,11 +339,14 @@ function createLanSyncNode(opts) {
                 if (Number.isFinite(s) && s > pullAckSeq) pullAckSeq = s
               }
             }
-            // appliedToSeq in the PEER's seq space (the rows' own seq): the peer feeds it into
+            // The ack is sent ONCE, at the final chunk (segments-chunk.js contract). appliedToSeq
+            // is in the PEER's seq space (the rows' own seq): the peer feeds it into
             // buildSegments(fromSeq) against ITS oplog. Reporting our own local max here (the old
             // behavior) overshot the peer's cursor whenever our oplog ran ahead and silently
             // skipped its fresh rows every round.
-            client.send({ type: 'ack', applied: msg.segments.length, rejected: 0, ...(pullAckSeq > 0 ? { appliedToSeq: pullAckSeq } : {}) })
+            if (msg.final) {
+              client.send({ type: 'ack', applied: msg.segments.length, rejected: 0, ...(pullAckSeq > 0 ? { appliedToSeq: pullAckSeq } : {}) })
+            }
           } else if (msg.type === 'snapshot-chunk' && Array.isArray(msg.rows)) {
             if (!awaitingSnapshot) throw new Error('unsolicited snapshot-chunk')
             chunkTotal = Number(msg.totalChunks) || chunkTotal
@@ -448,28 +466,42 @@ function createLanSyncNode(opts) {
       },
       getHandler: (peer) => (msg, socket) => {
         try {
-          if (msg.type === 'segments' && Array.isArray(msg.segments)) {
-            // appliedToSeq is expressed in the SENDER's seq space: the max seq among the rows
-            // the sender just pushed (segment rows carry the sender's oplog seq — engine
-            // buildSegments contract). The sender feeds this into buildSegments(fromSeq) against
-            // ITS OWN oplog, so reporting OUR local max seq here (the old behavior) overshot the
-            // sender's cursor whenever our oplog ran ahead of theirs — their fresh rows were then
-            // skipped every round (permanent hole with >=3 devices, watermark persisted).
-            // Empty push -> omit the field: the sender keeps its cursor (monotonic guard).
-            // oldestSeq advertises the oldest oplog seq we still RETAIN (our space): a peer whose
-            // pull watermark is below it knows its increments are pruned here and must request a
-            // snapshot (see the client trigger).
-            let appliedToSeq = 0
+          if (msg.type === 'segments-chunk' && Array.isArray(msg.segments)) {
+            // Push receiver: ingest per chunk (idempotent under the merge rules) and ack ONCE at
+            // the final chunk. appliedToSeq is expressed in the SENDER's seq space: the max seq
+            // among the rows the sender pushed across ALL chunks of this connection (segment rows
+            // carry the sender's oplog seq — engine buildSegments contract). The sender feeds it
+            // into buildSegments(fromSeq) against ITS OWN oplog, so reporting OUR local max seq
+            // here (the old behavior) overshot the sender's cursor whenever our oplog ran ahead
+            // of theirs — their fresh rows were then skipped every round (permanent hole with
+            // >=3 devices, watermark persisted). Empty push -> omit the field: the sender keeps
+            // its cursor (monotonic guard). oldestSeq advertises the oldest oplog seq we still
+            // RETAIN (our space): a peer whose pull watermark is below it knows its increments
+            // are pruned here and must request a snapshot (see the client trigger).
+            if (!socket._segPush) socket._segPush = { maxSeq: 0, segments: 0 }
+            const acc = socket._segPush
             for (const seg of msg.segments) {
               ingestSegment(seg)
+              acc.segments += 1
               for (const row of (seg && seg.rows) || []) {
                 const s = Number(row && row.seq)
-                if (Number.isFinite(s) && s > appliedToSeq) appliedToSeq = s
+                if (Number.isFinite(s) && s > acc.maxSeq) acc.maxSeq = s
               }
             }
-            const mine = buildSegments ? buildSegments() : []
-            sendVia(socket, { type: 'segments', segments: mine })
-            sendVia(socket, { type: 'ack', applied: msg.segments.length, rejected: 0, ...(appliedToSeq > 0 ? { appliedToSeq } : {}), oldestSeq: getOldestSeq ? currentOldestSeq() : undefined })
+            if (msg.final) {
+              // The response pull travels through the SAME bounded chunking: the server's own
+              // first-sync backlog is just as large as the client's.
+              const mine = buildSegments ? buildSegments() : []
+              for (const chunk of packSegmentChunks(mine)) {
+                sendVia(socket, { type: 'segments-chunk', segments: chunk.segments, final: chunk.final })
+              }
+              sendVia(socket, {
+                type: 'ack', applied: acc.segments, rejected: 0,
+                ...(acc.maxSeq > 0 ? { appliedToSeq: acc.maxSeq } : {}),
+                oldestSeq: getOldestSeq ? currentOldestSeq() : undefined,
+              })
+              socket._segPush = null // the acked push round is complete; a new push re-accumulates
+            }
           } else if (msg.type === 'snapshot-request') {
             // Snapshot-request protocol: stream the live state as bounded snapshot-chunk messages
             // + a snapshot-end trailer carrying OUR current cursor, so the peer records it as its

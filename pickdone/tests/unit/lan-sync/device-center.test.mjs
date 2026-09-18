@@ -50,7 +50,7 @@ test('device-center: getStatus exposes watermark + pendingCount + online per pee
     deviceId: 'peer',
     pairingSecret: SECRET,
     getHandler: () => (msg, socket) => {
-      if (msg.type === 'segments') {
+      if (msg.type === 'segments-chunk') {
         socket._lanSend({ type: 'ack', applied: msg.segments.length, rejected: 0, appliedToSeq: 4 })
       }
     },
