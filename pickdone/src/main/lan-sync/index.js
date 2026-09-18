@@ -8,8 +8,12 @@
  *   A -> B: segments {segments: buildSegments()}   push my pending segments
  *   B -> A: ack {applied, rejected} + B's own segments (pull)
  *   A -> B: snapshot-request {requesterMaxSeq?} when B pruned past A's watermark
- *   B -> A: snapshot-chunk* {index, totalChunks, rows} + snapshot-end {totalRows, cursor}
- *   B -> A: snapshot {snapshot} (legacy whole-snapshot reply, kept for compat)
+ *   B -> A: snapshot-chunk* {index, totalChunks, rows} + snapshot-end {totalChunks, totalRows, cursor}
+ *           (snapshot-end with totalChunks:0/totalRows:0 is a VALID terminal: empty live state)
+ *   B -> A: snapshot-busy {}    server role is already serving this peer's snapshot — retry later
+ *   B -> A: snapshot-error {reason}  the snapshot could not be built (e.g. a single row exceeds
+ *           the chunk budget) — a clean terminal for the requesting round, never re-armed this
+ *           session unless the peer's increments start applying again
  *
  * Merge semantics are NOT implemented here — ingestSegment/ingestSnapshot are
  * caller callbacks that feed shared/sync-core (merge.mjs / segment.mjs), per
@@ -87,10 +91,17 @@ function createLanSyncNode(opts) {
   //     sender's cursor only after a COMPLETE snapshot; increments carry it via trigger checks).
   //   needSnapshot — the trigger fired (peer pruned past my watermark and my state is not
   //     progressing): the NEXT round opens with a snapshot-request instead of failing silently.
-  //   snapshotBusy — one snapshot transfer in flight per peer, both roles (never overlap).
+  //   clientSnapshotBusy / serverSnapshotBusy — one snapshot transfer in flight per peer PER
+  //     ROLE (never overlap within a role). Deliberately separate sets: a single shared set made
+  //     the client's finish() cancel the server role's invariant, and made a same-pair mutual
+  //     snapshot exchange deadlock until the 120s round deadline.
+  //   snapshotFatal — the peer answered snapshot-error (e.g. oversized row): do NOT re-arm the
+  //     trigger this session unless the peer's increments start applying again (state changed).
   const pullWatermarkBy = new Map() // deviceId -> seq
   const needSnapshot = new Set()
-  const snapshotBusy = new Set()
+  const clientSnapshotBusy = new Set()
+  const serverSnapshotBusy = new Set()
+  const snapshotFatal = new Set()
 
   // Resolved once the TCP server is listening. Callers may await this at any
   // time (even after the event already fired) — unlike the 'listening' event,
@@ -216,7 +227,8 @@ function createLanSyncNode(opts) {
         settled = true
         if (done) clearTimeout(done)
         roundsRunning -= 1
-        snapshotBusy.delete(peer.deviceId)
+        clientSnapshotBusy.delete(peer.deviceId) // client-role flag ONLY: the server role's
+        // serverSnapshotBusy must survive a client round end (separate sets, see above).
         client.close()
         if (err) {
           // A round that died MID-snapshot re-arms the trigger deterministically: the pull
@@ -253,11 +265,16 @@ function createLanSyncNode(opts) {
        *  clears the flag: never snapshot a peer whose watermark is moving. */
       function evaluateSnapshotTrigger() {
         const wm = pullWatermarkBy.get(peer.deviceId) || 0
-        if (roundApplied > 0) { needSnapshot.delete(peer.deviceId); return }
+        if (roundApplied > 0) {
+          needSnapshot.delete(peer.deviceId)
+          snapshotFatal.delete(peer.deviceId) // state is changing again: re-arming is worth a try
+          return
+        }
         const oldest = Number(ackOldestSeq)
         if (!Number.isFinite(oldest) || oldest <= 0) return // peer did not advertise; nothing to act on
         if (ackSeq <= wm) return // fully caught up with the peer's max seq
-        if (oldest > wm + 1 && !snapshotBusy.has(peer.deviceId)) needSnapshot.add(peer.deviceId)
+        if (snapshotFatal.has(peer.deviceId)) return // peer cannot serve a snapshot (snapshot-error)
+        if (oldest > wm + 1 && !clientSnapshotBusy.has(peer.deviceId)) needSnapshot.add(peer.deviceId)
       }
       client.on('error', (err) => finish(err))
       client.on('rejected', () => finish(new Error('auth rejected by peer')))
@@ -271,10 +288,10 @@ function createLanSyncNode(opts) {
         client.send({ type: 'segments', segments: mine })
         // Deterministic trigger from the previous round: my increments are gone on the peer —
         // request a full snapshot INSTEAD of another futile incremental round. One transfer per
-        // peer at a time (snapshotBusy); the round now ends at snapshot-end, not at the ack.
-        if (needSnapshot.has(peer.deviceId) && !snapshotBusy.has(peer.deviceId)) {
+        // peer at a time (clientSnapshotBusy); the round now ends at snapshot-end, not at the ack.
+        if (needSnapshot.has(peer.deviceId) && !clientSnapshotBusy.has(peer.deviceId)) {
           needSnapshot.delete(peer.deviceId)
-          snapshotBusy.add(peer.deviceId)
+          clientSnapshotBusy.add(peer.deviceId)
           awaitingSnapshot = true
           chunkBuf.clear()
           client.send({ type: 'snapshot-request' })
@@ -286,36 +303,80 @@ function createLanSyncNode(opts) {
             for (const seg of msg.segments) {
               const r = ingestSegment(seg)
               roundApplied += (r && Number(r.applied)) || 0
-              if (seg && Number.isFinite(Number(seg.toSeq))) {
-                pullWatermarkBy.set(peer.deviceId, Math.max(pullWatermarkBy.get(peer.deviceId) || 0, Number(seg.toSeq)))
+              // Pull watermark advances CONTIGUOUSLY only: a segment starting past wm+1 means a
+              // pruned hole we did NOT receive — marking it received would starve the snapshot
+              // trigger (the oldest > wm+1 check could never fire again). The hole itself is what
+              // must arm the trigger (see evaluateSnapshotTrigger).
+              const from = Number(seg && seg.fromSeq)
+              const to = Number(seg && seg.toSeq)
+              if (Number.isFinite(from) && Number.isFinite(to)) {
+                const wm = pullWatermarkBy.get(peer.deviceId) || 0
+                if (from <= wm + 1 && to > wm) pullWatermarkBy.set(peer.deviceId, to)
               }
             }
             client.send({ type: 'ack', applied: msg.segments.length, rejected: 0 })
-          } else if (msg.type === 'snapshot' && msg.snapshot) {
-            ingestSnapshot(msg.snapshot)
-            client.send({ type: 'ack', applied: 1, rejected: 0, appliedToSeq: currentMaxSeq() })
           } else if (msg.type === 'snapshot-chunk' && Array.isArray(msg.rows)) {
+            if (!awaitingSnapshot) throw new Error('unsolicited snapshot-chunk')
             chunkTotal = Number(msg.totalChunks) || chunkTotal
             chunkBuf.set(Number(msg.index) || 0, msg.rows)
+          } else if (msg.type === 'snapshot-busy') {
+            // The peer's server role is busy (mutual snapshot collision): end the round as a
+            // clean retry-later — re-arm the trigger and let the normal backoff dial again.
+            // NOT an error: both sides are healthy, they just tried to snapshot each other.
+            if (!awaitingSnapshot) throw new Error('unsolicited snapshot-busy')
+            awaitingSnapshot = false
+            chunkBuf.clear()
+            clientSnapshotBusy.delete(peer.deviceId)
+            needSnapshot.add(peer.deviceId)
+            scheduleRetry(peer.deviceId)
+            finish(null)
+          } else if (msg.type === 'snapshot-error') {
+            // Clean terminal: the peer cannot serve a snapshot at all (e.g. a single live row
+            // exceeds the chunk budget). Log to the recent ring, and never re-arm the trigger
+            // this session unless the peer's state starts progressing again (see trigger).
+            if (!awaitingSnapshot) throw new Error('unsolicited snapshot-error')
+            const reason = String((msg && msg.reason) || 'snapshot failed')
+            awaitingSnapshot = false
+            chunkBuf.clear()
+            clientSnapshotBusy.delete(peer.deviceId)
+            snapshotFatal.add(peer.deviceId)
+            pushRecent({ at: Date.now(), kind: 'error', peer: peer.deviceId, detail: { error: `snapshot-error: ${reason}` } })
+            em.emit('snapshot-error', { peer: peer.deviceId, reason })
+            finish(null)
           } else if (msg.type === 'snapshot-end') {
-            // All-or-nothing finalization: the chunks must tile exactly [0..n) and sum to
+            // All-or-nothing finalization. ONLY process snapshot-end when a snapshot was actually
+            // requested on this connection (awaitingSnapshot) — anything else is a protocol
+            // violation and fails the round. The chunks must tile exactly [0..n) and sum to
             // totalRows, and ingestSnapshot must succeed — ONLY then does the pull watermark
             // advance to the sender's cursor. A partial/failed snapshot fails the round, leaves
             // the DB at the per-chunk committed state (merge-apply is idempotent), and the next
             // round re-requests (the trigger re-fires because the watermark did not advance).
-            const chunkCount = Number(msg.totalChunks) || chunkTotal // chunk count rides on snapshot-chunk
+            if (!awaitingSnapshot) throw new Error('unsolicited snapshot-end')
+            const declared = Number(msg.totalChunks)
+            const chunkCount = Number.isInteger(declared) && declared >= 0 ? declared : chunkTotal
             const totalRows = Number(msg.totalRows) || 0
-            const okShape = Number.isInteger(chunkCount) && chunkCount > 0 && chunkBuf.size === chunkCount &&
-              Array.from({ length: chunkCount }, (_, i) => chunkBuf.has(i)).every(Boolean)
-            const rows = okShape ? Array.from({ length: chunkCount }, (_, i) => chunkBuf.get(i)).flat() : null
-            chunkBuf.clear()
-            if (!rows || rows.length !== totalRows) {
-              throw new Error(`incomplete snapshot: ${rows ? rows.length : 'bad chunk set'} of ${totalRows} rows`)
+            let rows = null
+            if (chunkCount === 0) {
+              // Empty live state is a VALID terminal (nothing to sync): totalChunks:0 +
+              // totalRows:0 + cursor. Treating it as an error caused an infinite re-arm loop.
+              if (totalRows !== 0 || chunkBuf.size !== 0) {
+                throw new Error('incomplete snapshot: empty trailer but chunks/rows were advertised')
+              }
+              rows = []
+            } else {
+              const okShape = Number.isInteger(chunkCount) && chunkCount > 0 && chunkBuf.size === chunkCount &&
+                Array.from({ length: chunkCount }, (_, i) => chunkBuf.has(i)).every(Boolean)
+              rows = okShape ? Array.from({ length: chunkCount }, (_, i) => chunkBuf.get(i)).flat() : null
+              if (!rows || rows.length !== totalRows) {
+                throw new Error(`incomplete snapshot: ${rows ? rows.length : 'bad chunk set'} of ${totalRows} rows`)
+              }
             }
+            chunkBuf.clear()
             ingestSnapshot({ schemaVersion: Number(msg.schemaVersion) || 1, deviceId: peer.deviceId, rows })
-            const cursor = Number(msg.cursor) || 0
+            // Monotonic guard: a cursor of 0/absent must never REGRESS the watermark.
+            const cursor = Math.max(pullWatermarkBy.get(peer.deviceId) || 0, Number(msg.cursor) || 0)
             pullWatermarkBy.set(peer.deviceId, cursor) // watermark advances ONLY here
-            snapshotBusy.delete(peer.deviceId)
+            clientSnapshotBusy.delete(peer.deviceId)
             pushRecent({
               at: Date.now(), kind: 'snapshot', peer: peer.deviceId,
               detail: { direction: 'received', rows: rows.length, cursor },
@@ -384,23 +445,36 @@ function createLanSyncNode(opts) {
           } else if (msg.type === 'snapshot-request') {
             // Snapshot-request protocol: stream the live state as bounded snapshot-chunk messages
             // + a snapshot-end trailer carrying OUR current cursor, so the peer records it as its
-            // pull watermark and the next round is incremental. One transfer per peer at a time;
-            // sends are synchronous, so the busy flag is a documented invariant guard, not a queue.
-            if (!buildSnapshot || snapshotBusy.has(peer.deviceId)) return
-            snapshotBusy.add(peer.deviceId)
+            // pull watermark and the next round is incremental. One transfer per peer at a time
+            // (serverSnapshotBusy — the SERVER role's flag, independent of the client role's);
+            // sends are synchronous, so the busy flag is a documented invariant guard. A request
+            // while busy is answered with snapshot-busy (NOT silently dropped): a silent drop made
+            // a mutual snapshot exchange deadlock until both rounds hit the 120s deadline.
+            if (!buildSnapshot) return
+            if (serverSnapshotBusy.has(peer.deviceId)) {
+              sendVia(socket, { type: 'snapshot-busy' })
+              return
+            }
+            serverSnapshotBusy.add(peer.deviceId)
             try {
               const { chunks, totalRows, schemaVersion, cursor } = chunkSnapshot(buildSnapshot(), { cursor: currentMaxSeq() })
               for (const c of chunks) {
                 sendVia(socket, { type: 'snapshot-chunk', index: c.index, totalChunks: chunks.length, schemaVersion, rows: c.rows })
               }
-              sendVia(socket, { type: 'snapshot-end', totalRows, cursor, schemaVersion })
+              sendVia(socket, { type: 'snapshot-end', totalChunks: chunks.length, totalRows, cursor, schemaVersion })
               pushRecent({
                 at: Date.now(), kind: 'snapshot', peer: peer.deviceId,
                 detail: { direction: 'sent', rows: totalRows, cursor, label: `对端请求全量快照 / 已发送 ${totalRows} 行` },
               })
               em.emit('snapshot-sync', { peer: peer.deviceId, direction: 'sent', rows: totalRows, cursor })
+            } catch (err) {
+              // A build failure (e.g. chunkSnapshot: single row exceeds chunk budget) must NOT
+              // burn the requester's 120s round deadline: answer snapshot-error so the peer's
+              // round ends cleanly and it stops re-arming the trigger for this session.
+              try { sendVia(socket, { type: 'snapshot-error', reason: String((err && err.message) || 'snapshot failed') }) } catch { /* socket gone */ }
+              throw err
             } finally {
-              snapshotBusy.delete(peer.deviceId)
+              serverSnapshotBusy.delete(peer.deviceId)
             }
           }
         } catch (err) {
@@ -424,10 +498,13 @@ function createLanSyncNode(opts) {
   }
 
   function sendVia(socket, msg) {
-    // transport.js attaches _lanSend (AES-256-GCM framed when the session key is up);
-    // the raw-write fallback keeps non-transport sockets (tests) working.
-    if (typeof (socket && socket._lanSend) === 'function') { socket._lanSend(msg); return }
-    if (socket && socket.writable) socket.write(JSON.stringify(msg) + '\n')
+    // Fail closed: transport.js attaches _lanSend (AES-256-GCM framed once the session key is
+    // up) to every authenticated socket. A post-auth socket WITHOUT it would mean plaintext
+    // fallback — the old raw-write fallback silently downgraded; now we throw instead.
+    if (typeof (socket && socket._lanSend) !== 'function') {
+      throw new Error('sendVia: socket has no encrypted send path (post-auth plaintext fallback removed)')
+    }
+    socket._lanSend(msg)
   }
 
   /**

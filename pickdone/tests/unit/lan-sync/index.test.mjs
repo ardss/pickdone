@@ -136,9 +136,9 @@ test('glue: server-side ingest path accepts inbound segments from authenticated 
       if (msg.type === 'segments') {
         serverIngested.push(...msg.segments)
         socket._lanSend({ type: 'ack', applied: msg.segments.length, rejected: 0 })
-      } else if (msg.type === 'snapshot-request') {
-        socket._lanSend({ type: 'snapshot', snapshot: { tasks: 3 } })
       }
+      // (the legacy whole-snapshot reply shape was removed — both sides ship the chunked
+      // snapshot-request protocol; nothing sends `type:'snapshot'` anymore)
     },
   })
   await new Promise((resolve) => serverNode.on('listening', resolve))
