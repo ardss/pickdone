@@ -70,6 +70,22 @@ export function stableStringify(v) {
   return JSON.stringify(v)
 }
 
+/** Content fingerprint: stableStringify with `userId` keys omitted at EVERY nesting level.
+ *  Loop fix (2026-09-18 live incident): the todo payload carries data.userId, and each device
+ *  re-stamps it to its OWN local account on write — so the two machines' stored copies of the
+ *  same row permanently differ in data.userId. Comparing payloads with userId included made
+ *  every round see "different content", re-materialize the loser as a fresh -conflict-
+ *  recycle-bin copy, and bounce the re-captured winner back: a perpetual per-round conflict
+ *  loop. userId (at any depth) is an account identifier, never user content. */
+export function contentFingerprint(v) {
+  if (Array.isArray(v)) return `[${v.map(contentFingerprint).join(',')}]`
+  if (v && typeof v === 'object') {
+    const keys = Object.keys(v).filter(k => k !== 'userId').sort()
+    return `{${keys.map(k => `${JSON.stringify(k)}:${contentFingerprint(v[k])}`).join(',')}}`
+  }
+  return JSON.stringify(v)
+}
+
 function contentDiffers(a, b) {
   const keys = new Set([...Object.keys(a), ...Object.keys(b)])
   for (const k of keys) {
@@ -84,7 +100,9 @@ function contentDiffers(a, b) {
     // transport adapters rebuild the payload object per ingest, so reference
     // equality would report a conflict for byte-identical content (round-3 fix).
     if (va && vb && typeof va === 'object' && typeof vb === 'object') {
-      if (stableStringify(va) !== stableStringify(vb)) return true
+      // Payloads (row.data) compare by CONTENT, key-order-insensitive, with per-device
+      // account stamps (userId at any depth) excluded — see contentFingerprint above.
+      if (contentFingerprint(va) !== contentFingerprint(vb)) return true
       continue
     }
     return true

@@ -130,6 +130,19 @@ function createLocalStoreAdapter () {
 }
 
 /* ---------- engine + node lifecycle (lazy; only while enabled) ---------- */
+/**
+ * Symmetric LWW tie-breaks (merge.mjs compareRecency): inbound rows are stamped with the
+ * SENDING device's id (the segment envelope's deviceId) so a full tie resolves to the same
+ * winner on both peers. Without this the local side has no deviceId at all and tie outcomes
+ * depended on which side happened to be applying (loop fix 2026-09-18).
+ */
+function withPeerDeviceId (body) {
+  if (body && typeof body === 'object' && body.deviceId && Array.isArray(body.rows)) {
+    return { ...body, rows: body.rows.map(r => ({ ...r, deviceId: body.deviceId })) }
+  }
+  return body
+}
+
 function buildSegmentsWrapped (sinceSeq) {
   const r = state.engine.buildSegments(sinceSeq)
   state.pendingToSeq = r.toSeq
@@ -205,6 +218,7 @@ function startSync () {
   // three legacy rows stayed unsynced forever while every captured row converged).
   try { const seeded = state.db.call('seedSyncOplog', {}); if (seeded && seeded.seeded > 0) log.info('[LanSync] seeded', seeded.seeded, 'legacy rows into the oplog') } catch (e) { log.warn('[LanSync] legacy seed failed:', e.message) }
   state.engine = createEngine({ localStore: createLocalStoreAdapter(), deviceId })
+  state.deviceId = deviceId // symmetric tie-break stamping (see withPeerDeviceId / sync-apply)
   state.node = createLanSyncNode({
     deviceId,
     peerProgress: state.peerWatermarks,
@@ -219,7 +233,7 @@ function startSync () {
       // hydration — 2026-09-18 drill: server handlers ran 30-60s and starved every round).
       state.applyCache = createHydrationCache()
       try {
-        const r = state.engine.ingestSegment(body)
+        const r = state.engine.ingestSegment(withPeerDeviceId(body))
         flushPendingWrites()
         return r
       } finally { state.applyCache = null }
@@ -235,7 +249,7 @@ function startSync () {
       const rows = Array.isArray(body && body.rows) ? body.rows : []
       state.applyCache = createHydrationCache()
       try {
-        for (const r of rows) applyRowSafe(r)
+        for (const r of withPeerDeviceId(body).rows || []) applyRowSafe(r)
         flushPendingWrites()
       } finally { state.applyCache = null }
       return { rows: rows.length }
@@ -248,7 +262,7 @@ function startSync () {
       const rows = Array.isArray(body && body.rows) ? body.rows : []
       state.applyCache = createHydrationCache()
       try {
-        for (const r of rows) applyRowSafe(r)
+        for (const r of withPeerDeviceId(body).rows || []) applyRowSafe(r)
         flushPendingWrites()
       } finally { state.applyCache = null }
       return { rows: rows.length }
