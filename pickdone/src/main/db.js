@@ -842,6 +842,8 @@ syncOplogSince: ({ sinceSeq = 0, limit = 2000 } = {}) => db.prepare('SELECT seq,
   syncSetName: p => require('./db-sync-ops').dispatch('syncSetName', p),
   syncPairWithCode: p => require('./db-sync-ops').dispatch('syncPairWithCode', p),
   syncAddPeer: p => require('./db-sync-ops').dispatch('syncAddPeer', p),
+  syncPairRespond: p => require('./db-sync-ops').dispatch('syncPairRespond', p),
+  syncPairRequest: p => require('./db-sync-ops').dispatch('syncPairRequest', p),
   // One-time bootstrap: rows created before the oplog existed (any user enabling sync on an
   // existing database) have no change-capture pointers and would never propagate. Idempotent via
   // the sync.seedDone meta flag; NOT renderer-callable (main-internal, like the meta GC ops).
