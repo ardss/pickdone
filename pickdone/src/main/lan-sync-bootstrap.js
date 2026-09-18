@@ -591,4 +591,9 @@ module.exports.__test = {
   flushPendingWrites,
   syncSetEnabled: syncSetEnabledOp,
   localUserId,
+  // watermark persistence surface (2026-09-19 regression tests): the live map <-> settings_rows
+  // round-trip is the restart-survival contract for per-peer push watermarks.
+  persistPeerWatermarks,
+  createTrackedWatermarks,
+  loadPeerWatermarks,
 }

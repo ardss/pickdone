@@ -413,6 +413,9 @@ function readMaxOplogSeq (state) {
 module.exports = {
   SYNCABLE_ENTITIES,
   SECURITY_LOCK_KEY,
+  // Exported (2026-09-19): lan-sync-bootstrap destructures this for allRows()/hydration skips —
+  // the missing export made every allRows() call (legacy seed, snapshot serving) throw TypeError.
+  isMachineLocalSettingKey,
   createHydrationCache,
   hydrateRow,
   rowContentDiffers,
