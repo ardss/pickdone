@@ -573,7 +573,7 @@ export default {
 .sn-search input { transition: opacity var(--dur-fast) ease, transform var(--dur-mid) cubic-bezier(.2,.8,.2,1), padding var(--dur-slow) cubic-bezier(.2,.8,.2,1), flex var(--dur-slow) cubic-bezier(.2,.8,.2,1); }
 .sn-search i { font-style: normal; font-size: var(--fs-sm); opacity: .5; }
 .sn-search input { flex: 1; border: 0; background: none; font-size: var(--fs-md); color: var(--text-1); }
-.sn-search input::placeholder { color: #8a9099; }
+.sn-search input::placeholder { color: var(--text-4); }
 .sn-nav-item {
   display: flex; align-items: center; gap: var(--space-3); height: 40px; padding: 0 12px;
   border-radius: var(--radius-md); cursor: pointer; color: var(--text-1); font-size: var(--fs-md); transition: background var(--dur-fast);

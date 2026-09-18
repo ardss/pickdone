@@ -163,7 +163,11 @@ export default {
         // The rule is persisted with the group: when the last item in the group completes, toggleComplete can use it to auto-renew
         const ruleJson = JSON.stringify(this.form)
         // Authority = meta (same source as CLI; the 5175 shim implements meta too); the historical LS fallback was removed (2026-09-03 redundancy cleanup)
-        window.todoAPI.dbCall('setMeta', ['repeatRule:' + repeatId, ruleJson]).catch(e => console.error('[repeat] rule save failed:', e))
+        // setMeta failure used to be console.error only: tasks were created but auto-renewal would silently never fire (FilterModal save-failure pattern)
+        await window.todoAPI.dbCall('setMeta', ['repeatRule:' + repeatId, ruleJson]).catch(e => {
+          console.error('[repeat] rule save failed:', e)
+          this.$message.warning(this.$t('statsD.RepeatModal.ruleSaveFailed'))
+        })
         let made = 0
         for (let i = 0; i < dates.length; i++) {
           const d = dates[i]

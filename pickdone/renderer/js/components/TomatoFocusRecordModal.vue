@@ -341,7 +341,7 @@ export default {
 }
 /* 时间轴小时刻度线与图例 */
 .tfr-timeline__grid { position: absolute; inset: 0; pointer-events: none; }
-.tfr-timeline__grid i { position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(0, 0, 0, .06); }
+.tfr-timeline__grid i { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--line); }
 .tfr-timeline__legend { display: flex; gap: 14px; font-size: var(--fs-xs); color: var(--text-3); margin-top: 6px; }
 .tfr-timeline__legend .dot { display: inline-block; width: 8px; height: 8px; border-radius: var(--radius-xs); margin-right: 4px; vertical-align: -1px; }
 .tfr-timeline__legend .dot-focus { background: var(--brand); }
