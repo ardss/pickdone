@@ -39,7 +39,10 @@ module.exports = function todoHandlers (ctx) {
     'settingsRowsAll', 'settingsRowPut', 'settingsRowPutMany', 'settingsRowDelete',
     // P3a LAN sync settings/status (2026-09-16): implemented in lan-sync-bootstrap.js, dispatched via
     // db-sync-ops.js; identity writes are main-window-only (same capability class as setMeta)
-    'syncGetSettings', 'syncSetEnabled', 'syncGetStatus', 'syncGetPairingCode', 'syncSetName', 'syncPairWithCode', 'syncAddPeer'
+    'syncGetSettings', 'syncSetEnabled', 'syncGetStatus', 'syncGetPairingCode', 'syncSetName', 'syncPairWithCode', 'syncAddPeer',
+    // Device Center (2026-09-17): two-way confirmed pairing — answer the inbound pair-request
+    // dialog, or dial a peer and ask. Implemented in lan-sync-bootstrap.js via db-sync-ops.
+    'syncPairRespond', 'syncPairRequest'
   ])
 
   // Dangerous DB ops: batch write/batch delete/arbitrary meta write. Capability-wise aligned with "dangerous channels main-window only" —

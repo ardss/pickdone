@@ -8,12 +8,17 @@
  * socket destroyed.
  *
  * Message types:
- *   hello      {deviceId, protoVer, authCode}
- *   hello-ack  {ok, protoVer, error?}
- *   segments   {segments:[...]}   sync-core packed segment envelopes
- *   snapshot   {snapshot}
- *   ack        {applied, rejected}
- *   ping / pong {}
+ *   hello        {deviceId, protoVer, authCode}
+ *   hello-ack    {ok, protoVer, error?}
+ *   segments     {segments:[...]}   sync-core packed segment envelopes
+ *   snapshot     {snapshot}
+ *   ack          {applied, rejected}
+ *   ping / pong  {}
+ *   pair-request {deviceId, code?}          pre-auth: with code = manual 6-digit mode,
+ *                                           without code = two-way confirmed pairing
+ *   pair-accept  {secret}                   pairing succeeded (either mode)
+ *   pair-reject  {error}                    two-way mode: rejected / pair-throttled
+ *   pair-ack     {ok}                       manual mode: ok=false on bad code
  *
  * Pure Node (node:net + node:crypto), no Electron imports. CommonJS.
  */
@@ -33,6 +38,9 @@ const MAX_LINE_BYTES = 16 * 1024 * 1024
 // heartbeat-sized, so an unauthenticated peer has no reason to stream megabytes into our buffers.
 // After auth the cap is raised to MAX_LINE_BYTES (a round carries a whole first-sync backlog).
 const PRE_AUTH_LINE_BYTES = 4 * 1024
+// Two-way confirmed pairing: an unanswered pair-request is auto-rejected after this window
+// (the pending decision dialog must not stay open forever). Injectable per server for tests.
+const PAIR_CONFIRM_TIMEOUT_MS = 60 * 1000
 
 class ProtocolError extends Error {
   constructor(message) {
@@ -100,7 +108,7 @@ function send(socket, msg) {
 /** Shared server-side connection state machine (auth gate + dispatch).
  *  pairGate(remoteAddress) -> boolean: server-level sliding-window rate limiter for pair-request
  *  attempts (see createLanServer); when absent, no IP-level limiting is applied. */
-function wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, onUnauthorized, verifyPairingCode, onPaired, pairGate }) {
+function wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, onUnauthorized, verifyPairingCode, onPaired, pairGate, onPairRequest, onPairThrottled, pairConfirmTimeoutMs }) {
   const state = { peer: null, authorized: false }
   const finish = () => {
     if (state.peer) socket.emit('peer-closed', state.peer)
@@ -120,16 +128,63 @@ function wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, o
         if (msg.type === 'pair-request') {
           // Rate limit is SERVER-level per remoteAddress (sliding 10-minute window), not
           // per-connection: a per-connection counter resets on every reconnect, making online
-          // code guessing trivially cheap.
-          const code = typeof msg.code === 'string' ? msg.code : ''
-          if ((pairGate && !pairGate(socket.remoteAddress)) || !verifyPairingCode || !verifyPairingCode(code)) {
-            send(socket, { type: 'pair-ack', ok: false })
+          // code guessing trivially cheap. Applies to BOTH pairing modes (6-digit manual and
+          // two-way confirmed) — a throttled attempt answers pair-reject/pair-ack and is
+          // surfaced via onPairThrottled so the Device Center security ring can show it.
+          const code = typeof msg.code === 'string' && msg.code ? msg.code : null
+          if (pairGate && !pairGate(socket.remoteAddress)) {
+            if (onPairThrottled) onPairThrottled({ ip: socket.remoteAddress, reason: 'pair-throttled' })
+            if (code !== null) send(socket, { type: 'pair-ack', ok: false })
+            else send(socket, { type: 'pair-reject', error: 'pair-throttled' })
             socket.destroy()
             return
           }
-          send(socket, { type: 'pair-accept', secret: pairingSecret })
-          if (onPaired) onPaired({ deviceId: typeof msg.deviceId === 'string' ? msg.deviceId : '', host: socket.remoteAddress })
-          socket.destroy()
+          if (code !== null) {
+            // Manual pairing: the peer proves knowledge of our currently displayed 6-digit code
+            // and receives the persisted pairing secret (same threat model as WPS push-button:
+            // the LAN + the short-lived code are the gate).
+            if (!verifyPairingCode || !verifyPairingCode(code)) {
+              send(socket, { type: 'pair-ack', ok: false })
+              socket.destroy()
+              return
+            }
+            send(socket, { type: 'pair-accept', secret: pairingSecret })
+            if (onPaired) onPaired({ deviceId: typeof msg.deviceId === 'string' ? msg.deviceId : '', host: socket.remoteAddress })
+            socket.destroy()
+            return
+          }
+          // Two-way confirmed pairing: an unpaired client asks {type:'pair-request', deviceName,
+          // deviceId} BEFORE auth; a human decides via respond(accept) within the confirm window
+          // (auto-reject + close on timeout, timer unref'd so it never holds the process open).
+          // Accept hands out the persisted pairing secret, exactly like the manual code path —
+          // the client derives its authCode from it and the next round authenticates normally.
+          let settled = false
+          const finish = (accept) => {
+            if (settled) return
+            settled = true
+            clearTimeout(confirmTimer)
+            if (accept) {
+              send(socket, { type: 'pair-accept', secret: pairingSecret })
+              if (onPaired) onPaired({
+                deviceId: typeof msg.deviceId === 'string' ? msg.deviceId : '',
+                deviceName: typeof msg.deviceName === 'string' ? msg.deviceName : '',
+                host: socket.remoteAddress,
+                confirmed: true,
+              })
+            } else {
+              send(socket, { type: 'pair-reject', error: 'rejected' })
+            }
+            socket.destroy()
+          }
+          const confirmTimer = setTimeout(() => finish(false), pairConfirmTimeoutMs || PAIR_CONFIRM_TIMEOUT_MS)
+          confirmTimer.unref?.()
+          if (!onPairRequest) { finish(false); return }
+          onPairRequest({
+            deviceId: typeof msg.deviceId === 'string' ? msg.deviceId : '',
+            deviceName: typeof msg.deviceName === 'string' ? msg.deviceName : '',
+            host: socket.remoteAddress,
+            respond: finish,
+          })
           return
         }
         if (msg.type !== 'hello') {
@@ -169,7 +224,7 @@ function wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, o
  * @returns EventEmitter with .port (after 'listening'), .close()
  */
 function createLanServer(opts) {
-  const { deviceId, pairingSecret, getHandler, onPeer, onUnauthorized, verifyPairingCode, onPaired, host } = opts
+  const { deviceId, pairingSecret, getHandler, onPeer, onUnauthorized, verifyPairingCode, onPaired, host, onPairRequest, onPairThrottled, pairConfirmTimeoutMs } = opts
   const port = Number.isInteger(opts.port) ? opts.port : DEFAULT_PORT
   const em = new EventEmitter()
   const sockets = new Set()
@@ -196,7 +251,7 @@ function createLanServer(opts) {
   const server = net.createServer((socket) => {
     sockets.add(socket)
     socket.on('close', () => sockets.delete(socket))
-    wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, onUnauthorized, verifyPairingCode, onPaired, pairGate })
+    wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, onUnauthorized, verifyPairingCode, onPaired, pairGate, onPairRequest, onPairThrottled, pairConfirmTimeoutMs })
   })
   server.on('error', (err) => {
     // Fixed port taken (second instance on the same machine, or a stale process): degrade to an
@@ -236,7 +291,7 @@ function createLanServer(opts) {
  *   'ready' (hello-ack ok), 'rejected' (auth failed), 'message', 'error', 'close'
  */
 function connect(host, port, opts) {
-  const { deviceId, authCode, onUnauthorized, pairCode } = opts
+  const { deviceId, authCode, onUnauthorized, pairCode, pairOpen, deviceName } = opts
   const protoVer = opts.protoVer || PROTO_VER
   const timeoutMs = opts.timeoutMs || 5000
   const em = new EventEmitter()
@@ -247,6 +302,8 @@ function connect(host, port, opts) {
 
   socket.on('connect', () => {
     if (pairCode !== undefined) { send(socket, { type: 'pair-request', deviceId, code: String(pairCode) }); return }
+    // Two-way confirmed pairing (no code): ask the peer; the human there accepts or rejects.
+    if (pairOpen) { send(socket, { type: 'pair-request', deviceId, deviceName: deviceName || '' }); return }
     send(socket, { type: 'hello', deviceId, protoVer, authCode })
   })
   socket.on('timeout', () => {
@@ -266,6 +323,19 @@ function connect(host, port, opts) {
       if (msg.type === 'ping') { send(socket, { type: 'pong' }); return }
       if (!em.ready) {
         if (pairCode !== undefined) {
+          if (msg.type === 'pair-accept' && typeof msg.secret === 'string' && msg.secret) {
+            reader.setLimit(MAX_LINE_BYTES)
+            em.emit('paired', { secret: msg.secret })
+          } else {
+            em.emit('rejected', msg)
+          }
+          socket.destroy()
+          return
+        }
+        if (pairOpen) {
+          // Two-way confirm outcome: accept carries the peer's pairing secret (the client
+          // adopts it and derives its authCode from it, same as the manual code path);
+          // reject/timeout surfaces as 'rejected' with the peer's reason.
           if (msg.type === 'pair-accept' && typeof msg.secret === 'string' && msg.secret) {
             reader.setLimit(MAX_LINE_BYTES)
             em.emit('paired', { secret: msg.secret })
@@ -302,4 +372,4 @@ function connect(host, port, opts) {
   return em
 }
 
-module.exports = { createLanServer, connect, ProtocolError, PROTO_VER, DEFAULT_PORT, MAX_LINE_BYTES, PRE_AUTH_LINE_BYTES }
+module.exports = { createLanServer, connect, ProtocolError, PROTO_VER, DEFAULT_PORT, MAX_LINE_BYTES, PRE_AUTH_LINE_BYTES, PAIR_CONFIRM_TIMEOUT_MS }

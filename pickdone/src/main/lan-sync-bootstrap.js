@@ -29,6 +29,7 @@ const { createEngine } = require('../../shared/sync-core/engine.mjs')
 const mergeCore = require('../../shared/sync-core/merge.mjs')
 const { generatePairingSecret, derivePairingCode } = require('../../shared/sync-core/pairing.mjs')
 const { createLanSyncNode } = require('./lan-sync/index')
+const { DEFAULT_PORT } = require('./lan-sync/transport')
 const syncOps = require('./db-sync-ops')
 
 // settings_rows keys (never synced: hydration skips the 'sync.' namespace, otherwise peers would
@@ -406,7 +407,25 @@ function startSync () {
     buildSegments: buildSegmentsWrapped,
     buildSnapshot: () => state.engine.buildSnapshot()
   })
-  state.node.on('round-error', info => { log.warn('[LanSync] round error:', info && info.error); notifyRenderers('round-error') })
+  state.node.on('round-error', info => {
+    log.warn('[LanSync] round error:', info && info.error)
+    emitSyncEvent('round-error', { deviceId: info && info.peer, detail: info && info.error && info.error.message })
+    notifyRenderers('round-error')
+  })
+  state.node.on('round-done', info => emitSyncEvent('round-done', { deviceId: info && info.peer, applied: info && info.applied }))
+  state.node.on('peer-online', p => emitSyncEvent('peer-online', { deviceId: p.deviceId, deviceName: p.name, host: p.host }))
+  state.node.on('peer-offline', p => emitSyncEvent('peer-offline', { deviceId: p.deviceId, deviceName: p.name, host: p.host }))
+  state.node.on('pair-throttled', info => emitSyncEvent('pair-throttled', { ip: info && info.ip }))
+  // Inbound two-way confirm request: hold it for the human (respond callback comes from the
+  // transport, which owns the 60s auto-reject timer) and surface it to the renderer.
+  state.node.on('pair-request', info => {
+    state.pendingPair = info
+    emitSyncEvent('pair-request', { deviceId: info && info.deviceId, deviceName: info && info.deviceName, host: info && info.host })
+  })
+  state.node.on('pair-accepted', info => emitSyncEvent('pair-accepted', { host: info && info.host, port: info && info.port }))
+  state.node.on('pair-rejected', info => emitSyncEvent('pair-rejected', { host: info && info.host, port: info && info.port, reason: info && info.reason }))
+  // Inbound pairing completed (manual code or confirmed): tell the renderer it succeeded.
+  state.node.on('paired-inbound', info => emitSyncEvent('pair-accepted', { deviceId: info && info.deviceId, host: info && info.host }))
   state.node.on('peer-unauthorized', info => log.warn('[LanSync] unauthorized peer rejected:', info && info.deviceId))
   // restore manually added peers (node peer table is memory-only; settings_rows is the authority)
   for (const mp of manualPeers()) {
@@ -427,6 +446,7 @@ async function stopSync () {
   const n = state.node
   state.node = null
   state.engine = null
+  state.pendingPair = null
   try { await n.stop() } catch (e) { log.warn('[LanSync] stop failed:', e.message) }
   log.info('[LanSync] node stopped')
 }
@@ -435,6 +455,20 @@ function notifyRenderers (reason) {
   try {
     const senders = state.getWindowSenders ? state.getWindowSenders() : []
     for (const s of senders) { try { if (s && !s.isDestroyed()) s.send('lan-sync-changed', { reason, at: Date.now() }) } catch { /* dying sender */ } }
+  } catch { /* renderer notification is best-effort */ }
+}
+
+/**
+ * Device Center event channel: ONE 'syncEvent' IPC event carrying a self-describing payload
+ * {type, at, ...}. Kept alongside the legacy 'lan-sync-changed' ping (existing consumers keep
+ * working). Types: peer-online, peer-offline, pair-request, pair-accepted, pair-rejected,
+ * round-done, round-error, pair-throttled.
+ */
+function emitSyncEvent (type, payload) {
+  try {
+    const senders = state.getWindowSenders ? state.getWindowSenders() : []
+    const msg = { type, at: Date.now(), ...(payload || {}) }
+    for (const s of senders) { try { if (s && !s.isDestroyed()) s.send('syncEvent', msg) } catch { /* dying sender */ } }
   } catch { /* renderer notification is best-effort */ }
 }
 
@@ -451,9 +485,20 @@ function getSettingsPayload () {
 
 function getStatusPayload () {
   const s = getSettingsPayload()
-  if (!state.node) return { ...s, listening: false, port: null, peers: [], lastRoundAt: null, lastError: null }
+  if (!state.node) {
+    return {
+      ...s, listening: false, port: null, peers: [], recent: [], security: [],
+      lastRoundAt: null, lastError: null,
+      self: { deviceId: s.deviceId, deviceName: s.deviceName, port: null },
+    }
+  }
   const st = state.node.getStatus()
-  return { ...s, listening: st.listening, port: st.port, peers: st.peers, lastRoundAt: st.lastRoundAt, lastError: st.lastError }
+  return {
+    ...s, listening: st.listening, port: st.port,
+    peers: st.peers, recent: st.recent, security: st.security,
+    lastRoundAt: st.lastRoundAt, lastError: st.lastError,
+    self: st.self || { deviceId: s.deviceId, deviceName: s.deviceName, port: st.port },
+  }
 }
 
 function registerOps () {
@@ -511,6 +556,33 @@ function registerOps () {
       // placeholder id until the first authenticated hello reveals the peer's real identity
       return state.node.addPeer({ deviceId: 'manual-' + host + ':' + port, host, port, name: (p && p.name) || undefined })
     },
+    // Two-way confirmed pairing: respond to the pending inbound pair-request (from syncEvent
+    // 'pair-request'). The transport's 60s timer already auto-rejects on silence.
+    syncPairRespond: p => {
+      const accept = !!(p && p.accept)
+      const info = state.pendingPair
+      state.pendingPair = null
+      if (!info || typeof info.respond !== 'function') return { ok: false, error: 'no pending pair request' }
+      try { info.respond(accept) } catch (e) { log.warn('[LanSync] pair respond failed:', e.message); return { ok: false, error: e.message } }
+      log.info('[LanSync] inbound pair request', accept ? 'accepted' : 'rejected', 'from', info.host)
+      return { ok: true, accept }
+    },
+    // Two-way confirmed pairing: dial the peer and ask. Resolves once the peer's human accepts
+    // (secret adopted like syncPairWithCode, node restarted, first round kicked off); rejects on
+    // pair-reject / timeout, with the syncEvent 'pair-rejected' already emitted by the node.
+    syncPairRequest: async p => {
+      const host = String((p && p.host) || '').trim()
+      const port = Number.isInteger(p && p.port) ? p.port : DEFAULT_PORT
+      if (!host || !/^[.:\w-]+$/.test(host)) throw new Error('syncPairRequest: host is required')
+      if (!state.node) throw new Error('syncPairRequest: sync is not enabled')
+      const r = await state.node.requestPair(host, port)
+      settingPut(K_PAIRING_SECRET, String(r.secret))
+      log.info('[LanSync] two-way pairing accepted by', host, '- shared secret adopted, restarting node')
+      await stopSync()
+      startSync()
+      runRound().then(persistPeerWatermarks)
+      return { ...getSettingsPayload(), host: r.host, port: r.port }
+    },
     syncGetPairingCode: () => {
       const secret = settingGet(K_PAIRING_SECRET)
       if (!secret) return { code: null, expiresAt: 0 }
@@ -535,7 +607,7 @@ function registerOps () {
 /** Called once from src/main/index.js after db init. Never auto-enables sync. */
 function initLanSync ({ db, getWindowSenders }) {
   const peerWatermarks = createTrackedWatermarks()
-  state = { db, getWindowSenders, node: null, engine: null, timers: [], pendingToSeq: 0, peerWatermarks, pendingWrites: { todos: [], settings: [], tomatoes: [] } }
+  state = { db, getWindowSenders, node: null, engine: null, timers: [], pendingToSeq: 0, peerWatermarks, pendingWrites: { todos: [], settings: [], tomatoes: [] }, pendingPair: null }
   registerOps()
   try {
     if (settingGet(K_ENABLED) === true) startSync()
