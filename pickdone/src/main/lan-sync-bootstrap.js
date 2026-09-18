@@ -199,7 +199,9 @@ function kickSyncRound (reason) {
 async function runRound () {
   if (!state || !state.node) return null
   try {
+    const t0 = Date.now()
     const r = await state.node.startSyncRound()
+    log.info('[LanSync] round done in ' + (Date.now() - t0) + 'ms, confirmed ' + (r && r.confirmed) + '/' + (r && r.peers))
     // Push progress is per-peer (the node records each peer's acked seq into state.peerWatermarks);
     // persist the map so watermarks survive restarts. There is no global cursor advance: a dead or
     // stale peer must never gate what a reachable peer receives, and each round only ships a
