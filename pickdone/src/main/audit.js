@@ -73,7 +73,8 @@ const ACTION_BY_OP = {
 }
 
 // Settings/habits mirror blobs (renderer persists the whole state, debounced, on every change) — pure noise.
-const MIRROR_KEY_SKIP = new Set(['db.settingsState', 'db.habitsState'])
+// 'habitsState' (bare): pre-rename installs persisted the habits blob under this key; both spellings are noise (2026-09-19)
+const MIRROR_KEY_SKIP = new Set(['db.settingsState', 'db.habitsState', 'habitsState'])
 
 /** Best-effort meta key extraction: the renderer passes [key, value], db.js also accepts bare key or {key} */
 function metaKeyOf (params) {

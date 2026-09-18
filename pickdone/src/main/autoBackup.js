@@ -14,7 +14,10 @@ function nameToTs (name) {
   const [, a, b] = RE_EVT.exec(name) ? [null, m[2], m[3]] : [null, m[1], m[2]]
   const s = a // YYYYMMDD
   const t = b // HHMMSS
-  return Date.UTC(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8), +t.slice(0, 2), +t.slice(2, 4), +t.slice(4, 6))
+  // Fix (2026-09-19): the filename stamps are written from LOCAL time (auto-YYYYMMDD-HHMMSS generated
+  // by new Date() local formatting) — parsing them as Date.UTC shifted every non-UTC backup's age by the
+  // UTC offset, skewing the daily/weekly GFS anchor selection. Parse as local time to match the writer.
+  return +new Date(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8), +t.slice(0, 2), +t.slice(2, 4), +t.slice(4, 6))
 }
 
 /**
@@ -78,4 +81,4 @@ function selectStaleTmp (entries, { now = Date.now(), maxAgeMs = 60 * 60 * 1000 
     .map(e => e.name)
 }
 
-module.exports = { selectPrunes, selectStaleTmp, RE_AUTO, RE_EVT }
+module.exports = { selectPrunes, selectStaleTmp, nameToTs, RE_AUTO, RE_EVT }
