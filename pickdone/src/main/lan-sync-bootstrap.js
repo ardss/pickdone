@@ -191,8 +191,29 @@ function applyRowSafe (incoming) {
   try { return applyRowInner(incoming) } catch (e) { log.warn('[LanSync] apply failed for', incoming && incoming.entity, incoming && incoming.id, e.message); return false }
 }
 
+/**
+ * LWW clock-skew clamp (single choke point for ALL inbound rows: increments and snapshot chunks
+ * both land here). A peer whose clock runs far ahead would otherwise stamp every future conflict
+ * in its favor forever. Clamp only the comparison keys (updatedAt/deletedAt) to `now` when they
+ * are more than SKEW_CLAMP into the future; the stored payload (`data`) is never touched.
+ */
+const SKEW_CLAMP_MS = 10 * 60 * 1000
+function clampSkew (row) {
+  if (!row || typeof row !== 'object') return row
+  const now = Date.now()
+  const limit = now + SKEW_CLAMP_MS
+  const future = (row.updatedAt > limit) || (row.deletedAt > limit)
+  if (!future) return row
+  return {
+    ...row,
+    updatedAt: row.updatedAt > limit ? now : row.updatedAt,
+    deletedAt: row.deletedAt > limit ? now : row.deletedAt,
+  }
+}
+
 function applyRowInner (incoming) {
   if (!incoming || !SYNCABLE_ENTITIES.has(incoming.entity)) return false
+  incoming = clampSkew(incoming)
   const entity = incoming.entity
   // Locate the local counterpart for LWW comparison (cached: one entity-list read per ingest pass)
   const cache = state.applyCache || createHydrationCache()

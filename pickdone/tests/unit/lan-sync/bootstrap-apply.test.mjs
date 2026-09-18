@@ -160,6 +160,36 @@ test('bootstrap apply: filter live-row edit is SKIPPED when local LWW age is unk
   assert.equal(m.calls.find(c => c.op === 'filterUpsert'), undefined)
 })
 
+test('bootstrap apply: inbound ts >10min in the future is clamped to now and loses to a current local row (clock-skew clamp)', () => {
+  // Regression: a skewed peer clock (ts = now + 1h) permanently won every future LWW conflict.
+  // The clamp pulls the comparison key back to `now`, so a local row written at now wins.
+  const now = Date.now()
+  // Local row written 2s AHEAD of the captured `now` (well inside any sane clock) so it reliably
+  // beats the clamped inbound row (which lands at apply-time `now`).
+  const m = fresh({
+    ...EMPTY_TABLES,
+    getAll: () => [{ taskId: 't1', updateTime: now + 2000, delete: false, deletedAt: 0 }],
+  })
+  const ok = __test.applyRow({
+    entity: 'todo', id: 't1', seq: 11, ts: now + 3600 * 1000,
+    updatedAt: now + 3600 * 1000, deleted: false, deletedAt: 0,
+    data: { taskId: 't1', taskContent: 'from the future', updateTime: now + 3600 * 1000 },
+  })
+  assert.equal(ok, false, 'clamped inbound row (now) loses to local row (now, equal ts + seq tiebreak... local wins as incumbent)')
+  assert.equal(m.pendingWrites.todos.length, 0, 'no future-stamped write may land')
+  // And the payload of a WINNING clamped row is untouched: on a fresh local table the clamped
+  // row still lands, with the ORIGINAL payload data (only the comparison key changed).
+  const m2 = fresh({ ...EMPTY_TABLES })
+  const ok2 = __test.applyRow({
+    entity: 'todo', id: 't2', seq: 12, ts: now + 3600 * 1000,
+    updatedAt: now + 3600 * 1000, deleted: false, deletedAt: 0,
+    data: { taskId: 't2', taskContent: 'future content', updateTime: now + 3600 * 1000 },
+  })
+  assert.equal(ok2, true, 'clamped row still applies when there is no local counterpart')
+  const landed = m2.pendingWrites.todos[0]
+  assert.equal(landed.taskContent, 'future content', 'payload semantics are never mutated by the clamp')
+})
+
 test('bootstrap flush: a fully committed buffer is cleared', () => {
   const m = fresh({ ...EMPTY_TABLES })
   m.pendingWrites.todos.push({ taskId: 't1', taskContent: 'hello' })
