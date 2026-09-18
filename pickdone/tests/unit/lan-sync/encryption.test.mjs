@@ -11,10 +11,14 @@
  *   4. session key derived from a wrong secret cannot decrypt -> severed
  *   5. line caps still enforced on the encrypted framing (oversize encrypted line severed)
  *   6. the pair-accept `secret` is never plaintext on the wire (raw bytes sniffed)
+ *   7. pair-accept handshake key v2 (ephemeral ECDH): the transcript's PUBLIC material
+ *      (code, both ephemeral pubs, nonce, challenge — everything a passive sniffer sees)
+ *      does NOT derive the accept key; the legacy v1 derivation no longer decrypts either
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import net from 'node:net'
+import crypto from 'node:crypto'
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
@@ -428,5 +432,70 @@ test('encryption: a peer whose hello-ack lacks enc:1 is refused client-side with
     await client.close()
   } finally {
     await new Promise((resolve) => fakeOldPeer.close(resolve))
+  }
+})
+
+test('encryption: pair-accept handshake key v2 — passive-sniffer transcript cannot derive the accept key', async () => {
+  // Regression (2026-09-18, P1): the v1 key was HKDF(code|nonce|challenge) — ALL of it public
+  // on the wire, so a passive sniffer could decrypt the pair-accept (two-way mode) or brute
+  // force the 10^6 code space offline (manual mode). v2 mixes in ephemeral ECDH: the sniffer
+  // sees both PUBLIC keys but neither private half.
+  const CODE = '246810'
+  const server = createLanServer({
+    port: 0, host: '127.0.0.1', deviceId: SERVER_DEVICE, pairingSecret: SECRET,
+    verifyPairingCode: (c) => c === CODE,
+  })
+  const proxy = sniffProxy(await listen(server))
+  const sniffPort = await proxy.listen()
+  try {
+    // Raw manual-mode client through the proxy: pair-request {nonce, pub} -> pair-challenge
+    // {challenge, pub} -> encrypted pair-accept.
+    const sock = net.createConnection({ host: '127.0.0.1', port: sniffPort })
+    await new Promise((resolve, reject) => { sock.once('connect', resolve); sock.once('error', reject) })
+    const lines = []
+    let buf = ''
+    sock.setEncoding('utf8')
+    sock.on('data', (d) => {
+      buf += d
+      let i
+      while ((i = buf.indexOf('\n')) !== -1) { lines.push(buf.slice(0, i)); buf = buf.slice(i + 1) }
+    })
+    const nextLine = (ms = 4000) => new Promise((resolve) => {
+      const tick = () => resolve(lines.length ? lines.shift() : null)
+      if (lines.length) return tick()
+      setTimeout(tick, ms).unref?.()
+    })
+    const clientEph = cipher.createPairEphemeral()
+    const nonce = cipher.randomToken()
+    sock.write(JSON.stringify({ type: 'pair-request', deviceId: CLIENT_DEVICE, code: CODE, nonce, pub: clientEph.pub }) + '\n')
+    const challengeLine = JSON.parse(await nextLine())
+    assert.equal(challengeLine.type, 'pair-challenge', 'server sent its challenge')
+    const acceptLine = await nextLine()
+    assert.ok(cipher.isEncFrame(JSON.parse(acceptLine)), 'the pair-accept rode an encrypted frame')
+
+    // (a) The legacy v1 derivation — everything from the public transcript — must NOT decrypt
+    // the accept frame (old captured transcripts are dead).
+    const v1Ikm = Buffer.from(`${CODE}|${nonce}|${challengeLine.challenge}`, 'utf8')
+    const v1Key = Buffer.from(crypto.hkdfSync('sha256', v1Ikm, Buffer.from('pickdone-pair-hs-salt-v1', 'utf8'), Buffer.from('pickdone-lan-sync-pair-v1', 'utf8'), 32))
+    assert.throws(() => cipher.decryptFrame(v1Key, JSON.parse(acceptLine)), 'v1 transcript-derived key must fail')
+
+    // (b) Even mixing ALL public v2 transcript material (both ephemeral PUBLIC keys included)
+    // must not produce the accept key — a passive sniffer has exactly this and nothing more.
+    const pubIkm = Buffer.from(`${CODE}|${clientEph.pub}|${challengeLine.pub}|${nonce}|${challengeLine.challenge}`, 'utf8')
+    const pubKey = Buffer.from(crypto.hkdfSync('sha256', pubIkm, Buffer.from('pickdone-pair-hs-salt-v2', 'utf8'), Buffer.from('pickdone-lan-sync-pair-v2', 'utf8'), 32))
+    assert.throws(() => cipher.decryptFrame(pubKey, JSON.parse(acceptLine)), 'all-public-material key must fail')
+
+    // (c) The legitimate client — holding its ephemeral PRIVATE key — decrypts the secret.
+    const goodKey = cipher.deriveHandshakeKey({
+      code: CODE, ecdh: clientEph.ecdh, peerPub: challengeLine.pub, nonce, challenge: challengeLine.challenge,
+    })
+    const accept = cipher.decryptFrame(goodKey, JSON.parse(acceptLine))
+    assert.equal(accept.secret, SECRET, 'the ECDH handshake key opens the accept')
+
+    assert.ok(!proxy.text().includes(SECRET), 'secret never plaintext on the wire')
+    sock.destroy()
+  } finally {
+    await proxy.close()
+    await server.close()
   }
 })
