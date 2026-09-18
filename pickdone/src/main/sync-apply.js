@@ -105,9 +105,12 @@ function rowContentDiffers (a, b) {
     if (va === vb) continue
     // Payload objects (row.data) must be compared by CONTENT, not reference — otherwise the
     // "identical content: no-op" merge rule never fires and every round churns (round-3 fix).
+    // contentFingerprint additionally omits userId at every depth: each device re-stamps its
+    // own account id on write, so a data.userId-only difference is not content (loop fix
+    // 2026-09-18 — this compare used to keep the perpetual per-round conflict loop alive).
     if (va && vb && typeof va === 'object' && typeof vb === 'object') {
       // Key-order-insensitive canonical compare (peers build payloads with different key order)
-      if (mergeCore.stableStringify(va) !== mergeCore.stableStringify(vb)) return true
+      if (mergeCore.contentFingerprint(va) !== mergeCore.contentFingerprint(vb)) return true
       continue
     }
     return true
@@ -164,6 +167,34 @@ function clampSkew (row) {
   return out
 }
 
+/** Content key for conflict-copy dedup: the losing payload modulo bookkeeping (taskId/
+ *  updateTime/tombstone markers) and the per-device userId stamp. Two copies of the same
+ *  base row with equal keys carry the same user-visible lost content. */
+function conflictCopyContentKey (data) {
+  const rest = { ...data }
+  delete rest.taskId
+  delete rest.userId
+  delete rest.updateTime
+  delete rest.deletedAt
+  delete rest.delete
+  return mergeCore.contentFingerprint(rest)
+}
+
+/** Idempotent copy materialization (loop fix 2026-09-18): true when the recycle bin already
+ *  holds a `-conflict-` copy of `baseId` with the same content key — minting another would
+ *  grow the bin by one copy per round for as long as the (now normalized) row keeps bouncing. */
+function hasEquivalentConflictCopy (state, baseId, loserData) {
+  try {
+    const prefix = `${baseId}-conflict-`
+    const key = conflictCopyContentKey(loserData)
+    for (const t of state.db.call('getAll', { deleted: null }) || []) {
+      const id = String(t.taskId || '')
+      if (id.startsWith(prefix) && conflictCopyContentKey(t) === key) return true
+    }
+  } catch (e) { log.warn('[LanSync] conflict-copy dedup scan failed:', e.message) }
+  return false
+}
+
 function applyRowInner (state, incoming) {
   if (!incoming || !SYNCABLE_ENTITIES.has(incoming.entity)) return false
   // Defensive: a '*gc*' oplog marker must never surface as an appliable row id (see hydrateRow).
@@ -206,6 +237,11 @@ function applyRowInner (state, incoming) {
     const f = cache.filter(incoming.id)
     if (f) localRow = { updatedAt: 0, deleted: false, deletedAt: 0, ageUnknown: true, data: f }
   }
+  // Symmetric tie-breaks (merge.mjs compareRecency): the local side must carry THIS device's
+  // id so a full LWW tie resolves to the same winner on both peers instead of flip-flopping
+  // on insertion order (loop fix 2026-09-18; inbound rows are stamped with the sender's id
+  // at the transport boundary in lan-sync-bootstrap).
+  if (localRow && localRow.deviceId == null && state.deviceId) localRow.deviceId = state.deviceId
   if (!incoming.deleted && !incoming.data) return false // payload-less pointer, nothing to merge
   // Merge rules come from sync-core only (adapter boundary). Todos/chips/ledger have dedicated
   // rules; the remaining entities use the generic LWW shape.
@@ -227,11 +263,26 @@ function applyRowInner (state, incoming) {
     // the user's losing content. Skips are built into merge.mjs: no copy when content is
     // identical or when the loser is already a pure tombstone. The copy gets a suffixed id so
     // it cannot clobber the winning row; delete-wins keeps it out of the live list.
-    const loserData = conflictCopy.data
-    if (entity === 'todo' && loserData) {
-      const copyId = `${incoming.id}-conflict-${Date.now().toString(36)}`
-      state.pendingWrites.todos.push({ ...loserData, taskId: copyId, delete: 1, deletedAt: Date.now() })
-      log.warn('[LanSync] conflict on', entity, incoming.id, '— loser materialized to recycle bin as', copyId)
+    //
+    // Loop-fix guards (2026-09-18 live incident — recycle bins ballooned one copy per row per
+    // round per machine):
+    //   1. Copies are TERMINAL: a row whose id already carries the `-conflict-` marker never
+    //      spawns another copy — a copy that loses LWW here is simply dropped. Otherwise the
+    //      peer's copy-of-the-copy arrives as an independent row and re-participates forever.
+    //   2. Materialization is IDEMPOTENT: if an equivalent copy of the same base row already
+    //      sits in the recycle bin (same `-conflict-` prefix, same content fingerprint), do
+    //      not mint a second one.
+    const baseId = String(incoming.id)
+    if (baseId.includes('-conflict-')) {
+      log.warn('[LanSync] conflict on copy row', baseId, '— dropped (copies are terminal)')
+    } else if (entity === 'todo' && conflictCopy.data) {
+      if (hasEquivalentConflictCopy(state, baseId, conflictCopy.data)) {
+        log.warn('[LanSync] conflict on', entity, baseId, '— equivalent copy already in recycle bin, not duplicating')
+      } else {
+        const copyId = `${baseId}-conflict-${Date.now().toString(36)}`
+        state.pendingWrites.todos.push({ ...conflictCopy.data, taskId: copyId, delete: 1, deletedAt: Date.now() })
+        log.warn('[LanSync] conflict on', entity, baseId, '— loser materialized to recycle bin as', copyId)
+      }
     } else {
       log.warn('[LanSync] conflict on', entity, incoming.id, '— local copy superseded (conflict-copy UI deferred)')
     }
