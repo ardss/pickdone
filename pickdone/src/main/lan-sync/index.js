@@ -202,6 +202,9 @@ function createLanSyncNode(opts) {
       const client = connect(peer.host, peer.port, {
         deviceId,
         authCode,
+        // Session key material: the round transport is AES-256-GCM encrypted, key derived
+        // from the pairing secret + per-connection salt (transport.js/cipher.js).
+        pairingSecret,
         protoVer: PROTO_VER,
         // socket inactivity timeout: a peer answering a fresh-cursor round must build and stream a
         // full-oplog segment batch, which takes far longer than a heartbeat-sized exchange
@@ -421,6 +424,9 @@ function createLanSyncNode(opts) {
   }
 
   function sendVia(socket, msg) {
+    // transport.js attaches _lanSend (AES-256-GCM framed when the session key is up);
+    // the raw-write fallback keeps non-transport sockets (tests) working.
+    if (typeof (socket && socket._lanSend) === 'function') { socket._lanSend(msg); return }
     if (socket && socket.writable) socket.write(JSON.stringify(msg) + '\n')
   }
 

@@ -17,7 +17,9 @@ const { EventEmitter } = require('node:events')
 const dgram = require('node:dgram')
 
 const SERVICE_TYPE = 'pickdone-sync'
-const PROTO_VER = 1
+// Bumped 1 -> 2 with the encrypted transport (cipher.js): protoVer is advertised, not
+// enforced, but stays consistent with transport.js PROTO_VER semantics.
+const PROTO_VER = 2
 const FALLBACK_PORT = 58471
 const FALLBACK_INTERVAL_MS = 2000
 
