@@ -448,7 +448,7 @@ function assertHasTaskId (t) {
   }
 }
 
-const makeBulkOps = require('./db-bulk-ops')(db, () => OPS)
+const makeBulkOps = require('./db-bulk-ops')(() => db, () => OPS)
 const OPS = {
   upsert: t => { assertHasTaskId(t); stmts.upsert.run(todoToRow(t)); return true },
   upsertMany: list => { if (!Array.isArray(list)) throw new Error('[TodoDB] upsertMany: list must be an array, got ' + typeof list); list.forEach(assertHasTaskId); stmts.upsertMany(list.map(todoToRow)); return true },

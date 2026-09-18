@@ -5,17 +5,17 @@
  * the oplog's row-granular deltas). NOT renderer-callable (not in ALLOWED_RENDERER_OPS) —
  * reachable only via main-internal db.call. getOps is lazy because OPS references this module's
  * entries before the literal finishes evaluating. */
-module.exports = (db, getOps) => ({
+module.exports = (getDb, getOps) => ({
   upsertCategoryMany: list => {
     if (!Array.isArray(list)) throw new Error('[TodoDB] upsertCategoryMany: list must be an array, got ' + typeof list)
     const changed = []
-    const tr = db.transaction(() => { for (const c of list) if (getOps().upsertCategory(c) !== false) changed.push(c && c.id) })
+    const tr = getDb().transaction(() => { for (const c of list) if (getOps().upsertCategory(c) !== false) changed.push(c && c.id) })
     tr(); return changed
   },
   filterUpsertMany: list => {
     if (!Array.isArray(list)) throw new Error('[TodoDB] filterUpsertMany: list must be an array, got ' + typeof list)
     const changed = []
-    const tr = db.transaction(() => { for (const f of list) { const r = getOps().filterUpsert(f); if (r !== false) changed.push(r) } })
+    const tr = getDb().transaction(() => { for (const f of list) { const r = getOps().filterUpsert(f); if (r !== false) changed.push(r) } })
     tr(); return changed
   },
 })
