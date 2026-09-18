@@ -117,8 +117,18 @@ function send(socket, msg) {
   if (!socket.destroyed && socket.writable) {
     // Post-auth (and post-pair-challenge where applicable) traffic is encrypted under the
     // connection's key; socket._lanKey is null until a session/handshake key is established.
+    // Each encrypted frame carries a per-DIRECTION sequence number (starts at 0 on every
+    // connection; the peer enforces strictly-increasing — see unwrapInbound) so a captured
+    // frame cannot be replayed into the same connection.
     const key = socket._lanKey
-    const line = key ? cipher.encryptFrame(key, msg) : JSON.stringify(msg)
+    let line
+    if (key) {
+      const seq = socket._lanSendSeq || 0
+      socket._lanSendSeq = seq + 1
+      line = cipher.encryptFrame(key, msg, seq)
+    } else {
+      line = JSON.stringify(msg)
+    }
     socket.write(line + '\n')
   }
 }
@@ -130,16 +140,27 @@ function sendEnc(socket, key, msg) {
 
 /** Decrypt an inbound encrypted frame under the connection's key (session key when
  *  established, else the pair handshake key), enforcing: encrypted frames require an
- *  established key (else sever) and post-auth plaintext data messages are refused
- *  (else sever). ping/pong stays plaintext in both phases. Returns the decrypted
- *  message, or null when the connection was/should be severed. */
+ *  established key (else sever), post-auth plaintext data messages are refused (else
+ *  sever), and session frames carry a STRICTLY-INCREASING per-direction seq (replay or
+ *  seq regression severs — conn.recvSeq starts at -1 per connection). ping/pong stays
+ *  plaintext in both phases. Returns the decrypted message, or null when the connection
+ *  was/should be severed. */
 function unwrapInbound(socket, conn, raw) {
   if (!raw || typeof raw !== 'object') return raw
   if (cipher.isEncFrame(raw)) {
     const key = conn.sessionKey || conn.hsKey || null
     if (!key) { socket.destroy(); return null } // encrypted before any key was established
     try {
-      return cipher.decryptFrame(key, raw)
+      const msg = cipher.decryptFrame(key, raw)
+      if (conn.sessionKey) {
+        // Replay protection: session frames must be strictly increasing per direction. A
+        // replayed captured frame (or one with a regressed/missing seq) is rejected by the
+        // GCM-bound seq field — an attacker cannot re-stamp a frame without breaking the tag.
+        const seq = Number(raw.seq)
+        if (!Number.isInteger(seq) || seq <= conn.recvSeq) { socket.destroy(); return null }
+        conn.recvSeq = seq
+      }
+      return msg
     } catch {
       socket.destroy() // GCM tag failure = tampering or key mismatch
       return null
@@ -153,10 +174,13 @@ function unwrapInbound(socket, conn, raw) {
 }
 
 /** Shared server-side connection state machine (auth gate + dispatch).
- *  pairGate(remoteAddress) -> boolean: server-level sliding-window rate limiter for pair-request
- *  attempts (see createLanServer); when absent, no IP-level limiting is applied. */
-function wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, onUnauthorized, verifyPairingCode, onPaired, pairGate, onPairRequest, onPairThrottled, pairConfirmTimeoutMs }) {
-  const state = { peer: null, authorized: false, sessionKey: null, pairHs: null }
+ *  pairGate(remoteAddress) -> boolean: server-level sliding-window rate limiter, applied to
+ *  BOTH pair-request attempts and FAILED hello auth attempts (see createLanServer); when
+ *  absent, no IP-level limiting is applied.
+ *  seenPairNonces: server-level Set of client pair-request nonces — a nonce is single-use
+ *  per server, so a captured pair-request cannot be replayed into a fresh accept. */
+function wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, onUnauthorized, verifyPairingCode, onPaired, pairGate, onPairRequest, onPairThrottled, pairConfirmTimeoutMs, seenPairNonces }) {
+  const state = { peer: null, authorized: false, sessionKey: null, pairHs: null, recvSeq: -1 }
   socket._lanSend = (msg) => send(socket, msg) // encrypted send for server-side handlers (index.js sendVia)
   const finish = () => {
     // Best-effort zeroization of the derived session key on socket close (GC copies inside
@@ -188,6 +212,19 @@ function wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, o
           // Client half of the pair handshake key material (cipher.js): random 16B from the
           // requester. Empty string when absent (legacy shape) — the challenge still applies.
           const pairNonce = cipher.isValidToken(msg.nonce, cipher.SALT_BYTES) ? msg.nonce : ''
+          // Single-use nonce: a captured pair-request transcript must not be replayable into a
+          // fresh pair-accept on a later connection (server-level, survives reconnects).
+          if (pairNonce && seenPairNonces) {
+            if (seenPairNonces.has(pairNonce)) {
+              if (code !== null) send(socket, { type: 'pair-ack', ok: false })
+              else send(socket, { type: 'pair-reject', error: 'nonce reuse' })
+              socket.destroy()
+              return
+            }
+            // Bounded memory: a flood of pair-requests cannot grow the set without limit.
+            if (seenPairNonces.size >= 4096) seenPairNonces.clear()
+            seenPairNonces.add(pairNonce)
+          }
           if (pairGate && !pairGate(socket.remoteAddress)) {
             if (onPairThrottled) onPairThrottled({ ip: socket.remoteAddress, reason: 'pair-throttled' })
             if (code !== null) send(socket, { type: 'pair-ack', ok: false })
@@ -269,6 +306,16 @@ function wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, o
         const claimed = typeof msg.deviceId === 'string' ? msg.deviceId : ''
         if (claimed === deviceId || !verifyAuthCode(pairingSecret, claimed, msg.authCode)) {
           if (onUnauthorized) onUnauthorized({ deviceId: claimed, host: socket.remoteAddress })
+          // Online-guessing throttle: FAILED hello attempts feed the same server-level
+          // per-IP sliding window as pair-requests (count only failures — a successful auth
+          // never touches the counter, matching the pairGate "count every allowed attempt"
+          // semantics from the failure side). 5 failures per IP per 10 minutes, then refuse.
+          if (pairGate && !pairGate(socket.remoteAddress)) {
+            if (onPairThrottled) onPairThrottled({ ip: socket.remoteAddress, reason: 'auth-throttled' })
+            send(socket, { type: 'hello-ack', ok: false, protoVer: PROTO_VER, error: 'auth throttled' })
+            socket.destroy()
+            return
+          }
           send(socket, { type: 'hello-ack', ok: false, protoVer: PROTO_VER, error: 'auth failed' })
           socket.destroy()
           return
@@ -313,6 +360,9 @@ function createLanServer(opts) {
   // Lives at server scope so reconnecting cannot reset the counter (the old per-connection
   // counter made online code guessing free: one attempt per TCP connect).
   const pairAttemptsByIp = new Map()
+  // Server-level set of client pair-request nonces (single-use per server): a captured
+  // pair-request replayed on a fresh connection cannot mint a fresh pair-accept.
+  const seenPairNonces = new Set()
   const PAIR_WINDOW_MS = 10 * 60 * 1000
   const PAIR_MAX_ATTEMPTS = 5
   const pairGate = (ip) => {
@@ -331,7 +381,7 @@ function createLanServer(opts) {
   const server = net.createServer((socket) => {
     sockets.add(socket)
     socket.on('close', () => sockets.delete(socket))
-    wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, onUnauthorized, verifyPairingCode, onPaired, pairGate, onPairRequest, onPairThrottled, pairConfirmTimeoutMs })
+    wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, onUnauthorized, verifyPairingCode, onPaired, pairGate, onPairRequest, onPairThrottled, pairConfirmTimeoutMs, seenPairNonces })
   })
   server.on('error', (err) => {
     // Fixed port taken (second instance on the same machine, or a stale process): degrade to an
@@ -381,9 +431,10 @@ function connect(host, port, opts) {
   const timeoutMs = opts.timeoutMs || 5000
   const em = new EventEmitter()
   em.ready = false
-  // Connection crypto state: session key (post-auth, HKDF over pairingSecret + our salt) and
-  // the ephemeral pair handshake key (pre-pairing pair-accept decryption only).
-  const conn = { sessionKey: null, hsKey: null, authorized: false }
+  // Connection crypto state: session key (post-auth, HKDF over pairingSecret + our salt), the
+  // ephemeral pair handshake key (pre-pairing pair-accept decryption only), and the per-direction
+  // replay-protection receive counter (strictly-increasing seq; -1 = nothing received yet).
+  const conn = { sessionKey: null, hsKey: null, authorized: false, recvSeq: -1 }
   const salt = cipher.randomToken() // client-chosen per-connection session-key salt (in hello)
   const pairNonce = cipher.randomToken() // client half of the pair-accept handshake key
 

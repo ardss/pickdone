@@ -32,6 +32,12 @@ async function listen(server) {
   return server.port
 }
 
+/** Deterministic quiesce (NO fixed sleeps): the server destroys its socket in the same data
+ *  callback that decides handler-vs-destroy, so once the peer observed the close, the server
+ *  side has already made (and executed) that decision. Two setImmediate drains let the
+ *  cross-socket events settle before asserting absence. */
+const settle = () => new Promise((r) => setImmediate(() => setImmediate(r)))
+
 /** Byte-sniffing TCP proxy: forwards 127.0.0.1:port -> 127.0.0.1:targetPort and records
  *  EVERY raw byte in both directions (for plaintext-on-the-wire assertions). */
 function sniffProxy(targetPort) {
@@ -164,13 +170,13 @@ test('encryption: tampered GCM tag severs the connection and the message is neve
     const raw = await openRaw(port, deriveAuthCode(SECRET, CLIENT_DEVICE))
     assert.equal(raw.ack && raw.ack.ok, true, 'handshake ok')
     const key = cipher.deriveSessionKey(SECRET, raw.salt)
-    const frame = JSON.parse(cipher.encryptFrame(key, { type: 'segments', segments: [{ evil: true }] }))
+    const frame = JSON.parse(cipher.encryptFrame(key, { type: 'segments', segments: [{ evil: true }] }, 0))
     // Flip one character of the auth tag: GCM verification must fail server-side.
     const flipped = frame.tag[0] === 'A' ? 'B' : 'A'
     frame.tag = flipped + frame.tag.slice(1)
     raw.write(JSON.stringify(frame) + '\n')
     await raw.closed // connection dropped
-    await new Promise((r) => setTimeout(r, 50))
+    await settle()
     assert.equal(handled.length, 0, 'tampered frame never reaches the handler')
   } finally {
     await server.close()
@@ -190,7 +196,7 @@ test('encryption: plaintext data message where encryption is expected closes the
     assert.equal(raw.ack && raw.ack.ok, true)
     raw.write(JSON.stringify({ type: 'segments', segments: [{ plaintext: true }] }) + '\n')
     await raw.closed
-    await new Promise((r) => setTimeout(r, 50))
+    await settle()
     assert.equal(handled.length, 0, 'plaintext post-auth message refused')
   } finally {
     await server.close()
@@ -214,7 +220,7 @@ test('encryption: plaintext data message where encryption is expected closes the
     client.on('message', (m) => msgs.push(m))
     client.send({ type: 'segments', segments: [{ fromSeq: 1, toSeq: 1, deviceId: CLIENT_DEVICE, rows: [] }] })
     await new Promise((resolve) => client.on('close', resolve))
-    await new Promise((r) => setTimeout(r, 50))
+    await settle()
     assert.equal(msgs.length, 0, 'plaintext server reply is not parsed as a message')
     await client.close()
   } finally {
@@ -236,9 +242,9 @@ test('encryption: session key derived from a wrong secret cannot decrypt — con
     const raw = await openRaw(port, deriveAuthCode(SECRET, CLIENT_DEVICE))
     assert.equal(raw.ack && raw.ack.ok, true)
     const wrongKey = cipher.deriveSessionKey('a-totally-different-secret', raw.salt)
-    raw.write(cipher.encryptFrame(wrongKey, { type: 'segments', segments: [{ x: 1 }] }) + '\n')
+    raw.write(cipher.encryptFrame(wrongKey, { type: 'segments', segments: [{ x: 1 }] }, 0) + '\n')
     await raw.closed
-    await new Promise((r) => setTimeout(r, 50))
+    await settle()
     assert.equal(handled.length, 0, 'wrong-key frame never reaches the handler')
   } finally {
     await server.close()
@@ -260,11 +266,11 @@ test('encryption: line caps still enforced on the encrypted framing (oversize en
     const key = cipher.deriveSessionKey(SECRET, raw.salt)
     // Legitimately encrypted frame (right key, intact tag) but the resulting WIRE line
     // exceeds MAX_LINE_BYTES: the cap must sever the connection regardless of validity.
-    const frame = cipher.encryptFrame(key, { type: 'segments', pad: 'x'.repeat(25 * 1024 * 1024) })
+    const frame = cipher.encryptFrame(key, { type: 'segments', pad: 'x'.repeat(25 * 1024 * 1024) }, 0)
     assert.ok(Buffer.byteLength(frame, 'utf8') > MAX_LINE_BYTES)
     raw.write(frame + '\n')
     await raw.closed
-    await new Promise((r) => setTimeout(r, 50))
+    await settle()
     assert.equal(handled.length, 0, 'oversize encrypted line never reaches the handler')
     assert.equal(serverSawError, null, 'cap kill is not a server crash')
   } finally {
@@ -329,5 +335,98 @@ test('encryption: pre-auth encrypted frames (no session key) and plaintext peers
     await raw.closed
   } finally {
     await server2.close()
+  }
+})
+
+test('encryption: replaying a captured frame or regressing the per-direction seq destroys the connection', async () => {
+  const handled = []
+  const server = createLanServer({
+    port: 0, host: '127.0.0.1', deviceId: SERVER_DEVICE, pairingSecret: SECRET,
+    getHandler: () => (msg) => { if (msg.type === 'segments') handled.push(msg) },
+  })
+  const port = await listen(server)
+  try {
+    // (a) exact replay: the SAME wire line delivered twice — the second copy severs.
+    const raw = await openRaw(port, deriveAuthCode(SECRET, CLIENT_DEVICE))
+    assert.equal(raw.ack && raw.ack.ok, true)
+    const key = cipher.deriveSessionKey(SECRET, raw.salt)
+    const line = cipher.encryptFrame(key, { type: 'segments', segments: [{ replay: 1 }] }, 0) + '\n'
+    raw.write(line)
+    await settle()
+    assert.equal(handled.length, 1, 'the first (valid) delivery is handled')
+    raw.write(line) // captured-frame replay
+    await raw.closed
+    await settle()
+    assert.equal(handled.length, 1, 'replayed frame never reaches the handler; connection destroyed')
+
+    // (b) seq regression: both frames are validly encrypted, but 7 then 3 is not
+    // strictly increasing — the second frame severs before the handler runs.
+    const raw2 = await openRaw(port, deriveAuthCode(SECRET, CLIENT_DEVICE))
+    const key2 = cipher.deriveSessionKey(SECRET, raw2.salt)
+    raw2.write(cipher.encryptFrame(key2, { type: 'segments', segments: [{ n: 1 }] }, 7) + '\n')
+    await settle()
+    assert.equal(handled.length, 2)
+    raw2.write(cipher.encryptFrame(key2, { type: 'segments', segments: [{ n: 2 }] }, 3) + '\n')
+    await raw2.closed
+    await settle()
+    assert.equal(handled.length, 2, 'a seq regression severs the connection')
+
+    // (c) a session frame WITHOUT a seq is refused outright.
+    const raw3 = await openRaw(port, deriveAuthCode(SECRET, CLIENT_DEVICE))
+    const key3 = cipher.deriveSessionKey(SECRET, raw3.salt)
+    raw3.write(cipher.encryptFrame(key3, { type: 'segments', segments: [{ n: 3 }] }) + '\n')
+    await raw3.closed
+    await settle()
+    assert.equal(handled.length, 2, 'seq-less session frame refused')
+  } finally {
+    await server.close()
+  }
+})
+
+test('encryption: failed hello authCode attempts are per-IP throttled like pair-requests', async () => {
+  // Regression: the pairGate sliding window covered pair-request brute force only; online
+  // guessing of the authCode via `hello` was unlimited (one guess per TCP connect, forever).
+  const server = createLanServer({
+    port: 0, host: '127.0.0.1', deviceId: SERVER_DEVICE, pairingSecret: SECRET,
+    getHandler: () => { throw new Error('handler must never run') },
+  })
+  const port = await listen(server)
+  try {
+    const wrongCode = deriveAuthCode('a-different-secret', CLIENT_DEVICE) // right shape, wrong secret
+    const acks = []
+    for (let i = 0; i < 6; i++) {
+      const raw = await openRaw(port, wrongCode)
+      acks.push(raw.ack)
+      await raw.closed
+    }
+    assert.deepEqual(acks.slice(0, 5).map((a) => a && a.error), Array(5).fill('auth failed'), 'first 5 failures answered normally')
+    assert.equal(acks[5] && acks[5].ok, false)
+    assert.equal(acks[5] && acks[5].error, 'auth throttled', '6th consecutive failed hello from one IP is throttled')
+  } finally {
+    await server.close()
+  }
+})
+
+test('encryption: a peer whose hello-ack lacks enc:1 is refused client-side with a clear error (old-peer gate)', async () => {
+  // Raw stand-in for an OLD peer: completes the handshake but never echoes enc support.
+  const fakeOldPeer = net.createServer((s) => {
+    s.setEncoding('utf8')
+    s.on('data', () => { s.write(JSON.stringify({ type: 'hello-ack', ok: true, protoVer: 2 }) + '\n') })
+  })
+  await new Promise((resolve) => fakeOldPeer.listen(0, '127.0.0.1', resolve))
+  try {
+    const client = connect('127.0.0.1', fakeOldPeer.address().port, {
+      deviceId: CLIENT_DEVICE, authCode: deriveAuthCode(SECRET, CLIENT_DEVICE), pairingSecret: SECRET,
+    })
+    const result = await new Promise((resolve) => {
+      client.on('rejected', resolve)
+      client.on('ready', () => resolve({ ok: true }))
+      client.on('error', () => { /* destroy-after-reject noise is fine */ })
+    })
+    assert.equal(result.ok, false, 'client refuses the plaintext-capable round')
+    assert.equal(result.error, 'peer does not support encryption', 'the refusal carries a clear reason')
+    await client.close()
+  } finally {
+    await new Promise((resolve) => fakeOldPeer.close(resolve))
   }
 })

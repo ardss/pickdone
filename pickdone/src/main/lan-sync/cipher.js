@@ -9,21 +9,33 @@
  *     The CLIENT generates the salt and sends it in the plaintext `hello` message
  *     (`salt`, b64); the server derives the same key after verifying the authCode.
  *     Info string: 'pickdone-lan-sync-v1'.
- *   - Frame: one JSON LINE `{"enc":1,"iv":"<b64 12B>","tag":"<b64 16B>","data":"<b64>"}`.
+ *   - Frame: one JSON LINE `{"enc":1,"seq":N,"iv":"<b64 12B>","tag":"<b64 16B>","data":"<b64>"}`.
  *     `data` is the AES-256-GCM ciphertext of the UTF-8 JSON payload. Random 12-byte IV
  *     per message; GCM auth tag verified on decrypt — any tampering throws and the
- *     caller severs the connection. Line-based framing and the dynamic line caps in
+ *     caller severs the connection. `seq` is a per-DIRECTION monotonically increasing
+ *     counter starting at 0 on every connection (transport.js owns the counters and the
+ *     strictly-increasing enforcement; this module only carries the field) — it blocks
+ *     replaying a captured frame back into the same connection. Handshake/pair frames
+ *     (pair-accept) omit `seq`: they are single-message handshakes on a connection that
+ *     closes immediately after. Line-based framing and the dynamic line caps in
  *     transport.js are untouched (caps apply to the whole wire line, encrypted or not).
  *   - Pair-accept handshake key: pre-pairing there is no shared high-entropy material, so
  *     the `pair-accept {secret}` reply is encrypted under HKDF-SHA256 over
  *     `<code>|<clientNonce>|<serverChallenge>` (info 'pickdone-lan-sync-pair-v1', fixed
  *     salt). The client nonce rides the pair-request; the server sends a random 16B
- *     `pair-challenge` before accepting. HONEST LIMITATION: nonce + challenge (and, in
- *     manual mode, the 6-digit code itself) transit in plaintext, so a full passive
- *     sniffer can derive this key too — this is confidentiality-against-casual-scraping,
- *     NOT protection against a determined sniffer (no pre-shared secret exists pre-pairing;
- *     a real fix is TLS/Noise, out of scope). It is still strictly better than the prior
- *     plaintext secret: the long-lived pairing secret never appears on the wire at all.
+ *     `pair-challenge` before accepting (challenge is generated per request and bound to
+ *     that one connection; the accept reply is only ever written back on the same socket).
+ *     HONEST LIMITATION (do not oversell): the nonce, the challenge and, in manual mode,
+ *     the 6-digit code all transit in plaintext. In TWO-WAY mode the key material is then
+ *     entirely public — a passive sniffer recording the transcript can derive the key and
+ *     read the secret. In MANUAL mode the transcript allows an OFFLINE brute force over
+ *     the 10^6 code space. Single-use server nonces (transport.js) and the connection-bound
+ *     challenge stop trivial replay of a captured accept, but nothing here protects against
+ *     an active sniffer. This is confidentiality-against-casual-scraping, NOT protection
+ *     against a determined adversary; the real fix is a PAKE (e.g. SPAKE2+) or TLS/Noise —
+ *     tracked as a known follow-up, out of scope here. It is still strictly better than
+ *     the prior plaintext secret: the long-lived pairing secret never appears verbatim on
+ *     the wire, and each capture must be brute-forced per handshake.
  *   - Zeroize: buffers are overwritten in place on socket close (best-effort — GC copies
  *     of key material inside node:crypto internals cannot be reached).
  *
@@ -98,20 +110,27 @@ function isEncFrame(msg) {
 
 /**
  * Encrypt one message object into a wire line (WITHOUT the trailing '\n'):
- * `{"enc":1,"iv":"..","tag":"..","data":".."}` with a fresh random 12-byte IV.
+ * `{"enc":1,"seq":N,"iv":"..","tag":"..","data":".."}` with a fresh random 12-byte IV.
  * @param {Buffer} key - 32-byte session/handshake key
  * @param {object} obj
+ * @param {number} [seq] - per-direction message sequence number; session frames MUST carry
+ *   it (transport.js enforces strictly-increasing on receive). Omitted for one-shot
+ *   handshake frames (pair-accept).
  * @returns {string} line to write
  */
-function encryptFrame(key, obj) {
+function encryptFrame(key, obj, seq) {
   if (!Buffer.isBuffer(key) || key.length !== KEY_BYTES) {
     throw new Error('encryptFrame: key must be a 32-byte Buffer')
+  }
+  if (seq !== undefined && (!Number.isInteger(seq) || seq < 0)) {
+    throw new Error('encryptFrame: seq must be a non-negative integer')
   }
   const iv = crypto.randomBytes(IV_BYTES)
   const cipher = crypto.createCipheriv('aes-256-gcm', key, iv)
   const enc = Buffer.concat([cipher.update(Buffer.from(JSON.stringify(obj), 'utf8')), cipher.final()])
   return JSON.stringify({
     enc: ENC_VER,
+    ...(seq !== undefined ? { seq } : {}),
     iv: iv.toString('base64'),
     tag: cipher.getAuthTag().toString('base64'),
     data: enc.toString('base64'),
