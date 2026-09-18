@@ -62,10 +62,15 @@ function createServerRoleHandler(deps) {
         for (const seg of msg.segments) {
           ingestSegment(seg)
           acc.segments += 1
-          for (const row of (seg && seg.rows) || []) {
-            const s = Number(row && row.seq)
-            if (Number.isFinite(s) && s > acc.maxSeq) acc.maxSeq = s
-          }
+          // Wire envelopes are {body, fromSeq, toSeq}: the rows live INSIDE the packed body and
+          // seg.rows NEVER exists. The old per-row loop iterated nothing, so acc.maxSeq stayed 0
+          // and every ack omitted appliedToSeq — the sender's push watermark never advanced and
+          // the full retained oplog window was re-pushed EVERY round (the 2026-09-19 live 7-18s
+          // rounds). toSeq is the codec's highest-included seq for this segment (enforced by
+          // SegmentRange validation at pack time) — exactly the max row seq the loop meant to
+          // collect, in the SENDER's seq space.
+          const to = Number(seg && seg.toSeq)
+          if (Number.isFinite(to) && to > acc.maxSeq) acc.maxSeq = to
         }
         if (msg.final) {
           // The response pull travels through the SAME bounded chunking: the server's own

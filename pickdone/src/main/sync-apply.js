@@ -263,9 +263,16 @@ function applyRowInner (state, incoming) {
     conflictCopy = m.conflictCopy
   }
   if (localRow && winner !== incoming) return false // local version stands
-  // Identical-content no-op (prevents apply/push ping-pong) — LIVE rows only: a tombstone winner
-  // must still land even when the payload text matches, because the deletion itself is semantic.
+  // Identical-content no-op (prevents apply/push ping-pong):
+  //   - LIVE rows: identical content (userId-insensitive) is a no-op.
+  //   - BOTH-DEAD rows (2026-09-19 live storm): the local row is already a tombstone, so the
+  //     deletion has landed; re-writing the same dead row re-captured it into the oplog EVERY
+  //     round, and tombstones dominate the retained window — the whole window churned per round
+  //     on both peers (70-220s rounds that never shrank). Only a strictly newer deletion
+  //     (deletedAt advanced past ours) is worth landing.
   if (localRow && winner === incoming && !localRow.deleted && !incoming.deleted && !rowContentDiffers(localRow, incoming)) return false
+  if (localRow && winner === incoming && localRow.deleted && incoming.deleted &&
+      (incoming.deletedAt || 0) <= (localRow.deletedAt || 0)) return false
   if (conflictCopy) {
     // Surface the losing edit (merge.mjs contract: the loser is never silently dropped).
     // Round-3 review: materialize it as a TOMBSTONED todo row so the recycle bin can restore
@@ -344,12 +351,22 @@ function applyRowInner (state, incoming) {
     // one commit per row starved rounds the same way todos did before the write buffer.
     state.pendingWrites.categories.push({ ...winner.data, id: winner.data.categoryId })
   } else if (entity === 'plan') {
-    if (incoming.deleted) state.db.call('planRemoveIds', [incoming.id])
-    else if (localRow && localRow.ageUnknown) return false // cross-domain LWW: local age unknown, refuse to clobber
+    if (incoming.deleted) {
+      // Ghost-tombstone guard (2026-09-19 live storm): a plan pointer whose chip planAll cannot
+      // see hydrates as a tombstone (see hydrateRow), and planRemoveIds logged the delete into
+      // the oplog EVEN when we never had the chip — so both peers echoed the same delete back
+      // and forth at ~1000 oplog rows/s and every round carried the whole echo (120s+ rounds).
+      // Only delete a chip we actually have; a ghost tombstone is a no-op.
+      if (localRow) state.db.call('planRemoveIds', [incoming.id])
+      else return false
+    } else if (localRow && localRow.ageUnknown) return false // cross-domain LWW: local age unknown, refuse to clobber
     else state.pendingWrites.plans.push(winner.data) // bulk-buffered via planAddMany at flush
   } else if (entity === 'filter') {
-    if (incoming.deleted) state.db.call('filterDelete', Number(incoming.id))
-    else if (localRow && localRow.ageUnknown) return false // cross-domain LWW: local age unknown, refuse to clobber
+    if (incoming.deleted) {
+      // Same ghost-tombstone guard as plan: never re-capture a delete for a filter we don't have.
+      if (localRow) state.db.call('filterDelete', Number(incoming.id))
+      else return false
+    } else if (localRow && localRow.ageUnknown) return false // cross-domain LWW: local age unknown, refuse to clobber
     else state.pendingWrites.filters.push({ ...winner.data, id: Number(incoming.id) }) // bulk-buffered
   } else {
     return false
@@ -413,6 +430,9 @@ function readMaxOplogSeq (state) {
 module.exports = {
   SYNCABLE_ENTITIES,
   SECURITY_LOCK_KEY,
+  // Exported (2026-09-19): lan-sync-bootstrap destructures this for allRows()/hydration skips —
+  // the missing export made every allRows() call (legacy seed, snapshot serving) throw TypeError.
+  isMachineLocalSettingKey,
   createHydrationCache,
   hydrateRow,
   rowContentDiffers,

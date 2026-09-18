@@ -464,10 +464,13 @@ function createLanSyncNode(opts) {
                 const wm = pullWatermarkBy.get(peer.deviceId) || 0
                 if (from <= wm + 1 && to > wm) pullWatermarkBy.set(peer.deviceId, to)
                 if (to > peerMaxSeqSeen) peerMaxSeqSeen = to
-              }
-              for (const row of (seg && seg.rows) || []) {
-                const s = Number(row && row.seq)
-                if (Number.isFinite(s) && s > pullAckSeq) pullAckSeq = s
+                // pullAckSeq must come from the ENVELOPE, not seg.rows: the wire shape is
+                // {body, fromSeq, toSeq} — rows live inside the packed body and seg.rows never
+                // exists (the old per-row loop collected nothing, so our acks never carried
+                // appliedToSeq and the peer's serverPullAck never advanced — its pull response
+                // re-sent the full oplog window every round). toSeq is the segment's highest
+                // included seq in the PEER's seq space — same quantity the loop meant to take.
+                if (to > pullAckSeq) pullAckSeq = to
               }
             }
             // The ack is sent ONCE, at the final chunk (segments-chunk.js contract). appliedToSeq
