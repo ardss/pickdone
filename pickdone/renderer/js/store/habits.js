@@ -5,7 +5,13 @@
 import { FMT } from '../utils/core.js'
 
 const LS_KEY = 'habitsState'
-const META_KEY = 'habitsState'
+/** DB meta key MUST carry the `db.` prefix: the v6 sync-schema bridge (src/main/db-sync-schema.js
+ *  SYNC_BLOB_KEYS) only mirrors `db.settingsState` / `db.habitsState` into settings_rows — the bare
+ *  legacy `habitsState` row never synced. One-time migration: initFromDb reads `db.habitsState`
+ *  falling back to the legacy key, and (on fallback) copies the blob to the new key; the legacy row
+ *  is left in place during the transition (a later schema migration may sweep it). */
+const META_KEY = 'db.habitsState'
+const LEGACY_META_KEY = 'habitsState'
 /** Aux→main relay ping: aux windows can't call setMeta (MAIN_WINDOW_ONLY_OP); they write LS + this ping,
  *  and the main window's storage listener below re-persists the blob to the DB on its behalf. */
 const SYNC_KEY = 'habitsSyncPing'
@@ -228,8 +234,21 @@ export default {
     async initFromDb ({ commit }) {
       try {
         if (!window.todoAPI?.dbCall) return
-        const raw = await window.todoAPI.dbCall('getMeta', META_KEY)
-        if (raw) commit('replaceAll', JSON.parse(raw))
+        let raw = await window.todoAPI.dbCall('getMeta', META_KEY)
+        let legacy = false
+        if (!raw) {
+          // One-time migration source: pre-rename installs persisted under the bare 'habitsState' key
+          raw = await window.todoAPI.dbCall('getMeta', LEGACY_META_KEY)
+          legacy = !!raw
+        }
+        if (raw) {
+          commit('replaceAll', JSON.parse(raw))
+          if (legacy) {
+            // Copy the legacy blob to the db.-prefixed key so the sync bridge picks it up; the legacy
+            // row is kept (read path no longer depends on it after this write succeeds)
+            await window.todoAPI.dbCall('setMeta', [META_KEY, raw])
+          }
+        }
       } catch { /* empty environment */ }
     }
   }
