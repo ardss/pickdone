@@ -48,7 +48,7 @@ const CURSOR_META_KEY = 'sync.pushCursor' // persisted in meta (not settings_row
 const K_PEER_WATERMARKS = 'sync.peerWatermarks.v2' // {deviceId: highestSeqThatPeerAcked} — per-peer push progress (survives restarts)
 const K_SECURITY_LOG = 'sync.securityLog' // last 20 security-ring entries (pair-throttled / auth-rejected), JSON — survives restarts
 const SECURITY_PERSIST_MIN_MS = 1000 // write-throttle: at most one security-log write per second
-const START_DELAY_MS = 10 * 1000
+const START_DELAY_MS = 2000
 const ROUND_INTERVAL_MS = 5 * 60 * 1000
 // Pairing code validity: issued on first request and stable for 10 minutes (the LAN transport
 // authenticates with the persisted pairing secret — the displayed code is compare-only material
@@ -180,8 +180,8 @@ function scheduleSecurityPersist () {
 /* Change-triggered sync: local writes kick a debounced immediate round instead of waiting up
  * ROUND_INTERVAL_MS for the next periodic one. Floor-guarded so bulk imports fire one round,
  * not one per write. */
-const KICK_DEBOUNCE_MS = 2500
-const KICK_FLOOR_MS = 10000
+const KICK_DEBOUNCE_MS = 300
+const KICK_FLOOR_MS = 1500
 let kickTimer = null
 let lastKickRoundAt = 0
 function kickSyncRound (reason) {
@@ -325,7 +325,7 @@ function startSync () {
   state.node.on('snapshot-sync', info => emitSyncEvent('snapshot-sync', {
     deviceId: info && info.peer, direction: info && info.direction, rows: info && info.rows,
   }))
-  state.node.on('peer-online', p => emitSyncEvent('peer-online', { deviceId: p.deviceId, deviceName: p.name, host: p.host }))
+  state.node.on('peer-online', p => { emitSyncEvent('peer-online', { deviceId: p.deviceId, deviceName: p.name, host: p.host }); kickSyncRound('peer-online') })
   state.node.on('peer-offline', p => emitSyncEvent('peer-offline', { deviceId: p.deviceId, deviceName: p.name, host: p.host }))
   state.node.on('pair-throttled', info => emitSyncEvent('pair-throttled', { ip: info && info.ip }))
   // Security-ring persistence: pair-throttled / auth-rejected entries survive restarts via
