@@ -123,3 +123,32 @@ test('scheduler: sleep/wake - multiple reminders (reminderExtra) missed within t
   // Future reminders enter jobs as usual
   assert.equal(scheduler._jobs.size, 0, 'all expired means no future jobs')
 })
+
+test('scheduler: edge-triggered rebuild - unchanged reminder inputs are a no-op (DESKTOP reload-loop regression)', () => {
+  scheduler._clearStateForTest()
+  const futureTs = Date.now() + 60 * MIN
+  let setMetaCount = 0
+  let rows = []
+  const db = {
+    getMeta: k => (k === 'reminderLastSeenAt' ? String(Date.now() - MIN) : null),
+    setMeta: ([k, v]) => { if (k === 'reminderLastSeenAt') { setMetaCount++; db.saved = v } },
+    saved: null,
+    queryTodos: () => rows
+  }
+  // Empty reminder list (the exact DESKTOP loop shape: "0 future reminders, 0 missed re-fired")
+  scheduler.reloadAll(db)
+  const afterFirst = setMetaCount
+  assert.equal(afterFirst, 1, 'first rebuild writes the watermark once')
+  // The external-write watcher keeps kicking reloadAll with UNCHANGED inputs: each rebuild used
+  // to write reminderLastSeenAt again, touching the DB and re-arming the watcher -> flood.
+  for (let i = 0; i < 50; i++) scheduler.reloadAll(db)
+  assert.equal(setMetaCount, afterFirst, 'unchanged inputs must not rebuild or re-write the watermark')
+  // An actual input change (a new reminder arrives, e.g. via sync) re-arms the rebuild.
+  rows = [{ taskId: 's1', reminderTime: futureTs, reminderOffsets: [], reminderExtra: [], complete: false, delete: false }]
+  scheduler.reloadAll(db)
+  assert.equal(setMetaCount, afterFirst + 1, 'a changed reminder set rebuilds and writes again')
+  assert.ok(scheduler._jobs.has('s1:0'), 'the new future reminder is scheduled')
+  // And again unchanged: no-op
+  scheduler.reloadAll(db)
+  assert.equal(setMetaCount, afterFirst + 1, 'still no rebuild while inputs stay unchanged')
+})

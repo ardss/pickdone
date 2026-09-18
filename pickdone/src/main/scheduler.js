@@ -142,6 +142,22 @@ function reminderInstances (t) {
   return out
 }
 
+/** Edge-trigger fingerprint of every reminder-bearing task (2026-09-18 DESKTOP incident: the
+ *  external-write watcher kept kicking reloadAll with UNCHANGED reminder inputs — the rebuild
+ *  wrote reminderLastSeenAt, which touched the DB again, feeding the watcher back — flooding
+ *  the log ~800x with "0 future reminders"). When the reminder inputs are unchanged since the
+ *  last rebuild, the live timers are still exactly right (runtime-due reminders fire via their
+ *  own scheduled timers and are deduped by firedReminders), so a rebuild is a no-op. */
+let lastRebuildFingerprint = null
+function rebuildFingerprint (todos) {
+  const parts = []
+  for (const t of todos) {
+    if ((!t.reminderTime && !(t.reminderExtra || []).length) || t.complete) continue
+    parts.push(`${t.taskId}:${t.reminderTime || 0}:${(t.reminderOffsets || []).join(',')}:${(t.reminderExtra || []).join(',')}`)
+  }
+  return parts.join('|')
+}
+
 /** Full rebuild: iterate non-deleted/future tasks that have a reminder time.
  *  Missed catch-up: reminders that came due while the app was closed (last run's watermark < reminder time ≤ now) fire once immediately,
  *  watermark stored in meta as reminderLastSeenAt; completed tasks are neither re-fired nor scheduled. */
@@ -162,6 +178,12 @@ function reloadAll (db) {
   } catch { /* read failure treated as first run */ }
   if (firstRun) { try { db.setMeta(['reminderLastSeenAt', String(now)]) } catch {} }
   const todos = db.queryTodos({ deleted: 0, orderBy: 'remindAt ASC' })
+  // Edge-trigger: unchanged reminder inputs -> the current timers are still correct; skip the
+  // teardown AND the watermark write (the write is what re-touches the DB and fed the watcher
+  // loop on DESKTOP). First run always rebuilds (lastRebuildFingerprint === null).
+  const fingerprint = rebuildFingerprint(todos)
+  if (lastRebuildFingerprint !== null && fingerprint === lastRebuildFingerprint) return
+  lastRebuildFingerprint = fingerprint
   let future = 0
   let missed = 0
   for (const t of todos) {
@@ -196,5 +218,5 @@ module.exports = {
   _jobs: jobs,
   _fired: firedReminders,
   _markFired: markFired,
-  _clearStateForTest () { for (const h of jobs.values()) clearTimeout(h); jobs.clear(); firedReminders.clear() }
+  _clearStateForTest () { for (const h of jobs.values()) clearTimeout(h); jobs.clear(); firedReminders.clear(); lastRebuildFingerprint = null }
 }

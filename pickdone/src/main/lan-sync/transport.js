@@ -347,7 +347,17 @@ function wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, o
           return
         }
         const claimed = typeof msg.deviceId === 'string' ? msg.deviceId : ''
-        if (claimed === deviceId || !verifyAuthCode(pairingSecret, claimed, msg.authCode)) {
+        // Self-connection guard: a hello claiming OUR OWN deviceId means the sender is this very
+        // node dialing itself (stale manual peer / own-address entry — 2026-09-18 real-machine
+        // incident: both machines endlessly rejected "themselves" with a generic auth error).
+        // Answer with a DISTINCT reason so the dialing side can drop the bogus peer entry.
+        if (claimed === deviceId) {
+          if (onUnauthorized) onUnauthorized({ deviceId: claimed, host: socket.remoteAddress, self: true })
+          send(socket, { type: 'hello-ack', ok: false, protoVer: PROTO_VER, error: 'self-connection' })
+          socket.destroy()
+          return
+        }
+        if (!verifyAuthCode(pairingSecret, claimed, msg.authCode)) {
           if (onUnauthorized) onUnauthorized({ deviceId: claimed, host: socket.remoteAddress })
           // Online-guessing throttle: FAILED hello attempts feed the same server-level
           // per-IP sliding window as pair-requests (count only failures — a successful auth

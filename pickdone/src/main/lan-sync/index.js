@@ -31,6 +31,7 @@
  */
 
 const { EventEmitter } = require('node:events')
+const os = require('node:os')
 const { createDiscovery, PROTO_VER } = require('./discovery')
 const { createLanServer, connect, DEFAULT_PORT } = require('./transport')
 const { deriveAuthCode } = require('./pairing')
@@ -111,6 +112,14 @@ function createLanSyncNode(opts) {
   const backoffMs = new Map() // deviceId -> current backoff delay
   const retryTimers = new Map() // deviceId -> timer
   const authCode = deriveAuthCode(pairingSecret, deviceId)
+  // Own-address set (self-dial guard, 2026-09-18 real-machine incident): a peer entry whose host
+  // routes back to THIS node (second NIC IP, stale DHCP manual entry) makes us dial ourselves.
+  // Non-loopback only: CI two-node tests legitimately share 127.0.0.1. Injectable for tests.
+  const ownHosts = new Set(Array.isArray(opts.ownHosts) ? opts.ownHosts : (() => {
+    const out = []
+    try { for (const l of Object.values(os.networkInterfaces())) for (const ni of l || []) if (ni && ni.address && !ni.internal) out.push(ni.address) } catch { /* best effort */ }
+    return out
+  })())
   // Per-peer push watermarks: deviceId -> highest seq that peer has acked. Injected (a live Map) by
   // the bootstrap, which owns persistence; dead peers holding stale entries can no longer gate
   // other peers' rounds, and each round only ships a peer's unconfirmed delta.
@@ -165,6 +174,16 @@ function createLanSyncNode(opts) {
   function pushRing(arr, cap, entry) {
     arr.push(entry)
     if (arr.length > cap) arr.splice(0, arr.length - cap)
+  }
+  /** Drop every per-peer trace of `id` (LRU eviction + self-dial peer removal share this). */
+  function forgetPeer(id) {
+    peers.delete(id); lastSeenBy.delete(id); lastRoundBy.delete(id); errorBy.delete(id)
+    const t = retryTimers.get(id)
+    if (t) { clearTimeout(t); retryTimers.delete(id) }
+    backoffMs.delete(id); onlineNow.delete(id); needSnapshot.delete(id)
+    clientSnapshotBusy.delete(id); serverSnapshotBusy.delete(id)
+    snapshotFatalCount.delete(id); snapshotErrorCooldown.delete(id)
+    pullWatermarkBy.delete(id); serverPullAck.delete(id)
   }
   const pushRecent = (entry) => pushRing(recent, RECENT_CAP, entry)
   // security ring: seeded from the persisted log (opts.securityLog, owned by the bootstrap —
@@ -223,6 +242,8 @@ function createLanSyncNode(opts) {
 
   function rememberPeer(peer) {
     if (!peer || !peer.deviceId || peer.deviceId === deviceId) return
+    // Self-dial guard: never admit a peer whose host is one of our own addresses (see ownHosts).
+    if (peer.host && ownHosts.has(peer.host)) return
     // Bounded bookkeeping (round-3 review): a mDNS/UDP flood of random deviceIds must not grow
     // the peer/lastSeen maps without limit. Beyond MAX_PEERS, expel the LEAST-recently-seen
     // peer (never the incoming one) from every per-peer map.
@@ -232,23 +253,7 @@ function createLanSyncNode(opts) {
       for (const [id, seen] of lastSeenBy) {
         if (seen < oldestAt) { oldestAt = seen; oldestId = id }
       }
-      if (oldestId) {
-        const t = retryTimers.get(oldestId)
-        if (t) { clearTimeout(t); retryTimers.delete(oldestId) }
-        peers.delete(oldestId)
-        lastSeenBy.delete(oldestId)
-        lastRoundBy.delete(oldestId)
-        errorBy.delete(oldestId)
-        backoffMs.delete(oldestId)
-        onlineNow.delete(oldestId)
-        needSnapshot.delete(oldestId)
-        clientSnapshotBusy.delete(oldestId)
-        serverSnapshotBusy.delete(oldestId)
-        snapshotFatalCount.delete(oldestId)
-        snapshotErrorCooldown.delete(oldestId)
-        pullWatermarkBy.delete(oldestId)
-        serverPullAck.delete(oldestId)
-      }
+      if (oldestId) forgetPeer(oldestId)
     }
     const prev = peers.get(peer.deviceId)
     peers.set(peer.deviceId, {
@@ -395,7 +400,16 @@ function createLanSyncNode(opts) {
         if (oldest > wm + 1 && !clientSnapshotBusy.has(peer.deviceId)) needSnapshot.add(peer.deviceId)
       }
       client.on('error', (err) => finish(err))
-      client.on('rejected', () => finish(new Error('auth rejected by peer')))
+      client.on('rejected', (msg) => {
+        // The peer's server answered hello with its DISTINCT self-connection reason: this entry
+        // routes back to ourselves (stale manual host). Drop it and its retry timer — retrying
+        // would just re-dial ourselves forever (2026-09-18 incident).
+        const self = !!(msg && msg.error === 'self-connection')
+        if (self) forgetPeer(peer.deviceId)
+        finish(new Error(self
+          ? 'self-connection: peer entry pointed at this device and was removed'
+          : 'auth rejected by peer'))
+      })
       // A socket death before the round settled must fail the round PROMPTLY (previously only a
       // close MID-snapshot failed early — a clean FIN after our push left the round hanging for
       // the full 120s deadline). Post-finish closes are no-ops: snapshot transfers legitimately
