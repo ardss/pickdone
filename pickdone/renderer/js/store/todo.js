@@ -207,7 +207,9 @@ export default {
         todoSublist = null,
         todoImage = null,
         fileList = null,
-        addToTop = true,
+        // Default follows the user's "new task default position" setting (top|bottom); a caller
+        // passing an explicit addToTop still wins (destructuring default only applies when absent)
+        addToTop = rootState.settings.newTodoDefaultSort !== 'bottom',
         estimate = 0,
         dayOverride = null,
         predecessors = null
@@ -681,9 +683,17 @@ export default {
           .forEach(t => { t.status = t.status === 'delete' ? 'delete' : 'sync'; t.version = serverV })
       } catch (err) {
         reportError('syncTodos', err)
+        // Version-fence handling (P2): the db layer rejects a stale batch with
+        // "commitSyncBatch: version N < current todosVersion M — stale batch rejected" — a NEWER
+        // batch already persisted these rows, so re-enqueueing would replay a doomed batch forever
+        // (every quit flush). Drop it; the rows in memory are already acked by the newer batch.
+        // Any other failure (IO/lock/transient) keeps the retry-enqueue below.
+        const staleBatch = !!(err && /stale batch rejected/.test(String(err.message || err)))
         // Enqueue for retry like reorderTodos/safeUpsert (round-6 leftover): rows stay dirty in memory,
         // but the quit-flush replay needs the op verbatim to survive a close-before-retry
-        try { _pendingUpserts.push({ op: 'commitSyncBatch', params: { rows: deproxyRows(snapshot), version: serverV } }) } catch { /* keep the UI flow alive */ }
+        if (!staleBatch && snapshot.length) {
+          try { _pendingUpserts.push({ op: 'commitSyncBatch', params: { rows: deproxyRows(snapshot), version: serverV } }) } catch { /* keep the UI flow alive */ }
+        }
       } finally {
         commit('setSyncing', false)
         // In the finally block: the empty-snapshot early return used to skip the critical backup entirely

@@ -186,7 +186,38 @@ function flushPendingLedger () {
 function hookQuitFlush () {
   if (_flushHooked || !window.todoAPI || !window.todoAPI.onAppQuittingFlush) return
   _flushHooked = true
-  window.todoAPI.onAppQuittingFlush(() => flushPendingLedger())
+  window.todoAPI.onAppQuittingFlush(() => { flushPendingLedger(); flushPendingSnow() })
+}
+
+/** Task-side focus credit (bumpSnow) retry queue — same pending-retry pattern as _pendingLedger.
+ *  The old fire-and-forget `dbCall('bumpSnow', …).catch(() => {})` silently dropped the credit on
+ *  a transient IPC/DB failure (lock screen, quit race): the ledger recorded the focus but the task's
+ *  focusMinutes/snow never advanced. Entries are removed only on success (bumpSnow is idempotent
+ *  per the db layer) and replayed on the next write or at quit-flush. */
+const _pendingSnow = []
+function replayPendingSnow () {
+  for (const entry of [..._pendingSnow]) {
+    Promise.resolve(window.todoAPI && window.todoAPI.dbCall('bumpSnow', entry.params))
+      .then(() => {
+        const i = _pendingSnow.indexOf(entry); if (i >= 0) _pendingSnow.splice(i, 1)
+      })
+      .catch(e => console.error('[tomato] bumpSnow failed (queued for retry):', entry.params, e))
+  }
+}
+function snowWrite (params) {
+  _pendingSnow.push({ params })
+  replayPendingSnow()
+  hookQuitFlush()
+}
+function flushPendingSnow () {
+  const list = _pendingSnow.splice(0, _pendingSnow.length)
+  list.forEach((it, idx) => {
+    Promise.resolve(window.todoAPI && window.todoAPI.dbCall('bumpSnow', it.params))
+      .catch(e => {
+        console.error('[tomato] bumpSnow flush failed at quit:', it.params, e)
+        _pendingSnow.splice(Math.min(idx, _pendingSnow.length), 0, it)
+      })
+  })
 }
 
 export default {
@@ -378,7 +409,9 @@ export default {
         return
       }
       if (running && record) {
-        const focusedMin = Math.max(1, Math.min(s.tomatoTime, Math.floor((Date.now() - s.startedAt) / 60000)))
+        // Measured duration, not the current setting (unified with completeFocus): a mid-focus
+        // duration change used to cap the booked minutes at the NEW smaller setting, skewing the ledger
+        const focusedMin = Math.max(1, Math.min(FOCUS_MAX_MINUTES, Math.floor((Date.now() - s.startedAt) / 60000)))
         const focused = resolveFocusedTask(s.attachTodo, focusTodoPool(this))
         commit('addRecord', {
           // Deterministic id: cross-window dedupe as a backstop so the same give-up records only once
@@ -452,7 +485,9 @@ export default {
         }
         dispatch('auth/saveSnowGain', focusMin, { root: true })
         if (focused) {
-          window.todoAPI?.dbCall?.('bumpSnow', { taskId: focused.taskId, minutes: focusMin })?.catch?.(() => {})
+          // Queued write with retry (was fire-and-forget with an empty catch — a transient failure
+          // silently dropped the task's focus credit)
+          snowWrite({ taskId: focused.taskId, minutes: focusMin })
           // bumpSnow is a todo-row write issued as a raw dbCall outside the todo/* actions, so store/index.js's
           // WRITE_ACTIONS stamping never fires for it → the todos-changed broadcast echo of this write misses the
           // 1500ms echo-suppression window and todo/init's historyClear wipes the undo stack. Stamp it here,
