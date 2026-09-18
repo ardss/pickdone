@@ -141,14 +141,18 @@ test('transport: hello-before-data is enforced and pairing verifies symmetricall
   assert.ok(!verifyAuthCode('other-secret', CLIENT_DEVICE, code))
 })
 
-test('transport: EADDRINUSE degrades to an ephemeral port (second same-host instance)', async () => {
-  const first = createLanServer({ deviceId: 'dev1', pairingSecret: SECRET, getHandler: () => {} })
-  await new Promise((res, rej) => { first.on('listening', res); first.on('error', rej) })
-  const second = createLanServer({ deviceId: 'dev2', pairingSecret: SECRET, getHandler: () => {} })
+test('transport: EADDRINUSE on the fixed port is a LOUD failure, not a silent ephemeral fallback', async () => {
+  // Round-3 review: an ephemeral fallback bind is undiscoverable via the fixed-port rendezvous,
+  // so the old silent degrade produced a half-working, invisible node. Now the error is emitted.
+  const first = createLanServer({ port: 0, host: '127.0.0.1', deviceId: 'dev1', pairingSecret: SECRET, getHandler: () => {} })
+  const firstPort = await new Promise((res, rej) => { first.on('listening', () => res(first.port)); first.on('error', rej) })
+  // Second server targets the SAME now-taken fixed port (never the machine-wide default — an
+  // unrelated local app may hold 58471, which must not affect this test).
+  const second = createLanServer({ port: firstPort, host: '127.0.0.1', deviceId: 'dev2', pairingSecret: SECRET, getHandler: () => {} })
   try {
-    const p = await new Promise((res, rej) => { second.on('listening', res); second.on('error', rej) })
-    assert.ok(Number.isInteger(p) && p > 0, 'second server bound to an ephemeral port: ' + p)
-    assert.notEqual(p, first.port, 'must not reuse the taken fixed port')
+    const err = await new Promise((res, rej) => { second.on('error', res); second.on('listening', () => rej(new Error('must not bind a fallback port'))) })
+    assert.equal(err.code, 'EADDRINUSE', 'the fixed-port collision surfaces as an error event')
+    assert.equal(second.port, null, 'no ephemeral fallback port was bound')
   } finally {
     await second.close()
     await first.close()

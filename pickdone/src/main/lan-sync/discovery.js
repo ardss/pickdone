@@ -22,6 +22,13 @@ const SERVICE_TYPE = 'pickdone-sync'
 const PROTO_VER = 2
 const FALLBACK_PORT = 58471
 const FALLBACK_INTERVAL_MS = 2000
+// Bounded bookkeeping (round-3 review): a UDP/mDNS flood of forged deviceIds must not grow the
+// peer map without limit. Beyond MAX_PEERS the least-recently-seen peer is evicted.
+const MAX_PEERS = 64
+// UDP fallback rate limit (round-3 review): at most one accepted upsert per source IP per this
+// interval — legitimate broadcasters announce every FALLBACK_INTERVAL_MS, so 500ms discards
+// flood traffic while never dropping a real peer announcement.
+const UDP_UPSERT_MIN_INTERVAL_MS = 500
 
 let bonjourModule = null
 try {
@@ -38,6 +45,7 @@ try {
 function createDiscovery() {
   const em = new EventEmitter()
   const peers = new Map() // deviceId -> {deviceId, name, host, port, lastSeen}
+  const lastUpsertByIp = new Map() // ip -> last accepted UDP upsert (rate limit, see constant)
   let bonjour = null
   let advertisedService = null
   let browser = null
@@ -49,6 +57,15 @@ function createDiscovery() {
     if (!info || typeof info.deviceId !== 'string' || !info.deviceId) return null
     if (typeof info.port !== 'number' || !Number.isInteger(info.port) || info.port <= 0) return null
     const existing = peers.get(info.deviceId)
+    if (!existing && peers.size >= MAX_PEERS) {
+      // LRU eviction: expel the least-recently-seen peer (never the incoming one).
+      let oldestId = null
+      let oldestAt = Infinity
+      for (const [id, p] of peers) {
+        if (p.lastSeen < oldestAt) { oldestAt = p.lastSeen; oldestId = id }
+      }
+      if (oldestId) peers.delete(oldestId)
+    }
     const peer = {
       deviceId: info.deviceId,
       name: info.name || info.deviceId,
@@ -81,8 +98,17 @@ function createDiscovery() {
   function startUdpFallback({ deviceId, name, port }) {
     udp = dgram.createSocket({ type: 'udp4', reuseAddr: true })
     const payload = Buffer.from(JSON.stringify({ deviceId, name: name || deviceId, port, protoVer: PROTO_VER }))
-    udp.on('message', (buf) => {
+    udp.on('message', (buf, rinfo) => {
       try {
+        // Per-source rate limit (round-3 review): a flood of UDP broadcasts from one IP must not
+        // burn CPU on JSON.parse + upsert. Known peers re-announce every ~2s, so a 500ms floor
+        // per source IP never drops a legitimate announcement.
+        const ip = rinfo && rinfo.address
+        const now = Date.now()
+        const last = lastUpsertByIp.get(ip) || 0
+        if (now - last < UDP_UPSERT_MIN_INTERVAL_MS) return
+        lastUpsertByIp.set(ip, now)
+        if (lastUpsertByIp.size >= 1024) lastUpsertByIp.clear() // spoofed-source flood guard
         upsertPeer(JSON.parse(buf.toString('utf8')))
       } catch { /* malformed broadcast */ }
     })

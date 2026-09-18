@@ -222,3 +222,27 @@ test('flush sheds rows off an oversize batch instead of failing the whole push',
     assert.ok(seg.body.length <= 256 * 1024, `segment within cap (got ${seg.body.length})`)
   }
 })
+
+test('shed carry landing as the TERMINAL segment keeps fromSeq/toSeq consistent', () => {
+  // Round-3 review regression: when a shed `carry` became the last segment, toSeq stayed stale
+  // (carry.seq - 1 from the shedding catch) and the carry's own flush packed
+  // {fromSeq > toSeq} -> SegmentRangeError -> buildSegments threw EVERY round for such backlogs
+  // (permanent sync outage). These exact parameters reproduced it pre-fix (tiny rows force a
+  // >512-row batch whose packed overhead exceeds the 512-byte headroom, so the final flush sheds).
+  const storeA = makeStore('tail-a')
+  const ea = createEngine({ localStore: storeA, deviceId: 'tail-a' })
+  const title = 'y'.repeat(40)
+  for (let i = 0; i < 11000; i++) storeA.append({ id: `t${i}`, title, updatedAt: i })
+  const { segments, toSeq } = ea.buildSegments()
+  assert.ok(segments.length >= 2, 'large backlog splits')
+  assert.equal(toSeq, 11000, 'result toSeq covers the whole backlog')
+  let prevTo = 0
+  for (const seg of segments) {
+    assert.ok(seg.body.length <= 256 * 1024, `segment within cap (got ${seg.body.length})`)
+    assert.equal(seg.fromSeq, prevTo + 1, `contiguous ascending fromSeq (got ${seg.fromSeq}, prev toSeq ${prevTo})`)
+    assert.ok(seg.toSeq >= seg.fromSeq, 'toSeq >= fromSeq within every segment')
+    assert.equal(seg.toSeq, JSON.parse(seg.body).toSeq, 'envelope toSeq matches the meta toSeq')
+    prevTo = seg.toSeq
+  }
+  assert.equal(prevTo, 11000, 'segment ranges tile the whole backlog')
+})

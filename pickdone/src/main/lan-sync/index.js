@@ -34,11 +34,19 @@ const { EventEmitter } = require('node:events')
 const { createDiscovery, PROTO_VER } = require('./discovery')
 const { createLanServer, connect, DEFAULT_PORT } = require('./transport')
 const { deriveAuthCode } = require('./pairing')
-const { chunkSnapshot, rowChunks, finalizeSnapshot } = require('./snapshot')
+const { finalizeSnapshot } = require('./snapshot')
 const { packSegmentChunks } = require('./segments-chunk')
+const { createServerRoleHandler } = require('./server-role')
 
 const BACKOFF_BASE_MS = 5000
 const BACKOFF_MAX_MS = 60 * 1000
+// Snapshot transfer ceiling (round-3 review): a snapshot answering with more than this many
+// chunk messages is refused with snapshot-error {reason:'too-large'} instead of streaming
+// unboundedly (512 chunks x ~1MB ≈ a 500MB ceiling — generous for a todo library).
+const MAX_SNAPSHOT_CHUNKS = 512
+// Peer-bookkeeping ceiling (round-3 review): mDNS/UDP floods must not grow the peer table,
+// lastSeen map, or Device Center state without limit. LRU-expelled beyond this.
+const MAX_PEERS = 64
 // Round deadline: 120s of TOTAL silence fails the round; every PROGRESS event (a chunk
 // received, an ack, a snapshot trailer) re-arms the timer at PROGRESS_MS instead, so a slow
 // but moving snapshot transfer (first sync of a large library) is never killed mid-flight.
@@ -94,6 +102,12 @@ function createLanSyncNode(opts) {
   }
 
   const peers = new Map() // deviceId -> {deviceId, name, host, port}
+  // Backoff schedule, injectable for tests (busy-collision re-dial timing etc.). Production
+  // defaults: 5s base, exponential to a 60s cap.
+  const backoffBaseMs = Number(opts.backoffBaseMs) || BACKOFF_BASE_MS
+  const backoffMaxMs = Number(opts.backoffMaxMs) || BACKOFF_MAX_MS
+  // Per-snapshot transfer ceiling (injectable for tests; see MAX_SNAPSHOT_CHUNKS above).
+  const maxSnapshotChunks = Number(opts.maxSnapshotChunks) || MAX_SNAPSHOT_CHUNKS
   const backoffMs = new Map() // deviceId -> current backoff delay
   const retryTimers = new Map() // deviceId -> timer
   const authCode = deriveAuthCode(pairingSecret, deviceId)
@@ -101,6 +115,13 @@ function createLanSyncNode(opts) {
   // the bootstrap, which owns persistence; dead peers holding stale entries can no longer gate
   // other peers' rounds, and each round only ships a peer's unconfirmed delta.
   const peerProgress = opts.peerProgress || new Map()
+  // Server-role per-peer pull progress (round-3 review): deviceId -> highest seq (OUR seq
+  // space) the peer has acked across our pushed rows. The server role's pull response used to
+  // call buildSegments() with no cursor every round, re-sending the full oplog window forever
+  // (markPushed is deliberately not wired — per-peer watermarks replaced the global cursor).
+  // Acked seqs arrive via the 'ack' messages the peer sends for OUR push; the next round's
+  // pull response starts past them. Unknown peer -> full window (the old behavior).
+  const serverPullAck = new Map()
 
   // Snapshot-request bookkeeping (all in-memory, per peer):
   //   pullWatermarkBy — highest seq I have definitively received from that peer (advanced to the
@@ -147,9 +168,30 @@ function createLanSyncNode(opts) {
   }
   const pushRecent = (entry) => pushRing(recent, RECENT_CAP, entry)
   // security ring: seeded from the persisted log (opts.securityLog, owned by the bootstrap —
-  // the ephemeral process used to lose pair-throttle/auth-reject history on every restart)
-  if (Array.isArray(opts.securityLog)) for (const e of opts.securityLog.slice(-SECURITY_CAP)) pushRing(security, SECURITY_CAP, e)
+  // the ephemeral process used to lose pair-throttle/auth-reject history on every restart).
+  // Shape-checked at the trust boundary: the seed comes off settings_rows/disk, so a malformed
+  // persisted entry must not poison the security ring (rendered verbatim in Device Center).
+  const isshapelySecurityEntry = (e) => e && typeof e === 'object' &&
+    Number.isFinite(Number(e.at)) && typeof e.ip === 'string' && typeof e.reason === 'string'
+  if (Array.isArray(opts.securityLog)) {
+    for (const e of opts.securityLog.filter(isshapelySecurityEntry).slice(-SECURITY_CAP)) pushRing(security, SECURITY_CAP, e)
+  }
   const pushSecurity = (entry) => { pushRing(security, SECURITY_CAP, entry); em.emit('security-entry', entry) }
+
+  // Server-role message handling (segments-chunk push receive + ack bookkeeping + snapshot-request
+  // serving) is extracted to server-role.js (line ratchet). The handler is pure orchestration over
+  // the node's own state/callbacks.
+  const handleServerMessage = createServerRoleHandler({
+    ingestSegment, buildSegments, buildSnapshot, buildSnapshotRows,
+    getMaxSeq: getMaxSeq ? currentMaxSeq : null,
+    getOldestSeq: getOldestSeq ? currentOldestSeq : null,
+    serverSnapshotBusy, serverPullAck,
+    maxSnapshotChunks, snapshotSchemaVersion: opts.snapshotSchemaVersion,
+    pushRecent,
+    onSnapshotError: (info) => em.emit('snapshot-error', info),
+    onSnapshotSync: (info) => em.emit('snapshot-sync', info),
+    onServerError: (err) => em.emit('server-error', err),
+  })
 
   function computeOnline(id) {
     const now = Date.now()
@@ -181,6 +223,33 @@ function createLanSyncNode(opts) {
 
   function rememberPeer(peer) {
     if (!peer || !peer.deviceId || peer.deviceId === deviceId) return
+    // Bounded bookkeeping (round-3 review): a mDNS/UDP flood of random deviceIds must not grow
+    // the peer/lastSeen maps without limit. Beyond MAX_PEERS, expel the LEAST-recently-seen
+    // peer (never the incoming one) from every per-peer map.
+    if (!peers.has(peer.deviceId) && peers.size >= MAX_PEERS) {
+      let oldestId = null
+      let oldestAt = Infinity
+      for (const [id, seen] of lastSeenBy) {
+        if (seen < oldestAt) { oldestAt = seen; oldestId = id }
+      }
+      if (oldestId) {
+        const t = retryTimers.get(oldestId)
+        if (t) { clearTimeout(t); retryTimers.delete(oldestId) }
+        peers.delete(oldestId)
+        lastSeenBy.delete(oldestId)
+        lastRoundBy.delete(oldestId)
+        errorBy.delete(oldestId)
+        backoffMs.delete(oldestId)
+        onlineNow.delete(oldestId)
+        needSnapshot.delete(oldestId)
+        clientSnapshotBusy.delete(oldestId)
+        serverSnapshotBusy.delete(oldestId)
+        snapshotFatalCount.delete(oldestId)
+        snapshotErrorCooldown.delete(oldestId)
+        pullWatermarkBy.delete(oldestId)
+        serverPullAck.delete(oldestId)
+      }
+    }
     const prev = peers.get(peer.deviceId)
     peers.set(peer.deviceId, {
       deviceId: peer.deviceId,
@@ -198,13 +267,13 @@ function createLanSyncNode(opts) {
   function resetBackoff(peerId) {
     const t = retryTimers.get(peerId)
     if (t) { clearTimeout(t); retryTimers.delete(peerId) }
-    backoffMs.set(peerId, BACKOFF_BASE_MS)
+    backoffMs.set(peerId, backoffBaseMs)
   }
 
   function scheduleRetry(peerId) {
     if (stopped || retryTimers.has(peerId)) return
-    const delay = Math.min(backoffMs.get(peerId) || BACKOFF_BASE_MS, BACKOFF_MAX_MS)
-    backoffMs.set(peerId, Math.min(delay * 2, BACKOFF_MAX_MS))
+    const delay = Math.min(backoffMs.get(peerId) || backoffBaseMs, backoffMaxMs)
+    backoffMs.set(peerId, Math.min(delay * 2, backoffMaxMs))
     const t = setTimeout(() => {
       retryTimers.delete(peerId)
       const p = peers.get(peerId)
@@ -226,11 +295,13 @@ function createLanSyncNode(opts) {
       let ackOldestSeq = null // peer's advertised oldest RETAINED seq (undefined for old peers)
       let peerMaxSeqSeen = 0 // max seq observed in the PEER's segments this round (PEER's seq space)
       let roundApplied = 0 // rows the peer's segments changed locally this round (0 = no pull progress)
+      let pullAckSeq = 0 // max seq among the peer's pushed rows across ALL chunks (PEER's seq space)
       let awaitingSnapshot = false // snapshot-request sent; the round ends at snapshot-end, not ack
       const chunkBuf = new Map() // snapshot-chunk index -> rows (assembled at snapshot-end, fallback mode)
       const chunkRowCounts = new Map() // streaming mode: index -> applied row count (rows are NEVER buffered)
       const streamingSnapshot = typeof ingestSnapshotChunk === 'function'
       let chunkTotal = 0 // chunk count as advertised by the chunk messages
+      let chunkCount = 0 // chunks actually received (bounded: MAX_SNAPSHOT_CHUNKS caps the transfer)
       // Round deadline: PROGRESS-based, not fixed (2026-09-18). A silent peer still fails at
       // ROUND_DEADLINE_MS (120s); every data-carrying message re-arms the timer at
       // ROUND_PROGRESS_MS, so a slow-but-moving first-sync snapshot is never killed mid-flight.
@@ -325,10 +396,12 @@ function createLanSyncNode(opts) {
       }
       client.on('error', (err) => finish(err))
       client.on('rejected', () => finish(new Error('auth rejected by peer')))
-      // A socket death MID-snapshot must fail the round promptly (pull watermark stays put, the
-      // next round re-requests) instead of idling to the 120s deadline. Post-finish closes are
-      // no-ops (settled guard).
-      client.on('close', () => { if (awaitingSnapshot && !settled) finish(new Error('connection closed during snapshot transfer')) })
+      // A socket death before the round settled must fail the round PROMPTLY (previously only a
+      // close MID-snapshot failed early — a clean FIN after our push left the round hanging for
+      // the full 120s deadline). Post-finish closes are no-ops: snapshot transfers legitimately
+      // end via snapshot-end -> finish(null) (settled) BEFORE the peer's FIN arrives, so the
+      // ordering guard keeps clean terminal paths intact.
+      client.on('close', () => { if (!settled) finish(new Error('connection closed before the round completed')) })
       client.on('ready', () => {
         try {
           // push only what this peer has not confirmed yet (per-peer watermark; 0 = first contact).
@@ -361,7 +434,9 @@ function createLanSyncNode(opts) {
           // initial 120s full deadline).
           if (msg.type === 'segments-chunk' || msg.type === 'snapshot-chunk' || msg.type === 'snapshot-end' || msg.type === 'ack') progressDeadline()
           if (msg.type === 'segments-chunk' && Array.isArray(msg.segments)) {
-            let pullAckSeq = 0 // max seq among the rows the peer just pushed to us (PEER's seq space)
+            // pullAckSeq is ROUND-scoped (declared above): it must accumulate across ALL chunks
+            // of a multi-chunk push — resetting per chunk acked only the last chunk's max seq
+            // and the sender's per-peer watermark undershot (re-pushing already-applied rows).
             for (const seg of msg.segments) {
               const r = ingestSegment(seg)
               roundApplied += (r && Number(r.applied)) || 0
@@ -388,11 +463,17 @@ function createLanSyncNode(opts) {
             // skipped its fresh rows every round.
             if (msg.final) {
               client.send({ type: 'ack', applied: msg.segments.length, rejected: 0, ...(pullAckSeq > 0 ? { appliedToSeq: pullAckSeq } : {}) })
+              pullAckSeq = 0 // acked through here; a fresh push on this connection re-accumulates
             }
           } else if (msg.type === 'snapshot-chunk' && Array.isArray(msg.rows)) {
             if (!awaitingSnapshot) throw new Error('unsolicited snapshot-chunk')
             chunkTotal = Number(msg.totalChunks) || chunkTotal
             const idx = Number(msg.index) || 0
+            // Unbounded-transfer guard (round-3 review): a peer (or an attacker holding the
+            // pairing secret) must not stream snapshot chunks forever — past the ceiling the
+            // round fails and the trigger re-arms through the normal snapshot-error budget.
+            chunkCount += 1
+            if (chunkCount > maxSnapshotChunks) throw new Error(`snapshot too large: more than ${maxSnapshotChunks} chunks`)
             if (streamingSnapshot) {
               // Streaming receiver (2026-09-18): apply + flush THIS chunk immediately through the
               // caller's ingestSnapshotChunk — the full snapshot never materializes in memory.
@@ -407,14 +488,17 @@ function createLanSyncNode(opts) {
             // The peer's server role is busy (mutual snapshot collision): end the round as a
             // clean retry-later — re-arm the trigger and let the normal backoff dial again.
             // NOT an error: both sides are healthy, they just tried to snapshot each other.
+            // ORDERING (round-3 review): finish(null) FIRST, then scheduleRetry — finish's
+            // success path calls resetBackoff, which DELETES the just-armed retry timer, so the
+            // old order stalled mutual-snapshot recovery to the 5-min round interval.
             if (!awaitingSnapshot) throw new Error('unsolicited snapshot-busy')
             awaitingSnapshot = false
             chunkBuf.clear()
             chunkRowCounts.clear()
             clientSnapshotBusy.delete(peer.deviceId)
             needSnapshot.add(peer.deviceId)
-            scheduleRetry(peer.deviceId)
             finish(null)
+            scheduleRetry(peer.deviceId)
           } else if (msg.type === 'snapshot-error') {
             // Clean terminal: the peer could not serve a snapshot right now (e.g. an oversized
             // row). Log to the recent ring; do NOT re-arm immediately — the retry budget
@@ -508,104 +592,10 @@ function createLanSyncNode(opts) {
         pushRecent({ at: Date.now(), kind: 'pair', peer: info && info.deviceId || (info && info.host) || '', detail: { host: info && info.host, inbound: true, confirmed: !!(info && info.confirmed) } })
         em.emit('paired-inbound', info)
       },
-      getHandler: (peer) => (msg, socket) => {
-        try {
-          if (msg.type === 'segments-chunk' && Array.isArray(msg.segments)) {
-            // Push receiver: ingest per chunk (idempotent under the merge rules) and ack ONCE at
-            // the final chunk. appliedToSeq is expressed in the SENDER's seq space: the max seq
-            // among the rows the sender pushed across ALL chunks of this connection (segment rows
-            // carry the sender's oplog seq — engine buildSegments contract). The sender feeds it
-            // into buildSegments(fromSeq) against ITS OWN oplog, so reporting OUR local max seq
-            // here (the old behavior) overshot the sender's cursor whenever our oplog ran ahead
-            // of theirs — their fresh rows were then skipped every round (permanent hole with
-            // >=3 devices, watermark persisted). Empty push -> omit the field: the sender keeps
-            // its cursor (monotonic guard). oldestSeq advertises the oldest oplog seq we still
-            // RETAIN (our space): a peer whose pull watermark is below it knows its increments
-            // are pruned here and must request a snapshot (see the client trigger).
-            if (!socket._segPush) socket._segPush = { maxSeq: 0, segments: 0 }
-            const acc = socket._segPush
-            for (const seg of msg.segments) {
-              ingestSegment(seg)
-              acc.segments += 1
-              for (const row of (seg && seg.rows) || []) {
-                const s = Number(row && row.seq)
-                if (Number.isFinite(s) && s > acc.maxSeq) acc.maxSeq = s
-              }
-            }
-            if (msg.final) {
-              // The response pull travels through the SAME bounded chunking: the server's own
-              // first-sync backlog is just as large as the client's.
-              const mine = buildSegments ? buildSegments() : []
-              for (const chunk of packSegmentChunks(mine)) {
-                sendVia(socket, { type: 'segments-chunk', segments: chunk.segments, final: chunk.final })
-              }
-              sendVia(socket, {
-                type: 'ack', applied: acc.segments, rejected: 0,
-                ...(acc.maxSeq > 0 ? { appliedToSeq: acc.maxSeq } : {}),
-                oldestSeq: getOldestSeq ? currentOldestSeq() : undefined,
-              })
-              socket._segPush = null // the acked push round is complete; a new push re-accumulates
-            }
-          } else if (msg.type === 'snapshot-request') {
-            // Snapshot-request protocol: stream the live state as bounded snapshot-chunk messages
-            // + a snapshot-end trailer carrying OUR current cursor, so the peer records it as its
-            // pull watermark and the next round is incremental. One transfer per peer at a time
-            // (serverSnapshotBusy — the SERVER role's flag, independent of the client role's);
-            // sends are synchronous, so the busy flag is a documented invariant guard. A request
-            // while busy is answered with snapshot-busy (NOT silently dropped): a silent drop made
-            // a mutual snapshot exchange deadlock until both rounds hit the 120s deadline.
-            if (!buildSnapshot && !buildSnapshotRows) return
-            if (serverSnapshotBusy.has(peer.deviceId)) {
-              sendVia(socket, { type: 'snapshot-busy' })
-              return
-            }
-            serverSnapshotBusy.add(peer.deviceId)
-            try {
-              const cursor = currentMaxSeq()
-              let totalRows = 0
-              let schemaVersion = Number(opts.snapshotSchemaVersion) || 1
-              let sent = 0
-              if (buildSnapshotRows) {
-                // Memory-bounded sender path (2026-09-18): chunk DIRECTLY from the rows array —
-                // the old buildSnapshot() string -> JSON.parse -> re-stringify round-trip held
-                // ~3x the whole dataset in the main process during a snapshot send.
-                const rows = buildSnapshotRows()
-                rows.sort((a, b) => String(a.id).localeCompare(String(b.id)))
-                totalRows = rows.length
-                for (const c of rowChunks(rows)) {
-                  sendVia(socket, { type: 'snapshot-chunk', index: sent, totalChunks: 0, schemaVersion, rows: c.rows })
-                  sent += 1
-                }
-              } else {
-                const built = chunkSnapshot(buildSnapshot(), { cursor })
-                totalRows = built.totalRows
-                schemaVersion = built.schemaVersion
-                for (const c of built.chunks) {
-                  sendVia(socket, { type: 'snapshot-chunk', index: c.index, totalChunks: built.chunks.length, schemaVersion, rows: c.rows })
-                  sent += 1
-                }
-              }
-              sendVia(socket, { type: 'snapshot-end', totalChunks: sent, totalRows, cursor, schemaVersion })
-              pushRecent({
-                at: Date.now(), kind: 'snapshot', peer: peer.deviceId,
-                detail: { direction: 'sent', rows: totalRows, cursor, label: `对端请求全量快照 / 已发送 ${totalRows} 行` },
-              })
-              em.emit('snapshot-sync', { peer: peer.deviceId, direction: 'sent', rows: totalRows, cursor })
-            } catch (err) {
-              // A build failure (e.g. chunkSnapshot: single row exceeds chunk budget) must NOT
-              // burn the requester's 120s round deadline: answer snapshot-error so the peer's
-              // round ends cleanly and it stops re-arming the trigger for this session.
-              try { sendVia(socket, { type: 'snapshot-error', reason: String((err && err.message) || 'snapshot failed') }) } catch { /* socket gone */ }
-              throw err
-            } finally {
-              serverSnapshotBusy.delete(peer.deviceId)
-            }
-          }
-        } catch (err) {
-          try { require('electron-log').warn('[LanSync] server handler failed:', err && err.message) } catch { /* noop */ }
-          em.emit('server-error', err)
-        }
-      },
+      // Server-role message handling lives in server-role.js (createServerRoleHandler, wired
+      // above): segments-chunk push receive + ack, per-peer pull cursor, snapshot-request
+      // serving with the busy invariant and the transfer ceiling.
+      getHandler: (peer) => (msg, socket) => handleServerMessage(peer, msg, socket, sendVia),
       onPeer: (peer) => em.emit('peer-connected', peer),
       onUnauthorized: (info) => {
         pushSecurity({ at: Date.now(), ip: info && info.host, reason: 'auth-rejected' })

@@ -56,23 +56,33 @@ function fresh(tables, writeImpl) {
   return m
 }
 
-test('bootstrap apply: remote todo tombstone winner lands as a buffered tombstone row', () => {
+test('bootstrap apply: ghost tombstone (unknown id, data:null) reports applied WITHOUT inserting an empty row', () => {
+  // Round-3 review: the inbound pointer's row was already purged on the origin and we never had
+  // the todo either — buffering an upsert here would materialize a content-empty junk row on
+  // peers that never saw the task. The op counts as applied (the pull watermark advances; the
+  // merge is idempotent) but NOTHING is written.
   const m = fresh({ ...EMPTY_TABLES })
   const ok = __test.applyRow({ entity: 'todo', id: 't1', seq: 7, ts: 100, deleted: true, deletedAt: 99, data: null })
-  assert.equal(ok, true, 'tombstone winner must report applied')
-  assert.equal(m.pendingWrites.todos.length, 1)
-  assert.equal(m.pendingWrites.todos[0].taskId, 't1')
-  assert.equal(m.pendingWrites.todos[0].delete, 1)
-  assert.equal(m.pendingWrites.todos[0].deletedAt, 99)
+  assert.equal(ok, true, 'tombstone winner must report applied (watermark advances)')
+  assert.equal(m.pendingWrites.todos.length, 0, 'no empty row may be materialized for an unknown id')
+  assert.equal(m.calls.find(c => c.op === 'upsertMany'), undefined)
 })
 
-test('bootstrap apply: remote todo tombstone beats an older local live row (delete-wins)', () => {
-  // local live row updatedAt=50 vs tombstone deletedAt=99 -> delete must win and land
-  const m = fresh({ ...EMPTY_TABLES, getAll: () => [{ taskId: 't1', updateTime: 50, delete: false, deletedAt: 0 }] })
+test('bootstrap apply: remote todo tombstone beats an older local live row (delete-wins + conflict copy)', () => {
+  // local live row updatedAt=50 vs tombstone deletedAt=99 -> delete must win and land. Round-3
+  // review: the LOSING live content is materialized as a tombstoned recycle-bin copy row first
+  // (suffixed id, never clobbering the winner), then the winner lands as a tombstone row.
+  const m = fresh({ ...EMPTY_TABLES, getAll: () => [{ taskId: 't1', updateTime: 50, delete: false, deletedAt: 0, taskContent: 'local edit' }] })
   const ok = __test.applyRow({ entity: 'todo', id: 't1', seq: 7, ts: 100, deleted: true, deletedAt: 99, data: null })
   assert.equal(ok, true)
-  assert.equal(m.pendingWrites.todos.length, 1)
-  assert.equal(m.pendingWrites.todos[0].delete, 1)
+  assert.equal(m.pendingWrites.todos.length, 2)
+  const copy = m.pendingWrites.todos[0]
+  assert.equal(copy.delete, 1, 'conflict copy is tombstoned (recoverable in the recycle bin)')
+  assert.match(String(copy.taskId), /^t1-conflict-/, 'conflict copy id cannot clobber the winner')
+  assert.equal(copy.taskContent, 'local edit', 'the losing content is preserved in the copy')
+  const winner = m.pendingWrites.todos[1]
+  assert.equal(winner.taskId, 't1')
+  assert.equal(winner.delete, 1)
 })
 
 test('bootstrap apply: remote setting tombstone lands via settingsRowDelete, not a resurrecting put', () => {
@@ -113,25 +123,24 @@ test('bootstrap apply: remote tomato tombstone lands via tomatoRemoveByIds', () 
   assert.equal(m.pendingWrites.tomatoes.length, 0)
 })
 
-test('bootstrap flush: a failing bulk op throws AND keeps the buffer (never silently drops the batch)', () => {
-  // Regression: flushPendingWrites cleared the buffers in a `finally`, so when upsertMany threw
-  // the engine had already counted the rows applied and the peer got acked — the batch was gone
-  // for good. Now the throw propagates (round fails, peer cursor stays, next round re-pushes).
-  let threw = false
+test('bootstrap flush: per-buffer isolation — a failing bulk op drops ONLY its segment, others still flush', () => {
+  // Round-3 review: one malformed row used to throw out of a single bulk op and leave every
+  // buffer dirty — the throw re-fired on every later flush, wedging apply AND flush forever.
+  // Now each buffer op gets its own try/catch: the failing segment is dropped + logged (the rows
+  // stay recoverable via a later snapshot), the buffers clear, and the other ops proceed.
   const m = fresh(
     { ...EMPTY_TABLES },
-    { upsertMany: () => { threw = true; throw new Error('disk full') } },
+    { upsertMany: () => { throw new Error('disk full') } },
   )
   m.pendingWrites.todos.push({ taskId: 't1', taskContent: 'hello' })
   m.pendingWrites.settings.push({ key: 'k', value: 'v' })
   m.pendingWrites.tomatoes.push({ tomatoId: 'tm1' })
-  assert.throws(() => __test.flushPendingWrites(), /disk full/)
-  assert.equal(threw, true)
-  assert.equal(m.pendingWrites.todos.length, 1, 'todo batch must be preserved for re-push')
-  // Settings/tomatoes are flushed after todos; since upsertMany threw first they were never
-  // attempted, so they must ALSO still be buffered.
-  assert.equal(m.pendingWrites.settings.length, 1, 'settings batch must be preserved')
-  assert.equal(m.pendingWrites.tomatoes.length, 1, 'tomato batch must be preserved')
+  __test.flushPendingWrites() // must NOT throw
+  assert.equal(m.pendingWrites.todos.length, 0, 'failing segment is dropped, not re-wedged')
+  assert.equal(m.pendingWrites.settings.length, 0, 'healthy segments still clear (they flushed)')
+  assert.equal(m.pendingWrites.tomatoes.length, 0)
+  assert.ok(m.calls.some(c => c.op === 'settingsRowPutMany'), 'settings flush was attempted after the todo failure')
+  assert.ok(m.calls.some(c => c.op === 'tomatoAppendMany'), 'tomato flush was attempted after the todo failure')
 })
 
 test('bootstrap apply: plan live-row edit is SKIPPED when local LWW age is unknown (cross-domain guard)', () => {
@@ -282,4 +291,113 @@ test('bootstrap flush: bulk-buffered categories/plans/filters land through their
   assert.equal(m.pendingWrites.categories.length, 0)
   assert.equal(m.pendingWrites.plans.length, 0)
   assert.equal(m.pendingWrites.filters.length, 0)
+})
+
+/* ---------- round-3 hardening: skew payload normalization ---------- */
+
+test('bootstrap apply: a SKEWED WINNER stores payload timestamps normalized to <= now', () => {
+  // The comparison keys are clamped (see the boundary test above); round-3 review: the PAYLOAD
+  // fields written to disk must be normalized too, or the clamped-arrival winner keeps a future
+  // updateTime on disk and later silently reverts the local user's real newer edit.
+  const now = Date.now()
+  const m = fresh({ ...EMPTY_TABLES })
+  const ok = __test.applyRow({
+    entity: 'todo', id: 't1', seq: 30, ts: now + 3600 * 1000,
+    updatedAt: now + 3600 * 1000, deleted: false, deletedAt: 0,
+    data: { taskId: 't1', taskContent: 'from the future', updateTime: now + 3600 * 1000, deletedAt: 0 },
+  })
+  assert.equal(ok, true)
+  const landed = m.pendingWrites.todos[0]
+  assert.ok(landed.updateTime <= now + 50, `stored updateTime must be <= now (got ${landed.updateTime - now}ms in the future)`)
+  assert.equal(landed.taskContent, 'from the future')
+})
+
+test('bootstrap apply: a local newer edit survives a stale skewed re-push (no silent revert)', () => {
+  // Scenario behind the payload clamp: the skewed row landed earlier (clamped), the local user
+  // then edited at now+2s; the stale skewed row is re-pushed verbatim — it must LOSE.
+  const now = Date.now()
+  const m = fresh({
+    ...EMPTY_TABLES,
+    getAll: () => [{ taskId: 't1', updateTime: now + 2000, delete: false, deletedAt: 0, taskContent: 'real local edit' }],
+  })
+  const ok = __test.applyRow({
+    entity: 'todo', id: 't1', seq: 31, ts: now + 3600 * 1000,
+    updatedAt: now + 3600 * 1000, deleted: false, deletedAt: 0,
+    data: { taskId: 't1', taskContent: 'stale skewed copy', updateTime: now + 3600 * 1000 },
+  })
+  assert.equal(ok, false, 'the clamped stale row loses to the newer local edit')
+  assert.equal(m.pendingWrites.todos.length, 0)
+})
+
+/* ---------- round-3 hardening: securityLock* exclusion (egress + ingress) ---------- */
+
+test('bootstrap apply: securityLock* settings NEVER ingress (password ciphertext is strictly local)', () => {
+  const syncApply = require('../../../src/main/sync-apply.js')
+  const m = fresh({
+    ...EMPTY_TABLES,
+    settingsRowsAll: () => [{ key: 'securityLockHash', value: 'bcrypt$', updatedAt: 1, deleted: false, deletedAt: 0 }],
+  })
+  const ok = __test.applyRow({ entity: 'setting', id: 'securityLockHash', seq: 40, ts: 500, updatedAt: 500, deleted: false, deletedAt: 0, data: { key: 'securityLockHash', value: 'attacker' } })
+  assert.equal(ok, false, 'a securityLock* write from a peer must be refused')
+  assert.equal(m.pendingWrites.settings.length, 0)
+  assert.ok(syncApply.SECURITY_LOCK_KEY.test('securityLockHash'))
+  assert.ok(syncApply.SECURITY_LOCK_KEY.test('securityLockQuestion'))
+})
+
+test('bootstrap hydrate: securityLock* settings rows never egress (hydrateRow returns null)', () => {
+  const syncApply = require('../../../src/main/sync-apply.js')
+  const state = { db: { call: (op) => op === 'settingsRowsAll'
+    ? [{ key: 'securityLockHash', value: 'secret', updatedAt: 5, deleted: false, deletedAt: 0 }, { key: 'theme', value: 'dark', updatedAt: 6, deleted: false, deletedAt: 0 }]
+    : null } }
+  const cache = syncApply.createHydrationCache(state)
+  assert.equal(syncApply.hydrateRow(state, { entity: 'setting', entityId: 'securityLockHash', seq: 1, ts: 1 }, cache), null, 'securityLock row is filtered from egress')
+  const ok = syncApply.hydrateRow(state, { entity: 'setting', entityId: 'theme', seq: 2, ts: 2 }, cache)
+  assert.ok(ok && ok.data && ok.data.key === 'theme', 'ordinary settings still hydrate')
+})
+
+/* ---------- round-3 hardening: userId normalization + diff exclusion ---------- */
+
+test('bootstrap apply: inbound todo rows land with the LOCAL userId, never the peer\'s', () => {
+  const m = fresh({
+    ...EMPTY_TABLES,
+    getAll: () => [{ taskId: 'existing', userId: 555000 }],
+  })
+  const ok = __test.applyRow({ entity: 'todo', id: 't1', seq: 50, ts: 100, updatedAt: 100, deleted: false, deletedAt: 0, data: { taskId: 't1', taskContent: 'x', updateTime: 100, userId: 999999 } })
+  assert.equal(ok, true)
+  assert.equal(m.pendingWrites.todos[0].userId, 555000, 'the local account id wins (read from local todos)')
+})
+
+test('rowContentDiffers: a userId-only difference is NOT a content change (no apply/push ping-pong)', () => {
+  const syncApply = require('../../../src/main/sync-apply.js')
+  assert.equal(syncApply.rowContentDiffers({ taskContent: 'same', userId: 1 }, { taskContent: 'same', userId: 2 }), false)
+  assert.equal(syncApply.rowContentDiffers({ taskContent: 'same' }, { taskContent: 'same' }), false)
+  assert.equal(syncApply.rowContentDiffers({ taskContent: 'a' }, { taskContent: 'b' }), true)
+})
+
+/* ---------- round-3 hardening: conflict-copy skip rules ---------- */
+
+test('bootstrap apply: identical-content conflict produces NO conflict copy (no recycle-bin spam)', () => {
+  // Both rows carry the same content: merge picks a winner, rowContentDiffers says no-op -> no
+  // write, and in particular no -conflict- copy row.
+  const now = Date.now()
+  const m = fresh({
+    ...EMPTY_TABLES,
+    getAll: () => [{ taskId: 't1', updateTime: now, delete: false, deletedAt: 0, taskContent: 'same' }],
+  })
+  const ok = __test.applyRow({ entity: 'todo', id: 't1', seq: 60, ts: now, updatedAt: now, deleted: false, deletedAt: 0, data: { taskId: 't1', taskContent: 'same', updateTime: now, delete: false, deletedAt: 0 } })
+  assert.equal(ok, false, 'identical content is a no-op')
+  assert.equal(m.pendingWrites.todos.length, 0, 'no copy row for identical content')
+})
+
+test('bootstrap apply: a pure-tombstone loser produces NO conflict copy', () => {
+  // Local row is ALREADY deleted (older): the inbound newer tombstone wins; a tombstone has no
+  // content worth copying, so only the winner lands (idempotent).
+  const m = fresh({
+    ...EMPTY_TABLES,
+    getAll: () => [{ taskId: 't1', updateTime: 50, delete: true, deletedAt: 60, taskContent: 'gone' }],
+  })
+  const ok = __test.applyRow({ entity: 'todo', id: 't1', seq: 61, ts: 100, deleted: true, deletedAt: 99, data: null })
+  assert.equal(ok, true)
+  const copies = m.pendingWrites.todos.filter(r => String(r.taskId).includes('-conflict-'))
+  assert.equal(copies.length, 0, 'no copy for a pure tombstone loser')
 })
