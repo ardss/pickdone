@@ -57,6 +57,20 @@ function red (msg, tapFile) {
       console.error(`  —— TAP 输出尾部 ${TAIL_LINES} 行 ——`)
       console.error(lines.slice(-TAIL_LINES).map(l => `  | ${l}`).join('\n'))
     }
+    // 失败用例名全量回放(tail-30 常吞掉输出中段的 "not ok N - <name>",2026-09-19 ubuntu 实锤:
+    // "# fail 1" 可见但失败用例名既不在尾部也不在 check-all 的 diag 里,无法定位)
+    const failCases = lines.filter(l => /^not ok \d/.test(l)).slice(0, 20)
+    if (failCases.length) {
+      console.error(`  —— 失败用例(${failCases.length}) ——`)
+      console.error(failCases.map(l => `  | ${l.trim().slice(0, 200)}`).join('\n'))
+      // 每个失败用例 TAP 块里的错误信息行(name/message/stack 首行)
+      for (const fc of failCases) {
+        const i = lines.indexOf(fc)
+        if (i === -1) continue
+        const detail = lines.slice(i + 1, i + 40).filter(l => /^\s+(message|code|expected|actual|operator):/.test(l)).slice(0, 6)
+        if (detail.length) console.error(detail.map(l => `  | ${l.trim().slice(0, 200)}`).join('\n'))
+      }
+    }
   }
   process.exit(1)
 }
