@@ -34,11 +34,22 @@ const { EventEmitter } = require('node:events')
 const { createDiscovery, PROTO_VER } = require('./discovery')
 const { createLanServer, connect, DEFAULT_PORT } = require('./transport')
 const { deriveAuthCode } = require('./pairing')
-const { chunkSnapshot } = require('./snapshot')
+const { chunkSnapshot, rowChunks, finalizeSnapshot } = require('./snapshot')
 const { packSegmentChunks } = require('./segments-chunk')
 
 const BACKOFF_BASE_MS = 5000
 const BACKOFF_MAX_MS = 60 * 1000
+// Round deadline: 120s of TOTAL silence fails the round; every PROGRESS event (a chunk
+// received, an ack, a snapshot trailer) re-arms the timer at PROGRESS_MS instead, so a slow
+// but moving snapshot transfer (first sync of a large library) is never killed mid-flight.
+const ROUND_DEADLINE_MS = 120 * 1000
+const ROUND_PROGRESS_MS = 45 * 1000
+// snapshot-error retry budget: a transient snapshot failure no longer blocks recovery for the
+// whole session. The peer gets SNAPSHOT_FATAL_BUDGET attempts per session (a retry re-arms
+// only after SNAPSHOT_ERROR_COOLDOWN stalled rounds so errors do not spam round after round);
+// the budget resets to 0 on any round where the peer's increments applied again.
+const SNAPSHOT_FATAL_BUDGET = 3
+const SNAPSHOT_ERROR_COOLDOWN_ROUNDS = 2
 // Device Center: a peer counts as "online" while mDNS saw it (or its last round succeeded)
 // within this window; a 30s sweep flips stale peers offline and emits peer-offline.
 const ONLINE_WINDOW_MS = 90 * 1000
@@ -61,7 +72,7 @@ const PAIR_CONFIRM_TIMEOUT_CLIENT_MS = 63 * 1000
 function createLanSyncNode(opts) {
   const {
     deviceId, name, pairingSecret,
-    ingestSegment, ingestSnapshot, buildSegments, buildSnapshot,
+    ingestSegment, ingestSnapshot, ingestSnapshotChunk, buildSegments, buildSnapshot, buildSnapshotRows,
   } = opts
   const port = Number.isInteger(opts.port) ? opts.port : DEFAULT_PORT
   const host = opts.host
@@ -106,7 +117,8 @@ function createLanSyncNode(opts) {
   const needSnapshot = new Set()
   const clientSnapshotBusy = new Set()
   const serverSnapshotBusy = new Set()
-  const snapshotFatal = new Set()
+  const snapshotFatalCount = new Map() // deviceId -> snapshot-error attempts this session (budget-capped, see constants)
+  const snapshotErrorCooldown = new Map() // deviceId -> stalled rounds since the last snapshot-error
 
   // Resolved once the TCP server is listening. Callers may await this at any
   // time (even after the event already fired) — unlike the 'listening' event,
@@ -212,10 +224,23 @@ function createLanSyncNode(opts) {
       let peerMaxSeqSeen = 0 // max seq observed in the PEER's segments this round (PEER's seq space)
       let roundApplied = 0 // rows the peer's segments changed locally this round (0 = no pull progress)
       let awaitingSnapshot = false // snapshot-request sent; the round ends at snapshot-end, not ack
-      const chunkBuf = new Map() // snapshot-chunk index -> rows (assembled at snapshot-end)
+      const chunkBuf = new Map() // snapshot-chunk index -> rows (assembled at snapshot-end, fallback mode)
+      const chunkRowCounts = new Map() // streaming mode: index -> applied row count (rows are NEVER buffered)
+      const streamingSnapshot = typeof ingestSnapshotChunk === 'function'
       let chunkTotal = 0 // chunk count as advertised by the chunk messages
-      // Round deadline timer; cleared in finish() so a fast ack does not leak it past round end.
+      // Round deadline: PROGRESS-based, not fixed (2026-09-18). A silent peer still fails at
+      // ROUND_DEADLINE_MS (120s); every data-carrying message re-arms the timer at
+      // ROUND_PROGRESS_MS, so a slow-but-moving first-sync snapshot is never killed mid-flight.
       let done = null
+      const roundTimeoutMs = Number(opts.roundTimeoutMs) || ROUND_DEADLINE_MS
+      const roundProgressMs = Number(opts.roundProgressMs) || ROUND_PROGRESS_MS
+      const armDeadline = (ms) => {
+        if (settled) return
+        if (done) clearTimeout(done)
+        done = setTimeout(() => finish(new Error('round timed out waiting for peer ack')), ms)
+        done.unref?.()
+      }
+      const progressDeadline = () => { if (!settled) armDeadline(roundProgressMs) }
       const client = connect(peer.host, peer.port, {
         deviceId,
         authCode,
@@ -273,7 +298,8 @@ function createLanSyncNode(opts) {
         const wm = pullWatermarkBy.get(peer.deviceId) || 0
         if (roundApplied > 0) {
           needSnapshot.delete(peer.deviceId)
-          snapshotFatal.delete(peer.deviceId) // state is changing again: re-arming is worth a try
+          snapshotFatalCount.delete(peer.deviceId) // state is changing again: full budget restored
+          snapshotErrorCooldown.delete(peer.deviceId)
           return
         }
         const oldest = Number(ackOldestSeq)
@@ -282,7 +308,16 @@ function createLanSyncNode(opts) {
         // only: peerMaxSeqSeen comes from the peer's own segment seqs — NEVER mix it with the
         // sender-space appliedToSeq (the 2026-09-18 watermark-overshoot bug was exactly that).
         if (peerMaxSeqSeen > 0 && peerMaxSeqSeen <= wm) return
-        if (snapshotFatal.has(peer.deviceId)) return // peer cannot serve a snapshot (snapshot-error)
+        // snapshot-error retry budget: a transient failure gets up to SNAPSHOT_FATAL_BUDGET
+        // attempts per session (each retry after a cooldown so errors do not spam), and the
+        // budget resets as soon as the peer's increments apply again (see roundApplied above).
+        const attempts = snapshotFatalCount.get(peer.deviceId) || 0
+        if (attempts >= SNAPSHOT_FATAL_BUDGET) return // budget exhausted for this session
+        if (attempts > 0) {
+          const stalled = (snapshotErrorCooldown.get(peer.deviceId) || 0) + 1
+          if (stalled <= SNAPSHOT_ERROR_COOLDOWN_ROUNDS) { snapshotErrorCooldown.set(peer.deviceId, stalled); return }
+          snapshotErrorCooldown.set(peer.deviceId, 0)
+        }
         if (oldest > wm + 1 && !clientSnapshotBusy.has(peer.deviceId)) needSnapshot.add(peer.deviceId)
       }
       client.on('error', (err) => finish(err))
@@ -318,6 +353,10 @@ function createLanSyncNode(opts) {
       })
       client.on('message', (msg) => {
         try {
+          // Progress-based deadline: any data-carrying message proves the peer is alive and
+          // moving — re-arm at the shorter progress budget (a stalled peer still dies at the
+          // initial 120s full deadline).
+          if (msg.type === 'segments-chunk' || msg.type === 'snapshot-chunk' || msg.type === 'snapshot-end' || msg.type === 'ack') progressDeadline()
           if (msg.type === 'segments-chunk' && Array.isArray(msg.segments)) {
             let pullAckSeq = 0 // max seq among the rows the peer just pushed to us (PEER's seq space)
             for (const seg of msg.segments) {
@@ -350,7 +389,17 @@ function createLanSyncNode(opts) {
           } else if (msg.type === 'snapshot-chunk' && Array.isArray(msg.rows)) {
             if (!awaitingSnapshot) throw new Error('unsolicited snapshot-chunk')
             chunkTotal = Number(msg.totalChunks) || chunkTotal
-            chunkBuf.set(Number(msg.index) || 0, msg.rows)
+            const idx = Number(msg.index) || 0
+            if (streamingSnapshot) {
+              // Streaming receiver (2026-09-18): apply + flush THIS chunk immediately through the
+              // caller's ingestSnapshotChunk — the full snapshot never materializes in memory.
+              // Crash semantics are unchanged: the pull watermark still advances ONLY at
+              // snapshot-end, and chunk-merge-apply is idempotent.
+              ingestSnapshotChunk({ schemaVersion: Number(msg.schemaVersion) || 1, deviceId: peer.deviceId, rows: msg.rows })
+              chunkRowCounts.set(idx, msg.rows.length)
+            } else {
+              chunkBuf.set(idx, msg.rows)
+            }
           } else if (msg.type === 'snapshot-busy') {
             // The peer's server role is busy (mutual snapshot collision): end the round as a
             // clean retry-later — re-arm the trigger and let the normal backoff dial again.
@@ -358,20 +407,24 @@ function createLanSyncNode(opts) {
             if (!awaitingSnapshot) throw new Error('unsolicited snapshot-busy')
             awaitingSnapshot = false
             chunkBuf.clear()
+            chunkRowCounts.clear()
             clientSnapshotBusy.delete(peer.deviceId)
             needSnapshot.add(peer.deviceId)
             scheduleRetry(peer.deviceId)
             finish(null)
           } else if (msg.type === 'snapshot-error') {
-            // Clean terminal: the peer cannot serve a snapshot at all (e.g. a single live row
-            // exceeds the chunk budget). Log to the recent ring, and never re-arm the trigger
-            // this session unless the peer's state starts progressing again (see trigger).
+            // Clean terminal: the peer could not serve a snapshot right now (e.g. an oversized
+            // row). Log to the recent ring; do NOT re-arm immediately — the retry budget
+            // (SNAPSHOT_FATAL_BUDGET per session, cooldown-spaced, reset on progress) lets a
+            // TRANSIENT failure recover without restart while a hard failure stops spamming.
             if (!awaitingSnapshot) throw new Error('unsolicited snapshot-error')
             const reason = String((msg && msg.reason) || 'snapshot failed')
             awaitingSnapshot = false
             chunkBuf.clear()
+            chunkRowCounts.clear()
+            snapshotErrorCooldown.delete(peer.deviceId)
+            snapshotFatalCount.set(peer.deviceId, (snapshotFatalCount.get(peer.deviceId) || 0) + 1)
             clientSnapshotBusy.delete(peer.deviceId)
-            snapshotFatal.add(peer.deviceId)
             pushRecent({ at: Date.now(), kind: 'error', peer: peer.deviceId, detail: { error: `snapshot-error: ${reason}` } })
             em.emit('snapshot-error', { peer: peer.deviceId, reason })
             finish(null)
@@ -379,41 +432,30 @@ function createLanSyncNode(opts) {
             // All-or-nothing finalization. ONLY process snapshot-end when a snapshot was actually
             // requested on this connection (awaitingSnapshot) — anything else is a protocol
             // violation and fails the round. The chunks must tile exactly [0..n) and sum to
-            // totalRows, and ingestSnapshot must succeed — ONLY then does the pull watermark
-            // advance to the sender's cursor. A partial/failed snapshot fails the round, leaves
-            // the DB at the per-chunk committed state (merge-apply is idempotent), and the next
-            // round re-requests (the trigger re-fires because the watermark did not advance).
+            // totalRows — ONLY then does the pull watermark advance to the sender's cursor (in
+            // streaming mode the rows were ALREADY applied+flushed per chunk; in fallback mode
+            // they are assembled here and handed to ingestSnapshot once). A partial/failed
+            // snapshot fails the round, leaves the DB at the per-chunk committed state
+            // (merge-apply is idempotent), and the next round re-requests (the trigger re-fires
+            // because the watermark did not advance).
             if (!awaitingSnapshot) throw new Error('unsolicited snapshot-end')
-            const declared = Number(msg.totalChunks)
-            const chunkCount = Number.isInteger(declared) && declared >= 0 ? declared : chunkTotal
             const totalRows = Number(msg.totalRows) || 0
-            let rows = null
-            if (chunkCount === 0) {
-              // Empty live state is a VALID terminal (nothing to sync): totalChunks:0 +
-              // totalRows:0 + cursor. Treating it as an error caused an infinite re-arm loop.
-              if (totalRows !== 0 || chunkBuf.size !== 0) {
-                throw new Error('incomplete snapshot: empty trailer but chunks/rows were advertised')
-              }
-              rows = []
-            } else {
-              const okShape = Number.isInteger(chunkCount) && chunkCount > 0 && chunkBuf.size === chunkCount &&
-                Array.from({ length: chunkCount }, (_, i) => chunkBuf.has(i)).every(Boolean)
-              rows = okShape ? Array.from({ length: chunkCount }, (_, i) => chunkBuf.get(i)).flat() : null
-              if (!rows || rows.length !== totalRows) {
-                throw new Error(`incomplete snapshot: ${rows ? rows.length : 'bad chunk set'} of ${totalRows} rows`)
-              }
+            const fin = finalizeSnapshot({ declaredChunks: Number(msg.totalChunks), chunkTotal, totalRows, chunkBuf, chunkRowCounts })
+            if (!fin.ok) throw new Error(fin.reason)
+            if (!streamingSnapshot && fin.rows) {
+              ingestSnapshot({ schemaVersion: Number(msg.schemaVersion) || 1, deviceId: peer.deviceId, rows: fin.rows })
             }
             chunkBuf.clear()
-            ingestSnapshot({ schemaVersion: Number(msg.schemaVersion) || 1, deviceId: peer.deviceId, rows })
+            chunkRowCounts.clear()
             // Monotonic guard: a cursor of 0/absent must never REGRESS the watermark.
             const cursor = Math.max(pullWatermarkBy.get(peer.deviceId) || 0, Number(msg.cursor) || 0)
             pullWatermarkBy.set(peer.deviceId, cursor) // watermark advances ONLY here
             clientSnapshotBusy.delete(peer.deviceId)
             pushRecent({
               at: Date.now(), kind: 'snapshot', peer: peer.deviceId,
-              detail: { direction: 'received', rows: rows.length, cursor },
+              detail: { direction: 'received', rows: totalRows, cursor },
             })
-            em.emit('snapshot-sync', { peer: peer.deviceId, direction: 'received', rows: rows.length, cursor })
+            em.emit('snapshot-sync', { peer: peer.deviceId, direction: 'received', rows: totalRows, cursor })
             awaitingSnapshot = false
             finish(null)
           } else if (msg.type === 'ack') {
@@ -440,10 +482,9 @@ function createLanSyncNode(opts) {
         }
       })
       // No ack before the deadline = the round failed (push cursor stays put; next round re-pushes).
-      // The budget covers a FIRST sync between two real devices: tens of thousands of oplog rows
-      // ingested on both sides before either ack can be produced (2026-09-17 drill measured >30s).
-      done = setTimeout(() => finish(new Error('round timed out waiting for peer ack')), 120000)
-      done.unref?.()
+      // The initial budget covers a FIRST sync between two real devices of silence; actual data
+      // transfer keeps extending it via progressDeadline() (see the message handler below).
+      armDeadline(roundTimeoutMs)
     })
   }
 
@@ -510,18 +551,38 @@ function createLanSyncNode(opts) {
             // sends are synchronous, so the busy flag is a documented invariant guard. A request
             // while busy is answered with snapshot-busy (NOT silently dropped): a silent drop made
             // a mutual snapshot exchange deadlock until both rounds hit the 120s deadline.
-            if (!buildSnapshot) return
+            if (!buildSnapshot && !buildSnapshotRows) return
             if (serverSnapshotBusy.has(peer.deviceId)) {
               sendVia(socket, { type: 'snapshot-busy' })
               return
             }
             serverSnapshotBusy.add(peer.deviceId)
             try {
-              const { chunks, totalRows, schemaVersion, cursor } = chunkSnapshot(buildSnapshot(), { cursor: currentMaxSeq() })
-              for (const c of chunks) {
-                sendVia(socket, { type: 'snapshot-chunk', index: c.index, totalChunks: chunks.length, schemaVersion, rows: c.rows })
+              const cursor = currentMaxSeq()
+              let totalRows = 0
+              let schemaVersion = Number(opts.snapshotSchemaVersion) || 1
+              let sent = 0
+              if (buildSnapshotRows) {
+                // Memory-bounded sender path (2026-09-18): chunk DIRECTLY from the rows array —
+                // the old buildSnapshot() string -> JSON.parse -> re-stringify round-trip held
+                // ~3x the whole dataset in the main process during a snapshot send.
+                const rows = buildSnapshotRows()
+                rows.sort((a, b) => String(a.id).localeCompare(String(b.id)))
+                totalRows = rows.length
+                for (const c of rowChunks(rows)) {
+                  sendVia(socket, { type: 'snapshot-chunk', index: sent, totalChunks: 0, schemaVersion, rows: c.rows })
+                  sent += 1
+                }
+              } else {
+                const built = chunkSnapshot(buildSnapshot(), { cursor })
+                totalRows = built.totalRows
+                schemaVersion = built.schemaVersion
+                for (const c of built.chunks) {
+                  sendVia(socket, { type: 'snapshot-chunk', index: c.index, totalChunks: built.chunks.length, schemaVersion, rows: c.rows })
+                  sent += 1
+                }
               }
-              sendVia(socket, { type: 'snapshot-end', totalChunks: chunks.length, totalRows, cursor, schemaVersion })
+              sendVia(socket, { type: 'snapshot-end', totalChunks: sent, totalRows, cursor, schemaVersion })
               pushRecent({
                 at: Date.now(), kind: 'snapshot', peer: peer.deviceId,
                 detail: { direction: 'sent', rows: totalRows, cursor, label: `对端请求全量快照 / 已发送 ${totalRows} 行` },

@@ -27,6 +27,7 @@ const os = require('node:os')
 const log = require('electron-log')
 const { createEngine } = require('../../shared/sync-core/engine.mjs')
 const mergeCore = require('../../shared/sync-core/merge.mjs')
+const { SYNC_SCHEMA_VERSION } = require('../../shared/sync-core/merge.mjs')
 const { generatePairingSecret, derivePairingCode } = require('../../shared/sync-core/pairing.mjs')
 const { createLanSyncNode } = require('./lan-sync/index')
 const { DEFAULT_PORT } = require('./lan-sync/transport')
@@ -443,6 +444,19 @@ function startSync () {
       } finally { state.applyCache = null }
       return { rows: rows.length }
     },
+    // Streaming snapshot receiver: the node calls this PER received snapshot-chunk, so the
+    // full snapshot never materializes in memory and pendingWrites flush per chunk (bounded
+    // buffers). Crash semantics unchanged: the pull watermark still advances only at
+    // snapshot-end, and chunk-merge-apply is idempotent.
+    ingestSnapshotChunk: body => {
+      const rows = Array.isArray(body && body.rows) ? body.rows : []
+      state.applyCache = createHydrationCache()
+      try {
+        for (const r of rows) applyRowSafe(r)
+        flushPendingWrites()
+      } finally { state.applyCache = null }
+      return { rows: rows.length }
+    },
     getMaxSeq: () => readMaxOplogSeq(),
     // Oldest oplog seq still retained (the ring prunes from the front): advertised in the round
     // ack so a watermark-behind peer can tell its increments were pruned on our side.
@@ -451,7 +465,17 @@ function startSync () {
       return rows.length ? rows[0].seq : 0
     },
     buildSegments: buildSegmentsWrapped,
-    buildSnapshot: () => state.engine.buildSnapshot()
+    // Memory-bounded snapshot sender: the node streams bounded chunks straight from this rows
+    // array (sorted like engine.buildSnapshot). engine.buildSnapshot (full canonical JSON
+    // string) is intentionally NOT wired here anymore — materializing it held ~3x the dataset
+    // in the main process during a snapshot send. It stays available in the engine for
+    // tests/CLI.
+    buildSnapshotRows: () => {
+      const rows = createLocalStoreAdapter().allRows()
+      rows.sort((a, b) => String(a.id).localeCompare(String(b.id)))
+      return rows
+    },
+    snapshotSchemaVersion: SYNC_SCHEMA_VERSION,
   })
   state.node.on('round-error', info => {
     log.warn('[LanSync] round error:', info && info.error)

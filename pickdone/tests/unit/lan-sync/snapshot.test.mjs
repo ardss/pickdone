@@ -497,7 +497,7 @@ test('snapshot: unsolicited snapshot-end (no request in flight) fails the round'
   await server.close()
 })
 
-test('snapshot: snapshot-error is a clean terminal — logged, and the trigger does NOT re-arm this session', async () => {
+test('snapshot: snapshot-error is a clean terminal — logged, and immediate re-arm is suppressed (cooldown + budget)', async () => {
   const server = rawPeerServer({
     ack: { appliedToSeq: 100, oldestSeq: 50 },
     onRequest: (n, socket) => line(socket, { type: 'snapshot-error', reason: 'chunkSnapshot: single row exceeds chunk budget' }),
@@ -516,10 +516,208 @@ test('snapshot: snapshot-error is a clean terminal — logged, and the trigger d
 
   const r3 = await node.startSyncRound()
   assert.equal(r3.confirmed, 1)
-  assert.equal(server.seen.snapshotRequests, 1, 'no re-arm after a snapshot-error terminal')
+  assert.equal(server.seen.snapshotRequests, 1, 'no IMMEDIATE re-arm after a snapshot-error terminal (cooldown)')
 
   await node.stop()
   await server.close()
+})
+
+test('snapshot: snapshot-error retry budget — a transient failure recovers without restart', async () => {
+  // The peer answers snapshot-error for the first 2 requests, then serves a valid transfer.
+  // Old behavior: the FIRST error permanently blocked recovery until app restart.
+  let valid = false
+  const server = rawPeerServer({
+    ack: { appliedToSeq: 100, oldestSeq: 50 },
+    onRequest: (n, socket) => {
+      if (!valid) {
+        line(socket, { type: 'snapshot-error', reason: 'transient' })
+        if (n >= 2) valid = true
+        return
+      }
+      line(socket, { type: 'snapshot-chunk', index: 0, totalChunks: 1, schemaVersion: 1, rows: [{ entity: 'todo', id: 'ok', seq: 1 }] })
+      line(socket, { type: 'snapshot-end', totalChunks: 1, totalRows: 1, cursor: 100, schemaVersion: 1 })
+    },
+  })
+  const port = await listen(server)
+  const node = makeNode()
+  node.start()
+  await node.whenListening()
+  node.addPeer({ deviceId: 'peer', host: '127.0.0.1', port })
+
+  await node.startSyncRound() // arm
+  await node.startSyncRound() // request 1 -> error (attempt 1)
+  // cooldown: after an error the trigger waits 2 stalled rounds, then arms; the REQUEST itself
+  // fires on the following round.
+  await node.startSyncRound() // cooldown 1
+  await node.startSyncRound() // cooldown 2
+  await node.startSyncRound() // re-arms (cooldown elapsed)
+  const r6 = await node.startSyncRound() // request 2 -> error (attempt 2)
+  assert.equal(server.seen.snapshotRequests, 2)
+  assert.equal(r6.confirmed, 1)
+  // cooldown again, then re-arm -> request 3 -> VALID transfer
+  await node.startSyncRound()
+  await node.startSyncRound()
+  await node.startSyncRound()
+  const r = await node.startSyncRound()
+  assert.equal(server.seen.snapshotRequests, 3)
+  assert.equal(r.confirmed, 1)
+  assert.equal(node.getStatus().peers[0].pullWatermark, 100, 'the recovered transfer advances the watermark')
+
+  await node.stop()
+  await server.close()
+})
+
+test('snapshot: fatal budget exhausts after 3 errors and stops the re-arm/error spam', async () => {
+  const server = rawPeerServer({
+    ack: { appliedToSeq: 100, oldestSeq: 50 },
+    onRequest: (n, socket) => line(socket, { type: 'snapshot-error', reason: 'boom' }),
+  })
+  const port = await listen(server)
+  const node = makeNode()
+  node.start()
+  await node.whenListening()
+  node.addPeer({ deviceId: 'peer', host: '127.0.0.1', port })
+
+  // Burn the whole budget: arm + (2 cooldown rounds + request round) x 3 = attempts 3.
+  await node.startSyncRound() // arm
+  for (let i = 0; i < 3; i++) {
+    await node.startSyncRound()
+    await node.startSyncRound()
+    await node.startSyncRound() // this one re-arms and collects the error
+  }
+  assert.equal(server.seen.snapshotRequests, 3, 'exactly the 3 budget attempts were made')
+  // Budget exhausted: further stalled rounds never re-arm again (no error spam).
+  for (let i = 0; i < 5; i++) await node.startSyncRound()
+  assert.equal(server.seen.snapshotRequests, 3, 'no re-arm after the budget is exhausted')
+
+  await node.stop()
+  await server.close()
+})
+
+test('snapshot: streaming receiver applies + flushes per chunk and never buffers rows', async () => {
+  // ingestSnapshotChunk present -> streaming mode: each chunk is applied on ARRIVAL (before
+  // snapshot-end), the pull watermark still advances only at snapshot-end.
+  const snapRows = [
+    { entity: 'todo', id: 's1', updatedAt: 1, deleted: false, deletedAt: 0, data: { taskId: 's1' } },
+    { entity: 'todo', id: 's2', updatedAt: 2, deleted: false, deletedAt: 0, data: { taskId: 's2' } },
+    { entity: 'todo', id: 's3', updatedAt: 3, deleted: false, deletedAt: 0, data: { taskId: 's3' } },
+  ]
+  const server = rawPeerServer({
+    ack: { appliedToSeq: 100, oldestSeq: 50 },
+    onRequest: (n, socket) => {
+      line(socket, { type: 'snapshot-chunk', index: 0, totalChunks: 2, schemaVersion: 1, rows: [snapRows[0]] })
+      line(socket, { type: 'snapshot-chunk', index: 1, totalChunks: 2, schemaVersion: 1, rows: snapRows.slice(1) })
+      line(socket, { type: 'snapshot-end', totalChunks: 2, totalRows: 3, cursor: 100, schemaVersion: 1 })
+    },
+  })
+  const port = await listen(server)
+  const chunkApplications = []
+  let endApplied = 0
+  const node = makeNode({
+    ingestSnapshotChunk: ({ rows }) => { chunkApplications.push(rows.map(r => r.id)) },
+    ingestSnapshot: () => { endApplied += 1 },
+  })
+  node.start()
+  await node.whenListening()
+  node.addPeer({ deviceId: 'peer', host: '127.0.0.1', port })
+
+  await node.startSyncRound() // arm
+  const r = await node.startSyncRound() // streaming transfer
+  assert.equal(r.confirmed, 1)
+  assert.deepEqual(chunkApplications, [['s1'], ['s2', 's3']], 'each chunk was applied on arrival, in order')
+  assert.equal(endApplied, 0, 'the assembled-ingest fallback is NOT used in streaming mode')
+  assert.equal(node.getStatus().peers[0].pullWatermark, 100, 'watermark advances at snapshot-end only')
+
+  await node.stop()
+  await server.close()
+})
+
+test('snapshot: sender streams chunks directly from the rows array (buildSnapshotRows path)', async () => {
+  const rows = [
+    { entity: 'todo', id: 'b', updatedAt: 2, deleted: false, deletedAt: 0, data: { taskId: 'b' } },
+    { entity: 'todo', id: 'a', updatedAt: 1, deleted: false, deletedAt: 0, data: { taskId: 'a' } },
+    { entity: 'todo', id: 'c', updatedAt: 3, deleted: false, deletedAt: 0, data: { taskId: 'c' } },
+  ]
+  const receivedIds = []
+  const nodeA = makeNode({
+    deviceId: 'node-a',
+    ingestSnapshot: (snap) => { receivedIds.push(...snap.rows.map(r => r.id)); return { rows: snap.rows.length } },
+  })
+  const nodeB = makeNode({
+    deviceId: 'node-b',
+    getMaxSeq: () => 42,
+    getOldestSeq: () => 30, // pruned past A's watermark: arms the snapshot trigger
+    ingestSegment: () => ({ applied: 0, rejected: 0 }),
+    // Array path: no buildSnapshot JSON string is ever produced.
+    buildSnapshotRows: () => rows.slice(),
+    snapshotSchemaVersion: 7,
+  })
+  nodeA.start()
+  nodeB.start()
+  const [, portB] = await Promise.all([nodeA.whenListening(), nodeB.whenListening()])
+  nodeA.addPeer({ deviceId: 'node-b', host: '127.0.0.1', port: portB, name: 'Node B' })
+
+  await nodeA.startSyncRound() // arm (stalled + oldest > wm+1)
+  const r = await nodeA.startSyncRound() // snapshot flows
+  assert.equal(r.confirmed, 1)
+  assert.deepEqual(receivedIds, ['a', 'b', 'c'], 'rows streamed sorted by id, tiled across chunks')
+  assert.equal(nodeA.getStatus().peers[0].pullWatermark, 42, 'cursor recorded as pull watermark')
+
+  await nodeA.stop()
+  await nodeB.stop()
+})
+
+test('snapshot: progress-based round deadline — a slow-drip transfer outlives a short base deadline', async () => {
+  // Base deadline 400ms, progress extension 300ms. The peer sends 5 chunks, one every 150ms
+  // (total 750ms+): a fixed deadline shorter than the transfer would kill it mid-flight; the
+  // progress-based deadline stays alive because every chunk re-arms the timer.
+  const server = rawPeerServer({
+    ack: { appliedToSeq: 100, oldestSeq: 50 },
+    onRequest: async (n, socket) => {
+      for (let i = 0; i < 5; i++) {
+        await new Promise((r2) => setTimeout(r2, 150))
+        line(socket, { type: 'snapshot-chunk', index: i, totalChunks: 5, schemaVersion: 1, rows: [{ entity: 'todo', id: 'drip' + i }] })
+      }
+      line(socket, { type: 'snapshot-end', totalChunks: 5, totalRows: 5, cursor: 100, schemaVersion: 1 })
+    },
+  })
+  const port = await listen(server)
+  const node = makeNode({ roundTimeoutMs: 400, roundProgressMs: 300 })
+  node.start()
+  await node.whenListening()
+  node.addPeer({ deviceId: 'peer', host: '127.0.0.1', port })
+
+  await node.startSyncRound() // arm
+  const r = await node.startSyncRound() // slow-drip snapshot: total > base deadline
+  assert.equal(r.confirmed, 1, 'a moving transfer completes despite exceeding the base deadline')
+  assert.equal(node.getStatus().peers[0].pullWatermark, 100)
+
+  await node.stop()
+  await server.close()
+})
+
+test('snapshot: idle timeout — a silent peer still fails the round at the (short) deadline', async () => {
+  const server = rawPeerServer({
+    ack: { appliedToSeq: 100, oldestSeq: 50 },
+    onRequest: () => { /* never reply */ },
+  })
+  const port = await listen(server)
+  const node = makeNode({ roundTimeoutMs: 250, roundProgressMs: 200 })
+  node.start()
+  await node.whenListening()
+  node.addPeer({ deviceId: 'peer', host: '127.0.0.1', port })
+
+  await node.startSyncRound() // arm
+  const t0 = Date.now()
+  const r = await node.startSyncRound() // no progress at all
+  const elapsed = Date.now() - t0
+  assert.equal(r.confirmed, 0, 'a silent peer fails its round')
+  assert.ok(elapsed >= 200 && elapsed < 5000, `idle timeout fired near the deadline (took ${elapsed}ms)`)
+  assert.equal(node.getStatus().peers[0].pullWatermark, null)
+  assert.match(node.getStatus().lastError || '', /timed out/)
+
+  await node.stop()
+  server.close()
 })
 
 test('snapshot: adversarial chunk streams (missing/duplicate index, totalRows mismatch, chunks-less end) fail the round without advancing the watermark', async () => {
