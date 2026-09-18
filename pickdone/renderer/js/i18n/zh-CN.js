@@ -128,6 +128,14 @@ export default {
     "kindError": "错误",
     "kindPair": "配对",
     "securityWarn": "有未知设备尝试配对（已拦截）",
-    "securityDetail": "拦截详情"
+    "securityDetail": "拦截详情",
+    "pairExpiredMsg": "配对请求已过期，请让对方重新发起",
+    "pairWaiting": "正在等待对方确认…（60s）",
+    "pairTimeoutMsg": "对方未响应（超时）",
+    "pairThrottledMsg": "尝试过于频繁，请稍后再试",
+    "pairFailGenericMsg": "配对失败，请重试",
+    "pairExpiredHint": "请求已超时",
+    "kindSnapshot": "快照同步",
+    "feedSessionHint": "记录仅保留本次运行期间"
   }
 }

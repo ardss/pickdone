@@ -128,6 +128,14 @@ export default {
     "kindError": "Error",
     "kindPair": "Pair",
     "securityWarn": "An unknown device attempted to pair (blocked)",
-    "securityDetail": "Blocked attempts"
+    "securityDetail": "Blocked attempts",
+    "pairExpiredMsg": "The pairing request has expired — please have them try again",
+    "pairWaiting": "Waiting for the other device to confirm… (60s)",
+    "pairTimeoutMsg": "No response from the other device (timeout)",
+    "pairThrottledMsg": "Too many attempts — please try again later",
+    "pairFailGenericMsg": "Pairing failed — please try again",
+    "pairExpiredHint": "Request timed out",
+    "kindSnapshot": "Snapshot sync",
+    "feedSessionHint": "History is kept for this session only"
   }
 }

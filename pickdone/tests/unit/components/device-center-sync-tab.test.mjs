@@ -104,6 +104,7 @@ test('feed icon + relative time buckets are pure and total', () => {
   assert.equal(feedIcon('pull'), '↓')
   assert.equal(feedIcon('error'), '!')
   assert.equal(feedIcon('pair'), '∞')
+  assert.equal(feedIcon('snapshot'), '⇄')
   assert.equal(feedIcon('???'), '·')
   const now = 1700000000000
   assert.deepEqual(relTimeParts(now - 30 * 1000, now), { n: 0, unit: 'now' })
@@ -112,12 +113,82 @@ test('feed icon + relative time buckets are pure and total', () => {
   assert.deepEqual(relTimeParts(now - 2 * 86400 * 1000, now), { n: 2, unit: 'day' })
 })
 
+test('snapshot feed kind maps to the 快照同步 label (zh+en) in feedLine and the live-append path', async () => {
+  const { feedIcon } = pureFns(['feedIcon'])
+  assert.equal(feedIcon('snapshot'), '⇄')
+  assert.match(src, /snapshot: 'sync\.kindSnapshot'/, 'feedLine kindKey map must cover snapshot')
+  assert.match(src, /evt\.kind === 'snapshot' \? 'snapshot'/, 'live-append path must map snapshot events')
+  const zh = (await import(pathToFileURL(path.join(ROOT, 'renderer/js/i18n/zh-CN.js')))).default.sync
+  const en = (await import(pathToFileURL(path.join(ROOT, 'renderer/js/i18n/en-US.js')))).default.sync
+  assert.equal(zh.kindSnapshot, '快照同步')
+  assert.equal(en.kindSnapshot, 'Snapshot sync')
+})
+
 /* ---------- events + refresh + i18n symmetry ---------- */
 
 test('component refreshes status on every syncEvent and on mount', () => {
   assert.match(src, /onSyncEvent \(evt\)[\s\S]*?this\.refresh\(\)/)
-  assert.match(src, /mounted \(\) \{ this\.refresh\(\); this\.bindSyncEvents\(\) \}/)
+  assert.match(src, /mounted \(\) \{[\s\S]*?this\.refresh\(\)\.then\(\(\) => this\.checkPendingPair\(\)\)[\s\S]*?this\.bindSyncEvents\(\)[\s\S]*?\}/)
   assert.match(src, /onSyncEvent/, 'must subscribe to the syncEvent channel')
+})
+
+/* ---------- sync-hardening wave (2026-09-18) ---------- */
+
+test('syncEvent listener disposer is kept and called in beforeUnmount (no stacked listeners across remounts)', () => {
+  assert.match(src, /this\._syncEventDisposer = typeof off === 'function' \? off : null/,
+    'bindSyncEvents must store the unsubscribe fn returned by onSyncEvent')
+  const unmount = src.match(/beforeUnmount \(\) \{([\s\S]*?)\r?\n {2}\},\r?\n {2}mounted/)[1]
+  assert.match(unmount, /this\._syncEventDisposer[\s\S]*?this\._syncEventDisposer\(\)/,
+    'beforeUnmount must invoke the disposer (mount→unmount→mount leaves exactly one listener)')
+  assert.match(unmount, /this\._relTimer/, 'beforeUnmount must clear the relative-time ticker too')
+})
+
+test('pendingPair from syncGetStatus is consumed on mount (recovers the dialog after reopening settings)', () => {
+  assert.match(src, /checkPendingPair \(\) \{[\s\S]*?this\.status && this\.status\.pendingPair[\s\S]*?showIncomingPair/,
+    'status.pendingPair must open the same confirm dialog on mount')
+  assert.match(src, /if \(pp && !this\.incomingPair\)/, 'must not clobber a live dialog')
+})
+
+test('respondPair inspects the result: ok:false on accept toasts expiry, not success', () => {
+  assert.match(src, /const r = \(await syncPairRespond\(\{ accept: !!accept \}\)\) as \{ ok\?: boolean \} \| null/)
+  assert.match(src, /r && r\.ok === false\)[^\n]*pairExpiredMsg/, 'expired accept → 配对请求已过期 toast')
+  assert.match(src, /pairOkMsg/, 'successful accept still toasts success')
+})
+
+test('outbound connectPeer: connecting flag (disabled + inline hint) and reason-mapped failure toasts', () => {
+  const { pairFailureKey } = pureFns(['pairFailureKey'])
+  assert.equal(pairFailureKey({ reason: 'rejected' }), 'sync.pairRejectedMsg')
+  assert.equal(pairFailureKey({ message: 'pair timeout after 60s' }), 'sync.pairTimeoutMsg')
+  assert.equal(pairFailureKey({ reason: 'pair-throttled' }), 'sync.pairThrottledMsg')
+  assert.equal(pairFailureKey({}), '')
+  assert.equal(pairFailureKey(null), '')
+  assert.match(src, /this\.connecting = true/, 'immediate waiting state on connectPeer start')
+  assert.match(src, /:disabled="busy \|\| connecting \|\| !connectHost"/, 'button disabled while waiting')
+  assert.match(src, /v-if="connecting"/, 'inline 正在等待对方确认 hint while waiting')
+  assert.match(src, /pairFailureKey\(e\)/, 'failure reason mapping consulted before the generic toast')
+  assert.match(src, /key \|\| 'sync\.pairFailGenericMsg'/, 'confirm-flow failures use the generic key, not the code-domain one')
+})
+
+test('relative times get a 30s ticker so they do not freeze', () => {
+  assert.match(src, /startRelTicker \(\) \{[\s\S]*?30 \* 1000/)
+  assert.match(src, /void this\.relTick/, 'relTime must depend on the ticker for re-render')
+})
+
+test('pair dialog a11y: focus trap, autofocus on reject, Esc rejects without bubbling, expiry hint', () => {
+  assert.match(src, /@keydown="onPairKeydown"/)
+  assert.match(src, /aria-modal="true"/)
+  assert.match(src, /ref="pairRejectBtn"/, 'reject button must be ref-able for autofocus')
+  assert.match(src, /btn\.focus\(\)/, 'focus moves into the dialog (safe default = 拒绝)')
+  assert.match(src, /e\.stopPropagation\(\)[\s\S]*?this\.respondPair\(false\)/,
+    'Esc = reject and must NOT bubble up to close the whole settings modal')
+  assert.match(src, /focusables\[focusables\.length - 1\]/, 'Tab focus trap cycles inside the dialog')
+  assert.match(src, /pairExpired = true/, 'countdown expiry shows the inline 请求已超时 hint state')
+  assert.match(src, /sync\.pairExpiredHint/)
+  assert.match(src, /_pairPrevFocus[\s\S]*?prev\.focus\(\)/, 'focus restored to the previously focused element on close')
+})
+
+test('feed session hint is always rendered under the feed', () => {
+  assert.match(src, /sync-feed-hint[\s\S]*?\$t\('sync\.feedSessionHint'\)/)
 })
 
 test('sync i18n keys are symmetric across zh-CN and en-US shards', async () => {
@@ -127,7 +198,9 @@ test('sync i18n keys are symmetric across zh-CN and en-US shards', async () => {
     'synced', 'behindN', 'relJustNow', 'relMinutes', 'relHours', 'relDays', 'addDeviceLabel',
     'connectBtn', 'connectSent', 'pairRejectedMsg', 'pairRequestTitle', 'pairRequestFrom',
     'pairCountdown', 'acceptBtn', 'rejectBtn', 'manualPairLabel', 'activitySection', 'feedEmpty',
-    'kindPush', 'kindPull', 'kindError', 'kindPair', 'securityWarn', 'securityDetail']
+    'kindPush', 'kindPull', 'kindError', 'kindPair', 'securityWarn', 'securityDetail',
+    'pairExpiredMsg', 'pairWaiting', 'pairTimeoutMsg', 'pairThrottledMsg', 'pairFailGenericMsg',
+    'pairExpiredHint', 'kindSnapshot', 'feedSessionHint']
   for (const k of newKeys) {
     assert.ok(zh[k], `zh-CN sync.${k} missing`)
     assert.ok(en[k], `en-US sync.${k} missing`)

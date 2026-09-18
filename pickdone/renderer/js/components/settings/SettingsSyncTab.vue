@@ -62,8 +62,9 @@
       <div class="form-item"><span class="form-item__label">{{ $t('sync.addPeerLabel') }}</span>
         <div class="form-item__control">
           <el-input size="small" class="ctl-sm" :placeholder="$t('sync.addPeerHostPh')" :aria-label="$t('sync.addPeerLabel')" v-model="connectHost"/>
-          <button class="mini" :disabled="busy || !connectHost" @click="connectPeer">{{ $t('sync.connectBtn') }}</button>
-          <span class="tip">{{ $t('sync.addPeerTip') }}</span>
+          <button class="mini" :class="{ 'sync-connecting': connecting }" :disabled="busy || connecting || !connectHost" @click="connectPeer">{{ $t('sync.connectBtn') }}</button>
+          <span class="tip" v-if="connecting">{{ $t('sync.pairWaiting') }}</span>
+          <span class="tip" v-else>{{ $t('sync.addPeerTip') }}</span>
         </div></div>
       <div class="form-item"><span class="form-item__label"></span>
         <div class="form-item__control">
@@ -99,18 +100,20 @@
           <span class="sync-feed-time tip">{{ relTime(it.at) }}</span>
           <span class="sync-feed-text">{{ feedLine(it) }}</span>
         </div>
+        <div class="tip sync-feed-hint">{{ $t('sync.feedSessionHint') }}</div>
       </div>
     </div>
 
     <!-- Inbound pair-request dialog (custom inline modal, not ElMessageBox — this Element build
          exposes service components awkwardly; codebase prefers parent-v-if custom modals) -->
-    <div class="sync-pair-overlay" v-if="incomingPair">
-      <div class="sync-pair-dialog" role="dialog" :aria-label="$t('sync.pairRequestTitle')">
+    <div class="sync-pair-overlay" v-if="incomingPair" @keydown="onPairKeydown">
+      <div class="sync-pair-dialog" role="dialog" aria-modal="true" :aria-label="$t('sync.pairRequestTitle')" ref="pairDialog">
         <div class="sync-pair-dialog__title">{{ $t('sync.pairRequestTitle') }}</div>
         <div class="sync-pair-dialog__body">{{ $t('sync.pairRequestFrom', { name: incomingPair.deviceName || incomingPair.deviceId || '?', host: incomingPair.host }) }}</div>
-        <div class="tip">{{ $t('sync.pairCountdown', { n: incomingPair.leftSec }) }}</div>
-        <div class="sync-pair-dialog__actions">
-          <button class="mini" @click="respondPair(false)">{{ $t('sync.rejectBtn') }}</button>
+        <div class="tip" v-if="!pairExpired">{{ $t('sync.pairCountdown', { n: incomingPair.leftSec }) }}</div>
+        <div class="tip sync-pair-expired" v-if="pairExpired">{{ $t('sync.pairExpiredHint') }}</div>
+        <div class="sync-pair-dialog__actions" v-if="!pairExpired">
+          <button class="mini" ref="pairRejectBtn" @click="respondPair(false)">{{ $t('sync.rejectBtn') }}</button>
           <button class="mini sync-pair-accept" @click="respondPair(true)">{{ $t('sync.acceptBtn') }}</button>
         </div>
       </div>
@@ -151,7 +154,16 @@ function capFeed (recent, cap) {
 }
 /** Map a feed kind to a display icon (plain symbols, no emoji, token-colorable). */
 function feedIcon (kind) {
-  return { push: '↑', pull: '↓', error: '!', pair: '∞' }[kind] || '·'
+  return { push: '↑', pull: '↓', error: '!', pair: '∞', snapshot: '⇄' }[kind] || '·'
+}
+/** Map a pairing failure (err.reason/err.message from the main process) to an i18n key;
+ *  '' means "no specific reason known" → the caller shows the generic confirm-flow message. */
+function pairFailureKey (err) {
+  const r = String((err && (err.reason || err.message)) || '')
+  if (/reject/i.test(r)) return 'sync.pairRejectedMsg'
+  if (/time[- ]?out|timed/i.test(r)) return 'sync.pairTimeoutMsg'
+  if (/throttl/i.test(r)) return 'sync.pairThrottledMsg'
+  return ''
 }
 /** Relative-time bucketing shared by peer cards and the feed: {n, unit} with unit in
  *  'now'|'min'|'hour'|'day'. */
@@ -184,10 +196,11 @@ export default {
       connectHost: '',
       pairingExpiresAt: 0,
       pairingLeftSec: 0,
-      _pairTimer: null,
       // Device Center state
+      connecting: false, // outbound pair request in flight (60s await) — button disabled + inline hint
       incomingPair: null, // { deviceName, deviceId, host, expiresAt, leftSec }
-      _pairReqTimer: null,
+      pairExpired: false, // pair-request countdown hit 0 — brief inline hint before auto-dismiss
+      relTick: 0, // 30s-ticker counter; a render dependency of relTime so times stay fresh
       feedLive: [], // live-appended items from round-done/round-error while tab is open
       throttledAlert: false,
       securityOpen: false,
@@ -227,12 +240,13 @@ export default {
       return kind === 'behind' ? this.$t('sync.behindN', { n: p.pendingCount }) : this.$t('sync.synced')
     },
     feedLine (it) {
-      const kindKey = { push: 'sync.kindPush', pull: 'sync.kindPull', error: 'sync.kindError', pair: 'sync.kindPair' }[it.kind] || 'sync.kindPush'
+      const kindKey = { push: 'sync.kindPush', pull: 'sync.kindPull', error: 'sync.kindError', pair: 'sync.kindPair', snapshot: 'sync.kindSnapshot' }[it.kind] || 'sync.kindPush'
       const who = it.peer ? `${it.peer} · ` : ''
       const detail = it.detail ? ` ${it.detail}` : ''
       return `${this.$t(kindKey)} · ${who}${detail}`.trim()
     },
     relTime (ts) {
+      void this.relTick // 30s ticker dependency: re-render refreshes relative times
       const { n, unit } = relTimeParts(ts)
       if (unit === 'now') return this.$t('sync.relJustNow')
       return this.$t(unit === 'min' ? 'sync.relMinutes' : unit === 'hour' ? 'sync.relHours' : 'sync.relDays', { n })
@@ -263,7 +277,8 @@ export default {
       else if (evt.type === 'pair-rejected') this.$message.error(this.$t('sync.pairRejectedMsg'))
       else if (evt.type === 'pair-throttled') this.throttledAlert = true
       else if (evt.type === 'round-done' || evt.type === 'round-error') {
-        this.feedLive = [{ at: Date.now(), kind: evt.type === 'round-error' ? 'error' : (evt.dir === 'pull' ? 'pull' : 'push'), peer: evt.deviceName || evt.deviceId || '', detail: evt.detail || evt.error || '' }].concat(this.feedLive).slice(0, 50)
+        const kind = evt.type === 'round-error' ? 'error' : (evt.kind === 'snapshot' ? 'snapshot' : (evt.dir === 'pull' ? 'pull' : 'push'))
+        this.feedLive = [{ at: Date.now(), kind, peer: evt.deviceName || evt.deviceId || '', detail: evt.detail || evt.error || '' }].concat(this.feedLive).slice(0, 50)
       }
       this.refresh()
     },
@@ -271,11 +286,20 @@ export default {
       if (this._syncEventBound) return
       const api = (typeof window !== 'undefined' && window.todoAPI) as unknown as Record<string, unknown> | null
       if (api && typeof api.onSyncEvent === 'function') {
-        (api.onSyncEvent as (cb: (evt: { type?: string }) => void) => void)(this.onSyncEvent)
+        // Keep the disposer: without it every tab remount stacks another listener (duplicate toasts/feed entries)
+        const off = (api.onSyncEvent as (cb: (evt: { type?: string }) => void) => (void | (() => void)))(this.onSyncEvent)
+        this._syncEventDisposer = typeof off === 'function' ? off : null
         this._syncEventBound = true
       }
     },
+    /** Main holds an unanswered pair request for 60s and exposes it via syncGetStatus —
+     *  recover the confirm dialog when the settings tab is (re)opened mid-request. */
+    checkPendingPair () {
+      const pp = this.status && this.status.pendingPair
+      if (pp && !this.incomingPair) this.showIncomingPair({ deviceName: pp.deviceName, deviceId: pp.deviceId, host: pp.host })
+    },
     showIncomingPair (evt) {
+      this.pairExpired = false
       this.incomingPair = {
         deviceName: evt.deviceName || '',
         deviceId: evt.deviceId || '',
@@ -284,33 +308,75 @@ export default {
         leftSec: 60
       }
       if (!this._pairReqTimer) this._pairReqTimer = setInterval(() => this.tickIncomingPair(), 1000)
+      this.focusPairDialog()
+    },
+    /** A11y: move focus into the dialog (safe default = 拒绝) and remember where to restore it. */
+    focusPairDialog () {
+      if (typeof document === 'undefined') return
+      this._pairPrevFocus = document.activeElement
+      this.$nextTick(() => {
+        const btn = this.$refs.pairRejectBtn as HTMLButtonElement | undefined
+        if (btn && btn.focus) btn.focus()
+      })
+    },
+    /** Keydown on the overlay: Escape = reject (stopped — must not bubble up and close the
+     *  whole settings modal); Tab = cycle focus inside the dialog (focus trap). */
+    onPairKeydown (e) {
+      if (e.key === 'Escape') {
+        e.preventDefault(); e.stopPropagation()
+        this.respondPair(false)
+        return
+      }
+      if (e.key !== 'Tab') return
+      const root = this.$refs.pairDialog
+      if (!root || !root.querySelectorAll) return
+      const focusables = [...root.querySelectorAll('button, [href], input, select, [tabindex]')].filter((el: HTMLButtonElement) => !el.disabled)
+      if (!focusables.length) { e.preventDefault(); return }
+      const first = focusables[0]
+      const last = focusables[focusables.length - 1]
+      const active = document.activeElement
+      if (!root.contains(active)) { e.preventDefault(); (e.shiftKey ? last : first).focus(); return }
+      if (e.shiftKey && active === first) { e.preventDefault(); last.focus() }
+      else if (!e.shiftKey && active === last) { e.preventDefault(); first.focus() }
     },
     tickIncomingPair () {
       if (!this.incomingPair) { clearInterval(this._pairReqTimer); this._pairReqTimer = null; return }
       this.incomingPair.leftSec = Math.max(0, Math.round((this.incomingPair.expiresAt - Date.now()) / 1000))
-      if (this.incomingPair.leftSec === 0) this.dismissIncomingPair()
+      // Expiry is not silent anymore: brief inline hint, then auto-dismiss
+      if (this.incomingPair.leftSec === 0 && !this.pairExpired) {
+        this.pairExpired = true
+        if (!this._pairExpiryTimer) this._pairExpiryTimer = setTimeout(() => this.dismissIncomingPair(), 2500)
+      }
     },
     dismissIncomingPair () {
       this.incomingPair = null
       if (this._pairReqTimer) { clearInterval(this._pairReqTimer); this._pairReqTimer = null }
+      if (this._pairExpiryTimer) { clearTimeout(this._pairExpiryTimer); this._pairExpiryTimer = null }
+      const prev = this._pairPrevFocus
+      if (prev && prev.focus && document.contains(prev)) { try { prev.focus() } catch (e) { /* gone */ } }
+      this._pairPrevFocus = null
     },
     async respondPair (accept) {
       const req = this.incomingPair
       this.dismissIncomingPair()
       try {
-        await syncPairRespond({ accept: !!accept })
-        if (accept) this.$message.success(this.$t('sync.pairOkMsg'))
+        const r = (await syncPairRespond({ accept: !!accept })) as { ok?: boolean } | null
+        // ok:false = the 60s window already elapsed in main — say so instead of faking success
+        if (accept) (r && r.ok === false) ? this.$message.warning(this.$t('sync.pairExpiredMsg')) : this.$message.success(this.$t('sync.pairOkMsg'))
       } catch (e) { this.$message.error(this.$t('sync.pairFailMsg')) }
       if (req) this.refresh()
     },
     async connectPeer () {
       const host = String(this.connectHost || '').trim()
-      if (!host) return
-      this.busy = true
+      if (!host || this.connecting) return
+      this.connecting = true // immediate feedback: the 63s await must not leave the user staring at a dead button
       try {
         await syncPairRequest(host)
         this.$message.success(this.$t('sync.connectSent'))
-      } catch (e) { this.$message.error(this.$t('sync.pairFailMsg')) } finally { this.busy = false }
+      } catch (e) {
+        const key = pairFailureKey(e)
+        this.$message.error(this.$t(key || 'sync.pairFailGenericMsg'))
+      } finally { this.connecting = false }
     },
     async submitPairing () {
       this.busy = true
@@ -352,13 +418,28 @@ export default {
     tickPairing () {
       this.pairingLeftSec = Math.max(0, Math.round((this.pairingExpiresAt - Date.now()) / 1000))
       if (this.pairingLeftSec === 0) { this.pairingCode = ''; clearInterval(this._pairTimer); this._pairTimer = null }
+    },
+    /** 30s ticker: relative times ("3 分钟前") are computed from Date.now() at render time, so a
+     *  light tick (bumps _relTick, a render dependency) refreshes them without a status round-trip. */
+    startRelTicker () {
+      if (this._relTimer) return
+      // Instance-field timer (not data — vue/no-reserved-keys; timers need no reactivity)
+      this._relTimer = setInterval(() => { this.relTick++ }, 30 * 1000)
     }
   },
   beforeUnmount () {
     if (this._pairTimer) { clearInterval(this._pairTimer); this._pairTimer = null }
     if (this._pairReqTimer) { clearInterval(this._pairReqTimer); this._pairReqTimer = null }
+    if (this._pairExpiryTimer) { clearTimeout(this._pairExpiryTimer); this._pairExpiryTimer = null }
+    if (this._relTimer) { clearInterval(this._relTimer); this._relTimer = null }
+    if (this._syncEventDisposer) { try { this._syncEventDisposer() } catch (e) { /* already gone */ } this._syncEventDisposer = null }
+    this._syncEventBound = false
   },
-  mounted () { this.refresh(); this.bindSyncEvents() }
+  mounted () {
+    this.refresh().then(() => this.checkPendingPair())
+    this.bindSyncEvents()
+    this.startRelTicker()
+  }
 }
 </script>
 
@@ -393,4 +474,7 @@ export default {
 .sync-pair-dialog__title { color: var(--text-0); font-weight: 600; margin-bottom: 8px; }
 .sync-pair-dialog__body { color: var(--text-1); margin-bottom: 6px; }
 .sync-pair-dialog__actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.sync-connecting { opacity: 0.6; cursor: wait; }
+.sync-feed-hint { color: var(--text-3); }
+.sync-pair-expired { color: var(--danger, var(--text-2)); }
 </style>
