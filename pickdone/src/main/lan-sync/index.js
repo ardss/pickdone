@@ -723,11 +723,11 @@ function createLanSyncNode(opts) {
     /** Run one sync round against every known peer (sequentially). */
     async startSyncRound() {
       const targets = Array.from(peers.values())
+      // Parallel: a dead peer's 5s connect timeout must never delay a live peer's round
+      // (observed live: one stale entry serialized ~5-20s in front of every healthy exchange).
+      const results = await Promise.all(targets.map(async peer => (stopped ? false : syncWithPeer(peer))))
       let confirmed = 0
-      for (const peer of targets) {
-        if (stopped) break
-        if (await syncWithPeer(peer)) confirmed += 1
-      }
+      for (const ok of results) if (ok) confirmed += 1
       // confirmed === targets.length is the only safe condition for the caller to markPushed:
       // advancing the cursor because SOME peer answered used to drop the backlog of the peers
       // that had not confirmed yet (silent data loss, 2026-09-17 drill)
