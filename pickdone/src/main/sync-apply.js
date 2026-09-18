@@ -344,12 +344,22 @@ function applyRowInner (state, incoming) {
     // one commit per row starved rounds the same way todos did before the write buffer.
     state.pendingWrites.categories.push({ ...winner.data, id: winner.data.categoryId })
   } else if (entity === 'plan') {
-    if (incoming.deleted) state.db.call('planRemoveIds', [incoming.id])
-    else if (localRow && localRow.ageUnknown) return false // cross-domain LWW: local age unknown, refuse to clobber
+    if (incoming.deleted) {
+      // Ghost-tombstone guard (2026-09-19 live storm): a plan pointer whose chip planAll cannot
+      // see hydrates as a tombstone (see hydrateRow), and planRemoveIds logged the delete into
+      // the oplog EVEN when we never had the chip — so both peers echoed the same delete back
+      // and forth at ~1000 oplog rows/s and every round carried the whole echo (120s+ rounds).
+      // Only delete a chip we actually have; a ghost tombstone is a no-op.
+      if (localRow) state.db.call('planRemoveIds', [incoming.id])
+      else return false
+    } else if (localRow && localRow.ageUnknown) return false // cross-domain LWW: local age unknown, refuse to clobber
     else state.pendingWrites.plans.push(winner.data) // bulk-buffered via planAddMany at flush
   } else if (entity === 'filter') {
-    if (incoming.deleted) state.db.call('filterDelete', Number(incoming.id))
-    else if (localRow && localRow.ageUnknown) return false // cross-domain LWW: local age unknown, refuse to clobber
+    if (incoming.deleted) {
+      // Same ghost-tombstone guard as plan: never re-capture a delete for a filter we don't have.
+      if (localRow) state.db.call('filterDelete', Number(incoming.id))
+      else return false
+    } else if (localRow && localRow.ageUnknown) return false // cross-domain LWW: local age unknown, refuse to clobber
     else state.pendingWrites.filters.push({ ...winner.data, id: Number(incoming.id) }) // bulk-buffered
   } else {
     return false
