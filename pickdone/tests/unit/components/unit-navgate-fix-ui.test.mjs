@@ -116,10 +116,10 @@ test('splitBatchDelete: repeatId criterion matches TodoItem.isRepeat (string "nu
 
 test('TodoBoxView: batchDelete uses the unified exits, hand-rolled undo removed', () => {
   const src = read('renderer/js/views/TodoBoxView.vue')
-  assert.ok(src.includes("for (const raw of plain) await deleteWithUndo(this, this.$store, raw)"), 'plain rows via deleteWithUndo')
+  assert.ok(src.includes('batchMoveWithUndo(this, {'), 'batch delete aggregates via batchMoveWithUndo (D5: one undo toast, not N)')
   assert.ok(src.includes("this.$store.commit('ui/askRepeatDelete', repeatAsk.taskId)"), 'recurring rows via the scope-confirm modal')
   assert.ok(!src.includes('showUndoToast'), 'hand-rolled undo toast path removed (import included)')
-  assert.ok(!src.includes("dispatch('todo/deleteTodo'"), 'no direct deleteTodo dispatch left in batch delete')
+  assert.ok(src.includes('batchMoveWithUndo(this, {') && src.includes('revertOf:'), 'deletions feed one aggregated undo toast (D5 batch contract)')
 })
 
 /* ---------- #5 today view mode restore honors the deps gate ---------- */

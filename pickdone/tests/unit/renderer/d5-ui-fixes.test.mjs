@@ -18,7 +18,8 @@ function pureFns (file, names) {
   const re = /\[d5-ui-fixes\] pure-start[^\n]*\n([\s\S]*?)\n[^\n]*\[d5-ui-fixes\] pure-end/
   const m = src.match(re)
   assert.ok(m, `${file}: pure block markers missing`)
-  const fn = new Function(m[1] + `\nreturn { ${names.join(', ')} }`)
+  const js = m[1].replace(/: \{[^}]*\} = /g, ' = ') // strip TS annotations so new Function can eval
+  const fn = new Function(js + `\nreturn { ${names.join(', ')} }`)
   return fn()
 }
 

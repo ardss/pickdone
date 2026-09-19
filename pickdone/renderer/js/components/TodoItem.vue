@@ -108,7 +108,7 @@ let dragActive = false
 // the new day; a pure midnight day marker stays a pure marker) — a todoTime on another day is
 // left untouched. Same rule for reminderTime so the reminder cannot be orphaned on the old day.
 function crossDayMovePatch (dragged, newDay, startOfDay) {
-  const patch = { dayStart: newDay }
+  const patch: { dayStart: number, todoTime?: number, reminderTime?: number } = { dayStart: newDay }
   const origDay = dragged.dayStart || 0
   if (dragged.todoTime && startOfDay(dragged.todoTime) === startOfDay(origDay)) patch.todoTime = newDay + (dragged.todoTime - startOfDay(dragged.todoTime))
   if (dragged.reminderTime && startOfDay(dragged.reminderTime) === startOfDay(origDay)) patch.reminderTime = newDay + (dragged.reminderTime - startOfDay(dragged.reminderTime))
@@ -215,7 +215,7 @@ export default {
         // (mirrors DayDeck.onDrop semantics)
         const startOf = ts => +dayjs(ts).startOf('day')
         const patch = crossDayMovePatch(dragged, newDay, startOf)
-        const revertPatch = { dayStart: origDay }
+        const revertPatch: { dayStart: number, todoTime?: number, reminderTime?: number } = { dayStart: origDay }
         if ('todoTime' in patch) revertPatch.todoTime = dragged.todoTime
         if ('reminderTime' in patch) revertPatch.reminderTime = dragged.reminderTime
         // Unified exit moveWithUndo (hover pauses / ✕ closes); the hand-rolled $message version was removed (interaction contract ①)

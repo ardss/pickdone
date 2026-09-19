@@ -38,7 +38,7 @@ const evaluate = async expr => {
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pd-upd-'))
 fs.writeFileSync(path.join(tmpDir, 'todos.db'), '')
-const PORT = 9447 // Windows 保留段 9292-9391 之外
+const PORT = 9750 // outside the live Windows reserved ranges (9400-9499 shifted after reboot; was 9447)
 // 2026-09-13: this script is standalone and used to rely on the unit-pool overlay test (runtime.mjs
 // import side effect) having created tests/.artifacts first — moving that test out of the unit pool
 // broke it on fresh checkouts. Create the dir instead of depending on another script's side effect.
