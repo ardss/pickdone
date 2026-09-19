@@ -510,7 +510,13 @@ export default {
       const all: any = this._save.takeDirty(['subtasks', 'imgs', 'files'])
       all.delete = false
       all.status = 'update'
-      await this.$store.dispatch('todo/updateTodoFields', { taskId: this.e.taskId, patch: all })
+      try {
+        await this.$store.dispatch('todo/updateTodoFields', { taskId: this.e.taskId, patch: all })
+      } catch (e) {
+        // Restore failed: keep the item in the bin and surface the error instead of a false-success toast
+        this.$message.error(this.$t('statsC.RecycleBin.restoreFailedMsg') + (e && e.message ? e.message : e))
+        return
+      }
       this.$message.success(this.$t('statsJ.EditPanel.restoredMsg'))
       this.hydrate()
     },
