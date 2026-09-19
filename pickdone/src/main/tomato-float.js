@@ -198,6 +198,17 @@ function create () {
     try { win.setBounds(win.getBounds()) } catch (e) { /* empty */ }
   })
   win.on('closed', () => { stopDrag(); stopHitPoll(); win = null })
+  // P2 2026-09-20: the hit poll self-stops after ~1s of hidden ticks; an OS-level restore
+  // (un-minimize) or focus/activation makes the window visible again WITHOUT going through
+  // show() — the poll then stayed stopped and the card never became hoverable/clickable again.
+  // 'restore' covers minimize→restore; 'focus' covers activation paths that imply visibility
+  // (best-effort: the window is focusable:false on some platforms, so 'focus' may not fire —
+  // 'restore' is the load-bearing event). Guarded: only restarts when actually visible.
+  const ensureHitPoll = () => {
+    try { if (win && !win.isDestroyed() && win.isVisible() && !dockedToTray) startHitPoll() } catch { /* window dying */ }
+  }
+  win.on('restore', ensureHitPoll)
+  win.on('focus', ensureHitPoll)
   return win
 }
 

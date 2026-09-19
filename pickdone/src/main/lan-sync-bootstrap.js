@@ -434,8 +434,15 @@ async function stopSync () {
   if (!state.node) return
   for (const t of state.timers) { clearTimeout(t); clearInterval(t) }
   state.timers = []
-  if (securityPersistTimer) { clearTimeout(securityPersistTimer); securityPersistTimer = null }
   const n = state.node
+  // P2 2026-09-20: the security-ring persist is write-throttled to <=1 write/sec — pending
+  // throttled entries lived only in the node's memory ring and were LOST when the app quit
+  // inside the throttle window (the unref'd timer never fires). Flush synchronously BEFORE the
+  // node is torn down; quit/disable/unpair all funnel through here.
+  try {
+    if (securityPersistTimer) { clearTimeout(securityPersistTimer); securityPersistTimer = null }
+    if (n) settingPut(K_SECURITY_LOG, JSON.stringify(n.getStatus().security.slice(-20)))
+  } catch (e) { log.warn('[LanSync] security log flush on stop failed:', e.message) }
   state.node = null
   state.pendingPair = null
   // P1-4 (2026-09-19 data-safety round): the engine (and its hydration caches) used to be nulled

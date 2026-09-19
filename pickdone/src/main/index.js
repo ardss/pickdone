@@ -373,6 +373,12 @@ if (!app.requestSingleInstanceLock()) { app.quit() } else {
       // first and retries init once before renaming anything, so a healthy DB can no longer be
       // mislabeled .corrupt by a transient init failure (lock held / WAL race).
       const recoveredFrom = attemptDbRecovery(ud, () => dbm.init(ud))
+      // P1 2026-09-20: source 'error' = the corrupt file could NOT be quarantined (rename failed,
+      // e.g. AV/lock held) and NO backup was copied — treat it as NOT recovered so the dialog does
+      // not loop on a false "recovered, relaunch" path; the label explains the actual failure.
+      const recoveryFailed = !!(recoveredFrom && recoveredFrom.source === 'error')
+      if (recoveryFailed) log.error('[Init] DB recovery aborted:', recoveredFrom.label)
+      const recovered = recoveredFrom && !recoveryFailed
       if (recoveredFrom && (recoveredFrom.source === 'retry-ok' || recoveredFrom.source === 'transient')) {
         log.warn('[Init] DB init transient failure (header intact, no rename):', recoveredFrom.label)
       }
@@ -391,10 +397,12 @@ if (!app.requestSingleInstanceLock()) { app.quit() } else {
         // would never be pushed. Invalidate so the next round re-pushes the full window (idempotent).
         try { require('./lan-sync-bootstrap').invalidateSyncWatermarks('db-recovery') } catch { /* sync lazy-not-init */ }
       }
-      const detailMsg = String(e && e.message || e) + '.' + (recoveredFrom
-        ? i18nM.mt('dbFailRecovered', { n: restoredN })
-        : i18nM.mt('dbFailRecoveredNone')) + (reinitErr ? i18nM.mt('dbFailReinit', { msg: reinitErr.message }) : '')
-      const buttons = recoveredFrom
+      const detailMsg = String(e && e.message || e) + '.' + (recoveryFailed
+        ? ' ' + recoveredFrom.label
+        : recoveredFrom
+          ? i18nM.mt('dbFailRecovered', { n: restoredN })
+          : i18nM.mt('dbFailRecoveredNone')) + (reinitErr ? i18nM.mt('dbFailReinit', { msg: reinitErr.message }) : '')
+      const buttons = recovered
         ? [i18nM.mt('btnRecoverRelaunch'), i18nM.mt('btnOpenDataDir'), i18nM.mt('btnQuit')]
         : [i18nM.mt('btnOpenDataDirBackup'), i18nM.mt('btnResetRelaunch'), i18nM.mt('btnQuit')]
       const choice = dialog.showMessageBoxSync({
@@ -403,7 +411,7 @@ if (!app.requestSingleInstanceLock()) { app.quit() } else {
       })
       // app.exit does not trigger will-quit: the relaunch path must explicitly unregister system hotkeys (otherwise the new instance misreports registration conflicts)
       const relaunchClean = () => { app.relaunch(); shortcuts.unregisterAll(); app.exit(0) }
-      if (choice === 0 && recoveredFrom) {
+      if (choice === 0 && recovered) {
         // P2 2026-09-12: the recovery-succeeded relaunch branch skipped the plain-bak cleanup that the
         // init-success path below does — after recovery the plaintext copy stayed in userData forever,
         // defeating at-rest encryption. Clear it before relaunching (same semantics, best-effort).
@@ -414,7 +422,7 @@ if (!app.requestSingleInstanceLock()) { app.quit() } else {
         relaunchClean()
       }
       else if (choice === 0) { shell.openPath(ud); app.quit() }
-      else if (choice === 1 && recoveredFrom) { app.quit() }
+      else if (choice === 1 && recovered) { app.quit() }
       else if (choice === 1) {
         // Reset-data-and-relaunch. Root cause fixed (2026-09-09): unlink on an open SQLite file always
         // fails with EPERM on Windows and the blanket `catch {}` swallowed it — the user was told the

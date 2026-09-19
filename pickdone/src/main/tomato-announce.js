@@ -160,29 +160,39 @@ function onRemoteAnnounce (fn) {
  * Startup snapshot for the renderer: every currently-stored announce (running or idle —
  * the renderer filters staleness). db.js has no meta list op (size ratchet), so the keys
  * are enumerated from their oplog pointers (one paged scan) and read via getMeta.
+ *
+ * P2 2026-09-20: the full oplog re-scan ran on EVERY IPC call while the oplog only ever grows.
+ * The pointer enumeration is now cached behind an oplog-seq watermark: re-scan only the NEW
+ * seqs (usually zero rows) and reuse the deviceId map. Values are still read fresh via
+ * getMeta per call (cheap KV reads, always current). The cache is per-process memory only,
+ * so a node/DB restart simply rebuilds it from seq 0 — correctness is unaffected.
  */
+let announceCache = { watermark: 0, ids: new Map() } // deviceId -> latest pointer ts
 function listAnnounces () {
   if (!dbCall) return []
-  const latest = new Map() // deviceId -> latest pointer ts
   try {
-    let since = 0
+    let since = announceCache.watermark
     for (let i = 0; i < 100; i++) {
       const rows = dbCall('syncOplogSince', { sinceSeq: since, limit: 10000 }) || []
       for (const r of rows) {
         if (r.entity === 'meta' && isAnnounceKey(r.entityId)) {
           const id = String(r.entityId).slice(KEY_PREFIX.length)
-          if (r.ts > (latest.get(id) || 0)) latest.set(id, r.ts)
+          if (r.ts > (announceCache.ids.get(id) || 0)) announceCache.ids.set(id, r.ts)
         }
       }
-      if (rows.length < 10000) break
+      if (rows.length < 10000) {
+        since = rows.length ? rows[rows.length - 1].seq : since
+        break
+      }
       since = rows[rows.length - 1].seq
     }
+    announceCache.watermark = since
   } catch (e) {
     try { require('electron-log').warn('[TomatoAnnounce] list failed:', e && e.message) } catch { /* noop */ }
     return []
   }
   const out = []
-  for (const id of latest.keys()) {
+  for (const id of announceCache.ids.keys()) {
     try {
       const v = parseAnnounce(dbCall('getMeta', keyFor(id)))
       if (v) out.push(v)
@@ -194,6 +204,7 @@ function listAnnounces () {
 /** Test-only: reset injected deps + listeners (production never calls this). */
 function __reset () {
   dbCall = null; getIdentity = null; kickRound = null; remoteListeners.clear()
+  announceCache = { watermark: 0, ids: new Map() }
 }
 
 module.exports = {

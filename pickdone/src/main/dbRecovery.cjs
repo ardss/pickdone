@@ -94,11 +94,27 @@ function attemptDbRecovery (ud, retryInit) {
   const plainBakExists = fs.existsSync(path.join(ud, 'todos.db.plain-bak'))
   const jsonExists = fs.existsSync(criticalBackupPath(ud))
   if (!plainBakExists && !jsonExists) return null
+  // P1 2026-09-20: quarantine used to swallow rename failures (`catch {}`) and then fall through
+  // to copying the backup OVER a possibly-locked/possibly-open target — a silent recovery loop
+  // (corrupt file never moved, backup copy fails or hybrids the DB, dialog claims recovery every
+  // launch). Now: a rename failure is LOGGED and aborts this branch with a structured
+  // source:'error' result, so the caller's relaunch dialog explains the failure instead of
+  // pretending recovery happened. Never copy onto a target we could not first move aside.
   for (const suf of ['', '-wal', '-shm']) {
     const src = path.join(ud, 'todos.db' + suf)
-    if (fs.existsSync(src)) { try { fs.renameSync(src, src + '.corrupt-' + stamp) } catch {} }
+    if (!fs.existsSync(src)) continue
+    try {
+      fs.renameSync(src, src + '.corrupt-' + stamp)
+    } catch (e) {
+      logWarn('[dbRecovery] failed to quarantine', src, '-', e && e.message, '— recovery branch ABORTED (no backup copied over a possibly-locked target)')
+      return { source: 'error', label: 'corrupt DB could not be quarantined: ' + String(e && e.message || e) }
+    }
   }
-  try { fs.renameSync(path.join(ud, 'db.key'), path.join(ud, 'db.key.corrupt-' + stamp)) } catch {}
+  try { fs.renameSync(path.join(ud, 'db.key'), path.join(ud, 'db.key.corrupt-' + stamp)) } catch (e) {
+    // Key rename stays best-effort (a missing db.key leaves the fresh DB plaintext-readable, same
+    // as a fresh install) but it must not be silent.
+    logWarn('[dbRecovery] db.key rename failed (continuing, DB will be plaintext):', e && e.message)
+  }
   pruneCorruptScenes(ud)
   if (jsonExists) return { source: 'json', label: 'disaster-backup JSON (fresh)' }
   fs.copyFileSync(path.join(ud, 'todos.db.plain-bak'), path.join(ud, 'todos.db'))

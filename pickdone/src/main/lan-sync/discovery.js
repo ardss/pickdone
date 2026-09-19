@@ -83,6 +83,16 @@ function createDiscovery() {
   function startAdvertising({ deviceId, name, port }) {
     if (!deviceId || !Number.isInteger(port)) throw new Error('startAdvertising: deviceId and integer port required')
     if (bonjourModule) {
+      // P2 2026-09-20: repeated startAdvertising used to orphan the previous Bonjour instance —
+      // its published service + sockets stayed alive until GC (duplicate mDNS records, leaked
+      // handles). Destroy the old instance (which owns the browser + advertised service) before
+      // recreating.
+      if (bonjour) {
+        if (advertisedService) { try { advertisedService.stop() } catch { /* noop */ } }
+        if (browser) { try { browser.stop() } catch { /* noop */ } }
+        try { bonjour.destroy() } catch { /* noop */ }
+        bonjour = null; advertisedService = null; browser = null
+      }
       bonjour = new bonjourModule.Bonjour()
       advertisedService = bonjour.publish({
         name: `pickdone-${deviceId}`,
@@ -91,6 +101,9 @@ function createDiscovery() {
         txt: { deviceId, name: name || deviceId, protoVer: String(PROTO_VER) },
       })
     } else {
+      // UDP fallback: same leak guard — close the previous socket + interval before recreating.
+      if (udpTimer) { clearInterval(udpTimer); udpTimer = null }
+      if (udp) { try { udp.close() } catch { /* noop */ } udp = null }
       startUdpFallback({ deviceId, name, port })
     }
   }
@@ -128,7 +141,13 @@ function createDiscovery() {
   }
 
   function discover(onFound) {
-    if (typeof onFound === 'function') em.on('found', onFound)
+    if (typeof onFound === 'function') {
+      // P2 2026-09-20: repeated discover() with the same callback used to stack duplicate
+      // 'found' listeners (each duplicate emits a second onFound per peer + a MaxListeners
+      // warning). Dedupe: remove-then-add keeps exactly one registration per callback.
+      em.removeListener('found', onFound)
+      em.on('found', onFound)
+    }
     if (bonjourModule) {
       bonjour = bonjour || new bonjourModule.Bonjour()
       browser = bonjour.find({ type: SERVICE_TYPE }, (svc) => {

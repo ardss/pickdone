@@ -503,8 +503,13 @@ function applyRowInner (state, incoming) {
     // Running-tomato announcements (feature: live cross-device focus countdown): after the
     // peer's announce key landed, fan it out to the renderer. Announce keys pass the
     // machine-local filter on purpose (display-only remote runtime; see tomato-announce.js).
+    // P2 2026-09-20: the per-row emitRemoteAnnounce broadcast fired once per announce ROW
+    // inside the ingest loop; a first-sync segment can carry many announce updates per device.
+    // Coalesce: collect the latest value per key for this ingest pass; flushPendingWrites fans
+    // out ONCE after the rows are committed.
     if (require('./tomato-announce').isAnnounceKey(incoming.id)) {
-      require('./tomato-announce').emitRemoteAnnounce(incoming.id, winner.data.value)
+      if (!state.pendingAnnounces) state.pendingAnnounces = new Map()
+      state.pendingAnnounces.set(incoming.id, winner.data.value)
     }
   } else {
     return false
@@ -608,6 +613,16 @@ function flushPendingWrites (state) {
   if (buf.categories) buf.categories = []
   if (buf.plans) buf.plans = []
   if (buf.filters) buf.filters = []
+  // Coalesced remote-announce fan-out (P2 2026-09-20): one emit per committed ingest pass
+  // instead of one per announce row. Runs even when a bulk flush failed above — the meta rows
+  // were already committed via setMeta before buffering.
+  if (state.pendingAnnounces && state.pendingAnnounces.size) {
+    const ta = require('./tomato-announce')
+    for (const [key, value] of state.pendingAnnounces) {
+      try { ta.emitRemoteAnnounce(key, value) } catch (e) { log.warn('[LanSync] announce emit failed:', e.message) }
+    }
+    state.pendingAnnounces = null
+  }
   return { ok } // P0-1: false = at least one bulk op threw; the segment must not be acked
 }
 
