@@ -65,7 +65,7 @@
     "@fullcalendar/interaction": "^6.1.21",
     "@types/node": "^26.5.0",
     "@typescript-eslint/parser": "^8.70.0",
-    "@vitejs/plugin-vue": "^5.2.4",
+    "@vitejs/plugin-vue": "^6.0.9",
     "axe-core": "^4.13.0",
     "chart.js": "^4.4.4",
     "electron": "^39.8.10",
