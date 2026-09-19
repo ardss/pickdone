@@ -209,10 +209,22 @@ function createAttachmentPuller (opts = {}) {
     }
     if (!batch.length) return false
     session.requests.set(peerId, used + 1)
+    try {
+      opts.send({ type: 'att-req', ids: batch })
+    } catch (err) {
+      // Hardening (2026-09-19 drill): a send failure here must NEVER fail the sync round —
+      // it used to propagate through the round's message dispatch into finish(err), so one
+      // missing attachment made ALL sync rounds fail until the file appeared. Log, mark the
+      // batch failed (per-session failed-set prevents retry loops), and report "no request
+      // sent" so the caller finishes the round cleanly. errorCb kept for API symmetry:
+      // batch-level failures are skipped, not fatal.
+      try { require('electron-log').warn('[LanSync] att-req send failed, batch skipped:', err && err.message) } catch { /* noop */ }
+      for (const id of batch) markFailed(id)
+      return false
+    }
+    onDone = doneCb
     busy = true
     requested = true
-    onDone = doneCb // errorCb kept for API symmetry: batch-level failures are skipped, not fatal
-    opts.send({ type: 'att-req', ids: batch })
     return true
   }
 

@@ -394,3 +394,112 @@ test('watermark: 3-node chain A -> B -> C, B relays — A cursor never overshoot
   await nodeB.stop()
   await nodeC.stop()
 })
+
+test('glue: attachment pull rides the encrypted round via the raw socket (regression 2026-09-19)', async () => {
+  // Regression: the puller used to be wired `send: (m) => sendVia(client, m)` where `client`
+  // is the transport EventEmitter — sendVia dispatches through socket._lanSend, which lives on
+  // the RAW SOCKET (em._socket). Every att-req then threw and failed the WHOLE sync round, so
+  // any missing attachment blocked all syncing until the file appeared. The round must now
+  // confirm AND deliver the file.
+  const fileBytes = Buffer.from('attachment payload for the drill'.repeat(8))
+  const shaHex = (() => { const h = require('node:crypto').createHash('sha256'); h.update(fileBytes); return h.digest('hex') })()
+  const senderFiles = { 'pic.png': fileBytes }
+  const serverReqs = []
+  const writtenOnA = []
+
+  const nodeA = createLanSyncNode({
+    deviceId: 'att-client',
+    pairingSecret: SECRET,
+    port: 0,
+    host: '127.0.0.1',
+    discoverFn: fakeDiscovery(),
+    ingestSegment: () => ({ applied: 0, rejected: 0 }),
+    ingestSnapshot: () => {},
+    buildSegments: () => [],
+    getMissingAttachmentKeys: () => ['pic.png'],
+    attachmentPullerDeps: {
+      exists: key => writtenOnA.some(w => w.key === key),
+      size: key => (writtenOnA.find(w => w.key === key) || {}).buf ? writtenOnA.find(w => w.key === key).buf.length : 0,
+      read: () => Buffer.alloc(0),
+      writeAtomic: (key, buf) => { writtenOnA.push({ key, buf }); return true },
+      hashFn: buf => { const h = require('node:crypto').createHash('sha256'); h.update(buf); return h.digest('hex') },
+    },
+  })
+  const nodeB = createLanSyncNode({
+    deviceId: 'att-server',
+    pairingSecret: SECRET,
+    port: 0,
+    host: '127.0.0.1',
+    discoverFn: fakeDiscovery(),
+    ingestSegment: () => ({ applied: 0, rejected: 0 }),
+    ingestSnapshot: () => {},
+    buildSegments: () => [],
+    attachmentServerDeps: {
+      exists: key => key in senderFiles,
+      size: key => (senderFiles[key] || Buffer.alloc(0)).length,
+      read: (key, start, end) => (senderFiles[key] || Buffer.alloc(0)).slice(start, end + 1),
+    },
+  })
+  // Observe the inbound att-req on the server role (its handler receives the raw socket).
+  const origB = nodeB
+  void origB
+
+  nodeA.start(); nodeB.start()
+  const [, portB] = await Promise.all([nodeA.whenListening(), nodeB.whenListening()])
+  nodeA.addPeer({ deviceId: 'att-server', host: '127.0.0.1', port: portB })
+
+  await nodeA.startSyncRound()
+
+  const status = nodeA.getStatus()
+  assert.equal(status.lastError, null, 'the round must confirm even though an attachment pull happened')
+  assert.ok(status.lastRoundAt, 'round completed')
+  assert.equal(writtenOnA.length, 1, 'the attachment file was pulled and written')
+  assert.equal(writtenOnA[0].key, 'pic.png')
+  const h = require('node:crypto').createHash('sha256'); h.update(writtenOnA[0].buf)
+  assert.equal(h.digest('hex'), shaHex, 'pulled bytes match the source hash')
+
+  await nodeA.stop(); void serverReqs
+  await nodeB.stop()
+})
+
+test('glue: a missing-on-peer attachment must NOT fail the sync round (round isolation)', async () => {
+  // The peer has NEITHER the metadata-declared file nor a copy: it answers att-missing and the
+  // round must still confirm cleanly (pull cursor / lastRoundAt advance, no round error).
+  const nodeA = createLanSyncNode({
+    deviceId: 'att-miss-client',
+    pairingSecret: SECRET,
+    port: 0,
+    host: '127.0.0.1',
+    discoverFn: fakeDiscovery(),
+    ingestSegment: () => ({ applied: 0, rejected: 0 }),
+    ingestSnapshot: () => {},
+    buildSegments: () => [],
+    getMissingAttachmentKeys: () => ['gone.bin'],
+    attachmentPullerDeps: {
+      exists: () => false, size: () => 0, read: () => Buffer.alloc(0), writeAtomic: () => true,
+    },
+  })
+  const nodeB = createLanSyncNode({
+    deviceId: 'att-miss-server',
+    pairingSecret: SECRET,
+    port: 0,
+    host: '127.0.0.1',
+    discoverFn: fakeDiscovery(),
+    ingestSegment: () => ({ applied: 0, rejected: 0 }),
+    ingestSnapshot: () => {},
+    buildSegments: () => [],
+    attachmentServerDeps: { exists: () => false, size: () => 0, read: () => Buffer.alloc(0) },
+  })
+  nodeA.start(); nodeB.start()
+  const [, portB] = await Promise.all([nodeA.whenListening(), nodeB.whenListening()])
+  nodeA.addPeer({ deviceId: 'att-miss-server', host: '127.0.0.1', port: portB })
+
+  await nodeA.startSyncRound()
+
+  const status = nodeA.getStatus()
+  assert.equal(status.lastError, null, 'a missing attachment must not poison the round')
+  assert.ok(status.lastRoundAt, 'round confirmed despite the missing attachment')
+
+  await nodeA.stop()
+  await nodeB.stop()
+})

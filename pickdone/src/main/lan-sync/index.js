@@ -306,9 +306,9 @@ function createLanSyncNode(opts) {
       let roundApplied = 0 // rows the peer's segments changed locally this round (0 = no pull progress)
       let pullAckSeq = 0 // max seq among the peer's pushed rows across ALL chunks (PEER's seq space)
       let awaitingSnapshot = false // snapshot-request sent; the round ends at snapshot-end, not ack
-      // Attachment FILE puller (feature): missing files are requested over THIS session post-ack (att-transfer.js).
-      const att = createAttachmentPuller({ send: (m) => sendVia(client, m), session: attSession, peerId: peer.deviceId,
-        getKeys: typeof opts.getMissingAttachmentKeys === 'function' ? opts.getMissingAttachmentKeys : null })
+      // Attachment FILE puller (post-ack): sendVia needs the RAW SOCKET (socket._lanSend lives on em._socket, not the EventEmitter — wiring `client` here poisoned every round, 2026-09-19 drill).
+      const att = createAttachmentPuller({ send: (m) => sendVia(client._socket, m), session: attSession, peerId: peer.deviceId,
+        getKeys: typeof opts.getMissingAttachmentKeys === 'function' ? opts.getMissingAttachmentKeys : null, deps: opts.attachmentPullerDeps })
       const chunkBuf = new Map() // snapshot-chunk index -> rows (assembled at snapshot-end, fallback mode)
       const chunkRowCounts = new Map() // streaming mode: index -> applied row count (rows are NEVER buffered)
       const streamingSnapshot = typeof ingestSnapshotChunk === 'function'
@@ -584,13 +584,14 @@ function createLanSyncNode(opts) {
             if (getMaxSeq) seq = Math.min(seq, currentMaxSeq())
             if (seq > (peerProgress.get(peer.deviceId) || 0)) peerProgress.set(peer.deviceId, seq)
             evaluateSnapshotTrigger()
-            // With a snapshot-request in flight the round's finish waits for snapshot-end (the
-            // ack only proves the peer got MY push). Attachment pull likewise keeps the round
-            // open until att-end (the puller calls finish(null)); otherwise finish immediately.
-            if (!awaitingSnapshot && !att.maybeStart(() => finish(null), (err) => finish(err))) finish(null)
+            // The round's finish waits for snapshot-end (the ack only proves the peer got MY push); attachment
+            // pull likewise keeps it open until att-end. Pull send-failures are isolated inside the puller —
+            // an attachment failure must NEVER fail the sync round (2026-09-19 drill).
+            if (!awaitingSnapshot && !att.maybeStart(() => finish(null), () => finish(null))) finish(null)
           } else if (att.handles(msg.type)) { // attachment frames: att-end settles the round
             progressDeadline()
-            if (!att.onMessage(msg)) finish(null)
+            let attOpen = true; try { attOpen = att.onMessage(msg) } catch (err) { try { require('electron-log').warn('[LanSync] att frame error:', err && err.message) } catch { /* noop */ } } // round isolation: a transfer error ends the round cleanly, never rejects it
+            if (!attOpen) finish(null)
           }
         } catch (err) {
           finish(err)
