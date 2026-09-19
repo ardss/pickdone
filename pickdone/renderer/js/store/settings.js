@@ -182,26 +182,49 @@ function load () {
 let saveTimer = null
 let mirrorTimer = null
 const MIRROR_AT_KEY = 'settingsMirrorAt'
+/** Live module state reference for the quit-flush hook (persist is only ever called with this module's state) */
+let liveState = null
+/** Synchronous LS write (shared by the debounce timer and the quit flush) */
+function writeLsBlob (state) {
+  safeSet(LS_KEY, JSON.stringify({ ...state, schemaV: SETTINGS_SCHEMA_V }))
+  try { localStorage.setItem(MIRROR_AT_KEY, String(Date.now())) } catch (e) { /* empty */ }
+}
+function mirrorBlob (state) {
+  return { ...state, _savedAt: Date.now(), schemaV: SETTINGS_SCHEMA_V }
+}
+function canMirrorDb () {
+  // Float/quick-add windows don't write the DB directly (todo-db:call is main-window-only; would spam forbidden errors):
+  // aux windows write LS only; after main-window storage sync the main window persists
+  return typeof window !== 'undefined' && window.location && !/__tomato-float|__quick-add/.test(window.location.hash)
+}
 function persist (state) {
+  liveState = state
   state._lsAt = Date.now() // Write order: stamped at apply time; storage sync drops stale packets by this
   clearTimeout(saveTimer)
-  saveTimer = setTimeout(() => {
-    safeSet(LS_KEY, JSON.stringify({ ...state, schemaV: SETTINGS_SCHEMA_V }))
-    try { localStorage.setItem(MIRROR_AT_KEY, String(Date.now())) } catch (e) { /* empty */ }
-  }, 150)
+  saveTimer = setTimeout(() => writeLsBlob(state), 150)
   // Mirror into SQLite meta: settings are user configuration assets, no longer lost when LS is cleared (2s debounce)
   clearTimeout(mirrorTimer)
   mirrorTimer = setTimeout(() => {
     // Node unit-test environment has no window.location (debounce timers still fire after tests end, once blew up with uncaughtException)
-    if (typeof window === 'undefined' || !window.location) return
-    // Float/quick-add windows don't write the DB directly (todo-db:call is main-window-only; would spam forbidden errors):
-    // aux windows write LS only; after main-window storage sync the main window persists
-    if (/__tomato-float|__quick-add/.test(window.location.hash)) return
-    mirrorToDb('db.settingsState', { ...state, _savedAt: Date.now(), schemaV: SETTINGS_SCHEMA_V })
+    if (!canMirrorDb()) return
+    mirrorToDb('db.settingsState', mirrorBlob(state))
   }, 2000)
 }
 
 import { mirrorToDb, restoreFromDb } from '../utils/dbMirror.js'
+
+// P1 (D5 2026-09-20) quit-flush: direct `commit('settings/updateSettings')` paths (component shortcuts,
+// CLI-watcher apply, LAN-sync) bypass the `settings/update` action, and both the 150ms LS timer and the
+// 2s mirror timer can still be pending when the app quits — the last ≤2s of setting changes were lost.
+// This hook runs AFTER dbMirror's own quit hook (import order registers dbMirror first), so the
+// immediate mirrorToDb write lands into a drained pending set and is handed to the bridge synchronously.
+if (typeof window !== 'undefined' && window.todoAPI && window.todoAPI.onAppQuittingFlush) {
+  window.todoAPI.onAppQuittingFlush(() => {
+    if (!liveState) return
+    writeLsBlob(liveState)
+    if (canMirrorDb()) mirrorToDb('db.settingsState', mirrorBlob(liveState), true)
+  })
+}
 
 export default {
   namespaced: true,
