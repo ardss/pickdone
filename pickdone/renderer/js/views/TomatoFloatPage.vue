@@ -12,6 +12,10 @@
                   @pointerdown.stop @click.stop="cancelAttach"></button>
         </div>
         <div v-else class="tomato__task">{{ $t('statsB.TomatoFloatPage.attachLabel') }}<b class="tomato__task-none">{{ $t('statsB.TomatoFloatPage.noAttach') }}</b></div>
+        <!-- Remote running focus (LAN sync announce, display-only): never starts/rings here -->
+        <div v-if="remoteRun" class="tomato__remote" :title="$t('statsD.TomatoPanel.remoteRunningTip')">
+          {{ $t('statsD.TomatoPanel.remoteRunning', { name: remoteRun.deviceName || remoteRun.deviceId, time: remoteClock }) }}
+        </div>
         <div class="tomato__beads" :aria-label="$t('statsB.TomatoFloatPage.beadsAria')">
           <i v-for="k in beadsTotal" :key="k" :class="{done: k <= beadsDone}"></i>
         </div>
@@ -104,6 +108,7 @@
  *  Note: never pop a native dialog on a transparent frameless window — Windows will paint a system title bar onto the host window. */
 import { formatMMSS } from '../utils/tomatoShared.js'
 import { NOISES } from '../utils/mediaRegistry.js'
+import { remainSecOfAnnounce } from '../store/tomatoAnnounceShared.js'
 
 /** The browser debug host shim's todoAPI carries a version stamp; the real preload does not */
 function isPreviewHost () {
@@ -131,6 +136,10 @@ export default {
   computed: {
     working () { return !!(this.st && this.st.status === 'startTomatoTime') },
     resting () { return !!(this.st && this.st.status === 'startRestTime') },
+    /** Remote running focus (live cross-device announce) — display-only chip source.
+     *  Touches this.st so the 1s refresh loop re-derives the countdown. */
+    remoteRun () { void this.st; return this.$store.getters['tomatoAnnounce/primaryRunning'] },
+    remoteClock () { void this.st; return formatMMSS(remainSecOfAnnounce(this.$store.getters['tomatoAnnounce/primaryRunning'])) },
     clock () {
       if (this.remaining == null) return '--:--'
       return formatMMSS(this.remaining)
@@ -717,6 +726,8 @@ html[data-theme="dark"] .tomato__task-x { color: rgba(232,237,241,.5); }
 html[data-theme="dark"] .tomato__task-x:hover { background: rgba(255,255,255,.1); color: #e8edf1; }
 html[data-theme="dark"] .tomato__beads i { background: rgba(53,194,174,.22); }
 html[data-theme="dark"] .tomato__beads i.done { background: var(--brand-bright, #35c2ae); }
+/* Remote running focus chip (LAN sync announce, display-only) */
+.tomato__remote { font-size: 11px; color: var(--brand, #35c2ae); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 html[data-theme="dark"] .tomato__knob { background: #22262e; }
 html[data-theme="dark"] .tomato__ring-bg { stroke: rgba(53,194,174,.25); }
 html[data-theme="dark"] .tomato__ring-fg { stroke: var(--brand-bright, #35c2ae); }

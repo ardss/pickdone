@@ -19,7 +19,14 @@ module.exports = function attachmentHandlers (ctx) {
       const { shell } = require('electron')
       if (isLocked()) throw new Error('locked')
       if (typeof url !== 'string') return false // F2 2026-09-15: 非字符串 url 此前在 startsWith 处 TypeError;与 save-upload-file-to-download 守卫同款
-      if (url.startsWith('local://')) { shell.openPath(attachmentPath(url.slice(8))); return true }
+      if (url.startsWith('local://')) {
+        const p = attachmentPath(url.slice(8))
+        // Missing-file guard (feature: LAN-synced attachments): the metadata row may arrive
+        // before the file is pulled over. Structured result -> renderer toasts "not yet
+        // synced" instead of a raw open failure.
+        if (!fs.existsSync(p)) return { missing: true, name: path.basename(p) }
+        shell.openPath(p); return true
+      }
       if (isSafeExternal(url)) return shell.openExternal(url)
       return false
     },
@@ -29,7 +36,11 @@ module.exports = function attachmentHandlers (ctx) {
       // P2 2026-09-12: the trailing unconditional `return true` lied — unknown URL schemes reported
       // success. Return per branch: local opened → true, safe external handled → true, else false.
       if (typeof url !== 'string') return false // F2 2026-09-15: 同上 typeof 守卫(三通道家族一致性)
-      if (url.startsWith('local://')) { shell.openPath(attachmentPath(url.slice(8))); return true }
+      if (url.startsWith('local://')) {
+        const p = attachmentPath(url.slice(8))
+        if (!fs.existsSync(p)) return { missing: true, name: path.basename(p) } // same missing-file guard as open-file
+        shell.openPath(p); return true
+      }
       if (isSafeExternal(url)) { shell.openExternal(url); return true }
       return false
     },
@@ -51,6 +62,8 @@ module.exports = function attachmentHandlers (ctx) {
       // 并包 try 返回结构化错误(磁盘满/权限等此前抛裸异常,渲染端只能拿到笼统 invoke reject)
       try {
         const src = attachmentPath(url.slice(8))
+        // Missing-file guard (same as open-file): structured result instead of a raw ENOENT throw
+        if (!fs.existsSync(src)) return { missing: true, name: path.basename(src) }
         const dst = fixUtil.nextAvailableName(app.getPath('downloads'), safeName, p => fs.existsSync(p))
         fs.copyFileSync(src, dst)
         return dst

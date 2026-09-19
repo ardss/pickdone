@@ -39,6 +39,8 @@ export default {
 
     },
     "TomatoPanel": {
+      "remoteRunning": "Focus running on {name} · {time}",
+      "remoteRunningTip": "Another device is focusing (display only)",
       "phaseIdle": "Ready",
       "todayRecords": "Today's records",
       "countN": "{n}",

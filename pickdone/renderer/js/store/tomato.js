@@ -6,6 +6,12 @@ import { confirmUrl } from '../utils/mediaRegistry.js'
 import { tt } from '../utils/core.js'
 import { FOCUS_MAX_MINUTES, REST_MAX_MINUTES } from '../utils/limits.js'
 
+/** Running-tomato cross-device announce (feature: live remote focus chip). Fire-and-forget;
+ * announce failures never break the focus flow (peers' staleness TTL self-heals). */
+function announceCrossDevice (ctx, status) {
+  try { if (ctx && ctx.dispatch) ctx.dispatch('tomatoAnnounce/announceLocal', { status }) } catch (e) { /* announce is optional */ }
+}
+
 const LS_KEY = 'tomatoState'
 /** Persistence blob format version: incremented on future incompatible field semantics; readers tolerate old unstamped data as v1 */
 const SCHEMA_V = 1
@@ -381,6 +387,7 @@ export default {
     startFocus ({ state, commit }) {
       if (state.status !== 'default') return // triggering during focus/rest = illegal transition, prevents silently zeroing already-focused time
       commit('patch', { status: 'startTomatoTime', startedAt: Date.now(), remainSec: state.tomatoTime * 60 })
+      announceCrossDevice(this, 'running')
     },
     giveUp ({ state, commit, dispatch }, { record = true, reason = '' } = {}) {
       let s = state
@@ -424,6 +431,7 @@ export default {
         dispatch('todo/writeCriticalBackup', null, { root: true })
       }
       commit('patch', { status: 'default', startedAt: 0, remainSec: s.tomatoTime * 60 })
+      announceCrossDevice(this, 'idle')
     },
     async completeFocus ({ state, commit, rootState, dispatch }) {
       const s = state
@@ -498,6 +506,9 @@ export default {
         try { new Audio(confirmUrl(rootState.settings.completeSound)).play().catch(() => {}) } catch (e) { /* empty */ }
         if (s.enableNotification !== false) { try { window.todoAPI.notification({ title: tt('statsA.core.tomatoDoneTitle'), body: tt('statsA.core.tomatoDoneBody', { n: focusMin }) }) } catch (e) { /* locked screen rejects the channel — fire-and-forget */ } }
         commit('patch', { status: 'startRestTime', startedAt: Date.now(), remainSec: s.restTime * 60, _countDate: dayjs().format(FMT.date) })
+        // Focus complete: announce idle right away so peers' chips stop counting (display-only;
+        // the rest phase is local and intentionally not broadcast).
+        announceCrossDevice(this, 'idle')
       } catch (e) {
         // G1: booking failed mid-transition — release the phase claim so the next tick can retry the
         // completion instead of the tomato being lost forever behind a permanent claim mark.
@@ -510,9 +521,11 @@ export default {
       if (state.enableNotification !== false) { try { window.todoAPI.notification({ title: tt('statsA.core.restOverTitle'), body: tt('statsA.core.restOverBody') }) } catch (e) { /* locked screen rejects the channel — fire-and-forget */ } }
       commit('patch', { status: 'default', startedAt: 0, remainSec: state.tomatoTime * 60 })
     },
-    attach ({ commit }, taskId) {
+    attach ({ commit, state }, taskId) {
       const t = taskId ? this.state.todo.todoList.find(x => x.taskId === taskId) : null
       commit('patch', { attachTodo: t ? { taskId: t.taskId, taskContent: t.taskContent } : null })
+      // Attach change during a running focus: re-announce so peers' chips show the new link
+      announceCrossDevice(this, state.status === 'startTomatoTime' ? 'running' : 'idle')
     }
 
   }

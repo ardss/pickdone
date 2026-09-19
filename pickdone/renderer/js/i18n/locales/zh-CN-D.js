@@ -40,6 +40,8 @@ export default {
     },
     "TomatoPanel": {
       "title": "番茄钟",
+      "remoteRunning": "专注进行于 {name} · {time}",
+      "remoteRunningTip": "另一台设备正在专注中(仅显示,不会联动本机)",
       "phaseIdle": "待开始",
       "freeFocus": "自由专注",
       "phaseWork": "专注中",

@@ -1,0 +1,145 @@
+/** Attachment file pull over LAN sync (feature regression tests): request/serve/chunk/
+ * verify/atomic-write path with a FAKE transport (no sockets), plus the guards:
+ *   - sender refuses files >50MB and unknown ids; per-peer request rate cap
+ *   - receiver caps the per-round batch (20 files / 64MB) and verifies the sha256 hash
+ *   - writes land ATOMICALLY (tmp+rename) only after hash verification
+ *   - a missing-on-both-sides file lands in the per-session failed set (no retry loop)
+ *   - collectMissingKeys parses todo.image/todo.files local:// refs
+ * Run: node --test tests/unit/lan-sync/att-transfer.test.mjs */
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { createRequire } from 'node:module'
+import { createHash } from 'node:crypto'
+
+const require = createRequire(import.meta.url)
+const att = require('../../../src/main/lan-sync/att-transfer.js')
+
+const sha = buf => createHash('sha256').update(buf).digest('hex')
+
+function memDeps (files = {}) {
+  const written = []
+  const deps = {
+    exists: key => key in files || written.some(w => w.key === key),
+    size: key => (files[key] ? files[key].length : 0),
+    read: (key, start, end) => (files[key] || Buffer.alloc(0)).slice(start, end + 1),
+    writeAtomic: (key, buf) => { written.push({ key, buf }); return true },
+    hashFn: sha,
+  }
+  return { deps, written, files }
+}
+
+function frameFile (id, buf) {
+  const out = [{ type: 'att-meta', id, size: buf.length, hash: sha(buf) }]
+  for (let off = 0, i = 0; off < buf.length || i === 0; off += att.ENTRY_CHUNK_BYTES, i++) {
+    const chunk = buf.slice(off, Math.min(off + att.ENTRY_CHUNK_BYTES, buf.length))
+    out.push({ type: 'att-chunk', id, index: i, data: chunk.toString('base64'), final: off + att.ENTRY_CHUNK_BYTES >= buf.length })
+    if (off + att.ENTRY_CHUNK_BYTES >= buf.length) break
+  }
+  return out
+}
+
+test('att: extractLocalKeys parses todo.image/files and collectMissingKeys filters by disk', () => {
+  const rows = [
+    { taskId: 'a', image: JSON.stringify([{ url: 'local://a.png' }, { url: 'http://x' }]), files: JSON.stringify([{ url: 'local://b.pdf' }]) },
+    { taskId: 'b', image: 'not-json' },
+    { taskId: 'c', image: JSON.stringify([{ url: 'local://a.png' }]) },
+    null,
+  ]
+  const missing = att.collectMissingKeys(rows, key => key === 'a.png')
+  assert.deepEqual(missing, ['b.pdf'])
+  assert.deepEqual(att.extractLocalKeys(null), [])
+})
+
+test('att: server serves chunks + end; receiver verifies hash and writes atomically (roundtrip over a fake transport)', () => {
+  const sender = memDeps({ 'pic.png': Buffer.from('hello attachment data'.repeat(100)) })
+  const receiver = memDeps({})
+  const server = att.createAttachmentServer(sender.deps)
+  const wire = []
+  server.serve({ deviceId: 'peer-1' }, { type: 'att-req', ids: ['pic.png'] }, m => wire.push(m))
+  assert.equal(wire[0].type, 'att-meta')
+  assert.equal(wire[wire.length - 1].type, 'att-end')
+  assert.equal(wire[wire.length - 1].sent, 1)
+  const puller = att.createAttachmentPuller({
+    send: () => {}, deps: receiver.deps, getKeys: () => ['pic.png'], session: { failed: new Set(), requests: new Map() },
+  })
+  let done = false
+  assert.equal(puller.maybeStart(() => { done = true }, () => {}), true)
+  for (const m of wire) if (m.type !== 'att-req') puller.onMessage(m)
+  assert.equal(done, true, 'att-end settles the pull')
+  assert.equal(receiver.written.length, 1)
+  assert.equal(receiver.written[0].key, 'pic.png')
+  assert.equal(sha(receiver.written[0].buf), sha(sender.files['pic.png']), 'reassembled bytes match the source hash')
+})
+
+test('att: guards - unknown id, oversized file, per-peer rate cap, hash mismatch refused', () => {
+  const big = att.createAttachmentServer({ ...memDeps({ big: Buffer.alloc(51 * 1024 * 1024) }).deps, maxFileBytes: 50 * 1024 * 1024 })
+  const wire = []
+  big.serve({ deviceId: 'p' }, { type: 'att-req', ids: ['nope.png', 'big', '../evil'] }, m => wire.push(m))
+  const missing = wire.filter(m => m.type === 'att-missing')
+  assert.equal(missing.length, 3, 'not-found / too-large / bad-id all answer att-missing (never a hang)')
+  assert.deepEqual(missing.map(m => m.reason).sort(), ['bad-id', 'not-found', 'too-large'])
+  assert.equal(wire[wire.length - 1].type, 'att-end')
+
+  const receiver = memDeps({})
+  const puller = att.createAttachmentPuller({ send: () => {}, deps: receiver.deps, session: { failed: new Set(), requests: new Map() } })
+  const frames = frameFile('x.png', Buffer.from('real bytes'))
+  frames[0].hash = 'deadbeef'
+  for (const m of frames) puller.onMessage(m)
+  assert.equal(receiver.written.length, 0, 'hash mismatch: nothing written')
+  assert.equal(puller.onMessage({ type: 'att-end' }), false, 'att-end terminates the batch')
+
+  const capped = att.createAttachmentServer({ ...memDeps({}).deps, perPeerCap: 2 })
+  const sent = []
+  const peer = { deviceId: 'spammy' }
+  capped.serve(peer, { type: 'att-req', ids: [] }, m => sent.push(m))
+  capped.serve(peer, { type: 'att-req', ids: [] }, m => sent.push(m))
+  sent.length = 0
+  const r = capped.serve(peer, { type: 'att-req', ids: ['a'] }, m => sent.push(m))
+  assert.equal(r.capped, true)
+  assert.deepEqual(sent.map(m => m.type), ['att-end'])
+})
+
+test('att: puller batch caps, failed-set prevents retry loops, session request budget', () => {
+  const session = { failed: new Set(), requests: new Map() }
+  const sends = []
+  const puller = att.createAttachmentPuller({
+    send: m => sends.push(m), deps: memDeps({}).deps, session, peerId: 'peer-1',
+    maxFiles: 20, maxBytes: 64 * 1024 * 1024,
+    getKeys: () => Array.from({ length: 25 }, (_, i) => 'f' + i + '.png').concat(['f0.png']),
+  })
+  assert.equal(puller.maybeStart(() => {}, () => {}), true)
+  assert.equal(sends[0].ids.length, 20, 'per-round batch cap (20 files)')
+  assert.equal(sends[0].ids.filter(k => k === 'f0.png').length, 1, 'keys dedupe')
+  assert.equal(puller.maybeStart(() => {}, () => {}), false, 'one batch per round')
+  session.failed.add('f5.png')
+  const sends2 = []
+  const puller2 = att.createAttachmentPuller({
+    send: m => sends2.push(m), deps: memDeps({}).deps, session, peerId: 'peer-1',
+    getKeys: () => ['f5.png', 'zzz'],
+  })
+  assert.equal(puller2.maybeStart(() => {}, () => {}), true)
+  assert.deepEqual(sends2[0].ids, ['zzz'], 'failed-set entries are skipped (no retry loop)')
+  session.requests.set('peer-1', att.MAX_REQUESTS_PER_SESSION)
+  const sends3 = []
+  const puller3 = att.createAttachmentPuller({
+    send: m => sends3.push(m), deps: memDeps({}).deps, session, peerId: 'peer-1',
+    getKeys: () => ['never.png'],
+  })
+  assert.equal(puller3.maybeStart(() => {}, () => {}), false)
+  assert.equal(sends3.length, 0)
+})
+
+test('att: missing-on-both-sides flows cleanly through the node-level message contract', () => {
+  const sender = att.createAttachmentServer(memDeps({}).deps)
+  const receiver = memDeps({})
+  const session = { failed: new Set(), requests: new Map() }
+  const puller = att.createAttachmentPuller({ send: () => {}, deps: receiver.deps, session, getKeys: () => ['gone.png'] })
+  let done = false
+  puller.maybeStart(() => { done = true }, () => {})
+  const frames = []
+  sender.serve({ deviceId: 'p' }, { type: 'att-req', ids: ['gone.png'] }, m => frames.push(m))
+  for (const m of frames) if (m.type !== 'att-req') puller.onMessage(m)
+  assert.equal(done, true)
+  assert.equal(receiver.written.length, 0)
+  assert.ok(session.failed.has('gone.png'), 'peer-lacks-file lands in the failed set (a later SESSION may retry)')
+})

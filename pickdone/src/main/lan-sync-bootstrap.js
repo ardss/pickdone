@@ -320,6 +320,19 @@ function startSync () {
       return rows
     },
     snapshotSchemaVersion: SYNC_SCHEMA_VERSION,
+    // Attachment file pull (feature): after each confirmed round the client asks this for the
+    // attachment keys referenced by todo rows but missing on disk, and requests the files over
+    // the same encrypted session (att-transfer.js: hash-verified, atomic write, capped batch).
+    getMissingAttachmentKeys: () => {
+      try {
+        const fs = require('node:fs')
+        const path = require('node:path')
+        const dir = require('./attachments').attachDir()
+        const { collectMissingKeys } = require('./lan-sync/att-transfer')
+        // Same path resolution as attachments.js attachmentPath (basename-only under the dir)
+        return collectMissingKeys(state.db.call('getAll', { deleted: null }), key => fs.existsSync(path.join(dir, path.basename(String(key)))))
+      } catch { return [] }
+    },
   })
   state.node.on('round-error', info => {
     log.warn('[LanSync] round error:', info && info.error)
@@ -584,6 +597,18 @@ function initLanSync ({ db, getWindowSenders }) {
   const peerWatermarks = createTrackedWatermarks()
   state = { db, getWindowSenders, node: null, engine: null, timers: [], pendingToSeq: 0, peerWatermarks, localUserId: null, pendingWrites: { todos: [], settings: [], tomatoes: [], categories: [], plans: [], filters: [] }, pendingPair: null }
   registerOps()
+  // Running-tomato announcements (feature): wire the announce module to the db + identity,
+  // and relay remotely-applied announces to the renderer as 'tomato-announce' syncEvents.
+  // The announce key itself travels as a regular meta entity row (see sync-apply.js).
+  try {
+    const tomatoAnnounce = require('./tomato-announce')
+    tomatoAnnounce.init({
+      dbCall: (op, p) => state.db.call(op, p),
+      getIdentity: () => { const s = getSettingsPayload(); return { deviceId: s.deviceId, deviceName: s.deviceName } },
+      kickRound: kickSyncRound,
+    })
+    tomatoAnnounce.onRemoteAnnounce(v => emitSyncEvent('tomato-announce', v))
+  } catch (e) { log.warn('[LanSync] tomato-announce wiring failed:', e.message) }
   // v1 watermark cleanup (round-3 review): the pre-v2 'sync.peerWatermarks' row is dead data in
   // the RECEIVER's seq space (v2 lives under 'sync.peerWatermarks.v2'); delete it once.
   try {

@@ -533,6 +533,9 @@ app.on('before-quit', () => {
   // bootstrap's settings persists (peer watermarks / security log) run synchronously via db.call,
   // so nothing of sync's outlives the will-quit DB close (2026-09-18 P2 lifecycle fix).
   try { require('./lan-sync-bootstrap').stopSyncForQuit() } catch { /* sync never initialized */ }
+  // Running-tomato announcement: flip this device's announce to idle BEFORE the DB closes so
+  // peers stop showing the countdown (best-effort; the peers' staleness TTL covers a crash).
+  try { require('./tomato-announce').announceIdleForQuit() } catch { /* announce never initialized */ }
   // Before quitting, broadcast the renderer flush of debounced mirrors (the last write within dbMirror's 2s / disaster-snapshot 800ms window would be silently lost)
   // 2026-09-10 P1: previously only the main window was notified — the float window's pending pomodoro
   // ledger (and the whole broadcast when the main window was already destroyed, e.g. X-close→tray→quit)

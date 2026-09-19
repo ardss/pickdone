@@ -445,6 +445,12 @@ function applyRowInner (state, incoming) {
     }
     if (!winner.data) return false
     state.db.call('setMeta', [incoming.id, winner.data.value])
+    // Running-tomato announcements (feature: live cross-device focus countdown): after the
+    // peer's announce key landed, fan it out to the renderer. Announce keys pass the
+    // machine-local filter on purpose (display-only remote runtime; see tomato-announce.js).
+    if (require('./tomato-announce').isAnnounceKey(incoming.id)) {
+      require('./tomato-announce').emitRemoteAnnounce(incoming.id, winner.data.value)
+    }
   } else {
     return false
   }

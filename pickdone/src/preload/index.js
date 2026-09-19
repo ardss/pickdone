@@ -75,6 +75,12 @@ contextBridge.exposeInMainWorld('todoAPI', {
   deleteFile: url => invoke('delete-file', url),
   deleteTodoFilesRelevant: id => invoke('delete-todo-files', id), // clean up attachments when a task is permanently deleted
 
+  // ---- Running-tomato cross-device announcements (feature: live remote focus chip) ----
+  // Report a local focus transition (start/attach change/give up/complete) to the main
+  // process, which writes the synced meta announce row; and read the current snapshot.
+  tomatoRunAnnounce: payload => invoke('tomato-run-announce', payload),
+  tomatoRunAnnounces: () => invoke('tomato-run-announces'),
+
   // ---- Export ----
   exportXlsx: payload => invoke('export-todos-to-xlsx', payload),
 

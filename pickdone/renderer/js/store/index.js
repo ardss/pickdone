@@ -9,11 +9,12 @@ import habits from './habits.js'
 import ui from './ui.js'
 import repeatSettings from './repeatSettings.js'
 import filters from './filters.js'
+import tomatoAnnounce from './tomatoAnnounce.js'
 
 const Vuex = window.Vuex
 
 const store = Vuex.createStore({
-  modules: { auth, todo, tomato, settings, category, habits, ui, repeatSettings, filters },
+  modules: { auth, todo, tomato, settings, category, habits, ui, repeatSettings, filters, tomatoAnnounce },
   state: () => ({ cloudEnabled: false }),
   getters: {
     tomatoBarVisible (state) {
