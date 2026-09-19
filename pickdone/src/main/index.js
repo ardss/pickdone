@@ -380,7 +380,13 @@ if (!app.requestSingleInstanceLock()) { app.quit() } else {
       try { dbm.init(ud) } catch (e2) { reinitErr = e2 }
       let restoredN = 0
       // source is a structured branch flag; display copy must never drive logic (dbRecovery.cjs contract)
-      if (recoveredFrom && recoveredFrom.source === 'json') restoredN = restoreTasksFromCriticalBackup(ud)
+      if (recoveredFrom && recoveredFrom.source === 'json') {
+        restoredN = restoreTasksFromCriticalBackup(ud)
+        // GAP-D fix (2026-09-19): recovery writes go through dbm.call directly with no sync kick —
+        // restored rows waited for the periodic round. Boot-time kick is safe: kickSyncRound no-ops
+        // while the sync node is not initialized.
+        try { require('./lan-sync-bootstrap').kickSyncRound('db-recovery') } catch { /* sync lazy-not-init */ }
+      }
       const detailMsg = String(e && e.message || e) + '.' + (recoveredFrom
         ? i18nM.mt('dbFailRecovered', { n: restoredN })
         : i18nM.mt('dbFailRecoveredNone')) + (reinitErr ? i18nM.mt('dbFailReinit', { msg: reinitErr.message }) : '')
