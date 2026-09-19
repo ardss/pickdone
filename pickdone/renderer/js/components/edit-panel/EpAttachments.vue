@@ -48,7 +48,16 @@ export default {
   methods: {
     /* 粘贴/上传失败的兜底：不显示 Chromium 碎图图标，改用居中感叹号占位（视觉上与关闭✕可区分） */
     onImgErr (e) { (e.target as HTMLElement).classList.add('ep-img-broken') },
-    openFileUrl (f) { window.todoAPI.openFile(f.url) }
+    openFileUrl (f) {
+      // Missing-file guard (LAN-synced attachments): the metadata row can arrive before the
+      // file is pulled over sync — toast a friendly notice instead of a silent failure.
+      Promise.resolve(window.todoAPI.openFile(f.url)).then((r) => {
+        if (r && r.missing) {
+          const EP = (window as any).ElementPlus
+          if (EP && EP.ElMessage) EP.ElMessage({ type: 'warning', message: (this as any).$t('statsJ.EditPanel.attachmentMissing'), duration: 6000, showClose: true })
+        }
+      }).catch(() => { /* invoke-level errors keep their existing reporting path */ })
+    }
   }
 }
 </script>

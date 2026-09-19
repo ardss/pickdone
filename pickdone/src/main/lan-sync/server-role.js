@@ -38,6 +38,7 @@ function createServerRoleHandler(deps) {
     ingestSegment, buildSegments, buildSnapshot, buildSnapshotRows,
     getMaxSeq, getOldestSeq, serverSnapshotBusy, serverPullAck,
     maxSnapshotChunks, snapshotSchemaVersion, pushRecent, onSnapshotError, onServerError,
+    serveAttachments,
   } = deps
   const maxSnapshotRows = Number(deps.maxSnapshotRows) || MAX_SNAPSHOT_ROWS
   const currentMaxSeq = () => { try { return Number(getMaxSeq()) || 0 } catch { return 0 } }
@@ -178,6 +179,12 @@ function createServerRoleHandler(deps) {
         } finally {
           serverSnapshotBusy.delete(peer.deviceId)
         }
+      } else if (msg.type === 'att-req') {
+        // Attachment FILE pull (feature): the peer requests missing attachment files after a
+        // sync round applied their metadata rows. Served over the same encrypted session with
+        // per-file hash + chunked frames + per-peer rate cap (att-transfer.js). No-op when the
+        // caller did not wire a server (attachment serving is optional per node).
+        if (serveAttachments) serveAttachments(peer, msg, sendVia)
       }
     } catch (err) {
       try { require('electron-log').warn('[LanSync] server handler failed:', err && err.message) } catch { /* noop */ }

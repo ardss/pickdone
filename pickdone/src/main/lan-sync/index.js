@@ -38,6 +38,7 @@ const { deriveAuthCode } = require('./pairing')
 const { finalizeSnapshot } = require('./snapshot')
 const { packSegmentChunks } = require('./segments-chunk')
 const { createServerRoleHandler } = require('./server-role')
+const { createAttachmentServer, createAttachmentPuller } = require('./att-transfer')
 
 const BACKOFF_BASE_MS = 5000
 const BACKOFF_MAX_MS = 60 * 1000
@@ -207,10 +208,13 @@ function createLanSyncNode(opts) {
     serverSnapshotBusy, serverPullAck,
     maxSnapshotChunks, snapshotSchemaVersion: opts.snapshotSchemaVersion,
     pushRecent,
+    serveAttachments: createAttachmentServer(opts.attachmentServerDeps).serve, // per-node att-req server (rate caps inside)
     onSnapshotError: (info) => em.emit('snapshot-error', info),
     onSnapshotSync: (info) => em.emit('snapshot-sync', info),
     onServerError: (err) => em.emit('server-error', err),
   })
+  // Attachment pull session state: failed-set + request budgets live across rounds (no retry loops).
+  const attSession = { failed: new Set(), requests: new Map() }
 
   function computeOnline(id) {
     const now = Date.now()
@@ -302,6 +306,9 @@ function createLanSyncNode(opts) {
       let roundApplied = 0 // rows the peer's segments changed locally this round (0 = no pull progress)
       let pullAckSeq = 0 // max seq among the peer's pushed rows across ALL chunks (PEER's seq space)
       let awaitingSnapshot = false // snapshot-request sent; the round ends at snapshot-end, not ack
+      // Attachment FILE puller (feature): missing files are requested over THIS session post-ack (att-transfer.js).
+      const att = createAttachmentPuller({ send: (m) => sendVia(client, m), session: attSession, peerId: peer.deviceId,
+        getKeys: typeof opts.getMissingAttachmentKeys === 'function' ? opts.getMissingAttachmentKeys : null })
       const chunkBuf = new Map() // snapshot-chunk index -> rows (assembled at snapshot-end, fallback mode)
       const chunkRowCounts = new Map() // streaming mode: index -> applied row count (rows are NEVER buffered)
       const streamingSnapshot = typeof ingestSnapshotChunk === 'function'
@@ -578,8 +585,12 @@ function createLanSyncNode(opts) {
             if (seq > (peerProgress.get(peer.deviceId) || 0)) peerProgress.set(peer.deviceId, seq)
             evaluateSnapshotTrigger()
             // With a snapshot-request in flight the round's finish waits for snapshot-end (the
-            // ack only proves the peer got MY push, not that the snapshot stream completed).
-            if (!awaitingSnapshot) finish(null)
+            // ack only proves the peer got MY push). Attachment pull likewise keeps the round
+            // open until att-end (the puller calls finish(null)); otherwise finish immediately.
+            if (!awaitingSnapshot && !att.maybeStart(() => finish(null), (err) => finish(err))) finish(null)
+          } else if (att.handles(msg.type)) { // attachment frames: att-end settles the round
+            progressDeadline()
+            if (!att.onMessage(msg)) finish(null)
           }
         } catch (err) {
           finish(err)

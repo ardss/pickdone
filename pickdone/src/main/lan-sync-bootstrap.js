@@ -320,6 +320,19 @@ function startSync () {
       return rows
     },
     snapshotSchemaVersion: SYNC_SCHEMA_VERSION,
+    // Attachment file pull (feature): after each confirmed round the client asks this for the
+    // attachment keys referenced by todo rows but missing on disk, and requests the files over
+    // the same encrypted session (att-transfer.js: hash-verified, atomic write, capped batch).
+    getMissingAttachmentKeys: () => {
+      try {
+        const fs = require('node:fs')
+        const path = require('node:path')
+        const dir = require('./attachments').attachDir()
+        const { collectMissingKeys } = require('./lan-sync/att-transfer')
+        // Same path resolution as attachments.js attachmentPath (basename-only under the dir)
+        return collectMissingKeys(state.db.call('getAll', { deleted: null }), key => fs.existsSync(path.join(dir, path.basename(String(key)))))
+      } catch { return [] }
+    },
   })
   state.node.on('round-error', info => {
     log.warn('[LanSync] round error:', info && info.error)
