@@ -48,11 +48,16 @@ if (fs.existsSync(resCli)) {
   const skillBuf = fs.readFileSync(path.join(resCli, 'SKILL.md'))
   const ctrl = [...skillBuf].filter(b => b < 9 || (b > 13 && b < 32))
   if (ctrl.length) { console.error(`FAIL: resources/cli/SKILL.md 含 ${ctrl.length} 个 C0 控制字符（skill install 会原样扩散）`); process.exit(1) }
-  const cmdBuf = fs.readFileSync(path.join(unpacked, 'resources', 'bin', 'pickdone.cmd'))
-  if (cmdBuf[0] === 0xef && cmdBuf[1] === 0xbb && cmdBuf[2] === 0xbf) { console.error('FAIL: pickdone.cmd 带 UTF-8 BOM（cmd.exe 解析炸）'); process.exit(1) }
-  if ([...cmdBuf].some(b => b > 127)) { console.error('FAIL: pickdone.cmd 含非 ASCII 字节（cmd.exe 按 ANSI 解读会乱码）'); process.exit(1) }
-  const txt = cmdBuf.toString('latin1')
-  if (/(^|[^\r])\n/.test(txt)) { console.error('FAIL: pickdone.cmd 含裸 LF（cmd.exe 只认 CRLF）'); process.exit(1) }
+  // 2026-09-19: guard the .cmd shim checks on the file existing — the Linux AppImage/deb jobs run
+  // this script too and ship the unix shim only; a hard read there would fail a healthy package.
+  const cmdPath = path.join(unpacked, 'resources', 'bin', 'pickdone.cmd')
+  if (fs.existsSync(cmdPath)) {
+    const cmdBuf = fs.readFileSync(cmdPath)
+    if (cmdBuf[0] === 0xef && cmdBuf[1] === 0xbb && cmdBuf[2] === 0xbf) { console.error('FAIL: pickdone.cmd 带 UTF-8 BOM（cmd.exe 解析炸）'); process.exit(1) }
+    if ([...cmdBuf].some(b => b > 127)) { console.error('FAIL: pickdone.cmd 含非 ASCII 字节（cmd.exe 按 ANSI 解读会乱码）'); process.exit(1) }
+    const txt = cmdBuf.toString('latin1')
+    if (/(^|[^\r])\n/.test(txt)) { console.error('FAIL: pickdone.cmd 含裸 LF（cmd.exe 只认 CRLF）'); process.exit(1) }
+  }
 }
 
 // CLI module completeness gate: every require('./x') in cli/*.js|*.cjs must land in

@@ -94,6 +94,15 @@ function init (mainWin) {
   _inited = true
   autoUpdater.logger = log // stdout is invisible after packaging; update failures must be diagnosable from the log
   autoUpdater.autoInstallOnAppQuit = true // after download, a normal user quit silently upgrades
+  // P1-4 (2026-09-19 release-chain round): electron-updater derives the feed FILE from the app
+  // version — a `0.4.0-beta.x` version implies a `beta` channel and fetches `beta.yml`, which
+  // electron-builder never publishes for this project (it only emits `latest.yml` for the draft
+  // release). Result: every beta build's first update check 404'd. Pin the channel to `latest`
+  // (with allowPrerelease so beta versions still satisfy the range check) so the updater reads
+  // the artifact that actually ships, matching the GitHub draft release layout.
+  autoUpdater.channel = 'latest'
+  autoUpdater.allowPrerelease = true
+  autoUpdater.allowDowngrade = false
   syncAutoDownload()
   autoUpdater.on('checking-for-update', () => { state.status = 'checking'; broadcast() })
   autoUpdater.on('update-available', i => { state.status = autoUpdater.autoDownload ? 'downloading' : 'available'; state.info = i; broadcast() })

@@ -55,19 +55,24 @@ const GROUPS = [
     ]
   },
   {
+    // 2026-09-19: every ③ stage tuple carries an explicit named ceiling (5th element = minutes).
+    // Previously the stages rode the 15min default with no per-stage budget — a hung live stage got
+    // SIGKILLed mid-pool and read as "killed at job timeout with zero diagnostics". A named 20min
+    // ceiling per live stage (mirrors the unit-test pool's `, 30` fix) turns a hang into a red with
+    // a budget label instead of a silent external kill.
     name: '③ Electron 活体（并行 3 路,各自独立端口+隔离 userData;失败重试1次抗负载抖动）', parallel: 3, retry: 1,
     stages: [
-      ['UI 集成测试（自拉起 Electron 隔离实例）', 'node', ['tests/integration-ui.test.mjs']],
-      ['更新链路活体（dev降级/downloadUpdate守卫/开关默认/红点badge;真下载须公开仓后rc实测）', 'node', ['tests/integration-updater-ui.mjs']],
-      ['UI 交互冒烟（真实鼠标输入链,自拉起实例;562261c pointer capture 吞 click 事件防线）', 'node', ['tests/run-interactions-gated.mjs']],
-      ['UI 冒烟回归（假绿清剿后纳入门禁——游离门禁外的脚本必然腐烂,2026-09-01 实锤:标题冻结/引导遮罩吞点击均在门禁外烂了数日）', 'node', ['tests/run-interactions-gated.mjs', 'tests/ui-smoke.mjs']],
-      ['端到端用户流（自拉起实例;看门狗超时=红;浮窗 target 排除）', 'node', ['tests/run-interactions-gated.mjs', 'tests/e2e.test.mjs']],
-      ['键盘端到端（真实按键事件,自拉起实例）', 'node', ['tests/run-interactions-gated.mjs', 'tests/keyboard-e2e.mjs']],
-      ['CSSOM 完整性（规则数对照入库基线,防静默吞规则——两次实锤后立门禁）', 'node', ['tests/run-interactions-gated.mjs', 'tests/cssom-integrity.mjs']],
-      ['全功能覆盖走查（用户可达面业务语义:搜索/达成/标签/视图/回收站/重复/设置生效/习惯/项目/空态/账目）', 'node', ['tests/run-interactions-gated.mjs', 'tests/ui-coverage.mjs']],
+      ['UI 集成测试（自拉起 Electron 隔离实例）', 'node', ['tests/integration-ui.test.mjs'], 20],
+      ['更新链路活体（dev降级/downloadUpdate守卫/开关默认/红点badge;真下载须公开仓后rc实测）', 'node', ['tests/integration-updater-ui.mjs'], 20],
+      ['UI 交互冒烟（真实鼠标输入链,自拉起实例;562261c pointer capture 吞 click 事件防线）', 'node', ['tests/run-interactions-gated.mjs'], 20],
+      ['UI 冒烟回归（假绿清剿后纳入门禁——游离门禁外的脚本必然腐烂,2026-09-01 实锤:标题冻结/引导遮罩吞点击均在门禁外烂了数日）', 'node', ['tests/run-interactions-gated.mjs', 'tests/ui-smoke.mjs'], 20],
+      ['端到端用户流（自拉起实例;看门狗超时=红;浮窗 target 排除）', 'node', ['tests/run-interactions-gated.mjs', 'tests/e2e.test.mjs'], 20],
+      ['键盘端到端（真实按键事件,自拉起实例）', 'node', ['tests/run-interactions-gated.mjs', 'tests/keyboard-e2e.mjs'], 20],
+      ['CSSOM 完整性（规则数对照入库基线,防静默吞规则——两次实锤后立门禁）', 'node', ['tests/run-interactions-gated.mjs', 'tests/cssom-integrity.mjs'], 20],
+      ['全功能覆盖走查（用户可达面业务语义:搜索/达成/标签/视图/回收站/重复/设置生效/习惯/项目/空态/账目）', 'node', ['tests/run-interactions-gated.mjs', 'tests/ui-coverage.mjs'], 20],
       // 2026-09-13 从单测池挪入:活体测试不得进 pre-commit(pre-commit 须零环境依赖,不被 5175 宿主实时状态劫持)
-      ['视口/遮挡活体（最小视口不可见遮挡+confirm 命中,自拉起实例;leftover-ask 弹窗回归）', 'node', ['tests/run-interactions-gated.mjs', 'tests/integration/overlay-visibility.test.mjs']],
-      ['CLI 冒烟', 'node', ['cli/cli-smoke.js']],
+      ['视口/遮挡活体（最小视口不可见遮挡+confirm 命中,自拉起实例;leftover-ask 弹窗回归）', 'node', ['tests/run-interactions-gated.mjs', 'tests/integration/overlay-visibility.test.mjs'], 20],
+      ['CLI 冒烟', 'node', ['cli/cli-smoke.js'], 20],
     ]
   },
   {
