@@ -55,7 +55,7 @@
     "electron-log": "^5.2.0",
     "electron-updater": "^6.8.9",
     "exceljs": "^4.4.0",
-    "pinyin-pro": "^3.26.0",
+    "pinyin-pro": "^3.29.4",
     "solarlunar": "^3.1.0",
     "sortablejs": "^1.15.7"
   },
@@ -63,7 +63,7 @@
     "@fullcalendar/core": "^6.1.15",
     "@fullcalendar/daygrid": "^6.1.21",
     "@fullcalendar/interaction": "^6.1.21",
-    "@types/node": "^26.5.0",
+    "@types/node": "^26.6.1",
     "@typescript-eslint/parser": "^8.70.0",
     "@vitejs/plugin-vue": "^5.2.4",
     "axe-core": "^4.13.0",
