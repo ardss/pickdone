@@ -12,8 +12,11 @@
                   @pointerdown.stop @click.stop="cancelAttach"></button>
         </div>
         <div v-else class="tomato__task">{{ $t('statsB.TomatoFloatPage.attachLabel') }}<b class="tomato__task-none">{{ $t('statsB.TomatoFloatPage.noAttach') }}</b></div>
-        <!-- Remote running focus (LAN sync announce, display-only): never starts/rings here -->
-        <div v-if="remoteRun" class="tomato__remote" :title="$t('statsD.TomatoPanel.remoteRunningTip')">
+        <!-- Remote running focus (LAN sync announce, display-only): click opens the linked todo
+             (P2 2026-09-19 UX review: same behavior as the TomatoPanel chip — absent/deleted todo
+             toasts instead of a silent no-op; pointerdown.stop keeps the chip from dragging) -->
+        <div v-if="remoteRun" class="tomato__remote" role="button" tabindex="0" :title="$t('statsD.TomatoPanel.remoteRunningTip')"
+             @pointerdown.stop @click.stop="openRemoteTodo" @keydown.enter.prevent.stop="openRemoteTodo">
           {{ $t('statsD.TomatoPanel.remoteRunning', { name: remoteRun.deviceName || remoteRun.deviceId, time: remoteClock }) }}
         </div>
         <div class="tomato__beads" :aria-label="$t('statsB.TomatoFloatPage.beadsAria')">
@@ -206,8 +209,27 @@ export default {
   },
   methods: {
     read () { return this.$store.state.tomato },
+    /** P2 (2026-09-19 UX review): the remote chip now behaves like the TomatoPanel chip. The float
+     *  window cannot mount the main-window edit panel, so a LIVE linked todo summons the main
+     *  window (existing showMainFromFloat path); an absent/tombstoned one toasts instead of the
+     *  old tooltip-only fake affordance. */
+    openRemoteTodo () {
+      const id = this.remoteRun && this.remoteRun.attachTodoId
+      const root = this.$store.state.todo || {}
+      const live = id && (root.todoList || []).some(t => t && t.taskId === id && !t.delete)
+      const EP = window.ElementPlus
+      if (!live) {
+        if (EP && EP.ElMessage) EP.ElMessage({ type: 'warning', message: this.$t('statsD.TomatoPanel.remoteTodoMissing'), duration: 4000, showClose: true })
+        return
+      }
+      if (window.todoAPI && window.todoAPI.showMainFromFloat) window.todoAPI.showMainFromFloat()
+    },
     refresh () {
       this.st = this.read()
+      // P1-6 (2026-09-19 UX review): the announce getter caches on store state and Date.now() is
+      // not reactive — dispatch the store prune on this 500ms tick so a peer that crashed
+      // mid-focus drops its ghost chip by TTL instead of sticking forever.
+      try { this.$store.commit('tomatoAnnounce/prune') } catch (e) { /* store not ready */ }
       const s = this.st
       let remain = (s.tomatoTime || 25) * 60
       if ((s.status === 'startTomatoTime' || s.status === 'startRestTime') && s.startedAt) {
@@ -727,7 +749,10 @@ html[data-theme="dark"] .tomato__task-x:hover { background: rgba(255,255,255,.1)
 html[data-theme="dark"] .tomato__beads i { background: rgba(53,194,174,.22); }
 html[data-theme="dark"] .tomato__beads i.done { background: var(--brand-bright, #35c2ae); }
 /* Remote running focus chip (LAN sync announce, display-only) */
-.tomato__remote { font-size: 11px; color: var(--brand, #35c2ae); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tomato__remote { font-size: 11px; color: var(--brand, #35c2ae); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+/* P2 (2026-09-19 UX review): dark-mode token follows the file's neighboring dark overrides
+   (same #7fd0c7 tint the task title uses) — the light token dimmed the chip on dark cards. */
+html[data-theme="dark"] .tomato__remote { color: #7fd0c7; }
 html[data-theme="dark"] .tomato__knob { background: #22262e; }
 html[data-theme="dark"] .tomato__ring-bg { stroke: rgba(53,194,174,.25); }
 html[data-theme="dark"] .tomato__ring-fg { stroke: var(--brand-bright, #35c2ae); }

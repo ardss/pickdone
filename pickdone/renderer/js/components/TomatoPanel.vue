@@ -82,12 +82,14 @@ export default {
   methods: {
     dfmt (ts) { return dayjs(ts).format(FMT.time) },
     commitPatch (p) { store.commit('tomato/patch', p) },
-    /** Open the remote focus's linked todo (display-only: never starts/stops anything). */
+    /** Open the remote focus's linked todo (display-only: never starts/stops anything).
+     *  P2 (2026-09-19 UX review): an absent/deleted (tombstoned) todo must not click-fail
+     *  silently — toast "task not on this device" instead of a silent no-op. */
     openRemoteTodo () {
       const id = this.remoteRun && this.remoteRun.attachTodoId
-      if (!id) return
-      const row = (this.$store.state.todo.todoList || []).find(t => t && t.taskId === id)
+      const row = id ? (this.$store.state.todo.todoList || []).find(t => t && t.taskId === id && !t.delete) : null
       if (row) store.commit('ui/openEdit', row)
+      else if (this.$message) this.$message.warning(this.$t('statsD.TomatoPanel.remoteTodoMissing'))
     },
     openFloatWindow () {
       // Use the main process frameless float window (same channel as the Settings page toggle) instead of a plain window.open popup
@@ -96,6 +98,10 @@ export default {
     },
     recalc () {
       this.nowTs = Date.now() // remote chip countdown re-derives from the wall clock
+      // P1-6 (2026-09-19 UX review): the store getter caches on state, and Date.now() inside it is
+      // not reactive — a peer that crashed mid-focus left a ghost chip. This 500ms tick dispatches
+      // the store's prune so expired announces drop from the chip without a fresh sync event.
+      try { store.commit('tomatoAnnounce/prune') } catch (e) { /* store not ready */ }
       const s = this.s
       let remain
       if ((s.status === 'startTomatoTime' || s.status === 'startRestTime') && s.startedAt) {
@@ -111,7 +117,7 @@ export default {
 </script>
 <style>
 /* Remote running focus chip (LAN sync announce, display-only) */
-.tp-remote { display: flex; align-items: center; gap: 5px; font-size: var(--fs-xs); color: var(--brand); background: var(--brand-light); border-radius: var(--radius-sm); padding: 3px 8px; margin-bottom: 6px; cursor: pointer; }
+.tp-remote { display: flex; align-items: center; gap: 5px; font-size: var(--fs-xs); color: var(--brand); background: var(--brand-light); border-radius: var(--radius-sm); padding: 3px 8px; margin-bottom: 6px; cursor: pointer; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tp-remote:hover { filter: brightness(0.97); }
 .tp-remote:focus-visible { outline: 2px solid var(--brand); outline-offset: -1px; }
 </style>

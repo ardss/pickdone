@@ -16,7 +16,7 @@
     </div>
   </template>
   <template v-else>
-    <div class="ep-imgs" v-if="imgList.length">
+    <div class="ep-imgs" v-if="imgList.length" :key="'imgs' + arriveTick">
       <div v-for="(im,i) in imgList" :key="i" class="ep-img-cell">
         <button type="button" class="ep-img-btn" :aria-label="$t('statsJ.EditPanel.zoomImage') + (Number(i)+1)" @click="$emit('preview', im.url)">
           <img :src="im.url" alt="" loading="lazy" @error="onImgErr($event)">
@@ -45,6 +45,25 @@ export default {
     fileList: { type: Array as any, default: () => [] }
   },
   emits: ['pick', 'preview', 'remove'],
+  data () {
+    return {
+      // P1-8 (2026-09-19 UX review): LAN-pulled attachment files land on disk AFTER the todo row
+      // arrived; the main process emits 'attachments-arrived' per file. Bumping this counter
+      // re-keys the image grid, forcing fresh <img> loads for previously-failed thumbnails.
+      arriveTick: 0
+    }
+  },
+  mounted () {
+    if (typeof window !== 'undefined' && window.todoAPI && window.todoAPI.onSyncEvent) {
+      const off = window.todoAPI.onSyncEvent(evt => {
+        if (evt && evt.type === 'attachments-arrived') this.arriveTick++
+      })
+      this._offArrive = typeof off === 'function' ? off : null
+    }
+  },
+  beforeUnmount () {
+    if (this._offArrive) { try { this._offArrive() } catch (e) { /* already gone */ } this._offArrive = null }
+  },
   methods: {
     /* 粘贴/上传失败的兜底：不显示 Chromium 碎图图标，改用居中感叹号占位（视觉上与关闭✕可区分） */
     onImgErr (e) { (e.target as HTMLElement).classList.add('ep-img-broken') },
