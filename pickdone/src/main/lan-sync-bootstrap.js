@@ -48,6 +48,7 @@ const CURSOR_META_KEY = 'sync.pushCursor' // persisted in meta (not settings_row
 const K_PEER_WATERMARKS = 'sync.peerWatermarks.v2' // {deviceId: highestSeqThatPeerAcked} — per-peer push progress (survives restarts)
 const K_SECURITY_LOG = 'sync.securityLog' // last 20 security-ring entries (pair-throttled / auth-rejected), JSON — survives restarts
 const SECURITY_PERSIST_MIN_MS = 1000 // write-throttle: at most one security-log write per second
+const BLOB_SETTINGS_KEY = 'db.settingsState' // P1-2a: the renderer settings blob the applied rows are folded back into
 const START_DELAY_MS = 2000
 const ROUND_INTERVAL_MS = 5 * 60 * 1000
 // Pairing code validity: issued on first request and stable for 10 minutes (the LAN transport
@@ -269,6 +270,7 @@ function startSync () {
       try {
         const r = state.engine.ingestSegment(withPeerDeviceId(body))
         flushPendingWrites()
+        emitAppliedRound() // P0-1: refresh open views + settings hot-apply after a round applied rows
         return r
       } finally { state.applyCache = null }
     },
@@ -285,6 +287,7 @@ function startSync () {
       try {
         for (const r of withPeerDeviceId(body).rows || []) applyRowSafe(r)
         flushPendingWrites()
+        emitAppliedRound()
       } finally { state.applyCache = null }
       return { rows: rows.length }
     },
@@ -298,6 +301,7 @@ function startSync () {
       try {
         for (const r of withPeerDeviceId(body).rows || []) applyRowSafe(r)
         flushPendingWrites()
+        emitAppliedRound()
       } finally { state.applyCache = null }
       return { rows: rows.length }
     },
@@ -333,6 +337,9 @@ function startSync () {
         return collectMissingKeys(state.db.call('getAll', { deleted: null }), key => fs.existsSync(path.join(dir, path.basename(String(key)))))
       } catch { return [] }
     },
+    // P1-8 (2026-09-19 UX review): a pulled attachment file landed on disk — tell the renderer so
+    // EpAttachments can re-attempt image loads / refresh the list without a manual view change.
+    onAttachmentArrived: key => emitSyncEvent('attachments-arrived', { key: String(key || '') }),
   })
   state.node.on('round-error', info => {
     log.warn('[LanSync] round error:', info && info.error)
@@ -440,6 +447,124 @@ function emitSyncEvent (type, payload) {
     const msg = { type, at: Date.now(), ...(payload || {}) }
     for (const s of senders) { try { if (s && !s.isDestroyed()) s.send('syncEvent', msg) } catch { /* dying sender */ } }
   } catch { /* renderer notification is best-effort */ }
+}
+
+/* ---------- P0-1/P1-2/P1-5 (2026-09-19 UX review): post-round renderer refresh ----------
+ * Inbound rows were applied to the DB silently: 'lan-sync-changed' had zero consumers and the
+ * LAN apply path never broadcast the events the local-write path sends, so open views stayed
+ * stale until restart. After every ingest that applied rows we:
+ *   - re-baseline the external-write watcher (our own sync writes touch the WAL; without this
+ *     the watcher fires a full 'external-db-write' reload on top of ours),
+ *   - broadcast 'todos-changed' / 'tomato-records-changed' (the SAME channels the local-write
+ *     path uses — the renderer's echo-suppression window dedupes the double reload),
+ *   - for settings: fold applied rows into the db.settingsState blob (P1-2a: otherwise the
+ *     renderer's next whole-blob mirror re-stamps stale fields over newer rows = the per-round
+ *     "settings conflict … local copy superseded" churn) and hot-apply the patch to every live
+ *     window via the existing 'external-settings-changed' channel,
+ *   - emit AT MOST ONE 'sync-conflict' syncEvent per round (P1-5).
+ * Echo loops: rows the local renderer itself just wrote arrive back as identical-content no-ops
+ * (applyRowInner returns false -> nothing is marked applied -> no broadcast).
+ */
+const DATA_CHANNEL_KINDS = ['todo', 'category', 'plan', 'filter', 'meta'] // ride 'todos-changed' like local writes do
+function sendToRenderers (channel, msg) {
+  try {
+    const senders = state.getWindowSenders ? state.getWindowSenders() : []
+    for (const s of senders) { try { if (s && !s.isDestroyed()) s.send(channel, msg) } catch { /* dying sender */ } }
+  } catch { /* renderer notification is best-effort */ }
+}
+
+/** P1-2a: fold applied setting rows into the settings blob so blob-vs-rows converge (no re-stamp
+ *  churn). Best-effort: a missing/corrupt blob skips the fold (rows stay the sync truth). */
+function foldSettingsIntoBlob (patch) {
+  const keys = Object.keys(patch || {}).filter(k => !syncApply.isMachineLocalSettingKey(k))
+  if (!keys.length) return
+  try {
+    let doc = null
+    try { doc = JSON.parse(state.db.call('getMeta', BLOB_SETTINGS_KEY)) } catch { doc = null }
+    if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return
+    let touched = false
+    for (const k of keys) {
+      if (patch[k] === undefined) delete doc[k] // tombstone: drop the field from the blob
+      else { doc[k] = patch[k]; touched = true }
+      touched = true
+    }
+    if (touched) state.db.call('setMeta', [BLOB_SETTINGS_KEY, JSON.stringify(doc)])
+  } catch (e) { log.warn('[LanSync] settings blob fold failed:', e.message) }
+}
+
+function emitAppliedRound () {
+  const round = syncApply.consumeAppliedRound(state)
+  if (!round) return
+  // Sync writes are main-process writes: re-baseline the external-write watcher so its next poll
+  // does not mistake them for CLI writes and fire a second (undo-stack-wiping) full reload.
+  try { if (state.resyncExternalWatch) state.resyncExternalWatch() } catch { /* best-effort */ }
+  const at = Date.now()
+  if (round.kinds.some(k => DATA_CHANNEL_KINDS.includes(k))) {
+    sendToRenderers('todos-changed', { reason: 'lan-sync-apply', op: round.kinds.join(','), at })
+  }
+  if (round.kinds.includes('tomato')) {
+    sendToRenderers('tomato-records-changed', { reason: 'lan-sync-apply', at })
+  }
+  const settingKeys = Object.keys(round.settingsPatch || {})
+  if (settingKeys.length) {
+    foldSettingsIntoBlob(round.settingsPatch)
+    // Hot-apply path reuses the CLI settings watcher's channel: the renderer dispatches
+    // settings/update, which syncs LS/config.json/shortcuts and mirrors the blob back (now
+    // value-identical to the rows, so the bridge stamps nothing — the churn loop stays dead).
+    const patch = {}
+    for (const k of settingKeys) if (round.settingsPatch[k] !== undefined) patch[k] = round.settingsPatch[k]
+    if (Object.keys(patch).length) sendToRenderers('external-settings-changed', patch)
+  }
+  // P1-5: one conflict toast per round, max.
+  if (round.conflicts && round.conflicts.length) {
+    const c = round.conflicts[0]
+    emitSyncEvent('sync-conflict', { entity: c.entity, name: c.name, applied: c.applied, count: round.conflicts.length })
+  }
+}
+
+/* ---------- P1-3 (2026-09-19 UX review): unpair a device ---------- */
+/**
+ * Remove a paired device: drop its manual peer record + push watermark and REVOKE the shared
+ * pairing secret. Documented consequence (surfaced in the confirm dialog): pairing uses a single
+ * shared secret, so rotating it disconnects EVERY previously paired device — the unpaired peer's
+ * authenticated hello now fails (peer-unauthorized = syncing with it is paused) and both sides
+ * must re-pair to resume.
+ */
+async function syncUnpairPeerOp (p) {
+  const deviceId = String((p && p.deviceId) || '').trim()
+  if (!deviceId) throw new Error('syncUnpairPeer: deviceId is required')
+  if (!state.node) throw new Error('syncUnpairPeer: sync is not enabled')
+  // Resolve host/port from the live status so the manual-peer record (keyed by host:port) can go.
+  let host = null
+  let port = null
+  try {
+    const peer = (state.node.getStatus().peers || []).find(x => x && x.deviceId === deviceId)
+    if (peer) { host = peer.host; port = peer.port }
+  } catch { /* status read is best-effort; the rest still applies */ }
+  if (host) {
+    const rest = manualPeers().filter(x => !(x.host === host && Number(x.port) === Number(port)))
+    settingPut(K_MANUAL_PEERS, JSON.stringify(rest))
+    try { state.node.removePeer(String('manual-' + host + ':' + port)) } catch { /* older nodes: entry dies with the next restart */ }
+  }
+  // Drop the per-peer push watermark (a stale watermark must not survive a revoked pairing).
+  try {
+    const wm = loadPeerWatermarks()
+    if (wm[deviceId] != null) {
+      delete wm[deviceId]
+      settingPut(K_PEER_WATERMARKS, JSON.stringify(wm))
+      if (state.peerWatermarks && typeof state.peerWatermarks.delete === 'function') state.peerWatermarks.delete(deviceId)
+    }
+  } catch (e) { log.warn('[LanSync] watermark drop failed:', e.message) }
+  // Revoke the shared secret: the removed peer (and any other existing peer) can no longer
+  // authenticate until re-paired. Restart so the node advertises/authenticates with the new one.
+  settingPut(K_PAIRING_SECRET, generatePairingSecret())
+  state.pairingCode = null
+  await stopSync()
+  if (settingGet(K_ENABLED) === true) startSync()
+  notifyRenderers('peer-unpaired')
+  emitSyncEvent('peer-unpaired', { deviceId, host })
+  log.info('[LanSync] unpaired', deviceId, '- shared secret revoked (all peers must re-pair)')
+  return { ...getSettingsPayload(), unpaired: deviceId }
 }
 
 /* ---------- IPC op handlers (registered into db.OPS via db-sync-ops) ---------- */
@@ -571,6 +696,9 @@ function registerOps () {
       runRound().then(persistPeerWatermarks)
       return { ...getSettingsPayload(), host: r.host, port: r.port }
     },
+    // P1-3: unpair a device (Device Center peer card). Deletes the peer record + push watermark
+    // and revokes the shared pairing secret — every previously paired device must re-pair.
+    syncUnpairPeer: p => syncUnpairPeerOp(p),
     syncGetPairingCode: () => {
       const secret = settingGet(K_PAIRING_SECRET)
       if (!secret) return { code: null, expiresAt: 0 }
@@ -592,10 +720,12 @@ function registerOps () {
   })
 }
 
-/** Called once from src/main/index.js after db init. Never auto-enables sync. */
-function initLanSync ({ db, getWindowSenders }) {
+/** Called once from src/main/index.js after db init. Never auto-enables sync.
+ *  opts.resyncExternalWatch (P0-1): re-baseline hook for the external-write watcher — sync's own
+ *  main-process writes touch the WAL and must not surface as "external CLI writes". */
+function initLanSync ({ db, getWindowSenders, resyncExternalWatch } = {}) {
   const peerWatermarks = createTrackedWatermarks()
-  state = { db, getWindowSenders, node: null, engine: null, timers: [], pendingToSeq: 0, peerWatermarks, localUserId: null, pendingWrites: { todos: [], settings: [], tomatoes: [], categories: [], plans: [], filters: [] }, pendingPair: null }
+  state = { db, getWindowSenders, node: null, engine: null, timers: [], pendingToSeq: 0, peerWatermarks, localUserId: null, pendingWrites: { todos: [], settings: [], tomatoes: [], categories: [], plans: [], filters: [] }, pendingPair: null, applied: null, resyncExternalWatch: typeof resyncExternalWatch === 'function' ? resyncExternalWatch : null }
   registerOps()
   // Running-tomato announcements (feature): wire the announce module to the db + identity,
   // and relay remotely-applied announces to the renderer as 'tomato-announce' syncEvents.
@@ -634,4 +764,8 @@ module.exports.__test = {
   persistPeerWatermarks,
   createTrackedWatermarks,
   loadPeerWatermarks,
+  // P0-1/P1-2/P1-5 test surface: post-round applied bookkeeping -> renderer broadcasts.
+  emitAppliedRound: () => emitAppliedRound(),
+  // P1-3 test surface: unpair deletes peer record + watermark + revokes the shared secret.
+  unpairPeer: p => syncUnpairPeerOp(p),
 }

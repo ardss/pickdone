@@ -476,7 +476,14 @@ if (!app.requestSingleInstanceLock()) { app.quit() } else {
     registerIpc()
     watchDbForExternalWrites()
     // P3a LAN sync (lazy; never auto-enables — see lan-sync-bootstrap.js header)
-    require('./lan-sync-bootstrap').initLanSync({ db: dbm, getWindowSenders: () => BrowserWindow.getAllWindows().filter(w => !w.isDestroyed()).map(w => w.webContents) })
+    require('./lan-sync-bootstrap').initLanSync({
+      db: dbm,
+      getWindowSenders: () => BrowserWindow.getAllWindows().filter(w => !w.isDestroyed()).map(w => w.webContents),
+      // P0-1 (2026-09-19 UX review): after applying inbound rows, LAN sync re-baselines the
+      // external-write watcher — its own WAL writes must not surface as "CLI wrote" and fire a
+      // second, undo-stack-wiping full reload on top of the targeted lan-sync-apply broadcast.
+      resyncExternalWatch: () => { try { if (resyncDbWatch) resyncDbWatch() } catch { /* best-effort */ } },
+    })
 
     // Auto-update: init the event bridge + delayed silent check (does not compete with startup; degrades automatically in non-update environments)
     updater.init(win)
@@ -528,14 +535,18 @@ app.on('before-quit', () => {
   // would only be a dead letter — renderer invokes would fail against a closed handle.
   if (flushDone) return
   state.quitByUser = true
+  // Running-tomato announcement: flip this device's announce to idle BEFORE the sync node stops
+  // (P1-7 2026-09-19 UX review: the old order ran stopSyncForQuit first, so the idle write's
+  // kickSyncRound hit a dead node — the announce sat locally until the DB closed and peers showed
+  // our countdown for up to the 5-minute round/TTL window as ghosts). The write is local meta and
+  // synchronous (db.call); the kick ships it in a final best-effort round, and the peers' TTL rule
+  // still covers a crash where the round never completes.
+  try { require('./tomato-announce').announceIdleForQuit() } catch { /* announce never initialized */ }
   // Stop the LAN sync node (round timers + TCP server + retry timers) BEFORE the quit-flush window
   // closes the DB. Fire-and-forget: stopSync kicks the async server close off immediately and the
   // bootstrap's settings persists (peer watermarks / security log) run synchronously via db.call,
   // so nothing of sync's outlives the will-quit DB close (2026-09-18 P2 lifecycle fix).
   try { require('./lan-sync-bootstrap').stopSyncForQuit() } catch { /* sync never initialized */ }
-  // Running-tomato announcement: flip this device's announce to idle BEFORE the DB closes so
-  // peers stop showing the countdown (best-effort; the peers' staleness TTL covers a crash).
-  try { require('./tomato-announce').announceIdleForQuit() } catch { /* announce never initialized */ }
   // Before quitting, broadcast the renderer flush of debounced mirrors (the last write within dbMirror's 2s / disaster-snapshot 800ms window would be silently lost)
   // 2026-09-10 P1: previously only the main window was notified — the float window's pending pomodoro
   // ledger (and the whole broadcast when the main window was already destroyed, e.g. X-close→tray→quit)
