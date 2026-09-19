@@ -42,6 +42,14 @@ const { createAttachmentServer, createAttachmentPuller } = require('./att-transf
 
 const BACKOFF_BASE_MS = 5000
 const BACKOFF_MAX_MS = 60 * 1000
+// P1-3 (2026-09-19 data-safety round): dial budget. After DIAL_FAILURE_BUDGET consecutive failed
+// rounds a peer enters long-hibernate: retries drop to HIBERNATE_BACKOFF_MS (10min) instead of
+// the <=60s exponential cap, and the per-failure error fan-out (round-error event -> renderer
+// broadcast) collapses to ONE emission per hibernate window (streak > budget suppresses the
+// event; the recent ring still records every attempt). Any confirmed round resets the streak.
+// Both injectable via opts for tests.
+const DIAL_FAILURE_BUDGET_DEFAULT = 10
+const HIBERNATE_BACKOFF_MS_DEFAULT = 10 * 60 * 1000
 // Snapshot transfer ceiling (round-3 review): a snapshot answering with more than this many
 // chunk messages is refused with snapshot-error {reason:'too-large'} instead of streaming
 // unboundedly (512 chunks x ~1MB ≈ a 500MB ceiling — generous for a todo library).
@@ -108,10 +116,23 @@ function createLanSyncNode(opts) {
   // defaults: 5s base, exponential to a 60s cap.
   const backoffBaseMs = Number(opts.backoffBaseMs) || BACKOFF_BASE_MS
   const backoffMaxMs = Number(opts.backoffMaxMs) || BACKOFF_MAX_MS
+  // P1-3 hibernate budget (see the constants block above); injectable for tests.
+  const DIAL_FAILURE_BUDGET = Number(opts.dialFailureBudget) || DIAL_FAILURE_BUDGET_DEFAULT
+  const HIBERNATE_BACKOFF_MS = Number(opts.hibernateBackoffMs) || HIBERNATE_BACKOFF_MS_DEFAULT
   // Per-snapshot transfer ceiling (injectable for tests; see MAX_SNAPSHOT_CHUNKS above).
   const maxSnapshotChunks = Number(opts.maxSnapshotChunks) || MAX_SNAPSHOT_CHUNKS
   const backoffMs = new Map() // deviceId -> current backoff delay
   const retryTimers = new Map() // deviceId -> timer
+  // P1-3: per-peer dial bookkeeping. failStreakBy counts consecutive failed rounds; dialNotBefore
+  // is the earliest ms epoch the periodic startSyncRound may dial the peer (retry timers bypass
+  // it — they ARE the scheduled dial). unpairedBy holds TERMINAL auth-rejected peers: no dialing
+  // at all until the user re-pairs/unpairs/restarts (a re-announced/re-added peer clears it).
+  const failStreakBy = new Map() // deviceId -> consecutive failed rounds
+  const dialNotBefore = new Map() // deviceId -> ms epoch
+  const unpairedBy = new Set() // deviceId set (terminal peer-unauthorized)
+  // P1-4: live AUTHENTICATED server sockets per peer (last message wins) so an unpair can
+  // best-effort notify the peer with an `unpaired` control message before the node stops.
+  const liveServerSockets = new Map() // deviceId -> socket
   const authCode = deriveAuthCode(pairingSecret, deviceId)
   // Own-address set (self-dial guard, 2026-09-18 real-machine incident): a peer entry whose host
   // routes back to THIS node (second NIC IP, stale DHCP manual entry) makes us dial ourselves.
@@ -185,6 +206,7 @@ function createLanSyncNode(opts) {
     clientSnapshotBusy.delete(id); serverSnapshotBusy.delete(id)
     snapshotFatalCount.delete(id); snapshotErrorCooldown.delete(id)
     pullWatermarkBy.delete(id); serverPullAck.delete(id)
+    failStreakBy.delete(id); dialNotBefore.delete(id); unpairedBy.delete(id); liveServerSockets.delete(id)
   }
   const pushRecent = (entry) => pushRing(recent, RECENT_CAP, entry)
   // security ring: seeded from the persisted log (opts.securityLog, owned by the bootstrap —
@@ -212,9 +234,22 @@ function createLanSyncNode(opts) {
     onSnapshotError: (info) => em.emit('snapshot-error', info),
     onSnapshotSync: (info) => em.emit('snapshot-sync', info),
     onServerError: (err) => em.emit('server-error', err),
+    // P1-4: an authenticated peer told us it removed our pairing (unpaired control message).
+    onUnpaired: (peer) => {
+      const id = peer && peer.deviceId
+      if (!id) return
+      unpairedBy.add(id)
+      errorBy.set(id, 'unpaired: the peer removed this pairing, please re-pair')
+      const t = retryTimers.get(id)
+      if (t) { clearTimeout(t); retryTimers.delete(id) }
+      pushRecent({ at: Date.now(), kind: 'error', peer: id, detail: { error: 'peer removed this pairing (unpaired)' } })
+      refreshOnline(id)
+      em.emit('peer-unpaired-remote', { peer: id })
+    },
   })
-  // Attachment pull session state: failed-set + request budgets live across rounds (no retry loops).
-  const attSession = { failed: new Set(), requests: new Map() }
+  // Attachment pull session state: failed-set (P2-e: TIMESTAMPED entries, expire after 24h so a
+  // transient failure is retried the next day) + request budgets live across rounds (no retry loops).
+  const attSession = { failed: new Map(), requests: new Map() }
 
   function computeOnline(id) {
     const now = Date.now()
@@ -268,6 +303,10 @@ function createLanSyncNode(opts) {
       protoVer: peer.protoVer || (prev && prev.protoVer) || PROTO_VER,
     })
     lastSeenBy.set(peer.deviceId, Date.now())
+    // P1-3: a re-announced/re-added peer is dialable again — clear the terminal unpaired state
+    // AND its error stamp (the user re-paired; the stale auth-rejection must not linger in
+    // the Device Center card).
+    if (unpairedBy.delete(peer.deviceId)) errorBy.delete(peer.deviceId)
     refreshOnline(peer.deviceId)
     em.emit('peer', peers.get(peer.deviceId))
   }
@@ -277,12 +316,18 @@ function createLanSyncNode(opts) {
     const t = retryTimers.get(peerId)
     if (t) { clearTimeout(t); retryTimers.delete(peerId) }
     backoffMs.set(peerId, backoffBaseMs)
+    failStreakBy.delete(peerId) // P1-3: a confirmed round resets the dial-failure budget
+    dialNotBefore.delete(peerId)
   }
 
   function scheduleRetry(peerId) {
     if (stopped || retryTimers.has(peerId)) return
-    const delay = Math.min(backoffMs.get(peerId) || backoffBaseMs, backoffMaxMs)
-    backoffMs.set(peerId, Math.min(delay * 2, backoffMaxMs))
+    // P1-3 hibernate: after DIAL_FAILURE_BUDGET consecutive failures the retry cadence drops to
+    // HIBERNATE_BACKOFF_MS (long-hibernate) instead of the <=60s exponential cap.
+    const hibernating = (failStreakBy.get(peerId) || 0) >= DIAL_FAILURE_BUDGET
+    const delay = hibernating ? HIBERNATE_BACKOFF_MS : Math.min(backoffMs.get(peerId) || backoffBaseMs, backoffMaxMs)
+    backoffMs.set(peerId, hibernating ? backoffMaxMs : Math.min(delay * 2, backoffMaxMs))
+    dialNotBefore.set(peerId, Date.now() + delay) // startSyncRound respects this between retries
     const t = setTimeout(() => {
       retryTimers.delete(peerId)
       const p = peers.get(peerId)
@@ -306,6 +351,7 @@ function createLanSyncNode(opts) {
       let roundApplied = 0 // rows the peer's segments changed locally this round (0 = no pull progress)
       let pullAckSeq = 0 // max seq among the peer's pushed rows across ALL chunks (PEER's seq space)
       let awaitingSnapshot = false // snapshot-request sent; the round ends at snapshot-end, not ack
+      let authRejected = false // P1-3: the peer's server refused our hello (terminal, see finish)
       // Attachment FILE puller (post-ack): sendVia needs the RAW SOCKET (socket._lanSend lives on em._socket, not the EventEmitter — wiring `client` here poisoned every round, 2026-09-19 drill).
       // onArrived (P1-8): host callback per file landed on disk -> 'attachments-arrived' syncEvent so open views refresh live.
       const att = createAttachmentPuller({ send: (m) => sendVia(client._socket, m), session: attSession, peerId: peer.deviceId, getKeys: typeof opts.getMissingAttachmentKeys === 'function' ? opts.getMissingAttachmentKeys : null, deps: opts.attachmentPullerDeps, onArrived: typeof opts.onAttachmentArrived === 'function' ? opts.onAttachmentArrived : null })
@@ -337,7 +383,10 @@ function createLanSyncNode(opts) {
         // socket inactivity timeout: a peer answering a fresh-cursor round must build and stream a
         // full-oplog segment batch, which takes far longer than a heartbeat-sized exchange
         timeoutMs: 120000,
-        onUnauthorized: (info) => em.emit('peer-unauthorized', info),
+        // P1-3: the peer's server REJECTED our authenticated hello — the pairing was revoked on
+        // their side. Terminal for this session: no more dialing until the user re-pairs/unpairs
+        // or restarts (a re-announced/re-added peer clears the state via rememberPeer).
+        onUnauthorized: (info) => { authRejected = true; em.emit('peer-unauthorized', info) },
       })
       const finish = (err) => {
         if (settled) return
@@ -352,11 +401,34 @@ function createLanSyncNode(opts) {
           // watermark did not advance, so the next round must re-request (an RST can also
           // discard the ack that would otherwise have re-armed it).
           if (awaitingSnapshot) needSnapshot.add(peer.deviceId)
+          // P1-3: track the consecutive-failure streak. Past the budget the peer is
+          // hibernating (10min retries, see scheduleRetry) and the per-failure fan-out is
+          // suppressed — one round-error emission per hibernate window, no renderer broadcast
+          // per retry (the recent ring still records every attempt for Device Center).
+          const streak = (failStreakBy.get(peer.deviceId) || 0) + 1
+          failStreakBy.set(peer.deviceId, streak)
+          if (authRejected) {
+            // P1-3b TERMINAL: auth rejected = the peer removed our pairing. Stop dialing this
+            // peer entirely until user action; expose a DISTINCT state for the Device Center
+            // (peers[].peerState === 'unpaired'; lastError carries the same sentinel).
+            unpairedBy.add(peer.deviceId)
+            const t = retryTimers.get(peer.deviceId)
+            if (t) { clearTimeout(t); retryTimers.delete(peer.deviceId) }
+            lastError = `${peer.deviceId}: peer removed this pairing (re-pair required)`
+            errorBy.set(peer.deviceId, 'unpaired: the peer removed this pairing, please re-pair')
+            pushRecent({ at: Date.now(), kind: 'error', peer: peer.deviceId, detail: { error: 'auth rejected by peer (unpaired)' } })
+            refreshOnline(peer.deviceId)
+            em.emit('round-error', { peer: peer.deviceId, error: err, terminal: 'unpaired' })
+            resolve(false)
+            return
+          }
           lastError = `${peer.deviceId}: ${err.message}`
           errorBy.set(peer.deviceId, lastError)
           pushRecent({ at: Date.now(), kind: 'error', peer: peer.deviceId, detail: { error: err.message } })
           refreshOnline(peer.deviceId)
-          em.emit('round-error', { peer: peer.deviceId, error: err })
+          if (streak <= DIAL_FAILURE_BUDGET) {
+            em.emit('round-error', { peer: peer.deviceId, error: err })
+          }
           scheduleRetry(peer.deviceId)
           resolve(false)
         } else {
@@ -461,23 +533,37 @@ function createLanSyncNode(opts) {
             for (const seg of msg.segments) {
               const r = ingestSegment(seg)
               roundApplied += (r && Number(r.applied)) || 0
+              // P0-1: a flush-failed segment's rows were dropped locally — the pull watermark
+              // must NOT advance over it, and the next round force-arms a snapshot (the
+              // peer's full state re-applies idempotently, restoring the dropped rows).
+              const segFlushFailed = !!(r && r.flushFailed)
               // Pull watermark advances CONTIGUOUSLY only: a segment starting past wm+1 means a
               // pruned hole we did NOT receive — marking it received would starve the snapshot
               // trigger (the oldest > wm+1 check could never fire again). The hole itself is what
-              // must arm the trigger (see evaluateSnapshotTrigger).
+              // must arm the trigger (see evaluateSnapshotTrigger). P0-1/P1-2: a flush-failed
+              // segment keeps the watermark put as well (never advance over unapplied rows).
               const from = Number(seg && seg.fromSeq)
               const to = Number(seg && seg.toSeq)
               if (Number.isFinite(from) && Number.isFinite(to)) {
-                const wm = pullWatermarkBy.get(peer.deviceId) || 0
-                if (from <= wm + 1 && to > wm) pullWatermarkBy.set(peer.deviceId, to)
+                if (!segFlushFailed) {
+                  const wm = pullWatermarkBy.get(peer.deviceId) || 0
+                  if (from <= wm + 1 && to > wm) pullWatermarkBy.set(peer.deviceId, to)
+                  // pullAckSeq must come from the ENVELOPE, not seg.rows: the wire shape is
+                  // {body, fromSeq, toSeq} — rows live inside the packed body and seg.rows never
+                  // exists (the old per-row loop collected nothing, so our acks never carried
+                  // appliedToSeq and the peer's serverPullAck never advanced — its pull response
+                  // re-sent the full oplog window every round). toSeq is the segment's highest
+                  // included seq in the PEER's seq space — same quantity the loop meant to take.
+                  if (to > pullAckSeq) pullAckSeq = to
+                } else {
+                  // P0-1: a flush-failed segment is NOT acked — cap our appliedToSeq below it
+                  // (the peer keeps its push watermark and re-pushes after snapshot recovery)
+                  // and force-arm the snapshot trigger: increments alone cannot recover.
+                  const fFrom = Number.isFinite(from) ? from : 0
+                  if (pullAckSeq >= fFrom) pullAckSeq = Math.max(0, fFrom - 1)
+                  needSnapshot.add(peer.deviceId)
+                }
                 if (to > peerMaxSeqSeen) peerMaxSeqSeen = to
-                // pullAckSeq must come from the ENVELOPE, not seg.rows: the wire shape is
-                // {body, fromSeq, toSeq} — rows live inside the packed body and seg.rows never
-                // exists (the old per-row loop collected nothing, so our acks never carried
-                // appliedToSeq and the peer's serverPullAck never advanced — its pull response
-                // re-sent the full oplog window every round). toSeq is the segment's highest
-                // included seq in the PEER's seq space — same quantity the loop meant to take.
-                if (to > pullAckSeq) pullAckSeq = to
               }
             }
             // The ack is sent ONCE, at the final chunk (segments-chunk.js contract). appliedToSeq
@@ -510,19 +596,18 @@ function createLanSyncNode(opts) {
             }
           } else if (msg.type === 'snapshot-busy') {
             // The peer's server role is busy (mutual snapshot collision): end the round as a
-            // clean retry-later — re-arm the trigger and let the normal backoff dial again.
-            // NOT an error: both sides are healthy, they just tried to snapshot each other.
-            // ORDERING (round-3 review): finish(null) FIRST, then scheduleRetry — finish's
-            // success path calls resetBackoff, which DELETES the just-armed retry timer, so the
-            // old order stalled mutual-snapshot recovery to the 5-min round interval.
+            // retry-later — re-arm the trigger and let the normal backoff dial again. P2-d
+            // (2026-09-19): counted as a round FAILURE for lastError/backoff purposes (no
+            // resetBackoff) — reporting it as success made Device Center show healthy-while-
+            // diverging. Not a hard error: the trigger re-arms and the retry timer is armed by
+            // finish's failure path.
             if (!awaitingSnapshot) throw new Error('unsolicited snapshot-busy')
             awaitingSnapshot = false
             chunkBuf.clear()
             chunkRowCounts.clear()
             clientSnapshotBusy.delete(peer.deviceId)
             needSnapshot.add(peer.deviceId)
-            finish(null)
-            scheduleRetry(peer.deviceId)
+            finish(new Error('snapshot-busy: peer is serving another snapshot, will retry'))
           } else if (msg.type === 'snapshot-error') {
             // Clean terminal: the peer could not serve a snapshot right now (e.g. an oversized
             // row). Log to the recent ring; do NOT re-arm immediately — the retry budget
@@ -538,7 +623,10 @@ function createLanSyncNode(opts) {
             clientSnapshotBusy.delete(peer.deviceId)
             pushRecent({ at: Date.now(), kind: 'error', peer: peer.deviceId, detail: { error: `snapshot-error: ${reason}` } })
             em.emit('snapshot-error', { peer: peer.deviceId, reason })
-            finish(null)
+            // P2-d (2026-09-19): a snapshot-error terminal is a round FAILURE for lastError /
+            // backoff purposes (no resetBackoff) so Device Center does not show healthy-while-
+            // diverging; the retry budget above still keeps a transient failure recoverable.
+            finish(new Error(`snapshot-error from peer: ${reason}`))
           } else if (msg.type === 'snapshot-end') {
             // All-or-nothing finalization. ONLY process snapshot-end when a snapshot was actually
             // requested on this connection (awaitingSnapshot) — anything else is a protocol
@@ -576,18 +664,31 @@ function createLanSyncNode(opts) {
             ackApplied = Number(msg.applied) || 0
             ackSeq = Number(msg.appliedToSeq) || 0
             ackOldestSeq = msg.oldestSeq
+            // P0-1 (2026-09-19 data-safety round): the peer flagged a flush failure on our push —
+            // its ack stays BELOW the failed segment (appliedToSeq already capped receiver-side).
+            // Do not advance the watermark past unacked data and force-arm the snapshot trigger:
+            // the next round opens with a snapshot-request and the peer re-applies our full
+            // state idempotently (recovering whatever its bulk flush dropped).
+            if (msg.flushFailed) needSnapshot.add(peer.deviceId)
             // ackSeq is in OUR seq space (max seq among our rows the peer applied). Defensive
             // clamp to our own max oplog seq: a misbehaving/legacy peer (reporting its own local
             // seq space — the pre-2026-09-18 bug) must never push our cursor past our own oplog,
             // which would permanently skip our fresh rows.
             let seq = ackSeq
             if (getMaxSeq) seq = Math.min(seq, currentMaxSeq())
-            if (seq > (peerProgress.get(peer.deviceId) || 0)) peerProgress.set(peer.deviceId, seq)
+            // P0-1: a flush-failed ack means the peer DROPPED our rows — never advance the push
+            // watermark past unacked data (the re-push after the snapshot recovery is idempotent).
+            if (!msg.flushFailed && seq > (peerProgress.get(peer.deviceId) || 0)) peerProgress.set(peer.deviceId, seq)
             evaluateSnapshotTrigger()
             // The round's finish waits for snapshot-end (the ack only proves the peer got MY push); attachment
             // pull likewise keeps it open until att-end. Pull send-failures are isolated inside the puller —
             // an attachment failure must NEVER fail the sync round (2026-09-19 drill).
             if (!awaitingSnapshot && !att.maybeStart(() => finish(null), () => finish(null))) finish(null)
+          } else if (msg.type === 'unpaired') {
+            // P1-4: the peer told us it removed our pairing — same terminal path as an auth
+            // rejection (no more dialing until the user re-pairs; distinct Device Center state).
+            authRejected = true
+            finish(new Error('peer removed this pairing (unpaired)'))
           } else if (att.handles(msg.type)) { // attachment frames: att-end settles the round
             progressDeadline()
             let attOpen = true; try { attOpen = att.onMessage(msg) } catch (err) { try { require('electron-log').warn('[LanSync] att frame error:', err && err.message) } catch { /* noop */ } } // round isolation: a transfer error ends the round cleanly, never rejects it
@@ -624,7 +725,12 @@ function createLanSyncNode(opts) {
       // Server-role message handling lives in server-role.js (createServerRoleHandler, wired
       // above): segments-chunk push receive + ack, per-peer pull cursor, snapshot-request
       // serving with the busy invariant and the transfer ceiling.
-      getHandler: (peer) => (msg, socket) => handleServerMessage(peer, msg, socket, sendVia),
+      // P1-4: remember the live authenticated socket per peer so an unpair can best-effort
+      // notify the peer before the node stops. Cleared on node stop / forgetPeer.
+      getHandler: (peer) => (msg, socket) => {
+        try { if (peer && peer.deviceId && socket) liveServerSockets.set(peer.deviceId, socket) } catch { /* best effort */ }
+        handleServerMessage(peer, msg, socket, sendVia)
+      },
       onPeer: (peer) => em.emit('peer-connected', peer),
       onUnauthorized: (info) => {
         pushSecurity({ at: Date.now(), ip: info && info.host, reason: 'auth-rejected' })
@@ -735,9 +841,45 @@ function createLanSyncNode(opts) {
       return peers.get(id)
     },
 
-    /** Run one sync round against every known peer (sequentially). */
+    /** P1-4: drop every per-peer trace (manual-peer removal / unpair bookkeeping). */
+    removePeer(peerId) {
+      if (peerId) forgetPeer(String(peerId))
+    },
+
+    /** P1-3: manual retry-now (Device Center "sync now"): clear the dial window and cancel the
+     *  pending retry timer so the next startSyncRound dials immediately. The failure streak is
+     *  KEPT — a manual dial that fails again must not silently reset the hibernate budget. */
+    forceDial(peerId) {
+      const id = String(peerId || '')
+      dialNotBefore.delete(id)
+      const t = retryTimers.get(id)
+      if (t) { clearTimeout(t); retryTimers.delete(id) }
+    },
+
+    /** P1-4: best-effort notify a connected peer that we removed the pairing. Returns true when
+     *  an authenticated socket was live and the control message was handed to the wire. */
+    notifyUnpaired(peerId) {
+      const socket = liveServerSockets.get(String(peerId || ''))
+      if (!socket) return false
+      try { sendVia(socket, { type: 'unpaired' }); return true } catch { return false }
+    },
+
+    /** Run one sync round against every known peer (sequentially). P1-3: the periodic round
+     *  respects per-peer dial budgets — peers in terminal unpaired state are never dialed, and
+     *  peers inside their backoff/hibernate window are skipped (the retry timer dials them). */
     async startSyncRound() {
-      const targets = Array.from(peers.values())
+      const now = Date.now()
+      const targets = Array.from(peers.values()).filter(p => {
+        if (unpairedBy.has(p.deviceId)) return false
+        if ((dialNotBefore.get(p.deviceId) || 0) > now) {
+          // Backoff/hibernate window still open: the retry timer dials the peer when it opens.
+          // Re-arm a timer when none is pending (e.g. timers were cleared) so the peer is not
+          // stranded until the next periodic round.
+          if (!retryTimers.has(p.deviceId) && !stopped) scheduleRetry(p.deviceId)
+          return false
+        }
+        return !stopped
+      })
       // Parallel: a dead peer's 5s connect timeout must never delay a live peer's round
       // (observed live: one stale entry serialized ~5-20s in front of every healthy exchange).
       const results = await Promise.all(targets.map(async peer => (stopped ? false : syncWithPeer(peer))))
@@ -761,11 +903,21 @@ function createLanSyncNode(opts) {
           const wm = peerProgress.has(p.deviceId) ? peerProgress.get(p.deviceId) : null
           const seen = lastSeenBy.get(p.deviceId)
           const lr = lastRoundBy.get(p.deviceId)
+          // P1-3: structured per-peer state for the Device Center. 'unpaired' = TERMINAL auth
+          // rejection (the peer removed our pairing — renderer copy: "已被对方解除配对,请重新配对");
+          // 'hibernating' = past the dial-failure budget (10min retries); 'error' = recent failure.
+          const peerState = unpairedBy.has(p.deviceId) ? 'unpaired'
+            : (failStreakBy.get(p.deviceId) || 0) >= DIAL_FAILURE_BUDGET ? 'hibernating'
+              : errorBy.has(p.deviceId) ? 'error' : 'ok'
           return {
             ...p,
             online: (!!seen && now - seen < ONLINE_WINDOW_MS) || (!!lr && now - lr < ONLINE_WINDOW_MS),
             lastRoundAt: lr || null,
             lastError: errorBy.get(p.deviceId) || null,
+            peerState,
+            // P1-3: earliest ms epoch this peer will be dialed again (backoff/hibernate window);
+            // null = dialable now. Device Center can render "retrying in Xs" from it.
+            nextDialAt: dialNotBefore.get(p.deviceId) || null,
             watermark: wm,
             // Pull-side watermark: the sender cursor I recorded after my last COMPLETE snapshot
             // from this peer (increments carry it forward between snapshots via the trigger).
@@ -787,6 +939,7 @@ function createLanSyncNode(opts) {
       stopped = true
       if (sweepTimer) { clearInterval(sweepTimer); sweepTimer = null }
       onlineNow.clear()
+      liveServerSockets.clear()
       for (const t of retryTimers.values()) clearTimeout(t)
       retryTimers.clear()
       try { discovery.stop() } catch { /* noop */ }
@@ -796,4 +949,4 @@ function createLanSyncNode(opts) {
   }
 }
 
-module.exports = { createLanSyncNode, BACKOFF_BASE_MS, BACKOFF_MAX_MS }
+module.exports = { createLanSyncNode, BACKOFF_BASE_MS, BACKOFF_MAX_MS, DIAL_FAILURE_BUDGET_DEFAULT, HIBERNATE_BACKOFF_MS_DEFAULT }

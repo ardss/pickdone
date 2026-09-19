@@ -27,6 +27,13 @@ function fakeDiscovery() {
 // by transport.js and frames under the session key); raw plaintext writes are refused.
 function line(socket, obj) { socket._lanSend(obj) }
 
+// P1-3 (2026-09-19): failed rounds arm a per-peer dial window (startSyncRound respects it),
+// so tests dial explicitly via dialRound (forceDial) instead of waiting out the window.
+const FAST_DIAL = { dialFailureBudget: 1000, hibernateBackoffMs: 50 }
+// Every explicit round goes through forceDial: a FAILED round arms a retry timer + dial window
+// (P1-3), which would make the next startSyncRound skip the peer. forceDial = deterministic dial.
+async function dialRound (node) { node.forceDial('peer'); return node.startSyncRound() }
+
 /** Raw peer server: counts snapshot-requests, scriptable per-request behavior. */
 function rawPeerServer({ ack = { appliedToSeq: 100, oldestSeq: 50 }, onRequest, buildSegmentsRows = [] }) {
   const seen = { snapshotRequests: 0, rounds: 0 }
@@ -117,7 +124,7 @@ test('snapshot: stalled round with pruned peer history triggers snapshot-request
   node.addPeer({ deviceId: 'peer', host: '127.0.0.1', port })
 
   // Round 1: stalled (applied 0) + oldestSeq(50) > pullWatermark(0)+1 -> trigger arms.
-  const r1 = await node.startSyncRound()
+  const r1 = await dialRound(node)
   assert.equal(r1.confirmed, 1)
   assert.equal(server.seen.snapshotRequests, 0, 'round 1 is plain incremental: the trigger fires AFTER it')
   assert.equal(appliedSnapshots.length, 0)
@@ -126,7 +133,7 @@ test('snapshot: stalled round with pruned peer history triggers snapshot-request
   // Round 2: opens with snapshot-request; chunks applied; watermark jumps to the sender cursor.
   const snapEvents = []
   node.on('snapshot-sync', (info) => snapEvents.push(info))
-  const r2 = await node.startSyncRound()
+  const r2 = await dialRound(node)
   assert.equal(r2.confirmed, 1, 'round completes at snapshot-end, not at the ack')
   assert.equal(server.seen.snapshotRequests, 1)
   assert.equal(appliedSnapshots.length, 1)
@@ -139,7 +146,7 @@ test('snapshot: stalled round with pruned peer history triggers snapshot-request
   assert.ok(recvEntry, 'receiver-side snapshot recorded into the recent ring')
 
   // Round 3: caught up (watermark == peer max seq) -> plain incremental again, no re-request.
-  await node.startSyncRound()
+  await dialRound(node)
   assert.equal(server.seen.snapshotRequests, 1, 'no snapshot spam once the watermark is current')
   assert.deepEqual(requests, [1], 'exactly one snapshot-request (mirrors the seen counter)')
 
@@ -216,19 +223,17 @@ test('snapshot: partial transfer (socket death before snapshot-end) never advanc
   })
   const port = await listen(server)
 
-  const node = makeNode({
-    ingestSnapshot: (snap) => { appliedSnapshots.push(snap); return { rows: snap.rows.length } },
-  })
+  const node = makeNode({ ...FAST_DIAL, ingestSnapshot: (snap) => { appliedSnapshots.push(snap); return { rows: snap.rows.length } } })
   node.start()
   await node.whenListening()
   node.addPeer({ deviceId: 'peer', host: '127.0.0.1', port })
 
-  await node.startSyncRound() // arms the trigger
-  const r2 = await node.startSyncRound() // partial transfer: the round FAILS
+  await dialRound(node) // arms the trigger
+  const r2 = await dialRound(node) // partial transfer: the round FAILS
   assert.equal(r2.confirmed, 0, 'a truncated snapshot fails its round')
   assert.equal(node.getStatus().peers[0].pullWatermark, null, 'watermark NEVER advances on a partial snapshot')
 
-  const r3 = await node.startSyncRound() // re-requests and completes
+  const r3 = await dialRound(node) // re-requests and completes
   assert.equal(r3.confirmed, 1)
   assert.equal(server.seen.snapshotRequests, 2, 'exactly one retry after the failure')
   assert.equal(appliedSnapshots.length, 1, 'the truncated transfer never reached ingestSnapshot as complete')
@@ -255,7 +260,7 @@ test('snapshot: a progressing peer is never snapshot-requested despite pruned hi
   node.addPeer({ deviceId: 'peer', host: '127.0.0.1', port })
 
   for (let i = 0; i < 3; i++) {
-    const r = await node.startSyncRound()
+    const r = await dialRound(node)
     assert.equal(r.confirmed, 1)
   }
   assert.equal(appliedSegs, 6, 'increments flowed every round')
@@ -288,10 +293,10 @@ test('snapshot: a full-window segment jump over a pruned gap does NOT advance th
 
   // Round 1: the pushed segment jumps 0 -> 51. The watermark must STAY put (hole), and the
   // trigger must arm (oldest 50 > wm 0 + 1, nothing applied).
-  await node.startSyncRound()
+  await dialRound(node)
   assert.equal(node.getStatus().peers[0].pullWatermark, null, 'non-contiguous segment must not advance the pull watermark')
   // Round 2: snapshot-request fires (the trigger armed) and the snapshot converges.
-  const r2 = await node.startSyncRound()
+  const r2 = await dialRound(node)
   assert.equal(r2.confirmed, 1)
   assert.equal(server.seen.snapshotRequests, 1, 'the pruned-gap jump armed the snapshot trigger')
   assert.equal(node.getStatus().peers[0].pullWatermark, 100)
@@ -382,20 +387,23 @@ test('snapshot: snapshot-busy reply ends the round as a clean retry-later (re-ar
     },
   })
   const port = await listen(server)
-  const node = makeNode()
+  const node = makeNode(FAST_DIAL)
   node.start()
   await node.whenListening()
   node.addPeer({ deviceId: 'peer', host: '127.0.0.1', port })
 
-  await node.startSyncRound() // arms the trigger
-  const r2 = await node.startSyncRound() // snapshot-busy: clean retry-later
-  assert.equal(r2.confirmed, 1, 'snapshot-busy is a clean round end, not an error')
+  await dialRound(node) // arms the trigger
+  const r2 = await dialRound(node) // snapshot-busy: retry-later
+  // P2-d (2026-09-19): busy counts as a round FAILURE for lastError/backoff so Device Center
+  // does not show healthy-while-diverging; the trigger re-arms and the retry dials again.
+  assert.equal(r2.confirmed, 0, 'snapshot-busy is a failure terminal, not a healthy round')
   const errs = node.getStatus().recent.filter((e) => e.kind === 'error')
-  assert.equal(errs.length, 0, 'no error-spam for a busy peer')
+  assert.equal(errs.length, 1, 'exactly one error entry for the busy terminal')
+  assert.ok(node.getStatus().lastError, 'lastError set so the UI does not show healthy')
   assert.equal(node.getStatus().peers[0].pullWatermark, null, 'busy transfer never advanced the watermark')
 
   // The trigger re-armed (retry-later): the next round re-requests and converges.
-  const r3 = await node.startSyncRound()
+  const r3 = await dialRound(node)
   assert.equal(r3.confirmed, 1)
   assert.equal(server.seen.snapshotRequests, 2)
   assert.equal(node.getStatus().peers[0].pullWatermark, 100)
@@ -419,12 +427,12 @@ test('snapshot: EMPTY live state (totalChunks 0 / totalRows 0) is a valid termin
   await node.whenListening()
   node.addPeer({ deviceId: 'peer', host: '127.0.0.1', port })
 
-  await node.startSyncRound() // arms the trigger
-  const r2 = await node.startSyncRound() // empty snapshot: VALID terminal
+  await dialRound(node) // arms the trigger
+  const r2 = await dialRound(node) // empty snapshot: VALID terminal
   assert.equal(r2.confirmed, 1, 'empty snapshot completes the round')
   assert.equal(snapCount, 1, 'ingestSnapshot ran once with zero rows')
   assert.equal(node.getStatus().peers[0].pullWatermark, 100, 'watermark = cursor even for an empty snapshot')
-  await node.startSyncRound()
+  await dialRound(node)
   assert.equal(server.seen.snapshotRequests, 1, 'no infinite re-arm loop on empty snapshots')
 
   await node.stop()
@@ -455,16 +463,16 @@ test('snapshot: snapshot-end with cursor 0 must NOT regress an already-advanced 
   await node.whenListening()
   node.addPeer({ deviceId: 'peer', host: '127.0.0.1', port })
 
-  await node.startSyncRound() // arms the trigger
-  await node.startSyncRound() // snapshot with cursor 100
+  await dialRound(node) // arms the trigger
+  await dialRound(node) // snapshot with cursor 100
   assert.equal(node.getStatus().peers[0].pullWatermark, 100)
 
   // Peer advances and re-prunes: trigger re-arms, but the next snapshot-end carries cursor 0.
   ack = { appliedToSeq: 200, oldestSeq: 150 }
   cursor = 0
-  const r = await node.startSyncRound() // ack 200/150 -> stalled -> arms
+  const r = await dialRound(node) // ack 200/150 -> stalled -> arms
   assert.equal(r.confirmed, 1)
-  const r2 = await node.startSyncRound() // snapshot with bogus cursor 0
+  const r2 = await dialRound(node) // snapshot with bogus cursor 0
   assert.equal(r2.confirmed, 1)
   assert.equal(node.getStatus().peers[0].pullWatermark, 100, 'cursor 0 must not reset the watermark to 0')
 
@@ -490,7 +498,7 @@ test('snapshot: unsolicited snapshot-end (no request in flight) fails the round'
   await node.whenListening()
   node.addPeer({ deviceId: 'peer', host: '127.0.0.1', port })
 
-  const r = await node.startSyncRound()
+  const r = await dialRound(node)
   assert.equal(r.confirmed, 0, 'an unsolicited snapshot-end must fail the round')
   assert.equal(node.getStatus().peers[0].pullWatermark, null, 'and never advance the watermark')
 
@@ -504,18 +512,20 @@ test('snapshot: snapshot-error is a clean terminal — logged, and immediate re-
     onRequest: (n, socket) => line(socket, { type: 'snapshot-error', reason: 'chunkSnapshot: single row exceeds chunk budget' }),
   })
   const port = await listen(server)
-  const node = makeNode()
+  const node = makeNode(FAST_DIAL)
   node.start()
   await node.whenListening()
   node.addPeer({ deviceId: 'peer', host: '127.0.0.1', port })
 
-  await node.startSyncRound() // arm
-  const r2 = await node.startSyncRound() // snapshot-error
-  assert.equal(r2.confirmed, 1, 'snapshot-error ends the round cleanly')
+  await dialRound(node) // arm
+  const r2 = await dialRound(node) // snapshot-error
+  // P2-d: the terminal counts as a FAILURE (lastError/backoff) - not a healthy round end.
+  assert.equal(r2.confirmed, 0, 'snapshot-error fails the round (honest Device Center state)')
   const errEntry = node.getStatus().recent.find((e) => e.kind === 'error' && String(e.detail && e.detail.error).includes('snapshot-error'))
   assert.ok(errEntry, 'snapshot-error logged into the recent ring')
+  assert.ok(node.getStatus().lastError, 'lastError set so the UI does not show healthy')
 
-  const r3 = await node.startSyncRound()
+  const r3 = await dialRound(node)
   assert.equal(r3.confirmed, 1)
   assert.equal(server.seen.snapshotRequests, 1, 'no IMMEDIATE re-arm after a snapshot-error terminal (cooldown)')
 
@@ -540,26 +550,30 @@ test('snapshot: snapshot-error retry budget — a transient failure recovers wit
     },
   })
   const port = await listen(server)
-  const node = makeNode()
+  const node = makeNode(FAST_DIAL)
   node.start()
   await node.whenListening()
   node.addPeer({ deviceId: 'peer', host: '127.0.0.1', port })
 
-  await node.startSyncRound() // arm
-  await node.startSyncRound() // request 1 -> error (attempt 1)
+  await dialRound(node) // arm
+  await dialRound(node) // request 1 -> error (attempt 1, round FAILS)
   // cooldown: after an error the trigger waits 2 stalled rounds, then arms; the REQUEST itself
-  // fires on the following round.
-  await node.startSyncRound() // cooldown 1
-  await node.startSyncRound() // cooldown 2
-  await node.startSyncRound() // re-arms (cooldown elapsed)
-  const r6 = await node.startSyncRound() // request 2 -> error (attempt 2)
+  // fires on the following round. P1-3: each failed round arms the dial window -> wait it out.
+  node.forceDial('peer')
+  await dialRound(node) // cooldown 1
+  await dialRound(node) // cooldown 2
+  await dialRound(node) // re-arms (cooldown elapsed)
+  node.forceDial('peer')
+  const r6 = await dialRound(node) // request 2 -> error (attempt 2)
   assert.equal(server.seen.snapshotRequests, 2)
-  assert.equal(r6.confirmed, 1)
+  assert.equal(r6.confirmed, 0, 'the errored snapshot round fails (P2-d honesty)')
   // cooldown again, then re-arm -> request 3 -> VALID transfer
-  await node.startSyncRound()
-  await node.startSyncRound()
-  await node.startSyncRound()
-  const r = await node.startSyncRound()
+  node.forceDial('peer')
+  await dialRound(node)
+  await dialRound(node)
+  await dialRound(node)
+  node.forceDial('peer')
+  const r = await dialRound(node)
   assert.equal(server.seen.snapshotRequests, 3)
   assert.equal(r.confirmed, 1)
   assert.equal(node.getStatus().peers[0].pullWatermark, 100, 'the recovered transfer advances the watermark')
@@ -574,21 +588,22 @@ test('snapshot: fatal budget exhausts after 3 errors and stops the re-arm/error 
     onRequest: (n, socket) => line(socket, { type: 'snapshot-error', reason: 'boom' }),
   })
   const port = await listen(server)
-  const node = makeNode()
+  const node = makeNode(FAST_DIAL)
   node.start()
   await node.whenListening()
   node.addPeer({ deviceId: 'peer', host: '127.0.0.1', port })
 
   // Burn the whole budget: arm + (2 cooldown rounds + request round) x 3 = attempts 3.
-  await node.startSyncRound() // arm
+  await dialRound(node) // arm
   for (let i = 0; i < 3; i++) {
-    await node.startSyncRound()
-    await node.startSyncRound()
-    await node.startSyncRound() // this one re-arms and collects the error
+    await dialRound(node)
+    await dialRound(node)
+      await dialRound(node) // this one re-arms and collects the error
+    node.forceDial('peer')
   }
   assert.equal(server.seen.snapshotRequests, 3, 'exactly the 3 budget attempts were made')
   // Budget exhausted: further stalled rounds never re-arm again (no error spam).
-  for (let i = 0; i < 5; i++) await node.startSyncRound()
+  for (let i = 0; i < 5; i++) await dialRound(node)
   assert.equal(server.seen.snapshotRequests, 3, 'no re-arm after the budget is exhausted')
 
   await node.stop()
@@ -622,8 +637,8 @@ test('snapshot: streaming receiver applies + flushes per chunk and never buffers
   await node.whenListening()
   node.addPeer({ deviceId: 'peer', host: '127.0.0.1', port })
 
-  await node.startSyncRound() // arm
-  const r = await node.startSyncRound() // streaming transfer
+  await dialRound(node) // arm
+  const r = await dialRound(node) // streaming transfer
   assert.equal(r.confirmed, 1)
   assert.deepEqual(chunkApplications, [['s1'], ['s2', 's3']], 'each chunk was applied on arrival, in order')
   assert.equal(endApplied, 0, 'the assembled-ingest fallback is NOT used in streaming mode')
@@ -688,8 +703,8 @@ test('snapshot: progress-based round deadline — a slow-drip transfer outlives 
   await node.whenListening()
   node.addPeer({ deviceId: 'peer', host: '127.0.0.1', port })
 
-  await node.startSyncRound() // arm
-  const r = await node.startSyncRound() // slow-drip snapshot: total > base deadline
+  await dialRound(node) // arm
+  const r = await dialRound(node) // slow-drip snapshot: total > base deadline
   assert.equal(r.confirmed, 1, 'a moving transfer completes despite exceeding the base deadline')
   assert.equal(node.getStatus().peers[0].pullWatermark, 100)
 
@@ -708,9 +723,9 @@ test('snapshot: idle timeout — a silent peer still fails the round at the (sho
   await node.whenListening()
   node.addPeer({ deviceId: 'peer', host: '127.0.0.1', port })
 
-  await node.startSyncRound() // arm
+  await dialRound(node) // arm
   const t0 = Date.now()
-  const r = await node.startSyncRound() // no progress at all
+  const r = await dialRound(node) // no progress at all
   const elapsed = Date.now() - t0
   assert.equal(r.confirmed, 0, 'a silent peer fails its round')
   assert.ok(elapsed >= 200 && elapsed < 5000, `idle timeout fired near the deadline (took ${elapsed}ms)`)
@@ -757,18 +772,19 @@ test('snapshot: adversarial chunk streams (missing/duplicate index, totalRows mi
     },
   })
   const port = await listen(server)
-  const node = makeNode()
+  const node = makeNode(FAST_DIAL)
   node.start()
   await node.whenListening()
   node.addPeer({ deviceId: 'peer', host: '127.0.0.1', port })
 
-  await node.startSyncRound() // arms the trigger
+  await dialRound(node) // arms the trigger
   for (let i = 0; i < variants.length; i++) {
-    const r = await node.startSyncRound()
+      const r = await dialRound(node)
     assert.equal(r.confirmed, 0, `adversarial variant ${i + 1} must fail the round`)
     assert.equal(node.getStatus().peers[0].pullWatermark, null, `variant ${i + 1} must not advance the watermark`)
   }
-  const rOk = await node.startSyncRound()
+  node.forceDial('peer')
+  const rOk = await dialRound(node)
   assert.equal(rOk.confirmed, 1, 'a valid transfer still converges after the adversarial ones')
   assert.equal(node.getStatus().peers[0].pullWatermark, 100)
 

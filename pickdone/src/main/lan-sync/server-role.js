@@ -58,10 +58,19 @@ function createServerRoleHandler(deps) {
         // its cursor (monotonic guard). oldestSeq advertises the oldest oplog seq we still
         // RETAIN (our space): a peer whose pull watermark is below it knows its increments
         // are pruned here and must request a snapshot (see the client trigger).
-        if (!socket._segPush) socket._segPush = { maxSeq: 0, segments: 0 }
+        if (!socket._segPush) socket._segPush = { maxSeq: 0, segments: 0, flushFailedFrom: null }
         const acc = socket._segPush
         for (const seg of msg.segments) {
-          ingestSegment(seg)
+          const ing = ingestSegment(seg)
+          // P0-1 (2026-09-19 data-safety round): a segment whose bulk flush failed must NOT count
+          // as applied — its rows were dropped locally. Keep the acked appliedToSeq BELOW the
+          // failed segment's fromSeq (the sender keeps its watermark and re-pushes) and flag the
+          // ack so the sender force-arms its snapshot trigger (recovery path).
+          if (ing && ing.flushFailed) {
+            const fFrom = Number(seg && seg.fromSeq)
+            if (Number.isFinite(fFrom) && (acc.flushFailedFrom == null || fFrom < acc.flushFailedFrom)) acc.flushFailedFrom = fFrom
+            continue
+          }
           acc.segments += 1
           // Wire envelopes are {body, fromSeq, toSeq}: the rows live INSIDE the packed body and
           // seg.rows NEVER exists. The old per-row loop iterated nothing, so acc.maxSeq stayed 0
@@ -73,28 +82,30 @@ function createServerRoleHandler(deps) {
           const to = Number(seg && seg.toSeq)
           if (Number.isFinite(to) && to > acc.maxSeq) acc.maxSeq = to
         }
-        if (msg.final) {
-          // The response pull travels through the SAME bounded chunking: the server's own
-          // first-sync backlog is just as large as the client's. Round-3 review: the pull
-          // used to call buildSegments() with no cursor EVERY round, re-sending the full
-          // oplog window forever. The peer acks our pushed rows with appliedToSeq in OUR
-          // seq space (recorded below on 'ack'); the next round's pull starts past it.
-          // Unknown peer (or no ack yet) falls back to the full window.
-          const acked = serverPullAck.get(peer.deviceId)
-          const pullFrom = Number.isFinite(acked) && acked > 0
-            ? Math.min(acked, currentMaxSeq()) // defensive clamp: a lying peer must not skip our fresh rows
-            : undefined
-          const mine = buildSegments ? buildSegments(pullFrom) : []
-          for (const chunk of packSegmentChunks(mine)) {
-            sendVia(socket, { type: 'segments-chunk', segments: chunk.segments, final: chunk.final })
+          if (msg.final) {
+            // The response pull travels through the SAME bounded chunking (the server's own
+            // first-sync backlog is just as large as the client's): it starts past what the
+            // peer already acked (serverPullAck), full window for unknown peers.
+            // P0-1: cap the acked seq below the earliest flush-failed segment and tell the sender
+            // (flushFailed:true) so it does NOT advance its per-peer watermark and instead
+            // re-requests a snapshot next round.
+            if (acc.flushFailedFrom != null) acc.maxSeq = Math.min(acc.maxSeq, acc.flushFailedFrom - 1)
+            const acked = serverPullAck.get(peer.deviceId)
+            const pullFrom = Number.isFinite(acked) && acked > 0
+              ? Math.min(acked, currentMaxSeq()) // defensive clamp: a lying peer must not skip our fresh rows
+              : undefined
+            const mine = buildSegments ? buildSegments(pullFrom) : []
+            for (const chunk of packSegmentChunks(mine)) {
+              sendVia(socket, { type: 'segments-chunk', segments: chunk.segments, final: chunk.final })
+            }
+            sendVia(socket, {
+              type: 'ack', applied: acc.segments, rejected: 0,
+              ...(acc.maxSeq > 0 ? { appliedToSeq: acc.maxSeq } : {}),
+              ...(acc.flushFailedFrom != null ? { flushFailed: true } : {}),
+              oldestSeq: getOldestSeq ? currentOldestSeq() : undefined,
+            })
+            socket._segPush = null // the acked push round is complete; a new push re-accumulates
           }
-          sendVia(socket, {
-            type: 'ack', applied: acc.segments, rejected: 0,
-            ...(acc.maxSeq > 0 ? { appliedToSeq: acc.maxSeq } : {}),
-            oldestSeq: getOldestSeq ? currentOldestSeq() : undefined,
-          })
-          socket._segPush = null // the acked push round is complete; a new push re-accumulates
-        }
       } else if (msg.type === 'ack') {
         // The peer is acking OUR push (client role's pull response): appliedToSeq is the max
         // seq among our rows the peer applied — OUR seq space (see the segments-chunk branch
@@ -179,8 +190,13 @@ function createServerRoleHandler(deps) {
         } finally {
           serverSnapshotBusy.delete(peer.deviceId)
         }
-      } else if (msg.type === 'att-req') {
-        // Attachment FILE pull (feature): the peer requests missing attachment files after a
+      } else if (msg.type === 'unpaired') {
+        // P1-4 (2026-09-19 data-safety round): the peer removed OUR pairing (best-effort control
+        // message sent from its unpair flow). Stop dialing it: record the terminal unpaired
+        // state (deps.onUnpaired) so the Device Center renders "please re-pair" instead of
+        // retrying an auth that can never succeed until the user re-pairs.
+        if (deps.onUnpaired) deps.onUnpaired(peer)
+      } else if (msg.type === 'att-req') {        // Attachment FILE pull (feature): the peer requests missing attachment files after a
         // sync round applied their metadata rows. Served over the same encrypted session with
         // per-file hash + chunked frames + per-peer rate cap (att-transfer.js). No-op when the
         // caller did not wire a server (attachment serving is optional per node).

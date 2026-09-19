@@ -254,6 +254,10 @@ function startSync () {
   try { const seeded = state.db.call('seedSyncOplog', {}); if (seeded && seeded.seeded > 0) log.info('[LanSync] seeded', seeded.seeded, 'legacy rows into the oplog') } catch (e) { log.warn('[LanSync] legacy seed failed:', e.message) }
   state.engine = createEngine({ localStore: createLocalStoreAdapter(), deviceId })
   state.deviceId = deviceId // symmetric tie-break stamping (see withPeerDeviceId / sync-apply)
+  // P1-4 (2026-09-19 data-safety round): per-node write buffers + applied bookkeeping — a fresh
+  // start never inherits buffered (uncommitted) rows from a previous node instance.
+  state.pendingWrites = { todos: [], settings: [], tomatoes: [], categories: [], plans: [], filters: [] }
+  state.applied = null
   state.node = createLanSyncNode({
     deviceId,
     peerProgress: state.peerWatermarks,
@@ -269,7 +273,12 @@ function startSync () {
       state.applyCache = createHydrationCache()
       try {
         const r = state.engine.ingestSegment(withPeerDeviceId(body))
-        flushPendingWrites()
+        // P0-1 (2026-09-19 data-safety round): a failed bulk flush (poison row) must NOT be acked
+        // as applied — the rows were dropped from the buffer. Stamp the ingest result so the
+        // server role keeps appliedToSeq below this segment and the sender force-arms its
+        // snapshot trigger; the data remains recoverable via the next snapshot.
+        const flush = flushPendingWrites()
+        if (flush && flush.ok === false) r.flushFailed = true
         emitAppliedRound() // P0-1: refresh open views + settings hot-apply after a round applied rows
         return r
       } finally { state.applyCache = null }
@@ -286,7 +295,10 @@ function startSync () {
       state.applyCache = createHydrationCache()
       try {
         for (const r of withPeerDeviceId(body).rows || []) applyRowSafe(r)
-        flushPendingWrites()
+        // P0-1: same flush-failure honesty as the streaming path — fail loudly so the watermark
+        // never advances over rows that were dropped.
+        const flush = flushPendingWrites()
+        if (flush && flush.ok === false) throw new Error('snapshot flush failed (rows dropped, snapshot will retry)')
         emitAppliedRound()
       } finally { state.applyCache = null }
       return { rows: rows.length }
@@ -300,7 +312,11 @@ function startSync () {
       state.applyCache = createHydrationCache()
       try {
         for (const r of withPeerDeviceId(body).rows || []) applyRowSafe(r)
-        flushPendingWrites()
+        // P0-1: a failed flush during a streamed snapshot must fail the ROUND (throw) — the pull
+        // watermark advances only at snapshot-end, so a failed chunk keeps the watermark put and
+        // the next round re-requests the (idempotent) snapshot instead of acking dropped rows.
+        const flush = flushPendingWrites()
+        if (flush && flush.ok === false) throw new Error('snapshot chunk flush failed (rows dropped, snapshot will retry)')
         emitAppliedRound()
       } finally { state.applyCache = null }
       return { rows: rows.length }
@@ -393,7 +409,13 @@ function startSync () {
   state.node.on('pair-rejected', info => emitSyncEvent('pair-rejected', { host: info && info.host, port: info && info.port, reason: info && info.reason }))
   // Inbound pairing completed (manual code or confirmed): tell the renderer it succeeded.
   state.node.on('paired-inbound', info => emitSyncEvent('pair-accepted', { deviceId: info && info.deviceId, host: info && info.host }))
-  state.node.on('peer-unauthorized', info => log.warn('[LanSync] unauthorized peer rejected:', info && info.deviceId, 'from', info && info.host, info && info.error))
+  state.node.on('peer-unauthorized', info => {
+    log.warn('[LanSync] unauthorized peer rejected (terminal until re-pair):', info && info.deviceId, 'from', info && info.host, info && info.error)
+    // P1-3b: terminal state — the Device Center renders peers[].peerState === 'unpaired'
+    // (status payload) as "已被对方解除配对,请重新配对". Emitted ONCE per rejection; the node
+    // stops dialing that peer until user action.
+    emitSyncEvent('peer-unauthorized', { deviceId: info && info.deviceId, host: info && info.host, terminal: true })
+  })
   // restore manually added peers (node peer table is memory-only; settings_rows is the authority)
   for (const mp of manualPeers()) {
     try { state.node.addPeer({ deviceId: 'manual-' + mp.host + ':' + mp.port, host: mp.host, port: Number(mp.port) }) } catch (e) { log.warn('[LanSync] manual peer restore failed:', e.message) }
@@ -415,9 +437,14 @@ async function stopSync () {
   if (securityPersistTimer) { clearTimeout(securityPersistTimer); securityPersistTimer = null }
   const n = state.node
   state.node = null
-  state.engine = null
   state.pendingPair = null
+  // P1-4 (2026-09-19 data-safety round): the engine (and its hydration caches) used to be nulled
+  // BEFORE the node stopped — an in-flight ingestSegment (round still running on a live socket)
+  // hit `state.engine.ingestSegment of null` TypeError. Stop the node FIRST (its stop() awaits
+  // the server close, which quiesces in-flight rounds), THEN tear down the engine.
   try { await n.stop() } catch (e) { log.warn('[LanSync] stop failed:', e.message) }
+  state.engine = null
+  state.applyCache = null
   log.info('[LanSync] node stopped')
 }
 
@@ -522,6 +549,26 @@ function emitAppliedRound () {
   }
 }
 
+/* ---------- P1-6 (2026-09-19 data-safety round): recovery vs persisted watermarks ---------- */
+/**
+ * Invalidate every persisted per-peer push watermark after a DB RECOVERY/restore rebuilt the
+ * database in an OLDER oplog seq space: stale watermarks would sit above the restored rows and
+ * they would never be pushed. Clearing the map makes the next round re-push the full retained
+ * oplog window to every peer (merge-apply is idempotent, §4.1), and the peers' snapshot trigger
+ * re-syncs anything already pruned from our rebuilt oplog. Safe to call before initLanSync
+ * (no-op for the live map) — the settings row is the persistence authority.
+ */
+function invalidateSyncWatermarks (reason) {
+  try {
+    settingPut(K_PEER_WATERMARKS, JSON.stringify({}))
+  } catch (e) { log.warn('[LanSync] watermark invalidation persist failed:', e.message) }
+  try {
+    if (state && state.peerWatermarks && typeof state.peerWatermarks.clear === 'function') state.peerWatermarks.clear()
+  } catch { /* pre-init: nothing live to clear */ }
+  log.warn('[LanSync] peer watermarks invalidated (' + String(reason || 'recovery') + ') — full re-push + peer re-snapshot on next round')
+  try { kickSyncRound('watermarks-invalidated') } catch { /* node not started yet */ }
+}
+
 /* ---------- P1-3 (2026-09-19 UX review): unpair a device ---------- */
 /**
  * Remove a paired device: drop its manual peer record + push watermark and REVOKE the shared
@@ -559,6 +606,10 @@ async function syncUnpairPeerOp (p) {
   // authenticate until re-paired. Restart so the node advertises/authenticates with the new one.
   settingPut(K_PAIRING_SECRET, generatePairingSecret())
   state.pairingCode = null
+  // P1-4 (2026-09-19 data-safety round): best-effort tell the unpaired peer while a connection
+  // may still be live — it can then forget OUR peer record and enter its terminal unpaired
+  // state instead of auth-retrying forever. Never blocks the unpair flow.
+  try { const notified = state.node.notifyUnpaired(deviceId); log.info('[LanSync] unpaired notify to', deviceId, notified ? 'delivered' : 'no live connection (peer will discover via auth rejection)') } catch (e) { log.warn('[LanSync] unpaired notify failed:', e.message) }
   await stopSync()
   if (settingGet(K_ENABLED) === true) startSync()
   notifyRenderers('peer-unpaired')
@@ -749,7 +800,7 @@ function initLanSync ({ db, getWindowSenders, resyncExternalWatch } = {}) {
   } catch (e) { log.warn('[LanSync] startup enable failed:', e.message) }
 }
 
-module.exports = { initLanSync, stopSyncForQuit, kickSyncRound }
+module.exports = { initLanSync, stopSyncForQuit, kickSyncRound, invalidateSyncWatermarks }
 
 // Test-only hooks: applyRowInner/flushPendingWrites operate on the module-level `state` singleton;
 // unit tests swap in a mock state via __test.setState. Production paths never touch __test.
@@ -768,4 +819,8 @@ module.exports.__test = {
   emitAppliedRound: () => emitAppliedRound(),
   // P1-3 test surface: unpair deletes peer record + watermark + revokes the shared secret.
   unpairPeer: p => syncUnpairPeerOp(p),
+  // P1-4/P1-6 test surface: stop ordering (engine alive until the node stopped) + watermark
+  // invalidation (recovery path clears persisted per-peer progress).
+  stopSync,
+  invalidateSyncWatermarks,
 }

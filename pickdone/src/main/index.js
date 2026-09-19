@@ -386,6 +386,10 @@ if (!app.requestSingleInstanceLock()) { app.quit() } else {
         // restored rows waited for the periodic round. Boot-time kick is safe: kickSyncRound no-ops
         // while the sync node is not initialized.
         try { require('./lan-sync-bootstrap').kickSyncRound('db-recovery') } catch { /* sync lazy-not-init */ }
+        // P1-6 (2026-09-19 data-safety round): the recovery rebuilt the DB in an OLDER oplog seq
+        // space — stale persisted peer watermarks would sit above the restored rows and they
+        // would never be pushed. Invalidate so the next round re-pushes the full window (idempotent).
+        try { require('./lan-sync-bootstrap').invalidateSyncWatermarks('db-recovery') } catch { /* sync lazy-not-init */ }
       }
       const detailMsg = String(e && e.message || e) + '.' + (recoveredFrom
         ? i18nM.mt('dbFailRecovered', { n: restoredN })

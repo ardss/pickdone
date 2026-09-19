@@ -193,13 +193,18 @@ test('device-center: pair-throttled surfaces into the security ring', async () =
 })
 
 test('device-center: recent ring is capped at 50 entries', async () => {
-  const node = makeNode()
+  // P1-3 (2026-09-19): failed rounds arm a per-peer dial window; the injected short backoff
+  // plus a small wait keeps all 55 attempts dialing (and the high budget avoids hibernate).
+  const node = makeNode({ dialFailureBudget: 1000, hibernateBackoffMs: 20 })
   node.start()
   await node.whenListening()
   // Dead port: every round errors immediately (ECONNREFUSED on loopback) and pushes
   // one 'error' entry into the recent ring.
   node.addPeer({ deviceId: 'dead', host: '127.0.0.1', port: 1 })
-  for (let i = 0; i < 55; i++) await node.startSyncRound()
+  for (let i = 0; i < 55; i++) {
+    node.forceDial('dead') // P1-3: failed rounds arm the dial window; manual retry-now clears it
+    await node.startSyncRound()
+  }
 
   const st = node.getStatus()
   assert.equal(st.recent.length, 50, 'ring keeps exactly the last 50')
