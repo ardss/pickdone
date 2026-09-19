@@ -80,6 +80,10 @@ if (suites.length) console.error(`[run-all] suite filter: ${suites.join(',')} ->
 // a NAMED failure in <=2min instead of burning the whole CI job budget with zero diagnostics
 // (2026-09-19: ubuntu job sat 30min then was killed, 0 failures reported, hang unattributable).
 const TEST_TIMEOUT_MS = 120000
-const r = spawnSync(process.execPath, ['--test', `--test-timeout=${TEST_TIMEOUT_MS}`, ...forwardArgs, ...files],
+// --test-force-exit: a test that passes but leaks a handle (listening server, open socket,
+// watcher) would otherwise keep the per-file child process alive forever — the runner then waits
+// with ZERO results (0 failures, budget kill, unattributable). Force-exit makes the child leave
+// once tests finish; --test-timeout above covers the in-test hang case.
+const r = spawnSync(process.execPath, ['--test', '--test-force-exit', `--test-timeout=${TEST_TIMEOUT_MS}`, ...forwardArgs, ...files],
   { stdio: 'inherit' })
 process.exit(r.status ?? 1)
