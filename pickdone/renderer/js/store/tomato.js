@@ -173,21 +173,27 @@ function ledgerWrite (op, params) {
 }
 function flushPendingLedger () {
   const list = _pendingLedger.splice(0, _pendingLedger.length)
-  // P3 2026-09-12: failed entries splice back at their ORIGINAL index — the previous per-entry
-  // unshift ran in failure-completion order, reversing the queue so replayed ops (delete → re-add
-  // of the same record family) could land out of causal order. Ledger ops are idempotent upserts,
-  // but order preservation keeps the replay semantics obviously correct.
-  list.forEach((it, idx) => {
+  // D5 (2026-09-20): failed entries are collected and re-prepended in ORIGINAL index order (reverse
+  // iterate + unshift, same pattern as store/todo.js flushPendingUpserts). The old splice-at-stale-idx
+  // ran in failure-completion order after any await reordering, so a mixed success/failure flush could
+  // reinsert a later entry before an earlier one and invert causality on replay (tomatoRemoveByIds
+  // landing after the tomatoAppendMany it was meant to follow).
+  const jobs = list.map((it) =>
     Promise.resolve(window.todoAPI && window.todoAPI.dbCall(it.op, it.params))
       .then(res => {
         logRejectedRows(res, it.params)
         if (it.op === 'tomatoRemoveByIds') purgePendingAppends(it.params)
+        return null
       })
       .catch(e => {
         console.error('[tomato] ledger flush failed at quit:', it.op, e)
-        _pendingLedger.splice(Math.min(idx, _pendingLedger.length), 0, it)
+        return it
       })
-  })
+  )
+  Promise.all(jobs).then(outcomes => {
+    const failures = outcomes.filter(Boolean)
+    for (let i = failures.length - 1; i >= 0; i--) _pendingLedger.unshift(failures[i])
+  }).catch(() => { /* Promise.all never rejects (catches above) */ })
 }
 function hookQuitFlush () {
   if (_flushHooked || !window.todoAPI || !window.todoAPI.onAppQuittingFlush) return
@@ -199,7 +205,11 @@ function hookQuitFlush () {
  *  The old fire-and-forget `dbCall('bumpSnow', …).catch(() => {})` silently dropped the credit on
  *  a transient IPC/DB failure (lock screen, quit race): the ledger recorded the focus but the task's
  *  focusMinutes/snow never advanced. Entries are removed only on success (bumpSnow is idempotent
- *  per the db layer) and replayed on the next write or at quit-flush. */
+ *  per the db layer) and replayed on the next write or at quit-flush.
+ *  D5 (2026-09-20): each entry carries `dedupKey = String(startedAt)` — the phase identity the
+ *  completion was booked under. The db layer's bumpSnow honors an optional dedupKey so a replayed
+ *  entry (retry queue OR quit-flush) cannot double-credit a focus that already landed. Quit-flush
+ *  replays the same params object, so every replay path carries the same key. */
 const _pendingSnow = []
 function replayPendingSnow () {
   for (const entry of [..._pendingSnow]) {
@@ -217,13 +227,19 @@ function snowWrite (params) {
 }
 function flushPendingSnow () {
   const list = _pendingSnow.splice(0, _pendingSnow.length)
-  list.forEach((it, idx) => {
+  // D5: failures re-prepended in original order (same rationale as flushPendingLedger)
+  const jobs = list.map(it =>
     Promise.resolve(window.todoAPI && window.todoAPI.dbCall('bumpSnow', it.params))
+      .then(() => null)
       .catch(e => {
         console.error('[tomato] bumpSnow flush failed at quit:', it.params, e)
-        _pendingSnow.splice(Math.min(idx, _pendingSnow.length), 0, it)
+        return it
       })
-  })
+  )
+  Promise.all(jobs).then(outcomes => {
+    const failures = outcomes.filter(Boolean)
+    for (let i = failures.length - 1; i >= 0; i--) _pendingSnow.unshift(failures[i])
+  }).catch(() => { /* Promise.all never rejects (catches above) */ })
 }
 
 export default {
@@ -418,7 +434,9 @@ export default {
       if (running && record) {
         // Measured duration, not the current setting (unified with completeFocus): a mid-focus
         // duration change used to cap the booked minutes at the NEW smaller setting, skewing the ledger
-        const focusedMin = Math.max(1, Math.min(FOCUS_MAX_MINUTES, Math.floor((Date.now() - s.startedAt) / 60000)))
+        // Rounding unified with completeFocus (Math.round): floor vs round disagreed at the sub-minute
+        // boundary so a 25:40 focus booked 25 min on abandon but 26 min on complete. Both clamp FOCUS_MAX_MINUTES.
+        const focusedMin = Math.max(1, Math.min(FOCUS_MAX_MINUTES, Math.round((Date.now() - s.startedAt) / 60000)))
         const focused = resolveFocusedTask(s.attachTodo, focusTodoPool(this))
         commit('addRecord', {
           // Deterministic id: cross-window dedupe as a backstop so the same give-up records only once
@@ -495,7 +513,9 @@ export default {
         if (focused) {
           // Queued write with retry (was fire-and-forget with an empty catch — a transient failure
           // silently dropped the task's focus credit)
-          snowWrite({ taskId: focused.taskId, minutes: focusMin })
+          // dedupKey = phase identity: the db layer's bumpSnow honors it, so a replay (retry queue
+          // or quit-flush) of the same focus can never double-credit the task
+          snowWrite({ taskId: focused.taskId, minutes: focusMin, dedupKey: String(startedAt) })
           // bumpSnow is a todo-row write issued as a raw dbCall outside the todo/* actions, so store/index.js's
           // WRITE_ACTIONS stamping never fires for it → the todos-changed broadcast echo of this write misses the
           // 1500ms echo-suppression window and todo/init's historyClear wipes the undo stack. Stamp it here,

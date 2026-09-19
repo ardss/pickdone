@@ -61,7 +61,7 @@ test('completeFocus: 任务存活 → 保留链接并正常 bumpSnow(原行为�
   const { state, calls, run } = makeCtx({ taskId: 't1', delete: false })
   await run()
   assert.equal(calls.bumpSnow.length, 1)
-  assert.deepEqual(calls.bumpSnow[0], { taskId: 't1', minutes: 25 })
+  assert.deepEqual(calls.bumpSnow[0], { taskId: 't1', minutes: 25, dedupKey: String(state.tomatoRecordList[0].tomatoId.replace('tmt_f_', '')) }, 'D5: payload carries dedupKey = String(startedAt)')
   assert.equal(state.tomatoRecordList[0].focusTaskId, 't1')
 })
 
