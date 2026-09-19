@@ -107,6 +107,7 @@ export default {
   'statsJ.EditPanel.repeatPrefix': '重复 · ',
   'statsJ.EditPanel.addSubtaskAria': '添加子任务 ',
   'statsJ.EditPanel.zoomImage': '放大预览图片 ',
+  'statsJ.EditPanel.attachmentMissing': '附件尚未同步到本设备',
   'statsJ.EditPanel.addTitlePlaceholder': '添加标题',
   'statsJ.EditPanel.collapseEditor': '收起编辑框',
   'statsJ.EditPanel.descPlaceholder': '描述 / 粘贴图片',

@@ -32,6 +32,12 @@ module.exports = function tomatoHandlers (ctx) {
       win.setBounds({ x, y: b.y, width, height: b.height })
     },
     'set-tomato-float-panel': (e, open) => tomatoFloat.setPanelOpen(open),
+    // --- Running-tomato cross-device announcements (feature: live remote focus chip) ---
+    // Renderer (main + float windows) reports local focus transitions; main composes the
+    // device identity and writes the meta announce row (synced via the meta entity).
+    'tomato-run-announce': (e, payload) => require('../tomato-announce').announceFromRenderer(payload || {}),
+    // Startup/current snapshot of all peers' announces (renderer filters staleness itself)
+    'tomato-run-announces': () => require('../tomato-announce').listAnnounces(),
     // Double-click the float card to summon the main window: accepts only the float's own sender; showMainOrLock already handles the lock-screen redirect and main-window recreation branches
     'show-main-from-float': (e) => { if (tomatoFloat.isSelfSender(e.sender)) showMainOrLock() },
     'undock-tomato-float': () => { tomatoFloat.undock(); rebuildTrayMenu() },

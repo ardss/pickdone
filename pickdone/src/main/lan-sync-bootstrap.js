@@ -584,6 +584,18 @@ function initLanSync ({ db, getWindowSenders }) {
   const peerWatermarks = createTrackedWatermarks()
   state = { db, getWindowSenders, node: null, engine: null, timers: [], pendingToSeq: 0, peerWatermarks, localUserId: null, pendingWrites: { todos: [], settings: [], tomatoes: [], categories: [], plans: [], filters: [] }, pendingPair: null }
   registerOps()
+  // Running-tomato announcements (feature): wire the announce module to the db + identity,
+  // and relay remotely-applied announces to the renderer as 'tomato-announce' syncEvents.
+  // The announce key itself travels as a regular meta entity row (see sync-apply.js).
+  try {
+    const tomatoAnnounce = require('./tomato-announce')
+    tomatoAnnounce.init({
+      dbCall: (op, p) => state.db.call(op, p),
+      getIdentity: () => { const s = getSettingsPayload(); return { deviceId: s.deviceId, deviceName: s.deviceName } },
+      kickRound: kickSyncRound,
+    })
+    tomatoAnnounce.onRemoteAnnounce(v => emitSyncEvent('tomato-announce', v))
+  } catch (e) { log.warn('[LanSync] tomato-announce wiring failed:', e.message) }
   // v1 watermark cleanup (round-3 review): the pre-v2 'sync.peerWatermarks' row is dead data in
   // the RECEIVER's seq space (v2 lives under 'sync.peerWatermarks.v2'); delete it once.
   try {

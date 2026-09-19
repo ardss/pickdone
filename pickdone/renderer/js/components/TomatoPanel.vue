@@ -8,6 +8,13 @@
       <button class="mini" @click="openFloatWindow" :title="$t('statsD.TomatoPanel.floatTitle')">{{ $t('statsD.TomatoPanel.float') }}</button>
       <button class="mini close-x" :aria-label="$t('statsE.SettingsModal.closeBtn')" @click="closePanel"></button>
     </header>
+    <!-- Remote running focus (LAN sync announce, display-only): click opens the linked todo -->
+    <div v-if="remoteRun" class="tp-remote" role="button" tabindex="0"
+         :title="$t('statsD.TomatoPanel.remoteRunningTip')"
+         @click="openRemoteTodo" @keydown.enter.prevent="openRemoteTodo">
+      <i class="ico" style="--ico:url('app://app/assets/img/icon-tomato-timer2.svg');width:12px;height:12px"></i>
+      {{ $t('statsD.TomatoPanel.remoteRunning', { name: remoteRun.deviceName || remoteRun.deviceId, time: remoteClock }) }}
+    </div>
     <div class="ring-wrap">
       <svg viewBox="0 0 120 120" class="ring">
         <circle cx="60" cy="60" r="52" class="ring-bg"/>
@@ -40,13 +47,17 @@
 /** Full pomodoro settings panel (opened via shortcut / the ⚙ on the bottom bar): ring timer / duration config / today's records / float window */
 import {dayjs, FMT } from '../utils/core.js'
 import { formatMMSS } from '../utils/tomatoShared.js'
+import { remainSecOfAnnounce } from '../store/tomatoAnnounceShared.js'
 import store from '../store/index.js'
 
 export default {
   name: 'TomatoPanel',
-  data () { return { remaining: 1500 } },
+  data () { return { remaining: 1500, nowTs: Date.now() } },
   computed: {
     s () { return this.$store.state.tomato },
+    /** Remote running focus (live cross-device announce) — display-only chip source. */
+    remoteRun () { return this.$store.getters['tomatoAnnounce/primaryRunning'] },
+    remoteClock () { return formatMMSS(remainSecOfAnnounce(this.remoteRun, this.nowTs)) },
     isWork () { return this.s.status === 'startTomatoTime' },
     isRest () { return this.s.status === 'startRestTime' },
     percent () {
@@ -71,12 +82,20 @@ export default {
   methods: {
     dfmt (ts) { return dayjs(ts).format(FMT.time) },
     commitPatch (p) { store.commit('tomato/patch', p) },
+    /** Open the remote focus's linked todo (display-only: never starts/stops anything). */
+    openRemoteTodo () {
+      const id = this.remoteRun && this.remoteRun.attachTodoId
+      if (!id) return
+      const row = (this.$store.state.todo.todoList || []).find(t => t && t.taskId === id)
+      if (row) store.commit('ui/openEdit', row)
+    },
     openFloatWindow () {
       // Use the main process frameless float window (same channel as the Settings page toggle) instead of a plain window.open popup
       if (window.todoAPI && window.todoAPI.showTomatoFloat) window.todoAPI.showTomatoFloat()
       store.commit('ui/toggleTomatoPanel', false)
     },
     recalc () {
+      this.nowTs = Date.now() // remote chip countdown re-derives from the wall clock
       const s = this.s
       let remain
       if ((s.status === 'startTomatoTime' || s.status === 'startRestTime') && s.startedAt) {
@@ -90,3 +109,9 @@ export default {
 
 }
 </script>
+<style>
+/* Remote running focus chip (LAN sync announce, display-only) */
+.tp-remote { display: flex; align-items: center; gap: 5px; font-size: var(--fs-xs); color: var(--brand); background: var(--brand-light); border-radius: var(--radius-sm); padding: 3px 8px; margin-bottom: 6px; cursor: pointer; }
+.tp-remote:hover { filter: brightness(0.97); }
+.tp-remote:focus-visible { outline: 2px solid var(--brand); outline-offset: -1px; }
+</style>

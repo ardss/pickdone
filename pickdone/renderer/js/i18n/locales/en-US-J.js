@@ -108,6 +108,7 @@ export default {
   'statsJ.EditPanel.repeatPrefix': 'Repeat · ',
   'statsJ.EditPanel.addSubtaskAria': 'Add subtask ',
   'statsJ.EditPanel.zoomImage': 'Zoom image ',
+  'statsJ.EditPanel.attachmentMissing': 'Attachment not synced to this device yet',
   'statsJ.EditPanel.addTitlePlaceholder': 'Add title',
   'statsJ.EditPanel.collapseEditor': 'Collapse editor',
   'statsJ.EditPanel.descPlaceholder': 'Description / paste images',

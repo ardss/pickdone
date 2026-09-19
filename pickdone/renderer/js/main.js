@@ -176,6 +176,8 @@ async function bootstrap () {
     store.dispatch('settings/initFromDb').catch(() => {})
     store.dispatch('habits/initFromDb').catch(() => {})
     store.dispatch('tomato/initFromDb').catch(() => {})
+    // Remote running-tomato chip: subscribe to 'tomato-announce' syncEvents + load snapshot
+    store.dispatch('tomatoAnnounce/init').catch(() => {})
     import('./utils/tomatoEstimate.js').then(m => m.initFromDb()).catch(() => {}) // Estimated tomatoes: backfill from meta when newer (same ledger as CLI setEstimate, 2026-09-03)
     store.dispatch('filters/load').catch(() => {}) // Saved filters (smart lists)
     // Statutory holiday table (data source for repeat tasks "skip holidays / weekdays only") + lunar calendar library injection (lunar yearly repeats)
