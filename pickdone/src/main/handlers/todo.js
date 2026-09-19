@@ -43,13 +43,15 @@ module.exports = function todoHandlers (ctx) {
     'syncGetSettings', 'syncSetEnabled', 'syncGetStatus', 'syncGetPairingCode', 'syncSetName', 'syncPairWithCode', 'syncAddPeer',
     // Device Center (2026-09-17): two-way confirmed pairing — answer the inbound pair-request
     // dialog, or dial a peer and ask. Implemented in lan-sync-bootstrap.js via db-sync-ops.
-    'syncPairRespond', 'syncPairRequest'
+    // syncUnpairPeer (2026-09-19 UX review): Device Center unpair — rotates the shared pairing
+    // secret (destructive, confirm-dialog gated in the UI), same capability class as syncSetEnabled.
+    'syncPairRespond', 'syncPairRequest', 'syncUnpairPeer'
   ])
 
   // Dangerous DB ops: batch write/batch delete/arbitrary meta write. Capability-wise aligned with "dangerous channels main-window only" —
   // a compromised float/lock-screen window could previously wipe the whole database in bulk or change any meta via todo-db:call (audit 2026-09-01).
   // The renderer's real call surface has been verified: all three only occur in the main window (store/utils/main.js); auxiliary windows have no legitimate callers.
-  const MAIN_WINDOW_ONLY_OPS = new Set(['upsertMany', 'commitSyncBatch', 'hardDeleteMany', 'setMeta', 'deleteMeta', 'syncSetEnabled', 'syncSetName'])
+  const MAIN_WINDOW_ONLY_OPS = new Set(['upsertMany', 'commitSyncBatch', 'hardDeleteMany', 'setMeta', 'deleteMeta', 'syncSetEnabled', 'syncSetName', 'syncUnpairPeer'])
 
   return {
     // --- DB ---

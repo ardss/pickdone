@@ -851,9 +851,9 @@ syncOplogSince: ({ sinceSeq = 0, limit = 2000 } = {}) => db.prepare('SELECT seq,
   syncAddPeer: p => require('./db-sync-ops').dispatch('syncAddPeer', p),
   syncPairRespond: p => require('./db-sync-ops').dispatch('syncPairRespond', p),
   syncPairRequest: p => require('./db-sync-ops').dispatch('syncPairRequest', p),
-  // One-time bootstrap: rows created before the oplog existed (any user enabling sync on an
-  // existing database) have no change-capture pointers and would never propagate. Idempotent via
-  // the sync.seedDone meta flag; NOT renderer-callable (main-internal, like the meta GC ops).
+  syncUnpairPeer: p => require('./db-sync-ops').dispatch('syncUnpairPeer', p),
+  // One-time bootstrap: rows created before the oplog existed (any user enabling sync on an existing
+  // database) have no change-capture pointers and would never propagate. Idempotent via sync.seedDone; NOT renderer-callable.
   seedSyncOplog: p => require('./db-sync-ops').dispatch('seedSyncOplog', p),
   // Main-internal: bare oplog pointer backfill for legacy rows (used by the seedSyncOplog seed).
   appendOplogPointers: rows => {
