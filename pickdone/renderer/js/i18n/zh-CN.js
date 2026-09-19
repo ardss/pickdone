@@ -136,6 +136,17 @@ export default {
     "pairFailGenericMsg": "配对失败，请重试",
     "pairExpiredHint": "请求已超时",
     "kindSnapshot": "快照同步",
-    "feedSessionHint": "记录仅保留本次运行期间"
+    "feedSessionHint": "记录仅保留本次运行期间",
+    "confirmCancelBtn": "取消",
+    "confirmOkBtn": "确认",
+    "unpairBtn": "解除配对",
+    "unpairTitle": "解除设备配对",
+    "unpairConfirm": "确定解除与 {name} 的配对？\n配对使用共享密钥——解除即吊销该密钥，所有已配对设备都会断开，双方必须重新配对才能恢复同步。",
+    "unpairDoneMsg": "已解除 {name} 的配对——重新配对后才能恢复同步",
+    "unpairFailMsg": "解除配对失败",
+    "repairTitle": "配对新设备？",
+    "repairWarning": "配对将采用新的共享密钥——已配对的设备会被断开，需要重新配对。",
+    "conflictKept": "同步冲突：「{name}」已保留对方设备的版本，你早前的内容在回收站",
+    "conflictApplied": "同步冲突：「{name}」已应用对方设备的版本"
   }
 }
