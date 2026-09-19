@@ -103,15 +103,15 @@ import { getEstimate } from '../utils/tomatoEstimate.js'
 let dragActive = false
 
 /* [d5-ui-fixes] pure-start */
-// Cross-day move patch builder: dayStart is the bucketing key, so todoTime follows the new day
-// only when it was aligned with the old day (a pure day marker); a todoTime carrying a real
-// time-of-day (e.g. 14:30) is left untouched so the scheduled clock time survives the move.
-// Same rule for reminderTime (aligned to the old day -> shift to the new day). Mirrors DayDeck.
+// Cross-day move patch builder: dayStart is the bucketing key. todoTime follows the new day only
+// when it was anchored to the old day, keeping its time-of-day (a 14:30 schedule stays 14:30 on
+// the new day; a pure midnight day marker stays a pure marker) — a todoTime on another day is
+// left untouched. Same rule for reminderTime so the reminder cannot be orphaned on the old day.
 function crossDayMovePatch (dragged, newDay, startOfDay) {
   const patch = { dayStart: newDay }
   const origDay = dragged.dayStart || 0
-  if (dragged.todoTime && startOfDay(dragged.todoTime) === startOfDay(origDay)) patch.todoTime = newDay
-  if (dragged.reminderTime && startOfDay(dragged.reminderTime) === startOfDay(origDay)) patch.reminderTime = newDay
+  if (dragged.todoTime && startOfDay(dragged.todoTime) === startOfDay(origDay)) patch.todoTime = newDay + (dragged.todoTime - startOfDay(dragged.todoTime))
+  if (dragged.reminderTime && startOfDay(dragged.reminderTime) === startOfDay(origDay)) patch.reminderTime = newDay + (dragged.reminderTime - startOfDay(dragged.reminderTime))
   return patch
 }
 /* [d5-ui-fixes] pure-end */

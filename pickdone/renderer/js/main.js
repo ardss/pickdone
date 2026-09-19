@@ -460,7 +460,7 @@ async function bootstrap () {
       case 'deleteEvent': {
         const id = store.state.ui.rightSidebarTodoEdit.taskId || selectedTaskId()
         const t = id && store.state.todo.todoList.find(x => x.taskId === id)
-        if (t) deleteWithUndo(window.appUI, store, t).then(ok => { if (ok) store.dispatch('todo/computeViews') })
+        if (t) deleteWithUndo(window.appUI, store, t).then(ok => { if (ok) store.dispatch('todo/computeViews').catch(e => console.warn('[todo] undo-refresh computeViews failed:', e)) })
         break
       }
       case 'pinEvent': case 'unpinEvent': {
