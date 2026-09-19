@@ -2,7 +2,8 @@
 
   <div class="qapage" style="background:transparent">
     <div class="qapage__card">
-      <quick-add ref="qa" @created="onCreated"/>
+      <!-- quiet: the success toast would be destroyed with this window 250ms later; hiding the window is the ack -->
+      <quick-add ref="qa" quiet @created="onCreated"/>
     </div>
   </div>
 </template>

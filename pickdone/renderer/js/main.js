@@ -97,7 +97,7 @@ store.registerModule('_rt', {
       let rows
       try { rows = await window.todoAPI.dbCall('getAll', {}) } catch (e) { console.error('[rt] read failed:', e); return }
       store.commit('todo/setAllRows', rows)
-      store.dispatch('todo/computeViews')
+      store.dispatch('todo/computeViews').catch(e => console.warn('[rt] computeViews failed:', e))
     }
   }
 })
@@ -542,7 +542,8 @@ async function bootstrap () {
       const t0 = new Date(); t0.setHours(0,0,0,0)
       if (store.state.ui.daySelectedTs !== +t0) store.commit('ui/setDaySelected', 0)
     }
-    if (store.state.todo.viewsDirty || dayChanged) store.dispatch('todo/computeViews')
+    // .catch: an async action rejection here would surface as an unhandled promise rejection every minute
+    if (store.state.todo.viewsDirty || dayChanged) store.dispatch('todo/computeViews').catch(e => console.warn('[todo] periodic computeViews failed:', e))
   }, 60 * 1000)
 
   // Color mode (light/dark/follow system): apply at startup + react to changes

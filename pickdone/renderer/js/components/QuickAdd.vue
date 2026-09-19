@@ -35,6 +35,10 @@ import { resolveQuickAddDate } from '../utils/quickAddDate.js'
 
 export default {
   name: 'QuickAdd',
+  // quiet: suppress the success $message — used by the standalone quick-add window
+  // (QuickAddPage), where the toast would be destroyed 250ms later with the window;
+  // the window hiding itself is the success acknowledgement there
+  props: { quiet: { type: Boolean, default: false } },
   data () {
     return {
       text: '',
@@ -94,7 +98,9 @@ export default {
     },
     // Right-edge calendar button: pops up the standard Element Plus calendar to pick a date; clearing = no date
     onCalPick (ts) {
-      this.pickedDate = ts || null
+      // Picker clear (null) must mean the same as the chip ✕: pickedDate = 0 = explicitly "no date".
+      // Mapping it to null would drop the manual override and silently re-schedule via NL parsing/today.
+      this.pickedDate = ts || 0
     },
     nlHasLabel () {
       if (this.pickedDate === 0) return true
@@ -137,7 +143,9 @@ export default {
       if (d == null && !this.inTodoBox) d = dayjs().startOf('day').valueOf()
       const when = d && d !== 0 ? this.$t('statsD.QuickAdd.scheduledAt') + (dayjs(d).isSame(dayjs(), 'day') ? this.$t('statsD.QuickAdd.today') : dayjs(d).format(FMT.cnDate)) : this.$t('statsD.QuickAdd.movedToInbox')
       const msg = this.$t('statsD.QuickAdd.created', { c: content }) + when
-      this.$message.success(msg)
+      // quiet mode (standalone quick-add window): skip the toast — the window hides 250ms later
+      // and would destroy the toast mid-flight; the window hiding itself is the acknowledgement
+      if (!this.quiet) this.$message.success(msg)
       if (this.$announce) this.$announce(msg)
       this.$emit('created', { content, date: d })
       } catch (err) {

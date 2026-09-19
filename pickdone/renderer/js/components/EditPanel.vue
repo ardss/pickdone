@@ -393,8 +393,11 @@ export default {
     async repeatGroupInfo () {
       if (!this.e || !this.e.repeatId) { this.repeatCount = 0; return }
       try {
+        // Capture the task id before the await: if the panel switches to another task while the
+        // query is in flight, the stale result must not overwrite the new task's repeat count
+        const taskId = this.e.taskId
         const rows = await window.todoAPI.dbCall('queryTodos', { deleted: 0, repeatId: this.e.repeatId })
-        this.repeatCount = rows.length
+        if (this.e && this.e.taskId === taskId) this.repeatCount = rows.length
       } catch (err) { /* ignored */ }
     },
     close () {
