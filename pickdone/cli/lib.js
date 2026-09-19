@@ -661,8 +661,12 @@ function toggleComplete (input, target, { withSubtasks, completedAt } = {}) {
       } else {
         const now = Date.now()
         const sameDay = db.call('queryTodos', { deleted: 0 }).filter(x => x.dayStart === dayStartOf(next.todoTime))
+        // P2 2026-09-20: the renewal instance used a (min+max)/2 MIDPOINT sort, which lands the new
+        // instance in the MIDDLE of the day's ±step chain (renderer new/inserted tasks always go to
+        // an END). Mirrors the renderer's renewal convention (store/todo.js ensureNextRepeatInstance
+        // → addTodo addToTop:false → utils/core.js nextSort): bottom-insert min-512, empty day 1024.
         const sameSorts = sameDay.map(x => x.taskSort).filter(v => v != null)
-        const taskSort = sameSorts.length ? Math.fround((Math.min(...sameSorts) + Math.max(...sameSorts)) / 2) : 0
+        const taskSort = sameSorts.length ? Math.fround(Math.min(...sameSorts) - 512) : 1024
         let subs = null
         try { subs = t.subtasks ? JSON.parse(t.subtasks) : null } catch { /* keep null */ }
         const nt = {
@@ -962,10 +966,17 @@ function repeatOn (input, rule, count) {
   // same as RepeatModal) — copying the raw timestamp made reminders fire on the template's original date
   const tplRem = t.reminderTime > 0 ? dayjs(t.reminderTime) : null
   let made = 0
-  for (const ts of core.expandRepeatDates(base, rule).map(d => +d).filter(ts => ts > base).slice(0, cap)) {
+  // P2 2026-09-20: pass the holiday list — expandRepeatDates(base, rule) defaulted to [] so a
+  // skipStatutoryHolidays rule still expanded ONTO statutory holidays on the CLI (the renderer
+  // passes its holidayList here; the CLI complete-renewal path below already does). Mirrors
+  // cli/lib.js:655.
+  const holidayList = require('../src/main/core/holidays.js').getHolidayList()
+  for (const ts of core.expandRepeatDates(base, rule, holidayList).map(d => +d).filter(ts => ts > base).slice(0, cap)) {
     const sameDay = db.call('queryTodos', { deleted: 0 }).filter(x => x.dayStart === dayStartOf(ts))
     const sorts = sameDay.map(x => x.taskSort).filter(v => v != null)
-    const taskSort = sorts.length ? Math.fround((Math.min(...sorts) + Math.max(...sorts)) / 2) : 0
+    // P2 2026-09-20: midpoint → renderer renewal convention (see the complete-path comment above):
+    // bottom-insert min-512, empty day 1024 (store/todo.js addToTop:false → nextSort).
+    const taskSort = sorts.length ? Math.fround(Math.min(...sorts) - 512) : 1024
     let subs = null
     try { subs = t.subtasks ? JSON.parse(t.subtasks) : null } catch { /* keep null */ }
     const now = Date.now()

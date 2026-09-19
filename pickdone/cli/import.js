@@ -167,8 +167,28 @@ function rowsToItems (text, format) {
 }
 
 /* ================= dedup + write ================= */
+// P2 2026-09-20: the dedup fingerprint's day component used the raw stored dayStart ms — a
+// WRITE-machine local-midnight timestamp. Re-importing the same file against the same library
+// from a machine in a DIFFERENT timezone (synced library / traveler) derived a different local
+// midnight for the same calendar date, so every dated row double-imported. Fingerprint the day
+// as the CREATOR's calendar date instead: todo rows carry the creator IANA tz (db-rows
+// deviceTz), so the stored scheduledDay is re-expressed in the creator's own calendar
+// deterministically on ANY reader machine; the import side derives the same YYYY-MM-DD bucket
+// from the parsed due instant's local calendar (identical to the source string's date for the
+// date-only exports every vendor ships).
+function creatorDayBucket (t) {
+  const ms = (t && t.dayStart) || 0
+  if (!ms) return '0'
+  if (t.tz) {
+    try {
+      return new Intl.DateTimeFormat('en-CA', { timeZone: t.tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(ms))
+    } catch { /* unknown tz id: fall back to the reader-local calendar */ }
+  }
+  const d = new Date(ms)
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0')
+}
 function dedupKeyOf (t) {
-  return (t.taskContent || '').trim() + '|' + (t.dayStart || 0)
+  return (t.taskContent || '').trim() + '|' + creatorDayBucket(t)
 }
 
 /**
@@ -221,9 +241,11 @@ function importItems (items, { dryRun = false, format, category = null, useLists
     const dayStart = dayStartOf(it.due)
     // Tag suffix must be part of the dedup key: dedupKeyOf fingerprints stored taskContent, which
     // now carries the '#tag' tail — comparing against the bare title would re-import every rerun.
+    // The day component is the tz-stable YYYY-MM-DD bucket (see creatorDayBucket), not the raw ms.
     const tagSuffix = (it.tags || []).filter(Boolean).map(t => `#${String(t).replace(/\s+/g, '')}`).join(' ')
     const content = tagSuffix ? `${title} ${tagSuffix}` : title
-    const key = content + '|' + dayStart
+    const dayBucket = dayStart ? dayjs(dayStart).format('YYYY-MM-DD') : '0'
+    const key = content + '|' + dayBucket
     if (existing.has(key)) { report.duplicates++; report.tasks.push({ title, action: 'duplicate' }); continue }
     existing.add(key) // identical rows inside one file are deduped too
     const categoryId = fixedCategoryId != null ? fixedCategoryId
