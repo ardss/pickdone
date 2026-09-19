@@ -184,7 +184,10 @@ function createServerRoleHandler(deps) {
         // sync round applied their metadata rows. Served over the same encrypted session with
         // per-file hash + chunked frames + per-peer rate cap (att-transfer.js). No-op when the
         // caller did not wire a server (attachment serving is optional per node).
-        if (serveAttachments) serveAttachments(peer, msg, sendVia)
+        // serveAttachments expects a ONE-ARG send(msg); sendVia is (socket, msg) — adapt
+        // the raw socket in (2026-09-19: passing sendVia directly made every att-meta/
+        // att-chunk reply throw, so the requester's pull always starved to its deadline).
+        if (serveAttachments) serveAttachments(peer, msg, (m) => sendVia(socket, m))
       }
     } catch (err) {
       try { require('electron-log').warn('[LanSync] server handler failed:', err && err.message) } catch { /* noop */ }

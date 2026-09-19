@@ -143,3 +143,25 @@ test('att: missing-on-both-sides flows cleanly through the node-level message co
   assert.equal(receiver.written.length, 0)
   assert.ok(session.failed.has('gone.png'), 'peer-lacks-file lands in the failed set (a later SESSION may retry)')
 })
+
+test('att: a throwing send is round-isolated - batch marked failed, maybeStart reports "not started"', () => {
+  // Regression 2026-09-19: opts.send used to be allowed to throw out of maybeStart, which the
+  // round's message dispatch turned into finish(err) — one broken attachment send then failed
+  // EVERY sync round until the file appeared. The puller must swallow the error, mark the batch
+  // in the per-session failed set, and let the round finish cleanly.
+  const session = { failed: new Set(), requests: new Map() }
+  const receiver = memDeps({})
+  const puller = att.createAttachmentPuller({
+    send: () => { throw new Error('sendVia: socket has no encrypted send path') },
+    deps: receiver.deps,
+    getKeys: () => ['a.png', 'b.pdf'],
+    session,
+  })
+  let doneCbCalled = false
+  assert.equal(puller.maybeStart(() => { doneCbCalled = true }, () => {}), false,
+    'maybeStart reports "no request sent" so the caller finishes the round without error')
+  assert.equal(doneCbCalled, false)
+  assert.deepEqual([...session.failed].sort(), ['a.png', 'b.pdf'], 'the batch landed in the failed set (no retry loop)')
+  // A later attempt must not re-request the failed keys (empty batch -> false, round still clean).
+  assert.equal(puller.maybeStart(() => {}, () => {}), false)
+})
