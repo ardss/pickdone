@@ -31,6 +31,10 @@ const MAX_BYTES_PER_ROUND = 64 * 1024 * 1024
 // Per-session per-peer request cap (rate guard): a pathological library cannot spam a
 // peer with unbounded att-req batches; later sessions reset the budget.
 const MAX_REQUESTS_PER_SESSION = 200
+// P2-e (2026-09-19 data-safety round): failed-set entries expire after 24h — a file that failed
+// once (peer offline, transient write error) becomes pullable again the next day instead of
+// being blocked for the whole app-session lifetime.
+const FAILED_TTL_MS = 24 * 60 * 60 * 1000
 
 /* ---------- pure helpers (unit-tested) ---------- */
 
@@ -91,11 +95,33 @@ function defaultDeps () {
     size: key => { try { return fs.statSync(path.join(attachDir(), path.basename(String(key)))).size } catch { return 0 } },
     read: (key, start, end) => fs.readFileSync(path.join(attachDir(), path.basename(String(key)))).slice(start, end + 1),
     writeAtomic: (key, buf) => {
+      // P2-c (2026-09-19 data-safety round): never silently overwrite an existing local file with
+      // DIFFERENT content under the same basename (two devices can mint the same filename for
+      // different files — an overwrite would corrupt the first todo's attachment). Identical
+      // content is a dedup no-op; differing content renames the incoming file with a numeric
+      // suffix (mirrors attachments.js nextFreePath semantics).
+      // P2-b: the tmp file is unlinked in finally — a rename failure used to leave .att-tmp-*
+      // residue that accumulated across retries.
       const dst = path.join(attachDir(), path.basename(String(key)))
       const tmp = `${dst}.att-tmp-${Date.now()}-${Math.floor(Math.random() * 1e6)}`
-      fs.writeFileSync(tmp, buf)
-      fs.renameSync(tmp, dst)
-      return true
+      let finalDst = dst
+      try {
+        fs.writeFileSync(tmp, buf)
+        if (fs.existsSync(dst)) {
+          let same = false
+          try { same = sha256Hex(fs.readFileSync(dst)) === sha256Hex(buf) } catch { same = false }
+          if (same) return true // already have this exact content
+          const ext = path.extname(dst)
+          const stem = dst.slice(0, dst.length - ext.length)
+          let n = 1
+          while (fs.existsSync(`${stem}-${n}${ext}`)) n += 1
+          finalDst = `${stem}-${n}${ext}`
+        }
+        fs.renameSync(tmp, finalDst)
+        return true
+      } finally {
+        try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp) } catch { /* best-effort cleanup */ }
+      }
     },
   }
 }
@@ -174,19 +200,34 @@ function createAttachmentPuller (opts = {}) {
   const maxFileBytes = Number(opts.maxFileBytes) || MAX_FILE_BYTES
   const maxFiles = Number(opts.maxFiles) || MAX_FILES_PER_ROUND
   const maxBytes = Number(opts.maxBytes) || MAX_BYTES_PER_ROUND
-  const session = opts.session || { failed: new Set(), requests: new Map() }
+  // P2-e: the failed-set carries TIMESTAMPS (Map id -> failedAt ms); entries older than
+  // FAILED_TTL_MS no longer count as failed. A legacy Set session (older caller) is adapted.
+  const rawSession = opts.session || { failed: new Map(), requests: new Map() }
+  const failedSet = rawSession.failed instanceof Set ? rawSession.failed : (rawSession.failed instanceof Map ? rawSession.failed : new Map())
+  const session = { ...rawSession, failed: failedSet }
+  const failedAt = id => (failedSet instanceof Map ? failedSet.get(id) : (failedSet.has(id) ? 0 : undefined))
+  const isFailed = id => {
+    if (!failedSet.has(id)) return false
+    const at = failedAt(id)
+    if (failedSet instanceof Map && typeof at === 'number' && Date.now() - at > FAILED_TTL_MS) {
+      failedSet.delete(id) // expired: pullable again
+      return false
+    }
+    return true
+  }
   const pending = [] // keys queued for THIS round
   let busy = false
   let onDone = null
   let current = null // {id, size, hash, chunks: Map<index,buf>, received}
   let requested = false
+  let requestedBatch = new Set() // P2-a: ids actually requested this round (unsolicited frames rejected)
   let settled = false
   let receivedBytes = 0 // round budget accounting (actual att-meta sizes)
 
   /** Queue keys observed missing on disk (deduped against the session failed-set). */
   function noteMissing (keys) {
     for (const key of keys || []) {
-      if (session.failed.has(key)) continue
+      if (isFailed(String(key))) continue
       if (!pending.includes(key)) pending.push(key)
     }
   }
@@ -209,6 +250,7 @@ function createAttachmentPuller (opts = {}) {
     }
     if (!batch.length) return false
     session.requests.set(peerId, used + 1)
+    requestedBatch = new Set(batch) // P2-a: only these ids may come back as att-meta
     try {
       opts.send({ type: 'att-req', ids: batch })
     } catch (err) {
@@ -236,7 +278,8 @@ function createAttachmentPuller (opts = {}) {
   }
 
   function markFailed (id) {
-    session.failed.add(id)
+    if (failedSet instanceof Map) failedSet.set(id, Date.now())
+    else failedSet.add(id)
     current = null
   }
 
@@ -247,13 +290,27 @@ function createAttachmentPuller (opts = {}) {
   function onMessage (msg) {
     const type = msg && msg.type
     if (type === 'att-meta') {
-      if (Number(msg.size) > maxFileBytes) { markFailed(String(msg.id)); return true }
-      if (receivedBytes + Number(msg.size) > maxBytes) {
+      // P2-a (2026-09-19 data-safety round): reject UNSOLICITED att-meta frames — an id we did
+      // not request in this round's batch must never open a receive session (a compromised or
+      // buggy peer cannot push arbitrary files into the round's byte budget).
+      if (!requestedBatch.has(String(msg.id))) {
+        try { require('electron-log').warn('[LanSync] unsolicited att-meta rejected:', String(msg.id)) } catch { /* noop */ }
+        return true
+      }
+      // P2-b: size must be a finite positive number within the single-file cap — NaN used to
+      // poison the byte budget (`receivedBytes + NaN > maxBytes` is false, so NaN sizes sailed
+      // through and then `|| 0` recorded 0 received bytes while chunks still arrived).
+      const size = Number(msg.size)
+      if (!Number.isFinite(size) || size <= 0 || size > maxFileBytes) {
+        try { require('electron-log').warn('[LanSync] att-meta invalid size, treated as protocol error:', String(msg.id), msg.size) } catch { /* noop */ }
+        markFailed(String(msg.id)); return true
+      }
+      if (receivedBytes + size > maxBytes) {
         try { require('electron-log').warn('[LanSync] attachment exceeds round byte budget, skipped:', String(msg.id)) } catch { /* noop */ }
         markFailed(String(msg.id)); return true
       }
-      receivedBytes += Number(msg.size) || 0
-      current = { id: String(msg.id), size: Number(msg.size) || 0, hash: String(msg.hash || ''), chunks: new Map(), received: 0 }
+      receivedBytes += size
+      current = { id: String(msg.id), size, hash: String(msg.hash || ''), chunks: new Map(), received: 0 }
       return true
     }
     if (type === 'att-chunk') {
@@ -309,6 +366,7 @@ module.exports = {
   MAX_FILES_PER_ROUND,
   MAX_BYTES_PER_ROUND,
   MAX_REQUESTS_PER_SESSION,
+  FAILED_TTL_MS,
   extractLocalKeys,
   collectMissingKeys,
   createAttachmentServer,

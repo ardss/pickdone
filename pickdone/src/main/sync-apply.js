@@ -46,8 +46,18 @@ const isMachineLocalMetaKey = id => {
   return k.startsWith('sync.') || k.startsWith('_') || /^securityLock/.test(k) ||
     k.startsWith('cliTomato') || k === 'todosVersion' || k.startsWith('firedReminders:') ||
     k === 'reminderLastSeenAt' || k.startsWith('settingsRows.src.') ||
-    k === 'db.tomatoState' || k === 'habitsState'
+    k === 'db.tomatoState' || k === 'habitsState' ||
+    // P1-5 (2026-09-19 data-safety round): meta LWW conflict backups are per-device recovery
+    // copies of a LOSING local edit — they must stay local (syncing them would make the peer
+    // apply the loser as a live value and mint its own backup of the backup, forever).
+    // ALLOWLIST NOTE (P2-g): every key excluded here is deliberate machine-local state; any
+    // NEW user-data meta key must NOT be added to this filter or it silently stops syncing.
+    k.startsWith(META_CONFLICT_BACKUP_PREFIX)
 }
+
+// P1-5: prefix for dated meta conflict-backup keys (see the meta branch in applyRowInner).
+const META_CONFLICT_BACKUP_PREFIX = 'metaConflictBackup.'
+const META_CONFLICT_BACKUP_CAP = 20
 // The settings/habits blobs are deliberately EXCLUDED from meta sync: they already sync
 // FIELD-GRANULAR via the `setting` entity (the db-sync-schema setMeta bridge mirrors every blob
 // field into settings_rows). Syncing the blob itself would apply whole-blob LWW and let the
@@ -257,6 +267,27 @@ function hasEquivalentConflictCopy (state, baseId, loserData) {
   return false
 }
 
+/**
+ * P1-5: persist one losing meta value under a dated backup key and prune older backups for the
+ * same base key beyond META_CONFLICT_BACKUP_CAP. Best-effort: a backup failure must never fail
+ * the apply (the LWW winner still lands). Backup keys are machine-local (see the
+ * isMachineLocalMetaKey filter) so they never sync back to the peer.
+ */
+function writeMetaConflictBackup (state, key, value) {
+  try {
+    const ts36 = Date.now().toString(36)
+    const backupKey = `${META_CONFLICT_BACKUP_PREFIX}${key}.${ts36}`
+    state.db.call('setMeta', [backupKey, JSON.stringify({ key, value, lostAt: Date.now() })])
+    // Prune: keep only the latest META_CONFLICT_BACKUP_CAP backups per base key.
+    const prefix = `${META_CONFLICT_BACKUP_PREFIX}${key}.`
+    const keys = (state.db.call('listMetaKeys') || []).filter(k => String(k).startsWith(prefix)).sort()
+    for (const old of keys.slice(0, Math.max(0, keys.length - META_CONFLICT_BACKUP_CAP))) {
+      try { state.db.call('deleteMeta', old) } catch { /* prune is best-effort */ }
+    }
+    log.warn('[LanSync] meta LWW conflict on', key, '— loser backed up as', backupKey)
+  } catch (e) { log.warn('[LanSync] meta conflict backup failed for', key, e.message) }
+}
+
 function applyRowInner (state, incoming) {
   if (!incoming || !SYNCABLE_ENTITIES.has(incoming.entity)) return false
   // Defensive: a '*gc*' oplog marker must never surface as an appliable row id (see hydrateRow).
@@ -366,6 +397,19 @@ function applyRowInner (state, incoming) {
       }
       // P1-5: the user-facing toast is driven by the round summary (one per round, see markConflict)
       markConflict(state, 'todo', (conflictCopy.data && conflictCopy.data.taskContent) || baseId, false)
+    } else if (entity === 'meta' && conflictCopy && conflictCopy.data) {
+      // P1-5 (2026-09-19 data-safety round): a content-differing LWW loss on a meta key used to
+      // be silently dropped (whole-document KV, no recycle-bin shape). Materialize the loser as
+      // a dated backup key `metaConflictBackup.<key>.<ts36>` (self-healing: capped at the latest
+      // 20 per implementation cap) so the losing value stays recoverable, and include it in the
+      // per-round conflict summary (the existing toast fires via consumeAppliedRound). Announce
+      // keys (tomatoRunAnnounce.*) are ephemeral runtime state — no backup for those. A null
+      // loser value means the key was ABSENT locally (mergeTodoRows fabricates a data=null
+      // localRow) — nothing was lost, no backup.
+      if (!require('./tomato-announce').isAnnounceKey(incoming.id) && conflictCopy.data.value != null) {
+        writeMetaConflictBackup(state, String(incoming.id), conflictCopy.data.value)
+      }
+      markConflict(state, 'meta', incoming.id, true)
     } else {
       log.warn('[LanSync] conflict on', entity, incoming.id, '— local copy superseded (conflict-copy UI deferred)')
       // P1-5: non-todo losers are applied wholesale (LWW) — tell the user the peer's version won
@@ -531,9 +575,15 @@ function consumeAppliedRound (state) {
  * replaceAll, and before the transport sends its round ack — a peer's push cursor may only advance
  * over rows that are already committed here (crash mid-buffer = rows unapplied, cursor stays, the
  * next round re-pushes; same crash semantics as commitSyncBatch §4.1).
+ *
+ * P0-1 (2026-09-19 data-safety round): the flush now REPORTS failure ({ ok: false }) instead of
+ * only logging — the bootstrap propagates it as `flushFailed` on the ingestSegment result so the
+ * receiver's ack stays BELOW the failed segment (the sender keeps its push watermark, re-pushes)
+ * and the snapshot trigger force-arms. A dropped buffer must never be acked as applied.
  */
 function flushPendingWrites (state) {
   const buf = state.pendingWrites
+  let ok = true
   // Per-buffer-op isolation (round-3 review): ONE malformed row used to throw out of a single
   // bulk op and leave every buffer dirty — the throw re-fired on every later flush, wedging
   // apply AND flush forever (poison-pill row). Now each op gets its own try/catch: a failing op
@@ -542,6 +592,7 @@ function flushPendingWrites (state) {
   const flushOne = (list, op) => {
     if (!list || !list.length) return
     try { state.db.call(op, list) } catch (e) {
+      ok = false
       log.error(`[LanSync] flush ${op} failed — dropping ${list.length} buffered rows (recoverable via snapshot):`, e && e.message)
     }
   }
@@ -557,6 +608,7 @@ function flushPendingWrites (state) {
   if (buf.categories) buf.categories = []
   if (buf.plans) buf.plans = []
   if (buf.filters) buf.filters = []
+  return { ok } // P0-1: false = at least one bulk op threw; the segment must not be acked
 }
 
 /**
@@ -578,6 +630,8 @@ function readMaxOplogSeq (state) {
 module.exports = {
   SYNCABLE_ENTITIES,
   SECURITY_LOCK_KEY,
+  META_CONFLICT_BACKUP_PREFIX,
+  META_CONFLICT_BACKUP_CAP,
   // Exported (2026-09-19): lan-sync-bootstrap destructures this for allRows()/hydration skips —
   // the missing export made every allRows() call (legacy seed, snapshot serving) throw TypeError.
   isMachineLocalSettingKey,
@@ -594,4 +648,5 @@ module.exports = {
   consumeAppliedRound,
   flushPendingWrites,
   readMaxOplogSeq,
+  writeMetaConflictBackup,
 }

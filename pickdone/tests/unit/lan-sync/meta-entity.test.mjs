@@ -83,7 +83,16 @@ test('meta: LWW — a locally newer value stands, an older inbound row is droppe
     syncOplogSince: () => [{ seq: 1, entity: 'meta', entityId: 'tomatoEstimateState', ts: 100 }],
   })
   assert.equal(syncApply.applyRowSafe(m2.state, { entity: 'meta', id: 'tomatoEstimateState', seq: 9, ts: 900, updatedAt: 900, deleted: false, deletedAt: 0, data: { key: 'tomatoEstimateState', value: 'remote-newer' } }), true)
-  assert.deepEqual(opCalls(m2, 'setMeta')[0].params, ['tomatoEstimateState', 'remote-newer'])
+  // P1-5 (2026-09-19 data-safety round): the losing LOCAL value is backed up under a dated
+  // metaConflictBackup.* key BEFORE the winner lands — recoverable, not silently dropped.
+  // Backup keys are machine-local (never egress) and capped (writeMetaConflictBackup prunes).
+  const puts = opCalls(m2, 'setMeta')
+  assert.equal(puts.length, 2, 'one conflict backup + the winner write')
+  assert.match(String(puts[0].params[0]), /^metaConflictBackup\.tomatoEstimateState\./, 'loser backed up under the dated prefix')
+  const backup = JSON.parse(puts[0].params[1])
+  assert.equal(backup.key, 'tomatoEstimateState')
+  assert.equal(backup.value, 'local', 'backup carries the losing value')
+  assert.deepEqual(puts[1].params, ['tomatoEstimateState', 'remote-newer'], 'the winner still lands')
 })
 
 test('meta: identical content is a no-op (no per-round echo pointer churn)', () => {
