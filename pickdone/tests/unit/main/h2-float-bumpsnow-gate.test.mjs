@@ -21,7 +21,7 @@ const stubs = {
     app: { getPath: () => fs.mkdtempSync(path.join(os.tmpdir(), 'h2-float-audit-')), isPackaged: false }
   },
   '../tomato-float': { isSelfSender: () => true, isFloatSender: () => true },
-  '../scheduler': { reminderInstances: () => [], scheduleOne () {}, reloadAll () {} },
+  '../scheduler': { reminderInstances: () => [], needsCatchUp: () => false, scheduleOne () {}, reloadAll () {} },
   '../audit': { recordAppOp () {}, setDirResolver () {} }
 }
 const origLoad = Module._load

@@ -1,6 +1,7 @@
 /** CSV import IPC handlers (pure relocation from index.js registerIpc). */
 const fs = require('fs')
 const path = require('path')
+const crypto = require('crypto')
 const { Worker } = require('worker_threads')
 // electron is unavailable when this module is loaded outside Electron (unit tests) — tolerate
 let app = null
@@ -61,11 +62,19 @@ function runImportParse (text, format = 'auto') {
   })
 }
 
+/** sha256 of the exact previewed text (TOCTOU guard, fix 2026-09-19): import:run compares the file's
+ *  current content hash against the one approved at preview so the user never executes report B having
+ *  approved report A when the file changed between the two IPC calls. */
+function textHash (text) {
+  return crypto.createHash('sha256').update(String(text), 'utf8').digest('hex')
+}
+
 module.exports = function importHandlers (ctx) {
   const { getMainWindow, dbApi, broadcastTodosChanged, log, resyncDbWatch } = ctx
   const assertMainWindow = makeAssertMainWindow(getMainWindow)
 
   let lastPickedImportPath = '' // the only legitimate path source for import:run (the import:pick-preview dialog)
+  let lastPickedImportHash = '' // sha256 of the exact text the user previewed/approved
 
   return {
     // --- CSV import (migrating from other apps): reuses the CLI's cli/import.js engine; both preview and execution go through the main process ---
@@ -87,10 +96,12 @@ module.exports = function importHandlers (ctx) {
       if (tooBig) return { ok: false, code: 'USAGE', message: tooBig }
       try {
         const text = fs.readFileSync(file, 'utf8')
+        lastPickedImportHash = textHash(text) // remember what the user actually approved (TOCTOU guard below)
         // rowsToItems 在数十万行时同步阻塞主进程数秒:解析移入 worker 线程(2026-09-12 W1)
         const { format, items } = await runImportParse(text)
         return { ok: true, file, report: importer.importItems(items, { format, dryRun: true }) }
       } catch (err) {
+        lastPickedImportHash = '' // failed preview granted nothing: run must re-preview before executing
         // code (FORMAT_UNKNOWN/EMPTY_FILE) rides along when the worker supplied one; undefined code
         // falls back to the renderer's generic import-failed copy
         return { ok: false, code: err && err.code, message: (err && err.message) || String(err) }
@@ -106,8 +117,15 @@ module.exports = function importHandlers (ctx) {
       // between import:pick-preview and import:run (TOCTOU on the 20MB cap)
       const tooBig = fixUtil.checkImportFileSize(fs.statSync(f).size)
       if (tooBig) throw new Error(tooBig)
-      // same pipeline as importer.importFile, but the text->items parse runs in the worker thread
+      // TOCTOU content guard (fix 2026-09-19): the file must still be byte-identical to what the user
+      // previewed and approved. A changed file previously re-parsed silently — report A approved, report
+      // B executed. Abort with a clear error (plus an audit line) and force a fresh preview.
       const text = fs.readFileSync(f, 'utf8')
+      if (!lastPickedImportHash || textHash(text) !== lastPickedImportHash) {
+        try { appAudit.recordCustom('import', ['import:run', f], [], [], 'aborted: file changed since preview (hash mismatch), re-preview required') } catch { /* best-effort */ }
+        throw new Error('import: file changed since preview — re-run preview to approve the current content')
+      }
+      // same pipeline as importer.importFile, but the text->items parse runs in the worker thread
       const { format, items } = await runImportParse(text)
       if (!['ticktick', 'dida365', 'todoist'].includes(format)) {
         throw new Error(`unknown format "${format}" (valid: auto|ticktick|dida365|todoist)`)

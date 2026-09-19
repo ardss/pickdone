@@ -26,6 +26,7 @@
 </template>
 
 <script lang="ts">
+import { wouldCycle } from '../../utils/deps.js'
 /**
  * EditPanel dependencies block (S4 split 2026-09-12): predecessor multi-select
  * (experimental feature). Reads the todo store directly for names/candidates and
@@ -67,6 +68,9 @@ export default {
       const self = this.task && this.task.taskId
       return this.$store.state.todo.todoList
         .filter(t => !t.delete && !t.complete && t.taskId !== self && !have.has(t.taskId) && t.taskContent)
+        // Cycle-closing candidates never appear: picking one used to fail the store's write-time
+        // wouldCycle guard with a generic save-failure toast (same DFS helper as store/todo.js)
+        .filter(t => !self || !wouldCycle(this.$store.state.todo.todoList, self, this.depPreds.concat(t.taskId)))
     },
     addPred (id) {
       if (!id || this.depPreds.includes(id)) return

@@ -16,6 +16,9 @@
  */
 
 const SYNC_BLOB_KEYS = ['db.settingsState', 'db.habitsState']
+// Belt and braces (2026-09-19): pre-rename installs wrote the habits blob under the bare 'habitsState'
+// meta key; normalize either spelling to the canonical db.* key so migrateV6/bridge migrate both.
+const canonBlobKey = k => k === 'habitsState' ? 'db.habitsState' : k
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS settings_rows (
@@ -77,8 +80,11 @@ module.exports = ({ getDb, log }) => {
     // retries the blob — the "retry next boot" promise in the old comment was dead because this
     // function unconditionally returned true after `continue`).
     let pendingRetry = 0
-    for (const blobKey of SYNC_BLOB_KEYS) {
-      const blob = d.prepare('SELECT value FROM meta WHERE key = ?').get(blobKey)
+    for (const rawKey of [...SYNC_BLOB_KEYS, 'habitsState']) {
+      const blobKey = canonBlobKey(rawKey)
+      // The blob is stored under the RAW key as the writer spelled it; canonical key is only used
+      // for the snapshot marker so both spellings share one migration bookkeeping row.
+      const blob = d.prepare('SELECT value FROM meta WHERE key = ?').get(rawKey)
       if (!blob) continue // never written on this device: nothing to split
       const snapKey = 'settingsRows.src.' + blobKey
       const snap = d.prepare('SELECT value FROM meta WHERE key = ?').get(snapKey)
@@ -106,11 +112,12 @@ module.exports = ({ getDb, log }) => {
     OPS.setMeta = (k, v) => {
       if (Array.isArray(k)) { v = k[1]; k = k[0] }
       const r = rawSetMeta(k, v)
-      if (SYNC_BLOB_KEYS.includes(k)) {
+      const blobKey = canonBlobKey(k)
+      if (SYNC_BLOB_KEYS.includes(blobKey)) {
         let doc = null
         try { doc = JSON.parse(v) } catch (e) { /* bridge mirrors parseable docs only */ }
         const changed = doc ? mergeDoc(doc) : []
-        const snapKey = 'settingsRows.src.' + k
+        const snapKey = 'settingsRows.src.' + blobKey
         // P1 2026-09-17: only stamp the snapshot for PARSEABLE docs — stamping an unparseable blob
         // made migrateV6's "already migrated in this exact shape" guard skip the corruption retry.
         if (doc) getDb().prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(snapKey, String(v))

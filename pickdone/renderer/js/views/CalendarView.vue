@@ -127,8 +127,7 @@ export default {
     return { cal: null, cursorTs: 0, lunarMap: {}, view: 'dayGridMonth', tbWeekStart: 0, tbDragTask: null, morePop: null, busyDays: null, monthPop: false, popYear: dayjs().year(), selMonthTs: 0, todayInView: true }
   },
   computed: {
-    /* ===== Time block view ===== */
-    tbDays () {
+    /* ===== Time block view ===== */ tbDays () {
       const start = this.tbWeekStart || +dayjs().startOf('week')
       const today = +dayjs().startOf('day')
       return Array.from({ length: 7 }, (_, i) => {
@@ -792,6 +791,7 @@ html[data-theme="dark"] .day-expand-btn:hover { background: var(--gray-bg, #2226
 .fc .fc-daygrid-day-number .lunar{margin-left:5px;color:#9b9b9b;font-size:inherit}
 .fc .fc-daygrid-day-number .holiday{color:#fff;background:var(--brand)}
 .fc .fc-daygrid-day-number .work{color:#016d6e;background:#c7e4e4}
+/* 调休班徽标暗色:半透明品牌色(同09-18 #f5fafb 修法) */ html[data-theme="dark"] .fc .fc-daygrid-day-number .work{color:var(--brand-bright, #35c2ae);background:rgba(15, 157, 143, .18)}
 .fc .fc-col-header-cell-cushion{color:var(--brand-dark);font-weight:400;font-size: var(--fs-base);padding:8px}
 .fc .fc-daygrid-more-link{display:block}
 .fc .fc-popover{position:fixed!important;z-index:var(--z-fc-popover)!important}

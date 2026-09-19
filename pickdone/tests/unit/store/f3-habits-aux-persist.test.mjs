@@ -24,7 +24,7 @@ test('habits persist: 主窗(hash 无辅助窗标记)直写 setMeta(原行为保
   const s = habitsStore.state()
   habitsStore.mutations.addHabit(s, { name: '主窗习惯' })
   assert.equal(calls.setMeta.length, 1, '主窗直写 DB')
-  assert.equal(calls.setMeta[0][0], 'habitsState')
+  assert.equal(calls.setMeta[0][0], 'db.habitsState')
   assert.equal(isAuxWindow(), false)
 })
 

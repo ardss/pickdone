@@ -12,7 +12,7 @@
       <!-- Create habit (with frequency selection) -->
       <div class="habit-add">
         <input v-model="newHabit" class="habit-add-input" :placeholder="$t('statsB.HabitView.habitPlaceholder')"
-               :aria-label="$t('statsB.HabitView.habitAria')" @keydown.enter="addHabit"/>
+               :aria-label="$t('statsB.HabitView.habitAria')" @keydown.enter.prevent="e => { if (e.isComposing || e.keyCode === 229) return; addHabit() }"/>
         <select v-model="freqType" class="habit-add-input habit-freq-select" :aria-label="$t('statsP.HabitView.freqAria')">
           <option value="daily">{{ $t('statsB.HabitView.freqDaily') }}</option>
           <option value="weekdays">{{ $t('statsB.HabitView.freqWeekdays') }}</option>
@@ -40,7 +40,7 @@
                 :style="h.records && h.records[todayKey] ? { background: h.color, borderColor: h.color } : {}"
                 @click="check(h)" @keydown.enter.prevent="check(h)">✓</span>
           <template v-if="editingId === h.id">
-            <input v-model="editName" class="habit-rename" @keyup.enter="saveRename(h)" @blur="saveRename(h)"
+            <input v-model="editName" class="habit-rename" @keydown.enter.prevent="e => { if (e.isComposing || e.keyCode === 229) return; saveRename(h) }" @blur="saveRename(h)"
                    @keydown.esc.prevent="cancelRename(h)"/>
           </template>
           <template v-else>

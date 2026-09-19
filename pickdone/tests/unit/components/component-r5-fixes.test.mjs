@@ -140,7 +140,9 @@ test('HabitView: month nav mini arrows have aria-labels', () => {
 
 test('HabitView: rename input supports Esc to cancel (restore original name, exit edit mode)', () => {
   const src = read('views/HabitView.vue')
-  assert.match(src, /habit-rename[^>]*@keydown\.esc\.prevent="cancelRename\(h\)"/s)
+  // d4: the rename input gained an IME-guarded keydown.enter handler containing "=>", so the
+  // element scan must not rely on [^>] (no ">" allowed) — match within the tag instead
+  assert.match(src, /habit-rename[\s\S]*?@keydown\.esc\.prevent="cancelRename\(h\)"/)
   assert.match(src, /cancelRename \(h\) \{ this\.editName = h\.name; this\.editingId = null \}/)
 })
 

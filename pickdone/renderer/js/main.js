@@ -208,6 +208,9 @@ async function bootstrap () {
         _todosChangedTail = setTimeout(_reloadExternal, 1600)
         return
       }
+      // Direct path must cancel any pending trailing reload — otherwise an echo-window trailing
+      // timer followed by a direct reload runs _reloadExternal twice (double full reload)
+      clearTimeout(_todosChangedTail)
       _reloadExternal()
     }, 500)
   })
@@ -447,7 +450,11 @@ async function bootstrap () {
         break
       }
       case 'switchToDaytodo': router.push({ name: 'todo-list-today' }).catch(() => {}); break
-      case 'switchToRecentTodos': router.push({ name: 'todo-list-today' }).catch(() => {}); break
+      // "Recent todos" has no dedicated non-experimental route: todo-list-today (TodayView) is the
+      // dated today list, todo-list-today-x (TodayXView, "now/next" focus experiment) is the closest
+      // match for the shortcut label — genuinely ambiguous, wired to today-x per the shortcut's
+      // "switch to recent" semantics (dev-gated; when hidden the route still resolves via router)
+      case 'switchToRecentTodos': router.push({ name: 'todo-list-today-x' }).catch(() => {}); break
       case 'switchToSchedule': router.push({ name: 'todo-list-calendar' }).catch(() => {}); break
       case 'switchToInbox': router.push({ name: 'todo-list-todo-box' }).catch(() => {}); break
     }

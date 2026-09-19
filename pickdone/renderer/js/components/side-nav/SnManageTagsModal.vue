@@ -7,7 +7,7 @@
     <div v-for="t in tags" :key="t.name" class="cat-mgr-row cat-mgr-row--tag">
       <i class="cat-mgr-drag" :title="$t('statsG.SideNav.tagTitle')"><app-icon name="tag" :size="13"/></i>
       <input v-if="tagMgrEditing===t.name" v-model="tagMgrName" class="sn-cat-edit"
-             @keyup.enter="renameTag(t)" @blur="renameTag(t)"/>
+             @keydown.enter.prevent="e => { if (e.isComposing || e.keyCode === 229) return; renameTag(t) }" @blur="renameTag(t)"/>
       <span v-else class="cat-mgr-name" role="button" tabindex="0" :title="$t('statsG.SideNav.clickRenameTitle')"
             @click="startTagEdit(t)" @keydown.enter.prevent="startTagEdit(t)">{{t.name}}</span>
       <em class="cat-mgr-count">{{ $t('statsG.SideNav.countItems', { n: t.count }) }}</em>

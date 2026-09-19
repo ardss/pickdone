@@ -41,13 +41,54 @@ function criticalBackupPath (ud) {
   return external // when neither exists, return the new default write location
 }
 
-/** Tiered recovery of a corrupted DB: returns {source,label} (source ∈ 'plain-bak'|'json'; null = nothing recoverable).
- *  source is the structured branch flag — display strings must never drive logic (a copy rewrite once silently killed the JSON branch). Corrupt files are always renamed and preserved, never deleted. */
+/** SQLite files start with the 16-byte magic "SQLite format 3\0". A todos.db whose header still
+ *  carries the magic is NOT corrupt — an init failure over it was transient (lock held, WAL race,
+ *  disk pressure) and renaming it aside would destroy the user's real data in exchange for a stale
+ *  backup. Best-effort: unreadable/short file → header treated as bad. */
+const SQLITE_MAGIC = 'SQLite format 3\x00'
+function sqliteHeaderOk (file) {
+  try {
+    const fd = fs.openSync(file, 'r')
+    try {
+      const buf = Buffer.alloc(16)
+      const bytesRead = fs.readSync(fd, buf, 0, 16, 0) // fs.readSync returns the byte count directly
+      return bytesRead === 16 && buf.toString('binary') === SQLITE_MAGIC
+    } finally { fs.closeSync(fd) }
+  } catch { return false }
+}
+
+/** Tiered recovery of a corrupted DB: returns {source,label} (source ∈ 'plain-bak'|'json'|'transient'; null = nothing recoverable).
+ *  source is the structured branch flag — display strings must never drive logic (a copy rewrite once silently killed the JSON branch). Corrupt files are always renamed and preserved, never deleted.
+ *  P2 2026-09-19: an existence-only recoverable-source check used to rename a HEALTHY todos.db on a
+ *  transient init failure (lock held / WAL race). Now: when the main file's SQLite header is intact
+ *  the DB is NEVER treated as corrupt — retry init once (optional `retryInit` callback); 'retry-ok'
+ *  = retry succeeded, 'transient' = retry failed but the file is still healthy. Only a wrong header
+ *  AND a recoverable source proceed to the rename path. */
 /** 恢复优先级 = JSON 优先于 plain-bak(2026-09-04 深审 P0 倒置修复):critical JSON 是渲染端持续覆盖的最新快照,
  *  .plain-bak 是加密迁移那一刻的一次性快照、之后永不更新——旧的"plain-bak 优先"会在迁移一年后损坏时恢复一年前数据。
  *  .corrupt-* 现场只保留最近 3 套,更早的删除(无限累积曾无治理)。 */
-function attemptDbRecovery (ud) {
+function attemptDbRecovery (ud, retryInit) {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+  const mainDb = path.join(ud, 'todos.db')
+  // P2 2026-09-19: healthy header → the DB itself is fine; the init failure was transient. Retry
+  // init once when a hook is provided; regardless of the retry outcome a header-intact DB is never
+  // renamed — "corrupt" requires a WRONG header, not merely a failed init.
+  if (fs.existsSync(mainDb) && sqliteHeaderOk(mainDb)) {
+    if (typeof retryInit === 'function') {
+      try {
+        const retried = retryInit()
+        if (retried && typeof retried.then === 'function') {
+          // async retry not supported by the sync recovery contract
+          return { source: 'transient', label: 'transient init failure; SQLite header intact (no rename performed)' }
+        }
+        return { source: 'retry-ok', label: 'transient init failure; SQLite header intact, retry succeeded (no rename performed)' }
+      } catch {
+        return { source: 'transient', label: 'transient init failure persists; SQLite header intact, recovery NOT performed (healthy DB preserved)' }
+      }
+    }
+    // No retry hook available: still never rename a header-healthy DB on an existence-only guess.
+    return { source: 'transient', label: 'transient init failure; SQLite header intact (no rename performed)' }
+  }
   // Confirm a recoverable source exists before renaming: transient IO errors (disk full/lock held) also make init fail; renaming unconditionally
   // would mislabel the user's current database as .corrupt and fall back to a stale backup or even an empty DB
   const plainBakExists = fs.existsSync(path.join(ud, 'todos.db.plain-bak'))

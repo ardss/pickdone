@@ -39,4 +39,23 @@ function purgeAttachmentFiles (attachDir, ids) {
   } catch (err) { log.warn('[Purge] 附件目录遍历失败:', err.message) }
 }
 
-module.exports = { makeAssertMainWindow, purgeAttachmentFiles, ownsAttachmentFile }
+/** Pure decision for the startup meta GC (extracted 2026-09-19 from index.js for unit testing —
+ *  the P1 fix itself is the `deleted: 0` filter at the getAll call site in index.js, so the
+ *  deleted/live boundary stays observable here): given meta keys, live categories and todo rows,
+ *  returns the orphan keys to delete. A repeatId referenced only by a recycle-bin row anchors its
+ *  rule ONLY if the caller passes deleted rows in — index.js passes `deleted: 0`, so deleted tasks
+ *  never keep repeatRule meta alive. Pure: returns keys, never performs IO. */
+function computeMetaGc (metaKeys, categories, todos) {
+  const live = new Set((categories || []).map(c => String(c.id || c.categoryId)))
+  const liveRids = new Set((todos || []).map(t => t.repeatId).filter(Boolean))
+  const dead = []
+  for (const k of metaKeys || []) {
+    let m = k.match(/^repeatRule:(.+)$/)
+    if (m && !liveRids.has(m[1])) { dead.push(k); continue }
+    m = k.match(/^(?:projectDeadline|projectMilestones):(.+)$/)
+    if (m && !live.has(m[1])) dead.push(k)
+  }
+  return dead
+}
+
+module.exports = { makeAssertMainWindow, purgeAttachmentFiles, ownsAttachmentFile, computeMetaGc }

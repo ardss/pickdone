@@ -6,14 +6,24 @@ function createQuitAckTracker () {
   let token = 0
   const acked = new Set()
   const abandoned = new Set()
+  const expectedSenders = new Set() // P2 2026-09-19: exact sender set when the caller passes ids
   let expected = 0
   return {
-    /** Open a new round; returns the token to broadcast. liveWindows = count of windows we sent to. */
+    /** Open a new round; returns the token to broadcast.
+     *  liveWindows: either a COUNT (legacy — any sender may ack) or the ARRAY of webContents ids we
+     *  actually sent to. P2 2026-09-19: with the id set, an ack from a sender we never sent to
+     *  (unexpected window / spoof) no longer satisfies allAcked() — only expected senders count. */
     beginRound (liveWindows, roundToken) {
       token = roundToken
       acked.clear()
       abandoned.clear()
-      expected = liveWindows
+      expectedSenders.clear()
+      if (Array.isArray(liveWindows)) {
+        for (const id of liveWindows) expectedSenders.add(id)
+        expected = expectedSenders.size
+      } else {
+        expected = liveWindows
+      }
       return token
     },
     /** Strictly increasing token generator (P2 2026-09-12): Date.now() collides within the same
@@ -23,9 +33,11 @@ function createQuitAckTracker () {
       token = Math.max(token + 1, Date.now())
       return token
     },
-    /** Record an ack; false when stale-token, sender-less, or a duplicate from the same sender. */
+    /** Record an ack; false when stale-token, sender-less, a duplicate from the same sender, or —
+     *  when the round was opened with an id set — from a sender outside the expected set. */
     ack (t, senderId) {
       if (t !== token || senderId == null || acked.has(senderId)) return false
+      if (expectedSenders.size > 0 && !expectedSenders.has(senderId)) return false
       acked.add(senderId)
       return true
     },

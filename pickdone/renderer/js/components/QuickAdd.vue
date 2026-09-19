@@ -125,8 +125,7 @@ export default {
         todoDate: resolveQuickAddDate({ pickedDate: this.effDate, parsedTs: null, inTodoBox: this.inTodoBox, todayTs: dayjs().startOf('day').valueOf() }),
         todoReminderTime: 0,
         todoDifficultyLevel: 0,
-        addToTop: false
-      }
+        }
       // Category/project page context: belong to the current list, not the global default category (otherwise the current page cannot see the created task)
       if (this.routeCategoryId != null) payload.categoryId = this.routeCategoryId
       await this.$store.dispatch('todo/addTodo', payload)

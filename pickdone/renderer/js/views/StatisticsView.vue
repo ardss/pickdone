@@ -650,15 +650,15 @@ html[data-theme="dark"] .review-card { background: var(--panel); }
 .tl-seg { position: absolute; top: 0; bottom: 0; border-radius: 2px; }
 /* 专注时段带:连续番茄(间隔<=10min)合并为一条圆角带,带底=休息浅色,带内实心块=专注;
    消除"一块专注一块休息"的砖块感,hover 带体报整段摘要(块级 hover 保留单番茄明细) */
-.tl-band { position: absolute; top: 0; bottom: 0; border-radius: var(--radius-sm, 4px); background: var(--line, #c9ced6); cursor: default; }
+.tl-band { position: absolute; top: 0; bottom: 0; border-radius: var(--radius-sm, 4px); background: var(--line, var(--line-strong, #c9ced6)); cursor: default; }
 .tl-band .tl-seg.unit { top: 2px; bottom: 2px; border-radius: 0; background: var(--brand); box-shadow: 1px 0 0 var(--panel, #fff); }
 /* 带内纯品牌色直角相连(圆角会产生接缝);1px 白线仅作番茄分隔刻度 */
 /* 一个番茄=一个单元块：专注主体(品牌绿)+紧连的休息尾巴(灰)，--ff 为专注占比分割点(内联覆盖) */
-.tl-seg.unit { --ff: 80%; background: linear-gradient(to right, var(--brand) var(--ff), #c9ced6 var(--ff)); }
+.tl-seg.unit { --ff: 80%; background: linear-gradient(to right, var(--brand) var(--ff), var(--line-strong) var(--ff)); }
 .tl-seg.unit:hover { filter: brightness(.94); }
 .tl-seg.focus { background: var(--brand); }
 .tl-seg.focus:hover { background: var(--brand-dark); }
-.tl-seg.rest { background: #c9ced6; }
+.tl-seg.rest { background: var(--line-strong); }
 /* 空行不塌缩:无记录日保持整行轨道高度(压成细线曾显突兀),仅降透明度+日期变淡让注意力给有数据的日子 */
 .tl-row--empty .tl-track { opacity: .45; }
 .tl-row--empty .tl-date { color: var(--text-4); }
@@ -688,7 +688,7 @@ html[data-theme="dark"] .review-card { background: var(--panel); }
 .tl-chips { display: inline-flex; align-items: center; gap: var(--space-1); font-size: var(--fs-xs); color: var(--text-3); margin-right: 6px; }
 .tl-chip { width: 10px; height: 10px; border-radius: 3px; display: inline-block; margin: 0 2px 0 8px; }
 .tl-chip--focus { background: var(--brand); }
-.tl-chip--rest { background: #c9ced6; }
+.tl-chip--rest { background: var(--line-strong); }
 .tl-chip--idle { background: var(--track-bg, #ececef); }
 /* 时间刻度尺（行上方，0-24 每 3 小时一刻度） */
 .tl-hours { position: relative; height: 14px; margin-left: 52px; margin-right: 44px; margin-bottom: 6px; }

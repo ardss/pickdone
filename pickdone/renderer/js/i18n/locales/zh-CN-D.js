@@ -186,6 +186,7 @@ export default {
       "wd7": "日",
       "title": "重复规则",
       "aria": "重复规则设置",
+      "ruleSaveFailed": "重复规则保存失败，自动续期可能不生效",
       "wd0": "日",
       "generate": "生成",
       "baseEvent": "基准事件",

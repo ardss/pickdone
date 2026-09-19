@@ -78,7 +78,7 @@ export default {
 .ep-sub:hover .ep-sub-move, .ep-sub:focus-within .ep-sub-move { opacity: 1; pointer-events: auto; }
 .ep-sub-move i { font-style: normal; color: var(--text-3); cursor: pointer; margin-left: 3px; font-size: var(--fs-xs); }
 .ep-addsub-input { flex: 1; border: 0; background: none; font-size: var(--fs-md); color: var(--text-1); }
-.ep-addsub-input::placeholder { color: #8a9099; }
+.ep-addsub-input::placeholder { color: var(--text-4); }
 /* 子任务 ✕ 与 ≡ hover 该行才显示
    （设计稿 .todo-sublist-editor__delete(青灰叉)/__move(bars,#9b9b9b)） */
 .ep-sub-x, .ep-sub-drag { opacity: 0; transition: opacity var(--dur-mid); }

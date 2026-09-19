@@ -34,8 +34,7 @@ let opened = false
 function userDataDir () {
   if (process.env.TODO_DB_DIR) return process.env.TODO_DB_DIR
   if (process.env.TODO_USER_DATA_DIR) return process.env.TODO_USER_DATA_DIR
-  // Platform default must mirror Electron's app.getPath('userData') (~/.config/pickdone on Linux,
-  // ~/Library/Application Support/pickdone on macOS) — APPDATA-only resolved to CWD-relative
+  // Platform default must mirror Electron's app.getPath('userData') (~/.config/pickdone on Linux, ~/Library/Application Support/pickdone on macOS) — APPDATA-only resolved to CWD-relative
   // './pickdone' on Linux, so CLI and App each opened a different database (2026-09-11 audit P1)
   if (process.platform === 'darwin') return path.join(process.env.HOME || '', 'Library', 'Application Support', 'pickdone')
   if (process.platform === 'linux') {
@@ -149,8 +148,7 @@ function recycleTasks () { return open().call('queryTodos', { deleted: 1, orderB
  *  the fallback entirely would break existing keyword workflows against a task the user just deleted by mistake. Explicit
  *  intent keeps working: restore/delete pass an explicit recycle pool, so they never hit this warning path. */
 function resolveTask (input, pool) {
-  // Strip zero-width/full-width whitespace (IME candidates occasionally contain zero-width chars)
-  // Same normalization on both sides: stripping it only from the input made any multi-word keyword unmatchable
+  // Strip zero-width/full-width whitespace (IME candidates occasionally contain zero-width chars) Same normalization on both sides: stripping it only from the input made any multi-word keyword unmatchable
   const norm = v => String(v).toLowerCase().replace(/[\s\u00A0\u3000\u200B\u2003]/g, '')
   const matchIn = list => {
     const byId = list.find(t => t.taskId === input)
@@ -204,8 +202,7 @@ function listTodos (opts = {}) {
   if (opts.range === 'today') { q.dayStartFrom = +now.startOf('day'); q.dayStartTo = +now.endOf('day') }
   else if (opts.range === 'tomorrow') { const t = now.add(1, 'day'); q.dayStartFrom = +t.startOf('day'); q.dayStartTo = +t.endOf('day') }
   // Fix (2026-09-16): `week` now means the ISO week (Mon..Sun, same window as saved views' dateMode 'week' /
-  // FilterView applyViewConds endOf('isoWeek')) instead of a rolling 7 days; the rolling semantics moved to
-  // the new `next7d` range so nothing is lost.
+  // FilterView applyViewConds endOf('isoWeek')) instead of a rolling 7 days; the rolling semantics moved to the new `next7d` range so nothing is lost.
   else if (opts.range === 'week') { q.dayStartFrom = +now.startOf('day'); q.dayStartTo = +now.endOf('isoWeek') }
   else if (opts.range === 'next7d') { q.dayStartFrom = +now.startOf('day'); q.dayStartTo = +now.add(7, 'day').endOf('day') }
   else if (opts.range === 'overdue') { q.dayStartTo = +now.subtract(1, 'day').endOf('day') }
@@ -234,8 +231,7 @@ function stats ({ from, to } = {}) {
   const now = dayjs()
   const fmt = d => parseInt(d.format('YYYYMMDD'), 10)
   // Fix (2026-09-16): --from/--to go through the same parseDate as add/edit, so `stats --from today` /
-  // `--from +7d` work; the old bare dayjs(from) turned keywords into Invalid Date and died inside the db
-  // layer as an opaque USAGE error.
+  // `--from +7d` work; the old bare dayjs(from) turned keywords into Invalid Date and died inside the db layer as an opaque USAGE error.
   const f = from ? fmt(dayjs(parseDate(from))) : fmt(now.subtract(6, 'day'))
   const t = to ? fmt(dayjs(parseDate(to))) : fmt(now)
   const db = open()
@@ -382,8 +378,7 @@ function addMilestone (categoryInput, title, dateInput) {
   const list = msNormalize(getMilestones(categoryId).milestones.concat([added]))
   open().call('setMeta', [MS_KEY(categoryId), JSON.stringify(list)])
   audit.record({ action: 'milestone.add', targets: [{ taskId: 'cat:' + categoryId, content: cat ? cat.categoryName : String(categoryId) }], note: `milestone "${title.trim()}" → ${dayjs(date).format('YYYY-MM-DD')}` })
-  // `added` echoes the milestone this call actually inserted (the list is date-sorted, so the CLI used to
-  // echo milestones.at(-1) — a different row whenever the new date was not the latest)
+  // `added` echoes the milestone this call actually inserted (the list is date-sorted, so the CLI used to echo milestones.at(-1) — a different row whenever the new date was not the latest)
   const stored = list.find(m => m.title === added.title && m.date === added.date) || added
   return { categoryId, milestones: list, added: stored }
 }
@@ -425,8 +420,7 @@ function setProjectDeadline (input, dateInput) {
   let deadline = 0
   if (dateInput != null && dateInput !== '' && !/^(none|clear|清除|取消)$/i.test(dateInput)) {
     // review P2 (2026-09-10): delegate to the same parser as `edit --deadline` (parseDate) — the milestone
-    // parser rejected "tomorrow"/"+3d 09:00" here while `edit --deadline` accepted them. Deadlines stay
-    // day-granular via startOf('day'). (parseMilestoneDate remains milestone-command-only.)
+    // parser rejected "tomorrow"/"+3d 09:00" here while `edit --deadline` accepted them. Deadlines stay day-granular via startOf('day'). (parseMilestoneDate remains milestone-command-only.)
     try {
       deadline = dayStartOf(parseDate(dateInput))
     } catch (e) {
@@ -546,7 +540,11 @@ function addTodo ({ content, desc, date, reminder, category, difficulty, priorit
   const rowAfter = db.call('getById', t.taskId)
   audit.record({ action: 'add', targets: [t], changes: [{ after: rowAfter }] })
   // Tasks with an explicit time are auto-placed on the day timeline (user-finalized 2026-09-03): the reminder answers "when will you call me", the schedule chip answers "what should I do in this slot" — both are kept
-  const mm = dateExplicitTime(date)
+  // Fix (2026-09-19): NL times (明天9点/下午3点) resolved a timed todoTime but no chip — derive HH:mm from todoTime when the raw string has an NL marker and no HH:mm (bare dates must not fabricate chips).
+  let mm = dateExplicitTime(date)
+  if (!mm && todoTime && NL_TIME_MARKER_RE.test(String(date || '')) && !dayjs(todoTime).startOf('day').isSame(dayjs(todoTime))) {
+    mm = dayjs(todoTime).format('HH:mm')
+  }
   if (mm) { try { planSet(t.taskId, mm) } catch { /* chip write failure must not block task creation */ } }
   return rowAfter
 }
@@ -556,6 +554,9 @@ function dateExplicitTime (s) {
   const m = /(\d{1,2}):(\d{2})/.exec(String(s || ''))
   return m ? m[1].padStart(2, '0') + ':' + m[2] : null
 }
+
+/** Natural-language time markers (明天9点 / 下午3点 / 9点半 / 3pm): the raw string carries a time of day even without HH:mm */
+const NL_TIME_MARKER_RE = /(\d{1,2}\s*[点:：]|\d{1,2}\s*[:：]\s*\d{1,2}|[上午下午晚上早上凌晨中午]|半|\d{1,2}\s*(?:am|pm)\b)/i
 
 /** Reminder re-anchor on a reschedule (review P1 2026-09-11; renderer parity: EditPanel.applyDate).
  *  Shared by `edit --date` (pickdone.js) and `batch date` (batchRun) — the two channels used to diverge:
@@ -921,7 +922,8 @@ function buildRepeatRule (opts) {
   const count = parseInt(opts.count, 10) || 0
   if (type === 'daily') { rule.repeatType = 'day'; rule.repeatInterval = interval; if (count) rule.repeatDayCount = count }
   else if (type === 'weekly') {
-    rule.repeatType = 'week'; rule.repeatInterval = 1
+    // Fix (2026-09-19): --interval was ignored for weekly (hardcoded 1) while daily/monthly honored it
+    rule.repeatType = 'week'; rule.repeatInterval = interval
     if (opts.weekdays) rule.repeatWeekDays = String(opts.weekdays).split(/[,，]/).map(n => parseInt(n, 10)).filter(n => n >= 1 && n <= 7)
     if (count) rule.repeatWeekCount = count
   } else if (type === 'monthly') {
@@ -942,6 +944,14 @@ function repeatOn (input, rule, count) {
   if (t.complete) throw new CliError('task already completed; undo it before setting a repeat', 'INVALID_STATE')
   if (t.repeatId && String(t.repeatId).startsWith('repeat_')) throw new CliError('task already in a repeat group (' + t.repeatId + '); repeat off first, then re-set', 'ALREADY_REPEAT')
   const rid = 'repeat_' + t.userId + Date.now().toString(36) + Math.floor(Math.random() * 1e4)
+  // Fix (2026-09-19): no CLI flags for the yearly anchor — a Jan-1 default rule is re-anchored from the task's todoTime (explicit anchors stay authoritative).
+  if (rule.repeatType === 'year' && t.todoTime &&
+      rule.repeatYearMonth === core.REPEAT_DEFAULTS.repeatYearMonth &&
+      rule.repeatYearMonthDay === core.REPEAT_DEFAULTS.repeatYearMonthDay) {
+    const anchor = dayjs(t.todoTime)
+    rule.repeatYearMonth = anchor.month() + 1
+    rule.repeatYearMonthDay = anchor.date()
+  }
   db.call('setMeta', ['repeatRule:' + rid, JSON.stringify(rule)])
   db.call('upsert', Object.assign({}, t, { repeatId: rid, updateTime: Date.now(), status: 'update' }))
   // Generate subsequent instances (the first day is the current task itself), reusing the todo-core engine's expansion
@@ -1003,7 +1013,8 @@ function repeatOff (input, all) {
         removed++
       }
     }
-    open().call('setMeta', ['repeatRule:' + rid, ''])
+    // Fix (2026-09-19): '' → deleteMeta (file-wide convention) so the rule row is actually removed.
+    open().call('deleteMeta', 'repeatRule:' + rid)
   }
   open().call('upsert', Object.assign({}, t, { repeatId: null, updateTime: Date.now(), status: 'update' }))
   audit.record({ action: 'repeat.off', targets: [t], changes: [{ before: { rid } }], note: all ? 'repeat group dissolved (soft-deleted ' + removed + ' future instance(s))' : 'left repeat group (this instance only)' })
@@ -1647,6 +1658,9 @@ const SETTINGS_DENIED = new Set(['securityLockPassword', 'securityLockQuestion',
 function settingsDoc () {
   try { const d = JSON.parse(open().call('getMeta', 'db.settingsState') || 'null'); return d && typeof d === 'object' ? d : {} } catch { return {} }
 }
+/** Test-only seam: invoked inside settingsSet between the first settingsDoc() read and the fresh re-read (simulates a concurrent App-side write). */
+let settingsRaceHook = null
+function setSettingsRaceHookForTests (fn) { settingsRaceHook = typeof fn === 'function' ? fn : null }
 function settingsKnown (key) {
   if (SETTINGS_MANIFEST.boolean.includes(key)) return { type: 'boolean' }
   if (SETTINGS_MANIFEST.number.includes(key)) return { type: 'number' }
@@ -1686,21 +1700,18 @@ function settingsSet (key, value, { force = false } = {}) {
     if (!info.options.includes(String(value))) throw new CliError(`"${key}" expects one of: ${info.options.join(' | ')} (got "${value}")`, 'USAGE')
     v = String(value)
   }
-  // CAS guard (fix 2026-09-16): settingsSet is a read-modify-write of the WHOLE settingsState package and the
-  // write refreshes _savedAt — if the App wrote settings between our read and write, the CLI used to overwrite
-  // the App's newer package with a stale one (and the App would then mirror that stale package back on next
-  // launch, washing the user's newer settings away). Snapshot _savedAt at entry, re-read the meta just before
-  // the write, and refuse on drift. --force bypasses the check deliberately.
-  const savedAtSnapshot = settingsDoc()._savedAt || 0
+  // Concurrency guard (2026-09-16, reworked 2026-09-19): settingsSet is a read-modify-write of the WHOLE settingsState package. The old guard compared two synchronous reads — drift could never be observed. Root fix: re-read the doc immediately before setMeta and apply the SINGLE key onto the fresh doc, so a concurrent App change survives instead of being clobbered. --force still accepted (no-op:
+  // the merge is already the non-destructive path).
   const doc = settingsDoc()
   const before = key in doc ? doc[key] : null
-  if (!force && (settingsDoc()._savedAt || 0) !== savedAtSnapshot) {
-    throw new CliError('settings changed in App since read; re-run or use --force', 'SETTINGS_STALE')
-  }
-  doc[key] = v
-  doc._savedAt = Date.now()
-  doc.schemaV = doc.schemaV || 1
-  open().call('setMeta', ['db.settingsState', JSON.stringify(doc)])
+  // Test seam: inject a concurrent mutation into the race window (first read → fresh re-read) so unit
+  // tests can deterministically exercise the merge-on-fresh behavior. Null outside tests.
+  if (typeof settingsRaceHook === 'function') settingsRaceHook()
+  const fresh = settingsDoc()
+  fresh[key] = v
+  fresh._savedAt = Date.now()
+  fresh.schemaV = fresh.schemaV || 1
+  open().call('setMeta', ['db.settingsState', JSON.stringify(fresh)])
   audit.record({ action: 'settings.set', targets: [], changes: [{ before: { [key]: before }, after: { [key]: v } }], note: 'setting "' + key + '" changed (hot-synced to running App, applied on launch otherwise)' })
   return { key, value: v, previous: before }
 }
@@ -1758,35 +1769,26 @@ function planRemove (input, { date, at } = {}) {
   return { taskId: t.taskId, day, removed: ids.length }
 }
 
+const evu = require('./event-utils.cjs')
+const { eventFocusMinutes, eventEnd } = evu
+
 /* ---------------- Events import: rebuild a whole day's schedule from a structured event list (backfill/reconstruction scenarios) ----------------
-   Event shape: { date:'YYYY-MM-DD', start:'HH:mm', end:'HH:mm'|'24:00', title, category:'工作|学习|生活|发布|<id>',
-                  important:0|1, urgent:0|1, tags:['a','b'], estimate:N }
+   Event shape: { date, start, end|24:00, title, category, important, urgent, tags, estimate }
    Idempotent: dedupe by (dayStart, title); tasks already existing are skipped and not created again. */
-function eventFocusMinutes (mins) {
-  // Focus duration = wall-clock duration ×0.75 (reserving breaks), rounded to 25-min whole tomatoes, minimum one tomato
-  return Math.max(25, Math.round(mins * 0.75 / 25) * 25)
-}
-function eventEnd (e) {
-  let [h2, m2] = String(e.end || '').split(':').map(Number)
-  if (h2 === 24) { h2 = 23; m2 = 59 }
-  return { h: h2, m: m2 }
-}
-function eventKey (e) {
-  return dayStartOf(parseDate(e.date + ' ' + e.start)) + '|' + String(e.title || '').trim()
-}
+
 async function importEvents (events, { onProgress = () => {} } = {}) {
   if (!Array.isArray(events) || !events.length) throw new CliError('events file must be a non-empty JSON array', 'EMPTY_EVENTS')
   const existing = liveTasks()
   const seen = new Set(existing.map(t => t.dayStart + '|' + String(t.taskContent || '').trim()))
-  const recs = tomatoRecords() || []
-  const hasRecord = tid => recs.some(r => r.manual && r.focusTaskId === tid)
+  // Fix (2026-09-19): re-read records inside the predicate — a pre-import snapshot never saw rows the import itself just created.
+  const hasRecord = tid => (tomatoRecords() || []).some(r => r.manual && r.focusTaskId === tid)
   let created = 0, skipped = 0
   const failed = []
   for (const e of events) {
     const label = (e.date || '?') + ' ' + (e.start || '') + ' ' + (e.title || '').slice(0, 24)
     try {
       if (!e.date || !e.start || !e.end || !e.title) throw new CliError('missing date/start/end/title', 'BAD_EVENT')
-      const key = eventKey(e)
+      const key = evu.eventKey(e, dayStartOf, parseDate)
       if (seen.has(key)) { skipped++; onProgress({ label, status: 'skipped-task' }); continue }
       const { h: h1, m: m1 } = (() => { const [a, b] = String(e.start).split(':').map(Number); return { h: a, m: b } })()
       const { h: h2, m: m2 } = eventEnd(e)
@@ -1824,6 +1826,8 @@ async function importEvents (events, { onProgress = () => {} } = {}) {
   return { created, skipped, failed, total: events.length, hasRecord }
 }
 
+const eventKey = (e) => evu.eventKey(e, dayStartOf, parseDate)
+
 function getTask (input) { const t = resolveTask(input); if (!t) throw new CliError('task not found: ' + input, 'TASK_NOT_FOUND'); return t }
 // undone tasks whose predecessors are all complete (or none); optional categoryId scope. FS readiness read for humans and AI agents.
 function listReady (categoryId = null) {
@@ -1860,6 +1864,6 @@ module.exports = {
   lunarOf, lunarAnnotate,
   setEstimate, sortTask, listOn, resolveRecord, recordFix, recordRemove, moveSubtask,
   setReminderOffsets, setReminderExtra, addAttachment, listAttachments, removeAttachment,
-  settingsList, settingsSet, planSet, planList, planRemove, dateChangeReminderPatch,
+  settingsList, settingsSet, setSettingsRaceHookForTests, planSet, planList, planRemove, dateChangeReminderPatch,
   importEvents, eventFocusMinutes, eventKey
 }

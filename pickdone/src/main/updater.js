@@ -36,21 +36,55 @@ function broadcast () {
 // runs in before-quit/will-quit. Chosen as the least invasive hook — updater.js talks to the renderer via
 // the same 'app-quitting-flush' channel and lazily requires ./scheduler for flushFiredNow, so index.js
 // needs no exported symbol and no require cycle is created at load time.
+// P2 2026-09-19: the broadcast used to go out WITHOUT a token, so the renderer's quit-ack guard could
+// never match an ack to this round, and the old fire-and-forget shape cleared renderer pendings while
+// the installer's taskkill was free to land first. Now it runs the same tokenized handshake as the
+// quit path (quit-ack beginRound/ack) and performs the main-process flush only after every live
+// window acked or a short cap elapses.
 let _flushedOnReady = false
-function flushOnceOnReady () {
+let _activeFlushRound = null
+/** Routes a renderer 'app-quitting-flush-ack' into the updater's early-flush round, if one is in
+ *  flight (index.js owns the quit-path tracker; this early round has its own). No-op otherwise. */
+function forwardFlushAck (token, senderId) {
+  try { return !!(_activeFlushRound && _activeFlushRound.ack(token, senderId)) } catch { return false }
+}
+function flushOnceOnReady (deps = {}) {
   if (_flushedOnReady) return
   _flushedOnReady = true
-  // Renderer side: same channel as the before-quit path — the renderer immediately flushes whatever is
-  // still sitting in the dbMirror debounce (pending edits / pomodoro ledger) to disk.
-  try {
-    const { BrowserWindow } = require('electron')
-    for (const w of BrowserWindow.getAllWindows()) {
-      try { if (w && !w.isDestroyed()) w.webContents.send('app-quitting-flush') } catch { /* dead window */ }
+  const getWindows = deps.getWindows || (() => {
+    try { return require('electron').BrowserWindow.getAllWindows() } catch { return [] }
+  })
+  const tracker = deps.tracker || require('./quit-ack').createQuitAckTracker()
+  const flushMain = deps.flushMain || (() => { try { require('./scheduler').flushFiredNow() } catch { /* best-effort */ } })
+  const ACK_CAP_MS = deps.ACK_CAP_MS ?? 1500
+  const POLL_MS = 50
+  const senders = []
+  const token = tracker.nextToken()
+  for (const w of getWindows()) {
+    try {
+      if (w && !w.isDestroyed()) {
+        // Renderer side: same channel + token shape as the before-quit path — the renderer flushes
+        // whatever is still sitting in the dbMirror debounce (pending edits / pomodoro ledger) to
+        // disk, then acks 'app-quitting-flush-ack' with the token.
+        w.webContents.send('app-quitting-flush', { token })
+        senders.push(w.webContents.id)
+      }
+    } catch { /* dead window */ }
+  }
+  tracker.beginRound(senders, token)
+  _activeFlushRound = tracker
+  // Main-process side: same scheduler flush the will-quit path runs (persist the reminder dedup
+  // ledger now instead of losing whatever sits inside its 60s debounce when the installer /F-kills
+  // us) — but only once the renderer side is done (all acked) or the bounded cap elapsed, never
+  // before the renderer even had a chance to dispatch.
+  const startedAt = Date.now()
+  const poll = setInterval(() => {
+    if (tracker.allAcked() || Date.now() - startedAt >= ACK_CAP_MS) {
+      clearInterval(poll)
+      flushMain()
     }
-  } catch { /* electron unavailable (unit tests) */ }
-  // Main-process side: same scheduler flush the will-quit path runs (persist the reminder dedup ledger
-  // now instead of losing whatever sits inside its 60s debounce when the installer /F-kills us).
-  try { require('./scheduler').flushFiredNow() } catch { /* best-effort, never blocks the update */ }
+  }, POLL_MS)
+  if (poll.unref) poll.unref()
 }
 
 let _inited = false
@@ -120,4 +154,4 @@ function getStatus () {
   return { active: isActive(), version: require('electron').app.getVersion(), ...state }
 }
 
-module.exports = { init, check, downloadUpdate, quitAndInstall, getStatus }
+module.exports = { init, check, downloadUpdate, quitAndInstall, getStatus, flushOnceOnReady, forwardFlushAck }

@@ -173,6 +173,7 @@ export default {
       "wd7": "Sun",
       "title": "Repeat Rule",
       "aria": "Repeat rule settings",
+      "ruleSaveFailed": "Failed to save the repeat rule; auto-renewal may not take effect",
       "intervalHint": "The task repeats automatically every selected unit",
       "every": "every",
       "countHint": "Repeats within the selected range, stops automatically after",

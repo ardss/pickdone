@@ -18,13 +18,14 @@
       <i class="cat-mgr-drag" :title="$t('statsG.SideNav.dragSortTitle')"><app-icon name="dots" :size="13"/></i>
       <span class="sn-dot" :style="{borderColor:c.categoryColor, background:c.categoryColor}"></span>
       <input v-if="mgrEditing===c.categoryId" v-model="mgrName" class="sn-cat-edit"
-             @keyup.enter="saveMgrEdit(c)" @blur="saveMgrEdit(c)"/>
+             @keydown.enter.prevent="e => { if (e.isComposing || e.keyCode === 229) return; saveMgrEdit(c) }" @blur="saveMgrEdit(c)"/>
       <span v-else class="cat-mgr-name" role="button" tabindex="0" :title="$t('statsG.SideNav.clickRenameTitle')"
             @click="startMgrEdit(c)" @keydown.enter.prevent="startMgrEdit(c)">{{c.categoryName}}</span>
       <em class="cat-mgr-count" role="button" tabindex="0" :title="$t('statsG.SideNav.previewTitle')"
           @click="toggleMgrPreview(c.categoryId)"
-          @keydown.enter.prevent="toggleMgrPreview(c.categoryId)"
-          @keydown.space.prevent="toggleMgrPreview(c.categoryId)">{{ $t('statsG.SideNav.countItems', { n: countOf(c.categoryId) }) }}
+          @keydown.enter.prevent="toggleMgrPreview(c.categoryId)">{{ $t('statsG.SideNav.countItems', { n: countOf(c.categoryId) }) }}
+        <!-- No local Space keydown binding: main.js's global capture handler clicks role-bearing
+             elements — a local one double-toggled (open+close, 701b0ba class) -->
         <app-icon :name="mgrExpanded[c.categoryId] ? 'chevron-up' : 'chevron-down'" :size="11"/></em>
       <button class="cat-mgr-del" :class="{'cat-mgr-del--on': isProject(c.categoryId)}" @click="toggleProject(c)">{{isProject(c.categoryId) ? $t('statsE.SideNav.cancelProject') : $t('statsG.SideNav.setProjectBtn')}}</button>
       <button class="cat-mgr-del" @click="removeMgrCat(c)">{{ $t('statsG.SideNav.deleteBtn') }}</button>

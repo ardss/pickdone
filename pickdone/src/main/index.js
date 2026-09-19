@@ -131,7 +131,7 @@ function broadcastWhiteNoiseUpdated () {
 }
 
 /* ---------------- Tiered recovery from DB corruption (P0 data-loss prevention) — implementation extracted to dbRecovery.cjs (independently testable) ---------------- */
-function attemptDbRecovery (ud) { return dbRecovery.attemptDbRecovery(ud) }
+function attemptDbRecovery (ud, retryInit) { return dbRecovery.attemptDbRecovery(ud, retryInit) }
 function restoreTasksFromCriticalBackup (ud) { return dbRecovery.restoreTasksFromCriticalBackup(ud, list => dbm.call('upsertMany', list), c => dbm.call('upsertCategory', c), rows => dbm.call('tomatoAppendMany', rows)) }
 
 /* ---------------- External-write listener: when the CLI writes the DB directly, the running App refreshes automatically ---------------- */
@@ -142,8 +142,6 @@ function watchDbForExternalWrites () {
   const dbFile = path.join(ud, 'todos.db')
   const walFile = dbFile + '-wal'
   // In WAL mode CLI writes only land in -wal and the main DB's mtime stays unchanged (once broke the 2s broadcast, leaving stale UI data); watch both files
-  // Stat the baseline once first: starting lastMtime at 0 would make the first poll always kick, falsely reporting an "external write" right at startup
-  let lastMtime = 0
   // P2 2026-09-12 torn read: two independent statSync calls raced a concurrent CLI wal write — the
   // baseline absorbed half a write (missed event) or saw a transient value (false external-write
   // reload). Take the value only when two consecutive reads agree (fix-util.stableRead); persistent
@@ -152,7 +150,12 @@ function watchDbForExternalWrites () {
     const statOne = () => Math.max(fs.statSync(dbFile).mtimeMs, fs.existsSync(walFile) ? fs.statSync(walFile).mtimeMs : 0)
     return fixUtil.stableRead(statOne)
   }
-  lastMtime = readWatchMtime() || 0
+  // P2 2026-09-19: `readWatchMtime() || 0` mapped a null baseline (torn read at startup) to 0, so
+  // the first poll was a GUARANTEED false external-write (full reload + undo-stack wipe) the moment
+  // the real mtime came in. Keep the baseline null instead and let onChange establish it from the
+  // first non-null read WITHOUT kicking — a null baseline means "disarmed", not "everything changed".
+  let lastMtime = readWatchMtime()
+  if (lastMtime == null) log.warn('[TodoDB] 启动基线读取未定（torn read），首轮轮询仅建立基线不触发刷新')
   let lastTomatoCmdRaw = null
   let lastTomatoSeq = 0
   // CLI settings hot-sync baseline: the first poll only builds the baseline and does not push (otherwise startup would push a full diff by mistake)
@@ -237,6 +240,9 @@ function watchDbForExternalWrites () {
     try {
       const m = readWatchMtime()
       if (m == null) return
+      // Disarmed baseline (startup torn read): the first non-null read only ARMS the watcher —
+      // it is a baseline, not a change, so it must not kick a spurious external-write reload.
+      if (lastMtime == null) { lastMtime = m; forwardTomatoCmd(); return }
       if (m === lastMtime) { forwardTomatoCmd(); return } // check commands even when mtime is unchanged (guards against watchFile dropping events)
       lastMtime = m
       kick()
@@ -363,7 +369,13 @@ if (!app.requestSingleInstanceLock()) { app.quit() } else {
       log.error('[Init] DB 初始化失败：', e)
       const { dialog, shell } = require('electron')
       const ud = app.getPath('userData')
-      const recoveredFrom = attemptDbRecovery(ud)
+      // P2 2026-09-19: pass the retry hook — attemptDbRecovery now verifies the SQLite header magic
+      // first and retries init once before renaming anything, so a healthy DB can no longer be
+      // mislabeled .corrupt by a transient init failure (lock held / WAL race).
+      const recoveredFrom = attemptDbRecovery(ud, () => dbm.init(ud))
+      if (recoveredFrom && (recoveredFrom.source === 'retry-ok' || recoveredFrom.source === 'transient')) {
+        log.warn('[Init] DB init transient failure (header intact, no rename):', recoveredFrom.label)
+      }
       let reinitErr = null
       try { dbm.init(ud) } catch (e2) { reinitErr = e2 }
       let restoredN = 0
@@ -447,13 +459,12 @@ if (!app.requestSingleInstanceLock()) { app.quit() } else {
     scheduler.reloadAll(dbApi())
     // Meta GC: clean up orphan keys (residue after a repeat rule is deleted / project deadline & milestones become permanent orphans after a category is deleted)
     try {
-      const live = new Set((dbm.call('getAllCategories') || []).map(c => String(c.id || c.categoryId)))
-      const liveRids = new Set((dbm.call('getAll', { deleted: null }) || []).map(t => t.repeatId).filter(Boolean))
-      for (const k of dbm.call('listMetaKeys') || []) {
-        let m = k.match(/^repeatRule:(.+)$/)
-        if (m && !liveRids.has(m[1])) { dbm.call('deleteMeta', k); continue }
-        m = k.match(/^(?:projectDeadline|projectMilestones):(.+)$/)
-        if (m && !live.has(m[1])) dbm.call('deleteMeta', k)
+      // P1 2026-09-19: getAll({deleted:null}) included recycle-bin rows, so a repeatId referenced
+      // only by a deleted task kept its repeatRule: meta forever (never GC'd). Only LIVE rows keep
+      // a rule alive — deleted:0. Decision logic extracted to handlers/shared.computeMetaGc for tests.
+      const { computeMetaGc } = require('./handlers/shared')
+      for (const k of computeMetaGc(dbm.call('listMetaKeys'), dbm.call('getAllCategories'), dbm.call('getAll', { deleted: 0 }))) {
+        dbm.call('deleteMeta', k)
       }
     } catch (e) { log.warn('[MetaGC] skipped:', e && e.message) }
     registerIpc()
@@ -520,7 +531,9 @@ app.on('before-quit', () => {
   // 2026-09-10 P1: previously only the main window was notified — the float window's pending pomodoro
   // ledger (and the whole broadcast when the main window was already destroyed, e.g. X-close→tray→quit)
   // was silently lost. Broadcast to every live window with an isDestroyed guard.
-  let liveWindows = 0
+  // P2 2026-09-19: this is now the exact expected-set (webContents ids) rather than a count —
+  // beginRound takes the array so only these senders' acks can satisfy allAcked().
+  const liveWindows = []
   // P2 2026-09-12: Date.now() tokens collide within the same millisecond — a stale ack from a previous
   // round could then satisfy (token !== prevToken no longer holds) and cut the flush window short.
   // quit-ack now guarantees strictly increasing tokens across rounds.
@@ -529,7 +542,7 @@ app.on('before-quit', () => {
     try {
       if (w && !w.isDestroyed()) {
         w.webContents.send('app-quitting-flush', { token: roundToken })
-        liveWindows++
+        liveWindows.push(w.webContents.id)
         // P2 2026-09-12: a window destroyed between this send and its ack can never ack, so the
         // flush window previously waited out the full 2s cap every time a window died mid-handshake.
         // When the webContents is destroyed (window closed) or its renderer process is gone (crash —
@@ -552,6 +565,8 @@ app.on('before-quit', () => {
       }
     } catch {}
   }
+  // Pass the exact expected-sender set: an ack from a sender we never sent to can never satisfy
+  // allAcked() (quit-ack P2 2026-09-19).
   quitAck.beginRound(liveWindows, roundToken)
 })
 app.on('window-all-closed', e => { /* stay resident in the tray, do not quit */ })
@@ -650,7 +665,12 @@ function registerIpc () {
       // Stale token acks (from a previous quit attempt that was aborted) must not satisfy this round
       if (payload && e && e.sender && quitAck.ack(payload.token, e.sender.id)) {
         log.info('[Quit] flush ack received', quitAck.progress())
+        return
       }
+      // P2 2026-09-19: an ack whose token belongs to the updater's EARLY flush round
+      // (flushOnceOnReady) is stale for the quit round but must still reach that round's tracker,
+      // or its allAcked() can never go true and the early flush always waits out its cap.
+      try { updater.forwardFlushAck(payload && payload.token, e && e.sender && e.sender.id) } catch { /* best-effort */ }
     } catch { /* dying process — best effort */ }
   })
   // Unified error logging: handler throws are rethrown as-is (the renderer's invoke still rejects) while the main process leaves a trace —

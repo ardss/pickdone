@@ -128,11 +128,13 @@ module.exports = function todoHandlers (ctx) {
       if (dbm.isWriteOp(op)) {
         // Single-task writes (upsert/bumpSnow) reschedule only that task's timers via scheduleOne instead of a
         // full reloadAll (whole-table scan + all timers torn down and rebuilt on every write). Fall back to
-        // reloadAll for bulk ops, when the row is gone, or when any reminder time is already past — scheduleOne
-        // skips past times, while reloadAll owns the missed-reminder catch-up path (watermark + re-fire).
+        // reloadAll for bulk ops, when the row is gone, or when the task still owes a catch-up: a PAST
+        // reminder instance NOT yet in firedReminders needs reloadAll's missed-reminder path (watermark +
+        // re-fire). A past instance that already fired is fully deduped — needsCatchUp returns false, so a
+        // task whose reminders already fired no longer forces a full reloadAll on every edit (P1 2026-09-19).
         const tid = (params || {}).taskId
         const t = (op === 'upsert' || op === 'bumpSnow') && tid != null ? dbm.call('getById', String(tid)) : null
-        if (t && !scheduler.reminderInstances(t).some(([, ts]) => ts <= Date.now())) scheduler.scheduleOne(t)
+        if (t && !scheduler.needsCatchUp(t)) scheduler.scheduleOne(t)
         else scheduler.reloadAll(dbApi())
       }
       // 账本行写:调度器不依赖番茄记录;广播由 db 层 setLedgerChangedHook 统一发(CLI 直写同样触发),此处只跳过 todos 全量重载

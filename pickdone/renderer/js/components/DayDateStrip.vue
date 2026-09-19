@@ -79,6 +79,18 @@ export default {
       tick: 0
     }
   },
+  watch: {
+    // Calendar popover Esc only worked while focus was already inside (the @keydown.esc lives on
+    // the popover div): focus the first header control on open so Esc and Enter are reachable
+    showCal (v) {
+      if (!v) return
+      this.$nextTick(() => {
+        const pop = this.$el && this.$el.querySelector ? this.$el.querySelector('.ds-cal-pop') : null
+        const first = pop && pop.querySelector('button')
+        if (first) first.focus()
+      })
+    }
+  },
   computed: {
     selectedTs () { return this.$store.state.ui.daySelectedTs || this.today0 },
     today0 () { return this.$store.state.todo.todayTimestamp },

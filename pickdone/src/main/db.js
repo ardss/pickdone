@@ -63,8 +63,8 @@ function migratePlainToEncrypted (dir, file, key) {
     // 表清单动态枚举,禁手工维护:2026-09-04 深审实锤硬编码四表漏了 plan_chips/tomato_records,行表化用户的账本会在迁移中被清空(P0)
     const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all().map(r => r.name)
     for (const table of tables) {
-      db.exec('INSERT INTO enc."' + table + '" SELECT * FROM main."' + table + '"')
-    }
+      // Copy by NAME (see db-enc-copy.js): positional SELECT * shifted ALTER-appended columns on legacy DBs.
+      require('./db-enc-copy')(db, table)    }
     db.exec('DETACH DATABASE enc')
     // Explicit wal_checkpoint(TRUNCATE) before closing: ensure the plaintext WAL tail writes have landed in the main file before the WAL can be safely deleted (otherwise .plain-bak may miss tail data)
     db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
@@ -728,7 +728,7 @@ const OPS = {
     const extra = {}
     for (const k of Object.keys(r || {})) if (!known.has(k) && !UNSAFE_KEYS.has(k)) extra[k] = r[k]
     o.extra = Object.keys(extra).length ? JSON.stringify(extra) : null
-    if (!o.succeed && o.succeed !== 0) o.succeed = 1
+    // (2026-09-19) Deleted the old dead re-default here: the loop above already coerces succeed to 0/1
     return o
   },
   _rowToRec (r) {

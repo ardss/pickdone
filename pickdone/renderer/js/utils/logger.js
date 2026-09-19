@@ -10,12 +10,34 @@
 const BUFFER = []
 let flushTimer = null
 
+// Cap the buffer so a persistently dead bridge cannot grow it without bound:
+// on re-queue the oldest entries beyond the cap are dropped.
+const MAX_BUFFER = 200
+
+/** [logger-fixes] pure-start — re-queue failed entries in front of the buffer, dropping the oldest beyond cap */
+function requeueWithCap (buffer, failed, cap) {
+  const merged = failed.concat(buffer)
+  return merged.length > cap ? merged.slice(merged.length - cap) : merged
+}
+// [logger-fixes] pure-end
+
+function requeue (entries) {
+  const next = requeueWithCap(BUFFER, entries, MAX_BUFFER)
+  BUFFER.length = 0
+  for (const e of next) BUFFER.push(e)
+}
+
 function flush () {
   if (!BUFFER.length) return
   const entries = BUFFER.splice(0)
   try {
-    sendToMain(entries)
-  } catch (e) { /* silent */ }
+    const r = sendToMain(entries)
+    // Async bridge (ipcRenderer.invoke): a rejected promise used to swallow the batch — re-queue it
+    if (r && typeof r.catch === 'function') r.then(() => {}, () => { requeue(entries) })
+  } catch (e) {
+    // Sync bridge threw: re-queue (previously the entries were lost for good)
+    requeue(entries)
+  }
 }
 
 function enqueue (level, msg, stack) {
