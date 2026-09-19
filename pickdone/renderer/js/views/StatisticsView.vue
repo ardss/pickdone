@@ -256,6 +256,12 @@ import { periodBounds, buildHeatmap, countGiveUps7, buildWeekdayModel, buildTren
 
 const T = 'statsA.StatisticsView.'
 
+/* [d5-ui-fixes] pure-start */
+// CSV count formatting: integer counts print plainly (12, not "12.0"); fractional
+// values (e.g. averaged baselines) keep one decimal place
+function fmtCount (v) { return Number.isInteger(v) ? String(v) : v.toFixed(1) }
+/* [d5-ui-fixes] pure-end */
+
 export default {
   errorCaptured (err, vm, info) {
     console.error('[Stats-ErrorBoundary]', info, err && (err as any).stack || err)
@@ -516,13 +522,13 @@ export default {
       const m = this.metrics
       const rows = [[this.$t(T + 'csvPeriod'), m.label]]
       rows.push([this.$t(T + 'csvMetric'), this.$t(T + 'csvValue'), this.$t(T + 'csvBaseline')])
-      rows.push([this.$t(T + 'kpiDone'), m.done, m.baseline.done == null ? '' : m.baseline.done.toFixed(1)])
+      rows.push([this.$t(T + 'kpiDone'), m.done, m.baseline.done == null ? '' : fmtCount(m.baseline.done)])
       rows.push([this.$t(T + 'csvAdded'), m.added, ''])
       rows.push([this.$t(T + 'csvPlanned'), m.planned, ''])
       rows.push([this.$t(T + 'kpiRate'), m.doneRate == null ? '' : Math.round(m.doneRate * 100) + '%', m.baseline.doneRate == null ? '' : Math.round(m.baseline.doneRate * 100) + '%'])
-      rows.push([this.$t(T + 'csvFocusMins'), m.focusMins, m.baseline.focus == null ? '' : m.baseline.focus.toFixed(1)])
+      rows.push([this.$t(T + 'csvFocusMins'), m.focusMins, m.baseline.focus == null ? '' : fmtCount(m.baseline.focus)])
       rows.push([this.$t(T + 'csvTomatoes'), m.tomatoCount, ''])
-      rows.push([this.$t(T + 'kpiGiveup'), m.giveUps, m.baseline.giveUps == null ? '' : m.baseline.giveUps.toFixed(1)])
+      rows.push([this.$t(T + 'kpiGiveup'), m.giveUps, m.baseline.giveUps == null ? '' : fmtCount(m.baseline.giveUps)])
       rows.push([])
       rows.push([this.$t(T + 'csvNarrative')])
       rows.push([this.reviewHeadline])

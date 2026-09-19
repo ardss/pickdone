@@ -697,6 +697,9 @@ html[data-theme="dark"] .cal-fc {
   --fc-page-bg-color: var(--panel);
   --fc-border-color: var(--line);
 }
+/* 今日格高亮暗色覆盖：亮色的黄底 (0,3,0 前景权重) 在暗色面板上过亮且与暗色 token 冲突，
+   用 theme-dark 的 today token（同 theme-dark.css .fc-day-today 值）覆盖；亮色保持不变 */
+html[data-theme="dark"] .cal-fc.fc .fc-day-today { background: rgba(147, 160, 245, .10); }
 
 .day-create-btn, .day-expand-btn {
   width: 20px; height: 20px;
@@ -788,7 +791,7 @@ html[data-theme="dark"] .day-expand-btn:hover { background: var(--gray-bg, #2226
 .fc-scroller::-webkit-scrollbar{width:6px}
 .fc .fc-highlight{background:none;border:1px solid #2cacab}
 .fc .fc-daygrid-day-number{display:flex;flex-direction:row-reverse;justify-content:flex-end;width:100%;padding:2px 2px 1px;font-size: var(--fs-md);line-height:1;text-decoration:none}
-.fc .fc-daygrid-day-number .lunar{margin-left:5px;color:#9b9b9b;font-size:inherit}
+.fc .fc-daygrid-day-number .lunar{margin-left:5px;color:var(--text-3, #9b9b9b);font-size:inherit}
 .fc .fc-daygrid-day-number .holiday{color:#fff;background:var(--brand)}
 .fc .fc-daygrid-day-number .work{color:#016d6e;background:#c7e4e4}
 /* 调休班徽标暗色:半透明品牌色(同09-18 #f5fafb 修法) */ html[data-theme="dark"] .fc .fc-daygrid-day-number .work{color:var(--brand-bright, #35c2ae);background:rgba(15, 157, 143, .18)}
