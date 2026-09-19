@@ -14,6 +14,17 @@
  */
 import { isStaleAnnounce, buildAnnounceValue } from './tomatoAnnounceShared.js'
 
+// P2f (2026-09-19 UX review round 2): when sync is toggled OFF, a still-fresh `remote` announce
+// keeps the chip alive with no data path left to clear it. Pull the enabled flag through the same
+// lazy dynamic import the sync-tab utils already use (avoids a static cycle at store-load time).
+async function syncEnabledNow () {
+  try {
+    const m = await import('../utils/lanSync.js')
+    const s = await m.getSyncSettings()
+    return !!s.enabled
+  } catch (e) { return true } // cannot ask (CLI/test host): assume enabled, TTL staleness still applies
+}
+
 function api () { return (typeof window !== 'undefined' && window.todoAPI) || null }
 
 /** Compose this device's announce payload from the live tomato store state. */
@@ -63,6 +74,8 @@ export default {
       if (changed) s.remote = next
     },
     setInited (s) { s.inited = true },
+    /** P2f: sync toggled off — drop every remote announce so the chip cannot outlive its data path. */
+    clearRemote (s) { s.remote = {} },
   },
   actions: {
     /** One-time wiring: subscribe to 'tomato-announce' syncEvents + load the snapshot. */
@@ -81,6 +94,9 @@ export default {
     async reload ({ commit }) {
       const a = api()
       if (!a || !a.tomatoRunAnnounces) return
+      // P2f: sync off = no channel, no chip. Checked at every refresh so a CLI `sync off` (which
+      // bypasses the settings-tab toggle) is also covered.
+      if (!(await syncEnabledNow())) { commit('clearRemote'); return }
       try {
         const list = await a.tomatoRunAnnounces()
         for (const v of (Array.isArray(list) ? list : [])) commit('applyRemote', v)

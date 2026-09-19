@@ -174,9 +174,13 @@ export default {
   },
   actions: {
     /* ---------- Initialization: load from SQLite ---------- */
-    async init ({ commit, dispatch }) {
-      // After data reload, old snapshots no longer match the current rows; void the undo/redo stacks
-      commit('historyClear')
+    async init ({ commit, dispatch }, { preserveHistory = false } = {}) {
+      // After data reload, old snapshots no longer match the current rows; void the undo/redo stacks.
+      // P1-2 (2026-09-19 UX review round 2): LAN-sync-applied rounds reload with preserveHistory —
+      // remote edits are not captured in the local undo stack, so clearing here would only destroy
+      // the USER'S OWN pending undo history on every inbound sync round. True external writes
+      // (CLI watcher path) keep the clearing behavior.
+      if (!preserveHistory) commit('historyClear')
       let rows
       try {
         rows = await window.todoAPI.dbCall('getAll', {})

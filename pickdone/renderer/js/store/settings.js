@@ -132,6 +132,33 @@ export function coerceNumericSettings (merged) {
   return merged
 }
 
+/** P1-3 (2026-09-19 UX review round 2, pure, unit-tested): sanitize an INBOUND settings patch that
+ *  crossed a trust boundary (CLI `settings set` watcher, LAN-sync applied setting rows) before it
+ *  is committed to the live store. The external-settings-changed path historically Object.assigned
+ *  the patch bare — unknown keys and type-mismatched junk from a peer/old build landed verbatim.
+ *  Rules: keys not declared in DEFAULT_SETTINGS are dropped; values whose type differs from the
+ *  declared default are dropped; remaining numeric-string values are coerced exactly like
+ *  load()/restore() (coerceNumericSettings). */
+export function sanitizeSettingsPatch (patch) {
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return {}
+  const out = {}
+  for (const k of Object.keys(patch)) {
+    if (!(k in DEFAULT_SETTINGS)) continue // unknown junk
+    const def = DEFAULT_SETTINGS[k]
+    const v = patch[k]
+    if (v === null || v === undefined) continue // tombstones are not a valid live-patch value here
+    if (typeof def === 'number' && typeof v === 'string') {
+      // CLI legacy numeric-string shape: coerce exactly like coerceNumericSettings, drop non-numeric strings
+      const n = Number(v)
+      if (v.trim() !== '' && Number.isFinite(n)) out[k] = n
+      continue
+    }
+    if (typeof def !== typeof v) continue // type-mismatched junk (e.g. object where boolean declared)
+    out[k] = v
+  }
+  return out
+}
+
 function load () {
   // Corrupted-JSON fallback: this module executes at top level; a throw = the whole store chain's import fails and white-screens; falling back to {} lets the DB restore path (initFromDb) take over
   let raw = {}
@@ -197,6 +224,13 @@ export default {
         // IPC failure = LS written but config.json not; next launch config would overwrite it back (settings changed during lock → lost on restart): at least leave a trace
         console.error('[settings] updateSettings IPC failed, patch may be reverted on next launch:', patch, e)
       }
+    },
+    /** P1-3: inbound patch from a trust boundary (CLI watcher / LAN-sync applied settings rows).
+     *  Sanitized via sanitizeSettingsPatch (same coercion/validation family as restore()), then
+     *  re-dispatched through the normal update action so LS/config.json/shortcuts stay in sync. */
+    async updateExternal ({ dispatch }, patch) {
+      const clean = sanitizeSettingsPatch(patch)
+      if (Object.keys(clean).length) await dispatch('update', clean)
     },
     // On startup judge newness by timestamp: if the DB mirror is newer than LS (e.g. LS cleared / machine change) → restore key-level from DB wholesale; otherwise flush current values back to the DB
     async initFromDb ({ state, commit }) {

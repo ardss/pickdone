@@ -147,6 +147,7 @@ export default {
     "repairTitle": "Pair a new device?",
     "repairWarning": "Pairing adopts a new shared secret — existing paired devices will be disconnected and must be paired again.",
     "conflictKept": "Sync conflict: \"{name}\" — the other device's version was kept; your earlier copy is in the recycle bin",
-    "conflictApplied": "Sync conflict: \"{name}\" — the other device's version was applied"
+    "conflictApplied": "Sync conflict: \"{name}\" — the other device's version was applied",
+    "unpairedByRemote": "Unpaired by the other device — pair again"
   }
 }

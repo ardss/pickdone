@@ -147,6 +147,7 @@ export default {
     "repairTitle": "配对新设备？",
     "repairWarning": "配对将采用新的共享密钥——已配对的设备会被断开，需要重新配对。",
     "conflictKept": "同步冲突：「{name}」已保留对方设备的版本，你早前的内容在回收站",
-    "conflictApplied": "同步冲突：「{name}」已应用对方设备的版本"
+    "conflictApplied": "同步冲突：「{name}」已应用对方设备的版本",
+    "unpairedByRemote": "已被对方解除配对，请重新配对"
   }
 }

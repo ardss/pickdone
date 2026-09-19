@@ -37,6 +37,30 @@
  * stay in EditPanel.vue because imgList/fileList are save-pipeline state owned by
  * the parent; this component emits pick/preview/remove.
  */
+// [component-fixes] pure-start — keep pure & framework-free
+/** P2e (2026-09-19 UX review round 2): 'attachments-arrived' carries the landed file's key — only
+ *  bump the re-key tick when it belongs to THIS todo's attachments, otherwise unrelated arrivals
+ *  (other todo / other peer) flicker the grid for nothing. Matches on the item `key` field or the
+ *  url basename (older rows may lack `key`). An empty local list never matches; a key-less event
+ *  keeps legacy behavior (always bump) since there is nothing to compare against. */
+function arrivalTouchesCurrent (lists, key) {
+  if (!key) return true
+  const local = []
+  for (const list of lists) {
+    for (const it of (list || [])) {
+      if (!it) continue
+      if (it.key) local.push(String(it.key))
+      if (it.url) local.push(String(it.url).split('/').pop())
+    }
+  }
+  if (!local.length) return false
+  if (local.includes(key)) return true
+  let decoded = key
+  try { decoded = decodeURIComponent(key) } catch (e) { /* keep raw */ }
+  return decoded !== key && local.includes(decoded)
+}
+// [component-fixes] pure-end
+
 export default {
   name: 'EpAttachments',
   props: {
@@ -56,7 +80,10 @@ export default {
   mounted () {
     if (typeof window !== 'undefined' && window.todoAPI && window.todoAPI.onSyncEvent) {
       const off = window.todoAPI.onSyncEvent(evt => {
-        if (evt && evt.type === 'attachments-arrived') this.arriveTick++
+        if (evt && evt.type !== 'attachments-arrived') return
+        // P2e: only arrivals for THIS todo's attachment keys re-key the grid
+        if (!arrivalTouchesCurrent([this.imgList, this.fileList], evt.key)) return
+        this.arriveTick++
       })
       this._offArrive = typeof off === 'function' ? off : null
     }

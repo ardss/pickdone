@@ -193,12 +193,17 @@ async function bootstrap () {
   // Debounced 500ms: avoids burst full reloads when multiple windows (float/widgets) are online simultaneously
   let _todosChangedTimer = null
   let _todosChangedTail = null
-  const _reloadExternal = () => {
-    store.dispatch('todo/init').catch(() => {})
+  let _todosChangedSyncApply = false // last broadcast was a LAN-sync-applied round (payload reason)
+  const _reloadExternal = ({ preserveHistory = false } = {}) => {
+    // P1-2 (2026-09-19 UX review round 2): inbound LAN-sync rounds reload via the non-clearing
+    // variant — remote edits are not undoable locally, so clearing history would only destroy the
+    // user's OWN pending undo stack. CLI/watcher external writes keep the old clearing behavior.
+    store.dispatch('todo/init', preserveHistory ? { preserveHistory: true } : undefined).catch(() => {})
     // CLI can now write categories (category add/rename/rm) — reloading todos only would make new categories appear in the sidebar only after restart
     store.dispatch('category/init').catch(() => {})
   }
-  window.todoAPI.onTodosChanged(() => {
+  window.todoAPI.onTodosChanged(evt => {
+    _todosChangedSyncApply = !!(evt && evt.reason === 'lan-sync-apply')
     clearTimeout(_todosChangedTimer)
     // Guard runs when the timer fires, not on arrival: an IPC broadcast may arrive before subscribeAction.after timestamps,
     // so checking at fire time is the only way to cover "our own persisted write broadcast coming back" (otherwise todo/init's historyClear
@@ -207,22 +212,24 @@ async function bootstrap () {
       if (Date.now() - (store.state.todo._lastLocalWriteAt || 0) < 1500) {
         // External updates arriving within the echo-suppression window are not dropped outright: schedule a trailing reload, otherwise tasks just created in the quick-add window/peer would wait for the next change to appear
         clearTimeout(_todosChangedTail)
-        _todosChangedTail = setTimeout(_reloadExternal, 1600)
+        _todosChangedTail = setTimeout(() => _reloadExternal({ preserveHistory: _todosChangedSyncApply }), 1600)
         return
       }
       // Direct path must cancel any pending trailing reload — otherwise an echo-window trailing
       // timer followed by a direct reload runs _reloadExternal twice (double full reload)
       clearTimeout(_todosChangedTail)
-      _reloadExternal()
+      _reloadExternal({ preserveHistory: _todosChangedSyncApply })
     }, 500)
   })
 
-  // CLI settings set hot-apply: the main process watcher diffs changed keys and pushes a patch; going through the update action keeps
-  // LS/config.json/shortcuts/login-items all in sync (the write-back mirror's _savedAt updates, so the main process diff converges to empty)
+  // CLI settings set hot-apply + LAN-sync applied settings rows: the main process diffs changed keys
+  // and pushes a patch. Routed through `settings/updateExternal` (P1-3): the inbound patch is
+  // sanitized (unknown/type-mismatch keys dropped, numeric strings coerced) exactly like the
+  // restore()/load() paths, so junk from a peer or an old CLI build cannot corrupt live settings.
   if (window.todoAPI.onExternalSettingsChanged) {
     window.todoAPI.onExternalSettingsChanged(patch => {
       try {
-        if (patch && Object.keys(patch).length) store.dispatch('settings/update', patch)
+        if (patch && Object.keys(patch).length) store.dispatch('settings/updateExternal', patch)
       } catch (e) { console.error('[cli-settings] hot-apply failed', e) }    })
   }
 
@@ -230,14 +237,21 @@ async function bootstrap () {
   // syncEvent per round; show a single non-intrusive toast so the user learns their losing edit was
   // superseded (todo losers: their earlier copy is preserved in the recycle bin; setting/meta: the
   // peer's version was applied). Aux windows (float/quick-add) do not own user notifications.
+  // P2b (round 2): under edit-war a toast per round piles up — keep at most ONE visible conflict
+  // toast (replace the previous instance) with a 30s minimum interval between shows.
+  let _conflictToast = null
+  let _conflictShownAt = 0
   if (window.todoAPI.onSyncEvent && isMainShell) {
     window.todoAPI.onSyncEvent(evt => {
       if (!evt || evt.type !== 'sync-conflict') return
       try {
         const EP = window.ElementPlus
         if (!EP || !EP.ElMessage) return
+        if (Date.now() - _conflictShownAt < 30 * 1000) return // rate-limit: one conflict notice per 30s window
+        if (_conflictToast) { try { _conflictToast.close() } catch (e) { /* already gone */ } _conflictToast = null }
         const key = evt.applied ? 'sync.conflictApplied' : 'sync.conflictKept'
-        EP.ElMessage({ type: 'warning', message: i18n.global.t(key, { name: evt.name || '' }), duration: 6000, showClose: true })
+        _conflictToast = EP.ElMessage({ type: 'warning', message: i18n.global.t(key, { name: evt.name || '' }), duration: 6000, showClose: true })
+        _conflictShownAt = Date.now()
       } catch (e) { console.warn('[lan-sync] conflict toast failed', e) }
     })
   }
