@@ -141,7 +141,12 @@ test('glue: server-side ingest path accepts inbound segments from authenticated 
       // snapshot-request protocol; nothing sends `type:'snapshot'` anymore)
     },
   })
-  await new Promise((resolve) => serverNode.on('listening', resolve))
+  // Reject on 'error' too: awaiting the bare 'listening' event on a failed bind (e.g. a CI-only
+  // EACCES/EADDRNOTAVAIL) used to hang the suite forever with no failure named.
+  await new Promise((resolve, reject) => {
+    serverNode.once('listening', resolve)
+    serverNode.once('error', reject)
+  })
 
   const node = createLanSyncNode({
     deviceId: 'client-node',

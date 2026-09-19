@@ -41,6 +41,7 @@ export default {
     "TomatoPanel": {
       "remoteRunning": "Focus running on {name} · {time}",
       "remoteRunningTip": "Another device is focusing (display only)",
+      "remoteTodoMissing": "Task not on this device",
       "phaseIdle": "Ready",
       "todayRecords": "Today's records",
       "countN": "{n}",

@@ -274,6 +274,10 @@ function createAttachmentPuller (opts = {}) {
             try { require('electron-log').warn('[LanSync] attachment write failed:', id, e && e.message) } catch { /* noop */ }
             markFailed(id)
           }
+          // P1-8 (2026-09-19 UX review): the file just landed — notify the host so it can tell the
+          // renderer to refresh attachment images/lists (previously the arrival was invisible until
+          // a full view reload happened to run).
+          try { if (typeof opts.onArrived === 'function') opts.onArrived(id) } catch { /* notify is best-effort */ }
         }
         current = null
       }

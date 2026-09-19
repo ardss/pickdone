@@ -364,8 +364,12 @@ function applyRowInner (state, incoming) {
         state.pendingWrites.todos.push({ ...conflictCopy.data, taskId: copyId, delete: 1, deletedAt: Date.now() })
         log.warn('[LanSync] conflict on', entity, baseId, '— loser materialized to recycle bin as', copyId)
       }
+      // P1-5: the user-facing toast is driven by the round summary (one per round, see markConflict)
+      markConflict(state, 'todo', (conflictCopy.data && conflictCopy.data.taskContent) || baseId, false)
     } else {
       log.warn('[LanSync] conflict on', entity, incoming.id, '— local copy superseded (conflict-copy UI deferred)')
+      // P1-5: non-todo losers are applied wholesale (LWW) — tell the user the peer's version won
+      markConflict(state, entity, incoming.id, true)
     }
   }
   // Write the winner through the regular write ops (re-captured into the local oplog, which is what
@@ -398,10 +402,17 @@ function applyRowInner (state, incoming) {
       // deletion through the dedicated tombstone op instead. Direct sync call: deletes are rare
       // and tiny, no bulk buffering needed.
       state.db.call('settingsRowDelete', { key: incoming.id })
+      markAppliedSetting(state, incoming.id, undefined) // P1-2a: blob field dropped + hot-apply bookkeeping
       return true
     }
     if (!winner.data) return false
     state.pendingWrites.settings.push({ key: incoming.id, value: winner.data.value })
+    // P1-2a (2026-09-19 UX review): remember the applied key/value so the bootstrap can (1) fold it
+    // into the db.settingsState blob and (2) hot-apply it to the running renderer. Without (1) the
+    // renderer's next whole-blob mirror re-stamped its stale field over this newer row (fresh
+    // updatedAt) — both peers perpetually "won" with stale values and every round logged a
+    // settings conflict that nobody ever saw in the UI.
+    markAppliedSetting(state, incoming.id, winner.data.value)
   } else if (entity === 'tomato') {
     if (winner.deleted && !winner.data) {
       // Tomato tombstone winner (hydrated from a pointer whose row is gone locally): land it via
@@ -457,8 +468,62 @@ function applyRowInner (state, incoming) {
   return true
 }
 
+/** P0-1 (2026-09-19 UX review): applied-entity bookkeeping for the post-round renderer
+ *  broadcast. applyRowInner is the single choke point every inbound row passes through, so
+ *  `applied` is recorded right here: kinds that changed this round + the settings key/values
+ *  (P1-2: the consumer updates the db.settingsState blob with them so the renderer's next
+ *  whole-blob mirror cannot re-stamp stale fields over newer rows). */
+function markApplied (state, entity) {
+  if (!state.applied) state.applied = { kinds: new Set(), settingsPatch: {}, conflicts: [] }
+  state.applied.kinds.add(entity)
+}
+
+/** Capture an applied inbound SETTING row (P1-2a): key -> new value. Row values travel
+ *  JSON-serialized (uniform roundtrip), but the settings blob and the renderer's hot-apply
+ *  patch both work on PARSED values — decode here, falling back to the raw string for
+ *  non-JSON payloads. Deleted rows carry undefined (the blob field is dropped; the hot-apply
+ *  patch omits it — settings deletes are not a user-reachable flow today). securityLock*
+ *  never lands here (ingress gate). */
+function markAppliedSetting (state, key, value) {
+  markApplied(state, 'setting')
+  if (!state.applied) return
+  let decoded = value
+  if (typeof value === 'string') {
+    try { decoded = JSON.parse(value) } catch { /* keep the raw string */ }
+  }
+  state.applied.settingsPatch[key] = decoded
+}
+
+/**
+ * P1-5 (2026-09-19 UX review): per-round conflict summary. Non-todo LWW losses were warn-only
+ * log lines — the losing machine's user never learned their edit was superseded. Each conflict
+ * appends one {entity, name, applied} entry; the bootstrap emits AT MOST ONE 'sync-conflict'
+ * syncEvent per round (consumeAppliedRound) so the UI can show a single non-intrusive toast.
+ */
+function markConflict (state, entity, name, applied) {
+  if (!state.applied) state.applied = { kinds: new Set(), settingsPatch: {}, conflicts: [] }
+  if (!state.applied) return
+  state.applied.conflicts.push({ entity, name: String(name || ''), applied: !!applied })
+}
+
 function applyRowSafe (state, incoming) {
-  try { return applyRowInner(state, incoming) } catch (e) { log.warn('[LanSync] apply failed for', incoming && incoming.entity, incoming && incoming.id, e.message); return false }
+  try {
+    const ok = applyRowInner(state, incoming)
+    if (ok) markApplied(state, incoming && incoming.entity)
+    return ok
+  } catch (e) { log.warn('[LanSync] apply failed for', incoming && incoming.entity, incoming && incoming.id, e.message); return false }
+}
+
+/**
+ * Consume one round's applied bookkeeping (called by the bootstrap after flushPendingWrites):
+ * returns { kinds, settingsPatch, conflicts } or null when nothing applied. Resets the
+ * bookkeeping so the next round starts clean.
+ */
+function consumeAppliedRound (state) {
+  const a = state.applied
+  state.applied = null
+  if (!a || (!a.kinds.size && !a.conflicts.length && !Object.keys(a.settingsPatch).length)) return null
+  return { kinds: [...a.kinds], settingsPatch: a.settingsPatch, conflicts: a.conflicts }
 }
 
 /**
@@ -526,6 +591,7 @@ module.exports = {
   localUserId,
   clampSkew,
   applyRowSafe,
+  consumeAppliedRound,
   flushPendingWrites,
   readMaxOplogSeq,
 }

@@ -39,6 +39,7 @@
           <span class="tip sync-device-meta" v-else>{{ $t('sync.neverRan') }}</span>
           <span class="sync-pending" v-if="pendingBadge(p)">{{ pendingBadge(p) }}</span>
           <span class="tip sync-device-error" v-if="p.lastError">{{ $t('sync.errorPrefix', { msg: String(p.lastError).slice(0, 60) }) }}</span>
+          <button class="mini sync-unpair-btn" :disabled="busy || connecting" @click="askUnpair(p)">{{ $t('sync.unpairBtn') }}</button>
         </div>
       </div>
     </div>
@@ -115,6 +116,20 @@
         <div class="sync-pair-dialog__actions" v-if="!pairExpired">
           <button class="mini" ref="pairRejectBtn" @click="respondPair(false)">{{ $t('sync.rejectBtn') }}</button>
           <button class="mini sync-pair-accept" @click="respondPair(true)">{{ $t('sync.acceptBtn') }}</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Destructive-action confirm dialog: unpair a device (P1-3) / re-pair while other devices
+         exist (P1-4 — one shared pairing secret means the new pair disconnects existing peers).
+         Same custom-modal convention as the pair-request dialog above. -->
+    <div class="sync-pair-overlay" v-if="confirmBox" @keydown="onConfirmKeydown">
+      <div class="sync-pair-dialog" role="dialog" aria-modal="true" :aria-label="$t(confirmBox.titleKey)" ref="confirmDialog">
+        <div class="sync-pair-dialog__title">{{ $t(confirmBox.titleKey) }}</div>
+        <div class="sync-pair-dialog__body">{{ $t(confirmBox.textKey, confirmBox.params || {}) }}</div>
+        <div class="sync-pair-dialog__actions">
+          <button class="mini" ref="confirmCancelBtn" @click="cancelConfirm">{{ $t('sync.confirmCancelBtn') }}</button>
+          <button class="mini sync-pair-accept" @click="okConfirm">{{ $t('sync.confirmOkBtn') }}</button>
         </div>
       </div>
     </div>
@@ -205,7 +220,8 @@ export default {
       throttledAlert: false,
       securityOpen: false,
       manualOpen: false,
-      feedOpen: false
+      feedOpen: false,
+      confirmBox: null // P1-3/P1-4: { titleKey, textKey, params, onOk } destructive-action confirm
     }
   },
   computed: {
@@ -368,24 +384,69 @@ export default {
     },
     async connectPeer () {
       const host = String(this.connectHost || '').trim()
-      if (!host || this.connecting) return
-      this.connecting = true // immediate feedback: the 63s await must not leave the user staring at a dead button
-      try {
-        await syncPairRequest(host)
-        this.$message.success(this.$t('sync.connectSent'))
-      } catch (e) {
-        const key = pairFailureKey(e)
-        this.$message.error(this.$t(key || 'sync.pairFailGenericMsg'))
-      } finally { this.connecting = false }
+      // P1-4: ONE in-flight guard for both pairing flows — submitPairing used `busy` while
+      // connectPeer used `connecting`, so both could run concurrently and interleave the two
+      // secret rotations. connectPeer now holds `busy` too.
+      if (!host || this.busy || this.connecting) return
+      // P1-4: pairing adopts a NEW single shared secret — existing peers are disconnected and
+      // must re-pair. Say so before the user pulls the trigger.
+      const proceed = () => {
+        this.busy = true
+        this.connecting = true // immediate feedback: the 63s await must not leave the user staring at a dead button
+        try {
+          syncPairRequest(host).then(() => {
+            this.$message.success(this.$t('sync.connectSent'))
+          }).catch(e => {
+            const key = pairFailureKey(e)
+            this.$message.error(this.$t(key || 'sync.pairFailGenericMsg'))
+          }).finally(() => { this.busy = false; this.connecting = false; this.refresh() })
+        } catch (e) { this.busy = false; this.connecting = false }
+      }
+      if (this.peers.length) this.askConfirm('sync.repairTitle', 'sync.repairWarning', {}, proceed)
+      else proceed()
     },
     async submitPairing () {
-      this.busy = true
-      try {
-        await pairWithCode(this.pairDraft, this.pairTarget || (this.peers[0] && this.peers[0].deviceId))
-        this.$message.success(this.$t('sync.pairOkMsg'))
-        this.pairDraft = ''
-        this.status = await getSyncStatus()
-      } catch (e) { this.$message.error(this.$t('sync.pairFailMsg')) } finally { this.busy = false }
+      // P1-4: shared in-flight guard (see connectPeer)
+      if (this.busy || this.connecting) return
+      const proceed = () => {
+        this.busy = true
+        pairWithCode(this.pairDraft, this.pairTarget || (this.peers[0] && this.peers[0].deviceId)).then(async () => {
+          this.$message.success(this.$t('sync.pairOkMsg'))
+          this.pairDraft = ''
+          this.status = await getSyncStatus()
+        }).catch(() => { this.$message.error(this.$t('sync.pairFailMsg')) }).finally(() => { this.busy = false })
+      }
+      if (this.peers.length) this.askConfirm('sync.repairTitle', 'sync.repairWarning', {}, proceed)
+      else proceed()
+    },
+    /* ---------- P1-3/P1-4 confirm dialog ---------- */
+    askConfirm (titleKey, textKey, params, onOk) {
+      this.confirmBox = { titleKey, textKey, params: params || {}, onOk }
+    },
+    cancelConfirm () { this.confirmBox = null },
+    okConfirm () {
+      const box = this.confirmBox
+      this.confirmBox = null
+      if (box && typeof box.onOk === 'function') box.onOk()
+    },
+    onConfirmKeydown (e) {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); this.cancelConfirm() }
+    },
+    /** P1-3: unpair a peer card — confirm first (revoking the shared pairing secret disconnects
+     *  ALL previously paired devices; both sides must re-pair). */
+    askUnpair (p) {
+      if (!p || !p.deviceId || this.busy || this.connecting) return
+      const name = p.deviceName || p.deviceId
+      this.askConfirm('sync.unpairTitle', 'sync.unpairConfirm', { name }, async () => {
+        this.busy = true
+        try {
+          await dbCallLoose('syncUnpairPeer', { deviceId: p.deviceId })
+          this.$message.success(this.$t('sync.unpairDoneMsg', { name }))
+        } catch (e) { this.$message.error(this.$t('sync.unpairFailMsg')) } finally {
+          this.busy = false
+          this.refresh()
+        }
+      })
     },
     async onToggle (v) {
       this.busy = true
@@ -477,4 +538,6 @@ export default {
 .sync-connecting { opacity: 0.6; cursor: wait; }
 .sync-feed-hint { color: var(--text-3); }
 .sync-pair-expired { color: var(--danger, var(--text-2)); }
+.sync-unpair-btn { color: var(--danger, var(--text-2)); }
+.sync-pair-dialog__body { white-space: pre-line; }
 </style>

@@ -136,6 +136,17 @@ export default {
     "pairFailGenericMsg": "Pairing failed — please try again",
     "pairExpiredHint": "Request timed out",
     "kindSnapshot": "Snapshot sync",
-    "feedSessionHint": "History is kept for this session only"
+    "feedSessionHint": "History is kept for this session only",
+    "confirmCancelBtn": "Cancel",
+    "confirmOkBtn": "Confirm",
+    "unpairBtn": "Unpair",
+    "unpairTitle": "Unpair device",
+    "unpairConfirm": "Unpair {name}?\nPairing uses one shared secret — unpairing revokes it, ALL previously paired devices are disconnected and both sides must pair again to resume syncing.",
+    "unpairDoneMsg": "{name} unpaired — pair again to sync with it",
+    "unpairFailMsg": "Unpair failed",
+    "repairTitle": "Pair a new device?",
+    "repairWarning": "Pairing adopts a new shared secret — existing paired devices will be disconnected and must be paired again.",
+    "conflictKept": "Sync conflict: \"{name}\" — the other device's version was kept; your earlier copy is in the recycle bin",
+    "conflictApplied": "Sync conflict: \"{name}\" — the other device's version was applied"
   }
 }

@@ -307,8 +307,8 @@ function createLanSyncNode(opts) {
       let pullAckSeq = 0 // max seq among the peer's pushed rows across ALL chunks (PEER's seq space)
       let awaitingSnapshot = false // snapshot-request sent; the round ends at snapshot-end, not ack
       // Attachment FILE puller (post-ack): sendVia needs the RAW SOCKET (socket._lanSend lives on em._socket, not the EventEmitter — wiring `client` here poisoned every round, 2026-09-19 drill).
-      const att = createAttachmentPuller({ send: (m) => sendVia(client._socket, m), session: attSession, peerId: peer.deviceId,
-        getKeys: typeof opts.getMissingAttachmentKeys === 'function' ? opts.getMissingAttachmentKeys : null, deps: opts.attachmentPullerDeps })
+      // onArrived (P1-8): host callback per file landed on disk -> 'attachments-arrived' syncEvent so open views refresh live.
+      const att = createAttachmentPuller({ send: (m) => sendVia(client._socket, m), session: attSession, peerId: peer.deviceId, getKeys: typeof opts.getMissingAttachmentKeys === 'function' ? opts.getMissingAttachmentKeys : null, deps: opts.attachmentPullerDeps, onArrived: typeof opts.onAttachmentArrived === 'function' ? opts.onAttachmentArrived : null })
       const chunkBuf = new Map() // snapshot-chunk index -> rows (assembled at snapshot-end, fallback mode)
       const chunkRowCounts = new Map() // streaming mode: index -> applied row count (rows are NEVER buffered)
       const streamingSnapshot = typeof ingestSnapshotChunk === 'function'

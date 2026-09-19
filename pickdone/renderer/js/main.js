@@ -226,6 +226,22 @@ async function bootstrap () {
       } catch (e) { console.error('[cli-settings] hot-apply failed', e) }    })
   }
 
+  // P1-5 (2026-09-19 UX review): LAN sync conflict notice — main emits AT MOST ONE 'sync-conflict'
+  // syncEvent per round; show a single non-intrusive toast so the user learns their losing edit was
+  // superseded (todo losers: their earlier copy is preserved in the recycle bin; setting/meta: the
+  // peer's version was applied). Aux windows (float/quick-add) do not own user notifications.
+  if (window.todoAPI.onSyncEvent && isMainShell) {
+    window.todoAPI.onSyncEvent(evt => {
+      if (!evt || evt.type !== 'sync-conflict') return
+      try {
+        const EP = window.ElementPlus
+        if (!EP || !EP.ElMessage) return
+        const key = evt.applied ? 'sync.conflictApplied' : 'sync.conflictKept'
+        EP.ElMessage({ type: 'warning', message: i18n.global.t(key, { name: evt.name || '' }), duration: 6000, showClose: true })
+      } catch (e) { console.warn('[lan-sync] conflict toast failed', e) }
+    })
+  }
+
   // Quit-flush ack handshake (main waits for this before closing the DB, ≤2s cap): dbMirror/store flush
   // handlers registered this channel EARLIER (their modules load before main.js), so by the time our
   // listener runs their flush invokes are already dispatched — a short defer just lets the queued IPC

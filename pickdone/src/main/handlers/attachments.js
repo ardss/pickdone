@@ -7,7 +7,7 @@ const attachments = require('../attachments')
 const { saveAttachment, attachmentPath, attachDir } = attachments
 
 module.exports = function attachmentHandlers (ctx) {
-  const { isLocked, isSafeExternal, app, getMainWindow, broadcastWhiteNoiseUpdated } = ctx
+  const { isLocked, isSafeExternal, app, getMainWindow, broadcastWhiteNoiseUpdated, notifySyncChange } = ctx
   const { dialog } = require('electron')
 
   return {
@@ -23,8 +23,13 @@ module.exports = function attachmentHandlers (ctx) {
         const p = attachmentPath(url.slice(8))
         // Missing-file guard (feature: LAN-synced attachments): the metadata row may arrive
         // before the file is pulled over. Structured result -> renderer toasts "not yet
-        // synced" instead of a raw open failure.
-        if (!fs.existsSync(p)) return { missing: true, name: path.basename(p) }
+        // synced" instead of a raw open failure. P1-8 (2026-09-19 UX review): the missing key
+        // also kicks a best-effort immediate sync round, so the targeted pull runs now instead
+        // of waiting up to ROUND_INTERVAL_MS for the next periodic round.
+        if (!fs.existsSync(p)) {
+          try { if (notifySyncChange) notifySyncChange('attachment-missing-open') } catch { /* sync lazy-not-init */ }
+          return { missing: true, name: path.basename(p) }
+        }
         shell.openPath(p); return true
       }
       if (isSafeExternal(url)) return shell.openExternal(url)
