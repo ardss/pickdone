@@ -102,6 +102,20 @@ import { getEstimate } from '../utils/tomatoEstimate.js'
 // dragover is O(document); this is set on dragstart and cleared on dragend/drop.
 let dragActive = false
 
+/* [d5-ui-fixes] pure-start */
+// Cross-day move patch builder: dayStart is the bucketing key, so todoTime follows the new day
+// only when it was aligned with the old day (a pure day marker); a todoTime carrying a real
+// time-of-day (e.g. 14:30) is left untouched so the scheduled clock time survives the move.
+// Same rule for reminderTime (aligned to the old day -> shift to the new day). Mirrors DayDeck.
+function crossDayMovePatch (dragged, newDay, startOfDay) {
+  const patch = { dayStart: newDay }
+  const origDay = dragged.dayStart || 0
+  if (dragged.todoTime && startOfDay(dragged.todoTime) === startOfDay(origDay)) patch.todoTime = newDay
+  if (dragged.reminderTime && startOfDay(dragged.reminderTime) === startOfDay(origDay)) patch.reminderTime = newDay
+  return patch
+}
+/* [d5-ui-fixes] pure-end */
+
 export default {
   name: 'TodoItem',  props: {
     todo: { type: Object, required: true },
@@ -196,11 +210,19 @@ export default {
       if ((dragged.dayStart || 0) !== (target.dayStart || 0)) {
         const newDay = target.dayStart || +dayjs().startOf('day')
         const origDay = dragged.dayStart
+        // Preserve the task's time-of-day: todoTime/reminderTime follow the new day only when they
+        // were anchored to the old day; a real datetime (e.g. 14:30) must survive the move
+        // (mirrors DayDeck.onDrop semantics)
+        const startOf = ts => +dayjs(ts).startOf('day')
+        const patch = crossDayMovePatch(dragged, newDay, startOf)
+        const revertPatch = { dayStart: origDay }
+        if ('todoTime' in patch) revertPatch.todoTime = dragged.todoTime
+        if ('reminderTime' in patch) revertPatch.reminderTime = dragged.reminderTime
         // Unified exit moveWithUndo (hover pauses / ✕ closes); the hand-rolled $message version was removed (interaction contract ①)
         moveWithUndo(this, {
           label: this.$t('statsJ.TodoItem.movedTo', { d: dayjs(newDay).format(FMT.cnDate) }),
-          apply: () => this.$store.dispatch('todo/updateTodoFields', { taskId: dragged.taskId, patch: { dayStart: newDay, todoTime: newDay } }),
-          revert: () => this.$store.dispatch('todo/updateTodoFields', { taskId: dragged.taskId, patch: { dayStart: origDay, todoTime: origDay } })
+          apply: () => this.$store.dispatch('todo/updateTodoFields', { taskId: dragged.taskId, patch }),
+          revert: () => this.$store.dispatch('todo/updateTodoFields', { taskId: dragged.taskId, patch: revertPatch })
         })
         return
       }

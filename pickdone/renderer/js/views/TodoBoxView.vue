@@ -102,7 +102,7 @@
 import { taskContextMenu } from '../utils/taskMenu.js'
 import { DEFAULT_CAT_COLOR } from '../utils/core.js'
 import { toggleCompleteWithUndo } from '../utils/completeAction.js'
-import { batchMoveWithUndo, deleteWithUndo } from '../utils/confirm.js'
+import { batchMoveWithUndo } from '../utils/confirm.js'
 import { getEstimate } from '../utils/tomatoEstimate.js'
 import EmptyState from '../components/EmptyState.vue'
 
@@ -233,7 +233,7 @@ export default {
       try { await this.$confirm(this.$t('statsC.TodoBox.confirmDelete', { n }), this.$t('statsC.TodoBox.confirmTitle'), { type: 'warning' }) } catch { return }
       // Resolve against the live list first (dead ids deleted elsewhere during batching are excluded),
       // then split: recurring instances divert to ui/askRepeatDelete (RepeatDeleteModal owns their
-      // deletion), plain tasks go through the unified deleteWithUndo exit -- no hand-rolled undo here
+      // deletion), plain tasks are deleted in bulk below
       const rows = this.checkedIds
         .map(id => this.$store.state.todo.todoList.find(x => x.taskId === id))
         .filter(Boolean)
@@ -241,7 +241,21 @@ export default {
       // Keep the recurring selections that did not get a modal this pass checked, so "delete" asks
       // about the next repeat group when the user confirms again
       this.checkedIds = repeatRest.map(t => t.taskId)
-      for (const raw of plain) await deleteWithUndo(this, this.$store, raw)
+      // Aggregate undo: delete all plain rows first, then ONE batch undo toast restoring the whole
+      // group — per-row deleteWithUndo would stack N toasts for an N-row selection while sibling
+      // batch ops (batchToday/batchCat) aggregate via batchMoveWithUndo + closeAll
+      const snap = []
+      for (const raw of plain) {
+        try { await this.$store.dispatch('todo/deleteTodo', raw); snap.push({ id: raw.taskId }) } catch { /* dead row: skip */ }
+      }
+      if (snap.length) {
+        this.$message.closeAll()
+        batchMoveWithUndo(this, {
+          label: this.$t('statsC.TodoBox.msgDeleted', { n: snap.length }),
+          snap,
+          revertOf: r => this.$store.dispatch('todo/updateTodoFields', { taskId: r.id, patch: { delete: false, deletedAt: 0, status: 'update' } })
+        })
+      }
       if (repeatAsk) this.$store.commit('ui/askRepeatDelete', repeatAsk.taskId)
     },
     ctxMenu (t, e) {
