@@ -220,6 +220,15 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx electron-builder --linux AppImage --arm64 --x64 --publish always && npx electron-builder --linux deb --arm64 --publish always
 
+      # 2026-09-19 (P1-4j): parity with the windows job — run the packaged-artifact smoke
+      # (verify-packaged.cjs) on the Linux unpacked dirs too. The script's .cmd shim checks are
+      # existence-guarded, so running it against the unix-shim-only Linux packages is safe.
+      - name: Verify packaged artifact (static asar/resources/cli checks, windows-job parity)
+        working-directory: pickdone
+        run: |
+          node scripts/verify-packaged.cjs --dir dist/linux-unpacked
+          node scripts/verify-packaged.cjs --dir dist/linux-arm64-unpacked
+
       - name: Verify packaged artifacts (renderer + smoke trio, parity with the manual test workflow)
         working-directory: pickdone
         run: |

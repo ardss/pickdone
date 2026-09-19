@@ -38,8 +38,9 @@
           <span class="tip sync-device-meta" v-if="p.lastRoundAt">{{ $t('sync.lastRound', { time: relTime(p.lastRoundAt) }) }}</span>
           <span class="tip sync-device-meta" v-else>{{ $t('sync.neverRan') }}</span>
           <span class="sync-pending" v-if="pendingBadge(p)">{{ pendingBadge(p) }}</span>
-          <span class="tip sync-device-error" v-if="p.lastError">{{ $t('sync.errorPrefix', { msg: String(p.lastError).slice(0, 60) }) }}</span>
-          <button class="mini sync-unpair-btn" :disabled="busy || connecting" @click="askUnpair(p)">{{ $t('sync.unpairBtn') }}</button>
+          <span class="tip sync-device-error" v-if="isUnpairedByRemote(p)">{{ $t('sync.unpairedByRemote') }}</span>
+          <span class="tip sync-device-error" v-else-if="p.lastError">{{ $t('sync.errorPrefix', { msg: String(p.lastError).slice(0, 60) }) }}</span>
+          <button class="mini sync-unpair-btn" v-if="!isUnpairedByRemote(p)" :disabled="busy || connecting" @click="askUnpair(p)">{{ $t('sync.unpairBtn') }}</button>
         </div>
       </div>
     </div>
@@ -194,6 +195,15 @@ function relTimeParts (ts, now = null) {
 function securityVisible (list, throttled) {
   return !!(throttled || (Array.isArray(list) && list.length > 0))
 }
+/** P2c (2026-09-19 UX review round 2): a peer whose pairing secret was REVOKED on this side (or
+ *  that unpaired us) fails authenticated hello forever — it shows as a zombie card. Map such
+ *  lastError markers (agent-A field: `lastError`; defensive patterns incl. 'unpaired',
+ *  'peer-unauthorized', auth-rejected, and the Chinese notice) to the dedicated "unpaired by the
+ *  other device — pair again" state instead of a transient-looking red error. */
+function peerUnpairedByRemote (lastError) {
+  if (!lastError) return false
+  return /unpair|peer-unauthorized|unauthorized|auth[^.]{0,16}reject/i.test(String(lastError))
+}
 // [component-fixes] pure-end
 
 export default {
@@ -245,6 +255,8 @@ export default {
   methods: {
     dotClass (p) { return peerDotClass(p) },
     feedIcon (k) { return feedIcon(k) },
+    /** P2c: peer card in the "unpaired by the other device" state — dedicated copy + no Unpair button. */
+    isUnpairedByRemote (p) { return peerUnpairedByRemote(p && p.lastError) },
     dotTip (p) {
       if (p && p.lastError && p.lastErrorAt && (Date.now() - p.lastErrorAt) < 5 * 60 * 1000) return this.$t('sync.errTip')
       return this.$t(p && p.online ? 'sync.onlineTip' : 'sync.offlineTip')
@@ -422,11 +434,25 @@ export default {
     /* ---------- P1-3/P1-4 confirm dialog ---------- */
     askConfirm (titleKey, textKey, params, onOk) {
       this.confirmBox = { titleKey, textKey, params: params || {}, onOk }
+      // P2d (2026-09-19 UX review round 2): the overlay @keydown never fired because nothing inside
+      // held focus — Escape was unreachable. Focus the safe default (取消) on open, mirroring the
+      // pair-request dialog; the overlay keydown handler then receives Escape/Tab. Restore focus on close.
+      if (typeof document !== 'undefined') this._confirmPrevFocus = document.activeElement
+      this.$nextTick(() => {
+        const btn = this.$refs.confirmCancelBtn as HTMLButtonElement | undefined
+        if (btn && btn.focus) btn.focus()
+      })
     },
-    cancelConfirm () { this.confirmBox = null },
+    restoreConfirmFocus () {
+      const prev = this._confirmPrevFocus
+      if (prev && prev.focus && document.contains(prev)) { try { prev.focus() } catch (e) { /* gone */ } }
+      this._confirmPrevFocus = null
+    },
+    cancelConfirm () { this.confirmBox = null; this.restoreConfirmFocus() },
     okConfirm () {
       const box = this.confirmBox
       this.confirmBox = null
+      this.restoreConfirmFocus()
       if (box && typeof box.onOk === 'function') box.onOk()
     },
     onConfirmKeydown (e) {
@@ -454,6 +480,8 @@ export default {
         const s = await setSyncEnabled(v)
         this.enabled = !!s.enabled
         this.status = this.enabled ? await getSyncStatus() : null
+        // P2f: sync off kills the remote running-tomato chip immediately (no stale announce)
+        if (!this.enabled && this.$store) { try { this.$store.commit('tomatoAnnounce/clearRemote') } catch (e) { /* store absent in isolated mounts */ } }
         this.$message.success(this.$t(this.enabled ? 'sync.enabledMsg' : 'sync.disabledMsg'))
       } catch (e) { this.$message.error(this.$t('sync.toggleFailed')) } finally { this.busy = false }
     },

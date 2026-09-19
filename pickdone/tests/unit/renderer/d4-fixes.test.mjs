@@ -216,7 +216,9 @@ test('main.js: direct _reloadExternal path clears the pending trailing reload ti
   assert.ok(m, 'onTodosChanged block found')
   const block = m[0].split('\r').join('')
   const tailPath = block.indexOf('clearTimeout(_todosChangedTail)\n        _todosChangedTail = setTimeout')
-  const directPath = block.indexOf('clearTimeout(_todosChangedTail)\n      _reloadExternal()')
+  // 2026-09-19 sync UX round 2: the direct reload now carries the sync-reason flag
+  // ({ preserveHistory }) — anchor on the call prefix, not the full argument list
+  const directPath = block.indexOf('clearTimeout(_todosChangedTail)\n      _reloadExternal(')
   assert.ok(tailPath > -1, 'trailing path schedules the tail timer')
   assert.ok(directPath > tailPath, 'direct path must clearTimeout(_todosChangedTail) before _reloadExternal()')
 })

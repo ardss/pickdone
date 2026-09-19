@@ -6,6 +6,24 @@ and versioning follows [Semantic Versioning](https://semver.org/). The 0.x serie
 
 ## [Unreleased]
 
+## [0.4.0-beta.15] - 2026-09-19
+
+### Added
+- LAN sync hardening (0.4.0 line): change-triggered sync rounds with sub-3s propagation between paired devices; AES-256-GCM transport encryption with ECDH-mixed pairing handshake; snapshot-request protocol and chunked snapshot transfer for first-sync.
+- Device Center: peer cards with online/pending/error dots, confirmed two-way pairing (60s window), activity feed and a security strip listing blocked pairing attempts.
+- Running-tomato announcements: a focus session started on a paired device shows as a live chip here; attachment files now sync across devices and thumbnails/self-heal once the file lands.
+- CSV import, project overview view, per-device unpair with destructive-action confirmation.
+
+### Changed
+- Device-local settings keys (layout, onboarding, per-device UI meta) are excluded from sync so peers can no longer clobber local layout state; sync rounds write settings into the blob before hot-apply so open windows converge instead of churning.
+- Update channel pinned for beta builds: the updater now reads the published `latest.yml` instead of a never-published `beta.yml` (first update check no longer 404s on beta versions).
+
+### Fixed
+- Inbound LAN-sync rounds no longer wipe the local undo stack (remote edits are not undoable, so Ctrl+Z of your own recent edits survived); external DB writes keep the old behavior.
+- Settings patches arriving from the CLI or a peer are validated and coerced like locally-loaded settings; unknown or type-mismatched junk is dropped instead of assigned bare.
+- Conflict notices no longer pile up under edit wars (one toast, 30s rate limit); the unpair confirm dialog is keyboard-reachable (Escape works); a peer that was unpaired by the other side shows "unpaired — pair again" instead of a zombie error card.
+- Sync correctness: perpetual per-round conflict loop on userId-differing rows ended; tombstones no longer re-captured or re-written every round; per-peer push watermarks advanced from segment acks (no more full-window re-push); ghost plan/filter rows eliminated; parallel peer dialing; running seeds for legacy rows.
+
 ## [0.3.7] - 2026-09-16
 
 ### Fixed
