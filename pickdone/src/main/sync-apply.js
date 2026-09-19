@@ -18,7 +18,7 @@
 const log = require('electron-log')
 const mergeCore = require('../../shared/sync-core/merge.mjs')
 
-const SYNCABLE_ENTITIES = new Set(['todo', 'setting', 'tomato', 'category', 'plan', 'filter'])
+const SYNCABLE_ENTITIES = new Set(['todo', 'setting', 'tomato', 'category', 'plan', 'filter', 'meta'])
 // settings_rows keys holding password/question CIPHERTEXT — never egress, never ingress (round-3).
 const SECURITY_LOCK_KEY = /^securityLock/
 
@@ -29,6 +29,33 @@ const isMachineLocalSettingKey = id => {
   // 'sync.' namespace = identity/pairing state (strictly local); 'securityLock*' = password
   // ciphertext (round-3 review: never egresses); leading underscore = CLI bookkeeping stamps.
   return k.startsWith('sync.') || /^securityLock/.test(k) || k.startsWith('_')
+}
+
+// GAP-A fix (2026-09-19): meta rows (projectMilestones:*, projectCategoryIds, tomatoEstimateState,
+// projectDeadline:/projectStatus:, repeatRule:*, ...) were captured into the oplog but never
+// hydrated/applied, so they never reached peers. These meta keys are machine-local and must
+// neither egress nor be overwritten by a peer's row:
+//   'sync.*' = sync engine bookkeeping (push cursor etc.); '_' = CLI stamps; 'securityLock*'
+//   defensive parity with settings rows; 'cliTomato*' = CLI tomato runtime TRANSIENT state
+//   (per-device command/status slots); 'todosVersion' = per-device dirty-row cursor;
+//   'firedReminders:'/'reminderLastSeenAt' = per-device scheduler dedup watermarks;
+//   'settingsRows.src.*' = v6 migration snapshot markers; 'db.tomatoState'/'habitsState' =
+//   retired/legacy ledger+habits blobs (migration bookkeeping only).
+const isMachineLocalMetaKey = id => {
+  const k = String(id)
+  return k.startsWith('sync.') || k.startsWith('_') || /^securityLock/.test(k) ||
+    k.startsWith('cliTomato') || k === 'todosVersion' || k.startsWith('firedReminders:') ||
+    k === 'reminderLastSeenAt' || k.startsWith('settingsRows.src.') ||
+    k === 'db.tomatoState' || k === 'habitsState'
+}
+// The settings/habits blobs are deliberately EXCLUDED from meta sync: they already sync
+// FIELD-GRANULAR via the `setting` entity (the db-sync-schema setMeta bridge mirrors every blob
+// field into settings_rows). Syncing the blob itself would apply whole-blob LWW and let the
+// receiving bridge's mergeDoc re-stamp stale field values OVER newer row edits — the §4.2
+// whole-blob clobber the split was built to prevent.
+const isSyncBlobMetaKey = id => {
+  const k = String(id)
+  return k === 'db.settingsState' || k === 'db.habitsState'
 }
 
 /**
@@ -51,6 +78,23 @@ function createHydrationCache (state) {
     category: id => load('category', 'getAllCategories', r => String(r.categoryId)).get(String(id)),
     plan: id => load('plan', 'planAll', r => String(r.id)).get(String(id)),
     filter: id => load('filter', 'filterList', r => String(r.id)).get(String(id)),
+    // meta is a KV table (no updatedAt column): the row value reads per key, and the local LWW
+    // age for a key is the latest LOCAL oplog ts for it (one paged oplog scan per pass, cached).
+    meta: key => state.db.call('getMeta', key),
+    metaTs: () => {
+      if (!caches.metaTs) {
+        const m = new Map()
+        let since = 0
+        for (let i = 0; i < 10000; i++) {
+          const rows = state.db.call('syncOplogSince', { sinceSeq: since, limit: 10000 }) || []
+          for (const r of rows) if (r.entity === 'meta' && r.ts > (m.get(r.entityId) || 0)) m.set(r.entityId, r.ts)
+          if (rows.length < 10000) break
+          since = rows[rows.length - 1].seq
+        }
+        caches.metaTs = m
+      }
+      return caches.metaTs
+    },
   }
 }
 
@@ -76,6 +120,15 @@ function hydrateRow (state, ptr, cache) {
       const r = c.setting(ptr.entityId)
       if (!r) return null
       return { ...base, updatedAt: r.updatedAt, deleted: !!r.deleted, deletedAt: r.deletedAt || 0, data: { key: r.key, value: r.value } }
+    }
+    if (ptr.entity === 'meta') {
+      // Machine-local keys and the settings/habits blobs never egress (see the filter comments above).
+      if (isMachineLocalMetaKey(ptr.entityId) || isSyncBlobMetaKey(ptr.entityId)) return null
+      const v = c.meta(ptr.entityId)
+      // Value absent = the pointer was a deleteMeta (meta has no tombstone column): hydrate as a
+      // tombstone so the deletion propagates like every other entity's.
+      if (v == null) return { ...base, updatedAt: ptr.ts, deleted: true, deletedAt: ptr.ts, data: null }
+      return { ...base, updatedAt: ptr.ts, deleted: false, deletedAt: 0, data: { key: ptr.entityId, value: v } }
     }
     if (ptr.entity === 'tomato') {
       const r = c.tomato(ptr.entityId)
@@ -225,6 +278,18 @@ function applyRowInner (state, incoming) {
     // merge as a real row, otherwise an older remote live row wins LWW against "missing" and
     // resurrects what the user deleted here (delete-wins never gets a chance to hold).
     if (r) localRow = { updatedAt: r.updatedAt, deleted: !!r.deleted, deletedAt: r.deletedAt || 0, data: { key: r.key, value: r.value } }
+  } else if (entity === 'meta') {
+    // GAP-A fix (2026-09-19): see the isMachineLocalMetaKey/isSyncBlobMetaKey comments above.
+    if (isMachineLocalMetaKey(incoming.id) || isSyncBlobMetaKey(incoming.id)) return false
+    const localVal = cache.meta(incoming.id)
+    if (localVal == null && incoming.deleted) return false
+    // ...deletion already landed locally (or we never had the key): re-landing it would re-log an
+    // oplog pointer and echo between peers forever — deleteMeta only needs to fire on a device
+    // that still held a live value.
+    // meta has no updatedAt column, so the local LWW age is the latest local oplog ts for this
+    // key (cached per-pass oplog scan). No local pointer (legacy pre-oplog row) = age 0: the
+    // incoming row wins once, then the identical-content no-op keeps it from churning.
+    localRow = { updatedAt: cache.metaTs().get(incoming.id) || 0, deleted: false, deletedAt: 0, data: { key: incoming.id, value: localVal } }
   } else if (entity === 'tomato') {
     const r = cache.tomato(incoming.id)
     // tomatoAll filters deleted=0 (db.js), so a local tomato tombstone reads as "absent" here;
@@ -368,6 +433,18 @@ function applyRowInner (state, incoming) {
       else return false
     } else if (localRow && localRow.ageUnknown) return false // cross-domain LWW: local age unknown, refuse to clobber
     else state.pendingWrites.filters.push({ ...winner.data, id: Number(incoming.id) }) // bulk-buffered
+  } else if (entity === 'meta') {
+    // GAP-A fix (2026-09-19): meta lands through the regular setMeta/deleteMeta ops (re-captured
+    // into the local oplog, which is what acknowledges the state back to the peer). LWW-newer-wins
+    // with NO conflict copy for meta: it is a KV table whose values are whole documents — a losing
+    // whole-document copy has no recycle-bin semantics, and convergence is already guaranteed by
+    // the identical-content no-op above (both peers deterministically settle on the newer ts).
+    if (winner.deleted) {
+      state.db.call('deleteMeta', incoming.id)
+      return true
+    }
+    if (!winner.data) return false
+    state.db.call('setMeta', [incoming.id, winner.data.value])
   } else {
     return false
   }
@@ -433,6 +510,10 @@ module.exports = {
   // Exported (2026-09-19): lan-sync-bootstrap destructures this for allRows()/hydration skips —
   // the missing export made every allRows() call (legacy seed, snapshot serving) throw TypeError.
   isMachineLocalSettingKey,
+  // Exported (2026-09-19, GAP-A): lan-sync-bootstrap's allRows() uses both to keep machine-local
+  // meta and the settings/habits blobs out of snapshot/seed pushes.
+  isMachineLocalMetaKey,
+  isSyncBlobMetaKey,
   createHydrationCache,
   hydrateRow,
   rowContentDiffers,

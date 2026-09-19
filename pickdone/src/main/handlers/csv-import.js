@@ -145,6 +145,12 @@ module.exports = function importHandlers (ctx) {
       // 2026-09-10 P2:传 e.sender(IpcMainInvokeEvent 本身不是 webContents,exclude 永不命中,
       // 发起导入的窗会被自己的广播打断撤销栈);其余窗照常刷新
       broadcastTodosChanged('import', e.sender)
+      // GAP-C fix (2026-09-19): the import writes through dbm.call directly, so the oplog captured
+      // the new rows but NO sync round was kicked (resyncDbWatch only re-baselines the db watcher)
+      // — imported tasks waited for the whole 5-minute periodic round. Kick a debounced immediate
+      // round, same style as the external-db-write path in index.js. Fire-and-forget + guarded:
+      // kickSyncRound no-ops safely before sync init.
+      try { require('../lan-sync-bootstrap').kickSyncRound('csv-import') } catch { /* sync lazy-not-init */ }
       return r
     }
   }

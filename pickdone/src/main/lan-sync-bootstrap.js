@@ -84,7 +84,7 @@ function ensureIdentity () {
 /* The apply/hydration/flush pipeline lives in ./sync-apply.js (line ratchet, round-3 review);
  * the delegates below bind the bootstrap's module-level `state` singleton to it. */
 const syncApply = require('./sync-apply')
-const { isMachineLocalSettingKey } = syncApply
+const { isMachineLocalSettingKey, isMachineLocalMetaKey, isSyncBlobMetaKey } = syncApply
 const createHydrationCache = () => syncApply.createHydrationCache(state)
 const hydrateRow = (ptr, cache) => syncApply.hydrateRow(state, ptr, cache)
 const localUserId = () => syncApply.localUserId(state)
@@ -119,6 +119,19 @@ function createLocalStoreAdapter () {
       for (const c of state.db.call('getAllCategories', {}) || []) out.push({ entity: 'category', id: String(c.categoryId), updatedAt: c.updatedAt || 0, deleted: false, deletedAt: 0, data: c })
       for (const c of state.db.call('planAll', {}) || []) out.push({ entity: 'plan', id: c.id, updatedAt: 0, deleted: false, deletedAt: 0, data: c })
       for (const f of state.db.call('filterList', {}) || []) out.push({ entity: 'filter', id: String(f.id), updatedAt: 0, deleted: false, deletedAt: 0, data: f })
+      // Meta entity (GAP-A fix 2026-09-19): meta has no list-read op (db.js is size-ratcheted), so
+      // syncable meta keys are enumerated from their oplog pointers (latest local ts per key, one
+      // paged oplog scan) and read via getMeta. Legacy pre-oplog meta keys are not covered here —
+      // they surface once any device rewrites them; meta tombstones propagate via increments only
+      // (a pointer whose value is already gone reads as deleted in hydrateRow).
+      const metaCache = syncApply.createHydrationCache(state)
+      const metaTs = metaCache.metaTs()
+      for (const key of metaTs.keys()) {
+        if (isMachineLocalMetaKey(key) || isSyncBlobMetaKey(key)) continue
+        const v = metaCache.meta(key)
+        if (v == null) continue // deleted: tombstones are carried by the increment pointers
+        out.push({ entity: 'meta', id: key, updatedAt: metaTs.get(key) || 0, deleted: false, deletedAt: 0, data: { key, value: v } })
+      }
       return out
     },
     /** Fresh-device path. P3a: merge-apply (non-destructive) — see header scope cuts. */

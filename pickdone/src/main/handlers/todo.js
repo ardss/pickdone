@@ -124,7 +124,7 @@ module.exports = function todoHandlers (ctx) {
       try { appAudit.recordAppOp(op, params, { before: auditBefore, result: r }) } catch { /* best-effort */ }
       // Write-op determination lives in db.js's explicit WRITE_OPS list (do not fall back to regex: hardDeleteMany and others were once missed, leaving cross-window data stale)
       // setMeta writes only the meta table, not todos: skip reloadAll (settings/tomato/dayPlan mirrors are high-frequency writes; the previous full-reload path caused a reload storm); still broadcast so peer windows sync
-      if (op === 'setMeta') { broadcastTodosChanged(op, e.sender); return r }
+      if (op === 'setMeta') { broadcastTodosChanged(op, e.sender); if (notifySyncChange) notifySyncChange(op); return r } // GAP-B kick (2026-09-19): meta rows are syncable now — the early return used to skip the sync kick entirely
       if (dbm.isWriteOp(op)) {
         // Single-task writes (upsert/bumpSnow) reschedule only that task's timers via scheduleOne instead of a
         // full reloadAll (whole-table scan + all timers torn down and rebuilt on every write). Fall back to
@@ -138,7 +138,7 @@ module.exports = function todoHandlers (ctx) {
         else scheduler.reloadAll(dbApi())
       }
       // 账本行写:调度器不依赖番茄记录;广播由 db 层 setLedgerChangedHook 统一发(CLI 直写同样触发),此处只跳过 todos 全量重载
-      if (op === 'tomatoAppendMany' || op === 'tomatoUpdateById' || op === 'tomatoRemoveByIds' || op === 'tomatoMigrateFromMeta') return r
+      if (op === 'tomatoAppendMany' || op === 'tomatoUpdateById' || op === 'tomatoRemoveByIds' || op === 'tomatoMigrateFromMeta') { if (notifySyncChange) notifySyncChange(op); return r } // GAP-B kick (2026-09-19): ledger ops must reach peers in seconds, not at the next 5-min round — the early return used to skip the kick
       if (dbm.isWriteOp(op)) broadcastTodosChanged(op, e.sender) // exclude the originating sender, so optimistic updates are not clobbered by the echo
       if (notifySyncChange) notifySyncChange(op)
       return r
