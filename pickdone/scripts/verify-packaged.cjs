@@ -54,19 +54,41 @@ if (fs.existsSync(resCli)) {
   const txt = cmdBuf.toString('latin1')
   if (/(^|[^\r])\n/.test(txt)) { console.error('FAIL: pickdone.cmd 含裸 LF（cmd.exe 只认 CRLF）'); process.exit(1) }
 }
-  // CLI 模块完整性：cli/*.cjs 里的顶层 require('./x') 必须都能在 resources/cli 落地——
-  // extraResources filter 漏条目 = 打包版 CLI 全命令灭（2026-09-15 实锤 lib-attachments.cjs 漏登记）
-  for (const f of fs.readdirSync(resCli).filter(n => /\.c?js$/.test(n))) {
-    const src = fs.readFileSync(path.join(resCli, f), 'utf8')
+
+// CLI module completeness gate: every require('./x') in cli/*.js|*.cjs must land in
+// resources/cli — a missed extraResources filter entry = packaged CLI crashes on require.
+// Checked from BOTH sides (2026-09-15: lib-attachments.cjs omitted; 2026-09-19: event-utils.cjs
+// + cli/lib/ omitted — the landed-file scan alone cannot catch a source file that never got packaged):
+//   1. landed side: each require target inside resources/cli files must resolve there
+//   2. repo side: each require target in repo cli/ files must exist in resources/cli,
+//      and the entrypoints pickdone.js / lib.js must be packaged
+if (!fs.existsSync(resCli)) {
+  console.error('FAIL: resources/cli is missing entirely — extraResources dropped the CLI, packaged app cannot run any command')
+  process.exit(1)
+}
+
+function scanRequires (baseDir, relLabel) {
+  for (const f of fs.readdirSync(baseDir).filter(n => /\.c?js$/.test(n))) {
+    const src = fs.readFileSync(path.join(baseDir, f), 'utf8')
     for (const m of src.matchAll(/require\(['"]\.\/([^'"]+)['"]\)/g)) {
       const rel = m[1]
       const ok = ['.js', '.cjs', ''].some(ext => fs.existsSync(path.join(resCli, rel + ext)))
       if (!ok) {
-        console.error(`FAIL: resources/cli 缺 ${rel}（${f} 依赖它）——extraResources filter 漏条目,打包版 CLI 全命令灭`)
+        console.error(`FAIL: resources/cli is missing ${rel} (required by ${relLabel}/${f}) — extraResources filter gap, packaged CLI crashes on require`)
         process.exit(1)
       }
     }
   }
+}
+
+scanRequires(resCli, 'resources/cli') // landed side: no dangling requires inside the packaged tree
+for (const f of ['pickdone.js', 'lib.js']) {
+  if (!fs.existsSync(path.join(resCli, f))) {
+    console.error(`FAIL: resources/cli is missing entrypoint ${f} — extraResources filter gap, packaged CLI crashes on require`)
+    process.exit(1)
+  }
+}
+scanRequires(path.resolve('cli'), 'repo cli') // repo side: every source require target got packaged
 
 const pkg = JSON.parse(fs.readFileSync(path.resolve('package.json'), 'utf8'))
 const globs = pkg.build && pkg.build.files || []
