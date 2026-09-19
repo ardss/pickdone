@@ -35,7 +35,11 @@ function toRow (c) {
     sort: c.listSort || 0,
     isFolder: c.folderIs ? 1 : 0,
     parentId: c.folderId || 0,
-    deleted: c.delete ? 1 : 0
+    deleted: c.delete ? 1 : 0,
+    // D5 (2026-09-20): carry the tombstone stamp — markCascade sets deletedAt, but toRow dropped it,
+    // so the DB row never saw the value. The db layer preserves an existing stamp and stamps when
+    // absent; carrying the value here keeps renderer/CLI/db in one shape.
+    deletedAt: c.deletedAt || 0
   }
 }
 
@@ -87,6 +91,23 @@ function collectCascadeIds (state, id) {
   return out
 }
 export { collectCascadeIds }
+
+/** D5: remove saved filters referencing any victim categoryId. `this` = the store (mutations bind it).
+ *  Best-effort: a DB failure leaves the in-memory purge skipped too, so state and DB stay consistent
+ *  (the filter keeps working as before rather than silently diverging). */
+function purgeFiltersForVictims (victims) {
+  const fstate = this.state && this.state.filters
+  if (!fstate || !Array.isArray(fstate.list) || !fstate.list.length) return
+  const dead = new Set(victims.map(v => String(v)))
+  const doomed = fstate.list.filter(f => f && f.conds && dead.has(String(f.conds.catId)))
+  if (!doomed.length) return
+  const doomedIds = new Set(doomed.map(f => f.id))
+  fstate.list = fstate.list.filter(f => !doomedIds.has(f.id))
+  for (const f of doomed) {
+    try { window.todoAPI.dbCall('filterDelete', f.id).catch(e => console.error('[category] filterDelete failed during category delete:', e)) } catch (e) { /* degraded host */ }
+  }
+  this.commit('filters/setList', fstate.list)
+}
 
 /** Deleted categories cannot come back through getAllCategories (WHERE deleted = 0), so they are mirrored
  *  in the LS cache by persist() and re-merged here on startup. Without this a soft-deleted category
@@ -155,6 +176,10 @@ export default {
         try { window.todoAPI.dbCall('deleteMeta', deadlineKey(vid)).catch(() => {}) } catch (e) { /* absent is fine */ }
         delete state.projectMeta[vid]
       }
+      // D5 (2026-09-20): purge saved filters whose conds.catId references a victim — a filter on a
+      // deleted category matched nothing forever (FilterView excludes deleted categories), haunting the
+      // sidebar. Symmetric cleanup: DB rows deleted via filterDelete, then the state list trimmed.
+      try { purgeFiltersForVictims.call(this, victims) } catch (e) { /* filters are optional; deletion must not fail */ }
       persist(state.list)
     },
     markCascade (state, id) {
