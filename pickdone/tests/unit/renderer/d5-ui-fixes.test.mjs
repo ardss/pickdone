@@ -147,8 +147,12 @@ test('main.js: both todo/computeViews dispatches catch rejections', () => {
 
 test('RepeatDeleteModal cleanupOrphanRule: uses deleteMeta', () => {
   const src = read('renderer/js/components/RepeatDeleteModal.vue')
-  assert.match(src, /dbCall\('deleteMeta', \['repeatRule:' \+ rid\]\)/, 'orphan rule meta is deleted, not emptied')
-  assert.ok(!src.includes("dbCall('setMeta', ['repeatRule:' + rid, ''])"), 'setMeta empty-string tombstone removed')
+  // U-2: deleteMeta takes the BARE key string (the array form bound as positional params and always
+  // threw); the implementation now lives in utils/repeat.js cleanupOrphanRepeatRule, the modal delegates
+  assert.match(src, /cleanupOrphanRepeatRule/, 'modal delegates to the shared util')
+  const util = read('renderer/js/utils/repeat.js')
+  assert.match(util, /dbCall\('deleteMeta', 'repeatRule:' \+ rid\)/, 'orphan rule meta is deleted with the bare key string')
+  assert.ok(!util.includes("dbCall('setMeta', ['repeatRule:' + rid, ''])"), 'setMeta empty-string tombstone removed')
 })
 
 /* ---------- #6/#11/#12/#15/#16 CSS tokens, CSV counts, search sort ---------- */

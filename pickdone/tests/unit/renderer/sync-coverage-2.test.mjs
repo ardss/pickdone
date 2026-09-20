@@ -383,6 +383,8 @@ test('category: setProject writes ONLY the per-cat flag key (legacy blob never w
 
 test('category: softDelete cleans per-cat project flag keys for cascade victims', () => {
   const src = read('renderer/js/store/category.js')
-  assert.ok(src.includes('writeProjectFlag(vid, false)'), 'victim flag keys removed')
+  // U-4: victim project meta is cleared by backupThenClearProjectMeta (backed up to catProjectMetaBak.<id>
+  // first, then deleted from its live keys; recover restores them)
+  assert.ok(src.includes('backupThenClearProjectMeta(vid)'), 'victim project meta backed up then cleared')
   assert.ok(src.includes('projectCategoryFlag:'), 'per-cat flag key helper present')
 })

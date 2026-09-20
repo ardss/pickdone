@@ -28,6 +28,7 @@
 <script lang="ts">
 /** Recurring task delete confirmation -- three scopes (this event only / this event and after / entire group) */
 import dialogA11y from '../utils/dialogA11y.js'
+import { cleanupOrphanRepeatRule } from '../utils/repeat.js'
 
 export default {
   name: 'RepeatDeleteModal',
@@ -75,17 +76,10 @@ export default {
       await this.cleanupOrphanRule(b.repeatId)
       this.close()
     },
-    /** Clean up the repeat rule when no active instances remain in the group (meta + localStorage), preventing unbounded accumulation */
+    /** Clean up the repeat rule when no active instances remain in the group (meta + localStorage), preventing unbounded accumulation.
+     *  U-2: implementation extracted to utils/repeat.js so the bare-string deleteMeta contract is unit-testable. */
     async cleanupOrphanRule (rid) {
-      if (!rid) return
-      try {
-        const rest = await window.todoAPI.dbCall('queryTodos', { deleted: 0, repeatId: rid })
-        if (!rest.length) {
-          // deleteMeta over setMeta(''): an empty-string tombstone keeps the orphan meta row alive (CLI convention)
-          window.todoAPI.dbCall('deleteMeta', ['repeatRule:' + rid]).catch(() => {})
-        }
-      } catch (e) { /* Cleanup failure does not affect deletion */
-      }
+      return cleanupOrphanRepeatRule(rid)
     },
     close () { this.$store.commit('ui/askRepeatDelete', null) }
   },

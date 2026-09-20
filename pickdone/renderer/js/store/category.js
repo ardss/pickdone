@@ -1,4 +1,4 @@
-import { safeSet, dayjs } from '../utils/core.js'
+import { safeSet, dayjs, getMetaManyWithFallback } from '../utils/core.js'
 import { loadMilestones } from '../utils/milestones.js'
 import { normalizeStatus } from '../utils/projectStatus.js'
 /** Category module (offline persistence via localStorage; cloud APIs like getCategoryList reserved) */
@@ -84,6 +84,64 @@ function writeProjectFlag (id, flag) {
 const deadlineKey = id => 'projectDeadline:' + id
 /** Project lifecycle status (contract shared with the CLI): string active|paused|done|cancelled, absent = 'active' */
 const statusKey = id => 'projectStatus:' + id
+const milestonesKey = id => 'projectMilestones:' + id
+/** U-4 (2026-09-20): machine-local backup of a soft-deleted project category's meta. The old code
+ *  hard-deleted projectCategoryFlag/Status/Deadline (and left milestones orphaned), so recovering the
+ *  category irreversibly lost its project metadata. Pattern mirrors metaConflictBackup.*: the live keys
+ *  are copied into one `catProjectMetaBak.<id>` JSON blob, cleared from their live keys, and restored +
+ *  the backup deleted on recover. */
+const catMetaBakKey = id => 'catProjectMetaBak.' + id
+/** Read a project category's four meta surfaces into one backup blob, write the backup, THEN clear the
+ *  live keys (read→backup-write→delete sequence, never the reverse — a failed backup write keeps the
+ *  live keys instead of destroying unbacked metadata). */
+async function backupThenClearProjectMeta (id) {
+  if (typeof window === 'undefined' || !window.todoAPI || !window.todoAPI.dbCall) return
+  const blob = {}
+  try { blob.flag = (await window.todoAPI.dbCall('getMeta', projectFlagKey(id))) === '1' } catch (e) { /* absent */ }
+  try { blob.status = (await window.todoAPI.dbCall('getMeta', statusKey(id))) || '' } catch (e) { /* absent */ }
+  try { blob.deadline = (await window.todoAPI.dbCall('getMeta', deadlineKey(id))) || '' } catch (e) { /* absent */ }
+  try { blob.milestones = (await window.todoAPI.dbCall('getMeta', milestonesKey(id))) || '' } catch (e) { /* absent */ }
+  if (blob.flag || blob.status || blob.deadline || blob.milestones) {
+    try {
+      await window.todoAPI.dbCall('setMeta', [catMetaBakKey(id), JSON.stringify(blob)])
+    } catch (e) {
+      console.warn('[category] project-meta backup write failed — live keys kept for', id, e)
+      return
+    }
+  }
+  try { await window.todoAPI.dbCall('deleteMeta', projectFlagKey(id)) } catch (e) { /* absent is fine */ }
+  try { await window.todoAPI.dbCall('deleteMeta', statusKey(id)) } catch (e) { /* absent is fine */ }
+  try { await window.todoAPI.dbCall('deleteMeta', deadlineKey(id)) } catch (e) { /* absent is fine */ }
+  try { await window.todoAPI.dbCall('deleteMeta', milestonesKey(id)) } catch (e) { /* absent is fine */ }
+}
+/** U-4 recover path: restore the backed-up project meta to its live keys, then delete the backup.
+ *  Resolves true when a backup existed and was restored. */
+async function restoreProjectMetaBackup (id) {
+  if (typeof window === 'undefined' || !window.todoAPI || !window.todoAPI.dbCall) return false
+  let blob = null
+  try { blob = JSON.parse((await window.todoAPI.dbCall('getMeta', catMetaBakKey(id))) || 'null') } catch (e) { blob = null }
+  if (!blob || typeof blob !== 'object') return false
+  try { if (blob.flag) await window.todoAPI.dbCall('setMeta', [projectFlagKey(id), '1']) } catch (e) { /* best-effort */ }
+  try { if (blob.status) await window.todoAPI.dbCall('setMeta', [statusKey(id), blob.status]) } catch (e) { /* best-effort */ }
+  try { if (blob.deadline) await window.todoAPI.dbCall('setMeta', [deadlineKey(id), blob.deadline]) } catch (e) { /* best-effort */ }
+  try { if (blob.milestones) await window.todoAPI.dbCall('setMeta', [milestonesKey(id), blob.milestones]) } catch (e) { /* best-effort */ }
+  try { await window.todoAPI.dbCall('deleteMeta', catMetaBakKey(id)) } catch (e) { /* best-effort */ }
+  return !!blob.flag
+}
+/** U-5 (2026-09-20): the ONE sanctioned legacy-array write — on unmark, rewrite `projectCategoryIds`
+ *  without the id so init()'s legacy union cannot resurrect the unset project from a stale blob.
+ *  (Per-cat flag key deletion stays the primary syncable write; CLI twin does the same — F-Main.) */
+function rewriteLegacyProjectIdsWithout (id) {
+  try {
+    void (async () => {
+      if (!window.todoAPI || !window.todoAPI.dbCall) return
+      const arr = JSON.parse((await window.todoAPI.dbCall('getMeta', PROJECT_IDS_KEY)) || '[]')
+      if (Array.isArray(arr) && arr.includes(id)) {
+        await window.todoAPI.dbCall('setMeta', [PROJECT_IDS_KEY, JSON.stringify(arr.filter(x => x !== id))])
+      }
+    })()
+  } catch (e) { /* degraded host: nothing to rewrite */ }
+}
 /** Pure helper (unit-tested): the ids a cascade delete of `id` will mark deleted — the category itself plus,
  *  mirroring markCascade, folder descendants recursively and their non-folder children. Lets softDelete clean
  *  project meta for every victim, matching the CLI delete path. */
@@ -184,9 +242,8 @@ export default {
       const ids = state.projectIds.filter(x => !victims.includes(x))
       if (ids.length !== state.projectIds.length) state.projectIds = ids
       for (const vid of victims) {
-        writeProjectFlag(vid, false) // Y/X3: victim's per-cat flag key must not resurrect the project
-        try { window.todoAPI.dbCall('deleteMeta', statusKey(vid)).catch(() => {}) } catch (e) { /* absent is fine */ }
-        try { window.todoAPI.dbCall('deleteMeta', deadlineKey(vid)).catch(() => {}) } catch (e) { /* absent is fine */ }
+        // U-4: back up then clear the project meta (flag/status/deadline/milestones) — recover restores it
+        backupThenClearProjectMeta(vid)
         delete state.projectMeta[vid]
       }
       // D5 (2026-09-20): purge saved filters whose conds.catId references a victim — a filter on a
@@ -216,12 +273,30 @@ export default {
       persist(state.list)
     },
     /** Set/unset project: memory + per-cat flag meta only (U7: the legacy whole-array blob is never
-     *  written anymore; caller removes the flag first when a category is deleted) */
+     *  written anymore EXCEPT the sanctioned U-5 unmark rewrite below; caller removes the flag first
+     *  when a category is deleted) */
     setProject (state, { id, flag }) {
       const ids = state.projectIds.filter(x => x !== id)
       if (flag) ids.push(id)
       state.projectIds = ids
       writeProjectFlag(id, flag) // Y/X3: field-granular unit — the only persisted/synced write
+      if (!flag) rewriteLegacyProjectIdsWithout(id) // U-5: unset must also scrub the stale legacy blob, else init()'s union resurrects the project
+    },
+    /** U-4 (2026-09-20): recover a soft-deleted category in place and restore its backed-up project
+     *  meta (flag/status/deadline/milestones) from `catProjectMetaBak.<id>`, then delete the backup.
+     *  A restored project flag also re-enters the in-memory projectIds list. */
+    recover (state, id) {
+      const c = state.list.find(x => x.categoryId === id)
+      if (!c || !c.delete) return
+      c.delete = false
+      c.deletedAt = 0
+      persist(state.list)
+      restoreProjectMetaBackup(id).then(flagRestored => {
+        if (flagRestored && !state.projectIds.includes(id)) {
+          state.projectIds = [...state.projectIds, id]
+          // loadProjectMeta re-reads status/deadline/milestone into projectMeta on its next run
+        }
+      }).catch(() => { /* best-effort */ })
     },
     setProjectIds (state, ids) { state.projectIds = Array.isArray(ids) ? ids : [] },
     setProjectMeta (state, meta) { state.projectMeta = meta || {} },
@@ -278,11 +353,11 @@ export default {
         // Y/X3 legacy union: per-cat flag keys for every known row id, merged over the legacy blob
         // (a flag present only on a peer device arrives via its own per-cat key and must survive).
         const merged = (Array.isArray(ids) ? ids.slice() : [])
-        for (const r of rows) {
-          try {
-            if ((await window.todoAPI.dbCall('getMeta', projectFlagKey(r.categoryId))) === '1' && !merged.includes(r.categoryId)) merged.push(r.categoryId)
-          } catch (e) { /* absent is fine */ }
-        }
+        // U-18: one batch read instead of an O(N) sequential getMeta per row (fallback keeps the loop)
+        const flagVals = await getMetaManyWithFallback(rows.map(r => projectFlagKey(r.categoryId)))
+        rows.forEach((r, i) => {
+          if (flagVals[i] === '1' && !merged.includes(r.categoryId)) merged.push(r.categoryId)
+        })
         if (merged.length) commit('setProjectIds', merged)
       } catch (e) { /* stays empty when no project flags */ }
       await this.dispatch('category/loadProjectMeta')

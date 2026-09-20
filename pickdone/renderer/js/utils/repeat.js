@@ -144,3 +144,17 @@ export function expandRepeatDates (baseTs, settings, holidayList = []) {
 }
 
 
+
+/** U-2 (2026-09-20): orphan repeat-rule cleanup (renderer twin of the CLI convention — deleteMeta over
+ *  setMeta(''), since an empty-string tombstone keeps the orphan meta row alive). deleteMeta takes the
+ *  BARE key string: the array form was bound as positional params and always threw (hidden by .catch),
+ *  so orphan rules lingered forever. Extracted so the modal path is unit-testable without a .vue loader. */
+export async function cleanupOrphanRepeatRule (rid) {
+  if (!rid || typeof window === 'undefined' || !window.todoAPI || !window.todoAPI.dbCall) return
+  try {
+    const rest = await window.todoAPI.dbCall('queryTodos', { deleted: 0, repeatId: rid })
+    if (!rest.length) {
+      window.todoAPI.dbCall('deleteMeta', 'repeatRule:' + rid).catch(() => {})
+    }
+  } catch (e) { /* cleanup failure must not affect deletion */ }
+}
