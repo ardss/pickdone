@@ -11,4 +11,12 @@ function eventEnd (e) {
 function eventKey (e, dayStartOf, parseDate) {
   return dayStartOf(parseDate(e.date + ' ' + e.start)) + '|' + String(e.title || '').trim()
 }
-module.exports = { eventFocusMinutes, eventEnd, eventKey }
+/** M-13 (2026-09-20): pure parse of `netstat -ano` LISTENING output — unique numeric pids from
+ *  the last column. Extracted from cli/check-all.js's win32 orphan-reap fallback so it can be
+ *  unit-tested without spawning netstat. Empty/garbage input → []. */
+function pidsFromNetstatOutput (text) {
+  return [...new Set(String(text || '').split(/\r?\n/)
+    .map(l => l.trim().split(/\s+/).pop())
+    .filter(p => /^\d+$/.test(p)))]
+}
+module.exports = { eventFocusMinutes, eventEnd, eventKey, pidsFromNetstatOutput }

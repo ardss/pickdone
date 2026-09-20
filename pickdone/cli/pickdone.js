@@ -223,7 +223,10 @@ async function main () {
     // review P2 (2026-09-10): non-JSON dry-run previews pass objects here — printing them raw produced "[object Object]"
     else console.log(typeof data === 'object' && data !== null ? JSON.stringify(data, null, 2) : data)
   }
+  // M-12: estimate COLUMN is dead post-X2 — overlay the LIVE meta estimate (`tomatoEstimate` kept as alias)
+  const withEstimate = rows => rows.map(t => { try { const v = lib.getEstimateOf(t.taskId); t.estimate = t.tomatoEstimate = v } catch { /* keep column */ } return t })
   const emitList = (rows, lunarOf) => {
+    rows = withEstimate(rows) // M-12: live estimate on every list/search row (JSON + text)
     if (opts.json) return emit(rows)
     if (!rows.length) return console.log('(no tasks)')
     console.log(rows.map(t => fmtTodoLine(t, lunarOf)).join('\n'))
@@ -262,9 +265,9 @@ async function main () {
         let rows = lib.listOn(opts.on)
         // --lunar parity with the main list path (was silently ignored here) — additive JSON field only
         if (opts.lunar) rows = rows.map(t => ({ ...t, lunar: lib.lunarAnnotate(t) }))
-        if (opts.json) return emit(rows)
+        if (opts.json) return emit(withEstimate(rows)) // M-12: --on gains the live estimate field
         if (!rows.length) return console.log('(nothing scheduled on ' + opts.on + ')')
-        console.log(rows.map(t => `${t.time ? t.time : 'all-day'}  [${t.complete ? 'x' : ' '}] ${t.content}${t.tomatoEstimate ? '  (est ' + t.tomatoEstimate + '🍅)' : ''}${t.lunar ? '  (' + t.lunar + ')' : ''}`).join('\n'))
+        console.log(withEstimate(rows).map(t => `${t.time ? t.time : 'all-day'}  [${t.complete ? 'x' : ' '}] ${t.content}${t.tomatoEstimate ? '  (est ' + t.tomatoEstimate + '🍅)' : ''}${t.lunar ? '  (' + t.lunar + ')' : ''}`).join('\n'))
         console.log(`-- ${rows.length} task(s) on ${opts.on}`)
         return
       }
@@ -313,11 +316,8 @@ async function main () {
     case 'get': {
       if (!opts._[0]) throw new lib.CliError('usage: get <taskId|keyword>', 'USAGE')
       const t = lib.resolveTask(opts._[0])
-      // QC r2 (adversarial round): the todos.estimate COLUMN is dead weight — always 0 since the X2
-      // 2026-09-20 split moved the authoritative per-task estimate into meta keys
-      // (tomatoEstimateState:<taskId>). get is the documented read-back ("edit ... then get --json to
-      // read back") but it reported 0 right after a successful edit --estimate — an AI/script consumer
-      // sees the write "vanish". Surface the live meta value over the dead column.
+      // QC r2: the estimate COLUMN is dead (authoritative value lives in meta keys post-X2) —
+      // get is the documented read-back, so surface the LIVE meta value over the dead column.
       try { t.estimate = lib.getEstimateOf(t.taskId) } catch { /* read failure: keep the column value */ }
       if (opts.json) return emit(t)
       console.log(JSON.stringify(t, null, 2))

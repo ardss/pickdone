@@ -517,8 +517,7 @@ const OPS = {
   getMeta: k => { const r = stmts.getMeta.get(k); return r ? r.value : null },
   // Accepts both argument forms: (k, v) or [k, v] (the renderer's dbCall('setMeta', [k, v]) is passed through as a single call parameter)
   setMeta: (k, v) => { if (Array.isArray(k)) { v = k[1]; k = k[0] } stmts.setMeta.run(k, String(v)); return true },
-  // Main-process internal only (not in the ALLOWED_RENDERER_OPS whitelist): used by the startup meta GC
-  listMetaKeys: () => db.prepare('SELECT key FROM meta').all().map(r => r.key),
+  listMetaKeys: () => db.prepare('SELECT key FROM meta').all().map(r => r.key), // main-internal only (startup meta GC), NOT renderer-whitelisted
   // Monotonic sequence number for CLI tomato commands: UPDATE...RETURNING 单语句原子(两语句版在双 CLI 并发时读回同值→重号→App seq 去重丢命令,2026-09-04 深审 P1)
   nextCliTomatoSeq: () => Number(db.prepare("INSERT INTO meta (key, value) VALUES ('cliTomatoSeq', '1') ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT) RETURNING value").get().value),
   deleteMeta: k => { db.prepare('DELETE FROM meta WHERE key = ?').run(k); return true },
@@ -877,6 +876,7 @@ const OPS = {
   filterUpsertMany: makeBulkOps.filterUpsertMany,
   categoriesAllRows: makeBulkOps.categoriesAllRows, planTombstones: makeBulkOps.planTombstones, filterTombstones: makeBulkOps.filterTombstones, // sync-side raw reads (M1/M3) — main-internal, NOT renderer-callable
 syncOplogSince: ({ sinceSeq = 0, limit = 2000 } = {}) => db.prepare('SELECT seq, entity, entityId, ts FROM sync_oplog WHERE seq > ? ORDER BY seq ASC LIMIT ?').all(Number(sinceSeq) || 0, Math.max(1, Math.min(10000, Math.floor(Number(limit) || 2000)))),
+  getMetaMany: p => require('./db-sync-ops').dispatch('getMetaMany', p), // CONTRACT (F-UI): batch meta read; impl db-sync-ops.js
   // P3a LAN sync ops (2026-09-16): delegates into db-sync-ops.js (gate: ops must exist here; impl lives in lan-sync-bootstrap.js)
   syncGetSettings: p => require('./db-sync-ops').dispatch('syncGetSettings', p),
   syncSetEnabled: p => require('./db-sync-ops').dispatch('syncSetEnabled', p),
