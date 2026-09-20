@@ -275,8 +275,10 @@ function overview () {
   }
 }
 
-/* ================= Projects (categories flagged via meta projectCategoryIds, shared data source with the UI's progressive disclosure) ================= */
+/* ================= Projects (X3 2026-09-20: per-category flags `projectCategoryFlag:<categoryId>` = '1'; legacy whole-doc projectCategoryIds array is a read-only fallback union) ================= */
 const PROJECT_IDS_KEY = 'projectCategoryIds'
+const PROJECT_FLAG_PREFIX = 'projectCategoryFlag:'
+const projectFlagKey = id => PROJECT_FLAG_PREFIX + String(id)
 
 /** Single project four-question stats: when it started / how it is progressing / how much focus was invested / most recent activity */
 function projectStatus (c) {
@@ -304,23 +306,28 @@ function projectStatus (c) {
 }
 
 function getProjectIds () {
-  try { const a = JSON.parse(open().call('getMeta', PROJECT_IDS_KEY) || '[]'); return Array.isArray(a) ? a : [] } catch { return [] }
+  // X3 readers: per-category flags are the source of truth; the legacy whole-doc array is a
+  // read-only fallback — UNION both so data written by an old renderer/CLI still shows.
+  const ids = new Set()
+  for (const k of open().call('listMetaKeys') || []) if (String(k).startsWith(PROJECT_FLAG_PREFIX)) ids.add(String(k).slice(PROJECT_FLAG_PREFIX.length))
+  try { const a = JSON.parse(open().call('getMeta', PROJECT_IDS_KEY) || '[]'); if (Array.isArray(a)) for (const x of a) ids.add(String(x)) } catch { /* corrupt → ignore */ }
+  return [...ids]
 }
 
 function getProjects () {
   const ids = getProjectIds()
-  return open().call('getAllCategories').filter(c => ids.includes(c.categoryId)).map(projectStatus)
+  return open().call('getAllCategories').filter(c => ids.includes(String(c.categoryId))).map(projectStatus)
 }
 
 /** Set/unset as project (category name or id), with audit trail */
 function setProjectFlag (input, flag) {
   const db = open()
   const id = resolveCategory(input)
-  const cats = db.call('getAllCategories')
-  const c = cats.find(x => x.categoryId === id)
-  const ids = getProjectIds().filter(x => x !== id)
-  if (flag) ids.push(id)
-  db.call('setMeta', [PROJECT_IDS_KEY, JSON.stringify(ids)])
+  const c = db.call('getAllCategories').find(x => x.categoryId === id)
+  // X3: set = setMeta '1', unmark = deleteMeta (tombstone) — per-key writes never clobber a
+  // peer's concurrent flag the way the old whole-doc array did. Legacy array stays untouched.
+  if (flag) db.call('setMeta', [projectFlagKey(id), '1'])
+  else db.call('deleteMeta', projectFlagKey(id))
   audit.record({ action: 'project.set', targets: [{ taskId: 'cat:' + id, content: c ? c.categoryName : String(id) }], note: (flag ? 'set as project' : 'unset project') })
   return { categoryId: id, name: c ? c.categoryName : String(id), isProject: !!flag }
 }
@@ -1096,9 +1103,13 @@ function deleteCategory (input) {
     mark(id)
   }
   for (const c of victims) db.call('upsertCategory', catToRow(Object.assign({}, c, { delete: true })))
-  // A deleted category must not linger as a project (UI comment: the caller removes the flag first when a category is deleted)
-  const ids = getProjectIds().filter(x => !victims.some(v => v.categoryId === x))
-  if (ids.length !== getProjectIds().length) db.call('setMeta', [PROJECT_IDS_KEY, JSON.stringify(ids)])
+  // A deleted category must not linger as a project: X3 flag keys are removed per victim; the
+  // legacy whole-doc array (read fallback) is pruned only when it actually lost an id.
+  for (const v of victims) { try { db.call('deleteMeta', projectFlagKey(v.categoryId)) } catch { /* absent is fine */ } }
+  let legacyIds = []
+  try { const a = JSON.parse(open().call('getMeta', PROJECT_IDS_KEY) || '[]'); if (Array.isArray(a)) legacyIds = a } catch { /* corrupt → leave alone */ }
+  const pruned = legacyIds.filter(x => !victims.some(v => String(v.categoryId) === String(x)))
+  if (pruned.length !== legacyIds.length) db.call('setMeta', [PROJECT_IDS_KEY, JSON.stringify(pruned)])
   for (const v of victims) {
     try { db.call('deleteMeta', 'projectDeadline:' + v.categoryId) } catch { /* absent is fine */ }
     // same lifecycle cleanup for the explicit status meta (review P2 2026-09-11): a later category id
@@ -1455,22 +1466,44 @@ function backfillRecord ({ taskId = null, content = '', date, at = '20:00', minu
   return rec
 }
 
-/* ---------------- Tomato estimate per task (meta tomatoEstimateState, taskId→0-20; same key as renderer utils/tomatoEstimate.js) ---------------- */
+/* ---------------- Tomato estimate per task (per-task meta keys `tomatoEstimateState:<taskId>` = plain integer string; X2 2026-09-20 contract, renderer twin in utils/tomatoEstimate.js) ---------------- */
+const ESTIMATE_KEY_PREFIX = 'tomatoEstimateState:'
+const estimateKey = taskId => ESTIMATE_KEY_PREFIX + taskId
+/** Lazy legacy migration (first write): old whole-doc blob → per-task keys, then the legacy doc key
+ *  is deleteMeta'd (a sync tombstone, so peers drop it too). Corrupt blob → dropped, not fatal. */
+function migrateLegacyEstimateBlob () {
+  const legacy = open().call('getMeta', 'tomatoEstimateState')
+  if (legacy == null) return null
+  let map = {}
+  try { map = JSON.parse(legacy) || {} } catch { /* corrupt → drop */ }
+  for (const [taskId, v] of Object.entries(map)) {
+    const n = Math.max(0, Math.min(20, Math.round(Number(v) || 0)))
+    if (n > 0) open().call('setMeta', [estimateKey(taskId), String(n)])
+  }
+  open().call('deleteMeta', 'tomatoEstimateState')
+  return map
+}
 function setEstimate (input, n) {
   const t = resolveTask(input, liveTasks())
   const v = Math.max(0, Math.min(20, Math.round(Number(n) || 0)))
-  let map = {}
-  try { map = JSON.parse(open().call('getMeta', 'tomatoEstimateState') || '{}') } catch { /* corrupt → rebuild */ }
-  if (v > 0) map[t.taskId] = v
-  else delete map[t.taskId]
+  const legacy = migrateLegacyEstimateBlob()
+  // Setting = setMeta plain integer string; clearing = deleteMeta (tombstone propagates the removal)
+  if (v > 0) open().call('setMeta', [estimateKey(t.taskId), String(v)])
+  else open().call('deleteMeta', estimateKey(t.taskId))
   // Timestamp convention mirrors the renderer's tomatoEstimate/initFromDb: when meta is newer it takes over LS at startup (otherwise CLI writes get clobbered by the UI's stale LS)
-  open().call('setMeta', ['tomatoEstimateState', JSON.stringify(map)])
   open().call('setMeta', ['tomatoEstimateStateAt', String(Date.now())])
-  audit.record({ action: 'edit', targets: [t], changes: [{ before: { tomatoEstimate: getEstimateOf(t.taskId, map) }, after: { tomatoEstimate: v || null } }], note: 'tomato estimate set to ' + (v || '(none)') })
+  audit.record({ action: 'edit', targets: [t], changes: [{ before: { tomatoEstimate: getEstimateOf(t.taskId, legacy && legacy[t.taskId]) }, after: { tomatoEstimate: v || null } }], note: 'tomato estimate set to ' + (v || '(none)') })
   return { taskId: t.taskId, content: t.taskContent, tomatoEstimate: v }
 }
-function getEstimateOf (taskId, map) {
-  try { const m = map || JSON.parse(open().call('getMeta', 'tomatoEstimateState') || '{}'); return m[taskId] || 0 } catch { return 0 }
+function getEstimateOf (taskId, legacyVal) {
+  // Readers: per-task key first; legacy doc blob only as a read fallback (per-task miss)
+  try {
+    const per = open().call('getMeta', estimateKey(taskId))
+    if (per != null) return Math.max(0, Math.min(20, Math.round(Number(per) || 0)))
+    if (legacyVal != null) return Number(legacyVal) || 0
+    const m = JSON.parse(open().call('getMeta', 'tomatoEstimateState') || '{}')
+    return m[taskId] || 0
+  } catch { return 0 }
 }
 
 /* ---------------- Manual ordering (taskSort midpoint insertion — same semantics as renderer todo/reorderTodos drag) ---------------- */
@@ -1873,7 +1906,7 @@ module.exports = {
   resolveTaskExact, batchRun, batchTagOne, migrateChipsOnDayChange,
   viewsList, resolveView, viewAdd, viewRm, applyViewConds, viewFetchOpts, viewCondsSummary,
   lunarOf, lunarAnnotate,
-  setEstimate, sortTask, listOn, resolveRecord, recordFix, recordRemove, moveSubtask,
+  setEstimate, getEstimateOf, sortTask, listOn, resolveRecord, recordFix, recordRemove, moveSubtask,
   setReminderOffsets, setReminderExtra, addAttachment, listAttachments, removeAttachment,
   settingsList, settingsSet, setSettingsRaceHookForTests, planSet, planList, planRemove, dateChangeReminderPatch,
   importEvents, eventFocusMinutes, eventKey

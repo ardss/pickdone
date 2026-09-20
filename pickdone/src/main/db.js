@@ -787,6 +787,7 @@ const OPS = {
     return rec
   },
   tomatoAll: () => db.prepare('SELECT * FROM tomato_records WHERE deleted = 0 ORDER BY endTime DESC').all().map(OPS._rowToRec),
+  tomatoTombstones: () => db.prepare('SELECT tomatoId, updatedAt, deletedAt FROM tomato_records WHERE deleted = 1').all(),
   tomatoAppendMany: rows => {
     const list = Array.isArray(rows) ? rows : [rows]
     const ins = db.prepare(`INSERT INTO tomato_records (tomatoId, endTime, dateKey, focus, focusTaskId, focusDuration, rest, restDuration, succeed, manual, status, abandonReason, extra, deleted, deletedAt, updatedAt)
@@ -887,6 +888,9 @@ syncOplogSince: ({ sinceSeq = 0, limit = 2000 } = {}) => db.prepare('SELECT seq,
   syncPairRespond: p => require('./db-sync-ops').dispatch('syncPairRespond', p),
   syncPairRequest: p => require('./db-sync-ops').dispatch('syncPairRequest', p),
   syncUnpairPeer: p => require('./db-sync-ops').dispatch('syncUnpairPeer', p),
+  // X4 (2026-09-20): meta LWW conflict backup recovery (impl lan-sync-bootstrap via sync-conflict-backups.js)
+  syncConflictBackupsList: p => require('./db-sync-ops').dispatch('syncConflictBackupsList', p),
+  syncConflictBackupRestore: p => require('./db-sync-ops').dispatch('syncConflictBackupRestore', p),
   // One-time bootstrap: rows created before the oplog existed (any user enabling sync on an existing
   // database) have no change-capture pointers and would never propagate. Idempotent via sync.seedDone; NOT renderer-callable.
   seedSyncOplog: p => require('./db-sync-ops').dispatch('seedSyncOplog', p),

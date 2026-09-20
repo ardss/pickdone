@@ -63,15 +63,15 @@ test('域:分类 — CLI addCategory 与 UI(upsertCategory)互相可见', () => 
   assert.equal(lib.resolveCategory('同级对等乙'), 9877, 'UI 建的分类 CLI 可解析')
 })
 
-test('域:项目标识 — CLI setProjectFlag 与 UI 通道(setMeta projectCategoryIds)同账', () => {
+test('域:项目标识 — CLI setProjectFlag 写 per-category flag 键,UI 通道(legacy projectCategoryIds 数组)经 union 读同账(X3 2026-09-20)', () => {
   lib.setProjectFlag('对等分类', true)
-  const ids = JSON.parse(db.call('getMeta', 'projectCategoryIds') || '[]')
   const catId = lib.resolveCategory('对等分类')
-  assert.ok(ids.includes(catId), 'CLI 打的项目标必须落在共享 meta 键上')
-  // UI 通道: 直接 setMeta(等价 category/setProject 的持久化形态);9877=上一测试经 UI 通道建的真分类
-  const ids2 = [...ids, 9877]
+  assert.equal(db.call('getMeta', 'projectCategoryFlag:' + catId), '1', 'CLI 打的项目标必须落在 per-category flag 键(X3 契约)')
+  // UI 通道: legacy whole-doc array(pre-X3 渲染端形态)— union 读兜底,老数据必须仍可见
+  const legacy = JSON.parse(db.call('getMeta', 'projectCategoryIds') || '[]')
+  const ids2 = [...legacy, 9877]
   db.call('setMeta', ['projectCategoryIds', JSON.stringify(ids2)])
-  assert.ok(lib.getProjects().some(p => p.categoryId === 9877), 'UI 打的项目标 CLI getProjects 必须可见')
+  assert.ok(lib.getProjects().some(p => String(p.categoryId) === '9877'), 'UI 打的项目标 CLI getProjects 必须可见(union 兜底)')
 })
 
 test('域:项目截止/里程碑 — CLI 写入 meta 后 UI 同键可读', () => {
@@ -158,10 +158,10 @@ test('域:设置 — CLI settingsSet 落 meta db.settingsState(UI 镜像同键)'
   assert.equal(doc[key.key], true, 'CLI 改的设置必须落在 UI 可见的共享镜像键')
 })
 
-test('域:工作量 — CLI setEstimate 写共享 meta,UI initFromDb 同账', () => {
+test('域:工作量 — CLI setEstimate 写 per-task meta 键(X2 2026-09-20 契约),UI initFromDb 同账', () => {
   const [t] = lib.listTodos({ all: true }).filter(x => x.taskContent === '对等·任务A')
   lib.setEstimate(String(t.taskId), 3)
-  const map = JSON.parse(db.call('getMeta', 'tomatoEstimateState') || '{}')
-  assert.equal(map[t.taskId], 3, '预计番茄必须落在渲染端 tomatoEstimate/initFromDb 同款 meta 键')
+  assert.equal(db.call('getMeta', 'tomatoEstimateState:' + t.taskId), '3', '预计番茄必须落在 per-task 键 = 整数字符串(X2 契约)')
+  assert.equal(db.call('getMeta', 'tomatoEstimateState'), null, 'legacy whole-doc blob 不再被写(迁移后即删除)')
   assert.ok(Number(db.call('getMeta', 'tomatoEstimateStateAt')) > 0, '必须带时间戳(渲染端谁新用谁的判据)')
 })
