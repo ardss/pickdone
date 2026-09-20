@@ -154,5 +154,9 @@
   "renderer/js/store/auth.js::gamification.lastDeltaKey": {
     "authority": "local-only",
     "note": "Own last delta key for index self-heal; local bookkeeping recalculated from own meta keys at init"
+  },
+  "renderer/js/store/auth.js::gamification.ownKeys": {
+    "authority": "local-only",
+    "note": "Bounded (200) LS registry of every own emitted delta key for full index self-heal at init; append-only local bookkeeping, recalibrated against the shared index each init"
   }
 }
