@@ -317,26 +317,26 @@ test('Y10: saveSnowGain batches deltas (≤1/min) and initGamification migrates 
 
 /* ---------------- X3/Y renderer contracts ---------------- */
 
-test('tomatoEstimate: setEstimate writes the per-task meta key (delete on 0)', async () => {
+test('tomatoEstimateState: setEstimate writes the per-task meta key (delete on 0)', async () => {
   resetLs()
   const calls = []
   stubDb((op, p) => { calls.push([op, p]); return Promise.resolve(true) })
   const mod = await importSrc('renderer/js/utils/tomatoEstimate.js')
   mod.setEstimate('t1', 4)
   mod.setEstimate('t1', 0)
-  const setCall = calls.find(([op, p]) => op === 'setMeta' && p[0] === 'tomatoEstimate:t1')
+  const setCall = calls.find(([op, p]) => op === 'setMeta' && p[0] === 'tomatoEstimateState:t1')
   assert.ok(setCall, 'per-task key written')
   assert.equal(setCall[1][1], '4')
-  assert.ok(calls.some(([op, p]) => op === 'deleteMeta' && p === 'tomatoEstimate:t1'), 'zero estimate removes the key')
+  assert.ok(calls.some(([op, p]) => op === 'deleteMeta' && p === 'tomatoEstimateState:t1'), 'zero estimate removes the key')
 })
 
-test('tomatoEstimate: initFromDb unions per-task keys over the legacy blob and lazy-migrates (blob deleted)', async () => {
+test('tomatoEstimateState: initFromDb unions per-task keys over the legacy blob and lazy-migrates (blob deleted)', async () => {
   resetLs()
   const meta = new Map([
     ['tomatoEstimateState', JSON.stringify({ t1: 2 })],
     ['tomatoEstimateStateAt', String(Date.now())],
-    ['tomatoEstimate:t1', '3'], // per-task wins over legacy blob
-    ['tomatoEstimate:t2', '1']
+    ['tomatoEstimateState:t1', '3'], // per-task wins over legacy blob
+    ['tomatoEstimateState:t2', '1']
   ])
   const deleted = []
   stubDb((op, p) => {

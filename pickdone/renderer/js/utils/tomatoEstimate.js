@@ -12,7 +12,7 @@ const LS_KEY = 'tomatoEstimateState'
 const TS_KEY = 'tomatoEstimateStateAt'
 const MIN = 0
 const MAX = 20
-// Y (sync-coverage-2): per-task meta keys `tomatoEstimate:<taskId>` — the whole-map blob meta was
+// Y (sync-coverage-2): per-task meta keys `tomatoEstimateState:<taskId>` — the whole-map blob meta was
 // whole-key LWW, so two devices editing different tasks' estimates clobbered each other. Per-task
 // keys sync field-granular via the meta entity. The LS blob stays as the reactive cache; the DB
 // blob meta is legacy (lazy-migrated to per-task keys, then deleted; fallback read remains).
@@ -27,7 +27,7 @@ function load () {
 
 const state = reactive(load())
 
-const PER_TASK_PREFIX = 'tomatoEstimate:'
+const PER_TASK_PREFIX = 'tomatoEstimateState:'
 const keyOf = taskId => PER_TASK_PREFIX + taskId
 
 function persist () {
@@ -52,7 +52,7 @@ function persistTask (taskId, n) {
 }
 
 /** Startup backfill (Y rework): legacy-blob pass (timestamped whole-map meta, as before) UNION
- *  per-task keys `tomatoEstimate:<taskId>` for every known task id (caller passes the live id set;
+ *  per-task keys `tomatoEstimateState:<taskId>` for every known task id (caller passes the live id set;
  *  per-task values win — they are the syncable unit now). Also performs the one-time lazy
  *  migration: blob entries are emitted as per-task keys and the legacy DB blob is deleted
  *  (the LS blob stays as the reactive cache). */
