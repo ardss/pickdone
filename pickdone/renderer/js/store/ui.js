@@ -88,5 +88,21 @@ export default {
     openMenu (s, { x, y, items }) { s.contextMenu = { visible: true, x, y, items } },
     closeMenu (s) { s.contextMenu.visible = false },
     setLocked (s, v) { s.isLocked = v }
+  },
+  actions: {
+    // Round-1 P0 (2026-09-21): placeholder-tag ('userTags' meta) persistence lives HERE in the
+    // store, not in the side-nav children — the w5 architecture guard bans dbCall in
+    // SnManageTagsModal (lifecycle side effects stay out of the split children). Rename/delete of
+    // a placeholder tag must update this meta key or the placeholder silently survives.
+    renameUserTag ({ state, commit }, { from, to }) {
+      const list = (state.userTags || []).map(x => (x === from ? to : x))
+      commit('setUserTags', list)
+      try { window.todoAPI.dbCall('setMeta', ['userTags', JSON.stringify(list)]).catch(() => {}) } catch (e) { /* best-effort */ }
+    },
+    removeUserTag ({ state, commit }, name) {
+      const list = (state.userTags || []).filter(x => x !== name)
+      commit('setUserTags', list)
+      try { window.todoAPI.dbCall('setMeta', ['userTags', JSON.stringify(list)]).catch(() => {}) } catch (e) { /* best-effort */ }
+    }
   }
 }

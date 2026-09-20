@@ -43,6 +43,7 @@ const INDEX_KEY = 'gamification.delta.index'
 const BASE_EMITTED_KEY = 'gamification.baseEmitted'
 const DEVICE_LS = 'gamification.deviceId'
 const LAST_DELTA_LS = 'gamification.lastDeltaKey' // U9a: self-heal handle
+const OWN_KEYS_LS = 'gamification.ownKeys' // round-1 P0 (2026-09-21): EVERY own emitted delta key (full index self-heal)
 const FOLDED_LS = 'gamification.folded'
 const FLUSH_MIN_MS = 60000 // batch: at most one delta write per minute
 const COMPACT_AFTER_MS = 7 * 86400000 // U9b: deltas older than 7 days are compacted
@@ -76,7 +77,15 @@ function readJson (raw, fallback) {
 /** Emit one delta now (increments or a base migration) and union it into the shared index. */
 function emitDelta (entry) {
   const key = deltaKey()
-  try { localStorage.setItem(LAST_DELTA_LS, key) } catch (e) { /* empty */ }
+  try {
+    localStorage.setItem(LAST_DELTA_LS, key)
+    // Round-1 P0: remember EVERY emitted own key so init can self-heal the shared index for all
+    // of them, not just the last one (a lost index race orphaned every earlier key forever).
+    let ks = []
+    try { ks = JSON.parse(localStorage.getItem(OWN_KEYS_LS) || '[]') } catch (e) { ks = [] }
+    if (!Array.isArray(ks)) ks = []
+    if (!ks.includes(key)) { ks.push(key); try { localStorage.setItem(OWN_KEYS_LS, JSON.stringify(ks.slice(-200))) } catch (e) { /* empty */ } }
+  } catch (e) { /* empty */ }
   db('setMeta', [key, JSON.stringify(entry)])
   // Index union (best-effort): read → merge → write; races only delay discovery (append-only keys).
   Promise.resolve(db('getMeta', INDEX_KEY)).then(raw => {
@@ -188,7 +197,18 @@ export default {
         if (!Array.isArray(keys)) keys = []
         try {
           const lastOwn = localStorage.getItem(LAST_DELTA_LS)
-          if (lastOwn && !keys.includes(lastOwn)) { keys.push(lastOwn); db('setMeta', [INDEX_KEY, JSON.stringify(keys)]) }
+          if (lastOwn && !keys.includes(lastOwn)) keys.push(lastOwn)
+          // Round-1 P0 (2026-09-21): self-heal EVERY own emitted key into the shared index — the
+          // old last-delta-only repair left all earlier keys orphaned after a lost index race
+          // (peers could never discover them).
+          let ownKeys = []
+          try { ownKeys = JSON.parse(localStorage.getItem(OWN_KEYS_LS) || '[]') } catch (e) { ownKeys = [] }
+          if (Array.isArray(ownKeys)) {
+            for (const k of ownKeys) {
+              if (typeof k === 'string' && k.startsWith(DELTA_PREFIX + me + ':') && !keys.includes(k)) keys.push(k)
+            }
+          }
+          if (lastOwn || (Array.isArray(ownKeys) && ownKeys.length)) db('setMeta', [INDEX_KEY, JSON.stringify(keys)])
         } catch (e) { /* empty */ }
         // One-time migration: emit the current LS totals as a base delta so peers can adopt them
         // (per-field max). The factory-default 888 snow is NOT user progress — skip it.
@@ -205,7 +225,14 @@ export default {
         let addTomato = 0
         const baseMax = { snow: 0, tomatoGain: 0 }
         const entries = {}
-        const markFolded = (k, s, t, gen) => { folded[k] = gen != null ? { s, t, gen } : { s, t } }
+        // Round-1 P0 (2026-09-21): for SUBTOTAL keys the guard stores the ACCOUNTED amount
+        // (what this device has already folded toward that cumulative subtotal) plus the
+        // compacted-key snapshot of the generation that amount covers — the old guard stored the
+        // subtotal's raw total, so the next generation subtracted both it AND the individually
+        // folded covered keys again (per-generation undercount compounding).
+        const markFolded = (k, s, t, gen, compacted) => {
+          folded[k] = gen != null ? { s, t, gen, ...(Array.isArray(compacted) ? { compacted } : {}) } : { s, t }
+        }
         // U-18: one batch read of the delta keys instead of an O(N) sequential getMeta loop
         // (getMetaManyWithFallback keeps the per-key loop when the batch op is absent)
         const deltaVals = await getMetaManyWithFallback(keys)
@@ -225,19 +252,27 @@ export default {
           entries[k] = d
           const f = folded[k]
           if (d.gen != null) {
-            // U9b peer subtotal: fold only the not-yet-folded generation; subtract this device's
-            // previously folded subtotal amount and any covered keys it folded individually.
+            // U9b peer subtotal: fold only the not-yet-folded generation. The cumulative subtotal
+            // covers every key ever compacted; subtract EXACTLY what this device already counted:
+            // the subtotal-path contribution recorded in the guard (f.s/f.t — the guard stores the
+            // CONTRIBUTION d.total−accounted, NOT the raw total; storing the raw total was the
+            // round-1 P0 double-subtract undercount) plus every covered key folded INDIVIDUALLY
+            // (key meta is deleted by the owner's compaction, so an individual guard for a
+            // previously-covered key cannot reappear later — disjoint accounting).
             const fGen = (f && Number(f.gen)) || 0
             if (fGen >= (Number(d.gen) || 0)) continue
-            let s = (Number(d.snow) || 0) - ((f && Number(f.s)) || 0)
-            let t = (Number(d.tomatoGain) || 0) - ((f && Number(f.t)) || 0)
-            for (const ck of (Array.isArray(d.compacted) ? d.compacted : [])) {
+            const compacted = Array.isArray(d.compacted) ? d.compacted : []
+            let accounted = (f && Number(f.s)) || 0
+            let accountedT = (f && Number(f.t)) || 0
+            for (const ck of compacted) {
               const cf = folded[ck]
-              if (cf && Number.isFinite(Number(cf.s))) { s -= Number(cf.s) || 0; t -= Number(cf.t) || 0 }
+              if (cf && Number.isFinite(Number(cf.s))) { accounted += Number(cf.s) || 0; accountedT += Number(cf.t) || 0 }
             }
-            addSnow += Math.max(0, s)
-            addTomato += Math.max(0, t)
-            markFolded(k, Number(d.snow) || 0, Number(d.tomatoGain) || 0, Number(d.gen) || 0)
+            const contribS = Math.max(0, (Number(d.snow) || 0) - accounted)
+            const contribT = Math.max(0, (Number(d.tomatoGain) || 0) - accountedT)
+            addSnow += contribS
+            addTomato += contribT
+            markFolded(k, contribS, contribT, Number(d.gen) || 0, compacted)
             continue
           }
           if (f) continue // ordinary peer delta already folded on this device
