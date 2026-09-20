@@ -807,7 +807,10 @@ function registerOps () {
         stopSync().then(() => { if (settingGet(K_ENABLED) === true) startSync() }).catch(() => {})
       }
       return getSettingsPayload()
-    }
+    },
+    // X4 (2026-09-20): meta conflict backup list/restore for the renderer (impl in
+    // sync-conflict-backups.js — this file is at its size ratchet). Machine-local keys only.
+    ...require('./sync-conflict-backups').ops(() => (op, p) => state.db.call(op, p))
   })
 }
 
