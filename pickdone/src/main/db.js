@@ -609,7 +609,9 @@ const OPS = {
   // ===== Saved filters (smart lists): conds stores the condition JSON (catId/priority/dateMode) =====
   // Deletes are tombstones (P1 sync groundwork): a soft-deleted filter row must survive to propagate
   // to other devices; the recycle semantics stay invisible because filterList filters deleted=0.
-  filterList: () => db.prepare('SELECT * FROM filters WHERE deleted = 0 ORDER BY sort, id').all().map(r => ({ id: r.id, name: r.name, conds: parseConds(r.conds), sort: r.sort })),
+  // F3b (2026-09-20): updatedAt exposed — the sync LWW gate needs the row's age, otherwise a
+  // filter edit from a peer was refused for any filter this device already had (ageUnknown).
+  filterList: () => db.prepare('SELECT * FROM filters WHERE deleted = 0 ORDER BY sort, id').all().map(r => ({ id: r.id, name: r.name, conds: parseConds(r.conds), sort: r.sort, updatedAt: r.updatedAt || 0 })),
   filterUpsert: f => {
     const name = String(f && f.name || '').slice(0, 50)
     const conds = JSON.stringify(normConds(f && f.conds))
@@ -693,7 +695,10 @@ const OPS = {
   // reconcile pruned history via periodic full snapshots, so tombstoning it would only grow the table.
   // H2 2026-09-16: sort was missing from the snapshot SELECT — the snapshot/restore round-trip lost
   // chip ordering and restore's ON CONFLICT upsert then overwrote sort with 0.
-  planAll: () => db.prepare('SELECT id, taskId, day, mm, sort FROM plan_chips WHERE deleted = 0 ORDER BY day, mm, sort').all(),
+  // F3a (2026-09-20): updatedAt must be in the SELECT too — without it the sync layer could not
+  // know a chip's LWW age and refused every inbound edit for a chip the peer already had
+  // (sync-apply ageUnknown gate); chips are re-timed on every write, so the column is the age.
+  planAll: () => db.prepare('SELECT id, taskId, day, mm, sort, updatedAt FROM plan_chips WHERE deleted = 0 ORDER BY day, mm, sort').all(),
   planAddMany: chips => {
     // Skip-and-collect (round-3 review): one malformed chip used to throw for the WHOLE batch —
     // a poison pill in the sync flush wedged plan ingestion forever. Invalid rows are skipped

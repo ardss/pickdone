@@ -10,8 +10,8 @@
  *   (purgeRecycleBin/purgeSeedTodos DO capture per-id todo tombstones since 2026-09-18.)
  * - The oplog append is a separate transaction from the business write: a crash between the two
  *   commits loses the delta row (accepted window at synchronous=NORMAL).
- * - planMoveTask/planDeleteTask log ('plan', taskId) while other plan ops log chip ids — consumers
- *   of those two must reconcile via planAll until the granularity is unified.
+ * - planMoveTask/planDeleteTask/planDeleteTaskDay now log per-chip pointers (F3c, 2026-09-20);
+ *   pre-fix oplogs may still contain ('plan', taskId) pointers — consumers skip the ghost ids.
  * - planPrune ('plan','*gc*') and tomatoMigrateFromMeta ('tomato','*gc*') keep their single GC
  *   marker (their results feed count-shaped consumers — audit "pruned N chip row(s)"); delta
  *   consumers must skip '*gc*' ids (lan-sync hydration guards against them) and reconcile via a
@@ -55,8 +55,22 @@ module.exports = ({ getDb, log }) => {
       case 'planAddMany': return arr('plan', result)
       case 'planUpdateChip': return [one('plan', params && params.id)]
       case 'planRemoveIds': return arr('plan', params)
-      case 'planMoveTask': return [one('plan', params && params.taskId)]
-      case 'planDeleteTask': case 'planDeleteTaskDay': return [one('plan', params && params.taskId)]
+      // F3c (2026-09-20): these three ops move/delete CHIPS but used to log a single ('plan',
+      // taskId) pointer — peers hydrated that as a GHOST tombstone (no chip has id = taskId) and
+      // no-op'd, so task-level chip moves/deletes never propagated. Runs AFTER the write
+      // (call() appends post-op), so the affected chip ids are resolved from the rows themselves;
+      // planMoveTask's moved chips now sit at toDay. Legacy ('plan', taskId) pointers already in
+      // retained oplogs stay harmless no-ops (ghost guard in sync-apply hydration). Chips already
+      // sitting at toDay that were not moved may be over-logged: on peers they land as
+      // identical-content no-ops, which is the standard echo-suppression path.
+      case 'planMoveTask': return arr('plan', getDb().prepare('SELECT id FROM plan_chips WHERE taskId = ? AND day = ?')
+        .all(String(params && params.taskId), String(params && params.toDay)).map(r => r.id))
+      // planDeleteTask is called with a BARE taskId string (unlike planDeleteTaskDay's object);
+      // accept both shapes.
+      case 'planDeleteTask': return arr('plan', getDb().prepare('SELECT id FROM plan_chips WHERE taskId = ?')
+        .all(String((params && typeof params === 'object') ? params.taskId : params)).map(r => r.id))
+      case 'planDeleteTaskDay': return arr('plan', getDb().prepare('SELECT id FROM plan_chips WHERE taskId = ? AND day = ?')
+        .all(String(params && params.taskId), String(params && params.day)).map(r => r.id))
       case 'planPrune': return [one('plan', '*gc*')]
       case 'setMeta': return [one('meta', Array.isArray(params) ? params[0] : params)]
       // H2 2026-09-16: meta deletions were never captured (not in WRITE_OPS, no case here) — a removed

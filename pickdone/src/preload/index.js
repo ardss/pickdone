@@ -171,6 +171,12 @@ contextBridge.exposeInMainWorld('todoAPI', {
     ipcRenderer.on('external-settings-changed', h)
     return () => ipcRenderer.removeListener('external-settings-changed', h)
   },
+  // LAN sync hot-apply: applied db.habitsState fields pushed by the bootstrap fold (mirrors external-settings-changed)
+  onExternalHabitsChanged: fn => {
+    const h = (_e, patch) => fn(patch)
+    ipcRenderer.on('external-habits-changed', h)
+    return () => ipcRenderer.removeListener('external-habits-changed', h)
+  },
   // Pre-quit flush signal: broadcast by the main process on before-quit; the renderer's debounced mirror flushes to disk immediately
   onAppQuittingFlush: fn => {
     const h = (_e, p) => fn(p)
