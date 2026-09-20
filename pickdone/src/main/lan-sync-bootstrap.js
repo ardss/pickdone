@@ -31,6 +31,7 @@ const { SYNC_SCHEMA_VERSION } = require('../../shared/sync-core/merge.mjs')
 const { generatePairingSecret, derivePairingCode } = require('../../shared/sync-core/pairing.mjs')
 const { createLanSyncNode } = require('./lan-sync/index')
 const { DEFAULT_PORT } = require('./lan-sync/transport')
+const { isDialableHost } = require('./lan-sync/discovery')
 const syncOps = require('./db-sync-ops')
 
 // settings_rows keys (never synced: hydration skips the 'sync.' namespace, otherwise peers would adopt each other's identity)
@@ -39,6 +40,12 @@ const K_DEVICE_NAME = 'sync.deviceName'
 const K_PAIRING_SECRET = 'sync.pairingSecret'
 const K_ENABLED = 'sync.enabled'
 const K_MANUAL_PEERS = 'sync.manualPeers' // [{host,port}] — survives restarts (node peers are memory-only)
+// Round-1 P0 (2026-09-21): the PAIRED peer table — {deviceId: {deviceId,name,host,port,pairedAt}}.
+// The peer table used to live ONLY in node memory: `sync status` showed peers:(none) after every
+// restart and the periodic round had no dial targets until mDNS happened to re-find the peer.
+// The transport port is FIXED (58471, transport.DEFAULT_PORT) — both nodes bind the same port, so
+// the listening side can record a reachable peer address from the inbound connection alone.
+const K_PAIRED_PEERS = 'sync.peers'
 const CURSOR_META_KEY = 'sync.pushCursor' // persisted in meta (not settings_rows): per-device bookkeeping, no sync obligation
 // v2 (2026-09-18): the pre-v2 values were persisted in the RECEIVER's local seq space (its own
 // max oplog seq) while buildSegments(fromSeq) consumes the SENDER's space — feeding those back
@@ -237,6 +244,49 @@ function persistManualPeer (entry) {
   settingPut(K_MANUAL_PEERS, JSON.stringify(list))
 }
 
+/* ---------- Round-1 P0 (2026-09-21): paired-peer persistence + address hygiene ---------- */
+/** Normalize a wire/host address to a dialable form: strip IPv4-mapped IPv6 (::ffff:a.b.c.d);
+ *  return null for junk (scope-less link-local, 169.254.*, virtual ranges). */
+function normalizeHost (host) {
+  let h = String(host || '').trim()
+  if (h.startsWith('::ffff:')) h = h.slice(7)
+  return isDialableHost(h) ? h : null
+}
+function loadPairedPeers () {
+  try {
+    const v = JSON.parse(settingGet(K_PAIRED_PEERS) || '{}')
+    return (v && typeof v === 'object' && !Array.isArray(v)) ? v : {}
+  } catch { return {} }
+}
+/** Merge a peer record keyed by deviceId. Writes ONLY on a real change (connection events fire
+ *  per dial — this must not turn into a settings-table write amplifier). Returns true when written. */
+function persistPairedPeer (entry) {
+  try {
+    if (!entry || !entry.deviceId || typeof entry.deviceId !== 'string') return false
+    const all = loadPairedPeers()
+    const prev = all[entry.deviceId] || {}
+    const next = {
+      deviceId: entry.deviceId,
+      name: entry.name || prev.name || entry.deviceId,
+      // ACTUAL TCP address first (the caller passes socket remote addresses), previous value as
+      // fallback; undialable junk never overwrites a working address.
+      host: normalizeHost(entry.host) || prev.host || null,
+      port: (Number.isInteger(entry.port) && entry.port > 0 && entry.port <= 65535) ? entry.port : (prev.port || DEFAULT_PORT),
+      pairedAt: prev.pairedAt || Date.now(),
+    }
+    if (prev.host === next.host && prev.port === next.port && prev.name === next.name) return false
+    all[entry.deviceId] = next
+    settingPut(K_PAIRED_PEERS, JSON.stringify(all))
+    return true
+  } catch (e) { log.warn('[LanSync] paired-peer persist failed:', e.message); return false }
+}
+function removePairedPeer (deviceId) {
+  try {
+    const all = loadPairedPeers()
+    if (all[deviceId]) { delete all[deviceId]; settingPut(K_PAIRED_PEERS, JSON.stringify(all)) }
+  } catch (e) { log.warn('[LanSync] paired-peer remove failed:', e.message) }
+}
+
 /** Map wrapper exposing .raw() for persistence; seeded from settings_rows so progress survives restarts. */
 function createTrackedWatermarks () {
   const m = new Map(Object.entries(loadPeerWatermarks()).map(([k, v]) => [k, Number(v) || 0]))
@@ -408,8 +458,32 @@ function startSync () {
   })
   state.node.on('pair-accepted', info => emitSyncEvent('pair-accepted', { host: info && info.host, port: info && info.port }))
   state.node.on('pair-rejected', info => emitSyncEvent('pair-rejected', { host: info && info.host, port: info && info.port, reason: info && info.reason }))
-  // Inbound pairing completed (manual code or confirmed): tell the renderer it succeeded.
-  state.node.on('paired-inbound', info => emitSyncEvent('pair-accepted', { deviceId: info && info.deviceId, host: info && info.host }))
+  // Inbound pairing completed (manual code or confirmed): tell the renderer it succeeded AND
+  // (round-1 P0) immediately register + persist the peer from the ACTUAL TCP remote address —
+  // the inbound side always knows the peer's reachable address from its own socket.
+  state.node.on('paired-inbound', info => {
+    emitSyncEvent('pair-accepted', { deviceId: info && info.deviceId, host: info && info.host })
+    try {
+      if (!info || !info.deviceId || info.deviceId === state.deviceId) return
+      const myPort = (state.node && state.node.getStatus().port) || DEFAULT_PORT
+      persistPairedPeer({ deviceId: info.deviceId, name: info.deviceName, host: info.host, port: myPort })
+      if (state.node) state.node.addPeer({ deviceId: info.deviceId, name: info.deviceName, host: normalizeHost(info.host) || undefined, port: myPort })
+      kickSyncRound('paired-inbound')
+    } catch (e) { log.warn('[LanSync] paired-inbound persist failed:', e.message) }
+  })
+  // Round-1 P0: an authenticated connection proves the peer's ACTUAL reachable address — refresh
+  // the persisted record (and the live node entry) from socket remoteAddress, never from the
+  // stale/cached discovery value. Change-gated inside persistPairedPeer (no write amplification).
+  state.node.on('peer-connected', p => {
+    try {
+      if (!p || !p.deviceId || p.deviceId === state.deviceId) return
+      const myPort = (state.node && state.node.getStatus().port) || DEFAULT_PORT
+      if (persistPairedPeer({ deviceId: p.deviceId, host: p.host, port: myPort }) && state.node) {
+        const h = normalizeHost(p.host)
+        if (h) state.node.addPeer({ deviceId: p.deviceId, host: h, port: myPort })
+      }
+    } catch (e) { log.warn('[LanSync] peer-connected persist failed:', e.message) }
+  })
   state.node.on('peer-unauthorized', info => {
     log.warn('[LanSync] unauthorized peer rejected (terminal until re-pair):', info && info.deviceId, 'from', info && info.host, info && info.error)
     // P1-3b: terminal state — the Device Center renders peers[].peerState === 'unpaired'
@@ -420,6 +494,14 @@ function startSync () {
   // restore manually added peers (node peer table is memory-only; settings_rows is the authority)
   for (const mp of manualPeers()) {
     try { state.node.addPeer({ deviceId: 'manual-' + mp.host + ':' + mp.port, host: mp.host, port: Number(mp.port) }) } catch (e) { log.warn('[LanSync] manual peer restore failed:', e.message) }
+  }
+  // Round-1 P0: restore PAIRED peers — without this the peer table was memory-only and
+  // `sync status` reported peers:(none) after every restart even though pairing state survived.
+  for (const p of Object.values(loadPairedPeers())) {
+    try {
+      if (!p || !p.deviceId || p.deviceId === deviceId || !p.host) continue
+      state.node.addPeer({ deviceId: p.deviceId, name: p.name, host: p.host, port: Number(p.port) || DEFAULT_PORT })
+    } catch (e) { log.warn('[LanSync] paired peer restore failed:', e.message) }
   }
   state.node.start()
   state.pendingToSeq = 0
@@ -442,7 +524,9 @@ async function stopSync () {
   // node is torn down; quit/disable/unpair all funnel through here.
   try {
     if (securityPersistTimer) { clearTimeout(securityPersistTimer); securityPersistTimer = null }
-    if (n) settingPut(K_SECURITY_LOG, JSON.stringify(n.getStatus().security.slice(-20)))
+    // Round-1 P0: guard getStatus — a stale/mocked node reference threw
+    // `n.getStatus is not a function` and masked the flush with a warning.
+    if (n && typeof n.getStatus === 'function') settingPut(K_SECURITY_LOG, JSON.stringify(n.getStatus().security.slice(-20)))
   } catch (e) { log.warn('[LanSync] security log flush on stop failed:', e.message) }
   state.node = null
   state.pendingPair = null
@@ -633,6 +717,9 @@ async function syncUnpairPeerOp (p) {
     settingPut(K_MANUAL_PEERS, JSON.stringify(rest))
     try { state.node.removePeer(String('manual-' + host + ':' + port)) } catch { /* older nodes: entry dies with the next restart */ }
   }
+  // Round-1 P0: drop the persisted paired-peer record too (it keyed the stale address the manual
+  // record mirrored); re-pairing then starts from a clean table instead of merging into it.
+  removePairedPeer(deviceId)
   // Drop the per-peer push watermark (a stale watermark must not survive a revoked pairing).
   try {
     const wm = loadPeerWatermarks()
@@ -648,8 +735,11 @@ async function syncUnpairPeerOp (p) {
   state.pairingCode = null
   // P1-4 (2026-09-19 data-safety round): best-effort tell the unpaired peer while a connection
   // may still be live — it can then forget OUR peer record and enter its terminal unpaired
-  // state instead of auth-retrying forever. Never blocks the unpair flow.
-  try { const notified = state.node.notifyUnpaired(deviceId); log.info('[LanSync] unpaired notify to', deviceId, notified ? 'delivered' : 'no live connection (peer will discover via auth rejection)') } catch (e) { log.warn('[LanSync] unpaired notify failed:', e.message) }
+  // state instead of auth-retrying forever. Never blocks the unpair flow. Round-1 P0: guard the
+  // method existence (a stale/older node reference threw `notifyUnpaired is not a function`).
+  if (state.node && typeof state.node.notifyUnpaired === 'function') {
+    try { const notified = state.node.notifyUnpaired(deviceId); log.info('[LanSync] unpaired notify to', deviceId, notified ? 'delivered' : 'no live connection (peer will discover via auth rejection)') } catch (e) { log.warn('[LanSync] unpaired notify failed:', e.message) }
+  }
   await stopSync()
   if (settingGet(K_ENABLED) === true) startSync()
   notifyRenderers('peer-unpaired')
@@ -743,6 +833,11 @@ function registerOps () {
       if (!state.node) throw new Error('syncPairWithCode: sync is not enabled')
       const r = await state.node.pairWith(p && p.deviceId || undefined, code)
       settingPut(K_PAIRING_SECRET, String(r.secret))
+      // Round-1 P0: persist the paired peer from the address the pair ACTUALLY succeeded on (the
+      // dialed host:port), so the record survives restart and re-pairing overwrites any stale one.
+      if (r.peer && r.peer.deviceId) {
+        persistPairedPeer({ deviceId: r.peer.deviceId, name: r.peer.name, host: r.peer.host, port: r.peer.port })
+      }
       log.info('[LanSync] paired with peer', r.peer && r.peer.deviceId, '- shared secret adopted, restarting node')
       state.pairingCode = null // consumed; issue a fresh code on next click
       await stopSync()
@@ -863,6 +958,11 @@ module.exports.__test = {
   emitAppliedRound: () => emitAppliedRound(),
   // P1-3 test surface: unpair deletes peer record + watermark + revokes the shared secret.
   unpairPeer: p => syncUnpairPeerOp(p),
+  // Round-1 P0 test surface: paired-peer table persistence + address hygiene.
+  persistPairedPeer,
+  removePairedPeer,
+  loadPairedPeers,
+  normalizeHost,
   // P1-4/P1-6 test surface: stop ordering (engine alive until the node stopped) + watermark
   // invalidation (recovery path clears persisted per-peer progress).
   stopSync,
