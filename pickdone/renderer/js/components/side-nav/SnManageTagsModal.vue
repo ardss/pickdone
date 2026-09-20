@@ -78,13 +78,25 @@ export default defineComponent({
       return this.$store.state.todo.todoList.filter(t =>
         extractTags(t.taskContent, t.taskDescribe).includes(name))
     },
+    /* Round-1 P0 (2026-09-21): the rewrite regex MUST terminate on the SAME character class as
+       extractTags' TAG_RE (`[^\s#,，。.!?！？]`). The old whitespace-only lookahead never matched a
+       tag followed by punctuation (`#工作,明天`): the confirm dialog counted the todos (counter
+       uses extractTags), the rewrite replaced nothing, and a success toast still fired — a silent
+       no-op. Must be an arrow fn (binds this from the component methods scope). */
+    tagRewriteRe (name: string, opts?: { consume?: boolean }): RegExp {
+      const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      return new RegExp((opts && opts.consume ? '\\s*' : '') + '#' + esc + '(?=[\\s#,，。.!?！？]|$)', 'g')
+    },
+    /* Placeholder tags (ui.userTags meta entries with count 0) live in the 'userTags' meta key,
+       not in any todo content — rename/delete must update that list too or the placeholder
+       silently survives (and a renamed placeholder disappears). Persistence goes through the ui
+       store actions (w5 guard: no transport side effects in the side-nav children). */
     async renameTag (t) {
       const next = this.tagMgrName.trim().replace(/^#/, '')
       this.tagMgrEditing = null
       if (!next || next === t.name) return
       if (this.tags.some(x => x.name === next)) return this.$message.warning(this.$t('statsG.SideNav.tagExists', { name: next }))
-      const esc = t.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-      const re = new RegExp('#' + esc + '(?=\\s|$)', 'g')
+      const re = this.tagRewriteRe(t.name)
       for (const todo of this.tagTodos(t.name)) {
         const patch: any = {}
         if (todo.taskContent) {
@@ -97,14 +109,14 @@ export default defineComponent({
         }
         if (Object.keys(patch).length) await this.$store.dispatch('todo/updateTodoFields', { taskId: todo.taskId, patch })
       }
+      await this.$store.dispatch('ui/renameUserTag', { from: t.name, to: next })
       this.$message.success(this.$t('statsG.SideNav.tagRenamed', { name: next }))
     },
     async removeTag (t) {
       try {
         await this.$confirm(this.$t('statsG.SideNav.delTagConfirm', { name: t.name, count: this.tagTodos(t.name).length }), this.$t('statsE.SideNav.tipTitle'), { type: 'warning' })
       } catch { return }
-      const esc = t.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-      const re = new RegExp('\\s*#' + esc + '(?=\\s|$)', 'g')
+      const re = this.tagRewriteRe(t.name, { consume: true })
       for (const todo of this.tagTodos(t.name)) {
         const patch: any = {}
         if (todo.taskContent) {
@@ -117,6 +129,7 @@ export default defineComponent({
         }
         if (Object.keys(patch).length) await this.$store.dispatch('todo/updateTodoFields', { taskId: todo.taskId, patch })
       }
+      await this.$store.dispatch('ui/removeUserTag', t.name)
       this.$message.success(this.$t('statsG.SideNav.tagDeleted', { name: t.name }))
     }
   }

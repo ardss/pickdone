@@ -19,8 +19,24 @@
  *  - Receipt writes go through the plain setMeta statement (no separate oplog surface), matching
  *    cliTomatoState; both meta keys are machine-local (sync-apply.js isMachineLocalMetaKey).
  */
-function createSyncCmdHandler ({ dispatch, setMeta, log }) {
+function createSyncCmdHandler ({ dispatch, setMeta, log, getMeta, deleteMeta }) {
+  // Round-1 P0 (2026-09-21): lastSeq used to start at 0 per process, so a cliSyncCmd slot that
+  // survived the previous app run (e.g. an old `unpair`) was REPLAYED on every restart — the
+  // secret rotated and the peer silently dropped. Seed the watermark from the persisted
+  // `cliSyncSeq` counter (every command consumed a seq, so anything still in the slot is
+  // <= counter = already handled), and delete the slot after handling so a crashed/closed app
+  // cannot re-execute it either.
   let lastSeq = 0
+  try { lastSeq = Number(typeof getMeta === 'function' ? getMeta('cliSyncSeq') : 0) || 0 } catch { lastSeq = 0 }
+  const clearHandledSlot = async (cmd) => {
+    try {
+      if (typeof deleteMeta !== 'function' || typeof getMeta !== 'function') return
+      const cur = JSON.parse(getMeta('cliSyncCmd') || 'null')
+      // Compare-and-delete: only clear the slot when it STILL holds the command we just
+      // handled — a newer command must never be eaten by an older handler's cleanup.
+      if (cur && Number(cur.seq) === Number(cmd.seq)) deleteMeta('cliSyncCmd')
+    } catch (e) { log.warn('[CLI] sync slot cleanup failed:', e.message) }
+  }
   const respond = (seq, payload) => {
     try { setMeta('cliSyncState', JSON.stringify({ seq, at: Date.now(), ...payload })) } catch (e) { log.warn('[CLI] sync receipt write failed:', e.message) }
   }
@@ -61,7 +77,8 @@ function createSyncCmdHandler ({ dispatch, setMeta, log }) {
     try { cmd = raw ? JSON.parse(raw) : null } catch { return }
     if (!cmd || !Number.isFinite(cmd.seq) || cmd.seq <= lastSeq) return
     lastSeq = cmd.seq
-    handle(cmd)
+    // Slot cleanup after handling (see clearHandledSlot): no restart replay of a handled command.
+    Promise.resolve(handle(cmd)).finally(() => { clearHandledSlot(cmd) })
   }
   return { forward }
 }

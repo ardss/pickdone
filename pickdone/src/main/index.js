@@ -157,7 +157,11 @@ function watchDbForExternalWrites () {
   let lastMtime = readWatchMtime()
   if (lastMtime == null) log.warn('[TodoDB] 启动基线读取未定（torn read），首轮轮询仅建立基线不触发刷新')
   let lastTomatoCmdRaw = null
+  // Round-1 P0 (2026-09-21): seed the tomato command watermark from the persisted cliTomatoSeq
+  // counter (same restart-replay fix as the cliSyncCmd channel) — a stale slot command must not
+  // re-execute on every app restart.
   let lastTomatoSeq = 0
+  try { lastTomatoSeq = Number(dbm.call('getMeta', 'cliTomatoSeq')) || 0 } catch { lastTomatoSeq = 0 }
   // CLI settings hot-sync baseline: the first poll only builds the baseline and does not push (otherwise startup would push a full diff by mistake)
   let lastSettingsSavedAt = 0
   let lastSettingsDoc = null
@@ -178,6 +182,11 @@ function watchDbForExternalWrites () {
     const channel = syncChannel.createSyncCmdHandler({
       dispatch: (op, p) => syncOps.dispatch(op, p),
       setMeta: (k, v) => dbm.call('setMeta', [k, v]),
+      // Round-1 P0 (2026-09-21): seed the seq watermark from the persisted counter + clear the
+      // handled slot — an old `unpair` left in cliSyncCmd must never replay on every app restart
+      // (it rotated the pairing secret and silently dropped the peer).
+      getMeta: k => dbm.call('getMeta', k),
+      deleteMeta: k => dbm.call('deleteMeta', k),
       log
     })
     forwardSyncCmd = () => {
@@ -195,7 +204,17 @@ function watchDbForExternalWrites () {
       // F2 2026-09-15 竞态根修:此前 lastTomatoSeq 在 send 之前推进且 send 前无 isDestroyed 复查——窗口销毁/
       // 重建间隙 send 抛错被外层 catch 成 warn,但 seq 已消费 → 命令永久丢失。现抽为纯逻辑
       // fixUtil.tryForwardTomatoCmd:send 成功才推进 seq,失败/窗口未就绪均不消费(下轮轮询重投)。
-      const st = fixUtil.tryForwardTomatoCmd({ raw, lastTomatoCmdRaw, lastTomatoSeq, getMainWindow, isLocked })
+      const st = fixUtil.tryForwardTomatoCmd({
+        raw, lastTomatoCmdRaw, lastTomatoSeq, getMainWindow, isLocked,
+        // Round-1 P0 (2026-09-21): after a successful forward, clear the slot so the command
+        // cannot replay on the next app restart (compare-and-delete: never eat a newer command).
+        clearCmd: (cmd) => {
+          try {
+            const cur = JSON.parse(dbm.call('getMeta', 'cliTomatoCmd') || 'null')
+            if (cur && Number(cur.seq) === Number(cmd.seq)) dbm.call('deleteMeta', 'cliTomatoCmd')
+          } catch { /* best-effort cleanup */ }
+        }
+      })
       lastTomatoCmdRaw = st.lastTomatoCmdRaw
       lastTomatoSeq = st.lastTomatoSeq
       // 账本类命令已退役为 CLI 直写行表(渲染端经 tomato-records-changed 回灌),本通道只剩状态类 start/stop/attach,只发主窗
@@ -411,10 +430,16 @@ if (!app.requestSingleInstanceLock()) { app.quit() } else {
         // restored rows waited for the periodic round. Boot-time kick is safe: kickSyncRound no-ops
         // while the sync node is not initialized.
         try { require('./lan-sync-bootstrap').kickSyncRound('db-recovery') } catch { /* sync lazy-not-init */ }
-        // P1-6 (2026-09-19 data-safety round): the recovery rebuilt the DB in an OLDER oplog seq
-        // space — stale persisted peer watermarks would sit above the restored rows and they
-        // would never be pushed. Invalidate so the next round re-pushes the full window (idempotent).
-        try { require('./lan-sync-bootstrap').invalidateSyncWatermarks('db-recovery') } catch { /* sync lazy-not-init */ }
+      }
+      // P1-6 (2026-09-19 data-safety round) / round-1 P0 (2026-09-21): ANY recovery that replaced
+      // the DB file ('json' restore AND 'plain-bak' copy) rebuilt it in an OLDER oplog seq space —
+      // stale persisted peer watermarks would sit above the restored rows and they would never be
+      // re-pushed. Invalidate AFTER the recovery writes complete so the next round re-pushes the
+      // full window to every peer (merge-apply is idempotent) and peers re-snapshot anything
+      // already pruned from the rebuilt oplog. (Previously wired only on the 'json' branch — a
+      // plain-bak restore kept stale watermarks and restored rows never reached peers.)
+      if (recovered && (recoveredFrom.source === 'json' || recoveredFrom.source === 'plain-bak')) {
+        try { require('./lan-sync-bootstrap').invalidateSyncWatermarks('db-recovery:' + recoveredFrom.source) } catch { /* sync lazy-not-init */ }
       }
       const detailMsg = String(e && e.message || e) + '.' + (recoveryFailed
         ? ' ' + recoveredFrom.label

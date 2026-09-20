@@ -32,7 +32,7 @@
 
 const { EventEmitter } = require('node:events')
 const os = require('node:os')
-const { createDiscovery, PROTO_VER } = require('./discovery')
+const { createDiscovery, PROTO_VER, isDialableHost } = require('./discovery')
 const { createLanServer, connect, DEFAULT_PORT } = require('./transport')
 const { deriveAuthCode } = require('./pairing')
 const { finalizeSnapshot } = require('./snapshot')
@@ -179,6 +179,19 @@ function createLanSyncNode(opts) {
   const whenListening = new Promise((resolve) => { listeningResolve = resolve })
 
   const discovery = opts.discoverFn || createDiscovery()
+  // Round-1 P0 (2026-09-21): discovery re-resolution hook — on a failed round the node asks the
+  // discovery layer for a FRESH address for the peer before scheduling the retry (mDNS/UDP keep
+  // announcing while the peer is reachable). Injectable for tests.
+  const resolvePeerFn = typeof opts.resolvePeer === 'function'
+    ? opts.resolvePeer
+    : (id) => {
+      try {
+        for (const p of discovery.getPeers() || []) {
+          if (p && p.deviceId === id && isDialableHost(p.host)) return p
+        }
+      } catch { /* best effort */ }
+      return null
+    }
   let server = null
   let stopped = false
   let lastRoundAt = null
@@ -295,10 +308,15 @@ function createLanSyncNode(opts) {
       if (oldestId) forgetPeer(oldestId)
     }
     const prev = peers.get(peer.deviceId)
+    // Round-1 P0 (2026-09-21): sanitize the incoming host — a scope-less link-local IPv6, an IPv4
+    // link-local, or a virtual-adapter range (192.168.111.* VMware NAT) is never dialable; keep
+    // the previous host when the fresh one is junk instead of overwriting a working address.
+    const freshHostDialable = isDialableHost(peer.host)
+    if (peer.host && !freshHostDialable && prev && isDialableHost(prev.host)) peer = { ...peer, host: prev.host }
     peers.set(peer.deviceId, {
       deviceId: peer.deviceId,
       name: peer.name || (prev && prev.name) || peer.deviceId,
-      host: peer.host || (prev && prev.host),
+      host: (freshHostDialable ? peer.host : undefined) || (prev && isDialableHost(prev.host) ? prev.host : undefined),
       port: Number.isInteger(peer.port) ? peer.port : prev && prev.port,
       protoVer: peer.protoVer || (prev && prev.protoVer) || PROTO_VER,
     })
@@ -429,7 +447,24 @@ function createLanSyncNode(opts) {
           if (streak <= DIAL_FAILURE_BUDGET) {
             em.emit('round-error', { peer: peer.deviceId, error: err })
           }
+          // Round-1 P0 (2026-09-21): before letting the peer slide into backoff/hibernate, re-resolve
+          // its address through the discovery layer (mDNS/UDP) WITHIN this round. A stored stale or
+          // wrong-address entry used to hibernate into permanent silence while the peer sat
+          // reachable on the LAN. A fresh, DIFFERENT, dialable address replaces the stored one and
+          // resets the dial budget so the retry is immediate and never counts toward hibernation.
+          let refixed = false
+          try {
+            const again = typeof resolvePeerFn === 'function' ? resolvePeerFn(peer.deviceId) : null
+            const host = again && again.host
+            if (host && isDialableHost(host) && host !== peers.get(peer.deviceId)?.host) {
+              rememberPeer({ ...again, deviceId: peer.deviceId, port: Number(again.port) })
+              resetBackoff(peer.deviceId) // fresh address: retry fast, streak not charged
+              pushRecent({ at: Date.now(), kind: 'error', peer: peer.deviceId, detail: { error: `stored address failed; discovery re-resolved ${host}:${again.port}` } })
+              refixed = true
+            }
+          } catch { /* fallback is best-effort */ }
           scheduleRetry(peer.deviceId)
+          if (refixed) em.emit('round-error', { peer: peer.deviceId, error: err, recoveredAddress: true })
           resolve(false)
         } else {
           lastRoundAt = Date.now()

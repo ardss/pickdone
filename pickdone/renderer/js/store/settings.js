@@ -177,12 +177,15 @@ export function sanitizeSettingsPatch (patch, current) {
     // base is the CURRENT LIVE STATE (passed in by the caller), not DEFAULT_SETTINGS: merging over
     // defaults wiped every local customization and persisted the wipe to config.json. The sanitizer
     // stays pure — callers without live state (pure validation) pass no base and get defaults-merged
-    // output. Arrays are junk too (an object field never accepts a list).
+    // output. Arrays are junk for OBJECT-typed fields, but fields whose DEFAULT is an array
+    // (foldedTodoList) legitimately carry arrays — dropping them made an inbound LAN-sync fold
+    // apply to the main-process rows while live state kept the stale list, and the next persist
+    // re-stamped the stale value over the peer (fold state ping-ponged forever).
     if (k === 'shortcutKeySettings' && v && typeof v === 'object' && !Array.isArray(v)) {
       out[k] = { ...(current && current.shortcutKeySettings ? current.shortcutKeySettings : DEFAULT_SETTINGS.shortcutKeySettings), ...v }
       continue
     }
-    if (typeof def === 'object' && Array.isArray(v)) continue
+    if (typeof def === 'object' && !Array.isArray(def) && Array.isArray(v)) continue
     out[k] = v
   }
   return out
