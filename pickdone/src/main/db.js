@@ -617,7 +617,16 @@ const OPS = {
       // M2 (2026-09-20): preserve an explicit updatedAt (sync apply carries the peer row's LWW age)
       // instead of re-stamping now() — same rationale as planAddMany above. Renderer callers omit it and get now().
       const stamp = Number(f.updatedAt) > 0 ? Number(f.updatedAt) : Date.now()
-      db.prepare('UPDATE filters SET name=?, conds=?, sort=?, deleted=0, deletedAt=0, updatedAt=? WHERE id=?').run(name, conds, f.sort || 0, stamp, f.id)
+      const info = db.prepare('UPDATE filters SET name=?, conds=?, sort=?, deleted=0, deletedAt=0, updatedAt=? WHERE id=?').run(name, conds, f.sort || 0, stamp, f.id)
+      // Round-1 P0 (2026-09-21): sync apply passes an explicit id — when the row does not exist
+      // locally the UPDATE matched 0 rows, yet the oplog still logged a phantom pointer and the
+      // next egress fabricated a fresh tombstone for it (delete-wins LWW then deleted the
+      // SOURCE's live filter). INSERT fallback mirrors planAddMany/upsertCategory upsert
+      // semantics: an explicit id that is absent locally is created, never tombstoned.
+      if (info.changes === 0) {
+        db.prepare('INSERT INTO filters (id, name, conds, sort, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?)')
+          .run(f.id, name, conds, f.sort || 0, stamp, stamp)
+      }
       return f.id
     }
     const stamp = Number(f && f.updatedAt) > 0 ? Number(f.updatedAt) : Date.now()

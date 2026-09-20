@@ -15,6 +15,7 @@
 
 const { EventEmitter } = require('node:events')
 const dgram = require('node:dgram')
+const os = require('node:os')
 
 const SERVICE_TYPE = 'pickdone-sync'
 // Bumped 1 -> 2 with the encrypted transport (cipher.js): protoVer is advertised, not
@@ -37,6 +38,64 @@ try {
 } catch {
   bonjourModule = null // offline install: UDP fallback below
 }
+
+/* ---------- Round-1 P0 (2026-09-21): dialable-address selection ----------
+ * mDNS/UDP advertisements carry EVERY interface address of the advertising machine. Picking
+ * addresses[0] live-dialed a temporary IPv6, a scope-less link-local, or a VMware NAT IP — all
+ * timing out while the peer sat reachable one hop away. Selection rules:
+ *   - drop link-local IPv6 (fe80::) WITHOUT a %scope id (unroutable) and IPv4 link-local 169.254.*;
+ *   - drop known virtual-adapter ranges (192.168.111.* = VMware NAT here) and hosts resolved on
+ *     virtual adapters;
+ *   - prefer the IPv4 that shares a subnet with an ACTIVE NON-VIRTUAL local interface, then any
+ *     other IPv4, then a scoped/global IPv6, then whatever arrived. */
+const VIRTUAL_IF_RE = /vmnet|vmware|virtual|vbox|virtualbox|hyper-v|vethernet|docker|loopback|tap|tun/i
+function isVirtualRange(host) {
+  const m4 = String(host).match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/)
+  if (!m4) return false
+  const [a, b] = [Number(m4[1]), Number(m4[2])]
+  // 192.168.111.* (observed live VMware NAT); 169.254.* link-local handled separately below.
+  return (a === 192 && b === 168 && Number(m4[3]) === 111)
+}
+function hostScore(host) {
+  const s = String(host || '')
+  if (!s) return -1
+  if (s.startsWith('169.254.')) return -1 // IPv4 link-local
+  if (s.startsWith('fe80:') && !s.includes('%')) return -1 // scope-less IPv6 link-local
+  if (isVirtualRange(s)) return -1
+  const isV4 = /^\d+\.\d+\.\d+\.\d+$/.test(s)
+  let sameSubnet = 0
+  try {
+    const m = s.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/)
+    if (m) {
+      for (const list of Object.values(os.networkInterfaces())) {
+        for (const ni of list || []) {
+          if (!ni || ni.internal || !ni.address || ni.family !== 'IPv4') continue
+          if (VIRTUAL_IF_RE.test(String(ni.mac || '') ) ) continue // best-effort: no name exposed here
+          const n = ni.address.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/)
+          if (n && n[1] === m[1] && n[2] === m[2] && n[3] === m[3]) sameSubnet = 1
+        }
+      }
+    }
+  } catch { /* best effort */ }
+  if (isV4) return sameSubnet ? 4 : 3
+  if (s.includes(':')) return s.includes('%') || !s.startsWith('fe80') ? 2 : -1
+  return 1 // hostnames
+}
+/** Pick the most dialable address from an mDNS advertisement. */
+function pickAdvertisedAddress(addresses, fallbackHost) {
+  const list = (Array.isArray(addresses) ? addresses : []).filter(Boolean)
+  let best = null
+  let bestScore = -1
+  for (const a of list) {
+    const sc = hostScore(a)
+    if (sc > bestScore) { bestScore = sc; best = a }
+  }
+  if (bestScore >= 0) return best
+  if (fallbackHost && hostScore(fallbackHost) >= 0) return fallbackHost
+  return best || fallbackHost || null // everything filtered: caller decides (null = undialable)
+}
+/** True when a single host string is dialable (used to sanitize stored peer records). */
+function isDialableHost(host) { return hostScore(host) >= 0 }
 
 /**
  * Create a discovery instance.
@@ -69,7 +128,8 @@ function createDiscovery() {
     const peer = {
       deviceId: info.deviceId,
       name: info.name || info.deviceId,
-      host: info.host || '127.0.0.1',
+      // Round-1 P0: pick the dialable address (same-subnet IPv4 first) instead of addresses[0].
+      host: pickAdvertisedAddress(info.addresses, info.host) || '127.0.0.1',
       port: info.port,
       protoVer: info.protoVer || PROTO_VER,
       lastSeen: Date.now(),
@@ -154,7 +214,8 @@ function createDiscovery() {
         upsertPeer({
           deviceId: svc.txt && svc.txt.deviceId,
           name: svc.txt && svc.txt.name,
-          host: (svc.addresses && svc.addresses[0]) || svc.host,
+          host: svc.host,
+          addresses: svc.addresses, // round-1 P0: full list — pickAdvertisedAddress selects
           port: svc.port,
           protoVer: svc.txt && Number(svc.txt.protoVer),
         })
@@ -182,4 +243,4 @@ function createDiscovery() {
   }
 }
 
-module.exports = { createDiscovery, SERVICE_TYPE, PROTO_VER, FALLBACK_PORT }
+module.exports = { createDiscovery, SERVICE_TYPE, PROTO_VER, FALLBACK_PORT, pickAdvertisedAddress, isDialableHost, hostScore }
