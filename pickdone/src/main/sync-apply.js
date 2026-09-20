@@ -44,7 +44,10 @@ const isMachineLocalSettingKey = id => {
 const isMachineLocalMetaKey = id => {
   const k = String(id)
   return k.startsWith('sync.') || k.startsWith('_') || /^securityLock/.test(k) ||
-    k.startsWith('cliTomato') || k === 'todosVersion' || k.startsWith('firedReminders:') ||
+    k.startsWith('cliTomato') ||
+    // CLI sync command channel slots (feat/cli-sync-pair): cmd/receipt/seq are per-machine
+    // transport state, never data — syncing them would replay stale commands on the peer.
+    k.startsWith('cliSync') || k === 'todosVersion' || k.startsWith('firedReminders:') ||
     k === 'reminderLastSeenAt' || k.startsWith('settingsRows.src.') ||
     k === 'db.tomatoState' || k === 'habitsState' ||
     // M4 (2026-09-20): snowDedup:<task>:<key> = per-device dedup watermarks (bumpSnow), not data.

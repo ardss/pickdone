@@ -1,12 +1,12 @@
 {
-  "src/main/db.js": 961,
+  "src/main/db.js": 965,
   "renderer/js/store/todo.js": 782,
   "renderer/js/components/SideNav.vue": 986,
   "renderer/js/components/EditPanel.vue": 1032,
   "renderer/js/views/CalendarView.vue": 831,
   "renderer/js/views/StatisticsView.vue": 868,
-  "cli/pickdone.js": 1270,
-  "cli/lib.js": 1914,
+  "cli/pickdone.js": 1348,
+  "cli/lib.js": 1942,
   "src/main/lan-sync/index.js": 953,
   "src/main/lan-sync-bootstrap.js": 871
 }

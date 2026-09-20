@@ -923,6 +923,33 @@ function tomatoLiveRemainSec (st) {
   return st.remainSec || 0
 }
 
+
+/* ---------------- LAN sync command channel (feat/cli-sync-pair): same contract as the tomato channel —
+   CLI writes meta cliSyncCmd (seq via atomic nextCliSyncSeq) → the running App's main process
+   dispatches into db-sync-ops (the Device Center's own registry) → writes the receipt to
+   cliSyncState. The receipt wait matches the seq EXACTLY (not >=): a long-running pair must not
+   have its waiter satisfied by a later status command's higher seq landing first. */
+function writeSyncCmd (cmd) {
+  const seq = open().call('nextCliSyncSeq')
+  open().call('setMeta', ['cliSyncCmd', JSON.stringify({ seq, at: Date.now(), ...cmd })])
+  audit.record({ action: 'sync.' + cmd.action, targets: [], changes: [], note: 'CLI sync command (App executes and writes back cliSyncState)' })
+  return seq
+}
+function readSyncState () {
+  const raw = open().call('getMeta', 'cliSyncState')
+  if (!raw) return null
+  try { return JSON.parse(raw) } catch { return null }
+}
+async function waitForSyncAck (seq, timeoutMs = 15000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const st = readSyncState()
+    if (st && st.seq === seq) return st
+    await new Promise(r => setTimeout(r, 200))
+  }
+  return null
+}
+
 /* ---------------- Repeat rules (meta repeatRule:<rid>; generation reuses the todo-core engine) ---------------- */
 function buildRepeatRule (opts) {
   const rule = Object.assign({}, core.REPEAT_DEFAULTS)
@@ -1901,6 +1928,7 @@ module.exports = {
   getMilestones, addMilestone, removeMilestone, linkMilestone, msProgress,
   setProjectDeadline, getProjectDeadline,
   writeTomatoCmd, readTomatoState, waitForTomatoAck, tomatoLiveRemainSec, backfillRecord,
+  writeSyncCmd, readSyncState, waitForSyncAck,
   buildRepeatRule, repeatOn, repeatOff, repeatRuleInfo,
   addCategory, renameCategory, deleteCategory, moveCategory, categoryRows, categoryHierarchy, listTags, rewriteTag, tomatoRecords,
   resolveTaskExact, batchRun, batchTagOne, migrateChipsOnDayChange,
