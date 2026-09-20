@@ -76,12 +76,20 @@ export default {
   mounted () {
     // [component-r5] Hidden inline date pickers stay out of the Tab focus chain (opened via the pick button only)
     // — same placement as QuickAdd.vue's hidden calendar input
-    this.$nextTick(() => {
-      if (!this.$el || typeof this.$el.querySelectorAll !== 'function') return
-      this.$el.querySelectorAll('.rc-pick input').forEach(inp => inp.setAttribute('tabindex', '-1'))
-    })
+    this.pinPickTabindex()
+  },
+  watch: {
+    // The list renders asynchronously (store view recompute): rows mounted after the initial patch
+    // would keep focusable inputs unless the tabindex patch reruns on every list change
+    list () { this.pinPickTabindex() }
   },
   methods: {
+    pinPickTabindex () {
+      this.$nextTick(() => {
+        if (!this.$el || typeof this.$el.querySelectorAll !== 'function') return
+        this.$el.querySelectorAll('.rc-pick input').forEach(inp => inp.setAttribute('tabindex', '-1'))
+      })
+    },
     isOverdue (t) {
       return t.dayStart && dayjs(t.dayStart).startOf('day').valueOf() < dayjs().startOf('day').valueOf()
     },
@@ -117,14 +125,19 @@ export default {
       }
     },
     /** Earlier-version "pick date": a transparent date picker embedded in the button; picking restores to that date */
-    pickDate (t, ts) {
+    async pickDate (t, ts) {
       if (!ts) return
       const day = +dayjs(ts).startOf('day')
-      this.$store.dispatch('todo/updateTodoFields', {
-        taskId: t.taskId,
-        patch: { delete: false, status: 'update', dayStart: day, todoTime: day }
-      })
-      this.$message.success(this.$t('statsC.RecycleBin.restoredToDate'))
+      // Same semantics as restore(): await the dispatch, success toast only on success, error toast on failure
+      try {
+        await this.$store.dispatch('todo/updateTodoFields', {
+          taskId: t.taskId,
+          patch: { delete: false, status: 'update', dayStart: day, todoTime: day }
+        })
+        this.$message.success(this.$t('statsC.RecycleBin.restoredToDate'))
+      } catch (e) {
+        this.$message.error(this.$t('statsC.RecycleBin.restoreFailedMsg') + (e && e.message ? e.message : e))
+      }
     },
     /** Clicking the item content = open the right-side edit panel (consistent with the app-wide "click row to edit"); field changes auto-save while keeping the deleted state */
     openEdit (t) {

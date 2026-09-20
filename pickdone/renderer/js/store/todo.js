@@ -8,6 +8,7 @@ import { expandRepeatDates } from '../utils/repeat.js'
 import { sortByMode } from '../utils/sortMode.js'
 import { getEstimate, setEstimate } from '../utils/tomatoEstimate.js'
 import { clearSnapshot } from '../utils/dayPlans.js'
+import { loadMilestones, saveMilestones, scrubMilestoneTaskIds } from '../utils/milestones.js'
 // Cross-cutting concerns, physically split out of this module (pure relocation — the store's action
 // semantics are unchanged; the actions/mutations below delegate to these extracted implementations):
 import { enqueueChipSync, rowChipSync, planSnapshotRowSync, snapshotForDelete, restoreSnapshot } from './planChips.js'
@@ -215,6 +216,12 @@ export default {
         // passing an explicit addToTop still wins (destructuring default only applies when absent)
         addToTop = rootState.settings.newTodoDefaultSort !== 'bottom',
         estimate = 0,
+        // D5 (2026-09-20): triage/plan attributes carried by repeat renewal (CLI twin semantics, `t.x || 0`);
+        // plain addTodo callers omit them and get the 0 defaults
+        priority = 0,
+        deadlineTs = 0,
+        important = 0,
+        urgent = 0,
         dayOverride = null,
         predecessors = null
       } = payload
@@ -248,6 +255,7 @@ export default {
       const t = {
         complete: false, createTime: now, delete: false,
         reminderTime: todoReminderTime, reminderOffsets: Array.isArray(todoReminderOffsets) ? todoReminderOffsets : [], reminderExtra: Array.isArray(todoReminderExtra) ? todoReminderExtra : [], estimate, difficulty: todoDifficultyLevel,
+        priority, deadlineTs, important, urgent,
         repeatId, subtasks: todoSublist ? JSON.stringify(todoSublist) : null,
         predecessors: Array.isArray(predecessors) && predecessors.length ? JSON.stringify(predecessors) : null,
         image: todoImage, files: fileList,
@@ -391,6 +399,14 @@ export default {
         todoReminderOffsets: Array.isArray(t.reminderOffsets) ? t.reminderOffsets : [],
         todoReminderExtra: Array.isArray(t.reminderExtra) ? t.reminderExtra : [],
         todoDifficultyLevel: t.difficulty || 0,
+        // D5 (2026-09-20): carry the attributes the CLI twin (cli/lib.js complete → renewal) preserves —
+        // the renewal used to drop priority/deadlineTs/important/urgent and the per-task estimate, so a
+        // renewed instance silently lost its triage/plan data. `t.x || 0` semantics match the CLI.
+        priority: t.priority || 0,
+        deadlineTs: t.deadlineTs || 0,
+        important: t.important || 0,
+        urgent: t.urgent || 0,
+        estimate: t.estimate || 0,
         repeatId: rid,
         todoSublist: t.subtasks ? (function(){try{return JSON.parse(t.subtasks)}catch{return[]}})().map(x => ({ ...x, checked: false })) : null,
         addToTop: false
@@ -464,7 +480,7 @@ export default {
       return r
     },
 
-    async purgeIds ({ commit, dispatch, rootState }, ids) {
+    async purgeIds ({ commit, dispatch, rootState, state }, ids) {
       // Discrete op: break the 400ms undo merge so following edits don't fuse into the purge step
       commit('historyBreakMerge')
       if (ids.length) await dispatch('writeEventBackup', 'purge') // snapshot before permanent deletion
@@ -482,7 +498,20 @@ export default {
       // resurrect a stale estimate (review M-C5)
       try { for (const id of done) setEstimate(id, 0) } catch {}
       if (done.length) {
+        // Capture the doomed rows BEFORE hardRemove pulls them out of recycleList
+        const purgedCatIds = [...new Set(((state && state.recycleList) || []).filter(t => done.includes(t.taskId)).map(t => t.categoryId).filter(Boolean))]
         commit('hardRemove', done)
+        // D5 (2026-09-20): scrub the purged ids from `projectMilestones:<catId>` taskIds — a past
+        // milestone whose last link was purged otherwise kept a phantom taskId set, and
+        // milestoneState (ids.size > 0, zero existing linked tasks) fell through to the date-driven
+        // 'done' branch, flipping an UNMET milestone to done. Milestones keep their other links.
+        for (const cid of purgedCatIds) {
+          try {
+            const ms = await loadMilestones(cid)
+            const next = scrubMilestoneTaskIds(ms, done)
+            if (next !== ms) saveMilestones(cid, next)
+          } catch (e) { console.warn('[todo] milestone scrub after purge failed for category', cid, e) }
+        }
         // Rows are physically gone (hardDelete + attachment files + chip snapshot meta): any later undo replaying a
         // pre-purge snapshot would safeUpsert the deleted rows straight back from the dead. Void history so undo
         // can never cross the purge generation.
@@ -592,11 +621,15 @@ export default {
         else if (diff <= upcomingDays) upcomingList.push(t)
       })
 
-      // Expired completed: overdue tasks completed within the last N days (counted by completion time completedAt)
+      // Expired completed: overdue tasks completed within the last N days (counted by completion time completedAt).
+      // D5 (2026-09-20): exclude tasks already in todayDoneList — an overdue task completed TODAY landed in
+      // both groups (grouping is by completion time in one loop and by due date in the other), showing once
+      // in "today done" and again in "recent expired completed" (double un-complete entries).
       const completedCutoff = +dayjs(today).subtract(expCompletedDays, 'day')
+      const todayDoneIds = new Set(todayDoneList.map(t => t.taskId))
       live.forEach(t => {
         const doneTs = t.completedAt || t.updateTime || 0
-        if (t.complete && t.dayStart && t.dayStart < today && doneTs >= completedCutoff) {
+        if (t.complete && t.dayStart && t.dayStart < today && doneTs >= completedCutoff && !todayDoneIds.has(t.taskId)) {
           recentExpiredCompleted.push(t)
         }
       })

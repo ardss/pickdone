@@ -142,14 +142,23 @@ function createAttachmentServer (deps = {}) {
   /**
    * Serve one att-req. Returns {sent, missing} for logging; every answer travels through
    * `send` (the encrypted session path). Never throws at the caller.
+   * P2 2026-09-20: `send` now reports delivery (boolean). A failed frame send means the peer's
+   * socket is dead — abort the remaining serving immediately (the receiver's connection-error
+   * handler surfaces the round error promptly) instead of streaming the rest of the batch into
+   * the void until the receiver's 120s round deadline.
    */
   function serve (peer, msg, send) {
+    const emit = m => {
+      let ok = false
+      try { ok = send(m) !== false } catch { ok = false }
+      return ok
+    }
     const ids = Array.isArray(msg && msg.ids) ? msg.ids.slice(0, MAX_FILES_PER_ROUND) : []
     const peerId = (peer && peer.deviceId) || 'unknown'
     const count = requestsByPeer.get(peerId) || 0
     if (count >= perPeerCap) {
       try { require('electron-log').warn('[LanSync] att-req rate-capped for', peerId) } catch { /* noop */ }
-      send({ type: 'att-end', sent: 0, missing: ids.length })
+      emit({ type: 'att-end', sent: 0, missing: ids.length })
       return { sent: 0, missing: ids.length, capped: true }
     }
     requestsByPeer.set(peerId, count + 1)
@@ -158,31 +167,37 @@ function createAttachmentServer (deps = {}) {
     let roundBytes = 0
     for (const rawId of ids) {
       const id = String(rawId || '')
-      if (!id || /[\\/]|\.\./.test(id)) { missing += 1; send({ type: 'att-missing', id, reason: 'bad-id' }); continue }
-      if (!d.exists(id)) { missing += 1; send({ type: 'att-missing', id, reason: 'not-found' }); continue }
+      if (!id || /[\\/]|\.\./.test(id)) { missing += 1; if (!emit({ type: 'att-missing', id, reason: 'bad-id' })) return { sent, missing, aborted: true }; continue }
+      if (!d.exists(id)) { missing += 1; if (!emit({ type: 'att-missing', id, reason: 'not-found' })) return { sent, missing, aborted: true }; continue }
       const size = d.size(id)
       if (size > maxFileBytes) {
         missing += 1
         try { require('electron-log').warn('[LanSync] att-req refused (too large):', id, size) } catch { /* noop */ }
-        send({ type: 'att-missing', id, reason: 'too-large' })
+        if (!emit({ type: 'att-missing', id, reason: 'too-large' })) return { sent, missing, aborted: true }
         continue
       }
       if (roundBytes + size > maxRoundBytes) {
         missing += 1
-        send({ type: 'att-missing', id, reason: 'round-budget' })
+        if (!emit({ type: 'att-missing', id, reason: 'round-budget' })) return { sent, missing, aborted: true }
         continue
       }
       roundBytes += size
       const full = d.read(id, 0, size - 1)
       const hash = sha256Hex(full, deps.hashFn)
-      send({ type: 'att-meta', id, size: full.length, hash })
+      if (!emit({ type: 'att-meta', id, size: full.length, hash })) {
+        try { require('electron-log').warn('[LanSync] att-meta send failed, aborting serve for', peerId) } catch { /* noop */ }
+        return { sent, missing, aborted: true }
+      }
       for (let off = 0, idx = 0; off < full.length; off += ENTRY_CHUNK_BYTES, idx++) {
         const chunk = full.slice(off, Math.min(off + ENTRY_CHUNK_BYTES, full.length))
-        send({ type: 'att-chunk', id, index: idx, data: chunk.toString('base64'), final: off + ENTRY_CHUNK_BYTES >= full.length })
+        if (!emit({ type: 'att-chunk', id, index: idx, data: chunk.toString('base64'), final: off + ENTRY_CHUNK_BYTES >= full.length })) {
+          try { require('electron-log').warn('[LanSync] att-chunk send failed, aborting serve for', peerId) } catch { /* noop */ }
+          return { sent, missing, aborted: true }
+        }
       }
       sent += 1
     }
-    send({ type: 'att-end', sent, missing })
+    emit({ type: 'att-end', sent, missing })
     return { sent, missing }
   }
 

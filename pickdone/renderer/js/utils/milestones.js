@@ -59,6 +59,26 @@ export function parseMilestoneDate (input) {
   return d.isValid() ? +d.startOf('day') : null
 }
 
+/** D5 (2026-09-20, pure): drop purged task ids from every milestone's taskIds. Returns the ORIGINAL
+ *  array reference when nothing changed (callers can skip the save), otherwise a new list with the
+ *  dead ids scrubbed. Without this, purging a milestone's last linked task left ids.size > 0 with zero
+ *  existing links → milestoneState fell through to the date-driven 'done' branch and an unmet past
+ *  milestone flipped to done. */
+export function scrubMilestoneTaskIds (list, purgedIds) {
+  if (!Array.isArray(list)) return list
+  const dead = new Set(purgedIds || [])
+  if (!dead.size) return list
+  let changed = false
+  const out = list.map(m => {
+    if (!m || !Array.isArray(m.taskIds) || !m.taskIds.length) return m
+    const kept = m.taskIds.filter(id => !dead.has(id))
+    if (kept.length === m.taskIds.length) return m
+    changed = true
+    return Object.assign({}, m, { taskIds: kept })
+  })
+  return changed ? out : list
+}
+
 /**
  * Lifecycle state. Achievement semantics (2026-09-14 fix for "overdue milestones always showed done"):
  *  - date < today + linked tasks present in `tasks`: done only when ALL linked tasks are complete;

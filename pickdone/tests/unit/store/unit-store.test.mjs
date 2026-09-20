@@ -112,8 +112,9 @@ test('todo: today-completed grouped by completedAt (due yesterday, completed tod
   await run()
   const v = viewsOf(committed)
   assert.deepEqual(v.todayDoneList.map(t => t.taskId), ['done-today'])
-  // Expired-completed: dayStart < today and completion time within the retention window (done-today is also here because its due date passed - dual grouping)
-  assert.deepEqual(v.recent.expiredCompleted.map(t => t.taskId), ['done-old', 'done-today']) // ascending by dayStart
+  // Expired-completed: dayStart < today and completion time within the retention window.
+  // D5 2026-09-20 dedupe: done-today is already in todayDoneList, so it is excluded here.
+  assert.deepEqual(v.recent.expiredCompleted.map(t => t.taskId), ['done-old']) // ascending by dayStart
 })
 
 test('todo: retention range "today" semantics (previously misparsed as 7 days by a NaN fallback)', async () => {

@@ -96,6 +96,8 @@ export default {
   'statsJ.FilterModal.saveFailed': 'Save failed, please retry',
   'statsJ.DoneEntry.label': 'Completed',
   'statsJ.EditPanel.saveFailed': 'Save failed · changes not written, please retry',
+  'statsJ.EditPanel.remoteUpdated': 'Content updated on another device',
+  'statsJ.EditPanel.remoteRefresh': 'Refresh',
   'statsJ.EditPanel.priorityNormal': 'Low',
   'statsJ.EditPanel.priorityHigh': 'High',
   'statsJ.EditPanel.reminderPastTip': 'The reminder time has passed and will not fire',

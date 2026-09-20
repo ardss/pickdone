@@ -136,7 +136,9 @@ export default {
         }
         return true
       })
-      if (this.q.trim()) list.sort((a, b) => b.todoTime - a.todoTime) // reference: sort((a,b)=>b.todoTime-a.todoTime)
+      // Sort unconditionally: empty-keyword browse (filters only) must keep the same newest-first
+      // order as keyword search, otherwise ticking a filter reorders the whole list unexpectedly
+      list.sort((a, b) => b.todoTime - a.todoTime) // reference: sort((a,b)=>b.todoTime-a.todoTime)
       return list
     },
     // Render list is capped at 200 for DOM cost, but the count reflects the real total

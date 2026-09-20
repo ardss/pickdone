@@ -81,7 +81,8 @@ export default {
       try {
         const rest = await window.todoAPI.dbCall('queryTodos', { deleted: 0, repeatId: rid })
         if (!rest.length) {
-          window.todoAPI.dbCall('setMeta', ['repeatRule:' + rid, '']).catch(() => {})
+          // deleteMeta over setMeta(''): an empty-string tombstone keeps the orphan meta row alive (CLI convention)
+          window.todoAPI.dbCall('deleteMeta', ['repeatRule:' + rid]).catch(() => {})
         }
       } catch (e) { /* Cleanup failure does not affect deletion */
       }

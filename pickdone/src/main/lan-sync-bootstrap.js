@@ -118,8 +118,8 @@ function createLocalStoreAdapter () {
       }
       for (const r of state.db.call('tomatoAll', {}) || []) out.push({ entity: 'tomato', id: r.tomatoId, updatedAt: r.updatedAt || 0, deleted: false, deletedAt: 0, data: r })
       for (const c of state.db.call('getAllCategories', {}) || []) out.push({ entity: 'category', id: String(c.categoryId), updatedAt: c.updatedAt || 0, deleted: false, deletedAt: 0, data: c })
-      for (const c of state.db.call('planAll', {}) || []) out.push({ entity: 'plan', id: c.id, updatedAt: 0, deleted: false, deletedAt: 0, data: c })
-      for (const f of state.db.call('filterList', {}) || []) out.push({ entity: 'filter', id: String(f.id), updatedAt: 0, deleted: false, deletedAt: 0, data: f })
+      for (const c of state.db.call('planAll', {}) || []) out.push({ entity: 'plan', id: c.id, updatedAt: c.updatedAt || 0, deleted: false, deletedAt: 0, data: c })
+      for (const f of state.db.call('filterList', {}) || []) out.push({ entity: 'filter', id: String(f.id), updatedAt: f.updatedAt || 0, deleted: false, deletedAt: 0, data: f })
       // Meta entity (GAP-A fix 2026-09-19): meta has no list-read op (db.js is size-ratcheted), so
       // syncable meta keys are enumerated from their oplog pointers (latest local ts per key, one
       // paged oplog scan) and read via getMeta. Legacy pre-oplog meta keys are not covered here —
@@ -434,8 +434,15 @@ async function stopSync () {
   if (!state.node) return
   for (const t of state.timers) { clearTimeout(t); clearInterval(t) }
   state.timers = []
-  if (securityPersistTimer) { clearTimeout(securityPersistTimer); securityPersistTimer = null }
   const n = state.node
+  // P2 2026-09-20: the security-ring persist is write-throttled to <=1 write/sec — pending
+  // throttled entries lived only in the node's memory ring and were LOST when the app quit
+  // inside the throttle window (the unref'd timer never fires). Flush synchronously BEFORE the
+  // node is torn down; quit/disable/unpair all funnel through here.
+  try {
+    if (securityPersistTimer) { clearTimeout(securityPersistTimer); securityPersistTimer = null }
+    if (n) settingPut(K_SECURITY_LOG, JSON.stringify(n.getStatus().security.slice(-20)))
+  } catch (e) { log.warn('[LanSync] security log flush on stop failed:', e.message) }
   state.node = null
   state.pendingPair = null
   // P1-4 (2026-09-19 data-safety round): the engine (and its hydration caches) used to be nulled
@@ -500,23 +507,47 @@ function sendToRenderers (channel, msg) {
   } catch { /* renderer notification is best-effort */ }
 }
 
-/** P1-2a: fold applied setting rows into the settings blob so blob-vs-rows converge (no re-stamp
- *  churn). Best-effort: a missing/corrupt blob skips the fold (rows stay the sync truth). */
-function foldSettingsIntoBlob (patch) {
-  const keys = Object.keys(patch || {}).filter(k => !syncApply.isMachineLocalSettingKey(k))
-  if (!keys.length) return
+/** P1-2a / F1 (2026-09-20): fold applied setting rows back into the blob they came from so
+ *  blob-vs-rows converge (no re-stamp churn). The settings_rows key IS the source blob's field
+ *  name (db-sync-schema's setMeta bridge mirrors each blob's top-level fields row-for-row), so
+ *  the source blob is known statically: the habits blob (renderer store/habits.js persist shape)
+ *  carries exactly schemaV/habits/moments/savedAt; every other key lives in the settings blob.
+ *  Folding into the WRONG blob made applied habits fields (habits/moments/savedAt) vanish from
+ *  db.habitsState — the receiving habits store reads only that blob and its next persist()
+ *  re-mirrored the stale blob over the fresh rows with a fresh savedAt (stale clobber of the peer).
+ *  Guards against re-stamping newer rows backwards: the fold goes through setMeta, whose bridge
+ *  (db-sync-schema registerOps) runs mergeDoc -> putRow, which is a strict identical-content
+ *  no-op (the rows already hold these exact values, so no updatedAt is re-stamped), and the blob
+ *  meta keys themselves never sync (isSyncBlobMetaKey), so the fold cannot echo.
+ *  Best-effort: a missing/corrupt blob skips the fold (rows stay the sync truth).
+ *  Returns the parsed patches per blob for the renderer hot-apply broadcasts. */
+const HABITS_BLOB_KEY = 'db.habitsState'
+const HABITS_BLOB_FIELDS = new Set(['schemaV', 'habits', 'moments', 'savedAt'])
+function foldIntoBlob (blobKey, entries) {
+  if (!entries.length) return
   try {
     let doc = null
-    try { doc = JSON.parse(state.db.call('getMeta', BLOB_SETTINGS_KEY)) } catch { doc = null }
+    try { doc = JSON.parse(state.db.call('getMeta', blobKey)) } catch { doc = null }
     if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return
-    let touched = false
-    for (const k of keys) {
-      if (patch[k] === undefined) delete doc[k] // tombstone: drop the field from the blob
-      else { doc[k] = patch[k]; touched = true }
-      touched = true
+    for (const [k, v] of entries) {
+      if (v === undefined) delete doc[k] // tombstone: drop the field from the blob
+      else doc[k] = v
     }
-    if (touched) state.db.call('setMeta', [BLOB_SETTINGS_KEY, JSON.stringify(doc)])
-  } catch (e) { log.warn('[LanSync] settings blob fold failed:', e.message) }
+    state.db.call('setMeta', [blobKey, JSON.stringify(doc)])
+  } catch (e) { log.warn('[LanSync] settings blob fold failed:', blobKey, e.message) }
+}
+
+function foldSettingsIntoBlob (patch) {
+  const settings = []
+  const habits = []
+  for (const k of Object.keys(patch || {})) {
+    if (syncApply.isMachineLocalSettingKey(k)) continue
+    ;(HABITS_BLOB_FIELDS.has(k) ? habits : settings).push([k, patch[k]])
+  }
+  foldIntoBlob(BLOB_SETTINGS_KEY, settings)
+  foldIntoBlob(HABITS_BLOB_KEY, habits)
+  const toPatch = list => { const p = {}; for (const [k, v] of list) if (v !== undefined) p[k] = v; return p }
+  return { settingsPatch: toPatch(settings), habitsPatch: toPatch(habits) }
 }
 
 function emitAppliedRound () {
@@ -534,13 +565,21 @@ function emitAppliedRound () {
   }
   const settingKeys = Object.keys(round.settingsPatch || {})
   if (settingKeys.length) {
-    foldSettingsIntoBlob(round.settingsPatch)
-    // Hot-apply path reuses the CLI settings watcher's channel: the renderer dispatches
+    // F1 (2026-09-20): fold each applied row into ITS source blob (settings vs habits) and
+    // hot-apply each on its own channel. external-habits-changed mirrors external-settings-changed
+    // 1:1 (S2 renderer wiring contract):
+    //   channel: 'external-habits-changed'
+    //   payload: flat object of APPLIED habits-blob fields -> parsed values, e.g.
+    //            { habits: [...], moments: [...], savedAt: 1712345678901 }
+    //            (keys omitted when the applied row was a tombstone = field deleted).
+    //            Consumed like external-settings-changed: merge the fields into the habits store
+    //            state; savedAt LWW in store/habits.js already dedupes stale applications.
+    const { settingsPatch, habitsPatch } = foldSettingsIntoBlob(round.settingsPatch)
+    // Settings hot-apply path reuses the CLI settings watcher's channel: the renderer dispatches
     // settings/update, which syncs LS/config.json/shortcuts and mirrors the blob back (now
     // value-identical to the rows, so the bridge stamps nothing — the churn loop stays dead).
-    const patch = {}
-    for (const k of settingKeys) if (round.settingsPatch[k] !== undefined) patch[k] = round.settingsPatch[k]
-    if (Object.keys(patch).length) sendToRenderers('external-settings-changed', patch)
+    if (Object.keys(settingsPatch).length) sendToRenderers('external-settings-changed', settingsPatch)
+    if (Object.keys(habitsPatch).length) sendToRenderers('external-habits-changed', habitsPatch)
   }
   // P1-5: one conflict toast per round, max.
   if (round.conflicts && round.conflicts.length) {

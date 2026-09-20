@@ -114,6 +114,8 @@ export async function restoreSnapshot (taskId) {
     if (!raw) return
     const rows = JSON.parse(raw)
     if (Array.isArray(rows) && rows.length) await dbCall('planAddMany', rows)
-    await dbCall('setMeta', ['planChipsSnapshot:' + taskId, ''])
+    // D5 (2026-09-20): consume via deleteMeta, unified with clearSnapshot (CLI convention fixed
+    // 2026-09-19) — the old setMeta('') left an empty-string tombstone row in meta forever.
+    await dbCall('deleteMeta', 'planChipsSnapshot:' + taskId)
   } catch { /* Missing/corrupted snapshot treated as no schedule */ }
 }

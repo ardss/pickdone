@@ -51,7 +51,10 @@ export async function initFromDb () {
     const metaAtN = Number(metaAt) || 0
     const parsed = JSON.parse(metaRaw || 'null')
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return
-    if (metaAtN <= lsAt) return // LS is newer (just changed on this machine); leave it alone
+    // D5 (2026-09-20): strict `<` — an exact tie between meta and LS stamps favors CLI/meta per the
+    // "newer wins" contract (the CLI writes its timestamp synchronously; the LS write of the same
+    // change lands in the same tick, and `<=` used to let the stale LS side win the tie).
+    if (metaAtN < lsAt) return // LS is strictly newer; leave it alone (ties favor meta/CLI)
     for (const k of Object.keys(state)) delete state[k]
     for (const [k, v] of Object.entries(parsed)) {
       if (k === '_savedAt') continue

@@ -69,7 +69,7 @@ test('F6: clear-date via undo replay persists a chip snapshot meta that a later 
   await planChips.restoreSnapshot('t1')
   await drain()
   assert.deepEqual(chips, [{ id: 'c1', taskId: 't1', day: '2026-09-04', mm: '09:00' }], 'chips restored from snapshot')
-  assert.equal(meta.get('planChipsSnapshot:t1'), '', 'snapshot meta emptied after restore')
+  assert.ok(!('planChipsSnapshot:t1' in meta), 'snapshot meta row consumed via deleteMeta (D5 2026-09-20; no setMeta tombstone)')
 })
 
 test('F6: no-op when the task had no chips to snapshot (meta absent, clear still runs)', async () => {

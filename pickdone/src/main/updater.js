@@ -44,7 +44,9 @@ function broadcast () {
 let _flushedOnReady = false
 let _activeFlushRound = null
 /** Routes a renderer 'app-quitting-flush-ack' into the updater's early-flush round, if one is in
- *  flight (index.js owns the quit-path tracker; this early round has its own). No-op otherwise. */
+ *  flight (index.js owns the quit-path tracker; this early round has its own). No-op otherwise.
+ *  P2 2026-09-20: also guards against a STALE round — once the round completes (acked or cap)
+ *  the tracker is cleared below, so a late ack can no longer route into a finished round. */
 function forwardFlushAck (token, senderId) {
   try { return !!(_activeFlushRound && _activeFlushRound.ack(token, senderId)) } catch { return false }
 }
@@ -82,6 +84,9 @@ function flushOnceOnReady (deps = {}) {
     if (tracker.allAcked() || Date.now() - startedAt >= ACK_CAP_MS) {
       clearInterval(poll)
       flushMain()
+      // P2 2026-09-20: _activeFlushRound used to stay set forever after the round completed —
+      // late acks kept routing into the finished tracker and the reference leaked. Clear it.
+      if (_activeFlushRound === tracker) _activeFlushRound = null
     }
   }, POLL_MS)
   if (poll.unref) poll.unref()

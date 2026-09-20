@@ -98,8 +98,11 @@ if (typeof window !== 'undefined' && window.todoAPI && window.todoAPI.onAppQuitt
     for (const k of Object.keys(timers)) { clearTimeout(timers[k]); delete timers[k] }
     for (const k of Object.keys(pendings)) {
       const b = pendings[k]
-      delete pendings[k]
-      if (b !== undefined) writeNow(k, b) // best effort at quit: hand it to the bridge even if it may reject
+      if (b === undefined) { delete pendings[k]; continue }
+      // D5 (2026-09-20): the pending blob is only released when the write was actually handed to the
+      // bridge — mirroring flushKey's semantics. The old code deleted the pending BEFORE writeNow, so
+      // on a no-bridge/aux-window host the blob vanished instead of surviving for a later retry.
+      if (writeNow(k, b)) delete pendings[k]
     }
   })
 }

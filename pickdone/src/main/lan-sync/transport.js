@@ -125,23 +125,31 @@ class LineReader {
   }
 }
 
+/** Serialize + (optionally) encrypt one message onto the socket. Returns TRUE when the frame
+ *  was handed to the socket, FALSE when the socket is dead/not writable (or the kernel write
+ *  buffer rejected it). P2 2026-09-20: the send used to drop frames silently — callers (e.g. the
+ *  attachment server streaming att-chunks) had no way to notice a dead peer and kept "serving"
+ *  into the void until the receiver's 120s round deadline. */
 function send(socket, msg) {
-  if (!socket.destroyed && socket.writable) {
-    // Post-auth (and post-pair-challenge where applicable) traffic is encrypted under the
-    // connection's key; socket._lanKey is null until a session/handshake key is established.
-    // Each encrypted frame carries a per-DIRECTION sequence number (starts at 0 on every
-    // connection; the peer enforces strictly-increasing — see unwrapInbound) so a captured
-    // frame cannot be replayed into the same connection.
-    const key = socket._lanKey
-    let line
-    if (key) {
-      const seq = socket._lanSendSeq || 0
-      socket._lanSendSeq = seq + 1
-      line = cipher.encryptFrame(key, msg, seq)
-    } else {
-      line = JSON.stringify(msg)
-    }
-    socket.write(line + '\n')
+  if (!socket || socket.destroyed || !socket.writable) return false
+  // Post-auth (and post-pair-challenge where applicable) traffic is encrypted under the
+  // connection's key; socket._lanKey is null until a session/handshake key is established.
+  // Each encrypted frame carries a per-DIRECTION sequence number (starts at 0 on every
+  // connection; the peer enforces strictly-increasing — see unwrapInbound) so a captured
+  // frame cannot be replayed into the same connection.
+  const key = socket._lanKey
+  let line
+  if (key) {
+    const seq = socket._lanSendSeq || 0
+    socket._lanSendSeq = seq + 1
+    line = cipher.encryptFrame(key, msg, seq)
+  } else {
+    line = JSON.stringify(msg)
+  }
+  try {
+    return socket.write(line + '\n') !== false
+  } catch {
+    return false
   }
 }
 
@@ -600,4 +608,4 @@ function connect(host, port, opts) {
   return em
 }
 
-module.exports = { createLanServer, connect, ProtocolError, PROTO_VER, DEFAULT_PORT, MAX_LINE_BYTES, PRE_AUTH_LINE_BYTES, PAIR_CONFIRM_TIMEOUT_MS, cleanDeviceName }
+module.exports = { createLanServer, connect, send, ProtocolError, PROTO_VER, DEFAULT_PORT, MAX_LINE_BYTES, PRE_AUTH_LINE_BYTES, PAIR_CONFIRM_TIMEOUT_MS, cleanDeviceName }

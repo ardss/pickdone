@@ -143,14 +143,15 @@ test('bootstrap flush: per-buffer isolation — a failing bulk op drops ONLY its
   assert.ok(m.calls.some(c => c.op === 'tomatoAppendMany'), 'tomato flush was attempted after the todo failure')
 })
 
-test('bootstrap apply: plan live-row edit is SKIPPED when local LWW age is unknown (cross-domain guard)', () => {
-  // planAll does not SELECT updatedAt, so the local age is unknowable. Treating it as 0 let every
-  // remote row win, making two devices clobber each other's plan edits every round. Conservative
-  // fix: refuse the live-row write; only tombstones land.
-  const m = fresh({ ...EMPTY_TABLES, planAll: () => [{ id: 'p1', taskId: 't1', day: '2026-09-18', mm: '09:00' }] })
-  const ok = __test.applyRow({ entity: 'plan', id: 'p1', seq: 9, ts: 200, updatedAt: 200, deleted: false, deletedAt: 0, data: { id: 'p1', taskId: 't1', day: '2026-09-19', mm: '10:00' } })
-  assert.equal(ok, false, 'live plan write must be refused when local age is unknown')
-  assert.equal(m.calls.find(c => c.op === 'planAddMany'), undefined)
+test('bootstrap apply: plan live-row edit APPLIES with a known older local age (F3a — ageUnknown gate removed)', () => {
+  // F3a (2026-09-20): planAll now SELECTs updatedAt, so the local age is KNOWN and the old
+  // ageUnknown refusal (which silently dropped every peer edit for an existing chip) is gone.
+  // A peer's newer edit must win; a legacy pre-fix row (updatedAt 0) loses to any ts > 0.
+  const m = fresh({ ...EMPTY_TABLES, planAll: () => [{ id: 'p1', taskId: 't1', day: '2026-09-18', mm: '09:00', updatedAt: 100 }] })
+  const ok = __test.applyRow({ entity: 'plan', id: 'p1', seq: 9, ts: 200, updatedAt: 200, deleted: false, deletedAt: 0, data: { id: 'p1', taskId: 't1', day: '2026-09-19', mm: '10:00', updatedAt: 200 } })
+  assert.equal(ok, true, 'newer peer edit must be applied (known ages, remote wins)')
+  assert.equal(m.pendingWrites.plans.length, 1)
+  assert.equal(m.pendingWrites.plans[0].day, '2026-09-19')
 })
 
 test('bootstrap apply: plan TOMBSTONE still lands through the cross-domain guard', () => {
@@ -162,11 +163,13 @@ test('bootstrap apply: plan TOMBSTONE still lands through the cross-domain guard
   assert.deepEqual(del.params, ['p1'])
 })
 
-test('bootstrap apply: filter live-row edit is SKIPPED when local LWW age is unknown', () => {
-  const m = fresh({ ...EMPTY_TABLES, filterList: () => [{ id: '5', name: 'work', conds: {}, sort: 0 }] })
-  const ok = __test.applyRow({ entity: 'filter', id: '5', seq: 9, ts: 200, updatedAt: 200, deleted: false, deletedAt: 0, data: { id: 5, name: 'renamed', conds: {}, sort: 0 } })
-  assert.equal(ok, false)
-  assert.equal(m.calls.find(c => c.op === 'filterUpsert'), undefined)
+test('bootstrap apply: filter live-row edit APPLIES with a known older local age (F3b — ageUnknown gate removed)', () => {
+  // F3b (2026-09-20): filterList now exposes updatedAt — a peer's newer rename applies.
+  const m = fresh({ ...EMPTY_TABLES, filterList: () => [{ id: 5, name: 'work', conds: {}, sort: 0, updatedAt: 100 }] })
+  const ok = __test.applyRow({ entity: 'filter', id: '5', seq: 9, ts: 200, updatedAt: 200, deleted: false, deletedAt: 0, data: { id: 5, name: 'renamed', conds: {}, sort: 0, updatedAt: 200 } })
+  assert.equal(ok, true)
+  assert.equal(m.pendingWrites.filters.length, 1)
+  assert.equal(m.pendingWrites.filters[0].name, 'renamed')
 })
 
 test('bootstrap apply: inbound ts >10min in the future is clamped to now and loses to a current local row (clock-skew clamp)', () => {

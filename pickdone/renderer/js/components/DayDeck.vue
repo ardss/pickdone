@@ -16,11 +16,11 @@
            @click.stop="onCardClick(idx)">
         <div class="pd-day-deck__head">
           <span class="pd-day-deck__label">{{ labelOf(c.ts) }}</span>
-          <span class="pd-day-deck__count">{{ doneOf(c) }}/{{ c.all.length }}</span>
+          <span class="pd-day-deck__count">{{ doneOf(c) }}/{{ totalCountOf(c) }}</span>
         </div>
         <div class="pd-day-deck__wd">{{ dayjs(c.ts).format('MM/DD') + ' ' + $t('statsA.core.weekOf', { w: $t('statsA.core.wd' + dayjs(c.ts).day()) }) }}</div>
         <div class="pd-day-deck__bar" aria-hidden="true">
-          <i :style="{ width: (c.all.length ? doneOf(c) / c.all.length * 100 : 0) + '%' }"></i>
+          <i :style="{ width: (totalCountOf(c) ? doneOf(c) / totalCountOf(c) * 100 : 0) + '%' }"></i>
         </div>
         <div v-if="!c.all.length && !c.overdue.length" class="pd-day-deck__empty">{{ $t('statsE.TodayView.deckEmpty') }}</div>
         <template v-else>
@@ -196,6 +196,10 @@ export default {
   methods: {
     taskContextMenu (t, e) { taskContextMenu(this, t, e) },
     doneOf (card) { return card.all.filter(t => t.complete).length },
+    // Header count/progress denominator includes the overdue bucket: above N overdue items the
+    // "today" card used to show "0/0" even though tasks were listed (overdue tasks live in
+    // card.overdue, not card.all)
+    totalCountOf (card) { return card.all.length + (card.overdue ? card.overdue.length : 0) },
     /** Continuous position of the center-aligned carousel: 0 = center, negative = past side, positive = future side; during drag a fractional value gives finger-following sliding.
      *  Drag direction: dragging left (dragX<0) slides the whole content left and tomorrow slides in from the right edge -> pos is added in the same direction as dragX */
     posOf (idx) {

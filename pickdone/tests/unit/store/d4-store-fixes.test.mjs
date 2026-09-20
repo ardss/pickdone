@@ -77,8 +77,8 @@ test('giveUp: duration setting lowered mid-focus books MEASURED minutes, not the
   const ctx = giveUpCtx({ startedAt, tomatoTime: 3 }) // user lowered the duration to 3 mid-focus
   tomato.actions.giveUp(ctx, { record: true, reason: '' })
   assert.equal(ctx.state.tomatoRecordList.length, 1)
-  assert.equal(ctx.state.tomatoRecordList[0].focusDuration, 5,
-    'measured floor(5.5) minutes booked (old code capped at the current setting=3)')
+  assert.equal(ctx.state.tomatoRecordList[0].focusDuration, 6,
+    'measured round(5.5) minutes booked (D5 2026-09-20 unified with completeFocus; old code capped at the current setting=3)')
 })
 
 test('giveUp: measured minutes are clamped at FOCUS_MAX_MINUTES (600)', () => {

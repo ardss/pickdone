@@ -11,6 +11,16 @@ export const HISTORY_LIMIT = 50 // undo stack cap (entries)
 export const HISTORY_BYTES = 24 * 1024 * 1024 // undo stack byte-budget hard cap: one snapshot ~1MB with a thousand tasks; 50 entries once sat resident ~50MB unbounded
 
 /* Snapshot = JSON string: stringify once on the push side, parse only at undo time; byte budget hard-caps stack memory (with a thousand tasks, 50 full snapshots once sat ~50MB unbounded) */
+/** D5 (2026-09-20): shared eviction — run after BOTH the fresh-push accounting and the merge-delta
+ *  accounting. The merge path used to skip it, so 400ms typing bursts (each merged delta small on its
+ *  own) could grow `_histBytes` past HISTORY_BYTES without bound. */
+function evictOverflow (s) {
+  while (s.undoStack.length > 1 && (s.undoStack.length > HISTORY_LIMIT || s._histBytes > HISTORY_BYTES)) {
+    s._histBytes -= s.undoStack[0].length
+    s.undoStack.shift()
+  }
+}
+
 export function historyPush (s, snapRaw) {
   // Chained changes within 400ms (EditPanel 350ms debounced saves, batch loops) merge into the stack top
   const now = Date.now()
@@ -21,16 +31,14 @@ export function historyPush (s, snapRaw) {
     s._histLastPushAt = now
     s.redoStack = []
     s._histRedoBytes = 0
+    evictOverflow(s) // merge-delta accounting must respect the same byte budget as a fresh push
     return
   }
   s._histLastPushAt = now
   s.undoStack.push(snapRaw)
   s._histBytes = (s._histBytes || 0) + snapRaw.length
   // Dual limits: entry cap (old) + byte budget; evicted from the oldest end
-  while (s.undoStack.length > 1 && (s.undoStack.length > HISTORY_LIMIT || s._histBytes > HISTORY_BYTES)) {
-    s._histBytes -= s.undoStack[0].length
-    s.undoStack.shift()
-  }
+  evictOverflow(s)
   s.redoStack = []
   s._histRedoBytes = 0
 }
@@ -42,10 +50,7 @@ export function historyPushKeepRedo (s, snapRaw) {
   s._histLastPushAt = 0
   s.undoStack.push(snapRaw)
   s._histBytes = (s._histBytes || 0) + snapRaw.length
-  while (s.undoStack.length > 1 && (s.undoStack.length > HISTORY_LIMIT || s._histBytes > HISTORY_BYTES)) {
-    s._histBytes -= s.undoStack[0].length
-    s.undoStack.shift()
-  }
+  evictOverflow(s)
 }
 
 export function historyClear (s) { s.undoStack = []; s.redoStack = []; s._histLastPushAt = 0; s._histBytes = 0; s._histRedoBytes = 0 }

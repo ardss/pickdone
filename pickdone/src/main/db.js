@@ -481,9 +481,32 @@ const OPS = {
     tr(rows)
     return true
   },
-  bumpSnow: ({ taskId, minutes }) => {
+  bumpSnow: ({ taskId, minutes, dedupKey } = {}) => {
     // Server-side clamping: arbitrary/negative values from the renderer (including the float window) must not tamper with the focus ledger (a single focus session capped at 600 minutes)
     const m = Math.max(0, Math.min(LIMITS.FOCUS_MAX_MINUTES, Math.floor(Number(minutes) || 0)))
+    // P1 2026-09-20 idempotency contract: the renderer replays bumpSnow on an AMBIGUOUS failure
+    // (timeout / IPC drop where the write may or may not have landed). Without a dedup fence the
+    // replay re-runs the blind `+=` and double-credits the focus ledger. Optional `dedupKey`
+    // (string, e.g. the focus session id) installs a once-guard under the meta key
+    // `snowDedup:<taskId>:<dedupKey>`: the check + increment + stamp run in ONE transaction, so
+    // two concurrent replays cannot both pass the check. The first call credits and stamps; any
+    // later call with the same key returns { ok:true, minutes:0, deduped:true } without touching
+    // the row. Keys are bounded by usage (one per focus session), no pruning needed. Callers that
+    // send no dedupKey keep the legacy non-idempotent behavior (backward compatible).
+    if (dedupKey != null && dedupKey !== '') {
+      const key = `snowDedup:${taskId}:${dedupKey}`
+      const tr = db.transaction(() => {
+        if (stmts.getMeta.get(key)) return { ok: true, minutes: 0, deduped: true }
+        const r0 = stmts.bumpSnow.run({ taskId, minutes: m, now: Date.now() })
+        if (r0.changes === 0) {
+          const row = stmts.getById.get(taskId)
+          return { ok: false, reason: row ? 'deleted' : 'missing' }
+        }
+        stmts.setMeta.run(key, '1')
+        return { ok: true, minutes: m }
+      })
+      return tr()
+    }
     const r = stmts.bumpSnow.run({ taskId, minutes: m, now: Date.now() })
     // Structured result: changes=0 used to collapse "missing" and "soft-deleted" into a bare false, so callers silently dropped focus credit; name the reason
     if (r.changes === 0) {
@@ -543,7 +566,14 @@ const OPS = {
     // Stamp deletedAt at tombstone time: callers never pass it, and a tombstone without a timestamp
     // can never be time-ordered or reconciled by a sync engine (review V1-F5). An already-tombstoned
     // row keeps its original deletedAt (re-upserting the same deleted category must not re-stamp it).
-    const deletedAt = (c && c.deletedAt) || (c && c.delete ? ((cur && cur.deletedAt) || now) : 0)
+    // P2 2026-09-20: the stamp used to fire only for the renderer's `delete` field — a ROW-shape
+    // input (`deleted:1`, no `delete`, e.g. the CLI and the sync apply path's buffered categories)
+    // fell through to deletedAt=0, producing timestamp-less tombstones that LWW/sync ordering
+    // treats as oldest-possible. Normalize the deleted flag FIRST, then stamp: any tombstone
+    // without an explicit deletedAt (and without a prior stamp on the existing row) gets now(),
+    // and an already-stamped row keeps its original value.
+    const deleted = (c && (c.deleted != null ? c.deleted : c.delete)) ? 1 : 0
+    const deletedAt = (c && c.deletedAt) || (deleted ? ((cur && cur.deletedAt) || now) : 0)
     const row = {
       id: c && c.id,
       userId: c && c.userId,
@@ -553,8 +583,8 @@ const OPS = {
       sort: c && c.sort,
       isFolder: (c && c.isFolder) ? 1 : 0,
       parentId: c && c.parentId,
-      // callers may flag deletion via `delete` (renderer shape) or `deleted` (row shape); normalize to 1/0
-      deleted: (c && (c.deleted != null ? c.deleted : c.delete)) ? 1 : 0,
+      // callers may flag deletion via `delete` (renderer shape) or `deleted` (row shape); normalized above
+      deleted,
       deletedAt,
       updatedAt: (c && c.updatedAt) || now
     }
@@ -579,7 +609,9 @@ const OPS = {
   // ===== Saved filters (smart lists): conds stores the condition JSON (catId/priority/dateMode) =====
   // Deletes are tombstones (P1 sync groundwork): a soft-deleted filter row must survive to propagate
   // to other devices; the recycle semantics stay invisible because filterList filters deleted=0.
-  filterList: () => db.prepare('SELECT * FROM filters WHERE deleted = 0 ORDER BY sort, id').all().map(r => ({ id: r.id, name: r.name, conds: parseConds(r.conds), sort: r.sort })),
+  // F3b (2026-09-20): updatedAt exposed — the sync LWW gate needs the row's age, otherwise a
+  // filter edit from a peer was refused for any filter this device already had (ageUnknown).
+  filterList: () => db.prepare('SELECT * FROM filters WHERE deleted = 0 ORDER BY sort, id').all().map(r => ({ id: r.id, name: r.name, conds: parseConds(r.conds), sort: r.sort, updatedAt: r.updatedAt || 0 })),
   filterUpsert: f => {
     const name = String(f && f.name || '').slice(0, 50)
     const conds = JSON.stringify(normConds(f && f.conds))
@@ -663,7 +695,10 @@ const OPS = {
   // reconcile pruned history via periodic full snapshots, so tombstoning it would only grow the table.
   // H2 2026-09-16: sort was missing from the snapshot SELECT — the snapshot/restore round-trip lost
   // chip ordering and restore's ON CONFLICT upsert then overwrote sort with 0.
-  planAll: () => db.prepare('SELECT id, taskId, day, mm, sort FROM plan_chips WHERE deleted = 0 ORDER BY day, mm, sort').all(),
+  // F3a (2026-09-20): updatedAt must be in the SELECT too — without it the sync layer could not
+  // know a chip's LWW age and refused every inbound edit for a chip the peer already had
+  // (sync-apply ageUnknown gate); chips are re-timed on every write, so the column is the age.
+  planAll: () => db.prepare('SELECT id, taskId, day, mm, sort, updatedAt FROM plan_chips WHERE deleted = 0 ORDER BY day, mm, sort').all(),
   planAddMany: chips => {
     // Skip-and-collect (round-3 review): one malformed chip used to throw for the WHOLE batch —
     // a poison pill in the sync flush wedged plan ingestion forever. Invalid rows are skipped
