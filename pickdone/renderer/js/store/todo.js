@@ -525,7 +525,7 @@ export default {
     },
     async purgeAllRecycle ({ commit, dispatch, state }) {
       const ids = state.recycleList.map(t => t.taskId)
-      if (!ids.length) return
+      if (!ids.length) return true // QC r3: empty bin = nothing to purge = success (a falsy return read as "purge failed" in SettingsDataTab when the bin drained during the confirm dialogs)
       // Discrete op: break the 400ms undo merge so following edits don't fuse into the purge step
       commit('historyBreakMerge')
       await dispatch('writeEventBackup', 'purge-all') // snapshot before emptying the recycle bin
