@@ -13,9 +13,13 @@ const EMPTY_TABLES = {
   getAll: () => [],
   settingsRowsAll: () => [],
   tomatoAll: () => [],
-  getAllCategories: () => [],
+  // M1 (2026-09-20): the sync hydration reads RAW category rows (categoriesAllRows), not the
+  // hydrated getAllCategories app shape.
+  categoriesAllRows: () => [],
   planAll: () => [],
+  planTombstones: () => [],
   filterList: () => [],
+  filterTombstones: () => [],
 }
 
 function mockState (tables = {}, writeImpl = {}, senders = []) {
@@ -142,7 +146,8 @@ test('F1: the blob fold does not write settings rows itself (re-stamp guard live
 test('F2: inbound category tombstone lands via the bulk buffer with ordering metadata preserved', () => {
   const m = fresh({
     ...EMPTY_TABLES,
-    getAllCategories: () => [{ categoryId: 'c1', name: 'Work', updatedAt: 50 }],
+    // M1: raw row table shape (categoriesAllRows), live row.
+    categoriesAllRows: () => [{ id: 'c1', name: 'Work', color: '#fff', createdAt: 1, sort: 0, isFolder: 0, parentId: 0, deleted: 0, deletedAt: 0, updatedAt: 50 }],
   })
   const ok = __test.applyRow({ entity: 'category', id: 'c1', seq: 11, ts: 100, updatedAt: 100, deleted: true, deletedAt: 100, data: null })
   assert.equal(ok, true, 'tombstone winner must report applied')
@@ -162,17 +167,22 @@ test('F2: ghost category tombstone (category never seen locally) is applied with
 })
 
 test('F2: a newer live category re-add still wins over the tombstone round-trip', () => {
-  // Device state: category already deleted locally (getAllCategories hides tombstones) — the
-  // peer's newer live row (updatedAt > deletedAt) must land via upsertCategoryMany.
-  const m = fresh({ ...EMPTY_TABLES, getAllCategories: () => [] })
+  // Device state: category already deleted locally (categoriesAllRows carries the tombstone row) —
+  // the peer's newer live row (updatedAt > deletedAt) must land via upsertCategoryMany, in ROW
+  // shape (M1: upsertCategory binds the row columns; updatedAt preserved so no re-stamp churn).
+  const m = fresh({
+    ...EMPTY_TABLES,
+    categoriesAllRows: () => [{ id: 'c2', name: 'Old', color: '#000', createdAt: 1, sort: 0, isFolder: 0, parentId: 0, deleted: 1, deletedAt: 300, updatedAt: 300 }],
+  })
   const ok = __test.applyRow({
     entity: 'category', id: 'c2', seq: 13, ts: 900, updatedAt: 900, deleted: false, deletedAt: 0,
-    data: { categoryId: 'c2', name: 'Reborn', color: '#fff', sort: 1, updatedAt: 900 },
+    data: { id: 'c2', name: 'Reborn', color: '#fff', createdAt: 1, sort: 1, isFolder: 0, parentId: 0, deleted: 0, deletedAt: 0, updatedAt: 900 },
   })
   assert.equal(ok, true)
   assert.equal(m.pendingWrites.categories.length, 1)
-  assert.equal(m.pendingWrites.categories[0].deleted, undefined)
+  assert.equal(m.pendingWrites.categories[0].deleted, 0)
   assert.equal(m.pendingWrites.categories[0].name, 'Reborn')
+  assert.equal(m.pendingWrites.categories[0].updatedAt, 900, 'inbound updatedAt must be preserved (M1 no-re-stamp)')
 })
 
 /* ---------- F3: plan/filter LWW ages ---------- */
