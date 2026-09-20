@@ -38,17 +38,28 @@ function persist () {
   } catch (e) { /* ignore quota exceeded */ }
 }
 
-/** Y: per-task meta write (the syncable unit). n <= 0 removes the key. */
+/** Y: per-task meta write (the syncable unit). n <= 0 removes the key.
+ *  U-3 (2026-09-20): returns a promise resolving true/false so the lazy migration can tell whether the
+ *  fan-out actually landed (the old fire-and-forget let a failed write still delete the legacy blob). */
 function persistTask (taskId, n) {
-  try {
-    if (!window.todoAPI || !window.todoAPI.dbCall) return
-    if (n > 0) {
-      // 2026-09-12: silent .catch(() => {}) hid meta write failures — log them (same as before).
-      window.todoAPI.dbCall('setMeta', [keyOf(taskId), String(n)]).catch(e => console.error('[tomatoEstimate] setMeta(%s) failed:', keyOf(taskId), e))
-    } else {
-      window.todoAPI.dbCall('deleteMeta', keyOf(taskId)).catch(e => console.error('[tomatoEstimate] deleteMeta(%s) failed:', keyOf(taskId), e))
+  const done = async () => {
+    if (!window.todoAPI || !window.todoAPI.dbCall) return false
+    try {
+      if (n > 0) {
+        // 2026-09-12: silent .catch(() => {}) hid meta write failures — log them (same as before).
+        await window.todoAPI.dbCall('setMeta', [keyOf(taskId), String(n)])
+      } else {
+        await window.todoAPI.dbCall('deleteMeta', keyOf(taskId))
+      }
+      return true
+    } catch (e) {
+      console.error('[tomatoEstimate] persistTask(%s) failed:', keyOf(taskId), e)
+      return false
     }
-  } catch (e) { /* degraded debug host */ }
+  }
+  const p = done()
+  p.catch(() => {}) // never a floating rejection; callers await the resolved boolean
+  return p
 }
 
 /** Startup backfill (Y rework / U8 lazy rework): only the legacy-blob pass (timestamped whole-map
@@ -82,19 +93,27 @@ export async function initFromDb (taskIds) {
       } catch (e) { /* ignore */ }
       // Lazy migration: emit per-task keys for every blob entry (NEVER overwriting a per-task key
       // that already exists — the field-granular unit is authoritative once present), then delete
-      // the legacy DB blob.
+      // the legacy DB blob. U-3 (2026-09-20): the delete is now gated on EVERY fan-out write
+      // succeeding — a failed setMeta used to still delete the blob, silently losing that task's
+      // estimate (the per-task key never landed). On any failure the blob is kept and migration
+      // retries on the next boot.
       try {
         if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          const results = []
           for (const [k, v] of Object.entries(parsed)) {
             if (k === '_savedAt') continue
             try {
               const existing = await window.todoAPI.dbCall('getMeta', keyOf(k))
-              if (existing !== null && existing !== undefined && existing !== '') continue
+              if (existing !== null && existing !== undefined && existing !== '') { results.push(true); continue }
             } catch (e) { /* treat as absent */ }
-            persistTask(k, Number(v) || 0)
+            results.push(await persistTask(k, Number(v) || 0))
           }
-          window.todoAPI.dbCall('deleteMeta', LS_KEY).catch(() => {})
-          window.todoAPI.dbCall('deleteMeta', TS_KEY).catch(() => {})
+          if (results.length && results.every(Boolean)) {
+            await window.todoAPI.dbCall('deleteMeta', LS_KEY)
+            await window.todoAPI.dbCall('deleteMeta', TS_KEY)
+          } else {
+            console.warn('[tomatoEstimate] lazy migration incomplete — legacy blob kept for next-boot retry')
+          }
         }
       } catch (e) { /* best-effort: legacy fallback read still works */ }
     }
@@ -112,6 +131,16 @@ export async function initFromDb (taskIds) {
 const fetched = new Set()
 let fetchInflight = new Map()
 export function invalidateEstimateCache () { fetched.clear(); fetchInflight = new Map() }
+
+/** U-6 (2026-09-20): listeners notified when a lazy ensureEstimate fetch lands a value. The todoBox
+ *  difficulty sort reads getEstimate during computeViews; a value arriving AFTER the sort ran used to
+ *  leave the order stale until some unrelated rebuild. main.js registers a callback that dispatches
+ *  todo/computeViews so the order corrects once the async fetch lands. */
+const fetchedListeners = new Set()
+export function onEstimateFetched (fn) {
+  if (typeof fn === 'function') fetchedListeners.add(fn)
+  return () => fetchedListeners.delete(fn)
+}
 export function ensureEstimate (taskId) {
   if (!taskId || fetched.has(taskId)) return
   if (!window.todoAPI || !window.todoAPI.dbCall) return
@@ -127,6 +156,8 @@ export function ensureEstimate (taskId) {
       if (clamped > 0) state[taskId] = clamped
       else delete state[taskId]
       try { localStorage.setItem(LS_KEY, JSON.stringify(state)) } catch (e) { /* ignore */ }
+      // U-6: a value landed asynchronously — views sorted by difficulty may be stale; notify listeners
+      for (const fn of fetchedListeners) { try { fn(taskId, clamped) } catch (e) { /* listener must not break the fetch */ } }
     } catch (e) { /* absent is fine */ }
   })()
   fetchInflight.set(taskId, p)
@@ -135,6 +166,9 @@ export function ensureEstimate (taskId) {
 }
 
 export function getEstimate (taskId) { return state[taskId] || 0 }
+
+/** Test seam: the reactive map is module-private; behavior tests seed/inspect it through here. */
+export const _testInternals = { state, get MAX_KEYS () { return MAX_KEYS } }
 
 /** Capacity bound for the estimate map (H2 2026-09-16): the map used to grow forever — tasks purged
  *  via the recycle bin left their keys behind and a recycled numeric id could resurrect a stale
@@ -154,10 +188,16 @@ export function pruneEstimates (aliveIds) {
   return removed > 0
 }
 
-/** Keep the map bounded: drop the oldest entries (insertion order) once over capacity. */
+/** Keep the map bounded: drop the oldest entries (insertion order) once over capacity.
+ *  U-7 (2026-09-20): evicted ids also get their per-task meta key deleted — the mirror was trimmed but
+ *  the DB keys stayed behind, so a recycled id could resurrect a stale estimate from meta. */
 function trimToCapacity () {
   const keys = Object.keys(state)
-  for (let i = 0; i < keys.length - MAX_KEYS; i++) delete state[keys[i]]
+  for (let i = 0; i < keys.length - MAX_KEYS; i++) {
+    const evicted = keys[i]
+    delete state[evicted]
+    try { persistTask(evicted, 0) } catch (e) { /* best-effort: MetaGC covers the DB side */ }
+  }
 }
 
 export function setEstimate (taskId, n) {

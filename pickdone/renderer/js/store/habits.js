@@ -76,16 +76,27 @@ function persist (state) {
 // behalf (storage events only fire in the OTHER windows, so the writer never relays itself).
 let externalApplier = null
 /** Hook for main.js: register a callback receiving every external (aux-window) habits blob so it can
- *  be applied to the main window's Vuex store, e.g. `onExternalHabitBlob(b => store.commit('habits/applyExternal', b))`. */
+ *  be applied to the main window's Vuex store. U-10: the callback must RETURN whether the blob was
+ *  accepted (same savedAt guard as applyExternal) — the relay only persists accepted blobs to the DB. */
 export function onExternalHabitBlob (fn) { externalApplier = typeof fn === 'function' ? fn : null }
+
+/** Test seam: the relay runs from the module-level storage listener; behavior tests invoke it directly. */
+export const _testInternals = { relayAuxBlob }
 
 function relayAuxBlob () {
   try {
     const d = readLs()
     if (!d) { try { localStorage.removeItem(SYNC_KEY) } catch (e) { /* empty */ } return }
+    // U-10 (2026-09-20): the durable DB write only happens when applyExternal ACCEPTED the blob.
+    // The applier's savedAt guard rejects stale rounds; writing the rejected (stale) blob to the DB
+    // anyway clobbered the newer DB state with older data. No applier registered (headless/test) →
+    // write directly, the blob is the freshest state known to this window.
+    let accepted = true
     if (externalApplier) {
-      try { externalApplier(d) } catch (e) { console.error('[habits] external blob apply failed:', e) }
+      accepted = false
+      try { accepted = externalApplier(d) === true } catch (e) { console.error('[habits] external blob apply failed:', e) }
     }
+    if (!accepted) return
     // The ping is consumed only after the durable DB write settles: consuming it up front let one
     // failed IPC drop the aux edit from the retry channel entirely (the next main-window persist
     // would paper over it at best, or lose it on quit at worst).
