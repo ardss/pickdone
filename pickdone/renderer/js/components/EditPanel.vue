@@ -185,7 +185,7 @@ import { extractTags } from '../utils/search.js'
 import { subsCompleteTarget, reportError } from '../utils/core.js'
 import { deleteWithUndo, removeWithUndo } from '../utils/confirm.js'
 import { toggleCompleteWithUndo } from '../utils/completeAction.js'
-import { getEstimate, setEstimate } from '../utils/tomatoEstimate.js'
+import { getEstimate, setEstimate, ensureEstimate } from '../utils/tomatoEstimate.js'
 import { createSaveQueue } from '../utils/editSave.js'
 import { contentFingerprint, shouldRefreshRemote } from '../utils/editPanelRemoteSync.js'
 import EpReminders from './edit-panel/EpReminders.vue'
@@ -261,7 +261,8 @@ export default {
     // Deps surface gate, same two-layer doctrine as the today deps view (TodayView seg button): the developer-mode master switch AND the module's own switch must both be on
     devMode () { const s = this.$store.state.settings; return !!s.developerMode && !!s.showDepsModule },
     /* Pomodoro estimate/actual (ported from the refactor branch): the estimate is stored in tomatoEstimate, the actual is accumulated by attributing pomodoro records */
-    tomatoEstimateN () { return getEstimate(this.e && this.e.taskId) },
+    /* U8: lazy read-through (see TodoItem.tomatoEstimateN) — memoized per-id getMeta on first open. */
+    tomatoEstimateN () { ensureEstimate(this.e && this.e.taskId); return getEstimate(this.e && this.e.taskId) },
     tomatoActual () {
       const id = this.e && this.e.taskId
       if (!id) return 0
