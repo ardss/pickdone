@@ -7,6 +7,7 @@ const ElementPlus = window.ElementPlus
 
 import store from './store/index.js'
 import { onExternalHabitBlob } from './store/habits.js'
+import { createExternalReloader, kindsFromChangedEvent } from './utils/externalReload.js'
 import { loadRuntime } from './store/runtimeState.js'
 import router from './router.js'
 import App from './app-root.vue'
@@ -194,16 +195,17 @@ async function bootstrap () {
   let _todosChangedTimer = null
   let _todosChangedTail = null
   let _todosChangedSyncApply = false // last broadcast was a LAN-sync-applied round (payload reason)
-  const _reloadExternal = ({ preserveHistory = false } = {}) => {
-    // P1-2 (2026-09-19 UX review round 2): inbound LAN-sync rounds reload via the non-clearing
-    // variant — remote edits are not undoable locally, so clearing history would only destroy the
-    // user's OWN pending undo stack. CLI/watcher external writes keep the old clearing behavior.
-    store.dispatch('todo/init', preserveHistory ? { preserveHistory: true } : undefined).catch(() => {})
-    // CLI can now write categories (category add/rename/rm) — reloading todos only would make new categories appear in the sidebar only after restart
-    store.dispatch('category/init').catch(() => {})
-  }
+  let _todosChangedKinds = null // round kinds from the lan-sync-apply broadcast (op = comma-joined)
+  // F1 (2026-09-20): reload pipeline extracted to utils/externalReload.js so it is unit-testable
+  // and so inbound rounds also refresh saved filters ('filter' kind) and tomato estimates
+  // ('meta' kind, initFromDb throttled to 1s) — both used to stay stale until restart.
+  const _reloadExternal = createExternalReloader({
+    store,
+    reloadEstimates: () => import('./utils/tomatoEstimate.js').then(m => m.initFromDb())
+  })
   window.todoAPI.onTodosChanged(evt => {
     _todosChangedSyncApply = !!(evt && evt.reason === 'lan-sync-apply')
+    _todosChangedKinds = kindsFromChangedEvent(evt)
     clearTimeout(_todosChangedTimer)
     // Guard runs when the timer fires, not on arrival: an IPC broadcast may arrive before subscribeAction.after timestamps,
     // so checking at fire time is the only way to cover "our own persisted write broadcast coming back" (otherwise todo/init's historyClear
@@ -212,13 +214,13 @@ async function bootstrap () {
       if (Date.now() - (store.state.todo._lastLocalWriteAt || 0) < 1500) {
         // External updates arriving within the echo-suppression window are not dropped outright: schedule a trailing reload, otherwise tasks just created in the quick-add window/peer would wait for the next change to appear
         clearTimeout(_todosChangedTail)
-        _todosChangedTail = setTimeout(() => _reloadExternal({ preserveHistory: _todosChangedSyncApply }), 1600)
+        _todosChangedTail = setTimeout(() => _reloadExternal({ preserveHistory: _todosChangedSyncApply, kinds: _todosChangedSyncApply ? _todosChangedKinds : null }), 1600)
         return
       }
       // Direct path must cancel any pending trailing reload — otherwise an echo-window trailing
       // timer followed by a direct reload runs _reloadExternal twice (double full reload)
       clearTimeout(_todosChangedTail)
-      _reloadExternal({ preserveHistory: _todosChangedSyncApply })
+      _reloadExternal({ preserveHistory: _todosChangedSyncApply, kinds: _todosChangedSyncApply ? _todosChangedKinds : null })
     }, 500)
   })
 
@@ -231,6 +233,20 @@ async function bootstrap () {
       try {
         if (patch && Object.keys(patch).length) store.dispatch('settings/updateExternal', patch)
       } catch (e) { console.error('[cli-settings] hot-apply failed', e) }    })
+  }
+
+  // F2 (2026-09-20): LAN-sync habits fold channel. Habit fields are NOT part of DEFAULT_SETTINGS,
+  // so the settings sanitizer would drop them — S1's main process therefore emits a dedicated
+  // 'external-habits-changed' channel with { fields: { habits?, moments? }, savedAt }, which is
+  // routed into store/habits.js applyExternalPatch (merges into state, records savedAt, never
+  // persists → no echo loop). Registered defensively: when S1's emitter is not merged yet the
+  // preload API is simply absent and nothing is wired (no breakage).
+  if (window.todoAPI.onExternalHabitsChanged) {
+    window.todoAPI.onExternalHabitsChanged(payload => {
+      try {
+        store.dispatch('habits/applyExternalPatch', payload)
+      } catch (e) { console.error('[habits] external patch apply failed', e) }
+    })
   }
 
   // P1-5 (2026-09-19 UX review): LAN sync conflict notice — main emits AT MOST ONE 'sync-conflict'

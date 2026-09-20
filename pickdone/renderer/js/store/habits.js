@@ -192,6 +192,26 @@ export default {
       s.moments = blob.moments || []
       s.savedAt = blob.savedAt || 0
     },
+    /** F2 (2026-09-20): LAN-sync habits fold channel — S1's main process emits
+     *  'external-habits-changed' with { fields: { habits?, moments? }, savedAt }. Merge the peer
+     *  fields into state WITHOUT persisting: the incoming savedAt is recorded as applied, so the
+     *  next persist (triggered only by a real user edit) writes the merged state once and the
+     *  applied echo is dropped by the monotonic savedAt guard — no feedback loop. Partial fields
+     *  are allowed (a round that only touched moments must not need a habits array). */
+    applyExternalPatch (s, payload) {
+      if (!payload || typeof payload !== 'object') return
+      const fields = (payload.fields && typeof payload.fields === 'object' && !Array.isArray(payload.fields))
+        ? payload.fields
+        : payload // tolerate the bare blob shape { habits, moments, savedAt }
+      const savedAt = Number(payload.savedAt) || Number(fields.savedAt) || 0
+      if (savedAt && savedAt < (s.savedAt || 0)) return // stale peer round — already superseded
+      let changed = false
+      if (Array.isArray(fields.habits)) { normalizeHabitRecords(fields.habits); s.habits = fields.habits; changed = true }
+      if (Array.isArray(fields.moments)) { s.moments = fields.moments; changed = true }
+      if (!changed) return // nothing applicable: no state change, no savedAt bump
+      s.savedAt = savedAt || s.savedAt
+      // Deliberately NO persist() here — same no-echo contract as applyExternal above.
+    },
     addHabit (s, { name, frequency }) {
       // Millisecond-precision Date.now() alone can collide (rapid double-add), breaking delete/check-in by id
       const id = Date.now() + '-' + Math.random().toString(36).slice(2, 7)
