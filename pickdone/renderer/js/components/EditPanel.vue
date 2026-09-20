@@ -315,6 +315,16 @@ export default {
       // F3 (2026-09-20): inbound sync/CLI changed the open task while the panel is open. Without
       // this the next autosave clobbers the peer edit with the stale open-time snapshot.
       this.checkRemoteUpdate(t)
+      // Y8 (sync-coverage-2): the repeat-group count stales while the panel is open — an inbound
+      // round completing/deleting sibling instances of the same repeatId changes the store row
+      // without re-hydration. Piggyback the existing remote-update watcher (throttled).
+      if (t && this.e && this.isRepeat && t.repeatId === this.e.repeatId) {
+        const now = Date.now()
+        if (!this._rgRefreshAt || now - this._rgRefreshAt > 1500) {
+          this._rgRefreshAt = now
+          this.repeatGroupInfo()
+        }
+      }
     }
   },
   mounted () {

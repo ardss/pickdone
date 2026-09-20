@@ -175,10 +175,12 @@ export function sanitizeSettingsPatch (patch) {
     if (typeof def !== typeof v) continue // type-mismatched junk (e.g. object where boolean declared)
     // Y2: a partial inbound shortcut map must not unregister every other shortcut — merge over the
     // declared defaults before applying (main's applyShortcuts would otherwise drop missing keys).
+    // Arrays are junk too (an object field never accepts a list).
     if (k === 'shortcutKeySettings' && v && typeof v === 'object' && !Array.isArray(v)) {
       out[k] = { ...DEFAULT_SETTINGS.shortcutKeySettings, ...v }
       continue
     }
+    if (typeof def === 'object' && Array.isArray(v)) continue
     out[k] = v
   }
   return out
@@ -275,11 +277,6 @@ export default {
   getters: {},
   mutations: {
     updateSettings (state, patch) {
-      // Y6: the tours-seen ledger merges per-key max (never whole-doc clobber) — a peer that saw tour
-      // "pips" later must not erase this device's "today"/"journey" entries and re-pop them.
-      if (patch && patch.onboardingToursSeen && typeof patch.onboardingToursSeen === 'object' && !Array.isArray(patch.onboardingToursSeen)) {
-        patch = { ...patch, onboardingToursSeen: mergeTourMap(state.onboardingToursSeen, patch.onboardingToursSeen) }
-      }
       Object.assign(state, patch)
       persist(state)
     },
@@ -308,9 +305,15 @@ export default {
     },
     /** P1-3: inbound patch from a trust boundary (CLI watcher / LAN-sync applied settings rows).
      *  Sanitized via sanitizeSettingsPatch (same coercion/validation family as restore()), then
-     *  re-dispatched through the normal update action so LS/config.json/shortcuts stay in sync. */
-    async updateExternal ({ dispatch }, patch) {
+     *  re-dispatched through the normal update action so LS/config.json/shortcuts stay in sync.
+     *  Y6: the onboardingToursSeen ledger merges per-key max on inbound (never whole-doc clobber) —
+     *  a peer seeing tour "pips" must not erase this device's other seen entries. Local writes
+     *  (resetToursSeen) still replace wholesale because they bypass this merge. */
+    async updateExternal ({ state, dispatch }, patch) {
       const clean = sanitizeSettingsPatch(patch)
+      if (clean.onboardingToursSeen && typeof clean.onboardingToursSeen === 'object' && !Array.isArray(clean.onboardingToursSeen)) {
+        clean.onboardingToursSeen = mergeTourMap(state.onboardingToursSeen, clean.onboardingToursSeen)
+      }
       if (Object.keys(clean).length) await dispatch('update', clean)
     },
     // On startup judge newness by timestamp: if the DB mirror is newer than LS (e.g. LS cleared / machine change) → restore key-level from DB wholesale; otherwise flush current values back to the DB

@@ -26,13 +26,13 @@ beforeEach(() => {
   console.error = (...a) => { errors.push(a.join(' ')) }
 })
 
-test('F6: tomatoEstimate persist logs failed setMeta dual-writes', async () => {
+test('F6: tomatoEstimate persist logs failed setMeta per-task write (sync-coverage-2 rework: per-task keys replaced the dual blob+TS writes)', async () => {
   const mod = await import('../../../renderer/js/utils/tomatoEstimate.js')
   dbShouldFail = true
   mod.setEstimate('task-1', 3)
   await new Promise(r => realSetTimeout(r, 10))
   const hits = errors.filter(e => e.includes('tomatoEstimate'))
-  assert.equal(hits.length >= 2, true, 'both LS_KEY and TS_KEY write failures are logged, got: ' + hits.length)
+  assert.equal(hits.length >= 1, true, 'the per-task key (tomatoEstimate:<taskId>) write failure is logged, got: ' + hits.length)
   // success path stays silent
   errors.length = 0
   dbShouldFail = false
