@@ -116,7 +116,7 @@ export function invalidateNoise (key) {
 }
 
 // Default export = for main.js's `import noisePlayer from ...` usage (with only named exports, that import blows up the whole chain into a white screen under browser ESM)
-export default { startNoise, stopNoise, setNoiseVolume, invalidate: invalidateNoise }
+export default { startNoise, stopNoise, setNoiseVolume, invalidate: invalidateNoise, listenStopNoiseEvent }
 
 /** U-17 (2026-09-20): wire the TomatoAbandonModal's 'tomato-stop-noise' custom event to the player
  *  (the modal's dispatch used to be dead code — nothing listened). Extracted here so the wiring is
