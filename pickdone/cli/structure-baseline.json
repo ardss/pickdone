@@ -1,8 +1,8 @@
 {
   "src/main/db.js": 961,
   "renderer/js/store/todo.js": 762,
-  "renderer/js/components/SideNav.vue": 959,
-  "renderer/js/components/EditPanel.vue": 1021,
+  "renderer/js/components/SideNav.vue": 977,
+  "renderer/js/components/EditPanel.vue": 1031,
   "renderer/js/views/CalendarView.vue": 831,
   "renderer/js/views/StatisticsView.vue": 868,
   "cli/pickdone.js": 1264,
