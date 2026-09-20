@@ -59,7 +59,7 @@
     </div>
 
     <!-- Y9 (sync-coverage-2): sync conflict backups (meta conflict lost-data snapshots, agent X's
-         contract: syncConflictBackupsList -> [{key, lostAt, preview}], syncConflictBackupRestore(key)).
+         contract: syncConflictBackupsList -> [{key, lostAt, preview}], syncConflictBackupRestore({key})).
          Defensive: if the main process does not expose the ops yet (agent X not merged), the whole
          section stays hidden. -->
     <div class="form" v-if="conflictBackups !== null">
@@ -285,11 +285,13 @@ export default {
         this.conflictBackups = Array.isArray(list) ? list : []
       } catch (e) { this.conflictBackups = null }
     },
-    /** Y9: restore one backup via the contract op, then refresh the list. */
+    /** Y9/U6: restore one backup via the contract op, then refresh the list. Main expects a
+     *  `{key}` payload object (src/main/sync-conflict-backups.js), not a bare key string — the
+     *  old bare-string call made every restore throw "not a metaConflictBackup key". */
     async restoreConflict (b) {
       this.conflictBusy = b.key
       try {
-        await dbCallLoose('syncConflictBackupRestore', b.key)
+        await dbCallLoose('syncConflictBackupRestore', { key: b.key })
         this.$message.success(this.$t('sync.conflictRestored'))
       } catch (e) {
         this.$message.error(this.$t('sync.conflictRestoreFail'))
