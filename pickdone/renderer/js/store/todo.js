@@ -519,6 +519,9 @@ export default {
       }
       dispatch('computeViews')
       dispatch('writeCriticalBackup')
+      // QC r1: return what actually succeeded so views can converge their toasts on reality
+      // (purgeIds swallows per-id failures by design — the return value is the only failure signal)
+      return { done, failed: ids.filter(id => !done.includes(id)) }
     },
     async purgeAllRecycle ({ commit, dispatch, state }) {
       const ids = state.recycleList.map(t => t.taskId)
@@ -532,7 +535,7 @@ export default {
       // back into the recycle bin after restart while the user had been told they were gone for good
       let purged = false
       try { purged = await window.todoAPI.purgeRecycleBin() === true } catch (err) { reportError('purgeRecycleBin', err) }
-      if (!purged) { dispatch('computeViews'); return }
+      if (!purged) { dispatch('computeViews'); return false }
       // Attachment cleanup aligned with per-item permanent deletion (the main process's purgeRecycleBin only deletes rows, not files/)
       try { for (const id of ids) await window.todoAPI.deleteTodoFilesRelevant?.(id) } catch {}
       // Drop the pre-delete chip snapshot meta too (rows are gone, the snapshot can never be restored)
@@ -542,6 +545,7 @@ export default {
       commit('historyClear')
       dispatch('computeViews')
       dispatch('writeCriticalBackup')
+      return true // QC r1: boolean success flag — RecycleBinView.clearAll toasts error instead of false success
     },
     /** Recycle bin auto-expiry purge: deleted rows past N days by deletion time (updateTime) are permanently deleted (N=0 never).
         Clock sanity check: when the system clock jumps back/forward more than 48h (BIOS battery loss, manual change), skip this round of auto purge,

@@ -148,8 +148,12 @@ export default {
       toggleCompleteWithUndo({ store: this.$store, message: m => this.$message(m), todo: t, announce: m => this.$announce && this.$announce(m) })
     },
     purge (t) {
-      this.$confirm(this.$t('statsC.RecycleBin.purgeConfirm', { name: t.taskContent }), this.$t('statsC.RecycleBin.dangerAction'), { type: 'error' }).then(() => {
-        this.$store.dispatch('todo/purgeIds', [t.taskId])
+      this.$confirm(this.$t('statsC.RecycleBin.purgeConfirm', { name: t.taskContent }), this.$t('statsC.RecycleBin.dangerAction'), { type: 'error' }).then(async () => {
+        // Await the dispatch and converge only on success: purgeIds swallows per-id failures
+        // (reportError is console-only), so a silent IPC failure used to leave the row in the
+        // bin with no user-visible feedback at all.
+        const r = await this.$store.dispatch('todo/purgeIds', [t.taskId])
+        if (!r || !r.done.length) this.$message.error(this.$t('statsC.RecycleBin.purgeFailedMsg'))
       }).catch(() => {})
     },
     clearAll () {
@@ -173,10 +177,14 @@ export default {
           type: 'error',
           confirmButtonText: this.$t('statsC.RecycleBin.continueText')
         })
-      }).then(() => {
+      }).then(async () => {
         // Dedicated purgeAllRecycle: a single clear in the main process + event snapshot before clearing (the previous per-item hardDelete missed the snapshot semantics)
-        this.$store.dispatch('todo/purgeAllRecycle')
-        this.$message.success(this.$t('statsC.RecycleBin.cleared', { n }))
+        // Await + converge on the returned flag: the action resolves (not rejects) when the purge
+        // IPC fails, so firing the success toast unconditionally used to claim "cleared" while
+        // every row was still in the bin (same wait-for-success rule as restore()).
+        const ok = await this.$store.dispatch('todo/purgeAllRecycle')
+        if (ok) this.$message.success(this.$t('statsC.RecycleBin.cleared', { n }))
+        else this.$message.error(this.$t('statsC.RecycleBin.purgeFailedMsg'))
       }).catch(() => { /* user cancelled at any step */ })
     }
   },
