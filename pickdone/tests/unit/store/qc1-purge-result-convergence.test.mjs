@@ -91,13 +91,13 @@ test('qc1 purgeAllRecycle resolves FALSE when the purge IPC fails (success toast
   assert.equal(ok2, false, 'a falsy IPC result counts as failure too')
 })
 
-test('qc1 purgeAllRecycle on an empty bin is a no-op returning falsy', async () => {
+test('qc1 purgeAllRecycle on an empty bin is a no-op resolving TRUE (success, nothing to purge)', async () => {
   const ok = await todoActions.purgeAllRecycle.call({}, {
     commit: () => {},
     dispatch: async () => ({}),
     state: { recycleList: [] }
   })
-  assert.ok(!ok, 'empty bin: nothing purged, falsy result')
+  assert.equal(ok, true, 'empty bin: nothing to purge — must read as success, not failure (r3)')
 })
 
 test('qc1 purgeIds returns done/failed split so a total failure is visible to the view', async () => {
