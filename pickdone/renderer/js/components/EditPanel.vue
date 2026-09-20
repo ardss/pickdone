@@ -4,6 +4,14 @@
   <aside v-if="e" class="edit-panel" @click.stop>
     <div class="ep-inner">
         <div v-if="saveFailed" class="ep-save-failed" role="alert">{{ $t('statsJ.EditPanel.saveFailed') }}</div>
+        <!-- F3 (2026-09-20): a peer updated the open task while the panel holds UNSAVED user edits —
+             never auto-overwrite user input; offer an explicit re-hydrate instead -->
+        <div v-if="remoteStale" class="ep-remote-updated" role="status">
+          <span>{{ $t('statsJ.EditPanel.remoteUpdated') }}</span>
+          <span class="ep-remote-refresh" role="button" tabindex="0"
+                :aria-label="$t('statsJ.EditPanel.remoteRefresh')"
+                @click="refreshFromStore" @keydown.enter.prevent="refreshFromStore">{{ $t('statsJ.EditPanel.remoteRefresh') }}</span>
+        </div>
       <div class="ep-title-row">
         <el-input type="textarea" :autosize="{minRows:1,maxRows:4}" :placeholder="$t('statsJ.EditPanel.addTitlePlaceholder')"
                   :model-value="e.title" @input="v=>fieldPatch('title',v)" class="ep-title"/>
@@ -179,6 +187,7 @@ import { deleteWithUndo, removeWithUndo } from '../utils/confirm.js'
 import { toggleCompleteWithUndo } from '../utils/completeAction.js'
 import { getEstimate, setEstimate } from '../utils/tomatoEstimate.js'
 import { createSaveQueue } from '../utils/editSave.js'
+import { contentFingerprint, shouldRefreshRemote } from '../utils/editPanelRemoteSync.js'
 import EpReminders from './edit-panel/EpReminders.vue'
 import EpSubtasks from './edit-panel/EpSubtasks.vue'
 import EpAttachments from './edit-panel/EpAttachments.vue'
@@ -224,6 +233,7 @@ export default {
       fileList: [] as any,
       previewImg: null as any,
       repeatCount: 0,
+      remoteStale: false,
       PRIOS
     }
   },
@@ -302,6 +312,9 @@ export default {
       if (!t && !this.inRecycle && this.$store.state.ui.rightSidebarTodoEdit.visible) {
         this.$store.commit('ui/closeEdit')
       }
+      // F3 (2026-09-20): inbound sync/CLI changed the open task while the panel is open. Without
+      // this the next autosave clobbers the peer edit with the stale open-time snapshot.
+      this.checkRemoteUpdate(t)
     }
   },
   mounted () {
@@ -387,8 +400,37 @@ export default {
       this.imgList = JSON.parse(JSON.stringify(s.todoImageList))
       this.fileList = JSON.parse(JSON.stringify(s.fileList))
       this.e = JSON.parse(JSON.stringify(s))
+      // F3: record the hydration baseline (live-row updateTime + core-field fingerprint) so
+      // checkRemoteUpdate can tell inbound peer edits from the panel's own save echoes.
+      const live = this.task
+      this._remoteUpdateTime = live ? live.updateTime : s.updateTime
+      this._remoteFingerprint = contentFingerprint(this.e)
+      this.remoteStale = false
       this.repeatGroupInfo()
       this.initSubSortable()
+    },
+    /** F3: the live todo-store row changed while the panel is open. Pristine panel (no unsaved
+     *  user edits in the core fields) → silently re-hydrate from the store; panel holding user
+     *  input → show the inline notice + manual refresh, never overwrite user text. */
+    checkRemoteUpdate (row) {
+      if (!this.e || !row || row.taskId !== this.e.taskId) return
+      if (!this.$store.state.ui.rightSidebarTodoEdit.visible) return
+      const verdict = shouldRefreshRemote({
+        baseFingerprint: this._remoteFingerprint,
+        baseUpdateTime: this._remoteUpdateTime,
+        row
+      })
+      if (verdict === 'none') return
+      if (contentFingerprint(this.e) === this._remoteFingerprint) {
+        this.hydrate() // pristine: adopt the peer edit silently
+      } else {
+        this.remoteStale = true // user has unsaved edits: ask before overwriting
+      }
+    },
+    /** F3: manual "刷新" from the remote-updated notice — the user chose to take the peer copy. */
+    refreshFromStore () {
+      this.remoteStale = false
+      this.hydrate()
     },
     async repeatGroupInfo () {
       if (!this.e || !this.e.repeatId) { this.repeatCount = 0; return }
@@ -682,6 +724,12 @@ export default {
 /* 保存失败横幅 */
 .ep-save-failed { flex-shrink: 0; margin: 0 0 8px; padding: 6px 12px; font-size: var(--fs-sm);
   color: var(--danger); background: rgba(245, 108, 108, .1); border: 1px solid rgba(245, 108, 108, .35); border-radius: var(--radius-md); }
+/* F3: 内容已在其他设备更新 inline notice — subtle info style, refresh is an inline button */
+.ep-remote-updated { flex-shrink: 0; margin: 0 0 8px; padding: 6px 12px; font-size: var(--fs-sm);
+  color: var(--text-2); background: var(--bg-2, rgba(0,0,0,.04)); border: 1px solid var(--line-1, rgba(0,0,0,.12)); border-radius: var(--radius-md);
+  display: flex; align-items: center; gap: 8px; }
+.ep-remote-refresh { margin-left: auto; color: var(--primary, var(--text-1)); cursor: pointer; font-weight: 600; white-space: nowrap; }
+.ep-remote-refresh:hover { text-decoration: underline; }
 .ep-collapse-btn {
   flex-shrink: 0; width: 24px; height: 24px; margin-top: var(--space-2); margin-left: var(--space-1);
   display: inline-flex; align-items: center; justify-content: center;
