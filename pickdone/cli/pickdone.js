@@ -313,6 +313,12 @@ async function main () {
     case 'get': {
       if (!opts._[0]) throw new lib.CliError('usage: get <taskId|keyword>', 'USAGE')
       const t = lib.resolveTask(opts._[0])
+      // QC r2 (adversarial round): the todos.estimate COLUMN is dead weight — always 0 since the X2
+      // 2026-09-20 split moved the authoritative per-task estimate into meta keys
+      // (tomatoEstimateState:<taskId>). get is the documented read-back ("edit ... then get --json to
+      // read back") but it reported 0 right after a successful edit --estimate — an AI/script consumer
+      // sees the write "vanish". Surface the live meta value over the dead column.
+      try { t.estimate = lib.getEstimateOf(t.taskId) } catch { /* read failure: keep the column value */ }
       if (opts.json) return emit(t)
       console.log(JSON.stringify(t, null, 2))
       return

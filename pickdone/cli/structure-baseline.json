@@ -5,7 +5,7 @@
   "renderer/js/components/EditPanel.vue": 1032,
   "renderer/js/views/CalendarView.vue": 831,
   "renderer/js/views/StatisticsView.vue": 868,
-  "cli/pickdone.js": 1264,
+  "cli/pickdone.js": 1270,
   "cli/lib.js": 1914,
   "src/main/lan-sync/index.js": 953,
   "src/main/lan-sync-bootstrap.js": 871
