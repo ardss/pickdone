@@ -44,14 +44,20 @@ function purgeAttachmentFiles (attachDir, ids) {
  *  deleted/live boundary stays observable here): given meta keys, live categories and todo rows,
  *  returns the orphan keys to delete. A repeatId referenced only by a recycle-bin row anchors its
  *  rule ONLY if the caller passes deleted rows in — index.js passes `deleted: 0`, so deleted tasks
- *  never keep repeatRule meta alive. Pure: returns keys, never performs IO. */
+ *  never keep repeatRule meta alive. Pure: returns keys, never performs IO.
+ *  M-11 (2026-09-20): per-task tomato estimate keys (`tomatoEstimateState:<taskId>`) are GC'd too
+ *  — the X2 split created one meta row per task but nothing ever removed them, so purged tasks
+ *  leaked their keys forever. A key whose taskId is absent from the live todos set is dead. */
 function computeMetaGc (metaKeys, categories, todos) {
   const live = new Set((categories || []).map(c => String(c.id || c.categoryId)))
   const liveRids = new Set((todos || []).map(t => t.repeatId).filter(Boolean))
+  const liveTaskIds = new Set((todos || []).map(t => String(t.taskId)))
   const dead = []
   for (const k of metaKeys || []) {
     let m = k.match(/^repeatRule:(.+)$/)
     if (m && !liveRids.has(m[1])) { dead.push(k); continue }
+    m = k.match(/^tomatoEstimateState:(.+)$/)
+    if (m && !liveTaskIds.has(m[1])) { dead.push(k); continue }
     m = k.match(/^(?:projectDeadline|projectMilestones):(.+)$/)
     if (m && !live.has(m[1])) dead.push(k)
   }

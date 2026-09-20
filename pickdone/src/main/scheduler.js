@@ -27,6 +27,9 @@ function markFired (key) {
   schedulePersistFired()
 }
 let _persistTimer = null
+// M-10 (2026-09-20): a failed flushFiredNow used to silently drop the persist — already-fired
+// reminders then re-fired after restart. On setMeta failure: log + re-arm a 30s retry, max 3.
+let _persistRetries = 0
 function schedulePersistFired () {
   if (_persistTimer) return
   _persistTimer = setTimeout(() => { flushFiredNow() }, 60_000)
@@ -44,8 +47,19 @@ function flushFiredNow () {
       const packed = entries.map(([k, ts]) => `${k}|${ts}`).join('\x1f')
       db.call('setMeta', [FIRED_META_KEY, packed])
       for (const [, v] of firedReminders) if (v) v.written = true
+      _persistRetries = 0
     }
-  } catch (e) { /* silent when db is unavailable; the in-process LRU still works */ }
+  } catch (e) {
+    // M-10: log + bounded 30s retry backoff instead of the old silent drop; the in-process LRU
+    // still dedupes meanwhile. After 3 failed retries give up (the next markFired re-arms the
+    // 60s debounce anyway).
+    log.warn('[Scheduler] fired-reminder persist failed, will retry:', e && e.message)
+    if (_persistRetries < 3) {
+      _persistRetries++
+      _persistTimer = setTimeout(() => { flushFiredNow() }, 30_000)
+      if (_persistTimer && _persistTimer.unref) _persistTimer.unref()
+    }
+  }
 }
 /** Restore firedReminders from meta at startup, so already-fired reminders are not re-fired by the catch-up path after restart */
 function loadFiredFromMeta (db) {
