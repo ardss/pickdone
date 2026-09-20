@@ -110,6 +110,7 @@
  *  2. Monthly calendar check-in table (switch months, colored coverage)
  *  3. Countdown/anniversary moments */
 import { dayjs, FMT } from '../utils/core.js'
+import { clampIntervalN } from '../utils/limits.js'
 import { showUndoToast } from '../utils/undoToast.js'
 import EmptyState from '../components/EmptyState.vue'
 
@@ -184,7 +185,7 @@ export default {
       const freq: any = { type: this.freqType }
       if (this.freqType === 'weekdays') freq.weekdays = this.freqWeekdays
       if (this.freqType === 'interval') {
-        freq.intervalN = Math.min(30, Math.max(2, Number(this.freqIntervalN) || 2))
+        freq.intervalN = clampIntervalN(this.freqIntervalN) // U-21: boundary behavior extracted to utils/limits.js (unit-tested)
         if (freq.intervalN !== this.freqIntervalN) {
           this.freqIntervalN = freq.intervalN
           this.$message.warning(this.$t('statsE.HabitView.freqIntervalClamped', { min: 2, max: 30 }))

@@ -197,12 +197,18 @@ function unwrapInbound(socket, conn, raw) {
  *  pairGate(remoteAddress) -> boolean: server-level sliding-window rate limiter, applied to
  *  BOTH pair-request attempts and FAILED hello auth attempts (see createLanServer); when
  *  absent, no IP-level limiting is applied.
- *  seenPairNonces: server-level Set of client pair-request nonces — a nonce is single-use
- *  per server, so a captured pair-request cannot be replayed into a fresh accept. */
+ *  seenPairNonces: server-level Map (insertion-ordered) of client pair-request nonces — a nonce
+ *  is single-use per server, so a captured pair-request cannot be replayed into a fresh accept. */
 function wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, onUnauthorized, verifyPairingCode, onPaired, pairGate, onPairRequest, onPairThrottled, pairConfirmTimeoutMs, seenPairNonces }) {
   const state = { peer: null, authorized: false, sessionKey: null, pairHs: null, recvSeq: -1 }
   socket._lanSend = (msg) => send(socket, msg) // encrypted send for server-side handlers (index.js sendVia)
+  // M-6 (2026-09-20): close AND error both invoke finish — without a guard a socket that errors
+  // then closes emitted 'peer-closed' twice, double-counting peer bookkeeping upstream. Re-entry
+  // is now a no-op; everything else is identical to the old behavior.
+  let finishCalled = false
   const finish = () => {
+    if (finishCalled) return
+    finishCalled = true
     // Best-effort zeroization of the derived session key on socket close (GC copies inside
     // node:crypto internals are unreachable — documented in cipher.js).
     cipher.zeroize(state.sessionKey)
@@ -243,9 +249,18 @@ function wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, o
               socket.destroy()
               return
             }
-            // Bounded memory: a flood of pair-requests cannot grow the set without limit.
-            if (seenPairNonces.size >= 4096) seenPairNonces.clear()
-            seenPairNonces.add(pairNonce)
+            // Bounded memory: a flood of pair-requests cannot grow the map without limit.
+            // M-7 (2026-09-20): the old `size >= 4096 → clear()` wiped the WHOLE replay set on
+            // flood, un-replay-protecting every nonce captured before the flood (an attacker
+            // could forge 4096 junk requests then replay an old transcript). Map insertion
+            // order gives FIFO eviction: drop the OLDEST entry past an 8192-entry cap, so a
+            // 4096-strong forgery burst leaves earlier captured nonces rejected (cap 2x the
+            // burst = the replay window outlives any realistic flood; ~200KB worst case).
+            if (seenPairNonces.size >= 8192) {
+              const oldest = seenPairNonces.keys().next().value
+              if (oldest !== undefined) seenPairNonces.delete(oldest)
+            }
+            seenPairNonces.set(pairNonce, true)
           }
           if (pairGate && !pairGate(socket.remoteAddress)) {
             if (onPairThrottled) onPairThrottled({ ip: socket.remoteAddress, reason: 'pair-throttled' })
@@ -421,9 +436,11 @@ function createLanServer(opts) {
   // Lives at server scope so reconnecting cannot reset the counter (the old per-connection
   // counter made online code guessing free: one attempt per TCP connect).
   const pairAttemptsByIp = new Map()
-  // Server-level set of client pair-request nonces (single-use per server): a captured
-  // pair-request replayed on a fresh connection cannot mint a fresh pair-accept.
-  const seenPairNonces = new Set()
+  // Server-level insertion-ordered Map of client pair-request nonces (single-use per server): a
+  // captured pair-request replayed on a fresh connection cannot mint a fresh pair-accept.
+  // M-7: Map (not Set) so the 4096-cap evicts the OLDEST entry (FIFO) instead of clearing the
+  // whole replay set on a flood of forged nonces.
+  const seenPairNonces = new Map()
   const PAIR_WINDOW_MS = 10 * 60 * 1000
   const PAIR_MAX_ATTEMPTS = 5
   const pairGate = (ip) => {
@@ -608,4 +625,4 @@ function connect(host, port, opts) {
   return em
 }
 
-module.exports = { createLanServer, connect, send, ProtocolError, PROTO_VER, DEFAULT_PORT, MAX_LINE_BYTES, PRE_AUTH_LINE_BYTES, PAIR_CONFIRM_TIMEOUT_MS, cleanDeviceName }
+module.exports = { createLanServer, connect, send, wireConnection, ProtocolError, PROTO_VER, DEFAULT_PORT, MAX_LINE_BYTES, PRE_AUTH_LINE_BYTES, PAIR_CONFIRM_TIMEOUT_MS, cleanDeviceName }

@@ -44,6 +44,7 @@ export default {
       this.confirmAbandon()
     },
     confirmAbandon () {
+      this.stopNoise() // U-17: actually fire the stop-noise event (main.js listens and stops the player)
       this.$store.dispatch('tomato/giveUp', { record: true, reason: this.reason })
       this.$store.commit('ui/closeTomatoAbandon')
       if (this.$announce) this.$announce(this.$t('statsK.TomatoAbandonModal.k125') + (this.reason ? this.$t('statsK.TomatoAbandonModal.reasonSuffix', { r: this.reason }) : ''))

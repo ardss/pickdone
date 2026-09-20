@@ -23,6 +23,7 @@
               <el-option :label="$t('statsJ.FilterView.prioNone')" :value="0"/>
               <el-option label="★" :value="1"/>
               <el-option label="★★" :value="2"/>
+              <el-option label="★★★" :value="3"/>
             </el-select>
           </div>
           <div class="rm-row">

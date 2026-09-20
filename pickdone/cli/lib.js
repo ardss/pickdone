@@ -790,7 +790,7 @@ function purgeRecycleBin () {
   // Snapshot meta must die with the rows (review P2 2026-09-11): the App's purge path clears
   // planChipsSnapshot:<id>, the CLI purge left the meta behind — a later task-id collision could
   // backfill a purged task with someone else's chips, and the meta rows just leaked.
-  for (const r of rows) { try { db.call('deleteMeta', 'planChipsSnapshot:' + r.taskId) } catch { /* absent is fine */ } }
+  for (const r of rows) { try { db.call('deleteMeta', 'planChipsSnapshot:' + r.taskId) } catch { /* absent is fine */ } try { db.call('deleteMeta', ESTIMATE_KEY_PREFIX + r.taskId) } catch { /* M-11: estimate key dies with the row too */ } }
   db.call('purgeRecycleBin')
   audit.record({
     action: 'purge',

@@ -121,7 +121,13 @@ function createServerRoleHandler(deps) {
         // sends are synchronous, so the busy flag is a documented invariant guard. A request
         // while busy is answered with snapshot-busy (NOT silently dropped): a silent drop made
         // a mutual snapshot exchange deadlock until both rounds hit the 120s deadline.
-        if (!buildSnapshot && !buildSnapshotRows) return
+        // M-5 (2026-09-20): the no-builder case used to `return` silently too — the requester then
+        // burned the full 120s round deadline waiting for chunks that would never come. Reply
+        // snapshot-error (same terminal the too-large path uses) so the peer fails fast.
+        if (!buildSnapshot && !buildSnapshotRows) {
+          sendVia(socket, { type: 'snapshot-error', reason: 'no-builder' })
+          return
+        }
         if (serverSnapshotBusy.has(peer.deviceId)) {
           sendVia(socket, { type: 'snapshot-busy' })
           return

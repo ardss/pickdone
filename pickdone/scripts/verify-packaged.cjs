@@ -72,28 +72,29 @@ if (!fs.existsSync(resCli)) {
   process.exit(1)
 }
 
-function scanRequires (baseDir, relLabel) {
-  for (const f of fs.readdirSync(baseDir).filter(n => /\.c?js$/.test(n))) {
-    const src = fs.readFileSync(path.join(baseDir, f), 'utf8')
-    for (const m of src.matchAll(/require\(['"]\.\/([^'"]+)['"]\)/g)) {
-      const rel = m[1]
-      const ok = ['.js', '.cjs', ''].some(ext => fs.existsSync(path.join(resCli, rel + ext)))
-      if (!ok) {
-        console.error(`FAIL: resources/cli is missing ${rel} (required by ${relLabel}/${f}) — extraResources filter gap, packaged CLI crashes on require`)
-        process.exit(1)
-      }
-    }
-  }
+// M-14 (2026-09-20): the old scan was single-level and only matched require('./x') — cli/lib/**
+// subdirs, relative-parent requires ('../src/main/db.js' → resources/src/main/...) and bare lazy
+// requires ('solarlunar', 'dayjs/locale/zh-cn') all sailed through. The recursive, escape-aware
+// scan lives in verify-packaged-lib.cjs (unit-tested against a fixture tree).
+const vpLib = require('./verify-packaged-lib.cjs')
+const RESOURCES_ROOT = path.join(unpacked, 'resources')
+const readUtf8 = f => fs.readFileSync(f, 'utf8')
+const landedMissing = vpLib.findMissingRequires({ cliDir: resCli, resourcesDir: RESOURCES_ROOT, read: readUtf8 })
+if (landedMissing.length) {
+  console.error('FAIL: packaged CLI require gaps (extraResources/filter gap, packaged CLI crashes on require):\n  ' + landedMissing.join('\n  '))
+  process.exit(1)
 }
-
-scanRequires(resCli, 'resources/cli') // landed side: no dangling requires inside the packaged tree
 for (const f of ['pickdone.js', 'lib.js']) {
   if (!fs.existsSync(path.join(resCli, f))) {
     console.error(`FAIL: resources/cli is missing entrypoint ${f} — extraResources filter gap, packaged CLI crashes on require`)
     process.exit(1)
   }
 }
-scanRequires(path.resolve('cli'), 'repo cli') // repo side: every source require target got packaged
+const repoMissing = vpLib.findMissingRequires({ cliDir: path.resolve('cli'), resourcesDir: RESOURCES_ROOT, read: readUtf8 }) // repo side: every source require target got packaged
+if (repoMissing.length) {
+  console.error('FAIL: repo cli/ require targets not packaged:\n  ' + repoMissing.join('\n  '))
+  process.exit(1)
+}
 
 const pkg = JSON.parse(fs.readFileSync(path.resolve('package.json'), 'utf8'))
 const globs = pkg.build && pkg.build.files || []
@@ -135,6 +136,47 @@ const platformPrebuild = `prebuilds/${platMap[process.platform]}-${archMap[proce
 const vendorPrebuilds = path.join(unpacked, 'resources', 'vendor', 'better-sqlite3-multiple-ciphers', platformPrebuild)
 if (!fs.existsSync(vendorPrebuilds)) {
   console.error(`FAIL: ${vendorPrebuilds} 不存在（resources/vendor 驱动副本缺本平台 prebuild，打包版 DB 初始化必失败）`)
+  process.exit(1)
+}
+
+// M-15 (2026-09-20): linux update metadata reconcile — when electron-builder emitted
+// latest-linux.yml / latest-linux-arm64.yml (the linux CI job passes these paths to the
+// release), the version must match the packaged package.json and every artifact URL they
+// reference must exist next to the yml (a dangling auto-update pointer bricks the updater).
+// SKIP is only printed when the files are genuinely absent (win/mac builds).
+try {
+  const resPkgVersion = JSON.parse(fs.readFileSync(resPkg, 'utf8')).version
+  let yaml = null
+  try { yaml = req('js-yaml') } catch { /* fall back to line parsing below */ }
+  for (const ymlName of ['latest-linux.yml', 'latest-linux-arm64.yml']) {
+    const ymlPath = path.join(unpacked, ymlName)
+    if (!fs.existsSync(ymlPath)) { console.log('SKIP: ' + ymlName + ' 不存在（非 Linux 构建或未生成更新元数据）'); continue }
+    const text = fs.readFileSync(ymlPath, 'utf8')
+    let meta = null
+    if (yaml) { try { meta = yaml.load(text) } catch { meta = null } }
+    const ymlVersion = meta && meta.version || (text.match(/^version:\s*(\S+)/m) || [])[1]
+    if (ymlVersion && ymlVersion !== resPkgVersion) {
+      console.error(`FAIL: ${ymlName} version ${ymlVersion} != resources/package.json version ${resPkgVersion}（更新元数据与产物不一致）`)
+      process.exit(1)
+    }
+    // artifact refs: electron-builder uses files[].url (newer) or path (older)
+    const refs = new Set()
+    if (meta) {
+      for (const f of meta.files || []) if (f && f.url) refs.add(String(f.url))
+      if (meta.path) refs.add(String(meta.path))
+    }
+    if (!refs.size) { for (const m of text.matchAll(/^\s*(?:- )?url:\s*(\S+)/gm)) refs.add(m[1]) }
+    for (const ref of refs) {
+      const artPath = path.join(path.dirname(ymlPath), ref)
+      if (!fs.existsSync(artPath)) {
+        console.error(`FAIL: ${ymlName} 引用的产物 ${ref} 不在 ${path.dirname(ymlPath)}（自动更新会 404）`)
+        process.exit(1)
+      }
+    }
+    console.log(`OK: ${ymlName} version=${ymlVersion || '?'} ${refs.size} artifact ref(s) reconciled`)
+  }
+} catch (e) {
+  console.error('FAIL: linux 更新元数据校验异常: ' + (e && e.message))
   process.exit(1)
 }
 

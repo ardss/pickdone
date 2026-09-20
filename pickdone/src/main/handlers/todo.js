@@ -24,6 +24,8 @@ module.exports = function todoHandlers (ctx) {
   // purgeRecycleBin/purgeSeedTodos go through dedicated main-process channels below, not through this whitelist.
   const ALLOWED_RENDERER_OPS = new Set([
     'getById', 'getAll', 'queryTodos', 'getMeta', 'deleteMeta',
+    // CONTRACT (2026-09-20, F-UI): batch meta read (read-only, ANY window — replaces per-key getMeta loops)
+    'getMetaMany',
     'upsert', 'upsertMany', 'commitSyncBatch', 'hardDelete', 'hardDeleteMany', 'setMeta',
     'getAllCategories', 'upsertCategory',
     // Filter CRUD (filterUpsert/filterDelete are user-level safe writes, same as upsertCategory) + count reads
@@ -160,7 +162,10 @@ module.exports = function todoHandlers (ctx) {
       } catch (err) { log.warn('[Purge] 收集回收站行失败，仅删行:', err) }
       const r = dbm.call('purgeRecycleBin')
       purgeAttachmentFiles(attachDir, ids)
+      // M-4 (2026-09-20): mirror the GAP-B pattern — purge is a write; without the kick peers only
+      // saw emptied recycle bins at the next 5-min periodic round.
       scheduler.reloadAll(dbApi()); broadcastTodosChanged('purgeRecycleBin', e.sender)
+      if (notifySyncChange) notifySyncChange('purgeRecycleBin')
       return r
     },
     'db:purge-seed-todos': (e) => {
@@ -168,7 +173,9 @@ module.exports = function todoHandlers (ctx) {
       if (isLocked()) throw new Error('locked')
       const r = dbm.call('purgeSeedTodos')
       // Symmetric with purge-recycle-bin: purging demo data also refreshes the scheduler + broadcasts (once missing → other windows kept stale seed records and scheduled reminders still fired)
+      // M-4: same sync kick parity as purge-recycle-bin (GAP-B pattern).
       scheduler.reloadAll(dbApi()); broadcastTodosChanged('purgeSeedTodos', e.sender)
+      if (notifySyncChange) notifySyncChange('purgeSeedTodos')
       return r
     }
   }

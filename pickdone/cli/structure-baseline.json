@@ -1,6 +1,6 @@
 {
   "src/main/db.js": 961,
-  "renderer/js/store/todo.js": 766,
+  "renderer/js/store/todo.js": 782,
   "renderer/js/components/SideNav.vue": 986,
   "renderer/js/components/EditPanel.vue": 1032,
   "renderer/js/views/CalendarView.vue": 831,

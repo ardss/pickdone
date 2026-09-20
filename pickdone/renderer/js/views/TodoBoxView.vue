@@ -301,7 +301,7 @@ html[data-theme="dark"] .dropdown-select.is-open .dropdown-select__label { backg
 .todo-box-list .todo-box-list-item--is-drop{pointer-events:none}
 .todo-box-list .todo-box-list-item--is-drop:active,.todo-box-list .todo-box-list-item--is-drop:hover{background-color:var(--hover-bg)}
 .todo-box-list .todo-box-list-item--is-drag{background-color:var(--active-bg)}
-.todo-box-list .todo-box-list-item--selected,.todo-box-list .todo-box-list-item--selected:hover{background-color:#f5fafb}
+.todo-box-list .todo-box-list-item--selected,.todo-box-list .todo-box-list-item--selected:hover{background-color:var(--brand-light)}
 /* 裸文字按钮仅限待办箱条目（旧 scoped id）；回收站条目用原版药丸组（见 F2 补充） */
 .todo-box-list .todo-box-list-item__tools .btn{padding:0;color:var(--brand-dark);font-size: var(--fs-sm);background:none;border:none;cursor:pointer;transition:all .2s}
 .todo-box-list .todo-box-list-item__tools .btn:focus{outline:0}

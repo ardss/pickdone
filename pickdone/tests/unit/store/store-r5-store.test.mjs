@@ -253,10 +253,23 @@ test('P2-8 softDelete clears projectStatus/projectDeadline meta and prunes proje
     projectMeta: { 1: { status: 'paused' }, 2: { status: 'active' }, 5: { status: 'done' } }
   }
   const fakeThis = { commit: (type, payload) => categoryMutations.markCascade(state, payload) }
+  // seed the live project meta the backup path reads (otherwise there is nothing to back up)
+  const prevHandler = dbHandler
+  dbHandler = (op, params) => {
+    dbCalls.push([op, params])
+    if (op === 'getMeta' && params === 'projectStatus:1') return Promise.resolve('paused')
+    if (op === 'getMeta' && params === 'projectStatus:2') return Promise.resolve('active')
+    return Promise.resolve(null)
+  }
   categoryMutations.softDelete.call(fakeThis, state, 1)
+  // U-4: the backup→clear chain is async (read → write catProjectMetaBak.<id> → delete live keys)
+  await new Promise(r => setTimeout(r, 20))
   const metaDeletes = dbCalls.filter(c => c[0] === 'deleteMeta').map(c => c[1])
   assert.ok(metaDeletes.includes('projectStatus:1') && metaDeletes.includes('projectStatus:2'), 'projectStatus:<id> cleaned for every cascade victim')
   assert.ok(metaDeletes.includes('projectDeadline:1') && metaDeletes.includes('projectDeadline:2'), 'projectDeadline:<id> cleaned alongside')
+  assert.ok(metaDeletes.includes('projectMilestones:1') && metaDeletes.includes('projectMilestones:2'), 'milestones cleaned symmetrically')
+  assert.ok(dbCalls.some(c => c[0] === 'setMeta' && c[1][0] === 'catProjectMetaBak.1'), 'project meta backed up to the machine-local key before clearing')
+  dbHandler = prevHandler
   assert.deepEqual(state.projectIds, [5], 'deleted ids pruned from the project flag list')
   assert.equal(state.projectMeta[1], undefined)
   assert.equal(state.projectMeta[5].status, 'done', 'unrelated project meta untouched')

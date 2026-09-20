@@ -57,6 +57,21 @@ function sqliteHeaderOk (file) {
   } catch { return false }
 }
 
+/** M-1 (2026-09-20): make sure a stale db.key is OUT of the way before the restored (plaintext)
+ *  DB is reopened. Consistent with the plaintext-continuation contract ("a missing db.key leaves
+ *  the fresh DB plaintext-readable, same as a fresh install"): prefer renaming aside (preserves
+ *  forensic evidence), fall back to rename-with-.bad suffix, then to deletion. Returns true when
+ *  the key is gone or never existed; false when every strategy failed — the caller must then NOT
+ *  claim recovery success. Exported for unit tests (failure injection). */
+function quarantineKey (ud, stamp) {
+  const key = path.join(ud, 'db.key')
+  if (!fs.existsSync(key)) return true // already plaintext-continuation shaped
+  for (const suffix of ['.corrupt-' + stamp, '.bad-' + stamp]) {
+    try { fs.renameSync(key, key + suffix); return true } catch { /* locked/AV-held: try next strategy */ }
+  }
+  try { fs.rmSync(key, { force: true }); return !fs.existsSync(key) } catch { return false }
+}
+
 /** Tiered recovery of a corrupted DB: returns {source,label} (source ∈ 'plain-bak'|'json'|'transient'; null = nothing recoverable).
  *  source is the structured branch flag — display strings must never drive logic (a copy rewrite once silently killed the JSON branch). Corrupt files are always renamed and preserved, never deleted.
  *  P2 2026-09-19: an existence-only recoverable-source check used to rename a HEALTHY todos.db on a
@@ -110,10 +125,14 @@ function attemptDbRecovery (ud, retryInit) {
       return { source: 'error', label: 'corrupt DB could not be quarantined: ' + String(e && e.message || e) }
     }
   }
-  try { fs.renameSync(path.join(ud, 'db.key'), path.join(ud, 'db.key.corrupt-' + stamp)) } catch (e) {
-    // Key rename stays best-effort (a missing db.key leaves the fresh DB plaintext-readable, same
-    // as a fresh install) but it must not be silent.
-    logWarn('[dbRecovery] db.key rename failed (continuing, DB will be plaintext):', e && e.message)
+  if (!quarantineKey(ud, stamp)) {
+    // M-1 (2026-09-20): the old code treated a failed key rename as best-effort and continued —
+    // but the restored DB is PLAINTEXT while the stale db.key is still on disk, so the follow-up
+    // init at index.js reopened the restored DB with the OLD WRONG key, the decrypt probe failed,
+    // and the user got a "recovery succeeded" dialog while every launch kept failing. A stale key
+    // that cannot be moved or deleted is the same abort condition as a DB rename failure: report
+    // source:'error' so the caller shows a failure dialog instead of a false success.
+    return { source: 'error', label: 'stale db.key could not be quarantined (rename and delete both failed) — reopening the restored plaintext DB with the old key would fail every launch' }
   }
   pruneCorruptScenes(ud)
   if (jsonExists) return { source: 'json', label: 'disaster-backup JSON (fresh)' }
@@ -214,4 +233,4 @@ function writeCriticalStateBackupAtomic (ud, jsonText) {
   return dest
 }
 
-module.exports = { attemptDbRecovery, restoreTasksFromCriticalBackup, writeCriticalStateBackupAtomic, criticalBackupPath, restoreCategoriesFromCriticalBackup, restoreTomatoRecordsFromCriticalBackup }
+module.exports = { attemptDbRecovery, restoreTasksFromCriticalBackup, writeCriticalStateBackupAtomic, criticalBackupPath, restoreCategoriesFromCriticalBackup, restoreTomatoRecordsFromCriticalBackup, quarantineKey }

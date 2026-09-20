@@ -36,7 +36,7 @@
  *  - deviceId here is a GENERATED localStorage id (`gamification.deviceId`), NOT user.deviceId
  *    (which is the constant 'OFFLINE-DEVICE' for every install) and NOT the LAN-sync device id
  *    (which rotates on re-pairing and would orphan old delta keys). */
-import { loadLocalUser, safeSet } from '../utils/core.js'
+import { loadLocalUser, safeSet, getMetaManyWithFallback } from '../utils/core.js'
 
 const DELTA_PREFIX = 'gamification.delta.'
 const INDEX_KEY = 'gamification.delta.index'
@@ -206,8 +206,12 @@ export default {
         const baseMax = { snow: 0, tomatoGain: 0 }
         const entries = {}
         const markFolded = (k, s, t, gen) => { folded[k] = gen != null ? { s, t, gen } : { s, t } }
-        for (const k of keys) {
-          const d = readJson(await window.todoAPI.dbCall('getMeta', k), null)
+        // U-18: one batch read of the delta keys instead of an O(N) sequential getMeta loop
+        // (getMetaManyWithFallback keeps the per-key loop when the batch op is absent)
+        const deltaVals = await getMetaManyWithFallback(keys)
+        for (let ki = 0; ki < keys.length; ki++) {
+          const k = keys[ki]
+          const d = readJson(deltaVals[ki], null)
           // U2: null (not yet synced) or unreadable → leave unfolded, retry next init.
           if (!d || typeof d !== 'object' || Array.isArray(d)) continue
           if (d.base) {

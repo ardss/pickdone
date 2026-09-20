@@ -62,7 +62,15 @@ import i18n from './i18n/index.js'
 
 app.use(store)
 // Aux-window habit edits must feed back into main-window Vuex state, or the next main-window persist overwrites them with a stale copy (LWW)
-onExternalHabitBlob(blob => store.commit('habits/applyExternal', blob))
+// U-10: return whether the blob was accepted (applyExternal's savedAt guard) — the aux-relay only
+// writes the durable DB meta for ACCEPTED blobs, so a stale round can't clobber newer DB state
+onExternalHabitBlob(blob => {
+  const s = store.state.habits
+  if (!blob || !Array.isArray(blob.habits)) return false
+  if ((blob.savedAt || 0) < (s.savedAt || 0)) return false
+  store.commit('habits/applyExternal', blob)
+  return true
+})
 app.use(router)
 app.use(i18n)
 // vue-i18n@9 legacy:true only provides $t inside component instances; globalProperties needs explicit injection
@@ -181,6 +189,12 @@ async function bootstrap () {
     // Remote running-tomato chip: subscribe to 'tomato-announce' syncEvents + load snapshot
     store.dispatch('tomatoAnnounce/init').catch(() => {})
     import('./utils/tomatoEstimate.js').then(m => m.initFromDb(store.state.todo.todoList.map(t => t.taskId))).catch(() => {}) // Estimated tomatoes: backfill from meta when newer (same ledger as CLI setEstimate, 2026-09-03; Y: per-task key union over live ids)
+    // U-6 (2026-09-20): the todoBox difficulty sort reads estimates lazily (ensureEstimate read-through).
+    // When an async fetch lands, rebuild views once so the order corrects instead of staying stale until
+    // an unrelated rebuild (guarded by the sort mode — other sorts never read estimates).
+    import('./utils/tomatoEstimate.js').then(m => m.onEstimateFetched(() => {
+      if (store.state.settings.todoBoxSortMethod === 'difficulty') store.dispatch('todo/computeViews').catch(() => {})
+    })).catch(() => {})
     store.dispatch('filters/load').catch(() => {}) // Saved filters (smart lists)
     // Statutory holiday table (data source for repeat tasks "skip holidays / weekdays only") + lunar calendar library injection (lunar yearly repeats)
     store.commit('todo/setHolidayList', getHolidayList())
@@ -411,6 +425,10 @@ async function bootstrap () {
     // picks a new file (channel name fixed main-process-side); drop the player's permanent decode cache so the
     // new audio actually plays. Preload exposes onWhiteNoiseUpdated — guarded because older preload builds may
     // not whitelist the channel yet (in that case nothing subscribes and behavior is the old status quo).
+    // U-17 (2026-09-20): the abandon modal dispatches 'tomato-stop-noise'; wire it to the player so
+    // giving up from the modal stops the white noise immediately (the dispatch used to be dead code)
+    noisePlayer.listenStopNoiseEvent()
+
     if (typeof window.todoAPI.onWhiteNoiseUpdated === 'function') {
       window.todoAPI.onWhiteNoiseUpdated(d => {
         noisePlayer.invalidate(d && d.key)

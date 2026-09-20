@@ -390,7 +390,7 @@ export default {
         const r = dayjs(t.reminderTime)
         remind = dayjs(next).hour(r.hour()).minute(r.minute()).second(0).valueOf()
       }
-      await dispatch('addTodo', {
+      const nt = await dispatch('addTodo', {
         categoryId: t.categoryId,
         todoContent: t.taskContent,
         todoDescription: t.taskDescribe || '',
@@ -411,6 +411,12 @@ export default {
         todoSublist: t.subtasks ? (function(){try{return JSON.parse(t.subtasks)}catch{return[]}})().map(x => ({ ...x, checked: false })) : null,
         addToTop: false
       })
+      // U-1 (2026-09-20): the estimate column on the new row is write-once at the DB layer (the upsert
+      // ignores it for existing-style reasons) — the live value lives in the per-task meta key
+      // `tomatoEstimateState:<taskId>` (the field-granular syncable unit). Copy it there so the renewal
+      // keeps its estimated workload on BOTH ends (CLI twin: cli/lib.js renewal — F-Main's commit).
+      try { if (nt && nt.taskId) setEstimate(nt.taskId, t.estimate || 0) } catch (e) { /* estimate is advisory */ }
+      return nt
     },
     async reorderTodos ({ commit, dispatch }, updates) {
       const now = Date.now()
@@ -550,7 +556,7 @@ export default {
     /** Recycle bin auto-expiry purge: deleted rows past N days by deletion time (updateTime) are permanently deleted (N=0 never).
         Clock sanity check: when the system clock jumps back/forward more than 48h (BIOS battery loss, manual change), skip this round of auto purge,
         preventing the accident of "clock set to the future → startup hard-deletes the whole recycle bin" (finalized in the 2026-08-29 release review). */
-    async purgeExpiredRecycle ({ state, rootState, dispatch }) {
+    async purgeExpiredRecycle ({ state, rootState, dispatch }, { force = false } = {}) {
       const days = rootState.settings.recycleBinAutoDeleteDays
       if (!days) return
       const now = Date.now()
@@ -562,11 +568,21 @@ export default {
         console.warn('[todo] system clock rollback detected, skipping trash auto-purge this round')
         return
       }
-      try { localStorage.setItem('recycleLastPurgeAt', String(now)) } catch { /* ignore */ }
+      // U-8 (2026-09-20) same-day dedupe: computeViews dispatches this on every rebuild, so one day used
+      // to run the cutoff scan (and the pre-attempt stamp) many times. Once per LOCAL CALENDAR DAY is the
+      // semantic (not a 24h interval); `force` bypasses it for tests/manual triggers.
+      if (!force && lastPurgeAt && dayjs(lastPurgeAt).isSame(dayjs(), 'day')) return
       // Calendar-day basis: roll back N days from today at midnight, avoiding boundary drift from "deleted at an arbitrary moment"
       const cutoff = +dayjs().startOf('day').subtract(days, 'day')
       const ids = state.recycleList.filter(t => (t.deletedAt || t.updateTime || 0) < cutoff).map(t => t.taskId)
-      if (ids.length) await dispatch('purgeIds', ids)
+      try {
+        if (ids.length) await dispatch('purgeIds', ids)
+      } finally {
+        // U-8: the stamp moved AFTER the purge attempt — stamping up front meant a failed attempt (hardDelete
+        // errors) was recorded as done for the rest of the day and never retried. The attempt has now
+        // completed (success or its logged per-id failures), so the day is consumed either way.
+        try { localStorage.setItem('recycleLastPurgeAt', String(now)) } catch { /* ignore */ }
+      }
     },
 
     /* ---------- Undo/redo ---------- */

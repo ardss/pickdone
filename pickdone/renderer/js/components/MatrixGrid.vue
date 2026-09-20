@@ -50,7 +50,7 @@
 import { dayjs, FMT } from '../utils/core.js'
 import { chkColor, toggleTomatoAttach } from '../utils/taskRow.js'
 import { toggleCompleteWithUndo } from '../utils/completeAction.js'
-import { deleteWithUndo, moveWithUndo } from '../utils/confirm.js'
+import { deleteWithUndo, moveWithUndo, moveSnapshot } from '../utils/confirm.js'
 import { taskContextMenu } from '../utils/taskMenu.js'
 
 /* Quadrant titles store i18n keys (statsA.MatrixGrid.*), resolved with $t at render time (no component instance at module level) */
@@ -131,7 +131,7 @@ export default {
       if (!t || ((t.important || 0) === q.important && (t.urgent || 0) === q.urgent)) return
       // Drag-to-move contract: any field rewrite goes through moveWithUndo (undoable toast), never silent.
       // Snapshot the three affected fields (important/urgent/priority) so the revert restores the exact prior quadrant mapping.
-      const snap = { important: t.important || 0, urgent: t.urgent || 0, priority: t.priority }
+      const snap = moveSnapshot(t) // U-21: snapshot contract extracted (unit-tested)
       // Connect the ledgers: dragging to change quadrant syncs priority (important⇒high, non-important⇒low), consistent with EditPanel's reverse priority⇒important mapping
       moveWithUndo(this, {
         label: this.$t('statsJ.TodoItem.movedToQuadrant', { q: this.$t(q.titleKey) }),

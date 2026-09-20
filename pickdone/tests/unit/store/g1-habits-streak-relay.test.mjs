@@ -59,7 +59,9 @@ test('G1 habits [6]: storage relay applies the blob to Vuex state (hook), persis
   LS.habitsState = JSON.stringify({ schemaV: 1, habits: [{ id: 'aux-edit', records: {} }], moments: [], savedAt: 300 })
   LS[SYNC_KEY] = 'ping1'
   const applied = []
-  mod.onExternalHabitBlob(b => applied.push(b))
+  // U-10: the applier must RETURN whether the blob was accepted — the relay persists only accepted
+  // blobs to the durable DB (a stale round must not clobber newer DB state)
+  mod.onExternalHabitBlob(b => { applied.push(b); return true })
   listeners[0]({ key: SYNC_KEY })
   await new Promise(r => setTimeout(r, 10))
   assert.equal(applied.length, 1, 'the external blob was fed into the main Vuex state via the hook')

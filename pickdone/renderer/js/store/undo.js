@@ -64,11 +64,25 @@ export function historyUndoPop (s) {
   if (popped) s._histBytes = Math.max(0, (s._histBytes || 0) - popped.length)
 }
 
-export function historyRedoPop (s) { s.redoStack.pop() }
+export function historyRedoPop (s) {
+  const popped = s.redoStack.pop()
+  if (popped) s._histRedoBytes = Math.max(0, (s._histRedoBytes || 0) - popped.length)
+}
+
+/** U-9 (2026-09-20): the redo stack gets the same dual budget as the undo stack — entries cap + byte
+ *  budget (tracked in _histRedoBytes). Previously only the entry cap applied, so redo snapshots
+ *  (each ~1MB with a thousand tasks) sat resident unbounded. */
+function evictRedoOverflow (s) {
+  while (s.redoStack.length > 1 && (s.redoStack.length > HISTORY_LIMIT || (s._histRedoBytes || 0) > HISTORY_BYTES)) {
+    s._histRedoBytes = Math.max(0, (s._histRedoBytes || 0) - s.redoStack[0].length)
+    s.redoStack.shift()
+  }
+}
 
 export function historyRedoPush (s, snap) {
   s.redoStack.push(snap)
-  if (s.redoStack.length > HISTORY_LIMIT) s.redoStack.shift()
+  s._histRedoBytes = (s._histRedoBytes || 0) + snap.length
+  evictRedoOverflow(s)
 }
 
 /* ---------- Time travel (undo/redo) + snapshot-diff persistence ---------- */

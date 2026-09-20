@@ -295,6 +295,11 @@ function createAttachmentPuller (opts = {}) {
   function markFailed (id) {
     if (failedSet instanceof Map) failedSet.set(id, Date.now())
     else failedSet.add(id)
+    // M-8 (2026-09-20): when the failing file is the one currently being received (hash mismatch
+    // or write failure), REFUND its reserved size from the round byte budget — the transfer is
+    // dead, the reserved bytes were never landed, and without the refund one bad file shrank the
+    // budget for every later file in the round by up to maxFileBytes.
+    if (current && String(id) === current.id) receivedBytes = Math.max(0, receivedBytes - current.size)
     current = null
   }
 

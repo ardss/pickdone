@@ -42,6 +42,21 @@ function claimPhase (status, startedAt) {
  *  writes a row the renderer then ignores/never shows, i.e. silently dropped focus minutes). A dead or
  *  missing target resolves to null = the focus is accounted as free (no task association, no bumpSnow),
  *  removing any dependency on the main process's bumpSnow return value. */
+/** U-11 (2026-09-20): idempotent today-counter bump for completeFocus. The counter patch sits in the
+ *  same try block as later side effects (sound/notification); a mid-way failure releases the phase
+ *  claim and the next tick retries the whole completion — the old unguarded increment then double-bumped
+ *  todayTomatoCount for the same focus (same startedAt). The guard keys on the phase identity, mirroring
+ *  the claim token, so a retry counts the focus exactly once. Pure (unit-tested): returns the patch to
+ *  commit, or null when this focus was already counted. */
+export function todayCountPatch (state, startedAt, endTs) {
+  if (state._countedFocus === startedAt) return null
+  return {
+    todayTomatoCount: (state.todayTomatoCount || 0) + 1,
+    _countDate: dayjs(endTs).format(FMT.date),
+    _countedFocus: startedAt
+  }
+}
+
 export function resolveFocusedTask (attachTodo, todoRows) {
   if (!attachTodo || !attachTodo.taskId) return null
   const row = (todoRows || []).find(t => t && t.taskId === attachTodo.taskId)
@@ -507,7 +522,10 @@ export default {
         })
         {
           // 计入完成时刻所在日,与 stats/时间轴的 endTime 口径一致(2026-09-04 清理:原跨午夜判断是 endTs 与自身比较的恒真式,已删)
-          commit('patch', { todayTomatoCount: (s.todayTomatoCount || 0) + 1, _countDate: dayjs(endTs).format(FMT.date) })
+          // U-11: idempotent per startedAt — the retry path (claim released after a mid-way failure)
+          // must not double-bump todayTomatoCount for the same focus
+          const countPatch = todayCountPatch(s, startedAt, endTs)
+          if (countPatch) commit('patch', countPatch)
         }
         dispatch('auth/saveSnowGain', focusMin, { root: true })
         if (focused) {

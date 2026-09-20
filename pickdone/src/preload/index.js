@@ -15,6 +15,8 @@ contextBridge.exposeInMainWorld('todoAPI', {
 
   // ---- Database (same as the reference todo-db:call) ----
   dbCall: (op, params) => invoke('todo-db:call', op, params),
+  // CONTRACT (2026-09-20, F-UI): batch meta read — getMetaMany(['a','b']) → [{key,value|null}] aligned to input order
+  getMetaMany: keys => invoke('todo-db:call', 'getMetaMany', keys),
   // Dangerous purge goes through a dedicated channel (bypasses the todo-db:call op whitelist; executed inside the main process)
   purgeRecycleBin: () => invoke('db:purge-recycle-bin'),
   purgeSeedTodos: () => invoke('db:purge-seed-todos'),
