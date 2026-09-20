@@ -153,12 +153,14 @@ function hydrateRow (state, ptr, cache) {
     if (ptr.entity === 'plan') {
       const p = c.plan(ptr.entityId)
       if (!p) return { ...base, deleted: true, deletedAt: ptr.ts, data: null }
-      return { ...base, updatedAt: ptr.ts, deleted: false, deletedAt: 0, data: p }
+      // F3a (2026-09-20): planAll now SELECTs updatedAt — use the chip's real age so LWW works.
+      return { ...base, updatedAt: p.updatedAt || ptr.ts, deleted: false, deletedAt: 0, data: p }
     }
     if (ptr.entity === 'filter') {
       const f = c.filter(ptr.entityId)
       if (!f) return { ...base, deleted: true, deletedAt: ptr.ts, data: null }
-      return { ...base, updatedAt: ptr.ts, deleted: false, deletedAt: 0, data: f }
+      // F3b (2026-09-20): filterList now carries updatedAt — same LWW-age fix as plan.
+      return { ...base, updatedAt: f.updatedAt || ptr.ts, deleted: false, deletedAt: 0, data: f }
     }
   } catch (e) { log.warn('[LanSync] hydrate failed for', ptr.entity, ptr.entityId, e.message) }
   return null
@@ -331,16 +333,15 @@ function applyRowInner (state, incoming) {
     const c = cache.category(incoming.id)
     if (c) localRow = { updatedAt: c.updatedAt || 0, deleted: false, deletedAt: 0, data: c }
   } else if (entity === 'plan') {
-    // planAll/filterList do not SELECT updatedAt (db.js), so the local LWW age is UNKNOWN, not 0.
-    // An honest LWW is impossible across that domain: treating unknown as 0 makes every remote
-    // row (ts > 0) win, so two devices ping-pong plan/filter edits every round, each clobbering
-    // the other newer state. ageUnknown rows are therefore SKIPPED for live-row writes
-    // (conservative); tombstones still land (deletion propagation is strictly safer).
+    // F3a (2026-09-20): planAll SELECTs updatedAt now, so the local LWW age is KNOWN and the old
+    // ageUnknown refusal (which silently dropped every peer edit for an existing chip) is gone.
+    // tombstones from pre-fix rows (updatedAt column default 0) still lose only against ts > 0.
     const c = cache.plan(incoming.id)
-    if (c) localRow = { updatedAt: 0, deleted: false, deletedAt: 0, ageUnknown: true, data: c }
+    if (c) localRow = { updatedAt: c.updatedAt || 0, deleted: false, deletedAt: 0, data: c }
   } else if (entity === 'filter') {
+    // F3b (2026-09-20): same updatedAt exposure for filters — known local age, real LWW.
     const f = cache.filter(incoming.id)
-    if (f) localRow = { updatedAt: 0, deleted: false, deletedAt: 0, ageUnknown: true, data: f }
+    if (f) localRow = { updatedAt: f.updatedAt || 0, deleted: false, deletedAt: 0, data: f }
   }
   // Symmetric tie-breaks (merge.mjs compareRecency): the local side must carry THIS device's
   // id so a full LWW tie resolves to the same winner on both peers instead of flip-flopping
@@ -466,6 +467,20 @@ function applyRowInner (state, incoming) {
     }
     if (!winner.data) return false
     state.pendingWrites.tomatoes.push(winner.data)
+  } else if (entity === 'category' && winner.deleted) {
+    // F2 (2026-09-20): category tombstone landing. Hydrated deleted categories are
+    // {deleted:true, data:null} and the old branch required winner.data, so a peer's deletion
+    // NEVER landed here. Land it through the bulk buffer as a row-shape tombstone: upsertCategory
+    // preserves an explicit deletedAt/updatedAt, so merge ordering metadata survives the hop, and
+    // its identical-content no-op makes a re-landed tombstone idempotent (no re-stamp, no echo).
+    if (!localRow) return true // ghost tombstone: we never had the category — applied, no write
+    state.pendingWrites.categories.push({
+      id: incoming.id,
+      deleted: 1,
+      deletedAt: winner.deletedAt || incoming.deletedAt || 0,
+      updatedAt: winner.updatedAt || incoming.updatedAt || 0,
+    })
+    return true
   } else if (entity === 'category' && winner.data) {
     // Bulk-buffered (2026-09-18): a first-sync snapshot can carry hundreds of categories —
     // one commit per row starved rounds the same way todos did before the write buffer.
