@@ -223,8 +223,7 @@ function init (userDataPath) {
   try {
     initInner(userDataPath)
   } catch (e) {
-    // Never leave a half-open handle behind: the reset-data flow and recovery flow both rely on
-    // unlinking/reopening after a failed init (an open handle made unlink EPERM on Windows before)
+    // Never leave a half-open handle behind: the reset-data flow and recovery flow both rely on unlinking/reopening after a failed init (an open handle made unlink EPERM on Windows before)
     try { if (db) db.close() } catch {}
     db = null
     stmtsClearAll()
@@ -250,8 +249,7 @@ function initInner (userDataPath) {
   if (hadKeyFile) db.pragma(`key='${key}'`)
   // Protection: explicit read probe (journal_mode does not necessarily throw on a wrong key — actual decryption happens on the first page read)
   try { db.prepare('SELECT count(*) FROM sqlite_master').get() } catch (e) {
-    // Close the half-open handle before surfacing the error: the reset-data flow closes+unlinks the DB files
-    // and an open handle made unlink fail with EPERM on Windows, silently skipping the data destruction (2026-09-09)
+    // Close the half-open handle before surfacing the error: the reset-data flow closes+unlinks the DB files; an open handle made unlink fail with EPERM on Windows, silently skipping the data destruction (2026-09-09)
     try { db.close() } catch {}
     db = null
     if (!hadKeyFile) throw new Error(i18nM.mt('dbEncNoKey'))
@@ -312,9 +310,7 @@ function initInner (userDataPath) {
     } },
     { v: 4, fn: d => { const c=d.prepare('PRAGMA table_info(todos)').all().map(x=>x.name); if(!c.includes('predecessors')) d.exec('ALTER TABLE todos ADD COLUMN predecessors TEXT'); return true } },
     { v: 5, fn: d => {
-      // P1 sync groundwork (2026-09-15): tombstone + updatedAt columns on every synced table.
-      // Only todos carried updatedAt/deletedAt before; filters/plan_chips/tomato_records deletes were
-      // physical (unpropagatable) and categories had no change timestamp. Defaults keep existing rows.
+      // P1 sync groundwork (2026-09-15): tombstone + updatedAt columns on every synced table. Only todos carried updatedAt/deletedAt before; filters/plan_chips/tomato_records deletes were physical (unpropagatable) and categories had no change timestamp. Defaults keep existing rows.
       const want = {
         categories: ['deletedAt INTEGER NOT NULL DEFAULT 0', 'updatedAt INTEGER NOT NULL DEFAULT 0'],
         filters: ['deleted INTEGER NOT NULL DEFAULT 0', 'deletedAt INTEGER NOT NULL DEFAULT 0', 'updatedAt INTEGER NOT NULL DEFAULT 0'],
@@ -357,9 +353,7 @@ function initInner (userDataPath) {
   }
 
   // ===== Encryption finalization (runs after schema migration completes) =====
-  // The key is stored as db.key in the same directory (the CLI opening in the same directory is automatically compatible). Threat model: prevents the single
-  // todos.db file from being read directly by sync drives/copies/forensic tools; the key lives on the same machine, so "entire userData readable" is not covered.
-  // Both fresh installs (empty DB) and existing DBs (after schema migration) reach here and uniformly switch to the encrypted state.
+  // The key is stored as db.key in the same directory (the CLI opening in the same directory is automatically compatible). Threat model: prevents the single todos.db file from being read directly by sync drives/copies/forensic tools; the key lives on the same machine, so "entire userData readable" is not covered. Both fresh installs (empty DB) and existing DBs (after schema migration) reach here and uniformly switch to the encrypted state.
   if (!hadKeyFile) {
     key = crypto.randomBytes(32).toString('hex')
     if (preSchemaTables > 0) {
@@ -434,8 +428,7 @@ function queryTodos ({ deleted = 0, complete = null, categoryId = null, repeatId
     if (!cols.has(part[0]) || (part[1] && !/^(ASC|DESC)$/i.test(part[1]))) throw new Error('queryTodos: 非法 orderBy: ' + orderBy)
   }
   sql += ` ORDER BY ${orderBy}`
-  // F2 fix: `if (limit)` made limit=0 fail-open (0 === unlimited, while negatives threw) — validate on
-  // presence (null/undefined only), so 0 is an explicit "zero rows" and all invalid values fail closed.
+  // F2 fix: `if (limit)` made limit=0 fail-open (0 === unlimited, while negatives threw) — validate on presence (null/undefined only), so 0 is an explicit "zero rows" and all invalid values fail closed.
   if (limit !== null && limit !== undefined) { const n = Number(limit); if (!Number.isFinite(n) || n < 0) throw new Error('queryTodos: invalid limit'); sql += ' LIMIT ' + n }
   return db.prepare(sql).all(p).map(rowToTodo)
 }
@@ -455,8 +448,7 @@ const OPS = {
   // Atomic sync-commit (W3 2026-09-12): row upserts + todosVersion cursor advance in ONE transaction. Why atomic: writing rows with status='sync' non-atomically and crashing between the upserts and the setMeta would leave rows marked 'sync' in the DB while todosVersion stayed behind — the dirty-row filter (status !== 'sync') would then skip them forever and the cursor would never advance again =
   // silent permanent non-convergence. Inside one transaction the crash outcome is all-or-nothing: either the whole batch is re-sent on restart (old dirty semantics) or fully acknowledged (new semantics) — no intermediate state. Rows arrive in store shape; the DB layer forces status='sync' so a compromised renderer cannot write arbitrary status values through this op.
   commitSyncBatch: ({ rows, version }) => {
-    // The cursor is the convergence lynchpin — a non-numeric value (String(undefined) etc.) would
-    // poison state.version with NaN on the next boot's parseInt. Fail closed at the DB layer.
+    // The cursor is the convergence lynchpin — a non-numeric value (String(undefined) etc.) would poison state.version with NaN on the next boot's parseInt. Fail closed at the DB layer.
     const v = Number(version)
     if (!Number.isFinite(v) || v < 0) throw new Error('[TodoDB] commitSyncBatch: invalid version ' + String(version))
     if (!Array.isArray(rows)) {
@@ -464,11 +456,9 @@ const OPS = {
       // writing zero rows — dirty rows after it would never be re-sent (silent non-convergence)
       throw new Error('[TodoDB] commitSyncBatch: rows must be an array, got ' + typeof rows)
     }
-    // Version monotonic fence (round-8 audit P1): a stale retry batch (lower v) must not roll back
+    // Version monotonic fence (round-8 audit P1→P0 fix): a stale retry batch (lower v) must not roll back
     // the cursor or re-ack rows that a newer batch already confirmed — otherwise edits made between
-    // the two attempts get frozen as stale 'sync' content (B3 P1 scenario)
-    // Version monotonic fence (round-8 audit P1→P0 fix): a stale retry batch (lower v) must not
-    // roll back the cursor or re-ack rows that a newer batch already confirmed. Uses .get() (SELECT
+    // the two attempts get frozen as stale 'sync' content (B3 P1 scenario). Uses .get() (SELECT
     // returns {value} shape) — the original .run() returned a write-result object whose Number() was
     // NaN → || 0 → cur was always 0 and the fence was dead code (Z2 probe confirmed).
     const curRow = stmts.getMeta.get('todosVersion')
@@ -621,10 +611,14 @@ const OPS = {
       // Un-deletes on conflict are intentional, so a resurrected tombstone still writes.
       const cur = db.prepare('SELECT name, conds, sort, deleted FROM filters WHERE id = ?').get(f.id)
       if (cur && cur.deleted === 0 && cur.name === name && cur.conds === conds && cur.sort === (f.sort || 0)) return false
-      db.prepare('UPDATE filters SET name=?, conds=?, sort=?, deleted=0, deletedAt=0, updatedAt=? WHERE id=?').run(name, conds, f.sort || 0, Date.now(), f.id)
+      // M2 (2026-09-20): preserve an explicit updatedAt (sync apply carries the peer row's LWW age)
+      // instead of re-stamping now() — same rationale as planAddMany above. Renderer callers omit it and get now().
+      const stamp = Number(f.updatedAt) > 0 ? Number(f.updatedAt) : Date.now()
+      db.prepare('UPDATE filters SET name=?, conds=?, sort=?, deleted=0, deletedAt=0, updatedAt=? WHERE id=?').run(name, conds, f.sort || 0, stamp, f.id)
       return f.id
     }
-    const r = db.prepare('INSERT INTO filters (name, conds, sort, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?)').run(name, conds, f.sort || 0, Date.now(), Date.now())
+    const stamp = Number(f && f.updatedAt) > 0 ? Number(f.updatedAt) : Date.now()
+    const r = db.prepare('INSERT INTO filters (name, conds, sort, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?)').run(name, conds, f.sort || 0, Date.now(), stamp)
     return Number(r.lastInsertRowid)
   },
   filterDelete: id => { db.prepare('UPDATE filters SET deleted=1, deletedAt=?, updatedAt=? WHERE id = ?').run(Date.now(), Date.now(), id); return true },
@@ -690,8 +684,8 @@ const OPS = {
   // ===== Plan chips (timeline planning layer) formal row storage (2026-09-03 root fix) =====
   // Previously meta.dayPlanState JSON whole-package + LS dual-write with three-way concurrency — the architectural root of four data-loss incidents;
   // with row storage there is a single write channel (SQLite serialized) + write-op broadcast + cascading cleanup on task deletion, so the race is structurally eliminated.
-  // plan_chips deletes are tombstones (P1 sync groundwork): user-facing chip removals must propagate
-  // to other devices. planPrune is time-based GC (old days fall off) and stays physical — devices
+  // plan_chips deletes are tombstones (P1 sync groundwork): user-facing chip removals must propagate to other devices.
+  // planPrune is time-based GC (old days fall off) and stays physical — devices
   // reconcile pruned history via periodic full snapshots, so tombstoning it would only grow the table.
   // H2 2026-09-16: sort was missing from the snapshot SELECT — the snapshot/restore round-trip lost
   // chip ordering and restore's ON CONFLICT upsert then overwrote sort with 0.
@@ -707,11 +701,16 @@ const OPS = {
       /^\d{4}-\d{2}-\d{2}$/.test(String(c.day)) && /^([01]\d|2[0-3]):[0-5]\d$/.test(String(c.mm)))
       .map(c => ({
         id: (c && c.id) || 'pl_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
-        taskId: String(c.taskId || ''), day: String(c.day || ''), mm: String(c.mm || ''), sort: Number(c.sort) || 0
+        taskId: String(c.taskId || ''), day: String(c.day || ''), mm: String(c.mm || ''), sort: Number(c.sort) || 0,
+        // M2 (2026-09-20): an explicit updatedAt (the sync apply path carries the peer row's age)
+        // must survive — re-stamping now() here made the applied chip differ from the peer's row
+        // (fresh LWW age + a new oplog delta per applied chip = apply/push ping-pong). Mirrors
+        // upsertCategory's `(c && c.updatedAt) || now`; renderer callers omit it and get now().
+        updatedAt: Number(c && c.updatedAt) > 0 ? Number(c.updatedAt) : 0
       }))
     const ins = db.prepare('INSERT INTO plan_chips (id, taskId, day, mm, sort, deleted, deletedAt, updatedAt) VALUES (@id,@taskId,@day,@mm,@sort,0,0,@updatedAt) ON CONFLICT(id) DO UPDATE SET taskId=excluded.taskId, day=excluded.day, mm=excluded.mm, sort=excluded.sort, deleted=0, deletedAt=0, updatedAt=excluded.updatedAt')
     const now = Date.now()
-    const tr = db.transaction(() => list.forEach(c => ins.run({ ...c, updatedAt: now }))); tr()
+    const tr = db.transaction(() => list.forEach(c => ins.run({ ...c, updatedAt: c.updatedAt || now }))); tr()
     return list.map(c => c.id)
   },
   planUpdateChip: ({ id, day, mm }) => {
@@ -876,6 +875,7 @@ const OPS = {
   settingsRowDelete: p => syncSchema.rowDelete(p),
   upsertCategoryMany: makeBulkOps.upsertCategoryMany,
   filterUpsertMany: makeBulkOps.filterUpsertMany,
+  categoriesAllRows: makeBulkOps.categoriesAllRows, planTombstones: makeBulkOps.planTombstones, filterTombstones: makeBulkOps.filterTombstones, // sync-side raw reads (M1/M3) — main-internal, NOT renderer-callable
 syncOplogSince: ({ sinceSeq = 0, limit = 2000 } = {}) => db.prepare('SELECT seq, entity, entityId, ts FROM sync_oplog WHERE seq > ? ORDER BY seq ASC LIMIT ?').all(Number(sinceSeq) || 0, Math.max(1, Math.min(10000, Math.floor(Number(limit) || 2000)))),
   // P3a LAN sync ops (2026-09-16): delegates into db-sync-ops.js (gate: ops must exist here; impl lives in lan-sync-bootstrap.js)
   syncGetSettings: p => require('./db-sync-ops').dispatch('syncGetSettings', p),

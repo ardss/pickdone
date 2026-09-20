@@ -47,6 +47,8 @@ const isMachineLocalMetaKey = id => {
     k.startsWith('cliTomato') || k === 'todosVersion' || k.startsWith('firedReminders:') ||
     k === 'reminderLastSeenAt' || k.startsWith('settingsRows.src.') ||
     k === 'db.tomatoState' || k === 'habitsState' ||
+    // M4 (2026-09-20): snowDedup:<task>:<key> = per-device dedup watermarks (bumpSnow), not data.
+    k.startsWith('snowDedup:') ||
     // P1-5 (2026-09-19 data-safety round): meta LWW conflict backups are per-device recovery
     // copies of a LOSING local edit — they must stay local (syncing them would make the peer
     // apply the loser as a live value and mint its own backup of the backup, forever).
@@ -86,9 +88,18 @@ function createHydrationCache (state) {
     setting: key => load('setting', 'settingsRowsAll', r => r.key).get(key),
     tomato: id => load('tomato', 'tomatoAll', r => String(r.tomatoId)).get(String(id)),
     tomatoTomb: id => load('tomatoTomb', 'tomatoTombstones', r => String(r.tomatoId)).get(String(id)),
-    category: id => load('category', 'getAllCategories', r => String(r.categoryId)).get(String(id)),
+    // M1 (2026-09-20): categories read RAW ROW shape (categoriesAllRows, tombstones included) —
+    // the hydrated app shape (categoryName/...) has no row columns, so pushing it through
+    // upsertCategoryMany threw "Invalid value" in better-sqlite3 and flushOne dropped the whole
+    // categories buffer (category sync never landed); it also had no updatedAt (snapshot age 0).
+    category: id => load('category', 'categoriesAllRows', r => String(r.id)).get(String(id)),
     plan: id => load('plan', 'planAll', r => String(r.id)).get(String(id)),
     filter: id => load('filter', 'filterList', r => String(r.id)).get(String(id)),
+    // M3 (2026-09-20): tombstone reads — a LOCALLY deleted plan/filter must take part in inbound
+    // LWW like a settings/tomato tombstone, otherwise ANY peer live row (even older) resurrects
+    // it (categories need no separate read: categoriesAllRows carries their tombstones).
+    planTomb: id => load('planTomb', 'planTombstones', r => String(r.id)).get(String(id)),
+    filterTomb: id => load('filterTomb', 'filterTombstones', r => String(r.id)).get(String(id)),
     // meta is a KV table (no updatedAt column): the row value reads per key, and the local LWW
     // age for a key is the latest LOCAL oplog ts for it (one paged oplog scan per pass, cached).
     meta: key => state.db.call('getMeta', key),
@@ -147,19 +158,27 @@ function hydrateRow (state, ptr, cache) {
       return { ...base, updatedAt: r.updatedAt || ptr.ts, deleted: false, deletedAt: 0, data: r }
     }
     if (ptr.entity === 'category') {
+      // M1 (2026-09-20): data is the RAW ROW shape (see the cache comment) — the apply path
+      // pushes it straight through upsertCategory, which binds the row columns. A locally
+      // tombstoned row hydrates as a tombstone with its real age (M3/LWW).
       const cat = c.category(ptr.entityId)
-      if (!cat) return { ...base, deleted: true, deletedAt: ptr.ts, data: null } // tombstone hydration gap (see bootstrap header)
+      if (!cat || cat.deleted) return { ...base, updatedAt: (cat && cat.updatedAt) || ptr.ts, deleted: true, deletedAt: (cat && cat.deletedAt) || ptr.ts, data: null }
       return { ...base, updatedAt: cat.updatedAt || ptr.ts, deleted: false, deletedAt: 0, data: cat }
     }
     if (ptr.entity === 'plan') {
-      const p = c.plan(ptr.entityId)
+      // M3: a pointer for a locally deleted chip hydrates from planTombstones with its real age
+      // so the deletion (not a fake ptr.ts age) participates in egress LWW.
+      const p = c.plan(ptr.entityId) || c.planTomb(ptr.entityId)
       if (!p) return { ...base, deleted: true, deletedAt: ptr.ts, data: null }
+      if (p.deleted) return { ...base, updatedAt: p.updatedAt || ptr.ts, deleted: true, deletedAt: p.deletedAt || ptr.ts, data: null }
       // F3a (2026-09-20): planAll now SELECTs updatedAt — use the chip's real age so LWW works.
       return { ...base, updatedAt: p.updatedAt || ptr.ts, deleted: false, deletedAt: 0, data: p }
     }
     if (ptr.entity === 'filter') {
-      const f = c.filter(ptr.entityId)
+      // M3: same tombstone-aware hydration as plan.
+      const f = c.filter(ptr.entityId) || c.filterTomb(ptr.entityId)
       if (!f) return { ...base, deleted: true, deletedAt: ptr.ts, data: null }
+      if (f.deleted) return { ...base, updatedAt: f.updatedAt || ptr.ts, deleted: true, deletedAt: f.deletedAt || ptr.ts, data: null }
       // F3b (2026-09-20): filterList now carries updatedAt — same LWW-age fix as plan.
       return { ...base, updatedAt: f.updatedAt || ptr.ts, deleted: false, deletedAt: 0, data: f }
     }
@@ -335,18 +354,32 @@ function applyRowInner (state, incoming) {
       if (t) localRow = { updatedAt: t.updatedAt || 0, deleted: true, deletedAt: t.deletedAt || 0, data: null }
     }
   } else if (entity === 'category') {
-    const c = cache.category(incoming.id)
-    if (c) localRow = { updatedAt: c.updatedAt || 0, deleted: false, deletedAt: 0, data: c }
+    // M1/M3 (2026-09-20): categoriesAllRows is the raw ROW table (tombstones included), so a
+    // LOCALLY deleted category takes part in LWW — previously it read as absent (getAllCategories
+    // hides deleted rows) and ANY inbound live row, even older, resurrected it.
+    const r = cache.category(incoming.id)
+    if (r && !r.deleted) localRow = { updatedAt: r.updatedAt || 0, deleted: false, deletedAt: 0, data: r }
+    else if (r) localRow = { updatedAt: r.updatedAt || 0, deleted: true, deletedAt: r.deletedAt || 0, data: null }
   } else if (entity === 'plan') {
     // F3a (2026-09-20): planAll SELECTs updatedAt now, so the local LWW age is KNOWN and the old
     // ageUnknown refusal (which silently dropped every peer edit for an existing chip) is gone.
     // tombstones from pre-fix rows (updatedAt column default 0) still lose only against ts > 0.
+    // M3: tombstone fallback — a locally deleted chip must hold delete-wins against older peers.
     const c = cache.plan(incoming.id)
     if (c) localRow = { updatedAt: c.updatedAt || 0, deleted: false, deletedAt: 0, data: c }
+    else {
+      const t = cache.planTomb(incoming.id)
+      if (t) localRow = { updatedAt: t.updatedAt || 0, deleted: true, deletedAt: t.deletedAt || 0, data: null }
+    }
   } else if (entity === 'filter') {
     // F3b (2026-09-20): same updatedAt exposure for filters — known local age, real LWW.
+    // M3: tombstone fallback, same rationale as plan.
     const f = cache.filter(incoming.id)
     if (f) localRow = { updatedAt: f.updatedAt || 0, deleted: false, deletedAt: 0, data: f }
+    else {
+      const t = cache.filterTomb(incoming.id)
+      if (t) localRow = { updatedAt: t.updatedAt || 0, deleted: true, deletedAt: t.deletedAt || 0, data: null }
+    }
   }
   // Symmetric tie-breaks (merge.mjs compareRecency): the local side must carry THIS device's
   // id so a full LWW tie resolves to the same winner on both peers instead of flip-flopping
@@ -412,10 +445,17 @@ function applyRowInner (state, incoming) {
       // keys (tomatoRunAnnounce.*) are ephemeral runtime state — no backup for those. A null
       // loser value means the key was ABSENT locally (mergeTodoRows fabricates a data=null
       // localRow) — nothing was lost, no backup.
-      if (!require('./tomato-announce').isAnnounceKey(incoming.id) && conflictCopy.data.value != null) {
-        writeMetaConflictBackup(state, String(incoming.id), conflictCopy.data.value)
+      // M5 (2026-09-20): gamification.* keys are per-device COUNTERS/bookkeeping (delta indexes,
+      // streak caches), not user documents — a losing overwrite is routine bookkeeping churn, so
+      // minting metaConflictBackup.* copies (and toasting about it) for them was pure noise. The
+      // whole namespace is exempt from BOTH backup and conflict toast; it is already invisible to
+      // the backup-recovery list because the backups are simply never written.
+      const bk = String(incoming.id)
+      const isBookkeeping = bk.startsWith('gamification')
+      if (!isBookkeeping && !require('./tomato-announce').isAnnounceKey(bk) && conflictCopy.data.value != null) {
+        writeMetaConflictBackup(state, bk, conflictCopy.data.value)
       }
-      markConflict(state, 'meta', incoming.id, true)
+      if (!isBookkeeping) markConflict(state, 'meta', incoming.id, true)
     } else {
       log.warn('[LanSync] conflict on', entity, incoming.id, '— local copy superseded (conflict-copy UI deferred)')
       // P1-5: non-todo losers are applied wholesale (LWW) — tell the user the peer's version won
@@ -489,7 +529,27 @@ function applyRowInner (state, incoming) {
   } else if (entity === 'category' && winner.data) {
     // Bulk-buffered (2026-09-18): a first-sync snapshot can carry hundreds of categories —
     // one commit per row starved rounds the same way todos did before the write buffer.
-    state.pendingWrites.categories.push({ ...winner.data, id: winner.data.categoryId })
+    // M1 (2026-09-20): the payload is the RAW ROW shape (see hydrateRow) and must stay that way —
+    // upsertCategory binds @name/@color/@createdAt/... and the old hydrated app shape
+    // (categoryName/...) made better-sqlite3 throw "Invalid value", so flushOne dropped the WHOLE
+    // categories buffer and category sync never landed. Normalize defensively anyway (an older
+    // peer may still push the app shape) and preserve the winner's updatedAt like upsertCategory
+    // does for explicit stamps — re-stamping now() would mint a fresh oplog delta per applied
+    // row (ping-pong fuel, same shape as planAddMany's M2).
+    const d = winner.data
+    state.pendingWrites.categories.push({
+      id: d.id != null ? d.id : d.categoryId,
+      userId: d.userId,
+      name: d.name != null ? d.name : d.categoryName,
+      color: d.color != null ? d.color : d.categoryColor,
+      createdAt: d.createdAt != null ? d.createdAt : d.createTime,
+      sort: d.sort != null ? d.sort : d.listSort,
+      isFolder: (d.isFolder != null ? d.isFolder : d.folderIs) ? 1 : 0,
+      parentId: d.parentId != null ? d.parentId : (d.folderId || 0),
+      deleted: 0,
+      deletedAt: 0,
+      updatedAt: d.updatedAt || winner.updatedAt || 0,
+    })
   } else if (entity === 'plan') {
     if (incoming.deleted) {
       // Ghost-tombstone guard (2026-09-19 live storm): a plan pointer whose chip planAll cannot
