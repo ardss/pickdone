@@ -151,8 +151,12 @@ function parseTomatoMetaBlob (text) {
  *  - raw missing / already consumed / locked / window or webContents missing-or-destroyed → state untouched, sent:false (next poll retries)
  *  - seq <= lastTomatoSeq (already delivered) → raw marked consumed, sent:false
  *  - send() succeeds → lastTomatoSeq advances to cmd.seq and raw is consumed; send throwing propagates to the caller's catch without advancing anything
+ *  - clearCmd(cmd) (optional, round-1 P0 2026-09-21): invoked after a successful send so the
+ *    caller can delete the cliTomatoCmd slot — without it a handled command re-executed on every
+ *    app restart (lastTomatoSeq restarted at 0 per process). Compare-and-delete lives caller-side
+ *    so this pure function stays free of db dependencies.
  *  Returns { lastTomatoCmdRaw, lastTomatoSeq, sent, cmd }. */
-function tryForwardTomatoCmd ({ raw, lastTomatoCmdRaw, lastTomatoSeq, getMainWindow, isLocked }) {
+function tryForwardTomatoCmd ({ raw, lastTomatoCmdRaw, lastTomatoSeq, getMainWindow, isLocked, clearCmd }) {
   const untouched = { lastTomatoCmdRaw, lastTomatoSeq, sent: false, cmd: null }
   if (!raw || raw === lastTomatoCmdRaw) return untouched
   if (typeof isLocked === 'function' && isLocked()) return untouched
@@ -168,5 +172,6 @@ function tryForwardTomatoCmd ({ raw, lastTomatoCmdRaw, lastTomatoSeq, getMainWin
   try { cmd = JSON.parse(raw) } catch { return untouched } // 解析失败不消费 raw(与旧行为一致,外层 catch 记 warn)
   if (!cmd || !cmd.seq || cmd.seq <= lastTomatoSeq) return { lastTomatoCmdRaw: raw, lastTomatoSeq, sent: false, cmd: null }
   wc.send('cli-tomato-cmd', cmd) // 可能 throw(半销毁 peer):抛给调用方,seq/raw 均不推进 → 下轮轮询重投
+  if (typeof clearCmd === 'function') { try { clearCmd(cmd) } catch { /* slot cleanup is best-effort */ } }
   return { lastTomatoCmdRaw: raw, lastTomatoSeq: cmd.seq, sent: true, cmd }
 }
