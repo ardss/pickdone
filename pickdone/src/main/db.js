@@ -787,6 +787,7 @@ const OPS = {
     return rec
   },
   tomatoAll: () => db.prepare('SELECT * FROM tomato_records WHERE deleted = 0 ORDER BY endTime DESC').all().map(OPS._rowToRec),
+  tomatoTombstones: () => db.prepare('SELECT tomatoId, updatedAt, deletedAt FROM tomato_records WHERE deleted = 1').all(),
   tomatoAppendMany: rows => {
     const list = Array.isArray(rows) ? rows : [rows]
     const ins = db.prepare(`INSERT INTO tomato_records (tomatoId, endTime, dateKey, focus, focusTaskId, focusDuration, rest, restDuration, succeed, manual, status, abandonReason, extra, deleted, deletedAt, updatedAt)

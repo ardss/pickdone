@@ -117,6 +117,7 @@ function createLocalStoreAdapter () {
         out.push({ entity: 'setting', id: r.key, updatedAt: r.updatedAt, deleted: !!r.deleted, deletedAt: r.deletedAt || 0, data: { key: r.key, value: r.value } })
       }
       for (const r of state.db.call('tomatoAll', {}) || []) out.push({ entity: 'tomato', id: r.tomatoId, updatedAt: r.updatedAt || 0, deleted: false, deletedAt: 0, data: r })
+      for (const r of state.db.call('tomatoTombstones', {}) || []) out.push({ entity: 'tomato', id: r.tomatoId, updatedAt: r.updatedAt || 0, deleted: true, deletedAt: r.deletedAt || 0, data: null }) // X1: snapshot tombstones (rationale in sync-apply.js tomato localRow)
       for (const c of state.db.call('getAllCategories', {}) || []) out.push({ entity: 'category', id: String(c.categoryId), updatedAt: c.updatedAt || 0, deleted: false, deletedAt: 0, data: c })
       for (const c of state.db.call('planAll', {}) || []) out.push({ entity: 'plan', id: c.id, updatedAt: c.updatedAt || 0, deleted: false, deletedAt: 0, data: c })
       for (const f of state.db.call('filterList', {}) || []) out.push({ entity: 'filter', id: String(f.id), updatedAt: f.updatedAt || 0, deleted: false, deletedAt: 0, data: f })
@@ -846,6 +847,7 @@ module.exports = { initLanSync, stopSyncForQuit, kickSyncRound, invalidateSyncWa
 module.exports.__test = {
   setState: s => { state = s },
   applyRow: row => applyRowSafe(row),
+  allRows: () => createLocalStoreAdapter().allRows(),
   flushPendingWrites,
   syncSetEnabled: syncSetEnabledOp,
   localUserId,
