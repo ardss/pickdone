@@ -38,20 +38,31 @@ const sleep = ms => new Promise(r => setTimeout(r, ms))
 
 /* ---------------- P0-1: address selection + sanitization ---------------- */
 
-test('P0-1: hostScore rejects link-local (with/without scope), virtual ranges; accepts real IPv4', () => {
+test('P0-1 (amended round-2 P1): hostScore rejects link-local; 192.168.111.* no longer hard-rejected', () => {
   assert.equal(hostScore('169.254.10.10'), -1, 'IPv4 link-local')
   assert.equal(hostScore('fe80::1234'), -1, 'scope-less IPv6 link-local')
-  assert.equal(hostScore('192.168.111.10'), -1, 'VMware NAT range (observed live)')
-  assert.ok(hostScore('fe80::1234%12') >= 0, 'scoped link-local is technically dialable')
+  // Round-2 P1: the site-specific 192.168.111.* "VMware NAT" rejection was removed — topological
+  // scoring only. Same-subnet on a 192.168.111.x LAN = 4 (highest); cross-subnet = 1 (lowest
+  // dialable); a scoped fe80 strips its %scope and scores 1.
+  assert.equal(hostScore('fe80::1234%12'), 1, 'scoped link-local scores lowest-dialable')
+  const s = hostScore('192.168.111.10')
+  assert.ok(s === 1 || s === 4, '192.168.111.x allowed: ' + s)
   assert.ok(hostScore('192.168.31.22') >= 0)
   assert.ok(hostScore('10.0.0.5') >= 0)
 })
 
-test('P0-1: pickAdvertisedAddress never returns a filtered-out address', () => {
-  const junk = ['fe80::1', '169.254.5.5', '192.168.111.10']
-  const out = pickAdvertisedAddress([...junk, '192.168.31.22', 'fd00::5'], 'mdns-host')
+test('P0-1 (amended round-2 P1): pickAdvertisedAddress never returns an undialable address', () => {
+  const junk = ['fe80::1', '169.254.5.5']
+  const cands = [...junk, '192.168.111.10', '192.168.31.22', 'fd00::5']
+  const out = pickAdvertisedAddress(cands, 'mdns-host')
   assert.equal(junk.includes(out), false, 'picked ' + out)
-  assert.equal(out, '192.168.31.22')
+  // winner is whichever candidate scores highest on THIS machine (topological, not hardcoded)
+  let best = null; let bestScore = -1
+  for (const c of cands.filter(c => !junk.includes(c))) {
+    const sc = hostScore(c)
+    if (sc > bestScore) { bestScore = sc; best = c }
+  }
+  assert.equal(out, best, 'highest-scoring candidate wins')
   // everything junk → falls back to the advertised hostname, else null
   assert.equal(pickAdvertisedAddress(junk, 'peer-lan-host'), 'peer-lan-host')
   assert.equal(pickAdvertisedAddress(junk, null), null)

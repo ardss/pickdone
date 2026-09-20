@@ -162,6 +162,14 @@ function watchDbForExternalWrites () {
   // re-execute on every app restart.
   let lastTomatoSeq = 0
   try { lastTomatoSeq = Number(dbm.call('getMeta', 'cliTomatoSeq')) || 0 } catch { lastTomatoSeq = 0 }
+  // Round-2 P1 (2026-09-21): mirror of the cliSyncCmd slot fix — a command queued at exactly the
+  // counter (crash between slot-write and forward) must EXECUTE once after restart, not be
+  // skipped; seeding the watermark from the slot (counter - 1) lets the normal forward path run
+  // it and clear the slot, so a second restart never re-executes it.
+  try {
+    const queued = JSON.parse(dbm.call('getMeta', 'cliTomatoCmd') || 'null')
+    if (queued && Number.isFinite(queued.seq) && Number(queued.seq) === lastTomatoSeq) lastTomatoSeq -= 1
+  } catch { /* malformed slot: counter watermark stands */ }
   // CLI settings hot-sync baseline: the first poll only builds the baseline and does not push (otherwise startup would push a full diff by mistake)
   let lastSettingsSavedAt = 0
   let lastSettingsDoc = null

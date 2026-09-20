@@ -130,6 +130,15 @@ function createLanSyncNode(opts) {
   const failStreakBy = new Map() // deviceId -> consecutive failed rounds
   const dialNotBefore = new Map() // deviceId -> ms epoch
   const unpairedBy = new Set() // deviceId set (terminal peer-unauthorized)
+  // Round-2 P1 (2026-09-21): re-fix budget. A DEAD peer whose discovery record keeps flapping
+  // addresses used to reset the dial-failure streak on every wrong-address "re-fix" (fresh addr
+  // → immediate retry → fail → new addr …) = infinite round-error spam, hibernate unreachable.
+  // Re-fixes now count toward REFIX_BUDGET per REFIX_WINDOW_MS; past the budget the re-fix is
+  // skipped and hibernate applies normally. The streak itself is only ever cleared by a
+  // SUCCESSFUL round (resetBackoff on the success path).
+  const refixTimesBy = new Map() // deviceId -> array of re-fix ms epochs (hour-bounded)
+  const REFIX_BUDGET = 6
+  const REFIX_WINDOW_MS = 60 * 60 * 1000
   // P1-4: live AUTHENTICATED server sockets per peer (last message wins) so an unpair can
   // best-effort notify the peer with an `unpaired` control message before the node stops.
   const liveServerSockets = new Map() // deviceId -> socket
@@ -220,6 +229,7 @@ function createLanSyncNode(opts) {
     snapshotFatalCount.delete(id); snapshotErrorCooldown.delete(id)
     pullWatermarkBy.delete(id); serverPullAck.delete(id)
     failStreakBy.delete(id); dialNotBefore.delete(id); unpairedBy.delete(id); liveServerSockets.delete(id)
+    refixTimesBy.delete(id)
   }
   const pushRecent = (entry) => pushRing(recent, RECENT_CAP, entry)
   // security ring: seeded from the persisted log (opts.securityLog, owned by the bootstrap —
@@ -457,10 +467,24 @@ function createLanSyncNode(opts) {
             const again = typeof resolvePeerFn === 'function' ? resolvePeerFn(peer.deviceId) : null
             const host = again && again.host
             if (host && isDialableHost(host) && host !== peers.get(peer.deviceId)?.host) {
-              rememberPeer({ ...again, deviceId: peer.deviceId, port: Number(again.port) })
-              resetBackoff(peer.deviceId) // fresh address: retry fast, streak not charged
-              pushRecent({ at: Date.now(), kind: 'error', peer: peer.deviceId, detail: { error: `stored address failed; discovery re-resolved ${host}:${again.port}` } })
-              refixed = true
+              // Round-2 P1: budget the re-fix — a flapping dead peer must reach hibernate.
+              const nowMs = Date.now()
+              const times = (refixTimesBy.get(peer.deviceId) || []).filter(t => nowMs - t < REFIX_WINDOW_MS)
+              if (times.length >= REFIX_BUDGET) {
+                refixTimesBy.set(peer.deviceId, times) // budget exhausted: hibernate applies normally
+              } else {
+                times.push(nowMs)
+                refixTimesBy.set(peer.deviceId, times)
+                rememberPeer({ ...again, deviceId: peer.deviceId, port: Number(again.port) })
+                // Fast retry WITHOUT touching the failure streak: only a SUCCESSFUL round on the
+                // new address may reset the budget (resetBackoff on the success path).
+                const t = retryTimers.get(peer.deviceId)
+                if (t) { clearTimeout(t); retryTimers.delete(peer.deviceId) }
+                backoffMs.set(peer.deviceId, backoffBaseMs)
+                dialNotBefore.delete(peer.deviceId)
+                pushRecent({ at: nowMs, kind: 'error', peer: peer.deviceId, detail: { error: `stored address failed; discovery re-resolved ${host}:${again.port}` } })
+                refixed = true
+              }
             }
           } catch { /* fallback is best-effort */ }
           scheduleRetry(peer.deviceId)
@@ -946,6 +970,9 @@ function createLanSyncNode(opts) {
               : errorBy.has(p.deviceId) ? 'error' : 'ok'
           return {
             ...p,
+            // Round-2 P1: the renderer reads p.deviceName — the raw peer record only carries
+            // `name`, so Device Center showed raw UUIDs. Carry both.
+            deviceName: p.name,
             online: (!!seen && now - seen < ONLINE_WINDOW_MS) || (!!lr && now - lr < ONLINE_WINDOW_MS),
             lastRoundAt: lr || null,
             lastError: errorBy.get(p.deviceId) || null,

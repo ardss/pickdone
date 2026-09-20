@@ -209,7 +209,7 @@ test('d5-7: repeated discover(cb) emits onFound once per peer, not once per regi
   const cb = p => hits.push(p.deviceId)
   d.discover(cb)
   d.discover(cb) // duplicate registration (restart discovery with the same callback)
-  d._upsertPeer({ deviceId: 'devX', port: 58471 })
+  d._upsertPeer({ deviceId: 'devX', port: 58471, host: '192.168.31.50' })
   d._upsertPeer({ deviceId: 'devX', port: 58471 }) // known peer refresh → no duplicate emit
   assert.equal(hits.filter(x => x === 'devX').length, 1, 'deduped listener: exactly one found emit')
   d.stop()

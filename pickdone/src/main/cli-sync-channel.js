@@ -28,6 +28,18 @@ function createSyncCmdHandler ({ dispatch, setMeta, log, getMeta, deleteMeta }) 
   // cannot re-execute it either.
   let lastSeq = 0
   try { lastSeq = Number(typeof getMeta === 'function' ? getMeta('cliSyncSeq') : 0) || 0 } catch { lastSeq = 0 }
+  // Round-2 P1 (2026-09-21): seeding from the counter alone could DROP a queued command — the CLI
+  // consumes a seq BEFORE the app writes the slot, so a crash between slot-write and handle left
+  // cmd.seq === counter, which the counter watermark then skipped forever. When the slot holds a
+  // command at exactly the counter, seed the watermark from THE SLOT (counter - 1) so the command
+  // is handled once; clearHandledSlot then deletes it, so a second restart (slot gone) seeds from
+  // the counter again and nothing re-executes.
+  try {
+    if (typeof getMeta === 'function') {
+      const queued = JSON.parse(getMeta('cliSyncCmd') || 'null')
+      if (queued && Number.isFinite(queued.seq) && Number(queued.seq) === lastSeq) lastSeq -= 1
+    }
+  } catch { /* malformed slot: counter watermark stands */ }
   const clearHandledSlot = async (cmd) => {
     try {
       if (typeof deleteMeta !== 'function' || typeof getMeta !== 'function') return

@@ -285,10 +285,13 @@ export default {
       const seg = (name, fn) => { try { fn() } catch (e) { console.error('[settings] restore segment failed: ' + name, e); failed.push(name) } }
       if (b.settingsState) seg('settings', () => this.$store.commit('settings/restore', JSON.parse(b.settingsState)))
       if (b.categoryState) seg('category', () => { const c = JSON.parse(b.categoryState); if (c.list) this.$store.commit('category/setList', c.list) })
+      let habitCount = 0
       if (b.habitsState) seg('habits', () => {
         // Single writer via the store only: replaceAll already dual-writes LS+meta; writing LS directly from the component would create a second writer (dual-write ledger discipline)
         const hb = JSON.parse(b.habitsState)
-        if (hb && Array.isArray(hb.habits)) this.$store.commit('habits/replaceAll', hb)
+        // F6 (round-2 P1 2026-09-21): force bypasses the stale-savedAt guard and persists the
+        // restored blob to the DB meta row (reaching sync); count habits honestly in the report.
+        if (hb && Array.isArray(hb.habits)) { this.$store.commit('habits/replaceAll', { ...hb, force: true }); habitCount = hb.habits.length }
       })
       let rows = []
       if (b.todoState) {
@@ -301,7 +304,7 @@ export default {
       try { await this.restoreTomatoLedger(b) } catch (e) { console.error('[settings] restore segment failed: tomato', e); failed.push('tomato') }
       this.$store.dispatch('_rt/refreshFromDb')
       this.$store.dispatch('tomato/recordsReload').catch(e => console.error('[settings] tomato/recordsReload after restore failed:', e))
-      this.reportRestoreResult(rows.length, failed)
+      this.reportRestoreResult(rows.length + habitCount, failed) // F6: habits counted honestly
     },
     // 账本回灌:行表幂等 UPSERT,缺 tomatoId/endTime 的行跳过不拖批(与主进程 dbRecovery 同规则)
     async restoreTomatoLedger (b) {

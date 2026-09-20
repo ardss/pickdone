@@ -901,6 +901,7 @@ syncOplogSince: ({ sinceSeq = 0, limit = 2000 } = {}) => db.prepare('SELECT seq,
   syncPairRespond: p => require('./db-sync-ops').dispatch('syncPairRespond', p),
   syncPairRequest: p => require('./db-sync-ops').dispatch('syncPairRequest', p),
   syncUnpairPeer: p => require('./db-sync-ops').dispatch('syncUnpairPeer', p),
+  syncSetPeerAlias: p => require('./db-sync-ops').dispatch('syncSetPeerAlias', p), // Round-2 P1: machine-local per-peer display alias
   // X4 (2026-09-20): meta LWW conflict backup recovery (impl lan-sync-bootstrap via sync-conflict-backups.js)
   syncConflictBackupsList: p => require('./db-sync-ops').dispatch('syncConflictBackupsList', p),
   syncConflictBackupRestore: p => require('./db-sync-ops').dispatch('syncConflictBackupRestore', p),

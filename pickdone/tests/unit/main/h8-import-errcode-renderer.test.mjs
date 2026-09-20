@@ -77,7 +77,7 @@ test('h8-2: restore pipeline is shared (applyRestoreDump), isolates segments, or
   const vue = readSrc('renderer/js/components/settings/SettingsDataTab.vue')
   // P3 (2026-09-12) dedup: both paths funnel through ONE applyRestoreDump pipeline
   assert.equal((vue.match(/applyRestoreDump\s*\(/g) || []).length, 3, 'declaration + two call sites')
-  assert.equal((vue.match(/reportRestoreResult\(rows\.length, failed\)/g) || []).length, 1, 'single report funnel')
+  assert.equal((vue.match(/reportRestoreResult\(rows\.length \+ habitCount, failed\)/g) || []).length, 1, 'single report funnel (F6: habits counted honestly)')
   // todo segment runs after settings/category/habits inside the shared pipeline
   const body = (vue.match(/seg\('settings'.*?(?=reportRestoreResult)/s) || [])[0] || ''
   assert.ok(body, 'shared pipeline contains the segment chain')

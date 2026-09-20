@@ -145,6 +145,15 @@ async function compactOwnOldDeltas (keys, entries) {
   const nextKeys = keys.filter(k => !covered.includes(k))
   if (!nextKeys.includes(sk)) nextKeys.push(sk)
   await db('setMeta', [INDEX_KEY, JSON.stringify(nextKeys)])
+  // Round-2 P1 (2026-09-21): prune OWN_KEYS_LS after compaction — the covered keys' meta rows are
+  // gone, so keeping them in the local index re-pushed dead keys to peers forever (self-heal loop
+  // re-added them on every init).
+  try {
+    const ownRaw = JSON.parse(localStorage.getItem(OWN_KEYS_LS) || '[]')
+    if (Array.isArray(ownRaw) && covered.length) {
+      localStorage.setItem(OWN_KEYS_LS, JSON.stringify(ownRaw.filter(k => !covered.includes(k)).slice(-200)))
+    }
+  } catch (e) { /* LS unavailable (test env): index pruning stays best-effort */ }
   return nextKeys
 }
 
@@ -259,7 +268,10 @@ export default {
             // round-1 P0 double-subtract undercount) plus every covered key folded INDIVIDUALLY
             // (key meta is deleted by the owner's compaction, so an individual guard for a
             // previously-covered key cannot reappear later — disjoint accounting).
-            const fGen = (f && Number(f.gen)) || 0
+            // Round-2 P1: a LEGACY guard written before generations existed carries no `gen` —
+            // treat it as gen 1 so its (raw-total) amount is not folded a second time; the
+            // contribution arithmetic below still accounts via max(0, total − accounted).
+            const fGen = f ? (Number.isFinite(Number(f.gen)) ? Number(f.gen) : 1) : 0
             if (fGen >= (Number(d.gen) || 0)) continue
             const compacted = Array.isArray(d.compacted) ? d.compacted : []
             let accounted = (f && Number(f.s)) || 0
