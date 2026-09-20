@@ -51,11 +51,12 @@ function persistTask (taskId, n) {
   } catch (e) { /* degraded debug host */ }
 }
 
-/** Startup backfill (Y rework): legacy-blob pass (timestamped whole-map meta, as before) UNION
- *  per-task keys `tomatoEstimateState:<taskId>` for every known task id (caller passes the live id set;
- *  per-task values win — they are the syncable unit now). Also performs the one-time lazy
- *  migration: blob entries are emitted as per-task keys and the legacy DB blob is deleted
- *  (the LS blob stays as the reactive cache). */
+/** Startup backfill (Y rework / U8 lazy rework): only the legacy-blob pass (timestamped whole-map
+ *  meta, timestamp decides the winner) still runs at boot. Per-task keys `tomatoEstimateState:<taskId>`
+ *  are NO LONGER scanned for every known id (that was O(N) sequential getMeta per boot and per
+ *  inbound meta round) — they are read on demand via ensureEstimate() (memoized; invalidated by
+ *  meta rounds). Also performs the one-time lazy migration: blob entries are emitted as per-task
+ *  keys and the legacy DB blob is deleted (the LS blob stays as the reactive cache). */
 export async function initFromDb (taskIds) {
   try {
     if (!window.todoAPI || !window.todoAPI.dbCall) return
@@ -97,20 +98,40 @@ export async function initFromDb (taskIds) {
         }
       } catch (e) { /* best-effort: legacy fallback read still works */ }
     }
-    // Per-task union: known ids only (meta keys cannot be enumerated over this IPC bridge).
-    for (const id of (taskIds || [])) {
-      try {
-        const raw = await window.todoAPI.dbCall('getMeta', keyOf(id))
-        if (raw === null || raw === undefined || raw === '') continue
-        const n = Number(raw)
-        if (!Number.isFinite(n)) continue
-        const clamped = Math.max(MIN, Math.min(MAX, Math.round(n)))
-        if (clamped > 0) state[id] = clamped
-        else delete state[id]
-      } catch (e) { /* absent is fine */ }
-    }
-    try { localStorage.setItem(LS_KEY, JSON.stringify(state)) } catch (e) { /* ignore */ }
+    // U8 (2026-09-20): the per-task union used to getMeta EVERY known task id at boot and again on
+    // every inbound meta round (O(N) sequential reads per round). That scan is gone — per-task keys
+    // are read lazily via ensureEstimate() (memoized read-through) when a UI surface actually needs
+    // a value. Only the legacy blob fallback below still runs at init.
+    invalidateEstimateCache()
   } catch (e) { /* No DB host (5175 shim): degrade silently */ }
+}
+
+/** U8 lazy read-through cache: per-task meta keys are fetched on demand (first UI read of an id),
+ *  memoized in `fetched`, and invalidated in bulk when inbound meta rounds land (next read
+ *  re-fetches once). Keeps boot O(1) meta reads instead of O(N) per known task id. */
+const fetched = new Set()
+let fetchInflight = new Map()
+export function invalidateEstimateCache () { fetched.clear(); fetchInflight = new Map() }
+export function ensureEstimate (taskId) {
+  if (!taskId || fetched.has(taskId)) return
+  if (!window.todoAPI || !window.todoAPI.dbCall) return
+  if (fetchInflight.has(taskId)) return fetchInflight.get(taskId)
+  const p = (async () => {
+    fetched.add(taskId) // memoized even on failure: a flaky read must not turn into an infinite retry loop
+    try {
+      const raw = await window.todoAPI.dbCall('getMeta', keyOf(taskId))
+      if (raw === null || raw === undefined || raw === '') return
+      const n = Number(raw)
+      if (!Number.isFinite(n)) return
+      const clamped = Math.max(MIN, Math.min(MAX, Math.round(n)))
+      if (clamped > 0) state[taskId] = clamped
+      else delete state[taskId]
+      try { localStorage.setItem(LS_KEY, JSON.stringify(state)) } catch (e) { /* ignore */ }
+    } catch (e) { /* absent is fine */ }
+  })()
+  fetchInflight.set(taskId, p)
+  p.finally(() => fetchInflight.delete(taskId))
+  return p
 }
 
 export function getEstimate (taskId) { return state[taskId] || 0 }
@@ -144,6 +165,7 @@ export function setEstimate (taskId, n) {
   n = Math.max(MIN, Math.min(MAX, Math.round(n || 0)))
   if (n > 0) state[taskId] = n
   else delete state[taskId]
+  fetched.add(taskId) // U8: the local write is authoritative — no re-fetch needed for this id
   trimToCapacity()
   persist()
   persistTask(taskId, n) // Y: per-task meta key — the field-granular syncable unit

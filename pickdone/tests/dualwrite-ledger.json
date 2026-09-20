@@ -150,5 +150,9 @@
   "renderer/js/store/settings.js::appLocale": {
     "authority": "sqlite",
     "note": "Synced via settingsState blob field mirrored to settings_rows; LS is write-through cache calibrated on inbound rounds"
+  },
+  "renderer/js/store/auth.js::gamification.lastDeltaKey": {
+    "authority": "local-only",
+    "note": "Own last delta key for index self-heal; local bookkeeping recalculated from own meta keys at init"
   }
 }

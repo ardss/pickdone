@@ -96,7 +96,7 @@ import { extractTags } from '../utils/search.js'
 import { deleteWithUndo, moveWithUndo } from '../utils/confirm.js'
 import { toggleCompleteWithUndo } from '../utils/completeAction.js'
 import { chkColor } from '../utils/taskRow.js'
-import { getEstimate } from '../utils/tomatoEstimate.js'
+import { getEstimate, ensureEstimate } from '../utils/tomatoEstimate.js'
 
 // Module-level drag-in-progress flag: a document.querySelector('.td-item.dragging') on every
 // dragover is O(document); this is set on dragstart and cleared on dragend/drop.
@@ -151,7 +151,9 @@ export default {
       const projects = this.$store.getters['category/projects'] || []
       return projects.find(p => p.categoryId === this.todo.categoryId) || null
     },
-    tomatoEstimateN () { return getEstimate(this.todo.taskId) },
+    /* U8: lazy read-through — first render of an id memoizes one getMeta; the reactive state update
+       re-evaluates this computed when the fetch lands. Boot no longer scans all task ids. */
+    tomatoEstimateN () { ensureEstimate(this.todo.taskId); return getEstimate(this.todo.taskId) },
     /* Pomodoro ledger: pomodoros already invested in this task (attributed by record, abandoned excluded) — list item = unit of outcome, tomato = currency of workload (design-final) */
     tomatoActualN () {
       const id = this.todo.taskId

@@ -224,6 +224,7 @@
 /** Left sidebar -- structure/icons/styles aligned with the reference: user row, search, 5 main nav items, categories, tags, bottom buttons */
 import { extractTags } from '../utils/search.js'
 import { visibleNavRoutes } from '../utils/nav-gate.js'
+import { applyNarrow, toggleCollapse } from '../utils/navCollapse.js'
 import i18n from '../i18n/index.js'
 import WeatherWidget from './WeatherWidget.vue'
 import SnTagPanel from './side-nav/SnTagPanel.vue'
@@ -245,6 +246,10 @@ export default {
       // computed accessors over the synced settings store (blob fields sidebarCollapsed / catFold /
       // showTagPanel); localStorage 'sidebarCollapsed' stays as a write-through cache.
       narrow: false,
+      // U4 (2026-09-20): the forced narrow-viewport collapse is TRANSIENT component state — it never
+      // touches the settings store. The old code flipped the userCollapsed setter on viewport events,
+      // persisting + syncing a preference the user never chose.
+      forcedCollapsed: false,
       catEditing: null as any,
       newCatName: '',
       searchWord: '',
@@ -268,8 +273,9 @@ export default {
   computed: {
     /* Y3 (sync-coverage-2): the three fold flags live in the synced settings blob and are read
        reactively here; writes commit to the store (cross-device sync) and write-through the legacy
-       LS key as cache. The forced narrow-viewport collapse stays transient behavior (mounted), never
-       persisted intent — it flips the same accessor, which is what the user then keeps. */
+       LS key as cache. U4: the synced userCollapsed changes ONLY via an explicit user toggle
+       (toggleCollapse / search-box interactions) — viewport events drive forcedCollapsed, never
+       this setter. */
     userCollapsed: {
       get () { return !!this.$store.state.settings.sidebarCollapsed },
       set (v) {
@@ -285,9 +291,11 @@ export default {
       get () { return this.$store.state.settings.showTagPanel !== false },
       set (v) { this.$store.commit('settings/updateSettings', { showTagPanel: !!v }) }
     },
-    /* Collapsed state = user preference. Narrow windows (<920px) no longer force collapse: the expanded state is handled by a CSS drawer (absolutely positioned over the main column,
-       out of flow) to cover the overflow P0; the collapse-once-on-narrow logic is in mounted/_onNarrow */
-    collapsed () { return this.userCollapsed },
+    /* Collapsed state = user preference OR the transient narrow-viewport forced collapse (U4):
+       narrow windows (<920px) collapse via forcedCollapsed only, so the synced preference is
+       untouched; the expanded state is handled by a CSS drawer (absolutely positioned over the main
+       column, out of flow) to cover the overflow P0. */
+    collapsed () { return this.userCollapsed || this.forcedCollapsed },
     filteredNavOrder () {
       // Gate doctrine lives in utils/nav-gate.js (pure + unit-tested): developer mode is the master gate for experiments, each of which also has its own module switch; projects has graduated and rides on its own switch alone.
       return visibleNavRoutes(this.$store.state.settings, NAV_ORDER)
@@ -350,15 +358,12 @@ export default {
         try { const l = JSON.parse(v || '[]'); if (Array.isArray(l)) this.$store.commit('ui/setUserTags', l) } catch { /* no-op */ }
       }).catch(() => {})
     }
-    // Collapse once when entering a narrow viewport (breakpoint = drawer breakpoint 920px; the expanded state uses the CSS drawer overlay, no longer locked); the user preference is restored automatically when the window is widened back
+    // Collapse while in a narrow viewport (breakpoint = drawer breakpoint 920px). U4: via
+    // utils/navCollapse.js — flips the transient forcedCollapsed ONLY; the synced sidebarCollapsed
+    // preference changes exclusively through explicit user toggles.
     this._narrowMql = window.matchMedia('(max-width: 919px)')
-    this._onNarrow = e => {
-      const was = this.narrow
-      this.narrow = e.matches
-      if (!was && e.matches && !this.userCollapsed) this.toggleCollapse()
-    }
-    this.narrow = this._narrowMql.matches
-    if (this.narrow && !this.userCollapsed) this.userCollapsed = true
+    this._onNarrow = e => { applyNarrow(this, e.matches) }
+    applyNarrow(this, this._narrowMql.matches)
     if (this._narrowMql.addEventListener) this._narrowMql.addEventListener('change', this._onNarrow)
     else this._narrowMql.addListener(this._onNarrow)
   },
@@ -379,8 +384,12 @@ export default {
       return (v && v.i18n) ? i18n.global.t(v.i18n) : v
     },
     toggleCollapse () {
-      // LS write-through now lives in the userCollapsed setter (Y3)
-      this.userCollapsed = !this.userCollapsed
+      // U4 (via utils/navCollapse.js): an explicit user toggle resolves against the EFFECTIVE
+      // collapsed state (preference OR transient narrow force) and is the ONLY path that writes the
+      // synced sidebarCollapsed — clearing forcedCollapsed lets the user expand inside a narrow
+      // window (CSS drawer).
+      toggleCollapse({ getCollapsed: () => this.collapsed, commit: v => { this.userCollapsed = v } })
+      this.forcedCollapsed = false
     },
     /* Clicking the search icon while collapsed: expand the sidebar and hand focus to the search input.
        In narrow windows (<920px) the expanded state uses the drawer overlay (CSS media query, absolutely positioned over the main column without squeezing the layout),

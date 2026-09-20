@@ -72,8 +72,8 @@ function nextId () {
 const PROJECT_IDS_KEY = 'projectCategoryIds'
 /** Y/X3 (sync-coverage-2): per-category flag keys `projectCategoryFlag:<id>` = '1' — the legacy
  *  whole-array blob was whole-key LWW, so two devices flagging different categories clobbered each
- *  other. Per-cat flags sync field-granular; the legacy blob is still maintained as a union for
- *  older readers, and init() unions both sides. */
+ *  other. Per-cat flags sync field-granular; the legacy blob is READ-ONLY now (U7, 2026-09-20: the
+ *  renderer never writes it anymore — init() still unions it so old data survives). */
 const projectFlagKey = id => 'projectCategoryFlag:' + id
 function writeProjectFlag (id, flag) {
   try {
@@ -177,11 +177,12 @@ export default {
       // category kept haunting projectStatus:<id>/projectDeadline:<id> meta and the projectIds flag
       const victims = collectCascadeIds(state, id)
       this.commit('category/markCascade', id)
+      // U7 (2026-09-20): the legacy whole-array `projectCategoryIds` meta is NO LONGER WRITTEN by
+      // the renderer at all — whole-key LWW meant two devices editing different projects clobbered
+      // each other. Per-cat flag keys (writeProjectFlag below) are the only syncable unit now; the
+      // in-memory projectIds list is trimmed for the session (init() still unions the legacy blob).
       const ids = state.projectIds.filter(x => !victims.includes(x))
-      if (ids.length !== state.projectIds.length) {
-        state.projectIds = ids
-        try { window.todoAPI.dbCall('setMeta', [PROJECT_IDS_KEY, JSON.stringify(ids)]).catch(() => {}) } catch (e) { /* degraded host */ }
-      }
+      if (ids.length !== state.projectIds.length) state.projectIds = ids
       for (const vid of victims) {
         writeProjectFlag(vid, false) // Y/X3: victim's per-cat flag key must not resurrect the project
         try { window.todoAPI.dbCall('deleteMeta', statusKey(vid)).catch(() => {}) } catch (e) { /* absent is fine */ }
@@ -214,15 +215,13 @@ export default {
       })
       persist(state.list)
     },
-    /** Set/unset project: memory + meta persistence (caller removes the flag first when a category is deleted) */
+    /** Set/unset project: memory + per-cat flag meta only (U7: the legacy whole-array blob is never
+     *  written anymore; caller removes the flag first when a category is deleted) */
     setProject (state, { id, flag }) {
       const ids = state.projectIds.filter(x => x !== id)
       if (flag) ids.push(id)
       state.projectIds = ids
-      writeProjectFlag(id, flag) // Y/X3: field-granular unit
-      try {
-        window.todoAPI.dbCall('setMeta', [PROJECT_IDS_KEY, JSON.stringify(ids)]).catch(() => {})
-      } catch (e) { /* in-memory only when the browser debug host degrades */ }
+      writeProjectFlag(id, flag) // Y/X3: field-granular unit — the only persisted/synced write
     },
     setProjectIds (state, ids) { state.projectIds = Array.isArray(ids) ? ids : [] },
     setProjectMeta (state, meta) { state.projectMeta = meta || {} },

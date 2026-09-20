@@ -158,7 +158,7 @@ export function coerceNumericSettings (merged) {
  *  Rules: keys not declared in DEFAULT_SETTINGS are dropped; values whose type differs from the
  *  declared default are dropped; remaining numeric-string values are coerced exactly like
  *  load()/restore() (coerceNumericSettings). */
-export function sanitizeSettingsPatch (patch) {
+export function sanitizeSettingsPatch (patch, current) {
   if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return {}
   const out = {}
   for (const k of Object.keys(patch)) {
@@ -173,11 +173,13 @@ export function sanitizeSettingsPatch (patch) {
       continue
     }
     if (typeof def !== typeof v) continue // type-mismatched junk (e.g. object where boolean declared)
-    // Y2: a partial inbound shortcut map must not unregister every other shortcut — merge over the
-    // declared defaults before applying (main's applyShortcuts would otherwise drop missing keys).
-    // Arrays are junk too (an object field never accepts a list).
+    // U3 (2026-09-20): a partial inbound shortcut map must not reset the other bindings — the merge
+    // base is the CURRENT LIVE STATE (passed in by the caller), not DEFAULT_SETTINGS: merging over
+    // defaults wiped every local customization and persisted the wipe to config.json. The sanitizer
+    // stays pure — callers without live state (pure validation) pass no base and get defaults-merged
+    // output. Arrays are junk too (an object field never accepts a list).
     if (k === 'shortcutKeySettings' && v && typeof v === 'object' && !Array.isArray(v)) {
-      out[k] = { ...DEFAULT_SETTINGS.shortcutKeySettings, ...v }
+      out[k] = { ...(current && current.shortcutKeySettings ? current.shortcutKeySettings : DEFAULT_SETTINGS.shortcutKeySettings), ...v }
       continue
     }
     if (typeof def === 'object' && Array.isArray(v)) continue
@@ -194,6 +196,15 @@ export function mergeTourMap (local, inbound) {
     if (!(k in out) || v > (Number(out[k]) || 0)) out[k] = v
   }
   return out
+}
+
+/** U5 (2026-09-20, pure): canonical JSON — object keys sorted recursively, arrays in order. Replaces
+ *  the key-order-sensitive JSON.stringify equality checks (a synced map whose keys arrived in a
+ *  different order used to read as "different" and reseed/repatch spuriously). */
+export function canonicalJson (v) {
+  if (v === null || typeof v !== 'object') return JSON.stringify(v === undefined ? null : v)
+  if (Array.isArray(v)) return '[' + v.map(canonicalJson).join(',') + ']'
+  return '{' + Object.keys(v).sort().map(k => JSON.stringify(k) + ':' + canonicalJson(v[k])).join(',') + '}'
 }
 
 function load () {
@@ -310,25 +321,29 @@ export default {
      *  a peer seeing tour "pips" must not erase this device's other seen entries. Local writes
      *  (resetToursSeen) still replace wholesale because they bypass this merge. */
     async updateExternal ({ state, dispatch }, patch) {
-      const clean = sanitizeSettingsPatch(patch)
+      const clean = sanitizeSettingsPatch(patch, state) // U3: live state is the merge base for partial object fields
       if (clean.onboardingToursSeen && typeof clean.onboardingToursSeen === 'object' && !Array.isArray(clean.onboardingToursSeen)) {
         clean.onboardingToursSeen = mergeTourMap(state.onboardingToursSeen, clean.onboardingToursSeen)
       }
       if (Object.keys(clean).length) await dispatch('update', clean)
     },
     // On startup judge newness by timestamp: if the DB mirror is newer than LS (e.g. LS cleared / machine change) → restore key-level from DB wholesale; otherwise flush current values back to the DB
-    async initFromDb ({ state, commit }) {
+    // U5: the seed/restore of main-consumed fields (shortcutKeySettings, appLocale) is dispatched
+    // through the `update` action (not a raw commit), so main's updateSettings IPC fires and the
+    // shortcuts are hot re-registered from the synced map — the renderer and main-process no longer
+    // disagree until restart. Equality checks use canonicalJson (key-order-insensitive).
+    async initFromDb ({ state, commit, dispatch }) {
       // Y2 first-run seeding: if the blob still carries the untouched default shortcut map, adopt the
       // machine's real config.json values (read via the existing get-settings IPC). Seeding runs BEFORE
       // the DB-mirror restore so an already-synced blob value always wins over local config.
       try {
         const def = DEFAULT_SETTINGS.shortcutKeySettings
-        const isDefault = JSON.stringify(state.shortcutKeySettings) === JSON.stringify(def)
+        const isDefault = canonicalJson(state.shortcutKeySettings) === canonicalJson(def)
         if (isDefault && window.todoAPI && window.todoAPI.getSettings) {
           const cfg = await window.todoAPI.getSettings()
           if (cfg && cfg.shortcutKeySettings && typeof cfg.shortcutKeySettings === 'object' &&
-              JSON.stringify(cfg.shortcutKeySettings) !== JSON.stringify(def)) {
-            commit('updateSettings', { shortcutKeySettings: { ...def, ...cfg.shortcutKeySettings } })
+              canonicalJson(cfg.shortcutKeySettings) !== canonicalJson(def)) {
+            await dispatch('update', { shortcutKeySettings: { ...def, ...cfg.shortcutKeySettings } })
           }
         }
       } catch (e) { /* degraded host: keep defaults */ }
@@ -345,11 +360,13 @@ export default {
       const patch = {}
       for (const k of Object.keys(db)) {
         if (k === '_savedAt') continue
-        if (JSON.stringify(db[k]) !== JSON.stringify(state[k])) patch[k] = db[k]
+        if (canonicalJson(db[k]) !== canonicalJson(state[k])) patch[k] = db[k]
       }
       coerceNumericSettings(patch)
-      if (Object.keys(patch).length) commit('updateSettings', patch)
-      else mirrorToDb('db.settingsState', { ...state, _savedAt: db._savedAt, schemaV: SETTINGS_SCHEMA_V })
+      if (Object.keys(patch).length) {
+        if (patch.shortcutKeySettings || patch.appLocale) await dispatch('update', patch)
+        else commit('updateSettings', patch)
+      } else mirrorToDb('db.settingsState', { ...state, _savedAt: db._savedAt, schemaV: SETTINGS_SCHEMA_V })
     }
   }
 }

@@ -33,8 +33,7 @@ const { createLanSyncNode } = require('./lan-sync/index')
 const { DEFAULT_PORT } = require('./lan-sync/transport')
 const syncOps = require('./db-sync-ops')
 
-// settings_rows keys (never synced: hydration skips the 'sync.' namespace, otherwise peers would
-// adopt each other's identity)
+// settings_rows keys (never synced: hydration skips the 'sync.' namespace, otherwise peers would adopt each other's identity)
 const K_DEVICE_ID = 'sync.deviceId'
 const K_DEVICE_NAME = 'sync.deviceName'
 const K_PAIRING_SECRET = 'sync.pairingSecret'
@@ -43,8 +42,7 @@ const K_MANUAL_PEERS = 'sync.manualPeers' // [{host,port}] — survives restarts
 const CURSOR_META_KEY = 'sync.pushCursor' // persisted in meta (not settings_rows): per-device bookkeeping, no sync obligation
 // v2 (2026-09-18): the pre-v2 values were persisted in the RECEIVER's local seq space (its own
 // max oplog seq) while buildSegments(fromSeq) consumes the SENDER's space — feeding those back
-// overshot the cursor and skipped the sender's fresh rows. v2 starts empty once: the worst case
-// of dropping a watermark is a re-push of already-applied rows, which is idempotent (§4.1).
+// overshot the cursor and skipped the sender's fresh rows. v2 starts empty once: the worst case of dropping a watermark is a re-push of already-applied rows, which is idempotent (§4.1).
 const K_PEER_WATERMARKS = 'sync.peerWatermarks.v2' // {deviceId: highestSeqThatPeerAcked} — per-peer push progress (survives restarts)
 const K_SECURITY_LOG = 'sync.securityLog' // last 20 security-ring entries (pair-throttled / auth-rejected), JSON — survives restarts
 const SECURITY_PERSIST_MIN_MS = 1000 // write-throttle: at most one security-log write per second
@@ -110,22 +108,24 @@ function createLocalStoreAdapter () {
         out.push({ entity: 'todo', id: t.taskId, updatedAt: t.updateTime || 0, deleted: !!t.delete, deletedAt: t.deletedAt || 0, data: t })
       }
       for (const r of state.db.call('settingsRowsAll', {}) || []) {
-        // 'sync.' = identity namespace; 'securityLock*' = password/question ciphertext — both
-        // must never leave this device (round-3 review: the settingsState bridge mirrors
-        // securityLock rows into settings_rows).
+        // 'sync.' = identity namespace; 'securityLock*' = password/question ciphertext — both must never leave this device (round-3 review: the settingsState bridge mirrors securityLock rows into settings_rows).
         if (isMachineLocalSettingKey(r.key)) continue
         out.push({ entity: 'setting', id: r.key, updatedAt: r.updatedAt, deleted: !!r.deleted, deletedAt: r.deletedAt || 0, data: { key: r.key, value: r.value } })
       }
       for (const r of state.db.call('tomatoAll', {}) || []) out.push({ entity: 'tomato', id: r.tomatoId, updatedAt: r.updatedAt || 0, deleted: false, deletedAt: 0, data: r })
       for (const r of state.db.call('tomatoTombstones', {}) || []) out.push({ entity: 'tomato', id: r.tomatoId, updatedAt: r.updatedAt || 0, deleted: true, deletedAt: r.deletedAt || 0, data: null }) // X1: snapshot tombstones (rationale in sync-apply.js tomato localRow)
-      for (const c of state.db.call('getAllCategories', {}) || []) out.push({ entity: 'category', id: String(c.categoryId), updatedAt: c.updatedAt || 0, deleted: false, deletedAt: 0, data: c })
+      // M1/M3 (2026-09-20): categories snapshot from the RAW row table — peers apply category data
+      // through upsertCategory (row columns), and local tombstones must ride along (data:null) so a
+      // fresh device learns about deletions. Same tombstone rule for plans/filters (delete-wins for locally deleted rows on the receiving side).
+      for (const c of state.db.call('categoriesAllRows', {}) || []) out.push({ entity: 'category', id: String(c.id), updatedAt: c.updatedAt || 0, deleted: !!c.deleted, deletedAt: c.deletedAt || 0, data: c.deleted ? null : c })
       for (const c of state.db.call('planAll', {}) || []) out.push({ entity: 'plan', id: c.id, updatedAt: c.updatedAt || 0, deleted: false, deletedAt: 0, data: c })
+      for (const t of state.db.call('planTombstones', {}) || []) out.push({ entity: 'plan', id: t.id, updatedAt: t.updatedAt || 0, deleted: true, deletedAt: t.deletedAt || 0, data: null })
       for (const f of state.db.call('filterList', {}) || []) out.push({ entity: 'filter', id: String(f.id), updatedAt: f.updatedAt || 0, deleted: false, deletedAt: 0, data: f })
+      for (const t of state.db.call('filterTombstones', {}) || []) out.push({ entity: 'filter', id: String(t.id), updatedAt: t.updatedAt || 0, deleted: true, deletedAt: t.deletedAt || 0, data: null })
       // Meta entity (GAP-A fix 2026-09-19): meta has no list-read op (db.js is size-ratcheted), so
       // syncable meta keys are enumerated from their oplog pointers (latest local ts per key, one
-      // paged oplog scan) and read via getMeta. Legacy pre-oplog meta keys are not covered here —
-      // they surface once any device rewrites them; meta tombstones propagate via increments only
-      // (a pointer whose value is already gone reads as deleted in hydrateRow).
+      // paged oplog scan) and read via getMeta. Legacy pre-oplog meta keys are not covered here — they
+      // surface once any device rewrites them; meta tombstones propagate via increments only (a pointer whose value is already gone reads as deleted in hydrateRow).
       const metaCache = syncApply.createHydrationCache(state)
       const metaTs = metaCache.metaTs()
       for (const key of metaTs.keys()) {
