@@ -248,9 +248,21 @@ export default {
       this.loadPos()
       this.$nextTick(this.drawWires)
       window.addEventListener('resize', this.drawWires)
+      // Y7 (sync-coverage-2): milestones in the header strip were loaded once at mount — an inbound
+      // sync round (or CLI milestone write) never refreshed an open DepView. Re-read on
+      // todos-changed broadcasts, throttled (loadMs itself guards stale project switches).
+      if (window.todoAPI && window.todoAPI.onTodosChanged) {
+        this._offTodosChanged = window.todoAPI.onTodosChanged(() => {
+          const now = Date.now()
+          if (this._msRefreshAt && now - this._msRefreshAt < 2000) return
+          this._msRefreshAt = now
+          try { this.loadMs(); this.$store.dispatch('category/loadProjectMeta') } catch (e) { /* keep current state */ }
+        })
+      }
     },
     beforeUnmount () {
       window.removeEventListener('resize', this.drawWires)
+      if (this._offTodosChanged) { try { this._offTodosChanged() } catch (e) { /* already off */ } }
       window.removeEventListener('pointermove', this.onGripMove)
       window.removeEventListener('pointerup', this.onGripUp)
       this.flushPos()

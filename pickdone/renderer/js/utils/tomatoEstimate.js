@@ -12,6 +12,10 @@ const LS_KEY = 'tomatoEstimateState'
 const TS_KEY = 'tomatoEstimateStateAt'
 const MIN = 0
 const MAX = 20
+// Y (sync-coverage-2): per-task meta keys `tomatoEstimateState:<taskId>` — the whole-map blob meta was
+// whole-key LWW, so two devices editing different tasks' estimates clobbered each other. Per-task
+// keys sync field-granular via the meta entity. The LS blob stays as the reactive cache; the DB
+// blob meta is legacy (lazy-migrated to per-task keys, then deleted; fallback read remains).
 
 function load () {
   try {
@@ -23,47 +27,89 @@ function load () {
 
 const state = reactive(load())
 
+const PER_TASK_PREFIX = 'tomatoEstimateState:'
+const keyOf = taskId => PER_TASK_PREFIX + taskId
+
 function persist () {
   const now = String(Date.now())
   try {
     localStorage.setItem(LS_KEY, JSON.stringify(state))
     localStorage.setItem(TS_KEY, now)
   } catch (e) { /* ignore quota exceeded */ }
+}
+
+/** Y: per-task meta write (the syncable unit). n <= 0 removes the key. */
+function persistTask (taskId, n) {
   try {
-    if (window.todoAPI && window.todoAPI.dbCall) {
-      // 2026-09-12: silent .catch(() => {}) hid meta write failures — a failing setMeta meant the CLI/other
-      // windows kept a stale estimate with no trace. Log it.
-      window.todoAPI.dbCall('setMeta', [LS_KEY, JSON.stringify(state)]).catch(e => console.error('[tomatoEstimate] setMeta(%s) failed:', LS_KEY, e))
-      window.todoAPI.dbCall('setMeta', [TS_KEY, now]).catch(e => console.error('[tomatoEstimate] setMeta(%s) failed:', TS_KEY, e))
+    if (!window.todoAPI || !window.todoAPI.dbCall) return
+    if (n > 0) {
+      // 2026-09-12: silent .catch(() => {}) hid meta write failures — log them (same as before).
+      window.todoAPI.dbCall('setMeta', [keyOf(taskId), String(n)]).catch(e => console.error('[tomatoEstimate] setMeta(%s) failed:', keyOf(taskId), e))
+    } else {
+      window.todoAPI.dbCall('deleteMeta', keyOf(taskId)).catch(e => console.error('[tomatoEstimate] deleteMeta(%s) failed:', keyOf(taskId), e))
     }
   } catch (e) { /* degraded debug host */ }
 }
 
-/** Startup backfill: if the meta-side timestamp is newer (= changed by CLI/another window while offline), let meta take over LS wholesale. Same pattern as habits/initFromDb */
-export async function initFromDb () {
+/** Startup backfill (Y rework): legacy-blob pass (timestamped whole-map meta, as before) UNION
+ *  per-task keys `tomatoEstimateState:<taskId>` for every known task id (caller passes the live id set;
+ *  per-task values win — they are the syncable unit now). Also performs the one-time lazy
+ *  migration: blob entries are emitted as per-task keys and the legacy DB blob is deleted
+ *  (the LS blob stays as the reactive cache). */
+export async function initFromDb (taskIds) {
   try {
     if (!window.todoAPI || !window.todoAPI.dbCall) return
-    const [metaRaw, metaAt, lsAt] = await Promise.all([
+    const lsAt = Number(localStorage.getItem(TS_KEY)) || 0
+    const [metaRaw, metaAt] = await Promise.all([
       window.todoAPI.dbCall('getMeta', LS_KEY),
-      window.todoAPI.dbCall('getMeta', TS_KEY),
-      Promise.resolve(Number(localStorage.getItem(TS_KEY)) || 0)
+      window.todoAPI.dbCall('getMeta', TS_KEY)
     ])
     const metaAtN = Number(metaAt) || 0
     const parsed = JSON.parse(metaRaw || 'null')
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return
     // D5 (2026-09-20): strict `<` — an exact tie between meta and LS stamps favors CLI/meta per the
     // "newer wins" contract (the CLI writes its timestamp synchronously; the LS write of the same
     // change lands in the same tick, and `<=` used to let the stale LS side win the tie).
-    if (metaAtN < lsAt) return // LS is strictly newer; leave it alone (ties favor meta/CLI)
-    for (const k of Object.keys(state)) delete state[k]
-    for (const [k, v] of Object.entries(parsed)) {
-      if (k === '_savedAt') continue
-      state[k] = v
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && metaAtN >= lsAt) {
+      for (const k of Object.keys(state)) delete state[k]
+      for (const [k, v] of Object.entries(parsed)) {
+        if (k === '_savedAt') continue
+        state[k] = v
+      }
+      try {
+        localStorage.setItem(LS_KEY, JSON.stringify(state))
+        localStorage.setItem(TS_KEY, String(metaAtN))
+      } catch (e) { /* ignore */ }
+      // Lazy migration: emit per-task keys for every blob entry (NEVER overwriting a per-task key
+      // that already exists — the field-granular unit is authoritative once present), then delete
+      // the legacy DB blob.
+      try {
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          for (const [k, v] of Object.entries(parsed)) {
+            if (k === '_savedAt') continue
+            try {
+              const existing = await window.todoAPI.dbCall('getMeta', keyOf(k))
+              if (existing !== null && existing !== undefined && existing !== '') continue
+            } catch (e) { /* treat as absent */ }
+            persistTask(k, Number(v) || 0)
+          }
+          window.todoAPI.dbCall('deleteMeta', LS_KEY).catch(() => {})
+          window.todoAPI.dbCall('deleteMeta', TS_KEY).catch(() => {})
+        }
+      } catch (e) { /* best-effort: legacy fallback read still works */ }
     }
-    try {
-      localStorage.setItem(LS_KEY, JSON.stringify(state))
-      localStorage.setItem(TS_KEY, String(metaAtN))
-    } catch (e) { /* ignore */ }
+    // Per-task union: known ids only (meta keys cannot be enumerated over this IPC bridge).
+    for (const id of (taskIds || [])) {
+      try {
+        const raw = await window.todoAPI.dbCall('getMeta', keyOf(id))
+        if (raw === null || raw === undefined || raw === '') continue
+        const n = Number(raw)
+        if (!Number.isFinite(n)) continue
+        const clamped = Math.max(MIN, Math.min(MAX, Math.round(n)))
+        if (clamped > 0) state[id] = clamped
+        else delete state[id]
+      } catch (e) { /* absent is fine */ }
+    }
+    try { localStorage.setItem(LS_KEY, JSON.stringify(state)) } catch (e) { /* ignore */ }
   } catch (e) { /* No DB host (5175 shim): degrade silently */ }
 }
 
@@ -100,4 +146,5 @@ export function setEstimate (taskId, n) {
   else delete state[taskId]
   trimToCapacity()
   persist()
+  persistTask(taskId, n) // Y: per-task meta key — the field-granular syncable unit
 }

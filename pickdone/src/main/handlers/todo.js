@@ -45,13 +45,15 @@ module.exports = function todoHandlers (ctx) {
     // dialog, or dial a peer and ask. Implemented in lan-sync-bootstrap.js via db-sync-ops.
     // syncUnpairPeer (2026-09-19 UX review): Device Center unpair — rotates the shared pairing
     // secret (destructive, confirm-dialog gated in the UI), same capability class as syncSetEnabled.
-    'syncPairRespond', 'syncPairRequest', 'syncUnpairPeer'
+    // X4 (2026-09-20): meta conflict backup recovery — list (read-only) + restore (writes the
+    // original key back; main-window-only like the other data-mutating sync ops)
+    'syncPairRespond', 'syncPairRequest', 'syncUnpairPeer', 'syncConflictBackupsList', 'syncConflictBackupRestore'
   ])
 
   // Dangerous DB ops: batch write/batch delete/arbitrary meta write. Capability-wise aligned with "dangerous channels main-window only" —
   // a compromised float/lock-screen window could previously wipe the whole database in bulk or change any meta via todo-db:call (audit 2026-09-01).
   // The renderer's real call surface has been verified: all three only occur in the main window (store/utils/main.js); auxiliary windows have no legitimate callers.
-  const MAIN_WINDOW_ONLY_OPS = new Set(['upsertMany', 'commitSyncBatch', 'hardDeleteMany', 'setMeta', 'deleteMeta', 'syncSetEnabled', 'syncSetName', 'syncUnpairPeer'])
+  const MAIN_WINDOW_ONLY_OPS = new Set(['upsertMany', 'commitSyncBatch', 'hardDeleteMany', 'setMeta', 'deleteMeta', 'syncSetEnabled', 'syncSetName', 'syncUnpairPeer', 'syncConflictBackupRestore'])
 
   return {
     // --- DB ---

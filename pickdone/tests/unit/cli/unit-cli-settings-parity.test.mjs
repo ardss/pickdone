@@ -47,7 +47,12 @@ test('DEFAULT_SETTINGS 的可写设置键(非派生/非受保护)都进了 CLI �
   const defaults = defaultKeys()
   // 豁免:foldedTodoList=分组折叠态(存储结构);securityLockPassword=受保护键(SETTINGS_DENIED);
   // _lsAt=内部时间戳。三者刻意不可经 CLI 设置
-  const EXEMPT = new Set(['foldedTodoList', 'securityLockPassword', '_lsAt'])
+  // 豁免追加(2026-09-20 sync-coverage-2,Y 组):以下为渲染端同步载体字段——由 renderer 经
+  // settings_rows 桥字段级同步/热应用,不属于 CLI `settings set` 语义,刻意不进清单:
+  // appLocale(经 set-app-locale 生效)/shortcutKeySettings(经 config.json+applyShortcuts)/
+  // repeatDefaultSettings(repeatSettings store 载体)/onboardingToursSeen(merge-max 账本);
+  // sidebarCollapsed/catFold/showTagPanel 为纯 UI 折叠态。
+  const EXEMPT = new Set(['foldedTodoList', 'securityLockPassword', '_lsAt', 'appLocale', 'shortcutKeySettings', 'repeatDefaultSettings', 'onboardingToursSeen', 'sidebarCollapsed', 'catFold', 'showTagPanel'])
   const missing = [...defaults].filter(k => !manifest.has(k) && !EXEMPT.has(k))
   assert.deepEqual(missing, [], 'DEFAULT_SETTINGS 里有而 CLI 清单漏登记的键(用户将无法 settings set)')
 })

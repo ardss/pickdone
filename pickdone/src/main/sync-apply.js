@@ -85,6 +85,7 @@ function createHydrationCache (state) {
     todo: id => load('todo', 'getAll', r => String(r.taskId)).get(String(id)),
     setting: key => load('setting', 'settingsRowsAll', r => r.key).get(key),
     tomato: id => load('tomato', 'tomatoAll', r => String(r.tomatoId)).get(String(id)),
+    tomatoTomb: id => load('tomatoTomb', 'tomatoTombstones', r => String(r.tomatoId)).get(String(id)),
     category: id => load('category', 'getAllCategories', r => String(r.categoryId)).get(String(id)),
     plan: id => load('plan', 'planAll', r => String(r.id)).get(String(id)),
     filter: id => load('filter', 'filterList', r => String(r.id)).get(String(id)),
@@ -325,10 +326,14 @@ function applyRowInner (state, incoming) {
     localRow = { updatedAt: cache.metaTs().get(incoming.id) || 0, deleted: false, deletedAt: 0, data: { key: incoming.id, value: localVal } }
   } else if (entity === 'tomato') {
     const r = cache.tomato(incoming.id)
-    // tomatoAll filters deleted=0 (db.js), so a local tomato tombstone reads as "absent" here;
-    // localRow stays null and the incoming row (including its tombstone) wins and is landed via
-    // the tomatoRemoveByIds branch below — the tombstone still takes effect, idempotently.
+    // X1 (2026-09-20): a LOCAL tomato tombstone must take part in LWW like a settings tombstone.
+    // Previously it read as "absent" (tomatoAll filters deleted=0), so a peer's stale live row
+    // beat "missing" and resurrected the deleted record via tomatoAppendMany (deleted=0 upsert).
     if (r) localRow = { updatedAt: r.updatedAt || 0, deleted: false, deletedAt: 0, data: r }
+    else {
+      const t = cache.tomatoTomb(incoming.id)
+      if (t) localRow = { updatedAt: t.updatedAt || 0, deleted: true, deletedAt: t.deletedAt || 0, data: null }
+    }
   } else if (entity === 'category') {
     const c = cache.category(incoming.id)
     if (c) localRow = { updatedAt: c.updatedAt || 0, deleted: false, deletedAt: 0, data: c }

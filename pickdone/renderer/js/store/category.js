@@ -70,6 +70,17 @@ function nextId () {
 
 /** Meta key for project flags: value is a JSON array of categoryIds. A project = a flagged category, zero schema changes */
 const PROJECT_IDS_KEY = 'projectCategoryIds'
+/** Y/X3 (sync-coverage-2): per-category flag keys `projectCategoryFlag:<id>` = '1' — the legacy
+ *  whole-array blob was whole-key LWW, so two devices flagging different categories clobbered each
+ *  other. Per-cat flags sync field-granular; the legacy blob is still maintained as a union for
+ *  older readers, and init() unions both sides. */
+const projectFlagKey = id => 'projectCategoryFlag:' + id
+function writeProjectFlag (id, flag) {
+  try {
+    if (flag) window.todoAPI.dbCall('setMeta', [projectFlagKey(id), '1']).catch(() => {})
+    else window.todoAPI.dbCall('deleteMeta', projectFlagKey(id)).catch(() => {})
+  } catch (e) { /* degraded host */ }
+}
 const deadlineKey = id => 'projectDeadline:' + id
 /** Project lifecycle status (contract shared with the CLI): string active|paused|done|cancelled, absent = 'active' */
 const statusKey = id => 'projectStatus:' + id
@@ -172,6 +183,7 @@ export default {
         try { window.todoAPI.dbCall('setMeta', [PROJECT_IDS_KEY, JSON.stringify(ids)]).catch(() => {}) } catch (e) { /* degraded host */ }
       }
       for (const vid of victims) {
+        writeProjectFlag(vid, false) // Y/X3: victim's per-cat flag key must not resurrect the project
         try { window.todoAPI.dbCall('deleteMeta', statusKey(vid)).catch(() => {}) } catch (e) { /* absent is fine */ }
         try { window.todoAPI.dbCall('deleteMeta', deadlineKey(vid)).catch(() => {}) } catch (e) { /* absent is fine */ }
         delete state.projectMeta[vid]
@@ -207,6 +219,7 @@ export default {
       const ids = state.projectIds.filter(x => x !== id)
       if (flag) ids.push(id)
       state.projectIds = ids
+      writeProjectFlag(id, flag) // Y/X3: field-granular unit
       try {
         window.todoAPI.dbCall('setMeta', [PROJECT_IDS_KEY, JSON.stringify(ids)]).catch(() => {})
       } catch (e) { /* in-memory only when the browser debug host degrades */ }
@@ -263,7 +276,15 @@ export default {
       try {
         const raw = await window.todoAPI.dbCall('getMeta', PROJECT_IDS_KEY)
         const ids = JSON.parse(raw || '[]')
-        if (Array.isArray(ids)) commit('setProjectIds', ids)
+        // Y/X3 legacy union: per-cat flag keys for every known row id, merged over the legacy blob
+        // (a flag present only on a peer device arrives via its own per-cat key and must survive).
+        const merged = (Array.isArray(ids) ? ids.slice() : [])
+        for (const r of rows) {
+          try {
+            if ((await window.todoAPI.dbCall('getMeta', projectFlagKey(r.categoryId))) === '1' && !merged.includes(r.categoryId)) merged.push(r.categoryId)
+          } catch (e) { /* absent is fine */ }
+        }
+        if (merged.length) commit('setProjectIds', merged)
       } catch (e) { /* stays empty when no project flags */ }
       await this.dispatch('category/loadProjectMeta')
       if (rows.length) {

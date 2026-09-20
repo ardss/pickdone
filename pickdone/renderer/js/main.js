@@ -175,11 +175,12 @@ async function bootstrap () {
     bootMark('category/init')
     // Primary-data mirror restore: backfill settings/habits/tomato records from the DB archive when it is newer than LS (no more loss when LS is cleared)
     store.dispatch('settings/initFromDb').catch(() => {})
+    store.dispatch('auth/initGamification').catch(e => console.warn('[auth] gamification init failed:', e)) // Y10: fold synced gamification deltas into the LS totals
     store.dispatch('habits/initFromDb').catch(() => {})
     store.dispatch('tomato/initFromDb').catch(() => {})
     // Remote running-tomato chip: subscribe to 'tomato-announce' syncEvents + load snapshot
     store.dispatch('tomatoAnnounce/init').catch(() => {})
-    import('./utils/tomatoEstimate.js').then(m => m.initFromDb()).catch(() => {}) // Estimated tomatoes: backfill from meta when newer (same ledger as CLI setEstimate, 2026-09-03)
+    import('./utils/tomatoEstimate.js').then(m => m.initFromDb(store.state.todo.todoList.map(t => t.taskId))).catch(() => {}) // Estimated tomatoes: backfill from meta when newer (same ledger as CLI setEstimate, 2026-09-03; Y: per-task key union over live ids)
     store.dispatch('filters/load').catch(() => {}) // Saved filters (smart lists)
     // Statutory holiday table (data source for repeat tasks "skip holidays / weekdays only") + lunar calendar library injection (lunar yearly repeats)
     store.commit('todo/setHolidayList', getHolidayList())
@@ -201,7 +202,7 @@ async function bootstrap () {
   // ('meta' kind, initFromDb throttled to 1s) — both used to stay stale until restart.
   const _reloadExternal = createExternalReloader({
     store,
-    reloadEstimates: () => import('./utils/tomatoEstimate.js').then(m => m.initFromDb())
+    reloadEstimates: () => import('./utils/tomatoEstimate.js').then(m => m.initFromDb(store.state.todo.todoList.map(t => t.taskId)))
   })
   window.todoAPI.onTodosChanged(evt => {
     _todosChangedSyncApply = !!(evt && evt.reason === 'lan-sync-apply')

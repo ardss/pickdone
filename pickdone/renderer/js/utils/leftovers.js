@@ -11,10 +11,29 @@ import { batchMoveWithUndo } from './confirm.js'
 
 const FLAG_KEY = 'leftoverAskDate'
 
+/** Y5 (sync-coverage-2): the asked-date flag moved from localStorage to the syncable meta entity
+ *  (setMeta('leftoverAskDate', 'YYYY-MM-DD'); date-string LWW is merge-safe). LS stays as a
+ *  write-through cache so the sync-current-day read still works pre-migration / in degraded hosts. */
+async function askedToday (todayStr) {
+  try {
+    if (window.todoAPI && window.todoAPI.dbCall) {
+      const v = await window.todoAPI.dbCall('getMeta', FLAG_KEY)
+      if (v === todayStr) return true
+    }
+  } catch (e) { /* meta unavailable: fall through to LS */ }
+  try { return localStorage.getItem(FLAG_KEY) === todayStr } catch (e) { return false }
+}
+function markAsked (todayStr) {
+  try { localStorage.setItem(FLAG_KEY, todayStr) } catch (e) { /* empty */ }
+  try {
+    if (window.todoAPI && window.todoAPI.dbCall) window.todoAPI.dbCall('setMeta', [FLAG_KEY, todayStr]).catch(e => console.error('[leftovers] setMeta flag failed:', e))
+  } catch (e) { /* degraded host: LS only */ }
+}
+
 export async function maybeAskLeftovers (store) {
   try {
     const todayStr = dayjs().format(FMT.date)
-    if (localStorage.getItem(FLAG_KEY) === todayStr) return
+    if (await askedToday(todayStr)) return
 
     const yStart = +dayjs().subtract(1, 'day').startOf('day')
     const yEnd = +dayjs().subtract(1, 'day').endOf('day')
@@ -35,11 +54,11 @@ export async function maybeAskLeftovers (store) {
       )
     } catch (e) {
       // Staying on yesterday / manually closing also counts as "already asked today" — otherwise it re-pops on every refresh, the translucent overlay repeatedly covering the page (user feedback)
-      try { localStorage.setItem(FLAG_KEY, todayStr) } catch {}
+      markAsked(todayStr)
       return
     }
     // Only write the flag when the user explicitly chose "move to today" — avoids being skipped after hesitation
-    localStorage.setItem(FLAG_KEY, todayStr)
+    markAsked(todayStr)
     const todayStart = +dayjs().startOf('day')
     const snap = list.map(t => ({ id: t.taskId, dayStart: t.dayStart, todoTime: t.todoTime }))
     for (const t of list) {

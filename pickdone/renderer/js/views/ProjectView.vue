@@ -195,10 +195,26 @@ export default {
       this._boardRo.observe(this.$refs.headEl)
     }
     window.addEventListener('resize', this.measureBoard)
+    // Y7 (sync-coverage-2): milestones/deadline were read once at created() — an inbound sync round
+    // (or a CLI milestone/deadline meta write) never refreshed an already-open view. Re-read on
+    // todos-changed broadcasts (meta writes ride the same notify channel), throttled.
+    if (window.todoAPI && window.todoAPI.onTodosChanged) {
+      this._offTodosChanged = window.todoAPI.onTodosChanged(() => {
+        const now = Date.now()
+        if (this._msRefreshAt && now - this._msRefreshAt < 2000) return
+        this._msRefreshAt = now
+        try {
+          this.reloadMilestones()
+          this.reloadDeadline()
+          this.$store.dispatch('category/loadProjectMeta')
+        } catch { /* keep current view state */ }
+      })
+    }
   },
   beforeUnmount () {
     if (this._boardRo) this._boardRo.disconnect()
     window.removeEventListener('resize', this.measureBoard)
+    if (this._offTodosChanged) { try { this._offTodosChanged() } catch { /* already off */ } }
   },
   watch: {
     // Navigating project -> project reuses this component instance: the root :key re-keys a plain
@@ -387,7 +403,7 @@ export default {
     addMilestone () { this.msModal = { mode: 'add' } },
     /** Edit milestone (click node/card): same single dialog, pre-filled */
     editMilestone (m) { this.msModal = { mode: 'edit', ms: m } },
-    onMsSave ({ title, date }) {
+    async onMsSave ({ title, date }) {
       const modal = this.msModal
       this.msModal = null
       if (!modal) return
@@ -404,7 +420,19 @@ export default {
         this.$message.success(this.$t('statsB.ProjectView.msAdded'))
       } else {
         const ms = modal.ms
-        this.milestones = saveMilestones(this.catId, this.milestones.map(x => x.id === ms.id ? { ...x, title, date: parsed } : x))
+        // Y7 merge guard: the list may have changed while the dialog was open (peer sync round /
+        // CLI write). Re-read the latest from meta and edit ON that base — per-key LWW on the meta
+        // blob plus the conflict backup keep this safe; we only surface a console-level note
+        // (scope kept minimal, no extra UI).
+        let base = this.milestones
+        try {
+          const latest = await loadMilestones(this.catId)
+          if (latest.length !== base.length || latest.some((m, i) => (base[i] && (base[i].id !== m.id || base[i].date !== m.date || base[i].title !== m.title)))) {
+            console.info('[ProjectView] milestones changed while edit dialog open — rebasing on latest meta')
+            base = latest
+          }
+        } catch { /* re-read failure: fall back to the open-time snapshot */ }
+        this.milestones = saveMilestones(this.catId, base.map(x => x.id === ms.id ? { ...x, title, date: parsed } : x))
         this.$message.success(this.$t('statsB.ProjectView.msUpdated'))
       }
     },

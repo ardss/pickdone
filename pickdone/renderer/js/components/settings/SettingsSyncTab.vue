@@ -58,6 +58,26 @@
       </div>
     </div>
 
+    <!-- Y9 (sync-coverage-2): sync conflict backups (meta conflict lost-data snapshots, agent X's
+         contract: syncConflictBackupsList -> [{key, lostAt, preview}], syncConflictBackupRestore(key)).
+         Defensive: if the main process does not expose the ops yet (agent X not merged), the whole
+         section stays hidden. -->
+    <div class="form" v-if="conflictBackups !== null">
+      <div class="form-item"><span class="form-item__label"></span>
+        <div class="form-item__control">
+          <button class="mini sync-collapse-toggle" @click="conflictOpen = !conflictOpen">{{ conflictOpen ? '▾' : '▸' }} {{ $t('sync.conflictSection') }} ({{ conflictBackups.length }})</button>
+        </div></div>
+      <div v-if="conflictOpen" class="sync-conflict-list">
+        <div class="tip" v-if="!conflictBackups.length">{{ $t('sync.conflictEmpty') }}</div>
+        <div v-for="b in conflictBackups" :key="b.key" class="sync-conflict-item">
+          <span class="tip sync-conflict-key">{{ b.key }}</span>
+          <span class="tip" v-if="b.lostAt">{{ $t('sync.conflictLostAt', { time: fmtFull(b.lostAt) }) }}</span>
+          <span class="tip sync-conflict-preview" v-if="b.preview">{{ b.preview }}</span>
+          <button class="mini" :disabled="conflictBusy === b.key" @click="restoreConflict(b)">{{ $t('sync.conflictRestore') }}</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Outbound pairing: add device by host -->
     <div class="form" v-if="enabled">
       <div class="form-label">{{ $t('sync.addDeviceLabel') }}</div>
@@ -231,7 +251,11 @@ export default {
       securityOpen: false,
       manualOpen: false,
       feedOpen: false,
-      confirmBox: null // P1-3/P1-4: { titleKey, textKey, params, onOk } destructive-action confirm
+      confirmBox: null, // P1-3/P1-4: { titleKey, textKey, params, onOk } destructive-action confirm
+      // Y9 conflict backups: null = ops unavailable (hide the section); array = list from main
+      conflictBackups: null,
+      conflictOpen: false,
+      conflictBusy: null
     }
   },
   computed: {
@@ -253,6 +277,27 @@ export default {
     pairDraftOk () { return /^\d{6}$/.test(String(this.pairDraft || '')) }
   },
   methods: {
+    /** Y9: probe + list conflict backups. Missing/unavailable op (agent X not merged) => null
+     *  (section hidden); any other failure also degrades to hidden — this UI must never block sync. */
+    async loadConflictBackups () {
+      try {
+        const list = await dbCallLoose('syncConflictBackupsList')
+        this.conflictBackups = Array.isArray(list) ? list : []
+      } catch (e) { this.conflictBackups = null }
+    },
+    /** Y9: restore one backup via the contract op, then refresh the list. */
+    async restoreConflict (b) {
+      this.conflictBusy = b.key
+      try {
+        await dbCallLoose('syncConflictBackupRestore', b.key)
+        this.$message.success(this.$t('sync.conflictRestored'))
+      } catch (e) {
+        this.$message.error(this.$t('sync.conflictRestoreFail'))
+      } finally {
+        this.conflictBusy = null
+        this.loadConflictBackups()
+      }
+    },
     dotClass (p) { return peerDotClass(p) },
     feedIcon (k) { return feedIcon(k) },
     /** P2c: peer card in the "unpaired by the other device" state — dedicated copy + no Unpair button. */
@@ -526,6 +571,7 @@ export default {
   },
   mounted () {
     this.refresh().then(() => this.checkPendingPair())
+    this.loadConflictBackups()
     this.bindSyncEvents()
     this.startRelTicker()
   }

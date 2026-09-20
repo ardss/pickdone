@@ -205,5 +205,9 @@ contextBridge.exposeInMainWorld('todoAPI', {
   // Two-way confirmed pairing: answer a pending inbound request ({accept: boolean}) or
   // dial a peer and ask ({host, port?}). Both dispatch through the db-op whitelist.
   syncPairRespond: payload => invoke('todo-db:call', 'syncPairRespond', payload || {}),
-  syncPairRequest: payload => invoke('todo-db:call', 'syncPairRequest', payload || {})
+  syncPairRequest: payload => invoke('todo-db:call', 'syncPairRequest', payload || {}),
+  // X4 (2026-09-20): meta conflict backup recovery. List returns [{key, originalKey, lostAt,
+  // preview(<=200 chars)}]; restore re-applies a backup's value to its original key ({key} param).
+  syncConflictBackupsList: () => invoke('todo-db:call', 'syncConflictBackupsList', {}),
+  syncConflictBackupRestore: payload => invoke('todo-db:call', 'syncConflictBackupRestore', payload || {})
 })

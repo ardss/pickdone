@@ -148,6 +148,12 @@ export default {
     "repairWarning": "配对将采用新的共享密钥——已配对的设备会被断开，需要重新配对。",
     "conflictKept": "同步冲突：「{name}」已保留对方设备的版本，你早前的内容在回收站",
     "conflictApplied": "同步冲突：「{name}」已应用对方设备的版本",
-    "unpairedByRemote": "已被对方解除配对，请重新配对"
+    "unpairedByRemote": "已被对方解除配对，请重新配对",
+    "conflictSection": "同步冲突备份",
+    "conflictEmpty": "没有冲突备份记录",
+    "conflictLostAt": "丢失于 {time}",
+    "conflictRestore": "恢复",
+    "conflictRestored": "已恢复备份数据",
+    "conflictRestoreFail": "恢复失败，请重试"
   }
 }

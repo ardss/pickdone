@@ -11,13 +11,31 @@ const T = (k) => `statsH.Onboarding.${k}`
 function seenMap () {
   try { return JSON.parse(localStorage.getItem(LS_KEY) || '{}') } catch (e) { return {} }
 }
+/* Y6 (sync-coverage-2): the ledger also rides the synced settings blob field `onboardingToursSeen`
+ * (merged per-key max on inbound apply, see store/settings.js updateExternal). LS stays the
+ * synchronous cache; the blob mirror is debounced (runTour writes right after startup bursts). */
+let blobTimer = null
+function syncBlob () {
+  clearTimeout(blobTimer)
+  blobTimer = setTimeout(() => {
+    try {
+      const st = window.appUI && window.appUI.$store
+      if (st) st.commit('settings/updateSettings', { onboardingToursSeen: { ...seenMap() } })
+    } catch (e) { /* store not mounted / stub host */ }
+  }, 400)
+}
 function markSeen (key) {
   const m = seenMap()
   m[key] = Date.now()
   try { localStorage.setItem(LS_KEY, JSON.stringify(m)) } catch (e) { /* ignore */ }
+  syncBlob()
 }
 export function resetToursSeen () {
   try { localStorage.removeItem(LS_KEY) } catch (e) { /* ignore */ }
+  try {
+    const st = window.appUI && window.appUI.$store
+    if (st) st.commit('settings/updateSettings', { onboardingToursSeen: {} }) // local clear replaces wholesale (merge-max only guards INBOUND patches)
+  } catch (e) { /* store not mounted */ }
 }
 
 function driverFactory () {

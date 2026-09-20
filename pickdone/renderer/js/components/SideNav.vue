@@ -241,12 +241,12 @@ export default {
   components: { WeatherWidget, SnTagPanel, SnManageCategoriesModal, SnManageTagsModal, FilterModal: () => import('./FilterModal.vue') },
   data () {
     return {
-      // User's manual collapse preference (localStorage); forced collapse on narrow viewports, see also the narrow/collapsed computed Value is JSON.stringify(boolean); on corruption/tampering fall back to false instead of throwing and blowing up the whole sidebar mount
-      userCollapsed: localStorage.getItem('sidebarCollapsed') === 'true',
+      // Y3 (sync-coverage-2): userCollapsed / catFold / showTagPanel moved out of data() into
+      // computed accessors over the synced settings store (blob fields sidebarCollapsed / catFold /
+      // showTagPanel); localStorage 'sidebarCollapsed' stays as a write-through cache.
       narrow: false,
       catEditing: null as any,
       newCatName: '',
-      showTagPanel: true,
       searchWord: '',
       // Sync button spin flag (reference: sidebar-profile-item__btn--spin)
       spinning: false,
@@ -255,7 +255,6 @@ export default {
       manageVisible: false,
       // Manage tags modal: rename/delete lives in the extracted dialog; only the open flag stays
       tagMgrVisible: false,
-      catFold: false,
       showFilterPanel: true,
       filterEditVisible: false,
       expandedFolders: {} as any,
@@ -267,6 +266,25 @@ export default {
     }
   },
   computed: {
+    /* Y3 (sync-coverage-2): the three fold flags live in the synced settings blob and are read
+       reactively here; writes commit to the store (cross-device sync) and write-through the legacy
+       LS key as cache. The forced narrow-viewport collapse stays transient behavior (mounted), never
+       persisted intent — it flips the same accessor, which is what the user then keeps. */
+    userCollapsed: {
+      get () { return !!this.$store.state.settings.sidebarCollapsed },
+      set (v) {
+        this.$store.commit('settings/updateSettings', { sidebarCollapsed: !!v })
+        try { localStorage.setItem('sidebarCollapsed', JSON.stringify(!!v)) } catch (e) { /* empty */ }
+      }
+    },
+    catFold: {
+      get () { return !!this.$store.state.settings.catFold },
+      set (v) { this.$store.commit('settings/updateSettings', { catFold: !!v }) }
+    },
+    showTagPanel: {
+      get () { return this.$store.state.settings.showTagPanel !== false },
+      set (v) { this.$store.commit('settings/updateSettings', { showTagPanel: !!v }) }
+    },
     /* Collapsed state = user preference. Narrow windows (<920px) no longer force collapse: the expanded state is handled by a CSS drawer (absolutely positioned over the main column,
        out of flow) to cover the overflow P0; the collapse-once-on-narrow logic is in mounted/_onNarrow */
     collapsed () { return this.userCollapsed },
@@ -361,8 +379,8 @@ export default {
       return (v && v.i18n) ? i18n.global.t(v.i18n) : v
     },
     toggleCollapse () {
+      // LS write-through now lives in the userCollapsed setter (Y3)
       this.userCollapsed = !this.userCollapsed
-      localStorage.setItem('sidebarCollapsed', JSON.stringify(this.userCollapsed))
     },
     /* Clicking the search icon while collapsed: expand the sidebar and hand focus to the search input.
        In narrow windows (<920px) the expanded state uses the drawer overlay (CSS media query, absolutely positioned over the main column without squeezing the layout),

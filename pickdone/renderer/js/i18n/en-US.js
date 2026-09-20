@@ -148,6 +148,12 @@ export default {
     "repairWarning": "Pairing adopts a new shared secret — existing paired devices will be disconnected and must be paired again.",
     "conflictKept": "Sync conflict: \"{name}\" — the other device's version was kept; your earlier copy is in the recycle bin",
     "conflictApplied": "Sync conflict: \"{name}\" — the other device's version was applied",
-    "unpairedByRemote": "Unpaired by the other device — pair again"
+    "unpairedByRemote": "Unpaired by the other device — pair again",
+    "conflictSection": "Sync conflict backups",
+    "conflictEmpty": "No conflict backups",
+    "conflictLostAt": "Lost at {time}",
+    "conflictRestore": "Restore",
+    "conflictRestored": "Backup restored",
+    "conflictRestoreFail": "Restore failed, please retry"
   }
 }

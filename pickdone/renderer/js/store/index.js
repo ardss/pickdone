@@ -48,6 +48,35 @@ store.subscribeAction({
   }
 })
 
+// Y4 (sync-coverage-2): fan the synced settings blob's repeatDefaultSettings into the live
+// repeatSettings module whenever the blob changes (inbound sync via settings/updateExternal,
+// cross-window storage sync, DB-mirror restore all land on settings/updateSettings). One-way:
+// updateFromBlob never re-commits to settings, so there is no loop.
+store.subscribe(mutation => {
+  if (!(mutation.type === 'settings/updateSettings' && mutation.payload)) return
+  if ('repeatDefaultSettings' in mutation.payload) {
+    store.commit('repeatSettings/updateFromBlob', mutation.payload.repeatDefaultSettings)
+  }
+  // Y6: blob → LS write-through for the tours ledger (LS is the synchronous read cache of
+  // utils/onboardingTours.js). Merge per-key max so a stale whole-package echo can't unsee a tour.
+  if (mutation.payload.onboardingToursSeen && typeof mutation.payload.onboardingToursSeen === 'object') {
+    try {
+      const cur = JSON.parse(localStorage.getItem('onboardingToursSeen') || '{}')
+      for (const [k, v] of Object.entries(mutation.payload.onboardingToursSeen)) {
+        if (!(k in cur) || (Number(v) || 0) > (Number(cur[k]) || 0)) cur[k] = v
+      }
+      localStorage.setItem('onboardingToursSeen', JSON.stringify(cur))
+    } catch (e) { /* stub host without LS */ }
+  }
+})
+// Y4 first-run seed: the blob field starts empty — adopt the LS-loaded defaults so existing users
+// are mirrored once, after which the blob is authoritative on every change.
+try {
+  if (!Object.keys(store.state.settings.repeatDefaultSettings || {}).length && Object.keys(store.state.repeatSettings || {}).length) {
+    store.commit('settings/updateSettings', { repeatDefaultSettings: { ...store.state.repeatSettings } })
+  }
+} catch (e) { /* isolated unit-test stores may lack one side */ }
+
 // Cross-window tomatoState sync uniformly goes through main.js's storage listener → tomato/syncFromStorage (with normalization);
 // no duplicate listener here (double listeners would parse twice and bypass syncFromStorage's normalization with a direct Object.assign)
 

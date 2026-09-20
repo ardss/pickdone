@@ -69,7 +69,26 @@ export const DEFAULT_SETTINGS = {
   taskFlyAnimation: true, // paper-plane-to-entry animation on task completion (can be turned off in settings)
   sortMode: 'custom', // custom | created | difficulty (historical values may be Chinese, normalized compatibly in todo.js)
   closeActionMinimize: true,
-  colorMode: 'light'
+  colorMode: 'light',
+  // Y1 (sync-coverage-2): app locale rides the synced settings blob so it syncs field-granular via
+  // the settings_rows bridge; localStorage 'appLocale' stays as the boot cache (i18n/index.js:53).
+  appLocale: 'zh-CN',
+  // Y3: sidebar collapse / category-section fold / tag panel visibility in the synced blob.
+  // The forced narrow-viewport collapse stays transient (SideNav never persists it).
+  sidebarCollapsed: false,
+  catFold: false, // single bool: categories section folded in the sidebar (SideNav.vue semantics)
+  showTagPanel: true,
+  // Y2: global shortcut map (same shape as main config-store DEFAULT_SHORTCUTS — mirrored here
+  // because renderer code must not import from src/main). Seeded from config.json on first run.
+  shortcutKeySettings: {
+    sync: 'ctrl+s', toggleMainWindow: '', quickAddGlobal: 'alt+shift+t', addEvent: 'ctrl+n', deleteEvent: 'ctrl+d',
+    pinEvent: '', unpinEvent: '', toggleAllSubtasks: '', startPomodoro: '',
+    switchToDaytodo: 'ctrl+1', switchToRecentTodos: 'ctrl+2', switchToSchedule: 'ctrl+3', switchToInbox: 'ctrl+4'
+  },
+  // Y4: repeat-rule defaults (repeatSettingsV2State content as one JSON object; store/repeatSettings.js reads/writes through here)
+  repeatDefaultSettings: {},
+  // Y6: onboarding tours seen ledger ({tourKey: ts}); inbound patches merge per-key max, never clobber
+  onboardingToursSeen: {}
 }
 
 /**
@@ -154,7 +173,25 @@ export function sanitizeSettingsPatch (patch) {
       continue
     }
     if (typeof def !== typeof v) continue // type-mismatched junk (e.g. object where boolean declared)
+    // Y2: a partial inbound shortcut map must not unregister every other shortcut — merge over the
+    // declared defaults before applying (main's applyShortcuts would otherwise drop missing keys).
+    // Arrays are junk too (an object field never accepts a list).
+    if (k === 'shortcutKeySettings' && v && typeof v === 'object' && !Array.isArray(v)) {
+      out[k] = { ...DEFAULT_SETTINGS.shortcutKeySettings, ...v }
+      continue
+    }
+    if (typeof def === 'object' && Array.isArray(v)) continue
     out[k] = v
+  }
+  return out
+}
+
+/** Y6 pure helper (unit-tested): union-merge two {tourKey: ts} ledgers keeping the max ts per key. */
+export function mergeTourMap (local, inbound) {
+  const out = { ...(local && typeof local === 'object' ? local : {}) }
+  for (const k of Object.keys(inbound || {})) {
+    const v = Number(inbound[k]) || 0
+    if (!(k in out) || v > (Number(out[k]) || 0)) out[k] = v
   }
   return out
 }
@@ -175,6 +212,14 @@ function load () {
   if (merged.doneGroupsFoldMigrated !== true) {
     merged.foldedTodoList = Array.from(new Set([...(merged.foldedTodoList || []), 'today-done', 'day-done']))
     merged.doneGroupsFoldMigrated = true
+  }
+  // Y1/Y3 first-run seeding: the blob fields start at defaults; adopt legacy localStorage values so
+  // existing users keep their locale / collapsed sidebar (blob fields win from then on).
+  if (merged.appLocale === DEFAULT_SETTINGS.appLocale) {
+    try { const ls = localStorage.getItem('appLocale'); if (ls) merged.appLocale = ls } catch (e) { /* empty */ }
+  }
+  if (merged.sidebarCollapsed === false) {
+    try { if (localStorage.getItem('sidebarCollapsed') === 'true') merged.sidebarCollapsed = true } catch (e) { /* empty */ }
   }
   return merged
 }
@@ -243,6 +288,16 @@ export default {
   actions: {
     async update ({ commit }, patch) {
       commit('updateSettings', patch)
+      // Y1: locale hot-apply — mirror the local-change path (main handlers/settings.js 'set-app-locale'):
+      // main-process i18n + tray rebuild. LS 'appLocale' stays as i18n's boot cache (write-through).
+      if (patch && patch.appLocale && typeof patch.appLocale === 'string') {
+        try { localStorage.setItem('appLocale', patch.appLocale) } catch (e) { /* empty */ }
+        try {
+          const i18nMod = await import('../i18n/index.js')
+          if (i18nMod.default && i18nMod.default.global) i18nMod.default.global.locale = patch.appLocale
+        } catch (e) { /* i18n unavailable in degraded hosts */ }
+        try { if (window.todoAPI && window.todoAPI.setAppLocale) window.todoAPI.setAppLocale(patch.appLocale) } catch (e) { /* empty */ }
+      }
       try { await window.todoAPI.updateSettings(patch) } catch (e) {
         // IPC failure = LS written but config.json not; next launch config would overwrite it back (settings changed during lock → lost on restart): at least leave a trace
         console.error('[settings] updateSettings IPC failed, patch may be reverted on next launch:', patch, e)
@@ -250,13 +305,33 @@ export default {
     },
     /** P1-3: inbound patch from a trust boundary (CLI watcher / LAN-sync applied settings rows).
      *  Sanitized via sanitizeSettingsPatch (same coercion/validation family as restore()), then
-     *  re-dispatched through the normal update action so LS/config.json/shortcuts stay in sync. */
-    async updateExternal ({ dispatch }, patch) {
+     *  re-dispatched through the normal update action so LS/config.json/shortcuts stay in sync.
+     *  Y6: the onboardingToursSeen ledger merges per-key max on inbound (never whole-doc clobber) —
+     *  a peer seeing tour "pips" must not erase this device's other seen entries. Local writes
+     *  (resetToursSeen) still replace wholesale because they bypass this merge. */
+    async updateExternal ({ state, dispatch }, patch) {
       const clean = sanitizeSettingsPatch(patch)
+      if (clean.onboardingToursSeen && typeof clean.onboardingToursSeen === 'object' && !Array.isArray(clean.onboardingToursSeen)) {
+        clean.onboardingToursSeen = mergeTourMap(state.onboardingToursSeen, clean.onboardingToursSeen)
+      }
       if (Object.keys(clean).length) await dispatch('update', clean)
     },
     // On startup judge newness by timestamp: if the DB mirror is newer than LS (e.g. LS cleared / machine change) → restore key-level from DB wholesale; otherwise flush current values back to the DB
     async initFromDb ({ state, commit }) {
+      // Y2 first-run seeding: if the blob still carries the untouched default shortcut map, adopt the
+      // machine's real config.json values (read via the existing get-settings IPC). Seeding runs BEFORE
+      // the DB-mirror restore so an already-synced blob value always wins over local config.
+      try {
+        const def = DEFAULT_SETTINGS.shortcutKeySettings
+        const isDefault = JSON.stringify(state.shortcutKeySettings) === JSON.stringify(def)
+        if (isDefault && window.todoAPI && window.todoAPI.getSettings) {
+          const cfg = await window.todoAPI.getSettings()
+          if (cfg && cfg.shortcutKeySettings && typeof cfg.shortcutKeySettings === 'object' &&
+              JSON.stringify(cfg.shortcutKeySettings) !== JSON.stringify(def)) {
+            commit('updateSettings', { shortcutKeySettings: { ...def, ...cfg.shortcutKeySettings } })
+          }
+        }
+      } catch (e) { /* degraded host: keep defaults */ }
       const db = await restoreFromDb('db.settingsState')
       let lsAt = 0
       try { lsAt = Number(localStorage.getItem(MIRROR_AT_KEY) || 0) } catch (e) { /* empty */ }
