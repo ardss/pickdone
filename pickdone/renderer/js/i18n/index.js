@@ -69,6 +69,13 @@ export function setLocale (locale) {
   if (i18n.global) i18n.global.locale = locale
   document.documentElement.setAttribute('lang', locale === 'en-US' ? 'en' : 'zh-CN')
   try { window.todoAPI && window.todoAPI.setAppLocale && window.todoAPI.setAppLocale(locale) } catch (e) { /* browser host lacks this channel */ }
+  // Y1 (sync-coverage-2): mirror the change into the synced settings blob so the locale syncs
+  // field-granular to peers (LS stays the boot cache). The commit is skipped when the change itself
+  // arrived IN through the blob (store apply) and appLocale already matches — no echo loop.
+  try {
+    const st = window.appUI && window.appUI.$store
+    if (st && st.state.settings.appLocale !== locale) st.commit('settings/updateSettings', { appLocale: locale })
+  } catch (e) { /* store not mounted yet (early boot / stub hosts) */ }
   // document.title 固定为浏览器入口 <title>(无路由 afterEach 机制——曾标注的动态更新机制不存在,2026-09-05 审查核实后删除了依赖它的死代码 pageTitle)
 }
 
