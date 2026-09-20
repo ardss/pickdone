@@ -44,24 +44,25 @@ try {
  * addresses[0] live-dialed a temporary IPv6, a scope-less link-local, or a VMware NAT IP — all
  * timing out while the peer sat reachable one hop away. Selection rules:
  *   - drop link-local IPv6 (fe80::) WITHOUT a %scope id (unroutable) and IPv4 link-local 169.254.*;
- *   - drop known virtual-adapter ranges (192.168.111.* = VMware NAT here) and hosts resolved on
- *     virtual adapters;
- *   - prefer the IPv4 that shares a subnet with an ACTIVE NON-VIRTUAL local interface, then any
- *     other IPv4, then a scoped/global IPv6, then whatever arrived. */
-const VIRTUAL_IF_RE = /vmnet|vmware|virtual|vbox|virtualbox|hyper-v|vethernet|docker|loopback|tap|tun/i
-function isVirtualRange(host) {
-  const m4 = String(host).match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/)
-  if (!m4) return false
-  const [a, b] = [Number(m4[1]), Number(m4[2])]
-  // 192.168.111.* (observed live VMware NAT); 169.254.* link-local handled separately below.
-  return (a === 192 && b === 168 && Number(m4[3]) === 111)
-}
+ *   - Round-2 P1 (2026-09-21): the hardcoded 192.168.111.* "virtual range" was site-specific
+ *     (this dev machine's VMware NAT) and wrongly hard-rejected real peers on other LANs using
+ *     that range. Removed: scoring is now purely topological — an IPv4 sharing a /24 prefix with
+ *     an active non-internal local interface scores highest; everything else stays ALLOWED at the
+ *     lowest positive score (rememberPeer's dialability check + dial-failure budget still guard).
+ *   - a scoped link-local IPv6 (fe80::x%if) has its %scope stripped for comparison: the scope id
+ *     is the ADVERTISER's interface index, meaningless for dialing from here — score lowest. */
 function hostScore(host) {
-  const s = String(host || '')
+  let s = String(host || '')
   if (!s) return -1
   if (s.startsWith('169.254.')) return -1 // IPv4 link-local
-  if (s.startsWith('fe80:') && !s.includes('%')) return -1 // scope-less IPv6 link-local
-  if (isVirtualRange(s)) return -1
+  // Scoped link-local IPv6: strip the %scope suffix (advertiser's interface, not ours) — then it
+  // is just fe80::, scored LOWEST-dialable (1) instead of ranked as a global address (round-2 P1).
+  if (s.startsWith('fe80:')) {
+    const pct = s.indexOf('%')
+    if (pct === -1) return -1 // scope-less IPv6 link-local: unroutable
+    s = s.slice(0, pct)
+    return 1
+  }
   const isV4 = /^\d+\.\d+\.\d+\.\d+$/.test(s)
   let sameSubnet = 0
   try {
@@ -70,16 +71,15 @@ function hostScore(host) {
       for (const list of Object.values(os.networkInterfaces())) {
         for (const ni of list || []) {
           if (!ni || ni.internal || !ni.address || ni.family !== 'IPv4') continue
-          if (VIRTUAL_IF_RE.test(String(ni.mac || '') ) ) continue // best-effort: no name exposed here
           const n = ni.address.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/)
           if (n && n[1] === m[1] && n[2] === m[2] && n[3] === m[3]) sameSubnet = 1
         }
       }
     }
   } catch { /* best effort */ }
-  if (isV4) return sameSubnet ? 4 : 3
-  if (s.includes(':')) return s.includes('%') || !s.startsWith('fe80') ? 2 : -1
-  return 1 // hostnames
+  if (isV4) return sameSubnet ? 4 : 1 // round-2 P1: cross-subnet IPv4 allowed but lowest-ranked
+  if (s.includes(':')) return 3 // global/scoped IPv6 (scope already stripped above)
+  return 2 // hostnames
 }
 /** Pick the most dialable address from an mDNS advertisement. */
 function pickAdvertisedAddress(addresses, fallbackHost) {
@@ -128,12 +128,14 @@ function createDiscovery() {
     const peer = {
       deviceId: info.deviceId,
       name: info.name || info.deviceId,
-      // Round-1 P0: pick the dialable address (same-subnet IPv4 first) instead of addresses[0].
-      host: pickAdvertisedAddress(info.addresses, info.host) || '127.0.0.1',
+      // Round-2 P1: NO loopback placeholder — a peer without any dialable address is SKIPPED
+      // (announcements re-arrive every ~2s). Storing '127.0.0.1' made the node dial itself.
+      host: pickAdvertisedAddress(info.addresses, info.host),
       port: info.port,
       protoVer: info.protoVer || PROTO_VER,
       lastSeen: Date.now(),
     }
+    if (!peer.host || !isDialableHost(peer.host)) return null
     const isNew = !existing
     peers.set(info.deviceId, peer)
     if (isNew && !stopped) em.emit('found', peer)
@@ -182,7 +184,10 @@ function createDiscovery() {
         if (now - last < UDP_UPSERT_MIN_INTERVAL_MS) return
         lastUpsertByIp.set(ip, now)
         if (lastUpsertByIp.size >= 1024) lastUpsertByIp.clear() // spoofed-source flood guard
-        upsertPeer(JSON.parse(buf.toString('utf8')))
+        // Round-2 P1: the UDP fallback payload carries NO addresses — the sender's real IP is
+        // rinfo.address, so pass it as the candidate host. (It used to fall through to the
+        // '127.0.0.1' placeholder and every UDP-discovered peer was dialed on loopback.)
+        upsertPeer({ ...JSON.parse(buf.toString('utf8')), host: (rinfo && rinfo.address) || undefined })
       } catch { /* malformed broadcast */ }
     })
     udp.on('error', (err) => {

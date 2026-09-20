@@ -482,7 +482,8 @@ async function bootstrap () {
   }
 
   // Shortcut action dispatch (deleteEvent/pinEvent/startPomodoro/switchTo* etc., aligned with the reference shortcutKeySettings)
-  window.todoAPI.onShortcutAction(action => {
+  // Round-2 P1: existence-guarded like the onSecurityUnlock neighbor — a preload without the channel must not throw at boot.
+  if (window.todoAPI.onShortcutAction) window.todoAPI.onShortcutAction(action => {
     const selectedTaskId = () => {
       const el = document.querySelector('.td-item.selected')
       if (!el) return null
@@ -526,7 +527,8 @@ async function bootstrap () {
       case 'switchToInbox': router.push({ name: 'todo-list-todo-box' }).catch(() => {}); break
     }
   })
-  window.todoAPI.onSecurityLock(() => store.commit('ui/setLocked', true))
+  // Round-2 P1: existence-guarded (same rationale as onShortcutAction above).
+  if (window.todoAPI.onSecurityLock) window.todoAPI.onSecurityLock(() => store.commit('ui/setLocked', true))
   if (window.todoAPI.onSecurityUnlock) window.todoAPI.onSecurityUnlock(() => store.commit('ui/setLocked', false))
 
   // Shortcuts: ctrl+n focuses quick-add / ctrl+s sync / ctrl+z undo / ctrl+y·ctrl+shift+z redo (offline = local archive)

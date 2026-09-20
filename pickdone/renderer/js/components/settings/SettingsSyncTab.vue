@@ -33,7 +33,16 @@
         </div>
         <div v-for="p in peers" :key="p.deviceId" class="sync-device-card" :data-device-id="p.deviceId">
           <span class="sync-dot" :class="dotClass(p)" :title="dotTip(p)" :aria-label="dotTip(p)"></span>
-          <span class="sync-device-name">{{ p.deviceName || p.deviceId }}</span>
+          <!-- F1 (round-2 P1): alias wins display order, then the advertised deviceName (main now
+               carries it — the payload used to only have `name`, so raw UUIDs were shown), then
+               the raw record fields. Pencil icon = inline machine-local alias editor. -->
+          <span class="sync-device-name">{{ peerDisplayName(p) }}</span>
+          <button class="mini sync-alias-btn" v-if="aliasEditingId !== p.deviceId"
+                  :aria-label="$t('sync.aliasEdit')" :title="$t('sync.aliasEdit')"
+                  :disabled="busy" @click="startAlias(p)">✎</button>
+          <el-input v-if="aliasEditingId === p.deviceId" size="small" class="ctl-sm sync-alias-input"
+                    maxlength="40" v-model="aliasDraft" :placeholder="$t('sync.aliasPh')"
+                    :aria-label="$t('sync.aliasEdit')" @keyup.enter="saveAlias(p)" @blur="saveAlias(p)"/>
           <span class="tip sync-device-meta">{{ p.host }}</span>
           <span class="tip sync-device-meta" v-if="p.lastRoundAt">{{ $t('sync.lastRound', { time: relTime(p.lastRoundAt) }) }}</span>
           <span class="tip sync-device-meta" v-else>{{ $t('sync.neverRan') }}</span>
@@ -101,7 +110,7 @@
         <div class="form-item"><span class="form-item__label">{{ $t('sync.pairInputLabel') }}</span>
           <div class="form-item__control">
             <select v-if="peers.length" class="ctl-sm" v-model="pairTarget" :aria-label="$t('sync.pairTargetLabel')">
-              <option v-for="p in peers" :key="p.deviceId" :value="p.deviceId">{{ p.deviceName || p.deviceId }}</option>
+              <option v-for="p in peers" :key="p.deviceId" :value="p.deviceId">{{ peerDisplayName(p) }}</option>
             </select>
             <el-input size="small" class="ctl-sm" maxlength="6" :placeholder="$t('sync.pairInputPh')"
                       :aria-label="$t('sync.pairInputLabel')" v-model="pairDraft"/>
@@ -224,6 +233,12 @@ function peerUnpairedByRemote (lastError) {
   if (!lastError) return false
   return /unpair|peer-unauthorized|unauthorized|auth[^.]{0,16}reject/i.test(String(lastError))
 }
+/** F1 (round-2 P1 2026-09-21): peer display name — machine-local alias wins, then the advertised
+ *  deviceName (main now carries it on the status payload), then the raw record name/deviceId. */
+function peerDisplayName (peer) {
+  if (!peer) return ''
+  return peer.alias || peer.deviceName || peer.name || peer.deviceId || ''
+}
 // [component-fixes] pure-end
 
 export default {
@@ -252,6 +267,9 @@ export default {
       manualOpen: false,
       feedOpen: false,
       confirmBox: null, // P1-3/P1-4: { titleKey, textKey, params, onOk } destructive-action confirm
+      // F1 (round-2 P1): inline per-peer alias editor state (machine-local, sync.peerAlias.<id>)
+      aliasEditingId: null, // deviceId currently being aliased (null = no editor open)
+      aliasDraft: '',
       // Y9 conflict backups: null = ops unavailable (hide the section); array = list from main
       conflictBackups: null,
       conflictOpen: false,
@@ -301,6 +319,26 @@ export default {
       }
     },
     dotClass (p) { return peerDotClass(p) },
+    /** F1: alias-wins display name for a peer card / pairing target select. */
+    peerDisplayName (p) { return peerDisplayName(p) },
+    /** F1: open the inline alias editor pre-filled with the current alias. */
+    startAlias (p) {
+      if (!p || !p.deviceId) return
+      this.aliasEditingId = p.deviceId
+      this.aliasDraft = p.alias || ''
+    },
+    /** F1: persist the machine-local alias (empty clears it back to the advertised name).
+     *  Blur+Enter can both fire — the editing-id reset makes the second call a no-op. */
+    async saveAlias (p) {
+      if (!p || this.aliasEditingId !== p.deviceId) return
+      this.aliasEditingId = null
+      const alias = String(this.aliasDraft || '').trim()
+      try {
+        await dbCallLoose('syncSetPeerAlias', { deviceId: p.deviceId, alias })
+        this.$message.success(this.$t('sync.aliasSaved'))
+        this.refresh()
+      } catch (e) { this.$message.error(this.$t('sync.aliasSaveFail')) }
+    },
     feedIcon (k) { return feedIcon(k) },
     /** P2c: peer card in the "unpaired by the other device" state — dedicated copy + no Unpair button. */
     isUnpairedByRemote (p) { return peerUnpairedByRemote(p && p.lastError) },
@@ -615,5 +653,8 @@ export default {
 .sync-feed-hint { color: var(--text-3); }
 .sync-pair-expired { color: var(--danger, var(--text-2)); }
 .sync-unpair-btn { color: var(--danger, var(--text-2)); }
+.sync-alias-btn { background: none; border: none; cursor: pointer; color: var(--text-3); padding: 0 2px; }
+.sync-alias-btn:hover { color: var(--brand); }
+.sync-alias-input { width: 160px; }
 .sync-pair-dialog__body { white-space: pre-line; }
 </style>

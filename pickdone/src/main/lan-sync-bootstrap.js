@@ -394,16 +394,7 @@ function startSync () {
     // Attachment file pull (feature): after each confirmed round the client asks this for the
     // attachment keys referenced by todo rows but missing on disk, and requests the files over
     // the same encrypted session (att-transfer.js: hash-verified, atomic write, capped batch).
-    getMissingAttachmentKeys: () => {
-      try {
-        const fs = require('node:fs')
-        const path = require('node:path')
-        const dir = require('./attachments').attachDir()
-        const { collectMissingKeys } = require('./lan-sync/att-transfer')
-        // Same path resolution as attachments.js attachmentPath (basename-only under the dir)
-        return collectMissingKeys(state.db.call('getAll', { deleted: null }), key => fs.existsSync(path.join(dir, path.basename(String(key)))))
-      } catch { return [] }
-    },
+    getMissingAttachmentKeys: () => missingAttachmentKeys(state),
     // P1-8 (2026-09-19 UX review): a pulled attachment file landed on disk — tell the renderer so
     // EpAttachments can re-attempt image loads / refresh the list without a manual view change.
     onAttachmentArrived: key => emitSyncEvent('attachments-arrived', { key: String(key || '') }),
@@ -604,7 +595,12 @@ function sendToRenderers (channel, msg) {
  *  (db-sync-schema registerOps) runs mergeDoc -> putRow, which is a strict identical-content
  *  no-op (the rows already hold these exact values, so no updatedAt is re-stamped), and the blob
  *  meta keys themselves never sync (isSyncBlobMetaKey), so the fold cannot echo.
- *  Best-effort: a missing/corrupt blob skips the fold (rows stay the sync truth).
+ *  Best-effort: a corrupt blob skips the fold (rows stay the sync truth).
+ *  Round-2 P1 (2026-09-21): a MISSING blob no longer skips the fold — on a fresh-paired device
+ *  the blob is absent, the hot-apply deliberately does not persist, and nothing else rebuilt the
+ *  blob from rows: restart lost the whole habits view, and the next local persist wrote the
+ *  renderer's stale/empty blob over the peer's fresh rows (data loss). When the blob is missing
+ *  but applied rows exist, the blob is now MATERIALIZED from the rows (fold = create).
  *  Returns the parsed patches per blob for the renderer hot-apply broadcasts. */
 const HABITS_BLOB_KEY = 'db.habitsState'
 const HABITS_BLOB_FIELDS = new Set(['schemaV', 'habits', 'moments', 'savedAt'])
@@ -613,7 +609,13 @@ function foldIntoBlob (blobKey, entries) {
   try {
     let doc = null
     try { doc = JSON.parse(state.db.call('getMeta', blobKey)) } catch { doc = null }
-    if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return
+    if (!doc || typeof doc !== 'object' || Array.isArray(doc)) {
+      // Round-2 P1: materialize instead of skip. The habits blob carries the renderer store's
+      // persist shape (schemaV/habits/moments/savedAt); every other blob is the settings blob.
+      if (blobKey === HABITS_BLOB_KEY) doc = { schemaV: 1, habits: [], moments: [], savedAt: 0 }
+      else doc = {}
+      log.info('[LanSync] materializing missing blob from applied rows:', blobKey)
+    }
     for (const [k, v] of entries) {
       if (v === undefined) delete doc[k] // tombstone: drop the field from the blob
       else doc[k] = v
@@ -688,7 +690,7 @@ function invalidateSyncWatermarks (reason) {
   } catch (e) { log.warn('[LanSync] watermark invalidation persist failed:', e.message) }
   try {
     if (state && state.peerWatermarks && typeof state.peerWatermarks.clear === 'function') state.peerWatermarks.clear()
-  } catch { /* pre-init: nothing live to clear */ }
+  } catch (e) { log.warn('[LanSync] live watermark map clear failed:', e.message) } // round-2 P1: no silent swallow
   log.warn('[LanSync] peer watermarks invalidated (' + String(reason || 'recovery') + ') — full re-push + peer re-snapshot on next round')
   try { kickSyncRound('watermarks-invalidated') } catch { /* node not started yet */ }
 }
@@ -802,10 +804,38 @@ function getStatusPayload () {
   const st = state.node.getStatus()
   return {
     ...s, listening: st.listening, port: st.port,
-    peers: st.peers, recent: st.recent, security: st.security,
+    // Round-2 P1: attach the machine-local display alias (sync.peerAlias.<deviceId>) per peer —
+    // the alias is set from this device's Device Center only and never syncs ('sync.' namespace
+    // is machine-local), and it wins over the advertised device name in the renderer.
+    peers: (st.peers || []).map(p => ({ ...p, deviceName: p.deviceName || p.name, alias: peerAliasOf(p && p.deviceId) })),
+    recent: st.recent, security: st.security,
     lastRoundAt: st.lastRoundAt, lastError: st.lastError, pendingPair,
     self: st.self || { deviceId: s.deviceId, deviceName: s.deviceName, port: st.port },
   }
+}
+
+/* ---------- per-peer machine-local display alias (round-2 P1) ---------- */
+const K_PEER_ALIAS_PREFIX = 'sync.peerAlias.'
+function peerAliasOf (deviceId) {
+  if (!deviceId) return null
+  const v = settingGet(K_PEER_ALIAS_PREFIX + String(deviceId))
+  const s = typeof v === 'string' ? v.trim().slice(0, 40) : ''
+  return s || null
+}
+
+/* ---------- Round-2 P1 (F7, 2026-09-21): missing-attachment key collection ----------
+ * Only LIVE todos may re-pull files: getAll({deleted:null}) returned ALL rows including
+ * recycle-bin tombstones, so a deleted todo's files were re-requested from the peer every
+ * round forever (orphans GC on hard purge). Injectable existsFn/attachDir for tests. */
+function missingAttachmentKeys (st, inject = {}) {
+  try {
+    const fs = require('node:fs')
+    const path = require('node:path')
+    const { collectMissingKeys } = require('./lan-sync/att-transfer')
+    const dir = inject.attachDir || require('./attachments').attachDir()
+    const exists = inject.existsSync || (key => fs.existsSync(path.join(dir, path.basename(String(key)))))
+    return collectMissingKeys(st.db.call('getAll', { deleted: 0 }), exists)
+  } catch { return [] }
 }
 
 function registerOps () {
@@ -885,6 +915,16 @@ function registerOps () {
     // P1-3: unpair a device (Device Center peer card). Deletes the peer record + push watermark
     // and revokes the shared pairing secret — every previously paired device must re-pair.
     syncUnpairPeer: p => syncUnpairPeerOp(p),
+    // Round-2 P1: machine-local per-peer display alias for Device Center (sync.peerAlias.<id>).
+    syncSetPeerAlias: p => {
+      const deviceId = String((p && p.deviceId) || '').trim()
+      if (!deviceId) throw new Error('syncSetPeerAlias: deviceId is required')
+      const alias = String((p && p.alias) || '').trim().slice(0, 40)
+      const key = K_PEER_ALIAS_PREFIX + deviceId
+      if (alias) settingPut(key, alias)
+      else state.db.call('settingsRowDelete', { key }) // empty string clears the alias
+      return { deviceId, alias: alias || null }
+    },
     syncGetPairingCode: () => {
       const secret = settingGet(K_PAIRING_SECRET)
       if (!secret) return { code: null, expiresAt: 0 }
@@ -967,4 +1007,7 @@ module.exports.__test = {
   // invalidation (recovery path clears persisted per-peer progress).
   stopSync,
   invalidateSyncWatermarks,
+  // Round-2 P1 test surface: peer alias op registration + live-todo attachment key collection.
+  registerOps,
+  missingAttachmentKeys,
 }

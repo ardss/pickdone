@@ -182,15 +182,21 @@ export default {
     }
   },
   mutations: {
-    /** On startup, a newer main DB value overwrites local (last-write-wins by savedAt) */
+    /** On startup, a newer main DB value overwrites local (last-write-wins by savedAt).
+     *  Round-2 P1 F6 (2026-09-21): the restore-backup path passes {force:true} — a backup with an
+     *  OLDER savedAt must still apply (the user explicitly chose to restore), and the restored
+     *  blob must reach the durable DB meta row via persist(). Without force+persist the restore
+     *  silently no-opped whenever local savedAt was newer and never reached DB/sync. */
     replaceAll (s, blob) {
       if (!blob || !Array.isArray(blob.habits)) return
-      if ((blob.savedAt || 0) < (s.savedAt || 0)) return
+      const force = blob.force === true
+      if (!force && (blob.savedAt || 0) < (s.savedAt || 0)) return
       normalizeHabitRecords(blob.habits) // DB archive is the restore path for old backups — same missing-records guard as readLs
       s.habits = blob.habits
       s.moments = blob.moments || []
       s.savedAt = blob.savedAt || 0
       try { localStorage.setItem(LS_KEY, JSON.stringify(blob)) } catch {}
+      if (force) persist(s) // dual-write: durable DB meta row (single writer discipline kept — persist() IS the store's writer)
     },
     /** G1: an aux window's habits edit relayed through the main window — update the main window's Vuex
      *  state so its next persist doesn't resurrect stale data and clobber the aux edit (LS already holds

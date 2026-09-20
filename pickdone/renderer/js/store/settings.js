@@ -186,7 +186,11 @@ export function sanitizeSettingsPatch (patch, current) {
       continue
     }
     if (typeof def === 'object' && !Array.isArray(def) && Array.isArray(v)) continue
-    out[k] = v
+    // Round-2 P1 (2026-09-21): array-valued fields (foldedTodoList) sanitize their ENTRIES too —
+    // an inbound array carrying non-string junk (numbers, booleans, nested objects) used to be
+    // mirrored verbatim into live state and re-persisted. Keep non-empty strings only.
+    if (Array.isArray(def) && Array.isArray(v)) out[k] = v.filter(e => typeof e === 'string' && e.trim() !== '')
+    else out[k] = v
   }
   return out
 }
