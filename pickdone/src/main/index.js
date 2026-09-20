@@ -166,6 +166,24 @@ function watchDbForExternalWrites () {
     if (rawS) { const d = JSON.parse(rawS); lastSettingsSavedAt = (d && d._savedAt) || 0; lastSettingsDoc = d }
   } catch {}
   let debounce = null
+  // CLI sync command channel (feat/cli-sync-pair): same polling surface as cliTomatoCmd — the CLI
+  // writes meta cliSyncCmd, we dispatch into db-sync-ops (the Device Center's own registry) and
+  // write the receipt to cliSyncState. Handled in the MAIN process directly: LAN sync state lives
+  // here, not in the renderer, so no window forwarding is involved (and the security lock, which
+  // only gates todo-db:call IPC, must not wedge headless pairing of an idle machine).
+  let forwardSyncCmd = () => {}
+  try {
+    const syncChannel = require('./cli-sync-channel')
+    const syncOps = require('./db-sync-ops')
+    const channel = syncChannel.createSyncCmdHandler({
+      dispatch: (op, p) => syncOps.dispatch(op, p),
+      setMeta: (k, v) => dbm.call('setMeta', [k, v]),
+      log
+    })
+    forwardSyncCmd = () => {
+      try { channel.forward(dbm.call('getMeta', 'cliSyncCmd')) } catch (e) { log.warn('[CLI] sync 命令转发失败', e) }
+    }
+  } catch (e) { log.warn('[CLI] sync 命令通道初始化失败', e) }
   /* Tomato command forwarding: independent of mtime — fs.watchFile polling occasionally drops events, which
      once let a stop command be silently skipped (meta is a single slot; once an old command is overwritten by a
      new one it is lost forever), so every poll reads meta directly once (pure read). */
@@ -242,11 +260,12 @@ function watchDbForExternalWrites () {
       if (m == null) return
       // Disarmed baseline (startup torn read): the first non-null read only ARMS the watcher —
       // it is a baseline, not a change, so it must not kick a spurious external-write reload.
-      if (lastMtime == null) { lastMtime = m; forwardTomatoCmd(); return }
-      if (m === lastMtime) { forwardTomatoCmd(); return } // check commands even when mtime is unchanged (guards against watchFile dropping events)
+      if (lastMtime == null) { lastMtime = m; forwardTomatoCmd(); forwardSyncCmd(); return }
+      if (m === lastMtime) { forwardTomatoCmd(); forwardSyncCmd(); return } // check commands even when mtime is unchanged (guards against watchFile dropping events)
       lastMtime = m
       kick()
       forwardTomatoCmd()
+      forwardSyncCmd()
     } catch {}
   }
   fs.watchFile(dbFile, { interval: 500 }, onChange)

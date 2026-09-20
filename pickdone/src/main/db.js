@@ -520,6 +520,10 @@ const OPS = {
   listMetaKeys: () => db.prepare('SELECT key FROM meta').all().map(r => r.key), // main-internal only (startup meta GC), NOT renderer-whitelisted
   // Monotonic sequence number for CLI tomato commands: UPDATE...RETURNING 单语句原子(两语句版在双 CLI 并发时读回同值→重号→App seq 去重丢命令,2026-09-04 深审 P1)
   nextCliTomatoSeq: () => Number(db.prepare("INSERT INTO meta (key, value) VALUES ('cliTomatoSeq', '1') ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT) RETURNING value").get().value),
+  // CLI sync command channel (feat/cli-sync-pair): same atomic single-statement increment as
+  // nextCliTomatoSeq — two concurrent CLI processes must never mint the same seq or the App's
+  // seq dedup would silently drop the second command.
+  nextCliSyncSeq: () => Number(db.prepare("INSERT INTO meta (key, value) VALUES ('cliSyncSeq', '1') ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT) RETURNING value").get().value),
   deleteMeta: k => { db.prepare('DELETE FROM meta WHERE key = ?').run(k); return true },
   // P3 2026-09-17: recycle-bin rows are logically gone — counting them made the onboarding
   // "is this a fresh library" check false-positive on a library whose only rows were deleted ones.
