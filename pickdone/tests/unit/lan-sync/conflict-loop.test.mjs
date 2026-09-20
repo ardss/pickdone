@@ -88,7 +88,7 @@ function makeStore (deviceId, userId, todos) {
       }
       return (p || []).length
     }
-    if (op === 'settingsRowsAll' || op === 'tomatoAll' || op === 'getAllCategories' || op === 'planAll' || op === 'filterList') return []
+    if (op === 'settingsRowsAll' || op === 'tomatoAll' || op === 'categoriesAllRows' || op === 'planAll' || op === 'planTombstones' || op === 'filterList' || op === 'filterTombstones') return []
     return null
   }
   const state = {

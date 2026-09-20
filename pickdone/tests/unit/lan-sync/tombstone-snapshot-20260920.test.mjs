@@ -40,7 +40,7 @@ function mockState (tables = {}, writeImpl = {}) {
 
 const EMPTY = {
   getAll: () => [], settingsRowsAll: () => [], tomatoAll: () => [], tomatoTombstones: () => [],
-  getAllCategories: () => [], planAll: () => [], filterList: () => [], listMetaKeys: () => [],
+  categoriesAllRows: () => [], planTombstones: () => [], filterTombstones: () => [], planAll: () => [], filterList: () => [], listMetaKeys: () => [],
   getMeta: () => null, syncOplogSince: () => [],
 }
 

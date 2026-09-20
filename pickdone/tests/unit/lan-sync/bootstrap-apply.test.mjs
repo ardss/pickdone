@@ -18,7 +18,7 @@ const EMPTY_TABLES = {
   getAll: () => [],
   settingsRowsAll: () => [],
   tomatoAll: () => [],
-  getAllCategories: () => [],
+  categoriesAllRows: () => [], planTombstones: () => [], filterTombstones: () => [],
   planAll: () => [],
   filterList: () => [],
 }
