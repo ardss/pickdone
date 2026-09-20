@@ -20,6 +20,7 @@ export default {
       dangerAction: 'Dangerous action',
       clearConfirm: 'Empty the recycle bin? Deleted items cannot be recovered.',
       cleared: 'Recycle bin emptied ({n} tasks)',
+      purgeFailedMsg: 'Failed to empty: recycle bin data was not deleted, please retry',
       continueText: 'Continue',
       cancelText: 'Cancel',
       clearKeywordPrompt: 'There are {n} items in the recycle bin. Type the phrase below to confirm emptying:\n\n{kw}',

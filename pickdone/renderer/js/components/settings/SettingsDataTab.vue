@@ -327,8 +327,11 @@ export default {
       try {
         await confirmRecycleClear(this, n)
         // dispatch must be awaited: the async purge can fail (db write error); success toast only after it resolves
-        await this.$store.dispatch('todo/purgeAllRecycle')
-        this.$message.success(this.$t('statsC.RecycleBin.cleared', { n }))
+        // QC r1: purgeAllRecycle now returns a success flag — it RESOLVES (not rejects) on IPC
+        // failure, so the flag must be checked or the success toast fires on a failed purge.
+        const ok = await this.$store.dispatch('todo/purgeAllRecycle')
+        if (ok) this.$message.success(this.$t('statsC.RecycleBin.cleared', { n }))
+        else this.$message.error(this.$t('statsE.SettingsModal.purgeFailedMsg'))
       } catch (e) {
         // Element confirm rejects with the 'cancel'/'close' string on user cancel — swallow those only
         if (e !== 'cancel' && e !== 'close') this.$message.error(this.$t('statsE.SettingsModal.purgeFailedMsg') + (e && e.message ? e.message : e))

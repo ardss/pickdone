@@ -20,6 +20,7 @@ export default {
       dangerAction: '危险操作',
       clearConfirm: '确定要清空回收站吗？彻底删除后不可恢复。',
       cleared: '已永久清空回收站（{n} 条任务）',
+      purgeFailedMsg: '清空失败：回收站数据未删除，请重试',
       continueText: '继续',
       cancelText: '取消',
       clearKeywordPrompt: '回收站中有 {n} 条任务。\n\n为防误触，请输入下方关键字以确认清空：\n\n{kw}',
