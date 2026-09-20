@@ -12,9 +12,10 @@
  *      smoke 日志按脚本+pid 分文件;活体失败重试 1 次抗并行负载时序抖动)
  * 每阶段计时输出;总时长汇总。依赖关系只允许出现在"阶段内部",池间/池内全部并行。
  */
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import evtUtils from './event-utils.cjs'
 
 const WITH_A11Y = process.argv.includes('--a11y')
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
@@ -115,9 +116,12 @@ function runStage (stage) {
       if (process.platform === 'win32') {
         try { spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { shell: true, stdio: 'ignore' }) } catch {}
         try {
-          const { execSync } = require('node:child_process')
-          const out = execSync('netstat -ano | findstr :5175 | findstr LISTENING', { encoding: 'utf8', shell: true, stdio: ['ignore', 'pipe', 'ignore'] })
-          for (const pid of [...new Set(out.split(/\r?\n/).map(l => l.trim().split(/\s+/).pop()).filter(p => /^\d+$/.test(p)))]) {
+          // M-13 (2026-09-20): this file is ESM — the inline `require('node:child_process')` +
+          // execSync here crashed the whole fallback with "require is not defined", so orphaned
+          // visual-web listeners were never reaped. spawnSync is imported statically at the top;
+          // the pid parsing lives in cli/event-utils.cjs (unit-tested).
+          const r = spawnSync('netstat -ano | findstr :5175 | findstr LISTENING', { encoding: 'utf8', shell: true, stdio: ['ignore', 'pipe', 'ignore'] })
+          for (const pid of evtUtils.pidsFromNetstatOutput(r.stdout || '')) {
             try { spawn('taskkill', ['/pid', pid, '/T', '/F'], { shell: true, stdio: 'ignore' }) } catch {}
           }
         } catch { /* 端口本就空闲 */ }

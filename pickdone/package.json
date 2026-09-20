@@ -119,6 +119,10 @@
         "to": "node_modules/dayjs"
       },
       {
+        "from": "node_modules/solarlunar",
+        "to": "node_modules/solarlunar"
+      },
+      {
         "from": "assets/vendor-lib/dayjs-plugin-isoWeek.js",
         "to": "assets/vendor-lib/dayjs-plugin-isoWeek.js"
       },
