@@ -1,6 +1,7 @@
 /** Security lock (main process holds the locked state; the plaintext password never leaves the main process) — moved from index.js with dependency injection
  *  While locked, any path that would show the main window (tray/shortcut/second-instance/IPC) is redirected to focus the lock screen. */
 const path = require('path')
+const { timingSafeEqual } = require('node:crypto')
 const { BrowserWindow } = require('electron')
 
 /** Pure decision for the lock window's render-process-gone self-heal (unit-testable, mirrors the
@@ -179,7 +180,12 @@ function createSecurityLock ({ getMainWindow, showMainOrLock, readConfig, writeC
     } catch (e) { log.error('[SecurityLock] 解密失败', e); expected = '' }
     // When no password has ever been set, any input unlocks (avoid a permanent lockout)
     if (!expected) return true
-    return String(plain) === expected
+    // M-9 (2026-09-20): the plain === compare leaked the password length/prefix byte-by-byte
+    // through timing. Same constant-time pattern as lan-sync-bootstrap's pairing-code check:
+    // length equality first (not secret), then timingSafeEqual over equal-length buffers.
+    const a = Buffer.from(String(plain))
+    const b = Buffer.from(expected)
+    return a.length === b.length && timingSafeEqual(a, b)
   }
 
   /** Verify the sender comes from the lock-screen window (anti-spoofing for the unlock-app IPC) */
