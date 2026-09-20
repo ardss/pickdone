@@ -67,6 +67,9 @@ import store from '../store/index.js'
 function calGridOffset (dayOfWeek, weekFromSun) { return weekFromSun ? dayOfWeek : (dayOfWeek + 6) % 7 }
 /** Column order mapped to the wd0(Sun)..wd6(Sat) i18n keys for the chosen week start */
 function weekHeaderOrder (weekFromSun) { return weekFromSun ? [0, 1, 2, 3, 4, 5, 6] : [1, 2, 3, 4, 5, 6, 0] }
+/** U-16: the calendar-popover month that must be shown for a selected day ts (popover open syncs
+ *  calMonth to this — deep links and ‹ › month-crossing week shifts used to leave a stale grid) */
+function calMonthFor (ts) { return dayjs(ts).format('YYYY-MM') }
 // [component-fixes] pure-end
 
 export default {
@@ -84,6 +87,10 @@ export default {
     // the popover div): focus the first header control on open so Esc and Enter are reachable
     showCal (v) {
       if (!v) return
+      // U-16: sync the calendar month to the selected day — after a deep link or ‹ › week arrow
+      // crossing a month boundary, calMonth still pointed at the old month and the popover opened
+      // on the wrong grid (the selected day not even visible)
+      this.calMonth = calMonthFor(this.selectedTs)
       this.$nextTick(() => {
         const pop = this.$el && this.$el.querySelector ? this.$el.querySelector('.ds-cal-pop') : null
         const first = pop && pop.querySelector('button')

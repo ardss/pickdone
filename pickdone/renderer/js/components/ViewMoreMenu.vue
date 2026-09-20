@@ -31,6 +31,7 @@ const SORT_VALUE = {
   'viewMore.sortByDifficulty': 'difficulty'
 }
 
+// [component-fixes] pure-start (U-13: first calendar menu entry must not be a separator)
 const MENUS = {
   'todo-list-today': [
     { labelKey: 'viewMore.sortCustom', group: 'sort' },
@@ -48,13 +49,14 @@ const MENUS = {
     { labelKey: 'viewMore.checkFollowColor', toggle: 'isCompleteCheckboxColorFollow' }
   ],
   'todo-list-calendar': [
-    { sep: true },
+    // U-13: no leading separator — the menu used to open with a stray line above the first item
     { labelKey: 'statsE.ViewMoreMenu.showCompletedMenuItem', toggle: 'isShowCalendarCompleted' },
     { labelKey: 'statsE.ViewMoreMenu.privacyBlurMenuItem', toggle: 'isShowCalendarPrivacyMode' },
     { labelKey: 'statsE.ViewMoreMenu.holidayBadgesMenuItem', toggle: 'showHolidayMarkers' }
   ]
   // The todo box has no menu: sorting/order/categories are already provided by the header toolbar dropdown, another copy in the menu would be pure duplication
 }
+// [component-fixes] pure-end
 
 export default {
   name: 'ViewMoreMenu',

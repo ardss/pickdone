@@ -22,7 +22,8 @@
       <!-- Only the inner span is clickable; no row-level cursor (a cursor here advertised a dead click area) -->
       <div class="tb-row tb-row--harvest" v-if="!slim" style="display:flex;align-items:center;gap:8px">
         <span role="button" tabindex="0" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px"
-              :title="$t('statsE.TomatoBar.viewRecordsBtn')" @click="showRecordList" @keydown.enter.prevent="showRecordList">
+              :title="$t('statsE.TomatoBar.viewRecordsBtn')" :aria-label="$t('statsE.TomatoBar.viewRecordsBtn')"
+              @click="showRecordList" @keydown.enter.prevent="showRecordList">
           <app-icon name="list" :size="12" style="opacity:.6"/>
           <span>{{ $t('statsE.TomatoBar.todayHarvestPrefix') }}<b :style="{color: targetReached ? 'var(--tt-reached)' : 'var(--tt-open)'}" :title="$t('statsH.TomatoBar.harvestTip', { d: todayDone, n: todayTarget })">{{todayDone}}/{{todayTarget}}</b></span>
         </span>

@@ -72,7 +72,11 @@ export default {
         const cat = this.cats.find(x => x.categoryId === c.catId)
         parts.push(cat ? cat.categoryName : this.$t('statsJ.FilterView.uncategorized'))
       }
-      if (c.priority != null && c.priority !== -1) parts.push(this.$t('statsJ.FilterView.prio') + c.priority)
+      // U-12: render the priority chip via the prio* label keys (priority 3 used to show as a bare "3")
+      if (c.priority != null && c.priority !== -1) {
+        const lbl = ['', this.$t('statsJ.TodoItem.prioLow'), this.$t('statsJ.TodoItem.prioMedium'), this.$t('statsJ.TodoItem.prioHigh')][c.priority]
+        parts.push(this.$t('statsJ.FilterView.prio') + (lbl || c.priority))
+      }
       if (c.dateMode && c.dateMode !== 'all') parts.push(this.$t('statsJ.FilterView.dm_' + c.dateMode))
       return parts.join(' · ') || this.$t('statsJ.FilterView.condAll')
     },

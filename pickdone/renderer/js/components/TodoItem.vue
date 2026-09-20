@@ -22,7 +22,11 @@
       </svg>
     </span>
     <div class="td-body">
-      <div class="td-title" :class="{'td-title--empty': !todo.taskContent}" :title="todo.taskContent">{{ todo.taskContent || $t('statsE.TodoItem.untitled') }}</div>
+      <div class="td-title" :class="{'td-title--empty': !todo.taskContent}" :title="todo.taskContent">
+        <!-- U-15: wire the search highlight (query prop existed but was never rendered; SearchView passes it) -->
+        <span v-if="query" v-html="highlightedTitle"></span>
+        <template v-else>{{ todo.taskContent || $t('statsE.TodoItem.untitled') }}</template>
+      </div>
       <div v-if="todo.taskDescribe" class="td-desc">{{todo.taskDescribe}}</div>
       <div v-if="subtasks.length" class="td-subs">
         <div v-for="(s, si) in subtasks" :key="s.text + '#' + si" class="td-sub" role="checkbox"
@@ -92,7 +96,7 @@
  */
 import {dayjs, formatDayLabel, parseSubtasks, firstImageOfList, subsCompleteTarget, FMT } from '../utils/core.js'
 import { dateBadgeColor } from '../utils/core.js'
-import { extractTags } from '../utils/search.js'
+import { extractTags, highlightHTML } from '../utils/search.js'
 import { deleteWithUndo, moveWithUndo } from '../utils/confirm.js'
 import { toggleCompleteWithUndo } from '../utils/completeAction.js'
 import { chkColor } from '../utils/taskRow.js'
@@ -169,6 +173,8 @@ export default {
     img () { return firstImageOfList(this.todo.image) },
     fileCount () { try { return JSON.parse(this.todo.files || '[]').length } catch { return 0 } },
     tags () { return extractTags(this.todo.taskContent, this.todo.taskDescribe) },
+    // U-15: escape+wrap the query match (highlightHTML escapes first, safe for v-html)
+    highlightedTitle () { return highlightHTML(this.todo.taskContent || this.$t('statsE.TodoItem.untitled'), this.query) },
     selected () { const ed = this.$store.state.ui.rightSidebarTodoEdit; return ed.visible && ed.taskId === this.todo.taskId },
     isRepeat () { return !!(this.todo.repeatId && this.todo.repeatId !== 'null') },
     hasExtras () {

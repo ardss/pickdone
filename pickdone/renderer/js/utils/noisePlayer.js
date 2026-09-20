@@ -5,6 +5,11 @@
  *  decode results are cached per key, zero wait on switching/start-stop. Custom audio uses 'local:<key>' (the local:// protocol supports Range). */
 import { noiseUrl } from './mediaRegistry.js'
 
+// U-20 (2026-09-20): LRU-capped — custom audio ('local:<key>') used to grow this Map unboundedly
+// (each decoded buffer is tens of seconds of PCM ≈ several MB), so a user cycling through many custom
+// sounds could climb to hundreds of MB resident. Cap = 12 entries (presets ≤ that count anyway);
+// the Map's insertion order IS the recency order (a cache hit re-inserts the key at the tail).
+const MAX_DECODED = 12
 const decoded = new Map() // key → AudioBuffer (after seamless processing)
 let current = null // { key, src, gain }
 let ctx = null
@@ -43,8 +48,21 @@ function makeSeamless (buf, fadeSec) {
   return out
 }
 
+function cacheDecoded (key, buf) {
+  if (decoded.has(key)) decoded.delete(key) // re-insert → tail = most recently used
+  decoded.set(key, buf)
+  while (decoded.size > MAX_DECODED) {
+    const oldest = decoded.keys().next().value
+    decoded.delete(oldest)
+  }
+}
+
 async function getBuffer (key) {
-  if (decoded.has(key)) return decoded.get(key)
+  if (decoded.has(key)) {
+    const hit = decoded.get(key)
+    cacheDecoded(key, hit) // touch: refresh recency
+    return hit
+  }
   const src = srcOf(key)
   if (!src) {
     if (key && key.startsWith('file:')) console.warn('[noise] legacy custom audio path is no longer playable, please re-select it in settings:', key)
@@ -53,7 +71,7 @@ async function getBuffer (key) {
   const c = await audioCtx()
   const raw = await c.decodeAudioData(await (await fetch(src)).arrayBuffer())
   const buf = makeSeamless(raw, Math.min(1.5, raw.duration / 4))
-  decoded.set(key, buf)
+  cacheDecoded(key, buf)
   return buf
 }
 
@@ -99,3 +117,14 @@ export function invalidateNoise (key) {
 
 // Default export = for main.js's `import noisePlayer from ...` usage (with only named exports, that import blows up the whole chain into a white screen under browser ESM)
 export default { startNoise, stopNoise, setNoiseVolume, invalidate: invalidateNoise }
+
+/** U-17 (2026-09-20): wire the TomatoAbandonModal's 'tomato-stop-noise' custom event to the player
+ *  (the modal's dispatch used to be dead code — nothing listened). Extracted here so the wiring is
+ *  unit-testable; main.js calls it once at boot. `target` is injectable for tests. */
+export function listenStopNoiseEvent (target = (typeof window !== 'undefined' ? window : null)) {
+  if (!target || typeof target.addEventListener !== 'function') return
+  target.addEventListener('tomato-stop-noise', () => stopNoise())
+}
+
+/** Test seam: the cache/current slot are module-private; behavior tests inspect them through here. */
+export const _testInternals = { decoded, MAX_DECODED, cacheDecoded, getCurrent: () => current, setCurrent: v => { current = v } }
