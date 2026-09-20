@@ -26,7 +26,7 @@
               <div class="ta-edit-row"><span>{{ $t('statsK.TomatoAccount.start') }}</span>
                 <el-time-picker size="small" format="HH:mm" :clearable="false" :model-value="minToDate(draft.startMin)" @update:model-value="v => { draft.startMin = dateToMin(v) }"/></div>
               <div class="ta-edit-row"><span>{{ $t('statsK.TomatoAccount.focusMin') }}</span>
-                <el-input-number size="small" :min="1" :max="600" :step="5" controls-position="right" :model-value="draft.dur" @update:model-value="v => { draft.dur = v }"/></div>
+                <el-input-number size="small" :min="1" :max="focusMax" :step="5" controls-position="right" :model-value="draft.dur" @update:model-value="v => { draft.dur = v }"/></div>
               <div v-if="!draft.abandoned" class="ta-edit-row"><span>{{ $t('statsK.TomatoAccount.restMin') }}</span>
                 <el-input-number size="small" :min="0" :max="120" :step="5" controls-position="right" :model-value="draft.rest" @update:model-value="v => { draft.rest = v }"/></div>
               <div class="ta-edit-row"><span>{{ $t('statsK.TomatoAccount.givenUp') }}</span>
@@ -43,7 +43,7 @@
             <div class="ta-edit-row"><span>{{ $t('statsK.TomatoAccount.start') }}</span>
               <el-time-picker size="small" format="HH:mm" :clearable="false" :model-value="minToDate(draft.startMin)" @update:model-value="v => { draft.startMin = dateToMin(v) }"/></div>
             <div class="ta-edit-row"><span>{{ $t('statsK.TomatoAccount.focusMin') }}</span>
-              <el-input-number size="small" :min="1" :max="600" :step="5" controls-position="right" :model-value="draft.dur" @update:model-value="v => { draft.dur = v }"/></div>
+              <el-input-number size="small" :min="1" :max="focusMax" :step="5" controls-position="right" :model-value="draft.dur" @update:model-value="v => { draft.dur = v }"/></div>
             <div class="ta-edit-row"><span>{{ $t('statsK.TomatoAccount.restMin') }}</span>
               <el-input-number size="small" :min="0" :max="120" :step="5" controls-position="right" :model-value="draft.rest" @update:model-value="v => { draft.rest = v }"/></div>
             <div class="ta-hint">{{ $t('statsK.TomatoAccount.addHint') }}</div>
@@ -65,6 +65,7 @@
    Changing "actual" = posting — add/remove/modify entries (vouchers) here and the total follows automatically. Ledger integrity is non-negotiable, yet no detour to the timeline is needed.
    The empty state teaches: users opening it for the first time learn the "actual" semantics right here. */
 import { FMT, dayjs } from '../utils/core.js'
+import { FOCUS_MAX_MINUTES } from '../utils/limits.js'
 import dialogA11y from '../utils/dialogA11y.js'
 
 const CSS = `
@@ -112,7 +113,7 @@ function injectStyle () {
 export default {
   name: 'TaskAccountModal',
   mixins: [dialogA11y],
-  data: () => ({ editingId: null, draft: null }),
+  data: () => ({ editingId: null, draft: null, focusMax: FOCUS_MAX_MINUTES }), // U-21: single-source cap, no inline 600
   computed: {
     taskId () { return this.$store.state.ui.accountTaskId },
     task () { return this.$store.state.todo.todoList.find(t => t.taskId === this.taskId) || null },

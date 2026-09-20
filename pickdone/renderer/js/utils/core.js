@@ -253,3 +253,26 @@ export function parsePredecessors (v) {
   if (Array.isArray(v)) return v.filter(Boolean)
   try { const a = JSON.parse(v || '[]'); return Array.isArray(a) ? a.filter(Boolean) : [] } catch { return [] }
 }
+
+/** U-18 (2026-09-20): batch meta read — consume the main process's getMetaMany op (preload
+ *  window.todoAPI.getMetaMany, returns an ALIGNED [{ key, value }] list) instead of an O(N)
+ *  sequential per-key dbCall loop. DEFENSIVE: when the op is absent (older preload) or fails,
+ *  fall back to the per-key loop so callers never regress. Absent keys resolve to null. */
+export async function getMetaManyWithFallback (keys) {
+  const list = Array.isArray(keys) ? keys : []
+  if (typeof window !== 'undefined' && window.todoAPI && typeof window.todoAPI.getMetaMany === 'function') {
+    try {
+      const res = await window.todoAPI.getMetaMany(list)
+      if (Array.isArray(res) && res.length === list.length) {
+        const byKey = new Map(res.map(e => [e && e.key, e && e.value != null ? e.value : null]))
+        return list.map(k => (byKey.has(k) ? byKey.get(k) : null))
+      }
+      // misaligned/legacy-shaped response → treat as unavailable, fall through to the loop
+    } catch (e) { /* fall through to the per-key loop */ }
+  }
+  const out = []
+  for (const k of list) {
+    try { out.push(await window.todoAPI.dbCall('getMeta', k)) } catch (e) { out.push(null) }
+  }
+  return out
+}

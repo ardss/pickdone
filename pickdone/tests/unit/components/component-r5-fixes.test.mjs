@@ -180,8 +180,13 @@ test('RepeatModal: yearly fixed-date picker is not clearable', () => {
   assert.match(row[0], /:clearable="false"/)
 })
 
-test('TaskAccountModal: focus-minutes input max aligns with store clamp (600, not 720)', () => {
+test('TaskAccountModal: focus-minutes input max aligns with the shared store clamp (600, not 720)', async () => {
+  // U-21 honesty: assert the BEHAVIOR contract (the shared limits constant is 600) and that the modal
+  // binds it through that single source, instead of matching the literal ':max="600"' text
+  const limits = await import(pathToFileURL(path.join(ROOT, 'shared/limits.mjs')).href)
+  assert.equal(limits.FOCUS_MAX_MINUTES, 600, 'the ledger clamp constant the modal must mirror')
   const src = read('components/TaskAccountModal.vue')
-  assert.ok(src.includes(':max="600"'))
-  assert.ok(!src.includes(':max="720"'))
+  assert.ok(src.includes('FOCUS_MAX_MINUTES'), 'modal imports the shared constant (no inline 600)')
+  assert.ok(src.includes(':max="focusMax"'), 'input ceiling binds the shared constant')
+  assert.ok(!src.includes(':max="720"') && !src.includes(':max="600"'), 'no inline literals left')
 })

@@ -48,6 +48,13 @@ export function removeWithUndo (vm, doRemove, undo) {
 
 /** Unified exit for rescheduling (drag / move to today/tomorrow / calendar eventDrop): applies the change + "Moved to X + Undo" toast.
  *  apply/revert are dispatched by the caller as patches, keeping the data channel consistent with this place. */
+/** U-21 (2026-09-20): quadrant drag snapshot — the three fields a matrix move rewrites, with the
+ *  normalized defaults the revert must restore exactly (extracted from MatrixGrid so the snapshot
+ *  contract is unit-testable without a .vue loader). */
+export function moveSnapshot (t) {
+  return { important: (t && t.important) || 0, urgent: (t && t.urgent) || 0, priority: t ? t.priority : undefined }
+}
+
 export function moveWithUndo (vm, { label, apply, revert }) {
   apply()
   if (!vm.$message || !window.Vue) return

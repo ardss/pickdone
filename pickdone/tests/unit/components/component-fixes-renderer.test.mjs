@@ -5,6 +5,7 @@
  * fixes are locked in as structural source assertions (visual-only, covered by visual gate).
  * Run: node --test tests/component-fixes-renderer.test.mjs
  */
+import '../../setup.mjs' // U-21: the behavior imports (limits.js/confirm.js) need the node-env shims
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -100,18 +101,28 @@ test('EditPanel: deadline clear button has an aria-label (parity with reminder c
 test('TomatoBar: work (give-up) button uses the brand teal family, no brick red left', () => {
   const src = read('renderer/js/components/TomatoBar.vue')
   assert.ok(!src.includes('#bd401e'), 'brick red #bd401e must be gone')
-  assert.ok(src.includes('.tomato-timer__play--work { background-color: #0c8172; }'), 'work state must match the brand teal of the default play state')
+  // U-21 honesty: the exact-CSS-text anchor was brittle (any reformat false-red). The work-state teal
+  // is a visual-gate concern; here we only assert the rule still carries a brand token/teal value.
+  const workRule = (src.match(/\.tomato-timer__play--work\s*\{[^}]*\}/) || [''])[0]
+  assert.ok(workRule && /#0c8172|var\(--brand/.test(workRule), 'work state stays in the brand teal family')
   assert.ok(!/番茄无暂停语义[\s\S]*cursor:\s*pointer/.test(src), 'timer text must not advertise pause')
   const time = src.match(/\.tomato-timer__time \{[\s\S]*?\}/)[0]
   assert.ok(!time.includes('cursor: pointer'), 'timer time block must not claim clickability')
   assert.ok(time.includes('pointer-events: none'), 'timer time must ignore pointer events')
 })
 
-test('HabitView: habit name is wired to startRename; frequency form validates before commit', () => {
+test('HabitView: habit name is wired to startRename; frequency form validates before commit', async () => {
   const src = read('renderer/js/views/HabitView.vue')
   assert.ok(src.includes('class="habit-name" role="button"') && src.includes('@click="startRename(h)"'), 'habit-name must enter rename mode on click')
   assert.ok(src.includes("freqWeekdaysRequired"), 'empty-weekdays warning key used')
-  assert.ok(src.includes('Math.min(30, Math.max(2,'), 'intervalN clamped to 2-30')
+  // U-21 honesty: boundary behavior moved into utils/limits.js clampIntervalN and exercised directly
+  const { clampIntervalN } = await import(pathToFileURL(path.join(ROOT, 'renderer/js/utils/limits.js')).href)
+  assert.equal(clampIntervalN(1), 2, 'below range clamps up to the minimum 2')
+  assert.equal(clampIntervalN(50), 30, 'above range clamps down to the maximum 30')
+  assert.equal(clampIntervalN(7), 7, 'in-range value passes through')
+  assert.equal(clampIntervalN(undefined), 2, 'missing value falls back to the default 2')
+  assert.equal(clampIntervalN('5'), 5, 'numeric strings coerce')
+  assert.ok(src.includes('clampIntervalN(this.freqIntervalN)'), 'HabitView commits through the shared clamp')
 })
 
 test('TaskAccountModal: edit form exposes the abandoned toggle (saveEdit already honors it)', () => {
@@ -137,11 +148,18 @@ test('SideNav: clearing search navigates deterministically (replace to source vi
   assert.ok(!src.includes('todo-list-search\') this.$router.back()'), '$router.back() exit removed')
 })
 
-test('MatrixGrid: quadrant drop goes through moveWithUndo with a three-field snapshot', () => {
+test('MatrixGrid: quadrant drop goes through moveWithUndo with a three-field snapshot', async () => {
   const src = read('renderer/js/components/MatrixGrid.vue')
   assert.ok(src.includes('moveWithUndo(this,') , 'dropOn must use moveWithUndo')
-  assert.ok(src.includes('important: t.important || 0, urgent: t.urgent || 0, priority: t.priority'), 'revert snapshot covers important/urgent/priority')
   assert.ok(!/dropOn[\s\S]*updateTodoFields[\s\S]*patch:\s*\{ important: q\.important/.test(src.split('moveWithUndo')[0]), 'no direct silent update left in dropOn')
+  // U-21 honesty: the snapshot is now a real exported function — test its BEHAVIOR (exactly the three
+  // fields a quadrant move rewrites, with normalized defaults) instead of matching source text
+  const { moveSnapshot } = await import(pathToFileURL(path.join(ROOT, 'renderer/js/utils/confirm.js')).href)
+  assert.deepEqual(moveSnapshot({ important: 1, urgent: 1, priority: 3, taskContent: 'x' }),
+    { important: 1, urgent: 1, priority: 3 }, 'snapshot covers exactly important/urgent/priority')
+  assert.deepEqual(moveSnapshot({}), { important: 0, urgent: 0, priority: undefined }, 'missing fields normalize to the revert defaults')
+  assert.deepEqual(moveSnapshot(null), { important: 0, urgent: 0, priority: undefined }, 'null row is tolerated')
+  assert.ok(src.includes('const snap = moveSnapshot(t)'), 'dropOn snapshots through the shared helper')
 })
 
 test('a11y: role="checkbox" elements must NOT bind @keydown.space — the global main.js capture handler covers Space, and a per-element binding would double-toggle and cancel out', () => {
