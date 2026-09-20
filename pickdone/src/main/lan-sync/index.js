@@ -756,12 +756,12 @@ function createLanSyncNode(opts) {
     socket._lanSend(msg)
   }
 
-  /**
-   * Manual pairing with a known peer: exchange our 6-digit code for the peer's persisted
-   * pairing secret. Resolves {secret, peer}; rejects on reject/error/timeout.
-   */
+  /** Manual pairing with a known peer: exchange our 6-digit code for the peer's persisted pairing secret.
+   *  Resolves {secret, peer}; rejects on reject/error/timeout. */
   function pairWith(peerDeviceId, code) {
-    const peer = peers.get(peerDeviceId) || [...peers.values()][0]
+    // M-2: exact match only — no random-peer fallback; structured PEER_NOT_FOUND failure.
+    if (!peers.has(peerDeviceId)) { const e = new Error('pairWith: peer not discovered: ' + peerDeviceId); e.code = 'PEER_NOT_FOUND'; e.deviceId = peerDeviceId; return Promise.reject(e) }
+    const peer = peers.get(peerDeviceId)
     if (!peer || !peer.host || !peer.port) return Promise.reject(new Error('pairWith: no discovered peer'))
     return new Promise((resolve, reject) => {
       const client = connect(peer.host, peer.port, { deviceId, pairCode: String(code), protoVer: PROTO_VER, timeoutMs: 5000 })

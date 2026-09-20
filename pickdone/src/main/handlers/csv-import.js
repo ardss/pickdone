@@ -92,9 +92,11 @@ module.exports = function importHandlers (ctx) {
       const file = r.filePaths[0]
       lastPickedImportPath = file // import:run only allows executing the most recent dialog-picked path (prevents the renderer passing arbitrary paths to read files)
       // 同步 readFileSync 无上限曾把整个主进程(全部窗口/定时器)卡死在大 CSV 上:先 statSync 限 20MB 超限报错(2026-09-09 P2)
-      const tooBig = fixUtil.checkImportFileSize(fs.statSync(file).size)
-      if (tooBig) return { ok: false, code: 'USAGE', message: tooBig }
+      // M-3 (2026-09-20): the statSync moved INSIDE the try — a file deleted between the dialog and
+      // the stat used to throw raw ENOENT out of the IPC handler instead of the structured contract.
       try {
+        const tooBig = fixUtil.checkImportFileSize(fs.statSync(file).size)
+        if (tooBig) return { ok: false, code: 'USAGE', message: tooBig }
         const text = fs.readFileSync(file, 'utf8')
         lastPickedImportHash = textHash(text) // remember what the user actually approved (TOCTOU guard below)
         // rowsToItems 在数十万行时同步阻塞主进程数秒:解析移入 worker 线程(2026-09-12 W1)
@@ -115,7 +117,14 @@ module.exports = function importHandlers (ctx) {
       if (!lastPickedImportPath || f !== lastPickedImportPath) throw new Error('import: path not granted by picker')
       // H7 2026-09-12 P2: re-stat at run time — the file could have been swapped for a bigger one
       // between import:pick-preview and import:run (TOCTOU on the 20MB cap)
-      const tooBig = fixUtil.checkImportFileSize(fs.statSync(f).size)
+      // M-3 (2026-09-20): a vanished file used to throw raw ENOENT here; return the structured
+      // {ok:false, code} contract so the renderer surfaces a proper message instead of a throw.
+      let stat
+      try { stat = fs.statSync(f) } catch (err) {
+        lastPickedImportHash = ''
+        return { ok: false, code: 'FILE_MISSING', message: 'import: file no longer readable: ' + ((err && err.message) || String(err)) }
+      }
+      const tooBig = fixUtil.checkImportFileSize(stat.size)
       if (tooBig) throw new Error(tooBig)
       // TOCTOU content guard (fix 2026-09-19): the file must still be byte-identical to what the user
       // previewed and approved. A changed file previously re-parsed silently — report A approved, report
