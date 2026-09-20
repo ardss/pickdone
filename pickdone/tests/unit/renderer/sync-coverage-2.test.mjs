@@ -102,7 +102,7 @@ test('Y6: settings/updateExternal merges an inbound tours ledger per-key max', a
 test('Y2: settings/initFromDb seeds shortcutKeySettings from config.json when the blob is untouched', async () => {
   resetLs()
   const settings = (await importSrc('renderer/js/store/settings.js')).default
-  const commits = []
+  const updates = []
   const seededMap = { sync: 'ctrl+shift+x' }
   stubDb((op, p) => {
     if (op === 'get-settings') return Promise.resolve({ shortcutKeySettings: seededMap }) // note: also exposed as window.todoAPI.getSettings below
@@ -111,11 +111,17 @@ test('Y2: settings/initFromDb seeds shortcutKeySettings from config.json when th
     return Promise.resolve(null)
   })
   globalThis.window.todoAPI.getSettings = () => Promise.resolve({ shortcutKeySettings: seededMap }) // seeding reads the get-settings channel
+  globalThis.window.todoAPI.updateSettings = () => Promise.resolve(true)
   const state = { shortcutKeySettings: { ...settings.state.shortcutKeySettings } }
-  const ctx = { state, commit: (m, p) => commits.push(p) }
+  // U5: seeding routes through the `update` action (commit + updateSettings IPC for main hot-apply)
+  const ctx = {
+    state,
+    commit: (m, p) => { Object.assign(state, p) },
+    dispatch: async (a, p) => { updates.push(p); Object.assign(state, p) }
+  }
   await settings.actions.initFromDb(ctx)
-  const seeded = commits.find(p => p && p.shortcutKeySettings)
-  assert.ok(seeded, 'shortcut map seeded from config.json')
+  const seeded = updates.find(p => p && p.shortcutKeySettings)
+  assert.ok(seeded, 'shortcut map seeded from config.json via the update action')
   assert.equal(seeded.shortcutKeySettings.sync, 'ctrl+shift+x')
   assert.ok('quickAddGlobal' in seeded.shortcutKeySettings, 'seed merged over defaults')
 })
@@ -256,7 +262,7 @@ test('Y8: EditPanel re-runs repeatGroupInfo when the panel row changes inbound',
 test('Y9: SettingsSyncTab consumes exactly the contract ops and hides when absent', () => {
   const src = read('renderer/js/components/settings/SettingsSyncTab.vue')
   assert.ok(src.includes("dbCallLoose('syncConflictBackupsList')"), 'list op')
-  assert.ok(src.includes("dbCallLoose('syncConflictBackupRestore', b.key)"), 'restore op with key')
+  assert.ok(src.includes("dbCallLoose('syncConflictBackupRestore', { key: b.key })"), 'restore op with the {key} payload object (U6)')
   assert.ok(src.includes('conflictBackups = null'), 'ops absent -> section hidden')
   assert.ok(src.includes("v-if=\"conflictBackups !== null\""), 'defensive section gate')
 })
@@ -330,30 +336,37 @@ test('tomatoEstimateState: setEstimate writes the per-task meta key (delete on 0
   assert.ok(calls.some(([op, p]) => op === 'deleteMeta' && p === 'tomatoEstimateState:t1'), 'zero estimate removes the key')
 })
 
-test('tomatoEstimateState: initFromDb unions per-task keys over the legacy blob and lazy-migrates (blob deleted)', async () => {
+test('tomatoEstimateState: boot is lazy (U8) — legacy blob pass only, per-task keys read on demand', async () => {
   resetLs()
   const meta = new Map([
     ['tomatoEstimateState', JSON.stringify({ t1: 2 })],
     ['tomatoEstimateStateAt', String(Date.now())],
-    ['tomatoEstimateState:t1', '3'], // per-task wins over legacy blob
+    ['tomatoEstimateState:t1', '3'], // per-task wins over legacy blob (read lazily)
     ['tomatoEstimateState:t2', '1']
   ])
   const deleted = []
+  const reads = []
   stubDb((op, p) => {
-    if (op === 'getMeta') return Promise.resolve(meta.has(p) ? meta.get(p) : null)
+    if (op === 'getMeta') { reads.push(p); return Promise.resolve(meta.has(p) ? meta.get(p) : null) }
     if (op === 'setMeta') { meta.set(p[0], p[1]); return Promise.resolve(true) }
     if (op === 'deleteMeta') { deleted.push(p); meta.delete(p); return Promise.resolve(true) }
     return Promise.resolve(null)
   })
   const mod = await importSrc('renderer/js/utils/tomatoEstimate.js')
   await mod.initFromDb(['t1', 't2', 't3'])
-  assert.equal(mod.getEstimate('t1'), 3, 'per-task value wins over legacy blob')
-  assert.equal(mod.getEstimate('t2'), 1, 'per-task-only entry adopted')
+  // U8: boot does NOT scan every task id. The ONLY per-task read allowed is the one-time lazy
+  // migration existence check for a LEGACY BLOB entry (t1); non-blob ids (t2/t3) are never read.
+  const perTaskBootReads = reads.filter(k => /^tomatoEstimateState:(t1|t2|t3)$/.test(String(k)))
+  assert.deepEqual(perTaskBootReads, ['tomatoEstimateState:t1'], 'only the blob-entry migration check runs at boot')
   assert.ok(deleted.includes('tomatoEstimateState'), 'legacy blob meta deleted after migration')
+  await mod.ensureEstimate('t1')
+  assert.equal(mod.getEstimate('t1'), 3, 'lazy read: per-task value wins over legacy blob')
+  await mod.ensureEstimate('t2')
+  assert.equal(mod.getEstimate('t2'), 1, 'per-task-only entry adopted on demand')
   assert.equal(mod.getEstimate('t3'), 0, 'absent key = 0')
 })
 
-test('category: setProject writes the per-cat flag key AND maintains the legacy blob union', async () => {
+test('category: setProject writes ONLY the per-cat flag key (legacy blob never written, U7)', async () => {
   resetLs()
   const calls = []
   stubDb((op, p) => { calls.push([op, p]); return Promise.resolve(true) })
@@ -362,10 +375,10 @@ test('category: setProject writes the per-cat flag key AND maintains the legacy 
   mod.mutations.setProject.call({ commit: () => {} }, state, { id: 222, flag: true })
   assert.ok(state.projectIds.includes(222))
   assert.ok(calls.some(([op, p]) => op === 'setMeta' && p[0] === 'projectCategoryFlag:222' && p[1] === '1'), 'per-cat flag set')
-  const blob = calls.find(([op, p]) => op === 'setMeta' && p[0] === 'projectCategoryIds')
-  assert.deepEqual(JSON.parse(blob[1][1]), [111, 222], 'legacy blob union maintained')
+  assert.ok(!calls.some(([op, p]) => op === 'setMeta' && p[0] === 'projectCategoryIds'), 'legacy whole-array blob never written (U7)')
   mod.mutations.setProject.call({ commit: () => {} }, state, { id: 222, flag: false })
   assert.ok(calls.some(([op, p]) => op === 'deleteMeta' && p === 'projectCategoryFlag:222'), 'flag removal deletes the per-cat key')
+  assert.ok(!calls.some(([op, p]) => op === 'setMeta' && p[0] === 'projectCategoryIds'), 'still no legacy write after unflag')
 })
 
 test('category: softDelete cleans per-cat project flag keys for cascade victims', () => {
