@@ -97,6 +97,19 @@ function pickAdvertisedAddress(addresses, fallbackHost) {
 /** True when a single host string is dialable (used to sanitize stored peer records). */
 function isDialableHost(host) { return hostScore(host) >= 0 }
 
+/** Round-5 P1: stricter gate for MANUAL peer entry. hostScore alone treats every non-IP string
+ *  as a hostname (score 2), so "..." or "a..b" passed as "dialable" and got persisted, failing
+ *  every dial forever. A manual entry must be syntactically real — dotted IPv4, IPv6 literal,
+ *  or RFC-1123-style hostname labels — AND dialable per the discovery layer's own rules. */
+function isPlausibleHost(host) {
+  const s = String(host || '').trim()
+  if (!s) return false
+  const ipv4 = /^(\d{1,3})(\.\d{1,3}){3}$/.test(s)
+  const ipv6 = s.includes(':') && /^[0-9a-fA-F:.]+$/.test(s)
+  const hostname = /^(?=.{1,253}$)([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/.test(s)
+  return (ipv4 || ipv6 || hostname) && isDialableHost(s)
+}
+
 /**
  * Create a discovery instance.
  * @returns {{startAdvertising:Function, discover:Function, stop:Function, getPeers:Function, on:EventEmitter.on}}
@@ -248,4 +261,4 @@ function createDiscovery() {
   }
 }
 
-module.exports = { createDiscovery, SERVICE_TYPE, PROTO_VER, FALLBACK_PORT, pickAdvertisedAddress, isDialableHost, hostScore }
+module.exports = { createDiscovery, SERVICE_TYPE, PROTO_VER, FALLBACK_PORT, pickAdvertisedAddress, isDialableHost, isPlausibleHost, hostScore }

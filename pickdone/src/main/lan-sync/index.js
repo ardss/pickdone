@@ -376,6 +376,31 @@ function createLanSyncNode(opts) {
     // round start a parallel snapshot transfer mid-A. Skip instead — the in-flight round owns
     // the peer until it settles (the retry/backoff machinery re-dials afterwards).
     if (roundsInFlight.has(peer.deviceId)) return Promise.resolve(false)
+    // Round-4 P1 (roundsInFlight permanent leak): a malformed port/host (e.g. a corrupt
+    // discovery announce) used to make net.createConnection throw a RangeError SYNCHRONOUSLY
+    // inside the round's promise executor — before finish() existed — so the per-peer mutex
+    // below was never released and the peer was skipped FOREVER. Validate the dial target
+    // before taking the mutex.
+    // Round-5 P1: the rejection must go through the SAME failure accounting as a dial failure
+    // (finish()'s error path). It previously emitted round-error WITHOUT touching
+    // failStreakBy/dialNotBefore/scheduleRetry (the old "leaves the retry machinery in control"
+    // comment was wrong), so the startSyncRound trigger re-fired the same doomed round every
+    // tick with a fresh round-error fan-out, forever. Count the failure here, suppress the
+    // broadcast once hibernating (streak > DIAL_FAILURE_BUDGET), and let scheduleRetry arm
+    // dialNotBefore + the retry timer so hibernate applies.
+    const badPort = !Number.isInteger(peer.port) || peer.port < 1 || peer.port > 65535
+    if (!isDialableHost(peer.host) || badPort) {
+      const detail = badPort ? `invalid port (${peer.port})` : `invalid host (${peer.host})`
+      const streak = (failStreakBy.get(peer.deviceId) || 0) + 1
+      failStreakBy.set(peer.deviceId, streak)
+      lastError = `${peer.deviceId}: ${detail}`
+      errorBy.set(peer.deviceId, lastError)
+      pushRecent({ at: Date.now(), kind: 'error', peer: peer.deviceId, detail: { error: detail } })
+      refreshOnline(peer.deviceId)
+      if (streak <= DIAL_FAILURE_BUDGET) em.emit('round-error', { peer: peer.deviceId, error: new Error(detail) })
+      scheduleRetry(peer.deviceId)
+      return Promise.resolve(false)
+    }
     roundsInFlight.add(peer.deviceId)
     roundsRunning += 1
     return new Promise((resolve) => {
@@ -411,7 +436,11 @@ function createLanSyncNode(opts) {
         done.unref?.()
       }
       const progressDeadline = () => { if (!settled) armDeadline(roundProgressMs) }
-      const client = connect(peer.host, peer.port, {
+      const client = (() => {
+        // Round-4 P1: any synchronous throw from connect() (range/option errors) must land in
+        // finish(), not escape the promise executor and leak the roundsInFlight mutex.
+        try {
+          return connect(peer.host, peer.port, {
         deviceId,
         authCode,
         // Session key material: the round transport is AES-256-GCM encrypted, key derived
@@ -425,8 +454,16 @@ function createLanSyncNode(opts) {
         // their side. Terminal for this session: no more dialing until the user re-pairs/unpairs
         // or restarts (a re-announced/re-added peer clears the state via rememberPeer).
         onUnauthorized: (info) => { authRejected = true; em.emit('peer-unauthorized', info) },
-      })
-      const finish = (err) => {
+          })
+        } catch (err) {
+          finish(err)
+          return null
+        }
+      })()
+      // Round-4 P1: `function` declaration (hoisted) so the connect IIFE below can call finish
+      // from its catch path even though connect() textually precedes the body — a synchronous
+      // throw must reach finish (mutex release) instead of escaping the promise executor.
+      function finish (err) {
         if (settled) return
         settled = true
         if (done) clearTimeout(done)
@@ -437,7 +474,7 @@ function createLanSyncNode(opts) {
         // clear the flag while another round's snapshot transfer was still in flight.
         if (ownsSnapshotBusy) clientSnapshotBusy.delete(peer.deviceId) // client-role flag ONLY: the server role's
         // serverSnapshotBusy must survive a client round end (separate sets, see above).
-        client.close()
+        if (client) client.close()
         if (err) {
           // A round that died MID-snapshot re-arms the trigger deterministically: the pull
           // watermark did not advance, so the next round must re-request (an RST can also
