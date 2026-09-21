@@ -102,7 +102,11 @@ export default {
       undoEmpty: 'Nothing to undo',
       redoneLabel: 'Redone: {label}',
       redone: 'Redone',
-      redoEmpty: 'Nothing to redo'
+      redoEmpty: 'Nothing to redo',
+      deleteNoSelection: 'Select a task first',
+      pinIgnoredSort: 'Current sort is not custom — pin/unpin has no effect',
+      pinned: 'Pinned: {name}',
+      unpinned: 'Unpinned: {name}'
     },
     layout: {
       navToday: 'Today',
