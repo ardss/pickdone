@@ -208,3 +208,28 @@ test('i18n parity: WeatherWidget stale keys in BOTH zh and en D shards', () => {
     assert.ok(read('renderer/js/i18n/locales/en-US-D.js').includes('"' + k + '"'), 'en missing ' + k)
   }
 })
+
+/* ---------- [F9] EditPanel: width restore + save-failed Retry (anchors) ---------- */
+
+test('[F9] auto-widen remembers pre-open width and restores it on close', () => {
+  const src = read('renderer/js/layout.vue')
+  assert.ok(src.includes('_preEditWidth'), 'pre-open width is remembered')
+  assert.ok(src.includes('restoreWindowWidth'), 'restore call on close')
+  const preload = read('src/preload/index.js')
+  assert.ok(preload.includes('restoreWindowWidth: w => invoke('), 'preload exposes restoreWindowWidth')
+  const handler = read('src/main/handlers/tomato.js')
+  assert.ok(handler.includes("'restore-window-width'"), 'main handler shrinks the window back')
+  assert.ok(handler.includes('isMaximized'), 'restore never fights a maximized window')
+})
+
+test('[F9] save-failed banner has a working Retry that flushes the queue', () => {
+  const src = read('renderer/js/components/EditPanel.vue')
+  assert.ok(src.includes('retrySave'), 'retrySave handler present')
+  assert.ok(/retrySave[\s\S]{0,200}this\.saveFailed = false[\s\S]{0,80}this\.flushSave\(\)/.test(src), 'retry clears the flag and flushes pending saves')
+  assert.ok(src.includes('statsJ.EditPanel.saveRetry'), 'retry button labeled')
+})
+
+test('i18n parity: EditPanel saveRetry in BOTH zh and en J shards', () => {
+  assert.ok(read('renderer/js/i18n/locales/zh-CN-J.js').includes('saveRetry'), 'zh missing saveRetry')
+  assert.ok(read('renderer/js/i18n/locales/en-US-J.js').includes('saveRetry'), 'en missing saveRetry')
+})

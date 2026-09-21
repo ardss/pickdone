@@ -3,7 +3,11 @@
   <transition name="slide-right" appear>
   <aside v-if="e" class="edit-panel" @click.stop>
     <div class="ep-inner">
-        <div v-if="saveFailed" class="ep-save-failed" role="alert">{{ $t('statsJ.EditPanel.saveFailed') }}</div>
+        <!-- D6-F9: the failure banner gets an explicit Retry that flushes the pending save queue -->
+        <div v-if="saveFailed" class="ep-save-failed" role="alert">{{ $t('statsJ.EditPanel.saveFailed') }}<span
+              class="ep-save-retry" role="button" tabindex="0"
+              :aria-label="$t('statsJ.EditPanel.saveRetry')"
+              @click="retrySave" @keydown.enter.prevent="retrySave">{{ $t('statsJ.EditPanel.saveRetry') }}</span></div>
         <!-- F3 (2026-09-20): a peer updated the open task while the panel holds UNSAVED user edits —
              never auto-overwrite user input; offer an explicit re-hydrate instead -->
         <div v-if="remoteStale" class="ep-remote-updated" role="status">
@@ -380,6 +384,12 @@ export default {
     queueSave (patch) { if (this._save) this._save.queueSave(patch) },
     /** Immediately commit pending saves (must be called before switching tasks, so A's edits do not land on B) */
     flushSave () { if (this._save) this._save.flushSave() },
+    /** D6-F9: explicit Retry from the save-failed banner — re-attempt the pending flush now
+     *  (onFail/onDone flip saveFailed back if the retry fails again) */
+    retrySave () {
+      this.saveFailed = false
+      this.flushSave()
+    },
     markDirty (k) { if (this._save) this._save.markDirty(k) },
     /** Subtask drag sorting (sortablejs library; Up/Down buttons kept as a keyboard-accessible fallback).
         The panel body is under v-if="e", so the nodes do not exist at mounted time -- called after hydrate; old instances become invalid when nodes are replaced, destroy before rebuilding */
@@ -741,6 +751,7 @@ export default {
 .ep-remote-updated { flex-shrink: 0; margin: 0 0 8px; padding: 6px 12px; font-size: var(--fs-sm);
   color: var(--text-2); background: var(--bg-2, rgba(0,0,0,.04)); border: 1px solid var(--line-1, rgba(0,0,0,.12)); border-radius: var(--radius-md);
   display: flex; align-items: center; gap: 8px; }
+.ep-save-retry { margin-left: 8px; color: inherit; cursor: pointer; font-weight: 600; white-space: nowrap; text-decoration: underline; }
 .ep-remote-refresh { margin-left: auto; color: var(--primary, var(--text-1)); cursor: pointer; font-weight: 600; white-space: nowrap; }
 .ep-remote-refresh:hover { text-decoration: underline; }
 .ep-collapse-btn {

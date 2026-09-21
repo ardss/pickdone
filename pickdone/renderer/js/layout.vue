@@ -92,7 +92,17 @@ export default {
   watch: {
     // When the edit panel opens, ensure the window is wide enough for sidebar 250 + edit 335 + content 640 (auto-widen)
     '$store.state.ui.rightSidebarTodoEdit.visible' (v) {
-      if (v && window.todoAPI) window.todoAPI.ensureWindowWidth(1225)
+      if (!window.todoAPI) return
+      // D6-F9: the auto-widen to 1225 used to be one-way — remember the pre-open width and
+      // restore it when the panel closes (restore handler shrinks only if the window grew)
+      if (v) {
+        if (this._preEditWidth == null) this._preEditWidth = window.innerWidth
+        window.todoAPI.ensureWindowWidth(1225)
+      } else if (this._preEditWidth != null) {
+        const w = this._preEditWidth
+        this._preEditWidth = null
+        if (window.todoAPI.restoreWindowWidth) window.todoAPI.restoreWindowWidth(w)
+      }
     }
   },
   mounted () {
