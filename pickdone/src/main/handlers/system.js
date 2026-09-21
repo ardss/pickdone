@@ -7,8 +7,12 @@ const updater = require('../updater')
 const { createExporter } = require('../export-xlsx')
 
 module.exports = function systemHandlers (ctx) {
-  const { isLocked, allowWithinRate, i18n, app } = ctx
+  const { isLocked, allowWithinRate, i18n, app, getMainWindow } = ctx
   const { Notification, shell } = require('electron')
+  // D6 P2 (2026-09-21): updater channels are main-window-only — the check/download/quit-and-install
+  // triple used to be callable from ANY renderer window even while locked.
+  const { makeAssertMainWindow } = require('./shared')
+  const assertMainWindow = makeAssertMainWindow(getMainWindow)
   const { exportTodosToXlsx } = createExporter({ getMainWindow: ctx.getMainWindow, i18n, log })
   const notificationSendTimes = [] // sliding window for the notification channel rate limit (10 per 10s)
 
@@ -95,9 +99,11 @@ module.exports = function systemHandlers (ctx) {
     },
 
     // --- Auto-update ---
-    'updater:check': () => updater.check(),
-    'updater:download': () => updater.downloadUpdate(),
-    'updater:quit-and-install': () => updater.quitAndInstall(),
+    // D6 P2 (2026-09-21): main-window + locked-state gates on all three mutating updater channels
+    // (status stays readable — it leaks nothing and the settings page polls it from the main window only anyway).
+    'updater:check': (e) => { assertMainWindow(e); if (isLocked()) throw new Error('locked'); return updater.check() },
+    'updater:download': (e) => { assertMainWindow(e); if (isLocked()) throw new Error('locked'); return updater.downloadUpdate() },
+    'updater:quit-and-install': (e) => { assertMainWindow(e); if (isLocked()) throw new Error('locked'); return updater.quitAndInstall() },
     'updater:status': () => updater.getStatus()
   }
 }

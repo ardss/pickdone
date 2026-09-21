@@ -131,7 +131,11 @@ module.exports = function backupHandlers (ctx) {
       // ^(auto|evt)- 白名单天然排除 .tmp-* 原子写残留(2026-09-11 与 run-auto-backup 的清扫同策略)
       return { ok: true, files: fixUtil.sortBackupNamesNewestFirst(names.filter(f => /^(auto|evt)-/.test(f))) }
     },
-    'read-critical-state-backup': () => {
+    'read-critical-state-backup': (e) => {
+      // D6 P1 (2026-09-21): the read twin lacked assertMainWindow while the write twin has it —
+      // any auxiliary window (compromised float/quick-add) could exfiltrate the full disaster
+      // snapshot. Symmetric main-window gate with write-critical-state-backup.
+      assertMainWindow(e)
       if (isLocked()) throw new Error('app is locked')
       // Same source of truth as dbRecovery.cjs: external root first, with fallback to legacy files inside userData
       try { return fs.readFileSync(dbRecovery.criticalBackupPath(app.getPath('userData')), 'utf8') } catch { return null }
