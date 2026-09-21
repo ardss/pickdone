@@ -210,7 +210,7 @@ export default {
         // failure with its renewal-disabled consequence, instead of contradictory success+warning pops
         let msg = this.$t('statsD.RepeatModal.generated', { n: made })
         if (truncated) msg += this.$t('statsD.RepeatModal.truncated', { n: this.maxRepeat })
-        if (failed) msg += this.$t('statsD.RepeatModal.partialFail', { failed, total: dates.length })
+        if (failed) msg += this.$t('statsD.RepeatModal.partialFail', { made, failed, total: dates.length })
         if (ruleSaveFailed) msg += this.$t('statsD.RepeatModal.ruleSaveFailed') + this.$t('statsD.RepeatModal.renewalDisabledWarn')
         if (failed || ruleSaveFailed) this.$message.warning(msg)
         else this.$message.success(msg)
