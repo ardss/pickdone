@@ -3,11 +3,7 @@
   <transition name="slide-right" appear>
   <aside v-if="e" class="edit-panel" @click.stop>
     <div class="ep-inner">
-        <!-- D6-F9: the failure banner gets an explicit Retry that flushes the pending save queue -->
-        <div v-if="saveFailed" class="ep-save-failed" role="alert">{{ $t('statsJ.EditPanel.saveFailed') }}<span
-              class="ep-save-retry" role="button" tabindex="0"
-              :aria-label="$t('statsJ.EditPanel.saveRetry')"
-              @click="retrySave" @keydown.enter.prevent="retrySave">{{ $t('statsJ.EditPanel.saveRetry') }}</span></div>
+        <div v-if="saveFailed" class="ep-save-failed" role="alert">{{ $t('statsJ.EditPanel.saveFailed') }}<span class="ep-save-retry" role="button" tabindex="0" :aria-label="$t('statsJ.EditPanel.saveRetry')" @click="retrySave" @keydown.enter.prevent="retrySave">{{ $t('statsJ.EditPanel.saveRetry') }}</span></div>
         <!-- F3 (2026-09-20): a peer updated the open task while the panel holds UNSAVED user edits —
              never auto-overwrite user input; offer an explicit re-hydrate instead -->
         <div v-if="remoteStale" class="ep-remote-updated" role="status">
@@ -321,8 +317,8 @@ export default {
       // this the next autosave clobbers the peer edit with the stale open-time snapshot.
       this.checkRemoteUpdate(t)
       // Y8 (sync-coverage-2): the repeat-group count stales while the panel is open — an inbound
-      // round completing/deleting sibling instances of the same repeatId changes the store row
-      // without re-hydration. Piggyback the existing remote-update watcher (throttled).
+      // round touching sibling instances changes the store row without re-hydration; piggyback the
+      // existing remote-update watcher (throttled).
       if (t && this.e && this.isRepeat && t.repeatId === this.e.repeatId) {
         const now = Date.now()
         if (!this._rgRefreshAt || now - this._rgRefreshAt > 1500) {
@@ -336,7 +332,6 @@ export default {
 
     // First open of the edit panel: spotlight tour for the attachment toolbar (in-context teaching)
     this.$nextTick(() => { import('../utils/onboardingTours.js').then(mod => mod.maybeRunTour('editpanel', 600)).catch(() => {}) })
-    // Esc closes the topmost overlay: inner popovers first (category / reminders / dependencies), then the image preview, then the edit panel itself
     this._onKeydown = (e) => {
       if (e.key !== 'Escape') return
       if (this.catOpen) { this.catOpen = false; return }
@@ -345,26 +340,24 @@ export default {
       const dep = this.$refs.depBlock
       if (dep && dep.depOpen) { dep.depOpen = false; return }
       if (this.previewImg) { this.previewImg = null; return }
-      // When an upper modal (settings/recurring rule/feedback dialog) is open, Esc belongs to it; do not close the edit panel through the wall
       const ui = this.$store.state.ui
       if (ui.showSettingsModal || ui.showRepeatModalFor || ui.showFeedbackModal ||
           ui.showRepeatDeleteConfirm || ui.accountTaskId || ui.tomatoAbandonVisible || ui.tomatoFocusRecordVisible) return
       const st = this.$store.state.ui.rightSidebarTodoEdit
-      // D6-F1: cleanup-aware close — an inline-created (calendar) task still empty on Esc is soft-deleted
-      if (st && st.visible) this.$store.dispatch('ui/closeEditCleanup')
+      if (st && st.visible) this.$store.dispatch('ui/closeEditCleanup') // D6-F1: empty inline-created task is cleaned up
     }
     window.addEventListener('keydown', this._onKeydown)
     // Disable the browser's native spell check (English correction squiggles interfere with typing over Chinese content)
     this.$nextTick(() => {
       this.$el.querySelectorAll('textarea, input').forEach(el => el.setAttribute('spellcheck', 'false'))
     })
-    // Inputs created dynamically later (subtasks etc.) get spell check disabled on focus too Named handler: must be removed in beforeUnmount (listener accumulation when nodes are replaced after hydrate)
+    // Dynamically created inputs (subtasks etc.) also get spell check disabled; named handler removed in beforeUnmount (listener accumulation when nodes are replaced after hydrate)
     this._onFocusin = e => {
       const t = e.target
       if (t && (t.tagName === 'TEXTAREA' || t.tagName === 'INPUT') && t.hasAttribute('spellcheck')) t.setAttribute('spellcheck', 'false')
     }
     this.$el.addEventListener('focusin', this._onFocusin)
-    // The hidden date picker input stays out of the Tab focus chain (invoked programmatically only by the "pick a date" chip)
+    // The hidden date picker input stays out of the Tab focus chain (programmatic "pick a date" only)
     this.$nextTick(() => {
       // Under Element Plus, $refs.datePick.$el may be a comment/text node (no querySelector); defensively type-check
       const pickEl = this.$refs.datePick && this.$refs.datePick.$el
@@ -384,12 +377,7 @@ export default {
     queueSave (patch) { if (this._save) this._save.queueSave(patch) },
     /** Immediately commit pending saves (must be called before switching tasks, so A's edits do not land on B) */
     flushSave () { if (this._save) this._save.flushSave() },
-    /** D6-F9: explicit Retry from the save-failed banner — re-attempt the pending flush now
-     *  (onFail/onDone flip saveFailed back if the retry fails again) */
-    retrySave () {
-      this.saveFailed = false
-      this.flushSave()
-    },
+    retrySave () { this.saveFailed = false; this.flushSave() }, // D6-F9: banner Retry — onFail re-flags on failure
     markDirty (k) { if (this._save) this._save.markDirty(k) },
     /** Subtask drag sorting (sortablejs library; Up/Down buttons kept as a keyboard-accessible fallback).
         The panel body is under v-if="e", so the nodes do not exist at mounted time -- called after hydrate; old instances become invalid when nodes are replaced, destroy before rebuilding */
@@ -466,8 +454,7 @@ export default {
     },
     close () {
       if (!this.autoSave) this.queueSave({})
-      // D6-F1: cleanup-aware close (see Esc handler)
-      this.$store.dispatch('ui/closeEditCleanup')
+      this.$store.dispatch('ui/closeEditCleanup') // D6-F1: cleanup-aware close
     },
     // Collapse is not close: the edit state is kept, collapsing into a thin strip on the right edge that can be expanded again
     collapse () {
@@ -751,7 +738,7 @@ export default {
 .ep-remote-updated { flex-shrink: 0; margin: 0 0 8px; padding: 6px 12px; font-size: var(--fs-sm);
   color: var(--text-2); background: var(--bg-2, rgba(0,0,0,.04)); border: 1px solid var(--line-1, rgba(0,0,0,.12)); border-radius: var(--radius-md);
   display: flex; align-items: center; gap: 8px; }
-.ep-save-retry { margin-left: 8px; color: inherit; cursor: pointer; font-weight: 600; white-space: nowrap; text-decoration: underline; }
+.ep-save-retry { margin-left: 8px; text-decoration: underline; }
 .ep-remote-refresh { margin-left: auto; color: var(--primary, var(--text-1)); cursor: pointer; font-weight: 600; white-space: nowrap; }
 .ep-remote-refresh:hover { text-decoration: underline; }
 .ep-collapse-btn {
