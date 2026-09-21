@@ -51,11 +51,15 @@ test('w5 SnManageCategoriesModal: owns the mgrDrag* sort state machine verbatim'
   assert.match(catModal, /\$store\.commit\('category\/reorder', ids\)/, 'drag sort still commits category/reorder')
 })
 
-test('w5 SnManageCategoriesModal: carries the delete path (confirm + softDelete + detach + settings cleanup)', () => {
-  assert.match(catModal, /async delCat \(c\)/)
-  assert.match(catModal, /category\/softDelete/)
-  assert.match(catModal, /todoBoxCategoryId === c\.categoryId/)
-  assert.match(catModal, /isProject \(id\)/)
+test('w5 SnManageCategoriesModal: delete delegates to the shared undoable categoryDelete (D6)', () => {
+  // D6: delCat moved to side-nav/categoryDelete.js — busy-row guard, failure-isolated
+  // reassignment, and the undo-toast doctrine (categories/tasks/filters/settings recoverable)
+  assert.match(catModal, /deleteCategoryWithUndo/, 'modal delegates to the shared module')
+  const shared = read('renderer/js/components/side-nav/categoryDelete.js')
+  assert.match(shared, /category\/softDelete/, 'soft delete happens in the shared path')
+  assert.match(shared, /todoBoxCategoryId === c\.categoryId/, 'todoBox cleanup kept')
+  assert.match(catModal, /isProject \(id\)/, 'project guard stays in the modal (set/cancel project button)')
+  assert.match(shared, /filters\/save/, 'cascaded saved filters are restored on undo')
 })
 
 test('w5 SnManageTagsModal: owns tagMgr* rename/delete rewrite verbatim', () => {

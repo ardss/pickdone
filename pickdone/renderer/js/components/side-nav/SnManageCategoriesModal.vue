@@ -44,6 +44,7 @@
 
 <script lang="ts">
 import { defineComponent } from 'vue'
+import { deleteCategoryWithUndo } from './categoryDelete.js'
 
 export default defineComponent({
   name: 'SnManageCategoriesModal',
@@ -132,26 +133,8 @@ export default defineComponent({
         .slice(0, 5).map(t => t.taskContent)
     },
     toggleMgrPreview (id) { this.mgrExpanded = { ...this.mgrExpanded, [id]: !this.mgrExpanded[id] } },
-    async removeMgrCat (c) { await this.delCat(c) },
-    /* Delete path copied verbatim from SideNav.vue (the sidebar rows/trash keep their own copy): the
-       modal needs the same confirm + soft-delete + task-detach + settings-keys cleanup sequence */
-    async delCat (c) {
-      try {
-        await this.$confirm(this.$t('statsG.SideNav.delCatConfirm', { name: c.categoryName }), this.$t('statsE.SideNav.tipTitle'), { type: 'warning' })
-      } catch { return } // user cancelled; leave the data untouched
-      this.$store.commit('category/softDelete', c.categoryId)
-      if (this.isProject(c.categoryId)) this.$store.commit('category/setProject', { id: c.categoryId, flag: false })
-      for (const t of this.$store.state.todo.todoList.filter(x => x.categoryId === c.categoryId)) {
-        await this.$store.dispatch('todo/updateTodoFields', { taskId: t.taskId, patch: { categoryId: 0 } })
-      }
-      // Clean up settings keys pointing at the dead category id: otherwise the todo box filtered by that category stays forever empty (showing 0 items even after data restore)
-      const st: any = this.$store.state.settings
-      const reset: any = {}
-      if (st.todoBoxCategoryId === c.categoryId) reset.todoBoxCategoryId = -1
-      if (st.newTodoCategoryId === c.categoryId) reset.newTodoCategoryId = 0
-      if (st.calendarCategory === c.categoryId) reset.calendarCategory = 0
-      if (Object.keys(reset).length) this.$store.commit('settings/updateSettings', reset)
-    }
+    /* D6-F4: same shared cascade-delete exit as the sidebar rows (the verbatim copy drifted) */
+    async removeMgrCat (c) { await deleteCategoryWithUndo(this, c) },
   }
 })
 </script>

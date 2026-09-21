@@ -12,6 +12,8 @@ export default {
       delTagConfirm: 'Delete tag "{name}"? It will be removed from {count} task(s)',
       tagDeleted: 'Tag "{name}" deleted',
       delCatConfirm: 'Delete "{name}"? Its tasks will become uncategorized',
+      delCatPartialFail: 'Some task moves failed ({ok}/{total} succeeded) — retry the delete or handle manually',
+      delCatUndone: 'Deleted "{name}": {tasks} task(s) moved to uncategorized, {filters} saved filter(s) removed　',
       syncDoneMsg: 'Written to the local database and backed up',
       syncFailMsg: 'Something went wrong while saving data. Please try again',
       searchPlaceholder: 'Search',

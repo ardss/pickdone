@@ -31,6 +31,20 @@ module.exports = function tomatoHandlers (ctx) {
       const x = Math.max(wa.x, Math.min(b.x, wa.x + wa.width - width))
       win.setBounds({ x, y: b.y, width, height: b.height })
     },
+    // D6-F9: counterpart of ensure-window-width — the edit-panel auto-widen used to be one-way.
+    // Shrinks back to the remembered pre-open width (never below min, never while maximized).
+    'restore-window-width': (e, w) => {
+      const want = Math.max(900, Number(w) || 0)
+      const win = getMainWindow()
+      if (!win || win.isMaximized() || win.isFullScreen()) return
+      const b = win.getBounds()
+      if (b.width <= want) return
+      const { screen } = require('electron')
+      const wa = screen.getDisplayMatching(b).workArea
+      const width = Math.min(b.width, Math.max(want, 900))
+      const x = Math.max(wa.x, Math.min(b.x + (b.width - width), wa.x + wa.width - width))
+      win.setBounds({ x, y: b.y, width, height: b.height })
+    },
     'set-tomato-float-panel': (e, open) => tomatoFloat.setPanelOpen(open),
     // --- Running-tomato cross-device announcements (feature: live remote focus chip) ---
     // Renderer (main + float windows) reports local focus transitions; main composes the

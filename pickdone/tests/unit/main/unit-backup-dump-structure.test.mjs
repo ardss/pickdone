@@ -16,7 +16,9 @@ const HERE = path.dirname(fileURLToPath(import.meta.url))
 const read = p => fs.readFileSync(path.join(HERE, '../../..', p), 'utf8')
 
 // 恢复端实际消费的段 = 必含段(user/lastLoginRecord 由主进程恢复语义持有,渲染端两套恢复不消费,不列入)
-const REQUIRED_SEGMENTS = ['settingsState', 'user', 'lastLoginRecord', 'todoState', 'tomatoState', 'tomatoRecords', 'categoryState', 'habitsState']
+// D6-F14 (2026-09-21): planState/filterState joined the dump contract (schedule chips + saved
+// filters were silently lost on JSON disaster restore before)
+const REQUIRED_SEGMENTS = ['settingsState', 'user', 'lastLoginRecord', 'todoState', 'tomatoState', 'tomatoRecords', 'categoryState', 'habitsState', 'planState', 'filterState']
 
 // R1 refactor: buildBackupDump 与三处备份动作迁至 store/todoBackup.js（todo.js 只留 action 壳）
 const dumpSrc = () => read('renderer/js/store/todoBackup.js')
@@ -43,7 +45,8 @@ test('三处备份动作全部走 buildBackupDump,不允许手写 dump 拷贝', 
 
 test('两套恢复路径消费必含段(写入面↔消费面对账)', () => {
   const uiRestore = read('renderer/js/components/settings/SettingsDataTab.vue') // W5 wave 1: data tab (restore paths) extracted from SettingsModal.vue
-  for (const seg of ['settingsState', 'categoryState', 'habitsState', 'todoState', 'tomatoRecords']) {
+  // D6-F14: the UI restore must also consume the chips + saved-filters segments
+  for (const seg of ['settingsState', 'categoryState', 'habitsState', 'todoState', 'tomatoRecords', 'planState', 'filterState']) {
     assert.ok(uiRestore.includes('b.' + seg), `SettingsModal UI 恢复未消费备份段 ${seg}——恢复后该数据会"消失"`)
   }
   const mainRecovery = read('src/main/dbRecovery.cjs')

@@ -1,12 +1,15 @@
 <template>
 
-  <div class="weather-widget" :class="{ 'is-loading': loading }" v-if="enabled"
-       role="button" tabindex="0" :title="$t('statsD.WeatherWidget.refresh')"
+  <div class="weather-widget" :class="{ 'is-loading': loading, 'is-stale': stale }" v-if="enabled"
+       role="button" tabindex="0" :title="widgetTitle"
        @click="refresh" @keydown.enter.prevent="refresh">
     <span class="w-icon">{{icon}}</span>
     <span class="w-temp">{{ temp !== null ? temp + '°' : (loading ? '…' : '--') }}</span>
     <span class="w-desc" v-if="error">{{error}}</span>
     <span class="w-desc" v-else>{{desc}}</span>
+    <!-- D6-F8: after the final retry failure the cached temp is stale — dim it and show an explicit
+         refresh affordance instead of silently presenting hours-old data as current -->
+    <span v-if="stale" class="w-stale-chip" aria-live="polite">{{ $t('statsD.WeatherWidget.staleChip') }} ⟳</span>
     <!-- City outline sits next to the city name (user-finalized), not occupying the widget's leftmost position -->
     <svg v-if="shape" class="w-shape" :viewBox="shape.vb" aria-hidden="true">
       <path :d="shape.d"/>
@@ -148,7 +151,10 @@ export default {
       city: cached ? cached.city : '',
       shape: null as any,
       loading: false,
-      error: ''
+      error: '',
+      // D6-F8: true after the final retry failure with only cached data left — dims the temp and
+      // shows the explicit refresh chip until a successful fetch lands
+      stale: false
     }
   },
   computed: {
@@ -156,7 +162,12 @@ export default {
     manualCity () { return String(this.$store.state.settings.weatherCity || '').trim() },
     source () { return this.$store.state.settings.weatherSource === 'wttr' ? 'wttr' : 'open-meteo' },
     desc () { const k = WMO[this.code]; return k ? this.$t('statsD.WeatherWidget.' + k) : '' },
-    icon () { return ICON[this.code] || '🌡' }
+    icon () { return ICON[this.code] || '🌡' },
+    widgetTitle () {
+      return this.stale
+        ? this.$t('statsD.WeatherWidget.staleTitle', { temp: this.temp != null ? this.temp : '--' })
+        : this.$t('statsD.WeatherWidget.refresh')
+    }
   },
   watch: {
     enabled (v) { if (v) this.fetchWeather(); else this.reset() },
@@ -274,6 +285,7 @@ export default {
           this.code = cur.code
           this.city = cur.city
           this.error = ''
+          this.stale = false
           this._retryCount = 0
           clearTimeout(this._retryTimer)
           writeCache({ temp: this.temp, code: this.code, city: this.city })
@@ -287,6 +299,8 @@ export default {
         const c = this.city || this.manualCity
         if (c && !this.shape) this.loadCityShape(c)
         this._retryCount = (this._retryCount || 0) + 1
+        // Retries exhausted with cached data still showing: flag it as stale (D6-F8)
+        if (this._retryCount > 2 && this.temp !== null) this.stale = true
         if (this._retryCount <= 2) {
           clearTimeout(this._retryTimer)
           // Increment only, never decrement: only a monotonically growing counter can truly stop after two failures
@@ -302,6 +316,13 @@ export default {
 }
 </script>
 <style>/* 刷新按钮已移除：点击组件任意位置即刷新；w-shape = 城市轮廓小图标（Nominatim 边界简化描边） */
+/* D6-F8: stale state — dim temperature, explicit refresh chip */
+.weather-widget.is-stale .w-temp { opacity: .45; }
+.w-stale-chip {
+  font-size: var(--fs-xs, 11px); color: var(--text-3, #8a8f98);
+  border: 1px solid var(--border, rgba(0,0,0,.12)); border-radius: 999px;
+  padding: 0 6px; line-height: 16px; flex-shrink: 0;
+}
 .w-shape {
   width: 26px; height: 26px; flex-shrink: 0; margin-left: auto; /* 右对齐且紧贴城市名左侧 */
 }

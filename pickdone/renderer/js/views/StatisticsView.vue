@@ -272,7 +272,7 @@ export default {
   data () {
     return { view: 'stat', period: 'thisWeek', heatRange: 'halfYear', shareOpen: false, tlTip: null, customRange: null, customDraft: null, tlGrid: (() => { try { return localStorage.getItem('tlHoverGrid') !== '0' } catch { return true } })(), hmTip: { show: false, text: '', x: 0, y: 0 } as any, nowTick: Date.now() }
   },
-  /* Period/view state is written to route query (matching the calendar page convention): refresh/back-forward keeps the selection */
+  /* Period/view state goes to the route query (calendar page convention): refresh/back keeps the selection */
   watch: {
     view (v) { this.syncQuery() },
     period (v) { this.syncQuery() },
@@ -284,8 +284,8 @@ export default {
     const q = this.$route.query || {}
     if (['stat', 'ach'].includes(q.view)) this.view = q.view
     if (q.from && q.to && dayjs(String(q.from)).isValid() && dayjs(String(q.to)).isValid()) {
-      // Hand-edited URLs can bypass applyCustomRange's 366-day cap (a 2400-day span = thousands of byDaySeries points + 4x baseline windows, page-freeze level),
-      // and an inverted from>to range leaves all KPIs empty: clamp and normalize here
+      // Hand-edited URLs can bypass applyCustomRange's 366-day cap (a 2400-day span = page-freeze level);
+      // an inverted from>to range leaves all KPIs empty: clamp and normalize here
       let a = dayjs(String(q.from)).startOf('day')
       let b = dayjs(String(q.to)).startOf('day')
       if (b.isBefore(a)) { const tmp = a; a = b; b = tmp }
@@ -293,8 +293,7 @@ export default {
       this.customRange = [a.format('YYYY-MM-DD'), b.format('YYYY-MM-DD')]
       this.period = 'custom'
     } else if (PERIODS.includes(q.period)) this.period = q.period
-    // Low-frequency clock: periodBounds is a computed but depends on the wall clock; with no reactive dependency it's cached forever after first eval —
-    // the page never refreshes, and after crossing days/time slots the endpoints of "last 7 days" etc. are stale (audit 2026-09-01). 30s granularity suffices.
+    // Low-frequency clock: periodBounds depends on the wall clock with no reactive dep — cached after first eval, so period endpoints went stale across days (audit 2026-09-01). 30s suffices.
     this._nowTimer = setInterval(() => { this.nowTick = Date.now() }, 30000)
   },
   beforeUnmount () {
@@ -324,7 +323,6 @@ export default {
       const { start, end } = this.periodBounds
       return `${dayjs(start).format('MM.DD')} - ${dayjs(Math.min(end, +dayjs().endOf('day'))).format('MM.DD')}`
     },
-    /** Number of days in the custom range (for the cap validation message) */
     customDraftDays () {
       if (!this.customDraft || !this.customDraft[0] || !this.customDraft[1]) return 0
       return Math.round((+dayjs(this.customDraft[1]).startOf('day') - +dayjs(this.customDraft[0]).startOf('day')) / DAY_MS) + 1
@@ -454,13 +452,15 @@ export default {
       } else if (this.period !== 'thisWeek') q.period = this.period
       this.$router.replace({ query: q }).catch(() => {})
     },
-    /** Open the custom range picker: the draft defaults to the effective range, otherwise the last 7 days (called by onRangePopShow when the popover expands) */
+    /** Open the custom range picker: draft defaults to the effective range, else the last 7 days */
     initCustomDraft () {
       const now = dayjs()
       this.customDraft = this.customRange ? [...this.customRange] : [now.subtract(6, 'day').format('YYYY-MM-DD'), now.format('YYYY-MM-DD')]
     },
     applyCustomRange () {
       if (!this.customDraft || !this.customDraft[0] || !this.customDraft[1]) return
+      // D6-F10: an inverted pick (from > to) swaps in place so the visible selection matches what is applied
+      if (dayjs(this.customDraft[1]).isBefore(dayjs(this.customDraft[0]))) this.customDraft = [this.customDraft[1], this.customDraft[0]]
       if (this.customDraftDays > CUSTOM_MAX_DAYS) { this.$message.warning(this.$t(T + 'customTooLong', { n: CUSTOM_MAX_DAYS })); return }
       this.customRange = [...this.customDraft]
       this.period = 'custom'
