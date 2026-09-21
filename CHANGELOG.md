@@ -13,16 +13,28 @@ and versioning follows [Semantic Versioning](https://semver.org/). The 0.x serie
 - Device Center: peer cards with online/pending/error dots, confirmed two-way pairing (60s window), activity feed and a security strip listing blocked pairing attempts.
 - Running-tomato announcements: a focus session started on a paired device shows as a live chip here; attachment files now sync across devices and thumbnails/self-heal once the file lands.
 - CSV import, project overview view, per-device unpair with destructive-action confirmation.
+- Backups now carry day-plan chips and saved filters; disaster-restore to a new machine no longer loses your schedule chips or smart lists.
+- XLSX export gains Priority and Completed-at columns (17 columns total).
 
 ### Changed
 - Device-local settings keys (layout, onboarding, per-device UI meta) are excluded from sync so peers can no longer clobber local layout state; sync rounds write settings into the blob before hot-apply so open windows converge instead of churning.
 - Update channel pinned for beta builds: the updater now reads the published `latest.yml` instead of a never-published `beta.yml` (first update check no longer 404s on beta versions).
+- Architecture: all writes (app UI, CLI, restore/backup, mirrors) now flow through a single validated command pipeline with declared sync semantics per operation — the "side door bypassed sync discipline" bug class is structurally closed and machine-enforced by a new gate.
+- Category delete now follows the app's undo doctrine: one undo toast recovers the category, its reassigned tasks, the cascaded saved filters and the related settings keys.
+- CLI `settings set` writes the single field through the sync-truth row store, so CLI reads/writes can no longer resurrect stale peer values; CLI reads overlay rows over the cached blob.
+- CLI task creation, renewal and undo now match the app exactly: same sort placement, the pomodoro estimate is carried across renewal, and `done --undo` also removes the auto-renewed next instance.
 
 ### Fixed
 - Inbound LAN-sync rounds no longer wipe the local undo stack (remote edits are not undoable, so Ctrl+Z of your own recent edits survived); external DB writes keep the old behavior.
-- Settings patches arriving from the CLI or a peer are validated and coerced like locally-loaded settings; unknown or type-mismatched junk is dropped instead of assigned bare.
-- Conflict notices no longer pile up under edit wars (one toast, 30s rate limit); the unpair confirm dialog is keyboard-reachable (Escape works); a peer that was unpaired by the other side shows "unpaired — pair again" instead of a zombie error card.
-- Sync correctness: perpetual per-round conflict loop on userId-differing rows ended; tombstones no longer re-captured or re-written every round; per-peer push watermarks advanced from segment acks (no more full-window re-push); ghost plan/filter rows eliminated; parallel peer dialing; running seeds for legacy rows.
+- Undo after a backup restore / CSV import can no longer mass-delete the restored rows (and propagate those deletions to the paired device); undoing a local edit can no longer tombstone tasks created on the other device.
+- Pomodoro ledger rows synced from a peer keep the peer's edit age (no more apply/push churn or stale-wins); settings, plan chips and filters likewise preserve the winner's timestamps on apply.
+- A failed backup-restore collect no longer purges rows while leaving their private attachment files on disk — the purge aborts instead.
+- The backup-read channel and the destructive attachment/updater channels are main-window gated (a compromised auxiliary window can no longer exfiltrate the disaster snapshot, bulk-delete attachment files, or force an update restart); SVG attachments are no longer openable via the OS handler (script outside the app sandbox).
+- Sync hardening: machine-local bookkeeping no longer enters the sync ledger (the "device is a few hundred ops behind" counter was pure self-echo); plan/filter tombstones land with the sender's delete time (no re-stamp, no echo bounce); a brand-new meta key no longer fires a false conflict toast; a poisoned CLI command slot no longer hangs the CLI.
+- Reliability: quitting no longer leaves a "running" tomato ghost on the paired device (the idle announce ships in a final round); a failed bulk flush is no longer broadcast as applied; reminder dedup can no longer evict not-yet-persisted markers (no double notifications after restart); one malformed settings row can no longer drop its whole inbound segment.
+- CLI parity: purging via CLI scrubs milestone links like the app; config-consumed settings written via CLI (close action, launch-on-boot, etc.) now reach config.json and the OS login item even when written while the app is closed.
+- Renderer UX: calendar inline-create no longer leaves "(untitled)" orphan tasks on Esc/outside-click; Ctrl+N works on every view; the repeat-series modal survives per-date failures with one honest summary; the weather widget flags stale data with an explicit refresh; the edit panel restores your window width and gives save failures a Retry button; multi-term search highlights each term; the quick-add window keeps your draft across Esc.
+- Security: settings/config merges are prototype-pollution safe; the discovery rate limit can no longer be reset by spoofed-source floods.
 
 ## [0.3.7] - 2026-09-16
 
