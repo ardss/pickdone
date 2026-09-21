@@ -17,6 +17,38 @@
 
 const log = require('electron-log')
 const mergeCore = require('../../shared/sync-core/merge.mjs')
+// Phase-3 (docs/refactor-command-bus.md): buffer drain routes read their op from the manifest
+// so the engine's bulk surfaces stay census-tied to the single command table. The engine still
+// applies rows DIRECTLY (peer-carried LWW stamps — see the gate's sync-ingress exemption for
+// this file); the manifest is used for dispatch naming only, never for stamping.
+const manifest = require('./command-manifest')
+
+// Manifest keys of the buffered bulk commands, in exact flush order (order is load-bearing:
+// todos first so a same-round todo+plan move lands coherently, tombstone-heavy buffers early).
+// opOf() throws on a manifest drift instead of silently skipping a buffer.
+const FLUSH_ROUTE_COMMANDS = [
+  ['todos', 'todo.putMany'],
+  ['settings', 'setting.putMany'],
+  ['tomatoes', 'tomato.appendMany'],
+  ['categories', 'category.putMany'],
+  ['plans', 'plan.putMany'],
+  ['filters', 'filter.putMany']
+]
+const flushRoutes = FLUSH_ROUTE_COMMANDS.map(([buf, cmd]) => {
+  const row = manifest.COMMANDS[cmd]
+  if (!row) throw new Error('[sync-apply] flush route missing from manifest: ' + cmd)
+  return { buf, op: row.op, cmd }
+})
+
+// Entities whose local-counterpart lookup shares the live-row-then-tombstone-fallback shape
+// (cache key names into createHydrationCache). todo/setting/meta/category stay hand-rolled in
+// applyRowInner/hydrateRow — their lookup is genuinely bespoke (KV age from the oplog, raw-row
+// tombstone columns, machine-local gates); the manifest documents that in the entity rows.
+const TOMB_FALLBACK_LOOKUP = {
+  tomato: { live: 'tomato', tomb: 'tomatoTomb' },
+  plan: { live: 'plan', tomb: 'planTomb' },
+  filter: { live: 'filter', tomb: 'filterTomb' }
+}
 
 const SYNCABLE_ENTITIES = new Set(['todo', 'setting', 'tomato', 'category', 'plan', 'filter', 'meta'])
 // settings_rows keys holding password/question CIPHERTEXT — never egress, never ingress (round-3).
@@ -173,23 +205,18 @@ function hydrateRow (state, ptr, cache) {
       if (!cat || cat.deleted) return { ...base, updatedAt: (cat && cat.updatedAt) || ptr.ts, deleted: true, deletedAt: (cat && cat.deletedAt) || ptr.ts, data: null }
       return { ...base, updatedAt: cat.updatedAt || ptr.ts, deleted: false, deletedAt: 0, data: cat }
     }
-    if (ptr.entity === 'plan') {
-      // M3: a pointer for a locally deleted chip hydrates from planTombstones with its real age
-      // so the deletion (not a fake ptr.ts age) participates in egress LWW.
-      const p = c.plan(ptr.entityId) || c.planTomb(ptr.entityId)
-      if (!p) return { ...base, deleted: true, deletedAt: ptr.ts, data: null }
-      if (p.deleted) return { ...base, updatedAt: p.updatedAt || ptr.ts, deleted: true, deletedAt: p.deletedAt || ptr.ts, data: null }
-      // F3a (2026-09-20): planAll now SELECTs updatedAt — use the chip's real age so LWW works.
-      return { ...base, updatedAt: p.updatedAt || ptr.ts, deleted: false, deletedAt: 0, data: p }
-    }
-    if (ptr.entity === 'filter') {
-      // M3: same tombstone-aware hydration as plan.
-      const f = c.filter(ptr.entityId) || c.filterTomb(ptr.entityId)
-      if (!f) return { ...base, deleted: true, deletedAt: ptr.ts, data: null }
-      if (f.deleted) return { ...base, updatedAt: f.updatedAt || ptr.ts, deleted: true, deletedAt: f.deletedAt || ptr.ts, data: null }
-      // F3b (2026-09-20): filterList now carries updatedAt — same LWW-age fix as plan.
-      return { ...base, updatedAt: f.updatedAt || ptr.ts, deleted: false, deletedAt: 0, data: f }
-    }
+    if (ptr.entity === 'plan' || ptr.entity === 'filter') {
+    // Manifest-documented plan/filter hydration (TOMB_FALLBACK_LOOKUP): identical shape, differing
+    // only in the cache keys — live row first, tombstone-aware fallback. M3: a pointer for a locally
+    // deleted chip/filter hydrates from its tombstone read with its real age so the deletion (not a
+    // fake ptr.ts age) participates in egress LWW. F3a/F3b (2026-09-20): planAll/filterList now
+    // SELECT updatedAt — use the chip's real age so LWW works.
+    const keys = TOMB_FALLBACK_LOOKUP[ptr.entity]
+    const p = c[keys.live](ptr.entityId) || c[keys.tomb](ptr.entityId)
+    if (!p) return { ...base, deleted: true, deletedAt: ptr.ts, data: null }
+    if (p.deleted) return { ...base, updatedAt: p.updatedAt || ptr.ts, deleted: true, deletedAt: p.deletedAt || ptr.ts, data: null }
+    return { ...base, updatedAt: p.updatedAt || ptr.ts, deleted: false, deletedAt: 0, data: p }
+  }
   } catch (e) { log.warn('[LanSync] hydrate failed for', ptr.entity, ptr.entityId, e.message) }
   return null
 }
@@ -351,14 +378,21 @@ function applyRowInner (state, incoming) {
     // key (cached per-pass oplog scan). No local pointer (legacy pre-oplog row) = age 0: the
     // incoming row wins once, then the identical-content no-op keeps it from churning.
     localRow = { updatedAt: cache.metaTs().get(incoming.id) || 0, deleted: false, deletedAt: 0, data: { key: incoming.id, value: localVal } }
-  } else if (entity === 'tomato') {
-    const r = cache.tomato(incoming.id)
-    // X1 (2026-09-20): a LOCAL tomato tombstone must take part in LWW like a settings tombstone.
-    // Previously it read as "absent" (tomatoAll filters deleted=0), so a peer's stale live row
-    // beat "missing" and resurrected the deleted record via tomatoAppendMany (deleted=0 upsert).
+  } else if (entity === 'tomato' || entity === 'plan' || entity === 'filter') {
+    // Manifest-documented tombstone-fallback shape (TOMB_FALLBACK_LOOKUP): live row first, then
+    // the entity's tombstone read. Per-entity history that forced this shape:
+    //   X1 (2026-09-20, tomato): a LOCAL tomato tombstone must take part in LWW — it used to read
+    //   as "absent" (tomatoAll filters deleted=0) and a peer's stale live row resurrected the
+    //   record via tomatoAppendMany (deleted=0 upsert).
+    //   F3a/F3b (2026-09-20, plan/filter): planAll/filterList now SELECT updatedAt — known local
+    //   age, real LWW (the old ageUnknown refusal silently dropped every peer chip/filter edit).
+    //   M3 (2026-09-20, plan/filter): tombstone fallback — a locally deleted chip/filter must hold
+    //   delete-wins against older peers.
+    const keys = TOMB_FALLBACK_LOOKUP[entity]
+    const r = cache[keys.live](incoming.id)
     if (r) localRow = { updatedAt: r.updatedAt || 0, deleted: false, deletedAt: 0, data: r }
     else {
-      const t = cache.tomatoTomb(incoming.id)
+      const t = cache[keys.tomb](incoming.id)
       if (t) localRow = { updatedAt: t.updatedAt || 0, deleted: true, deletedAt: t.deletedAt || 0, data: null }
     }
   } else if (entity === 'category') {
@@ -368,26 +402,6 @@ function applyRowInner (state, incoming) {
     const r = cache.category(incoming.id)
     if (r && !r.deleted) localRow = { updatedAt: r.updatedAt || 0, deleted: false, deletedAt: 0, data: r }
     else if (r) localRow = { updatedAt: r.updatedAt || 0, deleted: true, deletedAt: r.deletedAt || 0, data: null }
-  } else if (entity === 'plan') {
-    // F3a (2026-09-20): planAll SELECTs updatedAt now, so the local LWW age is KNOWN and the old
-    // ageUnknown refusal (which silently dropped every peer edit for an existing chip) is gone.
-    // tombstones from pre-fix rows (updatedAt column default 0) still lose only against ts > 0.
-    // M3: tombstone fallback — a locally deleted chip must hold delete-wins against older peers.
-    const c = cache.plan(incoming.id)
-    if (c) localRow = { updatedAt: c.updatedAt || 0, deleted: false, deletedAt: 0, data: c }
-    else {
-      const t = cache.planTomb(incoming.id)
-      if (t) localRow = { updatedAt: t.updatedAt || 0, deleted: true, deletedAt: t.deletedAt || 0, data: null }
-    }
-  } else if (entity === 'filter') {
-    // F3b (2026-09-20): same updatedAt exposure for filters — known local age, real LWW.
-    // M3: tombstone fallback, same rationale as plan.
-    const f = cache.filter(incoming.id)
-    if (f) localRow = { updatedAt: f.updatedAt || 0, deleted: false, deletedAt: 0, data: f }
-    else {
-      const t = cache.filterTomb(incoming.id)
-      if (t) localRow = { updatedAt: t.updatedAt || 0, deleted: true, deletedAt: t.deletedAt || 0, data: null }
-    }
   }
   // Symmetric tie-breaks (merge.mjs compareRecency): the local side must carry THIS device's
   // id so a full LWW tie resolves to the same winner on both peers instead of flip-flopping
@@ -694,6 +708,8 @@ function flushPendingWrites (state) {
   // apply AND flush forever (poison-pill row). Now each op gets its own try/catch: a failing op
   // drops only ITS buffer segment with log.error (the data stays in the oplog, so it remains
   // recoverable via a later snapshot), the buffers clear either way, and the other ops proceed.
+  // Manifest-driven drain (Phase-3): buffer → bulk op mapping lives in flushRoutes (derived from
+  // command-manifest.js at module load), so a buffer cannot silently lose its manifest census row.
   const flushOne = (list, op) => {
     if (!list || !list.length) return
     try { state.db.call(op, list) } catch (e) {
@@ -701,18 +717,10 @@ function flushPendingWrites (state) {
       log.error(`[LanSync] flush ${op} failed — dropping ${list.length} buffered rows (recoverable via snapshot):`, e && e.message)
     }
   }
-  flushOne(buf.todos, 'upsertMany')
-  flushOne(buf.settings, 'settingsRowPutMany')
-  flushOne(buf.tomatoes, 'tomatoAppendMany')
-  flushOne(buf.categories, 'upsertCategoryMany')
-  flushOne(buf.plans, 'planAddMany')
-  flushOne(buf.filters, 'filterUpsertMany')
-  buf.todos = []
-  buf.settings = []
-  buf.tomatoes = []
-  if (buf.categories) buf.categories = []
-  if (buf.plans) buf.plans = []
-  if (buf.filters) buf.filters = []
+  for (const r of flushRoutes) {
+    flushOne(buf[r.buf], r.op)
+    buf[r.buf] = []
+  }
   // Coalesced remote-announce fan-out (P2 2026-09-20): one emit per committed ingest pass
   // instead of one per announce row. Runs even when a bulk flush failed above — the meta rows
   // were already committed via setMeta before buffering.

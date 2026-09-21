@@ -6,9 +6,9 @@
  *
  * Route order:
  *   1. window.commands.commit (production bridge → 'commands:commit' IPC);
- *   2. fallback: window.todoAPI.dbCall with the manifest's op — the preload alias routes
- *      manifest write ops through the SAME bus main-side, so the door is identical; this
- *      bridge also keeps the unit suites (which stub window.todoAPI.dbCall per-op and assert
+ *   2. fallback: window.todoAPI.dbCall with the manifest's op — the main-side handler routes
+ *      manifest write ops through the SAME bus regardless of channel, so the door is identical;
+ *      this bridge also keeps the unit suites (which stub window.todoAPI.dbCall per-op and assert
  *      the recorded ops) behaviorally green without a single assertion edit.
  *
  * VERB_TO_OP is a mirror of src/main/command-manifest.js OP_TO_COMMAND — kept literal so
@@ -66,10 +66,6 @@ export function commit (entity, verb, payload, opts) {
   if (!op) return Promise.reject(new Error('[command-bus] unknown command: ' + entity + '.' + verb))
   return legacyDbCall(op, payload)
 }
-
-/** Op-keyed route for pending-queue replay paths that carry op strings verbatim. */
-export function commitOp (op, params) {
-  const c = (typeof window !== 'undefined' && window.commands) || null
-  if (c && typeof c.commitOp === 'function') return c.commitOp(op, params)
-  return legacyDbCall(op, params)
-}
+// Phase-3 demolition: the op-keyed commitOp bridge export is gone (grep-zero callers — pending
+// queue replay paths call window.todoAPI.dbCall directly, and the main-side handler still routes
+// those manifest writes through the bus). commit() above is the only renderer mutation entry.
