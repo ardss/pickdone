@@ -55,6 +55,10 @@ const isMachineLocalSettingKey = k => {
 
 const COMMANDS = {
   // ---- todos ----
+  // BESPOKE MERGE (docs/refactor-command-bus.md §Sync ingress): todos are the only entity with
+  // recycle-bin conflict copies (merge.mjs mergeTodoRows → -conflict- rows), ghost-tombstone
+  // guards and a userId normalizer. The engine ingress (src/main/sync-apply.js applyRowInner)
+  // hand-rolls the todo branches on purpose — read them there before touching these rows.
   'todo.put':          { entity: 'todo', verb: 'put', sync: 'full', lwwField: 'updatedAt', tombstone: 'pointer', op: 'upsert' },
   'todo.putMany':      { entity: 'todo', verb: 'putMany', sync: 'full', lwwField: 'updatedAt', tombstone: 'pointer', op: 'upsertMany' },
   // Sync-ack echo path: db.call deliberately skips oplog capture for it (see db-oplog.js header)
@@ -84,6 +88,10 @@ const COMMANDS = {
   'plan.prune':        { entity: 'plan', verb: 'prune', sync: 'none', lwwField: null, tombstone: 'gc', op: 'planPrune' },
 
   // ---- pomodoro ledger (row storage, append-mostly) ----
+  // BESPOKE MERGE (docs/refactor-command-bus.md §Sync ingress): tomato rows merge via
+  // merge.mjs mergeTomatoRows (dedicated recency rules, no recycle-bin conflict copy) and read
+  // their local tombstones from a separate tombstone read (tomatoTombstones) — see the
+  // TOMB_FALLBACK_LOOKUP table in src/main/sync-apply.js.
   'tomato.appendMany': { entity: 'tomato', verb: 'appendMany', sync: 'full', lwwField: 'updatedAt', tombstone: null, op: 'tomatoAppendMany' },
   'tomato.updateById': { entity: 'tomato', verb: 'updateById', sync: 'full', lwwField: 'updatedAt', tombstone: null, op: 'tomatoUpdateById' },
   'tomato.removeByIds': { entity: 'tomato', verb: 'removeByIds', sync: 'full', lwwField: 'updatedAt', tombstone: 'row', op: 'tomatoRemoveByIds' },
