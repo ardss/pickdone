@@ -23,6 +23,8 @@
 const manifest = require('./command-manifest')
 
 const USAGE = 'USAGE'
+// D6 P2 (2026-09-21): explicit-stamp clamp window — legit device clock skew, not forgery.
+const STAMP_SKEW_MS = 5 * 60 * 1000
 
 function usageError (msg) {
   const e = new Error('[command-bus] ' + msg)
@@ -61,7 +63,10 @@ function createBus (dbCall, manifestMod = manifest) {
    * Stamp normalization. Returns the payload to persist:
    * - row.lwwField set and payload is a plain object lacking the field (or opts.preserveStamp
    *   is falsy and the field is absent) → stamp Date.now() (the bus owns the age);
-   * - the payload already carries an explicit age (sync-apply internal use) → preserved as-is;
+   * - the payload already carries an explicit age (sync-apply internal use) → preserved as-is,
+   *   UNLESS it lies about the future: D6 P2 (2026-09-21) clamp — an explicit stamp more than
+   *   STAMP_SKEW_MS ahead of local now is treated as forged (a compromised renderer could stick
+   *   a year-2100 stamp on a row via the IPC door and win LWW forever). Clamped to local now.
    * - opts.preserveStamp = true → never touched.
    * NON-PLAIN payloads (arrays like setMeta ['k','v'] / tomatoAppendMany rows, bare string
    * keys, scalars) pass through VERBATIM — those ops derive their stamps inside the db layer
@@ -72,8 +77,17 @@ function createBus (dbCall, manifestMod = manifest) {
     if (!row.lwwField) return payload
     if (payload == null || typeof payload !== 'object' || Array.isArray(payload)) return payload
     const hasExplicit = payload[row.lwwField] != null && Number(payload[row.lwwField]) > 0
-    if (hasExplicit || opts.preserveStamp) return payload
-    return { ...payload, [row.lwwField]: Date.now() }
+    if (hasExplicit) {
+      // D6 P2 (2026-09-21): future-stamp clamp. Legit clock skew is minutes, not years; anything
+      // beyond the skew window can only be forgery (preserveStamp callers are main-process and
+      // carry peer ages <= their own now + skew by construction).
+      if (Number(payload[row.lwwField]) > Date.now() + STAMP_SKEW_MS) {
+        return Object.assign({}, payload, { [row.lwwField]: Date.now() })
+      }
+      return payload
+    }
+    if (opts.preserveStamp) return payload
+    return Object.assign({}, payload, { [row.lwwField]: Date.now() })
   }
 
   /** Machine-local key classification for the row (meta/settings local-key filter). */
@@ -125,3 +139,4 @@ const bus = createBus((op, params) => require('./db').call(op, params))
 module.exports = bus
 module.exports.createBus = createBus
 module.exports.USAGE = USAGE
+module.exports.STAMP_SKEW_MS = STAMP_SKEW_MS // D6 P2 (2026-09-21): exported for tests/gates

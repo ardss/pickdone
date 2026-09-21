@@ -5,7 +5,7 @@ const fixUtil = require('../fix-util')
 const tomatoFloat = require('../tomato-float')
 const scheduler = require('../scheduler')
 const appAudit = require('../audit')
-const { makeAssertMainWindow, purgeAttachmentFiles } = require('./shared')
+const { makeAssertMainWindow, purgeAttachmentFiles, classifyCommitKey } = require('./shared')
 const bus = require('../command-bus')
 const manifest = require('../command-manifest')
 
@@ -32,7 +32,11 @@ module.exports = function todoHandlers (ctx) {
     // Phase 2: machine-local-key commits kick nothing — peers can never consume them
     // (firedReminders watermark, cliSync/cliTomato command slots, sync.* bookkeeping...).
     // The manifest's localKeys classifier is the single source for "local" here.
-    const key = Array.isArray(payload) ? payload[0] : (payload && typeof payload === 'object') ? payload.key : undefined
+    // D6 P2 (2026-09-21): key extraction moved to shared.classifyCommitKey — the old inline
+    // ternary misclassified row-list payloads (setting.putMany: payload[0] is a row OBJECT, taken
+    // wholesale as "the key" → never local) and saw undefined for bare string payloads
+    // (meta.delete 'k') → machine-local writes kicked pointless sync rounds.
+    const key = classifyCommitKey(payload)
     if (key != null && typeof row.localKeys === 'function' && row.localKeys(key)) return
     notifySyncChange(op)
   })
@@ -192,13 +196,40 @@ module.exports = function todoHandlers (ctx) {
     // Each entry: { entity, verb, payload, opts? }. Validation of the WHOLE batch happens
     // before any execution (unknown command = USAGE throw, never a silent no-op), then each
     // command runs through the exact same pipeline as the legacy todo-db:call route.
+    // D6 P1 (2026-09-21) partial-commit contract: execution is NOT atomic (a db transaction
+    // across bus fanout is explicitly out of scope). Entry k throwing after 0..k-1 committed
+    // used to reject the whole invoke — the renderer rolled back its optimistic state while the
+    // DB kept the earlier entries (divergence). Now a per-item failure returns a structured
+    // result instead of throwing:
+    //   { results, failedIndex: -1, error: null }                                  — all committed
+    //   { results, failedIndex: k, error }  (results.length === k, entries 0..k-1 COMMITTED)
+    // Callers decide what to do with the partial commit; entries after failedIndex were
+    // never attempted.
     'commands:commit': (e, batch) => {
       const list = Array.isArray(batch) ? batch : [batch]
       const rows = list.map(cmd => {
         const { entity, verb } = cmd || {}
-        return bus.resolve(entity, verb) // throws USAGE on unknown commands
+        return bus.resolve(entity, verb) // throws USAGE on unknown commands (before ANY execution)
       })
-      return list.map((cmd, i) => execDbCall(e, rows[i].op, (cmd || {}).payload, (cmd || {}).opts))
+      const results = []
+      for (let i = 0; i < list.length; i++) {
+        const cmd = list[i]
+        // D6 P2 (2026-09-21): preserveStamp is a MAIN-PROCESS capability (sync-apply replays
+        // peer-carried LWW ages). It used to be trusted verbatim from any renderer — a forged
+        // stale stamp via the IPC door would lose LWW forever. Strip it before bus.commit;
+        // main-process callers use bus.commit directly and are unaffected.
+        const opts = (cmd || {}).opts
+        let safeOpts = opts
+        if (opts && typeof opts === 'object' && 'preserveStamp' in opts) {
+          safeOpts = Object.assign({}, opts); delete safeOpts.preserveStamp
+        }
+        try {
+          results.push(execDbCall(e, rows[i].op, (cmd || {}).payload, safeOpts))
+        } catch (err) {
+          return { results, failedIndex: i, error: String((err && err.message) || err) }
+        }
+      }
+      return { results, failedIndex: -1, error: null }
     },
 
     // --- Dangerous purge: dedicated channels (bypassing the todo-db:call whitelist); only the main window may call (UI already double-confirms),
@@ -206,11 +237,18 @@ module.exports = function todoHandlers (ctx) {
     'db:purge-recycle-bin': (e) => {
       assertMainWindow(e)
       if (isLocked()) throw new Error('locked')
-      // Collect rows to delete and clean attachment files first (files before rows): deleting only rows once left private attachments on disk after "permanent wipe"
-      let ids = []
+      // Collect rows to delete and clean attachment files first (files before rows): deleting only rows once left private attachments on disk after "permanent wipe".
+      // D6 P1 (2026-09-21): a collect failure used to fall through with ids=[] — the purge then
+      // deleted the ROWS while purgeAttachmentFiles([]) no-op'd, orphaning every private
+      // attachment on disk forever (the exact outcome the files-before-rows order exists to
+      // prevent). Abort the purge BEFORE the bus commit instead; the caller sees the error.
+      let ids
       try {
         ids = dbm.call('queryTodos', { deleted: 1 }).map(t => t.taskId)
-      } catch (err) { log.warn('[Purge] 收集回收站行失败，仅删行:', err) }
+      } catch (err) {
+        log.warn('[Purge] 回收站行收集失败，purge 已中止（未删行未删文件）:', err)
+        throw new Error('purge aborted: failed to collect recycle-bin rows, no rows or files were deleted: ' + String((err && err.message) || err))
+      }
       // Phase-2: the purge commits go through the command bus (todo.purgeBin manifest row) —
       // the 'ls-mirror' hook fires the sync kick, 'undo-barrier' re-baselines the external-write
       // watcher (our own WAL write must not surface as an external CLI write).
