@@ -5,6 +5,7 @@ import { remainSecOf } from '../utils/tomatoShared.js'
 import { confirmUrl } from '../utils/mediaRegistry.js'
 import { tt } from '../utils/core.js'
 import { FOCUS_MAX_MINUTES, REST_MAX_MINUTES } from '../utils/limits.js'
+import { commit as commitCommand } from "../utils/commandBus.js"
 
 /** Running-tomato cross-device announce (feature: live remote focus chip). Fire-and-forget;
  * announce failures never break the focus flow (peers' staleness TTL self-heals). */
@@ -217,7 +218,7 @@ function hookQuitFlush () {
 }
 
 /** Task-side focus credit (bumpSnow) retry queue — same pending-retry pattern as _pendingLedger.
- *  The old fire-and-forget `dbCall('bumpSnow', …).catch(() => {})` silently dropped the credit on
+ *  The old fire-and-forget `commitCommand("todo", "bump", …).catch(() => {})` silently dropped the credit on
  *  a transient IPC/DB failure (lock screen, quit race): the ledger recorded the focus but the task's
  *  focusMinutes/snow never advanced. Entries are removed only on success (bumpSnow is idempotent
  *  per the db layer) and replayed on the next write or at quit-flush.
@@ -228,7 +229,7 @@ function hookQuitFlush () {
 const _pendingSnow = []
 function replayPendingSnow () {
   for (const entry of [..._pendingSnow]) {
-    Promise.resolve(window.todoAPI && window.todoAPI.dbCall('bumpSnow', entry.params))
+    Promise.resolve(window.todoAPI && commitCommand("todo", "bump", entry.params))
       .then(() => {
         const i = _pendingSnow.indexOf(entry); if (i >= 0) _pendingSnow.splice(i, 1)
       })
@@ -244,7 +245,7 @@ function flushPendingSnow () {
   const list = _pendingSnow.splice(0, _pendingSnow.length)
   // D5: failures re-prepended in original order (same rationale as flushPendingLedger)
   const jobs = list.map(it =>
-    Promise.resolve(window.todoAPI && window.todoAPI.dbCall('bumpSnow', it.params))
+    Promise.resolve(window.todoAPI && commitCommand("todo", "bump", it.params))
       .then(() => null)
       .catch(e => {
         console.error('[tomato] bumpSnow flush failed at quit:', it.params, e)
@@ -364,7 +365,7 @@ export default {
   actions: {
     /** 启动:一次性迁移旧 meta blob(如存在且表空),然后整载行表 */
     async initFromDb ({ commit }) {
-      try { await window.todoAPI.dbCall('tomatoMigrateFromMeta') } catch (e) { console.warn('[tomato] meta 迁移跳过/失败(不影响已迁移库):', e && e.message) }
+      try { await commitCommand('tomato', 'migrateFromMeta') } catch (e) { console.warn('[tomato] meta 迁移跳过/失败(不影响已迁移库):', e && e.message) }
       return commit('recordsReplace', await window.todoAPI.dbCall('tomatoAll'))
     },
     /** 收到 tomato-records-changed 广播:从 DB 重载账本(其他窗/CLI 落了账) */

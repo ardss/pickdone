@@ -1,3 +1,4 @@
+import { commit as commitCommand } from "./commandBus.js"
 /** Scheduling chips (dayPlanState) cross-component shared ops — the sole frontend channel after the storage-layer root fix
  *  2026-09-03 root fix: chips migrated from the meta.dayPlanState whole-package JSON (triple concurrent writes, root cause of four data-loss incidents) into
  *  SQLite plan_chips row storage. This is just a thin wrapper over db atomic ops:
@@ -26,19 +27,19 @@ function pingLocal () {
 }
 
 export async function addChips (chips) {
-  const ids = await dbCall('planAddMany', chips)
+  const ids = await commitCommand("plan", "putMany", chips)
   pingLocal()
   return ids
 }
 
 export async function updateChip (id, day, mm) {
-  const r = await dbCall('planUpdateChip', { id, day, mm })
+  const r = await commitCommand("plan", "put", { id, day, mm })
   pingLocal()
   return r
 }
 
 export async function removeChips (ids) {
-  const r = await dbCall('planRemoveIds', Array.isArray(ids) ? ids : [ids])
+  const r = await commitCommand("plan", "removeIds", Array.isArray(ids) ? ids : [ids])
   pingLocal()
   return r
 }
@@ -46,21 +47,21 @@ export async function removeChips (ids) {
 /** Task reschedule: migrate chips wholesale (time unchanged) */
 export async function moveTaskChips (taskId, fromDay, toDay) {
   if (!fromDay || !toDay || fromDay === toDay) return
-  const n = await dbCall('planMoveTask', { taskId, fromDay, toDay })
+  const n = await commitCommand("plan", "moveTask", { taskId, fromDay, toDay })
   if (n > 0) pingLocal()
   return n
 }
 
 /** Schedule date removed / task deleted: clear all chips */
 export async function clearTaskChips (taskId) {
-  const r = await dbCall('planDeleteTask', taskId)
+  const r = await commitCommand("plan", "deleteTask", taskId)
   pingLocal()
   return r
 }
 
 /** Expired day-bucket cleanup (outside the [-31d,+7d] window), called by DayRail prune */
 export async function pruneDays (keepDays) {
-  const r = await dbCall('planPrune', { keepDays })
+  const r = await commitCommand("plan", "prune", { keepDays })
   pingLocal()
   return r
 }
@@ -85,7 +86,7 @@ export async function importLegacyOnce () {
       }
     }
     if (!chips.length) return 0
-    await dbCall('planAddMany', chips)
+    await commitCommand("plan", "putMany", chips)
     localStorage.removeItem(LS_KEY)
     return chips.length
   } catch { return 0 }
@@ -96,15 +97,15 @@ export async function snapshotForDelete (taskId) {
   try {
     const rows = (await dbCall('planAll', [])).filter(r => r.taskId === taskId)
     if (!rows.length) return
-    await dbCall('setMeta', ['planChipsSnapshot:' + taskId, JSON.stringify(rows)])
-    await dbCall('planDeleteTask', taskId)
+    await commitCommand("meta", "put", ['planChipsSnapshot:' + taskId, JSON.stringify(rows)])
+    await commitCommand("plan", "deleteTask", taskId)
   } catch { /* Snapshot failure doesn't block deletion; chips left in the library as orphans can still be converged by planPrune */ }
 }
 
 /** Permanently deleted task: drop its chip snapshot meta row (restoreSnapshot only empties it; purge must remove
  *  the row, otherwise planChipsSnapshot:<id> keys accumulate in meta forever). Best-effort, never blocks purging. */
 export async function clearSnapshot (taskId) {
-  try { await dbCall('deleteMeta', 'planChipsSnapshot:' + taskId) } catch { /* orphan meta row is harmless */ }
+  try { await commitCommand("meta", "delete", 'planChipsSnapshot:' + taskId) } catch { /* orphan meta row is harmless */ }
 }
 
 /** Write back snapshot chips when restoring a task */
@@ -113,9 +114,9 @@ export async function restoreSnapshot (taskId) {
     const raw = await dbCall('getMeta', 'planChipsSnapshot:' + taskId)
     if (!raw) return
     const rows = JSON.parse(raw)
-    if (Array.isArray(rows) && rows.length) await dbCall('planAddMany', rows)
+    if (Array.isArray(rows) && rows.length) await commitCommand("plan", "putMany", rows)
     // D5 (2026-09-20): consume via deleteMeta, unified with clearSnapshot (CLI convention fixed
     // 2026-09-19) — the old setMeta('') left an empty-string tombstone row in meta forever.
-    await dbCall('deleteMeta', 'planChipsSnapshot:' + taskId)
+    await commitCommand("meta", "delete", 'planChipsSnapshot:' + taskId)
   } catch { /* Missing/corrupted snapshot treated as no schedule */ }
 }

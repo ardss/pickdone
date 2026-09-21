@@ -67,6 +67,7 @@
 <script lang="ts">
 import i18n, { setLocale, SUPPORTED } from '../i18n/index.js'
 import dialogA11y from '../utils/dialogA11y.js'
+import { commit as commitCommand } from "../utils/commandBus.js"
 /** First-run setup wizard: language -> color mode -> default categories -> close-button behavior (triggered only on fresh installs; existing data silently skips and backfills the flag) */
 const LS_ONBOARD = 'onboardingDone'
 /* Kept disabled (2026-09-08 user call): the settings switch + a one-shot tray balloon on first
@@ -122,7 +123,7 @@ export default {
     },
     /** DB meta dual-write: prevents the wizard from popping up again after localStorage is lost (cache clear / partition reset) */
     markDoneInDb () {
-      try { window.todoAPI.dbCall('setMeta', ['onboardingDone', '1']).catch(() => {}) } catch (e) { /* Debug host fallback */ }
+      try { commitCommand("meta", "put", ['onboardingDone', '1']).catch(() => {}) } catch (e) { /* Debug host fallback */ }
     },
     /** Rename seed categories to the chosen language only when they still carry the initial Chinese default names (untouched by the user) */
     renameSeedCats () {

@@ -6,6 +6,7 @@
  * The CLI side (cli/lib.js) reads/writes the same meta key; both ends share one source.
  */
 import { dayjs } from './core.js'
+import { commit as commitCommand } from "./commandBus.js"
 
 const keyOf = categoryId => 'projectMilestones:' + categoryId
 
@@ -39,7 +40,7 @@ export function saveMilestones (categoryId, list) {
   // 2026-09-12: the old `.catch(() => {})` swallowed setMeta failures, so a failed save silently lost edits.
   let savePromise = Promise.resolve(false)
   try {
-    savePromise = window.todoAPI.dbCall('setMeta', [keyOf(categoryId), JSON.stringify(clean)])
+    savePromise = commitCommand("meta", "put", [keyOf(categoryId), JSON.stringify(clean)])
       .then(() => true, e => { console.error('[milestones] saveMilestones setMeta failed for', categoryId, e); return false })
   } catch (e) { console.error('[milestones] saveMilestones db bridge unavailable:', e) } // in-memory only when running in a debug host without the DB bridge
   clean.savePromise = savePromise

@@ -3,6 +3,7 @@
  *           frequency: { type: 'daily'|'weekdays'|'interval', weekdays: [1,3,5], intervalN: 2 } }
  *  moment: { id, name, date(YYYY-MM-DD), kind: 'countdown' | 'memorial' } */
 import { FMT } from '../utils/core.js'
+import { commit as commitCommand } from "../utils/commandBus.js"
 
 const LS_KEY = 'habitsState'
 /** DB meta key MUST carry the `db.` prefix: the v6 sync-schema bridge (src/main/db-sync-schema.js
@@ -66,7 +67,7 @@ function persist (state) {
       return
     }
     // 2026-09-12: silent .catch(() => {}) hid meta write failures (DB is the durable source of truth) — log them
-    window.todoAPI.dbCall('setMeta', [META_KEY, JSON.stringify(blob)]).catch(e => console.error('[habits] setMeta failed:', e))
+    commitCommand("meta", "put", [META_KEY, JSON.stringify(blob)]).catch(e => console.error('[habits] setMeta failed:', e))
   } catch (e) { /* empty environment */ }
 }
 
@@ -101,7 +102,7 @@ function relayAuxBlob () {
     // failed IPC drop the aux edit from the retry channel entirely (the next main-window persist
     // would paper over it at best, or lose it on quit at worst).
     if (typeof window !== 'undefined' && window.todoAPI && window.todoAPI.dbCall) {
-      window.todoAPI.dbCall('setMeta', [META_KEY, JSON.stringify(d)]).then(
+      commitCommand("meta", "put", [META_KEY, JSON.stringify(d)]).then(
         () => { try { localStorage.removeItem(SYNC_KEY) } catch (e) { /* empty */ } },
         err => console.error('[habits] relay setMeta failed — ping kept for retry:', err)
       )
@@ -283,7 +284,7 @@ export default {
           if (legacy) {
             // Copy the legacy blob to the db.-prefixed key so the sync bridge picks it up; the legacy
             // row is kept (read path no longer depends on it after this write succeeds)
-            await window.todoAPI.dbCall('setMeta', [META_KEY, raw])
+            await commitCommand("meta", "put", [META_KEY, raw])
           }
         }
       } catch { /* empty environment */ }

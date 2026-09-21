@@ -158,6 +158,7 @@ import DepView from '../components/DepView.vue'
 import ProjectDocs from '../components/ProjectDocs.vue'
 import EmptyState from '../components/EmptyState.vue'
 import MilestoneEditModal from '../components/MilestoneEditModal.vue'
+import { commit as commitCommand } from "../utils/commandBus.js"
 
 // [navgate-fix] pure-start (extracted by tests/unit-navgate-fix-ui.test.mjs)
 /** Entrance-animation target for a freshly added milestone: saveMilestones returns the list sorted
@@ -468,14 +469,14 @@ export default {
         const date = parseMilestoneDate(value)
         if (!date) return this.$message.warning(this.$t('statsB.ProjectView.badDate'))
         this.deadlineTs = date
-        try { window.todoAPI.dbCall('setMeta', ['projectDeadline:' + this.catId, String(date)]).catch(() => {}) } catch { /* degraded to in-memory only */ }
+        try { commitCommand("meta", "put", ['projectDeadline:' + this.catId, String(date)]).catch(() => {}) } catch { /* degraded to in-memory only */ }
         this.$store.dispatch('category/loadProjectMeta')
         this.$message.success(this.$t('statsB.ProjectView.deadlineSet'))
       } catch { /* cancelled */ }
     },
     clearDeadline () {
       this.deadlineTs = 0
-      try { window.todoAPI.dbCall('setMeta', ['projectDeadline:' + this.catId, '0']).catch(() => {}) } catch { /* degraded */ }
+      try { commitCommand("meta", "put", ['projectDeadline:' + this.catId, '0']).catch(() => {}) } catch { /* degraded */ }
       this.$store.dispatch('category/loadProjectMeta')
       this.$message.success(this.$t('statsB.ProjectView.deadlineCleared'))
     },

@@ -14,6 +14,7 @@ import { loadMilestones, saveMilestones, scrubMilestoneTaskIds } from '../utils/
 import { enqueueChipSync, rowChipSync, planSnapshotRowSync, snapshotForDelete, restoreSnapshot } from './planChips.js'
 import { historyPush, historyPushKeepRedo, historyClear, historyBreakMerge, historyUndoPop, historyRedoPop, historyRedoPush, historyBarrierCore, undoStep, redoStep, persistSnapshotDiffCore } from './undo.js'
 import { writeEventBackupCore, writeAutoBackupCore, writeCriticalBackupCore } from './todoBackup.js'
+import { commit as commitCommand } from "../utils/commandBus.js"
 
 // planSnapshotRowSync stays a named export of this module (tests import it from here)
 export { planSnapshotRowSync }
@@ -55,7 +56,7 @@ function safeUpsert (row) {
   try { plain = JSON.parse(JSON.stringify(row)) } catch (e) { plain = row }
   const entry = { op: 'upsert', params: plain }
   _pendingUpserts.push(entry)
-  Promise.resolve(window.todoAPI.dbCall('upsert', plain))
+  Promise.resolve(commitCommand("todo", "put", plain))
     .then(() => { const i = _pendingUpserts.indexOf(entry); if (i >= 0) _pendingUpserts.splice(i, 1) })
     .catch(err => console.error('[todo] persist failed (queued for quit-flush retry):', err))
   hookQuitFlush()
@@ -455,7 +456,7 @@ export default {
       // whole batch (the rows were already re-sorted in memory, so a lost write resurfaces as a wrong order
       // after restart). flushPendingUpserts replays any queued op verbatim, 'upsertMany' included.
       try {
-        await window.todoAPI.dbCall('upsertMany', deproxyRows(rows))
+        await commitCommand("todo", "putMany", deproxyRows(rows))
       } catch (err) {
         reportError('upsertMany', err)
         try { _pendingUpserts.push({ op: 'upsertMany', params: deproxyRows(rows) }) } catch { /* keep the UI flow alive even if cloning fails */ }
@@ -516,7 +517,7 @@ export default {
       // Delete per id and remove locally only the successful ones: Promise.all swallowing errors then hardRemove-ing the whole batch once let failed ids "revive" back into the recycle bin after restart
       const done = []
       for (const id of ids) {
-        try { await window.todoAPI.dbCall('hardDelete', id); done.push(id); clearSnapshot(id) } catch (err) { reportError('hardDelete', err) }
+        try { await commitCommand("todo", "hardDelete", id); done.push(id); clearSnapshot(id) } catch (err) { reportError('hardDelete', err) }
       }
       try { for (const id of done) await window.todoAPI.deleteTodoFilesRelevant?.(id) } catch {}
       // Drop the purged tasks' pomodoro-estimate meta keys (setEstimate(id,0) deletes the key):
@@ -754,7 +755,7 @@ export default {
         // never advances again = silent permanent non-convergence. Inside one transaction there is no
         // intermediate state: after a crash the batch is either fully re-sent (old dirty semantics) or
         // fully acknowledged (new semantics). The db layer forces status='sync' on every row.
-        await window.todoAPI.dbCall('commitSyncBatch', { rows: deproxyRows(snapshot), version: serverV })
+        await commitCommand("todo", "commitBatch", { rows: deproxyRows(snapshot), version: serverV })
         // Only rows in the snapshot that weren't re-edited during the await are marked synced (can't do a wholesale markSyncedAll).
         // Recycle-bin rows (status==='delete' in memory) keep that status — but get the server version
         // stamped so they stop re-entering the dirty snapshot on every sync (P3 2026-09-12)

@@ -1,3 +1,4 @@
+import { commit as commitCommand } from "./commandBus.js"
 /**
  * localStorage → SQLite persistence mirror — the three "master data that should live in the DB" states all go through here:
  *   db.settingsState (all settings) / db.habitsState (habit check-ins) / (db.tomatoState 已退役:账本迁 tomato_records 行表,mirror 仅剩 settings/habits)
@@ -67,7 +68,7 @@ function writeNow (metaKey, blob) {
     // setMeta is now a main-window-only op (to prevent a compromised aux window from batch-modifying meta); aux windows (float/quick-add) don't write the DB directly —
     // LS is the cross-window sync channel; after the main window receives state via the storage event, the main window's mirror persists it
     if (window.location.hash && /__tomato-float|__quick-add/.test(window.location.hash)) return false
-    window.todoAPI.dbCall('setMeta', [metaKey, JSON.stringify(blob)])
+    commitCommand("meta", "put", [metaKey, JSON.stringify(blob)])
       .then(() => { delete attempts[metaKey] }) // success resets the backoff/give-up counter
       .catch(() => scheduleRetry(metaKey, blob))
     return true

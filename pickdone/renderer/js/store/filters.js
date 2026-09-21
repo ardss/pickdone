@@ -1,3 +1,4 @@
+import { commit as commitCommand } from "../utils/commandBus.js"
 /** Saved filters (smart lists) — condition sets persisted in the local DB filters table, entered via the sidebar group */
 export default {
   namespaced: true,
@@ -11,13 +12,13 @@ export default {
     },
     /** Backfill the list after create/update; returns the id for routing */
     async save ({ commit }, f) {
-      const id = await window.todoAPI.dbCall('filterUpsert', f)
+      const id = await commitCommand("filter", "put", f)
       const list = await window.todoAPI.dbCall('filterList')
       commit('setList', list)
       return id
     },
     async remove ({ commit }, id) {
-      await window.todoAPI.dbCall('filterDelete', id)
+      await commitCommand("filter", "delete", id)
       commit('setList', await window.todoAPI.dbCall('filterList'))
     }
   }

@@ -6,6 +6,7 @@
  *       overdue incomplete/30-day completed history/todo box/recycle bin/30 days of tomato focus records (incl. give-ups)/habit check-in history.
  */
 import { FMT } from './renderer/js/utils/core.js'
+import { commit as commitCommand } from "./utils/commandBus.js"
 
 const DAY = 86400000
 const REG_KEY = 'demoSeedV3'
@@ -19,7 +20,7 @@ async function purgeOld (store, reg) {
     .concat(store.state.todo.recycleList.filter(t => ids.includes(t.taskId)).map(t => t.taskId))
   if (!alive.length) return
   // purgeIds has no corresponding channel in the 5175 shim; hardDelete clears the shim storage, removeLocal clears the Vuex side, then recompute views
-  await window.todoAPI.dbCall('hardDelete', alive)
+  await commitCommand("todo", "hardDelete", alive)
   for (const id of alive) store.commit('todo/removeLocal', id)
   await store.dispatch('todo/computeViews')
 }
@@ -35,7 +36,7 @@ export async function seed () {
   // Empty the recycle bin (demo environment: orphan soft-deleted rows from previous rounds are cleared too)
   const recycleIds = store.state.todo.recycleList.map(t => t.taskId)
   if (recycleIds.length) {
-    await window.todoAPI.dbCall('hardDelete', recycleIds)
+    await commitCommand("todo", "hardDelete", recycleIds)
     for (const id of recycleIds) store.commit('todo/removeLocal', id)
     await store.dispatch('todo/computeViews')
   }
@@ -50,7 +51,7 @@ export async function seed () {
     { categoryId: 9103, userId: uid, categoryName: '生活', categoryColor: '#D9982F', createTime: now, listSort: 903, folderIs: false, folderId: 0, deleted: false },
     { categoryId: 9201, userId: uid, categoryName: '产品发布', categoryColor: '#7E57C2', createTime: now, listSort: 910, folderIs: true, folderId: 0, deleted: false }
   ]
-  for (const c of cats) await window.todoAPI.dbCall('upsertCategory', c)
+  for (const c of cats) await commitCommand("category", "put", c)
 
   const today = store.state.todo.todayTimestamp || +window.dayjs().startOf('day')
   const at = (dayOffset, h = 0, m = 0) => today + dayOffset * DAY + h * 3600000 + m * 60000
@@ -162,7 +163,7 @@ export async function seed () {
       }
     }
     // 批量注入:一次 append(行表支持数组)+一次 recordsReplace;逐条 addRecord 曾产生 120 次 LS 全量写+120 次 IPC(二轮深审 P2)
-    window.todoAPI.dbCall('tomatoAppendMany', recs).catch(e => console.warn('[demo] ledger append failed', e)); window.todoAPI.dbCall('tomatoAll').then(rows => store.commit('tomato/recordsReplace', rows)).catch(() => {})
+    commitCommand("tomato", "appendMany", recs).catch(e => console.warn('[demo] ledger append failed', e)); window.todoAPI.dbCall('tomatoAll').then(rows => store.commit('tomato/recordsReplace', rows)).catch(() => {})
     localStorage.setItem(TOMATO_FLAG, String(Date.now()))
   }
 

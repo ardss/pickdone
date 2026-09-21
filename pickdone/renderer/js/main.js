@@ -59,6 +59,7 @@ app.config.globalProperties.$announce = function (m) {
 }
 
 import i18n from './i18n/index.js'
+import { commit as commitCommand } from "./utils/commandBus.js"
 
 app.use(store)
 // Aux-window habit edits must feed back into main-window Vuex state, or the next main-window persist overwrites them with a stale copy (LWW)
@@ -321,7 +322,7 @@ async function bootstrap () {
           console.warn('[cli-tomato] ignoring stale command (>60s):', cmd.action, 'seq=' + cmd.seq)
           // 2026-09-12: the expired receipt is what unblocks the CLI's waitForTomatoAck — a failed write leaves
           // the CLI polling to its full timeout with no trace, so surface the error.
-          window.todoAPI.dbCall('setMeta', ['cliTomatoState', JSON.stringify(expiredTomatoReceipt(cmd, Date.now()))]).catch(e => console.error('[cli-tomato] failed to write expired receipt (CLI will wait until timeout):', e))
+          commitCommand("meta", "put", ['cliTomatoState', JSON.stringify(expiredTomatoReceipt(cmd, Date.now()))]).catch(e => console.error('[cli-tomato] failed to write expired receipt (CLI will wait until timeout):', e))
           return
         }
         const t = store.state.tomato
@@ -356,7 +357,7 @@ async function bootstrap () {
         setTimeout(() => {
           try {
             const s = store.state.tomato
-            window.todoAPI.dbCall('setMeta', ['cliTomatoState', JSON.stringify({
+            commitCommand("meta", "put", ['cliTomatoState', JSON.stringify({
               seq: cmd.seq, status: s.status, remainSec: s.remainSec, tomatoTime: s.tomatoTime,
               startedAt: s.startedAt, /* CLI status derives real-time remaining seconds from this (remainSec freezes at command time, drift unbounded) */
               attach: s.attachTodo ? { taskId: s.attachTodo.taskId, content: s.attachTodo.taskContent } : null,

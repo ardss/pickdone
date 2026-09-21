@@ -1,6 +1,7 @@
 import { safeSet, dayjs, getMetaManyWithFallback } from '../utils/core.js'
 import { loadMilestones } from '../utils/milestones.js'
 import { normalizeStatus } from '../utils/projectStatus.js'
+import { commit as commitCommand } from "../utils/commandBus.js"
 /** Category module (offline persistence via localStorage; cloud APIs like getCategoryList reserved) */
 const LS_KEY = 'categoryState'
 export const COLOR_PALETTE = ['#0f9d8f', '#f76e6e', '#f2a63b', '#7ac74f', '#5aa9e6', '#9d8df1', '#eb96c3', '#98a4ae']
@@ -54,7 +55,7 @@ function persist (list, opts = {}) {
   try {
     // Failures must be visible: LS is already updated above, so a silent per-row catch meant the user
     // believed categories were saved while SQLite (the CLI-visible authority) silently diverged
-    const jobs = list.map(c => window.todoAPI.dbCall('upsertCategory', toRow(c, opts)).catch(e => ({ err: e })))
+    const jobs = list.map(c => commitCommand("category", "put", toRow(c, opts)).catch(e => ({ err: e })))
     Promise.all(jobs).then(results => {
       const failed = results.filter(r => r && r.err)
       if (failed.length) console.error('[category] save failed for', failed.length, 'of', list.length, 'rows:', failed[0].err)
@@ -82,8 +83,8 @@ const PROJECT_IDS_KEY = 'projectCategoryIds'
 const projectFlagKey = id => 'projectCategoryFlag:' + id
 function writeProjectFlag (id, flag) {
   try {
-    if (flag) window.todoAPI.dbCall('setMeta', [projectFlagKey(id), '1']).catch(() => {})
-    else window.todoAPI.dbCall('deleteMeta', projectFlagKey(id)).catch(() => {})
+    if (flag) commitCommand("meta", "put", [projectFlagKey(id), '1']).catch(() => {})
+    else commitCommand("meta", "delete", projectFlagKey(id)).catch(() => {})
   } catch (e) { /* degraded host */ }
 }
 const deadlineKey = id => 'projectDeadline:' + id
@@ -108,16 +109,16 @@ async function backupThenClearProjectMeta (id) {
   try { blob.milestones = (await window.todoAPI.dbCall('getMeta', milestonesKey(id))) || '' } catch (e) { /* absent */ }
   if (blob.flag || blob.status || blob.deadline || blob.milestones) {
     try {
-      await window.todoAPI.dbCall('setMeta', [catMetaBakKey(id), JSON.stringify(blob)])
+      await commitCommand("meta", "put", [catMetaBakKey(id), JSON.stringify(blob)])
     } catch (e) {
       console.warn('[category] project-meta backup write failed — live keys kept for', id, e)
       return
     }
   }
-  try { await window.todoAPI.dbCall('deleteMeta', projectFlagKey(id)) } catch (e) { /* absent is fine */ }
-  try { await window.todoAPI.dbCall('deleteMeta', statusKey(id)) } catch (e) { /* absent is fine */ }
-  try { await window.todoAPI.dbCall('deleteMeta', deadlineKey(id)) } catch (e) { /* absent is fine */ }
-  try { await window.todoAPI.dbCall('deleteMeta', milestonesKey(id)) } catch (e) { /* absent is fine */ }
+  try { await commitCommand("meta", "delete", projectFlagKey(id)) } catch (e) { /* absent is fine */ }
+  try { await commitCommand("meta", "delete", statusKey(id)) } catch (e) { /* absent is fine */ }
+  try { await commitCommand("meta", "delete", deadlineKey(id)) } catch (e) { /* absent is fine */ }
+  try { await commitCommand("meta", "delete", milestonesKey(id)) } catch (e) { /* absent is fine */ }
 }
 /** U-4 recover path: restore the backed-up project meta to its live keys, then delete the backup.
  *  Resolves true when a backup existed and was restored. */
@@ -126,11 +127,11 @@ async function restoreProjectMetaBackup (id) {
   let blob = null
   try { blob = JSON.parse((await window.todoAPI.dbCall('getMeta', catMetaBakKey(id))) || 'null') } catch (e) { blob = null }
   if (!blob || typeof blob !== 'object') return false
-  try { if (blob.flag) await window.todoAPI.dbCall('setMeta', [projectFlagKey(id), '1']) } catch (e) { /* best-effort */ }
-  try { if (blob.status) await window.todoAPI.dbCall('setMeta', [statusKey(id), blob.status]) } catch (e) { /* best-effort */ }
-  try { if (blob.deadline) await window.todoAPI.dbCall('setMeta', [deadlineKey(id), blob.deadline]) } catch (e) { /* best-effort */ }
-  try { if (blob.milestones) await window.todoAPI.dbCall('setMeta', [milestonesKey(id), blob.milestones]) } catch (e) { /* best-effort */ }
-  try { await window.todoAPI.dbCall('deleteMeta', catMetaBakKey(id)) } catch (e) { /* best-effort */ }
+  try { if (blob.flag) await commitCommand("meta", "put", [projectFlagKey(id), '1']) } catch (e) { /* best-effort */ }
+  try { if (blob.status) await commitCommand("meta", "put", [statusKey(id), blob.status]) } catch (e) { /* best-effort */ }
+  try { if (blob.deadline) await commitCommand("meta", "put", [deadlineKey(id), blob.deadline]) } catch (e) { /* best-effort */ }
+  try { if (blob.milestones) await commitCommand("meta", "put", [milestonesKey(id), blob.milestones]) } catch (e) { /* best-effort */ }
+  try { await commitCommand("meta", "delete", catMetaBakKey(id)) } catch (e) { /* best-effort */ }
   return !!blob.flag
 }
 /** U-5 (2026-09-20): the ONE sanctioned legacy-array write — on unmark, rewrite `projectCategoryIds`
@@ -142,7 +143,7 @@ function rewriteLegacyProjectIdsWithout (id) {
       if (!window.todoAPI || !window.todoAPI.dbCall) return
       const arr = JSON.parse((await window.todoAPI.dbCall('getMeta', PROJECT_IDS_KEY)) || '[]')
       if (Array.isArray(arr) && arr.includes(id)) {
-        await window.todoAPI.dbCall('setMeta', [PROJECT_IDS_KEY, JSON.stringify(arr.filter(x => x !== id))])
+        await commitCommand("meta", "put", [PROJECT_IDS_KEY, JSON.stringify(arr.filter(x => x !== id))])
       }
     })()
   } catch (e) { /* degraded host: nothing to rewrite */ }
@@ -178,7 +179,7 @@ function purgeFiltersForVictims (victims) {
   const doomedIds = new Set(doomed.map(f => f.id))
   fstate.list = fstate.list.filter(f => !doomedIds.has(f.id))
   for (const f of doomed) {
-    try { window.todoAPI.dbCall('filterDelete', f.id).catch(e => console.error('[category] filterDelete failed during category delete:', e)) } catch (e) { /* degraded host */ }
+    try { commitCommand("filter", "delete", f.id).catch(e => console.error('[category] filterDelete failed during category delete:', e)) } catch (e) { /* degraded host */ }
   }
   this.commit('filters/setList', fstate.list)
 }
@@ -321,7 +322,7 @@ export default {
       const meta = { ...state.projectMeta, [id]: { ...(state.projectMeta[id] || {}), status: norm } }
       state.projectMeta = meta
       try {
-        window.todoAPI.dbCall('setMeta', [statusKey(id), norm]).catch(() => {})
+        commitCommand("meta", "put", [statusKey(id), norm]).catch(() => {})
       } catch (e) { /* in-memory only when the browser debug host degrades */ }
     }
   },
@@ -390,8 +391,8 @@ export default {
       if (migrated) { commit('setList', []); return 0 }
       const ls = loadList()
       try {
-        for (const c of ls) await window.todoAPI.dbCall('upsertCategory', toRow(c))
-        await window.todoAPI.dbCall('setMeta', ['categoryLsMigrated', '1'])
+        for (const c of ls) await commitCommand("category", "put", toRow(c))
+        await commitCommand("meta", "put", ['categoryLsMigrated', '1'])
       } catch (e) { console.warn('[category] migration failed (local cache still usable):', e) }
       commit('setList', ls)
       return ls.length

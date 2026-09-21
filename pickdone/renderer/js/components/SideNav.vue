@@ -231,6 +231,7 @@ import SnTagPanel from './side-nav/SnTagPanel.vue'
 import SnManageCategoriesModal from './side-nav/SnManageCategoriesModal.vue'
 import SnManageTagsModal from './side-nav/SnManageTagsModal.vue'
 import { NAV_ITEMS, navKeyOfRoute } from '../views/registry.js'
+import { commit as commitCommand } from "../utils/commandBus.js"
 
 // Icons/copy/order are all derived from views/registry.js (single source of truth); labelKey is resolved via navLabel() at render time -- there is no component context at module top level, calling this.$t directly would blow up the whole module (white screen)
 const NAV_ICON = Object.fromEntries(NAV_ITEMS.map(n => [n.route, n.icon]))
@@ -471,7 +472,7 @@ export default {
         if (!list.includes(name) && !this.tags.some(t => t.name === name)) list.push(name)
         this.$store.commit('ui/setUserTags', list)
         if (window.todoAPI && window.todoAPI.dbCall) {
-          window.todoAPI.dbCall('setMeta', ['userTags', JSON.stringify(list)]).catch(() => {})
+          commitCommand("meta", "put", ['userTags', JSON.stringify(list)]).catch(() => {})
         }
       } catch { /* cancelled */ }
     },
