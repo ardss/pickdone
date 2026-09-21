@@ -146,7 +146,10 @@ function createLocalStoreAdapter () {
     /** Fresh-device path. P3a: merge-apply (non-destructive) — see header scope cuts. */
     replaceAll (rows) {
       for (const r of rows || []) applyRowSafe(r)
-      flushPendingWrites()
+      // R7-B P2: a dropped bulk write here used to vanish silently (ingest paths stamp
+      // flushFailed / throw; this path didn't). Surface the failure to the engine.
+      const flush = flushPendingWrites()
+      if (flush && flush.ok === false) throw new Error('replaceAll flush failed: ' + ((flush.error && flush.error.message) || 'unknown'))
     }
   }
 }
@@ -529,6 +532,21 @@ async function stopSync () {
  *  synchronously via db.call inside startSyncRound/stop ordering, before the server close await. */
 function stopSyncForQuit () {
   try { if (state && state.node) stopSync().catch(() => {}) } catch { /* sync never initialized */ }
+}
+
+/* R7-B P2: the quit-time idle announce used to be written then killed by stopSyncForQuit
+ * before the debounced kick ever fired — peers saw a "running" tomato ghost until TTL.
+ * Ship the announce with an IMMEDIATE round (debounce cleared), best-effort within the
+ * will-quit flush window (500ms floor / 2s cap); the peers' TTL rule still covers a crash. */
+function shipQuitRound () {
+  try {
+    if (!state || !state.node) return false
+    clearTimeout(kickTimer)
+    kickTimer = null
+    lastKickRoundAt = Date.now()
+    runRound()
+    return true
+  } catch { return false }
 }
 
 function notifyRenderers (reason) {
@@ -992,7 +1010,7 @@ function initLanSync ({ db, getWindowSenders, resyncExternalWatch } = {}) {
   } catch (e) { log.warn('[LanSync] startup enable failed:', e.message) }
 }
 
-module.exports = { initLanSync, stopSyncForQuit, kickSyncRound, invalidateSyncWatermarks }
+module.exports = { initLanSync, stopSyncForQuit, kickSyncRound, shipQuitRound, invalidateSyncWatermarks }
 
 // Test-only hooks: applyRowInner/flushPendingWrites operate on the module-level `state` singleton;
 // unit tests swap in a mock state via __test.setState. Production paths never touch __test.
