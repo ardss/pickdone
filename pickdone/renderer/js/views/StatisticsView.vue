@@ -461,6 +461,10 @@ export default {
     },
     applyCustomRange () {
       if (!this.customDraft || !this.customDraft[0] || !this.customDraft[1]) return
+      // D6-F10: an inverted pick (from > to) used to be silently clamped downstream while the
+      // picker kept showing the inverted selection. Swap the draft in place so what the user
+      // sees applied is exactly what the picker shows.
+      if (dayjs(this.customDraft[1]).isBefore(dayjs(this.customDraft[0]))) this.customDraft = [this.customDraft[1], this.customDraft[0]]
       if (this.customDraftDays > CUSTOM_MAX_DAYS) { this.$message.warning(this.$t(T + 'customTooLong', { n: CUSTOM_MAX_DAYS })); return }
       this.customRange = [...this.customDraft]
       this.period = 'custom'

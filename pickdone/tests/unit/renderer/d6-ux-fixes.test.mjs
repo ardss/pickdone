@@ -233,3 +233,16 @@ test('i18n parity: EditPanel saveRetry in BOTH zh and en J shards', () => {
   assert.ok(read('renderer/js/i18n/locales/zh-CN-J.js').includes('saveRetry'), 'zh missing saveRetry')
   assert.ok(read('renderer/js/i18n/locales/en-US-J.js').includes('saveRetry'), 'en missing saveRetry')
 })
+
+/* ---------- [F10] statistics custom range: inverted picks swap in place (anchor) ---------- */
+
+test('[F10] applyCustomRange swaps an inverted pick in the visible draft before applying', () => {
+  const src = read('renderer/js/views/StatisticsView.vue')
+  const m = src.match(/applyCustomRange \(\) \{[\s\S]{0,600}\n    \},/)
+  const start = src.indexOf('applyCustomRange () {')
+  assert.ok(start >= 0, 'applyCustomRange found')
+  const body = src.slice(start, start + 1400)
+  assert.ok(/isBefore[\s\S]{0,200}customDraft = \[this\.customDraft\[1\], this\.customDraft\[0\]\]/.test(body),
+    'inverted draft is swapped in place (visible selection matches the applied range)')
+  assert.ok(body.indexOf('isBefore') < body.indexOf('customDraftDays > CUSTOM_MAX_DAYS'), 'swap happens BEFORE the cap check')
+})
