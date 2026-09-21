@@ -86,8 +86,26 @@ function createSyncCmdHandler ({ dispatch, setMeta, log, getMeta, deleteMeta }) 
   /** Called on every external-write poll tick with the raw cliSyncCmd meta value (may be null). */
   function forward (raw) {
     let cmd = null
-    try { cmd = raw ? JSON.parse(raw) : null } catch { return }
-    if (!cmd || !Number.isFinite(cmd.seq) || cmd.seq <= lastSeq) return
+    let parseFailed = false
+    try { cmd = raw ? JSON.parse(raw) : null } catch { parseFailed = true }
+    // D6 P2 (2026-09-21): a non-empty but unparseable (or seq-less) slot value used to be
+    // silently swallowed — the CLI had already consumed its seq, so no receipt ever arrived
+    // and `cli sync` waited forever. A poisoned slot must be compare-and-deleted (only when
+    // the meta value is STILL the payload we just failed on — a newer valid command must
+    // never be eaten) so the next poll starts clean and the CLI gets an error receipt.
+    if (parseFailed || (cmd && !Number.isFinite(cmd.seq))) {
+      if (raw != null && String(raw).length) {
+        log.warn('[CLI] cliSyncCmd slot held an unparseable payload, clearing it:', String(raw).slice(0, 120))
+        // No error receipt is possible: the payload carries no usable seq to receipt against
+        // (a seq-0 receipt would desync the CLI's state polling). Clearing the slot unblocks
+        // the next poll; the CLI's own timeout reports the failure.
+        try {
+          if (typeof deleteMeta === 'function' && typeof getMeta === 'function' && getMeta('cliSyncCmd') === raw) deleteMeta('cliSyncCmd')
+        } catch (e) { log.warn('[CLI] poisoned slot cleanup failed:', e.message) }
+      }
+      return
+    }
+    if (!cmd || cmd.seq <= lastSeq) return
     lastSeq = cmd.seq
     // Slot cleanup after handling (see clearHandledSlot): no restart replay of a handled command.
     Promise.resolve(handle(cmd)).finally(() => { clearHandledSlot(cmd) })

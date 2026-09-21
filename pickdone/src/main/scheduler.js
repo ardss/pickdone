@@ -20,8 +20,20 @@ const FIRED_MAX = 2000
 const firedReminders = new Map() // key -> {ts, written}
 function markFired (key) {
   if (firedReminders.size >= FIRED_MAX) {
-    const firstKey = firedReminders.keys().next().value
-    if (firstKey !== undefined) firedReminders.delete(firstKey)
+    // D6 P2 (2026-09-21): the old eviction took the OLDEST entry regardless of its written
+    // flag. Under sustained reminder traffic the 60s debounced flush means up to a minute of
+    // unwritten watermarks sits at the map head — evicting one of those dropped a fired
+    // reminder's watermark on the floor and it re-fired after restart (exactly the bug the
+    // LRU was built to prevent). Partition the eviction: the oldest WRITTEN entry goes first
+    // (its watermark is safely persisted, so losing the in-memory entry is harmless); only
+    // when EVERY entry is still unwritten (pathological all-pending burst) fall back to the
+    // oldest entry — the memory bound must still hold.
+    let victim
+    for (const [k, v] of firedReminders) {
+      if (v && v.written) { victim = k; break }
+    }
+    if (victim === undefined) victim = firedReminders.keys().next().value
+    if (victim !== undefined) firedReminders.delete(victim)
   }
   firedReminders.set(key, { ts: Date.now(), written: false })
   schedulePersistFired()
