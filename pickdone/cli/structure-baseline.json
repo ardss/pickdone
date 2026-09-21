@@ -1,5 +1,5 @@
 {
-  "src/main/db.js": 975,
+  "src/main/db.js": 992,
   "renderer/js/store/todo.js": 805,
   "renderer/js/components/SideNav.vue": 986,
   "renderer/js/components/EditPanel.vue": 1032,
