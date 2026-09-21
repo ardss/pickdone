@@ -8,7 +8,7 @@
   "cli/pickdone.js": 1352,
   "cli/lib.js": 1992,
   "src/main/lan-sync/index.js": 1076,
-  "src/main/lan-sync-bootstrap.js": 1017,
+  "src/main/lan-sync-bootstrap.js": 1029,
   "renderer/js/components/settings/SettingsSyncTab.vue": 661,
   "src/main/index.js": 771
 }
