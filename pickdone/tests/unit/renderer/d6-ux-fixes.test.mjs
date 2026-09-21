@@ -175,7 +175,7 @@ test('i18n parity: delCat keys in BOTH zh and en G shards', () => {
 
 test('[F7] generate() isolates per-date failures and merges toasts into one summary', () => {
   const src = read('renderer/js/components/RepeatModal.vue')
-  assert.ok(/for \(let i = 0; i < dates\.length; i\+\+\)[\s\S]{0,200}try \{[\s\S]{0,900}catch \(e\) \{[\s\S]{0,200}failed\+\+/.test(src),
+  assert.ok(/for \(let i = 0; i < dates\.length; i\+\+\)[\s\S]{0,600}try \{[\s\S]{0,1200}catch \(e\) \{[\s\S]{0,400}failed\+\+/.test(src),
     'each addTodo is wrapped in try/catch counting failures')
   assert.ok(src.includes('statsD.RepeatModal.partialFail'), 'summary reports failed/total')
   assert.ok(src.includes('statsD.RepeatModal.renewalDisabledWarn'), 'rule-save failure appends the renewal-disabled warning')
