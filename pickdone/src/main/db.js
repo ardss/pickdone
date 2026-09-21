@@ -633,7 +633,17 @@ const OPS = {
     const r = db.prepare('INSERT INTO filters (name, conds, sort, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?)').run(name, conds, f.sort || 0, Date.now(), stamp)
     return Number(r.lastInsertRowid)
   },
-  filterDelete: id => { db.prepare('UPDATE filters SET deleted=1, deletedAt=?, updatedAt=? WHERE id = ?').run(Date.now(), Date.now(), id); return true },
+  // R7 P1-2: opts {deletedAt, updatedAt} (sync apply path) preserve the winner's tombstone stamps —
+  // a local re-stamp replaced the true deletion time and re-won LWW on the origin (echo bounce).
+  // Idempotent: an already-deleted row is left untouched (no re-stamp, no phantom oplog delta).
+  filterDelete: (id, opts = {}) => {
+    // db.call passes params verbatim: the sync path sends [id, {deletedAt, updatedAt}] as one arg
+    if (Array.isArray(id)) { opts = id[1] || {}; id = id[0] }
+    const now = Date.now()
+    const dAt = (opts && opts.deletedAt) || now
+    const r = db.prepare('UPDATE filters SET deleted=1, deletedAt=?, updatedAt=? WHERE id = ? AND deleted=0').run(dAt, (opts && opts.updatedAt) || dAt, id)
+    return r.changes > 0
+  },
   // Per-day task total/completed counts (by due date), plus completion counts by "completion day" (unaffected by due date)
   // scheduledDay stores millisecond timestamps; callers may pass a YYYYMMDD integer (CLI), uniformly converted to a millisecond range
   _dayBounds: ({ from, to }) => {
@@ -731,11 +741,18 @@ const OPS = {
     const r = db.prepare('UPDATE plan_chips SET day=?, mm=?, updatedAt=? WHERE id=? AND deleted=0').run(String(day), String(mm), Date.now(), String(id))
     return r.changes > 0
   },
-  planRemoveIds: ids => {
+  planRemoveIds: (ids, opts = {}) => {
     const list = Array.isArray(ids) ? ids : [ids]
-    const del = db.prepare('UPDATE plan_chips SET deleted=1, deletedAt=?, updatedAt=? WHERE id = ?')
     const now = Date.now()
-    const tr = db.transaction(() => list.forEach(i => del.run(now, now, String(i)))); tr()
+    const dAt = (opts && opts.deletedAt) || now
+    const stamp = (opts && opts.updatedAt) || dAt
+    // Items may be plain ids (renderer/CLI) or {id, deletedAt, updatedAt} tombstone stamps (sync apply)
+    const del = db.prepare('UPDATE plan_chips SET deleted=1, deletedAt=?, updatedAt=? WHERE id = ? AND deleted=0')
+    const tr = db.transaction(() => list.forEach(i => {
+      const o = (i && typeof i === 'object') ? i : null
+      del.run((o && o.deletedAt) || dAt, (o && o.updatedAt) || stamp, String(o ? o.id : i))
+    }))
+    tr()
     return true
   },
   planMoveTask: ({ taskId, fromDay, toDay }) => {

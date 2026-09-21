@@ -50,7 +50,7 @@ test('plan tombstone for a chip we HAVE still lands (delete propagation intact)'
   __test.setState(state)
   const applied = __test.applyRow({ entity: 'plan', id: CHIP_ID, seq: 5, ts: T, updatedAt: T, deleted: true, deletedAt: T, data: null })
   assert.equal(applied, true, 'a delete for an existing chip must land')
-  assert.ok(calls.some(([op, params]) => op === 'planRemoveIds' && String(params && params[0]) === CHIP_ID), 'planRemoveIds called for the existing chip')
+  assert.ok(calls.some(([op, params]) => op === 'planRemoveIds' && ((params && params[0] && typeof params[0] === 'object') ? String(params[0].id) : String(params && params[0])) === CHIP_ID), 'planRemoveIds called for the existing chip')
 })
 
 test('filter ghost tombstone is a no-op too (same echo path)', () => {

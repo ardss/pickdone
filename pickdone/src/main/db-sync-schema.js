@@ -181,7 +181,9 @@ module.exports = ({ getDb, log }) => {
         for (const p of arr) {
           const key = p && p.key != null ? String(p.key) : ''
           if (!key) throw new Error('settingsRowPutMany: key is required')
-          if (putRow(key, p.value, now)) changed.push(key)
+          // R7 P1-1: an explicit updatedAt (sync apply path) preserves the winner's LWW age;
+          // local writers without a stamp keep the now-stamp behavior
+          if (putRow(key, p.value, (p && p.updatedAt) || now)) changed.push(key)
         }
       })
       tr()
