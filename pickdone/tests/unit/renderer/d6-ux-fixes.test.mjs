@@ -145,3 +145,28 @@ test('i18n parity: new statsH.main keys exist in BOTH zh and en shards', () => {
     assert.ok(read('renderer/js/i18n/locales/en-US-H.js').includes(k + ':'), 'en missing ' + k)
   }
 })
+
+/* ---------- [F4/F5cat] category delete: busy state, failure isolation, undo doctrine (anchors) ---------- */
+
+test('[F4/F5cat] delCat is failure-isolated, row-busy guarded and undo-toast driven', () => {
+  const nav = read('renderer/js/components/SideNav.vue')
+  assert.ok(nav.includes('catBusyId != null) return'), 're-entry guard on the busy flag')
+  assert.ok(nav.includes('deleteCategoryWithUndo'), 'shared delete exit wired into the sidebar')
+  assert.ok(nav.includes('catBusyId===o.categoryId'), 'row carries the busy state')
+  const shared = read('renderer/js/components/side-nav/categoryDelete.js')
+  assert.ok(shared.includes('delCatPartialFail'), 'partial-failure toast reports ok/total')
+  assert.ok(shared.includes('delCatUndone'), 'undo toast names the cascade (tasks + saved filters)')
+  assert.ok(shared.includes('collectCascadeIds'), 'cascade victims counted via the pure store helper')
+  assert.ok(shared.includes("commit('category/recover'"), 'undo restores the category flags')
+  assert.ok(shared.includes("dispatch('filters/save'"), 'undo re-puts the purged saved filters')
+  const modal = read('renderer/js/components/side-nav/SnManageCategoriesModal.vue')
+  assert.ok(modal.includes('deleteCategoryWithUndo'), 'manage-categories modal uses the same shared exit')
+  assert.ok(!modal.includes('delCatConfirm'), 'modal no longer double-confirms (doctrine inverted)')
+})
+
+test('i18n parity: delCat keys in BOTH zh and en G shards', () => {
+  for (const k of ['delCatPartialFail', 'delCatUndone']) {
+    assert.ok(read('renderer/js/i18n/locales/zh-CN-G.js').includes(k + ':'), 'zh missing ' + k)
+    assert.ok(read('renderer/js/i18n/locales/en-US-G.js').includes(k + ':'), 'en missing ' + k)
+  }
+})
