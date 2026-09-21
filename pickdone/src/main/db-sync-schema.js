@@ -38,10 +38,16 @@ module.exports = ({ getDb, log }) => {
 
   // Upsert one field row; stamps updatedAt only when the value actually changed (an identical
   // write must not fake LWW freshness, same rule as upsertCategory). Tombstoned rows resurrect.
-  const putRow = (key, rawValue, now) => {
+  // gateTs (Round-3 P1, 2026-09-21 settings LWW revert): when finite, a whole-blob mirror write
+  // whose snapshot stamp (_savedAt) predates a row's updatedAt must NOT re-stamp that row back —
+  // the row was applied by SYNC after the blob snapshot was taken, so the blob's value for that
+  // field is STALE. Skipping keeps the row (the sync truth) and emits no oplog delta, killing the
+  // revert loop: stale peer mirror → fresh-ts delta → newer row wins LWW → local user edit lost.
+  const putRow = (key, rawValue, now, gateTs) => {
     const value = JSON.stringify(rawValue === undefined ? null : rawValue)
-    const cur = getDb().prepare('SELECT value, deleted FROM settings_rows WHERE key = ?').get(key)
+    const cur = getDb().prepare('SELECT value, deleted, updatedAt FROM settings_rows WHERE key = ?').get(key)
     if (cur && !cur.deleted && cur.value === value) return false
+    if (Number.isFinite(gateTs) && cur && !cur.deleted && Number(cur.updatedAt) > gateTs) return false // stale whole-blob echo: row wins
     getDb().prepare(`INSERT INTO settings_rows (key, value, updatedAt, deleted, deletedAt) VALUES (?, ?, ?, 0, 0)
       ON CONFLICT(key) DO UPDATE SET value=excluded.value, updatedAt=excluded.updatedAt, deleted=0, deletedAt=0`)
       .run(key, value, now)
@@ -51,14 +57,16 @@ module.exports = ({ getDb, log }) => {
   // Blob -> rows diff-merge used by BOTH the v6 migration and the setMeta bridge: only fields
   // whose serialized value changed are re-stamped, so unchanged settings keep their LWW age.
   // Returns the changed field keys (caller turns them into oplog deltas).
-  function mergeDoc (doc) {
+  // gateTs (Round-3 P1): the blob's own _savedAt stamp, when the caller has one — fields whose
+  // rows are NEWER than the blob snapshot are stale echoes and are skipped (see putRow).
+  function mergeDoc (doc, gateTs) {
     if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return []
     const now = Date.now()
     const changed = []
     const tr = getDb().transaction(() => {
       for (const [k, v] of Object.entries(doc)) {
         if (UNSAFE_KEYS.has(k)) continue
-        if (putRow(k, v, now)) changed.push(k)
+        if (putRow(k, v, now, gateTs)) changed.push(k)
       }
     })
     tr()
@@ -116,7 +124,13 @@ module.exports = ({ getDb, log }) => {
       if (SYNC_BLOB_KEYS.includes(blobKey)) {
         let doc = null
         try { doc = JSON.parse(v) } catch (e) { /* bridge mirrors parseable docs only */ }
-        const changed = doc ? mergeDoc(doc) : []
+        // Round-3 P1: the renderer's whole-blob mirror carries `_savedAt` (settings.js
+        // mirrorBlob stamps it at persist time). Gate the diff-merge by it: a pending mirror
+        // queued BEFORE a sync-apply landed (its _savedAt older than the applied row's
+        // updatedAt) must not re-stamp the pre-edit value over the applied row — that stale
+        // echo used to win LWW on the peer and revert the local user's edit seconds later.
+        const gateTs = doc && Number.isFinite(Number(doc._savedAt)) ? Number(doc._savedAt) : undefined
+        const changed = doc ? mergeDoc(doc, gateTs) : []
         const snapKey = 'settingsRows.src.' + blobKey
         // P1 2026-09-17: only stamp the snapshot for PARSEABLE docs — stamping an unparseable blob
         // made migrateV6's "already migrated in this exact shape" guard skip the corruption retry.

@@ -367,8 +367,16 @@ function createLanSyncNode(opts) {
 
   /** Run one exchange with a peer: push my segments, pull theirs, ack. Resolves true only when
  *  the peer acked — the caller must not advance the push cursor over an unconfirmed round. */
-  function syncWithPeer(peer) {
+  const roundsInFlight = new Set() // Round-3 P1: per-peer round mutex — one dial per peer at a time
+  function syncWithPeer (peer) {
     if (stopped) return Promise.resolve(false)
+    // Round-3 P1: a re-entrant startSyncRound for a peer whose round is still in flight used to
+    // dial a SECOND concurrent connection (kick + retry timer + discovery all race); round B's
+    // finish() then unconditionally deleted round A's clientSnapshotBusy flag, letting a third
+    // round start a parallel snapshot transfer mid-A. Skip instead — the in-flight round owns
+    // the peer until it settles (the retry/backoff machinery re-dials afterwards).
+    if (roundsInFlight.has(peer.deviceId)) return Promise.resolve(false)
+    roundsInFlight.add(peer.deviceId)
     roundsRunning += 1
     return new Promise((resolve) => {
       let settled = false
@@ -378,6 +386,8 @@ function createLanSyncNode(opts) {
       let peerMaxSeqSeen = 0 // max seq observed in the PEER's segments this round (PEER's seq space)
       let roundApplied = 0 // rows the peer's segments changed locally this round (0 = no pull progress)
       let pullAckSeq = 0 // max seq among the peer's pushed rows across ALL chunks (PEER's seq space)
+      let roundFlushFailedFrom = null // Round-3 P1: earliest flush-failed fromSeq this round — caps pullAckSeq at the final ack
+      let ownsSnapshotBusy = false // Round-3 P1: THIS round set clientSnapshotBusy (only its owner may clear it)
       let awaitingSnapshot = false // snapshot-request sent; the round ends at snapshot-end, not ack
       let authRejected = false // P1-3: the peer's server refused our hello (terminal, see finish)
       // Attachment FILE puller (post-ack): sendVia needs the RAW SOCKET (socket._lanSend lives on em._socket, not the EventEmitter — wiring `client` here poisoned every round, 2026-09-19 drill).
@@ -421,7 +431,11 @@ function createLanSyncNode(opts) {
         settled = true
         if (done) clearTimeout(done)
         roundsRunning -= 1
-        clientSnapshotBusy.delete(peer.deviceId) // client-role flag ONLY: the server role's
+        roundsInFlight.delete(peer.deviceId) // Round-3 P1: release the per-peer round mutex
+        // Round-3 P1: delete the client snapshot flag ONLY if THIS round set it — a concurrent
+        // round (before the per-peer mutex) or a later finish on a stale connection used to
+        // clear the flag while another round's snapshot transfer was still in flight.
+        if (ownsSnapshotBusy) clientSnapshotBusy.delete(peer.deviceId) // client-role flag ONLY: the server role's
         // serverSnapshotBusy must survive a client round end (separate sets, see above).
         client.close()
         if (err) {
@@ -569,6 +583,7 @@ function createLanSyncNode(opts) {
           if (needSnapshot.has(peer.deviceId) && !clientSnapshotBusy.has(peer.deviceId)) {
             needSnapshot.delete(peer.deviceId)
             clientSnapshotBusy.add(peer.deviceId)
+            ownsSnapshotBusy = true
             awaitingSnapshot = true
             chunkBuf.clear()
             client.send({ type: 'snapshot-request' })
@@ -618,8 +633,12 @@ function createLanSyncNode(opts) {
                   // P0-1: a flush-failed segment is NOT acked — cap our appliedToSeq below it
                   // (the peer keeps its push watermark and re-pushes after snapshot recovery)
                   // and force-arm the snapshot trigger: increments alone cannot recover.
+                  // Round-3 P1: the cap is remembered ROUND-WIDE (mirrors server-role.js) —
+                  // a later segment with a higher toSeq used to re-raise pullAckSeq past the
+                  // failure, so the final-chunk ack re-acked the failed segment's rows and the
+                  // sender advanced its watermark over rows we actually dropped.
                   const fFrom = Number.isFinite(from) ? from : 0
-                  if (pullAckSeq >= fFrom) pullAckSeq = Math.max(0, fFrom - 1)
+                  if (roundFlushFailedFrom == null || fFrom < roundFlushFailedFrom) roundFlushFailedFrom = fFrom
                   needSnapshot.add(peer.deviceId)
                 }
                 if (to > peerMaxSeqSeen) peerMaxSeqSeen = to
@@ -631,8 +650,13 @@ function createLanSyncNode(opts) {
             // behavior) overshot the peer's cursor whenever our oplog ran ahead and silently
             // skipped its fresh rows every round.
             if (msg.final) {
+              // Round-3 P1: apply the round-wide flush-failure cap HERE, just before the
+              // final-chunk ack (server-role.js:92 parity) — mid-loop capping lost to later
+              // segments re-raising pullAckSeq.
+              if (roundFlushFailedFrom != null && pullAckSeq >= roundFlushFailedFrom) pullAckSeq = Math.max(0, roundFlushFailedFrom - 1)
               client.send({ type: 'ack', applied: msg.segments.length, rejected: 0, ...(pullAckSeq > 0 ? { appliedToSeq: pullAckSeq } : {}) })
               pullAckSeq = 0 // acked through here; a fresh push on this connection re-accumulates
+              roundFlushFailedFrom = null
             }
           } else if (msg.type === 'snapshot-chunk' && Array.isArray(msg.rows)) {
             if (!awaitingSnapshot) throw new Error('unsolicited snapshot-chunk')

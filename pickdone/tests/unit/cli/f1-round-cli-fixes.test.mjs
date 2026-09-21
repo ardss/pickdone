@@ -55,7 +55,10 @@ test('fix1: restoreTodo writes the row BEFORE consuming the snapshot (upsert fai
   // Now a retry succeeds and backfills the chips
   const after = lib.restoreTodo('f1快照任务')
   assert.equal(after.delete, false)
-  assert.equal(db.call('getMeta', 'planChipsSnapshot:' + t.taskId), '', 'successful restore consumes the one-shot snapshot')
+  // Round-3 P1 (2026-09-21): the one-shot snapshot is now consumed with deleteMeta (a real
+  // tombstone) instead of setMeta '' — a stale '' row could be misread as an (empty) snapshot
+  // by a later task-id collision and never propagated the removal to peers.
+  assert.equal(db.call('getMeta', 'planChipsSnapshot:' + t.taskId), null, 'successful restore consumes the one-shot snapshot')
   const backfilled = db.call('planAll', []).filter(r => r.taskId === t.taskId)
   assert.equal(backfilled.length, chips.length, 'chips are backfilled on the successful path')
 })

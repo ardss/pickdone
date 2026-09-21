@@ -18,6 +18,19 @@ import { writeEventBackupCore, writeAutoBackupCore, writeCriticalBackupCore } fr
 // planSnapshotRowSync stays a named export of this module (tests import it from here)
 export { planSnapshotRowSync }
 
+/** Round-3 P1 (2026-09-21): milestone scrub shared by purgeIds AND purgeAllRecycle (the bulk
+ *  "empty bin" path used to skip it, leaving phantom taskIds in `projectMilestones:<catId>` —
+ *  the D5 bug on the bulk path). Removes purgedIds from every category's milestone taskIds. */
+async function scrubMilestonesForPurged (catIds, purgedIds) {
+  for (const cid of catIds || []) {
+    try {
+      const ms = await loadMilestones(cid)
+      const next = scrubMilestoneTaskIds(ms, purgedIds)
+      if (next !== ms) saveMilestones(cid, next)
+    } catch (e) { console.warn('[todo] milestone scrub after purge failed for category', cid, e) }
+  }
+}
+
 
 const DEFAULT_VIEWS = () => ({
 
@@ -511,13 +524,8 @@ export default {
         // milestone whose last link was purged otherwise kept a phantom taskId set, and
         // milestoneState (ids.size > 0, zero existing linked tasks) fell through to the date-driven
         // 'done' branch, flipping an UNMET milestone to done. Milestones keep their other links.
-        for (const cid of purgedCatIds) {
-          try {
-            const ms = await loadMilestones(cid)
-            const next = scrubMilestoneTaskIds(ms, done)
-            if (next !== ms) saveMilestones(cid, next)
-          } catch (e) { console.warn('[todo] milestone scrub after purge failed for category', cid, e) }
-        }
+        // (Round-3 P1: shared with purgeAllRecycle — see scrubMilestonesForPurged below.)
+        await scrubMilestonesForPurged(purgedCatIds, done)
         // Rows are physically gone (hardDelete + attachment files + chip snapshot meta): any later undo replaying a
         // pre-purge snapshot would safeUpsert the deleted rows straight back from the dead. Void history so undo
         // can never cross the purge generation.
@@ -529,12 +537,15 @@ export default {
       // (purgeIds swallows per-id failures by design — the return value is the only failure signal)
       return { done, failed: ids.filter(id => !done.includes(id)) }
     },
-    async purgeAllRecycle ({ commit, dispatch, state }) {
+    async purgeAllRecycle ({ commit, dispatch, rootState, state }) {
       const ids = state.recycleList.map(t => t.taskId)
       if (!ids.length) return true // QC r3: empty bin = nothing to purge = success (a falsy return read as "purge failed" in SettingsDataTab when the bin drained during the confirm dialogs)
       // Discrete op: break the 400ms undo merge so following edits don't fuse into the purge step
       commit('historyBreakMerge')
       await dispatch('writeEventBackup', 'purge-all') // snapshot before emptying the recycle bin
+      // Round-3 P1 (parity with purgeIds): permanently deleted tasks still bound by focus detach first
+      const at = rootState && rootState.tomato && rootState.tomato.attachTodo
+      if (at && ids.includes(at.taskId)) dispatch('tomato/attach', null, { root: true })
       // DB rows first, then attachment files: the other order leaves rows pointing at deleted files if the file purge fails.
       // Converge only on success (aligned with purgeIds' per-id guard): when the purge IPC fails we keep the local
       // rows untouched — the old flow hardRemoved locally + cleared the undo stack anyway, so the rows "revived"
@@ -546,7 +557,12 @@ export default {
       try { for (const id of ids) await window.todoAPI.deleteTodoFilesRelevant?.(id) } catch {}
       // Drop the pre-delete chip snapshot meta too (rows are gone, the snapshot can never be restored)
       for (const id of ids) clearSnapshot(id)
+      // Round-3 P1: the bulk path used to SKIP the milestone scrub purgeIds does — emptying the
+      // bin left phantom taskIds in `projectMilestones:<catId>` (an unmet milestone with zero
+      // surviving links could flip to 'done', mirroring the D5 bug on the per-item path).
+      const purgedCatIds = [...new Set(((state.recycleList) || []).filter(t => ids.includes(t.taskId)).map(t => t.categoryId).filter(Boolean))]
       commit('hardRemove', ids)
+      await scrubMilestonesForPurged(purgedCatIds, ids)
       // Same resurrect guard as purgeIds: rows + files + snapshots are gone, undo must not cross this generation
       commit('historyClear')
       dispatch('computeViews')

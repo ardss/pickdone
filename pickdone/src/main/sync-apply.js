@@ -57,7 +57,12 @@ const isMachineLocalMetaKey = id => {
     // apply the loser as a live value and mint its own backup of the backup, forever).
     // ALLOWLIST NOTE (P2-g): every key excluded here is deliberate machine-local state; any
     // NEW user-data meta key must NOT be added to this filter or it silently stops syncing.
-    k.startsWith(META_CONFLICT_BACKUP_PREFIX)
+    k.startsWith(META_CONFLICT_BACKUP_PREFIX) ||
+    // Round-3 P1 (2026-09-21): migration/bookkeeping keys — a peer syncing its 'schemaVersion'
+    // row could REGRESS (or over-advance) this device's schema-migrator stamp, and a peer's
+    // legacy 'dayPlanState'/'dayPlanState.bak' whole-package chip JSON would re-poison a device
+    // that already migrated to the plan_chips row store (db.js migration reads these keys).
+    k === 'schemaVersion' || k === 'dayPlanState' || k.startsWith('dayPlanState.')
 }
 
 // P1-5: prefix for dated meta conflict-backup keys (see the meta branch in applyRowInner).

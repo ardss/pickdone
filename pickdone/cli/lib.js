@@ -26,6 +26,9 @@ try {
 
 const dbm = require('../src/main/db.js')
 const core = require('../src/main/core/todo-core.js')
+// Round-3 P1: ownership guard for attachment filenames (single source with the App's purge path,
+// src/main/handlers/shared.js — pure, electron-free).
+const { ownsAttachmentFile } = require('../src/main/handlers/shared.js')
 const audit = require('./audit.js')
 const nlDate = require('./nl-date.cjs')
 
@@ -327,7 +330,18 @@ function setProjectFlag (input, flag) {
   // X3: set = setMeta '1', unmark = deleteMeta (tombstone) — per-key writes never clobber a
   // peer's concurrent flag the way the old whole-doc array did. Legacy array stays untouched.
   if (flag) db.call('setMeta', [projectFlagKey(id), '1'])
-  else db.call('deleteMeta', projectFlagKey(id))
+  else {
+    db.call('deleteMeta', projectFlagKey(id))
+    // Round-3 P1 (renderer parity, category.js rewriteLegacyProjectIdsWithout / U-5): unmark must
+    // ALSO scrub the id from the legacy whole-doc array — getProjectIds unions both sources, so
+    // the stale blob resurrected the unset project on the next read.
+    try {
+      const arr = JSON.parse(open().call('getMeta', PROJECT_IDS_KEY) || '[]')
+      if (Array.isArray(arr) && arr.map(String).includes(String(id))) {
+        open().call('setMeta', [PROJECT_IDS_KEY, JSON.stringify(arr.filter(x => String(x) !== String(id)))])
+      }
+    } catch { /* corrupt blob → leave alone (renderer init heals it) */ }
+  }
   audit.record({ action: 'project.set', targets: [{ taskId: 'cat:' + id, content: c ? c.categoryName : String(id) }], note: (flag ? 'set as project' : 'unset project') })
   return { categoryId: id, name: c ? c.categoryName : String(id), isProject: !!flag }
 }
@@ -750,7 +764,10 @@ function chipsRestoreSnapshot (taskId) {
     if (!raw) return 0
     const rows = JSON.parse(raw)
     if (Array.isArray(rows) && rows.length) open().call('planAddMany', rows)
-    open().call('setMeta', ['planChipsSnapshot:' + taskId, ''])
+    // Round-3 P1: '' → deleteMeta (file-wide convention, renderer clearSnapshot parity) — a ''
+    // value is NOT a tombstone here, it is a stale meta row a later task-id collision could
+    // misread as an (empty) snapshot; deleteMeta propagates the removal to peers too.
+    open().call('deleteMeta', 'planChipsSnapshot:' + taskId)
     return rows.length
   } catch { return 0 }
 }
@@ -780,9 +797,11 @@ function purgeRecycleBin () {
   let filesRemoved = 0
   try {
     const dir = path.join(userDataDir(), 'files')
-    const prefixes = rows.map(r => `${r.taskId}_`)
     for (const f of fs.readdirSync(dir)) {
-      if (prefixes.some(p => f.startsWith(p))) {
+      // Round-3 P1: the old bare startsWith(`${taskId}_`) prefix let a task whose id is a PREFIX
+      // of another id ('a' vs 'a_b') delete the other task's files. Use the App's
+      // ownsAttachmentFile guard (segment after the id must be the all-digit timestamp).
+      if (rows.some(r => ownsAttachmentFile(f, r.taskId))) {
         try { fs.unlinkSync(path.join(dir, f)); filesRemoved++ } catch { /* best-effort, never block the purge */ }
       }
     }
@@ -1118,6 +1137,8 @@ function renameCategory (input, nextName) {
   audit.record({ action: 'category.rename', targets: [], changes: [{ before: { name: cat.categoryName }, after: { name: nextName } }], note: 'category renamed' })
   return updated
 }
+/** Best-effort meta read for the delete backup path ('' when the row/host is absent) */
+function safeGetMeta (k) { try { return open().call('getMeta', k) || '' } catch { return '' } }
 /** Soft delete (same as UI: delete flag + cascade to children; tasks keep categoryId and fall back to the default (uncategorized) in views). Project flag/deadline meta cleaned here. */
 function deleteCategory (input) {
   const db = open()
@@ -1130,6 +1151,24 @@ function deleteCategory (input) {
     mark(id)
   }
   for (const c of victims) db.call('upsertCategory', catToRow(Object.assign({}, c, { delete: true })))
+  // Round-3 P1 (U-4 parity with renderer category.js backupThenClearProjectMeta): back up the
+  // project meta surfaces into `catProjectMetaBak.<id>` BEFORE clearing them — the UI's recover
+  // path restores exactly this blob, and the CLI used to hard-delete the keys with no backup,
+  // making a recovered category lose its project flag/status/deadline/milestones irreversibly.
+  // (Must run before ANY live-key deletion below.)
+  const catMetaBakKey = vid => 'catProjectMetaBak.' + vid
+  for (const v of victims) {
+    const vid = String(v.categoryId)
+    const blob = {
+      flag: (safeGetMeta(projectFlagKey(vid)) === '1'),
+      status: safeGetMeta(projectStatusKey(vid)) || '',
+      deadline: safeGetMeta('projectDeadline:' + vid) || '',
+      milestones: safeGetMeta(MS_KEY(vid)) || ''
+    }
+    if (blob.flag || blob.status || blob.deadline || blob.milestones) {
+      db.call('setMeta', [catMetaBakKey(vid), JSON.stringify(blob)])
+    }
+  }
   // A deleted category must not linger as a project: X3 flag keys are removed per victim; the
   // legacy whole-doc array (read fallback) is pruned only when it actually lost an id.
   for (const v of victims) { try { db.call('deleteMeta', projectFlagKey(v.categoryId)) } catch { /* absent is fine */ } }
@@ -1138,10 +1177,13 @@ function deleteCategory (input) {
   const pruned = legacyIds.filter(x => !victims.some(v => String(v.categoryId) === String(x)))
   if (pruned.length !== legacyIds.length) db.call('setMeta', [PROJECT_IDS_KEY, JSON.stringify(pruned)])
   for (const v of victims) {
+    try { db.call('deleteMeta', projectFlagKey(v.categoryId)) } catch { /* absent is fine */ }
     try { db.call('deleteMeta', 'projectDeadline:' + v.categoryId) } catch { /* absent is fine */ }
     // same lifecycle cleanup for the explicit status meta (review P2 2026-09-11): a later category id
     // reuse would inherit the deleted project's stale status on both ends (key = projectStatus:<id>)
     try { db.call('deleteMeta', projectStatusKey(v.categoryId)) } catch { /* absent is fine */ }
+    // milestones die with the deletion too (backed up above — renderer parity backupThenClearProjectMeta)
+    try { db.call('deleteMeta', MS_KEY(v.categoryId)) } catch { /* absent is fine */ }
   }
   audit.record({ action: 'category.delete', targets: [], changes: [{ before: { names: victims.map(v => v.categoryName) } }], note: 'category soft-deleted (recoverable in UI), tasks kept' })
   return { deleted: victims.map(v => ({ id: v.categoryId, name: v.categoryName })) }

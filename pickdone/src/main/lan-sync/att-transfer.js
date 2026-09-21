@@ -336,6 +336,24 @@ function createAttachmentPuller (opts = {}) {
     if (type === 'att-chunk') {
       if (!current || String(msg.id) !== current.id) return true
       const buf = Buffer.from(String(msg.data || ''), 'base64')
+      // Round-3 P1: the DECLARED size (att-meta) is a hard ceiling — the old buffer accepted
+      // unbounded chunks and only failed at the hash check, so a buggy/malicious peer could
+      // balloon memory far past maxFileBytes per file. Enforce received+chunk <= size; a
+      // violation is a protocol error: drop the file, refund its reserved budget, fail the id
+      // (markFailed already refunds the byte budget and clears `current`).
+      if (current.received + buf.length > current.size) {
+        try { require('electron-log').warn('[LanSync] att-chunk exceeds declared size, protocol error:', current.id) } catch { /* noop */ }
+        markFailed(String(current.id))
+        return true
+      }
+      // Chunk-count ceiling (defensive): a peer drip-feeding 1-byte chunks forever must not
+      // grow the assembly map without limit (64k chunks is far past any real file at the
+      // frame sizes this protocol uses).
+      if (current.chunks.size >= 65536) {
+        try { require('electron-log').warn('[LanSync] att-chunk count ceiling exceeded, protocol error:', current.id) } catch { /* noop */ }
+        markFailed(String(current.id))
+        return true
+      }
       current.chunks.set(Number(msg.index) || 0, buf)
       current.received += buf.length
       if (msg.final) {
