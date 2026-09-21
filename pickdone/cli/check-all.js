@@ -40,6 +40,7 @@ const GROUPS = [
       ['提交身份(HEAD邮箱不得携带个人身份——QQ邮箱上公开仓实锤,SOP-02 §7)', 'node', ['cli/check-commit-identity.js']],
       ['变更操作反馈一致性（完成/删除/移动必须过撤销或确认出口,白名单制）', 'node', ['cli/check-op-feedback.js']],
       ['IPC op 覆盖（渲染端调用面⊆白名单⊆db.OPS,防功能静默全断）', 'node', ['cli/check-ipc-op-coverage.cjs']],
+      ['命令总线单写门（渲染端写形 dbCall 直连=0,manifest↔db.OPS/白名单互查,refactor-command-bus P1）', 'node', ['cli/check-command-bus.cjs']],
       ['双写台账（渲染端每个 localStorage 写点须声明权威源,防 LS 镜像与 DB 漂移——CLI/UI 联动 bug 根治防线）', 'node', ['cli/check-dualwrite.cjs']],
       ['ESM 模块图（import/export 匹配——白屏级事故在门禁拦截）', 'node', ['cli/check-esm-graph.cjs']],
       ['i18n 全量', 'node', ['cli/check-i18n.js', '--all']],

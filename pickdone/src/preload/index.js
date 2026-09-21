@@ -6,6 +6,36 @@ const { contextBridge, ipcRenderer } = require('electron')
 
 const invoke = (ch, ...args) => ipcRenderer.invoke(ch, ...args)
 
+// Phase-1 routing: manifest write ops go over commands:commit (entity/verb, validated +
+// stamped + fanout by the bus in the main process); reads and anything not in the manifest
+// keep the legacy todo-db:call channel untouched. The op→command map lives in the main
+// process (src/main/command-manifest.js — the single source of truth) and is warmed once at
+// startup; the sandboxed preload cannot require main-process files directly. Before the map
+// lands, calls fall back to todo-db:call — the main-side handler routes manifest write ops
+// through the bus regardless of channel, so behavior is identical either way.
+const opCommandMap = {}
+let opCommandMapReady = false
+invoke('commands:manifest').then(m => { Object.assign(opCommandMap, m || {}); opCommandMapReady = true }).catch(() => { opCommandMapReady = true })
+
+const routeDbCall = (op, params) => {
+  const key = opCommandMapReady ? opCommandMap[op] : null
+  if (!key) return invoke('todo-db:call', op, params)
+  const dot = key.indexOf('.')
+  return invoke('commands:commit', { entity: key.slice(0, dot), verb: key.slice(dot + 1), payload: params })
+}
+
+contextBridge.exposeInMainWorld('commands', {
+  // The mutation API: commit(entity, verb, payload[, opts]) — unknown commands throw USAGE
+  // in the main process. opts.preserveStamp keeps an explicit LWW age (sync-apply internal use).
+  commit: (entity, verb, payload, opts) => invoke('commands:commit', { entity, verb, payload, opts }),
+  // Batch form: [{ entity, verb, payload, opts? }, ...] → array of results (whole batch is
+  // validated before anything executes)
+  commitBatch: list => invoke('commands:commit', list),
+  // Migration shim for pending-queue replay paths that carry op strings verbatim — routes
+  // through the exact same bus door as commit().
+  commitOp: (op, params) => routeDbCall(op, params)
+})
+
 contextBridge.exposeInMainWorld('todoAPI', {
   // Version is injected by the main process via env var (app.getVersion()), avoiding hardcoded drift in the renderer
   version: process.env.APP_VERSION || '0.0.0',
@@ -13,8 +43,10 @@ contextBridge.exposeInMainWorld('todoAPI', {
   // Data-directory isolation flag (TODO_USER_DATA_DIR injected = isolated test/dev instance). Attach-mode smoke tests use this to refuse writing the real user database
   isDataIsolated: !!process.env.TODO_USER_DATA_DIR,
 
-  // ---- Database (same as the reference todo-db:call) ----
-  dbCall: (op, params) => invoke('todo-db:call', op, params),
+  // ---- Database ----
+  // Phase-1 alias: write ops route THROUGH the command bus (commands:commit); reads pass
+  // through to todo-db:call untouched — behavior-identical during the migration window.
+  dbCall: (op, params) => routeDbCall(op, params),
   // CONTRACT (2026-09-20, F-UI): batch meta read — getMetaMany(['a','b']) → [{key,value|null}] aligned to input order
   getMetaMany: keys => invoke('todo-db:call', 'getMetaMany', keys),
   // Dangerous purge goes through a dedicated channel (bypasses the todo-db:call op whitelist; executed inside the main process)
