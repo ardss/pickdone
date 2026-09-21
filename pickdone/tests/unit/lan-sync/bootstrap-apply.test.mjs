@@ -160,7 +160,11 @@ test('bootstrap apply: plan TOMBSTONE still lands through the cross-domain guard
   assert.equal(ok, true, 'tombstone must land even when local age is unknown')
   const del = m.calls.find(c => c.op === 'planRemoveIds')
   assert.ok(del, 'planRemoveIds must be called')
-  assert.deepEqual(del.params, ['p1'])
+  // R7 P1-2: the landing carries the winner's tombstone stamps (id readable as before)
+  const arg = del.params && del.params[0]
+  const landed = arg && typeof arg === 'object' ? arg : { id: arg }
+  assert.equal(String(landed.id), 'p1')
+  assert.equal(Number(landed.deletedAt), 200, 'winner deletedAt must survive the hop (no local re-stamp)')
 })
 
 test('bootstrap apply: filter live-row edit APPLIES with a known older local age (F3b — ageUnknown gate removed)', () => {

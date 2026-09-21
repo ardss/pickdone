@@ -51,10 +51,13 @@ module.exports = ({ getDb, log }) => {
       // row-granular delta shape as their single-row counterparts).
       case 'upsertCategoryMany': return arr('category', result)
       case 'filterUpsertMany': return arr('filter', result)
-      case 'filterDelete': return [one('filter', params)]
+      // R7 P1-2: filterDelete params may be (id) or ([id, {deletedAt, updatedAt}]) — sync apply
+      // passes the tombstone stamps. result=false (no live row matched) is a phantom: no delta.
+      case 'filterDelete': return result === false ? [] : [one('filter', Array.isArray(params) ? params[0] : params)]
       case 'planAddMany': return arr('plan', result)
       case 'planUpdateChip': return [one('plan', params && params.id)]
-      case 'planRemoveIds': return arr('plan', params)
+      // planRemoveIds accepts plain ids or {id, deletedAt, updatedAt} stamps (sync apply path)
+      case 'planRemoveIds': return arr('plan', (Array.isArray(params) ? params : [params]).map(x => (x && typeof x === 'object') ? x.id : x))
       // F3c (2026-09-20): these three ops move/delete CHIPS but used to log a single ('plan',
       // taskId) pointer — peers hydrated that as a GHOST tombstone (no chip has id = taskId) and
       // no-op'd, so task-level chip moves/deletes never propagated. Runs AFTER the write

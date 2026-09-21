@@ -458,12 +458,17 @@ function applyRowInner (state, incoming) {
       // minting metaConflictBackup.* copies (and toasting about it) for them was pure noise. The
       // whole namespace is exempt from BOTH backup and conflict toast; it is already invisible to
       // the backup-recovery list because the backups are simply never written.
+      // R7 P1-3: a null loser value means the key was ABSENT locally (mergeTodoRows fabricates a
+      // data=null localRow on first application) — nothing was lost, so no backup AND no toast:
+      // the fabricated null always content-differs, and the old unconditional markConflict burned
+      // the per-round conflict toast on every brand-new meta key, training users to ignore it.
       const bk = String(incoming.id)
+      const firstLanding = conflictCopy.data.value == null
       const isBookkeeping = bk.startsWith('gamification')
-      if (!isBookkeeping && !require('./tomato-announce').isAnnounceKey(bk) && conflictCopy.data.value != null) {
+      if (!isBookkeeping && !firstLanding && !require('./tomato-announce').isAnnounceKey(bk)) {
         writeMetaConflictBackup(state, bk, conflictCopy.data.value)
       }
-      if (!isBookkeeping) markConflict(state, 'meta', incoming.id, true)
+      if (!isBookkeeping && !firstLanding) markConflict(state, 'meta', incoming.id, true)
     } else {
       log.warn('[LanSync] conflict on', entity, incoming.id, '— local copy superseded (conflict-copy UI deferred)')
       // P1-5: non-todo losers are applied wholesale (LWW) — tell the user the peer's version won
@@ -504,7 +509,10 @@ function applyRowInner (state, incoming) {
       return true
     }
     if (!winner.data) return false
-    state.pendingWrites.settings.push({ key: incoming.id, value: winner.data.value })
+    // R7 P1-1: carry the winner's LWW age into the row write — putRow used to re-stamp local now,
+    // making the applied edit read newest-here while a peer edit pushed in-flight-but-older then
+    // silently lost on both sides (convergence on the OLDER value). Same contract as plans/filters.
+    state.pendingWrites.settings.push({ key: incoming.id, value: winner.data.value, updatedAt: winner.updatedAt })
     // P1-2a (2026-09-19 UX review): remember the applied key/value so the bootstrap can (1) fold it
     // into the db.settingsState blob and (2) hot-apply it to the running renderer. Without (1) the
     // renderer's next whole-blob mirror re-stamped its stale field over this newer row (fresh
@@ -565,14 +573,18 @@ function applyRowInner (state, incoming) {
       // the oplog EVEN when we never had the chip — so both peers echoed the same delete back
       // and forth at ~1000 oplog rows/s and every round carried the whole echo (120s+ rounds).
       // Only delete a chip we actually have; a ghost tombstone is a no-op.
-      if (localRow) state.db.call('planRemoveIds', [incoming.id])
+      // R7 P1-2: land the tombstone with the winner's stamps — planRemoveIds used to re-stamp
+      // local now, replacing the true deletion time (wrong delete-ordering on 3+ devices) and
+      // producing a tombstone strictly newer than the sender's, which echoed one extra round.
+      if (localRow) state.db.call('planRemoveIds', [{ id: incoming.id, deletedAt: winner.deletedAt || incoming.deletedAt, updatedAt: winner.updatedAt }])
       else return false
     } else if (localRow && localRow.ageUnknown) return false // cross-domain LWW: local age unknown, refuse to clobber
     else state.pendingWrites.plans.push(winner.data) // bulk-buffered via planAddMany at flush
   } else if (entity === 'filter') {
     if (incoming.deleted) {
       // Same ghost-tombstone guard as plan: never re-capture a delete for a filter we don't have.
-      if (localRow) state.db.call('filterDelete', Number(incoming.id))
+      // R7 P1-2: carry the winner's stamps (see the plan branch — no local re-stamp, no echo bounce).
+      if (localRow) state.db.call('filterDelete', [Number(incoming.id), { deletedAt: winner.deletedAt || incoming.deletedAt, updatedAt: winner.updatedAt }])
       else return false
     } else if (localRow && localRow.ageUnknown) return false // cross-domain LWW: local age unknown, refuse to clobber
     else state.pendingWrites.filters.push({ ...winner.data, id: Number(incoming.id) }) // bulk-buffered
