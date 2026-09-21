@@ -12,6 +12,8 @@ export default {
       delTagConfirm: '删除标签「{name}」？将从 {count} 条任务中移除该标签',
       tagDeleted: '标签「{name}」已删除',
       delCatConfirm: '删除「{name}」？其下任务将变为未分类',
+      delCatPartialFail: '部分任务移动失败（成功 {ok}/{total}），可重试删除或手动处理',
+      delCatUndone: '已删除「{name}」：{tasks} 个任务移入未分类，{filters} 个保存的筛选器被移除　',
       syncDoneMsg: '已写入本地数据库，并更新安全备份',
       syncFailMsg: '数据保存出现问题，请重试',
       searchPlaceholder: '搜索',

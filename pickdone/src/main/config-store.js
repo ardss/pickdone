@@ -61,6 +61,22 @@ function readConfig () {
 // an await. Additionally, a failed write no longer leaves config.json.tmp residue.
 let _pending = 0
 let _writeChain = Promise.resolve()
+// D6 P2 (2026-09-21): prototype-pollution-safe merge. Object.assign SETS properties — an own
+// '__proto__' key on the patch (arriving via JSON.parse from a hostile config/renderer channel)
+// rewrites the target's prototype instead of landing as data. Spread + hasOwn copy loop DEFINE
+// properties instead: '__proto__' stays an inert own key (and is dropped outright below).
+function mergeConfig (base, patch) {
+  // Spread = DefineOwnProperty: even if base somehow carries an own '__proto__' key it lands as
+  // inert data, never as a prototype write.
+  const c = { ...base }
+  if (patch && typeof patch === 'object') {
+    for (const k of Object.keys(patch)) {
+      if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue // own-key filter
+      c[k] = patch[k]
+    }
+  }
+  return c
+}
 function writeConfig (patch) {
   // P2 2026-09-20: read-failure gate — the unreadable config is still on disk (quarantine rename
   // failed); merging defaults into a write would destroy the last readable state. Skip the write;
@@ -70,7 +86,8 @@ function writeConfig (patch) {
     return null
   }
   const exec = () => {
-    const c = Object.assign(readConfig(), patch)
+    // D6 P2 (2026-09-21): mergeConfig replaces Object.assign — prototype-pollution-safe (see above).
+    const c = mergeConfig(readConfig(), patch)
     fs.mkdirSync(path.dirname(configFile()), { recursive: true })
     // Atomic write (tmp+rename): a truncated config.json used to make readConfig silently fall back to
     // defaults (readConfig now quarantines it as config.json.bad instead), losing winBounds/locale/security-lock password

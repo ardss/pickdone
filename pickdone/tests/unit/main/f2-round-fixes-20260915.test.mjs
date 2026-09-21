@@ -121,17 +121,19 @@ function loadAttachmentHandlers () {
     return origLoad.call(this, request, parent, isMain)
   }
   const mod = require_('../../../src/main/handlers/attachments.js')
-  const h = mod({ isLocked: () => false, isSafeExternal: u => typeof u === 'string' && /^https?:/i.test(u), getMainWindow: () => null, broadcastWhiteNoiseUpdated: () => {} })
+  const win = { webContents: { id: 'main' } }
+  const h = mod({ isLocked: () => false, isSafeExternal: u => typeof u === 'string' && /^https?:/i.test(u), getMainWindow: () => win, broadcastWhiteNoiseUpdated: () => {} })
+  const e = { sender: win.webContents } // D6 2026-09-21: delete-file 现为主窗限定,事件须为主窗 sender
   // handler 体内的 require('electron') 在每次 IPC 调用时才解析,mock 须保留到测试结束
-  return { h, restore: () => { Module._load = origLoad } }
+  return { h, e, restore: () => { Module._load = origLoad } }
 }
 test('F4: open-file / download-file-and-open / delete-file 对非字符串 url 返回 false 而非抛 TypeError', async () => {
-  const { h, restore } = loadAttachmentHandlers()
+  const { h, e, restore } = loadAttachmentHandlers()
   try {
     for (const bad of [undefined, null, 42, {}]) {
       assert.equal(await h['open-file']({}, bad), false, 'open-file url=' + String(bad))
       assert.equal(h['download-file-and-open']({}, bad), false, 'download-file-and-open url=' + String(bad))
-      assert.equal(h['delete-file']({}, bad), false, 'delete-file url=' + String(bad))
+      assert.equal(h['delete-file'](e, bad), false, 'delete-file url=' + String(bad))
     }
     // 合法外链不受影响
     assert.equal(await h['download-file-and-open']({}, 'https://example.com/a.png'), true)

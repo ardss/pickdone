@@ -185,16 +185,25 @@ module.exports = ({ getDb, log }) => {
       const arr = Array.isArray(list) ? list : [list]
       const now = Date.now()
       const changed = []
+      // D6 P2 (2026-09-21): the old `throw on any element lacking key` was a poison pill in the
+      // sync flush — flushOne caught it but dropped the WHOLE buffered settings segment, so one
+      // malformed element among hundreds of valid rows lost them all (architectural rule, same as
+      // planAddMany round-3: a bulk op's failure granularity is per-ROW, not per-BATCH). Skip and
+      // collect: valid rows commit, rejected entries are logged with their index/key and left out
+      // of the returned changed list (the caller logs them; data stays recoverable via snapshot).
+      const rejected = []
       const tr = getDb().transaction(() => {
-        for (const p of arr) {
+        for (let i = 0; i < arr.length; i++) {
+          const p = arr[i]
           const key = p && p.key != null ? String(p.key) : ''
-          if (!key) throw new Error('settingsRowPutMany: key is required')
+          if (!key) { rejected.push({ index: i, key: p && p.key != null ? String(p.key) : null, reason: 'key required' }); continue }
           // R7 P1-1: an explicit updatedAt (sync apply path) preserves the winner's LWW age;
           // local writers without a stamp keep the now-stamp behavior
           if (putRow(key, p.value, (p && p.updatedAt) || now)) changed.push(key)
         }
       })
       tr()
+      for (const r of rejected) log.warn(`[TodoDB] settingsRowPutMany: rejected row #${r.index} (${r.reason})`)
       return changed
     },
     rowDelete: p => {

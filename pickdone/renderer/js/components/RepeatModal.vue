@@ -151,11 +151,11 @@ export default {
     async generate () {
       if (!this.templateTodo) return
       this.generating = true
+      let dates = [] // hoisted: the catch below reports against it even when the try body throws early
       try {
         const tpl = this.templateTodo
         // Persist the current rule as the default
         this.$store.commit('repeatSettings/updateSettings', JSON.parse(JSON.stringify(this.form)))
-        let dates = []
         if (tpl.todoTime) dates = this.effectiveDates
         // Respect the "max recurring task group count" setting
         let truncated = false
@@ -164,12 +164,18 @@ export default {
         // The rule is persisted with the group: when the last item in the group completes, toggleComplete can use it to auto-renew
         const ruleJson = JSON.stringify(this.form)
         // Authority = meta (same source as CLI; the 5175 shim implements meta too); the historical LS fallback was removed (2026-09-03 redundancy cleanup)
-        // setMeta failure used to be console.error only: tasks were created but auto-renewal would silently never fire (FilterModal save-failure pattern)
+        // D6-F7: a failed rule save no longer fires its own toast mid-flow — it is folded into the
+        // single summary toast below (with the renewal-disabled consequence spelled out)
+        let ruleSaveFailed = false
         await commitCommand("meta", "put", ['repeatRule:' + repeatId, ruleJson]).catch(e => {
           console.error('[repeat] rule save failed:', e)
-          this.$message.warning(this.$t('statsD.RepeatModal.ruleSaveFailed'))
+          ruleSaveFailed = true
         })
+        // D6-F7: one instance failing used to escape as an unhandled rejection — the modal stuck
+        // open with a partial series and no report. Failures are now counted per date; the modal
+        // always closes and one summary toast reports made/total (+ truncated / rule-save state).
         let made = 0
+        let failed = 0
         for (let i = 0; i < dates.length; i++) {
           const d = dates[i]
           let remind = 0
@@ -177,25 +183,42 @@ export default {
             const t = dayjs(tpl.reminderTime)
             remind = d.hour(t.hour()).minute(t.minute()).second(0).valueOf()
           }
-          await this.$store.dispatch('todo/addTodo', {
-            categoryId: tpl.categoryId,
-            todoContent: tpl.taskContent,
-            todoDescription: tpl.taskDescribe || '',
-            todoDate: d.valueOf(),
-            todoReminderTime: remind,
-            todoReminderOffsets: Array.isArray(tpl.reminderOffsets) ? tpl.reminderOffsets : [],
-            todoDifficultyLevel: tpl.difficulty || 0,
-            repeatId,
-            // Generated instances always start unchecked, matching the store's ensureNextRepeatInstance semantics
-            todoSublist: (function(){ try { const list = JSON.parse(tpl.subtasks || 'null'); return Array.isArray(list) ? list.map(x => ({ ...x, checked: false })) : list } catch (e) { return null } })(),
-            todoImage: tpl.image,
-            fileList: tpl.files,
-            addToTop: false
-          })
-          made++
+          try {
+            await this.$store.dispatch('todo/addTodo', {
+              categoryId: tpl.categoryId,
+              todoContent: tpl.taskContent,
+              todoDescription: tpl.taskDescribe || '',
+              todoDate: d.valueOf(),
+              todoReminderTime: remind,
+              todoReminderOffsets: Array.isArray(tpl.reminderOffsets) ? tpl.reminderOffsets : [],
+              todoDifficultyLevel: tpl.difficulty || 0,
+              repeatId,
+              // Generated instances always start unchecked, matching the store's ensureNextRepeatInstance semantics
+              todoSublist: (function(){ try { const list = JSON.parse(tpl.subtasks || 'null'); return Array.isArray(list) ? list.map(x => ({ ...x, checked: false })) : list } catch (e) { return null } })(),
+              todoImage: tpl.image,
+              fileList: tpl.files,
+              addToTop: false
+            })
+            made++
+          } catch (e) {
+            failed++
+            console.error('[repeat] addTodo failed for date', dates[i] && dates[i].valueOf(), e)
+          }
         }
         this.$store.commit('ui/askRepeatEdit', null)
-        this.$message.success(this.$t('statsD.RepeatModal.generated', { n: made }) + (truncated ? this.$t('statsD.RepeatModal.truncated', { n: this.maxRepeat }) : ''))
+        // D6-F7/F9-merge: ONE summary toast — generated count + truncation + failures + rule-save
+        // failure with its renewal-disabled consequence, instead of contradictory success+warning pops
+        let msg = this.$t('statsD.RepeatModal.generated', { n: made })
+        if (truncated) msg += this.$t('statsD.RepeatModal.truncated', { n: this.maxRepeat })
+        if (failed) msg += this.$t('statsD.RepeatModal.partialFail', { made, failed, total: dates.length })
+        if (ruleSaveFailed) msg += this.$t('statsD.RepeatModal.ruleSaveFailed') + this.$t('statsD.RepeatModal.renewalDisabledWarn')
+        if (failed || ruleSaveFailed) this.$message.warning(msg)
+        else this.$message.success(msg)
+      } catch (e) {
+        // Catastrophic failure (rule persistence / unexpected throw): never leave the modal stuck open
+        console.error('[repeat] generate failed:', e)
+        this.$store.commit('ui/askRepeatEdit', null)
+        try { this.$message.error(this.$t('statsD.RepeatModal.partialFail', { made: 0, failed: dates.length, total: dates.length })) } catch (err) { /* toast is best-effort */ }
       } finally { this.generating = false }
     },
     close () { this.$store.commit('ui/askRepeatEdit', null) }

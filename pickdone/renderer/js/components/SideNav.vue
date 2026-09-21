@@ -104,7 +104,7 @@
              class="sn-cat-item" role="link" tabindex="0" draggable="true"
              :title="$t('statsG.SideNav.dblclickRenameTip')"
              :class="{active: $route.params && $route.params.id == o.categoryId,
-                      'drag-over-before': dragOverId===o.categoryId && dragPos==='before', 'drag-over-after': dragOverId===o.categoryId && dragPos==='after', dragging: catDragId===o.categoryId}"
+                      'drag-over-before': dragOverId===o.categoryId && dragPos==='before', 'drag-over-after': dragOverId===o.categoryId && dragPos==='after', dragging: catDragId===o.categoryId, busy: catBusyId===o.categoryId}"
              @click="go('todo-list-category',{id:o.categoryId})"
              @keydown.enter.prevent="go('todo-list-category',{id:o.categoryId})"
              @dblclick.stop="startCatEdit(o)"
@@ -232,6 +232,7 @@ import SnManageCategoriesModal from './side-nav/SnManageCategoriesModal.vue'
 import SnManageTagsModal from './side-nav/SnManageTagsModal.vue'
 import { NAV_ITEMS, navKeyOfRoute } from '../views/registry.js'
 import { commit as commitCommand } from "../utils/commandBus.js"
+import { deleteCategoryWithUndo } from './side-nav/categoryDelete.js'
 
 // Icons/copy/order are all derived from views/registry.js (single source of truth); labelKey is resolved via navLabel() at render time -- there is no component context at module top level, calling this.$t directly would blow up the whole module (white screen)
 const NAV_ICON = Object.fromEntries(NAV_ITEMS.map(n => [n.route, n.icon]))
@@ -243,6 +244,7 @@ export default {
   components: { WeatherWidget, SnTagPanel, SnManageCategoriesModal, SnManageTagsModal, FilterModal: () => import('./FilterModal.vue') },
   data () {
     return {
+      catBusyId: null as any, // D6-F4: category row whose delete cascade is running (blocks re-entry)
       // Y3 (sync-coverage-2): userCollapsed / catFold / showTagPanel moved out of data() into
       // computed accessors over the synced settings store (blob fields sidebarCollapsed / catFold /
       // showTagPanel); localStorage 'sidebarCollapsed' stays as a write-through cache.
@@ -504,22 +506,11 @@ export default {
        and the tag rename/delete rewrite). The sidebar's own delCat below stays: rows and the
        recycle-bin drop target still use it ===== */
     isProject (id) { return this.$store.state.category.projectIds.includes(id) },
+    /** D6-F4: shared cascade-delete exit (categoryDelete.js) + per-row busy guard */
     async delCat (c) {
-      try {
-        await this.$confirm(this.$t('statsG.SideNav.delCatConfirm', { name: c.categoryName }), this.$t('statsE.SideNav.tipTitle'), { type: 'warning' })
-      } catch { return } // user cancelled; leave the data untouched
-      this.$store.commit('category/softDelete', c.categoryId)
-      if (this.isProject(c.categoryId)) this.$store.commit('category/setProject', { id: c.categoryId, flag: false })
-      for (const t of this.$store.state.todo.todoList.filter(x => x.categoryId === c.categoryId)) {
-        await this.$store.dispatch('todo/updateTodoFields', { taskId: t.taskId, patch: { categoryId: 0 } })
-      }
-      // Clean up settings keys pointing at the dead category id: otherwise the todo box filtered by that category stays forever empty (showing 0 items even after data restore)
-      const st: any = this.$store.state.settings
-      const reset: any = {}
-      if (st.todoBoxCategoryId === c.categoryId) reset.todoBoxCategoryId = -1
-      if (st.newTodoCategoryId === c.categoryId) reset.newTodoCategoryId = 0
-      if (st.calendarCategory === c.categoryId) reset.calendarCategory = 0
-      if (Object.keys(reset).length) this.$store.commit('settings/updateSettings', reset)
+      if (this.catBusyId != null) return
+      this.catBusyId = c.categoryId
+      try { await deleteCategoryWithUndo(this, c) } finally { this.catBusyId = null }
     },
     /* ===== Account card: primary entry to Settings (feedback/about live inside the Settings page) ===== */
     openSettings () {
@@ -785,6 +776,7 @@ export default {
 .sn-cat-item:hover .sn-cat-del, .sn-cat-del:focus { opacity: 1; }
 .sn-cat-del:hover { color: var(--danger); }
 .sn-cat-item.dragging { opacity: .45; }
+.sn-cat-item.busy { opacity: .45; pointer-events: none; } /* D6-F4: cascade delete in flight */
 .sn-cat-item.drag-over-before { box-shadow: inset 0 2px 0 var(--brand); }
 .sn-cat-item.drag-over-after { box-shadow: inset 0 -2px 0 var(--brand); }
 .sn-cat-item { transition: background-color var(--dur-fast); }

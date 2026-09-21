@@ -199,6 +199,45 @@ function checkRows (report) {
   }
 }
 
+/**
+ * D6 P2 (2026-09-21) gate assertion: the manifest's localKeys mirror and sync-apply's
+ * authoritative machine-local filters must classify an enumerated key corpus IDENTICALLY.
+ * The mirror exists only so the bus's 'ls-mirror' fanout can skip sync kicks for machine-local
+ * writes; drift means either (a) local bookkeeping kicks pointless sync rounds, or (b) worse,
+ * a key sync-apply blocks from ingress still kicks egress rounds for data peers will never
+ * consume. The corpus enumerates every deliberate machine-local family PLUS user-data keys
+ * that must stay syncable (negative controls).
+ */
+const MIRROR_KEY_CORPUS = [
+  // machine-local families (both filters must say LOCAL)
+  'sync.pushCursor', 'sync.peerAlias.dev1', '_cliStamp', 'securityLockPassword', 'securityLockX',
+  'cliTomatoCmd', 'cliSyncReceipt', 'todosVersion', 'firedReminders:task1', 'reminderLastSeenAt',
+  'settingsRows.src.v6', 'db.tomatoState', 'habitsState', 'snowDedup:t1:k',
+  'metaConflictBackup.2026-09-21', 'schemaVersion', 'dayPlanState', 'dayPlanState.bak', 'dayPlanState.mon',
+  // user-data keys (both filters must say SYNCABLE — negative controls)
+  'dailyTomatoTarget', 'projectMilestones:p1', 'projectDeadline:p1', 'repeatRule:r1',
+  'someUserKey', 'themeColor', 'schemaVersion2', 'dayPlanStates', 'metaConflictBackups'
+]
+function checkLocalKeyMirror (report, syncApplyMod) {
+  let ok = true
+  const pairs = [
+    ['meta', manifest.isMachineLocalMetaKey, syncApplyMod.isMachineLocalMetaKey],
+    ['setting', manifest.isMachineLocalSettingKey, syncApplyMod.isMachineLocalSettingKey]
+  ]
+  for (const [name, mirror, authoritative] of pairs) {
+    if (typeof mirror !== 'function' || typeof authoritative !== 'function') {
+      report(`manifest ${name} localKeys 或 sync-apply ${name} 过滤器缺失，无法比对`); ok = false; continue
+    }
+    for (const k of MIRROR_KEY_CORPUS) {
+      if (!!mirror(k) !== !!authoritative(k)) {
+        report(`manifest ${name} localKeys 与 sync-apply 分类漂移: "${k}" mirror=${!!mirror(k)} sync-apply=${!!authoritative(k)}`)
+        ok = false
+      }
+    }
+  }
+  return ok
+}
+
 if (require.main === module) {
   if (process.argv.includes('--selftest')) {
     // Negative self-test: the scanner MUST catch a planted write-shaped dbCall, and MUST NOT
@@ -220,7 +259,16 @@ if (require.main === module) {
   }
   const pass = run()
   checkRows(m => { console.error(m); failed++ })
+  // D6 P2 (2026-09-21): manifest localKeys mirror ≡ sync-apply authoritative filters.
+  try {
+    const syncApplyMod = require(path.join(root, 'src/main/sync-apply'))
+    if (!checkLocalKeyMirror(m => { console.error('  ✗ ' + m); failed++ }, syncApplyMod)) failed++
+    else console.log('  ✓ manifest localKeys 镜像与 sync-apply 过滤器分类一致（' + MIRROR_KEY_CORPUS.length + ' 键语料）')
+  } catch (e) {
+    console.error('  ✗ 无法加载 sync-apply 以比对 localKeys 镜像:', e && e.message)
+    failed++
+  }
   console.log(failed === 0 && pass ? '[check-command-bus] PASS' : '[check-command-bus] FAIL')
   process.exit(failed === 0 && pass ? 0 : 1)
 }
-module.exports = { scanSource, scanWriteCallSites, checkRows }
+module.exports = { scanSource, scanWriteCallSites, checkRows, checkLocalKeyMirror, MIRROR_KEY_CORPUS }

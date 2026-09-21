@@ -14,6 +14,9 @@
  *  The mini window can't host a $message popup; success feedback is conveyed by the task appearing directly in the main window's list. */
 import QuickAdd from '../components/QuickAdd.vue'
 
+/** D6-F12: draft persistence for the mini window (Esc used to silently discard the typed text) */
+const DRAFT_KEY = 'quickAddDraft'
+
 export default {
   name: 'QuickAddPage',
   components: { QuickAdd },
@@ -29,6 +32,12 @@ export default {
       ? window.todoAPI.onQuickAddFocus(() => { this.$nextTick(() => { this.$refs.qa && this.$refs.qa.focusInput() }) })
       : null
     window.addEventListener('keydown', this.onKey)
+    // D6-F12: restore a draft left by a previous Esc-hide so the mini window behaves like the
+    // main window's quick-add bar (which keeps its text while mounted)
+    try {
+      const draft = localStorage.getItem(DRAFT_KEY)
+      if (draft && this.$refs.qa && !this.$refs.qa.text) this.$refs.qa.text = draft
+    } catch { /* draft persistence is best-effort */ }
     this.$nextTick(() => this.$refs.qa && this.$refs.qa.focusInput())
   },
   beforeUnmount () {
@@ -38,9 +47,20 @@ export default {
   },
   methods: {
     onKey (e) {
-      if (e.key === 'Escape') window.todoAPI.quickAddHide()
+      if (e.key === 'Escape') {
+        // D6-F12: persist the draft before hiding instead of silently discarding it
+        try {
+          const qa = this.$refs.qa
+          const txt = qa && qa.text ? qa.text : ''
+          if (txt.trim()) localStorage.setItem(DRAFT_KEY, txt)
+          else localStorage.removeItem(DRAFT_KEY)
+        } catch { /* best-effort */ }
+        window.todoAPI.quickAddHide()
+      }
     },
     onCreated () {
+      // The draft is consumed by a successful creation; clear it so a stale line never resurfaces
+      try { localStorage.removeItem(DRAFT_KEY) } catch { /* best-effort */ }
       // Pause briefly so the input clearing is visible, then hide
       setTimeout(() => window.todoAPI.quickAddHide(), 250)
     }

@@ -530,6 +530,18 @@ function normalizePreds (db, taskId, preds) {
   if (wouldCycle(db, taskId, next)) throw new CliError('dependency-cycle: this predecessor set closes a loop', 'DEP_CYCLE')
   return next.length ? JSON.stringify(next) : null
 }
+/** F3 (2026-09-21): sort single source with renderer utils/core.js nextSort — baseline 1024 for the
+ *  first row, ±512 step (addToTop → max+512, else min-512). The old CLI-only min-100/0 convention
+ *  contradicted both the renderer and this file's own renewal paths (min-512/1024), so CLI-added rows
+ *  drifted out of position against renderer rows sharing the same day/no-date pool. */
+function nextSortCli (addToTop, minS, maxS) {
+  let s
+  if (!minS && !maxS) s = 1024 // first element of the list, arbitrary baseline (renderer nextSort)
+  else if (addToTop) s = maxS + 512
+  else s = minS - 512
+  return Math.fround(s)
+}
+
 function addTodo ({ content, desc, date, reminder, category, difficulty, priority, important, urgent, repeatId = null, createTime = null, after = null }) {
   if (!content || !String(content).trim()) throw new CliError('task content required', 'EMPTY_CONTENT')
   const db = open()
@@ -543,11 +555,18 @@ function addTodo ({ content, desc, date, reminder, category, difficulty, priorit
     const existing = db.call('queryTodos', { deleted: 0, repeatId, dayStartFrom: targetDay, dayStartTo: targetDay })
     if (Array.isArray(existing) && existing.length) return existing[0]
   }
-  // Top-insert sort (renderer todo.js nextSort semantics): take min-100 within the target day's pool (or the no-date pool) so new tasks land on top
+  // Insert sort unified on renderer nextSort semantics (F3 2026-09-21, see nextSortCli): the side
+  // (top/bottom) follows the newTodoDefaultSort setting exactly like renderer addTodo's addToTop
+  // default, and the ±32 jitter (renderer addTodo, (Math.random()-0.5)*64) keeps two concurrently
+  // derived identical sorts distinct in arrival order.
   const targetDay = todoTime ? +dayjs(todoTime).startOf('day') : 0
   const daySorts = db.call('queryTodos', { deleted: 0 })
     .filter(x => (x.dayStart || 0) === targetDay)
     .map(x => x.taskSort).filter(v => v != null)
+  const addToTop = String(settingsDoc().newTodoDefaultSort || 'top') !== 'bottom'
+  const taskSort = Math.fround(
+    nextSortCli(addToTop, daySorts.length ? Math.min(...daySorts) : 0, daySorts.length ? Math.max(...daySorts) : 0) +
+    (Math.random() - 0.5) * 64)
   const t = {
     complete: false, createTime: createdTs, delete: false,
     reminderTime: reminder ? parseDate(reminder) : 0,
@@ -562,7 +581,7 @@ function addTodo ({ content, desc, date, reminder, category, difficulty, priorit
     taskContent: String(content).trim(),
     taskDescribe: desc ? String(desc) : '',
     taskId: genTaskId(guessUserId(), now),
-    taskSort: daySorts.length ? Math.fround(Math.min(...daySorts) - 100) : 0,
+    taskSort,
     todoTime,
     userId: guessUserId(), status: 'add', version: 0
   }
@@ -669,7 +688,31 @@ function toggleComplete (input, target, { withSubtasks, completedAt } = {}) {
         }
       } catch { /* skip the cascade when subtask JSON is malformed */ }
     }
-    return patchTodo(t.taskId, undoPatch, { action: 'undo' })
+    const undone = patchTodo(t.taskId, undoPatch, { action: 'undo' })
+    // F3 P2 (2026-09-21): undoing an auto-renewed completion used to leave the renewed next instance
+    // behind (the App's undo path removes it), so an accidental `done` on the group's last instance
+    // permanently seeded a phantom tomorrow/future instance that only a manual delete would clear.
+    // The renewal below only fires when the completed row is the group's LAST live instance — so on
+    // undo, remove the instance that renewal created: same rid, nearest later dayStart, still the
+    // group's last, and not itself completed. Any earlier sibling (a genuine older instance the user
+    // un-did) is left alone.
+    try {
+      if (t.repeatId && t.dayStart) {
+        const group = db.call('queryTodos', { deleted: 0, repeatId: t.repeatId })
+          .filter(x => x.taskId !== t.taskId && x.dayStart > 0)
+          .sort((a, b) => a.dayStart - b.dayStart)
+        const lastDay = group.length ? group[group.length - 1].dayStart : 0
+        const renewedNext = group.find(x => x.dayStart > t.dayStart)
+        if (renewedNext && !renewedNext.complete && renewedNext.dayStart === lastDay) {
+          const now = Date.now()
+          // version: 0 (deleteTodo parity) so the soft delete re-enters the sync snapshot
+          commit('todo', 'put', Object.assign({}, renewedNext, { delete: 1, deletedAt: now, updateTime: now, version: 0, status: 'delete' }))
+          chipsSnapshotForDelete(renewedNext.taskId) // same snapshot→clear cascade as deleteTodo
+          audit.record({ action: 'undo', targets: [renewedNext], changes: [{ before: renewedNext, after: null }], note: 'auto-renewed instance removed with the undo' })
+        }
+      }
+    } catch { /* best-effort: the undo itself must succeed even if the cleanup hits a snag */ }
+    return undone
   }
   const patch = core.completePatch(t, { withSubtasks: cascade, completedAt })
   const merged = { ...t, ...patch, updateTime: Date.now(), status: 'update' }
@@ -699,9 +742,13 @@ function toggleComplete (input, target, { withSubtasks, completedAt } = {}) {
         const taskSort = sameSorts.length ? Math.fround(Math.min(...sameSorts) - 512) : 1024
         let subs = null
         try { subs = t.subtasks ? JSON.parse(t.subtasks) : null } catch { /* keep null */ }
+        // F3 P2 (2026-09-21, D5 renderer parity — store/todo.js ensureNextRepeatInstance carries
+        // `estimate: t.estimate || 0` AND copies it into the per-task meta key, while the CLI twin
+        // hardcoded estimate:0): a renewed instance used to silently lose its estimated workload.
+        const estimate = Math.max(0, Math.min(20, Math.round(Number(t.estimate) || 0)))
         const nt = {
           complete: false, createTime: now, delete: false,
-          reminderTime: next.reminderTime, reminderOffsets: next.reminderOffsets || [], reminderExtra: Array.isArray(next.reminderExtra) ? next.reminderExtra : [], estimate: 0, difficulty: t.difficulty || 0,
+          reminderTime: next.reminderTime, reminderOffsets: next.reminderOffsets || [], reminderExtra: Array.isArray(next.reminderExtra) ? next.reminderExtra : [], estimate, difficulty: t.difficulty || 0,
           priority: t.priority || 0, deadlineTs: t.deadlineTs || 0, important: t.important || 0, urgent: t.urgent || 0,
           repeatId: rid,
           subtasks: subs ? JSON.stringify(subs.map(s => ({ ...s, checked: false }))) : null,
@@ -716,6 +763,15 @@ function toggleComplete (input, target, { withSubtasks, completedAt } = {}) {
           userId: t.userId, status: 'add', version: 0
         }
         commit('todo', 'put', nt)
+        // F3 P2: the estimate column is write-once at the DB layer (U-1) — the live value lives in the
+        // per-task meta key `tomatoEstimateState:<taskId>`; copy it there so the renewal keeps its
+        // estimate on both ends (renderer twin: setEstimate in ensureNextRepeatInstance).
+        if (estimate > 0) {
+          try {
+            commit('meta', 'put', [estimateKey(nt.taskId), String(estimate)])
+            commit('meta', 'put', ['tomatoEstimateStateAt', String(Date.now())]) // same stamp convention as setEstimate
+          } catch { /* estimate is advisory */ }
+        }
         renewed = db.call('getById', nt.taskId)
       }
     }
@@ -819,11 +875,37 @@ function purgeRecycleBin () {
   // planChipsSnapshot:<id>, the CLI purge left the meta behind — a later task-id collision could
   // backfill a purged task with someone else's chips, and the meta rows just leaked.
   for (const r of rows) { try { commit('meta', 'delete', 'planChipsSnapshot:' + r.taskId) } catch { /* absent is fine */ } try { commit('meta', 'delete', ESTIMATE_KEY_PREFIX + r.taskId) } catch { /* M-11: estimate key dies with the row too */ } }
+  // F3 P2 (2026-09-21, D5 renderer parity — store/todo.js scrubMilestonesForPurged, the renderer got
+  // this fix on both purge paths while the CLI twin kept the bug): purge used to leave the purged
+  // taskIds inside projectMilestones:<catId> blobs. A past milestone whose last link was purged then
+  // kept a phantom taskId set, and milestoneState (ids.size > 0, zero EXISTING linked tasks) fell
+  // through to the date-driven 'done' branch — flipping an UNMET milestone to done. Scrub the ids
+  // from every milestone blob before the rows die; milestones keep their other links.
+  let msScrubbed = 0
+  try {
+    const purgedIds = new Set(rows.map(r => r.taskId))
+    if (purgedIds.size) {
+      for (const k of open().call('listMetaKeys') || []) {
+        if (!String(k).startsWith('projectMilestones:')) continue
+        let list
+        try { list = JSON.parse(open().call('getMeta', k) || '[]') } catch { continue /* corrupt blob → leave alone */ }
+        if (!Array.isArray(list)) continue
+        let changed = false
+        for (const m of list) {
+          if (Array.isArray(m.taskIds) && m.taskIds.some(id => purgedIds.has(id))) {
+            m.taskIds = m.taskIds.filter(id => !purgedIds.has(id))
+            changed = true
+          }
+        }
+        if (changed) { commit('meta', 'put', [k, JSON.stringify(list)]); msScrubbed++ }
+      }
+    }
+  } catch { /* best-effort: the purge itself must not fail on meta scrubbing */ }
   commit('todo', 'purgeBin')
   audit.record({
     action: 'purge',
     changes: rows.map(r => ({ before: r })),
-    note: `purged ${rows.length} item(s) (irreversible), ${filesRemoved} attachment file(s) removed`
+    note: `purged ${rows.length} item(s) (irreversible), ${filesRemoved} attachment file(s) removed` + (msScrubbed ? `, milestone scrub: ${msScrubbed} blob(s)` : '')
   })
   return true
 }
@@ -1783,7 +1865,20 @@ const SETTINGS_MANIFEST = {
 const SETTINGS_DENIED = new Set(['securityLockPassword', 'securityLockQuestion', 'schemaV', '_savedAt'])
 
 function settingsDoc () {
-  try { const d = JSON.parse(open().call('getMeta', 'db.settingsState') || 'null'); return d && typeof d === 'object' ? d : {} } catch { return {} }
+  let doc = {}
+  try { const d = JSON.parse(open().call('getMeta', 'db.settingsState') || 'null'); if (d && typeof d === 'object') doc = d } catch { /* corrupt blob → rows overlay still readable */ }
+  // F3 P2 (2026-09-21): settings_rows is the field-granular sync truth (db-sync-schema.js P2 blob
+  // split) while the blob is only the renderer's debounced mirror. A sync-applied row newer than the
+  // blob (or a blob the mirror never refreshed) used to be invisible here, and settingsSet then
+  // re-merged from that stale whole-blob read and re-stamped it over the newer peer row. Overlay the
+  // non-deleted rows over the blob (rows win) so every CLI read starts from the converged doc.
+  try {
+    for (const r of open().call('settingsRowsAll') || []) {
+      if (!r || r.deleted || r.key == null) continue
+      doc[r.key] = r.value
+    }
+  } catch { /* pre-v6 DB without the rows table → blob-only read (previous behavior) */ }
+  return doc
 }
 /** Test-only seam: invoked inside settingsSet between the first settingsDoc() read and the fresh re-read (simulates a concurrent App-side write). */
 let settingsRaceHook = null
@@ -1827,15 +1922,21 @@ function settingsSet (key, value, { force = false } = {}) {
     if (!info.options.includes(String(value))) throw new CliError(`"${key}" expects one of: ${info.options.join(' | ')} (got "${value}")`, 'USAGE')
     v = String(value)
   }
-  // Concurrency guard (2026-09-16, reworked 2026-09-19): settingsSet is a read-modify-write of the WHOLE settingsState package. The old guard compared two synchronous reads — drift could never be observed. Root fix: re-read the doc immediately before setMeta and apply the SINGLE key onto the fresh doc, so a concurrent App change survives instead of being clobbered. --force still accepted (no-op:
-  // the merge is already the non-destructive path).
+  // Concurrency guard (2026-09-16, reworked 2026-09-19, F3 root fix 2026-09-21): the write goes to the
+  // ROW path first (setting.put → settings_rows, the field-granular sync truth with per-field LWW),
+  // THEN the blob is refreshed from a fresh settingsDoc() read (which now overlays rows over the blob).
+  // The old whole-blob re-merge stamped a fresh _savedAt onto a doc read from the possibly-stale
+  // blob, so it passed the mirror gate (db-sync-schema putRow gateTs) and clobbered newer peer rows
+  // wholesale. The refreshed blob is built from the converged doc, so its bridge mirror is a
+  // value-identical no-op — while the _savedAt bump keeps the two local blob consumers working (the
+  // main-process hot-sync watcher diffs _savedAt; renderer initFromDb restores from the blob).
   const doc = settingsDoc()
   const before = key in doc ? doc[key] : null
-  // Test seam: inject a concurrent mutation into the race window (first read → fresh re-read) so unit
+  // Test seam: inject a concurrent mutation into the race window (first read → row write) so unit
   // tests can deterministically exercise the merge-on-fresh behavior. Null outside tests.
   if (typeof settingsRaceHook === 'function') settingsRaceHook()
+  commit('setting', 'put', { key, value: v })
   const fresh = settingsDoc()
-  fresh[key] = v
   fresh._savedAt = Date.now()
   fresh.schemaV = fresh.schemaV || 1
   commit('meta', 'put', ['db.settingsState', JSON.stringify(fresh)])
@@ -1994,6 +2095,6 @@ module.exports = {
   lunarOf, lunarAnnotate,
   setEstimate, getEstimateOf, sortTask, listOn, resolveRecord, recordFix, recordRemove, moveSubtask,
   setReminderOffsets, setReminderExtra, addAttachment, listAttachments, removeAttachment,
-  settingsList, settingsSet, setSettingsRaceHookForTests, planSet, planList, planRemove, dateChangeReminderPatch,
+  settingsList, settingsSet, settingsDoc, setSettingsRaceHookForTests, planSet, planList, planRemove, dateChangeReminderPatch,
   importEvents, eventFocusMinutes, eventKey
 }

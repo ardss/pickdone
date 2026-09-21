@@ -42,6 +42,7 @@ const UPDATE_FIELDS_ALLOWLIST = [
   'RecycleBinView.vue', // recycle-bin restore (restore is itself an undo of delete, with success toast)
   'TodoBoxView.vue', // batch move-to-today / recategorize (batchMoveWithUndo) + restore (confirm-box context)
   'SideNav.vue', // category delete with batch detachment / tag rename-delete (all backed by $confirm)
+  'categoryDelete.js', // D6: shared category-delete exit — reassignment writes run inside the undo-toast flow (whole delete is one undoable step)
   'RepeatDeleteModal.vue', // repeat-task scope confirm dialog (the dialog is the confirm box, with undo)
   'CategoryView.vue', // expired move-to-today (rescheduleExpired+batchMoveWithUndo; only the revertOf callback here)
   'TagView.vue', // same as CategoryView (only the revertOf callback)

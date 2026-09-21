@@ -371,7 +371,15 @@ export default {
       }
       coerceNumericSettings(patch)
       if (Object.keys(patch).length) {
-        if (patch.shortcutKeySettings || patch.appLocale) await dispatch('update', patch)
+        // F3 (2026-09-21): the config-consumed key set must ALSO ride the `update` action. main's
+        // 'notify-settings-updated' writes config.json (the sole source windows.js consumes for
+        // closeActionMinimize / hideMainWindowOnStartup / enableSecurityLock / hardware-accel relaunch)
+        // and hot-applies runWhenComputerStart via app.setLoginItemSettings — a raw commit updated only
+        // the renderer store, so a CLI-written (or LAN-synced) value reverted on next launch while the
+        // OS login item never followed. Same rationale as the U5 shortcut/appLocale dispatch above.
+        const CONFIG_CONSUMED = ['closeActionMinimize', 'runWhenComputerStart', 'hideMainWindowOnStartup', 'enableHardwareAcceleration', 'enableSecurityLock']
+        const needsMainApply = ['shortcutKeySettings', 'appLocale', ...CONFIG_CONSUMED].some(k => k in patch)
+        if (needsMainApply) await dispatch('update', patch)
         else commit('updateSettings', patch)
       } else mirrorToDb('db.settingsState', { ...state, _savedAt: db._savedAt, schemaV: SETTINGS_SCHEMA_V })
     }

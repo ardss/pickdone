@@ -30,6 +30,8 @@ const MAX_PEERS = 64
 // interval — legitimate broadcasters announce every FALLBACK_INTERVAL_MS, so 500ms discards
 // flood traffic while never dropping a real peer announcement.
 const UDP_UPSERT_MIN_INTERVAL_MS = 500
+// D6 P2 (2026-09-21): cap on tracked source IPs before the LRU sweep runs (see startUdpFallback).
+const UDP_IP_TRACK_MAX = 1024
 
 let bonjourModule = null
 try {
@@ -195,8 +197,27 @@ function createDiscovery() {
         const now = Date.now()
         const last = lastUpsertByIp.get(ip) || 0
         if (now - last < UDP_UPSERT_MIN_INTERVAL_MS) return
+        // Re-insert (delete+set) so Map iteration order reflects recency — the sweep below
+        // evicts the LEAST recently active sources first.
+        if (lastUpsertByIp.has(ip)) lastUpsertByIp.delete(ip)
         lastUpsertByIp.set(ip, now)
-        if (lastUpsertByIp.size >= 1024) lastUpsertByIp.clear() // spoofed-source flood guard
+        // D6 P2 (2026-09-21): the old `size >= 1024 → clear()` was self-destructing under exactly
+        // the flood it guarded against — a spoofed-source cycler filled the map, the bulk clear
+        // reset EVERY legitimate peer's rate limit, and the next real announcement wave all
+        // passed the gate at once (burst amplification). Replace with a bounded LRU sweep:
+        // first drop entries older than the interval window (they are no longer rate-limiting
+        // anything), then evict least-recently-active entries one by one until under the cap.
+        // A bulk clear never happens; honest peers keep their limits and spoofed entries age out.
+        if (lastUpsertByIp.size >= UDP_IP_TRACK_MAX) {
+          for (const [k, t] of lastUpsertByIp) {
+            if (now - t >= UDP_UPSERT_MIN_INTERVAL_MS) lastUpsertByIp.delete(k)
+            if (lastUpsertByIp.size < UDP_IP_TRACK_MAX) break
+          }
+          while (lastUpsertByIp.size >= UDP_IP_TRACK_MAX) {
+            const oldest = lastUpsertByIp.keys().next().value
+            lastUpsertByIp.delete(oldest)
+          }
+        }
         // Round-2 P1: the UDP fallback payload carries NO addresses — the sender's real IP is
         // rinfo.address, so pass it as the candidate host. (It used to fall through to the
         // '127.0.0.1' placeholder and every UDP-discovered peer was dialed on loopback.)

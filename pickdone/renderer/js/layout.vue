@@ -92,7 +92,17 @@ export default {
   watch: {
     // When the edit panel opens, ensure the window is wide enough for sidebar 250 + edit 335 + content 640 (auto-widen)
     '$store.state.ui.rightSidebarTodoEdit.visible' (v) {
-      if (v && window.todoAPI) window.todoAPI.ensureWindowWidth(1225)
+      if (!window.todoAPI) return
+      // D6-F9: the auto-widen to 1225 used to be one-way — remember the pre-open width and
+      // restore it when the panel closes (restore handler shrinks only if the window grew)
+      if (v) {
+        if (this._preEditWidth == null) this._preEditWidth = window.innerWidth
+        window.todoAPI.ensureWindowWidth(1225)
+      } else if (this._preEditWidth != null) {
+        const w = this._preEditWidth
+        this._preEditWidth = null
+        if (window.todoAPI.restoreWindowWidth) window.todoAPI.restoreWindowWidth(w)
+      }
     }
   },
   mounted () {
@@ -104,7 +114,8 @@ export default {
       if (e.target.closest && e.target.closest('.edit-panel')) return
       // Clicks inside dialogs (repeat rules/settings/tomato records etc.) don't count as "outside the panel" — canceling/generating after setting a repeat shouldn't also collapse the edit panel
       if (e.target.closest && e.target.closest('.modal-container')) return
-      this.$store.commit('ui/collapseEdit')
+      // D6-F1: cleanup-aware collapse — an unnamed inline-created (calendar) task is removed instead
+      this.$store.dispatch('ui/collapseEditCleanup')
     }
     this.$watch('editVisible', (v) => {
       if (v) this._attachTimer = setTimeout(() => { this._attachTimer = null; document.addEventListener('mousedown', this._onDocClick) }, 0)

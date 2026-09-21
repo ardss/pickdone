@@ -818,6 +818,7 @@ const OPS = {
   tomatoTombstones: () => db.prepare('SELECT tomatoId, updatedAt, deletedAt FROM tomato_records WHERE deleted = 1').all(),
   tomatoAppendMany: rows => {
     const list = Array.isArray(rows) ? rows : [rows]
+    const now = Date.now()
     const ins = db.prepare(`INSERT INTO tomato_records (tomatoId, endTime, dateKey, focus, focusTaskId, focusDuration, rest, restDuration, succeed, manual, status, abandonReason, extra, deleted, deletedAt, updatedAt)
       VALUES (@tomatoId, @endTime, @dateKey, @focus, @focusTaskId, @focusDuration, @rest, @restDuration, @succeed, @manual, @status, @abandonReason, @extra, 0, 0, @updatedAt)
       ON CONFLICT(tomatoId) DO UPDATE SET endTime=excluded.endTime, dateKey=excluded.dateKey, focus=excluded.focus, focusTaskId=excluded.focusTaskId,
@@ -843,7 +844,14 @@ const OPS = {
       // dateKey 从调用方传入值起不再被信任,格式校验降级为派生后的防御断言
       r.dateKey = dayjs(r.endTime).format('YYYY-MM-DD')
       if (!/^\d{4}-\d{2}-\d{2}$/.test(String(r.dateKey))) { reject('dateKey derive failed'); return }
-      ins.run({ ...r, updatedAt: Date.now() })
+      // M2 class, third instance (2026-09-21 D6, after settings/plan): an explicit positive updatedAt
+      // (the sync-apply path carries the peer winner's LWW age, sync-apply.js pendingWrites.tomatoes)
+      // must survive the bulk write — hard-restamping now() here made every applied ledger row read
+      // newest-here and minted a fresh oplog delta per applied row (apply/push ping-pong, and the
+      // older peer row then silently lost LWW on the origin). Parity with planAddMany: renderer/CLI
+      // callers omit the stamp and get now().
+      const stamp = Number(raw.updatedAt) > 0 ? Number(raw.updatedAt) : now
+      ins.run({ ...r, updatedAt: stamp })
       accepted++
     }))
     tr()
@@ -856,12 +864,16 @@ const OPS = {
     // dateKey 双向强制 = dayjs(endTime):改 endTime 重导(改时间忘改日),只传 dateKey 也拒绝(脱离 endTime 的 dateKey patch = 幽灵行后门,2026-09-04 深审 P0)
     rec.dateKey = dayjs(rec.endTime).format('YYYY-MM-DD')
     if (!/^\d{4}-\d{2}-\d{2}$/.test(String(rec.dateKey))) throw new Error('tomatoUpdateById: bad endTime produces invalid dateKey')
+    delete rec.updatedAt // handled explicitly below; never leak the stamp into the extra JSON blob
     const r = OPS._recToRow(rec)
     // `AND deleted = 0`: a tombstoned (removed) record is invisible to every reader — reporting success
     // on it would tell the caller a patch landed that nobody can ever see (review V1-F2)
     const res = db.prepare(`UPDATE tomato_records SET endTime=@endTime, dateKey=@dateKey, focus=@focus, focusTaskId=@focusTaskId,
       focusDuration=@focusDuration, rest=@rest, restDuration=@restDuration, succeed=@succeed, manual=@manual,
-      status=@status, abandonReason=@abandonReason, extra=@extra, updatedAt=@updatedAt WHERE tomatoId=@tomatoId AND deleted = 0`).run(Object.assign({ tomatoId: String(tomatoId), updatedAt: Date.now() }, r))
+      status=@status, abandonReason=@abandonReason, extra=@extra, updatedAt=@updatedAt WHERE tomatoId=@tomatoId AND deleted = 0`)
+      // M2 class parity (2026-09-21 D6): a patch may carry the sync winner's explicit updatedAt —
+      // preserve it like tomatoAppendMany/planAddMany do; callers without a stamp keep local now.
+      .run(Object.assign({ tomatoId: String(tomatoId), updatedAt: Number(patch && patch.updatedAt) > 0 ? Number(patch.updatedAt) : Date.now() }, r))
     return res.changes > 0
   },
   // Tombstone delete (P1 sync groundwork): ledger removals must propagate to other devices; every

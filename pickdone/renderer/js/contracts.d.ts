@@ -63,6 +63,7 @@ interface TodoAPI {
   downloadUpdate: (...args: any[]) => any
   encryptSecret: (...args: any[]) => any
   ensureWindowWidth: (...args: any[]) => any
+  restoreWindowWidth: (...args: any[]) => any
   exportXlsx: (...args: any[]) => any
   flushTomatoFloat: (...args: any[]) => any
   getDefaultBackupDir: (...args: any[]) => any

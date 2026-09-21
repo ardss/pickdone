@@ -181,9 +181,12 @@ test('DayDateStrip: showCal watcher focuses the first popover control (Esc reach
 
 /* ---------- #11 RepeatModal: setMeta failure surfaces a warning toast ---------- */
 
-test('RepeatModal: setMeta failure warns via $message.warning with symmetric i18n keys', () => {
+test('RepeatModal: rule-save failure folded into the single summary toast (D6-F7, no competing toasts)', () => {
   const src = read('renderer/js/components/RepeatModal.vue')
-  assert.match(src, /this\.\$message\.warning\(this\.\$t\('statsD\.RepeatModal\.ruleSaveFailed'\)\)/)
+  // D6-F7: the standalone mid-flow warning is gone; the failure appends renewalDisabledWarn
+  // to the made/total summary toast instead (same i18n keys, one toast)
+  assert.ok(!src.includes("$message.warning(this.$t('statsD.RepeatModal.ruleSaveFailed'))"), 'no standalone ruleSaveFailed warning toast')
+  assert.match(src, /ruleSaveFailed'\) \+ this\.\$t\('statsD\.RepeatModal\.renewalDisabledWarn'\)/)
   const zh = read('renderer/js/i18n/locales/zh-CN-D.js')
   const en = read('renderer/js/i18n/locales/en-US-D.js')
   assert.match(zh, /"ruleSaveFailed": "重复规则保存失败，自动续期可能不生效"/)
@@ -203,7 +206,8 @@ test('TomatoFocusRecordModal: timeline gridlines use var(--line), not rgba(0,0,0
 test('main.js: switchToRecentTodos routes to todo-list-today-x, distinct from switchToDaytodo', () => {
   const src = read('renderer/js/main.js')
   assert.match(src, /case 'switchToDaytodo': router\.push\(\{ name: 'todo-list-today' \}\)/)
-  assert.match(src, /case 'switchToRecentTodos': router\.push\(\{ name: 'todo-list-today-x' \}\)/)
+  // D6-F6: the shortcut is dev-gated — non-dev users land on Today instead of the hidden page
+  assert.match(src, /case 'switchToRecentTodos': \{[\s\S]{0,200}'todo-list-today-x' : 'todo-list-today'/)
   const router = read('renderer/js/router.js')
   assert.match(router, /name: 'todo-list-today-x'/, 'target route exists in router.js')
 })

@@ -44,7 +44,14 @@ const isMachineLocalMetaKey = k => {
     s.startsWith('cliTomato') || s.startsWith('cliSync') || s === 'todosVersion' ||
     s.startsWith('firedReminders:') || s === 'reminderLastSeenAt' ||
     s.startsWith('settingsRows.src.') || s === 'db.tomatoState' || s === 'habitsState' ||
-    s.startsWith('snowDedup:') || s.startsWith('metaConflictBackup.')
+    s.startsWith('snowDedup:') || s.startsWith('metaConflictBackup.') ||
+    // D6 P2 (2026-09-21) round-3 parity: migration/bookkeeping keys the sync-apply filter blocks
+    // (a peer's 'schemaVersion' row could regress/over-advance the local schema migrator; legacy
+    // 'dayPlanState'/'dayPlanState.*' whole-package chip JSON would re-poison a device already
+    // migrated to the plan_chips row store). The mirror MUST classify them identically or the
+    // ls-mirror hook kicks sync rounds for writes peers are forbidden to consume — cli/
+    // check-command-bus.cjs now asserts the two filters agree over an enumerated key corpus.
+    k === 'schemaVersion' || k === 'dayPlanState' || k.startsWith('dayPlanState.')
 }
 
 // Machine-local settings-row keys (mirror of sync-apply.js isMachineLocalSettingKey).

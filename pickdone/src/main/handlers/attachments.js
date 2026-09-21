@@ -9,6 +9,9 @@ const { saveAttachment, attachmentPath, attachDir } = attachments
 module.exports = function attachmentHandlers (ctx) {
   const { isLocked, isSafeExternal, app, getMainWindow, broadcastWhiteNoiseUpdated, notifySyncChange } = ctx
   const { dialog } = require('electron')
+  // D6 P2 (2026-09-21): destructive attachment channels are main-window-only, same capability
+  // class as the backup channels hardened for this exact threat (compromised aux window).
+  const assertMainWindow = require('./shared').makeAssertMainWindow(getMainWindow)
 
   return {
     // --- Attachments (offline localization) ---
@@ -80,6 +83,7 @@ module.exports = function attachmentHandlers (ctx) {
     // told the attachment was gone while the file stayed on disk. Throw a structured error instead (the
     // renderer's existing invoke catch/reportError displays it); no renderer caller changes needed.
     'delete-file': (e, url) => {
+      assertMainWindow(e) // D6 P2 (2026-09-21): destructive channel, main-window-only like backup write
       if (isLocked()) throw new Error('locked')
       if (typeof url !== 'string') return false // F2 2026-09-15: 同 open-file/download-file 的 typeof 守卫(此前 startsWith TypeError)
       if (url.startsWith('local://')) {
@@ -91,6 +95,7 @@ module.exports = function attachmentHandlers (ctx) {
       return true
     },
     'delete-todo-files': (e, taskId) => {
+      assertMainWindow(e) // D6 P2 (2026-09-21): destructive channel, main-window-only like backup write
       if (isLocked()) throw new Error('locked')
       const dir = attachDir()
       const { ownsAttachmentFile } = require('./shared')

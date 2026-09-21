@@ -542,6 +542,11 @@ if (!app.requestSingleInstanceLock()) { app.quit() } else {
       for (const k of computeMetaGc(dbm.call('listMetaKeys'), dbm.call('getAllCategories'), dbm.call('getAll', { deleted: 0 }))) {
         require('./command-bus').commit('meta', 'delete', k, { preserveStamp: true }) // Phase-2: GC via the bus
       }
+      // D6 P2 (2026-09-21): the GC loop runs BEFORE registerIpc wires the bus fanout hooks, so
+      // the deletion deltas sat in the local oplog until the next periodic sync round — peers
+      // kept stale repeat-rule/deadline meta for minutes after boot. One explicit kick mirrors
+      // the GAP-D recovery kick above; kickSyncRound no-ops while sync is lazy-not-initialized.
+      try { require('./lan-sync-bootstrap').kickSyncRound('meta-gc') } catch { /* sync lazy-not-init */ }
     } catch (e) { log.warn('[MetaGC] skipped:', e && e.message) }
     registerIpc()
     watchDbForExternalWrites()

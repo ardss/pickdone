@@ -82,17 +82,18 @@ test('#2/#3 overview doneToday (completedAt caliber) and stats doneCompleted spl
   assert.ok(tRow.doneCompleted >= 2, 'both completions aggregated under their completion day')
 })
 
-test('#4 addTodo top-insert taskSort (min-100 within target day pool)', () => {
+test('#4 addTodo top-insert taskSort (renderer nextSort semantics: max+512, ±32 jitter — F3 unification)', () => {
   const tomorrow = +dayjs().add(2, 'day').startOf('day')
   seed({ taskContent: '排序池甲', todoTime: tomorrow, taskSort: 500 })
   seed({ taskContent: '排序池乙', todoTime: tomorrow, taskSort: 700 })
   const added = lib.addTodo({ content: '排序新任务', date: dayjs(tomorrow).format('YYYY-MM-DD') })
-  assert.equal(added.taskSort, 400, 'new task lands above the current minimum (min-100)')
+  assert.ok(Math.abs(added.taskSort - (700 + 512)) <= 32,
+    'new task takes the renderer nextSort top-insert slot (max+512 ±32); the old CLI-only min-100 = 400 contradicted the renderer and the renewal paths')
 
   // no-date pool gets the same treatment
   seed({ taskContent: '无日期池', todoTime: 0, taskSort: 1000 })
   const free = lib.addTodo({ content: '无日期新任务' })
-  assert.equal(free.taskSort, 900)
+  assert.ok(Math.abs(free.taskSort - (1000 + 512)) <= 32)
 })
 
 test('#5 backfill caps at 600 minutes (DB clamp), >600 is a USAGE error', () => {

@@ -119,6 +119,7 @@ contextBridge.exposeInMainWorld('todoAPI', {
   startTomatoFloatDrag: () => invoke('start-tomato-float-drag'),
   stopTomatoFloatDrag: () => invoke('stop-tomato-float-drag'),
   ensureWindowWidth: w => invoke('ensure-window-width', w),
+  restoreWindowWidth: w => invoke('restore-window-width', w),
   // Expanded-layer state report (⋮ menu/♪ noise/abandon confirm): the main process expands the hit area from the card strip to the whole window accordingly
   tomatoFloatPanel: open => invoke('set-tomato-float-panel', open),
   // Double-click the float card to summon the main window (the main process validates that the sender is the float window itself)

@@ -122,7 +122,8 @@ test('h7: Esc closes the inner popovers first, then the image preview, then the 
   const idxRemind = handler.indexOf('remindOpen = false')
   const idxDep = handler.indexOf('depOpen = false')
   const idxPreview = handler.indexOf('this.previewImg = null')
-  const idxPanel = handler.indexOf("commit('ui/closeEdit')")
+  // D6-F1: panel close now routes through closeEditCleanup (empty inline-created task cleanup)
+  const idxPanel = handler.indexOf("dispatch('ui/closeEditCleanup')")
   for (const [name, idx] of [['catOpen', idxCat], ['remindOpen', idxRemind], ['depOpen', idxDep]]) {
     assert.ok(idx >= 0, `Esc handler must close ${name}`)
     assert.ok(idx < idxPreview, `${name} must close before the image preview`)
