@@ -7,7 +7,6 @@ const scheduler = require('../scheduler')
 const appAudit = require('../audit')
 const { makeAssertMainWindow, purgeAttachmentFiles } = require('./shared')
 const bus = require('../command-bus')
-const manifest = require('../command-manifest')
 
 module.exports = function todoHandlers (ctx) {
   const {
@@ -184,9 +183,8 @@ module.exports = function todoHandlers (ctx) {
     // --- DB (legacy op-keyed channel: reads pass through; writes route through the bus) ---
     'todo-db:call': (e, op, params) => execDbCall(e, op, params),
 
-    // Preload route-table warm-up (sandboxed preload cannot require main files): the static
-    // manifest reverse index, safe to expose (plain op→'entity.verb' string pairs).
-    'commands:manifest': () => manifest.OP_TO_COMMAND,
+    // (Phase-3: the 'commands:manifest' preload warm-up channel is gone — the preload no
+    // longer mirrors the manifest; bus routing is enforced here, main-side, in execDbCall.)
 
     // --- Phase-1 command bus write door (batch array supported) ---
     // Each entry: { entity, verb, payload, opts? }. Validation of the WHOLE batch happens
