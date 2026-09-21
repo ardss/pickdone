@@ -159,8 +159,8 @@ test('buildTimelineRows: 7 rows, per-day done counts, duplicate records deduped,
   assert.equal(rows.length, 7)
   assert.equal(rows[6].dateKey, fmt(today))
   assert.equal(rows[6].done, 2) // only completed todos count
-  assert.equal(rows[6].count, 3) // failed/dup both count toward pomodoro tally? dup skipped before... p3 counted (count++ before dup check)
-  assert.equal(rows[6].minutes, 75)
+  assert.equal(rows[6].count, 2) // Round-4 P1: dup p3 deduped BEFORE the tally — no longer counted
+  assert.equal(rows[6].minutes, 50) // only p1+p2 focus minutes; dup no longer inflates
   const bands = rows[6].bands
   // 30min apart pomodoros, unit width 30min -> p2's unit starts exactly where p1's ends (<= 10min gap) -> one merged band
   assert.equal(bands.length, 1)
