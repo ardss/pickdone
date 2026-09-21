@@ -39,10 +39,10 @@ async function mainBody () {
   console.log('[2] subtask cascade')
   const lib = require(path.join(ROOT, 'cli/lib.js'))
   lib.open()
-  const db = require(path.join(ROOT, 'src/main/db.js'))
+  const commit = lib.commit // Phase-2 write door: smoke-seed writes go through the command bus
   const t1 = run(['get', '冒烟A'])
   // T1-3: one unchecked + one checked — avoids the "all checked" false positive
-  db.call('upsert', { ...t1.data, subtasks: JSON.stringify([{ text: '子1', checked: false }, { text: '子2', checked: true }]) })
+  commit('todo', 'put', { ...t1.data, subtasks: JSON.stringify([{ text: '子1', checked: false }, { text: '子2', checked: true }]) })
   const d = run(['done', '冒烟A'])
   const subs = JSON.parse(d.data.subtasks || '[]')
   ok('subtask cascade checks the unchecked one', subs[0] && subs[0].checked === true)
@@ -64,13 +64,13 @@ async function mainBody () {
   const dayjs = require('dayjs')
   const seed = (off, done) => {
     const b = run(['add', '刷牙', '--date', dayjs().add(off, 'day').format('YYYY-MM-DD')])
-    db.call('upsert', { ...b.data, repeatId: rid, complete: done, completedAt: done ? Date.now() : 0, status: done ? 'update' : 'add' })
+    commit('todo', 'put', { ...b.data, repeatId: rid, complete: done, completedAt: done ? Date.now() : 0, status: done ? 'update' : 'add' })
     return b.data
   }
   // T1-1: renewal latest-instance decision — completing the early one does not renew; only completing the late one renews
   const early = seed(0, false)
   const late = seed(1, false)
-  db.call('setMeta', ['repeatRule:' + rid, JSON.stringify({ repeatType: 'day', repeatInterval: 1 })])
+  commit('meta', 'put', ['repeatRule:' + rid, JSON.stringify({ repeatType: 'day', repeatInterval: 1 })])
   const rEarly = run(['done', early.taskId])
   ok('completing a non-latest instance does not renew', rEarly.renewed === null)
   const rLate = run(['done', late.taskId])

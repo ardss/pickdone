@@ -20,8 +20,8 @@ module.exports = function attach (win) {
         '        focusDuration: 25, rest: 5, restDuration: 5, succeed: true, status: "local" })',
         '    }',
         '  }',
-        '  if (!window.todoAPI || !window.todoAPI.dbCall) return "no-dbCall"',
-        "  await window.todoAPI.dbCall('tomatoAppendMany', recs)",  // 行表原子 op,幂等(同 id 不双账);LS blob 不再承载记录
+        '  if (!window.commands) return "no-commands"',
+        "  await window.commands.commit('tomato', 'appendMany', recs)",  // Phase-2 write door:行表原子 op 经 command bus(幂等,同 id 不双账);LS blob 不再承载记录
         '  return "seeded:" + recs.length',
         '})()'
       ].join('\n')

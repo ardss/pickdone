@@ -132,7 +132,13 @@ function broadcastWhiteNoiseUpdated () {
 
 /* ---------------- Tiered recovery from DB corruption (P0 data-loss prevention) — implementation extracted to dbRecovery.cjs (independently testable) ---------------- */
 function attemptDbRecovery (ud, retryInit) { return dbRecovery.attemptDbRecovery(ud, retryInit) }
-function restoreTasksFromCriticalBackup (ud) { return dbRecovery.restoreTasksFromCriticalBackup(ud, list => dbm.call('upsertMany', list), c => dbm.call('upsertCategory', c), rows => dbm.call('tomatoAppendMany', rows)) }
+// Phase-2 command bus: the critical-backup restore pipeline commits through the bus
+// (todo.putMany / category.put / tomato.appendMany) like every other write path. preserveStamp:
+// restore replays the backup's own row ages verbatim — re-stamping here would skew LWW against
+// peers. The 'undo-barrier'/'ls-mirror' subscribers only exist after registerIpc, so the
+// startup recovery path commits with no fanout, exactly as before.
+const busCommit = (entity, verb, payload) => require('./command-bus').commit(entity, verb, payload, { preserveStamp: true })
+function restoreTasksFromCriticalBackup (ud) { return dbRecovery.restoreTasksFromCriticalBackup(ud, list => busCommit('todo', 'putMany', list), c => busCommit('category', 'put', c), rows => busCommit('tomato', 'appendMany', rows)) }
 
 /* ---------------- External-write listener: when the CLI writes the DB directly, the running App refreshes automatically ---------------- */
 let resyncDbWatch = null // set by watchDbForExternalWrites: re-baselines lastMtime after OUR OWN db writes (P1 2026-09-11)
@@ -189,12 +195,12 @@ function watchDbForExternalWrites () {
     const syncOps = require('./db-sync-ops')
     const channel = syncChannel.createSyncCmdHandler({
       dispatch: (op, p) => syncOps.dispatch(op, p),
-      setMeta: (k, v) => dbm.call('setMeta', [k, v]),
+      setMeta: (k, v) => require('./command-bus').commit('meta', 'put', [k, v], { preserveStamp: true }), // Phase-2: receipt write via the bus (cliSync* keys are machine-local — no sync kick)
       // Round-1 P0 (2026-09-21): seed the seq watermark from the persisted counter + clear the
       // handled slot — an old `unpair` left in cliSyncCmd must never replay on every app restart
       // (it rotated the pairing secret and silently dropped the peer).
       getMeta: k => dbm.call('getMeta', k),
-      deleteMeta: k => dbm.call('deleteMeta', k),
+      deleteMeta: k => require('./command-bus').commit('meta', 'delete', k, { preserveStamp: true }),
       log
     })
     forwardSyncCmd = () => {
@@ -219,7 +225,7 @@ function watchDbForExternalWrites () {
         clearCmd: (cmd) => {
           try {
             const cur = JSON.parse(dbm.call('getMeta', 'cliTomatoCmd') || 'null')
-            if (cur && Number(cur.seq) === Number(cmd.seq)) dbm.call('deleteMeta', 'cliTomatoCmd')
+            if (cur && Number(cur.seq) === Number(cmd.seq)) require('./command-bus').commit('meta', 'delete', 'cliTomatoCmd', { preserveStamp: true })
           } catch { /* best-effort cleanup */ }
         }
       })
@@ -534,7 +540,7 @@ if (!app.requestSingleInstanceLock()) { app.quit() } else {
       // a rule alive — deleted:0. Decision logic extracted to handlers/shared.computeMetaGc for tests.
       const { computeMetaGc } = require('./handlers/shared')
       for (const k of computeMetaGc(dbm.call('listMetaKeys'), dbm.call('getAllCategories'), dbm.call('getAll', { deleted: 0 }))) {
-        dbm.call('deleteMeta', k)
+        require('./command-bus').commit('meta', 'delete', k, { preserveStamp: true }) // Phase-2: GC via the bus
       }
     } catch (e) { log.warn('[MetaGC] skipped:', e && e.message) }
     registerIpc()

@@ -739,7 +739,7 @@ async function main () {
         const oldDay = before && before.dayStart ? dayStr(before.dayStart) : null
         const newDay = updated && updated.dayStart ? dayStr(updated.dayStart) : null
         try {
-          if (oldDay && newDay && oldDay !== newDay) lib.open().call('planMoveTask', { taskId: tid2, fromDay: oldDay, toDay: newDay })
+          if (oldDay && newDay && oldDay !== newDay) lib.commit('plan', 'moveTask', { taskId: tid2, fromDay: oldDay, toDay: newDay })
           if (mm && !lib.open().call('planAll', []).some(r => r.taskId === tid2)) {
             lib.planSet(tid2, mm, { date: newDay })
           }

@@ -165,7 +165,7 @@ async function main () {
   ok('statistics page mounted', await evalJS('!!document.querySelector(".stat-page")'))
 
   console.log('[7] clean up probe data')
-  await evalJS(`window.todoAPI.dbCall('hardDelete', ${JSON.stringify(tid)})`)
+  await evalJS(`window.commands.commit('todo', 'hardDelete', ${JSON.stringify(tid)})`) // Phase-2 write door
   await evalJS(`${store}.dispatch('todo/init')`)
   await sleep(800)
   ok('probe cleaned up', await evalJS(`!${store}.state.todo.todoList.concat(${store}.state.todo.recycleList).some(x=>x.taskId===${JSON.stringify(tid)})`))
