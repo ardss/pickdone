@@ -128,6 +128,7 @@ import { toggleCompleteWithUndo } from '../utils/completeAction.js'
 import { deleteWithUndo, moveWithUndo } from '../utils/confirm.js'
 import { taskContextMenu } from '../utils/taskMenu.js'
 import { loadMilestones } from '../utils/milestones.js'
+import { commit as commitCommand } from "../utils/commandBus.js"
 
 export default {
   name: 'DepView',
@@ -321,7 +322,7 @@ export default {
     },
     flushPos () {
       clearTimeout(this.savePosTimer)
-      window.todoAPI.dbCall('setMeta', [this.posKey(), JSON.stringify(this.posMap)]).catch(() => {})
+      commitCommand("meta", "put", [this.posKey(), JSON.stringify(this.posMap)]).catch(() => {})
     },
     /** Auto-layout (user feedback 2026-09-07: the naive depth-grid looked messy):
      *  1) lane = topological depth; 2) order inside each lane by barycenter of already-placed

@@ -6,6 +6,8 @@ const tomatoFloat = require('../tomato-float')
 const scheduler = require('../scheduler')
 const appAudit = require('../audit')
 const { makeAssertMainWindow, purgeAttachmentFiles } = require('./shared')
+const bus = require('../command-bus')
+const manifest = require('../command-manifest')
 
 module.exports = function todoHandlers (ctx) {
   const {
@@ -15,6 +17,18 @@ module.exports = function todoHandlers (ctx) {
   } = ctx
 
   const assertMainWindow = makeAssertMainWindow(getMainWindow)
+
+  // ---- Command-bus post-commit fanout (subscribers, never second writers) ----
+  // Registration is idempotent (same-name hooks replace, command-bus.onCommit) — this module
+  // function runs once per registerIpc, but re-registering must not duplicate hooks.
+  // - 'ls-mirror': meta/settings commits kick the sync pipeline (peers + CLI settings watcher
+  //   mirror notice). Previously the handler's trailing notifySyncChange on every write path;
+  //   semantics unchanged (fire-and-forget best-effort kick).
+  // - 'undo-barrier': our own write just touched the DB/-wal — re-baseline the external-write
+  //   watcher immediately, otherwise the next poll mistakes our write for an external one
+  //   (full reload + undo-stack wipe). Previously inline after db.call; semantics unchanged.
+  bus.onCommit('ls-mirror', ({ op }) => { if (notifySyncChange) notifySyncChange(op) })
+  bus.onCommit('undo-barrier', () => { try { const rw = resyncDbWatch(); if (rw) rw() } catch { /* best-effort */ } })
 
   // Whitelist of DB ops callable by the renderer: only reads + safe writes pass.
   // Unlike dbm.isWriteOp: this whitelist governs "callable from any renderer window", while isWriteOp governs "whether reloadAll/broadcast is triggered".
@@ -60,9 +74,11 @@ module.exports = function todoHandlers (ctx) {
   // The renderer's real call surface has been verified: all three only occur in the main window (store/utils/main.js); auxiliary windows have no legitimate callers.
   const MAIN_WINDOW_ONLY_OPS = new Set(['upsertMany', 'commitSyncBatch', 'hardDeleteMany', 'setMeta', 'deleteMeta', 'syncSetEnabled', 'syncSetName', 'syncUnpairPeer', 'syncConflictBackupRestore', 'syncSetPeerAlias'])
 
-  return {
-    // --- DB ---
-    'todo-db:call': (e, op, params) => {
+  // Shared execution core for BOTH routes into the bus era:
+  //   'todo-db:call'   — legacy op-keyed channel (reads pass through untouched; writes are
+  //                      routed through the command bus by the manifest reverse index)
+  //   'commands:commit' — the Phase-1 write door (entity/verb, batch-capable)
+  const execDbCall = (e, op, params, opts) => {
       // While the security lock is active: only the lock-screen window may write (prevents the pomodoro float/injected windows from reading or writing data around the lock)
       if (isLocked() && !isLockWindow(e.sender)) {
         // 浮窗到点落番茄账是合法后台行为:锁屏期间放行浮窗自身的番茄追加类写(只挡读/危险写,威胁模型针对绕锁读写)
@@ -104,16 +120,18 @@ module.exports = function todoHandlers (ctx) {
       if (op === 'upsert' && params && params.taskId != null) {
         try { auditBefore = dbm.call('getById', String(params.taskId)) } catch { /* null → coarse action */ }
       }
-      // Renderer-originated ledger writes: suppress the db-layer hook broadcast (no sender info there)
-      // and broadcast here with sender exclusion instead — otherwise the writing window's own
-      // recordsReload echo could clobber in-flight state (2026-09-11 audit P2, todos-echo same shape)
+      // Phase-1 command bus: every manifest write op goes through bus.commitOp (validation +
+      // updatedAt stamping + post-commit fanout). Reads and not-yet-manifested ops keep the
+      // direct db.call path verbatim. Oplog capture stays inside db.call (kept, per spec).
+      const viaBus = !!bus.commandForOp(op)
       const isLedgerOp = dbm.LEDGER_WRITE_OPS.has(op)
       const unsuppress = isLedgerOp ? dbm.suppressLedgerHook() : null
-      // finally is mandatory: if dbm.call throws (DB busy / constraint), a leaked suppression count
+      // finally is mandatory: if db.call throws (DB busy / constraint), a leaked suppression count
       // would silently mute ALL ledger broadcasts (incl. CLI writes) until process restart
       let r
       try {
-        r = dbm.call(op, params)
+        if (viaBus) r = bus.commitOp(op, params, opts)
+        else r = dbm.call(op, params)
       } finally {
         if (unsuppress) unsuppress()
       }
@@ -122,8 +140,9 @@ module.exports = function todoHandlers (ctx) {
       // making the renderer treat a landed write as failed (retry paths / wrong UI state). Aligns with
       // the db.js setLedgerChangedHook contract: broadcast failure must not block the write; log only.
       if (unsuppress) { try { broadcastTomatoRecordsChanged(op, e.sender) } catch (err) { log.warn('[IPC] tomato-records broadcast failed (write already landed):', op, err) } }
-      // Our own write just touched the DB/-wal: re-baseline the external-write watcher immediately,
-      // otherwise the next poll mistakes our write for an external one (full reload + undo-stack wipe)
+      // Watch re-baseline: the bus's 'undo-barrier' hook owns this for bus-routed writes; the
+      // inline line stays as defense-in-depth for any future write path not yet on the manifest
+      // (idempotent pure-core re-baseline, r4 guard test pins the wiring).
       if (dbm.isWriteOp(op)) { try { const rw = resyncDbWatch(); if (rw) rw() } catch { /* best-effort */ } }
       // App-side audit: renderer-initiated writes append to the same JSONL trail the CLI writes
       // (userData/cli-audit.jsonl). No double-logging: CLI write commands hit db.js directly inside the
@@ -133,7 +152,7 @@ module.exports = function todoHandlers (ctx) {
       try { appAudit.recordAppOp(op, params, { before: auditBefore, result: r }) } catch { /* best-effort */ }
       // Write-op determination lives in db.js's explicit WRITE_OPS list (do not fall back to regex: hardDeleteMany and others were once missed, leaving cross-window data stale)
       // setMeta writes only the meta table, not todos: skip reloadAll (settings/tomato/dayPlan mirrors are high-frequency writes; the previous full-reload path caused a reload storm); still broadcast so peer windows sync
-      if (op === 'setMeta') { broadcastTodosChanged(op, e.sender); if (notifySyncChange) notifySyncChange(op); return r } // GAP-B kick (2026-09-19): meta rows are syncable now — the early return used to skip the sync kick entirely
+      if (op === 'setMeta') { broadcastTodosChanged(op, e.sender); if (!viaBus && notifySyncChange) notifySyncChange(op); return r } // bus-routed writes kick via the 'ls-mirror' hook instead (GAP-B, 2026-09-19)
       if (dbm.isWriteOp(op)) {
         // Single-task writes (upsert/bumpSnow) reschedule only that task's timers via scheduleOne instead of a
         // full reloadAll (whole-table scan + all timers torn down and rebuilt on every write). Fall back to
@@ -147,10 +166,31 @@ module.exports = function todoHandlers (ctx) {
         else scheduler.reloadAll(dbApi())
       }
       // 账本行写:调度器不依赖番茄记录;广播由 db 层 setLedgerChangedHook 统一发(CLI 直写同样触发),此处只跳过 todos 全量重载
-      if (op === 'tomatoAppendMany' || op === 'tomatoUpdateById' || op === 'tomatoRemoveByIds' || op === 'tomatoMigrateFromMeta') { if (notifySyncChange) notifySyncChange(op); return r } // GAP-B kick (2026-09-19): ledger ops must reach peers in seconds, not at the next 5-min round — the early return used to skip the kick
+      if (op === 'tomatoAppendMany' || op === 'tomatoUpdateById' || op === 'tomatoRemoveByIds' || op === 'tomatoMigrateFromMeta') { if (!viaBus && notifySyncChange) notifySyncChange(op); return r } // GAP-B kick (2026-09-19): ledger ops must reach peers in seconds — bus-routed writes kick via 'ls-mirror'
       if (dbm.isWriteOp(op)) broadcastTodosChanged(op, e.sender) // exclude the originating sender, so optimistic updates are not clobbered by the echo
-      if (notifySyncChange) notifySyncChange(op)
+      if (!viaBus && notifySyncChange) notifySyncChange(op) // reads only — writes kicked by the 'ls-mirror' hook inside the bus commit
       return r
+    } // end execDbCall
+
+  return {
+    // --- DB (legacy op-keyed channel: reads pass through; writes route through the bus) ---
+    'todo-db:call': (e, op, params) => execDbCall(e, op, params),
+
+    // Preload route-table warm-up (sandboxed preload cannot require main files): the static
+    // manifest reverse index, safe to expose (plain op→'entity.verb' string pairs).
+    'commands:manifest': () => manifest.OP_TO_COMMAND,
+
+    // --- Phase-1 command bus write door (batch array supported) ---
+    // Each entry: { entity, verb, payload, opts? }. Validation of the WHOLE batch happens
+    // before any execution (unknown command = USAGE throw, never a silent no-op), then each
+    // command runs through the exact same pipeline as the legacy todo-db:call route.
+    'commands:commit': (e, batch) => {
+      const list = Array.isArray(batch) ? batch : [batch]
+      const rows = list.map(cmd => {
+        const { entity, verb } = cmd || {}
+        return bus.resolve(entity, verb) // throws USAGE on unknown commands
+      })
+      return list.map((cmd, i) => execDbCall(e, rows[i].op, (cmd || {}).payload, (cmd || {}).opts))
     },
 
     // --- Dangerous purge: dedicated channels (bypassing the todo-db:call whitelist); only the main window may call (UI already double-confirms),

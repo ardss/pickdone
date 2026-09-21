@@ -1,4 +1,5 @@
 import { parseSubtasks, parseJSONSafe } from '../utils/core.js'
+import { commit as commitCommand } from "../utils/commandBus.js"
 /** UI module — right-side editor/dialog control (mirrors the reference ui module semantics) */
 export default {
   namespaced: true,
@@ -97,12 +98,12 @@ export default {
     renameUserTag ({ state, commit }, { from, to }) {
       const list = (state.userTags || []).map(x => (x === from ? to : x))
       commit('setUserTags', list)
-      try { window.todoAPI.dbCall('setMeta', ['userTags', JSON.stringify(list)]).catch(() => {}) } catch (e) { /* best-effort */ }
+      try { commitCommand("meta", "put", ['userTags', JSON.stringify(list)]).catch(() => {}) } catch (e) { /* best-effort */ }
     },
     removeUserTag ({ state, commit }, name) {
       const list = (state.userTags || []).filter(x => x !== name)
       commit('setUserTags', list)
-      try { window.todoAPI.dbCall('setMeta', ['userTags', JSON.stringify(list)]).catch(() => {}) } catch (e) { /* best-effort */ }
+      try { commitCommand("meta", "put", ['userTags', JSON.stringify(list)]).catch(() => {}) } catch (e) { /* best-effort */ }
     }
   }
 }

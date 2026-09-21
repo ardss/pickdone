@@ -103,6 +103,7 @@
 import { expandRepeatDates } from '../utils/repeat.js'
 import {dayjs, FMT } from '../utils/core.js'
 import dialogA11y from '../utils/dialogA11y.js'
+import { commit as commitCommand } from "../utils/commandBus.js"
 
 // l is the i18n key tail segment (statsD.RepeatModal.wd*), resolved with $t at render time
 const WEEKDAYS = [{ v: 1, l: 'wd1' }, { v: 2, l: 'wd2' }, { v: 3, l: 'wd3' }, { v: 4, l: 'wd4' }, { v: 5, l: 'wd5' }, { v: 6, l: 'wd6' }, { v: 7, l: 'wd7' }]
@@ -164,7 +165,7 @@ export default {
         const ruleJson = JSON.stringify(this.form)
         // Authority = meta (same source as CLI; the 5175 shim implements meta too); the historical LS fallback was removed (2026-09-03 redundancy cleanup)
         // setMeta failure used to be console.error only: tasks were created but auto-renewal would silently never fire (FilterModal save-failure pattern)
-        await window.todoAPI.dbCall('setMeta', ['repeatRule:' + repeatId, ruleJson]).catch(e => {
+        await commitCommand("meta", "put", ['repeatRule:' + repeatId, ruleJson]).catch(e => {
           console.error('[repeat] rule save failed:', e)
           this.$message.warning(this.$t('statsD.RepeatModal.ruleSaveFailed'))
         })

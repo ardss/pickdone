@@ -1,3 +1,4 @@
+import { commit as commitCommand } from "./commandBus.js"
 /** Tomato estimate — task-level "estimated tomato rounds" storage (dual write to localStorage + main DB meta, same pattern as habits).
  *  Actual rounds are not stored here (attributed from tomatoRecordList by focusTaskId).
  *  reactive: after EditPanel changes the estimate, the inline pill on TodoItem rows updates in the same frame.
@@ -47,9 +48,9 @@ function persistTask (taskId, n) {
     try {
       if (n > 0) {
         // 2026-09-12: silent .catch(() => {}) hid meta write failures — log them (same as before).
-        await window.todoAPI.dbCall('setMeta', [keyOf(taskId), String(n)])
+        await commitCommand("meta", "put", [keyOf(taskId), String(n)])
       } else {
-        await window.todoAPI.dbCall('deleteMeta', keyOf(taskId))
+        await commitCommand("meta", "delete", keyOf(taskId))
       }
       return true
     } catch (e) {
@@ -109,8 +110,8 @@ export async function initFromDb (taskIds) {
             results.push(await persistTask(k, Number(v) || 0))
           }
           if (results.length && results.every(Boolean)) {
-            await window.todoAPI.dbCall('deleteMeta', LS_KEY)
-            await window.todoAPI.dbCall('deleteMeta', TS_KEY)
+            await commitCommand("meta", "delete", LS_KEY)
+            await commitCommand("meta", "delete", TS_KEY)
           } else {
             console.warn('[tomatoEstimate] lazy migration incomplete — legacy blob kept for next-boot retry')
           }

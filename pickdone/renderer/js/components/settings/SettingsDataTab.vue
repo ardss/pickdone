@@ -76,6 +76,7 @@
 import { dayjs, FMT } from '../../utils/core.js'
 import { confirmRecycleClear } from '../../utils/confirm.js'
 import { loadRuntime } from '../../store/runtimeState.js'
+import { commit as commitCommand } from "../../utils/commandBus.js"
 
 /** Restore = the user wants the backup's data to win. Backup rows carry their backup-time
  *  updateTime + status:'sync', so LAN LWW instantly reverts the restore against any peer
@@ -299,7 +300,7 @@ export default {
       if (b.todoState) {
         try {
           const td = this.parseTodoState(b.todoState); (td.todoList || []).forEach(r => rows.push(restoreStampRow(r))); (td.recycleList || []).forEach(r => rows.push(restoreStampRow(r)))
-          if (rows.length) await window.todoAPI.dbCall('upsertMany', rows)
+          if (rows.length) await commitCommand("todo", "putMany", rows)
         } catch (e) { console.error('[settings] restore segment failed: todo', e); failed.push('todo'); rows = [] }
       }
       // 回收站行与专注账本同份同回(此前 UI 恢复只进 todoList,同一份 dump 走启动灾备却能全回——两端语义割裂)
@@ -313,7 +314,7 @@ export default {
       if (!b.tomatoRecords) return
       const recs = typeof b.tomatoRecords === 'string' ? JSON.parse(b.tomatoRecords) : b.tomatoRecords
       const ok = (Array.isArray(recs) ? recs : []).filter(r => r && r.tomatoId && r.endTime)
-      if (ok.length) await window.todoAPI.dbCall('tomatoAppendMany', ok)
+      if (ok.length) await commitCommand("tomato", "appendMany", ok)
     },
     restoreFromBackup () {
       this.confirmDanger(this.$t('statsE.SettingsModal.criticalRestoreConfirmMsg'), this.$t('statsH.SettingsModal.restoreTitle'), 'warning').then(async () => {
