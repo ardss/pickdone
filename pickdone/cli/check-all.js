@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 /**
  * Unified entry for all-dimension checks (SOP-00) — runs every automated check and summarizes the results
- * Usage: node cli/check-all.js [--a11y]
+ * Usage: node cli/check-all.js [--a11y] [--fast]
  *   --a11y: additionally runs the live axe scan (needs an app in CDP mode; not run by default, see cli/a11y-scan.js)
+ *   --fast: static-only tier (group ② gates+types+unit tests, no build/live/visual) — sub-2-minute
+ *           pre-push sanity; CI and release still run the full check:all
  * Any failure → non-zero exit; used as a one-shot full checkup before release/milestones.
  *
  * 执行模型(2026-09-06 效率专项:25 阶段纯串行 ~11min → 实测 5min 内,见提交 f9d60ac 及后续):
@@ -13,11 +15,18 @@
  * 每阶段计时输出;总时长汇总。依赖关系只允许出现在"阶段内部",池间/池内全部并行。
  */
 import { spawn, spawnSync } from 'node:child_process'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import evtUtils from './event-utils.cjs'
 
 const WITH_A11Y = process.argv.includes('--a11y')
+const FAST = process.argv.includes('--fast')
+// CPU-aware lane count for the Electron live pool: scale down on small machines, never exceed 3
+// (known load-sensitive gates: dbMirror backoff, perf 5000-task, UI coverage walkthrough get WORSE
+// under contention, so the ceiling stays at 3 even on 16-core boxes)
+const CPUS = os.availableParallelism ? os.availableParallelism() : os.cpus().length
+const LANES = Math.max(1, Math.min(3, CPUS))
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 
 const GROUPS = [
@@ -169,13 +178,17 @@ async function runPool (stages, limit, { retry = 0 } = {}) {
 }
 
 const results = []
-// ① 构建先行（产物依赖,唯一硬串行;构建失败后续全无意义,直接短路）
-console.log(`\n===== ${GROUPS[0].name} =====`)
-const buildRs = await runPool(GROUPS[0].stages, 1)
-results.push(...buildRs)
-if (buildRs.some(r => !r.ok)) {
-  console.error('\n✗ 构建失败,后续门禁全部短路(产物缺失跑了也是假象)')
-  process.exit(1)
+// ① 构建先行（产物依赖,唯一硬串行;构建失败后续全无意义,直接短路）——fast 档纯静态,无产物依赖,跳过
+if (FAST) {
+  console.log('\n[check:fast] 跳过 ①构建（静态门禁不依赖 renderer-dist）')
+} else {
+  console.log(`\n===== ${GROUPS[0].name} =====`)
+  const buildRs = await runPool(GROUPS[0].stages, 1)
+  results.push(...buildRs)
+  if (buildRs.some(r => !r.ok)) {
+    console.error('\n✗ 构建失败,后续门禁全部短路(产物缺失跑了也是假象)')
+    process.exit(1)
+  }
 }
 // ②③ 构建完成后同时起跑:静态池(纯文件分析/类型/单测)与 Electron 活体池互不依赖,
 // 只有 CPU 竞争——两池各自限道(3+3)避免把机器打满;更新链路类时序敏感阶段靠重试1次兜底
@@ -186,7 +199,10 @@ const ON_CI = !!(process.env.CI || process.env.GITHUB_ACTIONS)
 // 让它只跑静态池+单测,活体全量由 windows job 独扛;墙钟取 max 而非两 OS 各跑全套)
 const SKIP_LIVE = process.env.CHECK_ALL_SKIP_LIVE === '1'
 if (SKIP_LIVE && !ON_CI) console.warn('  [warn] 本地环境忽略 CHECK_ALL_SKIP_LIVE——活体池只在 CI 的双 OS 分工下跳过(红队 G1:防该 env 未来被误用成本地静默降级开关)')
-if (ON_CI) {
+if (FAST) {
+  console.log('\n===== [check:fast] 只跑静态门禁+类型+单元（跳过 build/活体/视觉——CI 与发布仍走全量 check:all） =====')
+  results.push(...await runPool(GROUPS[1].stages, GROUPS[1].parallel, { retry: GROUPS[1].retry || 0 }))
+} else if (ON_CI) {
   if (SKIP_LIVE) {
     console.log('\n===== [CI 模式+SKIP_LIVE] 只跑静态池(2 道),活体池由另一 OS job 独扛 =====')
     results.push(...await runPool(GROUPS[1].stages, 2))
@@ -196,14 +212,18 @@ if (ON_CI) {
     results.push(...await runPool(GROUPS[2].stages, 1, { retry: 1 }))
   }
 } else {
-  console.log(`\n===== ${GROUPS[1].name} × ${GROUPS[2].name}（两池同时起跑） =====`)
-  const [staticRs, liveRs] = await Promise.all([
+  // 2026-09-21: 视觉池(④)并入同一波——它自拉起 6175 端口宿主(--strictPort,与活体池随机
+  // CDP 端口+独立 userData 互不相干),此前排在整个 ③ 池之后纯串行,是墙钟最大的一块空闲串行段。
+  // 代价是满载更高(dbMirror/5000-task/走查等时序敏感门禁有 retry 1 兜底;若实测抖动恶化再降道)。
+  console.log(`\n===== ${GROUPS[1].name} × ${GROUPS[2].name} × ${GROUPS[3].name}（三池同时起跑） =====`)
+  const [staticRs, liveRs, visualRs] = await Promise.all([
     runPool(GROUPS[1].stages, GROUPS[1].parallel, { retry: GROUPS[1].retry || 0 }),
-    runPool(GROUPS[2].stages, GROUPS[2].parallel, { retry: GROUPS[2].retry || 0 })
+    runPool(GROUPS[2].stages, LANES, { retry: GROUPS[2].retry || 0 }),
+    runPool(GROUPS[3].stages, GROUPS[3].parallel, { retry: GROUPS[3].retry || 0 })
   ])
-  results.push(...staticRs, ...liveRs)
+  results.push(...staticRs, ...liveRs, ...visualRs)
 }
-for (const g of GROUPS.slice(3)) {
+for (const g of GROUPS.slice(FAST ? GROUPS.length : 4)) {
   // 视觉回归(第4组)是本机门禁:基线为 gitignored 的机器本地文件,且依赖 agent-browser——
   // CI 裸机上必然 14 场景全 MISSING-BASELINE,不得入 CI;本地 check:all 照常护航
   if (ON_CI && /视觉/.test(g.name)) {
