@@ -43,10 +43,19 @@ module.exports = function settingsHandlers (ctx) {
       }
       // Symmetric hardening of the write side with the read side: strip security keys and never send them down, and likewise never accept renderer writes for them
       // (a compromised auxiliary window could previously change the lock password / disable the lock via this channel — isLocked() reads config in real time, so the lock would fail on the next check cycle)
-      const clean = Object.assign({}, patch)
+      // D6 P2 (2026-09-21): spread + explicit dangerous-key strip replaces Object.assign —
+      // Object.assign SETS '__proto__', so a patch with an own '__proto__' key (JSON.parse from a
+      // hostile renderer) polluted Object.prototype; spread defines it as inert data and the
+      // explicit delete drops it. (writeConfig's mergeConfig now filters too — belt and braces.)
+      const clean = { ...patch }
       delete clean.securityLockPassword
       delete clean.securityLockQuestion
       delete clean.schemaV
+      delete clean.constructor
+      delete clean.prototype
+      // note: an own '__proto__' key on the patch is left as inert data here (spread defined it
+      // safely); writeConfig's mergeConfig filters it before any merge, and a direct
+      // `delete clean.__proto__` is banned by eslint no-proto.
       const c = writeConfig(clean)
       // P2 2026-09-12 defensive check on the writeConfig contract: config-store.js writeConfig returns
       // Object.assign(readConfig(), patch) — the full merged config — so c.shortcutKeySettings is
