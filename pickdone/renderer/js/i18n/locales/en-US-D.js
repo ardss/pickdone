@@ -30,6 +30,8 @@ export default {
       "fallbackCity": "Beijing",
       "refresh": "Refresh",
       "refreshAria": "Refresh weather",
+      "staleTitle": "Weather data is stale (last temperature {temp}°). Click to refresh",
+      "staleChip": "stale",
       "cityNotFound": "City not found: {city}",
       "wmo55": "Heavy drizzle",
       "wmo63": "Rain",

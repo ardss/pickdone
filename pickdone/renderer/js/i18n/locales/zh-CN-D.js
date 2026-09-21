@@ -29,6 +29,8 @@ export default {
       "fallbackCity": "北京",
       "refresh": "刷新",
       "refreshAria": "刷新天气",
+      "staleTitle": "天气数据已过期（最后温度 {temp}°）。点击刷新",
+      "staleChip": "已过期",
       "cityNotFound": "未找到城市 {city}",
       "wmo1": "大致晴朗",
       "wmo2": "局部多云",

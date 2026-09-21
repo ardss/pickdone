@@ -190,3 +190,21 @@ test('i18n parity: RepeatModal keys in BOTH zh and en D shards', () => {
     assert.ok(read('renderer/js/i18n/locales/en-US-D.js').includes('"' + k + '"'), 'en missing ' + k)
   }
 })
+
+/* ---------- [F8] WeatherWidget: stale flag after final retry failure (anchors) ---------- */
+
+test('[F8] weather dims cached temps and offers an explicit refresh affordance when stale', () => {
+  const src = read('renderer/js/components/WeatherWidget.vue')
+  assert.ok(src.includes("'is-stale': stale"), 'stale state class on the widget shell')
+  assert.ok(src.includes('w-stale-chip'), 'explicit refresh chip rendered when stale')
+  assert.ok(/_retryCount > 2 && this\.temp !== null\) this\.stale = true/.test(src), 'stale flips on only after the final retry with cached data')
+  assert.ok(src.includes('this.stale = false'), 'a successful fetch clears the stale flag')
+  assert.ok(src.includes('staleTitle'), 'title explains the stale state')
+})
+
+test('i18n parity: WeatherWidget stale keys in BOTH zh and en D shards', () => {
+  for (const k of ['staleTitle', 'staleChip']) {
+    assert.ok(read('renderer/js/i18n/locales/zh-CN-D.js').includes('"' + k + '"'), 'zh missing ' + k)
+    assert.ok(read('renderer/js/i18n/locales/en-US-D.js').includes('"' + k + '"'), 'en missing ' + k)
+  }
+})
