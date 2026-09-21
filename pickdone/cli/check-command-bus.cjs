@@ -129,11 +129,18 @@ function run () {
   }
   if (!failed) ok(`白名单 ∩ WRITE_OPS 的写 op 全部有 manifest 行`)
 
-  // (4) Phase 2 — ZERO write-shaped db.call outside the explicit exemption allowlist.
-  //     Every literal write-op call site in src/ + cli/ must be gone: writes commit through
-  //     the command bus (bus.commit(entity, verb, …)), reads stay on db.call. The exemptions
-  //     below are EXHAUSTIVE and each carries its rationale — adding a file here requires a
-  //     spec-level justification in the commit message (docs/refactor-command-bus.md).
+  // (4) Phase 2/3 — ZERO write-shaped db.call outside the EXEMPTION LEDGER (deliberate twin
+  //     door, not drift — full as-built rationale table lives in docs/refactor-command-bus.md
+  //     §Exemption ledger). Every literal write-op call site in src/ + cli/ must be gone:
+  //     writes commit through the command bus (bus.commit(entity, verb, …)), reads stay on
+  //     db.call. The ledger below is EXHAUSTIVE and each entry carries its one-line rationale;
+  //     adding a file here requires a spec-level justification in the commit message.
+  //     THE LEDGER AT A GLANCE (details in the doc):
+  //       db.js                  — the engine the bus dispatches into
+  //       command-bus.js         — the door itself
+  //       sync-apply.js          — REMOTE op ingress (wire-carried LWW stamps; bus re-stamps)
+  //       lan-sync-bootstrap.js  — sync ingest plumbing inside the same ingress contract
+  //       tomato-announce.js     — announce meta row via the pipeline-injected db surface
   const EXEMPT_FILES = {
     'src/main/db.js': 'the engine itself — the bus and every op implementation dispatch here',
     'src/main/command-bus.js': 'the single write door — commit() is the only caller that maps commands to ops',
@@ -155,8 +162,9 @@ function run () {
   }
   const writeUniverse = new Set([...dbWriteOps, ...writeOps])
   // Pinned literals (zero-test-edit rule): guard tests pin these byte-for-byte, and each call is
-  // STILL bus-routed — import.js's local `db` is a bus facade (commitOp → bus.commit), the same
-  // thin-alias pattern the Phase-1 preload kept for window.todoAPI.dbCall.
+  // STILL bus-routed — import.js's local `db` is a bus facade (commitOp → bus.commit).
+  // (Phase-3: the preload-side twin of this pattern — the dbCall write-alias — was demolished;
+  // bus routing for todo-db:call is enforced solely main-side in handlers/todo.js.)
   const PINNED_P2 = [
     { file: 'cli/import.js', op: 'upsertMany', why: 'h7-1 guard pins the literal; db is a bus facade' },
     { file: 'cli/import.js', op: 'upsertCategory', why: 'same import.js bus facade as upsertMany' }

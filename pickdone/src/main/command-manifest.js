@@ -2,9 +2,9 @@
  * Command manifest — single source of truth for renderer-reachable write commands
  * (refactor-command-bus.md Phase 1, docs/refactor-command-bus.md).
  *
- * One row per command. Gates (cli/check-command-bus.cjs) and the preload route table read
- * this file directly — keep it dependency-free (the Electron preload requires it in the
- * renderer bridge context, so no electron/ Heavy imports may leak in here).
+ * One row per command. Gates (cli/check-command-bus.cjs), the renderer facade mirror and the
+ * sync-apply flush routes read this file directly — keep it dependency-free (it must stay
+ * loadable outside electron; no electron/ imports may leak in here).
  *
  * Row shape:
  *   entity     – logical entity ('todo' | 'meta' | ...)
