@@ -24,6 +24,7 @@
     "release": "node scripts/release.mjs",
     "release:finalize": "node scripts/release-finalize.mjs",
     "check:all": "node cli/check-all.js",
+    "check:fast": "node cli/check-all.js --fast",
     "smoke:ui": "node tests/ui-smoke.mjs",
     "visual:baseline": "node tests/visual-regression.mjs --baseline",
     "visual:check": "node tests/visual-regression.mjs",
