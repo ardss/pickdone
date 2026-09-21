@@ -17,15 +17,29 @@
  *  edited, an inline "content updated on another device" notice with a manual refresh button is
  *  shown instead — user input is never auto-overwritten. */
 
-const FINGERPRINT_FIELDS = ['title', 'desc', 'dateTs', 'remindTs', 'priority', 'important', 'categoryId']
+// Each entry: [panel-snapshot key, live store-row key]. The baseline is fingerprinted from the
+// panel snapshot (title/desc/dateTs/...), but checkRemoteUpdate receives the RAW todo-store row
+// (taskContent/taskDescribe/todoTime/...). Round-6 P2: comparing one vocabulary against the other
+// made every live-row fingerprint '' -fields and the own-save echo branch dead — the verdict was
+// effectively "updateTime changed", cry-wolfing the stale banner on every inbound round.
+const FINGERPRINT_FIELDS = [
+  ['title', 'taskContent'],
+  ['desc', 'taskDescribe'],
+  ['dateTs', 'todoTime'],
+  ['remindTs', 'reminderTime'],
+  ['priority', 'priority'],
+  ['important', 'important'],
+  ['categoryId', 'categoryId']
+]
 
-/** Fingerprint of the core editable fields (order-stable, tolerant of missing rows). */
+/** Fingerprint of the core editable fields (order-stable, tolerant of missing rows; accepts both
+ *  the panel snapshot shape and the raw store row). */
 export function contentFingerprint (t) {
   if (!t || typeof t !== 'object') return ''
   const parts = []
-  for (const k of FINGERPRINT_FIELDS) {
-    const v = t[k]
-    parts.push(`${k}=${v === undefined || v === null ? '' : String(v)}`)
+  for (const [panelKey, rowKey] of FINGERPRINT_FIELDS) {
+    const v = t[panelKey] !== undefined ? t[panelKey] : t[rowKey]
+    parts.push(`${panelKey}=${v === undefined || v === null ? '' : String(v)}`)
   }
   return parts.join('|')
 }

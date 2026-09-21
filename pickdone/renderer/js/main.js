@@ -105,6 +105,11 @@ store.registerModule('_rt', {
     async refreshFromDb () {
       let rows
       try { rows = await window.todoAPI.dbCall('getAll', {}) } catch (e) { console.error('[rt] read failed:', e); return }
+      // Round-6 P0: whole-table replacement (backup restore / CSV import / seed purge all funnel here).
+      // Undo entries surviving the replace carry pre-restore snapshots whose from-only delete loop would
+      // mass-tombstone the freshly restored rows on the first Ctrl+Z — and sync those deletions to the
+      // peer. Same generation guard as purgeIds/purgeAllRecycle: history must not cross a table replace.
+      store.commit('todo/historyClear')
       store.commit('todo/setAllRows', rows)
       store.dispatch('todo/computeViews').catch(e => console.warn('[rt] computeViews failed:', e))
     }

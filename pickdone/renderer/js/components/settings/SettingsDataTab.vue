@@ -284,7 +284,9 @@ export default {
       const failed = []
       const seg = (name, fn) => { try { fn() } catch (e) { console.error('[settings] restore segment failed: ' + name, e); failed.push(name) } }
       if (b.settingsState) seg('settings', () => this.$store.commit('settings/restore', JSON.parse(b.settingsState)))
-      if (b.categoryState) seg('category', () => { const c = JSON.parse(b.categoryState); if (c.list) this.$store.commit('category/setList', c.list) })
+      // setListRestore: backup-time tombstones must not win category LWW and re-delete peer-recovered
+      // categories (round-6 P2) — live restored rows still take the fresh stamp (backup wins locally)
+      if (b.categoryState) seg('category', () => { const c = JSON.parse(b.categoryState); if (c.list) this.$store.commit('category/setListRestore', c.list) })
       let habitCount = 0
       if (b.habitsState) seg('habits', () => {
         // Single writer via the store only: replaceAll already dual-writes LS+meta; writing LS directly from the component would create a second writer (dual-write ledger discipline)

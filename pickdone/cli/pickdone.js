@@ -261,9 +261,13 @@ async function main () {
       // only); any inline filters below narrow it further. With --view the absent range no longer defaults to 'today' —
       // the saved view owns the date window (an overdue/no-date view must not be clipped to today).
       const view = opts.view != null && opts.view !== true ? lib.resolveView(opts.view) : null
-      const range = ['today', 'tomorrow', 'week', 'next7d', 'overdue', 'future'].includes(first) ? first : (opts.all || view ? null : 'today')
+      const validRange = ['today', 'tomorrow', 'week', 'next7d', 'overdue', 'future'].includes(first)
+      const range = validRange ? first : (opts.all || view ? null : 'today')
       if (view && opts.on != null && opts.on !== true) throw new lib.CliError('--view and --on are mutually exclusive (--view owns the date window)', 'USAGE')
-      if (first && !range && !opts.all && !opts.on) throw new lib.CliError(`unknown range "${first}" (valid: today/tomorrow/week/next7d/overdue/future or --all or --on <date>)`)
+      // Unknown first token must throw even with --all/--view: a typo like `list tommorow` previously
+      // fell through to today's list with exit 0 (silent wrong dataset for JSON/agent consumers).
+      const hasOn = opts.on != null && opts.on !== true
+      if (first && !validRange && !hasOn) throw new lib.CliError(`unknown range "${first}" (valid: today/tomorrow/week/next7d/overdue/future or --all or --on <date>)`)
       // --on <date>: what's scheduled on one specific day (with times) — the "what should I slot at 11am tomorrow" view
       if (opts.on != null && opts.on !== true) {
         let rows = lib.listOn(opts.on)

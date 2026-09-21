@@ -195,7 +195,8 @@ const genTaskId = core.genTaskId
 function listTodos (opts = {}) {
   const q = { deleted: 0, orderBy: 'scheduledDay ASC, sort ASC' }
   // Context protection: truncate by default when no limit is given, to avoid flooding the AI's context in one shot
-  q.limit = opts.limit ? Math.min(parseInt(opts.limit, 10) || 50, 500) : 200
+  // Invalid --limit (NaN) must fall back to the same default 200 as absent, not a silent 50-row cap
+  q.limit = opts.limit ? Math.min(parseInt(opts.limit, 10) || 200, 500) : 200
   const now = dayjs()
   if (opts.done != null) q.complete = opts.done
   if (opts.category != null) q.categoryId = opts.category
@@ -1748,7 +1749,10 @@ const SETTINGS_MANIFEST = {
     // TodoBoxView c.categoryId === settings.todoBoxCategoryId) — the CLI used to declare them string and write back
     // "5" (string), which silently failed every strict-equality filter. Type fixed here; the renderer load path gets a
     // coeresion guard in parallel (double insurance, independent).
-    'newTodoCategoryId', 'todoBoxCategoryId'],
+    'newTodoCategoryId', 'todoBoxCategoryId',
+    // calendarCategory is a numeric category id in the app (DEFAULT_SETTINGS calendarCategory: 0);
+    // declaring it string made `settings list` report the wrong type (value only survived via coercion)
+    'calendarCategory'],
   enum: {
     colorMode: ['light', 'dark', 'system'],
     calendarFontSize: ['small', 'medium', 'large'],
@@ -1764,7 +1768,9 @@ const SETTINGS_MANIFEST = {
     todoBoxSortMethod: ['created', 'due', 'difficulty'],
     todoBoxSortOrder: ['desc', 'asc']
   },
-  string: ['backupDir', 'whiteNoiseAudio', 'weatherCity', 'calendarCategory', 'searchDateRange', 'searchComplete', 'searchCategory', 'maxRepeat']
+  // calendarCategory is a numeric category id in the app (DEFAULT_SETTINGS calendarCategory: 0);
+  // declaring it string made `settings list` report the wrong type (value only survived via coercion)
+  string: ['backupDir', 'whiteNoiseAudio', 'weatherCity', 'searchDateRange', 'searchComplete', 'searchCategory', 'maxRepeat']
 }
 const SETTINGS_DENIED = new Set(['securityLockPassword', 'securityLockQuestion', 'schemaV', '_savedAt'])
 
@@ -1866,7 +1872,9 @@ function planList (date) {
 }
 function planRemove (input, { date, at } = {}) {
   const t = resolveTask(input, liveTasks())
-  const day = planDayKey(date)
+  // Same default-day rule as planSet: the task's own scheduled day (plan rm after plan set must not
+  // silently target today and fail PLAN_NOT_FOUND for a future-scheduled task); explicit --date overrides
+  const day = planDayKey(date != null && date !== true ? date : (t.dayStart ? dayjs(t.dayStart).format('YYYY-MM-DD') : null))
   const arr = planRows(day).filter(r => r.taskId === t.taskId)
   if (!arr.length) throw new CliError(`task has no chips on ${day}`, 'PLAN_NOT_FOUND')
   let ids

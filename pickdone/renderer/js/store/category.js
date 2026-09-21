@@ -25,7 +25,7 @@ function loadList () {
   return list
 }
 /** camelCase -> SQLite row (same style as db.js todoToRow) */
-function toRow (c) {
+function toRow (c, { restore = false } = {}) {
   return {
     id: c.categoryId,
     userId: c.userId != null ? c.userId : 840001,
@@ -39,17 +39,22 @@ function toRow (c) {
     // D5 (2026-09-20): carry the tombstone stamp — markCascade sets deletedAt, but toRow dropped it,
     // so the DB row never saw the value. The db layer preserves an existing stamp and stamps when
     // absent; carrying the value here keeps renderer/CLI/db in one shape.
-    deletedAt: c.deletedAt || 0
+    deletedAt: c.deletedAt || 0,
+    // Round-6 P2: a restored backup carries no category timestamp, so the db layer's now-stamp made
+    // backup-time tombstones win category LWW and re-delete categories a peer has since recovered or
+    // renamed. Restored tombstones get the epoch-oldest stamp (any real peer row — live or tombstone
+    // — wins the next LWW round); live restored rows still take the now-stamp (backup wins locally).
+    updatedAt: restore && c.delete ? 1 : undefined
   }
 }
 
 /** Dual write: localStorage stays as cache/disaster recovery, SQLite is authoritative (unified CLI/UI data source) */
-function persist (list) {
+function persist (list, opts = {}) {
   safeSet(LS_KEY, JSON.stringify({ list }))
   try {
     // Failures must be visible: LS is already updated above, so a silent per-row catch meant the user
     // believed categories were saved while SQLite (the CLI-visible authority) silently diverged
-    const jobs = list.map(c => window.todoAPI.dbCall('upsertCategory', toRow(c)).catch(e => ({ err: e })))
+    const jobs = list.map(c => window.todoAPI.dbCall('upsertCategory', toRow(c, opts)).catch(e => ({ err: e })))
     Promise.all(jobs).then(results => {
       const failed = results.filter(r => r && r.err)
       if (failed.length) console.error('[category] save failed for', failed.length, 'of', list.length, 'rows:', failed[0].err)
@@ -221,6 +226,8 @@ export default {
   },
   mutations: {
     setList (state, list) { state.list = list; persist(list) },
+    // Backup-restore entry: same list replacement, but restored tombstones must not win LWW (see toRow)
+    setListRestore (state, list) { state.list = list; persist(list, { restore: true }) },
     addCategory (state, { categoryName = 'New Category', categoryColor = COLOR_PALETTE[state.list.length % COLOR_PALETTE.length], folderIs = false, folderId = 0 }) {
       state.list.push({ categoryId: nextId(), userId: 840001, categoryName, categoryColor, createTime: Date.now(), listSort: Math.max(0, ...state.list.map(c => c.listSort)) + 100, folderIs, folderId, delete: false })
       persist(state.list)
