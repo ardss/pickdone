@@ -24,11 +24,16 @@
  *                by a peer — mirrors src/main/sync-apply.js's filters, kept inline so this
  *                module stays dependency-free; the sync-apply filters remain authoritative)
  *   op         – the existing db.js op this command dispatches to (engine untouched)
+ *   internal   – optional true = NOT renderer-reachable (no facade row, todo-db:call whitelist
+ *                rejects it): main-process / CLI-surface commands added in Phase 2. The gate's
+ *                facade-mirror check compares only renderer-scope rows.
  *
  * Phase-1 scope: every op the renderer can reach through the todo-db:call whitelist.
- * Dedicated purge channels (db:purge-recycle-bin / db:purge-seed-todos) and the sync-apply
- * bulk variants (upsertCategoryMany / filterUpsertMany) stay out of the renderer surface —
- * they join the manifest in Phase 2.
+ * Phase-2 scope: the remaining non-renderer write surfaces — the CLI's write door, the main
+ * process's purge channels / critical-backup restore / reminder watermark / CLI command-slot
+ * bookkeeping, and the sync-apply bulk variants (declared here as internal commands even
+ * though the sync engine itself calls them directly — see the gate's explicit ingress
+ * exemption for src/main/sync-apply.js + src/main/lan-sync-bootstrap.js).
  */
 
 // Machine-local meta keys (mirror of sync-apply.js isMachineLocalMetaKey — the user-data
@@ -98,7 +103,18 @@ const COMMANDS = {
   'sync.pairRequest':  { entity: 'sync', verb: 'pairRequest', sync: 'local', lwwField: null, tombstone: null, op: 'syncPairRequest' },
   'sync.unpairPeer':   { entity: 'sync', verb: 'unpairPeer', sync: 'local', lwwField: null, tombstone: null, op: 'syncUnpairPeer' },
   'sync.setPeerAlias': { entity: 'sync', verb: 'setPeerAlias', sync: 'local', lwwField: null, tombstone: null, op: 'syncSetPeerAlias' },
-  'sync.conflictBackupRestore': { entity: 'sync', verb: 'conflictBackupRestore', sync: 'local', lwwField: null, tombstone: null, op: 'syncConflictBackupRestore' }
+  'sync.conflictBackupRestore': { entity: 'sync', verb: 'conflictBackupRestore', sync: 'local', lwwField: null, tombstone: null, op: 'syncConflictBackupRestore' },
+
+  // ---- Phase 2: internal (non-renderer-surface) commands ----
+  // Dangerous purge channels (db:purge-recycle-bin / db:purge-seed-todos): main-window-only IPC
+  // + the CLI's `purge` command. oplog captures per-id todo tombstones (db-oplog.js), so sync:'full'.
+  'todo.purgeBin':     { entity: 'todo', verb: 'purgeBin', sync: 'full', lwwField: null, tombstone: 'row', op: 'purgeRecycleBin', internal: true },
+  'todo.purgeSeed':    { entity: 'todo', verb: 'purgeSeed', sync: 'full', lwwField: null, tombstone: 'row', op: 'purgeSeedTodos', internal: true },
+  // Sync-apply bulk variants: called directly by the engine ingress (sync-apply.js) with
+  // wire-carried LWW stamps; declared here so every write op in db.js WRITE_OPS has a manifest
+  // row and the gate's census is total. Payloads are row arrays — the bus passes them verbatim.
+  'category.putMany':  { entity: 'category', verb: 'putMany', sync: 'full', lwwField: 'updatedAt', tombstone: 'row', op: 'upsertCategoryMany', internal: true },
+  'filter.putMany':    { entity: 'filter', verb: 'putMany', sync: 'full', lwwField: 'updatedAt', tombstone: null, op: 'filterUpsertMany', internal: true }
 }
 
 // op → command reverse index (derived, not hand-maintained). Multiple commands per op is

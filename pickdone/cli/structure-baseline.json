@@ -6,7 +6,7 @@
   "renderer/js/views/CalendarView.vue": 831,
   "renderer/js/views/StatisticsView.vue": 868,
   "cli/pickdone.js": 1352,
-  "cli/lib.js": 1992,
+  "cli/lib.js": 2000,
   "src/main/lan-sync/index.js": 1076,
   "src/main/lan-sync-bootstrap.js": 1029,
   "renderer/js/components/settings/SettingsSyncTab.vue": 661,

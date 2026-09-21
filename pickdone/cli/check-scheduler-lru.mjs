@@ -48,10 +48,11 @@ check(
   'firedReminders.clear() 在生产路径 (非 _clearStateForTest 测试 helper) 会让第 1001 条起的补发二次弹通知,这就是原 1000+clear() 漏洞'
 )
 
-// 3) Persisted to meta
+// 3) Persisted to meta (Phase-2 command bus: the persist commits through meta.put; the old
+//    direct `db.call('setMeta', [FIRED_META_KEY, …])` form stays accepted for safety)
 check(
   'firedReminders 持久化到 meta',
-  /setMeta',\s*\[FIRED_META_KEY/.test(src),
+  /commit\('meta',\s*'put',\s*\[FIRED_META_KEY/.test(src) || /setMeta',\s*\[FIRED_META_KEY/.test(src),
   '防进程崩溃后补发路径二次 fire'
 )
 

@@ -45,7 +45,10 @@ function flushFiredNow () {
     const db = require('./db.js')
     if (typeof db.call === 'function') {
       const packed = entries.map(([k, ts]) => `${k}|${ts}`).join('\x1f')
-      db.call('setMeta', [FIRED_META_KEY, packed])
+      // Phase-2 command bus (docs/refactor-command-bus.md): the watermark persist commits through
+      // meta.put like every other write. The key is machine-local (manifest localKeys), so the
+      // 'ls-mirror' subscriber skips it — the watermark never kicked sync and still must not.
+      require('./command-bus').commit('meta', 'put', [FIRED_META_KEY, packed], { preserveStamp: true })
       for (const [, v] of firedReminders) if (v) v.written = true
       _persistRetries = 0
     }

@@ -27,7 +27,15 @@ module.exports = function todoHandlers (ctx) {
   // - 'undo-barrier': our own write just touched the DB/-wal — re-baseline the external-write
   //   watcher immediately, otherwise the next poll mistakes our write for an external one
   //   (full reload + undo-stack wipe). Previously inline after db.call; semantics unchanged.
-  bus.onCommit('ls-mirror', ({ op }) => { if (notifySyncChange) notifySyncChange(op) })
+  bus.onCommit('ls-mirror', ({ row, op, payload }) => {
+    if (!notifySyncChange) return
+    // Phase 2: machine-local-key commits kick nothing — peers can never consume them
+    // (firedReminders watermark, cliSync/cliTomato command slots, sync.* bookkeeping...).
+    // The manifest's localKeys classifier is the single source for "local" here.
+    const key = Array.isArray(payload) ? payload[0] : (payload && typeof payload === 'object') ? payload.key : undefined
+    if (key != null && typeof row.localKeys === 'function' && row.localKeys(key)) return
+    notifySyncChange(op)
+  })
   bus.onCommit('undo-barrier', () => { try { const rw = resyncDbWatch(); if (rw) rw() } catch { /* best-effort */ } })
 
   // Whitelist of DB ops callable by the renderer: only reads + safe writes pass.
@@ -203,22 +211,23 @@ module.exports = function todoHandlers (ctx) {
       try {
         ids = dbm.call('queryTodos', { deleted: 1 }).map(t => t.taskId)
       } catch (err) { log.warn('[Purge] 收集回收站行失败，仅删行:', err) }
-      const r = dbm.call('purgeRecycleBin')
+      // Phase-2: the purge commits go through the command bus (todo.purgeBin manifest row) —
+      // the 'ls-mirror' hook fires the sync kick, 'undo-barrier' re-baselines the external-write
+      // watcher (our own WAL write must not surface as an external CLI write).
+      const r = bus.commit('todo', 'purgeBin')
       purgeAttachmentFiles(attachDir, ids)
       // M-4 (2026-09-20): mirror the GAP-B pattern — purge is a write; without the kick peers only
       // saw emptied recycle bins at the next 5-min periodic round.
       scheduler.reloadAll(dbApi()); broadcastTodosChanged('purgeRecycleBin', e.sender)
-      if (notifySyncChange) notifySyncChange('purgeRecycleBin')
       return r
     },
     'db:purge-seed-todos': (e) => {
       assertMainWindow(e)
       if (isLocked()) throw new Error('locked')
-      const r = dbm.call('purgeSeedTodos')
+      const r = bus.commit('todo', 'purgeSeed')
       // Symmetric with purge-recycle-bin: purging demo data also refreshes the scheduler + broadcasts (once missing → other windows kept stale seed records and scheduled reminders still fired)
-      // M-4: same sync kick parity as purge-recycle-bin (GAP-B pattern).
+      // M-4: same sync kick parity as purge-recycle-bin (GAP-B pattern, via the 'ls-mirror' hook).
       scheduler.reloadAll(dbApi()); broadcastTodosChanged('purgeSeedTodos', e.sender)
-      if (notifySyncChange) notifySyncChange('purgeSeedTodos')
       return r
     }
   }

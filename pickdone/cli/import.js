@@ -9,6 +9,15 @@
  */
 const dayjs = require('dayjs')
 const core = require('../src/main/core/todo-core.js')
+// Phase-2 command-bus write door (docs/refactor-command-bus.md): import writes commit through
+// the bus via the facade below — manifest write ops go through bus.commitOp (preserveStamp keeps
+// payloads byte-identical to the legacy db.call path), reads pass through to the real handle.
+// Same thin-alias pattern the Phase-1 preload kept for window.todoAPI.dbCall; the h7-1 guard
+// test pins the `db.call('upsertMany', rows)` literal byte-for-byte (zero-test-edit rule).
+const bus = require('../src/main/command-bus')
+const makeBusFacade = real => ({
+  call: (op, params) => bus.commandForOp(op) ? bus.commitOp(op, params, { preserveStamp: true }) : real.call(op, params)
+})
 
 class ImportError extends Error {
   constructor (message, code = 'IMPORT_ERROR') { super(message); this.code = code }
@@ -197,7 +206,7 @@ function dedupKeyOf (t) {
  */
 function importItems (items, { dryRun = false, format, category = null, useLists = true } = {}) {
   const lib = require('./lib')
-  const db = lib.open()
+  const db = makeBusFacade(lib.open())
   const row = db.call('queryTodos', { deleted: 0, limit: 1 })[0] || db.call('queryTodos', { deleted: 1, limit: 1 })[0]
   const userId = row ? row.userId : 0
 

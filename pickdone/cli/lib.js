@@ -25,6 +25,14 @@ try {
 } catch (e) { /* ignore when electron-log is not installed */ }
 
 const dbm = require('../src/main/db.js')
+// Phase-2 command-bus write door (docs/refactor-command-bus.md): every CLI write goes through
+// the bus (manifest entity/verb) — op-keyed db writes from the CLI are gone. preserveStamp: the
+// CLI derives its own row ages exactly as before; the bus must not add fields the legacy calls
+// never sent (payloads stay byte-identical, sync LWW unchanged).
+const bus = require('../src/main/command-bus')
+// open() first: several call sites used `open().call(op, …)` as their only DB touch — the bus
+// commit must keep guaranteeing an initialized handle in pure-CLI sessions.
+const commit = (entity, verb, payload) => { open(); return bus.commit(entity, verb, payload, { preserveStamp: true }) }
 const core = require('../src/main/core/todo-core.js')
 // Round-3 P1: ownership guard for attachment filenames (single source with the App's purge path,
 // src/main/handlers/shared.js — pure, electron-free).
@@ -57,7 +65,7 @@ function open () {
   const dir = userDataDir()
   dbm.init(dir)
   // One-shot tomato ledger migration (review P2 2026-09-11): the App runs tomatoMigrateFromMeta on startup, but a CLI-only session after the ledger-schema upgrade used to read an empty ledger — and worse, a CLI backfill landing rows first made the migration's table-not-empty guard throw the old meta blob ledger away forever (the blob-deletion sentinel runs regardless). Running the migration sentinel here, BEFORE any CLI write, keeps both ends converging on the same row table. Idempotent by design: "meta blob absent" is the migrated marker, so repeat calls on already-migrated DBs are no-ops.
-  try { dbm.call('tomatoMigrateFromMeta') } catch (e) { /* migration failure must not block the CLI (same tolerance as the App's startup call) */ }
+  try { commit('tomato', 'migrateFromMeta') } catch (e) { /* migration failure must not block the CLI (same tolerance as the App's startup call) */ }
   opened = true
   return dbm
 }
@@ -330,16 +338,16 @@ function setProjectFlag (input, flag) {
   const c = db.call('getAllCategories').find(x => x.categoryId === id)
   // X3: set = setMeta '1', unmark = deleteMeta (tombstone) — per-key writes never clobber a
   // peer's concurrent flag the way the old whole-doc array did. Legacy array stays untouched.
-  if (flag) db.call('setMeta', [projectFlagKey(id), '1'])
+  if (flag) commit('meta', 'put', [projectFlagKey(id), '1'])
   else {
-    db.call('deleteMeta', projectFlagKey(id))
+    commit('meta', 'delete', projectFlagKey(id))
     // Round-3 P1 (renderer parity, category.js rewriteLegacyProjectIdsWithout / U-5): unmark must
     // ALSO scrub the id from the legacy whole-doc array — getProjectIds unions both sources, so
     // the stale blob resurrected the unset project on the next read.
     try {
       const arr = JSON.parse(open().call('getMeta', PROJECT_IDS_KEY) || '[]')
       if (Array.isArray(arr) && arr.map(String).includes(String(id))) {
-        open().call('setMeta', [PROJECT_IDS_KEY, JSON.stringify(arr.filter(x => String(x) !== String(id)))])
+        commit('meta', 'put', [PROJECT_IDS_KEY, JSON.stringify(arr.filter(x => String(x) !== String(id)))])
       }
     } catch { /* corrupt blob → leave alone (renderer init heals it) */ }
   }
@@ -398,7 +406,7 @@ function addMilestone (categoryInput, title, dateInput) {
   const cat = open().call('getAllCategories').find(c => c.categoryId === categoryId)
   const added = { title: String(title).trim(), date }
   const list = msNormalize(getMilestones(categoryId).milestones.concat([added]))
-  open().call('setMeta', [MS_KEY(categoryId), JSON.stringify(list)])
+  commit('meta', 'put', [MS_KEY(categoryId), JSON.stringify(list)])
   audit.record({ action: 'milestone.add', targets: [{ taskId: 'cat:' + categoryId, content: cat ? cat.categoryName : String(categoryId) }], note: `milestone "${title.trim()}" → ${dayjs(date).format('YYYY-MM-DD')}` })
   // `added` echoes the milestone this call actually inserted (the list is date-sorted, so the CLI used to echo milestones.at(-1) — a different row whenever the new date was not the latest)
   const stored = list.find(m => m.title === added.title && m.date === added.date) || added
@@ -410,7 +418,7 @@ function removeMilestone (categoryInput, index) {
   const i = parseInt(index, 10) - 1
   if (!(i >= 0 && i < milestones.length)) throw new CliError(`milestone index out of range: ${index} (${milestones.length} total; use milestone list)`, 'MS_NOT_FOUND')
   const [removed] = milestones.splice(i, 1)
-  open().call('setMeta', [MS_KEY(categoryId), JSON.stringify(milestones)])
+  commit('meta', 'put', [MS_KEY(categoryId), JSON.stringify(milestones)])
   audit.record({ action: 'milestone.rm', targets: [{ taskId: 'cat:' + categoryId, content: removed.title }], note: 'milestone removed' })
   return { categoryId, milestones, removed }
 }
@@ -425,7 +433,7 @@ function linkMilestone (categoryInput, index, taskInput, link = true) {
   const ids = new Set(ms.taskIds || [])
   link ? ids.add(t.taskId) : ids.delete(t.taskId)
   ms.taskIds = [...ids]
-  open().call('setMeta', [MS_KEY(categoryId), JSON.stringify(milestones)])
+  commit('meta', 'put', [MS_KEY(categoryId), JSON.stringify(milestones)])
   audit.record({
     action: link ? 'milestone.link' : 'milestone.unlink',
     targets: [{ taskId: 'cat:' + categoryId, content: ms.title }, t],
@@ -450,7 +458,7 @@ function setProjectDeadline (input, dateInput) {
     }
     if (!deadline) throw new CliError(`cannot parse date: "${dateInput}" (supported: YYYY-MM-DD / today / tomorrow / +14d / none to clear)`, 'BAD_DATE')
   }
-  open().call('setMeta', [key, String(deadline)])
+  commit('meta', 'put', [key, String(deadline)])
   audit.record({
     action: 'project.deadline',
     targets: [{ taskId: 'cat:' + id, content: cat ? cat.categoryName : String(id) }],
@@ -484,13 +492,13 @@ function setProjectStatus (input, status) {
   const name = cat ? cat.categoryName : String(id)
   const before = explicitStatus(id)
   if (String(status || '').toLowerCase() === 'none' || status == null || status === '') {
-    open().call('deleteMeta', projectStatusKey(id))
+    commit('meta', 'delete', projectStatusKey(id))
     audit.record({ action: 'project.status', targets: [{ taskId: 'cat:' + id, content: name }], changes: [{ before: { status: before }, after: { status: 'active' } }], note: 'project status cleared (falls back to active)' })
     return { categoryId: id, name, status: 'active', cleared: true }
   }
   const next = String(status).toLowerCase()
   if (!PROJECT_STATUS_VALUES.includes(next)) throw new CliError(`--status accepts ${PROJECT_STATUS_VALUES.join('|')}|none (got "${status}")`, 'USAGE')
-  open().call('setMeta', [projectStatusKey(id), next])
+  commit('meta', 'put', [projectStatusKey(id), next])
   audit.record({ action: 'project.status', targets: [{ taskId: 'cat:' + id, content: name }], changes: [{ before: { status: before }, after: { status: next } }], note: 'project status → ' + next })
   return { categoryId: id, name, status: next }
 }
@@ -558,7 +566,7 @@ function addTodo ({ content, desc, date, reminder, category, difficulty, priorit
     todoTime,
     userId: guessUserId(), status: 'add', version: 0
   }
-  db.call('upsert', t)
+  commit('todo', 'put', t)
   const rowAfter = db.call('getById', t.taskId)
   audit.record({ action: 'add', targets: [t], changes: [{ after: rowAfter }] })
   // Tasks with an explicit time are auto-placed on the day timeline (user-finalized 2026-09-03): the reminder answers "when will you call me", the schedule chip answers "what should I do in this slot" — both are kept
@@ -613,7 +621,7 @@ function patchTodo (input, patch, { action, note } = {}) {
   if (patch.predecessors !== undefined) patch.predecessors = normalizePreds(db, t.taskId, patch.predecessors)
   const merged = { ...t, ...patch, updateTime: Date.now(), status: act }
   if (patch.todoTime !== undefined) merged.dayStart = dayStartOf(patch.todoTime)
-  db.call('upsert', merged)
+  commit('todo', 'put', merged)
   const after = db.call('getById', t.taskId)
   audit.record({ action: action || 'edit', targets: [t], changes: [{ before: t, after }], note })
   return after
@@ -665,7 +673,7 @@ function toggleComplete (input, target, { withSubtasks, completedAt } = {}) {
   }
   const patch = core.completePatch(t, { withSubtasks: cascade, completedAt })
   const merged = { ...t, ...patch, updateTime: Date.now(), status: 'update' }
-  db.call('upsert', merged)
+  commit('todo', 'put', merged)
 
   // Repeat-group renewal (the store's ensureNextRepeatInstance semantics)
   let renewed = null
@@ -707,7 +715,7 @@ function toggleComplete (input, target, { withSubtasks, completedAt } = {}) {
           todoTime: next.todoTime,
           userId: t.userId, status: 'add', version: 0
         }
-        db.call('upsert', nt)
+        commit('todo', 'put', nt)
         renewed = db.call('getById', nt.taskId)
       }
     }
@@ -736,14 +744,14 @@ function deleteTodo (input) {
 function chipsSnapshotForDelete (taskId) {
   try {
     const rows = open().call('planAll', []).filter(r => r.taskId === taskId)
-    if (rows.length) open().call('setMeta', ['planChipsSnapshot:' + taskId, JSON.stringify(rows)])
-    open().call('planDeleteTask', taskId)
+    if (rows.length) commit('meta', 'put', ['planChipsSnapshot:' + taskId, JSON.stringify(rows)])
+    commit('plan', 'deleteTask', taskId)
   } catch { /* snapshot failure must not block deletion */ }
 }
 
 /** Clear a task's schedule chips across all days (hardDelete/purge paths; db layer cascades inline — this is a defensive explicit call) */
 function chipsRemoveTask (taskId) {
-  try { open().call('planDeleteTask', taskId); return 1 } catch { return 0 }
+  try { commit('plan', 'deleteTask', taskId); return 1 } catch { return 0 }
 }
 
 /** Day-change chip migration (same semantics as the UI's moveTaskChips and the `edit --date` follow-up):
@@ -753,7 +761,7 @@ function migrateChipsOnDayChange (taskId, oldDay, newDay) {
   try {
     const ymd = ts => { const d = new Date(ts); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') }
     if (ymd(oldDay) === ymd(newDay)) return 0
-    open().call('planMoveTask', { taskId, fromDay: ymd(oldDay), toDay: ymd(newDay) })
+    commit('plan', 'moveTask', { taskId, fromDay: ymd(oldDay), toDay: ymd(newDay) })
     return 1
   } catch { return 0 }
 }
@@ -764,11 +772,11 @@ function chipsRestoreSnapshot (taskId) {
     const raw = open().call('getMeta', 'planChipsSnapshot:' + taskId)
     if (!raw) return 0
     const rows = JSON.parse(raw)
-    if (Array.isArray(rows) && rows.length) open().call('planAddMany', rows)
+    if (Array.isArray(rows) && rows.length) commit('plan', 'putMany', rows)
     // Round-3 P1: '' → deleteMeta (file-wide convention, renderer clearSnapshot parity) — a ''
     // value is NOT a tombstone here, it is a stale meta row a later task-id collision could
     // misread as an (empty) snapshot; deleteMeta propagates the removal to peers too.
-    open().call('deleteMeta', 'planChipsSnapshot:' + taskId)
+    commit('meta', 'delete', 'planChipsSnapshot:' + taskId)
     return rows.length
   } catch { return 0 }
 }
@@ -782,7 +790,7 @@ function restoreTodo (input) {
   const db = open()
   const t = resolveTask(input, recycleTasks())
   const merged = { ...t, delete: false, deletedAt: 0, updateTime: Date.now(), status: 'update' }
-  db.call('upsert', merged)
+  commit('todo', 'put', merged)
   const after = db.call('getById', t.taskId)
   try { chipsRestoreSnapshot(t.taskId) } catch { /* no snapshot = originally had no schedule */ }
   audit.record({ action: 'restore', targets: [t], changes: [{ before: t, after }] })
@@ -791,7 +799,7 @@ function restoreTodo (input) {
 
 /** Permanently empty the recycle bin (dangerous; the entry layer is responsible for confirmation). Each row is recorded before clearing, preserving the only traceable deletion evidence */
 function purgeRecycleBin () {
-  const db = open()
+  open() // ensure the DB is open — the purge commits through the bus, which resolves this same module
   const rows = recycleTasks()
   // Delete attachment files BEFORE clearing rows (files/<taskId>_<ts>_<name>, same prefix rule as the
   // App's purgeAttachmentFiles in src/main/index.js): purging rows only once left private attachments on disk
@@ -810,8 +818,8 @@ function purgeRecycleBin () {
   // Snapshot meta must die with the rows (review P2 2026-09-11): the App's purge path clears
   // planChipsSnapshot:<id>, the CLI purge left the meta behind — a later task-id collision could
   // backfill a purged task with someone else's chips, and the meta rows just leaked.
-  for (const r of rows) { try { db.call('deleteMeta', 'planChipsSnapshot:' + r.taskId) } catch { /* absent is fine */ } try { db.call('deleteMeta', ESTIMATE_KEY_PREFIX + r.taskId) } catch { /* M-11: estimate key dies with the row too */ } }
-  db.call('purgeRecycleBin')
+  for (const r of rows) { try { commit('meta', 'delete', 'planChipsSnapshot:' + r.taskId) } catch { /* absent is fine */ } try { commit('meta', 'delete', ESTIMATE_KEY_PREFIX + r.taskId) } catch { /* M-11: estimate key dies with the row too */ } }
+  commit('todo', 'purgeBin')
   audit.record({
     action: 'purge',
     changes: rows.map(r => ({ before: r })),
@@ -911,7 +919,7 @@ function writeTomatoCmd (cmd) {
   // (common in scripted AI scenarios), so a persisted counter in meta is read-modify-written instead
   // Atomic increment (+1 inside SQL): two concurrent CLI processes writing the same seq would make the App's seq dedup silently drop the second command (audit H4)
   const seq = open().call('nextCliTomatoSeq')
-  open().call('setMeta', ['cliTomatoCmd', JSON.stringify({ seq, at: Date.now(), ...cmd })])
+  commit('meta', 'put', ['cliTomatoCmd', JSON.stringify({ seq, at: Date.now(), ...cmd })])
   audit.record({ action: 'tomato.' + cmd.action, targets: cmd.taskId ? [{ taskId: cmd.taskId }] : [], changes: [], note: 'CLI tomato command (App executes and writes back cliTomatoState)' })
   return seq
 }
@@ -951,7 +959,7 @@ function tomatoLiveRemainSec (st) {
    have its waiter satisfied by a later status command's higher seq landing first. */
 function writeSyncCmd (cmd) {
   const seq = open().call('nextCliSyncSeq')
-  open().call('setMeta', ['cliSyncCmd', JSON.stringify({ seq, at: Date.now(), ...cmd })])
+  commit('meta', 'put', ['cliSyncCmd', JSON.stringify({ seq, at: Date.now(), ...cmd })])
   audit.record({ action: 'sync.' + cmd.action, targets: [], changes: [], note: 'CLI sync command (App executes and writes back cliSyncState)' })
   return seq
 }
@@ -1010,8 +1018,8 @@ function repeatOn (input, rule, count) {
     rule.repeatYearMonth = anchor.month() + 1
     rule.repeatYearMonthDay = anchor.date()
   }
-  db.call('setMeta', ['repeatRule:' + rid, JSON.stringify(rule)])
-  db.call('upsert', Object.assign({}, t, { repeatId: rid, updateTime: Date.now(), status: 'update' }))
+  commit('meta', 'put', ['repeatRule:' + rid, JSON.stringify(rule)])
+  commit('todo', 'put', Object.assign({}, t, { repeatId: rid, updateTime: Date.now(), status: 'update' }))
   // Generate subsequent instances (the first day is the current task itself), reusing the todo-core engine's expansion
   const base = t.todoTime || t.dayStart || +dayjs().startOf('day')
   // Generation cap: explicit --count wins; otherwise the App's maxRepeat setting (default 2), same as RepeatModal
@@ -1034,7 +1042,7 @@ function repeatOn (input, rule, count) {
     let subs = null
     try { subs = t.subtasks ? JSON.parse(t.subtasks) : null } catch { /* keep null */ }
     const now = Date.now()
-    db.call('upsert', {
+    commit('todo', 'put', {
       complete: false, createTime: now, delete: false,
       reminderTime: tplRem ? +dayjs(ts).hour(tplRem.hour()).minute(tplRem.minute()).second(0).millisecond(0) : 0,
       reminderOffsets: Array.isArray(t.reminderOffsets) ? t.reminderOffsets : [], reminderExtra: Array.isArray(t.reminderExtra) ? t.reminderExtra : [],
@@ -1073,15 +1081,15 @@ function repeatOff (input, all) {
         // version: 0 (deleteTodo parity, 2026-09-12 P3): syncTodos excludes delete rows already acked
         // with version > 0, so keeping the old version meant the soft-deleted repeat instances never
         // re-entered the sync snapshot and the deletion silently never propagated.
-        open().call('upsert', Object.assign({}, x, { delete: 1, deletedAt: now, updateTime: now, version: 0, status: 'delete' }))
+        commit('todo', 'put', Object.assign({}, x, { delete: 1, deletedAt: now, updateTime: now, version: 0, status: 'delete' }))
         chipsSnapshotForDelete(x.taskId) // same snapshot→clear cascade as deleteTodo: soft-deleted instances must not leave orphan chips
         removed++
       }
     }
     // Fix (2026-09-19): '' → deleteMeta (file-wide convention) so the rule row is actually removed.
-    open().call('deleteMeta', 'repeatRule:' + rid)
+    commit('meta', 'delete', 'repeatRule:' + rid)
   }
-  open().call('upsert', Object.assign({}, t, { repeatId: null, updateTime: Date.now(), status: 'update' }))
+  commit('todo', 'put', Object.assign({}, t, { repeatId: null, updateTime: Date.now(), status: 'update' }))
   audit.record({ action: 'repeat.off', targets: [t], changes: [{ before: { rid } }], note: all ? 'repeat group dissolved (soft-deleted ' + removed + ' future instance(s))' : 'left repeat group (this instance only)' })
   return { rid, removed }
 }
@@ -1124,7 +1132,7 @@ function addCategory (name, { color, parent, folder } = {}) {
     createTime: Date.now(), listSort: Math.max(0, ...cats.map(c => c.listSort)) + 100,
     folderIs: !!folder, folderId: parentId, delete: false
   }
-  db.call('upsertCategory', catToRow(cat))
+  commit('category', 'put', catToRow(cat))
   audit.record({ action: 'category.add', targets: [], changes: [{ after: { name, id: cat.categoryId } }], note: (folder ? 'folder' : 'category') + ' created' })
   return cat
 }
@@ -1134,7 +1142,7 @@ function renameCategory (input, nextName) {
   const cat = db.call('getAllCategories').find(c => c.categoryId === id)
   if (db.call('getAllCategories').some(c => c.categoryId !== id && c.categoryName === nextName)) throw new CliError('category "' + nextName + '" already exists', 'CATEGORY_EXISTS')
   const updated = Object.assign({}, cat, { categoryName: nextName })
-  db.call('upsertCategory', catToRow(updated))
+  commit('category', 'put', catToRow(updated))
   audit.record({ action: 'category.rename', targets: [], changes: [{ before: { name: cat.categoryName }, after: { name: nextName } }], note: 'category renamed' })
   return updated
 }
@@ -1151,7 +1159,7 @@ function deleteCategory (input) {
     const mark = pid => { all.filter(c => c.folderId === pid).forEach(c => { victims.push(c); if (c.folderIs) mark(c.categoryId) }) }
     mark(id)
   }
-  for (const c of victims) db.call('upsertCategory', catToRow(Object.assign({}, c, { delete: true })))
+  for (const c of victims) commit('category', 'put', catToRow(Object.assign({}, c, { delete: true })))
   // Round-3 P1 (U-4 parity with renderer category.js backupThenClearProjectMeta): back up the
   // project meta surfaces into `catProjectMetaBak.<id>` BEFORE clearing them — the UI's recover
   // path restores exactly this blob, and the CLI used to hard-delete the keys with no backup,
@@ -1167,24 +1175,24 @@ function deleteCategory (input) {
       milestones: safeGetMeta(MS_KEY(vid)) || ''
     }
     if (blob.flag || blob.status || blob.deadline || blob.milestones) {
-      db.call('setMeta', [catMetaBakKey(vid), JSON.stringify(blob)])
+      commit('meta', 'put', [catMetaBakKey(vid), JSON.stringify(blob)])
     }
   }
   // A deleted category must not linger as a project: X3 flag keys are removed per victim; the
   // legacy whole-doc array (read fallback) is pruned only when it actually lost an id.
-  for (const v of victims) { try { db.call('deleteMeta', projectFlagKey(v.categoryId)) } catch { /* absent is fine */ } }
+  for (const v of victims) { try { commit('meta', 'delete', projectFlagKey(v.categoryId)) } catch { /* absent is fine */ } }
   let legacyIds = []
   try { const a = JSON.parse(open().call('getMeta', PROJECT_IDS_KEY) || '[]'); if (Array.isArray(a)) legacyIds = a } catch { /* corrupt → leave alone */ }
   const pruned = legacyIds.filter(x => !victims.some(v => String(v.categoryId) === String(x)))
-  if (pruned.length !== legacyIds.length) db.call('setMeta', [PROJECT_IDS_KEY, JSON.stringify(pruned)])
+  if (pruned.length !== legacyIds.length) commit('meta', 'put', [PROJECT_IDS_KEY, JSON.stringify(pruned)])
   for (const v of victims) {
-    try { db.call('deleteMeta', projectFlagKey(v.categoryId)) } catch { /* absent is fine */ }
-    try { db.call('deleteMeta', 'projectDeadline:' + v.categoryId) } catch { /* absent is fine */ }
+    try { commit('meta', 'delete', projectFlagKey(v.categoryId)) } catch { /* absent is fine */ }
+    try { commit('meta', 'delete', 'projectDeadline:' + v.categoryId) } catch { /* absent is fine */ }
     // same lifecycle cleanup for the explicit status meta (review P2 2026-09-11): a later category id
     // reuse would inherit the deleted project's stale status on both ends (key = projectStatus:<id>)
-    try { db.call('deleteMeta', projectStatusKey(v.categoryId)) } catch { /* absent is fine */ }
+    try { commit('meta', 'delete', projectStatusKey(v.categoryId)) } catch { /* absent is fine */ }
     // milestones die with the deletion too (backed up above — renderer parity backupThenClearProjectMeta)
-    try { db.call('deleteMeta', MS_KEY(v.categoryId)) } catch { /* absent is fine */ }
+    try { commit('meta', 'delete', MS_KEY(v.categoryId)) } catch { /* absent is fine */ }
   }
   audit.record({ action: 'category.delete', targets: [], changes: [{ before: { names: victims.map(v => v.categoryName) } }], note: 'category soft-deleted (recoverable in UI), tasks kept' })
   return { deleted: victims.map(v => ({ id: v.categoryId, name: v.categoryName })) }
@@ -1219,7 +1227,7 @@ function moveCategory (input, parentInput) {
     if (cat.folderIs) throw new CliError(`"${cat.categoryName}" is a folder: the App renders folders as roots only (nested folders are dropped from the sidebar), so folder→folder moves are rejected`, 'CATEGORY_NESTED_FOLDER')
     parentId = pid
   }
-  db.call('upsertCategory', catToRow(Object.assign({}, cat, { folderId: parentId })))
+  commit('category', 'put', catToRow(Object.assign({}, cat, { folderId: parentId })))
   audit.record({
     action: 'category.move',
     targets: [{ taskId: 'cat:' + id, content: cat.categoryName }],
@@ -1443,7 +1451,7 @@ function viewAdd (name, { category, priority, overdue, nodate } = {}) {
   const modes = [overdue ? 'overdue' : null, nodate ? 'none' : null].filter(Boolean)
   if (modes.length > 1) throw new CliError('--overdue and --nodate are mutually exclusive (both set the date condition)', 'USAGE')
   if (modes.length) conds.dateMode = modes[0]
-  const id = open().call('filterUpsert', { name: clean, conds, sort: 0 })
+  const id = commit('filter', 'put', { name: clean, conds, sort: 0 })
   audit.record({ action: 'view.add', targets: [], changes: [{ after: { id, name: clean, conds } }], note: 'saved view created (same filters table as the App smart lists)' })
   return { id, name: clean, conds, sort: 0 }
 }
@@ -1451,7 +1459,7 @@ function viewAdd (name, { category, priority, overdue, nodate } = {}) {
 /** Remove a saved view by name or id */
 function viewRm (input) {
   const v = resolveView(input)
-  open().call('filterDelete', v.id)
+  commit('filter', 'delete', v.id)
   audit.record({ action: 'view.rm', targets: [], changes: [{ before: { id: v.id, name: v.name, conds: v.conds } }], note: 'saved view removed' })
   return { id: v.id, name: v.name }
 }
@@ -1528,7 +1536,7 @@ function backfillRecord ({ taskId = null, content = '', date, at = '20:00', minu
   }
   // Single-row CLI path fails fast: a rejected row (bad at → NaN endTime etc.) must not print success
   // or write audit. Row-level tolerance ({accepted, rejected}) is for the renderer's batch queue.
-  const res = open().call('tomatoAppendMany', rec)
+  const res = commit('tomato', 'appendMany', rec)
   if (res && Array.isArray(res.rejected) && res.rejected.length) {
     throw new CliError('backfill rejected: ' + res.rejected.map(r => r.reason).join(', '), 'LEDGER_REJECT')
   }
@@ -1548,9 +1556,9 @@ function migrateLegacyEstimateBlob () {
   try { map = JSON.parse(legacy) || {} } catch { /* corrupt → drop */ }
   for (const [taskId, v] of Object.entries(map)) {
     const n = Math.max(0, Math.min(20, Math.round(Number(v) || 0)))
-    if (n > 0) open().call('setMeta', [estimateKey(taskId), String(n)])
+    if (n > 0) commit('meta', 'put', [estimateKey(taskId), String(n)])
   }
-  open().call('deleteMeta', 'tomatoEstimateState')
+  commit('meta', 'delete', 'tomatoEstimateState')
   return map
 }
 function setEstimate (input, n) {
@@ -1558,10 +1566,10 @@ function setEstimate (input, n) {
   const v = Math.max(0, Math.min(20, Math.round(Number(n) || 0)))
   const legacy = migrateLegacyEstimateBlob()
   // Setting = setMeta plain integer string; clearing = deleteMeta (tombstone propagates the removal)
-  if (v > 0) open().call('setMeta', [estimateKey(t.taskId), String(v)])
-  else open().call('deleteMeta', estimateKey(t.taskId))
+  if (v > 0) commit('meta', 'put', [estimateKey(t.taskId), String(v)])
+  else commit('meta', 'delete', estimateKey(t.taskId))
   // Timestamp convention mirrors the renderer's tomatoEstimate/initFromDb: when meta is newer it takes over LS at startup (otherwise CLI writes get clobbered by the UI's stale LS)
-  open().call('setMeta', ['tomatoEstimateStateAt', String(Date.now())])
+  commit('meta', 'put', ['tomatoEstimateStateAt', String(Date.now())])
   audit.record({ action: 'edit', targets: [t], changes: [{ before: { tomatoEstimate: getEstimateOf(t.taskId, legacy && legacy[t.taskId]) }, after: { tomatoEstimate: v || null } }], note: 'tomato estimate set to ' + (v || '(none)') })
   return { taskId: t.taskId, content: t.taskContent, tomatoEstimate: v }
 }
@@ -1667,7 +1675,7 @@ function recordFix (ref, { minutes, date, at, rest, succeed, task, free }) {
   }
   if (free === true) patch.focusTaskId = null
   else if (task) patch.focusTaskId = resolveTask(task, liveTasks()).taskId
-  const ok = open().call('tomatoUpdateById', { tomatoId: rec.tomatoId, patch })
+  const ok = commit('tomato', 'updateById', { tomatoId: rec.tomatoId, patch })
   if (!ok) throw new CliError('record vanished from ledger: ' + rec.tomatoId, 'RECORD_NOT_FOUND')
   audit.record({ action: 'tomato.record-fix', targets: [], changes: [{ before: rec, after: Object.assign({}, rec, patch) }], note: 'CLI record fix (ledger row direct)' })
   return { rec: Object.assign({}, rec, patch) }
@@ -1676,7 +1684,7 @@ function recordFix (ref, { minutes, date, at, rest, succeed, task, free }) {
 /** Delete an erroneous focus record (ledger row direct — the UI entry card deletes via the same op) */
 function recordRemove (ref) {
   const rec = resolveRecord(ref)
-  open().call('tomatoRemoveByIds', [rec.tomatoId])
+  commit('tomato', 'removeByIds', [rec.tomatoId])
   audit.record({ action: 'tomato.record-remove', targets: [], changes: [{ before: rec, after: null }], note: 'CLI record remove (ledger row direct)' })
   return { rec }
 }
@@ -1830,7 +1838,7 @@ function settingsSet (key, value, { force = false } = {}) {
   fresh[key] = v
   fresh._savedAt = Date.now()
   fresh.schemaV = fresh.schemaV || 1
-  open().call('setMeta', ['db.settingsState', JSON.stringify(fresh)])
+  commit('meta', 'put', ['db.settingsState', JSON.stringify(fresh)])
   audit.record({ action: 'settings.set', targets: [], changes: [{ before: { [key]: before }, after: { [key]: v } }], note: 'setting "' + key + '" changed (hot-synced to running App, applied on launch otherwise)' })
   return { key, value: v, previous: before }
 }
@@ -1851,8 +1859,8 @@ function planSet (input, mm, { date, replace } = {}) {
   const day = planDayKey(date != null && date !== true ? date : (t.dayStart ? dayjs(t.dayStart).format('YYYY-MM-DD') : null))
   const existing = planRows(day).filter(r => r.taskId === t.taskId)
   if (!replace && existing.some(r => r.mm === mm)) throw new CliError(`task already has a chip at ${mm} (plan list to inspect, --replace to rebuild)`, 'PLAN_EXISTS')
-  if (replace && existing.length) open().call('planDeleteTaskDay', { taskId: t.taskId, day })
-  open().call('planAddMany', [{ taskId: t.taskId, day, mm }])
+  if (replace && existing.length) commit('plan', 'deleteTaskDay', { taskId: t.taskId, day })
+  commit('plan', 'putMany', [{ taskId: t.taskId, day, mm }])
   const chips = planRows(day).filter(r => r.taskId === t.taskId).map(r => r.mm).sort() // re-read actual state so the audit stays faithful
   audit.record({ action: 'plan.set', targets: [t], changes: [{ after: { day, chips } }], note: 'scheduled on the day timeline at ' + mm })
   return { taskId: t.taskId, content: t.taskContent, day, chips }
@@ -1885,7 +1893,7 @@ function planRemove (input, { date, at } = {}) {
   } else {
     ids = arr.map(r => r.id)
   }
-  open().call('planRemoveIds', ids)
+  commit('plan', 'removeIds', ids)
   audit.record({ action: 'plan.remove', targets: [t], changes: [{ before: { day, removed: ids.length } }], note: 'timeline chips removed' })
   return { taskId: t.taskId, day, removed: ids.length }
 }
@@ -1966,7 +1974,7 @@ function listReady (categoryId = null) {
 const attachApi = require('./lib-attachments.cjs')
 const { addAttachment, listAttachments, removeAttachment } = attachApi({ resolveTask, liveTasks, patchTodo, userDataDir, CliError })
 module.exports = {
-  CliError, open, parseDate, dayStartOf, launchApp, userDataDir, hasIsolationEnv, guessUserId,
+  CliError, commit, open, parseDate, dayStartOf, launchApp, userDataDir, hasIsolationEnv, guessUserId,
   liveTasks, recycleTasks, resolveTask, resolveCategory,
   parsePredecessors, getTask, listReady,
   listTodos, getCategories, stats, overview,
