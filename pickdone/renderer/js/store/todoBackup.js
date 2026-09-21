@@ -14,7 +14,7 @@ export const SCHEMA_V = 1
 
 /* Single source for every backup dump (event/auto/critical). Previously hand-copied 3× and already drifting —
    a recovery dump missing a field means silently losing data on restore, so any new store goes here once. */
-export function buildBackupDump (rootState, state, { stripVolatileSettings = false } = {}) {
+export function buildBackupDump (rootState, state, { stripVolatileSettings = false, planState = null } = {}) {
   const settings = { ...rootState.settings }
   if (stripVolatileSettings) { settings.autoBackupLastAt = 0; settings.tomatoRecordAddCount = 0; settings.tomatoRecordAddDate = 0 } // strip volatile timestamps so content dedupe stays effective
   return {
@@ -33,16 +33,31 @@ export function buildBackupDump (rootState, state, { stripVolatileSettings = fal
       // 账本行集随份走(blob 已被掏空,不含记录;恢复端按行表幂等回灌)——无它则 JSON 灾备恢复任务回而专注账全丢
       tomatoRecords: JSON.stringify(rootState.tomato && rootState.tomato.tomatoRecordList || []),
       categoryState: JSON.stringify({ schemaV: SCHEMA_V, list: rootState.category.list }),
-      habitsState: JSON.stringify({ schemaV: SCHEMA_V, habits: rootState.habits.habits, moments: rootState.habits.moments, savedAt: rootState.habits.savedAt || 0 })
+      habitsState: JSON.stringify({ schemaV: SCHEMA_V, habits: rootState.habits.habits, moments: rootState.habits.moments, savedAt: rootState.habits.savedAt || 0 }),
+      // D6-F14: saved filters were never in dumps — a JSON disaster recovery wiped every smart list
+      filterState: JSON.stringify({ schemaV: SCHEMA_V, list: (rootState.filters && rootState.filters.list) || [] }),
+      // D6-F14: schedule chips live in SQLite (plan_chips), not in vuex state — callers pass the
+      // freshly-read rows via collectPlanState(); undefined segments are dropped by JSON.stringify
+      planState: planState || undefined
     }
   }
+}
+
+/** D6-F14: read the plan_chips rows at dump time (async storage — callers must await this and pass
+ *  the segment into buildBackupDump). Chips were never in dumps before: restoring a backup silently
+ *  dropped every schedule chip while tasks came back. */
+export async function collectPlanState () {
+  try {
+    const rows = await window.todoAPI.dbCall('planAll', [])
+    return JSON.stringify({ schemaV: SCHEMA_V, chips: Array.isArray(rows) ? rows : [] })
+  } catch (e) { return null } // degraded host: omit the segment rather than fail the whole dump
 }
 
 /** Event snapshot before dangerous operations: reason such as purge/import/restore, filename evt-<reason>-*.json */
 export async function writeEventBackupCore (ctx, { state, rootState }, reason) {
   try {
     if (!window.todoAPI || !window.todoAPI.runAutoBackup) return false
-    const dump = buildBackupDump(rootState, state)
+    const dump = buildBackupDump(rootState, state, { planState: await collectPlanState() })
     await window.todoAPI.runAutoBackup(JSON.stringify(dump), { tag: String(reason || 'op').toLowerCase(), eventKeep: 10, backupDir: rootState.settings.backupDir || '' })
   } catch (e) { console.error('[event-backup] failed:', e && e.message) }
 }
@@ -51,7 +66,7 @@ export async function writeEventBackupCore (ctx, { state, rootState }, reason) {
 export async function writeAutoBackupCore (ctx, { state, rootState }) {
   try {
     if (!window.todoAPI || !window.todoAPI.runAutoBackup) return
-    const dump = buildBackupDump(rootState, state, { stripVolatileSettings: true })
+    const dump = buildBackupDump(rootState, state, { stripVolatileSettings: true, planState: await collectPlanState() })
     const r = await window.todoAPI.runAutoBackup(JSON.stringify(dump), { recent: rootState.settings.autoBackupKeep || 24, backupDir: rootState.settings.backupDir || '' })
     if (r && r.ok) saveRuntime({ autoBackupLastAt: Date.now() })
     else saveRuntime({ autoBackupLastAt: 0 }) // retry next time on failure
@@ -66,10 +81,11 @@ export function writeCriticalBackupCore (ctx, { state, rootState }) {
   try {
     if (typeof window !== 'undefined' && window.location && window.location.hash && /__tomato-float|__quick-add/.test(window.location.hash)) return
   } catch { /* non-browser env */ }
-  const buildDump = () => buildBackupDump(rootState, state)
+  const buildDump = async () => buildBackupDump(rootState, state, { planState: await collectPlanState() })
   const writeNow = () => {
     try {
-      const p = window.todoAPI.writeCriticalStateBackup(JSON.stringify(buildDump()))
+      // D6-F14: chips read is async — the write becomes a promise chain (fire-and-forget as before)
+      const p = Promise.resolve(buildDump()).then(d => window.todoAPI.writeCriticalStateBackup(JSON.stringify(d)))
       if (p && typeof p.catch === 'function') p.catch(e => console.error('[todo] critical backup write failed:', e))
     } catch {}
   }

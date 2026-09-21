@@ -257,3 +257,33 @@ test('[F12] QuickAddPage persists the draft on Esc and restores it on reopen', (
   assert.ok(/getItem\(DRAFT_KEY\)[\s\S]{0,200}qa\.text = draft/.test(src), 'reopen restores the draft into the input')
   assert.ok(/onCreated[\s\S]{0,200}removeItem\(DRAFT_KEY\)/.test(src), 'a successful creation consumes the draft')
 })
+
+/* ---------- [F14] backup dump/restore carries plan chips + saved filters ---------- */
+
+test('[F14] buildBackupDump includes planState + filterState; writers read chips at dump time', async () => {
+  const filters = [{ id: 3, name: 'work', conds: { catId: 1 } }]
+  const { buildBackupDump, collectPlanState } = await import('../../../renderer/js/store/todoBackup.js')
+  const rootState = {
+    settings: {}, auth: { user: null, lastLoginRecord: null },
+    tomato: { tomatoRecordList: [] }, category: { list: [] },
+    habits: { habits: [], moments: [], savedAt: 0 },
+    filters: { list: filters }
+  }
+  const state = { search: '', todoList: [], recycleList: [], version: 0, remoteVersion: 0, todayTimestamp: 0, ignoreReminder: false, todosVersion: 0 }
+  if (!globalThis.window.location) globalThis.window.location = { hash: '' }
+  globalThis.window.localStorage = globalThis.window.localStorage || { getItem: () => null }
+  const dump = buildBackupDump(rootState, state, { planState: JSON.stringify({ schemaV: 1, chips: [] }) })
+  const segs = dump.backup
+  assert.ok(segs.filterState && JSON.parse(segs.filterState).list.length === 1, 'saved filters ride the dump')
+  assert.ok(segs.planState && JSON.parse(segs.planState).chips, 'plan chips segment included when provided')
+  assert.ok(buildBackupDump(rootState, state).backup.planState === undefined, 'planState absent when the caller could not read chips (dropped by JSON.stringify)')
+  assert.equal(typeof collectPlanState, 'function', 'collectPlanState exported for async chip reads')
+})
+
+test('[F14] restore pipeline consumes filterState + planState segments (source anchors)', () => {
+  const src = read('renderer/js/components/settings/SettingsDataTab.vue')
+  assert.ok(src.includes('restoreSavedFilters') && src.includes("commitCommand('filter', 'putMany'"), 'filters re-put idempotently by id')
+  assert.ok(src.includes('restorePlanChips') && src.includes("commitCommand('plan', 'putMany'"), 'chips re-put idempotently by id')
+  assert.ok(src.includes('day-plans-changed'), 'DayRail is pinged to reload after a chip restore')
+  assert.ok(/failed\.push\('filters'\)/.test(src) && /failed\.push\('planChips'\)/.test(src), 'segment failures are reported honestly')
+})

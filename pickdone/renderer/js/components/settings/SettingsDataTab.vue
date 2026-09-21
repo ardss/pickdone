@@ -305,9 +305,33 @@ export default {
       }
       // 回收站行与专注账本同份同回(此前 UI 恢复只进 todoList,同一份 dump 走启动灾备却能全回——两端语义割裂)
       try { await this.restoreTomatoLedger(b) } catch (e) { console.error('[settings] restore segment failed: tomato', e); failed.push('tomato') }
+      // D6-F14: saved filters + schedule chips ride the same dump (id-keyed idempotent re-put, like
+      // the tomato ledger) — a JSON disaster restore used to wipe every smart list and plan chip
+      try { await this.restoreSavedFilters(b) } catch (e) { console.error('[settings] restore segment failed: filters', e); failed.push('filters') }
+      try { await this.restorePlanChips(b) } catch (e) { console.error('[settings] restore segment failed: planChips', e); failed.push('planChips') }
       this.$store.dispatch('_rt/refreshFromDb')
       this.$store.dispatch('tomato/recordsReload').catch(e => console.error('[settings] tomato/recordsReload after restore failed:', e))
       this.reportRestoreResult(rows.length + habitCount, failed) // F6: habits counted honestly
+    },
+    // D6-F14: saved filters 回灌——按 id 幂等 re-put(filter.putMany upsert),随后以 DB 行表为准刷新内存列表
+    async restoreSavedFilters (b) {
+      if (!b.filterState) return
+      const fseg = typeof b.filterState === 'string' ? JSON.parse(b.filterState) : b.filterState
+      const list = (Array.isArray(fseg.list) ? fseg.list : []).filter(f => f && f.id != null)
+      if (list.length) {
+        await commitCommand('filter', 'putMany', list)
+        this.$store.commit('filters/setList', await window.todoAPI.dbCall('filterList'))
+      }
+    },
+    // D6-F14: schedule chips 回灌——行级幂等 re-put(plan.putMany upsert),缺 taskId/day/id 的行跳过不拖批
+    async restorePlanChips (b) {
+      if (!b.planState) return
+      const pseg = typeof b.planState === 'string' ? JSON.parse(b.planState) : b.planState
+      const chips = (Array.isArray(pseg.chips) ? pseg.chips : []).filter(c => c && c.id != null && c.taskId && c.day)
+      if (chips.length) {
+        await commitCommand('plan', 'putMany', chips)
+        try { window.dispatchEvent(new CustomEvent('day-plans-changed')) } catch { /* DayRail refresh is cosmetic */ }
+      }
     },
     // 账本回灌:行表幂等 UPSERT,缺 tomatoId/endTime 的行跳过不拖批(与主进程 dbRecovery 同规则)
     async restoreTomatoLedger (b) {
