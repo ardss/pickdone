@@ -218,7 +218,7 @@ export default {
         // Catastrophic failure (rule persistence / unexpected throw): never leave the modal stuck open
         console.error('[repeat] generate failed:', e)
         this.$store.commit('ui/askRepeatEdit', null)
-        try { this.$message.error(this.$t('statsD.RepeatModal.partialFail', { failed: dates.length, total: dates.length })) } catch (err) { /* toast is best-effort */ }
+        try { this.$message.error(this.$t('statsD.RepeatModal.partialFail', { made: 0, failed: dates.length, total: dates.length })) } catch (err) { /* toast is best-effort */ }
       } finally { this.generating = false }
     },
     close () { this.$store.commit('ui/askRepeatEdit', null) }
