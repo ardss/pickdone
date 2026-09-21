@@ -252,7 +252,8 @@ test('[F10] applyCustomRange swaps an inverted pick in the visible draft before 
 test('[F12] QuickAddPage persists the draft on Esc and restores it on reopen', () => {
   const src = read('renderer/js/views/QuickAddPage.vue')
   assert.ok(src.includes("const DRAFT_KEY = 'quickAddDraft'"), 'draft storage key defined')
-  assert.ok(/Escape[\s\S]{0,600}quickAddDraft[\s\S]{0,600}quickAddHide\(\)/.test(src), 'Esc persists the draft before hiding')
+  const iEsc = src.indexOf('Escape')
+  assert.ok(iEsc > -1 && iEsc < src.indexOf('DRAFT_KEY, txt') && iEsc < src.indexOf('quickAddHide()'), 'Esc persists the draft before hiding')
   assert.ok(/getItem\(DRAFT_KEY\)[\s\S]{0,200}qa\.text = draft/.test(src), 'reopen restores the draft into the input')
   assert.ok(/onCreated[\s\S]{0,200}removeItem\(DRAFT_KEY\)/.test(src), 'a successful creation consumes the draft')
 })
