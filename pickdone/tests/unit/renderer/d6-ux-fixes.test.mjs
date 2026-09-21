@@ -246,3 +246,13 @@ test('[F10] applyCustomRange swaps an inverted pick in the visible draft before 
     'inverted draft is swapped in place (visible selection matches the applied range)')
   assert.ok(body.indexOf('isBefore') < body.indexOf('customDraftDays > CUSTOM_MAX_DAYS'), 'swap happens BEFORE the cap check')
 })
+
+/* ---------- [F12] quick-add window: draft survives Esc-hide (anchor) ---------- */
+
+test('[F12] QuickAddPage persists the draft on Esc and restores it on reopen', () => {
+  const src = read('renderer/js/views/QuickAddPage.vue')
+  assert.ok(src.includes("const DRAFT_KEY = 'quickAddDraft'"), 'draft storage key defined')
+  assert.ok(/Escape[\s\S]{0,600}quickAddDraft[\s\S]{0,600}quickAddHide\(\)/.test(src), 'Esc persists the draft before hiding')
+  assert.ok(/getItem\(DRAFT_KEY\)[\s\S]{0,200}qa\.text = draft/.test(src), 'reopen restores the draft into the input')
+  assert.ok(/onCreated[\s\S]{0,200}removeItem\(DRAFT_KEY\)/.test(src), 'a successful creation consumes the draft')
+})
