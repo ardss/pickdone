@@ -346,7 +346,8 @@ export default {
       if (ui.showSettingsModal || ui.showRepeatModalFor || ui.showFeedbackModal ||
           ui.showRepeatDeleteConfirm || ui.accountTaskId || ui.tomatoAbandonVisible || ui.tomatoFocusRecordVisible) return
       const st = this.$store.state.ui.rightSidebarTodoEdit
-      if (st && st.visible) this.$store.commit('ui/closeEdit')
+      // D6-F1: cleanup-aware close — an inline-created (calendar) task still empty on Esc is soft-deleted
+      if (st && st.visible) this.$store.dispatch('ui/closeEditCleanup')
     }
     window.addEventListener('keydown', this._onKeydown)
     // Disable the browser's native spell check (English correction squiggles interfere with typing over Chinese content)
@@ -455,12 +456,13 @@ export default {
     },
     close () {
       if (!this.autoSave) this.queueSave({})
-      this.$store.commit('ui/closeEdit')
+      // D6-F1: cleanup-aware close (see Esc handler)
+      this.$store.dispatch('ui/closeEditCleanup')
     },
     // Collapse is not close: the edit state is kept, collapsing into a thin strip on the right edge that can be expanded again
     collapse () {
       if (!this.autoSave) this.queueSave({})
-      this.$store.commit('ui/collapseEdit')
+      this.$store.dispatch('ui/collapseEditCleanup')
       // Hand focus back to the task row being edited (keyboard users would otherwise drop to <body>); rows don't carry data-id yet, so fall back to the scroll container (focusable via tabindex=-1)
       this.$nextTick(() => {
         const id = this.e && this.e.taskId

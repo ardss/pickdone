@@ -57,13 +57,19 @@ export function matchTodo (todo, query, opt) {
 
 /** Highlight: safely escape per the project baseline, then wrap in <span class="search-highlight">.
  *  Input is plain-text user content: escape the whole string before highlighting (the old "HTML-tag segmented passthrough" branch let text resembling <img onerror> through,
- *  and this function is designed to feed v-html — a planted bug; passthrough removed 2026-09-02) */
+ *  and this function is designed to feed v-html — a planted bug; passthrough removed 2026-09-02)
+ *  D6 (2026-09-21): multi-term queries (whitespace-split, same split as matchTodo) highlight EACH
+ *  term — the old whole-query regex could only match the raw "milk bread" string, so nothing was
+ *  ever highlighted on a two-term search. Single-term behavior is unchanged. */
 export function highlightHTML (text, query, cls = 'search-highlight') {
   const s = escapeHtml(String(text == null ? '' : text))
-  const q = String(query || '').trim()
-  if (!q) return s
+  const terms = String(query || '').trim().split(/\s+/).filter(Boolean)
+  if (!terms.length) return s
   const esc = t => t.replace(/[.*+?${}()|[\]\\]/g, '\\$&')
-  return s.replace(new RegExp(`(${esc(escapeHtml(q))})`, 'gi'), `<span class="${cls}">$1</span>`)
+  // Terms are regex-escaped AND html-escaped (`s` is already escaped, so term occurrences only
+  // exist there in escaped form) — alternated into one pass
+  const re = new RegExp(`(${terms.map(t => esc(escapeHtml(t))).join('|')})`, 'gi')
+  return s.replace(re, `<span class="${cls}">$1</span>`)
 }
 export function escapeHtml (s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
