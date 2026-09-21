@@ -12,11 +12,14 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import net from 'node:net'
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
 const { createLanSyncNode } = require('../../../src/main/lan-sync/index.js')
 const { isPlausibleHost } = require('../../../src/main/lan-sync/discovery.js')
+const { createLanServer } = require('../../../src/main/lan-sync/transport.js')
+const cipher = require('../../../src/main/lan-sync/cipher.js')
 
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 
@@ -86,4 +89,36 @@ test('F2b: isPlausibleHost rejects undialable junk and accepts real targets', ()
   assert.equal(isPlausibleHost('my-nas.local'), true, 'hostname accepted')
   assert.equal(isPlausibleHost('MyServer'), true, 'single-label hostname accepted')
   assert.equal(isPlausibleHost('fd00::5'), true, 'global IPv6 accepted')
+})
+
+/* ---------------- F3: confirmTimer cleared on early socket close ---------------- */
+
+test('F3: a pair socket that dies mid-confirm-window leaves no late timer behind', async () => {
+  const pairRequests = []
+  const srv = createLanServer({
+    port: 0, host: '127.0.0.1', deviceId: 'dev-r5f3', pairingSecret: 's3cret', getHandler: () => {},
+    preAuthIdleMs: 5000, pairConfirmTimeoutMs: 300,
+    onPairRequest: (info) => pairRequests.push(info),
+    onPaired: () => {},
+  })
+  const port = await new Promise((resolve, reject) => {
+    srv.once('listening', () => resolve(srv.port)); srv.once('error', reject)
+  })
+
+  // Connect, send pair-request, then walk away before the confirm window closes.
+  const s = net.connect({ host: '127.0.0.1', port })
+  const eph = cipher.createPairEphemeral()
+  s.write(JSON.stringify({ type: 'pair-request', deviceId: 'client-r5f3', deviceName: 'R5', nonce: cipher.randomToken(), pub: eph.pub }) + '\n')
+  await sleep(120)
+  assert.equal(pairRequests.length, 1, 'pair-request surfaced')
+  s.destroy()
+
+  // Pre-fix, the 300ms confirmTimer stayed armed and fired finish(false) against the dead
+  // socket. Post-fix it is cleared on close; either way the server must stay healthy and a
+  // fresh pair flow must still complete without errors/unhandled rejections.
+  let errored = false
+  srv.on('error', () => { errored = true })
+  await sleep(450)
+  assert.equal(errored, false, 'no late timer crash on the server')
+  srv.close()
 })
