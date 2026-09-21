@@ -1,5 +1,6 @@
 import noisePlayer from './utils/noisePlayer.js'
 import { deleteWithUndo } from './utils/confirm.js'
+import { normalizeSortMode } from './utils/sortMode.js'
 /** Entry: assembles store/router, initializes data, mounts global capabilities
  *  Vue 3 (global build runtime): createApp bootstrap, UI layer is Element Plus */
 const Vue = window.Vue // vue3 global build (includes createApp and the runtime template compiler)
@@ -489,6 +490,18 @@ async function bootstrap () {
 
   // Shortcut action dispatch (deleteEvent/pinEvent/startPomodoro/switchTo* etc., aligned with the reference shortcutKeySettings)
   // Round-2 P1: existence-guarded like the onSecurityUnlock neighbor — a preload without the channel must not throw at boot.
+  // D6-F2: QuickAdd unmounts on statistics/calendar/search/filter (the bar is hidden there), removing
+  // its todo:focus-quickadd listener — Ctrl+N was dead on those views. When the bar is not mounted,
+  // fall back by routing to Today (which always mounts it) and focusing after the route lands.
+  const focusQuickAdd = () => {
+    if (document.querySelector('.qa-wrap')) {
+      window.dispatchEvent(new CustomEvent('todo:focus-quickadd'))
+      return
+    }
+    router.push({ name: 'todo-list-today' }).then(() => {
+      setTimeout(() => window.dispatchEvent(new CustomEvent('todo:focus-quickadd')), 120)
+    }).catch(() => {})
+  }
   if (window.todoAPI.onShortcutAction) window.todoAPI.onShortcutAction(action => {
     const selectedTaskId = () => {
       const el = document.querySelector('.td-item.selected')
@@ -503,14 +516,22 @@ async function bootstrap () {
         const id = store.state.ui.rightSidebarTodoEdit.taskId || selectedTaskId()
         const t = id && store.state.todo.todoList.find(x => x.taskId === id)
         if (t) deleteWithUndo(window.appUI, store, t).then(ok => { if (ok) store.dispatch('todo/computeViews').catch(e => console.warn('[todo] undo-refresh computeViews failed:', e)) })
+        else window.appUI && window.appUI.$message && window.appUI.$message.info(i18n.global.t('statsH.main.deleteNoSelection'))
         break
       }
       case 'pinEvent': case 'unpinEvent': {
         const id = store.state.ui.rightSidebarTodoEdit.taskId || selectedTaskId()
         const t = id && store.state.todo.todoList.find(x => x.taskId === id)
-        if (t) {
-          store.dispatch('todo/updateTodoFields', { taskId: t.taskId, patch: { taskSort: action === 'pinEvent' ? 99999.5 : -99999.5 } })
+        if (!t) break
+        // D6-F5: taskSort only drives order in the "custom" manual sort — in created/difficulty modes
+        // the pin silently did nothing visible. Announce honestly instead of a no-op write.
+        if (normalizeSortMode(store.state.settings.sortMode) !== 'custom') {
+          window.appUI && window.appUI.$message && window.appUI.$message.info(i18n.global.t('statsH.main.pinIgnoredSort'))
+          break
         }
+        const pinning = action === 'pinEvent'
+        store.dispatch('todo/updateTodoFields', { taskId: t.taskId, patch: { taskSort: pinning ? 99999.5 : -99999.5 } })
+        window.appUI && window.appUI.$message && window.appUI.$message.success(i18n.global.t(pinning ? 'statsH.main.pinned' : 'statsH.main.unpinned', { name: t.taskContent || i18n.global.t('statsJ.TodoItem.untitled') }))
         break
       }
       case 'startPomodoro': {
@@ -524,13 +545,20 @@ async function bootstrap () {
         break
       }
       case 'switchToDaytodo': router.push({ name: 'todo-list-today' }).catch(() => {}); break
-      // "Recent todos" has no dedicated non-experimental route: todo-list-today (TodayView) is the
-      // dated today list, todo-list-today-x (TodayXView, "now/next" focus experiment) is the closest
-      // match for the shortcut label — genuinely ambiguous, wired to today-x per the shortcut's
-      // "switch to recent" semantics (dev-gated; when hidden the route still resolves via router)
-      case 'switchToRecentTodos': router.push({ name: 'todo-list-today-x' }).catch(() => {}); break
+      // D6-F6: "Recent todos" was hard-wired to todo-list-today-x, which nav-gate hides for non-dev
+      // users — the shortcut teleported to a page the sidebar refuses to show. Only route to the
+      // experimental view under the same two-layer gate; everyone else lands on Today.
+      case 'switchToRecentTodos': {
+        const s = store.state.settings
+        router.push({ name: (s.developerMode && s.showTodayXModule === true) ? 'todo-list-today-x' : 'todo-list-today' }).catch(() => {})
+        break
+      }
       case 'switchToSchedule': router.push({ name: 'todo-list-calendar' }).catch(() => {}); break
       case 'switchToInbox': router.push({ name: 'todo-list-todo-box' }).catch(() => {}); break
+      // D6-F3: 'addEvent' was registered in the binding table (src/main/shortcuts.js) but never
+      // dispatched — the shortcut did nothing at all. Implement as "start inline create here":
+      // focus the quick-add bar (the current view's inline-create entry point).
+      case 'addEvent': focusQuickAdd(); break
     }
   })
   // Round-2 P1: existence-guarded (same rationale as onShortcutAction above).
@@ -545,7 +573,7 @@ async function bootstrap () {
     const inEditor = !!ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)
     if (e.ctrlKey && e.key.toLowerCase() === 'n') {
       e.preventDefault()
-      window.dispatchEvent(new CustomEvent('todo:focus-quickadd'))
+      focusQuickAdd()
     } else if (e.ctrlKey && e.key.toLowerCase() === 's') {
       e.preventDefault()
       // Key auto-repeat and in-flight sync would stack identical notifications: ignore re-triggers

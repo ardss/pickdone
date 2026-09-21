@@ -4,15 +4,18 @@
  *   [F1] calendar inline-create orphan cleanup: ui/closeEditCleanup + ui/collapseEditCleanup
  *        soft-delete the inline-created task ONLY while it is still unnamed (store-level, fake todo module)
  *   [F13] multi-term search highlights each term (not the raw whole-query string)
+ *   [F2/F3/F5/F6/F11] shortcut dispatch wiring in main.js (source anchors)
  * Run: node --test tests/unit/renderer/d6-ux-fixes.test.mjs
  */
 import '../../setup.mjs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
+const read = p => fs.readFileSync(path.join(ROOT, p), 'utf8')
 
 if (!globalThis.window.location) globalThis.window.location = { hash: '' }
 
@@ -106,4 +109,39 @@ test('[F13] highlightHTML single-term behavior unchanged; input stays escaped', 
   const evil = search.highlightHTML('<img onerror>', '<b>')
   assert.ok(!evil.includes('<b '), 'query is escaped before regex use')
   assert.ok(evil.startsWith('&lt;img'), 'text stays escaped')
+})
+
+/* ---------- [F2/F3/F5/F6/F11] shortcut dispatch wiring (source anchors; main.js boots a full app) ---------- */
+
+test('[F2/F3] Ctrl+N and addEvent route through focusQuickAdd with an unmounted-bar fallback', () => {
+  const src = read('renderer/js/main.js')
+  assert.ok(src.includes('const focusQuickAdd = () => {'), 'focusQuickAdd helper defined')
+  assert.ok(/if \(document\.querySelector\('\.qa-wrap'\)\)/.test(src), 'mounted-bar probe present')
+  assert.ok(src.includes("router.push({ name: 'todo-list-today' }).then("), 'fallback routes to Today when the bar is unmounted')
+  assert.ok(src.includes('focusQuickAdd()'), 'keydown handler delegates to the helper')
+  assert.ok(src.includes("case 'addEvent': focusQuickAdd(); break"), 'addEvent shortcut is dispatched (was a dead binding)')
+})
+
+test('[F5] pin/unpin announces state and refuses silently no-op when sort is not custom', () => {
+  const src = read('renderer/js/main.js')
+  assert.ok(src.includes("normalizeSortMode(store.state.settings.sortMode) !== 'custom'"), 'custom-sort guard present')
+  assert.ok(src.includes('statsH.main.pinIgnoredSort'), 'non-custom sort shows an info instead of a silent no-op')
+  assert.ok(src.includes('statsH.main.pinned') && src.includes('statsH.main.unpinned'), 'pin/unpin result is announced')
+})
+
+test('[F6] switchToRecentTodos respects the today-x nav gate', () => {
+  const src = read('renderer/js/main.js')
+  assert.ok(/switchToRecentTodos[\s\S]{0,200}showTodayXModule === true[\s\S]{0,120}todo-list-today-x[\s\S]{0,80}todo-list-today/.test(src),
+    'dev-gated today-x route; everyone else lands on Today')
+})
+
+test('[F11] deleteEvent with no selection shows an info instead of staying silent', () => {
+  assert.ok(read('renderer/js/main.js').includes('statsH.main.deleteNoSelection'), 'no-selection info anchor')
+})
+
+test('i18n parity: new statsH.main keys exist in BOTH zh and en shards', () => {
+  for (const k of ['deleteNoSelection', 'pinIgnoredSort', 'pinned', 'unpinned']) {
+    assert.ok(read('renderer/js/i18n/locales/zh-CN-H.js').includes(k + ':'), 'zh missing ' + k)
+    assert.ok(read('renderer/js/i18n/locales/en-US-H.js').includes(k + ':'), 'en missing ' + k)
+  }
 })
