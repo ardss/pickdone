@@ -1,5 +1,5 @@
-import { collectCascadeIds } from '../../../store/category.js'
-import { showUndoToast } from '../../../utils/undoToast.js'
+import { collectCascadeIds } from '../../store/category.js'
+import { showUndoToast } from '../../utils/undoToast.js'
 
 /** D6 (2026-09-21) F4+F5 rework of category delete — ONE shared exit for the sidebar rows and the
  *  manage-categories modal (the modal used to carry a verbatim copy that drifted):
