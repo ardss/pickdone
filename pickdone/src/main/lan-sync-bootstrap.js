@@ -146,7 +146,10 @@ function createLocalStoreAdapter () {
     /** Fresh-device path. P3a: merge-apply (non-destructive) — see header scope cuts. */
     replaceAll (rows) {
       for (const r of rows || []) applyRowSafe(r)
-      flushPendingWrites()
+      // R7-B P2: a dropped bulk write here used to vanish silently (ingest paths stamp
+      // flushFailed / throw; this path didn't). Surface the failure to the engine.
+      const flush = flushPendingWrites()
+      if (flush && flush.ok === false) throw new Error('replaceAll flush failed: ' + ((flush.error && flush.error.message) || 'unknown'))
     }
   }
 }
@@ -244,48 +247,11 @@ function persistManualPeer (entry) {
   settingPut(K_MANUAL_PEERS, JSON.stringify(list))
 }
 
-/* ---------- Round-1 P0 (2026-09-21): paired-peer persistence + address hygiene ---------- */
-/** Normalize a wire/host address to a dialable form: strip IPv4-mapped IPv6 (::ffff:a.b.c.d);
- *  return null for junk (scope-less link-local, 169.254.*, virtual ranges). */
-function normalizeHost (host) {
-  let h = String(host || '').trim()
-  if (h.startsWith('::ffff:')) h = h.slice(7)
-  return isDialableHost(h) ? h : null
-}
-function loadPairedPeers () {
-  try {
-    const v = JSON.parse(settingGet(K_PAIRED_PEERS) || '{}')
-    return (v && typeof v === 'object' && !Array.isArray(v)) ? v : {}
-  } catch { return {} }
-}
-/** Merge a peer record keyed by deviceId. Writes ONLY on a real change (connection events fire
- *  per dial — this must not turn into a settings-table write amplifier). Returns true when written. */
-function persistPairedPeer (entry) {
-  try {
-    if (!entry || !entry.deviceId || typeof entry.deviceId !== 'string') return false
-    const all = loadPairedPeers()
-    const prev = all[entry.deviceId] || {}
-    const next = {
-      deviceId: entry.deviceId,
-      name: entry.name || prev.name || entry.deviceId,
-      // ACTUAL TCP address first (the caller passes socket remote addresses), previous value as
-      // fallback; undialable junk never overwrites a working address.
-      host: normalizeHost(entry.host) || prev.host || null,
-      port: (Number.isInteger(entry.port) && entry.port > 0 && entry.port <= 65535) ? entry.port : (prev.port || DEFAULT_PORT),
-      pairedAt: prev.pairedAt || Date.now(),
-    }
-    if (prev.host === next.host && prev.port === next.port && prev.name === next.name) return false
-    all[entry.deviceId] = next
-    settingPut(K_PAIRED_PEERS, JSON.stringify(all))
-    return true
-  } catch (e) { log.warn('[LanSync] paired-peer persist failed:', e.message); return false }
-}
-function removePairedPeer (deviceId) {
-  try {
-    const all = loadPairedPeers()
-    if (all[deviceId]) { delete all[deviceId]; settingPut(K_PAIRED_PEERS, JSON.stringify(all)) }
-  } catch (e) { log.warn('[LanSync] paired-peer remove failed:', e.message) }
-}
+/* ---------- Round-1 P0 (2026-09-21): paired-peer persistence + address hygiene.
+ * Extracted to lan-sync/paired-peers.js (structure size ratchet) — settings access is
+ * injected, so the swappable module-level `state` (__test.setState) still applies. */
+const { normalizeHost, loadPairedPeers, persistPairedPeer, removePairedPeer } =
+  require('./lan-sync/paired-peers')({ settingGet, settingPut, log, isDialableHost, DEFAULT_PORT, K_PAIRED_PEERS })
 
 /** Map wrapper exposing .raw() for persistence; seeded from settings_rows so progress survives restarts. */
 function createTrackedWatermarks () {
@@ -328,10 +294,7 @@ function startSync () {
         // as applied — the rows were dropped from the buffer. Stamp the ingest result so the
         // server role keeps appliedToSeq below this segment and the sender force-arms its
         // snapshot trigger; the data remains recoverable via the next snapshot.
-        const flush = flushPendingWrites()
-        if (flush && flush.ok === false) r.flushFailed = true
-        emitAppliedRound() // P0-1: refresh open views + settings hot-apply after a round applied rows
-        return r
+        return finalizeIngest(r)
       } finally { state.applyCache = null }
     },
     ingestSnapshot: body => {
@@ -348,9 +311,7 @@ function startSync () {
         for (const r of withPeerDeviceId(body).rows || []) applyRowSafe(r)
         // P0-1: same flush-failure honesty as the streaming path — fail loudly so the watermark
         // never advances over rows that were dropped.
-        const flush = flushPendingWrites()
-        if (flush && flush.ok === false) throw new Error('snapshot flush failed (rows dropped, snapshot will retry)')
-        emitAppliedRound()
+        finalizeIngest(null, { snapshot: true })
       } finally { state.applyCache = null }
       return { rows: rows.length }
     },
@@ -366,9 +327,7 @@ function startSync () {
         // P0-1: a failed flush during a streamed snapshot must fail the ROUND (throw) — the pull
         // watermark advances only at snapshot-end, so a failed chunk keeps the watermark put and
         // the next round re-requests the (idempotent) snapshot instead of acking dropped rows.
-        const flush = flushPendingWrites()
-        if (flush && flush.ok === false) throw new Error('snapshot chunk flush failed (rows dropped, snapshot will retry)')
-        emitAppliedRound()
+        finalizeIngest(null, { snapshot: true, chunk: true })
       } finally { state.applyCache = null }
       return { rows: rows.length }
     },
@@ -538,6 +497,21 @@ function stopSyncForQuit () {
   try { if (state && state.node) stopSync().catch(() => {}) } catch { /* sync never initialized */ }
 }
 
+/* R7-B P2: the quit-time idle announce used to be written then killed by stopSyncForQuit
+ * before the debounced kick ever fired — peers saw a "running" tomato ghost until TTL.
+ * Ship the announce with an IMMEDIATE round (debounce cleared), best-effort within the
+ * will-quit flush window (500ms floor / 2s cap); the peers' TTL rule still covers a crash. */
+function shipQuitRound () {
+  try {
+    if (!state || !state.node) return false
+    clearTimeout(kickTimer)
+    kickTimer = null
+    lastKickRoundAt = Date.now()
+    runRound()
+    return true
+  } catch { return false }
+}
+
 function notifyRenderers (reason) {
   try {
     const senders = state.getWindowSenders ? state.getWindowSenders() : []
@@ -635,6 +609,24 @@ function foldSettingsIntoBlob (patch) {
   foldIntoBlob(HABITS_BLOB_KEY, habits)
   const toPatch = list => { const p = {}; for (const [k, v] of list) if (v !== undefined) p[k] = v; return p }
   return { settingsPatch: toPatch(settings), habitsPatch: toPatch(habits) }
+}
+
+/**
+ * P2-5 (round-7): shared ingest epilogue — flush the buffered writes, then (only on flush
+ * success) emit the applied round to renderers. A failed flush DROPPED the buffered rows from
+ * the DB: emitting todos-changed / external-settings-changed (and folding the settings patch
+ * into the source blobs) would show renderers data the DB does not have and let a hot-applied
+ * field into the blob diverge from the rows. The round result keeps its applied counts either
+ * way (logs / ack honesty unchanged); snapshot paths throw so the round fails (watermark safe).
+ */
+function finalizeIngest (r, { snapshot = false, chunk = false } = {}) {
+  const flush = flushPendingWrites()
+  if (flush && flush.ok === false) {
+    if (snapshot) throw new Error((chunk ? 'snapshot chunk ' : 'snapshot ') + 'flush failed (rows dropped, snapshot will retry)')
+    r.flushFailed = true
+  }
+  if (!(r && r.flushFailed)) emitAppliedRound() // P0-1: refresh open views + settings hot-apply after a round applied rows
+  return r
 }
 
 function emitAppliedRound () {
@@ -981,7 +973,7 @@ function initLanSync ({ db, getWindowSenders, resyncExternalWatch } = {}) {
   } catch (e) { log.warn('[LanSync] startup enable failed:', e.message) }
 }
 
-module.exports = { initLanSync, stopSyncForQuit, kickSyncRound, invalidateSyncWatermarks }
+module.exports = { initLanSync, stopSyncForQuit, kickSyncRound, shipQuitRound, invalidateSyncWatermarks }
 
 // Test-only hooks: applyRowInner/flushPendingWrites operate on the module-level `state` singleton;
 // unit tests swap in a mock state via __test.setState. Production paths never touch __test.
@@ -999,6 +991,7 @@ module.exports.__test = {
   loadPeerWatermarks,
   // P0-1/P1-2/P1-5 test surface: post-round applied bookkeeping -> renderer broadcasts.
   emitAppliedRound: () => emitAppliedRound(),
+  finalizeIngest,
   // P1-3 test surface: unpair deletes peer record + watermark + revokes the shared secret.
   unpairPeer: p => syncUnpairPeerOp(p),
   // Round-1 P0 test surface: paired-peer table persistence + address hygiene.

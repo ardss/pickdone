@@ -606,11 +606,15 @@ app.on('before-quit', () => {
   // synchronous (db.call); the kick ships it in a final best-effort round, and the peers' TTL rule
   // still covers a crash where the round never completes.
   try { require('./tomato-announce').announceIdleForQuit() } catch { /* announce never initialized */ }
+  // R7-B P2: ship the idle announce with an IMMEDIATE round. stopSyncForQuit used to run here,
+  // killing the node before the debounced kick fired, so the announce sat locally and peers
+  // showed our countdown as ghosts for up to the TTL window. The node now stops inside the
+  // will-quit flush window (flushNow), giving this round 500ms-2s of real runway.
+  try { require('./lan-sync-bootstrap').shipQuitRound() } catch { /* sync never initialized */ }
   // Stop the LAN sync node (round timers + TCP server + retry timers) BEFORE the quit-flush window
   // closes the DB. Fire-and-forget: stopSync kicks the async server close off immediately and the
   // bootstrap's settings persists (peer watermarks / security log) run synchronously via db.call,
   // so nothing of sync's outlives the will-quit DB close (2026-09-18 P2 lifecycle fix).
-  try { require('./lan-sync-bootstrap').stopSyncForQuit() } catch { /* sync never initialized */ }
   // Before quitting, broadcast the renderer flush of debounced mirrors (the last write within dbMirror's 2s / disaster-snapshot 800ms window would be silently lost)
   // 2026-09-10 P1: previously only the main window was notified — the float window's pending pomodoro
   // ledger (and the whole broadcast when the main window was already destroyed, e.g. X-close→tray→quit)
@@ -682,6 +686,9 @@ app.on('will-quit', (event) => {
     try { shortcuts.unregisterAll() } catch {}
     // Persist the reminder dedup ledger synchronously (quitting inside the 60s debounce window → reminders resent after restart) + close the db handle (avoids losing one checkpoint and late handle release on Windows)
     try { scheduler.flushFiredNow() } catch {}
+    // R7-B P2: the sync node (and its in-flight quit-announce round) stops here — after the
+    // flush window gave the round its runway, before the DB handle closes.
+    try { require('./lan-sync-bootstrap').stopSyncForQuit() } catch { /* sync never initialized */ }
     try { if (dbm && dbm.close) dbm.close() } catch {}
     flushDone = true
     app.quit()
