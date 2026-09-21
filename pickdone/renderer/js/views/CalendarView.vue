@@ -183,8 +183,9 @@ export default {
     wd (d) { return this.$t('statsJ.CalendarView.wd' + ((d + 6) % 7)) },
     /** 直接在该日创建「未命名」事件并打开编辑(格子角标 + / 键盘 Enter 共用) */
     createAt (ts) {
+      // D6-F1: mark the panel task as inline-created so an empty close (Esc/outside click) cleans it up
       return this.$store.dispatch('todo/addTodo', { todoContent: '', todoDate: ts })
-        .then(t => this.$store.commit('ui/openEdit', t))
+        .then(t => { this.$store.commit('ui/openEdit', t); this.$store.commit('ui/markInlineCreate', t && t.taskId) })
     },
     catColor (t) {
       const c = this.$store.getters['category/byId'](t.categoryId)
@@ -457,8 +458,9 @@ export default {
     },
     tbCreate (dayTs, hour) {
       const ts = dayTs + hour * 3600000
+      // D6-F1: same inline-create marking as createAt
       this.$store.dispatch('todo/addTodo', { todoContent: '', todoDate: dayTs, todoTime: ts })
-        .then(t => this.$store.commit('ui/openEdit', t))
+        .then(t => { this.$store.commit('ui/openEdit', t); this.$store.commit('ui/markInlineCreate', t && t.taskId) })
     },
     nav (dir) {
       if (this.view === 'timeblock') {
@@ -538,8 +540,9 @@ export default {
       const cell = e.target.closest && e.target.closest('.fc-daygrid-day')
       if (!cell || !cell.dataset.date) return
       e.preventDefault()
+      // D6-F1: same inline-create marking as createAt
       this.$store.dispatch('todo/addTodo', { todoContent: '', todoDate: +dayjs(cell.dataset.date) })
-        .then(t => this.$store.commit('ui/openEdit', t))
+        .then(t => { this.$store.commit('ui/openEdit', t); this.$store.commit('ui/markInlineCreate', t && t.taskId) })
     }
     if (this.$refs.fcEl) this.$refs.fcEl.addEventListener('keydown', this._onKey)
     // 格子右上角展开钮:FC 动态重绘格子,事件委托到容器;挡住冒泡防触发 dateClick 建任务

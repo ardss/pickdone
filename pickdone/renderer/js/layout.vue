@@ -104,7 +104,8 @@ export default {
       if (e.target.closest && e.target.closest('.edit-panel')) return
       // Clicks inside dialogs (repeat rules/settings/tomato records etc.) don't count as "outside the panel" — canceling/generating after setting a repeat shouldn't also collapse the edit panel
       if (e.target.closest && e.target.closest('.modal-container')) return
-      this.$store.commit('ui/collapseEdit')
+      // D6-F1: cleanup-aware collapse — an unnamed inline-created (calendar) task is removed instead
+      this.$store.dispatch('ui/collapseEditCleanup')
     }
     this.$watch('editVisible', (v) => {
       if (v) this._attachTimer = setTimeout(() => { this._attachTimer = null; document.addEventListener('mousedown', this._onDocClick) }, 0)
