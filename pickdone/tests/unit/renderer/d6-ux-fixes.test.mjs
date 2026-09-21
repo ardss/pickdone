@@ -287,3 +287,21 @@ test('[F14] restore pipeline consumes filterState + planState segments (source a
   assert.ok(src.includes('day-plans-changed'), 'DayRail is pinged to reload after a chip restore')
   assert.ok(/failed\.push\('filters'\)/.test(src) && /failed\.push\('planChips'\)/.test(src), 'segment failures are reported honestly')
 })
+
+/* ---------- [F15] XLSX export: priority + completedAt columns ---------- */
+
+test('[F15] export rows gain priority + completedAt; header + guard updated to 17 in both locales', () => {
+  const tab = read('renderer/js/components/settings/SettingsDataTab.vue')
+  assert.ok(tab.includes('t.priority || 0,') && tab.includes("t.completedAt ? dayjs(t.completedAt).format(FMT.dateTime) : ''"), 'rows append priority + completedAt')
+  const guard = read('src/main/export-xlsx.js')
+  assert.ok(guard.includes('head.length !== 17'), 'column guard raised to 17')
+  assert.ok(guard.includes("mergeCells('A1:Q1')"), 'title merge spans the new columns')
+  const zh = read('src/main/i18n.js')
+  for (const seg of ['优先级,完成时间', 'Priority,Completed at']) {
+    assert.ok(zh.includes(seg), 'exportCols updated: ' + seg)
+  }
+  for (const loc of ['zh-CN', 'en-US']) {
+    const m = zh.match(new RegExp("exportCols: '([^']+)'"))
+    assert.equal(m[1].split(',').length, 17, 'header has exactly 17 columns')
+  }
+})
