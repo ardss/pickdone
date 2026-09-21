@@ -404,6 +404,9 @@ function wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, o
         // hello-ack itself stays PLAINTEXT (handshake boundary) — the send key is attached
         // only after it, so the ack goes out unencrypted and both sides key up from it.
         send(socket, { type: 'hello-ack', ok: true, protoVer: PROTO_VER, enc: 1 })
+        // Round-3 P1: authenticated — disarm the pre-auth idle timeout (snapshot builds can
+        // legitimately keep the socket silent far longer than the 30s pre-auth budget).
+        if (socket.setTimeout) socket.setTimeout(0)
         socket._lanKey = state.sessionKey
         // Authenticated peers may stream full sync rounds: raise the line cap from 4KB to 32MB.
         reader.setLimit(MAX_LINE_BYTES)
@@ -443,6 +446,11 @@ function createLanServer(opts) {
   const seenPairNonces = new Map()
   const PAIR_WINDOW_MS = 10 * 60 * 1000
   const PAIR_MAX_ATTEMPTS = 5
+  // Round-3 P1: bounded memory for the rate limiter itself — a bot spraying SYN packets from
+  // 10k+ spoofed/virtual source IPs used to grow pairAttemptsByIp without limit. Map insertion
+  // order gives FIFO eviction (mirrors seenPairNonces above): drop the OLDEST IP entry past the
+  // 8192-key cap. Worst case ~8192 small arrays; a live attacker re-inserts on its next attempt.
+  const PAIR_IP_KEY_CAP = 8192
   const pairGate = (ip) => {
     const now = Date.now()
     const key = String(ip || 'unknown')
@@ -453,12 +461,39 @@ function createLanServer(opts) {
     }
     recent.push(now)
     pairAttemptsByIp.set(key, recent)
+    if (pairAttemptsByIp.size > PAIR_IP_KEY_CAP) {
+      const oldest = pairAttemptsByIp.keys().next().value
+      if (oldest !== undefined) pairAttemptsByIp.delete(oldest)
+    }
     return true
   }
 
+  // Round-3 P1 (pre-auth slow-loris): an UNAUTHENTICATED socket that connects and then sends
+  // nothing (or drips bytes to stay under the line reader) used to hold a server slot forever.
+  // Arm a 30s idle timeout on every accepted socket; wireConnection disarms it (setTimeout(0))
+  // at hello-ack, so authenticated sync rounds (which can legitimately sit silent while the
+  // peer builds a snapshot batch) are never killed by it. Configurable for tests.
+  const preAuthIdleMs = Number.isInteger(opts.preAuthIdleMs) ? opts.preAuthIdleMs : 30000
+  // Round-3 P1: concurrent-socket cap. Beyond MAX_SOCKETS concurrent connections every further
+  // accept is refused (destroyed immediately) — a socket-flood cannot exhaust fds/memory for
+  // the rest of the app. Authenticated peers count toward the same cap; normal operation uses
+  // at most a handful of sockets (one per paired peer).
+  const maxSockets = Number.isInteger(opts.maxSockets) ? opts.maxSockets : 64
+
   const server = net.createServer((socket) => {
+    if (sockets.size >= maxSockets) {
+      try { socket.destroy() } catch { /* never let a flood crash the accept loop */ }
+      return
+    }
     sockets.add(socket)
     socket.on('close', () => sockets.delete(socket))
+    if (preAuthIdleMs > 0) {
+      socket.setTimeout(preAuthIdleMs)
+      socket.on('timeout', () => {
+        // Only PRE-auth idleness is fatal here: wireConnection cleared the timer on auth.
+        try { socket.destroy() } catch { /* best-effort */ }
+      })
+    }
     wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, onUnauthorized, verifyPairingCode, onPaired, pairGate, onPairRequest, onPairThrottled, pairConfirmTimeoutMs, seenPairNonces })
   })
   server.on('error', (err) => {
@@ -487,6 +522,11 @@ function createLanServer(opts) {
   })
   em.on = em.on.bind(em)
   em._server = server
+  // Round-3 P1 test hooks (pure-node unit tests): the per-IP rate limiter and its FIFO cap are
+  // server-internal state; expose read/access handles so the eviction behavior is testable
+  // without opening thousands of real sockets.
+  em._pairGate = pairGate
+  em._pairAttemptsByIp = pairAttemptsByIp
   return em
 }
 
