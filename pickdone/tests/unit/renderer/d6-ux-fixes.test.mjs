@@ -170,3 +170,23 @@ test('i18n parity: delCat keys in BOTH zh and en G shards', () => {
     assert.ok(read('renderer/js/i18n/locales/en-US-G.js').includes(k + ':'), 'en missing ' + k)
   }
 })
+
+/* ---------- [F7] RepeatModal: per-date failure isolation + one summary toast (anchors) ---------- */
+
+test('[F7] generate() isolates per-date failures and merges toasts into one summary', () => {
+  const src = read('renderer/js/components/RepeatModal.vue')
+  assert.ok(/for \(let i = 0; i < dates\.length; i\+\+\)[\s\S]{0,200}try \{[\s\S]{0,900}catch \(e\) \{[\s\S]{0,200}failed\+\+/.test(src),
+    'each addTodo is wrapped in try/catch counting failures')
+  assert.ok(src.includes('statsD.RepeatModal.partialFail'), 'summary reports failed/total')
+  assert.ok(src.includes('statsD.RepeatModal.renewalDisabledWarn'), 'rule-save failure appends the renewal-disabled warning')
+  // the old contradictory pattern (success toast + standalone ruleSaveFailed warning) must be gone
+  assert.ok(!/\$message\.warning\(this\.\$t\('statsD\.RepeatModal\.ruleSaveFailed'\)\)/.test(src), 'no standalone rule-save-failed toast')
+  assert.ok(src.indexOf("commit('ui/askRepeatEdit', null)") < src.indexOf('$message.warning(msg)'), 'modal closes before the summary toast')
+})
+
+test('i18n parity: RepeatModal keys in BOTH zh and en D shards', () => {
+  for (const k of ['partialFail', 'renewalDisabledWarn']) {
+    assert.ok(read('renderer/js/i18n/locales/zh-CN-D.js').includes('"' + k + '"'), 'zh missing ' + k)
+    assert.ok(read('renderer/js/i18n/locales/en-US-D.js').includes('"' + k + '"'), 'en missing ' + k)
+  }
+})

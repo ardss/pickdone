@@ -190,6 +190,8 @@ export default {
       "title": "重复规则",
       "aria": "重复规则设置",
       "ruleSaveFailed": "重复规则保存失败，自动续期可能不生效",
+      "partialFail": "部分实例创建失败（成功 {made}/{total}，失败 {failed}）",
+      "renewalDisabledWarn": "；本组已停用自动续期，请在最后一项完成时手动创建下次任务",
       "wd0": "日",
       "generate": "生成",
       "baseEvent": "基准事件",

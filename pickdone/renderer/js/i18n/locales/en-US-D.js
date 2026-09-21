@@ -177,6 +177,8 @@ export default {
       "title": "Repeat Rule",
       "aria": "Repeat rule settings",
       "ruleSaveFailed": "Failed to save the repeat rule; auto-renewal may not take effect",
+      "partialFail": "Some instances failed to create ({made}/{total} succeeded, {failed} failed)",
+      "renewalDisabledWarn": "; auto-renewal is disabled for this group — create the next occurrence manually when the last item completes",
       "intervalHint": "The task repeats automatically every selected unit",
       "every": "every",
       "countHint": "Repeats within the selected range, stops automatically after",
