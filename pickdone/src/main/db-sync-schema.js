@@ -47,7 +47,17 @@ module.exports = ({ getDb, log }) => {
     const value = JSON.stringify(rawValue === undefined ? null : rawValue)
     const cur = getDb().prepare('SELECT value, deleted, updatedAt FROM settings_rows WHERE key = ?').get(key)
     if (cur && !cur.deleted && cur.value === value) return false
-    if (Number.isFinite(gateTs) && cur && !cur.deleted && Number(cur.updatedAt) > gateTs) return false // stale whole-blob echo: row wins
+    // Round-4 P1 (clock skew vs the mirror gate): cur.updatedAt may carry the PEER's clock —
+    // sync-apply.js clamps inbound rows only at now+SKEW_CLAMP_MS (10min), so a skewed peer can
+    // legally leave a row stamped up to +10min into OUR future. Comparing that future stamp
+    // against gateTs (the LOCAL _savedAt of the blob being mirrored) made every local edit
+    // during the skew window look "older than the row" and got dropped — lost on restart. The
+    // comparison must run on LOCAL time: clamp the row's stamp to our now, and only gate when
+    // the row is MEANINGFULLY newer than the blob snapshot (1s epsilon absorbs same-tick stamp
+    // ordering between the blob save and the mirror; a genuinely stale echo is minutes behind,
+    // so the Round-3 revert guard keeps its strength).
+    const curTs = cur ? Math.min(Number(cur.updatedAt) || 0, Date.now()) : 0
+    if (Number.isFinite(gateTs) && cur && !cur.deleted && curTs - gateTs > 1000) return false // stale whole-blob echo: row wins
     getDb().prepare(`INSERT INTO settings_rows (key, value, updatedAt, deleted, deletedAt) VALUES (?, ?, ?, 0, 0)
       ON CONFLICT(key) DO UPDATE SET value=excluded.value, updatedAt=excluded.updatedAt, deleted=0, deletedAt=0`)
       .run(key, value, now)

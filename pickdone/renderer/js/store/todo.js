@@ -12,7 +12,7 @@ import { loadMilestones, saveMilestones, scrubMilestoneTaskIds } from '../utils/
 // Cross-cutting concerns, physically split out of this module (pure relocation — the store's action
 // semantics are unchanged; the actions/mutations below delegate to these extracted implementations):
 import { enqueueChipSync, rowChipSync, planSnapshotRowSync, snapshotForDelete, restoreSnapshot } from './planChips.js'
-import { historyPush, historyPushKeepRedo, historyClear, historyBreakMerge, historyUndoPop, historyRedoPop, historyRedoPush, undoStep, redoStep, persistSnapshotDiffCore } from './undo.js'
+import { historyPush, historyPushKeepRedo, historyClear, historyBreakMerge, historyUndoPop, historyRedoPop, historyRedoPush, historyBarrierCore, undoStep, redoStep, persistSnapshotDiffCore } from './undo.js'
 import { writeEventBackupCore, writeAutoBackupCore, writeCriticalBackupCore } from './todoBackup.js'
 
 // planSnapshotRowSync stays a named export of this module (tests import it from here)
@@ -124,6 +124,7 @@ export default {
     undoStack: [],
     redoStack: [],
     _histLastPushAt: 0,
+    _histEpoch: 0, // Round-5 P0: reload epoch — bumped once per preserveHistory reload (see undo.js header)
     // Timestamp of the last local write: for todosChanged broadcast echoes (our own write broadcast back to us), skip full re-reads based on it, without clearing the undo stack
     _lastLocalWriteAt: 0,
     viewsDirty: true, // tasks changed, views pending recompute (the day-rollover timer decides recomputes based on this)
@@ -168,6 +169,8 @@ export default {
 /* History bookkeeping lives in undo.js (pure state-transform functions); these mutations are thin adapters. */
     historyPush (s, snapRaw) { historyPush(s, snapRaw) },
     historyPushKeepRedo (s, snapRaw) { historyPushKeepRedo(s, snapRaw) },
+    // Round-5 P0: barrier after a preserveHistory reload — epoch bump + redo clear + post-reload snapshot
+    historyBarrier (s) { historyBarrierCore(s) },
     historyRestore (s, snap) {
       s.todoList = snap.todoList
       s.recycleList = snap.recycleList
@@ -203,6 +206,10 @@ export default {
       let v = 0
       try { v = parseInt(await window.todoAPI.dbCall('getMeta', 'todosVersion') || '0', 10) } catch (err) { reportError('init:getMeta', err) }
       commit('setMeta', { todosVersion: v })
+      // Round-5 P0: the surviving stacks still hold whole-table snapshots taken BEFORE the peer's rows
+      // arrived. Push a barrier entry of the post-reload table and void the redo stack — without it the
+      // first undo diffed against a stale pre-sync baseline and tombstoned the peer-created tasks.
+      if (preserveHistory) commit('historyBarrier')
       await dispatch('computeViews')
       commit('setLoaded', true)
       dispatch('writeCriticalBackup')

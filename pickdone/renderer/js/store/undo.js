@@ -3,6 +3,23 @@
  * the undo/redo stack bookkeeping (50-entry cap + 24MB byte budget + 400ms chained-merge window) as pure
  * state-transform functions, plus the time-travel steps and snapshot-diff persistence — the Vuex actions
  * in todo.js delegate to these.
+ *
+ * Round-5 P0 — reload epochs (the `_e` tag on stack entries):
+ * LAN-sync reloads run todo/init with preserveHistory:true so the user's own undo history survives an
+ * inbound sync round. But the surviving stacks hold whole-table snapshots taken BEFORE the peer's rows
+ * arrived; undoing across the reload made persistSnapshotDiffCore emit delete:true tombstones for the
+ * peer-created ids (present in the DB, absent in the stale snapshot baseline) — and the next sync round
+ * propagated that deletion to the peer. Cross-device data loss.
+ * Design (reload epoch, chosen over "baseline freshness" heuristics for being exact and stateless per entry):
+ *   - `s._histEpoch` starts at 0 and increments once per preserveHistory reload, when a BARRIER snapshot
+ *     of the post-reload table is pushed (historyBarrierCore) and the redo stack is cleared (redo across
+ *     an inbound sync is meaningless — the "next" state no longer exists).
+ *   - Every stack entry is tagged with the epoch current at push time (`withEpoch`).
+ *   - The from-only delete loop in persistSnapshotDiffCore runs ONLY when the popped entry's epoch equals
+ *     the current epoch — i.e. the baseline cannot predate any inbound rows. Untagged (pre-fix / pre-barrier
+ *     session) entries read as epoch 0, so plain offline sessions keep the undo-of-create soft delete.
+ *   - The upsert loop keeps running for ALL epochs: undoing to a post-barrier snapshot legitimately
+ *     restores peer rows, and LWW on the peer arbitrates genuine edit conflicts.
  */
 import { planSnapshotRowSync, enqueueChipSync, fmtChipDay, snapshotForDelete, restoreSnapshot, clearTaskChips, moveTaskChips } from './planChips.js'
 
@@ -21,7 +38,15 @@ function evictOverflow (s) {
   }
 }
 
+/* Round-5 P0: snapshots are always produced by our own JSON.stringify of a plain object, so the epoch
+ * tag is appended without a re-parse (stringify-once discipline holds). Untagged entries read as 0. */
+function withEpoch (s, snapRaw) {
+  const e = s._histEpoch || 0
+  return e ? snapRaw.slice(0, -1) + `,"_e":${e}}` : snapRaw
+}
+
 export function historyPush (s, snapRaw) {
+  snapRaw = withEpoch(s, snapRaw)
   // Chained changes within 400ms (EditPanel 350ms debounced saves, batch loops) merge into the stack top
   const now = Date.now()
   if (now - (s._histLastPushAt || 0) < 400 && s.undoStack.length) {
@@ -47,6 +72,7 @@ export function historyPush (s, snapRaw) {
 // entries alive (historyPush resets redoStack, which used to kill every redo step after the first),
 // and breaks the merge window so a following edit starts a fresh undo step instead of fusing
 export function historyPushKeepRedo (s, snapRaw) {
+  snapRaw = withEpoch(s, snapRaw)
   s._histLastPushAt = 0
   s.undoStack.push(snapRaw)
   s._histBytes = (s._histBytes || 0) + snapRaw.length
@@ -54,6 +80,23 @@ export function historyPushKeepRedo (s, snapRaw) {
 }
 
 export function historyClear (s) { s.undoStack = []; s.redoStack = []; s._histLastPushAt = 0; s._histBytes = 0; s._histRedoBytes = 0 }
+
+/** Round-5 P0: barrier pushed after a preserveHistory reload (inbound LAN-sync round). Bumps the reload
+ *  epoch, clears the redo stack (its "next" states predate the inbound rows — redoing into them would
+ *  resurrect stale tables), and records the post-reload table as the newest undo entry so the FIRST undo
+ *  lands on the merged state instead of the pre-sync snapshot. Older (stale-epoch) entries stay reachable
+ *  for the user's own earlier edits, but their diff can no longer emit delete tombstones (see
+ *  persistSnapshotDiffCore). */
+export function historyBarrierCore (s) {
+  s._histEpoch = (s._histEpoch || 0) + 1
+  s._histLastPushAt = 0 // barrier is its own discrete step: break the 400ms merge window
+  s.redoStack = []
+  s._histRedoBytes = 0
+  const snapRaw = withEpoch(s, JSON.stringify({ todoList: s.todoList, recycleList: s.recycleList }))
+  s.undoStack.push(snapRaw)
+  s._histBytes = (s._histBytes || 0) + snapRaw.length
+  evictOverflow(s)
+}
 
 // Break the 400ms chained merge: discrete ops (add/delete/purge) call this so the next push starts a fresh undo step,
 // keeping those ops undoable on their own instead of fusing into a following EditPanel edit
@@ -80,6 +123,7 @@ function evictRedoOverflow (s) {
 }
 
 export function historyRedoPush (s, snap) {
+  snap = withEpoch(s, snap)
   s.redoStack.push(snap)
   s._histRedoBytes = (s._histRedoBytes || 0) + snap.length
   evictRedoOverflow(s)
@@ -102,9 +146,14 @@ export async function undoStep ({ state, commit, dispatch }) {
   }
   commit('historyUndoPop')
   const cur = { todoList: state.todoList, recycleList: state.recycleList }
-  commit('historyRedoPush', JSON.stringify(cur)) // stringify once here only, on the push side
+  commit('historyRedoPush', JSON.stringify(cur)) // stringify once here only, on the push side (tagged by historyRedoPush)
   commit('historyRestore', prev)
-  const changedRows = (await dispatch('persistSnapshotDiff', { from: cur, to: prev })) || []
+  const changedRows = (await dispatch('persistSnapshotDiff', {
+    from: cur,
+    to: prev,
+    // Round-5 P0: stale-epoch baselines must not tombstone ids the snapshot never saw (peer-created rows)
+    allowDeletes: (prev._e === undefined ? 0 : prev._e) === (state._histEpoch || 0)
+  })) || []
   dispatch('computeViews')
   dispatch('writeCriticalBackup')
   // label reuses the diff result; no more two rounds of full stringify over both snapshots
@@ -125,7 +174,11 @@ export async function redoStep ({ state, commit, dispatch }) {
   const cur = { todoList: state.todoList, recycleList: state.recycleList }
   commit('historyPushKeepRedo', JSON.stringify(cur))
   commit('historyRestore', next)
-  const changedRows = (await dispatch('persistSnapshotDiff', { from: cur, to: next })) || []
+  const changedRows = (await dispatch('persistSnapshotDiff', {
+    from: cur,
+    to: next,
+    allowDeletes: (next._e === undefined ? 0 : next._e) === (state._histEpoch || 0)
+  })) || []
   dispatch('computeViews')
   dispatch('writeCriticalBackup')
   return { ok: true, label: changedRows.length === 1 ? (changedRows[0].taskContent || '') : '' }
@@ -134,7 +187,7 @@ export async function redoStep ({ state, commit, dispatch }) {
 /** Persist the diff after a snapshot switch: rows present in "after" but missing/different in "before" are upserted;
     rows present in "before" but missing in "after" (undoing a "create") are soft-deleted, guaranteeing they can be restored again.
     Returns the changed-rows list (reused for the undo toast's label). Row-change detection uses the updateTime invariant (all writes bump it uniformly via updateTodoFields/reorder/delete). */
-export async function persistSnapshotDiffCore ({ commit }, { from, to }, safeUpsert) {
+export async function persistSnapshotDiffCore ({ commit }, { from, to, allowDeletes = true }, safeUpsert) {
   const fromMap = new Map(from.todoList.concat(from.recycleList).map(t => [t.taskId, t]))
   const toRows = to.todoList.concat(to.recycleList)
   const toIds = new Set(toRows.map(t => t.taskId))
@@ -152,6 +205,10 @@ export async function persistSnapshotDiffCore ({ commit }, { from, to }, safeUps
   }
   for (const row of from.todoList.concat(from.recycleList)) {
     if (!toIds.has(row.taskId)) {
+      // Round-5 P0: a stale-epoch baseline (taken before an inbound sync reload delivered peer rows) must
+      // never tombstone ids it never saw — the delete:true row would propagate to the peer on the next
+      // round and delete the task there. Local rows are still restored correctly via the upsert loop.
+      if (!allowDeletes) continue
       // version reset to 0 (same as deleteTodo): a re-delete after restore must re-enter the sync
       // snapshot — syncTodos excludes delete rows already acked with version > 0, so without the
       // reset the undo-of-create soft delete never propagated

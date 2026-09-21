@@ -319,7 +319,16 @@ function wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, o
           const challenge = cipher.randomToken()
           state.pairHs = { ecdh: serverEph.ecdh, peerPub, nonce: pairNonce, challenge }
           send(socket, { type: 'pair-challenge', challenge, pub: serverEph.pub })
+          // Round-4 P1: the pre-auth idle timeout (30s) would otherwise destroy this socket
+          // MID-decision — a respondent answering between 30s and the 60s confirm window
+          // closes found their dialog answer land on a dead socket. The human-decision window
+          // is already bounded by confirmTimer (PAIR_CONFIRM_TIMEOUT_MS, auto-reject + close),
+          // so disarm the idle timer here; the pair flow keeps its own deadline.
+          if (socket.setTimeout) socket.setTimeout(0)
           let settled = false
+          // Round-5 P2: declare before finish() so the socket's early-close handler can clear the
+          // pending confirm window (see below).
+          let confirmTimer = null
           const finish = (accept) => {
             if (settled) return
             settled = true
@@ -345,8 +354,14 @@ function wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, o
             }
             socket.destroy()
           }
-          const confirmTimer = setTimeout(() => finish(false), pairConfirmTimeoutMs || PAIR_CONFIRM_TIMEOUT_MS)
+          confirmTimer = setTimeout(() => finish(false), pairConfirmTimeoutMs || PAIR_CONFIRM_TIMEOUT_MS)
           confirmTimer.unref?.()
+          // Round-5 P2: if the respondent's socket dies mid-confirm-window (peer walked away,
+          // network drop), the 60s confirmTimer used to stay armed — firing finish(false) against
+          // a dead socket and holding the closure (and the pending-pair UI reference) alive for
+          // nothing. Clear it on early close; a settled flow is unaffected (timer already fired
+          // or finish already cleared it).
+          socket.once('close', () => { if (confirmTimer) { clearTimeout(confirmTimer); confirmTimer = null } })
           if (!onPairRequest) { finish(false); return }
           onPairRequest({
             deviceId: typeof msg.deviceId === 'string' ? msg.deviceId : '',

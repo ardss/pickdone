@@ -31,7 +31,7 @@ const { SYNC_SCHEMA_VERSION } = require('../../shared/sync-core/merge.mjs')
 const { generatePairingSecret, derivePairingCode } = require('../../shared/sync-core/pairing.mjs')
 const { createLanSyncNode } = require('./lan-sync/index')
 const { DEFAULT_PORT } = require('./lan-sync/transport')
-const { isDialableHost } = require('./lan-sync/discovery')
+const { isDialableHost, isPlausibleHost } = require('./lan-sync/discovery')
 const syncOps = require('./db-sync-ops')
 
 // settings_rows keys (never synced: hydration skips the 'sync.' namespace, otherwise peers would adopt each other's identity)
@@ -878,7 +878,10 @@ function registerOps () {
     syncAddPeer: p => {
       const host = String((p && p.host) || '').trim()
       const port = Number((p && p.port) || 58471)
-      if (!host || !/^[.:\w-]+$/.test(host)) throw new Error('syncAddPeer: host is required')
+      // Round-5 P1: strict manual-entry validation (discovery.isPlausibleHost) — the old loose
+      // /^[.:\w-]+$/ regex accepted undialable junk ("...", "a..b") that got persisted and then
+      // failed every dial forever.
+      if (!isPlausibleHost(host)) throw new Error('syncAddPeer: host must be a dialable IP or hostname')
       if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('syncAddPeer: invalid port')
       if (!state.node) throw new Error('syncAddPeer: sync is not enabled')
       persistManualPeer({ host, port })

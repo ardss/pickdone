@@ -190,10 +190,13 @@ export function buildTimelineRows ({ records, todos, t, now = Date.now() }) {
       const focusMs = (Number(r.focusDuration) || 0) * 60000
       const restMs = (Number(r.restDuration) || 0) * 60000
       const fStart = end - focusMs
-      if (r.succeed !== false) { minutes += Number(r.focusDuration) || 0; count++ }
+      // Round-4 P1: dedup BEFORE the minutes/count increments — a duplicate record used to
+      // inflate both the session count and the focus-minutes total even though only one
+      // visual band is rendered for it.
       const dupKey = fStart + '|' + end + '|' + (r.focusDuration || 0) + '|' + (r.focus || '')
       if (seen.has(dupKey)) continue
       seen.add(dupKey)
+      if (r.succeed !== false) { minutes += Number(r.focusDuration) || 0; count++ }
       // One pomodoro = one integral unit: the focus body plus the adjacent rest tail (finalized by user: rest and focus belong to the same moment; splitting them hurts readability)
       const clamp = (v, w) => Math.max(0, Math.min(v, 100 - Math.min(w, 100)))
       const restW = restMs > 0 ? Math.min(restMs, 5 * 60000) / DAY_MS * 100 : 0
