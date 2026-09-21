@@ -115,7 +115,15 @@ module.exports = ({ getDb, log }) => {
         pendingRetry++
         continue
       }
-      mergeDoc(doc)
+      // R7 P2-3 (2026-09-21): the old bare mergeDoc(doc) re-stamped EVERY changed field row with
+      // local now, ungated. On the restore path (a pre-v6 backup's blobs land in meta and this
+      // migration runs on next boot) that gave backup-era values a fresh LWW age, so they won
+      // against a peer's newer live settings rows. Gate the merge by the blob's own _savedAt
+      // stamp when it carries one; otherwise gate at 0 — putRow then preserves any EXISTING row
+      // (its real updatedAt always beats the gate) and only stamps fields that have no row yet,
+      // so absent fields land exactly once and pre-existing rows keep their true LWW age.
+      const gateTs = doc && Number.isFinite(Number(doc._savedAt)) ? Number(doc._savedAt) : 0
+      mergeDoc(doc, gateTs)
       d.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
         .run(snapKey, blob.value)
     }

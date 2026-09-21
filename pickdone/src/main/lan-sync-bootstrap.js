@@ -328,10 +328,7 @@ function startSync () {
         // as applied — the rows were dropped from the buffer. Stamp the ingest result so the
         // server role keeps appliedToSeq below this segment and the sender force-arms its
         // snapshot trigger; the data remains recoverable via the next snapshot.
-        const flush = flushPendingWrites()
-        if (flush && flush.ok === false) r.flushFailed = true
-        emitAppliedRound() // P0-1: refresh open views + settings hot-apply after a round applied rows
-        return r
+        return finalizeIngest(r)
       } finally { state.applyCache = null }
     },
     ingestSnapshot: body => {
@@ -348,9 +345,7 @@ function startSync () {
         for (const r of withPeerDeviceId(body).rows || []) applyRowSafe(r)
         // P0-1: same flush-failure honesty as the streaming path — fail loudly so the watermark
         // never advances over rows that were dropped.
-        const flush = flushPendingWrites()
-        if (flush && flush.ok === false) throw new Error('snapshot flush failed (rows dropped, snapshot will retry)')
-        emitAppliedRound()
+        finalizeIngest(null, { snapshot: true })
       } finally { state.applyCache = null }
       return { rows: rows.length }
     },
@@ -366,9 +361,7 @@ function startSync () {
         // P0-1: a failed flush during a streamed snapshot must fail the ROUND (throw) — the pull
         // watermark advances only at snapshot-end, so a failed chunk keeps the watermark put and
         // the next round re-requests the (idempotent) snapshot instead of acking dropped rows.
-        const flush = flushPendingWrites()
-        if (flush && flush.ok === false) throw new Error('snapshot chunk flush failed (rows dropped, snapshot will retry)')
-        emitAppliedRound()
+        finalizeIngest(null, { snapshot: true, chunk: true })
       } finally { state.applyCache = null }
       return { rows: rows.length }
     },
@@ -635,6 +628,24 @@ function foldSettingsIntoBlob (patch) {
   foldIntoBlob(HABITS_BLOB_KEY, habits)
   const toPatch = list => { const p = {}; for (const [k, v] of list) if (v !== undefined) p[k] = v; return p }
   return { settingsPatch: toPatch(settings), habitsPatch: toPatch(habits) }
+}
+
+/**
+ * P2-5 (round-7): shared ingest epilogue — flush the buffered writes, then (only on flush
+ * success) emit the applied round to renderers. A failed flush DROPPED the buffered rows from
+ * the DB: emitting todos-changed / external-settings-changed (and folding the settings patch
+ * into the source blobs) would show renderers data the DB does not have and let a hot-applied
+ * field into the blob diverge from the rows. The round result keeps its applied counts either
+ * way (logs / ack honesty unchanged); snapshot paths throw so the round fails (watermark safe).
+ */
+function finalizeIngest (r, { snapshot = false, chunk = false } = {}) {
+  const flush = flushPendingWrites()
+  if (flush && flush.ok === false) {
+    if (snapshot) throw new Error((chunk ? 'snapshot chunk ' : 'snapshot ') + 'flush failed (rows dropped, snapshot will retry)')
+    r.flushFailed = true
+  }
+  if (!(r && r.flushFailed)) emitAppliedRound() // P0-1: refresh open views + settings hot-apply after a round applied rows
+  return r
 }
 
 function emitAppliedRound () {
@@ -999,6 +1010,7 @@ module.exports.__test = {
   loadPeerWatermarks,
   // P0-1/P1-2/P1-5 test surface: post-round applied bookkeeping -> renderer broadcasts.
   emitAppliedRound: () => emitAppliedRound(),
+  finalizeIngest,
   // P1-3 test surface: unpair deletes peer record + watermark + revokes the shared secret.
   unpairPeer: p => syncUnpairPeerOp(p),
   // Round-1 P0 test surface: paired-peer table persistence + address hygiene.
