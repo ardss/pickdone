@@ -94,7 +94,7 @@ test('h7 data tab: restore field set (settings + habits + category) — deduped 
     assert.ok(m && m[0].includes('applyRestoreDump'), caller + ' must funnel through applyRestoreDump')
   }
   const dump = dataTab.match(/async applyRestoreDump \(dump\) \{([\s\S]*?)\n {4}\}/)[1]
-  for (const seg of ["commit('settings/restore'", "commit('category/setList'", "commit('habits/replaceAll'", 'restoreTomatoLedger(b)', 'parseTodoState(b.todoState)']) {
+  for (const seg of ["commit('settings/restore'", "commit('category/setListRestore'", "commit('habits/replaceAll'", 'restoreTomatoLedger(b)', 'parseTodoState(b.todoState)']) {
     assert.ok(dump.includes(seg), `shared restore pipeline missing ${seg}`)
   }
 })
