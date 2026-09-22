@@ -56,6 +56,13 @@ const PRE_AUTH_LINE_BYTES = 4 * 1024
 // Two-way confirmed pairing: an unanswered pair-request is auto-rejected after this window
 // (the pending decision dialog must not stay open forever). Injectable per server for tests.
 const PAIR_CONFIRM_TIMEOUT_MS = 60 * 1000
+// Wave-B P2-1: post-auth idle timeout. The pre-auth 30s timer is DISARMED at hello-ack (snapshot
+// builds can sit silent), but with no replacement an authenticated socket whose peer vanished
+// (sleep, Wi-Fi drop, crash without FIN) held its maxSockets slot forever — 64 zombies plugged
+// the accept cap. Every authenticated connection that sees NO inbound traffic for this long is
+// destroyed; live rounds re-arm the timer implicitly with every inbound frame. Matches the
+// 120s round deadline so a legitimately slow round is never killed between frames.
+const AUTH_IDLE_TIMEOUT_MS = 120 * 1000
 
 class ProtocolError extends Error {
   constructor(message) {
@@ -74,7 +81,7 @@ function cleanDeviceName(value) {
 }
 
 /** Line-framing reader: buffers socket data, emits parsed JSON objects.
- *  The line cap is dynamic (setLimit): 4KB until the peer authenticates, 16MB after. Buffer size
+ *  The line cap is dynamic (setLimit): 4KB until the peer authenticates, 32MB after. Buffer size
  *  is tracked by byte ACCUMULATION (chunk bytes in, consumed line bytes out) instead of a full
  *  Buffer.byteLength rescan per chunk, so a slow-loris drip of small chunks stays O(n) total. */
 class LineReader {
@@ -199,7 +206,7 @@ function unwrapInbound(socket, conn, raw) {
  *  absent, no IP-level limiting is applied.
  *  seenPairNonces: server-level Map (insertion-ordered) of client pair-request nonces — a nonce
  *  is single-use per server, so a captured pair-request cannot be replayed into a fresh accept. */
-function wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, onUnauthorized, verifyPairingCode, onPaired, pairGate, onPairRequest, onPairThrottled, pairConfirmTimeoutMs, seenPairNonces }) {
+function wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, onUnauthorized, verifyPairingCode, onPaired, pairGate, onPairRequest, onPairThrottled, pairConfirmTimeoutMs, seenPairNonces, authIdleMs }) {
   const state = { peer: null, authorized: false, sessionKey: null, pairHs: null, recvSeq: -1 }
   socket._lanSend = (msg) => send(socket, msg) // encrypted send for server-side handlers (index.js sendVia)
   // M-6 (2026-09-20): close AND error both invoke finish — without a guard a socket that errors
@@ -419,9 +426,14 @@ function wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, o
         // hello-ack itself stays PLAINTEXT (handshake boundary) — the send key is attached
         // only after it, so the ack goes out unencrypted and both sides key up from it.
         send(socket, { type: 'hello-ack', ok: true, protoVer: PROTO_VER, enc: 1 })
-        // Round-3 P1: authenticated — disarm the pre-auth idle timeout (snapshot builds can
-        // legitimately keep the socket silent far longer than the 30s pre-auth budget).
-        if (socket.setTimeout) socket.setTimeout(0)
+        // Round-3 P1: authenticated — the pre-auth idle timeout (30s) would otherwise destroy
+        // this socket (snapshot builds can legitimately keep the socket silent far longer than
+        // the 30s pre-auth budget). Wave-B P2-1: replace it with a LONGER authenticated-phase
+        // idle timeout instead of disarming entirely — a dead peer (no FIN, e.g. sleep/crash)
+        // must release its maxSockets slot. Node re-arms the timer on every inbound byte, so an
+        // active round (even a slow one, as long as frames keep arriving) is never killed.
+        // authIdleMs <= 0 opts out entirely (the legacy disarm behavior).
+        if (socket.setTimeout) socket.setTimeout(authIdleMs != null ? authIdleMs : AUTH_IDLE_TIMEOUT_MS)
         socket._lanKey = state.sessionKey
         // Authenticated peers may stream full sync rounds: raise the line cap from 4KB to 32MB.
         reader.setLimit(MAX_LINE_BYTES)
@@ -489,6 +501,9 @@ function createLanServer(opts) {
   // at hello-ack, so authenticated sync rounds (which can legitimately sit silent while the
   // peer builds a snapshot batch) are never killed by it. Configurable for tests.
   const preAuthIdleMs = Number.isInteger(opts.preAuthIdleMs) ? opts.preAuthIdleMs : 30000
+  // Wave-B P2-1: authenticated-phase idle timeout (replaces the disarmed pre-auth timer at
+  // hello-ack; see wireConnection). Injectable for tests; <= 0 disables.
+  const authIdleMs = opts.authIdleMs !== undefined ? opts.authIdleMs : AUTH_IDLE_TIMEOUT_MS
   // Round-3 P1: concurrent-socket cap. Beyond MAX_SOCKETS concurrent connections every further
   // accept is refused (destroyed immediately) — a socket-flood cannot exhaust fds/memory for
   // the rest of the app. Authenticated peers count toward the same cap; normal operation uses
@@ -505,11 +520,13 @@ function createLanServer(opts) {
     if (preAuthIdleMs > 0) {
       socket.setTimeout(preAuthIdleMs)
       socket.on('timeout', () => {
-        // Only PRE-auth idleness is fatal here: wireConnection cleared the timer on auth.
+        // Fatal in BOTH phases: pre-auth idleness (slow-loris) and authenticated idleness
+        // (Wave-B P2-1 zombie peer holding a maxSockets slot — wireConnection re-arms the
+        // timer at hello-ack with the longer authIdleMs budget).
         try { socket.destroy() } catch { /* best-effort */ }
       })
     }
-    wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, onUnauthorized, verifyPairingCode, onPaired, pairGate, onPairRequest, onPairThrottled, pairConfirmTimeoutMs, seenPairNonces })
+    wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, onUnauthorized, verifyPairingCode, onPaired, pairGate, onPairRequest, onPairThrottled, pairConfirmTimeoutMs, seenPairNonces, authIdleMs })
   })
   server.on('error', (err) => {
     // Fixed port taken (round-3 review): FAIL LOUDLY instead of silently degrading to an
@@ -680,4 +697,4 @@ function connect(host, port, opts) {
   return em
 }
 
-module.exports = { createLanServer, connect, send, wireConnection, ProtocolError, PROTO_VER, DEFAULT_PORT, MAX_LINE_BYTES, PRE_AUTH_LINE_BYTES, PAIR_CONFIRM_TIMEOUT_MS, cleanDeviceName }
+module.exports = { createLanServer, connect, send, wireConnection, ProtocolError, PROTO_VER, DEFAULT_PORT, MAX_LINE_BYTES, PRE_AUTH_LINE_BYTES, PAIR_CONFIRM_TIMEOUT_MS, AUTH_IDLE_TIMEOUT_MS, cleanDeviceName }

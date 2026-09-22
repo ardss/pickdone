@@ -43,6 +43,16 @@ module.exports = {
         if (current != null) {
           const ts36 = Date.now().toString(36)
           call('setMeta', [META_CONFLICT_BACKUP_PREFIX + originalKey + '.' + ts36, JSON.stringify({ key: originalKey, value: current, lostAt: Date.now() })])
+          // Wave-B P3: the re-backup must honor the same 20-per-key cap as the apply path's
+          // writeMetaConflictBackup (sync-apply.js) — the old restore minted unpruned backups,
+          // so repeated restore/re-conflict cycles grew metaConflictBackup.<key>.* forever.
+          try {
+            const prefix = META_CONFLICT_BACKUP_PREFIX + originalKey + '.'
+            const keys = (call('listMetaKeys') || []).map(String).filter(k => k.startsWith(prefix)).sort()
+            for (const old of keys.slice(0, Math.max(0, keys.length - 20))) {
+              try { call('deleteMeta', old) } catch { /* prune is best-effort */ }
+            }
+          } catch { /* prune is best-effort */ }
         }
         call('setMeta', [originalKey, b.value])
         call('deleteMeta', key)

@@ -26,15 +26,24 @@
 // encrypted frame (~4/3) — mirrors the snapshot chunker's budgeting.
 const SEGMENT_CHUNK_BYTES = 1024 * 1024
 
+// Wave-B P2-4: hard per-segment ceiling = the transport's post-auth wire cap (32MB). A SINGLE
+// segment larger than this can never travel: the sender's line blows the receiver's cap, the
+// receiver destroys the socket, and the round retries forever (no clean terminal state). The
+// packer now refuses such a segment with a tagged error so the round surfaces a TERMINAL,
+// diagnosable peer error instead of looping.
+const WIRE_CAP_BYTES = 32 * 1024 * 1024
+
 /**
  * Split a buildSegments() result into transport-safe chunk messages.
  * @param {Array<{body, fromSeq, toSeq}>} segments segment envelopes
- * @param {{ maxChunkBytes?: number }} opts
+ * @param {{ maxChunkBytes?: number, maxSegmentBytes?: number }} opts
  * @returns {Array<{segments: Array, final: boolean}>} at least one entry; the last has final:true
+ * @throws Error with .oversizedSegment = true when one envelope alone exceeds the wire cap
  */
 function packSegmentChunks (segments, opts = {}) {
   if (segments != null && !Array.isArray(segments)) throw new Error('packSegmentChunks: segments must be an array')
   const maxChunkBytes = opts.maxChunkBytes || SEGMENT_CHUNK_BYTES
+  const maxSegmentBytes = opts.maxSegmentBytes || WIRE_CAP_BYTES
   const list = segments || []
   const chunks = []
   let batch = []
@@ -48,6 +57,13 @@ function packSegmentChunks (segments, opts = {}) {
     // Measure the packed body when present (engine envelopes); fall back to the whole envelope
     // (rows-carrying shape used by tests / non-packed producers).
     const bytes = Buffer.byteLength(JSON.stringify(seg && seg.body != null ? seg.body : seg), 'utf8')
+    if (bytes > maxSegmentBytes) {
+      // Wave-B P2-4: refuse loudly INSTEAD of emitting a line the receiver must destroy.
+      const err = new Error(`single segment (${bytes} bytes) exceeds the ${maxSegmentBytes}-byte wire cap — sync cannot proceed until the offending row is trimmed or deleted`)
+      err.oversizedSegment = true
+      err.segmentBytes = bytes
+      throw err
+    }
     if (batch.length && batchBytes + bytes > maxChunkBytes) flush(false)
     batch.push(seg)
     batchBytes += bytes
@@ -56,4 +72,4 @@ function packSegmentChunks (segments, opts = {}) {
   return chunks
 }
 
-module.exports = { packSegmentChunks, SEGMENT_CHUNK_BYTES }
+module.exports = { packSegmentChunks, SEGMENT_CHUNK_BYTES, WIRE_CAP_BYTES }

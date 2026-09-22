@@ -238,6 +238,7 @@ function createAttachmentPuller (opts = {}) {
   let requestedBatch = new Set() // P2-a: ids actually requested this round (unsolicited frames rejected)
   let settled = false
   let receivedBytes = 0 // round budget accounting (actual att-meta sizes)
+  const reservedIds = new Set() // Wave-B P2-2: ids whose budget was reserved this round (dedupe)
 
   /** Queue keys observed missing on disk (deduped against the session failed-set). */
   function noteMissing (keys) {
@@ -310,11 +311,26 @@ function createAttachmentPuller (opts = {}) {
   function onMessage (msg) {
     const type = msg && msg.type
     if (type === 'att-meta') {
+      const idStr = String(msg.id)
+      // Wave-B P2-2: DUPLICATE att-meta for the file currently in flight (a buggy or re-serving
+      // peer re-announcing meta mid-transfer) must REUSE the open session, not re-open it — the
+      // old path re-reserved `size` against the round byte budget and reset `chunks`/`received`,
+      // double-counting the 64MB budget and corrupting the assembly.
+      if (current && current.id === idStr) {
+        try { require('electron-log').warn('[LanSync] duplicate att-meta for in-flight file, reusing open session:', idStr) } catch { /* noop */ }
+        return true
+      }
+      // Same guard for a meta re-sent AFTER the file already completed this round: the budget was
+      // already spent and the file landed — ignore instead of re-opening.
+      if (reservedIds.has(idStr)) {
+        try { require('electron-log').warn('[LanSync] duplicate att-meta for completed file, ignored:', idStr) } catch { /* noop */ }
+        return true
+      }
       // P2-a (2026-09-19 data-safety round): reject UNSOLICITED att-meta frames — an id we did
       // not request in this round's batch must never open a receive session (a compromised or
       // buggy peer cannot push arbitrary files into the round's byte budget).
-      if (!requestedBatch.has(String(msg.id))) {
-        try { require('electron-log').warn('[LanSync] unsolicited att-meta rejected:', String(msg.id)) } catch { /* noop */ }
+      if (!requestedBatch.has(idStr)) {
+        try { require('electron-log').warn('[LanSync] unsolicited att-meta rejected:', idStr) } catch { /* noop */ }
         return true
       }
       // P2-b: size must be a finite positive number within the single-file cap — NaN used to
@@ -322,15 +338,17 @@ function createAttachmentPuller (opts = {}) {
       // through and then `|| 0` recorded 0 received bytes while chunks still arrived).
       const size = Number(msg.size)
       if (!Number.isFinite(size) || size <= 0 || size > maxFileBytes) {
-        try { require('electron-log').warn('[LanSync] att-meta invalid size, treated as protocol error:', String(msg.id), msg.size) } catch { /* noop */ }
-        markFailed(String(msg.id)); return true
+        try { require('electron-log').warn('[LanSync] att-meta invalid size, treated as protocol error:', idStr, msg.size) } catch { /* noop */ }
+        markFailed(idStr); return true
       }
+      // Wave-B P2-2: the budget is reserved ONCE per id per round (guard above rejects re-metas).
       if (receivedBytes + size > maxBytes) {
-        try { require('electron-log').warn('[LanSync] attachment exceeds round byte budget, skipped:', String(msg.id)) } catch { /* noop */ }
-        markFailed(String(msg.id)); return true
+        try { require('electron-log').warn('[LanSync] attachment exceeds round byte budget, skipped:', idStr) } catch { /* noop */ }
+        markFailed(idStr); return true
       }
       receivedBytes += size
-      current = { id: String(msg.id), size, hash: String(msg.hash || ''), chunks: new Map(), received: 0 }
+      reservedIds.add(idStr)
+      current = { id: idStr, size, hash: String(msg.hash || ''), chunks: new Map(), received: 0 }
       return true
     }
     if (type === 'att-chunk') {
