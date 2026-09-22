@@ -83,7 +83,9 @@ module.exports = function todoHandlers (ctx) {
   // Dangerous DB ops: batch write/batch delete/arbitrary meta write. Capability-wise aligned with "dangerous channels main-window only" —
   // a compromised float/lock-screen window could previously wipe the whole database in bulk or change any meta via todo-db:call (audit 2026-09-01).
   // The renderer's real call surface has been verified: all three only occur in the main window (store/utils/main.js); auxiliary windows have no legitimate callers.
-  const MAIN_WINDOW_ONLY_OPS = new Set(['upsertMany', 'commitSyncBatch', 'hardDeleteMany', 'setMeta', 'deleteMeta', 'syncSetEnabled', 'syncSetName', 'syncUnpairPeer', 'syncConflictBackupRestore', 'syncSetPeerAlias'])
+  // Review-P1 (2026-09-22): the four pairing-establishment ops are a STRICTLY higher capability
+  // than unpair/rename (pairing routes the whole DB to a new peer) — they join the main-window set.
+  const MAIN_WINDOW_ONLY_OPS = new Set(['upsertMany', 'commitSyncBatch', 'hardDeleteMany', 'setMeta', 'deleteMeta', 'syncSetEnabled', 'syncSetName', 'syncUnpairPeer', 'syncConflictBackupRestore', 'syncSetPeerAlias', 'syncPairWithCode', 'syncAddPeer', 'syncPairRespond', 'syncPairRequest'])
 
   // Shared execution core for BOTH routes into the bus era:
   //   'todo-db:call'   — legacy op-keyed channel (reads pass through untouched; writes are
