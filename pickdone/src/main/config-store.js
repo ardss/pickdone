@@ -89,18 +89,12 @@ function writeConfig (patch) {
     // D6 P2 (2026-09-21): mergeConfig replaces Object.assign — prototype-pollution-safe (see above).
     const c = mergeConfig(readConfig(), patch)
     fs.mkdirSync(path.dirname(configFile()), { recursive: true })
-    // Atomic write (tmp+rename): a truncated config.json used to make readConfig silently fall back to
-    // defaults (readConfig now quarantines it as config.json.bad instead), losing winBounds/locale/security-lock password
-    const tmp = configFile() + '.tmp'
-    try {
-      fs.writeFileSync(tmp, JSON.stringify(c, null, '\t'))
-      fs.renameSync(tmp, configFile())
-    } catch (e) {
-      // Never leave config.json.tmp residue behind: a stale tmp invites tools/AV to resurrect or diff
-      // it, and it masks whether the last write landed. Clean up, then rethrow the original error.
-      try { fs.rmSync(tmp, { force: true }) } catch { /* best-effort */ }
-      throw e
-    }
+    // Atomic write (tmp+rename) — main-ipc-2 fsync fix (2026-09-22): writeFileDurable adds an
+    // fsync of the file data before the rename (and a best-effort dir fsync), so a power cut can
+    // no longer persist the rename while the new content is still OS-cached-only (a truncated/
+    // stale config.json = lost winBounds/locale/security-lock state). The helper owns the tmp
+    // lifecycle and guarantees no residue on failure.
+    require('./durable-fs').writeFileDurable(configFile(), JSON.stringify(c, null, '\t'))
     return c
   }
   if (_pending === 0) {

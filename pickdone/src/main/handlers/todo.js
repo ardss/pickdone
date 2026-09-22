@@ -121,11 +121,20 @@ module.exports = function todoHandlers (ctx) {
           // 本地时区当天(dateKey 按本地 dayjs 导出,UTC 串会在 0-8 点误判跨天)
           const todayKey = fixUtil.localDayKey(Date.now())
           if (op === 'tomatoUpdateById') {
-            // dateKey 由 endTime 强制导出(db 层),校验目标行当天即够;查不到的行让 db 层自己返回 false
+            // dateKey 由 endTime 强制导出(db 层);查不到的行让 db 层自己返回 false
             // D6 P2 (2026-09-22): tomatoAll (full-table scan, once per float tick under lock) →
             // indexed by-id read via tomatoGetById (same deleted=0 semantics as every reader)
+            // D7 (2026-09-22, main-ipc-7): the target row's CURRENT dateKey being today is not
+            // enough — db-layer tomatoUpdateById re-derives dateKey from endTime, so a patch
+            // carrying a historical endTime silently migrated a today row to any past day.
+            // Same local-today day-bound as the tomatoAppendMany branch below: an endTime present
+            // in the patch must land on local today too (focusDuration stays LIMITS-clamped at
+            // the db layer, so the residual surface is minutes-scale, not history forgery).
             const cur = dbm.call('tomatoGetById', String((params || {}).tomatoId))
-            floatLedger = !!cur && cur.dateKey === todayKey
+            const patch = (params || {}).patch || {}
+            const patchEnd = patch.endTime
+            floatLedger = !!cur && cur.dateKey === todayKey &&
+              (patchEnd == null || (Number(patchEnd) > 0 && fixUtil.localDayKey(Number(patchEnd)) === todayKey))
           } else {
             // tomatoAppendMany 同款收窄(2026-09-09 P2):此前批量追加无时间约束,被陷浮窗锁屏期可
             // 伪造任意历史日期的账本行;现要求所有行的 endTime 都落在本地当天
@@ -277,11 +286,15 @@ module.exports = function todoHandlers (ctx) {
     'db:purge-recycle-bin': (e) => {
       assertMainWindow(e)
       if (isLocked()) throw new Error('locked')
-      // Collect rows to delete and clean attachment files first (files before rows): deleting only rows once left private attachments on disk after "permanent wipe".
-      // D6 P1 (2026-09-21): a collect failure used to fall through with ids=[] — the purge then
-      // deleted the ROWS while purgeAttachmentFiles([]) no-op'd, orphaning every private
-      // attachment on disk forever (the exact outcome the files-before-rows order exists to
-      // prevent). Abort the purge BEFORE the bus commit instead; the caller sees the error.
+      // Files before rows, for real (main-ipc-8, 2026-09-22): the old comment claimed this order
+      // while the code did the opposite — bus.commit first (rows physically gone) THEN
+      // purgeAttachmentFiles, whose per-file failures are warn-only (handlers/shared.js). A failed/
+      // interrupted file delete after the commit permanently orphaned private attachment files with
+      // their owning rows gone. Now the files are removed BEFORE the commit: if the commit then
+      // fails, recycle-bin rows survive pointing at already-deleted files — the renderer's
+      // missing-file guard shows "not yet synced" instead, a benign outcome vs. an orphaned
+      // private file that nothing can ever reach again.
+      // D6 P1 (2026-09-21): a collect failure aborts the purge BEFORE any deletion (see below).
       let ids
       try {
         ids = dbm.call('queryTodos', { deleted: 1 }).map(t => t.taskId)
@@ -289,11 +302,12 @@ module.exports = function todoHandlers (ctx) {
         log.warn('[Purge] 回收站行收集失败，purge 已中止（未删行未删文件）:', err)
         throw new Error('purge aborted: failed to collect recycle-bin rows, no rows or files were deleted: ' + String((err && err.message) || err))
       }
+      // Files BEFORE the commit (main-ipc-8): see the comment above the ids collection.
+      purgeAttachmentFiles(attachDir, ids)
       // Phase-2: the purge commits go through the command bus (todo.purgeBin manifest row) —
       // the 'ls-mirror' hook fires the sync kick, 'undo-barrier' re-baselines the external-write
       // watcher (our own WAL write must not surface as an external CLI write).
       const r = bus.commit('todo', 'purgeBin')
-      purgeAttachmentFiles(attachDir, ids)
       // M-4 (2026-09-20): mirror the GAP-B pattern — purge is a write; without the kick peers only
       // saw emptied recycle bins at the next 5-min periodic round.
       scheduler.reloadAll(dbApi()); broadcastTodosChanged('purgeRecycleBin', e.sender)

@@ -73,6 +73,12 @@ function migratePlainToEncrypted (dir, file, key) {
     // Explicit wal_checkpoint(TRUNCATE) before closing: ensure the plaintext WAL tail writes have landed in the main file before the WAL can be safely deleted (otherwise .plain-bak may miss tail data)
     db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
     db.close()
+    // main-ipc-2 fsync fix (2026-09-22): the key must be PERSISTENTLY on disk before the renames
+    // below. The old writeFileSync (at the caller, after these renames) without fsync let a power
+    // cut persist the encrypted-DB rename while the key was still OS-cached-only — encrypted DB
+    // on disk, key lost, library unrecoverable. Durable write here closes that window; the
+    // caller's key write afterwards becomes an idempotent confirmation.
+    require('./durable-fs').writeFileDurable(path.join(path.dirname(file), 'db.key'), key)
     fs.renameSync(file, file + '.plain-bak')
     fs.renameSync(encFile, file)
     for (const suffix of ['-wal', '-shm']) { try { fs.rmSync(file + suffix, { force: true }) } catch {} }
@@ -364,7 +370,10 @@ function initInner (userDataPath) {
       const ok = migratePlainToEncrypted(userDataPath, file, key)
       db = new loadDriver()(file)
       // Order is critical: write db.key to disk before the pragma — if the encrypted DB is opened first and the key write fails, the DB is encrypted while the key exists only in memory and the next startup is unrecoverable
-      if (ok) { fs.writeFileSync(keyFile, key, 'utf8'); db.pragma(`key='${key}'`) }
+      // main-ipc-2 fsync fix (2026-09-22): writeFileDurable (tmp+fsync+rename) — writeFileSync alone
+      // left the key OS-cached; a power cut after migratePlainToEncrypted's renames persisted the
+      // encrypted DB without a recoverable key.
+      if (ok) { require('./durable-fs').writeFileDurable(keyFile, key); db.pragma(`key='${key}'`) }
       // On migration failure keep plaintext open (functionality first); the error is already logged
     } else {
       // Fresh install: the file only ever held our just-created empty schema — no data to migrate,
@@ -372,7 +381,7 @@ function initInner (userDataPath) {
       // encrypt existing pages → the CLI reopening with db.key reads garbage: "file is not a database")
       db.close()
       for (const f of [file, file + '-wal', file + '-shm']) { try { fs.rmSync(f, { force: true }) } catch {} }
-      fs.writeFileSync(keyFile, key, 'utf8')
+      require('./durable-fs').writeFileDurable(keyFile, key) // main-ipc-2 fsync fix (2026-09-22), same rationale as the migration path above
       db = new loadDriver()(file)
       db.pragma(`key='${key}'`)
       db.prepare('SELECT count(*) FROM sqlite_master').get() // decrypt probe, same as open path
@@ -446,6 +455,18 @@ function assertHasTaskId (t) {
 }
 
 const makeBulkOps = require('./db-bulk-ops')(() => db, () => OPS)
+// main-ipc-3 unbounded-key fix (2026-09-22): snowDedup:<taskId>:<dedupKey> meta keys are written
+// once per focus session (bumpSnow idempotency fence) and previously had NO cleanup path — they
+// accumulated linearly forever, and survived even after the owning task was hard-deleted or its
+// recycle-bin row purged (the startup meta GC's family list never covered them either). Purge the
+// owning task's keys inside the SAME delete transaction. Range predicate instead of LIKE: task
+// ids are renderer-supplied and % / _ in an id would silently widen a LIKE pattern.
+const deleteSnowDedupKeysFor = ids => {
+  for (const id of ids) {
+    const prefix = `snowDedup:${String(id)}:`
+    db.prepare('DELETE FROM meta WHERE key >= ? AND key < ?').run(prefix, prefix + ';')
+  }
+}
 const OPS = {
   upsert: t => { assertHasTaskId(t); stmts.upsert.run(todoToRow(t)); return true },
   upsertMany: list => { if (!Array.isArray(list)) throw new Error('[TodoDB] upsertMany: list must be an array, got ' + typeof list); list.forEach(assertHasTaskId); stmts.upsertMany(list.map(todoToRow)); return true },
@@ -488,8 +509,7 @@ const OPS = {
     // the row. Each key is stamped with its creation time; once the meta table holds more than
     // SNOW_DEDUP_CAP keys, entries older than SNOW_DEDUP_MAX_AGE_MS are pruned — replay protection
     // only needs recent keys (a replay lands within seconds of the ambiguous failure), while the
-    // one-row-per-focus-session accumulation used to grow the meta table unboundedly. Callers that
-    // send no dedupKey keep the legacy non-idempotent behavior (backward compatible).
+    // one-row-per-focus-session accumulation used to grow the meta table unboundedly. Callers that    // send no dedupKey keep the legacy non-idempotent behavior (backward compatible).
     if (dedupKey != null && dedupKey !== '') {
       const key = `snowDedup:${taskId}:${dedupKey}`
       const tr = db.transaction(() => {
@@ -529,8 +549,8 @@ const OPS = {
   },
   queryTodos,
   // 两表删除包事务:两语句间崩溃会留孤儿 chips(2026-09-05 终审 P1,与 hardDeleteMany 对齐)
-  hardDelete: id => { const tr = db.transaction(() => { db.prepare('DELETE FROM plan_chips WHERE taskId=?').run(String(id)); stmts.hardDelete.run(id) }); tr(); return true },
-  hardDeleteMany: ids => { const tr = db.transaction(() => ids.forEach(i => { db.prepare('DELETE FROM plan_chips WHERE taskId=?').run(String(i)); stmts.hardDelete.run(i) })); tr(); return true },
+  hardDelete: id => { const tr = db.transaction(() => { db.prepare('DELETE FROM plan_chips WHERE taskId=?').run(String(id)); deleteSnowDedupKeysFor([id]); stmts.hardDelete.run(id) }); tr(); return true },
+  hardDeleteMany: ids => { const tr = db.transaction(() => ids.forEach(i => { db.prepare('DELETE FROM plan_chips WHERE taskId=?').run(String(i)); deleteSnowDedupKeysFor([i]); stmts.hardDelete.run(i) })); tr(); return true },
   getMeta: k => { const r = stmts.getMeta.get(k); return r ? r.value : null },
   // Accepts both argument forms: (k, v) or [k, v] (the renderer's dbCall('setMeta', [k, v]) is passed through as a single call parameter)
   setMeta: (k, v) => { if (Array.isArray(k)) { v = k[1]; k = k[0] } stmts.setMeta.run(k, String(v)); return true },
@@ -553,6 +573,7 @@ const OPS = {
     const tr = db.transaction(() => {
       ids = db.prepare('SELECT id FROM todos WHERE deleted = 1').all().map(r => r.id)
       db.prepare('DELETE FROM plan_chips WHERE taskId IN (SELECT id FROM todos WHERE deleted = 1)').run()
+      deleteSnowDedupKeysFor(ids) // main-ipc-3 (2026-09-22): the rows die here — their focus-session dedup fences must not outlive them
       db.prepare('DELETE FROM todos WHERE deleted = 1').run()
     }); tr(); return ids
   },
@@ -562,6 +583,7 @@ const OPS = {
     const tr = db.transaction(() => {
       ids = db.prepare("SELECT id FROM todos WHERE substr(id, 1, 5) = 'seed_'").all().map(r => r.id)
       db.prepare("DELETE FROM plan_chips WHERE taskId IN (SELECT id FROM todos WHERE substr(id, 1, 5) = 'seed_')").run()
+      deleteSnowDedupKeysFor(ids) // main-ipc-3 (2026-09-22): same lifecycle rule as purgeRecycleBin
       db.prepare("DELETE FROM todos WHERE substr(id, 1, 5) = 'seed_'").run()
     }); tr(); return ids
   },
@@ -863,7 +885,14 @@ const OPS = {
       })
       if (!raw || !raw.tomatoId) { reject('tomatoId required'); return }
       if (!raw.endTime) { reject('endTime required'); return }
-      const r = OPS._recToRow(Object.assign({ dateKey: '', succeed: true, manual: false }, raw))
+      // Strip the explicit updatedAt BEFORE _recToRow snapshots unknown keys into the extra blob
+      // (main-ipc-9, see below); the stamp itself is re-read from raw at the ins.run site.
+      const clean = Object.assign({}, raw); delete clean.updatedAt
+      const r = OPS._recToRow(Object.assign({ dateKey: '', succeed: true, manual: false }, clean))
+      // main-ipc-9 (2026-09-22): the sync-apply path carries an explicit updatedAt (see stamp below);
+      // without the strip above it leaked into the extra JSON blob via _recToRow's unknown-key
+      // preservation (updatedAt is not a _REC_COLS column) — redundant storage read back on every
+      // _rowToRec. Same `delete rec.updatedAt` contract as tomatoUpdateById.
       // dateKey 无条件由 endTime 重导(2026-09-04 深审 P0:三补录入口曾各按 startTs 落 dateKey,跨午夜记录与统计/时间轴 endTime 口径分裂)
       // dateKey 从调用方传入值起不再被信任,格式校验降级为派生后的防御断言
       r.dateKey = dayjs(r.endTime).format('YYYY-MM-DD')

@@ -38,7 +38,12 @@ module.exports = function systemHandlers (ctx) {
 
     // --- External links ---
     'open-external-url': (e, url) => {
-      if (!isSafeExternal(url)) return
+      // D7 (2026-09-22, main-ipc-5): locked-state gate — this was the last data-plane channel in the
+      // family without it (notification/open-file/download/save-upload all gate). While locked, any
+      // surviving renderer window could still launch the browser at an arbitrary https URL (fishing
+      // redirect / external-protocol handler trigger). Symmetric throw, not a silent return.
+      if (isLocked()) throw new Error('locked')
+      // (also removes the old double isSafeExternal call — redundant branch debt)
       if (isSafeExternal(url)) shell.openExternal(url)
     },
     // [IPC dead channels cleaned] download-file/open-file-in-viewer/goto-main-window-and-select-todo/

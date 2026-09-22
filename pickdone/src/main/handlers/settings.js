@@ -66,8 +66,7 @@ module.exports = function settingsHandlers (ctx) {
       delete clean.securityLockQuestion
       delete clean.schemaV
       delete clean.constructor
-      delete clean.prototype
-      // note: an own '__proto__' key on the patch is left as inert data here (spread defined it
+      delete clean.prototype      // note: an own '__proto__' key on the patch is left as inert data here (spread defined it
       // safely); writeConfig's mergeConfig filters it before any merge, and a direct
       // `delete clean.__proto__` is banned by eslint no-proto.
       const c = writeConfig(clean)
