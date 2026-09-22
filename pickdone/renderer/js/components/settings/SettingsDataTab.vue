@@ -206,7 +206,7 @@ export default {
           t.deadlineTs ? dayjs(t.deadlineTs).format(FMT.date) : '',
           t.important === 1 || t.important === true ? 'Y' : 'N',
           t.urgent === 1 || t.urgent === true ? 'Y' : 'N',
-          t.todoDifficultyLevel || 0,
+          t.difficulty || 0, // DB row-set field is `difficulty` (db-rows.js rowToTodo); todoDifficultyLevel never existed and always exported 0
           // D6-F15: priority (0 none / 1 low / 3 high, matching the EditPanel two-tier ledger) and
           // completion time were never exported — the Excel snapshot lost the quadrant + completion data
           t.priority || 0,
