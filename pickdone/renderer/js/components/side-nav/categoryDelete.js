@@ -36,7 +36,10 @@ export async function deleteCategoryWithUndo (ctx, c) {
   if (st.calendarCategory === c.categoryId) reset.calendarCategory = 0
   const settingsReset = Object.keys(reset).length
   const preReset = { todoBoxCategoryId: st.todoBoxCategoryId, newTodoCategoryId: st.newTodoCategoryId, calendarCategory: st.calendarCategory }
-  if (settingsReset) ctx.$store.commit('settings/updateSettings', reset)
+  // Review P3 (2026-09-22): route through the settings/update ACTION (not the raw mutation) so the
+  // reset mirrors to config.json / shortcuts like every other settings write — the raw commit used
+  // to leave config.json pointing at the dead category id until the next unrelated settings change.
+  if (settingsReset) await ctx.$store.dispatch('settings/update', reset)
   const undo = async () => {
     for (const vid of victims) ctx.$store.commit('category/recover', vid)
     for (const t of affectedTasks) {
@@ -46,7 +49,7 @@ export async function deleteCategoryWithUndo (ctx, c) {
     for (const f of affectedFilters) {
       try { await ctx.$store.dispatch('filters/save', f) } catch (e) { /* best-effort */ }
     }
-    if (settingsReset) ctx.$store.commit('settings/updateSettings', preReset)
+    if (settingsReset) await ctx.$store.dispatch('settings/update', preReset)
   }
   const summary = ctx.$t('statsG.SideNav.delCatUndone', {
     name: c.categoryName,

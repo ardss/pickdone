@@ -7,6 +7,7 @@
  * `this`), which owns the debounce timers and the quit-flush hook flags exactly as before.
  */
 import { saveRuntime } from './runtimeState.js'
+import { isAuxWindow } from '../utils/auxWindow.js'
 
 /** Persistence blob format version (shared by the todoState/categoryState/habitsState segments in backup dumps);
  *  note this is unrelated to state.version (the sync counter). The restore side refuses to import segments >1 (preventing downgrade misreads). */
@@ -79,7 +80,7 @@ export function writeCriticalBackupCore (ctx, { state, rootState }) {
   // unhandled rejection on every debounced fire in the float/quick-add window and never wrote the backup there.
   // Aux windows don't back up (the main window's timer covers the shared state); early-return, mirroring dbMirror.js.
   try {
-    if (typeof window !== 'undefined' && window.location && window.location.hash && /__tomato-float|__quick-add/.test(window.location.hash)) return
+    if (isAuxWindow()) return // centralized detection (review P3 2026-09-22)
   } catch { /* non-browser env */ }
   const buildDump = async () => buildBackupDump(rootState, state, { planState: await collectPlanState() })
   const writeNow = () => {
