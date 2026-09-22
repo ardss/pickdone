@@ -342,19 +342,71 @@ function checkLocalKeyMirror (report, syncApplyMod) {
  * door) and sync-apply.js (remote ingress clampSkew). Source-level assertions catch a revert
  * to a hand-rolled literal.
  */
+/**
+ * Numeric-literal run: one number token (decimal, exponent, or hex) optionally joined to more
+ * number tokens by '*'. Every such run is a pure-numeric product we can evaluate exactly.
+ * Lookaround boundaries keep identifiers like `clamp600000` or member accesses from matching.
+ */
+const NUMERIC_RUN = /(?<![\w.$])(?:0[xX][0-9a-fA-F]+|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)(?:\s*\*\s*(?:0[xX][0-9a-fA-F]+|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?))*(?![\w.$])/g
+
+/** Evaluate a pure-numeric product slice ("600000", "6e5", "1000 * 60 * 10"). Returns the
+ *  numeric value, or null when the slice is not a pure product of numeric literals. */
+function evalNumericProduct (slice) {
+  let product = 1
+  let sawFactor = false
+  for (const raw of slice.split('*')) {
+    const token = raw.trim()
+    if (!/^(?:0[xX][0-9a-fA-F]+|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)$/.test(token)) return null
+    product *= Number(token)
+    sawFactor = true
+  }
+  return sawFactor ? product : null
+}
+
+/**
+ * Value-based handwritten-clamp detector: instead of memorizing ONE spelling of the clamp
+ * window ("5|10 * 60 * 1000"), evaluate every numeric run in (comment-stripped) source and
+ * flag any whose value equals a forbidden window. Equivalent spellings — 600000, 3e5,
+ * 1000*60*10, 0x927C0 — all carry the same value and are caught alike.
+ * Returns the offending slices with their values.
+ */
+function findClampWindowLiterals (src, windows) {
+  const hits = []
+  const clean = stripComments(src)
+  for (const m of clean.matchAll(NUMERIC_RUN)) {
+    const value = evalNumericProduct(m[0])
+    if (value !== null && windows.has(value)) hits.push({ text: m[0].trim(), value })
+  }
+  return hits
+}
+
+/** Parse the shared constant's value out of stamp-clamp.js using the same evaluator (so the
+ *  gate does not depend on stamp-clamp.js spelling its value as N*60*1000 either). */
+function parseStampClampMs (clampSrc) {
+  const m = clampSrc.match(/STAMP_CLAMP_MS\s*=\s*/)
+  if (!m) return null
+  const rest = clampSrc.slice(m.index + m[0].length)
+  const run = rest.match(new RegExp(NUMERIC_RUN.source, ''))
+  return run ? evalNumericProduct(run[0]) : null
+}
+
 function checkSharedStampClamp (report) {
   let ok = true
   const clampSrc = fs.readFileSync(path.join(root, 'src/main/stamp-clamp.js'), 'utf8')
-  const m = clampSrc.match(/STAMP_CLAMP_MS\s*=\s*(\d+)\s*\*\s*60\s*\*\s*1000/)
-  if (!m) { report('stamp-clamp.js 中找不到共享常量 STAMP_CLAMP_MS'); return false }
+  const clampMs = parseStampClampMs(clampSrc)
+  if (clampMs === null || !Number.isFinite(clampMs) || clampMs <= 0) { report('stamp-clamp.js 中找不到共享常量 STAMP_CLAMP_MS'); return false }
+  // Forbidden windows: the shared constant itself, plus the historical 5-minute variant when
+  // it is an integer (the pre-unification command-bus door used half the sync window).
+  const windows = new Set([clampMs])
+  if (clampMs % 2 === 0) windows.add(clampMs / 2)
   for (const rel of ['src/main/command-bus.js', 'src/main/sync-apply.js']) {
     const src = fs.readFileSync(path.join(root, rel), 'utf8')
     if (!/require\(['"]\.\/stamp-clamp['"]\)/.test(src)) {
       report(`${rel} 未引入共享 stamp-clamp 常量 —— 未来戳钳制窗口不允许各自手写`)
       ok = false
     }
-    if (/=\s*(5|10)\s*\*\s*60\s*\*\s*1000/.test(src)) {
-      report(`${rel} 中仍有手写钳制窗口字面量 —— 必须使用 stamp-clamp.js 的 STAMP_CLAMP_MS`)
+    for (const hit of findClampWindowLiterals(src, windows)) {
+      report(`${rel} 中仍有手写钳制窗口字面量 (${hit.text} = ${hit.value}) —— 必须使用 stamp-clamp.js 的 STAMP_CLAMP_MS`)
       ok = false
     }
   }
@@ -383,6 +435,13 @@ if (require.main === module) {
     const dyn = scanDynamicWriteSites("dbCall(opName, p); bus.commitOp(opVar, p); state.db.call(op, p); db.call('upsert', t); fn.call(this, x);")
     if (dyn.length !== 2) { console.error('  ✗ selftest: dynamic writes mis-flagged (' + dyn.length + ', want 2): ' + dyn.map(d => d.line.trim()).join(' | ')); stFailed++ }
     if (!dyn.some(d => d.line.includes('state.db.call(op'))) { console.error('  ✗ selftest: db-receiver dynamic write not caught'); stFailed++ }
+    // Stamp-clamp literal detector: equivalent spellings of the 10-min window are all caught;
+    // unrelated numbers / identifiers / comment text are not.
+    const win = new Set([600000, 300000])
+    const plantedWindows = findClampWindowLiterals("const A = 600000; const B = 6e5; const C = 1000 * 60 * 10; const D = 60 * 1000 * 10; const E = 3e5; const F = 0x927C0; const G = 5 * 60 * 1000", win)
+    if (plantedWindows.length !== 7) { console.error('  ✗ selftest: clamp-window spellings mis-caught (' + plantedWindows.length + ', want 7): ' + plantedWindows.map(h => h.text).join(' | ')); stFailed++ }
+    const cleanSrc = findClampWindowLiterals("const t = 30000; const n = 60 * 1000; const clamp600000 = 1; x.slice(0, 1000); // 600000 in a comment\n/* 5 * 60 * 1000 in a block */", win)
+    if (cleanSrc.length) { console.error('  ✗ selftest: clamp detector falsely flagged: ' + cleanSrc.map(h => h.text).join(' | ')); stFailed++ }
     checkRows(m => { console.error(m); stFailed++ })
     if (stFailed) process.exit(1)
     console.log('  ✓ command-bus gate self-test passed')
@@ -405,4 +464,4 @@ if (require.main === module) {
   console.log(failed === 0 && pass ? '[check-command-bus] PASS' : '[check-command-bus] FAIL')
   process.exit(failed === 0 && pass ? 0 : 1)
 }
-module.exports = { scanSource, scanWriteCallSites, scanWriteSites, scanDynamicWriteSites, checkRows, checkLocalKeyMirror, checkSharedStampClamp, MIRROR_KEY_CORPUS, stripComments }
+module.exports = { scanSource, scanWriteCallSites, scanWriteSites, scanDynamicWriteSites, checkRows, checkLocalKeyMirror, checkSharedStampClamp, MIRROR_KEY_CORPUS, stripComments, evalNumericProduct, findClampWindowLiterals, parseStampClampMs }
