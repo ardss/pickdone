@@ -28,11 +28,15 @@ process.on('exit', cleanupTempUserData)
 
 export const sleep = ms => new Promise(r => setTimeout(r, ms))
 
-/** bind-then-release 探测空闲调试端口（比 probe-then-bind 更稳，run-interactions-gated 已验证） */
+/** bind-then-release 探测空闲调试端口（比 probe-then-bind 更稳，run-interactions-gated 已验证）
+ *  候选池横跨多个不连续段：WinNAT 保留段会随重启漂移，2026-09-23 实锤 9400-9799 整段被吞
+ *  （bind 全拒 → 'no free debug port found'），单一连续池必然再撞。40 次尝试覆盖四段。 */
 export async function pickFreePort () {
   const net = await import('node:net')
-  for (let i = 0; i < 12; i++) {
-    const p = 9400 + Math.floor(Math.random() * 400)
+  const spans = [9400, 12000, 18000, 21000]
+  for (let i = 0; i < 40; i++) {
+    const span = spans[i % spans.length]
+    const p = span + Math.floor(Math.random() * 400)
     const free = await new Promise(resolve => {
       const srv = net.createServer()
       srv.once('error', () => resolve(false))
