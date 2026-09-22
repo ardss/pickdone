@@ -40,7 +40,7 @@ interface TomatoRecord {
   [key: string]: unknown
 }
 
-type DbCallOp = 'getById' | 'getAll' | 'queryTodos' | 'getMeta' | 'deleteMeta' | 'upsert' | 'upsertMany' | 'hardDelete' | 'hardDeleteMany' | 'setMeta' | 'getAllCategories' | 'upsertCategory' | 'filterList' | 'filterUpsert' | 'filterDelete' | 'countAll' | 'countSeedTodos' | 'bumpSnow' | 'planAll' | 'planAddMany' | 'planUpdateChip' | 'planRemoveIds' | 'planMoveTask' | 'planDeleteTask' | 'planDeleteTaskDay' | 'planPrune' | 'tomatoAll' | 'tomatoAppendMany' | 'tomatoUpdateById' | 'tomatoRemoveByIds' | 'tomatoMigrateFromMeta' | 'syncGetSettings' | 'syncSetEnabled' | 'syncGetStatus' | 'syncGetPairingCode' | 'syncSetName' | 'syncPairWithCode' | 'syncAddPeer'
+type DbCallOp = 'getById' | 'getAll' | 'queryTodos' | 'getMeta' | 'deleteMeta' | 'upsert' | 'upsertMany' | 'hardDelete' | 'hardDeleteMany' | 'setMeta' | 'getAllCategories' | 'upsertCategory' | 'filterList' | 'filterUpsert' | 'filterDelete' | 'countAll' | 'countSeedTodos' | 'bumpSnow' | 'planAll' | 'planAddMany' | 'planUpdateChip' | 'planRemoveIds' | 'planMoveTask' | 'planDeleteTask' | 'planDeleteTaskDay' | 'planPrune' | 'tomatoAll' | 'tomatoAppendMany' | 'tomatoUpdateById' | 'tomatoRemoveByIds' | 'tomatoMigrateFromMeta' | 'syncGetSettings' | 'syncSetEnabled' | 'syncGetStatus' | 'syncGetPairingCode' | 'syncSetName' | 'syncPairWithCode' | 'syncAddPeer' | 'getMetaMany' | 'commitSyncBatch' | 'tomatoGetById' | 'settingsRowsAll' | 'settingsRowPut' | 'settingsRowPutMany' | 'settingsRowDelete' | 'syncUnpairPeer' | 'syncPairRespond' | 'syncPairRequest' | 'syncConflictBackupsList' | 'syncConflictBackupRestore' | 'syncSetPeerAlias'
 
 interface TodoAPI {
   /** DB 白名单调用面:渲染端所有持久化读写必须经此(db.call);op 联合与主进程白名单同源 */
@@ -68,6 +68,8 @@ interface TodoAPI {
   flushTomatoFloat: (...args: any[]) => any
   getDefaultBackupDir: (...args: any[]) => any
   getSettings: (...args: any[]) => any
+  /** Batch meta read (CONTRACT 2026-09-20, F-UI): replaces per-key getMeta loops */
+  getMetaMany: (...args: any[]) => any
   hideTomatoFloat: (...args: any[]) => any
   importCsvPickPreview: (...args: any[]) => any
   importCsvRun: (...args: any[]) => any
@@ -80,6 +82,7 @@ interface TodoAPI {
   notification: (...args: any[]) => any
   onAppQuittingFlush: (...args: any[]) => any
   onCliTomatoCmd: (...args: any[]) => any
+  onExternalHabitsChanged: (...args: any[]) => any
   onExternalSettingsChanged: (...args: any[]) => any
   onPlaySound: (...args: any[]) => any
   onQuickAddFocus: (...args: any[]) => any
@@ -92,6 +95,7 @@ interface TodoAPI {
   onTomatoRecordsChanged: (...args: any[]) => any
   onTomatoTaskbarCmd: (...args: any[]) => any
   onUpdaterEvent: (...args: any[]) => any
+  onWhiteNoiseUpdated: (...args: any[]) => any
   openExternal: (...args: any[]) => any
   openFile: (...args: any[]) => any
   openLogsDir: (...args: any[]) => any
@@ -111,12 +115,22 @@ interface TodoAPI {
   showTomatoFloat: (...args: any[]) => any
   startTomatoFloatDrag: (...args: any[]) => any
   stopTomatoFloatDrag: (...args: any[]) => any
+  /** Pomodoro run announce channel(s): float-window run lifecycle posted to main */
+  tomatoRunAnnounce: (...args: any[]) => any
+  tomatoRunAnnounces: (...args: any[]) => any
   tomatoFloatPanel: (...args: any[]) => any
   tomatoFloatShown: (...args: any[]) => any
   updateSettings: (...args: any[]) => any
   updaterStatus: (...args: any[]) => any
   uploadAttachment: (...args: any[]) => any
   writeCriticalStateBackup: (...args: any[]) => any
+  /** LAN sync (Device Center): two-way confirmed pairing + conflict backup recovery + unpair/alias.
+   *  These dispatch through the todo-db:call whitelist (see DbCallOp). */
+  syncPairRespond: (...args: any[]) => any
+  syncPairRequest: (...args: any[]) => any
+  syncConflictBackupsList: (...args: any[]) => any
+  syncConflictBackupRestore: (...args: any[]) => any
+  notifyQuitFlushDone: (...args: any[]) => any
 }
 
 interface Window {

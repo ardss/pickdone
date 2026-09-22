@@ -638,7 +638,11 @@ export default {
 
       live.forEach(t => {
         const ds = t.dayStart
-        if (!ds) {
+        // Review P3 (2026-09-22): NaN dayStart (corrupted date parse) must degrade to the no-date
+        // bucket — NaN is falsy but previously still slipped into the `t.dayStart &&` checks below
+        // inconsistently; normalize once so the bucketing and comparators stay total.
+        const dsNum = (typeof ds === 'number' && Number.isFinite(ds)) ? ds : 0
+        if (!dsNum) {
           // Completed no-date tasks go into "today completed" (otherwise completing one makes it vanish from the today page with no way to un-complete in place)
           if (t.complete) {
             const ct = t.completedAt || t.updateTime || 0
@@ -656,7 +660,7 @@ export default {
           if (ct >= today && ct < +dayjs(today).add(1, 'day')) todayDoneList.push(t)
           return
         }
-        const diff = Math.round((ds - today) / DAY_MS)
+        const diff = Math.round((dsNum - today) / DAY_MS)
         if (diff < 0) {
           if (-diff <= expUncompletedDays) recentExpiredUncompleted.push(t)
         } else if (diff === 0) todayList.push(t)
@@ -679,17 +683,22 @@ export default {
       })
 
       const completedList = live.filter(t => t.complete)
-        .sort((a, b) => (b.completedAt || b.updateTime) - (a.completedAt || a.updateTime))
+        .sort((a, b) => (b.completedAt || b.updateTime || 0) - (a.completedAt || a.updateTime || 0))
 
       // Todo box: no-date incomplete
       let box = noDateList.filter(t => !t.complete)
       if (settings.todoBoxCategoryId !== -1) box = box.filter(t => t.categoryId === settings.todoBoxCategoryId)
       const dir = settings.todoBoxSortOrder === 'asc' ? 1 : -1
+      // Review P3 (2026-09-22): NaN-safe comparators — a NaN createTime/todoTime used to make the
+      // subtraction comparator return NaN (implementation-defined order); missing numbers now fall
+      // back to 0 so rows keep a deterministic position instead of reshuffling every recompute.
+      const tsOf = t => (typeof t.createTime === 'number' && Number.isFinite(t.createTime)) ? t.createTime : 0
+      const dueOf = t => (typeof (t.todoTime || t.createTime) === 'number' && Number.isFinite(t.todoTime || t.createTime)) ? (t.todoTime || t.createTime) : 0
       box.sort((a, b) => {
         switch (settings.todoBoxSortMethod) {
-          case 'due': return ((a.todoTime || a.createTime) - (b.todoTime || b.createTime)) * dir
+          case 'due': return (dueOf(a) - dueOf(b)) * dir
           case 'difficulty': return (getEstimate(a.taskId) - getEstimate(b.taskId)) * dir // Difficulty retired: by estimated workload = estimated tomatoes
-          default: return (a.createTime - b.createTime) * dir
+          default: return (tsOf(a) - tsOf(b)) * dir
         }
       })
 

@@ -14,7 +14,10 @@ import { showUndoToast } from '../../utils/undoToast.js'
 export async function deleteCategoryWithUndo (ctx, c) {
   const st0 = ctx.$store.state
   const victims = collectCascadeIds(st0.category, c.categoryId)
-  const affectedTasks = st0.todo.todoList.filter(x => victims.includes(x.categoryId))
+  // Shallow copies: these rows are the LIVE store objects, and the reassignment loop below writes
+  // categoryId:0 onto them — without the copy the "pre-delete snapshot" the undo restores from
+  // would already be overwritten (undo would patch categoryId:0, a silent no-op).
+  const affectedTasks = st0.todo.todoList.filter(x => victims.includes(x.categoryId)).map(x => ({ ...x }))
   const victimKey = new Set(victims.map(String))
   const affectedFilters = (st0.filters.list || []).filter(f => f && f.conds && victimKey.has(String(f.conds.catId)))
   ctx.$store.commit('category/softDelete', c.categoryId)
@@ -30,10 +33,13 @@ export async function deleteCategoryWithUndo (ctx, c) {
   }
   // Clean up settings keys pointing at the dead category id: otherwise the todo box filtered by that category stays forever empty (showing 0 items even after data restore)
   const st = ctx.$store.state.settings
+  // Review P1 (2026-09-22): test against the FULL cascade victim set, not just the root id — a folder
+  // delete also tombstones its descendants, so a subcategory-targeted todoBoxCategoryId survived
+  // pointing at a deleted id and the todo box stayed forever empty (0 items, even after undo).
   const reset = {}
-  if (st.todoBoxCategoryId === c.categoryId) reset.todoBoxCategoryId = -1
-  if (st.newTodoCategoryId === c.categoryId) reset.newTodoCategoryId = 0
-  if (st.calendarCategory === c.categoryId) reset.calendarCategory = 0
+  if (victimKey.has(String(st.todoBoxCategoryId))) reset.todoBoxCategoryId = -1
+  if (victimKey.has(String(st.newTodoCategoryId))) reset.newTodoCategoryId = 0
+  if (victimKey.has(String(st.calendarCategory))) reset.calendarCategory = 0
   const settingsReset = Object.keys(reset).length
   const preReset = { todoBoxCategoryId: st.todoBoxCategoryId, newTodoCategoryId: st.newTodoCategoryId, calendarCategory: st.calendarCategory }
   // Review P3 (2026-09-22): route through the settings/update ACTION (not the raw mutation) so the
@@ -42,8 +48,13 @@ export async function deleteCategoryWithUndo (ctx, c) {
   if (settingsReset) await ctx.$store.dispatch('settings/update', reset)
   const undo = async () => {
     for (const vid of victims) ctx.$store.commit('category/recover', vid)
+    // Review P2 (2026-09-22): re-check each task BEFORE restoring its snapshotted categoryId — the 5s
+    // undo window allows concurrent user edits (task moved elsewhere, or soft-deleted). Stomping the
+    // current categoryId with the stale snapshot would silently revert the user's move.
     for (const t of affectedTasks) {
       if (failed.some(f => f.taskId === t.taskId)) continue
+      const cur = (ctx.$store.state.todo.todoList || []).find(x => x.taskId === t.taskId)
+      if (!cur || cur.delete || cur.categoryId !== 0) continue
       try { await ctx.$store.dispatch('todo/updateTodoFields', { taskId: t.taskId, patch: { categoryId: t.categoryId } }) } catch (e) { /* best-effort */ }
     }
     for (const f of affectedFilters) {
