@@ -782,7 +782,11 @@ function toggleComplete (input, target, { withSubtasks, completedAt } = {}) {
         // F3 P2 (2026-09-21, D5 renderer parity — store/todo.js ensureNextRepeatInstance carries
         // `estimate: t.estimate || 0` AND copies it into the per-task meta key, while the CLI twin
         // hardcoded estimate:0): a renewed instance used to silently lose its estimated workload.
-        const estimate = Math.max(0, Math.min(20, Math.round(Number(t.estimate) || 0)))
+        // Fix (2026-09-22): read the LIVE meta estimate of the instance being renewed
+        // (getEstimateOf(旧taskId)) — the row's estimate COLUMN is dead post-X2 (bumpSnow writes
+        // accumulated focus minutes into it), so clamping it 0-20 turned "focused 150 min" into
+        // "estimated 20 tomatoes" on the renewed instance.
+        const estimate = Math.max(0, Math.min(20, Math.round(Number(getEstimateOf(t.taskId, t.estimate)) || 0)))
         const nt = {
           complete: false, createTime: now, delete: false,
           reminderTime: next.reminderTime, reminderOffsets: next.reminderOffsets || [], reminderExtra: Array.isArray(next.reminderExtra) ? next.reminderExtra : [], estimate, difficulty: t.difficulty || 0,
@@ -1886,10 +1890,15 @@ function setReminderExtra (input, csv) {
 }
 
 /* ---------------- Settings (meta db.settingsState mirror; hot-synced to a running App via the main-process watcher) ----------------
-   Manifest mirrors renderer store/settings.js DEFAULT_SETTINGS/SETTING_ENUMS (keep in sync; security keys are never settable here). */
+   Manifest mirrors renderer store/settings.js DEFAULT_SETTINGS/SETTING_ENUMS (keep in sync; security keys are never settable here).
+   Key-migration convention: when the renderer renames a key, the CLI manifest follows the NEW name
+   only (old keys are dropped here, the renderer's store proxy migrates old saved values); legacy
+   names must not linger as manifest entries — a "working" write to a dead key silently no-ops in the App.
+   Intentionally local-only (never manifest-exposed): shortcutKeySettings and foldedTodoList
+   (complex objects managed by the App's own UI). */
 const SETTINGS_MANIFEST = {
-  boolean: ['autoDownloadUpdates', 'enableTomatoFloating', 'weatherEnabled', 'taskFlyAnimation', 'closeActionMinimize', 'isCompleteWithSubtasks', 'isTodoEditModalCloseAutoSave', 'isCompleteCheckboxColorFollow', 'runWhenComputerStart', 'hideMainWindowOnStartup', 'enableHardwareAcceleration', 'showNoDate', 'showCompleteNoDate', 'showComplete', 'developerMode', 'showTodayXModule', 'showHabitModule', 'showProjectsModule', 'showDepsModule', 'isShowSubTask', 'isCalendarDimUncompleted', 'isShowCalendarPrivacyMode', 'isDefaultSubTaskFolded', 'showHolidayMarkers', 'showTodoCheckboxOrder', 'enableSecurityLock', 'autoBackupEnabled', 'isCalendarBackgroundUserSelected'],
-  number: ['dailyTomatoTarget', 'dailyLoadWarnThreshold', 'recycleBinAutoDeleteDays', 'notificationTimeoutInterval', 'todoDescriptionDisplayLineNumber', 'autoBackupIntervalMin', 'autoBackupKeep', 'whiteNoiseVolume', 'tomatoTimeDefault', 'restTimeDefault',
+  boolean: ['autoDownloadUpdates', 'enableTomatoFloating', 'weatherEnabled', 'taskFlyAnimation', 'closeActionMinimize', 'isCompleteWithSubtasks', 'isTodoEditModalCloseAutoSave', 'isCompleteCheckboxColorFollow', 'runWhenComputerStart', 'hideMainWindowOnStartup', 'enableHardwareAcceleration', 'showNoDate', 'showCompleteNoDate', 'showComplete', 'developerMode', 'showTodayXModule', 'showHabitModule', 'showProjectsModule', 'showDepsModule', 'isShowSubTask', 'isCalendarDimUncompleted', 'isShowCalendarPrivacyMode', 'isDefaultSubTaskFolded', 'showHolidayMarkers', 'showTodoCheckboxOrder', 'enableSecurityLock', 'autoBackupEnabled', 'isCalendarBackgroundUserSelected', 'isShowCalendarCompleted', 'sidebarCollapsed', 'catFold'],
+  number: ['dailyTomatoTarget', 'dailyLoadWarnThreshold', 'recycleBinAutoDeleteDays', 'notificationTimeoutInterval', 'todoDescriptionDisplayLineNumber', 'autoBackupIntervalMin', 'autoBackupKeep', 'whiteNoiseVolume', 'tomatoTime', 'restTime',
     // Category-id settings are NUMBERS on the App side (renderer store/settings.js DEFAULT_SETTINGS: newTodoCategoryId: 0,
     // todoBoxCategoryId: -1) and the render path filters with strict equality (store/todo.js todoBoxCategoryId !== -1,
     // TodoBoxView c.categoryId === settings.todoBoxCategoryId) — the CLI used to declare them string and write back
@@ -1916,7 +1925,7 @@ const SETTINGS_MANIFEST = {
   },
   // calendarCategory is a numeric category id in the app (DEFAULT_SETTINGS calendarCategory: 0);
   // declaring it string made `settings list` report the wrong type (value only survived via coercion)
-  string: ['backupDir', 'whiteNoiseAudio', 'weatherCity', 'searchDateRange', 'searchComplete', 'searchCategory', 'maxRepeat']
+  string: ['backupDir', 'whiteNoiseAudio', 'weatherCity', 'searchDateRange', 'searchComplete', 'searchCategory', 'maxRepeat', 'appLocale']
 }
 const SETTINGS_DENIED = new Set(['securityLockPassword', 'securityLockQuestion', 'schemaV', '_savedAt'])
 

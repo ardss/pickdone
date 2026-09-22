@@ -301,7 +301,10 @@ function importItems (items, { dryRun = false, format, category = null, useLists
       createTime: ts, delete: false,
       reminderTime: it.reminder || 0, reminderOffsets: [], reminderExtra: [],
       estimate: 0, difficulty: 0,
-      priority: it.priority || 0, deadlineTs: 0, important: 0, urgent: 0,
+      // Quadrant derivation MUST stay aligned with lib.addTodo (cli/lib.js): high priority (3) implies
+      // important=1 so imported high-priority tasks land in the same four-quadrant cell as CLI/App adds
+      // (they used to import as quadrant-less and vanish from the matrix).
+      priority: it.priority || 0, deadlineTs: 0, important: it.priority === 3 ? 1 : 0, urgent: 0,
       repeatId: null, // repeat rules are NOT auto-created (vendor RRULE dialects differ); imported as plain tasks
       subtasks: it.subs && it.subs.length ? JSON.stringify(it.subs.map(s => ({ text: s.text, checked: !!s.checked }))) : null,
       image: null, files: null,
