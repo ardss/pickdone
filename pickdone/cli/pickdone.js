@@ -236,11 +236,14 @@ async function main () {
     console.log(rows.map(t => fmtTodoLine(t, lunarOf)).join('\n'))
     console.log(`-- ${rows.length} task(s)`)
   }
-  const okMsg = (t, next) => {
+  // `text` carries a preformatted line for non-todo results (settings/plan/attachment ops return
+  // their own shapes — { key, value, previous } / { taskId, content, day, chips } / { taskId, removed });
+  // routing those through the todo template printed "✓ [ ]  undefined" + "taskId: undefined".
+  const okMsg = (t, next, text) => {
     if (opts.json) console.log(JSON.stringify({ ok: true, command: cmd, data: t, next: next || [] }, null, 2))
     else {
-      console.log('✓ ' + fmtTodoLine(t))
-      console.log('  taskId: ' + t.taskId)
+      console.log('✓ ' + (text || fmtTodoLine(t)))
+      if (!text && t && t.taskId !== undefined) console.log('  taskId: ' + t.taskId)
     }
   }
 
@@ -951,7 +954,8 @@ async function main () {
       if (op === 'rm' || op === 'remove') {
         const [kind, n] = files
         if (!kind || !n) throw new lib.CliError('usage: attachment rm <taskId|keyword> img|file <n>  (n from attachment list)', 'USAGE')
-        return okMsg(lib.removeAttachment(task, kind, n))
+        const r = lib.removeAttachment(task, kind, n)
+        return okMsg(r, null, `removed ${r.removed} attachment(s) from ${r.taskId}`)
       }
       throw new lib.CliError('unknown sub-operation "' + op + '" (valid: add/list/rm)', 'UNKNOWN_ARG')
     }
@@ -975,7 +979,9 @@ async function main () {
       if (op === 'set') {
         const value = srest.join(' ')
         if (!key || !value) throw new lib.CliError('usage: settings set <key> <value>   e.g. settings set backupDir "D:\\backups" / settings set colorMode dark', 'USAGE')
-        return okMsg(lib.settingsSet(key, value, { force: !!opts.force }), ['settings list --json to verify', 'a running App applies it within ~2s'])
+        const s = lib.settingsSet(key, value, { force: !!opts.force })
+        return okMsg(s, ['settings list --json to verify', 'a running App applies it within ~2s'],
+          `setting ${s.key} = ${JSON.stringify(s.value)} (was ${JSON.stringify(s.previous)})`)
       }
       throw new lib.CliError('unknown sub-operation "' + op + '" (valid: list/get/set)', 'UNKNOWN_ARG')
     }
@@ -992,15 +998,18 @@ async function main () {
       }
       if (op === 'set') {
         if (!a || !b) throw new lib.CliError('usage: plan set <taskId|keyword> <HH:mm> [--date D] [--replace]', 'USAGE')
-        return okMsg(lib.planSet(a, b, { date: opts.date, replace: !!opts.replace }), ['plan list --json to see the day timeline'])
+        const p = lib.planSet(a, b, { date: opts.date, replace: !!opts.replace })
+        return okMsg(p, ['plan list --json to see the day timeline'], `plan [${p.day}] ${p.content}: ${p.chips.join(' + ')}`)
       }
       if (op === 'rm' || op === 'remove') {
         if (!a) throw new lib.CliError('usage: plan rm <taskId|keyword> [--at HH:mm] [--date D]', 'USAGE')
-        return okMsg(lib.planRemove(a, { date: opts.date, at: opts.at !== true ? opts.at : undefined }))
+        const p = lib.planRemove(a, { date: opts.date, at: opts.at !== true ? opts.at : undefined })
+        return okMsg(p, null, `plan [${p.day}] ${p.taskId}: removed ${p.removed} chip(s)`)
       }
       // Shortcut form: plan <task> <HH:mm> schedules directly
       if (a && !['set', 'list', 'rm', 'remove'].includes(op)) {
-        return okMsg(lib.planSet(op, a, { date: opts.date, replace: !!opts.replace }), ['plan list --json to see the day timeline'])
+        const p = lib.planSet(op, a, { date: opts.date, replace: !!opts.replace })
+        return okMsg(p, ['plan list --json to see the day timeline'], `plan [${p.day}] ${p.content}: ${p.chips.join(' + ')}`)
       }
       throw new lib.CliError('unknown sub-operation "' + op + '" (valid: set/list/rm, or plan <task> <HH:mm>)', 'UNKNOWN_ARG')
     }
@@ -1297,9 +1306,9 @@ async function main () {
       } catch (e) {
         note = `cannot reach GitHub (${e.name === 'TimeoutError' ? 'timeout' : e.message})`
       }
-      // Numeric segment compare: lexicographic would call 0.10.0 older than 0.2.0
-      const cmp = v => String(v).replace(/^v/, '').split('.').map(Number)
-      const newer = (a, b) => { const x = cmp(a), y = cmp(b); for (let i = 0; i < Math.max(x.length, y.length); i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); return false }
+      // lib.compareVersions: numeric segments (0.10.0 > 0.2.0) AND semver prerelease ordering —
+      // the old Number-split comparator NaN'd the beta segment into "up to date" forever.
+      const newer = (a, b) => lib.compareVersions(a, b) > 0
       const upToDate = !latest || !newer(latest.tag, CLI_VERSION)
       const data = { local: CLI_VERSION, latest: latest ? latest.tag : null, upToDate, url: latest ? latest.url : null, note: note || undefined }
       if (opts.json) return emit(data)
