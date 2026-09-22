@@ -94,6 +94,40 @@ test('[F1] collapseEditCleanup: orphan is closed+deleted; normal case stays a pl
   assert.equal(s2.store.state.ui.rightSidebarTodoEdit.collapsed, true)
 })
 
+/* ---------- [F2r/F6r] review round 2026-09-22: flush-before-cleanup + shared undo restore path ---------- */
+
+test('[F2r] closeEditCleanup awaits the EditPanel flush hook — a title landing via the flush survives', async () => {
+  const { store, deletes } = makeStore({ todoList: [{ taskId: TASK, taskContent: '' }] })
+  openInline(store)
+  let flushed = 0
+  // Simulates the panel's save queue: the fast typist's title commits during the awaited flush
+  globalThis.window.__editPanelFlushSave = async () => {
+    flushed++
+    store.state.todo.todoList[0].taskContent = 'fast typist title'
+  }
+  try {
+    await store.dispatch('ui/closeEditCleanup')
+    assert.equal(flushed, 1, 'the panel flush ran exactly once before the emptiness check')
+    assert.deepEqual(deletes, [], 'just-titled task must NOT be orphan-deleted (was: 60ms sleep raced the 350ms debounce)')
+  } finally { delete globalThis.window.__editPanelFlushSave }
+})
+
+test('[F2r] a task still empty after the flush is still orphan-cleaned (semantics kept)', async () => {
+  const { store, deletes } = makeStore({ todoList: [{ taskId: TASK, taskContent: '' }] })
+  openInline(store)
+  globalThis.window.__editPanelFlushSave = async () => { /* flush landed nothing: task stays empty */ }
+  try {
+    await store.dispatch('ui/closeEditCleanup')
+    assert.deepEqual(deletes, [TASK], 'empty-content cleanup semantics unchanged')
+  } finally { delete globalThis.window.__editPanelFlushSave }
+})
+
+test('[F6r] inline-orphan undo routes through todo/restoreFromRecycle (chips survive, like the recycle bin)', () => {
+  const src = read('renderer/js/store/ui.js')
+  assert.ok(src.includes("dispatch('todo/restoreFromRecycle'"), 'undo uses the shared restore path (updateTodoFields + planChips restoreSnapshot)')
+  assert.ok(!src.includes("patch: { delete: false, deletedAt: 0, status: 'update' }"), 'raw delete:false patch is gone')
+})
+
 /* ---------- [F13] multi-term highlight: per-term, anchored on source ---------- */
 const search = await import('../../../renderer/js/utils/search.js')
 
