@@ -62,6 +62,9 @@ module.exports = function todoHandlers (ctx) {
     'planMoveTask', 'planDeleteTask', 'planDeleteTaskDay', 'planPrune',
     // 番茄账本行存储(2026-09-04 根修):主窗/浮窗/CLI 同表同 op,账本无整包覆盖面
     'tomatoAll', 'tomatoAppendMany', 'tomatoUpdateById', 'tomatoRemoveByIds', 'tomatoMigrateFromMeta',
+    // tomatoGetById (D6 P2 2026-09-22): read-only indexed by-id ledger read (lock-gate narrowing +
+    // available to renderers without scanning the whole table). Read-only → no manifest row needed.
+    'tomatoGetById',
     // Settings/habits row table (P2 2026-09-16, docs/sync §4.2 blob split): per-key rows + tombstones;
     // whitelisted ahead of the Wave-2 renderer switch so the coverage gate's renderer⊆whitelist direction holds
     'settingsRowsAll', 'settingsRowPut', 'settingsRowPutMany', 'settingsRowDelete',
@@ -110,7 +113,9 @@ module.exports = function todoHandlers (ctx) {
           const todayKey = fixUtil.localDayKey(Date.now())
           if (op === 'tomatoUpdateById') {
             // dateKey 由 endTime 强制导出(db 层),校验目标行当天即够;查不到的行让 db 层自己返回 false
-            const cur = dbm.call('tomatoAll', {}).find(r => r && String(r.tomatoId) === String((params || {}).tomatoId))
+            // D6 P2 (2026-09-22): tomatoAll (full-table scan, once per float tick under lock) →
+            // indexed by-id read via tomatoGetById (same deleted=0 semantics as every reader)
+            const cur = dbm.call('tomatoGetById', String((params || {}).tomatoId))
             floatLedger = !!cur && cur.dateKey === todayKey
           } else {
             // tomatoAppendMany 同款收窄(2026-09-09 P2):此前批量追加无时间约束,被陷浮窗锁屏期可

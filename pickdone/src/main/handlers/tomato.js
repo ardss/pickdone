@@ -1,10 +1,13 @@
 /** Pomodoro float/taskbar + quick-add + main-window control IPC handlers (pure relocation from index.js registerIpc). */
+const log = require('electron-log')
 const tomatoFloat = require('../tomato-float')
 const tomatoTaskbar = require('../tomato-taskbar')
 const quickAdd = require('../quick-add')
+const { makeAssertMainWindow } = require('./shared')
 
 module.exports = function tomatoHandlers (ctx) {
   const { getMainWindow, showMainOrLock, rebuildTrayMenu, updateTomatoTray } = ctx
+  const assertMainWindow = makeAssertMainWindow(getMainWindow)
 
   return {
     // --- Global quick-add mini window ---
@@ -49,14 +52,28 @@ module.exports = function tomatoHandlers (ctx) {
     // --- Running-tomato cross-device announcements (feature: live remote focus chip) ---
     // Renderer (main + float windows) reports local focus transitions; main composes the
     // device identity and writes the meta announce row (synced via the meta entity).
-    'tomato-run-announce': (e, payload) => require('../tomato-announce').announceFromRenderer(payload || {}),
+    // D6 P2 (2026-09-22): the write used to be callable from ANY sender — an arbitrary window
+    // (or injected page) could forge a SYNCED meta announce row and plant cross-device focus
+    // chips on every peer. Gated: main window or the float's own webContents only.
+    'tomato-run-announce': (e, payload) => {
+      const w = getMainWindow()
+      const isMain = w && !w.isDestroyed() && e.sender === w.webContents
+      if (!isMain && !tomatoFloat.isSelfSender(e.sender)) {
+        log.warn('[IPC] 拒绝非主窗/非浮窗调用 tomato-run-announce, sender:', e.sender.id)
+        throw new Error('forbidden: main window or tomato float only')
+      }
+      return require('../tomato-announce').announceFromRenderer(payload || {})
+    },
     // Startup/current snapshot of all peers' announces (renderer filters staleness itself)
     'tomato-run-announces': () => require('../tomato-announce').listAnnounces(),
     // Double-click the float card to summon the main window: accepts only the float's own sender; showMainOrLock already handles the lock-screen redirect and main-window recreation branches
     'show-main-from-float': (e) => { if (tomatoFloat.isSelfSender(e.sender)) showMainOrLock() },
     'undock-tomato-float': () => { tomatoFloat.undock(); rebuildTrayMenu() },
     // Pomodoro state pushed every second → carried by the taskbar five-piece set + tray tooltip together (single tooltip writer)
+    // D6 P2 (2026-09-22): main-window gate — any window could previously spoof the tray tooltip /
+    // taskbar five-piece state (a fake countdown, a fake running indicator) every second.
     'update-tomato-taskbar': (e, p) => {
+      assertMainWindow(e)
       if (!p || typeof p !== 'object') return
       tomatoTaskbar.update(p)
       const status = p.status || 'default'

@@ -815,6 +815,13 @@ const OPS = {
     return rec
   },
   tomatoAll: () => db.prepare('SELECT * FROM tomato_records WHERE deleted = 0 ORDER BY endTime DESC').all().map(OPS._rowToRec),
+  // D6 P2 (2026-09-22): indexed by-id read for the ledger lock gate (handlers/todo.js used to run
+  // tomatoAll — a full-table scan ORDER BY endTime DESC — once per float tick under lock).
+  // deleted = 0 matches every reader (tomatoAll/tomatoByDay), so a tombstoned id reads as null.
+  tomatoGetById: tomatoId => {
+    const r = db.prepare('SELECT * FROM tomato_records WHERE tomatoId = ? AND deleted = 0').get(String(tomatoId))
+    return r ? OPS._rowToRec(r) : null
+  },
   tomatoTombstones: () => db.prepare('SELECT tomatoId, updatedAt, deletedAt FROM tomato_records WHERE deleted = 1').all(),
   tomatoAppendMany: rows => {
     const list = Array.isArray(rows) ? rows : [rows]
