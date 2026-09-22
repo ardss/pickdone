@@ -137,6 +137,10 @@ function createLanSyncNode(opts) {
   // skipped and hibernate applies normally. The streak itself is only ever cleared by a
   // SUCCESSFUL round (resetBackoff on the success path).
   const refixTimesBy = new Map() // deviceId -> array of re-fix ms epochs (hour-bounded)
+  // Wave-B P2-4: peers whose backlog contains a SINGLE segment over the wire cap. Terminal for the
+  // retry loop (re-pushing can never succeed); cleared by forgetPeer / a fresh rememberPeer so a
+  // peer that fixes its data (row edited/deleted) syncs again without a restart.
+  const oversizedSegmentBy = new Set()
   const REFIX_BUDGET = 6
   const REFIX_WINDOW_MS = 60 * 60 * 1000
   // P1-4: live AUTHENTICATED server sockets per peer (last message wins) so an unpair can
@@ -176,6 +180,12 @@ function createLanSyncNode(opts) {
   //     trigger this session unless the peer's increments start applying again (state changed).
   const pullWatermarkBy = new Map() // deviceId -> seq
   const needSnapshot = new Set()
+  // Wave-B P1: FORCE-armed snapshot triggers. A flush-failed segment (receiver dropped rows it
+  // could not flush) is a poison state increments can never fix: even when the NEXT round applies
+  // other rows (roundApplied > 0), the snapshot request must still fire or the failed rows are
+  // re-pushed and re-dropped forever. Flags here survive evaluateSnapshotTrigger's progress clear
+  // (which only manages `needSnapshot`) and are consumed once the snapshot-request actually goes out.
+  const needSnapshotForce = new Set()
   const clientSnapshotBusy = new Set()
   const serverSnapshotBusy = new Set()
   const snapshotFatalCount = new Map() // deviceId -> snapshot-error attempts this session (budget-capped, see constants)
@@ -224,12 +234,13 @@ function createLanSyncNode(opts) {
     peers.delete(id); lastSeenBy.delete(id); lastRoundBy.delete(id); errorBy.delete(id)
     const t = retryTimers.get(id)
     if (t) { clearTimeout(t); retryTimers.delete(id) }
-    backoffMs.delete(id); onlineNow.delete(id); needSnapshot.delete(id)
+    backoffMs.delete(id); onlineNow.delete(id); needSnapshot.delete(id); needSnapshotForce.delete(id)
     clientSnapshotBusy.delete(id); serverSnapshotBusy.delete(id)
     snapshotFatalCount.delete(id); snapshotErrorCooldown.delete(id)
     pullWatermarkBy.delete(id); serverPullAck.delete(id)
+    peerProgress.delete(id) // Wave-B P3: a forgotten peer's push watermark must not linger
     failStreakBy.delete(id); dialNotBefore.delete(id); unpairedBy.delete(id); liveServerSockets.delete(id)
-    refixTimesBy.delete(id)
+    refixTimesBy.delete(id); oversizedSegmentBy.delete(id)
   }
   const pushRecent = (entry) => pushRing(recent, RECENT_CAP, entry)
   // security ring: seeded from the persisted log (opts.securityLog, owned by the bootstrap —
@@ -335,6 +346,9 @@ function createLanSyncNode(opts) {
     // AND its error stamp (the user re-paired; the stale auth-rejection must not linger in
     // the Device Center card).
     if (unpairedBy.delete(peer.deviceId)) errorBy.delete(peer.deviceId)
+    // Wave-B P2-4: a re-announced / re-added peer gets a fresh chance — the offending row may have
+    // been trimmed or deleted on either side since the terminal error.
+    if (oversizedSegmentBy.delete(peer.deviceId)) errorBy.delete(peer.deviceId)
     refreshOnline(peer.deviceId)
     em.emit('peer', peers.get(peer.deviceId))
   }
@@ -401,6 +415,10 @@ function createLanSyncNode(opts) {
       scheduleRetry(peer.deviceId)
       return Promise.resolve(false)
     }
+    // Wave-B P2-4: terminal oversized-segment state — dialing again is futile until the peer's
+    // data changes (a fresh rememberPeer clears the flag). Skip quietly; errorBy already carries
+    // the diagnosable message from the round that discovered it.
+    if (oversizedSegmentBy.has(peer.deviceId)) return Promise.resolve(false)
     roundsInFlight.add(peer.deviceId)
     roundsRunning += 1
     return new Promise((resolve) => {
@@ -501,6 +519,22 @@ function createLanSyncNode(opts) {
             resolve(false)
             return
           }
+          // Wave-B P2-4 TERMINAL: our own backlog holds a single segment over the 32MB wire cap.
+          // Retrying can never succeed (the same line is rebuilt and destroyed every round) —
+          // stop the retry loop and surface a clear, diagnosable peer error instead. A later
+          // discovery re-announce (rememberPeer) clears the state and gives sync a fresh chance.
+          if (err && err.oversizedSegment) {
+            oversizedSegmentBy.add(peer.deviceId)
+            const t = retryTimers.get(peer.deviceId)
+            if (t) { clearTimeout(t); retryTimers.delete(peer.deviceId) }
+            lastError = `${peer.deviceId}: ${err.message}`
+            errorBy.set(peer.deviceId, lastError)
+            pushRecent({ at: Date.now(), kind: 'error', peer: peer.deviceId, detail: { error: err.message } })
+            refreshOnline(peer.deviceId)
+            em.emit('round-error', { peer: peer.deviceId, error: err, terminal: 'oversized-segment' })
+            resolve(false)
+            return
+          }
           lastError = `${peer.deviceId}: ${err.message}`
           errorBy.set(peer.deviceId, lastError)
           pushRecent({ at: Date.now(), kind: 'error', peer: peer.deviceId, detail: { error: err.message } })
@@ -564,6 +598,15 @@ function createLanSyncNode(opts) {
        *  clears the flag: never snapshot a peer whose watermark is moving. */
       function evaluateSnapshotTrigger() {
         const wm = pullWatermarkBy.get(peer.deviceId) || 0
+        // Wave-B P1: a FORCE-armed trigger (flush-failed segment / flush-failed ack) is a poison
+        // state that partial progress cannot cure — the failed rows are dropped on the peer and
+        // re-pushed identically every round. The flag must survive this evaluation (only the
+        // snapshot-request in the next round's 'ready' consumes it), otherwise roundApplied > 0
+        // cancelled the escape and the push looped forever.
+        if (needSnapshotForce.has(peer.deviceId)) {
+          needSnapshot.add(peer.deviceId)
+          return
+        }
         if (roundApplied > 0) {
           needSnapshot.delete(peer.deviceId)
           snapshotFatalCount.delete(peer.deviceId) // state is changing again: full budget restored
@@ -619,6 +662,9 @@ function createLanSyncNode(opts) {
           // peer at a time (clientSnapshotBusy); the round now ends at snapshot-end, not at the ack.
           if (needSnapshot.has(peer.deviceId) && !clientSnapshotBusy.has(peer.deviceId)) {
             needSnapshot.delete(peer.deviceId)
+            // Wave-B P1: the request actually going out is what consumes the force-arm — a round
+            // that ends BEFORE the request (auth failure, socket death) must keep it armed.
+            needSnapshotForce.delete(peer.deviceId)
             clientSnapshotBusy.add(peer.deviceId)
             ownsSnapshotBusy = true
             awaitingSnapshot = true
@@ -677,6 +723,7 @@ function createLanSyncNode(opts) {
                   const fFrom = Number.isFinite(from) ? from : 0
                   if (roundFlushFailedFrom == null || fFrom < roundFlushFailedFrom) roundFlushFailedFrom = fFrom
                   needSnapshot.add(peer.deviceId)
+                  needSnapshotForce.add(peer.deviceId) // survives roundApplied > 0 (Wave-B P1)
                 }
                 if (to > peerMaxSeqSeen) peerMaxSeqSeen = to
               }
@@ -789,7 +836,10 @@ function createLanSyncNode(opts) {
             // Do not advance the watermark past unacked data and force-arm the snapshot trigger:
             // the next round opens with a snapshot-request and the peer re-applies our full
             // state idempotently (recovering whatever its bulk flush dropped).
-            if (msg.flushFailed) needSnapshot.add(peer.deviceId)
+            if (msg.flushFailed) {
+              needSnapshot.add(peer.deviceId)
+              needSnapshotForce.add(peer.deviceId) // survives roundApplied > 0 (Wave-B P1)
+            }
             // ackSeq is in OUR seq space (max seq among our rows the peer applied). Defensive
             // clamp to our own max oplog seq: a misbehaving/legacy peer (reporting its own local
             // seq space — the pre-2026-09-18 bug) must never push our cursor past our own oplog,
@@ -1025,10 +1075,12 @@ function createLanSyncNode(opts) {
           const lr = lastRoundBy.get(p.deviceId)
           // P1-3: structured per-peer state for the Device Center. 'unpaired' = TERMINAL auth
           // rejection (the peer removed our pairing — renderer copy: "已被对方解除配对,请重新配对");
-          // 'hibernating' = past the dial-failure budget (10min retries); 'error' = recent failure.
+          // 'oversized-segment' = TERMINAL wire-cap violation (Wave-B P2-4); 'hibernating' = past
+          // the dial-failure budget (10min retries); 'error' = recent failure.
           const peerState = unpairedBy.has(p.deviceId) ? 'unpaired'
-            : (failStreakBy.get(p.deviceId) || 0) >= DIAL_FAILURE_BUDGET ? 'hibernating'
-              : errorBy.has(p.deviceId) ? 'error' : 'ok'
+            : oversizedSegmentBy.has(p.deviceId) ? 'oversized-segment'
+              : (failStreakBy.get(p.deviceId) || 0) >= DIAL_FAILURE_BUDGET ? 'hibernating'
+                : errorBy.has(p.deviceId) ? 'error' : 'ok'
           return {
             ...p,
             // Round-2 P1: the renderer reads p.deviceName — the raw peer record only carries

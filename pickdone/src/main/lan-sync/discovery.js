@@ -151,6 +151,15 @@ function createDiscovery() {
       lastSeen: Date.now(),
     }
     if (!peer.host || !isDialableHost(peer.host)) return null
+    // Wave-B P2-3: route EVERY address change through the same scoring as mDNS. The UDP fallback
+    // announces only rinfo.address (no addresses list), so a multi-NIC peer's UDP sightings used
+    // to OVERWRITE the better-scored mDNS address with a worse one (and vice versa) every few
+    // seconds — address flapping that burned rememberPeer's dial-failure/re-pair budget. A newly
+    // scored candidate now only replaces the stored host when it scores STRICTLY higher — ties
+    // keep the incumbent so alternating equal-class announcements cannot flap the address.
+    if (existing && existing.host && isDialableHost(existing.host) && hostScore(peer.host) <= hostScore(existing.host)) {
+      peer.host = existing.host
+    }
     const isNew = !existing
     peers.set(info.deviceId, peer)
     if (isNew && !stopped) em.emit('found', peer)

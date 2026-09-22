@@ -6,7 +6,7 @@
  * A full snapshot of the live state can far exceed a single transport line, so
  * it travels as N bounded `snapshot-chunk` messages + one `snapshot-end`
  * trailer — the same oversize-shedding philosophy as engine.buildSegments
- * (no single JSON line ever approaches the transport's 16MB cap):
+ * (no single JSON line ever approaches the transport's 32MB cap):
  *
  *   snapshot-request {}                          receiver -> sender
  *   snapshot-chunk {id, index, of, schemaVersion, rows:[...]}   sender -> receiver
@@ -20,7 +20,7 @@
  */
 
 // Per-message row budget (~1MB of serialized rows). Conservative headroom under
-// the transport's post-auth 16MB line cap; mirrors the segment packer's budgeting.
+// the transport's post-auth 32MB line cap; mirrors the segment packer's budgeting.
 const SNAPSHOT_CHUNK_BYTES = 1024 * 1024
 
 /**
