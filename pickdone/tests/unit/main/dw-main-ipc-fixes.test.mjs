@@ -119,6 +119,10 @@ test('F1: the main window keeps its full settings surface (lock toggle / passwor
     runWhenComputerStart: true
   })
   assert.equal(written.enableSecurityLock, true)
+  // 2026-09-22 root-fix: the lock password ciphertext travels on THIS channel
+  // (SettingsModal.saveLockPassword -> settings/update -> notify-settings-updated); the old
+  // unconditional strip silently dropped every save. Per-sender stripping keeps the float
+  // locked out while the main window's settings page keeps its full surface.
   assert.equal(written.securityLockPassword, 'enc1:ok')
   assert.equal(written.securityLockQuestion, 'q')
   assert.equal(written.shortcutKeySettings.quickAddGlobal, 'alt+shift+t')
@@ -298,10 +302,12 @@ test('F6: white-noise picker rejects auxiliary senders and locked state before a
 const attachments = require_('../../../src/main/attachments.js')
 test('F4: withinStorageQuota pure gate', () => {
   const { withinStorageQuota, MAX_TOTAL_BYTES } = attachments
-  assert.equal(MAX_TOTAL_BYTES, 500 * 1024 * 1024)
+  // 2026-09-22 rebase: the merged wave-C quota (64MB total / 200 files, aligned with the LAN
+  // transfer round budget) is the shipping cap; the pure gate keeps its own explicit-quota form.
+  assert.equal(MAX_TOTAL_BYTES, 64 * 1024 * 1024)
   assert.equal(withinStorageQuota(0, 10), true)
-  assert.equal(withinStorageQuota(499 * 1024 * 1024, 1024 * 1024), true)
-  assert.equal(withinStorageQuota(499 * 1024 * 1024 + 1, 1024 * 1024), false, 'cap is exclusive at the boundary')
+  assert.equal(withinStorageQuota(63 * 1024 * 1024, 1024 * 1024), true)
+  assert.equal(withinStorageQuota(63 * 1024 * 1024 + 1, 1024 * 1024), false, 'cap is exclusive at the boundary')
   assert.equal(withinStorageQuota(600 * 1024 * 1024, 0), false)
   assert.equal(withinStorageQuota(10, 10, 20), true, 'explicit quota argument')
   assert.equal(withinStorageQuota(10, 11, 20), false)

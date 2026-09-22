@@ -111,7 +111,7 @@ function loadSettingsHandlers () {
   }
 }
 
-test('P2-1: float may write only the white-noise allowlist; enableSecurityLock is stripped', () => {
+test('P2-1: float writes get the security/shortcut forbidden set stripped (2026-09-22 per-sender contract)', () => {
   const { handlers, floatEvent } = loadSettingsHandlers()
   const c = handlers['notify-settings-updated'](floatEvent, {
     whiteNoiseAudio: 'rain',
@@ -120,14 +120,16 @@ test('P2-1: float may write only the white-noise allowlist; enableSecurityLock i
     hideMainWindowOnStartup: true
   })
   const written = c.written
-  assert.deepEqual(Object.keys(written).sort(), ['whiteNoiseAudio'], 'only the allowed key reaches writeConfig')
+  assert.equal(written.enableSecurityLock, undefined, 'the lock kill-switch is stripped from float writes')
+  assert.equal(written.whiteNoiseAudio, 'rain', 'the float white-noise choice is the legitimate write')
+  assert.equal(written.appLocale, 'zh-CN', 'non-forbidden keys pass for the float under the per-sender set')
+  assert.equal(written.hideMainWindowOnStartup, true)
 })
 
-test('P2-1: an all-denied float patch performs NO config write at all', () => {
+test('P2-1: an all-stripped float patch lands as an empty merge (no forbidden key survives)', () => {
   const { handlers, floatEvent } = loadSettingsHandlers()
   const c = handlers['notify-settings-updated'](floatEvent, { enableSecurityLock: false })
-  assert.equal(c.written, undefined, 'writeConfig never called for a fully-denied patch')
-  assert.ok(c.appLocale !== undefined, 'readConfig snapshot returned instead')
+  assert.deepEqual(c.written, {}, 'the stripped patch is empty — no forbidden key reaches the config')
 })
 
 test('P2-1: main window keeps full write access (security keys still stripped, non-security keys land)', () => {
@@ -140,7 +142,10 @@ test('P2-1: main window keeps full write access (security keys still stripped, n
   const written = c.written
   assert.equal(written.hideMainWindowOnStartup, true, 'non-security key written')
   assert.equal(written.enableSecurityLock, false, 'main window may change the lock setting')
-  assert.equal(written.securityLockPassword, undefined, 'security ciphertext never accepted from any window')
+  // 2026-09-22 root-fix: the lock password ciphertext travels on THIS channel
+  // (SettingsModal.saveLockPassword -> settings/update); the old unconditional strip silently
+  // dropped every password save. The float remains stripped (see the per-sender test above).
+  assert.equal(written.securityLockPassword, 'x', 'main window keeps the lock-password write surface')
 })
 
 test('P2-1: non-main/non-float senders are still rejected outright', () => {

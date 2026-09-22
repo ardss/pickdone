@@ -39,7 +39,7 @@ let _totalQuotaOverride = null
 function __setTotalQuota (bytes) { _totalQuotaOverride = bytes } // test-only
 /** Pure quota decision (unit-testable): does existing + incoming stay within the cap? */
 function withinStorageQuota (existingBytes, incomingBytes, quotaBytes) {
-  const q = quotaBytes == null ? MAX_TOTAL_BYTES : quotaBytes
+  const q = quotaBytes == null ? (_totalQuotaOverride || MAX_TOTAL_BYTES) : quotaBytes
   return (Number(existingBytes) || 0) + (Number(incomingBytes) || 0) <= q
 }
 /** Current total byte size of the attachment directory (missing/unreadable files count 0 — the
@@ -67,15 +67,16 @@ async function saveAttachment ({ taskId, name, dataBase64 }) {
   if (raw.toString('base64') !== stripped) throw new Error('attachment: base64 roundtrip mismatch')
   if (!raw.length) throw new Error('attachment: empty')
   if (raw.length > MAX_BYTES) throw new Error('attachment: too large (max 50MB)')
-  // P2-4 (R4 2026-09-21): aggregate quota (64MB total / 200 files, matching the LAN transfer budget)
-  const { bytes: usedBytes, count: usedFiles } = dirUsage(attachDir())
-  if (usedBytes + raw.length > MAX_TOTAL_BYTES) throw new Error('attachment: storage quota exceeded (max 64MB total)')
+  // P2-4 (R4 2026-09-21) + main-ipc-4 (2026-09-22): aggregate quota (64MB total / 200 files,
+  // aligned with the LAN transfer budget) through the pure, unit-testable gate.
+  if (!withinStorageQuota(dirTotalBytes(attachDir()), raw.length)) throw new Error('attachment: storage quota exceeded (max 64MB total)')
+  const { count: usedFiles } = dirUsage(attachDir())
   if (usedFiles >= MAX_FILES) throw new Error('attachment: too many attachment files (max 200)')
   const safe = `${String(taskId).replace(/[\\/:*?"<>|]/g, '_').replace(/\.\./g, '_')}_${Date.now()}_${cleanName.replace(/[\\/:*?"<>|]/g, '_')}`
   // P2 2026-09-12: two uploads in the same millisecond with the same task/name produced the same
   // Date.now() filename and writeFileSync silently overwrote the first attachment. Suffix -1/-2…
   // (pure helper in fix-util, testable) so every upload lands on its own file.
-  const dest = fixUtil.nextFreePath(dir, safe, p => fs.existsSync(p))
+  const dest = fixUtil.nextFreePath(attachDir(), safe, p => fs.existsSync(p))
   fs.writeFileSync(dest, raw)
   const finalName = path.basename(dest)
   const url = `local://${encodeURIComponent(finalName)}`

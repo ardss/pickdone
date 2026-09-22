@@ -3,15 +3,7 @@ const log = require('electron-log')
 const i18nM = require('../i18n')
 const tomatoFloat = require('../tomato-float')
 const tomatoTaskbar = require('../tomato-taskbar')
-const { makeAssertMainWindow } = require('./shared')
-
-// P2-1 (R4 2026-09-21): per-sender allowlist for the float window. The old gate was
-// "float may write anything except a 3-key denylist (securityLockPassword/Question/schemaV)",
-// so a compromised float could still flip enableSecurityLock:false (or any other config key)
-// through this channel and disarm the lock on its next real-time isLocked() read. The float's
-// ONLY legitimate write is the white-noise picker (TomatoFloatPage.vue settings/update), so the
-// float is narrowed to exactly those keys; the main window keeps full write access.
-const FLOAT_SETTINGS_ALLOW = new Set(['whiteNoiseAudio', 'whiteNoiseVolume'])
+const { makeAssertMainWindow, stripForbiddenSettingsKeys } = require('./shared')
 
 module.exports = function settingsHandlers (ctx) {
   const { readConfig, writeConfig, app, getMainWindow, applyShortcuts, rebuildTrayMenu, getTray } = ctx
@@ -45,28 +37,26 @@ module.exports = function settingsHandlers (ctx) {
     },
     'notify-settings-updated': (e, patch) => {
       // 写配置限主窗;浮窗白噪音选择是合法写入(浮窗内 settings/update 走此通道),放行浮窗自身(2026-09-05 终审 P1)
-      const isMain = !!(getMainWindow() && e.sender === getMainWindow().webContents)
-      const isFloat = tomatoFloat.isSelfSender(e.sender)
-      if (!(isFloat || isMain)) {
+      if (!(tomatoFloat.isSelfSender(e.sender) || (getMainWindow() && e.sender === getMainWindow().webContents))) {
         log.warn('[IPC] 拒绝非主窗/浮窗写配置, sender:', e.sender.id)
         throw new Error('forbidden: main window or float only')
       }
-      // P2-1 (R4 2026-09-21): replace the old denylist with a per-sender ALLOWLIST. Denying three
-      // keys left every other config key writable by a compromised float (enableSecurityLock:false
-      // disarms the lock on the next isLocked() read). The float may only write the white-noise
-      // keys it actually uses; anything else is stripped (and logged) before it reaches config.
-      const clean = { ...patch }
-      if (!isMain) {
-        for (const k of Object.keys(clean)) {
-          if (!FLOAT_SETTINGS_ALLOW.has(k)) { log.warn('[IPC] 浮窗越权配置键已剥离:', k); delete clean[k] }
-        }
-        if (!Object.keys(clean).length) return readConfig() // nothing the float may write: no config write at all
-      }
-      delete clean.securityLockPassword
-      delete clean.securityLockQuestion
-      delete clean.schemaV
-      delete clean.constructor
-      delete clean.prototype      // note: an own '__proto__' key on the patch is left as inert data here (spread defined it
+      // Symmetric hardening of the write side with the read side: strip security keys and never send them down, and likewise never accept renderer writes for them
+      // (a compromised auxiliary window could previously change the lock password / disable the lock via this channel — isLocked() reads config in real time, so the lock would fail on the next check cycle)
+      // D6 P2 (2026-09-21): spread + explicit dangerous-key strip replaces Object.assign —
+      // Object.assign SETS '__proto__', so a patch with an own '__proto__' key (JSON.parse from a
+      // hostile renderer) polluted Object.prototype; spread defines it as inert data and the
+      // explicit delete drops it. (writeConfig's mergeConfig now filters too — belt and braces.)
+      // D7 (2026-09-22, main-ipc-1): the strip set is now PER-SENDER. The universal dangerous-key
+      // strip below never covered enableSecurityLock (the main settings page legitimately toggles
+      // it, so a blanket strip would break the feature) — but the float window has no legitimate
+      // use for it, and a trapped float could send {enableSecurityLock:false} to silently kill the
+      // lock (isLocked() reads config in real time; the password survives, the lock never engages
+      // again). Same for shortcutKeySettings (re-registering global hotkeys) and the other
+      // main-consumed keys. Main-window senders keep the full surface; float senders get the
+      // forbidden set stripped (their white-noise choice still passes).
+      const clean = stripForbiddenSettingsKeys(patch, { float: !(getMainWindow() && e.sender === getMainWindow().webContents) })
+      // note: an own '__proto__' key on the patch is left as inert data here (spread defined it
       // safely); writeConfig's mergeConfig filters it before any merge, and a direct
       // `delete clean.__proto__` is banned by eslint no-proto.
       const c = writeConfig(clean)
