@@ -111,7 +111,13 @@ module.exports = function attachmentHandlers (ctx) {
     },
     // Custom white noise: copied into userData/files right after picking (reachable via the local:// protocol with Range support, so it can actually play during focus;
     // the old version returned only an absolute path, which the app:// page could not load → picking was equivalent to not picking). Fixed-name overwrite; the directory keeps only the latest file.
-    'select-user-white-noise-audio-file': async () => {
+    'select-user-white-noise-audio-file': async (e) => {
+      // D7 (2026-09-22, main-ipc-6): main-window + locked-state gates — this channel popped a native
+      // file dialog and copied the picked file into attachDir with NEITHER gate, asymmetric with
+      // upload-attachment/open-file/delete-file in the same module. The dialog needs human
+      // interaction, but gating consistency is the point (D6 hardening follow-up).
+      assertMainWindow(e)
+      if (isLocked()) throw new Error('locked')
       // win 模块级引用在主窗销毁重建后可能是 null/已销毁:dialog 收到死引用会抛,改 getMainWindow 守卫,
       // 无窗时传 undefined(dialog 以无父窗模式打开,2026-09-09 P2)
       const r = await dialog.showOpenDialog(getMainWindow() || undefined, { properties: ['openFile'], filters: [{ name: i18nM.mt('pickAudio'), extensions: ['mp3', 'wav', 'ogg'] }] })

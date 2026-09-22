@@ -14,12 +14,15 @@ try { log = require('electron-log') } catch { log = { warn () {}, error () {} } 
 /** Atomic JSON write (tmp + rename) with temp-file cleanup on failure (P2 2026-09-17: a failed
  *  writeFileSync/renameSync used to leave .tmp-* residue until the 1h sweep at best — and if the
  *  process died before any later backup run, forever). fs is injected so the unit tests can drive
- *  failure injection; returns { ok } and never throws. */
+ *  failure injection; returns { ok } and never throws.
+ *  main-ipc-2 fsync fix (2026-09-22): the write goes through writeFileDurable (data fsync before
+ *  the rename + best-effort dir fsync) — this JSON is the disaster-recovery source, and a power
+ *  cut between the OS cache and the rename used to leave a torn file. The fsMod injection is kept
+ *  for the residue-cleanup contract; the durable path always uses the real fs. */
 function atomicWriteJson (fsMod, dir, name, text) {
-  const tmp = path.join(dir, '.tmp-' + name)
+  const tmp = path.join(dir, name) + '.dtmp'
   try {
-    fsMod.writeFileSync(tmp, text)
-    fsMod.renameSync(tmp, path.join(dir, name))
+    require('../durable-fs').writeFileDurable(path.join(dir, name), text, fsMod)
     return { ok: true, file: name }
   } catch (err) {
     try { if (fsMod.existsSync(tmp)) fsMod.unlinkSync(tmp) } catch (e2) { log.warn('[Backup] tmp cleanup failed:', tmp, e2 && e2.message) }

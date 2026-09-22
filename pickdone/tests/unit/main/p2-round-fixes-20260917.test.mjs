@@ -130,7 +130,9 @@ test('atomicWriteJson cleans up the tmp file when write/rename fails', () => {
   assert.equal(r.ok, false)
   assert.match(r.error, /disk full/)
   assert.equal(removed.length, 1)
-  assert.match(String(removed[0]), /\.tmp-auto-x\.json$/)
+  // 2026-09-22 main-ipc-2: the write now goes through writeFileDurable (fsync before rename);
+  // the tmp suffix changed from '.tmp-<name>' to '<name>.dtmp' — the no-residue contract is unchanged.
+  assert.match(String(removed[0]), /auto-x\.json\.dtmp$/)
   const ok = atomicWriteJson(fs, fs.mkdtempSync(path.join(os.tmpdir(), 'r17-bk-')), 'auto-y.json', '{}')
   assert.deepEqual(ok, { ok: true, file: 'auto-y.json' })
 })

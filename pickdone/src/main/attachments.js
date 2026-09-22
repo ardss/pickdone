@@ -31,6 +31,26 @@ function dirUsage (dir) {
   return { bytes, count }
 }
 const ALLOWED_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'pdf', 'txt', 'md', 'csv', 'xlsx', 'xls', 'docx', 'doc', 'pptx', 'ppt', 'zip', 'mp3', 'wav', 'ogg', 'mp4', 'webm', 'json'])
+// main-ipc-4 quota fix (2026-09-22): the wave-C aggregate quota is also exposed as a pure,
+// unit-testable decision (withinStorageQuota) plus a byte-size scanner — same flood guard,
+// testable without 64MB fixtures.
+// Test hook: lets unit tests shrink the quota without writing 500MB of fixture data.
+let _totalQuotaOverride = null
+function __setTotalQuota (bytes) { _totalQuotaOverride = bytes } // test-only
+/** Pure quota decision (unit-testable): does existing + incoming stay within the cap? */
+function withinStorageQuota (existingBytes, incomingBytes, quotaBytes) {
+  const q = quotaBytes == null ? (_totalQuotaOverride || MAX_TOTAL_BYTES) : quotaBytes
+  return (Number(existingBytes) || 0) + (Number(incomingBytes) || 0) <= q
+}
+/** Current total byte size of the attachment directory (missing/unreadable files count 0 — the
+ *  quota is a best-effort flood guard, not an accounting ledger). */
+function dirTotalBytes (dir) {
+  let n = 0
+  for (const f of fs.readdirSync(dir)) {
+    try { n += fs.statSync(path.join(dir, f)).size } catch { /* raced delete */ }
+  }
+  return n
+}
 /** Upload: offline implementation = copy into userData/files and return a file:// style URL (signature mirrors re-assembling the key after the get7nyUpToken flow) */
 async function saveAttachment ({ taskId, name, dataBase64 }) {
   // Strip Windows trailing dots/spaces before extracting the extension (the filesystem strips them at creation; validation and persistence must see the same name)
@@ -47,9 +67,10 @@ async function saveAttachment ({ taskId, name, dataBase64 }) {
   if (raw.toString('base64') !== stripped) throw new Error('attachment: base64 roundtrip mismatch')
   if (!raw.length) throw new Error('attachment: empty')
   if (raw.length > MAX_BYTES) throw new Error('attachment: too large (max 50MB)')
-  // P2-4 (R4 2026-09-21): aggregate quota (64MB total / 200 files, matching the LAN transfer budget)
-  const { bytes: usedBytes, count: usedFiles } = dirUsage(attachDir())
-  if (usedBytes + raw.length > MAX_TOTAL_BYTES) throw new Error('attachment: storage quota exceeded (max 64MB total)')
+  // P2-4 (R4 2026-09-21) + main-ipc-4 (2026-09-22): aggregate quota (64MB total / 200 files,
+  // aligned with the LAN transfer budget) through the pure, unit-testable gate.
+  if (!withinStorageQuota(dirTotalBytes(attachDir()), raw.length)) throw new Error('attachment: storage quota exceeded (max 64MB total)')
+  const { count: usedFiles } = dirUsage(attachDir())
   if (usedFiles >= MAX_FILES) throw new Error('attachment: too many attachment files (max 200)')
   const safe = `${String(taskId).replace(/[\\/:*?"<>|]/g, '_').replace(/\.\./g, '_')}_${Date.now()}_${cleanName.replace(/[\\/:*?"<>|]/g, '_')}`
   // P2 2026-09-12: two uploads in the same millisecond with the same task/name produced the same
@@ -70,4 +91,4 @@ function attachmentPath (key) {
   return path.join(attachDir(), path.basename(decoded))
 }
 
-module.exports = { attachDir, saveAttachment, attachmentPath }
+module.exports = { attachDir, saveAttachment, attachmentPath, withinStorageQuota, dirTotalBytes, MAX_TOTAL_BYTES, __setTotalQuota }

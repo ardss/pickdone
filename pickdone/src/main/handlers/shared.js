@@ -123,4 +123,27 @@ function computeMetaGc (metaKeys, categories, todos) {
   return dead
 }
 
-module.exports = { makeAssertMainWindow, purgeAttachmentFiles, ownsAttachmentFile, computeMetaGc, classifyCommitKey, makeSyncKick }
+/** D7 (2026-09-22, main-ipc-1): pure key filter for 'notify-settings-updated' config writes.
+ *  The float window is a legitimate writer on this channel (its white-noise choice rides it),
+ *  but a TRAPPED float window must not be able to: disable the security lock
+ *  ({enableSecurityLock:false} → isLocked() reads config in real time, the lock silently dies on
+ *  next launch), swap the lock password/question, re-register global shortcuts
+ *  (shortcutKeySettings), flip the OS login item (runWhenComputerStart) or bump schemaV past what
+ *  this build understands. The main window keeps its full surface (the settings page legitimately
+ *  toggles enableSecurityLock / shortcutKeySettings / runWhenComputerStart). schemaV plus the
+ *  prototype-pollution trio are stripped for EVERY sender. Pure: returns a new object, never the
+ *  input. Exported for unit tests. */
+const FLOAT_FORBIDDEN_SETTINGS_KEYS = new Set([
+  'enableSecurityLock', 'securityLockPassword', 'securityLockQuestion',
+  'shortcutKeySettings', 'runWhenComputerStart'
+])
+function stripForbiddenSettingsKeys (patch, { float } = {}) {
+  const clean = { ...(patch && typeof patch === 'object' ? patch : {}) }
+  delete clean.schemaV
+  delete clean.constructor
+  delete clean.prototype
+  if (float) for (const k of FLOAT_FORBIDDEN_SETTINGS_KEYS) delete clean[k]
+  return clean
+}
+
+module.exports = { makeAssertMainWindow, purgeAttachmentFiles, ownsAttachmentFile, computeMetaGc, classifyCommitKey, makeSyncKick, stripForbiddenSettingsKeys, FLOAT_FORBIDDEN_SETTINGS_KEYS }

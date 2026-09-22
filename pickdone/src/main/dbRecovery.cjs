@@ -230,21 +230,13 @@ function restoreCategoriesFromCriticalBackup (raw, upsertCategory) {
 }
 
 /** Atomic disaster-backup write: temp file + rename within the same directory, preventing an interruption from corrupting the backup file itself.
- *  dest is decided by the caller (the main process currently passes the external default root pickdone-backups); the directory is created first if missing. */
+ *  dest is decided by the caller (the main process currently passes the external default root pickdone-backups); the directory is created first if missing.
+ *  main-ipc-2 fsync fix (2026-09-22): writeFileDurable fsyncs the data before the rename — this
+ *  JSON is the disaster-recovery SOURCE; a power cut between OS cache and rename left it torn. */
 function writeCriticalStateBackupAtomic (ud, jsonText) {
   fs.mkdirSync(ud, { recursive: true })
   const dest = path.join(ud, 'critical-state-backup.json')
-  const tmp = dest + '.tmp'
-  fs.writeFileSync(tmp, jsonText)
-  // P3 (R4 2026-09-21): fsync the temp file before the rename — without it a power loss can
-  // persist an empty/short rename target while the (otherwise durable) DB is gone, i.e. the
-  // disaster-backup itself becomes the disaster. Best-effort: a fsync failure must not break
-  // the backup write (same contract as the rest of this module).
-  try {
-    const fd = fs.openSync(tmp, 'r')
-    try { fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
-  } catch { /* fsync unsupported/failed: atomic rename semantics still hold on most FS */ }
-  fs.renameSync(tmp, dest)
+  require('./durable-fs').writeFileDurable(dest, jsonText)
   return dest
 }
 

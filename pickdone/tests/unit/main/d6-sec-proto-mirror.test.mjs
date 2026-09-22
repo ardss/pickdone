@@ -57,10 +57,23 @@ test('F9: notify-settings-updated sanitizes a __proto__-bearing renderer patch b
   const patch = JSON.parse('{"__proto__":{"polluted":"yes"},"securityLockPassword":"x","theme":"dark"}')
   api['notify-settings-updated']({ sender: MAINWC }, patch)
   assert.equal(written.length, 1)
-  const clean = written[0]
+  // 2026-09-22 main-ipc-1: the dangerous-key strip became PER-SENDER. The main window legitimately
+  // writes the security keys through this channel (SettingsModal.saveLockPassword rides
+  // settings/update), so the blanket strip is narrowed to auxiliary (float) senders — which is
+  // also where the P2 threat lived ({enableSecurityLock:false} from a trapped float silently
+  // killed the lock). The __proto__ de-fanging is unchanged for EVERY sender.
+  let clean = written[0]
   assert.equal(({}).polluted, undefined, 'Object.prototype must stay clean')
-  assert.equal('securityLockPassword' in clean, false, 'security keys still stripped')
   assert.equal(clean.theme, 'dark', 'legit keys still land')
+  assert.equal(clean.securityLockPassword, 'x', 'main window keeps the lock-password write surface (settings-page save)')
+  // impersonate the float sender (the handler checks tomatoFloat.isSelfSender at call time)
+  const tomatoFloat = require_('../../../src/main/tomato-float.js')
+  const realSelf = tomatoFloat.isSelfSender
+  tomatoFloat.isSelfSender = () => true
+  try { api['notify-settings-updated']({ sender: { id: 'float' } }, patch) } finally { tomatoFloat.isSelfSender = realSelf }
+  clean = written[1]
+  assert.equal('securityLockPassword' in clean, false, 'security keys still stripped for auxiliary (float) senders')
+  assert.equal(({}).polluted, undefined, 'prototype stays clean for auxiliary senders too')
 })
 
 // F10: manifest mirror vs sync-apply authoritative filters
