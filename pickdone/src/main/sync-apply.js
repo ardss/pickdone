@@ -29,7 +29,9 @@ const { STAMP_CLAMP_MS } = require('./stamp-clamp')
 // through an injected bus built on top of THIS state's db surface (createBus is exported for
 // exactly this). The bus's dbCall is state.db.call, so mock-driven unit suites keep their
 // recording surface; the hookless instance preserves the ingress contract (no ls-mirror kick,
-// no local re-stamping — every write passes { preserveStamp: true }).
+// no local re-stamping — every write passes { preserveStamp: true }, which means the bus never
+// MINTS a stamp; an explicit stamp beyond the shared skew window is still clamped, mirroring
+// clampSkew's ingress normalization — see command-bus.js stampPayload).
 const { createBus } = require('./command-bus')
 
 // Manifest keys of the buffered bulk commands, in exact flush order (order is load-bearing:
@@ -114,7 +116,8 @@ const META_CONFLICT_BACKUP_PREFIX = 'metaConflictBackup.'
  * file's flush/ingress writes. Builds a hookless bus on top of state.db.call (lazily, cached
  * on the state object — tests swap whole state objects) and routes every WRITE through
  * bus.commitOp(op, payload, { preserveStamp: true }): the manifest validates the op name,
- * the payload passes through verbatim (preserveStamp + the wire-carried ages survive), and
+ * the payload passes through with its wire-carried ages intact (preserveStamp never mints a
+ * stamp; the bus's future-stamp clamp still guards the door — see stampPayload), and
  * no fanout hooks fire (ingress must not kick local sync rounds — this is peer data landing,
  * not a local user edit). Reads stay on state.db.call.
  */
@@ -330,6 +333,12 @@ function clampSkew (row) {
     const dd = { ...d }
     if (stampNum(dd.updateTime) > limit) dd.updateTime = now
     if (stampNum(dd.deletedAt) > limit) dd.deletedAt = now
+    // Bus-stamps fix (2026-09-22): tomato/plan/filter/category hydrate their data as the RAW
+    // ROW, which carries the SAME `updatedAt` column the comparison key was taken from — the
+    // flush write path persists that data stamp verbatim (tomatoAppendMany / planAddMany keep
+    // an explicit positive updatedAt; the category branch prefers d.updatedAt). Clamping only
+    // the top-level keys used to let the winner land with a future data.updatedAt, which the
+    // next egress hydrate then pushed to every peer as the row's age.
     if (stampNum(dd.updatedAt) > limit) dd.updatedAt = now
     // P3: normalize present-but-garbage stamp fields on the clamp path (the non-skew path
     // still returns the row verbatim — see the contract comment above).
@@ -637,16 +646,14 @@ function applyRowInner (state, incoming) {
       // producing a tombstone strictly newer than the sender's, which echoed one extra round.
       if (localRow) busWrite(state, 'planRemoveIds', [{ id: incoming.id, deletedAt: winner.deletedAt || incoming.deletedAt, updatedAt: winner.updatedAt }])
       else return false
-    } else if (localRow && localRow.ageUnknown) return false // cross-domain LWW: local age unknown, refuse to clobber
-    else state.pendingWrites.plans.push(winner.data) // bulk-buffered via planAddMany at flush
+    } else state.pendingWrites.plans.push(winner.data) // bulk-buffered via planAddMany at flush
   } else if (entity === 'filter') {
     if (incoming.deleted) {
       // Same ghost-tombstone guard as plan: never re-capture a delete for a filter we don't have.
       // R7 P1-2: carry the winner's stamps (see the plan branch — no local re-stamp, no echo bounce).
       if (localRow) busWrite(state, 'filterDelete', [Number(incoming.id), { deletedAt: winner.deletedAt || incoming.deletedAt, updatedAt: winner.updatedAt }])
       else return false
-    } else if (localRow && localRow.ageUnknown) return false // cross-domain LWW: local age unknown, refuse to clobber
-    else state.pendingWrites.filters.push({ ...winner.data, id: Number(incoming.id) }) // bulk-buffered
+    } else state.pendingWrites.filters.push({ ...winner.data, id: Number(incoming.id) }) // bulk-buffered
   } else if (entity === 'meta') {
     // GAP-A fix (2026-09-19): meta lands through the regular setMeta/deleteMeta ops (re-captured
     // into the local oplog, which is what acknowledges the state back to the peer). LWW-newer-wins

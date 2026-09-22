@@ -125,7 +125,7 @@ test('R2: meta.put/meta.delete lwwField is null — the bus can never stamp a me
   assert.deepEqual(out, { op: 'setMeta', p: { key: 'k', value: 'v' } }, 'no updatedAt injected')
 })
 
-test('R2: a bus-stamped updatedAt on a bump payload cannot tamper with the ledger', () => {
+test('R2: a bus-stamped age on a bump payload cannot tamper with the ledger', () => {
   // bumpSnow's db impl destructures only { taskId, minutes, dedupKey } and stamps the row's
   // updatedAt itself — asserted here at the contract level: the bus MAY stamp the payload,
   // but the payload's age field is not part of bumpSnow's write surface (documented in the
@@ -135,7 +135,8 @@ test('R2: a bus-stamped updatedAt on a bump payload cannot tamper with the ledge
   const impl = dbSrc.match(/bumpSnow:\s*\(\{\s*taskId, minutes, dedupKey[\s\S]{0,200}/)
   assert.ok(impl, 'bumpSnow impl found')
   assert.ok(!impl[0].includes('updatedAt'), 'bumpSnow destructures no updatedAt from the payload')
-  assert.equal(manifestRow.lwwField, 'updatedAt', 'bus still clamps forged explicit stamps (defense in depth)')
+  // Bus-stamps fix (2026-09-22): lwwField is 'updateTime' — the todo row's real age column.
+  assert.equal(manifestRow.lwwField, 'updateTime', 'bus still clamps forged explicit stamps (defense in depth)')
 })
 
 /* ---------------- R5: ls-mirror kick observability ---------------- */
