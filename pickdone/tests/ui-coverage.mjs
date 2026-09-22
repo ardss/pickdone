@@ -90,10 +90,18 @@ try {
 
   console.log('[5] 今日页视图切换（四象限/卡片）')
   await goto('#/todo-list/today')
-  ok('四象限视图渲染', (await click('button[aria-label="Eisenhower matrix"]')) === 'ok' && (await evalJson(ctx, `document.querySelector('.today-list').innerHTML.includes('matrix')`)))
-  await sleep(400)
-  ok('卡片视图渲染', (await click('button[aria-label="Deck"]')) === 'ok' && (await exists('.today-list .pd-day-deck, .today-list [class*=day-deck]')))
-  ok('切回列表视图', (await click('button[aria-label="List"]')) === 'ok' && (await exists('.today-list .td-groups')))
+  // 2026-09-23: click -> immediate DOM assert races Vue's async render flush under load; poll instead
+  const clickPoll = async (sel, checkExpr, tries = 20, gapMs = 300) => {
+    if ((await click(sel)) !== 'ok') return false
+    for (let i = 0; i < tries; i++) {
+      if (await evalJson(ctx, checkExpr)) return true
+      await sleep(gapMs)
+    }
+    return false
+  }
+  ok('四象限视图渲染', await clickPoll('button[aria-label="Eisenhower matrix"]', `document.querySelector('.today-list').innerHTML.includes('matrix')`))
+  ok('卡片视图渲染', await clickPoll('button[aria-label="Deck"]', `!!document.querySelector('.today-list .pd-day-deck, .today-list [class*=day-deck]')`))
+  ok('切回列表视图', await clickPoll('button[aria-label="List"]', `!!document.querySelector('.today-list .td-groups')`))
 
   console.log('[6] 回收站 UI 流')
   const beforeCnt = await storeGet(`$s.state.todo.todoList.filter(t=>!t.delete).length`)
@@ -167,7 +175,11 @@ try {
   await goto('#/todo-list/today?date=2027-01-01')
   await sleep(400)
   const emptyDetail = await evalJson(ctx, `JSON.stringify({hash:location.hash,sel:window.appUI.$store.state.ui.daySelectedTs,empty:!!document.querySelector('.empty-state'),groups:document.querySelectorAll('.tg-group').length,body:document.body.innerText.replace(/\\s+/g,' ').slice(0,160)})`)
-  ok('无安排日显示空态文案', await bodyHas('Nothing scheduled'), emptyDetail)
+  // 2026-09-23: the assertion used to match the ENGLISH literal 'Nothing scheduled' — the copy
+  // is localized, so the check only passed when the walkthrough instance happened to boot en.
+  // Assert the locale-independent contract instead: the empty-state element exists (already in
+  // emptyDetail) and its copy is non-empty.
+  ok('无安排日显示空态文案', await evalJson(ctx, `(function(){const el=document.querySelector('.empty-state');return !!el && el.textContent.trim().length>0})()`), emptyDetail)
 
   console.log('[12] EditPanel 番茄账目行')
   await goto('#/todo-list/today')
