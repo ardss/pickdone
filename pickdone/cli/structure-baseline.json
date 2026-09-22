@@ -1,6 +1,6 @@
 {
   "src/main/db.js": 1011,
-  "src/main/sync-apply.js": 809,
+  "src/main/sync-apply.js": 825,
   "renderer/js/store/todo.js": 806,
   "renderer/js/components/SideNav.vue": 987,
   "renderer/js/components/EditPanel.vue": 1037,
