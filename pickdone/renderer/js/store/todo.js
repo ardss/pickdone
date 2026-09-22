@@ -51,7 +51,9 @@ const DEFAULT_VIEWS = () => ({
 // ---- DB write pending queue (mirrors tomato.js's _pendingLedger): a failed task upsert stays queued and replays on the next quit flush, so a transient IPC/db failure can't silently drop a task edit ----
 const _pendingUpserts = []
 let _todoFlushHooked = false
-function safeUpsert (row) {
+// Exported for unit tests (same precedent as planSnapshotRowSync): the quit-flush retry contract
+// (a failed upsert stays queued and is replayed) is behavior worth pinning.
+export function safeUpsert (row) {
   let plain
   try { plain = JSON.parse(JSON.stringify(row)) } catch (e) { plain = row }
   const entry = { op: 'upsert', params: plain }
@@ -66,23 +68,20 @@ function hookQuitFlush () {
   _todoFlushHooked = true
   window.todoAPI.onAppQuittingFlush(() => flushPendingUpserts())
 }
-/** Exit flush: send every pending upsert; a failed entry is put back at the queue head so the next write
- *  replays it (mirrors tomato.js flushPendingLedger — previously failures were only logged and silently lost) */
+/** Exit flush: send every pending upsert. maint-d7: failed entries NEVER leave the queue — the
+ *  splice happens per-entry only on success (safeUpsert's own removal shape). The old
+ *  splice-all-then-requeue-in-Promise.all requeued failures in an async aggregate callback, which
+ *  never ran when the process exited between the IPC dispatch and the callback (quit-flush: the ack
+ *  defer can outrun Promise.all) — every failed upsert was permanently lost. Replay is safe: upsert
+ *  is an idempotent row write. */
+// Exported for unit tests (same precedent as planSnapshotRowSync)
+export { flushPendingUpserts }
 function flushPendingUpserts () {
-  const list = _pendingUpserts.splice(0, _pendingUpserts.length)
-  const jobs = list.map((it, idx) =>
-    window.todoAPI.dbCall(it.op, it.params)
-      .then(() => null)
-      .catch(e => {
-        console.error('[todo] pending upsert flush failed at quit (requeued):', e)
-        return { idx, it }
-      })
-  )
-  // Re-add failures at the front in original index order (reverse iterate + unshift = original seq)
-  Promise.all(jobs).then(outcomes => {
-    const failures = outcomes.filter(Boolean)
-    for (let i = failures.length - 1; i >= 0; i--) _pendingUpserts.unshift(failures[i].it)
-  }).catch(() => { /* Promise.all never rejects (catches above) */ })
+  for (const entry of [..._pendingUpserts]) {
+    window.todoAPI.dbCall(entry.op, entry.params)
+      .then(() => { const i = _pendingUpserts.indexOf(entry); if (i >= 0) _pendingUpserts.splice(i, 1) })
+      .catch(e => console.error('[todo] pending upsert flush failed at quit (kept for retry):', e))
+  }
 }
 /** Strip Vue reactive proxies before IPC: rows come straight from reactive state, and a shallow spread
  *  ({ ...raw }) only unwraps the top level — nested arrays (reminderOffsets/reminderExtra/subtasks JSON is a
@@ -565,6 +564,10 @@ export default {
       try { for (const id of ids) await window.todoAPI.deleteTodoFilesRelevant?.(id) } catch {}
       // Drop the pre-delete chip snapshot meta too (rows are gone, the snapshot can never be restored)
       for (const id of ids) clearSnapshot(id)
+      // maint-d7: drop the purged tasks' pomodoro-estimate meta keys too — parity with purgeIds
+      // (review M-C5) and the CLI purge path (cli/lib.js deletes ESTIMATE_KEY_PREFIX per row); a
+      // recycled numeric taskId used to resurrect a stale estimate on the bulk "empty bin" path.
+      try { for (const id of ids) setEstimate(id, 0) } catch {}
       // Round-3 P1: the bulk path used to SKIP the milestone scrub purgeIds does — emptying the
       // bin left phantom taskIds in `projectMilestones:<catId>` (an unmet milestone with zero
       // surviving links could flip to 'done', mirroring the D5 bug on the per-item path).

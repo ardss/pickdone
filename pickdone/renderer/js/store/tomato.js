@@ -188,28 +188,21 @@ function ledgerWrite (op, params) {
   hookQuitFlush()
 }
 function flushPendingLedger () {
-  const list = _pendingLedger.splice(0, _pendingLedger.length)
-  // D5 (2026-09-20): failed entries are collected and re-prepended in ORIGINAL index order (reverse
-  // iterate + unshift, same pattern as store/todo.js flushPendingUpserts). The old splice-at-stale-idx
-  // ran in failure-completion order after any await reordering, so a mixed success/failure flush could
-  // reinsert a later entry before an earlier one and invert causality on replay (tomatoRemoveByIds
-  // landing after the tomatoAppendMany it was meant to follow).
-  const jobs = list.map((it) =>
-    Promise.resolve(window.todoAPI && window.todoAPI.dbCall(it.op, it.params))
+  // maint-d7: failed entries NEVER leave the queue — splice happens per-entry only on success
+  // (same keep-until-success shape as replayPendingLedger). The old splice-all-then-requeue-in-
+  // Promise.all lost every failed entry when the process exited between the IPC dispatch and the
+  // aggregate callback (quit-flush: the ack defer can outrun Promise.all), so a transient flush
+  // failure permanently dropped the ledger write. Replaying an entry that actually landed is safe:
+  // ledger ops are idempotent upserts.
+  for (const entry of [..._pendingLedger]) {
+    Promise.resolve(window.todoAPI && window.todoAPI.dbCall(entry.op, entry.params))
       .then(res => {
-        logRejectedRows(res, it.params)
-        if (it.op === 'tomatoRemoveByIds') purgePendingAppends(it.params)
-        return null
+        const i = _pendingLedger.indexOf(entry); if (i >= 0) _pendingLedger.splice(i, 1)
+        logRejectedRows(res, entry.params)
+        if (entry.op === 'tomatoRemoveByIds') purgePendingAppends(entry.params)
       })
-      .catch(e => {
-        console.error('[tomato] ledger flush failed at quit:', it.op, e)
-        return it
-      })
-  )
-  Promise.all(jobs).then(outcomes => {
-    const failures = outcomes.filter(Boolean)
-    for (let i = failures.length - 1; i >= 0; i--) _pendingLedger.unshift(failures[i])
-  }).catch(() => { /* Promise.all never rejects (catches above) */ })
+      .catch(e => console.error('[tomato] ledger flush failed at quit (kept for retry):', entry.op, e))
+  }
 }
 function hookQuitFlush () {
   if (_flushHooked || !window.todoAPI || !window.todoAPI.onAppQuittingFlush) return
@@ -242,20 +235,16 @@ function snowWrite (params) {
   hookQuitFlush()
 }
 function flushPendingSnow () {
-  const list = _pendingSnow.splice(0, _pendingSnow.length)
-  // D5: failures re-prepended in original order (same rationale as flushPendingLedger)
-  const jobs = list.map(it =>
-    Promise.resolve(window.todoAPI && commitCommand("todo", "bump", it.params))
-      .then(() => null)
-      .catch(e => {
-        console.error('[tomato] bumpSnow flush failed at quit:', it.params, e)
-        return it
+  // maint-d7: same keep-until-success shape as flushPendingLedger — a failed bump never leaves the
+  // queue, so a quit-flush failure cannot permanently drop the task-side focus credit (bumpSnow is
+  // idempotent and every replay carries the same dedupKey, so a double-send cannot double-credit).
+  for (const entry of [..._pendingSnow]) {
+    Promise.resolve(window.todoAPI && commitCommand("todo", "bump", entry.params))
+      .then(() => {
+        const i = _pendingSnow.indexOf(entry); if (i >= 0) _pendingSnow.splice(i, 1)
       })
-  )
-  Promise.all(jobs).then(outcomes => {
-    const failures = outcomes.filter(Boolean)
-    for (let i = failures.length - 1; i >= 0; i--) _pendingSnow.unshift(failures[i])
-  }).catch(() => { /* Promise.all never rejects (catches above) */ })
+      .catch(e => console.error('[tomato] bumpSnow flush failed at quit (kept for retry):', entry.params, e))
+  }
 }
 
 export default {
@@ -528,7 +517,10 @@ export default {
           const countPatch = todayCountPatch(s, startedAt, endTs)
           if (countPatch) commit('patch', countPatch)
         }
-        dispatch('auth/saveSnowGain', focusMin, { root: true })
+        // maint-d7: dedupKey = phase identity (String(startedAt)) — a completion retry (claim released
+        // after a mid-way failure) re-dispatches saveSnowGain; without the key the same focus double-
+        // patched the snow total and re-queued the delta (mirrors countPatch's startedAt guard above)
+        dispatch('auth/saveSnowGain', { gain: focusMin, dedupKey: String(startedAt) }, { root: true })
         if (focused) {
           // Queued write with retry (was fire-and-forget with an empty catch — a transient failure
           // silently dropped the task's focus credit)

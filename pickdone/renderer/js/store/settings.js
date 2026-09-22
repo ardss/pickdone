@@ -30,6 +30,7 @@ export const DEFAULT_SETTINGS = {
   isShowSubTask: true,
   isCalendarDimUncompleted: true,
   isShowCalendarPrivacyMode: false,
+  isShowCalendarCompleted: false, // maint-d7: read/written by CalendarView + ViewMoreMenu — was undeclared, so updateExternal/inbound sync silently stripped it (LAN sync / machine change = lost toggle)
   isDefaultSubTaskFolded: false,
   calendarFontSize: 'medium', // small|medium|large
   weekStartDay: 'mon', // mon|sun
@@ -61,8 +62,10 @@ export const DEFAULT_SETTINGS = {
   todoBoxSortMethod: 'created', // created|due|difficulty
   todoBoxSortOrder: 'desc', // desc|asc
   todoBoxCategoryId: -1,
-  tomatoTimeDefault: 25,
-  restTimeDefault: 5,
+  tomatoTime: 25, // maint-d7: the REAL focus-minutes key (SettingsModal `set({tomatoTime})` / TomatoPanel write it) — was undeclared, so inbound synced patches were stripped
+  restTime: 5, // maint-d7: the REAL rest-minutes key (same writers)
+  tomatoTimeDefault: 25, // maint-d7: LEGACY dead key, no live consumer — load() migrates its value to tomatoTime and drops it; declared only so inbound legacy patches sanitize/coerce instead of being unknown junk
+  restTimeDefault: 5, // maint-d7: LEGACY dead key, same treatment as tomatoTimeDefault
   enableTomatoFloating: true, // desktop floating window (the antonym of the reference disableTomatoFloating), on by default
   weatherEnabled: false, // sidebar weather (involves network and location, off by default, user enables in settings)
   weatherCity: '', // manually specified city; empty = auto-locate by IP
@@ -225,6 +228,17 @@ function load () {
   // Strip volatile keys already migrated to runtimeState (leftovers in old localStorage)
   delete merged.autoBackupLastAt; delete merged.tomatoRecordAddCount; delete merged.tomatoRecordAddDate
   coerceNumericSettings(merged)
+  // maint-d7: legacy tomatoTimeDefault/restTimeDefault carried the real user values while the live
+  // keys tomatoTime/restTime were undeclared (stripped by inbound-sync sanitization). Migrate the
+  // old values into the new keys (new key absent from the blob = untouched default) and delete the
+  // legacy keys — read-only compat: a blob that still carries them re-migrates on the next load.
+  for (const [legacy, live] of [['tomatoTimeDefault', 'tomatoTime'], ['restTimeDefault', 'restTime']]) {
+    if (raw[live] == null && raw[legacy] != null) {
+      const n = Number(raw[legacy])
+      if (Number.isFinite(n) && n > 0) merged[live] = n
+    }
+    delete merged[legacy]
+  }
   // No existing users pre-release: the legacy enum normalization table (LEGACY) was removed together with the old compat code
   // Completed groups folded by default (finalized by users 2026-08-30). Old users' saves with foldedTodoList=[] would override the new default,
   // so a one-time migration backfills it; afterwards the user's manual expand/collapse wins (removal from the list counts as expressed intent, no re-backfill).
@@ -291,6 +305,23 @@ if (typeof window !== 'undefined' && window.todoAPI && window.todoAPI.onAppQuitt
   })
 }
 
+/** maint-d7: settings the MAIN process consumes from config.json / its own handlers. A renderer-side
+ *  commit that skips the `settings/update` action's `updateSettings` IPC leaves these reverted on
+ *  next launch (config.json is windows.js's sole source; runWhenComputerStart hot-applies via
+ *  app.setLoginItemSettings). securityLockPassword rides the same channel — the per-sender
+ *  stripForbiddenSettingsKeys on main's side allows it from the main window. */
+export const MAIN_CONSUMED_SETTINGS = ['shortcutKeySettings', 'appLocale', 'closeActionMinimize', 'runWhenComputerStart', 'hideMainWindowOnStartup', 'enableHardwareAcceleration', 'enableSecurityLock', 'securityLockPassword']
+
+/** maint-d7 (pure, unit-tested): the subset of MAIN_CONSUMED_SETTINGS whose live value differs from
+ *  the declared default — i.e. what a bare restore/commit must hand to main's updateSettings IPC. */
+export function mainConsumedSettingsDiff (state) {
+  const patch = {}
+  for (const k of MAIN_CONSUMED_SETTINGS) {
+    if (canonicalJson(state ? state[k] : undefined) !== canonicalJson(DEFAULT_SETTINGS[k])) patch[k] = state[k]
+  }
+  return patch
+}
+
 export default {
   namespaced: true,
   state: load(),
@@ -303,6 +334,18 @@ export default {
     restore (state, saved) {
       Object.assign(state, coerceNumericSettings({ ...DEFAULT_SETTINGS, ...(saved || {}) }))
       persist(state)
+      // maint-d7: restore used to be a bare Object.assign+persist — no `settings/update` action, so
+      // no updateSettings IPC and main's config.json-consumed keys (launch-at-startup, shortcuts,
+      // locale, security lock...) were silently reverted by the restored (older) values. Diff the
+      // main-consumed keys against defaults and push the changed ones through the SAME IPC channel
+      // the update action uses; main's per-sender stripForbiddenSettingsKeys accepts these from the
+      // main window. Best-effort: a degraded host (tests, no bridge) must not break the restore.
+      try {
+        const diff = mainConsumedSettingsDiff(state)
+        if (Object.keys(diff).length && typeof window !== 'undefined' && window.todoAPI && window.todoAPI.updateSettings) {
+          window.todoAPI.updateSettings(diff)
+        }
+      } catch (e) { console.error('[settings] restore: main-process settings sync failed:', e) }
     }
   },
   actions: {
@@ -379,8 +422,9 @@ export default {
         // and hot-applies runWhenComputerStart via app.setLoginItemSettings — a raw commit updated only
         // the renderer store, so a CLI-written (or LAN-synced) value reverted on next launch while the
         // OS login item never followed. Same rationale as the U5 shortcut/appLocale dispatch above.
-        const CONFIG_CONSUMED = ['closeActionMinimize', 'runWhenComputerStart', 'hideMainWindowOnStartup', 'enableHardwareAcceleration', 'enableSecurityLock']
-        const needsMainApply = ['shortcutKeySettings', 'appLocale', ...CONFIG_CONSUMED].some(k => k in patch)
+        // maint-d7: the key set is shared with restore()'s diff (MAIN_CONSUMED_SETTINGS) so the
+        // two paths can never drift apart.
+        const needsMainApply = MAIN_CONSUMED_SETTINGS.some(k => k in patch)
         if (needsMainApply) await dispatch('update', patch)
         else commit('updateSettings', patch)
       } else mirrorToDb('db.settingsState', { ...state, _savedAt: db._savedAt, schemaV: SETTINGS_SCHEMA_V })
