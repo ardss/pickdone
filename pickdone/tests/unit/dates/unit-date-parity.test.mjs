@@ -13,11 +13,9 @@ const { parseMilestoneDate: cliParse, msProgress: cliProgress } = require('../..
 const { parseMilestoneDate: uiParse, milestoneProgress: uiProgress } = await import('../../../renderer/js/utils/milestones.js')
 const { dayjs } = await import('../../../renderer/js/utils/core.js')
 
-// maint/d7: bare 'M-D' is EXCLUDED from full parity for now — the renderer now resolves it to
-// the CURRENT year (V8's fallback Date parse used to turn '03-15' into 2001-03-15 and report it
-// valid, so the year-completion branch never ran). The CLI twin (cli/lib.js) still has the old
-// 2001 behavior; re-add 'M-D' cases here once cli/lib.js gets the same fix.
-const CASES = ['today', '明天', '+3d', '+2w', '2026-12-31', '1999-01-01', '', 'garbage', '2026-02-30']
+// bare 'M-D' back in full parity: both sides now route M-D before dayjs() so V8's fallback
+// Date parse (which turned '03-15' into 2001-03-15) can never win.
+const CASES = ['today', '明天', '+3d', '+2w', '2026-12-31', '1999-01-01', '', 'garbage', '2026-02-30', '03-15', '9-22']
 test('parseMilestoneDate: the renderer and the CLI agree on the same inputs', () => {
   for (const c of CASES) {
     const a = cliParse(c)

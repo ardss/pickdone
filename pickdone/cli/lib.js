@@ -427,8 +427,10 @@ function getMilestones (categoryInput) {
 function parseMilestoneDate (input) {
   const s = String(input || '').trim().toLowerCase()
   if (!s) return null
-  let d = dayjs(s)
-  if (!d.isValid() && /^\d{1,2}-\d{1,2}$/.test(s)) d = dayjs(`${dayjs().year()}-${s}`)
+  // bare 'M-D' must be routed BEFORE dayjs(): V8's fallback Date parse turns '03-15' into
+  // 2001-03-15 and reports it valid, so the year-completion branch never ran (parity with
+  // renderer/js/utils/milestones.js)
+  let d = /^\d{1,2}-\d{1,2}$/.test(s) ? dayjs(`${dayjs().year()}-${s}`) : dayjs(s)
   if (!d.isValid() && s === 'today') d = dayjs()
   if (!d.isValid() && s === '明天') d = dayjs().add(1, 'day')
   if (!d.isValid()) { const m = s.match(/^([+-])(\d+)d?$/); if (m) d = dayjs().add(m[1] === '+' ? +m[2] : -m[2], 'day') }
