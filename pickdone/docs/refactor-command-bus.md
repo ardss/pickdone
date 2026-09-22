@@ -33,22 +33,35 @@ renderer facade row; the todo-db:call whitelist rejects them).
 
 ## Exemption ledger (deliberate twin door, not drift)
 
-The gate (`cli/check-command-bus.cjs`, check 4) scans **every** `.js`/`.vue` under `src/` and
-`cli/` for write-shaped `.call('op'`/`dbCall('op'` literals and fails on any hit outside this
-EXHAUSTIVE ledger. Each entry carries its one-line rationale (also inline in the gate source);
-adding a file requires a spec-level justification in the commit message.
+The gate (`cli/check-command-bus.cjs`, check 4) scans **every** `.js`/`.cjs`/`.mjs`/`.vue` under
+`src/` and `cli/` for write-shaped `.call('op'`/`dbCall('op'` literals — including quote variants —
+and for dynamic (variable-op) write dispatch, failing on any hit outside this EXHAUSTIVE ledger and
+the exact-line anchors below. Each exempt file carries a write-call-count RATCHET that may only
+shrink (db.js/command-bus.js ratchet 0 — zero literal write sites forever; tomato-announce.js 1);
+adding an entry requires a spec-level justification in the commit message.
 
 | File | Why it may call db.call directly for writes |
 |---|---|
 | `src/main/db.js` | The engine itself — the bus and every op implementation dispatch here. |
 | `src/main/command-bus.js` | The single write door — `commit()` is the only caller that maps commands to ops. |
-| `src/main/sync-apply.js` | Sync engine ingress — applies **REMOTE** ops with peer-carried LWW stamps. The age travels on the wire; the bus's "stamp now" semantics do not apply, and re-routing would re-stamp/echo the peer's own data back. |
-| `src/main/lan-sync-bootstrap.js` | Sync ingest paths (hydration/flush/appendOplogPointers/blob fold/push cursor) run inside applyOps with peer stamps; unit suites drive them via an injected mock `state.db.call` surface that bus routing would bypass. Same ingress exemption as sync-apply.js. |
-| `src/main/tomato-announce.js` | Announce meta row written through the pipeline-injected db surface (`(op,p) => state.db.call(op,p)`), so the announce travels the oplog like every local write. Same exemption class as lan-sync-bootstrap.js. |
+| `src/main/tomato-announce.js` | Announce meta row written through the init()-injected db surface (`(op,p) => state.db.call(op,p)`), so the announce travels the oplog like every local write. Unit suites stub the injected surface; routing here would bypass the injected contract. |
 
-Plus **2 pinned bus-facade literals** (zero-test-edit rule: guard tests pin them byte-for-byte;
-each call is still bus-routed through import.js's bus facade):
-`cli/import.js` `upsertMany`, `upsertCategory`.
+Since PR #115 the sync ingress no longer needs an exemption: `src/main/sync-apply.js` and
+`src/main/lan-sync-bootstrap.js` route their writes through the **injected hookless bus**
+(`createBus((op, p) => state.db.call(op, p))` → `bus.commitOp` with `preserveStamp` — payload-
+verbatim, peer-carried stamps, and no onCommit fanout, which is correct: subscribers are never
+second writers, so ingress commits must not kick ls-mirror/undo-barrier). Their four remaining
+mixed read/write dynamic-dispatch closures are pinned to exact source lines (see anchors below).
+
+Plus **6 exact-line anchors** the gate tolerates (each pin tolerates only THAT literal line):
+
+- 2 bus-facade literals in `cli/import.js` (`upsertMany`, `upsertCategory`) — zero-test-edit rule;
+  each call is still bus-routed through import.js's bus facade.
+- 4 dynamic wholesale-dispatch anchors: 2 in `src/main/lan-sync-bootstrap.js`
+  (sync-conflict-backups ops surface, `dbCall` surface) and 2 in `src/main/sync-apply.js`
+  (the `createBus` ingress door, and the localKeys readback map). These closures pass the op
+  through a variable — mixed read/write injected surfaces that cannot route wholesale through the
+  manifest (reads would throw USAGE).
 
 On the renderer side, 3 write-shaped `dbCall` literals are pinned for the same zero-test-edit
 reason (`renderer/js/utils/repeat.js` deleteMeta, `renderer/js/components/ProjectDocs.vue` setMeta,
@@ -72,12 +85,29 @@ through the bus **regardless of channel**, so a write cannot dodge the door by c
 
 - Renderer write-shaped `dbCall`/`commitOp` literals: **0** (3 pinned, bus-routed — above).
 - Renderer facade `VERB_TO_OP` mirror vs manifest reverse index: **identical, 34 rows** (gate-checked).
-- `src/` + `cli/` out-of-door write-shaped `.call` literals: **0** outside the 5-file exemption
-  ledger + 2 pinned bus-facade literals.
+- `src/` + `cli/` (including `.cjs`/`.mjs`, quote variants covered) out-of-door write-shaped
+  `.call` literals and dynamic-op writes: **0** outside the 3-file exemption ledger and the
+  6 exact-line anchors (2 bus-facade + 4 dynamic dispatch).
 - Every manifest op exists in db.js `OPS` / db-sync-ops (no dead rows); every op in the renderer
   whitelist ∩ db.js `WRITE_OPS` has a manifest row (the door covers the whole surface it replaced).
 - db.js op census: **zero dead ops** — every op in `OPS` retains at least one live caller
   (sync-apply reads, CLI, main writers), so no op wrappers were removed in P3.
+
+**As-built additions (arch hardening, PR #115 — verified against `node cli/check-command-bus.cjs` PASS):**
+
+- **`capture` manifest column**: rows declare `capture: 'oplog' | 'none' | 'gc'` (arch review
+  2026-09-22 rec #2). `capture: 'none'` (e.g. `todo.commitBatch`) DECLARES db.call's deliberate
+  oplog-capture suppression in the manifest itself, so the bus/gates can reason about capture
+  without reading db-oplog.js.
+- **Shared stamp-clamp twin door**: the future-stamp clamp window is one constant —
+  `src/main/stamp-clamp.js` `STAMP_CLAMP_MS` — consumed by BOTH `command-bus.js` (explicit-stamp
+  forgery guard in `stampPayload`) and `src/main/sync-apply.js` (`clampSkew` ingress clamp at the
+  single choke point for all inbound rows). The gate asserts the twin consumption.
+- **Gate tightening**: the scanner now walks `.cjs`/`.mjs` (not just `.js`), normalizes string
+  quote variants so `"dbCall"` with double quotes cannot dodge the literal match, enforces the
+  per-exempt-file write-call ratchets described above, and cross-checks the manifest's
+  `localKeys` classifiers against sync-apply's filters over a **48-key parity corpus** (every
+  key family, matching AND non-matching shapes).
 
 **Demolished in P3** (bypassed-era plumbing physically gone):
 

@@ -13,6 +13,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { execFileSync } from 'node:child_process'
+import { isReleaseVersion } from './release-version.mjs'
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 const sh = (cmd) => execFileSync(cmd[0], cmd.slice(1), { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
@@ -34,7 +35,10 @@ const ghApi = (path) => sh(['gh', 'api', path])           // api 调用:repo 写
 const gh = (args) => sh(['gh', ...args, '--repo', REPO])  // 人类命令(release view/edit 等)
 
 const version = process.argv[2]
-if (!/^\d+\.\d+\.\d+$/.test(version || '')) die('用法: npm run release:finalize X.Y.Z')
+// P1-1 (R5): prerelease versions accepted (e.g. 0.4.0-beta.15) — shared validator, unit-covered.
+// The four-artifact check below interpolates the FULL version string, so prerelease artifact
+// names (PickDone-Setup-0.4.0-beta.15.exe) match automatically once this gate passes.
+if (!isReleaseVersion(version)) die('用法: npm run release:finalize X.Y.Z[-prerelease]')
 const TAG = 'v' + version
 
 // 1. 工作流状态

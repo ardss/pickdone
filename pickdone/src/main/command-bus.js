@@ -8,11 +8,18 @@
  *   2. normalize stamps — the bus, not the caller, is the source of truth for updatedAt.
  *      When the payload already carries the LWW field (the sync-apply internal path carries
  *      the peer row's age), the explicit stamp is preserved via opts.preserveStamp or an
- *      already-set field;
+ *      already-set field — BUT an explicit stamp more than STAMP_CLAMP_MS into the future
+ *      is always clamped to local now (forgery guard; preserveStamp never shields a future
+ *      stamp, see stampPayload below);
  *   3. dispatch to the existing tested db op — oplog capture stays where it is today
  *      (db.call appends it), so the wire/on-disk protocol is untouched;
  *   4. run post-commit fanout hooks in registration order. Subscribers (LS-mirror notice,
  *      undo-barrier notice) observe the commit — they are never second writers.
+ *
+ * Hookless-bus caveat (P3-2, R5): out-of-process CLI sessions commit through a bus instance
+ * with zero registered onCommit hooks — no LS-mirror kick, no undo-barrier. Safety rests on
+ * the "subscribers are never second writers" invariant (their absence cannot lose data), and
+ * the external-write watcher kicks sync when the App observes a CLI-written file.
  *
  * The engine (oplog ring, watermarks, LWW merge) is explicitly out of bounds.
  *
@@ -75,7 +82,9 @@ function createBus (dbCall, manifestMod = manifest) {
    *   one — a forged future tombstone stamp would win delete-vs-live LWW forever, exactly like
    *   a forged updatedAt. The clamp applies regardless of opts.preserveStamp: that flag protects
    *   the caller's LWW AGE (lwwField), never a future-dated deletion stamp.
-   * - opts.preserveStamp = true → the lwwField is never touched (see above for deletedAt).
+   * - opts.preserveStamp = true → the lwwField is never ADDED and past stamps are kept
+   *   verbatim; explicit FUTURE stamps (lwwField and deletedAt alike) are still clamped —
+   *   preserveStamp protects the caller's age, it is not a clamp exemption.
    * NON-PLAIN payloads (arrays like setMeta ['k','v'] / tomatoAppendMany rows, bare string
    * keys, scalars) pass through VERBATIM — those ops derive their stamps inside the db layer
    * and reshaping them would corrupt the call contract.

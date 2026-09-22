@@ -28,7 +28,9 @@ const dbm = require('../src/main/db.js')
 // Phase-2 command-bus write door (docs/refactor-command-bus.md): every CLI write goes through
 // the bus (manifest entity/verb) — op-keyed db writes from the CLI are gone. preserveStamp: the
 // CLI derives its own row ages exactly as before; the bus must not add fields the legacy calls
-// never sent (payloads stay byte-identical, sync LWW unchanged).
+// never sent (sync LWW unchanged). P2-1 (R5) contract precision: preserveStamp keeps PAST
+// stamps untouched, but an explicit stamp more than STAMP_CLAMP_MS into the future is still
+// clamped to now (shared forgery guard — see command-bus.stampPayload).
 const bus = require('../src/main/command-bus')
 // open() first: several call sites used `open().call(op, …)` as their only DB touch — the bus
 // commit must keep guaranteeing an initialized handle in pure-CLI sessions.
@@ -1276,8 +1278,27 @@ function deleteCategory (input) {
     // milestones die with the deletion too (backed up above — renderer parity backupThenClearProjectMeta)
     try { commit('meta', 'delete', MS_KEY(v.categoryId)) } catch { /* absent is fine */ }
   }
-  audit.record({ action: 'category.delete', targets: [], changes: [{ before: { names: victims.map(v => v.categoryName) } }], note: 'category soft-deleted (recoverable in UI), tasks kept' })
-  return { deleted: victims.map(v => ({ id: v.categoryId, name: v.categoryName })) }
+  // P1-3 (R5, sync-visible parity with renderer category.js purgeFiltersForVictims): saved
+  // filters whose conds.catId references a cascade victim must die with the category — the
+  // renderer cascades them (and its undo reports "{n} saved filter(s) removed"), the CLI used
+  // to leave them behind pointing at a dead category id. Tombstone each victim filter through
+  // the bus (filter.delete), back the set up in `catFiltersBak.<rootId>` for recover symmetry
+  // (same pattern as catProjectMetaBak above), and report the count in the command output.
+  const deadCatIds = new Set(victims.map(v => String(v.categoryId)))
+  const catFiltersBakKey = 'catFiltersBak.' + id
+  let removedFilters = 0
+  let doomedFilters = []
+  try {
+    doomedFilters = (db.call('filterList') || []).filter(f => f && f.conds && deadCatIds.has(String(f.conds.catId)))
+  } catch { /* degraded read: leave filters alone rather than half-cascading */ }
+  if (doomedFilters.length) {
+    commit('meta', 'put', [catFiltersBakKey, JSON.stringify(doomedFilters.map(f => ({ id: f.id, name: f.name, conds: f.conds, sort: f.sort })))])
+    for (const f of doomedFilters) {
+      try { commit('filter', 'delete', f.id); removedFilters++ } catch { /* skip and keep cascading */ }
+    }
+  }
+  audit.record({ action: 'category.delete', targets: [], changes: [{ before: { names: victims.map(v => v.categoryName) } }], note: 'category soft-deleted (recoverable in UI), tasks kept' + (removedFilters ? `, ${removedFilters} saved filter(s) removed` : '') })
+  return { deleted: victims.map(v => ({ id: v.categoryId, name: v.categoryName })), removedFilters }
 }
 
 /** Move a category under a folder or back to root ('root'). Parity note: the App's hierarchy getter
