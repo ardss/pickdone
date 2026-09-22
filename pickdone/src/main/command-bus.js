@@ -72,36 +72,55 @@ function createBus (dbCall, manifestMod = manifest) {
 
   /**
    * Stamp normalization. Returns the payload to persist:
-   * - row.lwwField set and payload is a plain object lacking the field (or opts.preserveStamp
-   *   is falsy and the field is absent) → stamp Date.now() (the bus owns the age);
-   * - the payload already carries an explicit age (sync-apply internal use) → preserved as-is,
-   *   UNLESS it lies about the future: D6 P2 (2026-09-21) clamp — an explicit stamp more than
-   *   STAMP_SKEW_MS ahead of local now is treated as forged (a compromised renderer could stick
-   *   a year-2100 stamp on a row via the IPC door and win LWW forever). Clamped to local now.
-   *   P2-1 (wave-A, 2026-09-21): the same clamp covers `deletedAt` wherever the payload carries
-   *   one — a forged future tombstone stamp would win delete-vs-live LWW forever, exactly like
-   *   a forged updatedAt. The clamp applies regardless of opts.preserveStamp: that flag protects
-   *   the caller's LWW AGE (lwwField), never a future-dated deletion stamp.
-   * - opts.preserveStamp = true → the lwwField is never ADDED and past stamps are kept
-   *   verbatim; explicit FUTURE stamps (lwwField and deletedAt alike) are still clamped —
-   *   preserveStamp protects the caller's age, it is not a clamp exemption.
-   * NON-PLAIN payloads (arrays like setMeta ['k','v'] / tomatoAppendMany rows, bare string
-   * keys, scalars) pass through VERBATIM — those ops derive their stamps inside the db layer
-   * and reshaping them would corrupt the call contract.
+   * - ROW-LIST payloads (bus-stamps fix 2026-09-22): arrays (todo.putMany, tomato.appendMany,
+   *   plan/setting/category/filter putMany rows) and the todo.commitBatch { rows: [...] }
+   *   envelope carry one age PER ROW — each plain-object element is stamped/clamped with the
+   *   same rules. Non-object elements (meta ['k','v'] pair arrays have lwwField null and are
+   *   never reached; defensive for scalars) pass through verbatim.
+   * - NESTED PATCH payloads (tomato.updateById): the real LWW age lives in payload.patch —
+   *   an explicit future stamp inside .patch is clamped exactly like a top-level one.
+   * - wave-A (2026-09-21): the same clamp covers `deletedAt` wherever the payload (top level
+   *   or .patch) carries one — a forged future tombstone stamp would win delete-vs-live LWW
+   *   forever. The clamp applies regardless of opts.preserveStamp: that flag protects the
+   *   caller's LWW AGE (lwwField), never a future-dated deletion stamp.
+   * NON-PLAIN payloads (bare string keys, scalars) pass through VERBATIM.
    * Payload is never mutated in place — callers may hold reactive rows.
    */
   function stampPayload (row, payload, opts = {}) {
-    if (payload == null || typeof payload !== 'object' || Array.isArray(payload)) return payload
-    const limit = Date.now() + STAMP_CLAMP_MS
-    if (!row.lwwField && payload.deletedAt == null) return payload
-    const hasExplicit = row.lwwField && payload[row.lwwField] != null && Number(payload[row.lwwField]) > 0
-    if (!hasExplicit && row.lwwField && !opts.preserveStamp) {
-      return Object.assign({}, payload, { [row.lwwField]: Date.now() })
+    const f = row.lwwField
+    if (!f || payload == null || typeof payload !== 'object') return payload
+    if (Array.isArray(payload)) return payload.map(el => stampValue(f, el, opts))
+    // todo.commitBatch envelope: commitSyncBatch takes { rows, version } — the ages ride on
+    // payload.rows, so the bus stamps/clamps each row instead of the envelope itself.
+    if (Array.isArray(payload.rows)) {
+      return Object.assign({}, payload, { rows: payload.rows.map(el => stampValue(f, el, opts)) })
     }
+    return stampValue(f, payload, opts)
+  }
+
+  /** Clamp-or-stamp one plain-object row against the manifest's lwwField. */
+  function stampValue (f, p, opts) {
+    if (p == null || typeof p !== 'object' || Array.isArray(p)) return p
+    const limit = Date.now() + STAMP_CLAMP_MS
+    const patch = (p.patch && typeof p.patch === 'object' && !Array.isArray(p.patch)) ? p.patch : null
+    // D6 P2 (2026-09-21) + wave-A + bus-stamps (2026-09-22): future-stamp clamp — legit clock
+    // skew is minutes, not years; anything beyond the skew window can only be forgery. Applies
+    // to the manifest age field AND deletedAt, at BOTH the top level and inside a nested
+    // .patch (tomato.updateById shape), and on every door including preserveStamp callers
+    // (preserveStamp means "never MINT a fresh stamp", not "may carry an arbitrary future age").
     const clamped = {}
-    if (hasExplicit && Number(payload[row.lwwField]) > limit) clamped[row.lwwField] = Date.now()
-    if (payload.deletedAt != null && Number(payload.deletedAt) > limit) clamped.deletedAt = Date.now()
-    return Object.keys(clamped).length ? Object.assign({}, payload, clamped) : payload
+    if (p[f] != null && Number(p[f]) > limit) clamped[f] = Date.now()
+    if (p.deletedAt != null && Number(p.deletedAt) > limit) clamped.deletedAt = Date.now()
+    if (patch) {
+      const pc = {}
+      if (patch[f] != null && Number(patch[f]) > limit) pc[f] = Date.now()
+      if (patch.deletedAt != null && Number(patch.deletedAt) > limit) pc.deletedAt = Date.now()
+      if (Object.keys(pc).length) clamped.patch = Object.assign({}, patch, pc)
+    }
+    if (Object.keys(clamped).length) return Object.assign({}, p, clamped)
+    if ((p[f] != null && Number(p[f]) > 0) || (patch && patch[f] != null && Number(patch[f]) > 0)) return p
+    if (opts.preserveStamp) return p
+    return Object.assign({}, p, { [f]: Date.now() })
   }
 
   /** Machine-local key classification for the row (meta/settings local-key filter). */

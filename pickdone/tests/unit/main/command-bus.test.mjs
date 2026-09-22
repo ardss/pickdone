@@ -43,17 +43,19 @@ test('unknown command throws USAGE, known command dispatches to the manifest op'
 
 test('stamp normalization: bus stamps lwwField; explicit age and preserveStamp survive', () => {
   const { bus, calls } = makeBus()
+  // Bus-stamps fix (2026-09-22): the todo row's REAL LWW age is updateTime (todoToRow binds
+  // updatedAt from t.updateTime), so the manifest's lwwField — and the bus's stamp — moved.
   bus.commit('todo', 'put', { taskId: 't1' })
-  assert.ok(Number(calls[0].params.updatedAt) > 0, 'bus stamps updatedAt')
+  assert.ok(Number(calls[0].params.updateTime) > 0, 'bus stamps updateTime (the real todo age)')
   const peerAge = 1234567890123
-  bus.commit('todo', 'put', { taskId: 't2', updatedAt: peerAge })
-  assert.equal(calls[1].params.updatedAt, peerAge, 'explicit peer age preserved (sync-apply path)')
+  bus.commit('todo', 'put', { taskId: 't2', updateTime: peerAge })
+  assert.equal(calls[1].params.updateTime, peerAge, 'explicit peer age preserved (sync-apply path)')
   bus.commit('todo', 'put', { taskId: 't3' }, { preserveStamp: true })
-  assert.equal(calls[2].params.updatedAt, undefined, 'preserveStamp skips stamping')
+  assert.equal(calls[2].params.updateTime, undefined, 'preserveStamp skips stamping')
   // payload is never mutated in place (callers may hold reactive rows)
   const row = { taskId: 't4' }
   bus.commit('todo', 'put', row)
-  assert.equal(row.updatedAt, undefined)
+  assert.equal(row.updateTime, undefined)
   // ops without an lwwField are passed through verbatim
   bus.commit('todo', 'hardDelete', 't1')
   assert.equal(calls[4].params, 't1')

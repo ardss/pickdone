@@ -72,22 +72,28 @@ const COMMANDS = {
   // recycle-bin conflict copies (merge.mjs mergeTodoRows → -conflict- rows), ghost-tombstone
   // guards and a userId normalizer. The engine ingress (src/main/sync-apply.js applyRowInner)
   // hand-rolls the todo branches on purpose — read them there before touching these rows.
-  'todo.put':          { entity: 'todo', verb: 'put', sync: 'full', lwwField: 'updatedAt', tombstone: 'pointer', op: 'upsert' },
-  'todo.putMany':      { entity: 'todo', verb: 'putMany', sync: 'full', lwwField: 'updatedAt', tombstone: 'pointer', op: 'upsertMany' },
+  // Bus-stamps fix (2026-09-22): lwwField is 'updateTime' — the todo row's REAL LWW age is
+  // updateTime (db-rows.js todoToRow binds `updatedAt: t.updateTime || 0`; db.js upsert never
+  // re-stamps and IGNORES a payload.updatedAt). The old 'updatedAt' here made the bus stamp
+  // (and clamp) a field the todo table does not read, so a forged future updateTime sailed
+  // through the IPC door and won LWW forever. Hydration/egress reads the same column
+  // (sync-apply.js hydrateRow `updatedAt: t.updateTime`).
+  'todo.put':          { entity: 'todo', verb: 'put', sync: 'full', lwwField: 'updateTime', tombstone: 'pointer', op: 'upsert' },
+  'todo.putMany':      { entity: 'todo', verb: 'putMany', sync: 'full', lwwField: 'updateTime', tombstone: 'pointer', op: 'upsertMany' },
   // Sync-ack echo path: db.call deliberately skips oplog capture for it (see db-oplog.js header).
   // Arch review 2026-09-22 rec #2: capture:'none' DECLARES that suppression in the manifest —
   // the command participates in sync (sync:'full') but its commit mints NO oplog rows, so the
-  // bus/gates can reason about capture without reading db-oplog.js. lwwField:'updatedAt' stays:
+  // bus/gates can reason about capture without reading db-oplog.js. lwwField:'updateTime' stays:
   // rows arrive with wire-carried ages the db layer preserves via todoToRow.
-  'todo.commitBatch':  { entity: 'todo', verb: 'commitBatch', sync: 'full', capture: 'none', lwwField: 'updatedAt', tombstone: null, op: 'commitSyncBatch' },
+  'todo.commitBatch':  { entity: 'todo', verb: 'commitBatch', sync: 'full', capture: 'none', lwwField: 'updateTime', tombstone: null, op: 'commitSyncBatch' },
   'todo.hardDelete':   { entity: 'todo', verb: 'hardDelete', sync: 'full', lwwField: null, tombstone: 'row', op: 'hardDelete' },
   'todo.hardDeleteMany': { entity: 'todo', verb: 'hardDeleteMany', sync: 'full', lwwField: null, tombstone: 'row', op: 'hardDeleteMany' },
   // Arch review 2026-09-22 rec #2: bumpSnow's db impl (db.js) destructures ONLY
   // { taskId, minutes, dedupKey } and stamps the row's updatedAt with its OWN now — a
-  // caller-supplied payload.updatedAt (including a bus-stamped one) is provably ignored.
-  // lwwField:'updatedAt' stays so the bus still clamps a forged explicit future stamp on the
+  // caller-supplied age (including a bus-stamped one) is provably ignored.
+  // lwwField:'updateTime' stays so the bus still clamps a forged explicit future stamp on the
   // payload before dispatch (defense in depth, same window as the ingress clamp).
-  'todo.bump':         { entity: 'todo', verb: 'bump', sync: 'full', lwwField: 'updatedAt', tombstone: null, op: 'bumpSnow' },
+  'todo.bump':         { entity: 'todo', verb: 'bump', sync: 'full', lwwField: 'updateTime', tombstone: null, op: 'bumpSnow' },
 
   // ---- meta (key/value rows) ----
   // Arch review 2026-09-22 rec #2: lwwField is null on BOTH meta rows. Meta is a KV table with
@@ -121,6 +127,9 @@ const COMMANDS = {
   // their local tombstones from a separate tombstone read (tomatoTombstones) — see the
   // TOMB_FALLBACK_LOOKUP table in src/main/sync-apply.js.
   'tomato.appendMany': { entity: 'tomato', verb: 'appendMany', sync: 'full', lwwField: 'updatedAt', tombstone: null, op: 'tomatoAppendMany' },
+  // Bus-stamps fix (2026-09-22): tomatoUpdateById's real LWW age arrives inside payload.patch
+  // (db.js Object.assigns the patch over the current record and preserves patch.updatedAt) —
+  // the bus clamps a forged future stamp there (see stampPayload's nested-patch branch).
   'tomato.updateById': { entity: 'tomato', verb: 'updateById', sync: 'full', lwwField: 'updatedAt', tombstone: null, op: 'tomatoUpdateById' },
   'tomato.removeByIds': { entity: 'tomato', verb: 'removeByIds', sync: 'full', lwwField: 'updatedAt', tombstone: 'pointer', op: 'tomatoRemoveByIds' },
   'tomato.migrateFromMeta': { entity: 'tomato', verb: 'migrateFromMeta', sync: 'none', lwwField: null, tombstone: 'gc', op: 'tomatoMigrateFromMeta' },
