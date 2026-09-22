@@ -52,6 +52,9 @@ const ICON = {
 const CACHE_KEY = 'weatherCache'
 const FETCH_TIMEOUT = 8000
 const AUTO_REFRESH_MS = 30 * 60 * 1000
+// Negative-result cache TTL for city-outline lookups: a Nominatim miss is remembered for 1 hour so the
+// 30-minute auto-refresh does not re-fire up to 3 variant requests per refresh for cities with no boundary
+const SHAPE_MISS_TTL_MS = 60 * 60 * 1000
 
 import { lookupCity, geocodeOnline } from '../utils/cnCities.js'
 import CITY_SHAPES from '../utils/city-shapes-data.js'
@@ -101,6 +104,7 @@ function geojsonToShape (gj) {
 /** City outline: built-in China dataset first (zero network, mainland-reliable) -> local cache -> Nominatim online fallback
  *  (Nominatim is DNS-poisoned on mainland networks but reachable from US/EU, so overseas cities resolve there) */
 async function loadShape (city) {
+  const now = Date.now()
   for (const name of cityVariants(city)) {
     // World city keys are lowercase English names, so do a lowercase fallback (sources may be "New York"/"New York City" etc. with mixed casing)
     const builtin = CITY_SHAPES[name] || CITY_SHAPES[name.toLowerCase()] || CITY_SHAPES[name.toLowerCase().replace(/\s+city$/, '')]
@@ -110,6 +114,13 @@ async function loadShape (city) {
       const cached = localStorage.getItem(key)
       if (cached) return JSON.parse(cached)
     } catch {}
+    // Negative-result cache: a recent miss skips the network round-trip (auto-refresh would otherwise
+    // re-query Nominatim with up to 3 variants every 30 minutes for cities that never resolve)
+    const missKey = 'geoShapeMiss-' + name
+    try {
+      const missAt = +localStorage.getItem(missKey)
+      if (missAt && now - missAt < SHAPE_MISS_TTL_MS) continue
+    } catch {}
     const r = await fetchWithTimeout(`https://nominatim.openstreetmap.org/search?city=${encodeURIComponent(name)}&format=json&polygon_geojson=1&limit=1&accept-language=zh`)
     const j = await r.json()
     const shape = j[0] ? geojsonToShape(j[0].geojson) : null
@@ -118,6 +129,8 @@ async function loadShape (city) {
 
       return shape
     }
+    // Record the miss with a timestamp; entries expire after SHAPE_MISS_TTL_MS
+    try { localStorage.setItem(missKey, String(now)) } catch {}
   }
   return null
 }
@@ -214,9 +227,10 @@ export default {
         `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true&timezone=auto`
       )
       const wj = await wr.json()
-      return wj.current_weather
-        ? { temp: Math.round(wj.current_weather.temperature), code: wj.current_weather.weathercode, city }
-        : null
+      // Missing current_weather must throw (same contract as fetchWttr's `no data`): returning null
+      // once fell through both branches silently, freezing the widget on hours-old cached data
+      if (!wj.current_weather) throw new Error('no current weather payload')
+      return { temp: Math.round(wj.current_weather.temperature), code: wj.current_weather.weathercode, city }
     },
     async fetchWeather () {
       if (!this.enabled || this.loading) return // re-entry guard: triggers during a fetch are ignored
