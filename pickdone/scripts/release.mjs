@@ -3,7 +3,7 @@
  * 一键发版(SOP-06 的可执行形态——流程长进工具里,不依赖任何人记得文档):
  *   npm run release 0.3.0
  * 步骤(任一步失败即中止,不会推任何东西):
- *   1. 校验版本号格式 X.Y.Z;工作区干净
+ *   1. 校验版本号格式 X.Y.Z[-prerelease];工作区干净
  *   2. CHANGELOG [Unreleased] 段非空 → 自动改名 [X.Y.Z] - 今天(空段=红:没东西可发就别发)
  *      若目标版本段落已存在=红(防重复发版);package.json version 自动写入 X.Y.Z
  *   3. npm run bump(缓存戳)
@@ -16,6 +16,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { execFileSync } from 'node:child_process'
+import { isReleaseVersion } from './release-version.mjs'
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 // stdio:'inherit' 时 execFileSync 返回 null(无捕获输出)——不能一律 .trim()
@@ -31,7 +32,8 @@ const npm = (args, opts = {}) => process.platform === 'win32'
   : sh(['npm', ...args], opts)
 
 const version = process.argv[2]
-if (!/^\d+\.\d+\.\d+$/.test(version || '')) die('用法: npm run release X.Y.Z')
+// P1-1 (R5): prerelease versions accepted (e.g. 0.4.0-beta.15) — shared validator, unit-covered.
+if (!isReleaseVersion(version)) die('用法: npm run release X.Y.Z[-prerelease]')
 const TAG = 'v' + version
 
 // 1. 工作区干净

@@ -380,7 +380,8 @@ async function main () {
         }
         const r = lib.deleteCategory(target)
         if (opts.json) return emit(r)
-        return console.log('✓ deleted: ' + r.deleted.map(v => v.name).join(', '))
+        // P1-3 (R5): report the saved-filter cascade so CLI output matches the renderer's undo message
+        return console.log('✓ deleted: ' + r.deleted.map(v => v.name).join(', ') + (r.removedFilters ? `; ${r.removedFilters} saved filter(s) removed` : ''))
       }
       throw new lib.CliError('unknown sub-operation "' + op + '" (valid: add/rename/move/rm; plain `categories` lists)', 'UNKNOWN_ARG')
     }
