@@ -14,11 +14,17 @@
  *                'none'  = internal GC-marker op, no per-row semantics
  *   lwwField   – the timestamp field the bus stamps (updatedAt source of truth: the bus);
  *                null when the op has no LWW age (pure appends, GC markers)
- *   tombstone  – 'row'    = physical row delete (hardDelete)
+ *   tombstone  – 'row'    = physical row delete (hardDelete, purgeRecycleBin, deleteMeta —
+ *                            the row/entry is REMOVED from its table)
  *                'pointer' = soft delete / tombstone flag on a live row (todo delete,
- *                            filterDelete, planRemoveIds, settings rows...)
+ *                            filterDelete, planRemoveIds, category upsert with deleted:1,
+ *                            settings rows, tomatoRemoveByIds...)
  *                'gc'      = single '*gc*' marker op (planPrune, tomatoMigrateFromMeta)
  *                null      = no deletion semantics
+ *                (P2-2, wave-A 2026-09-21: this column was audited against the actual db.js
+ *                delete behavior — upsertCategory/filterDelete/planRemoveIds/settingsRowDelete/
+ *                tomatoRemoveByIds all SOFT-delete via deleted=1 flags, so they are declared
+ *                'pointer'; only ops that physically REMOVE rows declare 'row'.)
  *   localKeys  – optional (key) => boolean classifier for machine-local keys inside the
  *                payload (meta/settings rows that must neither egress nor be overwritten
  *                by a peer — mirrors src/main/sync-apply.js's filters, kept inline so this
@@ -94,19 +100,19 @@ const COMMANDS = {
   'meta.delete':       { entity: 'meta', verb: 'delete', sync: 'full', lwwField: null, tombstone: 'row', localKeys: isMachineLocalMetaKey, op: 'deleteMeta' },
 
   // ---- categories ----
-  'category.put':      { entity: 'category', verb: 'put', sync: 'full', lwwField: 'updatedAt', tombstone: 'row', op: 'upsertCategory' },
+  'category.put':      { entity: 'category', verb: 'put', sync: 'full', lwwField: 'updatedAt', tombstone: 'pointer', op: 'upsertCategory' },
 
   // ---- smart filters ----
   'filter.put':        { entity: 'filter', verb: 'put', sync: 'full', lwwField: 'updatedAt', tombstone: null, op: 'filterUpsert' },
-  'filter.delete':     { entity: 'filter', verb: 'delete', sync: 'full', lwwField: 'updatedAt', tombstone: 'row', op: 'filterDelete' },
+  'filter.delete':     { entity: 'filter', verb: 'delete', sync: 'full', lwwField: 'updatedAt', tombstone: 'pointer', op: 'filterDelete' },
 
   // ---- plan chips (schedule-chip row storage) ----
   'plan.putMany':      { entity: 'plan', verb: 'putMany', sync: 'full', lwwField: 'updatedAt', tombstone: null, op: 'planAddMany' },
   'plan.put':          { entity: 'plan', verb: 'put', sync: 'full', lwwField: 'updatedAt', tombstone: null, op: 'planUpdateChip' },
-  'plan.removeIds':    { entity: 'plan', verb: 'removeIds', sync: 'full', lwwField: 'updatedAt', tombstone: 'row', op: 'planRemoveIds' },
+  'plan.removeIds':    { entity: 'plan', verb: 'removeIds', sync: 'full', lwwField: 'updatedAt', tombstone: 'pointer', op: 'planRemoveIds' },
   'plan.moveTask':     { entity: 'plan', verb: 'moveTask', sync: 'full', lwwField: 'updatedAt', tombstone: null, op: 'planMoveTask' },
-  'plan.deleteTask':   { entity: 'plan', verb: 'deleteTask', sync: 'full', lwwField: 'updatedAt', tombstone: 'row', op: 'planDeleteTask' },
-  'plan.deleteTaskDay': { entity: 'plan', verb: 'deleteTaskDay', sync: 'full', lwwField: 'updatedAt', tombstone: 'row', op: 'planDeleteTaskDay' },
+  'plan.deleteTask':   { entity: 'plan', verb: 'deleteTask', sync: 'full', lwwField: 'updatedAt', tombstone: 'pointer', op: 'planDeleteTask' },
+  'plan.deleteTaskDay': { entity: 'plan', verb: 'deleteTaskDay', sync: 'full', lwwField: 'updatedAt', tombstone: 'pointer', op: 'planDeleteTaskDay' },
   'plan.prune':        { entity: 'plan', verb: 'prune', sync: 'none', lwwField: null, tombstone: 'gc', op: 'planPrune' },
 
   // ---- pomodoro ledger (row storage, append-mostly) ----
@@ -116,13 +122,13 @@ const COMMANDS = {
   // TOMB_FALLBACK_LOOKUP table in src/main/sync-apply.js.
   'tomato.appendMany': { entity: 'tomato', verb: 'appendMany', sync: 'full', lwwField: 'updatedAt', tombstone: null, op: 'tomatoAppendMany' },
   'tomato.updateById': { entity: 'tomato', verb: 'updateById', sync: 'full', lwwField: 'updatedAt', tombstone: null, op: 'tomatoUpdateById' },
-  'tomato.removeByIds': { entity: 'tomato', verb: 'removeByIds', sync: 'full', lwwField: 'updatedAt', tombstone: 'row', op: 'tomatoRemoveByIds' },
+  'tomato.removeByIds': { entity: 'tomato', verb: 'removeByIds', sync: 'full', lwwField: 'updatedAt', tombstone: 'pointer', op: 'tomatoRemoveByIds' },
   'tomato.migrateFromMeta': { entity: 'tomato', verb: 'migrateFromMeta', sync: 'none', lwwField: null, tombstone: 'gc', op: 'tomatoMigrateFromMeta' },
 
   // ---- settings/habits rows (P2 blob split, docs/sync §4.2) ----
   'setting.put':       { entity: 'setting', verb: 'put', sync: 'full', lwwField: 'updatedAt', tombstone: 'row', localKeys: isMachineLocalSettingKey, op: 'settingsRowPut' },
   'setting.putMany':   { entity: 'setting', verb: 'putMany', sync: 'full', lwwField: 'updatedAt', tombstone: 'row', localKeys: isMachineLocalSettingKey, op: 'settingsRowPutMany' },
-  'setting.delete':    { entity: 'setting', verb: 'delete', sync: 'full', lwwField: 'updatedAt', tombstone: 'row', localKeys: isMachineLocalSettingKey, op: 'settingsRowDelete' },
+  'setting.delete':    { entity: 'setting', verb: 'delete', sync: 'full', lwwField: 'updatedAt', tombstone: 'pointer', localKeys: isMachineLocalSettingKey, op: 'settingsRowDelete' },
 
   // ---- LAN sync identity/device ops (machine-local: sync:'local') ----
   'sync.setEnabled':   { entity: 'sync', verb: 'setEnabled', sync: 'local', lwwField: null, tombstone: null, op: 'syncSetEnabled' },
@@ -143,7 +149,7 @@ const COMMANDS = {
   // Sync-apply bulk variants: called directly by the engine ingress (sync-apply.js) with
   // wire-carried LWW stamps; declared here so every write op in db.js WRITE_OPS has a manifest
   // row and the gate's census is total. Payloads are row arrays — the bus passes them verbatim.
-  'category.putMany':  { entity: 'category', verb: 'putMany', sync: 'full', lwwField: 'updatedAt', tombstone: 'row', op: 'upsertCategoryMany', internal: true },
+  'category.putMany':  { entity: 'category', verb: 'putMany', sync: 'full', lwwField: 'updatedAt', tombstone: 'pointer', op: 'upsertCategoryMany', internal: true },
   'filter.putMany':    { entity: 'filter', verb: 'putMany', sync: 'full', lwwField: 'updatedAt', tombstone: null, op: 'filterUpsertMany', internal: true }
 }
 
