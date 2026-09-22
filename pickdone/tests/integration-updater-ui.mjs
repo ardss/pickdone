@@ -24,8 +24,21 @@ const send = (method, params = {}) => new Promise((resolve, reject) => {
   const mid = ++id
   pending.set(mid, { resolve, reject })
   ws.send(JSON.stringify({ id: mid, method, params }))
-  setTimeout(() => { if (pending.has(mid)) { pending.delete(mid); reject(new Error('cdp timeout ' + method)) } }, 10000)
+  // 2026-09-23: 10s was fine standalone but this stage runs in check:all's 3-lane live pool —
+  // three Electron instances + the unit wall compete for CPU and a cold Runtime.evaluate can
+  // legitimately exceed 10s (the retry-once wrapper in check-all papers over it at best). 30s
+  // covers the contended case without slowing the uncontended one.
+  setTimeout(() => { if (pending.has(mid)) { pending.delete(mid); reject(new Error('cdp timeout ' + method)) } }, 30000)
 })
+// Poll an evaluate until it settles, instead of one fixed sleep + one shot: under the 3-lane
+// live pool the renderer's first paint can land well after the CDP socket opens.
+const evaluateReady = async (expr, { tries = 20, gapMs = 1500 } = {}) => {
+  let lastErr
+  for (let i = 0; i < tries; i++) {
+    try { return await evaluate(expr) } catch (e) { lastErr = e; await sleep(gapMs) }
+  }
+  throw lastErr
+}
 const evaluate = async expr => {
   const r = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true })
   if (r.error) throw new Error('cdp error: ' + r.error.message)
@@ -68,13 +81,15 @@ try {
     try { console.error('[diag] app log tail:\n' + fs.readFileSync(path.join(appCwd, 'tests', '.artifacts', 'upd-app.log'), 'utf8').split('\n').slice(-40).join('\n')) } catch {}
   }
   assert.ok(ok, 'app not ready within ~60s')
-  await sleep(1500)
-
-  // 0. 诊断:确认挂在真实 todoAPI 上
-  const probe = await evaluate(`(async () => ({ hasAPI: !!window.todoAPI, keys: window.todoAPI ? Object.keys(window.todoAPI).filter(k => /updat|check/i.test(k)) : [] }))()`)
+  // 0. 诊断:确认挂在真实 todoAPI 上(evaluateReady: 在 3 车道并行负载下渲染端首帧可能晚于
+  // CDP socket 就绪——轮询而非单发,2026-09-23 根修 check-all 活体池时序脆弱点)
+  const probe = await evaluateReady(`(async () => ({ hasAPI: !!window.todoAPI, keys: window.todoAPI ? Object.keys(window.todoAPI).filter(k => /updat|check/i.test(k)) : [] }))()`)
   console.log('[probe]', JSON.stringify(probe))
   const targets = await (await fetch('http://127.0.0.1:' + PORT + '/json/list', { signal: AbortSignal.timeout(1500) })).json()
   console.log('[targets]', targets.map(x => x.type + ' ' + x.url.slice(0, 60)).join(' | '))
+  // 2026-09-23: wait for the Vue app to actually mount (#app.__vue_app__) — under the live
+  // pool the CDP connection can beat the router+mount, and #app is null until then.
+  await evaluateReady(`(function(){ const el = document.querySelector('#app'); return !!(el && el.__vue_app__) })()`, { tries: 30, gapMs: 1000 })
   // 1. dev 环境:updater 降级 active:false(preload→main 全链通)
   const st = await evaluate('window.todoAPI.updaterStatus()')
   assert.equal(st.active, false, 'dev 环境应 active:false')
@@ -91,12 +106,20 @@ try {
   // 4. UI 链路:模拟主进程广播 ready → badge 红点必须出现;切回 idle → 红点消失
   //    (直接驱动与 updater:event 同一条 commit 路径的 mutation,验 badge 渲染而非事件传输)
   await evaluate(`document.querySelector('#app').__vue_app__.config.globalProperties.$store.commit('ui/setUpdateState', { status: 'ready' })`)
-  await sleep(300)
-  let dots = await evaluate('document.querySelectorAll(".sn-upd-dot").length')
+  // badge 渲染是异步 Vue flush:轮询等待出现/消失,替代固定 300ms 单发(3 车道并行负载下渲染帧会迟)
+  let dots = 0
+  for (let i = 0; i < 20; i++) {
+    dots = await evaluate('document.querySelectorAll(".sn-upd-dot").length')
+    if (dots >= 1) break
+    await sleep(300)
+  }
   assert.ok(dots >= 1, `ready 态齿轮红点未渲染(dots=${dots})`)
   await evaluate(`document.querySelector('#app').__vue_app__.config.globalProperties.$store.commit('ui/setUpdateState', { status: 'uptodate' })`)
-  await sleep(300)
-  dots = await evaluate('document.querySelectorAll(".sn-upd-dot").length')
+  for (let i = 0; i < 20; i++) {
+    dots = await evaluate('document.querySelectorAll(".sn-upd-dot").length')
+    if (dots === 0) break
+    await sleep(300)
+  }
   assert.equal(dots, 0, '非 ready 态不应残留红点')
 
   console.log('✓ updater UI 链路 4/4 全过:降级 active:false / downloadUpdate 守卫 / 开关默认值 / 红点随状态渲染')
