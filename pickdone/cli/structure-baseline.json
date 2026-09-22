@@ -1,9 +1,9 @@
 {
   "src/main/db.js": 1011,
   "src/main/sync-apply.js": 825,
-  "renderer/js/store/todo.js": 806,
+  "renderer/js/store/todo.js": 815,
   "renderer/js/components/SideNav.vue": 987,
-  "renderer/js/components/EditPanel.vue": 1037,
+  "renderer/js/components/EditPanel.vue": 1040,
   "renderer/js/views/CalendarView.vue": 834,
   "renderer/js/views/StatisticsView.vue": 868,
   "cli/pickdone.js": 1353,
