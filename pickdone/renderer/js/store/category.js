@@ -104,6 +104,35 @@ const catMetaBakKey = id => 'catProjectMetaBak.' + id
  *  promise before restoring, so the category only becomes recoverable once its meta is safely
  *  backed up (or provably absent). */
 const pendingMetaBackups = new Map()
+/** renderer-5 (sharp-review 2026-09-22): pendingMetaBackups above is per-window module state, so a
+ *  recover in window B never sees window A's in-flight delete-time backup and used to read the backup
+ *  key before A's write landed — deadline/milestones/status permanently lost. A durable in-DB marker
+ *  (`catProjectMetaBak.pending.<id>`) now brackets the read→backup-write→clear roundtrip: softDelete
+ *  writes it first (ordering through the same IPC pipe as the backup reads/writes), the backup deletes
+ *  it only after the live keys are cleared, and recover — in ANY window — waits it out (bounded) before
+ *  restoring. Local promise map stays as the fast path for same-window undo. */
+const pendingMetaBakKey = id => 'catProjectMetaBak.pending.' + id
+const PENDING_META_BAK_WAIT_MS = 3000
+function markPendingMetaBak (id) {
+  try { commitCommand('meta', 'put', [pendingMetaBakKey(id), '1']).catch(() => {}) } catch (e) { /* degraded host */ }
+}
+function clearPendingMetaBak (id) {
+  try { commitCommand('meta', 'delete', pendingMetaBakKey(id)).catch(() => {}) } catch (e) { /* degraded host */ }
+}
+/** Resolves once the durable marker is gone (backup roundtrip finished in whichever window) or the
+ *  bounded wait expires — a leaked marker (crash mid-roundtrip) must not wedge recover forever, so the
+ *  timeout also clears the stale marker. */
+async function waitOutPendingMetaBak (id) {
+  if (typeof window === 'undefined' || !window.todoAPI || !window.todoAPI.dbCall) return
+  const deadline = Date.now() + PENDING_META_BAK_WAIT_MS
+  while (Date.now() < deadline) {
+    let marker = null
+    try { marker = await window.todoAPI.dbCall('getMeta', pendingMetaBakKey(id)) } catch (e) { return }
+    if (!marker) return
+    await new Promise(r => setTimeout(r, 50))
+  }
+  clearPendingMetaBak(id)
+}
 /** Read a project category's four meta surfaces into one backup blob, write the backup, THEN clear the
  *  live keys (read→backup-write→delete sequence, never the reverse — a failed backup write keeps the
  *  live keys instead of destroying unbacked metadata). */
@@ -119,6 +148,8 @@ async function backupThenClearProjectMeta (id) {
       await commitCommand("meta", "put", [catMetaBakKey(id), JSON.stringify(blob)])
     } catch (e) {
       console.warn('[category] project-meta backup write failed — live keys kept for', id, e)
+      // Marker cleared: the live keys stay authoritative, so a waiting recover must not wait on us
+      clearPendingMetaBak(id)
       return
     }
   }
@@ -126,6 +157,8 @@ async function backupThenClearProjectMeta (id) {
   try { await commitCommand("meta", "delete", statusKey(id)) } catch (e) { /* absent is fine */ }
   try { await commitCommand("meta", "delete", deadlineKey(id)) } catch (e) { /* absent is fine */ }
   try { await commitCommand("meta", "delete", milestonesKey(id)) } catch (e) { /* absent is fine */ }
+  // Only now (backup key durably written, live keys cleared) may any window's recover proceed
+  clearPendingMetaBak(id)
 }
 /** U-4 recover path: restore the backed-up project meta to its live keys, then delete the backup.
  *  Resolves true when a backup existed and was restored. */
@@ -260,6 +293,7 @@ export default {
         // U-4: back up then clear the project meta (flag/status/deadline/milestones) — recover restores it.
         // Review P2: the promise is retained per id; recover/undo awaits it before reading the backup key.
         const p = Promise.resolve().then(() => backupThenClearProjectMeta(vid))
+        markPendingMetaBak(vid) // durable cross-window marker: written BEFORE the roundtrip's reads
         pendingMetaBackups.set(vid, p)
         p.catch(() => {}) // backupThenClear never throws by design; guard against unhandled rejections anyway
         delete state.projectMeta[vid]
@@ -315,6 +349,9 @@ export default {
       const pending = pendingMetaBackups.get(id)
       pendingMetaBackups.delete(id)
       Promise.resolve(pending).catch(() => {})
+        // renderer-5: also wait out the DURABLE marker — the in-flight roundtrip may belong to another
+        // window whose pendingMetaBackups map we cannot see; the marker (shared DB) is visible to all.
+        .then(() => waitOutPendingMetaBak(id))
         .then(() => restoreProjectMetaBackup(id))
         .then(flagRestored => {
           if (flagRestored && !state.projectIds.includes(id)) {

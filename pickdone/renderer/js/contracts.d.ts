@@ -41,10 +41,11 @@ interface TomatoRecord {
 }
 
 type DbCallOp = 'getById' | 'getAll' | 'queryTodos' | 'getMeta' | 'deleteMeta' | 'upsert' | 'upsertMany' | 'hardDelete' | 'hardDeleteMany' | 'setMeta' | 'getAllCategories' | 'upsertCategory' | 'filterList' | 'filterUpsert' | 'filterDelete' | 'countAll' | 'countSeedTodos' | 'bumpSnow' | 'planAll' | 'planAddMany' | 'planUpdateChip' | 'planRemoveIds' | 'planMoveTask' | 'planDeleteTask' | 'planDeleteTaskDay' | 'planPrune' | 'tomatoAll' | 'tomatoAppendMany' | 'tomatoUpdateById' | 'tomatoRemoveByIds' | 'tomatoMigrateFromMeta' | 'syncGetSettings' | 'syncSetEnabled' | 'syncGetStatus' | 'syncGetPairingCode' | 'syncSetName' | 'syncPairWithCode' | 'syncAddPeer' | 'getMetaMany' | 'commitSyncBatch' | 'tomatoGetById' | 'settingsRowsAll' | 'settingsRowPut' | 'settingsRowPutMany' | 'settingsRowDelete' | 'syncUnpairPeer' | 'syncPairRespond' | 'syncPairRequest' | 'syncConflictBackupsList' | 'syncConflictBackupRestore' | 'syncSetPeerAlias'
-
 interface TodoAPI {
   /** DB 白名单调用面:渲染端所有持久化读写必须经此(db.call);op 联合与主进程白名单同源 */
   dbCall (op: DbCallOp, params?: any): Promise<any>
+  /** CONTRACT (2026-09-20, F-UI): batch meta read — getMetaMany(['a','b']) → [{key,value|null}] aligned to input order */
+  getMetaMany: (keys: string[]) => Promise<Array<{ key: string, value: string | null }>>
   version?: string
   /** 数据隔离标记(TODO_USER_DATA_DIR 存在=false 并列调试实例共用真库) */
   isDataIsolated: boolean
@@ -135,6 +136,11 @@ interface TodoAPI {
 
 interface Window {
   todoAPI: TodoAPI
+  /** Command bus (renderer/js/utils/commandBus.js): validated/stamped mutation writes via commands:commit */
+  commands: {
+    commit: (entity: string, verb: string, payload?: any, opts?: any) => Promise<any>
+    commitBatch: (list: Array<{ entity: string, verb: string, payload?: any, opts?: any }>) => Promise<any>
+  }
   Vue: any
   dayjs: any
   Vuex: any
