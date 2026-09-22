@@ -52,11 +52,20 @@ export function parseMilestoneDate (input) {
   const s = String(input || '').trim().toLowerCase()
   if (!s) return null
   const y = dayjs().year()
-  let d = dayjs(s)
-  if (!d.isValid() && /^\d{1,2}-\d{1,2}$/.test(s)) d = dayjs(`${y}-${s}`)
-  if (!d.isValid() && s === 'today') d = dayjs()
+  // MM-DD must be dispatched BEFORE the bare `dayjs(s)` attempt: V8's fallback Date
+  // parsing turns '9-22' into 2001-09-22 and dayjs reports it as valid, so the old
+  // `!d.isValid()` guard never let the year-completion branch run and user input
+  // silently landed 25 years in the past.
+  let d
+  if (/^\d{1,2}-\d{1,2}$/.test(s)) {
+    const [mm, dd] = s.split('-')
+    d = dayjs(`${y}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}`)
+  } else {
+    d = dayjs(s)
+    if (!d.isValid() && s === 'today') d = dayjs()
   if (!d.isValid() && s === '明天') d = dayjs().add(1, 'day')
   if (!d.isValid()) { const m = s.match(/^([+-])(\d+)d?$/); if (m) d = dayjs().add(m[1] === '+' ? +m[2] : -m[2], 'day') }
+  }
   return d.isValid() ? +d.startOf('day') : null
 }
 

@@ -86,7 +86,7 @@ export function expandRepeatDates (baseTs, settings, holidayList = []) {
     case 'week': {
       let anchor = dayjs(baseTs)
       for (let w = 0; w < s.repeatWeekCount; w++) {
-        for (const wd of [...(s.repeatWeekDays || [])].sort((a, b) => a - b)) {
+        for (const wd of [...new Set(s.repeatWeekDays || [])].sort((a, b) => a - b)) {
           // Weekdays within the current week that are >= the anchor day; then jumps one week at a time
           const startOfWeek = anchor.startOf('isoWeek')
           const target = startOfWeek.add(wd - 1, 'day')
@@ -100,7 +100,7 @@ export function expandRepeatDates (baseTs, settings, holidayList = []) {
     case 'month': {
       let cursor = dayjs(baseTs).date(1)
       for (let mi = 0; mi < s.repeatMonthCount; mi++) {
-        for (const md of [...(s.repeatMonthDays || [])].sort((a, b) => a - b)) {
+        for (const md of [...new Set(s.repeatMonthDays || [])].sort((a, b) => a - b)) {
           const dim = cursor.daysInMonth()
           // End-of-month clamp: the 31st in a 30-day month falls onto the month's last day (universal calendar semantics); the original continue made a 1-31 monthly repeat silently vanish for entire 2/4/6/9/11 months
           const effDay = Math.min(md, dim)
