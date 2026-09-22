@@ -1,8 +1,10 @@
 # Sync Contract Matrix (U10 checklist)
 
-The canonical persistence matrix for the pickdone desktop app (61 items: **33 synced /
-20 machine-local / 9 transient**). Every future sync review MUST check new keys and new IPC
-channels against this document before merging. The renderer-owned half of the matrix lives in
+The canonical persistence matrix for the pickdone desktop app (item counts are APPROXIMATE —
+this census drifts as key families land; the authoritative enforcement is
+`isMachineLocalMetaKey`/`isMachineLocalSettingKey` in src/main/sync-apply.js, mirrored in
+src/main/command-manifest.js and asserted by cli/check-command-bus.cjs). Every future sync
+review MUST check new keys and new IPC channels against this document before merging. The renderer-owned half of the matrix lives in
 `renderer/js/store/*` + `renderer/js/utils/*`; the main-process half in `src/main/sync-apply.js`
 (`isMachineLocalMetaKey`) and `src/main/sync-conflict-backups.js`.
 
@@ -27,6 +29,13 @@ syncable anywhere in the renderer:
 | pairing identity (device id / keypair) | rotates on re-pairing; syncing it corrupts the pairing graph |
 | narrow-viewport forced collapse | transient UI state (SideNav `forcedCollapsed`); the synced `sidebarCollapsed` changes only via explicit user toggle (U4) |
 | `gamification.bookkeeping` local parts | `gamification.deviceId`, `gamification.seq`, `gamification.folded`, `gamification.base`, `gamification.lastDeltaKey`, `gamification.baseEmitted` — fold machinery state is per-device; only the delta keys themselves sync |
+| `_`-prefixed keys | leading-underscore CLI bookkeeping stamps (settings rows AND meta) — per-device command-channel state |
+| `cliSync*` | CLI sync command channel slots (`cmd`/`receipt`/`seq`) — per-machine transport state; syncing them would replay stale commands on the peer (feat/cli-sync-pair) |
+| `snowDedup:*` | per-device dedup watermarks (`bumpSnow`) — each device emits its own delta exactly once |
+| `schemaVersion` | per-device schema-migrator stamp — a peer's row could regress or over-advance this device's migration state |
+| `dayPlanState`, `dayPlanState.*` | legacy whole-package chip JSON migration sources (db.js migration reads them) — a peer's blob would re-poison a device already migrated to the plan_chips row store |
+| `db.tomatoState`, `habitsState` | retired/legacy ledger + habits blobs (migration bookkeeping only) |
+| `db.settingsState`, `db.habitsState` (meta entity) | the settings/habits whole blobs are EXCLUDED from meta sync (see section 2): they ride field-granular `settings_rows` sync instead; whole-blob LWW would re-stamp stale field values over newer row edits |
 
 ## 2. Syncable key contracts (meta entity, field-granular units)
 
@@ -38,7 +47,7 @@ syncable anywhere in the renderer:
 | `gamification.delta.<deviceId>:c` | `{snow, tomatoGain, ts, gen, compacted:[keys]}` | per-device compaction subtotal (U9b); `gen` grows per compaction run, peers fold the generation delta minus individually-folded covered keys |
 | `gamification.delta.index` | `JSON array of keys` | shared index, read-modify-write union by every writer; init re-adds the device's own last delta key if a race orphaned it (U9a) |
 | `tomatoRunAnnounce.<deviceId>` | run announcement | per-device announce channel for running pomodoros |
-| blob carriers | `db.settingsState`, `db.habitsState` | whole-blob mirrors (SQLite meta) used for restore/new-machine seeding; field-granular settings sync rides `settings_rows`, NOT the blob |
+| blob carriers | `db.settingsState`, `db.habitsState` | whole-blob mirrors (SQLite meta) used for restore/new-machine seeding ONLY — they are excluded from meta SYNC (both egress and ingress, `isSyncBlobMetaKey` in sync-apply.js). Field-granular settings sync rides `settings_rows`; syncing the blob itself would apply whole-blob LWW and let the receiving bridge's mergeDoc re-stamp stale field values OVER newer row edits (whole-blob LWW poison) |
 
 ## 3. Round kinds
 
