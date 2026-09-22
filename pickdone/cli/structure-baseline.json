@@ -8,7 +8,7 @@
   "renderer/js/views/StatisticsView.vue": 868,
   "cli/pickdone.js": 1362,
   "cli/lib.js": 2157,
-  "src/main/lan-sync/index.js": 1150,
+  "src/main/lan-sync/index.js": 1203,
   "src/main/lan-sync-bootstrap.js": 1029,
   "renderer/js/components/settings/SettingsSyncTab.vue": 661,
   "src/main/index.js": 771
