@@ -146,6 +146,11 @@ function createLanSyncNode(opts) {
   // P1-4: live AUTHENTICATED server sockets per peer (last message wins) so an unpair can
   // best-effort notify the peer with an `unpaired` control message before the node stops.
   const liveServerSockets = new Map() // deviceId -> socket
+  // Fix-round (2026-09-22, lan-sync-4): client connections of IN-FLIGHT rounds. stop() used to
+  // destroy only the server-side sockets — a round's client socket kept the event loop alive
+  // until its unref'd 120s round deadline (or the peer's FIN), so a graceful exit could hang
+  // for up to two minutes. stop() closes every in-flight client explicitly.
+  const activeClients = new Set() // client emitters with an unsettled round
   const authCode = deriveAuthCode(pairingSecret, deviceId)
   // Own-address set (self-dial guard, 2026-09-18 real-machine incident): a peer entry whose host
   // routes back to THIS node (second NIC IP, stale DHCP manual entry) makes us dial ourselves.
@@ -241,6 +246,11 @@ function createLanSyncNode(opts) {
     peerProgress.delete(id) // Wave-B P3: a forgotten peer's push watermark must not linger
     failStreakBy.delete(id); dialNotBefore.delete(id); unpairedBy.delete(id); liveServerSockets.delete(id)
     refixTimesBy.delete(id); oversizedSegmentBy.delete(id)
+    // Fix-round (2026-09-22, lan-sync-8): attachment bookkeeping is per-peer too — the pull
+    // session's request budget and the server role's served-request counter must not outlive
+    // the peer (they leaked until node stop).
+    attSession.requests.delete(id)
+    attServer.forget(id)
   }
   const pushRecent = (entry) => pushRing(recent, RECENT_CAP, entry)
   // security ring: seeded from the persisted log (opts.securityLog, owned by the bootstrap —
@@ -257,6 +267,9 @@ function createLanSyncNode(opts) {
   // Server-role message handling (segments-chunk push receive + ack bookkeeping + snapshot-request
   // serving) is extracted to server-role.js (line ratchet). The handler is pure orchestration over
   // the node's own state/callbacks.
+  // Fix-round (2026-09-22, lan-sync-8): keep the att-server INSTANCE so forgetPeer can reclaim
+  // its per-peer request counters (only .serve used to be retained).
+  const attServer = createAttachmentServer(opts.attachmentServerDeps)
   const handleServerMessage = createServerRoleHandler({
     ingestSegment, buildSegments, buildSnapshot, buildSnapshotRows,
     getMaxSeq: getMaxSeq ? currentMaxSeq : null,
@@ -264,7 +277,7 @@ function createLanSyncNode(opts) {
     serverSnapshotBusy, serverPullAck,
     maxSnapshotChunks, snapshotSchemaVersion: opts.snapshotSchemaVersion,
     pushRecent,
-    serveAttachments: createAttachmentServer(opts.attachmentServerDeps).serve, // per-node att-req server (rate caps inside)
+    serveAttachments: attServer.serve, // per-node att-req server (rate caps inside)
     onSnapshotError: (info) => em.emit('snapshot-error', info),
     onSnapshotSync: (info) => em.emit('snapshot-sync', info),
     onServerError: (err) => em.emit('server-error', err),
@@ -379,6 +392,39 @@ function createLanSyncNode(opts) {
     retryTimers.set(peerId, t)
   }
 
+  /** Fix-round (2026-09-22, lan-sync-7): shared discovery re-resolution (extracted from finish's
+   *  error path so the invalid host/port EARLY-EXIT dial path gets the same self-healing). A
+   *  fresh, DIFFERENT, dialable discovery record replaces the stored one, budgeted per
+   *  REFIX_WINDOW_MS so a flapping dead peer still reaches hibernate. On success the retry timer
+   *  is rearmed at base backoff (fast retry) WITHOUT touching the failure streak — only a
+   *  SUCCESSFUL round on the new address resets the budget. Returns true when a re-fix happened. */
+  function tryRefixAddress (peerId) {
+    try {
+      const again = typeof resolvePeerFn === 'function' ? resolvePeerFn(peerId) : null
+      const newHost = again && again.host
+      const newPort = Number(again && again.port)
+      if (!newHost || !isDialableHost(newHost)) return false
+      if (!Number.isInteger(newPort) || newPort < 1 || newPort > 65535) return false
+      const stored = peers.get(peerId)
+      if (newHost === (stored && stored.host) && newPort === (stored && stored.port)) return false
+      const nowMs = Date.now()
+      const times = (refixTimesBy.get(peerId) || []).filter(t => nowMs - t < REFIX_WINDOW_MS)
+      if (times.length >= REFIX_BUDGET) {
+        refixTimesBy.set(peerId, times) // budget exhausted: hibernate applies normally
+        return false
+      }
+      times.push(nowMs)
+      refixTimesBy.set(peerId, times)
+      rememberPeer({ ...again, deviceId: peerId, port: newPort })
+      const t = retryTimers.get(peerId)
+      if (t) { clearTimeout(t); retryTimers.delete(peerId) }
+      backoffMs.set(peerId, backoffBaseMs)
+      dialNotBefore.delete(peerId)
+      pushRecent({ at: nowMs, kind: 'error', peer: peerId, detail: { error: `stored address failed; discovery re-resolved ${newHost}:${newPort}` } })
+      return true
+    } catch { return false }
+  }
+
   /** Run one exchange with a peer: push my segments, pull theirs, ack. Resolves true only when
  *  the peer acked — the caller must not advance the push cursor over an unconfirmed round. */
   const roundsInFlight = new Set() // Round-3 P1: per-peer round mutex — one dial per peer at a time
@@ -405,6 +451,10 @@ function createLanSyncNode(opts) {
     const badPort = !Number.isInteger(peer.port) || peer.port < 1 || peer.port > 65535
     if (!isDialableHost(peer.host) || badPort) {
       const detail = badPort ? `invalid port (${peer.port})` : `invalid host (${peer.host})`
+      // Fix-round (2026-09-22, lan-sync-7): re-resolve through discovery BEFORE counting the
+      // failure — a corrupted stored record used to burn dial rounds (streak climbing toward
+      // hibernate) against the same bad target until an mDNS re-announce happened to overwrite it.
+      const refixed = tryRefixAddress(peer.deviceId)
       const streak = (failStreakBy.get(peer.deviceId) || 0) + 1
       failStreakBy.set(peer.deviceId, streak)
       lastError = `${peer.deviceId}: ${detail}`
@@ -413,6 +463,7 @@ function createLanSyncNode(opts) {
       refreshOnline(peer.deviceId)
       if (streak <= DIAL_FAILURE_BUDGET) em.emit('round-error', { peer: peer.deviceId, error: new Error(detail) })
       scheduleRetry(peer.deviceId)
+      if (refixed) em.emit('round-error', { peer: peer.deviceId, error: new Error(detail), recoveredAddress: true })
       return Promise.resolve(false)
     }
     // Wave-B P2-4: terminal oversized-segment state — dialing again is futile until the peer's
@@ -433,6 +484,9 @@ function createLanSyncNode(opts) {
       let ownsSnapshotBusy = false // Round-3 P1: THIS round set clientSnapshotBusy (only its owner may clear it)
       let awaitingSnapshot = false // snapshot-request sent; the round ends at snapshot-end, not ack
       let authRejected = false // P1-3: the peer's server refused our hello (terminal, see finish)
+      // Fix-round (2026-09-22, lan-sync-6): snapshot-busy is a scheduling collision, not a dial
+      // failure — finish's error path must not advance the dial-failure streak toward hibernate.
+      let snapshotBusyCollision = false
       // Attachment FILE puller (post-ack): sendVia needs the RAW SOCKET (socket._lanSend lives on em._socket, not the EventEmitter — wiring `client` here poisoned every round, 2026-09-19 drill).
       // onArrived (P1-8): host callback per file landed on disk -> 'attachments-arrived' syncEvent so open views refresh live.
       const att = createAttachmentPuller({ send: (m) => sendVia(client._socket, m), session: attSession, peerId: peer.deviceId, getKeys: typeof opts.getMissingAttachmentKeys === 'function' ? opts.getMissingAttachmentKeys : null, deps: opts.attachmentPullerDeps, onArrived: typeof opts.onAttachmentArrived === 'function' ? opts.onAttachmentArrived : null })
@@ -478,6 +532,7 @@ function createLanSyncNode(opts) {
           return null
         }
       })()
+      if (client) activeClients.add(client) // fix-round lan-sync-4: stop() closes in-flight clients
       // Round-4 P1: `function` declaration (hoisted) so the connect IIFE below can call finish
       // from its catch path even though connect() textually precedes the body — a synchronous
       // throw must reach finish (mutex release) instead of escaping the promise executor.
@@ -487,6 +542,7 @@ function createLanSyncNode(opts) {
         if (done) clearTimeout(done)
         roundsRunning -= 1
         roundsInFlight.delete(peer.deviceId) // Round-3 P1: release the per-peer round mutex
+        activeClients.delete(client) // fix-round lan-sync-4: this round's client is settled
         // Round-3 P1: delete the client snapshot flag ONLY if THIS round set it — a concurrent
         // round (before the per-peer mutex) or a later finish on a stale connection used to
         // clear the flag while another round's snapshot transfer was still in flight.
@@ -502,7 +558,10 @@ function createLanSyncNode(opts) {
           // hibernating (10min retries, see scheduleRetry) and the per-failure fan-out is
           // suppressed — one round-error emission per hibernate window, no renderer broadcast
           // per retry (the recent ring still records every attempt for Device Center).
-          const streak = (failStreakBy.get(peer.deviceId) || 0) + 1
+          // Fix-round (2026-09-22, lan-sync-6): a snapshot-busy collision does NOT count —
+          // two healthy peers exchanging mutual first-sync snapshots used to push each other
+          // into the 10-minute hibernate purely on same-cadence retries.
+          const streak = (failStreakBy.get(peer.deviceId) || 0) + (snapshotBusyCollision ? 0 : 1)
           failStreakBy.set(peer.deviceId, streak)
           if (authRejected) {
             // P1-3b TERMINAL: auth rejected = the peer removed our pairing. Stop dialing this
@@ -543,35 +602,10 @@ function createLanSyncNode(opts) {
             em.emit('round-error', { peer: peer.deviceId, error: err })
           }
           // Round-1 P0 (2026-09-21): before letting the peer slide into backoff/hibernate, re-resolve
-          // its address through the discovery layer (mDNS/UDP) WITHIN this round. A stored stale or
-          // wrong-address entry used to hibernate into permanent silence while the peer sat
-          // reachable on the LAN. A fresh, DIFFERENT, dialable address replaces the stored one and
-          // resets the dial budget so the retry is immediate and never counts toward hibernation.
-          let refixed = false
-          try {
-            const again = typeof resolvePeerFn === 'function' ? resolvePeerFn(peer.deviceId) : null
-            const host = again && again.host
-            if (host && isDialableHost(host) && host !== peers.get(peer.deviceId)?.host) {
-              // Round-2 P1: budget the re-fix — a flapping dead peer must reach hibernate.
-              const nowMs = Date.now()
-              const times = (refixTimesBy.get(peer.deviceId) || []).filter(t => nowMs - t < REFIX_WINDOW_MS)
-              if (times.length >= REFIX_BUDGET) {
-                refixTimesBy.set(peer.deviceId, times) // budget exhausted: hibernate applies normally
-              } else {
-                times.push(nowMs)
-                refixTimesBy.set(peer.deviceId, times)
-                rememberPeer({ ...again, deviceId: peer.deviceId, port: Number(again.port) })
-                // Fast retry WITHOUT touching the failure streak: only a SUCCESSFUL round on the
-                // new address may reset the budget (resetBackoff on the success path).
-                const t = retryTimers.get(peer.deviceId)
-                if (t) { clearTimeout(t); retryTimers.delete(peer.deviceId) }
-                backoffMs.set(peer.deviceId, backoffBaseMs)
-                dialNotBefore.delete(peer.deviceId)
-                pushRecent({ at: nowMs, kind: 'error', peer: peer.deviceId, detail: { error: `stored address failed; discovery re-resolved ${host}:${again.port}` } })
-                refixed = true
-              }
-            }
-          } catch { /* fallback is best-effort */ }
+          // its address through the discovery layer (mDNS/UDP) WITHIN this round — see
+          // tryRefixAddress (fix-round 2026-09-22: extracted so the invalid-target early-exit path
+          // shares the same budgeted self-healing).
+          const refixed = tryRefixAddress(peer.deviceId)
           scheduleRetry(peer.deviceId)
           if (refixed) em.emit('round-error', { peer: peer.deviceId, error: err, recoveredAddress: true })
           resolve(false)
@@ -618,7 +652,14 @@ function createLanSyncNode(opts) {
         // Fully caught up pulling (peer has nothing past our watermark)? Peer-space comparison
         // only: peerMaxSeqSeen comes from the peer's own segment seqs — NEVER mix it with the
         // sender-space appliedToSeq (the 2026-09-18 watermark-overshoot bug was exactly that).
-        if (peerMaxSeqSeen > 0 && peerMaxSeqSeen <= wm) return
+        if (peerMaxSeqSeen > 0 && peerMaxSeqSeen <= wm) {
+          // Fix-round (2026-09-22, lan-sync-5, increment path): the peer's OWN seqs running
+          // strictly BELOW our pull watermark is the oplog-reset signature — force a snapshot
+          // so the new epoch's (lower) cursor gets adopted at snapshot-end. The pre-fix plain
+          // return judged the peer "already caught up" and it silently never synced again.
+          if (peerMaxSeqSeen < wm && !clientSnapshotBusy.has(peer.deviceId)) needSnapshot.add(peer.deviceId)
+          return
+        }
         // snapshot-error retry budget: a transient failure gets up to SNAPSHOT_FATAL_BUDGET
         // attempts per session (each retry after a cooldown so errors do not spam), and the
         // budget resets as soon as the peer's increments apply again (see roundApplied above).
@@ -774,6 +815,7 @@ function createLanSyncNode(opts) {
             chunkRowCounts.clear()
             clientSnapshotBusy.delete(peer.deviceId)
             needSnapshot.add(peer.deviceId)
+            snapshotBusyCollision = true // lan-sync-6: exempt from the dial-failure streak
             finish(new Error('snapshot-busy: peer is serving another snapshot, will retry'))
           } else if (msg.type === 'snapshot-error') {
             // Clean terminal: the peer could not serve a snapshot right now (e.g. an oversized
@@ -813,9 +855,21 @@ function createLanSyncNode(opts) {
             }
             chunkBuf.clear()
             chunkRowCounts.clear()
-            // Monotonic guard: a cursor of 0/absent must never REGRESS the watermark.
-            const cursor = Math.max(pullWatermarkBy.get(peer.deviceId) || 0, Number(msg.cursor) || 0)
+            // Monotonic guard + rollback detection (fix-round 2026-09-22, lan-sync-5): a cursor
+            // of 0/absent must never REGRESS the watermark, but a cursor BELOW the recorded
+            // watermark means the peer RESET its oplog (same deviceId, sequence restarted) —
+            // adopt the lower cursor as the new epoch. The old strict max() wedged such a peer
+            // forever: new low-seq rows could neither advance the watermark nor fire the
+            // snapshot trigger (only deleting the watermarks on BOTH ends recovered).
+            const incoming = Number(msg.cursor) || 0
+            const prev = pullWatermarkBy.get(peer.deviceId) || 0
+            const cursor = incoming > 0 && incoming < prev ? incoming : Math.max(prev, incoming)
             pullWatermarkBy.set(peer.deviceId, cursor) // watermark advances ONLY here
+            if (incoming > 0 && incoming < prev) {
+              // New epoch: the old session's snapshot-error budget is meaningless now.
+              snapshotFatalCount.delete(peer.deviceId)
+              snapshotErrorCooldown.delete(peer.deviceId)
+            }
             clientSnapshotBusy.delete(peer.deviceId)
             pushRecent({
               at: Date.now(), kind: 'snapshot', peer: peer.deviceId,
@@ -901,7 +955,20 @@ function createLanSyncNode(opts) {
         try { if (peer && peer.deviceId && socket) liveServerSockets.set(peer.deviceId, socket) } catch { /* best effort */ }
         handleServerMessage(peer, msg, socket, sendVia)
       },
-      onPeer: (peer) => em.emit('peer-connected', peer),
+      onPeer: (peer, socket) => {
+        // P1-4 + fix-round (2026-09-22, lan-sync-3): remember the live authenticated socket AND
+        // drop it again when the socket dies — the entry used to linger forever holding a
+        // destroyed socket, so notifyUnpaired "succeeded" against a dead peer.
+        try {
+          if (peer && peer.deviceId && socket) {
+            liveServerSockets.set(peer.deviceId, socket)
+            socket.once('close', () => {
+              if (liveServerSockets.get(peer.deviceId) === socket) liveServerSockets.delete(peer.deviceId)
+            })
+          }
+        } catch { /* best effort */ }
+        em.emit('peer-connected', peer)
+      },
       onUnauthorized: (info) => {
         pushSecurity({ at: Date.now(), ip: info && info.host, reason: 'auth-rejected' })
         em.emit('peer-unauthorized', info)
@@ -1027,11 +1094,13 @@ function createLanSyncNode(opts) {
     },
 
     /** P1-4: best-effort notify a connected peer that we removed the pairing. Returns true when
-     *  an authenticated socket was live and the control message was handed to the wire. */
+     *  an authenticated socket was live AND the control message actually went to the wire —
+     *  fix-round (2026-09-22, lan-sync-3): send()'s false (destroyed/not-writable socket) used
+     *  to be swallowed, so the caller believed a dead peer had been told. */
     notifyUnpaired(peerId) {
       const socket = liveServerSockets.get(String(peerId || ''))
       if (!socket) return false
-      try { sendVia(socket, { type: 'unpaired' }); return true } catch { return false }
+      try { return sendVia(socket, { type: 'unpaired' }) !== false } catch { return false }
     },
 
     /** Run one sync round against every known peer (sequentially). P1-3: the periodic round
@@ -1114,6 +1183,12 @@ function createLanSyncNode(opts) {
       stopped = true
       if (sweepTimer) { clearInterval(sweepTimer); sweepTimer = null }
       onlineNow.clear()
+      // Fix-round (2026-09-22, lan-sync-4): close the CLIENT sockets of in-flight rounds too —
+      // they held the event loop open until the unref'd 120s round deadline (or peer FIN),
+      // stalling a graceful exit by up to two minutes. close() triggers each round's
+      // connection-close handler, so the rounds settle as failures through the normal path.
+      for (const c of activeClients) { try { c.close() } catch { /* best effort */ } }
+      activeClients.clear()
       liveServerSockets.clear()
       for (const t of retryTimers.values()) clearTimeout(t)
       retryTimers.clear()
