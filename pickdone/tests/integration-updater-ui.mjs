@@ -67,7 +67,10 @@ try {
   for (let i = 0; i < 40 && !ok; i++) {
     try {
       const list = await (await fetch(CDP + '/json/list', { signal: AbortSignal.timeout(1500) })).json()
-      const page = list.find(t => t.type === 'page' && /#\/todo-list/.test(t.url)) || list.find(t => t.type === 'page' && /index\.html/.test(t.url))
+      // 2026-09-23: only the routed app page qualifies. The bare index.html fallback used to
+      // connect to a pre-mount page (todoAPI injected, #app still null) — every later evaluate
+      // then ran against the wrong document.
+      const page = list.find(t => t.type === 'page' && /#\/todo-list/.test(t.url))
       if (page) {
         ws = new WebSocket(page.webSocketDebuggerUrl)
         await new Promise((r, j) => { ws.onopen = r; ws.onerror = j })
