@@ -201,7 +201,14 @@ function createAttachmentServer (deps = {}) {
     return { sent, missing }
   }
 
-  return { serve, requestsFor: peerId => requestsByPeer.get(peerId) || 0 }
+  // Fix-round (2026-09-22, lan-sync-8): per-peer bookkeeping must not outlive the peer —
+  // the node's forgetPeer calls this so a removed/expelled peer's served-request budget and
+  // session entry are reclaimed instead of lingering for the whole node lifetime.
+  return {
+    serve,
+    requestsFor: peerId => requestsByPeer.get(peerId) || 0,
+    forget: peerId => { requestsByPeer.delete(String(peerId || '')) },
+  }
 }
 
 /* ---------- receiver (client role) ---------- */
@@ -300,8 +307,14 @@ function createAttachmentPuller (opts = {}) {
     // or write failure), REFUND its reserved size from the round byte budget — the transfer is
     // dead, the reserved bytes were never landed, and without the refund one bad file shrank the
     // budget for every later file in the round by up to maxFileBytes.
-    if (current && String(id) === current.id) receivedBytes = Math.max(0, receivedBytes - current.size)
-    current = null
+    // Fix-round (2026-09-22): the refund AND the current-transfer cancellation apply ONLY when
+    // the failing id IS the in-flight file. markFailed used to clear `current` unconditionally,
+    // so an att-missing/att-meta failure carrying a DIFFERENT id silently dropped the file
+    // already being received while keeping its reserved byte budget (fix-round lan-sync-2).
+    if (current && String(id) === current.id) {
+      receivedBytes = Math.max(0, receivedBytes - current.size)
+      current = null
+    }
   }
 
   /**
@@ -397,6 +410,14 @@ function createAttachmentPuller (opts = {}) {
       return true
     }
     if (type === 'att-missing') {
+      // P2-a parity (fix-round lan-sync-1, 2026-09-22): only ids THIS round actually requested
+      // may be marked failed. An unsolicited att-missing used to write an ARBITRARY id into the
+      // 24h session failed-set (blocking that attachment's pull for a full day) — a buggy or
+      // compromised peer (threat model: holds the pairing secret) could poison any id at will.
+      if (!requestedBatch.has(String(msg.id))) {
+        try { require('electron-log').warn('[LanSync] unsolicited att-missing rejected:', String(msg.id)) } catch { /* noop */ }
+        return true
+      }
       markFailed(String(msg.id))
       return true
     }

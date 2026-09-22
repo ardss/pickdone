@@ -691,7 +691,28 @@ function connect(host, port, opts) {
   )
 
   em.send = (msg) => send(socket, msg)
-  em.close = () => new Promise((resolve) => { socket.end(); socket.destroy(); resolve() })
+  // Fix-round (2026-09-22, lan-sync-9): close() used to end()+destroy() in the same tick —
+  // frames still in the user-space/kernel write buffer (e.g. the round's final ack) were
+  // DISCARDED, the peer's watermark never advanced, and the next round re-pushed the whole
+  // window. end() alone flushes buffered frames + FIN; destroy() runs only after the flush
+  // completes (socket 'close'), an already-dead socket, or a 1s cap so a stalled peer can
+  // never hold close() open.
+  em.close = () => new Promise((resolve) => {
+    let settled = false
+    const finish = () => {
+      if (settled) return
+      settled = true
+      try { socket.destroy() } catch { /* already dead */ }
+      resolve()
+    }
+    const cap = setTimeout(finish, 1000)
+    cap.unref?.()
+    socket.once('close', () => { clearTimeout(cap); finish() })
+    try {
+      if (!socket.writable || socket.destroyed) finish()
+      else socket.end(() => { /* flushed: 'close' fires right after and resolves */ })
+    } catch { finish() }
+  })
   em.on = em.on.bind(em)
   em._socket = socket
   return em
