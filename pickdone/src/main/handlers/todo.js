@@ -174,14 +174,6 @@ module.exports = function todoHandlers (ctx) {
       } finally {
         if (unsuppress) unsuppress()
       }
-      // P3 (R4 2026-09-21): the write landed — drop the attachment files collected before the row
-      // deletion (files-before-rows order, same as db:purge-recycle-bin). Already-gone is success.
-      if (hardDeleteFiles && hardDeleteFiles.length) {
-        const dir = attachDir()
-        for (const f of hardDeleteFiles) {
-          try { fs.unlinkSync(path.join(dir, f)) } catch (err) { if ((err && err.code) !== 'ENOENT') log.warn('[IPC] hardDelete attachment file removal failed:', f, err) }
-        }
-      }
       // P2 2026-09-12: the broadcast must never throw past this point — a synchronous send failure
       // (half-destroyed peer window) would reject the IPC invoke even though the DB write succeeded,
       // making the renderer treat a landed write as failed (retry paths / wrong UI state). Aligns with
@@ -191,6 +183,14 @@ module.exports = function todoHandlers (ctx) {
       // inline line stays as defense-in-depth for any future write path not yet on the manifest
       // (idempotent pure-core re-baseline, r4 guard test pins the wiring).
       if (dbm.isWriteOp(op)) { try { const rw = resyncDbWatch(); if (rw) rw() } catch { /* best-effort */ } }
+      // P3 (R4 2026-09-21): the write landed — drop the attachment files collected before the row
+      // deletion (files-before-rows order, same as db:purge-recycle-bin). Already-gone is success.
+      if (hardDeleteFiles && hardDeleteFiles.length) {
+        const dir = attachDir()
+        for (const f of hardDeleteFiles) {
+          try { fs.unlinkSync(path.join(dir, f)) } catch (err) { if ((err && err.code) !== 'ENOENT') log.warn('[IPC] hardDelete attachment file removal failed:', f, err) }
+        }
+      }
       // App-side audit: renderer-initiated writes append to the same JSONL trail the CLI writes
       // (userData/cli-audit.jsonl). No double-logging: CLI write commands hit db.js directly inside the
       // CLI process and never pass through this IPC handler. The settings mirror blob (setMeta
