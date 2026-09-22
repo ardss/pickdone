@@ -32,7 +32,8 @@ test('qc2: get surfaces the live meta estimate, not the dead column, after edit 
 
   const got = runCliJson(['get', taskId])
   const row = got.data || got
-  assert.equal(row.estimate, 7, 'get must read the authoritative per-task meta key (was: dead column 0)')
+  assert.equal(row.tomatoEstimate, 7, 'get surfaces the live meta estimate under tomatoEstimate (2026-09-22 rename)')
+  assert.equal(row.estimate, 0, 'the DB estimate column is NOT overwritten (it carries accumulated focus minutes)')
 })
 
 test('qc2: get reports 0 for a task with no estimate key', () => {
@@ -40,7 +41,7 @@ test('qc2: get reports 0 for a task with no estimate key', () => {
   const taskId = added.data ? added.data.taskId : added.taskId
   const got = runCliJson(['get', taskId])
   const row = got.data || got
-  assert.equal(row.estimate, 0, 'no meta key = no estimate')
+  assert.equal(row.tomatoEstimate, 0, 'no meta key = no estimate')
 })
 
 test('qc2: clamping roundtrip — out-of-range edit stores 20 and get reflects it', () => {
@@ -48,5 +49,5 @@ test('qc2: clamping roundtrip — out-of-range edit stores 20 and get reflects i
   const taskId = added.data ? added.data.taskId : added.taskId
   runCliJson(['edit', taskId, '--estimate', '99'])
   const got = runCliJson(['get', taskId])
-  assert.equal((got.data || got).estimate, 20, 'clamp to 20 is visible on read-back')
+  assert.equal((got.data || got).tomatoEstimate, 20, 'clamp to 20 is visible on read-back')
 })

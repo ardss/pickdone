@@ -49,10 +49,13 @@ test('DEFAULT_SETTINGS 的可写设置键(非派生/非受保护)都进了 CLI �
   // _lsAt=内部时间戳。三者刻意不可经 CLI 设置
   // 豁免追加(2026-09-20 sync-coverage-2,Y 组):以下为渲染端同步载体字段——由 renderer 经
   // settings_rows 桥字段级同步/热应用,不属于 CLI `settings set` 语义,刻意不进清单:
-  // appLocale(经 set-app-locale 生效)/shortcutKeySettings(经 config.json+applyShortcuts)/
+  // shortcutKeySettings(经 config.json+applyShortcuts)/
   // repeatDefaultSettings(repeatSettings store 载体)/onboardingToursSeen(merge-max 账本);
-  // sidebarCollapsed/catFold/showTagPanel 为纯 UI 折叠态。
-  const EXEMPT = new Set(['foldedTodoList', 'securityLockPassword', '_lsAt', 'appLocale', 'shortcutKeySettings', 'repeatDefaultSettings', 'onboardingToursSeen', 'sidebarCollapsed', 'catFold', 'showTagPanel'])
+  // showTagPanel 为纯 UI 折叠态。
+  // 豁免追加(2026-09-22 maint-d7):tomatoTimeDefault/restTimeDefault 是渲染端 load() 迁移用的
+  // LEGACY 键(真实键 tomatoTime/restTime 已进 CLI 清单)——旧键名刻意不再暴露给 `settings set`。
+  // (appLocale/sidebarCollapsed/catFold 原在此豁免,2026-09-22 起进入清单,移出豁免表。)
+  const EXEMPT = new Set(['foldedTodoList', 'securityLockPassword', '_lsAt', 'shortcutKeySettings', 'repeatDefaultSettings', 'onboardingToursSeen', 'showTagPanel', 'tomatoTimeDefault', 'restTimeDefault'])
   const missing = [...defaults].filter(k => !manifest.has(k) && !EXEMPT.has(k))
   assert.deepEqual(missing, [], 'DEFAULT_SETTINGS 里有而 CLI 清单漏登记的键(用户将无法 settings set)')
 })
