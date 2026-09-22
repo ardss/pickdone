@@ -473,10 +473,20 @@ if (!app.requestSingleInstanceLock()) { app.quit() } else {
         // P2 2026-09-12: the recovery-succeeded relaunch branch skipped the plain-bak cleanup that the
         // init-success path below does — after recovery the plaintext copy stayed in userData forever,
         // defeating at-rest encryption. Clear it before relaunching (same semantics, best-effort).
-        try {
-          const pb = path.join(ud, 'todos.db.plain-bak')
-          if (fs.existsSync(pb)) { fs.rmSync(pb, { force: true }); log.info('[Init] 恢复成功重启前清除明文残留 todos.db.plain-bak') }
-        } catch (e0) { log.warn('[Init] plain-bak 清理失败(relaunch 前)', e0) }
+        // P1 (R4 2026-09-21): cleanup is now gated on an ACTUAL restore. restoreTasksFromCriticalBackup
+        // swallows per-step errors and returns 0 — the old unconditional delete destroyed the last
+        // usable backup (todos.db.plain-bak) whenever the JSON restore imported nothing. Only the
+        // 'json' branch with restoredN > 0 proves the DB was really rebuilt with current data, so
+        // only that branch may drop the bak; a 'plain-bak' copy or a 0-row restore keeps it on disk.
+        const jsonRestoreProved = recoveredFrom.source === 'json' && restoredN > 0
+        const pb = path.join(ud, 'todos.db.plain-bak')
+        if (jsonRestoreProved) {
+          try {
+            if (fs.existsSync(pb)) { fs.rmSync(pb, { force: true }); log.info('[Init] 恢复成功重启前清除明文残留 todos.db.plain-bak') }
+          } catch (e0) { log.warn('[Init] plain-bak 清理失败(relaunch 前)', e0) }
+        } else if (fs.existsSync(pb)) {
+          log.warn('[Init] plain-bak 保留:恢复未证实导入任何数据行 (source=' + recoveredFrom.source + ', restoredN=' + restoredN + '),最后的备份不可删除')
+        }
         relaunchClean()
       }
       else if (choice === 0) { shell.openPath(ud); app.quit() }

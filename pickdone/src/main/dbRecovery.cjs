@@ -175,7 +175,14 @@ function restoreTasksFromCriticalBackup (ud, upsertMany, upsertCategory, appendT
     restoreCategoriesFromCriticalBackup(raw, upsertCategory)
     restoreTomatoRecordsFromCriticalBackup(raw, appendTomatoRecords)
     return list.length
-  } catch { return 0 }
+  } catch (e) {
+    // P1 (R4 2026-09-21): the swallowed error used to make a failed restore indistinguishable
+    // from an empty backup — the caller then deleted todos.db.plain-bak on a "successful"
+    // recovery that imported nothing, permanently destroying the last usable backup. Log it
+    // (still return 0; the caller's restoredN > 0 gate keeps the bak file alive).
+    logWarn('[dbRecovery] restoreTasksFromCriticalBackup failed (0 rows imported):', e && e.message)
+    return 0
+  }
 }
 
 /** Ledger restore: backup.tomatoRecords is the row-table row set (JSON string or array). Rows missing tomatoId/endTime are skipped;
@@ -229,6 +236,14 @@ function writeCriticalStateBackupAtomic (ud, jsonText) {
   const dest = path.join(ud, 'critical-state-backup.json')
   const tmp = dest + '.tmp'
   fs.writeFileSync(tmp, jsonText)
+  // P3 (R4 2026-09-21): fsync the temp file before the rename — without it a power loss can
+  // persist an empty/short rename target while the (otherwise durable) DB is gone, i.e. the
+  // disaster-backup itself becomes the disaster. Best-effort: a fsync failure must not break
+  // the backup write (same contract as the rest of this module).
+  try {
+    const fd = fs.openSync(tmp, 'r')
+    try { fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
+  } catch { /* fsync unsupported/failed: atomic rename semantics still hold on most FS */ }
   fs.renameSync(tmp, dest)
   return dest
 }

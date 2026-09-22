@@ -1,5 +1,7 @@
 /** Todo/DB domain IPC handlers (pure relocation from index.js registerIpc). Each module exports (ctx) => ({ channel: fn }). */
 const log = require('electron-log')
+const fs = require('fs')
+const path = require('path')
 const dbm = require('../db')
 const fixUtil = require('../fix-util')
 const tomatoFloat = require('../tomato-float')
@@ -91,7 +93,11 @@ module.exports = function todoHandlers (ctx) {
   // The renderer's real call surface has been verified: all three only occur in the main window (store/utils/main.js); auxiliary windows have no legitimate callers.
   // Review-P1 (2026-09-22): the four pairing-establishment ops are a STRICTLY higher capability
   // than unpair/rename (pairing routes the whole DB to a new peer) — they join the main-window set.
-  const MAIN_WINDOW_ONLY_OPS = new Set(['upsertMany', 'commitSyncBatch', 'hardDeleteMany', 'setMeta', 'deleteMeta', 'syncSetEnabled', 'syncSetName', 'syncUnpairPeer', 'syncConflictBackupRestore', 'syncSetPeerAlias', 'syncPairWithCode', 'syncAddPeer', 'syncPairRespond', 'syncPairRequest'])
+  const MAIN_WINDOW_ONLY_OPS = new Set(['upsertMany', 'commitSyncBatch', 'hardDeleteMany', 'setMeta', 'deleteMeta', 'syncSetEnabled', 'syncSetName', 'syncUnpairPeer', 'syncConflictBackupRestore', 'syncSetPeerAlias', 'syncPairWithCode', 'syncAddPeer', 'syncPairRespond', 'syncPairRequest',
+    // P2-3 (R4 2026-09-21): the pairing code routes the whole DB to whoever holds it — same
+    // capability class as the pairing-establishment ops. Verified: the only renderer caller is
+    // SettingsSyncTab.vue (main-window settings page, via utils/lanSync.getPairingCode).
+    'syncGetPairingCode'])
 
   // Shared execution core for BOTH routes into the bus era:
   //   'todo-db:call'   — legacy op-keyed channel (reads pass through untouched; writes are
@@ -141,6 +147,18 @@ module.exports = function todoHandlers (ctx) {
       if (op === 'upsert' && params && params.taskId != null) {
         try { auditBefore = dbm.call('getById', String(params.taskId)) } catch { /* null → coarse action */ }
       }
+      // P3 (R4 2026-09-21): per-item hard delete used to orphan the task's attachment files on disk —
+      // only the db:purge-recycle-bin channel did files-before-rows. Collect the owned files BEFORE
+      // the row goes (collect failure must not block the delete: log and skip cleanup), then remove
+      // them after the write landed.
+      let hardDeleteFiles = null
+      if (op === 'hardDelete' && params != null) {
+        try {
+          const { ownsAttachmentFile } = require('./shared')
+          const id = String(Array.isArray(params) ? params[0] : params)
+          hardDeleteFiles = fs.readdirSync(attachDir()).filter(f => ownsAttachmentFile(f, id))
+        } catch (err) { log.warn('[IPC] hardDelete attachment collect failed (files may be orphaned):', err) }
+      }
       // Phase-1 command bus: every manifest write op goes through bus.commitOp (validation +
       // updatedAt stamping + post-commit fanout). Reads and not-yet-manifested ops keep the
       // direct db.call path verbatim. Oplog capture stays inside db.call (kept, per spec).
@@ -165,6 +183,14 @@ module.exports = function todoHandlers (ctx) {
       // inline line stays as defense-in-depth for any future write path not yet on the manifest
       // (idempotent pure-core re-baseline, r4 guard test pins the wiring).
       if (dbm.isWriteOp(op)) { try { const rw = resyncDbWatch(); if (rw) rw() } catch { /* best-effort */ } }
+      // P3 (R4 2026-09-21): the write landed — drop the attachment files collected before the row
+      // deletion (files-before-rows order, same as db:purge-recycle-bin). Already-gone is success.
+      if (hardDeleteFiles && hardDeleteFiles.length) {
+        const dir = attachDir()
+        for (const f of hardDeleteFiles) {
+          try { fs.unlinkSync(path.join(dir, f)) } catch (err) { if ((err && err.code) !== 'ENOENT') log.warn('[IPC] hardDelete attachment file removal failed:', f, err) }
+        }
+      }
       // App-side audit: renderer-initiated writes append to the same JSONL trail the CLI writes
       // (userData/cli-audit.jsonl). No double-logging: CLI write commands hit db.js directly inside the
       // CLI process and never pass through this IPC handler. The settings mirror blob (setMeta
@@ -185,6 +211,12 @@ module.exports = function todoHandlers (ctx) {
         const t = (op === 'upsert' || op === 'bumpSnow') && tid != null ? dbm.call('getById', String(tid)) : null
         if (t && !scheduler.needsCatchUp(t)) scheduler.scheduleOne(t)
         else scheduler.reloadAll(dbApi())
+        // P2-2 (R4 2026-09-21): reloadAll itself writes reminderLastSeenAt (a meta write that
+        // touches the -wal) AFTER the earlier re-baseline in this function, so the external-write
+        // watcher misclassified our own scheduler write as another external CLI write → spurious
+        // full reload + undo-stack wipe. Re-baseline again AFTER reloadAll completes (same pattern
+        // as the external-write kick in index.js; idempotent, cheap).
+        try { const rw = resyncDbWatch(); if (rw) rw() } catch { /* best-effort */ }
       }
       // 账本行写:调度器不依赖番茄记录;广播由 db 层 setLedgerChangedHook 统一发(CLI 直写同样触发),此处只跳过 todos 全量重载
       if (op === 'tomatoAppendMany' || op === 'tomatoUpdateById' || op === 'tomatoRemoveByIds' || op === 'tomatoMigrateFromMeta') { if (!viaBus && notifySyncChange) notifySyncChange(op); return r } // GAP-B kick (2026-09-19): ledger ops must reach peers in seconds — bus-routed writes kick via 'ls-mirror'
