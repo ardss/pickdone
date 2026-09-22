@@ -92,6 +92,14 @@ let dingFile = null
 
 function setSoundFile (f) { dingFile = f }
 
+/** Truncate by code points, not UTF-16 code units: slicing at a fixed index could split a
+ *  surrogate pair (emoji etc.) into lone surrogates — mojibake in the OS notification. */
+function clipText (v, max) {
+  const s = String(v == null ? '' : v)
+  const pts = Array.from(s)
+  return pts.length > max ? pts.slice(0, max).join('') : s
+}
+
 /** Display prefix for offsets ("30 minutes early" etc.); 0 = main reminder with no prefix; 'x<ts>' = extra absolute reminder with no prefix */
 function offsetLabel (offset) {
   if (!offset || (typeof offset === 'string' && offset[0] === 'x')) return ''
@@ -107,8 +115,8 @@ function fire (todo, offset) {
     // eslint-disable-next-line no-control-regex -- control characters are exactly the target of this sanitization; the rule does not apply here
     const clean = v => require('./sanitize').stripDangerous(v)
     const n = new Notification({
-      title: clean((offset ? offsetLabel(offset) : '') + (todo.taskContent || '')).slice(0, 60) || i18nM.mt('todoRemindTitle'),
-      body: clean(todo.taskDescribe).slice(0, 140) || i18nM.mt('todoRemindBody'),
+      title: clipText(clean((offset ? offsetLabel(offset) : '') + (todo.taskContent || '')), 60) || i18nM.mt('todoRemindTitle'),
+      body: clipText(clean(todo.taskDescribe), 140) || i18nM.mt('todoRemindBody'),
       icon: path.join(__dirname, '../../assets/icon.png'),
       silent: true
     })
@@ -261,7 +269,7 @@ function needsCatchUp (todo, now = Date.now()) {
 
 module.exports = {
   init: () => {}, reloadAll, scheduleOne, fire, setSoundFile, flushFiredNow,
-  reminderInstances, needsCatchUp,
+  reminderInstances, needsCatchUp, clipText,
   setFireForTest,
   _jobs: jobs,
   _fired: firedReminders,

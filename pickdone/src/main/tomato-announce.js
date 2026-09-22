@@ -196,7 +196,10 @@ function listAnnounces () {
     try {
       const v = parseAnnounce(dbCall('getMeta', keyFor(id)))
       if (v) out.push(v)
-    } catch { /* individual read failure: skip the entry */ }
+      // The meta row is gone (device unpaired / key evicted): drop the id from the pointer
+      // cache too — otherwise every later poll keeps issuing a getMeta for a dead key forever.
+      else announceCache.ids.delete(id)
+    } catch { /* individual read failure: skip the entry (id kept, retried next poll) */ }
   }
   return out
 }
