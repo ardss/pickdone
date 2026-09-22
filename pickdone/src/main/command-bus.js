@@ -71,27 +71,28 @@ function createBus (dbCall, manifestMod = manifest) {
    *   UNLESS it lies about the future: D6 P2 (2026-09-21) clamp — an explicit stamp more than
    *   STAMP_SKEW_MS ahead of local now is treated as forged (a compromised renderer could stick
    *   a year-2100 stamp on a row via the IPC door and win LWW forever). Clamped to local now.
-   * - opts.preserveStamp = true → never touched.
+   *   P2-1 (wave-A, 2026-09-21): the same clamp covers `deletedAt` wherever the payload carries
+   *   one — a forged future tombstone stamp would win delete-vs-live LWW forever, exactly like
+   *   a forged updatedAt. The clamp applies regardless of opts.preserveStamp: that flag protects
+   *   the caller's LWW AGE (lwwField), never a future-dated deletion stamp.
+   * - opts.preserveStamp = true → the lwwField is never touched (see above for deletedAt).
    * NON-PLAIN payloads (arrays like setMeta ['k','v'] / tomatoAppendMany rows, bare string
    * keys, scalars) pass through VERBATIM — those ops derive their stamps inside the db layer
    * and reshaping them would corrupt the call contract.
    * Payload is never mutated in place — callers may hold reactive rows.
    */
   function stampPayload (row, payload, opts = {}) {
-    if (!row.lwwField) return payload
     if (payload == null || typeof payload !== 'object' || Array.isArray(payload)) return payload
-    const hasExplicit = payload[row.lwwField] != null && Number(payload[row.lwwField]) > 0
-    if (hasExplicit) {
-      // D6 P2 (2026-09-21): future-stamp clamp. Legit clock skew is minutes, not years; anything
-      // beyond the skew window can only be forgery (preserveStamp callers are main-process and
-      // carry peer ages <= their own now + skew by construction).
-      if (Number(payload[row.lwwField]) > Date.now() + STAMP_CLAMP_MS) {
-        return Object.assign({}, payload, { [row.lwwField]: Date.now() })
-      }
-      return payload
+    const limit = Date.now() + STAMP_CLAMP_MS
+    if (!row.lwwField && payload.deletedAt == null) return payload
+    const hasExplicit = row.lwwField && payload[row.lwwField] != null && Number(payload[row.lwwField]) > 0
+    if (!hasExplicit && row.lwwField && !opts.preserveStamp) {
+      return Object.assign({}, payload, { [row.lwwField]: Date.now() })
     }
-    if (opts.preserveStamp) return payload
-    return Object.assign({}, payload, { [row.lwwField]: Date.now() })
+    const clamped = {}
+    if (hasExplicit && Number(payload[row.lwwField]) > limit) clamped[row.lwwField] = Date.now()
+    if (payload.deletedAt != null && Number(payload.deletedAt) > limit) clamped.deletedAt = Date.now()
+    return Object.keys(clamped).length ? Object.assign({}, payload, clamped) : payload
   }
 
   /** Machine-local key classification for the row (meta/settings local-key filter). */
