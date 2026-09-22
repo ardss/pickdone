@@ -305,22 +305,38 @@ function localUserId (state) {
  * payload" rule holds only on the non-skew path (row returned verbatim).
  */
 const SKEW_CLAMP_MS = STAMP_CLAMP_MS
+// P3 (wave-A, 2026-09-21): a non-numeric/garbage stamp (NaN, strings that don't parse) reads as
+// epoch 0 for comparison so a poisoned payload can never propagate NaN into the LWW comparisons
+// (NaN > limit is false, which used to let a NaN stamp sail through untouched).
+const stampNum = v => { const n = Number(v); return Number.isFinite(n) ? n : 0 }
+// P1-1 (wave-A, 2026-09-21): the future detection now includes the PAYLOAD stamps too — a
+// skewed/malicious peer could push a category/tomato/plan row whose top-level comparison keys
+// look sane while `data.updatedAt` carried a year-2100 stamp; the row would land with that
+// future age baked in and win LWW against every honest edit forever.
 function clampSkew (row) {
   if (!row || typeof row !== 'object') return row
   const now = Date.now()
   const limit = now + SKEW_CLAMP_MS
-  const future = (row.updatedAt > limit) || (row.deletedAt > limit)
+  const d = (row.data && typeof row.data === 'object') ? row.data : null
+  const future = (stampNum(row.updatedAt) > limit) || (stampNum(row.deletedAt) > limit) ||
+    (d && (stampNum(d.updateTime) > limit || stampNum(d.deletedAt) > limit || stampNum(d.updatedAt) > limit))
   if (!future) return row
   const out = {
     ...row,
-    updatedAt: row.updatedAt > limit ? now : row.updatedAt,
-    deletedAt: row.deletedAt > limit ? now : row.deletedAt,
+    updatedAt: stampNum(row.updatedAt) > limit ? now : row.updatedAt,
+    deletedAt: stampNum(row.deletedAt) > limit ? now : row.deletedAt,
   }
-  if (out.data && typeof out.data === 'object') {
-    const d = { ...out.data }
-    if (Number(d.updateTime) > limit) d.updateTime = now
-    if (Number(d.deletedAt) > limit) d.deletedAt = now
-    out.data = d
+  if (d) {
+    const dd = { ...d }
+    if (stampNum(dd.updateTime) > limit) dd.updateTime = now
+    if (stampNum(dd.deletedAt) > limit) dd.deletedAt = now
+    if (stampNum(dd.updatedAt) > limit) dd.updatedAt = now
+    // P3: normalize present-but-garbage stamp fields on the clamp path (the non-skew path
+    // still returns the row verbatim — see the contract comment above).
+    for (const f of ['updateTime', 'deletedAt', 'updatedAt']) {
+      if (dd[f] !== undefined && dd[f] !== null && !Number.isFinite(Number(dd[f]))) dd[f] = 0
+    }
+    out.data = dd
   }
   return out
 }
