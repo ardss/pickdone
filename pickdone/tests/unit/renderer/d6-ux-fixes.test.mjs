@@ -293,7 +293,10 @@ test('[F15] export rows gain priority + completedAt; header + guard updated to 1
   const tab = read('renderer/js/components/settings/SettingsDataTab.vue')
   assert.ok(tab.includes('t.priority || 0,') && tab.includes("t.completedAt ? dayjs(t.completedAt).format(FMT.dateTime) : ''"), 'rows append priority + completedAt')
   const guard = read('src/main/export-xlsx.js')
-  assert.ok(guard.includes('head.length !== 17'), 'column guard raised to 17')
+  // D7 (2026-09-22): the inline `head.length !== 17` throw became parseExportColumns with a named
+  // EXPECTED_EXPORT_COLS = 17 constant (translator-comma hardening); the count is unchanged.
+  assert.ok(guard.includes('EXPECTED_EXPORT_COLS = 17'), 'column count pinned at 17')
+  assert.ok(/head\.length !== expected/.test(guard), 'column guard still enforced')
   assert.ok(guard.includes("mergeCells('A1:Q1')"), 'title merge spans the new columns')
   const zh = read('src/main/i18n.js')
   for (const seg of ['优先级,完成时间', 'Priority,Completed at']) {

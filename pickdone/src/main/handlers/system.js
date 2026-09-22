@@ -47,7 +47,10 @@ module.exports = function systemHandlers (ctx) {
     // The old checkForUpdates/quitAndInstall stubs were also removed: preload actually uses updater:check / updater:quit-and-install
 
     // --- Export ---
-    'export-todos-to-xlsx': (e, payload) => { if (isLocked()) throw new Error('locked'); return exportTodosToXlsx(payload) },
+    // D6 P2 (2026-09-22): main-window gate added — the channel pops a native save dialog and
+    // writes a file, so an auxiliary window (compromised float/quick-add) could pop save dialogs
+    // and drop arbitrary xlsx files. Symmetric with the updater/critical-state siblings above.
+    'export-todos-to-xlsx': (e, payload) => { assertMainWindow(e); if (isLocked()) throw new Error('locked'); return exportTodosToXlsx(payload) },
 
     // --- Version-sync task set (offline no-op reserved channel) ---
     'sync-todos-to-server': () => ({ offline: true }),

@@ -44,7 +44,13 @@ module.exports = function backupHandlers (ctx) {
       return true
     },
     'get-default-backup-dir': () => defaultBackupRoot(),
-    'pick-backup-dir': async () => {
+    // D6 P2 (2026-09-22): main-window + locked-state gates — symmetric with every sibling above.
+    // Previously ANY window could pop a native directory dialog and, worse, append an arbitrary
+    // path to the on-disk backup-dir whitelist (saveAllowedBackupDirs) — widening where future
+    // auto backups (full JSON snapshots) land.
+    'pick-backup-dir': async (e) => {
+      assertMainWindow(e)
+      if (isLocked()) throw new Error('app is locked')
       const { dialog } = require('electron')
       const r = await dialog.showOpenDialog(getMainWindow() || undefined, { title: i18nM.mt('pickBackupDir'), properties: ['openDirectory', 'createDirectory'] })
       if (r.canceled || !r.filePaths[0]) return null
