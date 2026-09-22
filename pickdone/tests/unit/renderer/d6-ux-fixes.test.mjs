@@ -94,6 +94,40 @@ test('[F1] collapseEditCleanup: orphan is closed+deleted; normal case stays a pl
   assert.equal(s2.store.state.ui.rightSidebarTodoEdit.collapsed, true)
 })
 
+/* ---------- [F2r/F6r] review round 2026-09-22: flush-before-cleanup + shared undo restore path ---------- */
+
+test('[F2r] closeEditCleanup awaits the EditPanel flush hook — a title landing via the flush survives', async () => {
+  const { store, deletes } = makeStore({ todoList: [{ taskId: TASK, taskContent: '' }] })
+  openInline(store)
+  let flushed = 0
+  // Simulates the panel's save queue: the fast typist's title commits during the awaited flush
+  globalThis.window.__editPanelFlushSave = async () => {
+    flushed++
+    store.state.todo.todoList[0].taskContent = 'fast typist title'
+  }
+  try {
+    await store.dispatch('ui/closeEditCleanup')
+    assert.equal(flushed, 1, 'the panel flush ran exactly once before the emptiness check')
+    assert.deepEqual(deletes, [], 'just-titled task must NOT be orphan-deleted (was: 60ms sleep raced the 350ms debounce)')
+  } finally { delete globalThis.window.__editPanelFlushSave }
+})
+
+test('[F2r] a task still empty after the flush is still orphan-cleaned (semantics kept)', async () => {
+  const { store, deletes } = makeStore({ todoList: [{ taskId: TASK, taskContent: '' }] })
+  openInline(store)
+  globalThis.window.__editPanelFlushSave = async () => { /* flush landed nothing: task stays empty */ }
+  try {
+    await store.dispatch('ui/closeEditCleanup')
+    assert.deepEqual(deletes, [TASK], 'empty-content cleanup semantics unchanged')
+  } finally { delete globalThis.window.__editPanelFlushSave }
+})
+
+test('[F6r] inline-orphan undo routes through todo/restoreFromRecycle (chips survive, like the recycle bin)', () => {
+  const src = read('renderer/js/store/ui.js')
+  assert.ok(src.includes("dispatch('todo/restoreFromRecycle'"), 'undo uses the shared restore path (updateTodoFields + planChips restoreSnapshot)')
+  assert.ok(!src.includes("patch: { delete: false, deletedAt: 0, status: 'update' }"), 'raw delete:false patch is gone')
+})
+
 /* ---------- [F13] multi-term highlight: per-term, anchored on source ---------- */
 const search = await import('../../../renderer/js/utils/search.js')
 
@@ -252,8 +286,11 @@ test('[F12] QuickAddPage persists the draft on Esc and restores it on reopen', (
   const src = read('renderer/js/views/QuickAddPage.vue')
   assert.ok(src.includes("const DRAFT_KEY = 'quickAddDraft'"), 'draft storage key defined')
   const iEsc = src.indexOf('Escape')
-  assert.ok(iEsc > -1 && iEsc < src.indexOf('DRAFT_KEY, txt') && iEsc < src.indexOf('quickAddHide()'), 'Esc persists the draft before hiding')
+  // Review P3 2026-09-22: persistence extracted into persistDraft(); Esc still persists before hiding
+  assert.ok(iEsc > -1 && iEsc < src.indexOf('window.todoAPI.quickAddHide()') && /persistDraft \(\) \{/.test(src), 'Esc persists the draft before hiding')
   assert.ok(/getItem\(DRAFT_KEY\)[\s\S]{0,200}qa\.text = draft/.test(src), 'reopen restores the draft into the input')
+  assert.ok(/onQuickAddFocus[\s\S]{0,300}restoreDraft\(\)/.test(src), 'focus callback restores the draft (window is hidden-not-destroyed)')
+  assert.ok(/addEventListener\('blur', this\.persistDraft\)/.test(src), 'blur-hide also persists the draft')
   assert.ok(/onCreated[\s\S]{0,200}removeItem\(DRAFT_KEY\)/.test(src), 'a successful creation consumes the draft')
 })
 

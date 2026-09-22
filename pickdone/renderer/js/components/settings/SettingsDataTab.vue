@@ -77,6 +77,7 @@ import { dayjs, FMT } from '../../utils/core.js'
 import { confirmRecycleClear } from '../../utils/confirm.js'
 import { loadRuntime } from '../../store/runtimeState.js'
 import { commit as commitCommand } from "../../utils/commandBus.js"
+import { SCHEMA_V } from '../../store/todoBackup.js'
 
 /** Restore = the user wants the backup's data to win. Backup rows carry their backup-time
  *  updateTime + status:'sync', so LAN LWW instantly reverts the restore against any peer
@@ -274,6 +275,14 @@ export default {
       if (td && Number(td.schemaV) > 1) throw new Error('schemaV ' + td.schemaV + ' > 1 (backup from a newer app version)')
       return td || {}
     },
+    // Review P2 (2026-09-22): shared schemaV guard over EVERY stamped segment. parseTodoState covered
+    // only todoState — a newer-app backup's category/habits/filter/plan segments were restored
+    // unchecked (silent downgrade misreads). Absent/0 schemaV = legacy v1, allowed.
+    parseStampedSeg (raw) {
+      const seg = typeof raw === 'string' ? JSON.parse(raw) : raw
+      if (seg && Number(seg.schemaV) > SCHEMA_V) throw new Error('schemaV ' + seg.schemaV + ' > ' + SCHEMA_V + ' (backup from a newer app version)')
+      return seg || {}
+    },
     // H8 (2026-09-12): honest completion toast — every failed segment is named instead of a
     // blanket "parse failed" after other segments already committed
     reportRestoreResult (n, failed) {
@@ -291,11 +300,11 @@ export default {
       if (b.settingsState) seg('settings', () => this.$store.commit('settings/restore', JSON.parse(b.settingsState)))
       // setListRestore: backup-time tombstones must not win category LWW and re-delete peer-recovered
       // categories (round-6 P2) — live restored rows still take the fresh stamp (backup wins locally)
-      if (b.categoryState) seg('category', () => { const c = JSON.parse(b.categoryState); if (c.list) this.$store.commit('category/setListRestore', c.list) })
+      if (b.categoryState) seg('category', () => { const c = this.parseStampedSeg(b.categoryState); if (c.list) this.$store.commit('category/setListRestore', c.list) })
       let habitCount = 0
       if (b.habitsState) seg('habits', () => {
         // Single writer via the store only: replaceAll already dual-writes LS+meta; writing LS directly from the component would create a second writer (dual-write ledger discipline)
-        const hb = JSON.parse(b.habitsState)
+        const hb = this.parseStampedSeg(b.habitsState)
         // F6 (round-2 P1 2026-09-21): force bypasses the stale-savedAt guard and persists the
         // restored blob to the DB meta row (reaching sync); count habits honestly in the report.
         if (hb && Array.isArray(hb.habits)) { this.$store.commit('habits/replaceAll', { ...hb, force: true }); habitCount = hb.habits.length }
@@ -320,7 +329,7 @@ export default {
     // D6-F14: saved filters 回灌——按 id 幂等 re-put(filter.putMany upsert),随后以 DB 行表为准刷新内存列表
     async restoreSavedFilters (b) {
       if (!b.filterState) return
-      const fseg = typeof b.filterState === 'string' ? JSON.parse(b.filterState) : b.filterState
+      const fseg = this.parseStampedSeg(b.filterState)
       const list = (Array.isArray(fseg.list) ? fseg.list : []).filter(f => f && f.id != null)
       if (list.length) {
         await commitCommand('filter', 'putMany', list)
@@ -330,7 +339,7 @@ export default {
     // D6-F14: schedule chips 回灌——行级幂等 re-put(plan.putMany upsert),缺 taskId/day/id 的行跳过不拖批
     async restorePlanChips (b) {
       if (!b.planState) return
-      const pseg = typeof b.planState === 'string' ? JSON.parse(b.planState) : b.planState
+      const pseg = this.parseStampedSeg(b.planState)
       const chips = (Array.isArray(pseg.chips) ? pseg.chips : []).filter(c => c && c.id != null && c.taskId && c.day)
       if (chips.length) {
         await commitCommand('plan', 'putMany', chips)

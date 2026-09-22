@@ -330,6 +330,10 @@ export default {
   },
   mounted () {
 
+    // Review P2 (2026-09-22): expose the save queue's flush to the ui store — closeEditCleanup's
+    // inline-create orphan cleanup awaits it instead of racing the 350ms debounce with a fixed sleep
+    this._flushHook = () => this.flushSave()
+    window.__editPanelFlushSave = this._flushHook
     // First open of the edit panel: spotlight tour for the attachment toolbar (in-context teaching)
     this.$nextTick(() => { import('../utils/onboardingTours.js').then(mod => mod.maybeRunTour('editpanel', 600)).catch(() => {}) })
     this._onKeydown = (e) => {
@@ -367,6 +371,7 @@ export default {
   },
   beforeUnmount () {
     window.removeEventListener('keydown', this._onKeydown)
+    if (window.__editPanelFlushSave === this._flushHook) delete window.__editPanelFlushSave
     if (this.$el && this._onFocusin) this.$el.removeEventListener('focusin', this._onFocusin)
     // Esc 关闭路径不经 close():防抖回调会在卸载后写 this.saving,_sortable 也不会 destroy(2026-09-05 终审 P2)
     try { this.flushSave() } catch (e) { /* 卸载期落库失败不阻断卸载 */ }

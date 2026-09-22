@@ -1,4 +1,5 @@
 import { safeSet } from '../utils/core.js'
+import { isAuxWindow } from '../utils/auxWindow.js'
 /** Settings module — the full field set matches the reference settingsState */
 const LS_KEY = 'settingsState'
 /** Persistence blob format version: readers treat old unstamped data as v1 (behavior unchanged); the restore side refuses to import segments >1 (preventing downgrade misreads) */
@@ -258,7 +259,8 @@ function mirrorBlob (state) {
 function canMirrorDb () {
   // Float/quick-add windows don't write the DB directly (todo-db:call is main-window-only; would spam forbidden errors):
   // aux windows write LS only; after main-window storage sync the main window persists
-  return typeof window !== 'undefined' && window.location && !/__tomato-float|__quick-add/.test(window.location.hash)
+  // (review P3 2026-09-22: detection centralized in utils/auxWindow.js)
+  return typeof window !== 'undefined' && window.location && !isAuxWindow()
 }
 function persist (state) {
   liveState = state

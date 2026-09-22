@@ -100,8 +100,9 @@ export function createSaveQueue (store, opts) {
   }
 
   const flushSave = () => {
-    if (!booted) return // the immediate watcher fires before created; the dirty state is not yet initialized
+    if (!booted) return Promise.resolve() // the immediate watcher fires before created; the dirty state is not yet initialized
     clearTimeout(timer)
+    const outs = []
     const queued = pending
     pending = null
     const taskId = getTaskId()
@@ -111,27 +112,31 @@ export function createSaveQueue (store, opts) {
       // previously clearTimeout here dropped `queued.patch` entirely).
       const all = Object.assign({}, queued.patch, patch)
       if (Object.keys(all).length) {
-        store.dispatch('todo/updateTodoFields', { taskId, patch: all }).catch(() => {
+        outs.push(store.dispatch('todo/updateTodoFields', { taskId, patch: all }).catch(() => {
           restore(keys)
           if (opts.onFail) opts.onFail()
-        })
+        }))
       }
-      return
+      return Promise.all(outs)
     }
     if (queued && queued.taskId) {
       // Task switched inside the debounce window: the queued edits still commit to their enqueue-time
       // task (same snapshot semantics as the debounce callback); dirty fields go to the current task.
-      store.dispatch('todo/updateTodoFields', { taskId: queued.taskId, patch: queued.patch }).catch(() => {
+      outs.push(store.dispatch('todo/updateTodoFields', { taskId: queued.taskId, patch: queued.patch }).catch(() => {
         if (opts.onFail) opts.onFail()
-      })
+      }))
     }
     if (taskId && keys.length) {
-      store.dispatch('todo/updateTodoFields', { taskId, patch }).catch(() => {
+      outs.push(store.dispatch('todo/updateTodoFields', { taskId, patch }).catch(() => {
         // Restore the dirty flags for the keys that failed to persist and surface the failure banner
         restore(keys)
         if (opts.onFail) opts.onFail()
-      })
+      }))
     }
+    // Review P2 (2026-09-22): the flush promise is now RETURNED so callers (ui/closeEditCleanup's
+    // orphan cleanup) can await the pending dispatch — previously fire-and-forget, forcing the
+    // cleanup to guess with a fixed 60ms sleep while a fast typist's title was still in flight.
+    return Promise.all(outs)
   }
 
   return {

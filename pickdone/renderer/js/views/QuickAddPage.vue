@@ -29,32 +29,46 @@ export default {
       this.$router.push({ name: '__quick-add' }).catch(() => {})
     }
     this._offFocus = window.todoAPI.onQuickAddFocus
-      ? window.todoAPI.onQuickAddFocus(() => { this.$nextTick(() => { this.$refs.qa && this.$refs.qa.focusInput() }) })
+      ? window.todoAPI.onQuickAddFocus(() => {
+        // Review P3 (2026-09-22): the window is hidden-not-destroyed on hide, so mounted()'s one-shot
+        // restore never ran again — draft restore moved into the focus callback (runs on EVERY summon)
+        this.$nextTick(() => { this.restoreDraft(); this.$refs.qa && this.$refs.qa.focusInput() })
+      })
       : null
     window.addEventListener('keydown', this.onKey)
+    // Persist on blur too: hide paths other than Esc (focus loss) used to silently drop the draft
+    window.addEventListener('blur', this.persistDraft)
     // D6-F12: restore a draft left by a previous Esc-hide so the mini window behaves like the
     // main window's quick-add bar (which keeps its text while mounted)
-    try {
-      const draft = localStorage.getItem(DRAFT_KEY)
-      if (draft && this.$refs.qa && !this.$refs.qa.text) this.$refs.qa.text = draft
-    } catch { /* draft persistence is best-effort */ }
+    this.restoreDraft()
     this.$nextTick(() => this.$refs.qa && this.$refs.qa.focusInput())
   },
   beforeUnmount () {
     document.documentElement.classList.remove('widget-transparent')
     if (this._offFocus) this._offFocus()
     window.removeEventListener('keydown', this.onKey)
+    window.removeEventListener('blur', this.persistDraft)
   },
   methods: {
+    // D6-F12 + review P3: draft persistence is idempotent — safe to call from mount, focus and blur
+    restoreDraft () {
+      try {
+        const draft = localStorage.getItem(DRAFT_KEY)
+        if (draft && this.$refs.qa && !this.$refs.qa.text) this.$refs.qa.text = draft
+      } catch { /* draft persistence is best-effort */ }
+    },
+    persistDraft () {
+      try {
+        const qa = this.$refs.qa
+        const txt = qa && qa.text ? qa.text : ''
+        if (txt.trim()) localStorage.setItem(DRAFT_KEY, txt)
+        else localStorage.removeItem(DRAFT_KEY)
+      } catch { /* best-effort */ }
+    },
     onKey (e) {
       if (e.key === 'Escape') {
         // D6-F12: persist the draft before hiding instead of silently discarding it
-        try {
-          const qa = this.$refs.qa
-          const txt = qa && qa.text ? qa.text : ''
-          if (txt.trim()) localStorage.setItem(DRAFT_KEY, txt)
-          else localStorage.removeItem(DRAFT_KEY)
-        } catch { /* best-effort */ }
+        this.persistDraft()
         window.todoAPI.quickAddHide()
       }
     },

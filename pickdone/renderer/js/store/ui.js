@@ -6,12 +6,21 @@ import { showUndoToast } from '../utils/undoToast.js'
 /* D6-F1 (2026-09-21): calendar inline create commits an "(untitled)" task BEFORE opening the edit
  * panel — Esc / outside-click used to leave the nameless orphan on the board. Shared cleanup body
  * for closeEditCleanup / collapseEditCleanup: when the panel was editing THE inline-created task and
- * its content is still empty (a title typed in the final instants lands via EditPanel's unmount
- * flushSave — hence the one-macrotask grace wait), soft-delete it with the standard undo toast.
- * Strictly flag-scoped: a user-opened empty task is NEVER touched. */
+ * its content is still empty, soft-delete it with the standard undo toast.
+ * Review P2 (2026-09-22): the old fixed 60ms grace sleep raced EditPanel's 350ms debounce + IPC —
+ * a fast typist's title landed AFTER the emptiness check and the just-titled task was deleted as an
+ * orphan. The panel now registers window.__editPanelFlushSave (its save queue's flushSave, which
+ * resolves once the pending dispatch settles); cleanup awaits it BEFORE checking taskContent. The
+ * sleep survives only as a fallback for hosts without the hook (panel already unmounted → its
+ * beforeUnmount flush is still in flight). Strictly flag-scoped: a user-opened empty task is NEVER
+ * touched. */
 async function cleanupInlineCreated ({ state, rootState, dispatch }, createdId) {
   state.inlineCreatedTaskId = ''
-  await new Promise(r => setTimeout(r, 60))
+  try {
+    const flush = (typeof window !== 'undefined' && window.__editPanelFlushSave) || null
+    if (flush) await flush()
+    else await new Promise(r => setTimeout(r, 60))
+  } catch { /* a failed flush must not block the close flow */ }
   const t = ((rootState.todo && rootState.todo.todoList) || []).find(x => x.taskId === createdId)
   if (!t || t.delete) return
   if ((t.taskContent || '').trim()) return
@@ -19,9 +28,13 @@ async function cleanupInlineCreated ({ state, rootState, dispatch }, createdId) 
     await dispatch('todo/deleteTodo', t, { root: true })
     const h = window.Vue && window.Vue.h
     const msg = window.ElementPlus && window.ElementPlus.ElMessage
+    // Review P3 (2026-09-22): the undo previously patched delete:false directly, bypassing the chip
+    // snapshot/restore bookkeeping deleteTodo performed — an undone orphan kept its chips deleted.
+    // Route through the SAME restore path the recycle bin uses (updateTodoFields + planChips
+    // restoreSnapshot) so the schedule survives the undo like any other soft-delete reversal.
     const undo = () => {
       const cur = rootState.todo.recycleList.find(x => x.taskId === createdId)
-      if (cur) dispatch('todo/updateTodoFields', { taskId: createdId, patch: { delete: false, deletedAt: 0, status: 'update' } }, { root: true })
+      if (cur) dispatch('todo/restoreFromRecycle', { taskId: createdId }, { root: true })
     }
     if (h && msg && window.Vue) {
       showUndoToast(msg, [

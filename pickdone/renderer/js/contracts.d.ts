@@ -140,4 +140,7 @@ interface Window {
   ElementPlusLocaleEn?: any
   __lastVueErr?: any
   __tomatoFloatTick?: unknown
+  /** EditPanel save-queue flush hook (review P2 2026-09-22): awaited by ui/closeEditCleanup's
+   *  inline-create orphan cleanup so a pending debounced title lands before the emptiness check */
+  __editPanelFlushSave?: () => unknown
 }

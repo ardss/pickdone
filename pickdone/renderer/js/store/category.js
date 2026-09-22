@@ -97,6 +97,13 @@ const milestonesKey = id => 'projectMilestones:' + id
  *  are copied into one `catProjectMetaBak.<id>` JSON blob, cleared from their live keys, and restored +
  *  the backup deleted on recover. */
 const catMetaBakKey = id => 'catProjectMetaBak.' + id
+/** Review P2 (2026-09-22): per-victim in-flight backup promises. softDelete fires
+ *  backupThenClearProjectMeta per victim without blocking the UI; recover used to read the backup
+ *  key immediately — an undo clicked inside the read→backup-write→clear roundtrip saw NO backup yet
+ *  and permanently lost deadline/milestones/status. recover now awaits the victim's pending backup
+ *  promise before restoring, so the category only becomes recoverable once its meta is safely
+ *  backed up (or provably absent). */
+const pendingMetaBackups = new Map()
 /** Read a project category's four meta surfaces into one backup blob, write the backup, THEN clear the
  *  live keys (read→backup-write→delete sequence, never the reverse — a failed backup write keeps the
  *  live keys instead of destroying unbacked metadata). */
@@ -250,8 +257,11 @@ export default {
       const ids = state.projectIds.filter(x => !victims.includes(x))
       if (ids.length !== state.projectIds.length) state.projectIds = ids
       for (const vid of victims) {
-        // U-4: back up then clear the project meta (flag/status/deadline/milestones) — recover restores it
-        backupThenClearProjectMeta(vid)
+        // U-4: back up then clear the project meta (flag/status/deadline/milestones) — recover restores it.
+        // Review P2: the promise is retained per id; recover/undo awaits it before reading the backup key.
+        const p = Promise.resolve().then(() => backupThenClearProjectMeta(vid))
+        pendingMetaBackups.set(vid, p)
+        p.catch(() => {}) // backupThenClear never throws by design; guard against unhandled rejections anyway
         delete state.projectMeta[vid]
       }
       // D5 (2026-09-20): purge saved filters whose conds.catId references a victim — a filter on a
@@ -299,12 +309,19 @@ export default {
       c.delete = false
       c.deletedAt = 0
       persist(state.list)
-      restoreProjectMetaBackup(id).then(flagRestored => {
-        if (flagRestored && !state.projectIds.includes(id)) {
-          state.projectIds = [...state.projectIds, id]
-          // loadProjectMeta re-reads status/deadline/milestone into projectMeta on its next run
-        }
-      }).catch(() => { /* best-effort */ })
+      // Review P2: wait out the in-flight delete-time backup so the backup key is guaranteed written
+      // (or provably absent) before restoreProjectMetaBackup reads it — an instant undo no longer
+      // races the read→backup-write→clear roundtrip and silently drops deadline/milestones/status.
+      const pending = pendingMetaBackups.get(id)
+      pendingMetaBackups.delete(id)
+      Promise.resolve(pending).catch(() => {})
+        .then(() => restoreProjectMetaBackup(id))
+        .then(flagRestored => {
+          if (flagRestored && !state.projectIds.includes(id)) {
+            state.projectIds = [...state.projectIds, id]
+            // loadProjectMeta re-reads status/deadline/milestone into projectMeta on its next run
+          }
+        }).catch(() => { /* best-effort */ })
     },
     setProjectIds (state, ids) { state.projectIds = Array.isArray(ids) ? ids : [] },
     setProjectMeta (state, meta) { state.projectMeta = meta || {} },

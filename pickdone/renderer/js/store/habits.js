@@ -49,10 +49,11 @@ function load () {
 
 /** Aux-window detection: same judgment as dbMirror's writeNow (float / quick-add hashes).
  *  setMeta is a MAIN_WINDOW_ONLY_OP — an aux window's direct dbCall is rejected by the main process,
- *  which previously left the aux window's LS edit never reaching the durable DB copy. */
-export function isAuxWindow () {
-  try { return !!(typeof window !== 'undefined' && window.location && window.location.hash && /__tomato-float|__quick-add/.test(window.location.hash)) } catch (e) { return false }
-}
+ *  which previously left the aux window's LS edit never reaching the durable DB copy.
+ *  Review P3 (2026-09-22): the helper is centralized in utils/auxWindow.js (shared with
+ *  todoBackup/settings); re-exported here for the existing habits-specific importers. */
+export { isAuxWindow } from '../utils/auxWindow.js'
+import { isAuxWindow } from '../utils/auxWindow.js'
 
 /** Dual write: localStorage (synchronous fallback) + main DB meta table (source of truth, included in auto backup).
  *  Aux windows: LS write + relay ping only — the main window's storage listener persists to the DB on their behalf. */
