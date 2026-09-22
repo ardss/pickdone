@@ -17,7 +17,6 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { execFileSync } from 'node:child_process'
 import { isReleaseVersion } from './release-version.mjs'
-
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 // stdio:'inherit' 时 execFileSync 返回 null(无捕获输出)——不能一律 .trim()
 const sh = (cmd, opts = {}) => {

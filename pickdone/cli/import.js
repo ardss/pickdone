@@ -207,8 +207,11 @@ function dedupKeyOf (t) {
 function importItems (items, { dryRun = false, format, category = null, useLists = true } = {}) {
   const lib = require('./lib')
   const db = makeBusFacade(lib.open())
-  const row = db.call('queryTodos', { deleted: 0, limit: 1 })[0] || db.call('queryTodos', { deleted: 1, limit: 1 })[0]
-  const userId = row ? row.userId : 0
+  // Single source of truth for the owner id (lib.guessUserId): row-derived on a populated DB,
+  // 840001 (same hard-code as the renderer) on an empty one. The old local `: 0` fallback created
+  // rows the App could not associate with the logged-in user — the exact bug guessUserId fixed on
+  // the addTodo path while import kept its own diverging copy.
+  const userId = lib.guessUserId()
 
   // Fingerprint pool of existing tasks (live + recycle bin): importing the same file twice must not double-insert
   const existing = new Set()

@@ -14,7 +14,6 @@ import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { execFileSync } from 'node:child_process'
 import { isReleaseVersion } from './release-version.mjs'
-
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 const sh = (cmd) => execFileSync(cmd[0], cmd.slice(1), { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
 const die = msg => { console.error('✗ finalize: ' + msg); process.exit(1) }
@@ -115,8 +114,9 @@ if (fs.existsSync(SITE)) {
       const f = path.join(SITE, page)
       let h = fs.readFileSync(f, 'utf8')
       const before = h
-      h = h.replace(/"softwareVersion": "[^"]*"/, `"softwareVersion": "${version}"`)
-      h = h.replace(/"dateModified": "[^"]*"/, `"dateModified": new Date().toISOString().slice(0, 10)`)
+      // patchJsonLd (scripts/site-jsonld.mjs) interpolates both values as quoted JSON strings; the old
+      // inline replace wrote the raw JS expression text for dateModified, corrupting the JSON-LD block.
+      h = patchJsonLd(h, version, new Date().toISOString().slice(0, 10))
       if (h !== before) { fs.writeFileSync(f, h); patched++ }
     }
     say(patched ? `官网元数据已补丁 ${patched} 页(版本 ${version})——记得 commit + npx wrangler pages deploy(SOP-11 §6)` : '官网元数据无需补丁(已是当前版本)')

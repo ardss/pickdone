@@ -199,6 +199,41 @@ function guessUserId () {
   return row ? row.userId : 840001
 }
 
+/** Semver-aware comparison for release tags/versions ("v" prefix optional). Returns -1/0/1.
+ *  The previous update-command comparator split on '.' and coerced to Number, so every prerelease
+ *  segment became NaN, collapsed to 0 through `|| 0` — a 0.4.0-beta.15 user was told v0.4.0 was
+ *  not newer (up to date) even though semver puts 0.4.0 strictly above 0.4.0-beta.15.
+ *  Rules (semver §11): numeric core segments first; a version WITH a prerelease outranks nothing —
+ *  release > prerelease of the same core; prerelease identifiers compare numerically when both are
+ *  numeric, otherwise lexicographically, and numeric < alphanumeric; fewer identifiers loses. */
+function compareVersions (a, b) {
+  const parse = v => {
+    const s = String(v).replace(/^v/, '')
+    const dash = s.indexOf('-')
+    const core = (dash < 0 ? s : s.slice(0, dash)).split('.').map(Number)
+    const pre = dash < 0 ? null : s.slice(dash + 1).split('.')
+    return { core, pre }
+  }
+  const x = parse(a), y = parse(b)
+  for (let i = 0; i < 3; i++) {
+    const d = (x.core[i] || 0) - (y.core[i] || 0)
+    if (d) return d < 0 ? -1 : 1
+  }
+  if (!x.pre && !y.pre) return 0
+  if (!x.pre) return 1   // release outranks prerelease of the same core
+  if (!y.pre) return -1
+  for (let i = 0; i < Math.max(x.pre.length, y.pre.length); i++) {
+    const p = x.pre[i], q = y.pre[i]
+    if (p === undefined) return -1
+    if (q === undefined) return 1
+    const pNum = /^\d+$/.test(p), qNum = /^\d+$/.test(q)
+    if (pNum && qNum) { const d = Number(p) - Number(q); if (d) return d < 0 ? -1 : 1 }
+    if (pNum !== qNum) return pNum ? -1 : 1 // numeric identifiers < alphanumeric
+    if (p !== q) return p < q ? -1 : 1
+  }
+  return 0
+}
+
 const genTaskId = core.genTaskId
 
 /* ================= Read commands ================= */
@@ -2096,7 +2131,7 @@ function listReady (categoryId = null) {
 const attachApi = require('./lib-attachments.cjs')
 const { addAttachment, listAttachments, removeAttachment } = attachApi({ resolveTask, liveTasks, patchTodo, userDataDir, CliError })
 module.exports = {
-  CliError, commit, open, parseDate, dayStartOf, launchApp, userDataDir, hasIsolationEnv, guessUserId,
+  CliError, commit, open, parseDate, dayStartOf, launchApp, userDataDir, hasIsolationEnv, guessUserId, compareVersions,
   liveTasks, recycleTasks, resolveTask, resolveCategory,
   parsePredecessors, getTask, listReady,
   listTodos, getCategories, stats, overview,
