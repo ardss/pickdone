@@ -21,10 +21,14 @@
  */
 
 const manifest = require('./command-manifest')
+// Arch review 2026-09-22 rec #3: the clamp window is the SHARED constant (src/main/stamp-clamp.js)
+// — the same window/semantics as sync-apply.js's ingress clampSkew, enforced by the gate.
+const { STAMP_CLAMP_MS } = require('./stamp-clamp')
 
 const USAGE = 'USAGE'
 // D6 P2 (2026-09-21): explicit-stamp clamp window — legit device clock skew, not forgery.
-const STAMP_SKEW_MS = 5 * 60 * 1000
+// Arch review 2026-09-22 rec #3: now aliased to the shared STAMP_CLAMP_MS (10min, was 5min).
+const STAMP_SKEW_MS = STAMP_CLAMP_MS
 
 function usageError (msg) {
   const e = new Error('[command-bus] ' + msg)
@@ -81,7 +85,7 @@ function createBus (dbCall, manifestMod = manifest) {
       // D6 P2 (2026-09-21): future-stamp clamp. Legit clock skew is minutes, not years; anything
       // beyond the skew window can only be forgery (preserveStamp callers are main-process and
       // carry peer ages <= their own now + skew by construction).
-      if (Number(payload[row.lwwField]) > Date.now() + STAMP_SKEW_MS) {
+      if (Number(payload[row.lwwField]) > Date.now() + STAMP_CLAMP_MS) {
         return Object.assign({}, payload, { [row.lwwField]: Date.now() })
       }
       return payload
