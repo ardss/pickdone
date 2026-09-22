@@ -58,10 +58,23 @@ function legacyDbCall (op, params) {
   return window.todoAPI.dbCall(op, params)
 }
 
-/** The mutation API: commit(entity, verb, payload[, opts]). */
+/** The mutation API: commit(entity, verb, payload[, opts]).
+ *  D6-review P1: the main-side batch contract returns {results, failedIndex, error} instead of
+ *  rejecting on per-entry failure. The single-commit facade UNWRAPS that shape and rejects with
+ *  the entry error — otherwise every renderer write failure (DB busy, lock, constraint) resolves
+ *  as success: optimistic state stays, saveFailed banners/toasts never fire. Callers that want
+ *  the raw structured shape use commitBatch directly. */
 export function commit (entity, verb, payload, opts) {
   const c = (typeof window !== 'undefined' && window.commands) || null
-  if (c && typeof c.commit === 'function') return c.commit(entity, verb, payload, opts)
+  if (c && typeof c.commit === 'function') {
+    return c.commit(entity, verb, payload, opts).then(res => {
+      if (res && typeof res === 'object' && 'failedIndex' in res) {
+        if (res.failedIndex >= 0) throw new Error(res.error || 'commit failed at entry ' + res.failedIndex)
+        return res.results && res.results.length === 1 ? res.results[0] : res.results
+      }
+      return res
+    })
+  }
   const op = VERB_TO_OP[entity + '.' + verb]
   if (!op) return Promise.reject(new Error('[command-bus] unknown command: ' + entity + '.' + verb))
   return legacyDbCall(op, payload)
