@@ -31,7 +31,10 @@ export async function deleteCategoryWithUndo (ctx, c) {
   if (failed.length) {
     ctx.$message.warning(ctx.$t('statsG.SideNav.delCatPartialFail', { ok: affectedTasks.length - failed.length, total: affectedTasks.length }))
   }
-  // Clean up settings keys pointing at the dead category id: otherwise the todo box filtered by that category stays forever empty (showing 0 items even after data restore)
+  // Clean up settings keys pointing at any DEAD id in the cascade victim set (renderer-2, sharp-review
+  // 2026-09-22): the todo box / new-todo / calendar selectors can legitimately point at a folder's CHILD
+  // category, which the delete cascades away — comparing only the top-level id left the setting aimed at
+  // a dead id and the todo box permanently showing 0 items, the exact bug this block was added to prevent.
   const st = ctx.$store.state.settings
   // Review P1 (2026-09-22): test against the FULL cascade victim set, not just the root id — a folder
   // delete also tombstones its descendants, so a subcategory-targeted todoBoxCategoryId survived
