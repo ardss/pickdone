@@ -1,4 +1,5 @@
 import { commit as commitCommand } from "./commandBus.js"
+import { isAuxWindow } from "./auxWindow.js"
 /**
  * localStorage → SQLite persistence mirror — the three "master data that should live in the DB" states all go through here:
  *   db.settingsState (all settings) / db.habitsState (habit check-ins) / (db.tomatoState 已退役:账本迁 tomato_records 行表,mirror 仅剩 settings/habits)
@@ -67,9 +68,13 @@ function writeNow (metaKey, blob) {
     if (!window.todoAPI?.dbCall) return false
     // setMeta is now a main-window-only op (to prevent a compromised aux window from batch-modifying meta); aux windows (float/quick-add) don't write the DB directly —
     // LS is the cross-window sync channel; after the main window receives state via the storage event, the main window's mirror persists it
-    if (window.location.hash && /__tomato-float|__quick-add/.test(window.location.hash)) return false
+    // Aux-window gate now goes through the shared isAuxWindow() helper (same regex lived hand-copied in several files — one source of truth)
+    if (isAuxWindow()) return false
     commitCommand("meta", "put", [metaKey, JSON.stringify(blob)])
-      .then(() => { delete attempts[metaKey] }) // success resets the backoff/give-up counter
+      // Success resets the backoff/give-up counter — but only when THIS blob is still the newest
+      // one for the key: a late success of an older write must not clear the retry budget of the
+      // newer blob's pending failure cycle (mirror of scheduleRetry's stale-rejection guard).
+      .then(() => { if (newest[metaKey] === blob) delete attempts[metaKey] })
       .catch(() => scheduleRetry(metaKey, blob))
     return true
   } catch (e) {
