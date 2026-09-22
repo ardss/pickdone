@@ -9,6 +9,10 @@ const crypto = require('crypto')
 const LIMITS = require('../../shared/limits.mjs') // focus-duration clamp constants (single source, audit item 4); require(esm) — Node >= 22.12
 const { normalizeContent, rowToTodo, rowToCategory, todoToRow } = require('./db-rows')
 const dayjs = require('dayjs')
+// snowDedup key-cap (R5 P3): replay protection only needs recent keys, so past the cap the
+// older-than-30d entries are pruned (see bumpSnow).
+const SNOW_DEDUP_CAP = 2000
+const SNOW_DEDUP_MAX_AGE_MS = 30 * 24 * 3600 * 1000
 // electron-log only exists inside the packaged App; the standalone CLI (extraResources bundle) has no
 // node_modules/electron-log, so fall back to a no-op logger instead of crashing at require time
 let log
@@ -481,7 +485,10 @@ const OPS = {
     // `snowDedup:<taskId>:<dedupKey>`: the check + increment + stamp run in ONE transaction, so
     // two concurrent replays cannot both pass the check. The first call credits and stamps; any
     // later call with the same key returns { ok:true, minutes:0, deduped:true } without touching
-    // the row. Keys are bounded by usage (one per focus session), no pruning needed. Callers that
+    // the row. Each key is stamped with its creation time; once the meta table holds more than
+    // SNOW_DEDUP_CAP keys, entries older than SNOW_DEDUP_MAX_AGE_MS are pruned — replay protection
+    // only needs recent keys (a replay lands within seconds of the ambiguous failure), while the
+    // one-row-per-focus-session accumulation used to grow the meta table unboundedly. Callers that
     // send no dedupKey keep the legacy non-idempotent behavior (backward compatible).
     if (dedupKey != null && dedupKey !== '') {
       const key = `snowDedup:${taskId}:${dedupKey}`
@@ -492,10 +499,20 @@ const OPS = {
           const row = stmts.getById.get(taskId)
           return { ok: false, reason: row ? 'deleted' : 'missing' }
         }
-        stmts.setMeta.run(key, '1')
+        stmts.setMeta.run(key, String(Date.now()))
         return { ok: true, minutes: m }
       })
-      return tr()
+      const out = tr()
+      // Prune outside the bump transaction: the COUNT runs on every dedup'd bump but the DELETE
+      // only fires past the cap. Legacy keys stamped '1' cast to epoch 0 and age out immediately.
+      try {
+        const n = db.prepare("SELECT COUNT(*) n FROM meta WHERE key LIKE 'snowDedup:%'").get().n
+        if (n > SNOW_DEDUP_CAP) {
+          db.prepare("DELETE FROM meta WHERE key LIKE 'snowDedup:%' AND CAST(value AS INTEGER) < ?")
+            .run(Date.now() - SNOW_DEDUP_MAX_AGE_MS)
+        }
+      } catch { /* pruning is best-effort and must never fail the bump */ }
+      return out
     }
     const r = stmts.bumpSnow.run({ taskId, minutes: m, now: Date.now() })
     // Structured result: changes=0 used to collapse "missing" and "soft-deleted" into a bare false, so callers silently dropped focus credit; name the reason
