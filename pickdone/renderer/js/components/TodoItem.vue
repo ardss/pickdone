@@ -343,7 +343,15 @@ export default {
           (!this.todo.complete && this.todo.dayStart) ? { icon: 'chevron-down', label: this.$t('statsE.TodoItem.moveDown'), fn: () => this.keyboardMove(1) } : null,
           {
             icon: 'copy', label: this.$t('statsE.TodoItem.copyTitleDesc'),
-            fn: async () => { await navigator.clipboard.writeText((this.todo.taskContent || '') + '\n' + (this.todo.taskDescribe || '')); this.$message.success(this.$t('statsE.TodoItem.copiedMsg')) }
+            fn: async () => {
+              // Clipboard API can reject (focus loss / permission denial); surface it instead of an unhandled rejection
+              try {
+                await navigator.clipboard.writeText((this.todo.taskContent || '') + '\n' + (this.todo.taskDescribe || ''))
+                this.$message.success(this.$t('statsE.TodoItem.copiedMsg'))
+              } catch {
+                this.$message.error(this.$t('statsE.TodoItem.copyFailMsg'))
+              }
+            }
           },
           this.isRepeat ? { icon: 'repeat', label: this.$t('statsE.TodoItem.repeatDeleteMenu'), fn: () => this.$store.commit('ui/askRepeatDelete', this.todo.taskId), danger: true } : null,
           { sep: true },
