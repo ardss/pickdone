@@ -9,7 +9,7 @@
           <app-icon name="link" :size="14" :style="{color: isRest ? 'var(--tt-rest-accent)' : 'var(--tt-work-accent)'}"/>
           <!-- State-aware: idle + attached = "ready to start: X", no longer always "focusing" (residual-state bug after giving up, caught in dual-Persona testing) -->
           {{ isRest ? $t('statsE.TomatoBar.restAttach', { name: attachName }) : (isWork ? $t('statsE.TomatoBar.workAttach', { name: attachName }) : $t('statsE.TomatoBar.readyPrefix') + attachName) }}
-          <button type="button" class="tb-unlink" style="opacity:.5;cursor:pointer;background:none;border:none;padding:0;display:inline-flex;align-items:center"
+          <button type="button" class="tb-unlink"
                   :title="$t('statsE.TomatoBar.unlinkBtn')" :aria-label="$t('statsE.TomatoBar.unlinkPrefix') + attachName" @click="cancelAttach">
             <app-icon name="x" :size="11"/>
           </button>
@@ -332,6 +332,25 @@ export default {
   -webkit-mask: url('app://app/assets/img/icon-tomato-timer2.svg') center / contain no-repeat;
   mask: url('app://app/assets/img/icon-tomato-timer2.svg') center / contain no-repeat;
 }
+/* —— 解绑按钮：11px 图标原本 padding:0，有效命中区不足 12px。
+      padding 撑出 ≥24px 命中区（透明背景不改变外观），常态轻微淡化、hover 提升代替常驻 .5 透明。
+      (置于 .tomato-timer__time 注释之前：结构守卫测试禁止该注释之后出现 cursor:pointer) —— */
+.tb-unlink {
+  flex-shrink: 0;
+  padding: 7px; /* 7*2 + 11px icon = 25px square hit target */
+  cursor: pointer;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm, 6px);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: .6;
+  color: inherit;
+  transition: opacity var(--dur-fast, .15s);
+}
+.tb-unlink:hover { opacity: 1; }
+.tb-unlink:focus-visible { outline: 0; box-shadow: 0 0 0 3px rgba(0,140,142,.25); }
 /* 专注中「■ 放弃专注」同为品牌青(2026-09-03用户拍板:砖红攻击性太强与品牌不符,放弃语义由文案承载) */
 .tomato-timer__play--work { background-color: #0c8172; }
 .tomato-timer__play--work:focus { outline: 0; box-shadow: 0 0 0 3px rgba(0,140,142,.25); }
