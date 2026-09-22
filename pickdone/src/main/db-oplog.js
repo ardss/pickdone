@@ -98,6 +98,20 @@ module.exports = ({ getDb, log }) => {
   let oplogInsert = null
   let oplogCount = null
   let oplogOpCount = 0
+  // R7 fix (pending-count churn): machine-local bookkeeping keys (_savedAt/_lsAt stamps,
+  // db.settingsState/db.habitsState blob mirrors, sync.* state) must never ENTER the ring —
+  // the settings mirror rewrites them every few seconds, so ~3 no-op pointers landed per tick,
+  // the push watermark could never catch up with generation, and Device Center permanently
+  // showed a few hundred "pending" rows that were pure self-echo. hydrateRow already refuses
+  // them at egress (peers apply 0); the ring is the earlier choke point and the cheaper fix.
+  let localKeyPredicates = null
+  function isLocalBookkeeping (entity, entityId) {
+    try { if (!localKeyPredicates) localKeyPredicates = require('./sync-apply.js') } catch { return false }
+    const k = String(entityId)
+    if (entity === 'setting') return localKeyPredicates.isMachineLocalSettingKey(k)
+    if (entity === 'meta') return localKeyPredicates.isMachineLocalMetaKey(k) || localKeyPredicates.isSyncBlobMetaKey(k)
+    return false
+  }
   function appendOplog (entries) {
     if (!entries.length) return
     try {
@@ -105,7 +119,9 @@ module.exports = ({ getDb, log }) => {
         oplogInsert = getDb().prepare('INSERT INTO sync_oplog (entity, entityId, ts) VALUES (?, ?, ?)')
         oplogCount = getDb().prepare('SELECT COUNT(*) n FROM sync_oplog')
       }
-      const tr = getDb().transaction(() => entries.forEach(e => oplogInsert.run(e.entity, e.entityId, e.ts)))
+      const kept = entries.filter(e => !isLocalBookkeeping(e.entity, e.entityId))
+      if (!kept.length) return
+      const tr = getDb().transaction(() => kept.forEach(e => oplogInsert.run(e.entity, e.entityId, e.ts)))
       tr()
       // Cheap amortized ring-buffer trim: check every 200 appends, not every write
       if (++oplogOpCount % 200 === 0) {
