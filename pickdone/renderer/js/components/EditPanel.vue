@@ -380,8 +380,11 @@ export default {
   methods: {
     /* ===== Save pipeline wrappers (impl: utils/editSave.js) ===== */
     queueSave (patch) { if (this._save) this._save.queueSave(patch) },
-    /** Immediately commit pending saves (must be called before switching tasks, so A's edits do not land on B) */
-    flushSave () { if (this._save) this._save.flushSave() },
+    /** Immediately commit pending saves (must be called before switching tasks, so A's edits do not land on B).
+     *  Review P1 (2026-09-22): the flush PROMISE is returned — ui/closeEditCleanup registers this method
+     *  as window.__editPanelFlushSave and awaits it before the inline-created emptiness check; resolving
+     *  undefined re-opened the 60ms race against the 350ms debounce (fast-typed title orphan-deleted). */
+    flushSave () { return this._save ? this._save.flushSave() : undefined },
     retrySave () { this.saveFailed = false; this.flushSave() }, // D6-F9: banner Retry — onFail re-flags on failure
     markDirty (k) { if (this._save) this._save.markDirty(k) },
     /** Subtask drag sorting (sortablejs library; Up/Down buttons kept as a keyboard-accessible fallback).
