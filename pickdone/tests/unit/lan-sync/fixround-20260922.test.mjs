@@ -29,7 +29,7 @@ const require = createRequire(import.meta.url)
 const { createLanSyncNode } = require('../../../src/main/lan-sync/index.js')
 const { createLanServer, connect } = require('../../../src/main/lan-sync/transport.js')
 const att = require('../../../src/main/lan-sync/att-transfer.js')
-const { packSegmentChunks, SEGMENT_CHUNK_BYTES, SINGLE_SEGMENT_WIRE_CAP } = require('../../../src/main/lan-sync/segments-chunk.js')
+const { packSegmentChunks, SEGMENT_CHUNK_BYTES, WIRE_CAP_BYTES } = require('../../../src/main/lan-sync/segments-chunk.js')
 const { deriveAuthCode } = require('../../../src/main/lan-sync/pairing.js')
 
 const sha = buf => createHash('sha256').update(buf).digest('hex')
@@ -361,8 +361,8 @@ test('R9: a large frame sent right before close() still reaches the peer', async
 /* ---------------- R10: an oversize single segment fails loudly ---------------- */
 
 test('R10: a single segment past the wire cap throws instead of shipping an oversize chunk', () => {
-  const big = { fromSeq: 1, toSeq: 2, body: 'x'.repeat(SINGLE_SEGMENT_WIRE_CAP + 1) }
-  assert.throws(() => packSegmentChunks([big]), /segment exceeds the wire-cap ceiling/,
+  const big = { fromSeq: 1, toSeq: 2, body: 'x'.repeat(WIRE_CAP_BYTES + 1) }
+  assert.throws(() => packSegmentChunks([big]), /exceeds the .*-byte wire cap/,
     'an un-splittable over-cap segment must be rejected, not packed as an over-cap chunk')
   // Budget-busting but wire-safe (the real oplog shape, ~1.1MB envelope): ships alone, no throw.
   const chunky = { fromSeq: 1, toSeq: 2, body: 'x'.repeat(SEGMENT_CHUNK_BYTES + 100 * 1024) }
@@ -371,7 +371,7 @@ test('R10: a single segment past the wire cap throws instead of shipping an over
   assert.equal(own[0].segments.length, 1)
   assert.equal(own[0].final, true)
   // Exactly at the hard cap (minus the 2 JSON quote bytes) still packs.
-  const edge = { fromSeq: 1, toSeq: 2, body: 'x'.repeat(SINGLE_SEGMENT_WIRE_CAP - 2) }
+  const edge = { fromSeq: 1, toSeq: 2, body: 'x'.repeat(WIRE_CAP_BYTES - 2) }
   const chunks = packSegmentChunks([edge])
   assert.equal(chunks.length, 1)
   assert.equal(chunks[0].final, true)
