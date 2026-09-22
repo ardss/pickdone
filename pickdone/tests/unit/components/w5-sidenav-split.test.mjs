@@ -59,7 +59,8 @@ test('w5 SnManageCategoriesModal: delete delegates to the shared undoable catego
   assert.match(shared, /category\/softDelete/, 'soft delete happens in the shared path')
   // Wave-D P1-2: the cleanup now tests the FULL cascade victim set (folder descendants too),
   // not just the root categoryId
-  assert.match(shared, /victimKey\.has\(String\(st\.todoBoxCategoryId\)\)/, 'todoBox cleanup kept')  assert.match(catModal, /isProject \(id\)/, 'project guard stays in the modal (set/cancel project button)')
+  assert.match(shared, /victimKey\.has\(String\(st\.todoBoxCategoryId\)\)/, 'todoBox cleanup kept')
+  assert.match(catModal, /isProject \(id\)/, 'project guard stays in the modal (set/cancel project button)')
   assert.match(shared, /filters\/save/, 'cascaded saved filters are restored on undo')
 })
 
