@@ -103,7 +103,8 @@ export default {
       msgMoveCat: 'Moved {n} tasks to "{name}"',
       confirmDelete: 'Delete the selected {n} tasks to the recycle bin?',
       confirmTitle: 'Notice',
-      msgDeleted: 'Deleted {n} tasks'
+      msgDeleted: 'Deleted {n} tasks',
+      msgPartialFail: '{n} tasks failed to move'
     }
   }
 }
