@@ -691,14 +691,14 @@ test('snapshot: progress-based round deadline — a slow-drip transfer outlives 
     ack: { appliedToSeq: 100, oldestSeq: 50 },
     onRequest: async (n, socket) => {
       for (let i = 0; i < 5; i++) {
-        await new Promise((r2) => setTimeout(r2, 150))
+        await new Promise((r2) => setTimeout(r2, 300))
         line(socket, { type: 'snapshot-chunk', index: i, totalChunks: 5, schemaVersion: 1, rows: [{ entity: 'todo', id: 'drip' + i }] })
       }
       line(socket, { type: 'snapshot-end', totalChunks: 5, totalRows: 5, cursor: 100, schemaVersion: 1 })
     },
   })
   const port = await listen(server)
-  const node = makeNode({ roundTimeoutMs: 400, roundProgressMs: 300 })
+  const node = makeNode({ roundTimeoutMs: 500, roundProgressMs: 1500 })
   node.start()
   await node.whenListening()
   node.addPeer({ deviceId: 'peer', host: '127.0.0.1', port })

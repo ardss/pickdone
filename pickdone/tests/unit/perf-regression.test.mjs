@@ -71,10 +71,18 @@ test(`perf: ${N} tasks review metrics build`, async () => {
     records.push({ succeed: true, focusDuration: 25, endTime: String(Date.now() - (i % 30) * DAY), dateKey: '' })
   }
   const period = { start: Date.now() - 7 * DAY, end: Date.now() + DAY, label: '近7天', days: 8 }
+  // Control run on 1/8 of the data measures the MACHINE's current speed, not a fixed wall-clock
+  // number: under the unit wall's parallel load a fixed 2s ceiling measured the load, not the
+  // code (2026-09-23). The assertion is now the amplification ratio big-vs-control with a 20x
+  // margin — an order-of-magnitude algorithmic regression still fails; shared-CPU noise doesn't.
+  const control = todoList.slice(0, Math.ceil(todoList.length / 8))
+  const tC = performance.now()
+  buildReviewMetrics({ todos: control, records: records.slice(0, 63), catNameOf: () => '未分类' }, period)
+  const ctrlCost = Math.max(performance.now() - tC, 1)
   const t0 = performance.now()
   const m = buildReviewMetrics({ todos: todoList, records, catNameOf: () => '未分类' }, period)
   const cost = performance.now() - t0
   assert.ok(m.done >= 0 && m.focusMins >= 0, 'metric structure complete')
-  assert.ok(cost < 2000, `buildReviewMetrics took ${Math.round(cost)}ms, over the 2s ceiling`)
-  console.log(`    buildReviewMetrics(${N}+500) = ${Math.round(cost)}ms`)
+  assert.ok(cost < ctrlCost * 20, `buildReviewMetrics took ${Math.round(cost)}ms vs ${Math.round(ctrlCost)}ms control — over the 20x amplification ceiling`)
+  console.log(`    buildReviewMetrics(${N}+500) = ${Math.round(cost)}ms (control ${Math.round(ctrlCost)}ms)`)
 })
