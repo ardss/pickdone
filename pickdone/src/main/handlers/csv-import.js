@@ -151,6 +151,11 @@ module.exports = function importHandlers (ctx) {
       // 与 todo-db:call 写路径对齐(2026-09-09 P2):导入落库后必须刷新调度器并广播,否则应用内导入后
       // 主窗口列表陈旧、已导入的提醒全部静默丢失
       try { scheduler.reloadAll(dbApi()) } catch (err) { log.warn('[Import] reloadAll failed', err) }
+      // R4 P2 (2026-09-21): reloadAll itself writes reminderLastSeenAt (touching -wal) AFTER the
+      // re-baseline above — the next watch poll would misread that self-write as another EXTERNAL
+      // write (full reload + undo wipe). Re-baseline again once the scheduler's own write has
+      // landed, same as index.js does at the end of its external-write path.
+      try { const rw2 = resyncDbWatch && resyncDbWatch(); if (rw2) rw2() } catch (err) { log.warn('[Import] post-reloadAll resyncDbWatch failed', err) }
       // 2026-09-10 P2:传 e.sender(IpcMainInvokeEvent 本身不是 webContents,exclude 永不命中,
       // 发起导入的窗会被自己的广播打断撤销栈);其余窗照常刷新
       broadcastTodosChanged('import', e.sender)
