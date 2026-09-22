@@ -15,6 +15,21 @@ function attachDir () {
 // it to shell.openPath → the OS browser executes it OUTSIDE the app CSP. Dropping the extension
 // entirely is the root fix (svg attachments are rare; download-only carve-outs would be overkill).
 const MAX_BYTES = 50 * 1024 * 1024
+// P2-4 (R4 2026-09-21): per-file limits were enforced but the upload-attachment channel had NO
+// aggregate quota — a compromised renderer could fill the disk with 50MB files forever. Align
+// the total budget with the LAN attachment-transfer round budget (64MB, att-transfer.js) and cap
+// the file count. Best-effort check (concurrent uploads can race past it slightly; still caps
+// the unbounded growth).
+const MAX_TOTAL_BYTES = 64 * 1024 * 1024
+const MAX_FILES = 200
+function dirUsage (dir) {
+  let bytes = 0
+  let count = 0
+  for (const f of fs.readdirSync(dir)) {
+    try { bytes += fs.statSync(path.join(dir, f)).size; count++ } catch { /* vanished mid-scan */ }
+  }
+  return { bytes, count }
+}
 const ALLOWED_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'pdf', 'txt', 'md', 'csv', 'xlsx', 'xls', 'docx', 'doc', 'pptx', 'ppt', 'zip', 'mp3', 'wav', 'ogg', 'mp4', 'webm', 'json'])
 /** Upload: offline implementation = copy into userData/files and return a file:// style URL (signature mirrors re-assembling the key after the get7nyUpToken flow) */
 async function saveAttachment ({ taskId, name, dataBase64 }) {
@@ -32,6 +47,10 @@ async function saveAttachment ({ taskId, name, dataBase64 }) {
   if (raw.toString('base64') !== stripped) throw new Error('attachment: base64 roundtrip mismatch')
   if (!raw.length) throw new Error('attachment: empty')
   if (raw.length > MAX_BYTES) throw new Error('attachment: too large (max 50MB)')
+  // P2-4 (R4 2026-09-21): aggregate quota (64MB total / 200 files, matching the LAN transfer budget)
+  const { bytes: usedBytes, count: usedFiles } = dirUsage(attachDir())
+  if (usedBytes + raw.length > MAX_TOTAL_BYTES) throw new Error('attachment: storage quota exceeded (max 64MB total)')
+  if (usedFiles >= MAX_FILES) throw new Error('attachment: too many attachment files (max 200)')
   const safe = `${String(taskId).replace(/[\\/:*?"<>|]/g, '_').replace(/\.\./g, '_')}_${Date.now()}_${cleanName.replace(/[\\/:*?"<>|]/g, '_')}`
   // P2 2026-09-12: two uploads in the same millisecond with the same task/name produced the same
   // Date.now() filename and writeFileSync silently overwrote the first attachment. Suffix -1/-2…

@@ -55,7 +55,8 @@ module.exports = ({ getDb, log }) => {
       // passes the tombstone stamps. result=false (no live row matched) is a phantom: no delta.
       case 'filterDelete': return result === false ? [] : [one('filter', Array.isArray(params) ? params[0] : params)]
       case 'planAddMany': return arr('plan', result)
-      case 'planUpdateChip': return [one('plan', params && params.id)]
+      // P2-5 (R4 2026-09-21): false = the UPDATE matched no live chip (no change) — no delta.
+      case 'planUpdateChip': return result === false ? [] : [one('plan', params && params.id)]
       // planRemoveIds accepts plain ids or {id, deletedAt, updatedAt} stamps (sync apply path)
       case 'planRemoveIds': return arr('plan', (Array.isArray(params) ? params : [params]).map(x => (x && typeof x === 'object') ? x.id : x))
       // F3c (2026-09-20): these three ops move/delete CHIPS but used to log a single ('plan',
@@ -88,7 +89,11 @@ module.exports = ({ getDb, log }) => {
         const ids = (Array.isArray(params) ? params : [params]).map(r => r && r.tomatoId).filter(Boolean)
         return arr('tomato', ids)
       }
-      case 'tomatoUpdateById': return [one('tomato', params && params.tomatoId)]
+      // P2-5 (R4 2026-09-21): both ops return changes > 0 as a boolean — false means the UPDATE
+      // matched nothing (missing/tombstoned row) or the write was an identical no-op. The old
+      // unconditional pointer emitted a PHANTOM delta in exactly those cases (delta consumers
+      // hydrate a row that never changed; e.g. the float's every-tick tomatoUpdateById echo).
+      case 'tomatoUpdateById': return result === false ? [] : [one('tomato', params && params.tomatoId)]
       case 'tomatoRemoveByIds': return arr('tomato', params)
       case 'tomatoMigrateFromMeta': return [one('tomato', '*gc*')]
       default: return []

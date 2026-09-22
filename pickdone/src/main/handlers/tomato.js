@@ -6,7 +6,7 @@ const quickAdd = require('../quick-add')
 const { makeAssertMainWindow } = require('./shared')
 
 module.exports = function tomatoHandlers (ctx) {
-  const { getMainWindow, showMainOrLock, rebuildTrayMenu, updateTomatoTray } = ctx
+  const { getMainWindow, showMainOrLock, rebuildTrayMenu, updateTomatoTray, isLocked } = ctx
   const assertMainWindow = makeAssertMainWindow(getMainWindow)
 
   return {
@@ -56,6 +56,9 @@ module.exports = function tomatoHandlers (ctx) {
     // (or injected page) could forge a SYNCED meta announce row and plant cross-device focus
     // chips on every peer. Gated: main window or the float's own webContents only.
     'tomato-run-announce': (e, payload) => {
+      // P3 (R4 2026-09-21): locked-state gate, symmetric with upload-attachment/open-file —
+      // the announce write is a SYNCED meta write and must not land while the lock is active.
+      if (isLocked()) throw new Error('locked')
       const w = getMainWindow()
       const isMain = w && !w.isDestroyed() && e.sender === w.webContents
       if (!isMain && !tomatoFloat.isSelfSender(e.sender)) {
@@ -65,7 +68,12 @@ module.exports = function tomatoHandlers (ctx) {
       return require('../tomato-announce').announceFromRenderer(payload || {})
     },
     // Startup/current snapshot of all peers' announces (renderer filters staleness itself)
-    'tomato-run-announces': () => require('../tomato-announce').listAnnounces(),
+    // P3 (R4 2026-09-21): locked-state read gate, symmetric with the announce write above —
+    // the lock screen must not expose cross-device focus activity (which tasks, how long).
+    'tomato-run-announces': () => {
+      if (isLocked()) throw new Error('locked')
+      return require('../tomato-announce').listAnnounces()
+    },
     // Double-click the float card to summon the main window: accepts only the float's own sender; showMainOrLock already handles the lock-screen redirect and main-window recreation branches
     'show-main-from-float': (e) => { if (tomatoFloat.isSelfSender(e.sender)) showMainOrLock() },
     'undock-tomato-float': () => { tomatoFloat.undock(); rebuildTrayMenu() },
