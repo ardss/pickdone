@@ -68,15 +68,30 @@ const COMMANDS = {
   // hand-rolls the todo branches on purpose — read them there before touching these rows.
   'todo.put':          { entity: 'todo', verb: 'put', sync: 'full', lwwField: 'updatedAt', tombstone: 'pointer', op: 'upsert' },
   'todo.putMany':      { entity: 'todo', verb: 'putMany', sync: 'full', lwwField: 'updatedAt', tombstone: 'pointer', op: 'upsertMany' },
-  // Sync-ack echo path: db.call deliberately skips oplog capture for it (see db-oplog.js header)
-  'todo.commitBatch':  { entity: 'todo', verb: 'commitBatch', sync: 'full', lwwField: 'updatedAt', tombstone: null, op: 'commitSyncBatch' },
+  // Sync-ack echo path: db.call deliberately skips oplog capture for it (see db-oplog.js header).
+  // Arch review 2026-09-22 rec #2: capture:'none' DECLARES that suppression in the manifest —
+  // the command participates in sync (sync:'full') but its commit mints NO oplog rows, so the
+  // bus/gates can reason about capture without reading db-oplog.js. lwwField:'updatedAt' stays:
+  // rows arrive with wire-carried ages the db layer preserves via todoToRow.
+  'todo.commitBatch':  { entity: 'todo', verb: 'commitBatch', sync: 'full', capture: 'none', lwwField: 'updatedAt', tombstone: null, op: 'commitSyncBatch' },
   'todo.hardDelete':   { entity: 'todo', verb: 'hardDelete', sync: 'full', lwwField: null, tombstone: 'row', op: 'hardDelete' },
   'todo.hardDeleteMany': { entity: 'todo', verb: 'hardDeleteMany', sync: 'full', lwwField: null, tombstone: 'row', op: 'hardDeleteMany' },
+  // Arch review 2026-09-22 rec #2: bumpSnow's db impl (db.js) destructures ONLY
+  // { taskId, minutes, dedupKey } and stamps the row's updatedAt with its OWN now — a
+  // caller-supplied payload.updatedAt (including a bus-stamped one) is provably ignored.
+  // lwwField:'updatedAt' stays so the bus still clamps a forged explicit future stamp on the
+  // payload before dispatch (defense in depth, same window as the ingress clamp).
   'todo.bump':         { entity: 'todo', verb: 'bump', sync: 'full', lwwField: 'updatedAt', tombstone: null, op: 'bumpSnow' },
 
   // ---- meta (key/value rows) ----
-  'meta.put':          { entity: 'meta', verb: 'put', sync: 'full', lwwField: 'updatedAt', tombstone: null, localKeys: isMachineLocalMetaKey, op: 'setMeta' },
-  'meta.delete':       { entity: 'meta', verb: 'delete', sync: 'full', lwwField: 'updatedAt', tombstone: 'row', localKeys: isMachineLocalMetaKey, op: 'deleteMeta' },
+  // Arch review 2026-09-22 rec #2: lwwField is null on BOTH meta rows. Meta is a KV table with
+  // no age column (the ingress LWW age is derived from the oplog — see sync-apply.js metaTs);
+  // 'updatedAt' here was inert-but-harmful: every real caller passes a ['key','value'] array or
+  // a bare string key (which the bus passes verbatim), but a PLAIN-OBJECT payload would have
+  // been silently stamped with an updatedAt field the db layer ignores. null = the bus can
+  // never reshape a meta payload.
+  'meta.put':          { entity: 'meta', verb: 'put', sync: 'full', lwwField: null, tombstone: null, localKeys: isMachineLocalMetaKey, op: 'setMeta' },
+  'meta.delete':       { entity: 'meta', verb: 'delete', sync: 'full', lwwField: null, tombstone: 'row', localKeys: isMachineLocalMetaKey, op: 'deleteMeta' },
 
   // ---- categories ----
   'category.put':      { entity: 'category', verb: 'put', sync: 'full', lwwField: 'updatedAt', tombstone: 'row', op: 'upsertCategory' },

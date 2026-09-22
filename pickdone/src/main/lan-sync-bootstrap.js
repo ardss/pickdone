@@ -68,7 +68,7 @@ function settingGet (key) {
   const row = state.db.call('settingsRowsAll', {}).find(r => r.key === key && !r.deleted)
   return row ? row.value : null
 }
-function settingPut (key, value) { return state.db.call('settingsRowPut', { key, value }) }
+function settingPut (key, value) { return busWrite('settingsRowPut', { key, value }) }
 
 /* ---------- identity ---------- */
 function ensureIdentity () {
@@ -95,6 +95,11 @@ const createHydrationCache = () => syncApply.createHydrationCache(state)
 const hydrateRow = (ptr, cache) => syncApply.hydrateRow(state, ptr, cache)
 const localUserId = () => syncApply.localUserId(state)
 const applyRowSafe = row => syncApply.applyRowSafe(state, row)
+// Arch review 2026-09-22 rec #1 (twin-door convergence): manifest-op writes route through the
+// same injected-ingress bus as sync-apply.js (hookless, payload-verbatim, preserveStamp) —
+// only reads and the non-manifest sync-engine bookkeeping ops (appendOplogPointers /
+// seedSyncOplog) stay on the raw db.call surface.
+const busWrite = (op, payload) => syncApply.busWrite(state, op, payload)
 const flushPendingWrites = () => syncApply.flushPendingWrites(state)
 const readMaxOplogSeq = () => syncApply.readMaxOplogSeq(state)
 
@@ -106,7 +111,7 @@ function createLocalStoreAdapter () {
       return ptrs.map(ptr => hydrateRow(ptr, cache)).filter(Boolean)
     },
     getCursor () { const v = state.db.call('getMeta', CURSOR_META_KEY); const n = Number(v); return Number.isFinite(n) && n > 0 ? n : 0 },
-    setCursor (seq) { state.db.call('setMeta', [CURSOR_META_KEY, String(seq)]) },
+    setCursor (seq) { busWrite('setMeta', [CURSOR_META_KEY, String(seq)]) },
     applyRow: row => applyRowSafe(row),
     /** Current live rows incl. tombstones, for buildSnapshot (seq-less; engine sorts by id). */
     allRows () {
@@ -594,7 +599,7 @@ function foldIntoBlob (blobKey, entries) {
       if (v === undefined) delete doc[k] // tombstone: drop the field from the blob
       else doc[k] = v
     }
-    state.db.call('setMeta', [blobKey, JSON.stringify(doc)])
+    busWrite('setMeta', [blobKey, JSON.stringify(doc)])
   } catch (e) { log.warn('[LanSync] settings blob fold failed:', blobKey, e.message) }
 }
 
@@ -917,7 +922,7 @@ function registerOps () {
       const alias = String((p && p.alias) || '').trim().slice(0, 40)
       const key = K_PEER_ALIAS_PREFIX + deviceId
       if (alias) settingPut(key, alias)
-      else state.db.call('settingsRowDelete', { key }) // empty string clears the alias
+      else busWrite('settingsRowDelete', { key }) // empty string clears the alias
       return { deviceId, alias: alias || null }
     },
     syncGetPairingCode: () => {
@@ -966,7 +971,7 @@ function initLanSync ({ db, getWindowSenders, resyncExternalWatch } = {}) {
   // v1 watermark cleanup (round-3 review): the pre-v2 'sync.peerWatermarks' row is dead data in
   // the RECEIVER's seq space (v2 lives under 'sync.peerWatermarks.v2'); delete it once.
   try {
-    if (settingGet('sync.peerWatermarks') != null) state.db.call('settingsRowDelete', { key: 'sync.peerWatermarks' })
+    if (settingGet('sync.peerWatermarks') != null) busWrite('settingsRowDelete', { key: 'sync.peerWatermarks' })
   } catch (e) { log.warn('[LanSync] v1 watermark cleanup failed:', e.message) }
   try {
     if (settingGet(K_ENABLED) === true) startSync()

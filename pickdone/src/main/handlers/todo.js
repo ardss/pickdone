@@ -5,7 +5,7 @@ const fixUtil = require('../fix-util')
 const tomatoFloat = require('../tomato-float')
 const scheduler = require('../scheduler')
 const appAudit = require('../audit')
-const { makeAssertMainWindow, purgeAttachmentFiles, classifyCommitKey } = require('./shared')
+const { makeAssertMainWindow, purgeAttachmentFiles, classifyCommitKey, makeSyncKick } = require('./shared')
 const bus = require('../command-bus')
 
 module.exports = function todoHandlers (ctx) {
@@ -26,6 +26,9 @@ module.exports = function todoHandlers (ctx) {
   // - 'undo-barrier': our own write just touched the DB/-wal — re-baseline the external-write
   //   watcher immediately, otherwise the next poll mistakes our write for an external one
   //   (full reload + undo-stack wipe). Previously inline after db.call; semantics unchanged.
+  // Arch review 2026-09-22 rec #5: a THROWING notifySyncChange no longer loses the kick
+  // silently — makeSyncKick counts it, defers it, and retries one-shot (next commit + timer).
+  const kickSync = makeSyncKick(op => notifySyncChange(op))
   bus.onCommit('ls-mirror', ({ row, op, payload }) => {
     if (!notifySyncChange) return
     // Phase 2: machine-local-key commits kick nothing — peers can never consume them
@@ -37,7 +40,7 @@ module.exports = function todoHandlers (ctx) {
     // (meta.delete 'k') → machine-local writes kicked pointless sync rounds.
     const key = classifyCommitKey(payload)
     if (key != null && typeof row.localKeys === 'function' && row.localKeys(key)) return
-    notifySyncChange(op)
+    kickSync.kick(op)
   })
   bus.onCommit('undo-barrier', () => { try { const rw = resyncDbWatch(); if (rw) rw() } catch { /* best-effort */ } })
 

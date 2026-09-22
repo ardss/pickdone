@@ -22,6 +22,15 @@ const mergeCore = require('../../shared/sync-core/merge.mjs')
 // applies rows DIRECTLY (peer-carried LWW stamps — see the gate's sync-ingress exemption for
 // this file); the manifest is used for dispatch naming only, never for stamping.
 const manifest = require('./command-manifest')
+// Arch review 2026-09-22 rec #3: the ingress clamp window is the SHARED constant — the same
+// window/semantics as the command-bus explicit-stamp clamp (see stamp-clamp.js).
+const { STAMP_CLAMP_MS } = require('./stamp-clamp')
+// Arch review 2026-09-22 rec #1 (twin-door convergence): flush/ingress WRITE sites route
+// through an injected bus built on top of THIS state's db surface (createBus is exported for
+// exactly this). The bus's dbCall is state.db.call, so mock-driven unit suites keep their
+// recording surface; the hookless instance preserves the ingress contract (no ls-mirror kick,
+// no local re-stamping — every write passes { preserveStamp: true }).
+const { createBus } = require('./command-bus')
 
 // Manifest keys of the buffered bulk commands, in exact flush order (order is load-bearing:
 // todos first so a same-round todo+plan move lands coherently, tombstone-heavy buffers early).
@@ -99,6 +108,26 @@ const isMachineLocalMetaKey = id => {
 
 // P1-5: prefix for dated meta conflict-backup keys (see the meta branch in applyRowInner).
 const META_CONFLICT_BACKUP_PREFIX = 'metaConflictBackup.'
+
+/**
+ * Arch review 2026-09-22 rec #1 (twin-door convergence): the per-state write door for this
+ * file's flush/ingress writes. Builds a hookless bus on top of state.db.call (lazily, cached
+ * on the state object — tests swap whole state objects) and routes every WRITE through
+ * bus.commitOp(op, payload, { preserveStamp: true }): the manifest validates the op name,
+ * the payload passes through verbatim (preserveStamp + the wire-carried ages survive), and
+ * no fanout hooks fire (ingress must not kick local sync rounds — this is peer data landing,
+ * not a local user edit). Reads stay on state.db.call.
+ */
+function busFor (state) {
+  if (!state.__bus) state.__bus = createBus((op, p) => state.db.call(op, p))
+  return state.__bus
+}
+
+/** The one write helper for sync ingress: manifest-validated dispatch, payload untouched. */
+function busWrite (state, op, payload) {
+  return busFor(state).commitOp(op, payload, { preserveStamp: true })
+}
+
 const META_CONFLICT_BACKUP_CAP = 20
 // The settings/habits blobs are deliberately EXCLUDED from meta sync: they already sync
 // FIELD-GRANULAR via the `setting` entity (the db-sync-schema setMeta bridge mirrors every blob
@@ -275,7 +304,7 @@ function localUserId (state) {
  * the local user's real newer edit on the next re-push of the stale row. The "don't touch
  * payload" rule holds only on the non-skew path (row returned verbatim).
  */
-const SKEW_CLAMP_MS = 10 * 60 * 1000
+const SKEW_CLAMP_MS = STAMP_CLAMP_MS
 function clampSkew (row) {
   if (!row || typeof row !== 'object') return row
   const now = Date.now()
@@ -334,12 +363,12 @@ function writeMetaConflictBackup (state, key, value) {
   try {
     const ts36 = Date.now().toString(36)
     const backupKey = `${META_CONFLICT_BACKUP_PREFIX}${key}.${ts36}`
-    state.db.call('setMeta', [backupKey, JSON.stringify({ key, value, lostAt: Date.now() })])
+    busWrite(state, 'setMeta', [backupKey, JSON.stringify({ key, value, lostAt: Date.now() })])
     // Prune: keep only the latest META_CONFLICT_BACKUP_CAP backups per base key.
     const prefix = `${META_CONFLICT_BACKUP_PREFIX}${key}.`
     const keys = (state.db.call('listMetaKeys') || []).filter(k => String(k).startsWith(prefix)).sort()
     for (const old of keys.slice(0, Math.max(0, keys.length - META_CONFLICT_BACKUP_CAP))) {
-      try { state.db.call('deleteMeta', old) } catch { /* prune is best-effort */ }
+      try { busWrite(state, 'deleteMeta', old) } catch { /* prune is best-effort */ }
     }
     log.warn('[LanSync] meta LWW conflict on', key, '— loser backed up as', backupKey)
   } catch (e) { log.warn('[LanSync] meta conflict backup failed for', key, e.message) }
@@ -518,7 +547,7 @@ function applyRowInner (state, incoming) {
       // the (data-carrying) tombstone through the buffer would RESURRECT the row; land the
       // deletion through the dedicated tombstone op instead. Direct sync call: deletes are rare
       // and tiny, no bulk buffering needed.
-      state.db.call('settingsRowDelete', { key: incoming.id })
+      busWrite(state, 'settingsRowDelete', { key: incoming.id })
       markAppliedSetting(state, incoming.id, undefined) // P1-2a: blob field dropped + hot-apply bookkeeping
       return true
     }
@@ -537,7 +566,7 @@ function applyRowInner (state, incoming) {
     if (winner.deleted && !winner.data) {
       // Tomato tombstone winner (hydrated from a pointer whose row is gone locally): land it via
       // the tombstone op. Direct sync call, same reasoning as settingsRowDelete above.
-      state.db.call('tomatoRemoveByIds', [incoming.id])
+      busWrite(state, 'tomatoRemoveByIds', [incoming.id])
       return true
     }
     if (!winner.data) return false
@@ -590,7 +619,7 @@ function applyRowInner (state, incoming) {
       // R7 P1-2: land the tombstone with the winner's stamps — planRemoveIds used to re-stamp
       // local now, replacing the true deletion time (wrong delete-ordering on 3+ devices) and
       // producing a tombstone strictly newer than the sender's, which echoed one extra round.
-      if (localRow) state.db.call('planRemoveIds', [{ id: incoming.id, deletedAt: winner.deletedAt || incoming.deletedAt, updatedAt: winner.updatedAt }])
+      if (localRow) busWrite(state, 'planRemoveIds', [{ id: incoming.id, deletedAt: winner.deletedAt || incoming.deletedAt, updatedAt: winner.updatedAt }])
       else return false
     } else if (localRow && localRow.ageUnknown) return false // cross-domain LWW: local age unknown, refuse to clobber
     else state.pendingWrites.plans.push(winner.data) // bulk-buffered via planAddMany at flush
@@ -598,7 +627,7 @@ function applyRowInner (state, incoming) {
     if (incoming.deleted) {
       // Same ghost-tombstone guard as plan: never re-capture a delete for a filter we don't have.
       // R7 P1-2: carry the winner's stamps (see the plan branch — no local re-stamp, no echo bounce).
-      if (localRow) state.db.call('filterDelete', [Number(incoming.id), { deletedAt: winner.deletedAt || incoming.deletedAt, updatedAt: winner.updatedAt }])
+      if (localRow) busWrite(state, 'filterDelete', [Number(incoming.id), { deletedAt: winner.deletedAt || incoming.deletedAt, updatedAt: winner.updatedAt }])
       else return false
     } else if (localRow && localRow.ageUnknown) return false // cross-domain LWW: local age unknown, refuse to clobber
     else state.pendingWrites.filters.push({ ...winner.data, id: Number(incoming.id) }) // bulk-buffered
@@ -609,11 +638,11 @@ function applyRowInner (state, incoming) {
     // whole-document copy has no recycle-bin semantics, and convergence is already guaranteed by
     // the identical-content no-op above (both peers deterministically settle on the newer ts).
     if (winner.deleted) {
-      state.db.call('deleteMeta', incoming.id)
+      busWrite(state, 'deleteMeta', incoming.id)
       return true
     }
     if (!winner.data) return false
-    state.db.call('setMeta', [incoming.id, winner.data.value])
+    busWrite(state, 'setMeta', [incoming.id, winner.data.value])
     // Running-tomato announcements (feature: live cross-device focus countdown): after the
     // peer's announce key landed, fan it out to the renderer. Announce keys pass the
     // machine-local filter on purpose (display-only remote runtime; see tomato-announce.js).
@@ -712,7 +741,7 @@ function flushPendingWrites (state) {
   // command-manifest.js at module load), so a buffer cannot silently lose its manifest census row.
   const flushOne = (list, op) => {
     if (!list || !list.length) return
-    try { state.db.call(op, list) } catch (e) {
+    try { busWrite(state, op, list) } catch (e) {
       ok = false
       log.error(`[LanSync] flush ${op} failed — dropping ${list.length} buffered rows (recoverable via snapshot):`, e && e.message)
     }
@@ -772,4 +801,8 @@ module.exports = {
   flushPendingWrites,
   readMaxOplogSeq,
   writeMetaConflictBackup,
+  // Arch review 2026-09-22 rec #1: the injected-ingress write door (lan-sync-bootstrap routes
+  // its manifest-op writes through the same helper so the engine stays one bus-routed surface).
+  busFor,
+  busWrite,
 }

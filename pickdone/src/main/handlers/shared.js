@@ -36,6 +36,43 @@ function classifyCommitKey (payload) {
   return undefined
 }
 
+/** Arch review 2026-09-22 rec #5 (ls-mirror observability): a FAILED notifySyncChange kick
+ * must not be lost silently — a lost kick means the change never reaches peers until some
+ * later write happens to kick again. makeSyncKick wraps the notify so a throwing kick is
+ * COUNTED, DEFERRED, and retried ONE-SHOT: on the next kick (re-kick on next commit) and via
+ * a short timer (timerMs, unref'd so it never holds the process open). The retry slot holds
+ * the OLDEST lost op — a newer op is dropped in favor of it only when the slot retry also
+ * fails (still bounded: exactly one pending op, one timer, one next-commit retry).
+ * Returns { kick, deferredCount } for unit tests. */
+function makeSyncKick (notify, { timerMs = 750, setTimeout: st = setTimeout, clearTimeout: ct = clearTimeout } = {}) {
+  let deferred = null // oldest lost op awaiting its one-shot retry
+  let timer = null
+  let deferredCount = 0
+  const attempt = op => {
+    try { notify(op); return true } catch { return false }
+  }
+  const retry = () => {
+    timer = null
+    if (deferred == null) return
+    const op = deferred
+    deferred = null
+    if (!attempt(op)) requeue(op) // still failing: re-arm (bounded: one slot)
+  }
+  const requeue = op => {
+    deferredCount++
+    if (deferred == null) deferred = op // keep the OLDEST lost kick; newer losses only count
+    if (!timer) timer = st(retry, timerMs)
+    if (timer && typeof timer.unref === 'function') timer.unref()
+  }
+  return {
+    kick (op) {
+      if (deferred != null) retry() // re-kick the lost op on the next commit first
+      if (!attempt(op)) requeue(op)
+    },
+    get deferredCount () { return deferredCount },
+  }
+}
+
 /** Ownership test for attachment filenames (P2 2026-09-17). saveAttachment names files
  *  `${taskId}_${Date.now()}_${name}`, so a bare startsWith(taskId + '_') let a task whose id is a
  *  prefix of another id ('a' vs 'a_b') delete the other task's files. The segment right after the
@@ -86,4 +123,4 @@ function computeMetaGc (metaKeys, categories, todos) {
   return dead
 }
 
-module.exports = { makeAssertMainWindow, purgeAttachmentFiles, ownsAttachmentFile, computeMetaGc, classifyCommitKey }
+module.exports = { makeAssertMainWindow, purgeAttachmentFiles, ownsAttachmentFile, computeMetaGc, classifyCommitKey, makeSyncKick }
