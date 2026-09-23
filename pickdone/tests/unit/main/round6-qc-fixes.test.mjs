@@ -12,6 +12,7 @@ import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import path from 'node:path'
+import fs from 'node:fs'
 
 const require_ = createRequire(import.meta.url)
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
@@ -27,7 +28,25 @@ test('r6-1: list unknown first token throws USAGE even when --all/--view present
 
 test('r6-2: listTodos invalid --limit falls back to the 200 default', async () => {
   const lib = require_(path.join(root, 'cli/lib.js'))
-  // Direct unit probe of the normalization seam via the documented default contract
+  // Behavioral probe (was source-regex-only, a tautology): seed >200 tasks in an isolated
+  // TODO_DB_DIR, then the normalization seam must hold — invalid limit -> 200 rows, 1 -> 1 row.
+  const os = (await import('node:os')).default
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'r6-2-limit-'))
+  process.env.TODO_DB_DIR = dir
+  try {
+    const now = Date.now()
+    for (let i = 0; i < 205; i++) {
+      lib.addTodo({ content: 'r6-2 seed ' + i, createTime: new Date(now).toISOString() })
+    }
+    const invalid = lib.listTodos({ limit: 'abc' })
+    assert.equal(invalid.length, 200, "limit:'abc' falls back to the 200 default, got " + invalid.length)
+    assert.equal(lib.listTodos({ limit: '1' }).length, 1, 'limit:1 returns exactly 1 row')
+    assert.equal(lib.listTodos({}).length, 200, 'absent limit defaults to 200')
+  } finally {
+    delete process.env.TODO_DB_DIR
+    // The cached sqlite handle keeps todos.db locked on Windows — leave the tmpdir for OS cleanup.
+  }
+  // Source regex kept as a secondary seam guard
   const src = require_('fs').readFileSync(path.join(root, 'cli/lib.js'), 'utf8')
   assert.match(src, /parseInt\(opts\.limit, 10\) \|\| 200, 500\)/)
   assert.ok(typeof lib.listTodos === 'function')
