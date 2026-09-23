@@ -105,6 +105,16 @@ test('F-A4 buildAnnounceValue strips control chars and truncates attachTodoTitle
   // clean title passes through unchanged (no over-sanitization)
   const clean = ta.buildAnnounceValue({ deviceId: 'd', status: 'running', startedAt: 1, plannedSec: 5, attachTodoId: 't', attachTodoTitle: 'Report' })
   assert.equal(clean.attachTodoTitle, 'Report')
+  // review follow-up: deviceName/deviceId are peer-controlled too and deviceName is rendered
+  // verbatim in peer UI chips — same sanitize+cap choke point applies
+  const hostileName = 'N\u202eX\u0007' + 'y'.repeat(200)
+  const v2 = ta.buildAnnounceValue({ deviceId: 'dev\u0001-x', deviceName: hostileName, status: 'running', startedAt: 1, plannedSec: 5 })
+  assert.ok(v2.deviceName.length <= 40 && !/[\u0000-\u001f\u202a-\u202e]/.test(v2.deviceName), 'deviceName sanitized + capped at 40')
+  assert.ok(v2.deviceId.length <= 128 && !/[\u0000-\u001f]/.test(v2.deviceId), 'deviceId sanitized + capped')
+  // legit identity passes through unchanged
+  const v3 = ta.buildAnnounceValue({ deviceId: '0f8a-uuid', deviceName: '书房台式机', status: 'idle' })
+  assert.equal(v3.deviceName, '书房台式机')
+  assert.equal(v3.deviceId, '0f8a-uuid')
 })
 
 /* ---------- F-A6: shared formatMMSS ---------- */

@@ -50,9 +50,15 @@ function isAnnounceKey (key) { return String(key || '').startsWith(KEY_PREFIX) }
  */
 function buildAnnounceValue ({ deviceId, deviceName, status, startedAt, plannedSec, attachTodoId, attachTodoTitle, at } = {}) {
   const now = Number(at) || Date.now()
+  // Review follow-up to F-A4 (2026-09-24): deviceName/deviceId are PEER-CONTROLLED too (a
+  // device names itself at pairing) and deviceName is rendered verbatim in peer UI chips —
+  // sanitize them through the same choke point as the attach fields (transport.js
+  // cleanDeviceName caps names at 40 for the same log-forging reason). parseAnnounce re-runs
+  // this builder, so remote values are re-sanitized on receive; legit ids/names are
+  // alphanumeric + CJK and pass through unchanged.
   const base = {
-    deviceId: String(deviceId || ''),
-    deviceName: String(deviceName || ''),
+    deviceId: sanitizeText(String(deviceId || ''), 128),
+    deviceName: sanitizeText(String(deviceName || ''), 40),
     status: status === 'running' ? 'running' : 'idle',
     startedAt: Number(startedAt) || 0,
     plannedSec: Math.max(0, Number(plannedSec) || 0),
