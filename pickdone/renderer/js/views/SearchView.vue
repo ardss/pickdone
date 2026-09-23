@@ -6,9 +6,9 @@
         <!-- reference: MainNavSearch-isomorphic keyword input -->
         <div class="main-nav-search">
           <div class="main-nav-search__icon"></div>
-          <input ref="inp" v-model="q" spellcheck="false" autocomplete="off" :aria-label="$t('statsC.Search.searchAria')"
+          <input ref="inp" v-model="qText" spellcheck="false" autocomplete="off" :aria-label="$t('statsC.Search.searchAria')"
                  class="main-nav-search__input" type="text" :placeholder="$t('statsC.Search.searchPlaceholder')"/>
-          <div v-if="q.trim()!==''" class="main-nav-search__clear close-x close-x--sm" role="button" tabindex="0" :aria-label="$t('statsC.Search.clearAria')" @click="q=''" @keydown.enter.prevent="q=''"></div>
+          <div v-if="qText.trim()!==''" class="main-nav-search__clear close-x close-x--sm" role="button" tabindex="0" :aria-label="$t('statsC.Search.clearAria')" @click="clearQ" @keydown.enter.prevent="clearQ"></div>
         </div>
         <!-- filters (correspond to the project baseline's three dropdown-selects) -->
         <el-select size="small" class="search-filter-el" style="width:110px"
@@ -83,13 +83,22 @@ const LEGACY_VALUE_MAP = {
   '已完成': 'done', '未完成': 'undone'
 }
 
+// F-C6 (maint/dw wave3): per-keystroke debounce before the keyword lands in the store — the old
+// v-model="q" committed on every input event and re-ran the full-table matchTodo (filter + sort)
+// per keystroke. 180ms sits between typing cadence and perceived immediacy (same debounce family
+// as todo.js VIEWS_DEBOUNCE_MS).
+const SEARCH_DEBOUNCE_MS = 180
+
 export default {
   name: 'SearchView',
   components: { TodoItem, EmptyState },
   data () {
-    return {}
+    // F-C6: local input buffer — the input binds to this; the debounced watcher lands it in the
+    // store. (Binding straight to the store getter made every keystroke a full-table re-match.)
+    return { qText: '' }
   },
   created () {
+    this.qText = this.$store.state.todo.search || ''
     // Normalize legacy persisted Chinese values into stable keys (Chinese enums once mismatched every filter branch under an English UI)
     const st = this.settings
     const patch = {}
@@ -98,13 +107,21 @@ export default {
     }
     if (Object.keys(patch).length) this.$store.commit('settings/updateSettings', patch)
   },
+  beforeUnmount () {
+    // Fire the pending keystroke on teardown so the store never keeps a stale half-typed keyword
+    if (this._qTimer) { clearTimeout(this._qTimer); this._qTimer = null }
+    if (this.qText !== (this.$store.state.todo.search || '')) this.$store.commit('todo/setSearch', this.qText)
+  },
+  watch: {
+    qText (v) {
+      clearTimeout(this._qTimer)
+      this._qTimer = setTimeout(() => { this._qTimer = null; this.$store.commit('todo/setSearch', v) }, SEARCH_DEBOUNCE_MS)
+    }
+  },
   computed: {
     dateRangeOptions () { return DATE_RANGE_OPTIONS.map(o => ({ ...o, label: this.$t(o.labelKey) })) },
     completeOptions () { return COMPLETE_OPTIONS.map(o => ({ ...o, label: this.$t(o.labelKey) })) },
-    q: {
-      get () { return this.$store.state.todo.search || '' },
-      set (v) { this.$store.commit('todo/setSearch', v) }
-    },
+    q () { return this.$store.state.todo.search || '' },
     settings () { return this.$store.state.settings },
     cats () {
       return [{ value: '', label: this.$t('statsC.Search.allCats') }]
@@ -151,7 +168,13 @@ export default {
     resetFilter () { // reference resetFilter: zero out the three options then re-search
       this.$store.commit('settings/updateSettings', { searchCategory: '', searchComplete: '', searchDateRange: '' })
     },
-    patch (k, v) { this.$store.commit('settings/updateSettings', { [k]: v }) }
+    patch (k, v) { this.$store.commit('settings/updateSettings', { [k]: v }) },
+    // F-C6 clear button: bypass the debounce — clearing must take effect immediately
+    clearQ () {
+      clearTimeout(this._qTimer); this._qTimer = null
+      this.qText = ''
+      this.$store.commit('todo/setSearch', '')
+    }
   },
 
 }
