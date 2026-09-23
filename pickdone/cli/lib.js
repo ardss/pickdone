@@ -476,16 +476,6 @@ function toggleComplete (input, target, { withSubtasks, completedAt } = {}) {
       if (Array.isArray(existing) && existing.length) {
         renewed = existing[0]
       } else {
-        const now = Date.now()
-        const sameDay = db.call('queryTodos', { deleted: 0 }).filter(x => x.dayStart === dayStartOf(next.todoTime))
-        // P2 2026-09-20: the renewal instance used a (min+max)/2 MIDPOINT sort, which lands the new
-        // instance in the MIDDLE of the day's ±step chain (renderer new/inserted tasks always go to
-        // an END). Mirrors the renderer's renewal convention (store/todo.js ensureNextRepeatInstance
-        // → addTodo addToTop:false → utils/core.js nextSort): bottom-insert min-512, empty day 1024.
-        const sameSorts = sameDay.map(x => x.taskSort).filter(v => v != null)
-        const taskSort = sameSorts.length ? Math.fround(Math.min(...sameSorts) - 512) : 1024
-        let subs = null
-        try { subs = t.subtasks ? JSON.parse(t.subtasks) : null } catch { /* keep null */ }
         // F3 P2 (2026-09-21, D5 renderer parity — store/todo.js ensureNextRepeatInstance carries
         // `estimate: t.estimate || 0` AND copies it into the per-task meta key, while the CLI twin
         // hardcoded estimate:0): a renewed instance used to silently lose its estimated workload.
@@ -493,24 +483,11 @@ function toggleComplete (input, target, { withSubtasks, completedAt } = {}) {
         // (getEstimateOf(旧taskId)) — the row's estimate COLUMN is dead post-X2 (bumpSnow writes
         // accumulated focus minutes into it), so clamping it 0-20 turned "focused 150 min" into
         // "estimated 20 tomatoes" on the renewed instance.
-        const estimate = Math.max(0, Math.min(20, Math.round(Number(getEstimateOf(t.taskId, t.estimate)) || 0)))
-        // P2-4 single source: carried attributes come from core.renewalCarryFields (shared/repeat-core.mjs) —
-        // the exact same set the renderer's ensureNextRepeatInstance maps onto addTodo; the D5 parity
-        // fixes no longer need to be applied twice.
-        const nt = {
-          complete: false, createTime: now, delete: false,
-          ...core.renewalCarryFields(t, next), estimate,
-          subtasks: subs ? JSON.stringify(subs.map(s => ({ ...s, checked: false }))) : null,
-          image: null, files: null,
-          categoryId: t.categoryId,
-          updateTime: now, syncTime: 0,
-          taskContent: t.taskContent,
-          taskDescribe: t.taskDescribe || '',
-          taskId: core.genTaskId(t.userId, now),
-          taskSort,
-          todoTime: next.todoTime,
-          userId: t.userId, status: 'add', version: 0
-        }
+        const estimate = clampEstimate(getEstimateOf(t.taskId, t.estimate))
+        // F3 P2-4 single source: carried attributes come from core.renewalCarryFields via
+        // buildRenewalInstance (F-B4) — the exact same set the renderer's ensureNextRepeatInstance
+        // maps onto addTodo.
+        const nt = buildRenewalInstance(t, next, { estimate })
         commit('todo', 'put', nt)
         // F3 P2: the estimate column is write-once at the DB layer (U-1) — the live value lives in the
         // per-task meta key `tomatoEstimateState:<taskId>`; copy it there so the renewal keeps its
@@ -533,6 +510,39 @@ function toggleComplete (input, target, { withSubtasks, completedAt } = {}) {
     note: renewed ? 'repeat renewed → ' + renewed.taskId : undefined
   })
   return { completed, renewed }
+}
+
+/** F-B4 (dw wave 3): single constructor for CLI renewal instances — the done path (repeat renewal on
+ *  complete) and repeatOn's future-instance expansion (expand) carried two ~40-line near-verbatim
+ *  object literals. Behavior preserved exactly, including expand's historical estimate:0 (no silent
+ *  behavior change; the done path keeps its live getEstimateOf readback). Sort lands via the shared
+ *  nextSort(false,…) bottom-insert convention instead of the inline min-512:1024 duplication. */
+function buildRenewalInstance (t, next, { estimate = 0, todoTime = next.todoTime, reminderTime, extra = {} } = {}) {
+  const now = Date.now()
+  const sameDay = open().call('queryTodos', { deleted: 0 }).filter(x => x.dayStart === dayStartOf(todoTime))
+  const sameSorts = sameDay.map(x => x.taskSort).filter(v => v != null)
+  // P2 2026-09-20 convention (renderer renewal: store/todo.js addToTop:false → nextSort): bottom-insert
+  // min-512, empty day 1024.
+  const taskSort = Math.fround(nextSort(false, sameSorts.length ? Math.min(...sameSorts) : 0, sameSorts.length ? Math.max(...sameSorts) : 0))
+  let subs = null
+  try { subs = t.subtasks ? JSON.parse(t.subtasks) : null } catch { /* keep null */ }
+  return {
+    complete: false, createTime: now, delete: false,
+    ...core.renewalCarryFields(t, next),
+    reminderTime: reminderTime !== undefined ? reminderTime : next.reminderTime,
+    estimate,
+    subtasks: subs ? JSON.stringify(subs.map(s => ({ ...s, checked: false }))) : null,
+    image: null, files: null,
+    categoryId: t.categoryId,
+    updateTime: now, syncTime: 0,
+    taskContent: t.taskContent,
+    taskDescribe: t.taskDescribe || '',
+    taskId: core.genTaskId(t.userId, now),
+    taskSort,
+    todoTime,
+    userId: t.userId, status: 'add', version: 0,
+    ...extra
+  }
 }
 
 /** Soft delete → recycle bin (deletedAt drives the 30-day auto hard-delete and recycle-bin ordering, aligned with the renderer) */
@@ -852,9 +862,7 @@ function repeatOn (input, rule, count) {
   const base = t.todoTime || t.dayStart || +dayjs().startOf('day')
   // Generation cap: explicit --count wins; otherwise the App's maxRepeat setting (default 2), same as RepeatModal
   const cap = count > 0 ? count : (parseInt(settingsDoc().maxRepeat, 10) || 2)
-  // Template reminder keeps its wall-clock time on each instance (dayjs(ts).hour().minute() re-derive per instance,
-  // same as RepeatModal) — copying the raw timestamp made reminders fire on the template's original date
-  const tplRem = t.reminderTime > 0 ? dayjs(t.reminderTime) : null
+  // Template reminder wall-clock re-derivation now happens per instance inside the loop (F-B4).
   let made = 0
   // P2 2026-09-20: pass the holiday list — expandRepeatDates(base, rule) defaulted to [] so a
   // skipStatutoryHolidays rule still expanded ONTO statutory holidays on the CLI (the renderer
@@ -862,25 +870,16 @@ function repeatOn (input, rule, count) {
   // cli/lib.js:655.
   const holidayList = require('../src/main/core/holidays.js').getHolidayList()
   for (const ts of core.expandRepeatDates(base, rule, holidayList).map(d => +d).filter(ts => ts > base).slice(0, cap)) {
-    const sameDay = db.call('queryTodos', { deleted: 0 }).filter(x => x.dayStart === dayStartOf(ts))
-    const sorts = sameDay.map(x => x.taskSort).filter(v => v != null)
-    // P2 2026-09-20: midpoint → renderer renewal convention (see the complete-path comment above):
-    // bottom-insert min-512, empty day 1024 (store/todo.js addToTop:false → nextSort).
-    const taskSort = sorts.length ? Math.fround(Math.min(...sorts) - 512) : 1024
-    let subs = null
-    try { subs = t.subtasks ? JSON.parse(t.subtasks) : null } catch { /* keep null */ }
-    const now = Date.now()
-    commit('todo', 'put', {
-      complete: false, createTime: now, delete: false,
-      reminderTime: tplRem ? +dayjs(ts).hour(tplRem.hour()).minute(tplRem.minute()).second(0).millisecond(0) : 0,
-      reminderOffsets: Array.isArray(t.reminderOffsets) ? t.reminderOffsets : [], reminderExtra: Array.isArray(t.reminderExtra) ? t.reminderExtra : [],
-      priority: t.priority || 0, deadlineTs: t.deadlineTs || 0, important: t.important || 0, urgent: t.urgent || 0,
-      estimate: 0, difficulty: t.difficulty || 0,
-      repeatId: rid, subtasks: subs ? JSON.stringify(subs.map(x => ({ ...x, checked: false }))) : null,
-      image: null, files: null, categoryId: t.categoryId,
-      updateTime: now, syncTime: 0, taskContent: t.taskContent, taskDescribe: t.taskDescribe || '',
-      taskId: core.genTaskId(t.userId, now), taskSort, todoTime: ts, userId: t.userId, status: 'add', version: 0
-    })
+    // F-B4: shared renewal-instance constructor (done-path parity). reminderTime keeps the template's
+    // wall-clock time on each instance (dayjs re-derive per instance, same as RepeatModal — copying
+    // the raw timestamp made reminders fire on the template's original date). estimate stays 0 and
+    // carries NO meta write-back — historical D5-parity known gap, preserved as-is.
+    const tplRem = t.reminderTime > 0 ? +dayjs(ts).hour(dayjs(t.reminderTime).hour()).minute(dayjs(t.reminderTime).minute()).second(0).millisecond(0) : 0
+    commit('todo', 'put', buildRenewalInstance(t, { todoTime: ts, reminderTime: 0 }, {
+      todoTime: ts,
+      reminderTime: tplRem,
+      extra: { repeatId: rid }
+    }))
     made++
   }
   audit.record({ action: 'repeat.on', targets: [t], changes: [{ after: { rid, rule, made } }], note: 'repeat set, ' + made + ' future instance(s) generated' })
@@ -1879,6 +1878,6 @@ module.exports = {
   setEstimate, getEstimateOf, sortTask, listOn, resolveRecord, recordFix, recordRemove, moveSubtask,
   setReminderOffsets, setReminderExtra, addAttachment, listAttachments, removeAttachment,
   settingsList, settingsSet, settingsDoc, setSettingsRaceHookForTests, planSet, planList, planRemove, dateChangeReminderPatch,
-  SETTINGS_MANIFEST, settingsKnown,
+  SETTINGS_MANIFEST, settingsKnown, normKey, buildRenewalInstance,
   importEvents, eventFocusMinutes, eventKey
 }
