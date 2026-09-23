@@ -70,8 +70,9 @@ test('split: parent still gates the deps block on the two-condition devMode and 
   for (const tag of ['<ep-reminders', '<ep-subtasks', '<ep-attachments', '<ep-dependencies']) {
     assert.ok(src.includes(tag), `parent template missing ${tag}`)
   }
-  // components option wires the children (not global registration)
-  assert.match(src, /components: \{ EpReminders, EpSubtasks, EpAttachments, EpDependencies \}/)
+  // components option wires the children (not global registration); EpTomato/EpTags joined in
+  // maint/dw-wave2 domain-2
+  assert.match(src, /components: \{ EpReminders, EpSubtasks, EpAttachments, EpDependencies, EpTomato, EpTags \}/)
 })
 
 test('split: child view blocks carry their own styles; parent keeps the shared selectors', () => {

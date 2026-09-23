@@ -102,10 +102,11 @@ test('EditPanel: disk deletion timer re-checks the latest store row before delet
 /* ---------------- EditPanel: pomodoro estimate stepper labels ---------------- */
 
 test('EditPanel: estimate −/+ buttons have distinct decrease/increase aria-labels', () => {
-  const src = read('renderer/js/components/EditPanel.vue')
-  assert.match(src, /:aria-label="\$t\('statsG\.EpTomato\.estDecrease'\)" @click\.stop="estDelta\(-1\)"/)
-  assert.match(src, /:aria-label="\$t\('statsG\.EpTomato\.estIncrease'\)" @click\.stop="estDelta\(1\)"/)
-  assert.ok(!/aria-label="\$t\('statsG\.EpTomato\.estTip'\)" @click\.stop="estDelta/.test(src), 'shared hint label removed')
+  // maint/dw-wave2 domain-2 split: the ledger row lives in edit-panel/EpTomato.vue now
+  const src = read('renderer/js/components/edit-panel/EpTomato.vue')
+  assert.match(src, /:aria-label="\$t\('statsG\.EpTomato\.estDecrease'\)" @click\.stop="\$emit\('est-delta', -1\)"/)
+  assert.match(src, /:aria-label="\$t\('statsG\.EpTomato\.estIncrease'\)" @click\.stop="\$emit\('est-delta', 1\)"/)
+  assert.ok(!/aria-label="\$t\('statsG\.EpTomato\.estTip'\)" @click\.stop="\$emit\('est-delta'/.test(src), 'shared hint label removed')
 })
 
 /* ---------------- EditPanel: subtask row a11y/UX ---------------- */
@@ -172,9 +173,11 @@ test('TodoBoxView: dropdown triggers are focusable and open via Enter; menu item
 })
 
 test('SideNav: category rows advertise double-click rename via title', () => {
-  const src = read('renderer/js/components/SideNav.vue')
-  const hits = src.match(/\$t\('statsG\.SideNav\.dblclickRenameTip'\)"/g) || []
-  assert.ok(hits.length >= 3, 'title on folder/child/plain category rows')
+  // maint/dw-wave2 domain-2 split: folder/child/flat rows are one SnCategoryItem — the title
+  // on its single root serves all three variants
+  const src = read('renderer/js/components/side-nav/SnCategoryItem.vue')
+  assert.match(src, /:title="\$t\('statsG\.SideNav\.dblclickRenameTip'\)"/)
+  for (const v of ['folder', 'child', 'flat']) assert.match(src, new RegExp(`'${v}'`), `${v} variant served by the single row component`)
 })
 
 /* ---------------- HabitView ---------------- */

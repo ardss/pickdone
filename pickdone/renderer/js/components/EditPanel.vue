@@ -73,16 +73,7 @@
         <ep-dependencies ref="depBlock" :task="e" @patch="patchPreds"/>
       </div>
 
-      <div class="ep-row ep-tags-row">
-        <span class="ep-field-label ep-field-ico" :title="$t('statsJ.EditPanel.tagsPlaceholder')"><b class="ep-hash">#</b></span>
-        <span v-for="t in taskTags" :key="t" class="ep-tag-chip">
-          #{{ t }}
-          <span class="ep-tag-x close-x" role="button" tabindex="0" :title="$t('statsJ.EditPanel.removePrefix') + t" :aria-label="$t('statsJ.EditPanel.removeTag', { t: t })"
-                @click.stop="removeTag(t)" @keydown.enter.prevent.stop="removeTag(t)"></span>
-        </span>
-        <input class="ep-tag-input" v-model="tagInput" :placeholder="$t('statsJ.EditPanel.addTagHint')" :aria-label="$t('statsJ.EditPanel.addTag')"
-               @keydown.enter.prevent="onTagEnter" @blur="addTag"/>
-      </div>
+      <ep-tags :tags="taskTags" @add="addTag" @remove="removeTag"/>
 
       <div v-if="inRecycle" class="ep-recycle-banner">
         <i class="ico" style="--ico:url('app://app/assets/img/delete_black_48dp.svg');width:16px;height:16px"></i>
@@ -116,27 +107,12 @@
 
       <div class="ep-row ep-prio">
         <img class="ep-ico" src="app://app/assets/img/icon-tune.svg" style="opacity:.6">
-        <span class="ep-diff-label">{{ $t('statsJ.EditPanel.priorityLabel') }}</span><span class="hint-q" :title="$t('statsJ.EditPanel.urgencyHint')">?</span>
+        <span class="ep-diff-label">{{ $t('statsJ.EditPanel.priorityLabel') }}</span><span class="hint-q" role="button" tabindex="0" :title="$t('statsJ.EditPanel.urgencyHint')" :aria-label="$t('statsJ.EditPanel.urgencyHint')">?</span>
         <span class="ep-diff-btns ep-prio-btns">
           <button v-for="pr in PRIOS" :key="pr.v" :class="['prio-'+pr.v, {on:((task&&task.priority)||0)===pr.v}]" @click="fieldPatch('priority', ((task&&task.priority)||0)===pr.v?0:pr.v)">{{ tt(pr.l) }}</button>
         </span>
       </div>
-      <div class="ep-row ep-tomato-est">
-        <img class="ep-ico" src="app://app/assets/img/icon-tomato-timer2.svg" style="opacity:.6">
-        <span class="ep-diff-label">{{ $t('statsG.EpTomato.est') }}</span><span class="hint-q" :title="$t('statsG.EpTomato.estTip')">?</span>
-        <!-- Single ledger: estimated is editable (− number +), actual is read-only (reconciled from focus records; corrections go via the context-menu focus entry) — the pomodoro icon scheme was rejected by the user (±1 per click was ambiguous), reverted to the number version -->
-        <!-- Integrated ledger control (user-finalized 2026-09-03): estimate stepper segment + actual segment share one equal-height housing, whole housing highlights on selection, clicking the actual segment opens the ledger dialog -->
-        <span class="ep-tom-account" :class="{gain: tomatoActual > 0}">
-          <span class="ep-tom-seg ep-tom-seg--est">
-            <button class="ep-tom-step" :aria-label="$t('statsG.EpTomato.estDecrease')" @click.stop="estDelta(-1)">−</button>
-            <span class="ep-tom-num">{{ tomatoEstimateN }}</span>
-            <button class="ep-tom-step" :aria-label="$t('statsG.EpTomato.estIncrease')" @click.stop="estDelta(1)">+</button>
-            <img class="ep-tom-ico" src="app://app/assets/img/icon-tomato-timer2.svg" alt="">
-          </span>
-          <span class="ep-tom-seg ep-tom-seg--act" role="button" tabindex="0"
-                :title="$t('statsG.EpTomato.actTip')" @click.stop="openAccount" @keydown.enter.prevent.stop="openAccount">{{ $t('statsG.EpTomato.act') }} <b>{{ tomatoActual }}</b></span>
-        </span>
-      </div>
+      <ep-tomato :estimate="tomatoEstimateN" :actual="tomatoActual" @est-delta="estDelta" @open="openAccount"/>
 
       <!-- Whole row clickable to summon the calendar (user-finalized: not just the right pill); the clear ✕ carries its own stop and is unaffected -->
       <div class="ep-row ep-deadline" role="button" tabindex="0" :aria-label="$t('statsJ.EditPanel.setDeadline')"
@@ -193,6 +169,8 @@ import EpReminders from './edit-panel/EpReminders.vue'
 import EpSubtasks from './edit-panel/EpSubtasks.vue'
 import EpAttachments from './edit-panel/EpAttachments.vue'
 import EpDependencies from './edit-panel/EpDependencies.vue'
+import EpTomato from './edit-panel/EpTomato.vue'
+import EpTags from './edit-panel/EpTags.vue'
 
 const FIELD_MAP = {
   title: 'taskContent',
@@ -221,14 +199,13 @@ function attachmentUrlPresent (row, url) {
 
 export default {
   name: 'EditPanel',
-  components: { EpReminders, EpSubtasks, EpAttachments, EpDependencies },
+  components: { EpReminders, EpSubtasks, EpAttachments, EpDependencies, EpTomato, EpTags },
   data () {
     return {
       e: null as any,
       saving: false,
       saveFailed: false,
       catOpen: false,
-      tagInput: '',
       subList: [] as any,
       imgList: [] as any,
       fileList: [] as any,
@@ -709,15 +686,9 @@ export default {
       this.markDirty('preds'); this.queueSave({})
     },
     tt (k) { const s = String(k || ''); return (s.startsWith('statsE.') || s.startsWith('statsJ.')) ? this.$t(s) : s },
-    // IME guard: the Enter that commits a composition (keyCode 229) must not add a half-typed tag
-    onTagEnter (e) {
-      if (e.isComposing || e.keyCode === 229) return
-      this.addTag()
-    },
-    addTag () {
-      const name = (this.tagInput || '').trim().replace(/^#+/, '')
-      this.tagInput = ''
-      if (!name || this.taskTags.includes(name)) return
+    // EpTags emits a cleaned, deduped tag name; the title hash-token rewrite + persistence stay here
+    addTag (name) {
+      if (!this.e || !name) return
       const base = (this.e.title || '').replace(/\s+$/, '')
       this.fieldPatch('title', base + ' #' + name)
     },
@@ -927,6 +898,9 @@ export default {
 /* danger-btn 并入同一 hover(双轨合一) */
 
 /* —— 编辑面板 a11y 补丁：键盘焦点可见 / 伪可点击收敛 —— */
+/* 帮助提示「?」(hint-q):键盘/读屏可达( tabindex=0 + aria-label,与 title 同 i18n key),聚焦可见 */
+.hint-q { cursor: help; }
+.hint-q:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; border-radius: var(--radius-sm); }
 /* 隐藏清除/删除 ✕ 仅 hover 显现，键盘聚焦时必须可见（选择器横跨父子组件块，统一留父层——全局样式仍命中子组件 DOM） */
 .ep-remind-clear:focus-visible, .ep-sub-x:focus-visible, .ep-sub-move i:focus-visible { opacity: 1; }
 /* 键盘焦点环：行/chip/选项/工具统一品牌色描边 */
@@ -984,8 +958,7 @@ html[data-theme="dark"] .ep-chip:active, html[data-theme="dark"] .ep-date-chip:a
 .ep-cats { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; padding-left: 2px; }
 .ep-tags-row { flex-wrap: wrap; row-gap: var(--space-1); border-bottom: 1px solid #f0f0f0; }
 .ep-date-chips { position: relative; display: flex; gap: 6px; flex-wrap: nowrap; margin: 10px 0 4px; }
-/* —— 5. 右编辑栏：设计稿 .right-sidebar[scoped]{min-width:335px;border-left:#f3f3f3} —— */
-/* 右侧编辑栏（right-sidebar）：布局+覆盖层模式合一(此前散在 SideNav 两处+此处三条,含一个 !important 对轰)
+/* —— 5. 右编辑栏：设计稿 .right-sidebar[scoped]{min-width:335px;border-left:#f3f3f3} —— *//* 右侧编辑栏（right-sidebar）：布局+覆盖层模式合一(此前散在 SideNav 两处+此处三条,含一个 !important 对轰)
    覆盖层模式(设计稿行为:滑出覆盖内容,不推挤布局);收起把手以本面板为定位锚点 */
 .edit-panel {
   position: fixed;
