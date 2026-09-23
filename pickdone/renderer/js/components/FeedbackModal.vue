@@ -4,7 +4,7 @@
   <transition name="fade">
     <div class="modal-container" @click.self="close">
       <div class="modal-tablecloth" @click.self="close">
-        <div class="modal" role="dialog" aria-modal="true" :aria-label="$t('feedback.title')" style="width:460px;max-width:min(460px,92vw);max-height:88%">
+        <div class="modal" role="dialog" aria-modal="true" :aria-label="$t('feedback.title')" style="width:460px;max-width:min(460px,92vw);max-height:88%" @keydown.esc="close">
           <div class="modal__header"><span>{{ $t('feedback.title') }}</span><div class="modal__close close-x" role="button" tabindex="0" :aria-label="$t('feedback.title')" @click="close" @keydown.enter.prevent="close"></div></div>
           <div class="modal__body">
             <div class="fb-type-row" role="radiogroup" :aria-label="$t('feedback.typeLabel')">
