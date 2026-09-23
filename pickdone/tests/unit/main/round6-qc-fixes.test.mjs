@@ -46,8 +46,8 @@ test('r6-2: listTodos invalid --limit falls back to the 200 default', async () =
     delete process.env.TODO_DB_DIR
     // The cached sqlite handle keeps todos.db locked on Windows — leave the tmpdir for OS cleanup.
   }
-  // Source regex kept as a secondary seam guard
-  const src = require_('fs').readFileSync(path.join(root, 'cli/lib.js'), 'utf8')
+  // Source regex kept as a secondary seam guard (the normalization now lives in cli/lib-tasks.cjs)
+  const src = require_('fs').readFileSync(path.join(root, 'cli/lib-tasks.cjs'), 'utf8')
   assert.match(src, /parseInt\(opts\.limit, 10\) \|\| 200, 500\)/)
   assert.ok(typeof lib.listTodos === 'function')
 })
