@@ -202,14 +202,22 @@ test('F5: concurrent-socket cap refuses connections beyond the limit and recover
   })
   const s1 = await mk()
   const s2 = await mk()
-  const refused = new Promise(resolve => {
-    const s3 = net.connect({ host: '127.0.0.1', port })
-    s3.on('close', resolve)
-    s3.on('error', resolve)
-    setTimeout(resolve, 3000)
+  let s3 = null
+  // Regression guard (was assert.ok(true)): while both slots are held, the 3rd connection must be
+  // actively torn down by the server (close or error) — a hung, silently-accepted socket used to
+  // pass because all three outcomes funneled into the same resolve. The timeout is a FAIL now.
+  const refused = new Promise((resolve, reject) => {
+    s3 = net.connect({ host: '127.0.0.1', port })
+    let gotData = false
+    s3.on('data', () => { gotData = true })
+    s3.on('close', () => resolve({ how: 'closed', gotData }))
+    s3.on('error', e => resolve({ how: 'error:' + (e.code || e.message), gotData }))
+    setTimeout(() => reject(new Error('over-limit socket neither closed nor errored within 3s — connections beyond maxSockets hang instead of being refused')), 3000)
   })
-  await refused
-  assert.ok(true, 'the 3rd connection was closed/refused by the server')
+  const outcome = await refused
+  assert.ok(outcome.how === 'closed' || /^error:ECONN/.test(outcome.how), '3rd connection was torn down by the server, got: ' + outcome.how)
+  assert.equal(outcome.gotData, false, 'the refused socket never received protocol data')
+  s3.destroy()
   s1.destroy()
   await sleep(100)
   const s4 = await mk()

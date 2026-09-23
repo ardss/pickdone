@@ -17,7 +17,7 @@
 const fs = require('fs')
 const path = require('path')
 
-const ROOT = path.resolve(__dirname, '..', '..', '..')
+const ROOT = path.resolve(__dirname, '..', '..') // pickdone/cli -> repo root (was THREE levels up: READMEs never found, mediaRefs always [], gate permanently fake-green)
 const README_EN = path.join(ROOT, 'README.md')
 const README_ZH = path.join(ROOT, 'README.zh-CN.md')
 
@@ -33,6 +33,9 @@ function mediaRefs (file) {
 
 const problems = []
 for (const [file, isEn] of [[README_EN, true], [README_ZH, false]]) {
+  // 2026-09-23 P3: a missing README previously returned zero mediaRefs and the gate exited GREEN —
+  // scan-surface collapse. Fail closed like check-tokens.js (missing checked object = red).
+  if (!fs.existsSync(file)) { problems.push(`scan surface missing: ${file} — the gate has nothing to scan, refusing the fake green`); continue }
   for (const ref of mediaRefs(file)) {
     if (/^(https?:)?\/\//.test(ref)) continue // remote assets are out of scope
     const abs = path.resolve(ROOT, ref)

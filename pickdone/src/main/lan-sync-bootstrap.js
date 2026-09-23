@@ -31,7 +31,7 @@ const { SYNC_SCHEMA_VERSION } = require('../../shared/sync-core/merge.mjs')
 const { generatePairingSecret, derivePairingCode } = require('../../shared/sync-core/pairing.mjs')
 const { createLanSyncNode } = require('./lan-sync/index')
 const { DEFAULT_PORT } = require('./lan-sync/transport')
-const { isDialableHost, isPlausibleHost } = require('./lan-sync/discovery')
+const { isDialableHost } = require('./lan-sync/discovery') // isPlausibleHost dropped with the retired syncAddPeer chain (2026-09-23)
 const syncOps = require('./db-sync-ops')
 
 // settings_rows keys (never synced: hydration skips the 'sync.' namespace, otherwise peers would adopt each other's identity)
@@ -246,11 +246,8 @@ function manualPeers () {
   try { return JSON.parse(settingGet(K_MANUAL_PEERS) || '[]') || [] } catch { return [] }
 }
 
-function persistManualPeer (entry) {
-  const list = manualPeers().filter(x => !(x.host === entry.host && Number(x.port) === Number(entry.port)))
-  list.push(entry)
-  settingPut(K_MANUAL_PEERS, JSON.stringify(list))
-}
+// (2026-09-23) persistManualPeer removed with the syncAddPeer IPC chain it only served; the
+// K_MANUAL_PEERS restore loop stays as a legacy drain for data written before manual entry was retired.
 
 /* ---------- Round-1 P0 (2026-09-21): paired-peer persistence + address hygiene.
  * Extracted to lan-sync/paired-peers.js (structure size ratchet) — settings access is
@@ -871,19 +868,6 @@ function registerOps () {
       startSync()
       runRound().then(persistPeerWatermarks)
       return { ...getSettingsPayload(), peer: r.peer }
-    },
-    syncAddPeer: p => {
-      const host = String((p && p.host) || '').trim()
-      const port = Number((p && p.port) || 58471)
-      // Round-5 P1: strict manual-entry validation (discovery.isPlausibleHost) — the old loose
-      // /^[.:\w-]+$/ regex accepted undialable junk ("...", "a..b") that got persisted and then
-      // failed every dial forever.
-      if (!isPlausibleHost(host)) throw new Error('syncAddPeer: host must be a dialable IP or hostname')
-      if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('syncAddPeer: invalid port')
-      if (!state.node) throw new Error('syncAddPeer: sync is not enabled')
-      persistManualPeer({ host, port })
-      // placeholder id until the first authenticated hello reveals the peer's real identity
-      return state.node.addPeer({ deviceId: 'manual-' + host + ':' + port, host, port, name: (p && p.name) || undefined })
     },
     // Two-way confirmed pairing: respond to the pending inbound pair-request (from syncEvent
     // 'pair-request'). The transport's 60s timer already auto-rejects on silence.

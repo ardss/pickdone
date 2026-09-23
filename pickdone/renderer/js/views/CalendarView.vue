@@ -111,6 +111,8 @@ function wdLabel (t, d) { return t('statsJ.CalendarView.wd' + ((d + 6) % 7)) }
 // actual calls all go through the this.wd(d) method (below), keeping Vue template compilation friendly.
 
 import { loadSolarLunar } from '../utils/lunar.js'
+import { weekGridStart } from '../utils/weekGrid.js'
+import { today0, dayStart } from '../utils/todayBounds.js'
 const LUNAR = () => loadSolarLunar().then(m => {
   const sl = m.default || m
   // ISC-licensed solarlunar (the former js-calendar-converter was GPL, so the library had to be swapped); adapts IDayCn/IMonthCn fields so callers need zero changes
@@ -127,9 +129,12 @@ export default {
     return { cal: null, cursorTs: 0, lunarMap: {}, view: 'dayGridMonth', tbWeekStart: 0, tbDragTask: null, morePop: null, busyDays: null, monthPop: false, popYear: dayjs().year(), selMonthTs: 0, todayInView: true }
   },
   computed: {
-    /* ===== Time block view ===== */ tbDays () {
-      const start = this.tbWeekStart || +dayjs().startOf('week')
-      const today = +dayjs().startOf('day')
+    /* ===== Time block view ===== */
+    // Fix (domain-3, 2026-09-23): the time-block week now follows settings.weekStartDay instead of
+    // the dayjs default (Sunday — no dayjs locale is set in the renderer), matching DayDateStrip's grid.
+    tbDays () {
+      const start = this.tbWeekStart || weekGridStart(Date.now(), this.settings.weekStartDay === 'sun')
+      const today = today0()
       return Array.from({ length: 7 }, (_, i) => {
         const ts = start + i * 86400000
         return { ts, label: wdLabel(this.$t.bind(this), dayjs(ts).day()), dom: dayjs(ts).date(), isToday: ts === today }
@@ -138,7 +143,7 @@ export default {
     tbHours () { return Array.from({ length: 18 }, (_, i) => i + 6) },
     tbRowH () { return 56 },
     tbPool () {
-      const start = this.tbWeekStart || +dayjs().startOf('week')
+      const start = this.tbWeekStart || weekGridStart(Date.now(), this.settings.weekStartDay === 'sun')
       const end = start + 7 * 86400000
       return this.$store.state.todo.todoList.filter(t => {
         if (t.complete || t.delete || !t.dayStart || t.dayStart < start || t.dayStart >= end) return false
@@ -254,18 +259,18 @@ export default {
         initialDate: initialDateTs || undefined,
         // On view/date change, refresh the "today" anchor visibility and the year-month panel selection (drives template re-render)
         datesSet (info) {
-          const t = dayjs().startOf('day')
+          const t = dayjs(today0())
           self.todayInView = !t.isBefore(dayjs(info.view.currentStart).startOf('day')) &&
                              !t.isAfter(dayjs(info.view.currentEnd).startOf('day'))
           // Reactive cursor: rangeText is a computed, but cal.getDate() is non-reactive — once computed, it's cached forever,
           // freezing the title after paging (a real regression, caught by the corrupted ui-smoke). Title/month panel are both driven from here.
           const d = dayjs(info.view.currentDate || info.view.currentStart)
-          self.cursorTs = +d.startOf('day')
+          self.cursorTs = dayStart(d)
           self.selMonthTs = +d.startOf('month')
         },
         // "+N" -> 自绘日浮层(与格子右上角展开钮共用 openDayPeek)
         moreLinkClick (info) {
-          self.openDayPeek(+dayjs(info.date).startOf('day'), info.dayEl)
+          self.openDayPeek(dayStart(info.date), info.dayEl)
           return false
         },
         // Drag to reschedule (interaction plugin); only changing the start date is allowed, not stretching the span
@@ -273,7 +278,7 @@ export default {
         eventDurationEditable: false,
         eventDrop (info) {
           self._droppedAt = Date.now()
-          const ts = +dayjs(info.event.start).startOf('day')
+          const ts = dayStart(info.event.start)
           if (self._dragInfo && ts !== self._dragInfo.origTs) {
             const origTs = self._dragInfo.origTs
             // Same semantics as list/card drag: moveWithUndo provides the unified "moved to X + undo"
@@ -288,7 +293,7 @@ export default {
           }
         },
         eventDragStart (info) {
-          self._dragInfo = { taskId: info.event.id, origTs: +dayjs(info.event.start).startOf('day') }
+          self._dragInfo = { taskId: info.event.id, origTs: dayStart(info.event.start) }
           self._autoNav = 0
           self._edgeDir = 0
           self._edgeTimer = null
@@ -409,7 +414,7 @@ export default {
       if (v === 'timeblock') {
         if (this.cal) { this.cal.destroy(); this.cal = null }
       } else if (wasTb || !this.cal) {
-        const d = this.cal ? +dayjs(this.cal.getDate()).startOf('day') : 0
+        const d = this.cal ? dayStart(this.cal.getDate()) : 0
         this.$nextTick(() => this.renderCalendar(d))
       } else {
         this.cal.changeView(v)
@@ -464,7 +469,7 @@ export default {
     },
     nav (dir) {
       if (this.view === 'timeblock') {
-        this.tbWeekStart = (this.tbWeekStart || +dayjs().startOf('week')) + dir * 7 * 86400000
+        this.tbWeekStart = (this.tbWeekStart || weekGridStart(Date.now(), this.settings.weekStartDay === 'sun')) + dir * 7 * 86400000
         return
       }
       if (!this.cal) return
@@ -477,7 +482,7 @@ export default {
           if (!this.cal) return
           const firstAfter = (document.querySelector('.fc-daygrid-day') || { getAttribute: () => null }).getAttribute('data-date')
           if (firstAfter && firstBefore && firstAfter === firstBefore) {
-            this.renderCalendar(+dayjs(this.cal.getDate()).startOf('day'))
+            this.renderCalendar(dayStart(this.cal.getDate()))
           }
         }, 600)
       })
@@ -551,14 +556,14 @@ export default {
       if (create && create.dataset.createDate) {
         e.stopPropagation()
         e.preventDefault()
-        this.createAt(+dayjs(create.dataset.createDate).startOf('day'))
+        this.createAt(dayStart(create.dataset.createDate))
         return
       }
       const btn = e.target.closest && e.target.closest('.day-expand-btn')
       if (!btn || !btn.dataset.expandDate) return
       e.stopPropagation()
       e.preventDefault()
-      this.openDayPeek(+dayjs(btn.dataset.expandDate).startOf('day'), btn.closest('.fc-daygrid-day'))
+      this.openDayPeek(dayStart(btn.dataset.expandDate), btn.closest('.fc-daygrid-day'))
     }
     if (this.$refs.fcEl) this.$refs.fcEl.addEventListener('click', this._onExpandClick, true)
     // Initial view: route query takes priority (deep link/refresh), then the localStorage memory (time block view is restored too; it used to be ignored and fall back to month view)

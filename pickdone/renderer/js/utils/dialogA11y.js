@@ -3,7 +3,10 @@
  *  - Tab/Shift+Tab cycles among the first/last focusable elements; focus must not escape the dialog to operate the underlying layer
  *  - Escape triggers @close/@cancel (if present); the caller handles business logic inside close()
  *  beforeUnmount restores the _dlgPrevFocus recorded at mounted time
- *  Note: this mixin only manages the focus fence and does not close the dialog directly — the caller component must listen for the dialogEscape event and handle it itself */
+ *  Escape contract: the mixin itself closes the dialog — capture-phase keydown calls this.close()
+ *  if defined, else this.onCancel(), else $emit('close'). The root node should also carry
+ *  @keydown.esc so Escape still works when focus sits inside an INPUT/TEXTAREA (the mixin defers
+ *  to native behavior there and does not fire). No separate escape event exists — never wire one. */
 // In DOM order (querySelectorAll multiple times would be reordered by CSS cascade, splitting them loses order); filters disabled/hidden secondarily
 const FOCUSABLE = 'input, textarea, select, button, [href], [tabindex]'
 

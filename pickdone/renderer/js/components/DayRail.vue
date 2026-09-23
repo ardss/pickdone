@@ -115,6 +115,8 @@ import { taskContextMenu } from '../utils/taskMenu.js'
 import * as dayPlans from '../utils/dayPlans.js'
 import { dayPlannedLoad, loadLevel } from '../utils/loadWarn.js'
 import { getEstimate } from '../utils/tomatoEstimate.js'
+import { mmToHHmm } from '../utils/tomatoShared.js'
+import { today0 } from '../utils/todayBounds.js'
 const DAY_START_H = 0
 const DAY_END_H = 23
 
@@ -326,8 +328,8 @@ export default {
       return list
     },
     /* Follow the right column's date strip (user-finalized): the time rail shows the selected day, not just today — can review history / plan the future */
-    selTs () { return this.$store.state.ui.daySelectedTs || +dayjs().startOf('day') },
-    isViewingToday () { return this.selTs === +dayjs().startOf('day') },
+    selTs () { return this.$store.state.ui.daySelectedTs || today0() },
+    isViewingToday () { return this.selTs === today0() },
     headLabel () {
       if (this.isViewingToday) return this.$t('statsA.core.today')
       const d = dayjs(this.selTs)
@@ -610,7 +612,8 @@ export default {
     /* Record segment click/right-click = openEntry (unified correction panel); the old changeLinkedTask
        right-click menu was removed (zero callers repo-wide after the seg-drop linkage fix) */
     /* Entry card unified entry: single-click block = edit; double-click/right-click empty rail = backfill at this moment; start/end precise to the minute, no more snapping to whole hours */
-    minToHHmm (m) { const v = Math.max(0, Math.min(1439, Math.round(m))); return String(Math.floor(v / 60)).padStart(2, '0') + ':' + String(v % 60).padStart(2, '0') },
+    // thin delegate — single source in utils/tomatoShared.js (clamping semantics preserved there)
+    minToHHmm (m) { return mmToHHmm(m) },
     minToDate (m) { const d = new Date(); d.setHours(0, 0, 0, 0); d.setMinutes(Math.max(0, Math.min(1439, Math.round(m)))); return d },
     dateToMin (d) { if (!(d instanceof Date)) return 0; return d.getHours() * 60 + d.getMinutes() },
     hhmmToMin (v) { const p = String(v || '').split(':'); const m = (parseInt(p[0], 10) || 0) * 60 + (parseInt(p[1], 10) || 0); return Math.max(0, Math.min(1439, m)) },

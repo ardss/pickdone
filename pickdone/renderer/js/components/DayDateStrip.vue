@@ -61,12 +61,10 @@
  */
 import { dayjs, DAY_MS } from '../utils/core.js'
 import store from '../store/index.js'
+import { calGridOffset, weekHeaderOrder } from '../utils/weekGrid.js'
 
-// [component-fixes] pure-start (extracted verbatim by tests/component-fixes-renderer.test.mjs)
-/** Leading-blank offset for a week-based grid honoring the week-start setting (Mon default / Sun optional) */
-function calGridOffset (dayOfWeek, weekFromSun) { return weekFromSun ? dayOfWeek : (dayOfWeek + 6) % 7 }
-/** Column order mapped to the wd0(Sun)..wd6(Sat) i18n keys for the chosen week start */
-function weekHeaderOrder (weekFromSun) { return weekFromSun ? [0, 1, 2, 3, 4, 5, 6] : [1, 2, 3, 4, 5, 6, 0] }
+// [component-fixes] pure-start — calGridOffset/weekHeaderOrder moved 2026-09-23 to utils/weekGrid.js
+// (single source shared with CalendarView/FilterView/chartModels; the component imports them above).
 /** U-16: the calendar-popover month that must be shown for a selected day ts (popover open syncs
  *  calMonth to this — deep links and ‹ › month-crossing week shifts used to leave a stale grid) */
 function calMonthFor (ts) { return dayjs(ts).format('YYYY-MM') }

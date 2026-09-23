@@ -126,11 +126,10 @@ import { dayjs, FMT } from '../utils/core.js'
 import { genTomatoId } from '../utils/core.js'
 import { loadRuntime, saveRuntime } from '../store/runtimeState.js'
 import dialogA11y from '../utils/dialogA11y.js'
+import { secToHHmmss } from '../utils/tomatoShared.js'
 
-function fmtSec (sec) {
-  const s = Math.max(0, Math.round(sec))
-  return `${String(Math.floor(s / 3600)).padStart(2, '0')}:${String(Math.floor(s % 3600 / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
-}
+// thin delegate — single source in utils/tomatoShared.js (extracted verbatim 2026-09-23)
+const fmtSec = secToHHmmss
 
 export default {
   name: 'TomatoFocusRecord',

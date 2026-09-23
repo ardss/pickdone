@@ -93,7 +93,7 @@ const i18n = (window.VueI18n && window.VueI18n.createI18n)
 // Context-free fallback lookup: when the i18n instance is unavailable (e.g. node unit-test environments), look the key up directly in the flat table
 function flatOf (o, prefix, dst) {
   for (const k of Object.keys(o)) {
-    const kk = prefix ? prefix + '' + k : k
+    const kk = prefix ? prefix + '.' + k : k
     if (o[k] && typeof o[k] === 'object') flatOf(o[k], kk, dst)
     else dst[kk] = o[k]
   }

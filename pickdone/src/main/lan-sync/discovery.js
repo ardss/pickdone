@@ -21,7 +21,21 @@ const SERVICE_TYPE = 'pickdone-sync'
 // Bumped 1 -> 2 with the encrypted transport (cipher.js): protoVer is advertised, not
 // enforced, but stays consistent with transport.js PROTO_VER semantics.
 const PROTO_VER = 2
-const FALLBACK_PORT = 58471
+// UDP fallback port. WinNAT reserved ranges DRIFT BETWEEN REBOOTS and can swallow 58471 whole
+// (bind EACCES; 2026-09-23 verified live: excluded range 58439-58538) — same environment failure
+// class as the pickFreePort fix (c2e17f57). Candidates therefore span four discontiguous spans and
+// the first BINDABLE port wins (bind-failure -> next candidate, never a silent dead channel).
+// LAN_SYNC_UDP_FALLBACK_PORT pins a specific port as a manual escape hatch for fragmented networks
+// (all peers on a LAN must broadcast on the same port; the deterministic candidate order makes
+// healthy hosts converge on 58471 anyway).
+const FALLBACK_PORT = 58471 // canonical port; first candidate (kept exported for compat)
+const FALLBACK_PORT_CANDIDATES = [
+  ...(Number(process.env.LAN_SYNC_UDP_FALLBACK_PORT) > 0 ? [Number(process.env.LAN_SYNC_UDP_FALLBACK_PORT)] : []),
+  FALLBACK_PORT,
+  39071,
+  44071,
+  20071,
+]
 const FALLBACK_INTERVAL_MS = 2000
 // Bounded bookkeeping (round-3 review): a UDP/mDNS flood of forged deviceIds must not grow the
 // peer map without limit. Beyond MAX_PEERS the least-recently-seen peer is evicted.
@@ -126,6 +140,9 @@ function createDiscovery() {
   let udp = null
   let udpTimer = null
   let stopped = false
+  let candidateIdx = 0 // UDP fallback bind-candidate cursor (see FALLBACK_PORT_CANDIDATES)
+  let udpBound = false
+  let fallbackPort = 0 // the port this instance actually bound (0 = none yet)
 
   function upsertPeer(info) {
     if (!info || typeof info.deviceId !== 'string' || !info.deviceId) return null
@@ -195,8 +212,27 @@ function createDiscovery() {
   }
 
   function startUdpFallback({ deviceId, name, port }) {
-    udp = dgram.createSocket({ type: 'udp4', reuseAddr: true })
+    candidateIdx = 0
+    udpBound = false
     const payload = Buffer.from(JSON.stringify({ deviceId, name: name || deviceId, port, protoVer: PROTO_VER }))
+    // A fresh socket per attempt: a socket whose bind failed is closed and cannot be re-bound.
+    const tryBind = () => {
+      if (udp) { try { udp.close() } catch { /* noop */ } }
+      udp = dgram.createSocket({ type: 'udp4', reuseAddr: true })
+      attachUdpHandlers()
+      const port = FALLBACK_PORT_CANDIDATES[candidateIdx++]
+      udp.bind(port, () => {
+        udpBound = true
+        fallbackPort = port // only on SUCCESS — an in-flight attempt must not read as bound
+        udp.setBroadcast(true)
+        udpTimer = setInterval(() => {
+          udp.send(payload, port, '255.255.255.255', () => {})
+        }, FALLBACK_INTERVAL_MS)
+        udpTimer.unref?.()
+      })
+    }
+    // Handlers are re-attached per bind attempt (tryBind builds a fresh socket each time).
+    function attachUdpHandlers () {
     udp.on('message', (buf, rinfo) => {
       try {
         // Per-source rate limit (round-3 review): a flood of UDP broadcasts from one IP must not
@@ -234,18 +270,22 @@ function createDiscovery() {
       } catch { /* malformed broadcast */ }
     })
     udp.on('error', (err) => {
+      // Bind-phase failure (WinNAT excluded range / port occupied): walk to the next candidate
+      // instead of leaving a dead channel (2026-09-23 root fix, c2e17f57 precedent). After the
+      // socket IS bound, keep the old behavior — a later EADDRINUSE from a second instance must
+      // not kill the app; just leave a trace. Never fully silent either way.
+      if (!udpBound && err && /^(EACCES|EADDRINUSE|EADDRNOTAVAIL)$/.test(err.code || '')) {
+        if (candidateIdx < FALLBACK_PORT_CANDIDATES.length) tryBind()
+        else try { require('electron-log').warn('[LanSync] UDP discovery fallback: no bindable candidate port from', FALLBACK_PORT_CANDIDATES.join('/')) } catch { /* noop */ }
+        return
+      }
       // Best-effort fallback, but never silent: an unlogged bind/send failure made the whole
       // discovery channel look healthy while discovering nothing. Keep the socket alive (a later
       // EADDRINUSE from a second instance must not kill the app); just leave a trace.
       try { require('electron-log').warn(`[LanSync] UDP discovery fallback error${err && err.code ? ' (' + err.code + ')' : ''}:`, err && err.message) } catch { /* electron-log unavailable in pure-node contexts */ }
     })
-    udp.bind(FALLBACK_PORT, () => {
-      udp.setBroadcast(true)
-      udpTimer = setInterval(() => {
-        udp.send(payload, FALLBACK_PORT, '255.255.255.255', () => {})
-      }, FALLBACK_INTERVAL_MS)
-      udpTimer.unref?.()
-    })
+    }
+    tryBind()
   }
 
   function discover(onFound) {
@@ -279,6 +319,8 @@ function createDiscovery() {
     if (advertisedService) { try { advertisedService.stop() } catch { /* noop */ } advertisedService = null }
     if (bonjour) { try { bonjour.destroy() } catch { /* noop */ } bonjour = null }
     if (udp) { try { udp.close() } catch { /* noop */ } udp = null }
+    fallbackPort = 0
+    udpBound = false
   }
 
   return {
@@ -286,9 +328,10 @@ function createDiscovery() {
     discover,
     stop,
     getPeers: () => Array.from(peers.values()),
+    udpFallbackPort: () => fallbackPort, // test hook: which candidate actually bound
     on: em.on.bind(em),
     _upsertPeer: upsertPeer, // test hook (injected peer lists)
   }
 }
 
-module.exports = { createDiscovery, SERVICE_TYPE, PROTO_VER, FALLBACK_PORT, pickAdvertisedAddress, isDialableHost, isPlausibleHost, hostScore }
+module.exports = { createDiscovery, SERVICE_TYPE, PROTO_VER, FALLBACK_PORT, FALLBACK_PORT_CANDIDATES, pickAdvertisedAddress, isDialableHost, isPlausibleHost, hostScore }

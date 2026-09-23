@@ -131,6 +131,53 @@ test('F2: UDP fallback discovery stores the sender address (rinfo.address) as th
   }
 })
 
+test('F2: UDP fallback walks to the next candidate when the pinned port is unbindable (WinNAT excluded ranges drift between reboots)', async () => {
+  const dgram = require('node:dgram')
+  const Module = require('module')
+  const origLoad = Module._load
+  const origCreateSocket = dgram.createSocket
+  let D = null
+  try {
+    // Pin a recognizable dead candidate AND sabotage the first bind attempt deterministically
+    // (Windows grants SO_REUSEADDR binds on almost any port, so an OS-level EACCES cannot be
+    // staged reliably — the real-world trigger is WinNAT excluded ranges, which shift per boot).
+    process.env.LAN_SYNC_UDP_FALLBACK_PORT = '58477'
+    let sabotaged = 1
+    dgram.createSocket = function (...args) {
+      const s = origCreateSocket.apply(dgram, args)
+      const origBind = s.bind.bind(s)
+      s.bind = function (...bindArgs) {
+        if (sabotaged > 0) {
+          sabotaged--
+          process.nextTick(() => s.emit('error', Object.assign(new Error('sabotaged bind (test)'), { code: 'EACCES' })))
+          return s
+        }
+        return origBind(...bindArgs)
+      }
+      return s
+    }
+    Module._load = function (request, parent, isMain) {
+      if (request === 'bonjour-service') throw new Error('stubbed unavailable (UDP fallback test)')
+      return origLoad.call(this, request, parent, isMain)
+    }
+    // FALLBACK_PORT_CANDIDATES is built at require time — env must be set BEFORE the re-require.
+    delete require.cache[require.resolve('../../../src/main/lan-sync/discovery.js')]
+    const { createDiscovery: createUdpDiscovery } = require('../../../src/main/lan-sync/discovery.js')
+    D = createUdpDiscovery()
+    D.startAdvertising({ deviceId: 'udp-c', name: 'UDP-C', port: 58493 })
+    const t0 = Date.now()
+    while (Date.now() - t0 < 5000 && !D.udpFallbackPort()) await sleep(100)
+    const bound = D.udpFallbackPort()
+    assert.ok(bound > 0, 'a fallback candidate port actually bound')
+    assert.notEqual(bound, 58477, 'the failed pinned candidate was ABANDONED, not retried forever (walk moved to the next candidate)')
+  } finally {
+    delete process.env.LAN_SYNC_UDP_FALLBACK_PORT
+    dgram.createSocket = origCreateSocket
+    Module._load = origLoad
+    try { if (D) D.stop() } catch { /* noop */ }
+  }
+})
+
 /** /24 prefixes of this machine's active non-internal IPv4 interfaces. */
 function localPrefixes () {
   const out = new Set()
