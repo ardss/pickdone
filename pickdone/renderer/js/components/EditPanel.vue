@@ -107,7 +107,7 @@
 
       <div class="ep-row ep-prio">
         <img class="ep-ico" src="app://app/assets/img/icon-tune.svg" style="opacity:.6">
-        <span class="ep-diff-label">{{ $t('statsJ.EditPanel.priorityLabel') }}</span><span class="hint-q" role="button" tabindex="0" :title="$t('statsJ.EditPanel.urgencyHint')" :aria-label="$t('statsJ.EditPanel.urgencyHint')">?</span>
+        <span class="ep-diff-label">{{ $t('statsJ.EditPanel.priorityLabel') }}</span><span class="hint-q" role="img" :title="$t('statsJ.EditPanel.urgencyHint')" :aria-label="$t('statsJ.EditPanel.urgencyHint')">?</span>
         <span class="ep-diff-btns ep-prio-btns">
           <button v-for="pr in PRIOS" :key="pr.v" :class="['prio-'+pr.v, {on:((task&&task.priority)||0)===pr.v}]" @click="fieldPatch('priority', ((task&&task.priority)||0)===pr.v?0:pr.v)">{{ tt(pr.l) }}</button>
         </span>
@@ -281,7 +281,13 @@ export default {
           this.hydrate()
           this.$nextTick(() => {
             const t = this.$el && this.$el.querySelector('.ep-title textarea')
-            if (t && document.activeElement && document.activeElement.tagName === 'BODY') t.focus()
+            // F-D5 (maint/dw 2026-09-23): opening via keyboard (Enter on a .td-item row) leaves
+            // activeElement on the row — the BODY-only guard skipped focusing and keyboard/screen-
+            // reader users got no "panel is open" feedback. Also take focus when activation came
+            // from inside a todo row; plain mouse focus elsewhere is left untouched.
+            const ae = document.activeElement
+            const fromRow = !!ae && !!ae.closest && !!ae.closest('.td-item')
+            if (t && (!ae || ae.tagName === 'BODY' || fromRow)) t.focus()
           })
         }
       }
@@ -898,7 +904,7 @@ export default {
 /* danger-btn 并入同一 hover(双轨合一) */
 
 /* —— 编辑面板 a11y 补丁：键盘焦点可见 / 伪可点击收敛 —— */
-/* 帮助提示「?」(hint-q):键盘/读屏可达( tabindex=0 + aria-label,与 title 同 i18n key),聚焦可见 */
+/* 帮助提示「?」(hint-q):F-D4 降级为 role=img + aria-label(原 role=button 零激活逻辑是假按钮),聚焦可见 */
 .hint-q { cursor: help; }
 .hint-q:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; border-radius: var(--radius-sm); }
 /* 隐藏清除/删除 ✕ 仅 hover 显现，键盘聚焦时必须可见（选择器横跨父子组件块，统一留父层——全局样式仍命中子组件 DOM） */
