@@ -109,3 +109,36 @@ test('r6-7: tray quit confirms before abandoning a running pomodoro', () => {
     assert.equal(i18n.split(key).length - 1, 2, `i18n key ${key} present in zh-CN AND en`)
   }
 })
+
+/* F5 (2026-09-23, 完成日口径): complete=1 && completedAt=0 的历史/异常行在 App 侧
+   (metrics.js doneTsOf / store todayDoneList)按 updateTime 兜底计入,CLI/DB 侧却永不计入 —
+   三侧在同一 commit 内对齐到 App 语义。 */
+test('r6-8: CLI overview.doneToday and DB statsByDay count completedAt=0 rows via the updateTime fallback (App parity)', () => {
+  const osDefault = require_('os')
+  const dayjs = require_('dayjs')
+  const dir = fs.mkdtempSync(path.join(osDefault.tmpdir(), 'r6-8-done-day-'))
+  process.env.TODO_DB_DIR = dir
+  try {
+    const db = require_(path.join(root, 'src/main/db.js'))
+    db.init(dir)
+    const lib = require_(path.join(root, 'cli/lib.js'))
+    const now = Date.now()
+    const weekAgo = now - 7 * 86400000
+    // A completedAt=0 completed row edited today (the legacy/abnormal shape) must count as done
+    // TODAY on every side; a control row completed last week must stay in its own day.
+    db.call('upsertMany', [
+      { taskId: 'r6-8-a', taskContent: 'legacy completed row', createTime: weekAgo, updateTime: now, delete: 0, complete: 1, completedAt: 0, todoTime: weekAgo, taskSort: 1 },
+      { taskId: 'r6-8-b', taskContent: 'week-old completion', createTime: weekAgo, updateTime: weekAgo, delete: 0, complete: 1, completedAt: weekAgo, todoTime: weekAgo, taskSort: 2 },
+    ])
+    const ov = lib.overview()
+    assert.equal(ov.today.doneToday, 1, 'CLI overview.doneToday counts the completedAt=0 row via the updateTime fallback')
+    const byDay = db.call('statsByDay', { from: now - 30 * 86400000, to: now })
+    const totalDone = byDay.doneByCompletionDay.reduce((s, r) => s + (r.n || 0), 0)
+    assert.equal(totalDone, 2, 'DB doneByCompletionDay counts BOTH completed rows (pre-fix it silently dropped the completedAt=0 one)')
+    const todayKey = Number(dayjs(now).format('YYYYMMDD'))
+    const todayRow = byDay.doneByCompletionDay.find(r => Number(r.ds) === todayKey)
+    assert.ok(todayRow && todayRow.n >= 1, 'the fallback row lands in TODAY\'s completion-day bucket')
+  } finally {
+    delete process.env.TODO_DB_DIR
+  }
+})

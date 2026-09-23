@@ -316,8 +316,9 @@ function overview () {
     today: {
       total: all.filter(t => t.dayStart >= today0 && t.dayStart <= today24).length,
       done: all.filter(t => t.dayStart >= today0 && t.dayStart <= today24 && t.complete).length,
-      // 口径对齐 App(metrics.js doneTsOf):按 completedAt 落在今天计完成,旧 done(按 dayStart)保留兼容
-      doneToday: all.filter(t => t.complete && t.completedAt >= today0 && t.completedAt <= today24).length
+      // 口径对齐 App(metrics.js doneTsOf):按 completedAt 落在今天计完成,completedAt=0 的历史/异常行按
+      // updateTime 兜底(P3 2026-09-23;与 db.js statsByDay doneByCompletionDay 同 commit 对齐,旧注释自称对齐实际没有)
+      doneToday: all.filter(t => t.complete && (t.completedAt || t.updateTime || 0) >= today0 && (t.completedAt || t.updateTime || 0) <= today24).length
     },
     overdue: all.filter(t => !t.complete && t.dayStart > 0 && t.dayStart < today0).length,
     noDate: all.filter(t => !t.dayStart).length,

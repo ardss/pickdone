@@ -726,10 +726,12 @@ const OPS = {
     // 完成日查询的边界须与 strftime 产出的 YYYYMMDD 同单位(2026-09-05 终审 P1:与毫秒边界 BETWEEN 恒假→恒空)
     const fKey = f == null ? 0 : Number(dayjs(f).format('YYYYMMDD'))
     const tKey = t == null ? 99991231 : Number(dayjs(t).format('YYYYMMDD'))
-    const doneByCompletionDay = db.prepare(`SELECT CAST(strftime('%Y%m%d', completedAt/1000, 'unixepoch', 'localtime') AS INTEGER) ds, COUNT(*) n
+    // P3 2026-09-23 完成日口径对齐(与渲染端 metrics.js doneTsOf 一致): completedAt=0 的历史/异常完成行
+    // 按 updateTime 兜底落日 — 旧 SQL `completedAt > 0` 把这类行从所有完成日统计里永久剔除,App 侧却计入
+    const doneByCompletionDay = db.prepare(`SELECT CAST(strftime('%Y%m%d', COALESCE(NULLIF(completedAt,0), updatedAt)/1000, 'unixepoch', 'localtime') AS INTEGER) ds, COUNT(*) n
       FROM todos
-      WHERE deleted=0 AND complete=1 AND completedAt > 0
-        AND CAST(strftime('%Y%m%d', completedAt/1000, 'unixepoch', 'localtime') AS INTEGER) BETWEEN ? AND ?
+      WHERE deleted=0 AND complete=1 AND COALESCE(NULLIF(completedAt,0), updatedAt) > 0
+        AND CAST(strftime('%Y%m%d', COALESCE(NULLIF(completedAt,0), updatedAt)/1000, 'unixepoch', 'localtime') AS INTEGER) BETWEEN ? AND ?
       GROUP BY ds`).all(fKey, tKey)
     return { rows, doneByCompletionDay }
   },
