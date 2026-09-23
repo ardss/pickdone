@@ -63,7 +63,7 @@ export function moveSnapshot (t) {
 function moveFailToast (vm, e) {
   try {
     console.error('[todo] move apply/revert failed:', e)
-    if (vm && vm.$message) vm.$message.error(tt('statsE.SettingsModal.purgeFailedMsg') + ((e && e.message) || ''))
+    if (vm && vm.$message) vm.$message.error(tt('statsH.main.actionFailedMsg') + ((e && e.message) || ''))
   } catch { /* toast must never become the new failure */ }
 }
 function observeMove (vm, step) {

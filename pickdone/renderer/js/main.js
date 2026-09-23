@@ -543,7 +543,7 @@ async function bootstrap () {
           window.appUI && window.appUI.$message && window.appUI.$message.success(i18n.global.t(pinning ? 'statsH.main.pinned' : 'statsH.main.unpinned', { name: t.taskContent || i18n.global.t('statsJ.TodoItem.untitled') }))
         }).catch(e => {
           console.error('[todo] pin/unpin failed:', e)
-          window.appUI && window.appUI.$message && window.appUI.$message.error(i18n.global.t('statsE.SettingsModal.purgeFailedMsg') + ((e && e.message) || ''))
+          window.appUI && window.appUI.$message && window.appUI.$message.error(i18n.global.t('statsH.main.actionFailedMsg') + ((e && e.message) || ''))
         })
         break
       }

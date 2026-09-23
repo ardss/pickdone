@@ -106,7 +106,8 @@ export default {
       deleteNoSelection: 'Select a task first',
       pinIgnoredSort: 'Current sort is not custom — pin/unpin has no effect',
       pinned: 'Pinned: {name}',
-      unpinned: 'Unpinned: {name}'
+      unpinned: 'Unpinned: {name}',
+      actionFailedMsg: 'Action failed: '
     },
     layout: {
       navToday: 'Today',
