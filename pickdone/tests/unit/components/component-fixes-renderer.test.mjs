@@ -63,10 +63,15 @@ test('pruneExpiredFoldKeys: boundary — a key exactly at today start is not exp
   assert.deepEqual(pruneExpiredFoldKeys([`expired-${today0}`], today0), [`expired-${today0}`])
 })
 
-/* ---------- #9 DayDateStrip: week-start-aware calendar grid ---------- */
+/* ---------- #9 DayDateStrip: week-start-aware calendar grid ----------
+ * 2026-09-23: calGridOffset/weekHeaderOrder moved verbatim to utils/weekGrid.js (single source
+ * shared with CalendarView/FilterView/chartModels) — the DayDateStrip pure block no longer
+ * carries them, so these guards exercise the weekGrid module directly. */
+
+const weekGrid = await import(pathToFileURL(path.join(ROOT, 'renderer/js/utils/weekGrid.js')).href)
 
 test('calGridOffset: Monday start maps Mon..Sun to 0..6, Sunday start maps Sun..Sat to 0..6', () => {
-  const { calGridOffset } = pureFns('renderer/js/components/DayDateStrip.vue', ['calGridOffset'])
+  const { calGridOffset } = weekGrid
   for (let dow = 0; dow < 7; dow++) {
     assert.equal(calGridOffset(dow, false), (dow + 6) % 7, `mon-start dow=${dow}`)
     assert.equal(calGridOffset(dow, true), dow, `sun-start dow=${dow}`)
@@ -76,7 +81,7 @@ test('calGridOffset: Monday start maps Mon..Sun to 0..6, Sunday start maps Sun..
 })
 
 test('weekHeaderOrder: header columns rotate with the week start, staying in sync with calCells', () => {
-  const { weekHeaderOrder } = pureFns('renderer/js/components/DayDateStrip.vue', ['weekHeaderOrder'])
+  const { weekHeaderOrder } = weekGrid
   assert.deepEqual(weekHeaderOrder(false), [1, 2, 3, 4, 5, 6, 0]) // Mon..Sun
   assert.deepEqual(weekHeaderOrder(true), [0, 1, 2, 3, 4, 5, 6]) // Sun..Sat
 })

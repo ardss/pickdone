@@ -46,7 +46,9 @@
  * Render structure matches the todo box (todo-box-list-item row family); complete/edit/context-menu entries share the same source.
  */
 import { taskContextMenu } from '../utils/taskMenu.js'
-import { DEFAULT_CAT_COLOR, dayjs } from '../utils/core.js'
+import { DEFAULT_CAT_COLOR } from '../utils/core.js'
+import { today0 } from '../utils/todayBounds.js'
+import { isoWeekEnd } from '../utils/weekGrid.js'
 import { toggleCompleteWithUndo } from '../utils/completeAction.js'
 import { getEstimate } from '../utils/tomatoEstimate.js'
 import FilterModal from '../components/FilterModal.vue'
@@ -84,17 +86,19 @@ export default {
       const f = this.filter
       if (!f) return []
       const c = f.conds || {}
-      const today0 = +dayjs().startOf('day')
-      const weekEnd = +dayjs().endOf('isoWeek')
+      const today0ts = today0()
+      // Hard-Monday (isoWeek) window kept deliberately — pairs with cli/lib.js's week filter window;
+      // whether it should follow settings.weekStartDay is pending product confirmation (see weekGrid.js).
+      const weekEnd = isoWeekEnd(Date.now())
       return this.$store.state.todo.todoList.filter(t => {
         if (t.delete || t.complete) return false
         if (c.catId != null && c.catId !== -1 && (t.categoryId || 0) !== c.catId) return false
         if (c.priority != null && c.priority !== -1 && (t.priority || 0) !== c.priority) return false
         if (c.dateMode && c.dateMode !== 'all') {
           const d = t.dayStart || 0
-          if (c.dateMode === 'today' && d !== today0) return false
-          if (c.dateMode === 'week' && !(d >= today0 && d <= weekEnd)) return false
-          if (c.dateMode === 'overdue' && !(d && d < today0)) return false
+          if (c.dateMode === 'today' && d !== today0ts) return false
+          if (c.dateMode === 'week' && !(d >= today0ts && d <= weekEnd)) return false
+          if (c.dateMode === 'overdue' && !(d && d < today0ts)) return false
           if (c.dateMode === 'none' && d !== 0) return false
         }
         return true

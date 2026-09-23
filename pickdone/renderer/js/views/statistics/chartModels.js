@@ -11,6 +11,7 @@
  *  - `dayjs` / DAY_MS / FMT come from the shared core util, exactly as before.
  */
 import { dayjs, DAY_MS, FMT } from '../../utils/core.js'
+import { calGridOffset, isoWeekStart } from '../../utils/weekGrid.js'
 
 const T = 'statsA.StatisticsView.'
 
@@ -22,7 +23,7 @@ export function periodBounds (period, customRange, nowTick, t) {
   const now = dayjs(nowTick)
   switch (period) {
     case 'lastWeek': {
-      const s = now.subtract(1, 'week').startOf('isoWeek')
+      const s = isoWeekStart(+now.subtract(1, 'week'))
       return { start: +s, end: +s.add(7, 'day'), label: t(T + 'period_lastWeek') }
     }
     case 'thisMonth': return { start: +now.startOf('month'), end: +now, label: t(T + 'period_thisMonth') }
@@ -39,7 +40,7 @@ export function periodBounds (period, customRange, nowTick, t) {
       const e = +dayjs(customRange[1]).add(1, 'day').startOf('day') // end is an exclusive upper bound, covering the whole selected final day
       return { start: s, end: e, label: t(T + 'period_custom') }
     }
-    default: return { start: +now.startOf('isoWeek'), end: +now, label: t(T + 'period_thisWeek') }
+    default: return { start: isoWeekStart(nowTick), end: +now, label: t(T + 'period_thisWeek') }
   }
 }
 
@@ -52,7 +53,7 @@ export function buildHeatmap ({ todos, records, weeks, nowTick }) {
   const day = DAY_MS
   // 用响应式时钟 nowTick 而非 dayjs():跨零点停留时热力图窗口不冻结(同 periodBounds)
   const today = dayjs(nowTick).startOf('day')
-  const end = +today.add(6 - ((today.day() + 6) % 7), 'day')
+  const end = +today.add(6 - calGridOffset(today.day(), false), 'day') // same Monday-start math as isoWeek, via the shared weekGrid helper
   const start = +dayjs(end).subtract(weeks * 7 - 1, 'day')
   const doneByDay = new Map(); const focusByDay = new Map()
   todos.forEach(todo => {
