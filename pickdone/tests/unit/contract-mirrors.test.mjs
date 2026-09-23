@@ -9,10 +9,11 @@ import path from 'node:path'
 import { ANCHORS, REPO_ROOT, readAnchor } from '../lib/source-anchors.mjs'
 
 test('SETTINGS_MANIFEST: a key must not appear in two type lists (categoryId string/number double-entry regression)', async () => {
-  const src = readAnchor('cliLib')
-  // Pull the manifest object literal out of lib.js without executing the CLI
-  const m = src.match(/const SETTINGS_MANIFEST = \{[\s\S]*?\n\}/)
-  assert.ok(m, 'SETTINGS_MANIFEST found in cli/lib.js')
+  // dw wave 3 (F-B9): SETTINGS_MANIFEST moved verbatim to shared/settings-manifest.mjs — anchor follows the module
+  const src = fs.readFileSync(path.join(REPO_ROOT, 'shared/settings-manifest.mjs'), 'utf8')
+  // Pull the manifest object literal out without executing anything
+  const m = src.match(/export const SETTINGS_MANIFEST = \{[\s\S]*?\n\}/)
+  assert.ok(m, 'SETTINGS_MANIFEST found in shared/settings-manifest.mjs')
   const seen = new Map()
   const TYPE_LISTS = ['boolean', 'number', 'string']
   for (const list of m[0].matchAll(/(\w+): \[([^\]]*)\]/g)) {

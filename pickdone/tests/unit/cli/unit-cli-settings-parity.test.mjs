@@ -12,9 +12,11 @@ import { ANCHORS, REPO_ROOT } from '../../lib/source-anchors.mjs'
 const read = p => fs.readFileSync(path.join(REPO_ROOT, p), 'utf8')
 
 function manifestKeys () {
-  const src = read(ANCHORS.cliLib)
-  const m = src.match(/const SETTINGS_MANIFEST = \{[\s\S]*?\n\}/)
-  assert.ok(m, 'SETTINGS_MANIFEST 必须存在于 cli/lib.js')
+  // dw wave 3 (F-B9): SETTINGS_MANIFEST moved verbatim to shared/settings-manifest.mjs
+  // (cli/lib.js re-imports it) — the anchor follows the module.
+  const src = read('shared/settings-manifest.mjs')
+  const m = src.match(/export const SETTINGS_MANIFEST = \{[\s\S]*?\n\}/)
+  assert.ok(m, 'SETTINGS_MANIFEST 必须存在于 shared/settings-manifest.mjs')
   const keys = new Set()
   for (const arr of m[0].matchAll(/\b(?:boolean|number|string): \[([^\]]*)\]/g)) {
     for (const k of arr[1].matchAll(/'([^']+)'/g)) keys.add(k[1])
