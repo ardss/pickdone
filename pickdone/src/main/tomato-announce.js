@@ -22,6 +22,8 @@
  */
 
 const KEY_PREFIX = 'tomatoRunAnnounce.'
+// F-A4: shared text sanitizer (pure Node, no Electron) — see buildAnnounceValue.
+const { sanitizeText } = require('./sanitize')
 // Staleness TTL factor (spec): an entry older than 2x its planned duration is dead even
 // if startedAt+plannedSec is still in the future (covers clock skew between peers).
 const STALE_AGE_FACTOR = 2
@@ -57,8 +59,14 @@ function buildAnnounceValue ({ deviceId, deviceName, status, startedAt, plannedS
     at: now,
   }
   if (base.status === 'running' && attachTodoId) {
-    base.attachTodoId = String(attachTodoId)
-    base.attachTodoTitle = String(attachTodoTitle || '')
+    base.attachTodoId = sanitizeText(String(attachTodoId || ''), 120) // same clamp as the title (ids are short; unbounded String() was the same injection surface)
+    // Domain-1 F-A4 (2026-09-23): the title used to pass through bare String() — an
+    // unclamped 32MB title written into meta then kickRound-synced to EVERY peer (single row
+    // blowing the 32MB line-framing budget) plus control-char injection into peer UIs/logs.
+    // sanitizeText (single source, same as system.js/transport.js) strips control/RTL/bidi
+    // chars and truncates. parseAnnounce re-runs buildAnnounceValue, so REMOTE announce
+    // values are re-sanitized on this side too — one choke point covers both directions.
+    base.attachTodoTitle = sanitizeText(String(attachTodoTitle || ''), 120)
   }
   return base
 }
