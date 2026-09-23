@@ -46,14 +46,10 @@ export function genTomatoId () { return `tmt_${Date.now().toString(36)}${Math.fl
 
 /** Sort score (midpoint insertion, fround precision aligned with project baseline).
  *  custom mode displays by taskSort descending: addToTop = above the max; appending to the bottom must go below the min (minS-512),
- *  the original midpoint algorithm landed inside (min,max) = new tasks inserted mid-list instead of at the bottom (2026-09-02 4th review P1) */
-export function nextSort (addToTop, minS, maxS) {
-  let s
-  if (!minS && !maxS) s = 1024 // first element of the list, arbitrary baseline
-  else if (addToTop) s = maxS + 512
-  else s = minS - 512
-  return Math.fround(s)
-}
+ *  the original midpoint algorithm landed inside (min,max) = new tasks inserted mid-list instead of at the bottom (2026-09-02 4th review P1)
+ *  P3-7 (dw wave): the implementation moved to shared/sort-core.mjs (single source — the CLI's
+ *  nextSortCli verbatim copy is gone); re-exported here under the established name (limits.js pattern). */
+export { nextSort } from '../../../shared/sort-core.mjs'
 
 export const IMG_EXT = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp']
 export function isImageName (n) {
