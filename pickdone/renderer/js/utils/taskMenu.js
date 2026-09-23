@@ -97,8 +97,13 @@ export function buildTaskMenu (vm, t, caps = {}, extra = []) {
       icon: 'copy',
       label: vm.$t('statsE.TodoItem.copyTitleDesc'),
       fn: async () => {
-        await navigator.clipboard.writeText((t.taskContent || '') + '\n' + (t.taskDescribe || ''))
-        vm.$message.success(vm.$t('statsE.TodoItem.copiedMsg'))
+        // Clipboard API can reject (focus loss / permission denial); surface it instead of an unhandled rejection — same guard as TodoItem.vue's twin implementation
+        try {
+          await navigator.clipboard.writeText((t.taskContent || '') + '\n' + (t.taskDescribe || ''))
+          vm.$message.success(vm.$t('statsE.TodoItem.copiedMsg'))
+        } catch {
+          vm.$message.error(vm.$t('statsE.TodoItem.copyFailMsg'))
+        }
       }
     })
   }
