@@ -7,12 +7,10 @@ const fs = require('fs')
 let _app = null
 try { _app = require('electron').app } catch { /* plain node */ }
 
-const DEFAULT_SHORTCUTS = {
-  // quickAddGlobal 旧默认 ctrl+shift+a 与微信/QQ 截图热键冲突(国内环境注册必败),2026-09-05 改 alt+shift+t(T=Todo 好记)
-  sync: 'ctrl+s', toggleMainWindow: '', quickAddGlobal: 'alt+shift+t', addEvent: 'ctrl+n', deleteEvent: 'ctrl+d',
-  pinEvent: '', unpinEvent: '', toggleAllSubtasks: '', startPomodoro: '',
-  switchToDaytodo: 'ctrl+1', switchToRecentTodos: 'ctrl+2', switchToSchedule: 'ctrl+3', switchToInbox: 'ctrl+4'
-}
+// P2-3 (maint/dw 2026-09-23): the factory shortcut table moved to shared/shortcut-defaults.mjs —
+// single source with the renderer's restore-defaults button (which used to carry a drifted
+// hand-copied literal that re-enabled 1 global hotkey + 4 in-app shortcuts on reset+save).
+const { DEFAULT_SHORTCUTS } = require('../../shared/shortcut-defaults.mjs')
 // electron is resolved at module load (see top); __setConfigDir lets plain-Node unit tests point
 // configFile at a temp dir without any electron dependency.
 let _configDirOverride = null
