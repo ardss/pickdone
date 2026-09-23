@@ -206,15 +206,12 @@ export function sanitizeSettingsPatch (patch, current) {
 /** F-C3 (maint/dw wave3, pure): range clamp for numeric settings — sanitizeSettingsPatch used to do
  *  type validation only, so an inbound patch like {tomatoTime: 9999, restTime: 0} passed straight
  *  through the mirror chain (mirrorTomatoLedger → tomato/patch) into the RUNNING countdown and was
- *  persisted to LS + db.settingsState + config.json. The ranges mirror the only two bounded-UI
- *  surfaces (SettingsModal :min/:max) and the CLI manifest (cli/lib.js SETTINGS_MANIFEST.ranges).
- *  TODO(maint/dw wave4): consume domain2's shared/settings-manifest.mjs instead of this inline
- *  table once that module lands (values identical to the CLI manifest). */
-export const SETTING_RANGES = {
-  tomatoTime: { min: 5, max: 180 }, // SettingsModal focus-length input-number (:min=5 :max=180)
-  restTime: { min: 1, max: 60 }, // SettingsModal break-length input-number (:min=1 :max=60)
-  dailyTomatoTarget: { min: 1, max: 50 } // SettingsModal daily-goal input (:min=1 :max=50)
-}
+ *  persisted to LS + db.settingsState + config.json. The ranges are the SHARED manifest table
+ *  (domain2's shared/settings-manifest.mjs — same source cli/lib.js enforces on the CLI side, and
+ *  the same values the SettingsModal :min/:max render; wave3 review: the wave4 TODO to converge is
+ *  now fulfilled, no second copy to drift). */
+import { SETTINGS_MANIFEST } from '../../../shared/settings-manifest.mjs'
+export const SETTING_RANGES = SETTINGS_MANIFEST.ranges
 export function clampNumericSettings (patch) {
   if (!patch || typeof patch !== 'object') return patch
   for (const k of Object.keys(SETTING_RANGES)) {
