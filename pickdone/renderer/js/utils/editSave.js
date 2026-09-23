@@ -59,6 +59,20 @@ export function createSaveQueue (store, opts) {
     dirty = Object.assign(restored, dirty)
   }
 
+  /** P2-5 (maint/dw 2026-09-23): re-queue a failed dispatch's immediate patch so retrySave / the
+   *  next queueSave can actually replay it. Immediate fields (title, date, reminders) go through
+   *  queueSave WITHOUT markDirty — they leave no trace in the dirty map, so the old catch blocks
+   *  (which only restored dirty FLAGS) permanently dropped them: the pending slot had already been
+   *  nulled at callback entry, and a retry had nothing to resend. The patch returns to `pending`
+   *  with its ENQUEUE-time taskId (same merge rule as queueSave: same-task patches merge, a
+   *  different task starts a fresh slot). */
+  const requeue = (queued) => {
+    if (!queued || !Object.keys(queued.patch || {}).length) return
+    pending = (pending && pending.taskId === queued.taskId)
+      ? { taskId: queued.taskId, patch: Object.assign({}, pending.patch, queued.patch) }
+      : { taskId: queued.taskId, patch: Object.assign({}, queued.patch) }
+  }
+
   /** Pending debounce-window patch. H1 fix (2026-09-16): the queued immediate patch (fieldPatch/
    *  applyDate/onRemindersCommit go through queueSave but do NOT markDirty) used to live only in the
    *  timer closure — flushSave's clearTimeout discarded it wholesale, so editing a title and closing
@@ -105,7 +119,10 @@ export function createSaveQueue (store, opts) {
         // The dispatch failed: re-mark the drained keys (merged with anything marked since, same order
         // as flushSave) so a later queueSave/flushSave retries them. Without this the drained batch was
         // gone for good -- onFail surfaced the banner but the edits were silently never persisted.
+        // P2-5: the queued IMMEDIATE patch is re-queued too — it never had dirty flags, so restoring
+        // flags alone discarded it forever (retrySave spun on an empty pending).
         restore(drainedKeys)
+        requeue(queued)
         if (opts.onFail) opts.onFail()
       } finally {
         if (opts.onSaving) opts.onSaving(false)
@@ -128,6 +145,7 @@ export function createSaveQueue (store, opts) {
       if (Object.keys(all).length) {
         outs.push(store.dispatch('todo/updateTodoFields', { taskId, patch: all }).catch(() => {
           restore(keys)
+          requeue(queued) // P2-5: the immediate half of the failed batch must survive too
           if (opts.onFail) opts.onFail()
         }))
       }
@@ -137,6 +155,9 @@ export function createSaveQueue (store, opts) {
       // Task switched inside the debounce window: the queued edits still commit to their enqueue-time
       // task (same snapshot semantics as the debounce callback); dirty fields go to the current task.
       outs.push(store.dispatch('todo/updateTodoFields', { taskId: queued.taskId, patch: queued.patch }).catch(() => {
+        // P2-5: this branch's dirty FLAGS are restored by the next branch's catch — but queued.patch
+        // has no flags; re-queue it so the switched-away task's edits are not lost for good.
+        requeue(queued)
         if (opts.onFail) opts.onFail()
       }))
     }

@@ -4,7 +4,7 @@
  *   1. Type a task name into the quick-add box + Enter -> task persisted
  *   2. Focus the sidebar brand row + Enter -> collapse/expand toggles
  *   3. Esc closes the popup layer
- * Usage: npm run smoke:keyboard  (SKIPs with exit 0 when there is no debug port)
+ * Usage: node tests/run-interactions-gated.mjs tests/keyboard-e2e.mjs  (wired into check-all.js as the keyboard e2e entry; SKIPs with exit 0 when there is no debug port)
  */
 const CDP = process.env.TODO_CDP || 'http://127.0.0.1:9333'
 

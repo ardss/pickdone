@@ -160,11 +160,17 @@ export default {
       } finally { this.importing = false }
     },
     async pickBackupDir () {
-      const dir = await window.todoAPI.pickBackupDir()
-      if (!dir) return
-      this.set({ backupDir: dir })
-      this.loadBackupDirDisplay()
-      this.$message.success(this.$t('statsE.SettingsModal.backupLocationUpdatedMsg'))
+      // P3-8 (maint/dw 2026-09-23): the dialog/IPC rejection used to escape as an unhandled
+      // rejection with zero user feedback (importFromCsv / runAutoBackupNow both report).
+      try {
+        const dir = await window.todoAPI.pickBackupDir()
+        if (!dir) return
+        this.set({ backupDir: dir })
+        this.loadBackupDirDisplay()
+        this.$message.success(this.$t('statsE.SettingsModal.backupLocationUpdatedMsg'))
+      } catch (e) {
+        this.$message.error(this.$t('statsE.SettingsModal.backupFail'))
+      }
     },
     resetBackupDir () {
       this.set({ backupDir: '' })
@@ -245,6 +251,10 @@ export default {
         txt && txt !== before
           ? this.$message.success(this.$t('statsE.SettingsModal.criticalBackupWrittenMsg'))
           : this.$message.error(this.$t('statsH.SettingsModal.backupFailed'))
+      } catch (e) {
+        // P3-8: readCriticalStateBackup/writeCriticalBackup IPC failures used to escape as an
+        // unhandled rejection — same honest-failure contract as runAutoBackupNow.
+        this.$message.error(this.$t('statsE.SettingsModal.backupFail'))
       } finally { this.backingUp = false }
     },
     async loadAutoBackupList () {

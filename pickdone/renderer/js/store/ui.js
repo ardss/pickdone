@@ -135,6 +135,10 @@ export default {
     setDaySelected (s, ts) { s.daySelectedTs = ts },
     toggleSettings (s, v) { s.showSettingsModal = v == null ? !s.showSettingsModal : v },
     closeFeedback (s) { s.showFeedbackModal = false },
+    // P3-9 (maint/dw 2026-09-23): showFeedbackModal had no open mutation anywhere — the modal was
+    // unreachable dead UI (its mount point in layout.vue could never render). openFeedback makes
+    // the state honest; entry wiring is the caller's choice.
+    openFeedback (s) { s.showFeedbackModal = true },
     askRepeatDelete (s, taskIdOrnull) { s.showRepeatDeleteConfirm = taskIdOrnull },
     askRepeatEdit (s, taskIdOrNull) { s.showRepeatModalFor = taskIdOrNull },
     openMenu (s, { x, y, items }) { s.contextMenu = { visible: true, x, y, items } },

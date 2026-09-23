@@ -9,6 +9,7 @@
  */
 const dayjs = require('dayjs')
 const core = require('../src/main/core/todo-core.js')
+const { localDayKey } = require('../src/main/fix-util.js') // P3-8: local-day key single source (inline copy removed)
 // Phase-2 command-bus write door (docs/refactor-command-bus.md): import writes commit through
 // the bus via the facade below — manifest write ops go through bus.commitOp (preserveStamp keeps
 // payloads byte-identical to the legacy db.call path), reads pass through to the real handle.
@@ -193,8 +194,7 @@ function creatorDayBucket (t) {
       return new Intl.DateTimeFormat('en-CA', { timeZone: t.tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(ms))
     } catch { /* unknown tz id: fall back to the reader-local calendar */ }
   }
-  const d = new Date(ms)
-  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0')
+  return localDayKey(ms)
 }
 function dedupKeyOf (t) {
   return (t.taskContent || '').trim() + '|' + creatorDayBucket(t)

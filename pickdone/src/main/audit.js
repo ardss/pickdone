@@ -16,19 +16,12 @@
 const path = require('path')
 const fs = require('fs')
 const dayjs = require('dayjs')
+const { userDataDir } = require('./user-dir.js') // P3-9 (dw wave): single source — same env priority chain cli/lib.js reads
 
 const MAX_BYTES_DEFAULT = 5 * 1024 * 1024
 let maxBytes = MAX_BYTES_DEFAULT
 
-const defaultDirResolver = () => (
-  process.env.TODO_DB_DIR ||
-  process.env.TODO_USER_DATA_DIR ||
-  (process.platform === 'darwin'
-    ? path.join(process.env.HOME || '', 'Library', 'Application Support', 'pickdone')
-    : process.platform === 'linux'
-      ? path.join(process.env.XDG_CONFIG_HOME || path.join(process.env.HOME || '', '.config'), 'pickdone')
-      : path.join(process.env.APPDATA || '', 'pickdone'))
-)
+const defaultDirResolver = userDataDir
 let resolveDir = defaultDirResolver
 
 /** Test/injection hook: override the output directory (lazy — called at write time, not at injection time) */

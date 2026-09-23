@@ -62,6 +62,8 @@ function formatShortcutText (v) {
  *  Extracted verbatim from SettingsModal.vue (W5 wave 1) — no prop contract, talks to the
  *  settings store directly, exactly like the parent did. Generic form-control styles
  *  (.form-item/.sc-capture) stay in the parent's global stylesheet. */
+import { DEFAULT_SHORTCUTS } from '../../../../shared/shortcut-defaults.mjs'
+
 export default {
   name: 'SettingsShortcutsTab',
   data () {
@@ -158,15 +160,27 @@ export default {
     },
     formatShortcut (v) { return formatShortcutText(v) || this.$t('statsE.SettingsModal.scEmpty') },
     resetShortcuts () {
-      this.shortcutForm = { sync: 'ctrl+s', addEvent: 'ctrl+n', deleteEvent: 'ctrl+d', toggleMainWindow: 'ctrl+alt+t', quickAddGlobal: 'alt+shift+t', pinEvent: 'ctrl+p', unpinEvent: 'ctrl+shift+p', toggleAllSubtasks: 'ctrl+shift+s', startPomodoro: 'ctrl+alt+p', switchToDaytodo: 'ctrl+1', switchToRecentTodos: 'ctrl+2', switchToSchedule: 'ctrl+3', switchToInbox: 'ctrl+4' }
+      // P2-3 (maint/dw 2026-09-23): restore now reads the SHARED factory table
+      // (shared/shortcut-defaults.mjs — the same map src/main/config-store.js ships). The old
+      // hand-copied literal had drifted by 5 keys: reset+save re-enabled 1 OS-level global hotkey
+      // (ctrl+alt+t) and 4 in-app shortcuts the factory ships empty.
+      this.shortcutForm = { ...DEFAULT_SHORTCUTS }
     },
-    saveShortcuts () {
+    async saveShortcuts () {
       // Same ledger as the parent's set(): go through the settings/update action in one hop so
       // the store's shortcutKeySettings is committed AND config.json is written. A bare
       // todoAPI.updateSettings left the store stale and the dbMirror debounce then wrote the
       // old value back over it (old shortcuts resurfaced on the next launch).
+      // P2-2 (maint/dw 2026-09-23): the dispatch is now awaited and its result honored — on IPC
+      // failure the user gets an honest error toast and the dirty snapshot does NOT advance
+      // (previously "saved" was faked and the close-discard guard silently disarmed while
+      // config.json never received the write; everything rolled back on next launch).
       const snap = JSON.parse(JSON.stringify(this.shortcutForm))
-      this.$store.dispatch('settings/update', { shortcutKeySettings: snap })
+      const r = await this.$store.dispatch('settings/update', { shortcutKeySettings: snap })
+      if (r && r.ok === false) {
+        this.$message.error(this.$t('statsJ.EditPanel.saveFailed'))
+        return
+      }
       this._shortcutSnapshot = JSON.stringify(this.shortcutForm)
       this.$message.success(this.$t('statsE.SettingsModal.shortcutSavedMsg'))
       if (this.$announce) this.$announce(this.$t('statsE.SettingsModal.shortcutSavedMsg'))

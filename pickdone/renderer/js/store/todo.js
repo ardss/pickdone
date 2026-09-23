@@ -4,7 +4,7 @@
  */
 import { genTaskId, nextSort, dayjs, reportError, DAY_MS, rangeDays, parsePredecessors } from '../utils/core.js'
 import { wouldCycle, isTaskReady } from '../utils/deps.js'
-import { expandRepeatDates } from '../utils/repeat.js'
+import { nextRepeatInstance, isLastRepeatInstance, renewalCarryFields } from '../utils/repeat.js'
 import { sortByMode } from '../utils/sortMode.js'
 import { getEstimate, setEstimate } from '../utils/tomatoEstimate.js'
 import { clearSnapshot } from '../utils/dayPlans.js'
@@ -388,46 +388,41 @@ export default {
       return r
     },
 
-    /** Repeat-group renewal: when the last incomplete instance in a group is completed, generate the next instance per the group rule */
+    /** Repeat-group renewal: when the last incomplete instance in a group is completed, generate the next instance per the group rule.
+     *  Decision (is-last) + next-occurrence + carried fields all come from shared/repeat-core.mjs (P2-4 single source);
+     *  this action keeps only the dispatch('addTodo') thin wrapper and the persistence concerns. */
     async ensureNextRepeatInstance ({ dispatch }, completedTodo) {
       const rid = completedTodo.repeatId
       if (!rid) return
-      if (!completedTodo.dayStart) return // no-date instances don't renew after completion (otherwise pseudo-instances expand from 1970; same guard as the core single source)
       const group = this.state.todo.todoList.filter(t => t.repeatId === rid && !t.delete && t.dayStart > 0)
-      const lastDay = Math.max(...group.map(t => t.dayStart || 0))
-      // Only renew when the completed one is the group's last (latest) instance; leave it alone if future instances remain
-      if ((completedTodo.dayStart || 0) < lastDay) return
+      // Only the group's last (latest) instance renews; no-date instances never renew (a bogus 1970 chain)
+      if (!isLastRepeatInstance(completedTodo, group)) return
       // The rule's single source of truth is meta (same source as the CLI); the historical LS fallback has been dismantled (all hosts have the meta channel)
       let rule = null
       try { rule = JSON.parse(await window.todoAPI.dbCall('getMeta', 'repeatRule:' + rid) || 'null') } catch { /* empty */ }
       if (!rule) return
-      const dates = expandRepeatDates(lastDay || completedTodo.todoTime, rule, this.state.todo.holidayList || [])
-      const next = dates.map(d => +d).find(ts => ts > (completedTodo.dayStart || 0))
+      // Single source: next occurrence + reminder time (same computation the CLI twin uses via todo-core.js)
+      const next = nextRepeatInstance(completedTodo, group, rule, this.state.todo.holidayList || [])
       if (!next) return
       const t = completedTodo
-      let remind = 0
-      if (t.reminderTime > 0 && t.dayStart) {
-        const r = dayjs(t.reminderTime)
-        remind = dayjs(next).hour(r.hour()).minute(r.minute()).second(0).valueOf()
-      }
+      // Single source: carried attributes (D5 parity set — the renewal used to drop priority/deadlineTs/
+      // important/urgent, `t.x || 0` semantics), mapped onto addTodo's todoX argument names
+      const carry = renewalCarryFields(t, next)
       const nt = await dispatch('addTodo', {
         categoryId: t.categoryId,
         todoContent: t.taskContent,
         todoDescription: t.taskDescribe || '',
-        todoDate: next,
-        todoReminderTime: remind,
-        todoReminderOffsets: Array.isArray(t.reminderOffsets) ? t.reminderOffsets : [],
-        todoReminderExtra: Array.isArray(t.reminderExtra) ? t.reminderExtra : [],
-        todoDifficultyLevel: t.difficulty || 0,
-        // D5 (2026-09-20): carry the attributes the CLI twin (cli/lib.js complete → renewal) preserves —
-        // the renewal used to drop priority/deadlineTs/important/urgent and the per-task estimate, so a
-        // renewed instance silently lost its triage/plan data. `t.x || 0` semantics match the CLI.
-        priority: t.priority || 0,
-        deadlineTs: t.deadlineTs || 0,
-        important: t.important || 0,
-        urgent: t.urgent || 0,
+        todoDate: next.todoTime,
+        todoReminderTime: carry.reminderTime,
+        todoReminderOffsets: carry.reminderOffsets,
+        todoReminderExtra: carry.reminderExtra,
+        todoDifficultyLevel: carry.difficulty,
+        priority: carry.priority,
+        deadlineTs: carry.deadlineTs,
+        important: carry.important,
+        urgent: carry.urgent,
         estimate: t.estimate || 0,
-        repeatId: rid,
+        repeatId: carry.repeatId,
         todoSublist: t.subtasks ? (function(){try{return JSON.parse(t.subtasks)}catch{return[]}})().map(x => ({ ...x, checked: false })) : null,
         addToTop: false
       })

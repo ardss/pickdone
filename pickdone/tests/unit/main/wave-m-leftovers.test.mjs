@@ -35,7 +35,9 @@ test('snowDedup: key is stamped with its creation epoch, replay stays deduped', 
 
 test('snowDedup: keys older than the age floor are pruned once the cap is exceeded', () => {
   // Simulate an aged backlog: keys stamped '1' (epoch 0) must age out on the next dedup'd bump.
-  for (let i = 0; i < 2001; i++) db.call('setMeta', [`snowDedup:legacy_${i}:s`, '1'])
+  // One transaction via setMetaMany — 2001 standalone setMeta calls each pay a commit fsync and
+  // blew the 2min test ceiling on CI's slow disk (windows job red 2026-09-23, fail 0 + exit 1).
+  db.call('setMetaMany', Array.from({ length: 2001 }, (_, i) => [`snowDedup:legacy_${i}:s`, '1']))
   assert.ok(snowKeyCount() > 2000, 'backlog must exceed the cap before the bump')
   const t = { taskId: 'wm_prune_1', taskContent: 'x', categoryId: null, complete: false, deleted: false }
   db.call('upsert', t)

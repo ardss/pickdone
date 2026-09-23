@@ -554,6 +554,10 @@ const OPS = {
   getMeta: k => { const r = stmts.getMeta.get(k); return r ? r.value : null },
   // Accepts both argument forms: (k, v) or [k, v] (the renderer's dbCall('setMeta', [k, v]) is passed through as a single call parameter)
   setMeta: (k, v) => { if (Array.isArray(k)) { v = k[1]; k = k[0] } stmts.setMeta.run(k, String(v)); return true },
+  // Batched bulk meta write (single transaction): N standalone setMeta calls each pay a commit
+  // fsync (~7ms here), which put a 2000-row test backlog past the 2min CI ceiling. Callers pass
+  // [[k, v], ...]; NOT renderer-whitelisted (backfill/tests/maintenance only).
+  setMetaMany: rows => { const tr = db.transaction(list => { for (const [k, v] of list) stmts.setMeta.run(String(k), String(v)) }); tr(rows); return rows.length },
   listMetaKeys: () => db.prepare('SELECT key FROM meta').all().map(r => r.key), // main-internal only (startup meta GC), NOT renderer-whitelisted
   // Monotonic sequence number for CLI tomato commands: UPDATE...RETURNING 单语句原子(两语句版在双 CLI 并发时读回同值→重号→App seq 去重丢命令,2026-09-04 深审 P1)
   nextCliTomatoSeq: () => Number(db.prepare("INSERT INTO meta (key, value) VALUES ('cliTomatoSeq', '1') ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT) RETURNING value").get().value),
@@ -1029,7 +1033,7 @@ function call (op, params) {
 // Do not guess with regexes — write ops like hardDeleteMany/filterDelete/clearCategories were once missed, leaving cross-window data stale.
 
 const WRITE_OPS = new Set([
-  'upsert', 'upsertMany', 'commitSyncBatch', 'bumpSnow', 'hardDelete', 'hardDeleteMany', 'setMeta', 'deleteMeta',
+  'upsert', 'upsertMany', 'commitSyncBatch', 'bumpSnow', 'hardDelete', 'hardDeleteMany', 'setMeta', 'setMetaMany', 'deleteMeta',
   'purgeRecycleBin', 'purgeSeedTodos', 'upsertCategory',
   'filterUpsert', 'filterDelete',
   'planAddMany', 'planUpdateChip', 'planRemoveIds', 'planMoveTask',
