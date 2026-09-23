@@ -52,7 +52,9 @@ const UPDATE_FIELDS_ALLOWLIST = [
 const hits = []
 for (const dir of SCAN_DIRS) {
   const abs = path.join(ROOT, dir)
-  if (!fs.existsSync(abs)) continue
+  // 2026-09-23 P3: a missing scan dir previously meant R1a/R1b/R2 scanned NOTHING and the gate
+  // exited GREEN — scan-surface collapse. Fail closed like check-css-freeze.mjs.
+  if (!fs.existsSync(abs)) { hits.push(`${dir}  [扫描面缺失: 目录不存在 — 拒绝假绿]`); continue }
   const walkSfc = (dir, out = []) => {
     for (const name of fs.readdirSync(dir)) {
       const p = path.join(dir, name)
