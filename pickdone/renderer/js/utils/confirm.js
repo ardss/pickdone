@@ -55,14 +55,32 @@ export function moveSnapshot (t) {
   return { important: (t && t.important) || 0, urgent: (t && t.urgent) || 0, priority: t ? t.priority : undefined }
 }
 
+/** F-D7 (maint/dw 2026-09-23): moveWithUndo/batchMoveWithUndo used to fire-and-forget apply()/
+ *  revert() — when a patch dispatch rejects (e.g. todo.js write-time dependency-cycle throw on
+ *  revert), the user still saw "moved + undo" and the undo died silently as an unhandled
+ *  rejection. One shared wrapper: observe the promise, honest failure toast (same shape as the
+ *  undo/redo P3-7 catch in main.js). Only ever shows on a real rejection. */
+function moveFailToast (vm, e) {
+  try {
+    console.error('[todo] move apply/revert failed:', e)
+    if (vm && vm.$message) vm.$message.error(tt('statsE.SettingsModal.purgeFailedMsg') + ((e && e.message) || ''))
+  } catch { /* toast must never become the new failure */ }
+}
+function observeMove (vm, step) {
+  try {
+    const r = step()
+    if (r && typeof r.catch === 'function') r.catch(e => moveFailToast(vm, e))
+  } catch (e) { moveFailToast(vm, e) }
+}
+
 export function moveWithUndo (vm, { label, apply, revert }) {
-  apply()
+  observeMove(vm, apply)
   if (!vm.$message || !window.Vue) return
   showUndoToast(vm.$message.bind(vm), [
     label + '　',
     window.Vue.h('a', {
       style: { color: 'var(--brand)', cursor: 'pointer' },
-      onClick: () => { revert(); vm.$message.closeAll() }
+      onClick: () => { observeMove(vm, revert); vm.$message.closeAll() }
     }, tt('statsJ.TodoItem.undoMove'))
   ])
 }
@@ -75,7 +93,7 @@ export function batchMoveWithUndo (vm, { label, snap, revertOf }) {
     label + '　',
     window.Vue.h('a', {
       style: { color: 'var(--brand)', cursor: 'pointer' },
-      onClick: () => { for (const s of snap) revertOf(s); vm.$message.closeAll() }
+      onClick: () => { for (const s of snap) observeMove(vm, () => revertOf(s)); vm.$message.closeAll() }
     }, tt('statsJ.TodoItem.undoMove'))
   ])
 }
