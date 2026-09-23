@@ -1,8 +1,10 @@
 /**
- * Visual regression gate - drives the real app via CDP, screenshots every route x light/dark themes, and pixel-diffs against baselines.
- * 用法:
- *   npm run visual:baseline   # retake baselines (before refactors / after intentional redesigns)
- *   npm run visual:check      # compare against baselines; diff beyond the threshold exits non-zero (mandatory after refactor/style changes)
+ * Visual regression gate (SUPERSEDED — do not extend).
+ * The npm scripts visual:baseline / visual:check no longer exist; the visual gate now runs via
+ * scripts/visual-web.mjs (web-host variant, wired into check-all.js with --spawn). This file is
+ * kept only for reference; run `node scripts/visual-web.mjs` instead of anything below.
+ *
+ * Legacy behavior: drives the real app via CDP, screenshots every route x light/dark themes, and pixel-diffs against baselines.
  * Requires the app running with a debug port: npx electron . --no-focus --remote-debugging-port=9333 (SKIPs with exit 0 when absent, never blocking CI)
  * Baselines/artifacts go to tests/.artifacts/visual/ (gitignored).
  */
