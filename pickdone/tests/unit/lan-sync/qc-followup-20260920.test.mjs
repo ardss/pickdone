@@ -172,18 +172,18 @@ test('M-8: hash-mismatch refunds the round byte budget so later files still fit'
     maxFileBytes: 1024, maxBytes: 100, // tight budget: without the refund only ONE of the two fits
     session: { failed: new Map(), requests: new Map() },
   })
-  // ONE batch containing both files: bad.bin (70B, wrong hash → refund) then good.bin (55B).
-  puller.noteMissing(['bad.bin', 'good.bin'])
+  // ONE batch containing both files: bad.png (70B, wrong hash → refund) then good.png (55B).
+  puller.noteMissing(['bad.png', 'good.png'])
   let done = false
   assert.equal(puller.maybeStart(() => { done = true }, () => {}), true)
-  // bad.bin with a WRONG hash → hash mismatch → markFailed → budget refunded
-  assert.equal(puller.onMessage({ type: 'att-meta', id: 'bad.bin', size: bad.length, hash: 'deadbeef' }), true)
-  assert.equal(puller.onMessage({ type: 'att-chunk', id: 'bad.bin', index: 0, data: bad.toString('base64'), final: true }), true)
-  // good.bin must still pass the budget gate BECAUSE bad.bin's 70 bytes were refunded
-  assert.equal(puller.onMessage({ type: 'att-meta', id: 'good.bin', size: good.length, hash: deps.hashFn(good) }), true)
-  assert.equal(puller.onMessage({ type: 'att-chunk', id: 'good.bin', index: 0, data: good.toString('base64'), final: true }), true)
+  // bad.png with a WRONG hash → hash mismatch → markFailed → budget refunded
+  assert.equal(puller.onMessage({ type: 'att-meta', id: 'bad.png', size: bad.length, hash: 'deadbeef' }), true)
+  assert.equal(puller.onMessage({ type: 'att-chunk', id: 'bad.png', index: 0, data: bad.toString('base64'), final: true }), true)
+  // good.bin must still pass the budget gate BECAUSE bad.png's 70 bytes were refunded
+  assert.equal(puller.onMessage({ type: 'att-meta', id: 'good.png', size: good.length, hash: deps.hashFn(good) }), true)
+  assert.equal(puller.onMessage({ type: 'att-chunk', id: 'good.png', index: 0, data: good.toString('base64'), final: true }), true)
   assert.equal(puller.onMessage({ type: 'att-end' }), false)
   assert.ok(done, 'batch terminated cleanly')
-  assert.ok(written.some(w => w.key === 'good.bin'), 'the second file landed because the failed file refunded its reserved bytes')
-  assert.ok(!written.some(w => w.key === 'bad.bin'), 'the corrupt file was never written')
+  assert.ok(written.some(w => w.key === 'good.png'), 'the second file landed because the failed file refunded its reserved bytes')
+  assert.ok(!written.some(w => w.key === 'bad.png'), 'the corrupt file was never written')
 })

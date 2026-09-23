@@ -66,7 +66,7 @@ test('R1: an att-missing for an id outside the requested batch never enters the 
   const { deps } = makePullerDeps()
   const session = { failed: new Map(), requests: new Map() }
   let sentIds = null
-  const puller = att.createAttachmentPuller({ deps, session, peerId: 'p1', send: m => { sentIds = m.ids }, getKeys: () => ['k1'] })
+  const puller = att.createAttachmentPuller({ deps, session, peerId: 'p1', send: m => { sentIds = m.ids }, getKeys: () => ['k1.png'] })
   assert.equal(puller.maybeStart(() => {}, () => {}), true, 'the att-req went out')
   assert.ok(sentIds && sentIds.length === 1, 'one id requested')
   // A buggy/compromised peer answers with a missing frame for an id we NEVER asked for.
@@ -82,7 +82,7 @@ test('R1b: an unsolicited att-missing does not cancel the in-flight transfer', (
   const { deps, written } = makePullerDeps()
   const session = { failed: new Map(), requests: new Map() }
   let sentIds = null
-  const puller = att.createAttachmentPuller({ deps, session, peerId: 'p1', send: m => { sentIds = m.ids }, getKeys: () => ['k1'] })
+  const puller = att.createAttachmentPuller({ deps, session, peerId: 'p1', send: m => { sentIds = m.ids }, getKeys: () => ['k1.png'] })
   puller.maybeStart(() => {}, () => {})
   const reqId = String(sentIds[0])
   const payload = Buffer.from('hello-world')
@@ -99,7 +99,7 @@ test('R2: an att-missing for a different id neither drops the current file nor r
   const { deps, written } = makePullerDeps()
   const session = { failed: new Map(), requests: new Map() }
   let sentIds = null
-  const puller = att.createAttachmentPuller({ deps, session, peerId: 'p1', maxBytes: 1500, send: m => { sentIds = m.ids }, getKeys: () => ['k1', 'k2'] })
+  const puller = att.createAttachmentPuller({ deps, session, peerId: 'p1', maxBytes: 1500, send: m => { sentIds = m.ids }, getKeys: () => ['k1.png', 'k2.png'] })
   puller.maybeStart(() => {}, () => {})
   const [k1, k2] = sentIds.map(String)
   const payload = Buffer.alloc(1000).fill(7)
@@ -116,7 +116,7 @@ test('R2b: a failed in-flight id refunds its reserved budget for later files', (
   const { deps, written } = makePullerDeps()
   const session = { failed: new Map(), requests: new Map() }
   let sentIds = null
-  const puller = att.createAttachmentPuller({ deps, session, peerId: 'p1', maxBytes: 1500, send: m => { sentIds = m.ids }, getKeys: () => ['k1', 'k2'] })
+  const puller = att.createAttachmentPuller({ deps, session, peerId: 'p1', maxBytes: 1500, send: m => { sentIds = m.ids }, getKeys: () => ['k1.png', 'k2.png'] })
   puller.maybeStart(() => {}, () => {})
   const [k1, k2] = sentIds.map(String)
   const payload = Buffer.alloc(1000).fill(9)
