@@ -6,6 +6,10 @@ import { confirmUrl } from '../utils/mediaRegistry.js'
 import { tt } from '../utils/core.js'
 import { FOCUS_MAX_MINUTES, REST_MAX_MINUTES } from '../utils/limits.js'
 import { commit as commitCommand } from "../utils/commandBus.js"
+// F-C3 (maint/dw wave3): the ledger patch is the last hop into the RUNNING countdown — clamp the
+// duration keys here as a bottom-line guard even for callers that bypass sanitizeSettingsPatch
+// (raw commit('tomato/patch') from float/quick-add windows, main.js CLI hooks).
+import { clampNumericSettings } from './settings.js'
 
 /** Running-tomato cross-device announce (feature: live remote focus chip). Fire-and-forget;
  * announce failures never break the focus flow (peers' staleness TTL self-heals). */
@@ -273,7 +277,10 @@ export default {
   },
   mutations: {
     patch (s, p) {
-      Object.assign(s, p)
+      // F-C3: duration keys (TOMATO_LEDGER_KEYS family) are clamped at this final hop — an unclamped
+      // inbound value (e.g. tomatoTime 9999 from an unsanitized path) used to drive the running
+      // countdown and get persisted to LS + db.settingsState verbatim.
+      Object.assign(s, clampNumericSettings(p))
       persistState(s)
     },
     /** Correct a focus record's linked task (user drags a task onto a timeline record segment / removes the link): only metadata changes; facts like time/duration untouched */
