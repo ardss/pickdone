@@ -35,11 +35,11 @@
  * `milestone` null = add mode, otherwise pre-fills for edit. Emits save({title, date: 'YYYY-MM-DD'}).
  */
 import dialogA11y from '../utils/dialogA11y.js'
+// F-C7 (maint/dw wave3): shared local day-key — was the third hand-rolled copy in the renderer
+import { localDayKey } from '../../../shared/date-key.mjs'
 
 function tsToDate (ts) {
-  const d = new Date(ts)
-  const p = n => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+  return localDayKey(ts)
 }
 
 export default {

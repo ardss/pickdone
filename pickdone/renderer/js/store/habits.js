@@ -54,6 +54,8 @@ function load () {
  *  todoBackup/settings); re-exported here for the existing habits-specific importers. */
 export { isAuxWindow } from '../utils/auxWindow.js'
 import { isAuxWindow } from '../utils/auxWindow.js'
+// F-C7 (maint/dw wave3): local day-key from the shared module — was hand-rolled twice below
+import { localDayKey } from '../../../shared/date-key.mjs'
 
 /** Dual write: localStorage (synchronous fallback) + main DB meta table (source of truth, included in auto backup).
  *  Aux windows: LS write + relay ping only — the main window's storage listener persists to the DB on their behalf. */
@@ -158,7 +160,7 @@ export default {
       // loop-exit conditions unreachable (no due day ever breaks, no createdKey guard) → infinite loop,
       // frozen renderer. Two years of look-back is far beyond any meaningful streak.
       for (let guard = 0; guard < 730; guard++) {
-        const k = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0')
+        const k = localDayKey(d) // F-C7: shared/date-key.mjs — was the third hand-rolled copy of the same concatenation
         if (h.records[k]) { streak++ } else if (k !== todayKey() && isDueOn(h, k)) break
         if (createdKey && k < createdKey) break // walked back before the habit's creation: nothing earlier can be due (loop guard)
         d.setDate(d.getDate() - 1)
@@ -170,7 +172,7 @@ export default {
       const out = []
       const d = new Date(); d.setDate(d.getDate() - 29)
       for (let i = 0; i < 30; i++) {
-        const k = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0')
+        const k = localDayKey(d) // F-C7: shared/date-key.mjs
         out.push({ key: k, on: !!(h && h.records[k]) })
         d.setDate(d.getDate() + 1)
       }
