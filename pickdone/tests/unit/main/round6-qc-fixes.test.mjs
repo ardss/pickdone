@@ -84,3 +84,28 @@ test('r6-6: contentFingerprint is vocabulary-agnostic (panel snapshot vs raw row
   // Mixed-shape rows (partially hydrated) resolve panel key first, fall back to row key
   assert.equal(contentFingerprint({ title: 'X', todoTime: 5 }), contentFingerprint({ taskContent: 'X', todoTime: 5 }))
 })
+
+/* F1 (2026-09-23, main-process quit chain): tray quit used to tear down a running pomodoro
+   silently — no confirm, no partial ledger record. The main process has exactly one running-state
+   signal (the per-second taskbar push routed through updateTomatoTray); the tray quit must gate
+   on it and ask before quitting. Electron main isn't unit-runnable, so this pins the wiring
+   contract (dialog present, cancel restores quitByUser, direct quit unchanged when idle). */
+test('r6-7: tray quit confirms before abandoning a running pomodoro', () => {
+  const src = require_('fs').readFileSync(path.join(root, 'src/main/index.js'), 'utf8')
+  const i = src.indexOf('async function quitFromTray')
+  assert.ok(i > 0, 'quitFromTray exists')
+  const body = src.slice(i, src.indexOf('\n}', i))
+  // The confirm keys off the live pomodoro signal, not an unconditional dialog
+  assert.match(body, /if \(tomatoLiveText\)/, 'confirm only while a pomodoro is live')
+  assert.match(body, /dialog\.showMessageBox/, 'main-process dialog is the confirm vehicle')
+  assert.match(body, /cancelId: 1/, 'cancel is the safe default choice')
+  assert.match(body, /response !== 0[\s\S]*?quitByUser = false/, 'cancelling restores the quit intent (no zombie half-quit state)')
+  assert.match(body, /app\.quit\(\)/, 'confirming proceeds to app.quit()')
+  // The tray menu routes through quitFromTray (no duplicated bare app.quit() left in the tray item)
+  assert.doesNotMatch(src, /label: i18nM\.mt\('trayQuit'\)[^}]*app\.quit\(\)/, 'trayQuit click no longer quits bare')
+  // The i18n surface carries the copy in BOTH locales
+  const i18n = require_('fs').readFileSync(path.join(root, 'src/main/i18n.js'), 'utf8')
+  for (const key of ['quitFocusActiveTitle', 'quitFocusActiveMsg', 'quitFocusQuit', 'quitFocusCancel']) {
+    assert.equal(i18n.split(key).length - 1, 2, `i18n key ${key} present in zh-CN AND en`)
+  }
+})

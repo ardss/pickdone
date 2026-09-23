@@ -336,9 +336,47 @@ function createTray () {
   tray.on('click', () => { showMainOrLock() })
 }
 // Tray carries pomodoro state: the tooltip is composed solely by the main process (single writer; shows just the app name when text is empty)
+let tomatoLiveText = '' // non-empty = a focus/rest pomodoro is live (per-second push from the renderer; the main process's only running-state signal)
 function updateTomatoTray (text) {
   const t = String(text || '').trim()
+  tomatoLiveText = t
   if (tray) { try { tray.setToolTip(i18nM.mt('appName') + (t ? ' · ' + t : '')) } catch (e) { /* empty */ } }
+}
+
+/* ================= Tray quit with focus-in-progress confirmation ================= */
+async function quitFromTray () {
+  state.quitByUser = true
+  // P2 2026-09-23: a running pomodoro used to die silently on tray-quit — the ledger only ever
+  // records on completeFocus/giveUp, so the in-progress session vanished with no confirm and no
+  // record. Ask before tearing everything down (the tray stays alive until confirmed).
+  if (tomatoLiveText) {
+    try {
+      const { dialog } = require('electron')
+      const { response } = await dialog.showMessageBox({
+        type: 'question',
+        title: i18nM.mt('quitFocusActiveTitle'),
+        message: i18nM.mt('quitFocusActiveTitle'),
+        detail: i18nM.mt('quitFocusActiveMsg') + '\n\n' + tomatoLiveText,
+        buttons: [i18nM.mt('quitFocusQuit'), i18nM.mt('quitFocusCancel')],
+        cancelId: 1,
+        defaultId: 1,
+        noLink: true,
+      })
+      if (response !== 0) { state.quitByUser = false; return } // cancelled: restore quit intent
+    } catch (e) { log.warn('[Tray] quit confirm dialog failed, proceeding with quit', e) }
+  }
+  // win can be a DESTROYED instance here (closeActionMinimize=false destroys the window on X but only
+  // createMainWindow reassigns the module var) — getBounds on it throws "Object has been destroyed" and
+  // kills the whole quit chain. Route through the live-window guard.
+  const qw = getMainWindow()
+  // P1 2026-09-12: writeConfig here used to run bare — a disk-full/locked config.json threw straight
+  // out of the tray-menu click handler. The tray was already destroyed below, so the quit died
+  // mid-chain leaving a zombie process (no window, no tray). Same try-wrap as windows.js close path.
+  if (qw) { try { writeConfig({ winBounds: qw.getBounds() }) } catch (err) { log.warn('[Tray] winBounds 写入失败(退出路径)', err) } }
+  // Destroy the tray icon first: the icon only disappears on Windows when the process exits,
+  // while the quit path (renderer flush + scheduler persist + WAL close) can take seconds — without this, the icon lingers and reads as "quit is slow"
+  if (tray) { try { tray.destroy() } catch (e) { /* empty */ } tray = null }
+  app.quit()
 }
 
 function rebuildTrayMenu () {
@@ -348,21 +386,7 @@ function rebuildTrayMenu () {
     click: () => { tomatoFloat.isDocked() ? tomatoFloat.undock() : tomatoFloat.dock(); rebuildTrayMenu() } })
   tpl.push({ label: i18nM.mt('trayOpen'), click: () => { showMainOrLock() } })
   tpl.push({ type: 'separator' })
-  tpl.push({ label: i18nM.mt('trayQuit'), click: () => {
-    state.quitByUser = true
-    // win can be a DESTROYED instance here (closeActionMinimize=false destroys the window on X but only
-    // createMainWindow reassigns the module var) — getBounds on it throws "Object has been destroyed" and
-    // kills the whole quit chain. Route through the live-window guard.
-    const qw = getMainWindow()
-    // P1 2026-09-12: writeConfig here used to run bare — a disk-full/locked config.json threw straight
-    // out of the tray-menu click handler. The tray was already destroyed below, so the quit died
-    // mid-chain leaving a zombie process (no window, no tray). Same try-wrap as windows.js close path.
-    if (qw) { try { writeConfig({ winBounds: qw.getBounds() }) } catch (err) { log.warn('[Tray] winBounds 写入失败(退出路径)', err) } }
-    // Destroy the tray icon first: the icon only disappears on Windows when the process exits,
-    // while the quit path (renderer flush + scheduler persist + WAL close) can take seconds — without this, the icon lingers and reads as "quit is slow"
-    if (tray) { try { tray.destroy() } catch (e) { /* empty */ } tray = null }
-    app.quit()
-  } })
+  tpl.push({ label: i18nM.mt('trayQuit'), click: () => { quitFromTray() } })
   tray.setContextMenu(Menu.buildFromTemplate(tpl))
 }
 
