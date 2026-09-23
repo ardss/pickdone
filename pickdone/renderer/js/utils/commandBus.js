@@ -45,7 +45,6 @@ export const VERB_TO_OP = {
   'sync.setEnabled': 'syncSetEnabled',
   'sync.setName': 'syncSetName',
   'sync.pairWithCode': 'syncPairWithCode',
-  'sync.addPeer': 'syncAddPeer',
   'sync.pairRespond': 'syncPairRespond',
   'sync.pairRequest': 'syncPairRequest',
   'sync.unpairPeer': 'syncUnpairPeer',

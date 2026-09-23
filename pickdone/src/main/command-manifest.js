@@ -143,7 +143,6 @@ const COMMANDS = {
   'sync.setEnabled':   { entity: 'sync', verb: 'setEnabled', sync: 'local', lwwField: null, tombstone: null, op: 'syncSetEnabled' },
   'sync.setName':      { entity: 'sync', verb: 'setName', sync: 'local', lwwField: null, tombstone: null, op: 'syncSetName' },
   'sync.pairWithCode': { entity: 'sync', verb: 'pairWithCode', sync: 'local', lwwField: null, tombstone: null, op: 'syncPairWithCode' },
-  'sync.addPeer':      { entity: 'sync', verb: 'addPeer', sync: 'local', lwwField: null, tombstone: null, op: 'syncAddPeer' },
   'sync.pairRespond':  { entity: 'sync', verb: 'pairRespond', sync: 'local', lwwField: null, tombstone: null, op: 'syncPairRespond' },
   'sync.pairRequest':  { entity: 'sync', verb: 'pairRequest', sync: 'local', lwwField: null, tombstone: null, op: 'syncPairRequest' },
   'sync.unpairPeer':   { entity: 'sync', verb: 'unpairPeer', sync: 'local', lwwField: null, tombstone: null, op: 'syncUnpairPeer' },
