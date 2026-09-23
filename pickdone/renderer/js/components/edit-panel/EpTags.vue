@@ -15,12 +15,13 @@
 </template>
 
 <script lang="ts">
+import type { PropType } from 'vue'
 /** Hash-tag chips + add-input row; the parent owns the title rewrite (addTag/removeTag). */
 export default {
   name: 'EpTags',
   props: {
     /** derived tag names (parent computed taskTags via extractTags(e.title)) */
-    tags: { type: Array, default: () => [] }
+    tags: { type: Array as PropType<string[]>, default: () => [] }
   },
   emits: ['add', 'remove'],
   data () {
