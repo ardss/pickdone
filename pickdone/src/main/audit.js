@@ -166,7 +166,8 @@ function asId (v) { return v == null ? null : String(v) }
 function target (taskId, content) {
   const t = {}
   if (taskId != null) t.taskId = String(taskId)
-  if (content != null && content !== '') t.content = String(content)
+  // F-B8: target content is capped like snapshot content (audit must not be a plaintext history)
+  if (content != null && content !== '') t.content = capContent(content)
   return Object.keys(t).length ? t : null
 }
 
