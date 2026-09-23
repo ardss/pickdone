@@ -65,64 +65,36 @@
         <span class="sn-dot none"></span><span>{{ $t('statsG.SideNav.uncategorized') }}</span>
       </div>
       <template v-for="o in hierarchical" :key="o.categoryId">
-        <div v-if="o.folderIs" class="sn-cat-item sn-cat-folder"
-             :class="{'drag-over-before': dragOverId===o.categoryId && dragPos==='before', 'drag-over-after': dragOverId===o.categoryId && dragPos==='after', dragging: catDragId===o.categoryId}"
-             role="button" tabindex="0" draggable="true"
-             :title="$t('statsG.SideNav.dblclickRenameTip')"
-             :aria-expanded="isFolderExpanded(o.categoryId) ? 'true' : 'false'"
-             @click="toggleFolder(o.categoryId)" @keydown.enter.prevent="toggleFolder(o.categoryId)"
-             @dblclick.stop="startCatEdit(o)"
-             @dragstart="dragStartCat(o,$event)" @dragover.prevent="dragOverCat(o,$event)" @drop.prevent="dropOnCat(o,$event)" @dragend="dragEndCat">
-          <app-icon name="folder" :size="14" v-if="!isFolderExpanded(o.categoryId)" :style="{color:o.categoryColor}"/>
-          <app-icon name="folder" :size="14" v-else :style="{color:o.categoryColor}"/>
-          <template v-if="catEditing===o.categoryId">
-            <input v-model="newCatName" class="sn-cat-edit" @keydown.enter.prevent="onCatEditEnter($event, o)" @keydown.esc.prevent="cancelCatEdit(o)" @blur="saveCatEdit(o)"/>
-          </template>
-          <template v-else><span class="sn-cat-name">{{o.categoryName}}</span></template>
-          <i class="folder-toggle-icon"><app-icon :name="isFolderExpanded(o.categoryId)?'chevron-down':'chevron-right'" :size="11"/></i>
-          <i class="sn-cat-del sn-cat-ren" role="button" tabindex="0" :aria-label="$t('statsG.SideNav.renameCatAria')" style="display:inline-flex"
-             :title="$t('statsG.SideNav.renameCatTitle')" @click.stop="startCatEdit(o)" @keydown.enter.prevent.stop="startCatEdit(o)"><app-icon name="edit" :size="12"/></i>
-          <i class="sn-cat-del" role="button" tabindex="0" :aria-label="$t('statsG.SideNav.delCatAria')" style="display:inline-flex"
-             :title="$t('statsG.SideNav.delCatTitle')" @click.stop="delCat(o)" @keydown.enter.prevent.stop="delCat(o)"><app-icon name="trash" :size="12"/></i>
-        </div>
+        <!-- Folder / child / flat rows: one SnCategoryItem (maint/dw-wave2 domain-2 split; the three
+             verbatim template copies + their inline rename inputs live in the child now). State and
+             every mutation (rename buffer / drag machine / cascade delete) stay in this parent. -->
+        <sn-category-item v-if="o.folderIs" :cat="o" variant="folder"
+             :expanded="isFolderExpanded(o.categoryId)"
+             :editing="catEditing===o.categoryId" :new-cat-name="newCatName"
+             :drag-over="dragOverId===o.categoryId" :drag-pos="dragPos" :dragging="catDragId===o.categoryId"
+             @toggle="toggleFolder(o.categoryId)" @rename="startCatEdit(o)" @del="delCat(o)"
+             @edit-input="newCatName=$event" @edit-enter="onCatEditEnter($event, o)"
+             @edit-cancel="cancelCatEdit(o)" @edit-save="saveCatEdit(o)"
+             @drag-start="dragStartCat(o,$event)" @drag-over="dragOverCat(o,$event)"
+             @drop="dropOnCat(o,$event)" @drag-end="dragEndCat"/>
         <template v-if="o.folderIs && o.children && o.children.length && isFolderExpanded(o.categoryId)">
-          <div v-for="ch in o.children" :key="'c'+ch.categoryId"
-               class="sn-cat-item sn-cat-child" role="link" tabindex="0"
-               :title="$t('statsG.SideNav.dblclickRenameTip')"
-               :class="{active: $route.params && $route.params.id == ch.categoryId}"
-               @click="go('todo-list-category',{id:ch.categoryId})"
-               @dblclick.stop="startCatEdit(ch)"
-               @keydown.enter.prevent="go('todo-list-category',{id:ch.categoryId})">
-            <span class="sn-dot" :style="{background:ch.categoryColor}"></span>
-            <template v-if="catEditing===ch.categoryId">
-              <input v-model="newCatName" class="sn-cat-edit" @keydown.enter.prevent="onCatEditEnter($event, ch)" @keydown.esc.prevent="cancelCatEdit(ch)" @blur="saveCatEdit(ch)"/>
-            </template>
-            <template v-else><span>{{ch.categoryName}}</span></template>
-            <i class="sn-cat-del sn-cat-ren" role="button" tabindex="0" :aria-label="$t('statsG.SideNav.renameCatAria')" style="display:inline-flex"
-               :title="$t('statsG.SideNav.renameCatTitle')" @click.stop="startCatEdit(ch)" @keydown.enter.prevent.stop="startCatEdit(ch)"><app-icon name="edit" :size="12"/></i>
-            <i class="sn-cat-del" role="button" tabindex="0" :aria-label="$t('statsG.SideNav.delCatAria')" style="display:inline-flex"
-               :title="$t('statsG.SideNav.delCatTitle')" @click.stop="delCat(ch)" @keydown.enter.prevent.stop="delCat(ch)"><app-icon name="trash" :size="12"/></i>
-          </div>
+          <sn-category-item v-for="ch in o.children" :key="'c'+ch.categoryId" :cat="ch" variant="child"
+               :active="$route.params && $route.params.id == ch.categoryId"
+               :editing="catEditing===ch.categoryId" :new-cat-name="newCatName"
+               @open="go('todo-list-category',{id:ch.categoryId})" @rename="startCatEdit(ch)" @del="delCat(ch)"
+               @edit-input="newCatName=$event" @edit-enter="onCatEditEnter($event, ch)"
+               @edit-cancel="cancelCatEdit(ch)" @edit-save="saveCatEdit(ch)"/>
         </template>
-        <div v-if="!o.folderIs"
-             class="sn-cat-item" role="link" tabindex="0" draggable="true"
-             :title="$t('statsG.SideNav.dblclickRenameTip')"
-             :class="{active: $route.params && $route.params.id == o.categoryId,
-                      'drag-over-before': dragOverId===o.categoryId && dragPos==='before', 'drag-over-after': dragOverId===o.categoryId && dragPos==='after', dragging: catDragId===o.categoryId, busy: catBusyId===o.categoryId}"
-             @click="go('todo-list-category',{id:o.categoryId})"
-             @keydown.enter.prevent="go('todo-list-category',{id:o.categoryId})"
-             @dblclick.stop="startCatEdit(o)"
-             @dragstart="dragStartCat(o,$event)" @dragover.prevent="dragOverCat(o,$event)" @drop.prevent="dropOnCat(o,$event)" @dragend="dragEndCat">
-          <span class="sn-dot" :style="{borderColor:o.categoryColor, background:o.categoryColor}"></span>
-          <template v-if="catEditing===o.categoryId">
-            <input v-model="newCatName" class="sn-cat-edit" @keydown.enter.prevent="onCatEditEnter($event, o)" @keydown.esc.prevent="cancelCatEdit(o)" @blur="saveCatEdit(o)"/>
-          </template>
-          <template v-else><span>{{o.categoryName}}</span></template>
-          <i class="sn-cat-del sn-cat-ren" role="button" tabindex="0" :aria-label="$t('statsG.SideNav.renameCatAria')" style="display:inline-flex"
-             :title="$t('statsG.SideNav.renameCatTitle')" @click.stop="startCatEdit(o)" @keydown.enter.prevent.stop="startCatEdit(o)"><app-icon name="edit" :size="12"/></i>
-          <i class="sn-cat-del" role="button" tabindex="0" :aria-label="$t('statsG.SideNav.delCatAria')" style="display:inline-flex"
-             :title="$t('statsG.SideNav.delCatTitle')" @click.stop="delCat(o)" @keydown.enter.prevent.stop="delCat(o)"><app-icon name="trash" :size="12"/></i>
-        </div>
+        <sn-category-item v-if="!o.folderIs" :cat="o" variant="flat"
+             :active="$route.params && $route.params.id == o.categoryId"
+             :editing="catEditing===o.categoryId" :new-cat-name="newCatName"
+             :drag-over="dragOverId===o.categoryId" :drag-pos="dragPos" :dragging="catDragId===o.categoryId"
+             :busy="catBusyId===o.categoryId"
+             @open="go('todo-list-category',{id:o.categoryId})" @rename="startCatEdit(o)" @del="delCat(o)"
+             @edit-input="newCatName=$event" @edit-enter="onCatEditEnter($event, o)"
+             @edit-cancel="cancelCatEdit(o)" @edit-save="saveCatEdit(o)"
+             @drag-start="dragStartCat(o,$event)" @drag-over="dragOverCat(o,$event)"
+             @drop="dropOnCat(o,$event)" @drag-end="dragEndCat"/>
       </template>
       </template>
     </div>
@@ -159,52 +131,25 @@
 
     </div>
 
-    <!-- Recycle bin merged into the account row (user-finalized): a low-frequency defensive tool doesn't compete with navigation for space; the category-drag-into-delete target moved with the button -->
+    <!-- Recycle bin merged into the account row (user-finalized): a low-frequency defensive tool doesn't compete with navigation for space; the category-drag-into-delete target moved with the button.
+         Sync/recycle/settings trio: one SnFootActions (maint/dw-wave2 domain-2 split of the two parallel expanded/collapsed copies) -->
     <div class="sn-account">
       <span class="sn-avatar" :style="avatarStyle" aria-hidden="true">{{avatarChar}}</span>
       <span class="sn-username" :title="userNameMasked">{{userNameMasked}}</span>
       <span class="ml-auto"></span>
-      <svg v-if="syncDone" class="sn-sync sn-sync--done" viewBox="0 0 24 24" role="img" :aria-label="$t('statsG.SideNav.syncDoneAria')">
-        <path d="M20 6L9 17l-5-5" fill="none" stroke="#0c8172" stroke-width="2.4"
-              stroke-linecap="round" stroke-linejoin="round" pathLength="1"/>
-      </svg>
-      <img v-else class="sn-sync" :class="{spinning}" src="app://app/assets/img/icon-sync3.svg" :title="$t('statsG.SideNav.syncTitle')"
-           role="button" tabindex="0" :aria-label="$t('statsG.SideNav.syncAria')" @click="syncNow" @keydown.enter.prevent="syncNow">
-      <button class="sn-account-gear sn-account-trash" :class="{'drag-ready': catDragId!=null, 'drag-over': trashHot}"
-              :title="$t('statsG.SideNav.recycleBinBtn')" :aria-label="$t('statsG.SideNav.recycleBinBtn')"
-              @click="go('todo-list-recycle-bin')" @keydown.enter.prevent="go('todo-list-recycle-bin')"
-              @dragover="trashDragOver" @dragleave="trashHot=false" @drop.prevent="dropOnTrash">
-        <app-icon name="trash" :size="14"/>
-        <em v-if="recycleCount" class="sn-badge">{{ recycleCount }}</em>
-      </button>
-      <button class="sn-account-gear" :title="$t('statsG.SideNav.settingsTitle')" :aria-label="$t('statsG.SideNav.settingsAria')" @click="openSettings">
-        <app-icon name="gear" :size="15"/>
-        <i v-if="$store.state.ui.updateReady" class="sn-upd-dot" :title="$t('update.readyBadge')"></i>
-      </button>
+      <sn-foot-actions :spinning="spinning" :sync-done="syncDone"
+                       :drag-ready="catDragId!=null" :trash-hot="trashHot"
+                       :recycle-count="recycleCount" :update-ready="$store.state.ui.updateReady"
+                       @sync="syncNow" @recycle="go('todo-list-recycle-bin')" @settings="openSettings"
+                       @trash-dragover="trashDragOver" @trash-dragleave="trashHot=false" @trash-drop="dropOnTrash"/>
     </div>
 
-    <div class="sn-collapsed-foot">
-      <!-- Sync is also added to the collapsed state (user-finalized): the account row hides entirely when collapsed; sync/recycle bin/settings stack vertically -->
-      <button class="sn-cog-btn" :title="$t('statsG.SideNav.syncTitle')" :aria-label="$t('statsG.SideNav.syncAria')"
-              @click="syncNow" @keydown.enter.prevent="syncNow">
-        <svg v-if="syncDone" class="sn-sync sn-sync--done" viewBox="0 0 24 24" role="img" :aria-label="$t('statsG.SideNav.syncDoneAria')">
-          <path d="M20 6L9 17l-5-5" fill="none" stroke="#0c8172" stroke-width="2.4"
-                stroke-linecap="round" stroke-linejoin="round" pathLength="1"/>
-        </svg>
-        <img v-else class="sn-sync" :class="{spinning}" src="app://app/assets/img/icon-sync3.svg" alt="">
-      </button>
-      <button class="sn-cog-btn" :class="{'drag-ready': catDragId!=null, 'drag-over': trashHot}"
-              :title="$t('statsG.SideNav.recycleBinBtn')" :aria-label="$t('statsG.SideNav.recycleBinBtn')"
-              @click="go('todo-list-recycle-bin')" @keydown.enter.prevent="go('todo-list-recycle-bin')"
-              @dragover="trashDragOver" @dragleave="trashHot=false" @drop.prevent="dropOnTrash">
-        <app-icon name="trash" :size="15"/>
-      </button>
-      <button class="sn-cog-btn" :title="$t('statsG.SideNav.settingsTitle')" :aria-label="$t('statsG.SideNav.settingsAria')"
-              @click="openSettings" @keydown.enter.prevent="openSettings">
-        <app-icon name="gear" :size="15"/>
-        <i v-if="$store.state.ui.updateReady" class="sn-upd-dot" :title="$t('update.readyBadge')"></i>
-      </button>
-    </div>
+    <sn-foot-actions collapsed
+                     :spinning="spinning" :sync-done="syncDone"
+                     :drag-ready="catDragId!=null" :trash-hot="trashHot"
+                     :update-ready="$store.state.ui.updateReady"
+                     @sync="syncNow" @recycle="go('todo-list-recycle-bin')" @settings="openSettings"
+                     @trash-dragover="trashDragOver" @trash-dragleave="trashHot=false" @trash-drop="dropOnTrash"/>
 
     <!-- Expand handle while collapsed: appears at the right-edge middle on hovering the sidebar's blank area (2026-08-31 user feedback on discoverability) -->
     <button v-if="collapsed" class="sn-expand-hint" :title="$t('statsG.SideNav.expandSidebar')" :aria-label="$t('statsG.SideNav.expandSidebar')"
@@ -236,6 +181,8 @@ import WeatherWidget from './WeatherWidget.vue'
 import SnTagPanel from './side-nav/SnTagPanel.vue'
 import SnManageCategoriesModal from './side-nav/SnManageCategoriesModal.vue'
 import SnManageTagsModal from './side-nav/SnManageTagsModal.vue'
+import SnCategoryItem from './side-nav/SnCategoryItem.vue'
+import SnFootActions from './side-nav/SnFootActions.vue'
 import { NAV_ITEMS, navKeyOfRoute } from '../views/registry.js'
 import { commit as commitCommand } from "../utils/commandBus.js"
 import { deleteCategoryWithUndo } from './side-nav/categoryDelete.js'
@@ -247,7 +194,7 @@ const NAV_ORDER = NAV_ITEMS.map(n => n.route)
 
 export default {
   name: 'SideNav',
-  components: { WeatherWidget, SnTagPanel, SnManageCategoriesModal, SnManageTagsModal, FilterModal: () => import('./FilterModal.vue') },
+  components: { WeatherWidget, SnTagPanel, SnManageCategoriesModal, SnManageTagsModal, SnCategoryItem, SnFootActions, FilterModal: () => import('./FilterModal.vue') },
   data () {
     return {
       catBusyId: null as any, // D6-F4: category row whose delete cascade is running (blocks re-entry)
