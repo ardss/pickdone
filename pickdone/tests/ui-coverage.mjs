@@ -103,9 +103,12 @@ try {
     }
     return false
   }
-  ok('四象限视图渲染', await clickPoll('button[aria-label="Eisenhower matrix"]', `document.querySelector('.today-list').innerHTML.includes('matrix')`))
-  ok('卡片视图渲染', await clickPoll('button[aria-label="Deck"]', `!!document.querySelector('.today-list .pd-day-deck, .today-list [class*=day-deck]')`))
-  ok('切回列表视图', await clickPoll('button[aria-label="List"]', `!!document.querySelector('.today-list .td-groups')`))
+  // 2026-09-24 adversarial-review fix: the three aria-labels are $t-bound (statsE.TodayView.*,
+  // zh-CN renders 四象限/卡片/列表) — select the .pd-view-seg buttons positionally instead
+  // (TodayView.vue:11-13 fixed order list/matrix/deck; the gated deps button is 4th and unused)
+  ok('四象限视图渲染', await clickPoll('.pd-view-seg button:nth-of-type(2)', `document.querySelector('.today-list').innerHTML.includes('matrix')`))
+  ok('卡片视图渲染', await clickPoll('.pd-view-seg button:nth-of-type(3)', `!!document.querySelector('.today-list .pd-day-deck, .today-list [class*=day-deck]')`))
+  ok('切回列表视图', await clickPoll('.pd-view-seg button:nth-of-type(1)', `!!document.querySelector('.today-list .td-groups')`))
 
   console.log('[6] 回收站 UI 流')
   const beforeCnt = await storeGet(`$s.state.todo.todoList.filter(t=>!t.delete).length`)
@@ -135,7 +138,9 @@ try {
   ok('编辑栏打开', await exists('.ep-inner'))
   ok('重复规则弹窗打开', (await click('.ep-repeat-row')) === 'ok' && await exists('.modal-container'))
   await sleep(600)
-  const gen = await evalJson(ctx, `(()=>{const b=[...document.querySelectorAll('.modal-container button')].find(x=>x.textContent.includes('Generate'));if(!b)return 'nobtn';if(b.disabled)return 'disabled';b.click();return 'ok'})()`)
+  // locale-independent: the generate button is the modal footer's primary el-button
+  // (RepeatModal.vue:94, label is $t('statsD.RepeatModal.generate') — zh-CN renders 生成)
+  const gen = await evalJson(ctx, `(()=>{const b=document.querySelector('.modal-container .modal__footer .el-button--primary');if(!b)return 'nobtn';if(b.disabled)return 'disabled';b.click();return 'ok'})()`)
   await sleep(1500)
   const cntAfterRepeat = await storeGet(`$s.state.todo.todoList.filter(t=>!t.delete).length`)
   ok('重复生成产出新任务', gen === 'ok' && cntAfterRepeat > cntBeforeRepeat, `gen=${gen} ${cntBeforeRepeat}→${cntAfterRepeat}`)
@@ -147,7 +152,12 @@ try {
   await storeRun(`$s.commit('ui/toggleSettings',true)`)
   await sleep(900)
   ok('设置弹窗打开', await exists('.modal-container'))
-  const setLen = await evalJson(ctx, `(()=>{const inp=document.querySelector('input[aria-label="Focus length (min):"]');if(!inp)return 'nosel';
+  // locale-independent: pick the el-input-number control that is DISPLAYING the store's current
+  // tomatoTime (SettingsModal.vue:230; the aria-label is $t-bound so zh-CN rendered 专注时长（分钟）).
+  // Self-verifying: if the wrong control is picked, the '专注时长写入设置' store assertion below fails.
+  const setLen = await evalJson(ctx, `(function(){const want=String(window.appUI.$store.state.settings.tomatoTime||25);
+    const inp=[...document.querySelectorAll('.modal-container .el-input-number input')].find(x=>x.value===want);
+    if(!inp)return 'nosel';
     const setter=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
     setter.call(inp,'30');inp.dispatchEvent(new Event('input',{bubbles:true}));
     inp.dispatchEvent(new Event('change',{bubbles:true}));inp.blur();return 'ok'})()`)
@@ -164,7 +174,9 @@ try {
   await sleep(500)
   await goto('#/todo-list/habit')
   await typeIn('.habit-add-input', '跑步')
-  ok('习惯「新建」按钮点击', (await clickText('button', 'New')) === 'ok')
+  // locale-independent: the create button is .habit-add's .mini.primary (HabitView.vue:29,
+  // label $t('statsB.HabitView.create') — zh-CN renders 新建); it precedes the moment-add block in DOM
+  ok('习惯「新建」按钮点击', (await evalJson(ctx, `(()=>{const b=document.querySelector('.habit-add button.mini.primary');if(!b)return 'nosel';b.click();return 'ok'})()`)) === 'ok')
   await sleep(700)
   ok('新建习惯卡片出现', await bodyHas('跑步') && (await exists('.habit-card')))
   // 2026-09-23 (domain-5): the old assertion only checked that clickText('✓') returned 'ok' — the
