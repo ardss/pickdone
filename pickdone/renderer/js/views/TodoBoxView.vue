@@ -256,10 +256,13 @@ export default {
       // Aggregate undo: delete all plain rows first, then ONE batch undo toast restoring the whole
       // group — per-row deleteWithUndo would stack N toasts for an N-row selection while sibling
       // batch ops (batchToday/batchCat) aggregate via batchMoveWithUndo + closeAll
-      const snap = []
-      for (const raw of plain) {
-        try { await this.$store.dispatch('todo/deleteTodo', raw); snap.push({ id: raw.taskId }) } catch { /* dead row: skip */ }
-      }
+      // F-C1: batch delete — ONE snapshot push / ONE computeViews / ONE putMany (the per-row
+      // deleteTodo loop used to push a whole-table undo snapshot per row)
+      let snap = []
+      try {
+        const ids = await this.$store.dispatch('todo/deleteTodosMany', plain)
+        snap = ids.map(id => ({ id }))
+      } catch { /* dead rows: skip */ }
       if (snap.length) {
         this.$message.closeAll()
         batchMoveWithUndo(this, {

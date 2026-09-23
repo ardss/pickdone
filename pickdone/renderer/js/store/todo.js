@@ -487,6 +487,53 @@ export default {
       dispatch('writeCriticalBackup')
     },
 
+    /** maint/dw wave3 F-C1: batch variant of deleteTodo — ONE history snapshot (one undo restores
+     *  the whole batch), ONE computeViews, ONE putMany write. The old call sites looped per-row
+     *  deleteTodo dispatches: each round broke the 400ms undo merge and pushed a whole-table
+     *  snapshot into the undo stack (a 700-row batch ≈ 0.7GB of string churn), ran a debounced
+     *  computeViews per row and 3 serial IPCs per row. Same batch shape as reorderTodos
+     *  (Map lookup + putMany + single computeViews). Deliberately NOT in index.js's
+     *  HISTORY_ACTIONS set: the pre-batch snapshot is pushed here explicitly (once) instead of by
+     *  the subscribeAction before-hook, so the whole batch is exactly ONE undo step. */
+    async deleteTodosMany ({ commit, dispatch, rootState }, todos) {
+      commit('historyBreakMerge')
+      const index = new Map([...this.state.todo.todoList, ...this.state.todo.recycleList].map(t => [t.taskId, t]))
+      const now = Date.now()
+      const rows = []
+      const ids = []
+      for (const todo of (todos || [])) {
+        const raw = index.get(todo && todo.taskId)
+        if (!raw) continue
+        ids.push(raw.taskId)
+        // version reset to 0: same re-delete-after-restore sync semantics as deleteTodo
+        rows.push({ ...raw, delete: true, deleting: true, deletedAt: now, updateTime: now, status: 'delete', version: 0 })
+      }
+      if (!rows.length) return []
+      // Single pre-batch snapshot (same shape the subscribeAction before-hook pushes for deleteTodo)
+      const snap = this.state.todo
+      commit('historyPush', JSON.stringify({ todoList: snap.todoList, recycleList: snap.recycleList }))
+      // Focus-bound rows detach first (same as deleteTodo)
+      const at = rootState.tomato && rootState.tomato.attachTodo
+      if (at && ids.includes(at.taskId)) dispatch('tomato/attach', null, { root: true })
+      for (const merged of rows) commit('upsertLocal', merged)
+      // deleting is a local-dialect UI flag, not a schema column: strip before persisting (deleteTodo)
+      const clean = rows.map(m => { const r = { ...m }; delete r.deleting; return r })
+      // Same pending-queue guarantee as reorderTodos: a transient IPC/db failure stays queued for the
+      // quit-flush replay instead of silently dropping the batch
+      try {
+        await commitCommand('todo', 'putMany', deproxyRows(clean))
+      } catch (err) {
+        reportError('upsertMany', err)
+        try { _pendingUpserts.push({ op: 'upsertMany', params: deproxyRows(clean) }) } catch { /* keep the UI flow alive */ }
+        hookQuitFlush()
+      }
+      // Chip cascade per task, snapshot to meta first (same as deleteTodo)
+      for (const id of ids) { try { await snapshotForDelete(id) } catch (e) { console.warn('[todo] failed to snapshot chips for deleted task:', e) } }
+      dispatch('computeViews')
+      dispatch('writeCriticalBackup')
+      return ids
+    },
+
     async restoreFromRecycle ({ commit, dispatch }, todo) {
       // Row first, snapshot second (verify-then-commit): restoreSnapshot empties the snapshot meta as a side
       // effect, so consuming it before the row update was confirmed meant a mid-way failure (row missing,
