@@ -6,7 +6,7 @@
        opens the ledger dialog. State + persistence stay in the parent. -->
   <div class="ep-row ep-tomato-est">
     <img class="ep-ico" src="app://app/assets/img/icon-tomato-timer2.svg" style="opacity:.6">
-    <span class="ep-diff-label">{{ $t('statsG.EpTomato.est') }}</span><span class="hint-q" role="button" tabindex="0" :title="$t('statsG.EpTomato.estTip')" :aria-label="$t('statsG.EpTomato.estTip')">?</span>
+    <span class="ep-diff-label">{{ $t('statsG.EpTomato.est') }}</span><span class="hint-q" role="img" :title="$t('statsG.EpTomato.estTip')" :aria-label="$t('statsG.EpTomato.estTip')">?</span>
     <span class="ep-tom-account" :class="{gain: actual > 0}">
       <span class="ep-tom-seg ep-tom-seg--est">
         <button class="ep-tom-step" :aria-label="$t('statsG.EpTomato.estDecrease')" @click.stop="$emit('est-delta', -1)">−</button>
