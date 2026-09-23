@@ -196,7 +196,7 @@ try {
     ok('预计番茄 + 步进生效', parseInt(estAfter) === parseInt(estBefore) + 1, `${estBefore}→${estAfter}`)
   } else ok('预计番茄步进器存在', false, 'steps=' + steps)
 
-  console.log('- 浮窗验证拆分为 tests/_float-check.mjs（需要真实弹窗,不在无焦点门禁内）')
+  console.log('- 浮窗验证见 tests/float-hit.probe.mjs（需要真实弹窗+--remote-debugging-port 前置,提交前手动跑,不在无焦点门禁内）')
   console.log(`\nresults: ${pass} passed, ${fail} failed`)
   if (fail) { console.error('FAILURES:\n  - ' + fails.join('\n  - ')); process.exit(1) }
   process.exit(0)
