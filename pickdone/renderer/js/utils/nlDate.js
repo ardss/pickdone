@@ -7,6 +7,7 @@ import { FMT } from './core.js'
  */
 import { dayjs } from './core.js'
 import { parseChineseNaturalDate } from '../../../shared/nl-date-core.mjs'
+import { mmToHHmm } from './tomatoShared.js'
 
 /** English NL parsing:
  *  - today / tonight / tomorrow / yesterday
@@ -146,7 +147,7 @@ function parseEnglishDate (text, base) {
     // Explicit time given: already past → roll forward one day (consistent with the Chinese version)
     if (d.isBefore(base)) d = d.add(1, 'day')
     date = d
-    label = (label ? label + ' ' : '') + `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`
+    label = (label ? label + ' ' : '') + mmToHHmm(h * 60 + min)
   }
   return { date, label, restText: restText || text }
 }
@@ -181,7 +182,7 @@ export function parseNaturalDate (text, base = dayjs()) {
     if (withTime.isBefore(base)) withTime = withTime.add(1, 'day')
     return {
       date: withTime,
-      label: (cnResult.label ? cnResult.label + ' ' : '') + `${String(peeled.h).padStart(2, '0')}:${String(peeled.min).padStart(2, '0')}`,
+      label: (cnResult.label ? cnResult.label + ' ' : '') + mmToHHmm(peeled.h * 60 + peeled.min),
       restText: cnResult.restText
     }
   }

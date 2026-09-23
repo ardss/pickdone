@@ -49,6 +49,7 @@
  */
 import { dayjs, FMT } from '../../utils/core.js'
 import { removeWithUndo } from '../../utils/confirm.js'
+import { mmToHHmm } from '../../utils/tomatoShared.js'
 
 // [h7-fixes] pure-start
 /** Undo re-insert index: the index captured at delete time can be stale after concurrent
@@ -108,7 +109,8 @@ export default {
       const last = this.remindRows[this.remindRows.length - 1]
       const [h, m] = String((last && last.time) || '09:00').split(':').map(Number)
       const nm = (h * 60 + m + 30) % 1440
-      this.remindRows.push({ date: (last && last.date) || (this.task.dateTs || null), time: String(Math.floor(nm / 60)).padStart(2, '0') + ':' + String(nm % 60).padStart(2, '0') })
+      // nm is already in 0..1439, so mmToHHmm's clamping is a no-op here (behavior-equivalent)
+      this.remindRows.push({ date: (last && last.date) || (this.task.dateTs || null), time: mmToHHmm(nm) })
     },
     removeRemindRow (i) {
       const row = this.remindRows[i]

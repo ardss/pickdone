@@ -40,6 +40,20 @@ export function formatMMSS (sec) {
   return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
 }
 
+/** Minutes → "HH:mm" (clamped to 0..1439 like DayRail's former inline copy); EpReminders' former
+ *  inline copy passed an already-in-range value, for which this is behavior-equivalent.
+ *  Previously inlined separately in DayRail/EpReminders/nlDate(×2) — same convergence motive as formatMMSS. */
+export function mmToHHmm (min) {
+  const v = Math.max(0, Math.min(1439, Math.round(Number(min) || 0)))
+  return `${String(Math.floor(v / 60)).padStart(2, '0')}:${String(v % 60).padStart(2, '0')}`
+}
+
+/** Seconds → "HH:mm:ss" (TomatoFocusRecordModal's former inline fmtSec, extracted verbatim) */
+export function secToHHmmss (sec) {
+  const s = Math.max(0, Math.round(Number(sec) || 0))
+  return `${String(Math.floor(s / 3600)).padStart(2, '0')}:${String(Math.floor(s % 3600 / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
+}
+
 /** CLI tomato command staleness + expired receipt (extracted 2026-09-11 so the rejection path is
  *  unit-testable; renderer/js/main.js consumes both). A command whose `at` is missing or older than
  *  the TTL must never execute (crash-replay protection), but — before the receipt existed — the main
