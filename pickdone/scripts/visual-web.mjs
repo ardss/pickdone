@@ -55,6 +55,12 @@ const ab = (args) => {
     try { return abOnce(args) } catch (e) {
       lastErr = e
       if ((e.stdout || '').includes('✓')) return e.stdout // 命令已生效,只是等回执超时
+      // 僵尸 daemon:进程活着但其浏览器连接已死(os error 10060 连接超时)——retry 打不到
+      // 别的实例,必须先关掉 daemon 让下一轮重新拉起(2026-09-23 check-all 内两连红实锤)
+      const blob = (e.stdout || '') + (e.stderr || '') + String(e.message || '')
+      if (/Could not configure browser|os error 10060|ETIMEDOUT/i.test(blob) && i === 0) {
+        try { execSync('agent-browser close', { encoding: 'utf8', timeout: 30000, shell: true, stdio: 'pipe' }) } catch {}
+      }
       execSync('sleep 3', { shell: true, stdio: 'ignore' })
     }
   }
