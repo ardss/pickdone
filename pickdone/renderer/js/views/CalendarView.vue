@@ -113,6 +113,9 @@ function wdLabel (t, d) { return t('statsJ.CalendarView.wd' + ((d + 6) % 7)) }
 import { loadSolarLunar } from '../utils/lunar.js'
 import { weekGridStart } from '../utils/weekGrid.js'
 import { today0, dayStart } from '../utils/todayBounds.js'
+// Perf (domain-5, 2026-09-23): O(1) time-block bucket lookups + task index + cursor-window
+// event trimming. Pure helpers, equivalence-guarded by tests/unit/renderer/dw5-calendar-perf.test.mjs
+import { buildTbBuckets, tbBucketGet, indexById, inCursorWindow } from '../utils/calendarBuckets.js'
 const LUNAR = () => loadSolarLunar().then(m => {
   const sl = m.default || m
   // ISC-licensed solarlunar (the former js-calendar-converter was GPL, so the library had to be swapped); adapts IDayCn/IMonthCn fields so callers need zero changes
@@ -142,6 +145,11 @@ export default {
     },
     tbHours () { return Array.from({ length: 18 }, (_, i) => i + 6) },
     tbRowH () { return 56 },
+    // Perf-E1: one O(n) bucketing pass per todoList change replaces 126 full-table
+    // filters per render (7×18 grid cells each .filter'ing the whole todoList).
+    tbBuckets () { return buildTbBuckets(this.$store.state.todo.todoList, dayStart) },
+    // Perf-E2: taskId → row index for every click/drop/edit entry point (was linear .find each time)
+    taskById () { return indexById(this.$store.state.todo.todoList) },
     tbPool () {
       const start = this.tbWeekStart || weekGridStart(Date.now(), this.settings.weekStartDay === 'sun')
       const end = start + 7 * 86400000
@@ -161,8 +169,12 @@ export default {
       // Caution: this array must never read settings — any settings change goes through the watcher and triggers a full FullCalendar re-layout,
       // and the relayout causes layout drift (event widths flickering large/small). Hiding for "show completed" is now done via container CSS
       // (when .cal-fc lacks show-done, display:none the completed events); busyDays is filtered separately per settings in the watcher.
+      // Perf-E2: pre-trim to the cursor month ±2 months (cursorTs is maintained by datesSet) so the
+      // watcher's setOption('events') no longer hands FullCalendar the whole history to re-parse on
+      // every todoList change. The visible grid only ever spans adjacent-month days, well inside the
+      // window; cursorTs=0 (first render, before datesSet) keeps the full set — identical output.
       return this.$store.state.todo.todoList
-        .filter(t => !t.delete && t.dayStart)
+        .filter(t => !t.delete && t.dayStart && inCursorWindow(t.dayStart, this.cursorTs))
         .map(t => ({
           id: t.taskId,
           title: t.taskContent,
@@ -286,7 +298,7 @@ export default {
               label: self.$t('statsJ.TodoItem.movedTo', { d: dayjs(ts).format(FMT.cnDate) }),
               apply: () => self.$store.dispatch('todo/updateTodoFields', { taskId: info.event.id, patch: { todoTime: ts } }),
               revert: () => {
-                const raw = self.$store.state.todo.todoList.find(x => x.taskId === info.event.id)
+                const raw = self.taskById.get(info.event.id)
                 if (raw) self.$store.dispatch('todo/updateTodoFields', { taskId: info.event.id, patch: { todoTime: origTs } })
               }
             })
@@ -324,7 +336,7 @@ export default {
           // Page-flip re-render interrupts the native drag (eventDrop not fired): shift the event by one month along the edge direction,
           // the user can then keep dragging it to the desired date in the new month view
           if (auto && self._dragInfo && Date.now() - (self._droppedAt || 0) > 200) {
-            const t = self.$store.state.todo.todoList.find(x => x.taskId === self._dragInfo.taskId)
+            const t = self.taskById.get(self._dragInfo.taskId)
             if (t && t.dayStart) {
               const ts = +dayjs(t.dayStart).add(auto > 0 ? 1 : -1, 'month').startOf('day')
               const origTs = t.todoTime
@@ -356,14 +368,14 @@ export default {
           info.el.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' || e.key === ' ') {
               e.preventDefault()
-              const raw = self.$store.state.todo.todoList.find(x => x.taskId === info.event.id)
+              const raw = self.taskById.get(info.event.id)
               if (raw) self.$store.commit('ui/openEdit', raw)
             }
           })
         },
         eventClick (info) {
           info.jsEvent.preventDefault()
-          const raw = self.$store.state.todo.todoList.find(x => x.taskId === info.event.id)
+          const raw = self.taskById.get(info.event.id)
           if (raw) self.$store.commit('ui/openEdit', raw)
         },
         // Weekday display (finalized after user request, known-UX 2026-08-28: its own row under the number, mirroring the date strip's two-line style)
@@ -430,13 +442,9 @@ export default {
       this.monthPop = false
     },
     /* ===== Time block view methods ===== */
+    // O(1) lookup into the tbBuckets computed (the former whole-table .filter per cell is gone)
     tbTasksOf (dayTs, hour) {
-      const slotStart = dayTs + hour * 3600000
-      const slotEnd = slotStart + 3600000
-      return this.$store.state.todo.todoList.filter(t => {
-        if (t.complete || t.delete || !t.todoTime || t.todoTime === t.dayStart) return false
-        return t.todoTime >= slotStart && t.todoTime < slotEnd
-      })
+      return tbBucketGet(this.tbBuckets, dayTs, hour)
     },
     tbDragStart (t, e) {
       this.tbDragTask = t
@@ -449,7 +457,7 @@ export default {
       this.tbDragTask = null
       if (!t && e) {
         const id = e.dataTransfer.getData('text/plain')
-        if (id) t = this.$store.state.todo.todoList.find(x => x.taskId === id)
+        if (id) t = this.taskById.get(id)
       }
       if (!t) return
       const ts = dayTs + hour * 3600000
@@ -512,12 +520,12 @@ export default {
       return this.$t('statsJ.CalendarView.dateWithWeek', { d: fmtDate(d), w: wdLabel(this.$t.bind(this), d.day()) })
     },
     openTaskEditById (taskId) {
-      const raw = this.$store.state.todo.todoList.find(x => x.taskId === taskId)
+      const raw = this.taskById.get(taskId)
       this.morePop = null
       if (raw) this.$store.commit('ui/openEdit', raw)
     },
     openEvent (id) {
-      const raw = this.$store.state.todo.todoList.find(x => x.taskId === id)
+      const raw = this.taskById.get(id)
       this.morePop = null
       if (raw) this.$store.commit('ui/openEdit', raw)
     },
