@@ -41,24 +41,16 @@ const core = require('../src/main/core/todo-core.js')
 const { ownsAttachmentFile } = require('../src/main/handlers/shared.js')
 const audit = require('./audit.js')
 const nlDate = require('./nl-date.cjs')
+const { parseMilestoneDateCore } = require('../shared/parse-date.mjs') // milestone-date core shared with the renderer (require(esm), same pattern as limits.mjs)
+const { nextSort } = require('../shared/sort-core.mjs') // P3-7: sort-score single source with renderer utils/core.js (require(esm))
+const { localDayKey } = require('../src/main/fix-util.js') // P3-8: single source for the local YYYY-MM-DD key (same require the lib-attachments module already uses)
 
 let opened = false
-// Single source of truth for the userData directory name (a result of app.setName('pickdone'); audit.js reuses this export, do not assemble a third copy) Env var relationship (backward compatible): TODO_DB_DIR          — legacy CLI-only override; points DIRECTLY at the data directory that contains todos.db (behavior unchanged) TODO_USER_DATA_DIR   — the main-process isolation var (src/main/index.js); treated as the userData root, which also contains todos.db at its top level, so the CLI can reuse it directly. Priority: TODO_DB_DIR > TODO_USER_DATA_DIR > %APPDATA%/pickdone. Neither var set means the real user database — scripts that spawn the App MUST fail fast instead (see e2e-walkthrough.js / ui-smoke.js).
-function userDataDir () {
-  if (process.env.TODO_DB_DIR) return process.env.TODO_DB_DIR
-  if (process.env.TODO_USER_DATA_DIR) return process.env.TODO_USER_DATA_DIR
-  // Platform default must mirror Electron's app.getPath('userData') (~/.config/pickdone on Linux, ~/Library/Application Support/pickdone on macOS) — APPDATA-only resolved to CWD-relative
-  // './pickdone' on Linux, so CLI and App each opened a different database (2026-09-11 audit P1)
-  if (process.platform === 'darwin') return path.join(process.env.HOME || '', 'Library', 'Application Support', 'pickdone')
-  if (process.platform === 'linux') {
-    return path.join(process.env.XDG_CONFIG_HOME || path.join(process.env.HOME || '', '.config'), 'pickdone')
-  }
-  return path.join(process.env.APPDATA || '', 'pickdone')
-}
-/** True when an explicit isolation dir (TODO_DB_DIR or TODO_USER_DATA_DIR) is set */
-function hasIsolationEnv () {
-  return !!(process.env.TODO_DB_DIR || process.env.TODO_USER_DATA_DIR)
-}
+// P3-9 (dw wave): the userData directory has ONE source — src/main/user-dir.js (no third copy;
+// audit.js defaultDirResolver now reads the same module). Env priority: TODO_DB_DIR (legacy
+// CLI-only override, points directly at the dir containing todos.db) > TODO_USER_DATA_DIR
+// (main-process isolation root) > platform default mirroring Electron app.getPath('userData').
+const { userDataDir, hasIsolationEnv } = require('../src/main/user-dir.js')
 /** Open the database (idempotent). The TODO_DB_DIR env var can point to an isolated directory (for tests); defaults to the App's userData */
 function open () {
   if (opened) return dbm
@@ -105,6 +97,21 @@ function parseDate (s) {
   if (kw) {
     const base = { today: now, tomorrow: now.add(1, 'day'), yesterday: now.subtract(1, 'day') }[kw[1]]
     return +base.hour(+kw[2]).minute(+kw[3]).second(0).millisecond(0)
+  }
+  // Bare M/D, M.D, M-D (no year) must be intercepted BEFORE dayjs(): V8's fallback Date parse
+  // turns '9/22' into 2001-09-22 and reports it valid, silently landing the deadline 25 years in
+  // the past (P2-1). Complete the current year and validate the month/day explicitly (same
+  // interception the shared parseMilestoneDateCore applies).
+  const bareMd = str.match(/^(\d{1,2})[/.-](\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?$/)
+  if (bareMd) {
+    const mo = +bareMd[1]; const d2 = +bareMd[2]
+    if (mo < 1 || mo > 12) throw new CliError(`invalid date: "${s}" (month ${mo} does not exist)`)
+    const days = dayjs().month(mo - 1).daysInMonth()
+    if (d2 < 1 || d2 > days) throw new CliError(`invalid date: "${s}" (${mo}-${d2} is not a valid month/day — month ${mo} has ${days} days)`)
+    let base = dayjs().month(mo - 1).date(d2)
+    if (bareMd[3] != null) base = base.hour(+bareMd[3]).minute(+bareMd[4]).second(0).millisecond(0)
+    else base = base.startOf('day')
+    return +base
   }
   const d = dayjs(str)
   if (!d.isValid()) {
@@ -423,18 +430,10 @@ function getMilestones (categoryInput) {
   return { categoryId: id, milestones: msNormalize(list) }
 }
 
-/** Milestone date parsing: YYYY-MM-DD / MM-DD (current year) / today | +Nd (明天 supported in parse below) */
+/** Milestone date parsing: YYYY-MM-DD / M-D, M/D, M.D (current year) / today | +Nd (明天 supported in core).
+ *  Single source: shared/parse-date.mjs — the same core the renderer's milestones.js uses. */
 function parseMilestoneDate (input) {
-  const s = String(input || '').trim().toLowerCase()
-  if (!s) return null
-  // bare 'M-D' must be routed BEFORE dayjs(): V8's fallback Date parse turns '03-15' into
-  // 2001-03-15 and reports it valid, so the year-completion branch never ran (parity with
-  // renderer/js/utils/milestones.js)
-  let d = /^\d{1,2}-\d{1,2}$/.test(s) ? dayjs(`${dayjs().year()}-${s}`) : dayjs(s)
-  if (!d.isValid() && s === 'today') d = dayjs()
-  if (!d.isValid() && s === '明天') d = dayjs().add(1, 'day')
-  if (!d.isValid()) { const m = s.match(/^([+-])(\d+)d?$/); if (m) d = dayjs().add(m[1] === '+' ? +m[2] : -m[2], 'day') }
-  return d.isValid() ? +d.startOf('day') : null
+  return parseMilestoneDateCore(input, dayjs)
 }
 
 function addMilestone (categoryInput, title, dateInput) {
@@ -569,17 +568,10 @@ function normalizePreds (db, taskId, preds) {
   if (wouldCycle(db, taskId, next)) throw new CliError('dependency-cycle: this predecessor set closes a loop', 'DEP_CYCLE')
   return next.length ? JSON.stringify(next) : null
 }
-/** F3 (2026-09-21): sort single source with renderer utils/core.js nextSort — baseline 1024 for the
- *  first row, ±512 step (addToTop → max+512, else min-512). The old CLI-only min-100/0 convention
- *  contradicted both the renderer and this file's own renewal paths (min-512/1024), so CLI-added rows
- *  drifted out of position against renderer rows sharing the same day/no-date pool. */
-function nextSortCli (addToTop, minS, maxS) {
-  let s
-  if (!minS && !maxS) s = 1024 // first element of the list, arbitrary baseline (renderer nextSort)
-  else if (addToTop) s = maxS + 512
-  else s = minS - 512
-  return Math.fround(s)
-}
+/** F3 (2026-09-21): sort convention — baseline 1024 for the first row, ±512 step (addToTop →
+ *  max+512, else min-512). P3-7 (dw wave): the CLI's verbatim nextSortCli copy is gone; the
+ *  shared implementation (shared/sort-core.mjs, also re-exported by renderer utils/core.js)
+ *  is imported as nextSort at the top of this file. */
 
 function addTodo ({ content, desc, date, reminder, category, difficulty, priority, important, urgent, repeatId = null, createTime = null, after = null }) {
   if (!content || !String(content).trim()) throw new CliError('task content required', 'EMPTY_CONTENT')
@@ -594,7 +586,7 @@ function addTodo ({ content, desc, date, reminder, category, difficulty, priorit
     const existing = db.call('queryTodos', { deleted: 0, repeatId, dayStartFrom: targetDay, dayStartTo: targetDay })
     if (Array.isArray(existing) && existing.length) return existing[0]
   }
-  // Insert sort unified on renderer nextSort semantics (F3 2026-09-21, see nextSortCli): the side
+  // Insert sort unified on renderer nextSort semantics (F3 2026-09-21, shared nextSort): the side
   // (top/bottom) follows the newTodoDefaultSort setting exactly like renderer addTodo's addToTop
   // default, and the ±32 jitter (renderer addTodo, (Math.random()-0.5)*64) keeps two concurrently
   // derived identical sorts distinct in arrival order.
@@ -604,7 +596,7 @@ function addTodo ({ content, desc, date, reminder, category, difficulty, priorit
     .map(x => x.taskSort).filter(v => v != null)
   const addToTop = String(settingsDoc().newTodoDefaultSort || 'top') !== 'bottom'
   const taskSort = Math.fround(
-    nextSortCli(addToTop, daySorts.length ? Math.min(...daySorts) : 0, daySorts.length ? Math.max(...daySorts) : 0) +
+    nextSort(addToTop, daySorts.length ? Math.min(...daySorts) : 0, daySorts.length ? Math.max(...daySorts) : 0) +
     (Math.random() - 0.5) * 64)
   const t = {
     complete: false, createTime: createdTs, delete: false,
@@ -789,11 +781,12 @@ function toggleComplete (input, target, { withSubtasks, completedAt } = {}) {
         // accumulated focus minutes into it), so clamping it 0-20 turned "focused 150 min" into
         // "estimated 20 tomatoes" on the renewed instance.
         const estimate = Math.max(0, Math.min(20, Math.round(Number(getEstimateOf(t.taskId, t.estimate)) || 0)))
+        // P2-4 single source: carried attributes come from core.renewalCarryFields (shared/repeat-core.mjs) —
+        // the exact same set the renderer's ensureNextRepeatInstance maps onto addTodo; the D5 parity
+        // fixes no longer need to be applied twice.
         const nt = {
           complete: false, createTime: now, delete: false,
-          reminderTime: next.reminderTime, reminderOffsets: next.reminderOffsets || [], reminderExtra: Array.isArray(next.reminderExtra) ? next.reminderExtra : [], estimate, difficulty: t.difficulty || 0,
-          priority: t.priority || 0, deadlineTs: t.deadlineTs || 0, important: t.important || 0, urgent: t.urgent || 0,
-          repeatId: rid,
+          ...core.renewalCarryFields(t, next), estimate,
           subtasks: subs ? JSON.stringify(subs.map(s => ({ ...s, checked: false }))) : null,
           image: null, files: null,
           categoryId: t.categoryId,
@@ -848,19 +841,16 @@ function chipsSnapshotForDelete (taskId) {
   } catch { /* snapshot failure must not block deletion */ }
 }
 
-/** Clear a task's schedule chips across all days (hardDelete/purge paths; db layer cascades inline — this is a defensive explicit call) */
-function chipsRemoveTask (taskId) {
-  try { commit('plan', 'deleteTask', taskId); return 1 } catch { return 0 }
-}
+/** P3-10 (dw wave): chipsRemoveTask deleted — dead export (zero callers repo-wide; deleteTodo goes
+ *  through chipsSnapshotForDelete, purgeRecycleBin relies on the db-layer cascade). */
 
 /** Day-change chip migration (same semantics as the UI's moveTaskChips and the `edit --date` follow-up):
  *  existing chips keep their times and follow the task to the new day. Best-effort — never blocks the patch. */
 function migrateChipsOnDayChange (taskId, oldDay, newDay) {
   if (!oldDay || !newDay || oldDay === newDay) return 0
   try {
-    const ymd = ts => { const d = new Date(ts); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') }
-    if (ymd(oldDay) === ymd(newDay)) return 0
-    commit('plan', 'moveTask', { taskId, fromDay: ymd(oldDay), toDay: ymd(newDay) })
+    if (localDayKey(oldDay) === localDayKey(newDay)) return 0
+    commit('plan', 'moveTask', { taskId, fromDay: localDayKey(oldDay), toDay: localDayKey(newDay) })
     return 1
   } catch { return 0 }
 }
@@ -1899,7 +1889,7 @@ function setReminderExtra (input, csv) {
    Intentionally local-only (never manifest-exposed): shortcutKeySettings and foldedTodoList
    (complex objects managed by the App's own UI). */
 const SETTINGS_MANIFEST = {
-  boolean: ['autoDownloadUpdates', 'enableTomatoFloating', 'weatherEnabled', 'taskFlyAnimation', 'closeActionMinimize', 'isCompleteWithSubtasks', 'isTodoEditModalCloseAutoSave', 'isCompleteCheckboxColorFollow', 'runWhenComputerStart', 'hideMainWindowOnStartup', 'enableHardwareAcceleration', 'showNoDate', 'showCompleteNoDate', 'showComplete', 'developerMode', 'showTodayXModule', 'showHabitModule', 'showProjectsModule', 'showDepsModule', 'isShowSubTask', 'isCalendarDimUncompleted', 'isShowCalendarPrivacyMode', 'isDefaultSubTaskFolded', 'showHolidayMarkers', 'showTodoCheckboxOrder', 'enableSecurityLock', 'autoBackupEnabled', 'isCalendarBackgroundUserSelected', 'isShowCalendarCompleted', 'sidebarCollapsed', 'catFold'],
+  boolean: ['autoDownloadUpdates', 'enableTomatoFloating', 'weatherEnabled', 'taskFlyAnimation', 'closeActionMinimize', 'isCompleteWithSubtasks', 'isTodoEditModalCloseAutoSave', 'isCompleteCheckboxColorFollow', 'runWhenComputerStart', 'hideMainWindowOnStartup', 'enableHardwareAcceleration', 'showNoDate', 'showCompleteNoDate', 'showComplete', 'developerMode', 'showTodayXModule', 'showHabitModule', 'showProjectsModule', 'showDepsModule', 'isShowSubTask', 'isCalendarDimUncompleted', 'isShowCalendarPrivacyMode', 'isDefaultSubTaskFolded', 'showHolidayMarkers', 'showTodoCheckboxOrder', 'enableSecurityLock', 'autoBackupEnabled', 'isCalendarBackgroundUserSelected', 'isShowCalendarCompleted', 'sidebarCollapsed', 'catFold', 'showTagPanel'],
   number: ['dailyTomatoTarget', 'dailyLoadWarnThreshold', 'recycleBinAutoDeleteDays', 'notificationTimeoutInterval', 'todoDescriptionDisplayLineNumber', 'autoBackupIntervalMin', 'autoBackupKeep', 'whiteNoiseVolume', 'tomatoTime', 'restTime',
     // Category-id settings are NUMBERS on the App side (renderer store/settings.js DEFAULT_SETTINGS: newTodoCategoryId: 0,
     // todoBoxCategoryId: -1) and the render path filters with strict equality (store/todo.js todoBoxCategoryId !== -1,
@@ -1910,6 +1900,16 @@ const SETTINGS_MANIFEST = {
     // calendarCategory is a numeric category id in the app (DEFAULT_SETTINGS calendarCategory: 0);
     // declaring it string made `settings list` report the wrong type (value only survived via coercion)
     'calendarCategory'],
+  // P3-6 (dw wave): per-key numeric bounds, mirrored from the UI's input controls (SettingsModal.vue)
+  // so the CLI enforces the same clamps instead of only isFinite/≥0. Keys without an entry keep the
+  // generic ≥0 gate.
+  ranges: {
+    tomatoTime: { min: 5, max: 180 },   // SettingsModal.vue focus-length input-number (:min=5 :max=180)
+    restTime: { min: 1, max: 60 },      // SettingsModal.vue break-length input-number (:min=1 :max=60)
+    dailyTomatoTarget: { min: 1, max: 50 },        // SettingsModal.vue daily-goal input (:min=1 :max=50)
+    dailyLoadWarnThreshold: { min: 0, max: 50 },   // SettingsModal.vue load-warn threshold (:min=0 :max=50)
+    todoDescriptionDisplayLineNumber: { min: 1, max: 6 } // SettingsModal.vue desc-lines slider (:min=1 :max=6)
+  },
   enum: {
     colorMode: ['light', 'dark', 'system'],
     calendarFontSize: ['small', 'medium', 'large'],
@@ -1985,6 +1985,13 @@ function settingsSet (key, value, { force = false } = {}) {
     // thresholds, intervals, volumes, counts), so both are rejected now.
     if (!Number.isFinite(v)) throw new CliError('"' + key + '" expects a finite number (got "' + value + '")', 'USAGE')
     if (v < 0) throw new CliError('"' + key + '" must be >= 0 (got "' + value + '")', 'USAGE')
+    // P3-6 (dw wave): per-key bounds mirroring the UI's input controls (SETTINGS_MANIFEST.ranges) —
+    // the CLI used to accept any non-negative number where the App's slider/input clamps
+    // (e.g. tomatoTime 5-180), so a CLI-written value silently displayed out of bounds in the App.
+    const range = SETTINGS_MANIFEST.ranges[key]
+    if (range && (v < range.min || v > range.max)) {
+      throw new CliError(`"${key}" must be between ${range.min} and ${range.max} (got "${value}")`, 'USAGE')
+    }
   } else if (info.type === 'enum') {
     if (!info.options.includes(String(value))) throw new CliError(`"${key}" expects one of: ${info.options.join(' | ')} (got "${value}")`, 'USAGE')
     v = String(value)
@@ -2146,7 +2153,7 @@ module.exports = {
   liveTasks, recycleTasks, resolveTask, resolveCategory,
   parsePredecessors, getTask, listReady,
   listTodos, getCategories, stats, overview,
-  addTodo, patchTodo, clearTodoDate, toggleComplete, deleteTodo, restoreTodo, purgeRecycleBin, doctor, dateExplicitTime, chipsRemoveTask, chipsRestoreSnapshot,
+  addTodo, patchTodo, clearTodoDate, toggleComplete, deleteTodo, restoreTodo, purgeRecycleBin, doctor, dateExplicitTime, chipsRestoreSnapshot,
   parseSubs, addSubtask, checkSubtask, removeSubtask,
   audit, readAuditLog: audit.readEntries,
   getProjects, getProjectIds, setProjectFlag, projectStatus, parseMilestoneDate,
@@ -2163,5 +2170,6 @@ module.exports = {
   setEstimate, getEstimateOf, sortTask, listOn, resolveRecord, recordFix, recordRemove, moveSubtask,
   setReminderOffsets, setReminderExtra, addAttachment, listAttachments, removeAttachment,
   settingsList, settingsSet, settingsDoc, setSettingsRaceHookForTests, planSet, planList, planRemove, dateChangeReminderPatch,
+  SETTINGS_MANIFEST, settingsKnown,
   importEvents, eventFocusMinutes, eventKey
 }

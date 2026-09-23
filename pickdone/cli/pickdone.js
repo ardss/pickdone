@@ -8,6 +8,7 @@
  * the primary consumer is AI agents, so it stays locale-independent.
  */
 const lib = require('./lib.js')
+const fixUtil = require('../src/main/fix-util.js') // P3-8: localDayKey single source (inline copy removed)
 const importer = require('./import.js')
 const dayjs = require('dayjs')
 const fs = require('fs')
@@ -748,7 +749,7 @@ async function main () {
       // day change → all chips migrate with the task (times unchanged, user-arranged extra chips are not collapsed); a task with no chips and an explicit time → add one
       if (opts.date !== undefined && !dateClear) {
         const mm = lib.dateExplicitTime(opts.date)
-        const dayStr = ts => { const d = new Date(ts); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') }
+        const dayStr = fixUtil.localDayKey // P3-8: single source (src/main/fix-util.js), inline copy removed
         const oldDay = before && before.dayStart ? dayStr(before.dayStart) : null
         const newDay = updated && updated.dayStart ? dayStr(updated.dayStart) : null
         try {
@@ -1182,7 +1183,8 @@ async function main () {
           content = t.taskContent
         }
         // Local-timezone YYYY-MM-DD (do not use toISOString: UTC shifts the whole block by a day for evening use)
-        const localYmd = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+        // P3-8: single source localDayKey (src/main/fix-util.js) — the inline copy is gone
+        const localYmd = fixUtil.localDayKey
         const dateStr = (raw => {
           if (raw === undefined || raw === true || raw === 'today' || raw === '') return localYmd(new Date())
           if (raw === 'tomorrow') { const d = new Date(); d.setDate(d.getDate() + 1); return localYmd(d) }
