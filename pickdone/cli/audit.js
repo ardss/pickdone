@@ -9,29 +9,19 @@
 const path = require('path')
 const fs = require('fs')
 const dayjs = require('dayjs')
+// F-B6/F-B8 (dw wave 3): rotation + snapshot vocabulary single source with the App (src/main/audit.js).
+// The destructive fixed '.1' rotation (unlinkSync of the previous archive) is gone — the App rotated
+// this SAME file to timestamped archives since 2026-09-10, and a parallel CLI session's unlinkSync('.1')
+// could delete the archive the App had JUST renamed into place. Timestamped rotation is non-destructive
+// under concurrency; snapshots now carry the shared content cap (privacy, see audit-rotate.cjs).
+const { rotateArchive, snapshot, capContent } = require('../shared/audit-rotate.cjs')
 
 const MAX_BYTES = 5 * 1024 * 1024
-
-// Semantic fields kept in snapshots (enough to answer "what did the AI change last step"; attachments and other large fields excluded)
-const SNAPSHOT_FIELDS = [
-  'taskContent', 'taskDescribe', 'complete', 'completedAt', 'todoTime', 'reminderTime',
-  'reminderOffsets', 'reminderExtra', 'dayStart', 'deletedAt', 'priority', 'deadlineTs', 'important', 'urgent',
-  'categoryId', 'repeatId', 'subtasks', 'delete', 'status', 'updateTime'
-]
 
 function auditFile () {
   // Lazy require: lib.js also requires this module at top level (bidirectional); synchronous destructuring would get incomplete exports at load time
   const { userDataDir } = require('./lib')
   return path.join(userDataDir(), 'cli-audit.jsonl')
-}
-
-function snapshot (t) {
-  if (!t) return null
-  const o = {}
-  for (const k of SNAPSHOT_FIELDS) {
-    if (t[k] !== undefined && t[k] !== null && t[k] !== '') o[k] = t[k]
-  }
-  return Object.keys(o).length ? o : null
 }
 
 // The raw command line of this process (injected by the pickdone CLI entry), persisted to enable replaying the whole invocation
@@ -45,11 +35,7 @@ function record ({ action, targets = [], changes = [], note }) {
     fs.mkdirSync(path.dirname(file), { recursive: true })
     try {
       const st = fs.statSync(file)
-      if (st.size > MAX_BYTES) {
-        const rolled = file + '.1'
-        if (fs.existsSync(rolled)) fs.unlinkSync(rolled)
-        fs.renameSync(file, rolled)
-      }
+      if (st.size > MAX_BYTES) rotateArchive(file) // F-B6: shared timestamped rotation (was destructive '.1')
     } catch (e) { /* no file on first write */ }
     const entry = {
       ts: Date.now(),
@@ -57,7 +43,7 @@ function record ({ action, targets = [], changes = [], note }) {
       actor: 'cli',
       action,
       argv: context.argv,
-      targets: targets.filter(Boolean).map(t => ({ taskId: t.taskId, content: t.content != null ? t.content : t.taskContent })),
+      targets: targets.filter(Boolean).map(t => ({ taskId: t.taskId, content: t.content != null && t.content !== '' ? capContent(t.content) : (t.taskContent != null && t.taskContent !== '' ? capContent(t.taskContent) : undefined) })),
       changes: (changes || []).filter(c => c && (c.before || c.after)).map(c => ({
         taskId: c.taskId || (c.after && c.after.taskId) || (c.before && c.before.taskId),
         before: snapshot(c.before),

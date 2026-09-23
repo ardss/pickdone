@@ -17,6 +17,10 @@ const path = require('path')
 const fs = require('fs')
 const dayjs = require('dayjs')
 const { userDataDir } = require('./user-dir.js') // P3-9 (dw wave): single source — same env priority chain cli/lib.js reads
+// F-B6/F-B8 (dw wave 3): rotation + snapshot vocabulary single-sourced with the CLI (shared/audit-rotate.cjs) —
+// both ends rotate the SAME cli-audit.jsonl from different processes, so the CLI now runs this same
+// non-destructive timestamped rotation, and both share one SNAPSHOT_FIELDS/snapshot definition.
+const { rotateArchive, snapshot, capContent } = require('../../shared/audit-rotate.cjs')
 
 const MAX_BYTES_DEFAULT = 5 * 1024 * 1024
 let maxBytes = MAX_BYTES_DEFAULT
@@ -87,29 +91,15 @@ function shouldAudit (op, params) {
 }
 
 // Fields whose change makes an upsert a real 'edit' (everything except subtasks) — mirrors the CLI's
-// semantic snapshot interest (cli/audit.js SNAPSHOT_FIELDS) minus subtasks itself.
+// semantic snapshot interest (cli/audit.js SNAPSHOT_FIELDS, now shared/audit-rotate.cjs) minus subtasks itself.
 const EDIT_FIELDS = [
   'taskContent', 'taskDescribe', 'complete', 'completedAt', 'todoTime', 'reminderTime',
   'reminderOffsets', 'reminderExtra', 'dayStart', 'deletedAt', 'priority', 'deadlineTs',
   'important', 'urgent', 'categoryId', 'repeatId', 'delete', 'status'
 ]
 
-// Semantic snapshot fields kept in changes (same list as cli/audit.js: enough to answer "what changed";
-// large fields like image/attachments excluded so lines stay small)
-const SNAPSHOT_FIELDS = [
-  'taskContent', 'taskDescribe', 'complete', 'completedAt', 'todoTime', 'reminderTime',
-  'reminderOffsets', 'reminderExtra', 'dayStart', 'deletedAt', 'priority', 'deadlineTs', 'important', 'urgent',
-  'categoryId', 'repeatId', 'subtasks', 'delete', 'status', 'updateTime'
-]
-
-function snapshot (t) {
-  if (!t) return null
-  const o = {}
-  for (const k of SNAPSHOT_FIELDS) {
-    if (t[k] !== undefined && t[k] !== null && t[k] !== '') o[k] = t[k]
-  }
-  return Object.keys(o).length ? o : null
-}
+// F-B6: SNAPSHOT_FIELDS + snapshot() moved verbatim to shared/audit-rotate.cjs (single source with
+// cli/audit.js, with the F-B8 content cap applied inside snapshot()).
 
 function sameValue (a, b) { return JSON.stringify(a) === JSON.stringify(b) }
 
