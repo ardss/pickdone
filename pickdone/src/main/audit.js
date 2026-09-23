@@ -32,8 +32,10 @@ let resolveDir = defaultDirResolver
 function setDirResolver (fn) { if (typeof fn === 'function') resolveDir = fn }
 /** Test hook: shrink the rotation threshold so the boundary is reachable with tiny writes */
 function setMaxBytes (n) { if (Number.isFinite(n) && n > 0) maxBytes = n }
-/** Test hook: restore default resolver and threshold (flushes the buffer first so assertions see every line) */
-function resetForTests () { flushNow(); resolveDir = defaultDirResolver; maxBytes = MAX_BYTES_DEFAULT }
+/** Test hook: restore default resolver and threshold (flushes the buffer first so assertions see
+ *  every line; dirReady is reset too — a test that re-points the resolver at a fresh directory
+ *  must get a fresh mkdir, not a silently skipped one). */
+function resetForTests () { flushNow(); resolveDir = defaultDirResolver; maxBytes = MAX_BYTES_DEFAULT; dirReady = false }
 
 function auditFile () {
   return path.join(resolveDir(), 'cli-audit.jsonl')
@@ -282,15 +284,17 @@ function rotateIfNeeded () {
 
 /** Split buffered lines into ≤maxBytes chunks, rotating between chunks — preserves the old
  *  per-line "rotate when the file exceeds the threshold" semantics while still writing each
- *  chunk as ONE append call. */
+ *  chunk as ONE append call. Chunk sizes measured in BYTES (Buffer.byteLength — the threshold
+ *  compares against st.size; CJK content is 3 bytes/char in UTF-8, so char count under-splits). */
 function chunkByThreshold (lines) {
   const chunks = []
   let cur = []
   let bytes = 0
   for (const line of lines) {
-    if (cur.length && bytes + line.length > maxBytes) { chunks.push(cur); cur = []; bytes = 0 }
+    const lineBytes = Buffer.byteLength(line)
+    if (cur.length && bytes + lineBytes > maxBytes) { chunks.push(cur); cur = []; bytes = 0 }
     cur.push(line)
-    bytes += line.length + 1
+    bytes += lineBytes
   }
   if (cur.length) chunks.push(cur)
   return chunks
@@ -311,19 +315,34 @@ function flushNow () {
   }
 }
 
-/** Drain the buffer as one async appendFile batch per threshold chunk. */
+// Async chunk writes are SERIALIZED through this chain: two fs.appendFile calls for the same file
+// issued in parallel could complete out of order in the threadpool and flip adjacent lines (the
+// CLI appends the SAME file from another process, so line order across processes is already
+// best-effort — within this process we keep it strict).
+let writeChain = Promise.resolve()
+
+/** Drain the buffer as one async appendFile batch per threshold chunk (chunks written in order). */
 function flushAsync () {
   flushTimer = null
   if (!buffer.length) return
   const lines = buffer.splice(0).map(e => JSON.stringify(e) + '\n')
   ensureDir()
-  for (const chunk of chunkByThreshold(lines)) {
-    try { rotateIfNeeded() } catch (e) { /* rotation failure must not lose the batch */ }
-    const text = chunk.join('')
-    fs.appendFile(auditFile(), text, err => {
-      if (err) { try { fs.appendFileSync(auditFile(), text) } catch { /* dropped by contract */ } }
-    })
-  }
+  const chunks = chunkByThreshold(lines).map(chunk => chunk.join(''))
+  writeChain = writeChain.then(() => {
+    let p = Promise.resolve()
+    for (const text of chunks) {
+      p = p.then(() => {
+        try { rotateIfNeeded() } catch (e) { /* rotation failure must not lose the batch */ }
+        return new Promise(resolve => {
+          fs.appendFile(auditFile(), text, err => {
+            if (err) { try { fs.appendFileSync(auditFile(), text) } catch { /* dropped by contract */ } }
+            resolve()
+          })
+        })
+      })
+    }
+    return p
+  })
 }
 
 // Quit flush: synchronous drain so buffered entries survive process exit (Electron main included)

@@ -516,15 +516,18 @@ function toggleComplete (input, target, { withSubtasks, completedAt } = {}) {
 /** F-B4 (dw wave 3): single constructor for CLI renewal instances — the done path (repeat renewal on
  *  complete) and repeatOn's future-instance expansion (expand) carried two ~40-line near-verbatim
  *  object literals. Behavior preserved exactly, including expand's historical estimate:0 (no silent
- *  behavior change; the done path keeps its live getEstimateOf readback). Sort lands via the shared
- *  nextSort(false,…) bottom-insert convention instead of the inline min-512:1024 duplication. */
+ *  behavior change; the done path keeps its live getEstimateOf readback). Sort keeps the legacy
+ *  length-keyed bottom-insert convention (min-512 / empty-day 1024; see the inline note for why
+ *  nextSort's own empty check is not used here). */
 function buildRenewalInstance (t, next, { estimate = 0, todoTime = next.todoTime, reminderTime, extra = {} } = {}) {
   const now = Date.now()
   const sameDay = open().call('queryTodos', { deleted: 0 }).filter(x => x.dayStart === dayStartOf(todoTime))
   const sameSorts = sameDay.map(x => x.taskSort).filter(v => v != null)
   // P2 2026-09-20 convention (renderer renewal: store/todo.js addToTop:false → nextSort): bottom-insert
-  // min-512, empty day 1024.
-  const taskSort = Math.fround(nextSort(false, sameSorts.length ? Math.min(...sameSorts) : 0, sameSorts.length ? Math.max(...sameSorts) : 0))
+  // min-512, empty day 1024. The EMPTY-day case is keyed on sameSorts.length, NOT nextSort's internal
+  // `!minS && !maxS` check — a day whose existing sorts are all exactly 0 (midpoint arithmetic can
+  // produce 0) must take the min-512 branch (-512), not the empty-day 1024 baseline (review fix).
+  const taskSort = sameSorts.length ? Math.fround(Math.min(...sameSorts) - 512) : 1024
   let subs = null
   try { subs = t.subtasks ? JSON.parse(t.subtasks) : null } catch { /* keep null */ }
   return {
@@ -1677,14 +1680,15 @@ function settingsSet (key, value, { force = false } = {}) {
   // contract lan-sync-bootstrap's foldSettingsIntoBlob routes by).
   const doc = settingsDoc()
   const before = key in doc ? doc[key] : null
-  // Test seam: inject a concurrent mutation into the race window (first read → row write) so unit
-  // tests can deterministically exercise the merge-on-fresh behavior. Null outside tests.
-  if (typeof settingsRaceHook === 'function') settingsRaceHook()
   // F-B1 secondary fix: the blob's _savedAt doubles as the bridge's LWW gateTs (db-sync-schema
   // putRow). Stamping it at WRITE time made the gate a tautology — a stale echo read BEFORE a
   // sync-apply landed was re-stamped to now and re-won the row. Stamp the PRE-WRITE read moment
-  // instead: rows applied between the two reads are newer than the blob snapshot and keep winning.
+  // instead (captured right after the first read, BEFORE the race hook can inject a concurrent
+  // apply): rows applied between the two reads are newer than the blob snapshot and keep winning.
   const readAt = Date.now()
+  // Test seam: inject a concurrent mutation into the race window (first read → row write) so unit
+  // tests can deterministically exercise the merge-on-fresh behavior. Null outside tests.
+  if (typeof settingsRaceHook === 'function') settingsRaceHook()
   commit('setting', 'put', { key, value: v })
   const fresh = stripHabitsFamily(settingsDoc())
   fresh._savedAt = readAt

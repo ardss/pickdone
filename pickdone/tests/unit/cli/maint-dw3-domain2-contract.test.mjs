@@ -41,14 +41,22 @@ test('F-B1: settingsSet write-back never carries habits/moments/savedAt into the
 })
 
 test('F-B1: the blob _savedAt (bridge LWW gateTs) is the READ moment, not the write moment', () => {
-  const before = Date.now() - 5000 // simulate a pre-write read moment via the race hook
-  lib.setSettingsRaceHookForTests(() => { /* hook fires between first read and row write */ })
+  // Discriminating regression (was a tautology): the race hook fires INSIDE settingsSet between
+  // the first settingsDoc() read and the row write — exactly where a sync-apply lands. We inject
+  // a settings row stamped 1ms after that moment. Under the OLD write-time stamp the blob's
+  // _savedAt (= write moment, after the hook) is NEWER than the injected row and the Round-3
+  // stale-echo gate (db-sync-schema putRow: curTs - gateTs > 1000) could never fire for it; under
+  // the read-time stamp the row is strictly newer than the blob snapshot.
+  lib.setSettingsRaceHookForTests(() => {
+    db.call('settingsRowPutMany', [{ key: 'weatherCity', value: 'peer-sync', updatedAt: Date.now() + 1 }])
+  })
   try {
     lib.settingsSet('dailyTomatoTarget', '7')
     const blob = JSON.parse(db.call('getMeta', 'db.settingsState'))
-    assert.ok(Number.isFinite(blob._savedAt), 'blob carries a _savedAt gate stamp')
-    assert.ok(blob._savedAt <= Date.now(), 'gate stamp is a wall-clock read moment')
-    assert.ok(before <= blob._savedAt)
+    const row = db.call('settingsRowsAll').find(r => r.key === 'weatherCity')
+    assert.ok(row && Number.isFinite(row.updatedAt), 'row injected inside the race window landed')
+    assert.ok(blob._savedAt < row.updatedAt, 'blob gate stamp must PREDATE a row applied inside the write window (write-time stamping fails this)')
+    assert.equal(row.value, 'peer-sync', 'the sync-applied value survives (the blob mirror is value-identical, no re-stamp)')
   } finally {
     lib.setSettingsRaceHookForTests(null)
   }
@@ -116,6 +124,17 @@ test('F-B4: buildRenewalInstance carries the renewal field set and bottom-insert
   assert.deepEqual(JSON.parse(nt.subtasks), [{ text: 's1', checked: false }]) // subtask state resets
   assert.equal(nt.reminderTime, 5)
   assert.ok(nt.taskId && nt.taskId !== t.taskId, 'new id generated')
+})
+
+test('F-B4: a day whose existing sorts are all exactly 0 still bottom-inserts at -512 (review fix)', () => {
+  // nextSort's empty-day check is `!minS && !maxS` — routing min=max=0 through it would wrongly
+  // take the 1024 empty-day baseline; the legacy length-keyed branch must produce min-512 = -512.
+  const t = lib.addTodo({ content: 'dw3-zero-sorts' })
+  lib.patchTodo(t.taskId, { taskSort: 0 }, { action: 'edit' })
+  const row = db.call('getById', t.taskId)
+  assert.equal(row.taskSort, 0)
+  const nt = lib.buildRenewalInstance(row, { todoTime: row.todoTime, reminderTime: 0 }, { estimate: 0 })
+  assert.equal(nt.taskSort, -512, 'min(0)-512, NOT the 1024 empty-day baseline')
 })
 
 /* ---------- F-B5: normKey single source + NFKC alignment (behavior change) ---------- */
