@@ -1,5 +1,5 @@
 /** Global + in-window shortcuts — moved from index.js with dependency injection */
-const { globalShortcut } = require('electron')
+const { globalShortcut, ipcMain } = require('electron')
 
 /** P2 2026-09-19: normalize keyboard-event key names to the Accelerator vocabulary the saved
  *  config uses. The old `key === 'delete' ? 'delete' : key` ternary was a dead no-op that lost the
@@ -78,8 +78,22 @@ function createShortcuts ({ getMainWindow, showMainOrLock, quickAdd, i18n, log }
       switchToDaytodo: 'todo:shortcut-nav-today',
       switchToRecentTodos: 'todo:shortcut-nav-recent',
       switchToSchedule: 'todo:shortcut-nav-calendar',
-      switchToInbox: 'todo:shortcut-nav-inbox'
+      switchToInbox: 'todo:shortcut-nav-inbox',
+      // F-D1 (maint/dw 2026-09-23): sync was exposed as a rebindable entry in the settings
+      // shortcuts tab and occupied ctrl+s in conflict detection, but this table (the ONLY
+      // before-input-event dispatcher) had no row — the combo never dispatched; the real Ctrl+S
+      // was a hardcoded renderer keydown branch. Wired here; the renderer consumes 'sync' in
+      // onShortcutAction with the same syncTodos feedback shape.
+      sync: 'todo:shortcut-sync'
     }
+    // F-D3 (maint/dw 2026-09-23): while the settings tab is RECORDING a new combo, the main
+    // process must stand down: before-input-event fires before the renderer's capture-phase
+    // listener, so a recorded combo that is already bound used to be preventDefault'ed (the
+    // recorder never saw the key — impossible to re-record) AND still dispatched its action
+    // (recording ctrl+d really deleted the selected task). The renderer toggles this flag over
+    // IPC on capture start/stop; suppressed events fall through untouched.
+    let captureSuppress = false
+    ipcMain.on('shortcut-capturing', (e, flag) => { captureSuppress = !!flag })
     // The main window may already be destroyed (settings re-bind triggered via notify-settings-updated during exit): guard with a getMainWindow null check
     const cur = getMainWindow()
     cur && cur.webContents.removeAllListeners('before-input-event')
@@ -92,6 +106,9 @@ function createShortcuts ({ getMainWindow, showMainOrLock, quickAdd, i18n, log }
       if (input.shift) parts.push('shift')
       const key = normalizeKey(input.key)
       if (!key) return
+      // F-D3: recording in progress — let the combo reach the renderer's capture listener
+      // untouched (no preventDefault, no action dispatch, no side effects mid-record)
+      if (captureSuppress) return
       parts.push(key)
       const combo = parts.join('+')
       for (const [action] of Object.entries(inApp)) {
