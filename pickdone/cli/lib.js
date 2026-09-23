@@ -47,9 +47,7 @@ const { localDayKey } = require('../src/main/fix-util.js') // P3-8: single sourc
 
 let opened = false
 // P3-9 (dw wave): the userData directory has ONE source — src/main/user-dir.js (no third copy;
-// audit.js defaultDirResolver now reads the same module). Env priority: TODO_DB_DIR (legacy
-// CLI-only override, points directly at the dir containing todos.db) > TODO_USER_DATA_DIR
-// (main-process isolation root) > platform default mirroring Electron app.getPath('userData').
+// audit.js defaultDirResolver reads the same module). Env priority: TODO_DB_DIR > TODO_USER_DATA_DIR > platform default.
 const { userDataDir, hasIsolationEnv } = require('../src/main/user-dir.js')
 /** Open the database (idempotent). The TODO_DB_DIR env var can point to an isolated directory (for tests); defaults to the App's userData */
 function open () {
@@ -99,9 +97,8 @@ function parseDate (s) {
     return +base.hour(+kw[2]).minute(+kw[3]).second(0).millisecond(0)
   }
   // Bare M/D, M.D, M-D (no year) must be intercepted BEFORE dayjs(): V8's fallback Date parse
-  // turns '9/22' into 2001-09-22 and reports it valid, silently landing the deadline 25 years in
-  // the past (P2-1). Complete the current year and validate the month/day explicitly (same
-  // interception the shared parseMilestoneDateCore applies).
+  // turns '9/22' into 2001-09-22 and reports it valid (P2-1). Current year + explicit month/day
+  // validation, same interception the shared parseMilestoneDateCore applies.
   const bareMd = str.match(/^(\d{1,2})[/.-](\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?$/)
   if (bareMd) {
     const mo = +bareMd[1]; const d2 = +bareMd[2]
@@ -431,7 +428,7 @@ function getMilestones (categoryInput) {
 }
 
 /** Milestone date parsing: YYYY-MM-DD / M-D, M/D, M.D (current year) / today | +Nd (明天 supported in core).
- *  Single source: shared/parse-date.mjs — the same core the renderer's milestones.js uses. */
+ *  Single source: shared/parse-date.mjs (same core as renderer milestones.js). */
 function parseMilestoneDate (input) {
   return parseMilestoneDateCore(input, dayjs)
 }
@@ -568,11 +565,8 @@ function normalizePreds (db, taskId, preds) {
   if (wouldCycle(db, taskId, next)) throw new CliError('dependency-cycle: this predecessor set closes a loop', 'DEP_CYCLE')
   return next.length ? JSON.stringify(next) : null
 }
-/** F3 (2026-09-21): sort convention — baseline 1024 for the first row, ±512 step (addToTop →
- *  max+512, else min-512). P3-7 (dw wave): the CLI's verbatim nextSortCli copy is gone; the
- *  shared implementation (shared/sort-core.mjs, also re-exported by renderer utils/core.js)
- *  is imported as nextSort at the top of this file. */
-
+/** F3 (2026-09-21): sort convention — baseline 1024 for the first row, ±512 step (addToTop → max+512, else min-512).
+ *  P3-7: the CLI's verbatim nextSortCli copy is gone; shared/sort-core.mjs is imported as nextSort above. */
 function addTodo ({ content, desc, date, reminder, category, difficulty, priority, important, urgent, repeatId = null, createTime = null, after = null }) {
   if (!content || !String(content).trim()) throw new CliError('task content required', 'EMPTY_CONTENT')
   const db = open()
@@ -587,9 +581,7 @@ function addTodo ({ content, desc, date, reminder, category, difficulty, priorit
     if (Array.isArray(existing) && existing.length) return existing[0]
   }
   // Insert sort unified on renderer nextSort semantics (F3 2026-09-21, shared nextSort): the side
-  // (top/bottom) follows the newTodoDefaultSort setting exactly like renderer addTodo's addToTop
-  // default, and the ±32 jitter (renderer addTodo, (Math.random()-0.5)*64) keeps two concurrently
-  // derived identical sorts distinct in arrival order.
+  // (top/bottom) follows newTodoDefaultSort; the ±32 jitter keeps concurrently identical sorts distinct.
   const targetDay = todoTime ? +dayjs(todoTime).startOf('day') : 0
   const daySorts = db.call('queryTodos', { deleted: 0 })
     .filter(x => (x.dayStart || 0) === targetDay)

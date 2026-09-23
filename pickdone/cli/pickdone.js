@@ -8,7 +8,7 @@
  * the primary consumer is AI agents, so it stays locale-independent.
  */
 const lib = require('./lib.js')
-const fixUtil = require('../src/main/fix-util.js') // P3-8: localDayKey single source (inline copy removed)
+const fixUtil = require('../src/main/fix-util.js') // P3-8: localDayKey single source
 const importer = require('./import.js')
 const dayjs = require('dayjs')
 const fs = require('fs')
@@ -745,8 +745,7 @@ async function main () {
       // cleared/sub-ops reuse the same taskId — no re-resolution after a possible --content rename
       const cleared = dateClear ? lib.clearTodoDate(tid2) : null
       const updated = lib.open().call('getById', tid2)
-      // Timeline chips follow the task (same semantics as the UI's moveTaskChips, finalized in the 2026-09-03 review):
-      // day change → all chips migrate with the task (times unchanged, user-arranged extra chips are not collapsed); a task with no chips and an explicit time → add one
+      // Timeline chips follow the task (UI moveTaskChips semantics, 2026-09-03 review): day change → chips migrate (times unchanged, no collapsing); no chips + explicit time → add one
       if (opts.date !== undefined && !dateClear) {
         const mm = lib.dateExplicitTime(opts.date)
         const dayStr = fixUtil.localDayKey // P3-8: single source (src/main/fix-util.js), inline copy removed
@@ -1183,8 +1182,7 @@ async function main () {
           content = t.taskContent
         }
         // Local-timezone YYYY-MM-DD (do not use toISOString: UTC shifts the whole block by a day for evening use)
-        // P3-8: single source localDayKey (src/main/fix-util.js) — the inline copy is gone
-        const localYmd = fixUtil.localDayKey
+        const localYmd = fixUtil.localDayKey // P3-8: single source localDayKey (src/main/fix-util.js)
         const dateStr = (raw => {
           if (raw === undefined || raw === true || raw === 'today' || raw === '') return localYmd(new Date())
           if (raw === 'tomorrow') { const d = new Date(); d.setDate(d.getDate() + 1); return localYmd(d) }

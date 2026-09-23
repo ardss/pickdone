@@ -75,14 +75,23 @@ test('G1 dbMirror: retries back off exponentially (base → base*2 …)', async 
   _timing.debounceMs = 5; _timing.retryBaseMs = 20; _timing.retryMaxMs = 60; _timing.maxAttempts = 10
   let failing = true // stop the retry loop before this test ends so it cannot leak into later tests
   impl = () => { calls.push([]); timestamps.push(Date.now()); return failing ? Promise.reject(new Error('locked')) : Promise.resolve('ok') }
-  mirrorToDb('k3', { v: 1 }, true)
-  await new Promise(r => setTimeout(r, 160))
-  assert.ok(calls.length >= 3, 'multiple retries happened, got ' + calls.length)
-  const gap1 = timestamps[1] - timestamps[0]
-  const gap2 = timestamps[2] - timestamps[1]
-  assert.ok(gap2 >= gap1, 'backoff is non-decreasing (exponential): ' + gap1 + 'ms then ' + gap2 + 'ms')
-  assert.ok(gap1 >= 15, 'first retry waits ~base ms: ' + gap1)
-  assert.ok(gap2 >= 35, 'second retry waits ~2x base ms: ' + gap2)
+  // Assert on the SCHEDULED delays, not wall-clock gaps: under a loaded CI box the event loop can
+  // stall so two already-due timers fire back-to-back, making measured gaps non-monotonic even
+  // though the backoff schedule is correct (observed flake — same class as the give-up test below).
+  const realSetTimeout = globalThis.setTimeout
+  const delays = []
+  globalThis.setTimeout = (fn, ms, ...rest) => { delays.push(ms); return realSetTimeout(fn, ms, ...rest) }
+  try {
+    mirrorToDb('k3', { v: 1 }, true)
+    const deadline = Date.now() + 5000
+    while (Date.now() < deadline && delays.length < 3) await new Promise(r => realSetTimeout(r, 10))
+    assert.ok(calls.length >= 3, 'multiple retries happened, got ' + calls.length)
+    const retries = delays.filter(d => d >= _timing.retryBaseMs) // exclude the 5ms debounce timer
+    assert.equal(retries[0], 20, 'first retry waits base ms')
+    assert.equal(retries[1], 40, 'second retry waits 2x base ms')
+    assert.equal(retries[2], 60, 'third retry waits 4x base ms (capped at retryMaxMs)')
+    assert.ok(delays[1] >= delays[0] && delays[2] >= delays[1], 'backoff is non-decreasing (exponential)')
+  } finally { globalThis.setTimeout = realSetTimeout }
   failing = false // lingering retries now succeed and retire the key
   await new Promise(r => setTimeout(r, 80))
 }))
