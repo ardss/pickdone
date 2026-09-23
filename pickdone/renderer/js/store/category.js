@@ -432,7 +432,15 @@ export default {
         // tombstones inside the recycle-bin retention window; old tombstones without deletedAt are
         // conservatively kept (pre-dates the stamp, may still be within an unknown window).
         const retentionDays = Number(rootState && rootState.settings && rootState.settings.recycleBinAutoDeleteDays) || 30
-        const cutoff = Date.now() - retentionDays * 86400000
+        // P3-6 (maint/dw 2026-09-23): same calendar-day cutoff as the todo-row purge (store/todo.js:
+        // startOf('day').subtract(days,'day') = local midnight minus N calendar days — computed here
+        // with plain Date math so this path stays independent of the window.dayjs UMD global). The
+        // old rolling-24h arithmetic let this entry expire up to 24h EARLIER than the rows it would
+        // recover — a restart inside that window silently dropped the recovery entry while the rows
+        // were still inside the retention window.
+        const _now = new Date()
+        const _localMidnight = new Date(_now.getFullYear(), _now.getMonth(), _now.getDate()).getTime()
+        const cutoff = _localMidnight - retentionDays * 86400000
         const dels = deletedFromLs().filter(d =>
           !rows.some(r => r.categoryId === d.categoryId) &&
           (!d.deletedAt || d.deletedAt > cutoff))

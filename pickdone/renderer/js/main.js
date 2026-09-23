@@ -590,14 +590,23 @@ async function bootstrap () {
         const ok = r && r.ok
         const label = ok && r.label ? i18n.global.t('statsH.main.undoneLabel', { label: r.label }) : i18n.global.t(ok ? 'statsH.main.undone' : 'statsH.main.undoEmpty')
         window.appUI.$message[ok ? 'success' : 'info'](label)
-      }).catch(e => console.error('[todo] undo failed:', e))
+      }).catch(e => {
+        // P3-7 (maint/dw 2026-09-23): a real failure path (persistSnapshotDiff writes can throw) used
+        // to die silently in the console while success/empty both toasted — surface it.
+        console.error('[todo] undo failed:', e)
+        window.appUI && window.appUI.$message && window.appUI.$message.error(i18n.global.t('statsE.SettingsModal.purgeFailedMsg') + ((e && e.message) || ''))
+      })
     } else if (!inEditor && ((e.ctrlKey && e.key.toLowerCase() === 'y') || (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'z'))) {
       e.preventDefault()
       store.dispatch('todo/redo').then(r => {
         const ok = r && r.ok
         const label = ok && r.label ? i18n.global.t('statsH.main.redoneLabel', { label: r.label }) : i18n.global.t(ok ? 'statsH.main.redone' : 'statsH.main.redoEmpty')
         window.appUI.$message[ok ? 'success' : 'info'](label)
-      }).catch(e => console.error('[todo] redo failed:', e))
+      }).catch(e => {
+        // P3-7: same honest failure toast as undo above
+        console.error('[todo] redo failed:', e)
+        window.appUI && window.appUI.$message && window.appUI.$message.error(i18n.global.t('statsE.SettingsModal.purgeFailedMsg') + ((e && e.message) || ''))
+      })
     }
   })
 

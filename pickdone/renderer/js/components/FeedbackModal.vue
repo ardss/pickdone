@@ -43,6 +43,9 @@
 import { appVersion } from '../utils/core.js'
 import dialogA11y from '../utils/dialogA11y.js'
 
+/** P3-9 (maint/dw 2026-09-23): max locally-staged feedback entries (see submit()). */
+const PENDING_CAP = 20
+
 export default {
   name: 'FeedbackModal',
   mixins: [dialogA11y],
@@ -83,12 +86,15 @@ export default {
           ts: Date.now()
         }
         // Stage locally (can be batch-uploaded later); corrupted data falls back to an empty array so push can't throw and lose user feedback
+        // P3-9 (maint/dw 2026-09-23): the staging array used to grow without bound — cap it at
+        // PENDING_CAP, dropping the OLDEST entry first (newest feedback is the most actionable).
         let arr = []
         try {
           const parsed = JSON.parse(localStorage.getItem('feedbackPending') || '[]')
           if (Array.isArray(parsed)) arr = parsed
         } catch (e) { /* corrupt -> start fresh */ }
         arr.push(payload)
+        while (arr.length > PENDING_CAP) arr.shift()
         localStorage.setItem('feedbackPending', JSON.stringify(arr))
         this.$message.success(this.$t('feedback.submitted'))
         this.desc = ''
