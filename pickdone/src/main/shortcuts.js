@@ -97,6 +97,10 @@ function createShortcuts ({ getMainWindow, showMainOrLock, quickAdd, i18n, log }
     // The main window may already be destroyed (settings re-bind triggered via notify-settings-updated during exit): guard with a getMainWindow null check
     const cur = getMainWindow()
     cur && cur.webContents.removeAllListeners('before-input-event')
+    // F-D3 self-heal: if the renderer dies / reloads mid-record (crash, dev reload) the
+    // suppression flag would otherwise stay raised forever and silently disable every in-app
+    // shortcut until the next record or app restart. Any fresh load starts from a clean slate.
+    cur && cur.webContents.on('did-finish-load', () => { captureSuppress = false })
     cur && cur.webContents.on('before-input-event', (e, input) => {
       const w = getMainWindow()
       if (input.type !== 'keyboard' || !w || w.isDestroyed()) return

@@ -23,6 +23,7 @@ function setupShortcuts () {
   const sent = []
   const prevented = []
   let beforeInput = null
+  let didFinishLoad = null
   const ipcHandlers = {}
   const electronStub = {
     globalShortcut: { register: () => true, unregisterAll: () => {} },
@@ -41,7 +42,10 @@ function setupShortcuts () {
     mod = require_(resolved)
   } finally { Module._load = origLoad }
   const webContents = {
-    on: (ev, h) => { if (ev === 'before-input-event') beforeInput = h },
+    on: (ev, h) => {
+      if (ev === 'before-input-event') beforeInput = h
+      if (ev === 'did-finish-load') didFinishLoad = h
+    },
     removeAllListeners: () => {},
     send: (ch, payload) => sent.push([ch, payload])
   }
@@ -62,6 +66,7 @@ function setupShortcuts () {
       const e = { preventDefault: () => prevented.push(true) }
       beforeInput(e, input)
     },
+    reload () { didFinishLoad() },
     get prevented () { return prevented.length }
   }
 }
@@ -111,6 +116,14 @@ test('F-D3: the settings tab toggles suppression on capture start/stop', () => {
   const src = code('renderer/js/components/settings/SettingsShortcutsTab.vue')
   assert.match(src, /setShortcutCapturing\(true\)/)
   assert.match(src, /setShortcutCapturing\(false\)/)
+})
+
+test('F-D3: a renderer reload mid-record self-heals — suppression cannot stick forever', () => {
+  const s = setupShortcuts()
+  s.ipcHandlers['shortcut-capturing']({}, true)
+  s.reload() // renderer crash/reload: did-finish-load must clear the stale flag
+  s.fire({ type: 'keyboard', control: true, key: 'd' })
+  assert.deepEqual(s.sent, [['shortcut-action', 'deleteEvent']], 'shortcuts dispatch again after a reload, no permanent mute')
 })
 
 test('F-D7: moveWithUndo surfaces an apply() rejection instead of faking the moved toast path', async () => {
