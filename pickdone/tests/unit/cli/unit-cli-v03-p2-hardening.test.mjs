@@ -80,6 +80,7 @@ test('P2-5: audit recordCustom lands and survives a rotation window', () => {
   audit.setMaxBytes(50) // tiny: the second entry must rotate the first away
   audit.recordCustom('import', ['import:run', 'x.csv'], [], [], 'imported 7 task(s)')
   audit.recordCustom('import', ['import:run', 'y.csv'], [], [], 'imported 3 task(s)')
+  audit.flushNow() // F-B7: entries are buffered and flushed async in production — drain before asserting
   const file = audit.auditFile()
   const lines = fs.readFileSync(file, 'utf8').trim().split('\n').map(l => JSON.parse(l))
   assert.equal(lines.length, 1, 'the first line rotated away')
