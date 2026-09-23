@@ -431,12 +431,9 @@ export default {
     },
     set (patch) {
       this.$store.dispatch('settings/update', patch) // goes through the action to sync to the main process config.json (otherwise toggles like launch-at-startup/hardware acceleration would not take effect)
-      // Pomodoro duration / rest duration / daily target are dual-store ledgers (the panel reads the tomato store) — the settings page must mirror after editing,
-      // otherwise it doesn't take effect within the session and only gets backfilled by init after restart (confirmed via release walkthrough: set 30, panel still showed 25:00)
-      const tomatoKeys = ['tomatoTime', 'restTime', 'dailyTomatoTarget']
-      const tp = {}
-      for (const k of tomatoKeys) if (k in patch && patch[k] != null) tp[k] = patch[k]
-      if (Object.keys(tp).length) this.$store.commit('tomato/patch', tp)
+      // Thin call (P1-1, maint/dw 2026-09-23): the tomato-duration mirror moved INTO the
+      // settings/update action (store/settings.js tomatoLedgerPatch) — the action is now the single
+      // bridge every inbound path (settings page / CLI / LAN sync / DB restore) converges through.
     },
     getLocale,
     async loadUpdStatus () {

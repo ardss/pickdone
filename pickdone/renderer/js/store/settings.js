@@ -1,5 +1,8 @@
 import { safeSet } from '../utils/core.js'
 import { isAuxWindow } from '../utils/auxWindow.js'
+// P2-3 (maint/dw 2026-09-23): the seeded shortcut map is the SHARED factory table (same module
+// src/main/config-store.js reads) — the hand-copied literal here could drift from main's defaults.
+import { DEFAULT_SHORTCUTS } from '../../../shared/shortcut-defaults.mjs'
 /** Settings module — the full field set matches the reference settingsState */
 const LS_KEY = 'settingsState'
 /** Persistence blob format version: readers treat old unstamped data as v1 (behavior unchanged); the restore side refuses to import segments >1 (preventing downgrade misreads) */
@@ -82,13 +85,10 @@ export const DEFAULT_SETTINGS = {
   sidebarCollapsed: false,
   catFold: false, // single bool: categories section folded in the sidebar (SideNav.vue semantics)
   showTagPanel: true,
-  // Y2: global shortcut map (same shape as main config-store DEFAULT_SHORTCUTS — mirrored here
-  // because renderer code must not import from src/main). Seeded from config.json on first run.
-  shortcutKeySettings: {
-    sync: 'ctrl+s', toggleMainWindow: '', quickAddGlobal: 'alt+shift+t', addEvent: 'ctrl+n', deleteEvent: 'ctrl+d',
-    pinEvent: '', unpinEvent: '', toggleAllSubtasks: '', startPomodoro: '',
-    switchToDaytodo: 'ctrl+1', switchToRecentTodos: 'ctrl+2', switchToSchedule: 'ctrl+3', switchToInbox: 'ctrl+4'
-  },
+  // Y2: global shortcut map — the SHARED factory table (shared/shortcut-defaults.mjs, same module
+  // src/main/config-store.js reads; previously a hand-copied mirror that could drift). Seeded from
+  // config.json on first run.
+  shortcutKeySettings: { ...DEFAULT_SHORTCUTS },
   // Y4: repeat-rule defaults (repeatSettingsV2State content as one JSON object; store/repeatSettings.js reads/writes through here)
   repeatDefaultSettings: {},
   // Y6: onboarding tours seen ledger ({tourKey: ts}); inbound patches merge per-key max, never clobber
@@ -225,6 +225,9 @@ function load () {
   if (typeof raw !== 'object' || Array.isArray(raw)) raw = {}
   // Format-version tolerance: old unstamped data treated as v1 (behavior unchanged); higher versions left for future upgrade logic
   const merged = { ...DEFAULT_SETTINGS, ...raw }
+  // shortcutKeySettings now references the SHARED factory object (shared/shortcut-defaults.mjs):
+  // clone it per store instance so mutating live state can never corrupt the shared default.
+  if (merged.shortcutKeySettings === DEFAULT_SETTINGS.shortcutKeySettings) merged.shortcutKeySettings = { ...DEFAULT_SHORTCUTS }
   // Strip volatile keys already migrated to runtimeState (leftovers in old localStorage)
   delete merged.autoBackupLastAt; delete merged.tomatoRecordAddCount; delete merged.tomatoRecordAddDate
   coerceNumericSettings(merged)
@@ -322,6 +325,25 @@ export function mainConsumedSettingsDiff (state) {
   return patch
 }
 
+/** P1-1 (maint/dw 2026-09-23): the pomodoro durations live in TWO ledgers — this module holds the
+ *  synced settings blob, but the running countdown reads the tomato module's runtime state. The
+ *  settings PAGE used to be the only place that mirrored the two (SettingsModal.set), so every
+ *  other inbound path (CLI `settings set`, LAN sync via updateExternal, DB restore via initFromDb)
+ *  updated the settings ledger and left the live countdown on stale values until restart. The
+ *  mirror now lives HERE: every write that carries one of these keys also patches the tomato
+ *  ledger. Pure helper (unit-tested) — callers pass their own commit so mutations/actions share it. */
+export const TOMATO_LEDGER_KEYS = ['tomatoTime', 'restTime', 'dailyTomatoTarget']
+export function tomatoLedgerPatch (patch) {
+  if (!patch || typeof patch !== 'object') return {}
+  const tp = {}
+  for (const k of TOMATO_LEDGER_KEYS) if (patch[k] != null) tp[k] = patch[k]
+  return tp
+}
+function mirrorTomatoLedger (commit, patch) {
+  const tp = tomatoLedgerPatch(patch)
+  if (Object.keys(tp).length) commit('tomato/patch', tp, { root: true })
+}
+
 export default {
   namespaced: true,
   state: load(),
@@ -332,7 +354,9 @@ export default {
       persist(state)
     },
     restore (state, saved) {
-      Object.assign(state, coerceNumericSettings({ ...DEFAULT_SETTINGS, ...(saved || {}) }))
+      const merged = coerceNumericSettings({ ...DEFAULT_SETTINGS, ...(saved || {}) })
+      if (merged.shortcutKeySettings === DEFAULT_SETTINGS.shortcutKeySettings) merged.shortcutKeySettings = { ...DEFAULT_SHORTCUTS }
+      Object.assign(state, merged)
       persist(state)
       // maint-d7: restore used to be a bare Object.assign+persist — no `settings/update` action, so
       // no updateSettings IPC and main's config.json-consumed keys (launch-at-startup, shortcuts,
@@ -351,6 +375,9 @@ export default {
   actions: {
     async update ({ commit }, patch) {
       commit('updateSettings', patch)
+      // P1-1: mirror duration keys into the tomato runtime ledger (all inbound paths converge here —
+      // updateExternal re-dispatches through this action; see tomatoLedgerPatch above).
+      mirrorTomatoLedger(commit, patch)
       // Y1: locale hot-apply — mirror the local-change path (main handlers/settings.js 'set-app-locale'):
       // main-process i18n + tray rebuild. LS 'appLocale' stays as i18n's boot cache (write-through).
       if (patch && patch.appLocale && typeof patch.appLocale === 'string') {
@@ -361,10 +388,17 @@ export default {
         } catch (e) { /* i18n unavailable in degraded hosts */ }
         try { if (window.todoAPI && window.todoAPI.setAppLocale) window.todoAPI.setAppLocale(patch.appLocale) } catch (e) { /* empty */ }
       }
-      try { await window.todoAPI.updateSettings(patch) } catch (e) {
-        // IPC failure = LS written but config.json not; next launch config would overwrite it back (settings changed during lock → lost on restart): at least leave a trace
-        console.error('[settings] updateSettings IPC failed, patch may be reverted on next launch:', patch, e)
+      // P2-2 (maint/dw 2026-09-23): the IPC result is now REPORTED instead of swallowed — the
+      // shortcuts tab awaits it and must not show "saved" (nor advance its dirty snapshot) when
+      // config.json was not written. A missing bridge (tests / browser host) counts as ok.
+      if (typeof window !== 'undefined' && window.todoAPI && window.todoAPI.updateSettings) {
+        try { await window.todoAPI.updateSettings(patch) } catch (e) {
+          // IPC failure = LS written but config.json not; next launch config would overwrite it back (settings changed during lock → lost on restart): at least leave a trace
+          console.error('[settings] updateSettings IPC failed, patch may be reverted on next launch:', patch, e)
+          return { ok: false, error: e }
+        }
       }
+      return { ok: true }
     },
     /** P1-3: inbound patch from a trust boundary (CLI watcher / LAN-sync applied settings rows).
      *  Sanitized via sanitizeSettingsPatch (same coercion/validation family as restore()), then
@@ -426,7 +460,7 @@ export default {
         // two paths can never drift apart.
         const needsMainApply = MAIN_CONSUMED_SETTINGS.some(k => k in patch)
         if (needsMainApply) await dispatch('update', patch)
-        else commit('updateSettings', patch)
+        else { commit('updateSettings', patch); mirrorTomatoLedger(commit, patch) } // P1-1: the raw-commit branch must mirror the tomato ledger too
       } else mirrorToDb('db.settingsState', { ...state, _savedAt: db._savedAt, schemaV: SETTINGS_SCHEMA_V })
     }
   }
