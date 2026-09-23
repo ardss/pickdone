@@ -219,6 +219,7 @@ export default {
       "postponeToTomorrow": "推迟到明天",
       "copyTitleDesc": "复制标题与描述",
       "copiedMsg": "已复制",
+      "copyFailMsg": "复制失败",
       "repeatDeleteMenu": "重复任务删除…",
       "moveToRecycleBin": "删除到回收站",
       "movedToBinMsg": "已删除到回收站：",

@@ -147,7 +147,7 @@
         <!-- Right date pill demoted to a purely visual indicator (clicks land on the whole row); the hidden-selector calendar pop pattern is unchanged -->
         <span class="ep-deadline-pill"
               :class="{ 'ep-deadline-pill--set': !!(e&&e.deadlineTs) }">
-          {{ e&&e.deadlineTs ? dayjs(e.deadlineTs).format('M/D') : $t('statsJ.EditPanel.pickDueDate') }}
+          {{ e&&e.deadlineTs ? fmtMd(e.deadlineTs) : $t('statsJ.EditPanel.pickDueDate') }}
         </span>
         <b v-if="e&&e.deadlineTs" class="ep-remind-clear close-x" role="button" tabindex="0" :title="$t('statsJ.EditPanel.clearDueDate')" :aria-label="$t('statsJ.EditPanel.clearDueDate')" @click.stop="fieldPatch('deadlineTs',0)"></b>
         <el-date-picker ref="deadlinePick" size="small" value-format="x" type="date"
@@ -181,6 +181,7 @@
  * Right edit panel -- aligned with the right-sidebar reference: Category chips / complete + expand / title / description / date chips (today, tomorrow, pick a date, no date) / add reminder / subtasks (x, drag handle) / add subtask (n/20) / three difficulty levels / upload images / bottom tool row S4 split (2026-09-12): reminders/subtasks/attachments/dependencies views moved to ./edit-panel/Ep*.vue -- children only EMIT change events; this component owns the state (e/subList/imgList/fileList) and funnels every mutation through the unified queueSave pipeline (utils/editSave.js). The save pipeline is the global lifeline: it is the only place that dispatches todo/updateTodoFields for panel edits.
  */
 import {dayjs, DAY_MS, FMT } from '../utils/core.js'
+import { getLocale } from '../i18n/index.js'
 import { extractTags } from '../utils/search.js'
 import { subsCompleteTarget, reportError } from '../utils/core.js'
 import { deleteWithUndo, removeWithUndo } from '../utils/confirm.js'
@@ -378,6 +379,9 @@ export default {
     if (this._sortable) { try { this._sortable.destroy() } catch (err) { /* already destroyed */ } this._sortable = null }
   },
   methods: {
+    // Locale-aware month/day label (same convention as CalendarView's fmtDate): the fixed 'M/D'
+    // once showed numeric-only dates under the English UI, off-contract with the FMT format system
+    fmtMd (ts) { return getLocale() === 'en-US' ? dayjs(ts).format('MMM D') : dayjs(ts).format(FMT.cnDate) },
     /* ===== Save pipeline wrappers (impl: utils/editSave.js) ===== */
     queueSave (patch) { if (this._save) this._save.queueSave(patch) },
     /** Immediately commit pending saves (must be called before switching tasks, so A's edits do not land on B).

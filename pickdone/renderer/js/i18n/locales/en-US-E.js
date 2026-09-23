@@ -219,6 +219,7 @@ export default {
       "postponeToTomorrow": "Postpone to tomorrow",
       "copyTitleDesc": "Copy title & description",
       "copiedMsg": "Copied",
+      "copyFailMsg": "Copy failed",
       "repeatDeleteMenu": "Delete repeating task…",
       "moveToRecycleBin": "Move to recycle bin",
       "movedToBinMsg": "Moved to recycle bin: ",

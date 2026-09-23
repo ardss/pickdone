@@ -162,5 +162,13 @@
   "renderer/js/views/QuickAddPage.vue::quickAddDraft": {
     "authority": "local-only",
     "note": "D6-F12: standalone quick-add draft persistence; LS is the authority for the ephemeral draft (never synced, consumed on create)"
+  },
+  "renderer/js/components/WeatherWidget.vue::geoShapeMiss-": {
+    "authority": "local-only",
+    "note": "negative geo-shape cache (1h TTL), self-healing: a later successful fetch overwrites the miss entry"
+  },
+  "renderer/js/store/auth.js::gamification.gainDedup": {
+    "authority": "local-only",
+    "note": "snow-gain replay dedup keys (startedAt) - mirrors gains already booked via db bumpSnow dedupKey; stale entries are harmless"
   }
 }

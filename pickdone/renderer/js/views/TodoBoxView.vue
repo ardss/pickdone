@@ -197,35 +197,47 @@ export default {
       // Filter against the current list first: dead ids deleted elsewhere during batching are excluded so the toast count matches reality
       const alive = this.checkedIds.filter(id => this.$store.state.todo.todoList.some(x => x.taskId === id))
       const snap = []
+      let failed = 0
       for (const id of alive) {
         const raw = this.$store.state.todo.todoList.find(x => x.taskId === id)
         if (!raw) continue
-        snap.push({ id, dayStart: raw.dayStart, todoTime: raw.todoTime })
-        await this.$store.dispatch('todo/updateTodoFields', { taskId: id, patch: { dayStart: ts, todoTime: ts } })
+        try {
+          await this.$store.dispatch('todo/updateTodoFields', { taskId: id, patch: { dayStart: ts, todoTime: ts } })
+          snap.push({ id, dayStart: raw.dayStart, todoTime: raw.todoTime })
+        } catch { failed++ } // per-row catch mirrors batchDelete: one dead row must not abort the rest
       }
       this.$message.closeAll()
-      batchMoveWithUndo(this, {
-        label: this.$t('statsC.TodoBox.msgToday', { n: snap.length }),
-        snap,
-        revertOf: r => this.$store.dispatch('todo/updateTodoFields', { taskId: r.id, patch: { dayStart: r.dayStart, todoTime: r.todoTime } })
-      })
+      if (snap.length) {
+        batchMoveWithUndo(this, {
+          label: this.$t('statsC.TodoBox.msgToday', { n: snap.length }),
+          snap,
+          revertOf: r => this.$store.dispatch('todo/updateTodoFields', { taskId: r.id, patch: { dayStart: r.dayStart, todoTime: r.todoTime } })
+        })
+      }
+      if (failed) this.$message.warning(this.$t('statsC.TodoBox.msgPartialFail', { n: failed }))
       this.checkedIds = []
     },
     async batchCat (catId) {
       const alive = this.checkedIds.filter(id => this.$store.state.todo.todoList.some(x => x.taskId === id))
       const snap = []
+      let failed = 0
       for (const id of alive) {
         const raw = this.$store.state.todo.todoList.find(x => x.taskId === id)
         if (!raw) continue
-        snap.push({ id, categoryId: raw.categoryId })
-        await this.$store.dispatch('todo/updateTodoFields', { taskId: id, patch: { categoryId: catId } })
+        try {
+          await this.$store.dispatch('todo/updateTodoFields', { taskId: id, patch: { categoryId: catId } })
+          snap.push({ id, categoryId: raw.categoryId })
+        } catch { failed++ }
       }
       this.$message.closeAll()
-      batchMoveWithUndo(this, {
-        label: this.$t('statsC.TodoBox.msgMoveCat', { n: snap.length, name: this.catNameOf(catId) || this.$t('statsC.TodoBox.uncategorized') }),
-        snap,
-        revertOf: r => this.$store.dispatch('todo/updateTodoFields', { taskId: r.id, patch: { categoryId: r.categoryId } })
-      })
+      if (snap.length) {
+        batchMoveWithUndo(this, {
+          label: this.$t('statsC.TodoBox.msgMoveCat', { n: snap.length, name: this.catNameOf(catId) || this.$t('statsC.TodoBox.uncategorized') }),
+          snap,
+          revertOf: r => this.$store.dispatch('todo/updateTodoFields', { taskId: r.id, patch: { categoryId: r.categoryId } })
+        })
+      }
+      if (failed) this.$message.warning(this.$t('statsC.TodoBox.msgPartialFail', { n: failed }))
       this.checkedIds = []
     },
     async batchDelete () {

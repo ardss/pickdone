@@ -91,6 +91,7 @@ Write commands:
           batch takes exact taskIds only — unknown ids land in failures[] and never abort the remaining tasks
   add    <content> [--desc text] [--date today|tomorrow|+3d|YYYY-MM-DD[ HH:mm]] [--created-at "YYYY-MM-DD HH:mm"]
          [--after <taskId|keyword>] [--reminder same as date] [--category name] [--difficulty 0-3] [--estimate 0-20]
+         [--deadline date|none] [--important 0|1] [--urgent 0|1] [--priority 0-3]
   done   <taskId|keyword>         complete a task (--no-sub-cascade to skip subtasks; --at "YYYY-MM-DD HH:mm" backdates completedAt)
   undo   <taskId|keyword>         undo completion
   edit   <taskId|keyword> [--content text] [--desc text] [--date value|none] [--reminder value|none] [--remind-offset "10,30"|none] [--remind-extra "D HH:mm,..."|none] [--category name] [--important 0|1] [--urgent 0|1] [--priority 0-3] [--difficulty 0-3] [--deadline date|none] [--estimate 0-20]
@@ -170,7 +171,7 @@ function fmtTodoLine (t, lunarOf) {
 }
 
 /** audit changes summary: list changed semantic fields (before→after) */
-const FIELD_LABEL = { taskContent: 'title', taskDescribe: 'desc', complete: 'complete', completedAt: 'completedAt', todoTime: 'date', reminderTime: 'reminder', categoryId: 'category', repeatId: 'repeatGroup', subtasks: 'subtasks', delete: 'delete', status: 'status' }
+const FIELD_LABEL = { taskContent: 'title', taskDescribe: 'desc', complete: 'complete', completedAt: 'completedAt', todoTime: 'date', reminderTime: 'reminder', categoryId: 'category', repeatId: 'repeatGroup', subtasks: 'subtasks', delete: 'delete', status: 'status', estimate: 'estimate', tomatoEstimate: 'tomatoEstimate', deadlineTs: 'deadline', priority: 'priority', important: 'important', urgent: 'urgent' }
 const ts = v => (typeof v === 'number' && v > 1e11) ? dayjs(v).format('MM-DD HH:mm') : v
 function summarizeChanges (changes) {
   const parts = []
@@ -328,8 +329,11 @@ async function main () {
       if (!opts._[0]) throw new lib.CliError('usage: get <taskId|keyword>', 'USAGE')
       const t = lib.resolveTask(opts._[0])
       // QC r2: the estimate COLUMN is dead (authoritative value lives in meta keys post-X2) —
-      // get is the documented read-back, so surface the LIVE meta value over the dead column.
-      try { t.estimate = lib.getEstimateOf(t.taskId) } catch { /* read failure: keep the column value */ }
+      // get is the documented read-back, so surface the LIVE meta value under its own
+      // `tomatoEstimate` field: overwriting the estimate COLUMN clobbered the DB row's own
+      // field (accumulated focus minutes per db.js bumpSnow) and clashed with the UI export's
+      // same-name caliber.
+      try { t.tomatoEstimate = lib.getEstimateOf(t.taskId) } catch { /* read failure: keep row as-is */ }
       if (opts.json) return emit(t)
       console.log(JSON.stringify(t, null, 2))
       return
@@ -570,7 +574,7 @@ async function main () {
       // so the task read as "ready" forever. Unknown refs fail fast with a non-zero exit.
       const afterRef = opts.after != null && opts.after !== true ? opts.after : null
       const afterIds = afterRef ? [lib.resolveTask(afterRef).taskId] : null
-      const t = lib.addTodo({
+      let t = lib.addTodo({
         content, desc: opts.desc, date: opts.date, reminder: opts.reminder,
         category: opts.category, difficulty: opts.difficulty,
         priority: opts.priority != null && opts.priority !== true ? opts.priority : undefined,
@@ -580,6 +584,11 @@ async function main () {
         after: afterIds
       })
       if (opts.estimate != null && opts.estimate !== true) lib.setEstimate(t.taskId, opts.estimate)
+      // --deadline at creation (edit parity, same parser): reuses the patchTodo pipeline; --important/
+      // --urgent/--priority were already wired through lib.addTodo's quadrant derivation above.
+      if (opts.deadline != null && opts.deadline !== true && !isDateClear(opts.deadline)) {
+        t = lib.patchTodo(t.taskId, { deadlineTs: lib.parseDate(opts.deadline) }, { action: 'edit', note: 'deadline set at creation' })
+      }
       const hints = [`get ${t.taskId} --json to verify`, `done ${t.taskId} to complete it`, 'list --json to read back']
       // No-date tasks land in the inbox (not the today list) — in practice even agents assume add=today, so an inline hint is mandatory
       if (!opts.date) {

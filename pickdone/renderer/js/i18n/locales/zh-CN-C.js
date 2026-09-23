@@ -103,7 +103,8 @@ export default {
       msgMoveCat: '已把 {n} 条任务移到「{name}」',
       confirmDelete: '删除选中的 {n} 条任务到回收站？',
       confirmTitle: '提示',
-      msgDeleted: '已删除 {n} 条任务'
+      msgDeleted: '已删除 {n} 条任务',
+      msgPartialFail: '{n} 条任务移动失败'
     }
   }
 }

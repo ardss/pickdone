@@ -182,14 +182,17 @@ test('#3 reorderTodos breaks the undo merge and de-proxies the upsertMany batch'
 })
 
 // ---- #4 quit-flush failure requeue ----
-test('#4 flushPendingUpserts requeues failed entries and replays them on the next flush', async () => {
-  safeUpsert(row('a', { taskContent: 'keep' }))
-  assert.equal(pendingUpserts.length, 1)
+test('#4 flushPendingUpserts keeps failed entries queued and replays them on the next flush', async () => {
+  // maint-d7: failed entries NEVER leave the queue (splice-on-success only), so a failed entry
+  // survives ANY number of failed flushes — previously the requeue lived in the Promise.all
+  // aggregate callback, which never ran if the process exited first (permanent loss).
   dbHandler = () => Promise.reject(new Error('ipc down at quit'))
-  flushPendingUpserts()
-  await waitFor(() => false, 30).catch(() => {}) // let rejections settle
+  safeUpsert(row('a', { taskContent: 'keep' }))
+  await new Promise(r => setTimeout(r, 20)) // let the initial safeUpsert attempt fail
+  assert.equal(pendingUpserts.length, 1, 'failed initial write stays queued')
+  flushPendingUpserts() // quit flush, also failing
   await new Promise(r => setTimeout(r, 20))
-  assert.equal(pendingUpserts.length, 1, 'failed entry is back in the queue')
+  assert.equal(pendingUpserts.length, 1, 'failed flush does not drop the entry')
   // next flush succeeds
   dbHandler = op => { dbCalls.push([op]); return Promise.resolve(null) }
   flushPendingUpserts()

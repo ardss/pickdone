@@ -18,7 +18,7 @@
           <span class="pd-day-deck__label">{{ labelOf(c.ts) }}</span>
           <span class="pd-day-deck__count">{{ doneOf(c) }}/{{ totalCountOf(c) }}</span>
         </div>
-        <div class="pd-day-deck__wd">{{ dayjs(c.ts).format('MM/DD') + ' ' + $t('statsA.core.weekOf', { w: $t('statsA.core.wd' + dayjs(c.ts).day()) }) }}</div>
+        <div class="pd-day-deck__wd">{{ fmtMd(c.ts) + ' ' + $t('statsA.core.weekOf', { w: $t('statsA.core.wd' + dayjs(c.ts).day()) }) }}</div>
         <div class="pd-day-deck__bar" aria-hidden="true">
           <i :style="{ width: (totalCountOf(c) ? doneOf(c) / totalCountOf(c) * 100 : 0) + '%' }"></i>
         </div>
@@ -33,7 +33,7 @@
               <span class="pd-day-deck__chk td-check" :class="{on: t.complete}" :style="chkStyleOf(t)" role="checkbox" :aria-checked="t.complete ? 'true' : 'false'"
                  :aria-label="$t('statsE.TodoItem.markComplete')"
                  tabindex="0" @click.stop="toggle(t, $event)" @keydown.enter.prevent.stop="toggle(t, $event)"><svg v-if="t.complete" class="td-check-svg" viewBox="0 0 12 12" aria-hidden="true"><polyline points="2,6.2 5,9 10,3" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" pathLength="1"/></svg></span>
-              <span class="pd-day-deck__overdue-date">{{ dayjs(t.dayStart).format('M/D') }}</span>
+              <span class="pd-day-deck__overdue-date">{{ fmtMd(t.dayStart) }}</span>
               <span class="pd-day-deck__title" role="button" tabindex="0"
                     :title="$t('statsE.TodayView.overdueSince', { d: dayjs(t.dayStart).format(FMT.cnDate) })"
                     :aria-label="$t('statsE.TodoItem.openEditor')"
@@ -93,6 +93,7 @@ import { deleteWithUndo, moveWithUndo } from '../utils/confirm.js'
 import { taskContextMenu } from '../utils/taskMenu.js'
 import { toggleTomatoAttach, chkStyle } from '../utils/taskRow.js'
 import { FMT } from '../utils/core.js'
+import { getLocale } from '../i18n/index.js'
 
 // Bare dayjs is the window.dayjs global (injected by the browser host); taking an explicit reference satisfies lint and avoids global lookups
 const dayjs = window.dayjs
@@ -194,6 +195,9 @@ export default {
     clearInterval(this._tick)
   },
   methods: {
+    // Locale-aware month/day label (same convention as CalendarView's fmtDate): hardcoded 'M/D'
+    // once showed numeric-only dates under the English UI, off-contract with the FMT format system
+    fmtMd (ts) { return getLocale() === 'en-US' ? dayjs(ts).format('MMM D') : dayjs(ts).format(FMT.cnDate) },
     taskContextMenu (t, e) { taskContextMenu(this, t, e) },
     doneOf (card) { return card.all.filter(t => t.complete).length },
     // Header count/progress denominator includes the overdue bucket: above N overdue items the

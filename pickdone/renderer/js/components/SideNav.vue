@@ -76,10 +76,12 @@
           <app-icon name="folder" :size="14" v-if="!isFolderExpanded(o.categoryId)" :style="{color:o.categoryColor}"/>
           <app-icon name="folder" :size="14" v-else :style="{color:o.categoryColor}"/>
           <template v-if="catEditing===o.categoryId">
-            <input v-model="newCatName" class="sn-cat-edit" @keydown.enter.prevent="onCatEditEnter($event, o)" @blur="saveCatEdit(o)"/>
+            <input v-model="newCatName" class="sn-cat-edit" @keydown.enter.prevent="onCatEditEnter($event, o)" @keydown.esc.prevent="cancelCatEdit(o)" @blur="saveCatEdit(o)"/>
           </template>
           <template v-else><span class="sn-cat-name">{{o.categoryName}}</span></template>
           <i class="folder-toggle-icon"><app-icon :name="isFolderExpanded(o.categoryId)?'chevron-down':'chevron-right'" :size="11"/></i>
+          <i class="sn-cat-del sn-cat-ren" role="button" tabindex="0" :aria-label="$t('statsG.SideNav.renameCatAria')" style="display:inline-flex"
+             :title="$t('statsG.SideNav.renameCatTitle')" @click.stop="startCatEdit(o)" @keydown.enter.prevent.stop="startCatEdit(o)"><app-icon name="edit" :size="12"/></i>
           <i class="sn-cat-del" role="button" tabindex="0" :aria-label="$t('statsG.SideNav.delCatAria')" style="display:inline-flex"
              :title="$t('statsG.SideNav.delCatTitle')" @click.stop="delCat(o)" @keydown.enter.prevent.stop="delCat(o)"><app-icon name="trash" :size="12"/></i>
         </div>
@@ -93,9 +95,11 @@
                @keydown.enter.prevent="go('todo-list-category',{id:ch.categoryId})">
             <span class="sn-dot" :style="{background:ch.categoryColor}"></span>
             <template v-if="catEditing===ch.categoryId">
-              <input v-model="newCatName" class="sn-cat-edit" @keydown.enter.prevent="onCatEditEnter($event, ch)" @blur="saveCatEdit(ch)"/>
+              <input v-model="newCatName" class="sn-cat-edit" @keydown.enter.prevent="onCatEditEnter($event, ch)" @keydown.esc.prevent="cancelCatEdit(ch)" @blur="saveCatEdit(ch)"/>
             </template>
             <template v-else><span>{{ch.categoryName}}</span></template>
+            <i class="sn-cat-del sn-cat-ren" role="button" tabindex="0" :aria-label="$t('statsG.SideNav.renameCatAria')" style="display:inline-flex"
+               :title="$t('statsG.SideNav.renameCatTitle')" @click.stop="startCatEdit(ch)" @keydown.enter.prevent.stop="startCatEdit(ch)"><app-icon name="edit" :size="12"/></i>
             <i class="sn-cat-del" role="button" tabindex="0" :aria-label="$t('statsG.SideNav.delCatAria')" style="display:inline-flex"
                :title="$t('statsG.SideNav.delCatTitle')" @click.stop="delCat(ch)" @keydown.enter.prevent.stop="delCat(ch)"><app-icon name="trash" :size="12"/></i>
           </div>
@@ -111,9 +115,11 @@
              @dragstart="dragStartCat(o,$event)" @dragover.prevent="dragOverCat(o,$event)" @drop.prevent="dropOnCat(o,$event)" @dragend="dragEndCat">
           <span class="sn-dot" :style="{borderColor:o.categoryColor, background:o.categoryColor}"></span>
           <template v-if="catEditing===o.categoryId">
-            <input v-model="newCatName" class="sn-cat-edit" @keydown.enter.prevent="onCatEditEnter($event, o)" @blur="saveCatEdit(o)"/>
+            <input v-model="newCatName" class="sn-cat-edit" @keydown.enter.prevent="onCatEditEnter($event, o)" @keydown.esc.prevent="cancelCatEdit(o)" @blur="saveCatEdit(o)"/>
           </template>
           <template v-else><span>{{o.categoryName}}</span></template>
+          <i class="sn-cat-del sn-cat-ren" role="button" tabindex="0" :aria-label="$t('statsG.SideNav.renameCatAria')" style="display:inline-flex"
+             :title="$t('statsG.SideNav.renameCatTitle')" @click.stop="startCatEdit(o)" @keydown.enter.prevent.stop="startCatEdit(o)"><app-icon name="edit" :size="12"/></i>
           <i class="sn-cat-del" role="button" tabindex="0" :aria-label="$t('statsG.SideNav.delCatAria')" style="display:inline-flex"
              :title="$t('statsG.SideNav.delCatTitle')" @click.stop="delCat(o)" @keydown.enter.prevent.stop="delCat(o)"><app-icon name="trash" :size="12"/></i>
         </div>
@@ -489,8 +495,21 @@ export default {
       if (e.isComposing || e.keyCode === 229) return
       this.saveCatEdit(c)
     },
+    // Esc restores the original name and leaves edit mode (blur-save semantics kept; cancel channel added,
+    // same pattern as HabitView cancelRename)
+    cancelCatEdit (c) {
+      this.newCatName = c.categoryName
+      this.catEditing = null
+    },
     saveCatEdit (c) {
-      this.$store.commit('category/updateCategory', { categoryId: c.categoryId, categoryName: this.newCatName.trim() || c.categoryName })
+      if (this.catEditing !== c.categoryId) return // blur fires after Esc-cancel: nothing left to save
+      const n = this.newCatName.trim()
+      if (!n) {
+        // Empty name used to silently keep the old name; warn and keep editing so the user notices
+        this.$message.warning(this.$t('statsG.SideNav.catNameEmptyWarn'))
+        return
+      }
+      this.$store.commit('category/updateCategory', { categoryId: c.categoryId, categoryName: n })
       this.catEditing = null
     },
     startCatEdit (c) {
@@ -775,6 +794,10 @@ export default {
 }
 .sn-cat-item:hover .sn-cat-del, .sn-cat-del:focus { opacity: 1; }
 .sn-cat-del:hover { color: var(--danger); }
+/* Rename entry shares the sn-cat-del hover-reveal pattern; offset left of the trash so the two don't overlap.
+   Keyboard-reachable rename for the dblclick-only path (finding: dblclick is pointer-only). */
+.sn-cat-del.sn-cat-ren { right: 28px; }
+.sn-cat-del.sn-cat-ren:hover { color: var(--text-2); }
 .sn-cat-item.dragging { opacity: .45; }
 .sn-cat-item.busy { opacity: .45; pointer-events: none; } /* D6-F4: cascade delete in flight */
 .sn-cat-item.drag-over-before { box-shadow: inset 0 2px 0 var(--brand); }

@@ -127,8 +127,15 @@ export function tourSeenState () { return seenMap() }
    Each completed action auto-advances to the next step; skip and next are always available, never trapping the user.
    No mask during the drag stage (the driver spotlight only lets through the highlighted element; dragging needs both ends interactive) — replaced by a persistent banner. */
 const J_SEED_TEXT = () => tt(T('jSeedTask'))
-const poll = (test, cb, interval = 400) => {
-  const iv = setInterval(() => { let ok = false; try { ok = test() } catch (e) { /* empty */ } if (ok) { clearInterval(iv); cb() } }, interval)
+/** Poll until test() passes. With maxMs > 0 the poll self-terminates once the budget is spent
+ *  and calls onTimeout (safe exit) instead of ticking forever when the awaited element never renders. */
+const poll = (test, cb, interval = 400, maxMs = 0, onTimeout = null) => {
+  const started = Date.now()
+  const iv = setInterval(() => {
+    let ok = false; try { ok = test() } catch (e) { /* empty */ }
+    if (ok) { clearInterval(iv); cb(); return }
+    if (maxMs > 0 && Date.now() - started >= maxMs) { clearInterval(iv); if (onTimeout) onTimeout() }
+  }, interval)
   return iv
 }
 function journeyBanner (text, skipLabel, onSkip) {
@@ -149,18 +156,28 @@ export function runJourney (force = false) {
   let watch = null
   const clearWatch = () => { if (watch) { clearInterval(watch); watch = null } }
   // Preset sample task (default schedule): created via the real input chain so the drag/tomato steps in focus have a real target; auto-retried once if it doesn't land
+  // Dedup guard: if a task with the seed text already exists (an earlier seed landed late, or the
+  // user already created one), seedOnce is a no-op — the old blind 2.4s retry used to create a
+  // duplicate sample task when the first seed rendered between the poll check and the timer.
+  const seedTaskExists = () => [...document.querySelectorAll('.td-item')].some(el => (el.textContent || '').includes(J_SEED_TEXT()))
   const seedOnce = () => {
+    if (seedTaskExists()) return
     inp.value = J_SEED_TEXT()
     inp.dispatchEvent(new Event('input', { bubbles: true }))
     // QuickAdd listens for keyup.enter (with isComposing/229 guards); sending keydown would never create
     inp.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', bubbles: true }))
   }
+  // Every journey watch is capped: a stage element that never renders (view switched, store error)
+  // must end the journey through the safe exit (finishAll tears the driver/banner down) instead of
+  // polling forever. finishAll is declared below; the closures only run after runJourney returns.
+  const JOURNEY_POLL_CAP_MS = 30000
+  const pollCapped = (test, cb) => poll(test, cb, 300, JOURNEY_POLL_CAP_MS, () => finishAll())
   if (!document.querySelector('.td-item')) {
     seedOnce()
-    watch = poll(() => !!document.querySelector('.td-item'), () => {
+    watch = pollCapped(() => !!document.querySelector('.td-item'), () => {
       clearWatch()
       stageCreate()
-    }, 300)
+    })
     // Sample task not landed within 2.4s = creation failed (input chain busy/view abnormal); retry once
     setTimeout(() => {
       if (!document.querySelector('.td-item') && !document.querySelector('.tour-journey-banner')) seedOnce()
@@ -203,36 +220,36 @@ export function runJourney (force = false) {
   // Stage D: start focus (click play; auto-advances once --work appears)
   const stageFocus = () => {
     const d = singleStep({ element: '.tomato-timer__play', popover: { title: tt(T('jFocusTitle')), description: tt(T('jFocusDesc')), side: 'top', align: 'center' } }, stageDone)
-    watch = poll(() => !!document.querySelector('.tomato-timer__play--work'), () => { clearWatch(); stageDone() })
+    watch = pollCapped(() => !!document.querySelector('.tomato-timer__play--work'), () => { clearWatch(); stageDone() })
     void d
   }
   // Stage C: drag to schedule (no-mask banner; auto-advances when the task lands on the rail; "skip this step" also works)
   const stageDrag = () => {
     const b = journeyBanner(tt(T('jDragBanner')), tt(T('jSkipStep')), () => { b.remove(); stageFocus() })
-    watch = poll(() => !!document.querySelector('.day-rail .pd-task-item'), () => { b.remove(); stageFocus() })
+    watch = pollCapped(() => !!document.querySelector('.day-rail .pd-task-item'), () => { b.remove(); stageFocus() })
   }
   // Stage B: select the sample task (wait for the row-end tomato to render first, then attach the active listener)
   const stagePick = () => {
     clearWatch()
-    watch = poll(() => !!document.querySelector('.td-tom'), () => {
+    watch = pollCapped(() => !!document.querySelector('.td-tom'), () => {
       clearWatch()
       // Same reentry guard as singleStep: destroying here must not relay onDestroy → onDone
       if (drv) { const d = drv; drv = null; advancing = true; try { d.destroy() } catch (e) { /* empty */ } advancing = false }
       singleStep({ element: '.td-tom', popover: { title: tt(T('jPickTitle')), description: tt(T('jPickDesc')), side: 'top', align: 'center' } }, stageDrag)
-      watch = poll(() => !!document.querySelector('.td-tom.active'), () => { clearWatch(); stageDrag() })
+      watch = pollCapped(() => !!document.querySelector('.td-tom.active'), () => { clearWatch(); stageDrag() })
     })
   }
   // Stage A: create your own task (task count growing above baseline = user-created, auto-advance; baseline is snapshotted only after the sample task renders, so the seed isn't mistaken for user creation)
   const stageCreate = () => {
     const armGrowth = () => {
       const baseCount = document.querySelectorAll('.td-item').length
-      watch = poll(() => document.querySelectorAll('.td-item').length > baseCount, () => { clearWatch(); stagePick() })
+      watch = pollCapped(() => document.querySelectorAll('.td-item').length > baseCount, () => { clearWatch(); stagePick() })
     }
     if (document.querySelector('.td-item')) { armGrowth(); return }
-    watch = poll(() => !!document.querySelector('.td-item'), () => { clearWatch(); armGrowth() })
+    watch = pollCapped(() => !!document.querySelector('.td-item'), () => { clearWatch(); armGrowth() })
     singleStep({ element: '.qa-input', popover: { title: tt(T('jCreateTitle')), description: tt(T('jCreateDesc')), side: 'bottom', align: 'start' } }, stagePick)
   }
   // Start once the quick-add box is ready
-  watch = poll(() => !!document.querySelector('.qa-input'), () => { clearWatch(); stageCreate() })
+  watch = pollCapped(() => !!document.querySelector('.qa-input'), () => { clearWatch(); stageCreate() })
   return true
 }

@@ -68,7 +68,11 @@ test('queueSave snapshots the taskId at enqueue time (task switch within the deb
   q.queueSave({})
   id = 'task-B' // hydrate switches the task before the debounce fires
   await sleep(10)
-  assert.equal(store.calls[0].payload.taskId, 'task-A', 'commits to the enqueue-time task')
+  // maint/d7 flushSave-parity: the queued patch commits to its enqueue-time task; dirty fields
+  // drain lazily at callback time (they then reflect task-B's view state) and go to the CURRENT
+  // task — the old code merged them onto task-A (cross-task contamination of B's rows onto A).
+  assert.equal(store.calls[0].payload.taskId, 'task-B', 'drained dirty fields go to the current task')
+  assert.equal(store.calls[0].payload.patch.image, JSON.stringify(['pic.png']))
 })
 
 test('queueSave dispatch failure surfaces onFail and restores the drained flags (F4 2026-09-15: failed batches retry like flushSave)', async () => {

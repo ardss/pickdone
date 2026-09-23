@@ -76,15 +76,29 @@ export function createSaveQueue (store, opts) {
     timer = setTimeout(async () => {
       const queued = pending
       pending = null
-      if (!queued || !queued.taskId) return
+      if (!queued) return
+      const taskId = getTaskId()
       if (opts.onSaving) opts.onSaving(true)
       let drainedKeys = []
       try {
         const { keys: drained, patch: dirtyPatch } = drain()
         drainedKeys = drained
-        const all = Object.assign({}, queued.patch, dirtyPatch)
-        if (Object.keys(all).length) {
-          await store.dispatch('todo/updateTodoFields', { taskId: queued.taskId, patch: all })
+        if (queued.taskId && queued.taskId === taskId) {
+          const all = Object.assign({}, queued.patch, dirtyPatch)
+          if (Object.keys(all).length) {
+            await store.dispatch('todo/updateTodoFields', { taskId: queued.taskId, patch: all })
+          }
+        } else {
+          // Aligned with flushSave (H1 follow-up): the queued edits commit to their ENQUEUE-time
+          // task whenever queued.taskId exists — they must never be silently dropped just because
+          // the current taskId went null; dirty fields drained meanwhile go to the CURRENT task,
+          // never merged onto the old one (same split as flushSave's task-switched branch).
+          if (queued.taskId && Object.keys(queued.patch).length) {
+            await store.dispatch('todo/updateTodoFields', { taskId: queued.taskId, patch: queued.patch })
+          }
+          if (taskId && Object.keys(dirtyPatch).length) {
+            await store.dispatch('todo/updateTodoFields', { taskId, patch: dirtyPatch })
+          }
         }
         if (opts.onDone) opts.onDone()
       } catch (e) {

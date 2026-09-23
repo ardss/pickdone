@@ -45,6 +45,7 @@ const DEVICE_LS = 'gamification.deviceId'
 const LAST_DELTA_LS = 'gamification.lastDeltaKey' // U9a: self-heal handle
 const OWN_KEYS_LS = 'gamification.ownKeys' // round-1 P0 (2026-09-21): EVERY own emitted delta key (full index self-heal)
 const FOLDED_LS = 'gamification.folded'
+const GAIN_DEDUP_LS = 'gamification.gainDedup' // maint-d7: idempotency keys for saveSnowGain (survives restarts)
 const FLUSH_MIN_MS = 60000 // batch: at most one delta write per minute
 const COMPACT_AFTER_MS = 7 * 86400000 // U9b: deltas older than 7 days are compacted
 
@@ -157,6 +158,35 @@ async function compactOwnOldDeltas (keys, entries) {
   return nextKeys
 }
 
+/** maint-d7: saveSnowGain idempotency. completeFocus retries the whole completion after a mid-way
+ *  failure (the phase claim is released so the next tick can re-complete); without a dedup key the
+ *  retry re-patched the LS snow total and re-queued the delta for the SAME focus (double snow gain,
+ *  mirroring the countPatch/_countedFocus guard in store/tomato.js). Keys are persisted to LS first
+ *  (restart-stable) and mirrored in an in-memory Set (LS-unavailable hosts). */
+const _appliedGainKeys = new Set()
+function gainAlreadyApplied (key) {
+  if (!key) return false
+  if (_appliedGainKeys.has(key)) return true
+  try {
+    const m = readJson(localStorage.getItem(GAIN_DEDUP_LS), {})
+    if (m[key]) { _appliedGainKeys.add(key); return true }
+  } catch (e) { /* empty */ }
+  return false
+}
+function markGainApplied (key) {
+  if (!key) return
+  _appliedGainKeys.add(key)
+  try {
+    const m = readJson(localStorage.getItem(GAIN_DEDUP_LS), {})
+    m[key] = Date.now()
+    const ks = Object.keys(m)
+    if (ks.length > 200) { // bounded: evict oldest stamps so the guard cannot grow without limit
+      ks.sort((a, b) => m[a] - m[b]).slice(0, ks.length - 200).forEach(k => { delete m[k] })
+    }
+    localStorage.setItem(GAIN_DEDUP_LS, JSON.stringify(m))
+  } catch (e) { /* empty */ }
+}
+
 export default {
   namespaced: true,
   state: () => ({ user: loadLocalUser(), loggedIn: true, lastLoginRecord: { method: 1, value: 'offline@local' } }),
@@ -176,14 +206,21 @@ export default {
     },
     /** Y10: the increment lands in the LS total immediately (display) AND is appended to the
      *  synced delta-log (batched ≤1/min). U1: because the LS total already contains this gain,
-     *  initGamification skips OWN delta keys when folding — see the module-header model note. */
-    async saveSnowGain ({ commit, state }, gain) {
+     *  initGamification skips OWN delta keys when folding — see the module-header model note.
+     *  maint-d7: payload may be a bare number (legacy callers) or {gain, dedupKey}; with a dedupKey
+     *  the SAME gain is applied exactly once per key (completeFocus retry safety), keyed on the
+     *  focus phase identity String(startedAt). */
+    async saveSnowGain ({ commit, state }, payload) {
+      const gain = typeof payload === 'number' ? payload : (Number(payload && payload.gain) || 0)
+      const dedupKey = (payload && typeof payload === 'object') ? payload.dedupKey : null
+      if (gainAlreadyApplied(dedupKey)) return
       const snow = (state.user.snow || 0) + gain
       const tomatoGain = (state.user.tomatoGain || 0) + Math.max(0, gain)
       commit('patchUser', { snow, tomatoGain })
       pending = pending || { snow: 0, tomatoGain: 0 }
       pending.snow += gain
       pending.tomatoGain += Math.max(0, gain)
+      markGainApplied(dedupKey)
       scheduleFlush()
     },
     /** Y10 startup fold: LS total + all not-yet-folded PEER deltas (own keys are skipped — their

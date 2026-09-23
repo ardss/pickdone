@@ -42,7 +42,7 @@
       </div>
 
       <!-- reference: todo-list-empty structure -->
-      <empty-state v-if="!results.length" inline><template #text>{{ q ? $t('statsC.Search.notFound', { q: esc(q) }) : $t('statsC.Search.empty') }}</template></empty-state>
+      <empty-state v-if="!results.length" inline><template #text>{{ q ? $t('statsC.Search.notFound', { q }) : $t('statsC.Search.empty') }}</template></empty-state>
     </div>
   </div>
 </template>

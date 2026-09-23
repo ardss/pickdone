@@ -138,7 +138,10 @@ function parseEnglishDate (text, base) {
     label = 'today'
   }
   if (hasTime) {
-    if (h > 23 || min > 59) return { date, label, restText: text }
+    // Out-of-range time (25:00): give up WHOLESALE instead of half-applying. The old
+    // `{ date, label, restText: text }` landed the date chip while keeping the raw text
+    // in the task body — QuickAdd rendered a chip for an input the user never got.
+    if (h > 23 || min > 59) return { date: null, label: '', restText: text }
     let d = date.hour(h).minute(min).second(0)
     // Explicit time given: already past → roll forward one day (consistent with the Chinese version)
     if (d.isBefore(base)) d = d.add(1, 'day')
