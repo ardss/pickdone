@@ -189,6 +189,10 @@ export function sanitizeSettingsPatch (patch, current) {
       out[k] = { ...(current && current.shortcutKeySettings ? current.shortcutKeySettings : DEFAULT_SETTINGS.shortcutKeySettings), ...v }
       continue
     }
+    // wave2 P3 (2026-09-23): symmetric junk drop — an ARRAY-default field (foldedTodoList) receiving
+    // a non-array object (typeof both 'object') slipped past every branch above and landed verbatim
+    // in live state + persist mirror. Declared arrays only ever accept arrays (entries filtered below).
+    if (Array.isArray(def) && !Array.isArray(v)) continue
     if (typeof def === 'object' && !Array.isArray(def) && Array.isArray(v)) continue
     // Round-2 P1 (2026-09-21): array-valued fields (foldedTodoList) sanitize their ENTRIES too —
     // an inbound array carrying non-string junk (numbers, booleans, nested objects) used to be
