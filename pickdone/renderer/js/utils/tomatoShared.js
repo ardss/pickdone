@@ -34,7 +34,10 @@ export function dedupeById (list) {
 
 /** Countdown display mm:ss (seconds floored, negatives treated as 0) — previously inlined separately in TomatoBar/TomatoPanel/TomatoFloatPage,
  *  where fixing one missed the other two; import uniformly from here.
- *  The main process (tomato-taskbar.js, CJS) can't import ESM, so an equivalent inline copy remains there and must be kept in sync when changed. */
+ *  Main-process side (F-A6, 2026-09-23): the two inline CJS copies (tomato-taskbar.js title +
+ *  handlers/tomato.js tray tooltip) now share shared/format-mmss.cjs (identical floor+clamp
+ *  semantics). The renderer bundle can't require .cjs, so this ESM copy stays as the renderer
+ *  single source — keep the two modules in sync when changed. */
 export function formatMMSS (sec) {
   const s = Math.max(0, Math.floor(Number(sec) || 0))
   return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`

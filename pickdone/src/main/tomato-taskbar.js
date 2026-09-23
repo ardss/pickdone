@@ -9,6 +9,7 @@ const { nativeImage } = require('electron')
 const { drawTrayPixels, drawBadgePixels, BRAND_WORK, BRAND_REST } = require('./core/pixel-icons')
 const log = require('electron-log')
 const { mt } = require('./i18n')
+const { formatMMSS } = require('../../shared/format-mmss.cjs')
 
 const S = 16 // toolbar icon size
 
@@ -83,9 +84,9 @@ function update (p = {}) {
   }
 
   // 2) Title countdown: mm:ss prefix; idle restores the plain app name
-  const mm = String(Math.floor(remain / 60)).padStart(2, '0')
-  const ss = String(remain % 60).padStart(2, '0')
-  const title = running || paused ? `${mm}:${ss} ${p.phaseText || ''} · ${baseTitle}` : baseTitle
+  // F-A6 (2026-09-23): the inline copy moved to shared/format-mmss.cjs (same floor+clamp
+  // semantics) — handlers/tomato.js's tray tooltip now shares this single source.
+  const title = running || paused ? `${formatMMSS(remain)} ${p.phaseText || ''} · ${baseTitle}` : baseTitle
   if (title !== last.title) {
     try { mainWin.setTitle(title) } catch (e) { /* */ }
     last.title = title

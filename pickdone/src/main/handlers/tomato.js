@@ -4,6 +4,7 @@ const tomatoFloat = require('../tomato-float')
 const tomatoTaskbar = require('../tomato-taskbar')
 const quickAdd = require('../quick-add')
 const { makeAssertMainWindow } = require('./shared')
+const { formatMMSS } = require('../../../shared/format-mmss.cjs') // F-A6: single mm:ss source (floor + negative clamp)
 
 module.exports = function tomatoHandlers (ctx) {
   const { getMainWindow, showMainOrLock, rebuildTrayMenu, updateTomatoTray, isLocked } = ctx
@@ -21,7 +22,11 @@ module.exports = function tomatoHandlers (ctx) {
     'flush-tomato-float': () => tomatoFloat.flushNow(),
     'set-tomato-float-bounds': () => tomatoFloat.setBounds(),
     'start-tomato-float-drag': (e) => tomatoFloat.dragStart(e.sender),
-    'stop-tomato-float-drag': () => tomatoFloat.dragStop(),
+    // Domain-1 F-A5 (2026-09-23): the sender is now forwarded on BOTH channels — dragStop/
+    // setPanelOpen used to be callable from ANY window, so a trapped float could interrupt a
+    // drag in progress (clearInterval dragTimer) or flip the panel/click-through state of a
+    // float it doesn't own. Symmetric with dragStart's win.webContents check.
+    'stop-tomato-float-drag': (e) => tomatoFloat.dragStop(e.sender),
     'ensure-window-width': (e, w) => {
       const need = Math.max(900, Number(w) || 0)
       const win = getMainWindow()
@@ -48,7 +53,7 @@ module.exports = function tomatoHandlers (ctx) {
       const x = Math.max(wa.x, Math.min(b.x + (b.width - width), wa.x + wa.width - width))
       win.setBounds({ x, y: b.y, width, height: b.height })
     },
-    'set-tomato-float-panel': (e, open) => tomatoFloat.setPanelOpen(open),
+    'set-tomato-float-panel': (e, open) => tomatoFloat.setPanelOpen(e.sender, open),
     // --- Running-tomato cross-device announcements (feature: live remote focus chip) ---
     // Renderer (main + float windows) reports local focus transitions; main composes the
     // device identity and writes the meta announce row (synced via the meta entity).
@@ -87,9 +92,9 @@ module.exports = function tomatoHandlers (ctx) {
       const status = p.status || 'default'
       const running = status === 'startTomatoTime' || status === 'startRestTime' || p.paused
       if (!running) { updateTomatoTray(''); return }
-      const mm = String(Math.floor((p.remainSec || 0) / 60)).padStart(2, '0')
-      const ss = String((p.remainSec || 0) % 60).padStart(2, '0')
-      updateTomatoTray(`${p.phaseText || ''} ${mm}:${ss}`)
+      // F-A6 (2026-09-23): mm:ss via the shared formatter — the inline copy had no floor/
+      // negative clamp, so a remainSec of -1 rendered "-1:-1" in the tray for a tick.
+      updateTomatoTray(`${p.phaseText || ''} ${formatMMSS(p.remainSec)}`)
     },
 
     // --- Window controls (win may be destroyed: null-guarded via getMainWindow, avoiding throws after destruction) ---
