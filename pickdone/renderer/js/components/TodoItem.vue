@@ -101,6 +101,7 @@ import { deleteWithUndo, moveWithUndo } from '../utils/confirm.js'
 import { toggleCompleteWithUndo } from '../utils/completeAction.js'
 import { chkColor } from '../utils/taskRow.js'
 import { getEstimate, ensureEstimate } from '../utils/tomatoEstimate.js'
+import { normalizeSortMode } from '../utils/sortMode.js'
 
 // Module-level drag-in-progress flag: a document.querySelector('.td-item.dragging') on every
 // dragover is O(document); this is set on dragstart and cleared on dragend/drop.
@@ -250,8 +251,17 @@ export default {
       list.splice(insertAt, 0, list.splice(from, 1)[0])
       this._writeSort(list)
     },
-    /** Batch midpoint write of taskSort in the new order */
+    /** Batch midpoint write of taskSort in the new order.
+     *  P2-4 (maint/dw 2026-09-23): taskSort only drives order in the "custom" manual sort — in
+     *  created/difficulty modes computeViews re-sorts every rebuild, so the row visibly snapped
+     *  straight back while the UI announced "moved". Same honest-guard as pinEvent (main.js D6-F5):
+     *  non-custom modes show the ignore hint and skip the write. Covers drag-drop too (onDrop
+     *  funnels through here). Returns false when the write was blocked. */
     _writeSort (list) {
+      if (normalizeSortMode(this.$store.state.settings.sortMode) !== 'custom') {
+        if (this.$message) this.$message.info(this.$t('statsH.main.pinIgnoredSort'))
+        return false
+      }
       const top = 9999; const step = (top * 2) / Math.max(1, list.length)
       const updates = []
       list.forEach((t, idx) => {
@@ -259,6 +269,7 @@ export default {
         if (Math.abs(sort - t.taskSort) > 0.01) updates.push({ taskId: t.taskId, taskSort: sort })
       })
       if (updates.length) this.$store.dispatch('todo/reorderTodos', updates)
+      return true
     },
     /** Keyboard sorting alternative (WCAG 2.1.1): Ctrl+Up/Down is equivalent to drag sorting, moving only within the same day */
     keyboardMove (dir) {
@@ -272,7 +283,7 @@ export default {
       const j = i + dir
       if (i < 0 || j < 0 || j >= list.length) return
       list.splice(j, 0, list.splice(i, 1)[0])
-      this._writeSort(list)
+      if (!this._writeSort(list)) return // blocked by the non-custom guard (hint toast already shown): no false "moved" announce
       // Standalone complete sentence (moving is not a completion): concatenating donePrefix produced the English malapropism "Completed Moved down: xxx"
       if (this.$announce) this.$announce(this.$t(dir > 0 ? 'statsJ.TodoItem.moveDownAnnounce' : 'statsJ.TodoItem.moveUpAnnounce', { t: raw.taskContent || '' }))
     },
