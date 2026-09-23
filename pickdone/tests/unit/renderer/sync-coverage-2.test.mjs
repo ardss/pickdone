@@ -180,7 +180,8 @@ test('Y4: repeatSettings/updateFromBlob adopts inbound blob state without re-com
 
 test('Y4: store/index.js fans blob changes into repeatSettings + tours LS cache', async () => {
   const src = read('renderer/js/store/index.js')
-  assert.ok(src.includes("'repeatDefaultSettings' in mutation.payload"), 'repeat fan-out subscription')
+  // wave2: the subscription now serves BOTH settings/updateSettings and settings/restore, fanning out from a unified `blob` binding
+  assert.ok(src.includes("'repeatDefaultSettings' in blob"), 'repeat fan-out subscription')
   assert.ok(src.includes('onboardingToursSeen'), 'tours LS write-through subscription')
 })
 

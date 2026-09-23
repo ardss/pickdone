@@ -3,7 +3,7 @@
 import auth from './auth.js'
 import todo from './todo.js'
 import tomato from './tomato.js'
-import settings from './settings.js'
+import settings, { tomatoLedgerPatch } from './settings.js'
 import category from './category.js'
 import habits from './habits.js'
 import ui from './ui.js'
@@ -53,20 +53,35 @@ store.subscribeAction({
 // cross-window storage sync, DB-mirror restore all land on settings/updateSettings). One-way:
 // updateFromBlob never re-commits to settings, so there is no loop.
 store.subscribe(mutation => {
-  if (!(mutation.type === 'settings/updateSettings' && mutation.payload)) return
-  if ('repeatDefaultSettings' in mutation.payload) {
-    store.commit('repeatSettings/updateFromBlob', mutation.payload.repeatDefaultSettings)
+  // wave2 P2 (2026-09-23): settings/restore is an inbound blob path too (backup restore), but the
+  // fan-out below only matched settings/updateSettings — after a restore the repeatSettings module
+  // and the tours LS cache kept their PRE-restore values, and the next repeatSettings/updateSettings
+  // re-committed the stale whole package over the freshly restored blob. For restore the payload is
+  // the RAW saved blob; the mutation has already merged it with defaults, so fan out from the
+  // EFFECTIVE live state instead.
+  const isRestore = mutation.type === 'settings/restore'
+  if (!((mutation.type === 'settings/updateSettings' && mutation.payload) || isRestore)) return
+  const blob = isRestore ? store.state.settings : mutation.payload
+  if ('repeatDefaultSettings' in blob) {
+    store.commit('repeatSettings/updateFromBlob', blob.repeatDefaultSettings)
   }
   // Y6: blob → LS write-through for the tours ledger (LS is the synchronous read cache of
   // utils/onboardingTours.js). Merge per-key max so a stale whole-package echo can't unsee a tour.
-  if (mutation.payload.onboardingToursSeen && typeof mutation.payload.onboardingToursSeen === 'object') {
+  if (blob.onboardingToursSeen && typeof blob.onboardingToursSeen === 'object') {
     try {
       const cur = JSON.parse(localStorage.getItem('onboardingToursSeen') || '{}')
-      for (const [k, v] of Object.entries(mutation.payload.onboardingToursSeen)) {
+      for (const [k, v] of Object.entries(blob.onboardingToursSeen)) {
         if (!(k in cur) || (Number(v) || 0) > (Number(cur[k]) || 0)) cur[k] = v
       }
       localStorage.setItem('onboardingToursSeen', JSON.stringify(cur))
     } catch (e) { /* stub host without LS */ }
+  }
+  // wave2 P2: restore is the one inbound path that still skipped the tomato duration mirror —
+  // the backup blob can carry durations different from the running tomato ledger, and the live
+  // countdown (tomato tick) stayed on stale values until restart. Same sink as update/initFromDb.
+  if (isRestore) {
+    const tp = tomatoLedgerPatch(blob)
+    if (Object.keys(tp).length) store.commit('tomato/patch', tp, { root: true })
   }
 })
 // Y4 first-run seed: the blob field starts empty — adopt the LS-loaded defaults so existing users
