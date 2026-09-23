@@ -43,6 +43,7 @@ const audit = require('./audit.js')
 const nlDate = require('./nl-date.cjs')
 const { parseMilestoneDateCore } = require('../shared/parse-date.mjs') // milestone-date core shared with the renderer (require(esm), same pattern as limits.mjs)
 const { nextSort, moveWithin } = require('../shared/sort-core.mjs') // P3-7 / F-B2: sort-score single source with renderer utils/core.js (require(esm))
+const { stripHabitsFamily } = require('../shared/settings-families.mjs') // F-B1: blob-family contract shared with lan-sync-bootstrap foldSettingsIntoBlob (require(esm))
 const { localDayKey } = require('../src/main/fix-util.js') // P3-8: single source for the local YYYY-MM-DD key (same require the lib-attachments module already uses)
 
 let opened = false
@@ -1668,14 +1669,25 @@ function settingsSet (key, value, { force = false } = {}) {
   // wholesale. The refreshed blob is built from the converged doc, so its bridge mirror is a
   // value-identical no-op — while the _savedAt bump keeps the two local blob consumers working (the
   // main-process hot-sync watcher diffs _savedAt; renderer initFromDb restores from the blob).
+  // F-B1 (dw wave 3): settings_rows carries BOTH blob families (db.settingsState AND db.habitsState
+  // — SYNC_BLOB_KEYS share the table), so the whole-doc read above can carry habits-family fields
+  // (habits/moments/savedAt). Writing them back inside db.settingsState let the settings blob
+  // swallow the habits state (renderer initFromDb then read a blob whose keys mixed families).
+  // The write-back strips the habits-exclusive family (shared/settings-families.mjs — the same
+  // contract lan-sync-bootstrap's foldSettingsIntoBlob routes by).
   const doc = settingsDoc()
   const before = key in doc ? doc[key] : null
   // Test seam: inject a concurrent mutation into the race window (first read → row write) so unit
   // tests can deterministically exercise the merge-on-fresh behavior. Null outside tests.
   if (typeof settingsRaceHook === 'function') settingsRaceHook()
+  // F-B1 secondary fix: the blob's _savedAt doubles as the bridge's LWW gateTs (db-sync-schema
+  // putRow). Stamping it at WRITE time made the gate a tautology — a stale echo read BEFORE a
+  // sync-apply landed was re-stamped to now and re-won the row. Stamp the PRE-WRITE read moment
+  // instead: rows applied between the two reads are newer than the blob snapshot and keep winning.
+  const readAt = Date.now()
   commit('setting', 'put', { key, value: v })
-  const fresh = settingsDoc()
-  fresh._savedAt = Date.now()
+  const fresh = stripHabitsFamily(settingsDoc())
+  fresh._savedAt = readAt
   fresh.schemaV = fresh.schemaV || 1
   commit('meta', 'put', ['db.settingsState', JSON.stringify(fresh)])
   audit.record({ action: 'settings.set', targets: [], changes: [{ before: { [key]: before }, after: { [key]: v } }], note: 'setting "' + key + '" changed (hot-synced to running App, applied on launch otherwise)' })
