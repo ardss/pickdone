@@ -78,3 +78,25 @@ test('R2: SETTING_RANGES is the shared manifest table (single source), manifest-
   assert.equal(clampNumericSettings({ dailyLoadWarnThreshold: 99 }).dailyLoadWarnThreshold, 50)
   assert.equal(sanitizeSettingsPatch({ todoDescriptionDisplayLineNumber: 99 }).todoDescriptionDisplayLineNumber, 6)
 })
+
+test('R2b: the habits-family field set (shared/settings-families.mjs) can never enter DEFAULT_SETTINGS', async () => {
+  // F-C2 review residue: the whitelist is the enforcement; this pins it to the SHARED family
+  // contract — if domain2 ever renames/adds family fields, a re-entry into DEFAULT_SETTINGS
+  // (which would let initFromDb adopt them again) fails here instead of drifting silently.
+  const { DEFAULT_SETTINGS } = await importSrc('renderer/js/store/settings.js')
+  const { HABITS_EXCLUSIVE_FIELDS, HABITS_BLOB_FIELDS } = await import(pathToFileURL(path.join(ROOT, 'shared/settings-families.mjs')).href)
+  for (const k of HABITS_EXCLUSIVE_FIELDS) {
+    assert.ok(!(k in DEFAULT_SETTINGS), `habits-exclusive family field '${k}' must stay out of DEFAULT_SETTINGS`)
+  }
+  for (const k of HABITS_BLOB_FIELDS) {
+    if (k === 'schemaV') continue // legal on BOTH blobs by contract, transported outside the patch loop
+    assert.ok(!(k in DEFAULT_SETTINGS), `habits-blob field '${k}' must stay out of DEFAULT_SETTINGS`)
+  }
+})
+
+test('R3 anchor: the external-echo q watcher cancels the pending debounce (no redundant same-value commit)', () => {
+  const src = read('renderer/js/views/SearchView.vue')
+  const watch = src.slice(src.indexOf('watch: {'), src.indexOf('computed: {'))
+  const qWatch = watch.slice(watch.indexOf('q (v)'), watch.indexOf('qText (v)'))
+  assert.ok(qWatch.includes('clearTimeout(this._qTimer)'), 'echoing an external search change must cancel the pending debounce (setSearch has no equality guard)')
+})

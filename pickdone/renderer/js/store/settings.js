@@ -478,15 +478,15 @@ export default {
       const patch = {}
       for (const k of Object.keys(db)) {
         if (k === '_savedAt') continue
-        // F-C2 (maint/dw wave3): DEFAULT_SETTINGS whitelist — the old loop adopted EVERY db key
-        // (only skipping _savedAt), so a polluted mirror blob (habits-family keys such as
-        // schemaV/habits/moments riding db.settingsState) landed verbatim in the live settings
-        // state and was then re-persisted by persist()/mirrorBlob to LS + DB + backup exports.
-        // Same unknown-key policy as sanitizeSettingsPatch.
-        // TODO(maint/dw wave4): consume domain2's shared/settings-families.mjs for the habits-family
-        // field set (HABITS_BLOB_FIELDS) once that module lands; the whitelist already makes them
-        // unreachable here, the shared module is only the documented export surface.
-        if (!(k in DEFAULT_SETTINGS)) continue
+      // F-C2 (maint/dw wave3): DEFAULT_SETTINGS whitelist — the old loop adopted EVERY db key
+      // (only skipping _savedAt), so a polluted mirror blob (habits-family keys such as
+      // schemaV/habits/moments riding db.settingsState) landed verbatim in the live settings
+      // state and was then re-persisted by persist()/mirrorBlob to LS + DB + backup exports.
+      // Same unknown-key policy as sanitizeSettingsPatch. The habits-family field SET is domain2's
+      // shared/settings-families.mjs (HABITS_EXCLUSIVE_FIELDS — landed 82fb2e95, no longer a
+      // wave4 TODO); the whitelist makes those keys unreachable here, and a unit test pins that
+      // the family can never re-enter DEFAULT_SETTINGS (single-source drift guard).
+      if (!(k in DEFAULT_SETTINGS)) continue
         if (canonicalJson(db[k]) !== canonicalJson(state[k])) patch[k] = db[k]
       }
       coerceNumericSettings(patch)

@@ -114,9 +114,14 @@ export default {
   },
   watch: {
     // F-C6 review: the store is written by other windows/CLI too — an EXTERNAL search change must
-    // still echo into the input (the old v-model getter followed it). Own commits round-trip as a
-    // no-op (value already equal), so no feedback loop with the debounced qText watcher below.
-    q (v) { if (v !== this.qText) this.qText = v },
+    // still echo into the input (the old v-model getter followed it). Clearing the pending debounce
+    // here makes the store win over a half-typed local buffer AND avoids the redundant same-value
+    // setSearch mutation the echo would otherwise re-schedule 180ms later (setSearch has no
+    // equality guard).
+    q (v) {
+      clearTimeout(this._qTimer); this._qTimer = null
+      if (v !== this.qText) this.qText = v
+    },
     qText (v) {
       clearTimeout(this._qTimer)
       this._qTimer = setTimeout(() => { this._qTimer = null; this.$store.commit('todo/setSearch', v) }, SEARCH_DEBOUNCE_MS)
