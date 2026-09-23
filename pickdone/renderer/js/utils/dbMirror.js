@@ -113,10 +113,27 @@ if (typeof window !== 'undefined' && window.todoAPI && window.todoAPI.onAppQuitt
   })
 }
 
+/** F-C4 (maint/dw wave3): sentinel distinguishing "DB read FAILED" from "DB has no mirror". The old
+ *  restoreFromDb collapsed no-bridge / missing row / IPC rejection into a single null, so
+ *  settings.initFromDb treated a one-shot transient getMeta failure at startup as "no mirror" and
+ *  mirrorToDb'd its in-memory DEFAULTS over the (newer) DB copy — permanently drowning it after an
+ *  LS clear / machine change. Consumers compare against this sentinel: on error they must only warn,
+ *  never write back. */
+export const DB_MIRROR_ERROR = Symbol('dbMirrorError')
+
 export async function restoreFromDb (metaKey) {
+  if (!window.todoAPI?.dbCall) return null // degraded host: genuinely no mirror to read
+  let raw
   try {
-    if (!window.todoAPI?.dbCall) return null
-    const raw = await window.todoAPI.dbCall('getMeta', metaKey)
-    return raw ? JSON.parse(raw) : null
-  } catch { return null }
+    raw = await window.todoAPI.dbCall('getMeta', metaKey)
+  } catch (e) {
+    // IPC rejection = READ ERROR, not emptiness — surface the sentinel instead of null
+    console.warn('[dbMirror] getMeta failed for', metaKey, '— treating as read error (no write-back):', e)
+    return DB_MIRROR_ERROR
+  }
+  if (!raw) return null
+  try { return JSON.parse(raw) } catch (e) {
+    console.warn('[dbMirror] getMeta returned unparseable JSON for', metaKey, '— treating as read error (no write-back):', e)
+    return DB_MIRROR_ERROR
+  }
 }
