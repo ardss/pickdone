@@ -156,6 +156,11 @@ function lunarAnnotate (t) {
 }
 
 /* ================= Task resolution ================= */
+// F-B5 (dw wave 3): single keyword normalization — was 3 verbatim copies (resolveTask, resolveRepeatEntry,
+// lib-tasks.cjs resolveCategory; the last now receives it via the existing deps injection). NFKC aligns
+// the CLI with the renderer's search normalization (utils/search.js normalize('NFKC')) — full-width
+// input ('Ａ１') used to match in the App but not in the CLI. BEHAVIOR CHANGE (NFKC alignment), noted.
+const normKey = v => String(v).normalize('NFKC').toLowerCase().replace(/[\s\u00A0\u3000\u200B\u2003]/g, '')
 function liveTasks () { return open().call('queryTodos', { deleted: 0, orderBy: 'scheduledDay ASC, sort ASC' }) }
 function recycleTasks () { return open().call('queryTodos', { deleted: 1, orderBy: 'updatedAt DESC' }) }
 
@@ -166,12 +171,11 @@ function recycleTasks () { return open().call('queryTodos', { deleted: 1, orderB
  *  intent keeps working: restore/delete pass an explicit recycle pool, so they never hit this warning path. */
 function resolveTask (input, pool) {
   // Strip zero-width/full-width whitespace (IME candidates occasionally contain zero-width chars) Same normalization on both sides: stripping it only from the input made any multi-word keyword unmatchable
-  const norm = v => String(v).toLowerCase().replace(/[\s\u00A0\u3000\u200B\u2003]/g, '')
   const matchIn = list => {
     const byId = list.find(t => t.taskId === input)
     if (byId) return [byId]
-    const kw = norm(input)
-    return list.filter(t => norm(t.taskContent || '').includes(kw))
+    const kw = normKey(input)
+    return list.filter(t => normKey(t.taskContent || '').includes(kw))
   }
   const liveHits = matchIn(pool || liveTasks())
   if (liveHits.length === 1) return liveHits[0]
@@ -245,7 +249,7 @@ const genTaskId = core.genTaskId
    lib-projects.cjs; deps are injected so the db/bus/audit seams stay single-sourced here. */
 const {
   listTodos, getCategories, resolveCategory, stats, overview,
-} = require('./lib-tasks.cjs')({ open, CliError, parseDate, dayjs })
+} = require('./lib-tasks.cjs')({ open, CliError, parseDate, dayjs, normKey }) // F-B5: normKey injected (resolveCategory's copy removed)
 const {
   getProjects, getProjectIds, setProjectFlag, projectStatus,
   getMilestones, parseMilestoneDate, addMilestone, removeMilestone, linkMilestone, msProgress,
@@ -887,9 +891,8 @@ function resolveRepeatEntry (input) {
   const list = liveTasks()
   const byId = list.find(t => t.taskId === input)
   if (byId) return byId
-  const norm = v => String(v).toLowerCase().replace(/[\s\u00A0\u3000\u200B\u2003]/g, '')
-  const kw = norm(input)
-  const hits = list.filter(t => norm(t.taskContent || '').includes(kw) && String(t.repeatId || '').startsWith('repeat_'))
+  const kw = normKey(input)
+  const hits = list.filter(t => normKey(t.taskContent || '').includes(kw) && String(t.repeatId || '').startsWith('repeat_'))
   if (hits.length) return hits[0]
   return resolveTask(input, list)
 }
