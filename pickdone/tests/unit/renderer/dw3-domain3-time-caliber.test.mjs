@@ -72,9 +72,12 @@ test('[D3-2] domain-3 files consume todayBounds (partial convergence; out-of-dom
   for (const f of ['renderer/js/views/CalendarView.vue', 'renderer/js/views/FilterView.vue', 'renderer/js/components/DayRail.vue']) {
     assert.ok(read(f).includes('utils/todayBounds.js'), `${f} imports the helper`)
   }
-  const todo = read('renderer/js/store/todo.js')
-  assert.ok(!todo.includes('todayBounds'), 'store/todo.js (domain-4) is untouched')
-  assert.ok(read('renderer/js/utils/taskMenu.js').length > 0, 'taskMenu.js readable')
+  // 2026-09-23 (domain-5): the two assertions below were removed.
+  // (1) `!read('store/todo.js').includes('todayBounds')` froze wave #133's TERRITORIAL claim into a
+  //     permanent assertion — the planned domain-3 today0 convergence of store/todo.js would trip it
+  //     through no fault of that change. Convergence is now protected by real behavior tests
+  //     (today0/dayStart semantics above), not by source-string guards on other domains' files.
+  // (2) `taskMenu.js.length > 0` was a always-true placeholder asserting nothing.
 })
 
 /* ---------- [D3-3] mmToHHmm / secToHHmmss single source ---------- */
