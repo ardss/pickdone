@@ -1390,32 +1390,35 @@ function backfillRecord ({ taskId = null, content = '', date, at = '20:00', minu
   return rec
 }
 
-/* ---------------- Tomato estimate per task (per-task meta keys `tomatoEstimateState:<taskId>` = plain integer string; X2 2026-09-20 contract, renderer twin in utils/tomatoEstimate.js) ---------------- */
-const ESTIMATE_KEY_PREFIX = 'tomatoEstimateState:'
-const estimateKey = taskId => ESTIMATE_KEY_PREFIX + taskId
+/* ---------------- Tomato estimate per task (per-task meta keys = plain integer string; X2 2026-09-20 contract) ----------------
+   F-B3 (dw wave 3): the storage contract (key prefix / 0..20 clamp / TS_KEY / legacy blob key) moved
+   to shared/estimate-core.mjs — single source with the renderer's utils/tomatoEstimate.js (the
+   renderer consumes the same module in its wave). */
+const { ESTIMATE_KEY_PREFIX, estimateKeyOf, clampEstimate, TS_KEY: ESTIMATE_TS_KEY, LEGACY_KEY: ESTIMATE_LEGACY_KEY } = require('../shared/estimate-core.mjs')
+const estimateKey = estimateKeyOf
 /** Lazy legacy migration (first write): old whole-doc blob → per-task keys, then the legacy doc key
  *  is deleteMeta'd (a sync tombstone, so peers drop it too). Corrupt blob → dropped, not fatal. */
 function migrateLegacyEstimateBlob () {
-  const legacy = open().call('getMeta', 'tomatoEstimateState')
+  const legacy = open().call('getMeta', ESTIMATE_LEGACY_KEY)
   if (legacy == null) return null
   let map = {}
   try { map = JSON.parse(legacy) || {} } catch { /* corrupt → drop */ }
   for (const [taskId, v] of Object.entries(map)) {
-    const n = Math.max(0, Math.min(20, Math.round(Number(v) || 0)))
+    const n = clampEstimate(v)
     if (n > 0) commit('meta', 'put', [estimateKey(taskId), String(n)])
   }
-  commit('meta', 'delete', 'tomatoEstimateState')
+  commit('meta', 'delete', ESTIMATE_LEGACY_KEY)
   return map
 }
 function setEstimate (input, n) {
   const t = resolveTask(input, liveTasks())
-  const v = Math.max(0, Math.min(20, Math.round(Number(n) || 0)))
+  const v = clampEstimate(n)
   const legacy = migrateLegacyEstimateBlob()
   // Setting = setMeta plain integer string; clearing = deleteMeta (tombstone propagates the removal)
   if (v > 0) commit('meta', 'put', [estimateKey(t.taskId), String(v)])
   else commit('meta', 'delete', estimateKey(t.taskId))
   // Timestamp convention mirrors the renderer's tomatoEstimate/initFromDb: when meta is newer it takes over LS at startup (otherwise CLI writes get clobbered by the UI's stale LS)
-  commit('meta', 'put', ['tomatoEstimateStateAt', String(Date.now())])
+  commit('meta', 'put', [ESTIMATE_TS_KEY, String(Date.now())])
   audit.record({ action: 'edit', targets: [t], changes: [{ before: { tomatoEstimate: getEstimateOf(t.taskId, legacy && legacy[t.taskId]) }, after: { tomatoEstimate: v || null } }], note: 'tomato estimate set to ' + (v || '(none)') })
   return { taskId: t.taskId, content: t.taskContent, tomatoEstimate: v }
 }
@@ -1423,9 +1426,9 @@ function getEstimateOf (taskId, legacyVal) {
   // Readers: per-task key first; legacy doc blob only as a read fallback (per-task miss)
   try {
     const per = open().call('getMeta', estimateKey(taskId))
-    if (per != null) return Math.max(0, Math.min(20, Math.round(Number(per) || 0)))
+    if (per != null) return clampEstimate(per)
     if (legacyVal != null) return Number(legacyVal) || 0
-    const m = JSON.parse(open().call('getMeta', 'tomatoEstimateState') || '{}')
+    const m = JSON.parse(open().call('getMeta', ESTIMATE_LEGACY_KEY) || '{}')
     return m[taskId] || 0
   } catch { return 0 }
 }
