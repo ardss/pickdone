@@ -102,6 +102,7 @@ import { toggleCompleteWithUndo } from '../utils/completeAction.js'
 import { chkColor } from '../utils/taskRow.js'
 import { getEstimate, ensureEstimate } from '../utils/tomatoEstimate.js'
 import { normalizeSortMode } from '../utils/sortMode.js'
+import { reorderScale } from '../../../shared/sort-core.mjs' // F-B2: reorder scale single source (the CLI's sortTask consumes the same module)
 
 // Module-level drag-in-progress flag: a document.querySelector('.td-item.dragging') on every
 // dragover is O(document); this is set on dragstart and cleared on dragend/drop.
@@ -262,11 +263,12 @@ export default {
         if (this.$message) this.$message.info(this.$t('statsH.main.pinIgnoredSort'))
         return false
       }
-      const top = 9999; const step = (top * 2) / Math.max(1, list.length)
+      // F-B2 (dw wave 3): the 9999→-9999 linear scale moved to shared/sort-core.mjs reorderScale —
+      // single source with the CLI's sortTask (moveWithin); arithmetic unchanged.
+      const scores = reorderScale(list.length)
       const updates = []
       list.forEach((t, idx) => {
-        const sort = Math.fround(top - idx * step)
-        if (Math.abs(sort - t.taskSort) > 0.01) updates.push({ taskId: t.taskId, taskSort: sort })
+        if (Math.abs(scores[idx] - t.taskSort) > 0.01) updates.push({ taskId: t.taskId, taskSort: scores[idx] })
       })
       if (updates.length) this.$store.dispatch('todo/reorderTodos', updates)
       return true

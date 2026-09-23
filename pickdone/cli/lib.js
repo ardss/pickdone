@@ -42,7 +42,7 @@ const { ownsAttachmentFile } = require('../src/main/handlers/shared.js')
 const audit = require('./audit.js')
 const nlDate = require('./nl-date.cjs')
 const { parseMilestoneDateCore } = require('../shared/parse-date.mjs') // milestone-date core shared with the renderer (require(esm), same pattern as limits.mjs)
-const { nextSort } = require('../shared/sort-core.mjs') // P3-7: sort-score single source with renderer utils/core.js (require(esm))
+const { nextSort, moveWithin } = require('../shared/sort-core.mjs') // P3-7 / F-B2: sort-score single source with renderer utils/core.js (require(esm))
 const { localDayKey } = require('../src/main/fix-util.js') // P3-8: single source for the local YYYY-MM-DD key (same require the lib-attachments module already uses)
 
 let opened = false
@@ -1430,34 +1430,28 @@ function getEstimateOf (taskId, legacyVal) {
   } catch { return 0 }
 }
 
-/* ---------------- Manual ordering (taskSort midpoint insertion — same semantics as renderer todo/reorderTodos drag) ---------------- */
+/* ---------------- Manual ordering (taskSort midpoint insertion — same semantics as renderer todo/reorderTodos drag)
+   F-B2 (dw wave 3): the score math moved to shared/sort-core.mjs moveWithin (single source with the
+   renderer's TodoItem._writeSort reorderScale rewrite); the ±100 no-beyond margin is precision
+   degradation only — order can no longer drift between the two ends' scales. */
 /** Reorder <task> relative to: top|bottom|up|down (within its day) or before|after <otherTask> (must share the day/no-date pool) */
 function sortTask (input, pos, refInput) {
   const t = resolveTask(input, liveTasks())
   const pool = liveTasks().filter(x => x.dayStart === t.dayStart).sort((a, b) => (a.taskSort || 0) - (b.taskSort || 0))
   const idx = pool.findIndex(x => x.taskId === t.taskId)
-  const mid = (a, b) => Math.fround((a + b) / 2)
-  let newSort
-  if (pos === 'top') newSort = (pool.length ? pool[0].taskSort || 0 : 0) - 100
-  else if (pos === 'bottom') newSort = (pool.length ? pool[pool.length - 1].taskSort || 0 : 0) + 100
-  else if (pos === 'up' || pos === 'down') {
-    const neighbor = pos === 'up' ? pool[idx - 1] : pool[idx + 1]
-    if (!neighbor) throw new CliError('task is already at the ' + (pos === 'up' ? 'top' : 'bottom') + ' of its list', 'ALREADY_AT_EDGE')
-    const beyond = pos === 'up' ? pool[idx - 2] : pool[idx + 2]
-    newSort = beyond ? mid(neighbor.taskSort || 0, beyond.taskSort || 0) : (pos === 'up' ? (neighbor.taskSort || 0) - 100 : (neighbor.taskSort || 0) + 100)
-  } else if (pos === 'before' || pos === 'after') {
+  let ref = null
+  if (pos === 'before' || pos === 'after') {
     if (!refInput) throw new CliError('sort before|after needs a reference task', 'USAGE')
-    const ref = resolveTask(refInput, liveTasks())
+    ref = resolveTask(refInput, liveTasks())
     if (ref.dayStart !== t.dayStart) throw new CliError('reference task must be on the same day (or both without a date) — change date first with edit --date', 'CROSS_DAY_SORT')
-    const ridx = pool.findIndex(x => x.taskId === ref.taskId)
-    if (pos === 'before') {
-      const beyond = ridx > 0 ? pool[ridx - 1] : null
-      newSort = beyond ? mid(beyond.taskSort || 0, ref.taskSort || 0) : (ref.taskSort || 0) - 100
-    } else {
-      const beyond = ridx < pool.length - 1 ? pool[ridx + 1] : null
-      newSort = beyond ? mid(ref.taskSort || 0, beyond.taskSort || 0) : (ref.taskSort || 0) + 100
-    }
-  } else throw new CliError('position must be top|up|down|bottom, or before|after <task>', 'USAGE')
+  }
+  const refIdx = ref ? pool.findIndex(x => x.taskId === ref.taskId) : -1
+  const mv = moveWithin(pool.map(x => x.taskSort), idx, pos, refIdx)
+  if (!mv || mv.edge || mv.sort == null) {
+    if (pos === 'up' || pos === 'down') throw new CliError('task is already at the ' + (pos === 'up' ? 'top' : 'bottom') + ' of its list', 'ALREADY_AT_EDGE')
+    throw new CliError('position must be top|up|down|bottom, or before|after <task>', 'USAGE')
+  }
+  const newSort = mv.sort
   patchTodo(t.taskId, { taskSort: newSort }, { action: 'sort' })
   // Re-read the real persisted order (cannot reuse the pool above — it is a pre-move snapshot; the ★ marker would show at the old position)
   const after = liveTasks()
