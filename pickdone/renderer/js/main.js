@@ -513,6 +513,12 @@ async function bootstrap () {
     }
     switch (action) {
       case 'deleteEvent': {
+        // F-D2 (maint/dw 2026-09-23): the main-process before-input-event does not know about
+        // input focus, so typing Ctrl+D inside an input used to delete the selected/edited task
+        // outright. Same inEditor exemption the Ctrl+Z/Y branches below already honor.
+        const ae = document.activeElement
+        const inEditor = !!ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)
+        if (inEditor) break
         const id = store.state.ui.rightSidebarTodoEdit.taskId || selectedTaskId()
         const t = id && store.state.todo.todoList.find(x => x.taskId === id)
         if (t) deleteWithUndo(window.appUI, store, t).then(ok => { if (ok) store.dispatch('todo/computeViews').catch(e => console.warn('[todo] undo-refresh computeViews failed:', e)) })
@@ -530,8 +536,15 @@ async function bootstrap () {
           break
         }
         const pinning = action === 'pinEvent'
-        store.dispatch('todo/updateTodoFields', { taskId: t.taskId, patch: { taskSort: pinning ? 99999.5 : -99999.5 } })
-        window.appUI && window.appUI.$message && window.appUI.$message.success(i18n.global.t(pinning ? 'statsH.main.pinned' : 'statsH.main.unpinned', { name: t.taskContent || i18n.global.t('statsJ.TodoItem.untitled') }))
+        // F-D6 (maint/dw 2026-09-23): the dispatch used to be fire-and-forget while the success
+        // toast fired unconditionally — a failed safeUpsert (retry-queue only) left a fake
+        // "pinned" toast and an unhandled rejection. Await + honest failure toast (P3-7 shape).
+        store.dispatch('todo/updateTodoFields', { taskId: t.taskId, patch: { taskSort: pinning ? 99999.5 : -99999.5 } }).then(() => {
+          window.appUI && window.appUI.$message && window.appUI.$message.success(i18n.global.t(pinning ? 'statsH.main.pinned' : 'statsH.main.unpinned', { name: t.taskContent || i18n.global.t('statsJ.TodoItem.untitled') }))
+        }).catch(e => {
+          console.error('[todo] pin/unpin failed:', e)
+          window.appUI && window.appUI.$message && window.appUI.$message.error(i18n.global.t('statsE.SettingsModal.purgeFailedMsg') + ((e && e.message) || ''))
+        })
         break
       }
       case 'startPomodoro': {
@@ -559,14 +572,29 @@ async function bootstrap () {
       // dispatched — the shortcut did nothing at all. Implement as "start inline create here":
       // focus the quick-add bar (the current view's inline-create entry point).
       case 'addEvent': focusQuickAdd(); break
+      // F-D1 (maint/dw 2026-09-23): sync is now a first-class in-app shortcut dispatched by the
+      // main process's before-input-event table (the old Ctrl+S was a hardcoded keydown branch
+      // below that ignored shortcutKeySettings.sync). Same feedback surface and in-flight guard.
+      case 'sync': runSync(); break
     }
   })
   // Round-2 P1: existence-guarded (same rationale as onShortcutAction above).
   if (window.todoAPI.onSecurityLock) window.todoAPI.onSecurityLock(() => store.commit('ui/setLocked', true))
   if (window.todoAPI.onSecurityUnlock) window.todoAPI.onSecurityUnlock(() => store.commit('ui/setLocked', false))
 
-  // Shortcuts: ctrl+n focuses quick-add / ctrl+s sync / ctrl+z undo / ctrl+y·ctrl+shift+z redo (offline = local archive)
+  // Shortcuts: ctrl+n focuses quick-add / ctrl+z undo / ctrl+y·ctrl+shift+z redo (offline = local archive)
+  // (Ctrl+S moved to the dispatched shortcut pipeline: shortcuts.js inApp table → case 'sync' above, F-D1)
   let syncInFlight = false
+  const runSync = () => {
+    // Key auto-repeat and in-flight sync would stack identical notifications: ignore re-triggers
+    if (syncInFlight) return
+    syncInFlight = true
+    // Same feedback surface as the SideNav sync icon: success/error notify, never silent
+    store.dispatch('todo/syncTodos').then(
+      () => window.appUI.$notify({ title: i18n.global.t('statsE.SideNav.syncCompleteMsg'), message: i18n.global.t('statsG.SideNav.syncDoneMsg'), type: 'success', duration: 2000 }),
+      e => window.appUI.$notify({ title: i18n.global.t('statsE.SideNav.syncFailedMsg'), message: (e && e.message) || i18n.global.t('statsG.SideNav.syncFailMsg'), type: 'error', duration: 4000 })
+    ).finally(() => { syncInFlight = false })
+  }
   window.addEventListener('keydown', e => {
     // Inside inputs/textareas, leave Ctrl+Z to text-level undo; don't steal it
     const ae = document.activeElement
@@ -574,16 +602,6 @@ async function bootstrap () {
     if (e.ctrlKey && e.key.toLowerCase() === 'n') {
       e.preventDefault()
       focusQuickAdd()
-    } else if (e.ctrlKey && e.key.toLowerCase() === 's') {
-      e.preventDefault()
-      // Key auto-repeat and in-flight sync would stack identical notifications: ignore re-triggers
-      if (e.repeat || syncInFlight) return
-      syncInFlight = true
-      // Same feedback surface as the SideNav sync icon: success/error notify, never silent
-      store.dispatch('todo/syncTodos').then(
-        () => window.appUI.$notify({ title: i18n.global.t('statsE.SideNav.syncCompleteMsg'), message: i18n.global.t('statsG.SideNav.syncDoneMsg'), type: 'success', duration: 2000 }),
-        e => window.appUI.$notify({ title: i18n.global.t('statsE.SideNav.syncFailedMsg'), message: (e && e.message) || i18n.global.t('statsG.SideNav.syncFailMsg'), type: 'error', duration: 4000 })
-      ).finally(() => { syncInFlight = false })
     } else if (!inEditor && e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === 'z') {
       e.preventDefault()
       store.dispatch('todo/undo').then(r => {
