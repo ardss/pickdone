@@ -42,13 +42,20 @@ test('F-B1: settingsSet write-back never carries habits/moments/savedAt into the
 
 test('F-B1: the blob _savedAt (bridge LWW gateTs) is the READ moment, not the write moment', () => {
   // Discriminating regression (was a tautology): the race hook fires INSIDE settingsSet between
-  // the first settingsDoc() read and the row write — exactly where a sync-apply lands. We inject
-  // a settings row stamped 1ms after that moment. Under the OLD write-time stamp the blob's
-  // _savedAt (= write moment, after the hook) is NEWER than the injected row and the Round-3
-  // stale-echo gate (db-sync-schema putRow: curTs - gateTs > 1000) could never fire for it; under
-  // the read-time stamp the row is strictly newer than the blob snapshot.
+  // the first settingsDoc() read and the row write — exactly where a sync-apply lands. The hook
+  // crosses a millisecond boundary BEFORE recording injectedAt (so the pre-hook read stamp is
+  // strictly <= the boundary it left) and again AFTER (so anything stamped after the hook — the
+  // old write-time stamp — is strictly newer than injectedAt). That makes the strict comparison
+  // deterministic on any machine speed: no ±1ms margin to win by luck. Under the OLD write-time
+  // stamp, _savedAt > injectedAt and the assertion fails; under the read-time stamp, the blob
+  // snapshot predates the row and the Round-3 stale-echo gate stays meaningful.
   lib.setSettingsRaceHookForTests(() => {
-    db.call('settingsRowPutMany', [{ key: 'weatherCity', value: 'peer-sync', updatedAt: Date.now() + 1 }])
+    const boundary = Date.now()
+    while (Date.now() === boundary) { /* spin: leave `boundary` behind us (<= ~1ms) */ }
+    const injectedAt = Date.now()
+    db.call('settingsRowPutMany', [{ key: 'weatherCity', value: 'peer-sync', updatedAt: injectedAt }])
+    const tail = Date.now()
+    while (Date.now() === tail) { /* spin: guarantee post-hook stamps are strictly newer */ }
   })
   try {
     lib.settingsSet('dailyTomatoTarget', '7')

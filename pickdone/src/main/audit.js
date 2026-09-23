@@ -33,9 +33,10 @@ function setDirResolver (fn) { if (typeof fn === 'function') resolveDir = fn }
 /** Test hook: shrink the rotation threshold so the boundary is reachable with tiny writes */
 function setMaxBytes (n) { if (Number.isFinite(n) && n > 0) maxBytes = n }
 /** Test hook: restore default resolver and threshold (flushes the buffer first so assertions see
- *  every line; dirReady is reset too — a test that re-points the resolver at a fresh directory
- *  must get a fresh mkdir, not a silently skipped one). */
-function resetForTests () { flushNow(); resolveDir = defaultDirResolver; maxBytes = MAX_BYTES_DEFAULT; dirReady = false }
+ *  every line; dirReady is reset so a re-pointed resolver gets a fresh mkdir; writeChain is reset
+ *  so a pending async drain from a previous test cannot land stale lines into a NEW directory
+ *  after this reset — test-seam-only ordering hazard, production has no flushNow/pending mix). */
+function resetForTests () { flushNow(); writeChain = Promise.resolve(); resolveDir = defaultDirResolver; maxBytes = MAX_BYTES_DEFAULT; dirReady = false }
 
 function auditFile () {
   return path.join(resolveDir(), 'cli-audit.jsonl')
