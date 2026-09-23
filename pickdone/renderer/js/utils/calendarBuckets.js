@@ -15,10 +15,17 @@
 const HOUR = 3600000
 const DAY = 86400000
 
-/** O(1) lookup: taskId → todo row (replaces repeated todoList.find O(n) scans) */
+/**
+ * O(1) lookup: taskId → todo row (replaces repeated todoList.find O(n) scans).
+ * First-wins on duplicate ids, exactly matching the find() semantics it replaces —
+ * find() scans forward and returns the first match; taskIds are unique in
+ * production (taskId is the row key), so this is a defensive-parity choice.
+ */
 export function indexById (list) {
   const m = new Map()
-  for (const t of list) m.set(t.taskId, t)
+  for (const t of list) {
+    if (!m.has(t.taskId)) m.set(t.taskId, t)
+  }
   return m
 }
 

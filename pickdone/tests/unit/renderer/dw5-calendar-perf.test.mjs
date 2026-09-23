@@ -87,10 +87,10 @@ test('[E2] cursor-window trim: in-month and adjacent-month days kept, far histor
   assert.equal(inCursorWindow(NaN, cursor), false, 'NaN dayStart never passes (defensive, mirrors !t.dayStart upstream)')
 })
 
-test('[E2] taskById Map resolves the same rows the linear .find returned (first-wins on duplicate ids)', () => {
+test('[E2] taskById Map resolves the same rows the linear .find returned (first-wins, find-parity)', () => {
   const list = [{ taskId: 'x', v: 1 }, { taskId: 'y', v: 2 }, { taskId: 'x', v: 3 }]
   const m = indexById(list)
-  assert.equal(m.get('x'), list[2], 'Map.set semantics: later duplicate wins — same as find() scanning forward')
+  assert.equal(m.get('x'), list[0], 'duplicate id resolves to the FIRST row — exactly what find() returned')
   assert.equal(m.get('y'), list[1])
   assert.equal(m.get('missing'), undefined)
 })
