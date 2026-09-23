@@ -60,11 +60,11 @@ const isMachineLocalMetaKey = k => {
     k === 'schemaVersion' || k === 'dayPlanState' || k.startsWith('dayPlanState.')
 }
 
-// Machine-local settings-row keys (mirror of sync-apply.js isMachineLocalSettingKey).
-const isMachineLocalSettingKey = k => {
-  const s = String(k)
-  return s.startsWith('sync.') || /^securityLock/.test(s) || s.startsWith('_')
-}
+// Machine-local settings-row keys: was a hand-maintained mirror of sync-apply.js — now the
+// SHARED module both ends import (domain-1 F-A1, 2026-09-23; cli/check-command-bus.cjs's
+// mirror-agreement assert holds by construction). The shared version also blocks the
+// machine-level config keys (enableSecurityLock etc.) a peer must never overwrite here.
+const { isMachineLocalSettingKey } = require('../../shared/machine-local-keys.mjs')
 
 const COMMANDS = {
   // ---- todos ----

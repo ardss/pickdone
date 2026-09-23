@@ -67,12 +67,12 @@ const SECURITY_LOCK_KEY = /^securityLock/
 
 // Machine-local bookkeeping keys: CLI last-seen/save stamps are per-device state, not user
 // data — syncing them made the two hosts fight over them every round (log noise, LWW churn).
-const isMachineLocalSettingKey = id => {
-  const k = String(id)
-  // 'sync.' namespace = identity/pairing state (strictly local); 'securityLock*' = password
-  // ciphertext (round-3 review: never egresses); leading underscore = CLI bookkeeping stamps.
-  return k.startsWith('sync.') || /^securityLock/.test(k) || k.startsWith('_')
-}
+// Domain-1 F-A1 (2026-09-23): the predicate moved to shared/machine-local-keys.mjs — the
+// manifest used to carry a hand-maintained mirror AND the old three-branch version let
+// machine-level config keys (enableSecurityLock/shortcutKeySettings/runWhenComputerStart/
+// hideMainWindowOnStartup) through, so a peer could silently disable the security lock or
+// re-register hotkeys here. Single source now; the manifest imports the same module.
+const { isMachineLocalSettingKey } = require('../../shared/machine-local-keys.mjs')
 
 // GAP-A fix (2026-09-19): meta rows (projectMilestones:*, projectCategoryIds, tomatoEstimateState,
 // projectDeadline:/projectStatus:, repeatRule:*, ...) were captured into the oplog but never
