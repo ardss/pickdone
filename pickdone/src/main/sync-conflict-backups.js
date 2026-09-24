@@ -21,23 +21,28 @@ const PREVIEW_MAX = 200
  * `<syncable-entity>:` — the prefix IS the routing decision here. If a future meta key ever
  * needs such a shape, move the write side to structured entity/id fields first. */
 const manifest = require('./command-manifest')
+/* Entities whose losers B16 backs up (the applyRowInner else branch): setting rides the SAME
+ * putMany command shape as plan/filter/category/tomato — the entity list is exactly the manifest
+ * commands with verb putMany/appendMany, so no entity can be dropped by a hand-maintained list
+ * again (review round 3: 'setting' was missing and its restores corrupted to '[object Object]'). */
 const ENTITY_RESTORE_OPS = (() => {
   const m = Object.create(null)
   for (const row of Object.values(manifest.COMMANDS)) {
     if (!row || (row.verb !== 'putMany' && row.verb !== 'appendMany')) continue
-    if (row.entity === 'plan' || row.entity === 'filter' || row.entity === 'category' || row.entity === 'tomato') m[row.entity] = row.op
+    if (['plan', 'filter', 'category', 'tomato', 'setting'].includes(row.entity)) m[row.entity] = row.op
   }
   return m
 })()
 /* Post-write read-back probes per entity: the bulk ops SILENTLY skip malformed rows
- * (planAddMany drops bad day/mm, tomatoAppendMany parks bad rows in `rejected`,
+ * (planAddMany drops bad day/mm, tomatoAppendMany/rowPutMany park bad rows in `rejected`,
  * upsertCategoryMany/filterUpsertMany suppress no-changes) — a blind backup-key delete after
  * the call could destroy the only surviving copy of a row that never landed. */
 const ENTITY_READBACK = {
   plan: (call, id) => (call('planAll') || []).some(r => String(r.id) === id),
   filter: (call, id) => (call('filterList') || []).some(r => String(r.id) === id),
   category: (call, id) => (call('categoriesAllRows') || []).some(r => String(r.id) === id && !r.deleted),
-  tomato: (call, id) => (call('tomatoAll') || []).some(r => String(r.tomatoId) === id)
+  tomato: (call, id) => (call('tomatoAll') || []).some(r => String(r.tomatoId) === id),
+  setting: (call, id) => (call('settingsRowsAll') || []).some(r => r.key === id && !r.deleted)
 }
 
 function parseBackup (raw) {
@@ -88,6 +93,8 @@ module.exports = {
           const row = b.value
           if (!row || typeof row !== 'object' || Array.isArray(row)) throw new Error('syncConflictBackupRestore: entity backup payload is not a row object')
           if (row.id == null) row.id = id
+          // setting rows are keyed by `key` (settings_rows PK), not `id`
+          if (row.key == null && entity === 'setting') row.key = id
           // loserCopy (merge.mjs) stamps the conflict markers onto the copied row; they are not
           // table columns — on tomato they would be snapshotted into the extra JSON blob and
           // permanently pollute the ledger row, so strip them before any write.

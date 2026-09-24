@@ -143,6 +143,23 @@ test('P0: filter/category/tomato backups restore into their native tables, confl
   assert.ok(!String(trow.extra || '').includes('conflictOf'), 'conflict markers stripped — extra blob unpolluted: ' + trow.extra)
 })
 
+test('P0: setting backups restore into settings_rows (round-3 review: they are NOT meta keys)', () => {
+  const dir = tmp()
+  db.init(dir)
+  const ops = scb.ops(() => (op, p) => db.call(op, p))
+  // B16 backs up setting losers as metaConflictBackup.setting:<key>.<ts36> with {key,value,...}
+  db.call('setMeta', [BACKUP_PREFIX + 'setting:lastOpenedProject.1ab', JSON.stringify({ key: 'setting:lastOpenedProject', value: { key: 'lastOpenedProject', value: 'proj-9', updatedAt: 1700000000000 }, lostAt: 1 })])
+  const r = ops.syncConflictBackupRestore({ key: BACKUP_PREFIX + 'setting:lastOpenedProject.1ab' })
+  assert.equal(r.ok, true)
+  assert.equal(r.entity, 'setting')
+  const row = db.call('settingsRowsAll').find(s => s.key === 'lastOpenedProject')
+  assert.ok(row && !row.deleted, 'setting row restored into settings_rows')
+  assert.equal(row.value, 'proj-9')
+  assert.equal(db.call('getMeta', 'setting:lastOpenedProject'), null, 'nothing String()-coerced into meta (old bug wrote [object Object] here)')
+  assert.equal(db.call('getMeta', BACKUP_PREFIX + 'setting:lastOpenedProject.1ab'), null, 'backup consumed only after the row landed')
+  assert.ok(isMachineLocalMetaKey(BACKUP_PREFIX + 'setting:lastOpenedProject.1ab'), 'setting backup keys stay machine-local')
+})
+
 test('P0 refuse-to-lose: a bulk op that silently skips the row keeps the backup key and throws', () => {
   const dir = tmp()
   db.init(dir)
