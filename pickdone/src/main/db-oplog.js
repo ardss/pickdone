@@ -90,6 +90,8 @@ module.exports = Object.assign(({ getDb, log }) => {
         .all(String(params && params.taskId), String(params && params.day)).map(r => r.id))
       case 'planPrune': return [one('plan', '*gc*')]
       case 'setMeta': return [one('meta', Array.isArray(params) ? params[0] : params)]
+      // setMetaMany takes a list of [k, v] pairs — same meta entity, row-granular pointers per key
+      case 'setMetaMany': return arr('meta', (Array.isArray(params) ? params : []).map(p => p && p[0]))
       // H2 2026-09-16: meta deletions were never captured (not in WRITE_OPS, no case here) — a removed
       // meta key could never propagate to other devices. Accepts ('k') or (['k']) argument forms.
       case 'deleteMeta': return [one('meta', Array.isArray(params) ? params[0] : params)]

@@ -1104,7 +1104,7 @@ const WRITE_OPS = new Set([
   'planAddMany', 'planUpdateChip', 'planRemoveIds', 'planMoveTask',
   'tomatoAppendMany', 'tomatoUpdateById', 'tomatoRemoveByIds', 'tomatoMigrateFromMeta',
   'planDeleteTask', 'planDeleteTaskDay', 'planPrune', 'settingsRowPut', 'settingsRowPutMany', 'settingsRowDelete',
-  'upsertCategoryMany', 'filterUpsertMany'
+  'upsertCategoryMany', 'filterUpsertMany', 'setMetaMany'
 ])
 const isWriteOp = op => WRITE_OPS.has(op)
 syncSchema.registerOps(OPS, WRITE_OPS, oplog)
