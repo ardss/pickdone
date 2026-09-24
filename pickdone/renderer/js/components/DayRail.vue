@@ -338,6 +338,9 @@ export default {
       return this.$t('statsA.core.calMd', { m: d.month() + 1, d: d.date(), w: this.$t('statsA.core.weekOf', { w: this.$t('statsA.core.wd' + d.day()) }) })
     },
     today () { void this.nowTs; void this.selTs; return dayjs(this.selTs).format(FMT.date) },
+    /* Selected day as a day-start ts — the project-wide bucketing caliber (dayStart/todoTime are
+       day-anchored ms timestamps); the `today` string computed stays for the date-keyed plans map */
+    selDayStart () { void this.nowTs; return +dayjs(this.selTs).startOf('day') },
     hoverTaskId () { return this.$store.state.ui.hoverTaskId },
     /* Entry card's owning-task candidates: today's (including due-today) incomplete first */
     cardTop () {
@@ -345,10 +348,12 @@ export default {
       return (Math.max(2, Math.min(68, this.entryDraft.startMin / 1440 * 100))) + '%'
     },
     taskOptions () {
-      const today = this.today
+      /* [dw-wave6 F5] compare in ms-timestamp caliber: `t.dayStart === 'YYYY-MM-DD'` was always false,
+         so pure day-scheduled (no todoTime) tasks vanished from the entry-card candidates */
+      const day = this.selDayStart
       const cands = this.$store.state.todo.todoList.filter(t => {
         if (t.delete) return false
-        return t.dayStart === today || (t.todoTime ? dayjs(t.todoTime).format(FMT.date) === today : false)
+        return t.dayStart === day || (t.todoTime ? +dayjs(t.todoTime).startOf('day') === day : false)
       })
       const rank = t => (t.complete ? 1 : 0)
       return cands.sort((a, b) => rank(a) - rank(b))
