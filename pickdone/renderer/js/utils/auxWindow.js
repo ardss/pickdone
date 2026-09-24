@@ -6,3 +6,11 @@ export function isAuxWindow () {
     return !!(typeof window !== 'undefined' && window.location && window.location.hash && /__tomato-float|__quick-add/.test(window.location.hash))
   } catch { return false } // non-browser env
 }
+
+/** Float-window-only check (route #__tomato-float). main.js used to hand-copy this regex twice
+ *  (isMainShell / isFloatShell), one copy drifted to miss __quick-add — route through the helpers. */
+export function isFloatWindow () {
+  try {
+    return !!(typeof window !== 'undefined' && window.location && window.location.hash && /__tomato-float/.test(window.location.hash))
+  } catch { return false }
+}
