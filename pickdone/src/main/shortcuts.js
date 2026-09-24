@@ -12,7 +12,13 @@ function normalizeKey (key) {
   return KEY_ALIASES[k] || k
 }
 
-function createShortcuts ({ getMainWindow, showMainOrLock, quickAdd, i18n, log }) {
+function createShortcuts ({ getMainWindow, showMainOrLock, quickAdd, i18n, log }, opts = {}) {
+  const {
+    captureSuppressMaxMs = 60000,
+    setTimeout: armTimer = setTimeout,
+    clearTimeout: disarmTimer = clearTimeout,
+    isFloatSender: isFloatSenderDep = null
+  } = opts
   // Register a single global shortcut: returns false when the key is taken. On failure, retry once after a delay (typical case: our own old instance
   // during restart or an isolated integration-test instance briefly holds the key and releases it on exit); only if that still fails show the conflict dialog.
   // Test-isolated instances (TODO_USER_DATA_DIR) never register — stealing the real instance's system hotkeys is pointless and guaranteed to clash.
@@ -61,7 +67,44 @@ function createShortcuts ({ getMainWindow, showMainOrLock, quickAdd, i18n, log }
   // F-D3 suppression flag + its IPC toggle live at factory scope: applyShortcuts runs on every
   // rebind, so re-registering the ipcMain listener per call stacked one closure per rebind.
   let captureSuppress = false
-  ipcMain.on('shortcut-capturing', (e, flag) => { captureSuppress = !!flag })
+  // main-ipc wave (2026-09-25) hardening for 'shortcut-capturing':
+  //  1) sender whitelist — previously ANY renderer window (or an injected page in one) could flip
+  //     the flag, silently disabling every in-app shortcut (a DoS on the main window's keyboard
+  //     surface). Legitimate recorders live in the main window's settings tab only; the aux
+  //     windows (quick-add / tomato float) are tolerated as defense for future record surfaces.
+  //  2) self-heal — if the recorder dies mid-record (renderer crash / reload before the
+  //     stop-toggle IPC), the flag would otherwise stay raised until app restart. Two layers:
+  //     a hard timeout arms on every set, and the recorded sender's destruction clears it.
+  let captureSuppressSender = null
+  let captureSuppressTimer = null
+  function clearCaptureSuppress () {
+    captureSuppress = false
+    captureSuppressSender = null
+    if (captureSuppressTimer) { disarmTimer(captureSuppressTimer); captureSuppressTimer = null }
+  }
+  function senderAllowed (sender) {
+    const w = getMainWindow()
+    if (w && !w.isDestroyed() && sender === w.webContents) return true
+    if (isFloatSenderDep) return !!isFloatSenderDep(sender)
+    try { if (require('./tomato-float').isSelfSender(sender)) return true } catch { /* fall through */ }
+    try { return !!(quickAdd && typeof quickAdd.isSelfSender === 'function' && quickAdd.isSelfSender(sender)) } catch { return false }
+  }
+  ipcMain.on('shortcut-capturing', (e, flag) => {
+    if (!e || !e.sender || !senderAllowed(e.sender)) {
+      try { (log || console).warn('[shortcut] rejected shortcut-capturing from non-whitelisted sender:', e && e.sender && e.sender.id) } catch { /* no logger */ }
+      return
+    }
+    if (flag) {
+      captureSuppress = true
+      captureSuppressSender = e.sender
+      if (captureSuppressTimer) disarmTimer(captureSuppressTimer)
+      captureSuppressTimer = armTimer(clearCaptureSuppress, captureSuppressMaxMs)
+      if (captureSuppressTimer && captureSuppressTimer.unref) captureSuppressTimer.unref()
+    } else {
+      // a stale stop from a replaced (destroyed) recorder window must not un-suppress a live one
+      if (!captureSuppressSender || captureSuppressSender === e.sender || captureSuppressSender.isDestroyed()) clearCaptureSuppress()
+    }
+  })
 
   function applyShortcuts (s = {}) {
     // 丢弃上一轮挂着的退避重试:重绑后旧组合不得再抢注系统热键
@@ -124,8 +167,8 @@ function createShortcuts ({ getMainWindow, showMainOrLock, quickAdd, i18n, log }
     // suppression flag would otherwise stay raised forever and silently disable every in-app
     // shortcut until the next record or app restart. Any fresh load starts from a clean slate;
     // render-process-gone covers the crash-without-reload tail (renderer gone, no new load).
-    const onFinishedLoad = () => { captureSuppress = false }
-    const onProcessGone = () => { captureSuppress = false }
+    const onFinishedLoad = () => clearCaptureSuppress()
+    const onProcessGone = () => clearCaptureSuppress()
     const onBeforeInput = (e, input) => {
       const w = getMainWindow()
       if (input.type !== 'keyboard' || !w || w.isDestroyed()) return
