@@ -86,3 +86,21 @@ export function extractTags (...texts) {
   })
   return [...set]
 }
+
+/** Wave-5 dedup: tag-count aggregation shared by SideNav / SnTagPanel / SnManageTagsModal via
+ *  getters['todo/tagCounts'] — counts #tags across the todo list, backfills empty "New Tag"
+ *  placeholder names (count 0), sorted count-desc, ties stable by first sight (Map insertion
+ *  order). (Relocated verbatim from store/todo.js — structural size ratchet; no behavior change.) */
+export function countTags (todos, userTags) {
+  const set = new Map()
+  for (const t of (todos || [])) {
+    for (const tag of extractTags(t.taskContent, t.taskDescribe)) {
+      set.set(tag, (set.get(tag) || 0) + 1)
+    }
+  }
+  // Empty tags created via "New Tag" also enter the list (count 0), otherwise they disappear right after creation
+  for (const name of (userTags || [])) {
+    if (!set.has(name)) set.set(name, 0)
+  }
+  return [...set.entries()].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count)
+}

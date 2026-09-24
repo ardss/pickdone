@@ -8,7 +8,7 @@ import { nextRepeatInstance, isLastRepeatInstance, renewalCarryFields } from '..
 import { sortByMode } from '../utils/sortMode.js'
 import { getEstimate, setEstimate } from '../utils/tomatoEstimate.js'
 import { clearSnapshot } from '../utils/dayPlans.js'
-import { loadMilestones, saveMilestones, scrubMilestoneTaskIds } from '../utils/milestones.js'
+import { scrubMilestonesForPurged } from '../utils/milestones.js'
 // Cross-cutting concerns, physically split out of this module (pure relocation — the store's action
 // semantics are unchanged; the actions/mutations below delegate to these extracted implementations):
 import { enqueueChipSync, rowChipSync, planSnapshotRowSync, snapshotForDelete, restoreSnapshot } from './planChips.js'
@@ -16,26 +16,12 @@ import { historyPush, historyPushKeepRedo, historyClear, historyBreakMerge, hist
 import { writeEventBackupCore, writeAutoBackupCore, writeCriticalBackupCore } from './todoBackup.js'
 import { commit as commitCommand } from "../utils/commandBus.js"
 import { safeUpsert, flushPendingUpserts, queuePendingUpsert, pendingUpserts, daysRangeTs } from './todoPendingUpserts.js'
-import { extractTags } from '../utils/search.js'
+import { countTags } from '../utils/search.js'
 // Re-export: unit tests import the quit-flush retry contract straight from store/todo.js
 export { safeUpsert, flushPendingUpserts }
 
 // planSnapshotRowSync stays a named export of this module (tests import it from here)
 export { planSnapshotRowSync }
-
-/** Round-3 P1 (2026-09-21): milestone scrub shared by purgeIds AND purgeAllRecycle (the bulk
- *  "empty bin" path used to skip it, leaving phantom taskIds in `projectMilestones:<catId>` —
- *  the D5 bug on the bulk path). Removes purgedIds from every category's milestone taskIds. */
-async function scrubMilestonesForPurged (catIds, purgedIds) {
-  for (const cid of catIds || []) {
-    try {
-      const ms = await loadMilestones(cid)
-      const next = scrubMilestoneTaskIds(ms, purgedIds)
-      if (next !== ms) saveMilestones(cid, next)
-    } catch (e) { console.warn('[todo] milestone scrub after purge failed for category', cid, e) }
-  }
-}
-
 
 const DEFAULT_VIEWS = () => ({
 
@@ -92,23 +78,10 @@ export default {
     todayTodoList: s => s.views.todayTodoList,
     yesterdayTodoList: s => s.views.yesterdayTodoList,
     /* Wave-5 dedup: tag count aggregation was kept verbatim in THREE components (SideNav /
-       SnTagPanel / SnManageTagsModal — even their comments admitted being copies). Pure
-       derivation from state, so it belongs here: counts #tags across todoList, then fills in
-       empty "New Tag" placeholder entries from ui/userTags (count 0), sorted count-desc.
-       Vuex caches it for free; the shape is byte-identical to the three removed copies. */
-    tagCounts: (s, _g, rootState) => {
-      const set = new Map()
-      for (const t of [...s.todoList]) {
-        for (const tag of extractTags(t.taskContent, t.taskDescribe)) {
-          set.set(tag, (set.get(tag) || 0) + 1)
-        }
-      }
-      // Empty tags created via "New Tag" also enter the list (count 0), otherwise they disappear right after creation
-      for (const name of ((rootState && rootState.ui && rootState.ui.userTags) || [])) {
-        if (!set.has(name)) set.set(name, 0)
-      }
-      return [...set.entries()].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count)
-    }
+       SnTagPanel / SnManageTagsModal). Pure derivation from state; Vuex caches it for free.
+       The counting core lives in utils/search.js countTags (next to extractTags). */
+    tagCounts: (s, _g, rootState) =>
+      countTags(s.todoList, (rootState && rootState.ui && rootState.ui.userTags))
   },
   mutations: {
     setLoaded: (s, v) => { s.loaded = v },
