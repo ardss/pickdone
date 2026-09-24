@@ -16,7 +16,7 @@
 const path = require('path')
 const fs = require('fs')
 const dayjs = require('dayjs')
-const { userDataDir } = require('./user-dir.js') // P3-9 (dw wave): single source — same env priority chain cli/lib.js reads
+const { userDataDir, hasIsolationEnv } = require('./user-dir.js') // P3-9 (dw wave): single source — same env priority chain cli/lib.js reads
 // F-B6/F-B8 (dw wave 3): rotation + snapshot vocabulary single-sourced with the CLI (shared/audit-rotate.cjs) —
 // both ends rotate the SAME cli-audit.jsonl from different processes, so the CLI now runs this same
 // non-destructive timestamped rotation, and both share one SNAPSHOT_FIELDS/snapshot definition.
@@ -25,7 +25,24 @@ const { rotateArchive, snapshot, capContent } = require('../../shared/audit-rota
 const MAX_BYTES_DEFAULT = 5 * 1024 * 1024
 let maxBytes = MAX_BYTES_DEFAULT
 
-const defaultDirResolver = userDataDir
+/** Fail-safe default resolver (2026-09-25): the raw userDataDir() fallback silently resolved to the REAL
+ *  %APPDATA%/pickdone whenever audit.js ran outside Electron with no isolation env (unit tools, scripts,
+ *  any non-Electron require of this module) — index.js:757 only installs the app.getPath resolver after
+ *  app ready, so an early audit in the real app also fell through here. Non-Electron + non-isolated now
+ *  REFUSES to hand out the real dir: the caller drops the entry in memory with a one-time console.warn.
+ *  The packaged app is unaffected: process.versions.electron marks the Electron main process. */
+let refusedDirWarned = false
+function safeDefaultDirResolver () {
+  if (!hasIsolationEnv() && !(process.versions && process.versions.electron)) {
+    if (!refusedDirWarned) {
+      refusedDirWarned = true
+      console.warn('[audit] no TODO_DB_DIR/TODO_USER_DATA_DIR outside Electron — refusing to write the real %APPDATA% audit trail; entries dropped in memory')
+    }
+    return null
+  }
+  return userDataDir()
+}
+const defaultDirResolver = safeDefaultDirResolver
 let resolveDir = defaultDirResolver
 
 /** Test/injection hook: override the output directory (lazy — called at write time, not at injection time) */
@@ -36,10 +53,11 @@ function setMaxBytes (n) { if (Number.isFinite(n) && n > 0) maxBytes = n }
  *  every line; dirReady is reset so a re-pointed resolver gets a fresh mkdir; writeChain is reset
  *  so a pending async drain from a previous test cannot land stale lines into a NEW directory
  *  after this reset — test-seam-only ordering hazard, production has no flushNow/pending mix). */
-function resetForTests () { flushNow(); writeChain = Promise.resolve(); resolveDir = defaultDirResolver; maxBytes = MAX_BYTES_DEFAULT; dirReady = false }
+function resetForTests () { flushNow(); writeChain = Promise.resolve(); resolveDir = defaultDirResolver; maxBytes = MAX_BYTES_DEFAULT; dirReady = false; refusedDirWarned = false; lastNoop = null }
 
 function auditFile () {
-  return path.join(resolveDir(), 'cli-audit.jsonl')
+  const dir = resolveDir()
+  return dir ? path.join(dir, 'cli-audit.jsonl') : null
 }
 
 /* ================= op → semantic action ================= */
@@ -267,6 +285,8 @@ function noteFor (op, params, result) {
 const FLUSH_DELAY_MS = 100
 const FLUSH_BATCH_MAX = 64
 const buffer = []
+// No-op aggregation state (see appendEntry): signature + entry reference of the last changes:[] line
+let lastNoop = null
 let flushTimer = null
 let dirReady = false
 
@@ -308,15 +328,23 @@ function chunkByThreshold (lines) {
  *  C13 (P2 2026-09-24): a chunk that fails both append attempts used to `return` and drag every
  *  later chunk of the same drain down with it — one bad chunk dropped the whole rest of the batch.
  *  Failure is now per-chunk: the chunk is dropped (fire-and-forget contract) and the drain continues. */
+let rotationWarned = false
+function warnRotationFailure (e) {
+  if (rotationWarned) return
+  rotationWarned = true
+  console.warn('[audit] rotation failed; continuing to append to the oversized trail (fire-and-forget):', e && e.message)
+}
+
 function flushNow () {
   if (flushTimer) { clearTimeout(flushTimer); flushTimer = null }
+  if (!resolveDir()) return // fail-safe resolver refused the dir — entries stay dropped
   const pending = inFlight.splice(0) // C5: sync-write whatever the async path has not finished
   if (!buffer.length && !pending.length) return
   const lines = buffer.splice(0).map(e => JSON.stringify(e) + '\n')
   ensureDir()
   const texts = pending.concat(chunkByThreshold(lines).map(chunk => chunk.join('')))
   for (const text of texts) {
-    try { rotateIfNeeded() } catch (e) { /* rotation failure must not lose the batch */ }
+    try { rotateIfNeeded() } catch (e) { warnRotationFailure(e) } // 2026-09-25: never silent — one-time warn
     for (let attempt = 0; attempt < 2; attempt++) {
       try { fs.appendFileSync(auditFile(), text); break } catch (e) { if (attempt > 0) break /* C13: drop this chunk alone, keep draining */ }
     }
@@ -337,7 +365,7 @@ let inFlight = []
 /** Drain the buffer as one async appendFile batch per threshold chunk (chunks written in order). */
 function flushAsync () {
   flushTimer = null
-  if (!buffer.length) return
+  if (!buffer.length || !resolveDir()) return
   const lines = buffer.splice(0).map(e => JSON.stringify(e) + '\n')
   ensureDir()
   const chunks = chunkByThreshold(lines).map(chunk => chunk.join(''))
@@ -365,7 +393,29 @@ function appendEntry (entry) {
   // review P2 (2026-09-10): the CLI rotates the same file concurrently — an append landing inside the
   // other process's rename window used to throw and the line was lost (fire-and-forget). The batch
   // retry logic in flushAsync/flushNow keeps that single-retry-with-fresh-stat behavior.
+  // Fail-safe guard (2026-09-25): a null/empty dir (refused non-Electron resolver) drops in memory.
   try {
+    if (!resolveDir()) return
+    // No-op aggregation (2026-09-25): a write-amplification storm used to land thousands of IDENTICAL
+    // changes:[] lines (category.upsert ×153 rows per reload round). When a record carries no changes and
+    // is (action + argv + targets)-identical to the PREVIOUS entry, fold it into that entry as a repeat
+    // count instead of appending another line — the trail keeps one line + "×N" note with full fidelity
+    // of what happened and how often, at a fraction of the bytes. Records WITH changes are never folded
+    // (each is a distinct user-visible edit).
+    if (!entry.changes.length && lastNoop) {
+      const sig = JSON.stringify([entry.action, entry.argv, entry.targets])
+      if (sig === lastNoop.sig) {
+        lastNoop.entry.repeat += 1
+        lastNoop.entry.note = (lastNoop.baseNote ? lastNoop.baseNote + ' ' : '') + '×' + lastNoop.entry.repeat + ' identical repeats folded'
+        return
+      }
+    }
+    if (!entry.changes.length) {
+      lastNoop = { sig: JSON.stringify([entry.action, entry.argv, entry.targets]), entry, baseNote: entry.note }
+      entry.repeat = 1
+    } else {
+      lastNoop = null
+    }
     buffer.push(entry)
     if (buffer.length >= FLUSH_BATCH_MAX) flushAsync()
     else if (!flushTimer) flushTimer = setTimeout(flushAsync, FLUSH_DELAY_MS)

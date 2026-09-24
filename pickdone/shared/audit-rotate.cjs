@@ -34,12 +34,48 @@ function pruneArchives (file, keep = ARCHIVES_TO_KEEP) {
  *  file B had JUST renamed into '.1'. Timestamped targets make both renames non-destructive (a
  *  same-millisecond collision bumps the stamp instead of overwriting), and pruning keeps the
  *  archive set bounded. */
-function rotateArchive (file) {
-  let stamp = Date.now()
-  let rolled = file + '.' + stamp
-  while (fs.existsSync(rolled)) rolled = file + '.' + (++stamp)
-  fs.renameSync(file, rolled)
-  pruneArchives(file)
+/** Retry/backoff knobs (2026-09-25 rotation-robustness fix): Windows EPERM — the other dual writer
+ *  (App or CLI process) holding the file open mid-append — used to make renameSync throw ONCE and the
+ *  empty catch in the caller swallowed it, so e.g. .dev-data/cli-audit.jsonl grew to 51MB+ with rotation
+ *  silently dead. Now: limited retry with backoff, then a non-destructive fallback (rename the oversized
+ *  file to a `.corrupt-<ts>` sibling so a NEW trail starts), and never silent — `warn` fires on fallback
+ *  and on final failure (truncate-to-empty as the last resort to respect the size threshold). */
+const ROTATE_RETRIES = 3
+const ROTATE_BACKOFF_MS = 50
+
+function sleepSync (ms) {
+  try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) } catch { /* degraded host: skip backoff */ }
+}
+
+function rotateArchive (file, warn = console.warn) {
+  const notify = typeof warn === 'function' ? warn : () => {}
+  for (let attempt = 0; attempt < ROTATE_RETRIES; attempt++) {
+    if (attempt > 0) sleepSync(ROTATE_BACKOFF_MS * attempt) // backoff: give the other writer's handle a beat to close
+    let stamp = Date.now() + attempt
+    let rolled = file + '.' + stamp
+    while (fs.existsSync(rolled)) rolled = file + '.' + (++stamp)
+    try {
+      fs.renameSync(file, rolled)
+      pruneArchives(file)
+      return rolled
+    } catch (e) {
+      if (attempt < ROTATE_RETRIES - 1) continue
+      // All retries exhausted. Fallback 1: a non-numeric, always-unique target name often succeeds where
+      // the `<ms>` name raced a same-ms sibling; `.corrupt-` marks it as not a regular archive.
+      const ts = new Date().toISOString().replace(/[:.]/g, '-')
+      const corrupt = file + '.corrupt-' + ts
+      try {
+        fs.renameSync(file, corrupt)
+        notify('[audit-rotate] rename failed after ' + ROTATE_RETRIES + ' attempts (' + e.message + '); oversized trail moved to ' + path.basename(corrupt))
+        return corrupt
+      } catch (e2) {
+        // Fallback 2 (last resort): truncate in place so the main file respects the threshold again.
+        try { fs.truncateSync(file, 0); notify('[audit-rotate] rotation failed (' + e.message + '); trail truncated in place — archives NOT rotated') } catch (e3) {
+          notify('[audit-rotate] rotation AND truncate failed (' + e3.message + '); oversized trail keeps growing')
+        }
+      }
+    }
+  }
 }
 
 /* ================= shared snapshot vocabulary ================= */
