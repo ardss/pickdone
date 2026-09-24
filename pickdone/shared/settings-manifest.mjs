@@ -30,7 +30,14 @@ export const SETTINGS_MANIFEST = {
     restTime: { min: 1, max: 60 },      // SettingsModal.vue break-length input-number (:min=1 :max=60)
     dailyTomatoTarget: { min: 1, max: 50 },        // SettingsModal.vue daily-goal input (:min=1 :max=50)
     dailyLoadWarnThreshold: { min: 0, max: 50 },   // SettingsModal.vue load-warn threshold (:min=0 :max=50)
-    todoDescriptionDisplayLineNumber: { min: 1, max: 6 } // SettingsModal.vue desc-lines slider (:min=1 :max=6)
+    todoDescriptionDisplayLineNumber: { min: 1, max: 6 }, // SettingsModal.vue desc-lines slider (:min=1 :max=6)
+    // B5 (daily 2026-09-24): the three keys below had no manifest entry, so LAN-ingress patches
+    // bypassed clampNumericSettings entirely (the renderer's SETTING_RANGES IS this table — an
+    // unclamped inbound value landed verbatim in live state, e.g. whiteNoiseVolume: 55 from a CLI).
+    // Bounds mirror the only UI controls:
+    whiteNoiseVolume: { min: 0, max: 1 },  // SettingsModal.vue volume slider is 0-100% mapped /100 (:min=0 :max=100)
+    notificationTimeoutInterval: { min: 30000, max: 300000 }, // SettingsModal.vue radio group offers 30s/2min/5min only
+    autoBackupKeep: { min: 5, max: 30 }    // SettingsDataTab.vue copies select offers 5/10/20/30 only
   },
   enum: {
     colorMode: ['light', 'dark', 'system'],
@@ -45,9 +52,19 @@ export const SETTINGS_MANIFEST = {
     upcomingTodoRange: ['7d', '30d'],
     weatherSource: ['open-meteo', 'wttr'],
     todoBoxSortMethod: ['created', 'due', 'difficulty'],
-    todoBoxSortOrder: ['desc', 'asc']
+    todoBoxSortOrder: ['desc', 'asc'],
+    // B10 (2026-09-24): appLocale moves string→enum — the main process silently normalizes any
+    // other locale back to zh-CN, so a CLI-written 'fr-FR' reported success while the App showed
+    // zh-CN. Only the two locales i18n actually ships are legal (store/settings.js DEFAULT_SETTINGS).
+    appLocale: ['zh-CN', 'en-US']
   },
+  // B11 (2026-09-24): repeatDefaultSettings and onboardingToursSeen DO ride the synced settings
+  // blob (store/index.js fans them into repeatSettings / the tour ledger) but they are OBJECT MAPS
+  // managed by App UIs (repeat-defaults modal, onboarding tours) — not CLI-settable primitives, so
+  // they deliberately have no boolean/number/enum/string entry. settingsSet's blob write-back
+  // whitelist (cli/lib.js) still carries them, or every CLI write would strip them from the blob.
+  blobOnly: ['repeatDefaultSettings', 'onboardingToursSeen'],
   // calendarCategory is a numeric category id in the app (DEFAULT_SETTINGS calendarCategory: 0);
   // declaring it string made `settings list` report the wrong type (value only survived via coercion)
-  string: ['backupDir', 'whiteNoiseAudio', 'weatherCity', 'searchDateRange', 'searchComplete', 'searchCategory', 'maxRepeat', 'appLocale']
+  string: ['backupDir', 'whiteNoiseAudio', 'weatherCity', 'searchDateRange', 'searchComplete', 'searchCategory', 'maxRepeat']
 }

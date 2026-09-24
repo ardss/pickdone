@@ -116,7 +116,8 @@ test('m7-3: manifest exposes tomatoTime/restTime + the sync-surface keys, dead n
   const byKey = Object.fromEntries(rows.map(r => [r.key, r]))
   assert.equal(byKey.tomatoTime.type, 'number')
   assert.equal(byKey.restTime.type, 'number')
-  assert.equal(byKey.appLocale.type, 'string')
+  assert.equal(byKey.appLocale.type, 'enum') // B10 (2026-09-24): appLocale is the zh-CN|en-US enum, not a free string
+  assert.deepEqual(byKey.appLocale.options, ['zh-CN', 'en-US'])
   assert.equal(byKey.sidebarCollapsed.type, 'boolean')
   assert.equal(byKey.catFold.type, 'boolean')
 })
