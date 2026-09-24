@@ -173,6 +173,7 @@ import EpDependencies from './edit-panel/EpDependencies.vue'
 import EpTomato from './edit-panel/EpTomato.vue'
 import EpTags from './edit-panel/EpTags.vue'
 import * as attachments from './edit-panel/attachments.js'
+import * as repeat from './edit-panel/repeat.js'
 
 const FIELD_MAP = {
   title: 'taskContent',
@@ -429,16 +430,8 @@ export default {
       this.remoteStale = false
       this.hydrate()
     },
-    async repeatGroupInfo () {
-      if (!this.e || !this.e.repeatId) { this.repeatCount = 0; return }
-      try {
-        // Capture the task id before the await: if the panel switches to another task while the
-        // query is in flight, the stale result must not overwrite the new task's repeat count
-        const taskId = this.e.taskId
-        const rows = await window.todoAPI.dbCall('queryTodos', { deleted: 0, repeatId: this.e.repeatId })
-        if (this.e && this.e.taskId === taskId) this.repeatCount = rows.length
-      } catch (err) { /* ignored */ }
-    },
+    /* ===== Repeat: modals + group-count query (impl: edit-panel/repeat.js) ===== */
+    async repeatGroupInfo () { return repeat.repeatGroupInfo(this) },
     close () {
       if (!this.autoSave) this.queueSave({})
       this.$store.dispatch('ui/closeEditCleanup') // D6-F1: cleanup-aware close
@@ -646,8 +639,9 @@ export default {
       // Same semantics as the list/todo box/quadrant matrix: no confirmation dialog, 5s undo toast after delete (consistency consolidated 2026-08-31)
       deleteWithUndo(this, this.$store, this.task).then(ok => { if (ok) this.close() }).catch(() => {})
     },
-    askRepeatEdit () { this.$store.commit('ui/askRepeatEdit', this.e.taskId) },
-    askRepeatDelete () { this.$store.commit('ui/askRepeatDelete', this.e.taskId) },
+    /* ===== Repeat (impl: edit-panel/repeat.js) ===== */
+    askRepeatEdit () { return repeat.askRepeatEdit(this) },
+    askRepeatDelete () { return repeat.askRepeatDelete(this) },
     estDelta (d) { setEstimate(this.e && this.e.taskId, getEstimate(this.e && this.e.taskId) + d) },
     chipCat (c) { this.fieldPatch('categoryId', c.categoryId) }, // reserved: category quick chips
     pickCat (id) { this.fieldPatch('categoryId', id); this.catOpen = false },
