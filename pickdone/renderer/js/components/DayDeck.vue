@@ -93,6 +93,7 @@ import { deleteWithUndo, moveWithUndo } from '../utils/confirm.js'
 import { taskContextMenu } from '../utils/taskMenu.js'
 import { toggleTomatoAttach, chkStyle } from '../utils/taskRow.js'
 import { FMT } from '../utils/core.js'
+import { crossDayMovePatch, crossDayRevertPatch } from '../utils/crossDayMove.js' // [maint-0924 A2]
 import { getLocale } from '../i18n/index.js'
 
 // Bare dayjs is the window.dayjs global (injected by the browser host); taking an explicit reference satisfies lint and avoids global lookups
@@ -167,10 +168,16 @@ export default {
     }
   },
   watch: {
-    // Write the globally selected date back synchronously when the day changes (A1 option 2): the date strip highlight follows, keeping list/card navigation in sync
+    // Write the globally selected date back synchronously when the day changes (A1 option 2): the date strip highlight follows, keeping list/card navigation in sync.
+    // [maint-0924 A14] screen-reader announce for local flips (arrow keys / swipe / side-card
+    // click set _flipLocal); the daySelectedTs sync path stays silent to avoid double announce
     front (idx) {
       const ts = this.days[idx]
       if (ts && ts !== (this.$store.state.ui.daySelectedTs || 0)) this.$store.commit('ui/setDaySelected', ts)
+      if (this._flipLocal) {
+        this._flipLocal = false
+        if (this.$announce && ts) this.$announce(this.$t('statsE.TodayView.deckDayAnnounce', { d: this.labelOf(ts) }))
+      }
     },
     // Reverse sync (fixed 2026-09-02): the date strip's "back to today" / calendar popover day-pick only wrote the store, and the deck had no
     // listener, so the card stack never moved. Store change → if the target day is within the ±7-day window, rotate that card to the center;
@@ -254,12 +261,13 @@ export default {
       const t = this.$store.state.todo.todoList.find(x => x.taskId === id)
       if (!t) return
       const ts = this.days[idx]
-      if (+dayjs(t.dayStart).startOf('day') === ts) return
-      // dayStart is the card bucketing key; todoTime is updated in sync when it aligns with the old schedule, keeping the calendar view consistent
-      const patch: any = { dayStart: ts }
-      const tt: any = t as any
-      if (tt.todoTime && +dayjs(tt.todoTime).startOf('day') === +dayjs(tt.dayStart).startOf('day')) patch.todoTime = ts
-      const orig = { dayStart: t.dayStart, todoTime: t.todoTime }
+      if (+dayjs(t.dayStart || 0).startOf('day') === ts) return
+      // [maint-0924 A2] shared cross-day rules (utils/crossDayMove.js, same as list drag / batch
+      // move-to-today): todoTime anchored to the old day follows the new day keeping its
+      // time-of-day, and reminderTime/reminderExtra shift too so the reminder is not orphaned
+      const startOf = x => +dayjs(x).startOf('day')
+      const patch: any = crossDayMovePatch(t, ts, startOf)
+      const orig = crossDayRevertPatch(t, patch)
       moveWithUndo(this, {
         label: this.$t('statsJ.TodoItem.movedTo', { d: dayjs(ts).format(FMT.cnDate) }),
         apply: () => this.$store.dispatch('todo/updateTodoFields', { taskId: id, patch }),
@@ -279,7 +287,7 @@ export default {
     /** Clicking a side card jumps directly to that day (drag beyond 8px counts as a swipe and does not trigger the jump) */
     onCardClick (idx) {
       if (this._moved > 8) return
-      if (idx !== this.front) this.front = idx
+      if (idx !== this.front) { this._flipLocal = true; this.front = idx }
     },
     onPointerMove (e) {
       if (!this.dragging) return
@@ -290,16 +298,16 @@ export default {
       if (!this.dragging) return
       this.dragging = false
       const TH = 70
-      if (this.dragX <= -TH && this.front < this.days.length - 1) this.front++
-      else if (this.dragX >= TH && this.front > 0) this.front--
+      if (this.dragX <= -TH && this.front < this.days.length - 1) { this._flipLocal = true; this.front++ }
+      else if (this.dragX >= TH && this.front > 0) { this._flipLocal = true; this.front-- }
       this.dragX = 0
     },
     onKey (e) {
       // Only flip days when the deck container itself has focus: pressing ←/→ while focus is on an inline control (checkbox/title)
       // must not be hijacked into day flipping (this once made the focused card get display:none for keyboard users, losing focus entirely)
       if (e.target !== e.currentTarget) return
-      if (e.key === 'ArrowLeft' && this.front > 0) { this.front--; e.preventDefault() }
-      if (e.key === 'ArrowRight' && this.front < this.days.length - 1) { this.front++; e.preventDefault() }
+      if (e.key === 'ArrowLeft' && this.front > 0) { this._flipLocal = true; this.front--; e.preventDefault() }
+      if (e.key === 'ArrowRight' && this.front < this.days.length - 1) { this._flipLocal = true; this.front++; e.preventDefault() }
     }
   },
 
