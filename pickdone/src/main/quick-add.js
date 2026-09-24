@@ -6,6 +6,7 @@
 const { BrowserWindow, screen } = require('electron')
 const path = require('path')
 const log = require('electron-log')
+const { attachLoadGuard } = require('./aux-load-guard')
 
 const W = 480
 const H = 64
@@ -52,6 +53,15 @@ function create () {
   })
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   win.loadURL('app://app/renderer-dist/index.html#/__quick-add').catch(e => { try { log.warn('[QuickAdd] loadURL failed', e) } catch {} })
+  // F16 (2026-09-24): did-fail-load used to be unhandled here — a failed page load left the window
+  // alive on the error page and toggle()'s reuse branch kept show()+send-ing into it (typed input
+  // silently lost). Shared self-heal with tomato-float.js (aux-load-guard): retry with backoff,
+  // destroy on exhaustion; 'closed' resets win=null and toggle() lazily recreates.
+  attachLoadGuard(win, {
+    url: 'app://app/renderer-dist/index.html#/__quick-add',
+    routeMark: '__quick-add',
+    tag: 'QuickAdd'
+  })
   // 首次唤起 focus 早于页面加载必丢(2026-09-10 P2):toggle 在 loadURL 尚未完成时就 send('quick-add-focus'),
   // 渲染端监听器还没注册 → 第一次按快捷键输入框不聚焦。did-finish-load 后若窗仍可见则补发一次。
   win.webContents.on('did-finish-load', () => {
