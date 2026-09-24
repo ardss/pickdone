@@ -133,14 +133,30 @@ export function historyRedoPush (s, snap) {
 // These mirror the Vuex action bodies 1:1; the actions in todo.js delegate here with their context.
 // `dispatchPersistDiff` is injected because persistSnapshotDiff stays a todo-module action (it needs safeUpsert).
 
+/** [dw-wave6 F13] Single parse+shape guard shared by undoStep/redoStep (was two diverging JSON.parse
+ *  try/catch blocks that only caught syntax corruption): a snapshot that parses but is shape-corrupt
+ *  (`{}` / `{"_e":3}` — todoList/recycleList not arrays) used to blow up later in
+ *  persistSnapshotDiffCore AFTER the stack entry had been popped, permanently losing the undo step.
+ *  Returns the parsed snapshot, or null when the entry is unusable (caller must dispose of it). */
+function parseSnapshot (raw, kind) {
+  try {
+    const snap = JSON.parse(raw)
+    if (!snap || !Array.isArray(snap.todoList) || !Array.isArray(snap.recycleList)) {
+      throw new Error('snapshot shape corrupted (todoList/recycleList not arrays)')
+    }
+    return snap
+  } catch (e) {
+    console.error(`[todo] ${kind} snapshot corrupted, dropping the corrupt step:`, e)
+    return null
+  }
+}
+
 export async function undoStep ({ state, commit, dispatch }) {
   if (!state.undoStack.length) return false
   // Parse-before-pop: a corrupt snapshot used to be popped first and only then JSON.parse'd — the step vanished
   // into an unhandled rejection (main.js had no .catch) while the stack had already been mutated.
-  const prevRaw = state.undoStack[state.undoStack.length - 1]
-  let prev
-  try { prev = JSON.parse(prevRaw) } catch (e) {
-    console.error('[todo] undo snapshot corrupted, dropping the corrupt step:', e)
+  const prev = parseSnapshot(state.undoStack[state.undoStack.length - 1], 'undo')
+  if (!prev) {
     commit('historyUndoPop') // dispose the unreadable entry so older (valid) undo steps stay reachable
     return false
   }
@@ -162,11 +178,9 @@ export async function undoStep ({ state, commit, dispatch }) {
 
 export async function redoStep ({ state, commit, dispatch }) {
   if (!state.redoStack.length) return false
-  // Parse-before-pop (same corruption guard as undo)
-  const nextRaw = state.redoStack[state.redoStack.length - 1]
-  let next
-  try { next = JSON.parse(nextRaw) } catch (e) {
-    console.error('[todo] redo snapshot corrupted, dropping the corrupt step:', e)
+  // Parse-before-pop (same shared parse+shape guard as undo)
+  const next = parseSnapshot(state.redoStack[state.redoStack.length - 1], 'redo')
+  if (!next) {
     commit('historyRedoPop')
     return false
   }

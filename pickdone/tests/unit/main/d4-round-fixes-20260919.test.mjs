@@ -111,11 +111,15 @@ test('d4 index: watcher baseline keeps null (disarmed) instead of mapping to 0 (
 
 /* ---------------- item 10: tomato-float destroys the window when load retries are exhausted ---------------- */
 test('d4 tomato-float: retry exhaustion destroys the dead window for lazy recreate (source assertion)', () => {
+  // F16 refactor (2026-09-24): the retry/destroy policy moved into the shared aux-load-guard;
+  // this assertion now pins the wiring (float attaches the guard) + the guard's destroy semantics.
   const s = readSrc('tomato-float.js')
-  const failIdx = s.indexOf("'did-fail-load'")
-  const exhaustIdx = s.indexOf('loadRetries < 5', failIdx)
-  const destroyIdx = s.indexOf('win.destroy()', exhaustIdx)
-  assert.ok(exhaustIdx > failIdx && destroyIdx > exhaustIdx, 'the exhaustion branch calls win.destroy()')
+  assert.ok(s.includes("require('./aux-load-guard')") && /attachLoadGuard\(win/.test(s),
+    'tomato-float attaches the shared load guard')
+  const guard = readSrc('aux-load-guard.js')
+  const exhaustIdx = guard.indexOf('retries < maxRetries')
+  const destroyIdx = guard.indexOf('win.destroy()', exhaustIdx)
+  assert.ok(exhaustIdx > -1 && destroyIdx > exhaustIdx, 'the exhaustion branch calls win.destroy() (lazy recreate via closed)')
 })
 
 /* ---------------- item 14: quick-add ignoreBlur cannot latch ---------------- */

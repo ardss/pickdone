@@ -31,13 +31,16 @@
       <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.backUpNowLabel') }}</span>
         <div class="form-item__control">
           <button class="mini" @click="runAutoBackupNow">{{ $t('statsE.SettingsModal.autoBackUpNowBtn') }}</button>
-          <span class="tip">{{ autoBackupStatusLine }} · {{ $t('statsH.SettingsModal.backupRetentionTip') }}</span>
+          <span class="tip">{{ autoBackupStatusLine + eventBackupFailSuffix }} · {{ $t('statsH.SettingsModal.backupRetentionTip') }}</span>
         </div></div>
     </div>
     <div class="form">
       <div class="form-label">{{ $t('statsE.SettingsModal.dataManagementSection') }}</div>
       <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.exportExcelLabel') }}</span>
-        <div class="form-item__control"><button class="primary mini-lg" :disabled="exporting" @click="exportXlsx">{{ $t('statsE.SettingsModal.exportXlsxBtn') }}</button></div></div>
+        <div class="form-item__control"><button class="primary mini-lg" :disabled="exporting" @click="exportXlsx">{{ $t('statsE.SettingsModal.exportXlsxBtn') }}</button>
+          <!-- F8: the xlsx export has no import counterpart (import only accepts CSV), so without
+               this hint users exported a file the app could never read back -->
+          <span class="tip">{{ $t('statsE.SettingsModal.exportXlsxTip') }}</span></div></div>
       <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.importCsvLabel') }}</span>
         <div class="form-item__control"><button class="mini-lg" :disabled="importing" @click="importFromCsv">{{ $t('statsE.SettingsModal.importCsvBtn') }}</button></div></div>
       <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.snapshotWriteLabel') }}</span>
@@ -100,6 +103,8 @@ export default {
       autoBackupLastAt: 0,
       autoBackupLastFailAt: 0,
       autoBackupLastError: '',
+      eventBackupLastFailAt: 0,
+      eventBackupLastError: '',
       backupDirShown: '',
       autoBackupFiles: [] as any,
       autoBackupPick: ''
@@ -110,6 +115,13 @@ export default {
     backupDirDisplay () { return this.backupDirShown || this.$t('statsE.SettingsModal.loadingPlaceholder') },
     // Honest backup status: a recent failure outranks the "never ran" fallback so a persistently
     // failing backup (unwritable dir / offline disk) is not mislabeled as "not run yet"
+    // F3 (dw wave6 adversarial round): event-snapshot (pre-purge) failures were stamped into
+    // runtimeState by writeEventBackupCore but rendered NOWHERE — the lastBackupFailPrefix channel
+    // only read autoBackupLast*. Surface the last failed evt snapshot through the same channel.
+    eventBackupFailSuffix () {
+      if (!this.eventBackupLastFailAt) return ''
+      return ' · ' + this.$t('statsH.SettingsModal.lastBackupFailPrefix') + (this.eventBackupLastError || this.$t('statsH.SettingsModal.backupFailed')) + ' (evt ' + this.dfmt(this.eventBackupLastFailAt) + ')'
+    },
     autoBackupStatusLine () {
       if (this.autoBackupLastFailAt && this.autoBackupLastFailAt >= this.autoBackupLastAt) {
         return this.$t('statsH.SettingsModal.lastBackupFailPrefix') + (this.autoBackupLastError || this.$t('statsH.SettingsModal.backupFailed')) + ' (' + this.dfmt(this.autoBackupLastFailAt) + ')'
@@ -154,7 +166,10 @@ export default {
         // purge/purge-all (store/todo.js writeEventBackup). Main-process-side dumping would need a
         // second dump builder and risk diverging from the restore format; this reuses
         // buildBackupDump verbatim so the snapshot restores identically.
-        await this.$store.dispatch('todo/writeEventBackup', 'import')
+        // Domain-2 review (2026-09-24): writeEventBackupCore now returns a boolean (todoBackup.js
+        // F3) — a failed pre-import snapshot must at least warn the user (no rollback point), same
+        // contract as todo.js purge/purge-all.
+        if (!(await this.$store.dispatch('todo/writeEventBackup', 'import'))) this.$message.warning(this.$t('statsE.SettingsModal.snapshotFailWarnMsg'))
         const done = await window.todoAPI.importCsvRun(picked.file)
         await this.$store.dispatch('_rt/refreshFromDb')
         this.$message.success(this.$t('statsH.SettingsModal.importDone', { n: done.imported, d: done.duplicates }))
@@ -191,6 +206,8 @@ export default {
       this.autoBackupLastAt = rt.autoBackupLastAt || 0
       this.autoBackupLastFailAt = rt.autoBackupLastFailAt || 0
       this.autoBackupLastError = rt.autoBackupLastError || ''
+      this.eventBackupLastFailAt = rt.eventBackupLastFailAt || 0
+      this.eventBackupLastError = rt.eventBackupLastError || ''
       try {
         const def = await window.todoAPI.getDefaultBackupDir()
         this.backupDirDefault = def
@@ -246,27 +263,53 @@ export default {
     subtaskLines (raw) {
       try { return (JSON.parse(raw || '[]')).map(s => (s.checked ? '[x] ' : '[ ] ') + s.text).join('\n') } catch { return '' }
     },
+    /** F6 (2026-09-24): write→poll→verdict as ONE async helper (extracted from writeBackupNow's
+     *  confirm callback so the timeout logic has a single home). The old verdict treated
+     *  "content never changed within the window" as FAILURE, but the main process rewrites the
+     *  snapshot unconditionally (no dedup) — identical content IS a successful write, and the
+     *  store's 5s debounce could legitimately land right after the old 5s poll deadline.
+     *  Verdict: content CHANGED within the window → written; timeout with content readable and
+     *  IDENTICAL to before → already up to date (success); only an unreadable snapshot (null,
+     *  i.e. real IPC/write failure) reports failure. Window widened to 7.5s to cover the
+     *  debounce + write latency. */
+    async verifySnapshotWritten () {
+      const before = await window.todoAPI.readCriticalStateBackup().catch(() => null)
+      this.$store.dispatch('todo/writeCriticalBackup')
+      const deadline = Date.now() + 7500
+      let txt = null
+      while (Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 200))
+        txt = await window.todoAPI.readCriticalStateBackup().catch(() => null)
+        // done as soon as the snapshot differs from the pre-write content
+        if (txt && txt !== before) return { ok: true }
+      }
+      // Post-deadline verdict: identical readable content is NOT a proven failure (no-dedup rewrite
+      // + 5s debounce), but it is NOT a proven success either — writeCriticalBackupCore is
+      // fire-and-forget and swallows write errors (p.catch → console.error), so a REAL failure
+      // (disk full / permission) also leaves the content identical. Review 2026-09-24: the caller
+      // reports unchanged as a NEUTRAL info toast, never a success toast. Only null (unreadable)
+      // is a hard failure.
+      if (txt && txt === before) return { ok: true, unchanged: true }
+      return { ok: false }
+    },
     async writeBackupNow () {
       // Trigger a critical-state backup immediately and point out its location.
-      // Poll for the snapshot actually changing instead of a blind 1200ms sleep: slow disks took
-      // longer (false failure) and identical content never changed at all; the busy flag also
-      // blocks double-click re-entry.
+      // Poll via verifySnapshotWritten (see there for the change-vs-identical verdict); the busy
+      // flag blocks double-click re-entry.
       if (this.backingUp) return
       this.backingUp = true
       try {
-        const before = await window.todoAPI.readCriticalStateBackup().catch(() => null)
-        this.$store.dispatch('todo/writeCriticalBackup')
-        const deadline = Date.now() + 5000
-        let txt = null
-        while (Date.now() < deadline) {
-          await new Promise(r => setTimeout(r, 200))
-          txt = await window.todoAPI.readCriticalStateBackup().catch(() => null)
-          // done as soon as the snapshot differs from the pre-write content
-          if (txt && txt !== before) break
+        const r = await this.verifySnapshotWritten()
+        if (r.ok) {
+          // unchanged = NEUTRAL info, never success: identical content can mean "already up to
+          // date" OR a silently failed fire-and-forget write — a false success on a disaster-
+          // recovery action is worse than the old false failure.
+          r.unchanged
+            ? this.$message.info(this.$t('statsE.SettingsModal.snapshotUpToDateMsg'))
+            : this.$message.success(this.$t('statsE.SettingsModal.criticalBackupWrittenMsg'))
+        } else {
+          this.$message.error(this.$t('statsH.SettingsModal.backupFailed'))
         }
-        txt && txt !== before
-          ? this.$message.success(this.$t('statsE.SettingsModal.criticalBackupWrittenMsg'))
-          : this.$message.error(this.$t('statsH.SettingsModal.backupFailed'))
       } catch (e) {
         // P3-8: readCriticalStateBackup/writeCriticalBackup IPC failures used to escape as an
         // unhandled rejection — same honest-failure contract as runAutoBackupNow.
@@ -290,7 +333,10 @@ export default {
             const r = await window.todoAPI.readAutoBackup(this.st.backupDir || '', this.autoBackupPick)
             // read-auto-backup 现在返回 { ok, text?, error? }:读取失败显式报错,不再与「文件不存在」混为空串
             if (!r || !r.ok) return this.$message.error(this.$t('statsE.SettingsModal.backupFileNotFoundMsg') + ((r && r.error) ? ': ' + r.error : ''))
-            await this.$store.dispatch('todo/writeEventBackup', 'restore')
+            // Domain-2 review (2026-09-24): boolean return is checked — a failed pre-restore
+            // snapshot means NO rollback point; warn loudly but let the user's confirmed restore
+            // proceed (aborting on a warning would need its own confirmation round).
+            if (!(await this.$store.dispatch('todo/writeEventBackup', 'restore'))) this.$message.warning(this.$t('statsE.SettingsModal.snapshotFailWarnMsg'))
             await this.applyRestoreDump(JSON.parse(r.text))
           } catch (e) { this.$message.error(this.$t('statsE.SettingsModal.backupParseFailedMsg') + e.message) }
         }).catch(() => {})
@@ -381,7 +427,13 @@ export default {
     },
     restoreFromBackup () {
       this.confirmDanger(this.$t('statsE.SettingsModal.criticalRestoreConfirmMsg'), this.$t('statsH.SettingsModal.restoreTitle'), 'warning').then(async () => {
-        this.$store.dispatch('todo/writeEventBackup', 'restore')
+        // F2 (2026-09-24): the dispatch MUST be awaited — writeEventBackupCore's dump builder reads
+        // the live state only after an internal IPC await, so an un-awaited dispatch raced the
+        // applyRestoreDump commits below and the "pre-restore rollback snapshot" could capture
+        // mid/post-restore state. Same contract as restoreFromAutoBackup and importFromCsv.
+        // Domain-2 review (2026-09-24): the boolean return is now CHECKED — a failed pre-restore
+        // snapshot means NO rollback point; warn loudly, let the confirmed restore proceed.
+        if (!(await this.$store.dispatch('todo/writeEventBackup', 'restore'))) this.$message.warning(this.$t('statsE.SettingsModal.snapshotFailWarnMsg'))
         let txt = null
         try { txt = await window.todoAPI.readCriticalStateBackup() } catch (e) { return this.$message.error(this.$t('statsE.SettingsModal.backupParseFailedMsg') + e.message) }
         if (!txt) return this.$message.error(this.$t('statsE.SettingsModal.backupFileNotFoundMsg'))

@@ -842,56 +842,9 @@ async function main () {
       return
     }
     case 'restore-backup': {
-      // Read-only safety command: discover + validate + guide. The DB is encrypted (better-sqlite3-multiple-ciphers
-      // + db.key, see src/main/db.js), so the CLI NEVER swaps the DB file itself — the App owns real restoration.
-      const SNAP = 'auto-'
-      // The backup default root is externalized (userData parent dir / pickdone-backups, separate from todos.db); falls back to userData/backups for old or unmigrated installs
-      const extRoot = path.join(path.dirname(lib.userDataDir()), 'pickdone-backups')
-      const legacyRoot = path.join(lib.userDataDir(), 'backups')
-      let backupRoot = legacyRoot
-      try {
-        const extHas = fs.existsSync(extRoot) && fs.readdirSync(extRoot).some(f => f.startsWith(SNAP) && f.endsWith('.json'))
-        const legacyHas = fs.existsSync(legacyRoot) && fs.readdirSync(legacyRoot).some(f => f.startsWith(SNAP) && f.endsWith('.json'))
-        if (extHas && !legacyHas) backupRoot = extRoot // when both sides hold snapshots, prefer the legacy dir (external root only after migration)
-      } catch {}
-      if (!opts._.length) {
-        // List recoverable auto snapshots (no DB access, no writes)
-        const files = fs.existsSync(backupRoot)
-          ? fs.readdirSync(backupRoot).filter(f => f.startsWith(SNAP) && f.endsWith('.json'))
-            .map(f => { const st = fs.statSync(path.join(backupRoot, f)); return { file: f, mtime: st.mtimeMs, size: st.size } })
-            .sort((a, b) => b.mtime - a.mtime)
-          : []
-        if (opts.json) return emit({ backupDir: backupRoot, snapshots: files })
-        if (!files.length) { console.log(`(no auto-*.json snapshots in ${backupRoot})`); return }
-        console.log('Recoverable snapshots (newest first):')
-        files.forEach(f => console.log(`  ${f.file}  modified ${dayjs(f.mtime).format('YYYY-MM-DD HH:mm:ss')}  (${f.size} bytes)`))
-        console.log('Run `restore-backup <path>` to validate one and see how to restore it.')
-        return
-      }
-      const file = path.resolve(opts._[0])
-      if (!fs.existsSync(file)) throw new lib.CliError(`snapshot file not found: ${file}`, 'SNAPSHOT_NOT_FOUND')
-      let snap
-      try { snap = JSON.parse(fs.readFileSync(file, 'utf8')) } catch (e) {
-        throw new lib.CliError(`snapshot is not valid JSON: ${file} (${e.message})`, 'SNAPSHOT_INVALID')
-      }
-      // Summarize whatever the JSON exposes (schema tolerant)
-      const summary = {
-        file,
-        todos: Array.isArray(snap.todos) ? snap.todos.length
-          : Array.isArray(snap.todoList) ? snap.todoList.length
-            : Array.isArray(snap) ? snap.length : null,
-        categories: Array.isArray(snap.categories) ? snap.categories.length : null,
-        meta: snap.meta && typeof snap.meta === 'object' ? Object.keys(snap.meta).length : null,
-        savedAt: snap.savedAt || snap.createTime || snap.time || null
-      }
-      if (opts.json) return emit({ ...summary, guide: 'Open the App: Settings -> Backup -> Restore from snapshot, then select this file.' })
-      console.log('Snapshot OK (valid JSON): ' + file)
-      if (summary.todos != null) console.log(`  tasks: ${summary.todos}`)
-      if (summary.categories != null) console.log(`  categories: ${summary.categories}`)
-      if (summary.savedAt) console.log(`  savedAt: ${dayjs(summary.savedAt).format('YYYY-MM-DD HH:mm:ss')}`)
-      console.log('')
-      console.log('The CLI does not replace the database (the DB file is encrypted with db.key and must be restored by the App).')
-      console.log('To restore: open the App -> Settings -> Backup -> Restore from snapshot, and select this file.')
+      // Read-only safety command: discover + validate + guide. Body lives in lib-restore-backup.cjs
+      // (structural ratchet: extracted unchanged from this file).
+      require('./lib-restore-backup.cjs')({ opts, lib, emit })
       return
     }
 

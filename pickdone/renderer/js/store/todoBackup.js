@@ -14,15 +14,16 @@ import { isAuxWindow } from '../utils/auxWindow.js'
 export const SCHEMA_V = 1
 
 /* Single source for every backup dump (event/auto/critical). Previously hand-copied 3× and already drifting —
-   a recovery dump missing a field means silently losing data on restore, so any new store goes here once. */
+   a recovery dump missing a field means silently losing data on restore, so any new store goes here once.
+   F7/F17 (dw wave6 2026-09-24): segments must also have a CONSUMER to stay in the dump — user/lastLoginRecord
+   (auth has its own localStorage re-fill channel, cross-machine JSON import never read them) and tomatoState
+   (the countdown blob is retired, the ledger lives in tomato_records rows) were dead weight and are gone. */
 export function buildBackupDump (rootState, state, { stripVolatileSettings = false, planState = null } = {}) {
   const settings = { ...rootState.settings }
   if (stripVolatileSettings) { settings.autoBackupLastAt = 0; settings.tomatoRecordAddCount = 0; settings.tomatoRecordAddDate = 0 } // strip volatile timestamps so content dedupe stays effective
   return {
     backup: {
       settingsState: JSON.stringify(settings),
-      user: JSON.stringify(rootState.auth.user),
-      lastLoginRecord: JSON.stringify(rootState.auth.lastLoginRecord),
       todoState: JSON.stringify({
         schemaV: SCHEMA_V,
         search: state.search, todoList: state.todoList, recycleList: state.recycleList, version: state.version,
@@ -30,8 +31,9 @@ export function buildBackupDump (rootState, state, { stripVolatileSettings = fal
         ignoreReminder: state.ignoreReminder, todosVersion: state.todosVersion, isSyncing: false,
         views: {}
       }),
-      tomatoState: localStorage.getItem('tomatoState') || '{}',
       // 账本行集随份走(blob 已被掏空,不含记录;恢复端按行表幂等回灌)——无它则 JSON 灾备恢复任务回而专注账全丢
+      // F17 (dw wave6 2026-09-24): 旧 tomatoState 倒计时 blob 段已停写——账本早已迁 tomato_records 行表
+      // (dbMirror.js 注释确认),UI 恢复七段与 dbRecovery 三段都从不读它,全仓无恢复端消费者。
       tomatoRecords: JSON.stringify(rootState.tomato && rootState.tomato.tomatoRecordList || []),
       categoryState: JSON.stringify({ schemaV: SCHEMA_V, list: rootState.category.list }),
       habitsState: JSON.stringify({ schemaV: SCHEMA_V, habits: rootState.habits.habits, moments: rootState.habits.moments, savedAt: rootState.habits.savedAt || 0 }),
@@ -54,13 +56,27 @@ export async function collectPlanState () {
   } catch (e) { return null } // degraded host: omit the segment rather than fail the whole dump
 }
 
-/** Event snapshot before dangerous operations: reason such as purge/import/restore, filename evt-<reason>-*.json */
+/** Event snapshot before dangerous operations: reason such as purge/import/restore, filename evt-<reason>-*.json
+ *  F3 (dw wave6 2026-09-24): the main process signals failure via the return value ({ok:false,error},
+ *  handlers/backup.js) — nothing throws, so the old bare catch made a failed pre-destroy snapshot
+ *  invisible to the caller (purge/purge-all carried on hard-deleting with no snapshot on disk).
+ *  Now: r.ok is checked, a boolean is returned, and failures land in runtimeState
+ *  (eventBackupLastFailAt/eventBackupLastError) — same honest-status pattern as writeAutoBackupCore.
+ *  Display contract for domain 2 (SettingsDataTab): the existing lastBackupFailPrefix channel can
+ *  render these two keys the same way it renders autoBackupLastError/autoBackupLastFailAt. */
 export async function writeEventBackupCore (ctx, { state, rootState }, reason) {
   try {
     if (!window.todoAPI || !window.todoAPI.runAutoBackup) return false
     const dump = buildBackupDump(rootState, state, { planState: await collectPlanState() })
-    await window.todoAPI.runAutoBackup(JSON.stringify(dump), { tag: String(reason || 'op').toLowerCase(), eventKeep: 10, backupDir: rootState.settings.backupDir || '' })
-  } catch (e) { console.error('[event-backup] failed:', e && e.message) }
+    const r = await window.todoAPI.runAutoBackup(JSON.stringify(dump), { tag: String(reason || 'op').toLowerCase(), eventKeep: 10, backupDir: rootState.settings.backupDir || '' })
+    if (r && r.ok) { saveRuntime({ eventBackupLastFailAt: 0, eventBackupLastError: '' }); return true }
+    saveRuntime({ eventBackupLastFailAt: Date.now(), eventBackupLastError: String((r && r.error) || 'backup failed').slice(0, 160) })
+    return false
+  } catch (e) {
+    console.error('[event-backup] failed:', e && e.message)
+    saveRuntime({ eventBackupLastFailAt: Date.now(), eventBackupLastError: String((e && e.message) || e).slice(0, 160) })
+    return false
+  }
 }
 
 /** Auto backup: same structure as critical-state, written to userData/backups/auto-*.json with rolling cleanup */

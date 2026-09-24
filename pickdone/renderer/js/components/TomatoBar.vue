@@ -226,6 +226,10 @@ export default {
       if (!window.todoAPI || this._floatToggling) return // busy guard: rapid clicks must not fire multiple IPC toggles
       this._floatToggling = true
       try {
+        // F12 (2026-09-24, round 2): the 'user closed' marker is owned by main-process tomato-float.js
+        // (hide() sets it, show()/undock() clear it — persisted in the todo DB meta table). The
+        // renderer writes nothing here; the earlier localStorage writes are gone (they missed the
+        // SettingsModal/TomatoPanel/tray bypass paths and the contextBridge wrapper approach threw).
         if (this.floatOn) { window.todoAPI.hideTomatoFloat() } else { window.todoAPI.showTomatoFloat() }
         // Give the main process a beat to apply the change, then write back from its real visibility
         await new Promise(r => setTimeout(r, 300))

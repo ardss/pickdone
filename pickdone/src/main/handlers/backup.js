@@ -33,6 +33,23 @@ function atomicWriteJson (fsMod, dir, name, text) {
   }
 }
 
+/** F21 (dw wave6 2026-09-24): pick a collision-free snapshot filename. Same-tag same-second
+ *  snapshots used to silently overwrite each other (evt-<reason> events fire back-to-back; the
+ *  atomic rename lands on the same name, the earlier snapshot is gone, yet {ok:true} is still
+ *  returned). Collision is resolved by bumping the embedded stamp +1s per taken name instead of a
+ *  "-1" suffix: the GFS sort/prune parsers (fix-util.backupNameTs / autoBackup.nameToTs) only
+ *  recognize the strict auto-YYYYMMDD-HHMMSS.json / evt-<reason>-... shape — a suffixed name
+ *  parses as ts=0, sorts oldest and gets pruned first, which would defeat the fix itself. */
+function uniqueSnapshotName (existsSync, dir, tag, stamp, baseMs) {
+  const pad = n => String(n).padStart(2, '0')
+  const fmt = x => { const d = new Date(x); return d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '-' + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds()) }
+  let name = tag + stamp + '.json'
+  for (let bump = 1; bump <= 900 && existsSync(path.join(dir, name)); bump++) {
+    name = tag + fmt(baseMs + bump * 1000) + '.json' // 900 bumped names deep: give up deterministically rather than loop forever
+  }
+  return name
+}
+
 
 module.exports = function backupHandlers (ctx) {
   const { isLocked, app, getMainWindow } = ctx
@@ -77,7 +94,10 @@ module.exports = function backupHandlers (ctx) {
         const stamp = d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '-' + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds())
         // Lowercase uniformly: keeps evt snapshot naming consistent with autoBackup's case-sensitive RE_EVT (no i flag)
         const tag = o.tag ? ('evt-' + String(o.tag).toLowerCase().replace(/[^a-z0-9-]/g, '') + '-') : 'auto-'
-        const name = tag + stamp + '.json'
+        // F21 (dw wave6 2026-09-24): same-tag same-second snapshots used to silently overwrite each
+        // other (evt-<reason> events fire back-to-back; the atomic rename lands on the same name,
+        // the earlier snapshot is gone, yet {ok:true} is still returned). See uniqueSnapshotName.
+        const name = uniqueSnapshotName(fs.existsSync.bind(fs), dir, tag, stamp, d.getTime())
         // Content dedup: only compare against the newest file. (The original implementation compared against any old file — when the data was changed back to its original state
         // it would return dedup without writing the new snapshot, yet prune would delete that old snapshot → that point in time ends up with no backup)
         // 排序按名字内嵌时间戳(2026-09-10 P2):字典序 sort() 让 'auto-' 排在同日 'evt-…' 之后/之前错位,
@@ -154,3 +174,4 @@ module.exports = function backupHandlers (ctx) {
   }
 }
 module.exports.atomicWriteJson = atomicWriteJson
+module.exports.uniqueSnapshotName = uniqueSnapshotName

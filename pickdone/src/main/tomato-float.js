@@ -5,6 +5,8 @@
 const { BrowserWindow, screen } = require('electron')
 const path = require('path')
 const log = require('electron-log')
+const { attachLoadGuard } = require('./aux-load-guard')
+const db = require('./db')
 
 const W = 240
 const H = 320 // Fixed-height window: 240×86 card docked at the bottom, upper space reserved for the ⋮ menu/♪ noise/abandon-confirm expansion (2026-09-02 second decision: back to constant height)
@@ -25,6 +27,32 @@ let dragTimer = null
 let dragCtx = null
 let dockedToTray = false // docked to tray: window hidden but the instance kept; the tray icon carries the state
 let screenHooksOn = false
+
+/* ---- "user explicitly closed the float" marker (F12, 2026-09-24 adversarial-review round 2) ----
+ * Persisted in the todo DB meta table so it survives restarts; the renderer main.js auto-show gate
+ * (6s after start) reads it via todo-db:call getMeta and must not resurrect a float the user closed.
+ * OWNERSHIP lives HERE, in the single convergence point of every open/close path — an earlier attempt
+ * wrapped window.todoAPI.showTomatoFloat in the renderer, but contextBridge objects are read-only
+ * (strict-mode ESM assignment throws; the wrapper never installed). All paths converge on this module:
+ *   close paths → hide() (TomatoBar toggle, float ✕, SettingsModal switch off — all via 'hide-tomato-float');
+ *                 dock() is deliberately NOT a close (undock restores the same session intent).
+ *   open paths  → show() AND undock() clear the marker (IPC 'show-tomato-float' from SettingsModal /
+ *                 TomatoPanel / TomatoBar, tray undock, auto-show itself — harmless no-op there). */
+const CLOSED_BY_USER_KEY = 'tomatoFloatClosedByUser'
+
+function setUserClosed (closed) {
+  try {
+    if (!db.isOpen()) return // DB not initialized yet (early startup / bare unit env): nothing to persist
+    db.call(closed ? 'setMeta' : 'deleteMeta', closed ? [CLOSED_BY_USER_KEY, '1'] : CLOSED_BY_USER_KEY)
+  } catch (e) { log.warn('[TomatoFloat] persist closed-marker failed', e) }
+}
+
+function isUserClosed () {
+  try {
+    if (!db.isOpen()) return false
+    return db.call('getMeta', CLOSED_BY_USER_KEY) === '1'
+  } catch (e) { return false }
+}
 /** Re-clamp bounds after wake-from-sleep / monitor unplug: in click-through state the float cannot even be
  *  dragged, so once it drifts off-screen it is unrecoverable. screen 是进程级单例:create() 可能多次执行,
  *  监听器必须在模块级只挂一次(否则随窗口重建无限累积,2026-09-05 终审 P2) */
@@ -47,6 +75,7 @@ function dock () {
 
 function undock () {
   dockedToTray = false
+  setUserClosed(false) // re-opening via the tray is an explicit user open: the close marker must not survive it
   // Window never created (float disabled at startup) or destroyed: lazy-create via show(), otherwise the tray's "show float window" click would never respond (false affordance)
   if (!win || win.isDestroyed()) { module.exports.show(); return }
   win.showInactive(); setBounds()
@@ -137,31 +166,14 @@ function create () {
   // The float only ever serves __tomato-float: block all page-level navigation and popups (prevents anchors/mis-clicks from opening framed child windows)
   // 2026-08-31 root-cause fix: the app:// page occasionally fails to load (any HTML/CSS failure cripples the
   // whole window — error page/unstyled layout; the "rectangle/incomplete/broken" the user kept seeing was
-  // this), and after failure it stays stuck on the error page with no retry. Added automatic retry as a backstop
-  let loadRetries = 0
-  win.webContents.on('did-finish-load', () => { loadRetries = 0 })
-  win.webContents.on('did-fail-load', (e, code, desc, url, isMain) => {
-    if (!isMain) return
-    if (!String(url).includes('__tomato-float')) return
-    if (loadRetries < 5) {
-      loadRetries++
-      stopHitPoll()
-      log.warn('[TomatoFloat] 页面加载失败，重试', loadRetries, code, desc)
-      setTimeout(() => {
-        if (win && !win.isDestroyed()) {
-          win.loadURL('app://app/renderer-dist/index.html#/__tomato-float').catch(() => {})
-        }
-      }, 400 * loadRetries)
-      return
-    }
-    // P2 2026-09-19: retries exhausted used to leave the dead/error-page window alive — invisible
-    // to the user yet still click-through-polled and always-on-top (a dead click-through window
-    // blocking the bottom-right corner until restart). Destroy it: 'closed' resets win=null and the
-    // next show()/undock() lazily recreates a fresh window (same self-heal as quick-add.js).
-    log.error('[TomatoFloat] 页面加载重试耗尽，销毁浮窗等待下次 show() 重建', code, desc)
-    stopDrag()
-    stopHitPoll()
-    try { if (win && !win.isDestroyed()) win.destroy() } catch (e2) { /* already gone */ }
+  // this), and after failure it stays stuck on the error page with no retry. F16 refactor (2026-09-24):
+  // the retry/destroy policy moved to the shared aux-load-guard (quick-add.js had drifted to have none).
+  attachLoadGuard(win, {
+    url: 'app://app/renderer-dist/index.html#/__tomato-float',
+    routeMark: '__tomato-float',
+    tag: 'TomatoFloat',
+    onRetry: () => stopHitPoll(),
+    onExhausted: () => { stopDrag(); stopHitPoll() }
   })
   // 渲染进程崩溃自愈(2026-09-09,与主窗 render-process-gone 同类):did-fail-load 只覆盖加载失败,
   // 渲染进程崩溃后浮窗从此白屏/无响应且永不恢复。崩溃时销毁重建;若崩溃前可见(番茄进行中)则延迟重开。
@@ -197,7 +209,12 @@ function create () {
     // After show, flush the bounds in place to force DWM to repaint the transparent layer (backstop against ghosting; dragging "erases" the ghost via this same mechanism)
     try { win.setBounds(win.getBounds()) } catch (e) { /* empty */ }
   })
-  win.on('closed', () => { stopDrag(); stopHitPoll(); win = null })
+  // F10 (2026-09-24): panelOpen must reset here too. 'closed' fires on every destroy path (user destroy
+  // after did-fail-load retries exhausted, render-process-gone rebuild); without the reset the module-level
+  // panelOpen stayed true into the NEXT window instance, so startHitPoll hit-tested the fresh 320px window
+  // as "panel open" = whole window (incl. ~234px transparent idle area) clickable — an invisible wall
+  // blocking the desktop until the renderer happened to report panel state again.
+  win.on('closed', () => { stopDrag(); stopHitPoll(); panelOpen = false; lastIgnore = null; win = null })
   // P2 2026-09-20: the hit poll self-stops after ~1s of hidden ticks; an OS-level restore
   // (un-minimize) or focus/activation makes the window visible again WITHOUT going through
   // show() — the poll then stayed stopped and the card never became hoverable/clickable again.
@@ -229,6 +246,9 @@ function stopDrag () {
 let hitTimer = null
 let panelOpen = false // when the renderer has an expanded layer (⋮ menu/♪ noise/abandon confirm), the whole window responds
 let lastIgnore = null
+
+/** Test-only getter (F10): pins that 'closed' resets the module-level panel state */
+function isPanelOpen () { return panelOpen }
 
 /** Hit-test pure function (exported for unit tests): whether the cursor is over an interactive area = the bottom card strip, or the whole window when an expanded layer is open */
 function isInsideHit (cursor, bounds, open, cardH) {
@@ -320,10 +340,13 @@ function flushPaint (w) {
 module.exports = {
   dock, undock, isDocked,
   isInsideHit, // hover hit-test pure function (for unit tests)
+  isPanelOpen, // panel-state getter (unit tests pin the F10 'closed' reset)
+  isUserClosed, // closed-marker getter (unit tests pin the F12 marker lifecycle)
   clampDrag, // drag clamp pure function (for unit tests)
   /** Show (setBounds + showInactive if already created; common practice: do not steal focus) */
   show () {
     dockedToTray = false // dock 后走 show 等于解除收纳:否则 isDocked 误报、stopDrag 不重启轮询(2026-09-05 终审 P2)
+    setUserClosed(false) // every open path converges here (SettingsModal/TomatoPanel/TomatoBar IPC, auto-show): clear the close marker
     let w = win
     if (!w || w.isDestroyed()) w = create()
     if (!w.webContents.isLoadingMainFrame()) { w.showInactive(); flushPaint(w) }
@@ -332,6 +355,7 @@ module.exports = {
     return true
   },
   hide () {
+    setUserClosed(true) // explicit user close (TomatoBar toggle / float ✕ / settings switch off): persists across restarts
     stopDrag()
     stopHitPoll()
     applyIgnore(true) // hidden = restore full click-through, avoiding residual clickable state before the next show

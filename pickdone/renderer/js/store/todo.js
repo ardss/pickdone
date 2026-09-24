@@ -496,7 +496,13 @@ export default {
     async purgeIds ({ commit, dispatch, rootState, state }, ids) {
       // Discrete op: break the 400ms undo merge so following edits don't fuse into the purge step
       commit('historyBreakMerge')
-      if (ids.length) await dispatch('writeEventBackup', 'purge') // snapshot before permanent deletion
+      // F3 (dw wave6 2026-09-24): the snapshot result is no longer swallowed — a failed pre-purge
+      // snapshot (IPC error / {ok:false}) is logged loudly here and stamped into runtimeState
+      // (eventBackupLastFailAt/eventBackupLastError, surfaced via the Settings→Data status line)
+      // instead of purging silently with no evt-*.json on disk. The purge itself still proceeds:
+      // blocking the user's explicit destructive command on a backup IO failure trades one bug
+      // for a worse one (a purge that can never finish).
+      if (ids.length && !(await dispatch('writeEventBackup', 'purge'))) console.error('[todo] purge proceeded WITHOUT its pre-delete event snapshot (see eventBackupLastError)') // snapshot before permanent deletion
       // Permanently deleted tasks still bound by focus: detach (same as deleteTodo)
       const at = rootState.tomato && rootState.tomato.attachTodo
       if (at && ids.includes(at.taskId)) dispatch('tomato/attach', null, { root: true })
@@ -536,7 +542,9 @@ export default {
       if (!ids.length) return true // QC r3: empty bin = nothing to purge = success (a falsy return read as "purge failed" in SettingsDataTab when the bin drained during the confirm dialogs)
       // Discrete op: break the 400ms undo merge so following edits don't fuse into the purge step
       commit('historyBreakMerge')
-      await dispatch('writeEventBackup', 'purge-all') // snapshot before emptying the recycle bin
+      // F3 (dw wave6 2026-09-24): same honest-failure handling as purgeIds above — a failed
+      // pre-purge snapshot is logged + stamped into runtimeState instead of vanishing
+      if (!(await dispatch('writeEventBackup', 'purge-all'))) console.error('[todo] purge-all proceeded WITHOUT its pre-delete event snapshot (see eventBackupLastError)') // snapshot before emptying the recycle bin
       // Round-3 P1 (parity with purgeIds): permanently deleted tasks still bound by focus detach first
       const at = rootState && rootState.tomato && rootState.tomato.attachTodo
       if (at && ids.includes(at.taskId)) dispatch('tomato/attach', null, { root: true })

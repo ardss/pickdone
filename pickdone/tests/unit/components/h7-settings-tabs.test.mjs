@@ -71,8 +71,11 @@ test('h7 settings modal: DOM panel order matches tab order (tomato → data → 
 test('h7 data tab: writeBackupNow polls instead of a blind 1200ms timeout', () => {
   const fn = dataTab.match(/async writeBackupNow \(\) \{([\s\S]*?)\n\s{4}\},/)[1]
   assert.ok(!/setTimeout\(\(\) =>/.test(fn), 'blind setTimeout race must be gone')
-  assert.match(fn, /readCriticalStateBackup/)
-  assert.match(fn, /Date\.now\(\) \+ 5000/)
+  // F6 (2026-09-24): the poll moved into verifySnapshotWritten; writeBackupNow delegates to it
+  assert.match(fn, /await this\.verifySnapshotWritten\(\)/)
+  const helper = dataTab.match(/async verifySnapshotWritten \(\) \{([\s\S]*?)\n\s{4}\},/)[1]
+  assert.match(helper, /readCriticalStateBackup/)
+  assert.match(helper, /Date\.now\(\) \+ 7[0-9]00/, 'poll window covers the store-side 5s debounce')
   assert.match(fn, /this\.backingUp = true/)
   // busy flag wired to the button to block double-click re-entry
   assert.match(dataTab, /:disabled="backingUp" @click="writeBackupNow"/)
