@@ -192,6 +192,8 @@ export default {
         }
       }
       this.$store.commit('habits/addHabit', { name: n, frequency: freq })
+      // [maint-0924 A12] creation feedback (was silent)
+      this.$message.success(this.$t('statsB.HabitView.addedToast', { n }))
       this.newHabit = ''
     },
     startRename (h) { this.editingId = h.id; this.editName = h.name },
@@ -199,7 +201,10 @@ export default {
     cancelRename (h) { this.editName = h.name; this.editingId = null },
     saveRename (h) {
       const n = this.editName.trim()
-      if (n) this.$store.commit('habits/renameHabit', { id: h.id, name: n })
+      // [maint-0924 A11] empty name warns and STAYS in edit mode (was a silent exit, misaligned
+      // with SideNav's empty-name handling which keeps the editor open)
+      if (!n) { this.$message.warning(this.$t('statsE.HabitView.renameEmpty')); return }
+      this.$store.commit('habits/renameHabit', { id: h.id, name: n })
       this.editingId = null
     },
     // Check-in is a one-click explicit toggle on data: same undo layer as task completion (silent before; consolidated 2026-09-01)
@@ -226,7 +231,10 @@ export default {
     },
     addMoment () {
       if (!this.newMoment.trim() || !this.newMomentDate) return this.$message.warning(this.$t('statsB.HabitView.nameAndDateRequired'))
-      this.$store.commit('habits/addMoment', { name: this.newMoment.trim(), date: this.newMomentDate, kind: this.newMomentKind })
+      const n = this.newMoment.trim()
+      this.$store.commit('habits/addMoment', { name: n, date: this.newMomentDate, kind: this.newMomentKind })
+      // [maint-0924 A12] creation feedback (was silent)
+      this.$message.success(this.$t('statsB.HabitView.momentAddedToast', { n }))
       this.newMoment = ''; this.newMomentDate = ''
     },
     daysDiff (m) {
