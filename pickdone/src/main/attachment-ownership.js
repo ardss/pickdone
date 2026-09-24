@@ -3,6 +3,7 @@
  *  depend on this module WITHOUT dragging in the electron-log require that shared.js carries.
  *  Dependency direction: handlers/shared.js and cli/lib.js → here; nothing electron-related
  *  may appear in this file. */
+const fs = require('fs')
 
 /** Ownership test for attachment filenames (P2 2026-09-17). saveAttachment names files
  * `${taskId}_${Date.now()}_${name}`, so a bare startsWith(taskId + '_') let a task whose id is a
@@ -16,4 +17,11 @@ function ownsAttachmentFile (f, id) {
   return /^\d+$/.test(seg)
 }
 
-module.exports = { ownsAttachmentFile }
+/** D3 (2026-09-24, verbatim extraction from handlers/todo.js hardDelete pre-collection):
+ *  list the attachment files in attachDir owned by a single task id, BEFORE the row is
+ *  deleted (files-before-rows, P3 R4 2026-09-21). Caller keeps its warn-only try/catch. */
+function collectOwnedAttachmentFiles (attachDir, id) {
+  return fs.readdirSync(attachDir()).filter(f => ownsAttachmentFile(f, id))
+}
+
+module.exports = { ownsAttachmentFile, collectOwnedAttachmentFiles }
