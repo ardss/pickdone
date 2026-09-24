@@ -37,7 +37,10 @@
     <div class="form">
       <div class="form-label">{{ $t('statsE.SettingsModal.dataManagementSection') }}</div>
       <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.exportExcelLabel') }}</span>
-        <div class="form-item__control"><button class="primary mini-lg" :disabled="exporting" @click="exportXlsx">{{ $t('statsE.SettingsModal.exportXlsxBtn') }}</button></div></div>
+        <div class="form-item__control"><button class="primary mini-lg" :disabled="exporting" @click="exportXlsx">{{ $t('statsE.SettingsModal.exportXlsxBtn') }}</button>
+          <!-- F8: the xlsx export has no import counterpart (import only accepts CSV), so without
+               this hint users exported a file the app could never read back -->
+          <span class="tip">{{ $t('statsE.SettingsModal.exportXlsxTip') }}</span></div></div>
       <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.importCsvLabel') }}</span>
         <div class="form-item__control"><button class="mini-lg" :disabled="importing" @click="importFromCsv">{{ $t('statsE.SettingsModal.importCsvBtn') }}</button></div></div>
       <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.snapshotWriteLabel') }}</span>
@@ -246,27 +249,47 @@ export default {
     subtaskLines (raw) {
       try { return (JSON.parse(raw || '[]')).map(s => (s.checked ? '[x] ' : '[ ] ') + s.text).join('\n') } catch { return '' }
     },
+    /** F6 (2026-09-24): write→poll→verdict as ONE async helper (extracted from writeBackupNow's
+     *  confirm callback so the timeout logic has a single home). The old verdict treated
+     *  "content never changed within the window" as FAILURE, but the main process rewrites the
+     *  snapshot unconditionally (no dedup) — identical content IS a successful write, and the
+     *  store's 5s debounce could legitimately land right after the old 5s poll deadline.
+     *  Verdict: content CHANGED within the window → written; timeout with content readable and
+     *  IDENTICAL to before → already up to date (success); only an unreadable snapshot (null,
+     *  i.e. real IPC/write failure) reports failure. Window widened to 7.5s to cover the
+     *  debounce + write latency. */
+    async verifySnapshotWritten () {
+      const before = await window.todoAPI.readCriticalStateBackup().catch(() => null)
+      this.$store.dispatch('todo/writeCriticalBackup')
+      const deadline = Date.now() + 7500
+      let txt = null
+      while (Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 200))
+        txt = await window.todoAPI.readCriticalStateBackup().catch(() => null)
+        // done as soon as the snapshot differs from the pre-write content
+        if (txt && txt !== before) return { ok: true }
+      }
+      // Post-deadline verdict: identical readable content = the write landed with no change
+      // (or the debounced write is content-identical) — NOT a failure. Only null (unreadable)
+      // stays a failure; a genuine write error is never reported as success.
+      if (txt && txt === before) return { ok: true, unchanged: true }
+      return { ok: false }
+    },
     async writeBackupNow () {
       // Trigger a critical-state backup immediately and point out its location.
-      // Poll for the snapshot actually changing instead of a blind 1200ms sleep: slow disks took
-      // longer (false failure) and identical content never changed at all; the busy flag also
-      // blocks double-click re-entry.
+      // Poll via verifySnapshotWritten (see there for the change-vs-identical verdict); the busy
+      // flag blocks double-click re-entry.
       if (this.backingUp) return
       this.backingUp = true
       try {
-        const before = await window.todoAPI.readCriticalStateBackup().catch(() => null)
-        this.$store.dispatch('todo/writeCriticalBackup')
-        const deadline = Date.now() + 5000
-        let txt = null
-        while (Date.now() < deadline) {
-          await new Promise(r => setTimeout(r, 200))
-          txt = await window.todoAPI.readCriticalStateBackup().catch(() => null)
-          // done as soon as the snapshot differs from the pre-write content
-          if (txt && txt !== before) break
+        const r = await this.verifySnapshotWritten()
+        if (r.ok) {
+          r.unchanged
+            ? this.$message.success(this.$t('statsE.SettingsModal.snapshotUpToDateMsg'))
+            : this.$message.success(this.$t('statsE.SettingsModal.criticalBackupWrittenMsg'))
+        } else {
+          this.$message.error(this.$t('statsH.SettingsModal.backupFailed'))
         }
-        txt && txt !== before
-          ? this.$message.success(this.$t('statsE.SettingsModal.criticalBackupWrittenMsg'))
-          : this.$message.error(this.$t('statsH.SettingsModal.backupFailed'))
       } catch (e) {
         // P3-8: readCriticalStateBackup/writeCriticalBackup IPC failures used to escape as an
         // unhandled rejection — same honest-failure contract as runAutoBackupNow.
@@ -381,7 +404,11 @@ export default {
     },
     restoreFromBackup () {
       this.confirmDanger(this.$t('statsE.SettingsModal.criticalRestoreConfirmMsg'), this.$t('statsH.SettingsModal.restoreTitle'), 'warning').then(async () => {
-        this.$store.dispatch('todo/writeEventBackup', 'restore')
+        // F2 (2026-09-24): the dispatch MUST be awaited — writeEventBackupCore's dump builder reads
+        // the live state only after an internal IPC await, so an un-awaited dispatch raced the
+        // applyRestoreDump commits below and the "pre-restore rollback snapshot" could capture
+        // mid/post-restore state. Same contract as restoreFromAutoBackup (:293) and importFromCsv.
+        await this.$store.dispatch('todo/writeEventBackup', 'restore')
         let txt = null
         try { txt = await window.todoAPI.readCriticalStateBackup() } catch (e) { return this.$message.error(this.$t('statsE.SettingsModal.backupParseFailedMsg') + e.message) }
         if (!txt) return this.$message.error(this.$t('statsE.SettingsModal.backupFileNotFoundMsg'))

@@ -417,6 +417,7 @@ export default {
       persist(state)
     },
     restore (state, saved) {
+      const prevLocale = state.appLocale
       const merged = clampNumericSettings(coerceNumericSettings({ ...DEFAULT_SETTINGS, ...(saved || {}) }))
       if (merged.shortcutKeySettings === DEFAULT_SETTINGS.shortcutKeySettings) merged.shortcutKeySettings = { ...DEFAULT_SHORTCUTS }
       Object.assign(state, merged)
@@ -433,6 +434,20 @@ export default {
           window.todoAPI.updateSettings(diff)
         }
       } catch (e) { console.error('[settings] restore: main-process settings sync failed:', e) }
+      // F9 (2026-09-24): the main-consumed diff above pushed appLocale to MAIN's config.json, but
+      // the RENDERER side stayed on the old locale until restart — LS 'appLocale' (i18n's boot
+      // cache) and i18n.global.locale are only written by the `update` action's locale path
+      // (SettingsModal/Onboarding setLocale). Reuse that same path on restore: LS write-through +
+      // hot-apply, only when the restored blob actually changes the locale. Fire-and-forget like
+      // the update action: a degraded host (no i18n module) must not break the restore.
+      const loc = state.appLocale
+      if (typeof loc === 'string' && loc && loc !== prevLocale) {
+        try { localStorage.setItem('appLocale', loc) } catch (e) { /* empty */ }
+        import('../i18n/index.js').then(m => {
+          if (m && m.setLocale && typeof document !== 'undefined') m.setLocale(loc)
+          else if (m && m.default && m.default.global) m.default.global.locale = loc
+        }).catch(e => { console.error('[settings] restore: locale hot-apply failed:', e) })
+      }
     }
   },
   actions: {
