@@ -35,7 +35,8 @@ function makeCtx () {
   const state = { list: [], projectIds: [], projectMeta: {} }
   const ctx = {
     state,
-    commit (type, payload) { if (type === 'setList') state.list = payload; if (type === 'setProjectIds') state.projectIds = payload }
+    // init commits setListFromDb since the 2026-09-25 write-amplification fix (reads must not persist)
+    commit (type, payload) { if (type === 'setList' || type === 'setListFromDb') state.list = payload; if (type === 'setProjectIds') state.projectIds = payload }
   }
   ctx.thisStore = { dispatch (type) { return store.actions[type.split('/')[1]].call(thisStore, ctx) } }
   const thisStore = { dispatch: (type) => { /* loadProjectMeta is a no-op with empty projectIds */ return Promise.resolve() } }
