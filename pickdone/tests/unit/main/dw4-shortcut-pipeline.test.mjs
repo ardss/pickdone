@@ -24,6 +24,7 @@ function setupShortcuts () {
   const prevented = []
   let beforeInput = null
   let didFinishLoad = null
+  let processGone = null
   const ipcHandlers = {}
   const electronStub = {
     globalShortcut: { register: () => true, unregisterAll: () => {} },
@@ -42,11 +43,13 @@ function setupShortcuts () {
     mod = require_(resolved)
   } finally { Module._load = origLoad }
   const webContents = {
+    removed: [],
     on: (ev, h) => {
       if (ev === 'before-input-event') beforeInput = h
       if (ev === 'did-finish-load') didFinishLoad = h
+      if (ev === 'render-process-gone') processGone = h
     },
-    removeAllListeners: () => {},
+    removeAllListeners: ev => { if (ev !== 'before-input-event') webContents.removed.push(ev) },
     send: (ch, payload) => sent.push([ch, payload])
   }
   const win = { isDestroyed: () => false, webContents }
@@ -67,6 +70,8 @@ function setupShortcuts () {
       beforeInput(e, input)
     },
     reload () { didFinishLoad() },
+    crash () { processGone() },
+    get removed () { return webContents.removed },
     get prevented () { return prevented.length }
   }
 }
@@ -124,6 +129,21 @@ test('F-D3: a renderer reload mid-record self-heals — suppression cannot stick
   s.reload() // renderer crash/reload: did-finish-load must clear the stale flag
   s.fire({ type: 'keyboard', control: true, key: 'd' })
   assert.deepEqual(s.sent, [['shortcut-action', 'deleteEvent']], 'shortcuts dispatch again after a reload, no permanent mute')
+})
+
+test('F-D3: a renderer crash WITHOUT reload also lifts suppression (render-process-gone tail)', () => {
+  const s = setupShortcuts()
+  s.ipcHandlers['shortcut-capturing']({}, true)
+  s.crash()
+  s.fire({ type: 'keyboard', control: true, key: 'd' })
+  assert.deepEqual(s.sent, [['shortcut-action', 'deleteEvent']], 'a dead renderer cannot leave the pipeline muted')
+})
+
+test('F-D3: re-binding clears the self-heal listeners — no per-rebind accumulation', () => {
+  const s = setupShortcuts()
+  s.api.applyShortcuts({ sync: 'ctrl+s', deleteEvent: 'ctrl+d' }) // a second applyShortcuts (settings re-bind)
+  assert.ok(s.removed.includes('did-finish-load'), 'did-finish-load removed before re-add')
+  assert.ok(s.removed.includes('render-process-gone'), 'render-process-gone removed before re-add')
 })
 
 test('F-D7: moveWithUndo surfaces an apply() rejection instead of faking the moved toast path', async () => {

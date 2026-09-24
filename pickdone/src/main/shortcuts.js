@@ -96,11 +96,18 @@ function createShortcuts ({ getMainWindow, showMainOrLock, quickAdd, i18n, log }
     ipcMain.on('shortcut-capturing', (e, flag) => { captureSuppress = !!flag })
     // The main window may already be destroyed (settings re-bind triggered via notify-settings-updated during exit): guard with a getMainWindow null check
     const cur = getMainWindow()
+    // Re-bind hygiene: removeAllListeners before every re-add, matching the before-input-event
+    // line below — applyShortcuts runs on every settings re-bind, so a bare .on here would
+    // stack one listener per rebind (adversarial review round 2, item 2).
     cur && cur.webContents.removeAllListeners('before-input-event')
+    cur && cur.webContents.removeAllListeners('did-finish-load')
+    cur && cur.webContents.removeAllListeners('render-process-gone')
     // F-D3 self-heal: if the renderer dies / reloads mid-record (crash, dev reload) the
     // suppression flag would otherwise stay raised forever and silently disable every in-app
-    // shortcut until the next record or app restart. Any fresh load starts from a clean slate.
+    // shortcut until the next record or app restart. Any fresh load starts from a clean slate;
+    // render-process-gone covers the crash-without-reload tail (renderer gone, no new load).
     cur && cur.webContents.on('did-finish-load', () => { captureSuppress = false })
+    cur && cur.webContents.on('render-process-gone', () => { captureSuppress = false })
     cur && cur.webContents.on('before-input-event', (e, input) => {
       const w = getMainWindow()
       if (input.type !== 'keyboard' || !w || w.isDestroyed()) return

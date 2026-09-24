@@ -612,7 +612,7 @@ async function bootstrap () {
         // P3-7 (maint/dw 2026-09-23): a real failure path (persistSnapshotDiff writes can throw) used
         // to die silently in the console while success/empty both toasted — surface it.
         console.error('[todo] undo failed:', e)
-        window.appUI && window.appUI.$message && window.appUI.$message.error(i18n.global.t('statsE.SettingsModal.purgeFailedMsg') + ((e && e.message) || ''))
+        window.appUI && window.appUI.$message && window.appUI.$message.error(i18n.global.t('statsH.main.actionFailedMsg') + ((e && e.message) || ''))
       })
     } else if (!inEditor && ((e.ctrlKey && e.key.toLowerCase() === 'y') || (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'z'))) {
       e.preventDefault()
@@ -623,7 +623,7 @@ async function bootstrap () {
       }).catch(e => {
         // P3-7: same honest failure toast as undo above
         console.error('[todo] redo failed:', e)
-        window.appUI && window.appUI.$message && window.appUI.$message.error(i18n.global.t('statsE.SettingsModal.purgeFailedMsg') + ((e && e.message) || ''))
+        window.appUI && window.appUI.$message && window.appUI.$message.error(i18n.global.t('statsH.main.actionFailedMsg') + ((e && e.message) || ''))
       })
     }
   })
