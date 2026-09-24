@@ -28,7 +28,11 @@ async function makeFixture() {
   // vendor 平台 prebuild（win32-x64，extraResources 全量副本检查）
   const prebuildDir = path.join(unpacked, 'resources', 'vendor', 'better-sqlite3-multiple-ciphers', 'prebuilds')
   fs.mkdirSync(prebuildDir, { recursive: true })
-  fs.writeFileSync(path.join(prebuildDir, 'win32-x64.node'), 'dummy')
+  // extraResources 是全平台副本(verify-packaged 按宿主 platformPrebuild 校验)——夹具必须
+  // 写全平台,只写 win32 会在 linux CI 上误判缺驱动而 FAIL
+  for (const pre of ['win32-x64', 'linux-x64', 'linux-arm64', 'darwin-arm64', 'darwin-x64']) {
+    fs.writeFileSync(path.join(prebuildDir, pre + '.node'), 'dummy')
+  }
   // resources/package.json（版本对账基准）
   fs.writeFileSync(path.join(unpacked, 'resources', 'package.json'), JSON.stringify({ name: 'pickdone', version: '1.0.0' }))
   // 宿主 cwd 侧：package.json（无白名单包）+ renderer-dist/index.html
