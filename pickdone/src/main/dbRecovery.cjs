@@ -57,12 +57,40 @@ function sqliteHeaderOk (file) {
   } catch { return false }
 }
 
+/** Pure mapping of the startup recovery dialog's (recovered, choice) → action, extracted from
+ *  index.js (2026-09-25) so the button table and its branch chain stay in lockstep and the map
+ *  is unit-testable without Electron. Buttons (index.js, same order):
+ *    recovered:   [btnRecoverRelaunch, btnOpenDataDir, btnQuit]
+ *    !recovered:  [btnOpenDataDirBackup, btnResetRelaunch, btnQuit]
+ *  Fix 2026-09-25 (P1): the recovered choice===1 button promised "open data dir" but the old
+ *  inline chain only ran app.quit() — shell.openPath was never called on that branch. */
+function recoveryDialogAction (recovered, choice) {
+  if (recovered) {
+    if (choice === 0) return 'relaunch'
+    if (choice === 1) return 'open-data-dir' // caller does shell.openPath(ud) then app.quit()
+    return 'quit'
+  }
+  if (choice === 0) return 'open-data-dir' // caller does shell.openPath(ud) then app.quit()
+  if (choice === 1) return 'reset-and-relaunch'
+  return 'quit'
+}
+
 /** Vendor driver, resolved the same way db.js resolves it (repo vendor/ in dev, resourcesPath is
  *  handled by db.js itself — this pure module only ever runs against the repo layout in tests and
  *  the packaged layout always has vendor/ next to app root). Null when unavailable: the probe then
  *  answers 'unknown' and the caller stays CONSERVATIVE (never destroys data on an inconclusive probe). */
 function loadVendorDriver () {
-  try { return require(path.join(__dirname, '..', '..', 'vendor', 'better-sqlite3-multiple-ciphers')) } catch { return null }
+  // Packaged layout (mirror of db.js loadDriver): the driver lives in extraResources at
+  // resources/vendor — the repo-relative path below does not exist inside app.asar, so without
+  // this branch the probe could never answer 'yes'/'no' in a packaged build and a genuinely
+  // corrupt encrypted db stayed 'unknown' (recovery path unreachable in the wild).
+  const candidates = []
+  try { if (process.resourcesPath) candidates.push(path.join(process.resourcesPath, 'vendor', 'better-sqlite3-multiple-ciphers')) } catch { /* non-Electron runtime without the field */ }
+  candidates.push(path.join(__dirname, '..', '..', 'vendor', 'better-sqlite3-multiple-ciphers'))
+  for (const root of candidates) {
+    try { return require(root) } catch { /* try next candidate */ }
+  }
+  return null
 }
 
 /** P2 (dw wave5 2026-09-24): the plaintext-magic header guard is ALWAYS false for this repo's
@@ -154,20 +182,27 @@ function attemptDbRecovery (ud, retryInit) {
   if (fs.existsSync(mainDb) && fs.existsSync(keyFile)) {
     const probe = encryptedProbe(mainDb, keyFile)
     if (probe !== 'no') {
+      // 2026-09-25: the transient/declined outcomes used to return silently — the caller's error
+      // dialog then either claimed a recovery that never happened or showed no reason at all.
+      // Log the probe verdict with every no-rename return so the trail explains WHY nothing was touched.
       if (probe === 'yes' && typeof retryInit === 'function') {
         try {
           const retried = retryInit()
           if (retried && typeof retried.then === 'function') {
+            logWarn('[dbRecovery] transient init failure; encrypted db decrypts with its key (probe=yes); async retry unsupported, no rename performed')
             return { source: 'transient', label: 'transient init failure; encrypted db decrypts with its key (no rename performed)' }
           }
           return { source: 'retry-ok', label: 'transient init failure; encrypted db decrypts with its key, retry succeeded (no rename performed)' }
         } catch {
+          logWarn('[dbRecovery] transient init failure persists; encrypted db decrypts with its key (probe=yes), recovery NOT performed (healthy DB preserved)')
           return { source: 'transient', label: 'transient init failure persists; encrypted db decrypts with its key, recovery NOT performed (healthy DB preserved)' }
         }
       }
-      return { source: 'transient', label: probe === 'yes'
+      const declinedLabel = probe === 'yes'
         ? 'transient init failure; encrypted db decrypts with its key (no rename performed)'
-        : 'decrypt probe inconclusive (sqlite driver unavailable or db.key unreadable) — recovery declined to avoid destroying a possibly-healthy encrypted DB (no rename performed)' }
+        : 'decrypt probe inconclusive (sqlite driver unavailable or db.key unreadable) — recovery declined to avoid destroying a possibly-healthy encrypted DB (no rename performed)'
+      logWarn('[dbRecovery] recovery declined: probe=' + probe + ' — ' + declinedLabel)
+      return { source: 'transient', label: declinedLabel }
     }
   }
   // Confirm a recoverable source exists before renaming: transient IO errors (disk full/lock held) also make init fail; renaming unconditionally
@@ -296,7 +331,7 @@ function restoreHabitsBlobFromCriticalBackup (raw, habitsPut) {
     const seg = parseSegment(raw.backup && raw.backup.habitsState, 'habitsState')
     if (seg === null || !Array.isArray(seg.habits)) return 0
     try {
-      habitsPut(['db.habitsState', JSON.stringify({ habits: seg.habits, moments: Array.isArray(seg.moments) ? seg.moments : [], savedAt: Number(seg.savedAt) || 0 })])
+      habitsPut(['db.habitsState', JSON.stringify({ schemaV: SUPPORTED_SCHEMA_V, habits: seg.habits, moments: Array.isArray(seg.moments) ? seg.moments : [], savedAt: Number(seg.savedAt) || 0 })])
       return 1
     } catch { return 0 }
   } catch { return 0 }
@@ -438,4 +473,4 @@ function sweepPendingDeletes (ud, log) {
   return swept
 }
 
-module.exports = { attemptDbRecovery, restoreTasksFromCriticalBackup, writeCriticalStateBackupAtomic, criticalBackupPath, restoreCategoriesFromCriticalBackup, restoreTomatoRecordsFromCriticalBackup, quarantineKey, sqliteHeaderOk, encryptedProbe, preflightMigrateResidue, sweepPendingDeletes }
+module.exports = { attemptDbRecovery, restoreTasksFromCriticalBackup, writeCriticalStateBackupAtomic, criticalBackupPath, restoreCategoriesFromCriticalBackup, restoreTomatoRecordsFromCriticalBackup, quarantineKey, sqliteHeaderOk, encryptedProbe, preflightMigrateResidue, sweepPendingDeletes, recoveryDialogAction, loadVendorDriver }
