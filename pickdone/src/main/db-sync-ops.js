@@ -7,6 +7,12 @@
  * throws — sync is off by default and the renderer only reaches these ops from the settings UI.
  */
 const handlers = Object.create(null)
+/* P1 fix (2026-09-25): handlers split into a STATIC layer (registered at module load, survives
+ * reset) and a DYNAMIC layer (registered by initLanSync, cleared by reset). Previously reset()
+ * wiped the statically-registered getMetaMany too and nothing ever re-registered it, so after a
+ * db re-init db.call('getMetaMany') threw 'sync op unavailable' forever. reset() now clears only
+ * the dynamic layer. */
+const dynamicHandlers = Object.create(null)
 
 /* CONTRACT (2026-09-20, F-UI consumes): batch meta read `getMetaMany(keys: string[])` →
  * [{key, value|null}] with the output ALIGNED 1:1 to the input key order. Read-only, available
@@ -27,14 +33,14 @@ handlers.getMetaMany = (keys) => {
 
 module.exports = {
   /** Register/override the sync op handlers (called once from lan-sync-bootstrap.initLanSync). */
-  register (map) { Object.assign(handlers, map) },
+  register (map) { Object.assign(dynamicHandlers, map) },
 
-  /** Drop all handlers (tests / db re-init). */
-  reset () { for (const k of Object.keys(handlers)) delete handlers[k] },
+  /** Drop the DYNAMIC handlers only (tests / db re-init) — static ops like getMetaMany stay. */
+  reset () { for (const k of Object.keys(dynamicHandlers)) delete dynamicHandlers[k] },
 
   /** Called by the db.js OPS delegates. */
   dispatch (op, params) {
-    const fn = handlers[op]
+    const fn = handlers[op] || dynamicHandlers[op]
     if (!fn) throw new Error('[db-sync-ops] sync op unavailable (LAN sync not initialized): ' + op)
     return fn(params)
   }
