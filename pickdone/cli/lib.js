@@ -1396,7 +1396,7 @@ function backfillRecord ({ taskId = null, content = '', date, at = '20:00', minu
    F-B3 (dw wave 3): the storage contract (key prefix / 0..20 clamp / TS_KEY / legacy blob key) moved
    to shared/estimate-core.mjs — single source with the renderer's utils/tomatoEstimate.js (the
    renderer consumes the same module in its wave). */
-const { ESTIMATE_KEY_PREFIX, estimateKeyOf, clampEstimate, TS_KEY: ESTIMATE_TS_KEY, LEGACY_KEY: ESTIMATE_LEGACY_KEY } = require('../shared/estimate-core.mjs')
+const { ESTIMATE_KEY_PREFIX, estimateKeyOf, clampEstimate, TS_KEY: ESTIMATE_TS_KEY, LEGACY_KEY: ESTIMATE_LEGACY_KEY, ESTIMATE_MAX } = require('../shared/estimate-core.mjs')
 const estimateKey = estimateKeyOf
 /** Lazy legacy migration (first write): old whole-doc blob → per-task keys, then the legacy doc key
  *  is deleteMeta'd (a sync tombstone, so peers drop it too). Corrupt blob → dropped, not fatal. */
@@ -1438,11 +1438,14 @@ function getEstimateOf (taskId, legacyVal) {
 /* ---------------- Manual ordering (taskSort midpoint insertion — same semantics as renderer todo/reorderTodos drag)
    F-B2 (dw wave 3): the score math moved to shared/sort-core.mjs moveWithin (single source with the
    renderer's TodoItem._writeSort reorderScale rewrite); the ±100 no-beyond margin is precision
-   degradation only — order can no longer drift between the two ends' scales. */
+   degradation only — order can no longer drift between the two ends' scales.
+   B2 (2026-09-24): pool + dayOrder are in APP DISPLAY order (taskSort DESCENDING — sortMode.js
+   custom mode). moveWithin's `sorts` contract is display order now, so `sort top` lands max+100
+   (visually first) instead of the old min-100 (visually last, P1 cross-end inversion). */
 /** Reorder <task> relative to: top|bottom|up|down (within its day) or before|after <otherTask> (must share the day/no-date pool) */
 function sortTask (input, pos, refInput) {
   const t = resolveTask(input, liveTasks())
-  const pool = liveTasks().filter(x => x.dayStart === t.dayStart).sort((a, b) => (a.taskSort || 0) - (b.taskSort || 0))
+  const pool = liveTasks().filter(x => x.dayStart === t.dayStart).sort((a, b) => (b.taskSort || 0) - (a.taskSort || 0))
   const idx = pool.findIndex(x => x.taskId === t.taskId)
   let ref = null
   if (pos === 'before' || pos === 'after') {
@@ -1458,10 +1461,12 @@ function sortTask (input, pos, refInput) {
   }
   const newSort = mv.sort
   patchTodo(t.taskId, { taskSort: newSort }, { action: 'sort' })
-  // Re-read the real persisted order (cannot reuse the pool above — it is a pre-move snapshot; the ★ marker would show at the old position)
+  // Re-read the real persisted order (cannot reuse the pool above — it is a pre-move snapshot; the ★ marker would show at the old position).
+  // Reported in App display order (taskSort descending) — B2: the old ascending readout was the
+  // App's list printed upside-down.
   const after = liveTasks()
     .filter(x => x.dayStart === t.dayStart)
-    .sort((a, b) => (a.taskSort || 0) - (b.taskSort || 0))
+    .sort((a, b) => (b.taskSort || 0) - (a.taskSort || 0))
     .map(x => (x.taskId === t.taskId ? '★' : '') + x.taskContent)
   return { taskId: t.taskId, taskSort: newSort, dayOrder: after }
 }
@@ -1689,7 +1694,19 @@ function settingsSet (key, value, { force = false } = {}) {
   // tests can deterministically exercise the merge-on-fresh behavior. Null outside tests.
   if (typeof settingsRaceHook === 'function') settingsRaceHook()
   commit('setting', 'put', { key, value: v })
+  // B15 (2026-09-24): the blob write-back is a WHITELIST rebuild, not a passthrough — DEFAULT_SETTINGS
+  // keys (the manifest families + blob-only maps + the two local-only keys) plus the blob's own
+  // meta fields. Otherwise dirty keys (renamed-away settings, foreign blobs) rode every write-back
+  // forever: the blob could never slim down and renderer initFromDb kept resurrecting them.
+  const blobAllow = new Set([
+    ...SETTINGS_MANIFEST.boolean, ...SETTINGS_MANIFEST.number,
+    ...Object.keys(SETTINGS_MANIFEST.enum), ...SETTINGS_MANIFEST.string,
+    ...(SETTINGS_MANIFEST.blobOnly || []),
+    'shortcutKeySettings', 'foldedTodoList', // intentionally local-only (manifest header) but still DEFAULT_SETTINGS blob keys
+    '_savedAt', 'schemaV', '_lsAt'
+  ])
   const fresh = stripHabitsFamily(settingsDoc())
+  for (const k of Object.keys(fresh)) { if (!blobAllow.has(k)) delete fresh[k] }
   fresh._savedAt = readAt
   fresh.schemaV = fresh.schemaV || 1
   commit('meta', 'put', ['db.settingsState', JSON.stringify(fresh)])
@@ -1765,7 +1782,7 @@ async function importEvents (events, { onProgress = () => {} } = {}) {
   const seen = new Set(existing.map(t => t.dayStart + '|' + String(t.taskContent || '').trim()))
   // Fix (2026-09-19): re-read records inside the predicate — a pre-import snapshot never saw rows the import itself just created.
   const hasRecord = tid => (tomatoRecords() || []).some(r => r.manual && r.focusTaskId === tid)
-  let created = 0, skipped = 0
+  let created = 0, skipped = 0, clamped = 0
   const failed = []
   for (const e of events) {
     const label = (e.date || '?') + ' ' + (e.start || '') + ' ' + (e.title || '').slice(0, 24)
@@ -1786,7 +1803,16 @@ async function importEvents (events, { onProgress = () => {} } = {}) {
         createTime: e.date + ' ' + e.start
       })
       seen.add(key)
-      if (e.estimate) { try { setEstimate(t.taskId, Math.min(20, Number(e.estimate) || 0)) } catch (er) { /* non-fatal */ } }
+      // B14 (2026-09-24): estimate>20 is no longer clamped SILENTLY (Math.min(20, …) reported
+      // success while a different estimate landed — the same failure mode backfillRecord's
+      // over-cap throw fixes). The row-level clamp (setEstimate → clampEstimate) still applies;
+      // the event is imported, but the clamp is surfaced via onProgress and a `clamped` count
+      // in the return value (event-level `failed` would overstate — the task itself succeeded).
+      if (e.estimate) {
+        const want = Number(e.estimate) || 0
+        try { setEstimate(t.taskId, want) } catch (er) { /* non-fatal */ }
+        if (want > ESTIMATE_MAX) { clamped++; onProgress({ label, status: 'estimate-clamped', wanted: want, stored: ESTIMATE_MAX }) }
+      }
       // Behavior fix (2026-09-16): a FUTURE event used to be imported as completed + with a backfilled focus
       // record — importing next week's schedule fabricated "done + accounted" history for work not yet done.
       // Future events now only create the task; completion and the ledger row are left to the real day.
@@ -1806,7 +1832,7 @@ async function importEvents (events, { onProgress = () => {} } = {}) {
       onProgress({ label, status: 'failed', error: String(er.message || er) })
     }
   }
-  return { created, skipped, failed, total: events.length, hasRecord }
+  return { created, skipped, clamped, failed, total: events.length, hasRecord }
 }
 
 const eventKey = (e) => evu.eventKey(e, dayStartOf, parseDate)

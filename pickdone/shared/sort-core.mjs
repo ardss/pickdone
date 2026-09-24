@@ -29,8 +29,12 @@ export function reorderScale (n, top = 9999) {
 }
 
 /**
- * Midpoint/neighbor sort for moving one row within an ordered list (`sorts`: taskSort values
- * ascending, `idx`: the mover's current index, `refIdx`: reference index for before|after).
+ * Midpoint/neighbor sort for moving one row within an ordered list. B2 (2026-09-24) direction
+ * fix: `sorts` is in APP DISPLAY order — taskSort DESCENDING, exactly the order the App's
+ * sortMode.js custom mode renders (`b.taskSort - a.taskSort`). `idx` is the mover's display
+ * index, `refIdx` the reference index for before|after (also display order: 'before' = above
+ * on screen). Previously the contract said "ascending", so the CLI's `sort top` produced
+ * min-100 — the visually BOTTOM row (P1 cross-end inversion, daily 0924).
  * Returns { sort } with the new score, or { edge: true } when an up/down move would leave the
  * list (caller decides the user-facing error). Same ±100 fixed-margin convention the CLI
  * sortTask used inline — precision degrades only when no beyond-row exists, order never flips.
@@ -38,23 +42,25 @@ export function reorderScale (n, top = 9999) {
 export function moveWithin (sorts, idx, pos, refIdx = -1) {
   const at = i => (sorts[i] == null ? 0 : sorts[i])
   const mid = (a, b) => Math.fround((a + b) / 2)
-  if (pos === 'top') return { sort: sorts.length ? at(0) - 100 : -100 }
-  if (pos === 'bottom') return { sort: sorts.length ? at(sorts.length - 1) + 100 : 100 }
+  // Display order is descending, so "above on screen" = a LARGER taskSort: top over-flows +100
+  // past the current max, bottom under-flows -100 past the current min.
+  if (pos === 'top') return { sort: sorts.length ? at(0) + 100 : 100 }
+  if (pos === 'bottom') return { sort: sorts.length ? at(sorts.length - 1) - 100 : -100 }
   if (pos === 'up' || pos === 'down') {
     const ni = pos === 'up' ? idx - 1 : idx + 1
     if (ni < 0 || ni >= sorts.length) return { edge: true }
     const bi = pos === 'up' ? idx - 2 : idx + 2
     const beyond = bi >= 0 && bi < sorts.length
-    return { sort: beyond ? mid(at(ni), at(bi)) : at(ni) + (pos === 'up' ? -100 : 100) }
+    return { sort: beyond ? mid(at(ni), at(bi)) : at(ni) + (pos === 'up' ? 100 : -100) }
   }
   if (pos === 'before' || pos === 'after') {
     if (refIdx < 0 || refIdx >= sorts.length) return { edge: true }
     if (pos === 'before') {
       const bi = refIdx - 1
-      return { sort: bi >= 0 ? mid(at(bi), at(refIdx)) : at(refIdx) - 100 }
+      return { sort: bi >= 0 ? mid(at(bi), at(refIdx)) : at(refIdx) + 100 }
     }
     const bi = refIdx + 1
-    return { sort: bi < sorts.length ? mid(at(refIdx), at(bi)) : at(refIdx) + 100 }
+    return { sort: bi < sorts.length ? mid(at(refIdx), at(bi)) : at(refIdx) - 100 }
   }
   return { edge: true }
 }

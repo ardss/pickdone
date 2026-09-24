@@ -238,6 +238,7 @@ export default {
       prioHigh: '高',
       prioLabel: '优先级 {p}',
       dragHint: '拖动可调整象限',
+      kbdHint: 'Ctrl+1~4 可移动到对应象限',
       emptyDrop: '拖任务到这里'
     },
     Insights: {

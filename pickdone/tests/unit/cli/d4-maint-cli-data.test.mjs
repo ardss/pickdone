@@ -53,7 +53,10 @@ test('settingsSet merges the single key onto a FRESH doc (concurrent App write s
   // its fresh re-read just before setMeta)
   lib.setSettingsRaceHookForTests(() => {
     const concurrent = readSettingsDoc()
-    concurrent.appConcurrencyKey = 'written-by-app'
+    // B15 (2026-09-24): the write-back is a manifest whitelist rebuild — a concurrent App write can
+    // only survive through a legit settings key (the old ad-hoc appConcurrencyKey was exactly the
+    // dirty-key class B15 strips, so the fixture moved to a manifest key).
+    concurrent.searchComplete = 'written-by-app'
     concurrent._savedAt = 1700000000001
     db.call('setMeta', ['db.settingsState', JSON.stringify(concurrent)])
   })
@@ -62,7 +65,7 @@ test('settingsSet merges the single key onto a FRESH doc (concurrent App write s
   assert.equal(r.value, '7')
   const final = readSettingsDoc()
   assert.equal(final.maxRepeat, '7', 'CLI key must land')
-  assert.equal(final.appConcurrencyKey, 'written-by-app', 'concurrent App change must NOT be clobbered by the stale first read')
+  assert.equal(final.searchComplete, 'written-by-app', 'concurrent App change must NOT be clobbered by the stale first read')
   lib.setSettingsRaceHookForTests(null)
 })
 

@@ -78,12 +78,13 @@ test('F-B2: reorderScale reproduces the 9999→-9999 linear rewrite exactly', as
   const expected = [0, 1, 2, 3].map(i => Math.fround(9999 - i * (19998 / 4)))
   assert.deepEqual(scores, expected)
   assert.ok(scores[0] > scores[3], 'descending order')
-  // moveWithin: midpoint with a beyond row, ±100 margin without
+  // moveWithin: midpoint with a beyond row, ±100 margin without. B2 (2026-09-24): `sorts` is in APP
+  // DISPLAY order (taskSort DESCENDING) — "above on screen" is a larger score.
   assert.equal(moveWithin([300, 200, 100], 2, 'up').sort, Math.fround((200 + 300) / 2))
   assert.equal(moveWithin([200, 100], 0, 'up').edge, true, 'up from the top is an edge')
-  assert.equal(moveWithin([100, 200], 0, 'down').sort, 300, 'no beyond row → neighbor+100')
-  assert.equal(moveWithin([500, 400, 300], 2, 'before', 1).sort, Math.fround((400 + 500) / 2), 'midpoint when a beyond row exists')
-  assert.equal(moveWithin([500, 400, 300], 2, 'before', 0).sort, 400, 'no beyond row → ref-100 margin')
+  assert.equal(moveWithin([200, 100], 0, 'down').sort, 0, 'no beyond row → neighbor-100 (below the display bottom)')
+  assert.equal(moveWithin([500, 400, 300], 2, 'before', 1).sort, Math.fround((500 + 400) / 2), 'midpoint when a beyond row exists')
+  assert.equal(moveWithin([500, 400, 300], 2, 'before', 0).sort, 600, 'no beyond row → ref+100 margin (above the display top)')
 })
 
 test('F-B2: CLI sortTask lands midpoints between rows and keeps day order correct', () => {

@@ -28,6 +28,11 @@ const os = require('node:os')
 const log = require('electron-log')
 const { createEngine } = require('../../shared/sync-core/engine.mjs')
 const { SYNC_SCHEMA_VERSION } = require('../../shared/sync-core/merge.mjs')
+// B3 (daily 2026-09-24): the habits-blob field set is the SHARED family contract
+// (shared/settings-families.mjs — the same module cli/lib.js stripHabitsFamily and the
+// renderer whitelist consume). The hand-copied literal here could drift from the shared
+// set and route an applied row into the WRONG blob on fold.
+const { HABITS_BLOB_FIELDS } = require('../../shared/settings-families.mjs')
 const { generatePairingSecret, derivePairingCode } = require('../../shared/sync-core/pairing.mjs')
 const { createLanSyncNode } = require('./lan-sync/index')
 const { DEFAULT_PORT } = require('./lan-sync/transport')
@@ -579,7 +584,6 @@ function sendToRenderers (channel, msg) {
  *  but applied rows exist, the blob is now MATERIALIZED from the rows (fold = create).
  *  Returns the parsed patches per blob for the renderer hot-apply broadcasts. */
 const HABITS_BLOB_KEY = 'db.habitsState'
-const HABITS_BLOB_FIELDS = new Set(['schemaV', 'habits', 'moments', 'savedAt'])
 function foldIntoBlob (blobKey, entries) {
   if (!entries.length) return
   try {

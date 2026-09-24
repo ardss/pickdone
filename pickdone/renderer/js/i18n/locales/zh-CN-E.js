@@ -236,7 +236,9 @@ export default {
       "moveDown": "下移排序",
       "repeatLabel": "重复",
       "pomodoroInvested": "番茄投入",
-      "togglePomodoroFocus": "选中/取消番茄专注"
+      "togglePomodoroFocus": "选中/取消番茄专注",
+      "subCheckedAnnounce": "已勾选子任务：{s}",
+      "subUncheckedAnnounce": "已取消勾选子任务：{s}"
 
     },
     "TodoGroups": {
@@ -356,7 +358,8 @@ export default {
       "overdueSince": "自 {d} 逾期未完成",
       "deckOverdue": "逾期未完成 {n} 项",
       "deckEmpty": "这一天没有任务",
-      "untitled": "（无标题）"
+      "untitled": "（无标题）",
+      "deckDayAnnounce": "已切换到 {d}"
 
     },
     "CategoryView": {
@@ -420,7 +423,8 @@ export default {
       "freqWeekdaysRequired": "按周重复至少需选择一天",
       "freqIntervalClamped": "间隔天数需在 {min} 到 {max} 之间",
       "renameTip": "点击重命名",
-      "intervalAria": "间隔天数"
+      "intervalAria": "间隔天数",
+      "renameEmpty": "习惯名不能为空"
 
     }
 

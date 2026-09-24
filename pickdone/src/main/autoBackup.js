@@ -68,15 +68,19 @@ function selectPrunes (names, o = {}) {
   return prunes
 }
 
-/** Stale atomic-write residue picker (pure, unit-testable): a crash between writeFileSync('.tmp-X') and
- *  renameSync used to leave .tmp-* files in the backup dir forever (run-auto-backup's prune filter only
- *  matches ^(auto|evt)-). An entry is stale when it starts with '.tmp-' AND its mtime is older than
+/** Stale atomic-write residue picker (pure, unit-testable): a crash between writeFileSync(tmp) and
+ *  renameSync used to leave temp files in the backup dir forever (run-auto-backup's prune filter only
+ *  matches ^(auto|evt)-). An entry is stale when it is a temp file AND its mtime is older than
  *  maxAgeMs (1h default — a concurrent in-flight write must never be swept). Caller supplies mtimes.
+ *  C7 (P2 2026-09-24): durable writes name their residue `<file>.<pid>.<ms>.dtmp` (and the legacy
+ *  fixed `<file>.dtmp` / historical `.tmp-*` spellings existed too) — the picker used to match only
+ *  the `.tmp-` prefix, so durable residue accumulated forever. /\.dtmp(\.|$)/ matches all three.
  *  @param {{name: string, mtimeMs: number}[]} entries
  *  @returns {string[]} stale temp file names */
 function selectStaleTmp (entries, { now = Date.now(), maxAgeMs = 60 * 60 * 1000 } = {}) {
   return (entries || [])
-    .filter(e => e && typeof e.name === 'string' && e.name.startsWith('.tmp-') &&
+    .filter(e => e && typeof e.name === 'string' &&
+      (e.name.startsWith('.tmp-') || /\.dtmp(\.|$)/.test(e.name)) &&
       Number.isFinite(e.mtimeMs) && now - e.mtimeMs > maxAgeMs)
     .map(e => e.name)
 }

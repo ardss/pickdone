@@ -237,6 +237,7 @@ export default {
       prioHigh: 'High',
       prioLabel: 'Priority {p}',
       dragHint: 'Drag to change quadrant',
+      kbdHint: 'Ctrl+1..4 moves to a quadrant',
       emptyDrop: 'Drop tasks here'
     },
     Insights: {

@@ -13,8 +13,11 @@
              :class="{ dragging: dragId===t.taskId }"
              @dragstart="dragStart(t,$event)" @dragend="dragId=null"
              @click="openEdit(t)" @keydown.enter.prevent="openEdit(t)"
+             @keydown.ctrl.1.prevent="kbdQuadrant(t, 0)" @keydown.ctrl.2.prevent="kbdQuadrant(t, 1)"
+             @keydown.ctrl.3.prevent="kbdQuadrant(t, 2)" @keydown.ctrl.4.prevent="kbdQuadrant(t, 3)"
              @contextmenu="taskContextMenu(t, $event)"
-             tabindex="0" role="button" :title="taskTip(t)" :aria-label="$t('statsA.MatrixGrid.taskPrefix')+(t.taskContent||$t('statsA.MatrixGrid.noTitle'))">
+             tabindex="0" role="button" :title="taskTip(t)" :aria-label="$t('statsA.MatrixGrid.taskPrefix')+(t.taskContent||$t('statsA.MatrixGrid.noTitle'))"
+             aria-keyshortcuts="Control+1 Control+2 Control+3 Control+4">
           <span class="td-check" :class="{on: isComplete(t)}" :style="isComplete(t) ? { background: chkColor(t), borderColor: chkColor(t) } : {}" role="checkbox"
                 :aria-checked="isComplete(t) ? 'true' : 'false'" :aria-label="$t('statsJ.TodoItem.markDone')"
                 tabindex="0" @click.stop="completeTask(t)" @keydown.enter.prevent.stop="completeTask(t)">
@@ -129,6 +132,18 @@ export default {
       this.overKey = null
       const t = this.tasks.find(x => x.taskId === id)
       if (!t || ((t.important || 0) === q.important && (t.urgent || 0) === q.urgent)) return
+      this.moveQuadrant(t, q)
+    },
+    /* [maint-0924 A3] keyboard path (WCAG 2.1.1): Ctrl+1..4 = the four quadrants, same moveWithUndo
+     * exit and priority ledger as the drag path — the matrix had zero keyboard move before */
+    kbdQuadrant (t, qi) {
+      const q = QUADRANTS[qi]
+      if (!q) return
+      if ((t.important || 0) === q.important && (t.urgent || 0) === q.urgent) return
+      this.moveQuadrant(t, q)
+    },
+    moveQuadrant (t, q) {
+      const id = t.taskId
       // Drag-to-move contract: any field rewrite goes through moveWithUndo (undoable toast), never silent.
       // Snapshot the three affected fields (important/urgent/priority) so the revert restores the exact prior quadrant mapping.
       const snap = moveSnapshot(t) // U-21: snapshot contract extracted (unit-tested)
@@ -146,6 +161,7 @@ export default {
       const prio = ['', this.$t('statsA.MatrixGrid.prioLow'), this.$t('statsA.MatrixGrid.prioMid'), this.$t('statsA.MatrixGrid.prioHigh')][(t.priority || 0)]
       if ((t.priority || 0) > 0) parts.push(this.$t('statsA.MatrixGrid.prioLabel', { p: prio }))
       parts.push(this.$t('statsA.MatrixGrid.dragHint'))
+      parts.push(this.$t('statsA.MatrixGrid.kbdHint')) // [maint-0924 A3]
       return parts.join(' · ')
     },
     dueLabel (t) {

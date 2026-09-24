@@ -54,6 +54,11 @@ function load () {
  *  todoBackup/settings); re-exported here for the existing habits-specific importers. */
 export { isAuxWindow } from '../utils/auxWindow.js'
 import { isAuxWindow } from '../utils/auxWindow.js'
+// B7 (daily 2026-09-24): reuse dbMirror's read sentinel — same fix family as F-C4 on the
+// settings side. The old inline getMeta + silent catch collapsed "read FAILED" into "no
+// mirror": a transient getMeta rejection at startup left the stale LS blob in place and the
+// NEXT persist() drowned the (newer) durable DB copy under it.
+import { restoreFromDb, DB_MIRROR_ERROR } from '../utils/dbMirror.js'
 // F-C7 (maint/dw wave3): local day-key from the shared module — was hand-rolled twice below
 import { localDayKey } from '../../../shared/date-key.mjs'
 
@@ -271,23 +276,35 @@ export default {
     }
   },
   actions: {
-    /** Restore from the main DB at startup: replaceAll already does last-write-wins by savedAt (the DB archive is the fallback when LS is cleared) */
+    /** Restore from the main DB at startup: replaceAll already does last-write-wins by savedAt (the DB archive is the fallback when LS is cleared)
+     *  B7 (daily 2026-09-24): a DB READ ERROR is not "no mirror" — restoreFromDb surfaces the
+     *  DB_MIRROR_ERROR sentinel and this cycle warns and SKIPS both the restore and any later
+     *  write-back, so a transient getMeta failure can no longer leave stale LS state that the
+     *  next persist() would mirror over the newer durable DB copy (F-C4 parity, settings side). */
     async initFromDb ({ commit }) {
       try {
         if (!window.todoAPI?.dbCall) return
-        let raw = await window.todoAPI.dbCall('getMeta', META_KEY)
-        let legacy = false
-        if (!raw) {
-          // One-time migration source: pre-rename installs persisted under the bare 'habitsState' key
-          raw = await window.todoAPI.dbCall('getMeta', LEGACY_META_KEY)
-          legacy = !!raw
+        let blob = await restoreFromDb(META_KEY)
+        if (blob === DB_MIRROR_ERROR) {
+          console.warn('[habits] initFromDb: DB mirror read failed this startup — skipping the restore (and the write-back) so the DB copy is preserved')
+          return
         }
-        if (raw) {
-          commit('replaceAll', JSON.parse(raw))
+        let legacy = false
+        if (!blob) {
+          // One-time migration source: pre-rename installs persisted under the bare 'habitsState' key
+          blob = await restoreFromDb(LEGACY_META_KEY)
+          if (blob === DB_MIRROR_ERROR) {
+            console.warn('[habits] initFromDb: legacy DB mirror read failed this startup — skipping the restore so the DB copy is preserved')
+            return
+          }
+          legacy = !!blob
+        }
+        if (blob) {
+          commit('replaceAll', blob)
           if (legacy) {
             // Copy the legacy blob to the db.-prefixed key so the sync bridge picks it up; the legacy
             // row is kept (read path no longer depends on it after this write succeeds)
-            await commitCommand("meta", "put", [META_KEY, raw])
+            await commitCommand("meta", "put", [META_KEY, JSON.stringify(blob)])
           }
         }
       } catch { /* empty environment */ }

@@ -136,7 +136,7 @@ test('[5] TodoItem sort writes are guarded by non-custom sort mode (drag + keybo
   const writeSort = src.slice(src.indexOf('_writeSort (list)'), src.indexOf('keyboardMove (dir)'))
   assert.ok(writeSort.includes("normalizeSortMode(this.$store.state.settings.sortMode) !== 'custom'"),
     '_writeSort checks the sort mode (covers onDrop drag path)')
-  assert.ok(writeSort.includes('pinIgnoredSort'), 'blocked writes announce honestly (same copy as pinEvent)')
+  assert.ok(writeSort.includes('sortIgnored'), 'blocked writes announce honestly (dedicated reorder copy, [maint-0924 A4])')
   assert.ok(writeSort.includes('return false'), 'the guard reports the block to callers')
   const kb = src.slice(src.indexOf('keyboardMove (dir)'), src.indexOf('onCheckClick (e)'))
   assert.ok(/if \(!this\._writeSort\(list\)\) return/.test(kb),

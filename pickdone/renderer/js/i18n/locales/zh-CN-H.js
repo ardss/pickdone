@@ -105,6 +105,7 @@ export default {
       redoEmpty: '没有可重做的操作',
       deleteNoSelection: '请先选中一个任务',
       pinIgnoredSort: '当前排序不是自定义排序，置顶/取消置顶不生效',
+      sortIgnored: '当前排序不是自定义排序，排序调整不生效',
       pinned: '已置顶：{name}',
       unpinned: '已取消置顶：{name}',
       actionFailedMsg: '操作失败：'
@@ -122,6 +123,10 @@ export default {
     TodoGroups: {
       empty: '暂无待办',
       toggleGroup: '展开或收起分组 {label}'
+    },
+    tomato: {
+      focusToRestAnnounce: '专注完成，休息 {n} 分钟',
+      restOverAnnounce: '休息结束，可以开始下一个专注'
     }
   }
 }

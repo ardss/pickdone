@@ -9,6 +9,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import * as crossDayMove from '../../../renderer/js/utils/crossDayMove.js'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const read = p => fs.readFileSync(path.join(ROOT, p), 'utf8')
@@ -31,7 +32,9 @@ const at = (n, hours) => n * DAY + hours * 3600000
 /* ---------- #4 TodoItem: cross-day drag preserves time-of-day ---------- */
 
 test('TodoItem crossDayMovePatch: time-of-day survives the move, day markers follow', () => {
-  const { crossDayMovePatch } = pureFns('renderer/js/components/TodoItem.vue', ['crossDayMovePatch'])
+  // [maint-0924 A1] the builder moved to utils/crossDayMove.js (shared with DayDeck.onDrop and
+  // TodoBoxView.batchToday); the d5 contract is re-anchored on the shared module
+  const { crossDayMovePatch } = crossDayMove
   const newDay = at(10, 0)
   const oldDay = at(9, 0)
   // todoTime 14:30 and reminder 08:00 anchored to the old day -> shift to the new day, same clock time
@@ -49,8 +52,8 @@ test('TodoItem: cross-day drop uses the patch builder and reverts the touched fi
   const src = read('renderer/js/components/TodoItem.vue')
   assert.match(src, /crossDayMovePatch\(dragged, newDay, startOf\)/, 'onDrop must build the patch via crossDayMovePatch')
   assert.ok(!/patch: \{ dayStart: newDay, todoTime: newDay \}/.test(src), 'old todoTime=newDay wipe must stay deleted')
-  assert.match(src, /if \('todoTime' in patch\) revertPatch\.todoTime = dragged\.todoTime/, 'revert restores only fields the patch touched')
-  assert.match(src, /if \('reminderTime' in patch\) revertPatch\.reminderTime = dragged\.reminderTime/, 'revert restores reminderTime when shifted')
+  assert.match(src, /crossDayRevertPatch\(dragged, patch\)/, 'revert restores only fields the patch touched (shared builder)')
+  assert.match(src, /from '\.\.\/utils\/crossDayMove\.js'/, 'TodoItem imports the shared cross-day rules')
 })
 
 /* ---------- #14 DayDeck: header count includes the overdue bucket ---------- */

@@ -463,8 +463,11 @@ export default {
     },
     async setDeadline () {
       try {
-        const { value } = await this.$prompt(this.$t('statsB.ProjectView.deadlinePrompt'), this.$t('statsB.ProjectView.deadlineTitle'), {
-          inputValue: this.deadlineTs ? dayjs(this.deadlineTs).format(FMT.date) : '', inputPattern: /\S/, inputErrorMessage: this.$t('statsB.ProjectView.dateRequired')
+        const { value } = await this.$prompt(this.$t('statsB.ProjectView.deadlinePrompt') + ' ' + this.$t('statsB.ProjectView.dateFmtHint'), this.$t('statsB.ProjectView.deadlineTitle'), {
+          inputValue: this.deadlineTs ? dayjs(this.deadlineTs).format(FMT.date) : '', inputPattern: /\S/, inputErrorMessage: this.$t('statsB.ProjectView.dateRequired'),
+          // [maint-0924 A10] live validation under the input (ElMessageBox prompt inputValidator):
+          // every keystroke reports unparseable dates instead of failing only after OK
+          inputValidator: v => (parseMilestoneDate(v) ? true : this.$t('statsB.ProjectView.badDate'))
         })
         const date = parseMilestoneDate(value)
         if (!date) return this.$message.warning(this.$t('statsB.ProjectView.badDate'))
@@ -490,11 +493,16 @@ export default {
     async recomplete () {
       const ts = this.todayTs
       const { n, snap }: any = await rescheduleExpired(this.$store.dispatch, this.inCat, ts)
-      if (n) batchMoveWithUndo(this, {
-        label: this.$t('statsB.ProjectView.rescheduled'),
-        snap,
-        revertOf: r => this.$store.dispatch('todo/updateTodoFields', { taskId: r.id, patch: { dayStart: r.dayStart, todoTime: r.todoTime } })
-      })
+      if (n) {
+        batchMoveWithUndo(this, {
+          label: this.$t('statsB.ProjectView.rescheduled'),
+          snap,
+          revertOf: r => this.$store.dispatch('todo/updateTodoFields', { taskId: r.id, patch: { dayStart: r.dayStart, todoTime: r.todoTime } })
+        })
+      } else {
+        // [maint-0924 A13] n=0 was silent — say there is nothing to reschedule
+        this.$message.info(this.$t('statsB.ProjectView.noOverdue'))
+      }
     }
   },
 
