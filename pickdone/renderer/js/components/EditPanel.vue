@@ -460,7 +460,7 @@ export default {
         if (!row && id != null) {
           // rows don't carry data-id yet: fall back to locating the row element by its mounted component
           const rows = document.querySelectorAll('.td-item')
-          for (const r of rows) { if (r.__vue__ && r.__vue__.todo && r.__vue__.todo.taskId === id) { row = r; break } }
+          for (const r of rows) { if ((r as any).__vue__ && (r as any).__vue__.todo && (r as any).__vue__.todo.taskId === id) { row = r; break } }
         }
         if (row) { (row as HTMLElement).focus(); return }
         const list = document.querySelector<HTMLElement>('.main-scroll')
