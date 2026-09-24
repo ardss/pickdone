@@ -866,8 +866,12 @@ const OPS = {
     const r = db.prepare('UPDATE plan_chips SET day=?, updatedAt=? WHERE taskId=? AND day=? AND deleted=0').run(String(toDay), Date.now(), String(taskId), String(fromDay))
     return r.changes
   },
-  planDeleteTask: taskId => { db.prepare('UPDATE plan_chips SET deleted=1, deletedAt=?, updatedAt=? WHERE taskId=?').run(Date.now(), Date.now(), String(taskId)); return true },
-  planDeleteTaskDay: ({ taskId, day }) => { db.prepare('UPDATE plan_chips SET deleted=1, deletedAt=?, updatedAt=? WHERE taskId=? AND day=?').run(Date.now(), Date.now(), String(taskId), String(day)); return true },
+  // P2 idempotency (2026-09-25): `AND deleted=0` mirrors filterDelete/planRemoveIds — a repeat
+  // delete of an already-deleted task used to re-stamp deletedAt/updatedAt with a fresh now(),
+  // and every such call minted ANOTHER tombstone-pointer oplog entry (db-oplog's planDeleteTask
+  // case has no deleted filter), flooding the sender's log on repeated calls. Now a no-op.
+  planDeleteTask: taskId => { const r = db.prepare('UPDATE plan_chips SET deleted=1, deletedAt=?, updatedAt=? WHERE taskId=? AND deleted=0').run(Date.now(), Date.now(), String(taskId)); return r.changes > 0 },
+  planDeleteTaskDay: ({ taskId, day }) => { const r = db.prepare('UPDATE plan_chips SET deleted=1, deletedAt=?, updatedAt=? WHERE taskId=? AND day=? AND deleted=0').run(Date.now(), Date.now(), String(taskId), String(day)); return r.changes > 0 },
   planPrune: ({ keepDays }) => {
     const keep = Array.isArray(keepDays) ? keepDays.filter(d => /^\d{4}-\d{2}-\d{2}$/.test(String(d))) : []
     if (!keep.length) return 0
@@ -1094,7 +1098,7 @@ function call (op, params) {
 // Do not guess with regexes — write ops like hardDeleteMany/filterDelete/clearCategories were once missed, leaving cross-window data stale.
 
 const WRITE_OPS = new Set([
-  'upsert', 'upsertMany', 'commitSyncBatch', 'bumpSnow', 'hardDelete', 'hardDeleteMany', 'setMeta', 'setMetaMany', 'deleteMeta',
+  'upsert', 'upsertMany', 'commitSyncBatch', 'bumpSnow', 'hardDelete', 'hardDeleteMany', 'setMeta', 'deleteMeta',
   'purgeRecycleBin', 'purgeSeedTodos', 'upsertCategory',
   'filterUpsert', 'filterDelete',
   'planAddMany', 'planUpdateChip', 'planRemoveIds', 'planMoveTask',

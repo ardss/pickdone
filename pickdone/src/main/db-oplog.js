@@ -79,10 +79,14 @@ module.exports = Object.assign(({ getDb, log }) => {
       case 'planMoveTask': return arr('plan', getDb().prepare('SELECT id FROM plan_chips WHERE taskId = ? AND day = ?')
         .all(String(params && params.taskId), String(params && params.toDay)).map(r => r.id))
       // planDeleteTask is called with a BARE taskId string (unlike planDeleteTaskDay's object);
-      // accept both shapes.
-      case 'planDeleteTask': return arr('plan', getDb().prepare('SELECT id FROM plan_chips WHERE taskId = ?')
+      // accept both shapes. P2 idempotency (2026-09-25): a no-op delete (op returned false —
+      // the chips were already deleted, see the `AND deleted=0` guard in db.js) captures NOTHING;
+      // previously every repeat delete re-logged the same tombstone pointers and flooded the
+      // sender's oplog. The SELECTs stay unfiltered by `deleted` on purpose: capture runs POST-op
+      // and a REAL first delete must still see the (now deleted=1) chip ids.
+      case 'planDeleteTask': return result === false ? [] : arr('plan', getDb().prepare('SELECT id FROM plan_chips WHERE taskId = ?')
         .all(String((params && typeof params === 'object') ? params.taskId : params)).map(r => r.id))
-      case 'planDeleteTaskDay': return arr('plan', getDb().prepare('SELECT id FROM plan_chips WHERE taskId = ? AND day = ?')
+      case 'planDeleteTaskDay': return result === false ? [] : arr('plan', getDb().prepare('SELECT id FROM plan_chips WHERE taskId = ? AND day = ?')
         .all(String(params && params.taskId), String(params && params.day)).map(r => r.id))
       case 'planPrune': return [one('plan', '*gc*')]
       case 'setMeta': return [one('meta', Array.isArray(params) ? params[0] : params)]
