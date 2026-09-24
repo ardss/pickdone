@@ -138,6 +138,36 @@ export const SETTING_ENUMS = {
     { v: 'small', l: 'statsE.SettingsModal.sizeSmall' },
     { v: 'medium', l: 'statsH.SettingsModal.fontMedium' },
     { v: 'large', l: 'statsH.SettingsModal.fontLarge' }
+  ],
+  // B6 (daily 2026-09-24): the five keys below existed only in the shared manifest enum
+  // (shared/settings-manifest.mjs) — SETTING_ENUMS (the schema the settings page and the
+  // sanitize path treat as the legal-value list) was missing them, so inbound patches carrying
+  // a junk weekStartDay/calendarBackground/calendarFontColor/todoBoxSortMethod/todoBoxSortOrder
+  // passed sanitizeSettingsPatch unvalidated. Values are pinned to the manifest's enum lists by
+  // unit test (single source for the VALUE SET is the manifest; this table only adds i18n labels).
+  // Labels reuse existing i18n keys where one exists; the calendarBackground/calendarFontColor
+  // options have no shipped label keys yet and fall back to their raw value via $t passthrough.
+  weekStartDay: [
+    { v: 'mon', l: 'statsE.SettingsModal.weekStartMonday' },
+    { v: 'sun', l: 'statsE.SettingsModal.weekStartSunday' }
+  ],
+  calendarBackground: [
+    { v: 'list', l: 'list' },
+    { v: 'theme', l: 'theme' },
+    { v: 'system', l: 'statsE.SettingsModal.themeFollowSystem' }
+  ],
+  calendarFontColor: [
+    { v: 'white', l: 'white' },
+    { v: 'black', l: 'black' }
+  ],
+  todoBoxSortMethod: [
+    { v: 'created', l: 'statsE.TodoBoxView.sortByCreated' },
+    { v: 'due', l: 'statsE.TodoBoxView.sortByDueDate' },
+    { v: 'difficulty', l: 'statsE.TodoBoxView.sortByDifficulty' }
+  ],
+  todoBoxSortOrder: [
+    { v: 'desc', l: 'statsE.TodoBoxView.sortDescending' },
+    { v: 'asc', l: 'statsE.TodoBoxView.sortAscending' }
   ]
 }
 
@@ -177,6 +207,13 @@ export function sanitizeSettingsPatch (patch, current) {
       continue
     }
     if (typeof def !== typeof v) continue // type-mismatched junk (e.g. object where boolean declared)
+    // B6 (daily 2026-09-24): enum membership check — a key with a legal-value list in the SHARED
+    // manifest (SETTINGS_MANIFEST.enum, the single source the value sets are pinned against)
+    // only accepts members; anything else (e.g. a peer writing weekStartDay:'monday' or
+    // appLocale:'fr-FR') used to land verbatim and silently break the consuming UI, which
+    // falls back to defaults on an unknown value. Dropped, not clamped: enums have no order.
+    const legalEnums = SETTINGS_MANIFEST.enum[k]
+    if (legalEnums && !legalEnums.includes(v)) continue
     // U3 (2026-09-20): a partial inbound shortcut map must not reset the other bindings — the merge
     // base is the CURRENT LIVE STATE (passed in by the caller), not DEFAULT_SETTINGS: merging over
     // defaults wiped every local customization and persisted the wipe to config.json. The sanitizer

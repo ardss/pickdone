@@ -184,7 +184,10 @@ test('F-C3: tomato/patch mutation clamps the ledger keys as the final hop (other
   tomatoMod.default.mutations.patch(s, { tomatoTime: 9999, restTime: 0, whiteNoiseVolume: 2 })
   assert.equal(s.tomatoTime, 180, 'running countdown cannot be driven to 9999 minutes')
   assert.equal(s.restTime, 1)
-  assert.equal(s.whiteNoiseVolume, 2, 'non-ledger keys are NOT clamped by this guard (single responsibility)')
+  // B5 (daily 2026-09-24): whiteNoiseVolume gained a manifest range ({min:0,max:1}, the UI
+  // volume slider domain), so it is now a bounded setting and IS clamped by the shared table
+  // like every other ranged key — the old "not clamped here" expectation was the exact gap B5 closes.
+  assert.equal(s.whiteNoiseVolume, 1, 'whiteNoiseVolume clamps to the 0-1 slider domain')
 })
 
 /* ---------------- F-C4: restoreFromDb distinguishes error from empty ---------------- */
