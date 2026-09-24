@@ -236,7 +236,9 @@ export default {
       "moveDown": "Move down",
       "repeatLabel": "Repeat",
       "pomodoroInvested": "Pomodoro invested",
-      "togglePomodoroFocus": "Toggle pomodoro focus"
+      "togglePomodoroFocus": "Toggle pomodoro focus",
+      "subCheckedAnnounce": "Subtask checked: {s}",
+      "subUncheckedAnnounce": "Subtask unchecked: {s}"
 
     },
     "TodoGroups": {
@@ -356,7 +358,8 @@ export default {
       "overdueSince": "Overdue since {d}",
       "deckOverdue": "{n} overdue incomplete",
       "deckEmpty": "No tasks on this day",
-      "untitled": "(untitled)"
+      "untitled": "(untitled)",
+      "deckDayAnnounce": "Switched to {d}"
 
     },
     "CategoryView": {
@@ -420,7 +423,8 @@ export default {
       "freqWeekdaysRequired": "Pick at least one weekday for the weekly schedule",
       "freqIntervalClamped": "Interval must be between {min} and {max} days",
       "renameTip": "Click to rename",
-      "intervalAria": "Interval days"
+      "intervalAria": "Interval days",
+      "renameEmpty": "Habit name cannot be empty"
 
     }
 

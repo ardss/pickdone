@@ -105,6 +105,7 @@ export default {
       redoEmpty: 'Nothing to redo',
       deleteNoSelection: 'Select a task first',
       pinIgnoredSort: 'Current sort is not custom — pin/unpin has no effect',
+      sortIgnored: 'Current sort is not custom — reordering has no effect',
       pinned: 'Pinned: {name}',
       unpinned: 'Unpinned: {name}',
       actionFailedMsg: 'Action failed: '
@@ -122,6 +123,10 @@ export default {
     TodoGroups: {
       empty: 'No todos',
       toggleGroup: 'Expand or collapse group {label}'
+    },
+    tomato: {
+      focusToRestAnnounce: 'Focus complete — rest for {n} minutes',
+      restOverAnnounce: 'Break over — ready for the next focus'
     }
   }
 }
