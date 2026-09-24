@@ -320,7 +320,10 @@ export default {
       if (ui.showSettingsModal || ui.showRepeatModalFor || ui.showFeedbackModal ||
           ui.showRepeatDeleteConfirm || ui.accountTaskId || ui.tomatoAbandonVisible || ui.tomatoFocusRecordVisible) return
       const st = this.$store.state.ui.rightSidebarTodoEdit
-      if (st && st.visible) this.$store.dispatch('ui/closeEditCleanup') // D6-F1: empty inline-created task is cleaned up
+      if (st && st.visible) {
+        this.$store.dispatch('ui/closeEditCleanup') // D6-F1: empty inline-created task is cleaned up
+        this.refocusRow(st.taskId) // [maint-0924 A7] Esc close must not drop focus to <body> (same rule as collapse())
+      }
     }
     window.addEventListener('keydown', this._onKeydown)
     // Disable the browser's native spell check (English correction squiggles interfere with typing over Chinese content)
@@ -443,12 +446,21 @@ export default {
     collapse () {
       if (!this.autoSave) this.queueSave({})
       this.$store.dispatch('ui/collapseEditCleanup')
-      // Hand focus back to the task row being edited (keyboard users would otherwise drop to <body>); rows don't carry data-id yet, so fall back to the scroll container (focusable via tabindex=-1)
+      // Hand focus back to the task row being edited (keyboard users would otherwise drop to <body>)
+      this.refocusRow(this.e && this.e.taskId)
+    },
+    /** [maint-0924 A7] focus-return shared by collapse() and the Esc-close path: focus the edited
+     * task row, falling back to the scroll container (focusable via tabindex=-1) */
+    refocusRow (id) {
       this.$nextTick(() => {
-        const id = this.e && this.e.taskId
         let row = null
         if (id != null) {
-          row = document.querySelector('.td-item[data-id="' + id + '"], .td-item[data-task-id="' + id + '"]')
+          row = document.querySelector('.td-item[data-id="' + id + '"], .td-item[data-task-id="' + id + '"], .td-item[data-taskid="' + id + '"]')
+        }
+        if (!row && id != null) {
+          // rows don't carry data-id yet: fall back to locating the row element by its mounted component
+          const rows = document.querySelectorAll('.td-item')
+          for (const r of rows) { if (r.__vue__ && r.__vue__.todo && r.__vue__.todo.taskId === id) { row = r; break } }
         }
         if (row) { (row as HTMLElement).focus(); return }
         const list = document.querySelector<HTMLElement>('.main-scroll')
