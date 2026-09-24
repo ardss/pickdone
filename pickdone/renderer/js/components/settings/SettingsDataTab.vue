@@ -31,7 +31,7 @@
       <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.backUpNowLabel') }}</span>
         <div class="form-item__control">
           <button class="mini" @click="runAutoBackupNow">{{ $t('statsE.SettingsModal.autoBackUpNowBtn') }}</button>
-          <span class="tip">{{ autoBackupStatusLine }} · {{ $t('statsH.SettingsModal.backupRetentionTip') }}</span>
+          <span class="tip">{{ autoBackupStatusLine + eventBackupFailSuffix }} · {{ $t('statsH.SettingsModal.backupRetentionTip') }}</span>
         </div></div>
     </div>
     <div class="form">
@@ -103,6 +103,8 @@ export default {
       autoBackupLastAt: 0,
       autoBackupLastFailAt: 0,
       autoBackupLastError: '',
+      eventBackupLastFailAt: 0,
+      eventBackupLastError: '',
       backupDirShown: '',
       autoBackupFiles: [] as any,
       autoBackupPick: ''
@@ -113,6 +115,13 @@ export default {
     backupDirDisplay () { return this.backupDirShown || this.$t('statsE.SettingsModal.loadingPlaceholder') },
     // Honest backup status: a recent failure outranks the "never ran" fallback so a persistently
     // failing backup (unwritable dir / offline disk) is not mislabeled as "not run yet"
+    // F3 (dw wave6 adversarial round): event-snapshot (pre-purge) failures were stamped into
+    // runtimeState by writeEventBackupCore but rendered NOWHERE — the lastBackupFailPrefix channel
+    // only read autoBackupLast*. Surface the last failed evt snapshot through the same channel.
+    eventBackupFailSuffix () {
+      if (!this.eventBackupLastFailAt) return ''
+      return ' · ' + this.$t('statsH.SettingsModal.lastBackupFailPrefix') + (this.eventBackupLastError || this.$t('statsH.SettingsModal.backupFailed')) + ' (evt ' + this.dfmt(this.eventBackupLastFailAt) + ')'
+    },
     autoBackupStatusLine () {
       if (this.autoBackupLastFailAt && this.autoBackupLastFailAt >= this.autoBackupLastAt) {
         return this.$t('statsH.SettingsModal.lastBackupFailPrefix') + (this.autoBackupLastError || this.$t('statsH.SettingsModal.backupFailed')) + ' (' + this.dfmt(this.autoBackupLastFailAt) + ')'
@@ -194,6 +203,8 @@ export default {
       this.autoBackupLastAt = rt.autoBackupLastAt || 0
       this.autoBackupLastFailAt = rt.autoBackupLastFailAt || 0
       this.autoBackupLastError = rt.autoBackupLastError || ''
+      this.eventBackupLastFailAt = rt.eventBackupLastFailAt || 0
+      this.eventBackupLastError = rt.eventBackupLastError || ''
       try {
         const def = await window.todoAPI.getDefaultBackupDir()
         this.backupDirDefault = def

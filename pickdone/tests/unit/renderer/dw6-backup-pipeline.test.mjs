@@ -84,3 +84,17 @@ test('F7/F17: buildBackupDump no longer writes the dead user/lastLoginRecord/tom
     assert.ok(keys.includes(alive), `consumed segment "${alive}" is still written`)
   }
 })
+
+test('F3 adversarial round: SettingsDataTab actually renders the event-snapshot failure channel', async () => {
+  // The F3 commit message claimed the lastBackupFailPrefix channel would surface the event keys —
+  // adversarial review verified NO .vue rendered them. Pin the render (source-level, same pattern
+  // as unit-backup-dump-structure's consumer-facing assertions).
+  const fs = await import('node:fs')
+  const src = fs.readFileSync(path.join(ROOT, 'renderer/js/components/settings/SettingsDataTab.vue'), 'utf8')
+  for (const needle of ['eventBackupLastFailAt', 'eventBackupFailSuffix', 'eventBackupLastError']) {
+    assert.ok(src.includes(needle), `SettingsDataTab must render the event-snapshot failure channel (${needle})`)
+  }
+  // the suffix rides the SAME lastBackupFailPrefix i18n channel as the auto-backup failure line
+  const tipIdx = src.indexOf('autoBackupStatusLine + eventBackupFailSuffix')
+  assert.ok(tipIdx > 0, 'the event failure suffix is composed into the visible status tip')
+})
