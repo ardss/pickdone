@@ -69,7 +69,8 @@ export default {
       notRunYet: '尚未执行',
       logsLabel: '运行日志',
       openLogsDir: '打开日志目录',
-      backupRetentionTip: '存于 App 数据目录 backups/ · 保留策略：近期24份+每日14天+每周8周+危险操作前快照'
+      backupRetentionTip: '存于 App 数据目录 backups/ · 保留策略：近期24份+每日14天+每周8周+危险操作前快照',
+      lastBackupFailPrefix: '上次备份失败：'
     },
     TomatoBar: {
       harvestTip: '今日已收成 {d} 个番茄，目标 {n} 个；点击查看专注记录',
@@ -127,6 +128,9 @@ export default {
     tomato: {
       focusToRestAnnounce: '专注完成，休息 {n} 分钟',
       restOverAnnounce: '休息结束，可以开始下一个专注'
+    },
+    update: {
+      availableToast: '发现新版本，可在 设置 → 关于 中下载'
     }
   }
 }

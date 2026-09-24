@@ -69,7 +69,8 @@ export default {
       notRunYet: 'Not run yet',
       logsLabel: 'Logs',
       openLogsDir: 'Open logs folder',
-      backupRetentionTip: 'Stored in the app data directory backups/ · Retention: last 24 copies + 14 daily + 8 weekly + snapshot before dangerous actions'
+      backupRetentionTip: 'Stored in the app data directory backups/ · Retention: last 24 copies + 14 daily + 8 weekly + snapshot before dangerous actions',
+      lastBackupFailPrefix: 'Last backup failed: '
     },
     TomatoBar: {
       harvestTip: '{d} of {n} pomodoros done today; click to view focus records',
@@ -127,6 +128,9 @@ export default {
     tomato: {
       focusToRestAnnounce: 'Focus complete — rest for {n} minutes',
       restOverAnnounce: 'Break over — ready for the next focus'
+    },
+    update: {
+      availableToast: 'A new version is available — download it in Settings → About'
     }
   }
 }
