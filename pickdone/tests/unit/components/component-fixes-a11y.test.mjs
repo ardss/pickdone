@@ -83,8 +83,16 @@ test('EditPanel: disk deletion defers to the undo-toast dismiss hook and re-chec
   // toast's onDismiss (fires after the toast actually closes on any path) behind an undone flag.
   const src = read('renderer/js/components/EditPanel.vue')
   // 5500 now appears ONLY in the no-toast fallback branch (toast unavailable -> old semantics);
-  // the primary path defers to onDismiss with no parallel timer
-  const primary = src.slice(src.indexOf('removeFile (arrName, idx)'), src.indexOf('if (!removeWithUndo(this,'))
+  // the primary path defers to onDismiss with no parallel timer.
+  // Review-hardening (round 2): indexOf ORDER assertions instead of slice+includes/regex —
+  // robust against comment rewording and whitespace changes, still pins the exact mechanism.
+  const rmStart = src.indexOf('removeFile (arrName, idx)')
+  const fallbackIdx = src.indexOf('if (!removeWithUndo(this,')
+  const fallbackTimerIdx = src.indexOf('setTimeout(deleteFromDisk, 5500)')
+  assert.ok(rmStart > -1, 'removeFile method present')
+  assert.ok(fallbackIdx > rmStart, 'fallback branch sits inside removeFile, after the primary removeWithUndo call')
+  assert.ok(fallbackTimerIdx > fallbackIdx, 'the 5500 timer exists ONLY in the fallback branch')
+  const primary = src.slice(rmStart, fallbackIdx)
   assert.ok(!primary.includes('setTimeout('), 'primary path defers disk deletion to the toast dismiss hook, not a timer')
   const guardIdx = src.indexOf('attachmentUrlPresent(row, item.url)')
   const deleteIdx = src.indexOf('deleteFile(item.url)')
@@ -95,7 +103,7 @@ test('EditPanel: disk deletion defers to the undo-toast dismiss hook and re-chec
   // review-fix (2026-09-25): removeWithUndo now reports whether the toast was shown; the
   // early-return path (no $message/Vue) falls back to the old fixed-delay deletion instead of
   // leaking the disk file forever (onDismiss would never fire there).
-  assert.match(block, /if \(!removeWithUndo\(this,[\s\S]*?setTimeout\(deleteFromDisk, 5500\)/)
+  // (fallback ordering asserted above via indexOf — no text-order-fragile regex here)
 })
 
 /* ---------------- EditPanel: pomodoro estimate stepper labels ---------------- */
