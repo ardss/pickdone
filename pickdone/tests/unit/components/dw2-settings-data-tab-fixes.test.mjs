@@ -49,6 +49,22 @@ test('F6: verifySnapshotWritten exists and only an unreadable snapshot verdicts 
   assert.match(dataTab, /if \(txt && txt === before\) return \{ ok: true, unchanged: true \}/)
   assert.match(dataTab, /return \{ ok: false \}/)
   assert.match(dataTab, /snapshotUpToDateMsg/)
+  // review 2026-09-24: unchanged is a NEUTRAL info toast — writeCriticalBackupCore swallows write
+  // errors, so identical content can be a real silent failure and must never read as success
+  assert.match(wbn[0], /\$message\.info\(this\.\$t\('statsE\.SettingsModal\.snapshotUpToDateMsg'\)\)/)
+  assert.ok(!/success\(this\.\$t\('statsE\.SettingsModal\.snapshotUpToDateMsg'\)\)/.test(wbn[0]), 'unchanged must not be a success toast')
+})
+
+test('F2 follow-up: the writeEventBackup boolean return is checked at the import/restore call sites', () => {
+  // domain 1 landed the boolean (todoBackup.js F3): pre-import / pre-restore snapshots that fail
+  // to write must warn (no rollback point) instead of carrying on silently
+  const sites = dataTab.match(/\$store\.dispatch\('todo\/writeEventBackup'[^)]*\)/g) || []
+  assert.ok(sites.length >= 3, 'three snapshot call sites present (import / auto-restore / restore)')
+  assert.match(dataTab, /if \(!\(await this\.\$store\.dispatch\('todo\/writeEventBackup', 'restore'\)\)\) this\.\$message\.warning\(this\.\$t\('statsE\.SettingsModal\.snapshotFailWarnMsg'\)\)/)
+  assert.match(dataTab, /if \(!\(await this\.\$store\.dispatch\('todo\/writeEventBackup', 'import'\)\)\) this\.\$message\.warning\(this\.\$t\('statsE\.SettingsModal\.snapshotFailWarnMsg'\)\)/)
+  for (const [name, src] of [['zh-CN', zhE], ['en-US', enE]]) {
+    assert.match(src, /"snapshotFailWarnMsg": "(?!")/, `${name} locale has snapshotFailWarnMsg`)
+  }
 })
 
 test('F6: poll window covers the store-side 5s debounce (widened past 5s)', () => {

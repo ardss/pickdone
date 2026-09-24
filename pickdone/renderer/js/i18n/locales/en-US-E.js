@@ -200,6 +200,7 @@ export default {
       "snapshotBackUpNowBtn": "Back up now",
       "snapshotStructureHint": "Same structure as standard backup files",
       "snapshotUpToDateMsg": "Snapshot is already up to date",
+      "snapshotFailWarnMsg": "Pre-operation snapshot failed to write; this operation has no rollback point",
       "restoreSnapshotLabel": "Restore from snapshot:",
       "restoreEllipsis": "Restore…",
       "clearDemoDataLabel": "Clear demo data (seed* sample tasks & pomodoro records):",

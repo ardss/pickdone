@@ -200,6 +200,7 @@ export default {
       "snapshotBackUpNowBtn": "立即备份",
       "snapshotStructureHint": "与标准备份文件结构一致",
       "snapshotUpToDateMsg": "快照已是最新内容",
+      "snapshotFailWarnMsg": "操作前快照写入失败，本次操作将没有回退点",
       "restoreSnapshotLabel": "从灾备快照恢复：",
       "restoreEllipsis": "恢复…",
       "clearDemoDataLabel": "清除演示数据（seed 开头的示例任务与番茄记录）：",
