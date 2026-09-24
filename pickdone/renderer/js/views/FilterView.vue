@@ -102,7 +102,7 @@ export default {
           if (c.dateMode === 'none' && d !== 0) return false
         }
         return true
-      }).sort((a, b) => (a.taskSort || 0) - (b.taskSort || 0))
+      }).sort((a, b) => (b.taskSort || 0) - (a.taskSort || 0)) // B8 (2026-09-24): display order is taskSort DESCENDING (sortMode.js custom mode) — the old ascending readout put pinned tasks at the bottom
     },
     selectedId () { return this.$store.state.ui.rightSidebarTodoEdit.taskId }
   },
