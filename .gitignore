@@ -75,3 +75,7 @@ scripts/promo-media/
 docs/media/promo/
 docs/media/xhs-cover.png
 docs/官网/
+
+# 会话级临时目录与 Windows 误生成文件(2026-09-24 收编 git status 实测 ?? 项)
+.tmp-*/
+nul
