@@ -237,6 +237,7 @@ async function main () {
     tag: ['rename', 'rm', 'delete'],
     view: ['add', 'rm', 'delete'],
     plan: ['set', 'rm', 'remove'],
+    attachment: ['add', 'rm', 'remove'],
     milestone: ['add', 'rm', 'link', 'unlink'],
     settings: ['set'],
     tomato: ['start', 'stop', 'attach', 'backfill'],
@@ -247,6 +248,10 @@ async function main () {
     const sub = opts._[0]
     if (cmd === 'tomato' && sub === 'record') return true // record fix/rm mutate the ledger directly
     if (cmd === 'project') return !!(opts.on || opts.off || opts.status !== undefined || opts.deadline !== undefined)
+    // plan shortcut form `plan <task> <HH:mm>` writes via planSet without the `set` sub-op:
+    // two positionals whose first is not `list` can only be the shortcut (the read forms are
+    // bare `plan`, `plan list [date]` or `plan <date>` with a single positional)
+    if (cmd === 'plan') return opts._.length >= 2 && sub !== 'list'
     return !!(GATED_WRITE_SUBOPS[cmd] && GATED_WRITE_SUBOPS[cmd].includes(sub))
   }
   if (isGatedWrite(cmd, opts) && !opts.yesIKnow) lib.assertIsolationForWrite()

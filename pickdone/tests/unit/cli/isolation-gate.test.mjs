@@ -53,6 +53,36 @@ test('write command without isolation env: exit 1 + ISOLATION_REQUIRED, real DB 
   assert.ok(!r.stdout.includes('"ok":true'))
 })
 
+test('plan shortcut form (plan <task> <HH:mm>) without isolation env: gated (adversarial round)', async () => {
+  // The shortcut dispatches planSet directly without the `set` sub-op — it used to slip past the
+  // gate and open the default-dir DB (returned TASK_NOT_FOUND with a DB created in a fake APPDATA)
+  const fake = fs.mkdtempSync(path.join(os.tmpdir(), 'pd-iso-gate-plan-'))
+  const env = bareEnv(); env.APPDATA = fake
+  const r = await runCli(['plan', 'sometask', '09:00'], env)
+  assert.equal(r.code, 1)
+  assert.match(r.stderr, /ISOLATION_REQUIRED/)
+  assert.ok(!fs.existsSync(path.join(fake, 'pickdone', 'todos.db')), 'no DB created in the default dir')
+  // read forms stay unlocked
+  const rd = await runCli(['plan', 'list'], env)
+  assert.notEqual(rd.code, 1, 'plan list must not be gated')
+})
+
+test('attachment add/rm without isolation env: gated (adversarial round)', async () => {
+  // addAttachment/removeAttachment patch the row and copy files into userData — they used to run
+  // ungated and created todos.db/db.key in the default dir before failing with TASK_NOT_FOUND
+  const fake = fs.mkdtempSync(path.join(os.tmpdir(), 'pd-iso-gate-att-'))
+  const env = bareEnv(); env.APPDATA = fake
+  for (const args of [['attachment', 'add', 't1', 'package.json'], ['attachment', 'rm', 't1', 'img', '1']]) {
+    const r = await runCli(args, env)
+    assert.equal(r.code, 1, args.join(' '))
+    assert.match(r.stderr, /ISOLATION_REQUIRED/)
+  }
+  assert.ok(!fs.existsSync(path.join(fake, 'pickdone', 'todos.db')), 'no DB created in the default dir')
+  // read form stays unlocked (a TASK_NOT_FOUND means it got past the gate to the lookup itself)
+  const rd = await runCli(['attachment', 'list', 't1'], env)
+  assert.ok(!/ISOLATION_REQUIRED/.test(rd.stderr), 'attachment list must not be gated')
+})
+
 test('write command with TODO_DB_DIR: gate bypassed only by isolation or --yes-i-know (confirm path)', async () => {
   // --yes-i-know is the documented explicit confirm for the real DB; here we only prove the gate
   // honours it by running the WRITE against an isolated dir anyway (never the real one).
