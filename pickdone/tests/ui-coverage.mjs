@@ -46,8 +46,6 @@ try {
     el.dispatchEvent(new Event('input',{bubbles:true}));return 'ok'})()`)
   const enterIn = async sel => evalJson(ctx, `(()=>{const el=document.querySelector(${JSON.stringify(sel)});if(!el)return 'nosel';
     el.dispatchEvent(new KeyboardEvent('keyup',{key:'Enter',bubbles:true}));return 'ok'})()`)
-  const clickText = async (sel, text) => evalJson(ctx, `(()=>{const els=[...document.querySelectorAll(${JSON.stringify(sel)})];
-    const el=els.find(x=>x.textContent.includes(${JSON.stringify(text)}));if(!el)return 'nomatch';el.click();return 'ok'})()`)
   const ok = (name, cond, detail = '') => {
     if (cond) { pass++; console.log('  ✓ ' + name) } else { fail++; fails.push(name); console.error('  ✗ ' + name + (detail ? ' — ' + detail : '')) }
   }

@@ -109,8 +109,8 @@ test('F-A4 buildAnnounceValue strips control chars and truncates attachTodoTitle
   // verbatim in peer UI chips — same sanitize+cap choke point applies
   const hostileName = 'N\u202eX\u0007' + 'y'.repeat(200)
   const v2 = ta.buildAnnounceValue({ deviceId: 'dev\u0001-x', deviceName: hostileName, status: 'running', startedAt: 1, plannedSec: 5 })
-  assert.ok(v2.deviceName.length <= 40 && !/[\u0000-\u001f\u202a-\u202e]/.test(v2.deviceName), 'deviceName sanitized + capped at 40')
-  assert.ok(v2.deviceId.length <= 128 && !/[\u0000-\u001f]/.test(v2.deviceId), 'deviceId sanitized + capped')
+  assert.ok(v2.deviceName.length <= 40 && !/[\u0000-\u001f\u202a-\u202e]/.test(v2.deviceName), 'deviceName sanitized + capped at 40') // eslint-disable-line no-control-regex -- the regex intentionally matches control characters
+  assert.ok(v2.deviceId.length <= 128 && !/[\u0000-\u001f]/.test(v2.deviceId), 'deviceId sanitized + capped') // eslint-disable-line no-control-regex -- the regex intentionally matches control characters
   // legit identity passes through unchanged
   const v3 = ta.buildAnnounceValue({ deviceId: '0f8a-uuid', deviceName: '书房台式机', status: 'idle' })
   assert.equal(v3.deviceName, '书房台式机')

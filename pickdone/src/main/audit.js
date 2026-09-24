@@ -266,7 +266,7 @@ function noteFor (op, params, result) {
  */
 const FLUSH_DELAY_MS = 100
 const FLUSH_BATCH_MAX = 64
-let buffer = []
+const buffer = []
 let flushTimer = null
 let dirReady = false
 

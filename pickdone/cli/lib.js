@@ -847,7 +847,6 @@ function buildRepeatRule (opts) {
   return rule
 }
 function repeatOn (input, rule, count) {
-  const db = open()
   const t = resolveTask(input, liveTasks())
   if (t.complete) throw new CliError('task already completed; undo it before setting a repeat', 'INVALID_STATE')
   if (t.repeatId && String(t.repeatId).startsWith('repeat_')) throw new CliError('task already in a repeat group (' + t.repeatId + '); repeat off first, then re-set', 'ALREADY_REPEAT')

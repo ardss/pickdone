@@ -133,7 +133,7 @@ test('EditPanel: dependency candidate truncation is announced', () => {
 
 test('SearchView: clear button handles Enter like the date chip pattern', () => {
   const src = read('renderer/js/views/SearchView.vue')
-  assert.match(src, /main-nav-search__clear[^>]*@keydown\.enter\.prevent="q=''"/)
+  assert.match(src, /main-nav-search__clear[^>]*@keydown\.enter\.prevent="clearQ"/)
 })
 
 test('TodoItem: Ctrl+Arrow shortcuts only announced for dated tasks', () => {
