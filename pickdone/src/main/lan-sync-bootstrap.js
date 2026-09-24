@@ -38,7 +38,6 @@ const { createLanSyncNode } = require('./lan-sync/index')
 const { DEFAULT_PORT } = require('./lan-sync/transport')
 const { isDialableHost } = require('./lan-sync/discovery') // isPlausibleHost dropped with the retired syncAddPeer chain (2026-09-23)
 const syncOps = require('./db-sync-ops')
-
 // settings_rows keys (never synced: hydration skips the 'sync.' namespace, otherwise peers would adopt each other's identity)
 const K_DEVICE_ID = 'sync.deviceId'
 const K_DEVICE_NAME = 'sync.deviceName'

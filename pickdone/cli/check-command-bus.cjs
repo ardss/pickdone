@@ -214,11 +214,12 @@ function run () {
     'src/main/tomato-announce.js': { why: 'sync ingress plumbing — announce meta row written through the init()-injected db surface (tests stub it; same ingress class as lan-sync-bootstrap was)', ratchet: 1 }
   }
   const writeUniverse = new Set([...dbWriteOps, ...writeOps])
-  // Exact-line anchors for the two import.js bus-facade literals (h7-1 guard pins them
-  // byte-for-byte; import.js's local `db` is a bus facade: commitOp → bus.commit).
+  // Exact-line anchors for the two import-engine bus-facade literals (h7-1 guard pins them
+  // byte-for-byte; the engine's local `db` is a bus facade: commitOp → bus.commit). Anchors
+  // follow the D3 move of the engine from cli/import.js to src/main/import/index.js.
   const PINNED_P2 = [
-    { file: 'cli/import.js', frags: ["db.call('upsertMany', rows)"] },
-    { file: 'cli/import.js', frags: ["db.call('upsertCategory', {"] }
+    { file: 'src/main/import/index.js', frags: ["db.call('upsertMany', rows)"] },
+    { file: 'src/main/import/index.js', frags: ["db.call('upsertCategory', {"] }
   ]
   // Exact-line anchors for the DYNAMIC wholesale-dispatch surfaces (rec #4): these closures
   // pass the op through variable — mixed read/write injected surfaces that cannot route

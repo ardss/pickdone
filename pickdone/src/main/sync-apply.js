@@ -1,5 +1,4 @@
 'use strict'
-
 /**
  * Sync apply pipeline (extracted from lan-sync-bootstrap.js, round-3 review line ratchet).
  *
