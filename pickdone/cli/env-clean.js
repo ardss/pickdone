@@ -5,7 +5,10 @@ const fs = require('fs')
 const os = require('os')
 const path = require('path')
 
-/** Collect cleanable targets: test-isolation userData (todo-test-* and pd-it-*), test logs, and (--all) dev data directories */
+/** Collect cleanable targets: test-isolation userData (todo-test-* and pd-it-*), test logs, the dev
+ *  data directory (.dev-data — default target since the 2026-09-25 isolation wave: it is fully
+ *  regenerable dev data) and the legacy repo-tree pickdone-backups leak (auto snapshots the old
+ *  parent-of-userData derivation wrote next to the source tree). */
 function collectTargets ({ all = false, appRoot }) {
   const targets = []
   const tmp = os.tmpdir()
@@ -15,7 +18,8 @@ function collectTargets ({ all = false, appRoot }) {
     }
   }
   targets.push({ p: path.join(appRoot, 'tests', '.artifacts'), label: '测试日志产物' })
-  if (all) targets.push({ p: path.join(appRoot, '.dev-data'), label: '开发数据目录(.dev-data)' })
+  targets.push({ p: path.join(appRoot, '.dev-data'), label: '开发数据目录(.dev-data)' })
+  targets.push({ p: path.join(appRoot, 'pickdone-backups'), label: '仓库残留备份泄漏(pickdone-backups)' })
   return targets.filter(t => { try { fs.statSync(t.p); return true } catch { return false } })
 }
 
