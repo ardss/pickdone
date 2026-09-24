@@ -63,6 +63,27 @@ test('[F12] behavior: the gate logic flips exactly on the persisted key', () => 
   assert.equal(gate(true, '0'), true, "any other value than '1' is not a close")
 })
 
+test('[F12] bypass re-open paths clear the stale close marker (adversarial-review follow-up)', () => {
+  // The float can be re-opened without TomatoBar.toggleFloat: SettingsModal.setTomatoFloat and
+  // TomatoPanel.openFloatWindow both call todoAPI.showTomatoFloat; the tray undock goes through
+  // main-process tomatoFloat.undock (invisible to renderer show calls). Each path must clear
+  // 'tomatoFloatClosedByUser' or a restart suppresses auto-show despite last action = "open".
+  const mainSrc = read('renderer/js/main.js')
+  const wrapIdx = mainSrc.indexOf('window.todoAPI.showTomatoFloat = ')
+  const rmIdx = mainSrc.indexOf("localStorage.removeItem('tomatoFloatClosedByUser')", wrapIdx)
+  assert.ok(wrapIdx > -1 && rmIdx > wrapIdx, 'main.js wraps todoAPI.showTomatoFloat and clears the marker inside (SettingsModal/TomatoPanel paths)')
+  const barSrc = read('renderer/js/components/TomatoBar.vue')
+  const syncIdx = barSrc.indexOf('tomatoFloatShown()')
+  const syncRm = barSrc.indexOf("localStorage.removeItem('tomatoFloatClosedByUser')", syncIdx)
+  assert.ok(syncIdx > -1 && syncRm > syncIdx, 'TomatoBar 15s visibility sync clears the marker when the float is seen open (tray undock path)')
+  // behavior mirror of the wrapper: any explicit show wipes the marker
+  const ls = { v: '1', removeItem (k) { if (k === 'tomatoFloatClosedByUser') this.v = null } }
+  const origShow = () => 'shown'
+  const wrapped = (...a) => { try { ls.removeItem('tomatoFloatClosedByUser') } catch { /* */ } return origShow(...a) }
+  wrapped()
+  assert.equal(ls.v, null, 'an explicit re-open leaves no stale close marker behind')
+})
+
 /* ---------- [F18] aux-window single source ---------- */
 
 test('[F18] isFloatWindow matches only the float route; isAuxWindow covers both aux routes', () => {

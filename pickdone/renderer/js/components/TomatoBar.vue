@@ -126,7 +126,14 @@ export default {
       this._floatSyncN = (this._floatSyncN || 0) + 1
       if (this._floatSyncN >= 15 && window.todoAPI && window.todoAPI.tomatoFloatShown) {
         this._floatSyncN = 0
-        window.todoAPI.tomatoFloatShown().then(v => { this.floatOn = !!v }).catch(() => {})
+        window.todoAPI.tomatoFloatShown().then(v => {
+          this.floatOn = !!v
+          // F12 follow-up (2026-09-24): a tray undock re-opens the float without going through
+          // todoAPI.showTomatoFloat (main-process tomatoFloat.undock) — the 'closed by user' marker
+          // must not survive a re-open, or main.js auto-show would suppress the float after restart
+          // even though the user's last action was "open".
+          if (v) { try { localStorage.removeItem('tomatoFloatClosedByUser') } catch { /* storage unavailable */ } }
+        }).catch(() => {})
       }
     }, 1000)
     // Taskbar thumbnail toolbar button callback (abandon; the pomodoro has no pause semantics)

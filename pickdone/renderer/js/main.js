@@ -689,4 +689,19 @@ bootMark('Vue mount (first paint)')
 window.__startupReport = () => console.table(__bootMarks)
 bootstrap()
 
+// F12 follow-up (2026-09-24 adversarial review): 'tomatoFloatClosedByUser' records the user's LAST
+// explicit close for the auto-show gate above. TomatoBar.toggleFloat is its only writer, but the
+// float can be re-opened through bypass paths that never touch TomatoBar (SettingsModal.setTomatoFloat,
+// TomatoPanel.openFloatWindow — both via todoAPI.showTomatoFloat — and the tray dock/undock menu,
+// main-process side). Clear the close marker on every renderer-initiated show by wrapping the bridge
+// (covers SettingsModal/TomatoPanel and any future caller); the tray path is covered by TomatoBar's
+// 15s tomatoFloatShown visibility sync, which clears the marker once the float is seen open.
+if (typeof window !== 'undefined' && window.todoAPI && typeof window.todoAPI.showTomatoFloat === 'function') {
+  const origShowTomatoFloat = window.todoAPI.showTomatoFloat.bind(window.todoAPI)
+  window.todoAPI.showTomatoFloat = (...args) => {
+    try { localStorage.removeItem('tomatoFloatClosedByUser') } catch { /* storage unavailable */ }
+    return origShowTomatoFloat(...args)
+  }
+}
+
 export default Vue
