@@ -1694,7 +1694,19 @@ function settingsSet (key, value, { force = false } = {}) {
   // tests can deterministically exercise the merge-on-fresh behavior. Null outside tests.
   if (typeof settingsRaceHook === 'function') settingsRaceHook()
   commit('setting', 'put', { key, value: v })
+  // B15 (2026-09-24): the blob write-back is a WHITELIST rebuild, not a passthrough — DEFAULT_SETTINGS
+  // keys (the manifest families + blob-only maps + the two local-only keys) plus the blob's own
+  // meta fields. Otherwise dirty keys (renamed-away settings, foreign blobs) rode every write-back
+  // forever: the blob could never slim down and renderer initFromDb kept resurrecting them.
+  const blobAllow = new Set([
+    ...SETTINGS_MANIFEST.boolean, ...SETTINGS_MANIFEST.number,
+    ...Object.keys(SETTINGS_MANIFEST.enum), ...SETTINGS_MANIFEST.string,
+    ...(SETTINGS_MANIFEST.blobOnly || []),
+    'shortcutKeySettings', 'foldedTodoList', // intentionally local-only (manifest header) but still DEFAULT_SETTINGS blob keys
+    '_savedAt', 'schemaV', '_lsAt'
+  ])
   const fresh = stripHabitsFamily(settingsDoc())
+  for (const k of Object.keys(fresh)) { if (!blobAllow.has(k)) delete fresh[k] }
   fresh._savedAt = readAt
   fresh.schemaV = fresh.schemaV || 1
   commit('meta', 'put', ['db.settingsState', JSON.stringify(fresh)])
