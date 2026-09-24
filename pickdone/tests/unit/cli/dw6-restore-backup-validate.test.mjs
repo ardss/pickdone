@@ -74,6 +74,16 @@ test('F14: schemaV>1 segment is refused with SNAPSHOT_FUTURE (same guard as the 
   assert.match(r && r.message, /schemaV=2/)
 })
 
+test('adversarial round: schemaV>1 on the NON-counted segments (filterState) is refused too', () => {
+  const f = path.join(process.env.TODO_DB_DIR, 'future-filter.json')
+  const dump = JSON.parse(realDump({}))
+  dump.backup.filterState = JSON.stringify({ schemaV: 9, list: [] })
+  fs.writeFileSync(f, JSON.stringify(dump))
+  const r = runCliFail(['restore-backup', f, '--json'])
+  assert.equal(r && r.error, 'SNAPSHOT_FUTURE', 'the whole versioned segment set is guarded, not just the counted two')
+  assert.match(r && r.message, /filterState\.schemaV=9/)
+})
+
 test('F15: discovery lists snapshots from the user-chosen settings.backupDir', () => {
   const userDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dw6-user-backupdir-'))
   try {

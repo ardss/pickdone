@@ -906,10 +906,13 @@ async function main () {
         throw new lib.CliError('snapshot is valid JSON but not a pickdone backup dump (no backup.todoState/categoryState segments found)', 'SNAPSHOT_INVALID')
       }
       // schemaV guard, same contract as the restore side (dbRecovery.parseSegment / applyRestoreDump):
-      // a segment written by a NEWER app version must not be misread by this (older) CLI.
-      for (const [label, seg] of [['todoState', todoState], ['categoryState', catState]]) {
+      // a segment written by a NEWER app version must not be misread by this (older) CLI. Covers the
+      // whole versioned segment set (adversarial round): todoState/categoryState (counted here) plus
+      // filterState/planState/habitsState (restored by the App from the same dump).
+      for (const key of ['todoState', 'categoryState', 'filterState', 'planState', 'habitsState']) {
+        const seg = parseSeg(key)
         if (seg && Number(seg.schemaV || 1) > 1) {
-          throw new lib.CliError(`snapshot ${label}.schemaV=${seg.schemaV} is newer than this CLI supports — upgrade the App and restore from its Settings -> Backup`, 'SNAPSHOT_FUTURE')
+          throw new lib.CliError(`snapshot ${key}.schemaV=${seg.schemaV} is newer than this CLI supports — upgrade the App and restore from its Settings -> Backup`, 'SNAPSHOT_FUTURE')
         }
       }
       // Summarize whatever the JSON exposes (schema tolerant; legacy flat shapes keep working)
