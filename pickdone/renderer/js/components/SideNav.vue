@@ -173,7 +173,6 @@
 
 <script lang="ts">
 /** Left sidebar -- structure/icons/styles aligned with the reference: user row, search, 5 main nav items, categories, tags, bottom buttons */
-import { extractTags } from '../utils/search.js'
 import { visibleNavRoutes } from '../utils/nav-gate.js'
 import { applyNarrow, toggleCollapse } from '../utils/navCollapse.js'
 import i18n from '../i18n/index.js'
@@ -293,19 +292,9 @@ export default {
       for (const ch of String(this.userNameMasked)) h = (h * 31 + ch.charCodeAt(0)) % 360
       return { background: `linear-gradient(135deg, hsl(${h},62%,58%), hsl(${(h + 40) % 360},62%,46%))` }
     },
-    tags () {
-      const set = new Map()
-      for (const t of [...this.$store.state.todo.todoList]) {
-        for (const tag of extractTags(t.taskContent, t.taskDescribe)) {
-          set.set(tag, (set.get(tag) || 0) + 1)
-        }
-      }
-      // Empty tags created via "New Tag" also enter the list (count 0), otherwise they disappear right after creation
-      for (const name of this.$store.state.ui.userTags) {
-        if (!set.has(name)) set.set(name, 0)
-      }
-      return [...set.entries()].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count)
-    }
+    /* Wave-5 dedup: the derivation moved to getters['todo/tagCounts'] (was verbatim-triplicated
+       here, in SnTagPanel and SnManageTagsModal). Same shape: [{name, count}] count-desc. */
+    tags () { return this.$store.getters['todo/tagCounts'] }
   },
   mounted () {
     // Restore empty tags created via "New Tag" (stored in meta; the tags themselves are still derived from #xxx in content)

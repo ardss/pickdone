@@ -139,6 +139,17 @@ if (!fs.existsSync(vendorPrebuilds)) {
   process.exit(1)
 }
 
+// sha512/size 实测对账核心（Windows latest.yml 与 linux latest-linux*.yml 共用，2026-09-24 泛化）：
+// 返回 null=一致，否则返回不一致描述。重打包后只拷部分文件即发出=用户更新失败/增量下载损坏。
+function shaSizeMismatch(crypto, filePath, expectSha, expectSize) {
+  const buf = fs.readFileSync(filePath)
+  const actualSha = crypto.createHash('sha512').update(buf).digest('base64')
+  if (actualSha !== expectSha || buf.length !== Number(expectSize)) {
+    return `sha512 ${actualSha === expectSha ? '一致' : '不一致'} / size ${buf.length} vs ${expectSize}`
+  }
+  return null
+}
+
 // M-15 (2026-09-20): linux update metadata reconcile — when electron-builder emitted
 // latest-linux.yml / latest-linux-arm64.yml (the linux CI job passes these paths to the
 // release), the version must match the packaged package.json and every artifact URL they
@@ -166,14 +177,27 @@ try {
       if (meta.path) refs.add(String(meta.path))
     }
     if (!refs.size) { for (const m of text.matchAll(/^\s*(?:- )?url:\s*(\S+)/gm)) refs.add(m[1]) }
+    let shaVerified = 0
     for (const ref of refs) {
       const artPath = path.join(path.dirname(ymlPath), ref)
       if (!fs.existsSync(artPath)) {
         console.error(`FAIL: ${ymlName} 引用的产物 ${ref} 不在 ${path.dirname(ymlPath)}（自动更新会 404）`)
         process.exit(1)
       }
+      // sha512/size 实测（2026-09-24 泛化自 Windows latest.yml 对账）：electron-builder 在 files[]
+      // 每项声明 sha512/size，被替换或拷贝残缺的 AppImage/deb 在此被拦下，不再漏到用户端
+      const fMeta = meta && (meta.files || []).find(f => f && f.url === ref)
+      if (fMeta && fMeta.sha512 && fMeta.size != null) {
+        const crypto = require('node:crypto')
+        const mm = shaSizeMismatch(crypto, artPath, fMeta.sha512, fMeta.size)
+        if (mm) {
+          console.error(`FAIL: ${ymlName} 与 ${ref} 实测不符（${mm}）——重打包后未同步重生成元数据`)
+          process.exit(1)
+        }
+        shaVerified++
+      }
     }
-    console.log(`OK: ${ymlName} version=${ymlVersion || '?'} ${refs.size} artifact ref(s) reconciled`)
+    console.log(`OK: ${ymlName} version=${ymlVersion || '?'} ${refs.size} artifact ref(s) reconciled` + (shaVerified ? `（sha512/size 实测通过 ${shaVerified} 个）` : ''))
   }
 } catch (e) {
   console.error('FAIL: linux 更新元数据校验异常: ' + (e && e.message))
@@ -229,10 +253,9 @@ try {
     if (urlM && shaM && sizeM) {
       const exePath = path.join(path.dirname(ymlPath), urlM[1])
       if (!fs.existsSync(exePath)) { console.error('FAIL: latest.yml 指向的 ' + urlM[1] + ' 不存在于 dist/（发布三件套不齐）'); process.exit(1) }
-      const buf = fs.readFileSync(exePath)
-      const actualSha = crypto.createHash('sha512').update(buf).digest('base64')
-      if (actualSha !== shaM[1] || buf.length !== Number(sizeM[1])) {
-        console.error(`FAIL: latest.yml 与 ${urlM[1]} 实测不符（sha512 ${actualSha === shaM[1] ? '一致' : '不一致'} / size ${buf.length} vs ${sizeM[1]}）——重打包后未同步重生成元数据`)
+      const mm = shaSizeMismatch(crypto, exePath, shaM[1], sizeM[1])
+      if (mm) {
+        console.error(`FAIL: latest.yml 与 ${urlM[1]} 实测不符（${mm}）——重打包后未同步重生成元数据`)
         process.exit(1)
       }
       console.log('OK: latest.yml ↔ ' + urlM[1] + ' sha512/size 对账一致')

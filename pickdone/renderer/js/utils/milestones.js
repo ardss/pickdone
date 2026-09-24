@@ -74,6 +74,20 @@ export function scrubMilestoneTaskIds (list, purgedIds) {
   return changed ? out : list
 }
 
+/** Round-3 P1 (2026-09-21): milestone scrub shared by purgeIds AND purgeAllRecycle (the bulk
+ *  "empty bin" path used to skip it, leaving phantom taskIds in `projectMilestones:<catId>` —
+ *  the D5 bug on the bulk path). Removes purgedIds from every category's milestone taskIds.
+ *  (Relocated verbatim from store/todo.js — structural size ratchet; no behavior change.) */
+export async function scrubMilestonesForPurged (catIds, purgedIds) {
+  for (const cid of catIds || []) {
+    try {
+      const ms = await loadMilestones(cid)
+      const next = scrubMilestoneTaskIds(ms, purgedIds)
+      if (next !== ms) saveMilestones(cid, next)
+    } catch (e) { console.warn('[todo] milestone scrub after purge failed for category', cid, e) }
+  }
+}
+
 /**
  * Lifecycle state. Achievement semantics (2026-09-14 fix for "overdue milestones always showed done"):
  *  - date < today + linked tasks present in `tasks`: done only when ALL linked tasks are complete;

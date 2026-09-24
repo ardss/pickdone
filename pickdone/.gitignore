@@ -32,6 +32,7 @@ tests/.artifacts/
 # 本会话验证用打包输出(宿主进程索引器锁文件,会话结束即可删)
 dist-verify/
 dist-final-check/
+dist-fix/
 
 # Vite 构建产物(打包时由 build:renderer 生成)
 renderer-dist/

@@ -69,10 +69,16 @@ export async function writeAutoBackupCore (ctx, { state, rootState }) {
     if (!window.todoAPI || !window.todoAPI.runAutoBackup) return
     const dump = buildBackupDump(rootState, state, { stripVolatileSettings: true, planState: await collectPlanState() })
     const r = await window.todoAPI.runAutoBackup(JSON.stringify(dump), { recent: rootState.settings.autoBackupKeep || 24, backupDir: rootState.settings.backupDir || '' })
-    if (r && r.ok) saveRuntime({ autoBackupLastAt: Date.now() })
-    else saveRuntime({ autoBackupLastAt: 0 }) // retry next time on failure
+    if (r && r.ok) saveRuntime({ autoBackupLastAt: Date.now(), autoBackupLastFailAt: 0, autoBackupLastError: '' })
+    // Failure must stay visible (autoBackupLastAt:0 alone made a persistently failing backup read as
+    // "never ran" in Settings→Data): keep the fail timestamp + reason for the honest status line.
+    else saveRuntime({ autoBackupLastAt: 0, autoBackupLastFailAt: Date.now(), autoBackupLastError: String((r && r.error) || 'backup failed').slice(0, 160) }) // retry next time on failure
     return !!r && !!(r.ok)
-  } catch (e) { console.error('[auto-backup] failed:', e && e.message) }
+  } catch (e) {
+    console.error('[auto-backup] failed:', e && e.message)
+    saveRuntime({ autoBackupLastAt: 0, autoBackupLastFailAt: Date.now(), autoBackupLastError: String((e && e.message) || e).slice(0, 160) })
+    return false // callers (SettingsDataTab) branch on ok === false: undefined used to fire the success toast on a thrown IPC
+  }
 }
 
 export function writeCriticalBackupCore (ctx, { state, rootState }) {

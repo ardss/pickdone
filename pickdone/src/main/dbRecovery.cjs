@@ -57,6 +57,40 @@ function sqliteHeaderOk (file) {
   } catch { return false }
 }
 
+/** Vendor driver, resolved the same way db.js resolves it (repo vendor/ in dev, resourcesPath is
+ *  handled by db.js itself — this pure module only ever runs against the repo layout in tests and
+ *  the packaged layout always has vendor/ next to app root). Null when unavailable: the probe then
+ *  answers 'unknown' and the caller stays CONSERVATIVE (never destroys data on an inconclusive probe). */
+function loadVendorDriver () {
+  try { return require(path.join(__dirname, '..', '..', 'vendor', 'better-sqlite3-multiple-ciphers')) } catch { return null }
+}
+
+/** P2 (dw wave5 2026-09-24): the plaintext-magic header guard is ALWAYS false for this repo's
+ *  steady state — a multiple-ciphers encrypted todos.db starts with CIPHERTEXT, not the magic.
+ *  This probe decides "is the db actually readable with its key": readonly open + PRAGMA key +
+ *  a real read of sqlite_master (decryption happens on first page read, journal_mode alone does
+ *  not throw — same probe shape as db.js's open path). Answers:
+ *    'yes'     decryptable → the db is healthy; init failure was transient → NEVER rename/rollback
+ *    'no'      key present but the file cannot be decrypted → genuinely corrupt → recovery may proceed
+ *    'unknown' driver unavailable / key unreadable → inconclusive → caller must stay conservative
+ *  Key validity rule mirrors db.js: a non-64-hex db.key is treated as no-key (plaintext-continuation). */
+function encryptedProbe (file, keyFile) {
+  const Database = loadVendorDriver()
+  if (!Database) return 'unknown'
+  let key
+  try { key = fs.readFileSync(keyFile, 'utf8').trim() } catch { return 'no' }
+  if (!/^[0-9a-fA-F]{64}$/.test(key)) return 'no' // corrupt key = db.js treats it as keyless; header rules apply
+  let db
+  try {
+    db = new Database(file, { readonly: true })
+    try {
+      db.pragma(`key='${key}'`)
+      db.prepare('SELECT count(*) FROM sqlite_master').get()
+      return 'yes'
+    } finally { try { db.close() } catch { /* already closed on probe failure */ } }
+  } catch { return 'no' }
+}
+
 /** M-1 (2026-09-20): make sure a stale db.key is OUT of the way before the restored (plaintext)
  *  DB is reopened. Consistent with the plaintext-continuation contract ("a missing db.key leaves
  *  the fresh DB plaintext-readable, same as a fresh install"): prefer renaming aside (preserves
@@ -103,6 +137,33 @@ function attemptDbRecovery (ud, retryInit) {
     }
     // No retry hook available: still never rename a header-healthy DB on an existence-only guess.
     return { source: 'transient', label: 'transient init failure; SQLite header intact (no rename performed)' }
+  }
+  // P2 (dw wave5 2026-09-24): an ENCRYPTED db (db.key present) starts with ciphertext, so the
+  // plaintext-magic guard above is always false for it — the old code treated every encrypted db
+  // as corrupt and renamed a HEALTHY one aside on the first transient init failure, rolling back
+  // to a stale backup. When a key exists, decide by the decrypt probe instead: decryptable =
+  // healthy, same protection as a header-intact plaintext db (retry once, never rename);
+  // undecryptable = genuinely corrupt, fall through to the recovery path. An inconclusive probe
+  // (driver unavailable) stays conservative: no rename, no rollback.
+  const keyFile = path.join(ud, 'db.key')
+  if (fs.existsSync(mainDb) && fs.existsSync(keyFile)) {
+    const probe = encryptedProbe(mainDb, keyFile)
+    if (probe !== 'no') {
+      if (probe === 'yes' && typeof retryInit === 'function') {
+        try {
+          const retried = retryInit()
+          if (retried && typeof retried.then === 'function') {
+            return { source: 'transient', label: 'transient init failure; encrypted db decrypts with its key (no rename performed)' }
+          }
+          return { source: 'retry-ok', label: 'transient init failure; encrypted db decrypts with its key, retry succeeded (no rename performed)' }
+        } catch {
+          return { source: 'transient', label: 'transient init failure persists; encrypted db decrypts with its key, recovery NOT performed (healthy DB preserved)' }
+        }
+      }
+      return { source: 'transient', label: probe === 'yes'
+        ? 'transient init failure; encrypted db decrypts with its key (no rename performed)'
+        : 'decrypt probe inconclusive (sqlite driver unavailable) — recovery declined to avoid destroying a possibly-healthy encrypted DB (no rename performed)' }
+    }
   }
   // Confirm a recoverable source exists before renaming: transient IO errors (disk full/lock held) also make init fail; renaming unconditionally
   // would mislabel the user's current database as .corrupt and fall back to a stale backup or even an empty DB
@@ -240,4 +301,49 @@ function writeCriticalStateBackupAtomic (ud, jsonText) {
   return dest
 }
 
-module.exports = { attemptDbRecovery, restoreTasksFromCriticalBackup, writeCriticalStateBackupAtomic, criticalBackupPath, restoreCategoriesFromCriticalBackup, restoreTomatoRecordsFromCriticalBackup, quarantineKey, sqliteHeaderOk }
+/** P2 (dw wave5 2026-09-24, sunk from index.js whenReady — this module is the pure-fs home for
+ *  startup recovery orchestration): plain-bak residue precheck. Three conditions together are the
+ *  crash-between-two-renames scene of migratePlainToEncrypted: no todos.db + plain-bak + no db.key
+ *  → clear orphan WAL and put the plaintext copy back. No todos.db + plain-bak + a db.key still
+ *  present (user hand-deleted the db etc.) → move the key aside and restore the bak; init then
+ *  re-encrypts with a fresh key, data preserved. Pure fs over the userData path → unit-testable. */
+function preflightMigrateResidue (ud, log) {
+  const warn = (...a) => { try { (log || console).warn('[Init] ' + a.join(' ')) } catch { /* best-effort */ } }
+  try {
+    const mainDb = path.join(ud, 'todos.db')
+    const bak = path.join(ud, 'todos.db.plain-bak')
+    if (fs.existsSync(mainDb) || !fs.existsSync(bak)) return false
+    const key = path.join(ud, 'db.key')
+    if (!fs.existsSync(key)) {
+      for (const suf of ['-wal', '-shm']) { try { fs.rmSync(mainDb + suf, { force: true }) } catch {} }
+      fs.copyFileSync(bak, mainDb)
+      warn('迁移中断残留:已从 todos.db.plain-bak 恢复数据库文件')
+    } else {
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+      try { fs.renameSync(key, key + '.superseded-' + stamp) } catch {}
+      for (const suf of ['-wal', '-shm']) { try { fs.rmSync(mainDb + suf, { force: true }) } catch {} }
+      fs.copyFileSync(bak, mainDb)
+      warn('todos.db 缺失但存在明文备份:已从 plain-bak 恢复,旧 db.key 移为 db.key.superseded-*')
+    }
+    return true
+  } catch (e) {
+    warn('plain-bak 预检失败', (e && e.message) || e)
+    return false
+  }
+}
+
+/** P2 (dw wave5 2026-09-24, sunk from index.js whenReady): sweep files renamed aside by a previous
+ *  "reset data" while their handles were still open (pending-delete-<ts>-*). At next startup the
+ *  handles are gone; delete them best-effort. Returns the number of entries swept. */
+function sweepPendingDeletes (ud, log) {
+  let swept = 0
+  try {
+    for (const f of fs.readdirSync(ud)) {
+      if (!f.startsWith('pending-delete-')) continue
+      try { fs.rmSync(path.join(ud, f), { force: true, recursive: true }); swept++ } catch {}
+    }
+  } catch (e) { try { (log || console).warn('[Init] pending-delete 清扫失败', e) } catch { /* best-effort */ } }
+  return swept
+}
+
+module.exports = { attemptDbRecovery, restoreTasksFromCriticalBackup, writeCriticalStateBackupAtomic, criticalBackupPath, restoreCategoriesFromCriticalBackup, restoreTomatoRecordsFromCriticalBackup, quarantineKey, sqliteHeaderOk, encryptedProbe, preflightMigrateResidue, sweepPendingDeletes }

@@ -84,6 +84,11 @@ const TEST_TIMEOUT_MS = 120000
 // watcher) would otherwise keep the per-file child process alive forever — the runner then waits
 // with ZERO results (0 failures, budget kill, unattributable). Force-exit makes the child leave
 // once tests finish; --test-timeout above covers the in-test hang case.
-const r = spawnSync(process.execPath, ['--test', '--test-force-exit', `--test-timeout=${TEST_TIMEOUT_MS}`, ...forwardArgs, ...files],
+const r = spawnSync(process.execPath, ['--test', '--test-force-exit', `--test-timeout=${TEST_TIMEOUT_MS}`,
+  // Pin the TAP reporter: check-test-summary.cjs anchors its fail/skip parsing on the TAP plan
+  // (`1..N` + `# fail` lines), but Node >= 24 defaults the reporter to 'spec' even for non-TTY
+  // stdout — the summary gate then read fail=undefined and red'd every run (2026-09-24).
+  '--test-reporter=tap', '--test-reporter-destination=stdout',
+  ...forwardArgs, ...files],
   { stdio: 'inherit' })
 process.exit(r.status ?? 1)

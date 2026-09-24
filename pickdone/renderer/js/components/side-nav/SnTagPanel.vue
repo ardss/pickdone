@@ -13,26 +13,13 @@
 
 <script lang="ts">
 import { defineComponent } from 'vue'
-import { extractTags } from '../../utils/search.js'
 import { navKeyOfRoute } from '../../views/registry.js'
 
 export default defineComponent({
   name: 'SnTagPanel',
   computed: {
-    /* Same derivation as the SideNav copy (kept there for createTag's duplicate check) */
-    tags () {
-      const set = new Map()
-      for (const t of [...this.$store.state.todo.todoList]) {
-        for (const tag of extractTags(t.taskContent, t.taskDescribe)) {
-          set.set(tag, (set.get(tag) || 0) + 1)
-        }
-      }
-      // Empty tags created via "New Tag" also enter the list (count 0), otherwise they disappear right after creation
-      for (const name of this.$store.state.ui.userTags) {
-        if (!set.has(name)) set.set(name, 0)
-      }
-      return [...set.entries()].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count)
-    }
+    /* Wave-5 dedup: single source is getters['todo/tagCounts'] (was a verbatim copy of SideNav's) */
+    tags () { return this.$store.getters['todo/tagCounts'] }
   },
   methods: {
     /* Same navigation contract as SideNav.go(): push the route, then sync the nav key for the highlight */

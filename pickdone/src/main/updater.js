@@ -58,38 +58,21 @@ function flushOnceOnReady (deps = {}) {
   })
   const tracker = deps.tracker || require('./quit-ack').createQuitAckTracker()
   const flushMain = deps.flushMain || (() => { try { require('./scheduler').flushFiredNow() } catch { /* best-effort */ } })
-  const ACK_CAP_MS = deps.ACK_CAP_MS ?? 1500
-  const POLL_MS = 50
-  const senders = []
-  const token = tracker.nextToken()
-  for (const w of getWindows()) {
-    try {
-      if (w && !w.isDestroyed()) {
-        // Renderer side: same channel + token shape as the before-quit path — the renderer flushes
-        // whatever is still sitting in the dbMirror debounce (pending edits / pomodoro ledger) to
-        // disk, then acks 'app-quitting-flush-ack' with the token.
-        w.webContents.send('app-quitting-flush', { token })
-        senders.push(w.webContents.id)
-      }
-    } catch { /* dead window */ }
-  }
-  tracker.beginRound(senders, token)
+  // P2 (dw wave5 2026-09-24): the whole broadcast→ack→bounded-wait→flushMain round moved into
+  // quit-ack.runFlushRound (it used to be a hand-rolled copy of index.js's will-quit loop with a
+  // drifted 1500ms cap; the cap now unifies on the shared 2000ms default in quit-ack.js).
   _activeFlushRound = tracker
-  // Main-process side: same scheduler flush the will-quit path runs (persist the reminder dedup
-  // ledger now instead of losing whatever sits inside its 60s debounce when the installer /F-kills
-  // us) — but only once the renderer side is done (all acked) or the bounded cap elapsed, never
-  // before the renderer even had a chance to dispatch.
-  const startedAt = Date.now()
-  const poll = setInterval(() => {
-    if (tracker.allAcked() || Date.now() - startedAt >= ACK_CAP_MS) {
-      clearInterval(poll)
-      flushMain()
+  require('./quit-ack').runFlushRound({
+    tracker,
+    getWindows,
+    flushMain,
+    capMs: deps.ACK_CAP_MS,
+    onDone: t => {
       // P2 2026-09-20: _activeFlushRound used to stay set forever after the round completed —
       // late acks kept routing into the finished tracker and the reference leaked. Clear it.
-      if (_activeFlushRound === tracker) _activeFlushRound = null
+      if (_activeFlushRound === t) _activeFlushRound = null
     }
-  }, POLL_MS)
-  if (poll.unref) poll.unref()
+  })
 }
 
 let _inited = false

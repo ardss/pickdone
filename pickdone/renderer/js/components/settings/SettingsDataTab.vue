@@ -31,7 +31,7 @@
       <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.backUpNowLabel') }}</span>
         <div class="form-item__control">
           <button class="mini" @click="runAutoBackupNow">{{ $t('statsE.SettingsModal.autoBackUpNowBtn') }}</button>
-          <span class="tip">{{ autoBackupLastAt ? $t('statsE.SettingsModal.lastRunPrefix') + dfmt(autoBackupLastAt) : $t('statsH.SettingsModal.notRunYet') }} · {{ $t('statsH.SettingsModal.backupRetentionTip') }}</span>
+          <span class="tip">{{ autoBackupStatusLine }} · {{ $t('statsH.SettingsModal.backupRetentionTip') }}</span>
         </div></div>
     </div>
     <div class="form">
@@ -98,6 +98,8 @@ export default {
       backingUp: false,
       backupDirDefault: '',
       autoBackupLastAt: 0,
+      autoBackupLastFailAt: 0,
+      autoBackupLastError: '',
       backupDirShown: '',
       autoBackupFiles: [] as any,
       autoBackupPick: ''
@@ -105,7 +107,15 @@ export default {
   },
   computed: {
     st () { return this.$store.state.settings },
-    backupDirDisplay () { return this.backupDirShown || this.$t('statsE.SettingsModal.loadingPlaceholder') }
+    backupDirDisplay () { return this.backupDirShown || this.$t('statsE.SettingsModal.loadingPlaceholder') },
+    // Honest backup status: a recent failure outranks the "never ran" fallback so a persistently
+    // failing backup (unwritable dir / offline disk) is not mislabeled as "not run yet"
+    autoBackupStatusLine () {
+      if (this.autoBackupLastFailAt && this.autoBackupLastFailAt >= this.autoBackupLastAt) {
+        return this.$t('statsH.SettingsModal.lastBackupFailPrefix') + (this.autoBackupLastError || this.$t('statsH.SettingsModal.backupFailed')) + ' (' + this.dfmt(this.autoBackupLastFailAt) + ')'
+      }
+      return this.autoBackupLastAt ? this.$t('statsE.SettingsModal.lastRunPrefix') + this.dfmt(this.autoBackupLastAt) : this.$t('statsH.SettingsModal.notRunYet')
+    }
   },
   mounted () {
     this.loadBackupDirDisplay()
@@ -177,7 +187,10 @@ export default {
       this.loadBackupDirDisplay()
     },
     async loadBackupDirDisplay () {
-      this.autoBackupLastAt = loadRuntime().autoBackupLastAt || 0
+      const rt = loadRuntime()
+      this.autoBackupLastAt = rt.autoBackupLastAt || 0
+      this.autoBackupLastFailAt = rt.autoBackupLastFailAt || 0
+      this.autoBackupLastError = rt.autoBackupLastError || ''
       try {
         const def = await window.todoAPI.getDefaultBackupDir()
         this.backupDirDefault = def
@@ -186,7 +199,10 @@ export default {
     },
     async runAutoBackupNow () {
       const ok = await this.$store.dispatch('todo/writeAutoBackup')
-      this.autoBackupLastAt = loadRuntime().autoBackupLastAt || Date.now()
+      const rt = loadRuntime()
+      this.autoBackupLastAt = rt.autoBackupLastAt || (ok ? Date.now() : 0)
+      this.autoBackupLastFailAt = rt.autoBackupLastFailAt || 0
+      this.autoBackupLastError = rt.autoBackupLastError || ''
       // Failures must be reported honestly (an unwritable backupDir / an offline disk once silently faked success for a long time)
       ok === false ? this.$message.error(this.$t('statsE.SettingsModal.backupFail')) : this.$message.success(this.$t('statsE.SettingsModal.autoBackupWrittenMsg'))
     },

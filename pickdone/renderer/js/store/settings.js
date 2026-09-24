@@ -373,9 +373,10 @@ if (typeof window !== 'undefined' && window.todoAPI && window.todoAPI.onAppQuitt
 /** maint-d7: settings the MAIN process consumes from config.json / its own handlers. A renderer-side
  *  commit that skips the `settings/update` action's `updateSettings` IPC leaves these reverted on
  *  next launch (config.json is windows.js's sole source; runWhenComputerStart hot-applies via
- *  app.setLoginItemSettings). securityLockPassword rides the same channel — the per-sender
- *  stripForbiddenSettingsKeys on main's side allows it from the main window. */
-export const MAIN_CONSUMED_SETTINGS = ['shortcutKeySettings', 'appLocale', 'closeActionMinimize', 'runWhenComputerStart', 'hideMainWindowOnStartup', 'enableHardwareAcceleration', 'enableSecurityLock', 'securityLockPassword']
+ *  app.setLoginItemSettings). autoDownloadUpdates rides it too — src/main/updater.js re-reads it
+ *  from config.json on every update check (syncAutoDownload). securityLockPassword rides the same
+ *  channel — the per-sender stripForbiddenSettingsKeys on main's side allows it from the main window. */
+export const MAIN_CONSUMED_SETTINGS = ['shortcutKeySettings', 'appLocale', 'closeActionMinimize', 'runWhenComputerStart', 'hideMainWindowOnStartup', 'enableHardwareAcceleration', 'enableSecurityLock', 'securityLockPassword', 'autoDownloadUpdates']
 
 /** maint-d7 (pure, unit-tested): the subset of MAIN_CONSUMED_SETTINGS whose live value differs from
  *  the declared default — i.e. what a bare restore/commit must hand to main's updateSettings IPC. */

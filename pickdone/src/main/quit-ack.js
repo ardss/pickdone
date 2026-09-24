@@ -58,4 +58,51 @@ function createQuitAckTracker () {
   }
 }
 
-module.exports = { createQuitAckTracker }
+/** P2 (dw wave5 2026-09-24): the broadcast→ack→bounded-wait→flushMain loop existed twice —
+ *  index.js's will-quit flush window and updater.js's flushOnceOnReady — with drifted caps
+ *  (2000 vs 1500ms). Converged here. The unified cap is 2000ms (the quit-path value; the
+ *  updater's early round only gains extra bound time, renderer dispatch typically finishes in
+ *  far less). Lifecycle teardown (stopDbWatch/unregisterShortcuts/dbm.close/app.quit) stays in
+ *  index.js — only the handshake round is shared. */
+const FLUSH_ACK_CAP_MS = 2000
+const POLL_MS = 50
+
+/** Bounded wait for the current round's acks, then flushMain. Used by runFlushRound and by
+ *  index.js's will-quit (which broadcasts earlier, in before-quit, together with the abandon
+ *  wiring — so it only needs the wait half). Never calls flushMain twice: guard in the caller. */
+function awaitFlushAcks ({ tracker, capMs = FLUSH_ACK_CAP_MS, pollMs = POLL_MS, flushMain, onDone }) {
+  const startedAt = Date.now()
+  const poll = setInterval(() => {
+    if (tracker.allAcked() || Date.now() - startedAt >= capMs) {
+      clearInterval(poll)
+      flushMain()
+      if (onDone) onDone(tracker)
+    }
+  }, pollMs)
+  if (poll.unref) poll.unref()
+}
+
+/** One full flush round: broadcast 'app-quitting-flush' with a fresh token to every live window
+ *  (onSend(w) hooks per-window extras), open the tracker round on the exact sender set, then
+ *  wait bounded for the acks and run flushMain. Returns the round token. */
+function runFlushRound ({ tracker, getWindows, flushMain, capMs, pollMs, onSend, onDone }) {
+  const t = tracker || createQuitAckTracker()
+  const senders = []
+  const token = t.nextToken()
+  for (const w of (getWindows ? getWindows() : [])) {
+    try {
+      if (w && !w.isDestroyed()) {
+        // Renderer side: same channel + token shape for every round — the renderer flushes its
+        // debounced mirrors (pending edits / pomodoro ledger), then acks 'app-quitting-flush-ack'.
+        w.webContents.send('app-quitting-flush', { token })
+        senders.push(w.webContents.id)
+        if (onSend) onSend(w)
+      }
+    } catch { /* dead window */ }
+  }
+  t.beginRound(senders, token)
+  awaitFlushAcks({ tracker: t, capMs, pollMs, flushMain, onDone })
+  return token
+}
+
+module.exports = { createQuitAckTracker, runFlushRound, awaitFlushAcks, FLUSH_ACK_CAP_MS, POLL_MS }

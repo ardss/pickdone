@@ -59,6 +59,9 @@ const noop = () => {}
 const ctxBase = {
   isLocked: () => locked,
   isLockWindow: () => false,
+  // P3 2026-09-24: system.js now consumes the ctx-injected isSafeExternal (single source with
+  // index.js) — the test ctx must inject the same index.js-shaped validator.
+  isSafeExternal: u => typeof u === 'string' && /^https?:\/\//i.test(u),
   app: { getPath: () => TMP },
   getMainWindow: () => MAIN,
   notifySyncChange: noop,

@@ -23,7 +23,7 @@ See the [README](README.md) for a full tour, and https://pickdone.app for the li
 
 ```bash
 npm run check          # fast loop: ESLint + unit tests + CLI smoke
-npm run check:all      # full 29-stage gate CI runs — required green before your PR
+npm run check:all      # full multi-stage gate (stage count grows as pools evolve; the script's summary is the source of truth) — required green before your PR
 ```
 
 CI runs `check:all` (lint, typecheck, unit tests, live Electron integration/smoke/e2e, packaging whitelist drift, …); a green `check` alone can still fail CI. Running a single test file: `node --test tests/<file>.test.mjs` from `pickdone/`.
@@ -35,7 +35,7 @@ CI runs `check:all` (lint, typecheck, unit tests, live Electron integration/smok
 - **i18n**: all user-facing copy goes through `$t()` locale packs; zh-CN and en-US must stay in sync (`npm run check:i18n`); zh-CN values are the baseline
 - **Data safety**: SQLite is the single source of truth; schema changes require idempotent migrations verified against an old database; never touch data files from the renderer process
 - **Visuals/interaction**: keep existing layout and interaction conventions; styles must use the design tokens in `assets/css/base.css` (colors/radii/spacing/motion durations)
-- **Accessibility**: new components pass `npm run check:a11y` (axe scan)
+- **Accessibility**: new components pass `node cli/check-all.js --a11y` (live-app axe scan via `cli/a11y-scan.js`; needs an app in CDP mode, not part of the default gate)
 
 ## Native module note
 

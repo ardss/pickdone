@@ -270,6 +270,7 @@
                   <button class="mini" v-if="updActive" :disabled="updStatus === 'checking' || updStatus === 'downloading'" @click="checkUpdate">{{ $t('update.checkNow') }}</button>
                   <span v-if="updStatus === 'downloading'" class="upd-hint">{{ $t('update.downloading') }} {{ updPercent }}%</span>
                   <span v-else-if="updStatus === 'available'" class="upd-hint">{{ $t('update.available') }} v{{ updNewVersion }}</span>
+                  <span v-else-if="updStatus === 'error'" class="upd-hint">{{ $t('update.failedReason', { msg: String((updInfo && updInfo.message) || '').slice(0, 120) }) }}</span>
                   <button v-if="updStatus === 'available'" class="mini" @click="downloadNow">{{ $t('update.downloadNow') }}</button>
                   <button v-else-if="updStatus === 'ready'" class="primary mini-lg" @click="restartToUpdate">{{ $t('update.restartNow') }}</button>
                   <button class="mini" v-if="!updActive" @click="openReleases">{{ $t('update.openReleases') }}</button>
@@ -338,7 +339,8 @@ export default {
       updVersion: '',
       updActive: true,
       updPercent: 0,
-      updNewVersion: ''
+      updNewVersion: '',
+      updInfo: null
     }
   },
   watch: {
@@ -446,6 +448,7 @@ export default {
     },
     applyUpdStatus (r) {
       this.updStatus = r.status
+      this.updInfo = (r && r.info) || null
       if (r.status === 'checking') this.updPercent = 0
       if (r.info && r.info.percent != null) this.updPercent = r.info.percent
       if (r.info && r.info.version) this.updNewVersion = r.info.version
