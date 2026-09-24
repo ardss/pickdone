@@ -198,7 +198,6 @@ try {
       }
     }
     console.log(`OK: ${ymlName} version=${ymlVersion || '?'} ${refs.size} artifact ref(s) reconciled` + (shaVerified ? `（sha512/size 实测通过 ${shaVerified} 个）` : ''))
-    console.log(`OK: ${ymlName} version=${ymlVersion || '?'} ${refs.size} artifact ref(s) reconciled`)
   }
 } catch (e) {
   console.error('FAIL: linux 更新元数据校验异常: ' + (e && e.message))
