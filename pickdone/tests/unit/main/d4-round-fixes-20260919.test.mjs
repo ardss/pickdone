@@ -184,11 +184,14 @@ test('d4 config-store: concurrent writeConfig calls both land; a throwing write 
     assert.equal(onDisk.b, 2, 'both patches landed (read-modify-write never interleaved)')
     // throwing write: force the tmp creation to fail once; the tmp file must be cleaned before rethrow.
     // 2026-09-22 main-ipc-2: the write goes through writeFileDurable (fd write + fsync before the
-    // rename), so the injection point moved from writeFileSync(config.json.tmp) to openSync(config.json.dtmp).
+    // rename), so the injection point moved from writeFileSync(config.json.tmp) to openSync(tmp).
+    // 2026-09-24 C3: tmp names are unique per call — `config.json.<pid>.<ms>.dtmp` — so match on
+    // the basename prefix + .dtmp suffix instead of the old fixed constant.
     const origOpen = fs.openSync
     let failed = false
     fs.openSync = function (p, ...rest) {
-      if (String(p).endsWith('config.json.dtmp')) { failed = true; throw new Error('EACCES: disk full') }
+      const base = String(p).split(/[\\/]/).pop()
+      if (base.startsWith('config.json.') && base.endsWith('.dtmp')) { failed = true; throw new Error('EACCES: disk full') }
       return origOpen.call(this, p, ...rest)
     }
     try {
@@ -197,7 +200,7 @@ test('d4 config-store: concurrent writeConfig calls both land; a throwing write 
       fs.openSync = origOpen
     }
     assert.ok(failed, 'the failure was injected at the tmp write')
-    assert.equal(fs.existsSync(path.join(dir, 'config.json.dtmp')), false, 'no tmp residue after a failed write')
+    assert.equal(fs.readdirSync(dir).filter(n => n.endsWith('.dtmp')).length, 0, 'no tmp residue after a failed write')
     assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8')).b, 2, 'previous good config still intact')
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
