@@ -134,6 +134,11 @@ export default {
     historyRedoPop (s) { historyRedoPop(s) },
     historyRedoPush (s, snap) { historyRedoPush(s, snap) },
     viewsClean (s) { s.viewsDirty = false },
+    /* Echo-suppression stamp: the single writer of _lastLocalWriteAt (previously two direct
+       cross-module writes: index.js subscribeAction-after and tomato.js bumpSnow). Consumers:
+       main.js todosChanged echo gate (1500ms window, protects the undo stack from our own
+       broadcast echo's todo/init historyClear). */
+    stampLocalWrite (s) { s._lastLocalWriteAt = Date.now() },
     setSyncing (s, v) { s.isSyncing = v },
     setViews (s, views) { s.views = views },
     setTodayTs (s, ts) { s.todayTimestamp = +dayjs(ts || Date.now()).startOf('day') },
