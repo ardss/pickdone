@@ -1438,11 +1438,14 @@ function getEstimateOf (taskId, legacyVal) {
 /* ---------------- Manual ordering (taskSort midpoint insertion — same semantics as renderer todo/reorderTodos drag)
    F-B2 (dw wave 3): the score math moved to shared/sort-core.mjs moveWithin (single source with the
    renderer's TodoItem._writeSort reorderScale rewrite); the ±100 no-beyond margin is precision
-   degradation only — order can no longer drift between the two ends' scales. */
+   degradation only — order can no longer drift between the two ends' scales.
+   B2 (2026-09-24): pool + dayOrder are in APP DISPLAY order (taskSort DESCENDING — sortMode.js
+   custom mode). moveWithin's `sorts` contract is display order now, so `sort top` lands max+100
+   (visually first) instead of the old min-100 (visually last, P1 cross-end inversion). */
 /** Reorder <task> relative to: top|bottom|up|down (within its day) or before|after <otherTask> (must share the day/no-date pool) */
 function sortTask (input, pos, refInput) {
   const t = resolveTask(input, liveTasks())
-  const pool = liveTasks().filter(x => x.dayStart === t.dayStart).sort((a, b) => (a.taskSort || 0) - (b.taskSort || 0))
+  const pool = liveTasks().filter(x => x.dayStart === t.dayStart).sort((a, b) => (b.taskSort || 0) - (a.taskSort || 0))
   const idx = pool.findIndex(x => x.taskId === t.taskId)
   let ref = null
   if (pos === 'before' || pos === 'after') {
@@ -1458,10 +1461,12 @@ function sortTask (input, pos, refInput) {
   }
   const newSort = mv.sort
   patchTodo(t.taskId, { taskSort: newSort }, { action: 'sort' })
-  // Re-read the real persisted order (cannot reuse the pool above — it is a pre-move snapshot; the ★ marker would show at the old position)
+  // Re-read the real persisted order (cannot reuse the pool above — it is a pre-move snapshot; the ★ marker would show at the old position).
+  // Reported in App display order (taskSort descending) — B2: the old ascending readout was the
+  // App's list printed upside-down.
   const after = liveTasks()
     .filter(x => x.dayStart === t.dayStart)
-    .sort((a, b) => (a.taskSort || 0) - (b.taskSort || 0))
+    .sort((a, b) => (b.taskSort || 0) - (a.taskSort || 0))
     .map(x => (x.taskId === t.taskId ? '★' : '') + x.taskContent)
   return { taskId: t.taskId, taskSort: newSort, dayOrder: after }
 }
