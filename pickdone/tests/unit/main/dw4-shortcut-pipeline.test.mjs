@@ -25,6 +25,7 @@ function setupShortcuts () {
   let beforeInput = null
   let didFinishLoad = null
   let processGone = null
+  let removeAllCalled = false
   const ipcHandlers = {}
   const electronStub = {
     globalShortcut: { register: () => true, unregisterAll: () => {} },
@@ -43,13 +44,22 @@ function setupShortcuts () {
     mod = require_(resolved)
   } finally { Module._load = origLoad }
   const webContents = {
-    removed: [],
-    on: (ev, h) => {
+    listeners: {},
+    isDestroyed: () => false,
+    on (ev, h) {
+      (this.listeners[ev] = this.listeners[ev] || []).push(h)
       if (ev === 'before-input-event') beforeInput = h
       if (ev === 'did-finish-load') didFinishLoad = h
       if (ev === 'render-process-gone') processGone = h
     },
-    removeAllListeners: ev => { if (ev !== 'before-input-event') webContents.removed.push(ev) },
+    removeListener (ev, h) {
+      const arr = this.listeners[ev] || []
+      const i = arr.indexOf(h)
+      if (i >= 0) arr.splice(i, 1)
+    },
+    // P1 2026-09-24: removeAllListeners was the OLD rebind hygiene — it also stripped windows.js
+    // crash self-heal listeners. Kept here only to assert shortcuts.js no longer calls it.
+    removeAllListeners: () => { removeAllCalled = true },
     send: (ch, payload) => sent.push([ch, payload])
   }
   const win = { isDestroyed: () => false, webContents }
@@ -65,6 +75,8 @@ function setupShortcuts () {
   })
   return {
     api, sent, ipcHandlers,
+    wcCount (ev) { return (webContents.listeners[ev] || []).length },
+    get removeAllCalled () { return removeAllCalled },
     fire (input) {
       const e = { preventDefault: () => prevented.push(true) }
       beforeInput(e, input)
@@ -139,11 +151,15 @@ test('F-D3: a renderer crash WITHOUT reload also lifts suppression (render-proce
   assert.deepEqual(s.sent, [['shortcut-action', 'deleteEvent']], 'a dead renderer cannot leave the pipeline muted')
 })
 
-test('F-D3: re-binding clears the self-heal listeners — no per-rebind accumulation', () => {
+test('F-D3: re-binding swaps the suppression-reset listeners without accumulation — and never removeAllListeners', () => {
   const s = setupShortcuts()
   s.api.applyShortcuts({ sync: 'ctrl+s', deleteEvent: 'ctrl+d' }) // a second applyShortcuts (settings re-bind)
-  assert.ok(s.removed.includes('did-finish-load'), 'did-finish-load removed before re-add')
-  assert.ok(s.removed.includes('render-process-gone'), 'render-process-gone removed before re-add')
+  // P1 2026-09-24: the old removeAllListeners rebind hygiene is FORBIDDEN — it also stripped the
+  // windows.js crash self-heal / load-retry listeners on the same webContents (dead window after
+  // a renderer crash). Exact-reference removal only: exactly one OWN listener per event remains.
+  assert.equal(s.removeAllCalled, false, 'removeAllListeners must not be called during a rebind')
+  assert.equal(s.wcCount('did-finish-load'), 1, 'exactly one own did-finish-load suppression reset after a rebind')
+  assert.equal(s.wcCount('render-process-gone'), 1, 'exactly one own render-process-gone suppression reset after a rebind')
 })
 
 test('F-D7: moveWithUndo surfaces an apply() rejection instead of faking the moved toast path', async () => {

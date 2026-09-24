@@ -49,6 +49,20 @@ function createShortcuts ({ getMainWindow, showMainOrLock, quickAdd, i18n, log }
     return ok
   }
 
+  // P1 (dw wave5 2026-09-24): the previous rebind hygiene used webContents.removeAllListeners() on
+  // before-input-event / did-finish-load / render-process-gone — which ALSO stripped the main
+  // window's crash self-heal and load-retry counters wired in windows.js (they hang their own
+  // did-finish-load / render-process-gone listeners on the SAME webContents). applyShortcuts runs
+  // on every cold start (index.js calls it right after createMainWindow) and on every shortcut
+  // re-bind, so after a renderer crash the window stayed dead/blank with no reload→relaunch
+  // recovery until the user killed the process. Fix: hold OUR OWN handler references and
+  // removeListener exactly those — never removeAllListeners.
+  let bound = null // { wc, onBeforeInput, onFinishedLoad, onProcessGone } of the previous rebind
+  // F-D3 suppression flag + its IPC toggle live at factory scope: applyShortcuts runs on every
+  // rebind, so re-registering the ipcMain listener per call stacked one closure per rebind.
+  let captureSuppress = false
+  ipcMain.on('shortcut-capturing', (e, flag) => { captureSuppress = !!flag })
+
   function applyShortcuts (s = {}) {
     // 丢弃上一轮挂着的退避重试:重绑后旧组合不得再抢注系统热键
     for (const t of retryTimers) clearTimeout(t)
@@ -92,23 +106,27 @@ function createShortcuts ({ getMainWindow, showMainOrLock, quickAdd, i18n, log }
     // recorder never saw the key — impossible to re-record) AND still dispatched its action
     // (recording ctrl+d really deleted the selected task). The renderer toggles this flag over
     // IPC on capture start/stop; suppressed events fall through untouched.
-    let captureSuppress = false
-    ipcMain.on('shortcut-capturing', (e, flag) => { captureSuppress = !!flag })
     // The main window may already be destroyed (settings re-bind triggered via notify-settings-updated during exit): guard with a getMainWindow null check
     const cur = getMainWindow()
-    // Re-bind hygiene: removeAllListeners before every re-add, matching the before-input-event
-    // line below — applyShortcuts runs on every settings re-bind, so a bare .on here would
-    // stack one listener per rebind (adversarial review round 2, item 2).
-    cur && cur.webContents.removeAllListeners('before-input-event')
-    cur && cur.webContents.removeAllListeners('did-finish-load')
-    cur && cur.webContents.removeAllListeners('render-process-gone')
+    // P1 (dw wave5 2026-09-24) rebind hygiene, take 2: remove ONLY the handlers we attached on the
+    // previous applyShortcuts call (exact references via removeListener). windows.js hangs its own
+    // did-finish-load / render-process-gone listeners on this same webContents — they must survive
+    // every rebind. Never reintroduce removeAllListeners here.
+    if (bound && bound.wc && !bound.wc.isDestroyed()) {
+      try {
+        bound.wc.removeListener('before-input-event', bound.onBeforeInput)
+        bound.wc.removeListener('did-finish-load', bound.onFinishedLoad)
+        bound.wc.removeListener('render-process-gone', bound.onProcessGone)
+      } catch { /* destroyed between the check and the remove */ }
+    }
+    if (!cur) { bound = null; return }
     // F-D3 self-heal: if the renderer dies / reloads mid-record (crash, dev reload) the
     // suppression flag would otherwise stay raised forever and silently disable every in-app
     // shortcut until the next record or app restart. Any fresh load starts from a clean slate;
     // render-process-gone covers the crash-without-reload tail (renderer gone, no new load).
-    cur && cur.webContents.on('did-finish-load', () => { captureSuppress = false })
-    cur && cur.webContents.on('render-process-gone', () => { captureSuppress = false })
-    cur && cur.webContents.on('before-input-event', (e, input) => {
+    const onFinishedLoad = () => { captureSuppress = false }
+    const onProcessGone = () => { captureSuppress = false }
+    const onBeforeInput = (e, input) => {
       const w = getMainWindow()
       if (input.type !== 'keyboard' || !w || w.isDestroyed()) return
       const parts = []
@@ -130,7 +148,11 @@ function createShortcuts ({ getMainWindow, showMainOrLock, quickAdd, i18n, log }
           return
         }
       }
-    })
+    }
+    cur.webContents.on('did-finish-load', onFinishedLoad)
+    cur.webContents.on('render-process-gone', onProcessGone)
+    cur.webContents.on('before-input-event', onBeforeInput)
+    bound = { wc: cur.webContents, onBeforeInput, onFinishedLoad, onProcessGone }
   }
 
   return { applyShortcuts, unregisterAll: () => globalShortcut.unregisterAll() }
