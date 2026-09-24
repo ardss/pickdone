@@ -14,14 +14,17 @@
  *   - IPC ops: syncGetSettings / syncSetEnabled / syncGetStatus / syncGetPairingCode / syncSetName
  *     registered into db.js OPS via db-sync-ops.js (keeps the three-way op whitelist gate true).
  *
- * Known P3a scope cuts (documented, not silent):
- *   - Category/plan/filter tombstones cannot be hydrated (no read op returns them), so deletions of
- *     those entities propagate only as seq-advancing pointers that peers skip; full snapshot
- *     reconciliation covers them once snapshot exchange is wired into the round protocol.
- *   - conflictCopy from merge.mjs is materialized for todos only (tombstoned recycle-bin row,
- *     see sync-apply.js); other entities log the loser (no conflict-copy UI yet).
- *   - applySnapshot/replaceAll is implemented as merge-apply (non-destructive) because the round
- *     protocol never sends snapshot-request in P3a; a true destructive reset is deferred.
+ * Known P3a scope cuts (documented, not silent) — STATUS UPDATE 2026-09-25, two of the three
+ * original cuts have since been CLOSED (M3 + B16, see sync-apply.js):
+ *   - CLOSED (M3 2026-09-20): category/plan/filter tombstones ARE hydrated now — allRows() pushes
+ *     them (planTombstones/filterTombstones/categoriesAllRows below) and sync-apply.js applies
+ *     tombstone winners per entity; deletions propagate as real delete-wins rows, not skipped
+ *     pointers.
+ *   - CLOSED (B16 2026-09-24): conflictCopy is materialized for todos (recycle-bin row) AND for
+ *     plan/filter/category/setting/meta (machine-local metaConflictBackup.<entity>:<id> backups,
+ *     restorable via syncConflictBackupsList/Restore — see sync-conflict-backups.js).
+ *   - Still open: applySnapshot/replaceAll is implemented as merge-apply (non-destructive) because
+ *     the round protocol never sends snapshot-request in P3a; a true destructive reset is deferred.
  */
 const { randomUUID, timingSafeEqual } = require('node:crypto')
 const os = require('node:os')
