@@ -158,7 +158,10 @@ window.appUI = null
 // Window roles: main window (default) / tomato float window (__tomato-float) / global quick-add window (__quick-add)
 // Float and quick-add windows are lightweight helpers: auto-backup setInterval never runs there;
 // the float window adds a fallback tick heartbeat (main.js the bottom), quick-add syncs passively via storage events and IPC broadcasts
-const isMainShell = !/__tomato-float|__quick-add/.test(window.location.hash)
+// F18 (2026-09-24): both hand-copied hash regexes here (isMainShell / isFloatShell) route through
+// utils/auxWindow.js now — one copy had drifted to miss __quick-add.
+import { isAuxWindow, isFloatWindow } from './utils/auxWindow.js'
+const isMainShell = !isAuxWindow()
 
 async function bootstrap () {
   // 2026-09-02 measurement verdict: keep it serial. Tried settings∥category in parallel; measured total time actually rose ~50ms
@@ -447,16 +450,22 @@ async function bootstrap () {
   // Shared tomato tick: main window drives + float window is a fallback heartbeat (2026-09-04 deep review P0: main window can be closed/rebuilt (tray minimization),
   // single-point heartbeat would make the entire focus that is counting down in the float window silently evaporate). Quick-add does not participate ( controlling CPU stack, was 3-window 1Hz at 5-15% ).
   // cross-window sync relies on the localStorage storage event + tomato.js's deterministic tomatoId + claimPhase token.
-  const isFloatShell = /__tomato-float/.test(window.location.hash)
+  const isFloatShell = isFloatWindow()
   if (isMainShell || isFloatShell) {
     setInterval(() => { store.dispatch('tomato/tick').catch(() => {}) }, 1000)
   }
 
   // When the tomato timer is enabled and the float window hasn't been closed, auto-show the float window 6 seconds after start — main window only
   // (quick-add/float windows also load this file; indiscriminate popping would "revive" a float window the user closed)
+  // F12 (2026-09-24): "the user explicitly closed it" is persisted under a dedicated localStorage key
+  // (NOT enableTomatoFloating — that is the settings-switch semantics, written only by SettingsModal).
+  // TomatoBar.toggleFloat writes/clears the key; auto-show respects it so a closed float stays closed
+  // across restarts. Session-only runtime state by design (renderer localStorage, not config.json).
   if (isMainShell) {
     setTimeout(() => {
-      if (window.todoAPI && store.state.settings.enableTomatoFloating !== false) {
+      let closedByUser = false
+      try { closedByUser = localStorage.getItem('tomatoFloatClosedByUser') === '1' } catch { /* storage unavailable */ }
+      if (window.todoAPI && store.state.settings.enableTomatoFloating !== false && !closedByUser) {
         window.todoAPI.showTomatoFloat()
       }
     }, 6000)

@@ -93,7 +93,10 @@ export function focusTodoPool (storeLike) {
 const DEF = {
   status: 'default', attachTodo: null, todayTomatoCount: 0, tomatoRecordList: [],
   tomatoTime: 25, restTime: 5, enableNotification: true, enableBeep: true,
-  whiteNoiseAudio: '', isEnabledFloatingWindow: false,
+  // F12 (2026-09-24): dead floating-window default removed — zero consumers repo-wide; float
+  // visibility lives in main-process tomato-float.js + localStorage 'tomatoFloatClosedByUser'
+  // (see TomatoBar.toggleFloat / renderer main.js auto-show).
+  whiteNoiseAudio: '',
   preTomatoTimes: [25], preRestTimes: [5],
   remainSec: 1500, startedAt: 0
 }

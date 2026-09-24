@@ -226,7 +226,16 @@ export default {
       if (!window.todoAPI || this._floatToggling) return // busy guard: rapid clicks must not fire multiple IPC toggles
       this._floatToggling = true
       try {
-        if (this.floatOn) { window.todoAPI.hideTomatoFloat() } else { window.todoAPI.showTomatoFloat() }
+        if (this.floatOn) {
+          window.todoAPI.hideTomatoFloat()
+          // F12 (2026-09-24): an explicit user close persists across restarts — main.js auto-show
+          // (6s after start) reads this key and must not resurrect the float the user closed.
+          // Deliberately NOT enableTomatoFloating (settings-switch semantics, SettingsModal-owned).
+          try { localStorage.setItem('tomatoFloatClosedByUser', '1') } catch { /* storage unavailable */ }
+        } else {
+          window.todoAPI.showTomatoFloat()
+          try { localStorage.removeItem('tomatoFloatClosedByUser') } catch { /* storage unavailable */ }
+        }
         // Give the main process a beat to apply the change, then write back from its real visibility
         await new Promise(r => setTimeout(r, 300))
         this.floatOn = !!(await window.todoAPI.tomatoFloatShown())
