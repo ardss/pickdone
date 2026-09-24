@@ -244,14 +244,18 @@ const RESTORE_SEGMENTS = [
   { seg: 'habitsState', enable: c => c.habitsPut, restore: (raw, cb) => restoreHabitsBlobFromCriticalBackup(raw, cb) }
 ]
 
-/** todoState re-import: merge todoList+recycleList, filter rows without taskId. Returns the number imported. */
+/** todoState re-import: merge todoList+recycleList, filter rows without taskId. Returns the number imported.
+ *  Adversarial-round fix: a missing upsertTasks callback with a NON-empty list used to return
+ *  list.length while importing nothing — a lie that could open the caller's restoredN>0 gate
+ *  (bak-file cleanup) on a restore that touched zero rows. No callback ⇒ honest 0. */
 function restoreTodoRowsFromCriticalBackup (raw, upsertMany) {
   // todoState has two real shapes: the renderer's writeCriticalBackup stores a JSON string (nested via JSON.stringify),
   // while some old drill data is an object. Previously only objects were accepted — real disaster backups would silently import 0 rows (confirmed by the round-trip test 2026-09-01).
   const todoState = parseSegment(raw.backup && raw.backup.todoState, 'todoState')
   if (todoState === null) return 0 // schemaV too high: skip the task segment, process the rest as usual
   const list = ((todoState.todoList || []).concat(todoState.recycleList || [])).filter(t => t && t.taskId)
-  if (list.length && upsertMany) upsertMany(list)
+  if (typeof upsertMany !== 'function') return 0 // cannot import → never claim the count
+  if (list.length) upsertMany(list)
   return list.length
 }
 

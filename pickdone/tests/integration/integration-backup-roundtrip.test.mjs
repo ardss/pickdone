@@ -185,4 +185,18 @@ test('round-trip: tomatoRecords/filterState/planState/habitsState segments re-im
 
   dbm.close()
   fs.rmSync(udB, { recursive: true, force: true })
+
+  // Adversarial-round pin: a NON-empty todoState with a missing upsertTasks callback must return
+  // 0 — the old shape returned list.length while importing nothing, which could have opened the
+  // caller's restoredN>0 gate (bak cleanup) on a restore that touched zero rows.
+  const udC = tmpDir()
+  dbRecovery.writeCriticalStateBackupAtomic(udC, JSON.stringify({
+    backup: { todoState: JSON.stringify({ schemaV: 1, todoList: [{ taskId: 't9', taskContent: 'x' }], recycleList: [], version: 0, remoteVersion: 0, todayTimestamp: Date.now(), ignoreReminder: {}, todosVersion: '0', isSyncing: false, views: {} }) }
+  }))
+  const nGhost = dbRecovery.restoreTasksFromCriticalBackup(udC, undefined, undefined, undefined)
+  assert.equal(nGhost, 0, 'missing callback + non-empty todoState reports 0 imported (never a ghost count)')
+  dbm.init(udC)
+  assert.ok(!dbm.call('getById', 't9'), 'and indeed no row landed in the db')
+  dbm.close()
+  fs.rmSync(udC, { recursive: true, force: true, maxRetries: 3 })
 })
