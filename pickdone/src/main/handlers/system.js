@@ -7,7 +7,10 @@ const updater = require('../updater')
 const { createExporter } = require('../export-xlsx')
 
 module.exports = function systemHandlers (ctx) {
-  const { isLocked, allowWithinRate, i18n, app, getMainWindow } = ctx
+  // P3 (dw wave5 2026-09-24): isSafeExternal now comes from the injected ctx (index.js:788) —
+  // this module used to carry a private verbatim copy, so any drift would have split the
+  // external-link safety criterion between the two files. Same pattern as isLocked above.
+  const { isLocked, allowWithinRate, i18n, app, getMainWindow, isSafeExternal } = ctx
   const { Notification, shell } = require('electron')
   // D6 P2 (2026-09-21): updater channels are main-window-only — the check/download/quit-and-install
   // triple used to be callable from ANY renderer window even while locked.
@@ -114,9 +117,4 @@ module.exports = function systemHandlers (ctx) {
     'updater:quit-and-install': (e) => { assertMainWindow(e); if (isLocked()) throw new Error('locked'); return updater.quitAndInstall() },
     'updater:status': () => updater.getStatus()
   }
-}
-
-/* ---------------- External-link safety: only http/https allowed ---------------- */
-function isSafeExternal (url) {
-  return typeof url === 'string' && /^https?:\/\//i.test(url)
 }
