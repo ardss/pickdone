@@ -78,7 +78,12 @@ function encryptedProbe (file, keyFile) {
   const Database = loadVendorDriver()
   if (!Database) return 'unknown'
   let key
-  try { key = fs.readFileSync(keyFile, 'utf8').trim() } catch { return 'no' }
+  // F20 (dw wave6 2026-09-24): a key-read IO failure (AV/lock瞬时占用 — existsSync at the caller
+  // already passed) used to map to 'no' = "genuinely corrupt", which re-opened the wave5 hole:
+  // a HEALTHY db got renamed + rolled back to a stale backup through this side door. Unreadable
+  // key is exactly the 'unknown' case this comment block always promised ("key unreadable → stay
+  // conservative"); only a READABLE key that is not 64-hex counts as keyless ('no').
+  try { key = fs.readFileSync(keyFile, 'utf8').trim() } catch { return 'unknown' }
   if (!/^[0-9a-fA-F]{64}$/.test(key)) return 'no' // corrupt key = db.js treats it as keyless; header rules apply
   let db
   try {
@@ -162,7 +167,7 @@ function attemptDbRecovery (ud, retryInit) {
       }
       return { source: 'transient', label: probe === 'yes'
         ? 'transient init failure; encrypted db decrypts with its key (no rename performed)'
-        : 'decrypt probe inconclusive (sqlite driver unavailable) — recovery declined to avoid destroying a possibly-healthy encrypted DB (no rename performed)' }
+        : 'decrypt probe inconclusive (sqlite driver unavailable or db.key unreadable) — recovery declined to avoid destroying a possibly-healthy encrypted DB (no rename performed)' }
     }
   }
   // Confirm a recoverable source exists before renaming: transient IO errors (disk full/lock held) also make init fail; renaming unconditionally
