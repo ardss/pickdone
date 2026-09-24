@@ -124,7 +124,14 @@ export default {
       try { await this.$confirm(this.$t('statsJ.FilterView.delConfirm', { n: clicked.name }), this.$t('statsJ.FilterView.delTitle'), { type: 'warning' }) } catch { return }
       const f = this.filter
       if (!f) return
-      await this.$store.dispatch('filters/remove', f.id)
+      // P2 fix (2026-09-25): a failed delete used to bubble as an unhandled rejection and the view
+      // navigated away anyway (the filter silently survived). Surface the error and stay put.
+      try {
+        await this.$store.dispatch('filters/remove', f.id)
+      } catch (e) {
+        this.$message.error(this.$t('statsJ.FilterView.delFilter') + ': ' + (e && e.message ? e.message : e))
+        return
+      }
       this.$router.replace({ name: 'todo-list-today' })
     },
     saved (id) {
