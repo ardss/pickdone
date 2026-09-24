@@ -114,6 +114,51 @@ test('P2: repeat planDeleteTask does not re-stamp deletedAt nor mint a new oplog
   assert.equal(oplogLen(), afterFirst, 'repeat planDeleteTaskDay also logs no new oplog entry')
 })
 
+test('P0: filter/category/tomato backups restore into their native tables, conflict markers stripped', () => {
+  const dir = tmp()
+  db.init(dir)
+  const ops = scb.ops(() => (op, p) => db.call(op, p))
+  const stamp = 1700000000000
+
+  // filter: raw filterList shape + loserCopy markers (must be stripped, not written)
+  db.call('setMeta', [BACKUP_PREFIX + 'filter:42.aa', JSON.stringify({ key: 'filter:42', value: { id: 42, name: 'Work', conds: [{ k: 'p', v: '1' }], sort: 3, updatedAt: stamp, conflictOf: 42, conflictAt: stamp }, lostAt: 1 })])
+  const rf = ops.syncConflictBackupRestore({ key: BACKUP_PREFIX + 'filter:42.aa' })
+  assert.equal(rf.entity, 'filter')
+  const frow = db.call('filterList').find(f => f.id === 42)
+  assert.ok(frow && frow.name === 'Work', 'filter restored into filters')
+
+  // category: RAW row shape (M1 — the hydrated app shape would throw in better-sqlite3)
+  db.call('setMeta', [BACKUP_PREFIX + 'category:9.bb', JSON.stringify({ key: 'category:9', value: { id: 9, userId: null, name: 'Home', color: '#fff', createdAt: stamp, sort: 1, isFolder: 0, parentId: null, deleted: 0, deletedAt: 0, updatedAt: stamp, conflictOf: 9, conflictAt: stamp }, lostAt: 1 })])
+  const rc = ops.syncConflictBackupRestore({ key: BACKUP_PREFIX + 'category:9.bb' })
+  assert.equal(rc.entity, 'category')
+  const crow = db.call('categoriesAllRows').find(c => c.id === 9)
+  assert.ok(crow && !crow.deleted && crow.name === 'Home', 'category restored into categories')
+
+  // tomato: rec shape (tomatoAll/_rowToRec); conflictOf/conflictAt must NOT leak into extra
+  db.call('setMeta', [BACKUP_PREFIX + 'tomato:tm7.cc', JSON.stringify({ key: 'tomato:tm7', value: { tomatoId: 'tm7', endTime: 1700000100000, focus: 25, focusTaskId: 't1', succeed: true, updatedAt: stamp, conflictOf: 'tm7', conflictAt: stamp }, lostAt: 1 })])
+  const rt = ops.syncConflictBackupRestore({ key: BACKUP_PREFIX + 'tomato:tm7.cc' })
+  assert.equal(rt.entity, 'tomato')
+  const trow = db.call('tomatoAll').find(r => r.tomatoId === 'tm7')
+  assert.ok(trow, 'tomato restored into tomato_records')
+  assert.ok(!String(trow.extra || '').includes('conflictOf'), 'conflict markers stripped — extra blob unpolluted: ' + trow.extra)
+})
+
+test('P0 refuse-to-lose: a bulk op that silently skips the row keeps the backup key and throws', () => {
+  const dir = tmp()
+  db.init(dir)
+  const ops = scb.ops(() => (op, p) => db.call(op, p))
+  // malformed day (planAddMany silently drops it — db.js:825) with a live taskId so the skip
+  // is silent, not a filter-visible rejection
+  db.call('setMeta', [BACKUP_PREFIX + 'plan:pl_bad.dd', JSON.stringify({ key: 'plan:pl_bad', value: { id: 'pl_bad', taskId: 'cba_task_x', day: '2026/09/25', mm: '99:99', updatedAt: 1 }, lostAt: 1 })])
+  assert.throws(() => ops.syncConflictBackupRestore({ key: BACKUP_PREFIX + 'plan:pl_bad.dd' }), /did not land in plan/)
+  assert.equal(db.call('getMeta', BACKUP_PREFIX + 'plan:pl_bad.dd') != null, true, 'the ONLY copy survives — backup key NOT consumed')
+  assert.equal(db.call('planAll').some(c => c.id === 'pl_bad'), false, 'no junk row landed')
+  // tomato row without endTime -> tomatoAppendMany parks it in rejected (no throw) — same guard
+  db.call('setMeta', [BACKUP_PREFIX + 'tomato:tm_bad.ee', JSON.stringify({ key: 'tomato:tm_bad', value: { tomatoId: 'tm_bad', focus: 25 }, lostAt: 1 })])
+  assert.throws(() => ops.syncConflictBackupRestore({ key: BACKUP_PREFIX + 'tomato:tm_bad.ee' }), /did not land in tomato/)
+  assert.equal(db.call('getMeta', BACKUP_PREFIX + 'tomato:tm_bad.ee') != null, true, 'tomato backup kept on silent rejection')
+})
+
 test('P1: db-sync-ops reset() keeps the statically-registered getMetaMany dispatchable', () => {
   syncOps.reset()
   // static op survives reset (previously threw 'sync op unavailable' forever after)

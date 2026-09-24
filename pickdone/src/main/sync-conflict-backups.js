@@ -16,7 +16,10 @@ const PREVIEW_MAX = 200
  * registered bulk-write command is restored INTO ITS NATIVE TABLE via that command; only true
  * meta keys go through setMeta. The routing table is derived from the command manifest (single
  * source — never a hand-copied prefix list). Old-format backups (bare key + object value, no
- * structured entity/id fields on the write side) resolve through the same prefix parse. */
+ * structured entity/id fields on the write side) resolve through the same prefix parse.
+ * CONVENTION to guard (review 2026-09-25): user-data META keys must never be named
+ * `<syncable-entity>:` — the prefix IS the routing decision here. If a future meta key ever
+ * needs such a shape, move the write side to structured entity/id fields first. */
 const manifest = require('./command-manifest')
 const ENTITY_RESTORE_OPS = (() => {
   const m = Object.create(null)
@@ -26,6 +29,16 @@ const ENTITY_RESTORE_OPS = (() => {
   }
   return m
 })()
+/* Post-write read-back probes per entity: the bulk ops SILENTLY skip malformed rows
+ * (planAddMany drops bad day/mm, tomatoAppendMany parks bad rows in `rejected`,
+ * upsertCategoryMany/filterUpsertMany suppress no-changes) — a blind backup-key delete after
+ * the call could destroy the only surviving copy of a row that never landed. */
+const ENTITY_READBACK = {
+  plan: (call, id) => (call('planAll') || []).some(r => String(r.id) === id),
+  filter: (call, id) => (call('filterList') || []).some(r => String(r.id) === id),
+  category: (call, id) => (call('categoriesAllRows') || []).some(r => String(r.id) === id && !r.deleted),
+  tomato: (call, id) => (call('tomatoAll') || []).some(r => String(r.tomatoId) === id)
+}
 
 function parseBackup (raw) {
   try { const o = JSON.parse(raw); if (o && typeof o === 'object' && !Array.isArray(o)) return o } catch { /* unreadable payload surfaces as skipped/err below */ }
@@ -75,7 +88,18 @@ module.exports = {
           const row = b.value
           if (!row || typeof row !== 'object' || Array.isArray(row)) throw new Error('syncConflictBackupRestore: entity backup payload is not a row object')
           if (row.id == null) row.id = id
+          // loserCopy (merge.mjs) stamps the conflict markers onto the copied row; they are not
+          // table columns — on tomato they would be snapshotted into the extra JSON blob and
+          // permanently pollute the ledger row, so strip them before any write.
+          delete row.conflictOf
+          delete row.conflictAt
           call(restoreOp, [row])
+          // Read-back before consuming: the bulk op may have SILENTLY skipped the row (see
+          // ENTITY_READBACK). If it never landed, keep the backup key — the restore is
+          // refuse-to-lose, never ok:true-with-copy-deleted.
+          if (!ENTITY_READBACK[entity](call, String(row.id))) {
+            throw new Error('syncConflictBackupRestore: restored row did not land in ' + entity + ' (bulk op skipped it) — backup kept')
+          }
           call('deleteMeta', key)
           return { ok: true, key: originalKey, entity }
         }
