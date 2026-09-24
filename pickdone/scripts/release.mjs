@@ -7,7 +7,7 @@
  *   2. CHANGELOG [Unreleased] 段非空 → 自动改名 [X.Y.Z] - 今天(空段=红:没东西可发就别发)
  *      若目标版本段落已存在=红(防重复发版);package.json version 自动写入 X.Y.Z
  *   3. npm run bump(缓存戳)
- *   4. npm run check:all 本机全绿(29 项,含本机视觉第④组——CI 跑不了的那道护航就在这一步)
+ *   4. npm run check:all 本机全绿(数量随池内条目演进,以脚本输出汇总为准;含本机视觉第④组——CI 跑不了的那道护航就在这一步)
  *   5. commit "chore(release): vX.Y.Z" → push main → tag vX.Y.Z → push tag
  *   6. 提示:盯 Actions;成功后跑 `npm run release:finalize X.Y.Z` 填正文+核产物
  * 配套: scripts/release-finalize.mjs(构建成功后的人工三查也代码化)
@@ -85,7 +85,7 @@ say('[Unreleased] 非空,待归版')
 // 4. 缓存戳 + 全量门禁(视觉第④组只在本机跑,CI 跑不了——这就是为什么 tag 前必须本机过)
 say('npm run bump …')
 npm(['run', 'bump'], { stdio: 'inherit' })
-say('npm run check:all(29 项,约 4-8 分钟;中止=Ctrl+C)…')
+say('npm run check:all(数量随池内条目演进,以脚本输出汇总为准;约 4-8 分钟;中止=Ctrl+C)…')
 try {
   npm(['run', 'check:all'], { stdio: 'inherit' })
 } catch {
