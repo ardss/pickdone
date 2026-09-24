@@ -84,10 +84,12 @@ test('w5 SnTagPanel: multi-root fragment (rows stay direct children of the sn-ta
   assert.match(tpl, /<em class="sn-badge">\{\{t\.count\}\}<\/em>/)
 })
 
-test('w5 SnTagPanel: derives tags from todoList + ui/userTags and navigates with the same contract as SideNav.go', () => {
-  assert.match(tagPanel, /extractTags\(t\.taskContent, t\.taskDescribe\)/)
-  assert.match(tagPanel, /this\.\$store\.state\.ui\.userTags/)
-  assert.match(tagPanel, /sort\(\(a, b\) => b\.count - a\.count\)/)
+test('w5 SnTagPanel: reads tags from the single todo/tagCounts getter and navigates with the same contract as SideNav.go', () => {
+  // Wave-5 dedup update: the tags derivation (previously copied verbatim in SideNav/SnTagPanel/
+  // SnManageTagsModal) moved to getters['todo/tagCounts'] (store/todo.js) — see
+  // tests/unit/renderer/wave5-view-utils-dedup.test.mjs for the behavior parity of that getter.
+  assert.match(tagPanel, /getters\['todo\/tagCounts'\]/)
+  assert.ok(!/extractTags/.test(tagPanel), 'the counting loop left the panel')
   assert.match(tagPanel, /navKeyOfRoute\(name\) \|\| \('category:' \+ \(params && params\.id\)\)/)
 })
 

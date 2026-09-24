@@ -16,6 +16,7 @@ import { historyPush, historyPushKeepRedo, historyClear, historyBreakMerge, hist
 import { writeEventBackupCore, writeAutoBackupCore, writeCriticalBackupCore } from './todoBackup.js'
 import { commit as commitCommand } from "../utils/commandBus.js"
 import { safeUpsert, flushPendingUpserts, queuePendingUpsert, pendingUpserts, daysRangeTs } from './todoPendingUpserts.js'
+import { extractTags } from '../utils/search.js'
 // Re-export: unit tests import the quit-flush retry contract straight from store/todo.js
 export { safeUpsert, flushPendingUpserts }
 
@@ -89,7 +90,25 @@ export default {
   }),
   getters: {
     todayTodoList: s => s.views.todayTodoList,
-    yesterdayTodoList: s => s.views.yesterdayTodoList
+    yesterdayTodoList: s => s.views.yesterdayTodoList,
+    /* Wave-5 dedup: tag count aggregation was kept verbatim in THREE components (SideNav /
+       SnTagPanel / SnManageTagsModal — even their comments admitted being copies). Pure
+       derivation from state, so it belongs here: counts #tags across todoList, then fills in
+       empty "New Tag" placeholder entries from ui/userTags (count 0), sorted count-desc.
+       Vuex caches it for free; the shape is byte-identical to the three removed copies. */
+    tagCounts: (s, _g, rootState) => {
+      const set = new Map()
+      for (const t of [...s.todoList]) {
+        for (const tag of extractTags(t.taskContent, t.taskDescribe)) {
+          set.set(tag, (set.get(tag) || 0) + 1)
+        }
+      }
+      // Empty tags created via "New Tag" also enter the list (count 0), otherwise they disappear right after creation
+      for (const name of ((rootState && rootState.ui && rootState.ui.userTags) || [])) {
+        if (!set.has(name)) set.set(name, 0)
+      }
+      return [...set.entries()].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count)
+    }
   },
   mutations: {
     setLoaded: (s, v) => { s.loaded = v },
