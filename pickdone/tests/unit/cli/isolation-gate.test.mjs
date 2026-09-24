@@ -156,9 +156,11 @@ test('backup root single source: TODO_BACKUP_DIR wins; default stays inside user
     process.env.TODO_BACKUP_DIR = path.join(os.tmpdir(), 'pd-backup-override')
     assert.deepEqual(bd.defaultBackupRootCandidates('X:\\ud'), [process.env.TODO_BACKUP_DIR])
     delete process.env.TODO_BACKUP_DIR
-    const [active, legacy] = bd.defaultBackupRootCandidates('X:\\ud')
-    assert.equal(active, path.join('X:\\ud', 'backups'), 'default root inside the isolation userData (no repo-tree leak)')
-    assert.equal(legacy, path.join('X:\\', 'pickdone-backups'), 'legacy external root kept only for discovery/migration')
+    // Platform-neutral fixture: 'X:\ud' is not a separated path on posix, so dirname() collapses.
+    const ud = path.join(os.tmpdir(), 'pd-iso-ud-fixture')
+    const [active, legacy] = bd.defaultBackupRootCandidates(ud)
+    assert.equal(active, path.join(ud, 'backups'), 'default root inside the isolation userData (no repo-tree leak)')
+    assert.equal(legacy, path.join(path.dirname(ud), 'pickdone-backups'), 'legacy external root kept only for discovery/migration')
     const cjs = require_('../../../cli/lib-restore-backup.cjs')
     assert.equal(typeof cjs, 'function', 'CLI .cjs loads the electron-free module (lazy electron require)')
   } finally {
