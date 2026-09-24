@@ -147,9 +147,9 @@
  * The header answers four questions: when it started (earliest task creation time) / how it progresses (progress bar) / how much was invested (focus minutes = sum of estimate) / when it was last advanced.
  * Task list reuses the category list view's grouping semantics (past completed/expired uncompleted/today/tomorrow/day after tomorrow/later/no date) + a fully collapsed final "completed" group.
  */
-import {dayjs, DAY_MS, rescheduleExpired, FMT, rangeLabel , rangeDays } from '../utils/core.js'
+import {dayjs, DAY_MS, rescheduleExpired, FMT } from '../utils/core.js'
 import { batchMoveWithUndo } from '../utils/confirm.js'
-import { calTitle } from '../utils/buckets.js'
+import { buildExpiryGroups } from '../utils/expiryGroups.js'
 import { loadMilestones, saveMilestones, parseMilestoneDate, milestoneState, milestoneProgress, dueStateOf, newMilestoneId } from '../utils/milestones.js'
 import { COLOR_PALETTE } from '../store/category.js'
 import { PROJECT_STATUSES, statusI18nKey } from '../utils/projectStatus.js'
@@ -341,32 +341,23 @@ export default {
       }
     },
     groups () {
-      const s = this.settings
-      
-      const R1 = rangeDays(s.expiredCompletedTodoRange, 7)
-      const R2 = rangeDays(s.expiredUncompletedTodoRange, 30)
-      const list = this.inCat
-      const today = this.todayTs
-      const bucket = f => list.filter(f).sort((a, b) => b.taskSort - a.taskSort || b.createTime - a.createTime)
-      const g = []
-      const expDone = bucket(t => t.complete && t.dayStart && t.dayStart < today && t.dayStart >= today - R1 * DAY_MS)
-      if (expDone.length) g.push({ key: 'catExpDone', title: this.$t('statsB.ProjectView.expDoneTitle', { r: rangeLabel(s.expiredCompletedTodoRange, this.$t) }), todos: expDone, showDate: true, hasSettings: true })
-      const expUndo = bucket(t => !t.complete && t.dayStart && t.dayStart < today && t.dayStart >= today - R2 * DAY_MS).sort((a, b) => a.dayStart - b.dayStart)
-      if (expUndo.length) g.push({ key: 'catExpUndo', title: this.$t('statsB.ProjectView.expUndoTitle', { r: rangeLabel(s.expiredUncompletedTodoRange, this.$t) }), todos: expUndo, showDate: true, color: 'color2', hasSettings: true, hasRecomplete: true })
-      const td = bucket(t => !t.complete && t.dayStart === today)
-      if (td.length) g.push({ key: 'catToday', title: this.calTitle(today), todos: td, color: 'color3' })
-      const tm = bucket(t => t.dayStart === today + DAY_MS)
-      if (tm.length) g.push({ key: 'catTomorrow', title: this.calTitle(today + DAY_MS), todos: tm, color: 'color3' })
-      const dat = bucket(t => t.dayStart === today + 2 * DAY_MS)
-      if (dat.length) g.push({ key: 'catDat', title: this.calTitle(today + 2 * DAY_MS), todos: dat, color: 'color3' })
-      const up = bucket(t => !t.complete && t.dayStart > today + 2 * DAY_MS)
-      if (up.length) g.push({ key: 'catUpcoming', title: this.$t('statsB.ProjectView.upcoming'), todos: up, showDate: true, color: 'color3', hasSettings: true })
-      const nd = bucket(t => !t.complete && !t.dayStart)
-      if (nd.length) g.push({ key: 'catNoDate', title: this.$t('statsB.ProjectView.noDate'), todos: nd, hasSettings: true })
-      // Final group: all completed in the project (collapsed by default; the "past completed" group above only covers the last N days, this is the full-set fallback)
-      const allDone = bucket(t => t.complete)
-      if (allDone.length) g.push({ key: 'projDone', title: this.$t('statsB.ProjectView.done'), todos: allDone, showDate: true })
-      return g
+      // Wave-5 dedup: same 7-bucket expiry grouping as CategoryView (single source in
+      // utils/expiryGroups.js); ProjectView adds the full-completed fallback group (projDone,
+      // collapsed by default — "past completed" above only covers the last N days, this is the
+      // full-set fallback). Group keys stay the unchanged UI contract.
+      return buildExpiryGroups({
+        list: this.inCat,
+        settings: this.settings,
+        today: this.todayTs,
+        t: this.$t,
+        keys: {
+          expDone: 'statsB.ProjectView.expDoneTitle',
+          expUndo: 'statsB.ProjectView.expUndoTitle',
+          upcoming: 'statsB.ProjectView.upcoming',
+          noDate: 'statsB.ProjectView.noDate'
+        },
+        extraGroups: [{ key: 'projDone', titleKey: 'statsB.ProjectView.done', filter: t => t.complete, props: { showDate: true } }]
+      })
     }
   },
   methods: {
@@ -377,7 +368,6 @@ export default {
       const h = Math.max(420, Math.round(sc.clientHeight - top - 25)) // 25 = page bottom padding
       bd.style.setProperty('--depv-board-h', h + 'px')
     },
-    calTitle (ts) { return calTitle(ts) },
     statusKey (s) { return statusI18nKey(s) },
     setStatus (status) {
       if (!status) return

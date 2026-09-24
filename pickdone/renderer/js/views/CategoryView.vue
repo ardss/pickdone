@@ -23,10 +23,9 @@
  *     today/tomorrow/day after tomorrow (color3, M/D weekX) / later schedules / no date
  * Events filtered by categoryId === route id; rows reuse <todo-item>.
  */
-import { rangeDays } from '../utils/core.js'
 import { batchMoveWithUndo } from '../utils/confirm.js'
-import { calTitle } from '../utils/buckets.js'
-import { DAY_MS, rescheduleExpired, rangeLabel } from '../utils/core.js'
+import { rescheduleExpired } from '../utils/core.js'
+import { buildExpiryGroups } from '../utils/expiryGroups.js'
 import TodoGroupBlock from '../components/TodoGroupBlock.vue'
 import EmptyState from '../components/EmptyState.vue'
 
@@ -52,33 +51,24 @@ export default {
       return this.$store.state.todo.todoList.filter(t => t.categoryId === id)
     },
     groups () {
-      const s = this.settings
-      
-      const R1 = rangeDays(s.expiredCompletedTodoRange, 7)
-      const R2 = rangeDays(s.expiredUncompletedTodoRange, 30)
-      const list = this.inCat
-      const today = this.todayTs
-      const bucket = f => list.filter(f).sort((a, b) => b.taskSort - a.taskSort || b.createTime - a.createTime)
-      const g = []
-      const expDone = bucket(t => t.complete && t.dayStart && t.dayStart < today && t.dayStart >= today - R1 * DAY_MS)
-      if (expDone.length) g.push({ key: 'catExpDone', title: this.$t('statsI.CategoryView.expDoneTitle', { r: rangeLabel(s.expiredCompletedTodoRange, this.$t) }), todos: expDone, showDate: true, hasSettings: true })
-      const expUndo = bucket(t => !t.complete && t.dayStart && t.dayStart < today && t.dayStart >= today - R2 * DAY_MS).sort((a, b) => a.dayStart - b.dayStart)
-      if (expUndo.length) g.push({ key: 'catExpUndo', title: this.$t('statsI.CategoryView.expUndoTitle', { r: rangeLabel(s.expiredUncompletedTodoRange, this.$t) }), todos: expUndo, showDate: true, color: 'color2', hasSettings: true, hasRecomplete: true })
-      const td = bucket(t => !t.complete && t.dayStart === today)
-      if (td.length) g.push({ key: 'catToday', title: this.calTitle(today), todos: td, color: 'color3' })
-      const tm = bucket(t => t.dayStart === today + DAY_MS)
-      if (tm.length) g.push({ key: 'catTomorrow', title: this.calTitle(today + DAY_MS), todos: tm, color: 'color3' })
-      const dat = bucket(t => t.dayStart === today + 2 * DAY_MS)
-      if (dat.length) g.push({ key: 'catDat', title: this.calTitle(today + 2 * DAY_MS), todos: dat, color: 'color3' })
-      const up = bucket(t => !t.complete && t.dayStart > today + 2 * DAY_MS)
-      if (up.length) g.push({ key: 'catUpcoming', title: this.$t('statsE.CategoryView.upcomingLabel'), todos: up, showDate: true, color: 'color3', hasSettings: true })
-      const nd = bucket(t => !t.complete && !t.dayStart)
-      if (nd.length) g.push({ key: 'catNoDate', title: this.$t('statsE.CategoryView.noDateLabel'), todos: nd, hasSettings: true })
-      return g
+      // Wave-5 dedup: the 7-bucket expiry grouping was verbatim-identical with ProjectView's
+      // groups(); only the i18n keys differ here (statsI/statsE shards). Single source in
+      // utils/expiryGroups.js; group keys are an unchanged UI contract.
+      return buildExpiryGroups({
+        list: this.inCat,
+        settings: this.settings,
+        today: this.todayTs,
+        t: this.$t,
+        keys: {
+          expDone: 'statsI.CategoryView.expDoneTitle',
+          expUndo: 'statsI.CategoryView.expUndoTitle',
+          upcoming: 'statsE.CategoryView.upcomingLabel',
+          noDate: 'statsE.CategoryView.noDateLabel'
+        }
+      })
     }
   },
   methods: {
-    calTitle (ts) { return calTitle(ts) },
     setCol (key, val) { this.collapsedMap[key] = val },
     /** "Reschedule": expired uncompleted in this list -> today */
     async recomplete () {
