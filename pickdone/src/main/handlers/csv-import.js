@@ -83,7 +83,7 @@ module.exports = function importHandlers (ctx) {
     // survived via the '[CODE] message' text hack. null still means "user canceled".
     'import:pick-preview': async (e) => {
       assertMainWindow(e) // H7→H8 fix: must pass the IPC event, not a string label (the string made the guard always-true-reject, killing all CSV imports)
-      const importer = require('../../../cli/import.js')
+      const importer = require('../import') // D3 review fix (2026-09-24): engine's in-tree home (src/main/import) — no main->cli reach-back
       const { dialog } = require('electron')
       const r = await dialog.showOpenDialog(getMainWindow() || undefined, {
         title: i18nM.mt('importPickCsv'), properties: ['openFile'], filters: [{ name: 'CSV', extensions: ['csv'] }]
@@ -111,7 +111,7 @@ module.exports = function importHandlers (ctx) {
     },
     'import:run': async (e, file) => {
       assertMainWindow(e)
-      const importer = require('../../../cli/import.js')
+      const importer = require('../import') // D3 review fix (2026-09-24): engine's in-tree home (src/main/import) — no main->cli reach-back
       const f = String(file || '')
       // Arbitrary-path read primitive sealed off: only the path most recently returned by the main-process dialog is accepted
       if (!lastPickedImportPath || f !== lastPickedImportPath) throw new Error('import: path not granted by picker')

@@ -1,9 +1,13 @@
 /**
  * CSV import engine — one-time migration from other to-do apps (TickTick / dida365 / Todoist).
  * D3 (2026-09-24): moved verbatim from cli/import.js so the main process (src/main/import-worker.js,
- * handlers/csv-import.js) no longer reaches back into cli/ — dependency direction is now
- * cli → src/main. cli/import.js stays as a re-export shim for its 6 test files. Requires are the
- * same modules, only the relative paths differ; logic is byte-identical to the pre-move engine.
+ * handlers/csv-import.js) requires the engine from its in-tree home instead of reaching back into
+ * cli/ for the parse surface; cli/import.js stays as a re-export shim for its 6 test files.
+ * DECLARED EXCEPTION (D3 review 2026-09-24): importItems() below still lazy-requires
+ * ../../../cli/lib as its write facade (lib.open/guessUserId/resolveCategory) — that is the
+ * pre-existing shared write door, not a parse-surface reach-back; relocating the CLI lib facade
+ * is out of scope and left untouched. Requires are the same modules, only the relative paths
+ * differ; logic is byte-identical to the pre-move engine.
  * Parsers are written against the vendors' real export column layouts (research notes: docs/导入功能调研-*.md, Chinese-named files on disk):
  *   TickTick backup v3.0 (14 cols, leading "Date:"/"Version: 3.0" meta lines)
  *   dida365 backup (25-col superset: Folder Name/Tags/taskId/parentId, "Is Check list" with a space)
