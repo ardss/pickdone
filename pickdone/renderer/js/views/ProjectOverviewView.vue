@@ -111,7 +111,7 @@ export default {
       const threshold = this.loadThreshold
       return this.$store.getters['category/projects'].map(c => {
         const meta = (this.$store.getters['category/projectMeta'])[c.categoryId] || {}
-        const todos = this.$store.state.todo.todoList.filter(t => t.categoryId === c.categoryId)
+        const todos = this.$store.getters['todo/byCategory'](c.categoryId)
         // Today-load badge: only tasks scheduled for today; estimates come from the shared tomatoEstimate map
         const load = dayPlannedLoad(todos.filter(t => t.dayStart === today0), t => getEstimate(t.taskId))
         return {

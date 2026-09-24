@@ -81,7 +81,13 @@ export default {
        SnTagPanel / SnManageTagsModal). Pure derivation from state; Vuex caches it for free.
        The counting core lives in utils/search.js countTags (next to extractTags). */
     tagCounts: (s, _g, rootState) =>
-      countTags(s.todoList, (rootState && rootState.ui && rootState.ui.userTags))
+      countTags(s.todoList, (rootState && rootState.ui && rootState.ui.userTags)),
+    /* D2 dedup: the two most-repeated filter predicates, shared across views (DepView /
+       TagAllView / TodayView for activeList; SnManageCategoriesModal / ProjectView /
+       ProjectOverviewView for byCategory). Same derivation as the private views precompute
+       above, but as cached getters. */
+    activeList: s => s.todoList.filter(t => !t.delete),
+    byCategory: s => id => s.todoList.filter(t => t.categoryId === id)
   },
   mutations: {
     setLoaded: (s, v) => { s.loaded = v },

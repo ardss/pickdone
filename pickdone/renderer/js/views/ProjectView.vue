@@ -322,7 +322,7 @@ export default {
     },
     inCat () {
       const id = this.catId
-      return this.$store.state.todo.todoList.filter(t => t.categoryId === id)
+      return this.$store.getters['todo/byCategory'](id)
     },
     /* ---- Header's four questions ---- */
     stats () {
