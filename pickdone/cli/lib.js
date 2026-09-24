@@ -1396,7 +1396,7 @@ function backfillRecord ({ taskId = null, content = '', date, at = '20:00', minu
    F-B3 (dw wave 3): the storage contract (key prefix / 0..20 clamp / TS_KEY / legacy blob key) moved
    to shared/estimate-core.mjs — single source with the renderer's utils/tomatoEstimate.js (the
    renderer consumes the same module in its wave). */
-const { ESTIMATE_KEY_PREFIX, estimateKeyOf, clampEstimate, TS_KEY: ESTIMATE_TS_KEY, LEGACY_KEY: ESTIMATE_LEGACY_KEY } = require('../shared/estimate-core.mjs')
+const { ESTIMATE_KEY_PREFIX, estimateKeyOf, clampEstimate, TS_KEY: ESTIMATE_TS_KEY, LEGACY_KEY: ESTIMATE_LEGACY_KEY, ESTIMATE_MAX } = require('../shared/estimate-core.mjs')
 const estimateKey = estimateKeyOf
 /** Lazy legacy migration (first write): old whole-doc blob → per-task keys, then the legacy doc key
  *  is deleteMeta'd (a sync tombstone, so peers drop it too). Corrupt blob → dropped, not fatal. */
@@ -1782,7 +1782,7 @@ async function importEvents (events, { onProgress = () => {} } = {}) {
   const seen = new Set(existing.map(t => t.dayStart + '|' + String(t.taskContent || '').trim()))
   // Fix (2026-09-19): re-read records inside the predicate — a pre-import snapshot never saw rows the import itself just created.
   const hasRecord = tid => (tomatoRecords() || []).some(r => r.manual && r.focusTaskId === tid)
-  let created = 0, skipped = 0
+  let created = 0, skipped = 0, clamped = 0
   const failed = []
   for (const e of events) {
     const label = (e.date || '?') + ' ' + (e.start || '') + ' ' + (e.title || '').slice(0, 24)
@@ -1803,7 +1803,16 @@ async function importEvents (events, { onProgress = () => {} } = {}) {
         createTime: e.date + ' ' + e.start
       })
       seen.add(key)
-      if (e.estimate) { try { setEstimate(t.taskId, Math.min(20, Number(e.estimate) || 0)) } catch (er) { /* non-fatal */ } }
+      // B14 (2026-09-24): estimate>20 is no longer clamped SILENTLY (Math.min(20, …) reported
+      // success while a different estimate landed — the same failure mode backfillRecord's
+      // over-cap throw fixes). The row-level clamp (setEstimate → clampEstimate) still applies;
+      // the event is imported, but the clamp is surfaced via onProgress and a `clamped` count
+      // in the return value (event-level `failed` would overstate — the task itself succeeded).
+      if (e.estimate) {
+        const want = Number(e.estimate) || 0
+        try { setEstimate(t.taskId, want) } catch (er) { /* non-fatal */ }
+        if (want > ESTIMATE_MAX) { clamped++; onProgress({ label, status: 'estimate-clamped', wanted: want, stored: ESTIMATE_MAX }) }
+      }
       // Behavior fix (2026-09-16): a FUTURE event used to be imported as completed + with a backfilled focus
       // record — importing next week's schedule fabricated "done + accounted" history for work not yet done.
       // Future events now only create the task; completion and the ledger row are left to the real day.
@@ -1823,7 +1832,7 @@ async function importEvents (events, { onProgress = () => {} } = {}) {
       onProgress({ label, status: 'failed', error: String(er.message || er) })
     }
   }
-  return { created, skipped, failed, total: events.length, hasRecord }
+  return { created, skipped, clamped, failed, total: events.length, hasRecord }
 }
 
 const eventKey = (e) => evu.eventKey(e, dayStartOf, parseDate)
