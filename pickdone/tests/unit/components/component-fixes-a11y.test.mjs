@@ -12,22 +12,10 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { attachmentUrlPresent } from '../../../renderer/js/utils/attachmentRefs.js'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const read = p => readFileSync(path.join(ROOT, p), 'utf8')
-
-/** Extract a "[component-fixes] pure-start ... pure-end" block from a source file and evaluate it. */
-function extractPure (file) {
-  const src = read(file)
-  const s = src.indexOf('[component-fixes] pure-start')
-  assert.ok(s >= 0, `pure block not found in ${file}`)
-  const codeStart = src.indexOf('*/', s) + 2 // skip the rest of the marker comment line
-  const codeEnd = src.indexOf('[component-fixes] pure-end')
-  const exports = {}
-  // eslint-disable-next-line no-new-func
-  new Function('exports', src.slice(codeStart, codeEnd) + '\nObject.assign(exports, { attachmentUrlPresent })')(exports)
-  return exports
-}
 
 /* ---------------- i18n bilingual parity ---------------- */
 
@@ -75,7 +63,7 @@ test('i18n: newly added fix keys exist in both languages with matching placehold
 /* ---------------- EditPanel: delayed disk deletion guard ---------------- */
 
 test('EditPanel pure helper: attachmentUrlPresent detects url in image/files JSON (fail-safe on bad JSON)', () => {
-  const { attachmentUrlPresent } = extractPure('renderer/js/components/EditPanel.vue')
+  // Moved verbatim to utils/attachmentRefs.js (structure-size ratchet); imported directly now
   const row = {
     image: JSON.stringify([{ url: 'att://a.png', name: 'a.png' }]),
     files: JSON.stringify([{ url: 'att://b.pdf', name: 'b.pdf' }])

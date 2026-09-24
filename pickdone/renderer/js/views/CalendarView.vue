@@ -110,21 +110,13 @@ function wdLabel (t, d) { return t('statsJ.CalendarView.wd' + ((d + 6) % 7)) }
 // Called via this in data/computed context — module top level has no this, so this._i18n is passed into the function;
 // actual calls all go through the this.wd(d) method (below), keeping Vue template compilation friendly.
 
-import { loadSolarLunar } from '../utils/lunar.js'
 import { weekGridStart } from '../utils/weekGrid.js'
 import { today0, dayStart } from '../utils/todayBounds.js'
 // Perf (domain-5, 2026-09-23): O(1) time-block bucket lookups + task index + cursor-window
 // event trimming. Pure helpers, equivalence-guarded by tests/unit/renderer/dw5-calendar-perf.test.mjs
 import { buildTbBuckets, tbBucketGet, indexById, inCursorWindow } from '../utils/calendarBuckets.js'
-const LUNAR = () => loadSolarLunar().then(m => {
-  const sl = m.default || m
-  // ISC-licensed solarlunar (the former js-calendar-converter was GPL, so the library had to be swapped); adapts IDayCn/IMonthCn fields so callers need zero changes
-  return { calendar: { solar2lunar (y, mo, da) {
-    const r = sl.solar2lunar(new Date(y, mo - 1, da))
-    return r ? Object.assign({}, r, { IDayCn: r.dayCn, IMonthCn: r.monthCn }) : r
-  } } }
-})
-
+// solarlunar → FullCalendar adapter lives in utils/lunarAdapter.js (structure-size ratchet)
+import LUNAR from '../utils/lunarAdapter.js'
 
 export default {
   name: 'CalendarView',

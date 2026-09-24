@@ -164,6 +164,7 @@ import { deleteWithUndo, removeWithUndo } from '../utils/confirm.js'
 import { toggleCompleteWithUndo } from '../utils/completeAction.js'
 import { getEstimate, setEstimate, ensureEstimate } from '../utils/tomatoEstimate.js'
 import { createSaveQueue } from '../utils/editSave.js'
+import { attachmentUrlPresent } from '../utils/attachmentRefs.js'
 import { contentFingerprint, shouldRefreshRemote } from '../utils/editPanelRemoteSync.js'
 import EpReminders from './edit-panel/EpReminders.vue'
 import EpSubtasks from './edit-panel/EpSubtasks.vue'
@@ -182,20 +183,7 @@ const FIELD_MAP = {
 // Priority has two tiers (user-finalized): high/low; connected with the quadrant's important — high⇔important=1, low⇔important=0 (see fieldPatch)
 const PRIOS = [{ v: 3, l: 'statsJ.EditPanel.priorityHigh' }, { v: 1, l: 'statsJ.EditPanel.prioLow' }]
 
-// [component-fixes] pure-start (extracted verbatim by tests/component-fixes-a11y.test.mjs)
-/** True when the attachment url is still referenced by the task row's image/files JSON.
- *  Malformed JSON counts as present (fail-safe: never delete a disk file on a parse error). */
-function attachmentUrlPresent (row, url) {
-  if (!row || !url) return false
-  for (const k of ['image', 'files']) {
-    try {
-      const a = JSON.parse(row[k] || '[]')
-      if (Array.isArray(a) && a.some(x => x && x.url === url)) return true
-    } catch (e) { return true }
-  }
-  return false
-}
-// [component-fixes] pure-end
+// [component-fixes] pure helper now lives in utils/attachmentRefs.js (imported below)
 
 export default {
   name: 'EditPanel',
