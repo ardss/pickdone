@@ -457,17 +457,21 @@ async function bootstrap () {
 
   // When the tomato timer is enabled and the float window hasn't been closed, auto-show the float window 6 seconds after start — main window only
   // (quick-add/float windows also load this file; indiscriminate popping would "revive" a float window the user closed)
-  // F12 (2026-09-24): "the user explicitly closed it" is persisted under a dedicated localStorage key
-  // (NOT enableTomatoFloating — that is the settings-switch semantics, written only by SettingsModal).
-  // TomatoBar.toggleFloat writes/clears the key; auto-show respects it so a closed float stays closed
-  // across restarts. Session-only runtime state by design (renderer localStorage, not config.json).
+  // F12 (2026-09-24, adversarial-review round 2): the "user explicitly closed" marker lives in the todo
+  // DB meta table ('tomatoFloatClosedByUser'), owned by main-process tomato-float.js — the single
+  // convergence point of every open/close path (hide() sets it; show()/undock() clear it), so all
+  // bypass re-open paths (SettingsModal switch, TomatoPanel button, tray undock) are covered by
+  // construction and no renderer-side wiring can drift. (An earlier localStorage + todoAPI-wrapper
+  // attempt failed: contextBridge objects are read-only.) dbCall round-trips the marker read.
   if (isMainShell) {
     setTimeout(() => {
-      let closedByUser = false
-      try { closedByUser = localStorage.getItem('tomatoFloatClosedByUser') === '1' } catch { /* storage unavailable */ }
-      if (window.todoAPI && store.state.settings.enableTomatoFloating !== false && !closedByUser) {
+      if (!window.todoAPI || store.state.settings.enableTomatoFloating === false) return
+      let markerRead = null
+      try { markerRead = window.todoAPI.dbCall('getMeta', 'tomatoFloatClosedByUser') } catch { /* db unavailable: default to showing */ }
+      Promise.resolve(markerRead).then(v => {
+        if (v === '1') return // the user explicitly closed the float last run: keep it closed
         window.todoAPI.showTomatoFloat()
-      }
+      }).catch(() => { /* marker read failed: err on the visible side */ })
     }, 6000)
   }
 
@@ -688,20 +692,5 @@ window.appUI = app.mount('#app')
 bootMark('Vue mount (first paint)')
 window.__startupReport = () => console.table(__bootMarks)
 bootstrap()
-
-// F12 follow-up (2026-09-24 adversarial review): 'tomatoFloatClosedByUser' records the user's LAST
-// explicit close for the auto-show gate above. TomatoBar.toggleFloat is its only writer, but the
-// float can be re-opened through bypass paths that never touch TomatoBar (SettingsModal.setTomatoFloat,
-// TomatoPanel.openFloatWindow — both via todoAPI.showTomatoFloat — and the tray dock/undock menu,
-// main-process side). Clear the close marker on every renderer-initiated show by wrapping the bridge
-// (covers SettingsModal/TomatoPanel and any future caller); the tray path is covered by TomatoBar's
-// 15s tomatoFloatShown visibility sync, which clears the marker once the float is seen open.
-if (typeof window !== 'undefined' && window.todoAPI && typeof window.todoAPI.showTomatoFloat === 'function') {
-  const origShowTomatoFloat = window.todoAPI.showTomatoFloat.bind(window.todoAPI)
-  window.todoAPI.showTomatoFloat = (...args) => {
-    try { localStorage.removeItem('tomatoFloatClosedByUser') } catch { /* storage unavailable */ }
-    return origShowTomatoFloat(...args)
-  }
-}
 
 export default Vue

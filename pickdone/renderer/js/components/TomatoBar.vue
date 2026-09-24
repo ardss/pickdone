@@ -126,14 +126,7 @@ export default {
       this._floatSyncN = (this._floatSyncN || 0) + 1
       if (this._floatSyncN >= 15 && window.todoAPI && window.todoAPI.tomatoFloatShown) {
         this._floatSyncN = 0
-        window.todoAPI.tomatoFloatShown().then(v => {
-          this.floatOn = !!v
-          // F12 follow-up (2026-09-24): a tray undock re-opens the float without going through
-          // todoAPI.showTomatoFloat (main-process tomatoFloat.undock) — the 'closed by user' marker
-          // must not survive a re-open, or main.js auto-show would suppress the float after restart
-          // even though the user's last action was "open".
-          if (v) { try { localStorage.removeItem('tomatoFloatClosedByUser') } catch { /* storage unavailable */ } }
-        }).catch(() => {})
+        window.todoAPI.tomatoFloatShown().then(v => { this.floatOn = !!v }).catch(() => {})
       }
     }, 1000)
     // Taskbar thumbnail toolbar button callback (abandon; the pomodoro has no pause semantics)
@@ -233,16 +226,11 @@ export default {
       if (!window.todoAPI || this._floatToggling) return // busy guard: rapid clicks must not fire multiple IPC toggles
       this._floatToggling = true
       try {
-        if (this.floatOn) {
-          window.todoAPI.hideTomatoFloat()
-          // F12 (2026-09-24): an explicit user close persists across restarts — main.js auto-show
-          // (6s after start) reads this key and must not resurrect the float the user closed.
-          // Deliberately NOT enableTomatoFloating (settings-switch semantics, SettingsModal-owned).
-          try { localStorage.setItem('tomatoFloatClosedByUser', '1') } catch { /* storage unavailable */ }
-        } else {
-          window.todoAPI.showTomatoFloat()
-          try { localStorage.removeItem('tomatoFloatClosedByUser') } catch { /* storage unavailable */ }
-        }
+        // F12 (2026-09-24, round 2): the 'user closed' marker is owned by main-process tomato-float.js
+        // (hide() sets it, show()/undock() clear it — persisted in the todo DB meta table). The
+        // renderer writes nothing here; the earlier localStorage writes are gone (they missed the
+        // SettingsModal/TomatoPanel/tray bypass paths and the contextBridge wrapper approach threw).
+        if (this.floatOn) { window.todoAPI.hideTomatoFloat() } else { window.todoAPI.showTomatoFloat() }
         // Give the main process a beat to apply the change, then write back from its real visibility
         await new Promise(r => setTimeout(r, 300))
         this.floatOn = !!(await window.todoAPI.tomatoFloatShown())

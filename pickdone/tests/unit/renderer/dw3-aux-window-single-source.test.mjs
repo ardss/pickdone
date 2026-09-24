@@ -36,52 +36,46 @@ test('[F4] fallback today uses the dayStart timestamp caliber (was an 8-digit YY
 
 /* ---------- [F12] closed-float persistence ---------- */
 
-test('[F12] auto-show gate respects tomatoFloatClosedByUser; TomatoBar writes/clears it', () => {
+test('[F12] auto-show gate reads the DB meta marker owned by main-process tomato-float', () => {
   const mainSrc = read('renderer/js/main.js')
-  assert.ok(mainSrc.includes("localStorage.getItem('tomatoFloatClosedByUser')"), 'auto-show reads the dedicated key')
-  assert.ok(mainSrc.includes('!closedByUser'), 'a user-closed float is not auto-resurrected 6s after start')
-  // the settings switch stays a separate semantic (must NOT be reused as the close flag)
-  assert.ok(mainSrc.includes('enableTomatoFloating !== false'), 'the settings-switch condition is unchanged')
+  assert.ok(mainSrc.includes("dbCall('getMeta', 'tomatoFloatClosedByUser')"), 'auto-show reads the marker via todo-db:call getMeta')
+  assert.ok(mainSrc.includes("if (v === '1') return"), 'a user-closed float is not auto-resurrected 6s after start')
+  assert.ok(mainSrc.includes('enableTomatoFloating === false'), 'the settings switch remains an independent condition')
+  // adversarial-review round 2: a contextBridge object (window.todoAPI) is READ-ONLY — assigning
+  // showTomatoFloat on it throws in strict-mode ESM and the wrapper never installs. Guarded so the
+  // broken approach cannot come back.
+  assert.ok(!mainSrc.includes('window.todoAPI.showTomatoFloat ='), 'no read-only contextBridge property assignment (throws in strict ESM)')
+  // marker ownership lives in the main process where every open/close path converges
+  const floatSrc = read('src/main/tomato-float.js')
+  const hideIdx = floatSrc.indexOf('hide () {')
+  assert.ok(floatSrc.includes('setUserClosed(false)') && floatSrc.indexOf('setUserClosed(false)', floatSrc.indexOf('undock ()')) > -1,
+    'show() AND undock() clear the marker (SettingsModal/TomatoPanel IPC + tray undock covered)')
+  assert.ok(floatSrc.indexOf('setUserClosed(true)', hideIdx) > hideIdx && hideIdx > -1, 'hide() marks "user closed"')
+  // renderer side writes nothing anymore (the localStorage pair was bypass-prone and is gone)
   const barSrc = read('renderer/js/components/TomatoBar.vue')
-  assert.ok(barSrc.includes("localStorage.setItem('tomatoFloatClosedByUser', '1')"), 'hide path persists the close')
-  assert.ok(barSrc.includes("localStorage.removeItem('tomatoFloatClosedByUser')"), 'show path clears it')
+  assert.ok(!barSrc.includes('tomatoFloatClosedByUser'), 'TomatoBar no longer writes/clears the marker (single owner in main process)')
   // dead field cleanup: no consumer left anywhere
-  const dead = ['renderer/js/store/tomato.js']
-  for (const f of dead) assert.ok(!read(f).includes('isEnabledFloatingWindow'), `${f}: dead default field removed`)
+  assert.ok(!read('renderer/js/store/tomato.js').includes('isEnabledFloatingWindow'), 'store/tomato.js: dead default field removed')
 })
 
-test('[F12] behavior: the gate logic flips exactly on the persisted key', () => {
-  // mirrors the main.js gate condition so the semantics are pinned, not just the source text
-  const gate = (settingsOn, lsValue) => {
-    let closedByUser = false
-    try { closedByUser = lsValue === '1' } catch { /* storage unavailable */ }
-    return settingsOn !== false && !closedByUser
+test('[F12] behavior: the gate flips exactly on the persisted marker value', () => {
+  // mirrors the main.js gate (dbCall promise → suppress on '1') so the semantics are pinned;
+  // the marker's real write/clear lifecycle is behavior-tested against a real DB in
+  // tests/unit/main/dw3-aux-window-lifecycle.test.mjs ([F12] marker lifecycle).
+  const gate = (settingsOn, markerPromise, show) => {
+    if (settingsOn === false) return
+    Promise.resolve(markerPromise).then(v => {
+      if (v === '1') return
+      show()
+    }).catch(() => { /* err on the visible side */ })
   }
-  assert.equal(gate(true, null), true, 'fresh install: auto-show')
-  assert.equal(gate(true, '1'), false, 'user closed it last run: stays closed')
-  assert.equal(gate(false, null), false, 'settings switch off: still off')
-  assert.equal(gate(true, '0'), true, "any other value than '1' is not a close")
-})
-
-test('[F12] bypass re-open paths clear the stale close marker (adversarial-review follow-up)', () => {
-  // The float can be re-opened without TomatoBar.toggleFloat: SettingsModal.setTomatoFloat and
-  // TomatoPanel.openFloatWindow both call todoAPI.showTomatoFloat; the tray undock goes through
-  // main-process tomatoFloat.undock (invisible to renderer show calls). Each path must clear
-  // 'tomatoFloatClosedByUser' or a restart suppresses auto-show despite last action = "open".
-  const mainSrc = read('renderer/js/main.js')
-  const wrapIdx = mainSrc.indexOf('window.todoAPI.showTomatoFloat = ')
-  const rmIdx = mainSrc.indexOf("localStorage.removeItem('tomatoFloatClosedByUser')", wrapIdx)
-  assert.ok(wrapIdx > -1 && rmIdx > wrapIdx, 'main.js wraps todoAPI.showTomatoFloat and clears the marker inside (SettingsModal/TomatoPanel paths)')
-  const barSrc = read('renderer/js/components/TomatoBar.vue')
-  const syncIdx = barSrc.indexOf('tomatoFloatShown()')
-  const syncRm = barSrc.indexOf("localStorage.removeItem('tomatoFloatClosedByUser')", syncIdx)
-  assert.ok(syncIdx > -1 && syncRm > syncIdx, 'TomatoBar 15s visibility sync clears the marker when the float is seen open (tray undock path)')
-  // behavior mirror of the wrapper: any explicit show wipes the marker
-  const ls = { v: '1', removeItem (k) { if (k === 'tomatoFloatClosedByUser') this.v = null } }
-  const origShow = () => 'shown'
-  const wrapped = (...a) => { try { ls.removeItem('tomatoFloatClosedByUser') } catch { /* */ } return origShow(...a) }
-  wrapped()
-  assert.equal(ls.v, null, 'an explicit re-open leaves no stale close marker behind')
+  const calls = []
+  gate(true, Promise.resolve(null), () => calls.push('shown'))
+  gate(true, Promise.resolve('1'), () => calls.push('shown'))
+  gate(false, Promise.resolve(null), () => calls.push('shown'))
+  return Promise.all([new Promise(r => setTimeout(r, 0))]).then(() => {
+    assert.deepEqual(calls, ['shown'], "only the unset-marker case shows; '1' and switch-off suppress")
+  })
 })
 
 /* ---------- [F18] aux-window single source ---------- */

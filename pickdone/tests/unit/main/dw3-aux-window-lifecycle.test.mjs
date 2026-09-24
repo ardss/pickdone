@@ -13,6 +13,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import { EventEmitter } from 'node:events'
+import os from 'node:os'
+import path from 'node:path'
+import fs from 'node:fs'
 
 const require_ = createRequire(import.meta.url)
 const Module = require_('module')
@@ -66,7 +69,12 @@ Module._load = function (request, parent, isMain) {
 process.on('exit', () => { Module._load = origLoad })
 
 const tomatoFloat = require_('../../../src/main/tomato-float.js')
+const db = require_('../../../src/main/db.js')
 const { attachLoadGuard } = require_('../../../src/main/aux-load-guard.js')
+
+// F12 round 2: the marker is persisted in the todo DB meta table — init a throwaway DB so the
+// marker lifecycle below exercises the REAL persistence path (no mirrors/stubs).
+db.init(fs.mkdtempSync(path.join(os.tmpdir(), 'dw3-float-marker-')))
 
 test.afterEach(() => {
   // stop the 40ms hit poll / timers leak: tear every living window down ('closed' stops poll+drag)
@@ -98,6 +106,32 @@ test('[F10] destroy → panelOpen must NOT leak into the next window instance', 
   const win2 = created[created.length - 1]
   assert.notEqual(win2, win1, 'a fresh instance was created')
   assert.equal(tomatoFloat.isPanelOpen(), false, 'fresh instance starts with hit test = card strip only (86px), not the 320px full window')
+})
+
+/* ---------- [F12 round 2] user-closed marker lifecycle (real DB persistence) ---------- */
+
+test('[F12] hide() persists the close marker; show()/undock() clear it — every bypass covered', () => {
+  tomatoFloat.show()
+  assert.equal(tomatoFloat.isUserClosed(), false, 'fresh state: not closed by user')
+  // close path: TomatoBar toggle / float ✕ / settings switch off — all land on hide()
+  tomatoFloat.hide()
+  assert.equal(tomatoFloat.isUserClosed(), true, 'hide() marks "user closed" (persisted in meta table)')
+  // open path #1: show() — the convergence of 'show-tomato-float' IPC (SettingsModal switch,
+  // TomatoPanel button, TomatoBar toggle) AND the auto-show call itself
+  tomatoFloat.show()
+  assert.equal(tomatoFloat.isUserClosed(), false, 'show() clears the marker — renderer bypass paths covered by construction')
+  // open path #2: tray undock of a docked (not destroyed) window — does NOT go through show()
+  tomatoFloat.hide()
+  assert.equal(tomatoFloat.isUserClosed(), true, 'precondition: closed again')
+  tomatoFloat.dock()
+  tomatoFloat.undock()
+  assert.equal(tomatoFloat.isUserClosed(), false, 'undock() clears the marker (tray path, no renderer involved)')
+  // marker must survive a process restart by construction: it lives in the DB meta table,
+  // which is exactly what the renderer auto-show gate reads via todo-db:call getMeta.
+  assert.equal(db.call('getMeta', 'tomatoFloatClosedByUser'), null, 'marker is stored under the meta key the gate reads')
+  tomatoFloat.hide()
+  assert.equal(db.call('getMeta', 'tomatoFloatClosedByUser'), '1', 'closed marker is a real DB row, not in-memory state')
+  tomatoFloat.show()
 })
 
 /* ---------- [F16/refactor] aux-load-guard ---------- */
