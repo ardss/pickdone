@@ -39,7 +39,7 @@ export function deleteWithUndo (vm, store, task) {
  *  Usage: removeWithUndo(this, () => { ...perform removal... }, () => { ...restore... }) */
 export function removeWithUndo (vm, doRemove, undo, opts = {}) {
   doRemove()
-  if (!vm.$message || !window.Vue) return
+  if (!vm.$message || !window.Vue) return false // review-fix (2026-09-25): callers with onDismiss follow-ups must know no toast (and thus no dismiss) happened
   // opts (2026-09-25): pass-through to showUndoToast — notably { onDismiss }, which callers like
   // EditPanel.removeFile use to defer destructive follow-ups (physical file deletion) until the
   // toast actually closes (hover-pause aware) instead of a fixed setTimeout racing the undo.
@@ -47,6 +47,7 @@ export function removeWithUndo (vm, doRemove, undo, opts = {}) {
     tt('statsJ.Confirm.removed') + '　',
     window.Vue.h('a', { style: { color: 'var(--brand)', cursor: 'pointer' }, onClick: undo }, tt('statsJ.Confirm.undo'))
   ], opts)
+  return true
 }
 
 /** Unified exit for rescheduling (drag / move to today/tomorrow / calendar eventDrop): applies the change + "Moved to X + Undo" toast.

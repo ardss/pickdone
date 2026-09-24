@@ -48,13 +48,20 @@ export function showUndoToast (messageFn, children, { type = 'success', onDismis
    *  Element Plus Message onClose callback both land here. onClose matters because a route change
    *  unmounts the whole tree: EP destroys the Message without anyone calling msg.close(), which used
    *  to leave the controller in activeToasts forever and leaked the shared keydown/keyup listeners. */
+  // Review-fix (2026-09-25): the two channels CONVERGE in real EP — patched close() runs
+  // unregister, then the original close reaches EP's teardown which invokes props.onClose(=this)
+  // a second time. Without a once-guard, onDismiss (e.g. EditPanel's disk-file deletion) fired
+  // twice on every real close.
+  let unregistered = false
   const unregister = () => {
+    if (unregistered) return
+    unregistered = true
     if (controller.pause) controller.pause = null // mark dead so late hover events can't re-arm
     if (activeToasts.delete(controller)) releaseKeyListeners()
     // onDismiss (2026-09-25): fires on EVERY close path (auto-dismiss timer / hover-paused expiry /
-    // ✕ / EP onClose after route change). Callers like EditPanel.removeFile defer destructive
-    // follow-ups (physical file deletion) to here instead of a fixed setTimeout, so a hover that
-    // pauses the timer past their deadline can no longer race the undo.
+    // ✕ / EP onClose after route change) — exactly ONCE. Callers like EditPanel.removeFile defer
+    // destructive follow-ups (physical file deletion) to here instead of a fixed setTimeout, so a
+    // hover that pauses the timer past their deadline can no longer race the undo.
     if (onDismiss) { try { onDismiss() } catch { /* dismiss hook must not break teardown */ } }
   }
   // Registered before messageFn so even an immediate onClose can't miss it

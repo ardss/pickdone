@@ -641,7 +641,10 @@ export default {
         // .catch: delete-file now surfaces structured errors instead of swallowing them (2026-09-11); this call is a fire-and-forget sweep — a failure must not become an unhandled rejection
         window.todoAPI.deleteFile(item.url).catch(() => {})
       }
-      removeWithUndo(this,
+      // Review-fix (2026-09-25): when the toast can't be shown (no $message / no Vue — removeWithUndo
+      // early-returns BEFORE arming any dismissal), onDismiss would never fire and the disk file
+      // would leak forever. Fall back to the old fixed-delay deletion (same store-row guard).
+      if (!removeWithUndo(this,
         () => {
           const at = this[arrName].indexOf(item) // P2: indexOf — a captured idx goes stale when an earlier row is removed first (out-of-order undos)
           this[arrName].splice(at < 0 ? this[arrName].length : at, 1)
@@ -655,7 +658,9 @@ export default {
           this.markDirty(arrName === 'imgList' ? 'imgs' : 'files')
           this.queueSave({})
         },
-        { onDismiss: deleteFromDisk })
+        { onDismiss: deleteFromDisk })) {
+        setTimeout(deleteFromDisk, 5500)
+      }
     },
     delTask () {
       // Recurring tasks share the context-menu semantics: ask the scope first (this instance only / the whole series)

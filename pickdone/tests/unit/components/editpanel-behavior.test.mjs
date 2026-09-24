@@ -157,18 +157,33 @@ test('P1 disk-delete: deletion fires only after the toast closes; hover past the
   } finally { t.reset() }
 })
 
-test('P1 disk-delete: without undo, onDismiss fires exactly once when the toast auto-dismisses', async () => {
+test('P1 disk-delete: without undo, onDismiss fires exactly once under REAL Element Plus close semantics', async () => {
+  // Review-fix (2026-09-25): the previous mock never dispatched EP's onClose, so the double
+  // channel (patched close → unregister, then EP teardown → props.onClose → unregister again)
+  // passed vacuously. This host replicates EP: close() → patched unregister → origClose →
+  // props.onClose (see element-plus.full.min.js: onClose&&d.component.exposed.onClose()).
   const t = mock.timers
   t.enable({ apis: ['setTimeout'] })
   try {
     let dismissed = 0
-    const { msg, vm } = toastHost()
+    let onCloseCb = null
+    const msg = {
+      $el: null, // no el → no hover listeners, timer path only
+      close () { if (onCloseCb) onCloseCb() } // EP teardown invokes props.onClose
+    }
+    const vm = { $message (opts) { msg.opts = opts; onCloseCb = opts.onClose; return msg } }
     CONFIRM.removeWithUndo(vm, () => {}, () => {}, { onDismiss: () => { dismissed++ } })
-    t.tick(5_000)
+    t.tick(5_000) // owned timer fires: arm() → msg.close() → unregister + EP onClose
     assert.equal(dismissed, 1, 'deletion happens after the toast closes (not on a parallel fixed timer)')
-    assert.equal(msg.closeCalls >= 0, true)
     t.tick(60_000)
-    assert.equal(dismissed, 1, 'never twice')
+    assert.equal(dismissed, 1, 'never twice — even though the close path converges from two channels')
+    // explicit ✕ close on a second toast: patched close + EP onClose both fire
+    dismissed = 0
+    onCloseCb = null
+    const vm2 = { $message (opts) { onCloseCb = opts.onClose; return msg } }
+    CONFIRM.removeWithUndo(vm2, () => {}, () => {}, { onDismiss: () => { dismissed++ } })
+    msg.close()
+    assert.equal(dismissed, 1, '✕ close (patched close + EP onClose) still fires onDismiss exactly once')
   } finally { t.reset() }
 })
 

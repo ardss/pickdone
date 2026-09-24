@@ -82,13 +82,20 @@ test('EditPanel: disk deletion defers to the undo-toast dismiss hook and re-chec
   // 5.5s + 撤销 revived the list entry with the file already gone). Deletion now rides the
   // toast's onDismiss (fires after the toast actually closes on any path) behind an undone flag.
   const src = read('renderer/js/components/EditPanel.vue')
-  assert.ok(!src.includes('5500'), 'fixed disk-deletion timer removed')
+  // 5500 now appears ONLY in the no-toast fallback branch (toast unavailable -> old semantics);
+  // the primary path defers to onDismiss with no parallel timer
+  const primary = src.slice(src.indexOf('removeFile (arrName, idx)'), src.indexOf('if (!removeWithUndo(this,'))
+  assert.ok(!primary.includes('setTimeout('), 'primary path defers disk deletion to the toast dismiss hook, not a timer')
   const guardIdx = src.indexOf('attachmentUrlPresent(row, item.url)')
   const deleteIdx = src.indexOf('deleteFile(item.url)')
   assert.ok(guardIdx > 0 && deleteIdx > guardIdx, 'deleteFile only runs after the store-row url guard')
   const block = src.slice(src.indexOf('removeFile (arrName, idx)'), src.indexOf('delTask ()'))
   assert.match(block, /undone = true/, 'undo marks the deletion as undone')
   assert.match(block, /onDismiss: deleteFromDisk/, 'disk deletion rides the toast dismiss hook')
+  // review-fix (2026-09-25): removeWithUndo now reports whether the toast was shown; the
+  // early-return path (no $message/Vue) falls back to the old fixed-delay deletion instead of
+  // leaking the disk file forever (onDismiss would never fire there).
+  assert.match(block, /if \(!removeWithUndo\(this,[\s\S]*?setTimeout\(deleteFromDisk, 5500\)/)
 })
 
 /* ---------------- EditPanel: pomodoro estimate stepper labels ---------------- */
