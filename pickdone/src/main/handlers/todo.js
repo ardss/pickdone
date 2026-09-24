@@ -162,6 +162,18 @@ module.exports = function todoHandlers (ctx) {
       if (op === 'upsert' && params && params.taskId != null) {
         try { auditBefore = dbm.call('getById', String(params.taskId)) } catch { /* null → coarse action */ }
       }
+      // C11 (daily 2026-09-24): the audit snapshot above and the bus write below are NOT atomic —
+      // a CLI/sync write can interleave, so the derived action label (create/delete/done/...)
+      // inferred from `before` can describe a base row the write never landed on. Detect the
+      // stale-base case via the row's version stamp: if the caller's payload carries a version
+      // that differs from the pre-write DB row's version, the write was made from a DIFFERENT
+      // base than the snapshot — the specific action label is untrustworthy, so the audit entry
+      // is downgraded to a coarse 'edit' (recordCustom) instead of a mislabeled specific action.
+      let auditStampMismatch = false
+      if (auditBefore && params && typeof params === 'object' &&
+          params.version != null && auditBefore.version != null) {
+        auditStampMismatch = Number(params.version) !== Number(auditBefore.version)
+      }
       // P3 (R4 2026-09-21): per-item hard delete used to orphan the task's attachment files on disk —
       // only the db:purge-recycle-bin channel did files-before-rows. Collect the owned files BEFORE
       // the row goes (collect failure must not block the delete: log and skip cleanup), then remove
@@ -211,7 +223,16 @@ module.exports = function todoHandlers (ctx) {
       // CLI process and never pass through this IPC handler. The settings mirror blob (setMeta
       // db.settingsState, persisted debounced on every settings change) is skipped as noise.
       // Fire-and-forget: audit failures must never break the IPC path.
-      try { appAudit.recordAppOp(op, params, { before: auditBefore, result: r }) } catch { /* best-effort */ }
+      try {
+        if (auditStampMismatch) {
+          // C11: stale-base write (concurrent CLI/sync write between the snapshot and the
+          // bus commit) — record the coarse 'edit' action explicitly instead of the
+          // snapshot-derived (potentially wrong) create/delete/done label.
+          appAudit.recordCustom('edit', [op], null, [], 'stale-base write: pre-write snapshot version differs from payload version (concurrent writer)')
+        } else {
+          appAudit.recordAppOp(op, params, { before: auditBefore, result: r })
+        }
+      } catch { /* best-effort */ }
       // Write-op determination lives in db.js's explicit WRITE_OPS list (do not fall back to regex: hardDeleteMany and others were once missed, leaving cross-window data stale)
       // setMeta writes only the meta table, not todos: skip reloadAll (settings/tomato/dayPlan mirrors are high-frequency writes; the previous full-reload path caused a reload storm); still broadcast so peer windows sync
       if (op === 'setMeta') { broadcastTodosChanged(op, e.sender); if (!viaBus && notifySyncChange) notifySyncChange(op); return r } // bus-routed writes kick via the 'ls-mirror' hook instead (GAP-B, 2026-09-19)
@@ -322,6 +343,20 @@ module.exports = function todoHandlers (ctx) {
     'db:purge-seed-todos': (e) => {
       assertMainWindow(e)
       if (isLocked()) throw new Error('locked')
+      // C10 (daily 2026-09-24): purge the seed tasks' OWNED attachment FILES too — the seed
+      // purge used to drop only the rows, orphaning any local:// attachment files on disk
+      // (asymmetric with db:purge-recycle-bin / hardDelete). Files BEFORE the commit
+      // (main-ipc-8 order, same as purge-recycle-bin): a failed commit then leaves rows
+      // pointing at already-deleted files — the renderer's missing-file guard shows
+      // "not yet synced", a benign outcome vs. an orphaned private file nothing can reach.
+      // A collect failure must not block the purge: log and skip cleanup.
+      let seedIds = []
+      try {
+        seedIds = (dbm.call('getAll', { deleted: null }) || [])
+          .map(t => t && t.taskId != null ? String(t.taskId) : '')
+          .filter(id => id.startsWith('seed_'))
+        if (seedIds.length) purgeAttachmentFiles(attachDir, seedIds)
+      } catch (err) { log.warn('[Purge] 种子任务附件收集失败（跳过文件清理，仅删行）:', err) }
       const r = bus.commit('todo', 'purgeSeed')
       // Symmetric with purge-recycle-bin: purging demo data also refreshes the scheduler + broadcasts (once missing → other windows kept stale seed records and scheduled reminders still fired)
       // M-4: same sync kick parity as purge-recycle-bin (GAP-B pattern, via the 'ls-mirror' hook).
