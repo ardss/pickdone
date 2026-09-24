@@ -69,11 +69,16 @@ test('i18n: component-r5 keys exist in both languages with matching placeholders
 
 /* ---------------- #2/#7/#14 TodoItem ---------------- */
 
-test('TodoItem: clickable row has role=button and i18n aria-label', () => {
+test('TodoItem: row is a focusable container; the title carries the open-button semantics', () => {
+  // [maint-0924 A15] role=button demoted from the row (a button wrapping checkboxes is broken
+  // nesting) to the .td-title element; the row keeps tabindex + aria-keyshortcuts
   const src = read('components/TodoItem.vue')
   const head = src.slice(src.indexOf('<div class="td-item"'), src.indexOf('<span class="td-check"'))
-  assert.match(head, /role="button"/)
-  assert.match(head, /:aria-label="\$t\('statsE\.TodoItem\.openTaskAria'/)
+  assert.doesNotMatch(head, /role="button"/, 'row container must not re-introduce role=button')
+  assert.match(head, /tabindex="0"/, 'row stays keyboard-focusable for its shortcut keys')
+  const body = src.slice(src.indexOf('<div class="td-body"'), src.indexOf('<div class="td-meta"'))
+  assert.match(body, /class="td-title"[^>]*role="button"/, 'title is the open-task button')
+  assert.match(body, /:aria-label="\$t\('statsE\.TodoItem\.openTaskAria'/, 'open-button aria-label kept on the title')
 })
 
 test('TodoItem: +N overflow badge for tags beyond 4 with full-list title', () => {

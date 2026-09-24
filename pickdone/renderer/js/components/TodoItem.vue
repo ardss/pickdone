@@ -2,8 +2,6 @@
 
   <div class="td-item" :class="{'is-complete':todo.complete, selected, dragging, 'td-item--enter': entering, 'pd-hoverlink': $store.state.ui.hoverTaskId === todo.taskId, ['prio-'+(todo.priority||0)]: (todo.priority||0)>0}"
        draggable="true"
-       role="button"
-       :aria-label="$t('statsE.TodoItem.openTaskAria', { name: todo.taskContent || $t('statsE.TodoItem.untitled') })"
        tabindex="0"
        @dragstart.stop="onDragStart" @dragover.stop.prevent="onDragOver" @dragleave.stop="onDragLeave"
        @drop.stop="onDrop" @dragend="onDragEnd"
@@ -11,6 +9,9 @@
        @keydown.ctrl.up.prevent="keyboardMove(-1)" @keydown.ctrl.down.prevent="keyboardMove(1)"
        @keydown.shift.delete.prevent="quickDelete"
        :aria-keyshortcuts="todo.dayStart ? 'Control+ArrowUp Control+ArrowDown Shift+Delete' : 'Shift+Delete'">
+       <!-- [maint-0924 A15] role=button demoted from the row to the title: a button role wrapping
+            checkboxes/buttons is broken ARIA nesting; the row stays a focusable container for the
+            shortcut keys (announced via aria-keyshortcuts), the "open" semantics live on the title -->
        <!-- Ctrl+Up/Down only reorders within the same day (keyboardMove no-ops for undated tasks), so the
             shortcut is only announced for dated tasks; Shift+Delete always applies -->
     <span class="td-check" :class="{on:todo.complete}" :style="todo.complete?{background:checkboxColor,borderColor:checkboxColor}:{}"
@@ -22,7 +23,9 @@
       </svg>
     </span>
     <div class="td-body">
-      <div class="td-title" :class="{'td-title--empty': !todo.taskContent}" :title="todo.taskContent">
+      <div class="td-title" :class="{'td-title--empty': !todo.taskContent}" :title="todo.taskContent"
+           role="button" tabindex="0" :aria-label="$t('statsE.TodoItem.openTaskAria', { name: todo.taskContent || $t('statsE.TodoItem.untitled') })"
+           @click.stop="openEdit" @keydown.enter.prevent.stop="openEdit">
         <!-- U-15: wire the search highlight (query prop existed but was never rendered; SearchView passes it) -->
         <span v-if="query" v-html="highlightedTitle"></span>
         <template v-else>{{ todo.taskContent || $t('statsE.TodoItem.untitled') }}</template>
@@ -103,24 +106,15 @@ import { chkColor } from '../utils/taskRow.js'
 import { getEstimate, ensureEstimate } from '../utils/tomatoEstimate.js'
 import { normalizeSortMode } from '../utils/sortMode.js'
 import { reorderScale } from '../../../shared/sort-core.mjs' // F-B2: reorder scale single source (the CLI's sortTask consumes the same module)
+import { crossDayMovePatch, crossDayRevertPatch } from '../utils/crossDayMove.js' // [maint-0924 A1] shared cross-day rules
 
 // Module-level drag-in-progress flag: a document.querySelector('.td-item.dragging') on every
 // dragover is O(document); this is set on dragstart and cleared on dragend/drop.
 let dragActive = false
 
-/* [d5-ui-fixes] pure-start */
-// Cross-day move patch builder: dayStart is the bucketing key. todoTime follows the new day only
-// when it was anchored to the old day, keeping its time-of-day (a 14:30 schedule stays 14:30 on
-// the new day; a pure midnight day marker stays a pure marker) — a todoTime on another day is
-// left untouched. Same rule for reminderTime so the reminder cannot be orphaned on the old day.
-function crossDayMovePatch (dragged, newDay, startOfDay) {
-  const patch: { dayStart: number, todoTime?: number, reminderTime?: number } = { dayStart: newDay }
-  const origDay = dragged.dayStart || 0
-  if (dragged.todoTime && startOfDay(dragged.todoTime) === startOfDay(origDay)) patch.todoTime = newDay + (dragged.todoTime - startOfDay(dragged.todoTime))
-  if (dragged.reminderTime && startOfDay(dragged.reminderTime) === startOfDay(origDay)) patch.reminderTime = newDay + (dragged.reminderTime - startOfDay(dragged.reminderTime))
-  return patch
-}
-/* [d5-ui-fixes] pure-end */
+// [maint-0924 A1] Cross-day move patch builder moved to utils/crossDayMove.js (single source now
+// shared with DayDeck.onDrop and TodoBoxView.batchToday — same time-of-day preservation rules,
+// plus reminderExtra shifting); imported below.
 
 export default {
   name: 'TodoItem',  props: {
@@ -219,15 +213,12 @@ export default {
       // Cross-day drag = reschedule the task to the target day (e.g. yesterday's unfinished task -> drag into the today group)
       if ((dragged.dayStart || 0) !== (target.dayStart || 0)) {
         const newDay = target.dayStart || +dayjs().startOf('day')
-        const origDay = dragged.dayStart
-        // Preserve the task's time-of-day: todoTime/reminderTime follow the new day only when they
+        // Preserve the task's time-of-day: todoTime/reminderTime/reminderExtra follow the new day only when they
         // were anchored to the old day; a real datetime (e.g. 14:30) must survive the move
         // (mirrors DayDeck.onDrop semantics)
         const startOf = ts => +dayjs(ts).startOf('day')
         const patch = crossDayMovePatch(dragged, newDay, startOf)
-        const revertPatch: { dayStart: number, todoTime?: number, reminderTime?: number } = { dayStart: origDay }
-        if ('todoTime' in patch) revertPatch.todoTime = dragged.todoTime
-        if ('reminderTime' in patch) revertPatch.reminderTime = dragged.reminderTime
+        const revertPatch = crossDayRevertPatch(dragged, patch)
         // Unified exit moveWithUndo (hover pauses / ✕ closes); the hand-rolled $message version was removed (interaction contract ①)
         moveWithUndo(this, {
           label: this.$t('statsJ.TodoItem.movedTo', { d: dayjs(newDay).format(FMT.cnDate) }),
@@ -260,7 +251,8 @@ export default {
      *  funnels through here). Returns false when the write was blocked. */
     _writeSort (list) {
       if (normalizeSortMode(this.$store.state.settings.sortMode) !== 'custom') {
-        if (this.$message) this.$message.info(this.$t('statsH.main.pinIgnoredSort'))
+        // [maint-0924 A4] dedicated copy: this guard also fires for drag/keyboard REORDERING, which has nothing to do with pinning
+        if (this.$message) this.$message.info(this.$t('statsH.main.sortIgnored'))
         return false
       }
       // F-B2 (dw wave 3): the 9999→-9999 linear scale moved to shared/sort-core.mjs reorderScale —
@@ -387,6 +379,9 @@ export default {
     toggleSub (s) {
       s.checked = !s.checked
       this.$store.dispatch('todo/updateTodoFields', { taskId: this.todo.taskId, patch: { subtasks: JSON.stringify(this.subtasks) } })
+      // [maint-0924 A5] read-screen feedback for the toggle itself (the parent-linkage announce
+      // below only fires when the flip completes/uncompletes the WHOLE task, not on plain toggles)
+      if (this.$announce) this.$announce(this.$t(s.checked ? 'statsE.TodoItem.subCheckedAnnounce' : 'statsE.TodoItem.subUncheckedAnnounce', { s: s.text }))
       // Subtask <-> parent linkage: all completed -> parent auto-completes; unchecking any subtask under a completed parent -> parent returns to incomplete
       const target = subsCompleteTarget(this.subtasks, this.todo.complete)
       if (target !== null) {
