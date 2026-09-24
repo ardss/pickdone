@@ -46,7 +46,6 @@ process.on('exit', () => { Module._load = origLoad })
 
 const realDb = require_('../../../src/main/db.js')
 realDb.init(process.env.TODO_DB_DIR)
-const bus = require_('../../../src/main/command-bus.js')
 const todoHandlers = require_('../../../src/main/handlers/todo.js')
 
 const MAIN = { webContents: { id: 'main' } }

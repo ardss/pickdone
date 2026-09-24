@@ -73,6 +73,9 @@ const SECURITY_LOCK_KEY = /^securityLock/
 // hideMainWindowOnStartup) through, so a peer could silently disable the security lock or
 // re-register hotkeys here. Single source now; the manifest imports the same module.
 const { isMachineLocalSettingKey } = require('../../shared/machine-local-keys.mjs')
+// Announce beacons are exempt from the B13 age-unknown refusal (see applyRowInner meta path).
+const ANNOUNCE_KEY_PREFIX = 'tomatoRunAnnounce.'
+const isAnnounceMetaKey = key => String(key || '').startsWith(ANNOUNCE_KEY_PREFIX)
 
 // GAP-A fix (2026-09-19): meta rows (projectMilestones:*, projectCategoryIds, tomatoEstimateState,
 // projectDeadline:/projectStatus:, repeatRule:*, ...) were captured into the oplog but never
@@ -438,7 +441,11 @@ function applyRowInner (state, incoming) {
     // refuse this round: keep the local value, warn. A local edit re-logs a pointer and the key
     // becomes comparable again; the peer's row re-lands on the next round if still newer.
     const tsMap = cache.metaTs()
-    if (localVal != null && !tsMap.has(incoming.id)) {
+    if (localVal != null && !tsMap.has(incoming.id) && !isAnnounceMetaKey(incoming.id)) {
+      // tomatoRunAnnounce.* keys are exempt: they are ephemeral per-device status beacons
+      // rewritten via setMeta on every tick and intentionally short-lived — their oplog pointers
+      // trim almost immediately, so "age unknown" is their steady state, not a red flag. Staleness
+      // is meaningless for a beacon, and the announce module dedups identical content itself.
       log.warn('[LanSync] meta local age unknown (oplog pointer trimmed) for live key', incoming.id, '— inbound row refused this round (0-age LWW would let a stale peer value win)')
       return false
     }
