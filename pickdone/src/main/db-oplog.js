@@ -6,7 +6,8 @@
  * Known gaps until the sync engine lands (declared 2026-09-15, review V1):
  * - Physical deletes (hardDelete/purgeRecycleBin/purgeSeedTodos/planPrune) physically remove
  *   tombstoned plan_chips and log only the todo entity — chip deletions in those paths are NOT
- *   captured, so multi-device chip state needs a periodic full snapshot (not yet implemented).
+ *   captured, so multi-device chip state needs a periodic full snapshot (see docs/sync-matrix.md
+ *   §5 — the oplog/snapshot convergence contract: ring trim, tombstone fallback, watermark rules).
  *   (purgeRecycleBin/purgeSeedTodos DO capture per-id todo tombstones since 2026-09-18.)
  * - The oplog append is a separate transaction from the business write: a crash between the two
  *   commits loses the delta row (accepted window at synchronous=NORMAL).
@@ -18,14 +19,22 @@
  *   full snapshot/tomatoAll instead of treating the marker as one record.
  */
 
-module.exports = ({ getDb, log }) => {
+// Ring-buffer retention (single source, D3 2026-09-24): every bare 10000 oplog page/limit
+// literal (db.js syncOplogSince clamp, sync-apply/lan-sync-bootstrap/tomato-announce pagers)
+// now derives from this constant via oplogKeepLimit() instead of duplicating the number.
+const SYNC_OPLOG_KEEP = 10000
+/** Effective oplog read page size: the requested limit clamped to the ring retention
+ *  (Math.min(SYNC_OPLOG_KEEP, limit)) — there is never more than the ring's worth of rows to
+ *  page through, so a larger request limit is pointless and a smaller one is honored. */
+const oplogKeepLimit = limit => Math.min(SYNC_OPLOG_KEEP, limit)
+
+module.exports = Object.assign(({ getDb, log }) => {
   /* ---------- Change-capture oplog (P1 sync groundwork, 2026-09-15) ---------- */
   // One sync_oplog row per successful write op. Appended in call() (db layer, like the ledger hook) so
   // IPC, aux windows and the CLI are all captured. commitSyncBatch is excluded — it is the sync-ack
   // echo path and a real sync engine must not re-capture the rows it just acknowledged. The log is a
-  // ring buffer (SYNC_OPLOG_KEEP): long-range history gaps are covered by periodic full snapshots, not
-  // by unbounded log retention.
-  const SYNC_OPLOG_KEEP = 10000
+  // ring buffer (SYNC_OPLOG_KEEP, exported above): long-range history gaps are covered by periodic
+  // full snapshots, not by unbounded log retention.
   // entity + affected ids per write op (batch ops expand to one row per id so deltas are row-granular)
   function oplogEntriesFor (op, params, result) {
     const now = Date.now()
@@ -140,4 +149,4 @@ module.exports = ({ getDb, log }) => {
   function oplogReset () { oplogInsert = null; oplogCount = null; oplogOpCount = 0 }
 
   return { oplogEntriesFor, appendOplog, oplogReset }
-}
+}, { SYNC_OPLOG_KEEP, oplogKeepLimit })
