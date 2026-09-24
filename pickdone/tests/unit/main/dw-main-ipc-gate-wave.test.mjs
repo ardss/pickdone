@@ -183,10 +183,15 @@ function shortcutSetup (factoryOpts = {}) {
 test('shortcuts: a non-whitelisted sender cannot raise the capture suppression', () => {
   const { ipcHandlers, win, sent } = shortcutSetup()
   const stranger = { sender: fakeWebContents() }
-  ipcHandlers['shortcut-capturing'](stranger, true) // must be REJECTED
+  ipcHandlers['shortcut-capturing'](stranger, true) // must be REJECTED (gate is MAIN WINDOW ONLY — adversarial review 2026-09-25 narrowed it; aux windows have no legitimate record surface)
   // ctrl+d must still dispatch (suppression must NOT be active)
   win.webContents.emit('before-input-event', { preventDefault () {} }, { type: 'keyboard', control: true, key: 'd' })
   assert.ok(sent.some(x => x[0] === 'shortcut-action'), 'combo must dispatch: stranger never got to suppress shortcuts')
+  // a second aux-window-shaped sender is equally rejected (never whitelisted)
+  const aux = { sender: fakeWebContents() }
+  ipcHandlers['shortcut-capturing'](aux, true)
+  win.webContents.emit('before-input-event', { preventDefault () {} }, { type: 'keyboard', control: true, key: 'd' })
+  assert.ok(sent.some(x => x[0] === 'shortcut-action'), 'aux-window sender must not suppress either')
 })
 
 test('shortcuts: whitelisted main sender suppresses dispatch, and the armed timeout self-heals', async () => {
@@ -272,6 +277,12 @@ test('tomato: main-window control channels reject a foreign sender (used to be g
   assert.throws(() => h['quick-add-hide'](stranger), /forbidden/, 'quick-add-hide must refuse a foreign sender')
   assert.throws(() => h['flush-tomato-float'](stranger), /forbidden/, 'flush-tomato-float must refuse a foreign sender')
   assert.throws(() => h['undock-tomato-float'](stranger), /forbidden/, 'undock-tomato-float must refuse a foreign sender')
+  // adversarial review 2026-09-25 ①: the remaining float side-effect channels join the gate
+  assert.throws(() => h['show-tomato-float'](stranger), /forbidden/, 'show-tomato-float must refuse a foreign sender')
+  assert.throws(() => h['hide-tomato-float'](stranger), /forbidden/, 'hide-tomato-float must refuse a foreign sender')
+  assert.throws(() => h['set-tomato-float-bounds'](stranger), /forbidden/, 'set-tomato-float-bounds must refuse a foreign sender')
+  // read-only channels stay open
+  assert.equal(h['tomato-float-shown'](), false, 'tomato-float-shown is read-only and stays ungated')
 })
 
 test('tomato: the main window still drives its own controls', () => {

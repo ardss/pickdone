@@ -1,5 +1,6 @@
 /** Global + in-window shortcuts — moved from index.js with dependency injection */
 const { globalShortcut, ipcMain } = require('electron')
+const { makeSenderIsMain } = require('./handlers/shared')
 
 /** P2 2026-09-19: normalize keyboard-event key names to the Accelerator vocabulary the saved
  *  config uses. The old `key === 'delete' ? 'delete' : key` ternary was a dead no-op that lost the
@@ -16,8 +17,7 @@ function createShortcuts ({ getMainWindow, showMainOrLock, quickAdd, i18n, log }
   const {
     captureSuppressMaxMs = 60000,
     setTimeout: armTimer = setTimeout,
-    clearTimeout: disarmTimer = clearTimeout,
-    isFloatSender: isFloatSenderDep = null
+    clearTimeout: disarmTimer = clearTimeout
   } = opts
   // Register a single global shortcut: returns false when the key is taken. On failure, retry once after a delay (typical case: our own old instance
   // during restart or an isolated integration-test instance briefly holds the key and releases it on exit); only if that still fails show the conflict dialog.
@@ -68,10 +68,13 @@ function createShortcuts ({ getMainWindow, showMainOrLock, quickAdd, i18n, log }
   // rebind, so re-registering the ipcMain listener per call stacked one closure per rebind.
   let captureSuppress = false
   // main-ipc wave (2026-09-25) hardening for 'shortcut-capturing':
-  //  1) sender whitelist — previously ANY renderer window (or an injected page in one) could flip
+  //  1) sender gate — previously ANY renderer window (or an injected page in one) could flip
   //     the flag, silently disabling every in-app shortcut (a DoS on the main window's keyboard
-  //     surface). Legitimate recorders live in the main window's settings tab only; the aux
-  //     windows (quick-add / tomato float) are tolerated as defense for future record surfaces.
+  //     surface). The ONLY legitimate record surface is the main window's settings shortcuts tab
+  //     (SettingsShortcutsTab.vue) — adversarial review 2026-09-25 narrowed the gate to the main
+  //     window alone (an early draft tolerated quick-add/float as "future-surface defense",
+  //     which left an injected aux page able to suppress all shortcuts; that tolerance is gone).
+  //     Converged on shared.makeSenderIsMain for the ownership test.
   //  2) self-heal — if the recorder dies mid-record (renderer crash / reload before the
   //     stop-toggle IPC), the flag would otherwise stay raised until app restart. Two layers:
   //     a hard timeout arms on every set, and the recorded sender's destruction clears it.
@@ -82,16 +85,10 @@ function createShortcuts ({ getMainWindow, showMainOrLock, quickAdd, i18n, log }
     captureSuppressSender = null
     if (captureSuppressTimer) { disarmTimer(captureSuppressTimer); captureSuppressTimer = null }
   }
-  function senderAllowed (sender) {
-    const w = getMainWindow()
-    if (w && !w.isDestroyed() && sender === w.webContents) return true
-    if (isFloatSenderDep) return !!isFloatSenderDep(sender)
-    try { if (require('./tomato-float').isSelfSender(sender)) return true } catch { /* fall through */ }
-    try { return !!(quickAdd && typeof quickAdd.isSelfSender === 'function' && quickAdd.isSelfSender(sender)) } catch { return false }
-  }
+  const senderIsMain = makeSenderIsMain(getMainWindow)
   ipcMain.on('shortcut-capturing', (e, flag) => {
-    if (!e || !e.sender || !senderAllowed(e.sender)) {
-      try { (log || console).warn('[shortcut] rejected shortcut-capturing from non-whitelisted sender:', e && e.sender && e.sender.id) } catch { /* no logger */ }
+    if (!e || !e.sender || !senderIsMain(e)) {
+      try { (log || console).warn('[shortcut] rejected shortcut-capturing from non-main sender:', e && e.sender && e.sender.id) } catch { /* no logger */ }
       return
     }
     if (flag) {

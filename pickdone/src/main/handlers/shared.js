@@ -14,6 +14,16 @@ function makeAssertMainWindow (getMainWindow) {
   }
 }
 
+/** Adversarial-review convergence (2026-09-25 ④): boolean twin of makeAssertMainWindow — "is this
+ *  IPC event's sender the main window's webContents". Single source for the ownership test so the
+ *  throw-style and boolean-style gates cannot drift (destroyed-window safe like the throw twin). */
+function makeSenderIsMain (getMainWindow) {
+  return (e) => {
+    const w = getMainWindow()
+    return !!(w && !w.isDestroyed() && e && e.sender === w.webContents)
+  }
+}
+
 /** D6 P2 (2026-09-21): key classifier for the command-bus 'ls-mirror' fanout hook. The hook must
  *  decide "is this commit machine-local (kick no sync round)" from the payload, and payloads are
  *  shape-polymorphic across manifest commands:
@@ -144,4 +154,4 @@ function stripForbiddenSettingsKeys (patch, { float } = {}) {
   return clean
 }
 
-module.exports = { makeAssertMainWindow, purgeAttachmentFiles, ownsAttachmentFile, computeMetaGc, classifyCommitKey, makeSyncKick, stripForbiddenSettingsKeys, FLOAT_FORBIDDEN_SETTINGS_KEYS }
+module.exports = { makeAssertMainWindow, makeSenderIsMain, purgeAttachmentFiles, ownsAttachmentFile, computeMetaGc, classifyCommitKey, makeSyncKick, stripForbiddenSettingsKeys, FLOAT_FORBIDDEN_SETTINGS_KEYS }

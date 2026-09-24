@@ -3,7 +3,7 @@ const log = require('electron-log')
 const tomatoFloat = require('../tomato-float')
 const tomatoTaskbar = require('../tomato-taskbar')
 const quickAdd = require('../quick-add')
-const { makeAssertMainWindow } = require('./shared')
+const { makeAssertMainWindow, makeSenderIsMain } = require('./shared')
 const { formatMMSS } = require('../../../shared/format-mmss.cjs') // F-A6: single mm:ss source (floor + negative clamp)
 
 module.exports = function tomatoHandlers (ctx) {
@@ -11,12 +11,12 @@ module.exports = function tomatoHandlers (ctx) {
   const assertMainWindow = makeAssertMainWindow(getMainWindow)
   // main-ipc wave (2026-09-25): the main-window control channels below had NO sender gate — any
   // renderer window (trapped float / injected page) could minimize/hide/close the main window,
-  // undock or flush the float. Gate: main window OR the channel's owning window (float owns the
-  // float controls, quick-add owns its own hide). is-maximized stays open (read-only).
-  const senderIsMain = e => {
-    const w = getMainWindow()
-    return !!(w && !w.isDestroyed() && e && e.sender === w.webContents)
-  }
+  // hide/undock/flush/reposition the float. Gate: main window OR the channel's owning window
+  // (float owns the float controls, quick-add owns its own hide). is-maximized /
+  // tomato-float-shown stay open (read-only).
+  // 2026-09-25 adversarial follow-up: ownership test converged on shared.makeSenderIsMain
+  // (boolean twin of makeAssertMainWindow) instead of a local re-implementation.
+  const senderIsMain = makeSenderIsMain(getMainWindow)
   const isFloatSelf = sender => {
     try { return !!require('../tomato-float').isSelfSender(sender) } catch { return false }
   }
@@ -52,11 +52,18 @@ module.exports = function tomatoHandlers (ctx) {
 
     // --- Pomodoro float window (aligned with the reference show/hide-tomato-floating IPCs) ---
     // --no-focus test instances never auto-show the float: it would cover the user's foreground work
-    'show-tomato-float': () => { if (!process.argv.includes('--no-focus')) { tomatoFloat.show(); rebuildTrayMenu() } },
-    'hide-tomato-float': () => tomatoFloat.hide(),
+    // Adversarial-review fix (2026-09-25 ①): show/hide/set-bounds were the same class of ungated
+    // side-effect as flush/undock (a trapped window could pop/hide/move the float) — same
+    // main-window-or-float gate. Legit callers: SettingsModal/TomatoBar/TomatoPanel (main window)
+    // and TomatoFloatPage (the float itself).
+    'show-tomato-float': (e) => {
+      assertFloatControl(e, 'show-tomato-float')
+      if (!process.argv.includes('--no-focus')) { tomatoFloat.show(); rebuildTrayMenu() }
+    },
+    'hide-tomato-float': (e) => { assertFloatControl(e, 'hide-tomato-float'); return tomatoFloat.hide() },
     'tomato-float-shown': () => tomatoFloat.isVisible(),
     'flush-tomato-float': (e) => { assertFloatControl(e, 'flush-tomato-float'); return tomatoFloat.flushNow() },
-    'set-tomato-float-bounds': () => tomatoFloat.setBounds(),
+    'set-tomato-float-bounds': (e) => { assertFloatControl(e, 'set-tomato-float-bounds'); return tomatoFloat.setBounds() },
     'start-tomato-float-drag': (e) => tomatoFloat.dragStart(e.sender),
     // Domain-1 F-A5 (2026-09-23): the sender is now forwarded on BOTH channels — dragStop/
     // setPanelOpen used to be callable from ANY window, so a trapped float could interrupt a
