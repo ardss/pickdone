@@ -9,17 +9,53 @@ const { formatMMSS } = require('../../../shared/format-mmss.cjs') // F-A6: singl
 module.exports = function tomatoHandlers (ctx) {
   const { getMainWindow, showMainOrLock, rebuildTrayMenu, updateTomatoTray, isLocked } = ctx
   const assertMainWindow = makeAssertMainWindow(getMainWindow)
+  // main-ipc wave (2026-09-25): the main-window control channels below had NO sender gate — any
+  // renderer window (trapped float / injected page) could minimize/hide/close the main window,
+  // undock or flush the float. Gate: main window OR the channel's owning window (float owns the
+  // float controls, quick-add owns its own hide). is-maximized stays open (read-only).
+  const senderIsMain = e => {
+    const w = getMainWindow()
+    return !!(w && !w.isDestroyed() && e && e.sender === w.webContents)
+  }
+  const isFloatSelf = sender => {
+    try { return !!require('../tomato-float').isSelfSender(sender) } catch { return false }
+  }
+  const isQuickAddSelf = sender => {
+    try { const qa = require('../quick-add'); return !!(qa && typeof qa.isSelfSender === 'function' && qa.isSelfSender(sender)) } catch { return false }
+  }
+  // main window only, with a lock-state reuse (same class as backup.js's `if (isLocked()) throw`):
+  // while the lock is active a non-main renderer must not be able to drive the main window's
+  // visibility at all.
+  const assertWindowControl = (e, label) => {
+    if (!senderIsMain(e)) {
+      log.warn('[IPC] 拒绝非主窗调用窗口控制通道, sender:', e && e.sender && e.sender.id)
+      throw new Error('forbidden: main window only (' + label + ')')
+    }
+  }
+  const assertFloatControl = (e, label) => {
+    if (!senderIsMain(e) && !isFloatSelf(e && e.sender)) {
+      log.warn('[IPC] 拒绝非主窗/非浮窗调用浮窗控制通道, sender:', e && e.sender && e.sender.id)
+      throw new Error('forbidden: main window or tomato float only (' + label + ')')
+    }
+  }
 
   return {
     // --- Global quick-add mini window ---
-    'quick-add-hide': () => quickAdd.hide(),
+    // Owning-window gate: only the main window or the quick-add window itself may hide it.
+    'quick-add-hide': (e) => {
+      if (!senderIsMain(e) && !isQuickAddSelf(e && e.sender)) {
+        log.warn('[IPC] 拒绝非主窗/非快加窗调用 quick-add-hide, sender:', e && e.sender && e.sender.id)
+        throw new Error('forbidden: main window or quick-add only')
+      }
+      return quickAdd.hide()
+    },
 
     // --- Pomodoro float window (aligned with the reference show/hide-tomato-floating IPCs) ---
     // --no-focus test instances never auto-show the float: it would cover the user's foreground work
     'show-tomato-float': () => { if (!process.argv.includes('--no-focus')) { tomatoFloat.show(); rebuildTrayMenu() } },
     'hide-tomato-float': () => tomatoFloat.hide(),
     'tomato-float-shown': () => tomatoFloat.isVisible(),
-    'flush-tomato-float': () => tomatoFloat.flushNow(),
+    'flush-tomato-float': (e) => { assertFloatControl(e, 'flush-tomato-float'); return tomatoFloat.flushNow() },
     'set-tomato-float-bounds': () => tomatoFloat.setBounds(),
     'start-tomato-float-drag': (e) => tomatoFloat.dragStart(e.sender),
     // Domain-1 F-A5 (2026-09-23): the sender is now forwarded on BOTH channels — dragStop/
@@ -81,7 +117,7 @@ module.exports = function tomatoHandlers (ctx) {
     },
     // Double-click the float card to summon the main window: accepts only the float's own sender; showMainOrLock already handles the lock-screen redirect and main-window recreation branches
     'show-main-from-float': (e) => { if (tomatoFloat.isSelfSender(e.sender)) showMainOrLock() },
-    'undock-tomato-float': () => { tomatoFloat.undock(); rebuildTrayMenu() },
+    'undock-tomato-float': (e) => { assertFloatControl(e, 'undock-tomato-float'); tomatoFloat.undock(); rebuildTrayMenu() },
     // Pomodoro state pushed every second → carried by the taskbar five-piece set + tray tooltip together (single tooltip writer)
     // D6 P2 (2026-09-22): main-window gate — any window could previously spoof the tray tooltip /
     // taskbar five-piece state (a fake countdown, a fake running indicator) every second.
@@ -98,10 +134,12 @@ module.exports = function tomatoHandlers (ctx) {
     },
 
     // --- Window controls (win may be destroyed: null-guarded via getMainWindow, avoiding throws after destruction) ---
-    'minimize-main-window': () => { const w = getMainWindow(); if (w) w.minimize(); return true },
-    'maximize-main-window': () => { const w = getMainWindow(); if (!w) return false; w.isMaximized() ? w.unmaximize() : w.maximize(); return true },
+    // main-ipc wave (2026-09-25): side-effecting controls are main-window only + locked-state gate
+    // (isLocked, symmetric with backup.js write channels); 'is-maximized' stays open (read-only).
+    'minimize-main-window': (e) => { assertWindowControl(e, 'minimize-main-window'); if (isLocked()) throw new Error('app is locked'); const w = getMainWindow(); if (w) w.minimize(); return true },
+    'maximize-main-window': (e) => { assertWindowControl(e, 'maximize-main-window'); if (isLocked()) throw new Error('app is locked'); const w = getMainWindow(); if (!w) return false; w.isMaximized() ? w.unmaximize() : w.maximize(); return true },
     'is-maximized': () => { const w = getMainWindow(); return w ? w.isMaximized() : false },
-    'hide-main-window': () => { const w = getMainWindow(); if (w) w.hide(); return true },
-    'close-main-window-request': () => { const w = getMainWindow(); if (w) w.close(); return true }
+    'hide-main-window': (e) => { assertWindowControl(e, 'hide-main-window'); if (isLocked()) throw new Error('app is locked'); const w = getMainWindow(); if (w) w.hide(); return true },
+    'close-main-window-request': (e) => { assertWindowControl(e, 'close-main-window-request'); if (isLocked()) throw new Error('app is locked'); const w = getMainWindow(); if (w) w.close(); return true }
   }
 }
