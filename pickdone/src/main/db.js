@@ -58,6 +58,11 @@ function migratePlainToEncrypted (dir, file, key) {
   const encFile = path.join(dir, 'todos-encrypted.tmp')
   try {
     fs.rmSync(encFile, { force: true })
+    // Test-only seam (2026-09-24 C12): a hook returning true simulates a crash mid-rename —
+    // the hook stages the on-disk state itself, then the REAL catch/restore path runs.
+    if (migrateFailHook && migrateFailHook({ dir, file, encFile })) {
+      throw new Error('[TodoDB] injected migration failure (test seam)')
+    }
     // ATTACH 的 KEY 是 SQL 字面量(参数化不支持),必须双写单引号——加密 key 是唯一触碰 SQL 字符串的敏感值
     const keyLiteral = String(key).replace(/'/g, "''")
     db.exec(`ATTACH DATABASE '${encFile.replace(/'/g, "''")}' AS enc KEY '${keyLiteral}'`)
@@ -100,6 +105,13 @@ function migratePlainToEncrypted (dir, file, key) {
     return false
   }
 }
+
+/** Test-only migration failure injection (C12, 2026-09-24): never set in production. */
+let migrateFailHook = null
+function __setMigrateFailHookForTests (fn) { migrateFailHook = typeof fn === 'function' ? fn : null }
+/** Test-only migration-list override (C2, 2026-09-24): never set in production. */
+let migrationsOverride = null
+function __setMigrationsForTests (list) { migrationsOverride = Array.isArray(list) ? list : null }
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS todos (
@@ -255,6 +267,25 @@ function initInner (userDataPath) {
     key = null
     hadKeyFile = false
   }
+  // C1 (P0 2026-09-24) 加密迁移崩溃中间态降级探测:migratePlainToEncrypted 的"写 db.key →
+  // rename(明文→.plain-bak) → rename(密→todos.db)"序列若在两步 rename 之间掉电,会留下
+  // "明文 todos.db + 有效 db.key"的组合。旧路径三条自愈链全部失效:带钥打开在首次读页即抛
+  // dbEncMismatch;dbRecovery 见 SQLite 头完好判 transient 拒绝改名恢复;重启即死循环。
+  // 探测:db.key 存在且 todos.db 头部仍是明文 SQLite magic(multiple-ciphers 加密库首页为
+  // 密文,不含该 magic)→ 库实际未加密,key 已作废 → 把 db.key 移为 db.key.superseded-<ts>,
+  // 按无钥明文库路径继续(init 末段会用新钥走 migratePlainToEncrypted 重加密),数据零丢失。
+  if (hadKeyFile && fs.existsSync(file) && require('./dbRecovery.cjs').sqliteHeaderOk(file)) {
+    const superseded = keyFile + '.superseded-' + new Date().toISOString().replace(/[:.]/g, '-')
+    try {
+      fs.renameSync(keyFile, superseded)
+      log.warn('[TodoDB] 检测到"明文库+有效 db.key"迁移中间态,db.key 已降级为', path.basename(superseded), ',走明文重加密路径')
+      key = null
+      hadKeyFile = false
+    } catch (e) {
+      // 降级改名失败(被占用/AV 持有):保持旧路径——带钥打开会失败进 dbEncMismatch → 恢复链
+      log.error('[TodoDB] db.key 降级改名失败,按带钥路径继续(预期解密探针失败)', e)
+    }
+  }
   db = new loadDriver()(file)
   if (hadKeyFile) db.pragma(`key='${key}'`)
   // Protection: explicit read probe (journal_mode does not necessarily throw on a wrong key — actual decryption happens on the first page read)
@@ -278,7 +309,8 @@ function initInner (userDataPath) {
   // ===== schemaVersion single migrator: migrations run once only, no longer re-executed on every startup (probe-style column adds / unconditional UPDATEs are implicit migration debt) =====
   const getVer = () => { try { const r = db.prepare("SELECT value FROM meta WHERE key='schemaVersion'").get(); return Number(r && r.value) || 0 } catch { return 0 } }
   const setVer = v => db.prepare('INSERT INTO meta (key, value) VALUES (\'schemaVersion\', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(String(v))
-  const MIGRATIONS = [
+  const MIGRATIONS = (function () {
+    const BUILT_IN = [
     { v: 1, fn: d => { d.exec('UPDATE todos SET remindAt = 0 WHERE remindAt IS NULL') } },
     { v: 2, fn: d => {
       // data-layer important/urgent for the Eisenhower matrix (2026-08-29) + multi-reminder list
@@ -337,10 +369,25 @@ function initInner (userDataPath) {
       return true
     } },
     { v: 6, fn: d => syncSchema.migrateV6(d) },
-  ]
+    ]
+    // C2 test-only seam (2026-09-24): inject a throwing migration without shipping it
+    return migrationsOverride || BUILT_IN
+  })()
   let ver = getVer()
+  // C2 (P1 2026-09-24) 迁移循环设防:此前任一迁移抛错直接冒泡 → init 永久失败、整库打不开
+  // (比带损启动更糟)。现在单条迁移抛错转中断:结构化日志 + 停在当前版本(schemaVersion 不推进,
+  // 下次启动重试该条),库照常打开。false 返回值语义不变(中断不推进)。
   // Failed migration must abort (not `continue`): advancing would stamp the higher version so the failed migration never retries.
-  for (const m of MIGRATIONS) { if (m.v > ver) { if (m.fn(db) === false) break; ver = m.v } }
+  for (const m of MIGRATIONS) {
+    if (m.v <= ver) continue
+    try {
+      if (m.fn(db) === false) break
+      ver = m.v
+    } catch (e) {
+      log.error('[TodoDB] schema 迁移 v' + m.v + ' 抛错,停于版本 ' + ver + ' 带损启动(版本不推进,下次启动重试):', e && e.message)
+      break
+    }
+  }
   if (ver !== getVer()) setVer(ver)
   // SCHEMA/MIGRATIONS dual-manifest decoupling backstop: if a future SCHEMA column addition is forgotten in MIGRATIONS, CREATE TABLE IF NOT EXISTS is
   // a no-op for existing tables and the upsert prepare dies at startup referencing the missing column. Here, probe and add columns uniformly via PRAGMA
@@ -368,6 +415,14 @@ function initInner (userDataPath) {
     key = crypto.randomBytes(32).toString('hex')
     if (preSchemaTables > 0) {
       const ok = migratePlainToEncrypted(userDataPath, file, key)
+      // C12 (P2 2026-09-24): 迁移失败且还原后 todos.db 仍缺位(.plain-bak 缺失/还原也失败)时,
+      // 下面的无参重开会让 better-sqlite3 静默新建空库——本次会话跑在空库上,且下次启动
+      // "无 todos.db 才恢复"的预检被跳过,旧数据永不自愈。主动 throw 进 index.js 的恢复链。
+      if (!ok && !fs.existsSync(file)) {
+        db = null
+        stmtsClearAll()
+        throw new Error('[TodoDB] 明文→加密迁移失败且 todos.db 缺位(无 .plain-bak 可还原),转交恢复链处理')
+      }
       db = new loadDriver()(file)
       // Order is critical: write db.key to disk before the pragma — if the encrypted DB is opened first and the key write fails, the DB is encrypted while the key exists only in memory and the next startup is unrecoverable
       // main-ipc-2 fsync fix (2026-09-22): writeFileDurable (tmp+fsync+rename) — writeFileSync alone
@@ -721,8 +776,25 @@ const OPS = {
     // '0000-00-00'/'9999-99-99'). The completion-day keys are YYYYMMDD integers: 0 / 99991231.
     const fLo = f == null ? 0 : f
     const tHi = t == null ? 8640000000000000 : t
-    const rows = db.prepare(`SELECT scheduledDay ds, SUM(complete) done, COUNT(*) total FROM todos
-      WHERE deleted=0 AND scheduledDay BETWEEN ? AND ? GROUP BY scheduledDay`).all(fLo, tHi)
+    // B12 (P3 2026-09-24) planned 口径对齐渲染端 metrics.js windowCounts:
+    //   ds = dayStart || (todoTime ? startOf(todoTime).day : 0) —— 纯 todoTime(无 scheduledDay)任务
+    // 也要计入当日 planned。旧行集只按 scheduledDay 分组,这类任务从所有统计里消失。
+    // 候选集 = scheduledDay 落界 OR (scheduledDay=0 且 scheduledAt 落界);时刻→当日的换算在 JS 侧用
+    // dayjs startOf('day')(本地时区正确;SQL strftime/julianday 的 UTC 取整在非 UTC 时区错日)。
+    // scheduledAt is the row column for the app-shape todoTime (see db-rows.rowToTodo).
+    const raw = db.prepare(`SELECT scheduledDay dsRaw, scheduledAt, SUM(complete) done, COUNT(*) total FROM todos
+      WHERE deleted=0 AND ((scheduledDay BETWEEN ? AND ?) OR (scheduledDay = 0 AND scheduledAt BETWEEN ? AND ?))
+      GROUP BY scheduledDay, scheduledAt`).all(fLo, tHi, fLo, tHi)
+    const byDay = new Map()
+    for (const r of raw) {
+      const ds = r.dsRaw || (r.scheduledAt ? +dayjs(r.scheduledAt).startOf('day') : 0)
+      if (!ds) continue
+      const cur = byDay.get(ds) || { ds, done: 0, total: 0 }
+      cur.done += r.done || 0
+      cur.total += r.total || 0
+      byDay.set(ds, cur)
+    }
+    const rows = [...byDay.values()].sort((a, b) => a.ds - b.ds)
     // 完成日查询的边界须与 strftime 产出的 YYYYMMDD 同单位(2026-09-05 终审 P1:与毫秒边界 BETWEEN 恒假→恒空)
     const fKey = f == null ? 0 : Number(dayjs(f).format('YYYYMMDD'))
     const tKey = t == null ? 99991231 : Number(dayjs(t).format('YYYYMMDD'))
@@ -1058,4 +1130,4 @@ function close () {
 // Initialized probe: within the same process (the main process's CSV import), reuse the existing connection; a second init rebuilding the handle on the same file is forbidden
 function isOpen () { return !!db }
 
-module.exports = { init, call, queryTodos, normalizeContent, isWriteOp, isOpen, close, setLedgerChangedHook, suppressLedgerHook, LEDGER_WRITE_OPS, WRITE_OPS, SCHEMA }
+module.exports = { init, call, queryTodos, normalizeContent, isWriteOp, isOpen, close, setLedgerChangedHook, suppressLedgerHook, LEDGER_WRITE_OPS, WRITE_OPS, SCHEMA, __setMigrateFailHookForTests, __setMigrationsForTests }
