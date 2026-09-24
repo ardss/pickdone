@@ -9,7 +9,7 @@ const ElementPlus = window.ElementPlus
 import store from './store/index.js'
 import { onExternalHabitBlob } from './store/habits.js'
 import { createExternalReloader, kindsFromChangedEvent } from './utils/externalReload.js'
-import { loadRuntime } from './store/runtimeState.js'
+import { loadRuntime } from './store/helpers/runtimeState.js'
 import router from './router.js'
 import App from './app-root.vue'
 import { setLunarLib } from './utils/repeat.js'

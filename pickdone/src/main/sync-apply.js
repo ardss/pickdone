@@ -1,5 +1,4 @@
 'use strict'
-
 /**
  * Sync apply pipeline (extracted from lan-sync-bootstrap.js, round-3 review line ratchet).
  *
@@ -25,6 +24,7 @@ const manifest = require('./command-manifest')
 // Arch review 2026-09-22 rec #3: the ingress clamp window is the SHARED constant — the same
 // window/semantics as the command-bus explicit-stamp clamp (see stamp-clamp.js).
 const { STAMP_CLAMP_MS } = require('./stamp-clamp')
+const { SYNC_OPLOG_KEEP, oplogKeepLimit } = require('./db-oplog') // D3 2026-09-24: oplog page size derives from the ring retention (was bare 10000s)
 // Arch review 2026-09-22 rec #1 (twin-door convergence): flush/ingress WRITE sites route
 // through an injected bus built on top of THIS state's db surface (createBus is exported for
 // exactly this). The bus's dbCall is state.db.call, so mock-driven unit suites keep their
@@ -182,10 +182,10 @@ function createHydrationCache (state) {
       if (!caches.metaTs) {
         const m = new Map()
         let since = 0
-        for (let i = 0; i < 10000; i++) {
-          const rows = state.db.call('syncOplogSince', { sinceSeq: since, limit: 10000 }) || []
+        for (let i = 0; i < SYNC_OPLOG_KEEP; i++) {
+          const rows = state.db.call('syncOplogSince', { sinceSeq: since, limit: oplogKeepLimit(SYNC_OPLOG_KEEP) }) || []
           for (const r of rows) if (r.entity === 'meta' && r.ts > (m.get(r.entityId) || 0)) m.set(r.entityId, r.ts)
-          if (rows.length < 10000) break
+          if (rows.length < SYNC_OPLOG_KEEP) break
           since = rows[rows.length - 1].seq
         }
         caches.metaTs = m
@@ -823,9 +823,9 @@ function flushPendingWrites (state) {
  */
 function readMaxOplogSeq (state) {
   let since = 0
-  for (let i = 0; i < 10000; i++) {
-    const rows = state.db.call('syncOplogSince', { sinceSeq: since, limit: 10000 }) || []
-    if (rows.length < 10000) return rows.length ? rows[rows.length - 1].seq : since
+  for (let i = 0; i < SYNC_OPLOG_KEEP; i++) {
+    const rows = state.db.call('syncOplogSince', { sinceSeq: since, limit: oplogKeepLimit(SYNC_OPLOG_KEEP) }) || []
+    if (rows.length < SYNC_OPLOG_KEEP) return rows.length ? rows[rows.length - 1].seq : since
     since = rows[rows.length - 1].seq
   }
   return since

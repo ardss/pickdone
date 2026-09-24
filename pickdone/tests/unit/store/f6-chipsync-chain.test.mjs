@@ -10,7 +10,7 @@ globalThis.dayjs = ts => ({ format: () => String(ts), valueOf: () => ts })
 globalThis.localStorage = { getItem: () => null, setItem: () => {}, removeItem: () => {} }
 globalThis.window = { location: { hash: '' }, todoAPI: { dbCall: async () => [] } }
 
-const { enqueueChipSync } = await import('../../../renderer/js/store/planChips.js')
+const { enqueueChipSync } = await import('../../../renderer/js/store/helpers/planChips.js')
 
 const deferred = () => {
   let resolve

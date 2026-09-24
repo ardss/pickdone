@@ -2,8 +2,8 @@
  * Extracted from store/todo.js (structure-size ratchet): the DB write pending queue +
  * the settings date-range resolver. No behavior change — code moved verbatim.
  */
-import { commit as commitCommand } from '../utils/commandBus.js'
-import { rangeDays } from '../utils/core.js'
+import { commit as commitCommand } from '../../utils/commandBus.js'
+import { rangeDays } from '../../utils/core.js'
 
 // ---- DB write pending queue (mirrors tomato.js's _pendingLedger): a failed task upsert stays queued and replays on the next quit flush, so a transient IPC/db failure can't silently drop a task edit ----
 const _pendingUpserts = []

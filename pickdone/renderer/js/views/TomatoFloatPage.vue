@@ -111,7 +111,7 @@
  *  Note: never pop a native dialog on a transparent frameless window — Windows will paint a system title bar onto the host window. */
 import { formatMMSS } from '../utils/tomatoShared.js'
 import { NOISES } from '../utils/mediaRegistry.js'
-import { remainSecOfAnnounce } from '../store/tomatoAnnounceShared.js'
+import { remainSecOfAnnounce } from '../store/helpers/tomatoAnnounceShared.js'
 
 /** The browser debug host shim's todoAPI carries a version stamp; the real preload does not */
 function isPreviewHost () {

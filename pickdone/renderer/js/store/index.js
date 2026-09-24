@@ -50,7 +50,7 @@ store.subscribeAction({
   },
   after (action) {
     if (!WRITE_ACTIONS.has(action.type)) return
-    store.state.todo._lastLocalWriteAt = Date.now()
+    store.commit('todo/stampLocalWrite')
   }
 })
 

@@ -2,12 +2,12 @@
 const log = require('electron-log')
 const fs = require('fs')
 const path = require('path')
-const dbm = require('../db')
-const fixUtil = require('../fix-util')
 const tomatoFloat = require('../tomato-float')
 const scheduler = require('../scheduler')
 const appAudit = require('../audit')
 const { makeAssertMainWindow, purgeAttachmentFiles, classifyCommitKey, makeSyncKick } = require('./shared')
+const { evalFloatLedger } = require('../float-ledger')
+const { collectOwnedAttachmentFiles } = require('../attachment-ownership')
 const bus = require('../command-bus')
 
 module.exports = function todoHandlers (ctx) {
@@ -16,6 +16,9 @@ module.exports = function todoHandlers (ctx) {
     resyncDbWatch, broadcastTomatoRecordsChanged, broadcastTodosChanged, dbApi, attachDir,
     notifySyncChange,
   } = ctx
+  // D3 (2026-09-24) dbCall dependency injection: the db handle comes from ctx (index.js injects
+  // it; tests can pass a fake). Fallback keeps direct requires of this module working.
+  const dbm = ctx.dbm || require('../db')
 
   const assertMainWindow = makeAssertMainWindow(getMainWindow)
 
@@ -112,42 +115,10 @@ module.exports = function todoHandlers (ctx) {
   const execDbCall = (e, op, params, opts) => {
       // While the security lock is active: only the lock-screen window may write (prevents the pomodoro float/injected windows from reading or writing data around the lock)
       if (isLocked() && !isLockWindow(e.sender)) {
-        // 浮窗到点落番茄账是合法后台行为:锁屏期间放行浮窗自身的番茄追加类写(只挡读/危险写,威胁模型针对绕锁读写)
-        let floatLedger = tomatoFloat.isSelfSender(e.sender) && /^(tomatoAppendMany|tomatoUpdateById|bumpSnow)$/.test(op) // bumpSnow=挂任务送专注积分,同属到点落账
-        // H2 2026-09-16: bumpSnow was the only one of the three float-ledger ops with zero narrowing —
-        // a trapped float window could re-credit any taskId (incl. soft-deleted/nonexistent rows; a live
-        // row inflates focusMinutes unboundedly). Same narrowing as tomatoAppendMany/tomatoUpdateById:
-        // the target row must really exist and not be soft-deleted.
-        if (floatLedger && op === 'bumpSnow') {
-          const tid = (params || {}).taskId
-          const t = tid != null ? dbm.call('getById', String(tid)) : null
-          floatLedger = !!t && !t.delete
-        }
-        if (floatLedger && (op === 'tomatoUpdateById' || op === 'tomatoAppendMany')) {
-          // 本地时区当天(dateKey 按本地 dayjs 导出,UTC 串会在 0-8 点误判跨天)
-          const todayKey = fixUtil.localDayKey(Date.now())
-          if (op === 'tomatoUpdateById') {
-            // dateKey 由 endTime 强制导出(db 层);查不到的行让 db 层自己返回 false
-            // D6 P2 (2026-09-22): tomatoAll (full-table scan, once per float tick under lock) →
-            // indexed by-id read via tomatoGetById (same deleted=0 semantics as every reader)
-            // D7 (2026-09-22, main-ipc-7): the target row's CURRENT dateKey being today is not
-            // enough — db-layer tomatoUpdateById re-derives dateKey from endTime, so a patch
-            // carrying a historical endTime silently migrated a today row to any past day.
-            // Same local-today day-bound as the tomatoAppendMany branch below: an endTime present
-            // in the patch must land on local today too (focusDuration stays LIMITS-clamped at
-            // the db layer, so the residual surface is minutes-scale, not history forgery).
-            const cur = dbm.call('tomatoGetById', String((params || {}).tomatoId))
-            const patch = (params || {}).patch || {}
-            const patchEnd = patch.endTime
-            floatLedger = !!cur && cur.dateKey === todayKey &&
-              (patchEnd == null || (Number(patchEnd) > 0 && fixUtil.localDayKey(Number(patchEnd)) === todayKey))
-          } else {
-            // tomatoAppendMany 同款收窄(2026-09-09 P2):此前批量追加无时间约束,被陷浮窗锁屏期可
-            // 伪造任意历史日期的账本行;现要求所有行的 endTime 都落在本地当天
-            const rows = Array.isArray(params) ? params : [params]
-            floatLedger = rows.every(r => r && r.endTime && fixUtil.localDayKey(r.endTime) === todayKey)
-          }
-        }
+        // 浮窗到点落番茄账是合法后台行为:锁屏期间放行浮窗自身的番茄追加类写(只挡读/危险写,威胁模型针对绕锁读写)。
+        // D3 (2026-09-24): the floatLedger date-boundary/row-existence decision (incl. its
+        // dbm.call queries) moved verbatim to src/main/float-ledger.js — same inputs, same verdict.
+        const floatLedger = evalFloatLedger({ op, params, isSelfSender: tomatoFloat.isSelfSender(e.sender), call: (o, p) => dbm.call(o, p) })
         if (!floatLedger) throw new Error('app is locked')
       }
       // Write-op whitelist: callable by the renderer; other ops must go through main-process methods (prevents XSS injecting arbitrary ops)
@@ -181,9 +152,10 @@ module.exports = function todoHandlers (ctx) {
       let hardDeleteFiles = null
       if (op === 'hardDelete' && params != null) {
         try {
-          const { ownsAttachmentFile } = require('./shared')
+          // D3 (2026-09-24): the owned-file collection moved to the electron-free domain module
+          // src/main/attachment-ownership.js (collectOwnedAttachmentFiles) — same filter, same call.
           const id = String(Array.isArray(params) ? params[0] : params)
-          hardDeleteFiles = fs.readdirSync(attachDir()).filter(f => ownsAttachmentFile(f, id))
+          hardDeleteFiles = collectOwnedAttachmentFiles(attachDir, id)
         } catch (err) { log.warn('[IPC] hardDelete attachment collect failed (files may be orphaned):', err) }
       }
       // Phase-1 command bus: every manifest write op goes through bus.commitOp (validation +

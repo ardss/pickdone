@@ -59,7 +59,7 @@
     "authority": "local-only",
     "note": "重复默认值偏好;无DB镜像,若需跨端收编须先建meta键"
   },
-  "renderer/js/store/runtimeState.js::runtimeState": {
+  "renderer/js/store/helpers/runtimeState.js::runtimeState": {
     "authority": "local-only",
     "note": "运行时状态(窗口/视图瞬时),重启即弃"
   },

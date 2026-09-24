@@ -10,7 +10,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import mod from '../../../renderer/js/store/tomatoAnnounce.js'
-import { buildAnnounceValue, isStaleAnnounce, remainSecOfAnnounce } from '../../../renderer/js/store/tomatoAnnounceShared.js'
+import { buildAnnounceValue, isStaleAnnounce, remainSecOfAnnounce } from '../../../renderer/js/store/helpers/tomatoAnnounceShared.js'
 
 const require = createRequire(import.meta.url)
 const taMain = require('../../../src/main/tomato-announce.js')

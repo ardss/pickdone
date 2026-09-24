@@ -23,6 +23,7 @@
 
 const KEY_PREFIX = 'tomatoRunAnnounce.'
 // F-A4: shared text sanitizer (pure Node, no Electron) — see buildAnnounceValue.
+const { SYNC_OPLOG_KEEP, oplogKeepLimit } = require('./db-oplog') // D3 2026-09-24: oplog page size derives from the ring retention (was bare 10000s)
 const { sanitizeText } = require('./sanitize')
 // Staleness TTL factor (spec): an entry older than 2x its planned duration is dead even
 // if startedAt+plannedSec is still in the future (covers clock skew between peers).
@@ -187,14 +188,14 @@ function listAnnounces () {
   try {
     let since = announceCache.watermark
     for (let i = 0; i < 100; i++) {
-      const rows = dbCall('syncOplogSince', { sinceSeq: since, limit: 10000 }) || []
+      const rows = dbCall('syncOplogSince', { sinceSeq: since, limit: oplogKeepLimit(SYNC_OPLOG_KEEP) }) || [] // D3 2026-09-24: was bare 10000
       for (const r of rows) {
         if (r.entity === 'meta' && isAnnounceKey(r.entityId)) {
           const id = String(r.entityId).slice(KEY_PREFIX.length)
           if (r.ts > (announceCache.ids.get(id) || 0)) announceCache.ids.set(id, r.ts)
         }
       }
-      if (rows.length < 10000) {
+      if (rows.length < SYNC_OPLOG_KEEP) {
         since = rows.length ? rows[rows.length - 1].seq : since
         break
       }

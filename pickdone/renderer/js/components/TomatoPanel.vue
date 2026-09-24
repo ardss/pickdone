@@ -47,7 +47,7 @@
 /** Full pomodoro settings panel (opened via shortcut / the ⚙ on the bottom bar): ring timer / duration config / today's records / float window */
 import {dayjs, FMT } from '../utils/core.js'
 import { formatMMSS } from '../utils/tomatoShared.js'
-import { remainSecOfAnnounce } from '../store/tomatoAnnounceShared.js'
+import { remainSecOfAnnounce } from '../store/helpers/tomatoAnnounceShared.js'
 import store from '../store/index.js'
 
 export default {

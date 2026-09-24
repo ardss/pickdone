@@ -19,6 +19,10 @@ dev-tools/
 # 系统文件
 .DS_Store
 Thumbs.db
+nul
+
+# 会话级临时工作目录(.tmp-qc 等)
+.tmp-*/
 tests/shot-*.png
 
 # 开发隔离数据目录（app:dev / TODO_USER_DATA_DIR）

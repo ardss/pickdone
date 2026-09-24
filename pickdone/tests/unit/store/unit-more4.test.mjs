@@ -87,7 +87,7 @@ test('core: parseSubtasks tolerates double-encoded JSON strings', () => {
 
 /* ---------- runtimeState: volatile state storage across restarts ---------- */
 
-import { loadRuntime, saveRuntime } from '../../../renderer/js/store/runtimeState.js'
+import { loadRuntime, saveRuntime } from '../../../renderer/js/store/helpers/runtimeState.js'
 
 test('runtimeState: save merges patches, load is fault-tolerant', () => {
   globalThis.localStorage.removeItem('runtimeState')

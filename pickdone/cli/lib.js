@@ -36,14 +36,16 @@ const bus = require('../src/main/command-bus')
 // commit must keep guaranteeing an initialized handle in pure-CLI sessions.
 const commit = (entity, verb, payload) => { open(); return bus.commit(entity, verb, payload, { preserveStamp: true }) }
 const core = require('../src/main/core/todo-core.js')
-// Round-3 P1: ownership guard for attachment filenames (single source with the App's purge path,
-// src/main/handlers/shared.js — pure, electron-free).
-const { ownsAttachmentFile } = require('../src/main/handlers/shared.js')
+// Round-3 P1: ownership guard for attachment filenames (single source with the App's purge path —
+// pure, electron-free; D3 2026-09-24 now required directly from its electron-free domain module
+// src/main/attachment-ownership.js instead of through handlers/shared.js + its electron-log require).
+const { ownsAttachmentFile } = require('../src/main/attachment-ownership.js')
 const audit = require('./audit.js')
 const nlDate = require('./nl-date.cjs')
 const { parseMilestoneDateCore } = require('../shared/parse-date.mjs') // milestone-date core shared with the renderer (require(esm), same pattern as limits.mjs)
 const { nextSort, moveWithin } = require('../shared/sort-core.mjs') // P3-7 / F-B2: sort-score single source with renderer utils/core.js (require(esm))
-const { stripHabitsFamily } = require('../shared/settings-families.mjs') // F-B1: blob-family contract shared with lan-sync-bootstrap foldSettingsIntoBlob (require(esm))
+const { stripHabitsFamily } = require('../shared/settings-families.mjs')
+const { matchesViewConds } = require('../shared/filter-core.mjs') // D4 2026-09-24: saved-view matcher single source with db.js / FilterView.vue (require(esm))
 const { localDayKey } = require('../src/main/fix-util.js') // P3-8: single source for the local YYYY-MM-DD key (same require the lib-attachments module already uses)
 
 let opened = false
@@ -1318,23 +1320,11 @@ function viewRm (input) {
  *  filter — default false keeps the FilterView undone-only parity, true skips the complete check (the fetch
  *  already filtered by the explicit flag) so done tasks are no longer silently dropped. */
 function applyViewConds (conds, tasks, { done = false } = {}) {
-  const c = conds || {}
   const today0 = +dayjs().startOf('day')
   const weekEnd = +dayjs().endOf('isoWeek') // isoWeek plugin extended explicitly at the top of this file
-  return tasks.filter(t => {
-    if (t.delete) return false
-    if (done === false && t.complete) return false
-    if (c.catId != null && c.catId !== -1 && (t.categoryId || 0) !== c.catId) return false
-    if (c.priority != null && c.priority !== -1 && (t.priority || 0) !== c.priority) return false
-    if (c.dateMode && c.dateMode !== 'all') {
-      const d = t.dayStart || 0
-      if (c.dateMode === 'today' && d !== today0) return false
-      if (c.dateMode === 'week' && !(d >= today0 && d <= weekEnd)) return false
-      if (c.dateMode === 'overdue' && !(d && d < today0)) return false
-      if (c.dateMode === 'none' && d !== 0) return false
-    }
-    return true
-  })
+  // D4 2026-09-24: the matcher moved to shared/filter-core.mjs (single source with db.js conds
+  // parsing and the renderer's FilterView.list); the `done` override contract is unchanged.
+  return tasks.filter(t => matchesViewConds(t, conds, { today0, weekEnd }, { done }))
 }
 
 /** listTodos fetch options for a saved view: push the view's dateMode/category down into the QUERY so the

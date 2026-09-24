@@ -92,13 +92,16 @@ test('EditPanel restoreFromBin: await wrapped in try/catch, error toast, item ke
 })
 
 test('EditPanel repeatGroupInfo: stale response discarded when the edited task changed mid-await', () => {
-  const src = read('renderer/js/components/EditPanel.vue')
-  const body = src.slice(src.indexOf('async repeatGroupInfo'), src.indexOf('close ()'))
-  const idCap = body.indexOf('const taskId = this.e.taskId')
+  // maint/dw-arch 2026-09-24 (D1 knife 3): the impl moved verbatim to edit-panel/repeat.js;
+  // anchors follow the move (same capture -> await -> guarded apply order)
+  const src = read('renderer/js/components/edit-panel/repeat.js')
+  const body = src.slice(src.indexOf('export async function repeatGroupInfo'))
+  const idCap = body.indexOf('const taskId = ctx.e.taskId')
   const awaitPos = body.indexOf('await window.todoAPI.dbCall')
-  const guard = body.indexOf('this.e.taskId === taskId')
+  const guard = body.indexOf('ctx.e.taskId === taskId')
   assert.ok(idCap > -1 && awaitPos > -1 && guard > -1, 'id captured before await, guard after')
   assert.ok(idCap < awaitPos && awaitPos < guard, 'capture -> await -> guarded apply order')
+  assert.match(read('renderer/js/components/EditPanel.vue'), /repeatGroupInfo \(\) \{ return repeat\.repeatGroupInfo\(this\) \}/, 'component delegates repeatGroupInfo')
 })
 
 /* ---------- #2/#3 RecycleBinView: pickDate await/catch, tabindex watcher ---------- */

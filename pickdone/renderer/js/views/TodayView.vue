@@ -170,7 +170,7 @@ export default {
       const isToday = sel === dayjs().startOf('day').valueOf()
       if (!isToday) {
         // Project baseline behavior: selecting another date in today view -> show that day's tasks
-        const all = this.fitProj(this.$store.state.todo.todoList.filter(t => !t.delete && t.dayStart === sel))
+        const all = this.fitProj(this.$store.getters['todo/activeList'].filter(t => t.dayStart === sel))
         const undone = all.filter(t => !t.complete)
         const done = all.filter(t => t.complete)
         const lbl = sel === +dayjs().add(1, 'day').startOf('day') ? this.$t('statsA.core.tomorrow')

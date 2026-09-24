@@ -23,8 +23,8 @@ const read = p => fs.readFileSync(path.join(HERE, '../../..', p), 'utf8')
 // 恢复端(UI 七段/主进程三段)从不消费,全仓无读取方。
 const REQUIRED_SEGMENTS = ['settingsState', 'todoState', 'tomatoRecords', 'categoryState', 'habitsState', 'planState', 'filterState']
 
-// R1 refactor: buildBackupDump 与三处备份动作迁至 store/todoBackup.js（todo.js 只留 action 壳）
-const dumpSrc = () => read('renderer/js/store/todoBackup.js')
+// R1 refactor: buildBackupDump 与三处备份动作迁至 store/helpers/todoBackup.js（todo.js 只留 action 壳）
+const dumpSrc = () => read('renderer/js/store/helpers/todoBackup.js')
 
 test('backup dump 单一来源含全部必含段', () => {
   const src = dumpSrc()

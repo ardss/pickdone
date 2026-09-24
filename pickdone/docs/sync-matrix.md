@@ -77,3 +77,47 @@ to decide which stores to reload (estimates ride `meta`, filters ride `filter`).
    user intent (U4).
 6. Fold-once ledgers mark keys consumed only after a successful non-null read (U2); null reads are
    retried next init.
+
+## 5. Oplog → snapshot contract (the three convergence mechanisms)
+
+The LAN-sync convergence loop rests on three mechanisms. Every review that touches
+`src/main/db-oplog.js`, `src/main/lan-sync/*` or `src/main/sync-apply.js` MUST re-check this
+section; the authoritative implementation comments live next to the code (links below).
+
+### 5.1 Oplog ring trimming (src/main/db-oplog.js, `appendOplog`)
+
+- The oplog is a RING BUFFER, not history: retention is `SYNC_OPLOG_KEEP = 10000` rows
+  (single source in db-oplog.js; readers page through it via `oplogKeepLimit(limit)`).
+- Trimming is amortized: a COUNT + bulk `DELETE ... WHERE seq <= MAX(seq) - KEEP` runs every
+  200 appends, not per write.
+- Machine-local bookkeeping (`isMachineLocalSettingKey` / `isMachineLocalMetaKey` /
+  `isSyncBlobMetaKey` in sync-apply.js) never ENTERS the ring (R7 fix) — the settings mirror
+  rewrites its stamps every few seconds and would otherwise drown the delta feed in self-echo.
+- Consequence: a consumer whose cursor falls behind `oldestSeq` can never converge from
+  increments and MUST fall back to a full snapshot (see 5.3).
+
+### 5.2 Tombstone fallback (db-oplog.js `oplogEntriesFor` + lan-sync hydration guards)
+
+- Physical purge paths propagate as REAL deletions: `purgeRecycleBin` / `purgeSeedTodos`
+  expand the purged ids into per-id `('todo', id)` tombstone pointers (2026-09-18) — the old
+  single `('todo','*gc*')` marker hydrated as a ghost tombstone on peers and could not stop
+  snapshot/merge resurrection.
+- Count-shaped bulk results keep a single GC marker instead: `planPrune` (`'plan','*gc*'`)
+  and `tomatoMigrateFromMeta` (`'tomato','*gc*'`). Delta consumers MUST skip `'*gc*'` ids
+  (lan-sync hydration guards against them) and reconcile via a full snapshot / `tomatoAll`
+  instead of treating the marker as one record.
+- Pre-2026-09-20 oplogs may still contain `('plan', taskId)` pointers from the old
+  planDeleteTask/planDeleteTaskDay shape — consumers skip those ghost ids too.
+
+### 5.3 Snapshot watermark advancement (src/main/lan-sync/index.js, snapshot.js)
+
+- Per-peer PUSH watermark (`peerProgress`): highest sender-space seq the peer has acked;
+  each round pushes only the peer's unconfirmed delta. The ack is expressed in the SENDER's
+  seq space (`appliedToSeq`), the only space `buildSegments(fromSeq)` can consume.
+- Per-peer PULL watermark advances CONTIGUOUSLY only: a segment starting past wm+1, or a
+  flush-failed/dropped segment, keeps the watermark put (never advance over unapplied rows).
+- Snapshots are the gap fallback: the server advertises `oldestSeq` (its retained ring floor);
+  a peer whose watermark is below `oldestSeq - 1` requests a snapshot. A full snapshot travels
+  as bounded `snapshot-chunk`s + one `snapshot-end` trailer whose `cursor` (sender max seq at
+  build time) becomes the receiver's pull watermark ONLY after snapshot-end — a partial
+  snapshot never advances the watermark (lan-sync/snapshot.js).

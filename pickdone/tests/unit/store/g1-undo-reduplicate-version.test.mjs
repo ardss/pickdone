@@ -1,5 +1,5 @@
 /**
- * G1 [8] regression for store/undo.js persistSnapshotDiffCore: the undo-of-create re-delete used to
+ * G1 [8] regression for store/helpers/undo.js persistSnapshotDiffCore: the undo-of-create re-delete used to
  * spread the row WITHOUT resetting version to 0 — syncTodos excludes delete rows already acked with
  * version > 0, so the soft delete never propagated (same bug family as deleteTodo's P3 2026-09-12 fix).
  * Run: node --test tests/unit/store/g1-undo-reduplicate-version.test.mjs
@@ -8,7 +8,7 @@ import '../../setup.mjs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { persistSnapshotDiffCore } from '../../../renderer/js/store/undo.js'
+import { persistSnapshotDiffCore } from '../../../renderer/js/store/helpers/undo.js'
 
 function makeCtx () {
   const upserted = []

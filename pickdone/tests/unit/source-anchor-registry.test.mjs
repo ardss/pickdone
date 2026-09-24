@@ -1,4 +1,4 @@
-/** W4 self-check for the source-anchor registry (tests/lib/source-anchors.mjs):
+/** Source-anchor registry self-check (tests/lib/source-anchors.mjs; renamed 2026-09-24 from w4-source-anchors.test.mjs to a domain name): (tests/lib/source-anchors.mjs):
  *  every registered anchor must point at a file (or directory, for dir-scan anchors)
  *  that actually exists — catches renames/moves that would otherwise break the
  *  source-anchored test class with confusing ENOENTs instead of a named failure.

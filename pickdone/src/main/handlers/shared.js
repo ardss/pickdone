@@ -78,12 +78,10 @@ function makeSyncKick (notify, { timerMs = 750, setTimeout: st = setTimeout, cle
  *  prefix of another id ('a' vs 'a_b') delete the other task's files. The segment right after the
  *  id must be the all-digit timestamp: 'a_b_1.png' fails for id 'a' ('b' is not digits) while
  *  'a_173…_x.png' matches. Exported for unit tests. */
-function ownsAttachmentFile (f, id) {
-  const s = String(id)
-  if (!s || !f.startsWith(s + '_')) return false
-  const seg = f.slice(s.length + 1).split('_', 1)[0]
-  return /^\d+$/.test(seg)
-}
+// D3 (2026-09-24): implementation moved to the electron-free domain module
+// src/main/attachment-ownership.js (the CLI requires it without dragging electron-log in);
+// re-exported here so every existing consumer (handlers/*, tests) keeps its import path.
+const { ownsAttachmentFile } = require('../attachment-ownership')
 
 /** Purge disk attachments after hard delete (filename prefix = taskId_, same rule as saveAttachment): warn-only on failure, never blocking */
 function purgeAttachmentFiles (attachDir, ids) {

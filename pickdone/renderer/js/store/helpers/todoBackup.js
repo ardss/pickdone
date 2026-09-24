@@ -7,7 +7,7 @@
  * `this`), which owns the debounce timers and the quit-flush hook flags exactly as before.
  */
 import { saveRuntime } from './runtimeState.js'
-import { isAuxWindow } from '../utils/auxWindow.js'
+import { isAuxWindow } from '../../utils/auxWindow.js'
 
 /** Persistence blob format version (shared by the todoState/categoryState/habitsState segments in backup dumps);
  *  note this is unrelated to state.version (the sync counter). The restore side refuses to import segments >1 (preventing downgrade misreads). */

@@ -298,7 +298,7 @@ test('[F12] QuickAddPage persists the draft on Esc and restores it on reopen', (
 
 test('[F14] buildBackupDump includes planState + filterState; writers read chips at dump time', async () => {
   const filters = [{ id: 3, name: 'work', conds: { catId: 1 } }]
-  const { buildBackupDump, collectPlanState } = await import('../../../renderer/js/store/todoBackup.js')
+  const { buildBackupDump, collectPlanState } = await import('../../../renderer/js/store/helpers/todoBackup.js')
   const rootState = {
     settings: {}, auth: { user: null, lastLoginRecord: null },
     tomato: { tomatoRecordList: [] }, category: { list: [] },

@@ -33,8 +33,8 @@ function resetLs () {
 const baseCtx = () => ({ state: {}, rootState: { settings: {}, category: { list: [] }, habits: { habits: [], moments: [] }, tomato: null, filters: { list: [] } } })
 
 test('F3: writeEventBackupCore returns false and stamps runtimeState when the IPC answers {ok:false}', async () => {
-  const { writeEventBackupCore } = await importSrc('renderer/js/store/todoBackup.js')
-  const { loadRuntime } = await importSrc('renderer/js/store/runtimeState.js')
+  const { writeEventBackupCore } = await importSrc('renderer/js/store/helpers/todoBackup.js')
+  const { loadRuntime } = await importSrc('renderer/js/store/helpers/runtimeState.js')
   resetLs()
   globalThis.window = globalThis.window || {}
   globalThis.window.todoAPI = {
@@ -49,8 +49,8 @@ test('F3: writeEventBackupCore returns false and stamps runtimeState when the IP
 })
 
 test('F3: a thrown IPC failure is stamped too, and a later success clears the failure line', async () => {
-  const { writeEventBackupCore } = await importSrc('renderer/js/store/todoBackup.js')
-  const { loadRuntime } = await importSrc('renderer/js/store/runtimeState.js')
+  const { writeEventBackupCore } = await importSrc('renderer/js/store/helpers/todoBackup.js')
+  const { loadRuntime } = await importSrc('renderer/js/store/helpers/runtimeState.js')
   resetLs()
   globalThis.window = globalThis.window || {}
   globalThis.window.todoAPI = {
@@ -69,7 +69,7 @@ test('F3: a thrown IPC failure is stamped too, and a later success clears the fa
 })
 
 test('F7/F17: buildBackupDump no longer writes the dead user/lastLoginRecord/tomatoState segments', async () => {
-  const { buildBackupDump } = await importSrc('renderer/js/store/todoBackup.js')
+  const { buildBackupDump } = await importSrc('renderer/js/store/helpers/todoBackup.js')
   resetLs()
   LS.set('tomatoState', '{"todayTomatoCount":3}')
   const dump = buildBackupDump(

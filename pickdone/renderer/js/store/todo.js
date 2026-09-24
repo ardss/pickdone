@@ -11,20 +11,17 @@ import { clearSnapshot } from '../utils/dayPlans.js'
 import { scrubMilestonesForPurged } from '../utils/milestones.js'
 // Cross-cutting concerns, physically split out of this module (pure relocation — the store's action
 // semantics are unchanged; the actions/mutations below delegate to these extracted implementations):
-import { enqueueChipSync, rowChipSync, planSnapshotRowSync, snapshotForDelete, restoreSnapshot } from './planChips.js'
-import { historyPush, historyPushKeepRedo, historyClear, historyBreakMerge, historyUndoPop, historyRedoPop, historyRedoPush, historyBarrierCore, undoStep, redoStep, persistSnapshotDiffCore } from './undo.js'
-import { writeEventBackupCore, writeAutoBackupCore, writeCriticalBackupCore } from './todoBackup.js'
+import { enqueueChipSync, rowChipSync, planSnapshotRowSync, snapshotForDelete, restoreSnapshot } from './helpers/planChips.js'
+import { historyPush, historyPushKeepRedo, historyClear, historyBreakMerge, historyUndoPop, historyRedoPop, historyRedoPush, historyBarrierCore, undoStep, redoStep, persistSnapshotDiffCore } from './helpers/undo.js'
+import { writeEventBackupCore, writeAutoBackupCore, writeCriticalBackupCore } from './helpers/todoBackup.js'
 import { commit as commitCommand } from "../utils/commandBus.js"
-import { safeUpsert, flushPendingUpserts, queuePendingUpsert, pendingUpserts, daysRangeTs } from './todoPendingUpserts.js'
+import { safeUpsert, flushPendingUpserts, queuePendingUpsert, pendingUpserts, daysRangeTs } from './helpers/todoPendingUpserts.js'
 import { countTags } from '../utils/search.js'
 // Re-export: unit tests import the quit-flush retry contract straight from store/todo.js
 export { safeUpsert, flushPendingUpserts }
-
 // planSnapshotRowSync stays a named export of this module (tests import it from here)
 export { planSnapshotRowSync }
-
 const DEFAULT_VIEWS = () => ({
-
     todayTodoList: [],
     todayDoneList: [],
     yesterdayTodoList: [],
@@ -34,20 +31,17 @@ const DEFAULT_VIEWS = () => ({
   completed: [],
     recycleBin: []
 })
-
 // Fields affecting a view's group membership (one-to-one with computeViews' grouping criteria):
 // delete/deletedAt (active/recycle bin), todoTime/dayStart (date grouping), complete/completedAt (completed grouping), categoryId (todo-box category filter)
 // Only writes to these fields need an immediate full view rebuild; the rest (title/description/subtask plain-text edits) take the lightweight path
 const VIEW_AFFECTING_FIELDS = ['delete', 'deletedAt', 'todoTime', 'dayStart', 'complete', 'completedAt', 'categoryId']
 const VIEWS_DEBOUNCE_MS = 600 // View-rebuild debounce for plain-text edits: staggered from EditPanel's 350ms save cadence; continuous typing recomputes only once
-
 /** Strip Vue reactive proxies before IPC: rows come straight from reactive state, and a shallow spread
  *  ({ ...raw }) only unwraps the top level — nested arrays (reminderOffsets/reminderExtra/subtasks JSON is a
  *  string, but reminderOffsets etc. stay Proxies) still fail the structured clone inside invoke
  *  ("An object could not be cloned" = the whole upsertMany batch silently dropped, same root cause
  *  safeUpsert's JSON round-trip documents for single rows) */
 function deproxyRows (rows) { return JSON.parse(JSON.stringify(rows)) }
-
 export default {
   namespaced: true,
   state: () => ({
@@ -81,7 +75,13 @@ export default {
        SnTagPanel / SnManageTagsModal). Pure derivation from state; Vuex caches it for free.
        The counting core lives in utils/search.js countTags (next to extractTags). */
     tagCounts: (s, _g, rootState) =>
-      countTags(s.todoList, (rootState && rootState.ui && rootState.ui.userTags))
+      countTags(s.todoList, (rootState && rootState.ui && rootState.ui.userTags)),
+    /* D2 dedup: the two most-repeated filter predicates, shared across views (DepView /
+       TagAllView / TodayView for activeList; SnManageCategoriesModal / ProjectView /
+       ProjectOverviewView for byCategory). Same derivation as the private views precompute
+       above, but as cached getters. */
+    activeList: s => s.todoList.filter(t => !t.delete),
+    byCategory: s => id => s.todoList.filter(t => t.categoryId === id)
   },
   mutations: {
     setLoaded: (s, v) => { s.loaded = v },
@@ -110,8 +110,6 @@ export default {
       }
     },
     hardRemove: (s, ids) => { s.viewsDirty = true; s.recycleList = s.recycleList.filter(t => !ids.includes(t.taskId)) },
-
-
 /* ---------- Undo/redo (snapshots pushed by index.js's subscribeAction before mutation-type actions) ---------- */
 /* History bookkeeping lives in undo.js (pure state-transform functions); these mutations are thin adapters. */
     historyPush (s, snapRaw) { historyPush(s, snapRaw) },
@@ -128,6 +126,11 @@ export default {
     historyRedoPop (s) { historyRedoPop(s) },
     historyRedoPush (s, snap) { historyRedoPush(s, snap) },
     viewsClean (s) { s.viewsDirty = false },
+    /* Echo-suppression stamp: the single writer of _lastLocalWriteAt (previously two direct
+       cross-module writes: index.js subscribeAction-after and tomato.js bumpSnow). Consumers:
+       main.js todosChanged echo gate (1500ms window, protects the undo stack from our own
+       broadcast echo's todo/init historyClear). */
+    stampLocalWrite (s) { s._lastLocalWriteAt = Date.now() },
     setSyncing (s, v) { s.isSyncing = v },
     setViews (s, views) { s.views = views },
     setTodayTs (s, ts) { s.todayTimestamp = +dayjs(ts || Date.now()).startOf('day') },
@@ -161,7 +164,6 @@ export default {
       commit('setLoaded', true)
       dispatch('writeCriticalBackup')
     },
-
     /** Add a task (field naming matches the reference addTodo) */
     async addTodo ({ state, rootState, commit, dispatch }, payload) {
       const {
@@ -253,7 +255,6 @@ export default {
       dispatch('writeCriticalBackup')
       return t
     },
-
     async updateTodoFields ({ state, commit, dispatch }, { taskId, patch }) {
       const unlocked = patch._unlocked; if (unlocked) delete patch._unlocked // advisory payload, never persisted
       const deferViews = patch._deferViews; if (deferViews) delete patch._deferViews // advisory: caller batches the view rebuild (bulk reschedule/migration)
@@ -296,7 +297,6 @@ export default {
       dispatch('writeCriticalBackup')
       return unlocked ? Object.assign({}, merged, { _unlocked: unlocked }) : merged
     },
-
     async toggleComplete ({ state, commit, dispatch, rootState }, todo) {
       const target = !todo.complete
       const patch = { complete: target, completedAt: target ? Date.now() : 0 }

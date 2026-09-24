@@ -149,7 +149,7 @@ export default {
       return (s || '#0f9d8f').trim() || '#0f9d8f'
     },
     inScope () {
-      var list = this.$store.state.todo.todoList.filter(function (t) { return !t.delete })
+      var list = this.$store.getters['todo/activeList']
       if (this.projectId == null) return list
       return list.filter(function (t) { return t.categoryId === this.projectId }.bind(this))
     },
@@ -530,7 +530,7 @@ export default {
      *  否则前置在别的项目时 byId 查不到,依赖卡会被误判为 ready */
     allLiveById () {
       var byId = {}
-      var list = this.$store.state.todo.todoList.filter(function (t) { return !t.delete })
+      var list = this.$store.getters['todo/activeList']
       for (var i = 0; i < list.length; i++) byId[list[i].taskId] = list[i]
       return byId
     },

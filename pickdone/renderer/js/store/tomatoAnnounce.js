@@ -12,7 +12,7 @@
  * unit-tested + contract-mirrored against the main-process copy) — a peer that crashed
  * mid-focus expires by TTL instead of sticking forever.
  */
-import { isStaleAnnounce, buildAnnounceValue } from './tomatoAnnounceShared.js'
+import { isStaleAnnounce, buildAnnounceValue } from './helpers/tomatoAnnounceShared.js'
 
 // P2f (2026-09-19 UX review round 2): when sync is toggled OFF, a still-fresh `remote` announce
 // keeps the chip alive with no data path left to clear it. Pull the enabled flag through the same

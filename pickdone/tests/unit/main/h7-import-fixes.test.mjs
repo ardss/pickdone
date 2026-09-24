@@ -83,7 +83,9 @@ test('h7-1: queryTodos is called a bounded number of times regardless of row cou
 })
 
 test('h7-1: batch write goes through the transactional upsertMany op (source assertion)', () => {
-  const src = readSrc('cli', 'import.js')
+  // D3 review fix (2026-09-24): the engine moved to src/main/import/index.js (cli/import.js is a
+  // re-export shim) — grep the engine body itself, not the shim, so the anchor stays solid.
+  const src = readSrc('src', 'main', 'import', 'index.js')
   assert.match(src, /db\.call\('upsertMany', rows\)/)
   assert.doesNotMatch(src, /db\.call\('upsert', t\)/, 'per-row upsert must be gone from the import loop')
   // db.js: upsertMany is wrapped in db.transaction

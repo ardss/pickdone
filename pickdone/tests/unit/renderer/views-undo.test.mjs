@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url'
 
 import { crossDayMovePatch } from '../../../renderer/js/utils/crossDayMove.js'
 import { dayStart } from '../../../renderer/js/utils/todayBounds.js'
-import { undoStep, redoStep } from '../../../renderer/js/store/undo.js'
+import { undoStep, redoStep } from '../../../renderer/js/store/helpers/undo.js'
 import { dayjs } from '../../../renderer/js/utils/core.js'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')

@@ -24,7 +24,7 @@ export default {
   computed: {
     tags () {
       const set = new Map()
-      for (const t of this.$store.state.todo.todoList.filter(x => !x.delete)) {
+      for (const t of this.$store.getters['todo/activeList']) {
         for (const tag of extractTags(t.taskContent, t.taskDescribe)) {
           set.set(tag, (set.get(tag) || 0) + 1)
         }

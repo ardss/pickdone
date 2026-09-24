@@ -75,7 +75,7 @@ export default defineComponent({
     countOf (id) {
       // Exclude recycle-bin rows: previewOf already filters !t.delete — the badge and the
       // preview must agree (the badge used to count deleted rows and read inflated)
-      return this.$store.state.todo.todoList.filter(t => t.categoryId === id && !t.complete && !t.delete).length
+      return this.$store.getters['todo/byCategory'](id).filter(t => !t.complete && !t.delete).length
     },
     isProject (id) { return this.$store.state.category.projectIds.includes(id) },
     /** Set/unset as project (secondary path; the primary entry is "New Project" on the project overview page) */

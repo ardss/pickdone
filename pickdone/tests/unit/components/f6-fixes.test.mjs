@@ -119,7 +119,7 @@ test('f6 DepView: blocked/ready judgment uses the full live task table, not just
   const missing = src.slice(src.indexOf('missingOf (t)'), src.indexOf('completeTask (t)'))
   assert.match(missing, /this\.allLiveById\(\)/, 'missingOf builds byId from all live tasks')
   const helper = src.slice(src.indexOf('allLiveById ()'), src.indexOf('missingOf (t)'))
-  assert.match(helper, /!t\.delete/, 'recycle-bin tasks excluded')
+  assert.match(helper, /this\.\$store\.getters\['todo\/activeList'\]/, 'recycle-bin tasks excluded (todo/activeList getter is the live source)')
 })
 
 test('f6 DepView: posMap dead keys are pruned and wire bounds only count live cards', () => {

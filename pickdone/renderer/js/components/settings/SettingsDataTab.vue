@@ -78,9 +78,9 @@
  *  styles stay in the parent's global stylesheet. */
 import { dayjs, FMT } from '../../utils/core.js'
 import { confirmRecycleClear } from '../../utils/confirm.js'
-import { loadRuntime } from '../../store/runtimeState.js'
+import { loadRuntime } from '../../store/helpers/runtimeState.js'
 import { commit as commitCommand } from "../../utils/commandBus.js"
-import { SCHEMA_V } from '../../store/todoBackup.js'
+import { SCHEMA_V } from '../../store/helpers/todoBackup.js'
 
 /** Restore = the user wants the backup's data to win. Backup rows carry their backup-time
  *  updateTime + status:'sync', so LAN LWW instantly reverts the restore against any peer

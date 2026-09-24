@@ -13,7 +13,10 @@
 const { parentPort, workerData } = require('worker_threads')
 
 try {
-  const importer = require('../../cli/import.js')
+    // D3 (2026-09-24): require the engine from its in-tree home (src/main/import) — the old
+  // '../../cli/import.js' was a main→cli reverse dependency (cli/import.js itself is now a
+  // re-export shim of this same module, so both paths stay behaviorally identical).
+  const importer = require('./import')
   const { text, format } = workerData || {}
   const fmt = format && format !== 'auto' ? format : importer.detectFormat(text)
   const items = importer.rowsToItems(text, fmt)

@@ -38,7 +38,6 @@ const { createLanSyncNode } = require('./lan-sync/index')
 const { DEFAULT_PORT } = require('./lan-sync/transport')
 const { isDialableHost } = require('./lan-sync/discovery') // isPlausibleHost dropped with the retired syncAddPeer chain (2026-09-23)
 const syncOps = require('./db-sync-ops')
-
 // settings_rows keys (never synced: hydration skips the 'sync.' namespace, otherwise peers would adopt each other's identity)
 const K_DEVICE_ID = 'sync.deviceId'
 const K_DEVICE_NAME = 'sync.deviceName'
@@ -95,6 +94,7 @@ function ensureIdentity () {
 /* The apply/hydration/flush pipeline lives in ./sync-apply.js (line ratchet, round-3 review);
  * the delegates below bind the bootstrap's module-level `state` singleton to it. */
 const syncApply = require('./sync-apply')
+const { SYNC_OPLOG_KEEP, oplogKeepLimit } = require('./db-oplog') // D3 2026-09-24: oplog page size derives from the ring retention (was bare 10000s)
 const { isMachineLocalSettingKey, isMachineLocalMetaKey, isSyncBlobMetaKey } = syncApply
 const createHydrationCache = () => syncApply.createHydrationCache(state)
 const hydrateRow = (ptr, cache) => syncApply.hydrateRow(state, ptr, cache)
@@ -111,7 +111,7 @@ const readMaxOplogSeq = () => syncApply.readMaxOplogSeq(state)
 function createLocalStoreAdapter () {
   return {
     getRowsSince (seq) {
-      const ptrs = state.db.call('syncOplogSince', { sinceSeq: seq, limit: 10000 }) || []
+      const ptrs = state.db.call('syncOplogSince', { sinceSeq: seq, limit: oplogKeepLimit(SYNC_OPLOG_KEEP) }) || [] // D3 2026-09-24: was bare 10000
       const cache = createHydrationCache()
       return ptrs.map(ptr => hydrateRow(ptr, cache)).filter(Boolean)
     },
