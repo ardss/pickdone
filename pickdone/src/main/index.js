@@ -236,32 +236,45 @@ function watchDbForExternalWrites () {
     } catch (e) { log.warn('[CLI] 番茄命令转发失败', e) }
     // CLI settings set: mirror changes to db.settingsState's _savedAt → diff and push to the renderer for hot application
     // (renderer dispatches settings/update → IPC notify-settings-updated → main-process config.json/shortcuts/login item sync accordingly)
+    // C14 (P2 2026-09-24): the change watermark used to be the blob's _savedAt alone — a whole-blob
+    // snapshot stamp written from the doc's READ time. Two CLI writes within one poll interval (or two
+    // concurrent CLI processes) could land the same _savedAt millisecond while settings_rows (the
+    // field-granular write truth, see cli/lib.js settingsSet row-path-first) already recorded both
+    // field updates — the intermediate state evaporated and the renderer never saw it. The watermark
+    // is now max(blob._savedAt, settings_rows max(updatedAt)): row updatedAt is stamped per real field
+    // change, so a same-millisecond blob stamp can no longer mask a change. Deleted rows count too (a
+    // tombstone is a state change the renderer must see).
     try {
       const rawS = dbm.call('getMeta', 'db.settingsState')
-      if (rawS) {
-        const doc = JSON.parse(rawS)
-        const at = (doc && doc._savedAt) || 0
-        if (at > lastSettingsSavedAt) {
-          const prev = lastSettingsDoc
-          lastSettingsSavedAt = at
-          lastSettingsDoc = doc
-          const win = getMainWindow()
-          if (prev && win) {
-            const patch = {}
-            for (const k of Object.keys(doc)) {
-              if (k === '_savedAt' || k === 'schemaV') continue
-              if (JSON.stringify(doc[k]) !== JSON.stringify(prev[k])) patch[k] = doc[k]
+      let doc = null
+      let at = 0
+      if (rawS) { doc = JSON.parse(rawS); at = (doc && doc._savedAt) || 0 }
+      try {
+        const rows = dbm.call('settingsRowsAll')
+        if (Array.isArray(rows)) {
+          for (const r of rows) { const u = Number(r && r.updatedAt) || 0; if (u > at) at = u }
+        }
+      } catch { /* rows unavailable (legacy lib) → fall back to the _savedAt-only watermark */ }
+      if (doc && at > lastSettingsSavedAt) {
+        const prev = lastSettingsDoc
+        lastSettingsSavedAt = at
+        lastSettingsDoc = doc
+        const win = getMainWindow()
+        if (prev && win) {
+          const patch = {}
+          for (const k of Object.keys(doc)) {
+            if (k === '_savedAt' || k === 'schemaV') continue
+            if (JSON.stringify(doc[k]) !== JSON.stringify(prev[k])) patch[k] = doc[k]
+          }
+          if (Object.keys(patch).length) {
+            delete patch.securityLockPassword
+            delete patch.securityLockQuestion
+            // P2 2026-09-11: hot-sync used to push only the main window — the float/quick-add windows
+            // kept pre-CLI-change settings until restart (same all-windows pattern as the quit flush)
+            for (const w of BrowserWindow.getAllWindows()) {
+              try { if (w && !w.isDestroyed()) w.webContents.send('external-settings-changed', patch) } catch {}
             }
-            if (Object.keys(patch).length) {
-              delete patch.securityLockPassword
-              delete patch.securityLockQuestion
-              // P2 2026-09-11: hot-sync used to push only the main window — the float/quick-add windows
-              // kept pre-CLI-change settings until restart (same all-windows pattern as the quit flush)
-              for (const w of BrowserWindow.getAllWindows()) {
-                try { if (w && !w.isDestroyed()) w.webContents.send('external-settings-changed', patch) } catch {}
-              }
-              log.info('[CLI] 设置变更热同步:', Object.keys(patch).join(','))
-            }
+            log.info('[CLI] 设置变更热同步:', Object.keys(patch).join(','))
           }
         }
       }
