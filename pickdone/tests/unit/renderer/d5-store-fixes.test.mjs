@@ -62,7 +62,7 @@ const dbMirror = await import('../../../renderer/js/utils/dbMirror.js')
 const dayPlans = await import('../../../renderer/js/utils/dayPlans.js')
 const milestones = await import('../../../renderer/js/utils/milestones.js')
 const tomatoEstimate = await import('../../../renderer/js/utils/tomatoEstimate.js')
-const undo = await import('../../../renderer/js/store/undo.js')
+const undo = await import('../../../renderer/js/store/helpers/undo.js')
 
 /* ---------- [1] bumpSnow dedupKey ---------- */
 

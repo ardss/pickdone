@@ -124,7 +124,7 @@
  *  Manual add follows the common tomatoRecordAdd pattern: start time + focus/rest duration sliders, limited to 3 per day (settings.tomatoRecordAddDate/Count). */
 import { dayjs, FMT } from '../utils/core.js'
 import { genTomatoId } from '../utils/core.js'
-import { loadRuntime, saveRuntime } from '../store/runtimeState.js'
+import { loadRuntime, saveRuntime } from '../store/helpers/runtimeState.js'
 import dialogA11y from '../utils/dialogA11y.js'
 import { secToHHmmss } from '../utils/tomatoShared.js'
 

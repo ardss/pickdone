@@ -36,7 +36,7 @@ const callsOf = op => dbCalls.filter(([o]) => o === op).map(([, p]) => p)
 const resetCalls = () => { dbCalls.length = 0 }
 
 const tomatoEstimate = await import('../../../renderer/js/utils/tomatoEstimate.js')
-const undo = await import('../../../renderer/js/store/undo.js')
+const undo = await import('../../../renderer/js/store/helpers/undo.js')
 const habits = await import('../../../renderer/js/store/habits.js')
 
 /* ---------- [U-3] legacy blob kept when fan-out fails ---------- */

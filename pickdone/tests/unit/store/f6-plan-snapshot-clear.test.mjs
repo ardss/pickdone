@@ -36,8 +36,8 @@ dbHandler = async (op, p) => {
   return []
 }
 
-const planChips = await import('../../../renderer/js/store/planChips.js')
-const undoMod = await import('../../../renderer/js/store/undo.js')
+const planChips = await import('../../../renderer/js/store/helpers/planChips.js')
+const undoMod = await import('../../../renderer/js/store/helpers/undo.js')
 
 const row = (taskId, over = {}) => ({
   taskId, taskContent: 't-' + taskId, delete: false, dayStart: 0, todoTime: 0,

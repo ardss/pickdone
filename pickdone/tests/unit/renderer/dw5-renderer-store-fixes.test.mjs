@@ -59,8 +59,8 @@ test('dw5-2: initFromDb routes an autoDownloadUpdates change through the update 
 })
 
 test('dw5-3: writeAutoBackupCore records the failure (timestamp + reason) in runtime state, success clears it', async () => {
-  const { writeAutoBackupCore } = await importSrc('renderer/js/store/todoBackup.js')
-  const { loadRuntime } = await importSrc('renderer/js/store/runtimeState.js')
+  const { writeAutoBackupCore } = await importSrc('renderer/js/store/helpers/todoBackup.js')
+  const { loadRuntime } = await importSrc('renderer/js/store/helpers/runtimeState.js')
   resetLs()
   const ctx = {}
   const base = { state: {}, rootState: { settings: {}, auth: { user: null, lastLoginRecord: null }, category: { list: [] }, habits: { habits: [], moments: [] } } }
@@ -85,8 +85,8 @@ test('dw5-3: writeAutoBackupCore records the failure (timestamp + reason) in run
 })
 
 test('dw5-4: writeAutoBackupCore keeps the honest failure line even when the IPC throws (locked / main-window-only)', async () => {
-  const { writeAutoBackupCore } = await importSrc('renderer/js/store/todoBackup.js')
-  const { loadRuntime } = await importSrc('renderer/js/store/runtimeState.js')
+  const { writeAutoBackupCore } = await importSrc('renderer/js/store/helpers/todoBackup.js')
+  const { loadRuntime } = await importSrc('renderer/js/store/helpers/runtimeState.js')
   resetLs()
   globalThis.window.todoAPI = {
     dbCall: async () => null,

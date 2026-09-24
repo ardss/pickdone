@@ -15,7 +15,7 @@ import assert from 'node:assert/strict'
 import {
   historyPush, historyBarrierCore, historyUndoPop, historyRedoPush,
   persistSnapshotDiffCore, undoStep
-} from '../../../renderer/js/store/undo.js'
+} from '../../../renderer/js/store/helpers/undo.js'
 
 const snapOf = s => JSON.stringify({ todoList: s.todoList, recycleList: s.recycleList })
 

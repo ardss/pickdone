@@ -8,8 +8,8 @@
  * Store consumers (undo.js / todo.js) must import these names from THIS module, never from
  * utils/dayPlans.js directly — guarded by tests/unit/store/w4-plan-chips-facade.test.mjs.
  */
-import { dayjs, FMT } from '../utils/core.js'
-import { moveTaskChips, clearTaskChips, snapshotForDelete, restoreSnapshot } from '../utils/dayPlans.js'
+import { dayjs, FMT } from '../../utils/core.js'
+import { moveTaskChips, clearTaskChips, snapshotForDelete, restoreSnapshot } from '../../utils/dayPlans.js'
 
 /** Chip-sync serial chain: when a task's reschedule fires in bursts, guarantees planMoveTask arrival order matches operation order.
  *  Values are {promise, settled} entries: the chain deletes itself once settled, and the size cap below only evicts

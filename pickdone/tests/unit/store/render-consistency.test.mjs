@@ -112,7 +112,7 @@ test('[R1] recover without an in-flight backup still works (plain path unchanged
 test('[R3] SettingsDataTab guards schemaV over every stamped segment via a shared helper', () => {
   const src = read('renderer/js/components/settings/SettingsDataTab.vue')
   assert.ok(src.includes('parseStampedSeg'), 'shared segment guard helper exists')
-  assert.ok(src.includes("import { SCHEMA_V } from '../../store/todoBackup.js'"), 'threshold comes from the single SCHEMA_V source')
+  assert.ok(src.includes("import { SCHEMA_V } from '../../store/helpers/todoBackup.js'"), 'threshold comes from the single SCHEMA_V source')
   for (const seg of ['b.categoryState', 'b.habitsState', 'b.filterState', 'b.planState']) {
     assert.ok(src.includes('this.parseStampedSeg(' + seg + ')'), 'stamped segment guarded: ' + seg)
   }
@@ -137,8 +137,8 @@ test('[R7] aux-window detection is centralized in utils/auxWindow.js', async () 
   try { assert.equal(isAuxWindow(), true, 'quick-add hash detected') } finally { globalThis.window.location = prev }
   globalThis.window.location = { hash: '#/__tomato-float' }
   try { assert.equal(isAuxWindow(), true, 'tomato float hash detected') } finally { globalThis.window.location = prev }
-  for (const f of ['renderer/js/store/todoBackup.js', 'renderer/js/store/habits.js', 'renderer/js/store/settings.js']) {
+  for (const f of ['renderer/js/store/helpers/todoBackup.js', 'renderer/js/store/habits.js', 'renderer/js/store/settings.js']) {
     assert.ok(read(f).includes('utils/auxWindow.js'), f + ' uses the centralized helper')
   }
-  assert.ok(!read('renderer/js/store/todoBackup.js').includes('/__tomato-float|__quick-add/'), 'hand-copied regex removed from todoBackup')
+  assert.ok(!read('renderer/js/store/helpers/todoBackup.js').includes('/__tomato-float|__quick-add/'), 'hand-copied regex removed from todoBackup')
 })
