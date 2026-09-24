@@ -34,6 +34,7 @@ afterEach(() => {
 })
 
 function auditLines () {
+  appAudit.flushNow() // F-B7: entries are buffered and flushed async in production — drain before asserting
   const file = path.join(tmpDir, 'cli-audit.jsonl')
   if (!fs.existsSync(file)) return []
   return fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l))

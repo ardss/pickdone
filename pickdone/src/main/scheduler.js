@@ -128,7 +128,9 @@ function fire (todo, offset) {
     // Notification sound
     const { sound } = require('./notify-sound')
     if (sound && dingFile) sound(dingFile)
-    log.info('[Reminder] 已触发提醒:', todo.taskId, offset || 0, todo.taskContent)
+    // F-B8 (dw wave 3): task titles no longer go to main.log (plaintext旁路 — same nature as the
+    // index.js plain-bak cleanup); the taskId is enough to correlate a reminder with its task.
+    log.info('[Reminder] 已触发提醒:', todo.taskId, offset || 0)
   } catch (e) {
     log.error('[Reminder] 触发失败', e)
   }

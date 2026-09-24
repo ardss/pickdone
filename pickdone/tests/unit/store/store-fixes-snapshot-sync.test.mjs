@@ -231,8 +231,12 @@ test('writeCriticalBackup: main window arms the debounced write and swallows IPC
     rootState: { settings: {}, auth: { user: {}, lastLoginRecord: null }, tomato: null, category: { list: [] }, habits: {} }
   })
   assert.ok(self._cbTimer)
-  await new Promise(r => setTimeout(r, 900)) // 800ms debounce fires; rejection must be caught, not unhandled
-  assert.equal(writeAttempts, 1)
+  // F-C5 (maint/dw wave3): the debounce is its documented 5s design value now (was a drifted 800ms)
+  // — poll instead of a fixed sleep so the assertion tracks the value without a dead 5s wait
+  for (let waited = 0; writeAttempts === 0 && waited < 6000; waited += 100) {
+    await new Promise(r => setTimeout(r, 100))
+  }
+  assert.equal(writeAttempts, 1) // debounced write fired; rejection must be caught, not unhandled
   clearTimeout(self._cbTimer)
 })
 

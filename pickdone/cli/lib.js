@@ -42,7 +42,8 @@ const { ownsAttachmentFile } = require('../src/main/handlers/shared.js')
 const audit = require('./audit.js')
 const nlDate = require('./nl-date.cjs')
 const { parseMilestoneDateCore } = require('../shared/parse-date.mjs') // milestone-date core shared with the renderer (require(esm), same pattern as limits.mjs)
-const { nextSort } = require('../shared/sort-core.mjs') // P3-7: sort-score single source with renderer utils/core.js (require(esm))
+const { nextSort, moveWithin } = require('../shared/sort-core.mjs') // P3-7 / F-B2: sort-score single source with renderer utils/core.js (require(esm))
+const { stripHabitsFamily } = require('../shared/settings-families.mjs') // F-B1: blob-family contract shared with lan-sync-bootstrap foldSettingsIntoBlob (require(esm))
 const { localDayKey } = require('../src/main/fix-util.js') // P3-8: single source for the local YYYY-MM-DD key (same require the lib-attachments module already uses)
 
 let opened = false
@@ -156,6 +157,11 @@ function lunarAnnotate (t) {
 }
 
 /* ================= Task resolution ================= */
+// F-B5 (dw wave 3): single keyword normalization — was 3 verbatim copies (resolveTask, resolveRepeatEntry,
+// lib-tasks.cjs resolveCategory; the last now receives it via the existing deps injection). NFKC aligns
+// the CLI with the renderer's search normalization (utils/search.js normalize('NFKC')) — full-width
+// input ('Ａ１') used to match in the App but not in the CLI. BEHAVIOR CHANGE (NFKC alignment), noted.
+const normKey = v => String(v).normalize('NFKC').toLowerCase().replace(/[\s\u00A0\u3000\u200B\u2003]/g, '')
 function liveTasks () { return open().call('queryTodos', { deleted: 0, orderBy: 'scheduledDay ASC, sort ASC' }) }
 function recycleTasks () { return open().call('queryTodos', { deleted: 1, orderBy: 'updatedAt DESC' }) }
 
@@ -166,12 +172,11 @@ function recycleTasks () { return open().call('queryTodos', { deleted: 1, orderB
  *  intent keeps working: restore/delete pass an explicit recycle pool, so they never hit this warning path. */
 function resolveTask (input, pool) {
   // Strip zero-width/full-width whitespace (IME candidates occasionally contain zero-width chars) Same normalization on both sides: stripping it only from the input made any multi-word keyword unmatchable
-  const norm = v => String(v).toLowerCase().replace(/[\s\u00A0\u3000\u200B\u2003]/g, '')
   const matchIn = list => {
     const byId = list.find(t => t.taskId === input)
     if (byId) return [byId]
-    const kw = norm(input)
-    return list.filter(t => norm(t.taskContent || '').includes(kw))
+    const kw = normKey(input)
+    return list.filter(t => normKey(t.taskContent || '').includes(kw))
   }
   const liveHits = matchIn(pool || liveTasks())
   if (liveHits.length === 1) return liveHits[0]
@@ -245,7 +250,7 @@ const genTaskId = core.genTaskId
    lib-projects.cjs; deps are injected so the db/bus/audit seams stay single-sourced here. */
 const {
   listTodos, getCategories, resolveCategory, stats, overview,
-} = require('./lib-tasks.cjs')({ open, CliError, parseDate, dayjs })
+} = require('./lib-tasks.cjs')({ open, CliError, parseDate, dayjs, normKey }) // F-B5: normKey injected (resolveCategory's copy removed)
 const {
   getProjects, getProjectIds, setProjectFlag, projectStatus,
   getMilestones, parseMilestoneDate, addMilestone, removeMilestone, linkMilestone, msProgress,
@@ -472,16 +477,6 @@ function toggleComplete (input, target, { withSubtasks, completedAt } = {}) {
       if (Array.isArray(existing) && existing.length) {
         renewed = existing[0]
       } else {
-        const now = Date.now()
-        const sameDay = db.call('queryTodos', { deleted: 0 }).filter(x => x.dayStart === dayStartOf(next.todoTime))
-        // P2 2026-09-20: the renewal instance used a (min+max)/2 MIDPOINT sort, which lands the new
-        // instance in the MIDDLE of the day's ±step chain (renderer new/inserted tasks always go to
-        // an END). Mirrors the renderer's renewal convention (store/todo.js ensureNextRepeatInstance
-        // → addTodo addToTop:false → utils/core.js nextSort): bottom-insert min-512, empty day 1024.
-        const sameSorts = sameDay.map(x => x.taskSort).filter(v => v != null)
-        const taskSort = sameSorts.length ? Math.fround(Math.min(...sameSorts) - 512) : 1024
-        let subs = null
-        try { subs = t.subtasks ? JSON.parse(t.subtasks) : null } catch { /* keep null */ }
         // F3 P2 (2026-09-21, D5 renderer parity — store/todo.js ensureNextRepeatInstance carries
         // `estimate: t.estimate || 0` AND copies it into the per-task meta key, while the CLI twin
         // hardcoded estimate:0): a renewed instance used to silently lose its estimated workload.
@@ -489,24 +484,11 @@ function toggleComplete (input, target, { withSubtasks, completedAt } = {}) {
         // (getEstimateOf(旧taskId)) — the row's estimate COLUMN is dead post-X2 (bumpSnow writes
         // accumulated focus minutes into it), so clamping it 0-20 turned "focused 150 min" into
         // "estimated 20 tomatoes" on the renewed instance.
-        const estimate = Math.max(0, Math.min(20, Math.round(Number(getEstimateOf(t.taskId, t.estimate)) || 0)))
-        // P2-4 single source: carried attributes come from core.renewalCarryFields (shared/repeat-core.mjs) —
-        // the exact same set the renderer's ensureNextRepeatInstance maps onto addTodo; the D5 parity
-        // fixes no longer need to be applied twice.
-        const nt = {
-          complete: false, createTime: now, delete: false,
-          ...core.renewalCarryFields(t, next), estimate,
-          subtasks: subs ? JSON.stringify(subs.map(s => ({ ...s, checked: false }))) : null,
-          image: null, files: null,
-          categoryId: t.categoryId,
-          updateTime: now, syncTime: 0,
-          taskContent: t.taskContent,
-          taskDescribe: t.taskDescribe || '',
-          taskId: core.genTaskId(t.userId, now),
-          taskSort,
-          todoTime: next.todoTime,
-          userId: t.userId, status: 'add', version: 0
-        }
+        const estimate = clampEstimate(getEstimateOf(t.taskId, t.estimate))
+        // F3 P2-4 single source: carried attributes come from core.renewalCarryFields via
+        // buildRenewalInstance (F-B4) — the exact same set the renderer's ensureNextRepeatInstance
+        // maps onto addTodo.
+        const nt = buildRenewalInstance(t, next, { estimate })
         commit('todo', 'put', nt)
         // F3 P2: the estimate column is write-once at the DB layer (U-1) — the live value lives in the
         // per-task meta key `tomatoEstimateState:<taskId>`; copy it there so the renewal keeps its
@@ -529,6 +511,42 @@ function toggleComplete (input, target, { withSubtasks, completedAt } = {}) {
     note: renewed ? 'repeat renewed → ' + renewed.taskId : undefined
   })
   return { completed, renewed }
+}
+
+/** F-B4 (dw wave 3): single constructor for CLI renewal instances — the done path (repeat renewal on
+ *  complete) and repeatOn's future-instance expansion (expand) carried two ~40-line near-verbatim
+ *  object literals. Behavior preserved exactly, including expand's historical estimate:0 (no silent
+ *  behavior change; the done path keeps its live getEstimateOf readback). Sort keeps the legacy
+ *  length-keyed bottom-insert convention (min-512 / empty-day 1024; see the inline note for why
+ *  nextSort's own empty check is not used here). */
+function buildRenewalInstance (t, next, { estimate = 0, todoTime = next.todoTime, reminderTime, extra = {} } = {}) {
+  const now = Date.now()
+  const sameDay = open().call('queryTodos', { deleted: 0 }).filter(x => x.dayStart === dayStartOf(todoTime))
+  const sameSorts = sameDay.map(x => x.taskSort).filter(v => v != null)
+  // P2 2026-09-20 convention (renderer renewal: store/todo.js addToTop:false → nextSort): bottom-insert
+  // min-512, empty day 1024. The EMPTY-day case is keyed on sameSorts.length, NOT nextSort's internal
+  // `!minS && !maxS` check — a day whose existing sorts are all exactly 0 (midpoint arithmetic can
+  // produce 0) must take the min-512 branch (-512), not the empty-day 1024 baseline (review fix).
+  const taskSort = sameSorts.length ? Math.fround(Math.min(...sameSorts) - 512) : 1024
+  let subs = null
+  try { subs = t.subtasks ? JSON.parse(t.subtasks) : null } catch { /* keep null */ }
+  return {
+    complete: false, createTime: now, delete: false,
+    ...core.renewalCarryFields(t, next),
+    reminderTime: reminderTime !== undefined ? reminderTime : next.reminderTime,
+    estimate,
+    subtasks: subs ? JSON.stringify(subs.map(s => ({ ...s, checked: false }))) : null,
+    image: null, files: null,
+    categoryId: t.categoryId,
+    updateTime: now, syncTime: 0,
+    taskContent: t.taskContent,
+    taskDescribe: t.taskDescribe || '',
+    taskId: core.genTaskId(t.userId, now),
+    taskSort,
+    todoTime,
+    userId: t.userId, status: 'add', version: 0,
+    ...extra
+  }
 }
 
 /** Soft delete → recycle bin (deletedAt drives the 30-day auto hard-delete and recycle-bin ordering, aligned with the renderer) */
@@ -829,7 +847,6 @@ function buildRepeatRule (opts) {
   return rule
 }
 function repeatOn (input, rule, count) {
-  const db = open()
   const t = resolveTask(input, liveTasks())
   if (t.complete) throw new CliError('task already completed; undo it before setting a repeat', 'INVALID_STATE')
   if (t.repeatId && String(t.repeatId).startsWith('repeat_')) throw new CliError('task already in a repeat group (' + t.repeatId + '); repeat off first, then re-set', 'ALREADY_REPEAT')
@@ -848,9 +865,7 @@ function repeatOn (input, rule, count) {
   const base = t.todoTime || t.dayStart || +dayjs().startOf('day')
   // Generation cap: explicit --count wins; otherwise the App's maxRepeat setting (default 2), same as RepeatModal
   const cap = count > 0 ? count : (parseInt(settingsDoc().maxRepeat, 10) || 2)
-  // Template reminder keeps its wall-clock time on each instance (dayjs(ts).hour().minute() re-derive per instance,
-  // same as RepeatModal) — copying the raw timestamp made reminders fire on the template's original date
-  const tplRem = t.reminderTime > 0 ? dayjs(t.reminderTime) : null
+  // Template reminder wall-clock re-derivation now happens per instance inside the loop (F-B4).
   let made = 0
   // P2 2026-09-20: pass the holiday list — expandRepeatDates(base, rule) defaulted to [] so a
   // skipStatutoryHolidays rule still expanded ONTO statutory holidays on the CLI (the renderer
@@ -858,25 +873,16 @@ function repeatOn (input, rule, count) {
   // cli/lib.js:655.
   const holidayList = require('../src/main/core/holidays.js').getHolidayList()
   for (const ts of core.expandRepeatDates(base, rule, holidayList).map(d => +d).filter(ts => ts > base).slice(0, cap)) {
-    const sameDay = db.call('queryTodos', { deleted: 0 }).filter(x => x.dayStart === dayStartOf(ts))
-    const sorts = sameDay.map(x => x.taskSort).filter(v => v != null)
-    // P2 2026-09-20: midpoint → renderer renewal convention (see the complete-path comment above):
-    // bottom-insert min-512, empty day 1024 (store/todo.js addToTop:false → nextSort).
-    const taskSort = sorts.length ? Math.fround(Math.min(...sorts) - 512) : 1024
-    let subs = null
-    try { subs = t.subtasks ? JSON.parse(t.subtasks) : null } catch { /* keep null */ }
-    const now = Date.now()
-    commit('todo', 'put', {
-      complete: false, createTime: now, delete: false,
-      reminderTime: tplRem ? +dayjs(ts).hour(tplRem.hour()).minute(tplRem.minute()).second(0).millisecond(0) : 0,
-      reminderOffsets: Array.isArray(t.reminderOffsets) ? t.reminderOffsets : [], reminderExtra: Array.isArray(t.reminderExtra) ? t.reminderExtra : [],
-      priority: t.priority || 0, deadlineTs: t.deadlineTs || 0, important: t.important || 0, urgent: t.urgent || 0,
-      estimate: 0, difficulty: t.difficulty || 0,
-      repeatId: rid, subtasks: subs ? JSON.stringify(subs.map(x => ({ ...x, checked: false }))) : null,
-      image: null, files: null, categoryId: t.categoryId,
-      updateTime: now, syncTime: 0, taskContent: t.taskContent, taskDescribe: t.taskDescribe || '',
-      taskId: core.genTaskId(t.userId, now), taskSort, todoTime: ts, userId: t.userId, status: 'add', version: 0
-    })
+    // F-B4: shared renewal-instance constructor (done-path parity). reminderTime keeps the template's
+    // wall-clock time on each instance (dayjs re-derive per instance, same as RepeatModal — copying
+    // the raw timestamp made reminders fire on the template's original date). estimate stays 0 and
+    // carries NO meta write-back — historical D5-parity known gap, preserved as-is.
+    const tplRem = t.reminderTime > 0 ? +dayjs(ts).hour(dayjs(t.reminderTime).hour()).minute(dayjs(t.reminderTime).minute()).second(0).millisecond(0) : 0
+    commit('todo', 'put', buildRenewalInstance(t, { todoTime: ts, reminderTime: 0 }, {
+      todoTime: ts,
+      reminderTime: tplRem,
+      extra: { repeatId: rid }
+    }))
     made++
   }
   audit.record({ action: 'repeat.on', targets: [t], changes: [{ after: { rid, rule, made } }], note: 'repeat set, ' + made + ' future instance(s) generated' })
@@ -887,9 +893,8 @@ function resolveRepeatEntry (input) {
   const list = liveTasks()
   const byId = list.find(t => t.taskId === input)
   if (byId) return byId
-  const norm = v => String(v).toLowerCase().replace(/[\s\u00A0\u3000\u200B\u2003]/g, '')
-  const kw = norm(input)
-  const hits = list.filter(t => norm(t.taskContent || '').includes(kw) && String(t.repeatId || '').startsWith('repeat_'))
+  const kw = normKey(input)
+  const hits = list.filter(t => normKey(t.taskContent || '').includes(kw) && String(t.repeatId || '').startsWith('repeat_'))
   if (hits.length) return hits[0]
   return resolveTask(input, list)
 }
@@ -1387,32 +1392,35 @@ function backfillRecord ({ taskId = null, content = '', date, at = '20:00', minu
   return rec
 }
 
-/* ---------------- Tomato estimate per task (per-task meta keys `tomatoEstimateState:<taskId>` = plain integer string; X2 2026-09-20 contract, renderer twin in utils/tomatoEstimate.js) ---------------- */
-const ESTIMATE_KEY_PREFIX = 'tomatoEstimateState:'
-const estimateKey = taskId => ESTIMATE_KEY_PREFIX + taskId
+/* ---------------- Tomato estimate per task (per-task meta keys = plain integer string; X2 2026-09-20 contract) ----------------
+   F-B3 (dw wave 3): the storage contract (key prefix / 0..20 clamp / TS_KEY / legacy blob key) moved
+   to shared/estimate-core.mjs — single source with the renderer's utils/tomatoEstimate.js (the
+   renderer consumes the same module in its wave). */
+const { ESTIMATE_KEY_PREFIX, estimateKeyOf, clampEstimate, TS_KEY: ESTIMATE_TS_KEY, LEGACY_KEY: ESTIMATE_LEGACY_KEY } = require('../shared/estimate-core.mjs')
+const estimateKey = estimateKeyOf
 /** Lazy legacy migration (first write): old whole-doc blob → per-task keys, then the legacy doc key
  *  is deleteMeta'd (a sync tombstone, so peers drop it too). Corrupt blob → dropped, not fatal. */
 function migrateLegacyEstimateBlob () {
-  const legacy = open().call('getMeta', 'tomatoEstimateState')
+  const legacy = open().call('getMeta', ESTIMATE_LEGACY_KEY)
   if (legacy == null) return null
   let map = {}
   try { map = JSON.parse(legacy) || {} } catch { /* corrupt → drop */ }
   for (const [taskId, v] of Object.entries(map)) {
-    const n = Math.max(0, Math.min(20, Math.round(Number(v) || 0)))
+    const n = clampEstimate(v)
     if (n > 0) commit('meta', 'put', [estimateKey(taskId), String(n)])
   }
-  commit('meta', 'delete', 'tomatoEstimateState')
+  commit('meta', 'delete', ESTIMATE_LEGACY_KEY)
   return map
 }
 function setEstimate (input, n) {
   const t = resolveTask(input, liveTasks())
-  const v = Math.max(0, Math.min(20, Math.round(Number(n) || 0)))
+  const v = clampEstimate(n)
   const legacy = migrateLegacyEstimateBlob()
   // Setting = setMeta plain integer string; clearing = deleteMeta (tombstone propagates the removal)
   if (v > 0) commit('meta', 'put', [estimateKey(t.taskId), String(v)])
   else commit('meta', 'delete', estimateKey(t.taskId))
   // Timestamp convention mirrors the renderer's tomatoEstimate/initFromDb: when meta is newer it takes over LS at startup (otherwise CLI writes get clobbered by the UI's stale LS)
-  commit('meta', 'put', ['tomatoEstimateStateAt', String(Date.now())])
+  commit('meta', 'put', [ESTIMATE_TS_KEY, String(Date.now())])
   audit.record({ action: 'edit', targets: [t], changes: [{ before: { tomatoEstimate: getEstimateOf(t.taskId, legacy && legacy[t.taskId]) }, after: { tomatoEstimate: v || null } }], note: 'tomato estimate set to ' + (v || '(none)') })
   return { taskId: t.taskId, content: t.taskContent, tomatoEstimate: v }
 }
@@ -1420,41 +1428,35 @@ function getEstimateOf (taskId, legacyVal) {
   // Readers: per-task key first; legacy doc blob only as a read fallback (per-task miss)
   try {
     const per = open().call('getMeta', estimateKey(taskId))
-    if (per != null) return Math.max(0, Math.min(20, Math.round(Number(per) || 0)))
+    if (per != null) return clampEstimate(per)
     if (legacyVal != null) return Number(legacyVal) || 0
-    const m = JSON.parse(open().call('getMeta', 'tomatoEstimateState') || '{}')
+    const m = JSON.parse(open().call('getMeta', ESTIMATE_LEGACY_KEY) || '{}')
     return m[taskId] || 0
   } catch { return 0 }
 }
 
-/* ---------------- Manual ordering (taskSort midpoint insertion — same semantics as renderer todo/reorderTodos drag) ---------------- */
+/* ---------------- Manual ordering (taskSort midpoint insertion — same semantics as renderer todo/reorderTodos drag)
+   F-B2 (dw wave 3): the score math moved to shared/sort-core.mjs moveWithin (single source with the
+   renderer's TodoItem._writeSort reorderScale rewrite); the ±100 no-beyond margin is precision
+   degradation only — order can no longer drift between the two ends' scales. */
 /** Reorder <task> relative to: top|bottom|up|down (within its day) or before|after <otherTask> (must share the day/no-date pool) */
 function sortTask (input, pos, refInput) {
   const t = resolveTask(input, liveTasks())
   const pool = liveTasks().filter(x => x.dayStart === t.dayStart).sort((a, b) => (a.taskSort || 0) - (b.taskSort || 0))
   const idx = pool.findIndex(x => x.taskId === t.taskId)
-  const mid = (a, b) => Math.fround((a + b) / 2)
-  let newSort
-  if (pos === 'top') newSort = (pool.length ? pool[0].taskSort || 0 : 0) - 100
-  else if (pos === 'bottom') newSort = (pool.length ? pool[pool.length - 1].taskSort || 0 : 0) + 100
-  else if (pos === 'up' || pos === 'down') {
-    const neighbor = pos === 'up' ? pool[idx - 1] : pool[idx + 1]
-    if (!neighbor) throw new CliError('task is already at the ' + (pos === 'up' ? 'top' : 'bottom') + ' of its list', 'ALREADY_AT_EDGE')
-    const beyond = pos === 'up' ? pool[idx - 2] : pool[idx + 2]
-    newSort = beyond ? mid(neighbor.taskSort || 0, beyond.taskSort || 0) : (pos === 'up' ? (neighbor.taskSort || 0) - 100 : (neighbor.taskSort || 0) + 100)
-  } else if (pos === 'before' || pos === 'after') {
+  let ref = null
+  if (pos === 'before' || pos === 'after') {
     if (!refInput) throw new CliError('sort before|after needs a reference task', 'USAGE')
-    const ref = resolveTask(refInput, liveTasks())
+    ref = resolveTask(refInput, liveTasks())
     if (ref.dayStart !== t.dayStart) throw new CliError('reference task must be on the same day (or both without a date) — change date first with edit --date', 'CROSS_DAY_SORT')
-    const ridx = pool.findIndex(x => x.taskId === ref.taskId)
-    if (pos === 'before') {
-      const beyond = ridx > 0 ? pool[ridx - 1] : null
-      newSort = beyond ? mid(beyond.taskSort || 0, ref.taskSort || 0) : (ref.taskSort || 0) - 100
-    } else {
-      const beyond = ridx < pool.length - 1 ? pool[ridx + 1] : null
-      newSort = beyond ? mid(ref.taskSort || 0, beyond.taskSort || 0) : (ref.taskSort || 0) + 100
-    }
-  } else throw new CliError('position must be top|up|down|bottom, or before|after <task>', 'USAGE')
+  }
+  const refIdx = ref ? pool.findIndex(x => x.taskId === ref.taskId) : -1
+  const mv = moveWithin(pool.map(x => x.taskSort), idx, pos, refIdx)
+  if (!mv || mv.edge || mv.sort == null) {
+    if (pos === 'up' || pos === 'down') throw new CliError('task is already at the ' + (pos === 'up' ? 'top' : 'bottom') + ' of its list', 'ALREADY_AT_EDGE')
+    throw new CliError('position must be top|up|down|bottom, or before|after <task>', 'USAGE')
+  }
+  const newSort = mv.sort
   patchTodo(t.taskId, { taskSort: newSort }, { action: 'sort' })
   // Re-read the real persisted order (cannot reuse the pool above — it is a pre-move snapshot; the ★ marker would show at the old position)
   const after = liveTasks()
@@ -1591,53 +1593,9 @@ function setReminderExtra (input, csv) {
 }
 
 /* ---------------- Settings (meta db.settingsState mirror; hot-synced to a running App via the main-process watcher) ----------------
-   Manifest mirrors renderer store/settings.js DEFAULT_SETTINGS/SETTING_ENUMS (keep in sync; security keys are never settable here).
-   Key-migration convention: when the renderer renames a key, the CLI manifest follows the NEW name
-   only (old keys are dropped here, the renderer's store proxy migrates old saved values); legacy
-   names must not linger as manifest entries — a "working" write to a dead key silently no-ops in the App.
-   Intentionally local-only (never manifest-exposed): shortcutKeySettings and foldedTodoList
-   (complex objects managed by the App's own UI). */
-const SETTINGS_MANIFEST = {
-  boolean: ['autoDownloadUpdates', 'enableTomatoFloating', 'weatherEnabled', 'taskFlyAnimation', 'closeActionMinimize', 'isCompleteWithSubtasks', 'isTodoEditModalCloseAutoSave', 'isCompleteCheckboxColorFollow', 'runWhenComputerStart', 'hideMainWindowOnStartup', 'enableHardwareAcceleration', 'showNoDate', 'showCompleteNoDate', 'showComplete', 'developerMode', 'showTodayXModule', 'showHabitModule', 'showProjectsModule', 'showDepsModule', 'isShowSubTask', 'isCalendarDimUncompleted', 'isShowCalendarPrivacyMode', 'isDefaultSubTaskFolded', 'showHolidayMarkers', 'showTodoCheckboxOrder', 'enableSecurityLock', 'autoBackupEnabled', 'isCalendarBackgroundUserSelected', 'isShowCalendarCompleted', 'sidebarCollapsed', 'catFold', 'showTagPanel'],
-  number: ['dailyTomatoTarget', 'dailyLoadWarnThreshold', 'recycleBinAutoDeleteDays', 'notificationTimeoutInterval', 'todoDescriptionDisplayLineNumber', 'autoBackupIntervalMin', 'autoBackupKeep', 'whiteNoiseVolume', 'tomatoTime', 'restTime',
-    // Category-id settings are NUMBERS on the App side (renderer store/settings.js DEFAULT_SETTINGS: newTodoCategoryId: 0,
-    // todoBoxCategoryId: -1) and the render path filters with strict equality (store/todo.js todoBoxCategoryId !== -1,
-    // TodoBoxView c.categoryId === settings.todoBoxCategoryId) — the CLI used to declare them string and write back
-    // "5" (string), which silently failed every strict-equality filter. Type fixed here; the renderer load path gets a
-    // coeresion guard in parallel (double insurance, independent).
-    'newTodoCategoryId', 'todoBoxCategoryId',
-    // calendarCategory is a numeric category id in the app (DEFAULT_SETTINGS calendarCategory: 0);
-    // declaring it string made `settings list` report the wrong type (value only survived via coercion)
-    'calendarCategory'],
-  // P3-6 (dw wave): per-key numeric bounds, mirrored from the UI's input controls (SettingsModal.vue)
-  // so the CLI enforces the same clamps instead of only isFinite/≥0. Keys without an entry keep the
-  // generic ≥0 gate.
-  ranges: {
-    tomatoTime: { min: 5, max: 180 },   // SettingsModal.vue focus-length input-number (:min=5 :max=180)
-    restTime: { min: 1, max: 60 },      // SettingsModal.vue break-length input-number (:min=1 :max=60)
-    dailyTomatoTarget: { min: 1, max: 50 },        // SettingsModal.vue daily-goal input (:min=1 :max=50)
-    dailyLoadWarnThreshold: { min: 0, max: 50 },   // SettingsModal.vue load-warn threshold (:min=0 :max=50)
-    todoDescriptionDisplayLineNumber: { min: 1, max: 6 } // SettingsModal.vue desc-lines slider (:min=1 :max=6)
-  },
-  enum: {
-    colorMode: ['light', 'dark', 'system'],
-    calendarFontSize: ['small', 'medium', 'large'],
-    weekStartDay: ['mon', 'sun'],
-    newTodoDefaultSort: ['top', 'bottom'],
-    calendarBackground: ['list', 'theme', 'system'],
-    calendarFontColor: ['white', 'black'],
-    sortMode: ['custom', 'created', 'difficulty'],
-    expiredCompletedTodoRange: ['today', '7d', '15d', '30d'],
-    expiredUncompletedTodoRange: ['7d', '30d', '90d'], // no 'today' — the renderer's SETTING_ENUMS (store/settings.js) has no 'today' option; a CLI-written 'today' would fail the renderer's coerce and fall back to the default (no migration needed; historical 'today' values just coerce back on the App side)
-    upcomingTodoRange: ['7d', '30d'],
-    weatherSource: ['open-meteo', 'wttr'],
-    todoBoxSortMethod: ['created', 'due', 'difficulty'],
-    todoBoxSortOrder: ['desc', 'asc']
-  },
-  // calendarCategory is a numeric category id in the app (DEFAULT_SETTINGS calendarCategory: 0);
-  // declaring it string made `settings list` report the wrong type (value only survived via coercion)
-  string: ['backupDir', 'whiteNoiseAudio', 'weatherCity', 'searchDateRange', 'searchComplete', 'searchCategory', 'maxRepeat', 'appLocale']
-}
+   F-B9 manifest single source: SETTINGS_MANIFEST moved verbatim to shared/settings-manifest.mjs
+   (dw wave 3) so the renderer's sanitize path can consume the same surface; re-exported below. */
+const { SETTINGS_MANIFEST } = require('../shared/settings-manifest.mjs') // require(esm)
 const SETTINGS_DENIED = new Set(['securityLockPassword', 'securityLockQuestion', 'schemaV', '_savedAt'])
 
 function settingsDoc () {
@@ -1713,14 +1671,26 @@ function settingsSet (key, value, { force = false } = {}) {
   // wholesale. The refreshed blob is built from the converged doc, so its bridge mirror is a
   // value-identical no-op — while the _savedAt bump keeps the two local blob consumers working (the
   // main-process hot-sync watcher diffs _savedAt; renderer initFromDb restores from the blob).
+  // F-B1 (dw wave 3): settings_rows carries BOTH blob families (db.settingsState AND db.habitsState
+  // — SYNC_BLOB_KEYS share the table), so the whole-doc read above can carry habits-family fields
+  // (habits/moments/savedAt). Writing them back inside db.settingsState let the settings blob
+  // swallow the habits state (renderer initFromDb then read a blob whose keys mixed families).
+  // The write-back strips the habits-exclusive family (shared/settings-families.mjs — the same
+  // contract lan-sync-bootstrap's foldSettingsIntoBlob routes by).
   const doc = settingsDoc()
   const before = key in doc ? doc[key] : null
+  // F-B1 secondary fix: the blob's _savedAt doubles as the bridge's LWW gateTs (db-sync-schema
+  // putRow). Stamping it at WRITE time made the gate a tautology — a stale echo read BEFORE a
+  // sync-apply landed was re-stamped to now and re-won the row. Stamp the PRE-WRITE read moment
+  // instead (captured right after the first read, BEFORE the race hook can inject a concurrent
+  // apply): rows applied between the two reads are newer than the blob snapshot and keep winning.
+  const readAt = Date.now()
   // Test seam: inject a concurrent mutation into the race window (first read → row write) so unit
   // tests can deterministically exercise the merge-on-fresh behavior. Null outside tests.
   if (typeof settingsRaceHook === 'function') settingsRaceHook()
   commit('setting', 'put', { key, value: v })
-  const fresh = settingsDoc()
-  fresh._savedAt = Date.now()
+  const fresh = stripHabitsFamily(settingsDoc())
+  fresh._savedAt = readAt
   fresh.schemaV = fresh.schemaV || 1
   commit('meta', 'put', ['db.settingsState', JSON.stringify(fresh)])
   audit.record({ action: 'settings.set', targets: [], changes: [{ before: { [key]: before }, after: { [key]: v } }], note: 'setting "' + key + '" changed (hot-synced to running App, applied on launch otherwise)' })
@@ -1879,6 +1849,6 @@ module.exports = {
   setEstimate, getEstimateOf, sortTask, listOn, resolveRecord, recordFix, recordRemove, moveSubtask,
   setReminderOffsets, setReminderExtra, addAttachment, listAttachments, removeAttachment,
   settingsList, settingsSet, settingsDoc, setSettingsRaceHookForTests, planSet, planList, planRemove, dateChangeReminderPatch,
-  SETTINGS_MANIFEST, settingsKnown,
+  SETTINGS_MANIFEST, settingsKnown, normKey, buildRenewalInstance,
   importEvents, eventFocusMinutes, eventKey
 }

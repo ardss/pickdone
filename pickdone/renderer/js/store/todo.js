@@ -2,7 +2,7 @@
  * Core todo module — state/action semantics aligned with the reference todo module
  * status: add/update/delete -> sync; local meta.todosVersion acts as the sync cursor
  */
-import { genTaskId, nextSort, dayjs, reportError, DAY_MS, rangeDays, parsePredecessors } from '../utils/core.js'
+import { genTaskId, nextSort, dayjs, reportError, DAY_MS, parsePredecessors } from '../utils/core.js'
 import { wouldCycle, isTaskReady } from '../utils/deps.js'
 import { nextRepeatInstance, isLastRepeatInstance, renewalCarryFields } from '../utils/repeat.js'
 import { sortByMode } from '../utils/sortMode.js'
@@ -15,6 +15,9 @@ import { enqueueChipSync, rowChipSync, planSnapshotRowSync, snapshotForDelete, r
 import { historyPush, historyPushKeepRedo, historyClear, historyBreakMerge, historyUndoPop, historyRedoPop, historyRedoPush, historyBarrierCore, undoStep, redoStep, persistSnapshotDiffCore } from './undo.js'
 import { writeEventBackupCore, writeAutoBackupCore, writeCriticalBackupCore } from './todoBackup.js'
 import { commit as commitCommand } from "../utils/commandBus.js"
+import { safeUpsert, flushPendingUpserts, queuePendingUpsert, pendingUpserts, daysRangeTs } from './todoPendingUpserts.js'
+// Re-export: unit tests import the quit-flush retry contract straight from store/todo.js
+export { safeUpsert, flushPendingUpserts }
 
 // planSnapshotRowSync stays a named export of this module (tests import it from here)
 export { planSnapshotRowSync }
@@ -45,66 +48,18 @@ const DEFAULT_VIEWS = () => ({
     recycleBin: []
 })
 
-/** Unified exit for DB persistence: failures are logged, never producing floating rejections (local/DB mismatch is visible in the console)
- *  JSON round-trip de-proxies: row objects come from reactive state, so nested arrays like reminderOffsets are Proxies
- *  that fail IPC structured cloning (symptom: every task edit logs "An object could not be cloned" and the DB receives no update) */
-// ---- DB write pending queue (mirrors tomato.js's _pendingLedger): a failed task upsert stays queued and replays on the next quit flush, so a transient IPC/db failure can't silently drop a task edit ----
-const _pendingUpserts = []
-let _todoFlushHooked = false
-// Exported for unit tests (same precedent as planSnapshotRowSync): the quit-flush retry contract
-// (a failed upsert stays queued and is replayed) is behavior worth pinning.
-export function safeUpsert (row) {
-  let plain
-  try { plain = JSON.parse(JSON.stringify(row)) } catch (e) { plain = row }
-  const entry = { op: 'upsert', params: plain }
-  _pendingUpserts.push(entry)
-  Promise.resolve(commitCommand("todo", "put", plain))
-    .then(() => { const i = _pendingUpserts.indexOf(entry); if (i >= 0) _pendingUpserts.splice(i, 1) })
-    .catch(err => console.error('[todo] persist failed (queued for quit-flush retry):', err))
-  hookQuitFlush()
-}
-function hookQuitFlush () {
-  if (_todoFlushHooked || !window.todoAPI || !window.todoAPI.onAppQuittingFlush) return
-  _todoFlushHooked = true
-  window.todoAPI.onAppQuittingFlush(() => flushPendingUpserts())
-}
-/** Exit flush: send every pending upsert. maint-d7: failed entries NEVER leave the queue — the
- *  splice happens per-entry only on success (safeUpsert's own removal shape). The old
- *  splice-all-then-requeue-in-Promise.all requeued failures in an async aggregate callback, which
- *  never ran when the process exited between the IPC dispatch and the callback (quit-flush: the ack
- *  defer can outrun Promise.all) — every failed upsert was permanently lost. Replay is safe: upsert
- *  is an idempotent row write. */
-// Exported for unit tests (same precedent as planSnapshotRowSync)
-export { flushPendingUpserts }
-function flushPendingUpserts () {
-  for (const entry of [..._pendingUpserts]) {
-    window.todoAPI.dbCall(entry.op, entry.params)
-      .then(() => { const i = _pendingUpserts.indexOf(entry); if (i >= 0) _pendingUpserts.splice(i, 1) })
-      .catch(e => console.error('[todo] pending upsert flush failed at quit (kept for retry):', e))
-  }
-}
-/** Strip Vue reactive proxies before IPC: rows come straight from reactive state, and a shallow spread
- *  ({ ...raw }) only unwraps the top level — nested arrays (reminderOffsets/reminderExtra/subtasks JSON is a
- *  string, but reminderOffsets etc. stay Proxies) still fail the structured clone inside invoke
- *  ("An object could not be cloned" = the whole upsertMany batch silently dropped, same root cause
- *  safeUpsert's JSON round-trip at :87-89 documents for single rows) */
-function deproxyRows (rows) { return JSON.parse(JSON.stringify(rows)) }
-
-function daysRangeTs (settings) {
-  // "today/yesterday" are semantic options and can't be resolved by extracting digits (would NaN-fallback to 7): today = current day only (1), yesterday = from yesterday (2)
-  const num = s => rangeDays(s, 7)
-  return {
-    expCompletedDays: num(settings.expiredCompletedTodoRange || '7d'),
-    expUncompletedDays: num(settings.expiredUncompletedTodoRange || '30d'),
-    upcomingDays: num(settings.upcomingTodoRange || '30d')
-  }
-}
-
 // Fields affecting a view's group membership (one-to-one with computeViews' grouping criteria):
 // delete/deletedAt (active/recycle bin), todoTime/dayStart (date grouping), complete/completedAt (completed grouping), categoryId (todo-box category filter)
 // Only writes to these fields need an immediate full view rebuild; the rest (title/description/subtask plain-text edits) take the lightweight path
 const VIEW_AFFECTING_FIELDS = ['delete', 'deletedAt', 'todoTime', 'dayStart', 'complete', 'completedAt', 'categoryId']
 const VIEWS_DEBOUNCE_MS = 600 // View-rebuild debounce for plain-text edits: staggered from EditPanel's 350ms save cadence; continuous typing recomputes only once
+
+/** Strip Vue reactive proxies before IPC: rows come straight from reactive state, and a shallow spread
+ *  ({ ...raw }) only unwraps the top level — nested arrays (reminderOffsets/reminderExtra/subtasks JSON is a
+ *  string, but reminderOffsets etc. stay Proxies) still fail the structured clone inside invoke
+ *  ("An object could not be cloned" = the whole upsertMany batch silently dropped, same root cause
+ *  safeUpsert's JSON round-trip documents for single rows) */
+function deproxyRows (rows) { return JSON.parse(JSON.stringify(rows)) }
 
 export default {
   namespaced: true,
@@ -453,8 +408,7 @@ export default {
         await commitCommand("todo", "putMany", deproxyRows(rows))
       } catch (err) {
         reportError('upsertMany', err)
-        try { _pendingUpserts.push({ op: 'upsertMany', params: deproxyRows(rows) }) } catch { /* keep the UI flow alive even if cloning fails */ }
-        hookQuitFlush()
+        try { queuePendingUpsert({ op: 'upsertMany', params: deproxyRows(rows) }) } catch { /* keep the UI flow alive even if cloning fails */ }
       }
       // Discrete op: break the 400ms undo merge so a following edit doesn't fuse into the drag step
       commit('historyBreakMerge')
@@ -485,6 +439,52 @@ export default {
       try { await snapshotForDelete(todo.taskId) } catch (e) { console.warn('[todo] failed to snapshot chips for deleted task:', e) }
       dispatch('computeViews')
       dispatch('writeCriticalBackup')
+    },
+
+    /** maint/dw wave3 F-C1: batch variant of deleteTodo — ONE history snapshot (one undo restores
+     *  the whole batch), ONE computeViews, ONE putMany write. The old call sites looped per-row
+     *  deleteTodo dispatches: each round broke the 400ms undo merge and pushed a whole-table
+     *  snapshot into the undo stack (a 700-row batch ≈ 0.7GB of string churn), ran a debounced
+     *  computeViews per row and 3 serial IPCs per row. Same batch shape as reorderTodos
+     *  (Map lookup + putMany + single computeViews). Deliberately NOT in index.js's
+     *  HISTORY_ACTIONS set: the pre-batch snapshot is pushed here explicitly (once) instead of by
+     *  the subscribeAction before-hook, so the whole batch is exactly ONE undo step. */
+    async deleteTodosMany ({ commit, dispatch, rootState }, todos) {
+      commit('historyBreakMerge')
+      const index = new Map([...this.state.todo.todoList, ...this.state.todo.recycleList].map(t => [t.taskId, t]))
+      const now = Date.now()
+      const rows = []
+      const ids = []
+      for (const todo of (todos || [])) {
+        const raw = index.get(todo && todo.taskId)
+        if (!raw) continue
+        ids.push(raw.taskId)
+        // version reset to 0: same re-delete-after-restore sync semantics as deleteTodo
+        rows.push({ ...raw, delete: true, deleting: true, deletedAt: now, updateTime: now, status: 'delete', version: 0 })
+      }
+      if (!rows.length) return []
+      // Single pre-batch snapshot (same shape the subscribeAction before-hook pushes for deleteTodo)
+      const snap = this.state.todo
+      commit('historyPush', JSON.stringify({ todoList: snap.todoList, recycleList: snap.recycleList }))
+      // Focus-bound rows detach first (same as deleteTodo)
+      const at = rootState.tomato && rootState.tomato.attachTodo
+      if (at && ids.includes(at.taskId)) dispatch('tomato/attach', null, { root: true })
+      for (const merged of rows) commit('upsertLocal', merged)
+      // deleting is a local-dialect UI flag, not a schema column: strip before persisting (deleteTodo)
+      const clean = rows.map(m => { const r = { ...m }; delete r.deleting; return r })
+      // Same pending-queue guarantee as reorderTodos: a transient IPC/db failure stays queued for the
+      // quit-flush replay instead of silently dropping the batch
+      try {
+        await commitCommand('todo', 'putMany', deproxyRows(clean))
+      } catch (err) {
+        reportError('upsertMany', err)
+        try { queuePendingUpsert({ op: 'upsertMany', params: deproxyRows(clean) }) } catch { /* keep the UI flow alive */ }
+      }
+      // Chip cascade per task, snapshot to meta first (same as deleteTodo)
+      for (const id of ids) { try { await snapshotForDelete(id) } catch (e) { console.warn('[todo] failed to snapshot chips for deleted task:', e) } }
+      dispatch('computeViews')
+      dispatch('writeCriticalBackup')
+      return ids
     },
 
     async restoreFromRecycle ({ commit, dispatch }, todo) {
@@ -780,7 +780,7 @@ export default {
         // Enqueue for retry like reorderTodos/safeUpsert (round-6 leftover): rows stay dirty in memory,
         // but the quit-flush replay needs the op verbatim to survive a close-before-retry
         if (!staleBatch && snapshot.length) {
-          try { _pendingUpserts.push({ op: 'commitSyncBatch', params: { rows: deproxyRows(snapshot), version: serverV } }) } catch { /* keep the UI flow alive */ }
+          try { queuePendingUpsert({ op: 'commitSyncBatch', params: { rows: deproxyRows(snapshot), version: serverV } }) } catch { /* keep the UI flow alive */ }
         }
       } finally {
         commit('setSyncing', false)
@@ -809,4 +809,4 @@ function showNoDateFilter (arr, settings) {
 function buildCalendarList (live) { return live.slice() }
 
 /** Test seams (unit-tested in tests/store-fixes-domain.test.mjs): pending-write requeue and the de-proxy round-trip */
-export const _testInternals = { pendingUpserts: _pendingUpserts, safeUpsert, flushPendingUpserts, deproxyRows }
+export const _testInternals = { pendingUpserts: pendingUpserts(), safeUpsert, flushPendingUpserts, deproxyRows }

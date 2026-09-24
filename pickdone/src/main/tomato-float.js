@@ -358,7 +358,11 @@ module.exports = {
       320 with no resizing (silky = pure CSS animation inside the window); do not blindly enable click-through
       on collapse: if the cursor still rests on the card strip it should remain clickable (blind click-through
       would swallow rapid consecutive clicks until the next poll round). */
-  setPanelOpen (open) {
+  setPanelOpen (sender, open) {
+    // F-A5 (2026-09-23): sender check symmetric with dragStart/dragStop — the panel (and the
+    // click-through state it drives) is the float's own UI state; a foreign/trapped window
+    // must not flip it. (handlers/tomato.js forwards e.sender; `open` is unchanged.)
+    if (!module.exports.isSelfSender(sender)) return false
     panelOpen = !!open
     if (!panelOpen && win && !win.isDestroyed()) {
       try { applyIgnore(!isInsideHit(screen.getCursorScreenPoint(), win.getBounds(), false, CARD_H)) } catch (e) { /* backstopped by the next poll round */ }
@@ -401,5 +405,11 @@ module.exports = {
     }, 16)
     return true
   },
-  dragStop () { stopDrag(); return true }
+  // F-A5 (2026-09-23): sender check aligned with dragStart — only the float's own webContents
+  // may end a drag. Unchecked, a trapped/foreign window could clearInterval the drag timer
+  // mid-drag (yank the card out of the user's hand).
+  dragStop (sender) {
+    if (!module.exports.isSelfSender(sender)) return false
+    stopDrag(); return true
+  }
 }

@@ -159,6 +159,10 @@ contextBridge.exposeInMainWorld('todoAPI', {
     ipcRenderer.on('shortcut-action', h)
     return () => ipcRenderer.removeListener('shortcut-action', h)
   },
+  // F-D3 (maint/dw 2026-09-23): while the settings tab records a new combo, tell the main
+  // process to suppress shortcut-action dispatch (before-input-event fires first; a recorded
+  // bound combo used to execute its real action, e.g. ctrl+d deleting the selected task)
+  setShortcutCapturing: flag => ipcRenderer.send('shortcut-capturing', !!flag),
   // Reminder sound: the main process sends the audio file path, the renderer plays it with Audio (see notify-sound.js)
   onPlaySound: fn => {
     const h = (_e, file) => fn(file)

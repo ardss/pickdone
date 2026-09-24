@@ -91,6 +91,7 @@ interface TodoAPI {
   onSecurityUnlock: (...args: any[]) => any
   onShortcutAction: (...args: any[]) => any
   onShortcutConflict: (...args: any[]) => any
+  setShortcutCapturing: (flag: boolean) => void
   onSyncEvent: (...args: any[]) => any
   onTodosChanged: (...args: any[]) => any
   onTomatoRecordsChanged: (...args: any[]) => any

@@ -46,8 +46,6 @@ try {
     el.dispatchEvent(new Event('input',{bubbles:true}));return 'ok'})()`)
   const enterIn = async sel => evalJson(ctx, `(()=>{const el=document.querySelector(${JSON.stringify(sel)});if(!el)return 'nosel';
     el.dispatchEvent(new KeyboardEvent('keyup',{key:'Enter',bubbles:true}));return 'ok'})()`)
-  const clickText = async (sel, text) => evalJson(ctx, `(()=>{const els=[...document.querySelectorAll(${JSON.stringify(sel)})];
-    const el=els.find(x=>x.textContent.includes(${JSON.stringify(text)}));if(!el)return 'nomatch';el.click();return 'ok'})()`)
   const ok = (name, cond, detail = '') => {
     if (cond) { pass++; console.log('  ✓ ' + name) } else { fail++; fails.push(name); console.error('  ✗ ' + name + (detail ? ' — ' + detail : '')) }
   }
@@ -64,20 +62,24 @@ try {
   await sleep(600)
 
   console.log('[2] 搜索页（稳定键筛选链）')
+  // 2026-09-23 (domain-5): the count assertions used includes('2')/includes('1') — any count
+  // CONTAINING the digit (12/21/10/…) passed. .result-count renders $t('…resultCount',{n}) from
+  // SearchView.vue:31; parse the integer out and compare exactly, plus negative controls.
+  const countOf = async () => parseInt(((await textOf('.result-count')) || '').replace(/[^\d]/g, ''), 10) || 0
   await goto('#/todo-list/search')
   console.log('   [probe] errors so far:', JSON.stringify((ctx.consoleErrors||[]).slice(0,3)), '| hash:', await evalJson(ctx, 'location.hash'), '| search-page:', await exists('.search-page'))
   await typeIn('.search-page .main-nav-search__input', '苹果')
   await sleep(900)
-  const cntAll = (await textOf('.result-count')) || ''
-  ok('搜索「苹果」命中 2 条', cntAll.includes('2'), JSON.stringify(cntAll))
+  const cntAll = await countOf()
+  ok('搜索「苹果」命中 2 条（精确计数,负例:非 3/12）', cntAll === 2 && cntAll !== 3 && cntAll !== 12, 'count=' + cntAll)
   await storeRun(`$s.commit('settings/updateSettings',{searchComplete:'undone'})`)
   await sleep(600)
-  const cntUndone = (await textOf('.result-count')) || ''
-  ok('状态筛选=未完成 → 只剩 1 条（稳定键生效）', cntUndone.includes('1'), JSON.stringify(cntUndone))
+  const cntUndone = await countOf()
+  ok('状态筛选=未完成 → 只剩 1 条（稳定键生效,负例:非 10/12）', cntUndone === 1 && cntUndone !== 10 && cntUndone !== 12, 'count=' + cntUndone)
   await storeRun(`$s.commit('settings/updateSettings',{searchComplete:'done',searchDateRange:'last7'})`)
   await sleep(600)
-  const cntDone = (await textOf('.result-count')) || ''
-  ok('状态筛选=已完成+最近7天 → 1 条', cntDone.includes('1'), JSON.stringify(cntDone))
+  const cntDone = await countOf()
+  ok('状态筛选=已完成+最近7天 → 1 条（精确计数）', cntDone === 1, 'count=' + cntDone)
   await storeRun(`$s.commit('settings/updateSettings',{searchComplete:'',searchDateRange:''})`)
 
   console.log('[3] 已达成页')
@@ -99,9 +101,12 @@ try {
     }
     return false
   }
-  ok('四象限视图渲染', await clickPoll('button[aria-label="Eisenhower matrix"]', `document.querySelector('.today-list').innerHTML.includes('matrix')`))
-  ok('卡片视图渲染', await clickPoll('button[aria-label="Deck"]', `!!document.querySelector('.today-list .pd-day-deck, .today-list [class*=day-deck]')`))
-  ok('切回列表视图', await clickPoll('button[aria-label="List"]', `!!document.querySelector('.today-list .td-groups')`))
+  // 2026-09-24 adversarial-review fix: the three aria-labels are $t-bound (statsE.TodayView.*,
+  // zh-CN renders 四象限/卡片/列表) — select the .pd-view-seg buttons positionally instead
+  // (TodayView.vue:11-13 fixed order list/matrix/deck; the gated deps button is 4th and unused)
+  ok('四象限视图渲染', await clickPoll('.pd-view-seg button:nth-of-type(2)', `document.querySelector('.today-list').innerHTML.includes('matrix')`))
+  ok('卡片视图渲染', await clickPoll('.pd-view-seg button:nth-of-type(3)', `!!document.querySelector('.today-list .pd-day-deck, .today-list [class*=day-deck]')`))
+  ok('切回列表视图', await clickPoll('.pd-view-seg button:nth-of-type(1)', `!!document.querySelector('.today-list .td-groups')`))
 
   console.log('[6] 回收站 UI 流')
   const beforeCnt = await storeGet(`$s.state.todo.todoList.filter(t=>!t.delete).length`)
@@ -110,8 +115,15 @@ try {
   ok('删除后活跃任务 -1', (await storeGet(`$s.state.todo.todoList.filter(t=>!t.delete).length`)) === beforeCnt - 1)
   await goto('#/todo-list/recycle-bin')
   ok('回收站页显示被删任务', await bodyHas('重复模板甲'))
-  ok('回收站提供 移到今天/彻底删除 按钮', await bodyHas('Move to today') && await bodyHas('Delete forever'))
-  ok('回收站行内 移到今天 还原点击', (await clickText('.recycle-page .btn', 'Move to today')) === 'ok')
+  // 2026-09-23 (domain-5): the two assertions below hardcoded ENGLISH copy ('Move to today' /
+  // 'Delete forever') — a zh-CN walkthrough instance (leftoverOk/btnPurge render 移到今天/彻底删除)
+  // failed red. Assert the locale-independent structure instead: each row's .btn-group carries the
+  // restore-date/restore-today/pick-date buttons plus the .rc-danger-btn purge button.
+  ok('回收站行内提供 还原/移到今天/彻底删除 按钮组（locale 无关）',
+    await evalJson(ctx, `(()=>{const g=[...document.querySelectorAll('.recycle-page .btn-group')].find(x=>x.querySelector('.rc-danger-btn'));
+      return !!g && g.querySelectorAll('.btn').length>=3 && !!g.querySelector('.rc-danger-btn')})()`))
+  ok('回收站行内 移到今天 还原点击', (await evalJson(ctx, `(()=>{const g=[...document.querySelectorAll('.recycle-page .btn-group')].find(x=>x.querySelector('.rc-danger-btn'));
+      const btns=[...g.querySelectorAll('.btn')];const b=btns[1];if(!b)return 'nobtn';b.click();return 'ok'})()`)) === 'ok')
   await sleep(700)
   ok('还原后活跃任务恢复', (await storeGet(`$s.state.todo.todoList.filter(t=>!t.delete).length`)) === beforeCnt)
 
@@ -124,7 +136,9 @@ try {
   ok('编辑栏打开', await exists('.ep-inner'))
   ok('重复规则弹窗打开', (await click('.ep-repeat-row')) === 'ok' && await exists('.modal-container'))
   await sleep(600)
-  const gen = await evalJson(ctx, `(()=>{const b=[...document.querySelectorAll('.modal-container button')].find(x=>x.textContent.includes('Generate'));if(!b)return 'nobtn';if(b.disabled)return 'disabled';b.click();return 'ok'})()`)
+  // locale-independent: the generate button is the modal footer's primary el-button
+  // (RepeatModal.vue:94, label is $t('statsD.RepeatModal.generate') — zh-CN renders 生成)
+  const gen = await evalJson(ctx, `(()=>{const b=document.querySelector('.modal-container .modal__footer .el-button--primary');if(!b)return 'nobtn';if(b.disabled)return 'disabled';b.click();return 'ok'})()`)
   await sleep(1500)
   const cntAfterRepeat = await storeGet(`$s.state.todo.todoList.filter(t=>!t.delete).length`)
   ok('重复生成产出新任务', gen === 'ok' && cntAfterRepeat > cntBeforeRepeat, `gen=${gen} ${cntBeforeRepeat}→${cntAfterRepeat}`)
@@ -136,7 +150,12 @@ try {
   await storeRun(`$s.commit('ui/toggleSettings',true)`)
   await sleep(900)
   ok('设置弹窗打开', await exists('.modal-container'))
-  const setLen = await evalJson(ctx, `(()=>{const inp=document.querySelector('input[aria-label="Focus length (min):"]');if(!inp)return 'nosel';
+  // locale-independent: pick the el-input-number control that is DISPLAYING the store's current
+  // tomatoTime (SettingsModal.vue:230; the aria-label is $t-bound so zh-CN rendered 专注时长（分钟）).
+  // Self-verifying: if the wrong control is picked, the '专注时长写入设置' store assertion below fails.
+  const setLen = await evalJson(ctx, `(function(){const want=String(window.appUI.$store.state.settings.tomatoTime||25);
+    const inp=[...document.querySelectorAll('.modal-container .el-input-number input')].find(x=>x.value===want);
+    if(!inp)return 'nosel';
     const setter=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
     setter.call(inp,'30');inp.dispatchEvent(new Event('input',{bubbles:true}));
     inp.dispatchEvent(new Event('change',{bubbles:true}));inp.blur();return 'ok'})()`)
@@ -153,10 +172,23 @@ try {
   await sleep(500)
   await goto('#/todo-list/habit')
   await typeIn('.habit-add-input', '跑步')
-  ok('习惯「新建」按钮点击', (await clickText('button', 'New')) === 'ok')
+  // locale-independent: the create button is .habit-add's .mini.primary (HabitView.vue:29,
+  // label $t('statsB.HabitView.create') — zh-CN renders 新建); it precedes the moment-add block in DOM
+  ok('习惯「新建」按钮点击', (await evalJson(ctx, `(()=>{const b=document.querySelector('.habit-add button.mini.primary');if(!b)return 'nosel';b.click();return 'ok'})()`)) === 'ok')
   await sleep(700)
   ok('新建习惯卡片出现', await bodyHas('跑步') && (await exists('.habit-card')))
-  ok('习惯打卡点击', (await clickText('.habit-card span', '✓')) === 'ok')
+  // 2026-09-23 (domain-5): the old assertion only checked that clickText('✓') returned 'ok' — the
+  // check-in SEMANTICS (check state flip) were uncovered. HabitView's .habit-check exposes
+  // role=checkbox with aria-checked bound to h.records[today] (HabitView.vue:37-41), so assert the
+  // user-visible aria state flips to true after the click (poll: Vue flushes async).
+  ok('习惯打卡点击', (await evalJson(ctx, `(()=>{const el=document.querySelector('.habit-card .habit-check');if(!el)return 'nosel';el.click();return 'ok'})()`)) === 'ok')
+  let checked = false
+  for (let i = 0; i < 10; i++) {
+    checked = await evalJson(ctx, `document.querySelector('.habit-card .habit-check')?.getAttribute('aria-checked')==='true'`)
+    if (checked) break
+    await sleep(300)
+  }
+  ok('打卡后卡片完成态翻转（aria-checked=true）', checked)
 
   console.log('[10] 项目 + 警示徽标')
   await goto('#/todo-list/projects')

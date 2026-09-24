@@ -59,7 +59,8 @@ test('r6-3: planRemove derives the default day from the task scheduled day like 
 })
 
 test('r6-4: settings manifest types calendarCategory as number', () => {
-  const src = require_('fs').readFileSync(path.join(root, 'cli/lib.js'), 'utf8')
+  // dw wave 3 (F-B9): SETTINGS_MANIFEST moved verbatim to shared/settings-manifest.mjs (cli/lib.js re-imports)
+  const src = require_('fs').readFileSync(path.join(root, 'shared/settings-manifest.mjs'), 'utf8')
   const manifest = src.match(/const SETTINGS_MANIFEST[\s\S]*?\n}/)[0]
   assert.doesNotMatch(manifest, /string: \[[^\]]*calendarCategory/)
   assert.match(manifest, /number: \[[^\]]*'calendarCategory'\]/)

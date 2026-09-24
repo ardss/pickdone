@@ -22,7 +22,7 @@
 
           <div class="rm-row" v-if="form.repeatType!=='year'">
             <span class="rl">{{ $t('statsD.RepeatModal.interval') }}</span>
-            <span class="rm-ctl">{{ $t('statsD.RepeatModal.every') }} <el-input-number size="small" :controls="false" v-model="form.repeatInterval" :min="1" :max="60"/><span class="hint-q" role="button" tabindex="0" :title="$t('statsD.RepeatModal.intervalHint')" :aria-label="$t('statsD.RepeatModal.intervalHint')">?</span> {{ form.repeatType==='day' ? $t('statsD.RepeatModal.unitDay') : form.repeatType==='week' ? $t('statsD.RepeatModal.unitWeek') : $t('statsD.RepeatModal.unitMonth') }}</span>
+            <span class="rm-ctl">{{ $t('statsD.RepeatModal.every') }} <el-input-number size="small" :controls="false" v-model="form.repeatInterval" :min="1" :max="60"/><span class="hint-q" role="img" :title="$t('statsD.RepeatModal.intervalHint')" :aria-label="$t('statsD.RepeatModal.intervalHint')">?</span> {{ form.repeatType==='day' ? $t('statsD.RepeatModal.unitDay') : form.repeatType==='week' ? $t('statsD.RepeatModal.unitWeek') : $t('statsD.RepeatModal.unitMonth') }}</span>
           </div>
 
           <div class="rm-row">
@@ -32,7 +32,7 @@
               <template v-if="form.repeatType==='week'"><el-input-number size="small" :controls="false" v-model="form.repeatWeekCount" :min="1" :max="104"/> {{ $t('statsD.RepeatModal.inWeeks') }}</template>
               <template v-if="form.repeatType==='month'"><el-input-number size="small" :controls="false" v-model="form.repeatMonthCount" :min="1" :max="120"/> {{ $t('statsD.RepeatModal.inMonths') }}</template>
               <template v-if="form.repeatType==='year'"><el-input-number size="small" :controls="false" v-model="form.repeatYearCount" :min="1" :max="10"/> {{ $t('statsD.RepeatModal.inYears') }}</template>
-              <span class="hint-q" role="button" tabindex="0" :title="$t('statsD.RepeatModal.countHint')" :aria-label="$t('statsD.RepeatModal.countHint')">?</span>
+              <span class="hint-q" role="img" :title="$t('statsD.RepeatModal.countHint')" :aria-label="$t('statsD.RepeatModal.countHint')">?</span>
             </span>
           </div>
 
@@ -76,13 +76,13 @@
                        @change="v=>patch({repeatYearMonthDay:v})">
               <el-option v-for="d in 30" :key="d" :label="$t('statsD.RepeatModal.lunarDayN', { d })" :value="d"/>
             </el-select>
-            <span class="hint-q" role="button" tabindex="0" :title="$t('statsD.RepeatModal.lunarSkipHint')" :aria-label="$t('statsD.RepeatModal.lunarSkipHint')">?</span>
+            <span class="hint-q" role="img" :title="$t('statsD.RepeatModal.lunarSkipHint')" :aria-label="$t('statsD.RepeatModal.lunarSkipHint')">?</span>
           </div>
 
           <div class="rm-skip">
             <label><el-switch :model-value="form.skipStatutoryHolidays" @change="v=>patch({skipStatutoryHolidays:v})" :disabled="form.statutoryWorkdays"/></label> {{ $t('statsD.RepeatModal.skipHolidays') }} &nbsp;&nbsp;
             <label><el-switch :model-value="form.skipWeekends" @change="v=>patch({skipWeekends:v})" :disabled="form.statutoryWorkdays"/></label> {{ $t('statsD.RepeatModal.skipWeekends') }} &nbsp;&nbsp;
-            <label><el-switch :model-value="form.statutoryWorkdays" @change="v=>patch({statutoryWorkdays:v})"/></label> {{ $t('statsD.RepeatModal.workdaysOnly') }}<span class="hint-q" role="button" tabindex="0" :title="$t('statsD.RepeatModal.workdayHint')" :aria-label="$t('statsD.RepeatModal.workdayHint')">?</span>
+            <label><el-switch :model-value="form.statutoryWorkdays" @change="v=>patch({statutoryWorkdays:v})"/></label> {{ $t('statsD.RepeatModal.workdaysOnly') }}<span class="hint-q" role="img" :title="$t('statsD.RepeatModal.workdayHint')" :aria-label="$t('statsD.RepeatModal.workdayHint')">?</span>
           </div>
 
           <div class="rm-preview">{{ $t('statsD.RepeatModal.previewPrefix') }}<b>{{previewCount}}</b>{{ $t('statsD.RepeatModal.previewSuffix') }}</div>
@@ -227,7 +227,7 @@ export default {
 }
 </script>
 <style>.form { max-width: 100%; }
-/* 帮助提示「?」(hint-q):键盘/读屏可达 + 聚焦可见(与 EditPanel 同规则;renderer 无 base.css,各自持一份) */
+/* 帮助提示「?」(hint-q):F-D4 降级为 role=img + aria-label(去假按钮语义),聚焦可见(与 EditPanel 同规则;renderer 无 base.css,各自持一份) */
 .hint-q { cursor: help; }
 .hint-q:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; border-radius: var(--radius-sm); }
 @keyframes modal-pop { from { opacity: 0; transform: translateY(8px) scale(.96); } }

@@ -70,9 +70,11 @@ test('TodoBoxView batchDelete: one aggregated batchMoveWithUndo undo toast, clos
   assert.match(src, /import \{ batchMoveWithUndo \} from '\.\.\/utils\/confirm\.js'/, 'batchMoveWithUndo import kept (deleteWithUndo import dropped)')
   const idxCloseAll = src.indexOf('this.$message.closeAll()', src.indexOf('async batchDelete'))
   const idxBatch = src.indexOf('batchMoveWithUndo(this', src.indexOf('async batchDelete'))
-  const idxLoop = src.indexOf("dispatch('todo/deleteTodo', raw)", src.indexOf('async batchDelete'))
-  assert.ok(idxCloseAll > -1 && idxBatch > -1 && idxLoop > -1, 'batchDelete deletes rows, closes toasts, shows one undo')
-  assert.ok(idxLoop < idxCloseAll && idxCloseAll < idxBatch, 'order: delete rows -> closeAll -> single batch undo toast')
+  // F-C1: rows are deleted via ONE deleteTodosMany dispatch (one snapshot push / one putMany),
+  // not a per-row deleteTodo loop
+  const idxDel = src.indexOf("dispatch('todo/deleteTodosMany', plain)", src.indexOf('async batchDelete'))
+  assert.ok(idxCloseAll > -1 && idxBatch > -1 && idxDel > -1, 'batchDelete deletes rows, closes toasts, shows one undo')
+  assert.ok(idxDel < idxCloseAll && idxCloseAll < idxBatch, 'order: delete rows -> closeAll -> single batch undo toast')
   assert.match(src, /msgDeleted/, 'aggregated toast uses the statsC.TodoBox.msgDeleted label')
 })
 

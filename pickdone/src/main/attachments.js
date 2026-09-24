@@ -91,4 +91,8 @@ function attachmentPath (key) {
   return path.join(attachDir(), path.basename(decoded))
 }
 
-module.exports = { attachDir, saveAttachment, attachmentPath, withinStorageQuota, dirTotalBytes, MAX_TOTAL_BYTES, __setTotalQuota }
+module.exports = { attachDir, saveAttachment, attachmentPath, withinStorageQuota, dirTotalBytes, MAX_TOTAL_BYTES, __setTotalQuota,
+  // Domain-1 F-A2 refactor (2026-09-23): the whitelist is exported so the LAN attachment
+  // receiver (lan-sync/att-transfer.js) enforces the SAME extension set on inbound files —
+  // one whitelist, two doors (upload IPC + sync ingress); keep it tighten-only (D6 svg root-fix).
+  ALLOWED_EXT }

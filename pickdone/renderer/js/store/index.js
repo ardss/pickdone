@@ -34,7 +34,13 @@ const HISTORY_ACTIONS = new Set([
 ])
 // Full set of write actions that persist and trigger cross-window broadcasts: the echo-suppression window's timestamp stamping must cover all of them; missing one causes
 // "our own broadcast echo reloading todo/init and clearing the undo stack" — the 2026-08-31 incident of this class only plugged ten whitelist entries
-const WRITE_ACTIONS = new Set([...HISTORY_ACTIONS, 'todo/undo', 'todo/redo', 'todo/syncTodos'])
+// F-C1 review fix: deleteTodosMany is a REAL DB write (todo.putMany) but deliberately kept out of
+// HISTORY_ACTIONS (it pushes its own single pre-batch snapshot in-action; the before-hook would
+// double-push). Without WRITE_ACTIONS membership its echo stamped no _lastLocalWriteAt, so the
+// main-process broadcast of its own write fell outside the 1500ms suppression window and the
+// echo's todo/init (no preserveHistory) cleared the undo stack — "one undo restores the whole
+// batch" died at runtime exactly as it did pre-2026-08-31.
+const WRITE_ACTIONS = new Set([...HISTORY_ACTIONS, 'todo/undo', 'todo/redo', 'todo/syncTodos', 'todo/deleteTodosMany'])
 store.subscribeAction({
   before (action) {
     if (!HISTORY_ACTIONS.has(action.type)) return

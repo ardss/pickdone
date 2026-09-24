@@ -57,11 +57,10 @@ export default {
         await this.cleanupOrphanRule(b.repeatId) // "this event only" must also check for orphan rules (after deleting the last instance in a group, the rule once lingered forever)
         return this.close()
       }
-      for (const id of ids) {
-        const row = this.$store.state.todo.todoList.find(t => t.taskId === id)
-        if (row) await this.$store.dispatch('todo/deleteTodo', row)
-      }
-      // Batch delete shares the single-item semantics: 5s undo toast; the 400ms chain merge ensures one undo restores the whole group
+      // F-C1: batch delete — ONE snapshot push (one undo restores the whole group), ONE computeViews,
+      // ONE putMany write (the per-row loop used to push a whole-table snapshot per instance)
+      await this.$store.dispatch('todo/deleteTodosMany', ids.map(id => ({ taskId: id })))
+      // Batch delete shares the single-item semantics: 5s undo toast; the single pre-batch snapshot guarantees one undo restores the whole group
       if (this.$message && window.Vue) {
         const undo = () => this.$store.dispatch('todo/undo').then(() => this.$message.closeAll())
         this.$message({

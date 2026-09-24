@@ -2,7 +2,7 @@
 /* Task read commands extracted verbatim from cli/lib.js (2026-09-23, #132 skipped P3-11 continuation:
    god-module split). Pure move — no behavior change; deps injected by lib.js so the db/bus seam stays single. */
 module.exports = (deps) => {
-  const { open, CliError, parseDate, dayjs } = deps
+  const { open, CliError, parseDate, dayjs, normKey } = deps // F-B5: keyword normalization single source (NFKC-aligned with the renderer's search)
 /* ================= Read commands ================= */
 function listTodos (opts = {}) {
   const q = { deleted: 0, orderBy: 'scheduledDay ASC, sort ASC' }
@@ -34,10 +34,9 @@ function resolveCategory (input) {
   if (!cats.length) throw new CliError('no categories exist (categories are created in the UI, stored in the SQLite categories table)', 'NO_CATEGORIES')
   const byId = cats.find(c => String(c.categoryId) === String(input))
   if (byId) return byId.categoryId
-  // Strip zero-width/full-width whitespace (IME candidates occasionally contain zero-width chars)
-  const norm = v => String(v).toLowerCase().replace(/[\s\u00A0\u3000\u200B\u2003]/g, '')
-  const kw = norm(input)
-  const hits = cats.filter(c => norm(c.categoryName || '').includes(kw))
+  // F-B5: normalization injected from cli/lib.js (NFKC + casefold + whitespace strip, single source)
+  const kw = normKey(input)
+  const hits = cats.filter(c => normKey(c.categoryName || '').includes(kw))
   if (hits.length === 1) return hits[0].categoryId
   if (hits.length > 1) throw new CliError(`category "${input}" is ambiguous: ${hits.map(c => c.categoryName).join(", ")}`, 'AMBIGUOUS_MATCH')
   throw new CliError(`category not found: "${input}" (available: ${cats.map(c => c.categoryName).join(", ")})`, 'CATEGORY_NOT_FOUND')

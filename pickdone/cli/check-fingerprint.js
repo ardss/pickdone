@@ -8,8 +8,11 @@ const fs = require('fs')
 const path = require('path')
 
 const ROOT = path.join(__dirname, '..')
-const SCAN_DIRS = ['src', 'renderer', 'cli', 'assets/css', 'browser-dev']
-const EXT = new Set(['.js', '.css', '.json', '.html', '.vue'])
+// 2026-09-23 (domain-5): + shared/ — since wave #132 the shared/*.mjs modules are part of the
+// shipped surface (repeat.js/nlDate.js/db.js/cli/nl-date.cjs all import them), so eight fingerprint
+// rules had ZERO coverage there; + .mjs extension for the same reason.
+const SCAN_DIRS = ['src', 'renderer', 'cli', 'assets/css', 'browser-dev', 'shared']
+const EXT = new Set(['.js', '.mjs', '.cjs', '.css', '.json', '.html', '.vue'])
 
 // Fingerprint classes (regex + description). To add a new fingerprint pattern: add a line here.
 const RULES = [
@@ -40,7 +43,17 @@ function walk (dir) {
     }
   }
 }
-SCAN_DIRS.forEach(d => { const p = path.join(ROOT, d); if (fs.existsSync(p)) walk(p) })
+// 2026-09-23 (domain-5): fail CLOSED on a missing scan dir — the forEach silently skipped absent
+// dirs, so a rename/move of a scan root (or a typo here) would quietly shrink the scan surface to
+// nothing while the gate printed green (same rot family fixed for media-lang/op-feedback in #133).
+SCAN_DIRS.forEach(d => {
+  const p = path.join(ROOT, d)
+  if (!fs.existsSync(p)) {
+    console.error(`✗ 指纹扫描面塌缩：扫描目录缺失 "${d}"（${p}）——登记的扫描面必须逐目录存在，拒绝静默跳过`)
+    process.exit(1)
+  }
+  walk(p)
+})
 
 if (hits.length) {
   console.error(`✗ 检出 ${hits.length} 处指纹（发布阻塞）：`)

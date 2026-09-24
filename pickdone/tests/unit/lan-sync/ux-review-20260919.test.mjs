@@ -211,7 +211,7 @@ test('P1-8: attachment pull fires onArrived per landed file (renderer arrival re
   const files = new Map()
   const puller = createAttachmentPuller({
     send: () => {},
-    getKeys: () => ['k1'],
+    getKeys: () => ['k1.png'],
     onArrived: key => arrived.push(key),
     deps: {
       exists: k => files.has(k),
@@ -221,14 +221,14 @@ test('P1-8: attachment pull fires onArrived per landed file (renderer arrival re
       hashFn: buf => require('node:crypto').createHash('sha256').update(buf).digest('hex'),
     },
   })
-  // Fake the sender's answer for key k1
+  // Fake the sender's answer for key k1.png
   const content = Buffer.from('hello attachment')
   const hash = require('node:crypto').createHash('sha256').update(content).digest('hex')
   puller.maybeStart(() => {}, () => {})
-  assert.equal(puller.onMessage({ type: 'att-meta', id: 'k1', size: content.length, hash }), true)
-  assert.equal(puller.onMessage({ type: 'att-chunk', id: 'k1', index: 0, data: content.toString('base64'), final: true }), true)
+  assert.equal(puller.onMessage({ type: 'att-meta', id: 'k1.png', size: content.length, hash }), true)
+  assert.equal(puller.onMessage({ type: 'att-chunk', id: 'k1.png', index: 0, data: content.toString('base64'), final: true }), true)
   assert.equal(puller.onMessage({ type: 'att-end', sent: 1, missing: 0 }), false)
-  assert.deepEqual(arrived, ['k1'], 'the host must be told the file landed so the UI can refresh')
+  assert.deepEqual(arrived, ['k1.png'], 'the host must be told the file landed so the UI can refresh')
 })
 
 test('P1-8: open-file with a missing local attachment kicks an immediate sync round', () => {

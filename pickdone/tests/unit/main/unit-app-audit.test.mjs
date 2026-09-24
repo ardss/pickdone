@@ -34,6 +34,7 @@ afterEach(() => {
 })
 
 function readLines () {
+  appAudit.flushNow() // F-B7: entries are buffered and flushed async in production — drain before asserting
   const file = path.join(tmpDir, 'cli-audit.jsonl')
   if (!fs.existsSync(file)) return []
   return fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l))
@@ -194,10 +195,12 @@ test('category and filter ops keep the CLI target conventions', () => {
 test('rotation triggers at the injected tiny threshold and rolls to a timestamped archive', () => {
   appAudit.setMaxBytes(1) // any content exceeds 1 byte
   appAudit.recordAppOp('hardDelete', 'first') // no file yet → appended directly
+  appAudit.flushNow() // F-B7: drain the buffer (production flushes async / at quit)
   assert.equal(readLines().length, 1)
   assert.equal(archiveNames().length, 0)
 
   appAudit.recordAppOp('hardDelete', 'second') // size > threshold → roll, then append
+  appAudit.flushNow()
   let archives = archiveNames()
   assert.equal(archives.length, 1)
   assert.equal(readArchiveFirstTarget(archives[0]), 'first') // the rolled file holds the old content
@@ -207,6 +210,7 @@ test('rotation triggers at the injected tiny threshold and rolls to a timestampe
   // Dual-writer regression (2026-09-10 P2): a later rotation must NOT destroy the previous archive.
   // The old fixed `.1` target unlinked it here — the 5MB archive the other process had just renamed.
   appAudit.recordAppOp('hardDelete', 'third')
+  appAudit.flushNow()
   archives = archiveNames()
   assert.equal(archives.length, 2)
   assert.equal(readArchiveFirstTarget(archives[0]), 'first')
@@ -216,7 +220,7 @@ test('rotation triggers at the injected tiny threshold and rolls to a timestampe
 
 test('rotation pruning keeps at most the 4 newest timestamped archives', () => {
   appAudit.setMaxBytes(1)
-  for (const label of ['a', 'b', 'c', 'd', 'e', 'f']) appAudit.recordAppOp('hardDelete', label)
+  for (const label of ['a', 'b', 'c', 'd', 'e', 'f']) { appAudit.recordAppOp('hardDelete', label); appAudit.flushNow() }
   // 6 appends → 5 rotations (every append after the first sees size > 1 byte) → pruned to 4
   const archives = archiveNames()
   assert.equal(archives.length, 4)

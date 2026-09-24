@@ -106,7 +106,8 @@ export default {
       deleteNoSelection: '请先选中一个任务',
       pinIgnoredSort: '当前排序不是自定义排序，置顶/取消置顶不生效',
       pinned: '已置顶：{name}',
-      unpinned: '已取消置顶：{name}'
+      unpinned: '已取消置顶：{name}',
+      actionFailedMsg: '操作失败：'
     },
     layout: {
       navToday: '今日待办',

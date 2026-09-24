@@ -185,7 +185,7 @@ function makePuller (extra = {}) {
     maxBytes: 15, // tiny round budget so double reservation would visibly overflow
     deps: { exists: () => false, size: () => 0, read: () => Buffer.alloc(0), writeAtomic: (k, b) => { writes.push({ k, b }); return true }, hashFn: () => 'h1' },
     send: m => { sent.push(m); return true },
-    getKeys: () => ['a'],
+    getKeys: () => ['a.txt'],
     onArrived: () => {},
     ...extra,
   })
@@ -195,12 +195,12 @@ function makePuller (extra = {}) {
 test('P2-2: duplicate att-meta mid-transfer reuses the open session (budget reserved once)', () => {
   const { puller, writes } = makePuller()
   assert.equal(puller.maybeStart(() => {}, () => {}), true, 'att-req sent')
-  puller.onMessage({ type: 'att-meta', id: 'a', size: 10, hash: 'h1' })
-  puller.onMessage({ type: 'att-chunk', id: 'a', index: 0, data: Buffer.from('hello').toString('base64') })
+  puller.onMessage({ type: 'att-meta', id: 'a.txt', size: 10, hash: 'h1' })
+  puller.onMessage({ type: 'att-chunk', id: 'a.txt', index: 0, data: Buffer.from('hello').toString('base64') })
   // duplicate meta for the in-flight file: the OLD path re-opened the session (re-reserved 10 of
   // the 15-byte budget and wiped the assembly map); the new path must be a no-op.
-  puller.onMessage({ type: 'att-meta', id: 'a', size: 10, hash: 'h1' })
-  puller.onMessage({ type: 'att-chunk', id: 'a', index: 1, data: Buffer.from('world').toString('base64'), final: true })
+  puller.onMessage({ type: 'att-meta', id: 'a.txt', size: 10, hash: 'h1' })
+  puller.onMessage({ type: 'att-chunk', id: 'a.txt', index: 1, data: Buffer.from('world').toString('base64'), final: true })
   assert.equal(writes.length, 1, 'file written exactly once')
   assert.equal(writes[0].b.toString(), 'helloworld', 'assembly NOT reset by the duplicate meta (chunks survived)')
 })
@@ -208,12 +208,12 @@ test('P2-2: duplicate att-meta mid-transfer reuses the open session (budget rese
 test('P2-2: duplicate att-meta after completion is ignored (no second write / re-reservation)', () => {
   const { puller, writes } = makePuller()
   puller.maybeStart(() => {}, () => {})
-  puller.onMessage({ type: 'att-meta', id: 'a', size: 10, hash: 'h1' })
-  puller.onMessage({ type: 'att-chunk', id: 'a', index: 0, data: Buffer.from('helloworld'), final: true })
+  puller.onMessage({ type: 'att-meta', id: 'a.txt', size: 10, hash: 'h1' })
+  puller.onMessage({ type: 'att-chunk', id: 'a.txt', index: 0, data: Buffer.from('helloworld'), final: true })
   assert.equal(writes.length, 1)
   // a second meta after completion would re-open + re-reserve under the old logic
-  puller.onMessage({ type: 'att-meta', id: 'a', size: 10, hash: 'h1' })
-  puller.onMessage({ type: 'att-chunk', id: 'a', index: 0, data: Buffer.from('helloworld'), final: true })
+  puller.onMessage({ type: 'att-meta', id: 'a.txt', size: 10, hash: 'h1' })
+  puller.onMessage({ type: 'att-chunk', id: 'a.txt', index: 0, data: Buffer.from('helloworld'), final: true })
   assert.equal(writes.length, 1, 'still exactly one write — the duplicate was ignored')
 })
 

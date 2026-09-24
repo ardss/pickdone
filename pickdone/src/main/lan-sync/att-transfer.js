@@ -20,6 +20,24 @@
  */
 
 const ENTRY_CHUNK_BYTES = 1024 * 1024
+const path = require('node:path')
+
+// Domain-1 F-A2 (2026-09-23): extension whitelist on RECEIVED files. The upload door
+// (attachments.js saveAttachment) enforces ALLOWED_EXT, but the LAN pull used to land ANY
+// hash-verified file — a peer holding the pairing secret could write script-capable files
+// (e.g. .svg / .html) into userData/files, bypassing the D6 "svg out of the whitelist" root
+// fix (open-file hands them to shell.openPath → OS browser executes outside the app CSP).
+// Reuses the SAME Set instance as the upload door (single whitelist, two doors).
+function extAllowed (key) {
+  let allowed = null
+  try { allowed = require('../attachments').ALLOWED_EXT } catch { allowed = null }
+  if (!allowed) return false // whitelist unavailable: fail closed
+  // Same trailing-dot/space strip as saveAttachment: the filesystem drops them at creation,
+  // so validation and persistence must see the same extension ('x.png.' must not pass as 'x.')
+  const base = path.basename(String(key)).replace(/[. ]+$/, '')
+  const ext = path.extname(base).slice(1).toLowerCase()
+  return !!ext && allowed.has(ext)
+}
 // Single-file ceiling (mirrors the upload handler's 50MB limit): the sender refuses to
 // serve anything larger and the receiver refuses to accept anything larger.
 const MAX_FILE_BYTES = 50 * 1024 * 1024
@@ -102,6 +120,9 @@ function defaultDeps () {
       // suffix (mirrors attachments.js nextFreePath semantics).
       // P2-b: the tmp file is unlinked in finally — a rename failure used to leave .att-tmp-*
       // residue that accumulated across retries.
+      // F-A2 defense-in-depth: the whitelist also gates the disk layer itself, so a future
+      // caller bypassing the puller cannot land a script-capable file (extAllowed fail-closed).
+      if (!extAllowed(key)) throw new Error('attachment: extension not allowed')
       const dst = path.join(attachDir(), path.basename(String(key)))
       const tmp = `${dst}.att-tmp-${Date.now()}-${Math.floor(Math.random() * 1e6)}`
       let finalDst = dst
@@ -394,6 +415,11 @@ function createAttachmentPuller (opts = {}) {
         const id = current.id
         if (sha256Hex(full, opts.deps && opts.deps.hashFn) !== current.hash) {
           try { require('electron-log').warn('[LanSync] attachment hash mismatch, skipped:', id) } catch { /* noop */ }
+          markFailed(id)
+        } else if (!extAllowed(id)) {
+          // F-A2: extension outside the shared whitelist → protocol-level refusal: the file
+          // lands in the per-session failed-set (no retry loop), nothing touches the disk.
+          try { require('electron-log').warn('[LanSync] attachment extension not allowed, skipped:', id) } catch { /* noop */ }
           markFailed(id)
         } else {
           try { d.writeAtomic(id, full); session.failed.delete(id) } catch (e) {

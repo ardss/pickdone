@@ -16,7 +16,12 @@ const CN_RE = /[\u4e00-\u9fff]/
 // had started rotting (new hardcoded copy there would have been permanently waved through).
 const KNOWN_DEBT = []
 const VISIBLE_RE = /\$?(message|msgbox|confirm|alert|success|error|warning|info)\s*\(|placeholder=|aria-label=|\btitle=|\blabel=/i
-const IGNORE_FILES = /i18n[/\\]|check-i18n/
+// 2026-09-23 (domain-5): shared/*.mjs date/repeat PARSING rules legitimately contain Chinese
+// string literals (nl-date-core's 今天/明天 rule set, repeat-core's '天'/'周'/'月'/'年' legacy
+// enum map) — they are parser inputs, not user-visible copy. Whitelisted here with a trace;
+// per gate policy, if a whitelisted file still produces a VISIBLE_RE hit it must be reviewed
+// line-by-line and confirmed to be a parsing rule before extending this list.
+const IGNORE_FILES = /i18n[/\\]|check-i18n|shared[/\\](nl-date-core|parse-date|repeat-core)\.mjs$/
 
 function scanFile (p, text, ignoreDebt) {
   const hits = []
@@ -33,16 +38,23 @@ function scanFile (p, text, ignoreDebt) {
   return hits
 }
 
+// 2026-09-23 (domain-5): both modes used to accept only .js/.vue, structurally excluding the
+// shipped shared/*.mjs surface; --all also walked ONLY renderer/js while claiming whole-repo
+// coverage. Now .mjs is accepted everywhere and --all walks shared/ too (incremental picks it
+// up via the same extension filter below), so a worktree with ONLY shared/ dirty files can no
+// longer green-exit through the self-check (which counts the same extensions).
+const SCAN_EXT = f => /\.(m?js|vue)$/.test(f)
 let files = []
 if (process.argv.includes('--all')) {
   const walk = d => {
     for (const f of require('fs').readdirSync(d)) {
       const p = path.join(d, f)
       if (require('fs').statSync(p).isDirectory()) { if (!/node_modules|vendor|i18n/.test(f)) walk(p); continue }
-      if ((f.endsWith('.js') || f.endsWith('.vue')) && !IGNORE_FILES.test(p)) files.push(p)
+      if (SCAN_EXT(f) && !IGNORE_FILES.test(p)) files.push(p)
     }
   }
   walk(path.join(ROOT, 'renderer', 'js'))
+  walk(path.join(ROOT, 'shared'))
 } else {
   const gitOpts = { cwd: ROOT, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }
   // 2026-09-23 P2 fix: the previous bare `git diff --name-only HEAD` printed REPO-ROOT-relative paths
@@ -53,14 +65,15 @@ if (process.argv.includes('--all')) {
   const diff = execFileSync('git', ['diff', '--name-only', '--relative=.', 'HEAD'], gitOpts)
     + '\n' + execFileSync('git', ['ls-files', '--others', '--exclude-standard'], gitOpts) // 未跟踪新文件一并查,否则新建文件绕过检查(2026-09-05 复核 P2)
   files = diff.split('\n').map(f => f.trim().replace(/\\/g, '/'))
-    .filter(f => (f.endsWith('.js') || f.endsWith('.vue')) && !f.startsWith('../'))
+    .filter(f => SCAN_EXT(f) && !f.startsWith('../'))
     .map(f => path.join(ROOT, f)).filter(p => { try { return require('fs').statSync(p).isFile() } catch { return false } })
   if (!files.length) {
     // Self-check (假绿防线): the worktree DOES hold dirty js/vue files but none were scanned — that is
     // scan-surface collapse (filter/normalization rot), not a clean pass. Fail red instead.
+    // Same extension set as the scan filter, so dirty shared/*.mjs files count here too.
     const dirtyJs = execFileSync('git', ['status', '--porcelain'], gitOpts).split('\n').filter(l => {
       const f = l.slice(3).trim().replace(/\\/g, '/')
-      return (f.endsWith('.js') || f.endsWith('.vue')) && !f.endsWith('/')
+      return SCAN_EXT(f) && !f.endsWith('/')
     })
     if (dirtyJs.length) {
       console.error('✗ 增量扫描面塌缩：工作树有 ' + dirtyJs.length + ' 个 js/vue 脏文件却一个都没进扫描（路径归一化失效），拒绝假绿')

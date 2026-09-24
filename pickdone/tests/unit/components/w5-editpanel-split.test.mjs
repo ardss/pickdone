@@ -56,11 +56,11 @@ test('split: restoreFromBin drains only subtasks/imgs/files through takeDirty (o
 })
 
 test('split: the attachmentUrlPresent pure block stays in EditPanel.vue (a11y test anchor position)', () => {
-  const src = read(PARENT)
-  const s = src.indexOf('[component-fixes] pure-start')
-  const e = src.indexOf('[component-fixes] pure-end')
-  assert.ok(s >= 0 && e > s, 'pure markers present')
-  assert.match(src.slice(s, e), /function attachmentUrlPresent \(row, url\)/)
+  // Moved verbatim to utils/attachmentRefs.js (structure-size ratchet); the parent imports it
+  // and the pure-helper a11y test imports the util module directly.
+  const util = read('renderer/js/utils/attachmentRefs.js')
+  assert.match(util, /export function attachmentUrlPresent \(row, url\)/)
+  assert.match(read(PARENT), /import \{ attachmentUrlPresent \} from '\.\.\/utils\/attachmentRefs\.js'/)
 })
 
 test('split: parent still gates the deps block on the two-condition devMode and composes the children', () => {

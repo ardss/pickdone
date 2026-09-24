@@ -5,8 +5,10 @@
  *    Escape behavior (dialogA11y.onKeydown returns for INPUT/TEXTAREA), so Esc did nothing.
  *  - The mixin's header comment claimed callers must listen for a 'dialogEscape' event — no such
  *    event is ever emitted or listened to anywhere; the real contract is close()/onCancel/$emit('close').
- *  - The six `?` hint marks (span.hint-q) carried only :title — keyboard users could not focus
- *    them and screen readers got no accessible name.
+ *  - The six `?` hint marks (span.hint-q) carried only :title — first made focusable
+ *    (role=button), then demoted to role=img + aria-label by the maint/dw F-D4 round: a button
+ *    with zero activation logic is a lie to screen readers, image semantics + accessible name
+ *    is the honest shape.
  * Run: node --test tests/unit/renderer/dw2-dialog-a11y-followups.test.mjs
  */
 import { test } from 'node:test'
@@ -55,8 +57,11 @@ test("dialogA11y: header comment states the real Escape contract; no 'dialogEsca
   assert.equal(out, '', 'dialogEscape must not appear anywhere under pickdone/renderer/')
 })
 
-test('hint-q: all six ? marks are focusable with an accessible name (role=button + tabindex + aria-label)', () => {
-  // EpTomato.vue hosts the ledger-row hint since the domain-2 EditPanel split
+test('hint-q: all six ? marks carry an accessible name and NO fake-button semantics (role=img, F-D4 demotion)', () => {
+  // EpTomato.vue hosts the ledger-row hint since the domain-2 EditPanel split.
+  // maint/dw wave (2026-09-24) F-D4: the marks were demoted from role=button (zero click/keydown
+  // handlers — Space hit the global role activator calling .click() into the void) to honest
+  // role=img + aria-label; this assertion was updated by the demoting round to pin the new shape.
   const files = [`${C}/EditPanel.vue`, `${C}/edit-panel/EpTomato.vue`, `${C}/RepeatModal.vue`]
   let seen = 0
   for (const f of files) {
@@ -64,8 +69,9 @@ test('hint-q: all six ? marks are focusable with an accessible name (role=button
     const spans = src.match(/<span class="hint-q"[^>]*><\/span>/g) || src.match(/<span class="hint-q"[^>]*>\?<\/span>/g) || []
     assert.ok(spans.length > 0, `${f} still renders its hint-q marks`)
     for (const span of spans) {
-      assert.match(span, /role="button"/)
-      assert.match(span, /tabindex="0"/)
+      assert.match(span, /role="img"/, 'demoted to honest image semantics')
+      assert.doesNotMatch(span, /role="button"/, 'the dead button role must not come back')
+      assert.doesNotMatch(span, /tabindex/, 'no fake tab stop without activation')
       assert.match(span, /:aria-label="\$t\('[^']+'\)"/, 'aria-label bound to the same i18n key as title')
       seen++
     }

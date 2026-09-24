@@ -97,6 +97,9 @@ export function writeCriticalBackupCore (ctx, { state, rootState }) {
   }
   // Debounced backup: structure matches the reference critical-state-backup.json
   clearTimeout(ctx._cbTimer)
-  // 5s debounce: full stringify + IPC disk write is expensive with thousands of tasks; 800ms would fire on nearly every continuous edit
-  ctx._cbTimer = setTimeout(writeNow, 800)
+  // F-C5 (maint/dw wave3): aligned to the design value this comment always stated (5s) — the timer
+  // had drifted to 800ms since 0.1.0, so every edit pause >800ms fired a full buildBackupDump
+  // (2-5MB stringify) + IPC + main-process fsync. The quit flush still guarantees the final
+  // snapshot is written on exit, so 5s costs nothing in durability.
+  ctx._cbTimer = setTimeout(writeNow, 5000)
 }

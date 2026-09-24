@@ -22,6 +22,8 @@
  */
 
 const KEY_PREFIX = 'tomatoRunAnnounce.'
+// F-A4: shared text sanitizer (pure Node, no Electron) — see buildAnnounceValue.
+const { sanitizeText } = require('./sanitize')
 // Staleness TTL factor (spec): an entry older than 2x its planned duration is dead even
 // if startedAt+plannedSec is still in the future (covers clock skew between peers).
 const STALE_AGE_FACTOR = 2
@@ -48,17 +50,29 @@ function isAnnounceKey (key) { return String(key || '').startsWith(KEY_PREFIX) }
  */
 function buildAnnounceValue ({ deviceId, deviceName, status, startedAt, plannedSec, attachTodoId, attachTodoTitle, at } = {}) {
   const now = Number(at) || Date.now()
+  // Review follow-up to F-A4 (2026-09-24): deviceName/deviceId are PEER-CONTROLLED too (a
+  // device names itself at pairing) and deviceName is rendered verbatim in peer UI chips —
+  // sanitize them through the same choke point as the attach fields (transport.js
+  // cleanDeviceName caps names at 40 for the same log-forging reason). parseAnnounce re-runs
+  // this builder, so remote values are re-sanitized on receive; legit ids/names are
+  // alphanumeric + CJK and pass through unchanged.
   const base = {
-    deviceId: String(deviceId || ''),
-    deviceName: String(deviceName || ''),
+    deviceId: sanitizeText(String(deviceId || ''), 128),
+    deviceName: sanitizeText(String(deviceName || ''), 40),
     status: status === 'running' ? 'running' : 'idle',
     startedAt: Number(startedAt) || 0,
     plannedSec: Math.max(0, Number(plannedSec) || 0),
     at: now,
   }
   if (base.status === 'running' && attachTodoId) {
-    base.attachTodoId = String(attachTodoId)
-    base.attachTodoTitle = String(attachTodoTitle || '')
+    base.attachTodoId = sanitizeText(String(attachTodoId || ''), 120) // same clamp as the title (ids are short; unbounded String() was the same injection surface)
+    // Domain-1 F-A4 (2026-09-23): the title used to pass through bare String() — an
+    // unclamped 32MB title written into meta then kickRound-synced to EVERY peer (single row
+    // blowing the 32MB line-framing budget) plus control-char injection into peer UIs/logs.
+    // sanitizeText (single source, same as system.js/transport.js) strips control/RTL/bidi
+    // chars and truncates. parseAnnounce re-runs buildAnnounceValue, so REMOTE announce
+    // values are re-sanitized on this side too — one choke point covers both directions.
+    base.attachTodoTitle = sanitizeText(String(attachTodoTitle || ''), 120)
   }
   return base
 }

@@ -97,7 +97,13 @@ module.exports = function todoHandlers (ctx) {
     // P2-3 (R4 2026-09-21): the pairing code routes the whole DB to whoever holds it — same
     // capability class as the pairing-establishment ops. Verified: the only renderer caller is
     // SettingsSyncTab.vue (main-window settings page, via utils/lanSync.getPairingCode).
-    'syncGetPairingCode'])
+    'syncGetPairingCode',
+    // Domain-1 F-A3 (2026-09-23): settings-row writes join the main-window set. They were
+    // whitelisted for ANY window — a trapped float window could write arbitrary settings_rows
+    // (habits/settings rows) and LWW-fan the row out to every peer. The legitimate surface is
+    // the main-window settings page (same class as syncSetPeerAlias; grep confirmed the only
+    // renderer route is utils/commandBus.js 'setting.put*' from main-window stores).
+    'settingsRowPut', 'settingsRowPutMany', 'settingsRowDelete'])
 
   // Shared execution core for BOTH routes into the bus era:
   //   'todo-db:call'   — legacy op-keyed channel (reads pass through untouched; writes are

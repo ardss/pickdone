@@ -200,7 +200,28 @@ export function sanitizeSettingsPatch (patch, current) {
     if (Array.isArray(def) && Array.isArray(v)) out[k] = v.filter(e => typeof e === 'string' && e.trim() !== '')
     else out[k] = v
   }
-  return out
+  return clampNumericSettings(out)
+}
+
+/** F-C3 (maint/dw wave3, pure): range clamp for numeric settings — sanitizeSettingsPatch used to do
+ *  type validation only, so an inbound patch like {tomatoTime: 9999, restTime: 0} passed straight
+ *  through the mirror chain (mirrorTomatoLedger → tomato/patch) into the RUNNING countdown and was
+ *  persisted to LS + db.settingsState + config.json. The ranges are the SHARED manifest table
+ *  (domain2's shared/settings-manifest.mjs — same source cli/lib.js enforces on the CLI side, and
+ *  the same values the SettingsModal :min/:max render; wave3 review: the wave4 TODO to converge is
+ *  now fulfilled, no second copy to drift). */
+import { SETTINGS_MANIFEST } from '../../../shared/settings-manifest.mjs'
+export const SETTING_RANGES = SETTINGS_MANIFEST.ranges
+export function clampNumericSettings (patch) {
+  if (!patch || typeof patch !== 'object') return patch
+  for (const k of Object.keys(SETTING_RANGES)) {
+    const v = patch[k]
+    if (typeof v !== 'number' || !Number.isFinite(v)) continue
+    const { min, max } = SETTING_RANGES[k]
+    if (v < min) patch[k] = min
+    else if (v > max) patch[k] = max
+  }
+  return patch
 }
 
 /** Y6 pure helper (unit-tested): union-merge two {tourKey: ts} ledgers keeping the max ts per key. */
@@ -297,7 +318,7 @@ function persist (state) {
   }, 2000)
 }
 
-import { mirrorToDb, restoreFromDb } from '../utils/dbMirror.js'
+import { mirrorToDb, restoreFromDb, DB_MIRROR_ERROR } from '../utils/dbMirror.js'
 
 // P1 (D5 2026-09-20) quit-flush: direct `commit('settings/updateSettings')` paths (component shortcuts,
 // CLI-watcher apply, LAN-sync) bypass the `settings/update` action, and both the 150ms LS timer and the
@@ -358,7 +379,7 @@ export default {
       persist(state)
     },
     restore (state, saved) {
-      const merged = coerceNumericSettings({ ...DEFAULT_SETTINGS, ...(saved || {}) })
+      const merged = clampNumericSettings(coerceNumericSettings({ ...DEFAULT_SETTINGS, ...(saved || {}) }))
       if (merged.shortcutKeySettings === DEFAULT_SETTINGS.shortcutKeySettings) merged.shortcutKeySettings = { ...DEFAULT_SHORTCUTS }
       Object.assign(state, merged)
       persist(state)
@@ -438,6 +459,13 @@ export default {
         }
       } catch (e) { /* degraded host: keep defaults */ }
       const db = await restoreFromDb('db.settingsState')
+      // F-C4: a READ ERROR (bridge present but getMeta rejected / blob unparseable) is NOT "no
+      // mirror" — the old code fell through to the mirrorToDb below and drowned a possibly newer
+      // DB copy under the in-memory defaults. On error: warn and leave both sides untouched.
+      if (db === DB_MIRROR_ERROR) {
+        console.warn('[settings] initFromDb: DB mirror read failed this startup — skipping both the restore and the write-back so the DB copy is preserved')
+        return
+      }
       let lsAt = 0
       try { lsAt = Number(localStorage.getItem(MIRROR_AT_KEY) || 0) } catch (e) { /* empty */ }
       if (!db || typeof db !== 'object' || (db._savedAt || 0) <= lsAt) {
@@ -450,9 +478,19 @@ export default {
       const patch = {}
       for (const k of Object.keys(db)) {
         if (k === '_savedAt') continue
+      // F-C2 (maint/dw wave3): DEFAULT_SETTINGS whitelist — the old loop adopted EVERY db key
+      // (only skipping _savedAt), so a polluted mirror blob (habits-family keys such as
+      // schemaV/habits/moments riding db.settingsState) landed verbatim in the live settings
+      // state and was then re-persisted by persist()/mirrorBlob to LS + DB + backup exports.
+      // Same unknown-key policy as sanitizeSettingsPatch. The habits-family field SET is domain2's
+      // shared/settings-families.mjs (HABITS_EXCLUSIVE_FIELDS — landed 82fb2e95, no longer a
+      // wave4 TODO); the whitelist makes those keys unreachable here, and a unit test pins that
+      // the family can never re-enter DEFAULT_SETTINGS (single-source drift guard).
+      if (!(k in DEFAULT_SETTINGS)) continue
         if (canonicalJson(db[k]) !== canonicalJson(state[k])) patch[k] = db[k]
       }
       coerceNumericSettings(patch)
+      clampNumericSettings(patch) // F-C3: the DB-mirror restore path is a trust boundary too
       if (Object.keys(patch).length) {
         // F3 (2026-09-21): the config-consumed key set must ALSO ride the `update` action. main's
         // 'notify-settings-updated' writes config.json (the sole source windows.js consumes for

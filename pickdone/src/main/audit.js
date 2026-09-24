@@ -17,6 +17,10 @@ const path = require('path')
 const fs = require('fs')
 const dayjs = require('dayjs')
 const { userDataDir } = require('./user-dir.js') // P3-9 (dw wave): single source — same env priority chain cli/lib.js reads
+// F-B6/F-B8 (dw wave 3): rotation + snapshot vocabulary single-sourced with the CLI (shared/audit-rotate.cjs) —
+// both ends rotate the SAME cli-audit.jsonl from different processes, so the CLI now runs this same
+// non-destructive timestamped rotation, and both share one SNAPSHOT_FIELDS/snapshot definition.
+const { rotateArchive, snapshot, capContent } = require('../../shared/audit-rotate.cjs')
 
 const MAX_BYTES_DEFAULT = 5 * 1024 * 1024
 let maxBytes = MAX_BYTES_DEFAULT
@@ -28,8 +32,11 @@ let resolveDir = defaultDirResolver
 function setDirResolver (fn) { if (typeof fn === 'function') resolveDir = fn }
 /** Test hook: shrink the rotation threshold so the boundary is reachable with tiny writes */
 function setMaxBytes (n) { if (Number.isFinite(n) && n > 0) maxBytes = n }
-/** Test hook: restore default resolver and threshold */
-function resetForTests () { resolveDir = defaultDirResolver; maxBytes = MAX_BYTES_DEFAULT }
+/** Test hook: restore default resolver and threshold (flushes the buffer first so assertions see
+ *  every line; dirReady is reset so a re-pointed resolver gets a fresh mkdir; writeChain is reset
+ *  so a pending async drain from a previous test cannot land stale lines into a NEW directory
+ *  after this reset — test-seam-only ordering hazard, production has no flushNow/pending mix). */
+function resetForTests () { flushNow(); writeChain = Promise.resolve(); resolveDir = defaultDirResolver; maxBytes = MAX_BYTES_DEFAULT; dirReady = false }
 
 function auditFile () {
   return path.join(resolveDir(), 'cli-audit.jsonl')
@@ -87,29 +94,15 @@ function shouldAudit (op, params) {
 }
 
 // Fields whose change makes an upsert a real 'edit' (everything except subtasks) — mirrors the CLI's
-// semantic snapshot interest (cli/audit.js SNAPSHOT_FIELDS) minus subtasks itself.
+// semantic snapshot interest (cli/audit.js SNAPSHOT_FIELDS, now shared/audit-rotate.cjs) minus subtasks itself.
 const EDIT_FIELDS = [
   'taskContent', 'taskDescribe', 'complete', 'completedAt', 'todoTime', 'reminderTime',
   'reminderOffsets', 'reminderExtra', 'dayStart', 'deletedAt', 'priority', 'deadlineTs',
   'important', 'urgent', 'categoryId', 'repeatId', 'delete', 'status'
 ]
 
-// Semantic snapshot fields kept in changes (same list as cli/audit.js: enough to answer "what changed";
-// large fields like image/attachments excluded so lines stay small)
-const SNAPSHOT_FIELDS = [
-  'taskContent', 'taskDescribe', 'complete', 'completedAt', 'todoTime', 'reminderTime',
-  'reminderOffsets', 'reminderExtra', 'dayStart', 'deletedAt', 'priority', 'deadlineTs', 'important', 'urgent',
-  'categoryId', 'repeatId', 'subtasks', 'delete', 'status', 'updateTime'
-]
-
-function snapshot (t) {
-  if (!t) return null
-  const o = {}
-  for (const k of SNAPSHOT_FIELDS) {
-    if (t[k] !== undefined && t[k] !== null && t[k] !== '') o[k] = t[k]
-  }
-  return Object.keys(o).length ? o : null
-}
+// F-B6: SNAPSHOT_FIELDS + snapshot() moved verbatim to shared/audit-rotate.cjs (single source with
+// cli/audit.js, with the F-B8 content cap applied inside snapshot()).
 
 function sameValue (a, b) { return JSON.stringify(a) === JSON.stringify(b) }
 
@@ -176,7 +169,8 @@ function asId (v) { return v == null ? null : String(v) }
 function target (taskId, content) {
   const t = {}
   if (taskId != null) t.taskId = String(taskId)
-  if (content != null && content !== '') t.content = String(content)
+  // F-B8: target content is capped like snapshot content (audit must not be a plaintext history)
+  if (content != null && content !== '') t.content = capContent(content)
   return Object.keys(t).length ? t : null
 }
 
@@ -259,51 +253,111 @@ function noteFor (op, params, result) {
   } catch (e) { return undefined }
 }
 
-/* ================= append (mirrors cli/audit.js: rotation before append, sync write) ================= */
+/* ================= append (F-B6 rotation single source; F-B7 buffered async flush) ================= */
 
-/** Keep at most the 4 newest timestamped archives of `file`; delete the rest (best-effort). */
-function pruneArchives (file) {
-  const prefix = path.basename(file) + '.'
-  const archives = fs.readdirSync(path.dirname(file))
-    .filter(n => n.startsWith(prefix) && /^\d+$/.test(n.slice(prefix.length)))
-    .sort((a, b) => Number(a.slice(prefix.length)) - Number(b.slice(prefix.length)))
-  for (const name of archives.slice(0, Math.max(0, archives.length - 4))) {
-    try { fs.unlinkSync(path.join(path.dirname(file), name)) } catch { /* best-effort */ }
+/** F-B7 (dw wave 3): appendEntry used to run mkdirSync + statSync + appendFileSync on EVERY audited
+ *  op (handlers/todo.js fires per write op) — three blocking syscalls on the main-process event
+ *  loop per write, with the mkdirSync pure redundancy. Now: directory ensured once per process,
+ *  entries buffered in-process and drained as ONE fs.appendFile batch on a short timer (threadpool,
+ *  non-blocking), rotation checked once per flush instead of per entry. Durability: quit-flush via
+ *  process 'exit' (synchronous — async writes cannot complete during exit) plus an explicit
+ *  flushNow() seam for tests/upgrade paths. A failed async batch retries once synchronously; if
+ *  that fails too the lines are dropped by the fire-and-forget contract (audit never blocks writes).
+ */
+const FLUSH_DELAY_MS = 100
+const FLUSH_BATCH_MAX = 64
+const buffer = []
+let flushTimer = null
+let dirReady = false
+
+function ensureDir () {
+  if (dirReady) return
+  try { fs.mkdirSync(path.dirname(auditFile()), { recursive: true }) } catch { /* best-effort */ }
+  dirReady = true
+}
+
+function rotateIfNeeded () {
+  try {
+    const st = fs.statSync(auditFile())
+    if (st.size > maxBytes) rotateArchive(auditFile())
+  } catch (e) { /* no file on first write */ }
+}
+
+/** Split buffered lines into ≤maxBytes chunks, rotating between chunks — preserves the old
+ *  per-line "rotate when the file exceeds the threshold" semantics while still writing each
+ *  chunk as ONE append call. Chunk sizes measured in BYTES (Buffer.byteLength — the threshold
+ *  compares against st.size; CJK content is 3 bytes/char in UTF-8, so char count under-splits). */
+function chunkByThreshold (lines) {
+  const chunks = []
+  let cur = []
+  let bytes = 0
+  for (const line of lines) {
+    const lineBytes = Buffer.byteLength(line)
+    if (cur.length && bytes + lineBytes > maxBytes) { chunks.push(cur); cur = []; bytes = 0 }
+    cur.push(line)
+    bytes += lineBytes
   }
+  if (cur.length) chunks.push(cur)
+  return chunks
 }
 
-/** Rotate `file` to a timestamped archive name (cli-audit.jsonl.<ms>), then prune old archives.
- *  2026-09-10 P2: the old fixed `.1` target let the two writers (App + CLI rotate the SAME JSONL
- *  from different processes) destroy each other's data — A's unlinkSync('.1') could delete the 5MB
- *  file B had JUST renamed into '.1'. Timestamped targets make both renames non-destructive (a
- *  same-millisecond collision bumps the stamp instead of overwriting), and pruning keeps the
- *  archive set bounded at 4. */
-function rotateArchive (file) {
-  let stamp = Date.now()
-  let rolled = file + '.' + stamp
-  while (fs.existsSync(rolled)) rolled = file + '.' + (++stamp)
-  fs.renameSync(file, rolled)
-  pruneArchives(file)
-}
-
-function appendEntry (entry) {
-  const file = auditFile()
-  fs.mkdirSync(path.dirname(file), { recursive: true })
-  // review P2 (2026-09-10): the CLI rotates the same file concurrently — an append landing inside the
-  // other process's rename window used to throw and the line was lost (fire-and-forget). Retry once with
-  // a fresh stat; the retry lands on the post-rotation file.
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      try {
-        const st = fs.statSync(file)
-        if (st.size > maxBytes) rotateArchive(file)
-      } catch (e) { /* no file on first write */ }
-      fs.appendFileSync(file, JSON.stringify(entry) + '\n')
-      return
-    } catch (e) {
-      if (attempt > 0) throw e
+/** Drain the buffer synchronously (quit path / tests). */
+function flushNow () {
+  if (flushTimer) { clearTimeout(flushTimer); flushTimer = null }
+  if (!buffer.length) return
+  const lines = buffer.splice(0).map(e => JSON.stringify(e) + '\n')
+  ensureDir()
+  for (const chunk of chunkByThreshold(lines)) {
+    try { rotateIfNeeded() } catch (e) { /* rotation failure must not lose the batch */ }
+    const text = chunk.join('')
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try { fs.appendFileSync(auditFile(), text); break } catch (e) { if (attempt > 0) return /* give up by contract */ }
     }
   }
+}
+
+// Async chunk writes are SERIALIZED through this chain: two fs.appendFile calls for the same file
+// issued in parallel could complete out of order in the threadpool and flip adjacent lines (the
+// CLI appends the SAME file from another process, so line order across processes is already
+// best-effort — within this process we keep it strict).
+let writeChain = Promise.resolve()
+
+/** Drain the buffer as one async appendFile batch per threshold chunk (chunks written in order). */
+function flushAsync () {
+  flushTimer = null
+  if (!buffer.length) return
+  const lines = buffer.splice(0).map(e => JSON.stringify(e) + '\n')
+  ensureDir()
+  const chunks = chunkByThreshold(lines).map(chunk => chunk.join(''))
+  writeChain = writeChain.then(() => {
+    let p = Promise.resolve()
+    for (const text of chunks) {
+      p = p.then(() => {
+        try { rotateIfNeeded() } catch (e) { /* rotation failure must not lose the batch */ }
+        return new Promise(resolve => {
+          fs.appendFile(auditFile(), text, err => {
+            if (err) { try { fs.appendFileSync(auditFile(), text) } catch { /* dropped by contract */ } }
+            resolve()
+          })
+        })
+      })
+    }
+    return p
+  })
+}
+
+// Quit flush: synchronous drain so buffered entries survive process exit (Electron main included)
+process.on('exit', () => { try { flushNow() } catch { /* never throw on exit */ } })
+
+function appendEntry (entry) {
+  // review P2 (2026-09-10): the CLI rotates the same file concurrently — an append landing inside the
+  // other process's rename window used to throw and the line was lost (fire-and-forget). The batch
+  // retry logic in flushAsync/flushNow keeps that single-retry-with-fresh-stat behavior.
+  try {
+    buffer.push(entry)
+    if (buffer.length >= FLUSH_BATCH_MAX) flushAsync()
+    else if (!flushTimer) flushTimer = setTimeout(flushAsync, FLUSH_DELAY_MS)
+  } catch (e) { /* audit failure never affects business writes */ }
 }
 
 /**
@@ -356,5 +410,6 @@ module.exports = {
   setDirResolver,
   setMaxBytes,
   resetForTests,
+  flushNow,
   MAX_BYTES_DEFAULT
 }

@@ -33,11 +33,25 @@ const allowed = new Set([...wlMatch[1].matchAll(/'([A-Za-z]+)'/g)].map(x => x[1]
 // Renderer call surface: both dbCall('op' and dbCall?.('op' forms must be captured (the optional-chain form was once missed).
 // ledgerWrite('op' 必须同扫:账本写全走 store/tomato.js 的 ledgerWrite 变量包装,只扫 dbCall 会令账本写面对门禁整体隐身
 // (新增 ledgerWrite op 忘加白名单=主进程 throw+catch 吞掉=静默全断,2026-09-04 并行审查 F8 实锤盲区)
+// Channel 2 (2026-09-23 domain-5): dynamic dispatch via dbCall(entry.op) — store/todo.js queues
+// { op: 'upsert'|'upsertMany'|'commitSyncBatch' } objects and fires them through
+// `window.todoAPI.dbCall(entry.op, ...)`, so the literal-regex above never sees those three ops.
+// A whitelist narrowing that dropped one of them would be a silently broken write with the gate
+// staying green — the exact shape of the historical filterList/bumpSnow incidents this gate exists
+// to prevent. Extraction is limited to files that actually contain a dynamic `dbCall(x.op`
+// dispatch (planChips.js also has `op: '...'` literals but they are local in-memory effect
+// descriptors, never IPC ops — scanning those would false-red on ops that are intentionally
+// not whitelisted).
 const used = new Map() // op -> first file it appears in
 for (const f of walk(path.join(root, 'renderer/js'), [])) {
   const src = fs.readFileSync(f, 'utf8')
   for (const m of src.matchAll(/(?:dbCall(?:\?\.)?|ledgerWrite)\(\s*'([A-Za-z]+)'/g)) {
     if (!used.has(m[1])) used.set(m[1], path.relative(root, f))
+  }
+  if (/dbCall(?:\?\.)?\(\s*[A-Za-z_$][\w$]*\.op\b/.test(src)) {
+    for (const m of src.matchAll(/\{\s*op:\s*'([A-Za-z]+)'/g)) {
+      if (!used.has(m[1])) used.set(m[1], path.relative(root, f))
+    }
   }
 }
 

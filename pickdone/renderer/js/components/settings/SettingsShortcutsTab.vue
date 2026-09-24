@@ -125,11 +125,16 @@ export default {
       }
       this.stopCapture()
       this.capturing = key
+      // F-D3: tell the main process to stand down while recording — before-input-event fires
+      // before this document capture listener, so a bound combo used to be swallowed AND its
+      // action executed mid-record (recording ctrl+d deleted the selected task)
+      if (window.todoAPI && typeof window.todoAPI.setShortcutCapturing === 'function') window.todoAPI.setShortcutCapturing(true)
       this._docKeyHandler = e => this.handleCaptureKey(e, key)
       document.addEventListener('keydown', this._docKeyHandler, true) // capture: true
     },
     stopCapture () {
       if (this._docKeyHandler) { document.removeEventListener('keydown', this._docKeyHandler, true); this._docKeyHandler = null }
+      if (this.capturing != null && window.todoAPI && typeof window.todoAPI.setShortcutCapturing === 'function') window.todoAPI.setShortcutCapturing(false)
       this.capturing = null
     },
     cancelCapture () { this.stopCapture() },

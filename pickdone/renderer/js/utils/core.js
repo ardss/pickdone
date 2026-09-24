@@ -98,13 +98,25 @@ export async function rescheduleExpired (dispatch, todos, todayTs) {
   if (n) await dispatch('todo/computeViews')
   return { n, snap }
 }
+// F-C6 (maint/dw wave3): parse-once cache keyed by the raw subtasks JSON text. Search re-parses the
+// same row text once per keyword per keystroke (matchTodo calls parseSubtasks per term), and every
+// TodoItem row re-parses on each render. Capped Map, same eviction shape as pinyinCache below.
+const _subtasksCache = new Map()
 export function parseSubtasks (jsonText) {
-  try {
-    const v = JSON.parse(jsonText || 'null')
-    if (typeof v === 'string') return JSON.parse(v)
-    if (Array.isArray(v)) return v
-  } catch {}
-  return []
+  let v = _subtasksCache.get(jsonText)
+  if (v === undefined) {
+    v = []
+    try {
+      const p = JSON.parse(jsonText || 'null')
+      if (typeof p === 'string') v = JSON.parse(p)
+      else if (Array.isArray(p)) v = p
+    } catch {}
+    if (_subtasksCache.size > 5000) _subtasksCache.clear()
+    _subtasksCache.set(jsonText, v)
+  }
+  // Hand out shallow per-item clones: consumers may mutate the returned rows (EditPanel subtask
+  // checkboxes) — exposing the cached array itself would let those edits corrupt the cache.
+  return Array.isArray(v) ? v.map(e => (e && typeof e === 'object') ? { ...e } : e) : v
 }
 export function parseJSONSafe (t) { try { return t ? JSON.parse(t) : null } catch { return null } }
 
