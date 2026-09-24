@@ -1,5 +1,5 @@
 /**
- * Updater UI 链路活体验证（独立脚本,不入 check:all——真更新下载依赖真实 GitHub Release,无法离线门禁）
+ * Updater UI 链路活体验证（已入 check:all ③活体池,见 cli/check-all.js;真更新下载依赖真实 GitHub Release,该段除外——dev 降级/守卫分支可离线门禁）
  * 覆盖:UI store 镜像 updater:event → 齿轮红点 badge 渲染;dev 环境降级(active:false);
  *       autoDownloadUpdates 默认值;downloadUpdate 非 available 态守卫返回 false。
  * 运行:node tests/integration-updater-ui.mjs
