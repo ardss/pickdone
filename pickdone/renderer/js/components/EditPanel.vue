@@ -159,7 +159,7 @@
 import {dayjs, DAY_MS, FMT } from '../utils/core.js'
 import { getLocale } from '../i18n/index.js'
 import { extractTags } from '../utils/search.js'
-import { subsCompleteTarget, reportError } from '../utils/core.js'
+import { subsCompleteTarget } from '../utils/core.js'
 import { deleteWithUndo, removeWithUndo } from '../utils/confirm.js'
 import { toggleCompleteWithUndo } from '../utils/completeAction.js'
 import { getEstimate, setEstimate, ensureEstimate } from '../utils/tomatoEstimate.js'
@@ -172,6 +172,7 @@ import EpAttachments from './edit-panel/EpAttachments.vue'
 import EpDependencies from './edit-panel/EpDependencies.vue'
 import EpTomato from './edit-panel/EpTomato.vue'
 import EpTags from './edit-panel/EpTags.vue'
+import * as attachments from './edit-panel/attachments.js'
 
 const FIELD_MAP = {
   title: 'taskContent',
@@ -600,25 +601,11 @@ export default {
     openAccount () {
       if (this.task) this.$store.commit('ui/openTaskAccount', this.task.taskId)
     },
-    pickFiles (kind) {
-      const input = document.createElement('input')
-      input.type = 'file'
-      input.multiple = true
-      if (kind === 'img') input.accept = 'image/*'
-      input.onchange = () => { for (const f of input.files) this.uploadOne(kind, f) }
-      input.click()
-    },
-    async onDescPaste (e) {
-      const items = e.clipboardData ? e.clipboardData.items : []
-      // The same clipboard image often carries multiple format entries (png/jpeg/bmp coexist); accepting all would upload duplicate image tiles; take only the first usable bitmap, png preferred
-      const imgItems = items.filter(i => i.type.startsWith('image/'))
-      if (!imgItems.length) return
-      e.preventDefault()
-      const pick = imgItems.find(i => i.type === 'image/png') || imgItems[0]
-      const f = pick.getAsFile()
-      if (f) await this.uploadOne('img', new File([f], f.name || 'clipboard.' + (pick.type.split('/')[1] || 'png'), { type: pick.type }))
-      this.scrollImgsIntoView()
-    },
+    /* ===== Attachments: upload/paste/drop orchestration (impl: edit-panel/attachments.js).
+       scrollImgsIntoView stays here — focus/scroll timing is the component's concern. ===== */
+    pickFiles (kind) { return attachments.pickFiles(this, kind) },
+    onDescPaste (e) { return attachments.onDescPaste(this, e) },
+    onDescDrop (e) { return attachments.onDescDrop(this, e) },
     /* After paste/drop, scroll thumbnails into view for immediate "it landed" feedback */
     scrollImgsIntoView () {
       this.$nextTick(() => {
@@ -626,29 +613,7 @@ export default {
         if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
       })
     },
-    async onDescDrop (e) {
-      const files = e.dataTransfer ? e.dataTransfer.files : []
-      for (const f of files) {
-        if (f.type.startsWith('image/')) {
-          await this.uploadOne('img', f)
-          this.scrollImgsIntoView()
-        }
-      }
-    },
-    async uploadOne (kind, f) {
-      try {
-        await this._uploadOne(kind, f)
-      } catch (err) { reportError('upload:' + f.name, err); this.$message.error(this.$t('statsJ.EditPanel.uploadFailedMsg') + f.name) }
-    },
-    async _uploadOne (kind, f) {
-      const buf = new Uint8Array(await f.arrayBuffer())
-      let binary = ''
-      for (let i = 0; i < buf.length; i += 0x8000) binary += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000))
-      const res = await window.todoAPI.uploadAttachment({ taskId: this.e.taskId, name: f.name, dataBase64: btoa(binary), type: f.type })
-      const item = { url: res.url, name: f.name, size: res.size }
-      if (kind === 'img') { this.imgList.push(item); this.markDirty('imgs') } else { this.fileList.push(item); this.markDirty('files') }
-      this.queueSave({})
-    },
+    uploadOne (kind, f) { return attachments.uploadOne(this, kind, f) },
     removeFile (arrName, idx) {
       const item = this[arrName][idx]
       if (!item) return
