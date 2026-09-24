@@ -2,6 +2,21 @@
  *  wiring in index.js runs inside Electron where no plain-node test can reach it). Pure state
  *  machine: one round per quit attempt, token-guarded so acks from an aborted previous round can
  *  never satisfy the current one, sender-deduped, and "zero live windows" takes the fast path. */
+/** P3 fix (2026-09-25): token generation is a MODULE-GLOBAL monotonic source shared by every
+ *  tracker instance in this process. Each tracker used to seed its own space with
+ *  Math.max(token+1, Date.now()), and the app runs TWO trackers (index.js quit path +
+ *  updater.js flushOnceOnReady) — both created within the same millisecond on startup start
+ *  from the same value, so their token spaces collide. The ack router (index.js
+ *  'app-quitting-flush-ack') tries the quit tracker first and only falls back to the updater's
+ *  on failure: a colliding token made the quit tracker consume the updater round's ack (or vice
+ *  versa after an aborted quit), stalling one round until its cap. One shared counter makes
+ *  tokens process-unique, so a token identifies exactly one round on exactly one tracker. */
+let _lastToken = 0
+function nextSharedToken () {
+  _lastToken = Math.max(_lastToken + 1, Date.now())
+  return _lastToken
+}
+
 function createQuitAckTracker () {
   let token = 0
   const acked = new Set()
@@ -28,9 +43,10 @@ function createQuitAckTracker () {
     },
     /** Strictly increasing token generator (P2 2026-09-12): Date.now() collides within the same
      *  millisecond, and a colliding stale ack from an aborted round would then pass the token guard
-     *  and satisfy the current round prematurely. Max(prev+1, now) guarantees monotonicity. */
+     *  and satisfy the current round prematurely. Max(prev+1, now) guarantees monotonicity; since
+     *  2026-09-25 the counter is shared across tracker instances (see nextSharedToken above). */
     nextToken () {
-      token = Math.max(token + 1, Date.now())
+      token = nextSharedToken()
       return token
     },
     /** Record an ack; false when stale-token, sender-less, a duplicate from the same sender, or —

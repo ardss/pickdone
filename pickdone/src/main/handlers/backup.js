@@ -44,8 +44,15 @@ function uniqueSnapshotName (existsSync, dir, tag, stamp, baseMs) {
   const pad = n => String(n).padStart(2, '0')
   const fmt = x => { const d = new Date(x); return d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '-' + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds()) }
   let name = tag + stamp + '.json'
-  for (let bump = 1; bump <= 900 && existsSync(path.join(dir, name)); bump++) {
-    name = tag + fmt(baseMs + bump * 1000) + '.json' // 900 bumped names deep: give up deterministically rather than loop forever
+  // P3 fix (2026-09-25): after the 900-name space is exhausted the old loop returned the LAST
+  // already-taken name — atomicWriteJson then silently overwrote an existing snapshot and still
+  // reported {ok:true} (a lost backup). Exhaustion now returns null and the caller reports failure.
+  if (existsSync(path.join(dir, name))) {
+    for (let bump = 1; bump <= 900; bump++) {
+      name = tag + fmt(baseMs + bump * 1000) + '.json' // 900 bumped names deep: give up deterministically rather than loop forever
+      if (!existsSync(path.join(dir, name))) return name
+    }
+    return null
   }
   return name
 }
@@ -98,6 +105,9 @@ module.exports = function backupHandlers (ctx) {
         // other (evt-<reason> events fire back-to-back; the atomic rename lands on the same name,
         // the earlier snapshot is gone, yet {ok:true} is still returned). See uniqueSnapshotName.
         const name = uniqueSnapshotName(fs.existsSync.bind(fs), dir, tag, stamp, d.getTime())
+        // P3 fix (2026-09-25): name-space exhaustion used to hand back an ALREADY-TAKEN name and the
+        // atomic write silently clobbered that existing snapshot while still returning {ok:true}.
+        if (!name) return { ok: false, error: 'snapshot name space exhausted (900 same-tag names taken)' }
         // Content dedup: only compare against the newest file. (The original implementation compared against any old file — when the data was changed back to its original state
         // it would return dedup without writing the new snapshot, yet prune would delete that old snapshot → that point in time ends up with no backup)
         // 排序按名字内嵌时间戳(2026-09-10 P2):字典序 sort() 让 'auto-' 排在同日 'evt-…' 之后/之前错位,

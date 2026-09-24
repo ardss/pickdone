@@ -28,6 +28,16 @@ const makeBusFacade = real => ({
   call: (op, params) => bus.commandForOp(op) ? bus.commitOp(op, params, { preserveStamp: true }) : real.call(op, params)
 })
 
+/** P3 fix (2026-09-25): bump a generated numeric category id past every taken id. The bare
+ *  `Date.now()+n` could equal an existing category's id, and db upsertCategory's ON CONFLICT
+ *  silently overwrote that live row while the import still reported ok. Pure + exported for
+ *  unit tests. */
+function allocCategoryId (base, isTaken) {
+  let id = Number(base) || 0
+  while (isTaken(id)) id++
+  return id
+}
+
 class ImportError extends Error {
   constructor (message, code = 'IMPORT_ERROR') { super(message); this.code = code }
 }
@@ -234,7 +244,10 @@ function importItems (items, { dryRun = false, format, category = null, useLists
     const hit = db.call('getAllCategories').find(c => (c.categoryName || '') === name)
     if (hit) { catCache.set(name, hit.categoryId); return hit.categoryId }
     if (dryRun) return 0 // preview must not create categories either
-    const id = Date.now() + createdCats.length + 1 // numeric id, same family as the renderer's nextId()
+    // P3 fix (2026-09-25): see allocCategoryId — probe the taken-id set before writing so a
+    // colliding id can never ON-CONFLICT-overwrite a live category row.
+    const taken = new Set((db.call('getAllCategories') || []).map(c => Number(c.categoryId)))
+    const id = allocCategoryId(Date.now() + createdCats.length + 1, n => taken.has(Number(n)))
     db.call('upsertCategory', {
       id, userId, name,
       color: ['#0f9d8f', '#4076C4', '#519A54', '#7E57C2', '#e8543f', '#D9982F', '#2f8fbb', '#b85c8f'][createdCats.length % 8],
@@ -354,4 +367,4 @@ function importFile (file, opts = {}) {
   return importItems(items, { ...opts, format })
 }
 
-module.exports = { parseCsv, detectFormat, rowsToItems, importItems, importFile, ImportError, dedupKeyOf }
+module.exports = { parseCsv, detectFormat, rowsToItems, importItems, importFile, ImportError, dedupKeyOf, allocCategoryId }
