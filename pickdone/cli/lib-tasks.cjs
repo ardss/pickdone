@@ -74,10 +74,15 @@ function overview () {
   const today24 = +now.endOf('day')
   const week24 = +now.add(7, 'day').endOf('day')
   const all = open().call('queryTodos', { deleted: 0 })
+  // B12 (2026-09-24): a task with only a timed todoTime and no dayStart still belongs to "today" —
+  // the renderer's metrics.js planned counter derives ds = dayStart || startOfDay(todoTime); the CLI
+  // keyed today.total/done on dayStart alone and undercounted those rows (same caliber as the db.js
+  // statsByDay side of this fix).
+  const schedDay = t => t.dayStart || (t.todoTime ? +dayjs(t.todoTime).startOf('day') : 0)
   return {
     today: {
-      total: all.filter(t => t.dayStart >= today0 && t.dayStart <= today24).length,
-      done: all.filter(t => t.dayStart >= today0 && t.dayStart <= today24 && t.complete).length,
+      total: all.filter(t => { const d = schedDay(t); return d >= today0 && d <= today24 }).length,
+      done: all.filter(t => { const d = schedDay(t); return d >= today0 && d <= today24 && t.complete }).length,
       // 口径对齐 App(metrics.js doneTsOf):按 completedAt 落在今天计完成,completedAt=0 的历史/异常行按
       // updateTime 兜底(P3 2026-09-23;与 db.js statsByDay doneByCompletionDay 同 commit 对齐,旧注释自称对齐实际没有)
       doneToday: all.filter(t => t.complete && (t.completedAt || t.updateTime || 0) >= today0 && (t.completedAt || t.updateTime || 0) <= today24).length
