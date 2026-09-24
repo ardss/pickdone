@@ -21,6 +21,7 @@
 
 const ENTRY_CHUNK_BYTES = 1024 * 1024
 const path = require('node:path')
+const { createHash } = require('node:crypto')
 
 // Domain-1 F-A2 (2026-09-23): extension whitelist on RECEIVED files. The upload door
 // (attachments.js saveAttachment) enforces ALLOWED_EXT, but the LAN pull used to land ANY
@@ -111,7 +112,19 @@ function defaultDeps () {
   return {
     exists: key => fs.existsSync(path.join(attachDir(), path.basename(String(key)))),
     size: key => { try { return fs.statSync(path.join(attachDir(), path.basename(String(key)))).size } catch { return 0 } },
-    read: (key, start, end) => fs.readFileSync(path.join(attachDir(), path.basename(String(key)))).slice(start, end + 1),
+    // C8 (daily 2026-09-24): positional chunked read — reads ONLY the requested [start..end]
+    // byte range via fs.readSync. The old default readFileSync'd the WHOLE file (up to 50MB)
+    // and sliced it, so every serve pass kept the full file resident and blocked the main process.
+    read: (key, start, end) => {
+      const fp = path.join(attachDir(), path.basename(String(key)))
+      const len = Math.max(0, end - start + 1)
+      const buf = Buffer.alloc(len)
+      const fd = fs.openSync(fp, 'r')
+      try {
+        const n = fs.readSync(fd, buf, 0, len, start)
+        return n === len ? buf : buf.subarray(0, n)
+      } finally { fs.closeSync(fd) }
+    },
     writeAtomic: (key, buf) => {
       // P2-c (2026-09-19 data-safety round): never silently overwrite an existing local file with
       // DIFFERENT content under the same basename (two devices can mint the same filename for
@@ -186,6 +199,7 @@ function createAttachmentServer (deps = {}) {
     let sent = 0
     let missing = 0
     let roundBytes = 0
+    let budgetSkipped = 0 // C9: files skipped by the round byte budget (reported on the result)
     for (const rawId of ids) {
       const id = String(rawId || '')
       if (!id || /[\\/]|\.\./.test(id)) { missing += 1; if (!emit({ type: 'att-missing', id, reason: 'bad-id' })) return { sent, missing, aborted: true }; continue }
@@ -199,27 +213,43 @@ function createAttachmentServer (deps = {}) {
       }
       if (roundBytes + size > maxRoundBytes) {
         missing += 1
-        if (!emit({ type: 'att-missing', id, reason: 'round-budget' })) return { sent, missing, aborted: true }
+        budgetSkipped += 1
+        // C9 (daily 2026-09-24): budget exhaustion used to be SILENT — contrast the rate-cap and
+        // too-large branches which both warn. An operator watching logs saw a batch quietly come
+        // up short with no trace. Warn here; the per-session recent ring (pushRecent) lives in
+        // lan-sync/index.js's server wiring, outside this module's surface — the budgetSkipped
+        // count on the return value is the hook it can consume.
+        try { require('electron-log').warn('[LanSync] att-req round byte budget exhausted, skipping', id, '(' + roundBytes + '/', maxRoundBytes, 'bytes used this round)') } catch { /* noop */ }
+        if (!emit({ type: 'att-missing', id, reason: 'round-budget' })) return { sent, missing, aborted: true, budgetSkipped }
         continue
       }
       roundBytes += size
-      const full = d.read(id, 0, size - 1)
-      const hash = sha256Hex(full, deps.hashFn)
-      if (!emit({ type: 'att-meta', id, size: full.length, hash })) {
-        try { require('electron-log').warn('[LanSync] att-meta send failed, aborting serve for', peerId) } catch { /* noop */ }
-        return { sent, missing, aborted: true }
+      // C8 (daily 2026-09-24): chunked read + streaming hash. The old path materialized the
+      // WHOLE file (up to 50MB) with d.read(0, size-1) just to hash it, then sliced att-chunks
+      // out of that resident buffer — a full readFileSync + sha256 blocking the main process per
+      // file (<=64MB per batch). Now each pass holds ONE ENTRY_CHUNK_BYTES chunk: pass 1 streams
+      // the file through an incremental sha256 for att-meta, pass 2 re-reads each chunk and
+      // sends it. At no point is the full file resident.
+      const hasher = createHash('sha256')
+      for (let off = 0; off < size; off += ENTRY_CHUNK_BYTES) {
+        hasher.update(d.read(id, off, Math.min(off + ENTRY_CHUNK_BYTES, size) - 1))
       }
-      for (let off = 0, idx = 0; off < full.length; off += ENTRY_CHUNK_BYTES, idx++) {
-        const chunk = full.slice(off, Math.min(off + ENTRY_CHUNK_BYTES, full.length))
-        if (!emit({ type: 'att-chunk', id, index: idx, data: chunk.toString('base64'), final: off + ENTRY_CHUNK_BYTES >= full.length })) {
+      const hash = hasher.digest('hex')
+      if (!emit({ type: 'att-meta', id, size, hash })) {
+        try { require('electron-log').warn('[LanSync] att-meta send failed, aborting serve for', peerId) } catch { /* noop */ }
+        return { sent, missing, aborted: true, budgetSkipped }
+      }
+      for (let off = 0, idx = 0; off < size; off += ENTRY_CHUNK_BYTES, idx++) {
+        const chunk = d.read(id, off, Math.min(off + ENTRY_CHUNK_BYTES, size) - 1)
+        if (!emit({ type: 'att-chunk', id, index: idx, data: chunk.toString('base64'), final: off + ENTRY_CHUNK_BYTES >= size })) {
           try { require('electron-log').warn('[LanSync] att-chunk send failed, aborting serve for', peerId) } catch { /* noop */ }
-          return { sent, missing, aborted: true }
+          return { sent, missing, aborted: true, budgetSkipped }
         }
       }
       sent += 1
     }
-    emit({ type: 'att-end', sent, missing })
-    return { sent, missing }
+    emit({ type: 'att-end', sent, missing, budgetSkipped })
+    return { sent, missing, budgetSkipped }
   }
 
   // Fix-round (2026-09-22, lan-sync-8): per-peer bookkeeping must not outlive the peer —
