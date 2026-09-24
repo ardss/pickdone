@@ -201,7 +201,10 @@ export default {
       const root = this.$store.state.todo || {}
       let list = (root.views && root.views.todayTodoList) || []
       if (!list.length) {
-        const today = window.dayjs ? +window.dayjs().format('YYYYMMDD') : 0
+        // F4 (2026-09-24): the fallback must compare against t.dayStart (a midnight timestamp, store/todo.js
+        // caliber). The old `+dayjs().format('YYYYMMDD')` (an 8-digit date) never equaled it (~10^5 apart),
+        // so the ⋮ menu permanently showed "no tasks today" whenever views.todayTodoList lagged.
+        const today = window.dayjs ? +window.dayjs().startOf('day') : 0
         list = (root.todoList || []).filter(t => t && !t.delete && t.dayStart === today)
       }
       return list.filter(t => t && !t.complete).slice(0, 30)
@@ -370,6 +373,13 @@ export default {
     this.refresh()
     this._onStorage = () => this.refresh()
     window.addEventListener('storage', this._onStorage)
+    // F22 (2026-09-24): currently UNREACHABLE on the float window — tomato-float.js creates it with
+    // focusable:false (Electron 35-37 DWM ghost workaround, see the create() comment block), so the
+    // window never holds keyboard focus and keydown never fires here. Kept on purpose: menus already
+    // have ✕/re-click close paths, and after the Electron v39 upgrade (fix #47386) focusable can be
+    // re-enabled — at which point this Escape path becomes live again. TEST GAP: no float-window
+    // keydown test exists (tests/ Escape coverage is main-window only); add one when the window is
+    // made focusable again.
     this._onKey = e => {
       if (e.key !== 'Escape') return
       if (this.menuOpen) this.closeMenu()
