@@ -421,37 +421,13 @@ if (!app.requestSingleInstanceLock()) { app.quit() } else {
     // 账本广播挂 db 层钩子(非 IPC handler):CLI 是独立进程直写 DB,不经过本进程 IPC,
     // 只有 db.call 统一出口能同时覆盖 App IPC 与外部写入后的通知(2026-09-04 实锤修复)
     dbm.setLedgerChangedHook(op => broadcastTomatoRecordsChanged(op))
-    // 无 todos.db 但 .plain-bak 存在 = 加密迁移两步 rename 间崩溃的'两头都没有'窗口(2026-09-04 深审 P0):
-    // 空库 init 不抛错、不会进 attemptDbRecovery,必须在此显式把 plain-bak 放回去
-    try {
-      const ud0 = app.getPath('userData'), fs0 = require('fs'), p0 = require('path')
-      // 三条件同时成立才是迁移两步 rename 的崩溃现场:无 todos.db、有 plain-bak、无 db.key(迁移成功才写 key;
-      // key 还在 = 用户手删库或其他场景,复制明文库会被带钥探针误判损坏,交给正常 init/recovery 流程)
-      const bak0 = p0.join(ud0, 'todos.db.plain-bak')
-      if (!fs0.existsSync(p0.join(ud0, 'todos.db')) && fs0.existsSync(bak0)) {
-        if (!fs0.existsSync(p0.join(ud0, 'db.key'))) {
-          // 无库+无key+有bak = 迁移两步 rename 崩溃现场:清孤儿 WAL 后把明文库放回
-          for (const suf of ['-wal', '-shm']) { try { fs0.rmSync(p0.join(ud0, 'todos.db' + suf), { force: true }) } catch {} }
-          fs0.copyFileSync(bak0, p0.join(ud0, 'todos.db'))
-          log.warn('[Init] 迁移中断残留:已从 todos.db.plain-bak 恢复数据库文件')
-        } else {
-          // 无库+有bak+有key(用户手删库等):静默跳过会让 init 落到空库、数据被无视(二轮深审 P1-1)。
-          // 把旧 key 移开、明文库放回:init 走无钥+存量库路径,生成新 key 并重加密,数据保留
-          const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-          try { fs0.renameSync(p0.join(ud0, 'db.key'), p0.join(ud0, 'db.key.superseded-' + stamp)) } catch {}
-          for (const suf of ['-wal', '-shm']) { try { fs0.rmSync(p0.join(ud0, 'todos.db' + suf), { force: true }) } catch {} }
-          fs0.copyFileSync(bak0, p0.join(ud0, 'todos.db'))
-          log.warn('[Init] todos.db 缺失但存在明文备份:已从 plain-bak 恢复,旧 db.key 移为 db.key.superseded-*')
-        }
-      }
-    } catch (e0) { log.warn('[Init] plain-bak 预检失败', e0) }
-    // 上次「重置数据」时被占用而改名挂起的文件(pending-delete-<ts>-*),本次启动句柄已释放,统一清扫
-    try {
-      const ud0s = app.getPath('userData')
-      for (const f of fs.readdirSync(ud0s)) {
-        if (f.startsWith('pending-delete-')) { try { fs.rmSync(path.join(ud0s, f), { force: true, recursive: true }) } catch {} }
-      }
-    } catch (e0s) { log.warn('[Init] pending-delete 清扫失败', e0s) }
+    // P2 (dw wave5 2026-09-24): the plain-bak residue precheck and the pending-delete sweep are
+    // pure fs over userData — sunk into dbRecovery.cjs (this module's declared home for startup
+    // recovery, testable without electron); whenReady keeps one-line calls. Behavior unchanged:
+    // 无 todos.db 但 .plain-bak 存在 = 加密迁移两步 rename 间崩溃的'两头都没有'窗口(2026-09-04 深审 P0),
+    // 必须在此显式把 plain-bak 放回去;pending-delete-<ts>-* 是上次「重置数据」被占用改名挂起的文件。
+    dbRecovery.preflightMigrateResidue(app.getPath('userData'), log)
+    dbRecovery.sweepPendingDeletes(app.getPath('userData'), log)
     try {
       dbm.init(app.getPath('userData'))
     } catch (e) {
