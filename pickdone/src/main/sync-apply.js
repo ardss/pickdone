@@ -431,7 +431,18 @@ function applyRowInner (state, incoming) {
     // meta has no updatedAt column, so the local LWW age is the latest local oplog ts for this
     // key (cached per-pass oplog scan). No local pointer (legacy pre-oplog row) = age 0: the
     // incoming row wins once, then the identical-content no-op keeps it from churning.
-    localRow = { updatedAt: cache.metaTs().get(incoming.id) || 0, deleted: false, deletedAt: 0, data: { key: incoming.id, value: localVal } }
+    // B13 (daily 2026-09-24, low-危 mitigation): age 0 is only honest for an ABSENT local value
+    // (first landing). For a LIVE key whose oplog pointers were ring-buffer-trimmed, age 0 lets
+    // a stale peer row win LWW against whatever unknown-age value sits here (and, via the
+    // mirrored deleteMeta hydration, even resurrect a deleted key). Age-unknown + live key =
+    // refuse this round: keep the local value, warn. A local edit re-logs a pointer and the key
+    // becomes comparable again; the peer's row re-lands on the next round if still newer.
+    const tsMap = cache.metaTs()
+    if (localVal != null && !tsMap.has(incoming.id)) {
+      log.warn('[LanSync] meta local age unknown (oplog pointer trimmed) for live key', incoming.id, '— inbound row refused this round (0-age LWW would let a stale peer value win)')
+      return false
+    }
+    localRow = { updatedAt: tsMap.get(incoming.id) || 0, deleted: false, deletedAt: 0, data: { key: incoming.id, value: localVal } }
   } else if (entity === 'tomato' || entity === 'plan' || entity === 'filter') {
     // Manifest-documented tombstone-fallback shape (TOMB_FALLBACK_LOOKUP): live row first, then
     // the entity's tombstone read. Per-entity history that forced this shape:
@@ -538,6 +549,17 @@ function applyRowInner (state, incoming) {
       }
       if (!isBookkeeping && !firstLanding) markConflict(state, 'meta', incoming.id, true)
     } else {
+      // B16 (daily 2026-09-24): merge.mjs contract says the loser is NEVER silently dropped, but
+      // for plan/filter/category/setting the loser used to vanish behind a warn-only log (only
+      // todos got a recycle-bin copy and meta got a backup). Reuse the metaConflictBackup
+      // mechanism: serialize the loser's data under a machine-local backup key
+      // `metaConflictBackup.<entity>:<id>.<ts36>` (the META_CONFLICT_BACKUP_PREFIX filter in
+      // isMachineLocalMetaKey keeps it local for ANY key, and it shows up in the existing
+      // syncConflictBackupsList recovery surface). Restoration of non-meta entities to their
+      // native tables is a separate concern — the goal here is that the losing bytes survive.
+      if (conflictCopy && conflictCopy.data !== undefined && conflictCopy.data !== null) {
+        writeMetaConflictBackup(state, `${entity}:${incoming.id}`, conflictCopy.data)
+      }
       log.warn('[LanSync] conflict on', entity, incoming.id, '— local copy superseded (conflict-copy UI deferred)')
       // P1-5: non-todo losers are applied wholesale (LWW) — tell the user the peer's version won
       markConflict(state, entity, incoming.id, true)
