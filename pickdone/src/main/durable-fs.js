@@ -20,8 +20,22 @@
 const fs = require('fs')
 const path = require('path')
 
+/** C3 (P1 2026-09-24): the tmp name used to be a shared constant `file + '.dtmp'` — the App main
+ *  process and a concurrent CLI process writing the SAME target file raced on one tmp path
+ *  (open 'w' truncates the other writer's in-flight tmp; rename then publishes a hybrid or a
+ *  foreign file). Now each write gets `<file>.<pid>.<ms>.dtmp` — unique per process per call.
+ *  The name still ENDS with '.dtmp' so autoBackup.selectStaleTmp's /\.dtmp$/ residue sweep keeps
+ *  matching crash residue. Exported so handlers/backup.js computes the SAME tmp path for its
+ *  failure-cleanup check without duplicating the format. */
+function dtmpPath (file) {
+  // seq disambiguates two calls within the same millisecond (writeFileDurable is synchronous, so
+  // in-process calls never overlap, but the name stays collision-free regardless).
+  return file + '.' + process.pid + '.' + Date.now() + '.' + (++dtmpSeq) + '.dtmp'
+}
+let dtmpSeq = 0
+
 function writeFileDurable (file, data, fsMod = fs) {
-  const tmp = file + '.dtmp'
+  const tmp = dtmpPath(file)
   let fd = null
   try {
     if (typeof fsMod.openSync === 'function') {
@@ -50,4 +64,4 @@ function writeFileDurable (file, data, fsMod = fs) {
   } catch { /* platform without directory fsync */ }
 }
 
-module.exports = { writeFileDurable }
+module.exports = { writeFileDurable, dtmpPath }

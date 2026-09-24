@@ -20,7 +20,9 @@ try { log = require('electron-log') } catch { log = { warn () {}, error () {} } 
  *  cut between the OS cache and the rename used to leave a torn file. The fsMod injection is kept
  *  for the residue-cleanup contract; the durable path always uses the real fs. */
 function atomicWriteJson (fsMod, dir, name, text) {
-  const tmp = path.join(dir, name) + '.dtmp'
+  // C3 (2026-09-24): tmp names are unique per call (<file>.<pid>.<ms>.dtmp, see durable-fs.dtmpPath);
+  // the failure-cleanup check must target the SAME path the durable writer used.
+  const tmp = require('../durable-fs').dtmpPath(path.join(dir, name))
   try {
     require('../durable-fs').writeFileDurable(path.join(dir, name), text, fsMod)
     return { ok: true, file: name }
