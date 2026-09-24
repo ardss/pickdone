@@ -79,6 +79,10 @@ function overview () {
   // keyed today.total/done on dayStart alone and undercounted those rows (same caliber as the db.js
   // statsByDay side of this fix).
   const schedDay = t => t.dayStart || (t.todoTime ? +dayjs(t.todoTime).startOf('day') : 0)
+  // Wave-5 P3: schedDay now applies to ALL four statistical buckets, not just `today` — a pure
+  // todoTime (dayStart=0) row used to be miscounted into noDate and to vanish from
+  // overdue/upcoming7days, disagreeing with the today block and with the renderer
+  // (renderer/js/views/statistics/metrics.js:38, ds = dayStart || startOfDay(todoTime)).
   return {
     today: {
       total: all.filter(t => { const d = schedDay(t); return d >= today0 && d <= today24 }).length,
@@ -87,9 +91,9 @@ function overview () {
       // updateTime 兜底(P3 2026-09-23;与 db.js statsByDay doneByCompletionDay 同 commit 对齐,旧注释自称对齐实际没有)
       doneToday: all.filter(t => t.complete && (t.completedAt || t.updateTime || 0) >= today0 && (t.completedAt || t.updateTime || 0) <= today24).length
     },
-    overdue: all.filter(t => !t.complete && t.dayStart > 0 && t.dayStart < today0).length,
-    noDate: all.filter(t => !t.dayStart).length,
-    upcoming7days: all.filter(t => t.dayStart > today24 && t.dayStart <= week24).length,
+    overdue: all.filter(t => { const d = schedDay(t); return !t.complete && d > 0 && d < today0 }).length,
+    noDate: all.filter(t => !schedDay(t)).length,
+    upcoming7days: all.filter(t => { const d = schedDay(t); return d > today24 && d <= week24 }).length,
     completedTotal: all.filter(t => t.complete).length,
     recycleBin: open().call('queryTodos', { deleted: 1 }).length,
     categories: open().call('getAllCategories').length
