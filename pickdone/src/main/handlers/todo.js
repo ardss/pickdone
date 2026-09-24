@@ -2,7 +2,6 @@
 const log = require('electron-log')
 const fs = require('fs')
 const path = require('path')
-const fixUtil = require('../fix-util')
 const tomatoFloat = require('../tomato-float')
 const scheduler = require('../scheduler')
 const appAudit = require('../audit')
