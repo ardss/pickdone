@@ -56,13 +56,27 @@ export async function collectPlanState () {
   } catch (e) { return null } // degraded host: omit the segment rather than fail the whole dump
 }
 
-/** Event snapshot before dangerous operations: reason such as purge/import/restore, filename evt-<reason>-*.json */
+/** Event snapshot before dangerous operations: reason such as purge/import/restore, filename evt-<reason>-*.json
+ *  F3 (dw wave6 2026-09-24): the main process signals failure via the return value ({ok:false,error},
+ *  handlers/backup.js) — nothing throws, so the old bare catch made a failed pre-destroy snapshot
+ *  invisible to the caller (purge/purge-all carried on hard-deleting with no snapshot on disk).
+ *  Now: r.ok is checked, a boolean is returned, and failures land in runtimeState
+ *  (eventBackupLastFailAt/eventBackupLastError) — same honest-status pattern as writeAutoBackupCore.
+ *  Display contract for domain 2 (SettingsDataTab): the existing lastBackupFailPrefix channel can
+ *  render these two keys the same way it renders autoBackupLastError/autoBackupLastFailAt. */
 export async function writeEventBackupCore (ctx, { state, rootState }, reason) {
   try {
     if (!window.todoAPI || !window.todoAPI.runAutoBackup) return false
     const dump = buildBackupDump(rootState, state, { planState: await collectPlanState() })
-    await window.todoAPI.runAutoBackup(JSON.stringify(dump), { tag: String(reason || 'op').toLowerCase(), eventKeep: 10, backupDir: rootState.settings.backupDir || '' })
-  } catch (e) { console.error('[event-backup] failed:', e && e.message) }
+    const r = await window.todoAPI.runAutoBackup(JSON.stringify(dump), { tag: String(reason || 'op').toLowerCase(), eventKeep: 10, backupDir: rootState.settings.backupDir || '' })
+    if (r && r.ok) { saveRuntime({ eventBackupLastFailAt: 0, eventBackupLastError: '' }); return true }
+    saveRuntime({ eventBackupLastFailAt: Date.now(), eventBackupLastError: String((r && r.error) || 'backup failed').slice(0, 160) })
+    return false
+  } catch (e) {
+    console.error('[event-backup] failed:', e && e.message)
+    saveRuntime({ eventBackupLastFailAt: Date.now(), eventBackupLastError: String((e && e.message) || e).slice(0, 160) })
+    return false
+  }
 }
 
 /** Auto backup: same structure as critical-state, written to userData/backups/auto-*.json with rolling cleanup */
