@@ -18,6 +18,7 @@ const SNOW_DEDUP_MAX_AGE_MS = 30 * 24 * 3600 * 1000
 let log
 try { log = require('electron-log') } catch { log = { info () {}, warn () {}, error () {} } }
 const oplog = require('./db-oplog')({ getDb: () => db, log }), syncSchema = require('./db-sync-schema')({ getDb: () => db, log })
+const oplogKeepLimit = require('./db-oplog').oplogKeepLimit // D3 2026-09-24: SYNC_OPLOG_KEEP single source (was a bare 10000 clamp literal)
 
 let Database = null
 function loadDriver () {
@@ -222,22 +223,9 @@ CREATE TABLE IF NOT EXISTS sync_oplog (
   ts       INTEGER NOT NULL
 );` + syncSchema.DDL
 
-const FILTER_DATE_MODES = new Set(['all', 'today', 'week', 'overdue', 'none'])
-/** Filter-condition normalization: whitelist validation for dateMode/catId/priority, falling back on invalid values (an unknown dateMode makes filtering silently degrade to "all") */
-function normConds (c) {
-  const v = c && typeof c === 'object' ? c : {}
-  const intOf = x => (Number.isFinite(x) && Number.isInteger(x) ? x : -1)
-  return {
-    catId: intOf(v.catId),
-    priority: intOf(v.priority),
-    dateMode: FILTER_DATE_MODES.has(v.dateMode) ? v.dateMode : 'all'
-  }
-}
-
-/** Filter-condition JSON parsing (non-objects become empty conditions) */
-function parseConds (s) {
-  try { const v = JSON.parse(s || '{}'); return v && typeof v === 'object' ? normConds(v) : normConds(null) } catch { return normConds(null) }
-}
+// D4 2026-09-24: conds whitelist/parse moved to shared/filter-core.mjs (single source with
+// cli/lib.js applyViewConds and renderer FilterView.vue — the three copies could drift silently)
+const { normConds, parseConds } = require('../../shared/filter-core.mjs') // require(esm) — Node >= 22.12
 
 function init (userDataPath) {
   // Re-entry policy (P2 2026-09-11): a second init while a handle is open closes the old handle cleanly first instead of throwing — rebuilding against a live handle would orphan prepared statements mid-write, and an abrupt throw broke the same-process restart idiom used across the unit tests (init without close = simulated restart). Closing first leaves no stale stmts and keeps the recovery re-init path (index.js db-fail dialog → attemptDbRecovery) working.
@@ -1048,7 +1036,7 @@ const OPS = {
   upsertCategoryMany: makeBulkOps.upsertCategoryMany,
   filterUpsertMany: makeBulkOps.filterUpsertMany,
   categoriesAllRows: makeBulkOps.categoriesAllRows, planTombstones: makeBulkOps.planTombstones, filterTombstones: makeBulkOps.filterTombstones, // sync-side raw reads (M1/M3) — main-internal, NOT renderer-callable
-syncOplogSince: ({ sinceSeq = 0, limit = 2000 } = {}) => db.prepare('SELECT seq, entity, entityId, ts FROM sync_oplog WHERE seq > ? ORDER BY seq ASC LIMIT ?').all(Number(sinceSeq) || 0, Math.max(1, Math.min(10000, Math.floor(Number(limit) || 2000)))),
+syncOplogSince: ({ sinceSeq = 0, limit = 2000 } = {}) => db.prepare('SELECT seq, entity, entityId, ts FROM sync_oplog WHERE seq > ? ORDER BY seq ASC LIMIT ?').all(Number(sinceSeq) || 0, Math.max(1, oplogKeepLimit(Math.floor(Number(limit) || 2000)))),
   getMetaMany: p => require('./db-sync-ops').dispatch('getMetaMany', p), // CONTRACT (F-UI): batch meta read; impl db-sync-ops.js
   // P3a LAN sync ops (2026-09-16): delegates into db-sync-ops.js (gate: ops must exist here; impl lives in lan-sync-bootstrap.js)
   syncGetSettings: p => require('./db-sync-ops').dispatch('syncGetSettings', p),

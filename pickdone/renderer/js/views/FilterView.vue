@@ -49,6 +49,7 @@ import { taskContextMenu } from '../utils/taskMenu.js'
 import { DEFAULT_CAT_COLOR } from '../utils/core.js'
 import { today0 } from '../utils/todayBounds.js'
 import { isoWeekEnd } from '../utils/weekGrid.js'
+import { matchesViewConds } from '../../../shared/filter-core.mjs' // D4 2026-09-24: saved-view matcher single source with db.js / cli applyViewConds
 import { toggleCompleteWithUndo } from '../utils/completeAction.js'
 import { getEstimate } from '../utils/tomatoEstimate.js'
 import FilterModal from '../components/FilterModal.vue'
@@ -85,24 +86,14 @@ export default {
     list () {
       const f = this.filter
       if (!f) return []
-      const c = f.conds || {}
-      const today0ts = today0()
       // Hard-Monday (isoWeek) window kept deliberately — pairs with cli/lib.js's week filter window;
       // whether it should follow settings.weekStartDay is pending product confirmation (see weekGrid.js).
-      const weekEnd = isoWeekEnd(Date.now())
-      return this.$store.state.todo.todoList.filter(t => {
-        if (t.delete || t.complete) return false
-        if (c.catId != null && c.catId !== -1 && (t.categoryId || 0) !== c.catId) return false
-        if (c.priority != null && c.priority !== -1 && (t.priority || 0) !== c.priority) return false
-        if (c.dateMode && c.dateMode !== 'all') {
-          const d = t.dayStart || 0
-          if (c.dateMode === 'today' && d !== today0ts) return false
-          if (c.dateMode === 'week' && !(d >= today0ts && d <= weekEnd)) return false
-          if (c.dateMode === 'overdue' && !(d && d < today0ts)) return false
-          if (c.dateMode === 'none' && d !== 0) return false
-        }
-        return true
-      }).sort((a, b) => (b.taskSort || 0) - (a.taskSort || 0)) // B8 (2026-09-24): display order is taskSort DESCENDING (sortMode.js custom mode) — the old ascending readout put pinned tasks at the bottom
+      // D4 2026-09-24: the matcher itself moved to shared/filter-core.mjs (single source with db.js
+      // conds parsing and cli/lib.js applyViewConds); done defaults to false = undone-only parity.
+      const win = { today0: today0(), weekEnd: isoWeekEnd(Date.now()) }
+      return this.$store.state.todo.todoList
+        .filter(t => matchesViewConds(t, f.conds || {}, win))
+        .sort((a, b) => (b.taskSort || 0) - (a.taskSort || 0)) // B8 (2026-09-24): display order is taskSort DESCENDING (sortMode.js custom mode) — the old ascending readout put pinned tasks at the bottom
     },
     selectedId () { return this.$store.state.ui.rightSidebarTodoEdit.taskId }
   },
