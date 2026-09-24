@@ -31,8 +31,9 @@ export function buildBackupDump (rootState, state, { stripVolatileSettings = fal
         ignoreReminder: state.ignoreReminder, todosVersion: state.todosVersion, isSyncing: false,
         views: {}
       }),
-      tomatoState: localStorage.getItem('tomatoState') || '{}',
       // 账本行集随份走(blob 已被掏空,不含记录;恢复端按行表幂等回灌)——无它则 JSON 灾备恢复任务回而专注账全丢
+      // F17 (dw wave6 2026-09-24): 旧 tomatoState 倒计时 blob 段已停写——账本早已迁 tomato_records 行表
+      // (dbMirror.js 注释确认),UI 恢复七段与 dbRecovery 三段都从不读它,全仓无恢复端消费者。
       tomatoRecords: JSON.stringify(rootState.tomato && rootState.tomato.tomatoRecordList || []),
       categoryState: JSON.stringify({ schemaV: SCHEMA_V, list: rootState.category.list }),
       habitsState: JSON.stringify({ schemaV: SCHEMA_V, habits: rootState.habits.habits, moments: rootState.habits.moments, savedAt: rootState.habits.savedAt || 0 }),

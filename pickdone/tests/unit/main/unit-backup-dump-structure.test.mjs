@@ -19,7 +19,9 @@ const read = p => fs.readFileSync(path.join(HERE, '../../..', p), 'utf8')
 // auth 有 localStorage 独立回灌通道(auth.js),跨机器 JSON 导入从不消费这两段,死段停写。
 // D6-F14 (2026-09-21): planState/filterState joined the dump contract (schedule chips + saved
 // filters were silently lost on JSON disaster restore before)
-const REQUIRED_SEGMENTS = ['settingsState', 'todoState', 'tomatoState', 'tomatoRecords', 'categoryState', 'habitsState', 'planState', 'filterState']
+// F17 (dw wave6 2026-09-24): tomatoState 倒计时 blob 段移出契约——账本已迁 tomato_records 行表,
+// 恢复端(UI 七段/主进程三段)从不消费,全仓无读取方。
+const REQUIRED_SEGMENTS = ['settingsState', 'todoState', 'tomatoRecords', 'categoryState', 'habitsState', 'planState', 'filterState']
 
 // R1 refactor: buildBackupDump 与三处备份动作迁至 store/todoBackup.js（todo.js 只留 action 壳）
 const dumpSrc = () => read('renderer/js/store/todoBackup.js')
