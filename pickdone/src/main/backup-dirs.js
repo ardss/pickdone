@@ -5,27 +5,49 @@
  *  backupDir to make the main process write JSON to an arbitrary path — tightened to a registration scheme: unregistered directories are always rejected and fall back to the default directory. */
 const path = require('path')
 const fs = require('fs')
-const { app } = require('electron')
 const log = require('electron-log')
 
-const allowedBackupDirs = new Set()
-function allowedBackupDirsFile () { return path.join(app.getPath('userData'), 'allowed-backup-dirs.json') }
+// Lazy electron require: this module is also consumed by pure-Node CLI code
+// (cli/lib-restore-backup.cjs) where `electron` cannot resolve at require time.
+let _app = null
+const getApp = () => { _app = _app || require('electron').app; return _app }
 
-/** Default backup root externalized: pickdone-backups under the userData parent directory (e.g. %APPDATA%\pickdone-backups).
- *  The old default userData/backups lived alongside todos.db in userData; wiping userData killed both DB and backups. Externalized, backups survive independently.
- *  Only a "default": when the user explicitly set a directory in settings.backupDir, the user's setting is honored (whitelist/symlink defenses unchanged). */
+const allowedBackupDirs = new Set()
+function allowedBackupDirsFile () { return path.join(getApp().getPath('userData'), 'allowed-backup-dirs.json') }
+
+/** Single source for default backup-root candidates (P0 root fix, 2026-09-25):
+ *  [0] is the ACTIVE default root; [1..] are legacy roots kept for discovery/migration only.
+ *  Priority: TODO_BACKUP_DIR (explicit) > <userData>/backups (inside the isolation dir — a dev
+ *  instance with TODO_USER_DATA_DIR can no longer leak auto snapshots into the repo tree via the
+ *  old parent-of-userData derivation) > legacy <parent-of-userData>/pickdone-backups.
+ *  Both consumers (main process defaultBackupRoot and the CLI restore-backup discovery) read THIS
+ *  function — no second copy of the derivation is allowed. */
+function defaultBackupRootCandidates (userDataDirPath) {
+  if (process.env.TODO_BACKUP_DIR) return [process.env.TODO_BACKUP_DIR]
+  return [
+    path.join(userDataDirPath, 'backups'),
+    path.join(path.dirname(userDataDirPath), 'pickdone-backups')
+  ]
+}
+
+/** Active default backup root. Previously externalized to parent-of-userData/pickdone-backups so
+ *  wiping userData spared the backups; that derivation made dev instances (userData under the repo)
+ *  write snapshots into the repo tree. The default now lives INSIDE userData (TODO_BACKUP_DIR can
+ *  externalize it explicitly) and the old external snapshots are migrated in once. */
 function defaultBackupRoot () {
-  const ud = app.getPath('userData')
-  const root = path.join(path.dirname(ud), 'pickdone-backups')
-  migrateLegacyBackups(ud, root)
+  const ud = getApp().getPath('userData')
+  const [root, ...legacyRoots] = defaultBackupRootCandidates(ud)
+  for (const legacy of legacyRoots) migrateLegacyBackups(legacy, root)
   return root
 }
 
-/** One-time, idempotent migration of the old default directory: when the new default root lacks the corresponding file, move *.json from userData/backups over.
- *  rename is naturally idempotent (the source disappears after moving); on name conflicts only the old-side copy is dropped, never overwriting the new root; failure only warns and does not block backups. */
-function migrateLegacyBackups (ud, root) {
+/** One-time, idempotent migration: move *.json from a legacy backup dir into the active root when
+ *  the corresponding file is absent there; name conflicts drop only the legacy copy; failure warns
+ *  and never blocks backups. A legacy dir equal to the root is skipped (self-move would delete). */
+function migrateLegacyBackups (legacyDir, root) {
   try {
-    const legacy = path.join(ud, 'backups')
+    const legacy = path.resolve(legacyDir)
+    if (legacy === path.resolve(root)) return
     if (!fs.existsSync(legacy)) return
     const files = fs.readdirSync(legacy).filter(f => f.endsWith('.json'))
     if (!files.length) return
@@ -37,7 +59,7 @@ function migrateLegacyBackups (ud, root) {
       if (fs.existsSync(dst)) { try { fs.unlinkSync(src) } catch {} continue }
       try { fs.renameSync(src, dst); moved++ } catch {}
     }
-    if (moved) log.info('[Backup] 已将旧默认备份目录快照迁移至外置根:', legacy, '->', root, `(${moved} 个文件)`)
+    if (moved) log.info('[Backup] 已将旧默认备份目录快照迁移至新默认根:', legacy, '->', root, `(${moved} 个文件)`)
   } catch (e) { log.warn('[Backup] 旧备份目录迁移跳过:', e && e.message) }
 }
 function loadAllowedBackupDirs () {
@@ -48,7 +70,7 @@ function saveAllowedBackupDirs () {
   try { fs.writeFileSync(allowedBackupDirsFile(), JSON.stringify([...allowedBackupDirs])) } catch {}
 }
 function resolveBackupDir (configured) {
-  const fallback = defaultBackupRoot() // externalized default root (formerly userData/backups, sharing the DB's fate)
+  const fallback = defaultBackupRoot() // default root: TODO_BACKUP_DIR or <userData>/backups (single source: defaultBackupRootCandidates)
   loadAllowedBackupDirs()
   const dir = configured || fallback
   const resolved = path.resolve(dir)
@@ -73,4 +95,4 @@ function resolveBackupDir (configured) {
   return resolved
 }
 
-module.exports = { resolveBackupDir, defaultBackupRoot, saveAllowedBackupDirs, loadAllowedBackupDirs, allowedBackupDirs }
+module.exports = { resolveBackupDir, defaultBackupRoot, defaultBackupRootCandidates, saveAllowedBackupDirs, loadAllowedBackupDirs, allowedBackupDirs }
