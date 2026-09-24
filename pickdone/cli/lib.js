@@ -470,7 +470,7 @@ function toggleComplete (input, target, { withSubtasks, completedAt } = {}) {
     const group = db.call('queryTodos', { deleted: 0, repeatId: rid })
     let rule = null
     try { rule = JSON.parse(db.call('getMeta', 'repeatRule:' + rid) || 'null') } catch { /* no rule means no renewal */ }
-    const next = core.nextRepeatInstance(merged, group, rule, require('../src/main/core/holidays.js').getHolidayList())
+    const next = core.nextRepeatInstance(merged, group, rule, require('../shared/holidays.mjs').getHolidayList())
     if (next) {
       // Renewal-instance idempotency: skip when an instance with the same rid + same dayStart exists (prevents duplicate CLI runs + concurrent multi-window generation creating two)
       const existing = db.call('queryTodos', { deleted: 0, repeatId: rid, dayStartFrom: next.todoTime, dayStartTo: next.todoTime })
@@ -871,7 +871,7 @@ function repeatOn (input, rule, count) {
   // skipStatutoryHolidays rule still expanded ONTO statutory holidays on the CLI (the renderer
   // passes its holidayList here; the CLI complete-renewal path below already does). Mirrors
   // cli/lib.js:655.
-  const holidayList = require('../src/main/core/holidays.js').getHolidayList()
+  const holidayList = require('../shared/holidays.mjs').getHolidayList()
   for (const ts of core.expandRepeatDates(base, rule, holidayList).map(d => +d).filter(ts => ts > base).slice(0, cap)) {
     // F-B4: shared renewal-instance constructor (done-path parity). reminderTime keeps the template's
     // wall-clock time on each instance (dayjs re-derive per instance, same as RepeatModal — copying

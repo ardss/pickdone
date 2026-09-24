@@ -544,15 +544,6 @@ if (!app.requestSingleInstanceLock()) { app.quit() } else {
     createMainWindow()
     const win = getMainWindow()
     tomatoTaskbar.init(win) // taskbar progress/title countdown/thumbnail toolbar (pomodoro, Windows native)
-    // Temporary demo data injection (enabled with --seed-tomato)
-    // Guard: TODO_USER_DATA_DIR unset = connected directly to the real database (%APPDATA%\pickdone); demo data must never pollute real user data
-    if (process.argv.includes('--seed-tomato')) {
-      if (!process.env.TODO_USER_DATA_DIR) {
-        log.warn('--seed-tomato 仅允许在隔离数据目录实例使用，本次已忽略；设置 TODO_USER_DATA_DIR 后重试')
-      } else {
-        try { require('./seed-temp')(win) } catch (e) { log.warn('[Seed] failed', e) }
-      }
-    }
     createTray()
     scheduler.setSoundFile(path.join(__dirname, '../../assets/media/confirm1.ogg'))
     scheduler.reloadAll(dbApi())
