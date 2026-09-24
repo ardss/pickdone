@@ -31,7 +31,7 @@ function releaseKeyListeners () {
   keydownHandler = keyupHandler = null
 }
 
-export function showUndoToast (messageFn, children, { type = 'success' } = {}) {
+export function showUndoToast (messageFn, children, { type = 'success', onDismiss } = {}) {
   const h = window.Vue.h
   let timer = null
   const arm = () => {
@@ -51,6 +51,11 @@ export function showUndoToast (messageFn, children, { type = 'success' } = {}) {
   const unregister = () => {
     if (controller.pause) controller.pause = null // mark dead so late hover events can't re-arm
     if (activeToasts.delete(controller)) releaseKeyListeners()
+    // onDismiss (2026-09-25): fires on EVERY close path (auto-dismiss timer / hover-paused expiry /
+    // ✕ / EP onClose after route change). Callers like EditPanel.removeFile defer destructive
+    // follow-ups (physical file deletion) to here instead of a fixed setTimeout, so a hover that
+    // pauses the timer past their deadline can no longer race the undo.
+    if (onDismiss) { try { onDismiss() } catch { /* dismiss hook must not break teardown */ } }
   }
   // Registered before messageFn so even an immediate onClose can't miss it
   activeToasts.add(controller)

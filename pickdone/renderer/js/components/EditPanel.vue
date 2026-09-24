@@ -56,7 +56,7 @@
           <span class="ml-auto"></span>
           <span class="ep-row-arrow" :class="{on: catOpen}">▾</span>
         </div>
-        <div v-if="catOpen" v-click-outside="() => catOpen = false" class="ep-cat-pop" role="listbox">
+        <div v-if="catOpen" v-click-outside="onCatOutside" class="ep-cat-pop" role="listbox">
           <div class="ep-cat-opt" role="option" :class="{on: !e.categoryId}" :aria-selected="(!e.categoryId)?'true':'false'"
                tabindex="0" @click="pickCat(0)" @keydown.enter.prevent="pickCat(0)">
             <span class="ep-cat-dot" style="background:var(--text-4)"></span>{{ $t('statsJ.EditPanel.uncategorizedOption') }}</div>
@@ -166,6 +166,7 @@ import { getEstimate, setEstimate, ensureEstimate } from '../utils/tomatoEstimat
 import { createSaveQueue } from '../utils/editSave.js'
 import { attachmentUrlPresent } from '../utils/attachmentRefs.js'
 import { contentFingerprint, shouldRefreshRemote } from '../utils/editPanelRemoteSync.js'
+import { findTaskRowEl } from '../utils/todoRowEl.js'
 import EpReminders from './edit-panel/EpReminders.vue'
 import EpSubtasks from './edit-panel/EpSubtasks.vue'
 import EpAttachments from './edit-panel/EpAttachments.vue'
@@ -174,6 +175,7 @@ import EpTomato from './edit-panel/EpTomato.vue'
 import EpTags from './edit-panel/EpTags.vue'
 import * as attachments from './edit-panel/attachments.js'
 import * as repeat from './edit-panel/repeat.js'
+import { catOutsideClose } from './edit-panel/interactions.js'
 
 const FIELD_MAP = {
   title: 'taskContent',
@@ -279,6 +281,10 @@ export default {
             const fromRow = !!ae && !!ae.closest && !!ae.closest('.td-item')
             if (t && (!ae || ae.tagName === 'BODY' || fromRow)) t.focus()
           })
+        } else {
+          // hydrate dedup (2026-09-25): forget the last hydration key on close so reopening the
+          // SAME task re-hydrates from a fresh snapshot instead of being deduped into a no-op
+          this._hydKey = null
         }
       }
     },
@@ -388,9 +394,15 @@ export default {
         })
       })
     },
-    hydrate () {
+    hydrate (force) {
       const s = this.$store.state.ui.rightSidebarTodoEdit
       if (!s.visible || !s.taskId) return
+      // P2 dedup (2026-09-25): the taskId and visible watchers are BOTH immediate, so a single
+      // open used to run hydrate twice — double flushSave, double repeatGroupInfo DB query, double
+      // initSubSortable. Same task + visible already hydrated → skip unless explicitly forced.
+      const key = s.taskId + '|' + !!s.visible
+      if (!force && this._hydKey === key) return
+      this._hydKey = key
       this.flushSave()
       this.subList = JSON.parse(JSON.stringify(s.sublist))
       // Mint stable render keys for rows imported from the store (persisted subtasks carry no _key)
@@ -420,7 +432,7 @@ export default {
       })
       if (verdict === 'none') return
       if (contentFingerprint(this.e) === this._remoteFingerprint) {
-        this.hydrate() // pristine: adopt the peer edit silently
+        this.hydrate(true) // pristine: adopt the peer edit silently (forced — same-key dedup must not skip it)
       } else {
         this.remoteStale = true // user has unsaved edits: ask before overwriting
       }
@@ -428,7 +440,7 @@ export default {
     /** F3: manual "刷新" from the remote-updated notice — the user chose to take the peer copy. */
     refreshFromStore () {
       this.remoteStale = false
-      this.hydrate()
+      this.hydrate(true)
     },
     /* ===== Repeat: modals + group-count query (impl: edit-panel/repeat.js) ===== */
     async repeatGroupInfo () { return repeat.repeatGroupInfo(this) },
@@ -447,15 +459,11 @@ export default {
      * task row, falling back to the scroll container (focusable via tabindex=-1) */
     refocusRow (id) {
       this.$nextTick(() => {
-        let row = null
-        if (id != null) {
-          row = document.querySelector('.td-item[data-id="' + id + '"], .td-item[data-task-id="' + id + '"], .td-item[data-taskid="' + id + '"]')
-        }
-        if (!row && id != null) {
-          // rows don't carry data-id yet: fall back to locating the row element by its mounted component
-          const rows = document.querySelectorAll('.td-item')
-          for (const r of rows) { if ((r as any).__vue__ && (r as any).__vue__.todo && (r as any).__vue__.todo.taskId === id) { row = r; break } }
-        }
+        // P1 fix (2026-09-25): the row locator moved to utils/todoRowEl.js — the old fallback only
+        // probed `el.__vue__` (Vue2-proprietary; this app is Vue3 createApp) and no `.td-item`
+        // element carries data-id, so BOTH stages missed and Esc/collapse always dropped focus to
+        // the scroll container. findTaskRowEl probes .td-item data-attributes plus BOTH Vue channels.
+        const row = findTaskRowEl(id)
         if (row) { (row as HTMLElement).focus(); return }
         const list = document.querySelector<HTMLElement>('.main-scroll')
         if (list) {
@@ -544,7 +552,7 @@ export default {
     toggleComplete () {
       // Same feedback semantics as checking in the list: completing shows a "completed + undo" toast, un-completing is only announced
       toggleCompleteWithUndo({ store: this.$store, message: this.$message, todo: this.task, announce: this.$announce })
-        .then(() => this.hydrate())
+        .then(() => this.hydrate(true))
     },
     /** Restore the currently edited task from the recycle bin (keeping the edited fields); after restore the banner disappears and the complete row returns */
     async restoreFromBin () {
@@ -562,7 +570,7 @@ export default {
         return
       }
       this.$message.success(this.$t('statsJ.EditPanel.restoredMsg'))
-      this.hydrate()
+      this.hydrate(true)
     },
     /* ===== Subtasks: EpSubtasks emits; subList + the toggle-complete linkage stay here ===== */
     addSub (text) {
@@ -581,8 +589,17 @@ export default {
     delSub (i) {
       const sub = this.subList[i]
       removeWithUndo(this,
-        () => { this.subList.splice(i, 1); this.markDirty('subtasks'); this.queueSave({}) },
-        () => { this.subList.splice(i, 0, sub); this.markDirty('subtasks'); this.queueSave({}) })
+        () => {
+          // P2: locate by item reference — the captured index goes stale when another subtask is removed first (out-of-order undos)
+          const at = this.subList.indexOf(sub)
+          this.subList.splice(at < 0 ? this.subList.length : at, 1)
+          this.markDirty('subtasks'); this.queueSave({})
+        },
+        () => {
+          const at = this.subList.indexOf(sub)
+          this.subList.splice(at < 0 ? this.subList.length : at, 0, sub)
+          this.markDirty('subtasks'); this.queueSave({})
+        })
     },
     moveSub (i, dir) {
       const j = i + dir
@@ -610,28 +627,35 @@ export default {
     removeFile (arrName, idx) {
       const item = this[arrName][idx]
       if (!item) return
-      let diskTimer = null
+      // P1 fix (2026-09-25): physical disk deletion used to ride a fixed 5.5s setTimeout while the
+      // undo toast's timer PAUSES ON HOVER — hover past 5.5s then clicking 撤销 revived the list
+      // entry but the file was already gone. Deletion is now deferred to the toast's dismiss hook
+      // (fires on every close path, after the hover-aware timer), guarded by an undone flag and the
+      // existing store-row url re-check.
+      let undone = false
+      const deleteFromDisk = () => {
+        if (undone || !item.url) return
+        // Data-safety guard: re-check the latest task row in the store before touching the disk. If the JSON update never landed (save failed / panel unmounted mid-write), the row still references the url — deleting the file then would corrupt the task's attachments.
+        const row = this.$store.state.todo.todoList.find(t => t.taskId === (this.e && this.e.taskId))
+        if (attachmentUrlPresent(row, item.url)) return
+        // .catch: delete-file now surfaces structured errors instead of swallowing them (2026-09-11); this call is a fire-and-forget sweep — a failure must not become an unhandled rejection
+        window.todoAPI.deleteFile(item.url).catch(() => {})
+      }
       removeWithUndo(this,
         () => {
-          this[arrName].splice(idx, 1)
+          const at = this[arrName].indexOf(item) // P2: indexOf — a captured idx goes stale when an earlier row is removed first (out-of-order undos)
+          this[arrName].splice(at < 0 ? this[arrName].length : at, 1)
           this.markDirty(arrName === 'imgList' ? 'imgs' : 'files')
           this.queueSave({})
-          // Delay disk file deletion until after the undo window: an accidental delete can be reverted losslessly within 5 seconds
-          diskTimer = setTimeout(() => {
-            if (!item.url) return
-            // Data-safety guard: re-check the latest task row in the store before touching the disk. If the JSON update never landed (save failed / panel unmounted mid-write), the row still references the url — deleting the file then would corrupt the task's attachments.
-            const row = this.$store.state.todo.todoList.find(t => t.taskId === (this.e && this.e.taskId))
-            if (attachmentUrlPresent(row, item.url)) return
-            // .catch: delete-file now surfaces structured errors instead of swallowing them (2026-09-11); this call is a fire-and-forget sweep — a failure must not become an unhandled rejection
-            window.todoAPI.deleteFile(item.url).catch(() => {})
-          }, 5500)
         },
         () => {
-          clearTimeout(diskTimer)
-          this[arrName].splice(idx, 0, item)
+          undone = true
+          const at = this[arrName].indexOf(item)
+          this[arrName].splice(at < 0 ? this[arrName].length : at, 0, item)
           this.markDirty(arrName === 'imgList' ? 'imgs' : 'files')
           this.queueSave({})
-        })
+        },
+        { onDismiss: deleteFromDisk })
     },
     delTask () {
       // Recurring tasks share the context-menu semantics: ask the scope first (this instance only / the whole series)
@@ -642,6 +666,10 @@ export default {
     /* ===== Repeat (impl: edit-panel/repeat.js) ===== */
     askRepeatEdit () { return repeat.askRepeatEdit(this) },
     askRepeatDelete () { return repeat.askRepeatDelete(this) },
+    // P2 fix (impl: edit-panel/interactions.js): header-row clicks are excluded from the
+    // click-outside closure so the header's click toggle alone owns open/close (the pop used to
+    // close on mousedown and re-open on the same row's click — it could never be dismissed)
+    onCatOutside (e) { return catOutsideClose(this, e) },
     estDelta (d) { setEstimate(this.e && this.e.taskId, getEstimate(this.e && this.e.taskId) + d) },
     chipCat (c) { this.fieldPatch('categoryId', c.categoryId) }, // reserved: category quick chips
     pickCat (id) { this.fieldPatch('categoryId', id); this.catOpen = false },

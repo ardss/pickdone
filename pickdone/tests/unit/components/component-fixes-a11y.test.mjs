@@ -77,14 +77,18 @@ test('EditPanel pure helper: attachmentUrlPresent detects url in image/files JSO
   assert.equal(attachmentUrlPresent({ image: '[{}]' }, ''), false, 'empty url never matches')
 })
 
-test('EditPanel: disk deletion timer re-checks the latest store row before deleteFile', () => {
+test('EditPanel: disk deletion defers to the undo-toast dismiss hook and re-checks the store row first', () => {
+  // 2026-09-25 P1 fix: the fixed 5.5s setTimeout raced the hover-paused undo toast (hover past
+  // 5.5s + 撤销 revived the list entry with the file already gone). Deletion now rides the
+  // toast's onDismiss (fires after the toast actually closes on any path) behind an undone flag.
   const src = read('renderer/js/components/EditPanel.vue')
-  const timerIdx = src.indexOf('5500')
-  assert.ok(timerIdx > 0, 'delayed disk timer present')
-  const block = src.slice(src.lastIndexOf('removeWithUndo', timerIdx), timerIdx + 200)
-  assert.match(block, /attachmentUrlPresent\(row, item\.url\)/, 'guard consults attachmentUrlPresent')
-  assert.match(block, /todoList\.find/, 'guard reads the latest task row from the store')
-  assert.ok(src.indexOf('attachmentUrlPresent(row, item.url)') < src.indexOf('deleteFile(item.url)'), 'deleteFile only runs after the guard')
+  assert.ok(!src.includes('5500'), 'fixed disk-deletion timer removed')
+  const guardIdx = src.indexOf('attachmentUrlPresent(row, item.url)')
+  const deleteIdx = src.indexOf('deleteFile(item.url)')
+  assert.ok(guardIdx > 0 && deleteIdx > guardIdx, 'deleteFile only runs after the store-row url guard')
+  const block = src.slice(src.indexOf('removeFile (arrName, idx)'), src.indexOf('delTask ()'))
+  assert.match(block, /undone = true/, 'undo marks the deletion as undone')
+  assert.match(block, /onDismiss: deleteFromDisk/, 'disk deletion rides the toast dismiss hook')
 })
 
 /* ---------------- EditPanel: pomodoro estimate stepper labels ---------------- */
