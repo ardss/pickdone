@@ -477,8 +477,18 @@ async function bootstrap () {
   // Kept outside the shortcut-conflict block: it was wrongly nested inside that if, so in environments without the conflict API the updater subscription never ran at all
   if (typeof window.todoAPI.onUpdaterEvent === 'function') {
     let _readyToasted = false
+    let _availableToasted = false // one-shot: a new version becomes available (autoDownload off) — the main process may re-broadcast 'available' on every 4h check, the toast must not repeat
     window.todoAPI.onUpdaterEvent(d => {
       if (d) store.commit('ui/setUpdateState', d) // Mirror into the ui store: data source for the red-dot badge on the sidebar settings gear
+      if (d && d.status === 'available' && !_availableToasted) {
+        // Promise kept (updater.js: 'when off, only a new-version notice is shown'): with auto-download
+        // off the only consumer of status='available' used to be Settings→About — users who never open
+        // settings never heard about the new version. Same long-lived toast shape as the ready toast.
+        _availableToasted = true
+        try {
+          window.ElementPlus.ElMessage({ type: 'info', message: i18n.global.t('statsH.update.availableToast'), duration: 12000, showClose: true })
+        } catch { /* Silent if toast fails; Settings→About still offers the download */ }
+      }
       if (d && d.status === 'ready' && !_readyToasted) {
         _readyToasted = true
         try {
