@@ -214,7 +214,12 @@ function reloadAll (db) {
     const raw = db.getMeta('reminderLastSeenAt')
     if (raw == null) firstRun = true
     lastSeen = parseInt(raw || '0', 10) || 0
-  } catch { /* read failure treated as first run */ }
+  } catch {
+    // C4 (P1 2026-09-24): the comment claimed "read failure treated as first run" but the catch left
+    // firstRun=false — a throwing getMeta (transient DB trouble) then made every historical reminder
+    // past `lastSeen=0` look catchable and re-fire all at once. Actually set the flag.
+    firstRun = true /* read failure treated as first run */
+  }
   const todos = db.queryTodos({ deleted: 0, orderBy: 'remindAt ASC' })
   // Edge-trigger: unchanged reminder inputs -> the current timers are still correct; skip the
   // teardown AND the watermark write (the write is what re-touches the DB and fed the watcher
