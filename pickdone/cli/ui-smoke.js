@@ -26,6 +26,15 @@ function killSpawnedChild () {
 }
 
 async function ensureApp () {
+  // Data-isolation gate must run before the connectivity probe: a stale CDP app already on the port
+  // would otherwise make --launch a no-op and silently bypass this refusal (unit-cli data-safety test)
+  if (process.argv.includes('--launch') && !process.env.TODO_DB_DIR && !process.env.TODO_USER_DATA_DIR) {
+    console.error('[data-safety] --launch refused: no isolated data directory set.')
+    console.error('  The spawned App would open your real %APPDATA%\\pickdone database.')
+    console.error('  Set an isolation dir first, e.g.:  PowerShell: $env:TODO_USER_DATA_DIR = "$env:TEMP\\pickdone-smoke"; node cli/ui-smoke.js --launch')
+    console.error('  (bash: TODO_USER_DATA_DIR=/tmp/pickdone-smoke node cli/ui-smoke.js --launch; TODO_DB_DIR also accepted)')
+    process.exit(1)
+  }
   for (let i = 0; i < 2; i++) {
     try { await getJSON('/json/list'); return } catch { /* not up */ }
     if (i === 0) {

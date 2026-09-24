@@ -742,9 +742,6 @@ html.widget-preview .tomato--expand-noise { width: 240px; height: 320px; }
 
 .abandon-btn--giveup { background: var(--danger-strong); color: #fff; }
 
-
-
-
 .abandon-btn--giveup:hover { background: var(--danger-strong); }
 
 /* ==================== 6. 浮窗深色主题适配（html[data-theme="dark"] 由 applyColorMode 统一挂载） ==================== */
