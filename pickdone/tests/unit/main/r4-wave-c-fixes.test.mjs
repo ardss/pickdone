@@ -48,8 +48,10 @@ test('P1: restoreTasksFromCriticalBackup returns 0 on a corrupt backup (error su
 test('P1: index.js relaunch branch gates the plain-bak cleanup on restoredN > 0 (source anchor)', () => {
   const src = fs.readFileSync(path.join(ROOT, 'src/main/index.js'), 'utf8')
   const relaunchIdx = src.indexOf('app.exit does not trigger will-quit')
-  const branch = src.slice(relaunchIdx, relaunchIdx + 4000)
-  assert.ok(branch.includes('choice === 0 && recovered'), 'relaunch branch located')
+  const branch = src.slice(relaunchIdx, relaunchIdx + 6000)
+  // main-ipc wave (2026-09-25): the branch chain is driven by dbRecovery.recoveryDialogAction —
+  // the relaunch arm is `dialogAction === 'relaunch'` (reached with recovered=true only).
+  assert.ok(branch.includes("dialogAction === 'relaunch'"), 'relaunch branch located')
   assert.ok(/restoredN > 0/.test(branch), 'cleanup must be gated on an actual restoredN > 0')
   // the rmSync of the plain-bak must live INSIDE the gated branch
   const gateIdx = branch.indexOf('restoredN > 0')
