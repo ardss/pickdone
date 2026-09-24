@@ -92,7 +92,8 @@ test('dw5-4: writeAutoBackupCore keeps the honest failure line even when the IPC
     dbCall: async () => null,
     runAutoBackup: async () => { throw new Error('app is locked') }
   }
-  await writeAutoBackupCore({}, { state: {}, rootState: { settings: {}, auth: { user: null, lastLoginRecord: null }, category: { list: [] }, habits: { habits: [], moments: [] } } })
+  const r = await writeAutoBackupCore({}, { state: {}, rootState: { settings: {}, auth: { user: null, lastLoginRecord: null }, category: { list: [] }, habits: { habits: [], moments: [] } } })
+  assert.equal(r, false, 'thrown path must return false — the caller\'s ok === false check decides the error vs success toast')
   const rt = loadRuntime()
   assert.ok(rt.autoBackupLastFailAt > 0 && String(rt.autoBackupLastError).includes('locked'), 'thrown failures are recorded too, not just console.error-ed')
 })

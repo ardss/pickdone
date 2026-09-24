@@ -77,6 +77,7 @@ export async function writeAutoBackupCore (ctx, { state, rootState }) {
   } catch (e) {
     console.error('[auto-backup] failed:', e && e.message)
     saveRuntime({ autoBackupLastAt: 0, autoBackupLastFailAt: Date.now(), autoBackupLastError: String((e && e.message) || e).slice(0, 160) })
+    return false // callers (SettingsDataTab) branch on ok === false: undefined used to fire the success toast on a thrown IPC
   }
 }
 
