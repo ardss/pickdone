@@ -207,7 +207,12 @@ module.exports = function todoHandlers (ctx) {
       } catch { /* best-effort */ }
       // Write-op determination lives in db.js's explicit WRITE_OPS list (do not fall back to regex: hardDeleteMany and others were once missed, leaving cross-window data stale)
       // setMeta writes only the meta table, not todos: skip reloadAll (settings/tomato/dayPlan mirrors are high-frequency writes; the previous full-reload path caused a reload storm); still broadcast so peer windows sync
-      if (op === 'setMeta') { broadcastTodosChanged(op, e.sender); if (!viaBus && notifySyncChange) notifySyncChange(op); return r } // bus-routed writes kick via the 'ls-mirror' hook instead (GAP-B, 2026-09-19)
+      // 2026-09-25 single-caliber cleanup: the old trailing `if (!viaBus && notifySyncChange)` here
+      // and on the ledger early-return were dead for writes (every whitelisted write op has a
+      // manifest row → viaBus is always true; verified WRITE_OPS ∩ bus.commandForOp = only
+      // setMetaMany lacks a row, and it is not on the renderer whitelist) — sync kicks ride the
+      // 'ls-mirror' commit hook above, nothing else.
+      if (op === 'setMeta') { broadcastTodosChanged(op, e.sender); return r }
       if (dbm.isWriteOp(op)) {
         // Single-task writes (upsert/bumpSnow) reschedule only that task's timers via scheduleOne instead of a
         // full reloadAll (whole-table scan + all timers torn down and rebuilt on every write). Fall back to
@@ -227,9 +232,11 @@ module.exports = function todoHandlers (ctx) {
         try { const rw = resyncDbWatch(); if (rw) rw() } catch { /* best-effort */ }
       }
       // 账本行写:调度器不依赖番茄记录;广播由 db 层 setLedgerChangedHook 统一发(CLI 直写同样触发),此处只跳过 todos 全量重载
-      if (op === 'tomatoAppendMany' || op === 'tomatoUpdateById' || op === 'tomatoRemoveByIds' || op === 'tomatoMigrateFromMeta') { if (!viaBus && notifySyncChange) notifySyncChange(op); return r } // GAP-B kick (2026-09-19): ledger ops must reach peers in seconds — bus-routed writes kick via 'ls-mirror'
+      if (op === 'tomatoAppendMany' || op === 'tomatoUpdateById' || op === 'tomatoRemoveByIds' || op === 'tomatoMigrateFromMeta') return r // sync kick rides the 'ls-mirror' hook (GAP-B, 2026-09-19)
       if (dbm.isWriteOp(op)) broadcastTodosChanged(op, e.sender) // exclude the originating sender, so optimistic updates are not clobbered by the echo
-      if (!viaBus && notifySyncChange) notifySyncChange(op) // reads only — writes kicked by the 'ls-mirror' hook inside the bus commit
+      // Reads kick NOTHING: the old trailing `if (!viaBus && notifySyncChange) notifySyncChange(op)` was
+      // only live for reads (every write routes through the bus) and mislabeled every read as a
+      // 'local-write:<op>' sync kick. Single caliber (2026-09-25): writes kick via 'ls-mirror' only.
       return r
     } // end execDbCall
 
