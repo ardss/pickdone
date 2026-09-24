@@ -13,8 +13,8 @@
         </div>
         <div class="title__append">
           <div class="dropdown-select" :class="{ 'is-open': openDd === 'sort' }">
-            <el-popover placement="bottom-start" width="160" trigger="click" :hide-after="0" popper-class="dd-pop" @show="openDd = 'sort'" @hide="openDd = null">
-              <ul class="dd-menu" role="listbox" :aria-label="$t('statsC.TodoBox.tip')">
+            <el-popover ref="popSort" placement="bottom-start" width="160" trigger="click" :hide-after="0" popper-class="dd-pop" @show="openDd = 'sort'" @hide="openDd = null">
+              <ul class="dd-menu" role="listbox" :aria-label="$t('statsC.TodoBox.tip')" @keydown="ddMenuKey($event, 'popSort')">
                 <li v-for="m in sortMethodOptions" :key="m.value" tabindex="0" role="option" :aria-selected="m.value === settings.todoBoxSortMethod ? 'true' : 'false'"
                     :class="{ on: m.value === settings.todoBoxSortMethod }" @click="setSort(m.value)" @keydown.enter.prevent="setSort(m.value)">{{ m.label }}</li>
               </ul>
@@ -22,8 +22,8 @@
             </el-popover>
           </div>
           <div class="dropdown-select" :class="{ 'is-open': openDd === 'order' }">
-            <el-popover placement="bottom-start" width="120" trigger="click" :hide-after="0" popper-class="dd-pop" @show="openDd = 'order'" @hide="openDd = null">
-              <ul class="dd-menu" role="listbox" :aria-label="$t('statsC.TodoBox.tip')">
+            <el-popover ref="popOrder" placement="bottom-start" width="120" trigger="click" :hide-after="0" popper-class="dd-pop" @show="openDd = 'order'" @hide="openDd = null">
+              <ul class="dd-menu" role="listbox" :aria-label="$t('statsC.TodoBox.tip')" @keydown="ddMenuKey($event, 'popOrder')">
                 <li v-for="o in sortOrderOptions" :key="o.value" tabindex="0" role="option" :aria-selected="o.value === settings.todoBoxSortOrder ? 'true' : 'false'"
                     :class="{ on: o.value === settings.todoBoxSortOrder }" @click="setOrder(o.value)" @keydown.enter.prevent="setOrder(o.value)">{{ o.label }}</li>
               </ul>
@@ -31,8 +31,8 @@
             </el-popover>
           </div>
           <div class="dropdown-select" :class="{ 'is-open': openDd === 'cat' }">
-            <el-popover placement="bottom-start" width="180" trigger="click" :hide-after="0" popper-class="dd-pop" @show="openDd = 'cat'" @hide="openDd = null">
-              <ul class="dd-menu" role="listbox" :aria-label="$t('statsC.TodoBox.tip')">
+            <el-popover ref="popCat" placement="bottom-start" width="180" trigger="click" :hide-after="0" popper-class="dd-pop" @show="openDd = 'cat'" @hide="openDd = null">
+              <ul class="dd-menu" role="listbox" :aria-label="$t('statsC.TodoBox.tip')" @keydown="ddMenuKey($event, 'popCat')">
                 <li :class="{ on: settings.todoBoxCategoryId === -1 }" tabindex="0" role="option" :aria-selected="settings.todoBoxCategoryId === -1 ? 'true' : 'false'" @click="setCat(-1)" @keydown.enter.prevent="setCat(-1)">{{ $t('statsC.TodoBox.allCats') }}</li>
                 <li v-for="c in cats" :key="c.categoryId" tabindex="0" role="option" :aria-selected="c.categoryId === settings.todoBoxCategoryId ? 'true' : 'false'"
                     :class="{ on: c.categoryId === settings.todoBoxCategoryId }" @click="setCat(c.categoryId)" @keydown.enter.prevent="setCat(c.categoryId)">{{ c.categoryName }}</li>
@@ -69,11 +69,11 @@
       </div>
       <transition name="fade">
         <div v-if="batchMode && checkedIds.length" class="tb-batch-bar">
-          <span>{{ $t('statsC.TodoBox.selectedCount', { n: checkedIds.length }) }}</span>
+          <span aria-live="polite">{{ $t('statsC.TodoBox.selectedCount', { n: checkedIds.length }) }}</span>
           <span class="ml-auto"></span>
-          <button class="mini" @click="batchToday">{{ $t('statsC.TodoBox.btnToday') }}</button>
-          <el-dropdown trigger="click" @command="batchCat">
-            <button class="mini">{{ $t('statsC.TodoBox.btnMoveToCat') }}</button>
+          <button class="mini" :disabled="batchBusy" @click="batchToday">{{ $t('statsC.TodoBox.btnToday') }}</button>
+          <el-dropdown trigger="click" :disabled="batchBusy" @command="batchCat">
+            <button class="mini" :disabled="batchBusy">{{ $t('statsC.TodoBox.btnMoveToCat') }}</button>
             <template #dropdown>
               <el-dropdown-menu>
                 <el-dropdown-item :command="0">{{ $t('statsC.TodoBox.uncategorized') }}</el-dropdown-item>
@@ -81,7 +81,7 @@
               </el-dropdown-menu>
             </template>
           </el-dropdown>
-          <button class="mini danger" @click="batchDelete">{{ $t('statsC.TodoBox.btnDelete') }}</button>
+          <button class="mini danger" :disabled="batchBusy" @click="batchDelete">{{ $t('statsC.TodoBox.btnDelete') }}</button>
           <button class="mini" @click="toggleBatch">{{ $t('statsC.TodoBox.btnDone') }}</button>
         </div>
       </transition>
@@ -104,6 +104,7 @@ import { DEFAULT_CAT_COLOR } from '../utils/core.js'
 import { toggleCompleteWithUndo } from '../utils/completeAction.js'
 import { batchMoveWithUndo } from '../utils/confirm.js'
 import { getEstimate } from '../utils/tomatoEstimate.js'
+import { crossDayMovePatch, crossDayRevertPatch } from '../utils/crossDayMove.js' // [maint-0924 A1]
 import EmptyState from '../components/EmptyState.vue'
 
 // [navgate-fix] pure-start (extracted by tests/unit-navgate-fix-ui.test.mjs)
@@ -130,7 +131,7 @@ export default {
   name: 'TodoBoxView',
   components: { EmptyState },
   data () {
-    return { batchMode: false, checkedIds: [], openDd: null }
+    return { batchMode: false, checkedIds: [], openDd: null, batchBusy: false }
   },
   computed: {
     settings () { return this.$store.state.settings },
@@ -158,6 +159,28 @@ export default {
     // keyboard activation for the sort/filter dropdown triggers; the cast lives here because the
     // structure guard rejects TS `as` expressions inside templates (silent-undefined identifier scan)
     tbTriggerKey (e) { (e.currentTarget as HTMLElement).click() },
+    // [maint-0924 A8] listbox keyboard semantics for the three custom dd-menus: ArrowDown/ArrowUp
+    // cycle focus across the options, Escape closes the popover and returns focus to its trigger
+    ddMenuKey (e, popRef) {
+      const ul = e.currentTarget
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault()
+        const items = Array.prototype.slice.call(ul.querySelectorAll('li'))
+        if (!items.length) return
+        const i = items.indexOf(document.activeElement)
+        const j = e.key === 'ArrowDown' ? (i + 1) % items.length : (i - 1 + items.length) % items.length
+        if (items[j]) items[j].focus()
+      } else if (e.key === 'Escape') {
+        e.stopPropagation()
+        this.openDd = null
+        const pop = this.$refs[popRef]
+        try { if (pop && typeof pop.hide === 'function') pop.hide() } catch (err) { /* popover already gone */ }
+        // the popper content is teleported to body — recover the trigger inside the component tree instead
+        const idx = { popSort: 0, popOrder: 1, popCat: 2 }[popRef]
+        const triggers = this.$el ? this.$el.querySelectorAll('.dropdown-select__label') : []
+        if (triggers[idx]) (triggers[idx] as HTMLElement).focus()
+      }
+    },
     estOf (t) { return getEstimate(t.taskId) },
     taskContextMenu (t, e) { taskContextMenu(this, t, e) },
     set (patch) { this.$store.commit('settings/updateSettings', patch); this.$store.dispatch('todo/computeViews') },
@@ -191,54 +214,69 @@ export default {
       if (i >= 0) this.checkedIds.splice(i, 1)
       else this.checkedIds.push(t.taskId)
     },
-    // Batch move goes through the unified utils exit (snapshots original values, one undo within 5s restores the whole group), same layer as single-item moveWithUndo
+    // Batch move goes through the unified utils exit (snapshots original values, one undo within 5s restores the whole group), same layer as single-item moveWithUndo.
+    // [maint-0924 A6] _batchBusy-style re-entrancy lock: the loop awaits per-row dispatches, so a
+    // double-click used to run the whole batch twice (double toasts, double snapshots)
+    // [maint-0924 A1] per-row patches go through the shared crossDayMovePatch: a task scheduled at
+    // 14:30 keeps 14:30 on today (the old hard todoTime=today 00:00 wiped the time-of-day and
+    // orphaned reminders on the old day)
     async batchToday () {
-      const ts = +window.dayjs().startOf('day')
-      // Filter against the current list first: dead ids deleted elsewhere during batching are excluded so the toast count matches reality
-      const alive = this.checkedIds.filter(id => this.$store.state.todo.todoList.some(x => x.taskId === id))
-      const snap = []
-      let failed = 0
-      for (const id of alive) {
-        const raw = this.$store.state.todo.todoList.find(x => x.taskId === id)
-        if (!raw) continue
-        try {
-          await this.$store.dispatch('todo/updateTodoFields', { taskId: id, patch: { dayStart: ts, todoTime: ts } })
-          snap.push({ id, dayStart: raw.dayStart, todoTime: raw.todoTime })
-        } catch { failed++ } // per-row catch mirrors batchDelete: one dead row must not abort the rest
-      }
-      this.$message.closeAll()
-      if (snap.length) {
-        batchMoveWithUndo(this, {
-          label: this.$t('statsC.TodoBox.msgToday', { n: snap.length }),
-          snap,
-          revertOf: r => this.$store.dispatch('todo/updateTodoFields', { taskId: r.id, patch: { dayStart: r.dayStart, todoTime: r.todoTime } })
-        })
-      }
-      if (failed) this.$message.warning(this.$t('statsC.TodoBox.msgPartialFail', { n: failed }))
-      this.checkedIds = []
+      if (this.batchBusy) return
+      this.batchBusy = true
+      try {
+        const ts = +window.dayjs().startOf('day')
+        const startOf = x => +window.dayjs(x).startOf('day')
+        // Filter against the current list first: dead ids deleted elsewhere during batching are excluded so the toast count matches reality
+        const alive = this.checkedIds.filter(id => this.$store.state.todo.todoList.some(x => x.taskId === id))
+        const snap = []
+        let failed = 0
+        for (const id of alive) {
+          const raw = this.$store.state.todo.todoList.find(x => x.taskId === id)
+          if (!raw) continue
+          try {
+            const patch = crossDayMovePatch(raw, ts, startOf)
+            await this.$store.dispatch('todo/updateTodoFields', { taskId: id, patch })
+            snap.push({ id, revert: crossDayRevertPatch(raw, patch) })
+          } catch { failed++ } // per-row catch mirrors batchDelete: one dead row must not abort the rest
+        }
+        this.$message.closeAll()
+        if (snap.length) {
+          batchMoveWithUndo(this, {
+            label: this.$t('statsC.TodoBox.msgToday', { n: snap.length }),
+            snap,
+            revertOf: r => this.$store.dispatch('todo/updateTodoFields', { taskId: r.id, patch: r.revert })
+          })
+        }
+        if (failed) this.$message.warning(this.$t('statsC.TodoBox.msgPartialFail', { n: failed }))
+        this.checkedIds = []
+      } finally { this.batchBusy = false }
     },
     async batchCat (catId) {
-      const alive = this.checkedIds.filter(id => this.$store.state.todo.todoList.some(x => x.taskId === id))
-      const snap = []
-      let failed = 0
-      for (const id of alive) {
-        const raw = this.$store.state.todo.todoList.find(x => x.taskId === id)
-        if (!raw) continue
-        try {
-          await this.$store.dispatch('todo/updateTodoFields', { taskId: id, patch: { categoryId: catId } })
-          snap.push({ id, categoryId: raw.categoryId })
-        } catch { failed++ }
-      }
-      this.$message.closeAll()
-      if (snap.length) {
-        batchMoveWithUndo(this, {
-          label: this.$t('statsC.TodoBox.msgMoveCat', { n: snap.length, name: this.catNameOf(catId) || this.$t('statsC.TodoBox.uncategorized') }),
-          snap,
-          revertOf: r => this.$store.dispatch('todo/updateTodoFields', { taskId: r.id, patch: { categoryId: r.categoryId } })
-        })
-      }
-      if (failed) this.$message.warning(this.$t('statsC.TodoBox.msgPartialFail', { n: failed }))
-      this.checkedIds = []
+      if (this.batchBusy) return
+      this.batchBusy = true
+      try {
+        const alive = this.checkedIds.filter(id => this.$store.state.todo.todoList.some(x => x.taskId === id))
+        const snap = []
+        let failed = 0
+        for (const id of alive) {
+          const raw = this.$store.state.todo.todoList.find(x => x.taskId === id)
+          if (!raw) continue
+          try {
+            await this.$store.dispatch('todo/updateTodoFields', { taskId: id, patch: { categoryId: catId } })
+            snap.push({ id, categoryId: raw.categoryId })
+          } catch { failed++ }
+        }
+        this.$message.closeAll()
+        if (snap.length) {
+          batchMoveWithUndo(this, {
+            label: this.$t('statsC.TodoBox.msgMoveCat', { n: snap.length, name: this.catNameOf(catId) || this.$t('statsC.TodoBox.uncategorized') }),
+            snap,
+            revertOf: r => this.$store.dispatch('todo/updateTodoFields', { taskId: r.id, patch: { categoryId: r.categoryId } })
+          })
+        }
+        if (failed) this.$message.warning(this.$t('statsC.TodoBox.msgPartialFail', { n: failed }))
+        this.checkedIds = []
+      } finally { this.batchBusy = false }
     },
     async batchDelete () {
       const n = this.checkedIds.length
