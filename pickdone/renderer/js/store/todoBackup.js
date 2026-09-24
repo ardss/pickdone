@@ -14,15 +14,16 @@ import { isAuxWindow } from '../utils/auxWindow.js'
 export const SCHEMA_V = 1
 
 /* Single source for every backup dump (event/auto/critical). Previously hand-copied 3× and already drifting —
-   a recovery dump missing a field means silently losing data on restore, so any new store goes here once. */
+   a recovery dump missing a field means silently losing data on restore, so any new store goes here once.
+   F7/F17 (dw wave6 2026-09-24): segments must also have a CONSUMER to stay in the dump — user/lastLoginRecord
+   (auth has its own localStorage re-fill channel, cross-machine JSON import never read them) and tomatoState
+   (the countdown blob is retired, the ledger lives in tomato_records rows) were dead weight and are gone. */
 export function buildBackupDump (rootState, state, { stripVolatileSettings = false, planState = null } = {}) {
   const settings = { ...rootState.settings }
   if (stripVolatileSettings) { settings.autoBackupLastAt = 0; settings.tomatoRecordAddCount = 0; settings.tomatoRecordAddDate = 0 } // strip volatile timestamps so content dedupe stays effective
   return {
     backup: {
       settingsState: JSON.stringify(settings),
-      user: JSON.stringify(rootState.auth.user),
-      lastLoginRecord: JSON.stringify(rootState.auth.lastLoginRecord),
       todoState: JSON.stringify({
         schemaV: SCHEMA_V,
         search: state.search, todoList: state.todoList, recycleList: state.recycleList, version: state.version,

@@ -15,10 +15,11 @@ import { fileURLToPath } from 'node:url'
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const read = p => fs.readFileSync(path.join(HERE, '../../..', p), 'utf8')
 
-// 恢复端实际消费的段 = 必含段(user/lastLoginRecord 由主进程恢复语义持有,渲染端两套恢复不消费,不列入)
+// 恢复端实际消费的段 = 必含段。F7 (dw wave6 2026-09-24): user/lastLoginRecord 移出契约——
+// auth 有 localStorage 独立回灌通道(auth.js),跨机器 JSON 导入从不消费这两段,死段停写。
 // D6-F14 (2026-09-21): planState/filterState joined the dump contract (schedule chips + saved
 // filters were silently lost on JSON disaster restore before)
-const REQUIRED_SEGMENTS = ['settingsState', 'user', 'lastLoginRecord', 'todoState', 'tomatoState', 'tomatoRecords', 'categoryState', 'habitsState', 'planState', 'filterState']
+const REQUIRED_SEGMENTS = ['settingsState', 'todoState', 'tomatoState', 'tomatoRecords', 'categoryState', 'habitsState', 'planState', 'filterState']
 
 // R1 refactor: buildBackupDump 与三处备份动作迁至 store/todoBackup.js（todo.js 只留 action 壳）
 const dumpSrc = () => read('renderer/js/store/todoBackup.js')
