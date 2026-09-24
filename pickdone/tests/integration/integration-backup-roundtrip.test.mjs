@@ -93,3 +93,96 @@ test('round-trip: real db -> critical backup JSON -> corrupt -> recovery re-impo
   fs.rmSync(udA, { recursive: true, force: true })
   fs.rmSync(udB, { recursive: true, force: true })
 })
+
+/**
+ * F19+F11 (dw wave6 2026-09-24): the tomato ledger rows, saved filters, plan chips and the habits
+ * blob from a backup JSON must survive the startup-recovery re-import — the production wiring
+ * (index.js restoreTasksFromCriticalBackup) passes filterPutMany/planPutMany/habitsPut through the
+ * same bus doors the renderer uses; before this test the whole re-import path of these segments
+ * had ZERO coverage (grep tests/ for appendTomatoRecords/restoreTomatoRecords* found only the
+ * write side) and a silently broken chain (callbacks not functions → return 0) would never go red.
+ */
+test('round-trip: tomatoRecords/filterState/planState/habitsState segments re-import via the F11 callbacks, idempotently', () => {
+  // dump is hand-built in renderer shape (no seeding db needed — the segments under test carry
+  // their rows verbatim); only the restore-side db is real.
+  const rec = {
+    tomatoId: 'tmt_rt_1', endTime: Date.now() - 60e3, dateKey: '', focus: '账本回灌',
+    focusTaskId: 't1', focusDuration: 25, rest: 5, restDuration: 5, succeed: true, manual: false, status: '', abandonReason: '', extra: {}
+  }
+  const dump = {
+    backup: {
+      todoState: JSON.stringify({ schemaV: 1, todoList: [], recycleList: [], version: 0, remoteVersion: 0, todayTimestamp: Date.now(), ignoreReminder: {}, todosVersion: '0', isSyncing: false, views: {} }),
+      categoryState: JSON.stringify({ schemaV: 1, list: [] }),
+      tomatoRecords: JSON.stringify([rec, { tomatoId: null, endTime: 1 }, { tomatoId: 'tmt_rt_2', endTime: Date.now() - 30e3, focusDuration: 50 }]),
+      filterState: JSON.stringify({ schemaV: 1, list: [{ id: 91, name: '工作紧急', conds: { catId: 3, priority: 2, dateMode: 'all' }, sort: 1, updatedAt: Date.now() }] }),
+      planState: JSON.stringify({ schemaV: 1, chips: [{ id: 'pl_rt_1', taskId: 't1', day: '2026-09-24', mm: '09:30', sort: 2, updatedAt: Date.now() }] }),
+      habitsState: JSON.stringify({ schemaV: 1, habits: [{ id: 'h1', name: '跑步', createdAt: 123 }], moments: [], savedAt: 42 })
+    }
+  }
+  const udB = tmpDir()
+  dbRecovery.writeCriticalStateBackupAtomic(udB, JSON.stringify(dump))
+  dbm.close()
+
+  // corrupt db + backup → JSON recovery path, exactly like the main process
+  fs.writeFileSync(path.join(udB, 'todos.db'), 'CORRUPT')
+  const from = dbRecovery.attemptDbRecovery(udB)
+  assert.equal(from && from.source, 'json')
+
+  dbm.init(udB)
+  // Same write doors as index.js (main-internal db.call ops behind the bus verbs)
+  const n = dbRecovery.restoreTasksFromCriticalBackup(udB,
+    list => dbm.call('upsertMany', list),
+    c => dbm.call('upsertCategory', c),
+    rows => dbm.call('tomatoAppendMany', rows),
+    {
+      filterPutMany: rows => dbm.call('filterUpsertMany', rows),
+      planPutMany: chips => dbm.call('planAddMany', chips),
+      habitsPut: pair => dbm.call('setMeta', pair)
+    })
+  assert.equal(n, 0, 'no task rows in this dump — but the other segments must still import')
+
+  const ledger = dbm.call('tomatoAll')
+  assert.equal(ledger.length, 2, 'both valid ledger rows re-import (row without tomatoId skipped)')
+  const back1 = ledger.find(r => r.tomatoId === 'tmt_rt_1')
+  assert.equal(back1.focus, '账本回灌', 'ledger focus text survives')
+  assert.equal(back1.focusDuration, 25, 'ledger duration survives')
+  assert.ok(back1.dateKey, 'dateKey re-derived from endTime')
+
+  const filters = dbm.call('filterList')
+  assert.equal(filters.length, 1, 'the saved filter re-imports')
+  assert.equal(filters[0].name, '工作紧急')
+  assert.deepEqual(filters[0].conds, { catId: 3, priority: 2, dateMode: 'all' }, 'filter conditions survive (normConds canonical shape)')
+
+  const chips = dbm.call('planAll')
+  assert.equal(chips.length, 1, 'the plan chip re-imports')
+  assert.equal(chips[0].id, 'pl_rt_1', 'chip keeps its id (idempotent upsert key)')
+  assert.equal(chips[0].sort, 2, 'chip sort survives (H2 regression guard)')
+
+  const habits = JSON.parse(dbm.call('getMeta', 'db.habitsState'))
+  assert.equal(habits.savedAt, 42, 'habits blob re-published through the meta door')
+  assert.equal(habits.habits.length, 1, 'one habit survives')
+  assert.equal(habits.habits[0].name, '跑步', 'habit name survives')
+
+  // Idempotency: replaying the restore (crash between restore and init retry, or double pass)
+  // must NOT duplicate ledger rows / filters / chips.
+  dbRecovery.restoreTasksFromCriticalBackup(udB,
+    list => dbm.call('upsertMany', list),
+    c => dbm.call('upsertCategory', c),
+    rows => dbm.call('tomatoAppendMany', rows),
+    {
+      filterPutMany: rows => dbm.call('filterUpsertMany', rows),
+      planPutMany: chips2 => dbm.call('planAddMany', chips2),
+      habitsPut: pair => dbm.call('setMeta', pair)
+    })
+  assert.equal(dbm.call('tomatoAll').length, 2, 'replay does not double the ledger (idempotent by tomatoId)')
+  assert.equal(dbm.call('filterList').length, 1, 'replay does not duplicate the filter (upsert by id)')
+  assert.equal(dbm.call('planAll').length, 1, 'replay does not duplicate the chip (upsert by id)')
+
+  // A broken chain (callbacks not functions) silently imports nothing — pin that it stays at 0 rows
+  // rather than throwing, so the caller's restoredN gate keeps the bak file alive.
+  const nSilent = dbRecovery.restoreTasksFromCriticalBackup(udB, undefined, undefined, undefined)
+  assert.equal(nSilent, 0, 'missing callbacks degrade to a no-op, not a crash')
+
+  dbm.close()
+  fs.rmSync(udB, { recursive: true, force: true })
+})

@@ -219,23 +219,106 @@ function pruneCorruptScenes (ud, keep = 3) {
   } catch { /* 清理失败不阻断恢复 */ }
 }
 
-/** Re-import from the disaster-backup JSON: merge todoList+recycleList, filter rows without id, return the number imported; returns 0 on any error.
- *  upsertCategory (optional) enables category restore (categories written back together, preventing "tasks returned but categories all gone").
- *  appendTomatoRecords (optional) enables ledger restore from backup.tomatoRecords row set (2026-09-04 起三处 dump 均带账本段;
- *  旧行表化前备份只有 tomatoState blob——那里面已无记录,跳过不报错)。appendMany = tomato_records 幂等 UPSERT,行表已有数据也不双账。
- *  Still not restored on this path: habits/moments (habitsState), settings (settingsState) — renderer-owned semantics. */
-function restoreTasksFromCriticalBackup (ud, upsertMany, upsertCategory, appendTomatoRecords) {
+/** F11 + registry refactor (dw wave6 2026-09-24): the single RESTORE-SEGMENT REGISTRY — segment
+ *  name → importer(raw, cb) → which callback enables it. The doc comment and the actual consumed
+ *  segments are driven by THIS one table, so comment and code can no longer drift (the same drift
+ *  was found in two separate review waves).
+ *  Consumed on the startup path: todoState, categoryState, tomatoRecords, filterState, planState,
+ *  habitsState — same segment set the UI restore (SettingsDataTab.applyRestoreDump) accepts.
+ *  Deliberately NOT restored here: settingsState (renderer-owned semantics — applying settings
+ *  re-runs migration/sanitize logic that belongs to the UI restore path only).
+ *  Every importer is idempotent by id (upsert / skip-rows-without-id), matching the UI rules:
+ *  a schemaV>1 segment is refused (parseSegment → null), rows without their id key are skipped,
+ *  and a single bad row never drags down the batch. */
+const RESTORE_SEGMENTS = [
+  { seg: 'todoState', enable: c => c.upsertTasks, restore: (raw, cb) => restoreTodoRowsFromCriticalBackup(raw, cb) },
+  { seg: 'categoryState', enable: c => c.upsertCategory, restore: (raw, cb) => restoreCategoriesFromCriticalBackup(raw, cb) },
+  { seg: 'tomatoRecords', enable: c => c.appendTomatoRecords, restore: (raw, cb) => restoreTomatoRecordsFromCriticalBackup(raw, cb) },
+  { seg: 'filterState', enable: c => c.filterPutMany, restore: (raw, cb) => restoreFilterRowsFromCriticalBackup(raw, cb) },
+  { seg: 'planState', enable: c => c.planPutMany, restore: (raw, cb) => restorePlanChipsFromCriticalBackup(raw, cb) },
+  { seg: 'habitsState', enable: c => c.habitsPut, restore: (raw, cb) => restoreHabitsBlobFromCriticalBackup(raw, cb) }
+]
+
+/** todoState re-import: merge todoList+recycleList, filter rows without taskId. Returns the number imported. */
+function restoreTodoRowsFromCriticalBackup (raw, upsertMany) {
+  // todoState has two real shapes: the renderer's writeCriticalBackup stores a JSON string (nested via JSON.stringify),
+  // while some old drill data is an object. Previously only objects were accepted — real disaster backups would silently import 0 rows (confirmed by the round-trip test 2026-09-01).
+  const todoState = parseSegment(raw.backup && raw.backup.todoState, 'todoState')
+  if (todoState === null) return 0 // schemaV too high: skip the task segment, process the rest as usual
+  const list = ((todoState.todoList || []).concat(todoState.recycleList || [])).filter(t => t && t.taskId)
+  if (list.length && upsertMany) upsertMany(list)
+  return list.length
+}
+
+/** Saved-filters restore: filterState rows are the renderer app shape ({id,name,conds,sort,updatedAt}) that
+ *  filterList writes into the dump; filterUpsertMany upserts by id (idempotent, INSERT-fallback on absent id).
+ *  Rows without an id are skipped (a fresh random id here would duplicate the smart list on every restore). */
+function restoreFilterRowsFromCriticalBackup (raw, filterPutMany) {
+  if (typeof filterPutMany !== 'function') return 0
+  try {
+    const seg = parseSegment(raw.backup && raw.backup.filterState, 'filterState')
+    if (seg === null) return 0
+    const rows = ((seg && seg.list) || []).filter(f => f && f.id != null)
+    if (!rows.length) return 0
+    try { filterPutMany(rows); return rows.length } catch { return 0 }
+  } catch { return 0 }
+}
+
+/** Plan-chips restore: planState rows are plan_chips row shape ({id,taskId,day,mm,sort,updatedAt} —
+ *  planAll writes them); planAddMany validates day/mm and upserts by id (idempotent, db.js:835 precedent).
+ *  Rows without an id are skipped for the same no-duplicate reason as filters. */
+function restorePlanChipsFromCriticalBackup (raw, planPutMany) {
+  if (typeof planPutMany !== 'function') return 0
+  try {
+    const seg = parseSegment(raw.backup && raw.backup.planState, 'planState')
+    if (seg === null) return 0
+    const rows = ((seg && seg.chips) || []).filter(c => c && c.id != null)
+    if (!rows.length) return 0
+    try { planPutMany(rows); return rows.length } catch { return 0 }
+  } catch { return 0 }
+}
+
+/** Habits restore: habitsState is ONE blob ({schemaV,habits,moments,savedAt}), not a row set —
+ *  re-published through the same meta door the renderer's habits store persists through
+ *  (meta 'db.habitsState'). Idempotent by construction (whole-blob put). schemaV>1 refuses. */
+function restoreHabitsBlobFromCriticalBackup (raw, habitsPut) {
+  if (typeof habitsPut !== 'function') return 0
+  try {
+    const seg = parseSegment(raw.backup && raw.backup.habitsState, 'habitsState')
+    if (seg === null || !Array.isArray(seg.habits)) return 0
+    try {
+      habitsPut(['db.habitsState', JSON.stringify({ habits: seg.habits, moments: Array.isArray(seg.moments) ? seg.moments : [], savedAt: Number(seg.savedAt) || 0 })])
+      return 1
+    } catch { return 0 }
+  } catch { return 0 }
+}
+
+/** Re-import from the disaster-backup JSON; returns the number of TASK rows imported (the caller's
+ *  restoredN>0 gate reads this). Per-segment callbacks are optional; a missing callback (or a
+ *  missing segment in an old backup) skips that segment silently — F11 (dw wave6) added
+ *  filterPutMany / planPutMany / habitsPut so startup recovery now re-imports the SAME segment set
+ *  the UI restore accepts (saved filters / schedule chips / habits used to be silently dropped).
+ *  Still not restored on this path: settingsState — renderer-owned semantics (see RESTORE_SEGMENTS). */
+function restoreTasksFromCriticalBackup (ud, upsertTasks, upsertCategory, appendTomatoRecords, extraCbs) {
+  const cbs = Object.assign(
+    { upsertTasks, upsertCategory, appendTomatoRecords },
+    extraCbs || {}
+  )
   try {
     const raw = JSON.parse(fs.readFileSync(criticalBackupPath(ud), 'utf8'))
-    // todoState has two real shapes: the renderer's writeCriticalBackup stores a JSON string (nested via JSON.stringify),
-    // while some old drill data is an object. Previously only objects were accepted — real disaster backups would silently import 0 rows (confirmed by the round-trip test 2026-09-01).
-    let todoState = parseSegment(raw.backup && raw.backup.todoState, 'todoState')
-    if (todoState === null) todoState = {} // schemaV too high: skip the task segment, process the rest as usual
-    const list = ((todoState.todoList || []).concat(todoState.recycleList || [])).filter(t => t && t.taskId)
-    if (list.length) upsertMany(list)
-    restoreCategoriesFromCriticalBackup(raw, upsertCategory)
-    restoreTomatoRecordsFromCriticalBackup(raw, appendTomatoRecords)
-    return list.length
+    let tasks = 0 // the return value stays the TASK count (index.js's restoredN gate + dialog copy read it)
+    for (const entry of RESTORE_SEGMENTS) {
+      try {
+        const cb = entry.enable(cbs)
+        if (typeof cb !== 'function') continue
+        const n = entry.restore(raw, cb) || 0
+        if (entry.seg === 'todoState') tasks = Math.max(0, n)
+      } catch (e) {
+        // one segment failing must not drag the others down
+        logWarn('[dbRecovery] segment', entry.seg, 'restore failed:', e && e.message)
+      }
+    }
+    return tasks
   } catch (e) {
     // P1 (R4 2026-09-21): the swallowed error used to make a failed restore indistinguishable
     // from an empty backup — the caller then deleted todos.db.plain-bak on a "successful"

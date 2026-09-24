@@ -138,7 +138,20 @@ function attemptDbRecovery (ud, retryInit) { return dbRecovery.attemptDbRecovery
 // peers. The 'undo-barrier'/'ls-mirror' subscribers only exist after registerIpc, so the
 // startup recovery path commits with no fanout, exactly as before.
 const busCommit = (entity, verb, payload) => require('./command-bus').commit(entity, verb, payload, { preserveStamp: true })
-function restoreTasksFromCriticalBackup (ud) { return dbRecovery.restoreTasksFromCriticalBackup(ud, list => busCommit('todo', 'putMany', list), c => busCommit('category', 'put', c), rows => busCommit('tomato', 'appendMany', rows)) }
+// F11 (dw wave6): startup recovery now re-imports the SAME segment set the UI restore accepts —
+// filter.putMany / plan.putMany / meta.put ride the same command-bus doors as the renderer, all
+// idempotent by id (dbRecovery skips rows without id; the db ops upsert ON CONFLICT).
+function restoreTasksFromCriticalBackup (ud) {
+  return dbRecovery.restoreTasksFromCriticalBackup(ud,
+    list => busCommit('todo', 'putMany', list),
+    c => busCommit('category', 'put', c),
+    rows => busCommit('tomato', 'appendMany', rows),
+    {
+      filterPutMany: rows => busCommit('filter', 'putMany', rows),
+      planPutMany: chips => busCommit('plan', 'putMany', chips),
+      habitsPut: pair => busCommit('meta', 'put', pair)
+    })
+}
 
 /* ---------------- External-write listener: when the CLI writes the DB directly, the running App refreshes automatically ---------------- */
 let resyncDbWatch = null // set by watchDbForExternalWrites: re-baselines lastMtime after OUR OWN db writes (P1 2026-09-11)
