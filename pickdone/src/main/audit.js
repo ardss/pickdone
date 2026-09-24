@@ -287,6 +287,14 @@ const FLUSH_BATCH_MAX = 64
 const buffer = []
 // No-op aggregation state (see appendEntry): signature + entry reference of the last changes:[] line
 let lastNoop = null
+// Adversarial-review fix (2026-09-25): a folded entry only exists in memory while it sits in the
+// buffer. Once its flush drained the buffer, mutating the detached object would silently DISCARD every
+// further identical record (repro: 1 write → flushNow → 50 identical writes → flushNow landed ONE line,
+// repeat=1, 50 records lost). Sealing on drain forces the next identical record to start a fresh line,
+// so every flush window's count reaches disk: total fidelity = sum of (repeat) over lines.
+function sealNoopIfDrained (drained) {
+  if (lastNoop && drained.indexOf(lastNoop.entry) !== -1) lastNoop = null
+}
 let flushTimer = null
 let dirReady = false
 
@@ -339,8 +347,10 @@ function flushNow () {
   if (flushTimer) { clearTimeout(flushTimer); flushTimer = null }
   if (!resolveDir()) return // fail-safe resolver refused the dir — entries stay dropped
   const pending = inFlight.splice(0) // C5: sync-write whatever the async path has not finished
-  if (!buffer.length && !pending.length) return
-  const lines = buffer.splice(0).map(e => JSON.stringify(e) + '\n')
+  const drained = buffer.splice(0)
+  if (!pending.length && !drained.length) return
+  sealNoopIfDrained(drained)
+  const lines = drained.map(e => JSON.stringify(e) + '\n')
   ensureDir()
   const texts = pending.concat(chunkByThreshold(lines).map(chunk => chunk.join('')))
   for (const text of texts) {
@@ -366,7 +376,9 @@ let inFlight = []
 function flushAsync () {
   flushTimer = null
   if (!buffer.length || !resolveDir()) return
-  const lines = buffer.splice(0).map(e => JSON.stringify(e) + '\n')
+  const drained = buffer.splice(0)
+  sealNoopIfDrained(drained)
+  const lines = drained.map(e => JSON.stringify(e) + '\n')
   ensureDir()
   const chunks = chunkByThreshold(lines).map(chunk => chunk.join(''))
   inFlight.push(...chunks)

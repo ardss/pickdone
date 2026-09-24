@@ -42,6 +42,21 @@ function pruneArchives (file, keep = ARCHIVES_TO_KEEP) {
  *  and on final failure (truncate-to-empty as the last resort to respect the size threshold). */
 const ROTATE_RETRIES = 3
 const ROTATE_BACKOFF_MS = 50
+// Adversarial-review fix: `.corrupt-<ts>` fallback siblings are not matched by pruneArchives' /^\d+$/
+// filter, so a long-lived EPERM environment could accumulate unbounded oversized copies. On every
+// SUCCESSFUL normal rotation, best-effort delete corrupt siblings older than a bounded window.
+const CORRUPT_KEEP_MS = 7 * 86400000
+
+function pruneCorruptSiblings (file, now = Date.now()) {
+  const prefix = path.basename(file) + '.corrupt-'
+  try {
+    for (const name of fs.readdirSync(path.dirname(file))) {
+      if (!name.startsWith(prefix)) continue
+      const full = path.join(path.dirname(file), name)
+      try { if (now - fs.statSync(full).mtimeMs > CORRUPT_KEEP_MS) fs.unlinkSync(full) } catch { /* best-effort */ }
+    }
+  } catch { /* best-effort */ }
+}
 
 function sleepSync (ms) {
   try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) } catch { /* degraded host: skip backoff */ }
@@ -57,6 +72,7 @@ function rotateArchive (file, warn = console.warn) {
     try {
       fs.renameSync(file, rolled)
       pruneArchives(file)
+      pruneCorruptSiblings(file)
       return rolled
     } catch (e) {
       if (attempt < ROTATE_RETRIES - 1) continue

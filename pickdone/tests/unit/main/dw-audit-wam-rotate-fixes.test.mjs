@@ -100,6 +100,38 @@ test('[audit-wam] rotateArchive never fails silent: persistent EPERM falls back 
   } finally { fs.renameSync = realRename; fs.truncateSync = realTruncate }
 })
 
+test('[audit-wam] folded entries SEAL on flush: records after a drain start a fresh line, none are lost', () => {
+  // Adversarial repro (2026-09-25): 1 write → flushNow → 50 identical writes → flushNow used to land
+  // ONE line with repeat=1 — the 50 post-flush records only mutated the detached entry object and were
+  // dropped. Every flush window's fold count must reach disk.
+  appAudit.recordAppOp('upsertCategory', { id: 'c1', name: 'Work', color: '#000' })
+  appAudit.flushNow()
+  for (let i = 0; i < 50; i++) appAudit.recordAppOp('upsertCategory', { id: 'c1', name: 'Work', color: '#000' })
+  appAudit.flushNow()
+
+  const lines = readLines()
+  assert.equal(lines.length, 2, 'two flush windows → two lines')
+  assert.equal(lines[0].repeat, 1)
+  assert.equal(lines[1].repeat, 50, 'the post-flush window folds among itself')
+  assert.equal(lines.reduce((s, l) => s + (l.repeat || 1), 0), 51, 'on-disk fold counts sum to every record written')
+})
+
+test('[audit-wam] successful rotation prunes STALE .corrupt- siblings (bounded), keeps fresh ones', () => {
+  const file = path.join(tmpDir, 'cli-audit.jsonl')
+  fs.writeFileSync(file, '{"line":1}\n')
+  const stale = file + '.corrupt-2020-01-01T00-00-00-000Z'
+  const fresh = file + '.corrupt-2026-09-25T00-00-00-000Z'
+  fs.writeFileSync(stale, 'old oversized copy')
+  fs.writeFileSync(fresh, 'recent oversized copy')
+  const old = new Date('2020-01-01')
+  fs.utimesSync(stale, old, old)
+  fs.utimesSync(fresh, new Date(), new Date())
+  rotateArchive(file, () => {})
+  assert.equal(fs.existsSync(stale), false, 'corrupt sibling older than the keep window is cleaned on rotation')
+  assert.ok(fs.existsSync(fresh), 'fresh corrupt sibling is kept')
+  assert.ok(fs.readdirSync(tmpDir).some(n => /^cli-audit\.jsonl\.\d+$/.test(n)), 'rotation itself still happened')
+})
+
 test('[audit-wam] rotateArchive last resort: rename AND corrupt-rename both fail → truncate + warn, never throw', () => {
   const file = path.join(tmpDir, 'cli-audit.jsonl')
   fs.writeFileSync(file, 'x'.repeat(100))
