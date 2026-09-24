@@ -141,14 +141,31 @@ export function mergeChipRows(local, remote) {
 }
 
 /**
- * Tomato ledger: append-only merge for the same tomatoId. Never deletes; the
- * row with the LARGER focusDuration wins (billing: over-record focus rather
- * than under-record); equal duration -> later updatedAt; then seq/deviceId.
+ * Tomato ledger: append-only merge for the same tomatoId. Never deletes by CONTENT; the
+ * row with the LARGER focusDuration wins (billing: over-record focus rather than
+ * under-record); equal duration -> later updatedAt; then seq/deviceId.
+ *
+ * B1 (daily 2026-09-24): tombstones now participate — mergeTomatoRows used to ignore the
+ * deleted flags entirely, so a LOCALLY deleted focus record was resurrected by ANY peer
+ * live row (even an older one), contradicting the X1 ingress intent (sync-apply already
+ * supplies the local tomato tombstone as localRow) and the §4.2 delete-wins rule. Same
+ * shape as mergeTodoRows: a tombstone beats a live row iff deletedAt > live.updatedAt;
+ * two tombstones resolve by recency; only when NEITHER side is deleted does the
+ * focusDuration billing rule apply.
  * @returns {{ row: object }} no conflict copy — ledger rows are additive.
  */
 export function mergeTomatoRows(local, remote) {
   if (!local) return { row: remote }
   if (!remote) return { row: local }
+  if (local.deleted && !remote.deleted) {
+    // Local tombstone vs peer live row: resurrect ONLY if the peer edit is strictly newer
+    // than the deletion (same total-order rule as todos).
+    return effectiveTs(remote) > effectiveTs(local) ? { row: remote } : { row: local }
+  }
+  if (!local.deleted && remote.deleted) {
+    // Local live edit vs peer tombstone: the edit survives iff it is newer than the deletion.
+    return effectiveTs(local) > effectiveTs(remote) ? { row: local } : { row: remote }
+  }
   if (local.focusDuration !== remote.focusDuration) {
     return local.focusDuration > remote.focusDuration ? { row: local } : { row: remote }
   }
