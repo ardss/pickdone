@@ -1,30 +1,30 @@
-/** Round-4-review (2026-09-11 pre-release audit) regression guards: three P1 fixes that previously
- *  had NO test — reverting any of them used to leave the suite green.
+/** Regression guards (originating from the round-4-review 2026-09-11 pre-release audit; renamed
+ *  2026-09-24 from r4-review-guards.test.mjs to a domain name and grouped under main/): two main-process
+ *  P1 fixes that previously had NO test — reverting either used to leave the suite green.
  *  Coverage:
  *   1. External-write watcher baseline resync (index.js resyncDbWatch, pure core in watch-baseline.js,
  *      gate = db.isWriteOp) — revert to "no resync on own writes" and the baseline test red-flags the
  *      write-op set the wiring depends on.
  *   2. Quit-flush ack handshake (quit-ack.js tracker, wired in index.js will-quit / app-quitting-flush-ack)
  *      — stale-token rejection, sender dedup, zero-window fast path, per-round reset.
- *   3. CLI tomato expired receipt (tomatoShared.js isStaleTomatoCmd / expiredTomatoReceipt, consumed by
- *      renderer main.js onCliTomatoCmd) — TTL boundary + receipt shape the CLI's waitForTomatoAck needs.
- * Run: node --test tests/r4-review-guards.test.mjs
+ *  (The third r4 guard, the CLI tomato stale-receipt pair, lives in tests/unit/cli/tomato-stale-receipt-guards.test.mjs.)
+ * Run: node --test tests/unit/main/watch-resync-quitack-guards.test.mjs
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
-import { readAnchor } from '../lib/source-anchors.mjs'
+import { readAnchor } from '../../lib/source-anchors.mjs'
 
 const require_ = createRequire(import.meta.url)
 
 test('watch baseline: a failed mtime read (null) never clobbers the current baseline', () => {
-  const { nextWatchBaseline } = require_( '../../src/main/watch-baseline.js')
+  const { nextWatchBaseline } = require_('../../../src/main/watch-baseline.js')
   assert.equal(nextWatchBaseline(1111, () => null), 1111, 'null read keeps the old baseline')
   assert.equal(nextWatchBaseline(1111, () => 2222), 2222, 'a fresh read wins')
 })
 
 test('watch baseline gate: the resync fires on write ops and only on write ops (the wiring condition)', () => {
-  const dbm = require_('../../src/main/db.js')
+  const dbm = require_('../../../src/main/db.js')
   // These are the ops the renderer actually writes through todo-db:call — if any of them stops being
   // a write op, our own writes go un-resynced and the "own write read back as external" bug returns.
   for (const op of ['upsert', 'upsertMany', 'setMeta', 'hardDelete', 'purgeRecycleBin']) {
@@ -49,7 +49,7 @@ test('watch baseline wiring: the todo-db:call handler re-baselines after dbm.cal
 })
 
 test('quit ack tracker: fresh acks count; stale tokens, dup senders and missing senders do not', () => {
-  const { createQuitAckTracker } = require_('../../src/main/quit-ack.js')
+  const { createQuitAckTracker } = require_('../../../src/main/quit-ack.js')
   const t = createQuitAckTracker()
   t.beginRound(2, 1000)
   assert.equal(t.allAcked(), false, 'two live windows: not done yet')
@@ -63,7 +63,7 @@ test('quit ack tracker: fresh acks count; stale tokens, dup senders and missing 
 })
 
 test('quit ack tracker: zero live windows takes the fast path; a new round resets everything', () => {
-  const { createQuitAckTracker } = require_('../../src/main/quit-ack.js')
+  const { createQuitAckTracker } = require_('../../../src/main/quit-ack.js')
   const t = createQuitAckTracker()
   t.beginRound(0, 100)
   assert.equal(t.allAcked(), true, 'no window online: skip waiting entirely')
@@ -81,30 +81,4 @@ test('quit ack wiring: index.js broadcast/ack/allAcked all route through the tra
   assert.match(src, /quitAck\.ack\(payload\.token, e\.sender\.id\)/, 'ack IPC handler feeds the tracker')
   assert.match(src, /allAcked = \(\) => quitAck\.allAcked\(\)/, 'will-quit polls the tracker')
   assert.doesNotMatch(src, /flushAckedSenders|flushExpectAcks/, 'the old inline sets are fully replaced')
-})
-
-test('cli tomato: TTL boundary and missing-at rejection', () => {
-  const { TOMATO_CMD_TTL_MS, isStaleTomatoCmd } = require_('../../renderer/js/utils/tomatoShared.js')
-  assert.equal(TOMATO_CMD_TTL_MS, 60000)
-  assert.equal(isStaleTomatoCmd({ at: 40_000 }, 100_000), false, 'exactly at the TTL edge is still fresh (60s)')
-  assert.equal(isStaleTomatoCmd({ at: 39_999 }, 100_000), true, 'one ms past the TTL is stale')
-  assert.equal(isStaleTomatoCmd({ at: 99_999 }, 100_000), false, 'fresh command')
-  assert.equal(isStaleTomatoCmd({}, 100_000), true, 'missing at = stale (crash-replay protection)')
-  assert.equal(isStaleTomatoCmd(null, 100_000), true, 'missing cmd = stale')
-})
-
-test('cli tomato: expired receipt keeps the command seq so waitForTomatoAck can unblock', () => {
-  const { expiredTomatoReceipt } = require_('../../renderer/js/utils/tomatoShared.js')
-  const now = 1_234_567
-  const r = expiredTomatoReceipt({ seq: 7, action: 'start', at: 1 }, now)
-  assert.deepEqual(r, { seq: 7, status: 'expired', error: 'stale command (>60s)', at: now })
-  assert.equal(expiredTomatoReceipt(null, now).seq, 0, 'degenerate cmd still yields a well-formed receipt')
-})
-
-test('cli tomato wiring: renderer main.js writes the receipt (not a silent return) on stale commands', () => {
-  const src = readAnchor('rendererMain')
-  const idx = src.indexOf('isStaleTomatoCmd(cmd, Date.now())')
-  assert.ok(idx > 0, 'stale check routed through the tested pure helper')
-  const block = src.slice(idx, idx + 500)
-  assert.match(block, /cliTomatoState[\s\S]{0,200}expiredTomatoReceipt/, 'stale rejection writes the expired receipt to cliTomatoState')
 })
