@@ -7,6 +7,26 @@
 const META_CONFLICT_BACKUP_PREFIX = 'metaConflictBackup.'
 const PREVIEW_MAX = 200
 
+/* B16 follow-up (P0, 2026-09-25): since B16 the apply path also backs up NON-meta losers under
+ * `metaConflictBackup.<entity>:<id>.<ts36>` with the FULL RAW ROW as the value (see the else
+ * branch in sync-apply.js applyRowInner). Restoring those used to go through setMeta, so db.js's
+ * String(v) coercion wrote the literal '[object Object]' into meta, the unique lost row was
+ * never returned to its table, and the backup key was then deleted — unrecoverable corruption.
+ * The restore now routes by key prefix: an `<entity>:<id>` original key whose entity has a
+ * registered bulk-write command is restored INTO ITS NATIVE TABLE via that command; only true
+ * meta keys go through setMeta. The routing table is derived from the command manifest (single
+ * source — never a hand-copied prefix list). Old-format backups (bare key + object value, no
+ * structured entity/id fields on the write side) resolve through the same prefix parse. */
+const manifest = require('./command-manifest')
+const ENTITY_RESTORE_OPS = (() => {
+  const m = Object.create(null)
+  for (const row of Object.values(manifest.COMMANDS)) {
+    if (!row || (row.verb !== 'putMany' && row.verb !== 'appendMany')) continue
+    if (row.entity === 'plan' || row.entity === 'filter' || row.entity === 'category' || row.entity === 'tomato') m[row.entity] = row.op
+  }
+  return m
+})()
+
 function parseBackup (raw) {
   try { const o = JSON.parse(raw); if (o && typeof o === 'object' && !Array.isArray(o)) return o } catch { /* unreadable payload surfaces as skipped/err below */ }
   return null
@@ -25,7 +45,9 @@ module.exports = {
         for (const key of keys) {
           const b = parseBackup(call('getMeta', key))
           if (!b || b.key == null) continue
-          const value = String(b.value == null ? '' : b.value)
+          // 发现12: entity backups carry an OBJECT value — String() rendered every one of them
+          // as '[object Object]' in the recovery UI. JSON-summarize object values instead.
+          const value = (b.value && typeof b.value === 'object') ? JSON.stringify(b.value) : String(b.value == null ? '' : b.value)
           out.push({ key: String(key), originalKey: String(b.key), lostAt: Number(b.lostAt) || 0, preview: value.slice(0, PREVIEW_MAX) })
         }
         return out
@@ -39,6 +61,24 @@ module.exports = {
         const b = parseBackup(call('getMeta', key))
         if (!b || b.key == null) throw new Error('syncConflictBackupRestore: backup payload unreadable')
         const originalKey = String(b.key)
+        // P0 branch: an `<entity>:<id>` original key restores into the entity's NATIVE table
+        // (plan_chips / filters / categories / tomato_records) through the manifest-derived bulk
+        // upsert op — never through setMeta (whose String(v) coercion corrupted the value to
+        // '[object Object]' and then deleted the only surviving copy). The upsert is oplog-
+        // captured like any local edit, so the restored row syncs to peers; the backup key itself
+        // stays machine-local (metaConflictBackup.* is in isMachineLocalMetaKey) and is consumed.
+        const colon = originalKey.indexOf(':')
+        const entity = colon > 0 ? originalKey.slice(0, colon) : ''
+        const restoreOp = ENTITY_RESTORE_OPS[entity]
+        if (restoreOp) {
+          const id = originalKey.slice(colon + 1)
+          const row = b.value
+          if (!row || typeof row !== 'object' || Array.isArray(row)) throw new Error('syncConflictBackupRestore: entity backup payload is not a row object')
+          if (row.id == null) row.id = id
+          call(restoreOp, [row])
+          call('deleteMeta', key)
+          return { ok: true, key: originalKey, entity }
+        }
         const current = call('getMeta', originalKey)
         if (current != null) {
           const ts36 = Date.now().toString(36)
