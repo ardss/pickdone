@@ -301,17 +301,24 @@ function chunkByThreshold (lines) {
   return chunks
 }
 
-/** Drain the buffer synchronously (quit path / tests). */
+/** Drain the buffer synchronously (quit path / tests).
+ *  C5 (P1 2026-09-24): chunks already handed to the async writer (flushAsync) used to be invisible
+ *  here — the quit-flush only wrote buffer remnants, so an in-flight async batch was silently lost
+ *  on process exit. They are now REGISTERED in `inFlight` and synchronously flushed first.
+ *  C13 (P2 2026-09-24): a chunk that fails both append attempts used to `return` and drag every
+ *  later chunk of the same drain down with it — one bad chunk dropped the whole rest of the batch.
+ *  Failure is now per-chunk: the chunk is dropped (fire-and-forget contract) and the drain continues. */
 function flushNow () {
   if (flushTimer) { clearTimeout(flushTimer); flushTimer = null }
-  if (!buffer.length) return
+  const pending = inFlight.splice(0) // C5: sync-write whatever the async path has not finished
+  if (!buffer.length && !pending.length) return
   const lines = buffer.splice(0).map(e => JSON.stringify(e) + '\n')
   ensureDir()
-  for (const chunk of chunkByThreshold(lines)) {
+  const texts = pending.concat(chunkByThreshold(lines).map(chunk => chunk.join('')))
+  for (const text of texts) {
     try { rotateIfNeeded() } catch (e) { /* rotation failure must not lose the batch */ }
-    const text = chunk.join('')
     for (let attempt = 0; attempt < 2; attempt++) {
-      try { fs.appendFileSync(auditFile(), text); break } catch (e) { if (attempt > 0) return /* give up by contract */ }
+      try { fs.appendFileSync(auditFile(), text); break } catch (e) { if (attempt > 0) break /* C13: drop this chunk alone, keep draining */ }
     }
   }
 }
@@ -322,6 +329,11 @@ function flushNow () {
 // best-effort — within this process we keep it strict).
 let writeChain = Promise.resolve()
 
+// C5 (P1 2026-09-24): chunks handed to the async writer but not yet persisted. flushAsync registers
+// them here; the serialized writer removes each head as its write completes. flushNow (quit path)
+// splices and sync-writes whatever is left, so an in-flight batch survives process exit.
+let inFlight = []
+
 /** Drain the buffer as one async appendFile batch per threshold chunk (chunks written in order). */
 function flushAsync () {
   flushTimer = null
@@ -329,20 +341,20 @@ function flushAsync () {
   const lines = buffer.splice(0).map(e => JSON.stringify(e) + '\n')
   ensureDir()
   const chunks = chunkByThreshold(lines).map(chunk => chunk.join(''))
+  inFlight.push(...chunks)
   writeChain = writeChain.then(() => {
-    let p = Promise.resolve()
-    for (const text of chunks) {
-      p = p.then(() => {
-        try { rotateIfNeeded() } catch (e) { /* rotation failure must not lose the batch */ }
-        return new Promise(resolve => {
-          fs.appendFile(auditFile(), text, err => {
-            if (err) { try { fs.appendFileSync(auditFile(), text) } catch { /* dropped by contract */ } }
-            resolve()
-          })
+    const writeNext = () => {
+      const text = inFlight[0]
+      if (text === undefined) return Promise.resolve()
+      return new Promise(resolve => {
+        fs.appendFile(auditFile(), text, err => {
+          if (err) { try { fs.appendFileSync(auditFile(), text) } catch { /* dropped by contract */ } }
+          if (inFlight[0] === text) inFlight.shift()
+          resolve()
         })
-      })
+      }).then(writeNext)
     }
-    return p
+    return writeNext()
   })
 }
 
