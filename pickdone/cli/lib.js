@@ -36,9 +36,10 @@ const bus = require('../src/main/command-bus')
 // commit must keep guaranteeing an initialized handle in pure-CLI sessions.
 const commit = (entity, verb, payload) => { open(); return bus.commit(entity, verb, payload, { preserveStamp: true }) }
 const core = require('../src/main/core/todo-core.js')
-// Round-3 P1: ownership guard for attachment filenames (single source with the App's purge path,
-// src/main/handlers/shared.js — pure, electron-free).
-const { ownsAttachmentFile } = require('../src/main/handlers/shared.js')
+// Round-3 P1: ownership guard for attachment filenames (single source with the App's purge path —
+// pure, electron-free; D3 2026-09-24 now required directly from its electron-free domain module
+// src/main/attachment-ownership.js instead of through handlers/shared.js + its electron-log require).
+const { ownsAttachmentFile } = require('../src/main/attachment-ownership.js')
 const audit = require('./audit.js')
 const nlDate = require('./nl-date.cjs')
 const { parseMilestoneDateCore } = require('../shared/parse-date.mjs') // milestone-date core shared with the renderer (require(esm), same pattern as limits.mjs)
