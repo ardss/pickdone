@@ -32,6 +32,7 @@ function parseArgs (argv) {
     else if (a === '--no-date') opts.noDate = true
     else if (a === '--all') opts.all = true
     else if (a === '--yes') opts.yes = true
+    else if (a === '--yes-i-know') opts.yesIKnow = true
     else if (a === '--force') opts.force = true
     else if (a.startsWith('--')) {
       const eq = a.indexOf('=')
@@ -129,8 +130,8 @@ Write commands:
   sync unpair --device <id>      unpair a peer (rotates the shared secret — every remaining peer must re-pair)
   open   [--dev]                  launch App (brings existing window to front if already running)
   doctor                          environment self-check (data dir/driver/rw scale)
-  clean  [--all] [--dry-run]      clean regenerable test/dev residue in %TEMP% (never touches real user data)
-  restore-backup [path]           list auto snapshots (userData/backups) or validate one and show how to restore (read-only, never touches the DB)
+  clean  [--all] [--dry-run]      clean regenerable test/dev residue: %TEMP% isolation dirs, tests/.artifacts, .dev-data (and --all: extra dev dirs; never touches real user data)
+  restore-backup [path]           list auto snapshots (userData/backups + legacy pickdone-backups) or validate one and show how to restore (read-only, never touches the DB)
 
 Global options:
   --json   structured output (recommended for AI; write responses include a next suggestions field)
@@ -145,8 +146,13 @@ Skills (AI agent integration):
   -h       help
 
 Environment:
-  TODO_DB_DIR         data directory override, contains todos.db directly (default %APPDATA%/pickdone, for test isolation)
-  TODO_USER_DATA_DIR  main-process isolation var (userData root); used by the CLI when TODO_DB_DIR is unset`
+  TODO_DB_DIR         data directory override, contains todos.db directly. REQUIRED for write
+                      commands (add/edit/done/delete/restore/subtask/repeat/events/deps/batch/import/
+                      category/tag/view/plan/settings/milestone/tomato-writes/sync-pairing/open/purge/sort):
+                      without it (or --yes-i-know) they refuse to touch the real user DB
+                      (%APPDATA%/pickdone). Read commands (version/list/doctor/restore-backup list) run unlocked.
+  TODO_USER_DATA_DIR  main-process isolation var (userData root); used by the CLI when TODO_DB_DIR is unset
+  TODO_BACKUP_DIR     backup snapshot directory override (default: <userData>/backups)`
 
 /* ================= formatting ================= */
 const NO_DATE = 'no date'
@@ -219,6 +225,31 @@ async function main () {
   if (opts.help) { console.log(HELP); return }
 
   const WRITE_CMDS = ['add', 'edit', 'done', 'undo', 'delete', 'restore', 'subtask', 'repeat', 'events', 'deps', 'batch'] // events 入列让 --dry-run 真预览(原为死分支:永远真跑)
+  // P0 isolation gate (structural root fix): without an explicit isolation dir the CLI's default
+  // path IS the real user database (%APPDATA%/pickdone). Gate every write-side invocation at the
+  // single dispatch point — the gate implementation itself lives in cli/lib.js
+  // (assertIsolationForWrite, same contract as e2e-walkthrough's assertIsolationEnv).
+  // --dry-run previews are read-only and pass; `open` is gated inside lib.launchApp (both spawn
+  // branches) so a cold-start can never attach to the real DB either.
+  const GATED_WRITE = new Set([...WRITE_CMDS, 'import', 'purge', 'sort'])
+  const GATED_WRITE_SUBOPS = {
+    category: ['add', 'rename', 'move', 'rm', 'delete'],
+    tag: ['rename', 'rm', 'delete'],
+    view: ['add', 'rm', 'delete'],
+    plan: ['set', 'rm', 'remove'],
+    milestone: ['add', 'rm', 'link', 'unlink'],
+    settings: ['set'],
+    tomato: ['start', 'stop', 'attach', 'backfill'],
+    sync: ['pair', 'pair-respond', 'unpair']
+  }
+  const isGatedWrite = (cmd, opts) => {
+    if (GATED_WRITE.has(cmd) && !opts['dry-run']) return true
+    const sub = opts._[0]
+    if (cmd === 'tomato' && sub === 'record') return true // record fix/rm mutate the ledger directly
+    if (cmd === 'project') return !!(opts.on || opts.off || opts.status !== undefined || opts.deadline !== undefined)
+    return !!(GATED_WRITE_SUBOPS[cmd] && GATED_WRITE_SUBOPS[cmd].includes(sub))
+  }
+  if (isGatedWrite(cmd, opts) && !opts.yesIKnow) lib.assertIsolationForWrite()
   const dry = !!opts['dry-run'] && WRITE_CMDS.includes(cmd)
   const emit = data => {
     if (opts.json) console.log(JSON.stringify({ ok: true, command: cmd, data }, null, 2))
@@ -803,7 +834,7 @@ async function main () {
       return okMsg(lib.restoreTodo(opts._[0]), ['list --all --json to read back'])
     }
     case 'open': {
-      const r = lib.launchApp({ dev: !!opts.dev })
+      const r = lib.launchApp({ dev: !!opts.dev, allowReal: !!opts.yesIKnow })
       if (opts.json) return emit({ launched: true, pid: r.pid, dev: r.dev, note: 'single-instance lock brings the existing window to front when already running' })
       console.log('✓ launched' + (r.dev ? ' (--dev)' : '') + '; if the App is already running, the existing window comes to front')
       return

@@ -52,6 +52,21 @@ let opened = false
 // P3-9 (dw wave): the userData directory has ONE source — src/main/user-dir.js (no third copy;
 // audit.js defaultDirResolver reads the same module). Env priority: TODO_DB_DIR > TODO_USER_DATA_DIR > platform default.
 const { userDataDir, hasIsolationEnv } = require('../src/main/user-dir.js')
+
+/* ================= data-safety isolation gate (P0, single point) =================
+ * Structural rule: without an explicitly declared isolation dir, no CLI entry may touch the real
+ * user database (%APPDATA%/pickdone). Path resolution is single-sourced in src/main/user-dir.js;
+ * the gate was missing at the CONSUMER side — every write-side entry (pickdone.js dispatch,
+ * launchApp) calls assertIsolationForWrite here instead of re-implementing the check.
+ * Same contract as cli/e2e-walkthrough.js assertIsolationEnv, one exported implementation. */
+const ISOLATION_HINT = 'CLI write commands default to the REAL user database (%APPDATA%\\pickdone). ' +
+  'Set TODO_DB_DIR=<isolated dir> (or TODO_USER_DATA_DIR) to isolate, or pass --yes-i-know to confirm writing the real database.'
+function assertIsolationForWrite ({ allowReal = false } = {}) {
+  if (hasIsolationEnv() || allowReal) return
+  const e = new CliError(ISOLATION_HINT, 'ISOLATION_REQUIRED')
+  throw e
+}
+
 /** Open the database (idempotent). The TODO_DB_DIR env var can point to an isolated directory (for tests); defaults to the App's userData */
 function open () {
   if (opened) return dbm
@@ -733,7 +748,10 @@ function doctor () {
 /** Launch/summon the Electron App: starts it when not running; when running, the single-instance lock brings the existing window to the front.
  *  Dev repo: spawn electron's cli.js against the project root.
  *  Packaged install: resources/cli has no node_modules — spawn the app exe at the install root instead. */
-function launchApp ({ dev = false } = {}) {
+function launchApp ({ dev = false, allowReal = false } = {}) {
+  // P0: never cold-start an App instance against the real user DB — a spawned App opens
+  // %APPDATA%/pickdone immediately; require explicit isolation (or --yes-i-know) first.
+  assertIsolationForWrite({ allowReal })
   const root = path.join(__dirname, '..')
   const electronCli = path.join(root, 'node_modules', 'electron', 'cli.js')
   if (fs.existsSync(electronCli)) {
@@ -1844,7 +1862,7 @@ function listReady (categoryId = null) {
 const attachApi = require('./lib-attachments.cjs')
 const { addAttachment, listAttachments, removeAttachment } = attachApi({ resolveTask, liveTasks, patchTodo, userDataDir, CliError })
 module.exports = {
-  CliError, commit, open, parseDate, dayStartOf, launchApp, userDataDir, hasIsolationEnv, guessUserId, compareVersions,
+  CliError, commit, open, parseDate, dayStartOf, launchApp, userDataDir, hasIsolationEnv, assertIsolationForWrite, guessUserId, compareVersions,
   liveTasks, recycleTasks, resolveTask, resolveCategory,
   parsePredecessors, getTask, listReady,
   listTodos, getCategories, stats, overview,
