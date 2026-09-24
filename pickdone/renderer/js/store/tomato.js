@@ -17,6 +17,19 @@ function announceCrossDevice (ctx, status) {
   try { if (ctx && ctx.dispatch) ctx.dispatch('tomatoAnnounce/announceLocal', { status }) } catch (e) { /* announce is optional */ }
 }
 
+/** [maint-0924 A9] in-app aria-live announce for phase flips. $announce lives on the Vue app
+ *  (main.js globalProperty) and is unreachable from a store module, so mirror its DOM fallback
+ *  directly (layout.vue's .sr-only[aria-live=polite] region). Fire-and-forget, never throws. */
+function announceUi (key, params) {
+  try {
+    const m = tt(key, params)
+    const el = document.querySelector('.sr-only[aria-live], [aria-live]')
+    if (!el) return
+    el.textContent = ''
+    requestAnimationFrame(() => { el.textContent = m })
+  } catch (e) { /* announce is optional */ }
+}
+
 const LS_KEY = 'tomatoState'
 /** Persistence blob format version: incremented on future incompatible field semantics; readers tolerate old unstamped data as v1 */
 const SCHEMA_V = 1
@@ -547,6 +560,8 @@ export default {
         // Focus complete: announce idle right away so peers' chips stop counting (display-only;
         // the rest phase is local and intentionally not broadcast).
         announceCrossDevice(this, 'idle')
+        // [maint-0924 A9] read-screen / in-app feedback for the phase flip (focus done -> rest N minutes)
+        announceUi('statsH.tomato.focusToRestAnnounce', { n: s.restTime })
       } catch (e) {
         // G1: booking failed mid-transition — release the phase claim so the next tick can retry the
         // completion instead of the tomato being lost forever behind a permanent claim mark.
@@ -558,6 +573,8 @@ export default {
       if (!claimPhase('startRestTime', state.startedAt)) return
       if (state.enableNotification !== false) { try { window.todoAPI.notification({ title: tt('statsA.core.restOverTitle'), body: tt('statsA.core.restOverBody') }) } catch (e) { /* locked screen rejects the channel — fire-and-forget */ } }
       commit('patch', { status: 'default', startedAt: 0, remainSec: state.tomatoTime * 60 })
+      // [maint-0924 A9] phase flip feedback: rest over, back to ready
+      announceUi('statsH.tomato.restOverAnnounce')
     },
     attach ({ commit, state }, taskId) {
       const t = taskId ? this.state.todo.todoList.find(x => x.taskId === taskId) : null

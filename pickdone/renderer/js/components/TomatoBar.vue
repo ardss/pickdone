@@ -3,7 +3,9 @@
   <div class="tomato-bar tomato-timer"
        :style="slim ? 'height:40px;flex:0 0 40px;min-height:0' : 'height:72px;flex:0 0 72px;min-height:0'"
        :class="[slim ? 'tomato-bar--slim' : '', {'tomato-timer--work': isWork, 'tomato-timer--rest': isRest}]">
-    <div class="tomato-timer__status">
+    <div class="tomato-timer__status" aria-live="polite">
+      <!-- [maint-0924 A9] status region is a live region: phase flips (focus->rest->idle) change the
+           text below and get read out; the store side also announces explicit phase sentences -->
       <div class="tb-row">
         <template v-if="attachName">
           <app-icon name="link" :size="14" :style="{color: isRest ? 'var(--tt-rest-accent)' : 'var(--tt-work-accent)'}"/>
