@@ -5,7 +5,8 @@
  * kept only for reference; run `node scripts/visual-web.mjs` instead of anything below.
  *
  * Legacy behavior: drives the real app via CDP, screenshots every route x light/dark themes, and pixel-diffs against baselines.
- * Requires the app running with a debug port: npx electron . --no-focus --remote-debugging-port=9333 (SKIPs with exit 0 when absent, never blocking CI)
+ * Requires the app running with a debug port on an ISOLATED instance (never bare `electron .` —
+ * that attaches to the real user DB): set TODO_USER_DATA_DIR or use `npm run app:dev -- --remote-debugging-port=9333` (SKIPs with exit 0 when absent, never blocking CI)
  * Baselines/artifacts go to tests/.artifacts/visual/ (gitignored).
  */
 import fs from 'node:fs'
@@ -48,7 +49,7 @@ async function connect () {
 }
 
 const conn = await connect()
-if (!conn) { console.log('SKIP: app is not running with a debug port (npx electron . --no-focus --remote-debugging-port=9333)'); process.exit(0) }
+if (!conn) { console.log('SKIP: no isolated app instance with a debug port (start it via: npm run app:dev -- --remote-debugging-port=9333, with TODO_USER_DATA_DIR isolation — never bare electron .)'); process.exit(0) }
 const { ws, send } = conn
 
 // Fixed emulated viewport: decouples screenshots from real window size/zoom/minimized state (baselines must be reproducible)
