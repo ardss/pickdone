@@ -138,6 +138,17 @@ test('launchApp without isolation env: rejects with ISOLATION_REQUIRED before an
   }
 })
 
+test('sync status without isolation env: gated — even reads of sync write a cliSyncCmd row (adversarial round)', async () => {
+  // `sync status` inserts a cliSyncCmd command row via lib.writeSyncCmd for the running App to
+  // consume; bare it used to create todos.db/db.key in the default dir (APP_NOT_RUNNING exit).
+  const fake = fs.mkdtempSync(path.join(os.tmpdir(), 'pd-iso-gate-sync-'))
+  const env = bareEnv(); env.APPDATA = fake
+  const r = await runCli(['sync', 'status'], env)
+  assert.equal(r.code, 1)
+  assert.match(r.stderr, /ISOLATION_REQUIRED/)
+  assert.ok(!fs.existsSync(path.join(fake, 'pickdone', 'todos.db')), 'no DB created in the default dir')
+})
+
 test('backup root single source: TODO_BACKUP_DIR wins; default stays inside userData; .cjs consumer shares it', () => {
   const bd = require_('../../../src/main/backup-dirs.js')
   const saved = process.env.TODO_BACKUP_DIR

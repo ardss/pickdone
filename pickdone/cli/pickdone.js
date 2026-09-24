@@ -148,7 +148,7 @@ Skills (AI agent integration):
 Environment:
   TODO_DB_DIR         data directory override, contains todos.db directly. REQUIRED for write
                       commands (add/edit/done/delete/restore/subtask/repeat/events/deps/batch/import/
-                      category/tag/view/plan/settings/milestone/tomato-writes/sync-pairing/open/purge/sort):
+                      category/tag/view/plan/settings/milestone/attachment/tomato-writes/sync-incl-status/open/purge/sort):
                       without it (or --yes-i-know) they refuse to touch the real user DB
                       (%APPDATA%/pickdone). Read commands (version/list/doctor/restore-backup list) run unlocked.
   TODO_USER_DATA_DIR  main-process isolation var (userData root); used by the CLI when TODO_DB_DIR is unset
@@ -240,14 +240,18 @@ async function main () {
     attachment: ['add', 'rm', 'remove'],
     milestone: ['add', 'rm', 'link', 'unlink'],
     settings: ['set'],
-    tomato: ['start', 'stop', 'attach', 'backfill'],
-    sync: ['pair', 'pair-respond', 'unpair']
+    tomato: ['start', 'stop', 'attach', 'backfill']
+    // (sync not listed here: gated whole-command above — every sub-op writes a cliSyncCmd row)
   }
   const isGatedWrite = (cmd, opts) => {
     if (GATED_WRITE.has(cmd) && !opts['dry-run']) return true
     const sub = opts._[0]
     if (cmd === 'tomato' && sub === 'record') return true // record fix/rm mutate the ledger directly
     if (cmd === 'project') return !!(opts.on || opts.off || opts.status !== undefined || opts.deadline !== undefined)
+    // EVERY sync form writes: even `sync status` inserts a cliSyncCmd command row via
+    // lib.writeSyncCmd for the running App to consume (adversarial round: bare `sync status`
+    // created todos.db/db.key in the default dir), so the whole family is gated
+    if (cmd === 'sync') return true
     // plan shortcut form `plan <task> <HH:mm>` writes via planSet without the `set` sub-op:
     // two positionals whose first is not `list` can only be the shortcut (the read forms are
     // bare `plan`, `plan list [date]` or `plan <date>` with a single positional)
