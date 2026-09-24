@@ -30,10 +30,10 @@ git tag vX.Y.Z && git push origin vX.Y.Z # ② tag 触发 release.yml(windows ru
 
 3. 盯 Actions:**Release** 工作流链 = 版本校验 → `check:all`(CI 自适应降道;视觉第④组 CI 自动跳过) → electron-builder 打包 → 打包产物活体验证(verify:packaged) → 上传 **Draft** Release。全程约 10 分钟。
 4. 失败处理:**不删 tag 重跑旧代码**——在 main 上修复 → push → `git tag -d vX.Y.Z && git push origin :refs/tags/vX.Y.Z` → 重新打 tag 指向新 HEAD。
-5. 构建成功后 **Draft Release 已自动挂产物**(Setup/Portable/latest.yml/SHA256SUMS.txt)。发布前人工三查:
+5. 构建成功后 **Draft Release 已自动挂产物**——Windows 五件(Setup/Portable/latest.yml/blockmap/SHA256SUMS.txt)+ Linux 六件(AppImage x64/arm64 + deb + latest-linux.yml/latest-linux-arm64.yml + SHA256SUMS-linux.txt,详见 SOP-11 §5)。发布前人工三查:
    - 正文不为空(空正文=丑闻,从 CHANGELOG 对应段落填入 `gh release edit vX.Y.Z --notes-file ...`);
    - 标题统一 `PickDone x.y.z`;
-   - 产物四个齐活、latest.yml 在列(自动更新依赖它)。
+   - 产物齐活:Windows 五件 + Linux 六件,各 latest*.yml 在列(自动更新依赖它们)。
 6. **点 Publish**。发布后到已装版本验证:应用内「检查更新」能收到新版本(latest.yml 生效)。
 
 ## 3. 发布后检查单
@@ -50,5 +50,5 @@ git tag vX.Y.Z && git push origin vX.Y.Z # ② tag 触发 release.yml(windows ru
 
 ## 5. 跨平台现状(0.3.0 候选,截至 2026-09-07)
 
-- **Linux**:CI 已有 Ubuntu Electron 活体门禁(xvfb),应用可运行;缺 `AppImage/deb` 打包目标。**成本最低,优先**。
+- **Linux**:已上线——release.yml 的 release-linux job 出 AppImage x64/arm64 + deb 双架构产物与 latest-linux*.yml 更新清单(2026-09-12 起),细节与坑位记录在 sop/SOP-11-发布流水线.md §5,彼处以它为准,本节不再重复维护。
 - **macOS**:不需要自备 Mac 也可起步——GitHub Actions 的 `macos-14` runner 可构建**未签名 dmg**;缺口在 ① Apple Developer 账号($99/年)做签名+公证(否则用户要右键绕 Gatekeeper),② mac 侧交互适配(自定义标题栏/taskbar 集成等 Windows 专属分支)。建议路径:先出未签名 dmg 给愿意反馈的用户收问题清单,签名按需补。
