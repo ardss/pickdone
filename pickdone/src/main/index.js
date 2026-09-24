@@ -624,8 +624,8 @@ let flushDone = false // flush window finished; second will-quit passes through 
 // flush invokes are dispatched; will-quit holds the quit until every live window acked or ≤2s elapsed
 // (bounded, so a hung renderer can never block quitting). The two-phase will-quit (flushDone passthrough
 // for updater's autoInstallOnAppQuit) is unchanged.
-const { createQuitAckTracker } = require('./quit-ack')
-const quitAck = createQuitAckTracker()
+const quitAckModule = require('./quit-ack')
+const quitAck = quitAckModule.createQuitAckTracker()
 // webContents -> latest 'destroyed'/'render-process-gone' abandon closure (WeakMap: dying senders GC freely)
 const quitAckGone = new WeakMap()
 app.on('before-quit', () => {
@@ -713,8 +713,6 @@ app.on('will-quit', (event) => {
   quitting = true
   event.preventDefault()
   const FLUSH_FLOOR_MS = 500
-  const FLUSH_ACK_CAP_MS = 2000
-  const startedAt = Date.now()
   const flushNow = () => {
     try { if (stopDbWatch) stopDbWatch() } catch {} // release the fs.watchFile poll timers before closing
     try { shortcuts.unregisterAll() } catch {}
@@ -739,12 +737,11 @@ app.on('will-quit', (event) => {
   // All acks already in (or no live window to wait for): keep the old fast path
   const allAcked = () => quitAck.allAcked()
   if (allAcked()) { setTimeout(flushNow, FLUSH_FLOOR_MS); return }
-  const poll = setInterval(() => {
-    if (allAcked() || Date.now() - startedAt >= FLUSH_ACK_CAP_MS) {
-      clearInterval(poll)
-      if (!flushDone) flushNow()
-    }
-  }, 50)
+  // P2 (dw wave5 2026-09-24): the 50ms poll loop was a hand-rolled copy of the same round logic
+  // updater.js carried (with a drifted cap); it moved into quit-ack.awaitFlushAcks — the shared
+  // bounded wait. Broadcast+abandon wiring stays in before-quit above; lifecycle teardown stays
+  // in flushNow. Cap unified on quit-ack.FLUSH_ACK_CAP_MS (2000ms).
+  quitAckModule.awaitFlushAcks({ tracker: quitAck, flushMain: () => { if (!flushDone) flushNow() } })
 })
 
 /* ================= Full IPC registration (channel names aligned with the project baseline) =================
