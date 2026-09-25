@@ -30,8 +30,16 @@ export function deleteWithUndo (vm, store, task) {
         window.Vue.h('a', { style: { color: 'var(--brand)', cursor: 'pointer' }, onClick: undo }, tt('statsJ.Confirm.undo'))
       ])
     }
+    // [maint-0925 A4] the bare .catch(() => false) below swallowed write failures silently — the
+    // user saw nothing while the delete never landed. Honest-failure toast, same shape as moveFailToast.
     return true
-  }).catch(() => false)
+  }).catch((e) => {
+    try {
+      console.error('[todo] delete failed:', e)
+      if (vm && vm.$message) vm.$message.error(tt('statsH.main.actionFailedMsg') + ((e && e.message) || ''))
+    } catch { /* toast must never become the new failure */ }
+    return false
+  })
 }
 
 /** Unified undo exit for irreversible removals inside the edit panel (tags/subtasks/reminder rows/attachments):

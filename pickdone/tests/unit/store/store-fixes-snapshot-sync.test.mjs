@@ -227,7 +227,7 @@ test('writeCriticalBackup: main window arms the debounced write and swallows IPC
   globalThis.window.todoAPI.writeCriticalStateBackup = () => { writeAttempts++; return Promise.reject(new Error('main-window-only')) }
   const self = {}
   actions.writeCriticalBackup.call(self, {
-    state: { todoList: [], recycleList: [], search: '', version: 1, remoteVersion: 0, todayTimestamp: 0, ignoreReminder: 0, todosVersion: 0 },
+    state: { todoList: [], recycleList: [], search: '', version: 1, remoteVersion: 0, todayTimestamp: 0, todosVersion: 0 },
     rootState: { settings: {}, auth: { user: {}, lastLoginRecord: null }, tomato: null, category: { list: [] }, habits: {} }
   })
   assert.ok(self._cbTimer)

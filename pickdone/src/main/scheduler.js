@@ -1,6 +1,7 @@
 /**
  * Reminder scheduler — native setTimeout one-shot timers, rebuilt from the DB after restart
- * Semantics: reminder_time is minute-precise; "ignore after today" is filtered renderer-side by ignoreReminder's date.
+ * Semantics: reminder_time is minute-precise; past-due instances are NOT filtered by a renderer flag —
+ * they fire exactly once through the firedReminders watermark (markFired/loadFiredFromMeta below).
  * Multiple reminders: a task can carry reminderOffsets (minute offsets, negative = earlier, relative to the main reminder remindAt);
  * scheduling expands [main reminder, ...offset times]; job key `taskId:offset`, offsets are inherited automatically across repeat renewals.
  * Note: node-schedule was used early on, but only one-shot absolute times are scheduled here, so native setTimeout + overflow rescheduling suffices.
@@ -100,6 +101,30 @@ function clipText (v, max) {
   return pts.length > max ? pts.slice(0, max).join('') : s
 }
 
+/** B4 (daily 2026-09-25): notificationTimeoutInterval — the renderer settings key
+ * (store/settings.js DEFAULT_SETTINGS, SettingsModal radio 30s/2min/5min, CLI-settable) had NO
+ * main-process consumer: every Notification this process created used the OS default duration,
+ * so the user's "notification display duration" choice was an orphan setting. Bounds/default
+ * mirror shared/settings-manifest.mjs (min 30000 / max 300000 / default 300000); anything outside
+ * the range (corrupt blob, junk from a degraded host) falls back to the declared default. */
+const NOTIFY_TIMEOUT_DEFAULT = 300000
+const NOTIFY_TIMEOUT_MIN = 30000
+const NOTIFY_TIMEOUT_MAX = 300000
+function timeoutFromInterval (raw) {
+  const v = Number(raw)
+  return Number.isFinite(v) && v >= NOTIFY_TIMEOUT_MIN && v <= NOTIFY_TIMEOUT_MAX ? v : NOTIFY_TIMEOUT_DEFAULT
+}
+/** Notification options honoring the setting. `timeout` (ms) is honored on Windows 7/8 and Linux;
+ *  `timeoutType: 'default'` keeps OS-native dismissal where the OS owns toast duration (Win10+).
+ *  db may be null in degraded hosts — the default duration applies. */
+function notifyTimeoutOpts (db) {
+  let raw = null
+  try { raw = JSON.parse((db && db.call && db.call('getMeta', 'db.settingsState')) || 'null') } catch { /* degraded host: default duration */ }
+  return { timeout: timeoutFromInterval(raw && raw.notificationTimeoutInterval), timeoutType: 'default' }
+}
+/** Same options, self-sourcing the app DB (for call sites without an injected db handle). */
+function notifyTimeoutOptsForApp () { return notifyTimeoutOpts(require('./db.js')) }
+
 /** Display prefix for offsets ("30 minutes early" etc.); 0 = main reminder with no prefix; 'x<ts>' = extra absolute reminder with no prefix */
 function offsetLabel (offset) {
   if (!offset || (typeof offset === 'string' && offset[0] === 'x')) return ''
@@ -118,7 +143,8 @@ function fire (todo, offset) {
       title: clipText(clean((offset ? offsetLabel(offset) : '') + (todo.taskContent || '')), 60) || i18nM.mt('todoRemindTitle'),
       body: clipText(clean(todo.taskDescribe), 140) || i18nM.mt('todoRemindBody'),
       icon: path.join(__dirname, '../../assets/icon.png'),
-      silent: true
+      silent: true,
+      ...notifyTimeoutOptsForApp()
     })
     n.on('click', () => {
       const win = require('./window-ref').getMainWindow()
@@ -276,7 +302,7 @@ function needsCatchUp (todo, now = Date.now()) {
 
 module.exports = {
   init: () => {}, reloadAll, scheduleOne, fire, setSoundFile, flushFiredNow,
-  reminderInstances, needsCatchUp, clipText,
+  reminderInstances, needsCatchUp, clipText, notifyTimeoutOpts, notifyTimeoutOptsForApp, timeoutFromInterval,
   setFireForTest,
   _jobs: jobs,
   _fired: firedReminders,

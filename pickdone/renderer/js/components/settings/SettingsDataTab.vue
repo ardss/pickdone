@@ -38,8 +38,10 @@
       <div class="form-label">{{ $t('statsE.SettingsModal.dataManagementSection') }}</div>
       <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.exportExcelLabel') }}</span>
         <div class="form-item__control"><button class="primary mini-lg" :disabled="exporting" @click="exportXlsx">{{ $t('statsE.SettingsModal.exportXlsxBtn') }}</button>
-          <!-- F8: the xlsx export has no import counterpart (import only accepts CSV), so without
-               this hint users exported a file the app could never read back -->
+          <!-- B2 (2026-09-25): the tip now promises only "viewing / archive". The old "to migrate
+               data back use CSV import" pointed at an impossible round-trip: CSV import reads
+               TickTick/dida365/Todoist vendor exports only, NOT this app's own xlsx (and an
+               own-format CSV/CLI export capability does not exist yet — tracked as a legacy item). -->
           <span class="tip">{{ $t('statsE.SettingsModal.exportXlsxTip') }}</span></div></div>
       <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.importCsvLabel') }}</span>
         <div class="form-item__control"><button class="mini-lg" :disabled="importing" @click="importFromCsv">{{ $t('statsE.SettingsModal.importCsvBtn') }}</button></div></div>
@@ -81,6 +83,7 @@ import { confirmRecycleClear } from '../../utils/confirm.js'
 import { loadRuntime } from '../../store/helpers/runtimeState.js'
 import { commit as commitCommand } from "../../utils/commandBus.js"
 import { SCHEMA_V } from '../../store/helpers/todoBackup.js'
+import { repeatRuleMetaKeys, ruleMapFromMetaRows, repeatRuleCell } from '../../utils/exportRepeatRules.js'
 
 /** Restore = the user wants the backup's data to win. Backup rows carry their backup-time
  *  updateTime + status:'sync', so LAN LWW instantly reverts the restore against any peer
@@ -172,6 +175,16 @@ export default {
         if (!(await this.$store.dispatch('todo/writeEventBackup', 'import'))) this.$message.warning(this.$t('statsE.SettingsModal.snapshotFailWarnMsg'))
         const done = await window.todoAPI.importCsvRun(picked.file)
         await this.$store.dispatch('_rt/refreshFromDb')
+        // B1 (2026-09-25): import:run now returns the structured { ok:false, code, message } contract
+        // (AUTH_EXPIRED / HASH_MISMATCH / FILE_MISSING / USAGE / FORMAT_UNKNOWN instead of throws).
+        // The result used to be fed straight into the success toast — a failed run reported
+        // "imported N" with N=undefined. Same code branch shape as the preview stage above.
+        if (done && done.ok === false) {
+          if (done.code === 'FORMAT_UNKNOWN') this.$message.error(this.$t('statsE.SettingsModal.importErrFormatUnknown'))
+          else if (done.code === 'EMPTY_FILE') this.$message.error(this.$t('statsE.SettingsModal.importErrEmptyFile'))
+          else this.$message.error(this.$t('statsE.SettingsModal.importFailedMsg') + (done.message || done.code || ''))
+          return
+        }
         this.$message.success(this.$t('statsH.SettingsModal.importDone', { n: done.imported, d: done.duplicates }))
       } catch (e) {
         // H8 (2026-09-12): worker error codes (FORMAT_UNKNOWN/EMPTY_FILE/USAGE) arrive as a
@@ -231,6 +244,14 @@ export default {
         const list = this.$store.state.todo.todoList
         if (!list.length) return this.$message.info(this.$t('statsE.SettingsModal.noDataYet'))
         const catName = id => (this.$store.state.category.list.find(c => c.categoryId === id) || {}).categoryName || ''
+        // B7 (2026-09-25): fill column 11 with the repeat rule BODY (serialized repeatSettingsV2 JSON
+        // from meta 'repeatRule:<rid>'), not just the bare repeatId — one batched meta read before
+        // mapping; a read failure degrades to the old bare-repeatId cell instead of killing the export
+        let ruleMap = {}
+        const ruleKeys = repeatRuleMetaKeys(list)
+        if (ruleKeys.length) {
+          try { ruleMap = ruleMapFromMetaRows(await window.todoAPI.getMetaMany(ruleKeys)) } catch { /* export without rule bodies */ }
+        }
         const rows = list.map(t => [
           t.taskId,
           t.dayStart ? dayjs(t.dayStart).format(FMT.date) : '',
@@ -241,7 +262,8 @@ export default {
           String(t.estimate || 0),
           t.reminderTime ? dayjs(t.reminderTime).format(FMT.dateTime) : '',
           (t.reminderOffsets || []).join(','),
-          t.repeatId || '',
+          // B7: rule body (serialized repeatSettingsV2) when the meta row exists, else the bare repeatId
+          repeatRuleCell(t, ruleMap),
           t.deadlineTs ? dayjs(t.deadlineTs).format(FMT.date) : '',
           t.important === 1 || t.important === true ? 'Y' : 'N',
           t.urgent === 1 || t.urgent === true ? 'Y' : 'N',
@@ -463,6 +485,10 @@ export default {
         const n = await window.todoAPI.dbCall('countSeedTodos')
         if (!n) return this.$message.info(this.$t('statsE.SettingsModal.noDemoDataMsg'))
         await this.confirmDanger(this.$t('statsH.SettingsModal.purgeSeedConfirm', { n }), this.$t('statsE.SettingsModal.clearDemoDataMsg'), 'warning')
+        // B8 (2026-09-25): event snapshot BEFORE the purge, same channel + boolean contract as
+        // import/restore above (writeEventBackup 'purge-seed' tags the evt- snapshot) — a demo-data
+        // purge used to be the only destructive op with NO rollback point.
+        if (!(await this.$store.dispatch('todo/writeEventBackup', 'purge-seed'))) this.$message.warning(this.$t('statsE.SettingsModal.snapshotFailWarnMsg'))
         await window.todoAPI.purgeSeedTodos()
         this.$store.dispatch('tomato/removeRecordsByIdPrefix', 'seed_')
         this.$store.dispatch('_rt/refreshFromDb')

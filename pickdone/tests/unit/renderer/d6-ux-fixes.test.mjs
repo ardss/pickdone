@@ -305,7 +305,7 @@ test('[F14] buildBackupDump includes planState + filterState; writers read chips
     habits: { habits: [], moments: [], savedAt: 0 },
     filters: { list: filters }
   }
-  const state = { search: '', todoList: [], recycleList: [], version: 0, remoteVersion: 0, todayTimestamp: 0, ignoreReminder: false, todosVersion: 0 }
+  const state = { search: '', todoList: [], recycleList: [], version: 0, remoteVersion: 0, todayTimestamp: 0, todosVersion: 0 }
   if (!globalThis.window.location) globalThis.window.location = { hash: '' }
   globalThis.window.localStorage = globalThis.window.localStorage || { getItem: () => null }
   const dump = buildBackupDump(rootState, state, { planState: JSON.stringify({ schemaV: 1, chips: [] }) })

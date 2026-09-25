@@ -18,7 +18,7 @@
         </div>
         <div class="modal__footer">
           <el-button size="small" @click="close">{{ $t('statsD.RepeatDeleteModal.cancel') }}</el-button>
-          <el-button size="small" type="danger" @click="confirm">{{ $t('statsD.RepeatDeleteModal.delete') }}</el-button>
+          <el-button size="small" type="danger" :loading="busy" @click="confirm">{{ $t('statsD.RepeatDeleteModal.delete') }}</el-button>
         </div>
       </div>
     </div>
@@ -33,7 +33,10 @@ import { cleanupOrphanRepeatRule } from '../utils/repeat.js'
 export default {
   name: 'RepeatDeleteModal',
   mixins: [dialogA11y],
-  data () { return { mode: 'this' } },
+  // [maint-0925 C3] busy guard + :loading: a double click on the confirm button used to run
+  // deleteTodosMany twice, pushing two snapshots into the undo stack (one undo restored only
+  // half the delete). The guard keeps the batch delete (and its single undo push) once-only.
+  data () { return { mode: 'this', busy: false } },
   computed: {
     base () {
       const id = this.$store.state.ui.showRepeatDeleteConfirm
@@ -43,8 +46,11 @@ export default {
   },
   methods: {
     async confirm () {
+      if (this.busy) return
       const b = this.base
       if (!b) return this.close()
+      this.busy = true
+      try {
       let group
       try { group = await window.todoAPI.dbCall('queryTodos', { deleted: 0, repeatId: b.repeatId }) } catch (e) { console.error('[repeat] query failed:', e); return }
       const ids = []
@@ -74,6 +80,7 @@ export default {
       // Clean up the orphan rule (meta + localStorage) when no active instances remain in the group, preventing unbounded accumulation
       await this.cleanupOrphanRule(b.repeatId)
       this.close()
+      } catch (e) { console.error('[repeat] delete failed:', e) } finally { this.busy = false }
     },
     /** Clean up the repeat rule when no active instances remain in the group (meta + localStorage), preventing unbounded accumulation.
      *  U-2: implementation extracted to utils/repeat.js so the bare-string deleteMeta contract is unit-testable. */

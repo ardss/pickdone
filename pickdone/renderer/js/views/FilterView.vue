@@ -10,7 +10,7 @@
         </div>
         <div class="title__append">
           <span class="sn-badge">{{ list.length }}</span>
-          <button v-if="filter" class="mini" @click="editVisible = true">{{ $t('statsJ.FilterView.editCond') }}</button>
+          <button v-if="filter" class="mini" @click="$store.commit('ui/toggleFilterModal', true)">{{ $t('statsJ.FilterView.editCond') }}</button>
           <button v-if="filter" class="mini danger" @click="delFilter">{{ $t('statsJ.FilterView.delFilter') }}</button>
         </div>
       </div>
@@ -35,7 +35,7 @@
         </div>
       </div>
     </div>
-    <filter-modal v-if="editVisible && filter" :filter="filter" @saved="saved" @close="editVisible = false"/>
+    <filter-modal v-if="showFilterModal && filter" :filter="filter" @saved="saved" @close="$store.commit('ui/toggleFilterModal', false)"/>
   </div>
 </template>
 
@@ -58,8 +58,10 @@ import EmptyState from '../components/EmptyState.vue'
 export default {
   name: 'FilterView',
   components: { FilterModal, EmptyState },
-  data () { return { editVisible: false } },
+  // [maint-0925 A2] visibility lives in the ui store (ui.showFilterModal) so the global Esc guard
+  // can see it; local component data was invisible to EditPanel._onKeydown
   computed: {
+    showFilterModal () { return this.$store.state.ui.showFilterModal },
     filter () {
       const id = Number(this.$route.params.id)
       return this.$store.state.filters.list.find(f => f.id === id) || null
@@ -96,6 +98,12 @@ export default {
         .sort((a, b) => (b.taskSort || 0) - (a.taskSort || 0)) // B8 (2026-09-24): display order is taskSort DESCENDING (sortMode.js custom mode) — the old ascending readout put pinned tasks at the bottom
     },
     selectedId () { return this.$store.state.ui.rightSidebarTodoEdit.taskId }
+  },
+  // [A2 review-fix] the flag moved out of component-local data into the ui store, so it no longer
+  // resets itself on teardown: leaving the route with the modal open would leave showFilterModal
+  // stuck true and the global Esc guard (EditPanel._onKeydown) swallowing Esc on every page
+  beforeUnmount () {
+    if (this.$store.state.ui.showFilterModal) this.$store.commit('ui/toggleFilterModal', false)
   },
   methods: {
     taskContextMenu (t, e) { taskContextMenu(this, t, e) },
@@ -135,7 +143,7 @@ export default {
       this.$router.replace({ name: 'todo-list-today' })
     },
     saved (id) {
-      this.editVisible = false
+      this.$store.commit('ui/toggleFilterModal', false)
       if (id && String(id) !== String(this.$route.params.id)) this.$router.replace({ name: 'todo-list-filter', params: { id: String(id) } })
     }
   },

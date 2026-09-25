@@ -53,10 +53,15 @@ test(`perf: ${N} tasks computeViews full grouping computation`, async () => {
     commit: (type, p) => { if (type === 'setViews') s.views = p },
     dispatch: async () => {}
   }
-  const t0 = performance.now()
-  // Inside a Vuex action this points to the store instance (computeViews reads this.state.todo)
-  await todo.actions.computeViews.call({ state: { todo: s } }, ctx)
-  const cost = performance.now() - t0
+  // best-of-3 (2026-09-25 pre-commit 实锤:满载机器单次测量撞 3s 天花板,同 review-metrics 的
+  // 暂停噪声问题)——min() 剔除 GC/JIT/并行负载暂停,真实量级退化每次都慢,天花板仍有效
+  const runOnce = async () => {
+    const t0 = performance.now()
+    // Inside a Vuex action this points to the store instance (computeViews reads this.state.todo)
+    await todo.actions.computeViews.call({ state: { todo: s } }, ctx)
+    return performance.now() - t0
+  }
+  const cost = Math.min(await runOnce(), await runOnce(), await runOnce())
   const total = Object.values(s.views).reduce((n, v) => n + (Array.isArray(v) ? v.length : 0), 0)
   assert.ok(total > 0, `view arrays non-empty (the computation really happened), keys=${Object.keys(s.views).join(',')}`)
   assert.ok(cost < 3000, `computeViews took ${Math.round(cost)}ms for ${N} tasks, over the 3s ceiling (order-of-magnitude degradation)`)
@@ -76,12 +81,18 @@ test(`perf: ${N} tasks review metrics build`, async () => {
   // code (2026-09-23). The assertion is now the amplification ratio big-vs-control with a 20x
   // margin — an order-of-magnitude algorithmic regression still fails; shared-CPU noise doesn't.
   const control = todoList.slice(0, Math.ceil(todoList.length / 8))
-  const tC = performance.now()
-  buildReviewMetrics({ todos: control, records: records.slice(0, 63), catNameOf: () => '未分类' }, period)
-  const ctrlCost = Math.max(performance.now() - tC, 1)
-  const t0 = performance.now()
-  const m = buildReviewMetrics({ todos: todoList, records, catNameOf: () => '未分类' }, period)
-  const cost = performance.now() - t0
+  // best-of-3 for both runs: a single GC/JIT pause mid-measurement (common under the unit wall's
+  // parallel load — 2026-09-25 full-suite red with cost > 20x control while the isolated run sat
+  // at 5x) must not read as an algorithmic regression. min() strips pauses; real slowdowns raise
+  // every repetition, so the 20x ceiling still catches order-of-magnitude regressions.
+  const run = (todos, recs) => {
+    const t = performance.now()
+    buildReviewMetrics({ todos, records: recs, catNameOf: () => '未分类' }, period)
+    return Math.max(performance.now() - t, 1)
+  }
+  const ctrlCost = Math.min(run(control, records.slice(0, 63)), run(control, records.slice(0, 63)), run(control, records.slice(0, 63)))
+  const m = buildReviewMetrics({ todos: todoList, records, catNameOf: () => '未分类' }, period) // warm-up outside timing
+  const cost = Math.min(run(todoList, records), run(todoList, records), run(todoList, records))
   assert.ok(m.done >= 0 && m.focusMins >= 0, 'metric structure complete')
   assert.ok(cost < ctrlCost * 20, `buildReviewMetrics took ${Math.round(cost)}ms vs ${Math.round(ctrlCost)}ms control — over the 20x amplification ceiling`)
   console.log(`    buildReviewMetrics(${N}+500) = ${Math.round(cost)}ms (control ${Math.round(ctrlCost)}ms)`)

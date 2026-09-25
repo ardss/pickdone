@@ -188,7 +188,7 @@ export default {
       "dataManagementSection": "数据管理",
       "exportExcelLabel": "导出全部任务为 Excel：",
       "exportXlsxBtn": "导出 xlsx",
-      "exportXlsxTip": "仅供查看 / 留档；数据回迁请使用 CSV 导入",
+      "exportXlsxTip": "仅供查看 / 留档（导出文件无法导回，导入仅支持其他应用的备份 CSV）",
       "importCsvLabel": "从其他应用迁移（滴答清单 / TickTick / Todoist 备份 CSV）：",
       "importCsvBtn": "导入…",
       "importPreviewMsg": "识别为 {f} 格式：将导入 {n} 条，跳过重复 {d} 条、无法解析 {s} 条。清单将建为同名分类。继续导入？",

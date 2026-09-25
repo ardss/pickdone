@@ -145,6 +145,26 @@ test('F3: >8192 distinct attacker IPs evict the OLDEST keys (bounded rate-limite
   srv.close()
 })
 
+/* ---------------- F3b (C1, 2026-09-25): same-tick close leaves no orphan listening server ---------------- */
+
+test('F3b: createLanServer + close() in the SAME tick never opens the port (no orphan server)', async () => {
+  const srv = createLanServer({
+    port: 0, host: '127.0.0.1', deviceId: 'dev-f3b', pairingSecret: 's', getHandler: () => {},
+  })
+  // Close BEFORE the deferred listen's nextTick runs — the exact shape that used to leave the
+  // port bound forever (this very file hung at process-exit because of it, C2 finding).
+  await srv.close()
+  await sleep(500) // well past the deferred nextTick: the listen must never have happened
+  assert.equal(srv.port, null, 'the server never reported a listening port')
+  assert.equal(srv._server.listening, false, 'the underlying net server is not listening')
+  // No 'listening' event escaped either — a second close() is a no-op that still resolves.
+  let listeningEvents = 0
+  srv.on('listening', () => { listeningEvents++ })
+  await srv.close()
+  await sleep(100)
+  assert.equal(listeningEvents, 0, 'no listening event after close')
+})
+
 /* ---------------- F4: att-chunk declared-size enforcement ---------------- */
 
 test('F4: an over-size att-chunk stream is rejected as a protocol error (no hash-check-time surprise)', () => {

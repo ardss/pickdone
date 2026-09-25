@@ -225,7 +225,7 @@ function backfillCommit (promptValue) {
       commit: (ty, p) => commits.push([ty, p]),
       dispatch: async () => {}
     },
-    $message: { success: () => {} },
+    $message: { success: () => {}, warning: () => {} },
     $prompt: () => Promise.resolve({ value: promptValue })
   }
   const menu = buildTaskMenu(vm, task, {}, [])
@@ -246,11 +246,35 @@ test('#7 backfill dateKey derives from endTime (DB re-derives from endTime, neve
   }
 })
 
-test('#8 backfill id shape matches the CLI contract and duration clamps to 600', async () => {
-  const commits = await backfillCommit('9999')
+// [maint-0925 A14] the silent clamp-to-600 contract was replaced: over-limit input is rejected
+// with an explicit hint toast (silent clamping dropped the tail of any focus > 4h... and then the
+// 600 cap itself was quiet). The id shape is asserted on an at-cap 600 instead.
+test('#8 backfill id shape matches the CLI contract; at-cap 600 accepted', async () => {
+  const commits = await backfillCommit('600')
   const rec = commits.find(c => c[0] === 'tomato/addRecord')[1]
-  assert.equal(rec.focusDuration, 600, 'clamped to the DB-layer single source')
+  assert.equal(rec.focusDuration, 600, 'the cap itself is accepted')
   assert.match(rec.tomatoId, /^tmt_m_\d+_600_12345678$/, 'id = tmt_m_<startTs>_<minutes>_<taskId slice(-8)>')
+})
+
+test('#8b backfill input above FOCUS_MAX_MINUTES is rejected with a hint, no record minted', async () => {
+  const warns = []
+  const commits = []
+  const task = row('task-12345678', { taskContent: 'My Task' })
+  const vm = {
+    $t: k => k,
+    $store: {
+      state: { todo: { todoList: [task] }, tomato: {} },
+      commit: (ty, p) => commits.push([ty, p]),
+      dispatch: async () => {}
+    },
+    $message: { success: () => {}, warning: m => warns.push(m) },
+    $prompt: () => Promise.resolve({ value: '9999' })
+  }
+  const menu = buildTaskMenu(vm, task, {}, [])
+  const item = menu.find(i => i.icon === 'timer')
+  await item.fn()
+  assert.deepEqual(commits, [], 'no record for over-limit input')
+  assert.equal(warns.length, 1, 'explicit hint instead of a silent clamp')
 })
 
 test('#8 backfill without a task uses the free-slot id suffix', async () => {

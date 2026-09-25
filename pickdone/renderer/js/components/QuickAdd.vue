@@ -120,9 +120,12 @@ export default {
       this._submitting = true
       let content = raw
       if (this.parsed) content = this.parsed.restText || raw
-      // Tag page context: tags are embedded in the content (#tag); appending it is required to land under the current tag (skip if the same tag already exists)
+      // Tag page context: tags are embedded in the content (#tag); appending it is required to land under the current tag.
+      // [maint-0925 A11] the includes() check is a substring match: '#java' suppressed '#java' AND
+      // '#javascript'. Word-boundary regex so only the exact tag token counts as present.
       const tag = this.routeTag
-      if (tag && !content.includes('#' + tag)) content = content + ' #' + tag
+      const esc = tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      if (tag && !new RegExp('(^|\\s)#' + esc + '(?=[\\s#,，。.!?！？]|$)').test(content)) content = content + ' #' + tag
       try {
       const payload: any = {
         todoContent: content,

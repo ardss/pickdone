@@ -243,7 +243,12 @@ function importItems (items, { dryRun = false, format, category = null, useLists
     if (catCache.has(name)) return catCache.get(name)
     const hit = db.call('getAllCategories').find(c => (c.categoryName || '') === name)
     if (hit) { catCache.set(name, hit.categoryId); return hit.categoryId }
-    if (dryRun) return 0 // preview must not create categories either
+    // A15 (2026-09-25): dry-run must still REPORT the would-be category creations — the report's
+    // JSDoc (:223) promises categoriesCreated, and the preview dialog shows the list-name→category
+    // mapping, but the dryRun branch returned 0 without touching createdCats, so preview always
+    // claimed "0 categories" and the number only appeared after the real import. Preview still
+    // writes nothing (cache maps to the 0 placeholder; the write path below is unreachable).
+    if (dryRun) { createdCats.push(name); catCache.set(name, 0); return 0 }
     // P3 fix (2026-09-25): see allocCategoryId — probe the taken-id set before writing so a
     // colliding id can never ON-CONFLICT-overwrite a live category row.
     const taken = new Set((db.call('getAllCategories') || []).map(c => Number(c.categoryId)))

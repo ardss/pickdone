@@ -6,6 +6,7 @@
 import { dayjs, FMT } from './core.js'
 import { FOCUS_MAX_MINUTES } from '../../../shared/limits.mjs'
 import { deleteWithUndo, moveWithUndo } from './confirm.js'
+import { crossDayMovePatch, crossDayRevertPatch } from './crossDayMove.js'
 import { toggleCompleteWithUndo } from './completeAction.js'
 
 /**
@@ -30,7 +31,11 @@ export function buildTaskMenu (vm, t, caps = {}, extra = []) {
     })
   }
   if (c.move) {
-    // Same semantics as TodoItem.moveDay: the target date lands on todoTime (dayStart derived by updateTodoFields);
+    // Same semantics as TodoItem.moveDay: the target day lands on todoTime (dayStart derived by updateTodoFields);
+    // [maint-0925 A1] the patch itself comes from crossDayMovePatch — the same single source as the
+    // drag path — so a 14:30 schedule keeps its 14:30 and reminderTime/reminderExtra follow the new
+    // day instead of being orphaned on the old one (the hand-written { todoTime: target } patch
+    // rewrote only todoTime and silently dropped everything else).
     // menu click = explicit operation, must carry the 5s undo toast (same layer as row-inline moveDay; drag stays silent by design)
     const move = (offset) => {
       const cur = raw()
@@ -38,11 +43,13 @@ export function buildTaskMenu (vm, t, caps = {}, extra = []) {
       const target = offset === 0
         ? +dayjs().startOf('day')
         : Math.max(+dayjs().add(offset, 'day').startOf('day'), +base.add(offset, 'day').startOf('day'))
-      const orig = cur.todoTime
+      const startOf = ts => +dayjs(ts).startOf('day')
+      const patch = crossDayMovePatch(cur, target, startOf)
+      const revertPatch = crossDayRevertPatch(cur, patch)
       moveWithUndo(vm, {
         label: vm.$t(offset === 0 ? 'statsJ.TodoItem.movedToToday' : 'statsJ.TodoItem.movedToTomorrow'),
-        apply: () => vm.$store.dispatch('todo/updateTodoFields', { taskId: cur.taskId, patch: { todoTime: target, status: 'update' } }),
-        revert: () => vm.$store.dispatch('todo/updateTodoFields', { taskId: cur.taskId, patch: { todoTime: orig, status: 'update' } })
+        apply: () => vm.$store.dispatch('todo/updateTodoFields', { taskId: cur.taskId, patch: { ...patch, status: 'update' } }),
+        revert: () => vm.$store.dispatch('todo/updateTodoFields', { taskId: cur.taskId, patch: { ...revertPatch, status: 'update' } })
       })
     }
     items.push({ icon: 'calendar', label: vm.$t('statsE.TodoItem.moveToToday'), fn: () => move(0) })
@@ -88,7 +95,16 @@ export function buildTaskMenu (vm, t, caps = {}, extra = []) {
           inputValue: '25',
           inputPattern: /^\d{1,3}$/,
           inputErrorMessage: vm.$t('statsG.DayRail.manualInvalid')
-        }).then(({ value }) => backfill(parseInt(value, 10))).catch(() => {})
+        }).then(({ value }) => {
+          const n = parseInt(value, 10)
+          // [maint-0925 A14] a silent clamp dropped the tail of any focus longer than the cap;
+          // over-limit input now gets an explicit rejection toast instead
+          if (n > FOCUS_MAX_MINUTES) {
+            vm.$message.warning(vm.$t('statsG.DayRail.manualInvalid'))
+            return
+          }
+          backfill(n)
+        }).catch(() => {})
       }
     })
   }

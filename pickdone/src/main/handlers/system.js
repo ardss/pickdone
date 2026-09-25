@@ -35,7 +35,7 @@ module.exports = function systemHandlers (ctx) {
       // Same sanitization as scheduler.fire: renderer-supplied title/body goes straight to system notifications; control characters/RTL override characters must be stripped
       // eslint-disable-next-line no-control-regex -- control characters are exactly the target of this sanitization; the rule does not apply here
       const clean = v => require('../sanitize').sanitizeText(v, 200)
-      const n = new Notification({ title: clean(typeof o.title === 'string' ? o.title : '') || i18n.mt('notifyDefault'), body: clean(typeof o.body === 'string' ? o.body : ''), silent: !!o.silent })
+      const n = new Notification({ title: clean(typeof o.title === 'string' ? o.title : '') || i18n.mt('notifyDefault'), body: clean(typeof o.body === 'string' ? o.body : ''), silent: !!o.silent, ...require('../scheduler').notifyTimeoutOptsForApp() }) // B4: honor notificationTimeoutInterval on every notification channel
       n.show(); return true
     },
 

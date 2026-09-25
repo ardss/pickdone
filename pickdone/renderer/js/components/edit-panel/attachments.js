@@ -55,7 +55,15 @@ export async function uploadOne (ctx, kind, f) {
   } catch (err) { reportError('upload:' + f.name, err); ctx.$message.error(ctx.$t('statsJ.EditPanel.uploadFailedMsg') + f.name) }
 }
 
+// [maint-0925 A7/C7] mirrors src/main/attachments.js MAX_BYTES (50MB): reject oversize files in the
+// renderer BEFORE reading arrayBuffer / hitting IPC — the old path base64-encoded a 65MB paste into
+// memory just to have the main process throw it away
+const MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+
 async function _uploadOne (ctx, kind, f) {
+  if (f && f.size > MAX_UPLOAD_BYTES) {
+    throw new Error('attachment too large (max 50MB): ' + f.name)
+  }
   const buf = new Uint8Array(await f.arrayBuffer())
   let binary = ''
   for (let i = 0; i < buf.length; i += 0x8000) binary += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000))

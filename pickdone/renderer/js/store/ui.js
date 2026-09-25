@@ -80,6 +80,11 @@ export default {
     // Empty tags created by the user via "New Tag" in the sidebar (the tag itself is still derived from the body's #xxx; only the placeholder is stored here)
     userTags: [],
     showSettingsModal: false,
+    // [maint-0925 A2] FilterModal visibility lives here, not in FilterView local data: any overlay
+    // that must be honored by the global Esc guard (EditPanel._onKeydown) has to be observable
+    // from the store — component-local data is invisible to it and the guard used to close the
+    // right edit sidebar behind an open filter modal.
+    showFilterModal: false,
     showFeedbackModal: false,
     showRepeatModalFor: null,   // taskId
     showRepeatDeleteConfirm: null,
@@ -140,6 +145,7 @@ export default {
     openTaskAccount (s, taskId) { s.accountTaskId = taskId || '' },
     setDaySelected (s, ts) { s.daySelectedTs = ts },
     toggleSettings (s, v) { s.showSettingsModal = v == null ? !s.showSettingsModal : v },
+    toggleFilterModal (s, v) { s.showFilterModal = v == null ? !s.showFilterModal : v },
     closeFeedback (s) { s.showFeedbackModal = false },
     // P3-9 (maint/dw 2026-09-23): showFeedbackModal had no open mutation anywhere — the modal was
     // unreachable dead UI (its mount point in layout.vue could never render). openFeedback makes

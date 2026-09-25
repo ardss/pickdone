@@ -94,8 +94,9 @@ function handleAppProtocol () {
       const resolved = path.resolve(attachmentPath(key))
       const attachRoot = path.resolve(attachDir())
       if (!(resolved === attachRoot || resolved.startsWith(attachRoot + path.sep))) return new Response('forbidden', { status: 403 }) // 带尾分隔符,防同前缀兄弟目录(2026-09-05 终审 hardening)
-      const extMime = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', bmp: 'image/bmp', ico: 'image/x-icon', pdf: 'application/pdf', txt: 'text/plain', mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', mp4: 'video/mp4', webm: 'video/webm' }
-      const mime = extMime[path.extname(resolved).slice(1).toLowerCase()] || 'application/octet-stream'
+      // C13/C15 (2026-09-25): single-source mime table + legacy-svg forced download (see the
+      // EXT_MIME/localAttachmentHeaders comment at the bottom of this file).
+      const { mime, extraHeaders } = localAttachmentHeaders(resolved)
       // P1 2026-09-12 hardening: local:// serves user-uploaded files, including attacker-shaped SVG
       // (script-bearing). Rendered as <img> SVG never executes script, but a top-level/iframe
       // navigation to local://…svg ran it on a same-app-origin-ish document with fetch access to
@@ -103,7 +104,8 @@ function handleAppProtocol () {
       // display is unaffected (those load paths do not execute script). nosniff blocks MIME confusion.
       const secureHeaders = {
         'Content-Security-Policy': "default-src 'none'; script-src 'none'",
-        'X-Content-Type-Options': 'nosniff'
+        'X-Content-Type-Options': 'nosniff',
+        ...extraHeaders
       }
       if (/\.(ogg|mp3|wav|mp4|webm)$/i.test(resolved)) return await fileResponse(resolved, mime, req, secureHeaders)
       const data = await fs.promises.readFile(resolved)
@@ -112,4 +114,33 @@ function handleAppProtocol () {
   })
 }
 
-module.exports = { handleAppProtocol, fileResponse } // fileResponse exported for unit tests (Content-Length invariant)
+/* ---- C13/C15 (2026-09-25): single-source attachment MIME table + legacy-svg downgrade ----
+ * The attachment mime map used to exist TWICE (here and a hand-copied subset in
+ * handlers/attachments.js 'mime-get-type') and drifted. attachmentMimeFor is now the only
+ * table; the handler consumes it. ALLOWED_EXT (attachments.js) remains the STORAGE whitelist
+ * and is untouched — this is the SERVING-side policy only.
+ * C15 legacy-svg verdict: D6 removed .svg from the upload whitelist, but svg files that
+ * arrived via LAN sync before that fix still sit in userData/files, and extMime served them
+ * as image/svg+xml — script-capable markup, one nosniff/CSP regression away from execution
+ * on an app-origin document. Serving policy is now forced to application/octet-stream +
+ * Content-Disposition: attachment (download, never render), CSP/nosniff headers unchanged.
+ * Full ban (404) was weighed and rejected: legitimate legacy assets would silently break;
+ * download-only keeps the file reachable with zero script surface. */
+const EXT_MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', bmp: 'image/bmp', ico: 'image/x-icon', pdf: 'application/pdf', txt: 'text/plain', mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', mp4: 'video/mp4', webm: 'video/webm' }
+/** MIME for an attachment filename/extension (single source; pure). */
+function attachmentMimeFor (name) {
+  const ext = String(name).split('.').pop().toLowerCase()
+  return EXT_MIME[ext] || 'application/octet-stream'
+}
+/** Serving policy for one local:// file (pure): { mime, extraHeaders }. Legacy .svg is forced
+ *  to a download (octet-stream + attachment disposition) instead of image/svg+xml. */
+function localAttachmentHeaders (file) {
+  const ext = path.extname(String(file)).slice(1).toLowerCase()
+  if (ext === 'svg') {
+    const safe = path.basename(String(file)).replace(/["\\\r\n]/g, '')
+    return { mime: 'application/octet-stream', extraHeaders: { 'Content-Disposition': 'attachment; filename="' + safe + '"' } }
+  }
+  return { mime: EXT_MIME[ext] || 'application/octet-stream', extraHeaders: {} }
+}
+
+module.exports = { handleAppProtocol, fileResponse, attachmentMimeFor, localAttachmentHeaders } // fileResponse exported for unit tests (Content-Length invariant)

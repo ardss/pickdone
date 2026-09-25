@@ -542,15 +542,29 @@ function createLanServer(opts) {
   // Listen on next tick: on Windows a same-tick EADDRINUSE fires the 'error' event
   // SYNCHRONOUSLY, before the caller can attach an 'error' listener — the unhandled 'error'
   // event would crash the process instead of surfacing through the documented API.
-  process.nextTick(() => server.listen(port, host, () => {
-    em.port = server.address().port
-    em.emit('listening', em.port)
-  }))
+  // C1 (2026-09-25, round-3 P1 follow-up): a createLanServer() whose close() lands in the SAME
+  // tick (before this nextTick ran — e.g. the F3 eviction test, or a feature-flagged shutdown)
+  // used to leave an ORPHAN LISTENING server: the deferred listen() still opened the port with
+  // nobody left to close it, and the process never exited. The `closing` flag is checked here
+  // (skip listen entirely) and again inside the listen callback (unwind a handle that already
+  // started binding), so close() is honored no matter which side of the nextTick it lands on.
+  let closing = false
+  process.nextTick(() => {
+    if (closing) return
+    server.listen(port, host, () => {
+      if (closing) { try { server.close() } catch { /* already closed */ } return }
+      em.port = server.address().port
+      em.emit('listening', em.port)
+    })
+  })
 
   em.port = null
   em.close = () => new Promise((resolve) => {
+    closing = true
     for (const s of sockets) s.destroy()
-    server.close(() => resolve())
+    // A never-listened server's close() hands ERR_SERVER_NOT_RUNNING to the callback — that is
+    // still "no longer serving" for the caller, so the promise resolves on every path.
+    try { server.close(() => resolve()) } catch { resolve() }
   })
   em.on = em.on.bind(em)
   em._server = server

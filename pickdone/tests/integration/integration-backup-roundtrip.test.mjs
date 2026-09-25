@@ -44,7 +44,7 @@ test('round-trip: real db -> critical backup JSON -> corrupt -> recovery re-impo
       todoState: JSON.stringify({
         todoList: persisted.filter(t => !t.delete),
         recycleList: persisted.filter(t => t.delete),
-        version: 0, remoteVersion: 0, todayTimestamp: Date.now(), ignoreReminder: {}, todosVersion: '0', isSyncing: false, views: {}
+        version: 0, remoteVersion: 0, todayTimestamp: Date.now(), todosVersion: '0', isSyncing: false, views: {}
       }),
       // Same shape as writeCriticalBackup: categoryState is a nested JSON string of { list: [...] } (renderer app-shape rows)
       categoryState: JSON.stringify({
@@ -111,7 +111,7 @@ test('round-trip: tomatoRecords/filterState/planState/habitsState segments re-im
   }
   const dump = {
     backup: {
-      todoState: JSON.stringify({ schemaV: 1, todoList: [], recycleList: [], version: 0, remoteVersion: 0, todayTimestamp: Date.now(), ignoreReminder: {}, todosVersion: '0', isSyncing: false, views: {} }),
+      todoState: JSON.stringify({ schemaV: 1, todoList: [], recycleList: [], version: 0, remoteVersion: 0, todayTimestamp: Date.now(), todosVersion: '0', isSyncing: false, views: {} }),
       categoryState: JSON.stringify({ schemaV: 1, list: [] }),
       tomatoRecords: JSON.stringify([rec, { tomatoId: null, endTime: 1 }, { tomatoId: 'tmt_rt_2', endTime: Date.now() - 30e3, focusDuration: 50 }]),
       filterState: JSON.stringify({ schemaV: 1, list: [{ id: 91, name: '工作紧急', conds: { catId: 3, priority: 2, dateMode: 'all' }, sort: 1, updatedAt: Date.now() }] }),
@@ -191,7 +191,7 @@ test('round-trip: tomatoRecords/filterState/planState/habitsState segments re-im
   // caller's restoredN>0 gate (bak cleanup) on a restore that touched zero rows.
   const udC = tmpDir()
   dbRecovery.writeCriticalStateBackupAtomic(udC, JSON.stringify({
-    backup: { todoState: JSON.stringify({ schemaV: 1, todoList: [{ taskId: 't9', taskContent: 'x' }], recycleList: [], version: 0, remoteVersion: 0, todayTimestamp: Date.now(), ignoreReminder: {}, todosVersion: '0', isSyncing: false, views: {} }) }
+    backup: { todoState: JSON.stringify({ schemaV: 1, todoList: [{ taskId: 't9', taskContent: 'x' }], recycleList: [], version: 0, remoteVersion: 0, todayTimestamp: Date.now(), todosVersion: '0', isSyncing: false, views: {} }) }
   }))
   const nGhost = dbRecovery.restoreTasksFromCriticalBackup(udC, undefined, undefined, undefined)
   assert.equal(nGhost, 0, 'missing callback + non-empty todoState reports 0 imported (never a ghost count)')

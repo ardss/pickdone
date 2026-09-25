@@ -28,6 +28,24 @@ let dragCtx = null
 let dockedToTray = false // docked to tray: window hidden but the instance kept; the tray icon carries the state
 let screenHooksOn = false
 
+/* ---- C10 (2026-09-25): crash-rebuild cap (aligned with windows.js crashReloadCount<3) ----
+ * 3 consecutive auto-rebuilds per health window; the counter resets when a rebuilt window
+ * reaches ready-to-show (proof of health, same as the main window's did-finish-load reset) or
+ * when the user explicitly opens the float. Exported as `crashRebuild` so the policy is
+ * unit-testable without booting Electron windows. */
+const CRASH_REBUILD_CAP = 3
+let crashRebuildCount = 0
+const crashRebuild = {
+  /** Consume one rebuild slot; false once the cap is exhausted (no further auto-rebuild). */
+  allow () {
+    if (crashRebuildCount >= CRASH_REBUILD_CAP) return false
+    crashRebuildCount++
+    return true
+  },
+  reset () { crashRebuildCount = 0 },
+  get count () { return crashRebuildCount },
+}
+
 /* ---- "user explicitly closed the float" marker (F12, 2026-09-24 adversarial-review round 2) ----
  * Persisted in the todo DB meta table so it survives restarts; the renderer main.js auto-show gate
  * (6s after start) reads it via todo-db:call getMeta and must not resurrect a float the user closed.
@@ -177,6 +195,13 @@ function create () {
   })
   // 渲染进程崩溃自愈(2026-09-09,与主窗 render-process-gone 同类):did-fail-load 只覆盖加载失败,
   // 渲染进程崩溃后浮窗从此白屏/无响应且永不恢复。崩溃时销毁重建;若崩溃前可见(番茄进行中)则延迟重开。
+  // C10 (2026-09-25): the rebuild used to be UNLIMITED — a renderer that crashes in a tight loop
+  // (poisoned local state, GPU driver death spiral) turned self-heal into a crash-loop generator.
+  // Aligned with the main window's precedent (windows.js:135-144, crashReloadCount<3): at most 3
+  // consecutive auto-rebuilds, counter reset when a rebuilt window actually reaches ready-to-show
+  // (same "reset on proof of health" semantics). Beyond the cap the float stays down until the
+  // user opens it explicitly (an explicit show() also resets — a deliberate user action is the
+  // strongest health signal we get).
   win.webContents.on('render-process-gone', (_e, details) => {
     const reason = details && details.reason
     log.error('[TomatoFloat] render-process-gone:', reason, 'exitCode=', details && details.exitCode)
@@ -185,7 +210,11 @@ function create () {
     stopDrag()
     stopHitPoll()
     try { if (win && !win.isDestroyed()) win.destroy() } catch (e) { /* already gone */ } // 'closed' 会复位 win=null
-    if (wasVisible) setTimeout(() => { try { module.exports.show() } catch (e) { log.warn('[TomatoFloat] 崩溃重建失败', e) } }, 500)
+    if (wasVisible && crashRebuild.allow()) {
+      setTimeout(() => { try { module.exports.reopen() } catch (e) { log.warn('[TomatoFloat] 崩溃重建失败', e) } }, 500)
+    } else if (wasVisible) {
+      log.error('[TomatoFloat] 崩溃重建超限(' + CRASH_REBUILD_CAP + ' 次),浮窗不再自动重建,等待用户手动打开')
+    }
   })
   win.webContents.on('will-navigate', (e, url) => {
     // Same-origin prefix guard, aligned with the main window (index.js): a substring match would let
@@ -205,6 +234,7 @@ function create () {
   win.loadURL('app://app/renderer-dist/index.html#/__tomato-float').catch(e => log.error('[TomatoFloat] loadURL failed', e))
   win.once('ready-to-show', () => {
     if (!win || win.isDestroyed()) return
+    crashRebuild.reset() // C10: a window that actually reached its first frame = health restored
     win.showInactive()
     // After show, flush the bounds in place to force DWM to repaint the transparent layer (backstop against ghosting; dragging "erases" the ghost via this same mechanism)
     try { win.setBounds(win.getBounds()) } catch (e) { /* empty */ }
@@ -339,12 +369,19 @@ function flushPaint (w) {
 
 module.exports = {
   dock, undock, isDocked,
+  crashRebuild, // C10 crash-rebuild cap policy (unit-testable; see CRASH_REBUILD_CAP above)
   isInsideHit, // hover hit-test pure function (for unit tests)
   isPanelOpen, // panel-state getter (unit tests pin the F10 'closed' reset)
   isUserClosed, // closed-marker getter (unit tests pin the F12 marker lifecycle)
   clampDrag, // drag clamp pure function (for unit tests)
   /** Show (setBounds + showInactive if already created; common practice: do not steal focus) */
   show () {
+    crashRebuild.reset() // C10: an explicit user open is the strongest health signal — refill rebuild slots
+    return module.exports.reopen()
+  },
+  /** Open WITHOUT touching the crash-rebuild counter — the crash self-heal path uses this so an
+   *  auto-rebuild cannot refill its own slots through show() (C10 cap would be a no-op). */
+  reopen () {
     dockedToTray = false // dock 后走 show 等于解除收纳:否则 isDocked 误报、stopDrag 不重启轮询(2026-09-05 终审 P2)
     setUserClosed(false) // every open path converges here (SettingsModal/TomatoPanel/TomatoBar IPC, auto-show): clear the close marker
     let w = win

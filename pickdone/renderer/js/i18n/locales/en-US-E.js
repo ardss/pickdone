@@ -188,7 +188,7 @@ export default {
       "dataManagementSection": "Data management",
       "exportExcelLabel": "Export all tasks to Excel:",
       "exportXlsxBtn": "Export xlsx",
-      "exportXlsxTip": "For viewing / archive only; to migrate data back use CSV import",
+      "exportXlsxTip": "For viewing / archive only (the export cannot be imported back; import accepts other apps' backup CSV only)",
       "importCsvLabel": "Migrate from another app (dida365 / TickTick / Todoist backup CSV):",
       "importCsvBtn": "Import...",
       "importPreviewMsg": "Recognized as {f} format: {n} task(s) to import, {d} duplicate(s) and {s} unparsable row(s) will be skipped. List names become categories. Import now?",

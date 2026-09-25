@@ -186,7 +186,10 @@
                     <el-radio-button value="mon">{{ $t('statsE.SettingsModal.weekStartMonday') }}</el-radio-button><el-radio-button value="sun">{{ $t('statsE.SettingsModal.weekStartSunday') }}</el-radio-button>
                   </el-radio-group>
                 </div></div>
-              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.holidayBadgesLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.showHolidayMarkers" @change="v=>set({showHolidayMarkers:v})"/></div></div>
+              <!-- B5 (daily 2026-09-25): the holiday-badges switch was removed — no renderer reads
+                   showHolidayMarkers to draw badges (CalendarView/DayDeck rendering was never
+                   implemented), so this control visibly did nothing. Re-add it together with the
+                   actual holiday-badge implementation. -->
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.blurScheduleLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.isShowCalendarPrivacyMode" @change="v=>set({isShowCalendarPrivacyMode:v})"/></div></div>
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.dimUncompletedLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.isCalendarDimUncompleted" @change="v=>{set({isCalendarDimUncompleted:v});$store.dispatch('todo/computeViews')}"/></div></div>
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.fontSizeLabel') }}</span>

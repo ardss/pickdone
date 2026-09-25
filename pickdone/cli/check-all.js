@@ -130,9 +130,16 @@ function runStage (stage) {
           // execSync here crashed the whole fallback with "require is not defined", so orphaned
           // visual-web listeners were never reaped. spawnSync is imported statically at the top;
           // the pid parsing lives in cli/event-utils.cjs (unit-tested).
-          const r = spawnSync('netstat -ano | findstr :5175 | findstr LISTENING', { encoding: 'utf8', shell: true, stdio: ['ignore', 'pipe', 'ignore'] })
-          for (const pid of evtUtils.pidsFromNetstatOutput(r.stdout || '')) {
-            try { spawn('taskkill', ['/pid', pid, '/T', '/F'], { shell: true, stdio: 'ignore' }) } catch {}
+          // 2026-09-25: reap the stage's ACTUAL port, not the historical 5175 — the visual stage
+          // now spawns on --port=6175 (WinNAT excluded-range dodge), so a timed-out run's orphaned
+          // vite on 6175 survived this reaper and poisoned the next run's host preflight.
+          const mPort = (Array.isArray(args) ? args.join(' ') : '').match(/--port=(\d+)/)
+          const reapPorts = mPort ? [mPort[1]] : ['5175', '6175']
+          for (const p of reapPorts) {
+            const r = spawnSync('netstat -ano | findstr :' + p + ' | findstr LISTENING', { encoding: 'utf8', shell: true, stdio: ['ignore', 'pipe', 'ignore'] })
+            for (const pid of evtUtils.pidsFromNetstatOutput(r.stdout || '')) {
+              try { spawn('taskkill', ['/pid', pid, '/T', '/F'], { shell: true, stdio: 'ignore' }) } catch {}
+            }
           }
         } catch { /* 端口本就空闲 */ }
       }

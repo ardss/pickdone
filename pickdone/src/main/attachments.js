@@ -22,10 +22,18 @@ const MAX_BYTES = 50 * 1024 * 1024
 // the unbounded growth).
 const MAX_TOTAL_BYTES = 64 * 1024 * 1024
 const MAX_FILES = 200
+// C14 (2026-09-25): `noise-custom.*` is the custom white-noise pick (handlers/attachments.js),
+// NOT an attachment — it has its own entry point (and, since C5, its own per-file cap) and is a
+// single fixed-name slot that overwrites itself. Counting it against the attachment quota meant
+// one ~60MB audio file nearly starved ALL attachment uploads (63.5MB noise + 1MB upload = quota
+// exceeded). Excluded from BOTH the byte sum and the file count.
+const NOISE_CUSTOM_RE = /^noise-custom\./
+function isUnownedNoiseFile (f) { return NOISE_CUSTOM_RE.test(String(f)) }
 function dirUsage (dir) {
   let bytes = 0
   let count = 0
   for (const f of fs.readdirSync(dir)) {
+    if (isUnownedNoiseFile(f)) continue // C14: white-noise slot is not attachment quota
     try { bytes += fs.statSync(path.join(dir, f)).size; count++ } catch { /* vanished mid-scan */ }
   }
   return { bytes, count }
@@ -43,10 +51,12 @@ function withinStorageQuota (existingBytes, incomingBytes, quotaBytes) {
   return (Number(existingBytes) || 0) + (Number(incomingBytes) || 0) <= q
 }
 /** Current total byte size of the attachment directory (missing/unreadable files count 0 — the
- *  quota is a best-effort flood guard, not an accounting ledger). */
+ *  quota is a best-effort flood guard, not an accounting ledger). C14: noise-custom.* excluded
+ *  (see dirUsage) so the white-noise slot cannot starve attachment uploads. */
 function dirTotalBytes (dir) {
   let n = 0
   for (const f of fs.readdirSync(dir)) {
+    if (isUnownedNoiseFile(f)) continue
     try { n += fs.statSync(path.join(dir, f)).size } catch { /* raced delete */ }
   }
   return n
@@ -66,12 +76,11 @@ async function saveAttachment ({ taskId, name, dataBase64 }) {
   const raw = Buffer.from(stripped, 'base64')
   if (raw.toString('base64') !== stripped) throw new Error('attachment: base64 roundtrip mismatch')
   if (!raw.length) throw new Error('attachment: empty')
-  if (raw.length > MAX_BYTES) throw new Error('attachment: too large (max 50MB)')
-  // P2-4 (R4 2026-09-21) + main-ipc-4 (2026-09-22): aggregate quota (64MB total / 200 files,
-  // aligned with the LAN transfer budget) through the pure, unit-testable gate.
-  if (!withinStorageQuota(dirTotalBytes(attachDir()), raw.length)) throw new Error('attachment: storage quota exceeded (max 64MB total)')
-  const { count: usedFiles } = dirUsage(attachDir())
-  if (usedFiles >= MAX_FILES) throw new Error('attachment: too many attachment files (max 200)')
+  // C5/C12 architecture wave (2026-09-25): the per-file size cap + aggregate quota now route
+  // through attachments-guards (single source shared with the white-noise pick entry — its
+  // guards.assertWriteAllowed enforces the SAME caps). Lazy require: guards itself requires
+  // this module for the exported pure gates, so the cycle must stay call-time only.
+  require('./attachments-guards').assertWriteAllowed({ incomingBytes: raw.length, dir: attachDir() })
   const safe = `${String(taskId).replace(/[\\/:*?"<>|]/g, '_').replace(/\.\./g, '_')}_${Date.now()}_${cleanName.replace(/[\\/:*?"<>|]/g, '_')}`
   // P2 2026-09-12: two uploads in the same millisecond with the same task/name produced the same
   // Date.now() filename and writeFileSync silently overwrote the first attachment. Suffix -1/-2…
@@ -92,6 +101,9 @@ function attachmentPath (key) {
 }
 
 module.exports = { attachDir, saveAttachment, attachmentPath, withinStorageQuota, dirTotalBytes, MAX_TOTAL_BYTES, __setTotalQuota,
+  // C5/C14 (2026-09-25): MAX_BYTES/MAX_FILES and the noise-slot classifier are exported so
+  // attachments-guards.js is the shared gate for every write entry without duplicating caps.
+  MAX_BYTES, MAX_FILES, isUnownedNoiseFile, dirUsage,
   // Domain-1 F-A2 refactor (2026-09-23): the whitelist is exported so the LAN attachment
   // receiver (lan-sync/att-transfer.js) enforces the SAME extension set on inbound files —
   // one whitelist, two doors (upload IPC + sync ingress); keep it tighten-only (D6 svg root-fix).

@@ -139,7 +139,8 @@
 
       <div class="ep-tools">
         <span class="ml-auto"></span>
-        <span class="ep-tool danger" role="button" tabindex="0" :title="$t('statsJ.EditPanel.deleteBtn')" :aria-label="$t('statsJ.EditPanel.deleteTask')" @click="delTask" @keydown.enter.prevent="delTask">
+        <!-- [maint-0925 A5] delete is a no-op on a recycle-state row and purge belongs to RecycleBinView — hide, same rule as the complete/repeat rows -->
+        <span v-if="!inRecycle" class="ep-tool danger" role="button" tabindex="0" :title="$t('statsJ.EditPanel.deleteBtn')" :aria-label="$t('statsJ.EditPanel.deleteTask')" @click="delTask" @keydown.enter.prevent="delTask">
           <i class="ico" style="--ico:url('app://app/assets/img/delete_black_48dp.svg');width:16px;height:16px"></i>
         </span>
       </div>
@@ -325,8 +326,8 @@ export default {
       if (dep && dep.depOpen) { dep.depOpen = false; return }
       if (this.previewImg) { this.previewImg = null; return }
       const ui = this.$store.state.ui
-      if (ui.showSettingsModal || ui.showRepeatModalFor || ui.showFeedbackModal ||
-          ui.showRepeatDeleteConfirm || ui.accountTaskId || ui.tomatoAbandonVisible || ui.tomatoFocusRecordVisible) return
+      // [maint-0925 A2] showFilterModal joins the whitelist (hoisted out of FilterView local data): Esc over the filter modal no longer closes the edit sidebar
+      if (ui.showSettingsModal || ui.showRepeatModalFor || ui.showFeedbackModal || ui.showFilterModal || ui.showRepeatDeleteConfirm || ui.accountTaskId || ui.tomatoAbandonVisible || ui.tomatoFocusRecordVisible) return
       const st = this.$store.state.ui.rightSidebarTodoEdit
       if (st && st.visible) {
         this.$store.dispatch('ui/closeEditCleanup') // D6-F1: empty inline-created task is cleaned up
@@ -606,6 +607,8 @@ export default {
       if (j < 0 || j >= this.subList.length) return
       const tmp = this.subList[i]; this.subList[i] = this.subList[j]; this.subList[j] = tmp
       this.markDirty('subtasks'); this.queueSave({})
+      // [maint-0925 A8] screen-reader feedback, same sentence as the row-level reorder (TodoItem.keyboardMove)
+      this.$announce && this.$announce(this.$t(dir > 0 ? 'statsJ.TodoItem.moveDownAnnounce' : 'statsJ.TodoItem.moveUpAnnounce', { t: (this.subList[j] && this.subList[j].text) || '' }))
     },
     /* Actual = total of this task's focus records; click = open the ledger detail (add/remove/modify entries, totals reconcile automatically) */
     openAccount () {
@@ -688,20 +691,26 @@ export default {
     addTag (name) {
       if (!this.e || !name) return
       const base = (this.e.title || '').replace(/\s+$/, '')
-      this.fieldPatch('title', base + ' #' + name)
+      // [maint-0925 A10] empty base produced a title with a leading space (' #name')
+      this.fieldPatch('title', base ? base + ' #' + name : '#' + name)
     },
     removeTag (name) {
-      const prevTitle = this.e.title || ''
+      // [maint-0925 A6] undo re-derives from the CURRENT title (the prevTitle snapshot clobbered edits made during the toast): re-insert at the original offset unless re-typed
+      const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const tokenRe = new RegExp('\\s*#' + esc + '(?=[\\s#,，。.!?！？]|$)')
+      const m = (this.e.title || '').match(new RegExp('#' + esc + '(?=[\\s#,，。.!?！？]|$)'))
+      this._removedTagAt = m ? m.index : null
       removeWithUndo(this,
+        () => this.fieldPatch('title', (this.e.title || '').replace(tokenRe, '')),
         () => {
-          const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-          const re = new RegExp('\\s*#' + esc + '(?=[\\s#,，。.!?！？]|$)')
-          this.fieldPatch('title', prevTitle.replace(re, ''))
-        },
-        () => this.fieldPatch('title', prevTitle))
+          const cur = this.e ? (this.e.title || '') : ''
+          if (new RegExp('(^|\\s)#' + esc + '(?=[\\s#,，。.!?！？]|$)').test(cur)) return // re-added during the toast: nothing to restore
+          const at = Math.min(this._removedTagAt == null ? cur.length : this._removedTagAt, cur.length)
+          const before = cur.slice(0, at).replace(/\s+$/, '')
+          this.fieldPatch('title', (before ? before + ' ' : '') + '#' + name + cur.slice(before.length))
+        })
     }
   },
-
 }
 </script>
 <style>
@@ -894,7 +903,6 @@ export default {
 .ep-tool.danger img { filter: invert(56%) sepia(87%) saturate(2449%) hue-rotate(318deg); }
 .mini.danger:hover, .ep-mini.danger:hover, .danger-btn:hover { color: var(--danger-strong); border-color: var(--danger); }
 /* danger-btn 并入同一 hover(双轨合一) */
-
 /* —— 编辑面板 a11y 补丁：键盘焦点可见 / 伪可点击收敛 —— */
 /* 帮助提示「?」(hint-q):F-D4 降级为 role=img + aria-label(原 role=button 零激活逻辑是假按钮),聚焦可见 */
 .hint-q { cursor: help; }

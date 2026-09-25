@@ -15,7 +15,11 @@ module.exports = function attachmentHandlers (ctx) {
 
   return {
     // --- Attachments (offline localization) ---
-    'upload-attachment': (e, payload) => { if (isLocked()) throw new Error('locked'); return saveAttachment(payload) },
+    // C12 (2026-09-25): this channel writes into the attachment store from a renderer-supplied
+    // payload — same destructive-capability class as delete-file/delete-todo-files (:86/:98),
+    // which already gate on assertMainWindow. An aux window (lock screen / float / quick-add)
+    // used to be able to upload silently; aligned here.
+    'upload-attachment': (e, payload) => { assertMainWindow(e); if (isLocked()) throw new Error('locked'); return saveAttachment(payload) },
     'open-file': async (e, url) => {
       // P2 2026-09-12 locked-state gate: this channel used to open/download even while locked —
       // asymmetric with upload/delete/notification, so a locked app still exfiltrated attachments
@@ -86,11 +90,13 @@ module.exports = function attachmentHandlers (ctx) {
       assertMainWindow(e) // D6 P2 (2026-09-21): destructive channel, main-window-only like backup write
       if (isLocked()) throw new Error('locked')
       if (typeof url !== 'string') return false // F2 2026-09-15: 同 open-file/download-file 的 typeof 守卫(此前 startsWith TypeError)
-      if (url.startsWith('local://')) {
-        try { fs.unlinkSync(attachmentPath(url.slice(8))) } catch (err) {
-          // Already-gone is success (idempotent delete); anything else is a real failure
-          if ((err && err.code) !== 'ENOENT') throw new Error('delete-file failed: ' + String((err && err.message) || err))
-        }
+      // C6 (2026-09-25): a non-local:// url used to fall through to `return true` — the caller
+      // was told "deleted" while nothing was (and could never be) deleted. open-file /
+      // download-file-and-open already answer false for unknown schemes; same honesty here.
+      if (!url.startsWith('local://')) return false
+      try { fs.unlinkSync(attachmentPath(url.slice(8))) } catch (err) {
+        // Already-gone is success (idempotent delete); anything else is a real failure
+        if ((err && err.code) !== 'ENOENT') throw new Error('delete-file failed: ' + String((err && err.message) || err))
       }
       return true
     },
@@ -123,6 +129,13 @@ module.exports = function attachmentHandlers (ctx) {
       const r = await dialog.showOpenDialog(getMainWindow() || undefined, { properties: ['openFile'], filters: [{ name: i18nM.mt('pickAudio'), extensions: ['mp3', 'wav', 'ogg'] }] })
       if (r.canceled || !r.filePaths[0]) return null
       const src = r.filePaths[0]
+      // C5 (2026-09-25): this entry used to copy the picked file into the attachment dir with
+      // NO size or quota gate (only upload-attachment had them) — a picked 2GB "audio" file
+      // landed on disk unchecked and, before C14, also starved every attachment upload. The
+      // stat happens BEFORE the copy: an over-size source is refused with nothing on disk.
+      // Caps are the shared ones (attachments-guards.assertWriteAllowed, 50MB/file + 64MB
+      // quota, single source with saveAttachment).
+      require('../attachments-guards').assertWhiteNoiseCopyAllowed(src, attachments.attachDir())
       const ext = path.extname(src).toLowerCase()
       const key = 'noise-custom' + ext
       await fs.promises.copyFile(src, path.join(attachments.attachDir(), key))
@@ -132,10 +145,9 @@ module.exports = function attachmentHandlers (ctx) {
       return { name: path.basename(src), key }
     },
     // --- Misc ---
-    'mime-get-type': (e, name) => {
-      const ext = String(name).split('.').pop().toLowerCase()
-      const t = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', pdf: 'application/pdf', mp3: 'audio/mpeg', ogg: 'audio/ogg' }
-      return t[ext] || 'application/octet-stream'
-    }
+    // C13 (2026-09-25): the hand-copied mime subset here drifted from protocol.js's table —
+    // both now read the ONE table (attachmentMimeFor). ALLOWED_EXT (storage whitelist) is a
+    // separate concern and unchanged.
+    'mime-get-type': (e, name) => require('../protocol').attachmentMimeFor(name)
   }
 }
