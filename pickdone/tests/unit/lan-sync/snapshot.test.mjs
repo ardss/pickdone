@@ -723,22 +723,39 @@ test('snapshot: idle timeout — a silent peer still fails the round at the (sho
   await node.whenListening()
   node.addPeer({ deviceId: 'peer', host: '127.0.0.1', port })
 
-  await dialRound(node) // arm
-  const t0 = Date.now()
-  const r = await dialRound(node) // no progress at all
-  const elapsed = Date.now() - t0
-  assert.equal(r.confirmed, 0, 'a silent peer fails its round')
-  // Deadline-based, load-tolerant: the round promise resolves when the internal idle timer fires,
-  // so the behavioral truth is confirmed===0 + /timed out/ lastError; the wall-clock check only
-  // guards "did not hang" (30s ceiling) and "did not fire instantly" (loose floor). Fixed-sleep
-  // style tight bounds (elapsed < 5000) flaked once under a fully loaded full-suite run.
-  const deadline = Date.now() + 30000
-  assert.ok(elapsed >= 150 && Date.now() < deadline, `idle timeout fired (took ${elapsed}ms, expected >=150ms and well under the 30s hang ceiling)`)
-  assert.equal(node.getStatus().peers[0].pullWatermark, null)
-  assert.match(node.getStatus().lastError || '', /timed out/)
-
-  await node.stop()
-  server.close()
+  // Cleanup in finally: a failing assertion used to skip node.stop()/server.close() and the
+  // leaked server handle kept a bare `node --test` (no --test-force-exit) alive forever
+  // (review finding 2026-09-25: all 20 tests done, runner sat 25+ min).
+  try {
+    await dialRound(node) // arm
+    const t0 = Date.now()
+    const r = await dialRound(node) // no progress at all
+    const elapsed = Date.now() - t0
+    assert.equal(r.confirmed, 0, 'a silent peer fails its round')
+    // Deadline-based, load-tolerant: the round promise resolves when the internal idle timer fires,
+    // so the behavioral truth is confirmed===0 + /timed out/ lastError; the wall-clock check only
+    // guards "did not hang" (30s ceiling) and "did not fire instantly" (loose floor). Fixed-sleep
+    // style tight bounds (elapsed < 5000) flaked once under a fully loaded full-suite run.
+    const deadline = Date.now() + 30000
+    assert.ok(elapsed >= 150 && Date.now() < deadline, `idle timeout fired (took ${elapsed}ms, expected >=150ms and well under the 30s hang ceiling)`)
+    // The status side effects (watermark reset, /timed out/ lastError) can land a tick AFTER the
+    // round promise resolves; under full-suite load that tick stretches (review round 1 caught a
+    // 1/7 failure at 804ms — past every wall-clock bound — i.e. a late status, not a late timer),
+    // so poll to a deadline instead of asserting synchronously.
+    const settleDeadline = Date.now() + 5000
+    let peerStatus
+    for (;;) {
+      peerStatus = (node.getStatus().peers || [])[0] || {}
+      if (peerStatus.pullWatermark === null && /timed out/.test(node.getStatus().lastError || '')) break
+      if (Date.now() > settleDeadline) break
+      await new Promise(resolve => setTimeout(resolve, 50))
+    }
+    assert.equal(peerStatus.pullWatermark, null, 'watermark stays null after a failed round')
+    assert.match(node.getStatus().lastError || '', /timed out/)
+  } finally {
+    await node.stop()
+    server.close()
+  }
 })
 
 test('snapshot: adversarial chunk streams (missing/duplicate index, totalRows mismatch, chunks-less end) fail the round without advancing the watermark', async () => {
