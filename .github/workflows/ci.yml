@@ -7,10 +7,16 @@ name: CI
 on:
   push:
     branches: [main]
+    # docs-only changes never change app behavior — skip the full paid matrix for them.
+    # NOTE: if branch protection requires this check, docs-only PRs will have no check run to
+    # satisfy it; handle via a separate lightweight docs check or a ruleset exemption.
+    paths-ignore: ['**/*.md', 'docs/**']
   pull_request:
+    paths-ignore: ['**/*.md', 'docs/**']
 
 permissions:
   contents: read
+  actions: write # the push/PR dedup step cancels its own duplicate run
 
 # superseded pushes on the same branch cancel the older run instead of queueing behind it
 concurrency:
@@ -24,14 +30,49 @@ jobs:
       matrix:
         os: [windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    # 2026-09-25 cost pass: measured peak is ~13.5min across recent runs, so 30min keeps >2.2x headroom
+    # while halving the burn ceiling of a hung run (was 60).
+    timeout-minutes: 30
     # OS split (2026-09-13 perf pass): the xvfb-driven Electron live pool is the slowest segment —
     # ubuntu runs static gates + unit tests only (CHECK_ALL_SKIP_LIVE), windows carries the full
-    # live pool. Wall clock takes the max instead of both OSes running everything.
+    # live pool. NOTE (2026-09-25 cost pass, honest semantics): check-all.js has no SKIP_STATIC flag,
+    # so the static pool still runs on BOTH OSes — ubuntu is not "static-only", it is "static + no live".
+    # Making ubuntu the sole static authority (option a) needs a CHECK_ALL_SKIP_STATIC flag in
+    # pickdone/cli/check-all.js, which is outside the CI-workflow layer's file scope. Wall clock still
+    # takes the max; the residual cost is ~5min of duplicated static work on the windows runner.
     env:
       CHECK_ALL_SKIP_LIVE: ${{ matrix.os == 'ubuntu-latest' && '1' || '0' }}
     steps:
       - uses: actions/checkout@v7
+
+      # Dedup (2026-09-25 cost pass): push(main) + pull_request both fired full matrices for the same
+      # content (e.g. run 36123046333 push + 36121107255 PR, ~11 billed min each). When a push lands on
+      # main with a tree identical to an open PR's head (rebase/ff merge), the PR run already covered
+      # it — cancel this duplicate before the heavy steps start.
+      - name: Skip push run whose tree is already covered by an open PR run
+        id: dedup
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          TREE=$(git rev-parse HEAD^{tree})
+          for SHA in $(gh api "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100" -q '.[].head.sha'); do
+            PR_TREE=$(gh api "repos/$GITHUB_REPOSITORY/commits/$SHA" -q '.commit.tree.sha')
+            if [ "$PR_TREE" = "$TREE" ]; then
+              echo "push tree $TREE == open PR head $SHA tree — duplicate of the pull_request run, cancelling"
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Cancel duplicate run (push == open PR head)
+        if: steps.dedup.outputs.skip == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: gh api -X POST "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/cancel" && sleep 90
 
       - uses: actions/setup-node@v7
         with:
@@ -48,6 +89,8 @@ jobs:
             ~/.cache/electron-builder
             ~/AppData/Local/electron-builder/Cache
           key: electron-${{ runner.os }}-${{ hashFiles('pickdone/package-lock.json') }}
+          # lock-only changes no longer force a full cold re-download of the Electron cache
+          restore-keys: electron-${{ runner.os }}-
 
       - name: Install
         working-directory: pickdone
@@ -76,16 +119,22 @@ jobs:
           fi
 
       # Dependency audit: the npmmirror mirror used in local dev makes npm audit 404, so CI forces the official registry.
-      # Non-blocking for now (continue-on-error): remove this line once legacy vulnerable deps are cleaned up, turning it into a hard release gate.
+      # Non-blocking for now (continue-on-error): remove that line once legacy vulnerable deps are cleaned up,
+      # turning it into a hard release gate.
+      # TODO(ardss, deadline 2026-10-31): clean the legacy advisories (npm audit --omit=dev currently exits 1:
+      # uuid<11.1.1 via exceljs) and then DELETE `continue-on-error: true` below to make this a hard gate.
       - name: Dependency audit (production deps, advisory only for now)
         working-directory: pickdone
         run: npm audit --omit=dev --registry=https://registry.npmjs.org
         continue-on-error: true
 
+      # failure || cancelled (2026-09-25): cancelled runs (e.g. 35756672832) previously uploaded zero
+      # diagnostics — a hang that gets cancelled left no evidence. retention 14d matches visual-smoke.yml.
       - name: Upload failure logs
-        if: failure()
+        if: failure() || cancelled()
         uses: actions/upload-artifact@v7
         with:
           name: check-all-logs-${{ matrix.os }}
           path: pickdone/tests/.artifacts/
+          retention-days: 14
           if-no-files-found: ignore
