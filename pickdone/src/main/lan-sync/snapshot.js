@@ -50,9 +50,12 @@ function chunkSnapshot (body, opts = {}) {
   for (const row of snap.rows) {
     const rowBytes = Buffer.byteLength(JSON.stringify(row), 'utf8')
     if (rowBytes > maxChunkBytes) throw new Error('chunkSnapshot: single row exceeds chunk budget')
-    if (batch.length && batchBytes + rowBytes > maxChunkBytes) flush()
+    // Budget by the ENVELOPE the receiver actually parses: the '{"rows":[]}' wrapper plus one
+    // ',' per joined row. Row-sum-only accounting let every full chunk overshoot by up to
+    // rows-per-chunk bytes (caught by the 50k-row scale test; the 32MB wire cap hid it).
+    if (batch.length && batchBytes + rowBytes + 1 > maxChunkBytes - 12) flush()
     batch.push(row)
-    batchBytes += rowBytes
+    batchBytes += rowBytes + 1
   }
   flush()
   for (const c of chunks) c.of = chunks.length
