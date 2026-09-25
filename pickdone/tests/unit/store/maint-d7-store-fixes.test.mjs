@@ -184,23 +184,44 @@ test('[6] settings restore() pushes main-consumed diffs through the updateSettin
   globalThis.window.todoAPI = Object.assign(globalThis.window.todoAPI || {}, {
     updateSettings: async patch => { ipc.push(patch) }
   })
-  const { default: settings, SETTINGS_SCHEMA_V } = await import('../../../renderer/js/store/settings.js?restore')
-  const state = {}
-  settings.mutations.restore(state, {
-    runWhenComputerStart: true, closeActionMinimize: false, appLocale: 'en-US',
-    shortcutKeySettings: { sync: 'ctrl+k' }, securityLockPassword: 'pw', enableSecurityLock: true,
-    schemaV: SETTINGS_SCHEMA_V
-  })
-  assert.equal(state.runWhenComputerStart, true, 'restore still applies the saved values')
-  assert.ok(ipc.length, 'the main process was notified')
-  const merged = Object.assign({}, ...ipc)
-  assert.equal(merged.runWhenComputerStart, true, 'config-consumed key rides the IPC')
-  assert.equal(merged.closeActionMinimize, false, 'windows.js-consumed key rides the IPC')
-  assert.equal(merged.appLocale, 'en-US', 'locale rides the IPC')
-  assert.equal(merged.securityLockPassword, 'pw', 'security lock password rides the IPC (per-sender strip allows main window)')
-  assert.equal(merged.foldedTodoList, undefined, 'renderer-only keys are NOT pushed to main')
-  // Defaults-only restore (nothing differs) → no spurious IPC
-  ipc.length = 0
-  settings.mutations.restore({}, null)
-  assert.equal(ipc.length, 0, 'no IPC when the restored state equals defaults for main-consumed keys')
+  // Hermetic on LS 'appLocale': sibling tests in this process (e.g. sync-coverage-2) set it, and
+  // restore() adopts LS when the blob locale is still the untouched default (same rule as load() —
+  // the 2026-09-26 appLocale write-back race fix), so a stale LS value would leak an appLocale IPC in.
+  const savedLsLocale = globalThis.localStorage.getItem('appLocale')
+  globalThis.localStorage.removeItem('appLocale')
+  try {
+    const { default: settings, SETTINGS_SCHEMA_V } = await import('../../../renderer/js/store/settings.js?restore')
+    const state = {}
+    settings.mutations.restore(state, {
+      runWhenComputerStart: true, closeActionMinimize: false, appLocale: 'en-US',
+      shortcutKeySettings: { sync: 'ctrl+k' }, securityLockPassword: 'pw', enableSecurityLock: true,
+      schemaV: SETTINGS_SCHEMA_V
+    })
+    assert.equal(state.runWhenComputerStart, true, 'restore still applies the saved values')
+    assert.ok(ipc.length, 'the main process was notified')
+    const merged = Object.assign({}, ...ipc)
+    assert.equal(merged.runWhenComputerStart, true, 'config-consumed key rides the IPC')
+    assert.equal(merged.closeActionMinimize, false, 'windows.js-consumed key rides the IPC')
+    assert.equal(merged.appLocale, 'en-US', 'locale rides the IPC')
+    assert.equal(merged.securityLockPassword, 'pw', 'security lock password rides the IPC (per-sender strip allows main window)')
+    assert.equal(merged.foldedTodoList, undefined, 'renderer-only keys are NOT pushed to main')
+    // Defaults-only restore (nothing differs) → no spurious IPC
+    ipc.length = 0
+    globalThis.localStorage.removeItem('appLocale') // the F9 write-through above put 'en-US' here; a defaults-only blob must adopt nothing
+    settings.mutations.restore({}, null)
+    assert.equal(ipc.length, 0, 'no IPC when the restored state equals defaults for main-consumed keys')
+    // Race fix (2026-09-26): blob locale still the untouched default + LS-forced boot locale →
+    // restore must ADOPT the LS value (mirroring load()'s Y1 seeding), not write the default back
+    // over it — that write-back clobbered LS 'en-US' mid-session and hot-flipped the UI to zh.
+    ipc.length = 0
+    globalThis.localStorage.setItem('appLocale', 'en-US')
+    const state2 = {}
+    settings.mutations.restore(state2, null)
+    assert.equal(state2.appLocale, 'en-US', 'blob-default locale adopts the LS boot cache (no clobber)')
+    const merged2 = Object.assign({}, ...ipc)
+    assert.equal(merged2.appLocale, 'en-US', 'the adopted locale still rides the IPC so main stays in sync')
+  } finally {
+    if (savedLsLocale === null) globalThis.localStorage.removeItem('appLocale')
+    else globalThis.localStorage.setItem('appLocale', savedLsLocale)
+  }
 })
