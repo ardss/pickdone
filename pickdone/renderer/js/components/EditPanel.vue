@@ -326,11 +326,8 @@ export default {
       if (dep && dep.depOpen) { dep.depOpen = false; return }
       if (this.previewImg) { this.previewImg = null; return }
       const ui = this.$store.state.ui
-      // [maint-0925 A2] showFilterModal joins the whitelist (visibility hoisted out of FilterView
-      // local data, which this guard could not see): Esc over the filter modal no longer closes
-      // the edit sidebar behind it
-      if (ui.showSettingsModal || ui.showRepeatModalFor || ui.showFeedbackModal || ui.showFilterModal ||
-          ui.showRepeatDeleteConfirm || ui.accountTaskId || ui.tomatoAbandonVisible || ui.tomatoFocusRecordVisible) return
+      // [maint-0925 A2] showFilterModal joins the whitelist (hoisted out of FilterView local data): Esc over the filter modal no longer closes the edit sidebar
+      if (ui.showSettingsModal || ui.showRepeatModalFor || ui.showFeedbackModal || ui.showFilterModal || ui.showRepeatDeleteConfirm || ui.accountTaskId || ui.tomatoAbandonVisible || ui.tomatoFocusRecordVisible) return
       const st = this.$store.state.ui.rightSidebarTodoEdit
       if (st && st.visible) {
         this.$store.dispatch('ui/closeEditCleanup') // D6-F1: empty inline-created task is cleaned up
@@ -698,8 +695,7 @@ export default {
       this.fieldPatch('title', base ? base + ' #' + name : '#' + name)
     },
     removeTag (name) {
-      // [maint-0925 A6] undo re-derives from the CURRENT title (the prevTitle snapshot clobbered
-      // edits made during the toast): re-insert the token at its original offset unless re-typed.
+      // [maint-0925 A6] undo re-derives from the CURRENT title (the prevTitle snapshot clobbered edits made during the toast): re-insert at the original offset unless re-typed
       const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
       const tokenRe = new RegExp('\\s*#' + esc + '(?=[\\s#,，。.!?！？]|$)')
       const m = (this.e.title || '').match(new RegExp('#' + esc + '(?=[\\s#,，。.!?！？]|$)'))
@@ -715,7 +711,6 @@ export default {
         })
     }
   },
-
 }
 </script>
 <style>
@@ -908,7 +903,6 @@ export default {
 .ep-tool.danger img { filter: invert(56%) sepia(87%) saturate(2449%) hue-rotate(318deg); }
 .mini.danger:hover, .ep-mini.danger:hover, .danger-btn:hover { color: var(--danger-strong); border-color: var(--danger); }
 /* danger-btn 并入同一 hover(双轨合一) */
-
 /* —— 编辑面板 a11y 补丁：键盘焦点可见 / 伪可点击收敛 —— */
 /* 帮助提示「?」(hint-q):F-D4 降级为 role=img + aria-label(原 role=button 零激活逻辑是假按钮),聚焦可见 */
 .hint-q { cursor: help; }
