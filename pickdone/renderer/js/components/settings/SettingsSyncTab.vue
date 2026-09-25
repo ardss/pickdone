@@ -318,7 +318,10 @@ export default {
         this.loadConflictBackups()
       }
     },
-    dotClass (p) { return peerDotClass(p) },
+    dotClass (p) {
+      void this.relTick // 30s ticker dependency: re-render ages out the red error dot past 5min
+      return peerDotClass(p)
+    },
     /** F1: alias-wins display name for a peer card / pairing target select. */
     peerDisplayName (p) { return peerDisplayName(p) },
     /** F1: open the inline alias editor pre-filled with the current alias. */
@@ -343,6 +346,7 @@ export default {
     /** P2c: peer card in the "unpaired by the other device" state — dedicated copy + no Unpair button. */
     isUnpairedByRemote (p) { return peerUnpairedByRemote(p && p.lastError) },
     dotTip (p) {
+      void this.relTick // 30s ticker dependency: tooltip stays in sync with the dot's error window
       if (p && p.lastError && p.lastErrorAt && (Date.now() - p.lastErrorAt) < 5 * 60 * 1000) return this.$t('sync.errTip')
       return this.$t(p && p.online ? 'sync.onlineTip' : 'sync.offlineTip')
     },

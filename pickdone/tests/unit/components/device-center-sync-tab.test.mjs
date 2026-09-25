@@ -174,6 +174,17 @@ test('relative times get a 30s ticker so they do not freeze', () => {
   assert.match(src, /void this\.relTick/, 'relTime must depend on the ticker for re-render')
 })
 
+test('error dot and tooltip must depend on the 30s ticker so the red state ages out (regression)', () => {
+  // Without a relTick dependency in dotClass/dotTip, a stale lastError keeps the dot red
+  // and the tooltip in error mode until an unrelated re-render happens.
+  const dotClass = src.match(/dotClass \(p\) \{[\s\S]*?\n {4}\}/)
+  assert.ok(dotClass, 'dotClass method present')
+  assert.match(dotClass[0], /void this\.relTick/, 'dotClass must depend on the ticker to re-age the dot')
+  const dotTip = src.match(/dotTip \(p\) \{[\s\S]*?\n {4}\}/)
+  assert.ok(dotTip, 'dotTip method present')
+  assert.match(dotTip[0], /void this\.relTick/, 'dotTip must depend on the ticker to stay in sync with the dot')
+})
+
 test('pair dialog a11y: focus trap, autofocus on reject, Esc rejects without bubbling, expiry hint', () => {
   assert.match(src, /@keydown="onPairKeydown"/)
   assert.match(src, /aria-modal="true"/)
