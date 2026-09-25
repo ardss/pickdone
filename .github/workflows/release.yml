@@ -35,6 +35,8 @@ jobs:
             ~/AppData/Local/electron/Cache
             ~/AppData/Local/electron-builder/Cache
           key: electron-${{ runner.os }}-${{ hashFiles('pickdone/package-lock.json') }}
+          # lock-only changes no longer force a full cold re-download of the Electron cache
+          restore-keys: electron-${{ runner.os }}-
 
       - name: Verify tag matches package.json version
         shell: bash
@@ -187,6 +189,8 @@ jobs:
             ~/.cache/electron
             ~/.cache/electron-builder
           key: electron-${{ runner.os }}-${{ hashFiles('pickdone/package-lock.json') }}
+          # lock-only changes no longer force a full cold re-download of the Electron cache
+          restore-keys: electron-${{ runner.os }}-
 
       - name: Verify tag matches package.json version
         run: |
