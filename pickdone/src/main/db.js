@@ -17,7 +17,7 @@ const SNOW_DEDUP_MAX_AGE_MS = 30 * 24 * 3600 * 1000
 // node_modules/electron-log, so fall back to a no-op logger instead of crashing at require time
 let log
 try { log = require('electron-log') } catch { log = { info () {}, warn () {}, error () {} } }
-const oplog = require('./db-oplog')({ getDb: () => db, log }), syncSchema = require('./db-sync-schema')({ getDb: () => db, log })
+const oplog = require('./db-oplog')({ getDb: () => db, log, getPurgeChips: () => purgeChipsScratch }), syncSchema = require('./db-sync-schema')({ getDb: () => db, log })
 const oplogKeepLimit = require('./db-oplog').oplogKeepLimit // D3 2026-09-24: SYNC_OPLOG_KEEP single source (was a bare 10000 clamp literal)
 
 let Database = null
@@ -510,6 +510,24 @@ const deleteSnowDedupKeysFor = ids => {
     db.prepare('DELETE FROM meta WHERE key >= ? AND key < ?').run(prefix, prefix + ';')
   }
 }
+// planChipsSnapshot meta lifecycle (parity with deleteSnowDedupKeysFor): the renderer mints a
+// `planChipsSnapshot:<taskId>` meta key per task with schedule chips (restoreSnapshot reads it
+// back). When the owning rows die here, the snapshot can never be restored — the key is a
+// permanent meta orphan (the CLI purge already deletes these keys for the same reason: a later
+// taskId collision could resurrect a stale chip set). Exact-key delete: ids never contain the
+// `planChipsSnapshot:` prefix shape collision risk (one row per task).
+const deleteChipsSnapshotKeysFor = ids => {
+  for (const id of ids) {
+    db.prepare("DELETE FROM meta WHERE key = 'planChipsSnapshot:' || ?").run(String(id))
+  }
+}
+// B9 purge chip-capture scratch (single-process synchronous db.call → oplog append): the purge
+// ops physically DELETE plan_chips inside their transaction, so the oplog expansion (which runs
+// POST-op and can only re-query surviving rows) cannot recover the doomed chip ids. The ops
+// stash them here; db-oplog's purgeRecycleBin/purgeSeedTodos case expands them into per-chip
+// tombstone pointers so a peer holding the chips live learns they died instead of LWW-resurrecting
+// ghost chips of purged todos. Overwritten by every purge call; empty when no purge ran.
+let purgeChipsScratch = []
 const OPS = {
   upsert: t => { assertHasTaskId(t); stmts.upsert.run(todoToRow(t)); return true },
   upsertMany: list => { if (!Array.isArray(list)) throw new Error('[TodoDB] upsertMany: list must be an array, got ' + typeof list); list.forEach(assertHasTaskId); stmts.upsertMany(list.map(todoToRow)); return true },
@@ -592,8 +610,8 @@ const OPS = {
   },
   queryTodos,
   // 两表删除包事务:两语句间崩溃会留孤儿 chips(2026-09-05 终审 P1,与 hardDeleteMany 对齐)
-  hardDelete: id => { const tr = db.transaction(() => { db.prepare('DELETE FROM plan_chips WHERE taskId=?').run(String(id)); deleteSnowDedupKeysFor([id]); stmts.hardDelete.run(id) }); tr(); return true },
-  hardDeleteMany: ids => { const tr = db.transaction(() => ids.forEach(i => { db.prepare('DELETE FROM plan_chips WHERE taskId=?').run(String(i)); deleteSnowDedupKeysFor([i]); stmts.hardDelete.run(i) })); tr(); return true },
+  hardDelete: id => { const tr = db.transaction(() => { db.prepare('DELETE FROM plan_chips WHERE taskId=?').run(String(id)); deleteSnowDedupKeysFor([id]); deleteChipsSnapshotKeysFor([id]); stmts.hardDelete.run(id) }); tr(); return true },
+  hardDeleteMany: ids => { const tr = db.transaction(() => ids.forEach(i => { db.prepare('DELETE FROM plan_chips WHERE taskId=?').run(String(i)); deleteSnowDedupKeysFor([i]); deleteChipsSnapshotKeysFor([i]); stmts.hardDelete.run(i) })); tr(); return true },
   getMeta: k => { const r = stmts.getMeta.get(k); return r ? r.value : null },
   // Accepts both argument forms: (k, v) or [k, v] (the renderer's dbCall('setMeta', [k, v]) is passed through as a single call parameter)
   setMeta: (k, v) => { if (Array.isArray(k)) { v = k[1]; k = k[0] } stmts.setMeta.run(k, String(v)); return true },
@@ -619,8 +637,13 @@ const OPS = {
     let ids = []
     const tr = db.transaction(() => {
       ids = db.prepare('SELECT id FROM todos WHERE deleted = 1').all().map(r => r.id)
+      // B9 (2026-09-26): capture the doomed chip ids BEFORE the physical delete — the oplog
+      // expansion runs post-op when the rows are gone, and without these pointers a peer that
+      // still holds the chips live LWW-resurrects them as ghost chips of purged todos.
+      purgeChipsScratch = db.prepare('SELECT id FROM plan_chips WHERE taskId IN (SELECT id FROM todos WHERE deleted = 1)').all().map(r => r.id)
       db.prepare('DELETE FROM plan_chips WHERE taskId IN (SELECT id FROM todos WHERE deleted = 1)').run()
       deleteSnowDedupKeysFor(ids) // main-ipc-3 (2026-09-22): the rows die here — their focus-session dedup fences must not outlive them
+      deleteChipsSnapshotKeysFor(ids) // snapshot meta dies with the rows (same lifecycle rule)
       db.prepare('DELETE FROM todos WHERE deleted = 1').run()
     }); tr(); return ids
   },
@@ -629,11 +652,16 @@ const OPS = {
     let ids = []
     const tr = db.transaction(() => {
       ids = db.prepare("SELECT id FROM todos WHERE substr(id, 1, 5) = 'seed_'").all().map(r => r.id)
+      purgeChipsScratch = db.prepare("SELECT id FROM plan_chips WHERE taskId IN (SELECT id FROM todos WHERE substr(id, 1, 5) = 'seed_')").all().map(r => r.id) // B9: see purgeRecycleBin
       db.prepare("DELETE FROM plan_chips WHERE taskId IN (SELECT id FROM todos WHERE substr(id, 1, 5) = 'seed_')").run()
       deleteSnowDedupKeysFor(ids) // main-ipc-3 (2026-09-22): same lifecycle rule as purgeRecycleBin
+      deleteChipsSnapshotKeysFor(ids) // same lifecycle rule
       db.prepare("DELETE FROM todos WHERE substr(id, 1, 5) = 'seed_'").run()
     }); tr(); return ids
   },
+  // B9: oplog-side access to the LAST purge's doomed chip ids (see purgeChipsScratch). Read
+  // inside oplogEntriesFor immediately after a purge op — the same synchronous call().
+  getPurgeChipsScratch: () => purgeChipsScratch,
   countSeedTodos: () => db.prepare("SELECT COUNT(*) n FROM todos WHERE substr(id, 1, 5) = 'seed_'").get().n,
   upsertCategory: (c) => {
     const now = Date.now()

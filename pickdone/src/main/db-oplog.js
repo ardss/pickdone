@@ -5,9 +5,14 @@
  *
  * Known gaps until the sync engine lands (declared 2026-09-15, review V1):
  * - Physical deletes (hardDelete/purgeRecycleBin/purgeSeedTodos/planPrune) physically remove
- *   tombstoned plan_chips and log only the todo entity — chip deletions in those paths are NOT
- *   captured, so multi-device chip state needs a periodic full snapshot (see docs/sync-matrix.md
- *   §5 — the oplog/snapshot convergence contract: ring trim, tombstone fallback, watermark rules).
+ *   tombstoned plan_chips. B9 (2026-09-26): the purge paths now ALSO log per-chip ('plan', id)
+ *   tombstone pointers — the chips are physically gone post-op, so db.js stashes the doomed chip
+ *   ids (purgeChipsScratch, injected here as getPurgeChips) and the purge expansion appends them
+ *   next to the per-id todo pointers. A peer still holding those chips live lands the deletion
+ *   through the existing planRemoveIds tombstone apply path instead of LWW-resurrecting ghost
+ *   chips of purged todos. Remaining declared gaps: hardDelete/hardDeleteMany stay todo-only for
+ *   their cascaded chips (peers recover via the todo tombstone + their own purge), and planPrune
+ *   keeps its '*gc*' GC marker (see docs/sync-matrix.md §5).
  *   (purgeRecycleBin/purgeSeedTodos DO capture per-id todo tombstones since 2026-09-18.)
  * - The oplog append is a separate transaction from the business write: a crash between the two
  *   commits loses the delta row (accepted window at synchronous=NORMAL).
@@ -28,7 +33,7 @@ const SYNC_OPLOG_KEEP = 10000
  *  page through, so a larger request limit is pointless and a smaller one is honored. */
 const oplogKeepLimit = limit => Math.min(SYNC_OPLOG_KEEP, limit)
 
-module.exports = Object.assign(({ getDb, log }) => {
+module.exports = Object.assign(({ getDb, log, getPurgeChips }) => {
   /* ---------- Change-capture oplog (P1 sync groundwork, 2026-09-15) ---------- */
   // One sync_oplog row per successful write op. Appended in call() (db layer, like the ledger hook) so
   // IPC, aux windows and the CLI are all captured. commitSyncBatch is excluded — it is the sync-ack
@@ -50,7 +55,14 @@ module.exports = Object.assign(({ getDb, log }) => {
       // 2026-09-18: both purge ops return the purged ids — expanded into per-id tombstone
       // pointers so purges propagate as real deletions (the old single ('todo','*gc*') marker
       // hydrated as a ghost tombstone on peers and could not stop snapshot/merge resurrection).
-      case 'purgeRecycleBin': case 'purgeSeedTodos': return arr('todo', result)
+      // B9 (2026-09-26): the cascade-deleted plan_chips are physically gone by expansion time,
+      // so db.js hands us their ids via getPurgeChips (captured INSIDE the purge transaction) —
+      // expanded into per-chip tombstone pointers riding the existing plan.removeIds apply path.
+      case 'purgeRecycleBin': case 'purgeSeedTodos': {
+        let chips = []
+        try { chips = (typeof getPurgeChips === 'function' ? getPurgeChips() : []) || [] } catch { /* scratch unavailable (legacy caller): todo pointers only */ }
+        return [...arr('todo', result), ...arr('plan', chips)]
+      }
       // H2 2026-09-16: an identical no-change upsert returns false — it must not produce a fake delta
       case 'upsertCategory': return result === false ? [] : [one('category', params && params.id)]
       // P2 2026-09-17: a no-change re-save returns false — it must not emit a delta (the old path
