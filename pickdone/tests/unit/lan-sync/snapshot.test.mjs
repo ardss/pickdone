@@ -713,9 +713,18 @@ test('snapshot: progress-based round deadline — a slow-drip transfer outlives 
 })
 
 test('snapshot: idle timeout — a silent peer still fails the round at the (short) deadline', async () => {
-  const server = rawPeerServer({
-    ack: { appliedToSeq: 100, oldestSeq: 50 },
-    onRequest: () => { /* never reply */ },
+  // Fully SILENT peer (never replies to ANY frame — hello/ready is answered by the transport,
+  // but no ack, no segments-chunk, no snapshot-end). The former rawPeerServer({onRequest: noop})
+  // was only silent for snapshot-REQUESTS: it still auto-acked empty pushes, so under extreme
+  // CPU starvation a round that took the incremental path got its ack and was legitimately
+  // reported confirmed (review round 2: 1/5 failure, confirmed===1 at 3261ms) — the product's
+  // "acked push = confirmed round" semantics are correct; the fixture's silence was incomplete.
+  const server = createLanServer({
+    port: 0,
+    host: '127.0.0.1',
+    deviceId: 'peer',
+    pairingSecret: SECRET,
+    getHandler: () => { /* never reply, ever */ },
   })
   const port = await listen(server)
   const node = makeNode({ roundTimeoutMs: 250, roundProgressMs: 200 })
