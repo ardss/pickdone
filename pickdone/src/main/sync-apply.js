@@ -135,6 +135,10 @@ function busWrite (state, op, payload) {
 }
 
 const META_CONFLICT_BACKUP_CAP = 20
+// MS-collision fix (2026-09-26): process-lifetime monotonic counter mixed into backup-key /
+// conflict-copy-id suffixes so two mints within the same millisecond can never collide
+// (Date.now() alone did). Monotonic per process: preserves sort order for the count-based prune.
+let backupSeq = 0
 // The settings/habits blobs are deliberately EXCLUDED from meta sync: they already sync
 // FIELD-GRANULAR via the `setting` entity (the db-sync-schema setMeta bridge mirrors every blob
 // field into settings_rows). Syncing the blob itself would apply whole-blob LWW and let the
@@ -389,7 +393,13 @@ function hasEquivalentConflictCopy (state, baseId, loserData) {
  */
 function writeMetaConflictBackup (state, key, value) {
   try {
-    const ts36 = Date.now().toString(36)
+    // MS-collision fix (2026-09-26): the key used to be `.<ts36>` alone — two conflict backups
+    // of the SAME base key minted within one millisecond (bulk apply loop) produced identical
+    // keys and the second setMeta silently OVERWROTE the first (the earlier losing value was
+    // lost). A module-level monotonic counter appended after the ts keeps the lexicographic
+    // prune order (ts36 dominates across milliseconds; the counter orders within one) while
+    // making every key unique.
+    const ts36 = `${Date.now().toString(36)}-${(backupSeq++).toString(36)}`
     const backupKey = `${META_CONFLICT_BACKUP_PREFIX}${key}.${ts36}`
     busWrite(state, 'setMeta', [backupKey, JSON.stringify({ key, value, lostAt: Date.now() })])
     // Prune: keep only the latest META_CONFLICT_BACKUP_CAP backups per base key.
@@ -524,7 +534,10 @@ function applyRowInner (state, incoming) {
       if (hasEquivalentConflictCopy(state, baseId, conflictCopy.data)) {
         log.warn('[LanSync] conflict on', entity, baseId, '— equivalent copy already in recycle bin, not duplicating')
       } else {
-        const copyId = `${baseId}-conflict-${Date.now().toString(36)}`
+        // MS-collision fix (2026-09-26): same-counter suffix as writeMetaConflictBackup — two
+        // conflict copies of the same base row in one millisecond used to mint the SAME copyId
+        // and silently collapse into one recycle-bin row.
+        const copyId = `${baseId}-conflict-${Date.now().toString(36)}-${(backupSeq++).toString(36)}`
         state.pendingWrites.todos.push({ ...conflictCopy.data, taskId: copyId, delete: 1, deletedAt: Date.now() })
         log.warn('[LanSync] conflict on', entity, baseId, '— loser materialized to recycle bin as', copyId)
       }
