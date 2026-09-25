@@ -142,7 +142,11 @@ export default {
       for (const r of this.remindRows) {
         const baseDay = r.date || this.task.dateTs || this.today0
         if (!baseDay) continue
-        const [h, m] = String(r.time || '09:00').split(':').map(Number)
+        // [maint-0925 A12] an explicitly cleared time (null) used to fall back to 09:00 silently —
+        // a reminder the user never chose. A null-time row is simply not committed (the row stays
+        // in the editor); clearing every row still reaches clearRemind below.
+        if (!r.time) continue
+        const [h, m] = String(r.time).split(':').map(Number)
         list.push(dayjs(baseDay).hour(h || 0).minute(m || 0).second(0).millisecond(0).valueOf())
       }
       if (!list.length) { this.clearRemind(); return }
