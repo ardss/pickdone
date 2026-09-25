@@ -149,7 +149,10 @@ function restoreTasksFromCriticalBackup (ud) {
     {
       filterPutMany: rows => busCommit('filter', 'putMany', rows),
       planPutMany: chips => busCommit('plan', 'putMany', chips),
-      habitsPut: pair => busCommit('meta', 'put', pair)
+      habitsPut: pair => busCommit('meta', 'put', pair),
+      // metaState (2026-09-26, meta-keys-omitted): repeat rules / tomato estimates / project
+      // deadline+status+flag+milestones live only in the meta table — re-put them like habits.
+      metaPut: pair => busCommit('meta', 'put', pair)
     })
 }
 

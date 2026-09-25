@@ -31,14 +31,33 @@ function parseSegment (seg, label) {
   return obj
 }
 
-/** Where the disaster-backup JSON lives: by default externalized to pickdone-backups in the userData parent directory (separated from the DB, recoverable even if userData is wiped);
- *  legacy compatibility: when the external location does not exist, fall back to the old userData/critical-state-backup.json (first recovery after an old instance upgrades still works). */
+/** Where the disaster-backup JSON lives. P0 root fix (2026-09-26, backup-path-fork): the reader
+ *  used to hand-copy the OLD pre-migration derivation (parent-of-userData/pickdone-backups +
+ *  legacy <userData>/critical-state-backup.json) while the writer moved to
+ *  defaultBackupRootCandidates(ud)[0] = <userData>/backups — the recovery chain could never find
+ *  the snapshot on any fresh install (and migrateLegacyBackups actively emptied the one directory
+ *  this reader still watched). Now the reader consumes the SAME single source (backup-roots.cjs),
+ *  keeping the legacy <userData>/critical-state-backup.json as an extra fallback checked last, and
+ *  reporting candidates[0] (the write location) when nothing exists. */
 function criticalBackupPath (ud) {
-  const external = path.join(path.dirname(ud), 'pickdone-backups', 'critical-state-backup.json')
-  if (fs.existsSync(external)) return external
+  const candidates = require('./backup-roots.cjs').defaultBackupRootCandidates(ud)
+    .map(root => path.join(root, 'critical-state-backup.json'))
   const legacy = path.join(ud, 'critical-state-backup.json')
-  if (fs.existsSync(legacy)) return legacy
-  return external // when neither exists, return the new default write location
+  for (const f of [...candidates, legacy]) {
+    if (fs.existsSync(f)) return f
+  }
+  return candidates[0] // when neither exists, return the default write location
+}
+
+/** P2 fix (2026-09-26, json-exists-vs-parseable): whole-file parseability gate for the disaster
+ *  backup. Existence alone made a torn/corrupt JSON yield source:'json' → an "empty DB recovery"
+ *  that also STEERED away from a usable todos.db.plain-bak. An object shape (raw && object) is the
+ *  plausible-backup bar; per-segment tolerance stays in the restore functions (parseSegment). */
+function backupJsonParseable (file) {
+  try {
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8'))
+    return !!(raw && typeof raw === 'object')
+  } catch { return false }
 }
 
 /** SQLite files start with the 16-byte magic "SQLite format 3\0". A todos.db whose header still
@@ -208,7 +227,12 @@ function attemptDbRecovery (ud, retryInit) {
   // Confirm a recoverable source exists before renaming: transient IO errors (disk full/lock held) also make init fail; renaming unconditionally
   // would mislabel the user's current database as .corrupt and fall back to a stale backup or even an empty DB
   const plainBakExists = fs.existsSync(path.join(ud, 'todos.db.plain-bak'))
-  const jsonExists = fs.existsSync(criticalBackupPath(ud))
+  // P2 fix (2026-09-26, json-exists-vs-parseable): an existing-but-unparseable JSON no longer
+  // counts as a recoverable source — the old existence-only check produced a source:'json'
+  // "recovery" that re-inited an EMPTY DB and outranked a usable plain-bak.
+  const jsonPath = criticalBackupPath(ud)
+  const jsonFileExists = fs.existsSync(jsonPath)
+  const jsonExists = jsonFileExists && backupJsonParseable(jsonPath)
   if (!plainBakExists && !jsonExists) return null
   // P1 2026-09-20: quarantine used to swallow rename failures (`catch {}`) and then fall through
   // to copying the backup OVER a possibly-locked/possibly-open target — a silent recovery loop
@@ -238,6 +262,9 @@ function attemptDbRecovery (ud, retryInit) {
   pruneCorruptScenes(ud)
   if (jsonExists) return { source: 'json', label: 'disaster-backup JSON (fresh)' }
   fs.copyFileSync(path.join(ud, 'todos.db.plain-bak'), path.join(ud, 'todos.db'))
+  // Truthful label: when the JSON existed but failed the parseability gate, the caller's dialog
+  // must say the restore came from the (possibly stale) plain-bak, not from the JSON.
+  if (jsonFileExists) return { source: 'plain-bak', label: 'disaster-backup JSON unparseable, restored from plain-bak (todos.db.plain-bak, possibly stale)' }
   return { source: 'plain-bak', label: 'local plaintext backup (todos.db.plain-bak, possibly stale)' }
 }
 
@@ -264,7 +291,7 @@ function pruneCorruptScenes (ud, keep = 3) {
  *  segments are driven by THIS one table, so comment and code can no longer drift (the same drift
  *  was found in two separate review waves).
  *  Consumed on the startup path: todoState, categoryState, tomatoRecords, filterState, planState,
- *  habitsState — same segment set the UI restore (SettingsDataTab.applyRestoreDump) accepts.
+ *  habitsState, metaState — same segment set the UI restore (SettingsDataTab.applyRestoreDump) accepts.
  *  Deliberately NOT restored here: settingsState (renderer-owned semantics — applying settings
  *  re-runs migration/sanitize logic that belongs to the UI restore path only).
  *  Every importer is idempotent by id (upsert / skip-rows-without-id), matching the UI rules:
@@ -276,8 +303,43 @@ const RESTORE_SEGMENTS = [
   { seg: 'tomatoRecords', enable: c => c.appendTomatoRecords, restore: (raw, cb) => restoreTomatoRecordsFromCriticalBackup(raw, cb) },
   { seg: 'filterState', enable: c => c.filterPutMany, restore: (raw, cb) => restoreFilterRowsFromCriticalBackup(raw, cb) },
   { seg: 'planState', enable: c => c.planPutMany, restore: (raw, cb) => restorePlanChipsFromCriticalBackup(raw, cb) },
-  { seg: 'habitsState', enable: c => c.habitsPut, restore: (raw, cb) => restoreHabitsBlobFromCriticalBackup(raw, cb) }
+  { seg: 'habitsState', enable: c => c.habitsPut, restore: (raw, cb) => restoreHabitsBlobFromCriticalBackup(raw, cb) },
+  { seg: 'metaState', enable: c => c.metaPut, restore: (raw, cb) => restoreMetaEntriesFromCriticalBackup(raw, cb) }
 ]
+
+/** Meta-key whitelist for the metaState segment restore (2026-09-26, meta-keys-omitted fix).
+ *  Only the data surfaces the backup collector gathered — repeat rules, per-task tomato estimates,
+ *  project deadline/status/flag/milestones + the project-id registry. Transient keys
+ *  (catProjectMetaBak.*, pending markers, todosVersion) are deliberately NOT restorable here. */
+const META_RESTORE_PREFIXES = [
+  'repeatRule:',
+  'tomatoEstimateState:',
+  'projectDeadline:',
+  'projectStatus:',
+  'projectCategoryFlag:',
+  'projectMilestones:',
+  'projectCategoryIds'
+]
+
+/** metaState restore: entries are {key,value} pairs read from the meta table at dump time
+ *  (todoBackup.collectMetaState). Idempotent whole-key puts; keys outside the whitelist and
+ *  entries without a value are skipped; a single bad entry never drags down the batch. */
+function restoreMetaEntriesFromCriticalBackup (raw, metaPut) {
+  if (typeof metaPut !== 'function') return 0
+  try {
+    const seg = parseSegment(raw.backup && raw.backup.metaState, 'metaState')
+    if (seg === null) return 0
+    const entries = ((seg && seg.entries) || []).filter(e =>
+      e && typeof e.key === 'string' && e.value != null && e.value !== '' &&
+      META_RESTORE_PREFIXES.some(p => e.key.startsWith(p)))
+    if (!entries.length) return 0
+    let n = 0
+    for (const e of entries) {
+      try { metaPut([e.key, e.value]); n++ } catch { /* one bad entry must not drag the batch */ }
+    }
+    return n
+  } catch { return 0 }
+}
 
 /** todoState re-import: merge todoList+recycleList, filter rows without taskId. Returns the number imported.
  *  Adversarial-round fix: a missing upsertTasks callback with a NON-empty list used to return
@@ -304,7 +366,11 @@ function restoreFilterRowsFromCriticalBackup (raw, filterPutMany) {
     if (seg === null) return 0
     const rows = ((seg && seg.list) || []).filter(f => f && f.id != null)
     if (!rows.length) return 0
-    try { filterPutMany(rows); return rows.length } catch { return 0 }
+    // B2 (2026-09-26): backup rows carry backup-time updatedAt and filterUpsert preserves explicit
+    // stamps — on a LAN-sync peer with newer rows the restore lost LWW instantly. Re-stamp fresh:
+    // restore = the backup's data must win (same rule as the UI restore's todo stamping).
+    const now = Date.now()
+    try { filterPutMany(rows.map(f => ({ ...f, updatedAt: now }))); return rows.length } catch { return 0 }
   } catch { return 0 }
 }
 
@@ -318,7 +384,10 @@ function restorePlanChipsFromCriticalBackup (raw, planPutMany) {
     if (seg === null) return 0
     const rows = ((seg && seg.chips) || []).filter(c => c && c.id != null)
     if (!rows.length) return 0
-    try { planPutMany(rows); return rows.length } catch { return 0 }
+    // B2 (2026-09-26): planAddMany preserves explicit updatedAt — re-stamp fresh so LAN LWW
+    // cannot instantly revert the restore against a peer holding newer chips.
+    const now = Date.now()
+    try { planPutMany(rows.map(c => ({ ...c, updatedAt: now }))); return rows.length } catch { return 0 }
   } catch { return 0 }
 }
 
@@ -473,4 +542,4 @@ function sweepPendingDeletes (ud, log) {
   return swept
 }
 
-module.exports = { attemptDbRecovery, restoreTasksFromCriticalBackup, writeCriticalStateBackupAtomic, criticalBackupPath, restoreCategoriesFromCriticalBackup, restoreTomatoRecordsFromCriticalBackup, quarantineKey, sqliteHeaderOk, encryptedProbe, preflightMigrateResidue, sweepPendingDeletes, recoveryDialogAction, loadVendorDriver }
+module.exports = { attemptDbRecovery, restoreTasksFromCriticalBackup, writeCriticalStateBackupAtomic, criticalBackupPath, backupJsonParseable, restoreCategoriesFromCriticalBackup, restoreTomatoRecordsFromCriticalBackup, restoreMetaEntriesFromCriticalBackup, quarantineKey, sqliteHeaderOk, encryptedProbe, preflightMigrateResidue, sweepPendingDeletes, recoveryDialogAction, loadVendorDriver }

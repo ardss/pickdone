@@ -15,20 +15,10 @@ const getApp = () => { _app = _app || require('electron').app; return _app }
 const allowedBackupDirs = new Set()
 function allowedBackupDirsFile () { return path.join(getApp().getPath('userData'), 'allowed-backup-dirs.json') }
 
-/** Single source for default backup-root candidates (P0 root fix, 2026-09-25):
- *  [0] is the ACTIVE default root; [1..] are legacy roots kept for discovery/migration only.
- *  Priority: TODO_BACKUP_DIR (explicit) > <userData>/backups (inside the isolation dir — a dev
- *  instance with TODO_USER_DATA_DIR can no longer leak auto snapshots into the repo tree via the
- *  old parent-of-userData derivation) > legacy <parent-of-userData>/pickdone-backups.
- *  Both consumers (main process defaultBackupRoot and the CLI restore-backup discovery) read THIS
- *  function — no second copy of the derivation is allowed. */
-function defaultBackupRootCandidates (userDataDirPath) {
-  if (process.env.TODO_BACKUP_DIR) return [process.env.TODO_BACKUP_DIR]
-  return [
-    path.join(userDataDirPath, 'backups'),
-    path.join(path.dirname(userDataDirPath), 'pickdone-backups')
-  ]
-}
+// P0 root fix (2026-09-26, backup-path-fork): the derivation itself moved to the dependency-free
+// backup-roots.cjs so the disaster-recovery reader (dbRecovery.cjs, pure-Node testable) consumes
+// the SAME single source instead of its own hand-copied fork that silently drifted from this one.
+const { defaultBackupRootCandidates } = require('./backup-roots.cjs')
 
 /** Active default backup root. Previously externalized to parent-of-userData/pickdone-backups so
  *  wiping userData spared the backups; that derivation made dev instances (userData under the repo)
@@ -42,7 +32,9 @@ function defaultBackupRoot () {
 }
 
 /** One-time, idempotent migration: move *.json from a legacy backup dir into the active root when
- *  the corresponding file is absent there; name conflicts drop only the legacy copy; failure warns
+ *  the corresponding file is absent there; on a NAME conflict the NEWER file wins (mtime comparison,
+ *  2026-09-26 P2 fix: the old code unlinked the legacy copy unconditionally, destroying a newer
+ *  legacy snapshot in favor of an older same-named file in the active root); failure warns
  *  and never blocks backups. A legacy dir equal to the root is skipped (self-move would delete). */
 function migrateLegacyBackups (legacyDir, root) {
   try {
@@ -56,7 +48,15 @@ function migrateLegacyBackups (legacyDir, root) {
     for (const f of files) {
       const src = path.join(legacy, f)
       const dst = path.join(root, f)
-      if (fs.existsSync(dst)) { try { fs.unlinkSync(src) } catch {} continue }
+      if (fs.existsSync(dst)) {
+        // Same-second snapshot filenames can hide different content: keep whichever copy is newer.
+        try {
+          const sm = fs.statSync(src).mtimeMs
+          const dm = fs.statSync(dst).mtimeMs
+          if (sm > dm) { fs.unlinkSync(dst); fs.renameSync(src, dst); moved++ } else { try { fs.unlinkSync(src) } catch {} }
+        } catch { try { fs.unlinkSync(src) } catch {} }
+        continue
+      }
       try { fs.renameSync(src, dst); moved++ } catch {}
     }
     if (moved) log.info('[Backup] 已将旧默认备份目录快照迁移至新默认根:', legacy, '->', root, `(${moved} 个文件)`)
@@ -95,4 +95,4 @@ function resolveBackupDir (configured) {
   return resolved
 }
 
-module.exports = { resolveBackupDir, defaultBackupRoot, defaultBackupRootCandidates, saveAllowedBackupDirs, loadAllowedBackupDirs, allowedBackupDirs }
+module.exports = { resolveBackupDir, defaultBackupRoot, defaultBackupRootCandidates, migrateLegacyBackups, saveAllowedBackupDirs, loadAllowedBackupDirs, allowedBackupDirs }
