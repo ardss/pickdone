@@ -274,14 +274,10 @@ function watchDbForExternalWrites () {
         lastSettingsDoc = doc
         const win = getMainWindow()
         if (prev && win) {
-          const patch = {}
-          for (const k of Object.keys(doc)) {
-            if (k === '_savedAt' || k === 'schemaV') continue
-            if (JSON.stringify(doc[k]) !== JSON.stringify(prev[k])) patch[k] = doc[k]
-          }
+          // Diff moved to settings-hot-sync.js (testable): machine-local stamps (_lsAt included —
+          // echo-loop root fix, see module comment) and secret fields never travel in the patch.
+          const patch = require('./settings-hot-sync').computeSettingsPatch(doc, prev)
           if (Object.keys(patch).length) {
-            delete patch.securityLockPassword
-            delete patch.securityLockQuestion
             // P2 2026-09-11: hot-sync used to push only the main window — the float/quick-add windows
             // kept pre-CLI-change settings until restart (same all-windows pattern as the quit flush)
             for (const w of BrowserWindow.getAllWindows()) {
