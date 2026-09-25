@@ -69,7 +69,8 @@ function runCoverage () {
 function parseAllFiles (out) {
   const lines = out.split(/\r?\n/)
   for (let i = lines.length - 1; i >= 0; i--) {
-    const m = /^#\s*all\s+files\s*\|\s*([\d.]+)\s*\|\s*([\d.]+)\s*\|\s*([\d.]+)/.exec(lines[i])
+    // node 24 prints the total row as "# all files | x | y | z"; node 22 (CI) omits the leading '#'
+    const m = /^#?\s*all\s+files\s*\|\s*([\d.]+)\s*\|\s*([\d.]+)\s*\|\s*([\d.]+)/.exec(lines[i])
     if (m) return { lines: +m[1], branches: +m[2], functions: +m[3] }
   }
   return null

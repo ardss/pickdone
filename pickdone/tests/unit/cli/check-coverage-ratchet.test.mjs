@@ -27,6 +27,11 @@ test('parseAllFiles: picks the LAST all-files summary (forged earlier lines cann
   assert.deepEqual(mod.parseAllFiles(out), { lines: 76.4, branches: 72.3, functions: 62.8 })
 })
 
+test('parseAllFiles: node 22 (CI linux) prints the total row WITHOUT the leading # — must still parse', () => {
+  const out = '# end of coverage report\nall files                           |  86.65 |    81.68 |   77.83 | \n'
+  assert.deepEqual(mod.parseAllFiles(out), { lines: 86.65, branches: 81.68, functions: 77.83 })
+})
+
 test('parseAllFiles: returns null when no summary line exists (fail-closed, not 0/0/0 equal-baseline green)', () => {
   assert.equal(mod.parseAllFiles('# foo | 100.00 | 100.00 | 100.00\n# all files?'), null)
   assert.equal(mod.parseAllFiles(''), null)
