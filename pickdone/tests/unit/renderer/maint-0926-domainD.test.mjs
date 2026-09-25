@@ -248,18 +248,18 @@ test('[B5] restoring a task whose repeatRule meta was GCed clears the repeatId (
 
 test('[B6] descLines clamp helper + TodoItem wiring for the description-lines setting', async () => {
   const { descLineClampStyle } = await import('../../../renderer/js/utils/descLines.js')
-  // clamping bounds and default
-  assert.equal(descLineClampStyle(3)['-webkit-line-clamp'], 3)
-  assert.equal(descLineClampStyle(0)['-webkit-line-clamp'], 1, 'clamped to the slider minimum')
-  assert.equal(descLineClampStyle(99)['-webkit-line-clamp'], 6, 'clamped to the slider maximum')
-  assert.equal(descLineClampStyle(undefined)['-webkit-line-clamp'], 3, 'store default fallback')
-  assert.equal(descLineClampStyle('4')['-webkit-line-clamp'], 4, 'string settings values are coerced')
-  assert.equal(descLineClampStyle(2.6)['-webkit-line-clamp'], 3, 'rounded')
+  // clamping bounds and default (keys are csstype camelCase vendor names since vue-tsc typed the helper)
+  assert.equal(descLineClampStyle(3).WebkitLineClamp, 3)
+  assert.equal(descLineClampStyle(0).WebkitLineClamp, 1, 'clamped to the slider minimum')
+  assert.equal(descLineClampStyle(99).WebkitLineClamp, 6, 'clamped to the slider maximum')
+  assert.equal(descLineClampStyle(undefined).WebkitLineClamp, 3, 'store default fallback')
+  assert.equal(descLineClampStyle('4').WebkitLineClamp, 4, 'string settings values are coerced')
+  assert.equal(descLineClampStyle(2.6).WebkitLineClamp, 3, 'rounded')
   // the box-clamp style block is complete
   const s = descLineClampStyle(2)
   assert.equal(s.display, '-webkit-box')
   assert.equal(s.overflow, 'hidden')
-  assert.equal(s['-webkit-box-orient'], 'vertical')
+  assert.equal(s.WebkitBoxOrient, 'vertical')
   // the dead setting now has a consumer
   const ti = read('renderer/js/components/TodoItem.vue')
   assert.match(ti, /todoDescriptionDisplayLineNumber/, 'TodoItem reads the setting (fails on the never-consumed code)')

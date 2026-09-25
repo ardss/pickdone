@@ -498,29 +498,8 @@ function assertHasTaskId (t) {
 }
 
 const makeBulkOps = require('./db-bulk-ops')(() => db, () => OPS)
-// main-ipc-3 unbounded-key fix (2026-09-22): snowDedup:<taskId>:<dedupKey> meta keys are written
-// once per focus session (bumpSnow idempotency fence) and previously had NO cleanup path — they
-// accumulated linearly forever, and survived even after the owning task was hard-deleted or its
-// recycle-bin row purged (the startup meta GC's family list never covered them either). Purge the
-// owning task's keys inside the SAME delete transaction. Range predicate instead of LIKE: task
-// ids are renderer-supplied and % / _ in an id would silently widen a LIKE pattern.
-const deleteSnowDedupKeysFor = ids => {
-  for (const id of ids) {
-    const prefix = `snowDedup:${String(id)}:`
-    db.prepare('DELETE FROM meta WHERE key >= ? AND key < ?').run(prefix, prefix + ';')
-  }
-}
-// planChipsSnapshot meta lifecycle (parity with deleteSnowDedupKeysFor): the renderer mints a
-// `planChipsSnapshot:<taskId>` meta key per task with schedule chips (restoreSnapshot reads it
-// back). When the owning rows die here, the snapshot can never be restored — the key is a
-// permanent meta orphan (the CLI purge already deletes these keys for the same reason: a later
-// taskId collision could resurrect a stale chip set). Exact-key delete: ids never contain the
-// `planChipsSnapshot:` prefix shape collision risk (one row per task).
-const deleteChipsSnapshotKeysFor = ids => {
-  for (const id of ids) {
-    db.prepare("DELETE FROM meta WHERE key = 'planChipsSnapshot:' || ?").run(String(id))
-  }
-}
+// Per-task meta-key GC helpers (snowDedup / planChipsSnapshot) moved to db-meta-gc.cjs verbatim:
+const { deleteSnowDedupKeysFor, deleteChipsSnapshotKeysFor } = require('./db-meta-gc.cjs')(() => db)
 // B9 purge chip-capture scratch (single-process synchronous db.call → oplog append): the purge
 // ops physically DELETE plan_chips inside their transaction, so the oplog expansion (which runs
 // POST-op and can only re-query surviving rows) cannot recover the doomed chip ids. The ops
@@ -1100,7 +1079,7 @@ syncOplogSince: ({ sinceSeq = 0, limit = 2000 } = {}) => db.prepare('SELECT seq,
 /** 账本变更钩子:任何进程(App 主进程 IPC / CLI 直连)经 call() 落账本写 op 后触发。
  *  App 侧用它向所有窗口广播 tomato-records-changed;CLI 进程内无窗口,钩子天然不挂。
  *  放在 db 层而非 IPC handler 是根修关键:CLI 直写不经过 IPC,钩子挂 handler 上会漏广播(2026-09-04 实锤)。 */
-const LEDGER_WRITE_OPS = new Set(['tomatoAppendMany', 'tomatoUpdateById', 'tomatoRemoveByIds', 'tomatoMigrateFromMeta'])
+const LEDGER_WRITE_OPS = require('./db-write-ops.cjs').LEDGER_WRITE_OPS
 let ledgerChangedHook = null
 function setLedgerChangedHook (fn) { ledgerChangedHook = typeof fn === 'function' ? fn : null }
 // Echo suppression (2026-09-11 audit P2): renderer-originated ledger writes must not echo back to the
@@ -1122,19 +1101,7 @@ function call (op, params) {
   return r
 }
 
-// Explicit write-op list: the todo-db:call handler uses it to decide reloadAll+broadcastTodosChanged.
-// Do not guess with regexes — write ops like hardDeleteMany/filterDelete/clearCategories were once missed, leaving cross-window data stale.
-
-const WRITE_OPS = new Set([
-  'upsert', 'upsertMany', 'commitSyncBatch', 'bumpSnow', 'hardDelete', 'hardDeleteMany', 'setMeta', 'deleteMeta',
-  'purgeRecycleBin', 'purgeSeedTodos', 'upsertCategory',
-  'filterUpsert', 'filterDelete',
-  'planAddMany', 'planUpdateChip', 'planRemoveIds', 'planMoveTask',
-  'tomatoAppendMany', 'tomatoUpdateById', 'tomatoRemoveByIds', 'tomatoMigrateFromMeta',
-  'planDeleteTask', 'planDeleteTaskDay', 'planPrune', 'settingsRowPut', 'settingsRowPutMany', 'settingsRowDelete',
-  'upsertCategoryMany', 'filterUpsertMany', 'setMetaMany'
-])
-const isWriteOp = op => WRITE_OPS.has(op)
+const { WRITE_OPS, isWriteOp } = require('./db-write-ops.cjs')
 syncSchema.registerOps(OPS, WRITE_OPS, oplog)
 
 /** Explicitly close the handle (for tests switching directories / graceful process exit); silent when uninitialized or already closed.

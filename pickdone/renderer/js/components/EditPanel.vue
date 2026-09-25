@@ -176,15 +176,8 @@ import EpTomato from './edit-panel/EpTomato.vue'
 import EpTags from './edit-panel/EpTags.vue'
 import * as attachments from './edit-panel/attachments.js'
 import * as repeat from './edit-panel/repeat.js'
-import { catOutsideClose } from './edit-panel/interactions.js'
+import { catOutsideClose, FIELD_MAP } from './edit-panel/interactions.js'
 
-const FIELD_MAP = {
-  title: 'taskContent',
-  desc: 'taskDescribe',
-  categoryId: 'categoryId',
-  priority: 'priority',
-  deadlineTs: 'deadlineTs'
-}
 // Priority has two tiers (user-finalized): high/low; connected with the quadrant's important — high⇔important=1, low⇔important=0 (see fieldPatch)
 const PRIOS = [{ v: 3, l: 'statsJ.EditPanel.priorityHigh' }, { v: 1, l: 'statsJ.EditPanel.prioLow' }]
 

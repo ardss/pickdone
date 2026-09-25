@@ -13,3 +13,13 @@ export function catOutsideClose (ctx, e) {
   if (row && row.contains && row.contains(e.target)) return
   ctx.catOpen = false
 }
+
+/** EditPanel field → todo store-field mapping for the quick fieldPatch pipeline (moved out of
+ *  EditPanel.vue for the file-size ratchet; pure data, no behavior change). */
+export const FIELD_MAP = {
+  title: 'taskContent',
+  desc: 'taskDescribe',
+  categoryId: 'categoryId',
+  priority: 'priority',
+  deadlineTs: 'deadlineTs'
+}

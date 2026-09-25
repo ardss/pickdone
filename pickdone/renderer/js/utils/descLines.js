@@ -11,13 +11,15 @@ export function descLineClampStyle (raw, { min = 1, max = 6, fallback = 3 } = {}
   let n = Math.round(Number(raw))
   if (!Number.isFinite(n)) n = fallback
   n = Math.min(max, Math.max(min, n))
-  return {
+  // Keys use csstype camelCase vendor names + literal JSDoc casts so the object type-checks
+  // as Vue's CSSProperties at :style consumers (TodoItem.vue) under vue-tsc.
+  return /** @type {import('vue').CSSProperties} */ ({
     display: '-webkit-box',
     overflow: 'hidden',
-    '-webkit-box-orient': 'vertical',
+    WebkitBoxOrient: /** @type {'vertical'} */ ('vertical'),
     textOverflow: 'ellipsis',
-    wordBreak: 'break-all',
+    wordBreak: /** @type {'break-all'} */ ('break-all'),
     whiteSpace: 'pre-line',
-    '-webkit-line-clamp': n
-  }
+    WebkitLineClamp: n
+  })
 }

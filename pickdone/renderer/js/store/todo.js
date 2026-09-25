@@ -16,32 +16,12 @@ import { historyPush, historyPushKeepRedo, historyClear, historyBreakMerge, hist
 import { writeEventBackupCore, writeAutoBackupCore, writeCriticalBackupCore } from './helpers/todoBackup.js'
 import { commit as commitCommand } from "../utils/commandBus.js"
 import { safeUpsert, flushPendingUpserts, queuePendingUpsert, pendingUpserts, daysRangeTs } from './helpers/todoPendingUpserts.js'
+import { DEFAULT_VIEWS, VIEW_AFFECTING_FIELDS, VIEWS_DEBOUNCE_MS, deproxyRows, showNoDateFilter, buildCalendarList } from './helpers/todoViews.js'
 import { countTags } from '../utils/search.js'
 // Re-export: unit tests import the quit-flush retry contract straight from store/todo.js
 export { safeUpsert, flushPendingUpserts }
 // planSnapshotRowSync stays a named export of this module (tests import it from here)
 export { planSnapshotRowSync }
-const DEFAULT_VIEWS = () => ({
-    todayTodoList: [],
-    todayDoneList: [],
-    yesterdayTodoList: [],
-  calendar: [],
-  todoBox: [],
-  todoBoxCount: 0,
-  completed: [],
-    recycleBin: []
-})
-// Fields affecting a view's group membership (one-to-one with computeViews' grouping criteria):
-// delete/deletedAt (active/recycle bin), todoTime/dayStart (date grouping), complete/completedAt (completed grouping), categoryId (todo-box category filter)
-// Only writes to these fields need an immediate full view rebuild; the rest (title/description/subtask plain-text edits) take the lightweight path
-const VIEW_AFFECTING_FIELDS = ['delete', 'deletedAt', 'todoTime', 'dayStart', 'complete', 'completedAt', 'categoryId']
-const VIEWS_DEBOUNCE_MS = 600 // View-rebuild debounce for plain-text edits: staggered from EditPanel's 350ms save cadence; continuous typing recomputes only once
-/** Strip Vue reactive proxies before IPC: rows come straight from reactive state, and a shallow spread
- *  ({ ...raw }) only unwraps the top level — nested arrays (reminderOffsets/reminderExtra/subtasks JSON is a
- *  string, but reminderOffsets etc. stay Proxies) still fail the structured clone inside invoke
- *  ("An object could not be cloned" = the whole upsertMany batch silently dropped, same root cause
- *  safeUpsert's JSON round-trip documents for single rows) */
-function deproxyRows (rows) { return JSON.parse(JSON.stringify(rows)) }
 export default {
   namespaced: true,
   state: () => ({
@@ -817,13 +797,6 @@ export default {
 
 /* Small helper for reading root settings (module-internal access) */
 function root_getCompleteWithSub (rootState) { return rootState && rootState.settings ? rootState.settings.isCompleteWithSubtasks !== false : true }
-
-function showNoDateFilter (arr, settings) {
-  return settings.showNoDate ? arr : []
-}
-
-/* Calendar view data: for the current month's span (±half a year), the daily set can render directly from raw todoList rows */
-function buildCalendarList (live) { return live.slice() }
 
 /** Test seams (unit-tested in tests/store-fixes-domain.test.mjs): pending-write requeue and the de-proxy round-trip */
 export const _testInternals = { pendingUpserts: pendingUpserts(), safeUpsert, flushPendingUpserts, deproxyRows }
