@@ -86,12 +86,15 @@ test('F6: delete-todo-files rejects auxiliary windows, accepts the main window',
   assert.throws(() => api['delete-todo-files'](eAux, 'taskX'), /forbidden: main window only/)
   assert.equal(api['delete-todo-files'](eMain, 'taskX'), true)
 })
-test('F6: upload-attachment stays non-main-window-reachable (float uploads are legitimate) and keeps its 50MB cap', async () => {
+test('F6: upload-attachment is main-window-only now (C12, 2026-09-25 D8 wave policy reversal) and keeps its 50MB cap', async () => {
   const { saveAttachment } = require_('../../../src/main/attachments.js')
   const api = attachmentHandlers(ctxBase)
-  // float/aux sender is NOT rejected at the channel gate (isLocked only): the handler actually
-  // runs and fails on payload validation instead of the main-window guard
-  await assert.rejects(api['upload-attachment'](eAux, { taskId: 't', name: 'x.png', dataBase64: '!!!bad!!!' }), /invalid base64/)
+  // POLICY REVERSAL (2026-09-25 D8 wave, owner-ruling on C12): the 2026-09-21 pin above let aux
+  // senders through because "float uploads are legitimate" — but the only renderer caller of
+  // uploadAttachment is renderer/js/components/edit-panel/attachments.js (EditPanel exists only
+  // in the MAIN window; the float/quick-add windows have no upload entry), so the channel is
+  // narrowed behind assertMainWindow like delete-file/delete-todo-files.
+  assert.throws(() => api['upload-attachment'](eAux, { taskId: 't', name: 'x.png', dataBase64: '!!!bad!!!' }), /forbidden: main window only/, 'aux senders are refused at the channel gate before payload validation')
   const big = Buffer.alloc(50 * 1024 * 1024 + 1, 7).toString('base64')
   await assert.rejects(saveAttachment({ taskId: 't', name: 'big.png', dataBase64: big }), /too large/,
     'the 50MB size cap must stay in force')
