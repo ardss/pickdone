@@ -89,6 +89,12 @@ const r = spawnSync(process.execPath, ['--test', '--test-force-exit', `--test-ti
   // (`1..N` + `# fail` lines), but Node >= 24 defaults the reporter to 'spec' even for non-TTY
   // stdout — the summary gate then read fail=undefined and red'd every run (2026-09-24).
   '--test-reporter=tap', '--test-reporter-destination=stdout',
+  // Coverage table carrier: the TAP reporter does not print the coverage report on
+  // node 22 (CI), so --experimental-test-coverage needs a second spec-reporter stream
+  // (stderr) or the coverage ratchet never finds its "# all files" summary line.
+  ...(forwardArgs.includes('--experimental-test-coverage')
+    ? ['--test-reporter=spec', '--test-reporter-destination=stderr']
+    : []),
   ...forwardArgs, ...files],
   { stdio: ['inherit', 'pipe', 'inherit'], maxBuffer: 1 << 28 })
 // Timing summary: print the enforced per-test ceiling next to the SLOWEST observed test, so a
