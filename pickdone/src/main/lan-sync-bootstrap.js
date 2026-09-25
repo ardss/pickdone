@@ -410,6 +410,7 @@ function startSync () {
           title: i18nM.mt('pairNotifyTitle'),
           body: who ? i18nM.mt('pairNotifyBody', { who }) : i18nM.mt('pairNotifyBodyUnknown'),
           silent: false,
+          ...require('./scheduler').notifyTimeoutOptsForApp() // B4: honor notificationTimeoutInterval on the pairing notification too
         })
         n.on('click', () => { try { notifyRenderers('pair-request-focus') } catch { /* noop */ } })
         n.show()
