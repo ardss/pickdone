@@ -107,6 +107,7 @@ import { getEstimate, ensureEstimate } from '../utils/tomatoEstimate.js'
 import { normalizeSortMode } from '../utils/sortMode.js'
 import { reorderScale } from '../../../shared/sort-core.mjs' // F-B2: reorder scale single source (the CLI's sortTask consumes the same module)
 import { crossDayMovePatch, crossDayRevertPatch } from '../utils/crossDayMove.js' // [maint-0924 A1] shared cross-day rules
+import { taskContextMenu } from '../utils/taskMenu.js' // [maint-0925 A16] one menu builder for all views
 
 // Module-level drag-in-progress flag: a document.querySelector('.td-item.dragging') on every
 // dragover is O(document); this is set on dragstart and cleared on dragend/drop.
@@ -304,24 +305,30 @@ export default {
       this.$store.dispatch('tomato/attach', attach)
     },
     // Right-click quick day move: change the date to yesterday/today (dayStart is derived by updateTodoFields)
+    // [maint-0925 A1] single patch source: goes through crossDayMovePatch like the drag path, so a
+    // task scheduled at 14:30 keeps its 14:30 after "postpone to tomorrow" and its reminder is not
+    // orphaned on the old day (the hand-written { todoTime: target } patch used to wipe both).
     moveDay (offset) {
-      const base = this.todo.todoTime
-        ? dayjs(this.todo.todoTime)
+      const cur = this.rawOf()
+      const base = cur.todoTime
+        ? dayjs(cur.todoTime)
         : dayjs().startOf('day')
       const target = offset === 0
         ? +dayjs().startOf('day')
         // Postpone: at least to tomorrow; unexpired tasks are pushed forward from their original date
         : Math.max(+dayjs().add(offset, 'day').startOf('day'), +base.add(offset, 'day').startOf('day'))
-      const orig = this.todo.todoTime
+      const startOf = ts => +dayjs(ts).startOf('day')
+      const patch = crossDayMovePatch(cur, target, startOf)
+      const revertPatch = crossDayRevertPatch(cur, patch)
       moveWithUndo(this, {
         label: offset === 1 ? this.$t('statsJ.TodoItem.movedToTomorrow') : this.$t('statsJ.TodoItem.movedToToday'),
         apply: () => this.$store.dispatch('todo/updateTodoFields', {
-          taskId: this.todo.taskId,
-          patch: { todoTime: target, status: 'update' }
+          taskId: cur.taskId,
+          patch: { ...patch, status: 'update' }
         }),
         revert: () => this.$store.dispatch('todo/updateTodoFields', {
-          taskId: this.todo.taskId,
-          patch: { todoTime: orig, status: 'update' }
+          taskId: cur.taskId,
+          patch: { ...revertPatch, status: 'update' }
         })
       })
     },
@@ -336,33 +343,14 @@ export default {
       this.$store.commit('ui/openEdit', raw)
     },
     ctxMenu (e) {
-      e.preventDefault()
-      this.$store.commit('ui/openMenu', {
-        x: e.clientX + 2, y: e.clientY + 2,
-        items: [
-          { icon: 'edit', label: this.$t('statsE.TodoItem.openEditor'), fn: () => this.openEdit() },
-          { icon: 'check', label: this.todo.complete ? this.$t('statsE.TodoItem.markIncomplete') : this.$t('statsJ.TodoItem.markDone'), fn: () => toggleCompleteWithUndo({ store: this.$store, message: this.$message, todo: this.rawOf(), announce: m => this.$announce && this.$announce(m) }) },
-          { icon: 'calendar', label: this.$t('statsE.TodoItem.moveToToday'), fn: () => this.moveDay(0) },
-          { icon: 'clock', label: this.$t('statsE.TodoItem.postponeToTomorrow'), fn: () => this.moveDay(1) },
-          (!this.todo.complete && this.todo.dayStart) ? { icon: 'chevron-up', label: this.$t('statsE.TodoItem.moveUp'), fn: () => this.keyboardMove(-1) } : null,
-          (!this.todo.complete && this.todo.dayStart) ? { icon: 'chevron-down', label: this.$t('statsE.TodoItem.moveDown'), fn: () => this.keyboardMove(1) } : null,
-          {
-            icon: 'copy', label: this.$t('statsE.TodoItem.copyTitleDesc'),
-            fn: async () => {
-              // Clipboard API can reject (focus loss / permission denial); surface it instead of an unhandled rejection
-              try {
-                await navigator.clipboard.writeText((this.todo.taskContent || '') + '\n' + (this.todo.taskDescribe || ''))
-                this.$message.success(this.$t('statsE.TodoItem.copiedMsg'))
-              } catch {
-                this.$message.error(this.$t('statsE.TodoItem.copyFailMsg'))
-              }
-            }
-          },
-          this.isRepeat ? { icon: 'repeat', label: this.$t('statsE.TodoItem.repeatDeleteMenu'), fn: () => this.$store.commit('ui/askRepeatDelete', this.todo.taskId), danger: true } : null,
-          { sep: true },
-          { icon: 'trash', label: this.$t('statsE.TodoItem.moveToRecycleBin'), danger: true, fn: () => deleteWithUndo(this, this.$store, this.rawOf()) }
-        ].filter(Boolean)
-      })
+      // [maint-0925 A16] the hand-copied item list drifted from buildTaskMenu (this copy lacked the
+      // shared guards and duplicated copy/delete verbatim). One builder for all views; view-specific
+      // rows (reorder / repeat-scope delete) ride in as `extra`, tomato stays off the row menu.
+      taskContextMenu(this, this.rawOf(), e, { tomato: false, recycle: !!this.todo.delete }, [
+        (!this.todo.complete && this.todo.dayStart) ? { icon: 'chevron-up', label: this.$t('statsE.TodoItem.moveUp'), fn: () => this.keyboardMove(-1) } : null,
+        (!this.todo.complete && this.todo.dayStart) ? { icon: 'chevron-down', label: this.$t('statsE.TodoItem.moveDown'), fn: () => this.keyboardMove(1) } : null,
+        this.isRepeat ? { icon: 'repeat', label: this.$t('statsE.TodoItem.repeatDeleteMenu'), fn: () => this.$store.commit('ui/askRepeatDelete', this.todo.taskId), danger: true } : null
+      ].filter(Boolean))
     },
     /** End-of-row trash quick delete (shared by hover icon / Delete key): same semantics as the context menu.
      *  Recurring task deletion has a dedicated confirm dialog (askRepeatDelete) that must not be bypassed */
