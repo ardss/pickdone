@@ -120,8 +120,13 @@ module.exports = function importHandlers (ctx) {
       assertNotLocked()
       const importer = require('../import') // D3 review fix (2026-09-24): engine's in-tree home (src/main/import) — no main->cli reach-back
       const f = String(file || '')
-      // Arbitrary-path read primitive sealed off: only the path most recently returned by the main-process dialog is accepted
-      if (!lastPickedImportPath || f !== lastPickedImportPath) throw new Error('import: path not granted by picker')
+      // Arbitrary-path read primitive sealed off: only the path most recently returned by the main-process dialog is accepted.
+      // B15 (2026-09-25): a completed/absent grant is now the structured AUTH_EXPIRED contract (see the
+      // success-path wipe below) instead of a bare throw — invoke() rejections strip the code across the
+      // context bridge, so the renderer could only ever show generic import-failed copy.
+      if (!lastPickedImportPath || f !== lastPickedImportPath) {
+        return { ok: false, code: 'AUTH_EXPIRED', message: 'import: this run was already executed or the app restarted — pick the file again to preview and approve a fresh import' }
+      }
       // H7 2026-09-12 P2: re-stat at run time — the file could have been swapped for a bigger one
       // between import:pick-preview and import:run (TOCTOU on the 20MB cap)
       // M-3 (2026-09-20): a vanished file used to throw raw ENOENT here; return the structured
@@ -145,15 +150,29 @@ module.exports = function importHandlers (ctx) {
         try { appAudit.recordCustom('import', ['import:run', f], [], [], 'aborted: file changed since preview (hash mismatch), re-preview required') } catch { /* best-effort */ }
         return { ok: false, code: 'HASH_MISMATCH', message: 'import: file changed since preview — re-run preview to approve the current content' }
       }
-      // same pipeline as importer.importFile, but the text->items parse runs in the worker thread
-      const { format, items } = await runImportParse(text)
+      // same pipeline as importer.importFile, but the text->items parse runs in the worker thread.
+      // C9 (2026-09-25): the parse can still fail here at run time (30s worker timeout, worker thread
+      // crash mid-clone of a huge buffer) — wrap it into the SAME {ok:false, code, message} contract
+      // as every other failure above (:135-139); a bare throw degraded to generic copy in the renderer.
+      // C11 (2026-09-25, same PR as C9 by design): the remaining main-thread cost of an import is
+      // importItems' own two queryTodos full scans (fingerprint pool + day-sort pool) — the 20MB file
+      // cap above bounds them; moving the pool build into the worker / paged reads is the tracked
+      // legacy item and must not be "fixed" here by re-reading the file (would race the B7 meta reads
+      // of the export path's sibling work).
+      let parsed
+      try { parsed = await runImportParse(text) } catch (err) {
+        return { ok: false, code: err && err.code, message: (err && err.message) || String(err) }
+      }
+      const { format, items } = parsed
       if (!['ticktick', 'dida365', 'todoist'].includes(format)) {
         return { ok: false, code: 'FORMAT_UNKNOWN', message: `unknown format "${format}" (valid: auto|ticktick|dida365|todoist)` }
       }
       const r = importer.importItems(items, { dryRun: false, format })
-      // review P2 (2026-09-10): bulk import writes straight through the main process and bypassed the
-      // todo-db:call audit hook — land one explicit line so app-side imports are traceable like CLI imports
-      try { appAudit.recordCustom('import', ['import:run', f], [], [], 'imported ' + ((r && r.imported) || 0) + ' task(s)') } catch { /* best-effort */ }
+      // B13 (2026-09-25): audit single-lining. importItems already lands ONE explicit audit line for
+      // every import (both this App path and the CLI path — 'cli/audit' and 'src/main/audit' append to
+      // the SAME cli-audit.jsonl), so the extra recordCustom here made App-side imports write TWO
+      // lines for one import while CLI imports wrote one. The duplicated block is deleted; the
+      // engine's line (with format/duplicates/categories detail) is the single record of truth.
       // H7 (2026-09-12 P1): bulk writes through dbm bypass the todo-db:call write path, so the db-watch
       // baseline was never re-synced — the next watch poll saw the mtime jump, misread OUR OWN import as
       // an EXTERNAL write and triggered a full reload + undo-stack clear (user lost undo history after
@@ -176,6 +195,13 @@ module.exports = function importHandlers (ctx) {
       // round, same style as the external-db-write path in index.js. Fire-and-forget + guarded:
       // kickSyncRound no-ops safely before sync init.
       try { require('../lan-sync-bootstrap').kickSyncRound('csv-import') } catch { /* sync lazy-not-init */ }
+      // B15 (2026-09-25): single-shot execution grant. The preview-approved hash authorized exactly
+      // ONE import of these bytes — leaving the grant armed let a double-invoke / re-fired IPC replay
+      // the import (harmless-ish only because dedup catches identical rows, but a re-picked DIFFERENT
+      // preview on the same path would still run on a stale approval). Clear both; the next import
+      // must go through a fresh preview, or import:run returns the structured AUTH_EXPIRED above.
+      lastPickedImportPath = ''
+      lastPickedImportHash = ''
       return r
     }
   }
