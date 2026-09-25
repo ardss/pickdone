@@ -8,12 +8,13 @@ import '../../setup.mjs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
+import { todayMidnightMs } from '../../lib/clock.mjs'
 import settings from '../../../renderer/js/store/settings.js'
 import ui from '../../../renderer/js/store/ui.js'
 import todo from '../../../renderer/js/store/todo.js'
 
 const DAY = 86400000
-const today0 = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime() })()
+const today0 = todayMidnightMs() // D4 clock determinism: noon-anchored via tests/lib/clock.mjs
 
 /* ---------- settings: merge and persistence ---------- */
 

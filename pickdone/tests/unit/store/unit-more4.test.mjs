@@ -11,6 +11,7 @@ import {
   formatDayLabel, dateBadgeColor, loadLocalUser, genTomatoId, cssVar
 } from '../../../renderer/js/utils/core.js'
 import { setEstimate, getEstimate } from '../../../renderer/js/utils/tomatoEstimate.js'
+import { todayMidnightMs } from '../../lib/clock.mjs'
 
 test('core: allSubsDone / subsCompleteTarget cascade matrix', () => {
   assert.equal(allSubsDone([]), false, 'an empty subtask list does not count as all done')
@@ -33,7 +34,7 @@ test('core: toPinyinLower / hasChinese / genTomatoId / cssVar', () => {
 })
 
 test('core: dateBadgeColor today/overdue/future/complete', () => {
-  const today = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime() })()
+  const today = todayMidnightMs() // D4 clock determinism: noon-anchored
   const store = { state: { todo: { todayTimestamp: today } } }
   assert.equal(dateBadgeColor({ complete: true, todoTime: today }, store), 'var(--text-4)')
   assert.equal(dateBadgeColor({ complete: false, todoTime: 0 }, store), 'var(--text-3)')
@@ -53,7 +54,7 @@ test('core: loadLocalUser offline profile (localStorage persistence)', () => {
 
 test('core: formatDayLabel yesterday/today/tomorrow/day-after/other years', () => {
   const DAY = 86400000
-  const today = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime() })()
+  const today = todayMidnightMs() // D4 clock determinism: noon-anchored
   assert.equal(formatDayLabel(today, today), '今天')
   assert.equal(formatDayLabel(today + DAY, today), '明天')
   assert.equal(formatDayLabel(today + 2 * DAY, today), '后天')
@@ -63,7 +64,7 @@ test('core: formatDayLabel yesterday/today/tomorrow/day-after/other years', () =
 
 test('core: rescheduleExpired only changes expired incomplete ones and counts them', async () => {
   const DAY = 86400000
-  const today = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime() })()
+  const today = todayMidnightMs() // D4 clock determinism: noon-anchored
   const calls = []
   const dispatch = async (name, payload) => calls.push([name, payload])
   const todos = [

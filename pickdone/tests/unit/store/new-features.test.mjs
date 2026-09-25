@@ -3,6 +3,8 @@ import '../../setup.mjs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
+import { todayMidnight, dayKeyOf } from '../../lib/clock.mjs'
+
 // Lets store/habits.js run under Node (it uses localStorage/Date internally)
 const store = {}
 globalThis.localStorage = {
@@ -12,10 +14,7 @@ globalThis.localStorage = {
 }
 const { default: habitsStore } = await import('../../../renderer/js/store/habits.js')
 
-const dayKey = (offset = 0) => {
-  const d = new Date(); d.setDate(d.getDate() + offset)
-  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0')
-}
+const dayKey = (offset = 0) => dayKeyOf(offset) // D4 clock determinism: noon-anchored via tests/lib/clock.mjs
 
 test('habits: create and check in today', () => {
   const s = habitsStore.state()
@@ -54,7 +53,7 @@ test('habits: last30 outputs 30 days with today last', () => {
 
 test('countdown: day diffs for remaining/passed/today', () => {
   const DAY = 86400000
-  const today = new Date(); today.setHours(0, 0, 0, 0)
+  const today = todayMidnight() // D4 clock determinism: noon-anchored
   const mk = off => { const d = new Date(today.getTime() + off * DAY); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') }
   const daysDiff = key => Math.round((+new Date(key + 'T00:00:00') - today.getTime()) / DAY)
   assert.equal(daysDiff(mk(7)), 7)

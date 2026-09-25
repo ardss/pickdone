@@ -5,11 +5,12 @@
 import '../../setup.mjs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { todayMidnightMs } from '../../lib/clock.mjs'
 
 import todo from '../../../renderer/js/store/todo.js'
 import settings from '../../../renderer/js/store/settings.js'
 
-const today0 = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime() })()
+const today0 = todayMidnightMs() // D4 clock determinism: noon-anchored via tests/lib/clock.mjs
 const T = (over = {}) => ({
   taskId: 't' + Math.random().toString(36).slice(2),
   taskContent: '任务', dayStart: today0, todoTime: today0, createTime: Date.now(),

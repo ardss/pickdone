@@ -7,6 +7,8 @@ import '../../setup.mjs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
+import { todayNoon } from '../../lib/clock.mjs'
+
 const { default: habitsStore, isDueOn } = await import('../../../renderer/js/store/habits.js')
 
 const dayKey = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0')
@@ -23,7 +25,7 @@ function habitWith (frequency, recordDays) {
 test('streak: 周一三五习惯跨周日连续(此前周日无记录就断签)', () => {
   // 回填过去 14 天内所有应打卡日(必然跨越至少一个周日)
   const records = []
-  const d = new Date(); d.setDate(d.getDate() - 14)
+  const d = todayNoon(-14) // D4 clock determinism: noon-anchored (no midnight-boundary drift while walking days)
   const dueDays = []
   for (let i = 0; i < 14; i++) {
     const k = dayKey(d)
@@ -34,7 +36,7 @@ test('streak: 周一三五习惯跨周日连续(此前周日无记录就断签)'
   const s = habitWith({ type: 'weekdays', weekdays: [0, 2, 4] }, records)
   const streak = habitsStore.getters.streakOf(s)('h1')
   // 今天若为打卡日且未打卡:宽限不断签,只数到昨天为止的连续打卡日;否则全部计入
-  const today = dayKey(new Date())
+  const today = dayKey(todayNoon()) // D4 clock determinism: noon-anchored
   const expected = isDueOn({ frequency: { type: 'weekdays', weekdays: [0, 2, 4] } }, today)
     ? dueDays.filter(k => k !== today).length
     : dueDays.length
@@ -42,7 +44,7 @@ test('streak: 周一三五习惯跨周日连续(此前周日无记录就断签)'
 })
 
 test('streak: 应打卡日缺记录仍断签(修法不放松真正的断签)', () => {
-  const d = new Date()
+  const d = todayNoon() // D4 clock determinism: noon-anchored
   const keys = []
   for (let i = 14; i >= 1; i--) { const x = new Date(d); x.setDate(d.getDate() - i); keys.push(dayKey(x)) }
   const freq = { type: 'weekdays', weekdays: [0, 2, 4] }
