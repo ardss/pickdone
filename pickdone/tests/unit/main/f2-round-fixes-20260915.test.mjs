@@ -104,9 +104,9 @@ test('F3: notification 入参 undefined/null/非对象/缺 title 均不抛 TypeE
   }
   assert.equal(seen.length, 4)
   for (const n of seen) assert.equal(n.title, '默认标题', '缺 title 走 i18n 安全默认')
-  // 合法入参仍按原样清洗透传
+  // 合法入参仍按原样清洗透传（B4 2026-09-25: 构造选项附带 notifyTimeoutOptsForApp 的 timeout/timeoutType）
   h.notification(fakeE, { title: 'Hello', body: 'World', silent: true })
-  assert.deepEqual(seen[seen.length - 1], { title: 'Hello', body: 'World', silent: true })
+  assert.deepEqual(seen[seen.length - 1], { title: 'Hello', body: 'World', silent: true, timeout: 300000, timeoutType: 'default' })
 })
 
 /* ---- F4: attachments 三通道 typeof 守卫(非字符串 url 不再 TypeError) ---- */

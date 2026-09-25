@@ -76,12 +76,18 @@ test(`perf: ${N} tasks review metrics build`, async () => {
   // code (2026-09-23). The assertion is now the amplification ratio big-vs-control with a 20x
   // margin — an order-of-magnitude algorithmic regression still fails; shared-CPU noise doesn't.
   const control = todoList.slice(0, Math.ceil(todoList.length / 8))
-  const tC = performance.now()
-  buildReviewMetrics({ todos: control, records: records.slice(0, 63), catNameOf: () => '未分类' }, period)
-  const ctrlCost = Math.max(performance.now() - tC, 1)
-  const t0 = performance.now()
-  const m = buildReviewMetrics({ todos: todoList, records, catNameOf: () => '未分类' }, period)
-  const cost = performance.now() - t0
+  // best-of-3 for both runs: a single GC/JIT pause mid-measurement (common under the unit wall's
+  // parallel load — 2026-09-25 full-suite red with cost > 20x control while the isolated run sat
+  // at 5x) must not read as an algorithmic regression. min() strips pauses; real slowdowns raise
+  // every repetition, so the 20x ceiling still catches order-of-magnitude regressions.
+  const run = (todos, recs) => {
+    const t = performance.now()
+    buildReviewMetrics({ todos, records: recs, catNameOf: () => '未分类' }, period)
+    return Math.max(performance.now() - t, 1)
+  }
+  const ctrlCost = Math.min(run(control, records.slice(0, 63)), run(control, records.slice(0, 63)), run(control, records.slice(0, 63)))
+  const m = buildReviewMetrics({ todos: todoList, records, catNameOf: () => '未分类' }, period) // warm-up outside timing
+  const cost = Math.min(run(todoList, records), run(todoList, records), run(todoList, records))
   assert.ok(m.done >= 0 && m.focusMins >= 0, 'metric structure complete')
   assert.ok(cost < ctrlCost * 20, `buildReviewMetrics took ${Math.round(cost)}ms vs ${Math.round(ctrlCost)}ms control — over the 20x amplification ceiling`)
   console.log(`    buildReviewMetrics(${N}+500) = ${Math.round(cost)}ms (control ${Math.round(ctrlCost)}ms)`)
