@@ -15,9 +15,10 @@
  * 每阶段计时输出;总时长汇总。依赖关系只允许出现在"阶段内部",池间/池内全部并行。
  */
 import { spawn, spawnSync } from 'node:child_process'
+import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import evtUtils from './event-utils.cjs'
 
 const WITH_A11Y = process.argv.includes('--a11y')
@@ -62,7 +63,7 @@ const GROUPS = [
       ['ESLint', 'node', ['node_modules/eslint/bin/eslint.js', 'renderer/js', 'cli', 'src', 'tests', '--quiet', '--cache']],
       ['vue-tsc 类型检查(SFC script lang=ts + 全局契约)', 'npm', ['run', 'typecheck']],
       // 经 check-test-summary.cjs 跑同一套 fail=0 + skip 棘轮校验(与 pre-commit 单一实现,防两处分叉)
-      ['单元测试（run-all 自动发现,fail=0+skip棘轮,勿手写清单）', 'node', ['cli/check-test-summary.cjs'], null, 30],
+      ['单元测试（run-all 自动发现,fail=0+skip棘轮,勿手写清单）', 'node', ['cli/check-test-summary.cjs'], null, 10],
     ]
   },
   {
@@ -153,13 +154,36 @@ function runStage (stage) {
   })
 }
 
+// ── flake 事件度量(2026-09-25 D2 效率波):runPool 重试通过的 stage 此前与一次通过同形、不落盘,
+// 活体池抖动率无从观测。重试通过即记一条事件(stage/attempt/首跑与重试耗时),结束后落盘 JSON
+// (tests/.artifacts/flake-events.json)并在汇总表打 ⚑ 标;单次 check:all 重试通过 stage 数 >2
+// 触发黄标警告(可执行门禁的观测面,不红——先观察 retry 触发率再谈收紧)。导出为纯函数供单测。
+const FLAKE_EVENTS = []
+export function resetFlakeEvents () { FLAKE_EVENTS.length = 0 }
+export function getFlakeEvents () { return FLAKE_EVENTS }
+export function evaluateFlakeThreshold (events, max = 2) {
+  return { count: events.length, max, level: events.length > max ? 'warn' : 'ok' }
+}
+export function writeFlakeEvents (events, dir, extra = {}) {
+  fs.mkdirSync(dir, { recursive: true })
+  const file = path.join(dir, 'flake-events.json')
+  fs.writeFileSync(file, JSON.stringify({ generatedAt: new Date().toISOString(), flakeCount: events.length, events, ...extra }, null, 2))
+  return file
+}
+
 // 并行池:并发上限 N,完成一个补一个,保持机器不被 Electron 实例打满
-async function runPool (stages, limit, { retry = 0 } = {}) {
+// opts.workerGate(i):第 i 个 worker 起跑前须先 await 的 gate(CI 流水线重叠用——第 2 条活体车道
+// 等静态池收尾才放行);opts.onLastStage:最后一个 stage 被 worker 领走时回调一次(静态池降到最后
+// 1 个 stage 时提前放行第 1 条活体车道)
+async function runPool (stages, limit, { retry = 0, onLastStage, workerGate } = {}) {
   const results = new Array(stages.length)
   let next = 0
-  async function worker () {
+  let tailCb = onLastStage
+  async function worker (idx) {
+    if (workerGate) await workerGate(idx)
     while (next < stages.length) {
       const i = next++
+      if (tailCb && next === stages.length) { const cb = tailCb; tailCb = null; cb() }
       process.stdout.write(`  ▶ [${i + 1}/${stages.length}] ${stages[i][0]} ... 启动\n`)
       results[i] = await runStage(stages[i])
       // 活体门禁在 3 车道并行负载下存在时序脆弱点(实测:更新链路单跑全绿,并行偶发红)——失败重试一次,
@@ -167,7 +191,10 @@ async function runPool (stages, limit, { retry = 0 } = {}) {
       for (let t = 0; t < retry && !results[i].ok; t++) {
         console.log(`  ↻ [${i + 1}/${stages.length}] ${stages[i][0]} 失败,重试 ${t + 1}/${retry} ...`)
         const r2 = await runStage(stages[i])
-        if (r2.ok) r2.ms += results[i].ms
+        if (r2.ok) {
+          r2.ms += results[i].ms
+          FLAKE_EVENTS.push({ stage: stages[i][0], attempt: t + 2, firstRunMs: results[i].ms, retryMs: r2.ms - results[i].ms })
+        }
         results[i] = r2
       }
       const r = results[i]
@@ -180,10 +207,13 @@ async function runPool (stages, limit, { retry = 0 } = {}) {
       }
     }
   }
-  await Promise.all(Array.from({ length: Math.min(limit, stages.length) }, worker))
+  await Promise.all(Array.from({ length: Math.min(limit, stages.length) }, (_, idx) => worker(idx)))
   return results
 }
 
+export { runPool, GROUPS }
+
+async function main () {
 const results = []
 // ① 构建先行（产物依赖,唯一硬串行;构建失败后续全无意义,直接短路）——fast 档纯静态,无产物依赖,跳过
 if (FAST) {
@@ -214,9 +244,26 @@ if (FAST) {
     console.log('\n===== [CI 模式+SKIP_LIVE] 只跑静态池(2 道),活体池由另一 OS job 独扛 =====')
     results.push(...await runPool(GROUPS[1].stages, 2))
   } else {
-    console.log('\n===== [CI 模式] 静态池(2 道)与 Electron 活体(1 道)顺序执行,不并发 =====')
-    results.push(...await runPool(GROUPS[1].stages, 2))
-    results.push(...await runPool(GROUPS[2].stages, 1, { retry: 1 }))
+    // 2026-09-25 D2 效率波:CI 两池不再纯顺序。①活体池 1→2 车道——活体开跑时静态池已结束、
+    // 机器空闲,'4 vCPU 挤爆'论证只针对两池并发场景(run 36123046333 口径活体 10 阶段串行 ~350s,
+    // 2 车道理论省 ~2.2min);②静态池降到最后 1 个 stage 时(workerGate/onLastStage 流水线钩子)
+    // 提前起第 1 条活体车道,静态池整体收尾后第 2 条车道放行——活体只依赖①构建产物,与静态池
+    // 无产物依赖,按 run 36123046333 时间线再省 ~4.2min。retry:1 兜底保留(与单测尾段并发有
+    // 抖动风险,flake 事件度量见 runPool——重试通过会落盘 flake-events.json 供观测)。
+    console.log('\n===== [CI 模式] 静态池(2 道)尾段与活体池流水线重叠;静态收尾后活体升 2 道 =====')
+    let fireTail = null
+    const staticTailStarted = new Promise(res => { fireTail = res })
+    const staticRsP = runPool(GROUPS[1].stages, 2, {
+      onLastStage: () => {
+        console.log('  ⇄ 静态池进入尾段(最后 1 个 stage),提前放行第 1 条活体车道')
+        fireTail()
+      }
+    })
+    const liveRs = await runPool(GROUPS[2].stages, 2, {
+      retry: 1,
+      workerGate: i => (i === 0 ? staticTailStarted : staticRsP)
+    })
+    results.push(...await staticRsP, ...liveRs)
   }
 } else {
   // 2026-09-21: 视觉池(④)并入同一波——它自拉起 6175 端口宿主(--strictPort,与活体池随机
@@ -243,9 +290,28 @@ for (const g of GROUPS.slice(FAST ? GROUPS.length : 4)) {
 }
 
 console.log('\n========== 体检汇总（按耗时降序） ==========')
-for (const r of [...results].sort((a, b) => b.ms - a.ms)) console.log(` ${r.ok ? '✓' : '✗'} ${fmtMs(r.ms).padStart(7)}  ${r.name}`)
+const flakeNames = new Set(FLAKE_EVENTS.map(e => e.stage))
+for (const r of [...results].sort((a, b) => b.ms - a.ms)) console.log(` ${r.ok ? '✓' : '✗'} ${fmtMs(r.ms).padStart(7)}  ${r.name}${flakeNames.has(r.name) ? '  ⚑flake(重试通过)' : ''}`)
 const failed = results.filter(r => !r.ok)
 const total = Date.now() - T0
-console.log(`\n${failed.length ? `✗ ${failed.length} 项失败: ${failed.map(f => f.name).join(' / ')}` : '✓ 全部通过'}（共 ${results.length} 项,总耗时 ${fmtMs(total)}）`)
+console.log(`\n${failed.length ? `✗ ${failed.length} 项失败: ${failed.map(f => f.name).join(' / ')}` : '✓ 全部通过'}（共 ${results.length} 项,总耗时 ${fmtMs(total)},flake 重试通过 ${FLAKE_EVENTS.length} 条）`)
+// flake 事件落盘:重试通过 stage 此前与一次通过同形,抖动率无从观测(D2 效率波新增)
+if (FLAKE_EVENTS.length) {
+  try {
+    const file = writeFlakeEvents(FLAKE_EVENTS, path.join(ROOT, 'tests', '.artifacts'), { totalStages: results.length, totalMs: total })
+    console.log(`flake 事件已落盘: ${file}`)
+  } catch (e) { console.warn(`  [warn] flake-events.json 写入失败: ${e.message}`) }
+}
+const flakeVerdict = evaluateFlakeThreshold(FLAKE_EVENTS)
+if (flakeVerdict.level === 'warn') console.log(`⚠ [flake-gate] 单次 check:all 重试通过 stage 数 ${flakeVerdict.count} > 阈值 ${flakeVerdict.max} —— 活体池抖动超标,黄标警告(不红;连续超标再考虑降道/修时序)`)
 if (!WITH_A11Y) console.log('提示: a11y 实测需活应用,加 --a11y 追加(cli/a11y-scan.js)')
 process.exit(failed.length ? 1 : 0)
+}
+
+// 仅直接执行时跑主流程;被单测 import 时只暴露 runPool/flake 纯函数(tests/unit/cli/check-all-flake-metrics.test.mjs)
+const AS_MAIN = (() => {
+  const a = String(process.argv[1] || '')
+  return a.replace(/\\/g, '/').toLowerCase().endsWith('/check-all.js') ||
+    (() => { try { return pathToFileURL(a).href === import.meta.url } catch { return false } })()
+})()
+if (AS_MAIN) await main()
