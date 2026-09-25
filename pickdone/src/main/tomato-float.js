@@ -77,8 +77,20 @@ function isUserClosed () {
 function ensureScreenHooks () {
   if (screenHooksOn) return
   screenHooksOn = true
-  screen.on('display-metrics-changed', () => { if (win && !win.isDestroyed()) setBounds() })
-  screen.on('display-removed', () => { if (win && !win.isDestroyed()) setBounds() })
+  screen.on('display-metrics-changed', () => safeReclamp())
+  screen.on('display-removed', () => safeReclamp())
+}
+
+// C8 (2026-09-26): both screen-event callbacks synchronously ran setBounds() → defaultBounds()
+// → screen.getPrimaryDisplay().bounds with no try/catch — a throw from the screen API during
+// the display-removal transition fired an UNCAUGHT EXCEPTION in the main process. Same hardening
+// convention as startHitPoll's tick ('transient screen API errors must not break the poll') and
+// undock's applyIgnore: the re-clamp intent stays, a failure becomes a logged no-op.
+function safeReclamp () {
+  try {
+    if (win && !win.isDestroyed()) setBounds()
+  } catch (e) { try { log.warn('[TomatoFloat] display-change re-clamp failed', e) } catch { /* logging is best-effort */ }
+  }
 }
 
 function dock () {
@@ -374,6 +386,9 @@ module.exports = {
   isPanelOpen, // panel-state getter (unit tests pin the F10 'closed' reset)
   isUserClosed, // closed-marker getter (unit tests pin the F12 marker lifecycle)
   clampDrag, // drag clamp pure function (for unit tests)
+  safeReclamp, // C8: guarded re-clamp (unit tests prove the screen-event path cannot throw)
+  __forceWin (w) { win = w }, // C8 test seam: inject a stub window so the guarded path is reachable
+  __clearWin () { win = null }, // C8 test seam
   /** Show (setBounds + showInactive if already created; common practice: do not steal focus) */
   show () {
     crashRebuild.reset() // C10: an explicit user open is the strongest health signal — refill rebuild slots
