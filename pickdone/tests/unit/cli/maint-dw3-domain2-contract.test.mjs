@@ -7,15 +7,15 @@
  * Run: node --test tests/unit/cli/maint-dw3-domain2-contract.test.mjs
  */
 import '../../setup.mjs'
-import { test } from 'node:test'
-import assert from 'node:assert/strict'
-import os from 'node:os'
 import path from 'node:path'
 import fs from 'node:fs'
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
 import { createRequire } from 'module'
 import { fileURLToPath } from 'node:url'
+import { isolatedTmpDir } from '../../lib/tmp-dir.mjs'
 
-process.env.TODO_DB_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'todo-dw3-domain2-'))
+process.env.TODO_DB_DIR = isolatedTmpDir('todo-dw3-domain2-')
 const here = path.dirname(fileURLToPath(import.meta.url))
 const require_ = createRequire(import.meta.url)
 const db = require_('../../../src/main/db.js')
@@ -164,7 +164,7 @@ test('F-B6: cli/audit rotates to timestamped archives (no destructive .1) and sh
   const appAuditSrc = fs.readFileSync(path.join(here, '../../../src/main/audit.js'), 'utf8')
   assert.match(appAuditSrc, /shared\/audit-rotate\.cjs/, 'App consumes the same shared rotation module')
   const { rotateArchive } = await import('../../../shared/audit-rotate.cjs')
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'todo-dw3-rot-'))
+  const tmp = isolatedTmpDir('todo-dw3-rot-')
   const file = path.join(tmp, 'cli-audit.jsonl')
   fs.writeFileSync(file, '{"n":1}\n')
   rotateArchive(file)
@@ -177,7 +177,7 @@ test('F-B6: cli/audit rotates to timestamped archives (no destructive .1) and sh
 
 test('F-B7: appendEntry buffers (sync read sees nothing until flushNow) and flushNow lands every line', async () => {
   const appAudit = require_('../../../src/main/audit.js')
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'todo-dw3-flush-'))
+  const tmp = isolatedTmpDir('todo-dw3-flush-')
   appAudit.resetForTests()
   appAudit.setDirResolver(() => tmp)
   try {

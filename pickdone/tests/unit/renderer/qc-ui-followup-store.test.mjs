@@ -12,6 +12,8 @@ import '../../setup.mjs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
+import { todayMidnightMs } from '../../lib/clock.mjs'
+
 if (!globalThis.window.location) globalThis.window.location = { hash: '' }
 
 const dbCalls = []
@@ -43,7 +45,7 @@ const callsOf = op => dbCalls.filter(([o]) => o === op).map(([, p]) => p)
 const resetCalls = () => { dbCalls.length = 0 }
 
 const DAY = 86400000
-const today0 = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime() })()
+const today0 = todayMidnightMs() // D4 clock determinism: noon-anchored via tests/lib/clock.mjs
 
 const todo = (await import('../../../renderer/js/store/todo.js')).default
 const category = (await import('../../../renderer/js/store/category.js')).default

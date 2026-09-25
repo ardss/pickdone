@@ -7,15 +7,15 @@
  * Behavior tests spawn the real CLI against an isolated temp better-sqlite3 DB.
  * Run: node --test tests/unit/cli/qc-followup-20260920.test.mjs */
 import { test } from 'node:test'
-import assert from 'node:assert/strict'
-import os from 'node:os'
 import path from 'node:path'
 import fs from 'node:fs'
+import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { createRequire } from 'module'
 import { fileURLToPath } from 'node:url'
+import { isolatedTmpDir } from '../../lib/tmp-dir.mjs'
 
-process.env.TODO_DB_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'todo-qc-followup-'))
+process.env.TODO_DB_DIR = isolatedTmpDir('todo-qc-followup-')
 const require_ = createRequire(import.meta.url)
 const db = require_('../../../src/main/db.js')
 db.init(process.env.TODO_DB_DIR)
@@ -96,7 +96,7 @@ test('M-13: pidsFromNetstatOutput parses unique numeric pids, tolerates garbage'
 const vpLib = require_('../../../scripts/verify-packaged-lib.cjs')
 
 test('M-14: findMissingRequires resolves recursive/escape/bare requires in a simulated resources tree', () => {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'm14-sim-'))
+  const tmp = isolatedTmpDir('m14-sim-')
   const resRoot = path.join(tmp, 'resources')
   const cliRoot = path.join(resRoot, 'cli')
   // Landed tree: cli root + cli/lib subdir; ../src/main escape target; bare node_modules

@@ -75,7 +75,8 @@ function red (msg, tapFile) {
   process.exit(1)
 }
 
-const arg = process.argv[2]
+// Only a non-flag argument is a TAP-file path; flags (--with-coverage) are options
+const arg = process.argv.slice(2).find(a => !a.startsWith('--')) ?? null
 let tapFile = arg || null
 let exitCode = 0
 
@@ -85,7 +86,10 @@ if (arg) {
   // 主管道模式:跑全量单测,TAP 重定向进临时文件(不靠管道,exit code 不被吞)
   tapFile = path.join(os.tmpdir(), `check-test-summary-${process.pid}-${Date.now()}.tap`)
   const fd = fs.openSync(tapFile, 'w')
-  const r = spawnSync(process.execPath, ['tests/run-all.mjs'], {
+  // --with-coverage: forward --experimental-test-coverage so run-all also writes the coverage
+  // summary for the ratchet gate (avoids a second concurrent full-suite run)
+  const extra = process.argv.includes('--with-coverage') ? ['--experimental-test-coverage'] : []
+  const r = spawnSync(process.execPath, ['tests/run-all.mjs', ...extra], {
     cwd: path.join(__dirname, '..'),
     stdio: ['ignore', fd, fd], // TAP 输出全量落盘,失败时回放尾部
   })

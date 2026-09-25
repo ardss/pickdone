@@ -4,15 +4,14 @@
  * "vanishing". Behavior tests spawn the real CLI against an isolated temp better-sqlite3 DB.
  */
 import { test } from 'node:test'
-import assert from 'node:assert/strict'
-import os from 'node:os'
 import path from 'node:path'
-import fs from 'node:fs'
+import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { createRequire } from 'module'
 import { fileURLToPath } from 'node:url'
+import { isolatedTmpDir } from '../../lib/tmp-dir.mjs'
 
-process.env.TODO_DB_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'todo-qc2-get-est-'))
+process.env.TODO_DB_DIR = isolatedTmpDir('todo-qc2-get-est-')
 const require_ = createRequire(import.meta.url)
 const db = require_('../../../src/main/db.js')
 

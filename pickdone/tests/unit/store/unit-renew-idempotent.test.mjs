@@ -7,15 +7,14 @@ import os from 'node:os'
 import path from 'node:path'
 import fs from 'node:fs'
 import { createRequire } from 'module'
+import { todayMidnightMs } from '../../lib/clock.mjs'
 const require_ = createRequire(import.meta.url)
 
 function tmpDir () { return fs.mkdtempSync(path.join(os.tmpdir(), 'todo-renew-')) }
 function seedDefaultCat (db) {
   db.call('upsertCategory', { id: 0, userId: 1, name: 'default', color: '#000', createdAt: Date.now(), sort: 0, isFolder: 0, parentId: 0, deleted: 0 })
 }
-function today0 () {
-  const d = new Date(); d.setHours(0, 0, 0, 0); return +d
-}
+const today0 = () => todayMidnightMs() // D4 clock determinism: noon-anchored via tests/lib/clock.mjs
 
 test('addTodo idempotency: a second addTodo with the same rid + same dayStart returns the existing instance', () => {
   process.env.TODO_DB_DIR = tmpDir()

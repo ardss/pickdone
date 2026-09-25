@@ -8,10 +8,10 @@ const CDP = process.env.TODO_CDP || 'http://127.0.0.1:9333'
 // Watchdog: any stage hanging (e.g. a dead CDP connection) forces an exit instead of wedging CI.
 // The WS must be closed before exiting - a dangling DevTools client pins the target proxy, making the next connection unresponsive
 const watchdog = setTimeout(() => {
-  console.error('FAIL: smoke script did not finish within 90s; forcing exit')
+  console.error('FAIL: smoke script did not finish within 300s; forcing exit')
   try { ws?.close() } catch {}
   process.exit(1)
-}, 90000)
+}, 300000) // 90s→300s (2026-09-26 check:all red): the script alone holds ~4 reloads x up-to-30s boot waits + a 30s time-blocks poll; under pool saturation those wall-clock waits alone blew past 90s and the watchdog killed a run that was still making progress (the live gate stage itself has a 20min ceiling)
 watchdog.unref?.()
 process.on('exit', () => { try { ws?.close() } catch {} })
 

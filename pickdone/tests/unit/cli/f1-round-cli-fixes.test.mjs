@@ -2,13 +2,13 @@
  *  TODO_DB_DIR — never touches real data (f6-cli-round6-fixes pattern).
  *  Run: node --test tests/unit/cli/f1-round-cli-fixes.test.mjs */
 import { test } from 'node:test'
-import assert from 'node:assert/strict'
-import os from 'node:os'
 import path from 'node:path'
 import fs from 'node:fs'
+import assert from 'node:assert/strict'
 import { createRequire } from 'module'
+import { isolatedTmpDir } from '../../lib/tmp-dir.mjs'
 
-process.env.TODO_DB_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'todo-cli-f1-'))
+process.env.TODO_DB_DIR = isolatedTmpDir('todo-cli-f1-')
 const require_ = createRequire(import.meta.url)
 const db = require_('../../../src/main/db.js')
 const lib = require_('../../../cli/lib.js')
@@ -75,7 +75,7 @@ test('fix4: deleteTodo writes version:0 (syncTodos excludes acked delete rows wi
 /* ---------- Fix 5: removeAttachment collapses the key to a basename (path traversal) ---------- */
 test('fix5: removeAttachment with a local://..%2F.. traversal key cannot delete files outside userData/files', () => {
   const t = seed({ taskContent: 'f1穿越任务' })
-  const victimDir = fs.mkdtempSync(path.join(os.tmpdir(), 'f1-victim-'))
+  const victimDir = isolatedTmpDir('f1-victim-')
   const victim = path.join(victimDir, 'db.key')
   fs.writeFileSync(victim, 'secret')
   // Row carries an encoded traversal key; removeAttachment must refuse to resolve it outside files/
@@ -99,7 +99,7 @@ test('fix5: removeAttachment with a local://..%2F.. traversal key cannot delete 
 /* ---------- Fix 6: addAttachment uses nextFreePath (no same-millisecond overwrite) ---------- */
 test('fix6: addAttachment does not overwrite an existing same-name file (nextFreePath suffixing)', () => {
   const t = seed({ taskContent: 'f1附件任务' })
-  const srcDir = fs.mkdtempSync(path.join(os.tmpdir(), 'f1-src-'))
+  const srcDir = isolatedTmpDir('f1-src-')
   const src = path.join(srcDir, 'note.txt')
   fs.writeFileSync(src, 'first')
   const first = lib.addAttachment(String(t.taskId), src)

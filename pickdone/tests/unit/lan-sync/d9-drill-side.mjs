@@ -97,7 +97,8 @@ const handlers = {
   start ({ dir, deviceId }) {
     if (!path.isAbsolute(dir)) dir = path.join(os.tmpdir(), dir)
     setup({ dir, deviceId })
-    return { port: null }
+    // echo the resolved dir: lets the concurrency smoke assert each side owns its own data dir
+    return { port: null, dir }
   },
   async port () {
     const p = await node.whenListening()

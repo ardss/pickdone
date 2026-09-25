@@ -3,13 +3,13 @@
  *  Assertion discipline: verify business-semantic values (exact counts/field values/side-effect contents); no tautological "returned an object so it passes" assertions.
  *  Run: npm test */
 import { test } from 'node:test'
-import assert from 'node:assert/strict'
-import os from 'node:os'
 import path from 'node:path'
 import fs from 'node:fs'
+import assert from 'node:assert/strict'
 import { createRequire } from 'module'
+import { isolatedTmpDir } from '../../lib/tmp-dir.mjs'
 
-process.env.TODO_DB_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'todo-cli-lib-'))
+process.env.TODO_DB_DIR = isolatedTmpDir('todo-cli-lib-')
 const require_ = createRequire(import.meta.url)
 const db = require_('../../../src/main/db.js')
 const lib = require_('../../../cli/lib.js')
@@ -206,7 +206,7 @@ test('CLI data-safety: ui-smoke --launch fails fast without any isolation env', 
 
 test('CLI data-safety: lib.userDataDir accepts TODO_USER_DATA_DIR as fallback (TODO_DB_DIR keeps priority)', () => {
   const savedDbDir = process.env.TODO_DB_DIR
-  const uddRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'todo-udd-'))
+  const uddRoot = isolatedTmpDir('todo-udd-')
   delete process.env.TODO_DB_DIR
   process.env.TODO_USER_DATA_DIR = uddRoot
   try {
@@ -223,7 +223,7 @@ test('CLI data-safety: lib.userDataDir accepts TODO_USER_DATA_DIR as fallback (T
 })
 
 test('CLI data-safety: restore-backup without args lists auto snapshots and never writes the DB', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'todo-restore-'))
+  const dir = isolatedTmpDir('todo-restore-')
   fs.mkdirSync(path.join(dir, 'backups'))
   fs.writeFileSync(path.join(dir, 'backups', 'auto-20260901-120000.json'), JSON.stringify({ todos: [{ taskId: 'a' }], categories: [] }))
   const r = spawnSync(process.execPath, [CLI('pickdone.js'), 'restore-backup'], {

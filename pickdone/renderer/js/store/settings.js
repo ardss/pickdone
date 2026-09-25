@@ -420,6 +420,17 @@ export default {
       const prevLocale = state.appLocale
       const merged = clampNumericSettings(coerceNumericSettings({ ...DEFAULT_SETTINGS, ...(saved || {}) }))
       if (merged.shortcutKeySettings === DEFAULT_SETTINGS.shortcutKeySettings) merged.shortcutKeySettings = { ...DEFAULT_SHORTCUTS }
+      // appLocale write-back race (2026-09-26 check:all confirmed red): a DB blob whose appLocale is
+      // still the untouched default ('zh-CN') must not clobber an LS-forced boot locale. load() already
+      // adopts LS in exactly this case (see the Y1/Y3 seeding above, merged.appLocale === default →
+      // adopt localStorage); restore happening a beat AFTER boot was missing the same adoption, so on a
+      // fresh/isolated instance it wrote 'zh-CN' back over LS 'appLocale'='en-US' and hot-flipped the UI
+      // to zh mid-session (ui-smoke's 'Todo box' highlight + 'Time blocks' text assertions failed on it).
+      // Same rule, same precedence: blob==default → LS wins. An explicitly chosen locale writes BOTH
+      // stores (setLocale / update action), so a real user's explicit choice is never overridden here.
+      if (merged.appLocale === DEFAULT_SETTINGS.appLocale) {
+        try { const ls = localStorage.getItem('appLocale'); if (ls) merged.appLocale = ls } catch (e) { /* empty */ }
+      }
       Object.assign(state, merged)
       persist(state)
       // maint-d7: restore used to be a bare Object.assign+persist — no `settings/update` action, so

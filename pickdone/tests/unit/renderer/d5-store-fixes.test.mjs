@@ -24,6 +24,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { todayMidnightMs } from '../../lib/clock.mjs'
+
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const read = p => fs.readFileSync(path.join(ROOT, p), 'utf8')
 
@@ -51,7 +53,7 @@ const callsOf = op => dbCalls.filter(([o]) => o === op).map(([, p]) => p)
 const resetCalls = () => { dbCalls.length = 0 }
 
 const DAY = 86400000
-const today0 = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime() })()
+const today0 = todayMidnightMs() // D4 clock determinism: noon-anchored via tests/lib/clock.mjs
 
 /* ---------- modules under test (imported once; singletons) ---------- */
 const tomato = (await import('../../../renderer/js/store/tomato.js')).default

@@ -97,12 +97,22 @@ test('contract mirror: renderer helpers match the main-process announce module e
     { deviceId: 'a', deviceName: 'A', status: 'weird', startedAt: 1, plannedSec: 10, at: now },
     null,
   ]
-  for (const f of fixtures) {
-    const rb = buildAnnounceValue(f || {})
-    const mb = taMain.buildAnnounceValue(f || {})
-    assert.deepEqual(rb, mb, 'buildAnnounceValue must match (status field compares equal)')
-    const built = taMain.buildAnnounceValue(f || {})
-    assert.equal(isStaleAnnounce(built, now), taMain.isStaleAnnounce(built, now), 'isStaleAnnounce must match')
-    assert.equal(remainSecOfAnnounce(built, now), taMain.remainSecOfAnnounce(built, now), 'remainSecOfAnnounce must match')
+  // Pin Date.now for the empty-input fixtures (null/{} have no `at`, so both builders fall
+  // back to Date.now()): deepEqual compares `at` strictly, and a 1ms tick between the renderer
+  // and main builds made this red under parallel-pool load (2026-09-26 check:all, twice) while
+  // solo runs stayed green — a clock race, not a contract drift.
+  const realNow = Date.now
+  Date.now = () => now
+  try {
+    for (const f of fixtures) {
+      const rb = buildAnnounceValue(f || {})
+      const mb = taMain.buildAnnounceValue(f || {})
+      assert.deepEqual(rb, mb, 'buildAnnounceValue must match (status field compares equal)')
+      const built = taMain.buildAnnounceValue(f || {})
+      assert.equal(isStaleAnnounce(built, now), taMain.isStaleAnnounce(built, now), 'isStaleAnnounce must match')
+      assert.equal(remainSecOfAnnounce(built, now), taMain.remainSecOfAnnounce(built, now), 'remainSecOfAnnounce must match')
+    }
+  } finally {
+    Date.now = realNow
   }
 })

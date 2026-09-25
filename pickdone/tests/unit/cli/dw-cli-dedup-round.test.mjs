@@ -13,12 +13,10 @@
 import '../../setup.mjs' // window/i18n shims — the P3-7 check imports the renderer's utils/core.js
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import os from 'node:os'
-import path from 'node:path'
-import fs from 'node:fs'
 import { createRequire } from 'module'
+import { isolatedTmpDir } from '../../lib/tmp-dir.mjs'
 
-process.env.TODO_DB_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'todo-dw-dedup-'))
+process.env.TODO_DB_DIR = isolatedTmpDir('todo-dw-dedup-')
 const require_ = createRequire(import.meta.url)
 const db = require_('../../../src/main/db.js')
 const lib = require_('../../../cli/lib.js')

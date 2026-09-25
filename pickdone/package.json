@@ -26,6 +26,7 @@
     "smoke:ui": "node tests/ui-smoke.mjs",
     "it": "node tests/integration-ui.test.mjs",
     "test:coverage": "node tests/run-all.mjs --experimental-test-coverage --test-coverage-exclude=**/node_modules/** --test-coverage-exclude=**/better-sqlite3-multiple-ciphers/**",
+    "check:coverage-ratchet": "node cli/check-coverage-ratchet.cjs",
     "lint": "eslint renderer/js cli src tests --ext .js,.vue,.cjs,.mjs",
     "lint:fix": "eslint renderer/js cli src tests --ext .js,.vue,.cjs,.mjs --fix",
     "check": "npm run lint -- --quiet && npm test && npm run smoke:cli",

@@ -1,15 +1,14 @@
 /** Regression for review P1 (2026-09-10): `list --view` used to fetch with the default row cap and only
  *  filter afterwards — libraries with more tasks than the cap silently lost matching rows vs the app's
  *  FilterView. The view's conds are now pushed into the query (dateMode/category/done, limit 500). */
-import path from 'node:path'
-import fs from 'node:fs'
-import os from 'node:os'
 import { execFileSync } from 'node:child_process'
+import path from 'node:path'
 import { createRequire } from 'module'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { isolatedTmpDir } from '../../lib/tmp-dir.mjs'
 
-process.env.TODO_DB_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'todo-view-cap-'))
+process.env.TODO_DB_DIR = isolatedTmpDir('todo-view-cap-')
 const require_ = createRequire(import.meta.url)
 const db = require_('../../../src/main/db.js')
 const lib = require_('../../../cli/lib.js')
