@@ -28,7 +28,7 @@ export function buildBackupDump (rootState, state, { stripVolatileSettings = fal
         schemaV: SCHEMA_V,
         search: state.search, todoList: state.todoList, recycleList: state.recycleList, version: state.version,
         remoteVersion: state.remoteVersion, todayTimestamp: state.todayTimestamp,
-        ignoreReminder: state.ignoreReminder, todosVersion: state.todosVersion, isSyncing: false,
+        todosVersion: state.todosVersion, isSyncing: false,
         views: {}
       }),
       // 账本行集随份走(blob 已被掏空,不含记录;恢复端按行表幂等回灌)——无它则 JSON 灾备恢复任务回而专注账全丢
@@ -67,7 +67,11 @@ export async function collectPlanState () {
 export async function writeEventBackupCore (ctx, { state, rootState }, reason) {
   try {
     if (!window.todoAPI || !window.todoAPI.runAutoBackup) return false
-    const dump = buildBackupDump(rootState, state, { planState: await collectPlanState() })
+    // B14 (daily 2026-09-25): evt snapshots strip volatile settings too — before this, only auto
+    // backups passed stripVolatileSettings, so two identical business states produced different
+    // evt dump bytes (autoBackupLastAt etc. tick between them) and handlers/backup.js's whole-blob
+    // content dedup never hit for event snapshots.
+    const dump = buildBackupDump(rootState, state, { stripVolatileSettings: true, planState: await collectPlanState() })
     const r = await window.todoAPI.runAutoBackup(JSON.stringify(dump), { tag: String(reason || 'op').toLowerCase(), eventKeep: 10, backupDir: rootState.settings.backupDir || '' })
     if (r && r.ok) { saveRuntime({ eventBackupLastFailAt: 0, eventBackupLastError: '' }); return true }
     saveRuntime({ eventBackupLastFailAt: Date.now(), eventBackupLastError: String((r && r.error) || 'backup failed').slice(0, 160) })
@@ -106,7 +110,10 @@ export function writeCriticalBackupCore (ctx, { state, rootState }) {
   try {
     if (isAuxWindow()) return // centralized detection (review P3 2026-09-22)
   } catch { /* non-browser env */ }
-  const buildDump = async () => buildBackupDump(rootState, state, { planState: await collectPlanState() })
+  // B14 (daily 2026-09-25): strip volatile settings here too — same rationale as writeEventBackupCore
+  // above: identical business states must produce byte-identical critical dumps so the main process's
+  // whole-string content dedup (handlers/backup.js) can hit.
+  const buildDump = async () => buildBackupDump(rootState, state, { stripVolatileSettings: true, planState: await collectPlanState() })
   const writeNow = () => {
     try {
       // D6-F14: chips read is async — the write becomes a promise chain (fire-and-forget as before)

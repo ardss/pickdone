@@ -74,7 +74,7 @@ test('F7/F17: buildBackupDump no longer writes the dead user/lastLoginRecord/tom
   LS.set('tomatoState', '{"todayTomatoCount":3}')
   const dump = buildBackupDump(
     { settings: {}, auth: { user: { name: 'x' }, lastLoginRecord: { t: 1 } }, category: { list: [] }, habits: { habits: [], moments: [] }, tomato: null, filters: { list: [] } },
-    { search: '', todoList: [], recycleList: [], version: 0, remoteVersion: 0, todayTimestamp: 0, ignoreReminder: {}, todosVersion: '0' }
+    { search: '', todoList: [], recycleList: [], version: 0, remoteVersion: 0, todayTimestamp: 0, todosVersion: '0' }
   )
   const keys = Object.keys(dump.backup)
   for (const dead of ['user', 'lastLoginRecord', 'tomatoState']) {

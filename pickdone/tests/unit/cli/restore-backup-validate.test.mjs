@@ -38,7 +38,7 @@ function realDump ({ todos = 3, cats = 2, schemaV = 1 } = {}) {
     backup: {
       settingsState: JSON.stringify({ backupDir: '', schemaV: 1 }),
       todoState: JSON.stringify({
-        schemaV, version: 0, remoteVersion: 0, todayTimestamp: Date.now(), ignoreReminder: {}, todosVersion: '0', isSyncing: false, views: {},
+        schemaV, version: 0, remoteVersion: 0, todayTimestamp: Date.now(), todosVersion: '0', isSyncing: false, views: {},
         todoList: Array.from({ length: todos }, (_, i) => ({ taskId: 'rt' + i, taskContent: '任务' + i })),
         recycleList: [{ taskId: 'rb1', taskContent: '回收站', delete: true }]
       }),

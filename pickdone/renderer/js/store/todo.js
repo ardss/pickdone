@@ -53,7 +53,6 @@ export default {
     todosVersion: 0,         // synced cursor (meta)
     remoteVersion: 0,
     todayTimestamp: Date.now(),
-    ignoreReminder: 0,
     recentlyAddedTaskId: '',
     lastCreatedTodoTaskId: '',
     // Undo/redo (Ctrl+Z / Ctrl+Y): whole-table snapshots taken before mutation-type actions, valid per session, not persisted
