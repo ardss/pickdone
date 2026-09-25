@@ -53,10 +53,15 @@ test(`perf: ${N} tasks computeViews full grouping computation`, async () => {
     commit: (type, p) => { if (type === 'setViews') s.views = p },
     dispatch: async () => {}
   }
-  const t0 = performance.now()
-  // Inside a Vuex action this points to the store instance (computeViews reads this.state.todo)
-  await todo.actions.computeViews.call({ state: { todo: s } }, ctx)
-  const cost = performance.now() - t0
+  // best-of-3 (2026-09-25 pre-commit 实锤:满载机器单次测量撞 3s 天花板,同 review-metrics 的
+  // 暂停噪声问题)——min() 剔除 GC/JIT/并行负载暂停,真实量级退化每次都慢,天花板仍有效
+  const runOnce = async () => {
+    const t0 = performance.now()
+    // Inside a Vuex action this points to the store instance (computeViews reads this.state.todo)
+    await todo.actions.computeViews.call({ state: { todo: s } }, ctx)
+    return performance.now() - t0
+  }
+  const cost = Math.min(await runOnce(), await runOnce(), await runOnce())
   const total = Object.values(s.views).reduce((n, v) => n + (Array.isArray(v) ? v.length : 0), 0)
   assert.ok(total > 0, `view arrays non-empty (the computation really happened), keys=${Object.keys(s.views).join(',')}`)
   assert.ok(cost < 3000, `computeViews took ${Math.round(cost)}ms for ${N} tasks, over the 3s ceiling (order-of-magnitude degradation)`)

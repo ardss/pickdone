@@ -90,14 +90,24 @@ if (SPAWN) {
     if (!busy) break
     await new Promise(r => setTimeout(r, 500))
   }
-  viteChild = cpSpawn('npm', ['run', 'dev', '--', '--port', PORT, '--strictPort'], { cwd: path.join(ROOT, 'browser-dev'), shell: true, stdio: 'ignore' })
-  let up = false
-  for (let t = 0; t < 40000 && !up; t += 500) {
+  // vite stdout/stderr 落盘而非 'ignore'(2026-09-25 check:all 实锤:spawn 宿主秒启秒死时零线索,
+  // 只能对着"宿主未启动"猜)——EACCES(WinNAT 排除段)/EADDRINUSE/配置错都会在这里现形
+  const viteLogPath = path.join(DIR, 'vite-spawn.log')
+  const viteLog = fs.openSync(viteLogPath, 'w')
+  viteChild = cpSpawn('npm', ['run', 'dev', '--', '--port', PORT, '--strictPort'], { cwd: path.join(ROOT, 'browser-dev'), shell: true, stdio: ['ignore', viteLog, viteLog] })
+  // 就绪判定须连续 3 次探活成功(2026-09-25 check:all 实锤:残留旧宿主垂死期间仍能应答 1 次,
+  // 单次 OK 即判 up → preflight 时宿主已死,"宿主未启动"。连续探活+短间隔排除垂死宿主假信号)
+  let upStreak = 0
+  for (let t = 0; t < 40000 && upStreak < 3; t += 500) {
     await new Promise(r => setTimeout(r, 500))
-    try { if ((await fetch(BASE, { signal: AbortSignal.timeout(2000) })).ok) up = true } catch { /* retry */ }
+    let ok = false
+    try { ok = (await fetch(BASE, { signal: AbortSignal.timeout(2000) })).ok } catch { /* retry */ }
+    upStreak = ok ? upStreak + 1 : 0
   }
+  const up = upStreak >= 3
+  try { fs.closeSync(viteLog) } catch { /* already closed */ }
   if (!up) {
-    console.error('✗ visual-web --spawn: 40s 内 port '+PORT+' 宿主未就绪(vite 启动失败?)')
+    console.error('✗ visual-web --spawn: 40s 内 port '+PORT+' 宿主未就绪(vite 启动失败?日志: tests/.artifacts/visual-web/vite-spawn.log)')
     killVite()
     process.exit(2)
   }
