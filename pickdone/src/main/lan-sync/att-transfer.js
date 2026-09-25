@@ -39,6 +39,16 @@ function extAllowed (key) {
   const ext = path.extname(base).slice(1).toLowerCase()
   return !!ext && allowed.has(ext)
 }
+// C14-cross (2026-09-25 adversarial-review follow-up): `noise-custom.*` is the LOCAL
+// white-noise pick slot and is EXEMPT from the attachment quota since C14 (attachments.js
+// isUnownedNoiseFile). The LAN ingress must never land such files: a malicious (or buggy)
+// peer could otherwise park a quota-exempt file under every whitelisted extension
+// (noise-custom.png, noise-custom.pdf, …) that no white-noise write ever overwrites (the
+// pick only ever writes noise-custom.<mp3|wav|ogg>) — a persistent quota escape.
+function reservedNoiseSlot (key) {
+  const base = path.basename(String(key))
+  try { return require('../attachments').isUnownedNoiseFile(base) } catch { return /^noise-custom\./.test(base) }
+}
 // Single-file ceiling (mirrors the upload handler's 50MB limit): the sender refuses to
 // serve anything larger and the receiver refuses to accept anything larger.
 const MAX_FILE_BYTES = 50 * 1024 * 1024
@@ -136,6 +146,9 @@ function defaultDeps () {
       // F-A2 defense-in-depth: the whitelist also gates the disk layer itself, so a future
       // caller bypassing the puller cannot land a script-capable file (extAllowed fail-closed).
       if (!extAllowed(key)) throw new Error('attachment: extension not allowed')
+      // C14-cross: the quota-exempt white-noise slot name shape never arrives over LAN
+      // (disk-layer twin of the puller gate below — defense in depth, same as F-A2).
+      if (reservedNoiseSlot(key)) throw new Error('attachment: reserved white-noise slot name')
       const dst = path.join(attachDir(), path.basename(String(key)))
       const tmp = `${dst}.att-tmp-${Date.now()}-${Math.floor(Math.random() * 1e6)}`
       let finalDst = dst
@@ -451,6 +464,11 @@ function createAttachmentPuller (opts = {}) {
           // lands in the per-session failed-set (no retry loop), nothing touches the disk.
           try { require('electron-log').warn('[LanSync] attachment extension not allowed, skipped:', id) } catch { /* noop */ }
           markFailed(id)
+        } else if (reservedNoiseSlot(id)) {
+          // C14-cross: the quota-exempt noise slot name shape is unclaimable over LAN — a peer
+          // could otherwise persist quota-exempt files that the white-noise pick never clears.
+          try { require('electron-log').warn('[LanSync] attachment reserved noise-slot name, skipped:', id) } catch { /* noop */ }
+          markFailed(id)
         } else {
           try { d.writeAtomic(id, full); session.failed.delete(id) } catch (e) {
             try { require('electron-log').warn('[LanSync] attachment write failed:', id, e && e.message) } catch { /* noop */ }
@@ -504,4 +522,5 @@ module.exports = {
   collectMissingKeys,
   createAttachmentServer,
   createAttachmentPuller,
+  defaultDeps, // test hook (C14-cross): lets unit tests reach the real disk layer directly
 }
