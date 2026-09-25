@@ -73,7 +73,7 @@ test('A7 EditPanel: Esc close returns focus like collapse()', () => {
   assert.match(src, /ui\/closeEditCleanup'\)[\s\S]{0,120}this\.refocusRow\(st\.taskId\)/, 'Esc path refocuses the edited row')
   const collapseFn = src.slice(src.indexOf('collapse () {'), src.indexOf('refocusRow (id)'))
   assert.match(collapseFn, /this\.refocusRow\(/, 'collapse() funnels through the same helper')
-  assert.match(src, /refocusRow \(id\) \{[\s\S]*?\.td-item\[/, 'helper targets the task row')
+  assert.match(src, /refocusRow \(id\) \{[\s\S]*?findTaskRowEl\(id\)/, 'helper targets the task row (shared Vue2/Vue3-aware locator)')
 })
 
 test('A8 TodoBoxView: dd-menus handle ArrowUp/Down cycling and Escape close', () => {

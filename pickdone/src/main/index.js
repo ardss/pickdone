@@ -495,7 +495,11 @@ if (!app.requestSingleInstanceLock()) { app.quit() } else {
       })
       // app.exit does not trigger will-quit: the relaunch path must explicitly unregister system hotkeys (otherwise the new instance misreports registration conflicts)
       const relaunchClean = () => { app.relaunch(); shortcuts.unregisterAll(); app.exit(0) }
-      if (choice === 0 && recovered) {
+      // P1 fix (2026-09-25): the branch chain is driven by the pure (recovered, choice) → action map
+      // in dbRecovery.recoveryDialogAction. The recovered choice===1 button ("open data dir") used to
+      // only app.quit() — shell.openPath was never called on that branch.
+      const dialogAction = dbRecovery.recoveryDialogAction(recovered, choice)
+      if (dialogAction === 'relaunch') {
         // P2 2026-09-12: the recovery-succeeded relaunch branch skipped the plain-bak cleanup that the
         // init-success path below does — after recovery the plaintext copy stayed in userData forever,
         // defeating at-rest encryption. Clear it before relaunching (same semantics, best-effort).
@@ -515,9 +519,8 @@ if (!app.requestSingleInstanceLock()) { app.quit() } else {
         }
         relaunchClean()
       }
-      else if (choice === 0) { shell.openPath(ud); app.quit() }
-      else if (choice === 1 && recovered) { app.quit() }
-      else if (choice === 1) {
+      else if (dialogAction === 'open-data-dir') { shell.openPath(ud); app.quit() }
+      else if (dialogAction === 'reset-and-relaunch') {
         // Reset-data-and-relaunch. Root cause fixed (2026-09-09): unlink on an open SQLite file always
         // fails with EPERM on Windows and the blanket `catch {}` swallowed it — the user was told the
         // data was destroyed while todos.db survived intact. Close our handle first, then delete;

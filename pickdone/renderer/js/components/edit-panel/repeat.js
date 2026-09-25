@@ -17,5 +17,10 @@ export async function repeatGroupInfo (ctx) {
     const taskId = ctx.e.taskId
     const rows = await window.todoAPI.dbCall('queryTodos', { deleted: 0, repeatId: ctx.e.repeatId })
     if (ctx.e && ctx.e.taskId === taskId) ctx.repeatCount = rows.length
-  } catch (err) { /* ignored */ }
+  } catch (err) {
+    // P2 fix (2026-09-25): the silent catch left repeatCount showing the PREVIOUS task's group
+    // count. Reset to 0 and warn — a failed query must not render a wrong repeat count.
+    console.warn('[edit-panel] repeatGroupInfo query failed:', err && err.message ? err.message : err)
+    ctx.repeatCount = 0
+  }
 }

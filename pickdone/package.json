@@ -8,7 +8,7 @@
   "scripts": {
     "start": "node scripts/app-dev.mjs",
     "dev": "node scripts/app-dev.mjs --dev",
-    "start:real": "npm run build:renderer && electron .",
+    "start:real": "node scripts/start-real.mjs",
     "app:dev": "node scripts/app-dev.mjs",
     "test": "node tests/run-all.mjs",
     "test:e2e": "node --test tests/e2e.test.mjs",

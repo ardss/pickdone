@@ -1,5 +1,6 @@
 /** Global + in-window shortcuts — moved from index.js with dependency injection */
 const { globalShortcut, ipcMain } = require('electron')
+const { makeSenderIsMain } = require('./handlers/shared')
 
 /** P2 2026-09-19: normalize keyboard-event key names to the Accelerator vocabulary the saved
  *  config uses. The old `key === 'delete' ? 'delete' : key` ternary was a dead no-op that lost the
@@ -12,7 +13,12 @@ function normalizeKey (key) {
   return KEY_ALIASES[k] || k
 }
 
-function createShortcuts ({ getMainWindow, showMainOrLock, quickAdd, i18n, log }) {
+function createShortcuts ({ getMainWindow, showMainOrLock, quickAdd, i18n, log }, opts = {}) {
+  const {
+    captureSuppressMaxMs = 60000,
+    setTimeout: armTimer = setTimeout,
+    clearTimeout: disarmTimer = clearTimeout
+  } = opts
   // Register a single global shortcut: returns false when the key is taken. On failure, retry once after a delay (typical case: our own old instance
   // during restart or an isolated integration-test instance briefly holds the key and releases it on exit); only if that still fails show the conflict dialog.
   // Test-isolated instances (TODO_USER_DATA_DIR) never register — stealing the real instance's system hotkeys is pointless and guaranteed to clash.
@@ -61,7 +67,41 @@ function createShortcuts ({ getMainWindow, showMainOrLock, quickAdd, i18n, log }
   // F-D3 suppression flag + its IPC toggle live at factory scope: applyShortcuts runs on every
   // rebind, so re-registering the ipcMain listener per call stacked one closure per rebind.
   let captureSuppress = false
-  ipcMain.on('shortcut-capturing', (e, flag) => { captureSuppress = !!flag })
+  // main-ipc wave (2026-09-25) hardening for 'shortcut-capturing':
+  //  1) sender gate — previously ANY renderer window (or an injected page in one) could flip
+  //     the flag, silently disabling every in-app shortcut (a DoS on the main window's keyboard
+  //     surface). The ONLY legitimate record surface is the main window's settings shortcuts tab
+  //     (SettingsShortcutsTab.vue) — adversarial review 2026-09-25 narrowed the gate to the main
+  //     window alone (an early draft tolerated quick-add/float as "future-surface defense",
+  //     which left an injected aux page able to suppress all shortcuts; that tolerance is gone).
+  //     Converged on shared.makeSenderIsMain for the ownership test.
+  //  2) self-heal — if the recorder dies mid-record (renderer crash / reload before the
+  //     stop-toggle IPC), the flag would otherwise stay raised until app restart. Two layers:
+  //     a hard timeout arms on every set, and the recorded sender's destruction clears it.
+  let captureSuppressSender = null
+  let captureSuppressTimer = null
+  function clearCaptureSuppress () {
+    captureSuppress = false
+    captureSuppressSender = null
+    if (captureSuppressTimer) { disarmTimer(captureSuppressTimer); captureSuppressTimer = null }
+  }
+  const senderIsMain = makeSenderIsMain(getMainWindow)
+  ipcMain.on('shortcut-capturing', (e, flag) => {
+    if (!e || !e.sender || !senderIsMain(e)) {
+      try { (log || console).warn('[shortcut] rejected shortcut-capturing from non-main sender:', e && e.sender && e.sender.id) } catch { /* no logger */ }
+      return
+    }
+    if (flag) {
+      captureSuppress = true
+      captureSuppressSender = e.sender
+      if (captureSuppressTimer) disarmTimer(captureSuppressTimer)
+      captureSuppressTimer = armTimer(clearCaptureSuppress, captureSuppressMaxMs)
+      if (captureSuppressTimer && captureSuppressTimer.unref) captureSuppressTimer.unref()
+    } else {
+      // a stale stop from a replaced (destroyed) recorder window must not un-suppress a live one
+      if (!captureSuppressSender || captureSuppressSender === e.sender || captureSuppressSender.isDestroyed()) clearCaptureSuppress()
+    }
+  })
 
   function applyShortcuts (s = {}) {
     // 丢弃上一轮挂着的退避重试:重绑后旧组合不得再抢注系统热键
@@ -124,8 +164,8 @@ function createShortcuts ({ getMainWindow, showMainOrLock, quickAdd, i18n, log }
     // suppression flag would otherwise stay raised forever and silently disable every in-app
     // shortcut until the next record or app restart. Any fresh load starts from a clean slate;
     // render-process-gone covers the crash-without-reload tail (renderer gone, no new load).
-    const onFinishedLoad = () => { captureSuppress = false }
-    const onProcessGone = () => { captureSuppress = false }
+    const onFinishedLoad = () => clearCaptureSuppress()
+    const onProcessGone = () => clearCaptureSuppress()
     const onBeforeInput = (e, input) => {
       const w = getMainWindow()
       if (input.type !== 'keyboard' || !w || w.isDestroyed()) return

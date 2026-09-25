@@ -49,14 +49,36 @@ function toRow (c, { restore = false } = {}) {
   }
 }
 
-/** Dual write: localStorage stays as cache/disaster recovery, SQLite is authoritative (unified CLI/UI data source) */
+/** Dual write: localStorage stays as cache/disaster recovery, SQLite is authoritative (unified CLI/UI data source).
+ *  Write-amplification fix (2026-09-25): persist used to re-commit EVERY row as category.put on every call,
+ *  and setList was reachable from the DB-read path (category/init) — externalReload → init → setList(rows) →
+ *  persist → N × upsertCategory writes → each audited as category.upsert → the writes broadcast todos-changed →
+ *  reload fires again. That read-back→persist loop was the ~80 lines/s category.upsert audit storm (~5MB per
+ *  7-10 min, 24MB+ archives on the real %APPDATA% side, 51MB+ un-rotated on .dev-data). Two guards now:
+ *    1. the read-back path goes through setListFromDb (NEVER persists — see that mutation);
+ *    2. persist diffs each row against the last SUCCESSFULLY committed row (per id) and only commits real
+ *       changes, so even a full-list caller rewrites only the rows that actually moved. A failed commit is
+ *       not remembered, so the next persist retries it (LS is already updated — SQLite must converge). */
+const lastPersistedRows = new Map() // categoryId → JSON of the row last committed successfully
 function persist (list, opts = {}) {
   safeSet(LS_KEY, JSON.stringify({ list }))
   try {
     // Failures must be visible: LS is already updated above, so a silent per-row catch meant the user
     // believed categories were saved while SQLite (the CLI-visible authority) silently diverged
-    const jobs = list.map(c => commitCommand("category", "put", toRow(c, opts)).catch(e => ({ err: e })))
+    const jobs = []
+    for (const c of list) {
+      const row = toRow(c, opts)
+      const sig = JSON.stringify(row)
+      if (lastPersistedRows.get(c.categoryId) === sig) continue // unchanged since the last successful commit
+      jobs.push(
+        commitCommand("category", "put", row)
+          .then(() => { lastPersistedRows.set(c.categoryId, sig) })
+          .catch(e => ({ err: e, id: c.categoryId }))
+      )
+    }
+    if (!jobs.length) return
     Promise.all(jobs).then(results => {
+      for (const r of results) if (r && r.err) lastPersistedRows.delete(r.id)
       const failed = results.filter(r => r && r.err)
       if (failed.length) console.error('[category] save failed for', failed.length, 'of', list.length, 'rows:', failed[0].err)
     }).catch(e => console.error('[category] save failed:', e))
@@ -269,6 +291,17 @@ export default {
     setList (state, list) { state.list = list; persist(list) },
     // Backup-restore entry: same list replacement, but restored tombstones must not win LWW (see toRow)
     setListRestore (state, list) { state.list = list; persist(list, { restore: true }) },
+    /** Write-amplification fix (2026-09-25): the ONLY sanctioned channel for lists READ BACK from SQLite
+     *  (category/init startup + externalReload's every-round category/init re-run). Reads must never
+     *  persist — the old setList here re-committed all N rows (each audited category.upsert) and the
+     *  writes re-broadcast todos-changed, re-entering the reload: the ~80 lines/s audit storm. Memory
+     *  assignment only; user edits still flow through addCategory/updateCategory/softDelete/... → persist.
+     *  The rows ARE the authoritative DB content, so they also seed the persist diff-baseline: the first
+     *  real user edit after load commits just that row, not the whole list re-synced. */
+    setListFromDb (state, list) {
+      state.list = list
+      for (const c of list) lastPersistedRows.set(c.categoryId, JSON.stringify(toRow(c)))
+    },
     addCategory (state, { categoryName = 'New Category', categoryColor = COLOR_PALETTE[state.list.length % COLOR_PALETTE.length], folderIs = false, folderId = 0 }) {
       state.list.push({ categoryId: nextId(), userId: 840001, categoryName, categoryColor, createTime: Date.now(), listSort: Math.max(0, ...state.list.map(c => c.listSort)) + 100, folderIs, folderId, delete: false })
       persist(state.list)
@@ -444,19 +477,19 @@ export default {
         const dels = deletedFromLs().filter(d =>
           !rows.some(r => r.categoryId === d.categoryId) &&
           (!d.deletedAt || d.deletedAt > cutoff))
-        commit('setList', rows.concat(dels))
+        commit('setListFromDb', rows.concat(dels))
         return rows.length
       }
       // One-time migration flag: otherwise "migrate only when the table is empty" would resurrect old localStorage caches after the user deletes all categories
       let migrated = false
       try { migrated = (await window.todoAPI.dbCall('getMeta', 'categoryLsMigrated')) === '1' } catch (e) { /* empty */ }
-      if (migrated) { commit('setList', []); return 0 }
+      if (migrated) { commit('setListFromDb', []); return 0 }
       const ls = loadList()
       try {
         for (const c of ls) await commitCommand("category", "put", toRow(c))
         await commitCommand("meta", "put", ['categoryLsMigrated', '1'])
       } catch (e) { console.warn('[category] migration failed (local cache still usable):', e) }
-      commit('setList', ls)
+      commit('setListFromDb', ls)
       return ls.length
     }
   }

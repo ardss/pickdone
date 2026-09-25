@@ -169,5 +169,5 @@ import <file.csv> [--format auto|ticktick|dida365|todoist] [--dry-run] [--catego
 - 数据层复用 Electron 主进程的 `src/main/db.js`（同一 SQLite：`%APPDATA%/pickdone/todos.db`，WAL 模式支持双进程并发；DB 加密，密钥 `db.key` 同目录，CLI 经 lib 自动解密）。
 - 写语义对齐渲染端 store：新增 `status:'add'`、修改 `status:'update'`、删除 `status:'delete'`；`completedAt` 仅在完成/撤销时写。
 - 运行中 App 通过 db 文件 mtime 监听（`src/main/index.js` watchDbForExternalWrites）感知 CLI 写入并自动刷新。
-- `TODO_DB_DIR` 环境变量可把 CLI 指向隔离数据目录（测试用，勿对真实库做自动化实验）。
+- `TODO_DB_DIR` 环境变量把 CLI 指向隔离数据目录；**对 AI/脚本而言它是写命令的必要前置**（无隔离 env 时写命令被拒，见上文门禁说明）。确需写真实库：显式 `--yes-i-know`。
 - 对标来源与设计取舍见 `analysis/AI管理接口-CLI对标与设计.md`。

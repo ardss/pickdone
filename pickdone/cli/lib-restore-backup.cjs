@@ -9,12 +9,15 @@
 const fs = require('fs')
 const path = require('path')
 const dayjs = require('dayjs')
+// Single source for default backup roots (P0 root fix): derivation lives in src/main/backup-dirs.js
+// (electron lazy-required there so this pure-Node CLI can require it) — no second copy here.
+const { defaultBackupRootCandidates } = require('../src/main/backup-dirs.js')
 
 module.exports = function restoreBackup ({ opts, lib, emit }) {
   const SNAP = 'auto-'
-  // The backup default root is externalized (userData parent dir / pickdone-backups, separate from todos.db); falls back to userData/backups for old or unmigrated installs
-  const extRoot = path.join(path.dirname(lib.userDataDir()), 'pickdone-backups')
-  const legacyRoot = path.join(lib.userDataDir(), 'backups')
+  // Active default root first (<userData>/backups, or TODO_BACKUP_DIR), then the legacy external
+  // parent-of-userData/pickdone-backups kept for old snapshots discovery.
+  const defaultRoots = defaultBackupRootCandidates(lib.userDataDir())
   // F15 (dw wave6 2026-09-24): snapshots actually land in resolveBackupDir(settings.backupDir) —
   // a user-chosen backup dir left the CLI's two hardcoded candidates empty ("no auto-*.json
   // snapshots") while the App had plenty. Read the user dir through the lib's settings channel
@@ -27,7 +30,7 @@ module.exports = function restoreBackup ({ opts, lib, emit }) {
     // user backup dir worth discovering anyway and degrades to the default candidates.
     if (fs.existsSync(path.join(lib.userDataDir(), 'todos.db'))) userDir = String(lib.settingsDoc().backupDir || '').trim()
   } catch { /* closed/locked DB → defaults only */ }
-  const candidateDirs = [...new Set([extRoot, legacyRoot, userDir && path.resolve(userDir)].filter(Boolean))]
+  const candidateDirs = [...new Set([...defaultRoots, userDir && path.resolve(userDir)].filter(Boolean))]
   const listSnapshots = root => {
     try {
       return fs.existsSync(root)

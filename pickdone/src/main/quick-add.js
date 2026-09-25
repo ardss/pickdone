@@ -120,7 +120,14 @@ function hide () {
 
 function is_visible () { return !!(win && !win.isDestroyed() && win.isVisible()) }
 
+/** main-ipc wave (2026-09-25): sender ownership test for the 'quick-add-hide' gate in
+ *  handlers/tomato.js (same shape as tomato-float.isSelfSender). true only for the quick-add
+ *  window's own webContents. */
+function isSelfSender (sender) {
+  return !!(win && !win.isDestroyed() && sender === win.webContents)
+}
+
 /** Lock-screen probe injection (index.js holds isLocked, avoiding a circular require) */
 function setLockProbe (fn) { lockProbe = fn }
 
-module.exports = { toggle, hide, isVisible: is_visible, setLockProbe }
+module.exports = { toggle, hide, isVisible: is_visible, setLockProbe, isSelfSender }

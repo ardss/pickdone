@@ -70,8 +70,13 @@ function textHash (text) {
 }
 
 module.exports = function importHandlers (ctx) {
-  const { getMainWindow, dbApi, broadcastTodosChanged, log, resyncDbWatch } = ctx
+  const { getMainWindow, dbApi, broadcastTodosChanged, log, resyncDbWatch, isLocked } = ctx
   const assertMainWindow = makeAssertMainWindow(getMainWindow)
+  // main-ipc wave (2026-09-25): both import channels write the whole task table — symmetric with
+  // backup.js's per-channel `if (isLocked()) throw new Error('app is locked')` gate (C-2 class:
+  // a compromised float/lock-screen window must not be able to write while the lock is active).
+  // The gate throws before any dialog/parse/write work.
+  const assertNotLocked = () => { if (isLocked && isLocked()) throw new Error('app is locked') }
 
   let lastPickedImportPath = '' // the only legitimate path source for import:run (the import:pick-preview dialog)
   let lastPickedImportHash = '' // sha256 of the exact text the user previewed/approved
@@ -83,6 +88,7 @@ module.exports = function importHandlers (ctx) {
     // survived via the '[CODE] message' text hack. null still means "user canceled".
     'import:pick-preview': async (e) => {
       assertMainWindow(e) // H7→H8 fix: must pass the IPC event, not a string label (the string made the guard always-true-reject, killing all CSV imports)
+      assertNotLocked()
       const importer = require('../import') // D3 review fix (2026-09-24): engine's in-tree home (src/main/import) — no main->cli reach-back
       const { dialog } = require('electron')
       const r = await dialog.showOpenDialog(getMainWindow() || undefined, {
@@ -111,6 +117,7 @@ module.exports = function importHandlers (ctx) {
     },
     'import:run': async (e, file) => {
       assertMainWindow(e)
+      assertNotLocked()
       const importer = require('../import') // D3 review fix (2026-09-24): engine's in-tree home (src/main/import) — no main->cli reach-back
       const f = String(file || '')
       // Arbitrary-path read primitive sealed off: only the path most recently returned by the main-process dialog is accepted
@@ -125,19 +132,23 @@ module.exports = function importHandlers (ctx) {
         return { ok: false, code: 'FILE_MISSING', message: 'import: file no longer readable: ' + ((err && err.message) || String(err)) }
       }
       const tooBig = fixUtil.checkImportFileSize(stat.size)
-      if (tooBig) throw new Error(tooBig)
+      // Contract fix (2026-09-25): expected failures return the declared { ok:false, code, message }
+      // shape (see the P3 2026-09-12 comment above; FILE_MISSING is the reference) instead of a bare
+      // throw — invoke() rejections strip the Error's custom props across the context bridge, so a
+      // thrown failure degraded to generic import-failed copy in the renderer.
+      if (tooBig) return { ok: false, code: 'USAGE', message: tooBig }
       // TOCTOU content guard (fix 2026-09-19): the file must still be byte-identical to what the user
       // previewed and approved. A changed file previously re-parsed silently — report A approved, report
       // B executed. Abort with a clear error (plus an audit line) and force a fresh preview.
       const text = fs.readFileSync(f, 'utf8')
       if (!lastPickedImportHash || textHash(text) !== lastPickedImportHash) {
         try { appAudit.recordCustom('import', ['import:run', f], [], [], 'aborted: file changed since preview (hash mismatch), re-preview required') } catch { /* best-effort */ }
-        throw new Error('import: file changed since preview — re-run preview to approve the current content')
+        return { ok: false, code: 'HASH_MISMATCH', message: 'import: file changed since preview — re-run preview to approve the current content' }
       }
       // same pipeline as importer.importFile, but the text->items parse runs in the worker thread
       const { format, items } = await runImportParse(text)
       if (!['ticktick', 'dida365', 'todoist'].includes(format)) {
-        throw new Error(`unknown format "${format}" (valid: auto|ticktick|dida365|todoist)`)
+        return { ok: false, code: 'FORMAT_UNKNOWN', message: `unknown format "${format}" (valid: auto|ticktick|dida365|todoist)` }
       }
       const r = importer.importItems(items, { dryRun: false, format })
       // review P2 (2026-09-10): bulk import writes straight through the main process and bypassed the

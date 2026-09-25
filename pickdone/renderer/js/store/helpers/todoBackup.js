@@ -82,7 +82,9 @@ export async function writeEventBackupCore (ctx, { state, rootState }, reason) {
 /** Auto backup: same structure as critical-state, written to userData/backups/auto-*.json with rolling cleanup */
 export async function writeAutoBackupCore (ctx, { state, rootState }) {
   try {
-    if (!window.todoAPI || !window.todoAPI.runAutoBackup) return
+    // P2 fix (2026-09-25): bare `return` gave undefined — SettingsDataTab's ok === false check
+    // missed it and read the degraded host as a successful backup.
+    if (!window.todoAPI || !window.todoAPI.runAutoBackup) return false
     const dump = buildBackupDump(rootState, state, { stripVolatileSettings: true, planState: await collectPlanState() })
     const r = await window.todoAPI.runAutoBackup(JSON.stringify(dump), { recent: rootState.settings.autoBackupKeep || 24, backupDir: rootState.settings.backupDir || '' })
     if (r && r.ok) saveRuntime({ autoBackupLastAt: Date.now(), autoBackupLastFailAt: 0, autoBackupLastError: '' })

@@ -79,6 +79,17 @@ if (SPAWN) {
     }
     await new Promise(r => setTimeout(r, 1000))
   } catch { /* 端口空闲 */ }
+  // 等端口真正释放(2026-09-25 check:all 实锤):taskkill 返回后旧宿主的子进程树可能还要几秒才退净,
+  // 新 vite 立即 EADDRINUSE 静默退场,而轮询却短暂探到垂死的旧宿主"就绪"——随后 preflight 报
+  // "宿主未启动"。杀完必须轮询到 LISTENING 彻底消失再 spawn。
+  for (let i = 0; i < 20; i++) {
+    let busy = true
+    try {
+      execSync('netstat -ano | findstr :' + PORT + ' | findstr LISTENING', { encoding: 'utf8', shell: true, stdio: ['ignore', 'pipe', 'ignore'] })
+    } catch { busy = false } // findstr 无匹配 = 端口已释放
+    if (!busy) break
+    await new Promise(r => setTimeout(r, 500))
+  }
   viteChild = cpSpawn('npm', ['run', 'dev', '--', '--port', PORT, '--strictPort'], { cwd: path.join(ROOT, 'browser-dev'), shell: true, stdio: 'ignore' })
   let up = false
   for (let t = 0; t < 40000 && !up; t += 500) {

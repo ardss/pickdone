@@ -1,7 +1,18 @@
 import { parseSubtasks, parseJSONSafe, tt } from '../utils/core.js'
 import { commit as commitCommand } from "../utils/commandBus.js"
 import { showUndoToast } from '../utils/undoToast.js'
-/** UI module — right-side editor/dialog control (mirrors the reference ui module semantics) */
+import { PANEL_FIELD_MAP } from '../utils/editPanelRemoteSync.js'
+/** ui module — right-side editor/dialog control (mirrors the reference ui module semantics) */
+
+/* Complex snapshot values: array fields are copied/parsed, never shared by reference with the
+ * store row. Scalar fields fall back to the default declared in PANEL_FIELD_MAP. */
+const SNAPSHOT_VALUE_MAPPERS = {
+  reminderOffsets: t => Array.isArray(t.reminderOffsets) ? t.reminderOffsets.slice() : [],
+  reminderExtra: t => Array.isArray(t.reminderExtra) ? t.reminderExtra.slice() : [],
+  sublist: t => parseSubtasks(t.subtasks),
+  todoImageList: t => parseJSONSafe(t.image) || [],
+  fileList: t => parseJSONSafe(t.files) || []
+}
 
 /* D6-F1 (2026-09-21): calendar inline create commits an "(untitled)" task BEFORE opening the edit
  * panel — Esc / outside-click used to leave the nameless orphan on the board. Shared cleanup body
@@ -100,22 +111,17 @@ export default {
       // 原双套字段名(新 title/desc/... + 旧 todoContent/...)写了全仓零读,2026-09-04 三轮扫荡清退
       // 新命名字段集为 EditPanel.hydrate 的数据源(this.e 整包快照,title/desc/dateTs/remindTs/子任务/图片/附件全被消费);
       // 只清退真正零读的旧命名集(todoContent/todoDescription/todoDateTs/reminderTime/difficulty,2026-09-04 三轮扫荡)
-      s.rightSidebarTodoEdit = {
-        visible: true,
-        collapsed: false,
-        taskId: todo.taskId,
-        title: todo.taskContent || '',
-        desc: todo.taskDescribe || '',
-        dateTs: todo.todoTime || 0,
-        remindTs: todo.reminderTime || 0,
-        reminderOffsets: Array.isArray(todo.reminderOffsets) ? todo.reminderOffsets.slice() : [],
-        reminderExtra: Array.isArray(todo.reminderExtra) ? todo.reminderExtra.slice() : [],
-        categoryId: todo.categoryId || 0,
-        repeatId: todo.repeatId || null,
-        sublist: parseSubtasks(todo.subtasks),
-        todoImageList: parseJSONSafe(todo.image) || [],
-        fileList: parseJSONSafe(todo.files) || []
+      // P0 root fix (2026-09-25): the snapshot keys derive from PANEL_FIELD_MAP (single source with
+      // contentFingerprint) — deadlineTs/priority/important used to be dropped here, which broke the
+      // deadline row and made the own-save-echo fingerprint mismatch eternal.
+      const snap = { visible: true, collapsed: false, taskId: todo.taskId }
+      for (const [panelKey, rowKey, dflt] of PANEL_FIELD_MAP) {
+        const v = todo[rowKey]
+        snap[panelKey] = SNAPSHOT_VALUE_MAPPERS[panelKey]
+          ? SNAPSHOT_VALUE_MAPPERS[panelKey](todo)
+          : (v === undefined || v === null ? dflt : v)
       }
+      s.rightSidebarTodoEdit = snap
     },
     closeEdit (s) { s.rightSidebarTodoEdit.visible = false; s.rightSidebarTodoEdit.taskId = null },
     // D6-F1: mark the panel's current task as inline-created-empty (calendar createAt/tbCreate/grid Enter)

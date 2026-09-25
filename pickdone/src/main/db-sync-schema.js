@@ -90,6 +90,12 @@ module.exports = ({ getDb, log }) => {
   function migrateV6 (d) {
     // tz column (§5): IANA timezone of the creating device, stamped on write by todoToRow;
     // NULL = pre-tz "local history" rows. scheduledDay semantics unchanged.
+    // 2026-09-25 guard note (no behavior change): this migration re-runs on retry-after-failure
+    // (pendingRetry>0 keeps the schemaVersion stamp from advancing), so EVERY schema side here
+    // must stay re-entrant: the `!cols.includes('tz')` probe is load-bearing (a bare ALTER TABLE
+    // would throw on the retried run), and `d.exec(DDL)` must stay IF-NOT-EXISTS shaped. New
+    // schema statements added below must follow the same exists-guard pattern — half-completed
+    // runs WILL come through here a second time.
     const cols = d.prepare('PRAGMA table_info(todos)').all().map(c => c.name)
     if (!cols.includes('tz')) d.exec('ALTER TABLE todos ADD COLUMN tz TEXT')
     d.exec(DDL)

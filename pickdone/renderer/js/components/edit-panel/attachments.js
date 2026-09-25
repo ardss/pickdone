@@ -14,14 +14,19 @@ export function pickFiles (ctx, kind) {
   input.type = 'file'
   input.multiple = true
   if (kind === 'img') input.accept = 'image/*'
-  input.onchange = () => { for (const f of input.files) uploadOne(ctx, kind, f) }
+  // P2 fix (2026-09-25): serialize the uploads — the old fire-and-forget loop raced uploadOne
+  // calls, landing thumbnails out of pick order (and interleaving queueSave writes)
+  input.onchange = async () => { for (const f of input.files) await uploadOne(ctx, kind, f) }
   input.click()
 }
 
 export async function onDescPaste (ctx, e) {
   const items = e.clipboardData ? e.clipboardData.items : []
+  // P0 fix (2026-09-25): DataTransferItemList is an indexed collection with NO .filter — calling
+  // items.filter threw a TypeError before preventDefault could run, so image paste was dead.
+  // Convert to a real array first.
   // The same clipboard image often carries multiple format entries (png/jpeg/bmp coexist); accepting all would upload duplicate image tiles; take only the first usable bitmap, png preferred
-  const imgItems = items.filter(i => i.type.startsWith('image/'))
+  const imgItems = Array.from(items).filter(i => i.type.startsWith('image/'))
   if (!imgItems.length) return
   e.preventDefault()
   const pick = imgItems.find(i => i.type === 'image/png') || imgItems[0]
@@ -36,6 +41,10 @@ export async function onDescDrop (ctx, e) {
     if (f.type.startsWith('image/')) {
       await uploadOne(ctx, 'img', f)
       ctx.scrollImgsIntoView()
+    } else {
+      // P2 fix (2026-09-25): non-image files were silently swallowed — route them to the
+      // file-attachment list instead of pretending the drop never happened
+      await uploadOne(ctx, 'file', f)
     }
   }
 }

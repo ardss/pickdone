@@ -77,14 +77,33 @@ test('EditPanel pure helper: attachmentUrlPresent detects url in image/files JSO
   assert.equal(attachmentUrlPresent({ image: '[{}]' }, ''), false, 'empty url never matches')
 })
 
-test('EditPanel: disk deletion timer re-checks the latest store row before deleteFile', () => {
+test('EditPanel: disk deletion defers to the undo-toast dismiss hook and re-checks the store row first', () => {
+  // 2026-09-25 P1 fix: the fixed 5.5s setTimeout raced the hover-paused undo toast (hover past
+  // 5.5s + 撤销 revived the list entry with the file already gone). Deletion now rides the
+  // toast's onDismiss (fires after the toast actually closes on any path) behind an undone flag.
   const src = read('renderer/js/components/EditPanel.vue')
-  const timerIdx = src.indexOf('5500')
-  assert.ok(timerIdx > 0, 'delayed disk timer present')
-  const block = src.slice(src.lastIndexOf('removeWithUndo', timerIdx), timerIdx + 200)
-  assert.match(block, /attachmentUrlPresent\(row, item\.url\)/, 'guard consults attachmentUrlPresent')
-  assert.match(block, /todoList\.find/, 'guard reads the latest task row from the store')
-  assert.ok(src.indexOf('attachmentUrlPresent(row, item.url)') < src.indexOf('deleteFile(item.url)'), 'deleteFile only runs after the guard')
+  // 5500 now appears ONLY in the no-toast fallback branch (toast unavailable -> old semantics);
+  // the primary path defers to onDismiss with no parallel timer.
+  // Review-hardening (round 2): indexOf ORDER assertions instead of slice+includes/regex —
+  // robust against comment rewording and whitespace changes, still pins the exact mechanism.
+  const rmStart = src.indexOf('removeFile (arrName, idx)')
+  const fallbackIdx = src.indexOf('if (!removeWithUndo(this,')
+  const fallbackTimerIdx = src.indexOf('setTimeout(deleteFromDisk, 5500)')
+  assert.ok(rmStart > -1, 'removeFile method present')
+  assert.ok(fallbackIdx > rmStart, 'fallback branch sits inside removeFile, after the primary removeWithUndo call')
+  assert.ok(fallbackTimerIdx > fallbackIdx, 'the 5500 timer exists ONLY in the fallback branch')
+  const primary = src.slice(rmStart, fallbackIdx)
+  assert.ok(!primary.includes('setTimeout('), 'primary path defers disk deletion to the toast dismiss hook, not a timer')
+  const guardIdx = src.indexOf('attachmentUrlPresent(row, item.url)')
+  const deleteIdx = src.indexOf('deleteFile(item.url)')
+  assert.ok(guardIdx > 0 && deleteIdx > guardIdx, 'deleteFile only runs after the store-row url guard')
+  const block = src.slice(src.indexOf('removeFile (arrName, idx)'), src.indexOf('delTask ()'))
+  assert.match(block, /undone = true/, 'undo marks the deletion as undone')
+  assert.match(block, /onDismiss: deleteFromDisk/, 'disk deletion rides the toast dismiss hook')
+  // review-fix (2026-09-25): removeWithUndo now reports whether the toast was shown; the
+  // early-return path (no $message/Vue) falls back to the old fixed-delay deletion instead of
+  // leaking the disk file forever (onDismiss would never fire there).
+  // (fallback ordering asserted above via indexOf — no text-order-fragile regex here)
 })
 
 /* ---------------- EditPanel: pomodoro estimate stepper labels ---------------- */

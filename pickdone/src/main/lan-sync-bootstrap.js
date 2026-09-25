@@ -14,14 +14,17 @@
  *   - IPC ops: syncGetSettings / syncSetEnabled / syncGetStatus / syncGetPairingCode / syncSetName
  *     registered into db.js OPS via db-sync-ops.js (keeps the three-way op whitelist gate true).
  *
- * Known P3a scope cuts (documented, not silent):
- *   - Category/plan/filter tombstones cannot be hydrated (no read op returns them), so deletions of
- *     those entities propagate only as seq-advancing pointers that peers skip; full snapshot
- *     reconciliation covers them once snapshot exchange is wired into the round protocol.
- *   - conflictCopy from merge.mjs is materialized for todos only (tombstoned recycle-bin row,
- *     see sync-apply.js); other entities log the loser (no conflict-copy UI yet).
- *   - applySnapshot/replaceAll is implemented as merge-apply (non-destructive) because the round
- *     protocol never sends snapshot-request in P3a; a true destructive reset is deferred.
+ * Known P3a scope cuts (documented, not silent) — STATUS UPDATE 2026-09-25, two of the three
+ * original cuts have since been CLOSED (M3 + B16, see sync-apply.js):
+ *   - CLOSED (M3 2026-09-20): category/plan/filter tombstones ARE hydrated now — allRows() pushes
+ *     them (planTombstones/filterTombstones/categoriesAllRows below) and sync-apply.js applies
+ *     tombstone winners per entity; deletions propagate as real delete-wins rows, not skipped
+ *     pointers.
+ *   - CLOSED (B16 2026-09-24): conflictCopy is materialized for todos (recycle-bin row) AND for
+ *     plan/filter/category/setting/meta (machine-local metaConflictBackup.<entity>:<id> backups,
+ *     restorable via syncConflictBackupsList/Restore — see sync-conflict-backups.js).
+ *   - Still open: applySnapshot/replaceAll is implemented as merge-apply (non-destructive) because
+ *     the round protocol never sends snapshot-request in P3a; a true destructive reset is deferred.
  */
 const { randomUUID, timingSafeEqual } = require('node:crypto')
 const os = require('node:os')
@@ -812,29 +815,10 @@ function getStatusPayload () {
   }
 }
 
-/* ---------- per-peer machine-local display alias (round-2 P1) ---------- */
-const K_PEER_ALIAS_PREFIX = 'sync.peerAlias.'
-function peerAliasOf (deviceId) {
-  if (!deviceId) return null
-  const v = settingGet(K_PEER_ALIAS_PREFIX + String(deviceId))
-  const s = typeof v === 'string' ? v.trim().slice(0, 40) : ''
-  return s || null
-}
-
-/* ---------- Round-2 P1 (F7, 2026-09-21): missing-attachment key collection ----------
- * Only LIVE todos may re-pull files: getAll({deleted:null}) returned ALL rows including
- * recycle-bin tombstones, so a deleted todo's files were re-requested from the peer every
- * round forever (orphans GC on hard purge). Injectable existsFn/attachDir for tests. */
-function missingAttachmentKeys (st, inject = {}) {
-  try {
-    const fs = require('node:fs')
-    const path = require('node:path')
-    const { collectMissingKeys } = require('./lan-sync/att-transfer')
-    const dir = inject.attachDir || require('./attachments').attachDir()
-    const exists = inject.existsSync || (key => fs.existsSync(path.join(dir, path.basename(String(key)))))
-    return collectMissingKeys(st.db.call('getAll', { deleted: 0 }), exists)
-  } catch { return [] }
-}
+/* per-peer display alias + missing-attachment key collection: extracted to
+   lan-sync/peer-extras.js (structure size ratchet) — injected settings keep the
+   swappable module-level state (__test.setState) applicable through the closure. */
+const { K_PEER_ALIAS_PREFIX, peerAliasOf, missingAttachmentKeys } = require('./lan-sync/peer-extras')({ settingGet })
 
 function registerOps () {
   syncOps.register({

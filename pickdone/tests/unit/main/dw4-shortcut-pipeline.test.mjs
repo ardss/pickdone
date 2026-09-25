@@ -81,6 +81,9 @@ function setupShortcuts () {
       const e = { preventDefault: () => prevented.push(true) }
       beforeInput(e, input)
     },
+    // main-ipc wave (2026-09-25): 'shortcut-capturing' is sender-whitelisted — tests toggle it
+    // as the MAIN WINDOW's webContents (the only legitimate recorder surface).
+    capturing (flag) { ipcHandlers['shortcut-capturing']({ sender: webContents }, flag) },
     reload () { didFinishLoad() },
     crash () { processGone() },
     get removed () { return webContents.removed },
@@ -120,11 +123,11 @@ test('F-D6: pin/unpin awaits the dispatch and only toasts success on it; failure
 test('F-D3: entering capture mode suppresses shortcut dispatch — no preventDefault, no action, key reaches the recorder', () => {
   const s = setupShortcuts()
   assert.equal(typeof s.ipcHandlers['shortcut-capturing'], 'function', 'main exposes the shortcut-capturing channel')
-  s.ipcHandlers['shortcut-capturing']({}, true)
+  s.capturing(true)
   s.fire({ type: 'keyboard', control: true, key: 'd' })
   assert.equal(s.sent.length, 0, 'no shortcut-action fires while recording (recording ctrl+d must NOT delete the task)')
   assert.equal(s.prevented, 0, 'the combo falls through so the renderer capture listener can record it')
-  s.ipcHandlers['shortcut-capturing']({}, false)
+  s.capturing(false)
   s.fire({ type: 'keyboard', control: true, key: 'd' })
   assert.deepEqual(s.sent, [['shortcut-action', 'deleteEvent']], 'dispatch resumes after recording ends')
 })
@@ -137,7 +140,7 @@ test('F-D3: the settings tab toggles suppression on capture start/stop', () => {
 
 test('F-D3: a renderer reload mid-record self-heals — suppression cannot stick forever', () => {
   const s = setupShortcuts()
-  s.ipcHandlers['shortcut-capturing']({}, true)
+  s.capturing(true)
   s.reload() // renderer crash/reload: did-finish-load must clear the stale flag
   s.fire({ type: 'keyboard', control: true, key: 'd' })
   assert.deepEqual(s.sent, [['shortcut-action', 'deleteEvent']], 'shortcuts dispatch again after a reload, no permanent mute')
@@ -145,7 +148,7 @@ test('F-D3: a renderer reload mid-record self-heals — suppression cannot stick
 
 test('F-D3: a renderer crash WITHOUT reload also lifts suppression (render-process-gone tail)', () => {
   const s = setupShortcuts()
-  s.ipcHandlers['shortcut-capturing']({}, true)
+  s.capturing(true)
   s.crash()
   s.fire({ type: 'keyboard', control: true, key: 'd' })
   assert.deepEqual(s.sent, [['shortcut-action', 'deleteEvent']], 'a dead renderer cannot leave the pipeline muted')

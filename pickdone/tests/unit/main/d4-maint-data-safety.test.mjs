@@ -149,11 +149,11 @@ test('import:run aborts when the file changed since the approved preview (TOCTOU
 
   // Mutate the file AFTER approval → run must refuse
   fs.writeFileSync(csvFile, 'Date: 2026/09/19 08:00\nVersion: 3.0\n' + ticktickHeader + '\n"收件箱","hello CHANGED","","","2026/09/21 10:00","","",,0,"0",,,1,,\n"收件箱","EVIL","","","2026/10/01","","",,0,"0",,,1,,\n')
-  await assert.rejects(
-    () => handlers['import:run'](fakeEvent, csvFile),
-    /file changed since preview/,
-    'run must abort on hash mismatch'
-  )
+  // main-ipc wave (2026-09-25): the abort is now the structured { ok:false, code } contract
+  // (bare throws lose the code across the context bridge) instead of a rejection.
+  const abort = await handlers['import:run'](fakeEvent, csvFile)
+  assert.equal(abort && abort.ok, false, 'run must abort on hash mismatch')
+  assert.equal(abort && abort.code, 'HASH_MISMATCH', 'the renderer gets the structured TOCTOU code')
   const abortLine = auditLines().find(l => l.action === 'import' && /changed since preview/.test(l.note || ''))
   assert.ok(abortLine, 'an audit line records the aborted run')
 

@@ -33,7 +33,8 @@ function makeCtx (rootState) {
   const ctx = {
     state,
     rootState,
-    commit (type, payload) { if (type === 'setList') state.list = payload; if (type === 'setProjectIds') state.projectIds = payload }
+    // init commits setListFromDb since the 2026-09-25 write-amplification fix (reads must not persist)
+    commit (type, payload) { if (type === 'setList' || type === 'setListFromDb') state.list = payload; if (type === 'setProjectIds') state.projectIds = payload }
   }
   const thisStore = { dispatch: () => Promise.resolve() }
   return { state, call: () => store.actions.init.call(thisStore, ctx) }

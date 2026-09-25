@@ -147,6 +147,13 @@ export function createEngine({ localStore, deviceId, clock = monotonicClock() })
   /**
    * SNAPSHOT — full state as one canonical (byte-deterministic) JSON string.
    * Includes the origin's max seq so a peer can resume increments cleanly.
+   *
+   * NOTE on maxSeq semantics (2026-09-25): maxSeq is read from row.seq, but the ONLY production
+   * adapter (lan-sync-bootstrap allRows) emits rows WITHOUT a seq field, so in production maxSeq
+   * is always 0 and a snapshot peer simply restarts increments from 0 (the round protocol never
+   * sends snapshots in P3a; this function is tests/CLI only). If a future adapter starts
+   * carrying per-row seq, maxSeq resumes meaningfully; do NOT derive it from updatedAt — the
+   * two are different clocks (oplog position vs wall-clock LWW age).
    */
   function buildSnapshot() {
     const rows = [...localStore.allRows()].sort((a, b) =>
