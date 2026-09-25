@@ -58,3 +58,33 @@ test('C8: restore, then restore the minted winner-backup, returns to the pre-res
   assert.equal(again.value.id, 'pl_loss')
   assert.equal(again.value.mm, '09:00')
 })
+
+/* C8 follow-up (2026-09-25 adversarial review): the winner snapshot is minted BEFORE the bulk
+ * write (it must capture the pre-overwrite row), so a THROWING restoreOp used to leave an
+ * orphan re-backup key. The restore now rolls the just-minted snapshot back on any failure. */
+test('C8: a failing restoreOp rolls back the minted winner snapshot (no orphan backup key)', () => {
+  const stored = new Map()
+  const rows = [{ id: 'pl_x', taskId: 't', day: '2026-09-25', mm: '12:00', sort: 3, updatedAt: 1700000009000 }]
+  const ORIG = 'metaConflictBackup.plan:pl_x.t0'
+  const call = (op, p) => {
+    switch (op) {
+      case 'getMeta': return stored.has(p) ? stored.get(p) : null
+      case 'setMeta': stored.set(p[0], p[1]); return undefined
+      case 'deleteMeta': stored.delete(p); return undefined
+      case 'listMetaKeys': return [...stored.keys()]
+      case 'planAll': return rows.map(r => ({ ...r }))
+      case 'planAddMany': throw new Error('disk full')
+      default: throw new Error('unexpected op ' + op)
+    }
+  }
+  const scb = require_('../../../src/main/sync-conflict-backups.js')
+  const ops = scb.ops(() => (op, p) => call(op, p))
+  stored.set(ORIG, JSON.stringify({ key: 'plan:pl_x', value: { id: 'pl_x', taskId: 't', day: '2026-09-25', mm: '08:00', sort: 1, updatedAt: 1700000000000 }, lostAt: 1 }))
+
+  assert.throws(() => ops.syncConflictBackupRestore({ key: ORIG }), /disk full/, 'the bulk-write failure surfaces to the caller')
+  const leftovers = [...stored.keys()].filter(k => k.startsWith('metaConflictBackup.plan:pl_x.') && k !== ORIG)
+  assert.equal(leftovers.length, 0, 'the minted winner snapshot was rolled back — no orphan key')
+  assert.equal(stored.has(ORIG), true, 'the ORIGINAL backup key survives the failed restore (refuse-to-lose)')
+  // and the pre-overwrite row content is untouched by the failed attempt
+  assert.equal(rows[0].mm, '12:00')
+})

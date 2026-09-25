@@ -130,20 +130,32 @@ module.exports = {
           // (minus conflict markers, same write-shape rules) into a fresh backup key BEFORE the
           // bulk write, pruned to the same 20-per-key cap as every other re-backup.
           const current = ENTITY_CURRENT_ROW[entity](call, id)
+          let snapKey = null
           if (current) {
             const snap = JSON.parse(JSON.stringify(current)) // detach from the live row list
             delete snap.conflictOf
             delete snap.conflictAt
             const ts36 = Date.now().toString(36)
-            call('setMeta', [META_CONFLICT_BACKUP_PREFIX + originalKey + '.' + ts36, JSON.stringify({ key: originalKey, value: snap, lostAt: Date.now() })])
+            snapKey = META_CONFLICT_BACKUP_PREFIX + originalKey + '.' + ts36
+            call('setMeta', [snapKey, JSON.stringify({ key: originalKey, value: snap, lostAt: Date.now() })])
             pruneBackups(call, originalKey)
           }
-          call(restoreOp, [row])
-          // Read-back before consuming: the bulk op may have SILENTLY skipped the row (see
-          // ENTITY_READBACK). If it never landed, keep the backup key — the restore is
-          // refuse-to-lose, never ok:true-with-copy-deleted.
-          if (!ENTITY_READBACK[entity](call, String(row.id))) {
-            throw new Error('syncConflictBackupRestore: restored row did not land in ' + entity + ' (bulk op skipped it) — backup kept')
+          // C8 follow-up (2026-09-25 adversarial review): the snapshot and the overwrite are not
+          // a single transaction — if the bulk write (or the read-back) throws, ROLL BACK the
+          // just-minted winner snapshot, otherwise the failed restore leaves an orphan
+          // metaConflictBackup key advertising a "recoverable" copy of a row that was never
+          // touched. The ORIGINAL backup key stays on any failure (refuse-to-lose).
+          try {
+            call(restoreOp, [row])
+            // Read-back before consuming: the bulk op may have SILENTLY skipped the row (see
+            // ENTITY_READBACK). If it never landed, keep the backup key — the restore is
+            // refuse-to-lose, never ok:true-with-copy-deleted.
+            if (!ENTITY_READBACK[entity](call, String(row.id))) {
+              throw new Error('syncConflictBackupRestore: restored row did not land in ' + entity + ' (bulk op skipped it) — backup kept')
+            }
+          } catch (e) {
+            if (snapKey != null) { try { call('deleteMeta', snapKey) } catch { /* rollback is best-effort; the 20-per-key prune bounds residue */ } }
+            throw e
           }
           call('deleteMeta', key)
           return { ok: true, key: originalKey, entity }
