@@ -63,9 +63,11 @@ const GROUPS = [
       ['ESLint', 'node', ['node_modules/eslint/bin/eslint.js', 'renderer/js', 'cli', 'src', 'tests', '--quiet', '--cache']],
       ['vue-tsc 类型检查(SFC script lang=ts + 全局契约)', 'npm', ['run', 'typecheck']],
       // 经 check-test-summary.cjs 跑同一套 fail=0 + skip 棘轮校验(与 pre-commit 单一实现,防两处分叉)
-      ['单元测试（run-all 自动发现,fail=0+skip棘轮,勿手写清单）', 'node', ['cli/check-test-summary.cjs'], null, 10],
-      // D4 覆盖率棘轮(只升不降,回退即红;自跑 unit coverage ~5min,15min 预算含满载余量)
-      ['覆盖率棘轮（lines/branch/funcs 对比 cli/.coverage-baseline.json,通过时自动上调基线）', 'node', ['cli/check-coverage-ratchet.cjs'], null, 15],
+      // --with-coverage: run-all also writes tests/.artifacts/coverage-summary.json on this pass
+      ['单元测试（run-all 自动发现,fail=0+skip棘轮,勿手写清单）', 'node', ['cli/check-test-summary.cjs', '--with-coverage'], null, 10],
+      // D4 覆盖率棘轮(只升不降,回退即红);--await-summary 复用上一 stage 的 coverage 摘要,
+      // 不再并发重跑全量单测(4vCPU CI 上双份套件并发=互相拖到超时红,2026-09-26 实锤)
+      ['覆盖率棘轮（lines/branch/funcs 对比 cli/.coverage-baseline.json,通过时自动上调基线）', 'node', ['cli/check-coverage-ratchet.cjs', '--await-summary'], null, 15],
     ]
   },
   {

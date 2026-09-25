@@ -51,15 +51,20 @@ test('writeBaseline/loadBaseline: JSON round-trips via the real file', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cov-ratchet-test-'))
   try {
     // writeBaseline 目标文件是模块常量,这里通过临时副本验证格式兼容性:
-    // 直接读仓库基线 + 往返写临时文件,确认 loadBaseline 能读回同值
+    // 直接读仓库基线 + 往返写临时文件,确认 loadBaseline 能读回同值(按平台分键)
     const repoBaseline = JSON.parse(fs.readFileSync(
       new URL('../../../cli/.coverage-baseline.json', import.meta.url), 'utf8'))
+    const platforms = Object.keys(repoBaseline.baselines || {})
+    assert.ok(platforms.length > 0, 'baseline must be keyed by platform (win32/linux file sets differ ~10pt)')
+    for (const p of platforms) {
+      const b = repoBaseline.baselines[p]
+      assert.ok(b.lines > 0 && b.branches > 0 && b.functions > 0,
+        `platform ${p} baseline must be positive (a zeroed baseline would make the ratchet toothless)`)
+    }
     const target = path.join(dir, 'b.json')
     fs.writeFileSync(target, JSON.stringify({ _comment: 'x', baselines: repoBaseline.baselines }, null, 2) + '\n')
     const loaded = JSON.parse(fs.readFileSync(target, 'utf8'))
     assert.deepEqual(loaded.baselines, repoBaseline.baselines)
-    assert.ok(loaded.baselines.lines > 0 && loaded.baselines.branches > 0 && loaded.baselines.functions > 0,
-      'repo baseline must be positive (a zeroed baseline would make the ratchet toothless)')
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
   }

@@ -1,8 +1,15 @@
 {
-  "_comment": "ratchet baseline: each metric = last passing run, floored to whole percent",
+  "_comment": "ratchet baseline per platform (win32/linux/darwin file sets differ ~10pt): each metric = last passing run on that platform, floored to whole percent",
   "baselines": {
-    "lines": 86,
-    "branches": 81,
-    "functions": 77
+    "linux": {
+      "lines": 86,
+      "branches": 81,
+      "functions": 77
+    },
+    "win32": {
+      "lines": 76,
+      "branches": 72,
+      "functions": 63
+    }
   }
 }

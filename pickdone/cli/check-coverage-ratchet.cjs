@@ -31,19 +31,29 @@ const METRICS = [
   { key: 'functions', label: 'funcs', column: 3 }
 ]
 
+// Coverage differs per platform (~10pt: win32 loads a smaller file set than linux CI), so the
+// ratchet is per-platform: one shared number would let the higher platform red the lower one.
+const PLATFORM = process.platform
+
 function loadBaseline () {
   let base = { lines: 0, branches: 0, functions: 0 }
   if (fs.existsSync(BASELINE_FILE)) {
-    base = { ...base, ...JSON.parse(fs.readFileSync(BASELINE_FILE, 'utf8')).baselines }
+    const baselines = JSON.parse(fs.readFileSync(BASELINE_FILE, 'utf8')).baselines || {}
+    base = { ...base, ...(baselines[PLATFORM] || {}) }
   }
   return base
 }
 
 function writeBaseline (measured) {
+  let baselines = {}
+  if (fs.existsSync(BASELINE_FILE)) {
+    baselines = JSON.parse(fs.readFileSync(BASELINE_FILE, 'utf8')).baselines || {}
+  }
+  baselines[PLATFORM] = measured
   fs.writeFileSync(BASELINE_FILE, JSON.stringify({
     // 覆盖率棘轮基线 - 由 check-coverage-ratchet.cjs 通过时自动回写,请勿手工下调
-    _comment: 'ratchet baseline: each metric = last passing run, floored to whole percent',
-    baselines: measured
+    _comment: 'ratchet baseline per platform (win32/linux/darwin file sets differ ~10pt): each metric = last passing run on that platform, floored to whole percent',
+    baselines
   }, null, 2) + '\n')
 }
 
@@ -81,15 +91,60 @@ module.exports = { parseAllFiles, loadBaseline, writeBaseline }
 
 if (require.main !== module) return
 
-const force = process.argv.includes('--update-baseline')
-const { out, code } = runCoverage()
-if (code !== 0) {
-  console.error('✗ [check-coverage-ratchet] unit suite itself failed (exit ' + code + '), coverage not evaluated')
-  const tail = out.split(/\r?\n/).filter(l => /^not ok /.test(l)).slice(0, 20)
-  if (tail.length) console.error(tail.map(l => '  | ' + l).join('\n'))
-  process.exit(1)
+const SUMMARY_FILE = path.join(__dirname, '..', 'tests', '.artifacts', 'coverage-summary.json')
+// The unit-test gate (check-all pool ②) runs run-all with --experimental-test-coverage, which
+// writes coverage-summary.json. Reuse it when fresh instead of re-running the whole unit suite:
+// running both suites CONCURRENTLY on a 4-vCPU CI runner doubled the load enough to time tests
+// out (2026-09-26 windows red). Wait briefly for the concurrent unit stage to produce it.
+const SUMMARY_MAX_AGE_MS = 30 * 60 * 1000
+const SUMMARY_WAIT_MS = 12 * 60 * 1000
+const SUMMARY_POLL_MS = 15 * 1000
+
+function loadFreshSummary (notBefore) {
+  try {
+    const stat = fs.statSync(SUMMARY_FILE)
+    if (Date.now() - stat.mtimeMs > SUMMARY_MAX_AGE_MS) return null
+    if (notBefore && stat.mtimeMs < notBefore) return null
+    const j = JSON.parse(fs.readFileSync(SUMMARY_FILE, 'utf8'))
+    if (typeof j.lines === 'number' && typeof j.branches === 'number' && typeof j.functions === 'number') return j
+    return null
+  } catch { return null }
 }
-const measured = parseAllFiles(out)
+
+function waitForFreshSummary (notBefore) {
+  const deadline = Date.now() + SUMMARY_WAIT_MS
+  for (;;) {
+    const s = loadFreshSummary(notBefore)
+    if (s) return s
+    if (Date.now() >= deadline) return null
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, SUMMARY_POLL_MS)
+  }
+}
+
+const force = process.argv.includes('--update-baseline')
+// --await-summary (check-all only): the unit stage runs concurrently in the same pool, so wait
+// for its coverage-summary.json. Standalone runs never wait — a missing/stale summary falls
+// straight through to the suite run.
+const startedAt = Date.now()
+const preflight = loadFreshSummary(null)
+const measuredFromSummary = preflight && (preflight.generatedAt && startedAt - Date.parse(preflight.generatedAt) < 60 * 1000)
+  ? preflight
+  : (process.argv.includes('--await-summary') ? waitForFreshSummary(startedAt) : null)
+
+let measured
+if (measuredFromSummary) {
+  measured = { lines: measuredFromSummary.lines, branches: measuredFromSummary.branches, functions: measuredFromSummary.functions }
+  console.log(`[check-coverage-ratchet] reused coverage summary from the unit gate (${measured.lines}/${measured.branches}/${measured.functions})`)
+} else {
+  const { out, code } = runCoverage()
+  if (code !== 0) {
+    console.error('✗ [check-coverage-ratchet] unit suite itself failed (exit ' + code + '), coverage not evaluated')
+    const tail = out.split(/\r?\n/).filter(l => /^not ok /.test(l)).slice(0, 20)
+    if (tail.length) console.error(tail.map(l => '  | ' + l).join('\n'))
+    process.exit(1)
+  }
+  measured = parseAllFiles(out)
+}
 if (!measured) {
   console.error('✗ [check-coverage-ratchet] no "# all files" coverage summary found — reporter output changed?')
   process.exit(1)
