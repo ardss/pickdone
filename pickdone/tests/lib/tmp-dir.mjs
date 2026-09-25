@@ -27,13 +27,18 @@ const require_ = createRequire(import.meta.url)
 // 进程退出时统一清扫本进程创建的所有临时目录(含未走 finally 的顶层泄漏兜底)
 const created = new Set()
 let hooksInstalled = false
+// maxRetries: win32 上 open 的 SQLite 句柄在 'exit' 钩子时刻尚未释放,unlink 报 EBUSY/EPERM;
+// 重试缓解短占用,但 DB 目录在 win32 上可能仍残留(Linux CI 上 unlink-open 语义直接成功)。
+function sweep () {
+  for (const d of created) {
+    try { fs.rmSync(d, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) } catch { /* best effort */ }
+  }
+}
 function installExitHooks () {
   if (hooksInstalled) return
   hooksInstalled = true
   for (const evt of ['exit', 'beforeExit']) {
-    process.on(evt, () => {
-      for (const d of created) { try { fs.rmSync(d, { recursive: true, force: true }) } catch { /* best effort */ } }
-    })
+    process.on(evt, sweep)
   }
 }
 

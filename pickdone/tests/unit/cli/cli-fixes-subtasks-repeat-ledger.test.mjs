@@ -3,15 +3,15 @@
  *  / repeat cap from settings.maxRepeat (#4) / record fix 600-min clamp errors (#6) / shim tomatoAppendMany dateKey re-derive (#8).
  *  Run: node --test tests/cli-fixes-subtasks-repeat-ledger.test.mjs */
 import { test } from 'node:test'
-import assert from 'node:assert/strict'
-import os from 'node:os'
 import path from 'node:path'
-import { ANCHORS, REPO_ROOT } from '../../lib/source-anchors.mjs'
 import fs from 'node:fs'
+import assert from 'node:assert/strict'
+import { ANCHORS, REPO_ROOT } from '../../lib/source-anchors.mjs'
 import vm from 'node:vm'
 import { createRequire } from 'module'
+import { isolatedTmpDir } from '../../lib/tmp-dir.mjs'
 
-process.env.TODO_DB_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'todo-cli-fixes-'))
+process.env.TODO_DB_DIR = isolatedTmpDir('todo-cli-fixes-')
 const require_ = createRequire(import.meta.url)
 const db = require_('../../../src/main/db.js')
 const lib = require_('../../../cli/lib.js')

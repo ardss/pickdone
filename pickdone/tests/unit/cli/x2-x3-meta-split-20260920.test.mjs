@@ -6,14 +6,12 @@
  *   readers union the legacy `projectCategoryIds` array with the flags.
  * Run: node --test tests/unit/cli/x2-x3-meta-split-20260920.test.mjs
  */
-import path from 'node:path'
-import fs from 'node:fs'
-import os from 'node:os'
 import { createRequire } from 'module'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { isolatedTmpDir } from '../../lib/tmp-dir.mjs'
 
-process.env.TODO_DB_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'todo-x2x3-'))
+process.env.TODO_DB_DIR = isolatedTmpDir('todo-x2x3-')
 const require_ = createRequire(import.meta.url)
 const db = require_('../../../src/main/db.js')
 const lib = require_('../../../cli/lib.js')

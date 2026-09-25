@@ -4,15 +4,15 @@
  *  3. list --view + --on is a usage error (--view owns the date window)
  *  4. batch done on already-complete tasks is an idempotent skip (completedAt untouched, not counted)
  *  5. main-process audit: recordCustom lands + rotation-window retry keeps the line */
+import { execFileSync } from 'node:child_process'
 import path from 'node:path'
 import fs from 'node:fs'
-import os from 'node:os'
-import { execFileSync } from 'node:child_process'
 import { createRequire } from 'module'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { isolatedTmpDir } from '../../lib/tmp-dir.mjs'
 
-process.env.TODO_DB_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'todo-p2-'))
+process.env.TODO_DB_DIR = isolatedTmpDir('todo-p2-')
 const require_ = createRequire(import.meta.url)
 const db = require_('../../../src/main/db.js')
 const lib = require_('../../../cli/lib.js')
@@ -73,7 +73,7 @@ test('P2-4: batch done on already-complete tasks is an idempotent skip', () => {
 })
 
 test('P2-5: audit recordCustom lands and survives a rotation window', () => {
-  process.env.TODO_USER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'todo-p2-audit-'))
+  process.env.TODO_USER_DATA_DIR = isolatedTmpDir('todo-p2-audit-')
   const audit = require_('../../../src/main/audit.js')
   audit.resetForTests()
   audit.setDirResolver(() => process.env.TODO_USER_DATA_DIR)

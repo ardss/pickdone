@@ -7,15 +7,14 @@
  *  with the same TODO_DB_DIR (cli-smoke.js / unit-cli-v02 pattern).
  *  Run: node --test tests/unit-cli-v03-date-clear.test.mjs */
 import { test } from 'node:test'
-import assert from 'node:assert/strict'
-import os from 'node:os'
 import path from 'node:path'
-import fs from 'node:fs'
+import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { createRequire } from 'module'
 import { fileURLToPath } from 'node:url'
+import { isolatedTmpDir } from '../../lib/tmp-dir.mjs'
 
-process.env.TODO_DB_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'todo-cli-v03-dateclear-'))
+process.env.TODO_DB_DIR = isolatedTmpDir('todo-cli-v03-dateclear-')
 const require_ = createRequire(import.meta.url)
 const db = require_('../../../src/main/db.js')
 const lib = require_('../../../cli/lib.js')

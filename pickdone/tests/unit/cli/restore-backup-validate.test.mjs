@@ -11,16 +11,16 @@
  * Run: node --test tests/unit/cli/dw6-restore-backup-validate.test.mjs
  */
 import { test } from 'node:test'
-import assert from 'node:assert/strict'
-import os from 'node:os'
 import path from 'node:path'
 import fs from 'node:fs'
+import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
-process.env.TODO_DB_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'todo-cli-restorebak-'))
+process.env.TODO_DB_DIR = isolatedTmpDir('todo-cli-restorebak-')
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 import { createRequire } from 'module'
+import { isolatedTmpDir } from '../../lib/tmp-dir.mjs'
 const require_ = createRequire(import.meta.url)
 const dbm = require_(path.join(ROOT, 'src/main/db.js'))
 dbm.init(process.env.TODO_DB_DIR)
@@ -85,7 +85,7 @@ test('adversarial round: schemaV>1 on the NON-counted segments (filterState) is 
 })
 
 test('F15: discovery lists snapshots from the user-chosen settings.backupDir', () => {
-  const userDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dw6-user-backupdir-'))
+  const userDir = isolatedTmpDir('dw6-user-backupdir-')
   try {
     fs.writeFileSync(path.join(userDir, 'auto-20260924-120000.json'), realDump({ todos: 1, cats: 0 }))
     // Point settings.backupDir at it (blob only; settings_rows overlay absent → doc = blob)
