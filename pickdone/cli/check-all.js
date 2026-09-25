@@ -175,21 +175,39 @@ export function writeFlakeEvents (events, dir, extra = {}) {
 // opts.workerGate(i):第 i 个 worker 起跑前须先 await 的 gate(CI 流水线重叠用——第 2 条活体车道
 // 等静态池收尾才放行);opts.onLastStage:最后一个 stage 被 worker 领走时回调一次(静态池降到最后
 // 1 个 stage 时提前放行第 1 条活体车道)
-async function runPool (stages, limit, { retry = 0, onLastStage, workerGate } = {}) {
+async function runPool (stages, limit, { retry = 0, onLastStage, workerGate, silent = false } = {}) {
   const results = new Array(stages.length)
   let next = 0
   let tailCb = onLastStage
+  // 车道 gate 的"排空兜底":最后一个 stage 被领走即放行所有仍在等 gate 的车道直接收工——
+  // 否则一条永不 resolve 的 gate 会把整池挂死(worker 的 await 永不返回,Promise.all 卡死)
+  let drainedRes = null
+  const drained = new Promise(res => { drainedRes = res })
+  // silent:true 供单测导入使用——node --test 的子进程以 stdout 承载 runner 序列化协议帧,
+  // 本池的原生 process.stdout.write/console.log 直写会随机插进帧中间,父端反序列化即炸
+  // ('Unable to deserialize cloned data',2026-09-25 对抗复审实测 15 跑 4 红);静默跑法零直写
+  const sayRaw = silent ? () => {} : s => process.stdout.write(s)
+  const say = silent ? () => {} : (...a) => console.log(...a)
   async function worker (idx) {
-    if (workerGate) await workerGate(idx)
+    let gateOpen = !workerGate
     while (next < stages.length) {
+      if (!gateOpen) {
+        const verdict = await Promise.race([
+          workerGate(idx).then(() => 'go'),
+          drained.then(() => 'drained')
+        ])
+        if (verdict === 'drained') return // 池已排空,这条被 gate 压住的车道无活可干
+        gateOpen = true
+      }
       const i = next++
+      if (next === stages.length && drainedRes) { const res = drainedRes; drainedRes = null; res() }
       if (tailCb && next === stages.length) { const cb = tailCb; tailCb = null; cb() }
-      process.stdout.write(`  ▶ [${i + 1}/${stages.length}] ${stages[i][0]} ... 启动\n`)
+      sayRaw(`  ▶ [${i + 1}/${stages.length}] ${stages[i][0]} ... 启动\n`)
       results[i] = await runStage(stages[i])
       // 活体门禁在 3 车道并行负载下存在时序脆弱点(实测:更新链路单跑全绿,并行偶发红)——失败重试一次,
       // 仍然红才是真回归;重试通过会累计耗时,便于区分稳定绿与抖动绿
       for (let t = 0; t < retry && !results[i].ok; t++) {
-        console.log(`  ↻ [${i + 1}/${stages.length}] ${stages[i][0]} 失败,重试 ${t + 1}/${retry} ...`)
+        say(`  ↻ [${i + 1}/${stages.length}] ${stages[i][0]} 失败,重试 ${t + 1}/${retry} ...`)
         const r2 = await runStage(stages[i])
         if (r2.ok) {
           r2.ms += results[i].ms
@@ -198,12 +216,12 @@ async function runPool (stages, limit, { retry = 0, onLastStage, workerGate } = 
         results[i] = r2
       }
       const r = results[i]
-      console.log(`  ${r.ok ? '✓' : '✗'} [${i + 1}/${stages.length}] ${r.name} — ${fmtMs(r.ms)}${r.timedOut ? `（超时 ${r.budget} 分钟按红计）` : ''}`)
+      say(`  ${r.ok ? '✓' : '✗'} [${i + 1}/${stages.length}] ${r.name} — ${fmtMs(r.ms)}${r.timedOut ? `（超时 ${r.budget} 分钟按红计）` : ''}`)
       if (!r.ok && r.out.trim()) {
-        console.log(r.out.trim().split('\n').slice(-25).map(l => '    ' + l).join('\n'))
+        say(r.out.trim().split('\n').slice(-25).map(l => '    ' + l).join('\n'))
         // tail 25 行常吞掉 node:test 的 "not ok N - <name>"（失败名在输出中段），单独抽失败用例行
         const diag = r.out.split('\n').filter(l => /✖|not ok \d|AssertionError|FAIL:|✗ /.test(l)).slice(0, 20)
-        if (diag.length) console.log('  [diag] failing cases:\n' + diag.map(l => '    ' + l.trim().slice(0, 150)).join('\n'))
+        if (diag.length) say('  [diag] failing cases:\n' + diag.map(l => '    ' + l.trim().slice(0, 150)).join('\n'))
       }
     }
   }

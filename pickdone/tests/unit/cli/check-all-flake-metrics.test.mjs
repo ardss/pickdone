@@ -6,17 +6,32 @@
  *   - writeFlakeEvents 落盘 JSON 且 flakeCount 正确
  *   - runPool 的 onLastStage(最后一个 stage 被领走时回调一次)与 workerGate(worker 起跑前 gate)
  * 全部用假 stage(node 子进程秒级退出),不拉 Electron、不依赖 renderer-dist。
+ * 关键:所有 runPool 调用必须 silent:true——本文件跑在 node --test 下,子进程 stdout 承载
+ * runner 序列化协议帧,check-all.js 的原生直写(process.stdout.write/console.log)随机插进帧
+ * 中间,父端 #processRawBuffer 反序列化即炸('Unable to deserialize cloned data',
+ * 2026-09-25 对抗复审实测 15 跑 4 红)。临时目录统一走 tests/lib/tmp-dir.mjs(退出自动清扫)。
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { runPool, resetFlakeEvents, getFlakeEvents, evaluateFlakeThreshold, writeFlakeEvents } from '../../../cli/check-all.js'
+import { isolatedTmpDir } from '../../lib/tmp-dir.mjs'
 
-function tmpDir (label) {
-  return fs.mkdtempSync(path.join(os.tmpdir(), `check-all-flake-${label}-`))
+const POOL_TIMEOUT_MS = 30000 // 兜底:runPool 卡死(如 workerGate 实现回归成前置全量等待)时按红而不是挂死
+
+/** 带 ProgressGuard 地跑 runPool:超时即 fail,防 gate 回归把池挂死吞掉测试进程 */
+async function runPoolGuarded (stages, limit, opts) {
+  let timer
+  try {
+    return await Promise.race([
+      runPool(stages, limit, opts),
+      new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('runPool did not finish within ' + POOL_TIMEOUT_MS + 'ms — workerGate/调度疑似挂死')), POOL_TIMEOUT_MS) })
+    ])
+  } finally { clearTimeout(timer) }
 }
+
+const okStage = name => [name, 'node', ['-e', 'process.exit(0)']]
 
 /** 造一个"首跑失败、重试通过"的 stage:辅助脚本首次运行写旗标并 exit 1,旗标存在则 exit 0 */
 function flakyStage (dir, name) {
@@ -33,8 +48,6 @@ function flakyStage (dir, name) {
   return [name, 'node', [helper, flag]]
 }
 
-const okStage = name => [name, 'node', ['-e', 'process.exit(0)']]
-
 test('threshold: ≤2 retry-passed stages = ok, >2 = warn', () => {
   assert.equal(evaluateFlakeThreshold([]).level, 'ok')
   assert.equal(evaluateFlakeThreshold([{ stage: 'a' }, { stage: 'b' }]).level, 'ok')
@@ -46,9 +59,9 @@ test('threshold: ≤2 retry-passed stages = ok, >2 = warn', () => {
 
 test('runPool: a retry-passed stage records exactly one flake event with attempt/耗时分账', async () => {
   resetFlakeEvents()
-  const dir = tmpDir('event')
+  const dir = isolatedTmpDir('check-all-flake-event-')
   const name = '假活体·重试通过'
-  const rs = await runPool([flakyStage(dir, name)], 1, { retry: 1 })
+  const rs = await runPoolGuarded([flakyStage(dir, name)], 1, { retry: 1, silent: true })
   assert.equal(rs.length, 1)
   assert.equal(rs[0].ok, true, '重试后应转绿')
   const ev = getFlakeEvents()
@@ -63,13 +76,12 @@ test('runPool: a retry-passed stage records exactly one flake event with attempt
 
 test('runPool: a first-pass-green stage records NO flake event', async () => {
   resetFlakeEvents()
-  await runPool([okStage('假活体·一次通过')], 1, { retry: 1 })
+  await runPoolGuarded([okStage('假活体·一次通过')], 1, { retry: 1, silent: true })
   assert.deepEqual(getFlakeEvents(), [])
 })
 
-test('writeFlakeEvents: writes JSON with flakeCount to the given dir', async () => {
-  resetFlakeEvents()
-  const dir = tmpDir('write')
+test('writeFlakeEvents: writes JSON with flakeCount to the given dir', () => {
+  const dir = isolatedTmpDir('check-all-flake-write-')
   const file = writeFlakeEvents([{ stage: 's1', attempt: 2 }], dir, { totalStages: 5 })
   const parsed = JSON.parse(fs.readFileSync(file, 'utf8'))
   assert.equal(parsed.flakeCount, 1)
@@ -81,23 +93,25 @@ test('writeFlakeEvents: writes JSON with flakeCount to the given dir', async () 
 test('runPool: onLastStage fires exactly once when the LAST stage is picked up', async () => {
   resetFlakeEvents()
   let tailCalls = 0
-  const stages = [okStage('s1'), okStage('s2'), okStage('s3')]
-  const rs = await runPool(stages, 2, { onLastStage: () => tailCalls++ })
+  const rs = await runPoolGuarded([okStage('s1'), okStage('s2'), okStage('s3')], 2, {
+    silent: true,
+    onLastStage: () => tailCalls++
+  })
   assert.equal(rs.length, 3)
   assert.ok(rs.every(r => r.ok))
   assert.equal(tailCalls, 1, '尾段回调只应触发一次')
 })
 
-test('runPool: workerGate holds a worker back until its gate resolves', async () => {
+test('runPool: workerGate holds worker 0 back WITHOUT blocking the pool', async () => {
   resetFlakeEvents()
-  const started = []
-  const gate = new Promise(res => { setTimeout(res, 150) })
-  const stages = [okStage('g1'), okStage('g2')]
-  const rs = await runPool(stages, 2, {
-    workerGate: i => (i === 0 ? gate : Promise.resolve())
+  // worker 0 的 gate 永不 resolve;worker 1 立即放行。正确实现下整池仍须正常收尾
+  // (stage 全由 worker 1 消化)——若 gate 回归成"起跑前全量等待",下面的
+  // runPoolGuarded 30s 兜底会把本用例按红而不是挂死测试进程
+  const gateNever = new Promise(() => {})
+  const rs = await runPoolGuarded([okStage('g1'), okStage('g2'), okStage('g3')], 2, {
+    silent: true,
+    workerGate: i => (i === 0 ? gateNever : Promise.resolve())
   })
-  assert.equal(rs.length, 2)
-  assert.ok(rs.every(r => r.ok))
-  // worker 0 被 gate 压住,全部 stage 由 worker 1 串行消化——两阶段都真实跑过
-  assert.deepEqual(started, [])
+  assert.equal(rs.length, 3)
+  assert.ok(rs.every(r => r.ok), '被 gate 压住的 worker 不得阻塞其余车道消化全部 stage')
 })
