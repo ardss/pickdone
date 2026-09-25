@@ -90,5 +90,18 @@ const r = spawnSync(process.execPath, ['--test', '--test-force-exit', `--test-ti
   // stdout — the summary gate then read fail=undefined and red'd every run (2026-09-24).
   '--test-reporter=tap', '--test-reporter-destination=stdout',
   ...forwardArgs, ...files],
-  { stdio: 'inherit' })
+  { stdio: ['inherit', 'pipe', 'inherit'], maxBuffer: 1 << 28 })
+// Timing summary: print the enforced per-test ceiling next to the SLOWEST observed test, so a
+// near-ceiling duration reads as "slow but finished" and a kill-at-ceiling reads as "hung".
+// The 2min ceiling itself stays as-is (observed margin vs the slowest test is 6.5x+).
+if (r.stdout) process.stdout.write(r.stdout) // forward the TAP verbatim (summary gate parses it)
+try {
+  const tap = r.stdout ? r.stdout.toString() : ''
+  const slow = []
+  for (const m of tap.matchAll(/^ {2}duration_ms: ([0-9.]+)/gm)) slow.push(parseFloat(m[1]))
+  if (slow.length) {
+    const max = Math.max(...slow)
+    console.error(`[run-all] per-test timeout ceiling: ${TEST_TIMEOUT_MS}ms; slowest observed test: ${max.toFixed(0)}ms (${(TEST_TIMEOUT_MS / max).toFixed(1)}x margin)`)
+  }
+} catch { /* diagnostics only — never mask the runner's real exit status */ }
 process.exit(r.status ?? 1)
