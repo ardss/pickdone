@@ -14,6 +14,8 @@ const log = require('electron-log')
 
 const dbm = require('./db')
 const fixUtil = require('./fix-util')
+// C11 (2026-09-26): quit gate for the external-write poll — see ext-watch-gate.js and onChange below.
+const extWatchGate = require('./ext-watch-gate')
 const { handleAppProtocol } = require('./protocol')
 // The .cjs extension must be spelled out: require's resolution algorithm does not include .cjs (once threw Cannot find module at startup)
 const dbRecovery = require('./dbRecovery.cjs')
@@ -314,6 +316,12 @@ function watchDbForExternalWrites () {
   }
   const onChange = () => {
     try {
+      // C11 (2026-09-26): once the quit chain has started, a tick landing inside the 500ms-2s
+      // flush window must do NOTHING — no dbm.call reads, no wc.send, no slot-delete commit.
+      // stopDbWatch only runs at flushNow (after the flush window), so the poll is still live
+      // here; without this gate a late tick could forward a CLI command to an already-flushed
+      // renderer and consume the slot whose resulting write would land after dbm.close().
+      if (!extWatchGate.canPoll()) return
       const m = readWatchMtime()
       if (m == null) return
       // Disarmed baseline (startup torn read): the first non-null read only ARMS the watcher —
@@ -717,6 +725,7 @@ app.on('will-quit', (event) => {
   if (flushDone) return // passthrough: let the native quit (and updater install) proceed
   if (quitting) { event.preventDefault(); return }
   quitting = true
+  extWatchGate.arm() // C11: disarm the external-write poll BEFORE the flush window opens
   event.preventDefault()
   const FLUSH_FLOOR_MS = 500
   const flushNow = () => {
