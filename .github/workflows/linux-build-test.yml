@@ -7,6 +7,12 @@ name: Linux build (test artifact)
 on:
   workflow_dispatch:
 
+# (2026-09-25 cost pass) parity with ci.yml / visual-smoke.yml (visual-smoke.yml:23-25 pattern):
+# a re-dispatch while one build is running cancels the older run instead of queueing behind it.
+concurrency:
+  group: linux-build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -27,6 +33,8 @@ jobs:
             ~/.cache/electron
             ~/.cache/electron-builder
           key: electron-${{ runner.os }}-${{ hashFiles('pickdone/package-lock.json') }}
+          # lock-only changes no longer force a full cold re-download of the Electron cache
+          restore-keys: electron-${{ runner.os }}-
 
       - name: Install
         working-directory: pickdone
