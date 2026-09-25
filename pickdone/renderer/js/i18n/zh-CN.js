@@ -158,6 +158,8 @@ export default {
     "conflictLostAt": "丢失于 {time}",
     "conflictRestore": "恢复",
     "conflictRestored": "已恢复备份数据",
-    "conflictRestoreFail": "恢复失败，请重试"
+    "conflictRestoreFail": "恢复失败，请重试",
+    "conflictRestoreTitle": "恢复冲突备份",
+    "conflictRestoreConfirm": "恢复「{key}」将覆盖当前保留的数据版本（当前版本会先自动再备份一次）。确认恢复？"
   }
 }

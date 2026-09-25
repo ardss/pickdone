@@ -79,10 +79,10 @@
       <div v-if="conflictOpen" class="sync-conflict-list">
         <div class="tip" v-if="!conflictBackups.length">{{ $t('sync.conflictEmpty') }}</div>
         <div v-for="b in conflictBackups" :key="b.key" class="sync-conflict-item">
-          <span class="tip sync-conflict-key">{{ b.key }}</span>
+          <span class="tip sync-conflict-key">{{ b.originalKey || b.key }}</span>
           <span class="tip" v-if="b.lostAt">{{ $t('sync.conflictLostAt', { time: fmtFull(b.lostAt) }) }}</span>
           <span class="tip sync-conflict-preview" v-if="b.preview">{{ b.preview }}</span>
-          <button class="mini" :disabled="conflictBusy === b.key" @click="restoreConflict(b)">{{ $t('sync.conflictRestore') }}</button>
+          <button class="mini" :disabled="conflictBusy === b.key" @click="askRestoreConflict(b)">{{ $t('sync.conflictRestore') }}</button>
         </div>
       </div>
     </div>
@@ -303,6 +303,13 @@ export default {
         this.conflictBackups = Array.isArray(list) ? list : []
       } catch (e) { this.conflictBackups = null }
     },
+    /** P3 UX: restoring overwrites the currently kept conflict winner — confirm first, matching
+     *  the destructive-action convention (unpair / re-pair). Show the friendly originalKey
+     *  (entity:id), not the raw metaConflictBackup meta key. */
+    askRestoreConflict (b) {
+      if (!b || !b.key || this.conflictBusy === b.key) return
+      this.askConfirm('sync.conflictRestoreTitle', 'sync.conflictRestoreConfirm', { key: b.originalKey || b.key }, () => this.restoreConflict(b))
+    },
     /** Y9/U6: restore one backup via the contract op, then refresh the list. Main expects a
      *  `{key}` payload object (src/main/sync-conflict-backups.js), not a bare key string — the
      *  old bare-string call made every restore throw "not a metaConflictBackup key". */
@@ -413,17 +420,25 @@ export default {
      *  recover the confirm dialog when the settings tab is (re)opened mid-request. */
     checkPendingPair () {
       const pp = this.status && this.status.pendingPair
-      if (pp && !this.incomingPair) this.showIncomingPair({ deviceName: pp.deviceName, deviceId: pp.deviceId, host: pp.host })
+      // A7: pass the main-stamped arrival time through — the recovery path must derive the
+      // remaining window from it, not restart the countdown at a full 60s.
+      if (pp && !this.incomingPair) this.showIncomingPair({ deviceName: pp.deviceName, deviceId: pp.deviceId, host: pp.host, at: pp.at })
     },
     showIncomingPair (evt) {
       this.pairExpired = false
+      // A7: the real 60s window is owned by the main-process transport, which stamps the
+      // arrival time (`at`) on status.pendingPair. Derive the remaining countdown from it so
+      // reopening the settings tab mid-request shows the true remaining seconds.
+      const expiresAt = (evt.at || Date.now()) + 60 * 1000
+      const leftSec = Math.max(0, Math.round((expiresAt - Date.now()) / 1000))
       this.incomingPair = {
         deviceName: evt.deviceName || '',
         deviceId: evt.deviceId || '',
         host: evt.host || '',
-        expiresAt: Date.now() + 60 * 1000,
-        leftSec: 60
+        expiresAt,
+        leftSec
       }
+      if (leftSec === 0) this.tickIncomingPair() // already expired: route into the expiry-hint path immediately
       if (!this._pairReqTimer) this._pairReqTimer = setInterval(() => this.tickIncomingPair(), 1000)
       this.focusPairDialog()
     },
@@ -515,7 +530,13 @@ export default {
           this.$message.success(this.$t('sync.pairOkMsg'))
           this.pairDraft = ''
           this.status = await getSyncStatus()
-        }).catch(() => { this.$message.error(this.$t('sync.pairFailMsg')) }).finally(() => { this.busy = false })
+        // Map the failure through pairFailureKey like connectPeer — the main process rejects
+        // with distinguishable reasons (rejected / timeout / throttled / not discovered) that
+        // the old blanket catch swallowed into the generic "code expired or wrong" toast.
+        }).catch(e => {
+          const key = pairFailureKey(e)
+          this.$message.error(this.$t(key || 'sync.pairFailMsg'))
+        }).finally(() => { this.busy = false })
       }
       if (this.peers.length) this.askConfirm('sync.repairTitle', 'sync.repairWarning', {}, proceed)
       else proceed()

@@ -158,6 +158,8 @@ export default {
     "conflictLostAt": "Lost at {time}",
     "conflictRestore": "Restore",
     "conflictRestored": "Backup restored",
-    "conflictRestoreFail": "Restore failed, please retry"
+    "conflictRestoreFail": "Restore failed, please retry",
+    "conflictRestoreTitle": "Restore conflict backup",
+    "conflictRestoreConfirm": "Restoring \"{key}\" overwrites the currently kept data (the current version is backed up again first). Restore it?"
   }
 }
