@@ -158,6 +158,17 @@ await sleep(800)
 await evalJson(`(()=>{try{localStorage.setItem('onboardingToursSeen',JSON.stringify({today:1,editpanel:1})); localStorage.setItem('appLocale','en-US')}catch{};return 'ok'})()`)
 await send('Page.reload')
 if (!(await waitBoot())) { console.error('FAIL: reload after tour-seeding did not finish within 30s'); try { ws.close() } catch {} process.exit(1) }
+// appLocale 回写竞态(2026-09-25 check:all 实锤:并行满载下 reload 时旧文档 unload 的设置持久化把
+// 内存里的 zh 写回 LS,盖掉刚 setItem 的 en-US → 新文档以 zh 启动,'Todo box' 高亮断言翻车)——
+// boot 后校验 locale 真生效,没生效就再写一次再 reload(最多 2 轮),仍不行才让后续断言按实红。
+for (let attempt = 0; attempt < 2; attempt++) {
+  const lang = await evalJson(`document.documentElement.lang || ''`)
+  if (/^en/i.test(lang)) break
+  await evalJson(`(()=>{try{localStorage.setItem('appLocale','en-US')}catch{};return 'ok'})()`)
+  await sleep(500) // let any pending persistence in the old document settle before reloading
+  await send('Page.reload')
+  if (!(await waitBoot())) { console.error('FAIL: locale re-apply reload did not finish within 30s'); try { ws.close() } catch {} process.exit(1) }
+}
 await send('Runtime.evaluate', { expression: `location.hash='#/todo-list/today'` }); await sleep(1500)
 ok('onboarding wizard closed (real clicks can land)', await evalJson(`!document.querySelector('.ob-mask')`), 'ob-mask still present')
 ok('driver tour overlay absent (real clicks can land)', await evalJson(`!document.body.classList.contains('driver-active') && !document.querySelector('.driver-overlay')`))
@@ -295,7 +306,7 @@ const matrix = await evalJson(`({quads: document.querySelectorAll('.matrix-quadr
 ok('quadrant: all four quadrants render', matrix.quads === 4)
 await gotoHash('#/todo-list/calendar', '.cal-seg button')
 await send('Runtime.evaluate', { expression: `[...document.querySelectorAll('.cal-seg button')].find(b => b.textContent.trim() === 'Time blocks')?.click()` })
-for (let i = 0; i < 10; i++) { await sleep(1000); if (await evalJson(`document.querySelectorAll('.cal-tb__cell').length > 0`)) break }
+for (let i = 0; i < 30; i++) { await sleep(1000); if (await evalJson(`document.querySelectorAll('.cal-tb__cell').length > 0`)) break } // 10s→30s:并行满载下 FC 网格首渲染可超 10s(2026-09-25 check:all 实锤 got 0)
 const tb = await evalJson(`({cells: document.querySelectorAll('.cal-tb__cell').length, pool: !!document.querySelector('.cal-tb__pool')})`)
 ok('time blocks: 7 days x 18 hours = 126 cells', tb.cells === 126, 'got ' + tb.cells)
 ok('time blocks: unscheduled task pool exists', tb.pool)
