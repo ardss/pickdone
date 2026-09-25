@@ -44,10 +44,33 @@ const ENTITY_READBACK = {
   tomato: (call, id) => (call('tomatoAll') || []).some(r => String(r.tomatoId) === id),
   setting: (call, id) => (call('settingsRowsAll') || []).some(r => r.key === id && !r.deleted)
 }
+/* C8 (2026-09-25): fetch the CURRENT winning row (raw) per entity — same sources as the
+ * readback probes but returning the row itself, so the restore can re-backup the row it is
+ * about to overwrite. Read-only probes; a missing row returns null (nothing to re-backup). */
+const ENTITY_CURRENT_ROW = {
+  plan: (call, id) => (call('planAll') || []).find(r => String(r.id) === id) || null,
+  filter: (call, id) => (call('filterList') || []).find(r => String(r.id) === id) || null,
+  category: (call, id) => (call('categoriesAllRows') || []).find(r => String(r.id) === id && !r.deleted) || null,
+  tomato: (call, id) => (call('tomatoAll') || []).find(r => String(r.tomatoId) === id) || null,
+  setting: (call, id) => (call('settingsRowsAll') || []).find(r => r.key === id && !r.deleted) || null
+}
 
 function parseBackup (raw) {
   try { const o = JSON.parse(raw); if (o && typeof o === 'object' && !Array.isArray(o)) return o } catch { /* unreadable payload surfaces as skipped/err below */ }
   return null
+}
+
+/* Wave-B P3 prune, shared: re-backups (meta AND entity branches since C8) honor the same
+ * 20-per-key cap as the apply path's writeMetaConflictBackup — repeated restore/re-conflict
+ * cycles must not grow metaConflictBackup.<key>.* forever. Best-effort by design. */
+function pruneBackups (call, originalKey) {
+  try {
+    const prefix = META_CONFLICT_BACKUP_PREFIX + originalKey + '.'
+    const keys = (call('listMetaKeys') || []).map(String).filter(k => k.startsWith(prefix)).sort()
+    for (const old of keys.slice(0, Math.max(0, keys.length - 20))) {
+      try { call('deleteMeta', old) } catch { /* prune is best-effort */ }
+    }
+  } catch { /* prune is best-effort */ }
 }
 
 module.exports = {
@@ -100,6 +123,21 @@ module.exports = {
           // permanently pollute the ledger row, so strip them before any write.
           delete row.conflictOf
           delete row.conflictAt
+          // C8 (2026-09-25): the entity branch used to OVERWRITE the current winning row without
+          // re-backuping it — the meta branch below re-backups the live value ("a restore is
+          // itself reversible", :73-75) but the entity restore destroyed the winner's only copy
+          // outside the table when the restore was itself wrong. Snapshot the current winner
+          // (minus conflict markers, same write-shape rules) into a fresh backup key BEFORE the
+          // bulk write, pruned to the same 20-per-key cap as every other re-backup.
+          const current = ENTITY_CURRENT_ROW[entity](call, id)
+          if (current) {
+            const snap = JSON.parse(JSON.stringify(current)) // detach from the live row list
+            delete snap.conflictOf
+            delete snap.conflictAt
+            const ts36 = Date.now().toString(36)
+            call('setMeta', [META_CONFLICT_BACKUP_PREFIX + originalKey + '.' + ts36, JSON.stringify({ key: originalKey, value: snap, lostAt: Date.now() })])
+            pruneBackups(call, originalKey)
+          }
           call(restoreOp, [row])
           // Read-back before consuming: the bulk op may have SILENTLY skipped the row (see
           // ENTITY_READBACK). If it never landed, keep the backup key — the restore is
@@ -115,15 +153,9 @@ module.exports = {
           const ts36 = Date.now().toString(36)
           call('setMeta', [META_CONFLICT_BACKUP_PREFIX + originalKey + '.' + ts36, JSON.stringify({ key: originalKey, value: current, lostAt: Date.now() })])
           // Wave-B P3: the re-backup must honor the same 20-per-key cap as the apply path's
-          // writeMetaConflictBackup (sync-apply.js) — the old restore minted unpruned backups,
-          // so repeated restore/re-conflict cycles grew metaConflictBackup.<key>.* forever.
-          try {
-            const prefix = META_CONFLICT_BACKUP_PREFIX + originalKey + '.'
-            const keys = (call('listMetaKeys') || []).map(String).filter(k => k.startsWith(prefix)).sort()
-            for (const old of keys.slice(0, Math.max(0, keys.length - 20))) {
-              try { call('deleteMeta', old) } catch { /* prune is best-effort */ }
-            }
-          } catch { /* prune is best-effort */ }
+          // writeMetaConflictBackup (sync-apply.js) — shared pruneBackups (also used by the
+          // C8 entity re-backup above).
+          pruneBackups(call, originalKey)
         }
         call('setMeta', [originalKey, b.value])
         call('deleteMeta', key)
