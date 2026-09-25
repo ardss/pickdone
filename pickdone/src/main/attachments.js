@@ -97,10 +97,49 @@ function attachmentPath (key) {
   // a weird-but-harmless key can still resolve to a real file instead of hard-failing the request.
   let decoded = key
   try { decoded = decodeURIComponent(key) } catch { decoded = key }
-  return path.join(attachDir(), path.basename(decoded))
+  const base = path.basename(decoded)
+  // LAN conflict rename (att-transfer-rename-ref-mismatch fix): when a pulled file with the same
+  // name but DIFFERENT content was renamed to `name-1` on disk, the synced row still says
+  // local://name — consult the device-local alias map FIRST so this device's resolution lands on
+  // the renamed bytes (the row itself must stay untouched: rewriting it would diverge from the
+  // sender's row and re-sync forever).
+  const alias = readAliases()[base]
+  return path.join(attachDir(), alias ? path.basename(alias) : base)
+}
+
+/* ---------- device-local attachment alias map (never synced) ----------
+ * Logical local:// key -> actual on-disk name, recorded when the LAN pull renames a
+ * same-name-different-content conflict to `name-1` (att-transfer.js writeAtomic). The synced
+ * rows keep referencing the ORIGINAL name, so every local:// resolution on this device must
+ * translate through this map. Device-local by design: the peer has no such collision and its
+ * own map (if any) would name the conflict differently — syncing it would corrupt both ends. */
+function aliasesPath () { return path.join(attachDir(), 'aliases.json') }
+function readAliases () {
+  try { const o = JSON.parse(fs.readFileSync(aliasesPath(), 'utf8')); if (o && typeof o === 'object' && !Array.isArray(o)) return o } catch { /* no map / unreadable: empty */ }
+  return {}
+}
+function setAlias (key, diskName) {
+  const k = path.basename(String(key || ''))
+  const n = path.basename(String(diskName || ''))
+  if (!k || !n || k === n) return false
+  const map = readAliases()
+  map[k] = n
+  try { fs.writeFileSync(aliasesPath(), JSON.stringify(map, null, 1)) } catch { /* best-effort */ }
+  return true
+}
+function deleteAlias (key) {
+  const k = path.basename(String(key || ''))
+  if (!k) return false
+  const map = readAliases()
+  if (!(k in map)) return false
+  delete map[k]
+  try { fs.writeFileSync(aliasesPath(), JSON.stringify(map, null, 1)) } catch { /* best-effort */ }
+  return true
 }
 
 module.exports = { attachDir, saveAttachment, attachmentPath, withinStorageQuota, dirTotalBytes, MAX_TOTAL_BYTES, __setTotalQuota,
+  // Alias map (LAN same-name conflict resolution): read/set/delete + list for tests/consumers.
+  readAliases, setAlias, deleteAlias, aliasesPath,
   // C5/C14 (2026-09-25): MAX_BYTES/MAX_FILES and the noise-slot classifier are exported so
   // attachments-guards.js is the shared gate for every write entry without duplicating caps.
   MAX_BYTES, MAX_FILES, isUnownedNoiseFile, dirUsage,
