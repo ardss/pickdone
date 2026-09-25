@@ -60,6 +60,7 @@ function arrivalTouchesCurrent (lists, key) {
   return decoded !== key && local.includes(decoded)
 }
 // [component-fixes] pure-end
+import { logger } from '../../utils/logger.js'
 
 export default {
   name: 'EpAttachments',
@@ -102,7 +103,14 @@ export default {
           const EP = (window as any).ElementPlus
           if (EP && EP.ElMessage) EP.ElMessage({ type: 'warning', message: (this as any).$t('statsJ.EditPanel.attachmentMissing'), duration: 6000, showClose: true })
         }
-      }).catch(() => { /* invoke-level errors keep their existing reporting path */ })
+      }).catch((err) => {
+        // Invoke-level failure (e.g. the locked gate in main/handlers/attachments.js 'open-file',
+        // or a dead IPC bridge). The old empty catch claimed these "keep their existing reporting
+        // path", but an explicit catch prevents the global unhandledrejection capture
+        // (utils/logger.js installGlobalErrorCapture) from ever firing — the failure was silent.
+        // Route it to the renderer log explicitly; the missing-file toast above is unchanged.
+        logger.error('open-file invoke failed: ' + ((err && (err.message || err)) || 'unknown'), err && err.stack)
+      })
     }
   }
 }
