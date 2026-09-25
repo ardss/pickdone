@@ -79,7 +79,7 @@ module.exports = function restoreBackup ({ opts, lib, emit }) {
   // a segment written by a NEWER app version must not be misread by this (older) CLI. Covers the
   // whole versioned segment set (adversarial round): todoState/categoryState (counted here) plus
   // filterState/planState/habitsState (restored by the App from the same dump).
-  for (const key of ['todoState', 'categoryState', 'filterState', 'planState', 'habitsState']) {
+  for (const key of ['todoState', 'categoryState', 'filterState', 'planState', 'habitsState', 'metaState']) {
     const seg = parseSeg(key)
     if (seg && Number(seg.schemaV || 1) > 1) {
       throw new lib.CliError(`snapshot ${key}.schemaV=${seg.schemaV} is newer than this CLI supports — upgrade the App and restore from its Settings -> Backup`, 'SNAPSHOT_FUTURE')

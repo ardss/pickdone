@@ -128,3 +128,44 @@ test('sync-hardening: restored todo rows are stamped dirty so LAN LWW / cloud fi
   assert.equal(stamped.taskId, 't1') // rest of the row carried over
   assert.equal(fn(null, now), null) // defensive
 })
+
+// ---------------- 2026-09-26 wave: B13 SCHEMA_V guard + B2 filter/plan LWW restamp + metaState restore ----------------
+
+test('B13: parseTodoState guards against the shared SCHEMA_V constant, not a hardcoded literal', () => {
+  // The literal '> 1' duplicated SCHEMA_V as a second source of truth (parseStampedSeg already
+  // uses the constant); it must read '> SCHEMA_V' so a future SCHEMA_V bump keeps both guards in lockstep.
+  assert.match(dataTab, /Number\(td\.schemaV\) > SCHEMA_V/, 'parseTodoState must compare against SCHEMA_V')
+  assert.ok(!/> 1 \(backup from a newer app version\)/.test(dataTab), 'the hardcoded "> 1" literal error copy must be gone')
+  // the error message interpolates the constant, mirroring parseStampedSeg
+  const fn = dataTab.match(/parseTodoState \(raw\) \{[\s\S]*?\n {4}\},/)[0]
+  assert.match(fn, /\+ SCHEMA_V \+/)
+})
+
+test('B2: restored saved-filter rows are re-stamped fresh (LAN LWW cannot self-revert the restore)', () => {
+  assert.match(dataTab, /function restoreStampLww \(row, now\) \{[\s\S]*?updatedAt: now \}/)
+  const fn = dataTab.match(/async restoreSavedFilters \(b\) \{[\s\S]*?\n {4}\},/)[0]
+  assert.match(fn, /restoreStampLww\(f, now\)/, 'filter rows must go through restoreStampLww before filter.putMany')
+  assert.match(fn, /const now = Date\.now\(\)/, 'the stamp is batched once per restore')
+  assert.ok(!/putMany', list\)/.test(fn), 'the raw backup list must NOT reach filter.putMany un-stamped')
+})
+
+test('B2: restored plan-chip rows are re-stamped fresh (same LWW rule as filters)', () => {
+  const fn = dataTab.match(/async restorePlanChips \(b\) \{[\s\S]*?\n {4}\},/)[0]
+  assert.match(fn, /restoreStampLww\(c, now\)/, 'chips must go through restoreStampLww before plan.putMany')
+  assert.match(fn, /const now = Date\.now\(\)/)
+  assert.ok(!/putMany', chips\)/.test(fn), 'the raw backup chips must NOT reach plan.putMany un-stamped')
+})
+
+test('metaState: applyRestoreDump restores the meta segment through the whitelisted meta.put door', () => {
+  const dump = dataTab.match(/async applyRestoreDump \(dump\) \{([\s\S]*?)\n {4}\}/)[1]
+  assert.ok(dump.includes('restoreMetaState(b)'), 'the metaState segment must be restored in the shared pipeline')
+  const fn = dataTab.match(/async restoreMetaState \(b\) \{[\s\S]*?\n {4}\},/)[0]
+  const wl = dataTab.match(/const META_RESTORE_PREFIXES = \[[\s\S]*?\]/)[0]
+  for (const prefix of ['repeatRule:', 'tomatoEstimateState:', 'projectDeadline:', 'projectStatus:', 'projectCategoryFlag:', 'projectMilestones:', 'projectCategoryIds']) {
+    assert.ok(wl.includes("'" + prefix + "'"), `restore whitelist must cover ${prefix}`)
+  }
+  assert.match(fn, /META_RESTORE_PREFIXES/, 'restore filters entries through META_RESTORE_PREFIXES')
+  assert.match(fn, /commitCommand\('meta', 'put'/, 'meta entries go through the same command door as the habits blob')
+  assert.match(fn, /parseStampedSeg\(b\.metaState\)/, 'the segment is schemaV-guarded like every other stamped segment')
+  assert.match(fn, /invalidateEstimateCache/, 'the memoized tomato-estimate cache is invalidated after a restore')
+})
