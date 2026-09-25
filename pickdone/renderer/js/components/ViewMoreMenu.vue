@@ -76,7 +76,9 @@ export default {
       this.$nextTick(() => {
         const el = this.$refs.pop
         if (el) {
-          el.style.left = Math.min(e.clientX - 190, window.innerWidth - 220) + 'px'
+          // [maint-0925 A13] clamp to the viewport on both sides: near the left edge clientX-190
+          // went negative and the pop was cut off / off-screen
+          el.style.left = Math.max(0, Math.min(e.clientX - 190, window.innerWidth - 220)) + 'px'
           el.style.top = (e.clientY + 8) + 'px'
           const first = el.querySelector('.vm-item[tabindex="0"]')
           if (first) first.focus()
