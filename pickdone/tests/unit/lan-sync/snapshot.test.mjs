@@ -791,3 +791,22 @@ test('snapshot: adversarial chunk streams (missing/duplicate index, totalRows mi
   await node.stop()
   await server.close()
 })
+
+test('chunkSnapshot: 50k-row scale — chunk count scales linearly, byte budget and tiling hold (2026-09-25 gap: chunking was only proven at 500 rows)', () => {
+  const N = 50000
+  const rows = []
+  for (let i = 0; i < N; i++) rows.push({ entity: 'todo', id: 's' + i, updatedAt: i, data: { taskId: 's' + i, pad: 'y'.repeat(200) } })
+  const r = chunkSnapshot({ schemaVersion: 1, rows }, { cursor: 42 })
+  assert.equal(r.totalRows, N)
+  assert.equal(r.cursor, 42)
+  assert.equal(r.chunks.flatMap(c => c.rows).length, N, 'every row lands in exactly one chunk')
+  for (let i = 1; i < r.chunks.length; i++) {
+    assert.ok(r.chunks[i - 1].rows.at(-1).id < r.chunks[i].rows[0].id, 'chunks tile in order without overlap')
+  }
+  for (const c of r.chunks) {
+    const bytes = Buffer.byteLength(JSON.stringify({ rows: c.rows }), 'utf8')
+    assert.ok(bytes <= SNAPSHOT_CHUNK_BYTES, 'every chunk stays under the budget')
+  }
+  // linear scaling sanity: ~200B/row rows against a 1MB budget must produce tens of chunks, not thousands
+  assert.ok(r.chunks.length >= 5 && r.chunks.length <= 400, 'chunk count within linear band: ' + r.chunks.length)
+})
