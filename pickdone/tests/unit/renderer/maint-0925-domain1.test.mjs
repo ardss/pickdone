@@ -102,6 +102,50 @@ test('A2 EditPanel global Esc guard honors showFilterModal; FilterView no longer
   assert.match(ui, /showFilterModal: false/, 'store declares the flag')
 })
 
+test('A2 review-fix: FilterView resets showFilterModal on unmount (no store-flag leak across routes)', () => {
+  const fv = read('renderer/js/views/FilterView.vue')
+  assert.match(fv, /beforeUnmount \(\) \{[\s\S]*?showFilterModal[\s\S]*?ui\/toggleFilterModal/, 'unmount hook closes the modal flag')
+  // drive the real hook body the way a route change would
+  const body = fv.match(/beforeUnmount \(\) \{([\s\S]*?)\},\r?\n {2}methods/)
+  assert.ok(body, 'beforeUnmount hook found')
+  const commits = []
+  const makeStore = open => ({
+    state: { ui: { showFilterModal: open } },
+    commit: (t, v) => commits.push([t, v])
+  })
+  const run = new Function('$store', body[1].replaceAll('this.$store', '$store'))
+  const store = makeStore(true)
+  run(store)
+  assert.deepEqual(commits, [['ui/toggleFilterModal', false]], 'leaving the route resets the flag')
+  // and it must be a no-op when the modal is already closed
+  commits.length = 0
+  run(makeStore(false))
+  assert.deepEqual(commits, [], 'no redundant commit when already closed')
+})
+
+/* ================= A6: removeTag undo rebuilds from the current title ================= */
+
+test('A6 review-fix: the "re-added during toast" guard recognizes the real #tag token form', () => {
+  const src = read('renderer/js/components/EditPanel.vue')
+  // extract BOTH regex string literals from removeTag so the scenario runs the shipped patterns;
+  // literals carry source-level escapes (\\s) — decode them to their JS string values first
+  const decode = lit => JSON.parse('"' + lit + '"')
+  const tokenLit = src.match(/const tokenRe = new RegExp\('([^']*)' \+ esc \+ '\(([^']*)\)'\)/)
+  assert.ok(tokenLit, 'tokenRe construction found')
+  const guardLit = src.match(/if \(new RegExp\('\(\^\|\\\\s\)#' \+ esc \+ '\(([^']*)\)'\)\.test\(cur\)\) return/)
+  assert.ok(guardLit, 'guard requires the # prefix: (^|\\s)#name')
+  const esc = 'java'
+  const tokenRe = new RegExp(decode(tokenLit[1]) + esc + '(' + decode(tokenLit[2]) + ')')
+  const guard = new RegExp('(^|\\s)#' + esc + '(' + decode(guardLit[1]) + ')')
+  // the reviewer scenario: remove → re-add during the toast → undo must be a no-op
+  let title = 'buy milk #java'
+  title = title.replace(tokenRe, '')
+  assert.equal(title, 'buy milk', 'remove works')
+  title = title + ' #java' // addTag re-adds during the toast window
+  assert.equal(guard.test(title), true, 'guard detects the re-added #java (the old bare-word pattern never matched it)')
+  assert.equal(guard.test('buy milk java'), false, 'a bare word is not a tag: undo must still restore for that title')
+})
+
 /* ================= A4: deleteWithUndo failure surfaces an error toast ================= */
 
 test('A4 deleteWithUndo: rejected dispatch → error toast (moveFailToast style) and false, not silence', async () => {

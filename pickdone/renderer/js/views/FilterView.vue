@@ -99,6 +99,12 @@ export default {
     },
     selectedId () { return this.$store.state.ui.rightSidebarTodoEdit.taskId }
   },
+  // [A2 review-fix] the flag moved out of component-local data into the ui store, so it no longer
+  // resets itself on teardown: leaving the route with the modal open would leave showFilterModal
+  // stuck true and the global Esc guard (EditPanel._onKeydown) swallowing Esc on every page
+  beforeUnmount () {
+    if (this.$store.state.ui.showFilterModal) this.$store.commit('ui/toggleFilterModal', false)
+  },
   methods: {
     taskContextMenu (t, e) { taskContextMenu(this, t, e) },
     openEdit (t) {

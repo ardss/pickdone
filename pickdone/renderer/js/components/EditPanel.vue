@@ -708,7 +708,7 @@ export default {
         () => this.fieldPatch('title', (this.e.title || '').replace(tokenRe, '')),
         () => {
           const cur = this.e ? (this.e.title || '') : ''
-          if (new RegExp('(^|\\s)' + esc + '(?=[\\s#,，。.!?！？]|$)').test(cur)) return // re-added during the toast: nothing to restore
+          if (new RegExp('(^|\\s)#' + esc + '(?=[\\s#,，。.!?！？]|$)').test(cur)) return // re-added during the toast: nothing to restore
           const at = Math.min(this._removedTagAt == null ? cur.length : this._removedTagAt, cur.length)
           const before = cur.slice(0, at).replace(/\s+$/, '')
           this.fieldPatch('title', (before ? before + ' ' : '') + '#' + name + cur.slice(before.length))
