@@ -10,6 +10,13 @@
  * renderer's sanitize path (domain 3 contract — exported surface: SETTINGS_MANIFEST with
  * boolean/number/enum/string arrays + ranges {min,max}).
  */
+// C3 (maint): single copy of the secret settings keys, shared by the producer gate
+// (src/main/settings-hot-sync.js — secrets never travel in a hot-sync patch) and the consumer
+// gate (renderer sanitizeSettingsPatch — an inbound patch carrying them is dropped). Broader
+// /^securityLock/ prefixes are enforced at ingress (sync-apply.js isMachineLocalSettingKey,
+// command-manifest.js SETTINGS_DENIED); this list covers the declared DEFAULT_SETTINGS keys.
+export const SECRET_KEYS = ['securityLockPassword', 'securityLockQuestion']
+
 export const SETTINGS_MANIFEST = {
   boolean: ['autoDownloadUpdates', 'enableTomatoFloating', 'weatherEnabled', 'taskFlyAnimation', 'closeActionMinimize', 'isCompleteWithSubtasks', 'isTodoEditModalCloseAutoSave', 'isCompleteCheckboxColorFollow', 'runWhenComputerStart', 'hideMainWindowOnStartup', 'enableHardwareAcceleration', 'showNoDate', 'showCompleteNoDate', 'showComplete', 'developerMode', 'showTodayXModule', 'showHabitModule', 'showProjectsModule', 'showDepsModule', 'isShowSubTask', 'isCalendarDimUncompleted', 'isShowCalendarPrivacyMode', 'isDefaultSubTaskFolded', 'showHolidayMarkers', 'showTodoCheckboxOrder', 'enableSecurityLock', 'autoBackupEnabled', 'isCalendarBackgroundUserSelected', 'isShowCalendarCompleted', 'sidebarCollapsed', 'catFold', 'showTagPanel'],
   number: ['dailyTomatoTarget', 'dailyLoadWarnThreshold', 'recycleBinAutoDeleteDays', 'notificationTimeoutInterval', 'todoDescriptionDisplayLineNumber', 'autoBackupIntervalMin', 'autoBackupKeep', 'whiteNoiseVolume', 'tomatoTime', 'restTime',

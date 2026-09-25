@@ -99,6 +99,51 @@ test('Y6: settings/updateExternal merges an inbound tours ledger per-key max', a
   assert.equal(patch.onboardingToursSeen.editpanel, 50) // untouched keys survive
 })
 
+/* B3 (maint): deletion tombstones — computeSettingsPatch now emits explicit null markers for keys
+ * removed from the synced blob; the sanitizer must reset a null-marked declared key to its
+ * DEFAULT value (same semantics a restart already gives an absent key), and updateExternal must
+ * actually reset live state so the stale value cannot be re-persisted over the peer's deletion. */
+test('B3: sanitizeSettingsPatch resets a null-marked key to its declared default', async () => {
+  const { sanitizeSettingsPatch, DEFAULT_SETTINGS } = await importSrc('renderer/js/store/settings.js')
+  const out = sanitizeSettingsPatch({ tomatoTime: null, whiteNoiseVolume: null, foldedTodoList: null, unknownJunk: null })
+  assert.equal(out.tomatoTime, DEFAULT_SETTINGS.tomatoTime)
+  assert.equal(out.whiteNoiseVolume, DEFAULT_SETTINGS.whiteNoiseVolume)
+  assert.deepEqual(out.foldedTodoList, DEFAULT_SETTINGS.foldedTodoList) // array default cloned, not shared
+  assert.ok(!('unknownJunk' in out))
+  // non-null values are untouched by the marker path
+  assert.equal(sanitizeSettingsPatch({ tomatoTime: 90 }).tomatoTime, 90)
+})
+
+test('B3: settings/updateExternal applies a deletion marker by resetting live state to default', async () => {
+  resetLs()
+  const settings = (await importSrc('renderer/js/store/settings.js')).default
+  const { DEFAULT_SETTINGS } = await importSrc('renderer/js/store/settings.js')
+  const dispatches = []
+  const ctx = {
+    state: { tomatoTime: 90, developerMode: true },
+    dispatch: (type, payload) => dispatches.push([type, payload])
+  }
+  await settings.actions.updateExternal(ctx, { tomatoTime: null }) // plain call: env quirk drops args on async .call
+  const [type, patch] = dispatches[0]
+  assert.equal(type, 'update')
+  assert.equal(patch.tomatoTime, DEFAULT_SETTINGS.tomatoTime) // deleted == reverted to default, hot
+  assert.ok(!('developerMode' in patch))
+})
+
+test('B3: sanitizeSettingsPatch drops an inbound secret payload entirely (C3 belt)', async () => {
+  const { sanitizeSettingsPatch } = await importSrc('renderer/js/store/settings.js')
+  const out = sanitizeSettingsPatch({ securityLockPassword: 'x', securityLockQuestion: 'q', tomatoTime: 25 })
+  assert.ok(!('securityLockPassword' in out) && !('securityLockQuestion' in out))
+  assert.equal(out.tomatoTime, 25)
+})
+
+test('B3: sanitizeSettingsPatch drops a securityLock-prefixed key even if undeclared would pass', async () => {
+  const { sanitizeSettingsPatch } = await importSrc('renderer/js/store/settings.js')
+  // securityLockPassword IS declared; a hypothetical future securityLock* key must not ride in either
+  assert.ok(!('securityLockPassword' in sanitizeSettingsPatch({ securityLockPassword: 12345, colorMode: 'dark' })))
+  assert.equal(sanitizeSettingsPatch({ colorMode: 'dark' }).colorMode, 'dark')
+})
+
 test('Y2: settings/initFromDb seeds shortcutKeySettings from config.json when the blob is untouched', async () => {
   resetLs()
   const settings = (await importSrc('renderer/js/store/settings.js')).default

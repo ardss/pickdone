@@ -179,6 +179,18 @@ test('F-C3: sanitizeSettingsPatch clamps out-of-range durations instead of passi
   assert.ok(!('tomatoTime' in sanitizeSettingsPatch({ tomatoTime: 'abc' })))
 })
 
+/* ---------------- C3 (maint): secret-key stripping in the inbound gate ---------------- */
+
+test('C3: sanitizeSettingsPatch strips secret keys from an inbound patch (defense-in-depth gate)', async () => {
+  const { sanitizeSettingsPatch } = settingsMod
+  // the probe case from the finding: the secret previously passed every branch (declared key,
+  // matching string type, no enum) and would be persisted via updateExternal
+  const out = sanitizeSettingsPatch({ securityLockPassword: 'x', securityLockQuestion: 'q1', tomatoTime: 25 }, {})
+  assert.deepEqual(out, { tomatoTime: 25 })
+  // broader prefix guard: any securityLock* key is dropped even before the known-key check
+  assert.ok(!('securityLockPassword' in sanitizeSettingsPatch({ securityLockPassword: 12345 })))
+})
+
 test('F-C3: tomato/patch mutation clamps the ledger keys as the final hop (other keys untouched)', async () => {
   const s = { tomatoTime: 25, restTime: 5, whiteNoiseVolume: 0.55 }
   tomatoMod.default.mutations.patch(s, { tomatoTime: 9999, restTime: 0, whiteNoiseVolume: 2 })

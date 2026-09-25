@@ -191,15 +191,32 @@ export function coerceNumericSettings (merged) {
  *  the patch bare — unknown keys and type-mismatched junk from a peer/old build landed verbatim.
  *  Rules: keys not declared in DEFAULT_SETTINGS are dropped; values whose type differs from the
  *  declared default are dropped; remaining numeric-string values are coerced exactly like
- *  load()/restore() (coerceNumericSettings). */
+ *  load()/restore() (coerceNumericSettings). B3: an explicit null marker (deletion tombstone from
+ *  computeSettingsPatch) resets the key to its declared DEFAULT value; C3: secret keys are
+ *  stripped regardless of value. */
 export function sanitizeSettingsPatch (patch, current) {
   if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return {}
   const out = {}
   for (const k of Object.keys(patch)) {
     if (!(k in DEFAULT_SETTINGS)) continue // unknown junk
+    // C3 (maint): last inbound gate — strip machine-local secret fields. Both real producers
+    // already strip them upstream (settings-hot-sync SECRET_KEYS; LAN ingress isMachineLocalSettingKey),
+    // but a future fourth path or an upstream-gate regression must not let a peer's secret
+    // overwrite the local lock. The /^securityLock/ prefix mirrors sync-apply.js's predicate
+    // (narrower than it: any future securityLock* key is covered even if undeclared below).
+    if (SECRET_KEYS.includes(k) || /^securityLock/.test(k)) continue
     const def = DEFAULT_SETTINGS[k]
     const v = patch[k]
-    if (v === null || v === undefined) continue // tombstones are not a valid live-patch value here
+    if (v === null) {
+      // B3 (maint): explicit deletion marker from computeSettingsPatch — a key removed from the
+      // synced blob (peer tombstone / deprecated key). The store is defaults-backed and
+      // DEFAULT_SETTINGS keys are always present in live state, so 'deleted' == revert to the
+      // declared default: exactly what a restart already produces for an absent key. Object/array
+      // defaults are cloned so mutating live state can never corrupt the module default.
+      out[k] = def && typeof def === 'object' ? (Array.isArray(def) ? [...def] : { ...def }) : def
+      continue
+    }
+    if (v === undefined) continue
     if (typeof def === 'number' && typeof v === 'string') {
       // CLI legacy numeric-string shape: coerce exactly like coerceNumericSettings, drop non-numeric strings
       const n = Number(v)
@@ -247,7 +264,7 @@ export function sanitizeSettingsPatch (patch, current) {
  *  (domain2's shared/settings-manifest.mjs — same source cli/lib.js enforces on the CLI side, and
  *  the same values the SettingsModal :min/:max render; wave3 review: the wave4 TODO to converge is
  *  now fulfilled, no second copy to drift). */
-import { SETTINGS_MANIFEST } from '../../../shared/settings-manifest.mjs'
+import { SETTINGS_MANIFEST, SECRET_KEYS } from '../../../shared/settings-manifest.mjs'
 export const SETTING_RANGES = SETTINGS_MANIFEST.ranges
 export function clampNumericSettings (patch) {
   if (!patch || typeof patch !== 'object') return patch

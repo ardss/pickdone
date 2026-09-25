@@ -35,3 +35,33 @@ test('reference-equal doc vs prev yields empty patch (baseline resync path)', ()
   const doc = { theme: 'dark', _lsAt: 1 }
   assert.deepEqual(computeSettingsPatch(doc, doc), {})
 })
+
+/* B3: deletion tombstones — a key present in prev but gone from doc must travel as an explicit
+ * null so other windows reset it (reset-to-default) instead of keeping the stale live value and
+ * re-persisting it over the peer's deletion. */
+test('B3: a key deleted from doc appears as null in the patch', () => {
+  const prev = { themeDark: true, customFlag: 'x', _savedAt: 1 }
+  const doc = { themeDark: true, _savedAt: 2 }
+  assert.deepEqual(computeSettingsPatch(doc, prev), { customFlag: null })
+})
+
+test('B3: deleted secret and machine-local keys never travel as tombstones', () => {
+  const prev = { securityLockPassword: 'a', _lsAt: 5, schemaV: 6, keepMe: 1 }
+  const doc = {}
+  assert.deepEqual(computeSettingsPatch(doc, prev), { keepMe: null })
+})
+
+/* B12: raw JSON.stringify is key-order-sensitive, so equal-content nested objects with different
+ * key insertion order were reported as changed and broadcast a spurious patch (echo-churn class).
+ * Canonical compare (contentFingerprint) must treat them as equal. */
+test('B12: equal-content nested objects with different key order yield an EMPTY patch', () => {
+  const prev = { shortcutKeySettings: { sync: 'ctrl+s', copy: 'ctrl+c' }, tomatoTime: 25 }
+  const doc = { shortcutKeySettings: { copy: 'ctrl+c', sync: 'ctrl+s' }, tomatoTime: 25 }
+  assert.deepEqual(computeSettingsPatch(doc, prev), {})
+})
+
+test('B12: nested objects with actually different content still travel', () => {
+  const prev = { shortcutKeySettings: { sync: 'ctrl+s', copy: 'ctrl+c' } }
+  const doc = { shortcutKeySettings: { copy: 'ctrl+c', sync: 'ctrl+shift+s' } }
+  assert.deepEqual(computeSettingsPatch(doc, prev), { shortcutKeySettings: { copy: 'ctrl+c', sync: 'ctrl+shift+s' } })
+})
