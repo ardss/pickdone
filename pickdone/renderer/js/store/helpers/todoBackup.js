@@ -18,7 +18,7 @@ export const SCHEMA_V = 1
    F7/F17 (dw wave6 2026-09-24): segments must also have a CONSUMER to stay in the dump — user/lastLoginRecord
    (auth has its own localStorage re-fill channel, cross-machine JSON import never read them) and tomatoState
    (the countdown blob is retired, the ledger lives in tomato_records rows) were dead weight and are gone. */
-export function buildBackupDump (rootState, state, { stripVolatileSettings = false, planState = null } = {}) {
+export function buildBackupDump (rootState, state, { stripVolatileSettings = false, planState = null, metaState = null } = {}) {
   const settings = { ...rootState.settings }
   if (stripVolatileSettings) { settings.autoBackupLastAt = 0; settings.tomatoRecordAddCount = 0; settings.tomatoRecordAddDate = 0 } // strip volatile timestamps so content dedupe stays effective
   return {
@@ -41,7 +41,11 @@ export function buildBackupDump (rootState, state, { stripVolatileSettings = fal
       filterState: JSON.stringify({ schemaV: SCHEMA_V, list: (rootState.filters && rootState.filters.list) || [] }),
       // D6-F14: schedule chips live in SQLite (plan_chips), not in vuex state — callers pass the
       // freshly-read rows via collectPlanState(); undefined segments are dropped by JSON.stringify
-      planState: planState || undefined
+      planState: planState || undefined,
+      // 2026-09-26 (meta-keys-omitted): repeat rules / per-task tomato estimates / project
+      // deadline+status+flag+milestones live ONLY in the DB meta table — callers pass the
+      // freshly-read entries via collectMetaState(); undefined (empty/degraded) is dropped
+      metaState: metaState || undefined
     }
   }
 }
@@ -53,6 +57,47 @@ export async function collectPlanState () {
   try {
     const rows = await window.todoAPI.dbCall('planAll', [])
     return JSON.stringify({ schemaV: SCHEMA_V, chips: Array.isArray(rows) ? rows : [] })
+  } catch (e) { return null } // degraded host: omit the segment rather than fail the whole dump
+}
+
+/** Meta keys whose ONLY persistence is the DB meta table (2026-09-26, meta-keys-omitted fix):
+ *  repeat rules `repeatRule:<rid>` (todo.js single source), per-task tomato estimates
+ *  `tomatoEstimateState:<taskId>` (tomatoEstimate.js), project deadline/status/flag/milestones
+ *  `project*:<id>` + the `projectCategoryIds` registry (category.js). Derived from live state so
+ *  deleted ids are not resurrected; values are batch-read via getMetaMany (same door as exportXlsx). */
+export function metaStateKeys (rootState, state) {
+  const keys = new Set()
+  const todos = (state.todoList || []).concat(state.recycleList || [])
+  for (const t of todos) {
+    if (!t) continue
+    if (t.repeatId) keys.add('repeatRule:' + t.repeatId)
+    if (t.taskId) keys.add('tomatoEstimateState:' + t.taskId)
+  }
+  for (const c of (rootState.category && rootState.category.list) || []) {
+    const id = c && c.categoryId
+    if (id == null) continue
+    keys.add('projectDeadline:' + id)
+    keys.add('projectStatus:' + id)
+    keys.add('projectCategoryFlag:' + id)
+    keys.add('projectMilestones:' + id)
+  }
+  if (((rootState.category && rootState.category.list) || []).some(c => c && c.categoryId != null)) keys.add('projectCategoryIds')
+  return [...keys]
+}
+
+/** Read the meta entries for the dump-time key set (async storage — callers must await this and
+ *  pass the segment into buildBackupDump like collectPlanState). Entries with no stored value are
+ *  dropped; empty/degraded → null so the segment is omitted rather than failing the dump. */
+export async function collectMetaState (rootState, state) {
+  try {
+    if (!window.todoAPI || !window.todoAPI.getMetaMany) return null
+    const keys = metaStateKeys(rootState, state)
+    if (!keys.length) return null
+    const rows = await window.todoAPI.getMetaMany(keys)
+    const entries = (rows || []).filter(r => r && typeof r.key === 'string' && r.value != null && r.value !== '')
+      .map(r => ({ key: r.key, value: r.value }))
+    if (!entries.length) return null
+    return JSON.stringify({ schemaV: SCHEMA_V, entries })
   } catch (e) { return null } // degraded host: omit the segment rather than fail the whole dump
 }
 
@@ -71,7 +116,7 @@ export async function writeEventBackupCore (ctx, { state, rootState }, reason) {
     // backups passed stripVolatileSettings, so two identical business states produced different
     // evt dump bytes (autoBackupLastAt etc. tick between them) and handlers/backup.js's whole-blob
     // content dedup never hit for event snapshots.
-    const dump = buildBackupDump(rootState, state, { stripVolatileSettings: true, planState: await collectPlanState() })
+    const dump = buildBackupDump(rootState, state, { stripVolatileSettings: true, planState: await collectPlanState(), metaState: await collectMetaState(rootState, state) })
     const r = await window.todoAPI.runAutoBackup(JSON.stringify(dump), { tag: String(reason || 'op').toLowerCase(), eventKeep: 10, backupDir: rootState.settings.backupDir || '' })
     if (r && r.ok) { saveRuntime({ eventBackupLastFailAt: 0, eventBackupLastError: '' }); return true }
     saveRuntime({ eventBackupLastFailAt: Date.now(), eventBackupLastError: String((r && r.error) || 'backup failed').slice(0, 160) })
@@ -89,7 +134,7 @@ export async function writeAutoBackupCore (ctx, { state, rootState }) {
     // P2 fix (2026-09-25): bare `return` gave undefined — SettingsDataTab's ok === false check
     // missed it and read the degraded host as a successful backup.
     if (!window.todoAPI || !window.todoAPI.runAutoBackup) return false
-    const dump = buildBackupDump(rootState, state, { stripVolatileSettings: true, planState: await collectPlanState() })
+    const dump = buildBackupDump(rootState, state, { stripVolatileSettings: true, planState: await collectPlanState(), metaState: await collectMetaState(rootState, state) })
     const r = await window.todoAPI.runAutoBackup(JSON.stringify(dump), { recent: rootState.settings.autoBackupKeep || 24, backupDir: rootState.settings.backupDir || '' })
     if (r && r.ok) saveRuntime({ autoBackupLastAt: Date.now(), autoBackupLastFailAt: 0, autoBackupLastError: '' })
     // Failure must stay visible (autoBackupLastAt:0 alone made a persistently failing backup read as
@@ -113,7 +158,7 @@ export function writeCriticalBackupCore (ctx, { state, rootState }) {
   // B14 (daily 2026-09-25): strip volatile settings here too — same rationale as writeEventBackupCore
   // above: identical business states must produce byte-identical critical dumps so the main process's
   // whole-string content dedup (handlers/backup.js) can hit.
-  const buildDump = async () => buildBackupDump(rootState, state, { stripVolatileSettings: true, planState: await collectPlanState() })
+  const buildDump = async () => buildBackupDump(rootState, state, { stripVolatileSettings: true, planState: await collectPlanState(), metaState: await collectMetaState(rootState, state) })
   const writeNow = () => {
     try {
       // D6-F14: chips read is async — the write becomes a promise chain (fire-and-forget as before)

@@ -17,7 +17,7 @@ const SNOW_DEDUP_MAX_AGE_MS = 30 * 24 * 3600 * 1000
 // node_modules/electron-log, so fall back to a no-op logger instead of crashing at require time
 let log
 try { log = require('electron-log') } catch { log = { info () {}, warn () {}, error () {} } }
-const oplog = require('./db-oplog')({ getDb: () => db, log }), syncSchema = require('./db-sync-schema')({ getDb: () => db, log })
+const oplog = require('./db-oplog')({ getDb: () => db, log, getPurgeChips: () => purgeChipsScratch }), syncSchema = require('./db-sync-schema')({ getDb: () => db, log })
 const oplogKeepLimit = require('./db-oplog').oplogKeepLimit // D3 2026-09-24: SYNC_OPLOG_KEEP single source (was a bare 10000 clamp literal)
 
 let Database = null
@@ -498,18 +498,15 @@ function assertHasTaskId (t) {
 }
 
 const makeBulkOps = require('./db-bulk-ops')(() => db, () => OPS)
-// main-ipc-3 unbounded-key fix (2026-09-22): snowDedup:<taskId>:<dedupKey> meta keys are written
-// once per focus session (bumpSnow idempotency fence) and previously had NO cleanup path — they
-// accumulated linearly forever, and survived even after the owning task was hard-deleted or its
-// recycle-bin row purged (the startup meta GC's family list never covered them either). Purge the
-// owning task's keys inside the SAME delete transaction. Range predicate instead of LIKE: task
-// ids are renderer-supplied and % / _ in an id would silently widen a LIKE pattern.
-const deleteSnowDedupKeysFor = ids => {
-  for (const id of ids) {
-    const prefix = `snowDedup:${String(id)}:`
-    db.prepare('DELETE FROM meta WHERE key >= ? AND key < ?').run(prefix, prefix + ';')
-  }
-}
+// Per-task meta-key GC helpers (snowDedup / planChipsSnapshot) moved to db-meta-gc.cjs verbatim:
+const { deleteSnowDedupKeysFor, deleteChipsSnapshotKeysFor } = require('./db-meta-gc.cjs')(() => db)
+// B9 purge chip-capture scratch (single-process synchronous db.call → oplog append): the purge
+// ops physically DELETE plan_chips inside their transaction, so the oplog expansion (which runs
+// POST-op and can only re-query surviving rows) cannot recover the doomed chip ids. The ops
+// stash them here; db-oplog's purgeRecycleBin/purgeSeedTodos case expands them into per-chip
+// tombstone pointers so a peer holding the chips live learns they died instead of LWW-resurrecting
+// ghost chips of purged todos. Overwritten by every purge call; empty when no purge ran.
+let purgeChipsScratch = []
 const OPS = {
   upsert: t => { assertHasTaskId(t); stmts.upsert.run(todoToRow(t)); return true },
   upsertMany: list => { if (!Array.isArray(list)) throw new Error('[TodoDB] upsertMany: list must be an array, got ' + typeof list); list.forEach(assertHasTaskId); stmts.upsertMany(list.map(todoToRow)); return true },
@@ -592,8 +589,8 @@ const OPS = {
   },
   queryTodos,
   // 两表删除包事务:两语句间崩溃会留孤儿 chips(2026-09-05 终审 P1,与 hardDeleteMany 对齐)
-  hardDelete: id => { const tr = db.transaction(() => { db.prepare('DELETE FROM plan_chips WHERE taskId=?').run(String(id)); deleteSnowDedupKeysFor([id]); stmts.hardDelete.run(id) }); tr(); return true },
-  hardDeleteMany: ids => { const tr = db.transaction(() => ids.forEach(i => { db.prepare('DELETE FROM plan_chips WHERE taskId=?').run(String(i)); deleteSnowDedupKeysFor([i]); stmts.hardDelete.run(i) })); tr(); return true },
+  hardDelete: id => { const tr = db.transaction(() => { db.prepare('DELETE FROM plan_chips WHERE taskId=?').run(String(id)); deleteSnowDedupKeysFor([id]); deleteChipsSnapshotKeysFor([id]); stmts.hardDelete.run(id) }); tr(); return true },
+  hardDeleteMany: ids => { const tr = db.transaction(() => ids.forEach(i => { db.prepare('DELETE FROM plan_chips WHERE taskId=?').run(String(i)); deleteSnowDedupKeysFor([i]); deleteChipsSnapshotKeysFor([i]); stmts.hardDelete.run(i) })); tr(); return true },
   getMeta: k => { const r = stmts.getMeta.get(k); return r ? r.value : null },
   // Accepts both argument forms: (k, v) or [k, v] (the renderer's dbCall('setMeta', [k, v]) is passed through as a single call parameter)
   setMeta: (k, v) => { if (Array.isArray(k)) { v = k[1]; k = k[0] } stmts.setMeta.run(k, String(v)); return true },
@@ -619,8 +616,13 @@ const OPS = {
     let ids = []
     const tr = db.transaction(() => {
       ids = db.prepare('SELECT id FROM todos WHERE deleted = 1').all().map(r => r.id)
+      // B9 (2026-09-26): capture the doomed chip ids BEFORE the physical delete — the oplog
+      // expansion runs post-op when the rows are gone, and without these pointers a peer that
+      // still holds the chips live LWW-resurrects them as ghost chips of purged todos.
+      purgeChipsScratch = db.prepare('SELECT id FROM plan_chips WHERE taskId IN (SELECT id FROM todos WHERE deleted = 1)').all().map(r => r.id)
       db.prepare('DELETE FROM plan_chips WHERE taskId IN (SELECT id FROM todos WHERE deleted = 1)').run()
       deleteSnowDedupKeysFor(ids) // main-ipc-3 (2026-09-22): the rows die here — their focus-session dedup fences must not outlive them
+      deleteChipsSnapshotKeysFor(ids) // snapshot meta dies with the rows (same lifecycle rule)
       db.prepare('DELETE FROM todos WHERE deleted = 1').run()
     }); tr(); return ids
   },
@@ -629,11 +631,16 @@ const OPS = {
     let ids = []
     const tr = db.transaction(() => {
       ids = db.prepare("SELECT id FROM todos WHERE substr(id, 1, 5) = 'seed_'").all().map(r => r.id)
+      purgeChipsScratch = db.prepare("SELECT id FROM plan_chips WHERE taskId IN (SELECT id FROM todos WHERE substr(id, 1, 5) = 'seed_')").all().map(r => r.id) // B9: see purgeRecycleBin
       db.prepare("DELETE FROM plan_chips WHERE taskId IN (SELECT id FROM todos WHERE substr(id, 1, 5) = 'seed_')").run()
       deleteSnowDedupKeysFor(ids) // main-ipc-3 (2026-09-22): same lifecycle rule as purgeRecycleBin
+      deleteChipsSnapshotKeysFor(ids) // same lifecycle rule
       db.prepare("DELETE FROM todos WHERE substr(id, 1, 5) = 'seed_'").run()
     }); tr(); return ids
   },
+  // B9: oplog-side access to the LAST purge's doomed chip ids (see purgeChipsScratch). Read
+  // inside oplogEntriesFor immediately after a purge op — the same synchronous call().
+  getPurgeChipsScratch: () => purgeChipsScratch,
   countSeedTodos: () => db.prepare("SELECT COUNT(*) n FROM todos WHERE substr(id, 1, 5) = 'seed_'").get().n,
   upsertCategory: (c) => {
     const now = Date.now()
@@ -1072,7 +1079,7 @@ syncOplogSince: ({ sinceSeq = 0, limit = 2000 } = {}) => db.prepare('SELECT seq,
 /** 账本变更钩子:任何进程(App 主进程 IPC / CLI 直连)经 call() 落账本写 op 后触发。
  *  App 侧用它向所有窗口广播 tomato-records-changed;CLI 进程内无窗口,钩子天然不挂。
  *  放在 db 层而非 IPC handler 是根修关键:CLI 直写不经过 IPC,钩子挂 handler 上会漏广播(2026-09-04 实锤)。 */
-const LEDGER_WRITE_OPS = new Set(['tomatoAppendMany', 'tomatoUpdateById', 'tomatoRemoveByIds', 'tomatoMigrateFromMeta'])
+const LEDGER_WRITE_OPS = require('./db-write-ops.cjs').LEDGER_WRITE_OPS
 let ledgerChangedHook = null
 function setLedgerChangedHook (fn) { ledgerChangedHook = typeof fn === 'function' ? fn : null }
 // Echo suppression (2026-09-11 audit P2): renderer-originated ledger writes must not echo back to the
@@ -1094,19 +1101,7 @@ function call (op, params) {
   return r
 }
 
-// Explicit write-op list: the todo-db:call handler uses it to decide reloadAll+broadcastTodosChanged.
-// Do not guess with regexes — write ops like hardDeleteMany/filterDelete/clearCategories were once missed, leaving cross-window data stale.
-
-const WRITE_OPS = new Set([
-  'upsert', 'upsertMany', 'commitSyncBatch', 'bumpSnow', 'hardDelete', 'hardDeleteMany', 'setMeta', 'deleteMeta',
-  'purgeRecycleBin', 'purgeSeedTodos', 'upsertCategory',
-  'filterUpsert', 'filterDelete',
-  'planAddMany', 'planUpdateChip', 'planRemoveIds', 'planMoveTask',
-  'tomatoAppendMany', 'tomatoUpdateById', 'tomatoRemoveByIds', 'tomatoMigrateFromMeta',
-  'planDeleteTask', 'planDeleteTaskDay', 'planPrune', 'settingsRowPut', 'settingsRowPutMany', 'settingsRowDelete',
-  'upsertCategoryMany', 'filterUpsertMany', 'setMetaMany'
-])
-const isWriteOp = op => WRITE_OPS.has(op)
+const { WRITE_OPS, isWriteOp } = require('./db-write-ops.cjs')
 syncSchema.registerOps(OPS, WRITE_OPS, oplog)
 
 /** Explicitly close the handle (for tests switching directories / graceful process exit); silent when uninitialized or already closed.

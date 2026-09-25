@@ -46,13 +46,31 @@ const ENTITY_READBACK = {
 }
 /* C8 (2026-09-25): fetch the CURRENT winning row (raw) per entity — same sources as the
  * readback probes but returning the row itself, so the restore can re-backup the row it is
- * about to overwrite. Read-only probes; a missing row returns null (nothing to re-backup). */
+ * about to overwrite. Read-only probes; a missing row returns null (nothing to re-backup).
+ * Tombstone-winner fix (2026-09-26): the `!r.deleted` filters contradicted the module's own C8
+ * invariant ("snapshot the current winner BEFORE the bulk write") — when the winner was a
+ * TOMBSTONE (deleted row), current read as null, no re-backup was minted, and the restore write
+ * silently erased the deletion mark. Now tombstone winners are snapshotted too:
+ *   - category/setting: the raw table reads (categoriesAllRows / settingsRowsAll) already carry
+ *     tombstones — the filter is simply dropped (no new read op, pruneBackups bounds growth).
+ *   - plan/filter: fallback to the M3 tombstone reads (planTombstones/filterTombstones) when the
+ *     live probe misses. DEBATABLE PART (documented, not invented around): those reads carry only
+ *     id/updatedAt/deletedAt, so the snapshot is a PARTIAL row — it faithfully records THAT A
+ *     DELETION was overwritten (and its stamps), but it is not a full row: re-restoring it is
+ *     refused by the bulk op's row validation (refuse-to-lose keeps the original backup). A
+ *     fuller tombstone shape would need a schema change — deliberately out of scope here.
+ *   - tomato: KNOWN GAP — no raw tombstone read exists for tomato_records (tomatoAll filters
+ *     deleted=0 and there is no tomatoTombstones read op wired into db.call), so a tomato
+ *     tombstone winner still yields no re-backup. Same reversibility gap as before this fix,
+ *     scoped unchanged; add the read op before extending this table. */
 const ENTITY_CURRENT_ROW = {
-  plan: (call, id) => (call('planAll') || []).find(r => String(r.id) === id) || null,
-  filter: (call, id) => (call('filterList') || []).find(r => String(r.id) === id) || null,
-  category: (call, id) => (call('categoriesAllRows') || []).find(r => String(r.id) === id && !r.deleted) || null,
+  plan: (call, id) => (call('planAll') || []).find(r => String(r.id) === id) ||
+    (call('planTombstones') || []).find(r => String(r.id) === id) || null,
+  filter: (call, id) => (call('filterList') || []).find(r => String(r.id) === id) ||
+    (call('filterTombstones') || []).find(r => String(r.id) === id) || null,
+  category: (call, id) => (call('categoriesAllRows') || []).find(r => String(r.id) === id) || null,
   tomato: (call, id) => (call('tomatoAll') || []).find(r => String(r.tomatoId) === id) || null,
-  setting: (call, id) => (call('settingsRowsAll') || []).find(r => r.key === id && !r.deleted) || null
+  setting: (call, id) => (call('settingsRowsAll') || []).find(r => r.key === id) || null
 }
 
 function parseBackup (raw) {

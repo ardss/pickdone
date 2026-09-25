@@ -64,13 +64,14 @@ test('P1-3: sanitizeSettingsPatch drops unknown/type-mismatch junk and coerces n
     newTodoCategoryId: '3',        // numeric string id → coerced (CLI legacy shape)
     autoDownloadUpdates: 'not-a-bool', // type mismatch → dropped
     notARealSetting: { junk: true },   // unknown key → dropped
-    backupDir: null                // tombstone → dropped
+    backupDir: null                // tombstone → reset to declared default (B3, commit 9bbef010)
   })
   assert.equal(out.tomatoTimeDefault, 25)
   assert.equal(out.newTodoCategoryId, 3)
   assert.ok(!('autoDownloadUpdates' in out))
   assert.ok(!('notARealSetting' in out))
-  assert.ok(!('backupDir' in out))
+  // B3: an explicit null marker (deletion tombstone) resets a declared key to its DEFAULT value
+  assert.equal(out.backupDir, '')
   assert.deepEqual(sanitizeSettingsPatch(null), {})
   assert.deepEqual(sanitizeSettingsPatch([1, 2]), {})
   // Every CLI-settable key survives sanitization when well-typed (manifest parity guard)

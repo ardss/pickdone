@@ -16,32 +16,12 @@ import { historyPush, historyPushKeepRedo, historyClear, historyBreakMerge, hist
 import { writeEventBackupCore, writeAutoBackupCore, writeCriticalBackupCore } from './helpers/todoBackup.js'
 import { commit as commitCommand } from "../utils/commandBus.js"
 import { safeUpsert, flushPendingUpserts, queuePendingUpsert, pendingUpserts, daysRangeTs } from './helpers/todoPendingUpserts.js'
+import { DEFAULT_VIEWS, VIEW_AFFECTING_FIELDS, VIEWS_DEBOUNCE_MS, deproxyRows, showNoDateFilter, buildCalendarList } from './helpers/todoViews.js'
 import { countTags } from '../utils/search.js'
 // Re-export: unit tests import the quit-flush retry contract straight from store/todo.js
 export { safeUpsert, flushPendingUpserts }
 // planSnapshotRowSync stays a named export of this module (tests import it from here)
 export { planSnapshotRowSync }
-const DEFAULT_VIEWS = () => ({
-    todayTodoList: [],
-    todayDoneList: [],
-    yesterdayTodoList: [],
-  calendar: [],
-  todoBox: [],
-  todoBoxCount: 0,
-  completed: [],
-    recycleBin: []
-})
-// Fields affecting a view's group membership (one-to-one with computeViews' grouping criteria):
-// delete/deletedAt (active/recycle bin), todoTime/dayStart (date grouping), complete/completedAt (completed grouping), categoryId (todo-box category filter)
-// Only writes to these fields need an immediate full view rebuild; the rest (title/description/subtask plain-text edits) take the lightweight path
-const VIEW_AFFECTING_FIELDS = ['delete', 'deletedAt', 'todoTime', 'dayStart', 'complete', 'completedAt', 'categoryId']
-const VIEWS_DEBOUNCE_MS = 600 // View-rebuild debounce for plain-text edits: staggered from EditPanel's 350ms save cadence; continuous typing recomputes only once
-/** Strip Vue reactive proxies before IPC: rows come straight from reactive state, and a shallow spread
- *  ({ ...raw }) only unwraps the top level — nested arrays (reminderOffsets/reminderExtra/subtasks JSON is a
- *  string, but reminderOffsets etc. stay Proxies) still fail the structured clone inside invoke
- *  ("An object could not be cloned" = the whole upsertMany batch silently dropped, same root cause
- *  safeUpsert's JSON round-trip documents for single rows) */
-function deproxyRows (rows) { return JSON.parse(JSON.stringify(rows)) }
 export default {
   namespaced: true,
   state: () => ({
@@ -487,6 +467,20 @@ export default {
       if (r) {
         try { await restoreSnapshot(todo.taskId) } catch { /* No snapshot = originally unscheduled */ }
       }
+      // [B5 fix] dangling repeatId guard: startup meta GC (computeMetaGc, shared.js) legitimately purges
+      // `repeatRule:<rid>` when the rule was referenced only by recycle-bin rows (the deleted:0 filter
+      // closed the leak but never taught restore about the new invariant). Restoring such a task used to
+      // resurrect a dangling repeatId: completing it hit ensureNextRepeatInstance's silent `!rule` return
+      // and the chain just died. If the rule meta is gone, restore the task as a plain non-repeating task
+      // (the rule data is gone; fabricating one would invent UX).
+      if (r && todo.repeatId) {
+        let rule = null
+        try { rule = JSON.parse(await window.todoAPI.dbCall('getMeta', 'repeatRule:' + todo.repeatId) || 'null') } catch { /* treated as gone */ }
+        if (!rule) {
+          await dispatch('updateTodoFields', { taskId: todo.taskId, patch: { repeatId: null, status: 'update' } })
+          console.warn('[todo] restored task', todo.taskId, 'had a dangling repeatId (rule meta GCed) — restored as a non-repeating task')
+        }
+      }
       // Discrete op: break the 400ms undo merge so a following edit doesn't fuse into the restore step
       commit('historyBreakMerge')
       return r
@@ -510,7 +504,10 @@ export default {
       for (const id of ids) {
         try { await commitCommand("todo", "hardDelete", id); done.push(id); clearSnapshot(id) } catch (err) { reportError('hardDelete', err) }
       }
-      try { for (const id of done) await window.todoAPI.deleteTodoFilesRelevant?.(id) } catch {}
+      // [C15 fix] the empty catch here silently orphaned attachment files on disk when cleanup failed
+      // (main throws a structured per-file failure list). Log it like the adjacent hardDelete failures;
+      // rows are already hard-deleted, so the purge (and the mandatory historyClear below) still proceeds.
+      try { for (const id of done) await window.todoAPI.deleteTodoFilesRelevant?.(id) } catch (err) { reportError('deleteTodoFilesRelevant', err) }
       // Drop the purged tasks' pomodoro-estimate meta keys (setEstimate(id,0) deletes the key):
       // MetaGC covers the DB side, this covers the renderer mirror so a recycled numeric id cannot
       // resurrect a stale estimate (review M-C5)
@@ -555,7 +552,8 @@ export default {
       try { purged = await window.todoAPI.purgeRecycleBin() === true } catch (err) { reportError('purgeRecycleBin', err) }
       if (!purged) { dispatch('computeViews'); return false }
       // Attachment cleanup aligned with per-item permanent deletion (the main process's purgeRecycleBin only deletes rows, not files/)
-      try { for (const id of ids) await window.todoAPI.deleteTodoFilesRelevant?.(id) } catch {}
+      // [C15 fix, same class as purgeIds] attachment-file cleanup failures are logged, not swallowed
+      try { for (const id of ids) await window.todoAPI.deleteTodoFilesRelevant?.(id) } catch (err) { reportError('deleteTodoFilesRelevant', err) }
       // Drop the pre-delete chip snapshot meta too (rows are gone, the snapshot can never be restored)
       for (const id of ids) clearSnapshot(id)
       // maint-d7: drop the purged tasks' pomodoro-estimate meta keys too — parity with purgeIds
@@ -799,13 +797,6 @@ export default {
 
 /* Small helper for reading root settings (module-internal access) */
 function root_getCompleteWithSub (rootState) { return rootState && rootState.settings ? rootState.settings.isCompleteWithSubtasks !== false : true }
-
-function showNoDateFilter (arr, settings) {
-  return settings.showNoDate ? arr : []
-}
-
-/* Calendar view data: for the current month's span (±half a year), the daily set can render directly from raw todoList rows */
-function buildCalendarList (live) { return live.slice() }
 
 /** Test seams (unit-tested in tests/store-fixes-domain.test.mjs): pending-write requeue and the de-proxy round-trip */
 export const _testInternals = { pendingUpserts: pendingUpserts(), safeUpsert, flushPendingUpserts, deproxyRows }

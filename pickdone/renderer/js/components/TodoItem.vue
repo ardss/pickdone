@@ -30,7 +30,7 @@
         <span v-if="query" v-html="highlightedTitle"></span>
         <template v-else>{{ todo.taskContent || $t('statsE.TodoItem.untitled') }}</template>
       </div>
-      <div v-if="todo.taskDescribe" class="td-desc">{{todo.taskDescribe}}</div>
+      <div v-if="todo.taskDescribe" class="td-desc" :style="descLineClamp">{{todo.taskDescribe}}</div>
       <div v-if="subtasks.length" class="td-subs">
         <div v-for="(s, si) in subtasks" :key="s.text + '#' + si" class="td-sub" role="checkbox"
              :aria-checked="s.checked ? 'true' : 'false'" tabindex="0"
@@ -108,6 +108,7 @@ import { normalizeSortMode } from '../utils/sortMode.js'
 import { reorderScale } from '../../../shared/sort-core.mjs' // F-B2: reorder scale single source (the CLI's sortTask consumes the same module)
 import { crossDayMovePatch, crossDayRevertPatch } from '../utils/crossDayMove.js' // [maint-0924 A1] shared cross-day rules
 import { taskContextMenu } from '../utils/taskMenu.js' // [maint-0925 A16] one menu builder for all views
+import { descLineClampStyle } from '../utils/descLines.js' // [B6 fix] consumes settings.todoDescriptionDisplayLineNumber
 
 // Module-level drag-in-progress flag: a document.querySelector('.td-item.dragging') on every
 // dragover is O(document); this is set on dragstart and cleared on dragend/drop.
@@ -143,6 +144,9 @@ export default {
   beforeUnmount () { clearTimeout(this._enterTimer) },
   computed: {
     cat () { return this.$store.getters['category/byId'](this.todo.categoryId) },
+    // [B6 fix] the "Description visible lines" slider (todoDescriptionDisplayLineNumber) had a settings
+    // UI but no consumer — the description never clamped. Apply the configured clamp to .td-desc.
+    descLineClamp () { return descLineClampStyle(this.$store.state.settings.todoDescriptionDisplayLineNumber) },
     // Resolved project for this task's category (null unless the category is flagged as a project and the badge is enabled).
     // Module gate first (nav-gate authority: projects ride on showProjectsModule alone) — with the
     // module off there is no badge, and goProject's !projCat guard keeps the row un-navigable

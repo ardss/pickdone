@@ -187,3 +187,28 @@ test('F-A5 float dragStop/setPanelOpen reject foreign senders (symmetric with dr
   assert.ok(dragStop.includes('isSelfSender(sender)'), 'dragStop must gate on isSelfSender')
   assert.ok(setPanel.includes('isSelfSender(sender)'), 'setPanelOpen must gate on isSelfSender')
 })
+
+/* ---------- C4 (2026-09-26): hardDelete is main-window-only, like its batch sibling ---------- */
+test('C4 hardDelete is rejected from a non-main-window sender at BOTH renderer doors', () => {
+  const todoHandlers = require_('../../../src/main/handlers/todo.js')
+  const mainWc = { id: 1 }
+  const ctx = {
+    isLocked: () => false, isLockWindow: () => false,
+    getMainWindow: () => ({ webContents: mainWc }),
+    resyncDbWatch: () => null, broadcastTomatoRecordsChanged: () => {}, broadcastTodosChanged: () => {},
+    dbApi: () => realDb, attachDir: () => process.env.TODO_DB_DIR, notifySyncChange: () => {},
+  }
+  const handlers = todoHandlers(ctx)
+  const stranger = { sender: { id: 99 } } // a trapped float / quick-add / lock window
+  // hardDelete permanently deletes the row AND its owned attachment files — the same
+  // destructive capability class as hardDeleteMany (already main-window-only).
+  assert.throws(() => handlers['todo-db:call'](stranger, 'hardDelete', 'c4-victim'),
+    /forbidden: main window only/, 'hardDelete via todo-db:call from a non-main window must be rejected')
+  // commands:commit door shares execDbCall's gate (it REPORTS the failure instead of throwing)
+  const r = handlers['commands:commit'](stranger, { entity: 'todo', verb: 'hardDelete', payload: 'c4-victim' })
+  assert.match(String(r && r.error), /forbidden: main window only/, 'hardDelete via commands:commit from a non-main window must be rejected')
+  // main-window sender passes the CAPABILITY gate (any error is not the gate's)
+  let gateError = null
+  try { handlers['todo-db:call']({ sender: mainWc }, 'hardDelete', '__c4_gate_probe__') } catch (e) { gateError = e }
+  assert.ok(!(gateError && /forbidden: main window only/.test(gateError.message)), 'main window must pass the gate')
+})

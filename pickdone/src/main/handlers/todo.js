@@ -96,7 +96,11 @@ module.exports = function todoHandlers (ctx) {
   // The renderer's real call surface has been verified: all three only occur in the main window (store/utils/main.js); auxiliary windows have no legitimate callers.
   // Review-P1 (2026-09-22): the four pairing-establishment ops are a STRICTLY higher capability
   // than unpair/rename (pairing routes the whole DB to a new peer) — they join the main-window set.
-  const MAIN_WINDOW_ONLY_OPS = new Set(['upsertMany', 'commitSyncBatch', 'hardDeleteMany', 'setMeta', 'deleteMeta', 'syncSetEnabled', 'syncSetName', 'syncUnpairPeer', 'syncConflictBackupRestore', 'syncSetPeerAlias', 'syncPairWithCode', 'syncPairRespond', 'syncPairRequest',
+  // C4 (2026-09-26): hardDelete joins its batch sibling — it permanently deletes the row AND
+  // the task's owned attachment files on disk, so an aux window (float / quick-add / lock
+  // screen) must not be able to invoke it either. The legit caller is the recycle-bin single
+  // purge, which only ever mounts in the main window (RecycleBinView route).
+  const MAIN_WINDOW_ONLY_OPS = new Set(['upsertMany', 'commitSyncBatch', 'hardDeleteMany', 'hardDelete', 'setMeta', 'deleteMeta', 'syncSetEnabled', 'syncSetName', 'syncUnpairPeer', 'syncConflictBackupRestore', 'syncSetPeerAlias', 'syncPairWithCode', 'syncPairRespond', 'syncPairRequest',
     // P2-3 (R4 2026-09-21): the pairing code routes the whole DB to whoever holds it — same
     // capability class as the pairing-establishment ops. Verified: the only renderer caller is
     // SettingsSyncTab.vue (main-window settings page, via utils/lanSync.getPairingCode).

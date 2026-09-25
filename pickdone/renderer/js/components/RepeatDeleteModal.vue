@@ -52,16 +52,24 @@ export default {
       this.busy = true
       try {
       let group
-      try { group = await window.todoAPI.dbCall('queryTodos', { deleted: 0, repeatId: b.repeatId }) } catch (e) { console.error('[repeat] query failed:', e); return }
+      try { group = await window.todoAPI.dbCall('queryTodos', { deleted: 0, repeatId: b.repeatId }) } catch (e) {
+        // [maint-0925 D] a failed group query used to silently return — a dead confirm button in a
+        // destructive dialog with zero feedback. Surface it, then bail (no rows were touched).
+        console.error('[repeat] query failed:', e)
+        if (this.$message) this.$message.error(this.$t('statsD.RepeatDeleteModal.queryFailed'))
+        return
+      }
       const ids = []
       if (this.mode === 'all') {
         group.forEach(t => ids.push(t.taskId))
       } else if (this.mode === 'from') {
         group.forEach(t => { if (t.dayStart >= b.dayStart) ids.push(t.taskId) })
       } else {
-        await this.$store.dispatch('todo/updateTodoFields', { taskId: b.taskId, patch: { repeatId: null, status: 'update' } })
-        await this.cleanupOrphanRule(b.repeatId) // "this event only" must also check for orphan rules (after deleting the last instance in a group, the rule once lingered forever)
-        return this.close()
+        // [A2 fix] "This event only" is a DELETE scope: it used to merely clear the task's repeatId
+        // (detach), leaving the task fully visible — the user pressed Delete and nothing disappeared.
+        // It now goes through the same batch-delete path as the other scopes, so it gets the shared
+        // snapshot push, the 5s undo toast and one computeViews for free.
+        ids.push(b.taskId)
       }
       // F-C1: batch delete — ONE snapshot push (one undo restores the whole group), ONE computeViews,
       // ONE putMany write (the per-row loop used to push a whole-table snapshot per instance)
@@ -80,7 +88,12 @@ export default {
       // Clean up the orphan rule (meta + localStorage) when no active instances remain in the group, preventing unbounded accumulation
       await this.cleanupOrphanRule(b.repeatId)
       this.close()
-      } catch (e) { console.error('[repeat] delete failed:', e) } finally { this.busy = false }
+      } catch (e) {
+        // [maint-0925 D] batch-delete failures used to be console-only (invisible in a packaged app
+        // while the destructive action visibly did nothing). Tell the user; busy is reset below.
+        console.error('[repeat] delete failed:', e)
+        if (this.$message) this.$message.error(this.$t('statsD.RepeatDeleteModal.deleteFailed'))
+      } finally { this.busy = false }
     },
     /** Clean up the repeat rule when no active instances remain in the group (meta + localStorage), preventing unbounded accumulation.
      *  U-2: implementation extracted to utils/repeat.js so the bare-string deleteMeta contract is unit-testable. */

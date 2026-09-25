@@ -84,6 +84,7 @@ import { loadRuntime } from '../../store/helpers/runtimeState.js'
 import { commit as commitCommand } from "../../utils/commandBus.js"
 import { SCHEMA_V } from '../../store/helpers/todoBackup.js'
 import { repeatRuleMetaKeys, ruleMapFromMetaRows, repeatRuleCell } from '../../utils/exportRepeatRules.js'
+import { invalidateEstimateCache } from '../../utils/tomatoEstimate.js'
 
 /** Restore = the user wants the backup's data to win. Backup rows carry their backup-time
  *  updateTime + status:'sync', so LAN LWW instantly reverts the restore against any peer
@@ -94,6 +95,29 @@ function restoreStampRow (row, now = null) {
   if (!row || typeof row !== 'object') return row
   return { ...row, status: 'update', updateTime: now || Date.now() }
 }
+
+/** B2 (2026-09-26): filter/plan rows keep their backup-time updatedAt in the DB, and filterUpsert/
+ *  planAddMany preserve explicit stamps — on a LAN-sync peer holding newer rows the restore lost
+ *  LWW instantly. Re-stamp the row's updatedAt fresh (batched per restore) so restored rows win.
+ *  filterUpsert's content no-op suppression keeps unchanged rows untouched; changed rows land
+ *  fresh and win, matching the restore-wins semantics above. */
+function restoreStampLww (row, now) {
+  if (!row || typeof row !== 'object') return row
+  return { ...row, updatedAt: now }
+}
+
+/** metaState (2026-09-26): only these meta-key surfaces are restorable — same whitelist as the
+ *  startup path (dbRecovery.META_RESTORE_PREFIXES). Transient keys (catProjectMetaBak.*,
+ *  pending markers, todosVersion) are deliberately excluded. */
+const META_RESTORE_PREFIXES = [
+  'repeatRule:',
+  'tomatoEstimateState:',
+  'projectDeadline:',
+  'projectStatus:',
+  'projectCategoryFlag:',
+  'projectMilestones:',
+  'projectCategoryIds'
+]
 
 export default {
   name: 'SettingsDataTab',
@@ -366,7 +390,9 @@ export default {
     // dump.todoState 解析 + 版本守卫:schemaV 高于本版支持的备份静默误读=降级导入事故,显式报错
     parseTodoState (raw) {
       const td = typeof raw === 'string' ? JSON.parse(raw) : raw
-      if (td && Number(td.schemaV) > 1) throw new Error('schemaV ' + td.schemaV + ' > 1 (backup from a newer app version)')
+      // B13 (2026-09-26): guard against the shared SCHEMA_V constant (mirror parseStampedSeg) —
+      // the hardcoded literal `> 1` drifted from the single source the moment SCHEMA_V moves.
+      if (td && Number(td.schemaV) > SCHEMA_V) throw new Error('schemaV ' + td.schemaV + ' > ' + SCHEMA_V + ' (backup from a newer app version)')
       return td || {}
     },
     // Review P2 (2026-09-22): shared schemaV guard over EVERY stamped segment. parseTodoState covered
@@ -416,28 +442,48 @@ export default {
       // the tomato ledger) — a JSON disaster restore used to wipe every smart list and plan chip
       try { await this.restoreSavedFilters(b) } catch (e) { console.error('[settings] restore segment failed: filters', e); failed.push('filters') }
       try { await this.restorePlanChips(b) } catch (e) { console.error('[settings] restore segment failed: planChips', e); failed.push('planChips') }
+      try { await this.restoreMetaState(b) } catch (e) { console.error('[settings] restore segment failed: metaState', e); failed.push('metaState') }
       this.$store.dispatch('_rt/refreshFromDb')
       this.$store.dispatch('tomato/recordsReload').catch(e => console.error('[settings] tomato/recordsReload after restore failed:', e))
       this.reportRestoreResult(rows.length + habitCount, failed) // F6: habits counted honestly
     },
     // D6-F14: saved filters 回灌——按 id 幂等 re-put(filter.putMany upsert),随后以 DB 行表为准刷新内存列表
+    // B2 (2026-09-26): rows are re-stamped fresh (restoreStampLww) so LAN LWW cannot self-revert the restore.
     async restoreSavedFilters (b) {
       if (!b.filterState) return
       const fseg = this.parseStampedSeg(b.filterState)
       const list = (Array.isArray(fseg.list) ? fseg.list : []).filter(f => f && f.id != null)
       if (list.length) {
-        await commitCommand('filter', 'putMany', list)
+        const now = Date.now()
+        await commitCommand('filter', 'putMany', list.map(f => restoreStampLww(f, now)))
         this.$store.commit('filters/setList', await window.todoAPI.dbCall('filterList'))
       }
     },
     // D6-F14: schedule chips 回灌——行级幂等 re-put(plan.putMany upsert),缺 taskId/day/id 的行跳过不拖批
+    // B2 (2026-09-26): chips are re-stamped fresh for the same LWW reason as filters.
     async restorePlanChips (b) {
       if (!b.planState) return
       const pseg = this.parseStampedSeg(b.planState)
       const chips = (Array.isArray(pseg.chips) ? pseg.chips : []).filter(c => c && c.id != null && c.taskId && c.day)
       if (chips.length) {
-        await commitCommand('plan', 'putMany', chips)
+        const now = Date.now()
+        await commitCommand('plan', 'putMany', chips.map(c => restoreStampLww(c, now)))
         try { window.dispatchEvent(new CustomEvent('day-plans-changed')) } catch { /* DayRail refresh is cosmetic */ }
+      }
+    },
+    // metaState 回灌 (2026-09-26, meta-keys-omitted): repeat rules / tomato estimates / project
+    // deadline+status+flag+milestones live only in the meta table — idempotent whole-key re-put
+    // through the same 'meta','put' command door the habits blob uses, whitelist-filtered.
+    async restoreMetaState (b) {
+      if (!b.metaState) return
+      const seg = this.parseStampedSeg(b.metaState)
+      const entries = (Array.isArray(seg.entries) ? seg.entries : []).filter(e =>
+        e && typeof e.key === 'string' && e.value != null && e.value !== '' &&
+        META_RESTORE_PREFIXES.some(p => e.key.startsWith(p)))
+      for (const e of entries) await commitCommand('meta', 'put', [e.key, e.value])
+      if (entries.some(e => e.key.startsWith('tomatoEstimateState:'))) {
+        // the per-task estimate cache is memoized — invalidate so the next read re-fetches from meta
+        try { invalidateEstimateCache() } catch { /* degraded host */ }
       }
     },
     // 账本回灌:行表幂等 UPSERT,缺 tomatoId/endTime 的行跳过不拖批(与主进程 dbRecovery 同规则)

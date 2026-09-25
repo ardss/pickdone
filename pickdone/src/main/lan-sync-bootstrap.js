@@ -396,7 +396,19 @@ function startSync () {
   // Inbound two-way confirm request: hold it for the human (respond callback comes from the
   // transport, which owns the 60s auto-reject timer) and surface it to the renderer.
   state.node.on('pair-request', info => {
-    state.pendingPair = { ...info, at: Date.now() }
+    // A7: wrap respond so ANY resolution — renderer accept/reject via syncPairRespond, or the
+    // transport's 60s auto-reject firing this closure directly — also clears state.pendingPair.
+    // Without this, an already-dead request could be re-surfaced to the renderer with a fresh
+    // countdown even though its window had long elapsed.
+    const record = {
+      ...info,
+      at: Date.now(),
+      respond: (...args) => {
+        if (state.pendingPair === record) state.pendingPair = null
+        return info.respond(...args)
+      }
+    }
+    state.pendingPair = record
     emitSyncEvent('pair-request', { deviceId: info && info.deviceId, deviceName: info && info.deviceName, host: info && info.host })
     notifyRenderers('pair-request')
     // OS-level notification: the user must notice a pairing request even with the settings

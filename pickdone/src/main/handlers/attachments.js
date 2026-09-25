@@ -94,10 +94,16 @@ module.exports = function attachmentHandlers (ctx) {
       // was told "deleted" while nothing was (and could never be) deleted. open-file /
       // download-file-and-open already answer false for unknown schemes; same honesty here.
       if (!url.startsWith('local://')) return false
-      try { fs.unlinkSync(attachmentPath(url.slice(8))) } catch (err) {
+      const key = url.slice(8)
+      try { fs.unlinkSync(attachmentPath(key)) } catch (err) {
         // Already-gone is success (idempotent delete); anything else is a real failure
         if ((err && err.code) !== 'ENOENT') throw new Error('delete-file failed: ' + String((err && err.message) || err))
       }
+      // LAN conflict alias cleanup: when the deleted file was the `name-1` conflict-rename
+      // target (aliased from the row's original local://key), drop the alias too — otherwise
+      // the stale entry keeps resolving the dead key to the now-missing renamed file and the
+      // missing-file guard can never re-pull the original key.
+      try { require('../attachments').deleteAlias(key) } catch { /* best-effort */ }
       return true
     },
     'delete-todo-files': (e, taskId) => {

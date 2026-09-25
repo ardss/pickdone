@@ -119,14 +119,27 @@ function defaultDeps () {
     try { dir = require('../attachments').attachDir() } catch { dir = process.cwd() }
     return dir
   }
+  // att-transfer-rename-ref-mismatch fix: a LAN pull that hit a same-name-different-content
+  // conflict was renamed to `name-1` on disk, but the synced row still references the ORIGINAL
+  // key — every local resolution (serving, missing-detection, open/read) must translate through
+  // the device-local alias map (attachments.readAliases) FIRST. Never synced; peers resolve
+  // through their own map.
+  const resolveKey = key => {
+    const base = path.basename(String(key))
+    try {
+      const alias = require('../attachments').readAliases()[base]
+      if (alias) return path.join(attachDir(), path.basename(alias))
+    } catch { /* electron-free unit context: no alias map */ }
+    return path.join(attachDir(), base)
+  }
   return {
-    exists: key => fs.existsSync(path.join(attachDir(), path.basename(String(key)))),
-    size: key => { try { return fs.statSync(path.join(attachDir(), path.basename(String(key)))).size } catch { return 0 } },
+    exists: key => fs.existsSync(resolveKey(key)),
+    size: key => { try { return fs.statSync(resolveKey(key)).size } catch { return 0 } },
     // C8 (daily 2026-09-24): positional chunked read — reads ONLY the requested [start..end]
     // byte range via fs.readSync. The old default readFileSync'd the WHOLE file (up to 50MB)
     // and sliced it, so every serve pass kept the full file resident and blocked the main process.
     read: (key, start, end) => {
-      const fp = path.join(attachDir(), path.basename(String(key)))
+      const fp = resolveKey(key)
       const len = Math.max(0, end - start + 1)
       const buf = Buffer.alloc(len)
       const fd = fs.openSync(fp, 'r')
@@ -141,6 +154,10 @@ function defaultDeps () {
       // different files — an overwrite would corrupt the first todo's attachment). Identical
       // content is a dedup no-op; differing content renames the incoming file with a numeric
       // suffix (mirrors attachments.js nextFreePath semantics).
+      // att-transfer-rename-ref-mismatch fix: writeAtomic now RETURNS the final stored basename
+      // and RECORDS a device-local alias (attachments.setAlias) for the conflict rename, so the
+      // synced row's original local://name keeps resolving to the INCOMING content on this device
+      // (the row itself is never rewritten — that would diverge it from the sender).
       // P2-b: the tmp file is unlinked in finally — a rename failure used to leave .att-tmp-*
       // residue that accumulated across retries.
       // F-A2 defense-in-depth: the whitelist also gates the disk layer itself, so a future
@@ -157,15 +174,27 @@ function defaultDeps () {
         if (fs.existsSync(dst)) {
           let same = false
           try { same = sha256Hex(fs.readFileSync(dst)) === sha256Hex(buf) } catch { same = false }
-          if (same) return true // already have this exact content
+          if (same) return path.basename(dst) // dedup no-op: not a new file, stays quota-exempt
           const ext = path.extname(dst)
           const stem = dst.slice(0, dst.length - ext.length)
           let n = 1
           while (fs.existsSync(`${stem}-${n}${ext}`)) n += 1
           finalDst = `${stem}-${n}${ext}`
         }
+        // att-transfer-quota-bypass fix: the LAN receive door now enforces the SAME caps as the
+        // upload door (attachments-guards.assertWriteAllowed: 50MB/file + 64MB total + 200-file
+        // count) — the guards module's contract said every write entry funnels through it, but
+        // this ingress never called it. Identical-content dedup above stays quota-exempt (it
+        // lands no new file). A refusal throws into the puller's catch → markFailed (24h
+        // failed-set, no retry loop) — no behavior change for legitimate small transfers.
+        require('../attachments-guards').assertWriteAllowed({ incomingBytes: buf.length, dir: attachDir() })
         fs.renameSync(tmp, finalDst)
-        return true
+        if (finalDst !== dst) {
+          // conflict rename landed: alias the original key to the new on-disk name so the
+          // synced row's local://original-key resolves to the incoming bytes on THIS device.
+          try { require('../attachments').setAlias(path.basename(String(key)), path.basename(finalDst)) } catch { /* best-effort; resolution falls back to the base name */ }
+        }
+        return path.basename(finalDst)
       } finally {
         try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp) } catch { /* best-effort cleanup */ }
       }
@@ -470,14 +499,17 @@ function createAttachmentPuller (opts = {}) {
           try { require('electron-log').warn('[LanSync] attachment reserved noise-slot name, skipped:', id) } catch { /* noop */ }
           markFailed(id)
         } else {
-          try { d.writeAtomic(id, full); session.failed.delete(id) } catch (e) {
+          let finalName = null
+          try { finalName = d.writeAtomic(id, full); session.failed.delete(id) } catch (e) {
             try { require('electron-log').warn('[LanSync] attachment write failed:', id, e && e.message) } catch { /* noop */ }
             markFailed(id)
           }
           // P1-8 (2026-09-19 UX review): the file just landed — notify the host so it can tell the
           // renderer to refresh attachment images/lists (previously the arrival was invisible until
-          // a full view reload happened to run).
-          try { if (typeof opts.onArrived === 'function') opts.onArrived(id) } catch { /* notify is best-effort */ }
+          // a full view reload happened to run). writeAtomic returns the FINAL stored basename —
+          // `name-1` when a same-name-different-content conflict was renamed — so the host learns
+          // where the bytes actually landed (the row's key keeps resolving via the alias map).
+          try { if (typeof opts.onArrived === 'function') opts.onArrived(id, finalName || id) } catch { /* notify is best-effort */ }
         }
         current = null
       }

@@ -654,18 +654,25 @@ async function bootstrap () {
   // Day-rollover refresh: full recompute only when tasks changed (dirty flag) or the calendar day rolled over, avoiding idle spinning every minute
   // Compare the full date string: getDate() only compares day-of-month, so a cross-month sleep (1st→2nd, same number) would miss it and freeze the Today page on the old month
   let lastComputedDay = new Date().toDateString()
-  setInterval(() => {
-    const day = new Date().toDateString()
-    const dayChanged = day !== lastComputedDay
-    if (dayChanged) lastComputedDay = day
-    // Midnight rollover: reset the selected day whenever it isn't "truly today" (previously only checked "exactly yesterday"; picking tomorrow/earlier then crossing a day left the page silently stuck on the old selection)
-    if (dayChanged && store.state.ui.daySelectedTs) {
-      const t0 = new Date(); t0.setHours(0,0,0,0)
-      if (store.state.ui.daySelectedTs !== +t0) store.commit('ui/setDaySelected', 0)
-    }
-    // .catch: an async action rejection here would surface as an unhandled promise rejection every minute
-    if (store.state.todo.viewsDirty || dayChanged) store.dispatch('todo/computeViews').catch(e => console.warn('[todo] periodic computeViews failed:', e))
-  }, 60 * 1000)
+  // [C5 fix] main-shell gate (same convention as the auto-backup loop): aux windows (tomato float,
+  // quick-add) used to run this loop too — an extra full computeViews per minute per window, a second
+  // driver racing the main window's recycle purge across midnight, and daySelectedTs commits in
+  // windows that never show the picker. The float window already falls back to local candidate
+  // computation when views are empty/lagging (TomatoFloatPage.vue), so gating is safe there.
+  if (isMainShell) {
+    setInterval(() => {
+      const day = new Date().toDateString()
+      const dayChanged = day !== lastComputedDay
+      if (dayChanged) lastComputedDay = day
+      // Midnight rollover: reset the selected day whenever it isn't "truly today" (previously only checked "exactly yesterday"; picking tomorrow/earlier then crossing a day left the page silently stuck on the old selection)
+      if (dayChanged && store.state.ui.daySelectedTs) {
+        const t0 = new Date(); t0.setHours(0,0,0,0)
+        if (store.state.ui.daySelectedTs !== +t0) store.commit('ui/setDaySelected', 0)
+      }
+      // .catch: an async action rejection here would surface as an unhandled promise rejection every minute
+      if (store.state.todo.viewsDirty || dayChanged) store.dispatch('todo/computeViews').catch(e => console.warn('[todo] periodic computeViews failed:', e))
+    }, 60 * 1000)
+  }
 
   // Color mode (light/dark/follow system): apply at startup + react to changes
   const mql = window.matchMedia('(prefers-color-scheme: dark)')

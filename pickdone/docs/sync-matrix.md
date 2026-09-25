@@ -102,6 +102,15 @@ section; the authoritative implementation comments live next to the code (links 
   expand the purged ids into per-id `('todo', id)` tombstone pointers (2026-09-18) — the old
   single `('todo','*gc*')` marker hydrated as a ghost tombstone on peers and could not stop
   snapshot/merge resurrection.
+- B9 (2026-09-26): the purges' cascade-deleted `plan_chips` are captured INSIDE the purge
+  transaction (the rows are physically gone by oplog-expansion time, so they cannot be
+  re-queried) and expand into per-chip `('plan', chipId)` tombstone pointers. A peer that still
+  holds those chips live hydrates the pointer as a tombstone (its row is gone on the purging
+  device, so no live row ever re-fuels LWW) and lands the deletion through the existing
+  `planRemoveIds` tombstone apply path — closing the former gap where ghost chips of purged
+  todos were resurrected on every peer. `hardDelete`/`hardDeleteMany` remain todo-pointer-only
+  for their cascaded chips (peers recover via the todo tombstone and their own purge);
+  `planPrune` keeps its `'*gc*'` marker.
 - Count-shaped bulk results keep a single GC marker instead: `planPrune` (`'plan','*gc*'`)
   and `tomatoMigrateFromMeta` (`'tomato','*gc*'`). Delta consumers MUST skip `'*gc*'` ids
   (lan-sync hydration guards against them) and reconcile via a full snapshot / `tomatoAll`

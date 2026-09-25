@@ -11,7 +11,7 @@
  */
 const { autoUpdater } = require('electron-updater')
 const log = require('electron-log')
-const { readConfig } = require('./config-store')
+const { readConfig, isReadFailed } = require('./config-store')
 
 // Portable versions (PORTABLE_EXECUTABLE_DIR injected by the electron-builder portable runtime) do not participate in in-app updates:
 // otherwise it would launch the NSIS installer and overwrite the install, breaking the portable single-file semantics
@@ -24,7 +24,26 @@ const state = { status: 'idle', info: null } // idle|checking|downloading|availa
 
 // Setting autoDownloadUpdates (default on): when off, only a new-version notice is shown; the user clicks "Download now" in settings
 function syncAutoDownload () {
-  try { autoUpdater.autoDownload = readConfig().autoDownloadUpdates !== false } catch { autoUpdater.autoDownload = true }
+  // updater-config-read-fail-open fix (2026-09-26): the catch failed OPEN to auto-download, and
+  // the real fail-open path was readConfig's defaults-on-corruption anyway — an explicit
+  // autoDownloadUpdates=false opt-out silently reverted to auto-download whenever the config
+  // read failed. Fail CLOSED when the opt-out state is UNKNOWABLE: a known-failed read
+  // (isReadFailed — quarantine failed, writes gated off) or a throw disables auto-download.
+  // Auto-download is a network side effect; without an affirmative readable consent it must not
+  // start. Residual (documented, deliberate): when quarantine SUCCEEDS the config reverts to
+  // defaults like every other preference (keys are lost, not destroyed — see config-store) and
+  // the lost opt-out is indistinguishable from a first install; closing that needs a
+  // readConfig degraded-marker API change, out of scope here. Missing config (ENOENT) keeps
+  // the defaults-on default.
+  let allow = false
+  try {
+    // read FIRST, then consult the failure flag: the flag is set by THIS readConfig call when
+    // it discovers (and cannot quarantine) the corruption — checking it before the read would
+    // only see the PREVIOUS read's state and miss the corruption found right here.
+    const c = readConfig()
+    allow = !isReadFailed() && c.autoDownloadUpdates !== false
+  } catch { allow = false }
+  autoUpdater.autoDownload = allow
 }
 
 function broadcast () {
@@ -151,4 +170,6 @@ function getStatus () {
   return { active: isActive(), version: require('electron').app.getVersion(), ...state }
 }
 
-module.exports = { init, check, downloadUpdate, quitAndInstall, getStatus, flushOnceOnReady, forwardFlushAck }
+module.exports = { init, check, downloadUpdate, quitAndInstall, getStatus, flushOnceOnReady, forwardFlushAck,
+  syncAutoDownload, // updater-config-read-fail-open fix: unit-testable decision (plain node + __setConfigDir)
+}

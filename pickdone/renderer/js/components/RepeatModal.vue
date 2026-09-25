@@ -91,7 +91,7 @@
         </div>
         <div class="modal__footer">
           <el-button size="small" @click="close">{{ $t('statsD.RepeatModal.cancel') }}</el-button>
-          <el-button size="small" type="primary" :loading="generating" :disabled="!templateTodo" @click="generate">{{ $t('statsD.RepeatModal.generate') }}</el-button>
+          <el-button size="small" type="primary" :loading="generating" :disabled="!templateTodo || !templateTodo.todoTime" @click="generate">{{ $t('statsD.RepeatModal.generate') }}</el-button>
         </div>
       </div>
     </div>
@@ -133,7 +133,9 @@ export default {
         .filter(d => +new Date(d).setHours(0, 0, 0, 0) !== base0)
     },
     previewCount () {
-      if (!this.templateTodo || !this.templateTodo.todoTime) return this.form.repeatType === 'day' ? this.form.repeatDayCount : '-'
+      // [A3 fix] a date-less template generates 0 instances — the preview must not promise N (the old
+      // daily branch returned repeatDayCount as if instances would be created)
+      if (!this.templateTodo || !this.templateTodo.todoTime) return '-'
       return Math.min(this.effectiveDates.length, this.maxRepeat)
     },
     maxRepeat () { return parseInt(this.$store.state.settings.maxRepeat) || 2 },
@@ -150,6 +152,13 @@ export default {
     patch (p) { Object.assign(this.form, p) },
     async generate () {
       if (!this.templateTodo) return
+      // [A3 fix] a task with no date can never anchor a series: the old path persisted the rule,
+      // generated 0 instances and reported SUCCESS. Block before any persistence (the default-rule
+      // save below must not overwrite the user's saved repeatSettings for a doomed generation).
+      if (!this.templateTodo.todoTime) {
+        this.$message.warning(this.$t('statsD.RepeatModal.noBaseDate'))
+        return
+      }
       this.generating = true
       let dates = [] // hoisted: the catch below reports against it even when the try body throws early
       try {

@@ -202,7 +202,8 @@ export default {
       "previewPrefix": "Repeat preview: ",
       "previewSuffix": "",
       "generated": "Repeat instances generated",
-      "truncated": "(partial)"
+      "truncated": "(partial)",
+      "noBaseDate": "This task has no date — set a date on the task before generating a repeat series"
 
     },
     "RepeatDeleteModal": {
@@ -216,7 +217,9 @@ export default {
       "allEvents": "All events",
       "confirmAria": "Confirm delete scope",
       "groupInfo": "\"{c}\" belongs to a repeat group (multiple events share one rule).",
-      "notFound": "Repeat group not found"
+      "notFound": "Repeat group not found",
+      "queryFailed": "Could not load the repeat group — nothing was deleted",
+      "deleteFailed": "Delete failed — please try again"
 
     }
 

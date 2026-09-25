@@ -167,8 +167,17 @@ function run () {
     if (!dbOps.has(row.op) && !syncOps.has(row.op)) bad(`manifest "${key}" 的 op "${row.op}" 在 db.js OPS / db-sync-ops 中不存在（死条目）`)
   }
   if (!failed) ok(`manifest ${Object.keys(manifest.COMMANDS).length} 个命令的 op 全部真实存在`)
-  const writeOpsMatch = dbSrc.match(/const WRITE_OPS = new Set\(\[([\s\S]*?)\]\)/)
-  if (!writeOpsMatch) { bad('db.js 中找不到 WRITE_OPS'); return false }
+  // WRITE_OPS moved verbatim out of db.js into src/main/db-write-ops.cjs (structure-size
+  // ratchet, pure data). Load the real set instead of regex-scraping, but still pin db.js to
+  // importing it — a re-inlined divergent copy must not pass silently.
+  const writeOpsSrcPath = path.join(root, 'src/main/db-write-ops.cjs')
+  const writeOpsSrc = fs.readFileSync(writeOpsSrcPath, 'utf8')
+  const writeOpsMatch = writeOpsSrc.match(/const WRITE_OPS = new Set\(\[([\s\S]*?)\]\)/)
+  if (!writeOpsMatch) { bad('db-write-ops.cjs 中找不到 WRITE_OPS'); return false }
+  if (!/require\('\.\/db-write-ops\.cjs'\)/.test(dbSrc)) {
+    bad('db.js 不再从 db-write-ops.cjs 引入 WRITE_OPS —— 出现内联副本？')
+    return false
+  }
   const dbWriteOps = new Set([...writeOpsMatch[1].matchAll(/'([A-Za-z]+)'/g)].map(x => x[1]))
   const MUTATOR_SHAPE = /(upsert|delete|purge|append|remove|put|bump|prune|migrate|update|commitSync|restore|set[A-Z])/
   // Mutators that are deliberately NOT in WRITE_OPS: appending IS the capture layer (a

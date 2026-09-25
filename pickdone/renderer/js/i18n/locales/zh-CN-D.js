@@ -202,7 +202,8 @@ export default {
       "previewPrefix": "重复预览：",
       "previewSuffix": "",
       "generated": "已生成重复实例",
-      "truncated": "（仅展示部分）"
+      "truncated": "（仅展示部分）",
+      "noBaseDate": "该任务没有日期——请先为任务设置日期，再生成重复系列"
 
     },
     "RepeatDeleteModal": {
@@ -216,7 +217,9 @@ export default {
       "allEvents": "所有事件",
       "confirmAria": "确认删除范围",
       "groupInfo": "「{c}」属于重复任务组（共含多条同规则事件）。",
-      "notFound": "未找到重复组"
+      "notFound": "未找到重复组",
+      "queryFailed": "重复组加载失败——未删除任何任务",
+      "deleteFailed": "删除失败，请重试"
 
     }
 

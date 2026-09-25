@@ -70,9 +70,24 @@ test('pair-request dialog calls syncPairRespond with {accept:true|false} from th
 })
 
 test('inbound pair-request auto-dismisses after 60s with countdown', () => {
-  assert.match(src, /expiresAt: Date\.now\(\) \+ 60 \* 1000/)
+  assert.match(src, /const expiresAt = \(evt\.at \|\| Date\.now\(\)\) \+ 60 \* 1000/,
+    'the 60s window must derive from the main-stamped arrival time (evt.at), not a fresh Date.now()')
   assert.match(src, /tickIncomingPair/, 'countdown ticker must be scheduled')
   assert.match(src, /pairCountdown/, 'dialog must render the countdown i18n key')
+})
+
+/* ---------- A7: pairing countdown tracks the real transport window ---------- */
+
+test('A7: recovered pendingPair dialog derives its countdown from status.pendingPair.at (regression)', () => {
+  // Without the fix, checkPendingPair dropped `at` and showIncomingPair restarted at a full 60s
+  // even when the main-process transport window had mostly elapsed.
+  const check = src.match(/checkPendingPair \(\) \{[\s\S]*?\n {4}\},/)
+  assert.ok(check, 'checkPendingPair method present')
+  assert.match(check[0], /at: pp\.at/, 'recovery path must forward the main-stamped arrival time')
+  assert.match(src, /const leftSec = Math\.max\(0, Math\.round\(\(expiresAt - Date\.now\(\)\) \/ 1000\)\)/,
+    'remaining seconds must be computed from the derived window')
+  assert.match(src, /if \(leftSec === 0\) this\.tickIncomingPair\(\)/,
+    'an already-elapsed window routes into the expiry-hint path, not a fresh countdown')
 })
 
 /* ---------- security strip ---------- */
@@ -174,6 +189,17 @@ test('relative times get a 30s ticker so they do not freeze', () => {
   assert.match(src, /void this\.relTick/, 'relTime must depend on the ticker for re-render')
 })
 
+test('error dot and tooltip must depend on the 30s ticker so the red state ages out (regression)', () => {
+  // Without a relTick dependency in dotClass/dotTip, a stale lastError keeps the dot red
+  // and the tooltip in error mode until an unrelated re-render happens.
+  const dotClass = src.match(/dotClass \(p\) \{[\s\S]*?\n {4}\}/)
+  assert.ok(dotClass, 'dotClass method present')
+  assert.match(dotClass[0], /void this\.relTick/, 'dotClass must depend on the ticker to re-age the dot')
+  const dotTip = src.match(/dotTip \(p\) \{[\s\S]*?\n {4}\}/)
+  assert.ok(dotTip, 'dotTip method present')
+  assert.match(dotTip[0], /void this\.relTick/, 'dotTip must depend on the ticker to stay in sync with the dot')
+})
+
 test('pair dialog a11y: focus trap, autofocus on reject, Esc rejects without bubbling, expiry hint', () => {
   assert.match(src, /@keydown="onPairKeydown"/)
   assert.match(src, /aria-modal="true"/)
@@ -200,7 +226,8 @@ test('sync i18n keys are symmetric across zh-CN and en-US shards', async () => {
     'pairCountdown', 'acceptBtn', 'rejectBtn', 'manualPairLabel', 'activitySection', 'feedEmpty',
     'kindPush', 'kindPull', 'kindError', 'kindPair', 'securityWarn', 'securityDetail',
     'pairExpiredMsg', 'pairWaiting', 'pairTimeoutMsg', 'pairThrottledMsg', 'pairFailGenericMsg',
-    'pairExpiredHint', 'kindSnapshot', 'feedSessionHint']
+    'pairExpiredHint', 'kindSnapshot', 'feedSessionHint',
+    'conflictRestoreTitle', 'conflictRestoreConfirm']
   for (const k of newKeys) {
     assert.ok(zh[k], `zh-CN sync.${k} missing`)
     assert.ok(en[k], `en-US sync.${k} missing`)
@@ -213,4 +240,47 @@ test('outbound pairing uses syncPairRequest and keeps manual code pairing as col
   assert.match(src, /manualOpen = !manualOpen/, 'manual section must be collapsible')
   assert.match(src, /manualPairLabel/)
   assert.match(src, /pairWithCode/, 'existing 6-digit code pairing must remain available')
+})
+
+/* ---------- submitPairing: failure reason is mapped, not swallowed ---------- */
+
+test('submitPairing maps the failure through pairFailureKey instead of a blanket generic toast (regression)', () => {
+  const submit = src.match(/async submitPairing \(\) \{[\s\S]*?\n {4}\},/)
+  assert.ok(submit, 'submitPairing method present')
+  // Without the fix the chain ended `.catch(() => ...pairFailMsg)` — reason discarded.
+  assert.doesNotMatch(submit[0], /catch\(\(\) =>/, 'must not discard the error object')
+  assert.match(submit[0], /const key = pairFailureKey\(e\)/, 'failure reason must be consulted')
+  assert.match(submit[0], /key \|\| 'sync\.pairFailMsg'/, 'fallback stays the accurate wrong-code message')
+})
+
+/* ---------- sync conflict backups: friendly key + confirm before restore ---------- */
+
+test('conflict backup list renders originalKey (entity:id), not the raw metaConflictBackup key (regression)', () => {
+  assert.match(src, /\{\{ b\.originalKey \|\| b\.key \}\}/,
+    'display must prefer the friendly originalKey; raw meta key only as fallback')
+  assert.doesNotMatch(src, /sync-conflict-key">\{\{ b\.key \}\}/, 'raw meta key must not be displayed directly')
+})
+
+test('conflict backup Restore goes through the destructive-action confirm dialog (regression)', () => {
+  assert.doesNotMatch(src, /@click="restoreConflict\(b\)"/, 'single-click restore must be gone')
+  assert.match(src, /@click="askRestoreConflict\(b\)"/)
+  const ask = src.match(/askRestoreConflict \(b\) \{[\s\S]*?\n {4}\},/)
+  assert.ok(ask, 'askRestoreConflict method present')
+  assert.match(ask[0], /askConfirm\('sync\.conflictRestoreTitle', 'sync\.conflictRestoreConfirm'/,
+    'restore must use the shared confirm-dialog convention (unpair / re-pair)')
+  assert.match(ask[0], /originalKey \|\| b\.key/, 'confirm copy names the friendly key')
+  assert.match(ask[0], /\(\) => this\.restoreConflict\(b\)/, 'restoreConflict only fires on OK')
+})
+
+/* ---------- A7 (main side): bootstrap clears pendingPair on ANY respond resolution ---------- */
+
+test('bootstrap wraps pair-request respond so auto-reject also clears state.pendingPair (regression)', () => {
+  // Without the wrap only syncPairRespond cleared the record — the transport's 60s auto-reject
+  // fired its own closure and left a dead request re-surfaceable with a fresh countdown.
+  const boot = read('src/main/lan-sync-bootstrap.js')
+  const handler = boot.match(/state\.node\.on\('pair-request', info => \{[\s\S]*?\r?\n {2}\}\)\r?\n/)
+  assert.ok(handler, 'pair-request handler present in lan-sync-bootstrap')
+  assert.match(handler[0], /respond: \(\.\.\.args\) => \{[\s\S]*?state\.pendingPair = null[\s\S]*?info\.respond\(\.\.\.args\)/,
+    'respond must be wrapped to clear state.pendingPair before delegating')
+  assert.match(handler[0], /state\.pendingPair = record/, 'the wrapped record is what gets stored')
 })

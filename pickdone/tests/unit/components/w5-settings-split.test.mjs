@@ -56,8 +56,8 @@ test('w5 SettingsModal split: data-management suite lives in the data child, not
     assert.match(dataTab, new RegExp('\\b' + fn + ' \\('), `data child missing ${fn}`)
     assert.ok(!new RegExp('\\b' + fn + ' \\(').test(parent), `parent still carries ${fn}`)
   }
-  // schemaV guard + write-through set() preserved
-  assert.match(dataTab, /schemaV ' \+ td\.schemaV \+ ' > 1/)
+  // schemaV guard (B13 2026-09-26: guard is against the shared SCHEMA_V constant, no '> 1' literal) + write-through set() preserved
+  assert.match(dataTab, /Number\(td\.schemaV\) > SCHEMA_V/)
   assert.match(dataTab, /this\.\$store\.dispatch\('settings\/update', patch\)/)
 })
 
