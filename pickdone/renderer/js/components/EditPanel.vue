@@ -95,7 +95,7 @@
            :aria-label="isRepeat ? $t('statsJ.EditPanel.editRepeatRule') : $t('statsJ.EditPanel.setRepeat')"
            @click="askRepeatEdit" @keydown.enter.prevent="askRepeatEdit">
         <span class="ep-field-label ep-field-ico" :title="$t('statsE.TodoItem.repeatLabel')"><app-icon name="repeat" :size="13"/></span>
-        <span class="ep-remind-label" :class="{'ep-remind-label--active': isRepeat}">{{ isRepeat ? $t('statsJ.EditPanel.repeatPrefix') + $t('statsJ.EditPanel.repeatN', { n: repeatCount }) : $t('statsJ.EditPanel.setRepeat') }}</span>
+        <span class="ep-remind-label" :class="{'ep-remind-label--active': isRepeat}">{{ isRepeat ? $t('statsJ.EditPanel.repeatPrefix') + $t('statsJ.EditPanel.repeatN', { n: repeatCount == null ? '—' : repeatCount }) : $t('statsJ.EditPanel.setRepeat') }}</span>
         <span class="ml-auto"></span>
         <template v-if="isRepeat">
           <button class="ep-mini" @click.stop="askRepeatEdit">{{ $t('statsJ.EditPanel.ruleLabel') }}</button>
@@ -157,7 +157,7 @@
 /**
  * Right edit panel -- aligned with the right-sidebar reference: Category chips / complete + expand / title / description / date chips (today, tomorrow, pick a date, no date) / add reminder / subtasks (x, drag handle) / add subtask (n/20) / three difficulty levels / upload images / bottom tool row S4 split (2026-09-12): reminders/subtasks/attachments/dependencies views moved to ./edit-panel/Ep*.vue -- children only EMIT change events; this component owns the state (e/subList/imgList/fileList) and funnels every mutation through the unified queueSave pipeline (utils/editSave.js). The save pipeline is the global lifeline: it is the only place that dispatches todo/updateTodoFields for panel edits.
  */
-import {dayjs, DAY_MS, FMT } from '../utils/core.js'
+import {dayjs, DAY_MS, FMT, reportError } from '../utils/core.js'
 import { getLocale } from '../i18n/index.js'
 import { extractTags } from '../utils/search.js'
 import { subsCompleteTarget } from '../utils/core.js'
@@ -327,7 +327,7 @@ export default {
       if (this.previewImg) { this.previewImg = null; return }
       const ui = this.$store.state.ui
       // [maint-0925 A2] showFilterModal joins the whitelist (hoisted out of FilterView local data): Esc over the filter modal no longer closes the edit sidebar
-      if (ui.showSettingsModal || ui.showRepeatModalFor || ui.showFeedbackModal || ui.showFilterModal || ui.showRepeatDeleteConfirm || ui.accountTaskId || ui.tomatoAbandonVisible || ui.tomatoFocusRecordVisible) return
+      if (ui.showSettingsModal || ui.showRepeatModalFor || ui.showFeedbackModal || ui.showFilterModal || ui.showRepeatDeleteConfirm || ui.accountTaskId || ui.tomatoAbandonVisible || ui.tomatoFocusRecordVisible || ui.tomatoRecordAddVisible) return
       const st = this.$store.state.ui.rightSidebarTodoEdit
       if (st && st.visible) {
         this.$store.dispatch('ui/closeEditCleanup') // D6-F1: empty inline-created task is cleaned up
@@ -641,8 +641,11 @@ export default {
         // Data-safety guard: re-check the latest task row in the store before touching the disk. If the JSON update never landed (save failed / panel unmounted mid-write), the row still references the url — deleting the file then would corrupt the task's attachments.
         const row = this.$store.state.todo.todoList.find(t => t.taskId === (this.e && this.e.taskId))
         if (attachmentUrlPresent(row, item.url)) return
-        // .catch: delete-file now surfaces structured errors instead of swallowing them (2026-09-11); this call is a fire-and-forget sweep — a failure must not become an unhandled rejection
-        window.todoAPI.deleteFile(item.url).catch(() => {})
+        // .catch: delete-file now surfaces structured errors instead of swallowing them (2026-09-11); this call is a fire-and-forget sweep — a failure must not become an unhandled rejection.
+        // [maint-0925 D] the old catch(() => {}) discarded the structured error entirely: log it via the
+        // shared reportError path (main's contract expects the error to surface; no toast — the row
+        // removal already committed, only the disk sweep can fail here).
+        window.todoAPI.deleteFile(item.url).catch(err => reportError('delete-file:' + (item && item.url), err))
       }
       // Review-fix (2026-09-25): when the toast can't be shown (no $message / no Vue — removeWithUndo
       // early-returns BEFORE arming any dismissal), onDismiss would never fire and the disk file

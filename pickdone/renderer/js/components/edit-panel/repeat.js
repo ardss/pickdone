@@ -19,8 +19,10 @@ export async function repeatGroupInfo (ctx) {
     if (ctx.e && ctx.e.taskId === taskId) ctx.repeatCount = rows.length
   } catch (err) {
     // P2 fix (2026-09-25): the silent catch left repeatCount showing the PREVIOUS task's group
-    // count. Reset to 0 and warn — a failed query must not render a wrong repeat count.
+    // count. Reset and warn — a failed query must not render a wrong repeat count.
+    // [A14 residual fix] null (rendered as an em-dash placeholder) instead of 0: with repeatId
+    // still set the query failure is UNKNOWN, and "Repeat · 0 time(s)" stated a wrong count as fact.
     console.warn('[edit-panel] repeatGroupInfo query failed:', err && err.message ? err.message : err)
-    ctx.repeatCount = 0
+    ctx.repeatCount = null
   }
 }

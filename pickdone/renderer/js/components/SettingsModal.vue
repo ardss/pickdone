@@ -533,6 +533,11 @@ export default {
         this.set({ whiteNoiseAudio: 'local:' + r.key })
         this._customNoiseName = r.name
         this.$message.success(this.$t('statsE.SettingsModal.selectedPrefix') + r.name)
+      }).catch(e => {
+        // White-noise size gate: picking an over-quota file makes the main process REJECT (normal path
+        // for >50MB audio, not an edge case) — the old catchless chain left the user with zero feedback
+        console.error('[Settings] custom white-noise pick rejected', e)
+        this.$message.error(this.$t('statsH.main.actionFailedMsg') + ((e && e.message) || ''))
       })
     },
     previewCompleteSound () {

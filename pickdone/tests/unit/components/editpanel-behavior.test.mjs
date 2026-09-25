@@ -214,14 +214,16 @@ test('P2 cat dropdown: clicking the header row closes the pop (mousedown-close n
   assert.equal(ctxClosed.catOpen, false, 'closed pop stays closed on header hover-mousedown')
 })
 
-test('P2 repeat: failed group query resets repeatCount to 0 (no stale count from the previous task) and warns', async () => {
+test('P2 repeat: failed group query resets repeatCount to null (no stale count from the previous task) and warns', async () => {
   const warns = []
   const origWarn = console.warn
   console.warn = (...a) => warns.push(a.join(' '))
   globalThis.window.todoAPI = { dbCall: async () => { throw new Error('ipc down') } }
   const ctx = { e: { taskId: 't1', repeatId: 'r1' }, repeatCount: 7 }
   try { await REP.repeatGroupInfo(ctx) } finally { console.warn = origWarn }
-  assert.equal(ctx.repeatCount, 0, 'old silent catch kept the previous task count visible')
+  // [A14 residual fix] null (EditPanel renders an em-dash) instead of 0: with repeatId still set the
+  // query failure is UNKNOWN, and "Repeat · 0 time(s)" stated a wrong count as fact.
+  assert.equal(ctx.repeatCount, null, 'old silent catch kept the previous task count visible; 0 was a wrong count as fact')
   assert.ok(warns.length === 1 && /repeatGroupInfo/.test(warns[0]), 'failure is no longer silent')
 })
 

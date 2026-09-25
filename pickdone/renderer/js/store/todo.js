@@ -487,6 +487,20 @@ export default {
       if (r) {
         try { await restoreSnapshot(todo.taskId) } catch { /* No snapshot = originally unscheduled */ }
       }
+      // [B5 fix] dangling repeatId guard: startup meta GC (computeMetaGc, shared.js) legitimately purges
+      // `repeatRule:<rid>` when the rule was referenced only by recycle-bin rows (the deleted:0 filter
+      // closed the leak but never taught restore about the new invariant). Restoring such a task used to
+      // resurrect a dangling repeatId: completing it hit ensureNextRepeatInstance's silent `!rule` return
+      // and the chain just died. If the rule meta is gone, restore the task as a plain non-repeating task
+      // (the rule data is gone; fabricating one would invent UX).
+      if (r && todo.repeatId) {
+        let rule = null
+        try { rule = JSON.parse(await window.todoAPI.dbCall('getMeta', 'repeatRule:' + todo.repeatId) || 'null') } catch { /* treated as gone */ }
+        if (!rule) {
+          await dispatch('updateTodoFields', { taskId: todo.taskId, patch: { repeatId: null, status: 'update' } })
+          console.warn('[todo] restored task', todo.taskId, 'had a dangling repeatId (rule meta GCed) — restored as a non-repeating task')
+        }
+      }
       // Discrete op: break the 400ms undo merge so a following edit doesn't fuse into the restore step
       commit('historyBreakMerge')
       return r
@@ -510,7 +524,10 @@ export default {
       for (const id of ids) {
         try { await commitCommand("todo", "hardDelete", id); done.push(id); clearSnapshot(id) } catch (err) { reportError('hardDelete', err) }
       }
-      try { for (const id of done) await window.todoAPI.deleteTodoFilesRelevant?.(id) } catch {}
+      // [C15 fix] the empty catch here silently orphaned attachment files on disk when cleanup failed
+      // (main throws a structured per-file failure list). Log it like the adjacent hardDelete failures;
+      // rows are already hard-deleted, so the purge (and the mandatory historyClear below) still proceeds.
+      try { for (const id of done) await window.todoAPI.deleteTodoFilesRelevant?.(id) } catch (err) { reportError('deleteTodoFilesRelevant', err) }
       // Drop the purged tasks' pomodoro-estimate meta keys (setEstimate(id,0) deletes the key):
       // MetaGC covers the DB side, this covers the renderer mirror so a recycled numeric id cannot
       // resurrect a stale estimate (review M-C5)
@@ -555,7 +572,8 @@ export default {
       try { purged = await window.todoAPI.purgeRecycleBin() === true } catch (err) { reportError('purgeRecycleBin', err) }
       if (!purged) { dispatch('computeViews'); return false }
       // Attachment cleanup aligned with per-item permanent deletion (the main process's purgeRecycleBin only deletes rows, not files/)
-      try { for (const id of ids) await window.todoAPI.deleteTodoFilesRelevant?.(id) } catch {}
+      // [C15 fix, same class as purgeIds] attachment-file cleanup failures are logged, not swallowed
+      try { for (const id of ids) await window.todoAPI.deleteTodoFilesRelevant?.(id) } catch (err) { reportError('deleteTodoFilesRelevant', err) }
       // Drop the pre-delete chip snapshot meta too (rows are gone, the snapshot can never be restored)
       for (const id of ids) clearSnapshot(id)
       // maint-d7: drop the purged tasks' pomodoro-estimate meta keys too — parity with purgeIds
