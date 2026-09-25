@@ -14,6 +14,9 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const dir = path.dirname(fileURLToPath(import.meta.url))
+// App root (pickdone/): the runner anchors its child spawn here and passes repo-relative
+// test paths — see the argv-length comment at the spawnSync call below.
+const appRoot = path.join(dir, '..')
 // Live-Electron tests spawn their own instance (~30-60s each) and depend on the shared 5175
 // host's runtime state — they stay out of the quick regression (and out of pre-commit, which
 // must never be hostage to dev-host state); each runs as a dedicated check:all ③ live stage.
@@ -95,8 +98,20 @@ const r = spawnSync(process.execPath, ['--test', '--test-force-exit', `--test-ti
   ...(forwardArgs.includes('--experimental-test-coverage')
     ? ['--test-reporter=spec', '--test-reporter-destination=stderr']
     : []),
-  ...forwardArgs, ...files],
-  { stdio: ['inherit', 'pipe', 'pipe'], maxBuffer: 1 << 28 })
+  ...forwardArgs, ...files.map(f => path.relative(appRoot, f))],
+  // Windows caps a spawned command line at ~32k chars: with ~350 discovered files, ABSOLUTE
+  // paths (K:\...\pickdone\tests\...) blow past it and spawnSync fails with ENAMETOOLONG —
+  // exit 1 with ZERO TAP output, which the summary gate could only read as a mystery red
+  // (2026-09-26 check:fast round-2). Anchor the spawn at the app root and pass repo-relative
+  // paths so the argv stays an order of magnitude under the cap regardless of checkout depth.
+  { cwd: appRoot, stdio: ['inherit', 'pipe', 'pipe'], maxBuffer: 1 << 28 })
+// Fail closed and LOUD on spawn errors: r.status is null when the child never ran, so the
+// old `r.status ?? 1` fell through to exit 1 with empty output — indistinguishable from a
+// test failure and unattributable. Name the errno instead.
+if (r.error) {
+  console.error(`✗ [run-all] test runner failed to spawn: ${r.error.code || r.error.message}`)
+  process.exit(1)
+}
 // Timing summary: print the enforced per-test ceiling next to the SLOWEST observed test, so a
 // near-ceiling duration reads as "slow but finished" and a kill-at-ceiling reads as "hung".
 // The 2min ceiling itself stays as-is (observed margin vs the slowest test is 6.5x+).
