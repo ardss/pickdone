@@ -489,6 +489,20 @@ function applyRowInner (state, incoming) {
   if (localRow && winner === incoming && !localRow.deleted && !incoming.deleted && !rowContentDiffers(localRow, incoming)) return false
   if (localRow && winner === incoming && localRow.deleted && incoming.deleted &&
       (incoming.deletedAt || 0) <= (localRow.deletedAt || 0)) return false
+  // Echo guard (2026-09-26 first-pair incident): the todo localRow above carries NO seq, so
+  // compareRecency's seq tiebreak always reads local=0 vs the inbound pointer's seq>0 — an
+  // ECHO of this device's own row (the peer applied it, re-captured it into its oplog, pushed
+  // it back) wins every same-updatedAt tie by construction. Whether that tie-win is harmless
+  // then depends entirely on the echo's content surviving the write roundtrip byte-identically
+  // (it could not: todoToRow re-derived scheduledDay in the writer's timezone). A live row that
+  // is NOT strictly newer than the local live row must never replace it nor spawn a conflict
+  // copy of it — refuse and keep local. Real peer edits (strictly newer stamps) still win on
+  // updatedAt before any tiebreak; live-vs-tombstone merges are left to the delete-wins rules.
+  if (entity === 'todo' && localRow && !localRow.deleted && !incoming.deleted &&
+      winner === incoming && stampNum(incoming.updatedAt) <= stampNum(localRow.updatedAt)) {
+    log.warn('[LanSync] same-stamp echo on todo', incoming.id, '— local row stands (an echo is never strictly newer)')
+    return false
+  }
   if (conflictCopy) {
     // Surface the losing edit (merge.mjs contract: the loser is never silently dropped).
     // Round-3 review: materialize it as a TOMBSTONED todo row so the recycle bin can restore
