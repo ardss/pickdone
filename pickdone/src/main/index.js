@@ -434,7 +434,10 @@ function rebuildTrayMenu () {
 
 /* ================= Single-instance lock & startup ================= */
 if (!app.requestSingleInstanceLock()) { app.quit() } else {
-  app.on('second-instance', () => { showMainOrLock() })
+  // Round-3 stability (2026-09-26): show() deferred until whenReady resolves when the event
+  // arrives during the cold-start init chain — new BrowserWindow before ready hard-throws and
+  // surfaced as a crash dialog on a plain double launch (see second-instance-gate.js).
+  require('./second-instance-gate').wireSecondInstance(app, () => { showMainOrLock() })
 
   app.whenReady().then(() => {
     Menu.setApplicationMenu(null) // project baseline has no menu bar
