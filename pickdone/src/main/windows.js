@@ -4,14 +4,35 @@
  */
 const { app, BrowserWindow, shell } = require('electron')
 const path = require('path')
+const fs = require('fs')
+const { crashRelaunchDecision, CRASH_RELAUNCH_CAP } = require('./handlers/shared')
 
-function createWindowManager (ctx) {
-  const {
+/* ---- D10 (2026-09-27): persisted renderer-crash relaunch counter ----
+ * crashReloadCount is in-memory and resets on did-finish-load AND on every app.relaunch() (fresh
+ * process ⇒ 0 again), so a renderer crashing deterministically at startup looped
+ * crash→3 reloads→relaunch forever. A small marker file in userData persists how many consecutive
+ * RELAUNCHES the crash policy already burned; the health window (60s alive after did-finish-load)
+ * clears it. Past CRASH_RELAUNCH_CAP the app gives up and shows a fatal-error dialog instead of
+ * spawning relaunch after relaunch (decision unit-tested: crashRelaunchDecision in handlers/shared;
+ * the marker round-trip itself is unit-tested via the __crashCounter export below). */
+const CRASH_MARKER_FILE = 'renderer-crash-relaunch-count.json'
+const CRASH_HEALTH_WINDOW_MS = 60_000
+function crashMarkerPath () { return path.join(app.getPath('userData'), CRASH_MARKER_FILE) }
+function readCrashRelaunchCount () {
+  try { return Number(JSON.parse(fs.readFileSync(crashMarkerPath(), 'utf8')).count) || 0 } catch { return 0 }
+}
+function writeCrashRelaunchCount (n) {
+  try { fs.writeFileSync(crashMarkerPath(), JSON.stringify({ count: n, at: Date.now() }), 'utf8') } catch { /* best-effort: a failed persist degrades to the old in-memory-only behavior */ }
+}
+
+function createWindowManager (ctx) {  const {
     readConfig, writeConfig, i18n, log, windowRef, closeBehavior,
     tomatoTaskbar, updater, applyShortcuts, shortcuts, scheduler,
     isLocked, lockAppNow, showMainOrLock,
-    isQuitting, getState, getTray
-  } = ctx
+  isQuitting, getState, getTray,
+  /** D10 (2026-09-27): index.js hook — clears the tomato countdown lease when the renderer dies. */
+  onRendererGone
+} = ctx
 
   let win = null // main window
 
@@ -133,9 +154,18 @@ function createWindowManager (ctx) {
     // Reload up to 3 times (counter resets on each successful did-finish-load); beyond the cap, relaunch the app —
     // a relaunched instance is strictly better than a zombie window the user must kill by hand.
     let crashReloadCount = 0
-    win.webContents.on('did-finish-load', () => { crashReloadCount = 0 })
+    let crashHealthTimer = null
+    win.webContents.on('did-finish-load', () => {
+      crashReloadCount = 0
+      // D10 (2026-09-27): health window — if the renderer stays alive 60s past a successful load,
+      // the crash streak is over; clear the persisted relaunch counter.
+      clearTimeout(crashHealthTimer)
+      crashHealthTimer = setTimeout(() => { writeCrashRelaunchCount(0) }, CRASH_HEALTH_WINDOW_MS)
+      if (crashHealthTimer.unref) crashHealthTimer.unref()
+    })
     win.webContents.on('render-process-gone', (_e, details) => {
       log.error('[Crash] render-process-gone:', details && details.reason, 'exitCode=', details && details.exitCode)
+      try { if (typeof onRendererGone === 'function') onRendererGone() } catch { /* lease clearing is best-effort */ }
       if (isQuitting()) return // a quit in progress kills renderers as a side effect; do not fight it
       const reason = details && details.reason
       if (!reason || reason === 'clean-exit') return
@@ -144,7 +174,21 @@ function createWindowManager (ctx) {
         log.warn('[Crash] 渲染进程崩溃,自动重载', crashReloadCount, '/3')
         setTimeout(() => { const w = getMainWindow(); if (w) { try { w.webContents.reload() } catch (e2) { log.warn('[Crash] reload failed', e2) } } }, 300)
       } else {
-        log.error('[Crash] 重载超限,relaunch 应用')
+        // D10 (2026-09-27): gate the relaunch on the PERSISTED counter. The in-memory counter
+        // resets on every relaunch, so the old code looped forever on a deterministic startup
+        // crash; past the cap we give up with a fatal-error dialog instead.
+        const relaunchCount = readCrashRelaunchCount()
+        const action = crashRelaunchDecision(relaunchCount, { cap: CRASH_RELAUNCH_CAP })
+        if (action === 'give-up') {
+          log.error('[Crash] relaunch cap (' + CRASH_RELAUNCH_CAP + ') exhausted — giving up, showing fatal-error dialog')
+          try {
+            const { dialog } = require('electron')
+            dialog.showErrorBox('[Crash] PickDone', 'The renderer process keeps crashing (' + CRASH_RELAUNCH_CAP + ' relaunches without a stable run). Please restart the app manually; if the problem persists, reinstall or report the log file from the data directory.')
+          } catch { /* no dialog available */ }
+          return
+        }
+        log.error('[Crash] 重载超限,relaunch 应用 (relaunch #' + (relaunchCount + 1) + ')')
+        writeCrashRelaunchCount(relaunchCount + 1)
         try { shortcuts.unregisterAll() } catch {}
         // Best-effort dedup-ledger persist so the relaunch doesn't re-fire reminders from the last 60s
         try { scheduler.flushFiredNow() } catch {}
@@ -220,4 +264,9 @@ function createWindowManager (ctx) {
   return { createMainWindow, getMainWindow }
 }
 
-module.exports = { createWindowManager }
+module.exports = {
+  createWindowManager,
+  // D10 test seam: crash-counter marker round-trip (plain-node tests stub electron's app.getPath)
+  __crashCounter: { read: readCrashRelaunchCount, write: writeCrashRelaunchCount },
+  CRASH_RELAUNCH_CAP, CRASH_HEALTH_WINDOW_MS,
+}

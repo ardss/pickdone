@@ -127,6 +127,18 @@ function computeMetaGc (metaKeys, categories, todos) {
     if (m && !liveTaskIds.has(m[1])) { dead.push(k); continue }
     m = k.match(/^(?:projectDeadline|projectMilestones):(.+)$/)
     if (m && !live.has(m[1])) dead.push(k)
+    // D10 (2026-09-27): per-category project fields follow the same lifecycle rule as
+    // projectDeadline/projectMilestones above — a purged category leaves its status/flag rows dead.
+    m = k.match(/^projectStatus:(.+)$/)
+    if (m && !live.has(m[1])) { dead.push(k); continue }
+    m = k.match(/^projectCategoryFlag:(.+)$/)
+    if (m && !live.has(m[1])) { dead.push(k); continue }
+    // D10 (2026-09-27): `catProjectMetaBak.pending.<id>` is a bracketed softDelete→rename roundtrip
+    // crash marker — the roundtrip either completed or never started, and this GC runs at startup
+    // before any NEW softDelete can mint a marker, so every pending marker is dead. The NON-pending
+    // `catProjectMetaBak.<id>` is deliberately left alone: it anchors the recovery entry of
+    // soft-deleted categories, which a live-only category set cannot see.
+    if (/^catProjectMetaBak\.pending\./.test(k)) { dead.push(k); continue }
   }
   return dead
 }
@@ -154,4 +166,26 @@ function stripForbiddenSettingsKeys (patch, { float } = {}) {
   return clean
 }
 
-module.exports = { makeAssertMainWindow, makeSenderIsMain, purgeAttachmentFiles, ownsAttachmentFile, computeMetaGc, classifyCommitKey, makeSyncKick, stripForbiddenSettingsKeys, FLOAT_FORBIDDEN_SETTINGS_KEYS }
+/** D10 (2026-09-27): tomatoLiveText freshness lease. The renderer pushes the tray countdown
+ *  text once per second; when the main-window renderer dies mid-pomodoro nothing clears the
+ *  last text, so quitFromTray's "focus in progress" confirm fired on EVERY quit forever.
+ *  The text is now a lease: live only while a push arrived within TTL_MS (10s). Pure. */
+const TOMATO_LIVE_TTL_MS = 10_000
+function isLiveTextFresh (text, lastUpdateAt, now = Date.now(), ttlMs = TOMATO_LIVE_TTL_MS) {
+  if (!String(text || '').trim()) return false
+  if (!Number.isFinite(lastUpdateAt) || lastUpdateAt <= 0) return false
+  return now - lastUpdateAt < ttlMs
+}
+
+/** D10 (2026-09-27): renderer crash relaunch policy. The in-process crashReloadCount resets on
+ *  did-finish-load AND on every app.relaunch() (fresh process ⇒ 0 again), so a renderer crashing
+ *  deterministically at startup looped crash→3 reloads→relaunch forever. The relaunch branch is
+ *  now gated by a counter persisted across processes (windows.js marker file) and cleared by a
+ *  60s post-load health window: past the cap the app gives up and shows a fatal-error dialog
+ *  instead of spawning relaunch storm after relaunch storm. Pure. */
+const CRASH_RELAUNCH_CAP = 3
+function crashRelaunchDecision (persistedRelaunchCount, { cap = CRASH_RELAUNCH_CAP } = {}) {
+  return Number(persistedRelaunchCount) >= cap ? 'give-up' : 'relaunch'
+}
+
+module.exports = { makeAssertMainWindow, makeSenderIsMain, purgeAttachmentFiles, ownsAttachmentFile, computeMetaGc, classifyCommitKey, makeSyncKick, stripForbiddenSettingsKeys, FLOAT_FORBIDDEN_SETTINGS_KEYS, isLiveTextFresh, TOMATO_LIVE_TTL_MS, crashRelaunchDecision, CRASH_RELAUNCH_CAP }

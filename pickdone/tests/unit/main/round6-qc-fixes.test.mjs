@@ -93,11 +93,16 @@ test('r6-6: contentFingerprint is vocabulary-agnostic (panel snapshot vs raw row
    contract (dialog present, cancel restores quitByUser, direct quit unchanged when idle). */
 test('r6-7: tray quit confirms before abandoning a running pomodoro', () => {
   const src = require_('fs').readFileSync(path.join(root, 'src/main/index.js'), 'utf8')
-  const i = src.indexOf('async function quitFromTray')
-  assert.ok(i > 0, 'quitFromTray exists')
+  // D10 (2026-09-27): quitFromTray is now a thin re-entrancy-guard wrapper; the confirm body
+  // moved verbatim into quitFromTrayInner (the guard refuses a second tray-quit click while the
+  // confirm dialog is open).
+  const i = src.indexOf('async function quitFromTrayInner')
+  assert.ok(i > 0, 'quitFromTrayInner exists')
   const body = src.slice(i, src.indexOf('\n}', i))
-  // The confirm keys off the live pomodoro signal, not an unconditional dialog
-  assert.match(body, /if \(tomatoLiveText\)/, 'confirm only while a pomodoro is live')
+  // The confirm keys off the live pomodoro signal, not an unconditional dialog. D10: the signal
+  // is a LEASE — isLiveTextFresh(tomatoLiveText, tomatoLiveAt) so a dead renderer's stale text
+  // cannot show a false confirm on every quit forever.
+  assert.match(body, /isLiveTextFresh\(tomatoLiveText/, 'confirm only while the pomodoro live-lease is fresh')
   assert.match(body, /dialog\.showMessageBox/, 'main-process dialog is the confirm vehicle')
   assert.match(body, /cancelId: 1/, 'cancel is the safe default choice')
   assert.match(body, /response !== 0[\s\S]*?quitByUser = false/, 'cancelling restores the quit intent (no zombie half-quit state)')
