@@ -46,8 +46,13 @@ module.exports = function systemHandlers (ctx) {
       // surviving renderer window could still launch the browser at an arbitrary https URL (fishing
       // redirect / external-protocol handler trigger). Symmetric throw, not a silent return.
       if (isLocked()) throw new Error('locked')
-      // (also removes the old double isSafeExternal call — redundant branch debt)
-      if (isSafeExternal(url)) shell.openExternal(url)
+      // D10 (2026-09-27): honest result. The handler returned undefined on EVERY path — for an
+      // unsafe scheme it silently did nothing with a success-shaped undefined return, so the
+      // renderer could not distinguish "opened" from "rejected by the scheme guard". Symmetric
+      // throw (like the isLocked guard above) + explicit true on the open path.
+      if (!isSafeExternal(url)) throw new Error('unsafe external url')
+      shell.openExternal(url)
+      return true
     },
     // [IPC dead channels cleaned] download-file/open-file-in-viewer/goto-main-window-and-select-todo/
     // show-todo-list/focus-main-window/open-settings-modal/user-logout/get-memory-metrics/

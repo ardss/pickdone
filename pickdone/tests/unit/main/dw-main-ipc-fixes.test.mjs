@@ -280,10 +280,13 @@ test('F5: open-external-url is locked-gated and single-validates', () => {
   locked = true
   try { assert.throws(() => api['open-external-url'](eMain, 'https://example.com'), /locked/) } finally { locked = false }
   calls.openExternal.length = 0
-  assert.equal(api['open-external-url'](eMain, 'https://example.com'), undefined)
+  // D10 (2026-09-27): honest result — a safe URL returns true, an unsafe scheme THROWS (was a
+  // silent success-shaped undefined on every path).
+  assert.equal(api['open-external-url'](eMain, 'https://example.com'), true)
   assert.deepEqual(calls.openExternal, ['https://example.com'], 'exactly one openExternal for a safe URL')
   calls.openExternal.length = 0
-  api['open-external-url'](eMain, 'file:///C:/Windows/System32/calc.exe')
+  assert.throws(() => api['open-external-url'](eMain, 'file:///C:/Windows/System32/calc.exe'), /unsafe external url/)
+  assert.throws(() => api['open-external-url'](eMain, 'javascript:alert(1)'), /unsafe external url/)
   assert.deepEqual(calls.openExternal, [], 'non-http(s) URLs stay blocked')
 })
 

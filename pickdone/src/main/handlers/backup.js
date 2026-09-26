@@ -179,7 +179,14 @@ module.exports = function backupHandlers (ctx) {
       assertMainWindow(e)
       if (isLocked()) throw new Error('app is locked')
       // Same source of truth as dbRecovery.cjs: external root first, with fallback to legacy files inside userData
-      try { return fs.readFileSync(dbRecovery.criticalBackupPath(app.getPath('userData')), 'utf8') } catch { return null }
+      // D10 (2026-09-27): classify like the sibling read-auto-backup — the blanket catch reported
+      // EACCES/EBUSY on an EXISTING critical backup as "no backup exists", hiding a real
+      // disaster-recovery asset from the renderer. Only a genuinely missing file returns null.
+      try { return fs.readFileSync(dbRecovery.criticalBackupPath(app.getPath('userData')), 'utf8') } catch (err) {
+        if (fixUtil.classifyBackupError(err) === 'missing') return null
+        err.message = 'critical backup exists but is unreadable: ' + (err && err.message || err)
+        throw err
+      }
     }
   }
 }

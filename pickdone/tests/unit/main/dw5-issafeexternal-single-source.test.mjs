@@ -52,10 +52,14 @@ test('P3: behavior unchanged — open-external-url still opens only http(s) and 
     })
   } finally { Module._load = origLoad }
   const sender = { sender: { id: 1 } }
+  // D10 (2026-09-27): the handler now returns an HONEST result — unsafe schemes throw a coded
+  // error (so the renderer can distinguish "opened" from "rejected by the scheme guard") instead
+  // of silently returning undefined. The safety criterion itself is unchanged: only http(s) opens.
   handlers['open-external-url'](sender, 'https://example.com')
-  handlers['open-external-url'](sender, 'file:///C:/Windows/System32/calc.exe')
-  handlers['open-external-url'](sender, 'javascript:alert(1)')
+  assert.throws(() => handlers['open-external-url'](sender, 'file:///C:/Windows/System32/calc.exe'), /unsafe external url/)
+  assert.throws(() => handlers['open-external-url'](sender, 'javascript:alert(1)'), /unsafe external url/)
   assert.deepEqual(opened, ['https://example.com'], 'only http(s) reaches shell.openExternal')
+  assert.equal(handlers['open-external-url'](sender, 'http://example.com/x'), true, 'opened URL returns true')
 })
 
 test('P3: locked gate still throws before opening', () => {
