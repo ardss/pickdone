@@ -67,7 +67,7 @@ try {
 let tray = null
 const state = { quitByUser: false } // shared with windows.js close handler (was a module var in the pre-split index.js)
 
-const { readConfig, writeConfig } = require('./config-store')
+const { readConfig, writeConfig, consumeQuarantineNotice } = require('./config-store')
 
 // Submodules like scheduler/notify-sound get the main window via window-ref, avoiding a reverse require('./index') dependency
 const windowRef = require('./window-ref')
@@ -605,6 +605,24 @@ if (!app.requestSingleInstanceLock()) { app.quit() } else {
 
     // Global shortcuts (shortcut settings stored in config.json)
     applyShortcuts(readConfig().shortcutKeySettings)
+
+    // Round-3 stability (2026-09-26): if this startup quarantined a corrupt config.json (renamed
+    // to config.json.bad), the user must know: settings reset for this session and the security
+    // lock is disabled until re-enabled. Notice-only — the fail-open semantics are unchanged.
+    try {
+      if (consumeQuarantineNotice()) {
+        const { Notification, dialog } = require('electron')
+        const body = 'Your config file (config.json) was corrupted and could not be read. ' +
+          'The previous file was preserved as config.json.bad. Settings are reset for this session ' +
+          'and the security lock is disabled until you re-enable it.'
+        log.warn('[App] config.json was corrupted and quarantined as config.json.bad; security lock disabled until re-enabled')
+        let shown = false
+        try {
+          if (Notification.isSupported()) { new Notification({ title: 'PickDone', body }).show(); shown = true }
+        } catch { /* fall through to the non-modal dialog */ }
+        if (!shown) dialog.showMessageBox(win, { type: 'warning', title: 'PickDone', message: body, buttons: ['OK'] }).catch(() => {})
+      }
+    } catch (e) { log.warn('[App] quarantine notice failed:', e && e.message) }
 
     // Security lock: when enabled the main process takes over — hide the main window and pop a standalone lock screen (aligned with the reference enableSecurityLock)
     if (readConfig().enableSecurityLock) {
