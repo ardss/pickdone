@@ -232,7 +232,9 @@ export default {
       // P1-6 (2026-09-19 UX review): the announce getter caches on store state and Date.now() is
       // not reactive — dispatch the store prune on this 500ms tick so a peer that crashed
       // mid-focus drops its ghost chip by TTL instead of sticking forever.
-      try { this.$store.commit('tomatoAnnounce/prune') } catch (e) { /* store not ready */ }
+      // Round-3 perf: skip the commit while no peer announce exists — pruning an empty map is a
+      // no-op, so an idle window stops issuing 2Hz Vuex commits.
+      try { if (Object.keys(this.$store.state.tomatoAnnounce.remote).length) this.$store.commit('tomatoAnnounce/prune') } catch (e) { /* store not ready */ }
       const s = this.st
       let remain = (s.tomatoTime || 25) * 60
       if ((s.status === 'startTomatoTime' || s.status === 'startRestTime') && s.startedAt) {
