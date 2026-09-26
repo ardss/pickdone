@@ -27,5 +27,14 @@ module.exports = (getDb) => ({
     for (const id of ids) {
       getDb().prepare("DELETE FROM meta WHERE key = 'planChipsSnapshot:' || ?").run(String(id))
     }
+  },
+  // D10 (2026-09-27, same lifecycle rule as the two families above): the renderer's purgeIds path
+  // clears the per-task focus estimate via setEstimate(id,0), but sync/manifest-issued hard deletes
+  // bypass the renderer entirely — without this exact-key delete the `tomatoEstimateState:<taskId>`
+  // meta row outlived its task until the next startup MetaGC.
+  deleteEstimateKeysFor (ids) {
+    for (const id of ids) {
+      getDb().prepare("DELETE FROM meta WHERE key = 'tomatoEstimateState:' || ?").run(String(id))
+    }
   }
 })

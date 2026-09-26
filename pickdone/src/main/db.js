@@ -502,7 +502,7 @@ function assertHasTaskId (t) {
 
 const makeBulkOps = require('./db-bulk-ops')(() => db, () => OPS)
 // Per-task meta-key GC helpers (snowDedup / planChipsSnapshot) moved to db-meta-gc.cjs verbatim:
-const { deleteSnowDedupKeysFor, deleteChipsSnapshotKeysFor } = require('./db-meta-gc.cjs')(() => db)
+const { deleteSnowDedupKeysFor, deleteChipsSnapshotKeysFor, deleteEstimateKeysFor } = require('./db-meta-gc.cjs')(() => db)
 // B9 purge chip-capture scratch (single-process synchronous db.call → oplog append): the purge
 // ops physically DELETE plan_chips inside their transaction, so the oplog expansion (which runs
 // POST-op and can only re-query surviving rows) cannot recover the doomed chip ids. The ops
@@ -592,8 +592,8 @@ const OPS = {
   },
   queryTodos,
   // 两表删除包事务:两语句间崩溃会留孤儿 chips(2026-09-05 终审 P1,与 hardDeleteMany 对齐)
-  hardDelete: id => { const tr = db.transaction(() => { db.prepare('DELETE FROM plan_chips WHERE taskId=?').run(String(id)); deleteSnowDedupKeysFor([id]); deleteChipsSnapshotKeysFor([id]); stmts.hardDelete.run(id) }); tr(); return true },
-  hardDeleteMany: ids => { const tr = db.transaction(() => ids.forEach(i => { db.prepare('DELETE FROM plan_chips WHERE taskId=?').run(String(i)); deleteSnowDedupKeysFor([i]); deleteChipsSnapshotKeysFor([i]); stmts.hardDelete.run(i) })); tr(); return true },
+  hardDelete: id => { const tr = db.transaction(() => { db.prepare('DELETE FROM plan_chips WHERE taskId=?').run(String(id)); deleteSnowDedupKeysFor([id]); deleteChipsSnapshotKeysFor([id]); deleteEstimateKeysFor([id]); stmts.hardDelete.run(id) }); tr(); return true },
+  hardDeleteMany: ids => { const tr = db.transaction(() => ids.forEach(i => { db.prepare('DELETE FROM plan_chips WHERE taskId=?').run(String(i)); deleteSnowDedupKeysFor([i]); deleteChipsSnapshotKeysFor([i]); deleteEstimateKeysFor([i]); stmts.hardDelete.run(i) })); tr(); return true },
   getMeta: k => { const r = stmts.getMeta.get(k); return r ? r.value : null },
   // Accepts both argument forms: (k, v) or [k, v] (the renderer's dbCall('setMeta', [k, v]) is passed through as a single call parameter)
   setMeta: (k, v) => { if (Array.isArray(k)) { v = k[1]; k = k[0] } stmts.setMeta.run(k, String(v)); return true },
@@ -626,6 +626,7 @@ const OPS = {
       db.prepare('DELETE FROM plan_chips WHERE taskId IN (SELECT id FROM todos WHERE deleted = 1)').run()
       deleteSnowDedupKeysFor(ids) // main-ipc-3 (2026-09-22): the rows die here — their focus-session dedup fences must not outlive them
       deleteChipsSnapshotKeysFor(ids) // snapshot meta dies with the rows (same lifecycle rule)
+      deleteEstimateKeysFor(ids) // D10 (2026-09-27): same lifecycle rule — the purge path bypasses the renderer's setEstimate(id,0)
       db.prepare('DELETE FROM todos WHERE deleted = 1').run()
     }); tr(); return ids
   },
@@ -638,6 +639,7 @@ const OPS = {
       db.prepare("DELETE FROM plan_chips WHERE taskId IN (SELECT id FROM todos WHERE substr(id, 1, 5) = 'seed_')").run()
       deleteSnowDedupKeysFor(ids) // main-ipc-3 (2026-09-22): same lifecycle rule as purgeRecycleBin
       deleteChipsSnapshotKeysFor(ids) // same lifecycle rule
+      deleteEstimateKeysFor(ids) // D10 (2026-09-27): same lifecycle rule
       db.prepare("DELETE FROM todos WHERE substr(id, 1, 5) = 'seed_'").run()
     }); tr(); return ids
   },
