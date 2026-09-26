@@ -533,8 +533,7 @@ export default {
       this.purging = true
       try {
         const n = this.$store.state.todo.recycleList.length
-      // Same strength as the recycle bin page: unified triple confirm confirmRecycleClear (previously only single confirm, inconsistent protection)
-      try {
+        // Same strength as the recycle bin page: unified triple confirm confirmRecycleClear (previously only single confirm, inconsistent protection)
         await confirmRecycleClear(this, n)
         // dispatch must be awaited: the async purge can fail (db write error); success toast only after it resolves
         // QC r1: purgeAllRecycle now returns a success flag — it RESOLVES (not rejects) on IPC
