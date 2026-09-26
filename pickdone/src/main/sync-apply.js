@@ -817,7 +817,9 @@ function quarantineFlushRows (state, op, list, err) {
     } catch { /* unreadable prior blob: start a fresh list rather than failing the quarantine */ }
     parked.push({ at: Date.now(), count: list.length, error: (err && err.message) || String(err), rows: list.map(quarantineEncodeRow) })
     while (parked.length > META_FLUSH_QUARANTINE_CAP) parked.shift()
-    state.db.call('setMeta', [key, JSON.stringify(parked)])
+    // Route through the bus facade like every other sync write (single-write-gate): the
+    // quarantine meta blob is machine-local, but the write must still be manifest-validated.
+    busWrite(state, 'setMeta', [key, JSON.stringify(parked)])
     return { op, key, count: list.length }
   } catch (e) {
     log.warn('[LanSync] flush quarantine parking failed (log-only drop):', e && e.message)
