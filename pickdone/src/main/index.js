@@ -758,14 +758,17 @@ app.on('will-quit', (event) => {
   extWatchGate.arm() // C11: disarm the external-write poll BEFORE the flush window opens
   event.preventDefault()
   const FLUSH_FLOOR_MS = 500
-  const flushNow = () => {
+  const flushNow = async () => {
     try { if (stopDbWatch) stopDbWatch() } catch {} // release the fs.watchFile poll timers before closing
     try { shortcuts.unregisterAll() } catch {}
     // Persist the reminder dedup ledger synchronously (quitting inside the 60s debounce window → reminders resent after restart) + close the db handle (avoids losing one checkpoint and late handle release on Windows)
     try { scheduler.flushFiredNow() } catch {}
     // R7-B P2: the sync node (and its in-flight quit-announce round) stops here — after the
     // flush window gave the round its runway, before the DB handle closes.
-    try { require('./lan-sync-bootstrap').stopSyncForQuit() } catch { /* sync never initialized */ }
+    // Round-3 stability (2026-09-26): AWAIT the stop — the settle-point persists (security ring
+    // + peer watermarks) run via db.call and must beat dbm.close(); fire-and-forget lost the
+    // in-flight round's watermark confirmations. Both flushNow callers ignore the return value.
+    try { await require('./lan-sync-bootstrap').stopSyncForQuit() } catch { /* sync never initialized */ }
     try { if (dbm && dbm.close) dbm.close() } catch {}
     flushDone = true
     app.quit()
