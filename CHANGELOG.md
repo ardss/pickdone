@@ -6,6 +6,26 @@ and versioning follows [Semantic Versioning](https://semver.org/). The 0.x serie
 
 ## [Unreleased]
 
+## [0.4.0-beta.17] - 2026-09-26
+
+### Added
+- Backup chains rebuilt: disaster-recovery JSON is now written and read from the same location (`<userData>/backups/`), legacy snapshots migrate, and recovery falls back honestly when the database is unreadable - restore-to-new-machine works end to end again.
+- Backup dumps carry a metaState segment (repeat rules, project deadlines, tomato estimates) and restamped timestamps, so restoring no longer loses recurring rules or gets rolled back by LAN last-write-wins.
+- Test system: coverage ratchet gate (lines/branches/functions only-go-up, per-platform baselines), 39 new integration tests (31 -> 70) over real cross-module SQLite pipelines, and flake-event metrics with a warning threshold in check:all.
+
+### Changed
+- Performance: the external-write watcher no longer runs a full SQLite+JSON settings scan ~4x per second forever (mtime-gated now); undo no longer stringifies the whole todo table on every edit; Today view groups are precomputed; DayRail and dependency-graph resize work is coalesced into animation frames; idle tomato panels stopped committing to the store twice per second.
+- Boot: vendor scripts load with defer (parser no longer blocks on ~1.9 MB of JS) and light/dark theme applies before first paint, so dark-mode users no longer see a light flash on launch.
+- check:all live pool runs two lanes with static/live overlap (measured 579s -> 326s); CI dedupes push-vs-PR runs and skips docs-only changes; updater and destructive channels fail closed when their configuration state is unknowable.
+- Settings hot-sync carries deletion tombstones, compares canonically, and never spreads secret keys; LAN attachment receive enforces the same quota/count guards as local writes; purge writes plan tombstones so peers no longer refill deleted chips.
+
+### Fixed
+- Disaster recovery P0: the recovery chain read legacy paths while backups were written elsewhere - the whole chain was dead; it now reads the real write path.
+- 'Delete this event only' on a repeating task now actually deletes the instance; repeat previews no longer promise N when a dateless task would generate 0.
+- LAN attachments: same-name different-content conflicts resolve to the incoming bytes with correct row references instead of mixing files up.
+- Stability: a second instance launched before the first finished starting no longer crashes both (window creation deferred until app-ready); quitting no longer races the external-write watcher's pending kick nor drops the final sync round's peer watermarks; corrupted config.json no longer silently disables the security lock; the reminder LRU no longer evicts unwritten dedup markers under burst; oplog capture failures no longer reject writes that already committed.
+- UX: destructive restore/purge buttons got busy/re-entry guards; white-noise size rejection reports feedback; statistics metrics dropped an O(records x todos x 5) scan per render.
+
 ## [0.4.0-beta.15] - 2026-09-19
 
 ### Added
