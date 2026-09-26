@@ -235,11 +235,19 @@ test('M-9: verifyLockPassword accepts the right password and rejects the wrong o
   assert.equal(lock.verifyLockPassword('s3cret'), true)
   assert.equal(lock.verifyLockPassword('wrong'), false)
   assert.equal(lock.verifyLockPassword(''), false)
-  // enc1-undecryptable → treat as no password (availability beats lock, existing contract)
-  stored = { securityLockPassword: 'enc1:bm90LXJlYWw' }
+  // enc1-undecryptable → R3-stability 2026-09-26 (SEMANTIC CHANGE, reverses the 2026-09-10
+  // intentional fail-open): verify FAILS (no arbitrary input unlocks a nominally locked app) and
+  // the load-failed fallback runs — lock disabled + password cleared via writeConfig, so the user
+  // re-sets a password instead of hitting a permanent lockout or a silent bypass.
+  stored = { securityLockPassword: 'enc1:bm90LXJlYWw', enableSecurityLock: true }
   const origReq = Module._load
   Module._load = (request, parent, isMain) => (request === 'electron' ? { safeStorage: { decryptString: () => { throw new Error('no key') } } } : origReq.call(this, request, parent, isMain))
-  try { assert.equal(lock.verifyLockPassword('anything'), true, 'decrypt failure == no password (permanent-lockout avoidance)') } finally { Module._load = origReq }
+  try {
+    assert.equal(lock.verifyLockPassword('anything'), false, 'decrypt failure == verify FAILS (fail-closed, no silent bypass)')
+  } finally { Module._load = origReq }
+  assert.equal(stored.enableSecurityLock, false, 'fallback disabled the lock')
+  assert.equal(stored.securityLockPassword, '', 'fallback cleared the undecryptable password (one-time reset, no permanent lockout)')
+  assert.equal(lock.verifyLockPassword('anything'), true, 'after the reset, empty stored password unlocks (availability preserved)')
 })
 
 // ---------------------------------------------------------------------------

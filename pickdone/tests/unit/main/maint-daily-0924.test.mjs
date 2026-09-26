@@ -336,9 +336,14 @@ test('B12: statsByDay planned includes scheduledDay=0 tasks whose scheduledAt fa
 test('C14: index.js hot-sync watermark covers settings_rows row updatedAt (source anchor)', () => {
   // index.js is electron-entry and cannot be required under plain node (project precedent:
   // d6-sync-fixes/d4 assert the wiring statically). Anchor the exact semantics, not just keywords.
+  // Re-anchored 2026-09-26 (round3-startup-perf-finding-1): the row-level watermark now comes
+  // from the settingsRowsMaxUpdated MAX aggregate (identical value, no full scan + per-row parse)
+  // instead of the settingsRowsAll loop.
   const src = fs.readFileSync(new URL('../../../src/main/index.js', import.meta.url), 'utf8')
-  assert.ok(src.includes("dbm.call('settingsRowsAll')"), 'the poll reads the row-level settings truth')
-  assert.match(src, /for \(const r of rows\) \{ const u = Number\(r && r\.updatedAt\) \|\| 0; if \(u > at\) at = u \}/, 'row updatedAt feeds the watermark')
+  assert.ok(src.includes("dbm.call('settingsRowsMaxUpdated')"), 'the poll reads the row-level settings truth via the MAX aggregate')
+  assert.match(src, /const maxRow = Number\(dbm\.call\('settingsRowsMaxUpdated'\)\) \|\| 0/, 'the aggregate result feeds the watermark')
+  assert.match(src, /if \(maxRow > at\) at = maxRow/, 'row MAX(updatedAt) raises the watermark above the blob stamp')
+  assert.ok(!src.includes("dbm.call('settingsRowsAll')"), 'the full settings_rows scan is gone from the hot poll')
   assert.match(src, /if \(doc && at > lastSettingsSavedAt\)/, 'the diff gate compares the combined watermark, not the blob stamp alone')
   assert.ok(!/const at = \(doc && doc\._savedAt\) \|\| 0\s*\n\s*if \(at > lastSettingsSavedAt\)/.test(src), 'the blob stamp alone no longer gates the diff')
 })
