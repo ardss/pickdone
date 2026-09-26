@@ -248,7 +248,10 @@ export default {
       this.loadMs()
       this.loadPos()
       this.$nextTick(this.drawWires)
-      window.addEventListener('resize', this.drawWires)
+      // round3-ux-perf-5: rAF-gate the resize redraw (same pattern as onGripMove) — drawWires
+      // reads getBoundingClientRect per card and rebuilds every wire path, which ran per resize
+      // tick during a window drag. Final wires unchanged: the last frame draws with final geometry.
+      window.addEventListener('resize', this.onResizeWires)
       // Y7 (sync-coverage-2): milestones in the header strip were loaded once at mount — an inbound
       // sync round (or CLI milestone write) never refreshed an open DepView. Re-read on
       // todos-changed broadcasts, throttled (loadMs itself guards stale project switches).
@@ -262,7 +265,8 @@ export default {
       }
     },
     beforeUnmount () {
-      window.removeEventListener('resize', this.drawWires)
+      window.removeEventListener('resize', this.onResizeWires)
+      if (this._rzRaf) cancelAnimationFrame(this._rzRaf)
       if (this._offTodosChanged) { try { this._offTodosChanged() } catch (e) { /* already off */ } }
       window.removeEventListener('pointermove', this.onGripMove)
       window.removeEventListener('pointerup', this.onGripUp)
@@ -446,6 +450,11 @@ export default {
       p.x = Math.max(0, Math.round(e.clientX - mv.tr.left - mv.ox))
       p.y = Math.max(0, Math.round(e.clientY - mv.tr.top - mv.oy))
       if (!this._mvRaf) this._mvRaf = requestAnimationFrame(() => { this._mvRaf = 0; this.drawWires() })
+    },
+    // round3-ux-perf-5: coalesced resize redraw — one drawWires per frame at final geometry
+    onResizeWires () {
+      if (this._rzRaf) return
+      this._rzRaf = requestAnimationFrame(() => { this._rzRaf = 0; this.drawWires() })
     },
     onGripUp () {
       if (!this._mv) return
