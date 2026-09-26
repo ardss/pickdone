@@ -298,6 +298,12 @@ function watchDbForExternalWrites () {
     clearTimeout(debounce)
     debounce = setTimeout(() => {
       try {
+        // Round-3 stability (2026-09-26): the quit chain arms ext-watch-gate BEFORE the flush
+        // window, but a kick scheduled within the 150ms debounce just before arm fires INSIDE
+        // the window — where the un-gated forwardTomatoCmd could consume a CLI command slot
+        // whose resulting write lands after dbm.close() (same permanent-loss class C11 fixed
+        // for ticks). Gate the flush body, not just the tick.
+        if (!extWatchGate.canPoll()) return
         scheduler.reloadAll(dbApi())
         broadcastTodosChanged('external-db-write')
         // CLI 直写账本行(独立进程,db 层钩子在 CLI 进程内不挂)——外部写轮询是唯一跨进程通知点,
@@ -344,6 +350,9 @@ function watchDbForExternalWrites () {
   resyncDbWatch = () => { lastMtime = nextWatchBaseline(lastMtime, readWatchMtime) }
   // P2 2026-09-11: fs.watchFile never unwatched — poll timers kept the quit chain alive/lint-y; release them on quit
   stopDbWatch = () => {
+    // Round-3 stability (2026-09-26): a pending 150ms debounce kick survived the unwatch and
+    // fired against the closed DB handle (error swallowed as a warn). Clear it first.
+    try { clearTimeout(debounce) } catch {}
     try { fs.unwatchFile(dbFile, onChange) } catch {}
     try { fs.unwatchFile(walFile, onChange) } catch {}
     resyncDbWatch = null
