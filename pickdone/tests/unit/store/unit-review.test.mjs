@@ -5,7 +5,7 @@
 import '../../setup.mjs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { buildReviewMetrics, pctDiff, doneTsOf } from '../../../renderer/js/views/statistics/metrics.js'
+import { buildReviewMetrics, indexTodosByTaskId, pctDiff, doneTsOf } from '../../../renderer/js/views/statistics/metrics.js'
 import { composeReview, kpiDelta } from '../../../renderer/js/views/statistics/insights.js'
 import { dayjs, DAY_MS } from '../../../renderer/js/utils/core.js'
 
@@ -232,6 +232,34 @@ test('composeReview: focus-no-done triggers when focus days leave no completions
   assert.equal(m.focusNoDoneDays, 3)
   const r = composeReview(m)
   assert.ok(r.insights.some(i => i.id === 'focus-no-done'))
+})
+
+test('indexTodosByTaskId/windowCounts: duplicate taskIds resolve first-match (Array.find parity)', () => {
+  // Regression: windowCounts used todos.find per record (O(R*T)). The first-wins Map must keep
+  // exact Array.find first-match semantics when duplicate taskIds exist.
+  const now = dayjs()
+  const start = +now.startOf('isoWeek').subtract(7, 'day')
+  const first = todo({ taskId: 'dup', categoryId: 1 })
+  const second = todo({ taskId: 'dup', categoryId: 2 })
+  const m = buildReviewMetrics({
+    todos: [first, second, todo({ taskId: 'solo', categoryId: 2 })],
+    records: [
+      record({ endTime: start + 9 * 3600000, focusDuration: 25, focusTaskId: 'dup' }),
+      record({ endTime: start + 10 * 3600000, focusDuration: 25, focusTaskId: 'solo' }),
+      record({ endTime: start + 11 * 3600000, focusDuration: 25, focusTaskId: null })
+    ],
+    catNameOf
+  }, thisWeek(now))
+  const byLabel = Object.fromEntries(m.catFocus.map(i => [i.label, i.value]))
+  // 'dup' focus (25min) is attributed to the FIRST task's category (学习=cat 1), not the later duplicate's
+  assert.equal(byLabel['学习'], 25)
+  // 'solo' (25min) hits the second todo's category; unlinked 25min goes to 未分类
+  assert.equal(byLabel['工作'], 25)
+  assert.equal(byLabel['未分类'], 25)
+  // The index itself: first-wins on duplicates, present for every key
+  const idx = indexTodosByTaskId([first, second])
+  assert.equal(idx.get('dup'), first)
+  assert.equal(idx.size, 1)
 })
 
 test('composeReview: sync-up triggers when focus days clearly out-complete no-focus days', () => {

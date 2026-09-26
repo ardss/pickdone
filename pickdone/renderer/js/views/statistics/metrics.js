@@ -19,8 +19,20 @@ export function dayKey (ts) {
   return dayjs(ts).format(FMT.date)
 }
 
-/** Raw counts for a single window: only filtering and summing, no comparison judgments */
-export function windowCounts (todos, records, catNameOf, start, end) {
+/**
+ * First-wins taskId -> todo index. Array.find semantics preserved exactly: insertion is
+ * first-match-wins, so duplicate taskIds resolve to the same todo Array.find would return.
+ * Builds in O(T) so the per-record lookup below is O(1) instead of another O(T) scan.
+ */
+export function indexTodosByTaskId (todos) {
+  const m = new Map()
+  for (const t of todos) if (!m.has(t.taskId)) m.set(t.taskId, t)
+  return m
+}
+
+/** Raw counts for a single window: only filtering and summing, no comparison judgments.
+ *  taskById (optional): shared first-wins index from indexTodosByTaskId; falls back to Array.find. */
+export function windowCounts (todos, records, catNameOf, start, end, taskById) {
   let done = 0; let added = 0; let planned = 0; let plannedDone = 0
   const doneByDay = new Map(); const focusByDay = new Map()
   const hourDist = new Array(24).fill(0)
@@ -76,7 +88,7 @@ export function windowCounts (todos, records, catNameOf, start, end) {
     const wd = (dayjs(endTs).day() + 6) % 7
     focusByWeekday[wd] += mins
     // focusTaskId is a task id; the task must be looked up first to get its category id (catNameOf expects a categoryId)
-    const focusTask = todos.find(t => t.taskId === r.focusTaskId)
+    const focusTask = taskById ? taskById.get(r.focusTaskId) : todos.find(t => t.taskId === r.focusTaskId)
     const c = catNameOf(focusTask ? focusTask.categoryId : 0)
     catFocus.set(c, (catFocus.get(c) || 0) + mins)
     // Task-level focus aggregation (task ranking; unlinked focus goes into the '_free' bucket)
@@ -105,7 +117,8 @@ export function buildReviewMetrics ({ todos, records, catNameOf }, period) {
   const { start, end, label } = period
   // days stays in milliseconds terms (last 7 days = 7; a calendar difference including today would give 8); DST protection only for calendar math on window endpoints/series/streaks
   const days = Math.max(1, Math.round((end - start) / DAY_MS))
-  const cur = windowCounts(todos, records, catNameOf, start, end)
+  const taskById = indexTodosByTaskId(todos) // built once, reused by all 5 windows (O(R*T) -> O(R+T))
+  const cur = windowCounts(todos, records, catNameOf, start, end, taskById)
 
   // Baseline: the 4 adjacent equal-length windows (each = `days` days); endpoints uniformly anchored at start. Window endpoints use dayjs calendar math:
   // millisecond multiplication drifts 1 hour across DST switch days, misaligning window slots with dayKeys (completions counted into an adjacent day)
@@ -113,7 +126,7 @@ export function buildReviewMetrics ({ todos, records, catNameOf }, period) {
   for (let i = 1; i <= 4; i++) {
     const a = +dayjs(start).subtract(i * days, 'day').startOf('day')
     const b = +dayjs(start).subtract((i - 1) * days, 'day').startOf('day')
-    prev.push(windowCounts(todos, records, catNameOf, a, b))
+    prev.push(windowCounts(todos, records, catNameOf, a, b, taskById))
   }
   const avg = key => {
     const vals = prev.map(p => p[key] / days)
