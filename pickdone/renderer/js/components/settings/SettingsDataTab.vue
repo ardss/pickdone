@@ -115,6 +115,7 @@ function restoreStampLww (row, now) {
 const META_RESTORE_PREFIXES = [
   'repeatRule:',
   'tomatoEstimateState:',
+  'planChipsSnapshot:',
   'projectDeadline:',
   'projectStatus:',
   'projectCategoryFlag:',

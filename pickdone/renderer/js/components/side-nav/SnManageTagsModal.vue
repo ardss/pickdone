@@ -5,7 +5,9 @@
   <el-dialog :title="$t('statsG.SideNav.manageTagTitle')" v-model="visible" width="420px" append-to-body class="cat-mgr-dialog tag-mgr-dialog" @closed="$emit('close')">
     <div class="cat-mgr-tip">{{ $t('statsG.SideNav.tagMgrTip') }}</div>
     <div v-for="t in tags" :key="t.name" class="cat-mgr-row cat-mgr-row--tag">
-      <i class="cat-mgr-drag" :title="$t('statsG.SideNav.tagTitle')"><app-icon name="tag" :size="13"/></i>
+      <!-- [drag-affordance fix] the grab-handle icon used to advertise a reordering interaction
+           this component never implemented (no draggable attribute, no drag handlers, no order
+           storage behind todo/tagCounts) — the affordance is gone until real reorder exists -->
       <input v-if="tagMgrEditing===t.name" v-model="tagMgrName" class="sn-cat-edit"
              @keydown.enter.prevent="e => { if (e.isComposing || e.keyCode === 229) return; renameTag(t) }" @blur="renameTag(t)"/>
       <span v-else class="cat-mgr-name" role="button" tabindex="0" :title="$t('statsG.SideNav.clickRenameTitle')"
@@ -81,13 +83,37 @@ export default defineComponent({
        not in any todo content — rename/delete must update that list too or the placeholder
        silently survives (and a renamed placeholder disappears). Persistence goes through the ui
        store actions (w5 guard: no transport side effects in the side-nav children). */
+    /* [bulk-rewrite error guard] each per-todo updateTodoFields can reject (db/IPC failure); the
+       old unguarded loop aborted mid-way with rows half-rewritten, no user feedback and (removeTag)
+       ui/removeUserTag undispatched — a half-deleted tag. On the first failure the loop stops, the
+       failure is toasted, and the tag bookkeeping (ui/renameUserTag|ui/removeUserTag) only runs
+       when every rewrite succeeded. */
+    async rewriteTagTodos (t, buildPatch) {
+      const todos = this.tagTodos(t.name)
+      let done = 0
+      for (const todo of todos) {
+        const patch = buildPatch(todo)
+        if (Object.keys(patch).length) {
+          try {
+            await this.$store.dispatch('todo/updateTodoFields', { taskId: todo.taskId, patch })
+            done++
+          } catch {
+            const failed = todos.length - done
+            // syncFailMsg stays in the SideNav shard (w5 key-placement guard)
+            this.$message.error(this.$t('statsG.SideNav.syncFailMsg') + ` (${done}/${todos.length})`)
+            return { ok: false, done, failed }
+          }
+        }
+      }
+      return { ok: true, done, failed: 0 }
+    },
     async renameTag (t) {
       const next = this.tagMgrName.trim().replace(/^#/, '')
       this.tagMgrEditing = null
       if (!next || next === t.name) return
       if (this.tags.some(x => x.name === next)) return this.$message.warning(this.$t('statsG.SideNav.tagExists', { name: next }))
       const re = this.tagRewriteRe(t.name)
-      for (const todo of this.tagTodos(t.name)) {
+      const r = await this.rewriteTagTodos(t, todo => {
         const patch: any = {}
         if (todo.taskContent) {
           const v = todo.taskContent.replace(re, '#' + next)
@@ -97,8 +123,9 @@ export default defineComponent({
           const v = todo.taskDescribe.replace(re, '#' + next)
           if (v !== todo.taskDescribe) patch.taskDescribe = v
         }
-        if (Object.keys(patch).length) await this.$store.dispatch('todo/updateTodoFields', { taskId: todo.taskId, patch })
-      }
+        return patch
+      })
+      if (!r.ok) return
       await this.$store.dispatch('ui/renameUserTag', { from: t.name, to: next })
       this.$message.success(this.$t('statsG.SideNav.tagRenamed', { name: next }))
     },
@@ -107,7 +134,7 @@ export default defineComponent({
         await this.$confirm(this.$t('statsG.SideNav.delTagConfirm', { name: t.name, count: this.tagTodos(t.name).length }), this.$t('statsE.SideNav.tipTitle'), { type: 'warning' })
       } catch { return }
       const re = this.tagRewriteRe(t.name, { consume: true })
-      for (const todo of this.tagTodos(t.name)) {
+      const r = await this.rewriteTagTodos(t, todo => {
         const patch: any = {}
         if (todo.taskContent) {
           const v = todo.taskContent.replace(re, '').trim()
@@ -117,8 +144,9 @@ export default defineComponent({
           const v = todo.taskDescribe.replace(re, '').trim()
           if (v !== todo.taskDescribe) patch.taskDescribe = v
         }
-        if (Object.keys(patch).length) await this.$store.dispatch('todo/updateTodoFields', { taskId: todo.taskId, patch })
-      }
+        return patch
+      })
+      if (!r.ok) return // half-deleted: the placeholder tag must survive until every rewrite succeeded
       await this.$store.dispatch('ui/removeUserTag', t.name)
       this.$message.success(this.$t('statsG.SideNav.tagDeleted', { name: t.name }))
     }
@@ -133,13 +161,12 @@ export default defineComponent({
 .cat-mgr-row {
   display: flex; align-items: center; gap: 10px;
   height: 42px; padding: 0 8px; font-size: var(--fs-md); color: var(--text-1);
-  border-bottom: 1px solid var(--line); background: var(--panel, #fff); cursor: grab;
+  border-bottom: 1px solid var(--line); background: var(--panel, #fff); cursor: default;
 }
 .cat-mgr-row:last-of-type { border-bottom: none; }
 .cat-mgr-row:hover { background: var(--gray-bg); }
 .cat-mgr-row { transition: background var(--dur-fast), transform var(--dur-fast); }
 .cat-mgr-row { position: relative; }
-.cat-mgr-drag { font-style: normal; color: var(--text-3); font-size: var(--fs-base); cursor: grab; flex-shrink: 0; }
 .cat-mgr-name {
   flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
   white-space: nowrap; cursor: text;

@@ -117,15 +117,16 @@ export default {
       const today = +dayjs().startOf('day')
       try {
         // dispatch 必须等待成功再报喜:异步恢复可能失败(db 写入错误),失败走 catch 提示而非假成功
-        // [dw-wave6 F1] restore-to-today goes through the shared crossDayMovePatch: time-of-day on
-        // todoTime/reminderTime/reminderExtra anchored to the old day travels to the new day instead of
-        // being hard-wiped to 00:00 (same fix family as maint-0924 A1/A2)
-        const patch = patchToToday
-          ? { delete: false, status: 'update', ...crossDayMovePatch(t, today, dayStart) }
-          : { delete: false, status: 'update' }
-        await this.$store.dispatch('todo/updateTodoFields', {
+        // [restore single-path fix] the bin view restores through todo/restoreFromRecycle (not bare
+        // todo/updateTodoFields), so every restore entry shares: the one-shot chip snapshot restore,
+        // the deletedAt reset, verify-then-commit ordering and the B5 dangling-repeatId guard.
+        // [dw-wave6 F1] restore-to-today still goes through the shared crossDayMovePatch (passed as
+        // dayPatch): time-of-day on todoTime/reminderTime/reminderExtra anchored to the old day
+        // travels to the new day instead of being hard-wiped to 00:00.
+        await this.$store.dispatch('todo/restoreFromRecycle', {
           taskId: t.taskId,
-          patch
+          repeatId: t.repeatId,
+          dayPatch: patchToToday ? crossDayMovePatch(t, today, dayStart) : undefined
         })
         this.$message.success(patchToToday ? this.$t('statsC.RecycleBin.restoredToToday') : this.$t('statsC.RecycleBin.restored'))
       } catch (e) {
@@ -137,12 +138,13 @@ export default {
       if (!ts) return
       const day = +dayjs(ts).startOf('day')
         // Same semantics as restore(): await the dispatch, success toast only on success, error toast on failure
-        // [dw-wave6 F1] pick-date restore also via crossDayMovePatch: scheduled/reminder times keep their
-        // time-of-day on the picked day; fields anchored elsewhere stay untouched
+        // [dw-wave6 F1] pick-date restore also via crossDayMovePatch (as dayPatch): scheduled/reminder
+        // times keep their time-of-day on the picked day; fields anchored elsewhere stay untouched
         try {
-          await this.$store.dispatch('todo/updateTodoFields', {
+          await this.$store.dispatch('todo/restoreFromRecycle', {
             taskId: t.taskId,
-            patch: { delete: false, status: 'update', ...crossDayMovePatch(t, day, dayStart) }
+            repeatId: t.repeatId,
+            dayPatch: crossDayMovePatch(t, day, dayStart)
           })
         this.$message.success(this.$t('statsC.RecycleBin.restoredToDate'))
       } catch (e) {

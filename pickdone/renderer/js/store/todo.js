@@ -465,7 +465,11 @@ export default {
       // effect, so consuming it before the row update was confirmed meant a mid-way failure (row missing,
       // updateTodoFields throwing) left the snapshot permanently lost and/or a ghost chip on the timeline.
       // The row update alone is harmless to retry; only after it succeeds do we spend the one-shot snapshot.
-      const r = await dispatch('updateTodoFields', { taskId: todo.taskId, patch: { delete: false, deletedAt: 0, status: 'update' } })
+      // [restore single-path fix] `dayPatch` (RecycleBinView restore-to-today / pick-date) merges the
+      // shared crossDayMovePatch fields into the same atomic restore entry, so EVERY restore path
+      // gets the chip snapshot restore, the deletedAt reset and the B5 dangling-repeatId guard —
+      // the bin view used to dispatch bare updateTodoFields and silently skipped all three.
+      const r = await dispatch('updateTodoFields', { taskId: todo.taskId, patch: { delete: false, deletedAt: 0, status: 'update', ...((todo && todo.dayPatch) || {}) } })
       if (r) {
         try { await restoreSnapshot(todo.taskId) } catch { /* No snapshot = originally unscheduled */ }
       }
@@ -726,13 +730,17 @@ export default {
         todayXNext: todayXNext.sort((x, y) => (x.dayStart - y.dayStart) || (x.todoTime - y.todoTime)),
         todayXOpen,
         // Completed-group sort matches the grouping basis (completedAt first, avoiding sort misplacement when editing after completion)
-        todayDoneList: todayDoneList.sort((a, b) => (b.completedAt || b.updateTime) - (a.completedAt || a.updateTime)),
+        // [nan-comparator fix] same ||0 fallback as the Review-P3 (2026-09-22) comparators above —
+        // a completed row with NaN completedAt/updateTime made this subtraction return NaN
+        // (implementation-defined order, rows reshuffling every recompute); recycleBin had the
+        // same gap on deletedAt/updateTime.
+        todayDoneList: todayDoneList.sort((a, b) => (b.completedAt || b.updateTime || 0) - (a.completedAt || a.updateTime || 0)),
         yesterdayTodoList: yesterday,
         calendar: buildCalendarList(live),
         todoBox: box,
         todoBoxCount: box.length, // Same source as box above (category filter/sort share one chain); previously computed independently here too — fixing one but not the other made the number and list disagree
         completed: completedList,
-        recycleBin: [...this.state.todo.recycleList].sort((a, b) => (b.deletedAt || b.updateTime) - (a.deletedAt || a.updateTime))
+        recycleBin: [...this.state.todo.recycleList].sort((a, b) => (b.deletedAt || b.updateTime || 0) - (a.deletedAt || a.updateTime || 0))
       })
       commit('viewsClean')
     },
@@ -750,16 +758,19 @@ export default {
       // even though it was never sent.
       let serverV = state.version
       try {
-        commit('bumpVersion')
-        serverV = state.version
         // Snapshot only dirty rows (status !== 'sync'); during the await, the user's new edits (status='update') aren't wrongly marked synced.
         // A recycle-bin row already acked (version > 0, stamped by a previous syncTodos success) is
         // excluded — otherwise it re-entered the snapshot and the commitSyncBatch write on EVERY sync
         // (P3 2026-09-12). A fresh delete resets version to 0 and is sent once.
         // An already-synced whole table skips the wholesale upsertMany write entirely (Ctrl+S with no changes = no write)
+        // [empty-sync-version fix] the version bump moved BELOW the empty-snapshot early return: a
+        // no-op sync used to increment state.version without writing the todosVersion cursor, so
+        // the in-memory counter ran ahead of the persisted one and reset backward across restarts.
         snapshot = [...state.todoList, ...state.recycleList]
           .filter(t => t.status !== 'sync' && !(t.status === 'delete' && t.version > 0))
         if (!snapshot.length) return
+        commit('bumpVersion')
+        serverV = state.version
         const snapshotIds = new Set(snapshot.map(t => t.taskId))
         // Atomic commit (W3 2026-09-12): rows + todosVersion cursor go to the DB in ONE transaction
         // (commitSyncBatch) instead of two separate dbCalls. Crash safety: previously a crash between the

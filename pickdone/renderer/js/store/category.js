@@ -464,7 +464,13 @@ export default {
         // the "permanently deleted" category resurrected as a ghost on every restart. Only re-attach
         // tombstones inside the recycle-bin retention window; old tombstones without deletedAt are
         // conservatively kept (pre-dates the stamp, may still be within an unknown window).
-        const retentionDays = Number(rootState && rootState.settings && rootState.settings.recycleBinAutoDeleteDays) || 30
+        // [tombstone-zero fix] 0 is the shipped 'never purge' option (SettingsDataTab radio): the
+        // old `Number(...) || 30` read it as 30, so a 'never' user still lost the category
+        // recovery entry after a month — diverging from the todo-row purge, which honors 0 via
+        // `if (!days) return` (store/todo.js). 0 now keeps tombstones unconditionally; junk/NaN
+        // still falls back to 30.
+        const rawDays = Number(rootState && rootState.settings && rootState.settings.recycleBinAutoDeleteDays)
+        const retentionDays = rawDays === 0 ? 0 : (rawDays > 0 ? rawDays : 30)
         // P3-6 (maint/dw 2026-09-23): same calendar-day cutoff as the todo-row purge (store/todo.js:
         // startOf('day').subtract(days,'day') = local midnight minus N calendar days — computed here
         // with plain Date math so this path stays independent of the window.dayjs UMD global). The
@@ -476,7 +482,7 @@ export default {
         const cutoff = _localMidnight - retentionDays * 86400000
         const dels = deletedFromLs().filter(d =>
           !rows.some(r => r.categoryId === d.categoryId) &&
-          (!d.deletedAt || d.deletedAt > cutoff))
+          (retentionDays === 0 || !d.deletedAt || d.deletedAt > cutoff))
         commit('setListFromDb', rows.concat(dels))
         return rows.length
       }
