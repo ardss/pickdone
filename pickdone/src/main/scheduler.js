@@ -109,6 +109,20 @@ let dingFile = null
 
 function setSoundFile (f) { dingFile = f }
 
+// D10 (2026-09-27): lock-aware show entry, wired by index.js (setShowMainEntry(showMainOrLock)).
+// The reminder notification click used to call win.show()/win.focus() DIRECTLY — clicking any
+// reminder unlocked a locked app to its full contents, bypassing the security lock that every
+// other entry point (tray click / second-instance / quick-add) honors.
+let showMainEntry = null
+function setShowMainEntry (fn) { showMainEntry = typeof fn === 'function' ? fn : null }
+/** Notification-click focus path (exported for unit tests): routes through the lock-aware
+ *  showMainOrLock when wired; bare-window fallback only when index.js never wired it. */
+function focusMainFromNotification () {
+  if (showMainEntry) { try { showMainEntry(); return } catch (e) { log.warn('[Reminder] showMainOrLock failed', e) } }
+  const win = require('./window-ref').getMainWindow()
+  if (win) { win.show(); win.focus() }
+}
+
 /** Truncate by code points, not UTF-16 code units: slicing at a fixed index could split a
  *  surrogate pair (emoji etc.) into lone surrogates — mojibake in the OS notification. */
 function clipText (v, max) {
@@ -163,8 +177,9 @@ function fire (todo, offset) {
       ...notifyTimeoutOptsForApp()
     })
     n.on('click', () => {
-      const win = require('./window-ref').getMainWindow()
-      if (win) { win.show(); win.focus() }
+      // D10 (2026-09-27): route through the lock-aware gate — a locked app must not be revealed
+      // by clicking a reminder notification (see focusMainFromNotification above).
+      focusMainFromNotification()
     })
     n.show()
     // Notification sound
@@ -318,6 +333,7 @@ function needsCatchUp (todo, now = Date.now()) {
 
 module.exports = {
   init: () => {}, reloadAll, scheduleOne, fire, setSoundFile, flushFiredNow,
+  setShowMainEntry, focusMainFromNotification,
   reminderInstances, needsCatchUp, clipText, notifyTimeoutOpts, notifyTimeoutOptsForApp, timeoutFromInterval,
   setFireForTest,
   _jobs: jobs,

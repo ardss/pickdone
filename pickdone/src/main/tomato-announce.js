@@ -183,12 +183,15 @@ function onRemoteAnnounce (fn) {
  * so a node/DB restart simply rebuilds it from seq 0 — correctness is unaffected.
  */
 let announceCache = { watermark: 0, ids: new Map() } // deviceId -> latest pointer ts
+let zeroRowPolls = 0 // D10: consecutive zero-row scans (idle state ALSO reads 0 rows every poll)
 function listAnnounces () {
   if (!dbCall) return []
   try {
     let since = announceCache.watermark
+    let rowsRead = 0
     for (let i = 0; i < 100; i++) {
       const rows = dbCall('syncOplogSince', { sinceSeq: since, limit: oplogKeepLimit(SYNC_OPLOG_KEEP) }) || [] // D3 2026-09-24: was bare 10000
+      rowsRead += rows.length
       for (const r of rows) {
         if (r.entity === 'meta' && isAnnounceKey(r.entityId)) {
           const id = String(r.entityId).slice(KEY_PREFIX.length)
@@ -200,6 +203,28 @@ function listAnnounces () {
         break
       }
       since = rows[rows.length - 1].seq
+    }
+    // D10 (2026-09-27): seq-space reset detection. The watermark is module-level and monotonic;
+    // after an in-place DB rebuild/recovery the oplog seq space restarts LOW, so `since` sat above
+    // every new seq, the scan read 0 rows forever and tomato chips went blind until process
+    // restart. When zero-row scans PERSIST (2 consecutive), probe the seq space: if NO row exists
+    // at watermark-1 or above, the space shrank under us — reset the cache and rescan from seq 0.
+    // The 2-poll delay keeps the healthy idle path exactly as cheap as before (a single 0-row
+    // incremental scan per poll; see the d5-4 watermark-cache test), at the cost of one extra
+    // poll interval of blindness after a rebuild — announcements are per-second pushes, so that
+    // latency is invisible.
+    if (rowsRead === 0 && announceCache.watermark > 0) {
+      zeroRowPolls++
+      if (zeroRowPolls >= 2) {
+        const probe = dbCall('syncOplogSince', { sinceSeq: announceCache.watermark - 1, limit: 2 }) || []
+        if (!probe.length) {
+          announceCache = { watermark: 0, ids: new Map() }
+          zeroRowPolls = 0
+          return listAnnounces()
+        }
+      }
+    } else {
+      zeroRowPolls = 0
     }
     announceCache.watermark = since
   } catch (e) {
@@ -223,6 +248,7 @@ function listAnnounces () {
 function __reset () {
   dbCall = null; getIdentity = null; kickRound = null; remoteListeners.clear()
   announceCache = { watermark: 0, ids: new Map() }
+  zeroRowPolls = 0
 }
 
 module.exports = {
