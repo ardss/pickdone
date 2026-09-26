@@ -268,10 +268,9 @@ function watchDbForExternalWrites () {
       let at = 0
       if (rawS) { doc = JSON.parse(rawS); at = (doc && doc._savedAt) || 0 }
       try {
-        const rows = dbm.call('settingsRowsAll')
-        if (Array.isArray(rows)) {
-          for (const r of rows) { const u = Number(r && r.updatedAt) || 0; if (u > at) at = u }
-        }
+        // Round-3 perf (2026-09-26): identical watermark via one MAX aggregate (tick runs ~4x/sec).
+        const maxRow = Number(dbm.call('settingsRowsMaxUpdated')) || 0
+        if (maxRow > at) at = maxRow
       } catch { /* rows unavailable (legacy lib) → fall back to the _savedAt-only watermark */ }
       if (doc && at > lastSettingsSavedAt) {
         const prev = lastSettingsDoc
@@ -298,6 +297,10 @@ function watchDbForExternalWrites () {
     clearTimeout(debounce)
     debounce = setTimeout(() => {
       try {
+        // Round-3 stability (2026-09-26): a kick scheduled within the 150ms debounce just before
+        // ext-watch-gate arms fires INSIDE the flush window — the un-gated forwardTomatoCmd could
+        // consume a CLI command slot whose write lands after dbm.close() (same C11 loss class).
+        if (!extWatchGate.canPoll()) return
         scheduler.reloadAll(dbApi())
         broadcastTodosChanged('external-db-write')
         // CLI 直写账本行(独立进程,db 层钩子在 CLI 进程内不挂)——外部写轮询是唯一跨进程通知点,
@@ -344,6 +347,8 @@ function watchDbForExternalWrites () {
   resyncDbWatch = () => { lastMtime = nextWatchBaseline(lastMtime, readWatchMtime) }
   // P2 2026-09-11: fs.watchFile never unwatched — poll timers kept the quit chain alive/lint-y; release them on quit
   stopDbWatch = () => {
+    // Round-3 stability (2026-09-26): a pending debounce kick survived the unwatch and fired against the closed DB handle. Clear it first.
+    try { clearTimeout(debounce) } catch {}
     try { fs.unwatchFile(dbFile, onChange) } catch {}
     try { fs.unwatchFile(walFile, onChange) } catch {}
     resyncDbWatch = null
@@ -434,7 +439,9 @@ function rebuildTrayMenu () {
 
 /* ================= Single-instance lock & startup ================= */
 if (!app.requestSingleInstanceLock()) { app.quit() } else {
-  app.on('second-instance', () => { showMainOrLock() })
+  // Round-3 stability (2026-09-26): show() deferred until whenReady during cold-start init — a
+  // BrowserWindow before ready hard-throws (see second-instance-gate.js).
+  require('./second-instance-gate').wireSecondInstance(app, () => { showMainOrLock() })
 
   app.whenReady().then(() => {
     Menu.setApplicationMenu(null) // project baseline has no menu bar
@@ -606,6 +613,9 @@ if (!app.requestSingleInstanceLock()) { app.quit() } else {
     // Global shortcuts (shortcut settings stored in config.json)
     applyShortcuts(readConfig().shortcutKeySettings)
 
+    // Round-3 stability (2026-09-26): surface a quarantined corrupt config.json to the user (notice-only)
+    require('./quarantine-notice').showQuarantineNotice(win, log)
+
     // Security lock: when enabled the main process takes over — hide the main window and pop a standalone lock screen (aligned with the reference enableSecurityLock)
     if (readConfig().enableSecurityLock) {
       win.webContents.once('did-finish-load', () => {
@@ -728,14 +738,16 @@ app.on('will-quit', (event) => {
   extWatchGate.arm() // C11: disarm the external-write poll BEFORE the flush window opens
   event.preventDefault()
   const FLUSH_FLOOR_MS = 500
-  const flushNow = () => {
+  const flushNow = async () => {
     try { if (stopDbWatch) stopDbWatch() } catch {} // release the fs.watchFile poll timers before closing
     try { shortcuts.unregisterAll() } catch {}
     // Persist the reminder dedup ledger synchronously (quitting inside the 60s debounce window → reminders resent after restart) + close the db handle (avoids losing one checkpoint and late handle release on Windows)
     try { scheduler.flushFiredNow() } catch {}
-    // R7-B P2: the sync node (and its in-flight quit-announce round) stops here — after the
-    // flush window gave the round its runway, before the DB handle closes.
-    try { require('./lan-sync-bootstrap').stopSyncForQuit() } catch { /* sync never initialized */ }
+    // R7-B P2: the sync node stops here — after the flush window, before the DB handle closes.
+    // Round-3 stability (2026-09-26): AWAIT the stop — the settle-point persists (security ring +
+    // peer watermarks) run via db.call and must beat dbm.close(); fire-and-forget lost the
+    // in-flight round's watermark confirmations.
+    try { await require('./lan-sync-bootstrap').stopSyncForQuit() } catch { /* sync never initialized */ }
     try { if (dbm && dbm.close) dbm.close() } catch {}
     flushDone = true
     app.quit()

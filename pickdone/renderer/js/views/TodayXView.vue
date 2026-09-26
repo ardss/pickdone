@@ -158,14 +158,16 @@ export default {
     /* ---- Next (today + overdue uncompleted) ---- */
     /* Grouping is delegated to the generic TodoGroups component: drag sort / click-row edit / hover delete / check / pomodoro select, all interactions retained */
     groups () {
+      /* Round-3 perf: groups come from the store's precomputed views (computeViews) instead of
+         re-filtering + re-sorting the whole todoList here on every reactive change. Same data,
+         same order (the store uses this view's exact comparator); the x-next group is uncapped
+         today+overdue — recent.expiredUncompleted could NOT be reused (expUncompletedDays cap). */
       const g = []
-      const undone = this.$store.state.todo.todoList
-        .filter(t => !t.delete && !t.complete && t.dayStart && t.dayStart <= this.today0)
-        .sort((x, y) => (x.dayStart - y.dayStart) || (x.todoTime - y.todoTime))
+      const undone = this.v.todayXNext || []
       g.push({ key: 'x-next', label: this.$t('statsE.TodayX.next'), todos: undone, count: undone.length })
       const done = this.v.todayDoneList || []
       if (done.length) g.push({ key: 'x-done', label: this.$t('statsE.TodayX.doneGroup'), todos: done, count: done.length })
-      const open = this.$store.state.todo.todoList.filter(t => !t.delete && !t.complete && !t.dayStart)
+      const open = this.v.todayXOpen || []
       g.push({ key: 'x-open', label: this.$t('statsE.TodayX.unscheduled'), todos: open, count: open.length })
       return g
     }

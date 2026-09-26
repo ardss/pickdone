@@ -22,6 +22,16 @@ function configFile () { return path.join(_configDirOverride || _app.getPath('us
 // SUCCESSFUL read path clears it (the file became readable/quarantined again).
 let _readFailed = false
 function isReadFailed () { return _readFailed }
+// Round-3 stability (2026-09-26): a successful quarantine (rename to .bad) used to be fully
+// silent — the security lock stayed off and user settings reset for the session with no
+// user-visible notice anywhere. Record the event and let the app consume it (read-and-clear)
+// at startup to surface one notice. Notice-only: the fail-open semantics are unchanged.
+let _quarantineNotice = false
+function consumeQuarantineNotice () {
+  const had = _quarantineNotice
+  _quarantineNotice = false
+  return had
+}
 function readConfig () {
   try {
     const c = JSON.parse(fs.readFileSync(configFile(), 'utf8'))
@@ -44,6 +54,10 @@ function readConfig () {
     try {
       fs.renameSync(configFile(), configFile() + '.bad')
       _readFailed = false
+      // Round-3 stability (2026-09-26): a SUCCESSFUL quarantine was the one fully silent path —
+      // only the failed rename logged. Warn here too and raise the user-visible notice flag.
+      _quarantineNotice = true
+      console.warn('[config-store] unreadable config.json quarantined as config.json.bad — previous settings preserved there; security lock disabled until re-enabled')
     } catch (renameErr) {
       console.warn('[config-store] quarantine of unreadable config.json failed:', renameErr && renameErr.message, '- writes are gated off until a read succeeds')
       _readFailed = true
@@ -105,4 +119,4 @@ function writeConfig (patch) {
   return result
 }
 
-module.exports = { readConfig, writeConfig, isReadFailed, DEFAULT_SHORTCUTS, __setConfigDir }
+module.exports = { readConfig, writeConfig, isReadFailed, consumeQuarantineNotice, DEFAULT_SHORTCUTS, __setConfigDir }

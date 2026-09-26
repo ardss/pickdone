@@ -35,6 +35,14 @@ module.exports = ({ getDb, log }) => {
   const rowsAll = () => getDb().prepare('SELECT key, value, updatedAt, deleted, deletedAt FROM settings_rows').all()
     .map(r => ({ key: r.key, value: parseValue(r.value), updatedAt: r.updatedAt, deleted: !!r.deleted, deletedAt: r.deletedAt }))
   const rowGet = k => rowsAll().find(r => r.key === String(k)) || null
+  // Round-3 perf (2026-09-26): the external-write watcher's per-tick settings watermark only
+  // needs max(updatedAt) — it used to rowsAll() + JSON.parse every row ~4x/sec for the app's
+  // lifetime. A single aggregate returns the IDENTICAL number (MAX over the column covers
+  // tombstones too) with zero per-row JSON.parse.
+  const maxUpdated = () => {
+    const r = getDb().prepare('SELECT MAX(updatedAt) AS m FROM settings_rows').get()
+    return (r && r.m) || 0
+  }
 
   // Upsert one field row; stamps updatedAt only when the value actually changed (an identical
   // write must not fake LWW freshness, same rule as upsertCategory). Tombstoned rows resurrect.
@@ -181,6 +189,7 @@ module.exports = ({ getDb, log }) => {
     // Row ops (db.js OPS delegate here). settingsRowsAll deliberately includes tombstones: the
     // sync merge needs them; user-facing consumers filter deleted rows themselves.
     rowsAll,
+    maxUpdated,
     rowGet,
     rowPut: p => {
       const key = p && p.key != null ? String(p.key) : ''

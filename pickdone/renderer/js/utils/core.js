@@ -111,7 +111,14 @@ export function parseSubtasks (jsonText) {
       if (typeof p === 'string') v = JSON.parse(p)
       else if (Array.isArray(p)) v = p
     } catch {}
-    if (_subtasksCache.size > 5000) _subtasksCache.clear()
+    // round3-startup-perf-15: LRU eviction (oldest-inserted) instead of wholesale clear —
+    // clear() dropped the whole hot set once the cap was crossed, forcing a ~5000-entry
+    // re-parse burst on the next distinct key. Same returned values; only the victim differs.
+    if (_subtasksCache.size >= 5000) _subtasksCache.delete(_subtasksCache.keys().next().value)
+    _subtasksCache.set(jsonText, v)
+  } else {
+    // touch on hit: re-insert to mark recency (Map insertion order = LRU order)
+    _subtasksCache.delete(jsonText)
     _subtasksCache.set(jsonText, v)
   }
   // Hand out shallow per-item clones: consumers may mutate the returned rows (EditPanel subtask
@@ -123,10 +130,18 @@ export function parseJSONSafe (t) { try { return t ? JSON.parse(t) : null } catc
 /* ---------- Pinyin helpers ---------- */
 const pinyinCache = new Map()
 export function toPinyinLower (s) {
-  if (pinyinCache.has(s)) return pinyinCache.get(s)
+  const hit = pinyinCache.get(s)
+  if (hit !== undefined) {
+    // round3-startup-perf-15: touch on hit (Map insertion order = LRU order)
+    pinyinCache.delete(s)
+    pinyinCache.set(s, hit)
+    return hit
+  }
   let out = ''
   try { out = pinyin(String(s), { toneType: 'none', type: 'array' }).join('').toLowerCase() } catch {}
-  if (pinyinCache.size > 5000) pinyinCache.clear()
+  // LRU eviction instead of wholesale clear — clear() dropped the whole hot set at the cap,
+  // so the next keystroke recomputed pinyin for ~5000 strings on the UI thread (jank cliff).
+  if (pinyinCache.size >= 5000) pinyinCache.delete(pinyinCache.keys().next().value)
   pinyinCache.set(s, out)
   return out
 }

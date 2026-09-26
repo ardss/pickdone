@@ -54,18 +54,21 @@
     <div class="form">
       <div class="form-label">{{ $t('statsE.SettingsModal.dangerZone') }}</div>
       <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.restoreSnapshotLabel') }}</span>
-        <div class="form-item__control"><button class="danger-btn" @click="restoreFromBackup">{{ $t('statsE.SettingsModal.restoreEllipsis') }}</button></div></div>
+        <div class="form-item__control"><button class="danger-btn" :disabled="restoring" @click="restoreFromBackup">{{ $t('statsE.SettingsModal.restoreEllipsis') }}</button></div></div>
       <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.autoRestoreLabel') }}</span>
         <div class="form-item__control" style="display:flex;gap:8px">
-          <el-select size="small" v-model="autoBackupPick" filterable style="max-width:260px" @focus="loadAutoBackupList" @visible-change="v => v && loadAutoBackupList()">
+          <!-- round3-ux-perf-11: @focus removed — visible-change(true) already refreshes on every
+               dropdown open (the only moment the list renders); focus+visible-change doubled the
+               listAutoBackups IPC per open. -->
+          <el-select size="small" v-model="autoBackupPick" filterable style="max-width:260px" @visible-change="v => v && loadAutoBackupList()">
             <el-option v-for="f in autoBackupFiles" :key="f" :label="f" :value="f" />
           </el-select>
-          <button class="mini" @click="restoreFromAutoBackup">{{ $t('statsE.SettingsModal.autoRestoreBtn') }}</button>
+          <button class="mini" :disabled="restoring" @click="restoreFromAutoBackup">{{ $t('statsE.SettingsModal.autoRestoreBtn') }}</button>
         </div></div>
       <div class="form-item danger-row"><span class="form-item__label">{{ $t('statsE.SettingsModal.clearDemoDataLabel') }}</span>
-        <div class="form-item__control"><button class="danger-btn" @click="purgeSeed">{{ $t('statsE.SettingsModal.clearBtn') }}</button></div></div>
+        <div class="form-item__control"><button class="danger-btn" :disabled="purging" @click="purgeSeed">{{ $t('statsE.SettingsModal.clearBtn') }}</button></div></div>
       <div class="form-item danger-row"><span class="form-item__label">{{ $t('statsE.SettingsModal.emptyBinLabel') }}</span>
-        <div class="form-item__control"><button class="danger-btn" @click="purgeRecycle">{{ $t('statsE.SettingsModal.emptyBinBtn') }}</button></div></div>
+        <div class="form-item__control"><button class="danger-btn" :disabled="purging" @click="purgeRecycle">{{ $t('statsE.SettingsModal.emptyBinBtn') }}</button></div></div>
     </div>
   </div>
 </template>
@@ -126,6 +129,11 @@ export default {
       exporting: false,
       importing: false,
       backingUp: false,
+      // round3-ux-perf-finding-3: the four danger operations lacked the busy-flag contract
+      // importFromCsv/writeBackupNow already follow — a second confirmed click while a
+      // restore/purge pipeline awaited IPC re-entered commitCommand with interleaved refreshes.
+      restoring: false,
+      purging: false,
       backupDirDefault: '',
       autoBackupLastAt: 0,
       autoBackupLastFailAt: 0,
@@ -372,20 +380,25 @@ export default {
       } catch { this.autoBackupFiles = [] }
     },
     async restoreFromAutoBackup () {
-      if (!this.autoBackupPick) return this.$message.info(this.$t('statsE.SettingsModal.autoRestoreEmpty'))
-      await this.confirmDanger(this.$t('statsE.SettingsModal.autoRestoreConfirm', { f: this.autoBackupPick }), this.$t('statsH.SettingsModal.restoreTitle'), 'warning')
-        .then(async () => {
-          try {
-            const r = await window.todoAPI.readAutoBackup(this.st.backupDir || '', this.autoBackupPick)
-            // read-auto-backup 现在返回 { ok, text?, error? }:读取失败显式报错,不再与「文件不存在」混为空串
-            if (!r || !r.ok) return this.$message.error(this.$t('statsE.SettingsModal.backupFileNotFoundMsg') + ((r && r.error) ? ': ' + r.error : ''))
-            // Domain-2 review (2026-09-24): boolean return is checked — a failed pre-restore
-            // snapshot means NO rollback point; warn loudly but let the user's confirmed restore
-            // proceed (aborting on a warning would need its own confirmation round).
-            if (!(await this.$store.dispatch('todo/writeEventBackup', 'restore'))) this.$message.warning(this.$t('statsE.SettingsModal.snapshotFailWarnMsg'))
-            await this.applyRestoreDump(JSON.parse(r.text))
-          } catch (e) { this.$message.error(this.$t('statsE.SettingsModal.backupParseFailedMsg') + e.message) }
-        }).catch(() => {})
+      // round3-ux-perf-finding-3: busy flag blocks double-click re-entry (same contract as importFromCsv)
+      if (this.restoring) return
+      this.restoring = true
+      try {
+        if (!this.autoBackupPick) return this.$message.info(this.$t('statsE.SettingsModal.autoRestoreEmpty'))
+        await this.confirmDanger(this.$t('statsE.SettingsModal.autoRestoreConfirm', { f: this.autoBackupPick }), this.$t('statsH.SettingsModal.restoreTitle'), 'warning')
+          .then(async () => {
+            try {
+              const r = await window.todoAPI.readAutoBackup(this.st.backupDir || '', this.autoBackupPick)
+              // read-auto-backup 现在返回 { ok, text?, error? }:读取失败显式报错,不再与「文件不存在」混为空串
+              if (!r || !r.ok) return this.$message.error(this.$t('statsE.SettingsModal.backupFileNotFoundMsg') + ((r && r.error) ? ': ' + r.error : ''))
+              // Domain-2 review (2026-09-24): boolean return is checked — a failed pre-restore
+              // snapshot means NO rollback point; warn loudly but let the user's confirmed restore
+              // proceed (aborting on a warning would need its own confirmation round).
+              if (!(await this.$store.dispatch('todo/writeEventBackup', 'restore'))) this.$message.warning(this.$t('statsE.SettingsModal.snapshotFailWarnMsg'))
+              await this.applyRestoreDump(JSON.parse(r.text))
+            } catch (e) { this.$message.error(this.$t('statsE.SettingsModal.backupParseFailedMsg') + e.message) }
+          }).catch(() => {})
+      } finally { this.restoring = false }
     },
     // dump.todoState 解析 + 版本守卫:schemaV 高于本版支持的备份静默误读=降级导入事故,显式报错
     parseTodoState (raw) {
@@ -494,6 +507,10 @@ export default {
       if (ok.length) await commitCommand("tomato", "appendMany", ok)
     },
     restoreFromBackup () {
+      // round3-ux-perf-finding-3: busy flag blocks double-click re-entry; the reset is chained
+      // (not a sync finally) so the flag stays set until the full confirm→read→apply pipeline ends.
+      if (this.restoring) return
+      this.restoring = true
       this.confirmDanger(this.$t('statsE.SettingsModal.criticalRestoreConfirmMsg'), this.$t('statsH.SettingsModal.restoreTitle'), 'warning').then(async () => {
         // F2 (2026-09-24): the dispatch MUST be awaited — writeEventBackupCore's dump builder reads
         // the live state only after an internal IPC await, so an un-awaited dispatch raced the
@@ -508,12 +525,15 @@ export default {
         try {
           await this.applyRestoreDump(JSON.parse(txt))
         } catch (e) { this.$message.error(this.$t('statsE.SettingsModal.backupParseFailedMsg') + e.message) }
-      }).catch(() => {})
+      }).catch(() => {}).finally(() => { this.restoring = false })
     },
     async purgeRecycle () {
-      const n = this.$store.state.todo.recycleList.length
-      // Same strength as the recycle bin page: unified triple confirm confirmRecycleClear (previously only single confirm, inconsistent protection)
+      // round3-ux-perf-finding-3: busy flag blocks double-click re-entry (same contract as importFromCsv)
+      if (this.purging) return
+      this.purging = true
       try {
+        const n = this.$store.state.todo.recycleList.length
+        // Same strength as the recycle bin page: unified triple confirm confirmRecycleClear (previously only single confirm, inconsistent protection)
         await confirmRecycleClear(this, n)
         // dispatch must be awaited: the async purge can fail (db write error); success toast only after it resolves
         // QC r1: purgeAllRecycle now returns a success flag — it RESOLVES (not rejects) on IPC
@@ -524,9 +544,12 @@ export default {
       } catch (e) {
         // Element confirm rejects with the 'cancel'/'close' string on user cancel — swallow those only
         if (e !== 'cancel' && e !== 'close') this.$message.error(this.$t('statsE.SettingsModal.purgeFailedMsg') + (e && e.message ? e.message : e))
-      }
+      } finally { this.purging = false }
     },
     async purgeSeed () {
+      // round3-ux-perf-finding-3: busy flag blocks double-click re-entry (same contract as importFromCsv)
+      if (this.purging) return
+      this.purging = true
       try {
         const n = await window.todoAPI.dbCall('countSeedTodos')
         if (!n) return this.$message.info(this.$t('statsE.SettingsModal.noDemoDataMsg'))
@@ -543,7 +566,7 @@ export default {
         // Element confirm rejects with the 'cancel'/'close' string on user cancel — only those mean "cancelled";
         // anything else is a real failure (countSeed/purgeSeed/refresh) and must not be reported as a silent success
         if (e !== 'cancel' && e !== 'close') this.$message.error(this.$t('statsE.SettingsModal.purgeFailedMsg') + (e && e.message ? e.message : e))
-      }
+      } finally { this.purging = false }
     }
   }
 }

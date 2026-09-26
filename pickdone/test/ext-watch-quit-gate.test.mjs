@@ -43,3 +43,26 @@ test('C11 wiring: index.js consults the gate at the single onChange entry and ar
   assert.ok(quitBlock.includes('extWatchGate.arm()'),
     'the gate is armed at will-quit entry, before the 500ms-2s flush window opens')
 })
+
+test('Round-3 (2026-09-26): stopDbWatch clears the pending debounce kick, and the kick flush body is gate-checked', () => {
+  const src = fs.readFileSync(new URL('../src/main/index.js', import.meta.url), 'utf8')
+  // (a) stopDbWatch must clearTimeout(debounce) BEFORE releasing the poll timers — a kick
+  // scheduled within the 150ms debounce window must not fire against the closed DB handle.
+  const stopIdx = src.indexOf('stopDbWatch = () => {')
+  assert.ok(stopIdx > 0, 'stopDbWatch found')
+  const stopBody = src.slice(stopIdx, src.indexOf('}', src.indexOf('resyncDbWatch = null', stopIdx)))
+  assert.ok(stopBody.includes('clearTimeout(debounce)'),
+    'THE FIX: stopDbWatch clears the pending debounce kick before closing down the poll')
+  assert.ok(stopBody.indexOf('clearTimeout(debounce)') < stopBody.indexOf('unwatchFile'),
+    'the debounce clear happens with the teardown (first thing stopDbWatch does)')
+  // (b) the kick callback's flush body must re-check the gate: a timer armed just before the
+  // quit chain arms the gate fires INSIDE the flush window, where its forwardTomatoCmd/dbm.call
+  // would consume a CLI slot whose write lands after dbm.close().
+  const kickIdx = src.indexOf('debounce = setTimeout(() => {')
+  assert.ok(kickIdx > 0, 'kick debounce timer found')
+  const kickBody = src.slice(kickIdx, src.indexOf("}, 150)", kickIdx))
+  assert.ok(kickBody.includes('extWatchGate.canPoll()'),
+    'THE FIX: the kick flush body is gated by extWatchGate.canPoll()')
+  assert.ok(kickBody.indexOf('extWatchGate.canPoll()') < kickBody.indexOf("scheduler.reloadAll"),
+    'the gate check runs BEFORE any dbm.call (scheduler.reloadAll / forwardTomatoCmd)')
+})

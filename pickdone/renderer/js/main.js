@@ -6,6 +6,12 @@ import { normalizeSortMode } from './utils/sortMode.js'
 const Vue = window.Vue // vue3 global build (includes createApp and the runtime template compiler)
 const ElementPlus = window.ElementPlus
 
+// Former inline head scripts (index.html could not defer them): run here at module evaluation,
+// which is guaranteed to be after ALL deferred vendor classics, so the order relative to the old
+// inline placement (after dayjs + isoWeek plugin, before anything reads window.dayjs) is preserved.
+if (window.dayjs && window.dayjs.extend && window.dayjs_plugin_isoWeek) window.dayjs.extend(window.dayjs_plugin_isoWeek)
+window.dayjs = window.dayjs || window.dayJs
+
 import store from './store/index.js'
 import { onExternalHabitBlob } from './store/habits.js'
 import { createExternalReloader, kindsFromChangedEvent } from './utils/externalReload.js'
@@ -15,6 +21,7 @@ import App from './app-root.vue'
 import { setLunarLib } from './utils/repeat.js'
 import { getHolidayList } from './utils/holidays.js'
 import { isStaleTomatoCmd, expiredTomatoReceipt } from './utils/tomatoShared.js'
+import { applyColorMode as applyColorModeTo } from './utils/colorMode.js'
 
 // Vue2 compat layer (@vue/compat) fully removed: our own code has completed migration to Vue3 semantics,
 // running entirely on Vue3 behavior (Element Plus is a native Vue3 library, modelValue/update:modelValue communication)
@@ -674,24 +681,26 @@ async function bootstrap () {
     }, 60 * 1000)
   }
 
-  // Color mode (light/dark/follow system): apply at startup + react to changes
-  const mql = window.matchMedia('(prefers-color-scheme: dark)')
-  const applyColorMode = () => {
-    const mode = store.state.settings.colorMode
-    const dark = mode === 'system' ? mql.matches : mode === 'dark'
-    document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light')
-    document.documentElement.classList.toggle('dark', dark)
-  }
-  // Follow system: track OS light/dark switches in real time
-  if (mql.addEventListener) mql.addEventListener('change', applyColorMode)
-  else if (mql.addListener) mql.addListener(applyColorMode)
-  applyColorMode()
-  store.subscribe((mutation) => {
-    if (mutation.type === 'settings/updateSettings' && mutation.payload && mutation.payload.colorMode) applyColorMode()
-  })
+  // Color mode handling moved pre-mount (see just above app.mount): it is self-contained and
+  // idempotent, and the persisted colorMode is already in store state at module evaluation
+  // (settings.js `state: load()` merges localStorage synchronously), so there is no reason to
+  // wait for the bootstrap() IPC/init chain - waiting painted first-launch dark users light.
 
   // mount moved before bootstrap: if any link in the init chain hangs, no more white screen
 }
+
+// Color mode (light/dark/follow system): apply PRE-mount so first paint already carries the
+// persisted theme (previously the first apply ran only at the tail of bootstrap(), after serial
+// IPC awaits -> dark users saw a light flash on every launch), then react to changes.
+const colorMql = window.matchMedia('(prefers-color-scheme: dark)')
+const applyColorMode = () => applyColorModeTo(store.state.settings.colorMode, colorMql.matches, document)
+// Follow system: track OS light/dark switches in real time
+if (colorMql.addEventListener) colorMql.addEventListener('change', applyColorMode)
+else if (colorMql.addListener) colorMql.addListener(applyColorMode)
+applyColorMode()
+store.subscribe((mutation) => {
+  if (mutation.type === 'settings/updateSettings' && mutation.payload && mutation.payload.colorMode) applyColorMode()
+})
 
 // Mount first, then initialize: Vuex reactivity refreshes the UI automatically once init data arrives;
 // even a hung/failed init still guarantees a visible interface (P0 white-screen prevention)

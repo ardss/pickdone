@@ -33,7 +33,23 @@ function markFired (key) {
     for (const [k, v] of firedReminders) {
       if (v && v.written) { victim = k; break }
     }
-    if (victim === undefined) victim = firedReminders.keys().next().value
+    if (victim === undefined) {
+      // R3-stability (2026-09-26): all-unwritten fallback — flush FIRST so the victim's watermark
+      // (and every other pending one) is persisted before the eviction; deleting an unwritten
+      // entry here used to drop that watermark on the floor and re-fire it after restart.
+      flushFiredNow()
+      // flushFiredNow swallows persist failures (M-10 retry path) — detect via the written flags:
+      // if anything is STILL unwritten the flush failed, so skip the eviction and let the map
+      // exceed FIRED_MAX by one entry; the bound self-heals on the next successful flush.
+      let stillUnwritten = false
+      for (const v of firedReminders.values()) { if (v && !v.written) { stillUnwritten = true; break } }
+      if (stillUnwritten) {
+        firedReminders.set(key, { ts: Date.now(), written: false })
+        schedulePersistFired()
+        return
+      }
+      victim = firedReminders.keys().next().value
+    }
     if (victim !== undefined) firedReminders.delete(victim)
   }
   firedReminders.set(key, { ts: Date.now(), written: false })

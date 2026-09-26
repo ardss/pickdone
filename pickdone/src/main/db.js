@@ -212,6 +212,9 @@ CREATE TABLE IF NOT EXISTS tomato_records (
   updatedAt     INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_tomato_records_date ON tomato_records (dateKey);
+-- Round-3 perf (2026-09-26): tomatoAll's 'WHERE deleted = 0 ORDER BY endTime DESC' reload scan
+-- becomes an ordered index search (same row order).
+CREATE INDEX IF NOT EXISTS idx_tomato_records_endtime ON tomato_records (deleted, endTime);
 -- Change-capture log (P1 sync groundwork 2026-09-15): one row per successful write op, appended in
 -- call() next to the ledger hook. Ring-buffered (see appendOplog); consumers read deltas via the
 -- syncOplogSince op and GC coverage comes from periodic full snapshots. commitSyncBatch is the
@@ -1041,6 +1044,10 @@ const OPS = {
   // db layer directly. Deliberately NOT in the renderer IPC whitelist or contracts.d.ts DbCallOp —
   // adding a renderer caller without whitelisting it would be the filterList/bumpSnow silent-outage shape.
   settingsRowsAll: () => syncSchema.rowsAll(), // settings/habits row table (P2, docs/sync §4.2)
+  // Round-3 perf (2026-09-26): per-tick settings-change watermark for the external-write watcher —
+  // same number rowsAll() would reduce to max(updatedAt), one aggregate instead of a full scan
+  // with per-row JSON.parse. Main-internal consumer (index.js forwardTomatoCmd), like rowsAll.
+  settingsRowsMaxUpdated: () => syncSchema.maxUpdated(),
   settingsRowPut: p => syncSchema.rowPut(p),
   settingsRowPutMany: p => syncSchema.rowPutMany(p),
   settingsRowDelete: p => syncSchema.rowDelete(p),
@@ -1097,7 +1104,13 @@ function call (op, params) {
   if (!fn) throw new Error('[TodoDB] 未知操作: ' + op)
   const r = fn(params)
   if (ledgerChangedHook && !ledgerHookSuppressCount && LEDGER_WRITE_OPS.has(op)) { try { ledgerChangedHook(op) } catch { /* 广播失败不阻断落库 */ } }
-  if (op !== 'commitSyncBatch' && WRITE_OPS.has(op)) oplog.appendOplog(oplog.oplogEntriesFor(op, params, r))
+  if (op !== 'commitSyncBatch' && WRITE_OPS.has(op)) {
+    // Round-3 stability (2026-09-26): oplogEntriesFor runs real SQL for a few ops (planMoveTask/
+    // planDeleteTask/planDeleteTaskDay) outside appendOplog's try/catch — a throw there (closed or
+    // re-init handle) rejected the caller's invoke for an ALREADY-COMMITTED write, violating
+    // appendOplog's contract; the delta row was lost either way. Now success + warn, happy path identical.
+    try { oplog.appendOplog(oplog.oplogEntriesFor(op, params, r)) } catch (e) { log.warn('[TodoDB] oplog capture failed (write itself is unaffected):', e && e.message) }
+  }
   return r
 }
 

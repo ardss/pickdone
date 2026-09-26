@@ -10,6 +10,7 @@ import ui from './ui.js'
 import repeatSettings from './repeatSettings.js'
 import filters from './filters.js'
 import tomatoAnnounce from './tomatoAnnounce.js'
+import { snapshotString } from './helpers/snapshotString.js'
 
 const Vuex = window.Vuex
 
@@ -45,8 +46,10 @@ store.subscribeAction({
   before (action) {
     if (!HISTORY_ACTIONS.has(action.type)) return
     const t = store.state.todo
-    // Snapshots stored as strings, not objects: stringify only once on the push side (previously stringify+parse double work); parse only at undo time
-    store.commit('todo/historyPush', JSON.stringify({ todoList: t.todoList, recycleList: t.recycleList }))
+    // Snapshots stored as strings, not objects: stringify only once on the push side (previously stringify+parse double work); parse only at undo time.
+    // Round-3 perf: snapshotString serializes only rows whose updateTime/version changed (per-row
+    // fragment cache) — output stays byte-identical to the previous whole-table JSON.stringify.
+    store.commit('todo/historyPush', snapshotString(t.todoList, t.recycleList))
   },
   after (action) {
     if (!WRITE_ACTIONS.has(action.type)) return

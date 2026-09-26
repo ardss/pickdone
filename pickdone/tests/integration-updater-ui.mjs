@@ -163,8 +163,11 @@ for (let attempt = 1; attempt <= 3; attempt++) {
     assert.equal(dots, 0, '非 ready 态不应残留红点')
     break
   } catch (e) {
-    // early-boot reload landed mid-sequence: drop the dead document and retry on the new one
-    if (attempt < 3 && /Cannot read properties of null/.test(String(e))) {
+    // early-boot reload landed mid-sequence: drop the dead document and retry on the new one.
+    // Both symptoms are the same reload race: pre-defer the #app element itself went away
+    // ("of null"); since vendor scripts carry defer, the element persists through the
+    // unmounted window ("of undefined" reading .config off __vue_app__).
+    if (attempt < 3 && /Cannot read properties of (null|undefined)/.test(String(e))) {
       console.log(`[retry] page navigated mid-sequence (early-boot reload), reconnecting — attempt ${attempt + 1}/3`)
       try { ws && ws.close() } catch {}
       ws = null

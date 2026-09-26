@@ -668,7 +668,7 @@ textarea { font-family: inherit; }
 
 
 
-.listfade-enter-active, .listfade-leave-active { transition: all .3s cubic-bezier(.2, .8, .2, 1); }
+.listfade-enter-active, .listfade-leave-active { transition: opacity .3s cubic-bezier(.2, .8, .2, 1), transform .3s cubic-bezier(.2, .8, .2, 1), width .3s cubic-bezier(.2, .8, .2, 1); }
 
 
 
@@ -683,18 +683,13 @@ textarea { font-family: inherit; }
 
 
 
-/* 离场条目脱流，其余条目经 .listfade-move 平滑补位 */
+/* Leaving rows are taken out of flow; the rest settle via .listfade-move */
 .listfade-leave-active { position: absolute; width: 100%; }
 
 
 
 
 .listfade-move { transition: transform .3s cubic-bezier(.2, .8, .2, 1); }
-
-
-
-
-.listfade-leave-active { position: absolute; width: 100%; }
 
 
 

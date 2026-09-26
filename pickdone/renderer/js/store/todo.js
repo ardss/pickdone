@@ -17,6 +17,7 @@ import { writeEventBackupCore, writeAutoBackupCore, writeCriticalBackupCore } fr
 import { commit as commitCommand } from "../utils/commandBus.js"
 import { safeUpsert, flushPendingUpserts, queuePendingUpsert, pendingUpserts, daysRangeTs } from './helpers/todoPendingUpserts.js'
 import { DEFAULT_VIEWS, VIEW_AFFECTING_FIELDS, VIEWS_DEBOUNCE_MS, deproxyRows, showNoDateFilter, buildCalendarList } from './helpers/todoViews.js'
+import { snapshotString } from './helpers/snapshotString.js'
 import { countTags } from '../utils/search.js'
 // Re-export: unit tests import the quit-flush retry contract straight from store/todo.js
 export { safeUpsert, flushPendingUpserts }
@@ -434,9 +435,10 @@ export default {
         rows.push({ ...raw, delete: true, deleting: true, deletedAt: now, updateTime: now, status: 'delete', version: 0 })
       }
       if (!rows.length) return []
-      // Single pre-batch snapshot (same shape the subscribeAction before-hook pushes for deleteTodo)
+      // Single pre-batch snapshot (same shape the before-hook pushes for deleteTodo); round-3 perf:
+      // fragment-cache stringify, byte-identical to the old whole-table one (helpers/snapshotString.js)
       const snap = this.state.todo
-      commit('historyPush', JSON.stringify({ todoList: snap.todoList, recycleList: snap.recycleList }))
+      commit('historyPush', snapshotString(snap.todoList, snap.recycleList))
       // Focus-bound rows detach first (same as deleteTodo)
       const at = rootState.tomato && rootState.tomato.attachTodo
       if (at && ids.includes(at.taskId)) dispatch('tomato/attach', null, { root: true })
@@ -630,6 +632,11 @@ export default {
       const upcomingList = []
       const noDateList = []
       const todayDoneList = []
+      // Round-3 perf (ux-perf-finding-10): precompute TodayXView's two groups here (sorted later
+      // with the exact comparator the view used inline: dayStart, then todoTime). x-next = today +
+      // ALL overdue uncompleted (UNCAPPED — cannot reuse recent.expiredUncompleted); x-open = the
+      // no-date uncompleted set, always shown (unlike recent.noDate, gated by showNoDate).
+      const todayXNext = []
 
       live.forEach(t => {
         const ds = t.dayStart
@@ -658,8 +665,8 @@ export default {
         const diff = Math.round((dsNum - today) / DAY_MS)
         if (diff < 0) {
           if (-diff <= expUncompletedDays) recentExpiredUncompleted.push(t)
-        } else if (diff === 0) todayList.push(t)
-        else if (diff === 1) tomorrowList.push(t)
+          todayXNext.push(t)
+        } else if (diff === 0) { todayList.push(t); todayXNext.push(t) } else if (diff === 1) tomorrowList.push(t)
         else if (diff === 2) after2List.push(t)
         else if (diff <= upcomingDays) upcomingList.push(t)
       })
@@ -682,6 +689,7 @@ export default {
 
       // Todo box: no-date incomplete
       let box = noDateList.filter(t => !t.complete)
+      const todayXOpen = box.slice() // TodayX "Unscheduled" group: same set, unsorted, no category filter (TodayX always shows it)
       if (settings.todoBoxCategoryId !== -1) box = box.filter(t => t.categoryId === settings.todoBoxCategoryId)
       const dir = settings.todoBoxSortOrder === 'asc' ? 1 : -1
       // Review P3 (2026-09-22): NaN-safe comparators — a NaN createTime/todoTime used to make the
@@ -715,6 +723,8 @@ export default {
         },
 
         todayTodoList: applySort(todayList),
+        todayXNext: todayXNext.sort((x, y) => (x.dayStart - y.dayStart) || (x.todoTime - y.todoTime)),
+        todayXOpen,
         // Completed-group sort matches the grouping basis (completedAt first, avoiding sort misplacement when editing after completion)
         todayDoneList: todayDoneList.sort((a, b) => (b.completedAt || b.updateTime) - (a.completedAt || a.updateTime)),
         yesterdayTodoList: yesterday,

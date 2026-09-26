@@ -111,3 +111,12 @@ test('F9 scope pin: the tomato mirror is NOT duplicated into restore (already co
   assert.ok(mut, 'restore mutation found')
   assert.ok(!/mirrorTomatoLedger/.test(mut[0]), 'no redundant tomato ledger mirror in restore')
 })
+
+// round3-ux-perf-11: the auto-backup el-select refreshed loadAutoBackupList on BOTH @focus and
+// @visible-change(true) — Element Plus fires focus then visible-change on a normal click-open,
+// so every dropdown open issued the listAutoBackups IPC twice. visible-change(true) alone covers
+// every moment the list actually renders; focus-without-open never showed the list.
+test('round3-ux-perf-11: auto-backup select refreshes on visible-change only, not on focus', () => {
+  assert.match(dataTab, /@visible-change="v => v && loadAutoBackupList\(\)"/, 'visible-change refresh kept')
+  assert.doesNotMatch(dataTab, /@focus="loadAutoBackupList"/, 'duplicate @focus refresh removed')
+})

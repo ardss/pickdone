@@ -243,13 +243,16 @@ test('F5 P2: reminder LRU evicts the oldest WRITTEN entry first; unwritten entri
   assert.ok(!fired.has('w0'), 'the oldest written entry was the eviction victim')
   assert.ok(fired.has('brand-new'))
 
-  // Fallback: when EVERY entry is unwritten, the oldest entry goes (bound must not be dropped).
+  // Fallback (R3-stability 2026-09-26): when EVERY entry is unwritten, markFired flushes FIRST.
+  // Here the flush cannot persist (no live db in this harness), so the eviction is SKIPPED:
+  // no unwritten watermark is dropped (that used to re-fire the reminder after restart) and
+  // the map is allowed to exceed FIRED_MAX by one; the bound self-heals on the next flush.
   scheduler._clearStateForTest()
   for (let i = 0; i < FIRED_MAX; i++) fired.set('u' + i, { ts: i, written: false })
   scheduler._markFired('x')
-  assert.equal(fired.size, FIRED_MAX, 'all-unwritten fallback keeps the cap')
-  assert.ok(fired.has('x'))
-  assert.ok(!fired.has('u0'), 'all-unwritten: oldest entry evicted as last resort')
+  assert.equal(fired.size, FIRED_MAX + 1, 'flush-failed fallback: eviction skipped, cap overshot by one (self-heals)')
+  assert.ok(fired.has('x'), 'the new watermark is recorded even when the flush failed')
+  assert.ok(fired.has('u0'), 'all-unwritten + flush failed: NO watermark is dropped (re-fire guard)')
   assert.ok(fired.has('u1'))
 })
 

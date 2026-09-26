@@ -280,7 +280,14 @@ export default {
     // Measure the rail height: CSS constants (100vh-N) cannot cover the real height taken by the app shell + page header,
     // any hardcoded constant overflows on one side; use the scroll container's clientHeight; sticky top stays 0 so the pinned position equals the flow position (a nonzero threshold made the rail jump on view switches)
     this.fitRail()
-    window.addEventListener('resize', this._onResize = () => { this.fitRail(); this.measureAxis() })
+    // round3-ux-perf-4: coalesce resize work to one animation frame — uncoalesced, each resize
+    // event read offsetTop/offsetHeight right after fitRail's style.height write (layout thrash
+    // during window drag). Final layout is identical: fitRail/measureAxis re-read the live DOM
+    // at execution time, so deferring by ≤1 frame cannot change the values.
+    window.addEventListener('resize', this._onResize = () => {
+      if (this._resizeRaf) return
+      this._resizeRaf = requestAnimationFrame(() => { this._resizeRaf = 0; this.fitRail(); this.measureAxis() })
+    })
     this.$nextTick(() => this.measureAxis())
     // Cross-component linkage: store (schedule/calendar/edit panel) reschedules/removes/deletes a task → dayPlans.js broadcast → timeline reloads in real time
     window.addEventListener('day-plans-changed', this._onPlansChanged = async () => {
@@ -311,6 +318,8 @@ export default {
   beforeUnmount () {
     clearInterval(this._tick)
     window.removeEventListener('resize', this._onResize)
+    // round3-ux-perf-4: drop a pending coalesced resize frame
+    if (this._resizeRaf) cancelAnimationFrame(this._resizeRaf)
     window.removeEventListener('day-plans-changed', this._onPlansChanged)
     if (this._offTodosChanged) this._offTodosChanged()
     if (this._railNarrowMql) {
