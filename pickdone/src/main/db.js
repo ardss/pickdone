@@ -1041,6 +1041,10 @@ const OPS = {
   // db layer directly. Deliberately NOT in the renderer IPC whitelist or contracts.d.ts DbCallOp —
   // adding a renderer caller without whitelisting it would be the filterList/bumpSnow silent-outage shape.
   settingsRowsAll: () => syncSchema.rowsAll(), // settings/habits row table (P2, docs/sync §4.2)
+  // Round-3 perf (2026-09-26): per-tick settings-change watermark for the external-write watcher —
+  // same number rowsAll() would reduce to max(updatedAt), one aggregate instead of a full scan
+  // with per-row JSON.parse. Main-internal consumer (index.js forwardTomatoCmd), like rowsAll.
+  settingsRowsMaxUpdated: () => syncSchema.maxUpdated(),
   settingsRowPut: p => syncSchema.rowPut(p),
   settingsRowPutMany: p => syncSchema.rowPutMany(p),
   settingsRowDelete: p => syncSchema.rowDelete(p),

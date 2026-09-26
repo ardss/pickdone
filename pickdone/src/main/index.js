@@ -268,10 +268,10 @@ function watchDbForExternalWrites () {
       let at = 0
       if (rawS) { doc = JSON.parse(rawS); at = (doc && doc._savedAt) || 0 }
       try {
-        const rows = dbm.call('settingsRowsAll')
-        if (Array.isArray(rows)) {
-          for (const r of rows) { const u = Number(r && r.updatedAt) || 0; if (u > at) at = u }
-        }
+        // Round-3 perf (2026-09-26): identical watermark via one MAX aggregate instead of
+        // settingsRowsAll + per-row JSON.parse (this tick runs ~4x/sec for the app's lifetime).
+        const maxRow = Number(dbm.call('settingsRowsMaxUpdated')) || 0
+        if (maxRow > at) at = maxRow
       } catch { /* rows unavailable (legacy lib) → fall back to the _savedAt-only watermark */ }
       if (doc && at > lastSettingsSavedAt) {
         const prev = lastSettingsDoc
