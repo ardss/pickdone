@@ -69,7 +69,15 @@ if (ALLOW_REUSE && await cdpAlive(CDP)) {
   // 按脚本名+pid 分文件:check:all 并行跑多个活体门禁时,共享单 log 会交错成乱码(2026-09-06 并行化配套)
   fs.mkdirSync(appCwd + '/tests/.artifacts', { recursive: true })
   const logFile = appCwd + '/tests/.artifacts/smoke-' + path.basename(SCRIPT).replace(/\W+/g, '-') + '-' + process.pid + '.log'
-  child = spawn(ELECTRON, ['.', '--no-focus', '--remote-debugging-port=' + port, ...(process.platform === 'linux' ? ['--no-sandbox'] : [])], {
+  // Anti-throttle flags (2026-09-26 check:all red): the shared tomato tick (1s setInterval) drives the
+  // [5.5] pomodoro smoke assertions. A test window that loses focus or gets fully covered by a parallel
+  // gate stage is throttled by Chromium (hidden pages: 1Hz -> 1 wake/minute under intensive throttling),
+  // turning a 1s contract into a multi-minute latency lottery under pool saturation. These flags apply
+  // ONLY to this spawned, disposable test instance - the packaged app keeps default (power-friendly)
+  // throttling for real users; test caps then measure app latency, not scheduler visibility.
+  child = spawn(ELECTRON, ['.', '--no-focus', '--remote-debugging-port=' + port,
+    '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding',
+    ...(process.platform === 'linux' ? ['--no-sandbox'] : [])], {
     cwd: appCwd,
     env: { ...process.env, TODO_USER_DATA_DIR: tmpDir },
     stdio: ['ignore', fs.openSync(logFile, 'a'), fs.openSync(logFile, 'a')]
