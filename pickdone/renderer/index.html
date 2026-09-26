@@ -9,21 +9,23 @@
   <link rel="stylesheet" href="app://app/assets/vendor-lib/driver.css">
   <link rel="stylesheet" href="app://app/assets/css/base.css?v=1789423807901">
   <link rel="stylesheet" href="app://app/assets/css/theme-dark.css?v=1789423807901">
-  <!-- Vue 3 运行时（纯 Vue3.5 全局构建） -->
-  <script src="app://app/assets/vendor-lib/vue3.global.prod.js?v=1789423807901"></script>
-  <script src="app://app/assets/vendor-lib/vue-i18n.global.prod.js"></script>
-  <script src="app://app/assets/vendor-lib/vuex4.global.prod.js?v=1789423807901"></script>
-  <script src="app://app/assets/vendor-lib/vue-router4.global.prod.js?v=1789423807901"></script>
-  <script src="app://app/assets/vendor-lib/element-plus.full.min.js?v=1789423807901"></script>
-  <script src="app://app/assets/vendor-lib/element-plus/locale-zh-cn.min.js"></script>
-  <script src="app://app/assets/vendor-lib/element-plus/locale-en.min.js"></script>
-  <script src="app://app/assets/vendor-lib/pinyin-pro.umd.js"></script>
-  <script src="app://app/assets/vendor-lib/dayjs.min.js"></script>
-  <script src="app://app/assets/vendor-lib/dayjs-plugin-isoWeek.js"></script>
-  <script>window.dayjs && window.dayjs.extend && window.dayjs.extend(window.dayjs_plugin_isoWeek)</script>
-  <script src="app://app/node_modules/sortablejs/Sortable.min.js"></script>
-  <script>window.dayjs = window.dayjs || window.dayJs;</script>
-  <script src="app://app/assets/vendor-lib/driver.iife.js"></script>
+  <!-- Vue 3 运行时（纯 Vue3.5 全局构建）。All external scripts carry defer: the parser no longer
+       blocks on ~1.9MB of vendor JS. Execution order is preserved (deferred classics run in document
+       order) and the type=module main.js runs after all of them, so window.Vue/ElementPlus/dayjs are
+       in place when it evaluates. The two former inline head one-liners (isoWeek extension, dayjs
+       global fallback) moved to the top of js/main.js - inline scripts cannot defer. -->
+  <script defer src="app://app/assets/vendor-lib/vue3.global.prod.js?v=1789423807901"></script>
+  <script defer src="app://app/assets/vendor-lib/vue-i18n.global.prod.js"></script>
+  <script defer src="app://app/assets/vendor-lib/vuex4.global.prod.js?v=1789423807901"></script>
+  <script defer src="app://app/assets/vendor-lib/vue-router4.global.prod.js?v=1789423807901"></script>
+  <script defer src="app://app/assets/vendor-lib/element-plus.full.min.js?v=1789423807901"></script>
+  <script defer src="app://app/assets/vendor-lib/element-plus/locale-zh-cn.min.js"></script>
+  <script defer src="app://app/assets/vendor-lib/element-plus/locale-en.min.js"></script>
+  <script defer src="app://app/assets/vendor-lib/pinyin-pro.umd.js"></script>
+  <script defer src="app://app/assets/vendor-lib/dayjs.min.js"></script>
+  <script defer src="app://app/assets/vendor-lib/dayjs-plugin-isoWeek.js"></script>
+  <script defer src="app://app/node_modules/sortablejs/Sortable.min.js"></script>
+  <script defer src="app://app/assets/vendor-lib/driver.iife.js"></script>
 </head>
 <body>
   <div id="app"></div>
