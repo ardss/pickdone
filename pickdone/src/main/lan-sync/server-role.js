@@ -29,6 +29,7 @@ const MAX_SNAPSHOT_ROWS = 1000000
  * @param {object} deps
  *   deviceId, ingestSegment(segment), buildSegments(fromSeq?), buildSnapshot?, buildSnapshotRows?,
  *   getMaxSeq?(), getOldestSeq?(), serverSnapshotBusy (Set), serverPullAck (Map),
+ *   onIngestFlushFailed?(peer) — Layer-2: arms the engine's snapshot recovery when a pushed segment flush-fails,
    *   maxSnapshotChunks (number), snapshotSchemaVersion (number),
    *   pushRecent(entry), onSnapshotError(info), onSnapshotSync(info), onServerError(err)
    * @returns {(peer, msg, socket, sendVia) => void}
@@ -38,8 +39,13 @@ function createServerRoleHandler(deps) {
     ingestSegment, buildSegments, buildSnapshot, buildSnapshotRows,
     getMaxSeq, getOldestSeq, serverSnapshotBusy, serverPullAck,
     maxSnapshotChunks, snapshotSchemaVersion, pushRecent, onSnapshotError, onServerError,
-    serveAttachments,
+    serveAttachments, onIngestFlushFailed,
   } = deps
+  // Layer-2 defense in depth (stalled-push finding): when OUR ingest of a pushed segment
+  // flush-fails, the ack flag alone only recovers the SENDER's side (it force-arms its
+  // snapshot trigger). The engine injects onIngestFlushFailed so the SERVER role also arms
+  // its own recovery (needSnapshotForce) toward this peer — if the sender is gone or its
+  // round never fires, the stalled state no longer goes completely un-armed on our end.
   const maxSnapshotRows = Number(deps.maxSnapshotRows) || MAX_SNAPSHOT_ROWS
   const currentMaxSeq = () => { try { return Number(getMaxSeq()) || 0 } catch { return 0 } }
   const currentOldestSeq = () => { try { return Number(getOldestSeq()) || 0 } catch { return 0 } }
@@ -69,6 +75,10 @@ function createServerRoleHandler(deps) {
           if (ing && ing.flushFailed) {
             const fFrom = Number(seg && seg.fromSeq)
             if (Number.isFinite(fFrom) && (acc.flushFailedFrom == null || fFrom < acc.flushFailedFrom)) acc.flushFailedFrom = fFrom
+            // Layer-2: arm the engine's recovery trigger toward THIS peer, too (previously the
+            // server role armed nothing here — the sender's force-armed snapshot was the only
+            // recovery path).
+            if (typeof onIngestFlushFailed === 'function') { try { onIngestFlushFailed(peer) } catch { /* recovery hook must not break ingest */ } }
             continue
           }
           acc.segments += 1

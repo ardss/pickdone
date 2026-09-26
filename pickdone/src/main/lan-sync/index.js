@@ -118,6 +118,9 @@ function createLanSyncNode(opts) {
   const backoffMaxMs = Number(opts.backoffMaxMs) || BACKOFF_MAX_MS
   // P1-3 hibernate budget (see the constants block above); injectable for tests.
   const DIAL_FAILURE_BUDGET = Number(opts.dialFailureBudget) || DIAL_FAILURE_BUDGET_DEFAULT
+  // Layer-2 (stalled-push finding): consecutive flush-failed rounds before the Device Center
+  // flips peerState to 'flush-stalled' (injectable for tests).
+  const FLUSH_STALL_BUDGET = Number(opts.flushStallBudget) || 3
   const HIBERNATE_BACKOFF_MS = Number(opts.hibernateBackoffMs) || HIBERNATE_BACKOFF_MS_DEFAULT
   // Per-snapshot transfer ceiling (injectable for tests; see MAX_SNAPSHOT_CHUNKS above).
   const maxSnapshotChunks = Number(opts.maxSnapshotChunks) || MAX_SNAPSHOT_CHUNKS
@@ -128,6 +131,10 @@ function createLanSyncNode(opts) {
   // it — they ARE the scheduled dial). unpairedBy holds TERMINAL auth-rejected peers: no dialing
   // at all until the user re-pairs/unpairs/restarts (a re-announced/re-added peer clears it).
   const failStreakBy = new Map() // deviceId -> consecutive failed rounds
+  // Layer-2 (stalled-push finding): consecutive flush-failed rounds per peer. Past
+  // FLUSH_STALL_BUDGET the Device Center surfaces peerState 'flush-stalled' — the recovery
+  // loop (force-armed snapshot on both ends) is NOT converging and needs user attention.
+  const flushStallBy = new Map() // deviceId -> consecutive flush-failed rounds
   const dialNotBefore = new Map() // deviceId -> ms epoch
   const unpairedBy = new Set() // deviceId set (terminal peer-unauthorized)
   // Round-2 P1 (2026-09-21): re-fix budget. A DEAD peer whose discovery record keeps flapping
@@ -245,6 +252,7 @@ function createLanSyncNode(opts) {
     pullWatermarkBy.delete(id); serverPullAck.delete(id)
     peerProgress.delete(id) // Wave-B P3: a forgotten peer's push watermark must not linger
     failStreakBy.delete(id); dialNotBefore.delete(id); unpairedBy.delete(id); liveServerSockets.delete(id)
+    flushStallBy.delete(id) // Layer-2: a forgotten peer's flush-stall counter must not linger
     refixTimesBy.delete(id); oversizedSegmentBy.delete(id)
     // Fix-round (2026-09-22, lan-sync-8): attachment bookkeeping is per-peer too — the pull
     // session's request budget and the server role's served-request counter must not outlive
@@ -278,6 +286,15 @@ function createLanSyncNode(opts) {
     maxSnapshotChunks, snapshotSchemaVersion: opts.snapshotSchemaVersion,
     pushRecent,
     serveAttachments: attServer.serve, // per-node att-req server (rate caps inside)
+    // Layer-2 (stalled-push finding): a flush-failed ingest of a peer's push arms OUR
+    // snapshot recovery toward that peer as well (needSnapshotForce survives roundApplied > 0),
+    // not just the sender's own force-arm via the flushFailed ack flag.
+    onIngestFlushFailed: (peer) => {
+      const id = peer && peer.deviceId
+      if (!id) return
+      needSnapshot.add(id)
+      needSnapshotForce.add(id)
+    },
     onSnapshotError: (info) => em.emit('snapshot-error', info),
     onSnapshotSync: (info) => em.emit('snapshot-sync', info),
     onServerError: (err) => em.emit('server-error', err),
@@ -487,6 +504,12 @@ function createLanSyncNode(opts) {
       // Fix-round (2026-09-22, lan-sync-6): snapshot-busy is a scheduling collision, not a dial
       // failure — finish's error path must not advance the dial-failure streak toward hibernate.
       let snapshotBusyCollision = false
+      // Layer-2 defense in depth (stalled-push finding): a flushFailed ack means the peer
+      // DROPPED our pushed rows — the round must end as a FAILURE (visible lastError /
+      // round-error, no silent "ok") but this is a peer-side ingest stall, NOT a dial
+      // failure, so it must not advance the streak toward the 10-minute hibernate
+      // (same exemption shape as snapshotBusyCollision above).
+      let flushFailedAck = false
       // Attachment FILE puller (post-ack): sendVia needs the RAW SOCKET (socket._lanSend lives on em._socket, not the EventEmitter — wiring `client` here poisoned every round, 2026-09-19 drill).
       // onArrived (P1-8): host callback per file landed on disk -> 'attachments-arrived' syncEvent so open views refresh live.
       const att = createAttachmentPuller({ send: (m) => sendVia(client._socket, m), session: attSession, peerId: peer.deviceId, getKeys: typeof opts.getMissingAttachmentKeys === 'function' ? opts.getMissingAttachmentKeys : null, deps: opts.attachmentPullerDeps, onArrived: typeof opts.onAttachmentArrived === 'function' ? opts.onAttachmentArrived : null })
@@ -561,7 +584,7 @@ function createLanSyncNode(opts) {
           // Fix-round (2026-09-22, lan-sync-6): a snapshot-busy collision does NOT count —
           // two healthy peers exchanging mutual first-sync snapshots used to push each other
           // into the 10-minute hibernate purely on same-cadence retries.
-          const streak = (failStreakBy.get(peer.deviceId) || 0) + (snapshotBusyCollision ? 0 : 1)
+          const streak = (failStreakBy.get(peer.deviceId) || 0) + (snapshotBusyCollision || flushFailedAck ? 0 : 1)
           failStreakBy.set(peer.deviceId, streak)
           if (authRejected) {
             // P1-3b TERMINAL: auth rejected = the peer removed our pairing. Stop dialing this
@@ -596,6 +619,9 @@ function createLanSyncNode(opts) {
           }
           lastError = `${peer.deviceId}: ${err.message}`
           errorBy.set(peer.deviceId, lastError)
+          // Layer-2: count consecutive flush-failed rounds; a clean round or an advancing
+          // snapshot cursor (recovery converging) clears the counter (see the resets below).
+          if (flushFailedAck) flushStallBy.set(peer.deviceId, (flushStallBy.get(peer.deviceId) || 0) + 1)
           pushRecent({ at: Date.now(), kind: 'error', peer: peer.deviceId, detail: { error: err.message } })
           refreshOnline(peer.deviceId)
           if (streak <= DIAL_FAILURE_BUDGET) {
@@ -607,6 +633,11 @@ function createLanSyncNode(opts) {
           // shares the same budgeted self-healing).
           const refixed = tryRefixAddress(peer.deviceId)
           scheduleRetry(peer.deviceId)
+          // Layer-2: the flush-failed peer ANSWERED on the wire — only its ingest stalled.
+          // Dial-failure backoff must not delay the recovery loop: re-arm at base cadence so
+          // the force-armed snapshot round dials immediately (still streak-exempt, still
+          // user-visible via errorBy/round-error).
+          if (flushFailedAck) resetBackoff(peer.deviceId)
           if (refixed) em.emit('round-error', { peer: peer.deviceId, error: err, recoveredAddress: true })
           resolve(false)
         } else {
@@ -614,6 +645,7 @@ function createLanSyncNode(opts) {
           lastError = null
           lastRoundBy.set(peer.deviceId, lastRoundAt)
           errorBy.delete(peer.deviceId)
+          flushStallBy.delete(peer.deviceId) // Layer-2: a clean round means the flush stall cleared
           pushRecent({
             at: lastRoundAt, kind: 'push', peer: peer.deviceId,
             detail: { applied: ackApplied, appliedToSeq: peerProgress.get(peer.deviceId) ?? null },
@@ -893,6 +925,10 @@ function createLanSyncNode(opts) {
             if (msg.flushFailed) {
               needSnapshot.add(peer.deviceId)
               needSnapshotForce.add(peer.deviceId) // survives roundApplied > 0 (Wave-B P1)
+              // Layer-2: the ack no longer settles the round as success below — end it as a
+              // FAILURE (streak-exempt) so the dropped-push stall is user-visible instead of
+              // an endless string of silent "ok" rounds.
+              flushFailedAck = true
             }
             // ackSeq is in OUR seq space (max seq among our rows the peer applied). Defensive
             // clamp to our own max oplog seq: a misbehaving/legacy peer (reporting its own local
@@ -903,6 +939,12 @@ function createLanSyncNode(opts) {
             // P0-1: a flush-failed ack means the peer DROPPED our rows — never advance the push
             // watermark past unacked data (the re-push after the snapshot recovery is idempotent).
             if (!msg.flushFailed && seq > (peerProgress.get(peer.deviceId) || 0)) peerProgress.set(peer.deviceId, seq)
+            // Layer-2: a flush-failed ack settles the round as a FAILURE (before the normal
+            // success path / attachment pull below) — the peer dropped our pushed rows, so
+            // this round must not count as a healthy "ok". The needSnapshotForce arm above
+            // plus the untouched :905 push-watermark guard make the next round open with a
+            // snapshot-request that re-applies our full state idempotently (recovery).
+            if (flushFailedAck) { finish(new Error('peer dropped pushed rows (flush failed)')); return }
             evaluateSnapshotTrigger()
             // The round's finish waits for snapshot-end (the ack only proves the peer got MY push); attachment
             // pull likewise keeps it open until att-end. Pull send-failures are isolated inside the puller —
@@ -1144,12 +1186,15 @@ function createLanSyncNode(opts) {
           const lr = lastRoundBy.get(p.deviceId)
           // P1-3: structured per-peer state for the Device Center. 'unpaired' = TERMINAL auth
           // rejection (the peer removed our pairing — renderer copy: "已被对方解除配对,请重新配对");
-          // 'oversized-segment' = TERMINAL wire-cap violation (Wave-B P2-4); 'hibernating' = past
+          // 'oversized-segment' = TERMINAL wire-cap violation (Wave-B P2-4); 'flush-stalled' =
+          // FLUSH_STALL_BUDGET consecutive flush-failed rounds (the peer keeps dropping our
+          // push and the snapshot recovery is not converging); 'hibernating' = past
           // the dial-failure budget (10min retries); 'error' = recent failure.
           const peerState = unpairedBy.has(p.deviceId) ? 'unpaired'
             : oversizedSegmentBy.has(p.deviceId) ? 'oversized-segment'
-              : (failStreakBy.get(p.deviceId) || 0) >= DIAL_FAILURE_BUDGET ? 'hibernating'
-                : errorBy.has(p.deviceId) ? 'error' : 'ok'
+              : (flushStallBy.get(p.deviceId) || 0) >= FLUSH_STALL_BUDGET ? 'flush-stalled'
+                : (failStreakBy.get(p.deviceId) || 0) >= DIAL_FAILURE_BUDGET ? 'hibernating'
+                  : errorBy.has(p.deviceId) ? 'error' : 'ok'
           return {
             ...p,
             // Round-2 P1: the renderer reads p.deviceName — the raw peer record only carries
@@ -1162,6 +1207,9 @@ function createLanSyncNode(opts) {
             // P1-3: earliest ms epoch this peer will be dialed again (backoff/hibernate window);
             // null = dialable now. Device Center can render "retrying in Xs" from it.
             nextDialAt: dialNotBefore.get(p.deviceId) || null,
+            // Push-side watermark (deviceId -> highest seq this peer acked). NOTE: the
+            // stalled-push finding report cited this line as 1142 — line numbers drift;
+            // reference getStatus().peers[].watermark by name instead.
             watermark: wm,
             // Pull-side watermark: the sender cursor I recorded after my last COMPLETE snapshot
             // from this peer (increments carry it forward between snapshots via the trigger).
