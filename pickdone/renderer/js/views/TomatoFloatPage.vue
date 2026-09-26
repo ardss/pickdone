@@ -109,7 +109,7 @@
  *  Top-right mini buttons: minimize / close (abandon + reset) / ⋮ task menu (picking a task only attaches it without starting; can rebind at any phase).
  *  The ⋮ menu and abandon dialog share the "temporarily enlarged window" mechanism; the browser debug host uses widget-preview (class-name enlargement).
  *  Note: never pop a native dialog on a transparent frameless window — Windows will paint a system title bar onto the host window. */
-import { formatMMSS } from '../utils/tomatoShared.js'
+import { formatMMSS, focusedElapsedSec } from '../utils/tomatoShared.js'
 import { NOISES } from '../utils/mediaRegistry.js'
 import { remainSecOfAnnounce } from '../store/helpers/tomatoAnnounceShared.js'
 
@@ -128,6 +128,9 @@ export default {
       abandonReason: '',
       menuOpen: false,
       noiseOpen: false,
+      // Wall-clock tick refreshed by the 500ms loop; Date.now() inside a computed is not reactive,
+      // so displayClock needs a data field to re-derive the "focused for" forward count
+      now: Date.now(),
       preview: isPreviewHost()
     }
   },
@@ -158,7 +161,7 @@ export default {
        quantity (this focus session) as live data instead of repeating it in static small text */
     displayClock () {
       if (this.abandoning && this.working && this.st && this.st.startedAt) {
-        return formatMMSS(Math.max(0, Math.floor((this.now - this.st.startedAt) / 1000)))
+        return formatMMSS(focusedElapsedSec(this.st.startedAt, this.now))
       }
       return this.clock
     },
@@ -228,6 +231,7 @@ export default {
       if (window.todoAPI && window.todoAPI.showMainFromFloat) window.todoAPI.showMainFromFloat()
     },
     refresh () {
+      this.now = Date.now()
       this.st = this.read()
       // P1-6 (2026-09-19 UX review): the announce getter caches on store state and Date.now() is
       // not reactive — dispatch the store prune on this 500ms tick so a peer that crashed

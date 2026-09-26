@@ -142,7 +142,13 @@ export default {
       return r.rest > 0 ? (start + ' – ' + hm(Number(r.endTime) + r.rest * 60000)) : start
     },
     // FMT.date 为 YYYY-MM-DD 全格式时缩写 MM-DD;原 slice(0,5)==='20' 恒假(2026-09-05 终审 P2 修复)
-    fmtDate (r) { return dayjs(Number(r.endTime)).format(FMT.date === 'YYYY-MM-DD' ? 'MM-DD' : FMT.date) },
+    // Cross-year records keep the full format: only current-year rows abbreviate to MM-DD —
+    // dropping the year from previous years' ledger entries made the history ambiguous (2026-09-27)
+    fmtDate (r) {
+      const d = dayjs(Number(r.endTime))
+      if (FMT.date !== 'YYYY-MM-DD') return d.format(FMT.date)
+      return d.year() === dayjs().year() ? d.format('MM-DD') : d.format('YYYY-MM-DD')
+    },
     toggleEdit (r) {
       if (this.editingId === r.tomatoId) { this.editingId = null; this.draft = null; return }
       this.editingId = r.tomatoId
@@ -167,11 +173,20 @@ export default {
           if (e !== 'cancel' && e !== 'close') this.$message.error(this.$t('statsK.TomatoAccount.deleteFailed'))
         })
     },
+    // Manual-add draft anchored at "now": the old Math.max(25, minutes-of-day) floor booked a
+    // future interval before 00:25 (at 00:05 the "completed" focus ended 20 minutes ahead).
+    // Clamp the duration to the elapsed part of the day instead — early-morning adds get a
+    // shorter duration, never a future one.
+    manualDraft (hours, minutes) {
+      const endMin = hours * 60 + minutes
+      const dur = Math.min(25, Math.max(1, endMin))
+      return { startMin: Math.max(0, endMin - dur), dur }
+    },
     openAdd () {
       const now = new Date()
-      const nowMin = Math.max(25, now.getHours() * 60 + now.getMinutes())
+      const { startMin, dur } = this.manualDraft(now.getHours(), now.getMinutes())
       this.editingId = null
-      this.draft = { create: true, startMin: nowMin - 25, dur: 25, rest: 5, abandoned: false }
+      this.draft = { create: true, startMin, dur, rest: 5, abandoned: false }
     },
     saveCreate () {
       const d = this.draft

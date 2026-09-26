@@ -43,6 +43,7 @@
           <i v-for="h in calWeekHeaders" :key="'h'+h" class="ds-cal-h">{{h}}</i>
           <button v-for="c in calCells" :key="c.key"
                   class="ds-cal-cell" :class="{out:!c.inMonth, today:c.isToday, sel:c.isSel}"
+                  :title="calCellLabel(c)" :aria-label="calCellLabel(c)"
                   @click="pickDay(c.key)">
             <b>{{c.n}}</b>
             <i v-if="c.hasTasks" class="ds-cal-dot"></i>
@@ -162,6 +163,9 @@ export default {
         hasTasks: this.taskDays.has(ts)
       }
     },
+    // Day cells announce the full date — a bare number gives screen-reader users no month context
+    // (the adjacent nav buttons already carry title + aria-label)
+    calCellLabel (c) { return dayjs(c.key).format('YYYY-MM-DD') },
     pickDay (ts) {
       store.commit('ui/setDaySelected', ts)
       this.showCal = false

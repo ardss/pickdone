@@ -41,6 +41,12 @@
         {{ $t('statsE.SearchView.truncatedNotice', { shown: results.length, n: matched.length }) }}
       </div>
 
+      <!-- Undated rows can never satisfy an explicit date range; say so instead of silently dropping them -->
+      <div v-if="undatedHidden" class="search-undated" role="note">
+        {{ $t('statsC.Search.undatedHidden', { n: undatedHidden }) }}
+        <el-button type="text" size="small" @click="patch('searchDateRange','')">{{ $t('statsC.Search.clearDateRange') }}</el-button>
+      </div>
+
       <!-- reference: todo-list-empty structure -->
       <empty-state v-if="!results.length" inline><template #text>{{ q ? $t('statsC.Search.notFound', { q }) : $t('statsC.Search.empty') }}</template></empty-state>
     </div>
@@ -137,11 +143,23 @@ export default {
         .concat(this.$store.state.category.list.filter(c => !c.delete)
           .map(c => ({ value: String(c.categoryId), label: c.categoryName })))
     },
-    matched () {
+    matched () { return this.matchTasks().list },
+    // Undated tasks excluded by the active date range (they can never satisfy it: both dayStart
+    // and todoTime are absent). Surfaced as a hint instead of a silent drop; 0 when no range is set.
+    undatedHidden () {
+      return this.settings.searchDateRange ? this.matchTasks().undatedHidden : 0
+    },
+    // Render list is capped at 200 for DOM cost, but the count reflects the real total
+    results () { return this.matched.slice(0, 200) }
+  },
+  mounted () { this.$refs.inp && this.$refs.inp.focus() },
+  methods: {
+    // Shared match pipeline for matched/undatedHidden so the exclusion count and the result list
+    // can never disagree (computed twice per render at most; the pool is small and matchTodo is cheap)
+    matchTasks () {
       const pool = [...this.$store.state.todo.todoList]
       const st = this.settings
       const range = st.searchDateRange
-      // Range semantics aligned with the reference searchResultList getter
       let fromTs = null; let toTs = null
       const today = +dayjs().startOf('day')
       switch (range) {
@@ -151,6 +169,7 @@ export default {
         case 'year': fromTs = +dayjs(today).subtract(365, 'days').startOf('day'); toTs = +dayjs(today).endOf('day'); break
         default: break
       }
+      let undated = 0
       const list = pool.filter(t => {
         if (!matchTodo(t, this.q)) return false
         if (st.searchComplete === 'undone' && t.complete) return false
@@ -158,20 +177,16 @@ export default {
         if (st.searchCategory && String(st.searchCategory) !== '' && String(t.categoryId) !== String(st.searchCategory)) return false
         if (fromTs !== null) {
           const ds = t.dayStart || t.todoTime || 0
-          if (!ds || ds < fromTs || ds > toTs) return false
+          if (!ds) { undated++; return false }
+          if (ds < fromTs || ds > toTs) return false
         }
         return true
       })
       // Sort unconditionally: empty-keyword browse (filters only) must keep the same newest-first
       // order as keyword search, otherwise ticking a filter reorders the whole list unexpectedly
       list.sort((a, b) => b.todoTime - a.todoTime) // reference: sort((a,b)=>b.todoTime-a.todoTime)
-      return list
+      return { list, undatedHidden: undated }
     },
-    // Render list is capped at 200 for DOM cost, but the count reflects the real total
-    results () { return this.matched.slice(0, 200) },
-  },
-  mounted () { this.$refs.inp && this.$refs.inp.focus() },
-  methods: {
     hl (t) { return highlightHTML(t, this.q) },
     esc (s) { return escapeHtml(s) },
     resetFilter () { // reference resetFilter: zero out the three options then re-search
@@ -190,4 +205,5 @@ export default {
 </script>
 <style>.result-count{color:var(--text-3);font-size: var(--fs-sm);line-height:28px;white-space:nowrap}
 .search-truncated{color:var(--text-3);font-size: var(--fs-sm);line-height:32px;text-align:center;padding:6px 0}
+.search-undated{color:var(--text-3);font-size: var(--fs-sm);line-height:32px;text-align:center;padding:0 0 6px}
 </style>

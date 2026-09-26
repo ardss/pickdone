@@ -74,6 +74,8 @@ export default {
       resetFilter: '重置筛选',
       resultCount: '共 {n} 条',
       notFound: '{q} 没有找到相关日程',
+      undatedHidden: '{n} 条无日期任务被日期筛选隐藏',
+      clearDateRange: '清除日期范围',
       empty: '暂无日程'
     },
     TodoBox: {

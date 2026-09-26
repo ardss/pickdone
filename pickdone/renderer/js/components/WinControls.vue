@@ -37,11 +37,21 @@ export default {
       window.todoAPI.isMaximized().then(v => { this.maxed = !!v }).catch(() => {})
     },
     close () { window.todoAPI.closeRequest() },
-    onDblClick () { this.toggleMax() }
+    onDblClick () { this.toggleMax() },
+    /* Coalesce resize bursts: window dragging/resizing fires `resize` dozens of times per second and
+       each one used to cost a full async isMaximized IPC round-trip just to toggle a cosmetic
+       max/restore icon. One trailing poll per ~150ms burst is visually indistinguishable. */
+    scheduleMaxPoll () {
+      if (this._maxTimer) return
+      this._maxTimer = setTimeout(() => {
+        this._maxTimer = null
+        window.todoAPI.isMaximized().then(v => { this.maxed = !!v }).catch(() => {})
+      }, 150)
+    }
   },
   mounted () {
     window.todoAPI.isMaximized().then(v => { this.maxed = !!v }).catch(() => {})
-    this._onMax = () => window.todoAPI.isMaximized().then(v => { this.maxed = !!v })
+    this._onMax = () => this.scheduleMaxPoll()
     window.addEventListener('resize', this._onMax)
     // focus-visible 恢复:启动首帧初始焦点常落在最小化钮上,直接开 outline 会在标题栏凭空亮一个框。
     // 规避:默认抑制;用户一旦用键盘(Tab/方向键等)切换焦点即进入 key 模式启用 outline,mouse 活动则回到抑制。
@@ -58,6 +68,7 @@ export default {
     window.addEventListener('pointerdown', this._onMouse, true)
   },
   beforeUnmount () {
+    if (this._maxTimer) { clearTimeout(this._maxTimer); this._maxTimer = null }
     window.removeEventListener('resize', this._onMax)
     window.removeEventListener('keydown', this._onFirstKey, true)
     window.removeEventListener('pointerdown', this._onMouse, true)

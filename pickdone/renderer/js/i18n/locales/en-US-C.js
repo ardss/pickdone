@@ -74,6 +74,8 @@ export default {
       resetFilter: 'Reset filters',
       resultCount: '{n} items',
       notFound: '{q} - no matching events',
+      undatedHidden: '{n} undated tasks hidden by the date filter',
+      clearDateRange: 'Clear date range',
       empty: ' No events '
     },
     TodoBox: {
