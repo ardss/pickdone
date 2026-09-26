@@ -57,7 +57,10 @@
         <div class="form-item__control"><button class="danger-btn" @click="restoreFromBackup">{{ $t('statsE.SettingsModal.restoreEllipsis') }}</button></div></div>
       <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.autoRestoreLabel') }}</span>
         <div class="form-item__control" style="display:flex;gap:8px">
-          <el-select size="small" v-model="autoBackupPick" filterable style="max-width:260px" @focus="loadAutoBackupList" @visible-change="v => v && loadAutoBackupList()">
+          <!-- round3-ux-perf-11: @focus removed — visible-change(true) already refreshes on every
+               dropdown open (the only moment the list renders); focus+visible-change doubled the
+               listAutoBackups IPC per open. -->
+          <el-select size="small" v-model="autoBackupPick" filterable style="max-width:260px" @visible-change="v => v && loadAutoBackupList()">
             <el-option v-for="f in autoBackupFiles" :key="f" :label="f" :value="f" />
           </el-select>
           <button class="mini" @click="restoreFromAutoBackup">{{ $t('statsE.SettingsModal.autoRestoreBtn') }}</button>
