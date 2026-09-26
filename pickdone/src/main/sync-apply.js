@@ -245,15 +245,15 @@ function hydrateRow (state, ptr, cache) {
       return { ...base, updatedAt: cat.updatedAt || ptr.ts, deleted: false, deletedAt: 0, data: cat }
     }
     if (ptr.entity === 'plan' || ptr.entity === 'filter') {
-    // Manifest-documented plan/filter hydration (TOMB_FALLBACK_LOOKUP): identical shape, differing
-    // only in the cache keys — live row first, tombstone-aware fallback. M3: a pointer for a locally
-    // deleted chip/filter hydrates from its tombstone read with its real age so the deletion (not a
-    // fake ptr.ts age) participates in egress LWW. F3a/F3b (2026-09-20): planAll/filterList now
-    // SELECT updatedAt — use the chip's real age so LWW works.
+    // Manifest-documented plan/filter hydration (TOMB_FALLBACK_LOOKUP): identical shape, differing only in the cache
+    // keys — live row first, tombstone fallback. M3: a locally deleted chip/filter hydrates from its tombstone read
+    // with its real age so the deletion (not a fake ptr.ts age) participates in egress LWW. F3a/F3b (2026-09-20):
+    // planAll/filterList now SELECT updatedAt — use the chip's real age so LWW works.
     const keys = TOMB_FALLBACK_LOOKUP[ptr.entity]
     const p = c[keys.live](ptr.entityId) || c[keys.tomb](ptr.entityId)
     if (!p) return { ...base, deleted: true, deletedAt: ptr.ts, data: null }
-    if (p.deleted) return { ...base, updatedAt: p.updatedAt || ptr.ts, deleted: true, deletedAt: p.deletedAt || ptr.ts, data: null }
+    // Tomb reads carry no `deleted` col (only deletedAt) — `p.deleted` never fired, so locally deleted chips hydrated LIVE (deletion never propagated).
+    if (p.deleted || p.deletedAt) return { ...base, updatedAt: p.updatedAt || ptr.ts, deleted: true, deletedAt: p.deletedAt || ptr.ts, data: null }
     return { ...base, updatedAt: p.updatedAt || ptr.ts, deleted: false, deletedAt: 0, data: p }
   }
   } catch (e) { log.warn('[LanSync] hydrate failed for', ptr.entity, ptr.entityId, e.message) }
