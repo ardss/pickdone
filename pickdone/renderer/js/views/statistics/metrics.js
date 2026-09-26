@@ -76,7 +76,10 @@ export function windowCounts (todos, records, catNameOf, start, end, taskById) {
     if (r.succeed === false) {
       giveUps++
       const reason = (r.abandonReason || '').trim()
-      if (reason) giveupNotes.push({ label: dayjs(endTs).format('MM/DD'), text: reason })
+      // key: stable per-source-record id (round3-ux-perf-finding-14) - the give-up list in
+      // StatisticsView keys on it so re-computed windows patch rows instead of re-patching all
+      // subsequent rows on removal (index keys). Falls back to label+text if the record has no id.
+      if (reason) giveupNotes.push({ key: String(r.tomatoId || (dayKey(endTs) + '\u0000' + reason)), label: dayjs(endTs).format('MM/DD'), text: reason })
       continue
     }
     const mins = r.focusDuration || 0

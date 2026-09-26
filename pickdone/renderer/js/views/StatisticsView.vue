@@ -154,7 +154,7 @@
             <div v-if="metrics.giveupNotes.length" class="tl-card">
               <div class="tl-head"><b>{{ $t('statsA.StatisticsView.giveupCardTitle') }}</b><span class="tl-sub">{{ $t('statsA.StatisticsView.giveupCardSub') }}</span></div>
               <ul class="review-card__list">
-                <li v-for="(n, i) in metrics.giveupNotes" :key="i">
+                <li v-for="n in metrics.giveupNotes" :key="n.key">
                   <span class="review-dot" aria-hidden="true"></span>
                   <span>{{ n.label }} · {{ n.text }}</span>
                 </li>

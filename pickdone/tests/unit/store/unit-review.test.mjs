@@ -178,15 +178,17 @@ test('buildReviewMetrics: give-up notes collect non-empty abandon reasons with d
   const now = dayjs()
   const start = +now.startOf('isoWeek').subtract(7, 'day')
   const records = [
-    record({ endTime: start + 9 * 3600000, succeed: false, abandonReason: '被会议打断' }),
-    record({ endTime: start + 10 * 3600000, succeed: false, abandonReason: '  ' }), // blank reason not recorded
-    record({ endTime: start + 11 * 3600000, succeed: false }) // no reason field not recorded
+    record({ tomatoId: 'gk1', endTime: start + 9 * 3600000, succeed: false, abandonReason: '被会议打断' }),
+    record({ tomatoId: 'gk2', endTime: start + 10 * 3600000, succeed: false, abandonReason: '  ' }), // blank reason not recorded
+    record({ tomatoId: 'gk3', endTime: start + 11 * 3600000, succeed: false }) // no reason field not recorded
   ]
   const m = buildReviewMetrics({ todos: [], records, catNameOf }, thisWeek(now))
   assert.equal(m.giveUps, 3)
   assert.equal(m.giveupNotes.length, 1)
   assert.equal(m.giveupNotes[0].text, '被会议打断')
   assert.match(m.giveupNotes[0].label, /^\d{2}\/\d{2}$/)
+  // Stable per-record key (round3-ux-perf-finding-14): the view must not key these rows by index
+  assert.equal(m.giveupNotes[0].key, 'gk1')
 })
 
 test('buildReviewMetrics: cross-metric days (focus≥25min counts as a focus day)', () => {
