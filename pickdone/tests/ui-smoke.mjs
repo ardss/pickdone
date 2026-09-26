@@ -340,9 +340,15 @@ const tomatoBackup = await evalJson(`JSON.stringify((${STORE_Q}) ? (${STORE_Q}).
 const tStart = Date.now() - 25 * 60000 - 3000 // a 25-minute focus that expired 3 seconds ago
 // Note: cannot modify localStorage directly (the running app writes its in-memory state back; race) - write via a store patch along the app's own path
 await evalJson(`(${STORE_Q}).commit('tomato/patch',{status:'startTomatoTime',startedAt:${tStart},tomatoTime:25,restTime:5,attachTodo:null,_paused:false})`)
-// Poll for the shared tick to take effect (1s tick period, ~8s polling cap; avoids fixed sleeps suffering scheduler jitter)
-const pollFor = async (expr, tries = 14, gap = 600) => { for (let i = 0; i < tries; i++) { await sleep(gap); const v = await evalJson(expr); if (v) return v } return null }
-const tickState = await pollFor(`(()=>{const st=(${STORE_Q});if(!st)return false;const s=st.state.tomato;if(s.status!=='startRestTime')return false;const last=(s.tomatoRecordList||[])[0]||{};return {status:s.status,count:s.todayTomatoCount,recId:last.tomatoId,recOk:last.succeed,recs:(s.tomatoRecordList||[]).length}})()`)
+// Poll for the shared tick to take effect (1s tick period; avoids fixed sleeps suffering scheduler jitter).
+// 120s cap (2026-09-26 check:all red): under full check:all pool saturation the completion's single
+// IPC await inside completeFocus (getById attach re-validation) was measured stretching to ~70s
+// (3 live stages + 2 unit walls on a saturated box); the previous ~8s cap measured our test
+// harness's latency budget, not the tick contract. The contract under test is "the shared tick
+// eventually flips + books exactly once" — idempotency (claim token + deterministic id) makes the
+// longer wait assertion-identical, only the latency budget changes.
+const pollFor = async (expr, tries, gap = 600) => { for (let i = 0; i < tries; i++) { await sleep(gap); const v = await evalJson(expr); if (v) return v } return null }
+const tickState = await pollFor(`(()=>{const st=(${STORE_Q});if(!st)return false;const s=st.state.tomato;if(s.status!=='startRestTime')return false;const last=(s.tomatoRecordList||[])[0]||{};return {status:s.status,count:s.todayTomatoCount,recId:last.tomatoId,recOk:last.succeed,recs:(s.tomatoRecordList||[]).length}})()`, 200)
 ok('expired focus auto-flips into rest', tickState && tickState.status === 'startRestTime', JSON.stringify(tickState))
 ok('auto-books a succeed record', tickState && tickState.recOk === true && tickState.recId === 'tmt_f_' + tStart, JSON.stringify(tickState))
 const recsAfterFlip = tickState ? tickState.recs : -1
@@ -352,9 +358,10 @@ ok('tick is idempotent and does not double-book', tickState2 && tickState2.recs 
 // Fast-forward rest expiry -> auto reset
 const rStart = Date.now() - 5 * 60000 - 2000
 await evalJson(`(${STORE_Q}).commit('tomato/patch',{status:'startRestTime',startedAt:${rStart},restTime:5})`)
-// 30s cap: the smoke window is unfocused, so Chromium throttles its timers — the 1s shared tick
-// can legitimately lag; the contract under test is "rest eventually auto-resets", not its latency.
-const restDone = await pollFor(`(()=>{const st=(${STORE_Q});return st&&st.state.tomato.status==='default'?'default':false})()`, 50, 600)
+// 90s cap: same saturation-latency reasoning as the flip poll above — the smoke window is unfocused,
+// so Chromium throttles its timers and the 1s shared tick can legitimately lag; the contract under
+// test is "rest eventually auto-resets", not its latency.
+const restDone = await pollFor(`(()=>{const st=(${STORE_Q});return st&&st.state.tomato.status==='default'?'default':false})()`, 150, 600)
 ok('rest expiry auto-resets', restDone === 'default', String(restDone))
 // Restore the scene: put the pomodoro state back, avoiding pollution of real data (Vue3 path: appUI.$store; globalProperties fallback)
 await evalAwait(`(function(){ const s=(window.appUI&&window.appUI.$store)||(function(){const a=document.getElementById('app').__vue_app__;return a.config.globalProperties.$store})(); s.commit('tomato/patch', JSON.parse(${JSON.stringify(tomatoBackup) || "'{}'"})); return 'ok' })()`)
