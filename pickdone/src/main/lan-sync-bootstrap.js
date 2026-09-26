@@ -509,27 +509,18 @@ async function stopSync () {
   // the server close, which quiesces in-flight rounds), THEN tear down the engine.
   try { await n.stop() } catch (e) { log.warn('[LanSync] stop failed:', e.message) }
   // Round-3 stability (2026-09-26): the in-flight quit round's peer acks landed in
-  // state.peerWatermarks AFTER the last runRound persist — flushing only the security ring
-  // let quit-time watermark confirmations die with the process (next start re-pushes one
-  // redundant idempotent delta per affected peer). Persist now, while the handle is still
-  // open; stop() already quiesced in-flight rounds, so this is the settle point.
+  // state.peerWatermarks AFTER the last runRound persist — flushing only the security ring let
+  // quit-time watermark confirmations die with the process. Persist here while the handle is open.
   try { persistPeerWatermarks() } catch (e) { log.warn('[LanSync] watermark flush on stop failed:', e.message) }
   state.engine = null
   state.applyCache = null
   log.info('[LanSync] node stopped')
 }
 
-/** Quit-chain hook (src/main/index.js will-quit flushNow): stop the node + round timers so they
- *  never outlive the DB handle. Returns the stop promise so the quit chain can AWAIT it before
- *  dbm.close() — the settle-point persists above (security ring + watermarks) must beat the
- *  close or they are lost. Callers that do not await keep working (promise is best-effort). */
+/** Quit-chain hook (src/main/index.js will-quit flushNow): stop the node + round timers so they never
+ *  outlive the DB handle. Returns the stop promise so the quit chain can AWAIT it before dbm.close() — the settle-point persists above must beat the close. */
 function stopSyncForQuit () {
-  try {
-    if (state && state.node) {
-      const p = stopSync().catch(() => {})
-      return p
-    }
-  } catch { /* sync never initialized */ }
+  try { if (state && state.node) return stopSync().catch(() => {}) } catch { /* sync never initialized */ }
 }
 
 /* R7-B P2: the quit-time idle announce used to be written then killed by stopSyncForQuit

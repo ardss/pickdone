@@ -67,7 +67,7 @@ try {
 let tray = null
 const state = { quitByUser: false } // shared with windows.js close handler (was a module var in the pre-split index.js)
 
-const { readConfig, writeConfig, consumeQuarantineNotice } = require('./config-store')
+const { readConfig, writeConfig } = require('./config-store')
 
 // Submodules like scheduler/notify-sound get the main window via window-ref, avoiding a reverse require('./index') dependency
 const windowRef = require('./window-ref')
@@ -268,8 +268,7 @@ function watchDbForExternalWrites () {
       let at = 0
       if (rawS) { doc = JSON.parse(rawS); at = (doc && doc._savedAt) || 0 }
       try {
-        // Round-3 perf (2026-09-26): identical watermark via one MAX aggregate instead of
-        // settingsRowsAll + per-row JSON.parse (this tick runs ~4x/sec for the app's lifetime).
+        // Round-3 perf (2026-09-26): identical watermark via one MAX aggregate (tick runs ~4x/sec).
         const maxRow = Number(dbm.call('settingsRowsMaxUpdated')) || 0
         if (maxRow > at) at = maxRow
       } catch { /* rows unavailable (legacy lib) → fall back to the _savedAt-only watermark */ }
@@ -298,11 +297,9 @@ function watchDbForExternalWrites () {
     clearTimeout(debounce)
     debounce = setTimeout(() => {
       try {
-        // Round-3 stability (2026-09-26): the quit chain arms ext-watch-gate BEFORE the flush
-        // window, but a kick scheduled within the 150ms debounce just before arm fires INSIDE
-        // the window — where the un-gated forwardTomatoCmd could consume a CLI command slot
-        // whose resulting write lands after dbm.close() (same permanent-loss class C11 fixed
-        // for ticks). Gate the flush body, not just the tick.
+        // Round-3 stability (2026-09-26): a kick scheduled within the 150ms debounce just before
+        // ext-watch-gate arms fires INSIDE the flush window — the un-gated forwardTomatoCmd could
+        // consume a CLI command slot whose write lands after dbm.close() (same C11 loss class).
         if (!extWatchGate.canPoll()) return
         scheduler.reloadAll(dbApi())
         broadcastTodosChanged('external-db-write')
@@ -350,8 +347,7 @@ function watchDbForExternalWrites () {
   resyncDbWatch = () => { lastMtime = nextWatchBaseline(lastMtime, readWatchMtime) }
   // P2 2026-09-11: fs.watchFile never unwatched — poll timers kept the quit chain alive/lint-y; release them on quit
   stopDbWatch = () => {
-    // Round-3 stability (2026-09-26): a pending 150ms debounce kick survived the unwatch and
-    // fired against the closed DB handle (error swallowed as a warn). Clear it first.
+    // Round-3 stability (2026-09-26): a pending debounce kick survived the unwatch and fired against the closed DB handle. Clear it first.
     try { clearTimeout(debounce) } catch {}
     try { fs.unwatchFile(dbFile, onChange) } catch {}
     try { fs.unwatchFile(walFile, onChange) } catch {}
@@ -443,9 +439,8 @@ function rebuildTrayMenu () {
 
 /* ================= Single-instance lock & startup ================= */
 if (!app.requestSingleInstanceLock()) { app.quit() } else {
-  // Round-3 stability (2026-09-26): show() deferred until whenReady resolves when the event
-  // arrives during the cold-start init chain — new BrowserWindow before ready hard-throws and
-  // surfaced as a crash dialog on a plain double launch (see second-instance-gate.js).
+  // Round-3 stability (2026-09-26): show() deferred until whenReady during cold-start init — a
+  // BrowserWindow before ready hard-throws (see second-instance-gate.js).
   require('./second-instance-gate').wireSecondInstance(app, () => { showMainOrLock() })
 
   app.whenReady().then(() => {
@@ -618,23 +613,8 @@ if (!app.requestSingleInstanceLock()) { app.quit() } else {
     // Global shortcuts (shortcut settings stored in config.json)
     applyShortcuts(readConfig().shortcutKeySettings)
 
-    // Round-3 stability (2026-09-26): if this startup quarantined a corrupt config.json (renamed
-    // to config.json.bad), the user must know: settings reset for this session and the security
-    // lock is disabled until re-enabled. Notice-only — the fail-open semantics are unchanged.
-    try {
-      if (consumeQuarantineNotice()) {
-        const { Notification, dialog } = require('electron')
-        const body = 'Your config file (config.json) was corrupted and could not be read. ' +
-          'The previous file was preserved as config.json.bad. Settings are reset for this session ' +
-          'and the security lock is disabled until you re-enable it.'
-        log.warn('[App] config.json was corrupted and quarantined as config.json.bad; security lock disabled until re-enabled')
-        let shown = false
-        try {
-          if (Notification.isSupported()) { new Notification({ title: 'PickDone', body }).show(); shown = true }
-        } catch { /* fall through to the non-modal dialog */ }
-        if (!shown) dialog.showMessageBox(win, { type: 'warning', title: 'PickDone', message: body, buttons: ['OK'] }).catch(() => {})
-      }
-    } catch (e) { log.warn('[App] quarantine notice failed:', e && e.message) }
+    // Round-3 stability (2026-09-26): surface a quarantined corrupt config.json to the user (notice-only)
+    require('./quarantine-notice').showQuarantineNotice(win, log)
 
     // Security lock: when enabled the main process takes over — hide the main window and pop a standalone lock screen (aligned with the reference enableSecurityLock)
     if (readConfig().enableSecurityLock) {
@@ -763,11 +743,10 @@ app.on('will-quit', (event) => {
     try { shortcuts.unregisterAll() } catch {}
     // Persist the reminder dedup ledger synchronously (quitting inside the 60s debounce window → reminders resent after restart) + close the db handle (avoids losing one checkpoint and late handle release on Windows)
     try { scheduler.flushFiredNow() } catch {}
-    // R7-B P2: the sync node (and its in-flight quit-announce round) stops here — after the
-    // flush window gave the round its runway, before the DB handle closes.
-    // Round-3 stability (2026-09-26): AWAIT the stop — the settle-point persists (security ring
-    // + peer watermarks) run via db.call and must beat dbm.close(); fire-and-forget lost the
-    // in-flight round's watermark confirmations. Both flushNow callers ignore the return value.
+    // R7-B P2: the sync node stops here — after the flush window, before the DB handle closes.
+    // Round-3 stability (2026-09-26): AWAIT the stop — the settle-point persists (security ring +
+    // peer watermarks) run via db.call and must beat dbm.close(); fire-and-forget lost the
+    // in-flight round's watermark confirmations.
     try { await require('./lan-sync-bootstrap').stopSyncForQuit() } catch { /* sync never initialized */ }
     try { if (dbm && dbm.close) dbm.close() } catch {}
     flushDone = true

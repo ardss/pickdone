@@ -212,9 +212,8 @@ CREATE TABLE IF NOT EXISTS tomato_records (
   updatedAt     INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_tomato_records_date ON tomato_records (dateKey);
--- Round-3 perf (2026-09-26): tomatoAll reads 'WHERE deleted = 0 ORDER BY endTime DESC' on every
--- ledger-write reload — without this index that is a full SCAN + TEMP B-TREE sort. The index turns
--- it into an ordered index search; row order is unchanged (same ORDER BY semantics).
+-- Round-3 perf (2026-09-26): tomatoAll's 'WHERE deleted = 0 ORDER BY endTime DESC' reload scan
+-- becomes an ordered index search (same row order).
 CREATE INDEX IF NOT EXISTS idx_tomato_records_endtime ON tomato_records (deleted, endTime);
 -- Change-capture log (P1 sync groundwork 2026-09-15): one row per successful write op, appended in
 -- call() next to the ledger hook. Ring-buffered (see appendOplog); consumers read deltas via the
@@ -1106,12 +1105,10 @@ function call (op, params) {
   const r = fn(params)
   if (ledgerChangedHook && !ledgerHookSuppressCount && LEDGER_WRITE_OPS.has(op)) { try { ledgerChangedHook(op) } catch { /* 广播失败不阻断落库 */ } }
   if (op !== 'commitSyncBatch' && WRITE_OPS.has(op)) {
-    // Round-3 stability (2026-09-26): oplogEntriesFor runs real SQL for a few ops
-    // (planMoveTask/planDeleteTask/planDeleteTaskDay) OUTSIDE appendOplog's try/catch — a
-    // throw there (closed/re-init handle) rejected the caller's invoke for an ALREADY-COMMITTED
-    // write, violating appendOplog's declared contract ("oplog append failed, write itself is
-    // unaffected"). The delta row was lost either way (never inserted); now the outcome is
-    // success + warn instead of error-on-committed-write. Happy path identical.
+    // Round-3 stability (2026-09-26): oplogEntriesFor runs real SQL for a few ops (planMoveTask/
+    // planDeleteTask/planDeleteTaskDay) outside appendOplog's try/catch — a throw there (closed or
+    // re-init handle) rejected the caller's invoke for an ALREADY-COMMITTED write, violating
+    // appendOplog's contract; the delta row was lost either way. Now success + warn, happy path identical.
     try { oplog.appendOplog(oplog.oplogEntriesFor(op, params, r)) } catch (e) { log.warn('[TodoDB] oplog capture failed (write itself is unaffected):', e && e.message) }
   }
   return r
