@@ -1105,7 +1105,15 @@ function call (op, params) {
   if (!fn) throw new Error('[TodoDB] 未知操作: ' + op)
   const r = fn(params)
   if (ledgerChangedHook && !ledgerHookSuppressCount && LEDGER_WRITE_OPS.has(op)) { try { ledgerChangedHook(op) } catch { /* 广播失败不阻断落库 */ } }
-  if (op !== 'commitSyncBatch' && WRITE_OPS.has(op)) oplog.appendOplog(oplog.oplogEntriesFor(op, params, r))
+  if (op !== 'commitSyncBatch' && WRITE_OPS.has(op)) {
+    // Round-3 stability (2026-09-26): oplogEntriesFor runs real SQL for a few ops
+    // (planMoveTask/planDeleteTask/planDeleteTaskDay) OUTSIDE appendOplog's try/catch — a
+    // throw there (closed/re-init handle) rejected the caller's invoke for an ALREADY-COMMITTED
+    // write, violating appendOplog's declared contract ("oplog append failed, write itself is
+    // unaffected"). The delta row was lost either way (never inserted); now the outcome is
+    // success + warn instead of error-on-committed-write. Happy path identical.
+    try { oplog.appendOplog(oplog.oplogEntriesFor(op, params, r)) } catch (e) { log.warn('[TodoDB] oplog capture failed (write itself is unaffected):', e && e.message) }
+  }
   return r
 }
 
