@@ -6,6 +6,8 @@
 export const DEFAULT_VIEWS = () => ({
     todayTodoList: [],
     todayDoneList: [],
+    todayXNext: [], // TodayX "Next" group: today + ALL overdue uncompleted (uncapped, sorted by dayStart/todoTime) — cannot reuse recent.expiredUncompleted (capped by expUncompletedDays)
+    todayXOpen: [], // TodayX "Unscheduled" group: no-date uncompleted, unsorted — always shown, unlike recent.noDate (gated by showNoDate)
     yesterdayTodoList: [],
   calendar: [],
   todoBox: [],
