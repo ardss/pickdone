@@ -478,7 +478,10 @@ if (!app.requestSingleInstanceLock()) { app.quit() } else {
       try { dbm.init(ud) } catch (e2) { reinitErr = e2 }
       let restoredN = 0
       // source is a structured branch flag; display copy must never drive logic (dbRecovery.cjs contract)
-      if (recoveredFrom && recoveredFrom.source === 'json') {
+      // jsonRestoreAllowed gates on the re-init having succeeded: with a dead DB (e.g. the vendor
+      // driver itself cannot load) every busCommit in the restore path throws and the "restore"
+      // rebuilds nothing (2026-09-26 lubancat live catch; gate = dbRecovery.jsonRestoreAllowed).
+      if (dbRecovery.jsonRestoreAllowed(recoveredFrom, reinitErr)) {
         restoredN = restoreTasksFromCriticalBackup(ud)
         // GAP-D fix (2026-09-19): recovery writes go through dbm.call directly with no sync kick —
         // restored rows waited for the periodic round. Boot-time kick is safe: kickSyncRound no-ops

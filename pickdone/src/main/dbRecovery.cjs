@@ -542,4 +542,13 @@ function sweepPendingDeletes (ud, log) {
   return swept
 }
 
-module.exports = { attemptDbRecovery, restoreTasksFromCriticalBackup, writeCriticalStateBackupAtomic, criticalBackupPath, backupJsonParseable, restoreCategoriesFromCriticalBackup, restoreTomatoRecordsFromCriticalBackup, restoreMetaEntriesFromCriticalBackup, quarantineKey, sqliteHeaderOk, encryptedProbe, preflightMigrateResidue, sweepPendingDeletes, recoveryDialogAction, loadVendorDriver }
+/** Pure gate for the startup catch-block: the JSON restore writes through the command bus, so it
+ *  may only run when the re-init actually brought the DB back. When re-init failed too (2026-09-26
+ *  lubancat: the vendor driver itself could not load under Debian 11's glibc), every busCommit in
+ *  the restore path throws ("stmts.upsertMany is not a function") and the "recovery" rebuilds
+ *  nothing while the log pretends an attempt happened. */
+function jsonRestoreAllowed (recoveredFrom, reinitErr) {
+  return !!(recoveredFrom && recoveredFrom.source === 'json' && !reinitErr)
+}
+
+module.exports = { attemptDbRecovery, restoreTasksFromCriticalBackup, writeCriticalStateBackupAtomic, criticalBackupPath, backupJsonParseable, restoreCategoriesFromCriticalBackup, restoreTomatoRecordsFromCriticalBackup, restoreMetaEntriesFromCriticalBackup, quarantineKey, sqliteHeaderOk, encryptedProbe, preflightMigrateResidue, sweepPendingDeletes, recoveryDialogAction, jsonRestoreAllowed, loadVendorDriver }

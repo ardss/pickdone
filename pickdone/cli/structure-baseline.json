@@ -1,6 +1,6 @@
 {
   "src/main/db.js": 1134,
-  "src/main/sync-apply.js": 861,
+  "src/main/sync-apply.js": 928,
   "renderer/js/store/todo.js": 813,
   "renderer/js/components/SideNav.vue": 949,
   "renderer/js/components/EditPanel.vue": 1023,
@@ -8,8 +8,8 @@
   "renderer/js/views/StatisticsView.vue": 868,
   "cli/pickdone.js": 1371,
   "cli/lib.js": 1885,
-  "src/main/lan-sync/index.js": 1203,
-  "src/main/lan-sync-bootstrap.js": 1003,
+  "src/main/lan-sync/index.js": 1251,
+  "src/main/lan-sync-bootstrap.js": 1017,
   "renderer/js/components/settings/SettingsSyncTab.vue": 661,
-  "src/main/index.js": 836
+  "src/main/index.js": 839
 }

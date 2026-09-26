@@ -212,9 +212,18 @@ module.exports = ({ getDb, log }) => {
           const p = arr[i]
           const key = p && p.key != null ? String(p.key) : ''
           if (!key) { rejected.push({ index: i, key: p && p.key != null ? String(p.key) : null, reason: 'key required' }); continue }
-          // R7 P1-1: an explicit updatedAt (sync apply path) preserves the winner's LWW age;
-          // local writers without a stamp keep the now-stamp behavior
-          if (putRow(key, p.value, (p && p.updatedAt) || now)) changed.push(key)
+          // 2026-09-26 poison-row fix: D6 P2 only isolated the MISSING-KEY class — a per-row putRow
+          // THROW (e.g. a value JSON.stringify cannot encode: BigInt / circular) still unwound the
+          // whole transaction and re-threw out of rowPutMany, so the sync flush dropped EVERY row
+          // in the segment, not just the poison one. Failure granularity is per-ROW: catch here,
+          // commit the valid siblings, surface the poisoned one in `rejected`.
+          try {
+            // R7 P1-1: an explicit updatedAt (sync apply path) preserves the winner's LWW age;
+            // local writers without a stamp keep the now-stamp behavior
+            if (putRow(key, p.value, (p && p.updatedAt) || now)) changed.push(key)
+          } catch (e) {
+            rejected.push({ index: i, key, reason: (e && e.message) || String(e) })
+          }
         }
       })
       tr()

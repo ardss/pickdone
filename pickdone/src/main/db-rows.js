@@ -138,7 +138,18 @@ function todoToRow (t) {
     updatedAt: t.updateTime || 0,
     syncTime: t.syncTime || 0,
     scheduledAt: todoTime,
-    scheduledDay: todoTime ? +dayjs(todoTime).startOf('day') : 0,
+    // Echo-stability fix (2026-09-26 first-pair incident): honor a caller-carried dayStart.
+    // This column used to be UNCONDITIONALLY re-derived from todoTime in the WRITING device's
+    // local timezone, so a peer that applied this row recomputed a different day whenever the
+    // two devices' timezones differ; its re-captured echo then content-differed from the
+    // origin forever, and (winning the seq tiebreak, where the local side always reads 0)
+    // binned the origin's own task to the recycle bin on first pair. Renderer/CLI writers keep
+    // dayStart consistent with todoTime (the renderer store re-derives it on every todoTime
+    // patch), and callers that omit it still get the derived value — this only removes the
+    // cross-timezone roundtrip drift on the sync write path.
+    scheduledDay: todoTime
+      ? (Number.isFinite(+t.dayStart) && +t.dayStart > 0 ? +t.dayStart : +dayjs(todoTime).startOf('day'))
+      : 0,
     remindAt: t.reminderTime || 0,
     reminders: packReminders(t.reminderOffsets, t.reminderExtra),
     sort: t.taskSort != null ? t.taskSort : 0,

@@ -1,6 +1,6 @@
 {
   "name": "pickdone",
-  "version": "0.4.0-beta.15",
+  "version": "0.4.0-beta.17",
   "private": true,
   "description": "PickDone — local-first todos, schedule and pomodoro focus desktop app",
   "productName": "PickDone",
@@ -95,6 +95,7 @@
           "lib-tasks.cjs",
           "lib-projects.cjs",
           "lib-attachments.cjs",
+          "lib-settings.cjs",
           "lib-restore-backup.cjs",
           "env-clean.js",
           "import.js",

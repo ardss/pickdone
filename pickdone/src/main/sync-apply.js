@@ -245,15 +245,15 @@ function hydrateRow (state, ptr, cache) {
       return { ...base, updatedAt: cat.updatedAt || ptr.ts, deleted: false, deletedAt: 0, data: cat }
     }
     if (ptr.entity === 'plan' || ptr.entity === 'filter') {
-    // Manifest-documented plan/filter hydration (TOMB_FALLBACK_LOOKUP): identical shape, differing
-    // only in the cache keys — live row first, tombstone-aware fallback. M3: a pointer for a locally
-    // deleted chip/filter hydrates from its tombstone read with its real age so the deletion (not a
-    // fake ptr.ts age) participates in egress LWW. F3a/F3b (2026-09-20): planAll/filterList now
-    // SELECT updatedAt — use the chip's real age so LWW works.
+    // Manifest-documented plan/filter hydration (TOMB_FALLBACK_LOOKUP): identical shape, differing only in the cache
+    // keys — live row first, tombstone fallback. M3: a locally deleted chip/filter hydrates from its tombstone read
+    // with its real age so the deletion (not a fake ptr.ts age) participates in egress LWW. F3a/F3b (2026-09-20):
+    // planAll/filterList now SELECT updatedAt — use the chip's real age so LWW works.
     const keys = TOMB_FALLBACK_LOOKUP[ptr.entity]
     const p = c[keys.live](ptr.entityId) || c[keys.tomb](ptr.entityId)
     if (!p) return { ...base, deleted: true, deletedAt: ptr.ts, data: null }
-    if (p.deleted) return { ...base, updatedAt: p.updatedAt || ptr.ts, deleted: true, deletedAt: p.deletedAt || ptr.ts, data: null }
+    // Tomb reads carry no `deleted` col (only deletedAt) — `p.deleted` never fired, so locally deleted chips hydrated LIVE (deletion never propagated).
+    if (p.deleted || p.deletedAt) return { ...base, updatedAt: p.updatedAt || ptr.ts, deleted: true, deletedAt: p.deletedAt || ptr.ts, data: null }
     return { ...base, updatedAt: p.updatedAt || ptr.ts, deleted: false, deletedAt: 0, data: p }
   }
   } catch (e) { log.warn('[LanSync] hydrate failed for', ptr.entity, ptr.entityId, e.message) }
@@ -489,6 +489,20 @@ function applyRowInner (state, incoming) {
   if (localRow && winner === incoming && !localRow.deleted && !incoming.deleted && !rowContentDiffers(localRow, incoming)) return false
   if (localRow && winner === incoming && localRow.deleted && incoming.deleted &&
       (incoming.deletedAt || 0) <= (localRow.deletedAt || 0)) return false
+  // Echo guard (2026-09-26 first-pair incident): the todo localRow above carries NO seq, so
+  // compareRecency's seq tiebreak always reads local=0 vs the inbound pointer's seq>0 — an
+  // ECHO of this device's own row (the peer applied it, re-captured it into its oplog, pushed
+  // it back) wins every same-updatedAt tie by construction. Whether that tie-win is harmless
+  // then depends entirely on the echo's content surviving the write roundtrip byte-identically
+  // (it could not: todoToRow re-derived scheduledDay in the writer's timezone). A live row that
+  // is NOT strictly newer than the local live row must never replace it nor spawn a conflict
+  // copy of it — refuse and keep local. Real peer edits (strictly newer stamps) still win on
+  // updatedAt before any tiebreak; live-vs-tombstone merges are left to the delete-wins rules.
+  if (entity === 'todo' && localRow && !localRow.deleted && !incoming.deleted &&
+      winner === incoming && stampNum(incoming.updatedAt) <= stampNum(localRow.updatedAt)) {
+    log.warn('[LanSync] same-stamp echo on todo', incoming.id, '— local row stands (an echo is never strictly newer)')
+    return false
+  }
   if (conflictCopy) {
     // Surface the losing edit (merge.mjs contract: the loser is never silently dropped).
     // Round-3 review: materialize it as a TOMBSTONED todo row so the recycle bin can restore
@@ -771,9 +785,52 @@ function consumeAppliedRound (state) {
  * receiver's ack stays BELOW the failed segment (the sender keeps its push watermark, re-pushes)
  * and the snapshot trigger force-arms. A dropped buffer must never be acked as applied.
  */
+// 2026-09-26 poison-row quarantine: meta key prefix for rows a failed bulk flush had to drop.
+// 'sync.*' is machine-local (isMachineLocalMetaKey), so quarantined copies never sync back to
+// the peer — they are a LOCAL recovery surface, not a replay channel.
+const META_FLUSH_QUARANTINE_PREFIX = 'sync.flushQuarantine.'
+// Cap parked entries per op: quarantine is a crash-inspection surface, not a data store; the
+// oplog/snapshot remains the authoritative recovery for large segments.
+const META_FLUSH_QUARANTINE_CAP = 50
+
+/** Safely encode one buffered row for the quarantine blob (a poison row may itself be
+ *  un-JSON-able — BigInt, circular — so fall back to a string rendering). */
+function quarantineEncodeRow (row) {
+  try { return JSON.parse(JSON.stringify(row)) } catch {
+    try { return String(row) } catch { return '[unrenderable row]' }
+  }
+}
+
+/**
+ * Park rows dropped by a failed bulk flush into a machine-local meta key
+ * (`sync.flushQuarantine.<op>`): append to the existing list (cap-trimmed, newest kept) and
+ * stamp each entry with the error and time. Best-effort: any failure here degrades to the old
+ * log-only behavior (the original flush error is already reported by the caller).
+ */
+function quarantineFlushRows (state, op, list, err) {
+  try {
+    const key = META_FLUSH_QUARANTINE_PREFIX + op
+    let parked = []
+    try {
+      const cur = state.db.call('getMeta', key)
+      if (cur != null) { const p = JSON.parse(cur); if (Array.isArray(p)) parked = p }
+    } catch { /* unreadable prior blob: start a fresh list rather than failing the quarantine */ }
+    parked.push({ at: Date.now(), count: list.length, error: (err && err.message) || String(err), rows: list.map(quarantineEncodeRow) })
+    while (parked.length > META_FLUSH_QUARANTINE_CAP) parked.shift()
+    // Route through the bus facade like every other sync write (single-write-gate): the
+    // quarantine meta blob is machine-local, but the write must still be manifest-validated.
+    busWrite(state, 'setMeta', [key, JSON.stringify(parked)])
+    return { op, key, count: list.length }
+  } catch (e) {
+    log.warn('[LanSync] flush quarantine parking failed (log-only drop):', e && e.message)
+    return null
+  }
+}
+
 function flushPendingWrites (state) {
   const buf = state.pendingWrites
   let ok = true
+  const quarantined = []
   // Per-buffer-op isolation (round-3 review): ONE malformed row used to throw out of a single
   // bulk op and leave every buffer dirty — the throw re-fired on every later flush, wedging
   // apply AND flush forever (poison-pill row). Now each op gets its own try/catch: a failing op
@@ -781,11 +838,29 @@ function flushPendingWrites (state) {
   // recoverable via a later snapshot), the buffers clear either way, and the other ops proceed.
   // Manifest-driven drain (Phase-3): buffer → bulk op mapping lives in flushRoutes (derived from
   // command-manifest.js at module load), so a buffer cannot silently lose its manifest census row.
+  // 2026-09-26 stalled-watermark fix (Layer 1): a failing op whose rows were SUCCESSFULLY
+  // quarantined no longer sets ok=false. Previously ok=false made ingestSegment stamp
+  // flushFailed, the ack stayed below the segment, the sender kept its push watermark and
+  // re-pushed the SAME segment — including the same poison row — every round: a permanent
+  // stall (watermark pinned forever, appliedToSeq never advanced in the sender's seq space).
+  // That is safe only while the drop is unrecoverable. With poison-row quarantine the dropped
+  // rows are parked under sync.flushQuarantine.<op> (machine-local meta, user-surfaced via
+  // Device Center), so the recovery invariant holds WITHOUT blocking the ack: remaining ops
+  // commit, the round acks with appliedToSeq, and the peer's watermark advances past the
+  // poison row. ok=false is reserved for the case where QUARANTINE PARKING ITSELF failed
+  // (rows truly dropped log-only) — that degrades to the old fail-closed behavior.
   const flushOne = (list, op) => {
     if (!list || !list.length) return
     try { busWrite(state, op, list) } catch (e) {
-      ok = false
-      log.error(`[LanSync] flush ${op} failed — dropping ${list.length} buffered rows (recoverable via snapshot):`, e && e.message)
+      log.error(`[LanSync] flush ${op} failed — dropping ${list.length} buffered rows (quarantined under ${META_FLUSH_QUARANTINE_PREFIX}${op}, recoverable via snapshot):`, e && e.message)
+      // 2026-09-26 poison-row quarantine: a dropped buffer used to be log-only ("recoverable via
+      // snapshot" = the ONLY recovery, and only if a snapshot actually re-fires). Park the rows in
+      // a machine-local meta key (sync.* never syncs — isMachineLocalMetaKey) so they stay
+      // inspectable/recoverable, and surface the quarantine on the flush result so the bootstrap
+      // can raise a Device Center syncEvent instead of failing silently.
+      const entry = quarantineFlushRows(state, op, list, e)
+      if (entry) quarantined.push(entry)
+      else ok = false // parking failed: log-only drop, fail closed so the segment is not acked
     }
   }
   for (const r of flushRoutes) {
@@ -802,7 +877,7 @@ function flushPendingWrites (state) {
     }
     state.pendingAnnounces = null
   }
-  return { ok } // P0-1: false = at least one bulk op threw; the segment must not be acked
+  return { ok, quarantined } // P0-1: false = at least one bulk op threw; the segment must not be acked
 }
 
 /**
@@ -826,6 +901,8 @@ module.exports = {
   SECURITY_LOCK_KEY,
   META_CONFLICT_BACKUP_PREFIX,
   META_CONFLICT_BACKUP_CAP,
+  // 2026-09-26 poison-row quarantine: where a failed flush parks its dropped rows.
+  META_FLUSH_QUARANTINE_PREFIX,
   // Exported (2026-09-19): lan-sync-bootstrap destructures this for allRows()/hydration skips —
   // the missing export made every allRows() call (legacy seed, snapshot serving) throw TypeError.
   isMachineLocalSettingKey,

@@ -197,19 +197,32 @@ test('P1-4j: verify-packaged.cjs guards the .cmd shim checks on file existence (
   assert.ok(m && /fs\.existsSync\(cmdPath\)/.test(m[0]), 'cmd checks are existence-guarded')
 })
 
-/* ---------------- P1-4h: CHANGELOG 0.4.0-beta.15 present in both locales ---------------- */
+/* ---------------- P1-4h: CHANGELOG latest version present in both locales + package match ---------------- */
 
-test('P1-4h: CHANGELOG.md and CHANGELOG.zh.md both have a non-empty 0.4.0-beta.15 section', () => {
+// The pending-release version is whatever the newest "## [x.y.z]" section in CHANGELOG.md
+// declares. Hardcoding it here made every version bump a test edit (caught 2026-09-26 when
+// cutting beta.17); deriving it keeps this gate a real cross-file consistency check.
+const latestReleaseVersion = () => {
+  const s = read('../CHANGELOG.md')
+  const m = s.match(/## \[([0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?)\]/) // first after "Unreleased"
+  assert.ok(m, 'CHANGELOG.md must declare at least one versioned section')
+  return m[1]
+}
+
+test('P1-4h: CHANGELOG.md and CHANGELOG.zh.md both have a non-empty section for the pending release version', () => {
+  const version = latestReleaseVersion()
   for (const f of ['../CHANGELOG.md', '../CHANGELOG.zh.md']) {
     const s = read(f)
-    const m = s.match(/## \[0\.4\.0-beta\.15\][^\n]*\n([\s\S]*?)(?=\n## \[)/)
-    assert.ok(m && m[1].trim().length >= 30, `${f} missing/thin 0.4.0-beta.15 section (release body step would exit 1)`)
+    const re = new RegExp(`## \\[${version.replace(/\./g, '\\.')}\\][^\\n]*\\n([\\s\\S]*?)(?=\\n## \\[)`)
+    const m = s.match(re)
+    assert.ok(m && m[1].trim().length >= 30, `${f} missing/thin ${version} section (release body step would exit 1)`)
   }
 })
 
-test('P1-4h: package.json + package-lock.json are bumped to 0.4.0-beta.15 (tag-match gate)', async () => {
+test('P1-4h: package.json + package-lock.json match the pending release version in CHANGELOG (tag-match gate)', () => {
+  const version = latestReleaseVersion()
   const pkg = JSON.parse(read('package.json'))
-  assert.equal(pkg.version, '0.4.0-beta.15')
+  assert.equal(pkg.version, version)
   const lock = JSON.parse(read('package-lock.json'))
-  assert.equal(lock.version, '0.4.0-beta.15')
+  assert.equal(lock.version, version)
 })

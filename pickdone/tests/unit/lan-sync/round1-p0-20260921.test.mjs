@@ -258,9 +258,13 @@ test('P0-4: index.js wires invalidateSyncWatermarks for BOTH json and plain-bak 
   const src = read('src/main/index.js')
   assert.match(src, /invalidateSyncWatermarks\('db-recovery:' \+ recoveredFrom\.source\)/)
   assert.match(src, /recoveredFrom\.source === 'json' \|\| recoveredFrom\.source === 'plain-bak'/)
-  // and it fires AFTER the recovery writes (outside the json-only restore branch)
-  const jsonBranch = src.match(/if \(recoveredFrom && recoveredFrom\.source === 'json'\) \{([\s\S]*?)\n {6}\}/)[1]
+  // and it fires AFTER the recovery writes (outside the json-only restore branch). The restore
+  // branch is now gated by dbRecovery.jsonRestoreAllowed (2026-09-26: restore must not run over a
+  // dead DB), so the branch regex follows the gate instead of the old raw source check.
+  const jsonBranch = src.match(/if \(dbRecovery\.jsonRestoreAllowed\(recoveredFrom, reinitErr\)\) \{([\s\S]*?)\n {6}\}/)[1]
   assert.ok(!jsonBranch.includes('invalidateSyncWatermarks'), 'must not stay json-only')
+  // the gate itself must require the re-init to have succeeded (lubancat regression)
+  assert.match(src, /jsonRestoreAllowed\(recoveredFrom, reinitErr\)/)
 })
 
 /* ---------------- P0-5: sanitizeSettingsPatch array-typed defaults ---------------- */
