@@ -13,6 +13,29 @@ function normalizeKey (key) {
   return KEY_ALIASES[k] || k
 }
 
+/** P2 (d10 domain-B, shift-digit-shortcuts-dead): Shift+digit in-app shortcuts never matched —
+ *  before-input-event's input.key carries the SHIFTED character ('!' for Shift+1), so the built
+ *  combo was 'ctrl+shift+!' while the saved accelerator is 'ctrl+shift+1'. Prefer input.code
+ *  ('Digit1'), which is layout-independent and unaffected by shift; fall back to the US-layout
+ *  shifted-symbol table when code is unavailable. */
+const SHIFTED_SYMBOLS = { '!': '1', '@': '2', '#': '3', '$': '4', '%': '5', '^': '6', '&': '7', '*': '8', '(': '9', ')': '0' }
+function normalizeInputKey (input) {
+  const digit = String(input.code || '').match(/^Digit([0-9])$/)
+  if (input.shift && digit) return digit[1]
+  const k = String(input.key || '')
+  if (input.shift && SHIFTED_SYMBOLS[k]) return SHIFTED_SYMBOLS[k]
+  return normalizeKey(k)
+}
+
+/** P2 (d10 domain-B, #3): a global accelerator without any modifier registered via
+ *  globalShortcut.register becomes a SYSTEM-WIDE hotkey for a bare letter/digit — hijacking
+ *  that key in every application. Used to clamp both the UI capture path and a hand-edited
+ *  config.json. */
+const MODIFIER_KEYS = new Set(['ctrl', 'control', 'alt', 'option', 'altgr', 'shift', 'cmd', 'command', 'meta', 'super', 'hyper'])
+function hasModifier (accel) {
+  return String(accel || '').toLowerCase().split('+').some(p => MODIFIER_KEYS.has(p.trim()))
+}
+
 function createShortcuts ({ getMainWindow, showMainOrLock, quickAdd, i18n, log }, opts = {}) {
   const {
     captureSuppressMaxMs = 60000,
@@ -108,18 +131,36 @@ function createShortcuts ({ getMainWindow, showMainOrLock, quickAdd, i18n, log }
     for (const t of retryTimers) clearTimeout(t)
     retryTimers.clear()
     globalShortcut.unregisterAll()
+    // P2 (d10 domain-B, #3): clamp modifier-less accelerators for the two GLOBAL registrations —
+    // a bare letter/digit in a hand-edited config.json must not bypass the UI guard and become a
+    // system-wide hotkey. Log it and tell the renderer via the existing conflict-toast channel.
+    const warnUnregistrable = accel => {
+      try { (log || console).warn('[shortcut] ignored modifier-less global accelerator: ' + accel) } catch { /* no logger */ }
+      const win = getMainWindow()
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('shortcut-conflict', { msg: i18n.mt('shortcutConflict', { key: accel }) })
+      }
+    }
     // Global system-level shortcut (per project baseline only toggleMainWindow is global; the rest are in-window)
     if (s.toggleMainWindow) {
-      registerGlobal(s.toggleMainWindow, () => {
-        const win = getMainWindow()
-        if (!win || win.isDestroyed()) return
-        if (win.isVisible() && win.isFocused()) win.hide()
-        else { showMainOrLock() }
-      }, s.toggleMainWindow)
+      if (!hasModifier(s.toggleMainWindow)) {
+        warnUnregistrable(s.toggleMainWindow)
+      } else {
+        registerGlobal(s.toggleMainWindow, () => {
+          const win = getMainWindow()
+          if (!win || win.isDestroyed()) return
+          if (win.isVisible() && win.isFocused()) win.hide()
+          else { showMainOrLock() }
+        }, s.toggleMainWindow)
+      }
     }
     // Global quick add: summon the mini input bar from anywhere (quick-add.js)
     if (s.quickAddGlobal) {
-      registerGlobal(s.quickAddGlobal, () => quickAdd.toggle(), s.quickAddGlobal)
+      if (!hasModifier(s.quickAddGlobal)) {
+        warnUnregistrable(s.quickAddGlobal)
+      } else {
+        registerGlobal(s.quickAddGlobal, () => quickAdd.toggle(), s.quickAddGlobal)
+      }
     }
     // In-window action shortcuts → broadcast to the renderer for dispatch
     const inApp = {
@@ -173,7 +214,7 @@ function createShortcuts ({ getMainWindow, showMainOrLock, quickAdd, i18n, log }
       if (input.control) parts.push('ctrl')
       if (input.alt) parts.push('alt')
       if (input.shift) parts.push('shift')
-      const key = normalizeKey(input.key)
+      const key = normalizeInputKey(input)
       if (!key) return
       // F-D3: recording in progress — let the combo reach the renderer's capture listener
       // untouched (no preventDefault, no action dispatch, no side effects mid-record)
@@ -198,4 +239,4 @@ function createShortcuts ({ getMainWindow, showMainOrLock, quickAdd, i18n, log }
   return { applyShortcuts, unregisterAll: () => globalShortcut.unregisterAll() }
 }
 
-module.exports = { createShortcuts, normalizeKey, KEY_ALIASES }
+module.exports = { createShortcuts, normalizeKey, normalizeInputKey, hasModifier, KEY_ALIASES }

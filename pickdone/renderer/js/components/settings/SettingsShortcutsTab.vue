@@ -50,6 +50,15 @@ function shouldBlockCaptureStart ({ now, lastBlurAt, hasFocus }) {
   return (now - lastBlurAt) < BLUR_GUARD_MS
 }
 
+/** D10 domain-B (#3): a commitable capture needs at least one modifier OR a non-typing key
+ *  (F-keys, space, delete). A bare letter/digit captured here and saved for a GLOBAL action
+ *  (toggleMainWindow/quickAddGlobal) used to become a system-wide hotkey hijacking that key
+ *  in every application. */
+function isCommittableCapture (e, k) {
+  if (e.ctrlKey || e.altKey || e.shiftKey || e.metaKey) return true
+  return /^f\d{1,2}$/.test(k) || k === ' ' || k === 'space' || k === 'delete'
+}
+
 /** Display form: stored tokens stay lowercase except cmd → ⌘ (meta was previously invisible). */
 function formatShortcutText (v) {
   return v ? String(v).replace(/(^|\+)cmd(?=\+|$)/g, '$1⌘') : ''
@@ -146,6 +155,13 @@ export default {
       if (k === 'escape') { this.stopCapture(); return } // Esc = cancel capture
       if (!k || k === 'control' || k === 'alt' || k === 'shift' || k === 'meta') return // do not commit when only modifier keys are pressed
       const combo = captureCombo(e, k)
+      // D10 domain-B (#3): reject modifier-less typing keys (bare letters/digits) with the same
+      // warning-toast path as a conflict — a saved bare key would be registered system-wide.
+      if (!isCommittableCapture(e, k)) {
+        this.$message.warning(this.$t('statsE.SettingsModal.shortcutConflictMsg', { combo }))
+        this.stopCapture()
+        return
+      }
       // Conflict detection: if it duplicates another shortcut, warn and do not write
       if (this.shortcutDefs.some(d => d.key !== key && this.shortcutForm[d.key] === combo)) {
         // The colon lives inside the i18n value: each locale punctuates with its own glyph
