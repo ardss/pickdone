@@ -771,9 +771,50 @@ function consumeAppliedRound (state) {
  * receiver's ack stays BELOW the failed segment (the sender keeps its push watermark, re-pushes)
  * and the snapshot trigger force-arms. A dropped buffer must never be acked as applied.
  */
+// 2026-09-26 poison-row quarantine: meta key prefix for rows a failed bulk flush had to drop.
+// 'sync.*' is machine-local (isMachineLocalMetaKey), so quarantined copies never sync back to
+// the peer — they are a LOCAL recovery surface, not a replay channel.
+const META_FLUSH_QUARANTINE_PREFIX = 'sync.flushQuarantine.'
+// Cap parked entries per op: quarantine is a crash-inspection surface, not a data store; the
+// oplog/snapshot remains the authoritative recovery for large segments.
+const META_FLUSH_QUARANTINE_CAP = 50
+
+/** Safely encode one buffered row for the quarantine blob (a poison row may itself be
+ *  un-JSON-able — BigInt, circular — so fall back to a string rendering). */
+function quarantineEncodeRow (row) {
+  try { return JSON.parse(JSON.stringify(row)) } catch {
+    try { return String(row) } catch { return '[unrenderable row]' }
+  }
+}
+
+/**
+ * Park rows dropped by a failed bulk flush into a machine-local meta key
+ * (`sync.flushQuarantine.<op>`): append to the existing list (cap-trimmed, newest kept) and
+ * stamp each entry with the error and time. Best-effort: any failure here degrades to the old
+ * log-only behavior (the original flush error is already reported by the caller).
+ */
+function quarantineFlushRows (state, op, list, err) {
+  try {
+    const key = META_FLUSH_QUARANTINE_PREFIX + op
+    let parked = []
+    try {
+      const cur = state.db.call('getMeta', key)
+      if (cur != null) { const p = JSON.parse(cur); if (Array.isArray(p)) parked = p }
+    } catch { /* unreadable prior blob: start a fresh list rather than failing the quarantine */ }
+    parked.push({ at: Date.now(), count: list.length, error: (err && err.message) || String(err), rows: list.map(quarantineEncodeRow) })
+    while (parked.length > META_FLUSH_QUARANTINE_CAP) parked.shift()
+    state.db.call('setMeta', [key, JSON.stringify(parked)])
+    return { op, key, count: list.length }
+  } catch (e) {
+    log.warn('[LanSync] flush quarantine parking failed (log-only drop):', e && e.message)
+    return null
+  }
+}
+
 function flushPendingWrites (state) {
   const buf = state.pendingWrites
   let ok = true
+  const quarantined = []
   // Per-buffer-op isolation (round-3 review): ONE malformed row used to throw out of a single
   // bulk op and leave every buffer dirty — the throw re-fired on every later flush, wedging
   // apply AND flush forever (poison-pill row). Now each op gets its own try/catch: a failing op
@@ -785,7 +826,14 @@ function flushPendingWrites (state) {
     if (!list || !list.length) return
     try { busWrite(state, op, list) } catch (e) {
       ok = false
-      log.error(`[LanSync] flush ${op} failed — dropping ${list.length} buffered rows (recoverable via snapshot):`, e && e.message)
+      log.error(`[LanSync] flush ${op} failed — dropping ${list.length} buffered rows (quarantined under ${META_FLUSH_QUARANTINE_PREFIX}${op}, recoverable via snapshot):`, e && e.message)
+      // 2026-09-26 poison-row quarantine: a dropped buffer used to be log-only ("recoverable via
+      // snapshot" = the ONLY recovery, and only if a snapshot actually re-fires). Park the rows in
+      // a machine-local meta key (sync.* never syncs — isMachineLocalMetaKey) so they stay
+      // inspectable/recoverable, and surface the quarantine on the flush result so the bootstrap
+      // can raise a Device Center syncEvent instead of failing silently.
+      const entry = quarantineFlushRows(state, op, list, e)
+      if (entry) quarantined.push(entry)
     }
   }
   for (const r of flushRoutes) {
@@ -802,7 +850,7 @@ function flushPendingWrites (state) {
     }
     state.pendingAnnounces = null
   }
-  return { ok } // P0-1: false = at least one bulk op threw; the segment must not be acked
+  return { ok, quarantined } // P0-1: false = at least one bulk op threw; the segment must not be acked
 }
 
 /**
@@ -826,6 +874,8 @@ module.exports = {
   SECURITY_LOCK_KEY,
   META_CONFLICT_BACKUP_PREFIX,
   META_CONFLICT_BACKUP_CAP,
+  // 2026-09-26 poison-row quarantine: where a failed flush parks its dropped rows.
+  META_FLUSH_QUARANTINE_PREFIX,
   // Exported (2026-09-19): lan-sync-bootstrap destructures this for allRows()/hydration skips —
   // the missing export made every allRows() call (legacy seed, snapshot serving) throw TypeError.
   isMachineLocalSettingKey,

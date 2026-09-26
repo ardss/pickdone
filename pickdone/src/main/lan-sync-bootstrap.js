@@ -649,6 +649,16 @@ function finalizeIngest (r, { snapshot = false, chunk = false } = {}) {
   if (flush && flush.ok === false) {
     if (snapshot) throw new Error((chunk ? 'snapshot chunk ' : 'snapshot ') + 'flush failed (rows dropped, snapshot will retry)')
     r.flushFailed = true
+    // 2026-09-26 poison-row quarantine: rows a failed flush dropped are parked under
+    // sync.flushQuarantine.<op> (machine-local meta). Tell the user via Device Center — a
+    // quarantine must be visible, not just 'recoverable via snapshot'.
+    if (Array.isArray(flush.quarantined) && flush.quarantined.length) {
+      r.quarantined = flush.quarantined
+      emitSyncEvent('flush-quarantined', {
+        ops: flush.quarantined.map(q => q.op),
+        count: flush.quarantined.reduce((n, q) => n + (q.count || 0), 0),
+      })
+    }
   }
   if (!(r && r.flushFailed)) emitAppliedRound() // P0-1: refresh open views + settings hot-apply after a round applied rows
   return r
