@@ -60,13 +60,14 @@ function loadWithStubs (relPath, stubs) {
 
 /** Fake parse worker: emits whatever `script(worker)` schedules (real worker_threads untouched
  *  for the lazily-required import engine). */
-function loadCsvImportWithWorker (script) {
+function loadCsvImportWithWorker (script, extraStubs) {
   class FakeWorker {
     constructor (entry, opts) { this.opts = opts; this.h = {}; script(this) }
     on (ev, h) { this.h[ev] = h }
     terminate () { return Promise.resolve(0) }
   }
-  return loadWithStubs('src/main/handlers/csv-import.js', { electron: electronStub, worker_threads: { Worker: FakeWorker } })
+  return loadWithStubs('src/main/handlers/csv-import.js', Object.assign(
+    { electron: electronStub, worker_threads: { Worker: FakeWorker } }, extraStubs || {}))
 }
 
 function handlerCtx () {
@@ -162,4 +163,38 @@ test('B15 + B13: after a successful run the grant is wiped (second run = AUTH_EX
   // and a never-granted path is the same structured contract (was: throw 'path not granted by picker')
   const r3 = await h['import:run'](e, path.join(dir, 'never-granted.csv'))
   assert.equal(r3 && r3.code, 'AUTH_EXPIRED')
+})
+
+/* ---------------- R3-stability: TOCTOU read guard — file vanishing between stat and read ---------------- */
+
+test('R3-stability: a file deleted between the run-time stat and the read returns structured FILE_MISSING instead of throwing', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'd9-toctou-'))
+  const csv = path.join(dir, 'vanish.csv')
+  fs.writeFileSync(csv, 'List Name,Title\r\nD9清单戊,d9 vanish 任务\r\n')
+  dialogStubData = { filePaths: [csv] }
+  // Interpose on fixUtil.checkImportFileSize (the only code between the :135 stat and the read):
+  // the first call (preview) passes through; the second (import:run) unlinks the file mid-window —
+  // reproducing the cross-process delete (AV scanner etc.) between statSync and readFileSync.
+  const realFixUtil = require_('../../../src/main/fix-util.js')
+  let statCalls = 0
+  const fixUtilStub = Object.assign(Object.create(Object.getPrototypeOf(realFixUtil)), realFixUtil, {
+    checkImportFileSize (size) {
+      statCalls++
+      if (statCalls === 2) { try { fs.unlinkSync(csv) } catch { /* already gone */ } }
+      return realFixUtil.checkImportFileSize(size)
+    }
+  })
+  const mod = loadCsvImportWithWorker(
+    w => setTimeout(() => w.h.message && w.h.message({ ok: true, format: 'ticktick', items: [fakeItem({ list: 'D9清单戊', title: 'd9 vanish 任务' })] }), 0),
+    { '../fix-util': fixUtilStub })
+  const { ctx, e } = handlerCtx()
+  const h = mod(ctx)
+  const p = await h['import:pick-preview'](e)
+  assert.equal(p && p.ok, true, 'preview must succeed so the run stage reaches the unguarded read')
+  assert.equal(statCalls, 1)
+  const r = await h['import:run'](e, csv) // must NOT reject with raw ENOENT
+  assert.equal(statCalls, 2, 'the run-time stat must have happened (the vanish happened after it)')
+  assert.equal(r && r.ok, false)
+  assert.equal(r && r.code, 'FILE_MISSING', 'the vanishing read must ride the structured {ok:false} contract, not a bare throw')
+  assert.match(r.message, /no longer readable/)
 })

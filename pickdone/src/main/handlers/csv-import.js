@@ -145,7 +145,14 @@ module.exports = function importHandlers (ctx) {
       // TOCTOU content guard (fix 2026-09-19): the file must still be byte-identical to what the user
       // previewed and approved. A changed file previously re-parsed silently — report A approved, report
       // B executed. Abort with a clear error (plus an audit line) and force a fresh preview.
-      const text = fs.readFileSync(f, 'utf8')
+      // R3-stability (2026-09-26): the read itself is also inside the TOCTOU window — a file deleted
+      // between the :135 stat and this read (AV scanner / another process) used to throw raw ENOENT
+      // out of the IPC handler. Same shape as the M-3 stat guard: a failed read grants nothing.
+      let text
+      try { text = fs.readFileSync(f, 'utf8') } catch (err) {
+        lastPickedImportHash = ''
+        return { ok: false, code: 'FILE_MISSING', message: 'import: file no longer readable: ' + ((err && err.message) || String(err)) }
+      }
       if (!lastPickedImportHash || textHash(text) !== lastPickedImportHash) {
         try { appAudit.recordCustom('import', ['import:run', f], [], [], 'aborted: file changed since preview (hash mismatch), re-preview required') } catch { /* best-effort */ }
         return { ok: false, code: 'HASH_MISMATCH', message: 'import: file changed since preview — re-run preview to approve the current content' }
