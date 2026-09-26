@@ -91,7 +91,11 @@ test('P-2: a failed flush parks its dropped rows in sync.flushQuarantine.<op> an
   const row = state.pendingWrites.settings[0]
 
   const r = bootstrap.__test.flushPendingWrites()
-  assert.equal(r.ok, false, 'the flush still reports failure (ack honesty unchanged)')
+  // 2026-09-26 Layer 1 (stalled-watermark fix): a successful quarantine no longer fails the
+  // flush — ok=false would stamp flushFailed, pin the sender's push watermark on the poison
+  // row and re-push the same segment forever. ok=true lets the ack advance; the parked rows
+  // remain the local recovery surface.
+  assert.equal(r.ok, true, 'successful quarantine lets the round ack (watermark advances)')
   assert.equal(r.quarantined.length, 1, 'the flush result names the quarantined segment')
   assert.equal(r.quarantined[0].op, 'settingsRowPutMany')
   assert.equal(r.quarantined[0].count, 1)
@@ -126,7 +130,9 @@ test('P-2: finalizeIngest raises a visible flush-quarantined syncEvent (log-only
   bootstrap.__test.setState(state)
 
   const r = bootstrap.__test.finalizeIngest({ appliedCount: 1 })
-  assert.equal(r.flushFailed, true)
+  // Layer 1: quarantine-success no longer stamps flushFailed (the round acks); the
+  // flush-quarantined surfacing moved out of the ok===false branch so it stays visible.
+  assert.equal(r.flushFailed, undefined, 'quarantined round is acked, not failed')
   const evt = sent.find(s => s.ch === 'syncEvent' && s.msg.type === 'flush-quarantined')
   assert.ok(evt, 'a flush-quarantined syncEvent reached the renderer channel')
   assert.deepEqual(evt.msg.ops, ['settingsRowPutMany'])

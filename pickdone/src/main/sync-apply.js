@@ -836,10 +836,20 @@ function flushPendingWrites (state) {
   // recoverable via a later snapshot), the buffers clear either way, and the other ops proceed.
   // Manifest-driven drain (Phase-3): buffer → bulk op mapping lives in flushRoutes (derived from
   // command-manifest.js at module load), so a buffer cannot silently lose its manifest census row.
+  // 2026-09-26 stalled-watermark fix (Layer 1): a failing op whose rows were SUCCESSFULLY
+  // quarantined no longer sets ok=false. Previously ok=false made ingestSegment stamp
+  // flushFailed, the ack stayed below the segment, the sender kept its push watermark and
+  // re-pushed the SAME segment — including the same poison row — every round: a permanent
+  // stall (watermark pinned forever, appliedToSeq never advanced in the sender's seq space).
+  // That is safe only while the drop is unrecoverable. With poison-row quarantine the dropped
+  // rows are parked under sync.flushQuarantine.<op> (machine-local meta, user-surfaced via
+  // Device Center), so the recovery invariant holds WITHOUT blocking the ack: remaining ops
+  // commit, the round acks with appliedToSeq, and the peer's watermark advances past the
+  // poison row. ok=false is reserved for the case where QUARANTINE PARKING ITSELF failed
+  // (rows truly dropped log-only) — that degrades to the old fail-closed behavior.
   const flushOne = (list, op) => {
     if (!list || !list.length) return
     try { busWrite(state, op, list) } catch (e) {
-      ok = false
       log.error(`[LanSync] flush ${op} failed — dropping ${list.length} buffered rows (quarantined under ${META_FLUSH_QUARANTINE_PREFIX}${op}, recoverable via snapshot):`, e && e.message)
       // 2026-09-26 poison-row quarantine: a dropped buffer used to be log-only ("recoverable via
       // snapshot" = the ONLY recovery, and only if a snapshot actually re-fires). Park the rows in
@@ -848,6 +858,7 @@ function flushPendingWrites (state) {
       // can raise a Device Center syncEvent instead of failing silently.
       const entry = quarantineFlushRows(state, op, list, e)
       if (entry) quarantined.push(entry)
+      else ok = false // parking failed: log-only drop, fail closed so the segment is not acked
     }
   }
   for (const r of flushRoutes) {
