@@ -571,11 +571,82 @@ function purgeRecycleBin () {
   return true
 }
 
-/* Subtasks: extracted verbatim to lib-subs.cjs (2026-09-27 size-ratchet split) */
+/* Subtasks + environment (doctor/launchApp): extracted verbatim to lib-subs.cjs / lib-env.cjs (2026-09-27 size-ratchet split) */
 const {
   parseSubs, addSubtask, checkSubtask, removeSubtask, moveSubtask,
 } = require('./lib-subs.cjs')({ resolveTask, liveTasks, patchTodo, CliError })
+const { doctor, launchApp } = require('./lib-env.cjs')({ open, CliError, userDataDir, assertIsolationForWrite })
 
+/* ---------------- Tomato/sync command channels: extracted verbatim to lib-channels.cjs (2026-09-27 size-ratchet split) ---------------- */
+const {
+  writeTomatoCmd, readTomatoState, waitForTomatoAck, tomatoLiveRemainSec,
+  writeSyncCmd, readSyncState, waitForSyncAck,
+} = require('./lib-channels.cjs')({ open, commit, audit })
+
+/* Categories write: extracted verbatim to lib-categories.cjs (2026-09-27 size-ratchet split) */
+const {
+  addCategory, renameCategory, deleteCategory, moveCategory, categoryRows, categoryHierarchy,
+} = require('./lib-categories.cjs')({ open, commit, audit, CliError, resolveCategory, projectFlagKey, projectStatusKey, MS_KEY, PROJECT_IDS_KEY })
+
+/* Tags + batch operations: extracted verbatim to lib-tags.cjs (2026-09-27 size-ratchet split) */
+const {
+  listTags, rewriteTag, resolveTaskExact, batchTagOne, batchRun,
+} = require('./lib-tags.cjs')({ liveTasks, CliError, patchTodo, toggleComplete, dateChangeReminderPatch, migrateChipsOnDayChange, parseDate, resolveCategory })
+
+/* Saved views (smart lists): extracted verbatim to lib-views.cjs (2026-09-27 size-ratchet split) */
+const {
+  viewsList, resolveView, viewAdd, viewRm, applyViewConds, viewFetchOpts, viewCondsSummary,
+} = require('./lib-views.cjs')({ open, commit, audit, CliError, dayjs, resolveCategory })
+
+/* ---------------- Focus ledger + per-task tomato estimates: extracted verbatim to lib-focus.cjs (2026-09-27 size-ratchet split) ---------------- */
+
+/* ---------------- Manual ordering (taskSort midpoint insertion — same semantics as renderer todo/reorderTodos drag)
+   F-B2 (dw wave 3): the score math moved to shared/sort-core.mjs moveWithin (single source with the
+   renderer's TodoItem._writeSort reorderScale rewrite); the ±100 no-beyond margin is precision
+   degradation only — order can no longer drift between the two ends' scales.
+   B2 (2026-09-24): pool + dayOrder are in APP DISPLAY order (taskSort DESCENDING — sortMode.js
+   custom mode). moveWithin's `sorts` contract is display order now, so `sort top` lands max+100
+   (visually first) instead of the old min-100 (visually last, P1 cross-end inversion). */
+/** Reorder <task> relative to: top|bottom|up|down (within its day) or before|after <otherTask> (must share the day/no-date pool) */
+function sortTask (input, pos, refInput) {
+  const t = resolveTask(input, liveTasks())
+  const pool = liveTasks().filter(x => x.dayStart === t.dayStart).sort((a, b) => (b.taskSort || 0) - (a.taskSort || 0))
+  const idx = pool.findIndex(x => x.taskId === t.taskId)
+  let ref = null
+  if (pos === 'before' || pos === 'after') {
+    if (!refInput) throw new CliError('sort before|after needs a reference task', 'USAGE')
+    ref = resolveTask(refInput, liveTasks())
+    if (ref.dayStart !== t.dayStart) throw new CliError('reference task must be on the same day (or both without a date) — change date first with edit --date', 'CROSS_DAY_SORT')
+  }
+  const refIdx = ref ? pool.findIndex(x => x.taskId === ref.taskId) : -1
+  const mv = moveWithin(pool.map(x => x.taskSort), idx, pos, refIdx)
+  if (!mv || mv.edge || mv.sort == null) {
+    if (pos === 'up' || pos === 'down') throw new CliError('task is already at the ' + (pos === 'up' ? 'top' : 'bottom') + ' of its list', 'ALREADY_AT_EDGE')
+    throw new CliError('position must be top|up|down|bottom, or before|after <task>', 'USAGE')
+  }
+  const newSort = mv.sort
+  patchTodo(t.taskId, { taskSort: newSort }, { action: 'sort' })
+  // Re-read the real persisted order (cannot reuse the pool above — it is a pre-move snapshot; the ★ marker would show at the old position).
+  // Reported in App display order (taskSort descending) — B2: the old ascending readout was the
+  // App's list printed upside-down.
+  const after = liveTasks()
+    .filter(x => x.dayStart === t.dayStart)
+    .sort((a, b) => (b.taskSort || 0) - (a.taskSort || 0))
+    .map(x => (x.taskId === t.taskId ? '★' : '') + x.taskContent)
+  return { taskId: t.taskId, taskSort: newSort, dayOrder: after }
+}
+
+/** All live tasks scheduled on a given date (with times) — the "what should I slot at 11am tomorrow" view */
+function listOn (date) {
+  const day = dayStartOf(parseDate(date))
+  if (!day) throw new CliError('a date is required (today/tomorrow/YYYY-MM-DD)', 'USAGE')
+  return liveTasks()
+    .filter(t => t.dayStart === day)
+    .sort((a, b) => (a.todoTime || a.dayStart) - (b.todoTime || b.dayStart) || (a.taskSort || 0) - (b.taskSort || 0))
+    .map(t => ({ taskId: t.taskId, content: t.taskContent, time: t.todoTime ? dayjs(t.todoTime).format('HH:mm') : null, complete: t.complete, tomatoEstimate: getEstimateOf(t.taskId), dayStart: t.dayStart }))
+}
+
+/** Resolve/fix/remove focus records: extracted verbatim to lib-focus.cjs (2026-09-27 size-ratchet split) */
 /* ---------------- Multiple reminders (reminderOffsets/reminderExtra — same todos columns the EditPanel writes) ---------------- */
 /** Set reminder offsets: csv of minutes BEFORE the main reminder ("10,30" = 10/30 minutes early, stored as -10/-30;
  *  "0" = on-time; "none" clears). Requires the main reminder to exist (UI also gates the chips on remindTs>0). */
