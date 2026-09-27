@@ -249,10 +249,13 @@ import StatsShareCard from './statistics/StatsShareCard.vue'
 import StatsAchievements from './statistics/StatsAchievements.vue'
 
 import { buildReviewMetrics, PERIODS, CUSTOM_MAX_DAYS } from './statistics/metrics.js'
-import { composeReview, kpiDelta } from './statistics/insights.js'
+import { composeReview } from './statistics/insights.js'
 import { csvField } from './statistics/csv.js'
+import { buildExportRows } from './statistics/csv.js'
 import { buildAchievements } from './statistics/achievements.js'
 import { periodBounds, buildHeatmap, countGiveUps7, buildWeekdayModel, buildTrendModel, buildFocusTrendModel, buildTimelineRows } from './statistics/chartModels.js'
+import { buildKpis, buildPeriodBests, buildAttentionRows, buildTaskFocusRows } from './statistics/reviewRows.js'
+import { clampTipPos, clampHmTipPos } from './statistics/tooltipClamp.js'
 
 const T = 'statsA.StatisticsView.'
 
@@ -345,70 +348,21 @@ export default {
     /** Compact data shared by share cards */
     shareTopInsights () { return this.review.insights.slice(0, 3) },
     hasAnyData () { return this.todoList.length > 0 || this.tomatoRecordList.length > 0 },
-    /* Four KPI tiles: the main number is the period total, delta vs baseline daily average x days (equal-length conversion) */
-    kpis () {
-      const m = this.metrics
-      const d = (cur, base) => kpiDelta(cur, base == null ? null : base * m.days, 15)
-      const ratePct = m.doneRate == null ? null : Math.round(m.doneRate * 100)
-      const baseRatePct = m.baseline.doneRate == null ? null : Math.round(m.baseline.doneRate * 100)
-      // Give-up rate: give-ups / total starts (completed + given up); without any starts there is no rate
-      const totalRuns = m.tomatoCount + m.giveUps
-      const giveupRatePct = totalRuns ? Math.round(m.giveUps / totalRuns * 100) : null
-      return [
-        { key: 'done', title: this.$t(T + 'kpiDone'), value: `${m.done}`, sub: this.$t(T + 'kpiDoneSub', { n: m.added }), delta: d(m.done, m.baseline.done), goodDir: 'up' },
-        { key: 'focus', title: this.$t(T + 'kpiFocus'), value: `${m.focusMins}min`, sub: this.$t(T + 'kpiFocusSub', { n: m.tomatoCount }), delta: d(m.focusMins, m.baseline.focus), goodDir: 'up' },
-        { key: 'rate', title: this.$t(T + 'kpiRate'), value: ratePct == null ? '—' : `${ratePct}%`, sub: this.$t(T + 'kpiRateSub', { n: m.planned }), delta: this.rateDelta(ratePct, baseRatePct), goodDir: 'up' },
-        { key: 'giveup', title: this.$t(T + 'kpiGiveup'), value: `${m.giveUps}`, sub: giveupRatePct == null ? this.$t(T + 'kpiGiveupSub') : this.$t(T + 'kpiGiveupRate', { n: giveupRatePct }), delta: d(m.giveUps, m.baseline.giveUps), goodDir: 'down' }
-      ]
-    },
-    /** Attention allocation: per-category focus minute bars (falls back to completion counts when focus records are sparse) */
-    attentionRows () {
-      const m = this.metrics
-      const useFocus = m.focusMins >= 15 && m.catFocus.length
-      const list = useFocus ? m.catFocus : m.catDone
-      const total = list.reduce((s, i) => s + i.value, 0) || 1
-      const unit = useFocus ? this.$t(T + 'unitMinutes') : this.$t(T + 'unitCount')
-      return list.slice(0, 6).map(i => ({
-        label: i.label, valueText: this.$t(T + 'attValue', { v: i.value, unit }),
-        pct: Math.max(4, Math.round(i.value / total * 100)), raw: i.value
-      }))
-    },
+    /* Four KPI tiles: the main number is the period total, delta vs baseline daily average x days — built in statistics/reviewRows.js */
+    kpis () { return buildKpis(this.metrics, (k, p) => this.$t(k, p)) },
+    /** Attention allocation: per-category focus minute bars — built in statistics/reviewRows.js */
+    attentionRows () { return buildAttentionRows(this.metrics, (k, p) => this.$t(k, p)) },
     attentionUnitLabel () { return this.metrics.focusMins >= 15 ? this.$t(T + 'attByFocus') : this.$t(T + 'attByCount') },
-    /** Period bests: three highlights of the review page */
-    periodBests () {
-      const m = this.metrics
-      const fmtD = d => d ? d.label : '—'
-      const bests: any[] = [
-        { title: this.$t(T + 'bestFocusDay'), value: m.bestFocusDay ? this.$t(T + 'bestFocusVal', { n: m.bestFocusDay.mins }) : '—', sub: m.bestFocusDay ? fmtD(m.bestFocusDay) : this.$t(T + 'bestNoFocus') },
-        { title: this.$t(T + 'bestDoneDay'), value: m.bestDoneDay ? this.$t(T + 'bestDoneVal', { n: m.bestDoneDay.count }) : '—', sub: m.bestDoneDay ? fmtD(m.bestDoneDay) : this.$t(T + 'bestNoDone') },
-        { title: this.$t(T + 'bestStreak'), value: this.$t(T + 'bestStreakVal', { n: m.streak }), sub: m.streak >= 2 ? this.$t(T + 'streakHabit') : this.$t(T + 'streakStart') }
-      ]
-      return bests
-    },
+    /** Period bests: three highlights of the review page — built in statistics/reviewRows.js */
+    periodBests () { return buildPeriodBests(this.metrics, (k, p) => this.$t(k, p)) },
     /** Weekday distribution (Monday-Sunday, dual axis) — shaping in statistics/chartModels.js */
     weekdayModel () { return buildWeekdayModel(this.metrics, (k, p) => this.$t(k, p)) },
     /* Completion trend + baseline reference band — shaping in statistics/chartModels.js */
     trendModel () { return buildTrendModel(this.metrics, (k, p) => this.$t(k, p), this.periodRangeLabel) },
     /* Focus trend (minutes) — shaping in statistics/chartModels.js */
     focusTrendModel () { return buildFocusTrendModel(this.metrics, (k, p) => this.$t(k, p), this.periodRangeLabel) },
-    /* Where focus went: task-level focus duration ranking (unlinked = free focus, listed separately) */
-    taskFocusRows () {
-      const m = this.metrics
-      if (m.focusMins < 15 || !m.taskFocus.length) return []
-      return m.taskFocus.slice(0, 6).map(i => {
-        let label
-        if (i.label === '_free') label = this.$t(T + 'freeFocus')
-        else {
-          const t = this.todoList.find(x => x.taskId === i.label)
-          label = t ? (t.taskContent || this.$t(T + 'untitled')) : this.$t(T + 'taskGone')
-        }
-        return {
-          label,
-          valueText: this.$t(T + 'attValue', { v: i.value, unit: this.$t(T + 'unitMinutes') }),
-          pct: Math.max(4, Math.round(i.value / m.focusMins * 100))
-        }
-      })
-    },
+    /* Where focus went: task-level focus duration ranking — built in statistics/reviewRows.js */
+    taskFocusRows () { return buildTaskFocusRows(this.metrics, this.todoList, (k, p) => this.$t(k, p)) },
     /* ---------- Heatmap (half year 26 weeks / full year 52 weeks) — shaping in statistics/chartModels.js ---------- */
     heatWeeks () { return this.heatRange === 'year' ? 52 : 26 },
     heatmap () {
@@ -466,10 +420,6 @@ export default {
       this.period = 'custom'
       this.$refs.rangePop && this.$refs.rangePop.hide()
     },
-    rateDelta (curPct, basePct) {
-      if (curPct == null || basePct == null || Math.abs(curPct - basePct) < 8) return null
-      return { pct: (curPct - basePct > 0 ? '+' : '') + (curPct - basePct) + '%', dir: curPct > basePct ? 'up' : 'down' }
-    },
     deltaClass (kpi, delta) {
       if (!delta) return 'flat'
       return delta.dir === kpi.goodDir ? 'good' : 'warn'
@@ -487,55 +437,26 @@ export default {
       this.hmTip = { show: true, text: this.heatCellTitle(c), x: r.left + r.width / 2, y: r.top, ch: r.height, px: null, below: false }
     },
     hmTipHide () { this.hmTip.show = false },
-    /** Timeline following tooltip: defaults to the mouse's upper right (CSS transform offset), then clamped by measured size after render to prevent overflow —
-     *  near the right edge it flips horizontally to the mouse's left; if that goes past the top edge it flips below the mouse (user feedback: popovers overflowed at screen edges) */
+    /* Tooltip clamping: pure geometry in statistics/tooltipClamp.js, patch applied here */
     clampTip (stateKey, refName) {
       const t = this[stateKey]
       const el = this.$refs[refName]
       if (!t || !el || t.show === false) return
-      const w = el.offsetWidth, h = el.offsetHeight, pad = 8, vw = window.innerWidth, vh = window.innerHeight
-      let px, py
-      if (stateKey === 'tlTip') {
-        px = t.x + 12; py = t.y - h - 10                       // default: upper right
-        if (px + w + pad > vw) px = Math.max(pad, t.x - w - 12) // near right edge -> flip left
-        if (py < pad) py = Math.min(t.y + 16, vh - h - pad)     // near top edge -> flip below
-        if (py + h + pad > vh) py = vh - h - pad
-      } else {
-        px = Math.min(Math.max(t.x, w / 2 + pad), vw - w / 2 - pad) // centered above the cell, clamped horizontally into the viewport
-        py = t.y
-      }
-      if (px !== t.px || py !== t.py) this[stateKey] = { ...t, px, py }
+      const pos = clampTipPos(t, el, stateKey)
+      if (pos) this[stateKey] = { ...t, ...pos }
     },
     clampHmTip () {
       const t = this.hmTip
       const el = this.$refs.hmTip
       if (!t || !t.show || !el) return
-      const w = el.offsetWidth, h = el.offsetHeight, pad = 8
-      const px = Math.min(Math.max(t.x, w / 2 + pad), window.innerWidth - w / 2 - pad)
-      const below = t.y - h - 10 < pad            // cell close to screen top -> flip below the cell
-      const py = below ? t.y + (t.ch || 0) + 8 : t.y
-      if (px !== t.px || below !== t.below || py !== t.py) this.hmTip = { ...t, px, py, below }
+      const pos = clampHmTipPos(t, el)
+      if (pos) this.hmTip = { ...t, ...pos }
     },
     /* Share card dialog (statistics/StatsShareCard.vue): open state stays here, export moved into the child */
     openShare () { this.shareOpen = true },
     exportTable () {
       const m = this.metrics
-      const rows = [[this.$t(T + 'csvPeriod'), m.label]]
-      rows.push([this.$t(T + 'csvMetric'), this.$t(T + 'csvValue'), this.$t(T + 'csvBaseline')])
-      rows.push([this.$t(T + 'kpiDone'), m.done, m.baseline.done == null ? '' : fmtCount(m.baseline.done)])
-      rows.push([this.$t(T + 'csvAdded'), m.added, ''])
-      rows.push([this.$t(T + 'csvPlanned'), m.planned, ''])
-      rows.push([this.$t(T + 'kpiRate'), m.doneRate == null ? '' : Math.round(m.doneRate * 100) + '%', m.baseline.doneRate == null ? '' : Math.round(m.baseline.doneRate * 100) + '%'])
-      rows.push([this.$t(T + 'csvFocusMins'), m.focusMins, m.baseline.focus == null ? '' : fmtCount(m.baseline.focus)])
-      rows.push([this.$t(T + 'csvTomatoes'), m.tomatoCount, ''])
-      rows.push([this.$t(T + 'kpiGiveup'), m.giveUps, m.baseline.giveUps == null ? '' : fmtCount(m.baseline.giveUps)])
-      rows.push([])
-      rows.push([this.$t(T + 'csvNarrative')])
-      rows.push([this.reviewHeadline])
-      this.review.insights.forEach(i => rows.push([this.insightText(i)]))
-      rows.push([])
-      rows.push([this.$t(T + 'csvDate'), this.$t(T + 'csvDoneCount'), this.$t(T + 'csvFocusMins')])
-      m.doneByDay.forEach((d, i) => rows.push([d.label, d.value, m.focusByDay[i] ? m.focusByDay[i].value : 0]))
+      const rows = buildExportRows(m, (k, p) => this.$t(T + k, p), this.reviewHeadline, this.review.insights.map(i => this.insightText(i)))
       // csvField neutralizes formula-injection prefixes (=+-@) in user text before quoting (OWASP)
       const csv = '﻿' + rows.map(r => r.map(c => csvField(c)).join(',')).join('\n')
       const a = document.createElement('a')
