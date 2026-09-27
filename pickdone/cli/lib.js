@@ -647,43 +647,11 @@ function listOn (date) {
 }
 
 /** Resolve/fix/remove focus records: extracted verbatim to lib-focus.cjs (2026-09-27 size-ratchet split) */
-/* ---------------- Multiple reminders (reminderOffsets/reminderExtra — same todos columns the EditPanel writes) ---------------- */
-/** Set reminder offsets: csv of minutes BEFORE the main reminder ("10,30" = 10/30 minutes early, stored as -10/-30;
- *  "0" = on-time; "none" clears). Requires the main reminder to exist (UI also gates the chips on remindTs>0). */
-function setReminderOffsets (input, csv) {
-  const t = resolveTask(input, liveTasks())
-  if (!t.reminderTime) throw new CliError('task has no main reminder — set it first with edit --reminder <time>', 'NEEDS_MAIN_REMINDER')
-  let offsets
-  let zeroAbsorbed = false
-  if (String(csv).trim().toLowerCase() === 'none') offsets = []
-  else {
-    offsets = String(csv).split(/[,，\s]+/).filter(Boolean).map(s => {
-      const v = parseInt(s, 10)
-      if (isNaN(v)) throw new CliError(`bad offset "${s}" (minutes before the main reminder, e.g. "10,30"; 0=on-time; none=clear)`, 'USAGE')
-      // "0" (on-time) is explicitly absorbed: db normOffsets filters 0 out, so writing [0] would silently vanish — map to "no offset" instead
-      return v === 0 ? null : -Math.abs(v)
-    })
-    zeroAbsorbed = offsets.includes(null)
-    offsets = [...new Set(offsets.filter(v => v != null))].sort((a, b) => a - b)
-  }
-  patchTodo(t.taskId, { reminderOffsets: offsets }, { action: 'edit' })
-  return {
-    taskId: t.taskId, reminderTime: t.reminderTime, reminderOffsets: offsets,
-    ...(zeroAbsorbed ? { note: '"0" (on-time) absorbed — no offset row written since the main reminder itself fires on time' } : {})
-  }
-}
-/** Set extra absolute reminders (on top of the main one): comma-separated datetimes, same formats as --date; "none" clears */
-function setReminderExtra (input, csv) {
-  const t = resolveTask(input, liveTasks())
-  let extras
-  if (String(csv).trim().toLowerCase() === 'none') extras = []
-  else {
-    extras = String(csv).split(/[,，]/).map(s => s.trim()).filter(Boolean).map(s => parseDate(s))
-    if (!extras.length) throw new CliError('no datetimes given (comma-separated, e.g. "2026-09-05 09:00, 2026-09-06 14:00")', 'USAGE')
-  }
-  patchTodo(t.taskId, { reminderExtra: extras }, { action: 'edit' })
-  return { taskId: t.taskId, reminderExtra: extras.map(ts => dayjs(ts).format('YYYY-MM-DD HH:mm')) }
-}
+
+/* Multiple reminders: extracted verbatim to lib-reminders.cjs (2026-09-27 size-ratchet split) */
+const {
+  setReminderOffsets, setReminderExtra,
+} = require('./lib-reminders.cjs')({ resolveTask, liveTasks, patchTodo, CliError, dayjs, parseDate })
 
 const settingsApi = require('./lib-settings.cjs')
 const { settingsDoc, setSettingsRaceHookForTests, settingsKnown, settingsList, settingsSet, SETTINGS_MANIFEST } = settingsApi({ open, commit, audit, CliError })
@@ -692,60 +660,10 @@ const {
   buildRenewalInstance, buildRepeatRule, repeatOn, repeatOff, repeatRuleInfo,
 } = require('./lib-repeat.cjs')({ open, commit, audit, CliError, dayjs, core, resolveTask, liveTasks, normKey, settingsDoc, chipsSnapshotForDelete, dayStartOf })
 
-function planDayKey (date) {
-  if (!date) return dayjs().format('YYYY-MM-DD')
-  return dayjs(dayStartOf(parseDate(date))).format('YYYY-MM-DD')
-}
-function planRows (day) {
-  const rows = open().call('planAll', []).filter(r => !day || r.day === day)
-  return rows
-}
-/** Place/schedule a task chip at HH:mm (one task can hold multiple chips = multiple expected pomodoros). --replace swaps all chips. */
-function planSet (input, mm, { date, replace } = {}) {
-  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(String(mm))) throw new CliError('time must be HH:mm (00:00-23:59)', 'USAGE')
-  const t = resolveTask(input, liveTasks())
-  // Defaults to the task's own scheduled day (a future task's chips land on its task day, not today); explicit --date overrides
-  const day = planDayKey(date != null && date !== true ? date : (t.dayStart ? dayjs(t.dayStart).format('YYYY-MM-DD') : null))
-  const existing = planRows(day).filter(r => r.taskId === t.taskId)
-  if (!replace && existing.some(r => r.mm === mm)) throw new CliError(`task already has a chip at ${mm} (plan list to inspect, --replace to rebuild)`, 'PLAN_EXISTS')
-  if (replace && existing.length) commit('plan', 'deleteTaskDay', { taskId: t.taskId, day })
-  commit('plan', 'putMany', [{ taskId: t.taskId, day, mm }])
-  const chips = planRows(day).filter(r => r.taskId === t.taskId).map(r => r.mm).sort() // re-read actual state so the audit stays faithful
-  audit.record({ action: 'plan.set', targets: [t], changes: [{ after: { day, chips } }], note: 'scheduled on the day timeline at ' + mm })
-  return { taskId: t.taskId, content: t.taskContent, day, chips }
-}
-function planList (date) {
-  const day = planDayKey(date)
-  const live = liveTasks()
-  const byTask = {}
-  for (const r of planRows(day)) {
-    if (!byTask[r.taskId]) byTask[r.taskId] = []
-    byTask[r.taskId].push(r.mm)
-  }
-  return { day, tasks: Object.entries(byTask).map(([taskId, chips]) => {
-    const t = live.find(x => x.taskId === taskId)
-    return { taskId, content: t ? t.taskContent : '(deleted task)', complete: !!(t && t.complete), chips: chips.sort() }
-  }) }
-}
-function planRemove (input, { date, at } = {}) {
-  const t = resolveTask(input, liveTasks())
-  // Same default-day rule as planSet: the task's own scheduled day (plan rm after plan set must not
-  // silently target today and fail PLAN_NOT_FOUND for a future-scheduled task); explicit --date overrides
-  const day = planDayKey(date != null && date !== true ? date : (t.dayStart ? dayjs(t.dayStart).format('YYYY-MM-DD') : null))
-  const arr = planRows(day).filter(r => r.taskId === t.taskId)
-  if (!arr.length) throw new CliError(`task has no chips on ${day}`, 'PLAN_NOT_FOUND')
-  let ids
-  if (at) {
-    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(String(at))) throw new CliError('time must be HH:mm', 'USAGE')
-    ids = arr.filter(r => r.mm === at).map(r => r.id)
-    if (!ids.length) throw new CliError(`no chip at ${at} for this task on ${day}`, 'PLAN_NOT_FOUND')
-  } else {
-    ids = arr.map(r => r.id)
-  }
-  commit('plan', 'removeIds', ids)
-  audit.record({ action: 'plan.remove', targets: [t], changes: [{ before: { day, removed: ids.length } }], note: 'timeline chips removed' })
-  return { taskId: t.taskId, day, removed: ids.length }
-}
+/* Day-plan (schedule chips): extracted verbatim to lib-plan.cjs (2026-09-27 size-ratchet split) */
+const {
+  planDayKey, planRows, planSet, planList, planRemove,
+} = require('./lib-plan.cjs')({ open, commit, audit, CliError, dayjs, resolveTask, liveTasks, parseDate, dayStartOf })
 
 const evu = require('./event-utils.cjs')
 const { eventFocusMinutes, eventEnd } = evu
