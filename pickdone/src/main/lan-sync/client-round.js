@@ -43,7 +43,7 @@ const SNAPSHOT_ERROR_COOLDOWN_ROUNDS = 2
 function createClientRound(ctx) {
   const {
     opts, deviceId, authCode, pairingSecret, em,
-    peers, retryTimers, lastRoundBy, failStreakBy, oversizedSegmentBy, unpairedBy, activeClients,
+    retryTimers, lastRoundBy, failStreakBy, oversizedSegmentBy, unpairedBy, activeClients,
     needSnapshot, needSnapshotForce, clientSnapshotBusy, pullWatermarkBy,
     snapshotFatalCount, snapshotErrorCooldown, flushStallBy, errorBy,
     attSession, peerProgress, DIAL_FAILURE_BUDGET, maxSnapshotChunks,

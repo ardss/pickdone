@@ -139,7 +139,8 @@ module.exports = ({ open, commit, audit, CliError, resolveCategory, projectFlagK
       while (cur && cur.folderId && !seen.has(cur.categoryId)) {
         seen.add(cur.categoryId)
         if (cur.folderId === id) throw new CliError(`cannot move "${cat.categoryName}" into its own descendant (cycle)`, 'CATEGORY_CYCLE')
-        cur = all.find(c => c.categoryId === cur.folderId)
+        const nextId = cur.folderId
+        cur = all.find(c => c.categoryId === nextId)
       }
       if (!parent.folderIs) throw new CliError(`"${parent.categoryName}" is not a folder — the App only nests categories inside folders`, 'CATEGORY_NOT_FOLDER')
       if (cat.folderIs) throw new CliError(`"${cat.categoryName}" is a folder: the App renders folders as roots only (nested folders are dropped from the sidebar), so folder→folder moves are rejected`, 'CATEGORY_NESTED_FOLDER')

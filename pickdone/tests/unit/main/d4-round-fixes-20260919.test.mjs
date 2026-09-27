@@ -103,10 +103,11 @@ test('d4 windows: crash-relaunch uses app.relaunch + app.quit, never app.exit(1)
 })
 
 /* ---------------- item 11: watcher null baseline arms instead of kicking ---------------- */
-test('d4 index: watcher baseline keeps null (disarmed) instead of mapping to 0 (source assertion)', () => {
-  const s = codeSrc('index.js')
+test('d4 watcher: baseline keeps null (disarmed) instead of mapping to 0 (source assertion)', () => {
+  // 2026-09-27 split: the poll moved verbatim out of index.js into external-db-watch.js — anchor follows it
+  const s = codeSrc('external-db-watch.js')
   assert.doesNotMatch(s, /readWatchMtime\(\) \|\| 0/, 'the null→0 false-external-write mapping is gone')
-  assert.match(codeSrc('index.js'), /lastMtime == null\) \{ lastMtime = m/, 'first non-null read only arms the baseline, no kick')
+  assert.match(s, /lastMtime == null\) \{ lastMtime = m/, 'first non-null read only arms the baseline, no kick')
 })
 
 /* ---------------- item 10: tomato-float destroys the window when load retries are exhausted ---------------- */

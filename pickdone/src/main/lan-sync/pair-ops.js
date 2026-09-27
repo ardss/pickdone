@@ -3,7 +3,6 @@
  * swappable module-level `state` (via getState) still applies, so __test.setState keeps working.
  * Registration stays in the bootstrap's registerOps (cli/check-command-bus.cjs anchors the
  * sync-conflict-backups spread there); only the handler bodies moved. */
-const { timingSafeEqual } = require('node:crypto')
 const { generatePairingSecret, derivePairingCode } = require('../../../shared/sync-core/pairing.mjs')
 
 module.exports = ({ getState, settingGet, settingPut, busWrite, getSettingsPayload, ensureIdentity,

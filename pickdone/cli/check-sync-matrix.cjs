@@ -8,7 +8,7 @@
  * seen in past waves). This gate cross-checks, both directions:
  *
  *   1. Every entity the doc lists as syncable (§3 round kinds) must still exist in the code's
- *      authoritative registry: SYNCABLE_ENTITIES in src/main/sync-apply.js (the apply pipeline's
+ *      authoritative registry: SYNCABLE_ENTITIES in src/main/sync-apply-hydrate.js (the apply pipeline's
  *      egress/ingress allowlist).
  *   2. Every code entity must appear in the doc — UNKNOWN = ERROR, forcing the doc to be updated
  *      in the same commit that adds a syncable entity.
@@ -20,7 +20,7 @@
  *      and stay a subset of the syncable entities.
  *
  * Dependency-free except command-manifest.js (which is deliberately loadable outside electron —
- * sync-apply.js itself requires electron-log, so its SYNCABLE_ENTITIES set is extracted by
+ * sync-apply-hydrate.js itself requires electron-log, so its SYNCABLE_ENTITIES set is extracted by
  * source parse, same technique the other static gates use).
  *
  * Env overrides for red-proof fixtures:
@@ -73,13 +73,13 @@ const docKindsList = docKinds
 if (!docKindsList.length) fail('doc: cannot parse the §3 DATA_CHANNEL_KINDS declaration')
 
 // ── code side ───────────────────────────────────────────────────────────────
-// SYNCABLE_ENTITIES from src/main/sync-apply.js (source parse — the module pulls electron-log).
-const applySrc = fs.readFileSync(path.join(ROOT, 'src', 'main', 'sync-apply.js'), 'utf8')
+// SYNCABLE_ENTITIES from src/main/sync-apply-hydrate.js (source parse — the module pulls electron-log).
+const applySrc = fs.readFileSync(path.join(ROOT, 'src', 'main', 'sync-apply-hydrate.js'), 'utf8')
 const mSyncable = applySrc.match(/SYNCABLE_ENTITIES\s*=\s*new Set\(\[([^\]]*)\]\)/)
 const codeEntities = mSyncable
   ? [...mSyncable[1].matchAll(/'([A-Za-z][A-Za-z0-9]*)'/g)].map(m => m[1])
   : []
-if (!codeEntities.length) fail('code: cannot parse SYNCABLE_ENTITIES from src/main/sync-apply.js')
+if (!codeEntities.length) fail('code: cannot parse SYNCABLE_ENTITIES from src/main/sync-apply-hydrate.js')
 
 // DATA_CHANNEL_KINDS from src/main/lan-sync-bootstrap.js
 const bootSrc = fs.readFileSync(path.join(ROOT, 'src', 'main', 'lan-sync-bootstrap.js'), 'utf8')
@@ -91,7 +91,7 @@ if (!codeKindsList.length) fail('code: cannot parse DATA_CHANNEL_KINDS from src/
 
 // Command manifest — dependency-free by contract, safe to require here. Always loaded from
 // THIS repo (its relative shared/ import breaks under a SYNC_MATRIX_ROOT fixture tree; the
-// code-side fixtures only vary the source-parsed sync-apply.js anyway).
+// code-side fixtures only vary the source-parsed sync-apply-hydrate.js anyway).
 let manifest
 try {
   manifest = require(path.join(path.dirname(path.dirname(__filename)), 'src', 'main', 'command-manifest.js'))
@@ -109,15 +109,15 @@ for (const row of Object.values(manifest.COMMANDS)) {
 // ── cross-checks ────────────────────────────────────────────────────────────
 // 1. doc → code: every matrix entity's sync path must still exist.
 for (const e of docEntities) {
-  if (!codeEntities.includes(e)) fail(`doc→code: matrix entity "${e}" (docs/sync-matrix.md §3) has no SYNCABLE_ENTITIES entry in src/main/sync-apply.js — the sync path was dropped or renamed without updating the contract`)
+  if (!codeEntities.includes(e)) fail(`doc→code: matrix entity "${e}" (docs/sync-matrix.md §3) has no SYNCABLE_ENTITIES entry in src/main/sync-apply-hydrate.js — the sync path was dropped or renamed without updating the contract`)
 }
 // 2. code → doc: unknown entity = error (forces the doc update in the same commit).
 for (const e of codeEntities) {
-  if (!docEntities.includes(e)) fail(`code→doc: syncable entity "${e}" (sync-apply.js SYNCABLE_ENTITIES) is missing from docs/sync-matrix.md §3 — update the matrix doc in the same commit`)
+  if (!docEntities.includes(e)) fail(`code→doc: syncable entity "${e}" (sync-apply-hydrate.js SYNCABLE_ENTITIES) is missing from docs/sync-matrix.md §3 — update the matrix doc in the same commit`)
 }
 // 3. manifest ↔ SYNCABLE_ENTITIES agreement.
 for (const e of fullEntities) {
-  if (!codeEntities.includes(e)) fail(`manifest→code: command-manifest.js has sync:'full' commands for entity "${e}" but it is not in SYNCABLE_ENTITIES (sync-apply.js) — rows of this entity will pass the bus yet never egress/ingress`)
+  if (!codeEntities.includes(e)) fail(`manifest→code: command-manifest.js has sync:'full' commands for entity "${e}" but it is not in SYNCABLE_ENTITIES (sync-apply-hydrate.js) — rows of this entity will pass the bus yet never egress/ingress`)
 }
 for (const e of codeEntities) {
   if (!fullEntities.has(e)) fail(`code→manifest: syncable entity "${e}" (SYNCABLE_ENTITIES) has no sync:'full' command row in command-manifest.js — its write surface left the bus census`)

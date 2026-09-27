@@ -30,6 +30,19 @@ const path = require('path')
 const root = path.join(__dirname, '..')
 const manifest = require(path.join(root, 'src/main/command-manifest'))
 
+// sync-apply (via sync-apply-hydrate) requires electron-log at top level; this gate runs under
+// plain node, so stub it just for the localKeys-mirror require below (functions under test are
+// log-free; only the module load path pulls the logger in).
+const Module = require('module')
+const origLoad = Module._load
+Module._load = function (request, parent, isMain) {
+  if (request === 'electron-log') {
+    const stub = { info () {}, warn () {}, error () {}, scope () { return stub } }
+    return stub
+  }
+  return origLoad.apply(this, arguments)
+}
+
 let failed = 0
 const bad = m => { console.error('  ✗ ' + m); failed++ }
 const ok = m => console.log('  ✓ ' + m)
@@ -237,7 +250,7 @@ function run () {
     { file: 'src/main/lan-sync-bootstrap.js', frags: ["require('./sync-conflict-backups').ops(() => (op, p) => state.db.call(op, p))"] },
     { file: 'src/main/lan-sync-bootstrap.js', frags: ['dbCall: (op, p) => state.db.call(op, p)'] },
     { file: 'src/main/sync-apply.js', frags: ['createBus((op, p) => state.db.call(op, p))'] },
-    { file: 'src/main/sync-apply.js', frags: ['new Map((state.db.call(op, {}) || [])'] }
+    { file: 'src/main/sync-apply-hydrate.js', frags: ['new Map((state.db.call(op, {}) || [])'] }
   ]
   let p2sites = 0
   for (const base of ['src', 'cli']) {

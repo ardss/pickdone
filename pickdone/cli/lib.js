@@ -5,7 +5,6 @@
  */
 const path = require('path')
 const fs = require('fs')
-const { spawn } = require('child_process')
 const dayjs = require('dayjs')
 require('dayjs/locale/zh-cn')
 dayjs.locale('zh-cn')
@@ -662,7 +661,7 @@ const {
 
 /* Day-plan (schedule chips): extracted verbatim to lib-plan.cjs (2026-09-27 size-ratchet split) */
 const {
-  planDayKey, planRows, planSet, planList, planRemove,
+  planSet, planList, planRemove,
 } = require('./lib-plan.cjs')({ open, commit, audit, CliError, dayjs, resolveTask, liveTasks, parseDate, dayStartOf })
 
 const evu = require('./event-utils.cjs')
