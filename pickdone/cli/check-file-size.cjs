@@ -56,7 +56,15 @@ function countLines (file) {
 }
 
 function loadBaseline () {
-  try { return JSON.parse(fs.readFileSync(BASELINE, 'utf8')) } catch { return {} }
+  try {
+    return JSON.parse(fs.readFileSync(BASELINE, 'utf8'))
+  } catch (e) {
+    // ENOENT = first run, an empty ratchet is legitimate. Any other failure (corrupt JSON,
+    // unreadable) would silently disable every baseline exemption — refuse instead of going green.
+    if (e && e.code === 'ENOENT') return {}
+    console.error('✗ structure-baseline.json exists but cannot be parsed (' + e.message + ') — the size ratchet would silently run with zero exemptions, refusing to fake-green')
+    process.exit(1)
+  }
 }
 
 function main () {

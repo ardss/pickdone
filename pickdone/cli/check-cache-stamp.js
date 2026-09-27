@@ -40,10 +40,18 @@ if (dirty.length) {
 }
 
 const tsOf = (spec) => Number(git(['log', '-1', '--format=%ct', '--', spec])) || 0
+// Fail-closed guard: a git failure (broken .git, missing binary) used to read as "no commit
+// history" and skip the gate entirely. Verify git actually works before trusting that skip.
+let gitOk = true
+try { git(['rev-parse', '--is-inside-work-tree']) } catch { gitOk = false }
 const htmlTs = tsOf('renderer/index.html')
 const assetFiles = git(['ls-files', ...WATCHED]).split('\n').filter(f => ASSET_EXT.test(f))
 const stale = assetFiles.filter(f => tsOf(f) > htmlTs)
-if (!htmlTs) { console.log('✓ 缓存戳:renderer/index.html 无提交历史(非 git 环境?),跳过'); process.exit(0) }
+if (!htmlTs) {
+  if (!gitOk) { console.error('✗ 缓存戳:git 不可用且 renderer/index.html 无提交时间——无法判定缓存戳纪律,拒绝假绿'); process.exit(1) }
+  console.log('✓ 缓存戳:renderer/index.html 无提交历史,跳过'); process.exit(0)
+}
+if (!gitOk) { console.error('✗ 缓存戳:git 异常,ls-files/log 结果不可信,拒绝假绿'); process.exit(1) }
 if (stale.length) {
   console.error('✗ 缓存戳纪律:以下资源在 renderer/index.html 最后一次修改之后又被改过,但 ?v= 戳未 bump——发版后已装用户将拿到旧缓存(immutable):\n  ' + stale.join('\n  ') + '\n  修复:改 renderer/index.html 的 ?v= 时间戳并随包发布(无 ?v= 的直引资源见脚本头部豁免清单,升级需人工 bump)')
   process.exit(1)

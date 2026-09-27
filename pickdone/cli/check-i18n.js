@@ -62,11 +62,22 @@ if (process.argv.includes('--all')) {
   // filter then dropped tracked changes via the path.join(ROOT, f) double-prefix and untracked ones via the
   // prefix miss, so incremental mode scanned 0 files and always exited green. --relative=. pins both outputs
   // to pickdone-relative paths unambiguously.
-  const diff = execFileSync('git', ['diff', '--name-only', '--relative=.', 'HEAD'], gitOpts)
+  // 2026-09-23 P2 fix + 2026-09-28 correction: bare `git diff --name-only HEAD` printed REPO-ROOT-relative
+  // paths (pickdone/...) while `git ls-files --others` printed pickdone-RELATIVE ones. `--relative=.`
+  // was tried as the pin, but on git 2.53 it returns an EMPTY diff from a subdirectory (the scan
+  // surface silently collapsed to zero). Bare `--relative` yields pickdone-relative paths correctly.
+  const diff = execFileSync('git', ['diff', '--name-only', '--relative', 'HEAD'], gitOpts)
     + '\n' + execFileSync('git', ['ls-files', '--others', '--exclude-standard'], gitOpts) // 未跟踪新文件一并查,否则新建文件绕过检查(2026-09-05 复核 P2)
   files = diff.split('\n').map(f => f.trim().replace(/\\/g, '/'))
     .filter(f => SCAN_EXT(f) && !f.startsWith('../'))
-    .map(f => path.join(ROOT, f)).filter(p => { try { return require('fs').statSync(p).isFile() } catch { return false } })
+  // 假绿防线: stat 失败的文件被静默剔除 = 扫描面静默缩水。diff 里的 js/vue 路径必然在盘上
+  // (git diff --name-only HEAD 不含已删除路径), stat 失败只可能是环境/路径归一化问题 → 红。
+  const statFailed = files.filter(f => { try { return !require('fs').statSync(path.join(ROOT, f)).isFile() } catch { return true } })
+  if (statFailed.length) {
+    console.error('✗ 增量扫描面塌缩:' + statFailed.length + ' 个 diff 中的 js/vue 文件 stat 失败,拒绝静默剔除:\n  ' + statFailed.join('\n  '))
+    process.exit(1)
+  }
+  files = files.map(f => path.join(ROOT, f))
   if (!files.length) {
     // Self-check (假绿防线): the worktree DOES hold dirty js/vue files but none were scanned — that is
     // scan-surface collapse (filter/normalization rot), not a clean pass. Fail red instead.

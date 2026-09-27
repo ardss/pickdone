@@ -183,9 +183,15 @@ function main () {
   if (args.includes('--staged')) {
     const { execFileSync } = require('child_process')
     const out = execFileSync('git', ['diff', '--cached', '--name-only', '--diff-filter=ACM'], { cwd: ROOT, encoding: 'utf8' })
-    files = out.split('\n').filter(Boolean)
-      .filter(f => /^src[\\/]main[\\/]/.test(f))
-      .map(f => path.join(ROOT, f)).filter(f => fs.existsSync(f))
+    // diff-filter=ACM only yields added/copied/modified paths, so every listed file MUST exist on
+    // disk; silently dropping a missing one would shrink the scan surface to a fake-green.
+    const stagedMain = out.split('\n').filter(Boolean).filter(f => /^src[\\/]main[\\/]/.test(f))
+    const missing = stagedMain.filter(f => !fs.existsSync(path.join(ROOT, f)))
+    if (missing.length) {
+      console.error('✗ boot-order --staged: staged src/main file(s) not found on disk — scan surface would silently shrink, refusing to fake-green:\n  ' + missing.join('\n  '))
+      process.exit(1)
+    }
+    files = stagedMain.map(f => path.join(ROOT, f))
   } else {
     files = listFiles(TARGET)
   }
