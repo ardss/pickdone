@@ -814,21 +814,19 @@ function getSettingsPayload () {
   }
 }
 
-/** Pending inbound pair request surfaced to the renderer (contract: renderer reads
- *  status.pendingPair on mount and shows the confirm dialog; syncPairRespond answers it). */
-function pendingPairPayload () {
-  const p = state.pendingPair
-  if (!p || typeof p.respond !== 'function') return null
-  return { deviceId: p.deviceId || null, deviceName: p.deviceName || null, host: p.host || null, at: p.at || Date.now() }
-}
+// Pending-pair payload helper; body in flush-quarantine-view.js (size-ratchet extraction).
+// Payload/summary helpers; bodies in flush-quarantine-view.js (size-ratchet extraction).
+const pendingPairPayload = () => require('./flush-quarantine-view').pendingPairPayload(state.pendingPair)
+const flushQuarantineSummary = require('./flush-quarantine-view').summarizeFlushQuarantine
 
 function getStatusPayload () {
   const s = getSettingsPayload()
   const pendingPair = pendingPairPayload()
+  const flushQuarantine = flushQuarantineSummary(state.db)
   if (!state.node) {
     return {
       ...s, listening: false, port: null, peers: [], recent: [], security: [],
-      lastRoundAt: null, lastError: null, pendingPair,
+      lastRoundAt: null, lastError: null, pendingPair, flushQuarantine,
       self: { deviceId: s.deviceId, deviceName: s.deviceName, port: null },
     }
   }
@@ -840,6 +838,8 @@ function getStatusPayload () {
     // is machine-local), and it wins over the advertised device name in the renderer.
     peers: (st.peers || []).map(p => ({ ...p, deviceName: p.deviceName || p.name, alias: peerAliasOf(p && p.deviceId) })),
     recent: st.recent, security: st.security,
+    // Read-only flush-quarantine summary (Device Center; re-apply op is a registered follow-up).
+    flushQuarantine,
     lastRoundAt: st.lastRoundAt, lastError: st.lastError, pendingPair,
     self: st.self || { deviceId: s.deviceId, deviceName: s.deviceName, port: st.port },
   }

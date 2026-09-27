@@ -284,3 +284,49 @@ test('bootstrap wraps pair-request respond so auto-reject also clears state.pend
     'respond must be wrapped to clear state.pendingPair before delegating')
   assert.match(handler[0], /state\.pendingPair = record/, 'the wrapped record is what gets stored')
 })
+
+/* ---------- 2026-09-27 sync wave: flush-stalled peerState + flush-quarantine surfacing ---------- */
+
+test('peerDotClass: flush-stalled peerState is red and does NOT age out via the 5min window', () => {
+  const { peerDotClass } = pureFns(['peerDotClass'])
+  const now = 1700000000000
+  assert.equal(peerDotClass({ online: true, peerState: 'flush-stalled' }, now), 'sync-dot--err')
+  // even a STALE lastError would normally fall back to ok — flush-stalled must win regardless
+  assert.equal(peerDotClass({ online: true, peerState: 'flush-stalled', lastError: 'boom', lastErrorAt: now - 60 * 60 * 1000 }, now), 'sync-dot--err')
+  assert.equal(peerDotClass({ online: true, peerState: 'ok' }, now), 'sync-dot--ok')
+})
+
+test('peerFlushStalled: pure helper matches peerState flush-stalled only', () => {
+  const { peerFlushStalled } = pureFns(['peerFlushStalled'])
+  assert.equal(peerFlushStalled({ peerState: 'flush-stalled' }), true)
+  assert.equal(peerFlushStalled({ peerState: 'ok' }), false)
+  assert.equal(peerFlushStalled({}), false)
+  assert.equal(peerFlushStalled(null), false)
+})
+
+test('flush-stalled notice renders distinctly on the peer card, before the generic lastError line', () => {
+  assert.match(src, /v-else-if="isFlushStalled\(p\)"/, 'peer card must have a dedicated flush-stalled line')
+  assert.match(src, /\$t\('sync\.flushStalledNotice'\)/)
+  const order = src.indexOf('isFlushStalled(p)')
+  const generic = src.indexOf("v-else-if=\"p.lastError\"")
+  assert.ok(order > -1 && generic > -1 && order < generic, 'flush-stalled line must win over generic lastError')
+})
+
+test('flush quarantine section: read-only, count + op names, no re-apply action', () => {
+  assert.match(src, /v-if="enabled && flushQuarantine\.length"/, 'section renders from status.flushQuarantine when non-empty')
+  assert.match(src, /\$t\('sync\.quarantineSection'\) \}\} \(\{\{ quarantineCount \}\}\)/, 'header shows the total parked-row count')
+  assert.match(src, /v-for="q in flushQuarantine"/, 'one row per parked op')
+  assert.match(src, /\{\{ q\.op \}\}/, 'op name displayed')
+  assert.match(src, /\$t\('sync\.quarantineRows'/, 'per-op parked-row count displayed')
+  assert.match(src, /quarantineOpen = !quarantineOpen/, 'collapsible like the conflict-backups section')
+  assert.doesNotMatch(src, /quarantine(Reapply|Restore|Apply|Retry)/i, 'read-only: no re-apply action (registered follow-up)')
+})
+
+test('main: getStatusPayload exposes a read-only flushQuarantine summary from meta', () => {
+  const view = read('src/main/flush-quarantine-view.js')
+  assert.match(view, /function summarizeFlushQuarantine \(db\)/)
+  assert.match(view, /META_FLUSH_QUARANTINE_PREFIX/, 'summary must scan the real quarantine meta prefix')
+  const boot = read('src/main/lan-sync-bootstrap.js')
+  assert.match(boot, /flushQuarantineSummary\(/, 'bootstrap must wire the extracted summarizer')
+  assert.match(boot, /flushQuarantine,/, 'getStatusPayload must carry flushQuarantine in both node/no-node branches')
+})
