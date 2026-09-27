@@ -371,9 +371,13 @@ ok('tick is idempotent and does not double-book', tickState2 && tickState2.recs 
 const rStart = Date.now() - 5 * 60000 - 2000
 await evalJson(`(${STORE_Q}).commit('tomato/patch',{status:'startRestTime',startedAt:${rStart},restTime:5})`)
 // Same pump reasoning as the flip poll above: the contract under test is "rest expiry auto-resets
-// through the shared tick", not Chromium's timer delivery latency in an unfocused window.
-const restDone = await pumpFor(`(()=>{const st=(${STORE_Q});return st&&st.state.tomato.status==='default'?'default':false})()`, 40, 600)
-ok('rest expiry auto-resets', restDone === 'default', String(restDone))
+// through the shared tick", not Chromium's timer delivery latency in an unfocused window. The probe
+// returns a full snapshot each iteration so a failure carries the tick's inputs (status/startedAt/
+// restTime as the tick saw them) instead of an opaque null — restTime=0 after a settings race, a
+// startedAt that lost the backdated patch, or an unchanged status each point at a different cause.
+const restDone = await pumpFor(`(()=>{const st=(${STORE_Q});if(!st)return false;const t=st.state.tomato;window.__restProbe={status:t.status,startedAt:t.startedAt,restTime:t.restTime,tomatoTime:t.tomatoTime,now:Date.now()};return t.status==='default'?'default':false})()`, 40, 600)
+const restProbe = await evalJson('window.__restProbe||null')
+ok('rest expiry auto-resets', restDone === 'default', JSON.stringify({ restDone, lastProbe: restProbe }))
 // Restore the scene: put the pomodoro state back, avoiding pollution of real data (Vue3 path: appUI.$store; globalProperties fallback)
 await evalAwait(`(function(){ const s=(window.appUI&&window.appUI.$store)||(function(){const a=document.getElementById('app').__vue_app__;return a.config.globalProperties.$store})(); s.commit('tomato/patch', JSON.parse(${JSON.stringify(tomatoBackup) || "'{}'"})); return 'ok' })()`)
 await sleep(300)

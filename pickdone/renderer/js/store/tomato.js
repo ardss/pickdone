@@ -98,7 +98,13 @@ const DEF = {
   // (todo DB meta 'tomatoFloatClosedByUser'; see tomato-float hide/show/undock + renderer main.js auto-show).
   whiteNoiseAudio: '',
   preTomatoTimes: [25], preRestTimes: [5],
-  remainSec: 1500, startedAt: 0
+  remainSec: 1500, startedAt: 0,
+  // Wall-clock stamp of the last STATUS transition (patch sets it when status changes). Cross-window
+  // sync compares these so a throttled peer's stale blob can never resurrect a phase the local
+  // window already transitioned past (2026-09-27: float-window stale write rolled the main window's
+  // focus->rest flip back to 'startTomatoTime', then the recorded claim blocked every retry tick —
+  // the phase wedged until the 24h rollover).
+  phaseTs: 0
 }
 
 function loadState (voidExpired = true) {
@@ -296,6 +302,7 @@ export default {
       // F-C3: duration keys (TOMATO_LEDGER_KEYS family) are clamped at this final hop — an unclamped
       // inbound value (e.g. tomatoTime 9999 from an unsanitized path) used to drive the running
       // countdown and get persisted to LS + db.settingsState verbatim.
+      if (p && p.status && p.status !== s.status) s.phaseTs = Date.now()
       Object.assign(s, clampNumericSettings(p))
       persistState(s)
     },
@@ -370,7 +377,18 @@ export default {
       if (ping == null || ping === lastAppliedPing) return
       lastAppliedPing = ping
       const records = s.tomatoRecordList
-      Object.assign(s, loadState(false))
+      const fresh = loadState(false)
+      if ((fresh.phaseTs || 0) < (s.phaseTs || 0)) {
+        // Stale-peer guard: the peer's blob describes a phase OLDER than one this window already
+        // transitioned past (throttled float writing mid-focus state after the main window flipped).
+        // Applying it would roll the phase back; and with the phase claim already recorded, every
+        // retry tick would no-op — a permanent wedge. Preferences still sync; the phase stays local.
+        const PHASE_KEYS = ['status', 'startedAt', 'remainSec', 'phaseTs']
+        const prefs = Object.fromEntries(Object.entries(fresh).filter(([k]) => !PHASE_KEYS.includes(k)))
+        Object.assign(s, prefs)
+      } else {
+        Object.assign(s, fresh)
+      }
       s.tomatoRecordList = records
     }
   },
