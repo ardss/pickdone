@@ -460,6 +460,11 @@ function rebuildTrayMenu () {
 }
 
 /* ================= Single-instance lock & startup ================= */
+// D10: true only for the singleton-lock WINNER after full startup. Declared before its first
+// assignment below — the duplicate instance's app.quit() used to run the whole will-quit flush
+// chain (preventDefault + quitAck + 500ms floor before a no-op flushNow) with a null db handle
+// and no windows.
+let ranFullInit = false
 if (!app.requestSingleInstanceLock()) { app.quit() } else {
   // D10 (2026-09-27): singleton-lock winner — only this instance may run the will-quit flush chain
   // (the duplicate's app.quit() has no DB and no windows; see shouldRunQuitFlush in will-quit).
@@ -671,10 +676,8 @@ function dbApi () { return { queryTodos: p => dbm.call('queryTodos', p), ...prox
 
 let quitting = false // re-entrancy guard for the will-quit flush window (see below)
 let flushDone = false // flush window finished; second will-quit passes through so the native quit event (updater autoInstallOnAppQuit) fires
-// D10 (2026-09-27): true only for the singleton-lock WINNER after full startup. The duplicate
-// instance's app.quit() used to run the whole will-quit flush chain (preventDefault + quitAck +
-// 500ms floor before a no-op flushNow) with a null db handle and no windows.
-let ranFullInit = false
+// D10 (2026-09-27): quit-chain guards (extracted to quit-guards.js for plain-node testability).
+const { createHangFallback, createReentrancyGuard, shouldRunQuitFlush } = require('./quit-guards')
 // D10 (2026-09-27): the 3s hang fallback is armed BEFORE the awaited flush steps (see flushNow) —
 // the old code created it only after the sync stop / dbm.close() resolved, so a never-settling
 // await left the windowless process hung forever with no timer.
@@ -700,8 +703,6 @@ const quitFromTrayGuard = createReentrancyGuard()
 // for updater's autoInstallOnAppQuit) is unchanged.
 const quitAckModule = require('./quit-ack')
 const quitAck = quitAckModule.createQuitAckTracker()
-// D10 (2026-09-27): quit-chain guards (extracted to quit-guards.js for plain-node testability).
-const { createHangFallback, createReentrancyGuard, shouldRunQuitFlush } = require('./quit-guards')
 // webContents -> latest 'destroyed'/'render-process-gone' abandon closure (WeakMap: dying senders GC freely)
 const quitAckGone = new WeakMap()
 app.on('before-quit', () => {
