@@ -2,12 +2,11 @@
 const fs = require('fs')
 const path = require('path')
 const i18nM = require('../i18n')
-const fixUtil = require('../fix-util')
 const attachments = require('../attachments')
 const { saveAttachment, attachmentPath, attachDir } = attachments
 
 module.exports = function attachmentHandlers (ctx) {
-  const { isLocked, isSafeExternal, app, getMainWindow, broadcastWhiteNoiseUpdated, notifySyncChange } = ctx
+  const { isLocked, isSafeExternal, getMainWindow, broadcastWhiteNoiseUpdated, notifySyncChange } = ctx
   const { dialog } = require('electron')
   // D6 P2 (2026-09-21): destructive attachment channels are main-window-only, same capability
   // class as the backup channels hardened for this exact threat (compromised aux window).
@@ -42,50 +41,9 @@ module.exports = function attachmentHandlers (ctx) {
       if (isSafeExternal(url)) return shell.openExternal(url)
       return false
     },
-    'download-file-and-open': (e, url) => {
-      const { shell } = require('electron')
-      if (isLocked()) throw new Error('locked')
-      // P2 2026-09-12: the trailing unconditional `return true` lied — unknown URL schemes reported
-      // success. Return per branch: local opened → true, safe external handled → true, else false.
-      if (typeof url !== 'string') return false // F2 2026-09-15: 同上 typeof 守卫(三通道家族一致性)
-      if (url.startsWith('local://')) {
-        const p = attachmentPath(url.slice(8))
-        if (!fs.existsSync(p)) return { missing: true, name: path.basename(p) } // same missing-file guard as open-file
-        shell.openPath(p); return true
-      }
-      if (isSafeExternal(url)) { shell.openExternal(url); return true }
-      return false
-    },
-    'save-upload-file-to-download': (e, url, targetName) => {
-      if (isLocked()) throw new Error('locked')
-      // H7 2026-09-12 P2: exact 'local://' prefix check BEFORE slicing (a non-local url used to have
-      // its first 8 characters sliced off and fed to attachmentPath)
-      if (typeof url !== 'string' || !url.startsWith('local://')) return null
-      // Security check: force basename on the target name and strip path segments (both separators,
-      // Windows treats '\' as a path separator too), preventing path traversal writes to arbitrary locations
-      const rawName = String(targetName || '').replace(/[\\/]/g, '_')
-      if (/^\.+$/.test(rawName)) throw new Error('bad target name')
-      let base = path.basename(rawName)
-      // Windows reserved device names (CON, NUL, COM1..9, LPT1..9, with or without extension) are
-      // unusable/unpredictable as download filenames — prefix them instead of failing the save
-      if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i.test(base)) base = '_' + base
-      const safeName = base || path.basename(attachmentPath(url.slice(8)))
-      // 同名不静默覆盖(2026-09-10 P2):copyFileSync 直接覆盖用户已有的同名下载;改为 " (n)" 后缀,
-      // 并包 try 返回结构化错误(磁盘满/权限等此前抛裸异常,渲染端只能拿到笼统 invoke reject)
-      try {
-        const src = attachmentPath(url.slice(8))
-        // Missing-file guard (same as open-file): structured result instead of a raw ENOENT throw
-        if (!fs.existsSync(src)) return { missing: true, name: path.basename(src) }
-        const dst = fixUtil.nextAvailableName(app.getPath('downloads'), safeName, p => fs.existsSync(p))
-        fs.copyFileSync(src, dst)
-        return dst
-      } catch (err) {
-        throw new Error('save-to-download failed: ' + String((err && err.message) || err))
-      }
-    },
-    // P2 2026-09-11: deletion failures used to be swallowed and true returned regardless — the user was
-    // told the attachment was gone while the file stayed on disk. Throw a structured error instead (the
-    // renderer's existing invoke catch/reportError displays it); no renderer caller changes needed.
+    // r3 dead-channel removal (2026-09-28): 'download-file-and-open' and
+    // 'save-upload-file-to-download' deleted — todoAPI.downloadAndOpen/saveToDownloads had
+    // zero renderer callers (open-file serves the live attachment path).
     'delete-file': (e, url) => {
       assertMainWindow(e) // D6 P2 (2026-09-21): destructive channel, main-window-only like backup write
       if (isLocked()) throw new Error('locked')
@@ -150,10 +108,7 @@ module.exports = function attachmentHandlers (ctx) {
       broadcastWhiteNoiseUpdated()
       return { name: path.basename(src), key }
     },
-    // --- Misc ---
-    // C13 (2026-09-25): the hand-copied mime subset here drifted from protocol.js's table —
-    // both now read the ONE table (attachmentMimeFor). ALLOWED_EXT (storage whitelist) is a
-    // separate concern and unchanged.
-    'mime-get-type': (e, name) => require('../protocol').attachmentMimeFor(name)
+    // r3 dead-channel removal (2026-09-28): 'mime-get-type' deleted — todoAPI.mimeByType had
+    // zero renderer callers; protocol.attachmentMimeFor stays the single mime table.
   }
 }

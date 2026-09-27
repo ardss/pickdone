@@ -49,14 +49,8 @@ interface TodoAPI {
   version?: string
   /** 数据隔离标记(TODO_USER_DATA_DIR 存在=false 并列调试实例共用真库) */
   isDataIsolated: boolean
-  decryptSecret: (...args: any[]) => any
   verifyLockPassword: (...args: any[]) => any
   unlockApp: (...args: any[]) => any
-  hideWindow: (...args: any[]) => any
-  downloadAndOpen: (...args: any[]) => any
-  saveToDownloads: (...args: any[]) => any
-  syncNow: (...args: any[]) => any
-  mimeByType: (...args: any[]) => any
   checkForUpdates: (...args: any[]) => any
   closeRequest: (...args: any[]) => any
   deleteFile: (...args: any[]) => any

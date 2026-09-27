@@ -134,6 +134,8 @@ export default {
     "pairTimeoutMsg": "No response from the other device (timeout)",
     "pairThrottledMsg": "Too many attempts — please try again later",
     "pairFailGenericMsg": "Pairing failed — please try again",
+    "egressHydrationFailed": "Egress hydration failed for {n} change(s) — pushed sync data is INCOMPLETE (recoverable via full snapshot)",
+    "oplogAppendFailed": "Local change logging failed — recent change(s) will not sync until the next full snapshot",
     "pairExpiredHint": "Request timed out",
     "kindSnapshot": "Snapshot sync",
     "feedSessionHint": "History is kept for this session only",

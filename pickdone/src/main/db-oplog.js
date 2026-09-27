@@ -33,7 +33,7 @@ const SYNC_OPLOG_KEEP = 10000
  *  page through, so a larger request limit is pointless and a smaller one is honored. */
 const oplogKeepLimit = limit => Math.min(SYNC_OPLOG_KEEP, limit)
 
-module.exports = Object.assign(({ getDb, log, getPurgeChips }) => {
+module.exports = Object.assign(({ getDb, log, getPurgeChips, onAppendFailure }) => {
   /* ---------- Change-capture oplog (P1 sync groundwork, 2026-09-15) ---------- */
   // One sync_oplog row per successful write op. Appended in call() (db layer, like the ledger hook) so
   // IPC, aux windows and the CLI are all captured. commitSyncBatch is excluded — it is the sync-ack
@@ -135,6 +135,14 @@ module.exports = Object.assign(({ getDb, log, getPurgeChips }) => {
   let oplogInsert = null
   let oplogCount = null
   let oplogOpCount = 0
+  // r3 fix (2026-09-28): a failed append used to be log.warn-only — the local write succeeded,
+  // but its delta pointer is now PERMANENTLY missing from the ring (the only record increment
+  // propagation has), peers silently stop receiving that change until the next full snapshot,
+  // and the push watermark advances as if nothing happened. Fail loud like the egress side
+  // (hydrateRow already throws+counts): keep a monotonic failure counter (oplogStats below)
+  // and invoke the injected onAppendFailure hook so the caller can surface the loss
+  // (db.js wires it to an 'oplog-append-failed' syncEvent → Device Center).
+  let oplogAppendFailures = 0
   // R7 fix (pending-count churn): machine-local bookkeeping keys (_savedAt/_lsAt stamps,
   // db.settingsState/db.habitsState blob mirrors, sync.* state) must never ENTER the ring —
   // the settings mirror rewrites them every few seconds, so ~3 no-op pointers landed per tick,
@@ -165,11 +173,18 @@ module.exports = Object.assign(({ getDb, log, getPurgeChips }) => {
         const n = oplogCount.get().n
         if (n > SYNC_OPLOG_KEEP) getDb().prepare('DELETE FROM sync_oplog WHERE seq <= (SELECT MAX(seq) FROM sync_oplog) - ?').run(SYNC_OPLOG_KEEP)
       }
-    } catch (e) { log.warn('[TodoDB] oplog append failed (write itself is unaffected):', e.message) }
+    } catch (e) {
+      oplogAppendFailures++
+      log.warn('[TodoDB] oplog append FAILED — that change will NOT propagate to peers until the next full snapshot:', e.message)
+      try { if (typeof onAppendFailure === 'function') onAppendFailure({ count: oplogAppendFailures, error: e.message }) } catch { /* surfacing is best-effort */ }
+    }
   }
 
   // Drop prepared statements on db re-init/close so the next handle re-prepares cleanly
   function oplogReset () { oplogInsert = null; oplogCount = null; oplogOpCount = 0 }
 
-  return { oplogEntriesFor, appendOplog, oplogReset }
+  // r3 fix: read-side for the failure counter (Device Center / tests).
+  function oplogStats () { return { appendFailures: oplogAppendFailures } }
+
+  return { oplogEntriesFor, appendOplog, oplogReset, oplogStats }
 }, { SYNC_OPLOG_KEEP, oplogKeepLimit })

@@ -16,7 +16,16 @@ const SNOW_DEDUP_MAX_AGE_MS = 30 * 24 * 3600 * 1000
 // node_modules/electron-log, so fall back to a no-op logger instead of crashing at require time
 let log
 try { log = require('electron-log') } catch { log = { info () {}, warn () {}, error () {} } }
-const oplog = require('./db-oplog')({ getDb: () => db, log, getPurgeChips: () => purgeChipsScratch }), syncSchema = require('./db-sync-schema')({ getDb: () => db, log })
+const oplog = require('./db-oplog')({
+  getDb: () => db,
+  log,
+  getPurgeChips: () => purgeChipsScratch,
+  // r3 fix (2026-09-28): a failed delta-row append used to be log-only — the loss was invisible
+  // (peers stop receiving that change until the next full snapshot while the push watermark
+  // advances). Surface it through the Device Center sync-event channel (lazy require:
+  // lan-sync-bootstrap may not be initialized yet — its emitter is guarded and no-ops then).
+  onAppendFailure: info => { try { require('./lan-sync-bootstrap').emitOplogAppendFailure(info) } catch { /* surfacing is best-effort */ } },
+}), syncSchema = require('./db-sync-schema')({ getDb: () => db, log })
 const oplogKeepLimit = require('./db-oplog').oplogKeepLimit // D3 2026-09-24: SYNC_OPLOG_KEEP single source (was a bare 10000 clamp literal)
 
 let Database = null

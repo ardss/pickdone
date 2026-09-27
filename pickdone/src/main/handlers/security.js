@@ -53,16 +53,9 @@ module.exports = function securityHandlers (ctx) {
       if (!plain) return ''
       if (!safeStorage.isEncryptionAvailable()) throw new Error('secure-encryption-unavailable')
       return 'enc1:' + safeStorage.encryptString(String(plain)).toString('base64')
-    },
-    'decrypt-secret': (e, stored) => {
-      assertMainWindow(e) // main-window guard via getMainWindow (isDestroyed-safe; bare module var win threw "Object has been destroyed" after X-close→tray)
-      try {
-        const { safeStorage } = require('electron')
-        if (!stored) return ''
-        if (!stored.startsWith('enc1:')) return stored // backward compatible with historical plaintext
-        if (!safeStorage.isEncryptionAvailable()) return ''
-        return safeStorage.decryptString(Buffer.from(stored.slice(5), 'base64'))
-      } catch { return '' }
     }
+    // r3 dead-channel removal (2026-09-28): 'decrypt-secret' deleted — its only consumer
+    // (todoAPI.decryptSecret) had zero renderer callers, so this was an unused-but-reachable
+    // main-window IPC door to the lock-screen plaintext ciphertext. Re-add only with a caller.
   }
 }

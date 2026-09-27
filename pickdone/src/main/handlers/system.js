@@ -65,9 +65,8 @@ module.exports = function systemHandlers (ctx) {
     // and drop arbitrary xlsx files. Symmetric with the updater/critical-state siblings above.
     'export-todos-to-xlsx': (e, payload) => { assertMainWindow(e); if (isLocked()) throw new Error('locked'); return exportTodosToXlsx(payload) },
 
-    // --- Version-sync task set (offline no-op reserved channel) ---
-    'sync-todos-to-server': () => ({ offline: true }),
-
+    // r3 dead-channel removal (2026-09-28): 'sync-todos-to-server' (offline no-op) deleted —
+    // todoAPI.syncNow had zero renderer callers (SideNav sync goes through vuex, not IPC).
     // --- Diagnostic logs (renderer logs to a separate file; export diagnostics bundle) ---
     'log:write': (e, entries) => {
       try {

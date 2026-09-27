@@ -93,16 +93,27 @@ function flushFiredNow () {
     }
   }
 }
-/** Restore firedReminders from meta at startup, so already-fired reminders are not re-fired by the catch-up path after restart */
+/** Restore firedReminders from meta at startup, so already-fired reminders are not re-fired by the catch-up path after restart.
+ * r3 fix (2026-09-28): a corrupted timestamp used to fall back to Date.now() — the entry looked
+ * "just fired", so the catch-up path silently swallowed that reminder FOREVER (single-sided
+ * permanent loss with no trace). The tolerance direction is now the safe one: a corrupt entry is
+ * DROPPED (worst case after restart = one re-fire by catch-up, which the LRU dedupes within a
+ * run), never converted into a fake fresh watermark. */
 function loadFiredFromMeta (db) {
   try {
     const raw = db.call('getMeta', FIRED_META_KEY)
     if (!raw || typeof raw !== 'string') return
     for (const pair of String(raw).split('\x1f')) {
       const [k, ts] = pair.split('|')
-      if (k && ts && !firedReminders.has(k)) firedReminders.set(k, { ts: parseInt(ts, 10) || Date.now(), written: true })
+      if (!k || !ts) { log.warn('[Scheduler] fired-reminder watermark: malformed entry dropped:', JSON.stringify(pair).slice(0, 80)); continue }
+      const n = parseInt(ts, 10)
+      if (!Number.isFinite(n) || n <= 0) {
+        log.warn('[Scheduler] fired-reminder watermark: corrupt timestamp for ' + k + ' — entry dropped so catch-up can re-fire it')
+        continue
+      }
+      if (!firedReminders.has(k)) firedReminders.set(k, { ts: n, written: true })
     }
-  } catch (e) { /* silent on corrupted meta */ }
+  } catch (e) { log.warn('[Scheduler] fired-reminder watermark load failed (catch-up will re-fire as needed):', e && e.message) }
 }
 
 let dingFile = null
@@ -336,6 +347,7 @@ module.exports = {
   setShowMainEntry, focusMainFromNotification,
   reminderInstances, needsCatchUp, clipText, notifyTimeoutOpts, notifyTimeoutOptsForApp, timeoutFromInterval,
   setFireForTest,
+  loadFiredFromMeta, // r3 2026-09-28 test surface: corrupt watermark entries are dropped, not faked fresh
   _jobs: jobs,
   _fired: firedReminders,
   _markFired: markFired,

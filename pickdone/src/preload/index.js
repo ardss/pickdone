@@ -52,7 +52,8 @@ contextBridge.exposeInMainWorld('todoAPI', {
   pickBackupDir: () => invoke('pick-backup-dir'),
   getDefaultBackupDir: () => invoke('get-default-backup-dir'),
   encryptSecret: plain => invoke('encrypt-secret', plain),
-  decryptSecret: stored => invoke('decrypt-secret', stored),
+  // r3 dead-channel removal (2026-09-28): decryptSecret had zero renderer callers while keeping
+  // a reachable main-window IPC door to the lock-screen plaintext — deleted on both ends.
   readCriticalStateBackup: () => invoke('read-critical-state-backup'),
   // One-click CSV migration (other todo apps → 拾事): pick file + preview / run by path; engine lives in main-process cli/import.js
   importCsvPickPreview: () => invoke('import:pick-preview'),
@@ -84,14 +85,11 @@ contextBridge.exposeInMainWorld('todoAPI', {
   minimize: () => invoke('minimize-main-window'),
   maximize: () => invoke('maximize-main-window'),
   isMaximized: () => invoke('is-maximized'),
-  hideWindow: () => invoke('hide-main-window'),
   closeRequest: () => invoke('close-main-window-request'),
 
   // ---- Attachments ----
   uploadAttachment: payload => invoke('upload-attachment', payload), // {taskId,name,dataBase64}
   openFile: url => invoke('open-file', url),
-  downloadAndOpen: url => invoke('download-file-and-open', url),
-  saveToDownloads: (url, name) => invoke('save-upload-file-to-download', url, name),
   deleteFile: url => invoke('delete-file', url),
   deleteTodoFilesRelevant: id => invoke('delete-todo-files', id), // clean up attachments when a task is permanently deleted
 
@@ -134,9 +132,6 @@ contextBridge.exposeInMainWorld('todoAPI', {
 
   // ---- Project baseline data migration ----
 
-  // ---- Cloud sync (reserved for the offline edition) ----
-  syncNow: () => invoke('sync-todos-to-server'),
-
   // ---- Misc ----
   openExternal: url => invoke('open-external-url', url),
   pickAudioFile: () => invoke('select-user-white-noise-audio-file'),
@@ -147,8 +142,6 @@ contextBridge.exposeInMainWorld('todoAPI', {
     ipcRenderer.on('white-noise-updated', h)
     return () => ipcRenderer.removeListener('white-noise-updated', h)
   },
-  mimeByType: n => invoke('mime-get-type', n),
-
   onShortcutConflict: fn => {
     const h = (_e, p) => fn(p)
     ipcRenderer.on('shortcut-conflict', h)

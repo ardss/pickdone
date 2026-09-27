@@ -146,7 +146,8 @@ module.exports = function tomatoHandlers (ctx) {
     'minimize-main-window': (e) => { assertWindowControl(e, 'minimize-main-window'); if (isLocked()) throw new Error('app is locked'); const w = getMainWindow(); if (w) w.minimize(); return true },
     'maximize-main-window': (e) => { assertWindowControl(e, 'maximize-main-window'); if (isLocked()) throw new Error('app is locked'); const w = getMainWindow(); if (!w) return false; w.isMaximized() ? w.unmaximize() : w.maximize(); return true },
     'is-maximized': () => { const w = getMainWindow(); return w ? w.isMaximized() : false },
-    'hide-main-window': (e) => { assertWindowControl(e, 'hide-main-window'); if (isLocked()) throw new Error('app is locked'); const w = getMainWindow(); if (w) w.hide(); return true },
+    // r3 dead-channel removal (2026-09-28): 'hide-main-window' deleted — todoAPI.hideWindow had
+    // zero renderer callers (every hide path is main-process internal).
     'close-main-window-request': (e) => { assertWindowControl(e, 'close-main-window-request'); if (isLocked()) throw new Error('app is locked'); const w = getMainWindow(); if (w) w.close(); return true }
   }
 }

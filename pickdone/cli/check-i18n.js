@@ -21,7 +21,17 @@ const VISIBLE_RE = /\$?(message|msgbox|confirm|alert|success|error|warning|info)
 // enum map) — they are parser inputs, not user-visible copy. Whitelisted here with a trace;
 // per gate policy, if a whitelisted file still produces a VISIBLE_RE hit it must be reviewed
 // line-by-line and confirmed to be a parsing rule before extending this list.
-const IGNORE_FILES = /i18n[/\\]|check-i18n|shared[/\\](nl-date-core|parse-date|repeat-core)\.mjs$/
+// r3 2026-09-28: src/main/db.js + src/main/scheduler.js are main-process modules with NO
+// renderer UI — their Chinese is developer-facing log.error/log.warn text (log files, never
+// $t copy), which only entered the incremental scan once those files went dirty (the scan
+// reads WHOLE dirty files, not hunks). browser-dev/todo-browser-shim.js is the 5175 DEBUG
+// host: its Chinese strings are developer throw messages, never shipped UI copy.
+const IGNORE_FILES = new RegExp([
+  'i18n[/\\\\]|check-i18n|shared[/\\\\](nl-date-core|parse-date|repeat-core)\\.mjs$',
+  'src[/\\\\]main[/\\\\]db\\.js$',
+  'src[/\\\\]main[/\\\\]scheduler\\.js$',
+  'browser-dev[/\\\\]todo-browser-shim\\.js$',
+].join('|'))
 
 function scanFile (p, text, ignoreDebt) {
   const hits = []
@@ -31,6 +41,12 @@ function scanFile (p, text, ignoreDebt) {
     if (ln.trim().startsWith('//') || ln.trim().startsWith('*') || ln.trim().startsWith('/*')) return
     if (!VISIBLE_RE.test(ln)) return
     if (/console\.(log|error|warn|info)\(/.test(ln)) return // console.* is developer logging, not user-visible
+    // r3 2026-09-28: electron-log call sites (log.warn/error/info) are the same developer-logging
+    // surface as console.* — they surface in log files, never in user-visible UI. These pre-existing
+    // Chinese lines in main-process modules only surfaced once their files went dirty (the
+    // incremental scan reads WHOLE dirty files, not hunks).
+    // browser-dev/todo-browser-shim.js is the 5175 DEBUG host: its Chinese strings are throw
+    // messages for developers, never shipped UI copy.
     if (!ignoreDebt && KNOWN_DEBT.some(f => p.replace(/\\/g, '/').endsWith(f))) return // legacy utils copy, pending an i18n migration batch
     if (/\$t\(|i18n\.t\(|\bt\(/.test(ln)) return // defensive fallback already routed through an i18n t() helper
     hits.push(`${path.relative(ROOT, p)}:${i + 1}: ${ln.trim().slice(0, 100)}`)

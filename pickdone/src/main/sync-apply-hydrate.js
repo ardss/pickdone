@@ -36,39 +36,12 @@ const isAnnounceMetaKey = key => String(key || '').startsWith(ANNOUNCE_KEY_PREFI
 // GAP-A fix (2026-09-19): meta rows (projectMilestones:*, projectCategoryIds, tomatoEstimateState,
 // projectDeadline:/projectStatus:, repeatRule:*, ...) were captured into the oplog but never
 // hydrated/applied, so they never reached peers. These meta keys are machine-local and must
-// neither egress nor be overwritten by a peer's row:
-//   'sync.*' = sync engine bookkeeping (push cursor etc.); '_' = CLI stamps; 'securityLock*'
-//   defensive parity with settings rows; 'cliTomato*' = CLI tomato runtime TRANSIENT state
-//   (per-device command/status slots); 'todosVersion' = per-device dirty-row cursor;
-//   'firedReminders:'/'reminderLastSeenAt' = per-device scheduler dedup watermarks;
-//   'settingsRows.src.*' = v6 migration snapshot markers; 'db.tomatoState'/'habitsState' =
-//   retired/legacy ledger+habits blobs (migration bookkeeping only).
-const isMachineLocalMetaKey = id => {
-  const k = String(id)
-  return k.startsWith('sync.') || k.startsWith('_') || /^securityLock/.test(k) ||
-    k.startsWith('cliTomato') ||
-    // CLI sync command channel slots (feat/cli-sync-pair): cmd/receipt/seq are per-machine
-    // transport state, never data — syncing them would replay stale commands on the peer.
-    k.startsWith('cliSync') || k === 'todosVersion' || k.startsWith('firedReminders:') ||
-    k === 'reminderLastSeenAt' || k.startsWith('settingsRows.src.') ||
-    k === 'db.tomatoState' || k === 'habitsState' ||
-    // M4 (2026-09-20): snowDedup:<task>:<key> = per-device dedup watermarks (bumpSnow), not data.
-    k.startsWith('snowDedup:') ||
-    // P1-5 (2026-09-19 data-safety round): meta LWW conflict backups are per-device recovery
-    // copies of a LOSING local edit — they must stay local (syncing them would make the peer
-    // apply the loser as a live value and mint its own backup of the backup, forever).
-    // ALLOWLIST NOTE (P2-g): every key excluded here is deliberate machine-local state; any
-    // NEW user-data meta key must NOT be added to this filter or it silently stops syncing.
-    k.startsWith(META_CONFLICT_BACKUP_PREFIX) ||
-    // Round-3 P1 (2026-09-21): migration/bookkeeping keys — a peer syncing its 'schemaVersion'
-    // row could REGRESS (or over-advance) this device's schema-migrator stamp, and a peer's
-    // legacy 'dayPlanState'/'dayPlanState.bak' whole-package chip JSON would re-poison a device
-    // that already migrated to the plan_chips row store (db.js migration reads these keys).
-    k === 'schemaVersion' || k === 'dayPlanState' || k.startsWith('dayPlanState.')
-}
-
-// P1-5: prefix for dated meta conflict-backup keys (see the meta branch in applyRowInner).
-const META_CONFLICT_BACKUP_PREFIX = 'metaConflictBackup.'
+// neither egress nor be overwritten by a peer's row — the full family list now lives in the
+// SHARED module (domain-3 fix 2026-09-28, same single-sourcing the settings predicate got in
+// F-A1): command-manifest.js's localKeys classifier imports the same function, so the
+// check-command-bus mirror-agreement assert holds by construction instead of by sync'd copies.
+const { isMachineLocalMetaKey, META_CONFLICT_BACKUP_PREFIX } =
+  require('../../shared/machine-local-keys.mjs')
 
 // The settings/habits blobs are deliberately EXCLUDED from meta sync: they already sync
 // FIELD-GRANULAR via the `setting` entity (the db-sync-schema setMeta bridge mirrors every blob

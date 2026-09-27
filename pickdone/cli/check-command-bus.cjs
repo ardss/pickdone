@@ -436,6 +436,40 @@ function checkSharedStampClamp (report) {
   return ok
 }
 
+/**
+ * F-A1 CLI-surface assertion: the CLI's settings deny door (cli/lib-settings.cjs) must DERIVE
+ * its predicate from the shared machine-local-keys module — the same module sync-apply.js and
+ * the manifest consume. A hand-copied literal there let `settings set enableSecurityLock false`
+ * through and hot-synced it into a running App (checkLocalKeyMirror above only anchors the two
+ * main-process ends, not the CLI). Source-level anchors catch a revert to a hand-written list.
+ */
+function checkCliSettingsDeny (report) {
+  let ok = true
+  const src = fs.readFileSync(path.join(root, 'cli/lib-settings.cjs'), 'utf8')
+  if (!/require\(['"][^'"]*machine-local-keys\.mjs['"]\)/.test(src)) {
+    report('cli/lib-settings.cjs 未引入共享 machine-local-keys.mjs —— CLI 拒绝集不允许手写字面量')
+    ok = false
+  }
+  if (!/isMachineLocalSettingKey\(key\)/.test(src)) {
+    report('cli/lib-settings.cjs 的 DENIED 判定未调用共享谓词 isMachineLocalSettingKey(key)')
+    ok = false
+  }
+  // The CLI's own literal may only carry keys the shared predicate does NOT cover
+  // (bookkeeping keys like schemaV). Any key the predicate already matches is a second copy.
+  const shared = require(path.join(root, 'shared/machine-local-keys.mjs'))
+  const m = src.match(/SETTINGS_DENIED\s*=\s*new Set\(\[([^\]]*)\]/)
+  if (!m) { report('cli/lib-settings.cjs 中找不到 SETTINGS_DENIED 集合'); ok = false } else {
+    for (const raw of m[1].split(',')) {
+      const key = raw.trim().replace(/^['"]|['"]$/g, '')
+      if (key && shared.isMachineLocalSettingKey(key)) {
+        report(`cli/lib-settings.cjs 的 SETTINGS_DENIED 含共享谓词已覆盖的键 "${key}" —— 删除字面量副本，从谓词派生`)
+        ok = false
+      }
+    }
+  }
+  return ok
+}
+
 if (require.main === module) {
   if (process.argv.includes('--selftest')) {
     // Negative self-test: the scanners MUST catch planted write-shaped calls (single, double
@@ -484,7 +518,10 @@ if (require.main === module) {
   // Arch review 2026-09-22 rec #3: ONE shared future-stamp clamp constant, imported by both doors.
   if (!checkSharedStampClamp(m => { console.error('  ✗ ' + m); failed++ })) failed++
   else console.log('  ✓ 未来戳钳制窗口为共享常量（command-bus.js 与 sync-apply.js 均引入 stamp-clamp.js）')
+  // F-A1: the CLI settings deny door derives from the shared machine-local predicate.
+  if (!checkCliSettingsDeny(m => { console.error('  ✗ ' + m); failed++ })) failed++
+  else console.log('  ✓ CLI settings 拒绝集从共享 machine-local-keys 谓词派生（无手写副本）')
   console.log(failed === 0 && pass ? '[check-command-bus] PASS' : '[check-command-bus] FAIL')
   process.exit(failed === 0 && pass ? 0 : 1)
 }
-module.exports = { scanSource, scanWriteCallSites, scanWriteSites, scanDynamicWriteSites, checkRows, checkLocalKeyMirror, checkSharedStampClamp, MIRROR_KEY_CORPUS, stripComments, evalNumericProduct, findClampWindowLiterals, parseStampClampMs }
+module.exports = { scanSource, scanWriteCallSites, scanWriteSites, scanDynamicWriteSites, checkRows, checkLocalKeyMirror, checkSharedStampClamp, checkCliSettingsDeny, MIRROR_KEY_CORPUS, stripComments, evalNumericProduct, findClampWindowLiterals, parseStampClampMs }

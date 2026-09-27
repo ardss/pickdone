@@ -8,11 +8,20 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
+// Freshness must fail toward a REBUILD, never crash: statSync inside the walk can lose a
+// TOCTOU race (file deleted between readdir and stat) or hit EPERM. Any unreadable entry
+// makes the whole subtree's mtime unknown → Infinity → `distM > srcMtime` is false → rebuild.
+// (The per-file stats in isDistFresh already catch to 0/false; the walk was the裸 throw.)
 const newestMtime = (dir, acc = 0) => {
-  if (!fs.existsSync(dir)) return acc
-  for (const f of fs.readdirSync(dir)) {
+  let entries
+  try {
+    if (!fs.existsSync(dir)) return acc
+    entries = fs.readdirSync(dir)
+  } catch { return Infinity }
+  for (const f of entries) {
     const p = path.join(dir, f)
-    const st = fs.statSync(p)
+    let st
+    try { st = fs.statSync(p) } catch { return Infinity }
     if (st.isDirectory()) acc = newestMtime(p, acc)
     else acc = Math.max(acc, st.mtimeMs)
   }

@@ -506,7 +506,8 @@ function notifyRenderers (reason) {
  * Device Center event channel: ONE 'syncEvent' IPC event carrying a self-describing payload
  * {type, at, ...}. Kept alongside the legacy 'lan-sync-changed' ping (existing consumers keep
  * working). Types: peer-online, peer-offline, pair-request, pair-accepted, pair-rejected,
- * round-done, round-error, pair-throttled.
+ * round-done, round-error, pair-throttled, flush-quarantined, tomato-announce,
+ * attachments-arrived, egress-hydration-failed, oplog-append-failed.
  */
 function emitSyncEvent (type, payload) {
   try {
@@ -514,6 +515,13 @@ function emitSyncEvent (type, payload) {
     const msg = { type, at: Date.now(), ...(payload || {}) }
     for (const s of senders) { try { if (s && !s.isDestroyed()) s.send('syncEvent', msg) } catch { /* dying sender */ } }
   } catch { /* renderer notification is best-effort */ }
+}
+
+/** r3 fix (2026-09-28): db.js's oplog append-failure hook lands here. Exported separately so
+ *  db.js can reach it through a lazy require before (or without) initLanSync — with `state`
+ *  null this degrades to a no-op instead of throwing inside the oplog's catch. */
+function emitOplogAppendFailure (info) {
+  try { emitSyncEvent('oplog-append-failed', { count: info && info.count, error: info && info.error }) } catch { /* renderer notification is best-effort */ }
 }
 
 /* ---------- P0-1/P1-2/P1-5 (2026-09-19 UX review): post-round renderer refresh ----------
@@ -744,7 +752,7 @@ function initLanSync ({ db, getWindowSenders, resyncExternalWatch } = {}) {
   } catch (e) { log.warn('[LanSync] startup enable failed:', e.message) }
 }
 
-module.exports = { initLanSync, stopSyncForQuit, kickSyncRound, shipQuitRound, invalidateSyncWatermarks }
+module.exports = { initLanSync, stopSyncForQuit, kickSyncRound, shipQuitRound, invalidateSyncWatermarks, emitOplogAppendFailure }
 
 // Test-only hooks: applyRowInner/flushPendingWrites operate on the module-level `state` singleton;
 // unit tests swap in a mock state via __test.setState. Production paths never touch __test.

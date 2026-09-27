@@ -444,6 +444,17 @@ export default {
         const kind = evt.type === 'round-error' ? 'error' : (evt.kind === 'snapshot' ? 'snapshot' : (evt.dir === 'pull' ? 'pull' : 'push'))
         this.feedLive = [{ at: Date.now(), kind, peer: evt.deviceName || evt.deviceId || '', detail: evt.detail || evt.error || '' }].concat(this.feedLive).slice(0, 50)
       }
+      // r3 fix (2026-09-28): one-way data-loss alerts used to be emit-only — the event type had
+      // no renderer consumer, so lost changes were visible only in main-process logs. Surface
+      // both as a live-feed error entry + a persistent warning toast (refresh happens below).
+      else if (evt.type === 'egress-hydration-failed') {
+        const n = evt.count || (Array.isArray(evt.failures) ? evt.failures.length : 0)
+        this.feedLive = [{ at: Date.now(), kind: 'error', peer: '', detail: this.$t('sync.egressHydrationFailed', { n }) }].concat(this.feedLive).slice(0, 50)
+        this.$message.warning(this.$t('sync.egressHydrationFailed', { n }))
+      } else if (evt.type === 'oplog-append-failed') {
+        this.feedLive = [{ at: Date.now(), kind: 'error', peer: '', detail: evt.error || this.$t('sync.oplogAppendFailed') }].concat(this.feedLive).slice(0, 50)
+        this.$message.warning(this.$t('sync.oplogAppendFailed'))
+      }
       this.refresh()
     },
     bindSyncEvents () {

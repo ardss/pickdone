@@ -134,6 +134,8 @@ export default {
     "pairTimeoutMsg": "对方未响应（超时）",
     "pairThrottledMsg": "尝试过于频繁，请稍后再试",
     "pairFailGenericMsg": "配对失败，请重试",
+    "egressHydrationFailed": "推送时 {n} 条变更读取失败——本次推送数据不完整（可通过全量快照恢复）",
+    "oplogAppendFailed": "本地变更记录写入失败——最近的变更在下次全量快照前不会同步到其他设备",
     "pairExpiredHint": "请求已超时",
     "kindSnapshot": "快照同步",
     "feedSessionHint": "记录仅保留本次运行期间",

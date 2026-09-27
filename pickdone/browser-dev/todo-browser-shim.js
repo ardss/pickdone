@@ -555,7 +555,6 @@
     minimize: () => console.log('[shim] minimize'),
     maximize: () => console.log('[shim] maximize'),
     isMaximized: async () => false,
-    hideWindow: () => {},
     closeRequest: () => {},
 
     uploadAttachment: async ({ name, dataBase64, type }) => {
@@ -569,7 +568,7 @@
       } catch { /* 配额满时仍返回 url，仅不持久化 */ }
       return { url, size: Math.round(dataBase64.length * 3 / 4) }
     },
-    openFile: () => {}, downloadAndOpen: async () => {}, saveToDownloads: async () => {}, deleteFile: async url => {
+    openFile: () => {}, deleteFile: async url => {
       try {
         const files = JSON.parse(localStorage.getItem('appBrowserShim.files') || '[]').filter(f => f.url !== url)
         localStorage.setItem('appBrowserShim.files', JSON.stringify(files))
@@ -588,15 +587,8 @@
     // 安全锁加密的5175本地替身:保持'enc1:'前缀契约,否则main.js会把undefined当密码持久化、迁移判定失效
     // (真实现为主进程级加密,5175的base64仅调试宿主内自洽,不得视为安全)
     encryptSecret: async pw => 'enc1:shim:' + btoa(unescape(encodeURIComponent(String(pw)))),
-    decryptSecret: async enc => {
-      const m = String(enc || '')
-      if (!m.startsWith('enc1:shim:')) return m
-      try { return decodeURIComponent(escape(atob(m.slice('enc1:shim:'.length)))) } catch { return '' }
-    },
-    syncNow: async () => ({ ok: false, reason: '浏览器调试模式下无云端同步' }),
     openExternal: url => window.open(url, '_blank'),
     pickAudioFile: async () => null,
-    mimeByType: n => (n.endsWith('.html') ? 'text/html' : 'application/octet-stream'),
 
     onShortcutAction: () => () => {},
     onTomatoTaskbarCmd: () => () => {},
@@ -620,10 +612,10 @@
   const warnOnce = (key, fn) => { if (!_warned.has(key)) { _warned.add(key); fn() } }
   const NOOP_SAFE = new Set([
     // 窗口/系统控制:5175 无窗口,print 级 no-op 已是既定能力差异
-    'minimize', 'maximize', 'isMaximized', 'hideWindow', 'closeRequest',
+    'minimize', 'maximize', 'isMaximized', 'closeRequest',
     'openExternal', 'notification', 'exportXlsx',
     // 文件打开/导出调试替身(读向)
-    'openFile', 'downloadAndOpen', 'saveToDownloads', 'mimeByType', 'pickAudioFile',
+    'openFile', 'pickAudioFile',
     // 小组件:全是 5175 no-op 能力差异清单成员
     'widgetList', 'createWidget', 'openWidget', 'closeWidget', 'deleteWidget',
     'openCalendarWidget', 'closeCalendarWidget', 'setWidgetsBackground',

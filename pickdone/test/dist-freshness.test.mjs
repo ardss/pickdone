@@ -66,3 +66,25 @@ test('missing dist → NOT fresh (first run must build)', () => {
   fs.rmSync(path.join(root, 'renderer-dist'), { recursive: true, force: true })
   assert.equal(isDistFresh(root), false)
 })
+
+test('THE FIX: stat failure inside recursive walk → NOT fresh, no throw (pre-fix: raw EPERM/ENOENT stack crashed npm start)', () => {
+  const root = fixtureAppRoot()
+  build(root)
+  const realStatSync = fs.statSync
+  let thrown = false
+  try {
+    // Simulate TOCTOU/EPERM: stat of one shared/** entry fails mid-walk
+    fs.statSync = (p, ...rest) => {
+      if (String(p).includes(path.join('shared', 'sort-core.mjs'))) {
+        thrown = true
+        throw Object.assign(new Error('EPERM'), { code: 'EPERM' })
+      }
+      return realStatSync(p, ...rest)
+    }
+    // must not throw; unknown subtree mtime → Infinity → fail toward rebuild
+    assert.equal(isDistFresh(root), false, 'unreadable source must force a rebuild, not crash or read as fresh')
+  } finally {
+    fs.statSync = realStatSync
+  }
+  assert.equal(thrown, true, 'fixture must have actually triggered the failing stat')
+})
