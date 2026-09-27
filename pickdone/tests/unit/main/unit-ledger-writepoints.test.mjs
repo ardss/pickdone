@@ -95,8 +95,10 @@ test('write-point: cli/lib.js 无 meta 镜像回读(全源码负向门禁)', () 
 })
 
 test('write-point: db.tomatoByDay 聚合自行表,不回读 meta blob', () => {
-  const db = read('src/main/db.js')
-  const fn = db.slice(db.indexOf('tomatoByDay:'), db.indexOf('tomatoAll:'))
+  // 2026-09-27 structure-size ratchet: tomatoByDay moved verbatim to db-stats-ops.js (db.js keeps
+  // only the thin delegate), so the contract now reads the implementation module.
+  const stats = read('src/main/db-stats-ops.js')
+  const fn = stats.slice(stats.indexOf('exports.tomatoByDay'))
   assert.ok(fn.includes('tomato_records'), 'tomatoByDay must aggregate from the row table')
   assert.ok(!fn.includes('tomatoRecordList'), 'tomatoByDay must not parse the LS/meta blob')
 })
