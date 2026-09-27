@@ -323,8 +323,10 @@ test('flush quarantine section: read-only, count + op names, no re-apply action'
 })
 
 test('main: getStatusPayload exposes a read-only flushQuarantine summary from meta', () => {
+  const view = read('src/main/flush-quarantine-view.js')
+  assert.match(view, /function summarizeFlushQuarantine \(dbCall\)/)
+  assert.match(view, /META_FLUSH_QUARANTINE_PREFIX/, 'summary must scan the real quarantine meta prefix')
   const boot = read('src/main/lan-sync-bootstrap.js')
-  assert.match(boot, /function flushQuarantineSummary \(\)/)
-  assert.match(boot, /syncApply\.META_FLUSH_QUARANTINE_PREFIX/, 'summary must scan the real quarantine meta prefix')
+  assert.match(boot, /flushQuarantineSummary\(/, 'bootstrap must wire the extracted summarizer')
   assert.match(boot, /flushQuarantine,/, 'getStatusPayload must carry flushQuarantine in both node/no-node branches')
 })
