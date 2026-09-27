@@ -45,6 +45,7 @@ const GROUPS = [
       ['依赖许可证', 'node', ['cli/check-licenses.js']],
       ['token 纪律', 'node', ['cli/check-tokens.js']],
       ['结构尺寸棘轮（文件行数分级上限+baseline只降不升——千行SFC与lib.js 1869行实锤后立的第6防护维度）', 'node', ['cli/check-file-size.cjs']],
+      ['启动顺序（src/main 顶层 use-before-let/const + require 在首次顶层使用之后——D10 提取改动两处 boot TDZ 崩溃零门禁可抓,8 个活体门禁红都只是症状）', 'node', ['cli/check-boot-order.cjs']],
       ['CSS 冻结(全局沉积文件只删不增,组件吸收重构护栏)', 'node', ['cli/check-css-freeze.mjs']],
       ['缓存戳纪律(?v= 未 bump=已装用户永拿旧缓存,2026-09-05 三笔连漏实锤后立门禁)', 'node', ['cli/check-cache-stamp.js']],
       ['提交身份(HEAD邮箱不得携带个人身份——QQ邮箱上公开仓实锤,SOP-02 §7)', 'node', ['cli/check-commit-identity.js']],
