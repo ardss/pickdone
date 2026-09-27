@@ -122,7 +122,12 @@ module.exports = Object.assign(({ getDb, log, getPurgeChips }) => {
       // hydrate a row that never changed; e.g. the float's every-tick tomatoUpdateById echo).
       case 'tomatoUpdateById': return result === false ? [] : [one('tomato', params && params.tomatoId)]
       case 'tomatoRemoveByIds': return arr('tomato', params)
-      case 'tomatoMigrateFromMeta': return [one('tomato', '*gc*')]
+      // r2 2026-09-28: result-aware like its siblings above — tomatoMigrateFromMeta returns 0 in
+      // the steady state (rows already present / no blob / corrupted blob), and the CLI's open()
+      // runs it on EVERY command (including pure reads). The unconditional pointer wrote one
+      // PHANTOM ('tomato','*gc*') sync row per CLI invocation. Only a real migration (result > 0)
+      // emits the GC marker.
+      case 'tomatoMigrateFromMeta': return result === 0 ? [] : [one('tomato', '*gc*')]
       default: return []
     }
   }

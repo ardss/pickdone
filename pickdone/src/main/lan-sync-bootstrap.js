@@ -116,7 +116,28 @@ function createLocalStoreAdapter () {
     getRowsSince (seq) {
       const ptrs = state.db.call('syncOplogSince', { sinceSeq: seq, limit: oplogKeepLimit(SYNC_OPLOG_KEEP) }) || [] // D3 2026-09-24: was bare 10000
       const cache = createHydrationCache()
-      return ptrs.map(ptr => hydrateRow(ptr, cache)).filter(Boolean)
+      // r2 2026-09-28: hydrateRow now RETHROWS on DB read failure (only legitimate skips return
+      // null). A failure must not be silently filtered out with the cursor advancing past the
+      // pointer — that lost changes one-way between full snapshots. Count it here, surface it in
+      // the egress report (state.egressHydrationFailures) and log it; the row itself is still
+      // skipped (cursor semantics unchanged — the loss is now VISIBLE, not silent).
+      const rows = []
+      const failures = []
+      for (const ptr of ptrs) {
+        let row = null
+        try { row = hydrateRow(ptr, cache) } catch (e) {
+          failures.push({ ...(e.egressHydration || { entity: ptr.entity, id: ptr.entityId, seq: ptr.seq }), error: e.message })
+          continue
+        }
+        if (row) rows.push(row)
+      }
+      state.egressHydrationFailures = failures
+      if (failures.length) {
+        log.warn('[LanSync] egress hydration failed for ' + failures.length + ' oplog pointer(s) — pushed rows are INCOMPLETE:',
+          failures.map(f => f.entity + ':' + f.id).join(', '))
+        try { emitSyncEvent('egress-hydration-failed', { count: failures.length, failures }) } catch { /* event surface is best-effort */ }
+      }
+      return rows
     },
     getCursor () { const v = state.db.call('getMeta', CURSOR_META_KEY); const n = Number(v); return Number.isFinite(n) && n > 0 ? n : 0 },
     setCursor (seq) { busWrite('setMeta', [CURSOR_META_KEY, String(seq)]) },
@@ -731,6 +752,9 @@ module.exports.__test = {
   setState: s => { state = s },
   applyRow: row => applyRowSafe(row),
   allRows: () => createLocalStoreAdapter().allRows(),
+  // r2 2026-09-28 test surface: egress hydration failure counting (getRowsSince no longer
+  // swallows hydrateRow exceptions).
+  getRowsSince: seq => createLocalStoreAdapter().getRowsSince(seq),
   flushPendingWrites,
   syncSetEnabled: syncSetEnabledOp,
   localUserId,

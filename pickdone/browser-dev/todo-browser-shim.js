@@ -496,6 +496,34 @@
         localStorage.setItem(META_KEY, JSON.stringify(m))
         return before - m.__shimPlanChips.length
       }
+      /* LAN 同步 (P3a) 5175 降级替身:lanSync.js 与设备中心 12 个 sync* op 裸调 dbCall,
+         此前 default 直接命中"未实现操作" throw——桌面正常、web 宿主打开设备中心即崩。
+         读类返回本地降级数据(无 LAN 节点),写类抛出可读错误(UI 侧 catch 走失败 toast,
+         不制造假成功)。设备名等纯本地字段存 LS,刷新不丢。 */
+      case 'syncGetSettings': {
+        let name = '浏览器调试设备'
+        try { name = localStorage.getItem('appBrowserShim.syncDeviceName') || name } catch {}
+        return { enabled: false, deviceId: 'browser-shim', deviceName: name, hasPairingSecret: false }
+      }
+      case 'syncGetStatus':
+        return { enabled: false, deviceId: 'browser-shim', deviceName: '浏览器调试设备', listening: false, port: 0, peers: [], lastRoundAt: 0, lastError: null }
+      case 'syncSetName':
+        try { localStorage.setItem('appBrowserShim.syncDeviceName', String((params && params.name) || '')) } catch {}
+        return { deviceName: String((params && params.name) || '') }
+      case 'syncSetPeerAlias':
+        return { ok: true, alias: String((params && params.alias) || '') }
+      case 'syncGetPairingCode':
+        // code:null → 设备中心走 pairingUnavailable 提示,与"未生成密钥"同路径
+        return { code: null, expiresAt: 0 }
+      case 'syncConflictBackupsList':
+        return []
+      case 'syncSetEnabled':
+      case 'syncPairWithCode':
+      case 'syncPairRequest':
+      case 'syncPairRespond':
+      case 'syncUnpairPeer':
+      case 'syncConflictBackupRestore':
+        throw new Error('[appBrowserShim] LAN 同步需要桌面主进程(mDNS/HTTP 节点),浏览器调试模式不支持:' + op)
       default:
         // 未实现 op 显式失败(此前返回 null 假成功,调用方把 null 当真结果渲染/入库)。console.warn 曾被 UI 吞掉,排查不到
         throw new Error('[appBrowserShim] dbCall 未实现操作:' + op)
@@ -583,16 +611,50 @@
   // 能力差异清单:防「5175上跑不出桌面行为」被误判为功能bug(历史:日志文件/自动备份/更新器均为此类)
   console.log('%c[appBrowserShim] 桌面有而5175为no-op的能力: logWrite文件日志 / runAutoBackup系列 / setAppLocale / 更新器 / 窗口控制(最小化等仅打印) / 托盘 / 安全锁系统级加密(用shim替身)', 'color:#67c23a')
 
-  // 未知桥接调用统一降级为安全 no-op（如番茄浮窗等新增能力），避免 UI 因缺方法而报错。
-  // then/Symbol 必须放行：Proxy 对任意 key 返回函数会让 await window.todoAPI 误判为 thenable
+  // 未知桥接调用的分治策略(d11 round 2):此前兜底对任意未实现方法返回 resolve(undefined) 假成功,
+  // 与 dbCall 的"未实现显式 throw"自相矛盾——updateSettings 当年正是走此路径被吞。现改为:
+  //   - 只读/UI 型白名单方法(缺了不丢数据)→ resolved no-op(对齐 preload 的 Promise 语义)
+  //   - 其余(尤其写类)→ rejected Promise,调用方 catch 得到显式失败,不再静默丢写
+  // then/Symbol 必须放行:Proxy 对任意 key 返回函数会让 await window.todoAPI 误判为 thenable
   const _warned = new Set()
   const warnOnce = (key, fn) => { if (!_warned.has(key)) { _warned.add(key); fn() } }
+  const NOOP_SAFE = new Set([
+    // 窗口/系统控制:5175 无窗口,print 级 no-op 已是既定能力差异
+    'minimize', 'maximize', 'isMaximized', 'hideWindow', 'closeRequest',
+    'openExternal', 'notification', 'exportXlsx',
+    // 文件打开/导出调试替身(读向)
+    'openFile', 'downloadAndOpen', 'saveToDownloads', 'mimeByType', 'pickAudioFile',
+    // 小组件:全是 5175 no-op 能力差异清单成员
+    'widgetList', 'createWidget', 'openWidget', 'closeWidget', 'deleteWidget',
+    'openCalendarWidget', 'closeCalendarWidget', 'setWidgetsBackground',
+    // 事件订阅:返回 disposer 即可
+    'onShortcutAction', 'onTomatoTaskbarCmd', 'onShortcutConflict', 'onSelectTodo',
+    'onOpenSettings', 'onSecurityLock', 'onWidgetBackground',
+    'onAppQuittingFlush', 'onCliTomatoCmd', 'onExternalHabitsChanged', 'onExternalSettingsChanged',
+    'onPlaySound', 'onQuickAddFocus', 'onSecurityUnlock', 'onSyncEvent', 'onTomatoRecordsChanged',
+    'onWhiteNoiseUpdated', 'onUpdaterEvent',
+    // 能力差异清单(:上方 console.log 成员)——5175 无日志文件/自动备份调度/更新器/托盘/系统锁,
+    // 这些通道的缺失早已是既定降级,保持 no-op;备份/清空等数据写不在白名单(fail-loud 走 catch)
+    'logWrite', 'openLogsDir', 'setAppLocale', 'lockApp', 'setShortcutCapturing',
+    'getMetaMany', // 只读批量 meta:与旧兜底一致返回 undefined,调用方已有 (rows||[]) 降级
+    'checkForUpdates', 'downloadUpdate', 'quitAndInstall', 'updaterStatus',
+    'ensureWindowWidth', 'restoreWindowWidth', 'quickAddHide', 'notifyQuitFlushDone',
+    // 番茄浮窗/任务栏:纯窗口 UI,5175 无窗口面
+    'showTomatoFloat', 'hideTomatoFloat', 'flushTomatoFloat', 'tomatoFloatPanel', 'tomatoFloatShown',
+    'setTomatoFloatBounds', 'startTomatoFloatDrag', 'stopTomatoFloatDrag', 'showMainFromFloat',
+    'pushTomatoTaskbar'
+  ])
   window.todoAPI = new Proxy(window.todoAPI || {}, {
     get (t, k) {
       if (k in t) return t[k]
       if (k === 'then' || typeof k === 'symbol') return undefined
-      warnOnce('api:' + String(k), () => console.warn('[appBrowserShim] todoAPI.' + String(k) + ' 未实现，返回 resolved no-op（对齐 preload 的 Promise 语义）'))
-      return () => Promise.resolve(undefined)
+      if (NOOP_SAFE.has(String(k))) {
+        warnOnce('api:' + String(k), () => console.warn('[appBrowserShim] todoAPI.' + String(k) + ' 未实现，返回 resolved no-op（对齐 preload 的 Promise 语义）'))
+        return () => Promise.resolve(undefined)
+      }
+      // 写类/未知方法:显式失败(fail-loud),新桥接方法在桌面端落地前不会再被静默吞掉
+      warnOnce('api:' + String(k), () => console.warn('[appBrowserShim] todoAPI.' + String(k) + ' 未实现，返回 rejected Promise（写类未知调用不允许假成功）'))
+      return () => Promise.reject(new Error('[appBrowserShim] todoAPI.' + String(k) + ' 未实现(浏览器调试宿主)'))
     }
   })
 })()

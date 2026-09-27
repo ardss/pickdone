@@ -36,11 +36,16 @@ const KNOWN_SUITES = new Set(['unit', 'integration', 'visual'])
 // and classified as 'unit' (all of them are plain-Node specs: electron / electron-updater stubbed
 // via require interception, config pointed at temp dirs). Both .test.mjs and .test.js are taken
 // here — the .js specs are CommonJS and run fine under node --test — while tests/** keeps its
-// historical .test.mjs-only convention (changing that is a separate, unrequested sweep).
+// historical .test.mjs-only convention EXCEPT the tests/-root specs (dayrail-resize-raf /
+// depview-resize-raf .test.js): those were orphaned when the double-extension fix was only
+// passed to the SIBLING_DIR discover() call — they ran on manual discipline alone (2026-09-28).
+// The root-level discover() now takes both extensions too, so *.test.js anywhere under tests/
+// is discovered; suite classification is unchanged (tests/ root = integration).
+const TEST_EXTS = ['.test.mjs', '.test.js']
 const SIBLING_DIR = path.join(dir, '..', 'test')
 const isSiblingSpec = file => file.startsWith(SIBLING_DIR + path.sep)
 
-function discover(root, acc = [], exts = ['.test.mjs']) {
+function discover(root, acc = [], exts = TEST_EXTS) {
   for (const e of readdirSync(root, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
     const p = path.join(root, e.name)
     if (e.isDirectory()) {
@@ -78,7 +83,7 @@ const suites = process.argv
   .flatMap(s => s.split(','))
 // drop the --suite args before forwarding the rest to node --test
 const forwardArgs = process.argv.slice(2).filter(a => !a.startsWith('--suite='))
-const all = discover(dir).concat(discover(SIBLING_DIR, [], ['.test.mjs', '.test.js']))
+const all = discover(dir).concat(discover(SIBLING_DIR, [], TEST_EXTS))
 // Fail-closed: refuse to run (instead of silently misclassifying) when a test file lives under an
 // unknown top-level directory — force an explicit suite classification. Sibling specs
 // (pickdone/test/) are pre-classified as 'unit' by suiteOf, so they skip this check.

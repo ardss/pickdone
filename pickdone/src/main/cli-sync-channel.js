@@ -19,11 +19,11 @@
  *  - Receipt writes go through the plain setMeta statement (no separate oplog surface), matching
  *    cliTomatoState; both meta keys are machine-local (sync-apply.js isMachineLocalMetaKey).
  */
-// 2026-09-28: abandonment TTL for a slot command queued at exactly the counter — the CLI's
-// waitForSyncAck gives up after 15s without releasing the slot; an older-than-TTL queued command
-// is an abandoned APP_NOT_RUNNING attempt and must NOT execute on a later restart. Mirrors
-// CLI_SLOT_ABANDON_TTL_MS in external-db-watch.js (both far above the CLI wait caps 8s/15s).
-const CLI_SLOT_ABANDON_TTL_MS = 60 * 1000
+// 2026-09-28 r2: the abandon/seed policy (TTL constant + fresh-vs-stale decision) moved to the
+// shared cli-slot-policy.js — it was previously duplicated with external-db-watch.js (constant
+// defined twice, kept in sync only by this comment). Same module now also backs the runtime
+// TTL abandon in fix-util.tryForwardTomatoCmd, so all three consumers share one definition.
+const { seedSlotWatermark } = require('./cli-slot-policy')
 
 function createSyncCmdHandler ({ dispatch, setMeta, log, getMeta, deleteMeta }) {
   // Round-1 P0 (2026-09-21): lastSeq used to start at 0 per process, so a cliSyncCmd slot that
@@ -32,39 +32,30 @@ function createSyncCmdHandler ({ dispatch, setMeta, log, getMeta, deleteMeta }) 
   // `cliSyncSeq` counter (every command consumed a seq, so anything still in the slot is
   // <= counter = already handled), and delete the slot after handling so a crashed/closed app
   // cannot re-execute it either.
-  let lastSeq = 0
-  try { lastSeq = Number(typeof getMeta === 'function' ? getMeta('cliSyncSeq') : 0) || 0 } catch { lastSeq = 0 }
   // Round-2 P1 (2026-09-21): seeding from the counter alone could DROP a queued command — the CLI
   // consumes a seq BEFORE the app writes the slot, so a crash between slot-write and handle left
   // cmd.seq === counter, which the counter watermark then skipped forever. When the slot holds a
   // command at exactly the counter, seed the watermark from THE SLOT (counter - 1) so the command
   // is handled once; clearHandledSlot then deletes it, so a second restart (slot gone) seeds from
   // the counter again and nothing re-executes.
-  // 2026-09-28: only for a FRESH queued command. waitForSyncAck gives up after 15s
-  // (APP_NOT_RUNNING) without releasing the slot — an abandoned unpair replayed days later would
-  // rotate the pairing secret with nobody home. Older than the TTL → abandoned: keep the counter
-  // watermark (seq consumed) and compare-and-delete the slot.
+  // 2026-09-28: only for a FRESH queued command (see cli-slot-policy.seedSlotWatermark) — an
+  // abandoned waitForSyncAck timeout (APP_NOT_RUNNING) must not replay an unpair days later.
+  let lastSeq = 0
   try {
-    if (typeof getMeta === 'function') {
-      const queued = JSON.parse(getMeta('cliSyncCmd') || 'null')
-      if (queued && Number.isFinite(queued.seq) && Number(queued.seq) === lastSeq) {
-        // Only a slot the CLI STAMPED and left to go stale is abandoned. The CLI always writes
-        // `at` (lib-channels writeSyncCmd); a slot without a stamp (foreign/legacy) keeps the
-        // crash-recovery execute-once semantics rather than being dropped on a guess.
-        const at = Number(queued.at) || 0
-        if (at > 0 && Date.now() - at > CLI_SLOT_ABANDON_TTL_MS) {
-          try {
-            if (typeof deleteMeta === 'function') {
-              const cur = JSON.parse(getMeta('cliSyncCmd') || 'null')
-              if (cur && Number(cur.seq) === Number(queued.seq)) deleteMeta('cliSyncCmd')
-            }
-          } catch { /* best-effort cleanup */ }
-        } else {
-          lastSeq -= 1
-        }
-      }
-    }
-  } catch { /* malformed slot: counter watermark stands */ }
+    lastSeq = seedSlotWatermark({
+      counter: Number(typeof getMeta === 'function' ? getMeta('cliSyncSeq') : 0) || 0,
+      slotRaw: typeof getMeta === 'function' ? getMeta('cliSyncCmd') : null,
+      now: Date.now(),
+      onAbandon: (queued) => {
+        try {
+          if (typeof deleteMeta === 'function') {
+            const cur = JSON.parse(getMeta('cliSyncCmd') || 'null')
+            if (cur && Number(cur.seq) === Number(queued.seq)) deleteMeta('cliSyncCmd')
+          }
+        } catch { /* best-effort cleanup */ }
+      },
+    })
+  } catch { lastSeq = Number(typeof getMeta === 'function' ? getMeta('cliSyncSeq') : 0) || 0 }
   const clearHandledSlot = async (cmd) => {
     try {
       if (typeof deleteMeta !== 'function' || typeof getMeta !== 'function') return

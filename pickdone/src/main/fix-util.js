@@ -155,9 +155,18 @@ function parseTomatoMetaBlob (text) {
  *    caller can delete the cliTomatoCmd slot — without it a handled command re-executed on every
  *    app restart (lastTomatoSeq restarted at 0 per process). Compare-and-delete lives caller-side
  *    so this pure function stays free of db dependencies.
- *  Returns { lastTomatoCmdRaw, lastTomatoSeq, sent, cmd }. */
-function tryForwardTomatoCmd ({ raw, lastTomatoCmdRaw, lastTomatoSeq, getMainWindow, isLocked, clearCmd }) {
-  const untouched = { lastTomatoCmdRaw, lastTomatoSeq, sent: false, cmd: null }
+ *  - abandoned (r2 2026-09-28): a STAMPED command (at > 0) older than CLI_SLOT_ABANDON_TTL_MS is
+ *    an APP_NOT_RUNNING giveaway — the CLI already reported failure (e.g. an unpair key rotation)
+ *    and left the slot. Executing it the moment the window/lock recovers would fire it long after
+ *    its writer gave up (the startup seed path already abandons such slots; the runtime forward
+ *    path used to check seq only and would still execute it). The command is consumed WITHOUT
+ *    executing: seq advances, raw is consumed, clearCmd runs, sent:false + abandoned:true.
+ *    A command WITHOUT an `at` stamp keeps execute-once semantics (same policy as the seed).
+ *  Returns { lastTomatoCmdRaw, lastTomatoSeq, sent, cmd, abandoned }. */
+const { CLI_SLOT_ABANDON_TTL_MS } = require('./cli-slot-policy')
+
+function tryForwardTomatoCmd ({ raw, lastTomatoCmdRaw, lastTomatoSeq, getMainWindow, isLocked, clearCmd, now }) {
+  const untouched = { lastTomatoCmdRaw, lastTomatoSeq, sent: false, cmd: null, abandoned: false }
   if (!raw || raw === lastTomatoCmdRaw) return untouched
   if (typeof isLocked === 'function' && isLocked()) return untouched
   const win = typeof getMainWindow === 'function' ? getMainWindow() : null
@@ -170,8 +179,15 @@ function tryForwardTomatoCmd ({ raw, lastTomatoCmdRaw, lastTomatoSeq, getMainWin
   if (!winOk) return untouched
   let cmd
   try { cmd = JSON.parse(raw) } catch { return untouched } // 解析失败不消费 raw(与旧行为一致,外层 catch 记 warn)
-  if (!cmd || !cmd.seq || cmd.seq <= lastTomatoSeq) return { lastTomatoCmdRaw: raw, lastTomatoSeq, sent: false, cmd: null }
+  if (!cmd || !cmd.seq || cmd.seq <= lastTomatoSeq) return { lastTomatoCmdRaw: raw, lastTomatoSeq, sent: false, cmd: null, abandoned: false }
+  // r2 2026-09-28: 过期弃置与启动播种同策略(cli-slot-policy)。CLI 已超时放弃(APP_NOT_RUNNING)
+  // 的命令不得在窗口恢复的瞬间补执行——只消费不执行,compare-and-delete 仍在调用侧 clearCmd。
+  const at = Number(cmd.at) || 0
+  if (at > 0 && (typeof now === 'number' ? now : Date.now()) - at > CLI_SLOT_ABANDON_TTL_MS) {
+    if (typeof clearCmd === 'function') { try { clearCmd(cmd) } catch { /* slot cleanup is best-effort */ } }
+    return { lastTomatoCmdRaw: raw, lastTomatoSeq: cmd.seq, sent: false, cmd, abandoned: true }
+  }
   wc.send('cli-tomato-cmd', cmd) // 可能 throw(半销毁 peer):抛给调用方,seq/raw 均不推进 → 下轮轮询重投
   if (typeof clearCmd === 'function') { try { clearCmd(cmd) } catch { /* slot cleanup is best-effort */ } }
-  return { lastTomatoCmdRaw: raw, lastTomatoSeq: cmd.seq, sent: true, cmd }
+  return { lastTomatoCmdRaw: raw, lastTomatoSeq: cmd.seq, sent: true, cmd, abandoned: false }
 }

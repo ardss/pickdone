@@ -18,6 +18,19 @@ module.exports = ({ open, commit, audit }) => {
     if (!raw) return null
     try { return JSON.parse(raw) } catch { return null }
   }
+  /* Slot ownership (d11 round 2): "who consumes, who clears" now closes the loop on the CLI's
+     timeout side too — the App already discards stale slots; a CLI that gives up waiting must not
+     leave its command slot behind for the App's TTL/catch-up logic to second-guess later.
+     Compare-and-delete: only remove the slot when it STILL holds our seq (a newer command from a
+     concurrent CLI process must never be deleted). */
+  function clearSlotIfStillMine (slotKey, seq) {
+    try {
+      const raw = open().call('getMeta', slotKey)
+      if (!raw) return
+      const slot = JSON.parse(raw)
+      if (slot && slot.seq === seq) commit('meta', 'delete', slotKey)
+    } catch (e) { /* corrupt slot: leave it for the App's TTL sweep */ }
+  }
   /* Wait for the App's consumption receipt: cliTomatoState.seq catching up means executed. Returns null on timeout (App not running / locked).
      The HELP contract promises start errors when the App is not running — writing meta and reporting success once made scripts believe focus had begun */
   async function waitForTomatoAck (seq, timeoutMs = 8000) {
@@ -30,6 +43,7 @@ module.exports = ({ open, commit, audit }) => {
       if (st && st.seq === seq) return st
       await new Promise(r => setTimeout(r, 200))
     }
+    clearSlotIfStillMine('cliTomatoCmd', seq)
     return null
   }
   /** Live remaining seconds for status: remainSec is frozen at the last command time; during focus it is derived from startedAt; state not written back for over 5s is marked stale */
@@ -67,6 +81,7 @@ module.exports = ({ open, commit, audit }) => {
       if (st && st.seq === seq) return st
       await new Promise(r => setTimeout(r, 200))
     }
+    clearSlotIfStillMine('cliSyncCmd', seq)
     return null
   }
 

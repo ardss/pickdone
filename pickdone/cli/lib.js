@@ -85,7 +85,13 @@ let tomatoMigrated = false
 function ensureTomatoMigrated () {
   if (tomatoMigrated) return
   tomatoMigrated = true
-  try { bus.commit('tomato', 'migrateFromMeta', null, { preserveStamp: true }) } catch (e) { /* migration failure must not block the CLI (same tolerance as the App's startup call) */ }
+  try { bus.commit('tomato', 'migrateFromMeta', null, { preserveStamp: true }) } catch (e) {
+    // Fail-loud (d11 round 2): the old bare catch swallowed a corrupt meta blob into SILENCE —
+    // `tomato list` then printed an empty ledger and exited 0 (read-side side effect + fake
+    // success). We still do not abort the read (full read/write open-protocol decoupling is a
+    // separate round), but the user now SEES the failure on stderr instead of an empty list.
+    console.error(`warning: tomato ledger migration failed (${e && e.message ? e.message : e}); tomato output may be incomplete — inspect the meta blob in ${userDataDir()}`)
+  }
 }
 
 /* ================= Errors ================= */

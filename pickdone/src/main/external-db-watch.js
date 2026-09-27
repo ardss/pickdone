@@ -8,49 +8,31 @@
 const path = require('path')
 const fs = require('fs')
 
-// 2026-09-28: TTL for a slot command queued at exactly the persisted counter. The CLI's
-// waitForTomatoAck/waitForSyncAck give up after 8s/15s (APP_NOT_RUNNING) and DO NOT release the
-// slot — the counter-1 seed below would then silently execute it on a restart days later (a
-// `tomato start` or an `unpair` key rotation firing out of nowhere). A queued command older than
-// this TTL was abandoned by its writer (both CLI wait caps are far below it); the app must not
-// execute it — drop the slot and keep the counter watermark.
-const CLI_SLOT_ABANDON_TTL_MS = 60 * 1000
+// 2026-09-28 r2: the abandon/seed policy (TTL constant + fresh-vs-stale decision) lives in
+// cli-slot-policy.js as a shared pure function — it was previously hand-copied here AND in
+// cli-sync-channel.js (TTL constant defined twice, kept in sync only by a comment). The
+// compare-and-delete of the slot stays a caller-side callback (see seedSlotWatermark).
+const { CLI_SLOT_ABANDON_TTL_MS, seedSlotWatermark } = require('./cli-slot-policy')
 
 /** Seed the tomato command watermark at startup. Returns the initial lastTomatoSeq.
  *  Pure/injected so the seed policy (including the abandonment TTL) is unit-testable without
  *  Electron. getMeta/deleteMeta talk to the machine-local meta table; deleteMeta is optional
  *  (tests without a meta writer just get the watermark back, slot left in place). */
 function seedTomatoWatermark ({ getMeta, deleteMeta }) {
-  let lastTomatoSeq = 0
-  try { lastTomatoSeq = Number(getMeta('cliTomatoSeq')) || 0 } catch { lastTomatoSeq = 0 }
-  // Round-2 P1 (2026-09-21): mirror of the cliSyncCmd slot fix — a command queued at exactly the
-  // counter (crash between slot-write and forward) must EXECUTE once after restart, not be
-  // skipped; seeding the watermark from the slot (counter - 1) lets the normal forward path run
-  // it and clear the slot, so a second restart never re-executes it.
-  // 2026-09-28: BUT only when the queued command is fresh. A stale one (age > TTL) is a command
-  // the CLI already timed out on (APP_NOT_RUNNING) and left behind — execute-once semantics would
-  // turn it into an execute-DAYS-later semantics. Abandon it instead: counter watermark stands
-  // (the seq is consumed) and the slot is compare-and-deleted.
-  try {
-    const queued = JSON.parse(getMeta('cliTomatoCmd') || 'null')
-    if (queued && Number.isFinite(queued.seq) && Number(queued.seq) === lastTomatoSeq) {
-      // Only a slot the CLI STAMPED and left to go stale is abandoned (the CLI always writes
-      // `at`, lib-channels writeTomatoCmd); a slot without a stamp keeps execute-once semantics.
-      const at = Number(queued.at) || 0
-      if (at > 0 && Date.now() - at > CLI_SLOT_ABANDON_TTL_MS) {
-        try {
-          if (typeof deleteMeta === 'function') {
-            const cur = JSON.parse(getMeta('cliTomatoCmd') || 'null')
-            // Compare-and-delete: never eat a NEWER command that landed while we seeded.
-            if (cur && Number(cur.seq) === Number(queued.seq)) deleteMeta('cliTomatoCmd')
-          }
-        } catch { /* best-effort cleanup */ }
-      } else {
-        lastTomatoSeq -= 1
-      }
-    }
-  } catch { /* malformed slot: counter watermark stands */ }
-  return lastTomatoSeq
+  return seedSlotWatermark({
+    counter: (() => { try { return Number(getMeta('cliTomatoSeq')) || 0 } catch { return 0 } })(),
+    slotRaw: (() => { try { return getMeta('cliTomatoCmd') } catch { return null } })(),
+    now: Date.now(),
+    onAbandon: (queued) => {
+      try {
+        if (typeof deleteMeta === 'function') {
+          const cur = JSON.parse(getMeta('cliTomatoCmd') || 'null')
+          // Compare-and-delete: never eat a NEWER command that landed while we seeded.
+          if (cur && Number(cur.seq) === Number(queued.seq)) deleteMeta('cliTomatoCmd')
+        }
+      } catch { /* best-effort cleanup */ }
+    },
+  })
 }
 
 function createExternalDbWatch (deps) {
@@ -145,6 +127,8 @@ function createExternalDbWatch (deps) {
         lastTomatoSeq = st.lastTomatoSeq
         // 账本类命令已退役为 CLI 直写行表(渲染端经 tomato-records-changed 回灌),本通道只剩状态类 start/stop/attach,只发主窗
         if (st.sent) log.info('[CLI] 番茄命令已转发渲染端:', st.cmd.action, 'seq=' + st.cmd.seq)
+        // r2 2026-09-28: 运行期弃置——CLI 已超时放弃(APP_NOT_RUNNING)的命令在窗口/解锁恢复后不得补执行
+        else if (st.abandoned) log.warn('[CLI] 番茄命令已过期弃置(超过 slot TTL,CLI 早已超时):', st.cmd.action, 'seq=' + st.cmd.seq)
       } catch (e) { log.warn('[CLI] 番茄命令转发失败', e) }
       // CLI settings set: mirror changes to db.settingsState's _savedAt → diff and push to the renderer for hot application
       // (renderer dispatches settings/update → IPC notify-settings-updated → main-process config.json/shortcuts/login item sync accordingly)

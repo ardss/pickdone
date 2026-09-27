@@ -10,7 +10,6 @@
  * the lan-sync-bootstrap and the test harness keep their single require surface.
  */
 
-const log = require('electron-log')
 const { SYNC_OPLOG_KEEP, oplogKeepLimit } = require('./db-oplog') // D3 2026-09-24: oplog page size derives from the ring retention (was bare 10000s)
 // Domain-1 F-A1 (2026-09-23): the machine-local setting predicate lives in
 // shared/machine-local-keys.mjs — single source; the manifest imports the same module.
@@ -188,8 +187,17 @@ function hydrateRow (state, ptr, cache) {
     if (p.deleted || p.deletedAt) return { ...base, updatedAt: p.updatedAt || ptr.ts, deleted: true, deletedAt: p.deletedAt || ptr.ts, data: null }
     return { ...base, updatedAt: p.updatedAt || ptr.ts, deleted: false, deletedAt: 0, data: p }
   }
-  } catch (e) { log.warn('[LanSync] hydrate failed for', ptr.entity, ptr.entityId, e.message) }
-  return null
+  } catch (e) {
+    // r2 2026-09-28: a DB read failure is NOT the same as "not syncable". The old catch-all
+    // collapsed both into `null`, so the LAN push's map+filter(Boolean) silently dropped the
+    // oplog pointer while the cursor advanced past it — changes were lost one-way between full
+    // snapshots with nothing but a local log.warn as a trace. RETHROW with the pointer attached;
+    // the batch layer (lan-sync-bootstrap getRowsSince) catches per-pointer and counts the loss
+    // into its egress report instead of swallowing it. Only the entity/local-key/gc branches
+    // above return null (= legitimate skip).
+    e.egressHydration = { entity: ptr.entity, id: ptr.entityId, seq: ptr.seq }
+    throw e
+  }
 }
 
 module.exports = {
