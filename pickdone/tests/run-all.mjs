@@ -21,7 +21,13 @@ const appRoot = path.join(dir, '..')
 // host's runtime state — they stay out of the quick regression (and out of pre-commit, which
 // must never be hostage to dev-host state); each runs as a dedicated check:all ③ live stage.
 // NOTE: exclusion is by bare FILENAME across all suites — never reuse these names elsewhere.
-const EXCLUDE = new Set(['e2e.test.mjs', 'integration-ui.test.mjs', 'overlay-visibility.test.mjs'])
+const EXCLUDE = new Set(['e2e.test.mjs', 'integration-ui.test.mjs', 'overlay-visibility.test.mjs',
+  // lan-sync-loopback (2026-09-27, sync wave): spawns real node child processes over live
+  // TCP loopback (~10s, timing-sensitive) — running it inside the default pool's parallel
+  // load flaked both itself and neighbouring timing-sensitive lan-sync unit tests. Dedicated
+  // gate: node --test tests/integration/lan-sync-loopback.test.mjs (also run by the live-drill
+  // stage; see docs/lan-sync-live-drill.md).
+  'lan-sync-loopback.test.mjs'])
 
 const KNOWN_SUITES = new Set(['unit', 'integration', 'visual'])
 
