@@ -160,6 +160,10 @@ export default {
     "conflictRestored": "Backup restored",
     "conflictRestoreFail": "Restore failed, please retry",
     "conflictRestoreTitle": "Restore conflict backup",
-    "conflictRestoreConfirm": "Restoring \"{key}\" overwrites the currently kept data (the current version is backed up again first). Restore it?"
+    "conflictRestoreConfirm": "Restoring \"{key}\" overwrites the currently kept data (the current version is backed up again first). Restore it?",
+    "flushStalledNotice": "Sync push stalled — repeated flush failures to this peer; snapshot recovery has not converged",
+    "quarantineSection": "Flush quarantine (parked rows)",
+    "quarantineRows": "{n} rows parked",
+    "quarantineHint": "Rows a failed sync flush dropped are parked machine-locally and recover via a full snapshot (read-only view)."
   }
 }

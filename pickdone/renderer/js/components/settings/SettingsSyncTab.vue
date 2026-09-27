@@ -48,6 +48,9 @@
           <span class="tip sync-device-meta" v-else>{{ $t('sync.neverRan') }}</span>
           <span class="sync-pending" v-if="pendingBadge(p)">{{ pendingBadge(p) }}</span>
           <span class="tip sync-device-error" v-if="isUnpairedByRemote(p)">{{ $t('sync.unpairedByRemote') }}</span>
+          <!-- 2026-09-27 sync wave: 'flush-stalled' peerState (main: FLUSH_STALL_BUDGET consecutive
+               flush-failed rounds) rendered distinctly — it wins over the generic lastError line. -->
+          <span class="tip sync-device-error" v-else-if="isFlushStalled(p)">{{ $t('sync.flushStalledNotice') }}</span>
           <span class="tip sync-device-error" v-else-if="p.lastError">{{ $t('sync.errorPrefix', { msg: String(p.lastError).slice(0, 60) }) }}</span>
           <button class="mini sync-unpair-btn" v-if="!isUnpairedByRemote(p)" :disabled="busy || connecting" @click="askUnpair(p)">{{ $t('sync.unpairBtn') }}</button>
         </div>
@@ -84,6 +87,26 @@
           <span class="tip sync-conflict-preview" v-if="b.preview">{{ b.preview }}</span>
           <button class="mini" :disabled="conflictBusy === b.key" @click="askRestoreConflict(b)">{{ $t('sync.conflictRestore') }}</button>
         </div>
+      </div>
+    </div>
+
+    <!-- 2026-09-27 sync wave: machine-local flush quarantine (rows a failed sync flush dropped are
+         parked under the sync.flushQuarantine meta keys by main). READ-ONLY surfacing only —
+         count + op names + last error; the re-apply action is a registered follow-up. Hidden
+         entirely when main does not expose status.flushQuarantine (older main / CLI test host). -->
+    <div class="form" v-if="enabled && flushQuarantine.length">
+      <div class="form-item"><span class="form-item__label"></span>
+        <div class="form-item__control">
+          <button class="mini sync-collapse-toggle" @click="quarantineOpen = !quarantineOpen">{{ quarantineOpen ? '▾' : '▸' }} {{ $t('sync.quarantineSection') }} ({{ quarantineCount }})</button>
+        </div></div>
+      <div v-if="quarantineOpen" class="sync-conflict-list">
+        <div v-for="q in flushQuarantine" :key="q.key" class="sync-conflict-item">
+          <span class="tip sync-conflict-key">{{ q.op }}</span>
+          <span class="tip">{{ $t('sync.quarantineRows', { n: q.count }) }}</span>
+          <span class="tip" v-if="q.lastAt">{{ $t('sync.conflictLostAt', { time: fmtFull(q.lastAt) }) }}</span>
+          <span class="tip sync-conflict-preview" v-if="q.lastError">{{ String(q.lastError).slice(0, 80) }}</span>
+        </div>
+        <div class="tip sync-feed-hint">{{ $t('sync.quarantineHint') }}</div>
       </div>
     </div>
 
@@ -184,6 +207,10 @@ const syncPairRequest = (host: string) => dbCallLoose('syncPairRequest', { host 
  *  green when online, gray otherwise. */
 function peerDotClass (peer, now = null) {
   const nowMs = now || Date.now()
+  // 2026-09-27 sync wave: a 'flush-stalled' peer is a persistent fault (budget of consecutive
+  // flush-failed rounds, not a transient lastError) — the dot stays red until main clears the
+  // state; it must NOT age out via the 5min lastError window.
+  if (peer && peer.peerState === 'flush-stalled') return 'sync-dot--err'
   if (peer && peer.lastError && peer.lastErrorAt && (nowMs - peer.lastErrorAt) < 5 * 60 * 1000) return 'sync-dot--err'
   return peer && peer.online ? 'sync-dot--ok' : 'sync-dot--off'
 }
@@ -233,6 +260,12 @@ function peerUnpairedByRemote (lastError) {
   if (!lastError) return false
   return /unpair|peer-unauthorized|unauthorized|auth[^.]{0,16}reject/i.test(String(lastError))
 }
+/** 2026-09-27 sync wave: main stamps peerState 'flush-stalled' after FLUSH_STALL_BUDGET
+ *  consecutive flush-failed rounds (lan-sync/index.js getStatus). Pure helper keeps the
+ *  template line and the dot class in agreement. */
+function peerFlushStalled (peer) {
+  return !!(peer && peer.peerState === 'flush-stalled')
+}
 /** F1 (round-2 P1 2026-09-21): peer display name — machine-local alias wins, then the advertised
  *  deviceName (main now carries it on the status payload), then the raw record name/deviceId. */
 function peerDisplayName (peer) {
@@ -273,7 +306,8 @@ export default {
       // Y9 conflict backups: null = ops unavailable (hide the section); array = list from main
       conflictBackups: null,
       conflictOpen: false,
-      conflictBusy: null
+      conflictBusy: null,
+      quarantineOpen: false // 2026-09-27: flush-quarantine section collapse state (read-only view)
     }
   },
   computed: {
@@ -292,7 +326,11 @@ export default {
         .sort((a, b) => (b.at || 0) - (a.at || 0))
       return capFeed(merged, 20)
     },
-    pairDraftOk () { return /^\d{6}$/.test(String(this.pairDraft || '')) }
+    pairDraftOk () { return /^\d{6}$/.test(String(this.pairDraft || '')) },
+    /** 2026-09-27: machine-local flush quarantine summary from status.flushQuarantine
+     *  (main: lan-sync-bootstrap flushQuarantineSummary). [] when main does not expose it. */
+    flushQuarantine () { return (this.status && this.status.flushQuarantine) || [] },
+    quarantineCount () { return this.flushQuarantine.reduce((n, q) => n + ((q && q.count) || 0), 0) }
   },
   methods: {
     /** Y9: probe + list conflict backups. Missing/unavailable op (agent X not merged) => null
@@ -352,6 +390,8 @@ export default {
     feedIcon (k) { return feedIcon(k) },
     /** P2c: peer card in the "unpaired by the other device" state — dedicated copy + no Unpair button. */
     isUnpairedByRemote (p) { return peerUnpairedByRemote(p && p.lastError) },
+    /** 2026-09-27: peer card in the persistent 'flush-stalled' state (see peerFlushStalled). */
+    isFlushStalled (p) { return peerFlushStalled(p) },
     dotTip (p) {
       void this.relTick // 30s ticker dependency: tooltip stays in sync with the dot's error window
       if (p && p.lastError && p.lastErrorAt && (Date.now() - p.lastErrorAt) < 5 * 60 * 1000) return this.$t('sync.errTip')

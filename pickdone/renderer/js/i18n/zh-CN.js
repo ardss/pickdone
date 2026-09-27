@@ -160,6 +160,10 @@ export default {
     "conflictRestored": "已恢复备份数据",
     "conflictRestoreFail": "恢复失败，请重试",
     "conflictRestoreTitle": "恢复冲突备份",
-    "conflictRestoreConfirm": "恢复「{key}」将覆盖当前保留的数据版本（当前版本会先自动再备份一次）。确认恢复？"
+    "conflictRestoreConfirm": "恢复「{key}」将覆盖当前保留的数据版本（当前版本会先自动再备份一次）。确认恢复？",
+    "flushStalledNotice": "同步推送已停滞——向该设备写入连续失败，快照恢复尚未收敛",
+    "quarantineSection": "写入隔离区（已暂存行）",
+    "quarantineRows": "已暂存 {n} 行",
+    "quarantineHint": "同步落库失败的行已暂存于本机，等待快照恢复（只读展示）。"
   }
 }

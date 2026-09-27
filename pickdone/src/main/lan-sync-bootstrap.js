@@ -822,13 +822,43 @@ function pendingPairPayload () {
   return { deviceId: p.deviceId || null, deviceName: p.deviceName || null, host: p.host || null, at: p.at || Date.now() }
 }
 
+// 2026-09-27 Device Center surfacing (read-only): summarize the machine-local flush quarantine
+// (sync.flushQuarantine.<op> blobs written by sync-apply.quarantineFlushRows). One entry per
+// parked op: { op, key, entries, count, lastAt, lastError }. Persisted in meta, so it stays
+// visible across restarts; a summary failure degrades to [] and never blocks getStatus.
+function flushQuarantineSummary () {
+  const out = []
+  try {
+    const keys = (state.db.call('listMetaKeys') || [])
+      .filter(k => String(k).startsWith(syncApply.META_FLUSH_QUARANTINE_PREFIX))
+      .sort()
+    for (const key of keys) {
+      const op = String(key).slice(syncApply.META_FLUSH_QUARANTINE_PREFIX.length)
+      let parked = []
+      try { parked = JSON.parse(state.db.call('getMeta', String(key)) || '[]') } catch { /* unreadable blob: degrade to empty list for this op */ }
+      if (!Array.isArray(parked)) parked = []
+      const last = parked[parked.length - 1] || {}
+      out.push({
+        op,
+        key: String(key),
+        entries: parked.length,
+        count: parked.reduce((n, e) => n + ((e && e.count) || 0), 0),
+        lastAt: (last && last.at) || null,
+        lastError: String((last && last.error) || '').slice(0, 120),
+      })
+    }
+  } catch { /* quarantine surfacing must never break getStatus */ }
+  return out
+}
+
 function getStatusPayload () {
   const s = getSettingsPayload()
   const pendingPair = pendingPairPayload()
+  const flushQuarantine = flushQuarantineSummary()
   if (!state.node) {
     return {
       ...s, listening: false, port: null, peers: [], recent: [], security: [],
-      lastRoundAt: null, lastError: null, pendingPair,
+      lastRoundAt: null, lastError: null, pendingPair, flushQuarantine,
       self: { deviceId: s.deviceId, deviceName: s.deviceName, port: null },
     }
   }
@@ -840,6 +870,9 @@ function getStatusPayload () {
     // is machine-local), and it wins over the advertised device name in the renderer.
     peers: (st.peers || []).map(p => ({ ...p, deviceName: p.deviceName || p.name, alias: peerAliasOf(p && p.deviceId) })),
     recent: st.recent, security: st.security,
+    // 2026-09-27: read-only flush-quarantine summary for the Device Center (no re-apply op yet —
+    // that is a registered follow-up). Persisted meta, so it survives restarts.
+    flushQuarantine,
     lastRoundAt: st.lastRoundAt, lastError: st.lastError, pendingPair,
     self: st.self || { deviceId: s.deviceId, deviceName: s.deviceName, port: st.port },
   }
