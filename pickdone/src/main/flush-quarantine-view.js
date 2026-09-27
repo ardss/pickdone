@@ -9,16 +9,16 @@
  */
 const { META_FLUSH_QUARANTINE_PREFIX } = require('./sync-apply')
 
-function summarizeFlushQuarantine (dbCall) {
+function summarizeFlushQuarantine (db) {
   const out = []
   try {
-    const keys = (dbCall('listMetaKeys') || [])
+    const keys = (db.call('listMetaKeys') || [])
       .filter(k => String(k).startsWith(META_FLUSH_QUARANTINE_PREFIX))
       .sort()
     for (const key of keys) {
       const op = String(key).slice(META_FLUSH_QUARANTINE_PREFIX.length)
       let parked = []
-      try { parked = JSON.parse(dbCall('getMeta', String(key)) || '[]') } catch { /* unreadable blob: degrade to empty list for this op */ }
+      try { parked = JSON.parse(db.call('getMeta', String(key)) || '[]') } catch { /* unreadable blob: degrade to empty list for this op */ }
       if (!Array.isArray(parked)) parked = []
       const last = parked[parked.length - 1] || {}
       out.push({

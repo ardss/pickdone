@@ -822,7 +822,7 @@ const flushQuarantineSummary = require('./flush-quarantine-view').summarizeFlush
 function getStatusPayload () {
   const s = getSettingsPayload()
   const pendingPair = pendingPairPayload()
-  const flushQuarantine = flushQuarantineSummary((op, params) => state.db.call(op, params))
+  const flushQuarantine = flushQuarantineSummary(state.db)
   if (!state.node) {
     return {
       ...s, listening: false, port: null, peers: [], recent: [], security: [],
