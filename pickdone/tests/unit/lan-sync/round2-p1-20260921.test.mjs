@@ -383,7 +383,9 @@ test('F8: cliSyncCmd slot at seq === counter executes ONCE after restart, not tw
 })
 
 test('F8: the tomato channel seeding mirrors the slot fix (source contract)', async () => {
-  const src = fs.readFileSync(here('../../../src/main/index.js'), 'utf8')
+  // Re-anchored 2026-09-27: the external-write watcher (carrying the tomato watermark seeding)
+  // moved verbatim from src/main/index.js to src/main/external-db-watch.js.
+  const src = fs.readFileSync(here('../../../src/main/external-db-watch.js'), 'utf8')
   assert.ok(/cliTomatoCmd[\s\S]{0,400}lastTomatoSeq -= 1/.test(src), 'tomato watermark seeds from a queued slot (counter - 1)')
 })
 
