@@ -80,10 +80,14 @@ test('d11r3[2]: a failed bumpSnow is persisted and replays via quit-flush after 
   assert.equal(typeof persisted.entries[0].ts, 'number', 'ts stamped')
 
   // Restart: fresh module hydrates the snow queue from LS; db healthy. Quit-flush must replay it.
+  // maint/d11-r4: count only restart-phase calls. The old assertion scanned both phases and the
+  // phase-1 dbCall records the FAILED bump before throwing — with the hydration TDZ the replay
+  // never fired and the "exactly once" pass was the failed attempt, a fake green.
   bumpFails = false
+  const restartCalls = []
   const flushCbs = []
   globalThis.window.todoAPI = {
-    dbCall: async (op, params) => { calls.push([op, params]); return { accepted: 1, rejected: [] } },
+    dbCall: async (op, params) => { restartCalls.push([op, params]); return { accepted: 1, rejected: [] } },
     onAppQuittingFlush (cb) { flushCbs.push(cb) }
   }
   const { default: tomato2 } = await import('../../../renderer/js/store/tomato.js?d11r3-snow-restart')
@@ -93,8 +97,8 @@ test('d11r3[2]: a failed bumpSnow is persisted and replays via quit-flush after 
   assert.ok(flushCbs.length >= 1, 'the ledger write hooks the quit flush in the fresh instance')
   for (const cb of flushCbs) await cb()
   await new Promise(r => setTimeout(r, 20))
-  const bumps = calls.filter(([op, p]) => op === 'bumpSnow' && p && p.taskId === 7)
-  assert.equal(bumps.length, 1, 'the hydrated snow entry replays exactly once at quit-flush')
+  const bumps = restartCalls.filter(([op, p]) => op === 'bumpSnow' && p && p.taskId === 7)
+  assert.equal(bumps.length, 1, 'the hydrated snow entry replays exactly once at quit-flush (restart phase only)')
   const after = readQueue(SNOW_KEY)
   assert.equal(after.entries.length, 0, 'LS snow queue drains after successful replay')
 })

@@ -57,20 +57,24 @@ test('prune still drops an expired entry and keeps a fresh one (TTL behavior pre
 })
 
 test('both 500ms tick handlers guard the prune commit on a non-empty remote', () => {
-  for (const [file, marker] of [
-    ['renderer/js/views/TomatoFloatPage.vue', 'this.$store.commit(\'tomatoAnnounce/prune\')'],
-    ['renderer/js/components/TomatoPanel.vue', 'store.commit(\'tomatoAnnounce/prune\')']
+  // maint/d11-r4 dedupe: both .vue tick handlers now call the shared pruneRemoteAnnounces
+  // helper, which carries the non-empty guard and is the ONLY place that commits the prune.
+  const helperSrc = read('renderer/js/store/tomatoAnnounce.js')
+  assert.ok(
+    /if \(st && st\.remote && Object\.keys\(st\.remote\)\.length\) store\.commit\('tomatoAnnounce\/prune'\)/.test(helperSrc),
+    'pruneRemoteAnnounces helper must commit tomatoAnnounce/prune only when remote is non-empty (idle windows must not issue 2Hz commits)')
+  // the helper must be the only commit site for the prune in renderer code
+  for (const [file, call] of [
+    ['renderer/js/views/TomatoFloatPage.vue', 'pruneRemoteAnnounces(this.$store)'],
+    ['renderer/js/components/TomatoPanel.vue', 'pruneRemoteAnnounces(store)']
   ]) {
     const src = read(file)
-    assert.ok(
-      /if \(Object\.keys\((?:this\.\$store\.|store\.)?state\.tomatoAnnounce\.remote\)\.length\) (?:this\.\$store\.|store\.)?commit\('tomatoAnnounce\/prune'\)/.test(src),
-      `${file} must commit tomatoAnnounce/prune only when remote is non-empty (idle windows must not issue 2Hz commits)`)
-    // the commit call site must be the guarded one (no unguarded commit left behind)
-    const commitSites = src.split(marker).length - 1
-    assert.ok(commitSites >= 1)
+    assert.ok(src.includes(`import { pruneRemoteAnnounces }`), `${file} must use the shared helper`)
+    const callSites = src.split(call).length - 1
+    assert.ok(callSites >= 1, `${file} must call the helper (${call})`)
     for (const line of src.split('\n')) {
-      if (line.includes(marker)) {
-        assert.ok(line.includes('Object.keys('), `${file}: every prune commit site must sit behind the non-empty guard`)
+      if (line.includes('tomatoAnnounce/prune')) {
+        assert.fail(`${file}: prune commit must live in the guarded helper, not inline (${file})`)
       }
     }
   }

@@ -118,9 +118,16 @@ module.exports = ({ open, commit, audit, CliError, dayjs, resolveTask, liveTasks
     if (rest != null) patch.restDuration = Math.max(0, Math.min(REST_MAX_MINUTES, parseInt(rest, 10) || 0))
     if (succeed != null && succeed !== true) patch.succeed = !/^(false|no|0)$/i.test(String(succeed))
     if (date || at) {
-      // endTime reposition: endTime defines placement; dateKey re-derived here (was App-side)
-      const endBase = parseDate(date || dayjs(rec.endTime || Date.now()).format('YYYY-MM-DD'))
-      const m = /^(\d{1,2}):(\d{2})$/.exec(String(at || dayjs(rec.endTime || Date.now()).format('HH:mm')))
+      // endTime reposition: endTime defines placement; dateKey re-derived here (was App-side).
+      // The record's own endTime is the anchor for whichever of --date/--at the caller omitted.
+      // It is DATA, not a display default: a missing/corrupt endTime must not silently anchor to
+      // "today, right now" (that would land a wrong dateKey). Fail loud and demand explicit input.
+      const recEnd = Number.isFinite(rec.endTime) && rec.endTime > 0 ? rec.endTime : null
+      if (!recEnd && (!date || !at)) {
+        throw new CliError('record ' + rec.tomatoId + ' has no valid endTime to anchor from — pass explicit --date (YYYY-MM-DD) and --at (HH:mm)', 'USAGE')
+      }
+      const endBase = parseDate(date || dayjs(recEnd).format('YYYY-MM-DD'))
+      const m = /^(\d{1,2}):(\d{2})$/.exec(String(at || dayjs(recEnd).format('HH:mm')))
       if (!m) throw new CliError('--at accepts HH:mm', 'USAGE')
       patch.endTime = dayjs(endBase).hour(+m[1]).minute(+m[2]).second(0).millisecond(0).valueOf()
       patch.dateKey = dayjs(patch.endTime).format('YYYY-MM-DD')

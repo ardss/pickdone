@@ -505,9 +505,14 @@ function notifyRenderers (reason) {
 /**
  * Device Center event channel: ONE 'syncEvent' IPC event carrying a self-describing payload
  * {type, at, ...}. Kept alongside the legacy 'lan-sync-changed' ping (existing consumers keep
- * working). Types: peer-online, peer-offline, pair-request, pair-accepted, pair-rejected,
- * round-done, round-error, pair-throttled, flush-quarantined, tomato-announce,
- * attachments-arrived, egress-hydration-failed, oplog-append-failed.
+ * working). Types:
+ * peer-online, peer-offline, peer-unauthorized, peer-unpaired, pair-request, pair-accepted,
+ * pair-rejected, pair-throttled, snapshot-sync, round-done, round-error, server-error,
+ * sync-conflict, flush-quarantined, tomato-announce, attachments-arrived,
+ * egress-hydration-failed, oplog-append-failed.
+ * (r4 2026-09-28: that list is set-equality-gated against the actual emit sites —
+ * tests/unit/main/fix-20260928-r4-main.test.mjs greps every emitSyncEvent('<type>') and fails
+ * on any drift in either direction.)
  */
 function emitSyncEvent (type, payload) {
   try {

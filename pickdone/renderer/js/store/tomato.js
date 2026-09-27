@@ -167,6 +167,11 @@ function persistState (state) {
  *  退出冲刷:pending 账本写挂到 app-quitting-flush(完成番茄后立刻退出是丢账最高频场景,三轮深审发布 blocker);
  *  失败留在重试队列,下一次任意账本写时重放(锁屏/瞬时 IO 失败自愈)。 */
 const _pendingLedger = []
+/** maint/d11-r4: _pendingSnow lives here (next to _pendingLedger) instead of further down — the
+ *  module-top-level hydratePendingQueue(PENDING_SNOW_KEY) revive closure pushes into it, and with
+ *  the const below its use site the closure hit the TDZ and the ReferenceError was swallowed by
+ *  the "corrupt blob" catch, so snow entries persisted before a crash never replayed. */
+const _pendingSnow = []
 let _flushHooked = false
 
 /** maint/d11-r3: the retry queues are now crash-proof. They used to be pure memory arrays — a quit
@@ -186,15 +191,22 @@ function savePendingQueues () {
   safeSet(PENDING_SNOW_KEY, JSON.stringify(pack(_pendingSnow, e => ({ seq: e.seq, ts: e.ts, params: e.params }))))
 }
 function hydratePendingQueue (key, revive) {
+  // maint/d11-r4: parse failures degrade (corrupt blob → start empty + log); revive failures
+  // propagate. The old single try/catch around both mislabeled any revive bug as a corrupt blob
+  // and silently swallowed it — a real code bug looked exactly like expected degradation.
+  let v
   try {
-    const v = JSON.parse(localStorage.getItem(key))
-    if (!v || typeof v !== 'object' || v.v !== PENDING_QUEUE_V || !Array.isArray(v.entries)) return
-    for (const raw of v.entries) {
-      const e = revive(raw)
-      if (!e) continue
-      if (typeof e.seq === 'number' && e.seq > _pendingSeq) _pendingSeq = e.seq
-    }
-  } catch (e) { /* corrupt blob → start empty; the ledger lives in SQLite, this is only the retry queue */ }
+    v = JSON.parse(localStorage.getItem(key))
+  } catch (e) {
+    console.error('[tomato] pending queue "' + key + '" is corrupt, starting empty:', e)
+    return
+  }
+  if (!v || typeof v !== 'object' || v.v !== PENDING_QUEUE_V || !Array.isArray(v.entries)) return
+  for (const raw of v.entries) {
+    const e = revive(raw)
+    if (!e) continue
+    if (typeof e.seq === 'number' && e.seq > _pendingSeq) _pendingSeq = e.seq
+  }
 }
 /** Startup hydration: entries queued in a previous process life come back (seq/ts stamped at enqueue
  *  time), then replay through the normal ledgerWrite/snowWrite paths. */
@@ -288,7 +300,6 @@ function hookQuitFlush () {
  *  completion was booked under. The db layer's bumpSnow honors an optional dedupKey so a replayed
  *  entry (retry queue OR quit-flush) cannot double-credit a focus that already landed. Quit-flush
  *  replays the same params object, so every replay path carries the same key. */
-const _pendingSnow = []
 function replayPendingSnow () {
   for (const entry of [..._pendingSnow]) {
     Promise.resolve(window.todoAPI && commitCommand("todo", "bump", entry.params))
@@ -319,11 +330,35 @@ function flushPendingSnow () {
   }
 }
 
+/** maint/d11-r4: single source for the tomato countdown's remaining seconds. Five hand-written
+ *  copies (TomatoBar clock/remainSecNow/pushTaskbar, TomatoPanel, TomatoFloatPage) drifted-able —
+ *  any rounding/clamp change on one end made float window and panel visibly disagree per second.
+ *  Running: clamp-floor elapsed from startedAt, never below 0. Idle: full tomatoTime (||25 default).
+ *  `now` is injected so callers keep their reactive tick (Date.now() in a Vuex getter is not
+ *  reactive — see P1-6). */
+export function remainingSecOfState (s, now) {
+  if (!s) return 25 * 60
+  const nowMs = Number(now) || Date.now()
+  const running = s.status === 'startTomatoTime' || s.status === 'startRestTime'
+  const total = ((s.status === 'startRestTime' ? s.restTime : s.tomatoTime) || 25) * 60
+  if (running && s.startedAt) {
+    const elapsed = Math.max(0, Math.floor((nowMs - s.startedAt) / 1000))
+    return Math.max(0, total - elapsed)
+  }
+  return total
+}
+
 export default {
   namespaced: true,
   state: loadState(),
   /** Task→actual tomato count lookup: build the Map once, component lookups are O(1). Abandoned (succeed===false) not counted */
   getters: {
+    /** maint/d11-r4: curried remaining-seconds — pass a reactive now from the component tick
+     *  (Date.now() inside the getter itself is not reactive, P1-6). Read-only view of
+     *  remainingSecOfState, the single source shared with the float window. */
+    remainingSec (s) {
+      return now => remainingSecOfState(s, now)
+    },
     actualCountByTask (s) {
       const m = new Map()
       for (const r of (s.tomatoRecordList || [])) {

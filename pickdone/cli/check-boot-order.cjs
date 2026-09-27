@@ -28,18 +28,10 @@ const acorn = require('acorn')
 const ROOT = path.join(__dirname, '..')
 const TARGET = path.join(ROOT, 'src', 'main')
 
-function listFiles (dir, out = []) {
-  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, e.name)
-    if (e.isDirectory()) {
-      if (e.name === 'node_modules' || e.name === 'dist' || e.name.startsWith('.')) continue
-      listFiles(full, out)
-    } else if (/\.(js|cjs|mjs)$/.test(e.name) && !e.name.endsWith('.d.ts')) {
-      out.push(full)
-    }
-  }
-  return out
-}
+// shared walker (lib-filescan.cjs): skip-list now includes renderer-dist like the other gates
+// (a no-op under src/main today, but the drift was the bug); exts stay .js/.cjs/.mjs (no .vue —
+// acorn parses raw script, vue SFCs are not part of the main boot graph)
+const { listFiles } = require('./lib-filescan.cjs')
 
 function parse (code) {
   for (const sourceType of ['module', 'script']) {

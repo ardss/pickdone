@@ -112,6 +112,8 @@
 import { formatMMSS, focusedElapsedSec } from '../utils/tomatoShared.js'
 import { NOISES } from '../utils/mediaRegistry.js'
 import { remainSecOfAnnounce } from '../store/helpers/tomatoAnnounceShared.js'
+import { remainingSecOfState } from '../store/tomato.js'
+import { pruneRemoteAnnounces } from '../store/tomatoAnnounce.js'
 // Drag/dblclick methods (pure relocation — spread into `methods` below)
 import { tomatoFloatDragMethods } from './tomatoFloatDrag.js'
 
@@ -240,16 +242,11 @@ export default {
       // mid-focus drops its ghost chip by TTL instead of sticking forever.
       // Round-3 perf: skip the commit while no peer announce exists — pruning an empty map is a
       // no-op, so an idle window stops issuing 2Hz Vuex commits.
-      try { if (Object.keys(this.$store.state.tomatoAnnounce.remote).length) this.$store.commit('tomatoAnnounce/prune') } catch (e) { /* store not ready */ }
-      const s = this.st
-      let remain = (s.tomatoTime || 25) * 60
-      if ((s.status === 'startTomatoTime' || s.status === 'startRestTime') && s.startedAt) {
-        const total = (s.status === 'startRestTime' ? s.restTime : s.tomatoTime) * 60
-        remain = Math.max(0, total - Math.max(0, Math.floor((Date.now() - s.startedAt) / 1000)))
-      }
-      this.remaining = remain
+      try { pruneRemoteAnnounces(this.$store) } catch (e) { /* store not ready */ }
+      // maint/d11-r4: single-source remaining seconds (was a character-twin of TomatoPanel's inline copy)
+      this.remaining = remainingSecOfState(this.st, this.now)
       // If the dialog is open but focus has already ended elsewhere (finished/ended elsewhere), auto-collapse — otherwise title and body desync
-      if (this.abandoning && s.status !== 'startTomatoTime') this.abandoning = false
+      if (this.abandoning && this.st.status !== 'startTomatoTime') this.abandoning = false
     },
     /* Window height decision log (second pass, 2026-09-02): constant 240×320; expanding/collapsing the ⋮ menu / ♪ noise / abandon confirm
        are all pure CSS animations inside the window (GPU-composited = buttery), the OS never resizes. Idle transparent empty areas are

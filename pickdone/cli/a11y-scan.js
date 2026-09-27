@@ -6,33 +6,17 @@
  */
 const path = require('path')
 const fs = require('fs')
-const http = require('http')
+const { sleep, getJSON, cdpConnect } = require('./lib-cdp-client.cjs')
 
 const PORT = 9444 // 9333 falls inside a Windows reserved port range (9292-9391) and gets swallowed; standardized on the project port 9444
 const ROUTE = process.argv[2] || '#/todo-list'
-const getJSON = p => new Promise((res, rej) => {
-  http.get({ host: '127.0.0.1', port: PORT, path: p, timeout: 2000 }, r => {
-    let s = ''; r.on('data', d => s += d); r.on('end', () => res(JSON.parse(s)))
-  }).on('error', rej)
-  return undefined
-})
-const sleep = ms => new Promise(r => setTimeout(r, ms))
 
 async function main () {
-  const list = await getJSON('/json/list').catch(() => { throw new Error('App 未在 CDP 模式运行（参考 cli/ui-smoke.js 的锁诊断）') })
+  const list = await getJSON(PORT, '/json/list').catch(() => { throw new Error('App 未在 CDP 模式运行（参考 cli/ui-smoke.js 的锁诊断）') })
   const page = list.find(t => t.type === 'page' && t.url.includes('#/todo-list'))
   if (!page) throw new Error('未找到主窗口 target')
-  const ws = new WebSocket(page.webSocketDebuggerUrl)
-  let id = 0
-const pending = new Map()
-  const send = (method, params = {}) => { const i = ++id; const p = new Promise(res => { pending.set(i, res); ws.send(JSON.stringify({ id: i, method, params })); }); return p; }
-  ws.onmessage = e => { const m = JSON.parse(e.data); if (m.id && pending.has(m.id)) { pending.get(m.id)(m.result); pending.delete(m.id) } }
-  await new Promise(r => ws.onopen = r)
-  const evalJS = async expr => {
-    const r = await send('Runtime.evaluate', { expression: expr, awaitPromise: true, returnByValue: true })
-    if (r.exceptionDetails) throw new Error('EXC: ' + (r.exceptionDetails.exception?.description || '').slice(0, 200))
-    return r.result.value
-  }
+  const { send, evalJS, open } = cdpConnect(page.webSocketDebuggerUrl)
+  await open
 
   await send('Page.enable')
   await evalJS(`location.hash = ${JSON.stringify(ROUTE)}; "ok"`)

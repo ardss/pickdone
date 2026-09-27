@@ -157,6 +157,14 @@ module.exports = Object.assign(({ getDb, log, getPurgeChips, onAppendFailure }) 
     if (entity === 'meta') return localKeyPredicates.isMachineLocalMetaKey(k) || localKeyPredicates.isSyncBlobMetaKey(k)
     return false
   }
+  // r4 fix (2026-09-28): oplogEntriesFor runs OUTSIDE appendOplog's try/catch (db.js call()),
+  // so when IT threw, the same delta loss was reported via log.warn only — no counter, no hook,
+  // no 'oplog-append-failed' syncEvent. Both failure entry points now share ONE reporter.
+  function reportAppendFailure (errorMsg) {
+    oplogAppendFailures++
+    log.warn('[TodoDB] oplog append FAILED — that change will NOT propagate to peers until the next full snapshot:', errorMsg)
+    try { if (typeof onAppendFailure === 'function') onAppendFailure({ count: oplogAppendFailures, error: errorMsg }) } catch { /* surfacing is best-effort */ }
+  }
   function appendOplog (entries) {
     if (!entries.length) return
     try {
@@ -173,11 +181,7 @@ module.exports = Object.assign(({ getDb, log, getPurgeChips, onAppendFailure }) 
         const n = oplogCount.get().n
         if (n > SYNC_OPLOG_KEEP) getDb().prepare('DELETE FROM sync_oplog WHERE seq <= (SELECT MAX(seq) FROM sync_oplog) - ?').run(SYNC_OPLOG_KEEP)
       }
-    } catch (e) {
-      oplogAppendFailures++
-      log.warn('[TodoDB] oplog append FAILED — that change will NOT propagate to peers until the next full snapshot:', e.message)
-      try { if (typeof onAppendFailure === 'function') onAppendFailure({ count: oplogAppendFailures, error: e.message }) } catch { /* surfacing is best-effort */ }
-    }
+    } catch (e) { reportAppendFailure(e.message) }
   }
 
   // Drop prepared statements on db re-init/close so the next handle re-prepares cleanly
@@ -186,5 +190,5 @@ module.exports = Object.assign(({ getDb, log, getPurgeChips, onAppendFailure }) 
   // r3 fix: read-side for the failure counter (Device Center / tests).
   function oplogStats () { return { appendFailures: oplogAppendFailures } }
 
-  return { oplogEntriesFor, appendOplog, oplogReset, oplogStats }
+  return { oplogEntriesFor, appendOplog, oplogReset, oplogStats, reportAppendFailure }
 }, { SYNC_OPLOG_KEEP, oplogKeepLimit })

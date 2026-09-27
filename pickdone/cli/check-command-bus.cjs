@@ -47,14 +47,10 @@ let failed = 0
 const bad = m => { console.error('  ✗ ' + m); failed++ }
 const ok = m => console.log('  ✓ ' + m)
 
-function walk (dir, acc) {
-  for (const f of fs.readdirSync(dir)) {
-    const p = path.join(dir, f)
-    if (fs.statSync(p).isDirectory()) walk(p, acc)
-    else if (['.js', '.vue', '.cjs', '.mjs'].includes(path.extname(p))) acc.push(p)
-  }
-  return acc
-}
+// shared walker (lib-filescan.cjs): the old hand-rolled copy skipped NOTHING (node_modules/.git
+// would have been scanned) and bare statSync crashed on vanished entries — closed by the shared
+// defaults; ext set (.js/.vue/.cjs/.mjs) matches the shared default exactly
+const { listFiles: walk } = require('./lib-filescan.cjs')
 
 /** Blank out comments (line + block) so planted doc examples never flag. String literals are
  *  kept (a planted write call inside a live string is indistinguishable from code anyway). */

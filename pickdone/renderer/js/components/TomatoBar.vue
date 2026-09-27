@@ -59,6 +59,7 @@
  */
 import {dayjs, FMT } from '../utils/core.js'
 import { formatMMSS } from '../utils/tomatoShared.js'
+import { remainingSecOfState } from '../store/tomato.js'
 import store from '../store/index.js'
 
 // The noise list/files/prefix have been consolidated into utils/mediaRegistry.js (single source of truth); only the "labelKey tail segment" is adapted here
@@ -75,14 +76,9 @@ export default {
     // Design-final: the full bar only appears on the today-todo view; other views show only a slim strip while focus/rest is running (phase + countdown + give up; harvest/noise/minimize hidden)
     slim () { return this.$route.name !== 'todo-list-today' },
     clock () {
-      const s = this.s
-      const now = this.ts || Date.now() // reactive ts: both cross-window sync and the per-second poll reliably trigger recomputation
-      if ((s.status === 'startTomatoTime' || s.status === 'startRestTime') && s.startedAt) {
-        const total = (s.status === 'startRestTime' ? s.restTime : s.tomatoTime) * 60
-        const elapsed = Math.max(0, Math.floor((now - s.startedAt) / 1000)) // clamped to 0 so a negative fraction does not floor to -1 (25:01 flicker at click instant)
-        return this.fmt(Math.max(0, total - elapsed))
-      }
-      return this.fmt((s.tomatoTime || 25) * 60)
+      // maint/d11-r4: single-source remaining seconds (store/tomato remainingSecOfState) — the
+      // old inline copy drifted-able against the float window and panel
+      return this.fmt(remainingSecOfState(this.s, this.ts || Date.now()))
     },
     attachName () { return this.s.attachTodo ? this.s.attachTodo.taskContent : '' },
     statusText () {
@@ -168,21 +164,15 @@ export default {
       }).catch(() => {})
     },
     fmt (n) { return formatMMSS(n) },
-    /** Remaining seconds (same source as clock: derived from startedAt while running, frozen when paused, full amount when idle); shared by the taskbar signature and push */
+    /** Remaining seconds (same source as clock: derived from startedAt while running, full amount when idle); shared by the taskbar signature and push */
     remainSecNow () {
-      const s = this.s
-      const running = this.isWork || this.isRest
-      const total = (this.isRest ? s.restTime : s.tomatoTime) * 60
-      const now = this.ts || Date.now()
-      return running && s.startedAt
-        ? Math.max(0, total - Math.max(0, Math.floor((now - s.startedAt) / 1000)))
-        : total
+      return remainingSecOfState(this.s, this.ts || Date.now())
     },
     /** Taskbar trio status push (progress bar / title countdown / thumbnail toolbar; todoAPI only exists on desktop) */
     pushTaskbar () {
       if (!window.todoAPI || !window.todoAPI.pushTomatoTaskbar) return
       const s = this.s
-      const total = (this.isRest ? s.restTime : s.tomatoTime) * 60
+      const total = ((s.status === 'startRestTime' ? s.restTime : s.tomatoTime) || 25) * 60
       const remainSec = this.remainSecNow()
       window.todoAPI.pushTomatoTaskbar({
         status: s.status || 'default',

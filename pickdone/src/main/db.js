@@ -767,7 +767,10 @@ function call (op, params) {
     // planDeleteTask/planDeleteTaskDay) outside appendOplog's try/catch — a throw there (closed or
     // re-init handle) rejected the caller's invoke for an ALREADY-COMMITTED write, violating
     // appendOplog's contract; the delta row was lost either way. Now success + warn, happy path identical.
-    try { oplog.appendOplog(oplog.oplogEntriesFor(op, params, r)) } catch (e) { log.warn('[TodoDB] oplog capture failed (write itself is unaffected):', e && e.message) }
+    // r4 fix (2026-09-28): when oplogEntriesFor itself throws, route through the SAME reporter
+    // appendOplog uses internally — the failure counter (oplogStats), the onAppendFailure hook
+    // (→ 'oplog-append-failed' syncEvent) and the warn log fire for BOTH entry points now.
+    try { oplog.appendOplog(oplog.oplogEntriesFor(op, params, r)) } catch (e) { oplog.reportAppendFailure(e && e.message) }
   }
   return r
 }

@@ -48,6 +48,8 @@
 import {dayjs, FMT } from '../utils/core.js'
 import { formatMMSS } from '../utils/tomatoShared.js'
 import { remainSecOfAnnounce } from '../store/helpers/tomatoAnnounceShared.js'
+import { remainingSecOfState } from '../store/tomato.js'
+import { pruneRemoteAnnounces } from '../store/tomatoAnnounce.js'
 import store from '../store/index.js'
 
 export default {
@@ -101,16 +103,9 @@ export default {
       // P1-6 (2026-09-19 UX review): the store getter caches on state, and Date.now() inside it is
       // not reactive — a peer that crashed mid-focus left a ghost chip. This 500ms tick dispatches
       // the store's prune so expired announces drop from the chip without a fresh sync event.
-      // Round-3 perf: skip the commit while no peer announce exists — pruning an empty map is a
-      // no-op, so an idle panel stops issuing 2Hz Vuex commits.
-      try { if (Object.keys(store.state.tomatoAnnounce.remote).length) store.commit('tomatoAnnounce/prune') } catch (e) { /* store not ready */ }
-      const s = this.s
-      let remain
-      if ((s.status === 'startTomatoTime' || s.status === 'startRestTime') && s.startedAt) {
-        const total = (s.status === 'startRestTime' ? s.restTime : s.tomatoTime) * 60
-        remain = Math.max(0, total - Math.max(0, Math.floor((Date.now() - s.startedAt) / 1000)))
-      } else remain = (s.tomatoTime || 25) * 60
-      this.remaining = remain
+      // maint/d11-r4: shared helper (was a character-twin of TomatoFloatPage's inline copy).
+      pruneRemoteAnnounces(store)
+      this.remaining = remainingSecOfState(this.s, this.nowTs)
     },
     closePanel () { store.commit('ui/toggleTomatoPanel', false) }
   },

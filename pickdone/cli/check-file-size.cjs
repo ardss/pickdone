@@ -38,18 +38,9 @@ function limitFor (rel) {
   return { warn: 800, error: 1200 }
 }
 
-function listFiles (dir, out = []) {
-  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, e.name)
-    if (e.isDirectory()) {
-      if (e.name === 'node_modules' || e.name === 'dist' || e.name === 'renderer-dist' || e.name.startsWith('.')) continue
-      listFiles(full, out)
-    } else if (/\.(vue|js|cjs|mjs)$/.test(e.name) && !e.name.endsWith('.d.ts')) {
-      out.push(full)
-    }
-  }
-  return out
-}
+// shared walker (lib-filescan.cjs) — default skips (node_modules/dist/renderer-dist/dot-dirs)
+// and default exts (.js/.vue/.cjs/.mjs, no .d.ts) match this gate's former hand-rolled copy exactly
+const { listFiles } = require('./lib-filescan.cjs')
 
 function countLines (file) {
   return fs.readFileSync(file, 'utf8').split('\n').length

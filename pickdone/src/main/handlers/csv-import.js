@@ -249,5 +249,6 @@ module.exports = function importHandlers (ctx) {
 module.exports.runImportParse = runImportParse
 module.exports.__workerRegistry = __workerRegistry
 module.exports.__resetWorkerRegistry = __resetWorkerRegistry
-module.exports.IMPORT_MAX_OUTSTANDING = IMPORT_MAX_OUTSTANDING
-module.exports.IMPORT_MAX_LEAKED = IMPORT_MAX_LEAKED
+// r4 (2026-09-28): IMPORT_MAX_OUTSTANDING / IMPORT_MAX_LEAKED are back to file-private consts —
+// they were exported "for future tests" but had zero references repo-wide (incl. tests), a fake
+// public-contract surface. The caps stay behaviorally anchored by the BUSY / breaker paths.
