@@ -351,7 +351,12 @@ await evalJson(`(${STORE_Q}).commit('tomato/patch',{status:'startTomatoTime',sta
 // interval dispatches; the idempotency contract under test (claim token + deterministic id) makes
 // extra dispatches assertion-identical — that exactly-once property is the third assertion here.
 const PUMP_TICK = `(${STORE_Q}).dispatch('tomato/tick').catch(()=>{}); true`
-const pumpFor = async (expr, tries, gap = 600) => { for (let i = 0; i < tries; i++) { await sleep(gap); await evalJson(PUMP_TICK); const v = await evalJson(expr); if (v) return v } return null }
+// Pump-then-read (not sleep-then-pump-then-read): each poll iteration observes the state DIRECTLY
+// after its own dispatched tick, so the assertion tests the tick's effect rather than whatever the
+// wall-clock happened to deliver during a random-phase 600ms gap. The trailing sleep only paces
+// retries (the app's own 1s interval may win the race — same code path, idempotent, so either
+// driver satisfies the assertion).
+const pumpFor = async (expr, tries, gap = 600) => { for (let i = 0; i < tries; i++) { await evalJson(PUMP_TICK); const v = await evalJson(expr); if (v) return v; await sleep(gap) } return null }
 const tickState = await pumpFor(`(()=>{const st=(${STORE_Q});if(!st)return false;const s=st.state.tomato;if(s.status!=='startRestTime')return false;const last=(s.tomatoRecordList||[])[0]||{};return {status:s.status,count:s.todayTomatoCount,recId:last.tomatoId,recOk:last.succeed,recs:(s.tomatoRecordList||[]).length}})()`, 60)
 ok('expired focus auto-flips into rest', tickState && tickState.status === 'startRestTime', JSON.stringify(tickState))
 ok('auto-books a succeed record', tickState && tickState.recOk === true && tickState.recId === 'tmt_f_' + tStart, JSON.stringify(tickState))
