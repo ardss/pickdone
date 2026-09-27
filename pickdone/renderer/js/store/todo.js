@@ -2,11 +2,10 @@
  * Core todo module — state/action semantics aligned with the reference todo module
  * status: add/update/delete -> sync; local meta.todosVersion acts as the sync cursor
  */
-import { genTaskId, nextSort, dayjs, reportError, DAY_MS, parsePredecessors } from '../utils/core.js'
+import { genTaskId, nextSort, dayjs, reportError, parsePredecessors } from '../utils/core.js'
 import { wouldCycle, isTaskReady } from '../utils/deps.js'
 import { nextRepeatInstance, isLastRepeatInstance, renewalCarryFields } from '../utils/repeat.js'
-import { sortByMode } from '../utils/sortMode.js'
-import { getEstimate, setEstimate } from '../utils/tomatoEstimate.js'
+import { setEstimate } from '../utils/tomatoEstimate.js'
 import { clearSnapshot } from '../utils/dayPlans.js'
 import { scrubMilestonesForPurged } from '../utils/milestones.js'
 // Cross-cutting concerns, physically split out of this module (pure relocation — the store's action
@@ -15,9 +14,12 @@ import { enqueueChipSync, rowChipSync, planSnapshotRowSync, snapshotForDelete, r
 import { historyPush, historyPushKeepRedo, historyClear, historyBreakMerge, historyUndoPop, historyRedoPop, historyRedoPush, historyBarrierCore, undoStep, redoStep, persistSnapshotDiffCore } from './helpers/undo.js'
 import { writeEventBackupCore, writeAutoBackupCore, writeCriticalBackupCore } from './helpers/todoBackup.js'
 import { commit as commitCommand } from "../utils/commandBus.js"
-import { safeUpsert, flushPendingUpserts, queuePendingUpsert, pendingUpserts, daysRangeTs } from './helpers/todoPendingUpserts.js'
-import { DEFAULT_VIEWS, VIEW_AFFECTING_FIELDS, VIEWS_DEBOUNCE_MS, deproxyRows, showNoDateFilter, buildCalendarList } from './helpers/todoViews.js'
+import { safeUpsert, flushPendingUpserts, queuePendingUpsert, pendingUpserts } from './helpers/todoPendingUpserts.js'
+import { DEFAULT_VIEWS, VIEW_AFFECTING_FIELDS, VIEWS_DEBOUNCE_MS, deproxyRows } from './helpers/todoViews.js'
 import { snapshotString } from './helpers/snapshotString.js'
+// View-computation + sync cores (pure relocation, structure-size ratchet — actions below are thin wrappers)
+import { computeViewsCore } from './helpers/todoComputeViews.js'
+import { syncTodosCore } from './helpers/todoSync.js'
 import { countTags } from '../utils/search.js'
 // Re-export: unit tests import the quit-flush retry contract straight from store/todo.js
 export { safeUpsert, flushPendingUpserts }
@@ -618,195 +620,14 @@ export default {
 
     scheduleReminder (_, todo) {/* the main process rebuilds the schedule automatically after dbCall */},
 
-    /* ---------- View computation (grouping semantics follow common practice) ---------- */
-    async computeViews ({ commit, rootState, dispatch }) {
-      // After crossing midnight, keep the global todayTimestamp consistent with the grouping basis (main.js dirt-checks every 60s)
-      commit('setTodayTs', Date.now())
-      dispatch('purgeExpiredRecycle')
-      const settings = rootState.settings
-      const { expCompletedDays, expUncompletedDays, upcomingDays } = daysRangeTs(settings)
-      const today = dayjs().startOf('day').valueOf()
-      const live = this.state.todo.todoList.filter(t => !t.delete)
+    /* ---------- View computation (grouping semantics follow common practice) ----------
+       Implementation extracted verbatim to helpers/todoComputeViews.js; the action stays the
+       public surface (tests drive it with a fake `this`, which is forwarded as the store). */
+    async computeViews (ctx) { return computeViewsCore(this, ctx) },
 
-      const recentExpiredCompleted = []
-      const recentExpiredUncompleted = []
-      const todayList = []
-      const tomorrowList = []
-      const after2List = []
-      const upcomingList = []
-      const noDateList = []
-      const todayDoneList = []
-      // Round-3 perf (ux-perf-finding-10): precompute TodayXView's two groups here (sorted later
-      // with the exact comparator the view used inline: dayStart, then todoTime). x-next = today +
-      // ALL overdue uncompleted (UNCAPPED — cannot reuse recent.expiredUncompleted); x-open = the
-      // no-date uncompleted set, always shown (unlike recent.noDate, gated by showNoDate).
-      const todayXNext = []
-
-      live.forEach(t => {
-        const ds = t.dayStart
-        // Review P3 (2026-09-22): NaN dayStart (corrupted date parse) must degrade to the no-date
-        // bucket — NaN is falsy but previously still slipped into the `t.dayStart &&` checks below
-        // inconsistently; normalize once so the bucketing and comparators stay total.
-        const dsNum = (typeof ds === 'number' && Number.isFinite(ds)) ? ds : 0
-        if (!dsNum) {
-          // Completed no-date tasks go into "today completed" (otherwise completing one makes it vanish from the today page with no way to un-complete in place)
-          if (t.complete) {
-            const ct = t.completedAt || t.updateTime || 0
-            if (ct >= today && ct < +dayjs(today).add(1, 'day')) todayDoneList.push(t)
-            else noDateList.push(t)
-          } else {
-            noDateList.push(t)
-          }
-          return
-        }
-        if (t.complete) {
-          // "Today completed" groups by completion time (completedAt, falling back to updateTime), not the original due date:
-          // a task due yesterday but completed today belongs in today completed (where it can be un-completed), not vanished into history
-          const ct = t.completedAt || t.updateTime || 0
-          if (ct >= today && ct < +dayjs(today).add(1, 'day')) todayDoneList.push(t)
-          return
-        }
-        const diff = Math.round((dsNum - today) / DAY_MS)
-        if (diff < 0) {
-          if (-diff <= expUncompletedDays) recentExpiredUncompleted.push(t)
-          todayXNext.push(t)
-        } else if (diff === 0) { todayList.push(t); todayXNext.push(t) } else if (diff === 1) tomorrowList.push(t)
-        else if (diff === 2) after2List.push(t)
-        else if (diff <= upcomingDays) upcomingList.push(t)
-      })
-
-      // Expired completed: overdue tasks completed within the last N days (counted by completion time completedAt).
-      // D5 (2026-09-20): exclude tasks already in todayDoneList — an overdue task completed TODAY landed in
-      // both groups (grouping is by completion time in one loop and by due date in the other), showing once
-      // in "today done" and again in "recent expired completed" (double un-complete entries).
-      const completedCutoff = +dayjs(today).subtract(expCompletedDays, 'day')
-      const todayDoneIds = new Set(todayDoneList.map(t => t.taskId))
-      live.forEach(t => {
-        const doneTs = t.completedAt || t.updateTime || 0
-        if (t.complete && t.dayStart && t.dayStart < today && doneTs >= completedCutoff && !todayDoneIds.has(t.taskId)) {
-          recentExpiredCompleted.push(t)
-        }
-      })
-
-      const completedList = live.filter(t => t.complete)
-        .sort((a, b) => (b.completedAt || b.updateTime || 0) - (a.completedAt || a.updateTime || 0))
-
-      // Todo box: no-date incomplete
-      let box = noDateList.filter(t => !t.complete)
-      const todayXOpen = box.slice() // TodayX "Unscheduled" group: same set, unsorted, no category filter (TodayX always shows it)
-      if (settings.todoBoxCategoryId !== -1) box = box.filter(t => t.categoryId === settings.todoBoxCategoryId)
-      const dir = settings.todoBoxSortOrder === 'asc' ? 1 : -1
-      // Review P3 (2026-09-22): NaN-safe comparators — a NaN createTime/todoTime used to make the
-      // subtraction comparator return NaN (implementation-defined order); missing numbers now fall
-      // back to 0 so rows keep a deterministic position instead of reshuffling every recompute.
-      const tsOf = t => (typeof t.createTime === 'number' && Number.isFinite(t.createTime)) ? t.createTime : 0
-      const dueOf = t => (typeof (t.todoTime || t.createTime) === 'number' && Number.isFinite(t.todoTime || t.createTime)) ? (t.todoTime || t.createTime) : 0
-      box.sort((a, b) => {
-        switch (settings.todoBoxSortMethod) {
-          case 'due': return (dueOf(a) - dueOf(b)) * dir
-          case 'difficulty': return (getEstimate(a.taskId) - getEstimate(b.taskId)) * dir // Difficulty retired: by estimated workload = estimated tomatoes
-          default: return (tsOf(a) - tsOf(b)) * dir
-        }
-      })
-
-      // Sort mode: stable-key normalization + comparator extracted to utils/sortMode.js (pure function, unit-testable)
-      const applySort = arr => sortByMode(arr, settings.sortMode)
-
-      // Yesterday's unfinished (day-rollover leftovers)
-      const yesterday = live.filter(t => !t.complete && t.dayStart === +dayjs(today).subtract(1, 'day'))
-
-      commit('setViews', {
-        recent: {
-          expiredCompleted: recentExpiredCompleted.sort((a, b) => a.dayStart - b.dayStart),
-          expiredUncompleted: recentExpiredUncompleted.sort((a, b) => a.dayStart - b.dayStart),
-          today: applySort(todayList),
-          tomorrow: tomorrowList,
-          dayAfterTomorrow: after2List,
-          upcoming: upcomingList,
-          noDate: showNoDateFilter(noDateList.filter(t => !t.complete), settings)
-        },
-
-        todayTodoList: applySort(todayList),
-        todayXNext: todayXNext.sort((x, y) => (x.dayStart - y.dayStart) || (x.todoTime - y.todoTime)),
-        todayXOpen,
-        // Completed-group sort matches the grouping basis (completedAt first, avoiding sort misplacement when editing after completion)
-        // [nan-comparator fix] same ||0 fallback as the Review-P3 (2026-09-22) comparators above —
-        // a completed row with NaN completedAt/updateTime made this subtraction return NaN
-        // (implementation-defined order, rows reshuffling every recompute); recycleBin had the
-        // same gap on deletedAt/updateTime.
-        todayDoneList: todayDoneList.sort((a, b) => (b.completedAt || b.updateTime || 0) - (a.completedAt || a.updateTime || 0)),
-        yesterdayTodoList: yesterday,
-        calendar: buildCalendarList(live),
-        todoBox: box,
-        todoBoxCount: box.length, // Same source as box above (category filter/sort share one chain); previously computed independently here too — fixing one but not the other made the number and list disagree
-        completed: completedList,
-        recycleBin: [...this.state.todo.recycleList].sort((a, b) => (b.deletedAt || b.updateTime || 0) - (a.deletedAt || a.updateTime || 0))
-      })
-      commit('viewsClean')
-    },
-
-    /** Trigger a "cloud sync" action — offline implementation: increment the local version and mark everything sync */
-    async syncTodos ({ state, commit, dispatch }) {
-      if (state.isSyncing) return
-      commit('setSyncing', true)
-      // Declared out here (not in the try) so the catch's retry-enqueue can reach it — a `const`
-      // inside the try block is invisible to catch, which silently killed the whole compensation
-      let snapshot = []
-      // Hoisted like `snapshot` (same try-scoped `const` trap): the catch's retry-enqueue must reuse the
-      // snapshot-time version. Using live `state.version` there would push the quit-flush replay cursor past
-      // rows the user edited during the await, letting the db layer mark that newer content status='sync'
-      // even though it was never sent.
-      let serverV = state.version
-      try {
-        // Snapshot only dirty rows (status !== 'sync'); during the await, the user's new edits (status='update') aren't wrongly marked synced.
-        // A recycle-bin row already acked (version > 0, stamped by a previous syncTodos success) is
-        // excluded — otherwise it re-entered the snapshot and the commitSyncBatch write on EVERY sync
-        // (P3 2026-09-12). A fresh delete resets version to 0 and is sent once.
-        // An already-synced whole table skips the wholesale upsertMany write entirely (Ctrl+S with no changes = no write)
-        // [empty-sync-version fix] the version bump moved BELOW the empty-snapshot early return: a
-        // no-op sync used to increment state.version without writing the todosVersion cursor, so
-        // the in-memory counter ran ahead of the persisted one and reset backward across restarts.
-        snapshot = [...state.todoList, ...state.recycleList]
-          .filter(t => t.status !== 'sync' && !(t.status === 'delete' && t.version > 0))
-        if (!snapshot.length) return
-        commit('bumpVersion')
-        serverV = state.version
-        const snapshotIds = new Set(snapshot.map(t => t.taskId))
-        // Atomic commit (W3 2026-09-12): rows + todosVersion cursor go to the DB in ONE transaction
-        // (commitSyncBatch) instead of two separate dbCalls. Crash safety: previously a crash between the
-        // upsertMany and the setMeta left rows at 'add'/'update' (harmless — they were just re-sent), but
-        // writing status='sync' into the DB without atomicity would create a fatal intermediate state —
-        // rows marked 'sync' with the cursor behind get skipped by the dirty-row filter and the cursor
-        // never advances again = silent permanent non-convergence. Inside one transaction there is no
-        // intermediate state: after a crash the batch is either fully re-sent (old dirty semantics) or
-        // fully acknowledged (new semantics). The db layer forces status='sync' on every row.
-        await commitCommand("todo", "commitBatch", { rows: deproxyRows(snapshot), version: serverV })
-        // Only rows in the snapshot that weren't re-edited during the await are marked synced (can't do a wholesale markSyncedAll).
-        // Recycle-bin rows (status==='delete' in memory) keep that status — but get the server version
-        // stamped so they stop re-entering the dirty snapshot on every sync (P3 2026-09-12)
-        ;[...state.todoList, ...state.recycleList]
-          .filter(t => snapshotIds.has(t.taskId) && t.status !== 'update')
-          .forEach(t => { t.status = t.status === 'delete' ? 'delete' : 'sync'; t.version = serverV })
-      } catch (err) {
-        reportError('syncTodos', err)
-        // Version-fence handling (P2): the db layer rejects a stale batch with
-        // "commitSyncBatch: version N < current todosVersion M — stale batch rejected" — a NEWER
-        // batch already persisted these rows, so re-enqueueing would replay a doomed batch forever
-        // (every quit flush). Drop it; the rows in memory are already acked by the newer batch.
-        // Any other failure (IO/lock/transient) keeps the retry-enqueue below.
-        const staleBatch = !!(err && /stale batch rejected/.test(String(err.message || err)))
-        // Enqueue for retry like reorderTodos/safeUpsert (round-6 leftover): rows stay dirty in memory,
-        // but the quit-flush replay needs the op verbatim to survive a close-before-retry
-        if (!staleBatch && snapshot.length) {
-          try { queuePendingUpsert({ op: 'commitSyncBatch', params: { rows: deproxyRows(snapshot), version: serverV } }) } catch { /* keep the UI flow alive */ }
-        }
-      } finally {
-        commit('setSyncing', false)
-        // In the finally block: the empty-snapshot early return used to skip the critical backup entirely
-        dispatch('writeCriticalBackup')
-      }
-      // Stay quiet on sync success (per common practice, auto sync doesn't disturb the user); the version number is an implementation detail and goes into no copy
-    },
+    /** Trigger a "cloud sync" action — offline implementation: increment the local version and mark everything sync.
+        Implementation extracted verbatim to helpers/todoSync.js (structure-size ratchet). */
+    async syncTodos (ctx) { return syncTodosCore(ctx) },
 
     /** Event snapshot before dangerous operations: reason such as purge/import/restore, filename evt-<reason>-*.json */
     writeEventBackup ({ state, rootState }, reason) { return writeEventBackupCore(this, { state, rootState }, reason) },

@@ -516,9 +516,11 @@ test('[sync-empty-version] syncTodos with an already-synced table leaves state.v
 /* ================= [nan-comparator] todayDoneList / recycleBin sorts are NaN-safe =========== */
 
 test('[nan-comparator] todayDoneList and recycleBin comparators carry the ||0 NaN fallback', () => {
-  const todo = read('renderer/js/store/todo.js')
+  // 2026-09-27 structure-size ratchet: computeViews moved verbatim to helpers/todoComputeViews.js
+  // (the action in todo.js is a thin wrapper), so this source contract reads the implementation.
+  const todo = read('renderer/js/store/helpers/todoComputeViews.js')
   assert.match(todo, /todayDoneList: todayDoneList\.sort\(\(a, b\) => \(b\.completedAt \|\| b\.updateTime \|\| 0\) - \(a\.completedAt \|\| a\.updateTime \|\| 0\)\)/,
     'a completed row with NaN completedAt/updateTime keeps a deterministic position')
-  assert.match(todo, /recycleBin: \[\.\.\.this\.state\.todo\.recycleList\]\.sort\(\(a, b\) => \(b\.deletedAt \|\| b\.updateTime \|\| 0\) - \(a\.deletedAt \|\| a\.updateTime \|\| 0\)\)/,
+  assert.match(todo, /recycleBin: \[\.\.\.store\.state\.todo\.recycleList\]\.sort\(\(a, b\) => \(b\.deletedAt \|\| b\.updateTime \|\| 0\) - \(a\.deletedAt \|\| a\.updateTime \|\| 0\)\)/,
     'a binned row with NaN deletedAt/updateTime keeps a deterministic position')
 })
