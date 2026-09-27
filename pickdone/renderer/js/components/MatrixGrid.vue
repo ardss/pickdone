@@ -11,7 +11,7 @@
       <div class="matrix-quadrant__list">
         <div v-for="t in q.tasks" :key="t.taskId" class="matrix-task" draggable="true"
              :class="{ dragging: dragId===t.taskId }"
-             @dragstart="dragStart(t,$event)" @dragend="dragId=null"
+             @dragstart="dragStart(t,$event)" @dragend="endDrag"
              @click="openEdit(t)" @keydown.enter.prevent="openEdit(t)"
              @keydown.ctrl.1.prevent="kbdQuadrant(t, 0)" @keydown.ctrl.2.prevent="kbdQuadrant(t, 1)"
              @keydown.ctrl.3.prevent="kbdQuadrant(t, 2)" @keydown.ctrl.4.prevent="kbdQuadrant(t, 3)"
@@ -125,6 +125,13 @@ export default {
       document.body.appendChild(ghost)
       try { e.dataTransfer.setDragImage(ghost, Math.min(60, w / 2), 18) } catch {}
       setTimeout(() => ghost.remove())
+    },
+    /* Drag end (drop OR cancel/Esc): both drag fields must reset. dropOn already cleared overKey,
+       but a cancelled drag never reaches drop — dragend only nulling dragId left the last-hovered
+       quadrant stuck with its 'over' highlight. */
+    endDrag () {
+      this.dragId = null
+      this.overKey = null
     },
     dropOn (q) {
       const id = this.dragId

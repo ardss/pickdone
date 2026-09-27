@@ -72,6 +72,12 @@ export function metaStateKeys (rootState, state) {
     if (!t) continue
     if (t.repeatId) keys.add('repeatRule:' + t.repeatId)
     if (t.taskId) keys.add('tomatoEstimateState:' + t.taskId)
+    // [chipsnapshot-backup fix] a binned task's schedule chips live ONLY in the
+    // `planChipsSnapshot:<taskId>` meta row once snapshotForDelete moves them out of plan_chips —
+    // without collecting it here, a disaster restore left the task restorable from the bin but its
+    // chips permanently lost. Binned ids ARE live state (recycleList is concatenated above), so
+    // derive-from-live still holds. (catProjectMetaBak.* stays deliberately excluded: transient.)
+    if (t.taskId) keys.add('planChipsSnapshot:' + t.taskId)
   }
   for (const c of (rootState.category && rootState.category.list) || []) {
     const id = c && c.categoryId

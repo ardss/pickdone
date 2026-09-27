@@ -191,7 +191,12 @@ function create () {
   // fire = the trigger chain physically cannot exist
   if (process.env.FLOAT_HIT_DBG) {
     win.on('focus', () => log.info('[TomatoFloat][dbg] window FOCUS（旧版在此后 blur 时长出标题栏）'))
-    win.on('blur', () => log.info('[TomatoFloat][dbg] window BLUR ← 幽灵标题栏触发点'))
+    win.on('blur', () => {
+      // D10: a mid-drag blur (renderer froze / OS stole activation) must end the drag — the
+      // sender-gated dragStop may never arrive.
+      if (dragCtx) stopDrag()
+      log.info('[TomatoFloat][dbg] window BLUR ← 幽灵标题栏触发点')
+    })
   }
   // The float only ever serves __tomato-float: block all page-level navigation and popups (prevents anchors/mis-clicks from opening framed child windows)
   // 2026-08-31 root-cause fix: the app:// page occasionally fails to load (any HTML/CSS failure cripples the
@@ -271,10 +276,22 @@ function create () {
   return win
 }
 
+// D10 (2026-09-27): drag failsafe cap. The 16ms drag loop's only exits were a destroyed window or
+// a thrown setBounds — if the float renderer freezes/crashes mid-drag its pointerup/pointercancel
+// (dragStop, sender-gated) never arrives and the card tracks the cursor at 60fps indefinitely
+// (hit-poll deliberately suspended during drag). Cap any single drag at 60s.
+const DRAG_MAX_MS = 60_000
+/** Pure failsafe decision (exported for unit tests): true once a drag has outlived the cap. */
+function dragExpired (startedAt, now = Date.now(), capMs = DRAG_MAX_MS) {
+  return Number.isFinite(startedAt) && startedAt > 0 && now - startedAt >= capMs
+}
+
 function stopDrag () {
   if (dragTimer) { clearInterval(dragTimer); dragTimer = null }
   dragCtx = null
   // 拖拽结束恢复穿透轮询(dragStart 时挂起,防中途误判 click-through 吞掉 pointerup 造成粘手)
+  // D10: this re-arm is unconditional-on-visibility — the failsafe path (and blur) guarantees the
+  // suspended hit poll can never stay suspended after the drag loop ends for ANY reason.
   if (win && !win.isDestroyed() && win.isVisible() && !dockedToTray) startHitPoll()
 }
 
@@ -383,6 +400,8 @@ module.exports = {
   dock, undock, isDocked,
   crashRebuild, // C10 crash-rebuild cap policy (unit-testable; see CRASH_REBUILD_CAP above)
   isInsideHit, // hover hit-test pure function (for unit tests)
+  dragExpired, // D10 drag failsafe pure decision (for unit tests)
+  DRAG_MAX_MS, // D10 drag failsafe cap
   isPanelOpen, // panel-state getter (unit tests pin the F10 'closed' reset)
   isUserClosed, // closed-marker getter (unit tests pin the F12 marker lifecycle)
   clampDrag, // drag clamp pure function (for unit tests)
@@ -459,9 +478,12 @@ module.exports = {
     applyIgnore(false)
     const b = win.getBounds()
     const cur = screen.getCursorScreenPoint()
-    dragCtx = { windowX: b.x, windowY: b.y, cursorX: cur.x, cursorY: cur.y, h: b.height, open: panelOpen } // dragging keeps the current height mode (86/320); size does not change while dragging
+    dragCtx = { windowX: b.x, windowY: b.y, cursorX: cur.x, cursorY: cur.y, h: b.height, open: panelOpen, startedAt: Date.now() } // dragging keeps the current height mode (86/320); size does not change while dragging
     dragTimer = setInterval(() => {
       if (!dragCtx || !win || win.isDestroyed()) { stopDrag(); return }
+      // D10: failsafe — a lost pointerup/pointercancel (frozen/crashed float renderer) must not
+      // track the cursor forever; end the drag and re-arm the hit poll.
+      if (dragExpired(dragCtx.startedAt)) { log.warn('[TomatoFloat] drag failsafe: exceeded ' + DRAG_MAX_MS + 'ms, force-stopping'); stopDrag(); return }
       try {
         const c = screen.getCursorScreenPoint()
         let x = Math.round(dragCtx.windowX + c.x - dragCtx.cursorX)

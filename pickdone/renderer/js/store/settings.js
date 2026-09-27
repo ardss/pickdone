@@ -435,7 +435,24 @@ export default {
     },
     restore (state, saved) {
       const prevLocale = state.appLocale
-      const merged = clampNumericSettings(coerceNumericSettings({ ...DEFAULT_SETTINGS, ...(saved || {}) }))
+      // [restore-sanitize fix] the backup blob is an untrusted input (old dump / tampered file):
+      // merge it through sanitizeSettingsPatch like every other trust boundary — unknown-key drop,
+      // type-junk drop, null-tombstone-to-default, enum gates — instead of a bare coerce/clamp that
+      // let deprecated/junk keys land verbatim in live state, LS and the db mirror. The sanitizer
+      // ends with clampNumericSettings and its numeric-string branch covers coerceNumericSettings.
+      const merged = sanitizeSettingsPatch({ ...DEFAULT_SETTINGS, ...(saved || {}) }, state)
+      // C3 carve-out: restore is the user's own explicit backup import, not a peer push. The
+      // secret keys the sanitizer strips on inbound sync paths are the backup's real values and
+      // must survive here — maint-d7 pushes securityLockPassword through the main-consumed diff so
+      // the lock survives a machine change; dropping it in restore would silently disable the lock.
+      for (const k of Object.keys(saved || {})) {
+        if ((SECRET_KEYS.includes(k) || /^securityLock/.test(k)) && typeof saved[k] === typeof DEFAULT_SETTINGS[k]) merged[k] = saved[k]
+      }
+      // Secret keys absent from the blob get their declared defaults back, so the defaults backstop
+      // still seats them in state (a defaults-only restore must not leave them undefined).
+      for (const k of Object.keys(DEFAULT_SETTINGS)) {
+        if ((SECRET_KEYS.includes(k) || /^securityLock/.test(k)) && !(k in merged)) merged[k] = DEFAULT_SETTINGS[k]
+      }
       if (merged.shortcutKeySettings === DEFAULT_SETTINGS.shortcutKeySettings) merged.shortcutKeySettings = { ...DEFAULT_SHORTCUTS }
       // appLocale write-back race (2026-09-26 check:all confirmed red): a DB blob whose appLocale is
       // still the untouched default ('zh-CN') must not clobber an LS-forced boot locale. load() already
@@ -469,8 +486,12 @@ export default {
       // hot-apply, only when the restored blob actually changes the locale. Fire-and-forget like
       // the update action: a degraded host (no i18n module) must not break the restore.
       const loc = state.appLocale
-      if (typeof loc === 'string' && loc && loc !== prevLocale) {
-        try { localStorage.setItem('appLocale', loc) } catch (e) { /* empty */ }
+      // [restore-locale-enum fix] same SETTINGS_MANIFEST.enum gate the sanitizer applies on other
+      // trust-boundary paths (the sanitizer above already drops junk locales, but the LS adoption
+      // branch can still seat a stale/junk LS value): a junk locale string must neither flip i18n
+      // nor reach the LS boot cache.
+      const legalLocales = SETTINGS_MANIFEST.enum.appLocale
+      if (typeof loc === 'string' && loc && (!legalLocales || legalLocales.includes(loc)) && loc !== prevLocale) {        try { localStorage.setItem('appLocale', loc) } catch (e) { /* empty */ }
         import('../i18n/index.js').then(m => {
           if (m && m.setLocale && typeof document !== 'undefined') m.setLocale(loc)
           else if (m && m.default && m.default.global) m.default.global.locale = loc

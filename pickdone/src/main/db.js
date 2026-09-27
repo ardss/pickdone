@@ -7,8 +7,7 @@ const i18nM = require('./i18n')
 const fs = require('fs')
 const crypto = require('crypto')
 const LIMITS = require('../../shared/limits.mjs') // focus-duration clamp constants (single source, audit item 4); require(esm) — Node >= 22.12
-const { normalizeContent, rowToTodo, rowToCategory, todoToRow } = require('./db-rows')
-const dayjs = require('dayjs')
+const { normalizeContent, rowToTodo, todoToRow } = require('./db-rows')
 // snowDedup key-cap (R5 P3): replay protection only needs recent keys, so past the cap the
 // older-than-30d entries are pruned (see bumpSnow).
 const SNOW_DEDUP_CAP = 2000
@@ -226,9 +225,8 @@ CREATE TABLE IF NOT EXISTS sync_oplog (
   ts       INTEGER NOT NULL
 );` + syncSchema.DDL
 
-// D4 2026-09-24: conds whitelist/parse moved to shared/filter-core.mjs (single source with
-// cli/lib.js applyViewConds and renderer FilterView.vue — the three copies could drift silently)
-const { normConds, parseConds } = require('../../shared/filter-core.mjs') // require(esm) — Node >= 22.12
+// D4 2026-09-24: filter conds whitelist/parse live in shared/filter-core.mjs via db-filter-ops.js
+// (single source with cli/lib.js applyViewConds and renderer FilterView.vue)
 
 function init (userDataPath) {
   // Re-entry policy (P2 2026-09-11): a second init while a handle is open closes the old handle cleanly first instead of throwing — rebuilding against a live handle would orphan prepared statements mid-write, and an abrupt throw broke the same-process restart idiom used across the unit tests (init without close = simulated restart). Closing first leaves no stale stmts and keeps the recovery re-init path (index.js db-fail dialog → attemptDbRecovery) working.
@@ -502,7 +500,16 @@ function assertHasTaskId (t) {
 
 const makeBulkOps = require('./db-bulk-ops')(() => db, () => OPS)
 // Per-task meta-key GC helpers (snowDedup / planChipsSnapshot) moved to db-meta-gc.cjs verbatim:
-const { deleteSnowDedupKeysFor, deleteChipsSnapshotKeysFor } = require('./db-meta-gc.cjs')(() => db)
+const { deleteSnowDedupKeysFor, deleteChipsSnapshotKeysFor, deleteEstimateKeysFor } = require('./db-meta-gc.cjs')(() => db)
+// Category / filter / stats / plan-chip / tomato-ledger op groups extracted verbatim to their own
+// modules (structure-size ratchet). Thin delegates in OPS below keep every db.call surface,
+// return shape and the internal _dayBounds/_recToRow/_rowToRec seams unchanged; `db` is read at
+// call time so the delegates always hit the live handle.
+const categoryOps = require('./db-category-ops')
+const filterOps = require('./db-filter-ops')
+const statsOps = require('./db-stats-ops')
+const planOps = require('./db-plan-ops')
+const tomatoOps = require('./db-tomato-ops')
 // B9 purge chip-capture scratch (single-process synchronous db.call → oplog append): the purge
 // ops physically DELETE plan_chips inside their transaction, so the oplog expansion (which runs
 // POST-op and can only re-query surviving rows) cannot recover the doomed chip ids. The ops
@@ -592,8 +599,8 @@ const OPS = {
   },
   queryTodos,
   // 两表删除包事务:两语句间崩溃会留孤儿 chips(2026-09-05 终审 P1,与 hardDeleteMany 对齐)
-  hardDelete: id => { const tr = db.transaction(() => { db.prepare('DELETE FROM plan_chips WHERE taskId=?').run(String(id)); deleteSnowDedupKeysFor([id]); deleteChipsSnapshotKeysFor([id]); stmts.hardDelete.run(id) }); tr(); return true },
-  hardDeleteMany: ids => { const tr = db.transaction(() => ids.forEach(i => { db.prepare('DELETE FROM plan_chips WHERE taskId=?').run(String(i)); deleteSnowDedupKeysFor([i]); deleteChipsSnapshotKeysFor([i]); stmts.hardDelete.run(i) })); tr(); return true },
+  hardDelete: id => { const tr = db.transaction(() => { db.prepare('DELETE FROM plan_chips WHERE taskId=?').run(String(id)); deleteSnowDedupKeysFor([id]); deleteChipsSnapshotKeysFor([id]); deleteEstimateKeysFor([id]); stmts.hardDelete.run(id) }); tr(); return true },
+  hardDeleteMany: ids => { const tr = db.transaction(() => ids.forEach(i => { db.prepare('DELETE FROM plan_chips WHERE taskId=?').run(String(i)); deleteSnowDedupKeysFor([i]); deleteChipsSnapshotKeysFor([i]); deleteEstimateKeysFor([i]); stmts.hardDelete.run(i) })); tr(); return true },
   getMeta: k => { const r = stmts.getMeta.get(k); return r ? r.value : null },
   // Accepts both argument forms: (k, v) or [k, v] (the renderer's dbCall('setMeta', [k, v]) is passed through as a single call parameter)
   setMeta: (k, v) => { if (Array.isArray(k)) { v = k[1]; k = k[0] } stmts.setMeta.run(k, String(v)); return true },
@@ -626,6 +633,7 @@ const OPS = {
       db.prepare('DELETE FROM plan_chips WHERE taskId IN (SELECT id FROM todos WHERE deleted = 1)').run()
       deleteSnowDedupKeysFor(ids) // main-ipc-3 (2026-09-22): the rows die here — their focus-session dedup fences must not outlive them
       deleteChipsSnapshotKeysFor(ids) // snapshot meta dies with the rows (same lifecycle rule)
+      deleteEstimateKeysFor(ids) // D10 (2026-09-27): same lifecycle rule — the purge path bypasses the renderer's setEstimate(id,0)
       db.prepare('DELETE FROM todos WHERE deleted = 1').run()
     }); tr(); return ids
   },
@@ -638,6 +646,7 @@ const OPS = {
       db.prepare("DELETE FROM plan_chips WHERE taskId IN (SELECT id FROM todos WHERE substr(id, 1, 5) = 'seed_')").run()
       deleteSnowDedupKeysFor(ids) // main-ipc-3 (2026-09-22): same lifecycle rule as purgeRecycleBin
       deleteChipsSnapshotKeysFor(ids) // same lifecycle rule
+      deleteEstimateKeysFor(ids) // D10 (2026-09-27): same lifecycle rule
       db.prepare("DELETE FROM todos WHERE substr(id, 1, 5) = 'seed_'").run()
     }); tr(); return ids
   },
@@ -645,399 +654,39 @@ const OPS = {
   // inside oplogEntriesFor immediately after a purge op — the same synchronous call().
   getPurgeChipsScratch: () => purgeChipsScratch,
   countSeedTodos: () => db.prepare("SELECT COUNT(*) n FROM todos WHERE substr(id, 1, 5) = 'seed_'").get().n,
-  upsertCategory: (c) => {
-    const now = Date.now()
-    // H2 2026-09-16 root fix (startup dirty-write storm): the renderer re-upserts every category on
-    // each boot; the old path rewrote all N rows with updatedAt=now and re-stamped tombstone
-    // deletedAt, producing N fake oplog deltas per launch. Now: existing row is compared field by
-    // field and an identical upsert is a no-op returning false (oplog produces no delta for it).
-    const cur = db.prepare('SELECT * FROM categories WHERE id = ?').get(c && c.id)
-    // Stamp deletedAt at tombstone time: callers never pass it, and a tombstone without a timestamp
-    // can never be time-ordered or reconciled by a sync engine (review V1-F5). An already-tombstoned
-    // row keeps its original deletedAt (re-upserting the same deleted category must not re-stamp it).
-    // P2 2026-09-20: the stamp used to fire only for the renderer's `delete` field — a ROW-shape
-    // input (`deleted:1`, no `delete`, e.g. the CLI and the sync apply path's buffered categories)
-    // fell through to deletedAt=0, producing timestamp-less tombstones that LWW/sync ordering
-    // treats as oldest-possible. Normalize the deleted flag FIRST, then stamp: any tombstone
-    // without an explicit deletedAt (and without a prior stamp on the existing row) gets now(),
-    // and an already-stamped row keeps its original value.
-    const deleted = (c && (c.deleted != null ? c.deleted : c.delete)) ? 1 : 0
-    const deletedAt = (c && c.deletedAt) || (deleted ? ((cur && cur.deletedAt) || now) : 0)
-    const row = {
-      id: c && c.id,
-      userId: c && c.userId,
-      name: c && c.name,
-      color: c && c.color,
-      createdAt: c && c.createdAt,
-      sort: c && c.sort,
-      isFolder: (c && c.isFolder) ? 1 : 0,
-      parentId: c && c.parentId,
-      // callers may flag deletion via `delete` (renderer shape) or `deleted` (row shape); normalized above
-      deleted,
-      deletedAt,
-      updatedAt: (c && c.updatedAt) || now
-    }
-    if (cur) {
-      const eq = (a, b) => (a == null ? null : a) === (b == null ? null : b)
-      const same = ['id', 'userId', 'name', 'color', 'createdAt', 'sort', 'isFolder', 'parentId', 'deleted', 'deletedAt']
-        .every(k => eq(row[k], cur[k])) &&
-        // updatedAt only counts as a diff when the caller explicitly supplied one (otherwise it is
-        // just our own now-stamp and would make every no-op upsert look like a change)
-        (c.updatedAt == null || eq(row.updatedAt, cur.updatedAt))
-      if (same) return false
-    }
-    db.prepare(`INSERT INTO categories (id,userId,name,color,createdAt,sort,isFolder,parentId,deleted,deletedAt,updatedAt)
-      VALUES (@id,@userId,@name,@color,@createdAt,@sort,@isFolder,@parentId,@deleted,@deletedAt,@updatedAt)
-      ON CONFLICT(id) DO UPDATE SET name=excluded.name, color=excluded.color, createdAt=excluded.createdAt,
-        sort=excluded.sort, isFolder=excluded.isFolder, parentId=excluded.parentId, deleted=excluded.deleted,
-        deletedAt=excluded.deletedAt, updatedAt=excluded.updatedAt
-      `).run(row) // 全字段 DO UPDATE:漏 isFolder/parentId 曾致拖入/拖出文件夹静默打回(2026-09-04 深审 P0);userId 不更新(行属不变)
-    return true
-  },
-  getAllCategories: () => db.prepare('SELECT * FROM categories WHERE deleted = 0 ORDER BY sort').all().map(rowToCategory),
-  // ===== Saved filters (smart lists): conds stores the condition JSON (catId/priority/dateMode) =====
-  // Deletes are tombstones (P1 sync groundwork): a soft-deleted filter row must survive to propagate
-  // to other devices; the recycle semantics stay invisible because filterList filters deleted=0.
-  // F3b (2026-09-20): updatedAt exposed — the sync LWW gate needs the row's age, otherwise a
-  // filter edit from a peer was refused for any filter this device already had (ageUnknown).
-  filterList: () => db.prepare('SELECT * FROM filters WHERE deleted = 0 ORDER BY sort, id').all().map(r => ({ id: r.id, name: r.name, conds: parseConds(r.conds), sort: r.sort, updatedAt: r.updatedAt || 0 })),
-  filterUpsert: f => {
-    const name = String(f && f.name || '').slice(0, 50)
-    const conds = JSON.stringify(normConds(f && f.conds))
-    if (f.id) {
-      // P2 2026-09-17 no-op suppression (same rule as upsertCategory): re-saving identical content
-      // used to overwrite updatedAt=now (faking LWW freshness) and emit a fake oplog delta per save.
-      // Un-deletes on conflict are intentional, so a resurrected tombstone still writes.
-      const cur = db.prepare('SELECT name, conds, sort, deleted FROM filters WHERE id = ?').get(f.id)
-      if (cur && cur.deleted === 0 && cur.name === name && cur.conds === conds && cur.sort === (f.sort || 0)) return false
-      // M2 (2026-09-20): preserve an explicit updatedAt (sync apply carries the peer row's LWW age)
-      // instead of re-stamping now() — same rationale as planAddMany above. Renderer callers omit it and get now().
-      const stamp = Number(f.updatedAt) > 0 ? Number(f.updatedAt) : Date.now()
-      const info = db.prepare('UPDATE filters SET name=?, conds=?, sort=?, deleted=0, deletedAt=0, updatedAt=? WHERE id=?').run(name, conds, f.sort || 0, stamp, f.id)
-      // Round-1 P0 (2026-09-21): sync apply passes an explicit id — when the row does not exist
-      // locally the UPDATE matched 0 rows, yet the oplog still logged a phantom pointer and the
-      // next egress fabricated a fresh tombstone for it (delete-wins LWW then deleted the
-      // SOURCE's live filter). INSERT fallback mirrors planAddMany/upsertCategory upsert
-      // semantics: an explicit id that is absent locally is created, never tombstoned.
-      if (info.changes === 0) {
-        db.prepare('INSERT INTO filters (id, name, conds, sort, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?)')
-          .run(f.id, name, conds, f.sort || 0, stamp, stamp)
-      }
-      return f.id
-    }
-    const stamp = Number(f && f.updatedAt) > 0 ? Number(f.updatedAt) : Date.now()
-    const r = db.prepare('INSERT INTO filters (name, conds, sort, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?)').run(name, conds, f.sort || 0, Date.now(), stamp)
-    return Number(r.lastInsertRowid)
-  },
-  // R7 P1-2: opts {deletedAt, updatedAt} (sync apply path) preserve the winner's tombstone stamps —
-  // a local re-stamp replaced the true deletion time and re-won LWW on the origin (echo bounce).
-  // Idempotent: an already-deleted row is left untouched (no re-stamp, no phantom oplog delta).
-  filterDelete: (id, opts = {}) => {
-    // db.call passes params verbatim: the sync path sends [id, {deletedAt, updatedAt}] as one arg
-    if (Array.isArray(id)) { opts = id[1] || {}; id = id[0] }
-    const now = Date.now()
-    const dAt = (opts && opts.deletedAt) || now
-    const r = db.prepare('UPDATE filters SET deleted=1, deletedAt=?, updatedAt=? WHERE id = ? AND deleted=0').run(dAt, (opts && opts.updatedAt) || dAt, id)
-    return r.changes > 0
-  },
-  // Per-day task total/completed counts (by due date), plus completion counts by "completion day" (unaffected by due date)
-  // scheduledDay stores millisecond timestamps; callers may pass a YYYYMMDD integer (CLI), uniformly converted to a millisecond range
-  _dayBounds: ({ from, to }) => {
-    const conv = v => {
-      if (v == null) return null
-      if (v >= 1e11) return v // already in milliseconds
-      const s = String(v)
-      const y = +s.slice(0, 4); const mo = +s.slice(4, 6); const d = +s.slice(6, 8)
-      // F2/H2: digit-slicing a 9-11 digit Unix-seconds value (e.g. 1758000000) yields a
-      // "valid but wrong" date (year 1757, month 00) that is NOT NaN and silently poisons stats.
-      // Validate the sliced calendar fields; anything outside month 1-12 / day 1-31 is a USAGE error.
-      if (!(mo >= 1 && mo <= 12) || !(d >= 1 && d <= 31)) {
-        throw new Error('[TodoDB] _dayBounds: ' + v + ' is not a parseable date (YYYYMMDD slices to month ' + mo + ', day ' + d + '), refusing to run BETWEEN a bogus range')
-      }
-      return new Date(y, mo - 1, d).getTime()
-    }
-    const f = conv(from)
-    const t = conv(to)
-    // F2 2026-09-15:new Date('垃圾').getTime()=NaN 可通过 == null 检查,SQL BETWEEN NaN 绑定成 NULL
-    // → 静默恒空统计(CLI stats 场景下"空结果"比报错更骗人)。NaN = 调用方传了无法解析的日期,USAGE 错误如实上抛。
-    for (const [name, v] of [['from', f], ['to', t]]) {
-      if (v != null && Number.isNaN(v)) throw new Error('[TodoDB] _dayBounds: ' + name + ' is not a parseable date, refusing to run BETWEEN NaN (silent empty stats)')
-    }
-    // 终点=to 当日本地日末:用 dayjs 加一天再减 1ms,夏令时切换日(23/25h)不错位 1 小时(2026-09-05 终审 P2;固定 +86400000 只对中国时区成立)
-    return [f == null ? null : f, t == null ? null : +dayjs(t).add(1, 'day').startOf('day') - 1]
-  },
-  statsByDay: ({ from, to }) => {
-    const [f, t] = OPS._dayBounds({ from, to })
-    // P2 2026-09-17: null bounds used to bind SQL BETWEEN NULL → silently always-empty, unlike
-    // tomatoByDay which substitutes open-ended sentinels. scheduledDay is a millisecond timestamp;
-    // 0 / 8.64e15 bracket every representable day (same sentinel semantics as tomatoByDay's
-    // '0000-00-00'/'9999-99-99'). The completion-day keys are YYYYMMDD integers: 0 / 99991231.
-    const fLo = f == null ? 0 : f
-    const tHi = t == null ? 8640000000000000 : t
-    // B12 (P3 2026-09-24) planned 口径对齐渲染端 metrics.js windowCounts:
-    //   ds = dayStart || (todoTime ? startOf(todoTime).day : 0) —— 纯 todoTime(无 scheduledDay)任务
-    // 也要计入当日 planned。旧行集只按 scheduledDay 分组,这类任务从所有统计里消失。
-    // 候选集 = scheduledDay 落界 OR (scheduledDay=0 且 scheduledAt 落界);时刻→当日的换算在 JS 侧用
-    // dayjs startOf('day')(本地时区正确;SQL strftime/julianday 的 UTC 取整在非 UTC 时区错日)。
-    // scheduledAt is the row column for the app-shape todoTime (see db-rows.rowToTodo).
-    const raw = db.prepare(`SELECT scheduledDay dsRaw, scheduledAt, SUM(complete) done, COUNT(*) total FROM todos
-      WHERE deleted=0 AND ((scheduledDay BETWEEN ? AND ?) OR (scheduledDay = 0 AND scheduledAt BETWEEN ? AND ?))
-      GROUP BY scheduledDay, scheduledAt`).all(fLo, tHi, fLo, tHi)
-    const byDay = new Map()
-    for (const r of raw) {
-      const ds = r.dsRaw || (r.scheduledAt ? +dayjs(r.scheduledAt).startOf('day') : 0)
-      if (!ds) continue
-      const cur = byDay.get(ds) || { ds, done: 0, total: 0 }
-      cur.done += r.done || 0
-      cur.total += r.total || 0
-      byDay.set(ds, cur)
-    }
-    const rows = [...byDay.values()].sort((a, b) => a.ds - b.ds)
-    // 完成日查询的边界须与 strftime 产出的 YYYYMMDD 同单位(2026-09-05 终审 P1:与毫秒边界 BETWEEN 恒假→恒空)
-    const fKey = f == null ? 0 : Number(dayjs(f).format('YYYYMMDD'))
-    const tKey = t == null ? 99991231 : Number(dayjs(t).format('YYYYMMDD'))
-    // P3 2026-09-23 完成日口径对齐(与渲染端 metrics.js doneTsOf 一致): completedAt=0 的历史/异常完成行
-    // 按 updateTime 兜底落日 — 旧 SQL `completedAt > 0` 把这类行从所有完成日统计里永久剔除,App 侧却计入
-    const doneByCompletionDay = db.prepare(`SELECT CAST(strftime('%Y%m%d', COALESCE(NULLIF(completedAt,0), updatedAt)/1000, 'unixepoch', 'localtime') AS INTEGER) ds, COUNT(*) n
-      FROM todos
-      WHERE deleted=0 AND complete=1 AND COALESCE(NULLIF(completedAt,0), updatedAt) > 0
-        AND CAST(strftime('%Y%m%d', COALESCE(NULLIF(completedAt,0), updatedAt)/1000, 'unixepoch', 'localtime') AS INTEGER) BETWEEN ? AND ?
-      GROUP BY ds`).all(fKey, tKey)
-    return { rows, doneByCompletionDay }
-  },
-  // 真实专注账:聚合 tomato_records 行表按 dateKey 求和(2026-09-04 起账本唯一事实源=行表,不再读 meta blob);
-  // 旧实现查 todos.focusMinutes(=预计番茄)导致"补录的专注在 stats 里恒为 0/缺天"
-  tomatoByDay: ({ from, to }) => {
-    const [f, t] = OPS._dayBounds({ from, to })
-    const fKey = f == null ? null : dayjs(f).format('YYYY-MM-DD')
-    const tKey = t == null ? null : dayjs(t).format('YYYY-MM-DD')
-    // 2026-09-04 根修:账本迁 tomato_records 行表后聚合一跳完成
-    // succeed=1 only: abandoned pomodoros are not focus time — same filter as the renderer's StatisticsView
-    const rows = db.prepare(`SELECT dateKey ds, SUM(focusDuration) focus FROM tomato_records
-      WHERE succeed = 1 AND deleted = 0 AND dateKey BETWEEN ? AND ? GROUP BY dateKey`).all(
-        fKey ? fKey : '0000-00-00', tKey ? tKey : '9999-99-99')
-    return rows.map(r => ({ ds: r.ds, focus: r.focus || 0 }))
-  },
-  // ===== Plan chips (timeline planning layer) formal row storage (2026-09-03 root fix) =====
-  // Previously meta.dayPlanState JSON whole-package + LS dual-write with three-way concurrency — the architectural root of four data-loss incidents;
-  // with row storage there is a single write channel (SQLite serialized) + write-op broadcast + cascading cleanup on task deletion, so the race is structurally eliminated.
-  // plan_chips deletes are tombstones (P1 sync groundwork): user-facing chip removals must propagate to other devices.
-  // planPrune is time-based GC (old days fall off) and stays physical — devices
-  // reconcile pruned history via periodic full snapshots, so tombstoning it would only grow the table.
-  // H2 2026-09-16: sort was missing from the snapshot SELECT — the snapshot/restore round-trip lost
-  // chip ordering and restore's ON CONFLICT upsert then overwrote sort with 0.
-  // F3a (2026-09-20): updatedAt must be in the SELECT too — without it the sync layer could not
-  // know a chip's LWW age and refused every inbound edit for a chip the peer already had
-  // (sync-apply ageUnknown gate); chips are re-timed on every write, so the column is the age.
-  planAll: () => db.prepare('SELECT id, taskId, day, mm, sort, updatedAt FROM plan_chips WHERE deleted = 0 ORDER BY day, mm, sort').all(),
-  planAddMany: chips => {
-    // Skip-and-collect (round-3 review): one malformed chip used to throw for the WHOLE batch —
-    // a poison pill in the sync flush wedged plan ingestion forever. Invalid rows are skipped
-    // (never applied); the valid rows commit and their ids are returned.
-    const list = (Array.isArray(chips) ? chips : [chips]).filter(c => c && c.taskId &&
-      /^\d{4}-\d{2}-\d{2}$/.test(String(c.day)) && /^([01]\d|2[0-3]):[0-5]\d$/.test(String(c.mm)))
-      .map(c => ({
-        id: (c && c.id) || 'pl_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
-        taskId: String(c.taskId || ''), day: String(c.day || ''), mm: String(c.mm || ''), sort: Number(c.sort) || 0,
-        // M2 (2026-09-20): an explicit updatedAt (the sync apply path carries the peer row's age)
-        // must survive — re-stamping now() here made the applied chip differ from the peer's row
-        // (fresh LWW age + a new oplog delta per applied chip = apply/push ping-pong). Mirrors
-        // upsertCategory's `(c && c.updatedAt) || now`; renderer callers omit it and get now().
-        updatedAt: Number(c && c.updatedAt) > 0 ? Number(c.updatedAt) : 0
-      }))
-    const ins = db.prepare('INSERT INTO plan_chips (id, taskId, day, mm, sort, deleted, deletedAt, updatedAt) VALUES (@id,@taskId,@day,@mm,@sort,0,0,@updatedAt) ON CONFLICT(id) DO UPDATE SET taskId=excluded.taskId, day=excluded.day, mm=excluded.mm, sort=excluded.sort, deleted=0, deletedAt=0, updatedAt=excluded.updatedAt')
-    const now = Date.now()
-    const tr = db.transaction(() => list.forEach(c => ins.run({ ...c, updatedAt: c.updatedAt || now }))); tr()
-    return list.map(c => c.id)
-  },
-  planUpdateChip: ({ id, day, mm }) => {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(day))) throw new Error('planUpdateChip: day 必须 YYYY-MM-DD')
-    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(String(mm))) throw new Error('planUpdateChip: mm 必须 HH:mm')
-    const r = db.prepare('UPDATE plan_chips SET day=?, mm=?, updatedAt=? WHERE id=? AND deleted=0').run(String(day), String(mm), Date.now(), String(id))
-    return r.changes > 0
-  },
-  planRemoveIds: (ids, opts = {}) => {
-    const list = Array.isArray(ids) ? ids : [ids]
-    const now = Date.now()
-    const dAt = (opts && opts.deletedAt) || now
-    const stamp = (opts && opts.updatedAt) || dAt
-    // Items may be plain ids (renderer/CLI) or {id, deletedAt, updatedAt} tombstone stamps (sync apply)
-    const del = db.prepare('UPDATE plan_chips SET deleted=1, deletedAt=?, updatedAt=? WHERE id = ? AND deleted=0')
-    const tr = db.transaction(() => list.forEach(i => {
-      const o = (i && typeof i === 'object') ? i : null
-      del.run((o && o.deletedAt) || dAt, (o && o.updatedAt) || stamp, String(o ? o.id : i))
-    }))
-    tr()
-    return true
-  },
-  planMoveTask: ({ taskId, fromDay, toDay }) => {
-    const okDay = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v))
-    if (!okDay(fromDay) || !okDay(toDay)) return 0 // reject malformed day keys outright, preventing chips from landing in invisible buckets
-    const r = db.prepare('UPDATE plan_chips SET day=?, updatedAt=? WHERE taskId=? AND day=? AND deleted=0').run(String(toDay), Date.now(), String(taskId), String(fromDay))
-    return r.changes
-  },
-  // P2 idempotency (2026-09-25): `AND deleted=0` mirrors filterDelete/planRemoveIds — a repeat
-  // delete of an already-deleted task used to re-stamp deletedAt/updatedAt with a fresh now(),
-  // and every such call minted ANOTHER tombstone-pointer oplog entry (db-oplog's planDeleteTask
-  // case has no deleted filter), flooding the sender's log on repeated calls. Now a no-op.
-  planDeleteTask: taskId => { const r = db.prepare('UPDATE plan_chips SET deleted=1, deletedAt=?, updatedAt=? WHERE taskId=? AND deleted=0').run(Date.now(), Date.now(), String(taskId)); return r.changes > 0 },
-  planDeleteTaskDay: ({ taskId, day }) => { const r = db.prepare('UPDATE plan_chips SET deleted=1, deletedAt=?, updatedAt=? WHERE taskId=? AND day=? AND deleted=0').run(Date.now(), Date.now(), String(taskId), String(day)); return r.changes > 0 },
-  planPrune: ({ keepDays }) => {
-    const keep = Array.isArray(keepDays) ? keepDays.filter(d => /^\d{4}-\d{2}-\d{2}$/.test(String(d))) : []
-    if (!keep.length) return 0
-    const ph = keep.map(() => '?').join(',')
-    const r = db.prepare(`DELETE FROM plan_chips WHERE day NOT IN (${ph})`).run(...keep)
-    return r.changes
-  },
-  // ===== Tomato focus ledger: formal row storage (2026-09-04 root fix, plan_chips same pattern) =====
-  // Single source of truth for the ledger; LS keeps only timer transient state. All writers (main window / float window / CLI) go through these atomic ops,
-  // structurally eliminating the entire class of "multi-writer full-blob overwrite → deletion resurrected / new records erased" incidents.
-  _REC_COLS: ['endTime', 'dateKey', 'focus', 'focusTaskId', 'focusDuration', 'rest', 'restDuration', 'succeed', 'manual', 'status', 'abandonReason'],
-  _recToRow (r) {
-    const o = { tomatoId: String(r.tomatoId) }
-    for (const k of OPS._REC_COLS) {
-      let v = r[k]
-      if (k === 'endTime' || k === 'rest') v = Math.max(0, Math.round(Number(v) || 0))
-      else if (k === 'focusDuration') v = Math.min(LIMITS.FOCUS_MAX_MINUTES, Math.max(0, Math.round(Number(v) || 0))) // clamp at the DB layer; P3 2026-09-17: lower bound is 0, not 1 — a bad value (0/NaN/garbage) must not be inflated into a phantom focus minute that LAN merge "max" then amplifies
-      else if (k === 'restDuration') v = Math.min(LIMITS.REST_MAX_MINUTES, Math.max(0, Math.round(Number(v) || 0)))
-      else if (k === 'succeed') v = v === false ? 0 : 1
-      else if (k === 'manual') v = v ? 1 : 0
-      o[k] = v == null ? null : v
-    }
-    // Preserve unknown/future fields as a JSON blob (won't be lost when writing back after forward-compatible reads)
-    const known = new Set(['tomatoId', ...OPS._REC_COLS])
-    const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
-    const extra = {}
-    for (const k of Object.keys(r || {})) if (!known.has(k) && !UNSAFE_KEYS.has(k)) extra[k] = r[k]
-    o.extra = Object.keys(extra).length ? JSON.stringify(extra) : null
-    // (2026-09-19) Deleted the old dead re-default here: the loop above already coerces succeed to 0/1
-    return o
-  },
-  _rowToRec (r) {
-    const rec = {
-      tomatoId: r.tomatoId, endTime: r.endTime, dateKey: r.dateKey,
-      focus: r.focus || '', focusTaskId: r.focusTaskId || null,
-      focusDuration: r.focusDuration || 0, rest: r.rest || 0, restDuration: r.restDuration || 0,
-      succeed: !!r.succeed, manual: !!r.manual, status: r.status || 'local', abandonReason: r.abandonReason || ''
-    }
-    if (r.extra) {
-      try {
-        // Key-filtered copy instead of Object.assign: JSON.parse materializes a "__proto__" own key
-        // and assign's [[Set]] would turn it into a prototype swap on rec (security review 2026-09-11)
-        const extra = JSON.parse(r.extra)
-        for (const k of Object.keys(extra)) {
-          if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue
-          rec[k] = extra[k]
-        }
-      } catch (e) { /* corrupted extra fields do not block the main fields */ }
-    }
-    return rec
-  },
-  tomatoAll: () => db.prepare('SELECT * FROM tomato_records WHERE deleted = 0 ORDER BY endTime DESC').all().map(OPS._rowToRec),
-  // D6 P2 (2026-09-22): indexed by-id read for the ledger lock gate (handlers/todo.js used to run
-  // tomatoAll — a full-table scan ORDER BY endTime DESC — once per float tick under lock).
-  // deleted = 0 matches every reader (tomatoAll/tomatoByDay), so a tombstoned id reads as null.
-  tomatoGetById: tomatoId => {
-    const r = db.prepare('SELECT * FROM tomato_records WHERE tomatoId = ? AND deleted = 0').get(String(tomatoId))
-    return r ? OPS._rowToRec(r) : null
-  },
-  tomatoTombstones: () => db.prepare('SELECT tomatoId, updatedAt, deletedAt FROM tomato_records WHERE deleted = 1').all(),
-  tomatoAppendMany: rows => {
-    const list = Array.isArray(rows) ? rows : [rows]
-    const now = Date.now()
-    const ins = db.prepare(`INSERT INTO tomato_records (tomatoId, endTime, dateKey, focus, focusTaskId, focusDuration, rest, restDuration, succeed, manual, status, abandonReason, extra, deleted, deletedAt, updatedAt)
-      VALUES (@tomatoId, @endTime, @dateKey, @focus, @focusTaskId, @focusDuration, @rest, @restDuration, @succeed, @manual, @status, @abandonReason, @extra, 0, 0, @updatedAt)
-      ON CONFLICT(tomatoId) DO UPDATE SET endTime=excluded.endTime, dateKey=excluded.dateKey, focus=excluded.focus, focusTaskId=excluded.focusTaskId,
-        focusDuration=excluded.focusDuration, rest=excluded.rest, restDuration=excluded.restDuration, succeed=excluded.succeed, manual=excluded.manual,
-        status=excluded.status, abandonReason=excluded.abandonReason, extra=excluded.extra, deleted=0, deletedAt=0, updatedAt=excluded.updatedAt`)
-    // F2 2026-09-15 行级容错(架构根因:批量接口的失败粒度应是"行级"而非"批级"):
-    // 此前任一行缺 tomatoId/endTime 抛错回滚整批 → 渲染端 pending 队列被一条坏行劫持无限重试,
-    // 同批合法账本行永不落库。现改为事务内跳过无效行并记入返回值 rejected,合法行照常落库;
-    // renderer acknowledges the batch on fulfilment and logs rejected rows, then drops them from its
-    // pending queue (报错以 console.error 上报,行按 rejected 索引剔除)。
-    const rejected = []
-    let accepted = 0
-    const tr = db.transaction(() => list.forEach((raw, index) => {
-      const reject = reason => rejected.push({
-        index,
-        tomatoId: raw && raw.tomatoId != null ? String(raw.tomatoId) : null,
-        reason
-      })
-      if (!raw || !raw.tomatoId) { reject('tomatoId required'); return }
-      if (!raw.endTime) { reject('endTime required'); return }
-      // Strip the explicit updatedAt BEFORE _recToRow snapshots unknown keys into the extra blob
-      // (main-ipc-9, see below); the stamp itself is re-read from raw at the ins.run site.
-      const clean = Object.assign({}, raw); delete clean.updatedAt
-      const r = OPS._recToRow(Object.assign({ dateKey: '', succeed: true, manual: false }, clean))
-      // main-ipc-9 (2026-09-22): the sync-apply path carries an explicit updatedAt (see stamp below);
-      // without the strip above it leaked into the extra JSON blob via _recToRow's unknown-key
-      // preservation (updatedAt is not a _REC_COLS column) — redundant storage read back on every
-      // _rowToRec. Same `delete rec.updatedAt` contract as tomatoUpdateById.
-      // dateKey 无条件由 endTime 重导(2026-09-04 深审 P0:三补录入口曾各按 startTs 落 dateKey,跨午夜记录与统计/时间轴 endTime 口径分裂)
-      // dateKey 从调用方传入值起不再被信任,格式校验降级为派生后的防御断言
-      r.dateKey = dayjs(r.endTime).format('YYYY-MM-DD')
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(r.dateKey))) { reject('dateKey derive failed'); return }
-      // M2 class, third instance (2026-09-21 D6, after settings/plan): an explicit positive updatedAt
-      // (the sync-apply path carries the peer winner's LWW age, sync-apply.js pendingWrites.tomatoes)
-      // must survive the bulk write — hard-restamping now() here made every applied ledger row read
-      // newest-here and minted a fresh oplog delta per applied row (apply/push ping-pong, and the
-      // older peer row then silently lost LWW on the origin). Parity with planAddMany: renderer/CLI
-      // callers omit the stamp and get now().
-      const stamp = Number(raw.updatedAt) > 0 ? Number(raw.updatedAt) : now
-      ins.run({ ...r, updatedAt: stamp })
-      accepted++
-    }))
-    tr()
-    return { accepted, rejected }
-  },
-  tomatoUpdateById: ({ tomatoId, patch }) => {
-    const cur = db.prepare('SELECT * FROM tomato_records WHERE tomatoId = ?').get(String(tomatoId))
-    if (!cur) return false
-    const rec = Object.assign(OPS._rowToRec(cur), patch || {})
-    // dateKey 双向强制 = dayjs(endTime):改 endTime 重导(改时间忘改日),只传 dateKey 也拒绝(脱离 endTime 的 dateKey patch = 幽灵行后门,2026-09-04 深审 P0)
-    rec.dateKey = dayjs(rec.endTime).format('YYYY-MM-DD')
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(rec.dateKey))) throw new Error('tomatoUpdateById: bad endTime produces invalid dateKey')
-    delete rec.updatedAt // handled explicitly below; never leak the stamp into the extra JSON blob
-    const r = OPS._recToRow(rec)
-    // `AND deleted = 0`: a tombstoned (removed) record is invisible to every reader — reporting success
-    // on it would tell the caller a patch landed that nobody can ever see (review V1-F2)
-    const res = db.prepare(`UPDATE tomato_records SET endTime=@endTime, dateKey=@dateKey, focus=@focus, focusTaskId=@focusTaskId,
-      focusDuration=@focusDuration, rest=@rest, restDuration=@restDuration, succeed=@succeed, manual=@manual,
-      status=@status, abandonReason=@abandonReason, extra=@extra, updatedAt=@updatedAt WHERE tomatoId=@tomatoId AND deleted = 0`)
-      // M2 class parity (2026-09-21 D6): a patch may carry the sync winner's explicit updatedAt —
-      // preserve it like tomatoAppendMany/planAddMany do; callers without a stamp keep local now.
-      .run(Object.assign({ tomatoId: String(tomatoId), updatedAt: Number(patch && patch.updatedAt) > 0 ? Number(patch.updatedAt) : Date.now() }, r))
-    return res.changes > 0
-  },
-  // Tombstone delete (P1 sync groundwork): ledger removals must propagate to other devices; every
-  // reader (tomatoAll/tomatoByDay) filters deleted=0, so behaviour matches the old physical delete.
-  tomatoRemoveByIds: ids => {
-    const list = Array.isArray(ids) ? ids : [ids]
-    const del = db.prepare('UPDATE tomato_records SET deleted=1, deletedAt=?, updatedAt=? WHERE tomatoId = ?')
-    const now = Date.now()
-    const tr = db.transaction(() => list.forEach(i => del.run(now, now, String(i))))
-    tr()
-    return true
-  },
-  // One-time migration: bulk-insert the full ledger from the old meta blob.
-  // 守卫不能只靠"表空"——用户删光账本后表空是合法状态,不删 meta blob 会整批复活已删记录(P0,并行审查实锤)。
-  // 所以:无论走哪条分支,迁移完成即删 meta blob;"blob 不存在"才是真正的已迁移哨兵。
-  tomatoMigrateFromMeta: () => {
-    const delBlob = () => { try { db.prepare('DELETE FROM meta WHERE key = ?').run('db.tomatoState') } catch { /* 清理失败不阻断 */ } }
-    const n = db.prepare('SELECT COUNT(*) c FROM tomato_records').get().c
-    if (n > 0) { delBlob(); return 0 }
-    // 损坏 blob 不删(2026-09-10 P2):此前 JSON.parse 失败 catch 成 {} → list 空 → delBlob 直接把
-    // 旧账本 blob 抹掉,记录永久丢失(可能只是磁盘位翻转/半截写入)。parse 失败 = warn + 返回 0
-    // 保留 blob,下次(比如从备份恢复后)还有迁移机会;只有成功解析才走迁移/清理。
-    // 纯解析逻辑抽到 fix-util.parseTomatoMetaBlob 便于 node --test 覆盖。
-    const parsed = require('./fix-util').parseTomatoMetaBlob(stmts.getMeta.get('db.tomatoState')?.value)
-    if (!parsed.ok) { log.warn('[TodoDB] tomatoMigrateFromMeta: 旧 meta blob 损坏(JSON 解析失败),保留 blob 不迁移不删除'); return 0 }
-    const list = parsed.list
-    if (!list.length) { delBlob(); return 0 }
-    OPS.tomatoAppendMany(list)
-    delBlob()
-    return list.length
-  },
+  // Category ops extracted verbatim to db-category-ops.js (structure-size ratchet)
+  upsertCategory: (...a) => categoryOps.upsertCategory(db, ...a),
+  getAllCategories: (...a) => categoryOps.getAllCategories(db, ...a),
+  // Saved-filter ops extracted verbatim to db-filter-ops.js (structure-size ratchet)
+  filterList: (...a) => filterOps.filterList(db, ...a),
+  filterUpsert: (...a) => filterOps.filterUpsert(db, ...a),
+  filterDelete: (...a) => filterOps.filterDelete(db, ...a),
+  // Stats/day-bounds ops extracted verbatim to db-stats-ops.js (structure-size ratchet; the
+  // _dayBounds delegate preserves the internal op surface used by CLI/tests)
+  _dayBounds: (...a) => statsOps._dayBounds(...a),
+  statsByDay: (...a) => statsOps.statsByDay(db, ...a),
+  tomatoByDay: (...a) => statsOps.tomatoByDay(db, ...a),
+  // Plan-chip ops extracted verbatim to db-plan-ops.js (structure-size ratchet)
+  planAll: (...a) => planOps.planAll(db, ...a),
+  planAddMany: (...a) => planOps.planAddMany(db, ...a),
+  planUpdateChip: (...a) => planOps.planUpdateChip(db, ...a),
+  planRemoveIds: (...a) => planOps.planRemoveIds(db, ...a),
+  planMoveTask: (...a) => planOps.planMoveTask(db, ...a),
+  planDeleteTask: (...a) => planOps.planDeleteTask(db, ...a),
+  planDeleteTaskDay: (...a) => planOps.planDeleteTaskDay(db, ...a),
+  planPrune: (...a) => planOps.planPrune(db, ...a),
+  // Tomato focus-ledger ops extracted verbatim to db-tomato-ops.js (structure-size ratchet; the
+  // _REC_COLS/_recToRow/_rowToRec delegates preserve the internal row-shaping seams)
+  _REC_COLS: tomatoOps._REC_COLS,
+  _recToRow: (...a) => tomatoOps._recToRow(...a),
+  _rowToRec: (...a) => tomatoOps._rowToRec(...a),
+  tomatoAll: (...a) => tomatoOps.tomatoAll(db, ...a),
+  tomatoGetById: (...a) => tomatoOps.tomatoGetById(db, ...a),
+  tomatoTombstones: (...a) => tomatoOps.tomatoTombstones(db, ...a),
+  tomatoAppendMany: (...a) => tomatoOps.tomatoAppendMany(db, ...a),
+  tomatoUpdateById: (...a) => tomatoOps.tomatoUpdateById(db, ...a),
+  tomatoRemoveByIds: (...a) => tomatoOps.tomatoRemoveByIds(db, ...a),
+  tomatoMigrateFromMeta: (...a) => tomatoOps.tomatoMigrateFromMeta(db, stmts, ...a),
   // Delta read for the (future) sync engine and tests: oplog rows strictly after sinceSeq, oldest first.
   // limit guards the first pull on a large existing log; callers page through via the returned max seq.
   // Main-process/CLI-only op by design: the future sync engine lives in the main process and reads the

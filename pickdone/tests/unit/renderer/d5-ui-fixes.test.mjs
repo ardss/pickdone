@@ -110,7 +110,8 @@ test('RecycleBinView pickDate: awaited dispatch, success only on success, error 
   const src = read('renderer/js/views/RecycleBinView.vue')
   const body = src.slice(src.indexOf('async pickDate'), src.indexOf('openEdit ('))
   assert.ok(body.includes('async pickDate'), 'pickDate is async')
-  assert.match(body, /try \{[\s\S]*await this\.\$store\.dispatch\('todo\/updateTodoFields'[\s\S]*\} catch/, 'dispatch awaited in try/catch')
+  // [restore single-path fix] pickDate restores through todo/restoreFromRecycle (dayPatch), not bare updateTodoFields
+  assert.match(body, /try \{[\s\S]*await this\.\$store\.dispatch\('todo\/restoreFromRecycle'[\s\S]*\} catch/, 'dispatch awaited in try/catch')
   const okPos = body.indexOf('restoredToDate')
   const awaitPos = body.indexOf('await this.$store.dispatch')
   const catchPos = body.indexOf('} catch')

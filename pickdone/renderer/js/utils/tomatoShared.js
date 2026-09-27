@@ -12,6 +12,15 @@ export function remainSecOf (status, startedAt, tomatoTime, restTime, now = Date
   return Math.max(0, total - elapsed)
 }
 
+/** Elapsed seconds of the running focus (floored, clamped to 0). Extracted from TomatoFloatPage's
+ *  abandon-confirm "focused for" clock: the component used to inline `(this.now - startedAt)/1000`
+ *  against a `now` field that did not exist in data(), so NaN flowed into formatMMSS and the big
+ *  digits froze at 00:00 exactly when the user was deciding whether to discard the session. */
+export function focusedElapsedSec (startedAt, now = Date.now()) {
+  if (!startedAt) return 0
+  return Math.max(0, Math.floor((now - startedAt) / 1000))
+}
+
 /** Phase identity token: unique identifier for one "entering a running state" (startedAt changes after resume/giveUp, i.e. a new identity) */
 export function phaseToken (status, startedAt) {
   return `${status}:${startedAt}`

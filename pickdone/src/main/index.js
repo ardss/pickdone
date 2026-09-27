@@ -102,7 +102,10 @@ const windowManager = createWindowManager({
   readConfig, writeConfig, i18n: i18nM, log, windowRef, closeBehavior,
   tomatoTaskbar, updater, applyShortcuts, shortcuts, scheduler,
   isLocked, lockAppNow, showMainOrLock,
-  isQuitting: () => quitting, getState: () => state, getTray: () => tray
+  isQuitting: () => quitting, getState: () => state, getTray: () => tray,
+  // D10 (2026-09-27): renderer-death hooks — clear the stale tomato countdown lease and let the
+  // crash counter health window live in windows.js (see crashRelaunchDecision in handlers/shared).
+  onRendererGone: clearTomatoLiveText
 })
 const createMainWindow = windowManager.createMainWindow
 function getMainWindow () { return windowManager.getMainWindow() }
@@ -363,6 +366,13 @@ function isSafeExternal (url) {
 const attachments = require('./attachments')
 const { attachDir } = attachments
 
+// D10 (2026-09-27): timestamp of the last renderer push — tomatoLiveText is a LEASE (fresh only
+// within TOMATO_LIVE_TTL_MS), not a latch; a dead renderer must not hold quit hostage forever.
+let tomatoLiveAt = 0
+// D10 (2026-09-27): wired into windows.js's render-process-gone hook — a crashed renderer clears
+// its own lease immediately (the TTL alone would still show a stale confirm for up to 10s).
+function clearTomatoLiveText () { tomatoLiveText = ''; tomatoLiveAt = 0 }
+
 /* ================= Tray ================= */
 function createTray () {
   const iconPath = path.join(__dirname, '../../assets/tray/tray.png')
@@ -378,16 +388,28 @@ let tomatoLiveText = '' // non-empty = a focus/rest pomodoro is live (per-second
 function updateTomatoTray (text) {
   const t = String(text || '').trim()
   tomatoLiveText = t
+  tomatoLiveAt = t ? Date.now() : 0 // D10: lease timestamp — emptiness (idle push) also clears the lease
   if (tray) { try { tray.setToolTip(i18nM.mt('appName') + (t ? ' · ' + t : '')) } catch (e) { /* empty */ } }
 }
 
 /* ================= Tray quit with focus-in-progress confirmation ================= */
 async function quitFromTray () {
+  // D10 (2026-09-27): re-entrancy guard — a second tray-quit click while the confirm dialog is
+  // open used to enter again (two dialogs, two quit chains, quitByUser race). Rejected before the
+  // first await.
+  if (!quitFromTrayGuard.enter()) return
+  try {
+    return await quitFromTrayInner()
+  } finally { quitFromTrayGuard.exit() }
+}
+async function quitFromTrayInner () {
   state.quitByUser = true
   // P2 2026-09-23: a running pomodoro used to die silently on tray-quit — the ledger only ever
   // records on completeFocus/giveUp, so the in-progress session vanished with no confirm and no
   // record. Ask before tearing everything down (the tray stays alive until confirmed).
-  if (tomatoLiveText) {
+  // D10 (2026-09-27): tomatoLiveText is a LEASE, not a latch — require a push within the TTL so a
+  // dead renderer's stale text cannot show a false "focus in progress" confirm on every quit.
+  if (require('./handlers/shared').isLiveTextFresh(tomatoLiveText, tomatoLiveAt)) {
     try {
       const { dialog } = require('electron')
       const { response } = await dialog.showMessageBox({
@@ -438,7 +460,15 @@ function rebuildTrayMenu () {
 }
 
 /* ================= Single-instance lock & startup ================= */
+// D10: true only for the singleton-lock WINNER after full startup. Declared before its first
+// assignment below — the duplicate instance's app.quit() used to run the whole will-quit flush
+// chain (preventDefault + quitAck + 500ms floor before a no-op flushNow) with a null db handle
+// and no windows.
+let ranFullInit = false
 if (!app.requestSingleInstanceLock()) { app.quit() } else {
+  // D10 (2026-09-27): singleton-lock winner — only this instance may run the will-quit flush chain
+  // (the duplicate's app.quit() has no DB and no windows; see shouldRunQuitFlush in will-quit).
+  ranFullInit = true
   // Round-3 stability (2026-09-26): show() deferred until whenReady during cold-start init — a
   // BrowserWindow before ready hard-throws (see second-instance-gate.js).
   require('./second-instance-gate').wireSecondInstance(app, () => { showMainOrLock() })
@@ -579,6 +609,7 @@ if (!app.requestSingleInstanceLock()) { app.quit() } else {
     tomatoTaskbar.init(win) // taskbar progress/title countdown/thumbnail toolbar (pomodoro, Windows native)
     createTray()
     scheduler.setSoundFile(path.join(__dirname, '../../assets/media/confirm1.ogg'))
+    scheduler.setShowMainEntry(showMainOrLock) // D10: reminder notification clicks honor the security lock
     scheduler.reloadAll(dbApi())
     // Meta GC: clean up orphan keys (residue after a repeat rule is deleted / project deadline & milestones become permanent orphans after a category is deleted)
     try {
@@ -645,6 +676,25 @@ function dbApi () { return { queryTodos: p => dbm.call('queryTodos', p), ...prox
 
 let quitting = false // re-entrancy guard for the will-quit flush window (see below)
 let flushDone = false // flush window finished; second will-quit passes through so the native quit event (updater autoInstallOnAppQuit) fires
+// D10 (2026-09-27): quit-chain guards (extracted to quit-guards.js for plain-node testability).
+const { createHangFallback, createReentrancyGuard, shouldRunQuitFlush } = require('./quit-guards')
+// D10 (2026-09-27): the 3s hang fallback is armed BEFORE the awaited flush steps (see flushNow) —
+// the old code created it only after the sync stop / dbm.close() resolved, so a never-settling
+// await left the windowless process hung forever with no timer.
+const quitHangFallback = createHangFallback({
+  timeoutMs: 3000,
+  onExit: () => {
+    // Hang fallback only; normally unreachable. app.exit() bypasses the quit event entirely, so
+    // electron-updater's autoInstallOnAppQuit would silently SKIP a pending update. When an update
+    // is ready, hand off to quitAndInstall() instead; only hard-exit when nothing is pending (or
+    // the handoff is refused, e.g. portable builds where quitAndInstall returns false).
+    try { if (updater.getStatus().status === 'ready' && updater.quitAndInstall()) return } catch { /* fall through to the hard exit */ }
+    try { app.exit(0) } catch {}
+  }
+})
+// D10 (2026-09-27): quitFromTray re-entrancy guard — a second tray-quit click while the confirm
+// dialog is open used to open a second dialog and race quitByUser.
+const quitFromTrayGuard = createReentrancyGuard()
 // Flush-ack handshake (2026-09-11 P1): the old fixed 500ms window raced the renderer's fire-and-forget
 // dbMirror invokes (.catch(()=>{})) — late writes were silently dropped after dbm.close(). before-quit
 // broadcasts 'app-quitting-flush' with a token; the renderer acks via 'app-quitting-flush-ack' after its
@@ -736,12 +786,20 @@ app.on('will-quit', (event) => {
      flush window → flush+close → app.quit() → will-quit(passthrough) → quit event; process must exit
      exactly once with no lingering tray icon. */
   if (flushDone) return // passthrough: let the native quit (and updater install) proceed
+  // D10 (2026-09-27): a second-instance (singleton-lock loser) has no DB, no windows, nothing to
+  // flush — pass the quit straight through instead of running the full preventDefault + quitAck +
+  // 500ms-floor chain against a null db handle. (Pure decision unit-tested in quit-guards tests.)
+  if (!shouldRunQuitFlush({ ranFullInit, flushDone, quitting })) return
   if (quitting) { event.preventDefault(); return }
   quitting = true
   extWatchGate.arm() // C11: disarm the external-write poll BEFORE the flush window opens
   event.preventDefault()
   const FLUSH_FLOOR_MS = 500
   const flushNow = async () => {
+    // D10 (2026-09-27): arm the 3s hang fallback BEFORE any await — the old code registered it only
+    // after the sync stop / dbm.close() resolved, so a never-settling await hung the process with
+    // no exit timer at all.
+    quitHangFallback.arm()
     try { if (stopDbWatch) stopDbWatch() } catch {} // release the fs.watchFile poll timers before closing
     try { shortcuts.unregisterAll() } catch {}
     // Persist the reminder dedup ledger synchronously (quitting inside the 60s debounce window → reminders resent after restart) + close the db handle (avoids losing one checkpoint and late handle release on Windows)
@@ -754,15 +812,9 @@ app.on('will-quit', (event) => {
     try { if (dbm && dbm.close) dbm.close() } catch {}
     flushDone = true
     app.quit()
-    setTimeout(() => {
-      // Hang fallback only; normally unreachable. 2026-09-10 P2: app.exit() bypasses the quit event
-      // entirely, so electron-updater's autoInstallOnAppQuit would silently SKIP a pending update.
-      // When an update is ready, hand off to quitAndInstall() instead — it quits, installs and
-      // relaunches by itself; only hard-exit when nothing is pending (or the handoff is refused,
-      // e.g. portable builds where quitAndInstall returns false without doing anything).
-      try { if (updater.getStatus().status === 'ready' && updater.quitAndInstall()) return } catch { /* fall through to the hard exit */ }
-      try { app.exit(0) } catch {}
-    }, 3000)
+    // D10 (2026-09-27): the hang fallback armed at flushNow entry STAYS armed through the re-issued
+    // quit — it is exactly the old 3s "quit was swallowed again" backstop, now guaranteed to exist
+    // even when an awaited flush step never settles (the bug this fix closes).
   }
   // All acks already in (or no live window to wait for): keep the old fast path
   const allAcked = () => quitAck.allAcked()

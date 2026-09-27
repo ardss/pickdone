@@ -314,6 +314,7 @@ const RESTORE_SEGMENTS = [
 const META_RESTORE_PREFIXES = [
   'repeatRule:',
   'tomatoEstimateState:',
+  'planChipsSnapshot:',
   'projectDeadline:',
   'projectStatus:',
   'projectCategoryFlag:',

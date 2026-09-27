@@ -111,8 +111,19 @@ function init (mainWin) {
   autoUpdater.allowPrerelease = true
   autoUpdater.allowDowngrade = false
   syncAutoDownload()
-  autoUpdater.on('checking-for-update', () => { state.status = 'checking'; broadcast() })
-  autoUpdater.on('update-available', i => { state.status = autoUpdater.autoDownload ? 'downloading' : 'available'; state.info = i; broadcast() })
+  autoUpdater.on('checking-for-update', () => {
+    // D10: a periodic/error-retry check() overlapping a manual downloadUpdate must not clobber state
+    if (_manualDownload) return
+    state.status = 'checking'; broadcast()
+  })
+  autoUpdater.on('update-available', i => {
+    // D10 (2026-09-27): a check() that fires 'update-available' mid-MANUAL-download used to reset
+    // status to 'available' and replace state.info, so the settings gate read the wrong state and a
+    // second downloadUpdate double-called autoUpdater.downloadUpdate. While a manual download is
+    // in flight, status/info are owned by it.
+    if (_manualDownload) return
+    state.status = autoUpdater.autoDownload ? 'downloading' : 'available'; state.info = i; broadcast()
+  })
   autoUpdater.on('update-not-available', i => { state.status = 'uptodate'; state.info = i; broadcast() })
   autoUpdater.on('download-progress', p => { state.status = 'downloading'; state.info = { percent: Math.round(p.percent || 0) }; broadcast() })
   autoUpdater.on('update-downloaded', i => { state.status = 'ready'; state.info = i; broadcast(); flushOnceOnReady() })
@@ -149,15 +160,24 @@ async function check () {
   return _inFlight
 }
 
-/** Manual download (settings page "Download now"): only meaningful in the "new version found but not auto-downloaded" state */
-async function downloadUpdate () {
-  if (!isActive() || state.status !== 'available') return false
-  autoUpdater.autoDownload = true
-  state.status = 'downloading'; broadcast()
-  try { await autoUpdater.downloadUpdate(); return true } catch (e) {
-    state.status = 'error'; state.info = { message: String(e && e.message || e).slice(0, 200) }; broadcast()
-    return false
-  }
+/** Manual download (settings page "Download now"): only meaningful in the "new version found but not auto-downloaded" state.
+ *  D10 (2026-09-27): idempotent — a second click while a manual download is in flight returns the
+ *  SAME in-flight promise (identity, not a wrapper) instead of double-calling
+ *  autoUpdater.downloadUpdate; and while it runs, the event guards above keep a concurrent check()
+ *  from resetting state mid-download. */
+let _manualDownload = null
+function downloadUpdate () {
+  if (_manualDownload) return _manualDownload
+  if (!isActive() || state.status !== 'available') return Promise.resolve(false)
+  _manualDownload = (async () => {
+    autoUpdater.autoDownload = true
+    state.status = 'downloading'; broadcast()
+    try { await autoUpdater.downloadUpdate(); return true } catch (e) {
+      state.status = 'error'; state.info = { message: String(e && e.message || e).slice(0, 200) }; broadcast()
+      return false
+    } finally { _manualDownload = null }
+  })()
+  return _manualDownload
 }
 
 function quitAndInstall () {

@@ -286,3 +286,241 @@ test('[C15] deleteTodoFilesRelevant failures are reported, not swallowed by an e
   const hits = todo.match(/reportError\('deleteTodoFilesRelevant', err\)/g) || []
   assert.equal(hits.length, 2, 'both purge paths (per-item + empty-bin) report cleanup failures')
 })
+
+/* ================= [tags-drag] SnManageTagsModal stops advertising a nonexistent reorder ===== */
+
+test('[tags-drag] the tag manager rows expose no drag affordance (reorder was never implemented)', () => {
+  const src = read('renderer/js/components/side-nav/SnManageTagsModal.vue')
+  assert.doesNotMatch(src, /cat-mgr-drag/, 'the grab-handle icon is gone (nothing draggable behind it)')
+  assert.doesNotMatch(src, /cursor:\s*grab/, 'no cursor:grab on the rows')
+  assert.doesNotMatch(src, /draggable=|@dragstart|@dragover/i, 'no drag wiring claimed either')
+})
+
+/* ================= [tags-rewrite] mid-loop rejection surfaces and keeps the tag whole ======== */
+
+// Load the component's <script> with stubbed imports (loadRepeatDeleteModal paradigm) — this
+// script is lang="ts", so the type annotations are stripped before the data-URL import.
+async function loadTagsModal () {
+  const src = read('renderer/js/components/side-nav/SnManageTagsModal.vue')
+  let script = src.match(/<script[^>]*>([\s\S]*?)<\/script>/)[1]
+  script = script
+    .replace(/^import[\s\S]*?from\s+'[^']*'\s*$/gm, '')
+    .replace(/\s+as any\b/g, '')
+    .replace(/\s+as HTMLInputElement \| null/g, '')
+    .replace(/:\s*any\b(\[\])?/g, '')
+    // tagRewriteRe's TS signature: `name: string`, `opts?: { consume?: boolean }` + `): RegExp`
+    .replace(/\(name:\s*string/g, '(name')
+    .replace(/,\s*opts\?:\s*\{[^}]*\}/g, ', opts')
+    .replace(/\):\s*RegExp(\s*\{)/g, ') {')
+  const code = 'const defineComponent = x => x\n' +
+    'const extractTags = (c, d) => ((String(c || "") + " " + String(d || "")).match(/#([^\\s#,，。.!?！？]+)/g) || []).map(s => s.slice(1))\n' +
+    script.replace('export default', 'export default')
+  const mod = await import('data:text/javascript,' + encodeURIComponent(code))
+  return mod.default
+}
+
+test('[tags-rewrite] removeTag stops on first failed rewrite: error toast, tag bookkeeping skipped', async () => {
+  const component = await loadTagsModal()
+  const dispatches = []
+  const toasts = { success: [], error: [] }
+  const todos = [
+    { taskId: 't1', taskContent: 'a #work', taskDescribe: '' },
+    { taskId: 't2', taskContent: 'b #work', taskDescribe: '' },
+    { taskId: 't3', taskContent: 'c #work', taskDescribe: '' }
+  ]
+  let updateCalls = 0
+  const self = {
+    // method-to-method calls run through `this`, so the fake component carries the real methods
+    ...component.methods,
+    $store: {
+      state: { todo: { todoList: todos } },
+      dispatch: (a, p) => {
+        dispatches.push([a, p])
+        if (a === 'todo/updateTodoFields') {
+          updateCalls++
+          if (updateCalls === 2) return Promise.reject(new Error('db write failed'))
+        }
+        return Promise.resolve()
+      }
+    },
+    $confirm: () => Promise.resolve(),
+    $message: { success: m => toasts.success.push(m), error: m => toasts.error.push(m), warning: () => {} },
+    $t: k => k
+  }
+  await component.methods.removeTag.call(self, { name: 'work', count: 3 })
+  assert.equal(updateCalls, 2, 'the loop stopped at the first failure')
+  assert.equal(toasts.error.length, 1, 'the failure is toasted, not silent')
+  assert.equal(dispatches.filter(([a]) => a === 'ui/removeUserTag').length, 0,
+    'the tag placeholder survives: removeUserTag is not dispatched on a half-deleted rewrite')
+  assert.equal(toasts.success.length, 0, 'no success toast on a partial rewrite')
+})
+
+test('[tags-rewrite] removeTag dispatches removeUserTag + success toast when every rewrite succeeds', async () => {
+  const component = await loadTagsModal()
+  const dispatches = []
+  const toasts = { success: [], error: [] }
+  const self = {
+    ...component.methods,
+    $store: {
+      state: { todo: { todoList: [{ taskId: 't1', taskContent: 'a #work', taskDescribe: '' }] } },
+      dispatch: (a, p) => { dispatches.push([a, p]); return Promise.resolve() }
+    },
+    $confirm: () => Promise.resolve(),
+    $message: { success: m => toasts.success.push(m), error: m => toasts.error.push(m), warning: () => {} },
+    $t: k => k
+  }
+  await component.methods.removeTag.call(self, { name: 'work', count: 1 })
+  assert.equal(dispatches.filter(([a]) => a === 'ui/removeUserTag').length, 1, 'bookkeeping runs on full success')
+  assert.equal(toasts.success.length, 1)
+  assert.equal(toasts.error.length, 0)
+})
+
+/* ================= [reschedule-crossday] rescheduleExpired keeps time-of-day / reminders ===== */
+
+test('[reschedule-crossday] rescheduleExpired moves a 14:30 schedule and its reminder to today, not midnight', async () => {
+  const { rescheduleExpired } = await import('../../../renderer/js/utils/core.js')
+  const DAY = 86400000
+  const today = new Date(); today.setHours(0, 0, 0, 0)
+  const todayTs = today.getTime()
+  const oldDay = todayTs - DAY
+  const calls = []
+  const dispatch = async (name, payload) => calls.push([name, payload])
+  const t = { taskId: 'a', complete: false, dayStart: oldDay, todoTime: oldDay + 14 * 3600000, reminderTime: oldDay + 9 * 3600000 }
+  await rescheduleExpired(dispatch, [t], todayTs)
+  const updates = calls.filter(([name]) => name === 'todo/updateTodoFields')
+  assert.equal(updates.length, 1)
+  const patch = updates[0][1].patch
+  assert.equal(patch.dayStart, todayTs, 'row moves to today')
+  assert.equal(patch.todoTime, todayTs + 14 * 3600000, 'the 14:30 schedule stays 14:30 (was hard-wiped to 00:00)')
+  assert.equal(patch.reminderTime, todayTs + 9 * 3600000, 'the reminder is not orphaned on the expired day')
+})
+
+/* ================= [restore-single-path] bin restore goes through todo/restoreFromRecycle ==== */
+
+test('[restore-single-path] restoreFromRecycle merges the dayPatch into its atomic restore patch', async () => {
+  const todo = (await import('../../../renderer/js/store/todo.js')).default
+  const dispatches = []
+  const dispatch = (a, p) => { dispatches.push([a, p]); return Promise.resolve({ taskId: p && p.taskId }) }
+  globalThis.window.todoAPI = { dbCall: async () => null }
+  const ctx = { commit () {}, dispatch }
+  await todo.actions.restoreFromRecycle.call({ state: { todo: { todoList: [] } } }, ctx,
+    { taskId: 't1', repeatId: 'r1', dayPatch: { dayStart: 12345, todoTime: 12345 + 3600000 } })
+  const patch = dispatches[0][1].patch
+  assert.equal(patch.delete, false, 'still an undelete')
+  assert.equal(patch.deletedAt, 0, 'deletedAt is reset (was never reset via the bare updateTodoFields path)')
+  assert.equal(patch.dayStart, 12345, 'the dayPatch fields ride the same restore entry')
+  assert.equal(patch.todoTime, 12345 + 3600000)
+})
+
+test('[restore-single-path] RecycleBinView restores via todo/restoreFromRecycle, not bare updateTodoFields', () => {
+  const src = read('renderer/js/views/RecycleBinView.vue')
+  assert.match(src, /dispatch\('todo\/restoreFromRecycle'/,
+    'restore()/pickDate() share the store action (chips snapshot + deletedAt reset + B5 repeatId guard on every entry)')
+  assert.doesNotMatch(src, /dispatch\('todo\/updateTodoFields'/,
+    'the bare updateTodoFields bypass is gone (it skipped all three restore guarantees)')
+})
+
+/* ================= [chipsnapshot-backup] bin tasks keep their chip snapshot through backups == */
+
+test('[chipsnapshot-backup] collectMetaState gathers planChipsSnapshot and both restore whitelists accept it', async () => {
+  const { metaStateKeys } = await import('../../../renderer/js/store/helpers/todoBackup.js')
+  const rootState = { category: { list: [] } }
+  const state = { todoList: [], recycleList: [{ taskId: 'b1', status: 'delete' }] }
+  const keys = metaStateKeys(rootState, state)
+  assert.ok(keys.includes('planChipsSnapshot:b1'),
+    'a binned task is live state: its chip-restore meta is collected (was silently lost on disaster restore)')
+  assert.ok(!keys.some(k => k.startsWith('catProjectMetaBak')), 'transient catProjectMetaBak stays excluded')
+  // without the restore whitelists the collector fix is dead code
+  const tab = read('renderer/js/components/settings/SettingsDataTab.vue')
+  assert.match(tab, /'planChipsSnapshot:',/, 'SettingsDataTab META_RESTORE_PREFIXES accepts planChipsSnapshot')
+  const rec = read('src/main/dbRecovery.cjs')
+  assert.match(rec, /'planChipsSnapshot:',/, 'dbRecovery META_RESTORE_PREFIXES accepts planChipsSnapshot')
+})
+
+/* ================= [tombstone-zero] recycleBinAutoDeleteDays=0 keeps category tombstones ===== */
+
+test('[tombstone-zero] with recycleBinAutoDeleteDays=0 an aged tombstone is still re-attached on init', async () => {
+  const category = (await import('../../../renderer/js/store/category.js')).default
+  globalThis.localStorage.setItem('categoryState', JSON.stringify({
+    list: [{ categoryId: 500, categoryName: 'Old', delete: true, deletedAt: 1000 }]
+  }))
+  const commits = []
+  globalThis.window.todoAPI = {
+    dbCall: async (op) => op === 'getAllCategories' ? [{ categoryId: 1, categoryName: 'Live' }] : null,
+    getMetaMany: async () => []
+  }
+  const self = { dispatch: async () => {} }
+  const ctx = { commit: (m, p) => commits.push([m, p]), rootState: { settings: { recycleBinAutoDeleteDays: 0 } } }
+  await category.actions.init.call(self, ctx)
+  const merged = commits.find(([m]) => m === 'setListFromDb')[1]
+  assert.ok(merged.some(c => c.categoryId === 500 && c.delete),
+    'the "never purge" setting keeps the recovery entry (0 used to read as 30 days)')
+})
+
+/* ================= [restore-sanitize] settings restore sanitizes the backup blob ============= */
+
+test('[restore-sanitize] restore drops unknown keys and non-enum values from the backup blob', async () => {
+  const settings = (await import('../../../renderer/js/store/settings.js')).default
+  const i18n = await import('../../../renderer/js/i18n/index.js')
+  globalThis.localStorage.setItem('appLocale', 'en-US')
+  const state = { appLocale: 'en-US', weekStartDay: 'mon' }
+  // mutations.restore(state, saved) — a plain two-arg call (no .call: the first PARAM is the state)
+  settings.mutations.restore(state, { junkKey: 'x', weekStartDay: 'monday', appLocale: 'xx-YY', securityLockPassword: 'pw-restored' })
+  assert.equal('junkKey' in state, false, 'unknown/deprecated keys never reach live state')
+  assert.equal(state.weekStartDay, 'mon', 'enum junk is dropped, the declared default stands')
+  assert.equal(state.appLocale, 'en-US', 'a junk locale never flips the UI locale')
+  assert.equal(state.securityLockPassword, 'pw-restored',
+    'C3 carve-out: restore is the user\'s own backup, the secret survives (maint-d7 lock-restore contract)')
+  // persist() debounces the LS write 150ms — wait it out, then assert the persisted mirror too
+  await new Promise(r => setTimeout(r, 250))
+  const blob = JSON.parse(globalThis.localStorage.getItem('settingsState'))
+  assert.equal('junkKey' in blob, false, 'the persisted LS mirror is sanitized too')
+  assert.equal(blob.appLocale, 'en-US')
+  // [restore-locale-enum] the junk locale must not reach the i18n boot cache / hot-apply path either
+  assert.notEqual(i18n.default && i18n.default.global ? i18n.default.global.locale : '', 'xx-YY',
+    'i18n locale was never flipped to the junk value')
+})
+
+/* ================= [habits-savedat] applyExternalPatch rejects an unsaved patch ============== */
+
+test('[habits-savedat] applyExternalPatch with no savedAt is a no-op against saved local state', async () => {
+  const habits = (await import('../../../renderer/js/store/habits.js')).default
+  const s = { habits: [{ id: 'keep' }], moments: [], savedAt: 100 }
+  // plain (state, payload) call — a .call(s, payload) would shift the payload into the state slot
+  habits.mutations.applyExternalPatch(s, { fields: { habits: [{ id: 'peer' }] } })
+  assert.equal(s.habits.length, 1, 'an unsaved peer patch is dropped (siblings reject it too)')
+  assert.equal(s.habits[0].id, 'keep')
+  assert.equal(s.savedAt, 100, 'no savedAt bump on a rejected round')
+})
+
+/* ================= [sync-empty-version] a no-op sync no longer bumps state.version ========= */
+
+test('[sync-empty-version] syncTodos with an already-synced table leaves state.version unchanged', async () => {
+  const todo = (await import('../../../renderer/js/store/todo.js')).default
+  const state = {
+    isSyncing: false,
+    version: 5,
+    todoList: [{ taskId: 'a', status: 'sync', version: 3 }],
+    recycleList: []
+  }
+  const ctx = {
+    state,
+    commit: (m) => { if (m === 'bumpVersion') state.version++ },
+    dispatch: async () => {}
+  }
+  await todo.actions.syncTodos.call({}, ctx)
+  assert.equal(state.version, 5, 'an empty round neither bumps the version nor needs the retry path')
+  assert.equal(state.isSyncing, false, 'the syncing flag is still released (finally block)')
+})
+
+/* ================= [nan-comparator] todayDoneList / recycleBin sorts are NaN-safe =========== */
+
+test('[nan-comparator] todayDoneList and recycleBin comparators carry the ||0 NaN fallback', () => {
+  // 2026-09-27 structure-size ratchet: computeViews moved verbatim to helpers/todoComputeViews.js
+  // (the action in todo.js is a thin wrapper), so this source contract reads the implementation.
+  const todo = read('renderer/js/store/helpers/todoComputeViews.js')
+  assert.match(todo, /todayDoneList: todayDoneList\.sort\(\(a, b\) => \(b\.completedAt \|\| b\.updateTime \|\| 0\) - \(a\.completedAt \|\| a\.updateTime \|\| 0\)\)/,
+    'a completed row with NaN completedAt/updateTime keeps a deterministic position')
+  assert.match(todo, /recycleBin: \[\.\.\.store\.state\.todo\.recycleList\]\.sort\(\(a, b\) => \(b\.deletedAt \|\| b\.updateTime \|\| 0\) - \(a\.deletedAt \|\| a\.updateTime \|\| 0\)\)/,
+    'a binned row with NaN deletedAt/updateTime keeps a deterministic position')
+})

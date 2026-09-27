@@ -1,10 +1,16 @@
 <template>
 
   <div class="qa-bar">
-    <div class="qa-inputwrap">
+      <div class="qa-inputwrap" :class="{ 'qa-failed': failed }">
       <input ref="inp" v-model="text" class="qa-input" :placeholder="$t('statsD.QuickAdd.placeholder')"
              :aria-label="$t('statsD.QuickAdd.ariaLabel')"
+             @input="failed = false"
              @keyup.enter="e => { if (e.isComposing || e.keyCode === 229) return; onEnter() }"/>
+      <transition name="fade">
+        <!-- Inline failure feedback for the 64px standalone quick-add window: a $message toast is
+             clipped there (overflow:hidden), so quiet mode surfaces the error inside the card -->
+        <div v-if="failed" class="qa-error" role="alert">{{ $t('statsD.QuickAdd.createFailed') }}</div>
+      </transition>
       <transition name="fade">
         <span v-if="nlHasLabel()" class="qa-date-chip" role="button" tabindex="0"
               :aria-label="$t('statsD.QuickAdd.clearDateAria', { d: nlLabel() })" @click="clearDate"
@@ -42,6 +48,9 @@ export default {
   data () {
     return {
       text: '',
+      // Set by a failed submit in quiet mode (standalone window) — the toast path is unavailable
+      // there; cleared by the next input so the field stays retryable
+      failed: false,
       // Single source of truth for the date: null = not manually set (falls back to NL parsing / default today), number = manually set, 0 = explicitly "no date"
       // ✕ clear sets it to 0; the manual value takes precedence over the parsed one, no need for mutual-exclusion patches like suppressParsed
       pickedDate: null as any
@@ -152,9 +161,13 @@ export default {
       if (this.$announce) this.$announce(msg)
       this.$emit('created', { content, date: d })
       } catch (err) {
-        // Failure must be visible and retryable: toast + keep the input so the user can resubmit
+        // Failure must be visible and retryable: toast + keep the input so the user can resubmit.
+        // Quiet mode (standalone 480x64 window) mirrors the success path's quiet contract: the
+        // toast is clipped by the tiny viewport (overflow:hidden), so surface the failure inline
+        // on the card instead — the input is kept and the window stays open for the retry.
         console.error('[quick-add] addTodo failed:', err)
-        this.$message.error(this.$t('statsD.QuickAdd.createFailed'))
+        if (this.quiet) this.failed = true
+        else this.$message.error(this.$t('statsD.QuickAdd.createFailed'))
       } finally { this._submitting = false }
     }
   },
@@ -289,4 +302,12 @@ html[data-theme="dark"] .qa-inputwrap:focus-within { background: var(--active-bg
    历史：本段原为构建产物逆向的 navbar/m-select 体系，页头统一重构时删除。 */
 .stat-page .content{flex:1;overflow:auto;background:var(--bg)}
 @keyframes qa-chip-pop { from { opacity: 0; transform: scale(.85); } }
+/* —— Inline failure feedback (standalone quick-add window: in quiet mode the $message toast is clipped by the 64px viewport) —— */
+.qa-inputwrap.qa-failed { border-color: var(--danger-strong, #d9534f); animation: qa-failed-shake .3s ease; }
+.qa-error {
+  position: absolute; left: 17px; right: 46px; bottom: 2px; z-index: 3;
+  color: var(--danger-strong, #d9534f); font-size: var(--fs-2xs); line-height: 1.2;
+  pointer-events: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+@keyframes qa-failed-shake { 25% { transform: translateX(-3px); } 75% { transform: translateX(3px); } }
 </style>

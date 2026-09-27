@@ -3,6 +3,7 @@
  * Rules aligned with the project's baseline reference analysis
  */
 import i18n, { lookupMessage } from '../i18n/index.js'
+import { crossDayMovePatch } from './crossDayMove.js'
 // UMD globals (index.html script tags): read once at top level (node tests inject window first via setup.mjs, then import);
 // when missing, the error is deferred to first call — no longer blowing up the import chain (audit S4)
 function g (k) {
@@ -90,8 +91,16 @@ export async function rescheduleExpired (dispatch, todos, todayTs) {
   for (const t of todos) {
     if (!t.complete && t.dayStart && t.dayStart < todayTs) {
       snap.push({ id: t.taskId, dayStart: t.dayStart, todoTime: t.todoTime })
+      // [reschedule-crossday fix] the hand-written patch hard-wrote todoTime: todayTs (midnight,
+      // wiping a 14:30 schedule) and never moved reminderTime/reminderExtra off the expired day —
+      // the exact bug class crossDayMove.js was extracted to fix (maint-0924 A1/A2); this third
+      // path was missed. Use the shared builder: time-of-day anchored to the old day travels to
+      // the new day, everything else is omitted (untouched).
+      const startOfTs = ts => dayjs(ts).startOf('day').valueOf()
+      const patch = crossDayMovePatch(t, todayTs, startOfTs)
       // _deferViews: one view rebuild after the loop instead of one per row (each was an O(n) computeViews)
-      await dispatch('todo/updateTodoFields', { taskId: t.taskId, patch: { dayStart: todayTs, todoTime: todayTs, _deferViews: true } })
+      patch._deferViews = true
+      await dispatch('todo/updateTodoFields', { taskId: t.taskId, patch })
       n++
     }
   }

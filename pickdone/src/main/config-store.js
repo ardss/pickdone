@@ -32,38 +32,71 @@ function consumeQuarantineNotice () {
   _quarantineNotice = false
   return had
 }
-function readConfig () {
+// D10 (2026-09-27): transient IO codes get a short backoff retry BEFORE quarantining — an AV
+// scan / EBUSY lock on a perfectly good config.json used to rename it to .bad immediately, and the
+// next writeConfig persisted an amputated defaults object while the real config sat orphaned.
+// Only JSON parse errors (definitively corrupt content) quarantine immediately.
+const TRANSIENT_READ_CODES = new Set(['EACCES', 'EBUSY', 'EIO', 'EPERM'])
+function readBackoffMs (attempt) { return attempt * 50 } // 50ms, 100ms
+function sleepBackoff (ms) {
+  // Synchronous backoff: readConfig's contract is sync (every caller reads the return value).
   try {
-    const c = JSON.parse(fs.readFileSync(configFile(), 'utf8'))
-    // Fill in defaults key by key: replacing only when the whole object is missing would make old configs miss later-added keys (settings page shows "not set")
-    c.shortcutKeySettings = { ...DEFAULT_SHORTCUTS, ...(c.shortcutKeySettings || {}) }
-    // 旧默认值一次性迁移:存量化配置里还钉着冲突键 ctrl+shift+a 的搬到新默认
-    if (c.shortcutKeySettings.quickAddGlobal === 'ctrl+shift+a') c.shortcutKeySettings.quickAddGlobal = DEFAULT_SHORTCUTS.quickAddGlobal
+    const buf = new SharedArrayBuffer(4)
+    Atomics.wait(new Int32Array(buf), 0, 0, ms)
+  } catch { /* no SAB/Atomics.wait: fall back to an immediate retry */ }
+}
+function quarantineConfig () {
+  // P2 2026-09-20: the rename itself used to be swallowed silently; when it FAILS the unreadable
+  // file is still in place, so writes must be gated off (no clobber) instead of proceeding.
+  // D10: never re-rename while the read-failure gate is already active — the previous rename
+  // failed (file in place + locked); retrying would just fail again over live state.
+  if (_readFailed) return
+  try {
+    fs.renameSync(configFile(), configFile() + '.bad')
     _readFailed = false
-    return c
-  } catch (e) {
-    // Only a genuinely missing file is a first install — return defaults silently.
-    if (e && e.code === 'ENOENT') { _readFailed = false; return { shortcutKeySettings: { ...DEFAULT_SHORTCUTS } } }
-    // 2026-09-10 P2: any OTHER failure (JSON parse error from a truncated write, EACCES/EBUSY IO) used to
-    // fall through to the same fresh-install default — and the next writeConfig() persisted that amputated
-    // object, permanently resetting winBounds/locale/lockPassword. Keep the evidence instead: rename the
-    // bad file to config.json.bad (best-effort) so it can be inspected or recovered by hand; those keys
-    // are lost from the live config but NOT destroyed.
-    // P2 2026-09-20: the rename itself used to be swallowed silently; when it FAILS the unreadable
-    // file is still in place, so writes must be gated off (no clobber) instead of proceeding.
-    try {
-      fs.renameSync(configFile(), configFile() + '.bad')
-      _readFailed = false
-      // Round-3 stability (2026-09-26): a SUCCESSFUL quarantine was the one fully silent path —
-      // only the failed rename logged. Warn here too and raise the user-visible notice flag.
-      _quarantineNotice = true
-      console.warn('[config-store] unreadable config.json quarantined as config.json.bad — previous settings preserved there; security lock disabled until re-enabled')
-    } catch (renameErr) {
-      console.warn('[config-store] quarantine of unreadable config.json failed:', renameErr && renameErr.message, '- writes are gated off until a read succeeds')
-      _readFailed = true
-    }
-    return { shortcutKeySettings: { ...DEFAULT_SHORTCUTS } }
+    // Round-3 stability (2026-09-26): a SUCCESSFUL quarantine was the one fully silent path —
+    // only the failed rename logged. Warn here too and raise the user-visible notice flag.
+    _quarantineNotice = true
+    console.warn('[config-store] unreadable config.json quarantined as config.json.bad — previous settings preserved there; security lock disabled until re-enabled')
+  } catch (renameErr) {
+    console.warn('[config-store] quarantine of unreadable config.json failed:', renameErr && renameErr.message, '- writes are gated off until a read succeeds')
+    _readFailed = true
   }
+}
+function readConfig () {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) sleepBackoff(readBackoffMs(attempt))
+    let raw = null
+    let readErr = null
+    try { raw = fs.readFileSync(configFile(), 'utf8') } catch (e) { readErr = e }
+    if (readErr) {
+      // Only a genuinely missing file is a first install — return defaults silently.
+      if (readErr.code === 'ENOENT') { _readFailed = false; return { shortcutKeySettings: { ...DEFAULT_SHORTCUTS } } }
+      // D10: transient IO (AV scan / EBUSY lock) — retry before quarantining; the file may be fine.
+      if (TRANSIENT_READ_CODES.has(readErr.code)) continue
+      break // non-transient IO (e.g. EISDIR): quarantining is the only path forward
+    }
+    try {
+      const c = JSON.parse(raw)
+      // Fill in defaults key by key: replacing only when the whole object is missing would make old configs miss later-added keys (settings page shows "not set")
+      c.shortcutKeySettings = { ...DEFAULT_SHORTCUTS, ...(c.shortcutKeySettings || {}) }
+      // 旧默认值一次性迁移:存量化配置里还钉着冲突键 ctrl+shift+a 的搬到新默认
+      if (c.shortcutKeySettings.quickAddGlobal === 'ctrl+shift+a') c.shortcutKeySettings.quickAddGlobal = DEFAULT_SHORTCUTS.quickAddGlobal
+      _readFailed = false
+      return c
+    } catch (e) {
+      // D10: JSON parse error = the content is definitively corrupt — quarantine immediately
+      // (no retry; a re-read will not heal it).
+      break
+    }
+  }
+  // 2026-09-10 P2: any OTHER failure (JSON parse error from a truncated write, persistent EACCES/EBUSY
+  // IO after the D10 retries) used to fall through to the same fresh-install default — and the next
+  // writeConfig() persisted that amputated object, permanently resetting winBounds/locale/lockPassword.
+  // Keep the evidence instead: rename the bad file to config.json.bad (best-effort) so it can be
+  // inspected or recovered by hand; those keys are lost from the live config but NOT destroyed.
+  quarantineConfig()
+  return { shortcutKeySettings: { ...DEFAULT_SHORTCUTS } }
 }
 // P2 2026-09-19 single-flight write queue: writes go through one serialization gate so read-modify-
 // write cycles can never interleave or reorder. Today the write body is fully synchronous, which

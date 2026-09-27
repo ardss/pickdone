@@ -109,9 +109,11 @@
  *  Top-right mini buttons: minimize / close (abandon + reset) / ⋮ task menu (picking a task only attaches it without starting; can rebind at any phase).
  *  The ⋮ menu and abandon dialog share the "temporarily enlarged window" mechanism; the browser debug host uses widget-preview (class-name enlargement).
  *  Note: never pop a native dialog on a transparent frameless window — Windows will paint a system title bar onto the host window. */
-import { formatMMSS } from '../utils/tomatoShared.js'
+import { formatMMSS, focusedElapsedSec } from '../utils/tomatoShared.js'
 import { NOISES } from '../utils/mediaRegistry.js'
 import { remainSecOfAnnounce } from '../store/helpers/tomatoAnnounceShared.js'
+// Drag/dblclick methods (pure relocation — spread into `methods` below)
+import { tomatoFloatDragMethods } from './tomatoFloatDrag.js'
 
 /** The browser debug host shim's todoAPI carries a version stamp; the real preload does not */
 function isPreviewHost () {
@@ -128,6 +130,9 @@ export default {
       abandonReason: '',
       menuOpen: false,
       noiseOpen: false,
+      // Wall-clock tick refreshed by the 500ms loop; Date.now() inside a computed is not reactive,
+      // so displayClock needs a data field to re-derive the "focused for" forward count
+      now: Date.now(),
       preview: isPreviewHost()
     }
   },
@@ -158,7 +163,7 @@ export default {
        quantity (this focus session) as live data instead of repeating it in static small text */
     displayClock () {
       if (this.abandoning && this.working && this.st && this.st.startedAt) {
-        return formatMMSS(Math.max(0, Math.floor((this.now - this.st.startedAt) / 1000)))
+        return formatMMSS(focusedElapsedSec(this.st.startedAt, this.now))
       }
       return this.clock
     },
@@ -228,6 +233,7 @@ export default {
       if (window.todoAPI && window.todoAPI.showMainFromFloat) window.todoAPI.showMainFromFloat()
     },
     refresh () {
+      this.now = Date.now()
       this.st = this.read()
       // P1-6 (2026-09-19 UX review): the announce getter caches on store state and Date.now() is
       // not reactive — dispatch the store prune on this 500ms tick so a peer that crashed
@@ -323,44 +329,12 @@ export default {
       this.cancelAttach()
       this.menuOpen = false
     },
-    /* Whole-card drag — left button only, excluding button area/menu/dialog; exclude first, then setPointerCapture
-       (capture redirects subsequent clicks to the captured element, so buttons would never receive the click) */
-    startDrag (e) {
-      if (this._dragging) this.stopDrag()
-      if (e.button !== 0) return
-      const t = e.target
-      if (this._isCardInteractive(t)) return
-      this._dragging = true
-      this._dragPointerId = e.pointerId
-      this._dragTarget = e.currentTarget
-      if (this._dragTarget.setPointerCapture) {
-        try { this._dragTarget.setPointerCapture(this._dragPointerId) } catch (err) { /* already released, etc. */ }
-      }
-      if (window.todoAPI) window.todoAPI.startTomatoFloatDrag()
-      e.preventDefault()
-    },
-    /* Interactive areas on the card (buttons/menu/dialog) — one shared exclusion list for drag and double-click */
-    _isCardInteractive (t) {
-      return !!(t && t.closest && (t.closest('.tomato__corner') || t.closest('.tf-menu') || t.closest('.tomato__knob') || t.closest('.tomato__task-x') || t.closest('.tf-abandon') || t.closest('.tf-noise')))
-    },
-    /* Double-click empty card area = summon main window (added 2026-09-02): the float window is non-activatable (focusable:false),
-       summoning goes through the main process showMainOrLock (covering lock-screen state redirect to the lock window,
-       and all branches for rebuilding a destroyed main window) */
-    onCardDblClick (e) {
-      const t = e.target
-      if (this._isCardInteractive(t)) return
-      if (window.todoAPI && window.todoAPI.showMainFromFloat) window.todoAPI.showMainFromFloat()
-    },
-    stopDrag (e) {
-      if (!this._dragging) return
-      if (e && e.pointerId != null && e.pointerId !== this._dragPointerId) return
-      this._dragging = false
-      const t = this._dragTarget
-      if (t && t.hasPointerCapture && t.hasPointerCapture(this._dragPointerId)) t.releasePointerCapture(this._dragPointerId)
-      this._dragPointerId = null
-      this._dragTarget = null
-      if (window.todoAPI) window.todoAPI.stopTomatoFloatDrag()
-    }
+    // Whole-card drag + double-click summon: implementations live verbatim in views/tomatoFloatDrag.js
+    // (size ratchet); these thin delegates keep the component's method surface identical.
+    startDrag (e) { return tomatoFloatDragMethods.startDrag.call(this, e) },
+    _isCardInteractive (t) { return tomatoFloatDragMethods._isCardInteractive.call(this, t) },
+    onCardDblClick (e) { return tomatoFloatDragMethods.onCardDblClick.call(this, e) },
+    stopDrag (e) { return tomatoFloatDragMethods.stopDrag.call(this, e) }
   },
   mounted () {
     if (this.preview) {

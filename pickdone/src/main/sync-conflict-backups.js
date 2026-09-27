@@ -91,6 +91,17 @@ function pruneBackups (call, originalKey) {
   } catch { /* prune is best-effort */ }
 }
 
+// D10 (2026-09-27): snapshot keys used Date.now().toString(36) as their ONLY suffix — two restores
+// for the same originalKey within the same millisecond (double-fired restore) minted the identical
+// snapKey and the second setMeta silently overwrote the first winner snapshot. An in-process
+// monotonic counter disambiguates (mirrors the `<taskId>-conflict-<ts36>-<seq36>` tombstone naming
+// the sync wave uses); pruneBackups still bounds growth.
+let snapSeq = 0
+function snapKeyFor (originalKey) {
+  snapSeq = (snapSeq + 1) % Number.MAX_SAFE_INTEGER
+  return META_CONFLICT_BACKUP_PREFIX + originalKey + '.' + Date.now().toString(36) + '-' + snapSeq.toString(36)
+}
+
 module.exports = {
   /** Returns the two renderer-callable ops bound to a dbCall accessor: dbCall() -> (op, params) => any */
   ops (dbCall) {
@@ -153,8 +164,7 @@ module.exports = {
             const snap = JSON.parse(JSON.stringify(current)) // detach from the live row list
             delete snap.conflictOf
             delete snap.conflictAt
-            const ts36 = Date.now().toString(36)
-            snapKey = META_CONFLICT_BACKUP_PREFIX + originalKey + '.' + ts36
+            snapKey = snapKeyFor(originalKey)
             call('setMeta', [snapKey, JSON.stringify({ key: originalKey, value: snap, lostAt: Date.now() })])
             pruneBackups(call, originalKey)
           }
@@ -180,8 +190,7 @@ module.exports = {
         }
         const current = call('getMeta', originalKey)
         if (current != null) {
-          const ts36 = Date.now().toString(36)
-          call('setMeta', [META_CONFLICT_BACKUP_PREFIX + originalKey + '.' + ts36, JSON.stringify({ key: originalKey, value: current, lostAt: Date.now() })])
+          call('setMeta', [snapKeyFor(originalKey), JSON.stringify({ key: originalKey, value: current, lostAt: Date.now() })])
           // Wave-B P3: the re-backup must honor the same 20-per-key cap as the apply path's
           // writeMetaConflictBackup (sync-apply.js) — shared pruneBackups (also used by the
           // C8 entity re-backup above).

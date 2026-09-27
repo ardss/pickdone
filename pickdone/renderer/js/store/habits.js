@@ -230,7 +230,10 @@ export default {
         ? payload.fields
         : payload // tolerate the bare blob shape { habits, moments, savedAt }
       const savedAt = Number(payload.savedAt) || Number(fields.savedAt) || 0
-      if (savedAt && savedAt < (s.savedAt || 0)) return // stale peer round — already superseded
+      // [patch-savedat-guard fix] a missing/0 savedAt used to bypass the staleness guard and apply
+      // unconditionally; siblings replaceAll/applyExternal treat missing savedAt as 0 and reject
+      // against a saved local state. Same rule: an unsaved patch is stale — drop it.
+      if ((savedAt || 0) < (s.savedAt || 0)) return // stale peer round — already superseded
       let changed = false
       if (Array.isArray(fields.habits)) { normalizeHabitRecords(fields.habits); s.habits = fields.habits; changed = true }
       if (Array.isArray(fields.moments)) { s.moments = fields.moments; changed = true }

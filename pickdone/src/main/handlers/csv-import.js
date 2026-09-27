@@ -17,18 +17,49 @@ const { makeAssertMainWindow } = require('./shared')
 // The parse runs in a worker thread; importItems (DB writes) stays in the main
 // process because it shares the app database via cli/lib.js.
 const IMPORT_WORKER_TIMEOUT_MS = 30000
+// D10 (2026-09-27): worker-stacking guard. Timeout abandons a parse worker with only a best-effort
+// terminate() (which cannot force-reclaim a worker stuck in a structured clone), and nothing
+// bounded concurrency — repeated pathological previews accumulated unreclaimable threads + buffers.
+// Two caps: at most IMPORT_MAX_OUTSTANDING parses in flight (a new one is refused with a coded BUSY
+// error), and a circuit breaker after IMPORT_MAX_LEAKED timed-out workers (terminate() could not
+// reclaim them — stop minting new threads for this process lifetime).
+const IMPORT_MAX_OUTSTANDING = 2
+const IMPORT_MAX_LEAKED = 3
+const outstandingWorkers = new Set()
+const leakedWorkers = new Set()
+function __workerRegistry () { return { outstanding: outstandingWorkers.size, leaked: leakedWorkers.size } } // test seam
+function __resetWorkerRegistry () { outstandingWorkers.clear(); leakedWorkers.clear() } // test-only
 
 function logTerminationFailure (err) {
   try { require('electron-log').warn('[Import] parse worker terminate() failed', err) } catch { /* no logger available */ }
 }
 
 function runImportParse (text, format = 'auto') {
+  // D10: concurrency + leak caps before minting a new thread (coded error, same '[CODE] msg'
+  // convention as the worker failure path so the renderer can show friendly copy).
+  if (outstandingWorkers.size >= IMPORT_MAX_OUTSTANDING) {
+    const e = new Error('[BUSY] import: another CSV parse is still in flight — wait for it to finish')
+    e.code = 'BUSY'
+    return Promise.reject(e)
+  }
+  if (leakedWorkers.size >= IMPORT_MAX_LEAKED) {
+    const e = new Error('[BUSY] import: too many unreclaimable parse workers (repeated timeouts) — restart the app to import again')
+    e.code = 'BUSY'
+    return Promise.reject(e)
+  }
   return new Promise((resolve, reject) => {
     let settled = false
+    let timedOut = false
     const finish = (fn, arg) => {
       if (settled) return
       settled = true
       clearTimeout(timer)
+      outstandingWorkers.delete(worker)
+      if (timedOut) {
+        // D10: this worker is (at best) terminating asynchronously and may be clone-stuck — count
+        // it against the leak breaker so unbounded thread accumulation is impossible.
+        leakedWorkers.add(worker)
+      }
       // H7 (2026-09-12): terminate() is async and can reject (e.g. while the worker is stuck in a
       // structured-clone of a huge buffer) — an unhandled rejection here would crash the main process.
       // It still cannot FORCE-reclaim such a worker (structural V8 limitation: a clone in flight is not
@@ -43,7 +74,8 @@ function runImportParse (text, format = 'auto') {
       ? path.join(process.resourcesPath, 'src', 'main', 'import-worker.js')
       : path.join(__dirname, '..', 'import-worker.js')
     const worker = new Worker(workerEntry, { workerData: { text, format } })
-    const timer = setTimeout(() => finish(reject, new Error('import: parse worker timed out after ' + IMPORT_WORKER_TIMEOUT_MS + 'ms')), IMPORT_WORKER_TIMEOUT_MS)
+    outstandingWorkers.add(worker) // D10: tracked so concurrent parses are capped
+    const timer = setTimeout(() => { timedOut = true; finish(reject, new Error('import: parse worker timed out after ' + IMPORT_WORKER_TIMEOUT_MS + 'ms')) }, IMPORT_WORKER_TIMEOUT_MS)
     worker.on('message', m => {
       if (m && m.ok) finish(resolve, m)
       else {
@@ -61,7 +93,6 @@ function runImportParse (text, format = 'auto') {
     worker.on('exit', code => { if (code !== 0) finish(reject, new Error('import: parse worker exited with code ' + code)) })
   })
 }
-
 /** sha256 of the exact previewed text (TOCTOU guard, fix 2026-09-19): import:run compares the file's
  *  current content hash against the one approved at preview so the user never executes report B having
  *  approved report A when the file changed between the two IPC calls. */
@@ -213,3 +244,10 @@ module.exports = function importHandlers (ctx) {
     }
   }
 }
+// D10: exported for unit tests (real worker_threads — no electron dependency); attached AFTER the
+// factory assignment so they survive the module.exports replacement.
+module.exports.runImportParse = runImportParse
+module.exports.__workerRegistry = __workerRegistry
+module.exports.__resetWorkerRegistry = __resetWorkerRegistry
+module.exports.IMPORT_MAX_OUTSTANDING = IMPORT_MAX_OUTSTANDING
+module.exports.IMPORT_MAX_LEAKED = IMPORT_MAX_LEAKED
