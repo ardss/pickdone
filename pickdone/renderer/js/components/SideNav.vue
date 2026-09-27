@@ -175,21 +175,16 @@
 /** Left sidebar -- structure/icons/styles aligned with the reference: user row, search, 5 main nav items, categories, tags, bottom buttons */
 import { visibleNavRoutes } from '../utils/nav-gate.js'
 import { applyNarrow, toggleCollapse } from '../utils/navCollapse.js'
-import i18n from '../i18n/index.js'
 import WeatherWidget from './WeatherWidget.vue'
 import SnTagPanel from './side-nav/SnTagPanel.vue'
 import SnManageCategoriesModal from './side-nav/SnManageCategoriesModal.vue'
 import SnManageTagsModal from './side-nav/SnManageTagsModal.vue'
 import SnCategoryItem from './side-nav/SnCategoryItem.vue'
 import SnFootActions from './side-nav/SnFootActions.vue'
-import { NAV_ITEMS, navKeyOfRoute } from '../views/registry.js'
-import { commit as commitCommand } from "../utils/commandBus.js"
+import { navKeyOfRoute } from '../views/registry.js'
+import { NAV_ICON, NAV_ORDER } from './side-nav/navConfig.js'
+import * as handlers from './side-nav/sideNavHandlers.js'
 import { deleteCategoryWithUndo } from './side-nav/categoryDelete.js'
-
-// Icons/copy/order are all derived from views/registry.js (single source of truth); labelKey is resolved via navLabel() at render time -- there is no component context at module top level, calling this.$t directly would blow up the whole module (white screen)
-const NAV_ICON = Object.fromEntries(NAV_ITEMS.map(n => [n.route, n.icon]))
-const NAV_LABEL = Object.fromEntries(NAV_ITEMS.map(n => [n.route, { i18n: n.labelKey }]))
-const NAV_ORDER = NAV_ITEMS.map(n => n.route)
 
 export default {
   name: 'SideNav',
@@ -266,32 +261,12 @@ export default {
     NAV_ORDER () { return NAV_ORDER },
     NAV_ICON () { return NAV_ICON },
     NAV_LABEL () { return NAV_LABEL },
-    /* Project warning badge: number of projects with an approaching deadline/milestone due (within 7 days, including overdue) — the template previously referenced a never-declared projectWarn so the badge was always empty (confirmed by the template identifier guard's first run) */
-    projectWarn () {
-      const meta = this.$store.state.category.projectMeta || {}
-      const now = Date.now()
-      const WEEK = 7 * 86400000
-      let n = 0
-      for (const id of Object.keys(meta)) {
-        const m = meta[id] || {}
-        if ((m.deadline && m.deadline - now < WEEK) || (m.nextMilestone && m.nextMilestone.date && m.nextMilestone.date - now < WEEK)) n++
-      }
-      return n
-    },
+    /* Project warning badge: number of projects with an approaching deadline/milestone due (within 7 days, including overdue) — body in side-nav/sideNavHandlers.js */
+    projectWarn () { return handlers.projectWarn(this) },
 
-    userNameMasked () {
-      const u = this.user || {}
-      // The default name is not persisted (otherwise the first-run language would be frozen); translated live in the current language
-      if (u.userNameDefault) return this.$t('statsA.core.offlineUser')
-      return u.userName || this.$t('statsE.SideNav.notSignedIn')
-    },
-    avatarChar () { return (this.userNameMasked || '·').trim().charAt(0).toUpperCase() || '·' },
-    avatarStyle () {
-      // Hash the username into a fixed hue so the same user keeps a stable color, with no offline avatar file dependency
-      let h = 0
-      for (const ch of String(this.userNameMasked)) h = (h * 31 + ch.charCodeAt(0)) % 360
-      return { background: `linear-gradient(135deg, hsl(${h},62%,58%), hsl(${(h + 40) % 360},62%,46%))` }
-    },
+    userNameMasked () { return handlers.userNameMasked(this) },
+    avatarChar () { return handlers.avatarChar(this) },
+    avatarStyle () { return handlers.avatarStyle(this) },
     /* Wave-5 dedup: the derivation moved to getters['todo/tagCounts'] (was verbatim-triplicated
        here, in SnTagPanel and SnManageTagsModal). Same shape: [{name, count}] count-desc. */
     tags () { return this.$store.getters['todo/tagCounts'] }
@@ -324,10 +299,7 @@ export default {
       this.filterEditVisible = false
       if (id) this.$router.push({ name: 'todo-list-filter', params: { id: String(id) } }).catch(() => {})
     },
-    navLabel (n) {
-      const v = NAV_LABEL[n] || ''
-      return (v && v.i18n) ? i18n.global.t(v.i18n) : v
-    },
+    navLabel (n) { return handlers.navLabel(this, n) },
     toggleCollapse () {
       // U4 (via utils/navCollapse.js): an explicit user toggle resolves against the EFFECTIVE
       // collapsed state (preference OR transient narrow force) and is the ONLY path that writes the
@@ -336,31 +308,12 @@ export default {
       toggleCollapse({ getCollapsed: () => this.collapsed, commit: v => { this.userCollapsed = v } })
       this.forcedCollapsed = false
     },
-    /* Clicking the search icon while collapsed: expand the sidebar and hand focus to the search input.
-       In narrow windows (<920px) the expanded state uses the drawer overlay (CSS media query, absolutely positioned over the main column without squeezing the layout),
-       so it can be expanded and focused directly at any width */
-    expandAndFocusSearch () {
-      if (!this.collapsed) return
-      this.toggleCollapse()
-      this.$nextTick(() => {
-        const input = this.$refs.searchInput
-        if (input) { input.focus(); input.select() }
-      })
-    },
-    /* Whole search box click (user-finalized: clicking again collapses it) --
-       clicking the input/clear button does not trigger; collapsed = expand + focus; expanded = collapse the sidebar */
-    onSearchClick (e) {
-      if (e.target.tagName === 'INPUT' || e.target.closest('.main-nav-search__clear')) return
-      if (this.collapsed) this.expandAndFocusSearch()
-      else this.toggleCollapse()
-    },
-    /* Esc inside the input: clear text first if any; if empty (or already cleared) collapse the sidebar and dismiss the search box */
-    onSearchEsc () {
-      if (String(this.$store.state.todo.search || '').trim()) { this.clearSearch(); return }
-      const input = this.$refs.searchInput
-      if (input) input.blur()
-      if (!this.collapsed) this.toggleCollapse()
-    },
+    /* Bodies of the search/copy/sync/drag handlers live in side-nav/sideNavHandlers.js
+       (size-ratchet split, verbatim move); the component keeps the method names the template
+       and the source-anchoring tests resolve against. */
+    expandAndFocusSearch () { handlers.expandAndFocusSearch(this) },
+    onSearchClick (e) { handlers.onSearchClick(this, e) },
+    onSearchEsc () { handlers.onSearchEsc(this) },
     go (name: string, params?: any) {
       this.$router.push({ name, params }).catch(() => {})
       // The navKey mapping derives from views/registry.js; parameterized routes (category/tag/project/filter) compose dynamic keys
@@ -370,20 +323,8 @@ export default {
     onSearchInputEvt (e: Event) {
       this.onSearchInput((e.target as HTMLInputElement).value)
     },
-    onSearchInput (v) {
-      this.$store.commit('todo/setSearch', v)
-      const w = String(v || '').trim()
-      // Snapshot the view we are leaving when entering search, so clearing can navigate back deterministically ($router.back() is unreliable: empty history stack misfires)
-      if (w && this.$route.name !== 'todo-list-search') {
-        this._searchReturnRoute = { name: this.$route.name, params: { ...this.$route.params } }
-        this.go('todo-list-search')
-      }
-      if (!w && this.$route.name === 'todo-list-search') this._returnFromSearch()
-    },
-    clearSearch () {
-      this.$store.commit('todo/setSearch', '')
-      if (this.$route.name === 'todo-list-search') this._returnFromSearch()
-    },
+    onSearchInput (v) { handlers.onSearchInput(this, v) },
+    clearSearch () { handlers.clearSearch(this) },
     /* Deterministic exit from the search page: router.replace to the snapshotted source view (today as the fallback),
        then re-sync the active nav key the same way go() does */
     _returnFromSearch () {
@@ -392,40 +333,12 @@ export default {
       this.$store.commit('ui/setNav', navKeyOfRoute(r.name) || ('category:' + (r.params && r.params.id)))
       this._searchReturnRoute = null
     },
-    createCategory () {
-      const name = this.$t('statsE.SideNav.newCategory')
-      this.$store.commit('category/addCategory', { categoryName: name })
-      const list = this.$store.state.category.list
-      this.catEditing = list[list.length - 1].categoryId
-      this.newCatName = name
-      this.$nextTick(() => {
-        const inp = this.$el.querySelector('.sn-cat-edit')
-        if (inp) { inp.focus(); inp.select() }
-      })
-    },
+    createCategory () { handlers.createCategory(this) },
     toggleFolder (id) { this.expandedFolders = { ...this.expandedFolders, [id]: !this.expandedFolders[id] } },
     /** New tag: same position and interaction as "New Category"; the tag itself is still derived from #xxx in content, empty tags are stored in meta as placeholders */
-    async createTag () {
-      try {
-        const { value } = await this.$prompt(this.$t('statsE.SideNav.tagAutoCreateHint'), this.$t('statsG.SideNav.newTagTitle'), {
-          inputValue: '', inputPattern: /\S/, inputErrorMessage: this.$t('statsE.SideNav.tagNameEmptyError')
-        })
-        const name = (value || '').trim().replace(/^#+/, '')
-        if (!name) return
-        const list = this.$store.state.ui.userTags.slice()
-        if (!list.includes(name) && !this.tags.some(t => t.name === name)) list.push(name)
-        this.$store.commit('ui/setUserTags', list)
-        if (window.todoAPI && window.todoAPI.dbCall) {
-          commitCommand("meta", "put", ['userTags', JSON.stringify(list)]).catch(() => {})
-        }
-      } catch { /* cancelled */ }
-    },
+    createTag () { return handlers.createTag(this) },
     isFolderExpanded (id) { return !!this.expandedFolders[id] },
-    addCategory () {
-      const name = this.newCatName.trim() || (this.$t('statsE.SideNav.categoriesLabel') + (this.categories.length + 1))
-      this.$store.commit('category/addCategory', { categoryName: name })
-      this.newCatName = ''
-    },
+    addCategory () { handlers.addCategory(this) },
     // IME guard: keyup.enter can't see the 229 composition flag, so listen on keydown and skip the Enter that commits an IME composition; blur-save stays intact (composition never blurs)
     onCatEditEnter (e, c) {
       if (e.isComposing || e.keyCode === 229) return
@@ -437,25 +350,8 @@ export default {
       this.newCatName = c.categoryName
       this.catEditing = null
     },
-    saveCatEdit (c) {
-      if (this.catEditing !== c.categoryId) return // blur fires after Esc-cancel: nothing left to save
-      const n = this.newCatName.trim()
-      if (!n) {
-        // Empty name used to silently keep the old name; warn and keep editing so the user notices
-        this.$message.warning(this.$t('statsG.SideNav.catNameEmptyWarn'))
-        return
-      }
-      this.$store.commit('category/updateCategory', { categoryId: c.categoryId, categoryName: n })
-      this.catEditing = null
-    },
-    startCatEdit (c) {
-      this.catEditing = c.categoryId
-      this.newCatName = c.categoryName
-      this.$nextTick(() => {
-        const inp = this.$el.querySelector('.sn-cat-edit')
-        if (inp) { inp.focus(); inp.select() }
-      })
-    },
+    saveCatEdit (c) { handlers.saveCatEdit(this, c) },
+    startCatEdit (c) { handlers.startCatEdit(this, c) },
     /* ===== Manage categories / manage tags dialogs: moved to side-nav/SnManageCategoriesModal.vue
        and side-nav/SnManageTagsModal.vue (2026-09-12 split, incl. the mgrDrag* sort state machine
        and the tag rename/delete rewrite). The sidebar's own delCat below stays: rows and the
@@ -471,65 +367,13 @@ export default {
     openSettings () {
       this.$store.commit('ui/toggleSettings', true)
     },
-    /* ===== Sync: the icon spins for exactly the sync duration, then turns into a checkmark in place on completion;
-       the result is clearly fed back via a top-right notification (success/failure); the checkmark is only an icon-state supplement ===== */
-    async syncNow () {
-      if (this.spinning || this.$store.state.todo.isSyncing) return
-      this.spinning = true
-      try {
-        await this.$store.dispatch('todo/syncTodos')
-        this.syncDone = true
-        clearTimeout(this._syncDoneTimer)
-        this._syncDoneTimer = setTimeout(() => { this.syncDone = false }, 1400)
-        this.$notify({ title: this.$t('statsE.SideNav.syncCompleteMsg'), message: this.$t('statsG.SideNav.syncDoneMsg'), type: 'success', duration: 2000 })
-      } catch (e) {
-        this.$notify({ title: this.$t('statsE.SideNav.syncFailedMsg'), message: (e && e.message) || this.$t('statsG.SideNav.syncFailMsg'), type: 'error', duration: 4000 })
-      } finally { this.spinning = false }
-    },
-    /* ===== Direct sidebar category operations (replacing the old "Manage Categories" modal) ===== */
-    dragStartCat (o, e) {
-      this.catDragId = o.categoryId
-      e.dataTransfer.effectAllowed = 'move'
-      e.dataTransfer.setData('text/plain', String(o.categoryId))
-    },
-    dragOverCat (o, e) {
-      if (this.catDragId == null || this.catDragId === o.categoryId) return
-      this.dragOverId = o.categoryId
-      // Decide whether to insert before or after the target based on the mouse being in the row's upper/lower half
-      const rect = e.currentTarget.getBoundingClientRect()
-      this.dragPos = e.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
-    },
-    dropOnCat (o, e) {
-      const from = this.catDragId
-      const pos = this.dragPos || 'before'
-      this.catDragId = null
-      this.dragOverId = null
-      this.dragPos = null
-      if (from == null || from === o.categoryId) return
-      const ids = this.hierarchical.map(c => c.categoryId)
-      const fi = ids.indexOf(from); const ti = ids.indexOf(o.categoryId)
-      if (fi < 0 || ti < 0) return
-      ids.splice(fi, 1)
-      let insertAt = ids.indexOf(o.categoryId)
-      if (pos === 'after') insertAt += 1
-      ids.splice(insertAt, 0, from)
-      this.$store.commit('category/reorder', ids)
-    },
+    syncNow () { return handlers.syncNow(this) },
+    dragStartCat (o, e) { handlers.dragStartCat(this, o, e) },
+    dragOverCat (o, e) { handlers.dragOverCat(this, o, e) },
+    dropOnCat (o, e) { handlers.dropOnCat(this, o, e) },
     dragEndCat () { this.catDragId = null; this.dragOverId = null; this.trashHot = false },
-    trashDragOver (e) {
-      if (this.catDragId == null) return
-      e.preventDefault()
-      e.dataTransfer.dropEffect = 'move'
-      this.trashHot = true
-    },
-    dropOnTrash () {
-      const id = this.catDragId
-      this.catDragId = null
-      this.dragOverId = null
-      this.trashHot = false
-      const c = this.$store.getters['category/byId'](id)
-      if (c) this.delCat(c)
-    },
+    trashDragOver (e) { handlers.trashDragOver(this, e) },
+    dropOnTrash () { handlers.dropOnTrash(this) },
   },
 
   created () { /* NAV_* constants are now exposed via computed (non-reactive instance properties once caused the template identifier guard to under-report) */ }
