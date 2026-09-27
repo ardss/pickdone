@@ -7,8 +7,8 @@
  * quarantinable corruption (documented config-store semantics: keys are lost, not destroyed).
  * Plain node: electron-updater / electron / electron-log stubbed, config-store pointed at a
  * fresh temp dir via __setConfigDir — never the real %APPDATA%.
- * NOTE: pickdone/test/ is NOT auto-discovered by tests/run-all.mjs; run directly:
- * node --test test/updater-fail-closed.test.mjs */
+ * Registered in tests/run-all.mjs since 2026-09-28 (was: run directly:
+ * node --test test/updater-fail-closed.test.mjs). */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -32,12 +32,28 @@ Module._load = function (request, parent, isMain) {
 }
 process.on('exit', () => { Module._load = origLoad })
 
-const updater = require_('../src/main/updater.js')
-const configStore = require_('../src/main/config-store.js')
+// Module isolation (2026-09-28 fix): config-store carries module-level mutable state
+// (_readFailed, set when a quarantine rename fails) with no public reset. The quarantine-
+ // failed test legitimately leaves _readFailed=true; without a fresh module instance the
+ // NEXT test's readConfig hits the D10 gate `if (_readFailed) return` in quarantineConfig,
+ // never clears the flag, and the "quarantine succeeded" assertions see stale state
+ // (isReadFailed()===true) — the red that stayed invisible while this dir was undiscovered.
+// Both modules are re-required per test so updater's destructured isReadFailed binding is
+// fresh too (it captures the flag getter at module load).
+let updater = null
+let configStore = null
+function freshModules () {
+  for (const m of Object.keys(require_.cache)) {
+    if (m.endsWith('config-store.js') || m.endsWith('updater.js')) delete require_.cache[m]
+  }
+  configStore = require_('../src/main/config-store.js')
+  updater = require_('../src/main/updater.js')
+}
 
 function freshDir () { return fs.mkdtempSync(path.join(os.tmpdir(), 'upd-failclosed-')) }
 
 test('opted-out readable config keeps auto-download OFF (existing behavior preserved)', () => {
+  freshModules()
   const dir = freshDir()
   configStore.__setConfigDir(dir)
   fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ autoDownloadUpdates: false }))
@@ -52,6 +68,7 @@ test('missing config keeps the defaults-on default (first install, not a fail-op
 })
 
 test('corrupt config that FAILS to quarantine: auto-download is refused (fail CLOSED — THE FIX)', () => {
+  freshModules()
   const dir = freshDir()
   configStore.__setConfigDir(dir)
   // config.json is a DIRECTORY (read EISDIR) and the quarantine target .bad exists as a
@@ -67,6 +84,7 @@ test('corrupt config that FAILS to quarantine: auto-download is refused (fail CL
 })
 
 test('corrupt config that quarantines successfully: defaults apply (documented residual, default on)', () => {
+  freshModules()
   const dir = freshDir()
   configStore.__setConfigDir(dir)
   fs.writeFileSync(path.join(dir, 'config.json'), '{ truncated json')

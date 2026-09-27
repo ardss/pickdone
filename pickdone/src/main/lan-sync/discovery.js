@@ -220,13 +220,23 @@ function createDiscovery() {
       if (udp) { try { udp.close() } catch { /* noop */ } }
       udp = dgram.createSocket({ type: 'udp4', reuseAddr: true })
       attachUdpHandlers()
-      const port = FALLBACK_PORT_CANDIDATES[candidateIdx++]
-      udp.bind(port, () => {
+      // 2026-09-28: renamed (was `port`, shadowing the destructured TCP port argument) — the
+      // fallback used to broadcast ONLY to its own bound candidate port, so a host whose
+      // candidate index landed on 39071 while its peer listened on 58471 never heard anything:
+      // silent discovery partition. Fan out to EVERY candidate port + the advertised TCP port.
+      const bindPort = FALLBACK_PORT_CANDIDATES[candidateIdx++]
+      udp.bind(bindPort, () => {
         udpBound = true
-        fallbackPort = port // only on SUCCESS — an in-flight attempt must not read as bound
+        fallbackPort = bindPort // only on SUCCESS — an in-flight attempt must not read as bound
         udp.setBroadcast(true)
+        const targets = [...new Set(FALLBACK_PORT_CANDIDATES
+          .concat(Number.isInteger(port) && port > 0 ? [port] : []))]
         udpTimer = setInterval(() => {
-          udp.send(payload, port, '255.255.255.255', () => {})
+          for (const target of targets) {
+            try { udp.send(payload, target, '255.255.255.255', () => {}) } catch (e) {
+              try { require('electron-log').warn('[LanSync] UDP fallback send failed:', e && e.message) } catch { /* noop */ }
+            }
+          }
         }, FALLBACK_INTERVAL_MS)
         udpTimer.unref?.()
       })

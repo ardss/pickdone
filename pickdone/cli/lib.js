@@ -33,7 +33,7 @@ const dbm = require('../src/main/db.js')
 const bus = require('../src/main/command-bus')
 // open() first: several call sites used `open().call(op, …)` as their only DB touch — the bus
 // commit must keep guaranteeing an initialized handle in pure-CLI sessions.
-const commit = (entity, verb, payload) => { open(); return bus.commit(entity, verb, payload, { preserveStamp: true }) }
+const commit = (entity, verb, payload) => { open(); ensureTomatoMigrated(); return bus.commit(entity, verb, payload, { preserveStamp: true }) }
 const core = require('../src/main/core/todo-core.js')
 // Round-3 P1: ownership guard for attachment filenames (single source with the App's purge path —
 // pure, electron-free; D3 2026-09-24 now required directly from its electron-free domain module
@@ -65,17 +65,27 @@ function assertIsolationForWrite ({ allowReal = false } = {}) {
   throw e
 }
 
-/** Open the database (idempotent). The TODO_DB_DIR env var can point to an isolated directory (for tests); defaults to the App's userData */
+/** Open the database (idempotent). The TODO_DB_DIR env var can point to an isolated directory (for tests); defaults to the App's userData.
+ *  Runs the one-shot tomato ledger migration sentinel (r5-4 contract: at open(), BEFORE any read or
+ *  write — a CLI-only `tomato list` after the ledger upgrade must see the migrated rows, and a CLI
+ *  backfill landing rows first must not make tomatoMigrateFromMeta's table-not-empty guard throw the
+ *  old meta blob away forever). Idempotent by design: "meta blob absent" is the migrated marker. */
 function open () {
   if (opened) return dbm
   // Main process reuse: when the App itself has already opened the DB with the same directory (CSV import goes through the main process IPC), init must not be run a second time to rebuild the connection
   if (dbm.isOpen && dbm.isOpen()) { opened = true; return dbm }
   const dir = userDataDir()
   dbm.init(dir)
-  // One-shot tomato ledger migration (review P2 2026-09-11): the App runs tomatoMigrateFromMeta on startup, but a CLI-only session after the ledger-schema upgrade used to read an empty ledger — and worse, a CLI backfill landing rows first made the migration's table-not-empty guard throw the old meta blob ledger away forever (the blob-deletion sentinel runs regardless). Running the migration sentinel here, BEFORE any CLI write, keeps both ends converging on the same row table. Idempotent by design: "meta blob absent" is the migrated marker, so repeat calls on already-migrated DBs are no-ops.
-  try { commit('tomato', 'migrateFromMeta') } catch (e) { /* migration failure must not block the CLI (same tolerance as the App's startup call) */ }
   opened = true
+  ensureTomatoMigrated()
   return dbm
+}
+// Flag both makes the migration once-per-process and breaks the recursion (the migration itself goes through the same write path).
+let tomatoMigrated = false
+function ensureTomatoMigrated () {
+  if (tomatoMigrated) return
+  tomatoMigrated = true
+  try { bus.commit('tomato', 'migrateFromMeta', null, { preserveStamp: true }) } catch (e) { /* migration failure must not block the CLI (same tolerance as the App's startup call) */ }
 }
 
 /* ================= Errors ================= */
@@ -711,7 +721,12 @@ async function importEvents (events, { onProgress = () => {} } = {}) {
       // Behavior fix (2026-09-16): a FUTURE event used to be imported as completed + with a backfilled focus
       // record — importing next week's schedule fabricated "done + accounted" history for work not yet done.
       // Future events now only create the task; completion and the ledger row are left to the real day.
-      const future = String(e.date) > dayjs().format('YYYY-MM-DD')
+      // D11 fix (2026-09-28): compare parsed TIMESTAMPS, not raw strings — a loose date like '2026-9-28'
+      // sorts before '2026-09-28' lexicographically, so an actually-future event was misjudged as past
+      // and got backfilled completion + a fabricated focus ledger row. Unparseable dates (NaN) are
+      // treated as future: without a real day there is no basis to fabricate "done" history.
+      const evDay = dayStartOf(parseDate(e.date))
+      const future = !(evDay > 0 && evDay <= dayStartOf(Date.now()))
       if (!future) {
         toggleComplete(t.taskId, true, { completedAt: parseDate(e.date + ' ' + endClamp) })
         const focusMin = eventFocusMinutes(mins)

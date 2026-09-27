@@ -5,10 +5,12 @@
  * (permanent command loss). The poll tick is now gated at its single entry point: once the
  * quit chain arms ext-watch-gate, every onChange tick is a no-op.
  * This file is plain Node (no electron launch, no real %APPDATA%): the gate decision is
- * exercised functionally; the index.js wiring is pinned by source (the F-A5 convention — the
- * entry file cannot be require()d under plain node without executing the app bootstrap).
- * NOTE: pickdone/test/ is NOT auto-discovered by tests/run-all.mjs; run directly:
- * node --test test/ext-watch-quit-gate.test.mjs */
+ * exercised functionally; the wiring is pinned by source (the F-A5 convention — the entry
+ * file cannot be require()d under plain node without executing the app bootstrap).
+ * 2026-09-28: the external-write poll was extracted from index.js to external-db-watch.js
+ * (pure move) — the onChange/stopDbWatch/debounce pins now read that file; index.js keeps
+ * only the will-quit arm pin. Was orphaned in pickdone/test/ (undiscovered); registered in
+ * tests/run-all.mjs since 2026-09-28. */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -28,8 +30,8 @@ test('C11 gate: ticks poll freely until will-quit arms the gate, then every tick
   assert.equal(gate.canPoll(), true, 'reset restores polling (test hygiene)')
 })
 
-test('C11 wiring: index.js consults the gate at the single onChange entry and arms it at will-quit entry', () => {
-  const src = fs.readFileSync(new URL('../src/main/index.js', import.meta.url), 'utf8')
+test('C11 wiring: the watcher consults the gate at the single onChange entry and index.js arms it at will-quit entry', () => {
+  const src = fs.readFileSync(new URL('../src/main/external-db-watch.js', import.meta.url), 'utf8')
   const onChangeIdx = src.indexOf('const onChange = () => {')
   assert.ok(onChangeIdx > 0, 'onChange found')
   const onChangeBody = src.slice(onChangeIdx, src.indexOf('fs.watchFile(dbFile', onChangeIdx))
@@ -37,15 +39,16 @@ test('C11 wiring: index.js consults the gate at the single onChange entry and ar
     'onChange must early-return on the quit gate BEFORE any readWatchMtime/dbm.call/send')
   assert.ok(onChangeBody.indexOf('extWatchGate.canPoll()') < onChangeBody.indexOf('readWatchMtime()'),
     'the gate is the FIRST thing the tick checks (no reads happen when gated)')
-  const quitIdx = src.indexOf('quitting = true')
+  const mainSrc = fs.readFileSync(new URL('../src/main/index.js', import.meta.url), 'utf8')
+  const quitIdx = mainSrc.indexOf('quitting = true')
   assert.ok(quitIdx > 0)
-  const quitBlock = src.slice(quitIdx, quitIdx + 200)
+  const quitBlock = mainSrc.slice(quitIdx, quitIdx + 200)
   assert.ok(quitBlock.includes('extWatchGate.arm()'),
     'the gate is armed at will-quit entry, before the 500ms-2s flush window opens')
 })
 
 test('Round-3 (2026-09-26): stopDbWatch clears the pending debounce kick, and the kick flush body is gate-checked', () => {
-  const src = fs.readFileSync(new URL('../src/main/index.js', import.meta.url), 'utf8')
+  const src = fs.readFileSync(new URL('../src/main/external-db-watch.js', import.meta.url), 'utf8')
   // (a) stopDbWatch must clearTimeout(debounce) BEFORE releasing the poll timers — a kick
   // scheduled within the 150ms debounce window must not fire against the closed DB handle.
   const stopIdx = src.indexOf('stopDbWatch = () => {')

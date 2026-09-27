@@ -24,7 +24,10 @@ module.exports = ({ open, commit, audit }) => {
     const deadline = Date.now() + timeoutMs
     while (Date.now() < deadline) {
       const st = readTomatoState()
-      if (st && st.seq >= seq) return st
+      // EXACT match (same contract as waitForSyncAck below): cliTomatoState is a SINGLE slot — a
+      // second command overwrites the first's receipt, and `>=` let a later command's higher seq
+      // satisfy the earlier waiter, reporting "✓ focus started" for a command the App never ran.
+      if (st && st.seq === seq) return st
       await new Promise(r => setTimeout(r, 200))
     }
     return null

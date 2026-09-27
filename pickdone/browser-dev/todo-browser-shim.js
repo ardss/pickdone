@@ -202,6 +202,17 @@
     saveCategories()
   }
 
+  // bumpSnow 落点(与桌面 UPDATE todos SET focusMinutes = focusMinutes + @m 同款):找不到行 → missing,软删行 → deleted
+  function shimBumpSnowApply (taskId, m) {
+    const t = todos.find(x => x.taskId === taskId)
+    if (!t) return { ok: false, reason: 'missing' }
+    if (t.delete) return { ok: false, reason: 'deleted' }
+    t.focusMinutes = (Number(t.focusMinutes) || 0) + m
+    t.status = 'update'; t.updatedAt = Date.now()
+    save(todos); broadcast()
+    return { ok: true, minutes: m }
+  }
+
   async function dbCall(op, params) {
     if (op === 'getAllCategories' || op === 'upsertCategory') syncCategories()
     switch (op) {
@@ -328,18 +339,28 @@
         return true
       }
       case 'bumpSnow':
-        // 桌面端写SQLite雪球分钟;5175按已有taskSnow聚合累计存meta,保证统计页不与桌面分叉
-        // Return shape stays in sync with src/main/db.js bumpSnow: { ok:true, minutes } /
-        // { ok:false, reason:'missing'|'deleted' }. The shim has no real DB row to probe,
-        // so the missing/deleted branch is not simulated here — every write resolves ok.
+        // 对齐桌面 src/main/db.js bumpSnow 契约(2026-09-28 此前三个洞):
+        // 1) 600 分钟存储钳制(FOCUS_MAX_MINUTES, shared/limits.mjs —— 5175 无 ESM 管线,常量就地镜像并注明单一源)
+        // 2) dedupKey 幂等:同 key 重放返回 { ok:true, minutes:0, deduped:true },不重复记账(模糊失败重放曾双倍入账)
+        // 3) 落点 todos.focusMinutes += 分钟(此前只写 meta __shimSnow,统计页读 focusMinutes 永远 0)
+        // 返回形状与 db.js 同:{ ok:true, minutes } / { ok:false, reason:'missing'|'deleted' }
         {
           const p = (Array.isArray(params) ? params[0] : params) || {}
-          if (!p.taskId) return { ok: true, minutes: Number(p.minutes) || 0 }
-          let m = {}
-          try { m = JSON.parse(localStorage.getItem(META_KEY)) || {} } catch {}
-          m['__shimSnow'] = Object.assign({}, m.__shimSnow, { [p.taskId]: (m.__shimSnow?.[p.taskId] || 0) + (Number(p.minutes) || 0) })
-          localStorage.setItem(META_KEY, JSON.stringify(m))
-          return { ok: true, minutes: Math.max(0, Math.floor(Number(p.minutes) || 0)) }
+          const m = Math.max(0, Math.min(600, Math.floor(Number(p.minutes) || 0)))
+          if (p.dedupKey != null && p.dedupKey !== '') {
+            const dkey = 'snowDedup:' + p.taskId + ':' + p.dedupKey
+            let md = {}
+            try { md = JSON.parse(localStorage.getItem(META_KEY)) || {} } catch {}
+            md.__shimSnowDedup = md.__shimSnowDedup || {}
+            if (md.__shimSnowDedup[dkey]) return { ok: true, minutes: 0, deduped: true }
+            const r = shimBumpSnowApply(p.taskId, m)
+            if (r.ok) {
+              md.__shimSnowDedup[dkey] = Date.now()
+              try { localStorage.setItem(META_KEY, JSON.stringify(md)) } catch {}
+            }
+            return r
+          }
+          return shimBumpSnowApply(p.taskId, m)
         }
       case 'tomatoAll':
         // 账本行表 shim:LS meta 桶存行集(桌面端为 SQLite tomato_records;5175 只求调试语义一致)
@@ -476,8 +497,8 @@
         return before - m.__shimPlanChips.length
       }
       default:
-        warnOnce('dbCall:' + op, () => console.warn('[appBrowserShim] 未实现的 dbCall 操作:', op, params))
-        return null
+        // 未实现 op 显式失败(此前返回 null 假成功,调用方把 null 当真结果渲染/入库)。console.warn 曾被 UI 吞掉,排查不到
+        throw new Error('[appBrowserShim] dbCall 未实现操作:' + op)
     }
   }
 
@@ -493,7 +514,13 @@
     getSettings: async () => {
       try { return JSON.parse(localStorage.getItem('settingsState') || '{}') || {} } catch { return {} }
     },
-    updateSettings: async patch => { console.log('[appBrowserShim] updateSettings', patch); return true },
+    updateSettings: async patch => {
+      // 持久化到 LS settingsState(与上方 getSettings 同键):此前只 console.log,5175 改设置刷新即丢
+      let cur = {}
+      try { cur = JSON.parse(localStorage.getItem('settingsState') || '{}') || {} } catch {}
+      localStorage.setItem('settingsState', JSON.stringify(Object.assign({}, cur, patch)))
+      return true
+    },
     writeCriticalStateBackup: async jsonText => { try { localStorage.setItem('appBrowserShim.criticalBackup', jsonText); return true } catch { return false } },
     readCriticalStateBackup: async () => localStorage.getItem('appBrowserShim.criticalBackup'),
 
