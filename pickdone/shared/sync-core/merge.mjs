@@ -58,7 +58,7 @@ function compareRecency(a, b) {
 /** Content identity: every field except bookkeeping (updatedAt/seq/deletedAt markers/deviceId/id)
  *  and `userId` (an account identifier, not user content — peers stamp rows with their own local
  *  account id, so a userId-only difference must never count as a content conflict). */
-const BOOKKEEPING = new Set(['id', 'updatedAt', 'seq', 'deviceId', 'deletedAt', 'userId'])
+const BOOKKEEPING = new Set(['id', 'updatedAt', 'seq', 'deviceId', 'deletedAt', 'userId', 'author'])
 /** Key-order-insensitive JSON: peers build the payload object with different key insertion
  *  orders, so a content compare must sort keys recursively (round-3 fix). */
 export function stableStringify(v) {
@@ -80,7 +80,10 @@ export function stableStringify(v) {
 export function contentFingerprint(v) {
   if (Array.isArray(v)) return `[${v.map(contentFingerprint).join(',')}]`
   if (v && typeof v === 'object') {
-    const keys = Object.keys(v).filter(k => k !== 'userId').sort()
+    // userId: per-device account stamp. syncAuthor (protocol v3): per-device provenance stamp —
+    // both are bookkeeping, never user content; a stamp-only difference must not read as a
+    // content conflict.
+    const keys = Object.keys(v).filter(k => k !== 'userId' && k !== 'syncAuthor').sort()
     return `{${keys.map(k => `${JSON.stringify(k)}:${contentFingerprint(v[k])}`).join(',')}}`
   }
   return JSON.stringify(v)
@@ -128,7 +131,15 @@ export function mergeTodoRows(local, remote) {
   if (c === 0) return { row: local, conflictCopy: null }
   const winner = c > 0 ? local : remote
   const loser = c > 0 ? remote : local
-  const conflictCopy = contentDiffers(winner, loser) && !loser.deleted ? loserCopy(loser) : null
+  // Provenance (protocol v3, 2026-09-29): `author` = the device whose write produced that
+  // version. Same author on BOTH sides means the loser is a STALE PRIOR VERSION of the same
+  // writer's line (a peer that simply had not received the newer edit yet) — there is no
+  // divergent edit to preserve, so no conflict copy. Different OR unknown authors = possibly
+  // divergent edits; mint the copy (conservative: a junk copy can be ignored, a lost edit
+  // cannot be recovered). This is the root fix for the junk-copy class — the stale base of
+  // every edit used to materialize once per not-yet-synced peer and sync back to the editor.
+  const sameLineage = !!winner.author && !!loser.author && winner.author === loser.author
+  const conflictCopy = contentDiffers(winner, loser) && !loser.deleted && !sameLineage ? loserCopy(loser) : null
   return { row: winner, conflictCopy }
 }
 

@@ -54,10 +54,12 @@ test('v6 migration: corrupted settings blob keeps schemaVersion back so the migr
   // re-open: v6 must fail (return false) and NOT stamp schemaVersion=6
   db.init(dir)
   assert.equal(db.call('getMeta', 'schemaVersion'), '5', 'corrupted blob must block the version stamp (retry next boot)')
-  // repair the blob and re-open: migration now succeeds and advances to v6
+  // repair the blob and re-open: migration now succeeds and advances past v6 (later built-ins
+  // such as v7 provenance run in the same pass — interval, not a literal, per 2026-09-29)
   db.call('setMeta', ['db.settingsState', JSON.stringify({ theme: 'dark' })])
   db.init(dir)
-  assert.equal(db.call('getMeta', 'schemaVersion'), '6', 'repaired blob migrates on retry')
+  const ver = Number(db.call('getMeta', 'schemaVersion'))
+  assert.ok(ver >= 6, `repaired blob migrates on retry (got ${ver})`)
   const rows = db.call('settingsRowsAll').filter(r => r.key === 'theme')
   assert.equal(rows.length, 1)
   assert.equal(rows[0].value, 'dark')

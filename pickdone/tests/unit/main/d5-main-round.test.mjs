@@ -270,7 +270,9 @@ test('d5-9: flushOnceOnReady clears the active round; forwardFlushAck ignores st
   }
   updater.flushOnceOnReady({ tracker, getWindows: () => [], flushMain: () => { flushed++ }, ACK_CAP_MS: 2000 })
   // round already complete (allAcked=true): after the poll tick the tracker must be cleared.
-  await new Promise(r => setTimeout(r, 120))
+  // Poll until the observable (2026-09-29): a single fixed wait sampled before the internal
+  // poll tick under a loaded wall.
+  for (let i = 0; i < 40 && flushed < 1; i++) await new Promise(r => setTimeout(r, 25))
   assert.equal(flushed, 1, 'main flush ran once')
   assert.equal(updater.forwardFlushAck('tok-1', 1), false, 'stale round must not route acks')
 })

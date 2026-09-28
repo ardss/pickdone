@@ -135,6 +135,9 @@ test('P1-3: unpair deletes the peer record + watermark and revokes the shared se
     ...EMPTY_TABLES,
     settingsRowsAll: () => ([
       { key: 'sync.enabled', value: true, updatedAt: 1, deleted: false, deletedAt: 0 },
+      // port 0 (2026-09-29): the unpair path restarts sync; without this the restart binds the
+      // REAL default port 58471 and collides with any parallel test doing the same.
+      { key: 'sync.port', value: 0, updatedAt: 1, deleted: false, deletedAt: 0 },
       { key: 'sync.deviceId', value: 'local-device', updatedAt: 1, deleted: false, deletedAt: 0 },
       { key: 'sync.deviceName', value: 'LAPTOP', updatedAt: 1, deleted: false, deletedAt: 0 },
       { key: 'sync.pairingSecret', value: 'OLDSECRET', updatedAt: 1, deleted: false, deletedAt: 0 },

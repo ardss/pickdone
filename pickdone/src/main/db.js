@@ -7,7 +7,7 @@ const i18nM = require('./i18n')
 const fs = require('fs')
 const crypto = require('crypto')
 const LIMITS = require('../../shared/limits.mjs') // focus-duration clamp constants (single source, audit item 4); require(esm) — Node >= 22.12
-const { normalizeContent, rowToTodo, todoToRow } = require('./db-rows')
+const { normalizeContent, rowToTodo, todoToRow, setSyncAuthor } = require('./db-rows')
 // snowDedup key-cap (R5 P3): replay protection only needs recent keys, so past the cap the
 // older-than-30d entries are pruned (see bumpSnow).
 const SNOW_DEDUP_CAP = 2000
@@ -154,7 +154,11 @@ CREATE TABLE IF NOT EXISTS todos (
   urgent        INTEGER NOT NULL DEFAULT 0,
   status        TEXT NOT NULL DEFAULT 'add',
   version       INTEGER NOT NULL DEFAULT 0,
-  tz            TEXT
+  tz            TEXT,
+  -- Row provenance (protocol v3, 2026-09-29): the device whose write produced this row's
+  -- current updatedAt. Lets the merge layer suppress same-writer stale echoes instead of
+  -- minting junk conflict copies. NULL = pre-v7 legacy row (unknown author).
+  syncAuthor    TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_todos_day       ON todos (deleted, scheduledDay);
 CREATE INDEX IF NOT EXISTS idx_todos_status    ON todos (status);
@@ -367,6 +371,13 @@ function initInner (userDataPath) {
       return true
     } },
     { v: 6, fn: d => syncSchema.migrateV6(d) },
+    { v: 7, fn: d => {
+      // Provenance (protocol v3, 2026-09-29): author of each row's current version. Probe-guarded
+      // like every schema side — re-runs on retry-after-failure must be exact no-ops.
+      const cols = d.prepare('PRAGMA table_info(todos)').all().map(c => c.name)
+      if (!cols.includes('syncAuthor')) d.exec('ALTER TABLE todos ADD COLUMN syncAuthor TEXT')
+      return true
+    } },
     ]
     // C2 test-only seam (2026-09-24): inject a throwing migration without shipping it
     return migrationsOverride || BUILT_IN
@@ -387,6 +398,13 @@ function initInner (userDataPath) {
     }
   }
   if (ver !== getVer()) setVer(ver)
+  // Provenance stamp (protocol v3): load the persisted identity so local writes are authored.
+  // The bootstrap re-injects it on ensureIdentity() too — this covers the process restart path
+  // where the identity already exists but sync has not been enabled yet this session.
+  try {
+    const idr = db.prepare("SELECT value FROM settings_rows WHERE key='sync.deviceId'").get()
+    if (idr && idr.value) setSyncAuthor(idr.value)
+  } catch { /* settings_rows not ready: writes stay author-NULL until ensureIdentity */ }
   // SCHEMA/MIGRATIONS dual-manifest decoupling backstop: if a future SCHEMA column addition is forgotten in MIGRATIONS, CREATE TABLE IF NOT EXISTS is
   // a no-op for existing tables and the upsert prepare dies at startup referencing the missing column. Here, probe and add columns uniformly via PRAGMA
   // based on todoToRow's real column set (NOT NULL columns get default values)

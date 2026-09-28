@@ -332,7 +332,9 @@ test('d4 updater: flushOnceOnReady sends a token, acks route via forwardFlushAck
   assert.equal(forwardFlushAck(token, 11), true, 'ack from an expected sender routes into the round')
   assert.equal(forwardFlushAck(token, 99), false, 'ack from an unexpected sender is rejected')
   assert.equal(forwardFlushAck(token, 12), true, 'second expected sender acks')
-  await new Promise(r => setTimeout(r, 300))
+  // Poll until the observable (2026-09-29): the ack→flush poll tick is internal; a fixed wait
+  // sampled before it under a loaded wall.
+  for (let i = 0; i < 60 && flushed.length < 1; i++) await new Promise(r => setTimeout(r, 25))
   assert.equal(flushed.length, 1, 'all expected acks in → the main-process flush runs before any taskkill')
 })
 

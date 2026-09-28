@@ -85,6 +85,9 @@ function ensureIdentity () {
     settingPut(K_DEVICE_ID, deviceId)
     log.info('[LanSync] device identity created:', deviceId)
   }
+  // Provenance stamp (protocol v3): from here on, local todo writes are authored. The db side
+  // loads the persisted identity at init too — this covers first-boot creation.
+  try { require('./db-rows').setSyncAuthor(deviceId) } catch { /* stamping is best-effort */ }
   let deviceName = settingGet(K_DEVICE_NAME)
   if (!deviceName || typeof deviceName !== 'string' || !deviceName.trim()) {
     deviceName = os.hostname() || 'pickdone-device'

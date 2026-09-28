@@ -83,7 +83,12 @@ test(`perf: ${N} tasks review metrics build`, async () => {
   // time by looping the SAME work until the elapsed time crosses a floor (40ms), so the number
   // averages over many iterations and has real magnitude. The 20x per-run ceiling still fails
   // only order-of-magnitude algorithmic regressions; shared-CPU noise cancels out.
-  const control = todoList.slice(0, Math.ceil(todoList.length / 8))
+  // Control = HALF the data (not 1/8, 2026-09-29): under full-wall memory contention the big
+  // run is memory-bound while a tiny control is cache-resident, so contention alone inflated
+  // the ratio past 20x with linear code. Half-size keeps both runs in the same memory regime
+  // (contention affects both) while an O(n^2) regression at 2x size still reads as a >=4x
+  // jump — far over the ceiling.
+  const control = todoList.slice(0, Math.ceil(todoList.length / 2))
   const bench = (todos, recs, floorMs = 40) => {
     buildReviewMetrics({ todos, records: recs, catNameOf: () => '未分类' }, period) // warm-up (JIT)
     let iters = 0
