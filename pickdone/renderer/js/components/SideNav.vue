@@ -182,7 +182,7 @@ import SnManageTagsModal from './side-nav/SnManageTagsModal.vue'
 import SnCategoryItem from './side-nav/SnCategoryItem.vue'
 import SnFootActions from './side-nav/SnFootActions.vue'
 import { navKeyOfRoute } from '../views/registry.js'
-import { NAV_ICON, NAV_ORDER } from './side-nav/navConfig.js'
+import { NAV_ICON, NAV_LABEL, NAV_ORDER } from './side-nav/navConfig.js'
 import * as handlers from './side-nav/sideNavHandlers.js'
 import { deleteCategoryWithUndo } from './side-nav/categoryDelete.js'
 

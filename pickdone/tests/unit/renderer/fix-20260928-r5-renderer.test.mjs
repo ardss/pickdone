@@ -68,7 +68,10 @@ test('r5[1b]: the happy path still rewrites PROJECT_IDS_KEY via commitCommand', 
 
 test('r5[2]: remainingSecOfState delegates to remainSecOf — rest fallback is 5min (not the drifted 25), running states are equivalent', async () => {
   const { remainingSecOfState } = await import('../../../renderer/js/store/tomato.js?r5-fn')
-  const { remainSecOf } = await import('../../../renderer/js/utils/tomatoShared.js?r5-shared')
+  // Plain specifier (no cache-busting query): tomatoShared.js is pure (no module state), and the
+  // `?r5-shared` query created a second module instance whose V8 coverage entry-shadowed the
+  // clean URL's, silently dropping the file below the coverage-ratchet baseline in every run.
+  const { remainSecOf } = await import('../../../renderer/js/utils/tomatoShared.js')
   const t0 = 1_700_000_000_000
   // Running: bit-for-bit equivalence with the pre-existing single source
   for (const [s, now] of [
