@@ -76,24 +76,29 @@ test(`perf: ${N} tasks review metrics build`, async () => {
     records.push({ succeed: true, focusDuration: 25, endTime: String(Date.now() - (i % 30) * DAY), dateKey: '' })
   }
   const period = { start: Date.now() - 7 * DAY, end: Date.now() + DAY, label: '近7天', days: 8 }
-  // Control run on 1/8 of the data measures the MACHINE's current speed, not a fixed wall-clock
-  // number: under the unit wall's parallel load a fixed 2s ceiling measured the load, not the
-  // code (2026-09-23). The assertion is now the amplification ratio big-vs-control with a 20x
-  // margin — an order-of-magnitude algorithmic regression still fails; shared-CPU noise doesn't.
+  // Root-cause rewrite (2026-09-29, after three symptom patches: fixed ceiling 09-23, ratio
+  // 09-23, best-of-3 09-25 still flaked under pre-commit parallel load): the ratio's DENOMINATOR
+  // was a ~1ms control run — timer resolution plus a single scheduler pause dominated it, so the
+  // ratio measured the unit wall's load, not the code. The fix is structural: measure per-run
+  // time by looping the SAME work until the elapsed time crosses a floor (40ms), so the number
+  // averages over many iterations and has real magnitude. The 20x per-run ceiling still fails
+  // only order-of-magnitude algorithmic regressions; shared-CPU noise cancels out.
   const control = todoList.slice(0, Math.ceil(todoList.length / 8))
-  // best-of-3 for both runs: a single GC/JIT pause mid-measurement (common under the unit wall's
-  // parallel load — 2026-09-25 full-suite red with cost > 20x control while the isolated run sat
-  // at 5x) must not read as an algorithmic regression. min() strips pauses; real slowdowns raise
-  // every repetition, so the 20x ceiling still catches order-of-magnitude regressions.
-  const run = (todos, recs) => {
-    const t = performance.now()
-    buildReviewMetrics({ todos, records: recs, catNameOf: () => '未分类' }, period)
-    return Math.max(performance.now() - t, 1)
+  const bench = (todos, recs, floorMs = 40) => {
+    buildReviewMetrics({ todos, records: recs, catNameOf: () => '未分类' }, period) // warm-up (JIT)
+    let iters = 0
+    const t0 = performance.now()
+    for (;;) {
+      buildReviewMetrics({ todos, records: recs, catNameOf: () => '未分类' }, period)
+      iters++
+      const elapsed = performance.now() - t0
+      if (elapsed >= floorMs || elapsed > 10000) return elapsed / iters
+    }
   }
-  const ctrlCost = Math.min(run(control, records.slice(0, 63)), run(control, records.slice(0, 63)), run(control, records.slice(0, 63)))
-  const m = buildReviewMetrics({ todos: todoList, records, catNameOf: () => '未分类' }, period) // warm-up outside timing
-  const cost = Math.min(run(todoList, records), run(todoList, records), run(todoList, records))
+  const ctrlCost = bench(control, records.slice(0, 63))
+  const m = buildReviewMetrics({ todos: todoList, records, catNameOf: () => '未分类' }, period)
+  const cost = bench(todoList, records)
   assert.ok(m.done >= 0 && m.focusMins >= 0, 'metric structure complete')
-  assert.ok(cost < ctrlCost * 20, `buildReviewMetrics took ${Math.round(cost)}ms vs ${Math.round(ctrlCost)}ms control — over the 20x amplification ceiling`)
-  console.log(`    buildReviewMetrics(${N}+500) = ${Math.round(cost)}ms (control ${Math.round(ctrlCost)}ms)`)
+  assert.ok(cost < ctrlCost * 20, `buildReviewMetrics per-run ${Math.round(cost * 100) / 100}ms vs control ${Math.round(ctrlCost * 100) / 100}ms — over the 20x amplification ceiling`)
+  console.log(`    buildReviewMetrics(${N}+500) = ${Math.round(cost * 100) / 100}ms/run (control ${Math.round(ctrlCost * 100) / 100}ms/run)`)
 })
