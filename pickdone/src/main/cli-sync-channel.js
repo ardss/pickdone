@@ -23,7 +23,7 @@
 // shared cli-slot-policy.js — it was previously duplicated with external-db-watch.js (constant
 // defined twice, kept in sync only by this comment). Same module now also backs the runtime
 // TTL abandon in fix-util.tryForwardTomatoCmd, so all three consumers share one definition.
-const { seedSlotWatermark, CLI_SLOT_ABANDON_TTL_MS } = require('./cli-slot-policy')
+const { seedSlotWatermark, isStaleSlotCmd } = require('./cli-slot-policy')
 
 function createSyncCmdHandler ({ dispatch, setMeta, log, getMeta, deleteMeta }) {
   // Round-1 P0 (2026-09-21): lastSeq used to start at 0 per process, so a cliSyncCmd slot that
@@ -125,14 +125,14 @@ function createSyncCmdHandler ({ dispatch, setMeta, log, getMeta, deleteMeta }) 
     lastSeq = cmd.seq
     // 2026-09-28 r5: runtime TTL abandon, same policy as the seed above and as
     // fix-util.tryForwardTomatoCmd (2026-09-28 r2). A STAMPED command (at > 0) older than
-    // CLI_SLOT_ABANDON_TTL_MS was already given up on by the CLI — waitForSyncAck (15s) long
-    // expired with APP_NOT_RUNNING — so executing it when the window/poll recovers would fire it
-    // long after its writer quit (e.g. an unpair rotating the pairing secret → the peer silently
-    // drops). Consume WITHOUT executing: seq advances (no replay), the slot is compare-and-deleted
-    // via clearHandledSlot (a newer command is never eaten), no receipt is written (the CLI is not
-    // polling this seq anymore). A command WITHOUT an `at` stamp keeps execute-once semantics.
-    const at = Number(cmd.at) || 0
-    if (at > 0 && Date.now() - at > CLI_SLOT_ABANDON_TTL_MS) {
+    // CLI_SLOT_ABANDON_TTL_MS (predicate shared from cli-slot-policy.isStaleSlotCmd, r6) was
+    // already given up on by the CLI — waitForSyncAck (15s) long expired with APP_NOT_RUNNING —
+    // so executing it when the window/poll recovers would fire it long after its writer quit
+    // (e.g. an unpair rotating the pairing secret → the peer silently drops). Consume WITHOUT
+    // executing: seq advances (no replay), the slot is compare-and-deleted via clearHandledSlot
+    // (a newer command is never eaten), no receipt is written (the CLI is not polling this seq
+    // anymore). A command WITHOUT an `at` stamp keeps execute-once semantics.
+    if (isStaleSlotCmd(cmd, Date.now())) {
       log.warn('[CLI] cliSyncCmd abandoned stale command (CLI already reported APP_NOT_RUNNING), seq:', cmd.seq, 'action:', cmd.action)
       Promise.resolve(clearHandledSlot(cmd)).catch(() => {})
       return

@@ -73,6 +73,11 @@ function createExternalDbWatch (deps) {
     // CLI settings hot-sync baseline: the first poll only builds the baseline and does not push (otherwise startup would push a full diff by mistake)
     let lastSettingsSavedAt = 0
     let lastSettingsDoc = null
+    // r6 2026-09-28: one-shot degrade for a corrupted db.settingsState blob — the parse used to
+    // throw into the outer catch EVERY poll tick (warn spam) while lastSettingsSavedAt never
+    // advanced. Now the warn fires once per distinct poisoned payload and the tick is skipped;
+    // when the CLI rewrites the blob (raw changes), parsing resumes normally.
+    let lastSettingsPoisonRaw = null
     try {
       const rawS = dbm.call('getMeta', 'db.settingsState')
       if (rawS) { const d = JSON.parse(rawS); lastSettingsSavedAt = (d && d._savedAt) || 0; lastSettingsDoc = d }
@@ -116,9 +121,18 @@ function createExternalDbWatch (deps) {
           raw, lastTomatoCmdRaw, lastTomatoSeq, getMainWindow, isLocked,
           // Round-1 P0 (2026-09-21): after a successful forward, clear the slot so the command
           // cannot replay on the next app restart (compare-and-delete: never eat a newer command).
-          clearCmd: (cmd) => {
+          // r6 2026-09-28: clearCmd(null, raw) is the POISONED-slot branch — an unparseable
+          // payload carries no usable seq to compare against, so the cleanup compares the exact
+          // raw value instead (same contract as cli-sync-channel's D6 P2 self-heal): a slot that
+          // no longer holds the poisoned payload (a newer valid command landed) is never eaten.
+          clearCmd: (cmd, raw) => {
             try {
-              const cur = JSON.parse(dbm.call('getMeta', 'cliTomatoCmd') || 'null')
+              const curRaw = dbm.call('getMeta', 'cliTomatoCmd')
+              if (cmd == null) {
+                if (curRaw === raw) require('./command-bus').commit('meta', 'delete', 'cliTomatoCmd', { preserveStamp: true })
+                return
+              }
+              const cur = JSON.parse(curRaw || 'null')
               if (cur && Number(cur.seq) === Number(cmd.seq)) require('./command-bus').commit('meta', 'delete', 'cliTomatoCmd', { preserveStamp: true })
             } catch { /* best-effort cleanup */ }
           }
@@ -129,6 +143,9 @@ function createExternalDbWatch (deps) {
         if (st.sent) log.info('[CLI] 番茄命令已转发渲染端:', st.cmd.action, 'seq=' + st.cmd.seq)
         // r2 2026-09-28: 运行期弃置——CLI 已超时放弃(APP_NOT_RUNNING)的命令在窗口/解锁恢复后不得补执行
         else if (st.abandoned) log.warn('[CLI] 番茄命令已过期弃置(超过 slot TTL,CLI 早已超时):', st.cmd.action, 'seq=' + st.cmd.seq)
+        // r6 2026-09-28: 毒槽告警(清除本身在 tryForwardTomatoCmd 内经 clearCmd(null, raw) 完成;
+        // 清除失败时下轮轮询重试并再次告警,与 cli-sync-channel 同策略)
+        else if (st.poisoned) log.warn('[CLI] cliTomatoCmd 槽存在不可解析 payload,已按原值比对清除:', String(raw).slice(0, 120))
       } catch (e) { log.warn('[CLI] 番茄命令转发失败', e) }
       // CLI settings set: mirror changes to db.settingsState's _savedAt → diff and push to the renderer for hot application
       // (renderer dispatches settings/update → IPC notify-settings-updated → main-process config.json/shortcuts/login item sync accordingly)
@@ -144,7 +161,17 @@ function createExternalDbWatch (deps) {
         const rawS = dbm.call('getMeta', 'db.settingsState')
         let doc = null
         let at = 0
-        if (rawS) { doc = JSON.parse(rawS); at = (doc && doc._savedAt) || 0 }
+        if (rawS) {
+          try { doc = JSON.parse(rawS); at = (doc && doc._savedAt) || 0 } catch {
+            // r6 2026-09-28: 与另两个 CLI 通道(sync 的 D6 P2 毒槽自愈、tomato 的 r6 毒槽清除)策略对齐:
+            // 每个 distinct 毒 payload 只告警一次并降级跳过本轮,不做 seq 比对删除(settingsState 是
+            // 整包快照而非单命令槽,且 settings_rows 才是字段写入真值——删除整包超出本域决策)。
+            if (rawS !== lastSettingsPoisonRaw) {
+              lastSettingsPoisonRaw = rawS
+              log.warn('[CLI] db.settingsState blob 不可解析,降级跳过本轮热同步(等待 CLI 重写):', String(rawS).slice(0, 120))
+            }
+          }
+        }
         try {
           // Round-3 perf (2026-09-26): identical watermark via one MAX aggregate (tick runs ~4x/sec).
           const maxRow = Number(dbm.call('settingsRowsMaxUpdated')) || 0

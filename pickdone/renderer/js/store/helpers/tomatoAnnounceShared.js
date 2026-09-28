@@ -4,23 +4,31 @@
  * remainSecOfAnnounce) — renderer code cannot require the CommonJS main module, so the
  * two implementations are kept in lockstep by tests/unit/store/tomato-remote-announce.test.mjs,
  * which runs the SAME fixtures through both and asserts identical results
- * (contract-mirror pattern, see tests/unit/contract-mirrors.test.mjs).
+ * (contract-mirror pattern, see tests/unit/store/tomato-remote-announce.test.mjs).
  */
+
+// r6: sanitize through the SHARED single source (shared/sanitize-text.mjs — the same
+// implementation src/main/sanitize.js ships, pinned equal by the mirror test's hostile
+// fixtures). The mirror previously did bare String(): long deviceName/attachTodo fields
+// and RTL/bidi injection chars passed unclamped on the renderer announce path while the
+// main process clamped to 128/40/120/120 — the "identical" contract was only true for
+// short clean fixtures.
+import { sanitizeText } from '../../../../shared/sanitize-text.mjs'
 
 /** Announce payload builder — identical semantics to the main-process copy. */
 export function buildAnnounceValue ({ deviceId, deviceName, status, startedAt, plannedSec, attachTodoId, attachTodoTitle, at } = {}) {
   const now = Number(at) || Date.now()
   const base = {
-    deviceId: String(deviceId || ''),
-    deviceName: String(deviceName || ''),
+    deviceId: sanitizeText(String(deviceId || ''), 128),
+    deviceName: sanitizeText(String(deviceName || ''), 40),
     status: status === 'running' ? 'running' : 'idle',
     startedAt: Number(startedAt) || 0,
     plannedSec: Math.max(0, Number(plannedSec) || 0),
     at: now,
   }
   if (base.status === 'running' && attachTodoId) {
-    base.attachTodoId = String(attachTodoId)
-    base.attachTodoTitle = String(attachTodoTitle || '')
+    base.attachTodoId = sanitizeText(String(attachTodoId || ''), 120)
+    base.attachTodoTitle = sanitizeText(String(attachTodoTitle || ''), 120)
   }
   return base
 }

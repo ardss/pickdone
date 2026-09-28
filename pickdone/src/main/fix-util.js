@@ -162,12 +162,28 @@ function parseTomatoMetaBlob (text) {
  *    path used to check seq only and would still execute it). The command is consumed WITHOUT
  *    executing: seq advances, raw is consumed, clearCmd runs, sent:false + abandoned:true.
  *    A command WITHOUT an `at` stamp keeps execute-once semantics (same policy as the seed).
- *  Returns { lastTomatoCmdRaw, lastTomatoSeq, sent, cmd, abandoned }. */
-const { CLI_SLOT_ABANDON_TTL_MS } = require('./cli-slot-policy')
+ *  - poisoned (r6 2026-09-28): an unparseable slot payload used to be silently returned
+ *    untouched — the slot was never cleared and every 500ms poll re-tried the same JSON.parse
+ *    forever (the cliSyncCmd twin channel already compare-and-deletes such payloads since D6
+ *    P2; this side had evolved single-sided). The parse failure now invokes clearCmd(null, raw)
+ *    so the CALLER can compare-and-delete by the exact raw value (a seq compare is impossible —
+ *    the payload has no usable seq), and returns poisoned:true so the caller can warn. The slot
+ *    still not being deleted only means the next poll retries the cleanup, same as the sync
+ *    channel.
+ *  Returns { lastTomatoCmdRaw, lastTomatoSeq, sent, cmd, abandoned, poisoned }. */
+const { isStaleSlotCmd } = require('./cli-slot-policy')
 
 function tryForwardTomatoCmd ({ raw, lastTomatoCmdRaw, lastTomatoSeq, getMainWindow, isLocked, clearCmd, now }) {
-  const untouched = { lastTomatoCmdRaw, lastTomatoSeq, sent: false, cmd: null, abandoned: false }
+  const untouched = { lastTomatoCmdRaw, lastTomatoSeq, sent: false, cmd: null, abandoned: false, poisoned: false }
   if (!raw || raw === lastTomatoCmdRaw) return untouched
+  // r6 2026-09-28: 毒槽自愈,与 cli-sync-channel(D6 P2)同契约——解析失败不再静默 return
+  // untouched(槽永不清除,每 500ms 轮询无限重试),而是触发调用侧按原始值 compare-and-delete。
+  // 毒 payload 永远不可能变成可执行命令,故清除不受锁屏/窗口状态门控(锁屏延后的只是有效命令)。
+  let cmd
+  try { cmd = JSON.parse(raw) } catch {
+    if (typeof clearCmd === 'function') { try { clearCmd(null, raw) } catch { /* best-effort cleanup */ } }
+    return { ...untouched, poisoned: true }
+  }
   if (typeof isLocked === 'function' && isLocked()) return untouched
   const win = typeof getMainWindow === 'function' ? getMainWindow() : null
   const wc = win && win.webContents
@@ -177,13 +193,10 @@ function tryForwardTomatoCmd ({ raw, lastTomatoCmdRaw, lastTomatoSeq, getMainWin
     wc != null &&
     (typeof wc.isDestroyed !== 'function' || !wc.isDestroyed())
   if (!winOk) return untouched
-  let cmd
-  try { cmd = JSON.parse(raw) } catch { return untouched } // 解析失败不消费 raw(与旧行为一致,外层 catch 记 warn)
-  if (!cmd || !cmd.seq || cmd.seq <= lastTomatoSeq) return { lastTomatoCmdRaw: raw, lastTomatoSeq, sent: false, cmd: null, abandoned: false }
-  // r2 2026-09-28: 过期弃置与启动播种同策略(cli-slot-policy)。CLI 已超时放弃(APP_NOT_RUNNING)
-  // 的命令不得在窗口恢复的瞬间补执行——只消费不执行,compare-and-delete 仍在调用侧 clearCmd。
-  const at = Number(cmd.at) || 0
-  if (at > 0 && (typeof now === 'number' ? now : Date.now()) - at > CLI_SLOT_ABANDON_TTL_MS) {
+  if (!cmd || !cmd.seq || cmd.seq <= lastTomatoSeq) return { lastTomatoCmdRaw: raw, lastTomatoSeq, sent: false, cmd: null, abandoned: false, poisoned: false }
+  // r2 2026-09-28: 过期弃置与启动播种同策略(cli-slot-policy.isStaleSlotCmd)。CLI 已超时放弃
+  // (APP_NOT_RUNNING)的命令不得在窗口恢复的瞬间补执行——只消费不执行,compare-and-delete 仍在调用侧 clearCmd。
+  if (isStaleSlotCmd(cmd, typeof now === 'number' ? now : Date.now())) {
     if (typeof clearCmd === 'function') { try { clearCmd(cmd) } catch { /* slot cleanup is best-effort */ } }
     return { lastTomatoCmdRaw: raw, lastTomatoSeq: cmd.seq, sent: false, cmd, abandoned: true }
   }

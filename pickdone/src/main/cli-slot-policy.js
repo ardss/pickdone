@@ -8,10 +8,22 @@
  *   - seedSlotWatermark: the startup seed decision — fresh queued command at the counter keeps
  *     crash-recovery execute-once semantics (seed counter-1); a stale (abandoned) one keeps the
  *     counter watermark and hands the slot to the caller-side compare-and-delete callback.
+ *   - isStaleSlotCmd(cmd, now): the runtime/seed TTL-abandon PREDICATE — r6 2026-09-28. The
+ *     `at > 0 && now - at > TTL` expression used to be hand-copied at THREE consumers
+ *     (seedSlotWatermark below, fix-util.tryForwardTomatoCmd, cli-sync-channel.forward) and any
+ *     single-side tightening drifted silently. One predicate, three call sites.
  * Pure/injected (no electron, no I/O): the compare-and-delete stays a caller callback so this
  * stays free of db dependencies, same shape as fix-util.tryForwardTomatoCmd's clearCmd.
  */
 const CLI_SLOT_ABANDON_TTL_MS = 60 * 1000
+
+/** True when `cmd` is one the CLI already STAMPED (`at`) and left to go stale past the abandon
+ *  TTL — it reported APP_NOT_RUNNING and will never poll this seq again; the app must consume it
+ *  WITHOUT executing. A command without an `at` stamp (foreign/legacy writer) keeps execute-once. */
+function isStaleSlotCmd (cmd, now) {
+  const at = Number(cmd && cmd.at) || 0
+  return at > 0 && (Number(now) || 0) - at > CLI_SLOT_ABANDON_TTL_MS
+}
 
 /** Decide the startup watermark for a CLI command slot channel.
  *  @param {number|string} counter  persisted seq counter (every consumed command bumped it)
@@ -29,8 +41,7 @@ function seedSlotWatermark ({ counter, slotRaw, now, onAbandon }) {
     if (queued && Number.isFinite(queued.seq) && Number(queued.seq) === lastSeq) {
       // Only a slot the CLI STAMPED (`at`) and left to go stale is abandoned; a slot without a
       // stamp (foreign/legacy) keeps the crash-recovery execute-once semantics.
-      const at = Number(queued.at) || 0
-      if (at > 0 && now - at > CLI_SLOT_ABANDON_TTL_MS) {
+      if (isStaleSlotCmd(queued, now)) {
         if (typeof onAbandon === 'function') { try { onAbandon(queued) } catch { /* best-effort cleanup */ } }
       } else {
         lastSeq -= 1
@@ -40,4 +51,4 @@ function seedSlotWatermark ({ counter, slotRaw, now, onAbandon }) {
   return lastSeq
 }
 
-module.exports = { CLI_SLOT_ABANDON_TTL_MS, seedSlotWatermark }
+module.exports = { CLI_SLOT_ABANDON_TTL_MS, seedSlotWatermark, isStaleSlotCmd }
