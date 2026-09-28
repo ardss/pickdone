@@ -47,8 +47,6 @@ export const PANEL_FIELD_MAP = [
   ['fileList', 'files', null]          // parsed from JSON — ui.js maps it
 ]
 
-export const PANEL_FIELD_KEYS = PANEL_FIELD_MAP.map(([k]) => k)
-
 const FINGERPRINT_FIELDS = [
   ['title', 'taskContent'],
   ['desc', 'taskDescribe'],

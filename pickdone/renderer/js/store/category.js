@@ -207,8 +207,8 @@ function rewriteLegacyProjectIdsWithout (id) {
       if (Array.isArray(arr) && arr.includes(id)) {
         await commitCommand("meta", "put", [PROJECT_IDS_KEY, JSON.stringify(arr.filter(x => x !== id))])
       }
-    })()
-  } catch (e) { /* degraded host: nothing to rewrite */ }
+    })().catch(e => console.warn('[category] legacy project-id rewrite failed for', id, e))
+  } catch (e) { /* degraded host: nothing to rewrite (synchronous) */ }
 }
 /** Pure helper (unit-tested): the ids a cascade delete of `id` will mark deleted — the category itself plus,
  *  mirroring markCascade, folder descendants recursively and their non-folder children. Lets softDelete clean
@@ -228,6 +228,9 @@ function collectCascadeIds (state, id) {
   return out
 }
 export { collectCascadeIds }
+// r5: exported for the unit regression that the async body's rejection is caught in-module
+// (the old sync try/catch never covered it → unhandled rejection, cleanup silently lost).
+export { rewriteLegacyProjectIdsWithout }
 
 /** D5: remove saved filters referencing any victim categoryId. `this` = the store (mutations bind it).
  *  Best-effort: a DB failure leaves the in-memory purge skipped too, so state and DB stay consistent

@@ -455,6 +455,26 @@ export default {
         this.feedLive = [{ at: Date.now(), kind: 'error', peer: '', detail: evt.error || this.$t('sync.oplogAppendFailed') }].concat(this.feedLive).slice(0, 50)
         this.$message.warning(this.$t('sync.oplogAppendFailed'))
       }
+      // r5 fix (2026-09-28): four more emit-only syncEvent types had zero renderer consumers —
+      // a peer rejected our auth / unpaired us / a snapshot round ran / the server errored, all
+      // invisible in the UI (main logs only). Each surfaces as a live-feed entry; auth-rejection
+      // and server errors additionally toast (they need user action / explain a sync outage).
+      else if (evt.type === 'peer-unauthorized') {
+        const who = evt.deviceName || evt.deviceId || ''
+        this.feedLive = [{ at: Date.now(), kind: 'error', peer: who, detail: this.$t('sync.peerUnauthorizedNotice') }].concat(this.feedLive).slice(0, 50)
+        this.$message.warning(this.$t('sync.peerUnauthorizedNotice'))
+      } else if (evt.type === 'peer-unpaired') {
+        const who = evt.deviceName || evt.deviceId || ''
+        this.feedLive = [{ at: Date.now(), kind: 'pair', peer: who, detail: this.$t('sync.peerUnpairedNotice') }].concat(this.feedLive).slice(0, 50)
+      } else if (evt.type === 'snapshot-sync') {
+        const who = evt.peer || ''
+        const detail = `${evt.direction || ''} ${evt.rows != null ? this.$t('sync.snapshotRows', { n: evt.rows }) : ''}`.trim()
+        this.feedLive = [{ at: Date.now(), kind: 'snapshot', peer: who, detail }].concat(this.feedLive).slice(0, 50)
+      } else if (evt.type === 'server-error') {
+        const detail = evt.detail || evt.code || ''
+        this.feedLive = [{ at: Date.now(), kind: 'error', peer: '', detail: `${this.$t('sync.serverErrorNotice')} ${detail}`.trim() }].concat(this.feedLive).slice(0, 50)
+        this.$message.error(this.$t('sync.serverErrorNotice'))
+      }
       this.refresh()
     },
     bindSyncEvents () {

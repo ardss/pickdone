@@ -333,19 +333,18 @@ function flushPendingSnow () {
 /** maint/d11-r4: single source for the tomato countdown's remaining seconds. Five hand-written
  *  copies (TomatoBar clock/remainSecNow/pushTaskbar, TomatoPanel, TomatoFloatPage) drifted-able —
  *  any rounding/clamp change on one end made float window and panel visibly disagree per second.
- *  Running: clamp-floor elapsed from startedAt, never below 0. Idle: full tomatoTime (||25 default).
+ *  Running: delegates to the pre-existing single source remainSecOf (tomatoShared) — floor+clamp
+ *  and the rest fallback (restTime || 5, NOT 25) stay identical to every other consumer.
+ *  Idle: full tomatoTime (||25; rest phase ||5, matching remainSecOf's defaults).
  *  `now` is injected so callers keep their reactive tick (Date.now() in a Vuex getter is not
  *  reactive — see P1-6). */
 export function remainingSecOfState (s, now) {
   if (!s) return 25 * 60
-  const nowMs = Number(now) || Date.now()
-  const running = s.status === 'startTomatoTime' || s.status === 'startRestTime'
-  const total = ((s.status === 'startRestTime' ? s.restTime : s.tomatoTime) || 25) * 60
-  if (running && s.startedAt) {
-    const elapsed = Math.max(0, Math.floor((nowMs - s.startedAt) / 1000))
-    return Math.max(0, total - elapsed)
-  }
-  return total
+  const running = remainSecOf(s.status, s.startedAt, s.tomatoTime, s.restTime, Number(now) || Date.now())
+  if (running !== null) return running
+  // Idle fallback — same defaults as remainSecOf: focus ||25, rest ||5 (r5: the rest half used to
+  // fall back to 25, making a missing restTime show 25:00 in float/panel vs 5:00 in TodayXView).
+  return ((s.status === 'startRestTime' ? s.restTime : s.tomatoTime) || (s.status === 'startRestTime' ? 5 : 25)) * 60
 }
 
 export default {
@@ -353,12 +352,6 @@ export default {
   state: loadState(),
   /** Task→actual tomato count lookup: build the Map once, component lookups are O(1). Abandoned (succeed===false) not counted */
   getters: {
-    /** maint/d11-r4: curried remaining-seconds — pass a reactive now from the component tick
-     *  (Date.now() inside the getter itself is not reactive, P1-6). Read-only view of
-     *  remainingSecOfState, the single source shared with the float window. */
-    remainingSec (s) {
-      return now => remainingSecOfState(s, now)
-    },
     actualCountByTask (s) {
       const m = new Map()
       for (const r of (s.tomatoRecordList || [])) {

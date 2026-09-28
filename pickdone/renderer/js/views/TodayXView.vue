@@ -61,7 +61,8 @@
 <script lang="ts">
 import { FMT, dayjs } from '../utils/core.js'
 import { getEstimate } from '../utils/tomatoEstimate.js'
-import { remainSecOf, formatMMSS } from '../utils/tomatoShared.js'
+import { formatMMSS } from '../utils/tomatoShared.js'
+import { remainingSecOfState } from '../store/tomato.js'
 import DayDateStrip from '../components/DayDateStrip.vue'
 import DayRail from '../components/DayRail.vue'
 import TodoGroups from '../components/TodoGroups.vue'
@@ -129,11 +130,13 @@ export default {
     focusing () { return this.tomato.status === 'startTomatoTime' },
     nowTask () { return this.tomato.attachTodo },
     running () { return this.focusing && !!this.tomato.startedAt },
+    /* maint/d11-r5: was the 6th hand-written countdown copy (and wrong in rest phase — the
+     * `status !== 'startTomatoTime'` branch returned the FOCUS length during rest). Now delegates
+     * to remainingSecOfState, the single source shared with TomatoBar/TomatoPanel/TomatoFloatPage:
+     * rest countdown shows restTime, idle fallback matches the store defaults (25/5). */
     remainSec () {
       void this.tick
-      const s = this.tomato
-      if (s.status !== 'startTomatoTime' || !s.startedAt) return s.tomatoTime * 60
-      return remainSecOf(s.status, s.startedAt, s.tomatoTime, s.restTime) || 0
+      return remainingSecOfState(this.tomato, Date.now())
     },
     timerLabel () { return formatMMSS(Math.max(0, this.remainSec)) },
     /* Idle state previews the configured focus length instead of a hardcoded 25:00 (aligned with TomatoBar) */
