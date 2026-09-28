@@ -14,17 +14,13 @@
 | 4. Pairing lifecycle | pairing a new peer never invalidates existing pairs; re-pair round-trips | per-pair secrets (unit `fix-20260928-per-pair-secret.test.mjs`) + live A↔B and A↔C both `state=ok` simultaneously | 2026-09-29 live |
 | 5. Flush failure / recovery | poison row → round fails visibly, watermark pinned, snapshot recovery arms, row quarantined | real-process integration `lan-sync-loopback.test.mjs` scenario 3 (2× pass) + live `flushQuarantine` observable on all nodes | 2026-09-29 |
 
-## Known design debt (named, not open bugs)
+## Design debt ledger
 
-- **Stale-base conflict copies (P2)**: `mergeTodoRows` mints a loser copy whenever content
-  differs — including when the loser is the unmodified base row a peer simply had not
-  received the newer edit for yet. Observed live: 1 edit × 2 peers → 2 junk recycle
-  copies, synced back to the editor. No data loss (winner always survives; copies are
-  additive and terminal). Root fix needs **author provenance in the row protocol** — the
-  current `deviceId` records the last hop, not the original writer, so the adapter cannot
-  distinguish "stale echo of the same writer's line" from "independent edit". Fix sketch:
-  carry `authorDeviceId` per row (protocol v3), suppress loser copies whose author equals
-  the winner's author.
+- **Stale-base conflict copies — RESOLVED 2026-09-29 (protocol v3)**: rows carry `syncAuthor`
+  (schema v7; preserved across hops; local writes self-stamp). `mergeTodoRows` suppresses the
+  copy when winner and loser share an author (stale prior version of the same writer's line),
+  mints conservatively on unknown (pre-v7) authors. The junk-copy class is dead at the decision
+  point; the six guards around the apply loop each remain for their distinct real case.
 - **§5 live poison injection**: the deployed build has no injection hook; tier 5 is
   verified by the real-process integration suite (real TCP, real DBs, production merge
   pipeline) plus the live quarantine observable. A dev-hook build would allow a live
