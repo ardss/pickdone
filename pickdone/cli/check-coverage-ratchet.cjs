@@ -49,7 +49,12 @@ function writeBaseline (measured) {
   if (fs.existsSync(BASELINE_FILE)) {
     baselines = JSON.parse(fs.readFileSync(BASELINE_FILE, 'utf8')).baselines || {}
   }
-  baselines[PLATFORM] = measured
+  // Floor to whole percent, matching the comparison (which floors the measured value too):
+  // the coverage table reports at 0.1 granularity, so a float baseline like 73.32 can never be
+  // reached by a 73.3 reading — the gate would red forever on its own calibration (2026-09-29).
+  baselines[PLATFORM] = Object.fromEntries(
+    Object.entries(measured).map(([k, v]) => [k, Math.floor(v)])
+  )
   fs.writeFileSync(BASELINE_FILE, JSON.stringify({
     // 覆盖率棘轮基线 - 由 check-coverage-ratchet.cjs 通过时自动回写,请勿手工下调
     _comment: 'ratchet baseline per platform (win32/linux/darwin file sets differ ~10pt): each metric = last passing run on that platform, floored to whole percent',
@@ -106,7 +111,21 @@ function loadFreshSummary (notBefore) {
     if (Date.now() - stat.mtimeMs > SUMMARY_MAX_AGE_MS) return null
     if (notBefore && stat.mtimeMs < notBefore) return null
     const j = JSON.parse(fs.readFileSync(SUMMARY_FILE, 'utf8'))
-    if (typeof j.lines === 'number' && typeof j.branches === 'number' && typeof j.functions === 'number') return j
+    if (typeof j.lines === 'number' && typeof j.branches === 'number' && typeof j.functions === 'number') {
+      // Instrument fix (2026-09-29): a FAILED suite aborts early, under-loads the file set
+      // (smaller denominator) and reads up to ~11pt HIGH — a failed-run summary must never
+      // feed the comparison or the auto-raise. Summaries without failCount predate the fix
+      // and are declined (conservative: the gate falls back to running the suite itself).
+      if (typeof j.failCount !== 'number') {
+        console.error('[check-coverage-ratchet] ignoring pre-instrument-fix coverage-summary.json (no failCount)')
+        return null
+      }
+      if (j.failCount > 0) {
+        console.error(`[check-coverage-ratchet] ignoring coverage-summary.json: ${j.failCount} failing test(s) — aborted runs overstate coverage`)
+        return null
+      }
+      return j
+    }
     return null
   } catch { return null }
 }

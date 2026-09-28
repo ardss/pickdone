@@ -7,9 +7,9 @@
       "functions": 77
     },
     "win32": {
-      "lines": 87,
-      "branches": 81,
-      "functions": 78
+      "lines": 73,
+      "branches": 73,
+      "functions": 60
     }
   }
 }

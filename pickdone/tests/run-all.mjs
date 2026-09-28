@@ -155,8 +155,13 @@ if (forwardArgs.includes('--experimental-test-coverage')) {
     const fs = await import('node:fs')
     const artifacts = path.join(dir, '.artifacts')
     fs.mkdirSync(artifacts, { recursive: true })
+    // fail count MUST ride along (2026-09-29 instrument fix): an ABORTED suite under-loads the
+    // file set (fewer children -> smaller denominator) and reads up to ~11pt HIGHER than the
+    // same tree fully green (84.83 aborted vs 73.26 green, same commit). The ratchet must only
+    // reuse summaries from GREEN runs — without the fail count it could not tell them apart.
+    const failCount = ((r.stdout || '').match(/^not ok /gm) || []).length
     fs.writeFileSync(path.join(artifacts, 'coverage-summary.json'),
-      JSON.stringify({ ...all, generatedAt: new Date().toISOString() }, null, 2) + '\n')
+      JSON.stringify({ ...all, failCount, generatedAt: new Date().toISOString() }, null, 2) + '\n')
     if (all) console.error(`[run-all] coverage summary written: ${all.lines}/${all.branches}/${all.functions}`)
     else console.error('[run-all] coverage requested but no all-files summary found — ratchet will fall back to its own run')
   } catch (e) { console.error(`[run-all] coverage summary write failed: ${e.message}`) }
