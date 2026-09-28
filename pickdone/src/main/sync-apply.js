@@ -190,6 +190,14 @@ function hasEquivalentConflictCopy (state, baseId, loserData) {
       const id = String(t.taskId || '')
       if (id.startsWith(prefix) && conflictCopyContentKey(t) === key) return true
     }
+    // Batch-safety (2026-09-28 3-machine drill): a copy minted earlier in THIS apply batch is
+    // still sitting in pendingWrites (commitSyncBatch defers the flush), invisible to the
+    // getAll scan above — a second conflict on the same base row in the same round then minted
+    // a duplicate recycle-bin copy. Scan the pending buffer with the same fingerprint.
+    for (const t of state.pendingWrites.todos || []) {
+      const id = String(t.taskId || '')
+      if (id.startsWith(prefix) && conflictCopyContentKey(t) === key) return true
+    }
   } catch (e) { log.warn('[LanSync] conflict-copy dedup scan failed:', e.message) }
   return false
 }
