@@ -72,11 +72,13 @@ module.exports = ({ getState, settingGet, settingPut, busWrite, getSettingsPaylo
     if (!/^\d{6}$/.test(code)) throw new Error('syncPairWithCode: 6-digit code required')
     if (!state.node) throw new Error('syncPairWithCode: sync is not enabled')
     const r = await state.node.pairWith(p && p.deviceId || undefined, code)
+    // F1 (2026-09-28 drill): the global secret is still adopted as a LEGACY fallback, but the
+    // per-pair secret now lives in the peer record — a later pairing must not invalidate this one.
     settingPut(K_PAIRING_SECRET, String(r.secret))
     // Round-1 P0: persist the paired peer from the address the pair ACTUALLY succeeded on (the
     // dialed host:port), so the record survives restart and re-pairing overwrites any stale one.
     if (r.peer && r.peer.deviceId) {
-      persistPairedPeer({ deviceId: r.peer.deviceId, name: r.peer.name, host: r.peer.host, port: r.peer.port })
+      persistPairedPeer({ deviceId: r.peer.deviceId, name: r.peer.name, host: r.peer.host, port: r.peer.port, secret: r.secret })
     }
     log.info('[LanSync] paired with peer', r.peer && r.peer.deviceId, '- shared secret adopted, restarting node')
     state.pairingCode = null // consumed; issue a fresh code on next click
@@ -109,7 +111,10 @@ module.exports = ({ getState, settingGet, settingPut, busWrite, getSettingsPaylo
     if (!host || !/^[.:\w-]+$/.test(host)) throw new Error('syncPairRequest: host is required')
     if (!state.node) throw new Error('syncPairRequest: sync is not enabled')
     const r = await state.node.requestPair(host, port)
+    // F1: legacy global adoption stays as fallback; the per-pair secret is persisted in the
+    // peer record (deviceId comes back in the pair-accept since this flow has no discovered peer).
     settingPut(K_PAIRING_SECRET, String(r.secret))
+    if (r.deviceId) persistPairedPeer({ deviceId: r.deviceId, host: r.host, port: r.port, secret: r.secret })
     log.info('[LanSync] two-way pairing accepted by', host, '- shared secret adopted, restarting node')
     await stopSync()
     startSync()

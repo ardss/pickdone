@@ -42,8 +42,10 @@ module.exports = ({ getState, emitSyncEvent, notifyRenderers, kickSyncRound, sch
       try {
         if (!info || !info.deviceId || info.deviceId === state.deviceId) return
         const myPort = (state.node && state.node.getStatus().port) || DEFAULT_PORT
-        persistPairedPeer({ deviceId: info.deviceId, name: info.deviceName, host: info.host, port: myPort })
-        if (state.node) state.node.addPeer({ deviceId: info.deviceId, name: info.deviceName, host: normalizeHost(info.host) || undefined, port: myPort })
+        // F1: the per-pair secret rides on paired-inbound (transport mints it at accept time)
+        // and is persisted in the peer record + fed to the live node entry for dialing.
+        persistPairedPeer({ deviceId: info.deviceId, name: info.deviceName, host: info.host, port: myPort, secret: info.secret })
+        if (state.node) state.node.addPeer({ deviceId: info.deviceId, name: info.deviceName, host: normalizeHost(info.host) || undefined, port: myPort, secret: info.secret })
         kickSyncRound('paired-inbound')
       } catch (e) { log.warn('[LanSync] paired-inbound persist failed:', e.message) }
     })
@@ -80,7 +82,7 @@ module.exports = ({ getState, emitSyncEvent, notifyRenderers, kickSyncRound, sch
     for (const p of Object.values(loadPairedPeers())) {
       try {
         if (!p || !p.deviceId || p.deviceId === deviceId || !p.host) continue
-        state.node.addPeer({ deviceId: p.deviceId, name: p.name, host: p.host, port: Number(p.port) || DEFAULT_PORT })
+        state.node.addPeer({ deviceId: p.deviceId, name: p.name, host: p.host, port: Number(p.port) || DEFAULT_PORT, secret: p.secret })
       } catch (e) { log.warn('[LanSync] paired peer restore failed:', e.message) }
     }
   }

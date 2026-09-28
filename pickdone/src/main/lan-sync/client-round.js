@@ -12,6 +12,7 @@
 
 const { connect } = require('./transport')
 const { PROTO_VER, isDialableHost } = require('./discovery')
+const { deriveAuthCode } = require('./pairing')
 const { packSegmentChunks } = require('./segments-chunk')
 const { finalizeSnapshot } = require('./snapshot')
 const { createAttachmentPuller } = require('./att-transfer')
@@ -145,10 +146,13 @@ function createClientRound(ctx) {
         try {
           return connect(peer.host, peer.port, {
         deviceId,
-        authCode,
-        // Session key material: the round transport is AES-256-GCM encrypted, key derived
-        // from the pairing secret + per-connection salt (transport.js/cipher.js).
-        pairingSecret,
+        // F1 (2026-09-28 drill): prefer the peer's per-pair secret from the paired-peer table;
+        // the global pairingSecret stays the fallback (legacy peers / not-yet-persisted records).
+        // The auth code must be derived from the SAME secret the peer will verify against.
+        pairingSecret: (peer && typeof peer.secret === 'string' && peer.secret) ? peer.secret : pairingSecret,
+        authCode: (peer && typeof peer.secret === 'string' && peer.secret)
+          ? deriveAuthCode(peer.secret, deviceId)
+          : authCode,
         protoVer: PROTO_VER,
         // socket inactivity timeout: a peer answering a fresh-cursor round must build and stream a
         // full-oplog segment batch, which takes far longer than a heartbeat-sized exchange

@@ -47,14 +47,19 @@ function makeLib (extra = {}) {
 }
 
 test('tomato list: date filters, task filter, limit and JSON emit with live-name resolution', async () => {
+  // Date keys derive from the SAME clock the lib filters with (dayjs local today) — hardcoded
+  // dates made this test fail at every local midnight rollover.
+  const dayjs = require('dayjs')
+  const TODAY = dayjs().format('YYYY-MM-DD')
+  const YESTERDAY = dayjs().subtract(1, 'day').format('YYYY-MM-DD')
   const recs = [
-    { tomatoId: 'a', dateKey: '2026-09-28', endTime: Date.now(), focusDuration: 25, focus: 'stale name', focusTaskId: 't1' },
-    { tomatoId: 'b', dateKey: '2026-09-27', endTime: Date.now() - 86400000, focusDuration: 10, succeed: false, focus: 'other' },
-    { tomatoId: 'c', dateKey: '2026-09-28', endTime: 0, focusDuration: 0, focus: '' }
+    { tomatoId: 'a', dateKey: TODAY, endTime: Date.now(), focusDuration: 25, focus: 'stale name', focusTaskId: 't1' },
+    { tomatoId: 'b', dateKey: YESTERDAY, endTime: Date.now() - 86400000, focusDuration: 10, succeed: false, focus: 'other' },
+    { tomatoId: 'c', dateKey: TODAY, endTime: 0, focusDuration: 0, focus: '' }
   ]
   const lib = makeLib({ records: recs })
   const logs = await captureLogs(() => runTomato({ opts: { _: ['list'], date: 'today' }, lib }))
-  assert.ok(logs.length >= 2, 'today filter keeps only 2026-09-28 rows + the summary')
+  assert.ok(logs.length >= 2, 'today filter keeps only today rows + the summary')
   assert.ok(logs[0].includes('write report'), 'stale focus name resolved live from the task pool')
   assert.ok(logs[0].includes('✓'))
   assert.ok(logs.join(' | ').includes('-- 2 record(s)'))

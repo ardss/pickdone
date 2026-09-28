@@ -102,12 +102,21 @@ test('device-center: pendingCount is null without getMaxSeq injector', async () 
 })
 
 test('device-center: two-way pair-request -> accept completes pairing and rounds authenticate', async () => {
-  const serverNode = makeNode({ deviceId: 'server-side', name: 'Server Side' })
+  // F1 (2026-09-28 drill): the responder mints a FRESH per-pair secret at accept time and the
+  // server must accept subsequent hellos under THAT secret (via secretFor), not the global.
+  const inboundSecrets = {}
+  const serverNode = makeNode({
+    deviceId: 'server-side', name: 'Server Side',
+    secretFor: (id) => inboundSecrets[id] || null,
+  })
   const pairedInbound = []
   serverNode.on('pair-request', (info) => {
     info.respond(true) // the human accepts
   })
-  serverNode.on('paired-inbound', (info) => pairedInbound.push(info))
+  serverNode.on('paired-inbound', (info) => {
+    pairedInbound.push(info)
+    inboundSecrets[info.deviceId] = info.secret // production: persistPairedPeer + addPeer
+  })
   serverNode.start()
   const serverPort = await serverNode.whenListening()
 
@@ -115,18 +124,19 @@ test('device-center: two-way pair-request -> accept completes pairing and rounds
   clientNode.start()
 
   const r = await clientNode.requestPair('127.0.0.1', serverPort)
-  assert.equal(r.secret, SECRET, 'accept hands out the persisted pairing secret')
+  assert.ok(r.secret && r.secret !== SECRET, 'accept mints a FRESH per-pair secret, never the global')
 
-  // The server saw a confirmed inbound pairing and rang it up.
+  // The server saw a confirmed inbound pairing carrying the SAME per-pair secret.
   assert.ok(pairedInbound.length === 1 && pairedInbound[0].confirmed === true)
+  assert.equal(pairedInbound[0].secret, r.secret, 'both sides hold the same per-pair secret')
+  assert.ok(pairedInbound[0].deviceId, 'accept carries the responder deviceId')
   const pairEntry = serverNode.getStatus().recent.find(e => e.kind === 'pair')
   assert.ok(pairEntry, 'pairing recorded into recent ring')
 
-  // With the adopted secret, a normal authenticated round succeeds (authCode derived
-  // from the secret exactly as in the manual 6-digit flow).
-  clientNode.addPeer({ deviceId: 'server-side', host: '127.0.0.1', port: serverPort, name: 'Server Side' })
+  // With the adopted per-pair secret, a normal authenticated round succeeds both ways.
+  clientNode.addPeer({ deviceId: 'server-side', host: '127.0.0.1', port: serverPort, name: 'Server Side', secret: r.secret })
   const ok = await clientNode.startSyncRound()
-  assert.equal(ok.confirmed, 1, 'post-pairing round authenticates with the derived authCode')
+  assert.equal(ok.confirmed, 1, 'post-pairing round authenticates with the per-pair secret')
 
   await clientNode.stop()
   await serverNode.stop()

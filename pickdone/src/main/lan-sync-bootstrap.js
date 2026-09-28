@@ -311,6 +311,11 @@ function startSync () {
     peerProgress: state.peerWatermarks,
     name: settingGet(K_DEVICE_NAME) || deviceName,
     pairingSecret: settingGet(K_PAIRING_SECRET),
+    // F1 (2026-09-28 drill): per-pair secret lookup for server-side hello auth — prefer the
+    // peer's own secret from the paired-peer table; null falls back to the global secret.
+    secretFor: (id) => {
+      try { const rec = loadPairedPeers()[String(id)]; return (rec && rec.secret) ? String(rec.secret) : null } catch { return null }
+    },
     securityLog: loadSecurityLog(),
     verifyPairingCode: code => !!state.pairingCode && state.pairingCode.expiresAt > Date.now() &&
       (() => { const a = Buffer.from(String(code)); const b = Buffer.from(String(state.pairingCode.code)); return a.length === b.length && timingSafeEqual(a, b) })(),

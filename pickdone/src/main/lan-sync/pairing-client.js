@@ -69,7 +69,9 @@ function createPairingClient({ peers, deviceId, name, em }) {
       }
       client.on('paired', (r) => {
         em.emit('pair-accepted', { host, port: targetPort })
-        done(resolve, { secret: r.secret, host, port: targetPort })
+        // F1: the accept now carries the responder's deviceId so the caller can persist the
+        // per-pair secret under the right peer record.
+        done(resolve, { secret: r.secret, deviceId: r.deviceId, host, port: targetPort })
       })
       client.on('rejected', (msg) => {
         const reason = (msg && msg.error) || 'rejected'

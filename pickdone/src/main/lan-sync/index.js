@@ -380,6 +380,8 @@ function createLanSyncNode(opts) {
       host: (freshHostDialable ? peer.host : undefined) || (prev && isDialableHost(prev.host) ? prev.host : undefined),
       port: Number.isInteger(peer.port) ? peer.port : prev && prev.port,
       protoVer: peer.protoVer || (prev && prev.protoVer) || PROTO_VER,
+      // F1: per-pair secret rides on the dial entry (client-round prefers it over the global).
+      secret: peer.secret || (prev && prev.secret) || null,
     })
     lastSeenBy.set(peer.deviceId, Date.now())
     // P1-3: a re-announced/re-added peer is dialable again — clear the terminal unpaired state
@@ -458,6 +460,9 @@ function createLanSyncNode(opts) {
       host,
       deviceId,
       pairingSecret,
+      // F1 (2026-09-28 drill): per-pair secret lookup (deviceId -> secret|null) injected by the
+      // bootstrap from the paired-peer table; null falls back to the global pairingSecret.
+      secretFor: opts.secretFor || null,
       verifyPairingCode: opts.verifyPairingCode,
       onPairRequest: (info) => em.emit('pair-request', info),
       onPairThrottled: (info) => {
