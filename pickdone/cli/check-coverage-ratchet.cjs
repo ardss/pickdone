@@ -31,9 +31,11 @@ const METRICS = [
   { key: 'functions', label: 'funcs', column: 3 }
 ]
 
-// Coverage differs per platform (~10pt: win32 loads a smaller file set than linux CI), so the
-// ratchet is per-platform: one shared number would let the higher platform red the lower one.
-const PLATFORM = process.platform
+// Coverage differs per platform AND per node version (2026-09-29 measurement: node 22 accounts
+// 84.8% where node 24 accounts 73.3% on the SAME tree — v8 coverage attribution changed), so the
+// ratchet key is platform@nodeMajor. A combo with no baseline yet calibrates on its first
+// full-green run (loud note) instead of comparing against another instrument's number.
+const PLATFORM = `${process.platform}@node${process.versions.node.split('.')[0]}`
 
 function loadBaseline () {
   let base = { lines: 0, branches: 0, functions: 0 }
@@ -170,9 +172,17 @@ if (!measured) {
 }
 
 const baseline = loadBaseline()
+const hasBaseline = baseline.lines > 0 || baseline.branches > 0 || baseline.functions > 0
 if (force) {
   writeBaseline(measured)
   console.log(`✓ [check-coverage-ratchet] baseline force-updated to ${JSON.stringify(measured)}`)
+  process.exit(0)
+}
+if (!hasBaseline) {
+  // First full-green run on this platform@node combo: calibrate, don't compare — comparing
+  // against another instrument's numbers is exactly the 2026-09-29 86-vs-73 failure mode.
+  writeBaseline(measured)
+  console.log(`✓ [check-coverage-ratchet] no baseline for ${PLATFORM} yet — calibrated from this full-green run: ${JSON.stringify(measured)}`)
   process.exit(0)
 }
 

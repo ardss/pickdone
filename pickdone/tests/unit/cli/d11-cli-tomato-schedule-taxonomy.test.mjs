@@ -7,7 +7,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
-import { writeFileSync, mkdtempSync, existsSync } from 'node:fs'
+import { writeFileSync, mkdtempSync, existsSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 const require = createRequire(import.meta.url)
@@ -223,10 +223,15 @@ test('ratchet helpers: parseAllFiles anchors on the LAST all-files row; loadBase
 
   const dir = mkdtempSync(join(tmpdir(), 'ratchet-test-'))
   const baselineFile = join(dir, 'baseline.json')
-  writeFileSync(baselineFile, JSON.stringify({ baselines: { win32: { lines: 87, branches: 81, functions: 78 } } }))
-  // loadBaseline reads from the real BASELINE_FILE path — exercise the pure parse path via a fake fs-free call instead
+  writeFileSync(baselineFile, JSON.stringify({ baselines: { 'win32@node22': { lines: 87, branches: 81, functions: 78 } } }))
+  // loadBaseline reads the REAL BASELINE_FILE keyed platform@nodeMajor (2026-09-29): zeros mean
+  // this combo has no baseline yet — the gate calibrates on its first full-green run.
   const base = ratchet.loadBaseline()
-  assert.ok(base.lines > 0, 'real baseline loads on this platform')
+  const raw = JSON.parse(readFileSync(join('cli', '.coverage-baseline.json'), 'utf8'))
+  const thisCombo = `${process.platform}@node${process.versions.node.split('.')[0]}`
+  const knownCombo = Object.prototype.hasOwnProperty.call(raw.baselines, thisCombo)
+  if (knownCombo) assert.ok(base.lines > 0, 'real baseline loads on a combo that has one')
+  else assert.equal(base.lines, 0, 'unknown platform@node combo reads zeros (calibrate-on-first-green)')
   void baselineFile
   void existsSync
 })
