@@ -622,6 +622,9 @@ function createLanSyncNode(opts) {
                   : errorBy.has(p.deviceId) ? 'error' : 'ok'
           return {
             ...p,
+            // F1: the per-pair secret is dial credentials — never surface it to the renderer
+            // or CLI status output (the spread above would otherwise carry it verbatim).
+            secret: undefined,
             // Round-2 P1: the renderer reads p.deviceName — the raw peer record only carries
             // `name`, so Device Center showed raw UUIDs. Carry both.
             deviceName: p.name,
