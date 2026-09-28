@@ -159,7 +159,10 @@ if (forwardArgs.includes('--experimental-test-coverage')) {
     // file set (fewer children -> smaller denominator) and reads up to ~11pt HIGHER than the
     // same tree fully green (84.83 aborted vs 73.26 green, same commit). The ratchet must only
     // reuse summaries from GREEN runs — without the fail count it could not tell them apart.
-    const failCount = ((r.stdout || '').match(/^not ok /gm) || []).length
+    // String() is mandatory: spawnSync without `encoding` returns Buffers, and Buffer.match
+    // throws — the throw used to abort the whole summary write (first CI run after the edit).
+    const stdoutText = String(r.stdout || '')
+    const failCount = (stdoutText.match(/^not ok /gm) || []).length
     fs.writeFileSync(path.join(artifacts, 'coverage-summary.json'),
       JSON.stringify({ ...all, failCount, generatedAt: new Date().toISOString() }, null, 2) + '\n')
     if (all) console.error(`[run-all] coverage summary written: ${all.lines}/${all.branches}/${all.functions}`)

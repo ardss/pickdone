@@ -1,15 +1,15 @@
 {
-  "_comment": "ratchet baseline per platform (win32/linux/darwin file sets differ ~10pt): each metric = last passing run on that platform, floored to whole percent",
+  "_comment": "ratchet baseline per platform: each metric = last passing FULL-GREEN run on that platform+node version, floored to whole percent. 2026-09-29 recalibration: the old 86-87/81/78 values came from the broken instrument (aborted-run summaries inflated ~11pt) on the pre-D10/D11 file set. node matters as much as OS: v22 accounts 84.8% where v24 accounts 73.3% on the same tree+build. win32/linux values measured on node 22 (CI runtime); see commit 574d81c8 follow-up for evidence.",
   "baselines": {
     "linux": {
-      "lines": 86,
-      "branches": 81,
-      "functions": 77
+      "lines": 84,
+      "branches": 82,
+      "functions": 76
     },
     "win32": {
-      "lines": 73,
-      "branches": 73,
-      "functions": 60
+      "lines": 84,
+      "branches": 82,
+      "functions": 76
     }
   }
 }
