@@ -58,10 +58,10 @@ test('browser-dev shim covers every dbCall op literal the renderer invokes', () 
 
 test('preload exposes no bridge without a main-process sender/handler counterpart (dead-channel class b)', () => {
   const preload = readAnchor('preloadIndex')
+  // Senders live in subdirectories too (lan-sync/apply-broadcast.js etc. after the 2026-09-27
+  // splits), so walk recursively — same as the invoke-handler guard below.
   let main = ''
-  for (const f of fs.readdirSync(path.join(REPO_ROOT, ANCHORS.mainDir))) {
-    if (f.endsWith('.js')) main += fs.readFileSync(path.join(REPO_ROOT, ANCHORS.mainDir, f), 'utf8')
-  }
+  for (const file of walkSources(path.join(REPO_ROOT, ANCHORS.mainDir))) main += fs.readFileSync(file, 'utf8')
   for (const m of preload.matchAll(/ipcRenderer\.on\(\s*['"]([\w-]+)['"]/g)) {
     const channel = m[1]
     assert.ok(

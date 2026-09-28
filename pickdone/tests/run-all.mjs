@@ -1,5 +1,6 @@
 /**
  * Unified entry for unit/integration tests - single source of truth: auto-discovers all test files under tests/ recursively
+ * plus the flat sibling dir pickdone/test/ (classified 'unit'; see SIBLING_DIR below).
  * (recursive), eliminating drift between hand-written lists.
  * (Historical incident: package.json and check-all each kept their own list; 2 files were once missed by npm test)
  * e2e.test.mjs needs a live Electron instance, stays out of the default regression, and runs via a separate `npm run e2e`.
@@ -22,16 +23,29 @@ const appRoot = path.join(dir, '..')
 // must never be hostage to dev-host state); each runs as a dedicated check:all ③ live stage.
 // NOTE: exclusion is by bare FILENAME across all suites — never reuse these names elsewhere.
 const EXCLUDE = new Set(['e2e.test.mjs', 'integration-ui.test.mjs', 'overlay-visibility.test.mjs',
-  // lan-sync-loopback (2026-09-27, sync wave): spawns real node child processes over live
-  // TCP loopback (~10s, timing-sensitive) — running it inside the default pool's parallel
-  // load flaked both itself and neighbouring timing-sensitive lan-sync unit tests. Dedicated
-  // gate: node --test tests/integration/lan-sync-loopback.test.mjs (also run by the live-drill
-  // stage; see docs/lan-sync-live-drill.md).
-  'lan-sync-loopback.test.mjs'])
+  // 2026-09-28 un-excluded: the --test-force-exit + 2min-ceiling harness added after that wave
+  // contains exactly the runaway-test scenario the flake feared, so the file re-joins the
+  // default pool — an orphaned integration spec is a regression nobody sees.
+  ])
 
 const KNOWN_SUITES = new Set(['unit', 'integration', 'visual'])
 
-function discover(root, acc = []) {
+// Sibling spec dir: pickdone/test/ (flat, next to tests/) used to be executed by NOTHING —
+// discover() only scanned tests/**, so 13 regression specs lived on manual discipline alone and
+// at least two had silently rotted to red (2026-09-28). They are now discovered alongside tests/
+// and classified as 'unit' (all of them are plain-Node specs: electron / electron-updater stubbed
+// via require interception, config pointed at temp dirs). Both .test.mjs and .test.js are taken
+// here — the .js specs are CommonJS and run fine under node --test — while tests/** keeps its
+// historical .test.mjs-only convention EXCEPT the tests/-root specs (dayrail-resize-raf /
+// depview-resize-raf .test.js): those were orphaned when the double-extension fix was only
+// passed to the SIBLING_DIR discover() call — they ran on manual discipline alone (2026-09-28).
+// The root-level discover() now takes both extensions too, so *.test.js anywhere under tests/
+// is discovered; suite classification is unchanged (tests/ root = integration).
+const TEST_EXTS = ['.test.mjs', '.test.js']
+const SIBLING_DIR = path.join(dir, '..', 'test')
+const isSiblingSpec = file => file.startsWith(SIBLING_DIR + path.sep)
+
+function discover(root, acc = [], exts = TEST_EXTS) {
   for (const e of readdirSync(root, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
     const p = path.join(root, e.name)
     if (e.isDirectory()) {
@@ -41,9 +55,9 @@ function discover(root, acc = []) {
       // dot-dirs (e.g. tests/.artifacts with the visual gate's locked Chromium profile) are
       // state, not specs — scanning them crashes on EPERM (scandir of Crashpad attachments)
       if (e.name.startsWith('.')) continue
-      discover(p, acc)
+      discover(p, acc, exts)
     }
-    else if (e.name.endsWith('.test.mjs') && !EXCLUDE.has(e.name)) acc.push(p)
+    else if (exts.some(x => e.name.endsWith(x)) && !EXCLUDE.has(e.name)) acc.push(p)
   }
   return acc
 }
@@ -58,6 +72,7 @@ function topOf(file) {
 // environment expectations. Such files are now an error: they must be moved into a known suite
 // directory or the directory added to KNOWN_SUITES explicitly.
 function suiteOf(file) {
+  if (isSiblingSpec(file)) return 'unit'
   const top = topOf(file)
   return KNOWN_SUITES.has(top) ? top : 'integration'
 }
@@ -68,10 +83,11 @@ const suites = process.argv
   .flatMap(s => s.split(','))
 // drop the --suite args before forwarding the rest to node --test
 const forwardArgs = process.argv.slice(2).filter(a => !a.startsWith('--suite='))
-const all = discover(dir)
+const all = discover(dir).concat(discover(SIBLING_DIR, [], TEST_EXTS))
 // Fail-closed: refuse to run (instead of silently misclassifying) when a test file lives under an
-// unknown top-level directory — force an explicit suite classification.
-const unclassified = all.filter(f => !KNOWN_SUITES.has(topOf(f)))
+// unknown top-level directory — force an explicit suite classification. Sibling specs
+// (pickdone/test/) are pre-classified as 'unit' by suiteOf, so they skip this check.
+const unclassified = all.filter(f => !isSiblingSpec(f) && !KNOWN_SUITES.has(topOf(f)))
 if (unclassified.length) {
   console.error(`✗ [run-all] ${unclassified.length} test file(s) under unknown suite director(ies) — classify them explicitly:`)
   unclassified.forEach(f => console.error(`  ${path.relative(dir, f)}`))
@@ -139,8 +155,16 @@ if (forwardArgs.includes('--experimental-test-coverage')) {
     const fs = await import('node:fs')
     const artifacts = path.join(dir, '.artifacts')
     fs.mkdirSync(artifacts, { recursive: true })
+    // fail count MUST ride along (2026-09-29 instrument fix): an ABORTED suite under-loads the
+    // file set (fewer children -> smaller denominator) and reads up to ~11pt HIGHER than the
+    // same tree fully green (84.83 aborted vs 73.26 green, same commit). The ratchet must only
+    // reuse summaries from GREEN runs — without the fail count it could not tell them apart.
+    // String() is mandatory: spawnSync without `encoding` returns Buffers, and Buffer.match
+    // throws — the throw used to abort the whole summary write (first CI run after the edit).
+    const stdoutText = String(r.stdout || '')
+    const failCount = (stdoutText.match(/^not ok /gm) || []).length
     fs.writeFileSync(path.join(artifacts, 'coverage-summary.json'),
-      JSON.stringify({ ...all, generatedAt: new Date().toISOString() }, null, 2) + '\n')
+      JSON.stringify({ ...all, failCount, generatedAt: new Date().toISOString() }, null, 2) + '\n')
     if (all) console.error(`[run-all] coverage summary written: ${all.lines}/${all.branches}/${all.functions}`)
     else console.error('[run-all] coverage requested but no all-files summary found — ratchet will fall back to its own run')
   } catch (e) { console.error(`[run-all] coverage summary write failed: ${e.message}`) }

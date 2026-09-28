@@ -32,8 +32,12 @@ module.exports = function createPairedPeers ({ settingGet, settingPut, log, isDi
         host: normalizeHost(entry.host) || prev.host || null,
         port: (Number.isInteger(entry.port) && entry.port > 0 && entry.port <= 65535) ? entry.port : (prev.port || DEFAULT_PORT),
         pairedAt: prev.pairedAt || Date.now(),
+        // Per-pair secret (2026-09-28 3-machine drill F1): the global sync.pairingSecret is
+        // overwritten on every new pairing, invalidating every PREVIOUS pair. Each pair now
+        // carries its own secret here; auth/dial prefer it and fall back to the global.
+        secret: entry.secret || prev.secret || null,
       }
-      if (prev.host === next.host && prev.port === next.port && prev.name === next.name) return false
+      if (prev.host === next.host && prev.port === next.port && prev.name === next.name && prev.secret === next.secret) return false
       all[entry.deviceId] = next
       settingPut(K_PAIRED_PEERS, JSON.stringify(all))
       return true

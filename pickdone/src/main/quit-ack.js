@@ -85,13 +85,21 @@ const POLL_MS = 50
 
 /** Bounded wait for the current round's acks, then flushMain. Used by runFlushRound and by
  *  index.js's will-quit (which broadcasts earlier, in before-quit, together with the abandon
- *  wiring — so it only needs the wait half). Never calls flushMain twice: guard in the caller. */
+ *  wiring — so it only needs the wait half). Never calls flushMain twice: guard in the caller.
+ *  2026-09-28: flushMain runs inside the timer callback mid-teardown — a throwing implementation
+ *  used to surface as an uncaughtException that could abort teardown and trigger crashRelaunch
+ *  (same per-callback try/catch convention as command-bus.runHooks). A throw is now contained
+ *  and logged; the quit chain continues. */
 function awaitFlushAcks ({ tracker, capMs = FLUSH_ACK_CAP_MS, pollMs = POLL_MS, flushMain, onDone }) {
   const startedAt = Date.now()
   const poll = setInterval(() => {
     if (tracker.allAcked() || Date.now() - startedAt >= capMs) {
       clearInterval(poll)
-      flushMain()
+      try {
+        flushMain()
+      } catch (e) {
+        try { console.warn('[quit-ack] flushMain threw during quit teardown:', (e && e.stack) || e) } catch { /* noop */ }
+      }
       if (onDone) onDone(tracker)
     }
   }, pollMs)

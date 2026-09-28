@@ -307,6 +307,12 @@ const RESTORE_SEGMENTS = [
   { seg: 'metaState', enable: c => c.metaPut, restore: (raw, cb) => restoreMetaEntriesFromCriticalBackup(raw, cb) }
 ]
 
+/** Derived (not hand-copied) segment-name list — the CLI's restore-backup validator consumes
+ *  THIS export so its schemaV guard can never drift from the registry (a hand-copied 6-segment
+ *  literal already missed tomatoRecords once: a future-version tomatoRecords segment passed the
+ *  CLI's "Snapshot OK" while the App's restore refused the dump). */
+const RESTORE_SEGMENT_NAMES = RESTORE_SEGMENTS.map(e => e.seg)
+
 /** Meta-key whitelist for the metaState segment restore (2026-09-26, meta-keys-omitted fix).
  *  Only the data surfaces the backup collector gathered — repeat rules, per-task tomato estimates,
  *  project deadline/status/flag/milestones + the project-id registry. Transient keys
@@ -552,4 +558,4 @@ function jsonRestoreAllowed (recoveredFrom, reinitErr) {
   return !!(recoveredFrom && recoveredFrom.source === 'json' && !reinitErr)
 }
 
-module.exports = { attemptDbRecovery, restoreTasksFromCriticalBackup, writeCriticalStateBackupAtomic, criticalBackupPath, backupJsonParseable, restoreCategoriesFromCriticalBackup, restoreTomatoRecordsFromCriticalBackup, restoreMetaEntriesFromCriticalBackup, quarantineKey, sqliteHeaderOk, encryptedProbe, preflightMigrateResidue, sweepPendingDeletes, recoveryDialogAction, jsonRestoreAllowed, loadVendorDriver }
+module.exports = { attemptDbRecovery, restoreTasksFromCriticalBackup, writeCriticalStateBackupAtomic, criticalBackupPath, backupJsonParseable, restoreCategoriesFromCriticalBackup, restoreTomatoRecordsFromCriticalBackup, restoreMetaEntriesFromCriticalBackup, quarantineKey, sqliteHeaderOk, encryptedProbe, preflightMigrateResidue, sweepPendingDeletes, recoveryDialogAction, jsonRestoreAllowed, loadVendorDriver, RESTORE_SEGMENT_NAMES }

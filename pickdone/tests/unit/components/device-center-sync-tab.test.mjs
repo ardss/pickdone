@@ -84,8 +84,8 @@ test('A7: recovered pendingPair dialog derives its countdown from status.pending
   const check = src.match(/checkPendingPair \(\) \{[\s\S]*?\n {4}\},/)
   assert.ok(check, 'checkPendingPair method present')
   assert.match(check[0], /at: pp\.at/, 'recovery path must forward the main-stamped arrival time')
-  assert.match(src, /const leftSec = Math\.max\(0, Math\.round\(\(expiresAt - Date\.now\(\)\) \/ 1000\)\)/,
-    'remaining seconds must be computed from the derived window')
+  assert.match(src, /const leftSec = Math\.max\(0, Math\.floor\(\(expiresAt - Date\.now\(\)\) \/ 1000\)\)/,
+    'remaining seconds must be computed from the derived window (r6: repo-wide floor caliber, pinned by format-mmss-contract)')
   assert.match(src, /if \(leftSec === 0\) this\.tickIncomingPair\(\)/,
     'an already-elapsed window routes into the expiry-hint path, not a fresh countdown')
 })

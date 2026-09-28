@@ -271,7 +271,9 @@ function tomatoHarness () {
 test('tomato: main-window control channels reject a foreign sender (used to be gate-less)', () => {
   const { h } = tomatoHarness()
   const stranger = { sender: fakeWebContents() }
-  for (const ch of ['minimize-main-window', 'maximize-main-window', 'hide-main-window', 'close-main-window-request']) {
+  // r3 2026-09-28: 'hide-main-window' removed from this family — dead channel deleted.
+  assert.equal('hide-main-window' in h, false, 'dead channel must stay deleted')
+  for (const ch of ['minimize-main-window', 'maximize-main-window', 'close-main-window-request']) {
     assert.throws(() => h[ch](stranger), /forbidden/, ch + ' must refuse a non-main sender')
   }
   assert.throws(() => h['quick-add-hide'](stranger), /forbidden/, 'quick-add-hide must refuse a foreign sender')
@@ -289,14 +291,13 @@ test('tomato: the main window still drives its own controls', () => {
   const { calls } = tomatoHarness()
   // the harness's fake win must own the sender — rebuild with matching sender
   const mainSender = fakeWebContents()
-  const win2 = { isDestroyed: () => false, webContents: mainSender, minimize: () => calls.push('minimize'), hide: () => calls.push('hide'), close: () => calls.push('close'), isMaximized: () => false }
+  const win2 = { isDestroyed: () => false, webContents: mainSender, minimize: () => calls.push('minimize'), close: () => calls.push('close'), isMaximized: () => false }
   const h2 = loadWithStubs('src/main/handlers/tomato.js', { electron: electronStub })({
     getMainWindow: () => win2, showMainOrLock: () => {}, rebuildTrayMenu: () => {}, updateTomatoTray: () => {}, isLocked: () => false
   })
   assert.equal(h2['minimize-main-window']({ sender: mainSender }), true)
-  assert.equal(h2['hide-main-window']({ sender: mainSender }), true)
   assert.equal(h2['close-main-window-request']({ sender: mainSender }), true)
-  assert.deepEqual(calls.slice(-3), ['minimize', 'hide', 'close'])
+  assert.deepEqual(calls.slice(-2), ['minimize', 'close'])
   // read-only channel stays open for any window
   assert.equal(h2['is-maximized']({ sender: fakeWebContents() }), false)
 })
@@ -307,7 +308,7 @@ test('tomato: locked state blocks the side-effecting window controls even from t
   const h = loadWithStubs('src/main/handlers/tomato.js', { electron: electronStub })({
     getMainWindow: () => win2, showMainOrLock: () => {}, rebuildTrayMenu: () => {}, updateTomatoTray: () => {}, isLocked: () => true
   })
-  for (const ch of ['minimize-main-window', 'maximize-main-window', 'hide-main-window', 'close-main-window-request']) {
+  for (const ch of ['minimize-main-window', 'maximize-main-window', 'close-main-window-request']) {
     assert.throws(() => h[ch]({ sender: mainSender }), /locked/, ch + ' must refuse while the security lock is active')
   }
 })

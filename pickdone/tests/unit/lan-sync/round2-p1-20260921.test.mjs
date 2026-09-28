@@ -383,8 +383,15 @@ test('F8: cliSyncCmd slot at seq === counter executes ONCE after restart, not tw
 })
 
 test('F8: the tomato channel seeding mirrors the slot fix (source contract)', async () => {
-  const src = fs.readFileSync(here('../../../src/main/index.js'), 'utf8')
-  assert.ok(/cliTomatoCmd[\s\S]{0,400}lastTomatoSeq -= 1/.test(src), 'tomato watermark seeds from a queued slot (counter - 1)')
+  // Re-anchored 2026-09-27: the external-write watcher (carrying the tomato watermark seeding)
+  // moved verbatim from src/main/index.js to src/main/external-db-watch.js.
+  // Re-anchored 2026-09-28 (r2): the seed/abandon policy was deduplicated into the shared
+  // cli-slot-policy.js (it was hand-copied in external-db-watch.js AND cli-sync-channel.js) —
+  // the counter-1 execute-once semantics now live there; the watcher delegates to it.
+  const src = fs.readFileSync(here('../../../src/main/external-db-watch.js'), 'utf8')
+  assert.ok(/require\('\.\/cli-slot-policy'\)/.test(src), 'tomato watermark delegates to the shared cli-slot-policy')
+  const policy = fs.readFileSync(here('../../../src/main/cli-slot-policy.js'), 'utf8')
+  assert.ok(/queued[\s\S]{0,400}lastSeq -= 1/.test(policy), 'tomato watermark seeds from a queued slot (counter - 1)')
 })
 
 /* ---------------- F9: misc guards ---------------- */

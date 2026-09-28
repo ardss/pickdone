@@ -1,15 +1,15 @@
 {
-  "_comment": "ratchet baseline per platform (win32/linux/darwin file sets differ ~10pt): each metric = last passing run on that platform, floored to whole percent",
+  "_comment": "ratchet baseline keyed platform@nodeMajor (coverage accounting is node-version-dependent: v22 measures 84.8% where v24 measures 73.3% on the same tree, 2026-09-29). Each metric = last passing FULL-GREEN run on that combo, floored to whole percent. A combo with no entry calibrates on its first full-green run. Recalibrated 2026-09-29 from the broken 86-87/81/78 values (aborted-run summaries had inflated them ~11pt, pre-D10/D11 file set).",
   "baselines": {
-    "linux": {
-      "lines": 86,
-      "branches": 81,
-      "functions": 77
+    "win32@node22": {
+      "lines": 84,
+      "branches": 82,
+      "functions": 76
     },
-    "win32": {
-      "lines": 87,
-      "branches": 81,
-      "functions": 78
+    "linux@node22": {
+      "lines": 84,
+      "branches": 82,
+      "functions": 76
     }
   }
 }

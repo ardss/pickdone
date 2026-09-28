@@ -198,17 +198,33 @@ async function restoreProjectMetaBackup (id) {
 }
 /** U-5 (2026-09-20): the ONE sanctioned legacy-array write — on unmark, rewrite `projectCategoryIds`
  *  without the id so init()'s legacy union cannot resurrect the unset project from a stale blob.
- *  (Per-cat flag key deletion stays the primary syncable write; CLI twin does the same — F-Main.) */
+ *  (Per-cat flag key deletion stays the primary syncable write; CLI twin does the same — F-Main.)
+ *  r6 (2026-09-28): the rewrite is no longer fire-and-forget. It is (a) chained per id (two
+ *  overlapping unmarks of the same id cannot interleave read→filter→put and re-add the id) and
+ *  (b) registered in pendingLegacyRewrites, which init() DRAINS before its legacy union read —
+ *  previously an init() racing the async cleanup read the un-scrubbed blob and the cancelled
+ *  project came back, the exact resurrection U-5 was written to kill. Failures stay non-fatal:
+ *  logged, never unhandled. */
+const pendingLegacyRewrites = new Map() // id -> in-flight rewrite promise
 function rewriteLegacyProjectIdsWithout (id) {
   try {
-    void (async () => {
-      if (!window.todoAPI || !window.todoAPI.dbCall) return
+    if (!window.todoAPI || !window.todoAPI.dbCall) return Promise.resolve()
+    const prev = pendingLegacyRewrites.get(id) || Promise.resolve()
+    const p = prev.then(async () => {
       const arr = JSON.parse((await window.todoAPI.dbCall('getMeta', PROJECT_IDS_KEY)) || '[]')
       if (Array.isArray(arr) && arr.includes(id)) {
         await commitCommand("meta", "put", [PROJECT_IDS_KEY, JSON.stringify(arr.filter(x => x !== id))])
       }
-    })()
-  } catch (e) { /* degraded host: nothing to rewrite */ }
+    }).catch(e => console.warn('[category] legacy project-id rewrite failed for', id, e))
+    pendingLegacyRewrites.set(id, p)
+    p.then(() => { if (pendingLegacyRewrites.get(id) === p) pendingLegacyRewrites.delete(id) })
+    return p
+  } catch (e) { /* degraded host: nothing to rewrite (synchronous) */ return Promise.resolve() }
+}
+/** r6: resolve when every in-flight legacy rewrite has settled — init() awaits this so the
+ *  union read can never observe a pre-cleanup PROJECT_IDS_KEY. */
+function drainLegacyRewrites () {
+  return Promise.all([...pendingLegacyRewrites.values()]).then(() => {})
 }
 /** Pure helper (unit-tested): the ids a cascade delete of `id` will mark deleted — the category itself plus,
  *  mirroring markCascade, folder descendants recursively and their non-folder children. Lets softDelete clean
@@ -228,6 +244,10 @@ function collectCascadeIds (state, id) {
   return out
 }
 export { collectCascadeIds }
+// r5: exported for the unit regression that the async body's rejection is caught in-module
+// (the old sync try/catch never covered it → unhandled rejection, cleanup silently lost).
+// r6: drainLegacyRewrites exported for init()'s ordering contract + the revival regression.
+export { rewriteLegacyProjectIdsWithout, drainLegacyRewrites }
 
 /** D5: remove saved filters referencing any victim categoryId. `this` = the store (mutations bind it).
  *  Best-effort: a DB failure leaves the in-memory purge skipped too, so state and DB stay consistent
@@ -443,6 +463,10 @@ export default {
       let rows = []
       try { rows = (await window.todoAPI.dbCall('getAllCategories')) || [] } catch (e) { console.warn('[category] SQLite read failed, using local cache', e) }
       try {
+        // r6 ordering contract: the legacy blob may have an un-scrub rewrite in flight (setProject
+        // unmark fired just before a reload) — drain it FIRST, else the union below resurrects a
+        // project the user just cancelled from the not-yet-cleaned legacy array.
+        await drainLegacyRewrites()
         const raw = await window.todoAPI.dbCall('getMeta', PROJECT_IDS_KEY)
         const ids = JSON.parse(raw || '[]')
         // Y/X3 legacy union: per-cat flag keys for every known row id, merged over the legacy blob

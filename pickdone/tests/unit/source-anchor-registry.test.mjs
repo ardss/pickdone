@@ -12,7 +12,7 @@ import { ANCHORS, REPO_ROOT, anchorPath } from '../lib/source-anchors.mjs'
 /** 枚举清单(2026-09-13 收紧:原 `keys.length >= 10` 是恒真型弱断言——注册表被清空到 10 个
  *  也照绿。现与 ANCHORS 实际 keys 集合精确比对;增删 anchor 必须同步改这份清单,防注册表静默漂移。 */
 const EXPECTED_ANCHOR_KEYS = [
-  'mainIndex', 'mainDir', 'handlersTodo', 'handlersBackup', 'preloadIndex', 'installerNsh',
+  'mainIndex', 'mainDir', 'handlersTodo', 'handlersBackup', 'externalDbWatch', 'preloadIndex', 'installerNsh',
   'cliLib', 'rendererMain', 'browserShim', 'settingsStore',
   'onboardingVue', 'recycleBinView', 'i18nZhC', 'i18nEnC'
 ].sort()

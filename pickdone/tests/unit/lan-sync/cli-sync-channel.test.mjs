@@ -132,6 +132,52 @@ test('channel: unpair passes deviceId through and surfaces failures', async () =
   assert.match(receipts[1].error, /deviceId is required/)
 })
 
+// ---- 2026-09-28 r5: runtime TTL abandon in forward() (parity with fix-util.tryForwardTomatoCmd) ----
+// A STAMPED command older than CLI_SLOT_ABANDON_TTL_MS was already given up on by the CLI
+// (waitForSyncAck APP_NOT_RUNNING): it must be consumed WITHOUT executing — no dispatch, no
+// receipt — and the slot compare-and-deleted, mirroring the tomato channel and the startup seed.
+test('channel: forward() abandons a stale stamped command without executing it', async () => {
+  const meta = {
+    cliSyncCmd: JSON.stringify({ seq: 9, action: 'unpair', deviceId: 'peer-b', at: Date.now() - 61 * 1000 }),
+  }
+  const deleted = []
+  const ch = createSyncCmdHandler({
+    dispatch: op => { throw new Error('must not dispatch: ' + op) },
+    setMeta: () => { throw new Error('must not write a receipt for an abandoned command') },
+    getMeta: k => meta[k],
+    deleteMeta: k => { deleted.push(k) },
+    log: { warn: () => {} },
+  })
+  ch.forward(meta.cliSyncCmd)
+  await new Promise(r => setTimeout(r, 20))
+  assert.deepEqual(deleted, ['cliSyncCmd'], 'stale slot is compare-and-deleted')
+  // replaying the same raw must stay inert (seq already consumed by the abandon)
+  deleted.length = 0
+  ch.forward(meta.cliSyncCmd)
+  await new Promise(r => setTimeout(r, 20))
+  assert.deepEqual(deleted, [], 'abandoned seq is not re-processed')
+})
+
+test('channel: forward() still executes a fresh stamped command and an unstamped queued command', async () => {
+  const receipts = []
+  const meta = {}
+  const ch = createSyncCmdHandler({
+    dispatch: op => (op === 'syncGetStatus' ? { enabled: true } : {}),
+    setMeta: (k, v) => { receipts.push(JSON.parse(v)) },
+    getMeta: k => meta[k],
+    deleteMeta: k => { delete meta[k] },
+    log: { warn: () => {} },
+  })
+  ch.forward(JSON.stringify({ seq: 1, action: 'status', at: Date.now() - 1000 })) // fresh stamp → executes
+  ch.forward(JSON.stringify({ seq: 2, action: 'status' })) // no stamp (legacy/foreign) → executes
+  await new Promise(r => setTimeout(r, 20))
+  assert.equal(receipts.length, 2)
+  assert.equal(receipts[0].seq, 1)
+  assert.equal(receipts[0].ok, true)
+  assert.equal(receipts[1].seq, 2)
+  assert.equal(receipts[1].ok, true)
+})
+
 test('channel e2e: pair command on node A + pair-respond command on node B complete a real pairing', async () => {
   // Node B (responder): the channel's pendingPair is fed by the transport's pair-request event —
   // exactly what pendingPairPayload() surfaces in the bootstrap.

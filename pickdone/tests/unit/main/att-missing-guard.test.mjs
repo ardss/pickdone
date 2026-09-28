@@ -31,12 +31,13 @@ test('attachment handlers: absent local:// files answer a structured missing res
     // present file: old behavior preserved
     assert.equal(await h['open-file']({}, url), true)
     assert.equal(opened, true)
-    // absent file: structured missing result on all three channels
-    for (const [ch, args] of [['open-file', [url.replace('present', 'absent')]], ['download-file-and-open', [url.replace('present', 'absent')]], ['save-upload-file-to-download', [url.replace('present', 'absent'), 'a.png']]]) {
-      const r = await h[ch]({}, ...args)
-      assert.ok(r && r.missing === true, ch + ' must report missing')
-      assert.equal(r.name, 'absent.png')
-    }
+    // absent file: structured missing result (r3 2026-09-28: download-file-and-open /
+    // save-upload-file-to-download are DELETED dead channels — only open-file remains)
+    const r = await h['open-file']({}, url.replace('present', 'absent'))
+    assert.ok(r && r.missing === true, 'open-file must report missing')
+    assert.equal(r.name, 'absent.png')
+    assert.equal('download-file-and-open' in h, false, 'dead channel must stay deleted')
+    assert.equal('save-upload-file-to-download' in h, false, 'dead channel must stay deleted')
   } finally {
     Module._load = origLoad
     rmSync(dir, { recursive: true, force: true })

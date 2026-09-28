@@ -127,14 +127,14 @@ test('C14: a 63.5MB noise-custom file no longer starves a 1MB attachment upload 
 
 /* ---------------- C13: single-source mime table ---------------- */
 
-test('C13: mime-get-type reads the protocol.js table (no drifted hand copy)', () => {
-  assert.equal(api['mime-get-type'](eMain, 'a.png'), 'image/png')
-  assert.equal(api['mime-get-type'](eMain, 'b.MP3'), 'audio/mpeg')
-  assert.equal(api['mime-get-type'](eMain, 'c.ogg'), 'audio/ogg')
-  assert.equal(api['mime-get-type'](eMain, 'd.pdf'), 'application/pdf')
-  assert.equal(api['mime-get-type'](eMain, 'e.unknownext'), 'application/octet-stream')
-  assert.equal(api['mime-get-type'](eMain, 'f.wav'), 'audio/wav', 'the old handler table lacked wav; the single source has it')
-  assert.equal(api['mime-get-type'](eMain, 'x.mp4'), 'video/mp4')
+test('C13: mime table stays single-source in protocol.js (r3: mime-get-type dead channel deleted)', () => {
+  // The IPC channel (todoAPI.mimeByType) had zero renderer callers and was removed on both
+  // ends; the single-source table itself must keep serving the live attachment paths.
+  assert.equal('mime-get-type' in api, false, 'dead channel must stay deleted')
+  const { attachmentMimeFor } = require_('../../../src/main/protocol.js')
+  assert.equal(attachmentMimeFor('a.png'), 'image/png')
+  assert.equal(attachmentMimeFor('f.wav'), 'audio/wav', 'the single source has wav')
+  assert.equal(attachmentMimeFor('e.unknownext'), 'application/octet-stream')
 })
 
 /* ---------------- C15: legacy svg forced to download, never render ---------------- */

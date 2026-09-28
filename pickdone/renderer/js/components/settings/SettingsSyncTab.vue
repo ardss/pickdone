@@ -194,6 +194,10 @@
  *  confirm-style pairing, activity feed, security notices). All state lives in the main-process
  *  DB (syncGetStatus / syncEvent channel) — no localStorage writes here. */
 import { getSyncSettings, getSyncStatus, setSyncEnabled, getPairingCode, setSyncDeviceName, pairWithCode } from '../../utils/lanSync.js'
+// r6: the pairing-code TTL fallback comes from the SHARED constant (shared/pairing-ttl.mjs) —
+// the old inline 5*60*1000 drifted from main's PAIRING_CODE_TTL_MS (10 min), so the UI cleared
+// the code at minute 5 while main still accepted it until minute 10.
+import { PAIRING_CODE_TTL_MS } from '../../../../shared/pairing-ttl.mjs'
 
 /** Device Center IPC ops (main-process agent's contract): answered pair-requests + outbound pairing.
  *  Kept inline (not in utils/lanSync.js) so the Device Center rework stays pathspec-scoped; the
@@ -444,6 +448,56 @@ export default {
         const kind = evt.type === 'round-error' ? 'error' : (evt.kind === 'snapshot' ? 'snapshot' : (evt.dir === 'pull' ? 'pull' : 'push'))
         this.feedLive = [{ at: Date.now(), kind, peer: evt.deviceName || evt.deviceId || '', detail: evt.detail || evt.error || '' }].concat(this.feedLive).slice(0, 50)
       }
+      // r3 fix (2026-09-28): one-way data-loss alerts used to be emit-only — the event type had
+      // no renderer consumer, so lost changes were visible only in main-process logs. Surface
+      // both as a live-feed error entry + a persistent warning toast (refresh happens below).
+      else if (evt.type === 'egress-hydration-failed') {
+        const n = evt.count || (Array.isArray(evt.failures) ? evt.failures.length : 0)
+        this.feedLive = [{ at: Date.now(), kind: 'error', peer: '', detail: this.$t('sync.egressHydrationFailed', { n }) }].concat(this.feedLive).slice(0, 50)
+        this.$message.warning(this.$t('sync.egressHydrationFailed', { n }))
+      } else if (evt.type === 'oplog-append-failed') {
+        this.feedLive = [{ at: Date.now(), kind: 'error', peer: '', detail: evt.error || this.$t('sync.oplogAppendFailed') }].concat(this.feedLive).slice(0, 50)
+        this.$message.warning(this.$t('sync.oplogAppendFailed'))
+      }
+      // r5 fix (2026-09-28): four more emit-only syncEvent types had zero renderer consumers —
+      // a peer rejected our auth / unpaired us / a snapshot round ran / the server errored, all
+      // invisible in the UI (main logs only). Each surfaces as a live-feed entry; auth-rejection
+      // and server errors additionally toast (they need user action / explain a sync outage).
+      else if (evt.type === 'peer-unauthorized') {
+        const who = evt.deviceName || evt.deviceId || ''
+        this.feedLive = [{ at: Date.now(), kind: 'error', peer: who, detail: this.$t('sync.peerUnauthorizedNotice') }].concat(this.feedLive).slice(0, 50)
+        this.$message.warning(this.$t('sync.peerUnauthorizedNotice'))
+      } else if (evt.type === 'peer-unpaired') {
+        const who = evt.deviceName || evt.deviceId || ''
+        this.feedLive = [{ at: Date.now(), kind: 'pair', peer: who, detail: this.$t('sync.peerUnpairedNotice') }].concat(this.feedLive).slice(0, 50)
+      } else if (evt.type === 'snapshot-sync') {
+        const who = evt.peer || ''
+        const detail = `${evt.direction || ''} ${evt.rows != null ? this.$t('sync.snapshotRows', { n: evt.rows }) : ''}`.trim()
+        this.feedLive = [{ at: Date.now(), kind: 'snapshot', peer: who, detail }].concat(this.feedLive).slice(0, 50)
+      } else if (evt.type === 'server-error') {
+        const detail = evt.detail || evt.code || ''
+        this.feedLive = [{ at: Date.now(), kind: 'error', peer: '', detail: `${this.$t('sync.serverErrorNotice')} ${detail}`.trim() }].concat(this.feedLive).slice(0, 50)
+        this.$message.error(this.$t('sync.serverErrorNotice'))
+      }
+      // r6 fix (2026-09-28): the last four emit-only syncEvent types — the r5 gate only proved
+      // emit↔doc, not emit↔consumer, so these had zero renderer branches (a peer dropping offline
+      // or quarantined rows being parked were visible in main logs only).
+      else if (evt.type === 'peer-online') {
+        const who = evt.deviceName || evt.deviceId || ''
+        this.feedLive = [{ at: Date.now(), kind: 'pair', peer: who, detail: this.$t('sync.peerOnlineNotice', { name: who }) }].concat(this.feedLive).slice(0, 50)
+      } else if (evt.type === 'peer-offline') {
+        const who = evt.deviceName || evt.deviceId || ''
+        this.feedLive = [{ at: Date.now(), kind: 'pair', peer: who, detail: this.$t('sync.peerOfflineNotice', { name: who }) }].concat(this.feedLive).slice(0, 50)
+      } else if (evt.type === 'flush-quarantined') {
+        const n = evt.count || (Array.isArray(evt.ops) ? evt.ops.length : 0)
+        this.feedLive = [{ at: Date.now(), kind: 'error', peer: '', detail: this.$t('sync.flushQuarantined', { n }) }].concat(this.feedLive).slice(0, 50)
+        this.$message.warning(this.$t('sync.flushQuarantined', { n }))
+      } else if (evt.type === 'sync-conflict') {
+        // Feed entry only — main.js owns the (rate-limited) toast; without a feed entry the
+        // conflict was invisible once the 6s toast expired.
+        const who = evt.name || evt.entity || ''
+        this.feedLive = [{ at: Date.now(), kind: 'error', peer: '', detail: this.$t('sync.conflictFeedEntry', { name: who }) }].concat(this.feedLive).slice(0, 50)
+      }
       this.refresh()
     },
     bindSyncEvents () {
@@ -470,7 +524,7 @@ export default {
       // arrival time (`at`) on status.pendingPair. Derive the remaining countdown from it so
       // reopening the settings tab mid-request shows the true remaining seconds.
       const expiresAt = (evt.at || Date.now()) + 60 * 1000
-      const leftSec = Math.max(0, Math.round((expiresAt - Date.now()) / 1000))
+      const leftSec = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000)) // r6: floor — repo-wide remaining-seconds caliber
       this.incomingPair = {
         deviceName: evt.deviceName || '',
         deviceId: evt.deviceId || '',
@@ -513,7 +567,7 @@ export default {
     },
     tickIncomingPair () {
       if (!this.incomingPair) { clearInterval(this._pairReqTimer); this._pairReqTimer = null; return }
-      this.incomingPair.leftSec = Math.max(0, Math.round((this.incomingPair.expiresAt - Date.now()) / 1000))
+      this.incomingPair.leftSec = Math.max(0, Math.floor((this.incomingPair.expiresAt - Date.now()) / 1000)) // r6: floor caliber
       // Expiry is not silent anymore: brief inline hint, then auto-dismiss
       if (this.incomingPair.leftSec === 0 && !this.pairExpired) {
         this.pairExpired = true
@@ -649,13 +703,13 @@ export default {
         const r = await getPairingCode()
         if (!r || !r.code) { this.$message.error(this.$t('sync.pairingUnavailable')); return }
         this.pairingCode = r.code
-        this.pairingExpiresAt = r.expiresAt || (Date.now() + 5 * 60 * 1000)
+        this.pairingExpiresAt = r.expiresAt || (Date.now() + PAIRING_CODE_TTL_MS) // r6: shared 10-min truth, was a drifted 5-min inline literal
         this.tickPairing()
         if (!this._pairTimer) this._pairTimer = setInterval(() => this.tickPairing(), 1000)
       } catch (e) { this.$message.error(this.$t('sync.pairingUnavailable')) }
     },
     tickPairing () {
-      this.pairingLeftSec = Math.max(0, Math.round((this.pairingExpiresAt - Date.now()) / 1000))
+      this.pairingLeftSec = Math.max(0, Math.floor((this.pairingExpiresAt - Date.now()) / 1000)) // r6: floor caliber
       if (this.pairingLeftSec === 0) { this.pairingCode = ''; clearInterval(this._pairTimer); this._pairTimer = null }
     },
     /** 30s ticker: relative times ("3 分钟前") are computed from Date.now() at render time, so a

@@ -38,6 +38,7 @@
 
 const { EventEmitter } = require('node:events')
 const net = require('node:net')
+const { randomBytes } = require('node:crypto')
 const { verifyAuthCode } = require('./pairing')
 const cipher = require('./cipher')
 
@@ -206,7 +207,7 @@ function unwrapInbound(socket, conn, raw) {
  *  absent, no IP-level limiting is applied.
  *  seenPairNonces: server-level Map (insertion-ordered) of client pair-request nonces — a nonce
  *  is single-use per server, so a captured pair-request cannot be replayed into a fresh accept. */
-function wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, onUnauthorized, verifyPairingCode, onPaired, pairGate, onPairRequest, onPairThrottled, pairConfirmTimeoutMs, seenPairNonces, authIdleMs }) {
+function wireConnection(socket, { deviceId, pairingSecret, secretFor, getHandler, onPeer, onUnauthorized, verifyPairingCode, onPaired, pairGate, onPairRequest, onPairThrottled, pairConfirmTimeoutMs, seenPairNonces, authIdleMs }) {
   const state = { peer: null, authorized: false, sessionKey: null, pairHs: null, recvSeq: -1 }
   socket._lanSend = (msg) => send(socket, msg) // encrypted send for server-side handlers (index.js sendVia)
   // M-6 (2026-09-20): close AND error both invoke finish — without a guard a socket that errors
@@ -309,8 +310,11 @@ function wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, o
               socket.destroy()
               return
             }
-            sendEnc(socket, hsKey, { type: 'pair-accept', secret: pairingSecret })
-            if (onPaired) onPaired({ deviceId: typeof msg.deviceId === 'string' ? msg.deviceId : '', host: socket.remoteAddress })
+            // F1 (2026-09-28 drill): mint a FRESH per-pair secret instead of handing out the
+            // global pairingSecret — a second pairing no longer invalidates earlier pairs.
+            const freshSecret = randomBytes(32).toString('hex') // same shape as generatePairingSecret (isValidPairingSecret)
+            sendEnc(socket, hsKey, { type: 'pair-accept', secret: freshSecret, deviceId })
+            if (onPaired) onPaired({ deviceId: typeof msg.deviceId === 'string' ? msg.deviceId : '', host: socket.remoteAddress, secret: freshSecret })
             socket.destroy()
             return
           }
@@ -349,12 +353,15 @@ function wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, o
                 socket.destroy()
                 return
               }
-              sendEnc(socket, hsKey, { type: 'pair-accept', secret: pairingSecret })
+              // F1: fresh per-pair secret here too (minted at accept time, not request time).
+              const freshSecret = randomBytes(32).toString('hex')
+              sendEnc(socket, hsKey, { type: 'pair-accept', secret: freshSecret, deviceId })
               if (onPaired) onPaired({
                 deviceId: typeof msg.deviceId === 'string' ? msg.deviceId : '',
                 deviceName: cleanDeviceName(msg.deviceName),
                 host: socket.remoteAddress,
                 confirmed: true,
+                secret: freshSecret,
               })
             } else {
               send(socket, { type: 'pair-reject', error: 'rejected' })
@@ -402,7 +409,12 @@ function wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, o
           socket.destroy()
           return
         }
-        if (!verifyAuthCode(pairingSecret, claimed, msg.authCode)) {
+        // F1 (2026-09-28 drill): auth prefers the peer's own per-pair secret from the paired-peer
+        // table; the global pairingSecret remains the fallback for legacy peers paired before
+        // per-peer secrets existed. A new pairing overwriting the global no longer breaks
+        // earlier pairs.
+        const peerSecret = (typeof secretFor === 'function' && secretFor(claimed)) || pairingSecret
+        if (!verifyAuthCode(peerSecret, claimed, msg.authCode)) {
           if (onUnauthorized) onUnauthorized({ deviceId: claimed, host: socket.remoteAddress })
           // Online-guessing throttle: FAILED hello attempts feed the same server-level
           // per-IP sliding window as pair-requests (count only failures — a successful auth
@@ -422,7 +434,7 @@ function wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, o
         state.authorized = true
         // Session key: HKDF-SHA256(pairingSecret, client salt from this hello). Every further
         // message in BOTH directions is now an encrypted frame (cipher.js).
-        state.sessionKey = cipher.deriveSessionKey(pairingSecret, msg.salt)
+        state.sessionKey = cipher.deriveSessionKey(peerSecret, msg.salt)
         // hello-ack itself stays PLAINTEXT (handshake boundary) — the send key is attached
         // only after it, so the ack goes out unencrypted and both sides key up from it.
         send(socket, { type: 'hello-ack', ok: true, protoVer: PROTO_VER, enc: 1 })
@@ -457,7 +469,7 @@ function wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, o
  * @returns EventEmitter with .port (after 'listening'), .close()
  */
 function createLanServer(opts) {
-  const { deviceId, pairingSecret, getHandler, onPeer, onUnauthorized, verifyPairingCode, onPaired, host, onPairRequest, onPairThrottled, pairConfirmTimeoutMs } = opts
+  const { deviceId, pairingSecret, secretFor, getHandler, onPeer, onUnauthorized, verifyPairingCode, onPaired, host, onPairRequest, onPairThrottled, pairConfirmTimeoutMs } = opts
   const port = Number.isInteger(opts.port) ? opts.port : DEFAULT_PORT
   const em = new EventEmitter()
   const sockets = new Set()
@@ -526,7 +538,7 @@ function createLanServer(opts) {
         try { socket.destroy() } catch { /* best-effort */ }
       })
     }
-    wireConnection(socket, { deviceId, pairingSecret, getHandler, onPeer, onUnauthorized, verifyPairingCode, onPaired, pairGate, onPairRequest, onPairThrottled, pairConfirmTimeoutMs, seenPairNonces, authIdleMs })
+    wireConnection(socket, { deviceId, pairingSecret, secretFor, getHandler, onPeer, onUnauthorized, verifyPairingCode, onPaired, pairGate, onPairRequest, onPairThrottled, pairConfirmTimeoutMs, seenPairNonces, authIdleMs })
   })
   server.on('error', (err) => {
     // Fixed port taken (round-3 review): FAIL LOUDLY instead of silently degrading to an
@@ -661,7 +673,9 @@ function connect(host, port, opts) {
         if (pairCode !== undefined || pairOpen) {
           if (msg.type === 'pair-accept' && typeof msg.secret === 'string' && msg.secret) {
             reader.setLimit(MAX_LINE_BYTES)
-            em.emit('paired', { secret: msg.secret })
+            // F1: the accept carries the responder's deviceId so the initiator can persist the
+            // per-pair secret under the RIGHT peer record (requestPair resolves host:port only).
+            em.emit('paired', { secret: msg.secret, deviceId: typeof msg.deviceId === 'string' ? msg.deviceId : '' })
           } else {
             em.emit('rejected', msg)
           }

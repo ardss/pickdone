@@ -16,7 +16,16 @@ const SNOW_DEDUP_MAX_AGE_MS = 30 * 24 * 3600 * 1000
 // node_modules/electron-log, so fall back to a no-op logger instead of crashing at require time
 let log
 try { log = require('electron-log') } catch { log = { info () {}, warn () {}, error () {} } }
-const oplog = require('./db-oplog')({ getDb: () => db, log, getPurgeChips: () => purgeChipsScratch }), syncSchema = require('./db-sync-schema')({ getDb: () => db, log })
+const oplog = require('./db-oplog')({
+  getDb: () => db,
+  log,
+  getPurgeChips: () => purgeChipsScratch,
+  // r3 fix (2026-09-28): a failed delta-row append used to be log-only — the loss was invisible
+  // (peers stop receiving that change until the next full snapshot while the push watermark
+  // advances). Surface it through the Device Center sync-event channel (lazy require:
+  // lan-sync-bootstrap may not be initialized yet — its emitter is guarded and no-ops then).
+  onAppendFailure: info => { try { require('./lan-sync-bootstrap').emitOplogAppendFailure(info) } catch { /* surfacing is best-effort */ } },
+}), syncSchema = require('./db-sync-schema')({ getDb: () => db, log })
 const oplogKeepLimit = require('./db-oplog').oplogKeepLimit // D3 2026-09-24: SYNC_OPLOG_KEEP single source (was a bare 10000 clamp literal)
 
 let Database = null
@@ -758,7 +767,10 @@ function call (op, params) {
     // planDeleteTask/planDeleteTaskDay) outside appendOplog's try/catch — a throw there (closed or
     // re-init handle) rejected the caller's invoke for an ALREADY-COMMITTED write, violating
     // appendOplog's contract; the delta row was lost either way. Now success + warn, happy path identical.
-    try { oplog.appendOplog(oplog.oplogEntriesFor(op, params, r)) } catch (e) { log.warn('[TodoDB] oplog capture failed (write itself is unaffected):', e && e.message) }
+    // r4 fix (2026-09-28): when oplogEntriesFor itself throws, route through the SAME reporter
+    // appendOplog uses internally — the failure counter (oplogStats), the onAppendFailure hook
+    // (→ 'oplog-append-failed' syncEvent) and the warn log fire for BOTH entry points now.
+    try { oplog.appendOplog(oplog.oplogEntriesFor(op, params, r)) } catch (e) { oplog.reportAppendFailure(e && e.message) }
   }
   return r
 }

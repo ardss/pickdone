@@ -8,22 +8,10 @@
  */
 const { execFile, spawn } = require('child_process')
 const path = require('path')
-const http = require('http')
+const { sleep, getJSON, adoptSpawnedChild, cdpConnect } = require('./lib-cdp-client.cjs')
 
 const PORT = 9333
 const ROOT = path.join(__dirname, '..')
-const getJSON = p => new Promise((res, rej) => {
-  http.get({ host: '127.0.0.1', port: PORT, path: p, timeout: 2000 }, r => {
-    let s = ''; r.on('data', d => { s += d }); r.on('end', () => res(JSON.parse(s)))
-  }).on('error', rej)
-})
-const sleep = ms => new Promise(r => setTimeout(r, ms))
-
-let spawnedChild = null
-function killSpawnedChild () {
-  if (!spawnedChild || spawnedChild.exitCode !== null) return
-  try { spawn('taskkill', ['/pid', String(spawnedChild.pid), '/T', '/F'], { stdio: 'ignore' }) } catch { /* best effort */ }
-}
 
 // Fail-fast data-isolation gate: this script spawns the real App and mutates data via the store.
 // Never touch the user's real database by default — require an explicit isolation dir.
@@ -50,7 +38,7 @@ async function ensureApp () {
     try {
       // Wait for the page target to appear (browser starts first, page created later; /json/list may briefly return an empty array)
       for (let t = 0; t < 20; t++) {
-        const l = await getJSON('/json/list')
+        const l = await getJSON(PORT, '/json/list')
         if (Array.isArray(l) && l.some(x => x.type === 'page')) return
         await sleep(1000)
       }
@@ -61,8 +49,7 @@ async function ensureApp () {
       const child = spawn(process.execPath, [path.join(ROOT, 'node_modules', 'electron', 'cli.js'), '.', '--remote-debugging-port=' + PORT], { cwd: ROOT, detached: true, stdio: 'ignore' })
       child.unref()
       // Zombie guard: a detached spawn with no owner outlives this gate and pollutes port 9333 for every later CDP probe — always reap on exit
-      spawnedChild = child
-      process.on('exit', killSpawnedChild)
+      adoptSpawnedChild(child)
     }
     await sleep(8000)
   }
@@ -76,24 +63,14 @@ async function ensureApp () {
 
 async function main () {
   await ensureApp()
-  const list = await getJSON('/json/list')
+  const list = await getJSON(PORT, '/json/list')
   // Float windows and other child windows also load index.html; prefer the main window (hash route)
   const page = list.find(t => t.type === 'page' && t.url.includes('#/todo-list')) || list.find(t => t.type === 'page' && !t.url.includes('__tomato-float'))
-  const ws = new WebSocket(page.webSocketDebuggerUrl)
-  let id = 0; const pending = new Map(); const exceptions = []
-  const send = (method, params = {}) => new Promise(res => { const i = ++id; pending.set(i, res); ws.send(JSON.stringify({ id: i, method, params })) })
-  ws.onmessage = e => {
-    const m = JSON.parse(e.data)
-    if (m.id && pending.has(m.id)) { pending.get(m.id)(m.result); pending.delete(m.id); return }
-    if (m.method === 'Runtime.exceptionThrown') exceptions.push(((m.params.exceptionDetails.exception?.description || '')).slice(0, 200))
-  }
-  await new Promise((r) => { ws.onopen = () => r() })
+  const exceptions = []
+  // e2e stored slightly longer exception excerpts (300 vs 200) — now a parameter, not a copy
+  const { send, evalJS, open } = cdpConnect(page.webSocketDebuggerUrl, { exceptions, truncLen: 300 })
+  await open
   await send('Runtime.enable')
-  const evalJS = async expr => {
-    const r = await send('Runtime.evaluate', { expression: expr, awaitPromise: true, returnByValue: true })
-    if (r.exceptionDetails) throw new Error('EXC: ' + (r.exceptionDetails.exception?.description || '').slice(0, 300))
-    return r.result.value
-  }
 
   await send('Page.enable')
   await send('Page.reload')

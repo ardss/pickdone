@@ -134,16 +134,15 @@ function loadAttachmentHandlers () {
   Module._load = origLoad
   return mod
 }
-test('attachment handlers: open-file / download-file-and-open / save-upload-file-to-download all refuse while locked', () => {
+test('attachment handlers: open-file refuses while locked (r3: download/save-to-download dead channels deleted)', () => {
   const mod = loadAttachmentHandlers()
   const h = mod({ isLocked: () => true, isSafeExternal: u => /^https?:/i.test(u), getMainWindow: () => null, broadcastWhiteNoiseUpdated: () => {} })
   assert.rejects(() => h['open-file']({}, 'local://a.png'), /locked/)
-  assert.throws(() => h['download-file-and-open']({}, 'local://a.png'), /locked/)
-  assert.throws(() => h['save-upload-file-to-download']({}, 'local://a.png', 'a.png'), /locked/)
+  assert.equal('download-file-and-open' in h, false, 'dead channel must stay deleted')
+  assert.equal('save-upload-file-to-download' in h, false, 'dead channel must stay deleted')
 })
-test('download-file-and-open: returns false for unknown schemes instead of a blanket true', async () => {
+test('open-file: returns false for unknown schemes instead of a blanket true', async () => {
   const mod = loadAttachmentHandlers()
   const h = mod({ isLocked: () => false, isSafeExternal: u => /^https?:/i.test(u), getMainWindow: () => null, broadcastWhiteNoiseUpdated: () => {} })
-  assert.equal(h['download-file-and-open']({}, 'javascript:alert(1)'), false)
   assert.equal(await h['open-file']({}, 'weird://x'), false)
 })

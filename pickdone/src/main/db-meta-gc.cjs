@@ -9,12 +9,15 @@ module.exports = (getDb) => ({
   // once per focus session (bumpSnow idempotency fence) and previously had NO cleanup path — they
   // accumulated linearly forever, and survived even after the owning task was hard-deleted or its
   // recycle-bin row purged (the startup meta GC's family list never covered them either). Purge the
-  // owning task's keys inside the SAME delete transaction. Range predicate instead of LIKE: task
-  // ids are renderer-supplied and % / _ in an id would silently widen a LIKE pattern.
+  // owning task's keys inside the SAME delete transaction. (r4 2026-09-28: the old upper bound
+  // `prefix + ';'` assumed the dedupKey suffix's first byte < 0x3B — a letter-led dedupKey like
+  // 'focus-1' sorts ABOVE the bound and escaped the delete. substr prefix equality covers ANY
+  // suffix; still pattern-injection-safe, unlike LIKE.) Kept as a bounded prefix predicate, not
+  // LIKE: task ids are renderer-supplied and % / _ in an id would silently widen a LIKE pattern.
   deleteSnowDedupKeysFor (ids) {
     for (const id of ids) {
       const prefix = `snowDedup:${String(id)}:`
-      getDb().prepare('DELETE FROM meta WHERE key >= ? AND key < ?').run(prefix, prefix + ';')
+      getDb().prepare('DELETE FROM meta WHERE substr(key, 1, length(?)) = ?').run(prefix, prefix)
     }
   },
   // planChipsSnapshot meta lifecycle (parity with deleteSnowDedupKeysFor): the renderer mints a

@@ -127,16 +127,15 @@ function loadAttachmentHandlers () {
   // handler 体内的 require('electron') 在每次 IPC 调用时才解析,mock 须保留到测试结束
   return { h, e, restore: () => { Module._load = origLoad } }
 }
-test('F4: open-file / download-file-and-open / delete-file 对非字符串 url 返回 false 而非抛 TypeError', async () => {
+test('F4: open-file / delete-file return false (not TypeError) for non-string urls (r3: download-file-and-open removed)', async () => {
   const { h, e, restore } = loadAttachmentHandlers()
   try {
     for (const bad of [undefined, null, 42, {}]) {
       assert.equal(await h['open-file']({}, bad), false, 'open-file url=' + String(bad))
-      assert.equal(h['download-file-and-open']({}, bad), false, 'download-file-and-open url=' + String(bad))
       assert.equal(h['delete-file'](e, bad), false, 'delete-file url=' + String(bad))
     }
-    // 合法外链不受影响
-    assert.equal(await h['download-file-and-open']({}, 'https://example.com/a.png'), true)
+    // r3 2026-09-28: 死通道 download-file-and-open 三端删除,handler 不再注册
+    assert.equal('download-file-and-open' in h, false, 'dead channel must stay deleted')
   } finally { restore() }
 })
 

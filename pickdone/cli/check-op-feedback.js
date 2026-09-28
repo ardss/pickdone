@@ -38,6 +38,7 @@ const UPDATE_FIELDS_ALLOWLIST = [
   'MatrixGrid.vue', // four-quadrant drag to swap cells (drag exemption)
   'DayDeck.vue', // card-stack drag to change day (moveWithUndo)
   'CalendarView.vue', // event drag / page-flip compensation / time-block drag (all moveWithUndo or drag exemption + toast)
+  'calendarOptions.js', // extracted from CalendarView.vue (pure move, aaf510c5): eventDrop / page-flip writes all inside moveWithUndo (drag gesture)
   'EditPanel.vue', // edit panel autosave (queued debounce, save echoes back)
   'RecycleBinView.vue', // recycle-bin restore (restore is itself an undo of delete, with success toast)
   'TodoBoxView.vue', // batch move-to-today / recategorize (batchMoveWithUndo) + restore (confirm-box context)

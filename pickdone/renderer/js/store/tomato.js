@@ -98,7 +98,13 @@ const DEF = {
   // (todo DB meta 'tomatoFloatClosedByUser'; see tomato-float hide/show/undock + renderer main.js auto-show).
   whiteNoiseAudio: '',
   preTomatoTimes: [25], preRestTimes: [5],
-  remainSec: 1500, startedAt: 0
+  remainSec: 1500, startedAt: 0,
+  // Wall-clock stamp of the last STATUS transition (patch sets it when status changes). Cross-window
+  // sync compares these so a throttled peer's stale blob can never resurrect a phase the local
+  // window already transitioned past (2026-09-27: float-window stale write rolled the main window's
+  // focus->rest flip back to 'startTomatoTime', then the recorded claim blocked every retry tick —
+  // the phase wedged until the 24h rollover).
+  phaseTs: 0
 }
 
 function loadState (voidExpired = true) {
@@ -161,7 +167,59 @@ function persistState (state) {
  *  退出冲刷:pending 账本写挂到 app-quitting-flush(完成番茄后立刻退出是丢账最高频场景,三轮深审发布 blocker);
  *  失败留在重试队列,下一次任意账本写时重放(锁屏/瞬时 IO 失败自愈)。 */
 const _pendingLedger = []
+/** maint/d11-r4: _pendingSnow lives here (next to _pendingLedger) instead of further down — the
+ *  module-top-level hydratePendingQueue(PENDING_SNOW_KEY) revive closure pushes into it, and with
+ *  the const below its use site the closure hit the TDZ and the ReferenceError was swallowed by
+ *  the "corrupt blob" catch, so snow entries persisted before a crash never replayed. */
+const _pendingSnow = []
 let _flushHooked = false
+
+/** maint/d11-r3: the retry queues are now crash-proof. They used to be pure memory arrays — a quit
+ *  flush that still failed (main-process quit-ack caps at 2s then closes the db, so the in-flight
+ *  dbCall rejects) or a renderer crash dropped every queued entry with the process, and the
+ *  "replayed on the next ledger write" promise could never be kept. Both queues now mirror to
+ *  localStorage ({v, seq, ts, ...entry}), hydrate at module load, and replay on the next write or
+ *  quit-flush exactly as before. Removal on success re-saves, so the LS copy always tracks memory. */
+const PENDING_LEDGER_KEY = 'tomatoPendingLedger'
+const PENDING_SNOW_KEY = 'tomatoPendingSnow'
+const PENDING_QUEUE_V = 1
+let _pendingSeq = 0
+function nextPendingSeq () { _pendingSeq += 1; return _pendingSeq }
+function savePendingQueues () {
+  const pack = (entries, keep) => ({ v: PENDING_QUEUE_V, entries: entries.map(keep) })
+  safeSet(PENDING_LEDGER_KEY, JSON.stringify(pack(_pendingLedger, e => ({ seq: e.seq, ts: e.ts, op: e.op, params: e.params }))))
+  safeSet(PENDING_SNOW_KEY, JSON.stringify(pack(_pendingSnow, e => ({ seq: e.seq, ts: e.ts, params: e.params }))))
+}
+function hydratePendingQueue (key, revive) {
+  // maint/d11-r4: parse failures degrade (corrupt blob → start empty + log); revive failures
+  // propagate. The old single try/catch around both mislabeled any revive bug as a corrupt blob
+  // and silently swallowed it — a real code bug looked exactly like expected degradation.
+  let v
+  try {
+    v = JSON.parse(localStorage.getItem(key))
+  } catch (e) {
+    console.error('[tomato] pending queue "' + key + '" is corrupt, starting empty:', e)
+    return
+  }
+  if (!v || typeof v !== 'object' || v.v !== PENDING_QUEUE_V || !Array.isArray(v.entries)) return
+  for (const raw of v.entries) {
+    const e = revive(raw)
+    if (!e) continue
+    if (typeof e.seq === 'number' && e.seq > _pendingSeq) _pendingSeq = e.seq
+  }
+}
+/** Startup hydration: entries queued in a previous process life come back (seq/ts stamped at enqueue
+ *  time), then replay through the normal ledgerWrite/snowWrite paths. */
+hydratePendingQueue(PENDING_LEDGER_KEY, raw => {
+  if (!raw || typeof raw !== 'object' || typeof raw.op !== 'string' || !raw.params) return null
+  _pendingLedger.push({ op: raw.op, params: raw.params, seq: typeof raw.seq === 'number' ? raw.seq : nextPendingSeq(), ts: typeof raw.ts === 'number' ? raw.ts : Date.now() })
+  return _pendingLedger[_pendingLedger.length - 1]
+})
+hydratePendingQueue(PENDING_SNOW_KEY, raw => {
+  if (!raw || typeof raw !== 'object' || !raw.params) return null
+  _pendingSnow.push({ params: raw.params, seq: typeof raw.seq === 'number' ? raw.seq : nextPendingSeq(), ts: typeof raw.ts === 'number' ? raw.ts : Date.now() })
+  return _pendingSnow[_pendingSnow.length - 1]
+})
 /** H1 (2026-09-16): the db layer's tomatoAppendMany now returns a row-tolerant {accepted,rejected}
  *  result; rejected rows (missing tomatoId/endTime etc.) used to vanish silently — report each per contract. */
 function logRejectedRows (res, params) {
@@ -184,7 +242,7 @@ function purgePendingAppends (ids) {
     const e = _pendingLedger[i]
     if (!e || e.op !== 'tomatoAppendMany') continue
     const recs = Array.isArray(e.params) ? e.params : [e.params]
-    if (recs.some(r => r && dead.has(r.tomatoId))) _pendingLedger.splice(i, 1)
+    if (recs.some(r => r && dead.has(r.tomatoId))) { _pendingLedger.splice(i, 1); savePendingQueues() }
   }
 }
 
@@ -193,7 +251,8 @@ function replayPendingLedger () {
   for (const entry of [..._pendingLedger]) {
     Promise.resolve(window.todoAPI && window.todoAPI.dbCall(entry.op, entry.params))
       .then(res => {
-        const i = _pendingLedger.indexOf(entry); if (i >= 0) _pendingLedger.splice(i, 1)
+        const i = _pendingLedger.indexOf(entry)
+        if (i >= 0) { _pendingLedger.splice(i, 1); savePendingQueues() }
         logRejectedRows(res, entry.params)
         if (entry.op === 'tomatoRemoveByIds') purgePendingAppends(entry.params)
       })
@@ -201,8 +260,9 @@ function replayPendingLedger () {
   }
 }
 function ledgerWrite (op, params) {
-  const entry = { op, params }
+  const entry = { op, params, seq: nextPendingSeq(), ts: Date.now() }
   _pendingLedger.push(entry)
+  savePendingQueues()
   // Retry queue: replay any still-pending entries (incl. this one) before/with the new write
   replayPendingLedger()
   hookQuitFlush()
@@ -217,7 +277,8 @@ function flushPendingLedger () {
   for (const entry of [..._pendingLedger]) {
     Promise.resolve(window.todoAPI && window.todoAPI.dbCall(entry.op, entry.params))
       .then(res => {
-        const i = _pendingLedger.indexOf(entry); if (i >= 0) _pendingLedger.splice(i, 1)
+        const i = _pendingLedger.indexOf(entry)
+        if (i >= 0) { _pendingLedger.splice(i, 1); savePendingQueues() }
         logRejectedRows(res, entry.params)
         if (entry.op === 'tomatoRemoveByIds') purgePendingAppends(entry.params)
       })
@@ -239,18 +300,19 @@ function hookQuitFlush () {
  *  completion was booked under. The db layer's bumpSnow honors an optional dedupKey so a replayed
  *  entry (retry queue OR quit-flush) cannot double-credit a focus that already landed. Quit-flush
  *  replays the same params object, so every replay path carries the same key. */
-const _pendingSnow = []
 function replayPendingSnow () {
   for (const entry of [..._pendingSnow]) {
     Promise.resolve(window.todoAPI && commitCommand("todo", "bump", entry.params))
       .then(() => {
-        const i = _pendingSnow.indexOf(entry); if (i >= 0) _pendingSnow.splice(i, 1)
+        const i = _pendingSnow.indexOf(entry)
+        if (i >= 0) { _pendingSnow.splice(i, 1); savePendingQueues() }
       })
       .catch(e => console.error('[tomato] bumpSnow failed (queued for retry):', entry.params, e))
   }
 }
 function snowWrite (params) {
-  _pendingSnow.push({ params })
+  _pendingSnow.push({ params, seq: nextPendingSeq(), ts: Date.now() })
+  savePendingQueues()
   replayPendingSnow()
   hookQuitFlush()
 }
@@ -261,10 +323,28 @@ function flushPendingSnow () {
   for (const entry of [..._pendingSnow]) {
     Promise.resolve(window.todoAPI && commitCommand("todo", "bump", entry.params))
       .then(() => {
-        const i = _pendingSnow.indexOf(entry); if (i >= 0) _pendingSnow.splice(i, 1)
+        const i = _pendingSnow.indexOf(entry)
+        if (i >= 0) { _pendingSnow.splice(i, 1); savePendingQueues() }
       })
       .catch(e => console.error('[tomato] bumpSnow flush failed at quit (kept for retry):', entry.params, e))
   }
+}
+
+/** maint/d11-r4: single source for the tomato countdown's remaining seconds. Five hand-written
+ *  copies (TomatoBar clock/remainSecNow/pushTaskbar, TomatoPanel, TomatoFloatPage) drifted-able —
+ *  any rounding/clamp change on one end made float window and panel visibly disagree per second.
+ *  Running: delegates to the pre-existing single source remainSecOf (tomatoShared) — floor+clamp
+ *  and the rest fallback (restTime || 5, NOT 25) stay identical to every other consumer.
+ *  Idle: full tomatoTime (||25; rest phase ||5, matching remainSecOf's defaults).
+ *  `now` is injected so callers keep their reactive tick (Date.now() in a Vuex getter is not
+ *  reactive — see P1-6). */
+export function remainingSecOfState (s, now) {
+  if (!s) return 25 * 60
+  const running = remainSecOf(s.status, s.startedAt, s.tomatoTime, s.restTime, Number(now) || Date.now())
+  if (running !== null) return running
+  // Idle fallback — same defaults as remainSecOf: focus ||25, rest ||5 (r5: the rest half used to
+  // fall back to 25, making a missing restTime show 25:00 in float/panel vs 5:00 in TodayXView).
+  return ((s.status === 'startRestTime' ? s.restTime : s.tomatoTime) || (s.status === 'startRestTime' ? 5 : 25)) * 60
 }
 
 export default {
@@ -296,6 +376,7 @@ export default {
       // F-C3: duration keys (TOMATO_LEDGER_KEYS family) are clamped at this final hop — an unclamped
       // inbound value (e.g. tomatoTime 9999 from an unsanitized path) used to drive the running
       // countdown and get persisted to LS + db.settingsState verbatim.
+      if (p && p.status && p.status !== s.status) s.phaseTs = Date.now()
       Object.assign(s, clampNumericSettings(p))
       persistState(s)
     },
@@ -370,7 +451,18 @@ export default {
       if (ping == null || ping === lastAppliedPing) return
       lastAppliedPing = ping
       const records = s.tomatoRecordList
-      Object.assign(s, loadState(false))
+      const fresh = loadState(false)
+      if ((fresh.phaseTs || 0) < (s.phaseTs || 0)) {
+        // Stale-peer guard: the peer's blob describes a phase OLDER than one this window already
+        // transitioned past (throttled float writing mid-focus state after the main window flipped).
+        // Applying it would roll the phase back; and with the phase claim already recorded, every
+        // retry tick would no-op — a permanent wedge. Preferences still sync; the phase stays local.
+        const PHASE_KEYS = ['status', 'startedAt', 'remainSec', 'phaseTs']
+        const prefs = Object.fromEntries(Object.entries(fresh).filter(([k]) => !PHASE_KEYS.includes(k)))
+        Object.assign(s, prefs)
+      } else {
+        Object.assign(s, fresh)
+      }
       s.tomatoRecordList = records
     }
   },

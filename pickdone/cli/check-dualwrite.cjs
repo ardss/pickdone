@@ -22,14 +22,10 @@ const RENDERER = path.join(ROOT, 'renderer', 'js')
 const LEDGER = path.join(ROOT, 'tests', 'dualwrite-ledger.json')
 const SELFTEST = !!process.env.DUALWRITE_SELFTEST
 
-function walk (dir, out = []) {
-  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-    const p = path.join(dir, e.name)
-    if (e.isDirectory()) walk(p, out)
-    else if (e.name.endsWith('.js') || e.name.endsWith('.vue')) out.push(p)
-  }
-  return out
-}
+// shared walker (lib-filescan.cjs): the old hand-rolled copy skipped NOTHING (node_modules/.git
+// would have been scanned if they ever appeared under renderer/js) and missed .cjs/.mjs — both
+// drifts are closed by the shared defaults
+const { listFiles: walk } = require('./lib-filescan.cjs')
 
 /** Resolve an identifier key to its string literal via same-file `const ID = '...'` */
 function resolveConst (src, id) {

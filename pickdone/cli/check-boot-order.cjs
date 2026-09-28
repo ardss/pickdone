@@ -28,18 +28,10 @@ const acorn = require('acorn')
 const ROOT = path.join(__dirname, '..')
 const TARGET = path.join(ROOT, 'src', 'main')
 
-function listFiles (dir, out = []) {
-  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, e.name)
-    if (e.isDirectory()) {
-      if (e.name === 'node_modules' || e.name === 'dist' || e.name.startsWith('.')) continue
-      listFiles(full, out)
-    } else if (/\.(js|cjs|mjs)$/.test(e.name) && !e.name.endsWith('.d.ts')) {
-      out.push(full)
-    }
-  }
-  return out
-}
+// shared walker (lib-filescan.cjs): skip-list now includes renderer-dist like the other gates
+// (a no-op under src/main today, but the drift was the bug); exts stay .js/.cjs/.mjs (no .vue —
+// acorn parses raw script, vue SFCs are not part of the main boot graph)
+const { listFiles } = require('./lib-filescan.cjs')
 
 function parse (code) {
   for (const sourceType of ['module', 'script']) {
@@ -183,9 +175,15 @@ function main () {
   if (args.includes('--staged')) {
     const { execFileSync } = require('child_process')
     const out = execFileSync('git', ['diff', '--cached', '--name-only', '--diff-filter=ACM'], { cwd: ROOT, encoding: 'utf8' })
-    files = out.split('\n').filter(Boolean)
-      .filter(f => /^src[\\/]main[\\/]/.test(f))
-      .map(f => path.join(ROOT, f)).filter(f => fs.existsSync(f))
+    // diff-filter=ACM only yields added/copied/modified paths, so every listed file MUST exist on
+    // disk; silently dropping a missing one would shrink the scan surface to a fake-green.
+    const stagedMain = out.split('\n').filter(Boolean).filter(f => /^src[\\/]main[\\/]/.test(f))
+    const missing = stagedMain.filter(f => !fs.existsSync(path.join(ROOT, f)))
+    if (missing.length) {
+      console.error('✗ boot-order --staged: staged src/main file(s) not found on disk — scan surface would silently shrink, refusing to fake-green:\n  ' + missing.join('\n  '))
+      process.exit(1)
+    }
+    files = stagedMain.map(f => path.join(ROOT, f))
   } else {
     files = listFiles(TARGET)
   }

@@ -53,9 +53,13 @@ test('r6-2: listTodos invalid --limit falls back to the 200 default', async () =
 })
 
 test('r6-3: planRemove derives the default day from the task scheduled day like planSet', () => {
-  const src = require_('fs').readFileSync(path.join(root, 'cli/lib.js'), 'utf8')
+  // Re-anchored 2026-09-27: planRemove/planSet moved verbatim to cli/lib-plan.cjs (size-ratchet split)
+  const src = require_('fs').readFileSync(path.join(root, 'cli/lib-plan.cjs'), 'utf8')
   const fn = src.match(/function planRemove[\s\S]*?\n}/)[0]
   assert.match(fn, /planDayKey\(date != null && date !== true \? date : \(t\.dayStart \? dayjs\(t\.dayStart\)/, 'same default-day rule as planSet')
+  const lib = require_(path.join(root, 'cli/lib.js')) // behavior seam: exports survive the module move
+  assert.ok(typeof lib.planRemove === 'function')
+  assert.ok(typeof lib.planSet === 'function')
 })
 
 test('r6-4: settings manifest types calendarCategory as number', () => {

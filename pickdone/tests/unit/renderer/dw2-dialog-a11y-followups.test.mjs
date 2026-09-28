@@ -80,8 +80,7 @@ test('hint-q: all six ? marks carry an accessible name and NO fake-button semant
 })
 
 test('hint-q: :focus-visible style present in both host style blocks (no base.css exists)', () => {
-  for (const f of [`${C}/EditPanel.vue`, `${C}/RepeatModal.vue`]) {
-    const src = read(f)
-    assert.match(src, /\.hint-q:focus-visible\s*\{[^}]*outline/, `${f} style block carries the focus ring`)
-  }
+  // EditPanel's stylesheet moved verbatim to edit-panel/editPanel.css (structure-size ratchet)
+  assert.match(read(`${C}/edit-panel/editPanel.css`), /\.hint-q:focus-visible\s*\{[^}]*outline/, 'EditPanel stylesheet carries the focus ring')
+  assert.match(read(`${C}/RepeatModal.vue`), /\.hint-q:focus-visible\s*\{[^}]*outline/, 'RepeatModal style block carries the focus ring')
 })

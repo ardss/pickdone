@@ -12,6 +12,9 @@ const dayjs = require('dayjs')
 // Single source for default backup roots (P0 root fix): derivation lives in src/main/backup-dirs.js
 // (electron lazy-required there so this pure-Node CLI can require it) — no second copy here.
 const { defaultBackupRootCandidates } = require('../src/main/backup-dirs.js')
+// Restore-segment registry single source (see the schemaV guard below) — pure fs module,
+// no electron at top level, so this pure-Node CLI can require it.
+const dbRecovery = require('../src/main/dbRecovery.cjs')
 
 module.exports = function restoreBackup ({ opts, lib, emit }) {
   const SNAP = 'auto-'
@@ -76,10 +79,12 @@ module.exports = function restoreBackup ({ opts, lib, emit }) {
     throw new lib.CliError('snapshot is valid JSON but not a pickdone backup dump (no backup.todoState/categoryState segments found)', 'SNAPSHOT_INVALID')
   }
   // schemaV guard, same contract as the restore side (dbRecovery.parseSegment / applyRestoreDump):
-  // a segment written by a NEWER app version must not be misread by this (older) CLI. Covers the
-  // whole versioned segment set (adversarial round): todoState/categoryState (counted here) plus
-  // filterState/planState/habitsState (restored by the App from the same dump).
-  for (const key of ['todoState', 'categoryState', 'filterState', 'planState', 'habitsState', 'metaState']) {
+  // a segment written by a NEWER app version must not be misread by this (older) CLI. The segment
+  // set is DERIVED from dbRecovery's RESTORE_SEGMENTS registry (the single source whose doc comment
+  // promises "comment and code can no longer drift") — the previous hand-copied 6-segment literal
+  // missed tomatoRecords, so a schemaV=2 tomatoRecords segment passed this CLI's validation while
+  // the App's restore refused the dump.
+  for (const key of dbRecovery.RESTORE_SEGMENT_NAMES) {
     const seg = parseSeg(key)
     if (seg && Number(seg.schemaV || 1) > 1) {
       throw new lib.CliError(`snapshot ${key}.schemaV=${seg.schemaV} is newer than this CLI supports — upgrade the App and restore from its Settings -> Backup`, 'SNAPSHOT_FUTURE')

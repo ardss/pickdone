@@ -27,8 +27,9 @@
  *                'pointer'; only ops that physically REMOVE rows declare 'row'.)
  *   localKeys  – optional (key) => boolean classifier for machine-local keys inside the
  *                payload (meta/settings rows that must neither egress nor be overwritten
- *                by a peer — mirrors src/main/sync-apply.js's filters, kept inline so this
- *                module stays dependency-free; the sync-apply filters remain authoritative)
+ *                by a peer — imported from shared/machine-local-keys.mjs, the same module
+ *                src/main/sync-apply-hydrate.js gates with, so the copies cannot drift;
+ *                the shared filters remain authoritative)
  *   op         – the existing db.js op this command dispatches to (engine untouched)
  *   internal   – optional true = NOT renderer-reachable (no facade row, todo-db:call whitelist
  *                rejects it): main-process / CLI-surface commands added in Phase 2. The gate's
@@ -42,29 +43,11 @@
  * exemption for src/main/sync-apply.js + src/main/lan-sync-bootstrap.js).
  */
 
-// Machine-local meta keys (mirror of sync-apply.js isMachineLocalMetaKey — the user-data
-// allowlist there stays authoritative; this copy only classifies, it never gates writes).
-const isMachineLocalMetaKey = k => {
-  const s = String(k)
-  return s.startsWith('sync.') || s.startsWith('_') || /^securityLock/.test(s) ||
-    s.startsWith('cliTomato') || s.startsWith('cliSync') || s === 'todosVersion' ||
-    s.startsWith('firedReminders:') || s === 'reminderLastSeenAt' ||
-    s.startsWith('settingsRows.src.') || s === 'db.tomatoState' || s === 'habitsState' ||
-    s.startsWith('snowDedup:') || s.startsWith('metaConflictBackup.') ||
-    // D6 P2 (2026-09-21) round-3 parity: migration/bookkeeping keys the sync-apply filter blocks
-    // (a peer's 'schemaVersion' row could regress/over-advance the local schema migrator; legacy
-    // 'dayPlanState'/'dayPlanState.*' whole-package chip JSON would re-poison a device already
-    // migrated to the plan_chips row store). The mirror MUST classify them identically or the
-    // ls-mirror hook kicks sync rounds for writes peers are forbidden to consume — cli/
-    // check-command-bus.cjs now asserts the two filters agree over an enumerated key corpus.
-    k === 'schemaVersion' || k === 'dayPlanState' || k.startsWith('dayPlanState.')
-}
-
-// Machine-local settings-row keys: was a hand-maintained mirror of sync-apply.js — now the
-// SHARED module both ends import (domain-1 F-A1, 2026-09-23; cli/check-command-bus.cjs's
-// mirror-agreement assert holds by construction). The shared version also blocks the
-// machine-level config keys (enableSecurityLock etc.) a peer must never overwrite here.
-const { isMachineLocalSettingKey } = require('../../shared/machine-local-keys.mjs')
+// Machine-local meta/settings keys: both were hand-maintained mirrors of sync-apply(-hydrate).js
+// — now the SHARED module both ends import (settings in domain-1 F-A1 2026-09-23; meta in
+// domain-3 2026-09-28; cli/check-command-bus.cjs's mirror-agreement assert holds by
+// construction). The shared module stays dependency-free (no electron imports).
+const { isMachineLocalSettingKey, isMachineLocalMetaKey } = require('../../shared/machine-local-keys.mjs')
 
 const COMMANDS = {
   // ---- todos ----

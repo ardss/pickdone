@@ -5,7 +5,6 @@
  */
 const path = require('path')
 const fs = require('fs')
-const { spawn } = require('child_process')
 const dayjs = require('dayjs')
 require('dayjs/locale/zh-cn')
 dayjs.locale('zh-cn')
@@ -34,7 +33,7 @@ const dbm = require('../src/main/db.js')
 const bus = require('../src/main/command-bus')
 // open() first: several call sites used `open().call(op, …)` as their only DB touch — the bus
 // commit must keep guaranteeing an initialized handle in pure-CLI sessions.
-const commit = (entity, verb, payload) => { open(); return bus.commit(entity, verb, payload, { preserveStamp: true }) }
+const commit = (entity, verb, payload) => { open(); ensureTomatoMigrated(); return bus.commit(entity, verb, payload, { preserveStamp: true }) }
 const core = require('../src/main/core/todo-core.js')
 // Round-3 P1: ownership guard for attachment filenames (single source with the App's purge path —
 // pure, electron-free; D3 2026-09-24 now required directly from its electron-free domain module
@@ -45,7 +44,6 @@ const nlDate = require('./nl-date.cjs')
 const { parseMilestoneDateCore } = require('../shared/parse-date.mjs') // milestone-date core shared with the renderer (require(esm), same pattern as limits.mjs)
 const { nextSort, moveWithin } = require('../shared/sort-core.mjs') // P3-7 / F-B2: sort-score single source with renderer utils/core.js (require(esm))
 
-const { matchesViewConds } = require('../shared/filter-core.mjs') // D4 2026-09-24: saved-view matcher single source with db.js / FilterView.vue (require(esm))
 const { localDayKey } = require('../src/main/fix-util.js') // P3-8: single source for the local YYYY-MM-DD key (same require the lib-attachments module already uses)
 
 let opened = false
@@ -67,17 +65,33 @@ function assertIsolationForWrite ({ allowReal = false } = {}) {
   throw e
 }
 
-/** Open the database (idempotent). The TODO_DB_DIR env var can point to an isolated directory (for tests); defaults to the App's userData */
+/** Open the database (idempotent). The TODO_DB_DIR env var can point to an isolated directory (for tests); defaults to the App's userData.
+ *  Runs the one-shot tomato ledger migration sentinel (r5-4 contract: at open(), BEFORE any read or
+ *  write — a CLI-only `tomato list` after the ledger upgrade must see the migrated rows, and a CLI
+ *  backfill landing rows first must not make tomatoMigrateFromMeta's table-not-empty guard throw the
+ *  old meta blob away forever). Idempotent by design: "meta blob absent" is the migrated marker. */
 function open () {
   if (opened) return dbm
   // Main process reuse: when the App itself has already opened the DB with the same directory (CSV import goes through the main process IPC), init must not be run a second time to rebuild the connection
   if (dbm.isOpen && dbm.isOpen()) { opened = true; return dbm }
   const dir = userDataDir()
   dbm.init(dir)
-  // One-shot tomato ledger migration (review P2 2026-09-11): the App runs tomatoMigrateFromMeta on startup, but a CLI-only session after the ledger-schema upgrade used to read an empty ledger — and worse, a CLI backfill landing rows first made the migration's table-not-empty guard throw the old meta blob ledger away forever (the blob-deletion sentinel runs regardless). Running the migration sentinel here, BEFORE any CLI write, keeps both ends converging on the same row table. Idempotent by design: "meta blob absent" is the migrated marker, so repeat calls on already-migrated DBs are no-ops.
-  try { commit('tomato', 'migrateFromMeta') } catch (e) { /* migration failure must not block the CLI (same tolerance as the App's startup call) */ }
   opened = true
+  ensureTomatoMigrated()
   return dbm
+}
+// Flag both makes the migration once-per-process and breaks the recursion (the migration itself goes through the same write path).
+let tomatoMigrated = false
+function ensureTomatoMigrated () {
+  if (tomatoMigrated) return
+  tomatoMigrated = true
+  try { bus.commit('tomato', 'migrateFromMeta', null, { preserveStamp: true }) } catch (e) {
+    // Fail-loud (d11 round 2): the old bare catch swallowed a corrupt meta blob into SILENCE —
+    // `tomato list` then printed an empty ledger and exited 0 (read-side side effect + fake
+    // success). We still do not abort the read (full read/write open-protocol decoupling is a
+    // separate round), but the user now SEES the failure on stderr instead of an empty list.
+    console.error(`warning: tomato ledger migration failed (${e && e.message ? e.message : e}); tomato output may be incomplete — inspect the meta blob in ${userDataDir()}`)
+  }
 }
 
 /* ================= Errors ================= */
@@ -85,93 +99,10 @@ class CliError extends Error {
   constructor (message, code = 'CLI_ERROR') { super(message); this.code = code }
 }
 
-/* ================= Date parsing ================= */
-/** Supports today/tomorrow/yesterday/+N/-N days, YYYY-MM-DD, YYYY-MM-DD HH:mm, timestamps */
-function parseDate (s) {
-  if (s == null || s === '') return 0
-  const str = String(s).trim().toLowerCase()
-  // Explicitly accept only 13-digit ms timestamps (avoids a 12-digit seconds value being parsed as ms → 1970)
-  if (/^[+-]?\d{13}$/.test(str)) return parseInt(str, 10) // timestamp
-  const now = dayjs()
-  // Relative offsets: +3d / -1w / +2m, and offset-with-time like +2d 16:30
-  const offTime = str.match(/^([+-])(\d+)([dwm])\s+(\d{1,2}):(\d{2})$/)
-  const offMatch = str.match(/^([+-])(\d+)([dwm])$/)
-  if (offTime || offMatch) {
-    const sign = (offTime || offMatch)[1]
-    const n = parseInt((offTime || offMatch)[2]) * (sign === '+' ? 1 : -1)
-    const unit = { d: 'day', w: 'week', m: 'month' }[(offTime || offMatch)[3]]
-    const base = now.add(n, unit)
-    if (offTime) return +base.hour(+offTime[4]).minute(+offTime[5]).second(0).millisecond(0)
-    return +base
-  }
-  if (str === 'today' || str === '今天') return +now
-  if (str === 'tomorrow' || str === '明天') return +now.add(1, 'day')
-  if (str === 'yesterday' || str === '昨天') return +now.subtract(1, 'day')
-  // Keyword+time combos (tomorrow 09:00 / 明天11点) resolve deterministically before nlDate: "tomorrow" said in the small hours would
-  // colloquially land on today's daytime per Chinese usage, but for the CLI's AI users tomorrow must be unambiguous (+1 day)
-  const kw = str.match(/^(today|tomorrow|yesterday)\s+(\d{1,2}):(\d{2})$/)
-  if (kw) {
-    const base = { today: now, tomorrow: now.add(1, 'day'), yesterday: now.subtract(1, 'day') }[kw[1]]
-    return +base.hour(+kw[2]).minute(+kw[3]).second(0).millisecond(0)
-  }
-  // Bare M/D, M.D, M-D (no year) must be intercepted BEFORE dayjs(): V8's fallback Date parse
-  // turns '9/22' into 2001-09-22 and reports it valid (P2-1). Current year + explicit month/day
-  // validation, same interception the shared parseMilestoneDateCore applies.
-  const bareMd = str.match(/^(\d{1,2})[/.-](\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?$/)
-  if (bareMd) {
-    const mo = +bareMd[1]; const d2 = +bareMd[2]
-    if (mo < 1 || mo > 12) throw new CliError(`invalid date: "${s}" (month ${mo} does not exist)`)
-    const days = dayjs().month(mo - 1).daysInMonth()
-    if (d2 < 1 || d2 > days) throw new CliError(`invalid date: "${s}" (${mo}-${d2} is not a valid month/day — month ${mo} has ${days} days)`)
-    let base = dayjs().month(mo - 1).date(d2)
-    if (bareMd[3] != null) base = base.hour(+bareMd[3]).minute(+bareMd[4]).second(0).millisecond(0)
-    else base = base.startOf('day')
-    return +base
-  }
-  const d = dayjs(str)
-  if (!d.isValid()) {
-    // Chinese natural-language date fallback (后天/下周五/3天后/周末/M月D日…): same rule set as the renderer's nlDate, saving AI conversion tokens
-    const nl = nlDate.parseNaturalDate(String(s).trim())
-    if (nl && nl.date) return +nl.date
-    throw new CliError(`cannot parse date: "${s}" (supported: today/tomorrow/+3d/YYYY-MM-DD[ HH:mm], plus Chinese forms like 后天/下周五/8月15日)`)
-  }
-  // dayjs silent carry-over (2025-02-29 → 2025-03-01) — split Y/M/D and validate explicitly, aligned with the renderer's nlDate
-  const dateMatch = str.match(/^(\d{4})[/.-](\d{1,2})[/.-](\d{1,2})/)
-  if (dateMatch) {
-    const y = +dateMatch[1]; const mo = +dateMatch[2]; const d2 = +dateMatch[3]
-    const days = dayjs().year(y).month(mo - 1).daysInMonth()
-    if (mo < 1 || mo > 12 || d2 < 1 || d2 > days) throw new CliError(`invalid date: "${s}" (${y}-${mo} has only ${days} days)`)
-  }
-  return +d
-}
-
-/** Deadline → 00:00 of that day (consistent with the renderer's dayjs(todoTime).startOf('day')) */
-function dayStartOf (ts) { return ts ? +dayjs(ts).startOf('day') : 0 }
-
-/* ---------------- Lunar annotation (solarlunar, same ISC dependency the App's calendar/repeat use) ---------------- */
-let _solarlunar = null
-function solarlunar () {
-  if (!_solarlunar) _solarlunar = (r => (r && r.default) ? r.default : r)(require('solarlunar'))
-  return _solarlunar
-}
-
-/** Short lunar annotation for a task's displayed date: "七月廿九" (null when the task has no date or the lib is missing) */
-function lunarOf (t) {
-  const ts = t && (t.todoTime || t.dayStart)
-  if (!ts) return null
-  try {
-    const d = dayjs(ts)
-    const l = solarlunar().solar2lunar(d.year(), d.month() + 1, d.date())
-    return l && l.monthCn && l.dayCn ? l.monthCn + l.dayCn : null
-  } catch { return null }
-}
-
-/** Full annotation for --json rows: "YYYY-MM-DD · 七月廿九" (null for undated tasks) */
-function lunarAnnotate (t) {
-  const short = lunarOf(t)
-  if (!short) return null
-  return dayjs(t.todoTime || t.dayStart).format('YYYY-MM-DD') + ' · ' + short
-}
+/* ---------------- Split sub-modules (2026-09-23, #132 skipped P3-11 continuation; 2026-09-27 size-ratchet continuation) ----------------
+   Read commands and the projects/milestones/status block moved verbatim to lib-tasks.cjs /
+   lib-projects.cjs; deps are injected so the db/bus/audit seams stay single-sourced here. */
+const { parseDate, dayStartOf, lunarOf, lunarAnnotate } = require('./lib-date.cjs')({ CliError, dayjs, nlDate })
 
 /* ================= Task resolution ================= */
 // F-B5 (dw wave 3): single keyword normalization — was 3 verbatim copies (resolveTask, resolveRepeatEntry,
@@ -268,6 +199,10 @@ const genTaskId = core.genTaskId
 const {
   listTodos, getCategories, resolveCategory, stats, overview,
 } = require('./lib-tasks.cjs')({ open, CliError, parseDate, dayjs, normKey }) // F-B5: normKey injected (resolveCategory's copy removed)
+const {
+  tomatoRecords, backfillRecord, resolveRecord, recordFix, recordRemove,
+  setEstimate, getEstimateOf, estimateKey, ESTIMATE_KEY_PREFIX, ESTIMATE_MAX, clampEstimate,
+} = require('./lib-focus.cjs')({ open, commit, audit, CliError, dayjs, resolveTask, liveTasks, parseDate, FOCUS_MAX_MINUTES, REST_MAX_MINUTES })
 const {
   getProjects, getProjectIds, setProjectFlag, projectStatus,
   getMilestones, parseMilestoneDate, addMilestone, removeMilestone, linkMilestone, msProgress,
@@ -530,42 +465,6 @@ function toggleComplete (input, target, { withSubtasks, completedAt } = {}) {
   return { completed, renewed }
 }
 
-/** F-B4 (dw wave 3): single constructor for CLI renewal instances — the done path (repeat renewal on
- *  complete) and repeatOn's future-instance expansion (expand) carried two ~40-line near-verbatim
- *  object literals. Behavior preserved exactly, including expand's historical estimate:0 (no silent
- *  behavior change; the done path keeps its live getEstimateOf readback). Sort keeps the legacy
- *  length-keyed bottom-insert convention (min-512 / empty-day 1024; see the inline note for why
- *  nextSort's own empty check is not used here). */
-function buildRenewalInstance (t, next, { estimate = 0, todoTime = next.todoTime, reminderTime, extra = {} } = {}) {
-  const now = Date.now()
-  const sameDay = open().call('queryTodos', { deleted: 0 }).filter(x => x.dayStart === dayStartOf(todoTime))
-  const sameSorts = sameDay.map(x => x.taskSort).filter(v => v != null)
-  // P2 2026-09-20 convention (renderer renewal: store/todo.js addToTop:false → nextSort): bottom-insert
-  // min-512, empty day 1024. The EMPTY-day case is keyed on sameSorts.length, NOT nextSort's internal
-  // `!minS && !maxS` check — a day whose existing sorts are all exactly 0 (midpoint arithmetic can
-  // produce 0) must take the min-512 branch (-512), not the empty-day 1024 baseline (review fix).
-  const taskSort = sameSorts.length ? Math.fround(Math.min(...sameSorts) - 512) : 1024
-  let subs = null
-  try { subs = t.subtasks ? JSON.parse(t.subtasks) : null } catch { /* keep null */ }
-  return {
-    complete: false, createTime: now, delete: false,
-    ...core.renewalCarryFields(t, next),
-    reminderTime: reminderTime !== undefined ? reminderTime : next.reminderTime,
-    estimate,
-    subtasks: subs ? JSON.stringify(subs.map(s => ({ ...s, checked: false }))) : null,
-    image: null, files: null,
-    categoryId: t.categoryId,
-    updateTime: now, syncTime: 0,
-    taskContent: t.taskContent,
-    taskDescribe: t.taskDescribe || '',
-    taskId: core.genTaskId(t.userId, now),
-    taskSort,
-    todoTime,
-    userId: t.userId, status: 'add', version: 0,
-    ...extra
-  }
-}
-
 /** Soft delete → recycle bin (deletedAt drives the 30-day auto hard-delete and recycle-bin ordering, aligned with the renderer) */
 function deleteTodo (input) {
   // version reset to 0 (renderer parity: store/todo.js deleteTodo, P3 2026-09-12): syncTodos excludes
@@ -687,761 +586,34 @@ function purgeRecycleBin () {
   return true
 }
 
-/* ================= Subtasks (subtasks JSON: [{text, checked}], structure aligned with EditPanel) ================= */
-function parseSubs (t) {
-  try { const a = JSON.parse(t.subtasks || '[]'); return Array.isArray(a) ? a : [] } catch { return [] }
-}
+/* Subtasks + environment (doctor/launchApp): extracted verbatim to lib-subs.cjs / lib-env.cjs (2026-09-27 size-ratchet split) */
+const {
+  parseSubs, addSubtask, checkSubtask, removeSubtask, moveSubtask,
+} = require('./lib-subs.cjs')({ resolveTask, liveTasks, patchTodo, CliError })
+const { doctor, launchApp } = require('./lib-env.cjs')({ open, CliError, userDataDir, assertIsolationForWrite })
 
-/** Subtask resolution: 1-based index or unique text match */
-function findSub (subs, key) {
-  const s = String(key)
-  if (/^\d+$/.test(s)) {
-    const i = parseInt(s, 10) - 1
-    if (i < 0 || i >= subs.length) throw new CliError(`subtask index out of range: ${key} (${subs.length} total)`, 'SUB_NOT_FOUND')
-    return i
-  }
-  const kw = s.toLowerCase()
-  const hits = subs.map((x, i) => (x.text || '').toLowerCase().includes(kw) ? i : -1).filter(i => i >= 0)
-  if (hits.length === 1) return hits[0]
-  if (hits.length > 1) throw new CliError(`subtask keyword "${key}" matched ${hits.length}; use an index (get <task> --json to view subtasks)`, 'AMBIGUOUS_MATCH')
-  throw new CliError(`subtask not found: "${key}"`, 'SUB_NOT_FOUND')
-}
+/* ---------------- Tomato/sync command channels: extracted verbatim to lib-channels.cjs (2026-09-27 size-ratchet split) ---------------- */
+const {
+  writeTomatoCmd, readTomatoState, waitForTomatoAck, tomatoLiveRemainSec,
+  writeSyncCmd, readSyncState, waitForSyncAck,
+} = require('./lib-channels.cjs')({ open, commit, audit })
 
-function mutateSubs (input, fn, { action = 'subtask', note } = {}) {
-  const t = resolveTask(input)
-  const subs = parseSubs(t)
-  fn(subs)
-  return patchTodo(t.taskId, { subtasks: JSON.stringify(subs) }, { action, note })
-}
+/* Categories write: extracted verbatim to lib-categories.cjs (2026-09-27 size-ratchet split) */
+const {
+  addCategory, renameCategory, deleteCategory, moveCategory, categoryRows, categoryHierarchy,
+} = require('./lib-categories.cjs')({ open, commit, audit, CliError, resolveCategory, projectFlagKey, projectStatusKey, MS_KEY, PROJECT_IDS_KEY })
 
-const addSubtask = (input, text) => {
-  if (!text || !String(text).trim()) throw new CliError('subtask content required', 'EMPTY_CONTENT')
-  return mutateSubs(input, subs => subs.push({ text: String(text).trim(), checked: false }), { note: 'subtask added: ' + String(text).trim() })
-}
-const checkSubtask = (input, key, checked = true) => mutateSubs(input, subs => { subs[findSub(subs, key)].checked = !!checked }, { note: (checked ? 'check' : 'uncheck') + ' subtask: ' + key })
-const removeSubtask = (input, key) => mutateSubs(input, subs => subs.splice(findSub(subs, key), 1), { note: 'subtask removed: ' + key })
+/* Tags + batch operations: extracted verbatim to lib-tags.cjs (2026-09-27 size-ratchet split) */
+const {
+  listTags, rewriteTag, resolveTaskExact, batchTagOne, batchRun,
+} = require('./lib-tags.cjs')({ liveTasks, CliError, patchTodo, toggleComplete, dateChangeReminderPatch, migrateChipsOnDayChange, parseDate, resolveCategory })
 
-/** Environment self-check (modeled on remctl doctor): driver/DB file/read-write/scale */
-function doctor () {
-  const dir = userDataDir()
-  const file = path.join(dir, 'todos.db')
-  const checks = []
-  // ok must stay strictly boolean: mixing true/'skipped'/'synced' made the top-level every() always truthy (string truthiness), so machine consumers could not tell;
-  // 'skipped' (write probe skipped to protect real data) counts as passing, and the state field carries the raw status
-  const add = (name, ok, detail) => checks.push({ check: name, ok: ok === true || ok === 'skipped', state: String(ok), detail: detail || '' })
-  add('dataDir', fs.existsSync(dir), dir)
-  add('dbFile', fs.existsSync(file), file)
-  try {
-    const db = open()
-    const n = db.call('countAll')
-    add('driver', true, 'better-sqlite3-multiple-ciphers (N-API prebuilt)')
-    add('read', true, `${n} rows / recycle bin ${db.call('queryTodos', { deleted: 1 }).length} / categories ${db.call('getAllCategories').length}`)
-    const ver = db.call('getMeta', 'todosVersion')
-    add('meta', true, 'todosVersion ' + (ver != null ? 'synced' : 'local-only (db readable, no version stamp)'))
-    add('write', 'skipped', 'write probe skipped to protect real data; only runs in TODO_DB_DIR isolated dir')
-  } catch (e) {
-    add('open', false, String(e.message || e))
-  }
-  return { dataDir: dir, ok: checks.every(c => c.ok), checks }
-}
+/* Saved views (smart lists): extracted verbatim to lib-views.cjs (2026-09-27 size-ratchet split) */
+const {
+  viewsList, resolveView, viewAdd, viewRm, applyViewConds, viewFetchOpts, viewCondsSummary,
+} = require('./lib-views.cjs')({ open, commit, audit, CliError, dayjs, resolveCategory })
 
-/** Launch/summon the Electron App: starts it when not running; when running, the single-instance lock brings the existing window to the front.
- *  Dev repo: spawn electron's cli.js against the project root.
- *  Packaged install: resources/cli has no node_modules — spawn the app exe at the install root instead. */
-function launchApp ({ dev = false, allowReal = false } = {}) {
-  // P0: never cold-start an App instance against the real user DB — a spawned App opens
-  // %APPDATA%/pickdone immediately; require explicit isolation (or --yes-i-know) first.
-  assertIsolationForWrite({ allowReal })
-  const root = path.join(__dirname, '..')
-  const electronCli = path.join(root, 'node_modules', 'electron', 'cli.js')
-  if (fs.existsSync(electronCli)) {
-    const child = spawn(process.execPath, [electronCli, '.', ...(dev ? ['--dev'] : [])], {
-      cwd: root, detached: true, stdio: 'ignore',
-      env: { ...process.env, ELECTRON_ENABLE_LOG_DUMP: '0' }
-    })
-    child.unref()
-    return { pid: child.pid, dev }
-  }
-  // Packaged layout: __dirname = <install>\resources\cli → install root is two levels up
-  const installRoot = path.dirname(path.dirname(__dirname))
-  const exe = fs.readdirSync(installRoot).find(f => f.toLowerCase().endsWith('.exe') && fs.statSync(path.join(installRoot, f)).isFile())
-  if (!exe) throw new CliError('app executable not found next to the install resources', 'NO_ELECTRON')
-  const child = spawn(path.join(installRoot, exe), [], {
-    cwd: installRoot, detached: true, stdio: 'ignore',
-    env: { ...process.env, ELECTRON_ENABLE_LOG_DUMP: '0' }
-  })
-  child.unref()
-  return { pid: child.pid, dev: false }
-}
-
-/* ---------------- Pomodoro command channel (CLI writes a meta command → the running App dispatches the existing tomato action → writes state back)
-   State machine/idempotency/ledger all live in the App renderer's store/tomato.js; the CLI never writes pomodoro state in parallel. When the App is not running, status is marked pending. */
-function writeTomatoCmd (cmd) {
-  // Monotonically increasing sequence: the App drops stale commands via cmd.seq > lastTomatoSeq; two commands fired in the same millisecond via Date.now() would silently lose the second one
-  // (common in scripted AI scenarios), so a persisted counter in meta is read-modify-written instead
-  // Atomic increment (+1 inside SQL): two concurrent CLI processes writing the same seq would make the App's seq dedup silently drop the second command (audit H4)
-  const seq = open().call('nextCliTomatoSeq')
-  commit('meta', 'put', ['cliTomatoCmd', JSON.stringify({ seq, at: Date.now(), ...cmd })])
-  audit.record({ action: 'tomato.' + cmd.action, targets: cmd.taskId ? [{ taskId: cmd.taskId }] : [], changes: [], note: 'CLI tomato command (App executes and writes back cliTomatoState)' })
-  return seq
-}
-function readTomatoState () {
-  const raw = open().call('getMeta', 'cliTomatoState')
-  if (!raw) return null
-  try { return JSON.parse(raw) } catch { return null }
-}
-/* Wait for the App's consumption receipt: cliTomatoState.seq catching up means executed. Returns null on timeout (App not running / locked).
-   The HELP contract promises start errors when the App is not running — writing meta and reporting success once made scripts believe focus had begun */
-async function waitForTomatoAck (seq, timeoutMs = 8000) {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    const st = readTomatoState()
-    if (st && st.seq >= seq) return st
-    await new Promise(r => setTimeout(r, 200))
-  }
-  return null
-}
-/** Live remaining seconds for status: remainSec is frozen at the last command time; during focus it is derived from startedAt; state not written back for over 5s is marked stale */
-function tomatoLiveRemainSec (st) {
-  if (!st) return 0
-  if (st.status === 'startTomatoTime' && st.startedAt) {
-    return Math.max(0, Math.round(st.tomatoTime * 60 - (Date.now() - st.startedAt) / 1000))
-  }
-  if (st.status === 'startRestTime' && st.startedAt) {
-    return Math.max(0, Math.round((st.remainSec || 0) - (Date.now() - st.at) / 1000))
-  }
-  return st.remainSec || 0
-}
-
-
-/* ---------------- LAN sync command channel (feat/cli-sync-pair): same contract as the tomato channel —
-   CLI writes meta cliSyncCmd (seq via atomic nextCliSyncSeq) → the running App's main process
-   dispatches into db-sync-ops (the Device Center's own registry) → writes the receipt to
-   cliSyncState. The receipt wait matches the seq EXACTLY (not >=): a long-running pair must not
-   have its waiter satisfied by a later status command's higher seq landing first. */
-function writeSyncCmd (cmd) {
-  const seq = open().call('nextCliSyncSeq')
-  commit('meta', 'put', ['cliSyncCmd', JSON.stringify({ seq, at: Date.now(), ...cmd })])
-  audit.record({ action: 'sync.' + cmd.action, targets: [], changes: [], note: 'CLI sync command (App executes and writes back cliSyncState)' })
-  return seq
-}
-function readSyncState () {
-  const raw = open().call('getMeta', 'cliSyncState')
-  if (!raw) return null
-  try { return JSON.parse(raw) } catch { return null }
-}
-async function waitForSyncAck (seq, timeoutMs = 15000) {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    const st = readSyncState()
-    if (st && st.seq === seq) return st
-    await new Promise(r => setTimeout(r, 200))
-  }
-  return null
-}
-
-/* ---------------- Repeat rules (meta repeatRule:<rid>; generation reuses the todo-core engine) ---------------- */
-function buildRepeatRule (opts) {
-  const rule = Object.assign({}, core.REPEAT_DEFAULTS)
-  const type = opts.type || 'daily'
-  const interval = Math.max(1, parseInt(opts.interval, 10) || 1)
-  // count: 0 = unspecified → keep the engine defaults (day 90 / week 52 / month 24 / year 5, same as the renderer's RepeatModal form);
-  // the old Math.max(1, …) coerced an absent --count to repeatDayCount=1, so `repeat on --type daily` generated ZERO future instances
-  const count = parseInt(opts.count, 10) || 0
-  if (type === 'daily') { rule.repeatType = 'day'; rule.repeatInterval = interval; if (count) rule.repeatDayCount = count }
-  else if (type === 'weekly') {
-    // Fix (2026-09-19): --interval was ignored for weekly (hardcoded 1) while daily/monthly honored it
-    rule.repeatType = 'week'; rule.repeatInterval = interval
-    if (opts.weekdays) rule.repeatWeekDays = String(opts.weekdays).split(/[,，]/).map(n => parseInt(n, 10)).filter(n => n >= 1 && n <= 7)
-    if (count) rule.repeatWeekCount = count
-  } else if (type === 'monthly') {
-    rule.repeatType = 'month'; rule.repeatInterval = interval
-    if (opts.monthday) rule.repeatMonthDays = [parseInt(opts.monthday, 10) || 1]
-    if (count) rule.repeatMonthCount = count
-  } else if (type === 'yearly') {
-    rule.repeatType = 'year'; rule.repeatInterval = interval
-    if (count) rule.repeatYearCount = count
-  } else throw new CliError('--type accepts daily|weekly|monthly|yearly', 'USAGE')
-  if (opts['skip-weekends'] != null) rule.skipWeekends = true
-  if (opts['skip-holidays'] != null) rule.skipStatutoryHolidays = true
-  return rule
-}
-function repeatOn (input, rule, count) {
-  const t = resolveTask(input, liveTasks())
-  if (t.complete) throw new CliError('task already completed; undo it before setting a repeat', 'INVALID_STATE')
-  if (t.repeatId && String(t.repeatId).startsWith('repeat_')) throw new CliError('task already in a repeat group (' + t.repeatId + '); repeat off first, then re-set', 'ALREADY_REPEAT')
-  const rid = 'repeat_' + t.userId + Date.now().toString(36) + Math.floor(Math.random() * 1e4)
-  // Fix (2026-09-19): no CLI flags for the yearly anchor — a Jan-1 default rule is re-anchored from the task's todoTime (explicit anchors stay authoritative).
-  if (rule.repeatType === 'year' && t.todoTime &&
-      rule.repeatYearMonth === core.REPEAT_DEFAULTS.repeatYearMonth &&
-      rule.repeatYearMonthDay === core.REPEAT_DEFAULTS.repeatYearMonthDay) {
-    const anchor = dayjs(t.todoTime)
-    rule.repeatYearMonth = anchor.month() + 1
-    rule.repeatYearMonthDay = anchor.date()
-  }
-  commit('meta', 'put', ['repeatRule:' + rid, JSON.stringify(rule)])
-  commit('todo', 'put', Object.assign({}, t, { repeatId: rid, updateTime: Date.now(), status: 'update' }))
-  // Generate subsequent instances (the first day is the current task itself), reusing the todo-core engine's expansion
-  const base = t.todoTime || t.dayStart || +dayjs().startOf('day')
-  // Generation cap: explicit --count wins; otherwise the App's maxRepeat setting (default 2), same as RepeatModal
-  const cap = count > 0 ? count : (parseInt(settingsDoc().maxRepeat, 10) || 2)
-  // Template reminder wall-clock re-derivation now happens per instance inside the loop (F-B4).
-  let made = 0
-  // P2 2026-09-20: pass the holiday list — expandRepeatDates(base, rule) defaulted to [] so a
-  // skipStatutoryHolidays rule still expanded ONTO statutory holidays on the CLI (the renderer
-  // passes its holidayList here; the CLI complete-renewal path below already does). Mirrors
-  // cli/lib.js:655.
-  const holidayList = require('../shared/holidays.mjs').getHolidayList()
-  for (const ts of core.expandRepeatDates(base, rule, holidayList).map(d => +d).filter(ts => ts > base).slice(0, cap)) {
-    // F-B4: shared renewal-instance constructor (done-path parity). reminderTime keeps the template's
-    // wall-clock time on each instance (dayjs re-derive per instance, same as RepeatModal — copying
-    // the raw timestamp made reminders fire on the template's original date). estimate stays 0 and
-    // carries NO meta write-back — historical D5-parity known gap, preserved as-is.
-    const tplRem = t.reminderTime > 0 ? +dayjs(ts).hour(dayjs(t.reminderTime).hour()).minute(dayjs(t.reminderTime).minute()).second(0).millisecond(0) : 0
-    commit('todo', 'put', buildRenewalInstance(t, { todoTime: ts, reminderTime: 0 }, {
-      todoTime: ts,
-      reminderTime: tplRem,
-      extra: { repeatId: rid }
-    }))
-    made++
-  }
-  audit.record({ action: 'repeat.on', targets: [t], changes: [{ after: { rid, rule, made } }], note: 'repeat set, ' + made + ' future instance(s) generated' })
-  return { rid, made, task: t }
-}
-/* Repeat-group entry resolution: group instances share a name (same content, same date, different days), so AMBIGUOUS is meaningless for group ops — when several hits share a group, pick any one */
-function resolveRepeatEntry (input) {
-  const list = liveTasks()
-  const byId = list.find(t => t.taskId === input)
-  if (byId) return byId
-  const kw = normKey(input)
-  const hits = list.filter(t => normKey(t.taskContent || '').includes(kw) && String(t.repeatId || '').startsWith('repeat_'))
-  if (hits.length) return hits[0]
-  return resolveTask(input, list)
-}
-function repeatOff (input, all) {
-  const t = resolveRepeatEntry(input)
-  const rid = t.repeatId
-  if (!rid || !String(rid).startsWith('repeat_')) throw new CliError('task is not in a repeat group', 'NOT_REPEAT')
-  let removed = 0
-  if (all) {
-    const now = Date.now()
-    for (const x of open().call('queryTodos', { deleted: 0 })) {
-      if (x.repeatId === rid && x.taskId !== t.taskId && !x.complete) {
-        // version: 0 (deleteTodo parity, 2026-09-12 P3): syncTodos excludes delete rows already acked
-        // with version > 0, so keeping the old version meant the soft-deleted repeat instances never
-        // re-entered the sync snapshot and the deletion silently never propagated.
-        commit('todo', 'put', Object.assign({}, x, { delete: 1, deletedAt: now, updateTime: now, version: 0, status: 'delete' }))
-        chipsSnapshotForDelete(x.taskId) // same snapshot→clear cascade as deleteTodo: soft-deleted instances must not leave orphan chips
-        removed++
-      }
-    }
-    // Fix (2026-09-19): '' → deleteMeta (file-wide convention) so the rule row is actually removed.
-    commit('meta', 'delete', 'repeatRule:' + rid)
-  }
-  commit('todo', 'put', Object.assign({}, t, { repeatId: null, updateTime: Date.now(), status: 'update' }))
-  audit.record({ action: 'repeat.off', targets: [t], changes: [{ before: { rid } }], note: all ? 'repeat group dissolved (soft-deleted ' + removed + ' future instance(s))' : 'left repeat group (this instance only)' })
-  return { rid, removed }
-}
-function repeatRuleInfo (input) {
-  const t = resolveRepeatEntry(input)
-  const rid = t.repeatId
-  if (!rid || !String(rid).startsWith('repeat_')) return { taskId: t.taskId, repeat: false }
-  let rule = null
-  try { rule = JSON.parse(open().call('getMeta', 'repeatRule:' + rid) || 'null') } catch { rule = null }
-  return { taskId: t.taskId, repeat: true, rid, rule }
-}
-
-/* ---------------- Categories write (same SQLite categories table as the UI; camelCase row mapping mirrors store/category.js toRow) ---------------- */
-const CAT_COLORS = ['#0f9d8f', '#f76e6e', '#f2a63b', '#7ac74f', '#5aa9e6', '#9d8df1', '#eb96c3', '#98a4ae']
-function catToRow (c) {
-  return {
-    id: c.categoryId, userId: c.userId != null ? c.userId : 840001,
-    name: c.categoryName, color: c.categoryColor || null,
-    createdAt: c.createTime || 0, sort: c.listSort || 0,
-    isFolder: c.folderIs ? 1 : 0, parentId: c.folderId || 0, deleted: c.delete ? 1 : 0
-  }
-}
-function addCategory (name, { color, parent, folder } = {}) {
-  const db = open()
-  const cats = db.call('getAllCategories')
-  if (cats.some(c => c.categoryName === name)) throw new CliError('category "' + name + '" already exists (names must stay unique so the CLI can address them)', 'CATEGORY_EXISTS')
-  let parentId = 0
-  if (parent != null && parent !== true) {
-    // resolveCategory returns the bare id — look the row back up before the folder check
-    // (was: p.folderIs on a number, always undefined → `category add --parent` rejected every parent)
-    const pid = resolveCategory(parent)
-    const p = cats.find(c => c.categoryId === pid)
-    if (!p || !p.folderIs) throw new CliError('parent "' + parent + '" is not a folder', 'CATEGORY_NOT_FOLDER')
-    if (folder) throw new CliError('nested folders are not supported — the App renders folders as roots only (same guard as category move)', 'CATEGORY_NESTED_FOLDER')
-    parentId = pid
-  }
-  const cat = {
-    categoryId: Date.now() * 1000 + Math.floor(Math.random() * 1000), userId: 840001,
-    categoryName: String(name), categoryColor: color && CAT_COLORS.includes(color) ? color : CAT_COLORS[cats.length % CAT_COLORS.length],
-    createTime: Date.now(), listSort: Math.max(0, ...cats.map(c => c.listSort)) + 100,
-    folderIs: !!folder, folderId: parentId, delete: false
-  }
-  commit('category', 'put', catToRow(cat))
-  audit.record({ action: 'category.add', targets: [], changes: [{ after: { name, id: cat.categoryId } }], note: (folder ? 'folder' : 'category') + ' created' })
-  return cat
-}
-function renameCategory (input, nextName) {
-  const db = open()
-  const id = resolveCategory(input)
-  const cat = db.call('getAllCategories').find(c => c.categoryId === id)
-  if (db.call('getAllCategories').some(c => c.categoryId !== id && c.categoryName === nextName)) throw new CliError('category "' + nextName + '" already exists', 'CATEGORY_EXISTS')
-  const updated = Object.assign({}, cat, { categoryName: nextName })
-  commit('category', 'put', catToRow(updated))
-  audit.record({ action: 'category.rename', targets: [], changes: [{ before: { name: cat.categoryName }, after: { name: nextName } }], note: 'category renamed' })
-  return updated
-}
-/** Best-effort meta read for the delete backup path ('' when the row/host is absent) */
-function safeGetMeta (k) { try { return open().call('getMeta', k) || '' } catch { return '' } }
-/** Soft delete (same as UI: delete flag + cascade to children; tasks keep categoryId and fall back to the default (uncategorized) in views). Project flag/deadline meta cleaned here. */
-function deleteCategory (input) {
-  const db = open()
-  const id = resolveCategory(input)
-  const all = db.call('getAllCategories')
-  const cat = all.find(c => c.categoryId === id)
-  const victims = [cat]
-  if (cat.folderIs) {
-    const mark = pid => { all.filter(c => c.folderId === pid).forEach(c => { victims.push(c); if (c.folderIs) mark(c.categoryId) }) }
-    mark(id)
-  }
-  for (const c of victims) commit('category', 'put', catToRow(Object.assign({}, c, { delete: true })))
-  // Round-3 P1 (U-4 parity with renderer category.js backupThenClearProjectMeta): back up the
-  // project meta surfaces into `catProjectMetaBak.<id>` BEFORE clearing them — the UI's recover
-  // path restores exactly this blob, and the CLI used to hard-delete the keys with no backup,
-  // making a recovered category lose its project flag/status/deadline/milestones irreversibly.
-  // (Must run before ANY live-key deletion below.)
-  const catMetaBakKey = vid => 'catProjectMetaBak.' + vid
-  for (const v of victims) {
-    const vid = String(v.categoryId)
-    const blob = {
-      flag: (safeGetMeta(projectFlagKey(vid)) === '1'),
-      status: safeGetMeta(projectStatusKey(vid)) || '',
-      deadline: safeGetMeta('projectDeadline:' + vid) || '',
-      milestones: safeGetMeta(MS_KEY(vid)) || ''
-    }
-    if (blob.flag || blob.status || blob.deadline || blob.milestones) {
-      commit('meta', 'put', [catMetaBakKey(vid), JSON.stringify(blob)])
-    }
-  }
-  // A deleted category must not linger as a project: X3 flag keys are removed per victim; the
-  // legacy whole-doc array (read fallback) is pruned only when it actually lost an id.
-  for (const v of victims) { try { commit('meta', 'delete', projectFlagKey(v.categoryId)) } catch { /* absent is fine */ } }
-  let legacyIds = []
-  try { const a = JSON.parse(open().call('getMeta', PROJECT_IDS_KEY) || '[]'); if (Array.isArray(a)) legacyIds = a } catch { /* corrupt → leave alone */ }
-  const pruned = legacyIds.filter(x => !victims.some(v => String(v.categoryId) === String(x)))
-  if (pruned.length !== legacyIds.length) commit('meta', 'put', [PROJECT_IDS_KEY, JSON.stringify(pruned)])
-  for (const v of victims) {
-    try { commit('meta', 'delete', projectFlagKey(v.categoryId)) } catch { /* absent is fine */ }
-    try { commit('meta', 'delete', 'projectDeadline:' + v.categoryId) } catch { /* absent is fine */ }
-    // same lifecycle cleanup for the explicit status meta (review P2 2026-09-11): a later category id
-    // reuse would inherit the deleted project's stale status on both ends (key = projectStatus:<id>)
-    try { commit('meta', 'delete', projectStatusKey(v.categoryId)) } catch { /* absent is fine */ }
-    // milestones die with the deletion too (backed up above — renderer parity backupThenClearProjectMeta)
-    try { commit('meta', 'delete', MS_KEY(v.categoryId)) } catch { /* absent is fine */ }
-  }
-  // P1-3 (R5, sync-visible parity with renderer category.js purgeFiltersForVictims): saved
-  // filters whose conds.catId references a cascade victim must die with the category — the
-  // renderer cascades them (and its undo reports "{n} saved filter(s) removed"), the CLI used
-  // to leave them behind pointing at a dead category id. Tombstone each victim filter through
-  // the bus (filter.delete), back the set up in `catFiltersBak.<rootId>` for recover symmetry
-  // (same pattern as catProjectMetaBak above), and report the count in the command output.
-  const deadCatIds = new Set(victims.map(v => String(v.categoryId)))
-  const catFiltersBakKey = 'catFiltersBak.' + id
-  let removedFilters = 0
-  let doomedFilters = []
-  try {
-    doomedFilters = (db.call('filterList') || []).filter(f => f && f.conds && deadCatIds.has(String(f.conds.catId)))
-  } catch { /* degraded read: leave filters alone rather than half-cascading */ }
-  if (doomedFilters.length) {
-    commit('meta', 'put', [catFiltersBakKey, JSON.stringify(doomedFilters.map(f => ({ id: f.id, name: f.name, conds: f.conds, sort: f.sort })))])
-    for (const f of doomedFilters) {
-      try { commit('filter', 'delete', f.id); removedFilters++ } catch { /* skip and keep cascading */ }
-    }
-  }
-  audit.record({ action: 'category.delete', targets: [], changes: [{ before: { names: victims.map(v => v.categoryName) } }], note: 'category soft-deleted (recoverable in UI), tasks kept' + (removedFilters ? `, ${removedFilters} saved filter(s) removed` : '') })
-  return { deleted: victims.map(v => ({ id: v.categoryId, name: v.categoryName })), removedFilters }
-}
-
-/** Move a category under a folder or back to root ('root'). Parity note: the App's hierarchy getter
- *  (renderer/js/store/category.js `hierarchical`) renders folders as roots and only nests non-folder
- *  children — a nested folder would be silently dropped from the sidebar — so folder→folder moves are rejected. */
-function moveCategory (input, parentInput) {
-  const db = open()
-  const id = resolveCategory(input)
-  const all = db.call('getAllCategories')
-  const cat = all.find(c => c.categoryId === id)
-  if (!cat) throw new CliError(`category not found: "${input}"`, 'CATEGORY_NOT_FOUND')
-  const raw = String(parentInput == null ? '' : parentInput).trim().toLowerCase()
-  let parentId = 0
-  let parent = null
-  if (raw && raw !== 'root' && raw !== 'none') {
-    const pid = resolveCategory(parentInput)
-    if (pid === id) throw new CliError('cannot move a category under itself', 'CATEGORY_CYCLE')
-    parent = all.find(c => c.categoryId === pid)
-    if (!parent) throw new CliError(`category not found: "${parentInput}"`, 'CATEGORY_NOT_FOUND')
-    // Cycle guard first (more specific error): walk up from the parent; landing on the moved category closes a loop
-    let cur = parent
-    const seen = new Set()
-    while (cur && cur.folderId && !seen.has(cur.categoryId)) {
-      seen.add(cur.categoryId)
-      if (cur.folderId === id) throw new CliError(`cannot move "${cat.categoryName}" into its own descendant (cycle)`, 'CATEGORY_CYCLE')
-      cur = all.find(c => c.categoryId === cur.folderId)
-    }
-    if (!parent.folderIs) throw new CliError(`"${parent.categoryName}" is not a folder — the App only nests categories inside folders`, 'CATEGORY_NOT_FOLDER')
-    if (cat.folderIs) throw new CliError(`"${cat.categoryName}" is a folder: the App renders folders as roots only (nested folders are dropped from the sidebar), so folder→folder moves are rejected`, 'CATEGORY_NESTED_FOLDER')
-    parentId = pid
-  }
-  commit('category', 'put', catToRow(Object.assign({}, cat, { folderId: parentId })))
-  audit.record({
-    action: 'category.move',
-    targets: [{ taskId: 'cat:' + id, content: cat.categoryName }],
-    changes: [{ before: { parent: cat.folderId }, after: { parent: parentId } }],
-    note: parent ? 'moved under folder "' + parent.categoryName + '"' : 'moved to root'
-  })
-  return { categoryId: id, name: cat.categoryName, folderId: parentId, parentName: parent ? parent.categoryName : null }
-}
-
-/** Flat rows for `categories --json`: getAllCategories rows (order unchanged) + additive parentName */
-function categoryRows () {
-  const cats = open().call('getAllCategories')
-  const byId = new Map(cats.map(c => [c.categoryId, c]))
-  return cats.map(c => ({
-    ...c,
-    folderIs: !!c.folderIs,
-    parentName: c.folderId && byId.get(c.folderId) ? byId.get(c.folderId).categoryName : null
-  }))
-}
-
-/** Display order for the `categories` text listing: folders are roots with their children indented under
- *  them (mirrors the App's `hierarchical` getter); orphans render at root level rather than vanishing. */
-function categoryHierarchy () {
-  const cats = categoryRows()
-  const out = []
-  const printed = new Set()
-  for (const c of cats) {
-    if (c.folderIs) {
-      out.push({ row: c, depth: 0 })
-      printed.add(c.categoryId)
-      for (const ch of cats.filter(x => !x.folderIs && x.folderId === c.categoryId)) {
-        out.push({ row: ch, depth: 1 })
-        printed.add(ch.categoryId)
-      }
-    }
-  }
-  for (const c of cats) if (!printed.has(c.categoryId)) out.push({ row: c, depth: 0 })
-  return out
-}
-
-/* ---------------- Tags (derived from #tag in content/description; rename/remove rewrite text across tasks — same regex semantics as SideNav) ---------------- */
-// Character-for-character identical to renderer/js/utils/search.js TAG_RE (tags are derived from body text, no separate storage)
-const TAG_RE = /#([^\s#,，。.!?！？]+)/g
-function extractTagsCli (...texts) {
-  const set = new Set()
-  texts.forEach(t => {
-    if (!t) return
-    let m; TAG_RE.lastIndex = 0
-    while ((m = TAG_RE.exec(String(t)))) set.add(m[1])
-  })
-  return [...set]
-}
-function tagEsc (name) { return String(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') }
-function listTags () {
-  const count = {}
-  for (const t of liveTasks()) {
-    for (const name of extractTagsCli(t.taskContent, t.taskDescribe)) count[name] = (count[name] || 0) + 1
-  }
-  return Object.entries(count).map(([name, tasks]) => ({ name, tasks })).sort((a, b) => b.tasks - a.tasks || a.name.localeCompare(b.name))
-}
-function rewriteTag (name, next, { remove } = {}) {
-  const esc = tagEsc(name)
-  // rename: #old(?=\s|$) → #new ; remove: leading whitespace swallowed too (\s*#old(?=\s|$) → '')
-  const re = remove ? new RegExp('\\s*#' + esc + '(?=\\s|$)', 'g') : new RegExp('#' + esc + '(?=\\s|$)', 'g')
-  let touched = 0
-  for (const todo of liveTasks()) {
-    const patch = {}
-    if (todo.taskContent) {
-      const v = remove ? todo.taskContent.replace(re, '').trim() : todo.taskContent.replace(re, '#' + next)
-      if (v !== todo.taskContent) patch.taskContent = v
-    }
-    if (todo.taskDescribe) {
-      const v = remove ? todo.taskDescribe.replace(re, '').trim() : todo.taskDescribe.replace(re, '#' + next)
-      if (v !== todo.taskDescribe) patch.taskDescribe = v
-    }
-    if (Object.keys(patch).length) { patchTodo(todo.taskId, patch, { action: 'tag.' + (remove ? 'remove' : 'rename') }); touched++ }
-  }
-  return touched
-}
-
-/* ---------------- Batch operations (explicit taskIds only — no keyword matching; per-task failures never abort the run) ---------------- */
-/** Exact-id resolution for batch: batch is explicit by design, so the keyword/ambiguity path of resolveTask is deliberately absent */
-function resolveTaskExact (id, pool) {
-  const t = (pool || liveTasks()).find(x => x.taskId === String(id))
-  if (!t) throw new CliError(`task not found: "${id}" (batch takes exact taskIds only, no keyword matching)`, 'TASK_NOT_FOUND')
-  return t
-}
-
-/** Add/remove one #tag on a single task — same title/description rewrite path as `tag rename`/`tag rm`
- *  (TAG_RE boundary regex); add appends " #name" to the title like the App's EditPanel.addTag. */
-function batchTagOne (t, name, remove) {
-  const esc = tagEsc(name)
-  if (remove) {
-    const re = new RegExp('\\s*#' + esc + '(?=\\s|$)', 'g')
-    const patch = {}
-    if (t.taskContent) { const v = t.taskContent.replace(re, '').trim(); if (v !== t.taskContent) patch.taskContent = v }
-    if (t.taskDescribe) { const v = t.taskDescribe.replace(re, '').trim(); if (v !== t.taskDescribe) patch.taskDescribe = v }
-    if (!Object.keys(patch).length) throw new CliError(`tag #${name} not present on this task`, 'TAG_NOT_PRESENT')
-    return patchTodo(t.taskId, patch, { action: 'tag.remove' })
-  }
-  if (new RegExp('#' + esc + '(?=\\s|$)').test(t.taskContent || '')) throw new CliError(`tag #${name} already on this task`, 'TAG_PRESENT')
-  return patchTodo(t.taskId, { taskContent: (t.taskContent || '').replace(/\s+$/, '') + ' #' + name }, { action: 'tag.add' })
-}
-
-/**
- * Run a batch op over explicit taskIds. Returns { op, matched, changed, failures, outcomes } where
- * outcomes carries the per-task line info for text rendering; failures never abort the remaining tasks.
- * Audit: one entry per task change (inherent — every op routes through patchTodo/toggleComplete).
- */
-function batchRun (op, ids, { to, add, rm, dryRun } = {}) {
-  const entries = (Array.isArray(ids) ? ids : [ids]).map(String).filter(Boolean)
-  if (!entries.length) throw new CliError(`batch ${op} needs at least one taskId`, 'USAGE')
-  let toTs = null
-  let catId = null
-  let tagName = null
-  let removing = false
-  if (op === 'date') {
-    if (!to || to === true) throw new CliError('batch date needs --to <today|tomorrow|+Nd|YYYY-MM-DD[ HH:mm]>', 'USAGE')
-    toTs = parseDate(to) // same parser as `edit --date`; throws on bad input before anything is written
-  } else if (op === 'category') {
-    if (!to || to === true) throw new CliError('batch category needs --to <name|id>', 'USAGE')
-    catId = resolveCategory(to)
-  } else if (op === 'tag') {
-    const hasAdd = add != null && add !== true
-    const hasRm = rm != null && rm !== true
-    if (hasAdd === hasRm) throw new CliError('batch tag needs exactly one of --add <tag> | --rm <tag>', 'USAGE')
-    tagName = String(hasAdd ? add : rm).replace(/^#/, '')
-    if (!tagName) throw new CliError('tag name required (--add <tag> | --rm <tag>)', 'USAGE')
-    removing = hasRm
-  } else if (op !== 'done') {
-    throw new CliError(`unknown batch op "${op}" (valid: done/date/category/tag)`, 'USAGE')
-  }
-  const pool = liveTasks()
-  const describe = t => op === 'done' ? `complete "${t.taskContent}" (subtask cascade / repeat renewal apply)`
-    : op === 'date' ? `reschedule "${t.taskContent}" → ${to}`
-      : op === 'category' ? `recategorize "${t.taskContent}" → ${to}`
-        : `${removing ? 'remove' : 'add'} #${tagName} ${removing ? 'on' : 'to'} "${t.taskContent}"`
-  const exec = {
-    done: t => toggleComplete(t.taskId, true),
-    date: t => {
-      // Same reminder re-anchor as `edit --date` (dateChangeReminderPatch): batch date used to patch
-      // todoTime bare and leave the main reminder on the old day (semantic split between the channels)
-      const patch = { todoTime: toTs, ...dateChangeReminderPatch(t, toTs) }
-      const after = patchTodo(t.taskId, patch, { action: 'edit' })
-      migrateChipsOnDayChange(t.taskId, t.dayStart, after.dayStart)
-      return after
-    },
-    category: t => patchTodo(t.taskId, { categoryId: catId }, { action: 'edit' }),
-    tag: t => batchTagOne(t, tagName, removing)
-  }
-  const failures = []
-  const outcomes = []
-  let changed = 0
-  for (const id of entries) {
-    let t = null
-    try { t = resolveTaskExact(id, pool) } catch (e) {
-      failures.push({ taskId: id, error: e.message })
-      outcomes.push({ taskId: id, ok: false, error: e.message })
-      continue
-    }
-    if (op === 'done' && t.complete) {
-      // review P2 (2026-09-10): batch done used to rewrite completedAt and count the row as changed
-      outcomes.push({ taskId: t.taskId, ok: true, skipped: true, label: `already complete "${t.taskContent}"` })
-      continue
-    }
-    if (dryRun) { outcomes.push({ taskId: t.taskId, ok: true, dryRun: true, label: describe(t) }); continue }
-    try {
-      exec[op](t)
-      changed++
-      outcomes.push({ taskId: t.taskId, ok: true, label: describe(t) })
-    } catch (e) {
-      failures.push({ taskId: t.taskId, error: String(e.message || e) })
-      outcomes.push({ taskId: t.taskId, ok: false, error: String(e.message || e) })
-    }
-  }
-  if (dryRun) return { op, matched: entries.length, dryRun: true, plan: outcomes.filter(o => o.ok), failures, outcomes }
-  return { op, matched: entries.length, changed, failures, outcomes }
-}
-
-/* ---------------- Saved views (smart lists): the same SQLite `filters` table the App's FilterModal writes / FilterView consumes ----------------
-   conds contract is pinned by db.js normConds (both ends' read path): { catId: -1|categoryId, priority: -1|N, dateMode: 'all'|'today'|'week'|'overdue'|'none' }
-   with -1/'all' = condition off. Any other key would be stripped on read, so the CLI maps flags onto exactly this shape. */
-function viewsList () { return open().call('filterList') }
-
-function resolveView (input) {
-  const rows = viewsList()
-  const byId = rows.find(v => String(v.id) === String(input))
-  if (byId) return byId
-  const hits = rows.filter(v => v.name === input)
-  if (hits.length === 1) return hits[0]
-  if (hits.length > 1) throw new CliError(`view "${input}" is ambiguous (${hits.length} saved views share this name); use the view id (view list --json)`, 'AMBIGUOUS_MATCH')
-  throw new CliError(`view not found: "${input}" (view list to browse)`, 'VIEW_NOT_FOUND')
-}
-
-/** English one-line conds summary (the same conditions the App's FilterView header shows) */
-function viewCondsSummary (conds) {
-  const c = conds || {}
-  const parts = []
-  if (c.catId != null && c.catId !== -1) {
-    const cat = open().call('getAllCategories').find(x => x.categoryId === c.catId)
-    parts.push(cat ? 'cat:' + cat.categoryName : 'cat #' + c.catId)
-  }
-  if (c.priority != null && c.priority !== -1) parts.push('priority ' + c.priority)
-  if (c.dateMode && c.dateMode !== 'all') parts.push(c.dateMode)
-  return parts.join(' · ') || 'all undone tasks'
-}
-
-/** Create a saved view from CLI flags (duplicate names rejected). The conds shape always carries all
- *  three keys — that IS the renderer's parseConds output shape (-1/'all' = off). */
-function viewAdd (name, { category, priority, overdue, nodate } = {}) {
-  const clean = String(name || '').trim()
-  if (!clean) throw new CliError('view add needs a name', 'USAGE')
-  if (viewsList().some(v => v.name === clean)) throw new CliError(`view "${clean}" already exists (view list to browse)`, 'VIEW_EXISTS')
-  const conds = { catId: -1, priority: -1, dateMode: 'all' }
-  if (category != null && category !== true) conds.catId = resolveCategory(category)
-  if (priority != null && priority !== true) {
-    const p = parseInt(priority, 10)
-    if (!(p >= 0 && p <= 3) || String(p) !== String(priority).trim()) throw new CliError('--priority accepts 0-3 (got "' + priority + '")', 'USAGE')
-    conds.priority = p
-  }
-  const modes = [overdue ? 'overdue' : null, nodate ? 'none' : null].filter(Boolean)
-  if (modes.length > 1) throw new CliError('--overdue and --nodate are mutually exclusive (both set the date condition)', 'USAGE')
-  if (modes.length) conds.dateMode = modes[0]
-  const id = commit('filter', 'put', { name: clean, conds, sort: 0 })
-  audit.record({ action: 'view.add', targets: [], changes: [{ after: { id, name: clean, conds } }], note: 'saved view created (same filters table as the App smart lists)' })
-  return { id, name: clean, conds, sort: 0 }
-}
-
-/** Remove a saved view by name or id */
-function viewRm (input) {
-  const v = resolveView(input)
-  commit('filter', 'delete', v.id)
-  audit.record({ action: 'view.rm', targets: [], changes: [{ before: { id: v.id, name: v.name, conds: v.conds } }], note: 'saved view removed' })
-  return { id: v.id, name: v.name }
-}
-
-/** Apply a saved view's conds to a task pool — mirrors renderer FilterView.list exactly:
- *  undone only, catId/priority equality (-1 = off), dateMode today/isoWeek/overdue/none windows.
- *  opts.done override (review P1 2026-09-12): an explicit `list --view X --done/--undone` owns the completion
- *  filter — default false keeps the FilterView undone-only parity, true skips the complete check (the fetch
- *  already filtered by the explicit flag) so done tasks are no longer silently dropped. */
-function applyViewConds (conds, tasks, { done = false } = {}) {
-  const today0 = +dayjs().startOf('day')
-  const weekEnd = +dayjs().endOf('isoWeek') // isoWeek plugin extended explicitly at the top of this file
-  // D4 2026-09-24: the matcher moved to shared/filter-core.mjs (single source with db.js conds
-  // parsing and the renderer's FilterView.list); the `done` override contract is unchanged.
-  return tasks.filter(t => matchesViewConds(t, conds, { today0, weekEnd }, { done }))
-}
-
-/** listTodos fetch options for a saved view: push the view's dateMode/category down into the QUERY so the
- *  row cap (500) can no longer truncate away matching tasks before applyViewConds runs (review P1 2026-09-10:
- *  a 200-cap fetch filtered afterwards hid valid rows for >cap libraries). applyViewConds stays as the
- *  authoritative post-filter so the semantics remain byte-identical to the app's FilterView. */
-function viewFetchOpts (conds) {
-  const c = conds || {}
-  const mode = c.dateMode
-  return {
-    range: mode === 'today' || mode === 'week' || mode === 'overdue' ? mode : null,
-    noDate: mode === 'none',
-    done: false, // views are undone-only (FilterView parity, same as applyViewConds)
-    category: c.catId != null && c.catId !== -1 ? c.catId : null,
-    limit: 500 // fetch max; user --limit narrows AFTER applyViewConds
-  }
-}
-
-/* ---------------- Focus ledger (唯一事实源 = SQLite tomato_records 行表,同统计页/时间轴;CLI 直连 DB,无需 App 运行) ---------------- */
-function tomatoRecords () {
-  try {
-    const rows = open().call('tomatoAll')
-    return Array.isArray(rows) ? rows : []
-  } catch { return [] }
-}
-
-/** Backfill one manual focus record: CLI 直写账本行(不再经 App 命令通道,App 关闭也可用)。
- *  tomatoId 与渲染端手动补录同形(幂等:重复导入同槽位不产生第二条)。 */
-function backfillRecord ({ taskId = null, content = '', date, at = '20:00', minutes = 25 }) {
-  // FOCUS_MAX_MINUTES = the DB-layer clamp (shared/limits.mjs, db.js _recToRow): silently truncating 720 to 240/600 reported success while a different duration landed
-  const raw = parseInt(minutes, 10) || 25
-  if (raw > FOCUS_MAX_MINUTES) throw new CliError('backfill duration max is ' + FOCUS_MAX_MINUTES + ' minutes (DB-layer clamp); got ' + raw, 'USAGE')
-  const min = Math.max(1, raw)
-  const base = dayjs(date)
-  if (!base || !base.isValid()) throw new CliError('bad backfill date: ' + date, 'USAGE')
-  const m = /^(\d{1,2}):(\d{2})$/.exec(String(at))
-  if (!m) throw new CliError('--at accepts HH:mm', 'USAGE')
-  const endAt = base.hour(+m[1]).minute(+m[2]).second(0).millisecond(0)
-  const endTime = endAt.valueOf()
-  const startTs = endTime - min * 60000
-  const rec = {
-    tomatoId: 'tmt_m_' + startTs + '_' + min + '_' + String(taskId || 'free').slice(-8),
-    endTime, dateKey: endAt.format('YYYY-MM-DD'),
-    focus: content || '', focusTaskId: taskId || null,
-    focusDuration: min, rest: 0, restDuration: 0,
-    succeed: true, status: 'local', manual: true
-  }
-  // Single-row CLI path fails fast: a rejected row (bad at → NaN endTime etc.) must not print success
-  // or write audit. Row-level tolerance ({accepted, rejected}) is for the renderer's batch queue.
-  const res = commit('tomato', 'appendMany', rec)
-  if (res && Array.isArray(res.rejected) && res.rejected.length) {
-    throw new CliError('backfill rejected: ' + res.rejected.map(r => r.reason).join(', '), 'LEDGER_REJECT')
-  }
-  audit.record({ action: 'tomato.backfill', targets: taskId ? [{ taskId }] : [], changes: [], note: 'CLI backfill ' + min + 'min @ ' + rec.dateKey + ' ' + at + ' (ledger row direct)' })
-  return rec
-}
-
-/* ---------------- Tomato estimate per task (per-task meta keys = plain integer string; X2 2026-09-20 contract) ----------------
-   F-B3 (dw wave 3): the storage contract (key prefix / 0..20 clamp / TS_KEY / legacy blob key) moved
-   to shared/estimate-core.mjs — single source with the renderer's utils/tomatoEstimate.js (the
-   renderer consumes the same module in its wave). */
-const { ESTIMATE_KEY_PREFIX, estimateKeyOf, clampEstimate, TS_KEY: ESTIMATE_TS_KEY, LEGACY_KEY: ESTIMATE_LEGACY_KEY, ESTIMATE_MAX } = require('../shared/estimate-core.mjs')
-const estimateKey = estimateKeyOf
-/** Lazy legacy migration (first write): old whole-doc blob → per-task keys, then the legacy doc key
- *  is deleteMeta'd (a sync tombstone, so peers drop it too). Corrupt blob → dropped, not fatal. */
-function migrateLegacyEstimateBlob () {
-  const legacy = open().call('getMeta', ESTIMATE_LEGACY_KEY)
-  if (legacy == null) return null
-  let map = {}
-  try { map = JSON.parse(legacy) || {} } catch { /* corrupt → drop */ }
-  for (const [taskId, v] of Object.entries(map)) {
-    const n = clampEstimate(v)
-    if (n > 0) commit('meta', 'put', [estimateKey(taskId), String(n)])
-  }
-  commit('meta', 'delete', ESTIMATE_LEGACY_KEY)
-  return map
-}
-function setEstimate (input, n) {
-  const t = resolveTask(input, liveTasks())
-  const v = clampEstimate(n)
-  const legacy = migrateLegacyEstimateBlob()
-  // Setting = setMeta plain integer string; clearing = deleteMeta (tombstone propagates the removal)
-  if (v > 0) commit('meta', 'put', [estimateKey(t.taskId), String(v)])
-  else commit('meta', 'delete', estimateKey(t.taskId))
-  // Timestamp convention mirrors the renderer's tomatoEstimate/initFromDb: when meta is newer it takes over LS at startup (otherwise CLI writes get clobbered by the UI's stale LS)
-  commit('meta', 'put', [ESTIMATE_TS_KEY, String(Date.now())])
-  audit.record({ action: 'edit', targets: [t], changes: [{ before: { tomatoEstimate: getEstimateOf(t.taskId, legacy && legacy[t.taskId]) }, after: { tomatoEstimate: v || null } }], note: 'tomato estimate set to ' + (v || '(none)') })
-  return { taskId: t.taskId, content: t.taskContent, tomatoEstimate: v }
-}
-function getEstimateOf (taskId, legacyVal) {
-  // Readers: per-task key first; legacy doc blob only as a read fallback (per-task miss)
-  try {
-    const per = open().call('getMeta', estimateKey(taskId))
-    if (per != null) return clampEstimate(per)
-    if (legacyVal != null) return Number(legacyVal) || 0
-    const m = JSON.parse(open().call('getMeta', ESTIMATE_LEGACY_KEY) || '{}')
-    return m[taskId] || 0
-  } catch { return 0 }
-}
+/* ---------------- Focus ledger + per-task tomato estimates: extracted verbatim to lib-focus.cjs (2026-09-27 size-ratchet split) ---------------- */
 
 /* ---------------- Manual ordering (taskSort midpoint insertion — same semantics as renderer todo/reorderTodos drag)
    F-B2 (dw wave 3): the score math moved to shared/sort-core.mjs moveWithin (single source with the
@@ -1489,179 +661,24 @@ function listOn (date) {
     .map(t => ({ taskId: t.taskId, content: t.taskContent, time: t.todoTime ? dayjs(t.todoTime).format('HH:mm') : null, complete: t.complete, tomatoEstimate: getEstimateOf(t.taskId), dayStart: t.dayStart }))
 }
 
-/** Resolve a focus record by full tomatoId or unique prefix (tomatoIds are long; prefix is the human/AI-friendly handle) */
-function resolveRecord (ref) {
-  const recs = tomatoRecords().filter(Boolean)
-  const exact = recs.find(r => r.tomatoId === ref)
-  if (exact) return exact
-  const hits = recs.filter(r => r.tomatoId && String(r.tomatoId).startsWith(ref))
-  if (!hits.length) throw new CliError('no focus record matches "' + ref + '" — tomato list to browse ids', 'RECORD_NOT_FOUND')
-  if (hits.length > 1) {
-    const preview = hits.slice(0, 10).map(r => `  - ${r.tomatoId}  ${r.dateKey} ${r.focusDuration}min ${r.focus || '(free)'}`).join('\n')
-    throw new CliError(`"${ref}" matched ${hits.length} records; use a longer prefix:\n${preview}`, 'AMBIGUOUS_MATCH')
-  }
-  return hits[0]
-}
+/** Resolve/fix/remove focus records: extracted verbatim to lib-focus.cjs (2026-09-27 size-ratchet split) */
 
-/** Fix an existing focus record (wrong duration/time/task). The CLI writes the ledger row DIRECTLY via
- *  db.tomatoUpdateById — it does NOT route through the (retired) App command channel. Consequence: the
- *  running App does not learn about this write in-process. Convergence on the App side relies on external
- *  DB-write detection: db.js fires the ledger-changed hook for LEDGER_WRITE_OPS in the writer process
- *  (main/index.js setLedgerChangedHook → 'tomato-records-changed' broadcast), and external CLI writes are
- *  picked up by the main-process watcher / renderer store re-read (the same path that hot-applies
- *  `settings set`), or at worst on next launch. */
-function recordFix (ref, { minutes, date, at, rest, succeed, task, free }) {
-  const rec = resolveRecord(ref)
-  const patch = {}
-  // FOCUS_MAX_MINUTES is the DB-layer clamp (shared/limits.mjs, db.js _recToRow): accepting 720 used to report success while 600 landed (audit drift)
-  if (minutes != null) {
-    const n = parseInt(minutes, 10) || 0
-    if (n > FOCUS_MAX_MINUTES) throw new CliError('focus duration max is ' + FOCUS_MAX_MINUTES + ' minutes (DB-layer clamp); got ' + n, 'USAGE')
-    patch.focusDuration = Math.max(1, n)
-  }
-  // restDuration clamp = REST_MAX_MINUTES, the same cap the db layer applies (_recToRow); the old CLI-only
-  // 120 clamp silently rewrote a legitimate 300-min rest to 120 while a direct db append kept 600.
-  if (rest != null) patch.restDuration = Math.max(0, Math.min(REST_MAX_MINUTES, parseInt(rest, 10) || 0))
-  if (succeed != null && succeed !== true) patch.succeed = !/^(false|no|0)$/i.test(String(succeed))
-  if (date || at) {
-    // endTime reposition: endTime defines placement; dateKey re-derived here (was App-side)
-    const endBase = parseDate(date || dayjs(rec.endTime || Date.now()).format('YYYY-MM-DD'))
-    const m = /^(\d{1,2}):(\d{2})$/.exec(String(at || dayjs(rec.endTime || Date.now()).format('HH:mm')))
-    if (!m) throw new CliError('--at accepts HH:mm', 'USAGE')
-    patch.endTime = dayjs(endBase).hour(+m[1]).minute(+m[2]).second(0).millisecond(0).valueOf()
-    patch.dateKey = dayjs(patch.endTime).format('YYYY-MM-DD')
-  }
-  if (free === true) patch.focusTaskId = null
-  else if (task) patch.focusTaskId = resolveTask(task, liveTasks()).taskId
-  const ok = commit('tomato', 'updateById', { tomatoId: rec.tomatoId, patch })
-  if (!ok) throw new CliError('record vanished from ledger: ' + rec.tomatoId, 'RECORD_NOT_FOUND')
-  audit.record({ action: 'tomato.record-fix', targets: [], changes: [{ before: rec, after: Object.assign({}, rec, patch) }], note: 'CLI record fix (ledger row direct)' })
-  return { rec: Object.assign({}, rec, patch) }
-}
-
-/** Delete an erroneous focus record (ledger row direct — the UI entry card deletes via the same op) */
-function recordRemove (ref) {
-  const rec = resolveRecord(ref)
-  commit('tomato', 'removeByIds', [rec.tomatoId])
-  audit.record({ action: 'tomato.record-remove', targets: [], changes: [{ before: rec, after: null }], note: 'CLI record remove (ledger row direct)' })
-  return { rec }
-}
-
-/** Reorder subtasks (subtasks array order — same storage as EditPanel drag) */
-function moveSubtask (input, n, where, target) {
-  const t = resolveTask(input, liveTasks())
-  const subs = parseSubs(t)
-  const idx = parseInt(n, 10) - 1
-  if (!(idx >= 0 && idx < subs.length)) throw new CliError(`subtask #${n} not found (1-${subs.length})`, 'SUB_NOT_FOUND')
-  let to
-  if (where === 'up') to = idx - 1
-  else if (where === 'down') to = idx + 1
-  else if (where === 'top') to = 0
-  else if (where === 'bottom') to = subs.length - 1
-  else if (where === 'to') to = (parseInt(target, 10) || 0) - 1
-  else throw new CliError('position must be up|down|top|bottom|to <n>', 'USAGE')
-  if (!(to >= 0 && to < subs.length)) throw new CliError('target position out of range', 'SUB_NOT_FOUND')
-  const [item] = subs.splice(idx, 1)
-  subs.splice(to, 0, item)
-  patchTodo(t.taskId, { subtasks: JSON.stringify(subs) }, { action: 'subtask' })
-  return { taskId: t.taskId, order: subs.map((s, i) => `${i + 1}.${s.text}${s.checked ? '[x]' : ''}`) }
-}
-
-/* ---------------- Multiple reminders (reminderOffsets/reminderExtra — same todos columns the EditPanel writes) ---------------- */
-/** Set reminder offsets: csv of minutes BEFORE the main reminder ("10,30" = 10/30 minutes early, stored as -10/-30;
- *  "0" = on-time; "none" clears). Requires the main reminder to exist (UI also gates the chips on remindTs>0). */
-function setReminderOffsets (input, csv) {
-  const t = resolveTask(input, liveTasks())
-  if (!t.reminderTime) throw new CliError('task has no main reminder — set it first with edit --reminder <time>', 'NEEDS_MAIN_REMINDER')
-  let offsets
-  let zeroAbsorbed = false
-  if (String(csv).trim().toLowerCase() === 'none') offsets = []
-  else {
-    offsets = String(csv).split(/[,，\s]+/).filter(Boolean).map(s => {
-      const v = parseInt(s, 10)
-      if (isNaN(v)) throw new CliError(`bad offset "${s}" (minutes before the main reminder, e.g. "10,30"; 0=on-time; none=clear)`, 'USAGE')
-      // "0" (on-time) is explicitly absorbed: db normOffsets filters 0 out, so writing [0] would silently vanish — map to "no offset" instead
-      return v === 0 ? null : -Math.abs(v)
-    })
-    zeroAbsorbed = offsets.includes(null)
-    offsets = [...new Set(offsets.filter(v => v != null))].sort((a, b) => a - b)
-  }
-  patchTodo(t.taskId, { reminderOffsets: offsets }, { action: 'edit' })
-  return {
-    taskId: t.taskId, reminderTime: t.reminderTime, reminderOffsets: offsets,
-    ...(zeroAbsorbed ? { note: '"0" (on-time) absorbed — no offset row written since the main reminder itself fires on time' } : {})
-  }
-}
-/** Set extra absolute reminders (on top of the main one): comma-separated datetimes, same formats as --date; "none" clears */
-function setReminderExtra (input, csv) {
-  const t = resolveTask(input, liveTasks())
-  let extras
-  if (String(csv).trim().toLowerCase() === 'none') extras = []
-  else {
-    extras = String(csv).split(/[,，]/).map(s => s.trim()).filter(Boolean).map(s => parseDate(s))
-    if (!extras.length) throw new CliError('no datetimes given (comma-separated, e.g. "2026-09-05 09:00, 2026-09-06 14:00")', 'USAGE')
-  }
-  patchTodo(t.taskId, { reminderExtra: extras }, { action: 'edit' })
-  return { taskId: t.taskId, reminderExtra: extras.map(ts => dayjs(ts).format('YYYY-MM-DD HH:mm')) }
-}
+/* Multiple reminders: extracted verbatim to lib-reminders.cjs (2026-09-27 size-ratchet split) */
+const {
+  setReminderOffsets, setReminderExtra,
+} = require('./lib-reminders.cjs')({ resolveTask, liveTasks, patchTodo, CliError, dayjs, parseDate })
 
 const settingsApi = require('./lib-settings.cjs')
 const { settingsDoc, setSettingsRaceHookForTests, settingsKnown, settingsList, settingsSet, SETTINGS_MANIFEST } = settingsApi({ open, commit, audit, CliError })
 
-function planDayKey (date) {
-  if (!date) return dayjs().format('YYYY-MM-DD')
-  return dayjs(dayStartOf(parseDate(date))).format('YYYY-MM-DD')
-}
-function planRows (day) {
-  const rows = open().call('planAll', []).filter(r => !day || r.day === day)
-  return rows
-}
-/** Place/schedule a task chip at HH:mm (one task can hold multiple chips = multiple expected pomodoros). --replace swaps all chips. */
-function planSet (input, mm, { date, replace } = {}) {
-  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(String(mm))) throw new CliError('time must be HH:mm (00:00-23:59)', 'USAGE')
-  const t = resolveTask(input, liveTasks())
-  // Defaults to the task's own scheduled day (a future task's chips land on its task day, not today); explicit --date overrides
-  const day = planDayKey(date != null && date !== true ? date : (t.dayStart ? dayjs(t.dayStart).format('YYYY-MM-DD') : null))
-  const existing = planRows(day).filter(r => r.taskId === t.taskId)
-  if (!replace && existing.some(r => r.mm === mm)) throw new CliError(`task already has a chip at ${mm} (plan list to inspect, --replace to rebuild)`, 'PLAN_EXISTS')
-  if (replace && existing.length) commit('plan', 'deleteTaskDay', { taskId: t.taskId, day })
-  commit('plan', 'putMany', [{ taskId: t.taskId, day, mm }])
-  const chips = planRows(day).filter(r => r.taskId === t.taskId).map(r => r.mm).sort() // re-read actual state so the audit stays faithful
-  audit.record({ action: 'plan.set', targets: [t], changes: [{ after: { day, chips } }], note: 'scheduled on the day timeline at ' + mm })
-  return { taskId: t.taskId, content: t.taskContent, day, chips }
-}
-function planList (date) {
-  const day = planDayKey(date)
-  const live = liveTasks()
-  const byTask = {}
-  for (const r of planRows(day)) {
-    if (!byTask[r.taskId]) byTask[r.taskId] = []
-    byTask[r.taskId].push(r.mm)
-  }
-  return { day, tasks: Object.entries(byTask).map(([taskId, chips]) => {
-    const t = live.find(x => x.taskId === taskId)
-    return { taskId, content: t ? t.taskContent : '(deleted task)', complete: !!(t && t.complete), chips: chips.sort() }
-  }) }
-}
-function planRemove (input, { date, at } = {}) {
-  const t = resolveTask(input, liveTasks())
-  // Same default-day rule as planSet: the task's own scheduled day (plan rm after plan set must not
-  // silently target today and fail PLAN_NOT_FOUND for a future-scheduled task); explicit --date overrides
-  const day = planDayKey(date != null && date !== true ? date : (t.dayStart ? dayjs(t.dayStart).format('YYYY-MM-DD') : null))
-  const arr = planRows(day).filter(r => r.taskId === t.taskId)
-  if (!arr.length) throw new CliError(`task has no chips on ${day}`, 'PLAN_NOT_FOUND')
-  let ids
-  if (at) {
-    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(String(at))) throw new CliError('time must be HH:mm', 'USAGE')
-    ids = arr.filter(r => r.mm === at).map(r => r.id)
-    if (!ids.length) throw new CliError(`no chip at ${at} for this task on ${day}`, 'PLAN_NOT_FOUND')
-  } else {
-    ids = arr.map(r => r.id)
-  }
-  commit('plan', 'removeIds', ids)
-  audit.record({ action: 'plan.remove', targets: [t], changes: [{ before: { day, removed: ids.length } }], note: 'timeline chips removed' })
-  return { taskId: t.taskId, day, removed: ids.length }
-}
+const {
+  buildRenewalInstance, buildRepeatRule, repeatOn, repeatOff, repeatRuleInfo,
+} = require('./lib-repeat.cjs')({ open, commit, audit, CliError, dayjs, core, resolveTask, liveTasks, normKey, settingsDoc, chipsSnapshotForDelete, dayStartOf })
+
+/* Day-plan (schedule chips): extracted verbatim to lib-plan.cjs (2026-09-27 size-ratchet split) */
+const {
+  planSet, planList, planRemove,
+} = require('./lib-plan.cjs')({ open, commit, audit, CliError, dayjs, resolveTask, liveTasks, parseDate, dayStartOf })
 
 const evu = require('./event-utils.cjs')
 const { eventFocusMinutes, eventEnd } = evu
@@ -1710,7 +727,12 @@ async function importEvents (events, { onProgress = () => {} } = {}) {
       // Behavior fix (2026-09-16): a FUTURE event used to be imported as completed + with a backfilled focus
       // record — importing next week's schedule fabricated "done + accounted" history for work not yet done.
       // Future events now only create the task; completion and the ledger row are left to the real day.
-      const future = String(e.date) > dayjs().format('YYYY-MM-DD')
+      // D11 fix (2026-09-28): compare parsed TIMESTAMPS, not raw strings — a loose date like '2026-9-28'
+      // sorts before '2026-09-28' lexicographically, so an actually-future event was misjudged as past
+      // and got backfilled completion + a fabricated focus ledger row. Unparseable dates (NaN) are
+      // treated as future: without a real day there is no basis to fabricate "done" history.
+      const evDay = dayStartOf(parseDate(e.date))
+      const future = !(evDay > 0 && evDay <= dayStartOf(Date.now()))
       if (!future) {
         toggleComplete(t.taskId, true, { completedAt: parseDate(e.date + ' ' + endClamp) })
         const focusMin = eventFocusMinutes(mins)

@@ -19,6 +19,12 @@
  *  - Receipt writes go through the plain setMeta statement (no separate oplog surface), matching
  *    cliTomatoState; both meta keys are machine-local (sync-apply.js isMachineLocalMetaKey).
  */
+// 2026-09-28 r2: the abandon/seed policy (TTL constant + fresh-vs-stale decision) moved to the
+// shared cli-slot-policy.js — it was previously duplicated with external-db-watch.js (constant
+// defined twice, kept in sync only by this comment). Same module now also backs the runtime
+// TTL abandon in fix-util.tryForwardTomatoCmd, so all three consumers share one definition.
+const { seedSlotWatermark, isStaleSlotCmd } = require('./cli-slot-policy')
+
 function createSyncCmdHandler ({ dispatch, setMeta, log, getMeta, deleteMeta }) {
   // Round-1 P0 (2026-09-21): lastSeq used to start at 0 per process, so a cliSyncCmd slot that
   // survived the previous app run (e.g. an old `unpair`) was REPLAYED on every restart — the
@@ -26,20 +32,30 @@ function createSyncCmdHandler ({ dispatch, setMeta, log, getMeta, deleteMeta }) 
   // `cliSyncSeq` counter (every command consumed a seq, so anything still in the slot is
   // <= counter = already handled), and delete the slot after handling so a crashed/closed app
   // cannot re-execute it either.
-  let lastSeq = 0
-  try { lastSeq = Number(typeof getMeta === 'function' ? getMeta('cliSyncSeq') : 0) || 0 } catch { lastSeq = 0 }
   // Round-2 P1 (2026-09-21): seeding from the counter alone could DROP a queued command — the CLI
   // consumes a seq BEFORE the app writes the slot, so a crash between slot-write and handle left
   // cmd.seq === counter, which the counter watermark then skipped forever. When the slot holds a
   // command at exactly the counter, seed the watermark from THE SLOT (counter - 1) so the command
   // is handled once; clearHandledSlot then deletes it, so a second restart (slot gone) seeds from
   // the counter again and nothing re-executes.
+  // 2026-09-28: only for a FRESH queued command (see cli-slot-policy.seedSlotWatermark) — an
+  // abandoned waitForSyncAck timeout (APP_NOT_RUNNING) must not replay an unpair days later.
+  let lastSeq = 0
   try {
-    if (typeof getMeta === 'function') {
-      const queued = JSON.parse(getMeta('cliSyncCmd') || 'null')
-      if (queued && Number.isFinite(queued.seq) && Number(queued.seq) === lastSeq) lastSeq -= 1
-    }
-  } catch { /* malformed slot: counter watermark stands */ }
+    lastSeq = seedSlotWatermark({
+      counter: Number(typeof getMeta === 'function' ? getMeta('cliSyncSeq') : 0) || 0,
+      slotRaw: typeof getMeta === 'function' ? getMeta('cliSyncCmd') : null,
+      now: Date.now(),
+      onAbandon: (queued) => {
+        try {
+          if (typeof deleteMeta === 'function') {
+            const cur = JSON.parse(getMeta('cliSyncCmd') || 'null')
+            if (cur && Number(cur.seq) === Number(queued.seq)) deleteMeta('cliSyncCmd')
+          }
+        } catch { /* best-effort cleanup */ }
+      },
+    })
+  } catch { lastSeq = Number(typeof getMeta === 'function' ? getMeta('cliSyncSeq') : 0) || 0 }
   const clearHandledSlot = async (cmd) => {
     try {
       if (typeof deleteMeta !== 'function' || typeof getMeta !== 'function') return
@@ -107,6 +123,20 @@ function createSyncCmdHandler ({ dispatch, setMeta, log, getMeta, deleteMeta }) 
     }
     if (!cmd || cmd.seq <= lastSeq) return
     lastSeq = cmd.seq
+    // 2026-09-28 r5: runtime TTL abandon, same policy as the seed above and as
+    // fix-util.tryForwardTomatoCmd (2026-09-28 r2). A STAMPED command (at > 0) older than
+    // CLI_SLOT_ABANDON_TTL_MS (predicate shared from cli-slot-policy.isStaleSlotCmd, r6) was
+    // already given up on by the CLI — waitForSyncAck (15s) long expired with APP_NOT_RUNNING —
+    // so executing it when the window/poll recovers would fire it long after its writer quit
+    // (e.g. an unpair rotating the pairing secret → the peer silently drops). Consume WITHOUT
+    // executing: seq advances (no replay), the slot is compare-and-deleted via clearHandledSlot
+    // (a newer command is never eaten), no receipt is written (the CLI is not polling this seq
+    // anymore). A command WITHOUT an `at` stamp keeps execute-once semantics.
+    if (isStaleSlotCmd(cmd, Date.now())) {
+      log.warn('[CLI] cliSyncCmd abandoned stale command (CLI already reported APP_NOT_RUNNING), seq:', cmd.seq, 'action:', cmd.action)
+      Promise.resolve(clearHandledSlot(cmd)).catch(() => {})
+      return
+    }
     // Slot cleanup after handling (see clearHandledSlot): no restart replay of a handled command.
     Promise.resolve(handle(cmd)).finally(() => { clearHandledSlot(cmd) })
   }

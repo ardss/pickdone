@@ -109,14 +109,19 @@ async function openRaw(port, authCode, { salt = cipher.randomToken(), deviceId =
 
 test('encryption: two-way pairing through a sniffing proxy, then full sync rounds — rows never plaintext on the wire', async () => {
   const ROW_TEXT = 'secret-task-content-zebra'
+  // F1 (2026-09-28 drill): the server must accept hellos under the per-pair secret minted at
+  // pair-accept (production persists it into the paired-peer table; here, an in-test map).
+  const inboundSecrets = {}
   const serverNode = createLanSyncNode({
     deviceId: SERVER_DEVICE, name: 'EncS', pairingSecret: SECRET, port: 0, host: '127.0.0.1',
+    secretFor: (id) => inboundSecrets[id] || null,
     discoverFn: { startAdvertising() {}, discover() {}, stop() {}, getPeers: () => [] },
     ingestSegment: () => ({ applied: 0, rejected: 0 }),
     ingestSnapshot: () => {},
     buildSegments: () => [{ fromSeq: 1, toSeq: 1, deviceId: SERVER_DEVICE, rows: [{ entity: 'todo', id: 's1', updatedAt: 1, deleted: false, deletedAt: 0, data: { taskId: 's1', taskContent: ROW_TEXT } }] }],
   })
   serverNode.on('pair-request', (info) => info.respond(true))
+  serverNode.on('paired-inbound', (info) => { inboundSecrets[info.deviceId] = info.secret })
   serverNode.start()
   const realPort = await serverNode.whenListening()
 
@@ -130,11 +135,12 @@ test('encryption: two-way pairing through a sniffing proxy, then full sync round
       ingestSegment: () => {}, ingestSnapshot: () => {}, buildSegments: () => [],
     })
     const { secret } = await pairClient.requestPair('127.0.0.1', sniffPort)
-    assert.equal(secret, SECRET, 'pair-accept delivered the secret (decrypted client-side)')
+    assert.ok(secret && secret !== SECRET, 'pair-accept delivered a FRESH per-pair secret (decrypted client-side)')
     // (6) the raw wire between pair-request and pair-accept must NOT contain the secret.
     assert.ok(!proxy.text().includes(SECRET), 'pairing secret must never appear in sniffed bytes')
+    assert.ok(!proxy.text().includes(secret), 'the per-pair secret must never appear in sniffed bytes either')
 
-    // Full sync rounds with the adopted secret, still through the proxy.
+    // Full sync rounds with the adopted per-pair secret, still through the proxy.
     const clientNode = createLanSyncNode({
       deviceId: CLIENT_DEVICE, name: 'EncC', pairingSecret: secret, port: 0, host: '127.0.0.1',
       discoverFn: { startAdvertising() {}, discover() {}, stop() {}, getPeers: () => [] },
@@ -144,7 +150,7 @@ test('encryption: two-way pairing through a sniffing proxy, then full sync round
     })
     clientNode.start()
     await clientNode.whenListening()
-    clientNode.addPeer({ deviceId: SERVER_DEVICE, host: '127.0.0.1', port: sniffPort })
+    clientNode.addPeer({ deviceId: SERVER_DEVICE, host: '127.0.0.1', port: sniffPort, secret })
     const r = await clientNode.startSyncRound()
     assert.equal(r.confirmed, 1, 'round completed over the encrypted transport')
 
@@ -297,7 +303,8 @@ test('encryption: pair-accept secret is NOT plaintext on the wire (manual 6-digi
       client.on('rejected', reject)
       client.on('error', reject)
     })
-    assert.equal(paired.secret, SECRET, 'client decrypted the secret')
+    // F1 (2026-09-28 drill): the accept carries a FRESH per-pair secret, not the global.
+    assert.ok(paired.secret && paired.secret !== SECRET, 'client decrypted a fresh per-pair secret')
     const wire = proxy.text()
     assert.ok(wire.includes('"pair-request"'), 'proxy observed the pairing exchange')
     assert.ok(!wire.includes(SECRET), 'secret never in plaintext between pair-request and pair-accept')
@@ -490,7 +497,8 @@ test('encryption: pair-accept handshake key v2 — passive-sniffer transcript ca
       code: CODE, ecdh: clientEph.ecdh, peerPub: challengeLine.pub, nonce, challenge: challengeLine.challenge,
     })
     const accept = cipher.decryptFrame(goodKey, JSON.parse(acceptLine))
-    assert.equal(accept.secret, SECRET, 'the ECDH handshake key opens the accept')
+    // F1: the accept's payload is a fresh per-pair secret — never the server's global.
+    assert.ok(accept.secret && accept.secret !== SECRET, 'the ECDH handshake key opens the accept')
 
     assert.ok(!proxy.text().includes(SECRET), 'secret never plaintext on the wire')
     sock.destroy()

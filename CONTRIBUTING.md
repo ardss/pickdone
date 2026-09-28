@@ -45,6 +45,7 @@ SQLite ships as a vendored, prebuilt `better-sqlite3-multiple-ciphers` in `vendo
 
 - Commit messages follow `type(scope): description` with type in `feat / fix / chore / docs / refactor / test / ci`
 - Split large changes into small commits; one commit does one thing
+- Before committing, check the staging area for throwaway work files (`tmp_*` patch/scratch scripts, test snapshots) — they must be deleted, not committed (e.g. a `tmp_patch_tests.py` once slipped into a fix commit)
 
 ## Reporting issues
 

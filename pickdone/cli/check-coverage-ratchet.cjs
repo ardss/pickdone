@@ -31,9 +31,11 @@ const METRICS = [
   { key: 'functions', label: 'funcs', column: 3 }
 ]
 
-// Coverage differs per platform (~10pt: win32 loads a smaller file set than linux CI), so the
-// ratchet is per-platform: one shared number would let the higher platform red the lower one.
-const PLATFORM = process.platform
+// Coverage differs per platform AND per node version (2026-09-29 measurement: node 22 accounts
+// 84.8% where node 24 accounts 73.3% on the SAME tree — v8 coverage attribution changed), so the
+// ratchet key is platform@nodeMajor. A combo with no baseline yet calibrates on its first
+// full-green run (loud note) instead of comparing against another instrument's number.
+const PLATFORM = `${process.platform}@node${process.versions.node.split('.')[0]}`
 
 function loadBaseline () {
   let base = { lines: 0, branches: 0, functions: 0 }
@@ -49,7 +51,12 @@ function writeBaseline (measured) {
   if (fs.existsSync(BASELINE_FILE)) {
     baselines = JSON.parse(fs.readFileSync(BASELINE_FILE, 'utf8')).baselines || {}
   }
-  baselines[PLATFORM] = measured
+  // Floor to whole percent, matching the comparison (which floors the measured value too):
+  // the coverage table reports at 0.1 granularity, so a float baseline like 73.32 can never be
+  // reached by a 73.3 reading — the gate would red forever on its own calibration (2026-09-29).
+  baselines[PLATFORM] = Object.fromEntries(
+    Object.entries(measured).map(([k, v]) => [k, Math.floor(v)])
+  )
   fs.writeFileSync(BASELINE_FILE, JSON.stringify({
     // 覆盖率棘轮基线 - 由 check-coverage-ratchet.cjs 通过时自动回写,请勿手工下调
     _comment: 'ratchet baseline per platform (win32/linux/darwin file sets differ ~10pt): each metric = last passing run on that platform, floored to whole percent',
@@ -106,7 +113,21 @@ function loadFreshSummary (notBefore) {
     if (Date.now() - stat.mtimeMs > SUMMARY_MAX_AGE_MS) return null
     if (notBefore && stat.mtimeMs < notBefore) return null
     const j = JSON.parse(fs.readFileSync(SUMMARY_FILE, 'utf8'))
-    if (typeof j.lines === 'number' && typeof j.branches === 'number' && typeof j.functions === 'number') return j
+    if (typeof j.lines === 'number' && typeof j.branches === 'number' && typeof j.functions === 'number') {
+      // Instrument fix (2026-09-29): a FAILED suite aborts early, under-loads the file set
+      // (smaller denominator) and reads up to ~11pt HIGH — a failed-run summary must never
+      // feed the comparison or the auto-raise. Summaries without failCount predate the fix
+      // and are declined (conservative: the gate falls back to running the suite itself).
+      if (typeof j.failCount !== 'number') {
+        console.error('[check-coverage-ratchet] ignoring pre-instrument-fix coverage-summary.json (no failCount)')
+        return null
+      }
+      if (j.failCount > 0) {
+        console.error(`[check-coverage-ratchet] ignoring coverage-summary.json: ${j.failCount} failing test(s) — aborted runs overstate coverage`)
+        return null
+      }
+      return j
+    }
     return null
   } catch { return null }
 }
@@ -151,9 +172,17 @@ if (!measured) {
 }
 
 const baseline = loadBaseline()
+const hasBaseline = baseline.lines > 0 || baseline.branches > 0 || baseline.functions > 0
 if (force) {
   writeBaseline(measured)
   console.log(`✓ [check-coverage-ratchet] baseline force-updated to ${JSON.stringify(measured)}`)
+  process.exit(0)
+}
+if (!hasBaseline) {
+  // First full-green run on this platform@node combo: calibrate, don't compare — comparing
+  // against another instrument's numbers is exactly the 2026-09-29 86-vs-73 failure mode.
+  writeBaseline(measured)
+  console.log(`✓ [check-coverage-ratchet] no baseline for ${PLATFORM} yet — calibrated from this full-green run: ${JSON.stringify(measured)}`)
   process.exit(0)
 }
 

@@ -41,6 +41,17 @@ function composeFromTomatoState (tomatoState, status, deviceId, deviceName) {
   })
 }
 
+/** maint/d11-r4: shared 500ms-tick prune — previously two character-twin copies in TomatoPanel
+ *  and TomatoFloatPage (skip the commit while no remote announce exists: pruning an empty map is
+ *  a no-op, so an idle window stops issuing 2Hz Vuex commits). Components pass their store
+ *  instance (`store` or `this.$store`); store-not-ready degrades silently. */
+export function pruneRemoteAnnounces (store) {
+  try {
+    const st = store && store.state && store.state.tomatoAnnounce
+    if (st && st.remote && Object.keys(st.remote).length) store.commit('tomatoAnnounce/prune')
+  } catch (e) { /* store not ready */ }
+}
+
 export default {
   namespaced: true,
   state: { remote: {}, inited: false },

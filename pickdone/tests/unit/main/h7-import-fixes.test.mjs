@@ -142,23 +142,13 @@ function loadAttachmentHandlers (fakeAppRoot) {
   Module._load = origLoad
   return mod
 }
-test('h7-6: save-to-download filters backslash traversal, reserved device names, and non-local urls', () => {
+test('h7-6: save-to-download sanitizer channel is deleted (r3 2026-09-28 dead-channel removal)', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'todo-h7-dl-'))
-  fs.mkdirSync(path.join(tmp, 'files'), { recursive: true })
-  fs.writeFileSync(path.join(tmp, 'files', 'src.png'), 'x')
   const mod = loadAttachmentHandlers(tmp)
   const h = mod({ isLocked: () => false, isSafeExternal: u => /^https?:/i.test(u), getMainWindow: () => null, broadcastWhiteNoiseUpdated: () => {}, app: { getPath: () => tmp } })
-  // backslash traversal must collapse to a flat name inside downloads (separators → '_', no path segments)
-  const dst1 = h['save-upload-file-to-download']({}, 'local://src.png', '..\\..\\evil.png')
-  assert.equal(path.basename(dst1), '.._.._evil.png')
-  assert.ok(dst1.startsWith(tmp), 'must land inside the downloads dir')
-  // Windows reserved device names get a safe prefix instead of an unpredictable device open
-  const dst2 = h['save-upload-file-to-download']({}, 'local://src.png', 'CON.png')
-  assert.equal(path.basename(dst2), '_CON.png')
-  const dst3 = h['save-upload-file-to-download']({}, 'local://src.png', 'com1')
-  assert.equal(path.basename(dst3), '_com1')
-  // non-local URL: null without touching/slicing the value
-  assert.equal(h['save-upload-file-to-download']({}, 'https://x/y.png', 'y.png'), null)
+  // Its only consumer (todoAPI.saveToDownloads) had zero renderer callers; if the channel is
+  // ever re-added it must come back WITH a caller and this sanitizer's guarantees.
+  assert.equal('save-upload-file-to-download' in h, false, 'dead channel must stay deleted')
 })
 
 /* ---- 7 + 8: pick-preview main-window guard, import:run re-stat (source assertions) ---- */

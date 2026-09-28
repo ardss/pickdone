@@ -90,20 +90,7 @@
         "from": "cli",
         "to": "cli",
         "filter": [
-          "pickdone.js",
-          "lib.js",
-          "lib-tasks.cjs",
-          "lib-projects.cjs",
-          "lib-attachments.cjs",
-          "lib-settings.cjs",
-          "lib-restore-backup.cjs",
-          "env-clean.js",
-          "import.js",
-          "audit.js",
-          "event-utils.cjs",
-          "nl-date.cjs",
-          "lib/**",
-          "SKILL.md"
+          "**/*"
         ]
       },
       {

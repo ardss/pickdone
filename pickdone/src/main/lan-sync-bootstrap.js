@@ -36,7 +36,7 @@ const { SYNC_SCHEMA_VERSION } = require('../../shared/sync-core/merge.mjs')
 // renderer whitelist consume). The hand-copied literal here could drift from the shared
 // set and route an applied row into the WRONG blob on fold.
 const { HABITS_BLOB_FIELDS } = require('../../shared/settings-families.mjs')
-const { generatePairingSecret, derivePairingCode } = require('../../shared/sync-core/pairing.mjs')
+const { generatePairingSecret } = require('../../shared/sync-core/pairing.mjs') // derivePairingCode moved with syncGetPairingCode to lan-sync/pair-ops.js
 const { createLanSyncNode } = require('./lan-sync/index')
 const { DEFAULT_PORT } = require('./lan-sync/transport')
 const { isDialableHost } = require('./lan-sync/discovery') // isPlausibleHost dropped with the retired syncAddPeer chain (2026-09-23)
@@ -116,7 +116,28 @@ function createLocalStoreAdapter () {
     getRowsSince (seq) {
       const ptrs = state.db.call('syncOplogSince', { sinceSeq: seq, limit: oplogKeepLimit(SYNC_OPLOG_KEEP) }) || [] // D3 2026-09-24: was bare 10000
       const cache = createHydrationCache()
-      return ptrs.map(ptr => hydrateRow(ptr, cache)).filter(Boolean)
+      // r2 2026-09-28: hydrateRow now RETHROWS on DB read failure (only legitimate skips return
+      // null). A failure must not be silently filtered out with the cursor advancing past the
+      // pointer — that lost changes one-way between full snapshots. Count it here, surface it in
+      // the egress report (state.egressHydrationFailures) and log it; the row itself is still
+      // skipped (cursor semantics unchanged — the loss is now VISIBLE, not silent).
+      const rows = []
+      const failures = []
+      for (const ptr of ptrs) {
+        let row = null
+        try { row = hydrateRow(ptr, cache) } catch (e) {
+          failures.push({ ...(e.egressHydration || { entity: ptr.entity, id: ptr.entityId, seq: ptr.seq }), error: e.message })
+          continue
+        }
+        if (row) rows.push(row)
+      }
+      state.egressHydrationFailures = failures
+      if (failures.length) {
+        log.warn('[LanSync] egress hydration failed for ' + failures.length + ' oplog pointer(s) — pushed rows are INCOMPLETE:',
+          failures.map(f => f.entity + ':' + f.id).join(', '))
+        try { emitSyncEvent('egress-hydration-failed', { count: failures.length, failures }) } catch { /* event surface is best-effort */ }
+      }
+      return rows
     },
     getCursor () { const v = state.db.call('getMeta', CURSOR_META_KEY); const n = Number(v); return Number.isFinite(n) && n > 0 ? n : 0 },
     setCursor (seq) { busWrite('setMeta', [CURSOR_META_KEY, String(seq)]) },
@@ -290,6 +311,11 @@ function startSync () {
     peerProgress: state.peerWatermarks,
     name: settingGet(K_DEVICE_NAME) || deviceName,
     pairingSecret: settingGet(K_PAIRING_SECRET),
+    // F1 (2026-09-28 drill): per-pair secret lookup for server-side hello auth — prefer the
+    // peer's own secret from the paired-peer table; null falls back to the global secret.
+    secretFor: (id) => {
+      try { const rec = loadPairedPeers()[String(id)]; return (rec && rec.secret) ? String(rec.secret) : null } catch { return null }
+    },
     securityLog: loadSecurityLog(),
     verifyPairingCode: code => !!state.pairingCode && state.pairingCode.expiresAt > Date.now() &&
       (() => { const a = Buffer.from(String(code)); const b = Buffer.from(String(state.pairingCode.code)); return a.length === b.length && timingSafeEqual(a, b) })(),
@@ -368,31 +394,13 @@ function startSync () {
     // EpAttachments can re-attempt image loads / refresh the list without a manual view change.
     onAttachmentArrived: key => emitSyncEvent('attachments-arrived', { key: String(key || '') }),
   })
-  state.node.on('round-error', info => {
-    log.warn('[LanSync] round error:', info && info.error)
-    emitSyncEvent('round-error', { deviceId: info && info.peer, detail: info && info.error && info.error.message })
-    notifyRenderers('round-error')
+  // Node event wiring lives in lan-sync/node-events.js (2026-09-27 size ratchet) — same
+  // injected-deps pattern as paired-peers/peer-extras; getState keeps __test.setState effective.
+  const nodeEvents = require('./lan-sync/node-events')({
+    getState: () => state, emitSyncEvent, notifyRenderers, kickSyncRound, scheduleSecurityPersist,
+    persistPairedPeer, normalizeHost, loadPairedPeers, manualPeers, DEFAULT_PORT, log,
   })
-  // Server-role failures (round-3 review, loud EADDRINUSE): a fixed-port collision or another
-  // listener-level error must be VISIBLE — log.error + Device Center syncEvent + status
-  // lastError (the node already records err.message into its getStatus().lastError).
-  state.node.on('server-error', err => {
-    log.error('[LanSync] server error:', err && err.message)
-    emitSyncEvent('server-error', { detail: err && err.message, code: err && err.code })
-    notifyRenderers('round-error')
-  })
-  state.node.on('round-done', info => emitSyncEvent('round-done', { deviceId: info && info.peer, applied: info && info.applied }))
-  // Snapshot-request protocol activity for the Device Center feed (sent = we served a peer's
-  // snapshot-request; received = we recovered via a peer's full snapshot).
-  state.node.on('snapshot-sync', info => emitSyncEvent('snapshot-sync', {
-    deviceId: info && info.peer, direction: info && info.direction, rows: info && info.rows,
-  }))
-  state.node.on('peer-online', p => { emitSyncEvent('peer-online', { deviceId: p.deviceId, deviceName: p.name, host: p.host }); kickSyncRound('peer-online') })
-  state.node.on('peer-offline', p => emitSyncEvent('peer-offline', { deviceId: p.deviceId, deviceName: p.name, host: p.host }))
-  state.node.on('pair-throttled', info => emitSyncEvent('pair-throttled', { ip: info && info.ip }))
-  // Security-ring persistence: pair-throttled / auth-rejected entries survive restarts via
-  // settings_rows (bounded to the node's 20-entry ring, write-throttled).
-  state.node.on('security-entry', () => scheduleSecurityPersist())
+  nodeEvents.wireNodeEvents()
   // Inbound two-way confirm request: hold it for the human (respond callback comes from the
   // transport, which owns the 60s auto-reject timer) and surface it to the renderer.
   state.node.on('pair-request', info => {
@@ -429,53 +437,7 @@ function startSync () {
       }
     } catch (e) { log.warn('[LanSync] pair-request notification failed:', e.message) }
   })
-  state.node.on('pair-accepted', info => emitSyncEvent('pair-accepted', { host: info && info.host, port: info && info.port }))
-  state.node.on('pair-rejected', info => emitSyncEvent('pair-rejected', { host: info && info.host, port: info && info.port, reason: info && info.reason }))
-  // Inbound pairing completed (manual code or confirmed): tell the renderer it succeeded AND
-  // (round-1 P0) immediately register + persist the peer from the ACTUAL TCP remote address —
-  // the inbound side always knows the peer's reachable address from its own socket.
-  state.node.on('paired-inbound', info => {
-    emitSyncEvent('pair-accepted', { deviceId: info && info.deviceId, host: info && info.host })
-    try {
-      if (!info || !info.deviceId || info.deviceId === state.deviceId) return
-      const myPort = (state.node && state.node.getStatus().port) || DEFAULT_PORT
-      persistPairedPeer({ deviceId: info.deviceId, name: info.deviceName, host: info.host, port: myPort })
-      if (state.node) state.node.addPeer({ deviceId: info.deviceId, name: info.deviceName, host: normalizeHost(info.host) || undefined, port: myPort })
-      kickSyncRound('paired-inbound')
-    } catch (e) { log.warn('[LanSync] paired-inbound persist failed:', e.message) }
-  })
-  // Round-1 P0: an authenticated connection proves the peer's ACTUAL reachable address — refresh
-  // the persisted record (and the live node entry) from socket remoteAddress, never from the
-  // stale/cached discovery value. Change-gated inside persistPairedPeer (no write amplification).
-  state.node.on('peer-connected', p => {
-    try {
-      if (!p || !p.deviceId || p.deviceId === state.deviceId) return
-      const myPort = (state.node && state.node.getStatus().port) || DEFAULT_PORT
-      if (persistPairedPeer({ deviceId: p.deviceId, host: p.host, port: myPort }) && state.node) {
-        const h = normalizeHost(p.host)
-        if (h) state.node.addPeer({ deviceId: p.deviceId, host: h, port: myPort })
-      }
-    } catch (e) { log.warn('[LanSync] peer-connected persist failed:', e.message) }
-  })
-  state.node.on('peer-unauthorized', info => {
-    log.warn('[LanSync] unauthorized peer rejected (terminal until re-pair):', info && info.deviceId, 'from', info && info.host, info && info.error)
-    // P1-3b: terminal state — the Device Center renders peers[].peerState === 'unpaired'
-    // (status payload) as "已被对方解除配对,请重新配对". Emitted ONCE per rejection; the node
-    // stops dialing that peer until user action.
-    emitSyncEvent('peer-unauthorized', { deviceId: info && info.deviceId, host: info && info.host, terminal: true })
-  })
-  // restore manually added peers (node peer table is memory-only; settings_rows is the authority)
-  for (const mp of manualPeers()) {
-    try { state.node.addPeer({ deviceId: 'manual-' + mp.host + ':' + mp.port, host: mp.host, port: Number(mp.port) }) } catch (e) { log.warn('[LanSync] manual peer restore failed:', e.message) }
-  }
-  // Round-1 P0: restore PAIRED peers — without this the peer table was memory-only and
-  // `sync status` reported peers:(none) after every restart even though pairing state survived.
-  for (const p of Object.values(loadPairedPeers())) {
-    try {
-      if (!p || !p.deviceId || p.deviceId === deviceId || !p.host) continue
-      state.node.addPeer({ deviceId: p.deviceId, name: p.name, host: p.host, port: Number(p.port) || DEFAULT_PORT })
-    } catch (e) { log.warn('[LanSync] paired peer restore failed:', e.message) }
-  }
+  nodeEvents.restorePeers(deviceId)
   state.node.start()
   state.pendingToSeq = 0
   // Auto round: 10s after enable/boot, then every 5 minutes (only while enabled). unref'd:
@@ -548,8 +510,14 @@ function notifyRenderers (reason) {
 /**
  * Device Center event channel: ONE 'syncEvent' IPC event carrying a self-describing payload
  * {type, at, ...}. Kept alongside the legacy 'lan-sync-changed' ping (existing consumers keep
- * working). Types: peer-online, peer-offline, pair-request, pair-accepted, pair-rejected,
- * round-done, round-error, pair-throttled.
+ * working). Types:
+ * peer-online, peer-offline, peer-unauthorized, peer-unpaired, pair-request, pair-accepted,
+ * pair-rejected, pair-throttled, snapshot-sync, round-done, round-error, server-error,
+ * sync-conflict, flush-quarantined, tomato-announce, attachments-arrived,
+ * egress-hydration-failed, oplog-append-failed.
+ * (r4 2026-09-28: that list is set-equality-gated against the actual emit sites —
+ * tests/unit/main/fix-20260928-r4-main.test.mjs greps every emitSyncEvent('<type>') and fails
+ * on any drift in either direction.)
  */
 function emitSyncEvent (type, payload) {
   try {
@@ -557,6 +525,13 @@ function emitSyncEvent (type, payload) {
     const msg = { type, at: Date.now(), ...(payload || {}) }
     for (const s of senders) { try { if (s && !s.isDestroyed()) s.send('syncEvent', msg) } catch { /* dying sender */ } }
   } catch { /* renderer notification is best-effort */ }
+}
+
+/** r3 fix (2026-09-28): db.js's oplog append-failure hook lands here. Exported separately so
+ *  db.js can reach it through a lazy require before (or without) initLanSync — with `state`
+ *  null this degrades to a no-op instead of throwing inside the oplog's catch. */
+function emitOplogAppendFailure (info) {
+  try { emitSyncEvent('oplog-append-failed', { count: info && info.count, error: info && info.error }) } catch { /* renderer notification is best-effort */ }
 }
 
 /* ---------- P0-1/P1-2/P1-5 (2026-09-19 UX review): post-round renderer refresh ----------
@@ -576,65 +551,16 @@ function emitSyncEvent (type, payload) {
  * (applyRowInner returns false -> nothing is marked applied -> no broadcast).
  */
 const DATA_CHANNEL_KINDS = ['todo', 'category', 'plan', 'filter', 'meta'] // ride 'todos-changed' like local writes do
-function sendToRenderers (channel, msg) {
-  try {
-    const senders = state.getWindowSenders ? state.getWindowSenders() : []
-    for (const s of senders) { try { if (s && !s.isDestroyed()) s.send(channel, msg) } catch { /* dying sender */ } }
-  } catch { /* renderer notification is best-effort */ }
-}
-
-/** P1-2a / F1 (2026-09-20): fold applied setting rows back into the blob they came from so
- *  blob-vs-rows converge (no re-stamp churn). The settings_rows key IS the source blob's field
- *  name (db-sync-schema's setMeta bridge mirrors each blob's top-level fields row-for-row), so
- *  the source blob is known statically: the habits blob (renderer store/habits.js persist shape)
- *  carries exactly schemaV/habits/moments/savedAt; every other key lives in the settings blob.
- *  Folding into the WRONG blob made applied habits fields (habits/moments/savedAt) vanish from
- *  db.habitsState — the receiving habits store reads only that blob and its next persist()
- *  re-mirrored the stale blob over the fresh rows with a fresh savedAt (stale clobber of the peer).
- *  Guards against re-stamping newer rows backwards: the fold goes through setMeta, whose bridge
- *  (db-sync-schema registerOps) runs mergeDoc -> putRow, which is a strict identical-content
- *  no-op (the rows already hold these exact values, so no updatedAt is re-stamped), and the blob
- *  meta keys themselves never sync (isSyncBlobMetaKey), so the fold cannot echo.
- *  Best-effort: a corrupt blob skips the fold (rows stay the sync truth).
- *  Round-2 P1 (2026-09-21): a MISSING blob no longer skips the fold — on a fresh-paired device
- *  the blob is absent, the hot-apply deliberately does not persist, and nothing else rebuilt the
- *  blob from rows: restart lost the whole habits view, and the next local persist wrote the
- *  renderer's stale/empty blob over the peer's fresh rows (data loss). When the blob is missing
- *  but applied rows exist, the blob is now MATERIALIZED from the rows (fold = create).
- *  Returns the parsed patches per blob for the renderer hot-apply broadcasts. */
-const HABITS_BLOB_KEY = 'db.habitsState'
-function foldIntoBlob (blobKey, entries) {
-  if (!entries.length) return
-  try {
-    let doc = null
-    try { doc = JSON.parse(state.db.call('getMeta', blobKey)) } catch { doc = null }
-    if (!doc || typeof doc !== 'object' || Array.isArray(doc)) {
-      // Round-2 P1: materialize instead of skip. The habits blob carries the renderer store's
-      // persist shape (schemaV/habits/moments/savedAt); every other blob is the settings blob.
-      if (blobKey === HABITS_BLOB_KEY) doc = { schemaV: 1, habits: [], moments: [], savedAt: 0 }
-      else doc = {}
-      log.info('[LanSync] materializing missing blob from applied rows:', blobKey)
-    }
-    for (const [k, v] of entries) {
-      if (v === undefined) delete doc[k] // tombstone: drop the field from the blob
-      else doc[k] = v
-    }
-    busWrite('setMeta', [blobKey, JSON.stringify(doc)])
-  } catch (e) { log.warn('[LanSync] settings blob fold failed:', blobKey, e.message) }
-}
-
-function foldSettingsIntoBlob (patch) {
-  const settings = []
-  const habits = []
-  for (const k of Object.keys(patch || {})) {
-    if (syncApply.isMachineLocalSettingKey(k)) continue
-    ;(HABITS_BLOB_FIELDS.has(k) ? habits : settings).push([k, patch[k]])
-  }
-  foldIntoBlob(BLOB_SETTINGS_KEY, settings)
-  foldIntoBlob(HABITS_BLOB_KEY, habits)
-  const toPatch = list => { const p = {}; for (const [k, v] of list) if (v !== undefined) p[k] = v; return p }
-  return { settingsPatch: toPatch(settings), habitsPatch: toPatch(habits) }
-}
+/* sendToRenderers / foldIntoBlob / foldSettingsIntoBlob / emitAppliedRound live in
+ * lan-sync/apply-broadcast.js (2026-09-27 size ratchet) — same injected-deps factory pattern
+ * as paired-peers/peer-extras; getState keeps __test.setState effective. DATA_CHANNEL_KINDS
+ * and BLOB_SETTINGS_KEY stay declared HERE (cli/check-sync-matrix.cjs parses the kinds list
+ * from this file's source). */
+const applyBroadcast = require('./lan-sync/apply-broadcast')({
+  getState: () => state, busWrite, syncApply, HABITS_BLOB_FIELDS, DATA_CHANNEL_KINDS,
+  BLOB_SETTINGS_KEY, emitSyncEvent, log,
+})
+const { emitAppliedRound } = applyBroadcast
 
 /**
  * P2-5 (round-7): shared ingest epilogue — flush the buffered writes, then (only on flush
@@ -668,44 +594,6 @@ function finalizeIngest (r, { snapshot = false, chunk = false } = {}) {
   return r
 }
 
-function emitAppliedRound () {
-  const round = syncApply.consumeAppliedRound(state)
-  if (!round) return
-  // Sync writes are main-process writes: re-baseline the external-write watcher so its next poll
-  // does not mistake them for CLI writes and fire a second (undo-stack-wiping) full reload.
-  try { if (state.resyncExternalWatch) state.resyncExternalWatch() } catch { /* best-effort */ }
-  const at = Date.now()
-  if (round.kinds.some(k => DATA_CHANNEL_KINDS.includes(k))) {
-    sendToRenderers('todos-changed', { reason: 'lan-sync-apply', op: round.kinds.join(','), at })
-  }
-  if (round.kinds.includes('tomato')) {
-    sendToRenderers('tomato-records-changed', { reason: 'lan-sync-apply', at })
-  }
-  const settingKeys = Object.keys(round.settingsPatch || {})
-  if (settingKeys.length) {
-    // F1 (2026-09-20): fold each applied row into ITS source blob (settings vs habits) and
-    // hot-apply each on its own channel. external-habits-changed mirrors external-settings-changed
-    // 1:1 (S2 renderer wiring contract):
-    //   channel: 'external-habits-changed'
-    //   payload: flat object of APPLIED habits-blob fields -> parsed values, e.g.
-    //            { habits: [...], moments: [...], savedAt: 1712345678901 }
-    //            (keys omitted when the applied row was a tombstone = field deleted).
-    //            Consumed like external-settings-changed: merge the fields into the habits store
-    //            state; savedAt LWW in store/habits.js already dedupes stale applications.
-    const { settingsPatch, habitsPatch } = foldSettingsIntoBlob(round.settingsPatch)
-    // Settings hot-apply path reuses the CLI settings watcher's channel: the renderer dispatches
-    // settings/update, which syncs LS/config.json/shortcuts and mirrors the blob back (now
-    // value-identical to the rows, so the bridge stamps nothing — the churn loop stays dead).
-    if (Object.keys(settingsPatch).length) sendToRenderers('external-settings-changed', settingsPatch)
-    if (Object.keys(habitsPatch).length) sendToRenderers('external-habits-changed', habitsPatch)
-  }
-  // P1-5: one conflict toast per round, max.
-  if (round.conflicts && round.conflicts.length) {
-    const c = round.conflicts[0]
-    emitSyncEvent('sync-conflict', { entity: c.entity, name: c.name, applied: c.applied, count: round.conflicts.length })
-  }
-}
-
 /* ---------- P1-6 (2026-09-19 data-safety round): recovery vs persisted watermarks ---------- */
 /**
  * Invalidate every persisted per-peer push watermark after a DB RECOVERY/restore rebuilt the
@@ -724,61 +612,6 @@ function invalidateSyncWatermarks (reason) {
   } catch (e) { log.warn('[LanSync] live watermark map clear failed:', e.message) } // round-2 P1: no silent swallow
   log.warn('[LanSync] peer watermarks invalidated (' + String(reason || 'recovery') + ') — full re-push + peer re-snapshot on next round')
   try { kickSyncRound('watermarks-invalidated') } catch { /* node not started yet */ }
-}
-
-/* ---------- P1-3 (2026-09-19 UX review): unpair a device ---------- */
-/**
- * Remove a paired device: drop its manual peer record + push watermark and REVOKE the shared
- * pairing secret. Documented consequence (surfaced in the confirm dialog): pairing uses a single
- * shared secret, so rotating it disconnects EVERY previously paired device — the unpaired peer's
- * authenticated hello now fails (peer-unauthorized = syncing with it is paused) and both sides
- * must re-pair to resume.
- */
-async function syncUnpairPeerOp (p) {
-  const deviceId = String((p && p.deviceId) || '').trim()
-  if (!deviceId) throw new Error('syncUnpairPeer: deviceId is required')
-  if (!state.node) throw new Error('syncUnpairPeer: sync is not enabled')
-  // Resolve host/port from the live status so the manual-peer record (keyed by host:port) can go.
-  let host = null
-  let port = null
-  try {
-    const peer = (state.node.getStatus().peers || []).find(x => x && x.deviceId === deviceId)
-    if (peer) { host = peer.host; port = peer.port }
-  } catch { /* status read is best-effort; the rest still applies */ }
-  if (host) {
-    const rest = manualPeers().filter(x => !(x.host === host && Number(x.port) === Number(port)))
-    settingPut(K_MANUAL_PEERS, JSON.stringify(rest))
-    try { state.node.removePeer(String('manual-' + host + ':' + port)) } catch { /* older nodes: entry dies with the next restart */ }
-  }
-  // Round-1 P0: drop the persisted paired-peer record too (it keyed the stale address the manual
-  // record mirrored); re-pairing then starts from a clean table instead of merging into it.
-  removePairedPeer(deviceId)
-  // Drop the per-peer push watermark (a stale watermark must not survive a revoked pairing).
-  try {
-    const wm = loadPeerWatermarks()
-    if (wm[deviceId] != null) {
-      delete wm[deviceId]
-      settingPut(K_PEER_WATERMARKS, JSON.stringify(wm))
-      if (state.peerWatermarks && typeof state.peerWatermarks.delete === 'function') state.peerWatermarks.delete(deviceId)
-    }
-  } catch (e) { log.warn('[LanSync] watermark drop failed:', e.message) }
-  // Revoke the shared secret: the removed peer (and any other existing peer) can no longer
-  // authenticate until re-paired. Restart so the node advertises/authenticates with the new one.
-  settingPut(K_PAIRING_SECRET, generatePairingSecret())
-  state.pairingCode = null
-  // P1-4 (2026-09-19 data-safety round): best-effort tell the unpaired peer while a connection
-  // may still be live — it can then forget OUR peer record and enter its terminal unpaired
-  // state instead of auth-retrying forever. Never blocks the unpair flow. Round-1 P0: guard the
-  // method existence (a stale/older node reference threw `notifyUnpaired is not a function`).
-  if (state.node && typeof state.node.notifyUnpaired === 'function') {
-    try { const notified = state.node.notifyUnpaired(deviceId); log.info('[LanSync] unpaired notify to', deviceId, notified ? 'delivered' : 'no live connection (peer will discover via auth rejection)') } catch (e) { log.warn('[LanSync] unpaired notify failed:', e.message) }
-  }
-  await stopSync()
-  if (settingGet(K_ENABLED) === true) startSync()
-  notifyRenderers('peer-unpaired')
-  emitSyncEvent('peer-unpaired', { deviceId, host })
-  log.info('[LanSync] unpaired', deviceId, '- shared secret revoked (all peers must re-pair)')
-  return { ...getSettingsPayload(), unpaired: deviceId }
 }
 
 /* ---------- IPC op handlers (registered into db.OPS via db-sync-ops) ---------- */
@@ -850,6 +683,19 @@ function getStatusPayload () {
    swappable module-level state (__test.setState) applicable through the closure. */
 const { K_PEER_ALIAS_PREFIX, peerAliasOf, missingAttachmentKeys } = require('./lan-sync/peer-extras')({ settingGet })
 
+/* Pairing / unpair IPC op bodies: extracted to lan-sync/pair-ops.js (2026-09-27 size ratchet) —
+ * same injected-deps factory pattern; getState keeps the swappable module-level state
+ * (__test.setState) applicable through the closures. */
+const pairOps = require('./lan-sync/pair-ops')({
+  getState: () => state, settingGet, settingPut, busWrite, getSettingsPayload, ensureIdentity,
+  stopSync, startSync, runRound, persistPeerWatermarks, persistPairedPeer, removePairedPeer,
+  manualPeers, loadPeerWatermarks, notifyRenderers, emitSyncEvent,
+  K_PAIRING_SECRET, K_DEVICE_NAME, K_MANUAL_PEERS, K_PEER_WATERMARKS, K_ENABLED,
+  K_PEER_ALIAS_PREFIX, PAIRING_CODE_TTL_MS, DEFAULT_PORT, log,
+})
+const syncUnpairPeerOp = pairOps.syncUnpairPeerOp
+
+
 function registerOps () {
   syncOps.register({
     // main-internal (not renderer-callable): one-time legacy-row oplog backfill, see startSync.
@@ -869,82 +715,18 @@ function registerOps () {
     syncGetSettings: () => getSettingsPayload(),
     syncGetStatus: () => getStatusPayload(),
     syncSetEnabled: syncSetEnabledOp,
-    syncPairWithCode: async p => {
-      const code = String((p && p.code) || '').trim()
-      if (!/^\d{6}$/.test(code)) throw new Error('syncPairWithCode: 6-digit code required')
-      if (!state.node) throw new Error('syncPairWithCode: sync is not enabled')
-      const r = await state.node.pairWith(p && p.deviceId || undefined, code)
-      settingPut(K_PAIRING_SECRET, String(r.secret))
-      // Round-1 P0: persist the paired peer from the address the pair ACTUALLY succeeded on (the
-      // dialed host:port), so the record survives restart and re-pairing overwrites any stale one.
-      if (r.peer && r.peer.deviceId) {
-        persistPairedPeer({ deviceId: r.peer.deviceId, name: r.peer.name, host: r.peer.host, port: r.peer.port })
-      }
-      log.info('[LanSync] paired with peer', r.peer && r.peer.deviceId, '- shared secret adopted, restarting node')
-      state.pairingCode = null // consumed; issue a fresh code on next click
-      await stopSync()
-      startSync()
-      runRound().then(persistPeerWatermarks)
-      return { ...getSettingsPayload(), peer: r.peer }
-    },
-    // Two-way confirmed pairing: respond to the pending inbound pair-request (from syncEvent
-    // 'pair-request'). The transport's 60s timer already auto-rejects on silence.
-    syncPairRespond: p => {
-      const accept = !!(p && p.accept)
-      const info = state.pendingPair
-      state.pendingPair = null
-      if (!info || typeof info.respond !== 'function') return { ok: false, error: 'no pending pair request' }
-      try { info.respond(accept) } catch (e) { log.warn('[LanSync] pair respond failed:', e.message); return { ok: false, error: e.message } }
-      log.info('[LanSync] inbound pair request', accept ? 'accepted' : 'rejected', 'from', info.host)
-      return { ok: true, accept }
-    },
-    // Two-way confirmed pairing: dial the peer and ask. Resolves once the peer's human accepts
-    // (secret adopted like syncPairWithCode, node restarted, first round kicked off); rejects on
-    // pair-reject / timeout, with the syncEvent 'pair-rejected' already emitted by the node.
-    syncPairRequest: async p => {
-      const host = String((p && p.host) || '').trim()
-      const port = Number.isInteger(p && p.port) ? p.port : DEFAULT_PORT
-      if (!host || !/^[.:\w-]+$/.test(host)) throw new Error('syncPairRequest: host is required')
-      if (!state.node) throw new Error('syncPairRequest: sync is not enabled')
-      const r = await state.node.requestPair(host, port)
-      settingPut(K_PAIRING_SECRET, String(r.secret))
-      log.info('[LanSync] two-way pairing accepted by', host, '- shared secret adopted, restarting node')
-      await stopSync()
-      startSync()
-      runRound().then(persistPeerWatermarks)
-      return { ...getSettingsPayload(), host: r.host, port: r.port }
-    },
+    // Pairing/unpair/alias/name op bodies live in lan-sync/pair-ops.js (2026-09-27 size
+    // ratchet, injected-deps factory); registration stays here so the db.OPS whitelist gate
+    // (cli/check-command-bus.cjs) keeps seeing the same surface.
+    syncPairWithCode: pairOps.syncPairWithCode,
+    syncPairRespond: pairOps.syncPairRespond,
+    syncPairRequest: pairOps.syncPairRequest,
     // P1-3: unpair a device (Device Center peer card). Deletes the peer record + push watermark
     // and revokes the shared pairing secret — every previously paired device must re-pair.
     syncUnpairPeer: p => syncUnpairPeerOp(p),
-    // Round-2 P1: machine-local per-peer display alias for Device Center (sync.peerAlias.<id>).
-    syncSetPeerAlias: p => {
-      const deviceId = String((p && p.deviceId) || '').trim()
-      if (!deviceId) throw new Error('syncSetPeerAlias: deviceId is required')
-      const alias = String((p && p.alias) || '').trim().slice(0, 40)
-      const key = K_PEER_ALIAS_PREFIX + deviceId
-      if (alias) settingPut(key, alias)
-      else busWrite('settingsRowDelete', { key }) // empty string clears the alias
-      return { deviceId, alias: alias || null }
-    },
-    syncGetPairingCode: () => {
-      const secret = settingGet(K_PAIRING_SECRET)
-      if (!secret) return { code: null, expiresAt: 0 }
-      if (state.pairingCode && state.pairingCode.expiresAt > Date.now()) return state.pairingCode
-      const { deviceId } = ensureIdentity()
-      const expiresAt = Date.now() + PAIRING_CODE_TTL_MS
-      state.pairingCode = { code: derivePairingCode(secret, deviceId + ':' + expiresAt), expiresAt }
-      return state.pairingCode
-    },
-    syncSetName: p => {
-      const name = String((p && p.name) || '').trim().slice(0, 40)
-      if (!name) throw new Error('syncSetName: name is required')
-      settingPut(K_DEVICE_NAME, name)
-      if (state.node) { // advertising payload carries the name: restart to re-broadcast
-        stopSync().then(() => { if (settingGet(K_ENABLED) === true) startSync() }).catch(() => {})
-      }
-      return getSettingsPayload()
-    },
+    syncSetPeerAlias: pairOps.syncSetPeerAlias,
+    syncGetPairingCode: pairOps.syncGetPairingCode,
+    syncSetName: pairOps.syncSetName,
     // X4 (2026-09-20): meta conflict backup list/restore for the renderer (impl in
     // sync-conflict-backups.js — this file is at its size ratchet). Machine-local keys only.
     ...require('./sync-conflict-backups').ops(() => (op, p) => state.db.call(op, p))
@@ -980,7 +762,7 @@ function initLanSync ({ db, getWindowSenders, resyncExternalWatch } = {}) {
   } catch (e) { log.warn('[LanSync] startup enable failed:', e.message) }
 }
 
-module.exports = { initLanSync, stopSyncForQuit, kickSyncRound, shipQuitRound, invalidateSyncWatermarks }
+module.exports = { initLanSync, stopSyncForQuit, kickSyncRound, shipQuitRound, invalidateSyncWatermarks, emitOplogAppendFailure }
 
 // Test-only hooks: applyRowInner/flushPendingWrites operate on the module-level `state` singleton;
 // unit tests swap in a mock state via __test.setState. Production paths never touch __test.
@@ -988,6 +770,9 @@ module.exports.__test = {
   setState: s => { state = s },
   applyRow: row => applyRowSafe(row),
   allRows: () => createLocalStoreAdapter().allRows(),
+  // r2 2026-09-28 test surface: egress hydration failure counting (getRowsSince no longer
+  // swallows hydrateRow exceptions).
+  getRowsSince: seq => createLocalStoreAdapter().getRowsSince(seq),
   flushPendingWrites,
   syncSetEnabled: syncSetEnabledOp,
   localUserId,

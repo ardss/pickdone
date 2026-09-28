@@ -11,9 +11,11 @@ import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import mod from '../../../renderer/js/store/tomatoAnnounce.js'
 import { buildAnnounceValue, isStaleAnnounce, remainSecOfAnnounce } from '../../../renderer/js/store/helpers/tomatoAnnounceShared.js'
+import { sanitizeText as sharedSanitizeText } from '../../../shared/sanitize-text.mjs'
 
 const require = createRequire(import.meta.url)
 const taMain = require('../../../src/main/tomato-announce.js')
+const { sanitizeText: mainSanitizeText } = require('../../../src/main/sanitize.js')
 
 /** Minimal Vuex-like module harness (mutations/actions/getters run against a real state object). */
 function makeStore ({ tomatoState = {}, announceList = [] } = {}) {
@@ -114,5 +116,30 @@ test('contract mirror: renderer helpers match the main-process announce module e
     }
   } finally {
     Date.now = realNow
+  }
+})
+
+test('contract mirror r6: hostile fixtures (long fields, RTL/bidi injection) sanitize IDENTICALLY on both sides', () => {
+  const now = 5_000_000
+  // Pre-r6 the renderer mirror did bare String(): the first fixture built a 65-char
+  // deviceName renderer-side vs 40 main-side; the RTL override (U+202E) passed unstripped.
+  const hostile = [
+    { deviceId: 'd'.repeat(200), deviceName: 'n'.repeat(65) + '\u202Eevil', status: 'running', startedAt: now, plannedSec: 1500, at: now, attachTodoId: 'i'.repeat(200), attachTodoTitle: 'T'.repeat(300) + '\u2066bi' },
+    { deviceId: '\u202A\u200Fid', deviceName: '\u0007bell\u202Cname', status: 'running', startedAt: now, plannedSec: 1500, at: now, attachTodoId: '\u202Bid', attachTodoTitle: '\uFEFFtitle' },
+    { deviceId: 'ok', deviceName: 'Desk   double\u0000nul spaces', status: 'running', startedAt: now, plannedSec: 1500, at: now, attachTodoId: 't1', attachTodoTitle: 'Line1\nLine2\tTab' },
+  ]
+  for (const f of hostile) {
+    assert.deepEqual(buildAnnounceValue({ ...f }), taMain.buildAnnounceValue({ ...f }),
+      'hostile input must build byte-identical announces on both sides (renderer sanitized, not bare String())')
+  }
+  // Single-source pin: the shared sanitizer the renderer imports must behave EXACTLY like
+  // main's sanitizeText on a hostile battery — the mirror cannot fork again unnoticed.
+  const sharedSanitize = sharedSanitizeText
+  const mainSanitize = mainSanitizeText
+  const battery = ['', null, undefined, 42, 'x'.repeat(5000), '\u202Ertl\u2066iso\u2069', 'a\u0000b\u001Fc', '\u200Emark\uFEFFbom', 'tab\there\ncr', '  multi   space  ']
+  for (const s of battery) {
+    for (const max of [undefined, 5, 40, 120, 128]) {
+      assert.equal(sharedSanitize(s, max), mainSanitize(s, max), `sanitizeText(shared) === sanitizeText(main) for ${JSON.stringify(String(s)).slice(0, 30)} max=${max}`)
+    }
   }
 })

@@ -18,6 +18,7 @@ export const ANCHORS = {
   mainDir: 'src/main',
   handlersTodo: 'src/main/handlers/todo.js',
   handlersBackup: 'src/main/handlers/backup.js',
+  externalDbWatch: 'src/main/external-db-watch.js',
   preloadIndex: 'src/preload/index.js',
   installerNsh: 'build/installer.nsh',
   /** CLI */

@@ -5,6 +5,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isDistFresh } from './dist-freshness.mjs'
 
 const appRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const devDataDir = process.env.TODO_USER_DATA_DIR || path.join(appRoot, '.dev-data');
@@ -15,22 +16,10 @@ const electron = process.platform === 'win32' ? 'electron.cmd' : 'electron';
 const extraArgs = process.argv.slice(2); // 例如 --dev、--remote-debugging-port=9333
 
 // 渲染层先构建(SFC/TS → renderer-dist 产物);app:// 运行时只吃 dist。
-// 新鲜度跳过:产物 index.html 比全部源(renderer/js + renderer/index.html + vite.config)都新时跳过构建,日常启动省 ~4s
-const distIndex = path.join(appRoot, 'renderer-dist', 'index.html')
-const newestSrc = (dir, acc = 0) => {
-  if (!fs.existsSync(dir)) return acc
-  for (const f of fs.readdirSync(dir)) {
-    const p = path.join(dir, f)
-    const st = fs.statSync(p)
-    if (st.isDirectory()) acc = newestSrc(p, acc)
-    else acc = Math.max(acc, st.mtimeMs)
-  }
-  return acc
-}
-const viteCfgM = (() => { try { return fs.statSync(path.join(appRoot, 'vite.config.mjs')).mtimeMs } catch { return 0 } })()
-// vite.config.mjs 也入新鲜度:改 alias/插件后若漏算,npm start 会静默吃旧产物(2026-09-05 终审 P1)
-const srcMtime = Math.max(newestSrc(path.join(appRoot, 'renderer', 'js')), fs.statSync(path.join(appRoot, 'renderer', 'index.html')).mtimeMs, viteCfgM)
-const distFresh = fs.existsSync(distIndex) && fs.statSync(distIndex).mtimeMs > srcMtime
+// 新鲜度跳过:产物 index.html 比全部源都新时跳过构建,日常启动省 ~4s。指纹清单(与进 dist 的
+// 源集同步,漏一项就会静默吃旧产物):renderer/js + renderer/index.html + vite.config.mjs
+// (2026-09-05 终审 P1)+ shared/** 与 assets/**(2026-09-28:两者此前漏算,改 shared 后 dev 仍吃旧构建)
+const distFresh = isDistFresh(appRoot)
 if (process.argv.includes('--no-build') || distFresh) {
   console.log('[app-dev] renderer-dist 已是最新,跳过 vite build')
 } else {

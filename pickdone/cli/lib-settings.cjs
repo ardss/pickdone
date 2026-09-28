@@ -6,7 +6,17 @@ module.exports = ({ open, commit, audit, CliError }) => {
   // (dw wave 3) so the renderer's sanitize path can consume the same surface; re-exported below.
   const { SETTINGS_MANIFEST } = require('../shared/settings-manifest.mjs') // require(esm)
   const { stripHabitsFamily } = require('../shared/settings-families.mjs') // require(esm)
-  const SETTINGS_DENIED = new Set(['securityLockPassword', 'securityLockQuestion', 'schemaV', '_savedAt'])
+  // F-A1 CLI-side fix: the deny predicate is DERIVED from the shared machine-local-keys module
+  // (same module src/main/sync-apply.js + command-manifest.js consume) instead of a second
+  // hand-written literal. The old 4-key SETTINGS_DENIED literal missed the manifest's
+  // machine-level keys (enableSecurityLock etc.), so `settings set enableSecurityLock false`
+  // was accepted and hot-synced into a running App — bypassing the F-A1 "must neither egress
+  // nor be overwritten" rule on the CLI surface. The shared predicate is documented as
+  // "only ever tightened, never loosened", so deriving from it keeps the CLI deny set in
+  // lockstep forever. SETTINGS_DENIED keeps only the non-machine-local bookkeeping keys
+  // (schemaV) the predicate does not cover.
+  const { isMachineLocalSettingKey } = require('../shared/machine-local-keys.mjs') // require(esm)
+  const SETTINGS_DENIED = new Set(['schemaV'])
 
   function settingsDoc () {
     let doc = {}
@@ -47,7 +57,7 @@ module.exports = ({ open, commit, audit, CliError }) => {
     return rows
   }
   function settingsSet (key, value, { force = false } = {}) {
-    if (SETTINGS_DENIED.has(key)) throw new CliError('"' + key + '" is a protected key and cannot be set via CLI', 'DENIED_KEY')
+    if (SETTINGS_DENIED.has(key) || isMachineLocalSettingKey(key)) throw new CliError('"' + key + '" is a protected key and cannot be set via CLI', 'DENIED_KEY')
     const info = settingsKnown(key)
     if (!info) throw new CliError('unknown setting "' + key + '" — settings list to browse keys', 'UNKNOWN_KEY')
     let v = value

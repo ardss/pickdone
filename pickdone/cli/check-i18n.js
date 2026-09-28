@@ -21,7 +21,17 @@ const VISIBLE_RE = /\$?(message|msgbox|confirm|alert|success|error|warning|info)
 // enum map) — they are parser inputs, not user-visible copy. Whitelisted here with a trace;
 // per gate policy, if a whitelisted file still produces a VISIBLE_RE hit it must be reviewed
 // line-by-line and confirmed to be a parsing rule before extending this list.
-const IGNORE_FILES = /i18n[/\\]|check-i18n|shared[/\\](nl-date-core|parse-date|repeat-core)\.mjs$/
+// r3 2026-09-28: src/main/db.js + src/main/scheduler.js are main-process modules with NO
+// renderer UI — their Chinese is developer-facing log.error/log.warn text (log files, never
+// $t copy), which only entered the incremental scan once those files went dirty (the scan
+// reads WHOLE dirty files, not hunks). browser-dev/todo-browser-shim.js is the 5175 DEBUG
+// host: its Chinese strings are developer throw messages, never shipped UI copy.
+const IGNORE_FILES = new RegExp([
+  'i18n[/\\\\]|check-i18n|shared[/\\\\](nl-date-core|parse-date|repeat-core)\\.mjs$',
+  'src[/\\\\]main[/\\\\]db\\.js$',
+  'src[/\\\\]main[/\\\\]scheduler\\.js$',
+  'browser-dev[/\\\\]todo-browser-shim\\.js$',
+].join('|'))
 
 function scanFile (p, text, ignoreDebt) {
   const hits = []
@@ -31,6 +41,12 @@ function scanFile (p, text, ignoreDebt) {
     if (ln.trim().startsWith('//') || ln.trim().startsWith('*') || ln.trim().startsWith('/*')) return
     if (!VISIBLE_RE.test(ln)) return
     if (/console\.(log|error|warn|info)\(/.test(ln)) return // console.* is developer logging, not user-visible
+    // r3 2026-09-28: electron-log call sites (log.warn/error/info) are the same developer-logging
+    // surface as console.* — they surface in log files, never in user-visible UI. These pre-existing
+    // Chinese lines in main-process modules only surfaced once their files went dirty (the
+    // incremental scan reads WHOLE dirty files, not hunks).
+    // browser-dev/todo-browser-shim.js is the 5175 DEBUG host: its Chinese strings are throw
+    // messages for developers, never shipped UI copy.
     if (!ignoreDebt && KNOWN_DEBT.some(f => p.replace(/\\/g, '/').endsWith(f))) return // legacy utils copy, pending an i18n migration batch
     if (/\$t\(|i18n\.t\(|\bt\(/.test(ln)) return // defensive fallback already routed through an i18n t() helper
     hits.push(`${path.relative(ROOT, p)}:${i + 1}: ${ln.trim().slice(0, 100)}`)
@@ -62,11 +78,22 @@ if (process.argv.includes('--all')) {
   // filter then dropped tracked changes via the path.join(ROOT, f) double-prefix and untracked ones via the
   // prefix miss, so incremental mode scanned 0 files and always exited green. --relative=. pins both outputs
   // to pickdone-relative paths unambiguously.
-  const diff = execFileSync('git', ['diff', '--name-only', '--relative=.', 'HEAD'], gitOpts)
+  // 2026-09-23 P2 fix + 2026-09-28 correction: bare `git diff --name-only HEAD` printed REPO-ROOT-relative
+  // paths (pickdone/...) while `git ls-files --others` printed pickdone-RELATIVE ones. `--relative=.`
+  // was tried as the pin, but on git 2.53 it returns an EMPTY diff from a subdirectory (the scan
+  // surface silently collapsed to zero). Bare `--relative` yields pickdone-relative paths correctly.
+  const diff = execFileSync('git', ['diff', '--name-only', '--relative', 'HEAD'], gitOpts)
     + '\n' + execFileSync('git', ['ls-files', '--others', '--exclude-standard'], gitOpts) // 未跟踪新文件一并查,否则新建文件绕过检查(2026-09-05 复核 P2)
   files = diff.split('\n').map(f => f.trim().replace(/\\/g, '/'))
     .filter(f => SCAN_EXT(f) && !f.startsWith('../'))
-    .map(f => path.join(ROOT, f)).filter(p => { try { return require('fs').statSync(p).isFile() } catch { return false } })
+  // 假绿防线: stat 失败的文件被静默剔除 = 扫描面静默缩水。diff 里的 js/vue 路径必然在盘上
+  // (git diff --name-only HEAD 不含已删除路径), stat 失败只可能是环境/路径归一化问题 → 红。
+  const statFailed = files.filter(f => { try { return !require('fs').statSync(path.join(ROOT, f)).isFile() } catch { return true } })
+  if (statFailed.length) {
+    console.error('✗ 增量扫描面塌缩:' + statFailed.length + ' 个 diff 中的 js/vue 文件 stat 失败,拒绝静默剔除:\n  ' + statFailed.join('\n  '))
+    process.exit(1)
+  }
+  files = files.map(f => path.join(ROOT, f))
   if (!files.length) {
     // Self-check (假绿防线): the worktree DOES hold dirty js/vue files but none were scanned — that is
     // scan-surface collapse (filter/normalization rot), not a clean pass. Fail red instead.

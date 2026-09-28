@@ -23,15 +23,10 @@ const ALIAS_BARE = new Set(['vue', 'solarlunar'])
 const errors = []
 const visited = new Set()
 
-function listFiles (dir, out = []) {
-  for (const f of fs.readdirSync(dir)) {
-    const p = path.join(dir, f)
-    const st = fs.statSync(p)
-    if (st.isDirectory()) listFiles(p, out)
-    else if (f.endsWith('.js') || f.endsWith('.vue')) out.push(p)
-  }
-  return out
-}
+// shared walker (lib-filescan.cjs): the old hand-rolled copy had NO directory exclusions and
+// missed .cjs/.mjs, and its bare statSync crashed when a file vanished mid-walk (withFileTypes
+// in the shared walker skips vanished entries instead)
+const { listFiles } = require('./lib-filescan.cjs')
 
 function vueScript (file, src) {
   if (!file.endsWith('.vue')) return src
