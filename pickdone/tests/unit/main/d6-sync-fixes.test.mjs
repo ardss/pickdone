@@ -161,9 +161,15 @@ test('F3 P2: UDP flood-guard sweep never bulk-clears — a known peer keeps its 
   // A legit peer announces; its rate limit entry is now in the map. Real peers re-announce
   // every ~2s (> the 500ms floor), so an accepted re-announce refreshes LRU recency — model
   // that by advancing the clock (patched Date.now, restored at the end).
+  // FROZEN virtual clock (2026-09-29 root fix): the old `realNow() + shift` leaked REAL
+  // processing time into every stamp — under a loaded test wall the 1100-message flood took
+  // >500ms of real time, the floor expired mid-flood, and the final legit2 announce was
+  // wrongly accepted (3rd flake of this test). discovery.js reads ONLY Date.now, so a frozen
+  // base + explicit shift makes the scenario fully deterministic regardless of machine load.
   const realNow = Date.now
+  const frozenBase = 1700000000000
   let clockShift = 0
-  Date.now = () => realNow() + clockShift
+  Date.now = () => frozenBase + clockShift
   try {
     send('legit', '192.168.10.7')
     assert.ok(disc.getPeers().some(p => p.deviceId === 'legit'), 'first legit announcement is accepted')

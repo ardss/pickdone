@@ -116,7 +116,10 @@ function hydrateRow (state, ptr, cache) {
     if (ptr.entity === 'todo') {
       const t = c.todo(ptr.entityId)
       if (!t) return { ...base, deleted: true, deletedAt: ptr.ts, data: null }
-      return { ...base, updatedAt: t.updateTime || ptr.ts, deleted: !!t.delete, deletedAt: t.deletedAt || 0, data: t }
+      // Provenance rides TOP-LEVEL (protocol v3, 2026-09-29): withPeerDeviceId only overwrites
+      // `deviceId` (the hop/tie-break stamp), so `author` survives every relay — that is the
+      // whole point. '' = pre-v7 legacy row (unknown author).
+      return { ...base, author: t.syncAuthor || '', updatedAt: t.updateTime || ptr.ts, deleted: !!t.delete, deletedAt: t.deletedAt || 0, data: t }
     }
     if (ptr.entity === 'setting') {
       // 'sync.' namespace stays local (identity); 'securityLock*' rows hold password/question

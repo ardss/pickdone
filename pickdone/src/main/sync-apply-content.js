@@ -7,9 +7,11 @@ const mergeCore = require('../../shared/sync-core/merge.mjs')
 
 /** Content equality mirroring merge.mjs's contentDiffers (not exported there): bookkeeping fields
  *  (id/updatedAt/seq/deviceId/deletedAt markers + `deleted`) are excluded; `userId` too — peers
- *  stamp rows with their own local account id, so a userId-only difference must never churn. */
+ *  stamp rows with their own local account id, so a userId-only difference must never churn.
+ *  `author` (protocol v3 provenance) is bookkeeping for the same reason: identical content from
+ *  different writers must stay a no-op, not manufacture a conflict. */
 function rowContentDiffers (a, b) {
-  const SKIP = new Set(['id', 'updatedAt', 'seq', 'deviceId', 'deletedAt', 'deleted', 'entity', 'ts', 'userId'])
+  const SKIP = new Set(['id', 'updatedAt', 'seq', 'deviceId', 'deletedAt', 'deleted', 'entity', 'ts', 'userId', 'author'])
   const keys = new Set([...Object.keys(a), ...Object.keys(b)])
   for (const k of keys) {
     if (SKIP.has(k)) continue

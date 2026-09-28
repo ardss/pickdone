@@ -97,7 +97,10 @@ test('C2: throwing migration aborts to the current version; the DB still opens a
     // Before the fix this init threw and the library was unopenable until manual surgery.
     db.init(dir)
     assert.equal(db.call('getMeta', 'c2marker'), 'before', 'existing data intact after the aborted migration')
-    assert.equal(db.call('getMeta', 'schemaVersion'), '6', 'schemaVersion stopped at the last good value (99 NOT stamped)')
+    // Interval, not a literal: the built-in migration list grows per wave (v6 tz, v7 provenance,
+    // ...) and a hardcoded version here would be a per-wave edit tax (2026-09-29).
+    const ver = Number(db.call('getMeta', 'schemaVersion'))
+    assert.ok(ver >= 6 && ver < 99, `schemaVersion stopped at the last good value, injected 99 NOT stamped (got ${ver})`)
     db.call('setMeta', ['c2marker', 'after'])
     assert.equal(db.call('getMeta', 'c2marker'), 'after', 'the DB is writable after the abort')
   } finally {

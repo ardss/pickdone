@@ -98,3 +98,44 @@ test('applyRow merges into a Map store and keeps one row per id', () => {
   assert.equal(row.title, 'newer')
   assert.ok(conflictCopy)
 })
+
+// Provenance (protocol v3, 2026-09-29): author = the device whose write produced this version.
+// Same author on both sides = the loser is a stale prior version of the same writer's line —
+// never a conflict. This is the root fix for the junk-copy class (1 edit x N unsynced peers
+// used to mint N recycle copies that synced back to the editor).
+
+test('provenance: same-author stale version loses WITHOUT a conflict copy', () => {
+  // A wrote v0, edited to v2. B still holds v0 and its echo arrives at A: same writer, so the
+  // stale base is silently superseded — no divergent edit exists to preserve.
+  const v0 = todo({ title: 'v0', updatedAt: 100, seq: 1, author: 'devA' })
+  const v2 = todo({ title: 'v2', updatedAt: 300, seq: 3, deviceId: 'devA', author: 'devA' })
+  assert.equal(mergeTodoRows(v2, v0).conflictCopy, null, 'same-writer stale base: no copy')
+  assert.equal(mergeTodoRows(v0, v2).conflictCopy, null, 'order must not matter')
+})
+
+test('provenance: different-author older edit still yields a conflict copy', () => {
+  // A wrote v0 then v2; B independently edited the shared base into v1 (author B). B's v1
+  // losing to A's v2 IS a divergence — the copy must exist.
+  const v1 = todo({ title: 'B edit', updatedAt: 200, seq: 2, deviceId: 'devB', author: 'devB' })
+  const v2 = todo({ title: 'A v2', updatedAt: 300, seq: 3, deviceId: 'devA', author: 'devA' })
+  const { conflictCopy } = mergeTodoRows(v2, v1)
+  assert.ok(conflictCopy, 'divergent edit preserved')
+  assert.equal(conflictCopy.title, 'B edit')
+  assert.equal(conflictCopy.author, 'devB', 'copy keeps the loser lineage')
+})
+
+test('provenance: unknown author on either side stays conservative (mint)', () => {
+  // Pre-v7 legacy rows carry no author — behave exactly as before the field existed.
+  const legacy = todo({ title: 'legacy', updatedAt: 100, seq: 1 })
+  const authored = todo({ title: 'new', updatedAt: 300, seq: 3, deviceId: 'devA', author: 'devA' })
+  assert.ok(mergeTodoRows(authored, legacy).conflictCopy, 'unknown loser author mints')
+  assert.ok(mergeTodoRows(legacy, authored).conflictCopy, 'unknown winner author mints')
+})
+
+test('provenance: syncAuthor stamps are bookkeeping, not content', () => {
+  // Byte-identical payloads whose only difference is the per-device provenance stamp must be
+  // content-EQUAL (the identical-content no-op depends on it).
+  const a = todo({ title: 'same', updatedAt: 100, seq: 1, author: 'devA' })
+  const b = todo({ title: 'same', updatedAt: 100, seq: 1, deviceId: 'devB', author: 'devB' })
+  assert.equal(mergeTodoRows(a, b).conflictCopy, null, 'stamp-only difference: no conflict')
+})

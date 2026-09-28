@@ -7,7 +7,7 @@ const i18nM = require('./i18n')
 const fs = require('fs')
 const crypto = require('crypto')
 const LIMITS = require('../../shared/limits.mjs') // focus-duration clamp constants (single source, audit item 4); require(esm) — Node >= 22.12
-const { normalizeContent, rowToTodo, todoToRow } = require('./db-rows')
+const { normalizeContent, rowToTodo, todoToRow, setSyncAuthor } = require('./db-rows')
 // snowDedup key-cap (R5 P3): replay protection only needs recent keys, so past the cap the
 // older-than-30d entries are pruned (see bumpSnow).
 const SNOW_DEDUP_CAP = 2000
@@ -154,7 +154,11 @@ CREATE TABLE IF NOT EXISTS todos (
   urgent        INTEGER NOT NULL DEFAULT 0,
   status        TEXT NOT NULL DEFAULT 'add',
   version       INTEGER NOT NULL DEFAULT 0,
-  tz            TEXT
+  tz            TEXT,
+  -- Row provenance (protocol v3, 2026-09-29): the device whose write produced this row's
+  -- current updatedAt. Lets the merge layer suppress same-writer stale echoes instead of
+  -- minting junk conflict copies. NULL = pre-v7 legacy row (unknown author).
+  syncAuthor    TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_todos_day       ON todos (deleted, scheduledDay);
 CREATE INDEX IF NOT EXISTS idx_todos_status    ON todos (status);
@@ -307,70 +311,7 @@ function initInner (userDataPath) {
   // ===== schemaVersion single migrator: migrations run once only, no longer re-executed on every startup (probe-style column adds / unconditional UPDATEs are implicit migration debt) =====
   const getVer = () => { try { const r = db.prepare("SELECT value FROM meta WHERE key='schemaVersion'").get(); return Number(r && r.value) || 0 } catch { return 0 } }
   const setVer = v => db.prepare('INSERT INTO meta (key, value) VALUES (\'schemaVersion\', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(String(v))
-  const MIGRATIONS = (function () {
-    const BUILT_IN = [
-    { v: 1, fn: d => { d.exec('UPDATE todos SET remindAt = 0 WHERE remindAt IS NULL') } },
-    { v: 2, fn: d => {
-      // data-layer important/urgent for the Eisenhower matrix (2026-08-29) + multi-reminder list
-      const cols = d.prepare('PRAGMA table_info(todos)').all().map(c => c.name)
-      if (!cols.includes('important')) d.exec('ALTER TABLE todos ADD COLUMN important INTEGER NOT NULL DEFAULT 0')
-      if (!cols.includes('urgent')) d.exec('ALTER TABLE todos ADD COLUMN urgent INTEGER NOT NULL DEFAULT 0')
-      if (!cols.includes('reminders')) d.exec('ALTER TABLE todos ADD COLUMN reminders TEXT')
-    } },
-    { v: 3, fn: d => {
-      // Plan chips: meta.dayPlanState JSON → plan_chips row storage (2026-09-03 root fix). The original JSON key is renamed and kept as backup.
-      // Failure handling: return false → schemaVersion not advanced → retried on next startup (INSERT OR IGNORE is idempotent; the original key remains).
-      const r = d.prepare("SELECT value FROM meta WHERE key='dayPlanState'").get()
-      if (!r) return true
-      try {
-        const doc = JSON.parse(r.value)
-        const ins = d.prepare('INSERT OR IGNORE INTO plan_chips (id, taskId, day, mm, sort) VALUES (?,?,?,?,?)')
-        const tr = d.transaction(() => {
-          let n = 0
-          for (const day of Object.keys(doc)) {
-            if (day.startsWith('_')) continue
-            if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) continue
-            for (const [taskId, arr] of Object.entries(doc[day])) {
-              if (!Array.isArray(arr)) continue
-              for (const e of arr) {
-                if (!e || !/^([01]\d|2[0-3]):[0-5]\d$/.test(String(e.mm || ''))) continue
-                const id = (e && typeof e === 'object' && e.id) ? String(e.id) : ('pl_mig_' + n)
-                ins.run(id, taskId, day, String(e.mm), n); n++
-              }
-            }
-          }
-        }); tr()
-        d.prepare("INSERT INTO meta (key, value) VALUES ('dayPlanState.bak', ?) ON CONFLICT(key) DO NOTHING").run(r.value) // the first backup is never overwritten
-        d.prepare("DELETE FROM meta WHERE key='dayPlanState'").run()
-        return true
-      } catch (e) {
-        console.error('[TodoDB] dayPlanState 迁移失败(保留原键,schemaVersion 不推进,下次启动重试):', e)
-        return false
-      }
-    } },
-    { v: 4, fn: d => { const c=d.prepare('PRAGMA table_info(todos)').all().map(x=>x.name); if(!c.includes('predecessors')) d.exec('ALTER TABLE todos ADD COLUMN predecessors TEXT'); return true } },
-    { v: 5, fn: d => {
-      // P1 sync groundwork (2026-09-15): tombstone + updatedAt columns on every synced table. Only todos carried updatedAt/deletedAt before; filters/plan_chips/tomato_records deletes were physical (unpropagatable) and categories had no change timestamp. Defaults keep existing rows.
-      const want = {
-        categories: ['deletedAt INTEGER NOT NULL DEFAULT 0', 'updatedAt INTEGER NOT NULL DEFAULT 0'],
-        filters: ['deleted INTEGER NOT NULL DEFAULT 0', 'deletedAt INTEGER NOT NULL DEFAULT 0', 'updatedAt INTEGER NOT NULL DEFAULT 0'],
-        plan_chips: ['deleted INTEGER NOT NULL DEFAULT 0', 'deletedAt INTEGER NOT NULL DEFAULT 0', 'updatedAt INTEGER NOT NULL DEFAULT 0'],
-        tomato_records: ['deleted INTEGER NOT NULL DEFAULT 0', 'deletedAt INTEGER NOT NULL DEFAULT 0', 'updatedAt INTEGER NOT NULL DEFAULT 0']
-      }
-      for (const [table, cols] of Object.entries(want)) {
-        const have = new Set(d.prepare('PRAGMA table_info(' + table + ')').all().map(c => c.name))
-        for (const col of cols) {
-          const name = col.split(' ')[0]
-          if (!have.has(name)) d.exec(`ALTER TABLE ${table} ADD COLUMN ${col}`)
-        }
-      }
-      return true
-    } },
-    { v: 6, fn: d => syncSchema.migrateV6(d) },
-    ]
-    // C2 test-only seam (2026-09-24): inject a throwing migration without shipping it
-    return migrationsOverride || BUILT_IN
-  })()
+  const MIGRATIONS = require('./db-migrations')(syncSchema, migrationsOverride)
   let ver = getVer()
   // C2 (P1 2026-09-24) 迁移循环设防:此前任一迁移抛错直接冒泡 → init 永久失败、整库打不开
   // (比带损启动更糟)。现在单条迁移抛错转中断:结构化日志 + 停在当前版本(schemaVersion 不推进,
@@ -387,6 +328,13 @@ function initInner (userDataPath) {
     }
   }
   if (ver !== getVer()) setVer(ver)
+  // Provenance stamp (protocol v3): load the persisted identity so local writes are authored.
+  // The bootstrap re-injects it on ensureIdentity() too — this covers the process restart path
+  // where the identity already exists but sync has not been enabled yet this session.
+  try {
+    const idr = db.prepare("SELECT value FROM settings_rows WHERE key='sync.deviceId'").get()
+    if (idr && idr.value) setSyncAuthor(idr.value)
+  } catch { /* settings_rows not ready: writes stay author-NULL until ensureIdentity */ }
   // SCHEMA/MIGRATIONS dual-manifest decoupling backstop: if a future SCHEMA column addition is forgotten in MIGRATIONS, CREATE TABLE IF NOT EXISTS is
   // a no-op for existing tables and the upsert prepare dies at startup referencing the missing column. Here, probe and add columns uniformly via PRAGMA
   // based on todoToRow's real column set (NOT NULL columns get default values)

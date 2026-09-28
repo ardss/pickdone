@@ -87,7 +87,9 @@ function rowToTodo (r) {
     urgent: r.urgent || 0,
     status: r.status,
     version: r.version,
-    tz: r.tz || null
+    tz: r.tz || null,
+    // Provenance passthrough (protocol v3): who wrote this version. NULL = pre-v7 legacy row.
+    syncAuthor: r.syncAuthor || null
   }
 }
 
@@ -119,6 +121,17 @@ function deviceTz () {
   }
   return cachedTz || null
 }
+
+// Row provenance (2026-09-29 root fix, protocol v3): syncAuthor = the device whose WRITE
+// produced the row's current updatedAt. The merge layer needs it to tell "stale echo of the
+// same writer's line" (never a conflict) apart from "independent divergent edit" (real
+// conflict) — without it the apply loop accumulated one guard per new timing class. The
+// stamp is injected (setSyncAuthor) once the identity exists; local writes before that, and
+// every row written before this column existed, carry NULL = "unknown" — the merge treats
+// unknown as always-divergent (conservative: it can mint a junk copy, it can never lose one).
+let currentSyncAuthor = null
+function setSyncAuthor (deviceId) { currentSyncAuthor = String(deviceId || '') || null }
+function selfSyncAuthor () { return currentSyncAuthor || null }
 
 function todoToRow (t) {
   const todoTime = t.todoTime || 0
@@ -169,8 +182,12 @@ function todoToRow (t) {
     version: t.version || 0,
     // Caller-supplied tz wins (sync echo / LWW winner keeps its origin tz); otherwise stamp the
     // current device timezone (P2 2026-09-16, docs/sync §5)
-    tz: t.tz != null && t.tz !== '' ? String(t.tz) : deviceTz()
+    tz: t.tz != null && t.tz !== '' ? String(t.tz) : deviceTz(),
+    // Provenance: caller-supplied syncAuthor wins (sync apply / LWW winner keeps the ORIGINAL
+    // author across hops — this field must survive the round trip); otherwise this device wrote
+    // the version right now. NULL = written before the identity existed or before v7.
+    syncAuthor: t.syncAuthor != null && t.syncAuthor !== '' ? String(t.syncAuthor) : selfSyncAuthor()
   }
 }
 
-module.exports = { normalizeContent, parseOffsets, parseReminders, packReminders, rowToTodo, rowToCategory, todoToRow }
+module.exports = { normalizeContent, parseOffsets, parseReminders, packReminders, rowToTodo, rowToCategory, todoToRow, setSyncAuthor }

@@ -240,7 +240,10 @@ function applyRowInner (state, incoming) {
   let localRow = null
   if (entity === 'todo') {
     const t = cache.todo(incoming.id)
-    if (t) localRow = { updatedAt: t.updateTime || 0, deleted: !!t.delete, deletedAt: t.deletedAt || 0, data: t }
+    // Provenance (protocol v3): localRow.author = the stored row's author; incoming.author =
+    // the wire's top-level author (hydrateRow egress). Unknown (''/undefined) = pre-v7 legacy
+    // — the merge layer treats unknown-vs-anything as divergent (conservative).
+    if (t) localRow = { updatedAt: t.updateTime || 0, deleted: !!t.delete, deletedAt: t.deletedAt || 0, data: t, author: t.syncAuthor || '' }
   } else if (entity === 'setting') {
     // Egress gate mirrored on ingress (round-3 review): a peer must never WRITE securityLock*
     // rows here — the password/question ciphertext is strictly local.
@@ -307,6 +310,9 @@ function applyRowInner (state, incoming) {
   // on insertion order (loop fix 2026-09-18; inbound rows are stamped with the sender's id
   // at the transport boundary in lan-sync-bootstrap).
   if (localRow && localRow.deviceId == null && state.deviceId) localRow.deviceId = state.deviceId
+  // Provenance normalization (protocol v3): increment rows carry author top-level (hydrateRow);
+  // SNAPSHOT rows carry it in the payload (allRows data = the full todo payload). Missing = ''.
+  if (entity === 'todo' && incoming.author == null) incoming.author = (incoming.data && incoming.data.syncAuthor) || ''
   if (!incoming.deleted && !incoming.data) return false // payload-less pointer, nothing to merge
   // Merge rules come from sync-core only (adapter boundary). Todos/chips/ledger have dedicated
   // rules; the remaining entities use the generic LWW shape.
@@ -369,7 +375,15 @@ function applyRowInner (state, incoming) {
         // conflict copies of the same base row in one millisecond used to mint the SAME copyId
         // and silently collapse into one recycle-bin row.
         const copyId = `${baseId}-conflict-${Date.now().toString(36)}-${(backupSeq++).toString(36)}`
-        state.pendingWrites.todos.push({ ...conflictCopy.data, taskId: copyId, delete: 1, deletedAt: Date.now() })
+        // Provenance: the copy preserves the LOSER's author (it is a materialized copy of that
+        // writer's version, so its lineage must not be re-attributed to this device). Prefer the
+        // merge row's author; the payload's own stamp is the fallback; never write an empty
+        // string over an existing one.
+        state.pendingWrites.todos.push({
+          ...conflictCopy.data,
+          taskId: copyId, delete: 1, deletedAt: Date.now(),
+          ...(conflictCopy.author ? { syncAuthor: conflictCopy.author } : {})
+        })
         log.warn('[LanSync] conflict on', entity, baseId, '— loser materialized to recycle bin as', copyId)
       }
       // P1-5: the user-facing toast is driven by the round summary (one per round, see markConflict)
@@ -431,14 +445,16 @@ function applyRowInner (state, incoming) {
       // Real tombstone winner over an existing local row: without this branch no write fired and
       // the peer's deletion NEVER landed here (every branch required winner.data). Land it through
       // the buffered bulk path — todoToRow normalizes `delete:1` into a deleted=1 tombstone row on
-      // upsertMany.
-      state.pendingWrites.todos.push({ taskId: incoming.id, delete: 1, deletedAt: winner.deletedAt || incoming.deletedAt || 0 })
+      // upsertMany. Provenance: the tombstone's author is the deleting device's (incoming.author).
+      state.pendingWrites.todos.push({ taskId: incoming.id, delete: 1, deletedAt: winner.deletedAt || incoming.deletedAt || 0, syncAuthor: incoming.author || '' })
       return true
     }
     if (!winner.data) return false
     // userId normalization at the sync boundary (round-3 review): the row lands with THIS
-    // device's account id, never the peer's.
-    state.pendingWrites.todos.push({ ...winner.data, taskId: winner.data.taskId != null ? winner.data.taskId : incoming.id, userId: localUserId(state) })
+    // device's account id, never the peer's. Provenance: keep the ORIGINAL author — winner is
+    // always `incoming` here (a local winner returned above), and re-stamping self would break
+    // the same-writer lineage the merge layer now depends on.
+    state.pendingWrites.todos.push({ ...winner.data, taskId: winner.data.taskId != null ? winner.data.taskId : incoming.id, userId: localUserId(state), syncAuthor: incoming.author || '' })
   } else if (entity === 'setting') {
     if (winner.deleted) {
       // Tombstone winner (delete-wins). settingsRowPut/putRow clears `deleted` on write, so pushing

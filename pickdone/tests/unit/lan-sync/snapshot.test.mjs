@@ -329,7 +329,11 @@ test('snapshot: mutual busy — the server role serves while the same peer is bu
   await nodeB.startSyncRound()
   // Round 2: node-b's CLIENT role opens with snapshot-request and stalls (no reply ever).
   const stalledRound = nodeB.startSyncRound()
-  await new Promise((r) => setTimeout(r, 150)) // let the request land
+  // Wait for the observable, not a fixed 150ms (2026-09-29 hardening): under a starved wall
+  // the connect+hello+request took longer than 150ms and the assertion sampled too early.
+  for (let i = 0; i < 40 && stallServer.seen.snapshotRequests < 1; i++) {
+    await new Promise((r) => setTimeout(r, 50))
+  }
   assert.equal(stallServer.seen.snapshotRequests, 1)
 
   // While node-b's client role is busy on 'peer-a', the SAME peer id hits node-b's SERVER
@@ -706,7 +710,17 @@ test('snapshot: progress-based round deadline — a slow-drip transfer outlives 
   await dialRound(node) // arm
   const r = await dialRound(node) // slow-drip snapshot: total > base deadline
   assert.equal(r.confirmed, 1, 'a moving transfer completes despite exceeding the base deadline')
-  assert.equal(node.getStatus().peers[0].pullWatermark, 100)
+  // Wait for the watermark rather than sampling once (2026-09-29 hardening): under a starved
+  // test wall the arm round and the drip round can interleave, and a single getStatus() sample
+  // raced the drip round's snapshot-end. The intent being asserted is "the drip transfer
+  // completes and advances the pull watermark" — poll for it (product code sets the watermark
+  // synchronously before settling the round; this only tolerates test-side round interleaving).
+  let wm = null
+  for (let i = 0; i < 40 && wm !== 100; i++) {
+    wm = node.getStatus().peers[0].pullWatermark
+    if (wm !== 100) await new Promise((r2) => setTimeout(r2, 100))
+  }
+  assert.equal(wm, 100, 'the slow-drip snapshot advanced the pull watermark to the sender cursor')
 
   await node.stop()
   await server.close()
