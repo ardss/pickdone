@@ -50,6 +50,16 @@ const WORKER_SRC = [
   "import { createRequire } from 'node:module'",
   "import { pathToFileURL, fileURLToPath } from 'node:url'",
   "const require = createRequire(import.meta.url)",
+  "// Track this node's accepted TCP sockets so the hold latch can tear the transport down",
+  "// mid-round (ungraceful unplug semantics; node.stop() is graceful and must not be used).",
+  "const trackedSockets = new Set()",
+  "const netCjs = require('net')",
+  "const __origCreateServer = netCjs.createServer",
+  "netCjs.createServer = function (...args) {",
+  "  const cb = args[0]",
+  "  if (typeof cb === 'function') args[0] = function (sock) { trackedSockets.add(sock); sock.on('close', () => trackedSockets.delete(sock)); return cb.call(this, sock) }",
+  "  return __origCreateServer.apply(netCjs, args)",
+  "}",
   "const cfg = JSON.parse(process.argv[2])",
   "const { createLanSyncNode } = require(fileURLToPath(pathToFileURL(cfg.root + '/src/main/lan-sync/index.js')))",
   "const { pack, unpack } = await import(pathToFileURL(cfg.root + '/shared/sync-core/segment.mjs').href)",
@@ -65,6 +75,8 @@ const WORKER_SRC = [
   "const dropped = [] // rows the (simulated) flush dropped this ingest call",
   "let poisonArmed = false // when true, ids starting with 'poison' fail the flush",
   "let slowIngestMs = 0 // one-shot ingest delay used to hold a round open mid-flight",
+  "let holdIngestMs = 0 // next ingestSegment parks this many ms from ITS OWN entry",
+  "let killOnHoldEnd = false // when the hold ends, destroy every accepted server connection",
   "",
   "const localStore = {",
   "  getRowsSince(cursor) { return oplog.filter(r => r.seq > cursor) },",
@@ -96,6 +108,17 @@ const WORKER_SRC = [
   "        slowIngestMs = 0",
   "        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)",
   "      }",
+    "      if (holdIngestMs > 0) {",
+    "        // Park THIS ingest (the instrumented round's own push) for holdIngestMs from its",
+    "        // own entry, then optionally kill the transport. While parked the sender cannot",
+    "        // have been acked, so its round is provably still in flight when the connections",
+    "        // die — the drop can never miss the round, no matter what unrelated rounds ran",
+    "        // beforehand or how slow the handshake was.",
+    "        emit({ ev: 'ingest-held', ms: holdIngestMs })",
+    "        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, holdIngestMs)",
+    "        holdIngestMs = 0",
+    "        if (killOnHoldEnd) { killOnHoldEnd = false; for (const s of trackedSockets) { try { s.destroy() } catch { /* already gone */ } } }",
+    "      }",
   "      dropped.length = 0",
   "      const r = engine.ingestSegment(seg)",
   "      if (dropped.length) {",
@@ -154,7 +177,8 @@ const WORKER_SRC = [
   "    }",
   "    case 'arm-poison': poisonArmed = true; return { ok: true }",
   "    case 'arm-slow-ingest': slowIngestMs = m.ms; return { ok: true }",
-  "    case 'restart': {",
+    "    case 'hold-ingest': holdIngestMs = m.ms || 500; killOnHoldEnd = !!m.kill; return { ok: true }",
+    "    case 'restart': {",
   "      await node.stop()",
   "      node = makeNode()",
   "      forward(node)",
@@ -494,41 +518,34 @@ test('scenario 4: transport drop mid-round -> reconnect converges, watermark adv
     await a.write('a2', 'pre-drop-2')
     await b.write('b1', 'pre-drop-b')
 
-    // Hold B's ingest open mid-round so the drop lands while the round is in flight.
-    // Under parallel CI load the round may complete before the restart lands (the drop
-    // "missed" the round) — retry the phase with a longer hold instead of flaking.
-    let r = null
-    let restartReply = null
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      const lastErrCount = a.events.filter(e => e.ev === 'round-error').length
-      await b.cmd({ cmd: 'arm-slow-ingest', ms: 400 * attempt })
-      const roundPromise = a.cmd({ cmd: 'round' }) // fires; resolved later
-      await sleep(100 * attempt) // A's push is on the wire; B is mid-ingest, ack not yet sent
-      // Kill the transport under the round: B's stop() closes its server (and any sockets),
-      // A's in-flight client dies -> the round must settle as a FAILURE, never a silent ok.
-      restartReply = await b.cmd({ cmd: 'restart' })
-      assert.ok(Number.isInteger(restartReply.port) && restartReply.port > 0, 'B rebinds to a fresh port after restart')
-      r = await roundPromise
-      const newErrs = a.events.filter(e => e.ev === 'round-error').slice(lastErrCount)
-      const dropErr = newErrs.find(e => /closed|timed out|ECONNRESET|socket|connection|EPIPE/i.test(e.error || ''))
-      if (!r.ok && dropErr) break
-      assert.ok(attempt < 3, 'the mid-round transport drop must fail the round with a connection round-error (got ok=' +
-        JSON.stringify(r && r.ok) + ', errors=' + JSON.stringify(newErrs.map(e => e.error)) + ')')
-      // Missed the round (it completed before the drop): rebuild the backlog delta and retry.
-      await a.cmd({ cmd: 'add-peer', peer: { deviceId: b.deviceId, host: '127.0.0.1', port: restartReply.port, name: b.name } })
-      await b.cmd({ cmd: 'add-peer', peer: { deviceId: a.deviceId, host: '127.0.0.1', port: a.port, name: a.name } })
-      await converge(a, b, expected, 15000)
-      const reseed = await a.write('a-retry-' + attempt, 'reseed')
-      expected.add(reseed ? 'a-retry-' + attempt : '')
-    }
+    // Drop the transport mid-round, deterministically. The old one-shot arm-slow-ingest delay
+    // flaked (~1 in 5 under parallel load): an unrelated round (keepalive, retry-path converge)
+    // consumed the one-shot first, so the instrumented round completed instantly and the drop
+    // missed it. Instead the latch arms the INSTRUMENTED round's own ingest: B parks inside
+    // ingestSegment, and on hold expiry destroys every accepted server connection
+    // (closeAllConnections — ungraceful unplug semantics; node.stop() stays graceful and is
+    // not used). While B is parked it cannot have acked A's push, so A's round is provably
+    // still in flight when the connections die — the drop can never miss the round.
+    const lastErrCount = a.events.filter(e => e.ev === 'round-error').length
+    await b.cmd({ cmd: 'hold-ingest', ms: 800, kill: true })
+    const r = await a.cmd({ cmd: 'round' }) // settles only after B kills the transport
+    assert.equal(r.ok, false, 'the mid-round transport drop must fail the round, never settle silently ok')
+    const newErrs = a.events.filter(e => e.ev === 'round-error').slice(lastErrCount)
+    assert.ok(newErrs.some(e => /closed|timed out|ECONNRESET|socket|connection|EPIPE/i.test(e.error || '')),
+      'the round must fail with a connection round-error, got ' + JSON.stringify(newErrs.map(e => e.error)))
 
-    // Reconnect on the fresh port (manual re-add, as the Device Center manual entry does).
-    await a.cmd({ cmd: 'add-peer', peer: { deviceId: b.deviceId, host: '127.0.0.1', port: restartReply.port, name: b.name } })
+    // Reconnect (the listener was never closed, only established connections were destroyed,
+    // so the port is unchanged; manual re-add, as the Device Center manual entry does).
+    await a.cmd({ cmd: 'add-peer', peer: { deviceId: b.deviceId, host: '127.0.0.1', port: b.port, name: b.name } })
     await b.cmd({ cmd: 'add-peer', peer: { deviceId: a.deviceId, host: '127.0.0.1', port: a.port, name: a.name } })
 
-    // Reconnect on the fresh port (manual re-add, as the Device Center manual entry does).
-    await a.cmd({ cmd: 'add-peer', peer: { deviceId: b.deviceId, host: '127.0.0.1', port: restartReply.port, name: b.name } })
-    await b.cmd({ cmd: 'add-peer', peer: { deviceId: a.deviceId, host: '127.0.0.1', port: a.port, name: a.name } })
+    // Convergence after reconnect: the node parks the peer in 'error' after a failed round
+    // (no auto-retry), so drive the reconnect with explicit rounds until one confirms — the
+    // confirming round re-pushes the pre-drop rows AND pulls B's b1.
+    await until(async () => {
+      const rr2 = await a.cmd({ cmd: 'round' })
+      return rr2.ok === true
+    }, 20000, 'post-drop reconnect round confirms')
 
     // Convergence after reconnect: every pre-drop row survives on BOTH sides.
     await converge(a, b, expected, 20000)
