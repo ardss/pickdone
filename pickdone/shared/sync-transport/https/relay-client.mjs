@@ -11,7 +11,8 @@
 
 import { Hlc } from '../../sync-core/clock/hlc.mjs'
 import { createRevisionStore, commitLocal, applyEnvelope, materializedAll } from '../../sync-core/causality/merge.mjs'
-import { packEnvelope, unpackEnvelope } from '../../sync-core/revision/envelope.mjs'
+import { packEnvelope, unpackEnvelope, hashPayload } from '../../sync-core/revision/envelope.mjs'
+import { seal, open } from '../../sync-crypto/e2e.mjs'
 
 /**
  * @param {object} opts
@@ -21,7 +22,7 @@ import { packEnvelope, unpackEnvelope } from '../../sync-core/revision/envelope.
  * @param {typeof fetch} [opts.fetchImpl] injectable for tests
  * @param {object} [opts.store] existing revision store (attach mode); created when omitted
  */
-export function createRelayClient({ nodeId, account, baseUrl, fetchImpl = fetch, store } = {}) {
+export function createRelayClient({ nodeId, account, baseUrl, fetchImpl = fetch, store, dataKey } = {}) {
   if (!nodeId || !account || !baseUrl) throw new Error('relay-client: nodeId, account, baseUrl required')
   const s = store || createRevisionStore(nodeId)
   const clock = new Hlc(nodeId)
@@ -46,7 +47,9 @@ export function createRelayClient({ nodeId, account, baseUrl, fetchImpl = fetch,
       const items = []
       for (const env of s.revisions.values()) {
         if (!cursorState.pushed.has(env.revisionId)) {
-          items.push({ opId: env.revisionId, envelope: packEnvelope(env) })
+          // E2E: the relay stores opaque ciphertext when a data key is present —
+          // same schema, same endpoints (spec §3: payload stays opaque to the relay)
+          items.push({ opId: env.revisionId, envelope: dataKey ? seal(dataKey, env) : packEnvelope(env) })
           cursorState.pushed.add(env.revisionId)
         }
       }
@@ -54,7 +57,7 @@ export function createRelayClient({ nodeId, account, baseUrl, fetchImpl = fetch,
       const pull = await post('/v1/sync/pull', { account, afterSeq: cursorState.cursor })
       let applied = cursorState.cursor
       for (const item of pull.items) {
-        const env = unpackEnvelope(item.envelope)
+        const env = dataKey ? open(dataKey, item.envelope) : unpackEnvelope(item.envelope)
         const r = applyEnvelope(s, env)
         // ack advances only past frames that verified + merged (or were stale/dup) —
         // a verify/merge failure must NOT advance (spec §18/§67)
@@ -67,5 +70,64 @@ export function createRelayClient({ nodeId, account, baseUrl, fetchImpl = fetch,
     },
     async register() { return post('/v1/device/register', { account, device: nodeId }) },
     materialized() { return materializedAll(s) },
+
+    /**
+     * Snapshot upload (spec §22/§23): the entity's CURRENT revision envelope per
+     * entityId + coversSeq = the cursor this store is caught up to. A peer can
+     * bootstrap from this snapshot + replay the tail after coversSeq — never a
+     * full-oplog replay.
+     */
+    async uploadSnapshot() {
+      if (cursorState.cursor === 0) await this.round()
+      const entities = []
+      for (const entityId of new Set([...s.currentByEntity.keys()])) {
+        const cur = s.currentByEntity.get(entityId)
+        const env = s.revisions.get(cur)
+        if (env) entities.push(env)
+      }
+      const latest = await post('/v1/snapshot/latest', { account })
+      const generation = (latest.snapshot ? latest.snapshot.generation : 0) + 1
+      const snapshot = {
+        snapshotId: `snap-${generation}-${nodeId}`,
+        generation,
+        coversSeq: cursorState.cursor,
+        authorDeviceId: nodeId,
+        createdAt: Date.now(),
+        entities,
+      }
+      await post('/v1/snapshot/put', { account, snapshot: { ...snapshot, entities: dataKey ? seal(dataKey, entities) : entities } })
+      return { generation, coversSeq: snapshot.coversSeq, entities: entities.length }
+    },
+
+    /**
+     * Bootstrap (spec §23): latest valid snapshot → rebuild store from the current
+     * envelopes → replay tail → normal sync. Local pending pushes are preserved:
+     * they live in `pending` and are re-pushed on the next round (spec §24/§27 —
+     * the relay never rejects a revision for arriving late).
+     */
+    async bootstrap() {
+      const latest = await post('/v1/snapshot/latest', { account })
+      if (!latest.snapshot) return { bootstrapped: false, reason: 'no-snapshot' }
+      const pending = []
+      for (const env of s.revisions.values()) {
+        if (!cursorState.pushed.has(env.revisionId)) pending.push(env)
+      }
+      s.revisions.clear(); s.currentByEntity.clear(); s.headsByEntity.clear(); s.conflictsByEntity.clear()
+      cursorState.pushed.clear()
+      const snapEntities = typeof latest.snapshot.entities === 'string' && dataKey
+        ? open(dataKey, latest.snapshot.entities)
+        : (latest.snapshot.entities || [])
+      for (const env of snapEntities) {
+        // integrity first (spec §23 verify step): a tampered snapshot entry must
+        // abort the bootstrap, never restore half-verified state
+        if (hashPayload(env.payload) !== env.payloadHash) throw new Error('relay-client: snapshot payload hash mismatch')
+        applyEnvelope(s, env)
+        cursorState.pushed.add(env.revisionId)
+      }
+      cursorState.cursor = latest.snapshot.coversSeq || 0
+      for (const env of pending) applyEnvelope(s, env)
+      await this.round()
+      return { bootstrapped: true, generation: latest.snapshot.generation, coversSeq: cursorState.cursor }
+    },
   }
 }
