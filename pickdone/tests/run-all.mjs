@@ -104,7 +104,12 @@ if (suites.length) console.error(`[run-all] suite filter: ${suites.join(',')} ->
 // socket/watcher never closed, or a promise awaiting a sync event that never fires in CI) becomes
 // a NAMED failure in <=2min instead of burning the whole CI job budget with zero diagnostics
 // (2026-09-19: ubuntu job sat 30min then was killed, 0 failures reported, hang unattributable).
-const TEST_TIMEOUT_MS = 120000
+// 2026-09-29: raised 120s -> 300s. At 120s the ceiling itself became the top flake source:
+// three consecutive local full-suite runs each failed on a DIFFERENT wall-heavy test
+// (clamp assertion / slow-drip snapshot / oversize-line sever) and the slowest LEGIT test
+// measured 139s under load — the margin note below used to claim 6.5x when the slowest was
+// ~18s. 5min still names a hang well inside the CI job budget instead of the 30min sit.
+const TEST_TIMEOUT_MS = 300000
 // --test-force-exit: a test that passes but leaks a handle (listening server, open socket,
 // watcher) would otherwise keep the per-file child process alive forever — the runner then waits
 // with ZERO results (0 failures, budget kill, unattributable). Force-exit makes the child leave
@@ -136,7 +141,7 @@ if (r.error) {
 }
 // Timing summary: print the enforced per-test ceiling next to the SLOWEST observed test, so a
 // near-ceiling duration reads as "slow but finished" and a kill-at-ceiling reads as "hung".
-// The 2min ceiling itself stays as-is (observed margin vs the slowest test is 6.5x+).
+// The 5min ceiling itself stays as-is (2026-09-29 recalibration, see TEST_TIMEOUT_MS above).
 if (r.stdout) process.stdout.write(r.stdout) // forward the TAP verbatim (summary gate parses it)
 if (r.stderr) process.stderr.write(r.stderr) // spec reporter stream (coverage table) + runner warnings
 // When coverage was requested, persist a machine-readable summary for the coverage ratchet,
