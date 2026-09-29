@@ -100,13 +100,15 @@ export function fileStore(dir) {
   const persist = () => writeFileSync(file, JSON.stringify(mem.__dump(), null, 0))
   if (existsSync(file)) mem.__load(JSON.parse(readFileSync(file, 'utf8')))
   return {
-    kind: 'file',
+    // kind AFTER the spread: Object.entries(mem) carries kind:'memory' and would
+    // otherwise overwrite the file marker (drill log said "storage: memory @ .")
     ...Object.fromEntries(Object.entries(mem).map(([k, v]) =>
       [k, typeof v === 'function' ? (...args) => {
         const r = v(...args)
         if (!['lastSeq', 'getSince', 'getDevice', 'listDevices', 'latestSnapshot', 'gcFloor', 'flush', 'close', '__dump', '__load'].includes(k)) persist()
         return r
       } : v])),
+    kind: 'file',
     flush: persist,
     close: () => persist(),
   }
@@ -234,10 +236,13 @@ export function main(argv = process.argv.slice(2)) {
     return i >= 0 ? argv[i + 1] : fallback
   }
   const port = Number(arg('port', 58480))
+  // self-host must accept LAN/WAN peers: loopback default would make the relay
+  // unreachable from every other device (first real deployment caught this)
+  const host = arg('host', '0.0.0.0')
   const data = arg('data', null)
   const store = data ? fileStore(data) : memoryStore()
   const relay = createRelay(store)
-  return startRelayServer(relay, { port }).then(server => {
+  return startRelayServer(relay, { port, host }).then(server => {
     console.log(`[pickdone-sync-relay] listening on :${server.address().port} (storage: ${store.kind}${data ? ` @ ${dirname(data)}` : ''})`)
     return server
   })
