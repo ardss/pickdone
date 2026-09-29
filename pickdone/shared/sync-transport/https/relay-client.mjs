@@ -45,28 +45,43 @@ export function createRelayClient({ nodeId, account, baseUrl, fetchImpl = fetch,
     /** One sync round. Idempotent; safe to call from any scheduler cadence. */
     async round() {
       const items = []
+      const batch = []
       for (const env of s.revisions.values()) {
         if (!cursorState.pushed.has(env.revisionId)) {
           // E2E: the relay stores opaque ciphertext when a data key is present —
           // same schema, same endpoints (spec §3: payload stays opaque to the relay)
           items.push({ opId: env.revisionId, envelope: dataKey ? seal(dataKey, env) : packEnvelope(env) })
-          cursorState.pushed.add(env.revisionId)
+          batch.push(env.revisionId)
         }
       }
-      if (items.length) await post('/v1/sync/push', { account, device: nodeId, items })
+      // mark ONLY after the relay accepted the batch: marking before made a transient
+      // push failure orphan the revisions forever (never re-pushed, silent divergence)
+      if (items.length) { await post('/v1/sync/push', { account, device: nodeId, items }); for (const id of batch) cursorState.pushed.add(id) }
       const pull = await post('/v1/sync/pull', { account, afterSeq: cursorState.cursor })
       let applied = cursorState.cursor
+      let quarantined = 0
       for (const item of pull.items) {
-        const env = dataKey ? open(dataKey, item.envelope) : unpackEnvelope(item.envelope)
+        let env
+        try {
+          env = dataKey ? open(dataKey, item.envelope) : unpackEnvelope(item.envelope)
+        } catch (e) {
+          // quarantine semantics (spec §68): a frame that can never verify (tamper,
+          // bad version, corrupt JSON) must not wedge the device forever — skip it,
+          // advance past it, keep local state intact
+          applied = Math.max(applied, item.serverSeq)
+          quarantined++
+          continue
+        }
         const r = applyEnvelope(s, env)
-        // ack advances only past frames that verified + merged (or were stale/dup) —
-        // a verify/merge failure must NOT advance (spec §18/§67)
-        if (r.status === 'applied' || r.status === 'ignored') applied = Math.max(applied, item.serverSeq)
+        // ack advances past applied/merged frames AND duplicates (own frames come back
+        // on every pull — without this the cursor never moved and GC was pinned at 0)
+        // but NOT past frames that failed to merge for other reasons (spec §18/§67)
+        if (r.status === 'applied' || r.status === 'ignored' || r.status === 'duplicate') applied = Math.max(applied, item.serverSeq)
       }
       cursorState.cursor = applied
       let ackInfo = null
       if (applied > 0) ackInfo = await post('/v1/sync/ack', { account, device: nodeId, ackSeq: applied })
-      return { pushed: items.length, pulled: pull.items.length, cursor: cursorState.cursor, ack: ackInfo }
+      return { pushed: items.length, pulled: pull.items.length, quarantined, cursor: cursorState.cursor, ack: ackInfo }
     },
     async register() { return post('/v1/device/register', { account, device: nodeId }) },
     materialized() { return materializedAll(s) },

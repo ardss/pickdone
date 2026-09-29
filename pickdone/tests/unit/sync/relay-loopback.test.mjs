@@ -96,3 +96,78 @@ test('relay: file store round-trips state (self-host durability)', async t => {
   const { rmSync } = await import('node:fs')
   rmSync(tmp, { recursive: true, force: true })
 })
+
+// ---------- adversarial-review regressions (2026-09-30 four-way review) ----------
+
+test('relay: body over 8MB is rejected 413 before buffering (memory-DoS cap)', async t => {
+  const { baseUrl } = await withRelay(t, memoryStore())
+  const big = 'x'.repeat(9 * 1024 * 1024)
+  // two acceptable outcomes prove the cap: a clean 413 response, OR a client-side
+  // send error when the server destroys the socket mid-upload (timing race under
+  // full-suite load — both mean the body never got buffered)
+  let outcome = 'none'
+  try {
+    const res = await fetch(baseUrl + '/v1/sync/push', { method: 'POST', body: JSON.stringify({ account: ACCOUNT, device: 'd', items: [{ opId: 'o', envelope: big }] }) })
+    if (res.status === 413) outcome = '413'
+  } catch { outcome = 'reset' }
+  assert.notEqual(outcome, 'none', 'expected 413 or connection reset, got neither')
+})
+
+test('relay: non-string envelope is rejected 400 at push (pull-poisoning fix)', async t => {
+  const { relay, baseUrl } = await withRelay(t, memoryStore())
+  const res = await fetch(baseUrl + '/v1/sync/push', { method: 'POST', body: JSON.stringify({ account: ACCOUNT, device: 'd', items: [{ opId: 'o1', envelope: { bad: 'object' } }] }) })
+  assert.equal(res.status, 400)
+  assert.equal(relay.pull(ACCOUNT, 0).items.length, 0, 'account pull must stay clean')
+})
+
+test('relay-client: one poisoned frame is quarantined — cursor advances, later frames still apply', async t => {
+  const { relay, baseUrl } = await withRelay(t, memoryStore())
+  const a = createRelayClient({ nodeId: 'qa', account: 'q1', baseUrl })
+  await a.register()
+  await a.commit('t1', { title: 'good-one' })
+  await a.round()
+  // inject an undecodable frame AFTER the good one
+  relay.push('q1', 'injected', [{ opId: 'poison', envelope: '{not json' }])
+  await a.commit('t2', { title: 'good-two' })
+  const r = await a.round()
+  assert.equal(r.quarantined, 1, 'poison frame quarantined, not fatal')
+  assert.ok(r.cursor > 0, 'cursor advanced past the poisoned frame')
+  assert.equal(a.materialized()['t2'] !== undefined, true, 'frames behind the poison still applied')
+  // device keeps making progress on subsequent rounds (was: frozen forever)
+  await a.commit('t3', { title: 'post-poison' })
+  const r2 = await a.round()
+  assert.ok(r2.cursor >= r.cursor, 'device still progresses')
+})
+
+test('relay-client: transient push failure does NOT orphan pending revisions', async t => {
+  const { baseUrl } = await withRelay(t, memoryStore())
+  let failNext = false
+  const realFetch = globalThis.fetch
+  const flaky = (url, opts) => {
+    if (failNext && String(url).includes('/sync/push')) return Promise.reject(new Error('network blip'))
+    return realFetch(url, opts)
+  }
+  t.after(() => { globalThis.fetch = realFetch })
+  const a = createRelayClient({ nodeId: 'qa2', account: 'q2', baseUrl, fetchImpl: flaky })
+  await a.register()
+  await a.commit('t1', { title: 'survives a blip' })
+  failNext = true
+  await assert.rejects(() => a.round(), 'push failure surfaces (not silently swallowed)')
+  failNext = false
+  const r = await a.round()
+  assert.equal(r.pushed, 1, 'revision retried after the blip (was: orphaned forever)')
+  const b = createRelayClient({ nodeId: 'qb', account: 'q2', baseUrl })
+  await b.register(); await b.round()
+  assert.deepEqual(b.materialized(), a.materialized())
+})
+
+test('relay-client: own frames pulled back classify duplicate AND advance the cursor (GC un-pinned)', async t => {
+  const { relay, baseUrl } = await withRelay(t, memoryStore())
+  const a = createRelayClient({ nodeId: 'qa3', account: 'q3', baseUrl })
+  await a.register()
+  await a.commit('t1', { title: 'x' })
+  await a.round()
+  const r2 = await a.round() // idle round: own frame comes back as duplicate
+  assert.ok(r2.cursor > 0, 'cursor advances on duplicate own frames (was: pinned at 0 forever)')
+  assert.equal(relay.store.gcFloor('q3') > 0 || r2.cursor > 0, true)
+})

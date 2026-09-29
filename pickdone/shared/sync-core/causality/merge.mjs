@@ -84,7 +84,25 @@ export function commitLocal(store, { entity, entityId, clock, payload }) {
   const envelope = createEnvelope({ entity, entityId, hlc: clock.tick(), parents: parentIds, payload })
   applyEnvelope(store, envelope)
   headsOf(store, entityId).clear()
+  pruneSuperseded(store, entityId, envelope.revisionId)
   return envelope
+}
+
+/** Prune per-entity bookkeeping once revisions become ancestors of current:
+ *  heads that are superseded stop polluting future multi-parent commits, and
+ *  conflict copies of causally-resolved branches stop surfacing in materialized()
+ *  (both contracts were stated but unimplemented — adversarial review caught it). */
+function pruneSuperseded(store, entityId, currentId) {
+  const heads = headsOf(store, entityId)
+  for (const h of [...heads]) {
+    if (isAncestor(store, h, currentId)) heads.delete(h)
+  }
+  const conflicts = store.conflictsByEntity.get(entityId)
+  if (conflicts) {
+    for (const id of [...conflicts.keys()]) {
+      if (isAncestor(store, id, currentId)) conflicts.delete(id)
+    }
+  }
 }
 
 /**
@@ -113,6 +131,7 @@ export function applyEnvelope(store, envelope) {
   if (isAncestor(store, currentId, revisionId)) {
     store.currentByEntity.set(entityId, revisionId)
     headsOf(store, entityId).delete(currentId)
+    pruneSuperseded(store, entityId, revisionId)
     return { status: 'applied', action: 'descendant' }
   }
 
@@ -123,6 +142,7 @@ export function applyEnvelope(store, envelope) {
   store.currentByEntity.set(entityId, winner.revisionId)
   headsOf(store, entityId).delete(winner.revisionId)
   headsOf(store, entityId).add(loser.revisionId)
+  pruneSuperseded(store, entityId, winner.revisionId)
 
   let preserved = null
   if (hashPayload(loser.payload) !== hashPayload(winner.payload)) {

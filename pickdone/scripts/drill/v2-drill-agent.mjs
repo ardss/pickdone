@@ -30,6 +30,12 @@ await client.register()
 
 const conflicts = () => [...client.store.conflictsByEntity.values()].reduce((n, m) => n + m.size, 0)
 
+// synchronized reporting barrier: all agents finish their workload, then hold until
+// the shared deadline before final rounds + report — otherwise an early-starting
+// device snapshots fleet state before later devices finish writing (race found in
+// the post-fix drill rerun: A reported a stale hash)
+const startedAt = Date.now()
+
 // ---- stage 1: disjoint authoring
 for (let i = 1; i <= 10; i++) await client.commit(`${nodeId}-e${i}`, { title: `${nodeId} initial ${i}` })
 let r = await client.round()
@@ -53,8 +59,10 @@ console.log(JSON.stringify({ node: nodeId, stage: 2, conflicts: conflicts() }))
 // locally BEFORE any round (guaranteed by a staggered start gate below)
 await sleep(2000)
 await client.commit('concurrent-entity', { title: `concurrent claim by ${nodeId}` })
-// now everyone rounds to quiescence
-for (let i = 0; i < 6; i++) { await client.round(); await sleep(300) }
+// hold until the shared barrier, then round to quiescence
+const deadline = startedAt + Number(arg('deadline-ms', 25000))
+while (Date.now() < deadline) await sleep(200)
+for (let i = 0; i < 8; i++) { await client.round(); await sleep(200) }
 
 const state = client.materialized()
 const result = {

@@ -745,10 +745,14 @@ function call (op, params) {
     // r4 fix (2026-09-28): when oplogEntriesFor itself throws, route through the SAME reporter
     // appendOplog uses internally — the failure counter (oplogStats), the onAppendFailure hook
     // (→ 'oplog-append-failed' syncEvent) and the warn log fire for BOTH entry points now.
-    try { oplog.appendOplog(oplog.oplogEntriesFor(op, params, r)) } catch (e) { oplog.reportAppendFailure(e && e.message) }
+    let entries = null
+    try { entries = oplog.oplogEntriesFor(op, params, r) } catch (e) { oplog.reportAppendFailure(e && e.message) }
+    // compute entries ONCE and share: the old shape evaluated oplogEntriesFor twice per
+    // write (its planMove/planDelete arms run real SQL) even with the v2 flag off
+    if (entries) { try { oplog.appendOplog(entries) } catch (e) { oplog.reportAppendFailure(e && e.message) } }
     // Sync v2 revision recording (flag-gated inside record()): same never-fail-a-committed-
     // write contract as the oplog line above; a throw is warn-only, v1 sync unaffected.
-    try { revisions.record(oplog.oplogEntriesFor(op, params, r)) } catch (e) { log.warn('[db-revisions] record failed: ' + (e && e.message)) }
+    if (entries) { try { revisions.record(entries) } catch (e) { log.warn('[db-revisions] record failed: ' + (e && e.message)) } }
   }
   return r
 }

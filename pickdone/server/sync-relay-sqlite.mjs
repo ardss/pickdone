@@ -83,6 +83,10 @@ export function sqliteStore(dbPath, { Database } = {}) {
     getDevice: (account, deviceId) => getDeviceStmt.get(account, deviceId) || null,
     listDevices: account => db.prepare('SELECT * FROM devices WHERE account = ?').all(account),
     putSnapshot: (account, snapshot) => {
+      // clamp generation monotonically like memoryStore: a stale/lower-generation
+      // snapshot must not silently regress (backend divergence found in review)
+      const prev = db.prepare('SELECT generation FROM snapshots WHERE account = ?').get(account)
+      snapshot = { ...snapshot, generation: Math.max(prev ? prev.generation : 0, snapshot.generation || 0) }
       db.prepare(`
         INSERT INTO snapshots (account, generation, coversSeq, data) VALUES (?, ?, ?, ?)
         ON CONFLICT(account) DO UPDATE SET

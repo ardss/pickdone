@@ -130,7 +130,10 @@ export function createRelay(store) {
       store.upsertDevice(account, deviceId, { lastSeen: Date.now() })
       return { acked, serverSeq: store.lastSeq() }
     },
-    pull(account, afterSeq, maxBytes = 4 * 1024 * 1024) {
+    pull(account, afterSeq, maxBytes) {
+      // server-side clamp: a client sending maxBytes:null previously bypassed the cap
+      if (!Number.isFinite(maxBytes) || maxBytes <= 0) maxBytes = 4 * 1024 * 1024
+      maxBytes = Math.min(maxBytes, 32 * 1024 * 1024)
       const items = []
       let bytes = 0
       for (const e of store.getSince(account, afterSeq, 100000)) {
@@ -162,9 +165,20 @@ export function createRelay(store) {
 const PROTOCOL_VERSION = 1
 
 export function startRelayServer(relay, { port = 0, host = '127.0.0.1' } = {}) {
+  const MAX_BODY_BYTES = 8 * 1024 * 1024
   const server = createServer((req, res) => {
     const chunks = []
-    req.on('data', c => chunks.push(c))
+    let total = 0
+    req.on('data', c => {
+      total += c.length
+      if (total > MAX_BODY_BYTES) {
+        res.writeHead(413, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ error: 'request body too large' }))
+        req.destroy()
+        return
+      }
+      chunks.push(c)
+    })
     req.on('end', () => {
       let body = {}
       try {
@@ -173,8 +187,12 @@ export function startRelayServer(relay, { port = 0, host = '127.0.0.1' } = {}) {
         res.writeHead(200, { 'content-type': 'application/json', 'x-protocol-version': String(PROTOCOL_VERSION) })
         res.end(JSON.stringify({ protocolVersion: PROTOCOL_VERSION, ...out }))
       } catch (err) {
-        res.writeHead(err.status || 400, { 'content-type': 'application/json' })
-        res.end(JSON.stringify({ error: err.message }))
+        // protocol rejections keep their message; internal failures stay opaque
+        // (driver/storage exceptions must not reach the client)
+        const status = err.status || 500
+        res.writeHead(status, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ error: err.status ? err.message : 'internal error' }))
+        if (!err.status) console.error('[relay] internal error:', err)
       }
     })
   })
@@ -188,6 +206,10 @@ function route(relay, method, url, body) {
     case '/v1/sync/push': {
       const { account, device, items } = post()
       need(account && device && Array.isArray(items), 'account, device, items required')
+      // envelope must be an opaque STRING: an object here passes push but poisons every
+      // later pull for the account (pull does string ops on stored envelopes) — live
+      // inspection probe found this (P2)
+      need(items.every(it => it && typeof it.opId === 'string' && typeof it.envelope === 'string'), 'each item needs string opId + string envelope')
       return relay.push(account, device, items)
     }
     case '/v1/sync/pull': {
@@ -212,7 +234,7 @@ function route(relay, method, url, body) {
     }
     case '/v1/snapshot/put': {
       const { account, snapshot } = post()
-      need(account && snapshot && Number.isInteger(snapshot.coversSeq), 'account + snapshot{coversSeq} required')
+      need(account && snapshot && Number.isInteger(snapshot.coversSeq) && Number.isInteger(snapshot.generation), 'account + snapshot{generation, coversSeq} required')
       return relay.putSnapshot(account, snapshot)
     }
     case '/v1/snapshot/latest': {

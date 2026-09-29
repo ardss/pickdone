@@ -54,11 +54,14 @@ export class Hlc {
     this.logical = 0
   }
 
-  /** Restore persisted state (rule 5). Safe against future-dated saves. */
+  /** Restore persisted state (rule 5). Safe against future-dated saves and
+   *  against corrupted/non-positive snapshots (a negative physical would break
+   *  revisionId sorting — ignore instead of adopting). */
   restore(snapshot) {
     if (!snapshot || typeof snapshot !== 'object') return this
     const p = Number(snapshot.physical) || 0
     const l = Math.max(0, Number(snapshot.logical) || 0)
+    if (!(p > 0)) return this
     if (p > this.physical) {
       this.physical = p
       this.logical = l + 1 // adopt future physical, guarantee forward progress
@@ -77,6 +80,7 @@ export class Hlc {
     } else {
       this.logical += 1
     }
+    this._fence()
     return this.stamp()
   }
 
@@ -100,7 +104,19 @@ export class Hlc {
       this.physical = maxPhys
       this.logical = this.logical + 1
     }
+    this._fence()
     return this.stamp()
+  }
+
+  /** revisionId encodes logical in 6 digits: overflow would silently break the sort
+   *  order, so instead roll the physical forward (monotonicity preserved, ordering
+   *  stays lexicographic). A device doing a million same-ms events is pathological
+   *  but must not corrupt the id space. */
+  _fence() {
+    if (this.logical >= 1000000) {
+      this.physical += 1
+      this.logical = 0
+    }
   }
 
   stamp() {

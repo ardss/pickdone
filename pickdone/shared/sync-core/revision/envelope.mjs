@@ -23,15 +23,21 @@ const CONTENT_IGNORE = new Set([
   'id', 'updatedAt', 'seq', 'deviceId', 'deletedAt', 'userId', 'author', 'syncAuthor',
 ])
 
-/** Deterministic JSON: recursively sorted object keys, stable across devices. */
-export function canonicalJson(value, ignore = CONTENT_IGNORE) {
-  if (Array.isArray(value)) return `[${value.map(v => canonicalJson(v, ignore)).join(',')}]`
+const EMPTY_SET = new Set()
+
+/** Deterministic JSON: recursively sorted object keys, stable across devices.
+ *  Bookkeeping fields are stripped at the TOP LEVEL ONLY (they are row stamps on
+ *  the entity row) — stripping at every depth collided distinct nested objects
+ *  (e.g. subtasks differing only by their own ids) and weakened verifyEnvelope. */
+export function canonicalJson(value, ignore = CONTENT_IGNORE, depth = 0) {
+  if (Array.isArray(value)) return `[${value.map(v => canonicalJson(v, ignore, depth + 1)).join(',')}]`
   if (value && typeof value === 'object') {
+    const drop = depth === 0 ? ignore : EMPTY_SET
     const keys = Object.keys(value)
-      .filter(k => !ignore.has(k))
+      .filter(k => !drop.has(k))
       .filter(k => value[k] !== undefined)
       .sort()
-    return `{${keys.map(k => `${JSON.stringify(k)}:${canonicalJson(value[k], ignore)}`).join(',')}}`
+    return `{${keys.map(k => `${JSON.stringify(k)}:${canonicalJson(value[k], ignore, depth + 1)}`).join(',')}}`
   }
   return JSON.stringify(value ?? null)
 }
@@ -47,8 +53,14 @@ export function hashPayload(payload, ignore = CONTENT_IGNORE) {
 export function createEnvelope({ entity, entityId, hlc, parents = [], payload }) {
   if (!entity || !entityId) throw new Error('envelope: entity and entityId required')
   if (!hlc || typeof hlc.physical !== 'number' || !hlc.nodeId) throw new Error('envelope: hlc stamp required')
-  const revisionId = revisionIdFrom(hlc)
   const payloadHash = hashPayload(payload)
+  // Content-hash suffix in the id: a device that loses its persisted HLC and
+  // restarts on a rolled-back wall clock could re-mint the same (hlc, nodeId) for a
+  // DIFFERENT payload — the sort key alone would collide and silently shadow a
+  // real revision (found by adversarial review). Same HLC + same content = the
+  // same revision by definition, so the suffix makes genuine duplicates dedupe
+  // while distinct content can never share an id.
+  const revisionId = revisionIdFrom(hlc) + '-' + payloadHash.slice(0, 8)
   return {
     revisionId,
     entity,
