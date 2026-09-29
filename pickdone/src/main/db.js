@@ -26,6 +26,9 @@ const oplog = require('./db-oplog')({
   // lan-sync-bootstrap may not be initialized yet — its emitter is guarded and no-ops then).
   onAppendFailure: info => { try { require('./lan-sync-bootstrap').emitOplogAppendFailure(info) } catch { /* surfacing is best-effort */ } },
 }), syncSchema = require('./db-sync-schema')({ getDb: () => db, log })
+// Sync v2 write-path recorder (flag-gated, see db-revisions.cjs): mirrors the oplog
+// contract — never fails an already-committed write, warn + continue on error.
+const revisions = require('./db-revisions.cjs')({ getDb: () => db, log })
 const oplogKeepLimit = require('./db-oplog').oplogKeepLimit // D3 2026-09-24: SYNC_OPLOG_KEEP single source (was a bare 10000 clamp literal)
 
 let Database = null
@@ -236,6 +239,30 @@ CREATE TABLE IF NOT EXISTS sync_oplog (
   entity   TEXT NOT NULL,
   entityId TEXT NOT NULL,
   ts       INTEGER NOT NULL
+);
+-- Sync v2 revision store (v8 twin of the migration: fresh databases get the tables from
+-- SCHEMA, upgrades get them from MIGRATIONS — same dual-manifest as every other table).
+-- Written only while the sync.revisions.v2 flag is on; presence is inert at v1 runtime.
+CREATE TABLE IF NOT EXISTS sync_revisions (
+  revisionId     TEXT PRIMARY KEY,
+  entity         TEXT NOT NULL,
+  entityId       TEXT NOT NULL,
+  authorDeviceId TEXT NOT NULL,
+  hlcPhysical    INTEGER NOT NULL,
+  hlcLogical     INTEGER NOT NULL,
+  parents        TEXT NOT NULL DEFAULT '[]',
+  payloadHash    TEXT NOT NULL,
+  status         TEXT NOT NULL DEFAULT 'pending',
+  createdAt      INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sync_revisions_entity ON sync_revisions(entityId, hlcPhysical, hlcLogical);
+CREATE TABLE IF NOT EXISTS sync_revision_payloads (
+  revisionId TEXT PRIMARY KEY,
+  payload    TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sync_revision_current (
+  entityId   TEXT PRIMARY KEY,
+  revisionId TEXT NOT NULL
 );` + syncSchema.DDL
 
 // D4 2026-09-24: filter conds whitelist/parse live in shared/filter-core.mjs via db-filter-ops.js
@@ -719,9 +746,25 @@ function call (op, params) {
     // appendOplog uses internally — the failure counter (oplogStats), the onAppendFailure hook
     // (→ 'oplog-append-failed' syncEvent) and the warn log fire for BOTH entry points now.
     try { oplog.appendOplog(oplog.oplogEntriesFor(op, params, r)) } catch (e) { oplog.reportAppendFailure(e && e.message) }
+    // Sync v2 revision recording (flag-gated inside record()): same never-fail-a-committed-
+    // write contract as the oplog line above; a throw is warn-only, v1 sync unaffected.
+    try { revisions.record(oplog.oplogEntriesFor(op, params, r)) } catch (e) { log.warn('[db-revisions] record failed: ' + (e && e.message)) }
   }
   return r
 }
+
+// Sync v2 introspection + flag ops (machine-local: deliberately NOT in WRITE_OPS,
+// so flipping the flag is never oplog-captured or synced to peers).
+OPS.revisionsList = p => revisions.list(p && p.entityId, p && p.limit)
+OPS.revisionsFlag = p => {
+  const d = db
+  if (!d || !d.open) throw new Error('db closed')
+  const on = !!(p && p.on)
+  d.prepare('INSERT INTO settings_rows (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+    .run(revisions.FLAG_KEY, on ? '1' : '0')
+  return { on }
+}
+OPS.revisionsFlagState = () => ({ on: revisions.flagEnabled(db) })
 
 const { WRITE_OPS, isWriteOp } = require('./db-write-ops.cjs')
 syncSchema.registerOps(OPS, WRITE_OPS, oplog)
@@ -739,4 +782,4 @@ function close () {
 // Initialized probe: within the same process (the main process's CSV import), reuse the existing connection; a second init rebuilding the handle on the same file is forbidden
 function isOpen () { return !!db }
 
-module.exports = { init, call, queryTodos, normalizeContent, isWriteOp, isOpen, close, setLedgerChangedHook, suppressLedgerHook, LEDGER_WRITE_OPS, WRITE_OPS, SCHEMA, __setMigrateFailHookForTests, __setMigrationsForTests }
+module.exports = { init, call, queryTodos, normalizeContent, isWriteOp, isOpen, close, setLedgerChangedHook, suppressLedgerHook, LEDGER_WRITE_OPS, WRITE_OPS, SCHEMA, __setMigrateFailHookForTests, __setMigrationsForTests, __revisionsForTests: revisions }

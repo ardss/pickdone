@@ -73,6 +73,33 @@ module.exports = function buildMigrations (syncSchema, migrationsOverride) {
       if (!cols.includes('syncAuthor')) d.exec('ALTER TABLE todos ADD COLUMN syncAuthor TEXT')
       return true
     } },
+    { v: 8, fn: d => {
+      // Sync v2 revision store (docs/sync-v2-core-design.md step 3): immutable revisions +
+      // write-time payloads + per-entity current pointer. Written only while the
+      // sync.revisions.v2 flag is on; the tables existing changes nothing at v1 runtime.
+      d.exec(`CREATE TABLE IF NOT EXISTS sync_revisions (
+        revisionId TEXT PRIMARY KEY,
+        entity TEXT NOT NULL,
+        entityId TEXT NOT NULL,
+        authorDeviceId TEXT NOT NULL,
+        hlcPhysical INTEGER NOT NULL,
+        hlcLogical INTEGER NOT NULL,
+        parents TEXT NOT NULL DEFAULT '[]',
+        payloadHash TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        createdAt INTEGER NOT NULL
+      )`)
+      d.exec('CREATE INDEX IF NOT EXISTS idx_sync_revisions_entity ON sync_revisions(entityId, hlcPhysical, hlcLogical)')
+      d.exec(`CREATE TABLE IF NOT EXISTS sync_revision_payloads (
+        revisionId TEXT PRIMARY KEY,
+        payload TEXT NOT NULL
+      )`)
+      d.exec(`CREATE TABLE IF NOT EXISTS sync_revision_current (
+        entityId TEXT PRIMARY KEY,
+        revisionId TEXT NOT NULL
+      )`)
+      return true
+    } },
     ]
   return migrationsOverride || BUILT_IN
 }
