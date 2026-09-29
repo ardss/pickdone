@@ -230,7 +230,7 @@ const need = (ok, message) => { if (!ok) throw err(400, message) }
 
 // ---------- CLI entry (self-host, spec §54) ----------
 
-export function main(argv = process.argv.slice(2)) {
+export async function main(argv = process.argv.slice(2)) {
   const arg = (name, fallback) => {
     const i = argv.indexOf(`--${name}`)
     return i >= 0 ? argv[i + 1] : fallback
@@ -240,7 +240,11 @@ export function main(argv = process.argv.slice(2)) {
   // unreachable from every other device (first real deployment caught this)
   const host = arg('host', '0.0.0.0')
   const data = arg('data', null)
-  const store = data ? fileStore(data) : memoryStore()
+  let store
+  if (arg('storage', 'auto') === 'sqlite') {
+    const { sqliteStore } = await import('./sync-relay-sqlite.mjs')
+    store = sqliteStore(join(data || '.', 'relay.db'))
+  } else store = data ? fileStore(data) : memoryStore()
   const relay = createRelay(store)
   return startRelayServer(relay, { port, host }).then(server => {
     console.log(`[pickdone-sync-relay] listening on :${server.address().port} (storage: ${store.kind}${data ? ` @ ${dirname(data)}` : ''})`)
