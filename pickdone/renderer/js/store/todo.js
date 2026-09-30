@@ -370,6 +370,10 @@ export default {
       for (const u of updates) {
         const raw = index.get(u.taskId)
         if (!raw) continue
+        // [reorder-only no-LWW-re-age fix] a row whose taskSort did not actually change keeps its
+        // stamps: re-aging it (fresh updateTime + status='update') made a pure drag-reorder win
+        // LWW over a peer's concurrent CONTENT edit of the same row and silently revert it.
+        if (raw.taskSort === u.taskSort) { commit('upsertLocal', raw); continue }
         const merged = { ...raw, taskSort: u.taskSort, updateTime: now, status: 'update' }
         commit('upsertLocal', merged)
         rows.push(merged)

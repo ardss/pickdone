@@ -165,17 +165,28 @@ export function writeCriticalBackupCore (ctx, { state, rootState }) {
   // above: identical business states must produce byte-identical critical dumps so the main process's
   // whole-string content dedup (handlers/backup.js) can hit.
   const buildDump = async () => buildBackupDump(rootState, state, { stripVolatileSettings: true, planState: await collectPlanState(), metaState: await collectMetaState(rootState, state) })
+  // [quit-flush awaitable fix] writeNow used to be fully fire-and-forget: the quit-flush hook
+  // discarded the write promise (and only console.error'd failures), so the flush-ack handshake
+  // could not wait for the last critical snapshot and a failing write left no trace outside the
+  // console. Now the promise is retained (awaitable via criticalBackupWrite()) and failures are
+  // stamped into runtimeState like event/auto backups — same honest-status contract.
   const writeNow = () => {
     try {
-      // D6-F14: chips read is async — the write becomes a promise chain (fire-and-forget as before)
       const p = Promise.resolve(buildDump()).then(d => window.todoAPI.writeCriticalStateBackup(JSON.stringify(d)))
-      if (p && typeof p.catch === 'function') p.catch(e => console.error('[todo] critical backup write failed:', e))
-    } catch {}
+      _lastCriticalWrite = p
+      p.then(() => { try { saveRuntime({ criticalBackupLastFailAt: 0, criticalBackupLastError: '' }) } catch { /* quitting */ } })
+        .catch(e => {
+          console.error('[todo] critical backup write failed:', e)
+          try { saveRuntime({ criticalBackupLastFailAt: Date.now(), criticalBackupLastError: String((e && e.message) || e).slice(0, 160) }) } catch { /* quitting */ }
+        })
+      return p
+    } catch (e) { return Promise.reject(e) }
   }
-  // Quit flush: main process before-quit broadcast; pending debounced snapshots flush to disk immediately (state/rootState are live references, so flush reads the latest values)
+  // Quit flush: main process before-quit broadcast; pending debounced snapshots flush to disk immediately (state/rootState are live references, so flush reads the latest values).
+  // The flush write's promise is kept on ctx._quitFlushWrite — the awaitable seam for the flush-ack path.
   if (!ctx._flushHooked && window.todoAPI && window.todoAPI.onAppQuittingFlush) {
     ctx._flushHooked = true
-    window.todoAPI.onAppQuittingFlush(() => { if (ctx._cbTimer) { clearTimeout(ctx._cbTimer); ctx._cbTimer = null; writeNow() } })
+    window.todoAPI.onAppQuittingFlush(() => { if (ctx._cbTimer) { clearTimeout(ctx._cbTimer); ctx._cbTimer = null; ctx._quitFlushWrite = writeNow() } })
   }
   // Debounced backup: structure matches the reference critical-state-backup.json
   clearTimeout(ctx._cbTimer)
@@ -185,3 +196,10 @@ export function writeCriticalBackupCore (ctx, { state, rootState }) {
   // snapshot is written on exit, so 5s costs nothing in durability.
   ctx._cbTimer = setTimeout(writeNow, 5000)
 }
+
+/** Most recent critical-backup write promise (module-level, set before any use — see below). */
+let _lastCriticalWrite = null
+/** Awaitable seam for the most recent critical-backup write (test + flush-ack coordination): the
+ *  quit-flush write is no longer a discarded fire-and-forget. Resolves when the write IPC was
+ *  handed to the main process, rejects with the write failure. */
+export function criticalBackupWrite () { return _lastCriticalWrite }

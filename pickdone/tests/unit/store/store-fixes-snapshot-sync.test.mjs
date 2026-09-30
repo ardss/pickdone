@@ -192,7 +192,14 @@ test('persistSnapshotDiff: undone soft-delete restores the pre-delete chip snaps
   }
   await actions.persistSnapshotDiff({ commit: () => {} }, { from, to })
   await waitFor(() => dbCalls.some(([op]) => op === 'planAddMany'))
-  assert.ok(dbCalls.some(([op, p]) => op === 'planAddMany' && JSON.stringify(p) === JSON.stringify(JSON.parse(chips))))
+  // [LWW re-stamp fix] the restore keeps the snapshot rows' identity (id/taskId/day/mm) but
+  // re-stamps updatedAt fresh — the verbatim byte-equal replay of the pre-delete stamp lost
+  // LAN LWW to the delete's fresh tombstone
+  const put = dbCalls.find(([op]) => op === 'planAddMany')
+  assert.ok(put, 'chips written back via planAddMany')
+  const written = put[1][0]
+  assert.deepEqual({ id: written.id, taskId: written.taskId, day: written.day, mm: written.mm }, { id: 'y', taskId: 'A', day: '2026-01-05', mm: '10:30' })
+  assert.ok(Number(written.updatedAt) > 1e12, 'restored chip carries a fresh stamp (' + written.updatedAt + ')')
 })
 
 // ---- 4. syncTodos: critical backup runs even on the empty-snapshot early return ----

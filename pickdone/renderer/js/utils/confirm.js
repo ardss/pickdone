@@ -2,6 +2,13 @@
 import { tt } from './core.js'
 import { showUndoToast } from './undoToast.js'
 
+/** Single source for "is this row a live repeating instance" — repeatId is a valid repeatId.
+ *  The legacy string 'null' sentinel is NOT a repeat: before this shared predicate, leftovers.js
+ *  treated it as truthy and silently excluded those plain tasks from move-to-today. */
+export function isRepeatTask (t) {
+  return !!(t && t.repeatId && t.repeatId !== 'null')
+}
+
 /**
  * Delete to recycle bin (undoable): low-friction path — no confirmation dialog; after deletion shows a 5-second undo toast.
  * Repeating tasks automatically go through the dedicated confirmation modal (this one only / entire series); all entries are unified, must not bypass it.
@@ -10,8 +17,8 @@ import { showUndoToast } from './undoToast.js'
  */
 export function deleteWithUndo (vm, store, task) {
   if (!task) return Promise.resolve(false)
-  // Repeating task: must ask about scope before deletion (same criterion as TodoItem.isRepeat: repeatId is a valid repeatId)
-  if (task.repeatId && task.repeatId !== 'null') {
+  // Repeating task: must ask about scope before deletion (same criterion as TodoItem.isRepeat)
+  if (isRepeatTask(task)) {
     store.commit('ui/askRepeatDelete', task.taskId)
     return Promise.resolve(false)
   }
@@ -19,7 +26,13 @@ export function deleteWithUndo (vm, store, task) {
     const undo = () => {
       const cur = store.state.todo.recycleList.find(t => t.taskId === task.taskId)
       if (!cur) return
-      store.dispatch('todo/updateTodoFields', { taskId: task.taskId, patch: { delete: false, deletedAt: 0, status: 'update' } })
+      // [undo-delete-bypasses-restoreFromRecycle fix] the undo used to dispatch a bare
+      // updateTodoFields {delete:false,...}, skipping restoreFromRecycle's planChips snapshot
+      // restore (delete→undo lost the schedule chips) and the B5 dangling-repeatId guard.
+      // Every restore path goes through the single todo/restoreFromRecycle entry. Only a REAL
+      // repeatId feeds the B5 guard — the legacy 'null' string sentinel must not trigger a
+      // pointless repeatRule meta lookup on every undo.
+      store.dispatch('todo/restoreFromRecycle', { taskId: task.taskId, repeatId: isRepeatTask(cur) ? cur.repeatId : undefined })
       vm.$message.success(tt('statsJ.Confirm.restored'))
     }
     // Must use the component instance $message (EP 2.x): the old window.ELEMENT.Message is the element-ui (Vue2) global,

@@ -102,7 +102,7 @@
 import { taskContextMenu } from '../utils/taskMenu.js'
 import { DEFAULT_CAT_COLOR } from '../utils/core.js'
 import { toggleCompleteWithUndo } from '../utils/completeAction.js'
-import { batchMoveWithUndo } from '../utils/confirm.js'
+import { batchMoveWithUndo, isRepeatTask } from '../utils/confirm.js'
 import { getEstimate } from '../utils/tomatoEstimate.js'
 import { crossDayMovePatch, crossDayRevertPatch } from '../utils/crossDayMove.js' // [maint-0924 A1]
 import EmptyState from '../components/EmptyState.vue'
@@ -114,7 +114,7 @@ import EmptyState from '../components/EmptyState.vue'
  *  and the rest return as repeatRest (the view keeps them checked for the next pass). Plain rows
  *  all go through the unified deleteWithUndo exit, semantics identical to single-item delete. */
 function splitBatchDelete (rows) {
-  const isRepeat = t => !!(t && t.repeatId && t.repeatId !== 'null')
+  const isRepeat = isRepeatTask
   const plain = []
   let repeatAsk = null
   const repeatRest = []
@@ -279,6 +279,16 @@ export default {
       } finally { this.batchBusy = false }
     },
     async batchDelete () {
+      // [batchdelete-no-busy-guard fix] same batchBusy re-entrancy lock as batchToday/batchCat:
+      // during the awaited confirm + delete phase the (enabled) button could be re-clicked and a
+      // second run interleaved on the same checkedIds.
+      if (this.batchBusy) return
+      this.batchBusy = true
+      try {
+        await this._batchDeleteInner()
+      } finally { this.batchBusy = false }
+    },
+    async _batchDeleteInner () {
       const n = this.checkedIds.length
       try { await this.$confirm(this.$t('statsC.TodoBox.confirmDelete', { n }), this.$t('statsC.TodoBox.confirmTitle'), { type: 'warning' }) } catch { return }
       // Resolve against the live list first (dead ids deleted elsewhere during batching are excluded),
@@ -299,14 +309,22 @@ export default {
       let snap = []
       try {
         const ids = await this.$store.dispatch('todo/deleteTodosMany', plain)
-        snap = ids.map(id => ({ id }))
+        // [undo-delete-bypasses-restoreFromRecycle fix] capture each row's repeatId at delete time;
+        // the undo path below goes through todo/restoreFromRecycle so the planChips snapshot restore
+        // and the B5 dangling-repeatId guard apply — a bare {delete:false} patch skipped both.
+        snap = ids.map(id => {
+          const row = (plain || []).find(t => t.taskId === id)
+          // Only a REAL repeatId feeds the B5 guard — the legacy 'null' string sentinel must not
+          // trigger a pointless repeatRule meta lookup on every undo
+          return { id, repeatId: isRepeatTask(row) ? row.repeatId : undefined }
+        })
       } catch { /* dead rows: skip */ }
       if (snap.length) {
         this.$message.closeAll()
         batchMoveWithUndo(this, {
           label: this.$t('statsC.TodoBox.msgDeleted', { n: snap.length }),
           snap,
-          revertOf: r => this.$store.dispatch('todo/updateTodoFields', { taskId: r.id, patch: { delete: false, deletedAt: 0, status: 'update' } })
+          revertOf: r => this.$store.dispatch('todo/restoreFromRecycle', { taskId: r.id, repeatId: r.repeatId })
         })
       }
       if (repeatAsk) this.$store.commit('ui/askRepeatDelete', repeatAsk.taskId)

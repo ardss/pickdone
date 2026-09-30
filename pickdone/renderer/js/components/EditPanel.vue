@@ -320,6 +320,10 @@ export default {
       if (dep && dep.depOpen) { dep.depOpen = false; return }
       if (this.previewImg) { this.previewImg = null; return }
       const ui = this.$store.state.ui
+      // [editpanel-esc-ignores-context-menu fix] an open task context menu owns the Esc press
+      // (it closes the menu); the edit sidebar behind it must not also close. Same whitelist
+      // shape as the other overlays below.
+      if (ui.contextMenu && ui.contextMenu.visible) return
       // [maint-0925 A2] showFilterModal joins the whitelist (hoisted out of FilterView local data): Esc over the filter modal no longer closes the edit sidebar
       if (ui.showSettingsModal || ui.showRepeatModalFor || ui.showFeedbackModal || ui.showFilterModal || ui.showRepeatDeleteConfirm || ui.accountTaskId || ui.tomatoAbandonVisible || ui.tomatoFocusRecordVisible || ui.tomatoRecordAddVisible) return
       const st = this.$store.state.ui.rightSidebarTodoEdit

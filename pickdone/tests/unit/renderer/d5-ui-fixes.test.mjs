@@ -70,7 +70,7 @@ test('DayDeck: count and progress denominator include overdue items', () => {
 test('TodoBoxView batchDelete: one aggregated batchMoveWithUndo undo toast, closeAll, no per-row deleteWithUndo', () => {
   const src = read('renderer/js/views/TodoBoxView.vue')
   assert.ok(!src.includes("deleteWithUndo(this, this.$store, raw)"), 'per-row deleteWithUndo loop must stay deleted')
-  assert.match(src, /import \{ batchMoveWithUndo \} from '\.\.\/utils\/confirm\.js'/, 'batchMoveWithUndo import kept (deleteWithUndo import dropped)')
+  assert.match(src, /import \{ batchMoveWithUndo, isRepeatTask \} from '\.\.\/utils\/confirm\.js'/, 'batchMoveWithUndo import kept + shared isRepeatTask (undo-delete single-source round)')
   const idxCloseAll = src.indexOf('this.$message.closeAll()', src.indexOf('async batchDelete'))
   const idxBatch = src.indexOf('batchMoveWithUndo(this', src.indexOf('async batchDelete'))
   // F-C1: rows are deleted via ONE deleteTodosMany dispatch (one snapshot push / one putMany),

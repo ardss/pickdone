@@ -8,16 +8,45 @@ import { rangeDays } from '../../utils/core.js'
 // ---- DB write pending queue (mirrors tomato.js's _pendingLedger): a failed task upsert stays queued and replays on the next quit flush, so a transient IPC/db failure can't silently drop a task edit ----
 const _pendingUpserts = []
 let _todoFlushHooked = false
+let _flushing = false
+
+/** Live queue (test seam: _testInternals exposes the same array instance). */
+export function pendingUpserts () { return _pendingUpserts }
+
+/** [replay guard] The queue must hold only the NEWEST pending version of each row. A failed
+ *  upsert used to keep its full row JSON queued forever; a later edit of the same task queued a
+ *  SECOND entry, and on replay the STALE one was re-dispatched too — the older row JSON (db.js
+ *  OPS.upsert is a blind ON CONFLICT DO UPDATE, src/main/db.js) then overwrote the newer edit:
+ *  stale-wins until the next edit of that task. Single invariant, enforced at enqueue time for
+ *  every op shape that carries rows ('upsert' single row / 'upsertMany' + 'commitSyncBatch' row
+ *  lists): a newer write supersedes the older queued copy of the same taskId. */
+export function supersedePendingRow (taskId) {
+  if (taskId == null) return
+  for (let i = _pendingUpserts.length - 1; i >= 0; i--) {
+    const entry = _pendingUpserts[i]
+    if (!entry) continue
+    if (entry.op === 'upsert') {
+      if (entry.params && entry.params.taskId === taskId) _pendingUpserts.splice(i, 1)
+    } else if (entry.op === 'upsertMany' || entry.op === 'commitSyncBatch') {
+      const rows = entry.params && entry.params.rows !== undefined ? entry.params.rows : entry.params
+      if (!Array.isArray(rows)) continue
+      const next = rows.filter(r => !(r && r.taskId === taskId))
+      if (next.length === 0) _pendingUpserts.splice(i, 1)
+      else if (next.length !== rows.length) {
+        if (entry.op === 'commitSyncBatch') entry.params.rows = next
+        else entry.params = next
+      }
+    }
+  }
+}
 
 /** Queue a raw entry (upsertMany / commitSyncBatch share safeUpsert's replay guarantee:
- *  queueing also arms the quit-flush hook, same as safeUpsert). */
+ *  queueing also arms the quit-flush hook, same as safeUpsert). Callers queue batch entries that
+ *  are already the newest known state of their rows — batches are not auto-superseded here. */
 export function queuePendingUpsert (entry) {
   _pendingUpserts.push(entry)
   hookQuitFlush()
 }
-
-/** Live queue (test seam: _testInternals exposes the same array instance). */
-export function pendingUpserts () { return _pendingUpserts }
 
 /** Unified exit for DB persistence: failures are logged, never producing floating rejections (local/DB mismatch is visible in the console)
  *  JSON round-trip de-proxies: row objects come from reactive state, so nested arrays like reminderOffsets are Proxies
@@ -27,6 +56,8 @@ export function pendingUpserts () { return _pendingUpserts }
 export function safeUpsert (row) {
   let plain
   try { plain = JSON.parse(JSON.stringify(row)) } catch (e) { plain = row }
+  // Replay guard: this write supersedes any older queued copy of the same row (see supersedePendingRow)
+  supersedePendingRow(plain && plain.taskId)
   const entry = { op: 'upsert', params: plain }
   _pendingUpserts.push(entry)
   Promise.resolve(commitCommand('todo', 'put', plain))
@@ -48,10 +79,21 @@ function hookQuitFlush () {
 // Exported for unit tests (same precedent as planSnapshotRowSync)
 export { flushPendingUpserts }
 function flushPendingUpserts () {
-  for (const entry of [..._pendingUpserts]) {
-    window.todoAPI.dbCall(entry.op, entry.params)
-      .then(() => { const i = _pendingUpserts.indexOf(entry); if (i >= 0) _pendingUpserts.splice(i, 1) })
-      .catch(e => console.error('[todo] pending upsert flush failed at quit (kept for retry):', e))
+  // Re-entrancy guard: the quit-flush broadcast can arrive more than once (aborted round →
+  // re-issued quit) while entries from the first round are still in flight — a second concurrent
+  // flush re-dispatched the SAME still-queued entries (removal happens on success only).
+  if (_flushing) return
+  _flushing = true
+  try {
+    for (const entry of [..._pendingUpserts]) {
+      window.todoAPI.dbCall(entry.op, entry.params)
+        .then(() => { const i = _pendingUpserts.indexOf(entry); if (i >= 0) _pendingUpserts.splice(i, 1) })
+        .catch(e => console.error('[todo] pending upsert flush failed at quit (kept for retry):', e))
+    }
+  } finally {
+    // Hold the guard for a couple of microtasks so a same-tick re-broadcast cannot re-dispatch
+    // entries whose success-removal callbacks have not run yet (real quit rounds are seconds apart)
+    Promise.resolve().then(() => Promise.resolve()).then(() => { _flushing = false })
   }
 }
 

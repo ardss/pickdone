@@ -461,7 +461,15 @@ export default {
     /** Startup loading: SQLite is authoritative; when the table is empty and a local cache exists, perform a one-time migration (LS → SQLite) */
     async init ({ commit, rootState }) {
       let rows = []
-      try { rows = (await window.todoAPI.dbCall('getAllCategories')) || [] } catch (e) { console.warn('[category] SQLite read failed, using local cache', e) }
+      // [LS-migration DB-fail fix] distinguish "DB genuinely empty" from "DB read FAILED": a
+      // transient getAllCategories failure used to fall through into the LS→DB migration path
+      // below, and loadList() re-seeded the FIXED default ids (100001-100003) which were then
+      // committed via category.put — overwriting the real rows living under those same ids in
+      // SQLite (rename a default category, hit one transient read failure, it reverts). On a read
+      // failure the migration is skipped entirely: memory keeps the LS cache (setListFromDb never
+      // persists), nothing is written to the DB, and the next init retries.
+      let dbReadFailed = false
+      try { rows = (await window.todoAPI.dbCall('getAllCategories')) || [] } catch (e) { dbReadFailed = true; console.warn('[category] SQLite read failed, using local cache', e) }
       try {
         // r6 ordering contract: the legacy blob may have an un-scrub rewrite in flight (setProject
         // unmark fired just before a reload) — drain it FIRST, else the union below resurrects a
@@ -509,6 +517,14 @@ export default {
           (retentionDays === 0 || !d.deletedAt || d.deletedAt > cutoff))
         commit('setListFromDb', rows.concat(dels))
         return rows.length
+      }
+      // [LS-migration DB-fail fix] a failed DB read is NOT an empty table: skip the migration and
+      // the seed ids entirely (no category.put / no categoryLsMigrated stamp). The LS cache stays
+      // memory-only (setListFromDb never persists) so nothing can overwrite real DB rows.
+      if (dbReadFailed) {
+        const lsCache = loadList()
+        commit('setListFromDb', lsCache)
+        return -1
       }
       // One-time migration flag: otherwise "migrate only when the table is empty" would resurrect old localStorage caches after the user deletes all categories
       let migrated = false

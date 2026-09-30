@@ -15,7 +15,12 @@
                    'cat-mgr-row--over-after': mgrDragOverId === c.categoryId && mgrDragPos === 'after' }"
          draggable="true"
          @dragstart="dragMgrStart(c,$event)" @dragover.prevent="dragMgrOver(c,$event)" @drop.prevent="dropMgrOn(c)" @dragend="mgrDragId=null; mgrDragOverId=null; mgrDragPos=null">
-      <i class="cat-mgr-drag" :title="$t('statsG.SideNav.dragSortTitle')"><app-icon name="dots" :size="13"/></i>
+      <!-- [category-reorder-drag-only fix] the handle is now focusable and carries a keyboard
+           path (Alt+ArrowUp / Alt+ArrowDown), so reorder is no longer pointer-only a11y -->
+      <i class="cat-mgr-drag" :title="$t('statsG.SideNav.dragSortTitle')" role="button" tabindex="0"
+         :aria-label="$t('statsG.SideNav.dragSortTitle')"
+         @keydown.up.prevent="e => { if (e.altKey) mgrMove(c, -1) }"
+         @keydown.down.prevent="e => { if (e.altKey) mgrMove(c, 1) }"><app-icon name="dots" :size="13"/></i>
       <span class="sn-dot" :style="{borderColor:c.categoryColor, background:c.categoryColor}"></span>
       <input v-if="mgrEditing===c.categoryId" v-model="mgrName" class="sn-cat-edit"
              @keydown.enter.prevent="e => { if (e.isComposing || e.keyCode === 229) return; saveMgrEdit(c) }" @blur="saveMgrEdit(c)"/>
@@ -103,6 +108,16 @@ export default defineComponent({
       this.mgrDragId = c.categoryId
       e.dataTransfer.effectAllowed = 'move'
       e.dataTransfer.setData('text/plain', String(c.categoryId))
+    },
+    /** Keyboard reorder (Alt+ArrowUp/Down on the drag handle): same category/reorder commit the
+     *  drag path uses — one shared store mutation, no second write channel. */
+    mgrMove (c, dir) {
+      const ids = this.categories.map(x => x.categoryId)
+      const i = ids.indexOf(c.categoryId)
+      const j = i + dir
+      if (i < 0 || j < 0 || j >= ids.length) return
+      const tmp = ids[i]; ids[i] = ids[j]; ids[j] = tmp
+      this.$store.commit('category/reorder', ids)
     },
     dragMgrOver (c, e) {
       if (this.mgrDragId == null || this.mgrDragId === c.categoryId) return
