@@ -46,9 +46,13 @@ test('English on <weekday>: defaults to next week; rolls forward if already past
 })
 
 test('English next <weekday>: always next week (never this week)', () => {
-  // Base Tuesday: next monday = 2026-09-21 (this Monday 9-14 already passed)
+  // Base Tuesday: next monday = 2026-09-21 (this Monday 9-14 already passed — already next week)
   assert.equal(d('next monday').format('YYYY-MM-DD'), '2026-09-21')
-  assert.equal(d('next friday').format('YYYY-MM-DD'), '2026-09-18')
+  // next-weekday-force-next-week fix: 9-18 is INSIDE the base's week (Sun 9-13..Sat 9-19) —
+  // "next friday" from a Tuesday must be NEXT week's Friday, not this week's
+  assert.equal(d('next friday').format('YYYY-MM-DD'), '2026-09-25')
+  // next saturday from Saturday (same weekday): never today, always next week
+  assert.equal(d('next saturday').format('YYYY-MM-DD'), '2026-09-26')
   // next tuesday: this Tuesday is the base day, still next week -> 2026-09-22
   assert.equal(d('next tuesday').format('YYYY-MM-DD'), '2026-09-22')
 })
