@@ -12,7 +12,8 @@
         <div v-if="count > 0" class="todo-list-item-group__count"> {{ count }} </div>
       </div>
       <div v-if="hasSettings" class="todo-list-item-group__header-append" role="button" tabindex="0"
-           :title="$t('statsE.TodoGroupBlock.groupViewOptions')" @click.stop="gear" @keydown.enter.prevent="gear">
+           :title="$t('statsE.TodoGroupBlock.groupViewOptions')" :aria-label="$t('statsE.TodoGroupBlock.groupSettingsAria')"
+           @click.stop="gear" @keydown.enter.prevent="gear">
         <i class="todo-list-item-group__btn-settings todo-list-item-group__btn-settings-char">&#9881;</i>
       </div>
       <div v-if="hasRecomplete" class="todo-list-item-group__header-append" role="button" tabindex="0"
@@ -75,6 +76,10 @@ export default {
 .todo-list-item-group__header:hover{filter:brightness(.95)}
 .todo-list-item-group__header-append{display:flex;flex-shrink:0;align-items:center;opacity:0;transition:all .3s cubic-bezier(.23,1,.32,1)}
 .todo-list-item-group__header-container:hover .todo-list-item-group__header-append{opacity:1}
+/* [R8] keyboard parity: the gear/recomplete buttons are only reachable by Tab — reveal them when
+   focus is anywhere inside the group header, exactly like hover does, otherwise they are invisible
+   focus targets (opacity:0 keeps them clickable but unseen) */
+.todo-list-item-group__header-container:focus-within .todo-list-item-group__header-append{opacity:1}
 .todo-list-item-group__btn-settings{color:var(--text-4);cursor:pointer}
 .todo-list-item-group__title{flex:1;margin-right:20px;margin-left:6px;color:var(--text-3);font-size: var(--fs-base)}
 /* 分组标题不可编辑：用默认箭头，禁文字选中（避免 I 型输入光标与双击误选） */

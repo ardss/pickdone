@@ -392,6 +392,7 @@ export default {
     },
     "TodoGroupBlock": {
       "groupViewOptions": "Group view options",
+      "groupSettingsAria": "Open this group's view settings",
       "rescheduleBtn": "Reschedule"
 
     },

@@ -9,6 +9,15 @@
        @keydown.enter.prevent="go('todo-list-tag',{id:t.name})">
     <span class="sn-dot none"></span><span>{{t.name}}</span><em class="sn-badge">{{t.count}}</em>
   </div>
+  <!-- [R12] overflow indicator: tags past the 10-row cap used to be silently invisible — the panel
+       rendered exactly 10 rows with no hint that more exist. The +N row hands the intent to the
+       parent (SideNav opens the manage-tags modal, which lists every tag). Label reuses the
+       existing SideNav shard key (shard contract: side-nav keys stay in statsG.SideNav). -->
+  <div v-if="tags.length > 10" class="sn-cat-item sn-tags-more" role="button" tabindex="0"
+       :title="$t('statsG.SideNav.manageTagTitle')" :aria-label="$t('statsG.SideNav.manageTagTitle') + ' (+' + (tags.length - 10) + ')'"
+       @click="$emit('more')" @keydown.enter.prevent="$emit('more')">
+    <span class="sn-tags-more-label">+{{ tags.length - 10 }}</span>
+  </div>
 </template>
 
 <script lang="ts">
@@ -17,6 +26,7 @@ import { navKeyOfRoute } from '../../views/registry.js'
 
 export default defineComponent({
   name: 'SnTagPanel',
+  emits: ['more'],
   computed: {
     /* Wave-5 dedup: single source is getters['todo/tagCounts'] (was a verbatim copy of SideNav's) */
     tags () { return this.$store.getters['todo/tagCounts'] }

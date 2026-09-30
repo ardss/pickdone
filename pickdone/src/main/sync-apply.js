@@ -484,7 +484,11 @@ function applyRowInner (state, incoming) {
       // the peer's deletion NEVER landed here (every branch required winner.data). Land it through
       // the buffered bulk path — todoToRow normalizes `delete:1` into a deleted=1 tombstone row on
       // upsertMany. Provenance: the tombstone's author is the deleting device's (incoming.author).
-      state.pendingWrites.todos.push({ taskId: incoming.id, delete: 1, deletedAt: winner.deletedAt || incoming.deletedAt || 0, syncAuthor: incoming.author || '' })
+      // Sync-1: the tombstone must carry its LWW age — without updateTime the row used to land
+      // with updatedAt 0 (epoch-oldest) and the deletion resurrected on the next LWW round.
+      // todoToRow now also falls back to deletedAt for deleted rows (belt and braces for callers
+      // that only carry deletedAt).
+      state.pendingWrites.todos.push({ taskId: incoming.id, delete: 1, deletedAt: winner.deletedAt || incoming.deletedAt || 0, updateTime: winner.deletedAt || incoming.deletedAt || 0, syncAuthor: incoming.author || '' })
       return true
     }
     if (!winner.data) return false

@@ -40,9 +40,32 @@ export function supersedePendingRow (taskId) {
   }
 }
 
+/** [Fault-1] Shared stale-batch predicate: the db layer (src/main/db.js commitSyncBatch) rejects a
+ *  batch whose version is older than the persisted todosVersion with "— stale batch rejected".
+ *  That check lived as an inline regex ONLY in todoSync's catch; any other caller (flush replay,
+ *  tests) had to re-derive the string. Single source here. */
+export function isStaleBatchError (err) {
+  return !!(err && /stale batch rejected/.test(String((err && err.message) || err)))
+}
+
+/** [Fault-2] Batch-level supersede, mirroring supersedePendingRow's row invariant: a queued
+ *  commitSyncBatch replaying AFTER a newer batch has been persisted is a doomed replay — the db
+ *  layer rejects it as stale on every quit flush forever. Drop every queued batch whose version is
+ *  not newer than `version` (the version of the batch/about-to-be-queued state that supersedes it). */
+export function supersedePendingBatch (version) {
+  if (version == null) return
+  for (let i = _pendingUpserts.length - 1; i >= 0; i--) {
+    const entry = _pendingUpserts[i]
+    if (entry && entry.op === 'commitSyncBatch' && entry.params && entry.params.version != null && entry.params.version <= version) {
+      _pendingUpserts.splice(i, 1)
+    }
+  }
+}
+
 /** Queue a raw entry (upsertMany / commitSyncBatch share safeUpsert's replay guarantee:
  *  queueing also arms the quit-flush hook, same as safeUpsert). Callers queue batch entries that
- *  are already the newest known state of their rows — batches are not auto-superseded here. */
+ *  are already the newest known state of their rows — call supersedePendingBatch first to drop
+ *  older queued copies of the same batch. */
 export function queuePendingUpsert (entry) {
   _pendingUpserts.push(entry)
   hookQuitFlush()

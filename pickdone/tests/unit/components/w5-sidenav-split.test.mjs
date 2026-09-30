@@ -32,7 +32,8 @@ test('w5 SideNav split: parent registers the three side-nav children', () => {
 test('w5 SideNav split: parent delegates to the children via open prop / close emit', () => {
   assert.match(sideNav, /<sn-manage-categories-modal :open="manageVisible" @close="manageVisible=false"\/>/)
   assert.match(sideNav, /<sn-manage-tags-modal :open="tagMgrVisible" @close="tagMgrVisible=false"\/>/)
-  assert.match(sideNav, /<sn-tag-panel v-if="showTagPanel"\/>/)
+  // [R12] the '+N more' overflow row emits 'more'; SideNav opens the manage-tags modal with it
+  assert.match(sideNav, /<sn-tag-panel v-if="showTagPanel" @more="tagMgrVisible = true"\/>/)
   // dialogs stay mounted (open prop), keeping el-dialog's native open/close transition
   assert.ok(!sideNav.includes('<el-dialog'), 'parent must no longer render any el-dialog directly')
 })

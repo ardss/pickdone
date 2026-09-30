@@ -50,8 +50,13 @@ module.exports = Object.assign(({ getDb, log, getPurgeChips, onAppendFailure }) 
       case 'upsertMany': return arr('todo', (params || []).map(t => t && t.taskId))
       // P2 2026-09-17: a failed bump (missing/deleted task → { ok:false }) must not emit a delta —
       // the oplog row would point delta consumers at a row that never changed (ghost pointer).
-      case 'bumpSnow': return (result && result.ok === false) ? [] : [one('todo', params && params.taskId)]
-      case 'hardDelete': case 'hardDeleteMany': return arr('todo', params)
+      // Sync-8: a DEDUPED replay ({ ok:true, minutes:0, deduped:true }) changed nothing either —
+      // it used to pass the ok check and emit a phantom delta per replayed focus session.
+      case 'bumpSnow': return (result && (result.ok === false || result.deduped)) ? [] : [one('todo', params && params.taskId)]
+      // Sync-5: both ops return the ids PHYSICALLY deleted ([] for an id that was never there) —
+      // the params-side expansion used to emit a tombstone pointer for an absent id, telling
+      // peers to delete a row they may still hold live.
+      case 'hardDelete': case 'hardDeleteMany': return arr('todo', result)
       // 2026-09-18: both purge ops return the purged ids — expanded into per-id tombstone
       // pointers so purges propagate as real deletions (the old single ('todo','*gc*') marker
       // hydrated as a ghost tombstone on peers and could not stop snapshot/merge resurrection).
@@ -114,7 +119,9 @@ module.exports = Object.assign(({ getDb, log, getPurgeChips, onAppendFailure }) 
       // emits nothing, PutMany's result is the list of keys that actually changed
       case 'settingsRowPut': return result === false ? [] : [one('setting', params && params.key)]
       case 'settingsRowPutMany': return arr('setting', result)
-      case 'settingsRowDelete': return [one('setting', params && typeof params === 'object' ? params.key : params)]
+      // Sync-6: rowDelete returns changes>0 — false means the row was already tombstoned (or
+      // never existed), so re-logging the pointer would churn the ring and falsify delete order.
+      case 'settingsRowDelete': return result === false ? [] : [one('setting', params && typeof params === 'object' ? params.key : params)]
       case 'tomatoAppendMany': {
         const ids = (Array.isArray(params) ? params : [params]).map(r => r && r.tomatoId).filter(Boolean)
         return arr('tomato', ids)
@@ -126,7 +133,10 @@ module.exports = Object.assign(({ getDb, log, getPurgeChips, onAppendFailure }) 
       case 'tomatoUpdateById': return result === false ? [] : [one('tomato', params && params.tomatoId)]
       // D11 finding 2: params may be plain ids or {tomatoId, deletedAt, updatedAt} stamps (sync
       // apply path) — extract the id, an object would have String()-ified into a garbage pointer.
-      case 'tomatoRemoveByIds': return arr('tomato', (Array.isArray(params) ? params : [params]).map(x => (x && typeof x === 'object') ? (x.tomatoId != null ? x.tomatoId : x.id) : x))
+      // Sync-6: result-aware like planRemoveIds — the op (with its `AND deleted=0` guard) returns
+      // the ids ACTUALLY tombstoned; a re-delete of an already-dead id used to re-stamp its
+      // deletedAt AND emit a fresh pointer per call (echo fuel).
+      case 'tomatoRemoveByIds': return arr('tomato', result)
       // r2 2026-09-28: result-aware like its siblings above — tomatoMigrateFromMeta returns 0 in
       // the steady state (rows already present / no blob / corrupted blob), and the CLI's open()
       // runs it on EVERY command (including pure reads). The unconditional pointer wrote one

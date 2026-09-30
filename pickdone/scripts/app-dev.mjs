@@ -35,3 +35,13 @@ const child = spawn(electron, ['.', ...extraArgs], {
 });
 
 child.on('exit', (code) => process.exit(code ?? 0));
+
+// Fault-9 (D12 2026-10-01): a spawn failure (electron binary missing/corrupt after a partial
+// install, EACCES on the shim) emits child 'error' — with no listener that was an unhandled
+// 'error' event, which crashed this wrapper with ERR_UNHANDLED_ERROR instead of explaining the
+// failure. Note: on Windows (shell:true) many failures surface as a non-zero exit instead, so
+// this handler is the safety net for the paths that DO reach spawn-error.
+child.on('error', (err) => {
+  console.error('[app-dev] failed to start electron:', (err && err.message) || err);
+  process.exit(1);
+});

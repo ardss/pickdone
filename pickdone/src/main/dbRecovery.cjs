@@ -168,13 +168,61 @@ function quarantineKey (ud, stamp) {
 /** 恢复优先级 = JSON 优先于 plain-bak(2026-09-04 深审 P0 倒置修复):critical JSON 是渲染端持续覆盖的最新快照,
  *  .plain-bak 是加密迁移那一刻的一次性快照、之后永不更新——旧的"plain-bak 优先"会在迁移一年后损坏时恢复一年前数据。
  *  .corrupt-* 现场只保留最近 3 套,更早的删除(无限累积曾无治理)。 */
+/** Sync-4/Sync-17 (D12 2026-10-01): recovery-pending sentinel. Two live crash windows leave the
+ *  same poison state on disk: a HEALTHY-HEADER but EMPTY todos.db with an unconsumed, parseable
+ *  critical-state-backup.json —
+ *    Sync-4  crash between the empty re-init and the JSON restore (index.js catch-block);
+ *    Sync-17 re-init failed (jsonRestoreAllowed gate) after the corrupt db was already
+ *            quarantined → source:'json' returned, zero bytes restored, success semantics.
+ *  On every later boot the healthy-header guard then answered 'transient' forever (Sync-4) or the
+ *  plain-bak branch was permanently suppressed (Sync-17): the user sat on an empty DB silently.
+ *  index.js marks the sentinel exactly when that state is created and clears it when the JSON
+ *  restore provably consumed the snapshot; attemptDbRecovery treats (sentinel + parseable JSON)
+ *  as grounds to quarantine the empty shell and replay the restore. Pure fs → unit-testable. */
+function recoveryPendingPath (ud) {
+  return path.join(ud, 'recovery-pending.json')
+}
+function markRecoveryPending (ud, info) {
+  try {
+    fs.mkdirSync(ud, { recursive: true })
+    fs.writeFileSync(recoveryPendingPath(ud), JSON.stringify({
+      reason: String((info && info.reason) || 'json-restore-unconsumed'),
+      at: Date.now()
+    }))
+    return true
+  } catch { return false }
+}
+function clearRecoveryPending (ud) {
+  try { fs.rmSync(recoveryPendingPath(ud), { force: true }); return true } catch { return false }
+}
+function hasRecoveryPending (ud) {
+  return fs.existsSync(recoveryPendingPath(ud))
+}
+
 function attemptDbRecovery (ud, retryInit) {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-')
   const mainDb = path.join(ud, 'todos.db')
+  // Confirm a recoverable source exists before renaming: transient IO errors (disk full/lock held) also make init fail; renaming unconditionally
+  // would mislabel the user's current database as .corrupt and fall back to a stale backup or even an empty DB
+  const plainBakExists = fs.existsSync(path.join(ud, 'todos.db.plain-bak'))
+  // P2 fix (2026-09-26, json-exists-vs-parseable): an existing-but-unparseable JSON no longer
+  // counts as a recoverable source — the old existence-only check produced a source:'json'
+  // "recovery" that re-inited an EMPTY DB and outranked a usable plain-bak.
+  const jsonPath = criticalBackupPath(ud)
+  const jsonFileExists = fs.existsSync(jsonPath)
+  const jsonExists = jsonFileExists && backupJsonParseable(jsonPath)
+  // Sync-4/Sync-17: the sentinel only ever outranks the healthy-header guard when there is a
+  // parseable snapshot to replay — with no usable JSON the empty-shell diagnosis has no remedy
+  // and the conservative no-rename behavior must stand.
+  const replayPending = hasRecoveryPending(ud) && jsonExists
   // P2 2026-09-19: healthy header → the DB itself is fine; the init failure was transient. Retry
   // init once when a hook is provided; regardless of the retry outcome a header-intact DB is never
   // renamed — "corrupt" requires a WRONG header, not merely a failed init.
+  // Sync-4/Sync-17 exception: a pending sentinel + parseable JSON identifies this header-intact
+  // DB as the EMPTY SHELL of an interrupted recovery — fall through to the quarantine/replay path
+  // instead of answering 'transient' forever.
   if (fs.existsSync(mainDb) && sqliteHeaderOk(mainDb)) {
+    if (!replayPending) {
     if (typeof retryInit === 'function') {
       try {
         const retried = retryInit()
@@ -189,6 +237,8 @@ function attemptDbRecovery (ud, retryInit) {
     }
     // No retry hook available: still never rename a header-healthy DB on an existence-only guess.
     return { source: 'transient', label: 'transient init failure; SQLite header intact (no rename performed)' }
+    }
+    logWarn('[dbRecovery] recovery-pending sentinel + parseable critical backup: header-intact todos.db is the empty shell of an interrupted recovery — quarantining it and replaying the JSON restore')
   }
   // P2 (dw wave5 2026-09-24): an ENCRYPTED db (db.key present) starts with ciphertext, so the
   // plaintext-magic guard above is always false for it — the old code treated every encrypted db
@@ -224,15 +274,8 @@ function attemptDbRecovery (ud, retryInit) {
       return { source: 'transient', label: declinedLabel }
     }
   }
-  // Confirm a recoverable source exists before renaming: transient IO errors (disk full/lock held) also make init fail; renaming unconditionally
-  // would mislabel the user's current database as .corrupt and fall back to a stale backup or even an empty DB
-  const plainBakExists = fs.existsSync(path.join(ud, 'todos.db.plain-bak'))
-  // P2 fix (2026-09-26, json-exists-vs-parseable): an existing-but-unparseable JSON no longer
-  // counts as a recoverable source — the old existence-only check produced a source:'json'
-  // "recovery" that re-inited an EMPTY DB and outranked a usable plain-bak.
-  const jsonPath = criticalBackupPath(ud)
-  const jsonFileExists = fs.existsSync(jsonPath)
-  const jsonExists = jsonFileExists && backupJsonParseable(jsonPath)
+  // (plainBakExists / jsonPath / jsonExists are computed above the healthy-header guard — the
+  // Sync-4/Sync-17 sentinel bypass needs them before that early-return.)
   if (!plainBakExists && !jsonExists) return null
   // P1 2026-09-20: quarantine used to swallow rename failures (`catch {}`) and then fall through
   // to copying the backup OVER a possibly-locked/possibly-open target — a silent recovery loop
@@ -351,7 +394,15 @@ function restoreMetaEntriesFromCriticalBackup (raw, metaPut) {
 /** todoState re-import: merge todoList+recycleList, filter rows without taskId. Returns the number imported.
  *  Adversarial-round fix: a missing upsertTasks callback with a NON-empty list used to return
  *  list.length while importing nothing — a lie that could open the caller's restoredN>0 gate
- *  (bak-file cleanup) on a restore that touched zero rows. No callback ⇒ honest 0. */
+ *  (bak-file cleanup) on a restore that touched zero rows. No callback ⇒ honest 0.
+ *  Sync-14 (restore re-stamp doctrine — parity with the B2 filter/plan restores and the D11
+ *  finding-6 category restore): rows used to be re-imported with their BACKUP-era stamps, so
+ *  on a LAN peer holding newer rows the restore lost LWW instantly and the "recovered" data
+ *  was immediately overwritten. Doctrine: a restored LIVE row re-stamps updateTime fresh
+ *  (restore = the backup's data must win); a restored TOMBSTONE keeps its backup deletedAt
+ *  (or the epoch-oldest 1 when absent) with updateTime 1, so a peer that legitimately
+ *  re-created the todo after the backup wins the next LWW round (the deletion must not
+ *  un-delete the peer's newer work). */
 function restoreTodoRowsFromCriticalBackup (raw, upsertMany) {
   // todoState has two real shapes: the renderer's writeCriticalBackup stores a JSON string (nested via JSON.stringify),
   // while some old drill data is an object. Previously only objects were accepted — real disaster backups would silently import 0 rows (confirmed by the round-trip test 2026-09-01).
@@ -359,7 +410,15 @@ function restoreTodoRowsFromCriticalBackup (raw, upsertMany) {
   if (todoState === null) return 0 // schemaV too high: skip the task segment, process the rest as usual
   const list = ((todoState.todoList || []).concat(todoState.recycleList || [])).filter(t => t && t.taskId)
   if (typeof upsertMany !== 'function') return 0 // cannot import → never claim the count
-  if (list.length) upsertMany(list)
+  if (list.length) {
+    const now = Date.now()
+    upsertMany(list.map(t => {
+      const deleted = !!(t.delete || t.deleted)
+      return deleted
+        ? { ...t, delete: 1, deletedAt: t.deletedAt || 1, updateTime: 1 }
+        : { ...t, updateTime: now }
+    }))
+  }
   return list.length
 }
 
@@ -419,34 +478,60 @@ function restoreHabitsBlobFromCriticalBackup (raw, habitsPut) {
  *  filterPutMany / planPutMany / habitsPut so startup recovery now re-imports the SAME segment set
  *  the UI restore accepts (saved filters / schedule chips / habits used to be silently dropped).
  *  Still not restored on this path: settingsState — renderer-owned semantics (see RESTORE_SEGMENTS). */
-function restoreTasksFromCriticalBackup (ud, upsertTasks, upsertCategory, appendTomatoRecords, extraCbs) {
+/** Sync-3 (D12 2026-10-01): per-segment restore WITH an honest per-segment success report.
+ *  The old restoreTasksFromCriticalBackup swallowed per-segment failures and returned ONLY the
+ *  todoState task count, so index.js's jsonRestoreProved gate ("restoredN > 0") could delete
+ *  todos.db.plain-bak — the user's only other copy — while chips/filters/meta segments had just
+ *  failed to import. That loss is irreversible. Returns:
+ *    tasks               task-row count (the same number the legacy return carried)
+ *    imported            total rows imported across ALL segments
+ *    perSegment          { segName: count }
+ *    failedSegments      segments whose importer threw
+ *    unconsumedSegments  segments whose payload exists in the backup but imported 0 (conservative:
+ *                        a legitimately-empty payload also lands here — keeping todos.db.plain-bak
+ *                        on disk is always the safe side of this gate)
+ *    proved              true only when something was imported AND no segment failed or was left
+ *                        unconsumed — index.js gates the plain-bak cleanup on THIS flag. */
+function restoreSegmentsFromCriticalBackup (ud, upsertTasks, upsertCategory, appendTomatoRecords, extraCbs) {
   const cbs = Object.assign(
     { upsertTasks, upsertCategory, appendTomatoRecords },
     extraCbs || {}
   )
+  const result = { tasks: 0, imported: 0, perSegment: {}, failedSegments: [], unconsumedSegments: [], proved: false }
+  let raw
   try {
-    const raw = JSON.parse(fs.readFileSync(criticalBackupPath(ud), 'utf8'))
-    let tasks = 0 // the return value stays the TASK count (index.js's restoredN gate + dialog copy read it)
-    for (const entry of RESTORE_SEGMENTS) {
-      try {
-        const cb = entry.enable(cbs)
-        if (typeof cb !== 'function') continue
-        const n = entry.restore(raw, cb) || 0
-        if (entry.seg === 'todoState') tasks = Math.max(0, n)
-      } catch (e) {
-        // one segment failing must not drag the others down
-        logWarn('[dbRecovery] segment', entry.seg, 'restore failed:', e && e.message)
-      }
-    }
-    return tasks
+    raw = JSON.parse(fs.readFileSync(criticalBackupPath(ud), 'utf8'))
   } catch (e) {
-    // P1 (R4 2026-09-21): the swallowed error used to make a failed restore indistinguishable
-    // from an empty backup — the caller then deleted todos.db.plain-bak on a "successful"
-    // recovery that imported nothing, permanently destroying the last usable backup. Log it
-    // (still return 0; the caller's restoredN > 0 gate keeps the bak file alive).
-    logWarn('[dbRecovery] restoreTasksFromCriticalBackup failed (0 rows imported):', e && e.message)
-    return 0
+    // P1 (R4 2026-09-21): a failed restore must never read as restore-proof — the caller's
+    // proved gate keeps the bak file alive.
+    logWarn('[dbRecovery] restoreSegmentsFromCriticalBackup failed (0 rows imported):', e && e.message)
+    return result
   }
+  for (const entry of RESTORE_SEGMENTS) {
+    const cb = entry.enable(cbs)
+    if (typeof cb !== 'function') continue
+    const hadPayload = !!(raw && raw.backup && raw.backup[entry.seg] != null)
+    try {
+      const n = entry.restore(raw, cb) || 0
+      result.perSegment[entry.seg] = n
+      result.imported += n
+      if (entry.seg === 'todoState') result.tasks = Math.max(0, n) // legacy contract: the TASK count
+      if (hadPayload && n === 0) result.unconsumedSegments.push(entry.seg)
+    } catch (e) {
+      // one segment failing must not drag the others down — but it must be REPORTED
+      result.perSegment[entry.seg] = 0
+      result.failedSegments.push(entry.seg)
+      if (entry.seg === 'todoState') result.tasks = 0
+      logWarn('[dbRecovery] segment', entry.seg, 'restore failed:', e && e.message)
+    }
+  }
+  result.proved = result.imported > 0 && result.failedSegments.length === 0 && result.unconsumedSegments.length === 0
+  return result
+}
+
+/** Legacy shim: same task-count return the historical callers/tests assert on. */
+function restoreTasksFromCriticalBackup (ud, upsertTasks, upsertCategory, appendTomatoRecords, extraCbs) {
+  return restoreSegmentsFromCriticalBackup(ud, upsertTasks, upsertCategory, appendTomatoRecords, extraCbs).tasks
 }
 
 /** Ledger restore: backup.tomatoRecords is the row-table row set (JSON string or array). Rows missing tomatoId/endTime are skipped;
@@ -566,4 +651,4 @@ function jsonRestoreAllowed (recoveredFrom, reinitErr) {
   return !!(recoveredFrom && recoveredFrom.source === 'json' && !reinitErr)
 }
 
-module.exports = { attemptDbRecovery, restoreTasksFromCriticalBackup, writeCriticalStateBackupAtomic, criticalBackupPath, backupJsonParseable, restoreCategoriesFromCriticalBackup, restoreTomatoRecordsFromCriticalBackup, restoreMetaEntriesFromCriticalBackup, quarantineKey, sqliteHeaderOk, encryptedProbe, preflightMigrateResidue, sweepPendingDeletes, recoveryDialogAction, jsonRestoreAllowed, loadVendorDriver, RESTORE_SEGMENT_NAMES }
+module.exports = { attemptDbRecovery, restoreTasksFromCriticalBackup, restoreSegmentsFromCriticalBackup, writeCriticalStateBackupAtomic, criticalBackupPath, backupJsonParseable, restoreCategoriesFromCriticalBackup, restoreTomatoRecordsFromCriticalBackup, restoreMetaEntriesFromCriticalBackup, quarantineKey, sqliteHeaderOk, encryptedProbe, preflightMigrateResidue, sweepPendingDeletes, recoveryDialogAction, jsonRestoreAllowed, loadVendorDriver, RESTORE_SEGMENT_NAMES, recoveryPendingPath, markRecoveryPending, clearRecoveryPending, hasRecoveryPending }

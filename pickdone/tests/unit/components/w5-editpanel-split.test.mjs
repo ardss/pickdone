@@ -35,7 +35,8 @@ test('split: children never touch the save pipeline (emit-only contract)', () =>
 
 test('split: children declare their change events', () => {
   assert.match(read(KIDS[0]), /emits: \['commit', 'clear', 'offsets'\]/)
-  assert.match(read(KIDS[1]), /emits: \['add', 'toggle', 'remove', 'move'\]/)
+  // [R2] 'rename' joined the contract: EpSubtasks' inline rename editor commits via the emit
+  assert.match(read(KIDS[1]), /emits: \['add', 'toggle', 'remove', 'move', 'rename'\]/)
   assert.match(read(KIDS[2]), /emits: \['pick', 'preview', 'remove'\]/)
   assert.match(read(KIDS[3]), /emits: \['patch'\]/)
 })

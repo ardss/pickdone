@@ -149,7 +149,14 @@ export default {
         const [h, m] = String(r.time).split(':').map(Number)
         list.push(dayjs(baseDay).hour(h || 0).minute(m || 0).second(0).millisecond(0).valueOf())
       }
-      if (!list.length) { this.clearRemind(); return }
+      // [R5 null-time retention] an all-null commit (e.g. the user cleared the time picker on the only
+      // row) must NOT close the popover: that wiped the uncommitted row and the user's in-progress edit.
+      // Clear the reminder only when the editor itself is empty (every row removed via ✕); rows still
+      // being edited stay in the editor exactly like the single null-time case above.
+      if (!list.length) {
+        if (!this.remindRows.length) this.clearRemind()
+        return
+      }
       list.sort((a, b) => a - b)
       this.$emit('commit', list[0], list.slice(1))
     },

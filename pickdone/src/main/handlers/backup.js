@@ -120,12 +120,28 @@ module.exports = function backupHandlers (ctx) {
         // P3 fix (2026-09-25): name-space exhaustion used to hand back an ALREADY-TAKEN name and the
         // atomic write silently clobbered that existing snapshot while still returning {ok:true}.
         if (!name) return { ok: false, error: 'snapshot name space exhausted (900 same-tag names taken)' }
+        // Sync-9/Fault-15 (D12 2026-10-01): housekeeping (stale .tmp sweep + GFS prune) now runs
+        // BEFORE the dedup early-return and across BOTH tiers. The old order had two leaks: (a) a
+        // content-dedup hit returned before the sweep/prune ran, so unchanged data meant the
+        // backup dir NEVER aged (GFS anchor rotation starved → unbounded growth); (b) the file
+        // list was tag-filtered (o.tag ? /^evt-/ : both), so an evt run never pruned the auto
+        // tier. selectPrunes keeps the newest of each tier (recent N + daily/weekly anchors), so
+        // pruning the pre-write snapshot list can never drop the dedup twin or the freshest point.
+        const existing = fixUtil.sortBackupNamesNewestFirst(fs.readdirSync(dir).filter(f => /^(auto|evt)-/.test(f)))
+        try {
+          const stale = autoBackup.selectStaleTmp(fs.readdirSync(dir).map(f => {
+            try { return { name: f, mtimeMs: fs.statSync(path.join(dir, f)).mtimeMs } } catch { return null }
+          }))
+          for (const dead of stale) { try { fs.rmSync(path.join(dir, dead), { force: true }) } catch {} }
+        } catch { /* sweep is best-effort */ }
+        // Both tiers, regardless of this run's tag — the two tiers age on ONE shared directory.
+        const pruneList = existing
+        for (const dead of autoBackup.selectPrunes(pruneList, o)) { try { fs.unlinkSync(path.join(dir, dead)) } catch {} }
         // Content dedup: only compare against the newest file OF THE SAME TAG (D11 finding 17 —
         // see newestSameTag). (The original implementation compared against any old file — when the data was changed back to its original state
         // it would return dedup without writing the new snapshot, yet prune would delete that old snapshot → that point in time ends up with no backup)
         // 排序按名字内嵌时间戳(2026-09-10 P2):字典序 sort() 让 'auto-' 排在同日 'evt-…' 之后/之前错位,
         // 去重会拿一个陈旧文件当"最新"比对 → 误判 dedup 丢快照。复用 fix-util 的纯排序(与 autoBackup.nameToTs 同规则)。
-        const existing = fixUtil.sortBackupNamesNewestFirst(fs.readdirSync(dir).filter(f => /^(auto|evt)-/.test(f)))
         const twin = newestSameTag(existing, tag)
         if (twin) {
           try {
@@ -138,17 +154,6 @@ module.exports = function backupHandlers (ctx) {
         // file is cleaned up inline (P2 2026-09-17) and the structured error is returned
         const w = atomicWriteJson(fs, dir, name, jsonText)
         if (!w.ok) return { ok: false, error: w.error }
-        // P2 2026-09-11: sweep interrupted .tmp-* residue — a crash between writeFileSync and renameSync
-        // used to accumulate temp files in the backup dir forever (the prune filter below only matches
-        // ^(auto|evt)-). Only files older than 1h are swept, so a concurrent in-flight write is safe.
-        try {
-          const stale = autoBackup.selectStaleTmp(fs.readdirSync(dir).map(f => {
-            try { return { name: f, mtimeMs: fs.statSync(path.join(dir, f)).mtimeMs } } catch { return null }
-          }))
-          for (const dead of stale) { try { fs.rmSync(path.join(dir, dead), { force: true }) } catch {} }
-        } catch { /* sweep is best-effort */ }
-        const files = fs.readdirSync(dir).filter(f => (o.tag ? /^evt-/.test(f) : /^(auto|evt)-/.test(f)))
-        for (const dead of autoBackup.selectPrunes(files, o)) { try { fs.unlinkSync(path.join(dir, dead)) } catch {} }
         return { ok: true, file: name }
       } catch (err) { return { ok: false, error: String(err && err.message || err) } }
     },

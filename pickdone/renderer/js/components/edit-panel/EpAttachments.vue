@@ -103,6 +103,14 @@ export default {
           const EP = (window as any).ElementPlus
           if (EP && EP.ElMessage) EP.ElMessage({ type: 'warning', message: (this as any).$t('statsJ.EditPanel.attachmentMissing'), duration: 6000, showClose: true })
         }
+        // Fault-7 (D12): the main handler now maps shell.openPath's error-string resolution to a
+        // structured { ok:false, error } instead of claiming success — surface it; the old code
+        // silently did nothing when the OS refused the open.
+        if (r && r.error) {
+          const EP = (window as any).ElementPlus
+          logger.error('open-file failed: ' + r.error)
+          if (EP && EP.ElMessage) EP.ElMessage({ type: 'error', message: r.error, duration: 6000, showClose: true })
+        }
       }).catch((err) => {
         // Invoke-level failure (e.g. the locked gate in main/handlers/attachments.js 'open-file',
         // or a dead IPC bridge). The old empty catch claimed these "keep their existing reporting

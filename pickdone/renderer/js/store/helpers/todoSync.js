@@ -5,7 +5,7 @@
  */
 import { reportError } from '../../utils/core.js'
 import { commit as commitCommand } from '../../utils/commandBus.js'
-import { queuePendingUpsert } from './todoPendingUpserts.js'
+import { queuePendingUpsert, isStaleBatchError, supersedePendingBatch } from './todoPendingUpserts.js'
 import { deproxyRows } from './todoViews.js'
 
 export async function syncTodosCore ({ state, commit, dispatch }) {
@@ -56,11 +56,21 @@ export async function syncTodosCore ({ state, commit, dispatch }) {
     // batch already persisted these rows, so re-enqueueing would replay a doomed batch forever
     // (every quit flush). Drop it; the rows in memory are already acked by the newer batch.
     // Any other failure (IO/lock/transient) keeps the retry-enqueue below.
-    const staleBatch = !!(err && /stale batch rejected/.test(String(err.message || err)))
+    // [Fault-1] the stale-batch shape check is the shared isStaleBatchError predicate
+    // (todoPendingUpserts.js) instead of a private inline regex.
+    const staleBatch = isStaleBatchError(err)
+    if (staleBatch) {
+      // [Fault-1 stale splice] a PREVIOUS failure of this same version may already have queued the
+      // doomed batch for quit-flush replay — a stale rejection proves it can never succeed, so
+      // splice it out of the queue instead of leaving it to be rejected on every flush.
+      supersedePendingBatch(serverV)
+    }
     // Enqueue for retry like reorderTodos/safeUpsert (round-6 leftover): rows stay dirty in memory,
     // but the quit-flush replay needs the op verbatim to survive a close-before-retry
+    // [Fault-2] the new batch supersedes any older queued batch copies (same version retries queue
+    // twice otherwise, and an older-version copy would replay doomed forever)
     if (!staleBatch && snapshot.length) {
-      try { queuePendingUpsert({ op: 'commitSyncBatch', params: { rows: deproxyRows(snapshot), version: serverV } }) } catch { /* keep the UI flow alive */ }
+      try { supersedePendingBatch(serverV); queuePendingUpsert({ op: 'commitSyncBatch', params: { rows: deproxyRows(snapshot), version: serverV } }) } catch { /* keep the UI flow alive */ }
     }
   } finally {
     commit('setSyncing', false)

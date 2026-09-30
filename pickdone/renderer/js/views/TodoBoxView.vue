@@ -14,7 +14,7 @@
         <div class="title__append">
           <div class="dropdown-select" :class="{ 'is-open': openDd === 'sort' }">
             <el-popover ref="popSort" placement="bottom-start" width="160" trigger="click" :hide-after="0" popper-class="dd-pop" @show="openDd = 'sort'" @hide="openDd = null">
-              <ul class="dd-menu" role="listbox" :aria-label="$t('statsC.TodoBox.tip')" @keydown="ddMenuKey($event, 'popSort')">
+              <ul class="dd-menu" role="listbox" :aria-label="$t('statsC.TodoBox.ariaSortList')" @keydown="ddMenuKey($event, 'popSort')">
                 <li v-for="m in sortMethodOptions" :key="m.value" tabindex="0" role="option" :aria-selected="m.value === settings.todoBoxSortMethod ? 'true' : 'false'"
                     :class="{ on: m.value === settings.todoBoxSortMethod }" @click="setSort(m.value)" @keydown.enter.prevent="setSort(m.value)">{{ m.label }}</li>
               </ul>
@@ -23,7 +23,7 @@
           </div>
           <div class="dropdown-select" :class="{ 'is-open': openDd === 'order' }">
             <el-popover ref="popOrder" placement="bottom-start" width="120" trigger="click" :hide-after="0" popper-class="dd-pop" @show="openDd = 'order'" @hide="openDd = null">
-              <ul class="dd-menu" role="listbox" :aria-label="$t('statsC.TodoBox.tip')" @keydown="ddMenuKey($event, 'popOrder')">
+              <ul class="dd-menu" role="listbox" :aria-label="$t('statsC.TodoBox.ariaOrderList')" @keydown="ddMenuKey($event, 'popOrder')">
                 <li v-for="o in sortOrderOptions" :key="o.value" tabindex="0" role="option" :aria-selected="o.value === settings.todoBoxSortOrder ? 'true' : 'false'"
                     :class="{ on: o.value === settings.todoBoxSortOrder }" @click="setOrder(o.value)" @keydown.enter.prevent="setOrder(o.value)">{{ o.label }}</li>
               </ul>
@@ -32,7 +32,7 @@
           </div>
           <div class="dropdown-select" :class="{ 'is-open': openDd === 'cat' }">
             <el-popover ref="popCat" placement="bottom-start" width="180" trigger="click" :hide-after="0" popper-class="dd-pop" @show="openDd = 'cat'" @hide="openDd = null">
-              <ul class="dd-menu" role="listbox" :aria-label="$t('statsC.TodoBox.tip')" @keydown="ddMenuKey($event, 'popCat')">
+              <ul class="dd-menu" role="listbox" :aria-label="$t('statsC.TodoBox.ariaCatList')" @keydown="ddMenuKey($event, 'popCat')">
                 <li :class="{ on: settings.todoBoxCategoryId === -1 }" tabindex="0" role="option" :aria-selected="settings.todoBoxCategoryId === -1 ? 'true' : 'false'" @click="setCat(-1)" @keydown.enter.prevent="setCat(-1)">{{ $t('statsC.TodoBox.allCats') }}</li>
                 <li v-for="c in cats" :key="c.categoryId" tabindex="0" role="option" :aria-selected="c.categoryId === settings.todoBoxCategoryId ? 'true' : 'false'"
                     :class="{ on: c.categoryId === settings.todoBoxCategoryId }" @click="setCat(c.categoryId)" @keydown.enter.prevent="setCat(c.categoryId)">{{ c.categoryName }}</li>
@@ -82,7 +82,9 @@
             </template>
           </el-dropdown>
           <button class="mini danger" :disabled="batchBusy" @click="batchDelete">{{ $t('statsC.TodoBox.btnDelete') }}</button>
-          <button class="mini" @click="toggleBatch">{{ $t('statsC.TodoBox.btnDone') }}</button>
+          <!-- [R6] Done (exit batch) is gated by the same batchBusy lock as its siblings: while an
+               awaited batch op is in flight, exiting wiped checkedIds mid-loop and desynced the bar -->
+          <button class="mini" :disabled="batchBusy" @click="toggleBatch">{{ $t('statsC.TodoBox.btnDone') }}</button>
         </div>
       </transition>
     </div>

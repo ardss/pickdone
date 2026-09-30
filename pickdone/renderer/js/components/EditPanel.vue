@@ -103,7 +103,7 @@
         </template>
       </div>
 
-      <ep-subtasks :subs="subList" @add="addSub" @toggle="toggleSub" @remove="delSub" @move="moveSub"/>
+      <ep-subtasks :subs="subList" @add="addSub" @toggle="toggleSub" @remove="delSub" @move="moveSub" @rename="renameSub"/>
 
       <div class="ep-row ep-prio">
         <img class="ep-ico" src="app://app/assets/img/icon-tune.svg" style="opacity:.6">
@@ -607,6 +607,15 @@ export default {
       this.markDirty('subtasks'); this.queueSave({})
       // [maint-0925 A8] screen-reader feedback, same sentence as the row-level reorder (TodoItem.keyboardMove)
       this.$announce && this.$announce(this.$t(dir > 0 ? 'statsJ.TodoItem.moveDownAnnounce' : 'statsJ.TodoItem.moveUpAnnounce', { t: (this.subList[j] && this.subList[j].text) || '' }))
+    },
+    // [R2] subtask inline rename (EpSubtasks 'rename' emit): rewrite the row text and run it through
+    // the same unified save pipeline as add/toggle/move
+    renameSub (i, text) {
+      const sub = this.subList[i]
+      const t = (text || '').trim()
+      if (!sub || !t || sub.text === t) return
+      sub.text = t
+      this.markDirty('subtasks'); this.queueSave({})
     },
     /* Actual = total of this task's focus records; click = open the ledger detail (add/remove/modify entries, totals reconcile automatically) */
     openAccount () {

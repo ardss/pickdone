@@ -9,8 +9,10 @@
       <span class="ep-tag-x close-x" role="button" tabindex="0" :title="$t('statsJ.EditPanel.removePrefix') + t" :aria-label="$t('statsJ.EditPanel.removeTag', { t: t })"
             @click.stop="$emit('remove', t)" @keydown.enter.prevent.stop="$emit('remove', t)"></span>
     </span>
+    <!-- [R15] Enter-only commit: @blur used to fire addTag on click-away, silently rewriting the
+         task title mid-drag / mid-IME. The IME guard lives in onTagEnter (keydown sees the 229 flag). -->
     <input class="ep-tag-input" v-model="tagInput" :placeholder="$t('statsJ.EditPanel.addTagHint')" :aria-label="$t('statsJ.EditPanel.addTag')"
-           @keydown.enter.prevent="onTagEnter" @blur="addTag"/>
+           @keydown.enter.prevent="onTagEnter"/>
   </div>
 </template>
 

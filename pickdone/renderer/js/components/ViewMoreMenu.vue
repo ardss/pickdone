@@ -85,6 +85,21 @@ export default {
         }
       })
     },
+    // [R13] single close path that returns focus to the ⋮ trigger: the menu used to close with the
+    // trigger unreached on every path except Escape (item click, outside mousedown), dropping
+    // keyboard users at <body> after activating a menu item. The OUTSIDE-mousedown closer opts out
+    // (closeMenu(false)): that user clicked elsewhere on the page — silently yanking focus (and
+    // possibly scroll-into-view) back to the ⋮ button is a surprise; their focus already moved to
+    // whatever they clicked.
+    closeMenu (refocus = true) {
+      if (!this.open) return
+      this.open = false
+      if (!refocus) return
+      this.$nextTick(() => {
+        const btn = this.$el && this.$el.querySelector('.view-more-btn')
+        if (btn) btn.focus()
+      })
+    },
     onMenuKeydown (e) {
       const items = [...this.$el.querySelectorAll('.vm-item[tabindex="0"]')]
       if (!items.length) return
@@ -97,9 +112,7 @@ export default {
         items[(idx - 1 + items.length) % items.length].focus()
       } else if (e.key === 'Escape') {
         e.preventDefault()
-        this.open = false
-        const btn = this.$el.querySelector('.view-more-btn')
-        if (btn) btn.focus()
+        this.closeMenu()
       }
     },
     isActive (it) {
@@ -116,10 +129,11 @@ export default {
         this.$store.commit('settings/updateSettings', { sortMode: SORT_VALUE[it.labelKey] })
         this.$store.dispatch('todo/computeViews')
       }
-      this.open = false
+      // [R13] same focus-return close path as Escape (item activation used to strand focus)
+      this.closeMenu()
     },
     onDocDown (e) {
-      if (this.open && !e.target.closest('.view-more-pop') && !e.target.closest('.view-more-btn')) this.open = false
+      if (this.open && !e.target.closest('.view-more-pop') && !e.target.closest('.view-more-btn')) this.closeMenu(false)
     }
   },
   mounted () { document.addEventListener('mousedown', this.onDocDown, true) },
