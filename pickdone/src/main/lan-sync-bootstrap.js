@@ -101,7 +101,7 @@ function ensureIdentity () {
  * the delegates below bind the bootstrap's module-level `state` singleton to it. */
 const syncApply = require('./sync-apply')
 const { SYNC_OPLOG_KEEP, oplogKeepLimit } = require('./db-oplog') // D3 2026-09-24: oplog page size derives from the ring retention (was bare 10000s)
-const { isMachineLocalSettingKey, isMachineLocalMetaKey, isSyncBlobMetaKey } = syncApply
+const { isMachineLocalSettingKey } = syncApply
 const createHydrationCache = () => syncApply.createHydrationCache(state)
 const hydrateRow = (ptr, cache) => syncApply.hydrateRow(state, ptr, cache)
 const localUserId = () => syncApply.localUserId(state)
@@ -167,17 +167,14 @@ function createLocalStoreAdapter () {
       for (const f of state.db.call('filterList', {}) || []) out.push({ entity: 'filter', id: String(f.id), updatedAt: f.updatedAt || 0, deleted: false, deletedAt: 0, data: f })
       for (const t of state.db.call('filterTombstones', {}) || []) out.push({ entity: 'filter', id: String(t.id), updatedAt: t.updatedAt || 0, deleted: true, deletedAt: t.deletedAt || 0, data: null })
       // Meta entity (GAP-A fix 2026-09-19): meta has no list-read op (db.js is size-ratcheted), so
-      // syncable meta keys are enumerated from their oplog pointers (latest local ts per key, one
-      // paged oplog scan) and read via getMeta. Legacy pre-oplog meta keys are not covered here — they
-      // surface once any device rewrites them; meta tombstones propagate via increments only (a pointer whose value is already gone reads as deleted in hydrateRow).
-      const metaCache = syncApply.createHydrationCache(state)
-      const metaTs = metaCache.metaTs()
-      for (const key of metaTs.keys()) {
-        if (isMachineLocalMetaKey(key) || isSyncBlobMetaKey(key)) continue
-        const v = metaCache.meta(key)
-        if (v == null) continue // deleted: tombstones are carried by the increment pointers
-        out.push({ entity: 'meta', id: key, updatedAt: metaTs.get(key) || 0, deleted: false, deletedAt: 0, data: { key, value: v } })
-      }
+      // syncable meta keys used to be enumerated from their oplog pointers only — a live key whose
+      // pointers fell out of the ring never appeared in a snapshot AND was refused on ingress
+      // (B13 age-unknown gate): unsyncable in both directions until a local rewrite. D11 finding 4:
+      // enumeration moved to sync-apply.metaSnapshotRows — the meta TABLE (listMetaKeys) with the
+      // retained-pointer age, or the ring-floor bound for a trimmed key (paired ingress rule there).
+      // Meta tombstones still propagate via increments only (a pointer whose value is already gone
+      // reads as deleted in hydrateRow).
+      for (const row of syncApply.metaSnapshotRows(state)) out.push(row)
       return out
     },
     /** Fresh-device path. P3a: merge-apply (non-destructive) — see header scope cuts. */

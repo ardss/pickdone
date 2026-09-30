@@ -87,7 +87,7 @@ Write commands:
   sync unpair --device <id>      unpair a peer (rotates the shared secret — every remaining peer must re-pair)
   open   [--dev]                  launch App (brings existing window to front if already running)
   doctor                          environment self-check (data dir/driver/rw scale)
-  clean  [--all] [--dry-run]      clean regenerable test/dev residue: %TEMP% isolation dirs, tests/.artifacts, .dev-data (and --all: extra dev dirs; never touches real user data)
+  clean  [--all] [--dry-run] [--yes]   clean regenerable test/dev residue: %TEMP% isolation dirs, tests/.artifacts, .dev-data (--dry-run to preview, --yes to execute; --all also includes the legacy pickdone-backups repo-tree leak; never touches real user data)
   restore-backup [path]           list auto snapshots (userData/backups + legacy pickdone-backups) or validate one and show how to restore (read-only, never touches the DB)
 
 Global options:

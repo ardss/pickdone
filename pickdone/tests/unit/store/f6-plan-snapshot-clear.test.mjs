@@ -68,7 +68,12 @@ test('F6: clear-date via undo replay persists a chip snapshot meta that a later 
   // undo the clear: restoreSnapshot (the chain's effect) must bring the chips back from that meta
   await planChips.restoreSnapshot('t1')
   await drain()
-  assert.deepEqual(chips, [{ id: 'c1', taskId: 't1', day: '2026-09-04', mm: '09:00' }], 'chips restored from snapshot')
+  // [LWW re-stamp fix] restored chips keep their id/day/mm but carry a FRESH updatedAt — the old
+  // verbatim write replayed the pre-delete stamp and lost LAN LWW to the delete's fresh tombstone
+  assert.equal(chips.length, 1, 'chips restored from snapshot')
+  const { updatedAt, ...rest } = chips[0]
+  assert.deepEqual(rest, { id: 'c1', taskId: 't1', day: '2026-09-04', mm: '09:00' })
+  assert.ok(Number(updatedAt) > 1e12, 'restored chip re-stamped fresh (' + updatedAt + ')')
   assert.ok(!('planChipsSnapshot:t1' in meta), 'snapshot meta row consumed via deleteMeta (D5 2026-09-20; no setMeta tombstone)')
 })
 

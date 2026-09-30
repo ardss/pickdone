@@ -13,7 +13,7 @@
           <div v-if="timeline" class="tfr-timeline">
             <div class="tfr-timeline__head">
               <span class="tfr-timeline__nav">
-                <button type="button" class="tfr-nav-btn" :aria-label="$t('statsD.TomatoFocusRecord.prevDay')" :disabled="false" @click="tlOffset--">‹</button>
+                <button type="button" class="tfr-nav-btn" :aria-label="$t('statsD.TomatoFocusRecord.prevDay')" :disabled="tlOffset <= TL_MIN_OFFSET" @click="tlOffset--">‹</button>
                 <span class="tfr-timeline__date">{{ timeline.label }}{{ tlOffset===0 ? $t('statsD.TomatoFocusRecord.todaySuffix') : (tlOffset===-1 ? $t('statsD.TomatoFocusRecord.yesterdaySuffix') : '') }}</span>
                 <button type="button" class="tfr-nav-btn" :aria-label="$t('statsD.TomatoFocusRecord.nextDay')" :disabled="tlOffset>=0" @click="tlOffset++">›</button>
               </span>
@@ -140,6 +140,10 @@ export default {
       addSaving: false,
       menuRecord: null as any,
       tlOffset: 0,
+      // [tomato-timeline-unbounded-prev-day fix] prev-day navigation used to decrement forever
+      // into empty days. Lower bound: 30 days back (tlOffset <= -30 disables the ‹ button),
+      // matching the ledger's practical review window.
+      TL_MIN_OFFSET: -30,
       expandedId: null as any,
       highlightId: null as any
     }

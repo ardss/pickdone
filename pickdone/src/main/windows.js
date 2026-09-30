@@ -5,7 +5,7 @@
 const { app, BrowserWindow, shell } = require('electron')
 const path = require('path')
 const fs = require('fs')
-const { crashRelaunchDecision, CRASH_RELAUNCH_CAP } = require('./handlers/shared')
+const { crashRelaunchDecision, CRASH_RELAUNCH_CAP, openExternalSafely } = require('./handlers/shared')
 
 /* ---- D10 (2026-09-27): persisted renderer-crash relaunch counter ----
  * crashReloadCount is in-memory and resets on did-finish-load AND on every app.relaunch() (fresh
@@ -93,7 +93,7 @@ function createWindowManager (ctx) {  const {
     win.webContents.setWindowOpenHandler(({ url }) => {
       // The blank print window (printList's window.open('', '_blank') followed by document.write injecting print content, no navigation) was once wrongly killed by the blanket deny
       if (!url || url === 'about:blank') return { action: 'allow' }
-      if (/^https?:/i.test(url)) { shell.openExternal(url) }
+      if (/^https?:/i.test(url)) { openExternalSafely(shell, url, log) } // D11 12-windows: rejection-logged, never an unhandled rejection
       return { action: 'deny' }
     })
     // The allowed about:blank child had NO navigation guard (2026-09-11 P1): injected script could
@@ -102,13 +102,13 @@ function createWindowManager (ctx) {  const {
     win.webContents.on('did-create-window', (child) => {
       child.webContents.on('will-navigate', (e2, u) => {
         e2.preventDefault()
-        if (/^https?:/i.test(u)) { try { shell.openExternal(u) } catch { /* best-effort */ } }
+        if (/^https?:/i.test(u)) { openExternalSafely(shell, u, log) } // D11 12-windows: the try/catch twin could not catch the async rejection
       })
       try { child.webContents.setWindowOpenHandler(() => ({ action: 'deny' })) } catch { /* older Electron */ }
     })
     // Intercept navigation to non-app:// protocols; XSS cross-origin guard
     win.webContents.on('will-navigate', (e, url) => {
-      if (!/^app:\/\/app\//i.test(url)) { e.preventDefault(); if (/^https?:/i.test(url)) shell.openExternal(url) }
+      if (!/^app:\/\/app\//i.test(url)) { e.preventDefault(); if (/^https?:/i.test(url)) openExternalSafely(shell, url, log) }
     })
     // 加载失败自愈(2026-09-10 P2,与浮窗 5 次重试同类):此前主窗 did-fail-load 只 log,加载失败后
     // 用户面对白屏/错误页永不恢复。对主框架、非 -3(ERR_ABORTED 良性中断)做 3 次退避 reload,

@@ -29,13 +29,17 @@ function mockState (tables = {}) {
 }
 const opCalls = (m, op) => m.calls.filter(c => c.op === op)
 
-test('B13: live meta key with NO oplog pointer (trimmed history) refuses the inbound row — age-0 LWW is gone', () => {
+test('B13: live meta key with NO oplog pointer (trimmed history) refuses an inbound stamp NOT provably newer than the ring floor', () => {
+  // D11 finding 4: the unconditional refusal became a FLOOR-BOUND rule — the trimmed pointer
+  // proves the local write happened at/before the oldest retained oplog ts (floor 0 on an empty
+  // ring), so only an inbound stamp <= floor stays refused; a stamp > floor is provably newer
+  // and lands (accept side covered in tests/unit/main/d11-meta-reconciliation.test.mjs).
   const m = mockState({
     getMeta: k => (k === 'projectCategoryIds' ? '[3,7]' : null),
-    syncOplogSince: () => [], // pointers trimmed away: local age unknown
+    syncOplogSince: () => [], // pointers trimmed away: local age unknown, floor = 0
   })
-  const ok = syncApply.applyRowSafe(m.state, { entity: 'meta', id: 'projectCategoryIds', seq: 9, ts: 999, updatedAt: 999, deleted: false, deletedAt: 0, data: { key: 'projectCategoryIds', value: 'stale-peer' } })
-  assert.equal(ok, false, 'age-unknown live key must NOT lose to a 0-age comparison')
+  const ok = syncApply.applyRowSafe(m.state, { entity: 'meta', id: 'projectCategoryIds', seq: 9, ts: 0, updatedAt: 0, deleted: false, deletedAt: 0, data: { key: 'projectCategoryIds', value: 'ambiguous-age' } })
+  assert.equal(ok, false, 'a stamp at/below the floor proves nothing — the live local value stands')
   assert.equal(opCalls(m, 'setMeta').length, 0, 'no write landed for the refused row')
 })
 

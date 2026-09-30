@@ -102,15 +102,41 @@ const { rowContentDiffers } = require('./sync-apply-content')
  * profile id (renderer utils/core.js loadLocalUser). Memoized per sync session: the local
  * account never changes while the node runs.
  */
+// D11 finding 16: durable memo for the discovered account id. The in-memory `state.localUserId`
+// dies with the process — an empty todos table on the NEXT session (user deleted every task, or a
+// restore landed before the first sync round) used to fall back to the 840001 offline default even
+// though this device's real account id was known before. 'sync.*' is machine-local
+// (shared/machine-local-keys.mjs), so the memo never egresses.
+const LOCAL_USER_ID_META_KEY = 'sync.localUserId'
+
 function localUserId (state) {
   if (state.localUserId != null) return state.localUserId
   try {
     for (const t of state.db.call('getAll', { deleted: null }) || []) {
-      if (t && t.userId != null) { state.localUserId = t.userId; return state.localUserId }
+      if (t && t.userId != null) {
+        state.localUserId = t.userId
+        persistLocalUserId(state, t.userId)
+        return state.localUserId
+      }
     }
+  } catch { /* fall through to the durable memo / default */ }
+  try {
+    const persisted = Number(state.db.call('getMeta', LOCAL_USER_ID_META_KEY))
+    if (Number.isFinite(persisted) && persisted > 0) { state.localUserId = persisted; return state.localUserId }
   } catch { /* fall through to the default */ }
   state.localUserId = 840001
   return state.localUserId
+}
+
+/** Best-effort durable write of a DISCOVERED id (never the 840001 guess — that is a default,
+ *  not evidence). Machine-local meta, so no sync round is kicked for it. Routes through the
+ *  bus facade like every sync-apply write (single-write-gate). */
+function persistLocalUserId (state, id) {
+  try {
+    if (Number(state.db.call('getMeta', LOCAL_USER_ID_META_KEY)) !== Number(id)) {
+      busWrite(state, 'setMeta', [LOCAL_USER_ID_META_KEY, String(id)])
+    }
+  } catch { /* the scan result still applies for this session */ }
 }
 
 /**
@@ -276,10 +302,22 @@ function applyRowInner (state, incoming) {
       // rewritten via setMeta on every tick and intentionally short-lived — their oplog pointers
       // trim almost immediately, so "age unknown" is their steady state, not a red flag. Staleness
       // is meaningless for a beacon, and the announce module dedups identical content itself.
-      log.warn('[LanSync] meta local age unknown (oplog pointer trimmed) for live key', incoming.id, '— inbound row refused this round (0-age LWW would let a stale peer value win)')
-      return false
+      // D11 finding 4 (meta snapshot reconciliation): the B13 unconditional refusal made a live
+      // user-data key whose oplog pointers fell out of the ring unsyncable FOREVER (snapshot rows
+      // pass through this same branch). The trimmed pointer still proves a bound: the local write
+      // happened at or before the ring's oldest retained ts (metaFloorTs). An inbound row stamped
+      // NEWER than that floor is provably younger than the local value — accept it (localRow age
+      // = floor, so the LWW comparison and the identical-content no-op stay sound). Only an
+      // inbound stamp at/below the floor stays refused (genuinely ambiguous); a local edit re-logs
+      // a pointer and makes the key comparable again.
+      if (stampNum(incoming.updatedAt) <= cache.metaFloorTs()) {
+        log.warn('[LanSync] meta local age unknown (oplog pointer trimmed) for live key', incoming.id, '— inbound row refused this round (stamp not provably newer than the trimmed-pointer floor)')
+        return false
+      }
+      localRow = { updatedAt: cache.metaFloorTs(), deleted: false, deletedAt: 0, data: { key: incoming.id, value: localVal } }
+    } else {
+      localRow = { updatedAt: tsMap.get(incoming.id) || 0, deleted: false, deletedAt: 0, data: { key: incoming.id, value: localVal } }
     }
-    localRow = { updatedAt: tsMap.get(incoming.id) || 0, deleted: false, deletedAt: 0, data: { key: incoming.id, value: localVal } }
   } else if (entity === 'tomato' || entity === 'plan' || entity === 'filter') {
     // Manifest-documented tombstone-fallback shape (TOMB_FALLBACK_LOOKUP): live row first, then
     // the entity's tombstone read. Per-entity history that forced this shape:
@@ -461,7 +499,10 @@ function applyRowInner (state, incoming) {
       // the (data-carrying) tombstone through the buffer would RESURRECT the row; land the
       // deletion through the dedicated tombstone op instead. Direct sync call: deletes are rare
       // and tiny, no bulk buffering needed.
-      busWrite(state, 'settingsRowDelete', { key: incoming.id })
+      // D11 finding 3: carry the winner's stamps — settingsRowDelete re-stamped local now, making
+      // the applied deletion strictly newer than the sender's (delete-ordering falsified on 3+
+      // devices, one extra echo round). Same contract as planRemoveIds/filterDelete (R7 P1-2).
+      busWrite(state, 'settingsRowDelete', { key: incoming.id, deletedAt: winner.deletedAt || incoming.deletedAt, updatedAt: winner.updatedAt })
       markAppliedSetting(state, incoming.id, undefined) // P1-2a: blob field dropped + hot-apply bookkeeping
       return true
     }
@@ -480,7 +521,9 @@ function applyRowInner (state, incoming) {
     if (winner.deleted && !winner.data) {
       // Tomato tombstone winner (hydrated from a pointer whose row is gone locally): land it via
       // the tombstone op. Direct sync call, same reasoning as settingsRowDelete above.
-      busWrite(state, 'tomatoRemoveByIds', [incoming.id])
+      // D11 finding 2: carry the winner's stamps — tomatoRemoveByIds re-stamped local now with the
+      // same delete-ordering/echo consequences as planRemoveIds before R7 P1-2.
+      busWrite(state, 'tomatoRemoveByIds', [{ tomatoId: incoming.id, deletedAt: winner.deletedAt || incoming.deletedAt, updatedAt: winner.updatedAt || incoming.updatedAt || winner.deletedAt || incoming.deletedAt }])
       return true
     }
     if (!winner.data) return false
@@ -752,6 +795,31 @@ function readMaxOplogSeq (state) {
   return since
 }
 
+/**
+ * D11 finding 4 (egress half of the meta reconciliation): snapshot rows for the meta entity used
+ * to be enumerated ONLY from retained oplog pointers (allRows' metaTs scan) — a live user-data key
+ * whose pointers fell out of the ring never appeared in a snapshot and never re-pushed as an
+ * increment: unsyncable in BOTH directions until a local rewrite. Enumerate from the meta TABLE
+ * instead (listMetaKeys), with the retained-pointer ts as the age and the ring's floor ts as the
+ * honest age BOUND for a trimmed key (the local write happened at or before the floor). Pair with
+ * the ingress bound rule in applyRowInner, this closes the permanent-starvation class. Excluded:
+ * machine-local meta, the settings/habits blobs (field-granular via the setting entity), and
+ * keys whose value is absent (their deletions ride the increment tombstones, as before).
+ */
+function metaSnapshotRows (state) {
+  const cache = createHydrationCache(state)
+  const tsMap = cache.metaTs()
+  const floor = cache.metaFloorTs()
+  const out = []
+  for (const key of state.db.call('listMetaKeys') || []) {
+    if (isMachineLocalMetaKey(key) || isSyncBlobMetaKey(key)) continue
+    const v = cache.meta(key)
+    if (v == null) continue // deleted: tombstones are carried by the increment pointers
+    out.push({ entity: 'meta', id: key, updatedAt: tsMap.get(key) || floor, deleted: false, deletedAt: 0, data: { key, value: v } })
+  }
+  return out
+}
+
 module.exports = {
   SYNCABLE_ENTITIES,
   SECURITY_LOCK_KEY,
@@ -768,6 +836,7 @@ module.exports = {
   isSyncBlobMetaKey,
   createHydrationCache,
   hydrateRow,
+  metaSnapshotRows,
   rowContentDiffers,
   localUserId,
   clampSkew,

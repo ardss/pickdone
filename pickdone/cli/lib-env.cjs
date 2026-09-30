@@ -5,6 +5,22 @@ const path = require('path')
 const fs = require('fs')
 const { spawn } = require('child_process')
 
+/** cli-7: deterministic packaged-app exe picker. `fs.readdirSync(...).find(...)` used to take the
+ *  FIRST .exe in raw directory order — on NTFS that is roughly creation order, so which binary a
+ *  packaged install launched depended on installer file-write order, and a non-app exe (uninstaller,
+ *  crashpad handler, updater) could win. Pure + exported for unit tests.
+ *  Preference order: exact productName/name match → first non-utility exe in lexicographic order. */
+const NON_APP_EXE = /uninstall|unins|setup|squirrel|crashpad|updater|elevator|installer/i
+function pickProductExe (names, productNames = []) {
+  const exes = (names || [])
+    .filter(n => typeof n === 'string' && n.toLowerCase().endsWith('.exe'))
+    .sort((a, b) => a.localeCompare(b))
+  const wanted = ['pickdone', ...productNames].filter(Boolean).map(s => String(s).toLowerCase() + '.exe')
+  for (const w of [...new Set(wanted)]) if (exes.includes(w)) return w
+  const apps = exes.filter(n => !NON_APP_EXE.test(n))
+  return apps[0] || null
+}
+
 module.exports = ({ open, CliError, userDataDir, assertIsolationForWrite }) => {
   /** Environment self-check (modeled on remctl doctor): driver/DB file/read-write/scale */
   function doctor () {
@@ -49,7 +65,13 @@ module.exports = ({ open, CliError, userDataDir, assertIsolationForWrite }) => {
     }
     // Packaged layout: __dirname = <install>\resources\cli → install root is two levels up
     const installRoot = path.dirname(path.dirname(__dirname))
-    const exe = fs.readdirSync(installRoot).find(f => f.toLowerCase().endsWith('.exe') && fs.statSync(path.join(installRoot, f)).isFile())
+    // cli-7: deterministic pick (product-name match first, non-utility exes sorted) instead of
+    // "first .exe in readdir order"
+    const pkg = (() => { try { return require('../package.json') } catch { return {} } })()
+    const exe = pickProductExe(
+      fs.readdirSync(installRoot, { withFileTypes: true }).filter(d => d.isFile()).map(d => d.name),
+      [pkg.productName, pkg.name]
+    )
     if (!exe) throw new CliError('app executable not found next to the install resources', 'NO_ELECTRON')
     const child = spawn(path.join(installRoot, exe), [], {
       cwd: installRoot, detached: true, stdio: 'ignore',
@@ -61,3 +83,6 @@ module.exports = ({ open, CliError, userDataDir, assertIsolationForWrite }) => {
 
   return { doctor, launchApp }
 }
+
+// pure helper exported at module level for direct unit testing (no factory deps)
+module.exports.pickProductExe = pickProductExe

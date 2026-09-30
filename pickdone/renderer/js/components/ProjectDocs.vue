@@ -39,7 +39,7 @@ export default {
   name: 'ProjectDocs',
   props: { catId: { type: Number, required: true } },
   data () {
-    return { docs: [] as any, activeId: '' as any, savedAt: 0, saveTimer: 0 as any, loadToken: 0 }
+    return { docs: [] as any, activeId: '' as any, savedAt: 0, saveFailed: false, saveTimer: 0 as any, loadToken: 0 }
   },
   created () { this._docsCatId = this.catId },
   computed: {
@@ -50,6 +50,9 @@ export default {
       return this.docs.find(d => d.id === this.activeId) || null
     },
     statusText () {
+      // Honest failure state: a failed setMeta shows a save-failed notice instead of a false
+      // "Saved HH:mm" stamp; the next queueSave/persist retries.
+      if (this.saveFailed) return this.$t('statsH.main.actionFailedMsg')
       if (!this.savedAt) return ''
       return this.$t('statsB.ProjectDocs.saved', { t: dayjs(this.savedAt).format(FMT.time) })
     }
@@ -89,9 +92,14 @@ export default {
       const keyCat = Number(String(key).slice('projectDocs:'.length))
       if (this._docsCatId != null && !Number.isNaN(keyCat) && keyCat !== this._docsCatId) return
       try {
-        window.todoAPI.dbCall('setMeta', [key, JSON.stringify(this.docs)]).catch(() => {})
-      } catch (e) { /* 无桥环境仅内存 */ }
-      this.savedAt = Date.now()
+        // [projectdocs-false-saved-stamp fix] the old .catch(() => {}) swallowed write failures and
+        // then stamped savedAt unconditionally — the UI showed "Saved HH:mm" while the docs never
+        // landed. savedAt is stamped only in .then; a rejection flips to an honest failed state
+        // (inline notice; the next queueSave retries, mirroring the await-before-toast doctrine).
+        this._saving = (window.todoAPI.dbCall('setMeta', [key, JSON.stringify(this.docs)]) || Promise.resolve())
+          .then(() => { this.saveFailed = false; this.savedAt = Date.now() })
+          .catch(() => { this.saveFailed = true })
+      } catch (e) { this.saveFailed = true /* 无桥环境仅内存 */ }
     },
     queueSave () {
       if (this.active) this.active.updatedAt = Date.now()

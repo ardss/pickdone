@@ -70,7 +70,13 @@ module.exports = function tomatoHandlers (ctx) {
     // drag in progress (clearInterval dragTimer) or flip the panel/click-through state of a
     // float it doesn't own. Symmetric with dragStart's win.webContents check.
     'stop-tomato-float-drag': (e) => tomatoFloat.dragStop(e.sender),
+    // D11 finding 8 (C8): these two MAIN-WINDOW setBounds channels had NO gate — a trapped aux
+    // window could move/resize the main window (including while locked), the same class the
+    // main-ipc wave closed for minimize/maximize/close. Same gate: main window only + locked-state
+    // refusal, symmetric with assertWindowControl's siblings below.
     'ensure-window-width': (e, w) => {
+      assertWindowControl(e, 'ensure-window-width')
+      if (isLocked()) throw new Error('app is locked')
       const need = Math.max(900, Number(w) || 0)
       const win = getMainWindow()
       if (!win) return
@@ -85,6 +91,8 @@ module.exports = function tomatoHandlers (ctx) {
     // D6-F9: counterpart of ensure-window-width — the edit-panel auto-widen used to be one-way.
     // Shrinks back to the remembered pre-open width (never below min, never while maximized).
     'restore-window-width': (e, w) => {
+      assertWindowControl(e, 'restore-window-width')
+      if (isLocked()) throw new Error('app is locked')
       const want = Math.max(900, Number(w) || 0)
       const win = getMainWindow()
       if (!win || win.isMaximized() || win.isFullScreen()) return

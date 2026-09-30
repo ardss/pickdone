@@ -86,20 +86,29 @@ function createHydrationCache (state) {
     // meta is a KV table (no updatedAt column): the row value reads per key, and the local LWW
     // age for a key is the latest LOCAL oplog ts for it (one paged oplog scan per pass, cached).
     meta: key => state.db.call('getMeta', key),
-    metaTs: () => {
-      if (!caches.metaTs) {
-        const m = new Map()
-        let since = 0
-        for (let i = 0; i < SYNC_OPLOG_KEEP; i++) {
-          const rows = state.db.call('syncOplogSince', { sinceSeq: since, limit: oplogKeepLimit(SYNC_OPLOG_KEEP) }) || []
-          for (const r of rows) if (r.entity === 'meta' && r.ts > (m.get(r.entityId) || 0)) m.set(r.entityId, r.ts)
-          if (rows.length < SYNC_OPLOG_KEEP) break
-          since = rows[rows.length - 1].seq
-        }
-        caches.metaTs = m
+    metaTs: () => metaStats().map,
+    // D11 finding 4 (meta reconciliation): the ts of the OLDEST retained oplog row. A key whose
+    // pointers all trimmed provably last changed at or before this floor — the bound both the
+    // ingress accept rule (sync-apply.js) and the egress snapshot enumeration (metaSnapshotRows)
+    // compare against. 0 = empty ring (every key is "first landing").
+    metaFloorTs: () => metaStats().floor,
+  }
+  // One paged scan feeds both the per-key age map and the ring floor (D11 finding 4).
+  function metaStats () {
+    if (!caches.metaStats) {
+      const m = new Map()
+      let floor = 0
+      let since = 0
+      for (let i = 0; i < SYNC_OPLOG_KEEP; i++) {
+        const rows = state.db.call('syncOplogSince', { sinceSeq: since, limit: oplogKeepLimit(SYNC_OPLOG_KEEP) }) || []
+        if (rows.length && !floor) floor = rows[0].ts || 0 // ascending seq: the first row is the oldest retained
+        for (const r of rows) if (r.entity === 'meta' && r.ts > (m.get(r.entityId) || 0)) m.set(r.entityId, r.ts)
+        if (rows.length < SYNC_OPLOG_KEEP) break
+        since = rows[rows.length - 1].seq
       }
-      return caches.metaTs
-    },
+      caches.metaStats = { map: m, floor }
+    }
+    return caches.metaStats
   }
 }
 

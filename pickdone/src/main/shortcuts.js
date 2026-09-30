@@ -49,6 +49,21 @@ function createShortcuts ({ getMainWindow, showMainOrLock, quickAdd, i18n, log }
   // Changed to three silent backoff retries at 3s/12s/30s; only alert after final failure, at most once per combo per run, via a non-blocking renderer toast.
   const conflictWarned = new Set()
   const retryTimers = new Set()
+  // D11 finding (conflicted-hotkey-silent-unregister): during the 3s/12s/30s backoff the hotkey
+  // is simply dead, and when the main window is not up at final failure the notice used to be a
+  // log line only — the user was never told. Queue the notice and flush it to the first live
+  // renderer (did-finish-load, the same signal the F-D3 suppression self-heal uses) instead of
+  // dropping it. Bounded: a conflict that can never be delivered must not grow without limit.
+  const pendingConflictNotices = []
+  const PENDING_CONFLICT_NOTICE_CAP = 20
+  function sendConflictNotice (win, keyLabel) {
+    win.webContents.send('shortcut-conflict', { msg: i18n.mt('shortcutConflict', { key: keyLabel }) })
+  }
+  function flushPendingConflictNotices () {
+    const win = getMainWindow()
+    if (!win || win.isDestroyed() || !pendingConflictNotices.length) return
+    for (const keyLabel of pendingConflictNotices.splice(0)) sendConflictNotice(win, keyLabel)
+  }
   function registerGlobal (accel, onFire, keyLabel) {
     if (process.env.TODO_USER_DATA_DIR) return true
     const attempt = () => {
@@ -59,7 +74,7 @@ function createShortcuts ({ getMainWindow, showMainOrLock, quickAdd, i18n, log }
       const delays = [3000, 12000, 30000]
       delays.forEach((d, i) => {
         // 重试定时器入册:applyShortcuts 重绑时统一清理,否则旧组合的定时器会把已弃用的旧键重新注册回系统(2026-09-05 终审 P2)
-        const t = setTimeout(() => {
+        const t = armTimer(() => {
           retryTimers.delete(t)
           if (ok) return
         ok = attempt()
@@ -68,8 +83,13 @@ function createShortcuts ({ getMainWindow, showMainOrLock, quickAdd, i18n, log }
             conflictWarned.add(accel)
             const win = getMainWindow()
             if (win && !win.isDestroyed()) {
-              win.webContents.send('shortcut-conflict', { msg: i18n.mt('shortcutConflict', { key: keyLabel }) })
-            } else if (log) log.warn('[shortcut] conflict and main window unavailable, notification skipped: ' + keyLabel)
+              sendConflictNotice(win, keyLabel)
+            } else if (pendingConflictNotices.length < PENDING_CONFLICT_NOTICE_CAP) {
+              pendingConflictNotices.push(keyLabel) // flushed on the next did-finish-load
+              if (log) log.warn('[shortcut] conflict, main window unavailable — notice queued for the next renderer load: ' + keyLabel)
+            } else if (log) {
+              log.warn('[shortcut] conflict and main window unavailable, notice queue full: ' + keyLabel)
+            }
           }
         }, d)
         retryTimers.add(t)
@@ -205,7 +225,7 @@ function createShortcuts ({ getMainWindow, showMainOrLock, quickAdd, i18n, log }
     // suppression flag would otherwise stay raised forever and silently disable every in-app
     // shortcut until the next record or app restart. Any fresh load starts from a clean slate;
     // render-process-gone covers the crash-without-reload tail (renderer gone, no new load).
-    const onFinishedLoad = () => clearCaptureSuppress()
+    const onFinishedLoad = () => { clearCaptureSuppress(); flushPendingConflictNotices() }
     const onProcessGone = () => clearCaptureSuppress()
     const onBeforeInput = (e, input) => {
       const w = getMainWindow()

@@ -17,17 +17,20 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import '../../setup.mjs'
+const { isRepeatTask } = await import('../../../renderer/js/utils/confirm.js')
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const read = p => fs.readFileSync(path.join(ROOT, p), 'utf8')
 
-/** Extract the marked pure-function block from an SFC script and evaluate it, returning its functions */
+/** Extract the marked pure-function block from an SFC script and evaluate it, returning its functions.
+ *  The block may reference shared utils/confirm.js predicates — injected (the SFC imports them). */
 function pureFns (file, names) {
   const src = read(file)
   const m = src.match(/\/\/ \[navgate-fix\] pure-start[^\n]*\n([\s\S]*?)\/\/ \[navgate-fix\] pure-end/)
   assert.ok(m, `${file}: pure block markers missing`)
-  const fn = new Function(m[1] + `\nreturn { ${names.join(', ')} }`)
-  return fn()
+  const fn = new Function('isRepeatTask', m[1] + `\nreturn { ${names.join(', ')} }`)
+  return fn(isRepeatTask)
 }
 
 /* ---------- #1 DayDeck: optional pre-filtered source list (project filter in card view) ---------- */

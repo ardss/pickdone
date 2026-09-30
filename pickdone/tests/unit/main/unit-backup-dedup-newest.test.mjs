@@ -26,11 +26,16 @@ test('sortBackupNamesNewestFirst puts the newest snapshot first (dedup twin = in
   assert.equal(sorted[sorted.length - 1], 'auto-20260908-100000.json')
 })
 
-test('backup dedup compares against existing[0] (newest), never the tail (oldest)', () => {
+test('backup dedup compares against the newest SAME-TAG twin, never the tail (oldest)', () => {
   const block = indexSrc.slice(
     indexSrc.indexOf('sortBackupNamesNewestFirst(fs.readdirSync(dir)'),
     indexSrc.indexOf('Atomic write: temp file + rename')
   )
-  assert.ok(block.includes('existing[0]'), 'dedup must read existing[0]')
+  // D11 finding 17: the twin is the newest file of the SAME tag prefix (newestSameTag) — a bare
+  // existing[0] compared across tags, letting an evt-* twin suppress an auto-* snapshot whose
+  // content point then vanished with the evt tier's rotation. The 2026-09-10 contract (newest,
+  // never the tail) is preserved within the tag.
+  assert.ok(block.includes('newestSameTag(existing, tag)'), 'dedup must read the newest same-tag twin')
   assert.ok(!block.includes('existing[existing.length - 1]'), 'the tail comparison must stay gone')
+  assert.ok(!block.includes("existing[0]"), 'the bare cross-tag existing[0] comparison must stay gone')
 })

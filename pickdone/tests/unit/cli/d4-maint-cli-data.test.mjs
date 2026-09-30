@@ -110,8 +110,11 @@ test('importEvents hasRecord sees records created BY the import itself', async (
   assert.equal(res.failed.length, 0)
   const created = db.call('queryTodos', { deleted: 0 }).find(x => x.taskContent === 'D4导入唯一事件甲')
   assert.ok(created, 'task created')
-  assert.equal(res.hasRecord(created.taskId), true, 'hasRecord must re-read records — the import backfilled a manual row for this very task')
-  assert.equal(res.hasRecord('no-such-task'), false)
+  // cli-6 (maint/d11r2): hasRecord is a MATERIALIZED boolean on the result now (was a live closure
+  // function — invisible to every JSON consumer). The 2026-09-19 re-read property is preserved:
+  // the boolean still sees the manual row the import itself just backfilled.
+  assert.equal(res.hasRecord, true, 'hasRecord must be true — the import backfilled a manual row for this very task')
+  assert.equal(JSON.parse(JSON.stringify(res)).hasRecord, true, 'hasRecord must survive JSON serialization')
 })
 
 test('addTodo derives a chip from natural-language timed dates; bare dates stay chip-less', () => {

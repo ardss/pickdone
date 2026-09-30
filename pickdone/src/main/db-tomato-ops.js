@@ -142,11 +142,20 @@ exports.tomatoUpdateById = (db, { tomatoId, patch }) => {
 
 // Tombstone delete (P1 sync groundwork): ledger removals must propagate to other devices; every
 // reader (tomatoAll/tomatoByDay) filters deleted=0, so behaviour matches the old physical delete.
-exports.tomatoRemoveByIds = (db, ids) => {
+// D11 finding 2 (parity with planRemoveIds R7 P1-2 / filterDelete): items may be plain ids
+// (renderer/CLI) or {tomatoId, deletedAt, updatedAt} tombstone stamps (sync apply path) — the
+// sync layer carries the winner's LWW age; local writers without a stamp keep local now.
+exports.tomatoRemoveByIds = (db, ids, opts = {}) => {
   const list = Array.isArray(ids) ? ids : [ids]
   const del = db.prepare('UPDATE tomato_records SET deleted=1, deletedAt=?, updatedAt=? WHERE tomatoId = ?')
   const now = Date.now()
-  const tr = db.transaction(() => list.forEach(i => del.run(now, now, String(i))))
+  const dAt = (opts && opts.deletedAt) || now
+  const stamp = (opts && opts.updatedAt) || dAt
+  const tr = db.transaction(() => list.forEach(i => {
+    const o = (i && typeof i === 'object') ? i : null
+    const id = o ? (o.tomatoId != null ? o.tomatoId : o.id) : i
+    del.run((o && Number(o.deletedAt) > 0) ? Number(o.deletedAt) : dAt, (o && Number(o.updatedAt) > 0) ? Number(o.updatedAt) : stamp, String(id))
+  }))
   tr()
   return true
 }
@@ -166,7 +175,17 @@ exports.tomatoMigrateFromMeta = (db, stmts) => {
   if (!parsed.ok) { log.warn('[TodoDB] tomatoMigrateFromMeta: 旧 meta blob 损坏(JSON 解析失败),保留 blob 不迁移不删除'); return 0 }
   const list = parsed.list
   if (!list.length) { delBlob(); return 0 }
-  exports.tomatoAppendMany(db, list)
+  // D11 finding 10: tomatoAppendMany's failure granularity is per-ROW (a row missing
+  // tomatoId/endTime or failing the dateKey derive is rejected, the batch still commits). Deleting
+  // the blob unconditionally after a partial migration PERMANENTLY LOST every rejected record —
+  // the blob was the only copy. A rejected row keeps the blob (the upserts are idempotent by
+  // tomatoId, so the next boot re-migrates just the remainder); only a fully accepted batch
+  // (or an empty-after-parse blob) deletes it.
+  const res = exports.tomatoAppendMany(db, list)
+  if (res.rejected.length) {
+    log.warn(`[TodoDB] tomatoMigrateFromMeta: ${res.rejected.length} of ${list.length} blob rows rejected — blob KEPT for a retry next boot (unconditional delBlob would lose them)`)
+    return res.accepted
+  }
   delBlob()
-  return list.length
+  return res.accepted
 }

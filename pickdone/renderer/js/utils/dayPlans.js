@@ -114,7 +114,15 @@ export async function restoreSnapshot (taskId) {
     const raw = await dbCall('getMeta', 'planChipsSnapshot:' + taskId)
     if (!raw) return
     const rows = JSON.parse(raw)
-    if (Array.isArray(rows) && rows.length) await commitCommand("plan", "putMany", rows)
+    if (Array.isArray(rows) && rows.length) {
+      // [LWW re-stamp fix] the snapshot rows carry their PRE-DELETE updatedAt (planAddMany
+      // preserves explicit stamps, src/main/db-plan-ops.js) while the delete itself stamped a
+      // FRESH tombstone — over LAN the restored chips lost every LWW round and were silently
+      // re-deleted. Re-stamp fresh on restore, same rule the recovery path already fixed for
+      // itself (dbRecovery.cjs restorePlanChipsFromCriticalBackup).
+      const now = Date.now()
+      await commitCommand("plan", "putMany", rows.map(r => ({ ...r, updatedAt: now })))
+    }
     // D5 (2026-09-20): consume via deleteMeta, unified with clearSnapshot (CLI convention fixed
     // 2026-09-19) — the old setMeta('') left an empty-string tombstone row in meta forever.
     await commitCommand("meta", "delete", 'planChipsSnapshot:' + taskId)

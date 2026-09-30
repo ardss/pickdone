@@ -51,12 +51,19 @@ exports.planRemoveIds = (db, ids, opts = {}) => {
   const stamp = (opts && opts.updatedAt) || dAt
   // Items may be plain ids (renderer/CLI) or {id, deletedAt, updatedAt} tombstone stamps (sync apply)
   const del = db.prepare('UPDATE plan_chips SET deleted=1, deletedAt=?, updatedAt=? WHERE id = ? AND deleted=0')
+  // D11 finding 11 (same row-granular delta shape as planAddMany/planDeleteTask): return the ids
+  // that ACTUALLY changed — the `AND deleted=0` guard makes a ghost id (never existed, or already
+  // deleted) a no-op UPDATE, and the oplog used to emit a PHANTOM ('plan', ghostId) tombstone
+  // pointer for it (delta consumers hydrate a chip that never changed; peers then churn on a
+  // ghost tombstone every round). db-oplog.js's planRemoveIds case consumes this result.
+  const changed = []
   const tr = db.transaction(() => list.forEach(i => {
     const o = (i && typeof i === 'object') ? i : null
-    del.run((o && o.deletedAt) || dAt, (o && o.updatedAt) || stamp, String(o ? o.id : i))
+    const r = del.run((o && o.deletedAt) || dAt, (o && o.updatedAt) || stamp, String(o ? o.id : i))
+    if (r.changes > 0) changed.push(String(o ? o.id : i))
   }))
   tr()
-  return true
+  return changed
 }
 
 exports.planMoveTask = (db, { taskId, fromDay, toDay }) => {

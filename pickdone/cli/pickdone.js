@@ -86,7 +86,9 @@ async function main () {
   // (assertIsolationForWrite, same contract as e2e-walkthrough's assertIsolationEnv).
   // --dry-run previews are read-only and pass; `open` is gated inside lib.launchApp (both spawn
   // branches) so a cold-start can never attach to the real DB either.
-  const GATED_WRITE = new Set([...WRITE_CMDS, 'import', 'purge', 'sort'])
+  // cli-2: `clean` is gated too — it bulk-deletes directories (system temp isolation dirs, repo
+  // residue) and used to run its destructive pass with no gate and no confirmation at all.
+  const GATED_WRITE = new Set([...WRITE_CMDS, 'import', 'purge', 'sort', 'clean'])
   const GATED_WRITE_SUBOPS = {
     category: ['add', 'rename', 'move', 'rm', 'delete'],
     tag: ['rename', 'rm', 'delete'],
@@ -339,6 +341,10 @@ async function main () {
         if (curIds.includes(pt.taskId)) return okMsg(cur, ['already a predecessor: ' + pt.taskContent])
         next = curIds.concat(pt.taskId)
       } else if (verb === 'rm') {
+        // cli-16 membership guard: rm of a NON-predecessor used to fall through to patchTodo with an
+        // unchanged list — a real DB write + audit row ("deps-rm") for a mutation that never happened,
+        // poisoning the audit trail. Fail loudly instead.
+        if (!curIds.includes(pt.taskId)) throw new lib.CliError(pt.taskContent + ' (' + pt.taskId + ') is not a predecessor of ' + cur.taskContent + ' — nothing to remove (deps list to see the current edges)', 'NOT_A_PREDECESSOR')
         next = curIds.filter(x => x !== pt.taskId)
       } else throw new lib.CliError('unknown deps verb: ' + verb + ' (use list|add|rm)', 'USAGE')
       const out = lib.patchTodo(cur.taskId, { predecessors: next }, { action: 'deps-' + verb })
@@ -541,6 +547,12 @@ async function main () {
         const up = path.dirname(probe)
         if (up === probe) break
         probe = up
+      }
+      // cli-2 --yes opt-in: `clean` used to delete immediately on a bare invocation. Mirror `purge`:
+      // --dry-run previews freely; the destructive pass needs explicit --yes (agents must have user
+      // authorization before bulk rm, even of regenerable residue).
+      if (!opts['dry-run'] && !opts.dry && !opts.yes) {
+        throw new lib.CliError('clean bulk-deletes regenerable test/dev residue (temp isolation dirs, tests/.artifacts, .dev-data). Run --dry-run first to preview, then add --yes to execute', 'NEEDS_CONFIRM')
       }
       const r = require('./env-clean.js').cleanEnv({
         all: !!opts.all,

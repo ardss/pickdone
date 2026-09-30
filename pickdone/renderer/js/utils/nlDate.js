@@ -113,8 +113,14 @@ function parseEnglishDate (text, base) {
             const isThis = lc.startsWith('this ')
             // Bare weekday (no prefix) defaults to on = next occurrence
             if (isOn || (!isThis && !isNext)) diff = diff === 0 ? 7 : diff
-            else if (isNext) diff = diff === 0 ? 7 : diff
-            else if (isThis && diff === 0) diff = 7
+            else if (isThis) { if (diff === 0) diff = 7 } else if (isNext) {
+              // "next X" forces next week: the bare next occurrence is pushed out of the base's
+              // calendar week when it would land inside it (next friday from a Tuesday is NEXT
+              // week's Friday, never this week's; from a Tuesday, "next monday" already lands
+              // next week and stays there). Previously next resolved identically to a bare
+              // weekday, contradicting this file's header doc.
+              if (baseDow + diff < 7) diff += 7
+            }
             date = base.add(diff, 'day').startOf('day')
             label = m[0]
           } else if (/^this\s+weekend$|^weekend$/.test(lc)) {

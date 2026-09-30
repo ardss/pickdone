@@ -90,7 +90,8 @@ test('X1 ingress: inbound tombstone pointer deletes a peer-stale live record (sn
   assert.equal(m.pendingWrites.tomatoes.length, 0)
   const remove = m.calls.find(c => c.op === 'tomatoRemoveByIds')
   assert.ok(remove, 'tombstone pointer lands via tomatoRemoveByIds — record stays deleted on B')
-  assert.deepEqual(remove.params, ['t1'])
+  // D11 finding 2: the delete carries the winner's stamps (no local-now re-stamp)
+  assert.deepEqual(remove.params, [{ tomatoId: 't1', deletedAt: 2000, updatedAt: 2000 }])
 })
 
 test('X1 LWW preserved: a peer live row NEWER than the local tombstone legitimately wins', () => {
