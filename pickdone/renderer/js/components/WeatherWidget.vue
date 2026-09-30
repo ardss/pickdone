@@ -55,6 +55,39 @@ const AUTO_REFRESH_MS = 30 * 60 * 1000
 // Negative-result cache TTL for city-outline lookups: a Nominatim miss is remembered for 1 hour so the
 // 30-minute auto-refresh does not re-fire up to 3 variant requests per refresh for cities with no boundary
 const SHAPE_MISS_TTL_MS = 60 * 60 * 1000
+// [Fault-16] cap on persisted city outlines: geoShape-v2-<city> entries used to accumulate forever
+// (every city ever viewed stays in localStorage for the app's lifetime). Keep the most recent ones.
+const SHAPE_CACHE_MAX = 40
+
+// [d12-fixes] pure-start
+/** [Fault-16] Pure eviction planner: given the stored shape-cache entries ({key, at}), return the
+ *  keys to delete so at most `max` newest entries remain. Exported via the pure block for tests. */
+function planShapeCacheEviction (entries, max = SHAPE_CACHE_MAX) {
+  const sorted = [...entries].filter(e => e && e.key).sort((a, b) => (b.at || 0) - (a.at || 0))
+  return sorted.slice(max).map(e => e.key)
+}
+// [d12-fixes] pure-end
+
+/** [Fault-16] Enforce the cap after a write: enumerate geoShape-v2-* keys, parse their stored
+ *  {at, shape} wrapper (legacy raw-shape entries sort last), delete the oldest overflow. */
+function pruneShapeCache () {
+  try {
+    const entries = []
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i)
+      if (!key || !key.startsWith('geoShape-v2-')) continue
+      let at = 0
+      try {
+        const parsed = JSON.parse(localStorage.getItem(key))
+        if (parsed && typeof parsed === 'object' && parsed.at) at = +parsed.at
+      } catch { /* legacy/garbage entry: treat as oldest */ }
+      entries.push({ key, at })
+    }
+    for (const key of planShapeCacheEviction(entries)) {
+      try { localStorage.removeItem(key) } catch {}
+    }
+  } catch { /* localStorage unavailable — nothing to prune */ }
+}
 
 import { lookupCity, geocodeOnline } from '../utils/cnCities.js'
 import CITY_SHAPES from '../utils/city-shapes-data.js'
@@ -112,7 +145,12 @@ async function loadShape (city) {
     const key = 'geoShape-v2-' + name
     try {
       const cached = localStorage.getItem(key)
-      if (cached) return JSON.parse(cached)
+      if (cached) {
+        const parsed = JSON.parse(cached)
+        // [Fault-16] wrapper form {at, shape}; legacy entries stored the raw {d, vb} shape directly
+        const shape = parsed && typeof parsed === 'object' && parsed.shape ? parsed.shape : parsed
+        if (shape) return shape
+      }
     } catch {}
     // Negative-result cache: a recent miss skips the network round-trip (auto-refresh would otherwise
     // re-query Nominatim with up to 3 variants every 30 minutes for cities that never resolve)
@@ -125,7 +163,8 @@ async function loadShape (city) {
     const j = await r.json()
     const shape = j[0] ? geojsonToShape(j[0].geojson) : null
     if (shape) {
-      try { localStorage.setItem(key, JSON.stringify(shape)) } catch {}
+      try { localStorage.setItem(key, JSON.stringify({ at: now, shape })) } catch {}
+      pruneShapeCache() // [Fault-16] keep the persistent outline cache bounded
 
       return shape
     }
@@ -200,12 +239,22 @@ export default {
   },
   methods: {
     reset () {
+      // [Fault-4] bump the shape sequence: an in-flight outline load for the old state must not
+      // land after the reset and repopulate the cleared widget
+      this._shapeSeq = (this._shapeSeq || 0) + 1
       this.temp = null; this.code = null; this.city = ''; this.shape = null; this.error = ''
     },
-    /** City outline mini icon (async, may fail -- failure just means no icon) */
+    /** City outline mini icon (async, may fail -- failure just means no icon).
+     *  [Fault-4] response-order token: loadCityShape runs concurrently (auto-refresh + failure-path
+     *  reload for a different city); the SLOWER stale response used to overwrite this.shape with the
+     *  PREVIOUS city's outline. Only the latest-issued load may assign. */
     async loadCityShape (city) {
+      const seq = this._shapeSeq = (this._shapeSeq || 0) + 1
       this.shape = null
-      try { this.shape = await loadShape(city) } catch (e) { /* outline fetch failure does not affect weather display */ }
+      try {
+        const s = await loadShape(city)
+        if (seq === this._shapeSeq) this.shape = s
+      } catch (e) { /* outline fetch failure does not affect weather display */ }
     },
     /** wttr.in (j1 JSON) current weather, weatherCode matches the WMO table */
     async fetchWttr (cityQuery) {
