@@ -5,7 +5,14 @@
     <div v-for="(s,i) in subs" :key="s._key != null ? s._key : s.text + '_' + i" class="ep-sub">
       <span class="ep-sub-check" :class="{on:s.checked}" role="checkbox" :aria-checked="s.checked ? 'true' : 'false'"
             tabindex="0" @click.stop="toggleSub(s)" @keydown.enter.prevent.stop="toggleSub(s)">{{ s.checked ? '✓' : '' }}</span>
-      <span class="ep-sub-text" :class="{strike:s.checked}" @click="toggleSub(s)">{{s.text}}</span>
+      <span v-if="renameIndex !== i" class="ep-sub-text" :class="{strike:s.checked}" role="button" tabindex="0"
+            :aria-label="s.text" @click="toggleSub(s)" @dblclick="startRename(i)"
+            @keydown.enter.prevent.stop="startRename(i)">{{s.text}}</span>
+      <!-- [R2] Inline rename: double-click (or Enter on the focused text) opens the editor; Enter/blur
+           commits via the 'rename' emit, Esc cancels. commitRename is re-entrant-safe (blur after the
+           Enter commit is a no-op because renameIndex was already reset). -->
+      <input v-else v-model="renameText" class="ep-sub-rename-input" :aria-label="$t('statsJ.EditPanel.addSubtask')"
+             @keydown.enter.prevent.stop="commitRename(i)" @keydown.esc.prevent.stop="cancelRename" @blur="commitRename(i)"/>
       <b class="ep-sub-x close-x close-x--sm" role="button" tabindex="0" :aria-label="$t('statsJ.EditPanel.deleteSubtask')"
          @click.stop="delSub(i)" @keydown.enter.prevent.stop="delSub(i)"></b>
       <b class="ep-sub-drag">≡</b>
@@ -33,10 +40,13 @@ export default {
     /** Live subtask array owned by EditPanel (save-pipeline state), rendered read-only here. */
     subs: { type: Array as any, default: () => [] }
   },
-  emits: ['add', 'toggle', 'remove', 'move'],
+  emits: ['add', 'toggle', 'remove', 'move', 'rename'],
   data () {
     return {
-      newSub: ''
+      newSub: '',
+      // [R2] inline rename state: index of the row being renamed ('' = none) + the edit buffer
+      renameIndex: -1,
+      renameText: ''
     }
   },
   computed: {
@@ -60,7 +70,31 @@ export default {
     },
     toggleSub (s) { this.$emit('toggle', s) },
     delSub (i) { this.$emit('remove', i) },
-    moveSub (i, dir) { this.$emit('move', i, dir) }
+    moveSub (i, dir) { this.$emit('move', i, dir) },
+    // [R2] inline rename: open the editor, commit via 'rename' (parent owns subList + save pipeline), cancel on Esc
+    startRename (i) {
+      const s = this.subs[i]
+      if (!s) return
+      this.renameIndex = i
+      this.renameText = s.text
+      this.$nextTick(() => {
+        const el = this.$el && this.$el.querySelector('.ep-sub-rename-input')
+        if (el) el.focus()
+      })
+    },
+    commitRename (i) {
+      // blur fires after an Enter commit removed the editor — re-entrancy guard
+      if (this.renameIndex !== i) return
+      const text = (this.renameText || '').trim()
+      this.renameIndex = -1
+      this.renameText = ''
+      if (!text || !this.subs[i] || text === this.subs[i].text) return
+      this.$emit('rename', i, text)
+    },
+    cancelRename () {
+      this.renameIndex = -1
+      this.renameText = ''
+    }
   }
 }
 </script>
@@ -79,6 +113,8 @@ export default {
 .ep-sub-move i { font-style: normal; color: var(--text-3); cursor: pointer; margin-left: 3px; font-size: var(--fs-xs); }
 .ep-addsub-input { flex: 1; border: 0; background: none; font-size: var(--fs-md); color: var(--text-1); }
 .ep-addsub-input::placeholder { color: var(--text-4); }
+/* [R2] inline rename editor: same metrics as the row text so the swap is visually seamless */
+.ep-sub-rename-input { flex: 1; min-width: 0; border: 0; border-bottom: 1px solid var(--brand); background: none; font-size: var(--fs-md); color: var(--text-1); padding: 0 2px; }
 /* 子任务 ✕ 与 ≡ hover 该行才显示
    （设计稿 .todo-sublist-editor__delete(青灰叉)/__move(bars,#9b9b9b)） */
 .ep-sub-x, .ep-sub-drag { opacity: 0; transition: opacity var(--dur-mid); }
