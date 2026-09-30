@@ -1,5 +1,5 @@
 {
-  "_comment": "ratchet baseline per platform (win32/linux/darwin file sets differ ~10pt): each metric = last passing run on that platform, floored to whole percent",
+  "_comment": "ratchet baseline keyed platform@nodeMajor (coverage accounting is node-version-dependent, so a node-major bump re-baselines; win32/linux file sets also differ ~10pt): each metric = last passing run on that platform+node-major, floored to whole percent. No node24 entry yet — add one only from a full-green run on that runtime.",
   "baselines": {
     "win32@node22": {
       "lines": 85,
