@@ -125,6 +125,18 @@ function computeMetaGc (metaKeys, categories, todos) {
     if (m && !liveRids.has(m[1])) { dead.push(k); continue }
     m = k.match(/^tomatoEstimateState:(.+)$/)
     if (m && !liveTaskIds.has(m[1])) { dead.push(k); continue }
+    // D11 finding 5: the two orphan families the startup backstop never covered — per-delete
+    // hooks exist (db-meta-gc.cjs deleteChipsSnapshotKeysFor / deleteSnowDedupKeysFor) but keys
+    // orphaned BEFORE those hooks landed (or via any un-instrumented path) leaked forever.
+    // Same lifecycle rule as tomatoEstimateState above: the owning task id is gone from the live
+    // set → the key can never be read again.
+    //   - planChipsSnapshot:<taskId> — the renderer's per-task chip restore snapshot.
+    //   - snowDedup:<taskId>:<dedupKey> — the bumpSnow idempotency fence (one row per focus
+    //     session; written once, read only when that task bumps again).
+    m = k.match(/^planChipsSnapshot:(.+)$/)
+    if (m && !liveTaskIds.has(m[1])) { dead.push(k); continue }
+    m = k.match(/^snowDedup:(.+?):/)
+    if (m && !liveTaskIds.has(m[1])) { dead.push(k); continue }
     m = k.match(/^(?:projectDeadline|projectMilestones):(.+)$/)
     if (m && !live.has(m[1])) dead.push(k)
     // D10 (2026-09-27): per-category project fields follow the same lifecycle rule as
@@ -177,6 +189,26 @@ function isLiveTextFresh (text, lastUpdateAt, now = Date.now(), ttlMs = TOMATO_L
   return now - lastUpdateAt < ttlMs
 }
 
+/** D11 finding 12-windows: shell.openExternal returns a PROMISE — the `try { shell.openExternal(u) }
+ *  catch {}` pattern cannot catch an async rejection, and the fire-and-forget calls produced an
+ *  UNHANDLED REJECTION in the main process on every blocked/failed open (window-open handler,
+ *  child navigation guard, will-navigate XSS guard). Single helper: http(s)-gated, rejection-
+ *  logged, never throws. Pure control flow over the injected shell/logger — unit-testable. */
+function openExternalSafely (shell, url, logger = log) {
+  const u = String(url || '')
+  if (!/^https?:/i.test(u)) return false
+  try {
+    const p = shell.openExternal(u)
+    if (p && typeof p.catch === 'function') {
+      p.catch(err => { try { (logger || console).warn('[Window] openExternal failed:', u, err && err.message) } catch { /* logging is best-effort */ } })
+    }
+    return true
+  } catch (err) {
+    try { (logger || console).warn('[Window] openExternal threw:', u, err && err.message) } catch { /* best-effort */ }
+    return false
+  }
+}
+
 /** D10 (2026-09-27): renderer crash relaunch policy. The in-process crashReloadCount resets on
  *  did-finish-load AND on every app.relaunch() (fresh process ⇒ 0 again), so a renderer crashing
  *  deterministically at startup looped crash→3 reloads→relaunch forever. The relaunch branch is
@@ -188,4 +220,4 @@ function crashRelaunchDecision (persistedRelaunchCount, { cap = CRASH_RELAUNCH_C
   return Number(persistedRelaunchCount) >= cap ? 'give-up' : 'relaunch'
 }
 
-module.exports = { makeAssertMainWindow, makeSenderIsMain, purgeAttachmentFiles, ownsAttachmentFile, computeMetaGc, classifyCommitKey, makeSyncKick, stripForbiddenSettingsKeys, FLOAT_FORBIDDEN_SETTINGS_KEYS, isLiveTextFresh, TOMATO_LIVE_TTL_MS, crashRelaunchDecision, CRASH_RELAUNCH_CAP }
+module.exports = { makeAssertMainWindow, makeSenderIsMain, purgeAttachmentFiles, ownsAttachmentFile, computeMetaGc, classifyCommitKey, makeSyncKick, stripForbiddenSettingsKeys, FLOAT_FORBIDDEN_SETTINGS_KEYS, isLiveTextFresh, TOMATO_LIVE_TTL_MS, crashRelaunchDecision, CRASH_RELAUNCH_CAP, openExternalSafely }

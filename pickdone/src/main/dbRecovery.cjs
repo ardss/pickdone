@@ -465,7 +465,13 @@ function restoreTomatoRecordsFromCriticalBackup (raw, appendTomatoRecords) {
 
 /** Category restore: categoryState shares todoState's shape (string/object, two real forms). Rows are in renderer app shape
  *  (categoryId/categoryName/...), mapped back to db.js categories table rows then upserted (fresh DB = pure insert, idempotent);
- *  a single-row failure is skipped without dragging down the whole batch. No writes when the JSON has no category data. */
+ *  a single-row failure is skipped without dragging down the whole batch. No writes when the JSON has no category data.
+ *  D11 finding 6: a restored TOMBSTONE used to lose its stamps — deletedAt fell through to the db
+ *  layer's now-stamp (on a fresh recovery DB there is no prior row to keep) and updatedAt was
+ *  unstamped, so a backup-era deletion read newest-here and won LWW against a peer that had since
+ *  recovered/renamed the category. Mirrors the renderer restore rule (category.js toRow Round-6 P2):
+ *  restored tombstones carry their backup deletedAt, or the epoch-oldest stamp (1) when absent, and
+ *  updatedAt 1 so any real peer row wins the next LWW round; live rows keep the now-stamp. */
 function restoreCategoriesFromCriticalBackup (raw, upsertCategory) {
   if (typeof upsertCategory !== 'function') return 0
   try {
@@ -475,6 +481,7 @@ function restoreCategoriesFromCriticalBackup (raw, upsertCategory) {
     let n = 0
     for (const c of cats) {
       try {
+        const deleted = (c.deleted != null ? !!c.deleted : !!c.delete)
         upsertCategory({
           id: c.categoryId,
           userId: c.userId != null ? c.userId : null,
@@ -484,7 +491,8 @@ function restoreCategoriesFromCriticalBackup (raw, upsertCategory) {
           sort: c.listSort || 0,
           isFolder: c.folderIs ? 1 : 0,
           parentId: c.folderId || 0,
-          deleted: c.delete ? 1 : 0
+          deleted: deleted ? 1 : 0,
+          ...(deleted ? { deletedAt: c.deletedAt || 1, updatedAt: 1 } : {})
         })
         n++
       } catch {}

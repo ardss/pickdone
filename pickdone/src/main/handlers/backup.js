@@ -57,6 +57,18 @@ function uniqueSnapshotName (existsSync, dir, tag, stamp, baseMs) {
   return name
 }
 
+/** D11 finding 17: the content-dedup twin must come from the SAME tag prefix. The old compare
+ *  took existing[0] across ALL tags: when the newest file was an `evt-*` snapshot, a new `auto-`
+ *  snapshot with identical content was reported dedup'd against it — and when the evt twin was
+ *  later pruned by ITS tier's rotation (eventKeep), that content point vanished from the auto
+ *  tier entirely. Pure: returns the newest name carrying `tag` as its prefix (newest-first
+ *  input, as fixUtil.sortBackupNamesNewestFirst produces), or null. Exported for unit tests. */
+function newestSameTag (namesNewestFirst, tag) {
+  const prefix = String(tag || '')
+  if (!prefix) return null
+  return (namesNewestFirst || []).find(f => typeof f === 'string' && f.startsWith(prefix)) || null
+}
+
 
 module.exports = function backupHandlers (ctx) {
   const { isLocked, app, getMainWindow } = ctx
@@ -108,17 +120,17 @@ module.exports = function backupHandlers (ctx) {
         // P3 fix (2026-09-25): name-space exhaustion used to hand back an ALREADY-TAKEN name and the
         // atomic write silently clobbered that existing snapshot while still returning {ok:true}.
         if (!name) return { ok: false, error: 'snapshot name space exhausted (900 same-tag names taken)' }
-        // Content dedup: only compare against the newest file. (The original implementation compared against any old file — when the data was changed back to its original state
+        // Content dedup: only compare against the newest file OF THE SAME TAG (D11 finding 17 —
+        // see newestSameTag). (The original implementation compared against any old file — when the data was changed back to its original state
         // it would return dedup without writing the new snapshot, yet prune would delete that old snapshot → that point in time ends up with no backup)
         // 排序按名字内嵌时间戳(2026-09-10 P2):字典序 sort() 让 'auto-' 排在同日 'evt-…' 之后/之前错位,
         // 去重会拿一个陈旧文件当"最新"比对 → 误判 dedup 丢快照。复用 fix-util 的纯排序(与 autoBackup.nameToTs 同规则)。
         const existing = fixUtil.sortBackupNamesNewestFirst(fs.readdirSync(dir).filter(f => /^(auto|evt)-/.test(f)))
-        if (existing.length) {
+        const twin = newestSameTag(existing, tag)
+        if (twin) {
           try {
-            // newest-first sort → the dedup twin is existing[0]; the tail was the OLDEST file (review P1 2026-09-10:
-            // dedup never fired in the common case, and a stale snapshot could be returned as "the" backup)
-            if (fs.readFileSync(path.join(dir, existing[0]), 'utf8') === jsonText) {
-              return { ok: true, file: existing[0], dedup: true }
+            if (fs.readFileSync(path.join(dir, twin), 'utf8') === jsonText) {
+              return { ok: true, file: twin, dedup: true }
             }
           } catch {}
         }
@@ -192,3 +204,4 @@ module.exports = function backupHandlers (ctx) {
 }
 module.exports.atomicWriteJson = atomicWriteJson
 module.exports.uniqueSnapshotName = uniqueSnapshotName
+module.exports.newestSameTag = newestSameTag
