@@ -34,7 +34,13 @@ function sound (file) {
     }
     const { spawn } = require('child_process')
     if (process.platform === 'win32') {
-      spawn('powershell.exe', ['-c', '[console]::beep(880,180)'], { detached: true, stdio: 'ignore' }).unref()
+      // D13 C4 (2026-10-01): the spawned child MUST carry an 'error' listener. If powershell.exe
+      // is missing/blocked (spawn ENOENT/EACCES) the child emits 'error', and with no listener
+      // that became an uncaught exception crashing the main process — the linux/mac twin below
+      // is try/caught, this branch was not.
+      const child = spawn('powershell.exe', ['-c', '[console]::beep(880,180)'], { detached: true, stdio: 'ignore' })
+      child.on('error', () => { /* beep unavailable — the fallback is best-effort, never fatal */ })
+      child.unref()
     } else {
       // 非 win32 兜底(2026-09-09 P2):此前 macOS/Linux 上无存活主窗时提醒完全无声;
       // Electron shell.beep() 是同步系统蜂鸣,无窗/无文件场景下保证提醒可闻

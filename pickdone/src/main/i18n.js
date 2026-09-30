@@ -7,20 +7,27 @@ let app
 try { app = require('electron').app } catch { app = { getPath () { throw new Error('no electron') }, getLocale () { return 'zh-CN' } } }
 
 let cachedLocale = null
+// D13 C3 (2026-10-01): single source of truth for "is this a locale the app ships". The read
+// side (currentLocale) only ever recognized exact 'en-US', and the write side (set-app-locale)
+// persisted whatever string arrived — so appLocale 'zh-CN' in config.json silently fell through
+// to system detection, and any junk value ('fr-FR' from a hostile/buggy renderer) flipped the
+// app to the system default on the next launch. Both sides now go through this normalizer.
+function normalizeLocale (v) { return (v === 'en-US' || v === 'zh-CN') ? v : null }
 function currentLocale () {
   if (cachedLocale) return cachedLocale
   try {
     const fs = require('fs')
     const path = require('path')
     const c = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'config.json'), 'utf8'))
-    if (c.appLocale === 'en-US') { cachedLocale = 'en-US'; return cachedLocale }
+    const stored = normalizeLocale(c.appLocale)
+    if (stored) { cachedLocale = stored; return cachedLocale }
   } catch (e) { /* no config file (first launch) — fall back to system language */ }
   try {
     cachedLocale = (app.getLocale() || '').toLowerCase().startsWith('en') ? 'en-US' : 'zh-CN'
   } catch (e) { cachedLocale = 'zh-CN' }
   return cachedLocale
 }
-function setLocale (locale) { cachedLocale = locale === 'en-US' ? 'en-US' : 'zh-CN' }
+function setLocale (locale) { cachedLocale = normalizeLocale(locale) || 'zh-CN' }
 
 const MESSAGES = {
   'zh-CN': {
@@ -130,4 +137,4 @@ function mt (key, params) {
   return v
 }
 
-module.exports = { mt, setLocale, currentLocale }
+module.exports = { mt, setLocale, currentLocale, normalizeLocale }

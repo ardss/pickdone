@@ -25,8 +25,14 @@ module.exports = function settingsHandlers (ctx) {
     // Changing the app-wide language must not be triggerable by an auxiliary window.
     'set-app-locale': (e, locale) => {
       assertMainWindow(e)
+      // D13 C3 (2026-10-01): validate BEFORE persisting. Any string used to be written to
+      // config.json verbatim; on the next launch i18n only recognized exact 'en-US', so an
+      // unvalidated/junk value silently flipped the app back to the system default. Reject
+      // unsupported values at the IPC boundary and persist only the normalized locale.
+      const norm = i18nM.normalizeLocale(locale)
+      if (!norm) throw new Error('unsupported locale: ' + String(locale))
       const main = getMainWindow()
-      i18nM.setLocale(locale); const c = writeConfig({ appLocale: locale }); rebuildTrayMenu(); const tray = getTray(); if (tray) { try { tray.setToolTip(i18nM.mt('appName')) } catch (err) { /* empty */ } }
+      i18nM.setLocale(norm); const c = writeConfig({ appLocale: norm }); rebuildTrayMenu(); const tray = getTray(); if (tray) { try { tray.setToolTip(i18nM.mt('appName')) } catch (err) { /* empty */ } }
       // P2 2026-09-12: previously this looped EVERY live window and setTitle(appName), flattening
       // semantic titles (float window task title, lock window title). Auxiliary windows pick up the
       // new locale via their own per-second title pushes (tomato-float countdown, same pattern as the

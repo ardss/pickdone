@@ -205,7 +205,45 @@ module.exports = function importHandlers (ctx) {
       if (!['ticktick', 'dida365', 'todoist'].includes(format)) {
         return { ok: false, code: 'FORMAT_UNKNOWN', message: `unknown format "${format}" (valid: auto|ticktick|dida365|todoist)` }
       }
-      const r = importer.importItems(items, { dryRun: false, format })
+      // D13 C7 (2026-10-01): the post-write settlement (db-watch re-baseline x2, scheduler reload,
+      // broadcast, sync kick) and the single-shot grant wipe are shared by the success AND the
+      // importItems-throw path. Previously a throw from importItems (a partial import CAN throw
+      // mid-write) skipped all of it: the watch baseline stayed stale (our own partial write would
+      // be misread as an external write), the UI/scheduler/sync never converged, and the grant
+      // stayed armed so the same approved bytes were replayable after a partial import.
+      const settleAfterImport = () => {
+        try { const rw = resyncDbWatch && resyncDbWatch(); if (rw) rw() } catch (err) { log.warn('[Import] resyncDbWatch failed', err) }
+        // 与 todo-db:call 写路径对齐(2026-09-09 P2):导入落库后必须刷新调度器并广播,否则应用内导入后
+        // 主窗口列表陈旧、已导入的提醒全部静默丢失
+        try { scheduler.reloadAll(dbApi()) } catch (err) { log.warn('[Import] reloadAll failed', err) }
+        // R4 P2 (2026-09-21): reloadAll itself writes reminderLastSeenAt (touching -wal) AFTER the
+        // re-baseline above — the next watch poll would misread that self-write as another EXTERNAL
+        // write (full reload + undo wipe). Re-baseline again once the scheduler's own write has
+        // landed, same as index.js does at the end of its external-write path.
+        try { const rw2 = resyncDbWatch && resyncDbWatch(); if (rw2) rw2() } catch (err) { log.warn('[Import] post-reloadAll resyncDbWatch failed', err) }
+        // 2026-09-10 P2:传 e.sender(IpcMainInvokeEvent 本身不是 webContents,exclude 永不命中,
+        // 发起导入的窗会被自己的广播打断撤销栈);其余窗照常刷新
+        broadcastTodosChanged('import', e.sender)
+        // GAP-C fix (2026-09-19): the import writes through dbm.call directly, so the oplog captured
+        // the new rows but NO sync round was kicked (resyncDbWatch only re-baselines the db watcher)
+        // — imported tasks waited for the whole 5-minute periodic round. Kick a debounced immediate
+        // round, same style as the external-db-write path in index.js. Fire-and-forget + guarded:
+        // kickSyncRound no-ops safely before sync init.
+        try { require('../lan-sync-bootstrap').kickSyncRound('csv-import') } catch { /* sync lazy-not-init */ }
+      }
+      const wipeGrant = () => { lastPickedImportPath = ''; lastPickedImportHash = '' }
+      let r
+      try {
+        r = importer.importItems(items, { dryRun: false, format })
+      } catch (err) {
+        // C7: a partial import already touched the DB — settle exactly like the success path so
+        // watchers/UI/sync converge on what actually landed, consume the grant (a replay of the
+        // same bytes after a partial import needs a fresh preview), and return the SAME
+        // {ok:false, code, message} contract as every failure above.
+        settleAfterImport()
+        wipeGrant()
+        return { ok: false, code: err && err.code, message: (err && err.message) || String(err) }
+      }
       // B13 (2026-09-25): audit single-lining. importItems already lands ONE explicit audit line for
       // every import (both this App path and the CLI path — 'cli/audit' and 'src/main/audit' append to
       // the SAME cli-audit.jsonl), so the extra recordCustom here made App-side imports write TWO
@@ -215,31 +253,13 @@ module.exports = function importHandlers (ctx) {
       // baseline was never re-synced — the next watch poll saw the mtime jump, misread OUR OWN import as
       // an EXTERNAL write and triggered a full reload + undo-stack clear (user lost undo history after
       // every import). Re-baseline exactly like handlers/todo.js does after its write ops.
-      try { const rw = resyncDbWatch && resyncDbWatch(); if (rw) rw() } catch (err) { log.warn('[Import] resyncDbWatch failed', err) }
-      // 与 todo-db:call 写路径对齐(2026-09-09 P2):导入落库后必须刷新调度器并广播,否则应用内导入后
-      // 主窗口列表陈旧、已导入的提醒全部静默丢失
-      try { scheduler.reloadAll(dbApi()) } catch (err) { log.warn('[Import] reloadAll failed', err) }
-      // R4 P2 (2026-09-21): reloadAll itself writes reminderLastSeenAt (touching -wal) AFTER the
-      // re-baseline above — the next watch poll would misread that self-write as another EXTERNAL
-      // write (full reload + undo wipe). Re-baseline again once the scheduler's own write has
-      // landed, same as index.js does at the end of its external-write path.
-      try { const rw2 = resyncDbWatch && resyncDbWatch(); if (rw2) rw2() } catch (err) { log.warn('[Import] post-reloadAll resyncDbWatch failed', err) }
-      // 2026-09-10 P2:传 e.sender(IpcMainInvokeEvent 本身不是 webContents,exclude 永不命中,
-      // 发起导入的窗会被自己的广播打断撤销栈);其余窗照常刷新
-      broadcastTodosChanged('import', e.sender)
-      // GAP-C fix (2026-09-19): the import writes through dbm.call directly, so the oplog captured
-      // the new rows but NO sync round was kicked (resyncDbWatch only re-baselines the db watcher)
-      // — imported tasks waited for the whole 5-minute periodic round. Kick a debounced immediate
-      // round, same style as the external-db-write path in index.js. Fire-and-forget + guarded:
-      // kickSyncRound no-ops safely before sync init.
-      try { require('../lan-sync-bootstrap').kickSyncRound('csv-import') } catch { /* sync lazy-not-init */ }
+      settleAfterImport()
       // B15 (2026-09-25): single-shot execution grant. The preview-approved hash authorized exactly
       // ONE import of these bytes — leaving the grant armed let a double-invoke / re-fired IPC replay
       // the import (harmless-ish only because dedup catches identical rows, but a re-picked DIFFERENT
       // preview on the same path would still run on a stale approval). Clear both; the next import
       // must go through a fresh preview, or import:run returns the structured AUTH_EXPIRED above.
-      lastPickedImportPath = ''
-      lastPickedImportHash = ''
+      wipeGrant()
       return r
     }
   }
