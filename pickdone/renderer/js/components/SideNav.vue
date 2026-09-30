@@ -126,7 +126,8 @@
         <button type="button" class="sn-sec-toggle" :aria-expanded="showTagPanel ? 'true' : 'false'" :aria-label="$t('statsG.SideNav.tagSectionAria')"
                 @click.stop="showTagPanel=!showTagPanel" @keydown.enter.prevent.stop="showTagPanel=!showTagPanel" @keydown.space.prevent.stop="showTagPanel=!showTagPanel"><span>{{ $t('statsG.SideNav.tagSection') }}</span></button><span class="sn-sec-tools"><button class="sn-ico-btn" :title="$t('statsG.SideNav.newTagBtnTitle')" @click.stop="createTag"><app-icon name="plus" :size="12"/></button><button class="sn-ico-btn" :title="$t('statsG.SideNav.manageTagTitle')" @click.stop="tagMgrVisible = true"><app-icon name="gear" :size="12"/></button><i class="sn-fold-arrow" :class="{open:showTagPanel}"><app-icon name="chevron-down" :size="11"/></i></span>
       </div>
-      <sn-tag-panel v-if="showTagPanel"/>
+      <!-- [R12] '+N more' overflow row opens the manage-tags modal (only tag surface listing every tag) -->
+      <sn-tag-panel v-if="showTagPanel" @more="tagMgrVisible = true"/>
     </div>
 
     </div>
