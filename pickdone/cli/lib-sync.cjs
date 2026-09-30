@@ -35,7 +35,12 @@ module.exports = async function runSync ({ opts, lib, emit }) {
         // flow (`sync pair-respond --code <code>`), useful when nobody can touch the responder.
         const codeSeq = lib.writeSyncCmd({ action: 'pairing-code' })
         const codeAck = await lib.waitForSyncAck(codeSeq)
-        const ownCode = codeAck && codeAck.ok && codeAck.code && codeAck.code.code
+        // cli-15 fail-fast: a null or !ok codeAck used to be swallowed (`ownCode` just stayed
+        // falsy) and the flow SILENTLY continued into the actual pair attempt — the operator saw
+        // no local code and no hint that the first leg already failed. Fail loudly instead.
+        if (!codeAck) throw new lib.CliError('sync pair failed: no ack for the pairing-code request (App is not running or did not consume the command; launch with: open)', 'APP_NOT_RUNNING')
+        if (!codeAck.ok) throw new lib.CliError('sync pair failed: pairing-code request failed: ' + (codeAck.error || 'unknown'), 'SYNC_ERROR')
+        const ownCode = codeAck.code && codeAck.code.code
         if (ownCode) console.log(`pairing code ${ownCode} (valid 10 min) — peer may alternatively run: sync pair-respond --code ${ownCode}`)
         const seq = lib.writeSyncCmd({ action: 'pair', host, port })
         const timeoutMs = Math.max(15, parseInt(opts.timeout, 10) || 90) * 1000
@@ -73,5 +78,19 @@ module.exports = async function runSync ({ opts, lib, emit }) {
         if (opts.json) return emit({ unpaired: device, result: ack.result || null })
         return console.log(`✓ unpaired ${device} — shared secret rotated, remaining peers must re-pair`)
       }
-      throw new lib.CliError('usage: sync <status|pair|pair-respond|unpair>  (pair needs --host; pair-respond accepts --code NNNNNN or answers a pending request; unpair needs --device)', 'USAGE')
+      if (op === 'v2') {
+        // Sync v2 write-path flag (machine-local by design — sync.* keys are denied
+        // on the settings surface, so this gets its own verb on the direct-DB path).
+        // Immediate effect: db-revisions reads the flag per write, no app restart needed.
+        const mode = opts._[1]
+        if (mode === 'on' || mode === 'off') {
+          const r = lib.open().call('revisionsFlag', { on: mode === 'on' })
+          return console.log(`sync v2 revision recording: ${r.on ? 'ON' : 'OFF'}${mode === 'on' ? ' — writes now mint immutable revisions (v1 LAN sync unaffected)' : ''}`)
+        }
+        if (mode === 'state' || mode == null) {
+          return console.log(`sync v2 revision recording: ${lib.open().call('revisionsFlagState').on ? 'ON' : 'OFF'}`)
+        }
+        throw new lib.CliError('usage: sync v2 <on|off|state>', 'USAGE')
+      }
+      throw new lib.CliError('usage: sync <status|pair|pair-respond|unpair|v2>  (pair needs --host; pair-respond accepts --code NNNNNN or answers a pending request; unpair needs --device; v2 flips revision recording)', 'USAGE')
 }

@@ -533,8 +533,15 @@ function restoreTodo (input) {
 function purgeRecycleBin () {
   open() // ensure the DB is open — the purge commits through the bus, which resolves this same module
   const rows = recycleTasks()
-  // Delete attachment files BEFORE clearing rows (files/<taskId>_<ts>_<name>, same prefix rule as the
-  // App's purgeAttachmentFiles in src/main/index.js): purging rows only once left private attachments on disk
+  // cli-4 (root-cause ordering invariant): IRREVERSIBLE side effects must come AFTER the
+  // transactional state change, never before. The old files-first order deleted attachment
+  // files and THEN committed the purge — if the commit failed (bus rejection, mid-way error),
+  // live recycle-bin rows were left pointing at files that no longer exist: unrecoverable data
+  // loss. Rows now die first; a best-effort file pass that fails midway only leaves ORPHANED
+  // files (recoverable garbage), never a live row without its files.
+  commit('todo', 'purgeBin')
+  // Attachment files die after the rows (files/<taskId>_<ts>_<name>, same prefix rule as the
+  // App's purgeAttachmentFiles in src/main/index.js).
   let filesRemoved = 0
   try {
     const dir = path.join(userDataDir(), 'files')
@@ -577,7 +584,6 @@ function purgeRecycleBin () {
       }
     }
   } catch { /* best-effort: the purge itself must not fail on meta scrubbing */ }
-  commit('todo', 'purgeBin')
   audit.record({
     action: 'purge',
     changes: rows.map(r => ({ before: r })),
@@ -691,17 +697,24 @@ async function importEvents (events, { onProgress = () => {} } = {}) {
   if (!Array.isArray(events) || !events.length) throw new CliError('events file must be a non-empty JSON array', 'EMPTY_EVENTS')
   const existing = liveTasks()
   const seen = new Set(existing.map(t => t.dayStart + '|' + String(t.taskContent || '').trim()))
-  // Fix (2026-09-19): re-read records inside the predicate — a pre-import snapshot never saw rows the import itself just created.
-  const hasRecord = tid => (tomatoRecords() || []).some(r => r.manual && r.focusTaskId === tid)
+  // cli-6: the hasRecord closure was replaced by the materialized boolean at return time (see below).
   let created = 0, skipped = 0, clamped = 0
+  const createdIds = []
   const failed = []
   for (const e of events) {
     const label = (e.date || '?') + ' ' + (e.start || '') + ' ' + (e.title || '').slice(0, 24)
     try {
       if (!e.date || !e.start || !e.end || !e.title) throw new CliError('missing date/start/end/title', 'BAD_EVENT')
+      // cli-5: strict HH:mm validation BEFORE anything is written — a malformed time ('9:xx',
+      // '25:99') used to slip past the truthiness check and create a task with NaN-derived times.
+      // Bad events now land in `failed` like every other rejected event.
+      const startT = evu.parseHHmm(e.start)
+      if (!startT) throw new CliError('bad start time "' + e.start + '" (expect HH:mm 00:00-23:59)', 'BAD_EVENT')
+      const endT = evu.parseHHmm(e.end, { allow24: true })
+      if (!endT) throw new CliError('bad end time "' + e.end + '" (expect HH:mm 00:00-23:59 or 24:00)', 'BAD_EVENT')
       const key = evu.eventKey(e, dayStartOf, parseDate)
       if (seen.has(key)) { skipped++; onProgress({ label, status: 'skipped-task' }); continue }
-      const { h: h1, m: m1 } = (() => { const [a, b] = String(e.start).split(':').map(Number); return { h: a, m: b } })()
+      const { h: h1, m: m1 } = startT
       const { h: h2, m: m2 } = eventEnd(e)
       let mins = (h2 * 60 + m2) - (h1 * 60 + m1)
       if (mins <= 0) mins += 1440
@@ -714,6 +727,7 @@ async function importEvents (events, { onProgress = () => {} } = {}) {
         createTime: e.date + ' ' + e.start
       })
       seen.add(key)
+      createdIds.push(t.taskId)
       // B14 (2026-09-24): estimate>20 is no longer clamped SILENTLY (Math.min(20, …) reported
       // success while a different estimate landed — the same failure mode backfillRecord's
       // over-cap throw fixes). The row-level clamp (setEstimate → clampEstimate) still applies;
@@ -748,6 +762,12 @@ async function importEvents (events, { onProgress = () => {} } = {}) {
       onProgress({ label, status: 'failed', error: String(er.message || er) })
     }
   }
+  // cli-6: hasRecord used to be returned as a LIVE CLOSURE — a function on the result object.
+  // Nothing JSON-serializes a function, so every consumer that emitted/serialized the result
+  // silently dropped the field, and `res.hasRecord` reads as `function` not data. Materialize it:
+  // a plain boolean re-read from the ledger at return time (the d4 re-read property is preserved —
+  // it now sees rows the import itself just created).
+  const hasRecord = createdIds.some(tid => (tomatoRecords() || []).some(r => r.manual && r.focusTaskId === tid))
   return { created, skipped, clamped, failed, total: events.length, hasRecord }
 }
 

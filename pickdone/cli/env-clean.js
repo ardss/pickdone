@@ -6,9 +6,10 @@ const os = require('os')
 const path = require('path')
 
 /** Collect cleanable targets: test-isolation userData (todo-test-* and pd-it-*), test logs, the dev
- *  data directory (.dev-data — default target since the 2026-09-25 isolation wave: it is fully
- *  regenerable dev data) and the legacy repo-tree pickdone-backups leak (auto snapshots the old
- *  parent-of-userData derivation wrote next to the source tree). */
+ *  data directory (.dev-data) are default targets. The legacy repo-tree pickdone-backups leak
+ *  (auto snapshots the old parent-of-userData derivation wrote next to the source tree) is
+ *  OPT-IN via --all: unlike the other targets it is not pure residue — a user may have moved
+ *  real backups there, so bulk-deleting it must never happen on a bare clean. */
 function collectTargets ({ all = false, appRoot }) {
   const targets = []
   const tmp = os.tmpdir()
@@ -19,7 +20,9 @@ function collectTargets ({ all = false, appRoot }) {
   }
   targets.push({ p: path.join(appRoot, 'tests', '.artifacts'), label: '测试日志产物' })
   targets.push({ p: path.join(appRoot, '.dev-data'), label: '开发数据目录(.dev-data)' })
-  targets.push({ p: path.join(appRoot, 'pickdone-backups'), label: '仓库残留备份泄漏(pickdone-backups)' })
+  // cli-3: `--all` was a dead flag (collected but never consulted). It now means exactly one
+  // thing: include the pickdone-backups repo-tree leak in the cleanup pass.
+  if (all) targets.push({ p: path.join(appRoot, 'pickdone-backups'), label: '仓库残留备份泄漏(pickdone-backups)' })
   return targets.filter(t => { try { fs.statSync(t.p); return true } catch { return false } })
 }
 
