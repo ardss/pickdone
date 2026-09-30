@@ -40,7 +40,7 @@
                 :style="h.records && h.records[todayKey] ? { background: h.color, borderColor: h.color } : {}"
                 @click="check(h)" @keydown.enter.prevent="check(h)">✓</span>
           <template v-if="editingId === h.id">
-            <input v-model="editName" class="habit-rename" @keydown.enter.prevent="e => { if (e.isComposing || e.keyCode === 229) return; saveRename(h) }" @blur="saveRename(h)"
+            <input ref="renameInput" v-model="editName" class="habit-rename" @keydown.enter.prevent="e => { if (e.isComposing || e.keyCode === 229) return; saveRename(h) }" @blur="saveRename(h)"
                    @keydown.esc.prevent="cancelRename(h)"/>
           </template>
           <template v-else>
@@ -203,7 +203,19 @@ export default {
       const n = this.editName.trim()
       // [maint-0924 A11] empty name warns and STAYS in edit mode (was a silent exit, misaligned
       // with SideNav's empty-name handling which keeps the editor open)
-      if (!n) { this.$message.warning(this.$t('statsE.HabitView.renameEmpty')); return }
+      // [A11 fix] empty name warns and STAYS in edit mode; the warning fires from the input's blur
+      // handler, so re-focus the editor after nextTick (the blur removed focus) — otherwise the user
+      // is left with a zombie inline editor that must be clicked again
+      if (!n) {
+        this.$message.warning(this.$t('statsE.HabitView.renameEmpty'))
+        this.$nextTick(() => {
+          // the input lives in a v-for, so the ref may be collected as an array
+          const r = this.$refs.renameInput
+          const el = Array.isArray(r) ? r[0] : r
+          if (el) el.focus()
+        })
+        return
+      }
       this.$store.commit('habits/renameHabit', { id: h.id, name: n })
       this.editingId = null
     },
