@@ -392,6 +392,7 @@ export default {
     },
     "TodoGroupBlock": {
       "groupViewOptions": "本组视图设置",
+      "groupSettingsAria": "打开本组视图设置",
       "rescheduleBtn": "重新安排"
 
     },
