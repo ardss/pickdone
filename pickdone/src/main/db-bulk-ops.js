@@ -12,6 +12,33 @@
  * needs for row-shape apply and delete-wins LWW. These reads expose the raw rows; keep them
  * here (not db.js) — db.js is size-ratcheted and these are sync-internal. */
 module.exports = (getDb, getOps) => ({
+  // Sync-5 result-awareness (moved from db.js, structure-size ratchet): both ops return the
+  // ids PHYSICALLY deleted ([] for an absent id) — the oplog keys its tombstone pointers off
+  // this, so a hardDelete of an id that was never here emits no phantom delta (it used to
+  // return true unconditionally and told peers to delete a row they may still hold live).
+  // Cascaded cleanups stay unconditional (orphans from a partial earlier delete must still
+  // die); only the todo row's own DELETE decides the result. Same transaction packaging as
+  // before (a crash between the statements must not leave orphan plan_chips).
+  hardDelete: id => {
+    let ids = []
+    const gc = require('./db-meta-gc.cjs')(getDb)
+    const tr = getDb().transaction(() => {
+      getDb().prepare('DELETE FROM plan_chips WHERE taskId=?').run(String(id))
+      gc.deleteSnowDedupKeysFor([id]); gc.deleteChipsSnapshotKeysFor([id]); gc.deleteEstimateKeysFor([id])
+      if (getDb().prepare('DELETE FROM todos WHERE id = ?').run(id).changes > 0) ids = [String(id)]
+    })
+    tr(); return ids
+  },
+  hardDeleteMany: ids => {
+    const deleted = []
+    const gc = require('./db-meta-gc.cjs')(getDb)
+    const tr = getDb().transaction(() => ids.forEach(i => {
+      getDb().prepare('DELETE FROM plan_chips WHERE taskId=?').run(String(i))
+      gc.deleteSnowDedupKeysFor([i]); gc.deleteChipsSnapshotKeysFor([i]); gc.deleteEstimateKeysFor([i])
+      if (getDb().prepare('DELETE FROM todos WHERE id = ?').run(i).changes > 0) deleted.push(String(i))
+    }))
+    tr(); return deleted
+  },
   upsertCategoryMany: list => {
     if (!Array.isArray(list)) throw new Error('[TodoDB] upsertCategoryMany: list must be an array, got ' + typeof list)
     const changed = []

@@ -148,7 +148,13 @@ function todoToRow (t) {
     deletedAt: t.deletedAt || 0,
     deleted: t.delete ? 1 : 0,
     createdAt: t.createTime || 0,
-    updatedAt: t.updateTime || 0,
+    // Sync-1 tombstone stamp fallback: a tombstone landing through the sync bulk path carries
+    // ONLY deletedAt (sync-apply.js pushes {taskId, delete:1, deletedAt, syncAuthor} — the
+    // winner's payload was already dropped by the merge). updatedAt used to fall through to 0,
+    // making the landed tombstone epoch-oldest: any peer live row (or the row's own next echo)
+    // then beat it on the next LWW round and the deletion resurrected. A deleted row's honest
+    // LWW age is its deletedAt; live rows keep the plain updateTime semantics.
+    updatedAt: t.updateTime || (t.delete ? (t.deletedAt || 0) : 0),
     syncTime: t.syncTime || 0,
     scheduledAt: todoTime,
     // Echo-stability fix (2026-09-26 first-pair incident): honor a caller-carried dayStart.
@@ -190,4 +196,4 @@ function todoToRow (t) {
   }
 }
 
-module.exports = { normalizeContent, parseOffsets, parseReminders, packReminders, rowToTodo, rowToCategory, todoToRow, setSyncAuthor }
+module.exports = { normalizeContent, parseOffsets, parseReminders, packReminders, rowToTodo, rowToCategory, todoToRow, setSyncAuthor, selfSyncAuthor }

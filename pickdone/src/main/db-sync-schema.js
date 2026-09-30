@@ -31,6 +31,11 @@ CREATE TABLE IF NOT EXISTS settings_rows (
 
 const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
 
+// Sync-11: canonical (key-order-insensitive) JSON compare, single-sourced from sync-core's
+// stableStringify (the same normalization the merge layer uses for content identity).
+// require(esm) — same mechanism as db.js's shared/limits.mjs import; merge.mjs is dependency-free.
+const { stableStringify } = require('../../shared/sync-core/merge.mjs')
+
 module.exports = ({ getDb, log }) => {
   const rowsAll = () => getDb().prepare('SELECT key, value, updatedAt, deleted, deletedAt FROM settings_rows').all()
     .map(r => ({ key: r.key, value: parseValue(r.value), updatedAt: r.updatedAt, deleted: !!r.deleted, deletedAt: r.deletedAt }))
@@ -55,6 +60,16 @@ module.exports = ({ getDb, log }) => {
     const value = JSON.stringify(rawValue === undefined ? null : rawValue)
     const cur = getDb().prepare('SELECT value, deleted, updatedAt FROM settings_rows WHERE key = ?').get(key)
     if (cur && !cur.deleted && cur.value === value) return false
+    // Sync-11: canonical compare — the same document written with different key insertion
+    // order (or a re-serialized nested object) stringifies differently but IS the same value;
+    // the string compare above then read "changed", re-stamped updatedAt with fresh local now
+    // and minted a fake LWW age + oplog delta for an identical write. Compare both sides
+    // through stableStringify over the PARSED values (JSON semantics normalize both shapes).
+    if (cur && !cur.deleted) {
+      try {
+        if (stableStringify(JSON.parse(cur.value)) === stableStringify(JSON.parse(value))) return false
+      } catch { /* unparseable current value: genuinely changed */ }
+    }
     // Round-4 P1 (clock skew vs the mirror gate): cur.updatedAt may carry the PEER's clock —
     // sync-apply.js clamps inbound rows only at now+SKEW_CLAMP_MS (10min), so a skewed peer can
     // legally leave a row stamped up to +10min into OUR future. Comparing that future stamp
@@ -89,6 +104,32 @@ module.exports = ({ getDb, log }) => {
     })
     tr()
     return changed
+  }
+
+  // Sync-10: the blob mirror is a WHOLE-document write — a field the renderer REMOVED from the
+  // blob is deleted, but the bridge only ever mirrored fields PRESENT in the doc, so the stale
+  // settings_row lingered live forever: every snapshot re-pushed it to peers and a peer's newer
+  // mirror re-materialized it here (a permanent resurrection loop for deleted settings fields).
+  // Tombstone rows whose key is absent from the doc. Same gate as putRow (Round-3 P1): a row
+  // stamped MEANINGFULLY newer than the blob snapshot is sync truth that this stale echo must
+  // not destroy — those rows are skipped. Returns the tombstoned keys (oplog deltas).
+  function tombstoneAbsentRows (docKeys, gateTs) {
+    // Machine-local rows (sync.deviceId, securityLock*, sync.revisions.v2 flag — shared/
+    // machine-local-keys.mjs) never come from the blob doc but must NEVER be tombstoned off it:
+    // the blob mirror is not their writer.
+    const { isMachineLocalSettingKey } = require('../../shared/machine-local-keys.mjs')
+    const present = new Set((docKeys || []).filter(k => !UNSAFE_KEYS.has(k)))
+    const rows = getDb().prepare('SELECT key, updatedAt FROM settings_rows WHERE deleted = 0').all()
+    const now = Date.now()
+    const removed = []
+    for (const r of rows) {
+      if (present.has(r.key) || isMachineLocalSettingKey(r.key)) continue
+      if (Number.isFinite(gateTs) && Math.min(Number(r.updatedAt) || 0, now) - gateTs > 1000) continue // sync-applied after the snapshot: keep
+      // Same tombstone UPDATE as rowDelete (no re-stamp of an already-deleted row)
+      const res = getDb().prepare('UPDATE settings_rows SET deleted=1, deletedAt=?, updatedAt=? WHERE key=? AND deleted=0').run(now, now, r.key)
+      if (res.changes > 0) removed.push(r.key)
+    }
+    return removed
   }
 
   // v6 migration (docs/sync §4.2 settings/habits blob split + §5 tz column). Runs under the
@@ -163,6 +204,9 @@ module.exports = ({ getDb, log }) => {
         // echo used to win LWW on the peer and revert the local user's edit seconds later.
         const gateTs = doc && Number.isFinite(Number(doc._savedAt)) ? Number(doc._savedAt) : undefined
         const changed = doc ? mergeDoc(doc, gateTs) : []
+        // Sync-10: fields removed from the whole-blob mirror are deletions — tombstone their
+        // rows too (gated like putRow, so sync-applied newer rows survive a stale echo).
+        const removed = doc ? tombstoneAbsentRows(Object.keys(doc), gateTs) : []
         const snapKey = 'settingsRows.src.' + blobKey
         // P1 2026-09-17: only stamp the snapshot for PARSEABLE docs — stamping an unparseable blob
         // made migrateV6's "already migrated in this exact shape" guard skip the corruption retry.
@@ -170,6 +214,7 @@ module.exports = ({ getDb, log }) => {
         // Row-granular change capture for the mirrored fields (the ('meta', key) delta from the
         // setMeta op itself is emitted separately by call(); both belong in the log)
         if (changed.length) oplog.appendOplog(changed.map(id => ({ entity: 'setting', entityId: id, ts: Date.now() })))
+        if (removed.length) oplog.appendOplog(removed.map(id => ({ entity: 'setting', entityId: id, ts: Date.now() })))
       }
       return r
     }

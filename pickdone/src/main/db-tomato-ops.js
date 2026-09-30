@@ -147,17 +147,25 @@ exports.tomatoUpdateById = (db, { tomatoId, patch }) => {
 // sync layer carries the winner's LWW age; local writers without a stamp keep local now.
 exports.tomatoRemoveByIds = (db, ids, opts = {}) => {
   const list = Array.isArray(ids) ? ids : [ids]
-  const del = db.prepare('UPDATE tomato_records SET deleted=1, deletedAt=?, updatedAt=? WHERE tomatoId = ?')
+  // Sync-7: `AND deleted = 0` — re-deleting an already-tombstoned id used to RE-STAMP its
+  // deletedAt/updatedAt to local now, falsifying the true deletion order (an older, real
+  // deletion read newest-here and won LWW against a newer peer tombstone) and minting a fresh
+  // oplog pointer per repeat call. A dead row is final; only live rows can be tombstoned.
+  const del = db.prepare('UPDATE tomato_records SET deleted=1, deletedAt=?, updatedAt=? WHERE tomatoId = ? AND deleted = 0')
   const now = Date.now()
   const dAt = (opts && opts.deletedAt) || now
   const stamp = (opts && opts.updatedAt) || dAt
+  // Sync-6: return the ids ACTUALLY tombstoned (row-granular result contract, same as
+  // planRemoveIds) — the oplog consumer keys its pointers off this, so an absent or
+  // already-dead id emits no phantom delta.
+  const removed = []
   const tr = db.transaction(() => list.forEach(i => {
     const o = (i && typeof i === 'object') ? i : null
     const id = o ? (o.tomatoId != null ? o.tomatoId : o.id) : i
-    del.run((o && Number(o.deletedAt) > 0) ? Number(o.deletedAt) : dAt, (o && Number(o.updatedAt) > 0) ? Number(o.updatedAt) : stamp, String(id))
+    if (del.run((o && Number(o.deletedAt) > 0) ? Number(o.deletedAt) : dAt, (o && Number(o.updatedAt) > 0) ? Number(o.updatedAt) : stamp, String(id)).changes > 0) removed.push(String(id))
   }))
   tr()
-  return true
+  return removed
 }
 
 // One-time migration: bulk-insert the full ledger from the old meta blob.

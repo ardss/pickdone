@@ -7,7 +7,7 @@ const i18nM = require('./i18n')
 const fs = require('fs')
 const crypto = require('crypto')
 const LIMITS = require('../../shared/limits.mjs') // focus-duration clamp constants (single source, audit item 4); require(esm) — Node >= 22.12
-const { normalizeContent, rowToTodo, todoToRow, setSyncAuthor } = require('./db-rows')
+const { normalizeContent, rowToTodo, todoToRow, setSyncAuthor, selfSyncAuthor } = require('./db-rows')
 // snowDedup key-cap (R5 P3): replay protection only needs recent keys, so past the cap the
 // older-than-30d entries are pruned (see bumpSnow).
 const SNOW_DEDUP_CAP = 2000
@@ -432,7 +432,12 @@ function initInner (userDataPath) {
   // P1 2026-09-17: focus increments must also flip status to 'update' — the renderer's snapshot
   // filter drops rows with status='sync', so a bump on an already-synced row used to leave the
   // focus delta invisible to the cloud sync path (commitSyncBatch) forever.
-  stmts.bumpSnow = db.prepare("UPDATE todos SET focusMinutes = focusMinutes + @minutes, status = 'update', updatedAt = @now WHERE id = @taskId AND deleted = 0")
+  // Sync-2 (protocol v3 attribution): a focus bump is a WRITE that produces a new updatedAt —
+  // it must be attributed to this device (selfSyncAuthor) like every other write path, or the
+  // merge layer reads the bumped row as "unknown author" and treats every later same-writer
+  // echo as divergent (junk conflict copies). NULL (identity not yet established) stays honest:
+  // unknown = always-divergent = conservative, never a wrong attribution.
+  stmts.bumpSnow = db.prepare("UPDATE todos SET focusMinutes = focusMinutes + @minutes, status = 'update', updatedAt = @now, syncAuthor = @author WHERE id = @taskId AND deleted = 0")
   log.info('[TodoDB] 数据库初始化完成:', file)
   return file
 }
@@ -548,7 +553,7 @@ const OPS = {
       const key = `snowDedup:${taskId}:${dedupKey}`
       const tr = db.transaction(() => {
         if (stmts.getMeta.get(key)) return { ok: true, minutes: 0, deduped: true }
-        const r0 = stmts.bumpSnow.run({ taskId, minutes: m, now: Date.now() })
+        const r0 = stmts.bumpSnow.run({ taskId, minutes: m, now: Date.now(), author: selfSyncAuthor() })
         if (r0.changes === 0) {
           const row = stmts.getById.get(taskId)
           return { ok: false, reason: row ? 'deleted' : 'missing' }
@@ -568,7 +573,7 @@ const OPS = {
       } catch { /* pruning is best-effort and must never fail the bump */ }
       return out
     }
-    const r = stmts.bumpSnow.run({ taskId, minutes: m, now: Date.now() })
+    const r = stmts.bumpSnow.run({ taskId, minutes: m, now: Date.now(), author: selfSyncAuthor() })
     // Structured result: changes=0 used to collapse "missing" and "soft-deleted" into a bare false, so callers silently dropped focus credit; name the reason
     if (r.changes === 0) {
       const row = stmts.getById.get(taskId)
@@ -583,8 +588,11 @@ const OPS = {
   },
   queryTodos,
   // 两表删除包事务:两语句间崩溃会留孤儿 chips(2026-09-05 终审 P1,与 hardDeleteMany 对齐)
-  hardDelete: id => { const tr = db.transaction(() => { db.prepare('DELETE FROM plan_chips WHERE taskId=?').run(String(id)); deleteSnowDedupKeysFor([id]); deleteChipsSnapshotKeysFor([id]); deleteEstimateKeysFor([id]); stmts.hardDelete.run(id) }); tr(); return true },
-  hardDeleteMany: ids => { const tr = db.transaction(() => ids.forEach(i => { db.prepare('DELETE FROM plan_chips WHERE taskId=?').run(String(i)); deleteSnowDedupKeysFor([i]); deleteChipsSnapshotKeysFor([i]); deleteEstimateKeysFor([i]); stmts.hardDelete.run(i) })); tr(); return true },
+  // Sync-5 result-awareness — both delegates live in db-bulk-ops.js (size-ratchet move): they
+  // return the ids PHYSICALLY deleted (row-granular contract, same as purgeRecycleBin), so an
+  // absent id no longer returns true nor mints a phantom tombstone oplog pointer.
+  hardDelete: (...a) => makeBulkOps.hardDelete(...a),
+  hardDeleteMany: (...a) => makeBulkOps.hardDeleteMany(...a),
   getMeta: k => { const r = stmts.getMeta.get(k); return r ? r.value : null },
   // Accepts both argument forms: (k, v) or [k, v] (the renderer's dbCall('setMeta', [k, v]) is passed through as a single call parameter)
   setMeta: (k, v) => { if (Array.isArray(k)) { v = k[1]; k = k[0] } stmts.setMeta.run(k, String(v)); return true },
