@@ -108,7 +108,12 @@ function undock () {
   setUserClosed(false) // re-opening via the tray is an explicit user open: the close marker must not survive it
   // Window never created (float disabled at startup) or destroyed: lazy-create via show(), otherwise the tray's "show float window" click would never respond (false affordance)
   if (!win || win.isDestroyed()) { module.exports.show(); return }
-  win.showInactive(); setBounds()
+  win.showInactive()
+  // Fault-11 (D12 2026-10-01): the bare setBounds() → defaultBounds() → screen.getPrimaryDisplay()
+  // chain threw out of the tray-menu click handler when the display unplug landed mid-undock —
+  // an uncaught exception in the main process. Route through the C8 guarded re-clamp: the intent
+  // stays, a screen-API throw becomes a logged no-op (same convention as the screen-event hooks).
+  safeReclamp()
   // dock() 走 stopHitPoll+applyIgnore(true),undock 必须对称补链:否则轮询不重启且 lastIgnore 卡死 true,
   // 窗口永久 click-through——看得见、点不到、拖不动(2026-09-05 "浮窗拖不动"根因一)
   startHitPoll()
@@ -477,7 +482,19 @@ module.exports = {
     stopHitPoll()
     applyIgnore(false)
     const b = win.getBounds()
-    const cur = screen.getCursorScreenPoint()
+    // Fault-13 (D12 2026-10-01): getCursorScreenPoint throws synchronously when the session's
+    // cursor is unavailable (RDP disconnect / display teardown). Thrown out of dragStart it
+    // escaped as a raw IPC error AND left the hit poll suspended (stopHitPoll above already ran),
+    // so the float stayed click-through forever. Read the cursor under a guard: on failure log,
+    // re-arm the poll (the suspended state must never survive), and refuse the drag.
+    let cur
+    try {
+      cur = screen.getCursorScreenPoint()
+    } catch (e) {
+      log.warn('[TomatoFloat] dragStart: cursor point unavailable, drag refused', e)
+      startHitPoll()
+      return false
+    }
     dragCtx = { windowX: b.x, windowY: b.y, cursorX: cur.x, cursorY: cur.y, h: b.height, open: panelOpen, startedAt: Date.now() } // dragging keeps the current height mode (86/320); size does not change while dragging
     dragTimer = setInterval(() => {
       if (!dragCtx || !win || win.isDestroyed()) { stopDrag(); return }
