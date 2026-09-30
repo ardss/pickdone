@@ -147,8 +147,11 @@ const busCommit = (entity, verb, payload) => require('./command-bus').commit(ent
 // F11 (dw wave6): startup recovery now re-imports the SAME segment set the UI restore accepts —
 // filter.putMany / plan.putMany / meta.put ride the same command-bus doors as the renderer, all
 // idempotent by id (dbRecovery skips rows without id; the db ops upsert ON CONFLICT).
-function restoreTasksFromCriticalBackup (ud) {
-  return dbRecovery.restoreTasksFromCriticalBackup(ud,
+// Sync-3 (D12): the wrapper returns the per-segment REPORT (tasks / imported / failedSegments /
+// unconsumedSegments / proved) — the plain-bak cleanup gate must know whether EVERY segment of
+// the snapshot was consumed, not just whether todoState imported rows.
+function restoreFromCriticalBackup (ud) {
+  return dbRecovery.restoreSegmentsFromCriticalBackup(ud,
     list => busCommit('todo', 'putMany', list),
     c => busCommit('category', 'put', c),
     rows => busCommit('tomato', 'appendMany', rows),
@@ -322,16 +325,38 @@ if (!app.requestSingleInstanceLock()) { app.quit() } else {
       let reinitErr = null
       try { dbm.init(ud) } catch (e2) { reinitErr = e2 }
       let restoredN = 0
+      // Sync-3 (D12): per-segment success report — the plain-bak cleanup gate needs to know that
+      // EVERY segment of the snapshot was consumed, not just that todoState imported rows.
+      let restoreFullyConsumed = false
       // source is a structured branch flag; display copy must never drive logic (dbRecovery.cjs contract)
       // jsonRestoreAllowed gates on the re-init having succeeded: with a dead DB (e.g. the vendor
       // driver itself cannot load) every busCommit in the restore path throws and the "restore"
       // rebuilds nothing (2026-09-26 lubancat live catch; gate = dbRecovery.jsonRestoreAllowed).
       if (dbRecovery.jsonRestoreAllowed(recoveredFrom, reinitErr)) {
-        restoredN = restoreTasksFromCriticalBackup(ud)
+        const restored = restoreFromCriticalBackup(ud)
+        restoredN = restored.tasks
+        restoreFullyConsumed = !!restored.proved
         // GAP-D fix (2026-09-19): recovery writes go through dbm.call directly with no sync kick —
         // restored rows waited for the periodic round. Boot-time kick is safe: kickSyncRound no-ops
         // while the sync node is not initialized.
         try { require('./lan-sync-bootstrap').kickSyncRound('db-recovery') } catch { /* sync lazy-not-init */ }
+      }
+      // Sync-4/Sync-17 (D12): recovery-pending sentinel lifecycle. When a parseable critical
+      // backup is still on disk but the restore could NOT consume it (re-init failed → the
+      // jsonRestoreAllowed gate blocked the restore = Sync-17; or segments failed/stayed
+      // unconsumed = Sync-4's crash twin), mark the sentinel so the NEXT boot's attemptDbRecovery
+      // treats the resulting healthy-header empty shell as re-coverable instead of answering
+      // 'transient' forever. A proved restore (or any non-replayable state) clears it — no loop.
+      // This MUST sit outside the jsonRestoreAllowed gate: the gate is exactly what blocks the
+      // restore on reinitErr (Sync-17), and that is one of the two states the sentinel exists for.
+      const jsonSnapshotUsable = !!(recoveredFrom && recoveredFrom.source === 'json' &&
+        dbRecovery.backupJsonParseable(dbRecovery.criticalBackupPath(ud)))
+      const snapshotConsumed = jsonSnapshotUsable && !reinitErr && restoreFullyConsumed
+      if (jsonSnapshotUsable && !snapshotConsumed) {
+        dbRecovery.markRecoveryPending(ud, { reason: reinitErr ? 'json-restore-blocked' : 'json-restore-unconsumed' })
+        log.warn('[Init] recovery-pending sentinel written: parseable critical backup left unconsumed — next boot will replay the restore')
+      } else {
+        dbRecovery.clearRecoveryPending(ud)
       }
       // P1-6 (2026-09-19 data-safety round) / round-1 P0 (2026-09-21): ANY recovery that replaced
       // the DB file ('json' restore AND 'plain-bak' copy) rebuilt it in an OLDER oplog seq space —
@@ -365,12 +390,12 @@ if (!app.requestSingleInstanceLock()) { app.quit() } else {
         // P2 2026-09-12: the recovery-succeeded relaunch branch skipped the plain-bak cleanup that the
         // init-success path below does — after recovery the plaintext copy stayed in userData forever,
         // defeating at-rest encryption. Clear it before relaunching (same semantics, best-effort).
-        // P1 (R4 2026-09-21): cleanup is now gated on an ACTUAL restore. restoreTasksFromCriticalBackup
-        // swallows per-step errors and returns 0 — the old unconditional delete destroyed the last
-        // usable backup (todos.db.plain-bak) whenever the JSON restore imported nothing. Only the
-        // 'json' branch with restoredN > 0 proves the DB was really rebuilt with current data, so
-        // only that branch may drop the bak; a 'plain-bak' copy or a 0-row restore keeps it on disk.
-        const jsonRestoreProved = recoveredFrom.source === 'json' && restoredN > 0
+        // P1 (R4 2026-09-21): cleanup is now gated on an ACTUAL restore. The restore swallows
+        // per-step errors — the old unconditional delete destroyed the last usable backup
+        // (todos.db.plain-bak) whenever the JSON restore imported nothing. Only the 'json' branch
+        // with restoredN > 0 AND a fully-consumed snapshot (Sync-3: every segment imported) proves
+        // the DB was really rebuilt with current data, so only that branch may drop the bak.
+        const jsonRestoreProved = recoveredFrom.source === 'json' && restoredN > 0 && restoreFullyConsumed
         const pb = path.join(ud, 'todos.db.plain-bak')
         if (jsonRestoreProved) {
           try {
@@ -418,6 +443,9 @@ if (!app.requestSingleInstanceLock()) { app.quit() } else {
       const pb = path.join(app.getPath('userData'), 'todos.db.plain-bak')
       if (fs.existsSync(pb)) { fs.rmSync(pb, { force: true }); log.info('[Init] 加密库启动正常,已清除明文残留 todos.db.plain-bak') }
     } catch (e0) { log.warn('[Init] plain-bak 清理失败', e0) }
+    // Sync-4/Sync-17: a clean init means any recovery-pending sentinel from a previous interrupted
+    // recovery is stale (either the replay already ran or there is nothing left to replay).
+    try { dbRecovery.clearRecoveryPending(app.getPath('userData')) } catch { /* best-effort */ }
     handleAppProtocol()
     createMainWindow()
     const win = getMainWindow()
