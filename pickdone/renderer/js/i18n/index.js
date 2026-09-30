@@ -65,9 +65,13 @@ export function getLocale () {
 
 export function setLocale (locale) {
   if (!SUPPORTED.some(s => s[0] === locale)) return
-  localStorage.setItem(LS_KEY, locale)
+  // [Fault-12] persistence + DOM side effects are best-effort: stub environments (cli smoke tests
+  // have a bare window with no localStorage) and storage-blocked hosts used to throw straight out of
+  // setItem, killing the in-memory switch AND the settings-blob mirror below. getLocale() already
+  // guards its reads symmetrically.
+  try { localStorage.setItem(LS_KEY, locale) } catch (e) { /* keep the in-memory switch alive */ }
   if (i18n.global) i18n.global.locale = locale
-  document.documentElement.setAttribute('lang', locale === 'en-US' ? 'en' : 'zh-CN')
+  try { document.documentElement.setAttribute('lang', locale === 'en-US' ? 'en' : 'zh-CN') } catch (e) { /* document-less hosts */ }
   try { window.todoAPI && window.todoAPI.setAppLocale && window.todoAPI.setAppLocale(locale) } catch (e) { /* browser host lacks this channel */ }
   // Y1 (sync-coverage-2): mirror the change into the synced settings blob so the locale syncs
   // field-granular to peers (LS stays the boot cache). The commit is skipped when the change itself
