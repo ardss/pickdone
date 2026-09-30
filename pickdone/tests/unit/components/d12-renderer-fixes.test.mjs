@@ -115,16 +115,23 @@ test('R12: SideNav wires the overflow row to the manage-tags modal', () => {
 /* ---------------- R13: ViewMoreMenu focus return on every close path ---------------- */
 
 test('R13: a single closeMenu path returns focus to the trigger; all close paths use it', () => {
-  assert.match(VIEWMORE, /closeMenu \(\) \{/)
-  const close = VIEWMORE.slice(VIEWMORE.indexOf('closeMenu ()'))
+  assert.match(VIEWMORE, /closeMenu \(refocus = true\) \{/)
+  const close = VIEWMORE.slice(VIEWMORE.indexOf('closeMenu (refocus = true)'))
   assert.match(close, /const btn = this\.\$el && this\.\$el\.querySelector\('\.view-more-btn'\)/)
   assert.match(close, /if \(btn\) btn\.focus\(\)/)
-  // Escape, item click, outside mousedown — every closer goes through closeMenu
+  // Escape, item click — keyboard-anchored closers refocus the trigger via closeMenu()
   assert.match(VIEWMORE, /e\.key === 'Escape'[\s\S]{0,80}this\.closeMenu\(\)/)
   assert.match(VIEWMORE, /this\.closeMenu\(\)\s*\n\s*\},\s*\n\s*onDocDown/)
-  assert.match(VIEWMORE, /!e\.target\.closest\('\.view-more-btn'\)\) this\.closeMenu\(\)/)
   // the trigger-click toggle keeps its own close (focus already sits on the button)
   assert.match(VIEWMORE, /if \(this\.open\) \{ this\.open = false; return \}/)
+})
+
+test('R13b: the outside-mousedown closer does NOT refocus the trigger (no surprise focus yank)', () => {
+  // A mouse user clicking elsewhere on the page deliberately moved focus there; the pre-R13b
+  // code refocused the ⋮ button on that path too (surprise focus ring / scroll-into-view).
+  assert.match(VIEWMORE, /!e\.target\.closest\('\.view-more-btn'\)\) this\.closeMenu\(false\)/)
+  const close = VIEWMORE.slice(VIEWMORE.indexOf('closeMenu (refocus = true)'))
+  assert.match(close, /if \(!refocus\) return/, 'closeMenu must skip the focus return when refocus=false')
 })
 
 /* ---------------- Fault-4: WeatherWidget shape sequence token ---------------- */

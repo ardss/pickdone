@@ -87,10 +87,14 @@ export default {
     },
     // [R13] single close path that returns focus to the ⋮ trigger: the menu used to close with the
     // trigger unreached on every path except Escape (item click, outside mousedown), dropping
-    // keyboard users at <body> after activating a menu item
-    closeMenu () {
+    // keyboard users at <body> after activating a menu item. The OUTSIDE-mousedown closer opts out
+    // (closeMenu(false)): that user clicked elsewhere on the page — silently yanking focus (and
+    // possibly scroll-into-view) back to the ⋮ button is a surprise; their focus already moved to
+    // whatever they clicked.
+    closeMenu (refocus = true) {
       if (!this.open) return
       this.open = false
+      if (!refocus) return
       this.$nextTick(() => {
         const btn = this.$el && this.$el.querySelector('.view-more-btn')
         if (btn) btn.focus()
@@ -129,7 +133,7 @@ export default {
       this.closeMenu()
     },
     onDocDown (e) {
-      if (this.open && !e.target.closest('.view-more-pop') && !e.target.closest('.view-more-btn')) this.closeMenu()
+      if (this.open && !e.target.closest('.view-more-pop') && !e.target.closest('.view-more-btn')) this.closeMenu(false)
     }
   },
   mounted () { document.addEventListener('mousedown', this.onDocDown, true) },
