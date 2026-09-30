@@ -78,8 +78,11 @@ module.exports = Object.assign(({ getDb, log, getPurgeChips, onAppendFailure }) 
       case 'planAddMany': return arr('plan', result)
       // P2-5 (R4 2026-09-21): false = the UPDATE matched no live chip (no change) — no delta.
       case 'planUpdateChip': return result === false ? [] : [one('plan', params && params.id)]
-      // planRemoveIds accepts plain ids or {id, deletedAt, updatedAt} stamps (sync apply path)
-      case 'planRemoveIds': return arr('plan', (Array.isArray(params) ? params : [params]).map(x => (x && typeof x === 'object') ? x.id : x))
+      // planRemoveIds accepts plain ids or {id, deletedAt, updatedAt} stamps (sync apply path).
+      // D11 finding 11: result-aware like its siblings — the op returns the ids that ACTUALLY
+      // changed (the `AND deleted=0` guard no-ops a ghost/duplicate id); a phantom pointer for an
+      // id the UPDATE never matched used to be emitted from params alone.
+      case 'planRemoveIds': return arr('plan', result)
       // F3c (2026-09-20): these three ops move/delete CHIPS but used to log a single ('plan',
       // taskId) pointer — peers hydrated that as a GHOST tombstone (no chip has id = taskId) and
       // no-op'd, so task-level chip moves/deletes never propagated. Runs AFTER the write
@@ -121,7 +124,9 @@ module.exports = Object.assign(({ getDb, log, getPurgeChips, onAppendFailure }) 
       // unconditional pointer emitted a PHANTOM delta in exactly those cases (delta consumers
       // hydrate a row that never changed; e.g. the float's every-tick tomatoUpdateById echo).
       case 'tomatoUpdateById': return result === false ? [] : [one('tomato', params && params.tomatoId)]
-      case 'tomatoRemoveByIds': return arr('tomato', params)
+      // D11 finding 2: params may be plain ids or {tomatoId, deletedAt, updatedAt} stamps (sync
+      // apply path) — extract the id, an object would have String()-ified into a garbage pointer.
+      case 'tomatoRemoveByIds': return arr('tomato', (Array.isArray(params) ? params : [params]).map(x => (x && typeof x === 'object') ? (x.tomatoId != null ? x.tomatoId : x.id) : x))
       // r2 2026-09-28: result-aware like its siblings above — tomatoMigrateFromMeta returns 0 in
       // the steady state (rows already present / no blob / corrupted blob), and the CLI's open()
       // runs it on EVERY command (including pure reads). The unconditional pointer wrote one

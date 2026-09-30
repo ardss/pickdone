@@ -231,10 +231,16 @@ module.exports = ({ getDb, log }) => {
       return changed
     },
     rowDelete: p => {
-      const key = p && typeof p === 'object' ? String(p.key) : String(p)
+      // D11 finding 3 (parity with planRemoveIds/filterDelete stamps): p may be a bare key
+      // (renderer/CLI) or {key, deletedAt, updatedAt} tombstone stamps (sync apply path) — the
+      // sync layer carries the winner's LWW age; local writers without a stamp keep local now.
+      const o = (p && typeof p === 'object') ? p : { key: p }
+      const key = o.key != null ? String(o.key) : ''
       if (!key) throw new Error('settingsRowDelete: key is required')
       // Tombstone without re-stamping an already-deleted row (its deletedAt is the merge truth)
-      const r = getDb().prepare('UPDATE settings_rows SET deleted=1, deletedAt=?, updatedAt=? WHERE key=? AND deleted=0').run(Date.now(), Date.now(), key)
+      const dAt = Number(o.deletedAt) > 0 ? Number(o.deletedAt) : Date.now()
+      const r = getDb().prepare('UPDATE settings_rows SET deleted=1, deletedAt=?, updatedAt=? WHERE key=? AND deleted=0')
+        .run(dAt, Number(o.updatedAt) > 0 ? Number(o.updatedAt) : dAt, key)
       return r.changes > 0
     }
   }
