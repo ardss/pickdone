@@ -111,6 +111,20 @@ test('F2: a local edit is not gated away by a row stamped into the future (peer 
       if (sql.startsWith('SELECT key, value, updatedAt')) {
         return { all: () => [...rows.values()].filter(r => !r.deleted) }
       }
+      // Sync-10 tombstone scan (setMeta whole-blob mirror): fields removed from the doc get
+      // their settings_row tombstoned. Stub the scan and the tombstone UPDATE the same way
+      // the real statements behave, so the strict mock keeps guarding against NEW sql.
+      if (sql.startsWith('SELECT key, updatedAt FROM settings_rows WHERE deleted = 0')) {
+        return { all: () => [...rows.values()].filter(r => !r.deleted).map(r => ({ key: r.key, updatedAt: r.updatedAt })) }
+      }
+      if (sql.startsWith('UPDATE settings_rows SET deleted=1')) {
+        return { run: (deletedAt, updatedAt, key) => {
+          const r = rows.get(key)
+          if (!r || r.deleted) return { changes: 0 }
+          r.deleted = 1; r.deletedAt = deletedAt; r.updatedAt = updatedAt
+          return { changes: 1 }
+        } }
+      }
       if (sql.startsWith('INSERT INTO settings_rows')) {
         return { run: (key, value, updatedAt) => {
           rows.set(key, { key, value, updatedAt, deleted: 0, deletedAt: 0 })

@@ -216,6 +216,24 @@ test('Sync-10: machine-local rows and rows newer than the blob snapshot survive 
   db.close()
 })
 
+// ---------- Sync-10b: stamp-less whole-blob writes tombstone nothing ----------
+
+test('Sync-10b: a whole-blob write without _savedAt (habits mirror, recovery restore) tombstones NOTHING', () => {
+  // The habits blob family carries `savedAt` (no underscore) and the recovery restore republishes
+  // it verbatim, so the bridge sees no _savedAt watermark. Deletion inference needs the watermark:
+  // without it, absence from a DIFFERENT blob family's doc proves nothing — the pre-fix code
+  // tombstoned every db.settingsState-family row on each db.habitsState put.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'd12-bridge3-'))
+  db.init(dir)
+  db.call('settingsRowPut', { key: 'themeMode', value: 'dark' })
+  db.call('settingsRowPut', { key: 'staleDroppedField', value: 'old' })
+  db.call('setMeta', ['db.habitsState', JSON.stringify({ schemaV: 1, habits: [], moments: [], savedAt: Date.now() })])
+  const rows = db.call('settingsRowsAll')
+  assert.equal(rows.find(r => r.key === 'themeMode').deleted, false, 'settings-family row NOT tombstoned off a stamp-less habits doc')
+  assert.equal(rows.find(r => r.key === 'staleDroppedField').deleted, false, 'even a plausibly-stale row survives a doc with no watermark')
+  db.close()
+})
+
 // ---------- Sync-11: canonical JSON compare in putRow ----------
 
 test('Sync-11: a key-order-only rewrite of a blob field does NOT re-stamp the row', () => {

@@ -110,21 +110,30 @@ module.exports = ({ getDb, log }) => {
   // blob is deleted, but the bridge only ever mirrored fields PRESENT in the doc, so the stale
   // settings_row lingered live forever: every snapshot re-pushed it to peers and a peer's newer
   // mirror re-materialized it here (a permanent resurrection loop for deleted settings fields).
-  // Tombstone rows whose key is absent from the doc. Same gate as putRow (Round-3 P1): a row
-  // stamped MEANINGFULLY newer than the blob snapshot is sync truth that this stale echo must
-  // not destroy — those rows are skipped. Returns the tombstoned keys (oplog deltas).
+  // Tombstone rows whose key is absent from the doc. The doc's `_savedAt` stamp is the CAUSAL
+  // watermark: a row whose (clamped) updatedAt is AT OR AFTER the stamp was written while (or
+  // after) the mirror's base doc was being authored — the renderer's whole-doc mirror, a
+  // concurrent settingsSet row write inside its race window, or a sync-apply landing between
+  // the doc read and this bridge write. Its absence from the doc proves nothing about
+  // deletion, so those rows are kept (fixes f3-6c: the old >1s epsilon tombstoned a row a
+  // concurrent writer had created milliseconds earlier, clobbering the App's change). A row
+  // strictly OLDER than the stamp was fully visible to the doc's author; absence is a real
+  // removal → tombstone (Sync-10's resurrection-loop fix). Without a finite stamp the doc's
+  // freshness is unknown and absence proves nothing: tombstone nothing. Returns the
+  // tombstoned keys (oplog deltas).
   function tombstoneAbsentRows (docKeys, gateTs) {
     // Machine-local rows (sync.deviceId, securityLock*, sync.revisions.v2 flag — shared/
     // machine-local-keys.mjs) never come from the blob doc but must NEVER be tombstoned off it:
     // the blob mirror is not their writer.
     const { isMachineLocalSettingKey } = require('../../shared/machine-local-keys.mjs')
+    if (!Number.isFinite(gateTs)) return []
     const present = new Set((docKeys || []).filter(k => !UNSAFE_KEYS.has(k)))
     const rows = getDb().prepare('SELECT key, updatedAt FROM settings_rows WHERE deleted = 0').all()
     const now = Date.now()
     const removed = []
     for (const r of rows) {
       if (present.has(r.key) || isMachineLocalSettingKey(r.key)) continue
-      if (Number.isFinite(gateTs) && Math.min(Number(r.updatedAt) || 0, now) - gateTs > 1000) continue // sync-applied after the snapshot: keep
+      if (Math.min(Number(r.updatedAt) || 0, now) >= gateTs) continue // written at/after the snapshot stamp: not authored-over, keep
       // Same tombstone UPDATE as rowDelete (no re-stamp of an already-deleted row)
       const res = getDb().prepare('UPDATE settings_rows SET deleted=1, deletedAt=?, updatedAt=? WHERE key=? AND deleted=0').run(now, now, r.key)
       if (res.changes > 0) removed.push(r.key)
