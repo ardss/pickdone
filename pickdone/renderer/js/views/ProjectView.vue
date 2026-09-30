@@ -462,14 +462,30 @@ export default {
         const date = parseMilestoneDate(value)
         if (!date) return this.$message.warning(this.$t('statsB.ProjectView.badDate'))
         this.deadlineTs = date
-        try { commitCommand("meta", "put", ['projectDeadline:' + this.catId, String(date)]).catch(() => {}) } catch { /* degraded to in-memory only */ }
+        // [R3] the meta write used to be fire-and-forget (.catch(() => {})) so the "Deadline set"
+        // success toast fired even when persistence failed and the value silently vanished on
+        // reload. Await the commit; on failure drop the optimistic value and surface the error.
+        try {
+          await commitCommand('meta', 'put', ['projectDeadline:' + this.catId, String(date)])
+        } catch (e) {
+          this.deadlineTs = 0
+          this.$message.error(this.$t('statsB.ProjectView.deadlineSet') + ': ' + (e && e.message ? e.message : e))
+          return
+        }
         this.$store.dispatch('category/loadProjectMeta')
         this.$message.success(this.$t('statsB.ProjectView.deadlineSet'))
       } catch { /* cancelled */ }
     },
-    clearDeadline () {
+    async clearDeadline () {
       this.deadlineTs = 0
-      try { commitCommand("meta", "put", ['projectDeadline:' + this.catId, '0']).catch(() => {}) } catch { /* degraded */ }
+      // [R3] same false-success path as setDeadline: only toast success once the write persisted.
+      // Clear = put '0', same op/shape as the CLI's setProjectDeadline(none) path (parity kept).
+      try {
+        await commitCommand('meta', 'put', ['projectDeadline:' + this.catId, '0'])
+      } catch (e) {
+        this.$message.error(this.$t('statsB.ProjectView.deadlineCleared') + ': ' + (e && e.message ? e.message : e))
+        return
+      }
       this.$store.dispatch('category/loadProjectMeta')
       this.$message.success(this.$t('statsB.ProjectView.deadlineCleared'))
     },

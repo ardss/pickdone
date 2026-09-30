@@ -38,7 +38,7 @@
     <div v-else-if="canvasKind" :class="'single chart-'+canvasKind">
       <div v-if="model.title" :class="'chart-'+canvasKind+'__title'">{{ model.title }}</div>
       <div v-if="model.subTitle" :class="'chart-'+canvasKind+'__subtitle'">{{ model.subTitle }}</div>
-      <div v-if="!model.chartList || !model.chartList.length || listAllZero" class="chart-empty">{{ $t('statsA.ChartCard.empty') }}</div>
+      <div v-if="!model.chartList || !model.chartList.length || listAllZero || chartFailed" class="chart-empty">{{ $t('statsA.ChartCard.empty') }}</div>
       <div v-else class="chart-box"><canvas ref="canvas" :class="'chart-'+canvasKind+'__chart'"></canvas></div>
       <div v-if="model.summary" :class="'chart-'+canvasKind+'__footer'">{{ model.summary }}</div>
     </div>
@@ -47,7 +47,7 @@
     <div v-else-if="kind==='h'" class="chart-h single">
       <div class="chart-h__pic"></div>
       <div class="chart-h__title">{{ model.content }}</div>
-      <div class="chart-h__btn"><button class="base-button"> {{ $t('statsA.ChartCard.upgrade') }} </button></div>
+      <div class="chart-h__btn"><button type="button" class="base-button" @click="onUpgrade"> {{ $t('statsA.ChartCard.upgrade') }} </button></div>
     </div>
 
     <!-- Fallback: mirrors .none "chart not adapted" + a pre showing the raw data -->
@@ -66,7 +66,9 @@ import { loadScript, VENDOR } from '../../utils/lazy-script.js'
 const ChartCard = {
   name: 'ChartCard',
   props: { model: { type: Object, required: true }, idx: { type: Number, default: 0 } },
-  data () { return { theme: isDarkTheme() ? 'dark' : 'light' } },
+  // chartFailed: the Chart.js vendor bundle failed to inject — the canvas branch falls back to the
+  // chart-empty state instead of leaving a permanently blank box (R14)
+  data () { return { theme: isDarkTheme() ? 'dark' : 'light', chartFailed: false } },
   computed: {
     kind () {
       const m = this.model
@@ -118,14 +120,26 @@ const ChartCard = {
     destroyChart () {
       if (this._chart) { this._chart.destroy(); this._chart = null }
     },
+    /** Upgrade CTA (chart-h): the button was a dead no-op. There is no in-app purchase flow, so —
+     *  same pattern as SettingsModal.openOfficialSite — hand off to the official site. */
+    onUpgrade () {
+      if (window.todoAPI && typeof window.todoAPI.openExternal === 'function') {
+        window.todoAPI.openExternal('https://pickdone.app')
+      }
+    },
     renderChart () {
       this.destroyChart()
       if (!this.config || this.canvasKind !== String(this.model.modelType)) return
       // Chart.js lazy load (2026-09-02 startup optimization): injected on first draw, re-entering this function after injection
       if (!window.Chart) {
-        loadScript(VENDOR.chart).then(() => this.renderChart()).catch(() => {})
+        loadScript(VENDOR.chart).then(() => this.renderChart()).catch(() => {
+          // Vendor injection failed (offline/blocked file): fall back to the empty state instead of
+          // a blank canvas forever; a later re-render (locale/theme change) retries the load
+          this.chartFailed = true
+        })
         return
       }
+      this.chartFailed = false
       const el = this.$refs.canvas
       if (el) {
         const cfg = JSON.parse(JSON.stringify(this.config))

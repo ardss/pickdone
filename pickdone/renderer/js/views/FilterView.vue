@@ -21,7 +21,8 @@
       <div v-else class="todo-box-list">
         <div v-for="t in list" :key="t.taskId" class="todo-box-list-item"
              :class="{ 'todo-box-list-item--selected': selectedId === t.taskId }"
-             @click="openEdit(t)" @contextmenu.prevent="ctxMenu(t, $event)">
+             role="button" tabindex="0" :aria-label="t.taskContent"
+             @click="openEdit(t)" @keydown.enter.prevent="openEdit(t)" @contextmenu.prevent="ctxMenu(t, $event)">
           <span class="todo-box-list-item__category-dot tb-dot-check" :style="{ color: dotColor(t) }" role="checkbox"
                 :aria-checked="t.complete ? 'true' : 'false'" :aria-label="$t('statsC.TodoBox.ariaComplete')" :title="$t('statsC.TodoBox.titleComplete', { name: t.taskContent })" tabindex="0"
                 @click.stop="completeItem(t)" @keydown.enter.prevent.stop="completeItem(t)">

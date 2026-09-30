@@ -96,6 +96,7 @@
 import {dayjs, safeSet, FMT } from '../utils/core.js'
 import { taskContextMenu } from '../utils/taskMenu.js'
 import { moveWithUndo } from '../utils/confirm.js'
+import { crossDayMovePatch, crossDayRevertPatch } from '../utils/crossDayMove.js' // [R4] shared reminder re-anchoring invariant
 import { ensureFullCalendar } from '../utils/lazy-script.js'
 // Locale-aware format helpers + FullCalendar options builder (extracted verbatim — structure-size ratchet)
 import { fmtMonth, fmtDate, fmtFull, wdLabel, buildCalendarOptions } from './calendarOptions.js'
@@ -301,12 +302,20 @@ export default {
       }
       if (!t) return
       const ts = dayTs + hour * 3600000
-      const origDay = t.dayStart
-      const origTime = t.todoTime
+      // [R4] reminder re-anchoring rides the shared crossDayMovePatch invariant (same root fix as
+      // TodoItem drag / DayDeck drop / TodoBoxView batch-today): a reminder anchored to the old day
+      // must move to the new day keeping its time-of-day — the old hand-rolled {dayStart, todoTime}
+      // patch orphaned it on the expired day and the bell kept firing for a schedule that moved.
+      // todoTime is then overridden to the exact drop cell (crossDayMovePatch only preserves
+      // time-of-day; the time-block drop targets a concrete hour).
+      const startOf = x => +dayjs(x).startOf('day')
+      const patch = crossDayMovePatch(t, dayTs, startOf)
+      patch.todoTime = ts
+      const revert = crossDayRevertPatch(t, patch)
       moveWithUndo(this, {
         label: this.$t('statsJ.CalendarView.movedTo', { d: fmtDate(dayjs(ts)) + ' ' + dayjs(ts).format('HH:mm') }),
-        apply: () => this.$store.dispatch('todo/updateTodoFields', { taskId: t.taskId, patch: { dayStart: dayTs, todoTime: ts } }),
-        revert: () => this.$store.dispatch('todo/updateTodoFields', { taskId: t.taskId, patch: { dayStart: origDay, todoTime: origTime } })
+        apply: () => this.$store.dispatch('todo/updateTodoFields', { taskId: t.taskId, patch }),
+        revert: () => this.$store.dispatch('todo/updateTodoFields', { taskId: t.taskId, patch: revert })
       })
     },
     tbCreate (dayTs, hour) {
