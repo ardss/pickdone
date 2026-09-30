@@ -36,7 +36,19 @@ module.exports = function attachmentHandlers (ctx) {
           try { if (notifySyncChange) notifySyncChange('attachment-missing-open') } catch { /* sync lazy-not-init */ }
           return { missing: true, name: path.basename(p) }
         }
-        shell.openPath(p); return true
+        // Fault-7 (D12 2026-10-01): shell.openPath resolves with an ERROR STRING ('' = success) —
+        // the old fire-and-forget `shell.openPath(p); return true` discarded it and claimed
+        // success even when the OS refused the open (no association / blocked file / removed
+        // drive). Await the resolution: success keeps the boolean `true`, failure returns a
+        // structured { ok:false, error } (mirrors the missing-file shape the renderer already
+        // branches on); a rejected promise maps to the same shape instead of a raw IPC error.
+        try {
+          const openErr = await shell.openPath(p)
+          if (openErr) return { ok: false, error: String(openErr), name: path.basename(p) }
+          return true
+        } catch (err) {
+          return { ok: false, error: String((err && err.message) || err), name: path.basename(p) }
+        }
       }
       if (isSafeExternal(url)) return shell.openExternal(url)
       return false
