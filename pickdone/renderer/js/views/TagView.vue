@@ -35,7 +35,7 @@ export default {
   components: { GroupBlock: TodoGroupBlock, EmptyState },
   data () {
     return {
-      collapsedMap: { tagExpDone: true, tagExpUndo: false, tagToday: false, tagTomorrow: false, tagDat: false, tagUpcoming: false, tagNoDate: false }
+      collapsedMap: { tagExpDone: true, tagExpUndo: false, tagToday: false, tagTodayDone: true, tagTomorrow: false, tagDat: false, tagUpcoming: false, tagNoDate: false }
     }
   },
   computed: {
@@ -64,6 +64,11 @@ export default {
       const bucket = f => list.filter(f).sort((a, b) => b.taskSort - a.taskSort || b.createTime - a.createTime)
       const td = bucket(t => !t.complete && t.dayStart === today)
       if (td.length) g.push({ key: 'tagToday', title: this.calTitle(today), todos: td, color: 'color3' })
+      // [D13 A1] a task scheduled today and completed today matched no bucket (doneIn requires
+      // dayStart < today, the today bucket requires !complete) and vanished from the tag page
+      // until tomorrow. Same shared invariant as buildExpiryGroups' catTodayDone bucket.
+      const tdd = bucket(t => t.complete && t.dayStart === today)
+      if (tdd.length) g.push({ key: 'tagTodayDone', title: this.calTitle(today), todos: tdd, color: 'color3' })
       const tm = bucket(t => t.dayStart === today + DAY_MS)
       if (tm.length) g.push({ key: 'tagTomorrow', title: this.calTitle(today + DAY_MS), todos: tm, color: 'color3' })
       const dat = bucket(t => t.dayStart === today + 2 * DAY_MS)
