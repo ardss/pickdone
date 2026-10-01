@@ -102,7 +102,11 @@ export function createCategory (vm) {
   })
 }
 
-/** New tag: same position and interaction as "New Category"; the tag itself is still derived from #xxx in content, empty tags are stored in meta as placeholders */
+/** New tag: same position and interaction as "New Category"; the tag itself is still derived from #xxx in content, empty tags are stored in meta as placeholders.
+ *  [D13 A4] the userTags meta put used to be fire-and-forget (.catch(() => {})): on a write
+ *  failure the placeholder tag lived in memory only and silently disappeared after restart.
+ *  The put is now awaited — on failure the in-memory setUserTags is rolled back and the failure
+ *  is surfaced (same shape as the awaited-command R3 pattern). */
 export async function createTag (vm) {
   try {
     const { value } = await vm.$prompt(vm.$t('statsE.SideNav.tagAutoCreateHint'), vm.$t('statsG.SideNav.newTagTitle'), {
@@ -110,11 +114,17 @@ export async function createTag (vm) {
     })
     const name = (value || '').trim().replace(/^#+/, '')
     if (!name) return
-    const list = vm.$store.state.ui.userTags.slice()
+    const prev = vm.$store.state.ui.userTags.slice()
+    const list = prev.slice()
     if (!list.includes(name) && !vm.tags.some(t => t.name === name)) list.push(name)
     vm.$store.commit('ui/setUserTags', list)
     if (window.todoAPI && window.todoAPI.dbCall) {
-      commitCommand("meta", "put", ['userTags', JSON.stringify(list)]).catch(() => {})
+      try {
+        await commitCommand("meta", "put", ['userTags', JSON.stringify(list)])
+      } catch (e) {
+        vm.$store.commit('ui/setUserTags', prev)
+        vm.$message.error(vm.$t('statsG.SideNav.syncFailMsg') + ((e && e.message) ? `: ${e.message}` : ''))
+      }
     }
   } catch { /* cancelled */ }
 }
@@ -131,6 +141,13 @@ export function saveCatEdit (vm, c) {
   const n = vm.newCatName.trim()
   if (!n) {
     vm.$message.warning(vm.$t('statsG.SideNav.catNameEmptyWarn'))
+    // [D13 A12] the warning kept catEditing set, but blur had already fired — the inline editor
+    // sat unfocused (a zombie input the keyboard could not reach). Re-focus it so the user can
+    // type immediately (same $nextTick refocus shape as startCatEdit/HabitView).
+    vm.$nextTick(() => {
+      const inp = vm.$el.querySelector('.sn-cat-edit')
+      if (inp) inp.focus()
+    })
     return
   }
   vm.$store.commit('category/updateCategory', { categoryId: c.categoryId, categoryName: n })
