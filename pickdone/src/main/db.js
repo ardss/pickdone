@@ -421,6 +421,9 @@ function initInner (userDataPath) {
     db.pragma(`key='${key}'`)
   }
 
+  // [D13 #10] repeat-day uniqueness re-ensure (idempotent; after encryption finalization, which recreates fresh DBs from SCHEMA and drops the v9 index; skipped under the C2 test seam)
+  if (!migrationsOverride) { try { require('./db-migrations').ensureRepeatDayUniqueness(db) } catch (e) { log.warn('[TodoDB] repeat-day uniqueness ensure failed (non-fatal):', e && e.message) } }
+
 
   const cols = Object.keys(todoToRow({ taskId: '' }))
   stmts.upsert = db.prepare(`INSERT INTO todos (${cols.join(', ')}) VALUES (${cols.map(c => '@' + c).join(', ')}) ON CONFLICT(id) DO UPDATE SET ${cols.filter(c => c !== 'id').map(c => `${c} = excluded.${c}`).join(', ')}`)

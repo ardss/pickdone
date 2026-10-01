@@ -14,7 +14,7 @@ import { enqueueChipSync, rowChipSync, planSnapshotRowSync, snapshotForDelete, r
 import { historyPush, historyPushKeepRedo, historyClear, historyBreakMerge, historyUndoPop, historyRedoPop, historyRedoPush, historyBarrierCore, undoStep, redoStep, persistSnapshotDiffCore } from './helpers/undo.js'
 import { writeEventBackupCore, writeAutoBackupCore, writeCriticalBackupCore } from './helpers/todoBackup.js'
 import { commit as commitCommand } from "../utils/commandBus.js"
-import { safeUpsert, flushPendingUpserts, queuePendingUpsert, pendingUpserts } from './helpers/todoPendingUpserts.js'
+import { safeUpsert, flushPendingUpserts, queuePendingUpsert, pendingUpserts, supersedePendingRow } from './helpers/todoPendingUpserts.js'
 import { DEFAULT_VIEWS, VIEW_AFFECTING_FIELDS, VIEWS_DEBOUNCE_MS, deproxyRows } from './helpers/todoViews.js'
 import { snapshotString } from './helpers/snapshotString.js'
 // View-computation + sync cores (pure relocation, structure-size ratchet — actions below are thin wrappers)
@@ -180,8 +180,9 @@ export default {
       commit('historyBreakMerge')
       const now = Date.now()
       // Renewal instance idempotency: skip when the same rid + same dayStart already exists (prevents concurrent multi-window + CLI double-triggering creating two renewals at the same moment)
+      let targetDay = 0
       if (repeatId) {
-        const targetDay = dayOverride != null ? dayOverride : (todoDate ? +dayjs(todoDate).startOf('day') : 0)
+        targetDay = dayOverride != null ? dayOverride : (todoDate ? +dayjs(todoDate).startOf('day') : 0)
         if (targetDay) {
           try {
             const existing = await window.todoAPI.dbCall('queryTodos', { deleted: 0, repeatId, dayStartFrom: targetDay, dayStartTo: targetDay })
@@ -231,7 +232,35 @@ export default {
       }
       commit('upsertLocal', t)
       commit('setRecentlyAdded', t.taskId)
-      safeUpsert(t)
+      // [D13 #10] repeat-renewal duplicate race, renderer half: the check-then-insert guard above
+      // cannot close the window between queryTodos and the row write (multi-window + CLI). The DB
+      // layer now carries a UNIQUE partial index on (recurGroupId, scheduledDay) for live rows, so
+      // the LOSING renewal write rejects with a constraint error — the caller then adopts the
+      // winner's row instead of minting a second instance. Non-renewal adds keep the queued
+      // fire-and-forget path.
+      if (repeatId && targetDay) {
+        let plain
+        try { plain = JSON.parse(JSON.stringify(t)) } catch (e) { plain = t }
+        supersedePendingRow(plain && plain.taskId)
+        try {
+          await commitCommand('todo', 'put', plain)
+        } catch (e) {
+          if (/UNIQUE constraint failed/.test(String((e && e.message) || e))) {
+            commit('removeLocal', t.taskId)
+            try {
+              const existing = await window.todoAPI.dbCall('queryTodos', { deleted: 0, repeatId, dayStartFrom: targetDay, dayStartTo: targetDay })
+              if (Array.isArray(existing) && existing.length) {
+                commit('upsertLocal', existing[0])
+                dispatch('computeViews')
+                return existing[0] // the other trigger's instance wins; both callers resolve to the same row
+              }
+            } catch (e2) { /* fall through to the queued-retry path below */ }
+          }
+          queuePendingUpsert({ op: 'upsert', params: plain }) // non-constraint failure / lost race without an adoptable row: replay later
+        }
+      } else {
+        safeUpsert(t)
+      }
       dispatch('scheduleReminder', t)
       dispatch('computeViews')
       dispatch('writeCriticalBackup')
