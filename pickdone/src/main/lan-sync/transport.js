@@ -43,7 +43,16 @@ const { verifyAuthCode } = require('./pairing')
 const cipher = require('./cipher')
 
 const PROTO_VER = 2
-const DEFAULT_PORT = 58471
+// TODO_SYNC_PORT (2026-10-01): per-instance sync port for single-machine multi-instance debugging
+// (PICKDONE_MULTI=1 + scripts/dev-duo.mjs). Unset env keeps the historical fixed 58471 — the pure
+// resolver is unit-tested (tests/unit/main/multi-instance-port.test.cjs). UDP fallback discovery
+// already fans out to every candidate port plus the ADVERTISED TCP port (discovery.js), so a
+// peer listening on an overridden port stays discoverable without touching discovery.js.
+function resolveSyncPort (env) {
+  const n = Number(env && env.TODO_SYNC_PORT)
+  return (Number.isInteger(n) && n > 0 && n < 65536) ? n : 58471
+}
+const DEFAULT_PORT = resolveSyncPort(process.env)
 // A round's push travels as bounded `segments-chunk` lines (~1MB payload each, see
 // segments-chunk.js) since 2026-09-18: one whole-backlog line used to exceed this cap once
 // AES-GCM base64 framing inflated it, destroying first-sync rounds permanently. The cap stays
@@ -746,4 +755,4 @@ function connect(host, port, opts) {
   return em
 }
 
-module.exports = { createLanServer, connect, send, wireConnection, ProtocolError, PROTO_VER, DEFAULT_PORT, MAX_LINE_BYTES, PRE_AUTH_LINE_BYTES, PAIR_CONFIRM_TIMEOUT_MS, AUTH_IDLE_TIMEOUT_MS, cleanDeviceName }
+module.exports = { createLanServer, connect, send, wireConnection, ProtocolError, PROTO_VER, DEFAULT_PORT, resolveSyncPort, MAX_LINE_BYTES, PRE_AUTH_LINE_BYTES, PAIR_CONFIRM_TIMEOUT_MS, AUTH_IDLE_TIMEOUT_MS, cleanDeviceName }

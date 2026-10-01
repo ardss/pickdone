@@ -283,7 +283,13 @@ function rebuildTrayMenu () {
 // chain (preventDefault + quitAck + 500ms floor before a no-op flushNow) with a null db handle
 // and no windows.
 let ranFullInit = false
-if (!app.requestSingleInstanceLock()) { app.quit() } else {
+// Multi-instance opt-in (2026-10-01, src/main/multi-instance.js): PICKDONE_MULTI=1 scopes the
+// singleton lock per data dir — the lock file lives in userData, and app.setPath('userData',
+// TODO_USER_DATA_DIR) already ran at module top, so instances with different data dirs hold
+// independent locks. Default (no env) passes NO arguments: byte-identical to the historical call.
+const multiInstance = require('./multi-instance')
+const __multiLockArgs = multiInstance.lockRequestArgs(process.env, app.getPath('userData'))
+if (!app.requestSingleInstanceLock(...__multiLockArgs)) { app.quit() } else {
   // D10 (2026-09-27): singleton-lock winner — only this instance may run the will-quit flush chain
   // (the duplicate's app.quit() has no DB and no windows; see shouldRunQuitFlush in will-quit).
   ranFullInit = true
