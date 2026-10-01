@@ -47,9 +47,14 @@ function scheduleRetry (metaKey, blob) {
   }
   const n = (attempts[metaKey] || 0) + 1
   if (n > _timing.maxAttempts) {
-    // Give up after 10 consecutive failures: infinite no-backoff hammering otherwise spins forever
+    // Give up after 10 consecutive failures: infinite no-backoff hammering otherwise spins forever.
+    // [D13 #12] the give-up is no longer a silent parking state: the blob is parked DURABLY in LS
+    // (`dbMirror.unflushed.<metaKey>`) so the next boot's DB-precedence restore can tell "the DB
+    // blob is authoritative" apart from "a newer LS blob never landed". Previously a restore whose
+    // mirror never made it was silently drowned by the stale DB copy on the next startup.
+    markUnflushed(metaKey, blob)
     delete pendings[metaKey]; delete newest[metaKey]; delete attempts[metaKey]
-    console.error('[dbMirror] setMeta for', metaKey, 'failed', _timing.maxAttempts, 'times — giving up on this blob (data still live in localStorage)')
+    console.error('[dbMirror] setMeta for', metaKey, 'failed', _timing.maxAttempts, 'times — giving up on this blob; parked durably (dbMirror.unflushed.' + metaKey + '), restore prefers it over a stale DB copy')
     return
   }
   attempts[metaKey] = n
@@ -57,6 +62,27 @@ function scheduleRetry (metaKey, blob) {
   pendings[metaKey] = blob
   console.warn('[dbMirror] setMeta failed (attempt', n, '), retrying in', delay, 'ms:', metaKey)
   scheduleTimer(metaKey, delay)
+}
+
+/* ===== [D13 #12] durable unflushed-blob parking ===== */
+const unflushedKey = metaKey => 'dbMirror.unflushed.' + metaKey
+function markUnflushed (metaKey, blob) {
+  try {
+    localStorage.setItem(unflushedKey(metaKey), JSON.stringify({ at: Date.now(), blob }))
+  } catch (e) { console.warn('[dbMirror] failed to park unflushed blob for', metaKey, e) }
+}
+function clearUnflushed (metaKey) {
+  try { localStorage.removeItem(unflushedKey(metaKey)) } catch (e) { /* LS unavailable */ }
+}
+/** Consumer-side (startup restore) probe: returns the parked blob when the previous session gave
+ *  up mirroring this key, and clears the marker (the caller re-queues via mirrorToDb with a fresh
+ *  retry budget). Null when nothing is parked. */
+export function consumeUnflushed (metaKey) {
+  let raw = null
+  try { raw = localStorage.getItem(unflushedKey(metaKey)) } catch (e) { return null }
+  if (!raw) return null
+  clearUnflushed(metaKey)
+  try { return JSON.parse(raw) } catch (e) { return null }
 }
 
 /** Initiate one DB write; returns true when the write was actually handed to the DB bridge
@@ -75,6 +101,8 @@ function writeNow (metaKey, blob) {
       // one for the key: a late success of an older write must not clear the retry budget of the
       // newer blob's pending failure cycle (mirror of scheduleRetry's stale-rejection guard).
       .then(() => { if (newest[metaKey] === blob) delete attempts[metaKey] })
+      // [D13 #12] a landed write retires any durably parked copy of this key (same newest-guard)
+      .then(() => { if (newest[metaKey] === blob) clearUnflushed(metaKey) })
       .catch(() => scheduleRetry(metaKey, blob))
     return true
   } catch (e) {
@@ -88,6 +116,7 @@ export function mirrorToDb (metaKey, blob, immediate = false) {
   pendings[metaKey] = blob
   newest[metaKey] = blob
   attempts[metaKey] = 0 // a fresh user write gets a fresh retry budget
+  clearUnflushed(metaKey) // a fresh blob supersedes any parked copy of this key
   if (immediate) {
     // Compensation path (LS write failure etc.): skip the debounce and persist immediately, otherwise failing again within the 2s window = data exists only in memory
     clearTimeout(timers[metaKey]); delete timers[metaKey]
