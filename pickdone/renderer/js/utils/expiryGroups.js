@@ -30,6 +30,12 @@ export function buildExpiryGroups ({ list, settings, today, t, keys, extraGroups
   if (expUndo.length) g.push({ key: 'catExpUndo', title: t(keys.expUndo, { r: rangeLabel(settings.expiredUncompletedTodoRange, t) }), todos: expUndo, showDate: true, color: 'color2', hasSettings: true, hasRecomplete: true })
   const td = bucket(x => !x.complete && x.dayStart === today)
   if (td.length) g.push({ key: 'catToday', title: calTitle(today), todos: td, color: 'color3' })
+  // Shared invariant (D13 A1/A2): a task scheduled today and completed today matched NO bucket
+  // (catExpDone requires dayStart < today, catToday requires !complete) and vanished from every
+  // consumer without a projDone fallback until tomorrow. Every non-future task now lands in
+  // exactly one group: completed today lives here.
+  const tdd = bucket(x => x.complete && x.dayStart === today)
+  if (tdd.length) g.push({ key: 'catTodayDone', title: calTitle(today), todos: tdd, color: 'color3' })
   const tm = bucket(x => x.dayStart === today + DAY_MS)
   if (tm.length) g.push({ key: 'catTomorrow', title: calTitle(today + DAY_MS), todos: tm, color: 'color3' })
   const dat = bucket(x => x.dayStart === today + 2 * DAY_MS)

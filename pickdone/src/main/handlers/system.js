@@ -71,8 +71,9 @@ module.exports = function systemHandlers (ctx) {
     'log:write': (e, entries) => {
       try {
         if (!Array.isArray(entries)) return false
-        const rlog = require('electron-log')
-        rlog.scope('renderer')
+        // D13 C14 (2026-10-01): a dead `electron-log` require + `rlog.scope('renderer')` call used
+        // to sit here — the scope object was created and discarded, the actual write below goes to
+        // renderer.log via fs directly. Removed (no behavior change).
         // Write to a separate renderer.log (reuses electron-log's transports.file mechanism, scope isolated to a subdirectory)
         const fsx = require('fs')
         const dir = path.join(app.getPath('userData'), 'logs')

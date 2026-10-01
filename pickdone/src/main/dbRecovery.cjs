@@ -248,7 +248,13 @@ function attemptDbRecovery (ud, retryInit) {
   // undecryptable = genuinely corrupt, fall through to the recovery path. An inconclusive probe
   // (driver unavailable) stays conservative: no rename, no rollback.
   const keyFile = path.join(ud, 'db.key')
-  if (fs.existsSync(mainDb) && fs.existsSync(keyFile)) {
+  // D13 finding 2: the recovery-pending sentinel must outrank the decrypt probe exactly like it
+  // outranks the plaintext healthy-header guard above. The post-crash re-initialized ENCRYPTED
+  // empty shell (db.key present, fresh empty DB decrypts with its key) used to answer 'transient'
+  // here forever — the user sat on an empty DB with an unconsumed JSON snapshot, the exact state
+  // the sentinel was built to catch. replayPending already requires a PARSEABLE snapshot, so the
+  // guard stays conservative without one (probe verdict unchanged on that path).
+  if (fs.existsSync(mainDb) && fs.existsSync(keyFile) && !replayPending) {
     const probe = encryptedProbe(mainDb, keyFile)
     if (probe !== 'no') {
       // 2026-09-25: the transient/declined outcomes used to return silently — the caller's error
@@ -283,7 +289,13 @@ function attemptDbRecovery (ud, retryInit) {
   // launch). Now: a rename failure is LOGGED and aborts this branch with a structured
   // source:'error' result, so the caller's relaunch dialog explains the failure instead of
   // pretending recovery happened. Never copy onto a target we could not first move aside.
-  for (const suf of ['', '-wal', '-shm']) {
+  // D13 finding 14: rename the SIDECARS first and the main DB LAST. The old ['', '-wal', '-shm']
+  // order aborted on the first failure — a main-DB rename that succeeded while the -wal rename
+  // failed (locked/AV-held) left todos.db MISSING with a live -wal beside it; the next init then
+  // created a fresh empty todos.db (SQLite resets the stale WAL), and because the new file has a
+  // healthy header the recovery never re-fired — the real data survived only in .corrupt-*. With
+  // sidecars-first a mid-loop failure leaves todos.db in place and recovery is retried next boot.
+  for (const suf of ['-shm', '-wal', '']) {
     const src = path.join(ud, 'todos.db' + suf)
     if (!fs.existsSync(src)) continue
     try {

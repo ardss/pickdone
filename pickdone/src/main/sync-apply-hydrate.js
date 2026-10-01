@@ -157,7 +157,13 @@ function hydrateRow (state, ptr, cache) {
       // pushes it straight through upsertCategory, which binds the row columns. A locally
       // tombstoned row hydrates as a tombstone with its real age (M3/LWW).
       const cat = c.category(ptr.entityId)
-      if (!cat || cat.deleted) return { ...base, updatedAt: (cat && cat.updatedAt) || ptr.ts, deleted: true, deletedAt: (cat && cat.deletedAt) || ptr.ts, data: null }
+      // D13 finding 8: a row-PRESENT tombstone carries its honest deletedAt (legacy pre-D5
+      // deletes have deletedAt=0 — the old `(cat && cat.deletedAt) || ptr.ts` fabricated the
+      // oplog pointer time as the deletion age, falsifying LWW and recycle-bin retention math,
+      // exactly what the todo branch's D12 fix stopped). The ptr.ts fallback stays ONLY for the
+      // row-gone case, where no stamp exists anywhere.
+      if (!cat) return { ...base, updatedAt: ptr.ts, deleted: true, deletedAt: ptr.ts, data: null }
+      if (cat.deleted) return { ...base, updatedAt: cat.updatedAt || ptr.ts, deleted: true, deletedAt: cat.deletedAt || 0, data: null }
       return { ...base, updatedAt: cat.updatedAt || ptr.ts, deleted: false, deletedAt: 0, data: cat }
     }
     if (ptr.entity === 'plan' || ptr.entity === 'filter') {

@@ -423,18 +423,31 @@ export default {
       for (const id of Object.keys(patch || {})) next[id] = Object.assign({}, next[id], patch[id])
       state.projectMeta = next
     },
-    /** Set project lifecycle status: memory + meta persistence (same degradation as setProject) */
-    setProjectStatus (state, { id, status }) {
+    /** [D13 A3] memory-only half of the status write (the persistence moved to the awaited
+     *  `setProjectStatus` action below — the old mutation fired the meta put fire-and-forget,
+     *  so a failed write showed 'status changed' and silently reverted on next launch). */
+    setProjectStatusLocal (state, { id, status }) {
       const norm = normalizeStatus(status)
       const meta = { ...state.projectMeta, [id]: { ...(state.projectMeta[id] || {}), status: norm } }
       state.projectMeta = meta
-      try {
-        commitCommand("meta", "put", [statusKey(id), norm]).catch(() => {})
-      } catch (e) { /* in-memory only when the browser debug host degrades */ }
     }
   },
   actions: {
     async add ({ commit }, payload) { commit('addCategory', payload); return true }, // reserved: api.addCategoryList
+    /** [D13 A3] awaited status write (mirrors ProjectView.setDeadline's R3 pattern): optimistic
+     *  memory commit, then the meta put is AWAITED — on failure the in-memory status is rolled
+     *  back to the previous value and the rejection propagates so the caller toasts an error
+     *  instead of a success that the next launch silently reverts. */
+    async setProjectStatus ({ state, commit }, { id, status }) {
+      const prev = (state.projectMeta[id] || {}).status
+      commit('setProjectStatusLocal', { id, status })
+      try {
+        await commitCommand('meta', 'put', [statusKey(id), normalizeStatus(status)])
+      } catch (e) {
+        commit('setProjectStatusLocal', { id, status: prev })
+        throw e
+      }
+    },
     /** Unified loading of project metadata: status + deadline + next milestone (views/sidebar read only via this getter) */
     async loadProjectMeta ({ state, commit }) {
       if (!state.projectIds.length || !window.todoAPI || !window.todoAPI.dbCall) return
@@ -532,7 +545,13 @@ export default {
       if (migrated) { commit('setListFromDb', []); return 0 }
       const ls = loadList()
       try {
-        for (const c of ls) await commitCommand("category", "put", toRow(c))
+        // [D13 #7] the migration is restore-shaped (an empty DB being seeded from a cached copy):
+        // without {restore:true}, toRow left LS-cached tombstones stampless and upsertCategory
+        // stamped them `now` — after the first sync a peer's recovered/renamed category (real,
+        // older updatedAt) lost LWW to the fresh now-tombstone and was re-deleted (Round-6 P2
+        // hazard, unapplied to this path). restore:true gives only tombstones the epoch-oldest
+        // stamp; live rows still take the now-stamp ('backup wins locally').
+        for (const c of ls) await commitCommand("category", "put", toRow(c, { restore: true }))
         await commitCommand("meta", "put", ['categoryLsMigrated', '1'])
       } catch (e) { console.warn('[category] migration failed (local cache still usable):', e) }
       commit('setListFromDb', ls)

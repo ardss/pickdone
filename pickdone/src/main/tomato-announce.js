@@ -222,6 +222,11 @@ function listAnnounces () {
           zeroRowPolls = 0
           return listAnnounces()
         }
+        // D13 C8 (2026-10-01): the probe confirmed the seq space is intact — this is the healthy
+        // idle path, not a rebuild. Reset the counter, otherwise it kept growing and EVERY later
+        // idle poll paid the extra probe query forever (the D10 comment above promises a single
+        // cheap incremental scan per idle poll).
+        zeroRowPolls = 0
       }
     } else {
       zeroRowPolls = 0

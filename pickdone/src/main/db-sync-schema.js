@@ -134,8 +134,12 @@ module.exports = ({ getDb, log }) => {
     for (const r of rows) {
       if (present.has(r.key) || isMachineLocalSettingKey(r.key)) continue
       if (Math.min(Number(r.updatedAt) || 0, now) >= gateTs) continue // written at/after the snapshot stamp: not authored-over, keep
-      // Same tombstone UPDATE as rowDelete (no re-stamp of an already-deleted row)
-      const res = getDb().prepare('UPDATE settings_rows SET deleted=1, deletedAt=?, updatedAt=? WHERE key=? AND deleted=0').run(now, now, r.key)
+      // D13 finding 4: stamp the tombstone with the doc's causal watermark (gateTs), not local
+      // wall-clock now — the same stamp-awareness the rowDelete path carries (D11). A
+      // mirror-deletion is only provable against the snapshot taken at gateTs (_savedAt,
+      // potentially minutes before this bridge write); re-aging the tombstone to `now` made it
+      // read newest-here and beat a peer's genuinely newer tombstone/edit in LWW.
+      const res = getDb().prepare('UPDATE settings_rows SET deleted=1, deletedAt=?, updatedAt=? WHERE key=? AND deleted=0').run(gateTs, gateTs, r.key)
       if (res.changes > 0) removed.push(r.key)
     }
     return removed
@@ -282,6 +286,12 @@ module.exports = ({ getDb, log }) => {
       })
       tr()
       for (const r of rejected) log.warn(`[TodoDB] settingsRowPutMany: rejected row #${r.index} (${r.reason})`)
+      // D13 finding 3 (uniform bulk-flush rejection contract): attach the per-row rejections to
+      // the returned accepted-keys list as a NON-enumerable property — the array contract (oplog
+      // expansion `arr('setting', result)`, renderer acknowledgement) stays byte-compatible,
+      // while the sync flush (sync-apply.flushOne) can now see and quarantine the silently
+      // dropped rows instead of acking a segment whose tail never landed.
+      Object.defineProperty(changed, 'rejected', { value: rejected, enumerable: false })
       return changed
     },
     rowDelete: p => {

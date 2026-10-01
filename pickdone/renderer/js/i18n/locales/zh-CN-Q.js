@@ -14,6 +14,7 @@ export default {
     statusChangeTip: '状态：{s}（点击切换）',
     statusAria: '项目状态：{s}',
     statusChanged: '项目状态已切换为「{s}」',
+    statusChangeFailed: '项目状态保存失败：{m}',
     cancelConfirmTitle: '标记为已取消？',
     cancelConfirmText: '该项目将标记为「已取消」。确认切换吗？之后可再次点击状态切回。',
     filteredEmpty: '没有符合当前筛选状态的项目',

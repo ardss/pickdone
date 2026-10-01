@@ -107,7 +107,9 @@ test('A10 ProjectView: deadline prompt validates the date live under the input',
 test('A11 HabitView: empty rename warns and stays in edit mode', () => {
   const src = read('renderer/js/views/HabitView.vue')
   const fn = src.slice(src.indexOf('saveRename (h) {'), src.indexOf('// Check-in is a one-click'))
-  assert.match(fn, /if \(!n\) \{ this\.\$message\.warning\(this\.\$t\('statsE\.HabitView\.renameEmpty'\)\); return \}/)
+  // [d13 A11] the empty-name branch now also re-focuses the editor after nextTick; the
+  // warn-and-stay-open intent is unchanged
+  assert.match(fn, /\$message\.warning\(this\.\$t\('statsE\.HabitView\.renameEmpty'\)\)/)
   assert.ok(fn.indexOf('this.editingId = null') > fn.indexOf('if (!n)'), 'early return keeps editingId (editor stays open)')
   for (const loc of ['zh-CN-E.js', 'en-US-E.js']) assert.match(read('renderer/js/i18n/locales/' + loc), /renameEmpty/)
 })

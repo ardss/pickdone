@@ -171,10 +171,20 @@ exports.tomatoRemoveByIds = (db, ids, opts = {}) => {
 // One-time migration: bulk-insert the full ledger from the old meta blob.
 // 守卫不能只靠"表空"——用户删光账本后表空是合法状态,不删 meta blob 会整批复活已删记录(P0,并行审查实锤)。
 // 所以:无论走哪条分支,迁移完成即删 meta blob;"blob 不存在"才是真正的已迁移哨兵。
+// D13 finding 1: marker for "a previous migration run was PARTIAL (some rows rejected, blob
+// kept for retry)". Machine-local ('sync.*' never syncs), so it never reaches peers. The
+// COUNT(*)>0 short-circuit below must NOT fire while this marker is live: a partially-migrated
+// library legitimately has rows in tomato_records, and the old unconditional delBlob there
+// destroyed the rejected rows' only surviving copy on the very next boot.
+const TOMATO_PARTIAL_MIGRATION_KEY = 'sync.tomatoBlobPartialMigration'
+
 exports.tomatoMigrateFromMeta = (db, stmts) => {
   const delBlob = () => { try { db.prepare('DELETE FROM meta WHERE key = ?').run('db.tomatoState') } catch { /* 清理失败不阻断 */ } }
+  const getMarker = () => { try { const r = db.prepare('SELECT value FROM meta WHERE key = ?').get(TOMATO_PARTIAL_MIGRATION_KEY); return !!(r && r.value) } catch { return false } }
+  const setMarker = () => { try { db.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(TOMATO_PARTIAL_MIGRATION_KEY, '1') } catch { /* marker is best-effort */ } }
+  const clearMarker = () => { try { db.prepare('DELETE FROM meta WHERE key = ?').run(TOMATO_PARTIAL_MIGRATION_KEY) } catch { /* marker is best-effort */ } }
   const n = db.prepare('SELECT COUNT(*) c FROM tomato_records').get().c
-  if (n > 0) { delBlob(); return 0 }
+  if (n > 0 && !getMarker()) { delBlob(); return 0 }
   // 损坏 blob 不删(2026-09-10 P2):此前 JSON.parse 失败 catch 成 {} → list 空 → delBlob 直接把
   // 旧账本 blob 抹掉,记录永久丢失(可能只是磁盘位翻转/半截写入)。parse 失败 = warn + 返回 0
   // 保留 blob,下次(比如从备份恢复后)还有迁移机会;只有成功解析才走迁移/清理。
@@ -182,7 +192,7 @@ exports.tomatoMigrateFromMeta = (db, stmts) => {
   const parsed = require('./fix-util').parseTomatoMetaBlob(stmts.getMeta.get('db.tomatoState')?.value)
   if (!parsed.ok) { log.warn('[TodoDB] tomatoMigrateFromMeta: 旧 meta blob 损坏(JSON 解析失败),保留 blob 不迁移不删除'); return 0 }
   const list = parsed.list
-  if (!list.length) { delBlob(); return 0 }
+  if (!list.length) { clearMarker(); delBlob(); return 0 }
   // D11 finding 10: tomatoAppendMany's failure granularity is per-ROW (a row missing
   // tomatoId/endTime or failing the dateKey derive is rejected, the batch still commits). Deleting
   // the blob unconditionally after a partial migration PERMANENTLY LOST every rejected record —
@@ -191,9 +201,14 @@ exports.tomatoMigrateFromMeta = (db, stmts) => {
   // (or an empty-after-parse blob) deletes it.
   const res = exports.tomatoAppendMany(db, list)
   if (res.rejected.length) {
+    // D13 finding 1: stamp the partial-migration marker so the COUNT guard above cannot delete
+    // the blob on the next boot — the rejected rows' only copy is still this blob, and the
+    // upserts are idempotent by tomatoId, so the next boot re-migrates just the remainder.
+    setMarker()
     log.warn(`[TodoDB] tomatoMigrateFromMeta: ${res.rejected.length} of ${list.length} blob rows rejected — blob KEPT for a retry next boot (unconditional delBlob would lose them)`)
     return res.accepted
   }
+  clearMarker()
   delBlob()
   return res.accepted
 }

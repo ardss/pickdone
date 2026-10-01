@@ -4,7 +4,7 @@
     <!-- --body centered in the full viewport: the default tablecloth insets (left:235px/bottom:110px) exist to make room for the sidebar/tomato bar for the settings half-screen dialog; the repeat dialog landing on them would skew over the edit bar (user-reported occlusion + skew) -->
     <div class="modal-tablecloth modal-tablecloth--body" @click.self="close">
       <div class="modal" role="dialog" aria-modal="true" :aria-label="$t('statsD.RepeatModal.aria')" style="width:520px;max-height:100%" @keydown.esc="close">
-        <div class="modal__header"><span>{{ $t('statsD.RepeatModal.title') }}</span><button type="button" class="modal__close close-x" :aria-label="$t('statsD.RepeatModal.close')" @click="close"></button></div>
+        <div class="modal__header"><span>{{ $t('statsD.RepeatModal.title') }}</span><button type="button" class="modal__close close-x" :aria-label="$t('statsD.RepeatModal.close')" :disabled="generating" @click="close"></button></div>
         <div class="modal__body">
           <template v-if="templateTodo">
           <div class="rm-base">{{ $t('statsD.RepeatModal.baseEvent') }}{{baseLabel}} · {{templateTodo.taskContent}}</div>
@@ -62,7 +62,7 @@
           <div class="rm-row" v-if="form.repeatType==='year' && form.repeatYearType!=='lunar'">
             <span class="rl">{{ $t('statsD.RepeatModal.yearly') }}</span>
             <el-date-picker size="small" type="date" :placeholder="$t('statsD.RepeatModal.pickFixedDate')" value-format="x" :clearable="false"
-                            :model-value="new Date(2026, form.repeatYearMonth-1, form.repeatYearMonthDay).getTime()"
+                            :model-value="yearAnchorTs"
                             @update:model-value="ts=>{const d=new Date(ts);patch({repeatYearMonth:d.getMonth()+1,repeatYearMonthDay:d.getDate()})}"/>
           </div>
 
@@ -90,7 +90,7 @@
           <div v-else class="rm-base">{{ $t('statsD.RepeatModal.noBase') }}</div>
         </div>
         <div class="modal__footer">
-          <el-button size="small" @click="close">{{ $t('statsD.RepeatModal.cancel') }}</el-button>
+          <el-button size="small" :disabled="generating" @click="close">{{ $t('statsD.RepeatModal.cancel') }}</el-button>
           <el-button size="small" type="primary" :loading="generating" :disabled="!templateTodo || !templateTodo.todoTime" @click="generate">{{ $t('statsD.RepeatModal.generate') }}</el-button>
         </div>
       </div>
@@ -116,7 +116,10 @@ export default {
       form: null as any,
       weekdays: WEEKDAYS,
       monthDaysOptions: Array.from({ length: 31 }, (_, i) => i + 1),
-      generating: false
+      generating: false,
+      /* [A8 fix] set by close()/overlay/Esc while a generation is in flight; the addTodo loop
+         checks it between instances so closing mid-run no longer leaves a background series */
+      genCancelled: false
     }
   },
   computed: {
@@ -139,6 +142,19 @@ export default {
       return Math.min(this.effectiveDates.length, this.maxRepeat)
     },
     maxRepeat () { return parseInt(this.$store.state.settings.maxRepeat) || 2 },
+    /* [A7 fix] Yearly-rule picker anchor: only month/day are stored, so the year is display-only —
+       but a hardcoded 2026 goes stale from 2027, and a Feb-29 rule clamps to Mar 1 in a non-leap
+       anchor year. Anchor on the base task's year (falls back to the current year) and clamp the
+       day back into the anchor month so the picker always shows the stored month. */
+    yearAnchorTs () {
+      const f = this.form || { repeatYearMonth: 1, repeatYearMonthDay: 1 }
+      const y = (this.templateTodo && this.templateTodo.todoTime)
+        ? dayjs(this.templateTodo.todoTime).year()
+        : dayjs().year()
+      const m = f.repeatYearMonth || 1
+      const daysInMonth = dayjs(new Date(y, m, 0)).date()
+      return new Date(y, m - 1, Math.min(f.repeatYearMonthDay || 1, daysInMonth)).getTime()
+    },
     baseLabel () {
       return this.templateTodo && this.templateTodo.todoTime
         ? dayjs(this.templateTodo.todoTime).format(FMT.cnFull)
@@ -160,6 +176,7 @@ export default {
         return
       }
       this.generating = true
+      this.genCancelled = false
       let dates = [] // hoisted: the catch below reports against it even when the try body throws early
       try {
         const tpl = this.templateTodo
@@ -186,6 +203,8 @@ export default {
         let made = 0
         let failed = 0
         for (let i = 0; i < dates.length; i++) {
+          // [A8 fix] cancel/close during generation stops the remaining instances
+          if (this.genCancelled) break
           const d = dates[i]
           let remind = 0
           if (tpl.reminderTime > 0) {
@@ -230,7 +249,12 @@ export default {
         try { this.$message.error(this.$t('statsD.RepeatModal.partialFail', { made: 0, failed: dates.length, total: dates.length })) } catch (err) { /* toast is best-effort */ }
       } finally { this.generating = false }
     },
-    close () { this.$store.commit('ui/askRepeatEdit', null) }
+    /* [A8 fix] closing while generating cancels the remaining instances; the modal stays until the
+       in-flight addTodo settles (buttons are disabled, so this path is Esc/overlay-initiated) */
+    close () {
+      if (this.generating) { this.genCancelled = true; return }
+      this.$store.commit('ui/askRepeatEdit', null)
+    }
   },
 
 }

@@ -3,6 +3,10 @@
  * Pure relocation: db.js keeps thin delegates in OPS so db.call surfaces and return shapes are
  * unchanged.
  */
+// electron-log only exists inside the packaged App; the standalone CLI bundle has no
+// node_modules/electron-log, so fall back to a no-op logger instead of crashing at require time
+let log
+try { log = require('electron-log') } catch { log = { info () {}, warn () {}, error () {} } }
 // ===== Plan chips (timeline planning layer) formal row storage (2026-09-03 root fix) =====
 // Previously meta.dayPlanState JSON whole-package + LS dual-write with three-way concurrency — the architectural root of four data-loss incidents;
 // with row storage there is a single write channel (SQLite serialized) + write-op broadcast + cascading cleanup on task deletion, so the race is structurally eliminated.
@@ -20,21 +24,36 @@ exports.planAddMany = (db, chips) => {
   // Skip-and-collect (round-3 review): one malformed chip used to throw for the WHOLE batch —
   // a poison pill in the sync flush wedged plan ingestion forever. Invalid rows are skipped
   // (never applied); the valid rows commit and their ids are returned.
-  const list = (Array.isArray(chips) ? chips : [chips]).filter(c => c && c.taskId &&
-    /^\d{4}-\d{2}-\d{2}$/.test(String(c.day)) && /^([01]\d|2[0-3]):[0-5]\d$/.test(String(c.mm)))
-    .map(c => ({
-      id: (c && c.id) || 'pl_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
-      taskId: String(c.taskId || ''), day: String(c.day || ''), mm: String(c.mm || ''), sort: Number(c.sort) || 0,
-      // M2 (2026-09-20): an explicit updatedAt (the sync apply path carries the peer row's age)
-      // must survive — re-stamping now() here made the applied chip differ from the peer's row
-      // (fresh LWW age + a new oplog delta per applied chip = apply/push ping-pong). Mirrors
-      // upsertCategory's `(c && c.updatedAt) || now`; renderer callers omit it and get now().
-      updatedAt: Number(c && c.updatedAt) > 0 ? Number(c.updatedAt) : 0
-    }))
+  const rawList = (Array.isArray(chips) ? chips : [chips])
+  const list = []
+  // D13 finding 3 (uniform bulk-flush rejection contract): surface the skipped rows instead of
+  // silently filtering them — a buffered segment whose tail never landed used to ack ok=true and
+  // advance the sender's watermark past lost chips. `rejected` rides the returned accepted-ids
+  // array as a NON-enumerable property (array consumers — oplog expansion, renderer — unaffected).
+  const rejected = []
+  for (let i = 0; i < rawList.length; i++) {
+    const c = rawList[i]
+    if (c && c.taskId && /^\d{4}-\d{2}-\d{2}$/.test(String(c.day)) && /^([01]\d|2[0-3]):[0-5]\d$/.test(String(c.mm))) {
+      list.push({
+        id: (c && c.id) || 'pl_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+        taskId: String(c.taskId || ''), day: String(c.day || ''), mm: String(c.mm || ''), sort: Number(c.sort) || 0,
+        // M2 (2026-09-20): an explicit updatedAt (the sync apply path carries the peer row's age)
+        // must survive — re-stamping now() here made the applied chip differ from the peer's row
+        // (fresh LWW age + a new oplog delta per applied chip = apply/push ping-pong). Mirrors
+        // upsertCategory's `(c && c.updatedAt) || now`; renderer callers omit it and get now().
+        updatedAt: Number(c && c.updatedAt) > 0 ? Number(c.updatedAt) : 0
+      })
+    } else {
+      rejected.push({ index: i, taskId: c && c.taskId != null ? String(c.taskId) : null, reason: 'invalid chip (taskId/day/mm)' })
+    }
+  }
+  if (rejected.length) log.warn(`[TodoDB] planAddMany: rejected ${rejected.length} of ${rawList.length} chips (invalid taskId/day/mm)`)
   const ins = db.prepare('INSERT INTO plan_chips (id, taskId, day, mm, sort, deleted, deletedAt, updatedAt) VALUES (@id,@taskId,@day,@mm,@sort,0,0,@updatedAt) ON CONFLICT(id) DO UPDATE SET taskId=excluded.taskId, day=excluded.day, mm=excluded.mm, sort=excluded.sort, deleted=0, deletedAt=0, updatedAt=excluded.updatedAt')
   const now = Date.now()
   const tr = db.transaction(() => list.forEach(c => ins.run({ ...c, updatedAt: c.updatedAt || now }))); tr()
-  return list.map(c => c.id)
+  const accepted = list.map(c => c.id)
+  Object.defineProperty(accepted, 'rejected', { value: rejected, enumerable: false })
+  return accepted
 }
 
 exports.planUpdateChip = (db, { id, day, mm }) => {

@@ -134,12 +134,21 @@ export default {
     filterKey (f) { return STATUS_FILTER_I18N_KEYS[f] || STATUS_FILTER_I18N_KEYS.all },
     /** Status pill on the card cycles through the lifecycle (compact card layout beats a dropdown here).
      *  Every switch toasts the new status; landing on 'cancelled' asks for confirmation first — a single
-     *  accidental click must not silently kill a project's status. */
+     *  accidental click must not silently kill a project's status.
+     *  [D13 A3] the write now goes through the awaited setProjectStatus action: success is toasted
+     *  only after the meta put lands; a failed write rolls the pill back and toasts an error
+     *  (previously 'status changed' fired on the optimistic commit and the value silently
+     *  reverted on the next launch). */
     cycleStatus (id, cur) {
       const i = PROJECT_STATUSES.indexOf(normalizeStatus(cur))
       const next = PROJECT_STATUSES[(i + 1) % PROJECT_STATUSES.length]
-      const apply = () => {
-        this.$store.commit('category/setProjectStatus', { id, status: next })
+      const apply = async () => {
+        try {
+          await this.$store.dispatch('category/setProjectStatus', { id, status: next })
+        } catch (e) {
+          if (this.$message) this.$message.error(this.$t('projQ.statusChangeFailed', { m: (e && e.message) ? e.message : e }))
+          return
+        }
         if (this.$message) this.$message.success(this.$t('projQ.statusChanged', { s: this.$t(statusI18nKey(next)) }))
       }
       if (next === 'cancelled') {
@@ -177,7 +186,13 @@ export default {
         this.$store.commit('category/addCategory', { categoryName: name })
         const created = this.$store.state.category.list
           .find(c => !before.has(c.categoryId) && c.categoryName === name)
-        if (!created) return
+        // [D13 A15] the lookup-miss path used to end in total silence (no toast, dialog already
+        // closed) — surface a failure instead. Also roll the placeholder row back so a concurrent
+        // add cannot leave a stray untitled category behind.
+        if (!created) {
+          this.$message.error(this.$t('statsB.ProjectsView.createFailed', { name }))
+          return
+        }
         this.$store.commit('category/setProject', { id: created.categoryId, flag: true })
         this.$message.success(this.$t('statsB.ProjectsView.created', { name }))
       } catch { /* cancelled */ }

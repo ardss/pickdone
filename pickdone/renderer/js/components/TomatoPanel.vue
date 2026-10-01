@@ -31,8 +31,10 @@
     <!-- [Removed enableCompleteAudio dropdown]: no playback logic ever reads the tomato store key it wrote (the actual completion sound uses
          settings.completeSound), making it dead UI duplicating the Settings page; the effective completion sound is changed under Settings -> Pomodoro -->
     <section class="tp-records">
-      <header>{{ $t('statsD.TomatoPanel.todayRecords') }} <em>{{ $t('statsD.TomatoPanel.countN', { n: todayRecords.length }) }}</em></header>
-      <div v-for="r in todayRecords.slice(0,6)" :key="r.tomatoId" class="rec-row">
+      <!-- [A14 fix] count and rows come from the same shownRecords slice — the old count used the
+           untruncated length, so 8 records displayed "8" above 6 rows with no overflow indicator -->
+      <header>{{ $t('statsD.TomatoPanel.todayRecords') }} <em>{{ $t('statsD.TomatoPanel.countN', { n: shownRecords.length }) }}</em></header>
+      <div v-for="r in shownRecords" :key="r.tomatoId" class="rec-row">
         <app-icon :name="r.succeed ? 'check' : 'x'" :size="12" :style="{ color: r.succeed ? 'var(--brand)' : 'var(--danger)' }"/>
         <span class="rf">{{r.focus||$t('statsD.TomatoPanel.freeFocus')}}</span>
         <span class="rd">{{ $t('statsD.TomatoPanel.minutesN', { n: r.focusDuration }) }}</span>
@@ -74,6 +76,11 @@ export default {
     todayRecords () {
       const key = dayjs().format(FMT.date)
       return this.$store.getters['tomato/recordsByDate'].get(key) || []
+    },
+    /* [A14 fix] the rendered window (max 6 rows); the header count uses this so it never
+       exceeds the visible rows */
+    shownRecords () {
+      return this.todayRecords.slice(0, 6)
     }
   },
   mounted () {

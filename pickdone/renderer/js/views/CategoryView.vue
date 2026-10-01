@@ -34,7 +34,7 @@ export default {
   components: { GroupBlock: TodoGroupBlock, EmptyState },
   data () {
     return {
-      collapsedMap: { catExpDone: true, catExpUndo: false, catToday: false, catTomorrow: false, catDat: false, catUpcoming: false, catNoDate: false }
+      collapsedMap: { catExpDone: true, catExpUndo: false, catToday: false, catTodayDone: true, catTomorrow: false, catDat: false, catUpcoming: false, catNoDate: false, projDone: true }
     }
   },
   computed: {
@@ -64,7 +64,12 @@ export default {
           expUndo: 'statsI.CategoryView.expUndoTitle',
           upcoming: 'statsE.CategoryView.upcomingLabel',
           noDate: 'statsE.CategoryView.noDateLabel'
-        }
+        },
+        // [D13 A2] completed fallback (same as ProjectView's projDone): a completion outside the
+        // R1 window (or today's completion when the builder predates the shared catTodayDone
+        // bucket) must never be dropped — the "no completed task vanishes" invariant now holds
+        // for category pages too.
+        extraGroups: [{ key: 'projDone', titleKey: 'statsB.ProjectView.done', filter: t => t.complete && t.dayStart !== this.todayTs, props: { showDate: true } }]
       })
     }
   },

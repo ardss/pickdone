@@ -754,7 +754,8 @@ function flushPendingWrites (state) {
   // (rows truly dropped log-only) — that degrades to the old fail-closed behavior.
   const flushOne = (list, op) => {
     if (!list || !list.length) return
-    try { busWrite(state, op, list) } catch (e) {
+    let result = null
+    try { result = busWrite(state, op, list) } catch (e) {
       log.error(`[LanSync] flush ${op} failed — dropping ${list.length} buffered rows (quarantined under ${META_FLUSH_QUARANTINE_PREFIX}${op}, recoverable via snapshot):`, e && e.message)
       // 2026-09-26 poison-row quarantine: a dropped buffer used to be log-only ("recoverable via
       // snapshot" = the ONLY recovery, and only if a snapshot actually re-fires). Park the rows in
@@ -762,6 +763,23 @@ function flushPendingWrites (state) {
       // inspectable/recoverable, and surface the quarantine on the flush result so the bootstrap
       // can raise a Device Center syncEvent instead of failing silently.
       const entry = quarantineFlushRows(state, op, list, e)
+      if (entry) quarantined.push(entry)
+      else ok = false // parking failed: log-only drop, fail closed so the segment is not acked
+      return
+    }
+    // D13 finding 3 (per-row rejection quarantine): the bulk ops no longer drop rows silently —
+    // settingsRowPutMany / planAddMany / tomatoAppendMany surface their skipped rows as a
+    // `rejected` list (settingsRowPutMany/planAddMany attach it to the returned accepted array
+    // non-enumerably; tomatoAppendMany returns {accepted, rejected}). The old code discarded the
+    // result: rejected rows vanished, the buffer segment still cleared and the segment acked
+    // ok=true — the sender's watermark advanced past rows that never landed, permanently lost
+    // with zero user-visible trace. Park the rejected rows in the same machine-local quarantine
+    // the throw path uses and surface them on the flush result (flush-quarantined syncEvent).
+    const rejected = result && Array.isArray(result.rejected) ? result.rejected : []
+    if (rejected.length) {
+      log.error(`[LanSync] flush ${op}: ${rejected.length} of ${list.length} rows rejected by the bulk op — quarantined under ${META_FLUSH_QUARANTINE_PREFIX}${op}`)
+      const err = new Error('per-row rejection: ' + rejected.map(r => (r && r.reason) || 'unknown').join('; ').slice(0, 300))
+      const entry = quarantineFlushRows(state, op, rejected.map((r, i) => ({ ...list[r && r.index != null ? r.index : i], __rejectReason: (r && r.reason) || 'unknown' })), err)
       if (entry) quarantined.push(entry)
       else ok = false // parking failed: log-only drop, fail closed so the segment is not acked
     }
@@ -807,8 +825,13 @@ function readMaxOplogSeq (state) {
  * instead (listMetaKeys), with the retained-pointer ts as the age and the ring's floor ts as the
  * honest age BOUND for a trimmed key (the local write happened at or before the floor). Pair with
  * the ingress bound rule in applyRowInner, this closes the permanent-starvation class. Excluded:
- * machine-local meta, the settings/habits blobs (field-granular via the setting entity), and
- * keys whose value is absent (their deletions ride the increment tombstones, as before).
+ * machine-local meta, the settings/habits blobs (field-granular via the setting entity). D13
+ * finding 5: keys whose value is ABSENT but which still hold a retained oplog pointer are
+ * enumerated as TOMBSTONE snapshot rows — a locally deleted key whose increment pointers trimmed
+ * out of the ring used to be invisible to snapshot pushes, so a peer still holding the key live
+ * re-pushed it and (with no local tombstone left) the stale copy LWW-resurrected. Bounded by the
+ * retained ring: deletions whose pointers trimmed entirely stay unresolvable by snapshot (the
+ * documented residual — peers recover them via their own tombstones or the ring's floor rule).
  */
 function metaSnapshotRows (state) {
   const cache = createHydrationCache(state)
@@ -818,8 +841,17 @@ function metaSnapshotRows (state) {
   for (const key of state.db.call('listMetaKeys') || []) {
     if (isMachineLocalMetaKey(key) || isSyncBlobMetaKey(key)) continue
     const v = cache.meta(key)
-    if (v == null) continue // deleted: tombstones are carried by the increment pointers
+    if (v == null) continue // live enumeration only; deletions come from the pointer scan below
     out.push({ entity: 'meta', id: key, updatedAt: tsMap.get(key) || floor, deleted: false, deletedAt: 0, data: { key, value: v } })
+  }
+  // D13 finding 5: retained pointers for keys that no longer exist = locally deleted meta keys
+  // (deleteMeta is the only way a meta key disappears). Emit each as a tombstone row aged by its
+  // latest pointer ts (meta has no stamp column) so the deletion survives increment trimming.
+  const live = new Set((state.db.call('listMetaKeys') || []).map(String))
+  for (const [key, ts] of tsMap) {
+    if (live.has(key)) continue
+    if (isMachineLocalMetaKey(key) || isSyncBlobMetaKey(key)) continue
+    out.push({ entity: 'meta', id: key, updatedAt: ts || floor, deleted: true, deletedAt: ts || floor, data: null })
   }
   return out
 }

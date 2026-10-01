@@ -10,6 +10,11 @@
       "lines": 84,
       "branches": 82,
       "functions": 76
+    },
+    "win32@node24": {
+      "lines": 73,
+      "branches": 73,
+      "functions": 61
     }
   }
 }

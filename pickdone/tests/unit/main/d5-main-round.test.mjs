@@ -116,7 +116,11 @@ test('d5-3: unquarantineable corrupt DB aborts with source:error, no backup clob
     // No copy over the locked target: todos.db-wal still holds its original bytes and no
     // todos.db was materialized from the backup.
     assert.equal(fs.readFileSync(path.join(ud, 'todos.db-wal'), 'utf8'), 'wal-junk')
-    assert.ok(!fs.existsSync(path.join(ud, 'todos.db')), 'no backup copied over the locked target')
+    // D13 finding 14: the quarantine renames the SIDECARS first and the main DB LAST, so a
+    // failed -wal rename leaves todos.db AT ITS ORIGINAL PATH (recovery retried next boot) —
+    // the old main-first order left todos.db MISSING with a live -wal beside it (the next init
+    // then created a fresh empty DB and recovery never re-fired).
+    assert.equal(fs.readFileSync(path.join(ud, 'todos.db'), 'utf8'), 'not-a-sqlite-file-at-all', 'the corrupt main DB was NOT renamed aside before the failing -wal rename')
     assert.equal(fs.readFileSync(path.join(ud, 'todos.db.plain-bak'), 'utf8'), 'BACKUP-CONTENT')
   } finally {
     realFs.renameSync = origRename

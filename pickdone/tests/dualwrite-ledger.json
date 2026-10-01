@@ -178,5 +178,9 @@
   "renderer/js/store/auth.js::gamification.gainDedup": {
     "authority": "local-only",
     "note": "snow-gain replay dedup keys (startedAt) - mirrors gains already booked via db bumpSnow dedupKey; stale entries are harmless"
+  },
+  "renderer/js/utils/dbMirror.js::#unflushedKey": {
+    "authority": "sqlite",
+    "note": "D13 #12 durable parking for failed setMeta blobs - DB (meta) stays authoritative; LS blob is a retry buffer consumed by consumeUnflushed() at startup, which re-queues mirrorToDb and clears the marker (calibration: startup consume)"
   }
 }

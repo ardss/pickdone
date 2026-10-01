@@ -58,7 +58,7 @@ import { isAuxWindow } from '../utils/auxWindow.js'
 // settings side. The old inline getMeta + silent catch collapsed "read FAILED" into "no
 // mirror": a transient getMeta rejection at startup left the stale LS blob in place and the
 // NEXT persist() drowned the (newer) durable DB copy under it.
-import { restoreFromDb, DB_MIRROR_ERROR } from '../utils/dbMirror.js'
+import { restoreFromDb, DB_MIRROR_ERROR, consumeUnflushed } from '../utils/dbMirror.js'
 // F-C7 (maint/dw wave3): local day-key from the shared module — was hand-rolled twice below
 import { localDayKey } from '../../../shared/date-key.mjs'
 
@@ -284,9 +284,15 @@ export default {
      *  DB_MIRROR_ERROR sentinel and this cycle warns and SKIPS both the restore and any later
      *  write-back, so a transient getMeta failure can no longer leave stale LS state that the
      *  next persist() would mirror over the newer durable DB copy (F-C4 parity, settings side). */
-    async initFromDb ({ commit }) {
+    async initFromDb ({ state, commit }) {
       try {
         if (!window.todoAPI?.dbCall) return
+        // [D13 #12] unflushed-mirror parking: the previous session gave up mirroring this key —
+        // the LS copy is newer than whatever the DB holds. Skip the restore (LS state is already
+        // live) and re-mirror it via persist() (fresh savedAt + meta write) instead of letting
+        // the stale DB blob drown it (DB-precedence assumes the mirror actually landed).
+        const parked = consumeUnflushed(META_KEY)
+        if (parked && parked.blob) { persist(state); return }
         let blob = await restoreFromDb(META_KEY)
         if (blob === DB_MIRROR_ERROR) {
           console.warn('[habits] initFromDb: DB mirror read failed this startup — skipping the restore (and the write-back) so the DB copy is preserved')

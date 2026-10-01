@@ -356,7 +356,9 @@ export default {
           upcoming: 'statsB.ProjectView.upcoming',
           noDate: 'statsB.ProjectView.noDate'
         },
-        extraGroups: [{ key: 'projDone', titleKey: 'statsB.ProjectView.done', filter: t => t.complete, props: { showDate: true } }]
+        // [D13 A2] today's completions moved into the shared catTodayDone bucket (exactly-one-group
+        // invariant) — projDone keeps covering only completions OUTSIDE the today bucket
+        extraGroups: [{ key: 'projDone', titleKey: 'statsB.ProjectView.done', filter: t => t.complete && t.dayStart !== this.todayTs, props: { showDate: true } }]
       })
     }
   },
@@ -371,7 +373,10 @@ export default {
     statusKey (s) { return statusI18nKey(s) },
     setStatus (status) {
       if (!status) return
-      this.$store.commit('category/setProjectStatus', { id: this.catId, status })
+      // [D13 A3] persistence moved to the awaited setProjectStatus action (failure rolls the
+      // in-memory status back); this caller keeps its fire-and-forget UX but must not leave the
+      // rejection unhandled.
+      this.$store.dispatch('category/setProjectStatus', { id: this.catId, status }).catch(() => {})
     },
     /** Countdown in plain words: due today / due tomorrow / N days left / overdue by N days; returns empty when done (the card shows the done state) */
     countdownOf (m, state) {

@@ -16,6 +16,7 @@ import store from './store/index.js'
 import { onExternalHabitBlob } from './store/habits.js'
 import { createExternalReloader, kindsFromChangedEvent } from './utils/externalReload.js'
 import { loadRuntime } from './store/helpers/runtimeState.js'
+import { criticalBackupWrite, ackQuitFlushAfterWrite } from './store/helpers/todoBackup.js'
 import router from './router.js'
 import App from './app-root.vue'
 import { setLunarLib } from './utils/repeat.js'
@@ -306,13 +307,20 @@ async function bootstrap () {
 
   // Quit-flush ack handshake (main waits for this before closing the DB, ≤2s cap): dbMirror/store flush
   // handlers registered this channel EARLIER (their modules load before main.js), so by the time our
-  // listener runs their flush invokes are already dispatched — a short defer just lets the queued IPC
-  // messages actually leave before we ack. Payload echoes the token so the main process can drop stale acks.
+  // listener runs their flush invokes are already dispatched — a short floor lets the queued IPC
+  // messages actually leave before we ack. [D13 #11] the ack now also waits (bounded at 1s) for the
+  // retained critical-backup write to settle — the old fixed 60ms ack could fire mid-write and let
+  // the main process cut off the last critical snapshot. Payload echoes the token so the main
+  // process can drop stale acks.
   if (window.todoAPI.onAppQuittingFlush && window.todoAPI.notifyQuitFlushDone) {
     window.todoAPI.onAppQuittingFlush(payload => {
-      setTimeout(() => {
-        try { window.todoAPI.notifyQuitFlushDone({ token: payload && payload.token }) } catch (e) { /* app is quitting */ }
-      }, 60)
+      const write = typeof criticalBackupWrite === 'function' ? criticalBackupWrite() : null
+      ackQuitFlushAfterWrite({
+        write,
+        notifyDone: () => {
+          try { window.todoAPI.notifyQuitFlushDone({ token: payload && payload.token }) } catch (e) { /* app is quitting */ }
+        }
+      })
     })
   }
 

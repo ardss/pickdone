@@ -702,11 +702,18 @@ function registerOps () {
     seedSyncOplog: () => {
       if (settingGet('sync.seedDone')) return { seeded: 0 }
       // bare pointers only: content already lives locally; hydration on push reads the live rows.
+      // D13 finding 6: each pointer carries the row's REAL age where the entity stores one
+      // (allRows rows carry updatedAt) so the backfill does not stamp every legacy row
+      // newest-here; meta keys (no stored age) get the epoch-oldest 1 — a peer's genuine edit
+      // then wins the next LWW round (same doctrine as the D11 category-restore stamp).
       const seen = new Set()
       const rows = []
       for (const r of createLocalStoreAdapter().allRows()) {
         const k = r.entity + ':' + r.id
-        if (!seen.has(k)) { seen.add(k); rows.push({ entity: r.entity, id: r.id }) }
+        if (seen.has(k)) continue
+        seen.add(k)
+        const ts = r.entity === 'meta' ? 1 : (Number(r.updatedAt) > 0 ? Number(r.updatedAt) : undefined)
+        rows.push({ entity: r.entity, id: r.id, ts })
       }
       const res = state.db.call('appendOplogPointers', rows)
       settingPut('sync.seedDone', '1')

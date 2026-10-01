@@ -14,6 +14,7 @@ export default {
     statusChangeTip: 'Status: {s} (click to change)',
     statusAria: 'Project status: {s}',
     statusChanged: 'Project status changed to "{s}"',
+    statusChangeFailed: 'Failed to save project status: {m}',
     cancelConfirmTitle: 'Mark as cancelled?',
     cancelConfirmText: 'This project will be marked "Cancelled". Switch now? You can click the status again later to switch back.',
     filteredEmpty: 'No projects match the current status filter',

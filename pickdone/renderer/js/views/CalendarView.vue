@@ -323,6 +323,9 @@ export default {
       // D6-F1: same inline-create marking as createAt
       this.$store.dispatch('todo/addTodo', { todoContent: '', todoDate: dayTs, todoTime: ts })
         .then(t => { this.$store.commit('ui/openEdit', t); this.$store.commit('ui/markInlineCreate', t && t.taskId) })
+      // [A9 fix] IPC failure must surface a toast instead of dying as an unhandled rejection
+      // (same guard as the QuickAdd inline-create path)
+        .catch(e => { console.error('[calendar] tbCreate addTodo failed:', e); this.$message.error(this.$t('statsD.QuickAdd.createFailed')) })
     },
     nav (dir) {
       if (this.view === 'timeblock') {

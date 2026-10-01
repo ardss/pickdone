@@ -100,6 +100,35 @@ module.exports = function buildMigrations (syncSchema, migrationsOverride) {
       )`)
       return true
     } },
+    { v: 9, fn: d => {
+      // D13 #10: repeat-renewal idempotency at the DB layer. The renderer's check-then-insert
+      // guard cannot close the query→write window (multi-window + CLI triggering the same renewal
+      // concurrently minted duplicate instances). One live instance per (recurGroupId,
+      // scheduledDay) is now enforced by a unique partial index; pre-existing duplicates are
+      // collapsed first — keep the OLDEST row per group+day (the first-minted instance is the one
+      // earlier completions chained from), tombstone the later duplicates (recoverable, never
+      // destroyed). The index deliberately does NOT live in db.js's SCHEMA: the migrator loop runs
+      // AFTER db.exec(SCHEMA), so an index here is what keeps an existing duplicate-carrying DB
+      // from failing init. NOTE: ensureRepeatDayUniqueness is RE-RUN post-encryption-finalization
+      // (db.js) — the fresh-install encryption path recreates the DB from SCHEMA and would
+      // otherwise drop an index that only v9 created.
+      ensureRepeatDayUniqueness(d)
+      return true
+    } },
     ]
+  buildMigrations.ensureRepeatDayUniqueness = ensureRepeatDayUniqueness
   return migrationsOverride || BUILT_IN
+}
+
+/** Idempotent: collapse duplicate live (recurGroupId, scheduledDay) rows, then create the unique
+ *  partial index. Safe to run on every boot (dedupe UPDATE is a no-op once the index exists). */
+function ensureRepeatDayUniqueness (d) {
+  d.exec(`UPDATE todos SET deleted = 1, deletedAt = CASE WHEN deletedAt IS NULL OR deletedAt = 0 THEN ${Date.now()} ELSE deletedAt END
+          WHERE deleted = 0 AND recurGroupId IS NOT NULL AND scheduledDay > 0
+            AND id NOT IN (
+              SELECT MIN(id) FROM todos
+              WHERE deleted = 0 AND recurGroupId IS NOT NULL AND scheduledDay > 0
+              GROUP BY recurGroupId, scheduledDay
+            )`)
+  d.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_todos_repeat_day ON todos (recurGroupId, scheduledDay) WHERE deleted = 0 AND recurGroupId IS NOT NULL AND scheduledDay > 0')
 }

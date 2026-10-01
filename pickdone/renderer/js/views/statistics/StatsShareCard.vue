@@ -37,7 +37,7 @@
     <template #footer>
       <div class="share-dialog__foot">
         <button class="mini" @click="$emit('close')">{{ $t('statsA.StatisticsView.cancel') }}</button>
-        <button class="mini share-save" @click="saveShareCard">{{ $t('statsA.StatisticsView.saveImage') }}</button>
+        <button class="mini share-save" :disabled="exporting" @click="saveShareCard">{{ $t('statsA.StatisticsView.saveImage') }}</button>
       </div>
     </template>
   </el-dialog>
@@ -75,7 +75,7 @@ export default {
   },
   emits: ['close'],
   data () {
-    return { shareStyle: 'narrative' }
+    return { shareStyle: 'narrative', /* [A10 fix] guards saveShareCard against double-click re-entry */ exporting: false }
   },
   computed: {
     shareStyles () {
@@ -89,6 +89,10 @@ export default {
   methods: {
     /* Share card: three style templates -> html2canvas PNG export (fixed light background for consistent share appearance) */
     async saveShareCard () {
+      // [A10 fix] double-click used to run two concurrent html2canvas exports and download two files;
+      // a busy flag released in finally makes the second click a no-op
+      if (this.exporting) return
+      this.exporting = true
       try {
         const el = this.$refs.shareCard
         if (!el) return this.$message.error(this.$t(T + 'msgNoCardContent'))
@@ -100,7 +104,7 @@ export default {
         a.download = `${this.$t(T + 'fileShareCard')}_${this.period}_${dayjs().format('YYYYMMDD_HHmmss')}.png`
         a.click()
         this.$message.success(this.$t(T + 'msgShareSaved'))
-      } catch (e) { this.$message.error(this.$t(T + 'msgExportFailed', { msg: e.message })) }
+      } catch (e) { this.$message.error(this.$t(T + 'msgExportFailed', { msg: e.message })) } finally { this.exporting = false }
     }
   }
 }
