@@ -169,6 +169,7 @@ class Instance {
   }
 
   spawnProc () {
+    this.exitCode = undefined // a boot retry re-spawns the same Instance object
     this.proc = spawn(ELECTRON_BIN, ['.', '--remote-debugging-port=' + this.cdpPort], {
       cwd: PICKDONE_ROOT,
       stdio: 'ignore',
@@ -187,7 +188,22 @@ class Instance {
   }
 
   async connectCdp ({ bootTimeoutMs = 60000 } = {}) {
-    this.cdp = await Cdp.connect(this.cdpPort, { targetTimeoutMs: bootTimeoutMs })
+    // Poll in bounded slices so a process that DIES during boot is detected
+    // immediately (with its exit code) instead of burning the whole budget on
+    // 'fetch failed' against an endpoint that will never exist.
+    const deadline = Date.now() + bootTimeoutMs
+    for (;;) {
+      try {
+        this.cdp = await Cdp.connect(this.cdpPort, { targetTimeoutMs: Math.min(15000, deadline - Date.now()) })
+        break
+      } catch (e) {
+        if (this.exitCode !== undefined) {
+          throw new Error(`[${this.name}] electron exited code=${this.exitCode} before CDP came up on port ${this.cdpPort}`)
+        }
+        if (Date.now() > deadline) throw e
+        await sleep(300)
+      }
+    }
     // Wait for the production preload surface before any journey step.
     await until(async () => {
       const ready = await this.cdp.evalExpr(
@@ -196,6 +212,31 @@ class Instance {
       return ready === true
     }, bootTimeoutMs, `[${this.name}] window.todoAPI / window.commands exposed`)
     return this
+  }
+
+  /** Spawn + wait for the CDP endpoint, retrying once on a boot stall: the process is
+   *  alive but the debug endpoint never opens — the classic bind race on the allocated
+   *  port (another process grabs it between freePort() and the electron bind, common on
+   *  a loaded CI/agent box). The journey scenario is unchanged; only the boot detection
+   *  is retried, on a freshly allocated port. */
+  async boot ({ tries = 2, bootTimeoutMs = 60000 } = {}) {
+    let lastErr = null
+    for (let i = 0; i < tries; i++) {
+      if (i > 0) {
+        trace(`[${this.name}] boot attempt ${i + 1}/${tries} on a fresh CDP port (last error: ${lastErr && lastErr.message})`)
+        this.cdpPort = await freePort()
+      }
+      this.spawnProc()
+      try {
+        return await this.connectCdp({ bootTimeoutMs })
+      } catch (e) {
+        lastErr = e
+        // A dead process is a real failure (crash / lock loss) — do not mask it.
+        if (this.exitCode !== undefined) throw e
+        await this.killHard()
+      }
+    }
+    throw lastErr
   }
 
   /** Production read path: window.todoAPI.dbCall(op, params). */
@@ -329,12 +370,10 @@ test('J1: boot pair + enable sync + two-way pairing completes on both sides', as
     fs.mkdirSync(dirB, { recursive: true })
     const a = new Instance({ name: 'A', cdpPort: cdpA, syncPort: syncA, userDir: dirA })
     const b = new Instance({ name: 'B', cdpPort: cdpB, syncPort: syncB, userDir: dirB })
-    a.spawnProc()
-    b.spawnProc()
     liveInstances.add(a); liveInstances.add(b)
     pair.a = a; pair.b = b
-    await a.connectCdp()
-    await b.connectCdp()
+    await a.boot()
+    await b.boot()
 
     // Enable sync on both. NOTE (found by this suite, first run): the sync.* ops are
     // async in db.OPS, and commands:commit pushes their pending Promise into its
@@ -511,8 +550,7 @@ test('J4: reconnect — hard-kill B, restart with the same dirs, pair state surv
   const b2 = new Instance({ name: 'B2', cdpPort: bCdpPort, syncPort: bSyncPort, userDir: dirB })
   liveInstances.add(b2)
   pair.b = b2
-  b2.spawnProc()
-  await b2.connectCdp()
+  await b2.boot()
   trace('J4: B2 CDP up')
 
   // Pair state survived the crash: sync is still enabled and B still holds A as a

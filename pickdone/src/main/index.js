@@ -289,8 +289,36 @@ let ranFullInit = false
 // TODO_USER_DATA_DIR) already ran at module top, so instances with different data dirs hold
 // independent locks. Default (no env) passes NO arguments: byte-identical to the historical call.
 const multiInstance = require('./multi-instance')
+// Retry launches pause briefly before the lock request: the previous instance's dying
+// process tree needs a moment to release the singleton mutex. Default launches: no delay.
+if (multiInstance.preLockDelayMs(process.argv)) multiInstance.sleepSync(multiInstance.preLockDelayMs(process.argv))
+// Multi mode only: wait out a stale singleton lockfile (the killed instance's crashpad
+// handler holds <userData>/lockfile for ~10s after a hard kill; every launch inside that
+// window fails the lock and used to quit silently). A live holder keeps the file held for
+// its whole lifetime, so this times out into the normal (denying) lock request.
+if (multiInstance.isMultiEnabled(process.env)) {
+  const stale = multiInstance.clearStaleSingletonLockFileSync(app.getPath('userData'))
+  if (!stale.cleared) {
+    process.stderr.write('[MultiInstance] singleton lockfile still held after ' + stale.waitedMs + 'ms — requesting lock anyway\n')
+  }
+}
 const __multiLockArgs = multiInstance.lockRequestArgs(process.env, app.getPath('userData'))
-if (!app.requestSingleInstanceLock(...__multiLockArgs)) { app.quit() } else {
+if (!app.requestSingleInstanceLock(...__multiLockArgs)) {
+  // A lock denied right after a hard kill is usually a stale holder (dying child
+  // processes), and Electron caches the failed request, so an in-process retry never
+  // succeeds. Opt-in multi mode relaunches itself (bounded by --pickdone-lock-retry)
+  // so a crash-restart wins the lock; a real same-dir duplicate still terminates.
+  // Default (non-multi) mode keeps the historical instant quit.
+  if (multiInstance.shouldRelaunchOnLockLoss(process.env, process.argv)) {
+    // stderr, not electron-log: this runs pre-ready, before the file transport exists.
+    process.stderr.write('[MultiInstance] singleton lock denied — relaunching (attempt ' +
+      (multiInstance.lockRetryCount(process.argv) + 1) + '/' + multiInstance.LOCK_RETRY_MAX + ')\n')
+    app.relaunch({ args: multiInstance.relaunchArgv(process.argv, multiInstance.lockRetryCount(process.argv) + 1, process.cwd()) })
+  } else {
+    process.stderr.write('[MultiInstance] singleton lock denied — giving up\n')
+  }
+  app.quit()
+} else {
   // D10 (2026-09-27): singleton-lock winner — only this instance may run the will-quit flush chain
   // (the duplicate's app.quit() has no DB and no windows; see shouldRunQuitFlush in will-quit).
   ranFullInit = true
