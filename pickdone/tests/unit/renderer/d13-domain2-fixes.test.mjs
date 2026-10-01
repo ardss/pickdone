@@ -61,7 +61,7 @@ test('A1/A2 projDone fallbacks exclude today so the fallback never double-counts
   const catSrc = read('renderer/js/views/CategoryView.vue')
   const projSrc = read('renderer/js/views/ProjectView.vue')
   for (const [name, src] of [['CategoryView', catSrc], ['ProjectView', projSrc]]) {
-    assert.match(src, /filter: t => t\.complete && t\.dayStart !== today/,
+    assert.match(src, /filter: t => t\.complete && t\.dayStart !== this\.todayTs/,
       `${name}'s projDone fallback must exclude today's completions (they own the catTodayDone bucket)`)
   }
   const { buildExpiryGroups } = await import('../../../renderer/js/utils/expiryGroups.js')

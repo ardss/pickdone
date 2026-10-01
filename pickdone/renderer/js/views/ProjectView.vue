@@ -358,7 +358,7 @@ export default {
         },
         // [D13 A2] today's completions moved into the shared catTodayDone bucket (exactly-one-group
         // invariant) — projDone keeps covering only completions OUTSIDE the today bucket
-        extraGroups: [{ key: 'projDone', titleKey: 'statsB.ProjectView.done', filter: t => t.complete && t.dayStart !== today, props: { showDate: true } }]
+        extraGroups: [{ key: 'projDone', titleKey: 'statsB.ProjectView.done', filter: t => t.complete && t.dayStart !== this.todayTs, props: { showDate: true } }]
       })
     }
   },

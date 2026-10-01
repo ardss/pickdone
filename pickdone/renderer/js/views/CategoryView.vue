@@ -69,7 +69,7 @@ export default {
         // R1 window (or today's completion when the builder predates the shared catTodayDone
         // bucket) must never be dropped — the "no completed task vanishes" invariant now holds
         // for category pages too.
-        extraGroups: [{ key: 'projDone', titleKey: 'statsB.ProjectView.done', filter: t => t.complete && t.dayStart !== today, props: { showDate: true } }]
+        extraGroups: [{ key: 'projDone', titleKey: 'statsB.ProjectView.done', filter: t => t.complete && t.dayStart !== this.todayTs, props: { showDate: true } }]
       })
     }
   },
