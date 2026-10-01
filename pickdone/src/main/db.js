@@ -166,10 +166,6 @@ CREATE TABLE IF NOT EXISTS todos (
 CREATE INDEX IF NOT EXISTS idx_todos_day       ON todos (deleted, scheduledDay);
 CREATE INDEX IF NOT EXISTS idx_todos_status    ON todos (status);
 CREATE INDEX IF NOT EXISTS idx_todos_repeat    ON todos (recurGroupId);
--- D13 #10: the repeat-renewal unique partial index lives in migration v9 (db-migrations.js),
--- NOT here: SCHEMA.exec runs BEFORE the migrator loop, so an existing DB that still carries
--- pre-dedupe duplicate (recurGroupId, scheduledDay) rows would throw right here and fail the
--- whole init. v9 dedupes first, then creates the index.
 CREATE INDEX IF NOT EXISTS idx_todos_category  ON todos (deleted, categoryId, scheduledDay);
 CREATE INDEX IF NOT EXISTS idx_todos_complete  ON todos (deleted, complete, scheduledDay);
 CREATE INDEX IF NOT EXISTS idx_todos_reminder  ON todos (remindAt);
@@ -425,17 +421,6 @@ function initInner (userDataPath) {
     db.pragma(`key='${key}'`)
   }
 
-  // [D13 #10] repeat-day uniqueness re-ensure (idempotent): must run AFTER the encryption
-  // finalization — the fresh-install path deletes the plaintext handle (which had just run
-  // migration v9) and recreates the DB from SCHEMA, which would drop a migration-created
-  // index. The dedupe UPDATE is a no-op once the index exists. Skipped when the C2 test seam
-  // overrides the migration list (a test booting without v9 wants a genuinely index-less DB).
-  if (!migrationsOverride) {
-    try {
-      const buildMigrations = require('./db-migrations')
-      if (typeof buildMigrations.ensureRepeatDayUniqueness === 'function') buildMigrations.ensureRepeatDayUniqueness(db)
-    } catch (e) { log.warn('[TodoDB] repeat-day uniqueness ensure failed (non-fatal):', e && e.message) }
-  }
 
   const cols = Object.keys(todoToRow({ taskId: '' }))
   stmts.upsert = db.prepare(`INSERT INTO todos (${cols.join(', ')}) VALUES (${cols.map(c => '@' + c).join(', ')}) ON CONFLICT(id) DO UPDATE SET ${cols.filter(c => c !== 'id').map(c => `${c} = excluded.${c}`).join(', ')}`)
