@@ -9,7 +9,8 @@
            this component never implemented (no draggable attribute, no drag handlers, no order
            storage behind todo/tagCounts) — the affordance is gone until real reorder exists -->
       <input v-if="tagMgrEditing===t.name" v-model="tagMgrName" class="sn-cat-edit"
-             @keydown.enter.prevent="e => { if (e.isComposing || e.keyCode === 229) return; renameTag(t) }" @blur="renameTag(t)"/>
+             @keydown.enter.prevent="e => { if (e.isComposing || e.keyCode === 229) return; renameTag(t) }"
+             @keydown.esc.prevent="cancelTagEdit(t)" @blur="renameTag(t)"/>
       <span v-else class="cat-mgr-name" role="button" tabindex="0" :title="$t('statsG.SideNav.clickRenameTitle')"
             @click="startTagEdit(t)" @keydown.enter.prevent="startTagEdit(t)">{{t.name}}</span>
       <em class="cat-mgr-count">{{ $t('statsG.SideNav.countItems', { n: t.count }) }}</em>
@@ -107,7 +108,15 @@ export default defineComponent({
       }
       return { ok: true, done, failed: 0 }
     },
+    /* [D13 A13] Esc-cancel channel (HabitView.cancelRename convention): restore the original
+       name and clear the editing flag BEFORE the Esc-triggered blur reaches renameTag — blur is
+       a commit path here, so without this handler Esc committed the rename instead of canceling. */
+    cancelTagEdit (t) {
+      this.tagMgrName = t.name
+      this.tagMgrEditing = null
+    },
     async renameTag (t) {
+      if (this.tagMgrEditing !== t.name) return // blur after Enter/Esc: the editor is already closed, nothing to commit
       const next = this.tagMgrName.trim().replace(/^#/, '')
       this.tagMgrEditing = null
       if (!next || next === t.name) return
