@@ -59,7 +59,8 @@ module.exports = ({ getState, settingGet, settingPut, busWrite, getSettingsPaylo
       try { const notified = state.node.notifyUnpaired(deviceId); log.info('[LanSync] unpaired notify to', deviceId, notified ? 'delivered' : 'no live connection (peer will discover via auth rejection)') } catch (e) { log.warn('[LanSync] unpaired notify failed:', e.message) }
     }
     await stopSync()
-    if (settingGet(K_ENABLED) === true) startSync()
+    // D2-c: startSync is async/fail-closed now — log a bind failure instead of an unhandled rejection.
+    if (settingGet(K_ENABLED) === true) startSync().catch(e => log.error('[LanSync] restart after unpair failed:', e.message))
     notifyRenderers('peer-unpaired')
     emitSyncEvent('peer-unpaired', { deviceId, host })
     log.info('[LanSync] unpaired', deviceId, '- shared secret revoked (all peers must re-pair)')
@@ -83,7 +84,7 @@ module.exports = ({ getState, settingGet, settingPut, busWrite, getSettingsPaylo
     log.info('[LanSync] paired with peer', r.peer && r.peer.deviceId, '- shared secret adopted, restarting node')
     state.pairingCode = null // consumed; issue a fresh code on next click
     await stopSync()
-    startSync()
+    startSync().catch(e => log.error('[LanSync] restart after pairing failed:', e.message))
     runRound().then(persistPeerWatermarks)
     return { ...getSettingsPayload(), peer: r.peer }
   }
@@ -117,7 +118,7 @@ module.exports = ({ getState, settingGet, settingPut, busWrite, getSettingsPaylo
     if (r.deviceId) persistPairedPeer({ deviceId: r.deviceId, host: r.host, port: r.port, secret: r.secret })
     log.info('[LanSync] two-way pairing accepted by', host, '- shared secret adopted, restarting node')
     await stopSync()
-    startSync()
+    startSync().catch(e => log.error('[LanSync] restart after pairing failed:', e.message))
     runRound().then(persistPeerWatermarks)
     return { ...getSettingsPayload(), host: r.host, port: r.port }
   }
@@ -149,7 +150,7 @@ module.exports = ({ getState, settingGet, settingPut, busWrite, getSettingsPaylo
     if (!name) throw new Error('syncSetName: name is required')
     settingPut(K_DEVICE_NAME, name)
     if (getState().node) { // advertising payload carries the name: restart to re-broadcast
-      stopSync().then(() => { if (settingGet(K_ENABLED) === true) startSync() }).catch(() => {})
+      stopSync().then(() => { if (settingGet(K_ENABLED) === true) return startSync() }).catch(e => log.error('[LanSync] restart after rename failed:', e.message))
     }
     return getSettingsPayload()
   }

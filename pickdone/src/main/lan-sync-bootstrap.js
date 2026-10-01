@@ -292,7 +292,7 @@ function createTrackedWatermarks () {
   return m
 }
 
-function startSync () {
+async function startSync () {
   if (state.node) return
   const { deviceId, deviceName } = ensureIdentity()
   const pairingSecret = settingGet(K_PAIRING_SECRET)
@@ -310,6 +310,11 @@ function startSync () {
   state.node = createLanSyncNode({
     deviceId,
     peerProgress: state.peerWatermarks,
+    // Test-only bind override: unit tests pin {port, host} (state.syncBindOverride) to drive
+    // the EADDRINUSE fail-closed path hermetically (Windows only refuses a double bind when
+    // both sockets use the same specific host, so tests must pin both). Production leaves it
+    // unset and the node binds transport.DEFAULT_PORT on all interfaces.
+    ...(state && state.syncBindOverride) || {},
     name: settingGet(K_DEVICE_NAME) || deviceName,
     pairingSecret: settingGet(K_PAIRING_SECRET),
     // F1 (2026-09-28 drill): per-pair secret lookup for server-side hello auth — prefer the
@@ -440,6 +445,30 @@ function startSync () {
   })
   nodeEvents.restorePeers(deviceId)
   state.node.start()
+  // Audit D2-c/D3: the old flow returned right after node.start(), so an EADDRINUSE on the
+  // fixed sync port left the toggle reporting ON while the server was dead (rounds ran as
+  // 'confirmed 0/0' no-ops). Fail closed: enable only succeeds once the TCP server has
+  // actually bound the port; on bind error (or a 5s listen timeout) tear the node back down
+  // and rethrow so syncSetEnabledOp propagates the failure to the renderer's toggle.
+  try {
+    await new Promise((resolve, reject) => {
+      const onListen = p => { cleanup(); resolve(p) }
+      const onServerError = err => { cleanup(); reject(new Error(`sync server failed to bind: ${err && err.message}`)) }
+      const timer = setTimeout(() => { cleanup(); reject(new Error('sync server did not reach listening within 5s')) }, 5000)
+      timer.unref?.()
+      const cleanup = () => {
+        clearTimeout(timer)
+        try { state.node.off('listening', onListen) } catch { /* node torn down */ }
+        try { state.node.off('server-error', onServerError) } catch { /* node torn down */ }
+      }
+      state.node.once('listening', onListen)
+      state.node.once('server-error', onServerError)
+    })
+  } catch (e) {
+    log.error('[LanSync] start failed — sync stays OFF:', e.message)
+    await stopSync()
+    throw e
+  }
   state.pendingToSeq = 0
   // Auto round: 10s after enable/boot, then every 5 minutes (only while enabled). unref'd:
   // the round timers must never keep the process alive past quit (item 2026-09-18 P2).
@@ -630,7 +659,15 @@ async function syncSetEnabledOp (p) {
   if (enabled) {
     if (!settingGet(K_PAIRING_SECRET)) settingPut(K_PAIRING_SECRET, generatePairingSecret())
     if (state.node) await stopSync() // rapid off->on: release the old server/port BEFORE rebinding
-    startSync()
+    // D2-c fail closed: await the bind — a failed startSync (EADDRINUSE) must surface as a
+    // toggle error here, not leave K_ENABLED=true with a dead server. Roll the setting back so
+    // a restart doesn't auto-enable a server that cannot bind.
+    try {
+      await startSync()
+    } catch (e) {
+      settingPut(K_ENABLED, false)
+      throw e
+    }
   } else {
     await stopSync()
   }
@@ -766,7 +803,12 @@ function initLanSync ({ db, getWindowSenders, resyncExternalWatch } = {}) {
     if (settingGet('sync.peerWatermarks') != null) busWrite('settingsRowDelete', { key: 'sync.peerWatermarks' })
   } catch (e) { log.warn('[LanSync] v1 watermark cleanup failed:', e.message) }
   try {
-    if (settingGet(K_ENABLED) === true) startSync()
+    if (settingGet(K_ENABLED) === true) {
+      // D2-c: startSync is async and fail-closed now — a bind failure at boot must be logged,
+      // not become an unhandled rejection. K_ENABLED stays true so the toggle reflects the
+      // user's intent, but getStatus().listening=false shows the device card the truth.
+      startSync().catch(e => log.error('[LanSync] startup enable failed:', e.message))
+    }
   } catch (e) { log.warn('[LanSync] startup enable failed:', e.message) }
 }
 

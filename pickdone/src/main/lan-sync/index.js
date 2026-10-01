@@ -538,6 +538,8 @@ function createLanSyncNode(opts) {
     pairWith,
     requestPair,
     on: em.on.bind(em),
+    once: em.once.bind(em),
+    off: em.off.bind(em),
 
     /** Start advertising, discovery, and the TCP server. */
     start() {
