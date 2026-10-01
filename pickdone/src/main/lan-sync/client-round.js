@@ -43,7 +43,7 @@ const SNAPSHOT_ERROR_COOLDOWN_ROUNDS = 2
  */
 function createClientRound(ctx) {
   const {
-    opts, deviceId, authCode, pairingSecret, em,
+    opts, deviceId, pairingSecret, em, // authCode removed (2026-10-02): unused since the per-instance-port fix superseded the static auth code
     secretFor, // per-instance-port fix (2026-10-01): dial-side per-pair secret fallback
     retryTimers, lastRoundBy, failStreakBy, oversizedSegmentBy, unpairedBy, activeClients,
     needSnapshot, needSnapshotForce, clientSnapshotBusy, pullWatermarkBy,
