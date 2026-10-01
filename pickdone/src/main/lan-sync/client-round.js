@@ -44,6 +44,7 @@ const SNAPSHOT_ERROR_COOLDOWN_ROUNDS = 2
 function createClientRound(ctx) {
   const {
     opts, deviceId, authCode, pairingSecret, em,
+    secretFor, // per-instance-port fix (2026-10-01): dial-side per-pair secret fallback
     retryTimers, lastRoundBy, failStreakBy, oversizedSegmentBy, unpairedBy, activeClients,
     needSnapshot, needSnapshotForce, clientSnapshotBusy, pullWatermarkBy,
     snapshotFatalCount, snapshotErrorCooldown, flushStallBy, errorBy,
@@ -51,9 +52,15 @@ function createClientRound(ctx) {
     buildSegments, ingestSegment, ingestSnapshot, ingestSnapshotChunk,
     getMaxSeq, currentMaxSeq,
     getStopped, bumpRounds, setLastRoundAt, setLastError,
+    getListenPort, // per-instance-port fix (2026-10-01): advertised in hello (see connect below)
     pushRecent, refreshOnline, scheduleRetry, resetBackoff, tryRefixAddress, forgetPeer,
     sendVia,
   } = ctx
+  // Guarded accessor: the server binds after the node constructs this factory, and a TDZ
+  // reference must degrade to "unknown" rather than break the round.
+  const ownListenPort = () => {
+    try { const p = typeof getListenPort === 'function' ? getListenPort() : null; return Number.isInteger(p) && p > 0 ? p : null } catch { return null }
+  }
   function syncWithPeer (peer) {
     if (getStopped()) return Promise.resolve(false)
     // Round-3 P1: a re-entrant startSyncRound for a peer whose round is still in flight used to
@@ -144,16 +151,26 @@ function createClientRound(ctx) {
         // Round-4 P1: any synchronous throw from connect() (range/option errors) must land in
         // finish(), not escape the promise executor and leak the roundsInFlight mutex.
         try {
+          // Per-instance-port fix (2026-10-01 journey drill): resolve the dial secret as
+          // live-entry secret -> persisted per-pair record (secretFor) -> global. The middle
+          // step matters: after a self-guard forgetPeer, discovery re-adds the entry WITHOUT
+          // the per-pair secret, and dialing the stale global made the peer's server answer
+          // auth-failed (terminal 'unpaired') even though the pairing was intact.
+          const dialSecret = (peer && typeof peer.secret === 'string' && peer.secret)
+            ? peer.secret
+            : (((typeof secretFor === 'function' && secretFor(peer.deviceId)) || pairingSecret))
           return connect(peer.host, peer.port, {
         deviceId,
         // F1 (2026-09-28 drill): prefer the peer's per-pair secret from the paired-peer table;
         // the global pairingSecret stays the fallback (legacy peers / not-yet-persisted records).
         // The auth code must be derived from the SAME secret the peer will verify against.
-        pairingSecret: (peer && typeof peer.secret === 'string' && peer.secret) ? peer.secret : pairingSecret,
-        authCode: (peer && typeof peer.secret === 'string' && peer.secret)
-          ? deriveAuthCode(peer.secret, deviceId)
-          : authCode,
+        pairingSecret: dialSecret,
+        authCode: deriveAuthCode(dialSecret, deviceId),
         protoVer: PROTO_VER,
+        // Per-instance-port fix (2026-10-01): hello carries our LISTEN port so the peer's
+        // server-side address refresh persists a dialable port (differs from theirs when
+        // TODO_SYNC_PORT overrides are in play).
+        listenPort: ownListenPort(),
         // socket inactivity timeout: a peer answering a fresh-cursor round must build and stream a
         // full-oplog segment batch, which takes far longer than a heartbeat-sized exchange
         timeoutMs: 120000,

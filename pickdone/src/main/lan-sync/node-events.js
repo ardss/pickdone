@@ -41,24 +41,37 @@ module.exports = ({ getState, emitSyncEvent, notifyRenderers, kickSyncRound, sch
       emitSyncEvent('pair-accepted', { deviceId: info && info.deviceId, host: info && info.host })
       try {
         if (!info || !info.deviceId || info.deviceId === state.deviceId) return
+        // Per-instance-port fix (2026-10-01 journey drill): the old `port: myPort` here recorded
+        // OUR OWN listen port as the peer's dial address — only correct while every instance
+        // bound the same fixed 58471. With per-instance TODO_SYNC_PORT overrides the acceptor
+        // dialed ITSELF, hit the self-connection guard and the peer entry was removed ("peer
+        // removed this pairing"). The peer's real port now arrives on the wire (pair-request
+        // listenPort, transport onPaired); myPort stays the legacy fallback for old peers.
         const myPort = (state.node && state.node.getStatus().port) || DEFAULT_PORT
+        const peerPort = (Number.isInteger(info.port) && info.port > 0 && info.port <= 65535) ? info.port : myPort
         // F1: the per-pair secret rides on paired-inbound (transport mints it at accept time)
         // and is persisted in the peer record + fed to the live node entry for dialing.
-        persistPairedPeer({ deviceId: info.deviceId, name: info.deviceName, host: info.host, port: myPort, secret: info.secret })
-        if (state.node) state.node.addPeer({ deviceId: info.deviceId, name: info.deviceName, host: normalizeHost(info.host) || undefined, port: myPort, secret: info.secret })
+        persistPairedPeer({ deviceId: info.deviceId, name: info.deviceName, host: info.host, port: peerPort, secret: info.secret })
+        if (state.node) state.node.addPeer({ deviceId: info.deviceId, name: info.deviceName, host: normalizeHost(info.host) || undefined, port: peerPort, secret: info.secret })
         kickSyncRound('paired-inbound')
       } catch (e) { log.warn('[LanSync] paired-inbound persist failed:', e.message) }
     })
     // Round-1 P0: an authenticated connection proves the peer's ACTUAL reachable address — refresh
     // the persisted record (and the live node entry) from socket remoteAddress, never from the
     // stale/cached discovery value. Change-gated inside persistPairedPeer (no write amplification).
+    // Per-instance-port fix (2026-10-01 journey drill): the dial-back port is the peer's
+    // hello-advertised listenPort. When it is ABSENT (legacy peer, or their server had not bound
+    // yet when this round dialed) we must NOT substitute myPort — in the split-port world that
+    // pointed our own dial address back at ourselves (self-connection guard -> forgetPeer ->
+    // secret-less re-discovery -> stale-global dial -> "peer removed this pairing"). Passing null
+    // keeps the previous record/entry port instead (persistPairedPeer / rememberPeer semantics).
     state.node.on('peer-connected', p => {
       try {
         if (!p || !p.deviceId || p.deviceId === state.deviceId) return
-        const myPort = (state.node && state.node.getStatus().port) || DEFAULT_PORT
-        if (persistPairedPeer({ deviceId: p.deviceId, host: p.host, port: myPort }) && state.node) {
+        const peerPort = (Number.isInteger(p.listenPort) && p.listenPort > 0 && p.listenPort <= 65535) ? p.listenPort : null
+        if (persistPairedPeer({ deviceId: p.deviceId, host: p.host, port: peerPort }) && state.node) {
           const h = normalizeHost(p.host)
-          if (h) state.node.addPeer({ deviceId: p.deviceId, host: h, port: myPort })
+          if (h) state.node.addPeer({ deviceId: p.deviceId, host: h, port: peerPort })
         }
       } catch (e) { log.warn('[LanSync] peer-connected persist failed:', e.message) }
     })

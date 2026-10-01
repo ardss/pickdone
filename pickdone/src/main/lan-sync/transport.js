@@ -323,7 +323,10 @@ function wireConnection(socket, { deviceId, pairingSecret, secretFor, getHandler
             // global pairingSecret — a second pairing no longer invalidates earlier pairs.
             const freshSecret = randomBytes(32).toString('hex') // same shape as generatePairingSecret (isValidPairingSecret)
             sendEnc(socket, hsKey, { type: 'pair-accept', secret: freshSecret, deviceId })
-            if (onPaired) onPaired({ deviceId: typeof msg.deviceId === 'string' ? msg.deviceId : '', host: socket.remoteAddress, secret: freshSecret })
+            if (onPaired) onPaired({ deviceId: typeof msg.deviceId === 'string' ? msg.deviceId : '', host: socket.remoteAddress, secret: freshSecret,
+              // Per-instance-port fix: the requester's LISTEN port from the pair-request, so the
+              // acceptor persists a dialable address (null on legacy requesters — node-events falls back).
+              port: Number.isInteger(msg.listenPort) && msg.listenPort > 0 && msg.listenPort <= 65535 ? msg.listenPort : null })
             socket.destroy()
             return
           }
@@ -371,6 +374,8 @@ function wireConnection(socket, { deviceId, pairingSecret, secretFor, getHandler
                 host: socket.remoteAddress,
                 confirmed: true,
                 secret: freshSecret,
+                // Per-instance-port fix: same as the manual-code path above.
+                port: Number.isInteger(msg.listenPort) && msg.listenPort > 0 && msg.listenPort <= 65535 ? msg.listenPort : null,
               })
             } else {
               send(socket, { type: 'pair-reject', error: 'rejected' })
@@ -439,7 +444,11 @@ function wireConnection(socket, { deviceId, pairingSecret, secretFor, getHandler
           socket.destroy()
           return
         }
-        state.peer = { deviceId: claimed, host: socket.remoteAddress, protoVer: msg.protoVer || PROTO_VER }
+        state.peer = { deviceId: claimed, host: socket.remoteAddress, protoVer: msg.protoVer || PROTO_VER,
+          // Per-instance-port fix (2026-10-01): the peer's own LISTEN port, advertised in hello —
+          // this is the port a dial BACK to them must use when per-instance TODO_SYNC_PORT
+          // overrides make it differ from ours. Absent on legacy peers (node-events falls back).
+          listenPort: Number.isInteger(msg.listenPort) && msg.listenPort > 0 && msg.listenPort <= 65535 ? msg.listenPort : null }
         state.authorized = true
         // Session key: HKDF-SHA256(pairingSecret, client salt from this hello). Every further
         // message in BOTH directions is now an encrypted frame (cipher.js).
@@ -615,6 +624,15 @@ function connect(host, port, opts) {
   const { deviceId, authCode, pairingSecret, onUnauthorized, pairCode, pairOpen, deviceName } = opts
   const protoVer = opts.protoVer || PROTO_VER
   const timeoutMs = opts.timeoutMs || 5000
+  // Per-instance-port fix (2026-10-01 journey drill): the client advertises its own LISTEN port
+  // in hello / pair-request so the SERVER side can persist a dialable address for us. With the
+  // fixed historical port (58471) both sides' ports were identical and the old "store myPort"
+  // shortcut happened to be right; with TODO_SYNC_PORT overrides they differ and the acceptor
+  // must learn our port from the wire. Optional + validated: peers that omit it keep the
+  // server-side legacy fallback (node-events.js).
+  const listenPort = Number.isInteger(opts.listenPort) && opts.listenPort > 0 && opts.listenPort <= 65535
+    ? opts.listenPort
+    : null
   const em = new EventEmitter()
   em.ready = false
   // Connection crypto state: session key (post-auth, HKDF over pairingSecret + our salt), the
@@ -630,10 +648,10 @@ function connect(host, port, opts) {
   socket._lanSend = (msg) => send(socket, msg)
 
   socket.on('connect', () => {
-    if (pairCode !== undefined) { send(socket, { type: 'pair-request', deviceId, code: String(pairCode), nonce: pairNonce, pub: pairEph.pub }); return }
+    if (pairCode !== undefined) { send(socket, { type: 'pair-request', deviceId, code: String(pairCode), nonce: pairNonce, pub: pairEph.pub, ...(listenPort ? { listenPort } : {}) }); return }
     // Two-way confirmed pairing (no code): ask the peer; the human there accepts or rejects.
-    if (pairOpen) { send(socket, { type: 'pair-request', deviceId, deviceName: deviceName || '', nonce: pairNonce, pub: pairEph.pub }); return }
-    send(socket, { type: 'hello', deviceId, protoVer, authCode, enc: cipher.ENC_VER, salt })
+    if (pairOpen) { send(socket, { type: 'pair-request', deviceId, deviceName: deviceName || '', nonce: pairNonce, pub: pairEph.pub, ...(listenPort ? { listenPort } : {}) }); return }
+    send(socket, { type: 'hello', deviceId, protoVer, authCode, enc: cipher.ENC_VER, salt, ...(listenPort ? { listenPort } : {}) })
   })
   socket.on('timeout', () => {
     const err = new Error(`connect timeout to ${host}:${port}`)

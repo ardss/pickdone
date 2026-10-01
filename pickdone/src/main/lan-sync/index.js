@@ -260,7 +260,12 @@ function createLanSyncNode(opts) {
 
   // Client-side pairing flows (pairWith/requestPair) are extracted to pairing-client.js
   // (line ratchet). Pure orchestration over transport.connect; the factory is pure wiring.
-  const { pairWith, requestPair } = createPairingClient({ peers, deviceId, name, em })
+  // getListenPort (per-instance-port fix 2026-10-01): pairing dials advertise our own listen
+  // port so the acceptor persists a dialable address (lazy — the server binds later).
+  const { pairWith, requestPair } = createPairingClient({
+    peers, deviceId, name, em,
+    getListenPort: () => (server && typeof server.port === 'number' ? server.port : null),
+  })
 
   // Server-role message handling (segments-chunk push receive + ack bookkeeping + snapshot-request
   // serving) is extracted to server-role.js (line ratchet). The handler is pure orchestration over
@@ -312,6 +317,11 @@ function createLanSyncNode(opts) {
   const setLastRoundAt = (t) => { lastRoundAt = t; return t }
   const { syncWithPeer } = createClientRound({
     opts, deviceId, authCode, pairingSecret, em,
+    // Per-instance-port fix (2026-10-01 journey drill): the dial-side per-pair secret lookup.
+    // A live peer entry can lose its secret (self-guard forgetPeer -> secret-less discovery
+    // re-add); without this fallback the round dialed with the STALE global secret and the
+    // peer's server answered auth-failed -> terminal "peer removed this pairing".
+    secretFor: opts.secretFor || null,
     peers, retryTimers, lastRoundBy, failStreakBy, oversizedSegmentBy, unpairedBy, activeClients,
     needSnapshot, needSnapshotForce, clientSnapshotBusy, pullWatermarkBy,
     snapshotFatalCount, snapshotErrorCooldown, flushStallBy, errorBy,
@@ -319,6 +329,9 @@ function createLanSyncNode(opts) {
     buildSegments, ingestSegment, ingestSnapshot, ingestSnapshotChunk,
     getMaxSeq, currentMaxSeq,
     getStopped: () => stopped,
+    // Per-instance-port fix (2026-10-01): round dials advertise our own listen port in hello
+    // so the peer's server-side address refresh (peer-connected) stores a dialable port.
+    getListenPort: () => (server && typeof server.port === 'number' ? server.port : null),
     bumpRounds: (d) => { roundsRunning += d },
     setLastRoundAt, setLastError,
     pushRecent, refreshOnline, scheduleRetry, resetBackoff, tryRefixAddress, forgetPeer,
