@@ -9,7 +9,7 @@
  * utils/dayPlans.js directly — guarded by tests/unit/store/w4-plan-chips-facade.test.mjs.
  */
 import { dayjs, FMT } from '../../utils/core.js'
-import { moveTaskChips, clearTaskChips, snapshotForDelete, restoreSnapshot } from '../../utils/dayPlans.js'
+import { moveTaskChips, clearTaskChips, snapshotForDelete, snapshotForDeleteMany, restoreSnapshot } from '../../utils/dayPlans.js'
 
 /** Chip-sync serial chain: when a task's reschedule fires in bursts, guarantees planMoveTask arrival order matches operation order.
  *  Values are {promise, settled} entries: the chain deletes itself once settled, and the size cap below only evicts
@@ -47,7 +47,7 @@ export async function rowChipSync (taskId, prevDayStart, nextRow) {
 }
 
 /** Facade re-exports: the four chip ops above (single impl in utils/dayPlans.js) + fmtChipDay */
-export { fmtChipDay, snapshotForDelete, restoreSnapshot, clearTaskChips, moveTaskChips }
+export { fmtChipDay, snapshotForDelete, snapshotForDeleteMany, restoreSnapshot, clearTaskChips, moveTaskChips }
 
 /** Pure planner for snapshot-replay side effects (unit-testable, no dayjs/window — day values stay raw timestamps).
  *  Root cause it addresses: undo/redo replays snapshot rows via safeUpsert, bypassing updateTodoFields' chip-sync /

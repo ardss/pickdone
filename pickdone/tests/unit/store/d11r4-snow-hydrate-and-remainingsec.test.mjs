@@ -32,7 +32,8 @@ test('d11r4[1]: a snow entry persisted before a crash is hydrated and replayed i
 
   const bumps = []
   globalThis.window.todoAPI = {
-    dbCall: async (op, params) => { if (op === 'bumpSnow') bumps.push(params); return { accepted: 1, rejected: [] } },
+    // D14-C2: real db.bumpSnow contract is {ok:true|false,reason}, never {accepted,rejected}
+    dbCall: async (op, params) => { if (op === 'bumpSnow') bumps.push(params); return { ok: true, minutes: 1 } },
     onAppQuittingFlush (cb) { this._quitCbs = (this._quitCbs || []).concat(cb) },
   }
   const { default: tomato } = await import('../../../renderer/js/store/tomato.js?d11r4-snow-hydrate')
