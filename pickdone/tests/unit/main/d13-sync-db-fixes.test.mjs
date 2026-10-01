@@ -79,9 +79,11 @@ test('fix 1: a partially-migrated library keeps the blob on the next boot and re
     assert.equal(n2, 1, 'run 2: the migration re-ran (red before the fix: the count guard deleted the blob)')
     assert.equal(calls, 2, 'run 2: tomatoAppendMany re-invoked for the remainder')
     assert.ok(db.call('getMeta', 'db.tomatoState'), 'run 2: blob still KEPT')
-    // run 3: fully accepted → blob deleted and the marker cleared (steady state restored)
+    // run 3: fully accepted → blob deleted and the marker cleared (steady state restored).
+    // D14 B1: the retry only re-attempts rows NOT already in tomato_records — 'd13f1-ok' was
+    // really inserted in run 2, so run 3's stub sees just the remaining row (accepted=1).
     const n3 = db.call('tomatoMigrateFromMeta', { getMeta: k => db.call('getMeta', k) })
-    assert.equal(n3, 2)
+    assert.equal(n3, 1, 'run 3: only the remaining row is re-attempted (already-migrated rows are filtered)')
     assert.equal(db.call('getMeta', 'db.tomatoState'), null, 'run 3: lossless migration deletes the blob')
     assert.equal(db.call('getMeta', 'sync.tomatoBlobPartialMigration'), null, 'run 3: marker cleared')
   } finally { tomatoOps.tomatoAppendMany = origAppend }

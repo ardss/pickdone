@@ -178,12 +178,20 @@ exports.tomatoRemoveByIds = (db, ids, opts = {}) => {
 // library legitimately has rows in tomato_records, and the old unconditional delBlob there
 // destroyed the rejected rows' only surviving copy on the very next boot.
 const TOMATO_PARTIAL_MIGRATION_KEY = 'sync.tomatoBlobPartialMigration'
+// D14 B12: boot-attempt accounting for a live partial-migration marker. The marker itself keeps
+// the value '1' (its truthiness is the contract, and the D13 test pins it); the attempt counter
+// lives in its own machine-local key so an operator can see HOW LONG the blob has been retrying,
+// and the warn escalates to an explicit permanent-rejection error after PARTIAL_ESCALATE_AT boots.
+const TOMATO_PARTIAL_MIGRATION_ATTEMPTS_KEY = 'sync.tomatoBlobPartialMigrationAttempts'
+const PARTIAL_ESCALATE_AT = 5
 
 exports.tomatoMigrateFromMeta = (db, stmts) => {
   const delBlob = () => { try { db.prepare('DELETE FROM meta WHERE key = ?').run('db.tomatoState') } catch { /* 清理失败不阻断 */ } }
   const getMarker = () => { try { const r = db.prepare('SELECT value FROM meta WHERE key = ?').get(TOMATO_PARTIAL_MIGRATION_KEY); return !!(r && r.value) } catch { return false } }
   const setMarker = () => { try { db.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(TOMATO_PARTIAL_MIGRATION_KEY, '1') } catch { /* marker is best-effort */ } }
-  const clearMarker = () => { try { db.prepare('DELETE FROM meta WHERE key = ?').run(TOMATO_PARTIAL_MIGRATION_KEY) } catch { /* marker is best-effort */ } }
+  const clearMarker = () => { try { db.prepare('DELETE FROM meta WHERE key = ?').run(TOMATO_PARTIAL_MIGRATION_KEY); db.prepare('DELETE FROM meta WHERE key = ?').run(TOMATO_PARTIAL_MIGRATION_ATTEMPTS_KEY) } catch { /* marker is best-effort */ } }
+  const getAttempts = () => { try { return Number(db.prepare('SELECT value FROM meta WHERE key = ?').get(TOMATO_PARTIAL_MIGRATION_ATTEMPTS_KEY)?.value) || 0 } catch { return 0 } }
+  const setAttempts = n => { try { db.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(TOMATO_PARTIAL_MIGRATION_ATTEMPTS_KEY, String(n)) } catch { /* best-effort */ } }
   const n = db.prepare('SELECT COUNT(*) c FROM tomato_records').get().c
   if (n > 0 && !getMarker()) { delBlob(); return 0 }
   // 损坏 blob 不删(2026-09-10 P2):此前 JSON.parse 失败 catch 成 {} → list 空 → delBlob 直接把
@@ -194,19 +202,56 @@ exports.tomatoMigrateFromMeta = (db, stmts) => {
   if (!parsed.ok) { log.warn('[TodoDB] tomatoMigrateFromMeta: 旧 meta blob 损坏(JSON 解析失败),保留 blob 不迁移不删除'); return 0 }
   const list = parsed.list
   if (!list.length) { clearMarker(); delBlob(); return 0 }
+  // D14 B1 (2026-10-02): a partial-migration RETRY must not re-apply rows that already live in
+  // tomato_records. tomatoAppendMany's ON CONFLICT ends `deleted=0, deletedAt=0`, so re-running
+  // the whole blob (a) UN-TOMBSTONED every row the user deleted between boots and (b) clobbered
+  // any post-migration edit with the stale blob copy. Once a row's id exists in the table the DB
+  // row is authoritative — alive rows are already migrated, tombstoned rows must stay dead — so
+  // both classes are filtered out of the replay. Chunked IN () keeps the statement under
+  // SQLite's host-parameter ceiling for large legacy ledgers.
+  const pending = []
+  {
+    const ids = []
+    for (const r of list) if (r && r.tomatoId != null) ids.push(String(r.tomatoId))
+    const present = new Set()
+    for (let i = 0; i < ids.length; i += 500) {
+      const chunk = ids.slice(i, i + 500)
+      if (!chunk.length) break
+      const rows = db.prepare(`SELECT tomatoId FROM tomato_records WHERE tomatoId IN (${chunk.map(() => '?').join(',')})`).all(...chunk)
+      for (const row of rows) present.add(row.tomatoId)
+    }
+    for (const r of list) {
+      const id = r && r.tomatoId != null ? String(r.tomatoId) : null
+      if (id && present.has(id)) continue // already migrated (alive or tombstoned): never re-apply
+      pending.push(r)
+    }
+  }
+  if (!pending.length) {
+    // every blob row is already in the table (e.g. the last rejected stragglers were since
+    // repaired/re-added by hand): the blob has no unique copy left — steady state restored.
+    clearMarker(); delBlob(); return 0
+  }
   // D11 finding 10: tomatoAppendMany's failure granularity is per-ROW (a row missing
   // tomatoId/endTime or failing the dateKey derive is rejected, the batch still commits). Deleting
   // the blob unconditionally after a partial migration PERMANENTLY LOST every rejected record —
-  // the blob was the only copy. A rejected row keeps the blob (the upserts are idempotent by
-  // tomatoId, so the next boot re-migrates just the remainder); only a fully accepted batch
-  // (or an empty-after-parse blob) deletes it.
-  const res = exports.tomatoAppendMany(db, list)
+  // the blob was the only copy. A rejected row keeps the blob; with the D14 B1 filter above the
+  // retry set shrinks to the still-missing rows (already-present rows are never re-applied), and
+  // only a fully accepted batch (or an empty-after-parse / fully-present blob) deletes it.
+  const res = exports.tomatoAppendMany(db, pending)
   if (res.rejected.length) {
     // D13 finding 1: stamp the partial-migration marker so the COUNT guard above cannot delete
-    // the blob on the next boot — the rejected rows' only copy is still this blob, and the
-    // upserts are idempotent by tomatoId, so the next boot re-migrates just the remainder.
+    // the blob on the next boot — the rejected rows' only copy is still this blob.
+    // D14 B12: the marker used to be re-stamped every boot with zero accounting — a permanently
     setMarker()
-    log.warn(`[TodoDB] tomatoMigrateFromMeta: ${res.rejected.length} of ${list.length} blob rows rejected — blob KEPT for a retry next boot (unconditional delBlob would lose them)`)
+    // rejected row (e.g. missing endTime) re-parsed and re-warned forever with no surface. Count
+    // attempts and escalate: past PARTIAL_ESCALATE_AT boots the warn becomes an explicit
+    // permanent-rejection error naming the causes; the blob is still retained (never destroyed).
+    const attempts = getAttempts() + 1
+    setAttempts(attempts)
+    const causes = [...new Set(res.rejected.map(r => r.reason))].join(', ')
+    const msg = `[TodoDB] tomatoMigrateFromMeta: ${res.rejected.length} of ${pending.length} remaining blob rows rejected (${causes}) — blob KEPT for a retry next boot (attempt ${attempts})`
+    if (attempts >= PARTIAL_ESCALATE_AT) log.error(msg + ' — these rows are permanently rejected; the blob stays on disk for inspection but no further progress is possible without manual repair')
+    else log.warn(msg)
     return res.accepted
   }
   clearMarker()
