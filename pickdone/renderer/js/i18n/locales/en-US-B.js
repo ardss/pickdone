@@ -75,6 +75,7 @@ export default {
       "promptText": "A project collects tasks like a list, and shows progress and focus time here",
       "nameRequired": "Project name cannot be empty",
       "created": "Project \"{name}\" created",
+      "createFailed": "Failed to create project \"{name}\" (concurrent change) — please try again",
       "enterProject": "Open project \"{name}\"",
       "progressAria": "Progress {n}%",
       "tasks": "Tasks {done}/{total}",

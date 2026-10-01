@@ -74,6 +74,7 @@ export default {
       promptText: '项目会像一个清单一样收纳任务，并在这里看到进度与专注投入',
       nameRequired: '项目名不能为空',
       created: '项目「{name}」已创建',
+      createFailed: '项目「{name}」创建失败（并发变更），请重试',
       enterProject: '进入项目「{name}」',
       progressAria: '进度 {n}%',
       tasks: '任务 {done}/{total}',
