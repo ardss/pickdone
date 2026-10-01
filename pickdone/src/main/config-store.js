@@ -36,8 +36,18 @@ function consumeQuarantineNotice () {
 // scan / EBUSY lock on a perfectly good config.json used to rename it to .bad immediately, and the
 // next writeConfig persisted an amputated defaults object while the real config sat orphaned.
 // Only JSON parse errors (definitively corrupt content) quarantine immediately.
+// D14 C3 (2026-10-02): the D10 budget (3 reads, 50+100ms ≈ 150ms total) is far below real AV
+// on-access lock durations (100ms-2s+ on Windows), so a HEALTHY config.json under a sustained
+// scan was still renamed to .bad — a lock TIMEOUT is not corruption. Two changes:
+//   - the retry budget scales to realistic AV locks: exponential 100/200/400/800ms ≈ 1.5s of
+//     backoff across 5 read attempts;
+//   - exhausting that budget on transient IO sets the read-failed WRITE gate (no clobber of the
+//     still-locked file) but does NOT quarantine — the healthy file stays in place and the next
+//     successful read resumes normally. Quarantine remains reserved for definitive corruption
+//     (JSON parse error) and non-transient IO.
 const TRANSIENT_READ_CODES = new Set(['EACCES', 'EBUSY', 'EIO', 'EPERM'])
-function readBackoffMs (attempt) { return attempt * 50 } // 50ms, 100ms
+const TRANSIENT_ATTEMPTS = 5
+function readBackoffMs (attempt) { return Math.min(100 * Math.pow(2, attempt - 1), 800) } // 100, 200, 400, 800 (≈1.5s total)
 function sleepBackoff (ms) {
   // Synchronous backoff: readConfig's contract is sync (every caller reads the return value).
   try {
@@ -64,7 +74,8 @@ function quarantineConfig () {
   }
 }
 function readConfig () {
-  for (let attempt = 0; attempt < 3; attempt++) {
+  let transientExhausted = false
+  for (let attempt = 0; attempt < TRANSIENT_ATTEMPTS; attempt++) {
     if (attempt > 0) sleepBackoff(readBackoffMs(attempt))
     let raw = null
     let readErr = null
@@ -72,8 +83,8 @@ function readConfig () {
     if (readErr) {
       // Only a genuinely missing file is a first install — return defaults silently.
       if (readErr.code === 'ENOENT') { _readFailed = false; return { shortcutKeySettings: { ...DEFAULT_SHORTCUTS } } }
-      // D10: transient IO (AV scan / EBUSY lock) — retry before quarantining; the file may be fine.
-      if (TRANSIENT_READ_CODES.has(readErr.code)) continue
+      // D10: transient IO (AV scan / EBUSY lock) — retry before giving up; the file may be fine.
+      if (TRANSIENT_READ_CODES.has(readErr.code)) { transientExhausted = attempt === TRANSIENT_ATTEMPTS - 1; continue }
       break // non-transient IO (e.g. EISDIR): quarantining is the only path forward
     }
     try {
@@ -91,10 +102,19 @@ function readConfig () {
     }
   }
   // 2026-09-10 P2: any OTHER failure (JSON parse error from a truncated write, persistent EACCES/EBUSY
-  // IO after the D10 retries) used to fall through to the same fresh-install default — and the next
+  // IO after the retries) used to fall through to the same fresh-install default — and the next
   // writeConfig() persisted that amputated object, permanently resetting winBounds/locale/lockPassword.
-  // Keep the evidence instead: rename the bad file to config.json.bad (best-effort) so it can be
-  // inspected or recovered by hand; those keys are lost from the live config but NOT destroyed.
+  // Keep the evidence instead. D14 C3: the two residual classes get DIFFERENT treatment —
+  //   - transient IO exhausted: the file is most likely HEALTHY but locked (a timeout is not
+  //     corruption). Do NOT rename it aside; set the read-failed gate (writeConfig is gated off,
+  //     so the still-on-disk config cannot be clobbered) and return defaults for this session.
+  //   - JSON parse error / non-transient IO: quarantine to .bad as before (genuine corruption or
+  //     an unopenable path).
+  if (transientExhausted) {
+    _readFailed = true
+    console.warn(`[config-store] config.json stayed locked (${TRANSIENT_ATTEMPTS} attempts, ~1.5s backoff) — treating as AV/lock contention, NOT quarantining; writes gated off until a read succeeds`)
+    return { shortcutKeySettings: { ...DEFAULT_SHORTCUTS } }
+  }
   quarantineConfig()
   return { shortcutKeySettings: { ...DEFAULT_SHORTCUTS } }
 }
