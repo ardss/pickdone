@@ -220,3 +220,19 @@ let _lastCriticalWrite = null
  *  quit-flush write is no longer a discarded fire-and-forget. Resolves when the write IPC was
  *  handed to the main process, rejects with the write failure. */
 export function criticalBackupWrite () { return _lastCriticalWrite }
+
+/** [D13 #11] Quit-flush ack: resolves the ack AFTER the retained critical write settles (or the
+ *  cap elapses — the main process closes the DB at ≤2s, so the ack must always fire) and after a
+ *  short floor that lets the other quit-flush handlers' queued IPC messages actually leave.
+ *  The old ack path was a fixed 60ms setTimeout that never looked at the write promise, so
+ *  quitting inside the write's 2-5MB dump + IPC + fsync window cut off the last critical
+ *  snapshot. Exported for the regression test (same D11 todoBackup test style). */
+export function ackQuitFlushAfterWrite ({ write, notifyDone, capMs = 1000, floorMs = 60 }) {
+  const waited = new Promise(resolve => {
+    let done = false
+    const finish = () => { if (!done) { done = true; resolve() } }
+    setTimeout(finish, capMs) // cap: the main process closes the DB at ≤2s — the ack must always fire
+    Promise.resolve(write).then(finish, finish) // write failure is already stamped into runtimeState; never block the quit
+  })
+  return waited.then(() => new Promise(resolve => setTimeout(resolve, floorMs))).then(notifyDone)
+}
