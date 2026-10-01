@@ -7,8 +7,9 @@
        @drop.stop="onDrop" @dragend="onDragEnd"
        @click.stop="openEdit" @keydown.enter.prevent="openEdit" @contextmenu.stop.prevent="ctxMenu($event)"
        @keydown.ctrl.up.prevent="keyboardMove(-1)" @keydown.ctrl.down.prevent="keyboardMove(1)"
+       @keydown.up.prevent="focusRow(-1)" @keydown.down.prevent="focusRow(1)"
        @keydown.shift.delete.prevent="quickDelete"
-       :aria-keyshortcuts="todo.dayStart ? 'Control+ArrowUp Control+ArrowDown Shift+Delete' : 'Shift+Delete'">
+       :aria-keyshortcuts="todo.dayStart ? 'Control+ArrowUp Control+ArrowDown ArrowUp ArrowDown Shift+Delete' : 'ArrowUp ArrowDown Shift+Delete'">
        <!-- [maint-0924 A15] role=button demoted from the row to the title: a button role wrapping
             checkboxes/buttons is broken ARIA nesting; the row stays a focusable container for the
             shortcut keys (announced via aria-keyshortcuts), the "open" semantics live on the title -->
@@ -102,7 +103,7 @@ import { dateBadgeColor } from '../utils/core.js'
 import { extractTags, highlightHTML } from '../utils/search.js'
 import { deleteWithUndo, moveWithUndo } from '../utils/confirm.js'
 import { toggleCompleteWithUndo } from '../utils/completeAction.js'
-import { chkColor } from '../utils/taskRow.js'
+import { chkColor, neighborInList } from '../utils/taskRow.js'
 import { getEstimate, ensureEstimate } from '../utils/tomatoEstimate.js'
 import { normalizeSortMode } from '../utils/sortMode.js'
 import { reorderScale } from '../../../shared/sort-core.mjs' // F-B2: reorder scale single source (the CLI's sortTask consumes the same module)
@@ -285,6 +286,17 @@ export default {
       if (!this._writeSort(list)) return // blocked by the non-custom guard (hint toast already shown): no false "moved" announce
       // Standalone complete sentence (moving is not a completion): concatenating donePrefix produced the English malapropism "Completed Moved down: xxx"
       if (this.$announce) this.$announce(this.$t(dir > 0 ? 'statsJ.TodoItem.moveDownAnnounce' : 'statsJ.TodoItem.moveUpAnnounce', { t: raw.taskContent || '' }))
+    },
+    /** D4-keyboard fix (2026-10-02): plain ArrowUp/ArrowDown moves FOCUS between rows (roving
+     *  focus over the rendered .td-item list, scoped to the current view container so it never
+     *  jumps into another widget). Each row previously cost 5 Tab stops with no arrow navigation
+     *  at all; Ctrl+Up/Down keeps its move-the-row meaning, Enter on a row opens the editor. */
+    focusRow (dir) {
+      const host = (this.$el && this.$el.closest) ? (this.$el.closest('.view-page') || this.$el.closest('.page') || this.$el.ownerDocument) : null
+      if (!host) return
+      const rows = Array.from(host.querySelectorAll('.td-item'))
+      const next = neighborInList(rows, this.$el, dir)
+      if (next) next.focus()
     },
     onCheckClick (e) {
       e.stopPropagation()

@@ -85,7 +85,7 @@ export default {
     "pairInputLabel": "输入对端配对码",
 
     "addPeerLabel": "按 IP 添加设备",
-    "addPeerHostPh": "如 192.168.1.64（端口默认 58471）",
+    "addPeerHostPh": "如 192.168.1.64 或 192.168.1.64:58471",
     "addPeerBtn": "添加",
     "addPeerTip": "自动发现被路由器/防火墙拦截时使用",
     "addPeerOkMsg": "设备已添加",
@@ -133,6 +133,7 @@ export default {
     "pairWaiting": "正在等待对方确认…（60s）",
     "pairTimeoutMsg": "对方未响应（超时）",
     "pairThrottledMsg": "尝试过于频繁，请稍后再试",
+    "pairBadAddrMsg": "地址无法解析 — 请输入 IP 或 IP:端口（如 192.168.1.64:58471）",
     "pairFailGenericMsg": "配对失败，请重试",
     "egressHydrationFailed": "推送时 {n} 条变更读取失败——本次推送数据不完整（可通过全量快照恢复）",
     "oplogAppendFailed": "本地变更记录写入失败——最近的变更在下次全量快照前不会同步到其他设备",

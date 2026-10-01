@@ -23,3 +23,12 @@ export function chkStyle (store, t) {
   const c = chkColor(store, t)
   return { background: c, borderColor: c }
 }
+
+/** D4-keyboard (2026-10-02): roving-focus neighbor lookup for ArrowUp/ArrowDown list
+ *  navigation. Returns the row `dir` positions from `current` inside the ordered `rows`
+ *  list (null when current is absent or already at the edge). Pure, unit-testable. */
+export function neighborInList (rows, current, dir) {
+  const i = rows.indexOf(current)
+  if (i < 0) return null
+  return rows[i + dir] || null
+}

@@ -121,6 +121,7 @@ export default {
       "noDate": "no date",
       "movedToInbox": ", moved to inbox",
       "created": "Task added: {c}",
+      "createdBulk": "Added {n} tasks from pasted lines",
       "createFailed": "Failed to create task, please retry"
 
     },

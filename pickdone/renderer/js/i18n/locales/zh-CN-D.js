@@ -121,6 +121,7 @@ export default {
       "noDate": "未安排日期",
       "scheduledAt": "，已安排在",
       "created": "已添加任务：{c}",
+      "createdBulk": "已按粘贴的 {n} 行分别创建任务",
       "createFailed": "创建失败，请重试"
 
     },
