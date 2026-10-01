@@ -128,7 +128,7 @@ export default {
           repeatId: t.repeatId,
           dayPatch: patchToToday ? crossDayMovePatch(t, today, dayStart) : undefined
         })
-        this.$message.success(patchToToday ? this.$t('statsC.RecycleBin.restoredToToday') : this.$t('statsC.RecycleBin.restored'))
+        this.$message.success(this.$t(patchToToday ? 'statsC.RecycleBin.restoredToToday' : 'statsC.RecycleBin.restored', { name: t.taskContent || this.$t('statsJ.TodoItem.untitled') }))
       } catch (e) {
         this.$message.error(this.$t('statsC.RecycleBin.restoreFailedMsg') + (e && e.message ? e.message : e))
       }
@@ -146,7 +146,7 @@ export default {
             repeatId: t.repeatId,
             dayPatch: crossDayMovePatch(t, day, dayStart)
           })
-        this.$message.success(this.$t('statsC.RecycleBin.restoredToDate'))
+        this.$message.success(this.$t('statsC.RecycleBin.restoredToDate', { name: t.taskContent || this.$t('statsJ.TodoItem.untitled') }))
       } catch (e) {
         this.$message.error(this.$t('statsC.RecycleBin.restoreFailedMsg') + (e && e.message ? e.message : e))
       }
