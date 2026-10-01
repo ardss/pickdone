@@ -77,7 +77,9 @@ test('category mutations: addCategory appends sort + palette color; updateCatego
   assert.ok(!s.projectIds.includes(s.list[0].categoryId), 'unmark removes it')
   category.mutations.mergeProjectMeta(s, { [s.list[0].categoryId]: { status: 'paused' } })
   assert.equal(s.projectMeta[s.list[0].categoryId].status, 'paused')
-  category.mutations.setProjectStatus(s, { id: s.list[0].categoryId, status: 'bogus' })
+  // D13 A3: the status mutation is memory-only now (setProjectStatusLocal); the awaited meta
+  // write lives in the setProjectStatus ACTION. Normalization still happens at commit time.
+  category.mutations.setProjectStatusLocal(s, { id: s.list[0].categoryId, status: 'bogus' })
   assert.equal(s.projectMeta[s.list[0].categoryId].status, 'active', 'invalid status normalizes')
 })
 
