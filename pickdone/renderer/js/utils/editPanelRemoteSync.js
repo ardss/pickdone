@@ -15,7 +15,12 @@
  *  Component policy on 'changed': if the user has NOT typed anything since hydration
  *  (panel fingerprint === hydrated fingerprint) the panel silently re-hydrates; if the user HAS
  *  edited, an inline "content updated on another device" notice with a manual refresh button is
- *  shown instead — user input is never auto-overwritten. */
+ *  shown instead — user input is never auto-overwritten.
+ *
+ *  Also hosts taskAbsentIn — the verified-absence check EditPanel's auto-close guard must pass
+ *  before closing the panel (P1 2026-10-01 round). The shared panel-snapshot builder
+ *  (buildEditSnapshot, used by BOTH ui/openEdit and EditPanel.hydrate) lives in store/ui.js —
+ *  this module stays dependency-free (round6-qc-fixes imports it without the test DOM setup). */
 
 // Each entry: [panel-snapshot key, live store-row key]. The baseline is fingerprinted from the
 // panel snapshot (title/desc/dateTs/...), but checkRemoteUpdate receives the RAW todo-store row
@@ -54,21 +59,36 @@ const FINGERPRINT_FIELDS = [
   ['remindTs', 'reminderTime'],
   ['priority', 'priority'],
   ['important', 'important'],
-  ['categoryId', 'categoryId']
+  ['categoryId', 'categoryId'],
+  // [uiux-2026-10-01 J3 P2] repeatId joins the fingerprint: RepeatModal.generate stamps the
+  // template task with the new group's repeatId while its edit panel is open; without it the
+  // inbound change classifies as a non-core own-save echo (verdict 'none') and the panel keeps
+  // showing "设置重复" with no way back into the rule from the task it was created on.
+  ['repeatId', 'repeatId']
 ]
 
 /** Panel-snapshot keys the own-save-echo fingerprint depends on. Exported for the shape
  *  consistency test: every one of these MUST be present in the openEdit snapshot. */
 export const FINGERPRINT_PANEL_KEYS = FINGERPRINT_FIELDS.map(([k]) => k)
 
+/** Default applied when BOTH the panel key and the row key are absent. Pulled from
+ *  PANEL_FIELD_MAP so the fingerprint vocabulary cannot drift from the snapshot builder:
+ *  browser-shim rows lack priority/important (the desktop db layer normalizes them at
+ *  db-rows.js), and the openEdit snapshot defaults those to 0 — fingerprinting the missing
+ *  row as '' while the panel baseline says 0 made every own-save echo classify as a peer
+ *  edit (P1 2026-10-01: pristine re-hydrates discarded just-added subtasks mid-panel). */
+const PANEL_DEFAULTS = Object.fromEntries(PANEL_FIELD_MAP.map(([panelKey, , dflt]) => [panelKey, dflt]))
+
 /** Fingerprint of the core editable fields (order-stable, tolerant of missing rows; accepts both
- *  the panel snapshot shape and the raw store row). */
+ *  the panel snapshot shape and the raw store row). Missing fields normalize to the same default
+ *  the snapshot builder would have applied. */
 export function contentFingerprint (t) {
   if (!t || typeof t !== 'object') return ''
   const parts = []
   for (const [panelKey, rowKey] of FINGERPRINT_FIELDS) {
-    const v = t[panelKey] !== undefined ? t[panelKey] : t[rowKey]
-    parts.push(`${panelKey}=${v === undefined || v === null ? '' : String(v)}`)
+    let v = t[panelKey] !== undefined && t[panelKey] !== null ? t[panelKey] : t[rowKey]
+    if (v === undefined || v === null) v = PANEL_DEFAULTS[panelKey] !== undefined ? PANEL_DEFAULTS[panelKey] : ''
+    parts.push(`${panelKey}=${String(v)}`)
   }
   return parts.join('|')
 }
@@ -79,4 +99,20 @@ export function shouldRefreshRemote ({ baseFingerprint, baseUpdateTime, row }) {
   if (Number(row.updateTime) === Number(baseUpdateTime)) return 'none'
   if (contentFingerprint(row) === baseFingerprint) return 'none' // own-save echo / non-core change
   return 'changed'
+}
+
+/** Verified absence: the task is in NEITHER the active list NOR the recycle bin. Used by
+ *  EditPanel's auto-close guard so a transient null during todo/init#setAllRows (full reload
+ *  replacing the row array) no longer reads as "task deleted by another window" and slams the
+ *  panel shut mid-edit (P1 2026-10-01: picking a deadline during the reload window closed the
+ *  panel and lost the edit). */
+export function taskAbsentIn (todoState, taskId) {
+  if (!taskId) return false
+  const st = todoState || {}
+  // Neither list readable (missing store state) → cannot verify absence; treat as present so
+  // the guard can never close the panel on a data-shaped surprise.
+  if (!Array.isArray(st.todoList) || !Array.isArray(st.recycleList)) return false
+  const inList = st.todoList.some(t => t && t.taskId === taskId) ||
+                 st.recycleList.some(t => t && t.taskId === taskId)
+  return !inList
 }

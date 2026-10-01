@@ -189,6 +189,12 @@ export default {
         const repeatId = `repeat_${tpl.userId}${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`
         // The rule is persisted with the group: when the last item in the group completes, toggleComplete can use it to auto-renew
         const ruleJson = JSON.stringify(this.form)
+        // [uiux-2026-10-01 J3 P2] The template task IS the series' first instance (effectiveDates
+        // explicitly excludes its own day), so it must carry the group's repeatId — otherwise the
+        // edit panel's repeat row on the very task the rule was created from still reads
+        // "设置重复" with no 规则/删除 entry point, and toggleComplete's auto-renew never fires
+        // for the anchor day.
+        await this.$store.dispatch('todo/updateTodoFields', { taskId: tpl.taskId, patch: { repeatId } })
         // Authority = meta (same source as CLI; the 5175 shim implements meta too); the historical LS fallback was removed (2026-09-03 redundancy cleanup)
         // D6-F7: a failed rule save no longer fires its own toast mid-flow — it is folded into the
         // single summary toast below (with the renewal-disabled consequence spelled out)
