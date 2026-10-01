@@ -111,8 +111,15 @@ test('C4: the win32 beep fallback registers an error listener on the spawned chi
   clearCache('src/main/notify-sound.js')
   assert.ok(!spawned)
   // notify-sound requires 'child_process' INSIDE sound() at call time — keep the interception
-  // active across the call, not just the module load.
-  withStubs({ child_process: { spawn: () => { spawned = true; return fakeChild } } }, () => notifySound.sound(''))
+  // active across the call, not just the module load. The win32 branch is platform-gated, so pin
+  // process.platform for the duration (this suite must pass on linux CI too).
+  const realPlatform = process.platform
+  Object.defineProperty(process, 'platform', { value: 'win32' })
+  try {
+    withStubs({ child_process: { spawn: () => { spawned = true; return fakeChild } } }, () => notifySound.sound(''))
+  } finally {
+    Object.defineProperty(process, 'platform', { value: realPlatform })
+  }
   assert.ok(spawned, 'the powershell beep spawn happened')
   const err = regs.find(([ev]) => ev === 'error')
   assert.ok(err, 'red before the fix: no error listener — a spawn ENOENT crashed the main process')
