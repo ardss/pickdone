@@ -93,7 +93,7 @@ function setupShortcuts () {
 
 test('F-D1: sync is a dispatched in-app shortcut — ctrl+s reaches the renderer as shortcut-action', () => {
   const s = setupShortcuts()
-  s.fire({ type: 'keyboard', control: true, key: 's' })
+  s.fire({ type: 'keyDown', control: true, key: 's' })
   assert.deepEqual(s.sent, [['shortcut-action', 'sync']], 'ctrl+s must dispatch the sync action over the same pipeline as the other nine shortcuts')
   assert.equal(s.prevented, 1, 'the combo is consumed (prevents the browser save dialog)')
 })
@@ -124,11 +124,11 @@ test('F-D3: entering capture mode suppresses shortcut dispatch — no preventDef
   const s = setupShortcuts()
   assert.equal(typeof s.ipcHandlers['shortcut-capturing'], 'function', 'main exposes the shortcut-capturing channel')
   s.capturing(true)
-  s.fire({ type: 'keyboard', control: true, key: 'd' })
+  s.fire({ type: 'keyDown', control: true, key: 'd' })
   assert.equal(s.sent.length, 0, 'no shortcut-action fires while recording (recording ctrl+d must NOT delete the task)')
   assert.equal(s.prevented, 0, 'the combo falls through so the renderer capture listener can record it')
   s.capturing(false)
-  s.fire({ type: 'keyboard', control: true, key: 'd' })
+  s.fire({ type: 'keyDown', control: true, key: 'd' })
   assert.deepEqual(s.sent, [['shortcut-action', 'deleteEvent']], 'dispatch resumes after recording ends')
 })
 
@@ -142,7 +142,7 @@ test('F-D3: a renderer reload mid-record self-heals — suppression cannot stick
   const s = setupShortcuts()
   s.capturing(true)
   s.reload() // renderer crash/reload: did-finish-load must clear the stale flag
-  s.fire({ type: 'keyboard', control: true, key: 'd' })
+  s.fire({ type: 'keyDown', control: true, key: 'd' })
   assert.deepEqual(s.sent, [['shortcut-action', 'deleteEvent']], 'shortcuts dispatch again after a reload, no permanent mute')
 })
 
@@ -150,7 +150,7 @@ test('F-D3: a renderer crash WITHOUT reload also lifts suppression (render-proce
   const s = setupShortcuts()
   s.capturing(true)
   s.crash()
-  s.fire({ type: 'keyboard', control: true, key: 'd' })
+  s.fire({ type: 'keyDown', control: true, key: 'd' })
   assert.deepEqual(s.sent, [['shortcut-action', 'deleteEvent']], 'a dead renderer cannot leave the pipeline muted')
 })
 
@@ -222,4 +222,32 @@ test('F-D4: the six hint-q marks no longer carry fake-button semantics', () => {
 test('F-D5: the EditPanel focus guard also fires when activation came from a todo row', () => {
   const src = code('renderer/js/components/EditPanel.vue')
   assert.match(src, /closest\('\.td-item'\)/, 'the keyboard-entry path (focus on a .td-item row) must focus the title')
+})
+
+// Regression (audit D4): Electron's before-input-event delivers type 'keyDown'/'rawKeyDown',
+// never 'keyboard'. The old guard `input.type !== 'keyboard'` never passed, so every in-app
+// shortcut was dead in the live app while these tests (which fired the impossible value) passed.
+// Pin the real vocabulary: both Electron keydown types dispatch; everything else is ignored.
+test('D4: before-input-event accepts the real Electron vocabulary (keyDown/rawKeyDown), ignores keyUp/char', () => {
+  const s = setupShortcuts()
+  s.fire({ type: 'keyDown', control: true, key: 's' })
+  s.fire({ type: 'rawKeyDown', control: true, key: 'd' })
+  assert.deepEqual(s.sent, [['shortcut-action', 'sync'], ['shortcut-action', 'deleteEvent']], 'both Electron keydown types dispatch')
+  assert.equal(s.prevented, 2)
+  s.fire({ type: 'keyUp', control: true, key: 's' })
+  s.fire({ type: 'char', control: true, key: 's' })
+  s.fire({ type: 'keyboard', control: true, key: 's' })
+  assert.equal(s.sent.length, 2, 'keyUp/char (and the old impossible keyboard value) never dispatch')
+  assert.equal(s.prevented, 2)
+})
+
+// shift+digit: Electron reports key '@' with code 'Digit2' when shift is held; normalizeInputKey
+// must fold it to the digit so a recorded ctrl+shift+2 binding matches. This path was unreachable
+// while the guard demanded type 'keyboard'.
+test('D4: shift+digit combos normalize via input.code and dispatch (ctrl+shift+2)', () => {
+  const s = setupShortcuts()
+  s.api.applyShortcuts({ sync: 'ctrl+shift+2', deleteEvent: 'ctrl+d', addEvent: 'ctrl+n', toggleMainWindow: '', quickAddGlobal: '' })
+  s.fire({ type: 'keyDown', control: true, shift: true, key: '@', code: 'Digit2' })
+  assert.deepEqual(s.sent, [['shortcut-action', 'sync']], 'shift+digit folds to ctrl+shift+2 and dispatches')
+  assert.equal(s.prevented, 1)
 })

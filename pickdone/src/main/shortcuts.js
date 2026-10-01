@@ -229,7 +229,11 @@ function createShortcuts ({ getMainWindow, showMainOrLock, quickAdd, i18n, log }
     const onProcessGone = () => clearCaptureSuppress()
     const onBeforeInput = (e, input) => {
       const w = getMainWindow()
-      if (input.type !== 'keyboard' || !w || w.isDestroyed()) return
+      // Electron's before-input-event only ever delivers 'keyDown'/'rawKeyDown'/'keyUp'/'char'
+      // — never 'keyboard'. The old `type !== 'keyboard'` guard never passed, killing every
+      // in-app shortcut (ctrl+1..4, ctrl+d, ctrl+s, pin, pomodoro). Accept the real keydown
+      // vocabulary and ignore keyups/char.
+      if ((input.type !== 'keyDown' && input.type !== 'rawKeyDown') || !w || w.isDestroyed()) return
       const parts = []
       if (input.control) parts.push('ctrl')
       if (input.alt) parts.push('alt')

@@ -97,7 +97,7 @@ test('P1: re-binding shortcuts preserves foreign before-input-event listeners an
   assert.equal(wc.count('before-input-event'), 2, 'rebinds must remove the OWN previous dispatcher, not accumulate one per rebind')
   assert.equal(wc.count('did-finish-load'), 1, 'exactly one OWN suppression reset after rebinding (no foreign listener here)')
   assert.equal(wc.count('render-process-gone'), 1, 'exactly one OWN suppression reset after rebinding (no foreign listener here)')
-  wc.emit('before-input-event', { preventDefault: () => {} }, { type: 'keyboard', control: true, key: 'f' })
+  wc.emit('before-input-event', { preventDefault: () => {} }, { type: 'keyDown', control: true, key: 'f' })
   assert.equal(foreignCalls, 1, 'the foreign before-input-event listener still fires')
 })
 
@@ -106,14 +106,14 @@ test('P1: shortcut dispatch still works after a rebind (no behavior change on th
   const sent = []
   wc.send = (ch, p) => sent.push([ch, p])
   api.applyShortcuts({ deleteEvent: 'ctrl+d' })
-  wc.emit('before-input-event', { preventDefault: () => {} }, { type: 'keyboard', control: true, key: 'd' })
+  wc.emit('before-input-event', { preventDefault: () => {} }, { type: 'keyDown', control: true, key: 'd' })
   assert.deepEqual(sent, [['shortcut-action', 'deleteEvent']])
   // rebind to a new combo: old combo must stop dispatching, new combo must dispatch
   api.applyShortcuts({ deleteEvent: 'ctrl+e' })
   sent.length = 0
-  wc.emit('before-input-event', { preventDefault: () => {} }, { type: 'keyboard', control: true, key: 'd' })
+  wc.emit('before-input-event', { preventDefault: () => {} }, { type: 'keyDown', control: true, key: 'd' })
   assert.equal(sent.length, 0, 'the old combo is unbound after a rebind')
-  wc.emit('before-input-event', { preventDefault: () => {} }, { type: 'keyboard', control: true, key: 'e' })
+  wc.emit('before-input-event', { preventDefault: () => {} }, { type: 'keyDown', control: true, key: 'e' })
   assert.deepEqual(sent, [['shortcut-action', 'deleteEvent']])
 })
 
