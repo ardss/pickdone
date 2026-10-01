@@ -661,7 +661,12 @@ function connect(host, port, opts) {
     else em.emit('close')
     socket.destroy()
   })
-  socket.on('error', (err) => em.emit('error', err))
+  socket.on('error', (err) => {
+    // D14 C5: mirror the guarded timeout path above — a caller without an 'error' listener must
+    // not turn a socket error into an uncaught 'error' event (process crash). The close that
+    // always follows a socket error is the contract every caller already handles.
+    if (em.listenerCount('error') > 0) em.emit('error', err)
+  })
   socket.on('close', () => {
     // Best-effort zeroization of derived keys (see cipher.js for the GC-copy caveat).
     cipher.zeroize(conn.sessionKey)

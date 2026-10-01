@@ -26,6 +26,17 @@ function createPairingClient({ peers, deviceId, name, em, getListenPort }) {
   // with TODO_SYNC_PORT overrides the acceptor's port differs from ours and the old
   // "persist myPort on the accept side" shortcut dialed the acceptor into itself.
   const advertiseListenPort = () => { try { const p = typeof getListenPort === 'function' ? getListenPort() : null; return Number.isInteger(p) && p > 0 ? p : null } catch { return null } }
+  // D14 C13 (2026-10-02): both pairing flows used to leave transport 'close' unhandled — a peer
+  // that accepts the TCP connection and then dies (or destroys the socket without sending a
+  // frame, e.g. the server's max-socket destroy) left the promise hanging until the full 63s
+  // client deadline. close-without-settlement is now a fast rejection. `settled` guards the
+  // done() path: done() itself closes the socket, so the trailing 'close' event must not
+  // double-settle or clobber the real outcome.
+  function wireCloseGuard (done, reject, message) {
+    let settled = false
+    const doneG = (fn, v) => { if (settled) return; settled = true; done(fn, v) }
+    return { doneG, onClose: () => doneG(reject, new Error(message)) }
+  }
   /** Manual pairing with a known peer: exchange our 6-digit code for the peer's persisted pairing secret.
    *  Resolves {secret, peer}; rejects on reject/error/timeout. */
   function pairWith(peerDeviceId, code) {
@@ -44,9 +55,11 @@ function createPairingClient({ peers, deviceId, name, em, getListenPort }) {
         try { client.close() } catch { /* noop */ }
         fn(v)
       }
-      client.on('paired', (r) => { em.emit('paired-outbound', { peer: peer.deviceId }); done(resolve, { secret: r.secret, peer }) })
-      client.on('rejected', () => done(reject, new Error('pairing code rejected by peer')))
-      client.on('error', (err) => done(reject, err))
+      const closeGuard = wireCloseGuard(done, reject, 'peer closed the connection before the pairing code was answered')
+      client.on('paired', (r) => { em.emit('paired-outbound', { peer: peer.deviceId }); closeGuard.doneG(resolve, { secret: r.secret, peer }) })
+      client.on('rejected', () => closeGuard.doneG(reject, new Error('pairing code rejected by peer')))
+      client.on('error', (err) => closeGuard.doneG(reject, err))
+      client.on('close', closeGuard.onClose)
     })
   }
 
@@ -73,20 +86,22 @@ function createPairingClient({ peers, deviceId, name, em, getListenPort }) {
         try { client.close() } catch { /* noop */ }
         fn(v)
       }
+      const closeGuard = wireCloseGuard(done, reject, 'peer closed the connection before the pairing request was answered')
       client.on('paired', (r) => {
         em.emit('pair-accepted', { host, port: targetPort })
         // F1: the accept now carries the responder's deviceId so the caller can persist the
         // per-pair secret under the right peer record.
-        done(resolve, { secret: r.secret, deviceId: r.deviceId, host, port: targetPort })
+        closeGuard.doneG(resolve, { secret: r.secret, deviceId: r.deviceId, host, port: targetPort })
       })
       client.on('rejected', (msg) => {
         const reason = (msg && msg.error) || 'rejected'
         em.emit('pair-rejected', { host, port: targetPort, reason })
         const err = new Error('pairing rejected by peer: ' + reason)
         err.reason = reason
-        done(reject, err)
+        closeGuard.doneG(reject, err)
       })
-      client.on('error', (err) => done(reject, err))
+      client.on('error', (err) => closeGuard.doneG(reject, err))
+      client.on('close', closeGuard.onClose)
     })
   }
 

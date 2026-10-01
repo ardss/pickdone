@@ -493,7 +493,16 @@ function createLanSyncNode(opts) {
       // P1-4: remember the live authenticated socket per peer so an unpair can best-effort
       // notify the peer before the node stops. Cleared on node stop / forgetPeer.
       getHandler: (peer) => (msg, socket) => {
-        try { if (peer && peer.deviceId && socket) liveServerSockets.set(peer.deviceId, socket) } catch { /* best effort */ }
+        try {
+          if (peer && peer.deviceId && socket) {
+            // D14 C14 (2026-10-02): this used to be an unconditional last-writer-wins set — a
+            // STALE half-open connection's late inbound message overwrote the live socket ref,
+            // so notifyUnpaired then "succeeded" by writing into the dead peer. Only adopt the
+            // inbound socket when there is no ref or the incumbent is destroyed; the onPeer
+            // 'close' hook below reclaims genuinely dead entries either way.
+            adoptLiveSocket(liveServerSockets, peer.deviceId, socket)
+          }
+        } catch { /* best effort */ }
         handleServerMessage(peer, msg, socket, sendVia)
       },
       onPeer: (peer, socket) => {
@@ -690,4 +699,16 @@ function createLanSyncNode(opts) {
   }
 }
 
-module.exports = { createLanSyncNode, BACKOFF_BASE_MS, BACKOFF_MAX_MS, DIAL_FAILURE_BUDGET_DEFAULT, HIBERNATE_BACKOFF_MS_DEFAULT }
+// D14 C14 (2026-10-02): socket-adoption rule for the per-peer live-server-socket map, extracted
+// for unit testing. An inbound message adopts its socket ONLY when the map has no ref, the
+// incumbent is destroyed, or it IS the incumbent — a stale half-open connection's late message
+// must never overwrite the live ref (notifyUnpaired would then write into a dead socket).
+function adoptLiveSocket (map, deviceId, socket) {
+  if (!deviceId || !socket) return false
+  const cur = map.get(deviceId)
+  if (cur && !cur.destroyed && cur !== socket) return false
+  map.set(deviceId, socket)
+  return true
+}
+
+module.exports = { createLanSyncNode, adoptLiveSocket, BACKOFF_BASE_MS, BACKOFF_MAX_MS, DIAL_FAILURE_BUDGET_DEFAULT, HIBERNATE_BACKOFF_MS_DEFAULT }

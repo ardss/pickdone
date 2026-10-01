@@ -109,6 +109,24 @@ function sha256Hex (buf, hashFn) {
   return createHash('sha256').update(buf).digest('hex')
 }
 
+// D14 C7 (2026-10-02): chunked positional sha256 of an on-disk file — the receive-side dedup
+// used to readFileSync the WHOLE existing file (up to 50MB) on the main process just to compare
+// hashes against the (already in-memory) incoming buffer. Same pattern as the serve-side C8
+// fix: one ENTRY_CHUNK_BYTES window resident at a time.
+function sha256FileChunked (fs, fp) {
+  const fd = fs.openSync(fp, 'r')
+  try {
+    const hasher = createHash('sha256')
+    const buf = Buffer.alloc(ENTRY_CHUNK_BYTES)
+    for (;;) {
+      const n = fs.readSync(fd, buf, 0, buf.length, null)
+      if (n <= 0) break
+      hasher.update(n === buf.length ? buf : buf.subarray(0, n))
+    }
+    return hasher.digest('hex')
+  } finally { fs.closeSync(fd) }
+}
+
 /** Default disk layer over the user-data attachments dir. Injectable for tests. */
 function defaultDeps () {
   const fs = require('node:fs')
@@ -173,7 +191,8 @@ function defaultDeps () {
         fs.writeFileSync(tmp, buf)
         if (fs.existsSync(dst)) {
           let same = false
-          try { same = sha256Hex(fs.readFileSync(dst)) === sha256Hex(buf) } catch { same = false }
+          // D14 C7: chunked hash of the on-disk file (was a full readFileSync per conflict).
+          try { same = sha256FileChunked(fs, dst) === sha256Hex(buf) } catch { same = false }
           if (same) return path.basename(dst) // dedup no-op: not a new file, stays quota-exempt
           const ext = path.extname(dst)
           const stem = dst.slice(0, dst.length - ext.length)
@@ -247,6 +266,14 @@ function createAttachmentServer (deps = {}) {
       const id = String(rawId || '')
       if (!id || /[\\/]|\.\./.test(id)) { missing += 1; if (!emit({ type: 'att-missing', id, reason: 'bad-id' })) return { sent, missing, aborted: true }; continue }
       if (!d.exists(id)) { missing += 1; if (!emit({ type: 'att-missing', id, reason: 'not-found' })) return { sent, missing, aborted: true }; continue }
+      // D14 C8 (2026-10-02): everything below (size stat, chunked reads, hashing) is wrapped
+      // per-file — d.read/fs.openSync used to throw straight out of serve() on a file that
+      // vanished or became unreadable between the exists() precheck and the read, breaking the
+      // documented never-throws contract AND aborting the batch WITHOUT att-end, so the
+      // requester burned its full 120s round deadline. A per-file failure now answers with the
+      // att-missing error shape so the requester's puller settles the id fast and the batch
+      // still terminates with att-end.
+      try {
       const size = d.size(id)
       if (size > maxFileBytes) {
         missing += 1
@@ -288,6 +315,12 @@ function createAttachmentServer (deps = {}) {
           try { require('electron-log').warn('[LanSync] att-chunk send failed, aborting serve for', peerId) } catch { /* noop */ }
           return { sent, missing, aborted: true, budgetSkipped }
         }
+      }
+      } catch (readErr) {
+        missing += 1
+        try { require('electron-log').warn('[LanSync] att-req read failed, answering att-missing:', id, readErr && readErr.message) } catch { /* noop */ }
+        if (!emit({ type: 'att-missing', id, reason: 'read-error' })) return { sent, missing, aborted: true }
+        continue
       }
       sent += 1
     }
