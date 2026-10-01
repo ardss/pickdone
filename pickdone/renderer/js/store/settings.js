@@ -610,7 +610,14 @@ export default {
       // wave4 TODO); the whitelist makes those keys unreachable here, and a unit test pins that
       // the family can never re-enter DEFAULT_SETTINGS (single-source drift guard).
       if (!(k in DEFAULT_SETTINGS)) continue
-        if (canonicalJson(db[k]) !== canonicalJson(state[k])) patch[k] = db[k]
+        // D14-B6 (2026-10-01): onboardingToursSeen obeys the Y6 per-key merge contract on EVERY
+        // inbound boundary — the key-level restore used to adopt the DB map wholesale, so
+        // local-only seen tour keys (tours dismissed on this device but not yet synced to the
+        // peer's map) were dropped and the onboarding tour replayed after a restart.
+        if (k === 'onboardingToursSeen' && db[k] && typeof db[k] === 'object' && !Array.isArray(db[k])) {
+          const merged = mergeTourMap(state.onboardingToursSeen, db[k])
+          if (canonicalJson(merged) !== canonicalJson(state[k])) patch[k] = merged
+        } else if (canonicalJson(db[k]) !== canonicalJson(state[k])) patch[k] = db[k]
       }
       coerceNumericSettings(patch)
       clampNumericSettings(patch) // F-C3: the DB-mirror restore path is a trust boundary too
