@@ -5,7 +5,8 @@
       <input ref="inp" v-model="text" class="qa-input" :placeholder="$t('statsD.QuickAdd.placeholder')"
              :aria-label="$t('statsD.QuickAdd.ariaLabel')"
              @input="failed = false"
-             @keyup.enter="e => { if (e.isComposing || e.keyCode === 229) return; onEnter() }"/>
+             @keyup.enter="e => { if (e.isComposing || e.keyCode === 229) return; onEnter() }"
+             @keyup.esc="onCancel"/>
       <transition name="fade">
         <!-- Inline failure feedback for the 64px standalone quick-add window: a $message toast is
              clipped there (overflow:hidden), so quiet mode surfaces the error inside the card -->
@@ -101,6 +102,14 @@ export default {
     window.removeEventListener('todo:focus-quickadd', this.focusInput)
   },
   methods: {
+    /* [uiux-2026-10-01 J1 P3] Esc is the universal cancel key: clear the draft (and the failure
+       mark); a non-empty draft is also left so the field blurs — an empty draft only blurs. */
+    onCancel () {
+      this.failed = false
+      if (this.text) this.text = ''
+      const inp = this.$refs.inp
+      if (inp && inp.blur) inp.blur()
+    },
     focusInput () { this.$refs.inp.focus() },
     clearDate () {
       this.pickedDate = 0 // explicitly "no date" (goes to the todo box); NL parsing no longer applies
