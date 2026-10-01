@@ -1,8 +1,12 @@
 <template>
-  <!-- LAN sync tab (P3a, 2026-09-16; Device Center rework 2026-09-17). Rendered lazily: the parent
-       gates this component with v-if on local tab state, so the default settings DOM (visual
-       baseline) is pixel-identical. -->
   <div class="tab-panel">
+    <!-- The root must stay a single element (no comment before the root div): a comment sibling
+         before the root makes the component root a Fragment and Vue cannot apply the parent's
+         v-show directive in dev builds (dev compiler keeps comments; prod strips them). -->
+    <!-- LAN sync tab (P3a, 2026-09-16; Device Center rework 2026-09-17). Rendered lazily: the parent
+         gates this component with v-if on local tab state, so the default settings DOM (visual
+         baseline) is pixel-identical. A leading comment BEFORE the root div would make the component
+         root a Fragment and Vue could not apply the parent's v-show directive. -->
     <div class="form">
       <div class="form-item"><span class="form-item__label"></span>
         <div class="form-item__control"><span class="tip sync-free-tip">{{ $t('sync.freeForever') }}</span></div></div>

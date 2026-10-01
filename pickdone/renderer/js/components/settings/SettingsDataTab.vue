@@ -1,6 +1,9 @@
 <template>
-  <!-- Data management tab (extracted from SettingsModal.vue, W5 wave 1; zero behavior change) -->
   <div class="tab-panel">
+    <!-- The root must stay a single element (no comment before the root div): a comment sibling
+         before the root makes the component root a Fragment and Vue cannot apply the parent's
+         v-show directive in dev builds (dev compiler keeps comments; prod strips them). -->
+    <!-- Data management tab (extracted from SettingsModal.vue, W5 wave 1; zero behavior change) -->
     <div class="form">
       <div class="form-label">{{ $t('statsE.SettingsModal.autoBackupSection') }}</div>
       <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.autoBackupLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.autoBackupEnabled !== false" @change="v=>set({autoBackupEnabled:v})"/></div></div>
