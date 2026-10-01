@@ -29,6 +29,7 @@
 const { randomUUID, timingSafeEqual } = require('node:crypto')
 const os = require('node:os')
 const log = require('electron-log')
+require('./log-isolation') // test isolation: redirect electron-log file transport into TODO_DB_DIR/TODO_USER_DATA_DIR
 const { createEngine } = require('../../shared/sync-core/engine.mjs')
 const { SYNC_SCHEMA_VERSION } = require('../../shared/sync-core/merge.mjs')
 // B3 (daily 2026-09-24): the habits-blob field set is the SHARED family contract

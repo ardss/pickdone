@@ -11,6 +11,7 @@ const path = require('path')
 process.env.APP_VERSION = app.getVersion()
 const fs = require('fs')
 const log = require('electron-log')
+require('./log-isolation') // test isolation: redirect electron-log file transport into TODO_DB_DIR/TODO_USER_DATA_DIR
 
 const dbm = require('./db')
 const fixUtil = require('./fix-util')

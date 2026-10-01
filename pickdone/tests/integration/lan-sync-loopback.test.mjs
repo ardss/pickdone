@@ -229,9 +229,15 @@ class Peer {
 
   async start() {
     fs.writeFileSync(this.workerPath, WORKER_SRC)
+    // Log isolation (log-isolation fix): the worker requires src/main/lan-sync/* which
+    // acquire electron-log. Without an isolation env the child's file transport resolved
+    // the REAL %APPDATA%/pickdone/logs/main.log ("poison row" lines leaked there). Give
+    // every worker its own TODO_DB_DIR so src/main/log-isolation.js redirects the
+    // transport into scratchDir/logs/main.log.
+    this.isolatedDbDir = fs.mkdtempSync(path.join(path.dirname(this.workerPath), 'worker-db-'))
     this.proc = spawn(process.execPath, [this.workerPath, JSON.stringify({
       root: PICKDONE_ROOT, deviceId: this.deviceId, name: this.name, secret: this.secret,
-    })], { stdio: ['pipe', 'pipe', 'pipe'] })
+    })], { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, TODO_DB_DIR: this.isolatedDbDir } })
     this.proc.stdout.setEncoding('utf8')
     this.proc.stderr.setEncoding('utf8')
     this.proc.stdout.on('data', (d) => this._onOut(d))

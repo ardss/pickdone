@@ -557,6 +557,7 @@ function createLanServer(opts) {
     // half-working node. Port 0 (explicitly ephemeral config) can never hit EADDRINUSE.
     if (err && err.code === 'EADDRINUSE' && em.port === null && port !== 0) {
       try { require('electron-log').error(`[LanSync] fixed sync port ${port} is in use — sync is NOT discoverable (EADDRINUSE)`) } catch { /* electron-log unavailable in pure-node contexts */ }
+      require('../log-isolation') // test isolation: redirect electron-log file transport into TODO_DB_DIR/TODO_USER_DATA_DIR
     }
     em.emit('error', err)
   })

@@ -234,6 +234,7 @@ function createAttachmentServer (deps = {}) {
     const count = requestsByPeer.get(peerId) || 0
     if (count >= perPeerCap) {
       try { require('electron-log').warn('[LanSync] att-req rate-capped for', peerId) } catch { /* noop */ }
+      require('../log-isolation') // test isolation: redirect electron-log file transport into TODO_DB_DIR/TODO_USER_DATA_DIR
       emit({ type: 'att-end', sent: 0, missing: ids.length })
       return { sent: 0, missing: ids.length, capped: true }
     }

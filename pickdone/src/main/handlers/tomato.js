@@ -1,5 +1,6 @@
 /** Pomodoro float/taskbar + quick-add + main-window control IPC handlers (pure relocation from index.js registerIpc). */
 const log = require('electron-log')
+require('../log-isolation') // test isolation: redirect electron-log file transport into TODO_DB_DIR/TODO_USER_DATA_DIR
 const tomatoFloat = require('../tomato-float')
 const tomatoTaskbar = require('../tomato-taskbar')
 const quickAdd = require('../quick-add')

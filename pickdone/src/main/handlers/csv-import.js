@@ -32,6 +32,7 @@ function __resetWorkerRegistry () { outstandingWorkers.clear(); leakedWorkers.cl
 
 function logTerminationFailure (err) {
   try { require('electron-log').warn('[Import] parse worker terminate() failed', err) } catch { /* no logger available */ }
+  require('../log-isolation') // test isolation: redirect electron-log file transport into TODO_DB_DIR/TODO_USER_DATA_DIR
 }
 
 function runImportParse (text, format = 'auto') {

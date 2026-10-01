@@ -9,6 +9,7 @@ const dayjs = require('dayjs')
 // node_modules/electron-log, so fall back to a no-op logger instead of crashing at require time
 let log
 try { log = require('electron-log') } catch { log = { info () {}, warn () {}, error () {} } }
+require('./log-isolation') // test isolation: redirect electron-log file transport into TODO_DB_DIR/TODO_USER_DATA_DIR
 
 // ===== Tomato focus ledger: formal row storage (2026-09-04 root fix, plan_chips same pattern) =====
 // Single source of truth for the ledger; LS keeps only timer transient state. All writers (main window / float window / CLI) go through these atomic ops,

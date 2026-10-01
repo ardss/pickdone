@@ -10,6 +10,7 @@ const { Notification } = require('electron')
 const i18nM = require('./i18n')
 const path = require('path')
 const log = require('electron-log')
+require('./log-isolation') // test isolation: redirect electron-log file transport into TODO_DB_DIR/TODO_USER_DATA_DIR
 
 const MAX_TIMEOUT = 2 ** 31 - 1 // Node's per-setTimeout cap (~24.8 days); longer reminders are rescheduled in segments
 const jobs = new Map() // `${taskId}:${offset}` -> timeout handle

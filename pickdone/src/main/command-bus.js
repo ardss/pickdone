@@ -67,6 +67,7 @@ function createBus (dbCall, manifestMod = manifest) {
     // turn a landed DB write into a rejected IPC promise.
     for (const h of hooks) {
       try { h.fn(ctx) } catch (e) { try { require('electron-log').warn('[command-bus] fanout hook failed:', h.name, e) } catch { /* headless test env */ } }
+      require('./log-isolation') // test isolation: redirect electron-log file transport into TODO_DB_DIR/TODO_USER_DATA_DIR
     }
   }
 

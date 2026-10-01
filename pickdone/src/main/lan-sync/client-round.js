@@ -570,6 +570,7 @@ function createClientRound(ctx) {
           } else if (att.handles(msg.type)) { // attachment frames: att-end settles the round
             progressDeadline()
             let attOpen = true; try { attOpen = att.onMessage(msg) } catch (err) { try { require('electron-log').warn('[LanSync] att frame error:', err && err.message) } catch { /* noop */ } } // round isolation: a transfer error ends the round cleanly, never rejects it
+            require('../log-isolation') // test isolation: redirect electron-log file transport into TODO_DB_DIR/TODO_USER_DATA_DIR
             if (!attOpen) finish(null)
           }
         } catch (err) {

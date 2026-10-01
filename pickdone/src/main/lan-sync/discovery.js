@@ -235,6 +235,7 @@ function createDiscovery() {
           for (const target of targets) {
             try { udp.send(payload, target, '255.255.255.255', () => {}) } catch (e) {
               try { require('electron-log').warn('[LanSync] UDP fallback send failed:', e && e.message) } catch { /* noop */ }
+              require('../log-isolation') // test isolation: redirect electron-log file transport into TODO_DB_DIR/TODO_USER_DATA_DIR
             }
           }
         }, FALLBACK_INTERVAL_MS)
