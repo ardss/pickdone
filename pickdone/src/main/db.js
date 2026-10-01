@@ -166,6 +166,10 @@ CREATE TABLE IF NOT EXISTS todos (
 CREATE INDEX IF NOT EXISTS idx_todos_day       ON todos (deleted, scheduledDay);
 CREATE INDEX IF NOT EXISTS idx_todos_status    ON todos (status);
 CREATE INDEX IF NOT EXISTS idx_todos_repeat    ON todos (recurGroupId);
+-- D13 #10: the repeat-renewal unique partial index lives in migration v9 (db-migrations.js),
+-- NOT here: SCHEMA.exec runs BEFORE the migrator loop, so an existing DB that still carries
+-- pre-dedupe duplicate (recurGroupId, scheduledDay) rows would throw right here and fail the
+-- whole init. v9 dedupes first, then creates the index.
 CREATE INDEX IF NOT EXISTS idx_todos_category  ON todos (deleted, categoryId, scheduledDay);
 CREATE INDEX IF NOT EXISTS idx_todos_complete  ON todos (deleted, complete, scheduledDay);
 CREATE INDEX IF NOT EXISTS idx_todos_reminder  ON todos (remindAt);
@@ -421,6 +425,18 @@ function initInner (userDataPath) {
     db.pragma(`key='${key}'`)
   }
 
+  // [D13 #10] repeat-day uniqueness re-ensure (idempotent): must run AFTER the encryption
+  // finalization — the fresh-install path deletes the plaintext handle (which had just run
+  // migration v9) and recreates the DB from SCHEMA, which would drop a migration-created
+  // index. The dedupe UPDATE is a no-op once the index exists. Skipped when the C2 test seam
+  // overrides the migration list (a test booting without v9 wants a genuinely index-less DB).
+  if (!migrationsOverride) {
+    try {
+      const buildMigrations = require('./db-migrations')
+      if (typeof buildMigrations.ensureRepeatDayUniqueness === 'function') buildMigrations.ensureRepeatDayUniqueness(db)
+    } catch (e) { log.warn('[TodoDB] repeat-day uniqueness ensure failed (non-fatal):', e && e.message) }
+  }
+
   const cols = Object.keys(todoToRow({ taskId: '' }))
   stmts.upsert = db.prepare(`INSERT INTO todos (${cols.join(', ')}) VALUES (${cols.map(c => '@' + c).join(', ')}) ON CONFLICT(id) DO UPDATE SET ${cols.filter(c => c !== 'id').map(c => `${c} = excluded.${c}`).join(', ')}`)
   stmts.getById = db.prepare('SELECT * FROM todos WHERE id = ?')
@@ -607,7 +623,10 @@ const OPS = {
   // nextCliTomatoSeq — two concurrent CLI processes must never mint the same seq or the App's
   // seq dedup would silently drop the second command.
   nextCliSyncSeq: () => Number(db.prepare("INSERT INTO meta (key, value) VALUES ('cliSyncSeq', '1') ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT) RETURNING value").get().value),
-  deleteMeta: k => { db.prepare('DELETE FROM meta WHERE key = ?').run(k); return true },
+  // D13 finding 9: result-aware like hardDelete/settingsRowDelete (D12 Sync-5/6) — deleting an
+  // ABSENT key used to return true unconditionally and mint a phantom ('meta', key) tombstone
+  // delta in the oplog (peers then churned on a key that never changed).
+  deleteMeta: k => { const r = db.prepare('DELETE FROM meta WHERE key = ?').run(k); return r.changes > 0 },
   // P3 2026-09-17: recycle-bin rows are logically gone — counting them made the onboarding
   // "is this a fresh library" check false-positive on a library whose only rows were deleted ones.
   countAll: () => db.prepare('SELECT COUNT(*) n FROM todos WHERE deleted = 0').get().n,
@@ -714,14 +733,9 @@ syncOplogSince: ({ sinceSeq = 0, limit = 2000 } = {}) => db.prepare('SELECT seq,
   // One-time bootstrap: rows created before the oplog existed (any user enabling sync on an existing
   // database) have no change-capture pointers and would never propagate. Idempotent via sync.seedDone; NOT renderer-callable.
   seedSyncOplog: p => require('./db-sync-ops').dispatch('seedSyncOplog', p),
-  // Main-internal: bare oplog pointer backfill for legacy rows (used by the seedSyncOplog seed).
-  appendOplogPointers: rows => {
-    const now = Date.now()
-    const ins = db.prepare('INSERT INTO sync_oplog (entity, entityId, ts) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM sync_oplog WHERE entity = ? AND entityId = ?)')
-    let seeded = 0
-    for (const r of rows || []) seeded += ins.run(r.entity, String(r.id), now, r.entity, String(r.id)).changes
-    return { seeded }
-  },
+  // Main-internal: bare oplog pointer backfill for legacy rows (impl db-oplog.js — D13 size
+  // ratchet; the seed passes per-row real ages, see db-oplog.appendOplogPointers).
+  appendOplogPointers: rows => oplog.appendOplogPointers(rows),
 }
 
 /** 账本变更钩子:任何进程(App 主进程 IPC / CLI 直连)经 call() 落账本写 op 后触发。

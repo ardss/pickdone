@@ -114,7 +114,9 @@ module.exports = Object.assign(({ getDb, log, getPurgeChips, onAppendFailure }) 
       case 'setMetaMany': return arr('meta', (Array.isArray(params) ? params : []).map(p => p && p[0]))
       // H2 2026-09-16: meta deletions were never captured (not in WRITE_OPS, no case here) — a removed
       // meta key could never propagate to other devices. Accepts ('k') or (['k']) argument forms.
-      case 'deleteMeta': return [one('meta', Array.isArray(params) ? params[0] : params)]
+      // D13 finding 9: result-aware like settingsRowDelete (Sync-6) — deleteMeta returns
+      // changes>0, so deleting an ABSENT key (false) emits no phantom ('meta', key) tombstone.
+      case 'deleteMeta': return result === false ? [] : [one('meta', Array.isArray(params) ? params[0] : params)]
       // P2 settings_rows (docs/sync §4.2): row-granular deltas; a no-change put (result false)
       // emits nothing, PutMany's result is the list of keys that actually changed
       case 'settingsRowPut': return result === false ? [] : [one('setting', params && params.key)]
@@ -205,5 +207,24 @@ module.exports = Object.assign(({ getDb, log, getPurgeChips, onAppendFailure }) 
   // r3 fix: read-side for the failure counter (Device Center / tests).
   function oplogStats () { return { appendFailures: oplogAppendFailures } }
 
-  return { oplogEntriesFor, appendOplog, oplogReset, oplogStats, reportAppendFailure }
+  // Main-internal: bare oplog pointer backfill for legacy rows (used by the seedSyncOplog seed
+  // in lan-sync-bootstrap; D13 size-ratchet move out of db.js, behavior unchanged).
+  // D13 finding 6: a row may carry an explicit `ts` — the seed passes each row's REAL age where
+  // the entity stores one (todos updateTime, categories/plan/filter updatedAt) and the
+  // epoch-oldest 1 for meta keys (no stored age exists; any genuine peer edit then wins the next
+  // LWW round, same doctrine as the D11 category-restore stamp). The old blanket Date.now()
+  // stamped every legacy pointer newest-here, so enabling sync on an existing DB made each
+  // device's legacy meta keys outrank a peer's genuinely older-but-real edits.
+  function appendOplogPointers (rows) {
+    const now = Date.now()
+    const ins = getDb().prepare('INSERT INTO sync_oplog (entity, entityId, ts) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM sync_oplog WHERE entity = ? AND entityId = ?)')
+    let seeded = 0
+    for (const r of rows || []) {
+      const ts = Number(r.ts) > 0 ? Number(r.ts) : now
+      seeded += ins.run(r.entity, String(r.id), ts, r.entity, String(r.id)).changes
+    }
+    return { seeded }
+  }
+
+  return { oplogEntriesFor, appendOplog, oplogReset, oplogStats, reportAppendFailure, appendOplogPointers }
 }, { SYNC_OPLOG_KEEP, oplogKeepLimit })

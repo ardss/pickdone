@@ -372,7 +372,7 @@ function persist (state) {
   }, 2000)
 }
 
-import { mirrorToDb, restoreFromDb, DB_MIRROR_ERROR } from '../utils/dbMirror.js'
+import { mirrorToDb, restoreFromDb, DB_MIRROR_ERROR, consumeUnflushed } from '../utils/dbMirror.js'
 
 // P1 (D5 2026-09-20) quit-flush: direct `commit('settings/updateSettings')` paths (component shortcuts,
 // CLI-watcher apply, LAN-sync) bypass the `settings/update` action, and both the 150ms LS timer and the
@@ -560,6 +560,16 @@ export default {
           }
         }
       } catch (e) { /* degraded host: keep defaults */ }
+      // [D13 #12] unflushed-mirror parking: the previous session gave up mirroring this key after
+      // its retry budget — the LS copy is NEWER than whatever reached the DB. DB-precedence
+      // assumes the mirror actually landed; when it provably did not, prefer LS (already live in
+      // state) and re-mirror it with a fresh retry budget instead of letting the stale DB blob
+      // drown it. The marker is consumed (cleared) here; a landed write retires it (dbMirror).
+      const parked = consumeUnflushed('db.settingsState')
+      if (parked && parked.blob) {
+        mirrorToDb('db.settingsState', { ...state, _savedAt: Date.now(), schemaV: SETTINGS_SCHEMA_V })
+        return
+      }
       const db = await restoreFromDb('db.settingsState')
       // F-C4: a READ ERROR (bridge present but getMeta rejected / blob unparseable) is NOT "no
       // mirror" — the old code fell through to the mirrorToDb below and drowned a possibly newer
@@ -570,8 +580,19 @@ export default {
       }
       let lsAt = 0
       try { lsAt = Number(localStorage.getItem(MIRROR_AT_KEY) || 0) } catch (e) { /* empty */ }
-      if (!db || typeof db !== 'object' || (db._savedAt || 0) <= lsAt) {
-        mirrorToDb('db.settingsState', { ...state, _savedAt: Date.now(), schemaV: SETTINGS_SCHEMA_V })
+      // D13 finding 15 (two-part fix):
+      // (a) ties resolve in DB's favor (`<`, not `<=`): an equal stamp makes the DB branch a
+      //     canonical no-op or an honest restore, never a stale-LS write-back.
+      // (b) when the write-back branch runs while a DB blob exists, the mirrored doc carries the
+      //     PRIOR db._savedAt instead of a fresh now(): that stamp is the BRIDGE GATE the
+      //     db-sync-schema setMeta mirror reads (gateTs = _savedAt), so putRow can still skip
+      //     settings_rows newer than the pre-write-back snapshot instead of re-aging
+      //     peer-applied rows to now (a crash between sync-apply and the next persist used to
+      //     drown the peer's edit with gateTs=now, which skips nothing).
+      const priorStamp = (db && typeof db === 'object') ? Number(db._savedAt) : NaN
+      if (!db || typeof db !== 'object' || (db._savedAt || 0) < lsAt) {
+        const gateStamp = Number.isFinite(priorStamp) && priorStamp > 0 ? priorStamp : Date.now()
+        mirrorToDb('db.settingsState', { ...state, _savedAt: gateStamp, schemaV: SETTINGS_SCHEMA_V })
         return
       }
       // Downgrade protection: reject import when the DB mirror's schemaV is higher than the version this code supports (prevents "new config poured into old code" misreads), same semantics as dbRecovery.parseSegment;
