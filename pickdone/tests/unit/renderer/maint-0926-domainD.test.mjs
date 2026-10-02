@@ -313,7 +313,10 @@ async function loadTagsModal () {
     .replace(/,\s*opts\?:\s*\{[^}]*\}/g, ', opts')
     .replace(/\):\s*RegExp(\s*\{)/g, ') {')
   const code = 'const defineComponent = x => x\n' +
+    'if (!globalThis.window.Vue) globalThis.window.Vue = { h: () => ({}) } // D15-A8 undo-toast render stub\n' +
     'const extractTags = (c, d) => ((String(c || "") + " " + String(d || "")).match(/#([^\\s#,，。.!?！？]+)/g) || []).map(s => s.slice(1))\n' +
+    // D15-A8: removeTag now ends in the app-wide undo toast (stubbed; recorded on globalThis.__undoToasts)
+    'const showUndoToast = (messageFn, children) => { (globalThis.__undoToasts = globalThis.__undoToasts || []).push(children); return messageFn({ type: "success", message: children }) }\n' +
     script.replace('export default', 'export default')
   const mod = await import('data:text/javascript,' + encodeURIComponent(code))
   return mod.default
@@ -362,16 +365,18 @@ test('[tags-rewrite] removeTag dispatches removeUserTag + success toast when eve
   const self = {
     ...component.methods,
     $store: {
-      state: { todo: { todoList: [{ taskId: 't1', taskContent: 'a #work', taskDescribe: '' }] } },
+      state: { todo: { todoList: [{ taskId: 't1', taskContent: 'a #work', taskDescribe: '' }], recycleList: [] } },
       dispatch: (a, p) => { dispatches.push([a, p]); return Promise.resolve() }
     },
     $confirm: () => Promise.resolve(),
-    $message: { success: m => toasts.success.push(m), error: m => toasts.error.push(m), warning: () => {} },
+    $message: { success: m => toasts.success.push(m), error: m => toasts.error.push(m), warning: () => {}, closeAll: () => {}, bind: () => () => {} },
     $t: k => k
   }
+  globalThis.__undoToasts = []
   await component.methods.removeTag.call(self, { name: 'work', count: 1 })
   assert.equal(dispatches.filter(([a]) => a === 'ui/removeUserTag').length, 1, 'bookkeeping runs on full success')
-  assert.equal(toasts.success.length, 1)
+  // D15-A8: the delete acknowledgement is the undo toast, not a plain success toast
+  assert.equal(globalThis.__undoToasts.length, 1)
   assert.equal(toasts.error.length, 0)
 })
 

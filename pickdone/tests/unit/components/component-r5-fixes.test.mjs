@@ -117,7 +117,9 @@ test('CompletedView: help tip popover keyboard/touch reachable (click trigger + 
   assert.ok(ref, 'popover reference found')
   assert.match(ref[0], /tabindex="0"/)
   assert.match(ref[0], /role="button"/)
-  assert.match(ref[0], /@keydown\.enter\.prevent/)
+  // D15-A13: Enter-only became the shared roleButtonActivate handler (Enter AND Space, ARIA
+  // button pattern) — the reachability contract this test pins is a superset now
+  assert.match(ref[0], /@keydown="onTipKey"/)
   assert.match(ref[0], /statsC\.Completed\.tipAria/)
 })
 
