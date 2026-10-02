@@ -256,6 +256,7 @@ CREATE TABLE IF NOT EXISTS sync_revisions (
   createdAt      INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_sync_revisions_entity ON sync_revisions(entityId, hlcPhysical, hlcLogical);
+CREATE INDEX IF NOT EXISTS idx_sync_revisions_hlc ON sync_revisions(hlcPhysical DESC, hlcLogical DESC);
 CREATE TABLE IF NOT EXISTS sync_revision_payloads (
   revisionId TEXT PRIMARY KEY,
   payload    TEXT NOT NULL

@@ -19,7 +19,7 @@ const revisions = db.__revisionsForTests
 
 db.init(process.env.TODO_DB_DIR)
 
-test('retention: superseded payloads are pruned, current payload + ancestry survive', () => {
+test('retention: superseded payloads are pruned, current payload + ancestry survive', async t => {
   assert.equal(db.call('revisionsFlagState').on, false)
   db.call('revisionsFlag', { on: true })
 
@@ -28,6 +28,10 @@ test('retention: superseded payloads are pruned, current payload + ancestry surv
     db.call('upsert', { taskId: 'churn', title: 'edit #' + i, createdAt: 1, updatedAt: 1000 + i })
   }
   db.call('upsert', { taskId: 'churn', title: FINAL_TITLE, createdAt: 1, updatedAt: 9999 })
+
+  // perf-sync-revisions-prune-inline-write-stall: the prune is deferred via setImmediate (out of
+  // the write hot path), so yield one macrotask turn before asserting the post-prune bounds.
+  await new Promise(resolve => setImmediate(resolve))
 
   const keep = revisions.payloadKeep()
   assert.equal(keep, 20)

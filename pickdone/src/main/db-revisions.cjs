@@ -119,25 +119,40 @@ module.exports = function createRevisionRecorder ({ getDb, log }) {
       saveClock(d)
     })
     run()
-    prunePayloads(d)
+    // perf-sync-revisions-prune-inline-write-stall (P3, symptom of "v2 write path does synchronous
+    // maintenance inline"): the prune (per-write COUNT + bulk DELETE) used to run inside record(),
+    // stalling every write behind maintenance work. It already runs strictly AFTER the commit, and
+    // exportToStore tolerates pruned payloads (ancestry-only rows are skipped), so deferring it to
+    // setImmediate keeps the write hot path clean without changing retention semantics.
+    setImmediate(() => prunePayloads(d))
     return { recorded }
   }
 
   /** Retention GC: drop payloads of non-current revisions outside the recent-keep window.
    *  Never throws into the write path — a failed prune only means one more cycle of growth. */
+  const PRUNE_CHUNK = 2000
   function prunePayloads (d) {
     const keep = payloadKeep()
     try {
       const n = d.prepare('SELECT COUNT(*) n FROM sync_revision_payloads').get().n
       if (n <= keep + Math.floor(keep / 4)) return 0
-      return d.prepare(`DELETE FROM sync_revision_payloads WHERE revisionId IN (
+      // Chunked so even a deferred prune of a very large backlog stays bounded per statement.
+      const del = d.prepare(`DELETE FROM sync_revision_payloads WHERE revisionId IN (
         SELECT p.revisionId FROM sync_revision_payloads p
         JOIN sync_revisions r ON r.revisionId = p.revisionId
         WHERE p.revisionId NOT IN (SELECT revisionId FROM sync_revision_current)
           AND p.revisionId NOT IN (
             SELECT revisionId FROM sync_revisions ORDER BY hlcPhysical DESC, hlcLogical DESC LIMIT ?
           )
-      )`).run(keep).changes
+        LIMIT ?
+      )`)
+      let total = 0
+      let changes
+      do {
+        changes = del.run(keep, PRUNE_CHUNK).changes
+        total += changes
+      } while (changes >= PRUNE_CHUNK)
+      return total
     } catch (e) {
       log && log.warn && log.warn('[db-revisions] payload prune failed (non-fatal): ' + (e && e.message))
       return 0
