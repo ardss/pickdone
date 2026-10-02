@@ -95,6 +95,27 @@ module.exports = function attachmentHandlers (ctx) {
       try { attachments.pruneMissingAliases() } catch { /* best-effort */ }
       return true
     },
+    // Perf (purge batch): ONE IPC for a batch of purging tasks instead of one delete-todo-files
+    // IPC per id (each of which did its own readdir). Same ownership rule, same gates, one
+    // readdir for the whole batch. Returns the number of files actually unlinked.
+    'delete-todo-files-many': (e, taskIds) => {
+      assertMainWindow(e) // D6 P2 (2026-09-21): destructive channel, main-window-only like delete-todo-files
+      if (isLocked()) throw new Error('locked')
+      if (!Array.isArray(taskIds) || !taskIds.length) return 0
+      const idStrs = taskIds.map(String)
+      const dir = attachDir()
+      const { ownsAttachmentFile } = require('./shared')
+      const failures = []
+      let deleted = 0
+      for (const f of fs.readdirSync(dir)) {
+        if (!idStrs.some(taskId => ownsAttachmentFile(f, taskId))) continue
+        try { fs.unlinkSync(path.join(dir, f)); deleted++ } catch (err) { if ((err && err.code) !== 'ENOENT') failures.push(f + ': ' + String((err && err.message) || err)) }
+      }
+      if (failures.length) throw new Error('delete-todo-files-many failed: ' + failures.join('; '))
+      // Same alias-map cleanup contract as delete-todo-files (see its comment above).
+      try { attachments.pruneMissingAliases() } catch { /* best-effort */ }
+      return deleted
+    },
     // Custom white noise: copied into userData/files right after picking (reachable via the local:// protocol with Range support, so it can actually play during focus;
     // the old version returned only an absolute path, which the app:// page could not load → picking was equivalent to not picking). Fixed-name overwrite; the directory keeps only the latest file.
     'select-user-white-noise-audio-file': async (e) => {

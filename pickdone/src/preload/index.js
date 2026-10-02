@@ -92,6 +92,7 @@ contextBridge.exposeInMainWorld('todoAPI', {
   openFile: url => invoke('open-file', url),
   deleteFile: url => invoke('delete-file', url),
   deleteTodoFilesRelevant: id => invoke('delete-todo-files', id), // clean up attachments when a task is permanently deleted
+  deleteTodoFilesMany: ids => invoke('delete-todo-files-many', ids), // batch twin — one IPC for a multi-id purge
 
   // ---- Running-tomato cross-device announcements (feature: live remote focus chip) ----
   // Report a local focus transition (start/attach change/give up/complete) to the main
