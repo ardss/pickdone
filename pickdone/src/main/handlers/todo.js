@@ -162,6 +162,22 @@ module.exports = function todoHandlers (ctx) {
           const id = String(Array.isArray(params) ? params[0] : params)
           hardDeleteFiles = collectOwnedAttachmentFiles(attachDir, id)
         } catch (err) { log.warn('[IPC] hardDelete attachment collect failed (files may be orphaned):', err) }
+        // Lifecycle (2026-10-02): files BEFORE the commit — the unlink used to run only AFTER the
+        // bus commit landed, i.e. rows-before-files, the exact order main-ipc-8 rejected for the
+        // db:purge-recycle-bin channel: a failed/interrupted unlink (or a crash between commit and
+        // unlink) orphans the private file with its owning row already gone — nothing can ever
+        // reach it again. The inverse residual (commit fails after files deleted) is the accepted
+        // direction: recycle-bin/live rows survive pointing at missing files and the renderer's
+        // missing-file guard shows "not yet synced" (benign). Per-file failures stay warn-only.
+        // The alias prune rides the same sweep: entries whose target file just died must not keep
+        // resolving the dead key forever.
+        if (hardDeleteFiles && hardDeleteFiles.length) {
+          const dir = attachDir()
+          for (const f of hardDeleteFiles) {
+            try { fs.unlinkSync(path.join(dir, f)) } catch (err) { if ((err && err.code) !== 'ENOENT') log.warn('[IPC] hardDelete attachment file removal failed (pre-commit):', f, err) }
+          }
+          try { require('../attachments').pruneMissingAliases() } catch { /* alias prune is best-effort */ }
+        }
       }
       // Phase-1 command bus: every manifest write op goes through bus.commitOp (validation +
       // updatedAt stamping + post-commit fanout). Reads and not-yet-manifested ops keep the
@@ -187,14 +203,8 @@ module.exports = function todoHandlers (ctx) {
       // inline line stays as defense-in-depth for any future write path not yet on the manifest
       // (idempotent pure-core re-baseline, r4 guard test pins the wiring).
       if (dbm.isWriteOp(op)) { try { const rw = resyncDbWatch(); if (rw) rw() } catch { /* best-effort */ } }
-      // P3 (R4 2026-09-21): the write landed — drop the attachment files collected before the row
-      // deletion (files-before-rows order, same as db:purge-recycle-bin). Already-gone is success.
-      if (hardDeleteFiles && hardDeleteFiles.length) {
-        const dir = attachDir()
-        for (const f of hardDeleteFiles) {
-          try { fs.unlinkSync(path.join(dir, f)) } catch (err) { if ((err && err.code) !== 'ENOENT') log.warn('[IPC] hardDelete attachment file removal failed:', f, err) }
-        }
-      }
+      // Lifecycle (2026-10-02): the owned-file removal moved ABOVE the bus commit (files-before-
+      // rows, see the comment at the collect site) — nothing left to do here.
       // App-side audit: renderer-initiated writes append to the same JSONL trail the CLI writes
       // (userData/cli-audit.jsonl). No double-logging: CLI write commands hit db.js directly inside the
       // CLI process and never pass through this IPC handler. The settings mirror blob (setMeta

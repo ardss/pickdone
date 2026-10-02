@@ -89,6 +89,10 @@ module.exports = function attachmentHandlers (ctx) {
         try { fs.unlinkSync(path.join(dir, f)) } catch (err) { if ((err && err.code) !== 'ENOENT') failures.push(f + ': ' + String((err && err.message) || err)) }
       }
       if (failures.length) throw new Error('delete-todo-files failed: ' + failures.join('; '))
+      // Lifecycle (2026-10-02): the bulk unlink must also drop alias-map entries whose target
+      // file just died (same cleanup the single delete-file path does per key) — a stale entry
+      // keeps resolving the dead key to a missing file and blocks the missing-file re-pull.
+      try { attachments.pruneMissingAliases() } catch { /* best-effort */ }
       return true
     },
     // Custom white noise: copied into userData/files right after picking (reachable via the local:// protocol with Range support, so it can actually play during focus;

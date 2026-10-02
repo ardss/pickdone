@@ -94,7 +94,10 @@ function makeSyncKick (notify, { timerMs = 750, setTimeout: st = setTimeout, cle
 // re-exported here so every existing consumer (handlers/*, tests) keeps its import path.
 const { ownsAttachmentFile } = require('../attachment-ownership')
 
-/** Purge disk attachments after hard delete (filename prefix = taskId_, same rule as saveAttachment): warn-only on failure, never blocking */
+/** Purge disk attachments after hard delete (filename prefix = taskId_, same rule as saveAttachment): warn-only on failure, never blocking.
+ *  Lifecycle (2026-10-02): after the bulk unlink the device-local alias map is pruned — entries
+ *  whose target file this purge just removed must die with it, or they keep resolving the dead
+ *  logical key to a missing file forever (leak + blocks the missing-file re-pull). */
 function purgeAttachmentFiles (attachDir, ids) {
   if (!ids || !ids.length) return
   try {
@@ -104,6 +107,7 @@ function purgeAttachmentFiles (attachDir, ids) {
         try { fs.unlinkSync(path.join(dir, f)) } catch (err) { log.warn('[Purge] 附件删除失败:', f, err.message) }
       }
     }
+    try { require('../attachments').pruneMissingAliases() } catch { /* alias prune is best-effort */ }
   } catch (err) { log.warn('[Purge] 附件目录遍历失败:', err.message) }
 }
 
