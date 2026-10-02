@@ -55,6 +55,9 @@ function packReminders (offsets, extra) {
 /** Row -> app object */
 function rowToTodo (r) {
   if (!r) return null
+  // Parse r.reminders once per row (perf-rowtotodo-double-reminders-parse): parseOffsets
+  // itself called parseReminders, so non-null reminder rows paid two JSON.parse calls.
+  const rm = parseReminders(r.reminders)
   return {
     taskId: r.id,
     userId: r.userId,
@@ -70,8 +73,8 @@ function rowToTodo (r) {
     todoTime: r.scheduledAt,
     dayStart: r.scheduledDay,
     reminderTime: r.remindAt || 0,
-    reminderOffsets: parseOffsets(r.reminders),
-    reminderExtra: parseReminders(r.reminders).x,
+    reminderOffsets: rm.o,
+    reminderExtra: rm.x,
     taskSort: r.sort,
     estimate: r.focusMinutes,
     difficulty: r.difficulty,
