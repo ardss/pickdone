@@ -6,6 +6,19 @@ const tomatoFloat = require('../tomato-float')
 const tomatoTaskbar = require('../tomato-taskbar')
 const { makeAssertMainWindow, stripForbiddenSettingsKeys } = require('./shared')
 
+// Response-shaped projector for outbound config: stripForbiddenSettingsKeys only cleans the
+// INBOUND patch, but writeConfig returns the FULL merged on-disk config (config-store.js
+// mergeConfig(readConfig(), patch)), so returning it verbatim from a write handler hands the
+// security-lock ciphertext + plaintext recovery question back to the calling window — the exact
+// material the get-settings read path (below) is documented to never send down. Any handler that
+// returns a config to a renderer must pass it through this first.
+function sanitizeConfigOut (c) {
+  if (!c || typeof c !== 'object') return c
+  delete c.securityLockPassword
+  delete c.securityLockQuestion
+  return c
+}
+
 module.exports = function settingsHandlers (ctx) {
   const { readConfig, writeConfig, app, getMainWindow, applyShortcuts, rebuildTrayMenu, getTray } = ctx
   const assertMainWindow = makeAssertMainWindow(getMainWindow)
@@ -40,7 +53,7 @@ module.exports = function settingsHandlers (ctx) {
       // taskbar setBaseTitle precedent); only the main window's title is the plain appName.
       try { if (!main.isDestroyed()) main.setTitle(i18nM.mt('appName')) } catch (err) { /* dying window */ }
       try { tomatoTaskbar.setBaseTitle(i18nM.mt('appName')) } catch (err) { /* taskbar module keeps its previous base */ }
-      return c
+      return sanitizeConfigOut(c)
     },
     'notify-settings-updated': (e, patch) => {
       // 写配置限主窗;浮窗白噪音选择是合法写入(浮窗内 settings/update 走此通道),放行浮窗自身(2026-09-05 终审 P1)
@@ -78,7 +91,7 @@ module.exports = function settingsHandlers (ctx) {
       if ('runWhenComputerStart' in clean) {
         try { app.setLoginItemSettings({ openAtLogin: !!clean.runWhenComputerStart }) } catch (err) { log.warn(err) }
       }
-      return c
+      return sanitizeConfigOut(c)
     }
   }
 }
