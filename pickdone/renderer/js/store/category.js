@@ -60,8 +60,18 @@ function toRow (c, { restore = false } = {}) {
  *       changes, so even a full-list caller rewrites only the rows that actually moved. A failed commit is
  *       not remembered, so the next persist retries it (LS is already updated — SQLite must converge). */
 const lastPersistedRows = new Map() // categoryId → JSON of the row last committed successfully
+// Exported read-only for the leak regression (see pendingMetaBackups below): keys must track the live list.
+export { lastPersistedRows }
+/** Leak fix (dw wave 2026-10-02): the diff baseline kept an entry for every id ever persisted, even
+ *  after the row left the list (purged tombstone, hard delete) — unbounded growth over a long session.
+ *  Every persist()/setListFromDb() caller passes the FULL list, so a key absent from it is dead. */
+function prunePersistBaseline (list) {
+  const live = new Set(list.map(c => c.categoryId))
+  for (const id of [...lastPersistedRows.keys()]) if (!live.has(id)) lastPersistedRows.delete(id)
+}
 function persist (list, opts = {}) {
   safeSet(LS_KEY, JSON.stringify({ list }))
+  prunePersistBaseline(list)
   try {
     // Failures must be visible: LS is already updated above, so a silent per-row catch meant the user
     // believed categories were saved while SQLite (the CLI-visible authority) silently diverged
@@ -103,11 +113,25 @@ const PROJECT_IDS_KEY = 'projectCategoryIds'
  *  other. Per-cat flags sync field-granular; the legacy blob is READ-ONLY now (U7, 2026-09-20: the
  *  renderer never writes it anymore — init() still unions it so old data survives). */
 const projectFlagKey = id => 'projectCategoryFlag:' + id
-function writeProjectFlag (id, flag) {
+/** Error-safety fix (dw wave 2026-10-02): a failed meta put/delete used to vanish into
+ *  `.catch(() => {})` — the in-memory projectIds said "project flagged" while the durable per-cat
+ *  flag said otherwise, so the project silently resurrected (failed delete) or silently vanished
+ *  (failed put) at next init. The failure is now surfaced AND `onFail` lets the caller revert the
+ *  in-memory state to match what is actually durable (D13-A4 / D14-B7 pattern). */
+function writeProjectFlag (id, flag, onFail) {
   try {
-    if (flag) commitCommand("meta", "put", [projectFlagKey(id), '1']).catch(() => {})
-    else commitCommand("meta", "delete", projectFlagKey(id)).catch(() => {})
-  } catch (e) { /* degraded host */ }
+    const p = flag
+      ? commitCommand("meta", "put", [projectFlagKey(id), '1'])
+      : commitCommand("meta", "delete", projectFlagKey(id))
+    p.catch(e => {
+      console.error('[category] project flag write failed for', id, flag ? '(put)' : '(delete)', e)
+      if (typeof onFail === 'function') { try { onFail(e) } catch (e2) { /* revert must not throw */ } }
+    })
+  } catch (e) {
+    // degraded host: the durable write never even started, so the in-memory flip is a lie too
+    console.error('[category] project flag write unavailable (degraded host) for', id, e)
+    if (typeof onFail === 'function') { try { onFail(e) } catch (e2) { /* revert must not throw */ } }
+  }
 }
 const deadlineKey = id => 'projectDeadline:' + id
 /** Project lifecycle status (contract shared with the CLI): string active|paused|done|cancelled, absent = 'active' */
@@ -126,6 +150,9 @@ const catMetaBakKey = id => 'catProjectMetaBak.' + id
  *  promise before restoring, so the category only becomes recoverable once its meta is safely
  *  backed up (or provably absent). */
 const pendingMetaBackups = new Map()
+// Exported read-only for the leak regression (r5/r6 precedent of exporting internals for tests):
+// the map must hold only IN-FLIGHT roundtrips, never settled promises of never-recovered victims.
+export { pendingMetaBackups }
 /** renderer-5 (sharp-review 2026-09-22): pendingMetaBackups above is per-window module state, so a
  *  recover in window B never sees window A's in-flight delete-time backup and used to read the backup
  *  key before A's write landed — deadline/milestones/status permanently lost. A durable in-DB marker
@@ -136,10 +163,16 @@ const pendingMetaBackups = new Map()
 const pendingMetaBakKey = id => 'catProjectMetaBak.pending.' + id
 const PENDING_META_BAK_WAIT_MS = 3000
 function markPendingMetaBak (id) {
-  try { commitCommand('meta', 'put', [pendingMetaBakKey(id), '1']).catch(() => {}) } catch (e) { /* degraded host */ }
+  // Error-safety fix: this marker is the cross-window gate that keeps recover from reading the
+  // backup key before the roundtrip wrote it (renderer-5). A failed write previously vanished into
+  // `.catch(() => {})` — recover could then proceed up to PENDING_META_BAK_WAIT_MS early and read a
+  // not-yet-written backup. Surfaced loudly; the bounded wait stays the last-line guard.
+  try { commitCommand('meta', 'put', [pendingMetaBakKey(id), '1']).catch(e => console.error('[category] pending-meta-backup MARKER write failed for', id, '— cross-window recover may race the backup roundtrip:', e)) } catch (e) { console.error('[category] pending-meta-backup marker unavailable (degraded host) for', id, e) }
 }
 function clearPendingMetaBak (id) {
-  try { commitCommand('meta', 'delete', pendingMetaBakKey(id)).catch(() => {}) } catch (e) { /* degraded host */ }
+  // A failed clear is tolerated (waitOutPendingMetaBak's bounded wait clears stale markers), but it
+  // must not be invisible: every recover of this id would otherwise burn the full 3s wait silently.
+  try { commitCommand('meta', 'delete', pendingMetaBakKey(id)).catch(e => console.warn('[category] pending-meta-backup marker clear failed for', id, '(bounded wait will clear it):', e)) } catch (e) { /* degraded host: no marker to clear */ }
 }
 /** Resolves once the durable marker is gone (backup roundtrip finished in whichever window) or the
  *  bounded wait expires — a leaked marker (crash mid-roundtrip) must not wedge recover forever, so the
@@ -375,6 +408,7 @@ export default {
      *  real user edit after load commits just that row, not the whole list re-synced. */
     setListFromDb (state, list) {
       state.list = list
+      prunePersistBaseline(list)
       for (const c of list) lastPersistedRows.set(c.categoryId, JSON.stringify(toRow(c)))
     },
     addCategory (state, { categoryName = 'New Category', categoryColor = COLOR_PALETTE[state.list.length % COLOR_PALETTE.length], folderIs = false, folderId = 0 }) {
@@ -403,7 +437,12 @@ export default {
         const p = Promise.resolve().then(() => backupThenClearProjectMeta(vid))
         markPendingMetaBak(vid) // durable cross-window marker: written BEFORE the roundtrip's reads
         pendingMetaBackups.set(vid, p)
-        p.catch(() => {}) // backupThenClear never throws by design; guard against unhandled rejections anyway
+        // Leak fix (dw wave 2026-10-02): the entry used to be deleted ONLY in recover(), so a victim
+        // never recovered (purged, or recovered in another window) kept its settled promise — with its
+        // closure — alive forever. A settled promise needs no awaiting: recover falls through
+        // Promise.resolve(undefined) to waitOutPendingMetaBak, whose DURABLE marker (cleared only when
+        // the backup roundtrip finished) remains the correctness gate.
+        p.catch(() => {}).then(() => { if (pendingMetaBackups.get(vid) === p) pendingMetaBackups.delete(vid) })
         delete state.projectMeta[vid]
       }
       // D5 (2026-09-20): purge saved filters whose conds.catId references a victim — a filter on a
@@ -436,10 +475,22 @@ export default {
      *  written anymore EXCEPT the sanctioned U-5 unmark rewrite below; caller removes the flag first
      *  when a category is deleted) */
     setProject (state, { id, flag }) {
-      const ids = state.projectIds.filter(x => x !== id)
+      const prev = state.projectIds
+      const ids = prev.filter(x => x !== id)
       if (flag) ids.push(id)
       state.projectIds = ids
-      writeProjectFlag(id, flag) // Y/X3: field-granular unit — the only persisted/synced write
+      // Error-safety fix: on a failed durable flag write the in-memory flip is reverted to match what
+      // is actually on disk (previously the optimistic list survived while the durable flag did not —
+      // the project silently vanished/resurrected at next init with zero feedback). One write, one
+      // failure callback — no identity guard (a reactive proxy never === the raw array).
+      let flagWriteFailed = false
+      writeProjectFlag(id, flag, () => {
+        if (flagWriteFailed) return
+        flagWriteFailed = true
+        state.projectIds = flag
+          ? prev.filter(x => x !== id) // put failed → durable has no flag → drop the id again
+          : (ids.includes(id) ? ids : ids.concat(id)) // delete failed → durable still flagged → keep it
+      }) // Y/X3: field-granular unit — the only persisted/synced write
       if (!flag) rewriteLegacyProjectIdsWithout(id) // U-5: unset must also scrub the stale legacy blob, else init()'s union resurrects the project
     },
     /** U-4 (2026-09-20): recover a soft-deleted category in place and restore its backed-up project
