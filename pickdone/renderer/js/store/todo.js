@@ -5,7 +5,7 @@
 import { genTaskId, nextSort, dayjs, reportError, parsePredecessors } from '../utils/core.js'
 import { wouldCycle, isTaskReady } from '../utils/deps.js'
 import { nextRepeatInstance, isLastRepeatInstance, renewalCarryFields } from '../utils/repeat.js'
-import { setEstimate } from '../utils/tomatoEstimate.js'
+import { setEstimate, pruneEstimates, estimateStateKeys } from '../utils/tomatoEstimate.js'
 import { clearSnapshot } from '../utils/dayPlans.js'
 import { scrubMilestonesForPurged } from '../utils/milestones.js'
 // Cross-cutting concerns, physically split out of this module (pure relocation — the store's action
@@ -314,9 +314,22 @@ export default {
       if (target) {
         // dependency linkage: completing this task may unlock dependents — attach their names so the completion toast can mention it
         try {
-          const newlyReady = state.todoList.filter(t => !t.delete && !t.complete &&
-            parsePredecessors(t.predecessors).includes(todo.taskId) &&
-            isTaskReady(state.todoList.map(x => x.taskId === t.taskId ? { ...x } : x), t))
+          // Perf (toggle-complete dep scan): one O(N) pass parses each row's predecessors ONCE and
+          // feeds both the reverse-dependents index and the readiness check — the old shape ran
+          // ~N + D parsePredecessors invocations per toggle (filter re-parse + isTaskReady re-parse
+          // per dependent) and rebuilt an O(N) byId map for every candidate dependent. The scan
+          // runs BEFORE any mutation, so reading rows directly (no defensive {...x} copy) keeps
+          // the output identical.
+          const live = state.todoList
+          const byId = {}
+          const predsByRow = new Map()
+          for (const x of live) {
+            if (!x.delete) byId[x.taskId] = x
+            predsByRow.set(x, parsePredecessors(x.predecessors))
+          }
+          const newlyReady = live.filter(t => !t.delete && !t.complete &&
+            predsByRow.get(t).includes(todo.taskId) &&
+            isTaskReady(live, t, { byId, predsOf: r => predsByRow.get(r) }))
           if (newlyReady.length) patch._unlocked = newlyReady.map(t => t.taskContent || t.taskId)
         } catch { /* dep info is advisory; never block completion */ }
       }
@@ -547,19 +560,40 @@ export default {
       // Permanently deleted tasks still bound by focus: detach (same as deleteTodo)
       const at = rootState.tomato && rootState.tomato.attachTodo
       if (at && ids.includes(at.taskId)) dispatch('tomato/attach', null, { root: true })
-      // Delete per id and remove locally only the successful ones: Promise.all swallowing errors then hardRemove-ing the whole batch once let failed ids "revive" back into the recycle bin after restart
-      const done = []
-      for (const id of ids) {
-        try { await commitCommand("todo", "hardDelete", id); done.push(id); clearSnapshot(id) } catch (err) { reportError('hardDelete', err) }
+      // Delete per id and remove locally only the successful ones: Promise.all swallowing errors then hardRemove-ing the whole batch once let failed ids "revive" back into the recycle bin after restart.
+      // Perf (purge batch): one hardDeleteMany commit replaces the per-id hardDelete loop — the
+      // server-side bulk op already GCs chips/snow/estimate meta keys per id and returns only the
+      // PHYSICALLY deleted ids (absent ids excluded, same per-id honesty as the old loop). If the
+      // bulk op rejects wholesale (older host / bus error), fall back to the per-id loop so the
+      // failure isolation is preserved.
+      let done = []
+      try {
+        const deleted = await commitCommand("todo", "hardDeleteMany", ids)
+        if (!Array.isArray(deleted)) throw new Error('hardDeleteMany returned no per-id result — falling back to per-id hardDelete')
+        done = deleted.map(String)
+        for (const id of done) clearSnapshot(id)
+      } catch (err) {
+        reportError('hardDeleteMany', err)
+        for (const id of ids) {
+          try { await commitCommand("todo", "hardDelete", id); done.push(id); clearSnapshot(id) } catch (e) { reportError('hardDelete', e) }
+        }
       }
       // [C15 fix] the empty catch here silently orphaned attachment files on disk when cleanup failed
       // (main throws a structured per-file failure list). Log it like the adjacent hardDelete failures;
       // rows are already hard-deleted, so the purge (and the mandatory historyClear below) still proceeds.
-      try { for (const id of done) await window.todoAPI.deleteTodoFilesRelevant?.(id) } catch (err) { reportError('deleteTodoFilesRelevant', err) }
-      // Drop the purged tasks' pomodoro-estimate meta keys (setEstimate(id,0) deletes the key):
-      // MetaGC covers the DB side, this covers the renderer mirror so a recycled numeric id cannot
-      // resurrect a stale estimate (review M-C5)
-      try { for (const id of done) setEstimate(id, 0) } catch {}
+      // Perf (purge batch): ONE delete-todo-files-many IPC for the whole batch instead of a per-id
+      // readdir+unlink IPC each.
+      try { if (done.length && window.todoAPI.deleteTodoFilesMany) await window.todoAPI.deleteTodoFilesMany(done) } catch (err) { reportError('deleteTodoFilesMany', err) }
+      // Drop the purged tasks' pomodoro-estimate meta keys from the renderer mirror: hardDeleteMany
+      // already deleted the DB keys server-side (deleteEstimateKeysFor per id, incl. the legacy
+      // per-id fallback) — MetaGC/DB owns the DB side; pruneEstimates(alive-complement) drops the
+      // local mirror entries so a recycled numeric id cannot resurrect a stale estimate (review M-C5).
+      try {
+        if (done.length) {
+          const purgedSet = new Set(done)
+          pruneEstimates(estimateStateKeys().filter(k => !purgedSet.has(k)))
+        }
+      } catch {}
       if (done.length) {
         // Capture the doomed rows BEFORE hardRemove pulls them out of recycleList
         const purgedCatIds = [...new Set(((state && state.recycleList) || []).filter(t => done.includes(t.taskId)).map(t => t.categoryId).filter(Boolean))]
@@ -601,13 +635,18 @@ export default {
       if (!purged) { dispatch('computeViews'); return false }
       // Attachment cleanup aligned with per-item permanent deletion (the main process's purgeRecycleBin only deletes rows, not files/)
       // [C15 fix, same class as purgeIds] attachment-file cleanup failures are logged, not swallowed
-      try { for (const id of ids) await window.todoAPI.deleteTodoFilesRelevant?.(id) } catch (err) { reportError('deleteTodoFilesRelevant', err) }
+      // Perf (purge batch): ONE delete-todo-files-many IPC for the whole bin instead of a per-id readdir+unlink IPC each.
+      try { if (window.todoAPI.deleteTodoFilesMany) await window.todoAPI.deleteTodoFilesMany(ids) } catch (err) { reportError('deleteTodoFilesMany', err) }
       // Drop the pre-delete chip snapshot meta too (rows are gone, the snapshot can never be restored)
       for (const id of ids) clearSnapshot(id)
       // maint-d7: drop the purged tasks' pomodoro-estimate meta keys too — parity with purgeIds
       // (review M-C5) and the CLI purge path (cli/lib.js deletes ESTIMATE_KEY_PREFIX per row); a
       // recycled numeric taskId used to resurrect a stale estimate on the bulk "empty bin" path.
-      try { for (const id of ids) setEstimate(id, 0) } catch {}
+      // The DB keys are purged server-side by purgeRecycleBin's per-row GC; this prunes the local mirror.
+      try {
+        const purgedSet = new Set(ids)
+        pruneEstimates(estimateStateKeys().filter(k => !purgedSet.has(k)))
+      } catch {}
       // Round-3 P1: the bulk path used to SKIP the milestone scrub purgeIds does — emptying the
       // bin left phantom taskIds in `projectMilestones:<catId>` (an unmet milestone with zero
       // surviving links could flip to 'done', mirroring the D5 bug on the per-item path).
