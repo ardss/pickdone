@@ -170,7 +170,10 @@ class Instance {
 
   spawnProc () {
     this.exitCode = undefined // a boot retry re-spawns the same Instance object
-    this.proc = spawn(ELECTRON_BIN, ['.', '--remote-debugging-port=' + this.cdpPort], {
+    // linux CI (ubuntu-latest) has no user namespaces / GPU: electron needs --no-sandbox and
+    // --disable-gpu or it dies with code=null before the CDP port ever opens (PR #160 evidence)
+    const linuxFlags = process.platform === 'linux' ? ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'] : []
+    this.proc = spawn(ELECTRON_BIN, ['.', ...linuxFlags, '--remote-debugging-port=' + this.cdpPort], {
       cwd: PICKDONE_ROOT,
       stdio: 'ignore',
       env: {
