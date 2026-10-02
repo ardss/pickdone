@@ -451,7 +451,19 @@ function initInner (userDataPath) {
 
 
   const cols = Object.keys(todoToRow({ taskId: '' }))
-  stmts.upsert = db.prepare(`INSERT INTO todos (${cols.join(', ')}) VALUES (${cols.map(c => '@' + c).join(', ')}) ON CONFLICT(id) DO UPDATE SET ${cols.filter(c => c !== 'id').map(c => `${c} = excluded.${c}`).join(', ')}`)
+  // B1 (2026-10-03) — focusMinutes accumulate-vs-replace duality. The renderer's contract
+  // (store todo.js "U-1 write-once at the DB layer") treats focus minutes as MONOTONIC:
+  // the only mutation that ever lowers nothing is bumpSnow's DB-side `focusMinutes = focusMinutes + ?`
+  // (see stmts.bumpSnow below); writers never send a decreasing value. But a whole-row upsert
+  // from a STALE cross-window snapshot (e.g. stampLocalWrite skips its own reload, so the
+  // in-memory row still carries the pre-bump estimate) used to overwrite the accumulated
+  // column back to the old value and sync the erasure. MAX(existing, excluded) preserves the
+  // higher accumulated total: identical to `= excluded` for inserts and fresh writers, and
+  // only ever rejects a DECREASE, which no legitimate writer performs. This is the class root:
+  // focusMinutes is the only todos column with an accumulate-vs-replace duality (every other
+  // column is last-writer-wins by design), so it gets the guard and an explicit contract
+  // comment here rather than a per-call-site workaround.
+  stmts.upsert = db.prepare(`INSERT INTO todos (${cols.join(', ')}) VALUES (${cols.map(c => '@' + c).join(', ')}) ON CONFLICT(id) DO UPDATE SET ${cols.filter(c => c !== 'id').map(c => c === 'focusMinutes' ? 'focusMinutes = MAX(todos.focusMinutes, excluded.focusMinutes)' : `${c} = excluded.${c}`).join(', ')}`)
   stmts.getById = db.prepare('SELECT * FROM todos WHERE id = ?')
   stmts.hardDelete = db.prepare('DELETE FROM todos WHERE id = ?')
   stmts.getMeta = db.prepare('SELECT value FROM meta WHERE key = ?')
