@@ -121,14 +121,27 @@ module.exports = function buildMigrations (syncSchema, migrationsOverride) {
 }
 
 /** Idempotent: collapse duplicate live (recurGroupId, scheduledDay) rows, then create the unique
- *  partial index. Safe to run on every boot (dedupe UPDATE is a no-op once the index exists). */
+ *  partial index. Safe to run on every boot (dedupe UPDATE is a no-op once the index exists).
+ *  D14 C10 (2026-10-02): the survivor used to be `MIN(id)` — correct for legacy integer id rows
+ *  (smallest = first minted) but LEXICOGRAPHIC-ARBITRARY for the current TEXT taskIds (a
+ *  random/uuid id's alphabetically-smallest string has no relation to which instance the repeat
+ *  chain continues from; tombstoning that one can make the visible series swap its anchor).
+ *  Survivor rule is now explicit and deterministic: OLDEST createdAt wins (the first-minted
+ *  instance is the one earlier completions chained from), tie-broken by smallest id so the same
+ *  duplicate set always collapses to the same row on every device/boot. */
 function ensureRepeatDayUniqueness (d) {
   d.exec(`UPDATE todos SET deleted = 1, deletedAt = CASE WHEN deletedAt IS NULL OR deletedAt = 0 THEN ${Date.now()} ELSE deletedAt END
           WHERE deleted = 0 AND recurGroupId IS NOT NULL AND scheduledDay > 0
             AND id NOT IN (
-              SELECT MIN(id) FROM todos
-              WHERE deleted = 0 AND recurGroupId IS NOT NULL AND scheduledDay > 0
-              GROUP BY recurGroupId, scheduledDay
+              SELECT id FROM (
+                SELECT id, ROW_NUMBER() OVER (
+                  PARTITION BY recurGroupId, scheduledDay
+                  ORDER BY createdAt ASC, id ASC
+                ) rn
+                FROM todos
+                WHERE deleted = 0 AND recurGroupId IS NOT NULL AND scheduledDay > 0
+              )
+              WHERE rn = 1
             )`)
   d.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_todos_repeat_day ON todos (recurGroupId, scheduledDay) WHERE deleted = 0 AND recurGroupId IS NOT NULL AND scheduledDay > 0')
 }

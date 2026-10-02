@@ -8,14 +8,14 @@ const fs = require('fs')
 const crypto = require('crypto')
 const LIMITS = require('../../shared/limits.mjs') // focus-duration clamp constants (single source, audit item 4); require(esm) — Node >= 22.12
 const { normalizeContent, rowToTodo, todoToRow, setSyncAuthor, selfSyncAuthor } = require('./db-rows')
-// snowDedup key-cap (R5 P3): replay protection only needs recent keys, so past the cap the
-// older-than-30d entries are pruned (see bumpSnow).
+// snowDedup key-cap (R5 P3): past the cap, older-than-30d entries are pruned (see bumpSnow).
 const SNOW_DEDUP_CAP = 2000
 const SNOW_DEDUP_MAX_AGE_MS = 30 * 24 * 3600 * 1000
 // electron-log only exists inside the packaged App; the standalone CLI (extraResources bundle) has no
 // node_modules/electron-log, so fall back to a no-op logger instead of crashing at require time
 let log
 try { log = require('electron-log') } catch { log = { info () {}, warn () {}, error () {} } }
+require('./log-isolation') // test isolation: file transport -> TODO_DB_DIR/TODO_USER_DATA_DIR
 const oplog = require('./db-oplog')({
   getDb: () => db,
   log,

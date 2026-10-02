@@ -1,6 +1,9 @@
 <template>
-  <!-- Shortcuts: key capture controls (extracted from SettingsModal.vue, W5 wave 1; zero behavior change) -->
   <div class="tab-panel">
+    <!-- The root must stay a single element (no comment before the root div): a comment sibling
+         before the root makes the component root a Fragment and Vue cannot apply the parent's
+         v-show directive in dev builds (dev compiler keeps comments; prod strips them). -->
+    <!-- Shortcuts: key capture controls (extracted from SettingsModal.vue, W5 wave 1; zero behavior change) -->
     <div class="form">
       <div class="form-label">{{ $t('statsE.SettingsModal.shortcutsSection') }}</div>
       <template v-for="sc in shortcutDefs" :key="sc.key">

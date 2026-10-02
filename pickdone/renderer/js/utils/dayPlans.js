@@ -108,8 +108,39 @@ export async function clearSnapshot (taskId) {
   try { await commitCommand("meta", "delete", 'planChipsSnapshot:' + taskId) } catch { /* orphan meta row is harmless */ }
 }
 
-/** Write back snapshot chips when restoring a task */
-export async function restoreSnapshot (taskId) {
+/** D14-C15 (2026-10-01): batch variant of snapshotForDelete — ONE planAll read for all ids instead of
+ *  a full-table scan per id (deleteTodosMany over N tasks used to cost N × planAll + 3N IPC
+ *  round-trips). Per id with chips the effect is identical to snapshotForDelete: snapshot rows to
+ *  meta ('planChipsSnapshot:<id>'), then clear the task's chip rows. Ids without chips are no-ops,
+ *  exactly like the single-op path. Best-effort per id, never blocks the deletion. */
+export async function snapshotForDeleteMany (taskIds) {
+  const ids = (Array.isArray(taskIds) ? taskIds : [taskIds]).filter(Boolean)
+  if (!ids.length) return
+  let byTask = null
+  try {
+    byTask = new Map()
+    for (const r of await dbCall('planAll', [])) {
+      if (!r || !r.taskId) continue
+      if (!byTask.has(r.taskId)) byTask.set(r.taskId, [])
+      byTask.get(r.taskId).push(r)
+    }
+  } catch { return } // chip read failure doesn't block deletion (same contract as the single op)
+  for (const id of ids) {
+    const rows = byTask.get(id) || []
+    try {
+      if (rows.length) await commitCommand("meta", "put", ['planChipsSnapshot:' + id, JSON.stringify(rows)])
+      await commitCommand("plan", "deleteTask", id)
+    } catch (e) { console.warn('[dayPlans] batch chip snapshot failed for', id, e) }
+  }
+}
+
+/** Write back snapshot chips when restoring a task.
+ *  D14-B4 (2026-10-01): `toDay` (YYYY-MM-DD) — when the restore re-dates the task (recycle-bin
+ *  "restore to today" / "pick date" via the dayPatch), restoring the pre-delete chips VERBATIM
+ *  resurrected them on the OLD day (ghost timeline blocks there until planPrune GC) while the task
+ *  lives on the new day. With toDay, every snapshot chip is re-dated onto the restored day (mm
+ *  times unchanged); without it, behavior stays byte-identical (undo/rowChipSync paths). */
+export async function restoreSnapshot (taskId, toDay) {
   try {
     const raw = await dbCall('getMeta', 'planChipsSnapshot:' + taskId)
     if (!raw) return
@@ -121,7 +152,10 @@ export async function restoreSnapshot (taskId) {
       // re-deleted. Re-stamp fresh on restore, same rule the recovery path already fixed for
       // itself (dbRecovery.cjs restorePlanChipsFromCriticalBackup).
       const now = Date.now()
-      await commitCommand("plan", "putMany", rows.map(r => ({ ...r, updatedAt: now })))
+      await commitCommand("plan", "putMany", rows.map(r => {
+        const row = (toDay && /^\d{4}-\d{2}-\d{2}$/.test(String(toDay))) ? { ...r, day: toDay } : { ...r }
+        return { ...row, updatedAt: now }
+      }))
     }
     // D5 (2026-09-20): consume via deleteMeta, unified with clearSnapshot (CLI convention fixed
     // 2026-09-19) — the old setMeta('') left an empty-string tombstone row in meta forever.

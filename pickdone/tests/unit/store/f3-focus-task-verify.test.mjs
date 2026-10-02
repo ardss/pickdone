@@ -18,7 +18,7 @@ function makeCtx (getByIdResult, statePatch = {}) {
   globalThis.window.todoAPI = {
     dbCall: async (op, params) => {
       if (op === 'getById') { calls.getById.push(params); return typeof getByIdResult === 'function' ? getByIdResult(params) : getByIdResult }
-      if (op === 'bumpSnow') { calls.bumpSnow.push(params); return true }
+      if (op === 'bumpSnow') { calls.bumpSnow.push(params); return { ok: true, minutes: 25 } } // D14-C2: real db.bumpSnow contract is {ok:true|false}
       return null
     },
     notification: () => {}

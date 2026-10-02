@@ -11,6 +11,7 @@ export default {
       allProjects: '全部',
       filterLabel: '按项目过滤',
       waiting: '等',
+      waitMore: '另有 {n} 条未完成前置未展示', // D14-A5: truncation notice
       stage: '阶段',
       dragHint: '拖 A 到 B 上：落在左半 = A 是 B 的前置；落在右半 = B 是 A 的前置',
       moveHint: '拖动圆点移动卡片',

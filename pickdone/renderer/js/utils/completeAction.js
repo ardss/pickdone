@@ -39,6 +39,13 @@ export function toggleCompleteWithUndo ({ store, message, todo, announce, fromEl
       if (!cur) return
       store.dispatch('todo/toggleComplete', cur)
       if (announce) announce(tt('statsA.core.' + (wasComplete ? 'doneAnnounce' : 'undoneAnnounce'), { c: content }))
+      // [uiux-2026-10-01 J2 P3] The undo is the feedback moment this toast exists for: leaving the
+      // stale "已完成：… 撤销" toast on screen read as if the click never registered (and invited a
+      // second click on a dead control). Close the undo toast and confirm the revert with the
+      // mirrored announce copy — same visible-confirmation contract as moveWithUndo's closeAll.
+      const doneText = tt('statsA.core.' + (wasComplete ? 'doneAnnounce' : 'undoneAnnounce'), { c: content || tt('statsJ.TodoItem.untitled') })
+      try { message.closeAll() } catch { /* mock or already closed */ }
+      message({ type: 'success', message: doneText, duration: 2000 })
     }
     showUndoToast(message, [
       tt('statsA.core.' + (wasComplete ? 'undoneAnnounce' : 'doneAnnounce'), { c: content || tt('statsJ.TodoItem.untitled') }) + '　',

@@ -85,6 +85,12 @@ export function consumeUnflushed (metaKey) {
   try { return JSON.parse(raw) } catch (e) { return null }
 }
 
+/** D14-B3 (2026-10-01): true once the quit-flush broadcast has been received. After it, scheduleRetry's
+ *  in-memory re-queue + backoff timer can never fire again (the process is exiting), so a rejected
+ *  quit-path write must skip the retry ladder and park the blob DURABLY right away (markUnflushed) —
+ *  that LS parking feature's primary scenario used to be unreachable. */
+let _quitting = false
+
 /** Initiate one DB write; returns true when the write was actually handed to the DB bridge
  *  (the promise may still reject later — scheduleRetry handles that), false when the environment
  *  made writing impossible (blob stays queued in pendings). */
@@ -103,7 +109,18 @@ function writeNow (metaKey, blob) {
       .then(() => { if (newest[metaKey] === blob) delete attempts[metaKey] })
       // [D13 #12] a landed write retires any durably parked copy of this key (same newest-guard)
       .then(() => { if (newest[metaKey] === blob) clearUnflushed(metaKey) })
-      .catch(() => scheduleRetry(metaKey, blob))
+      .catch(() => {
+        // D14-B3: on the quit path the retry timer would die with the process — park immediately
+        if (_quitting) {
+          if (newest[metaKey] === blob) {
+            markUnflushed(metaKey, blob)
+            delete pendings[metaKey]; delete newest[metaKey]; delete attempts[metaKey]
+            console.error('[dbMirror] quit-flush setMeta rejected for', metaKey, '— parked durably (dbMirror.unflushed.' + metaKey + ')')
+          }
+          return
+        }
+        scheduleRetry(metaKey, blob)
+      })
     return true
   } catch (e) {
     // degraded host (no todoAPI): previously swallowed too — surface it at least
@@ -130,6 +147,9 @@ export function mirrorToDb (metaKey, blob, immediate = false) {
 // Quit flush: main process before-quit broadcast (mirrors pending in the debounce window are flushed to disk immediately, otherwise quit/crash loses the last write)
 if (typeof window !== 'undefined' && window.todoAPI && window.todoAPI.onAppQuittingFlush) {
   window.todoAPI.onAppQuittingFlush(() => {
+    // D14-B3: flip the flag BEFORE dispatching so any rejection of these writes takes the
+    // durable-parking path instead of the (already doomed) in-memory retry ladder.
+    _quitting = true
     for (const k of Object.keys(timers)) { clearTimeout(timers[k]); delete timers[k] }
     for (const k of Object.keys(pendings)) {
       const b = pendings[k]
@@ -137,7 +157,10 @@ if (typeof window !== 'undefined' && window.todoAPI && window.todoAPI.onAppQuitt
       // D5 (2026-09-20): the pending blob is only released when the write was actually handed to the
       // bridge — mirroring flushKey's semantics. The old code deleted the pending BEFORE writeNow, so
       // on a no-bridge/aux-window host the blob vanished instead of surviving for a later retry.
+      // D14-B3: when the bridge is unavailable on the QUIT path, there is no "later retry" in this
+      // process — park durably instead of losing the blob with the module state.
       if (writeNow(k, b)) delete pendings[k]
+      else { markUnflushed(k, b); console.error('[dbMirror] quit-flush could not write', k, '— parked durably (dbMirror.unflushed.' + k + ')') }
     }
   })
 }

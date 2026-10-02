@@ -12,7 +12,7 @@
            commits via the 'rename' emit, Esc cancels. commitRename is re-entrant-safe (blur after the
            Enter commit is a no-op because renameIndex was already reset). -->
       <input v-else v-model="renameText" class="ep-sub-rename-input" :aria-label="$t('statsJ.EditPanel.addSubtask')"
-             @keydown.enter.prevent.stop="commitRename(i)" @keydown.esc.prevent.stop="cancelRename" @blur="commitRename(i)"/>
+             @keydown.enter.prevent.stop="onRenameEnter(i, $event)" @keydown.esc.prevent.stop="cancelRename" @blur="commitRename(i)"/>
       <b class="ep-sub-x close-x close-x--sm" role="button" tabindex="0" :aria-label="$t('statsJ.EditPanel.deleteSubtask')"
          @click.stop="delSub(i)" @keydown.enter.prevent.stop="delSub(i)"></b>
       <b class="ep-sub-drag">≡</b>
@@ -61,6 +61,13 @@ export default {
     onSubEnter (e) {
       if (e.isComposing || e.keyCode === 229) return
       this.addSub()
+    },
+    // IME guard for the inline rename editor: the Enter that ends a pinyin composition arrives as
+    // keydown (isComposing / keyCode 229) and must not commit the half-converted pinyin —
+    // same rule as onSubEnter above (fix for the D4-ime finding: commitRename had no guard)
+    onRenameEnter (i, e) {
+      if (e.isComposing || e.keyCode === 229) return
+      this.commitRename(i)
     },
     addSub () {
       const text = this.newSub.trim()

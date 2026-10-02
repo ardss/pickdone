@@ -48,6 +48,7 @@ const UPDATE_FIELDS_ALLOWLIST = [
   'CategoryView.vue', // expired move-to-today (rescheduleExpired+batchMoveWithUndo; only the revertOf callback here)
   'TagView.vue', // same as CategoryView (only the revertOf callback)
   'ProjectView.vue', // same as CategoryView (only the revertOf callback)
+  'RepeatModal.vue', // stamps the group repeatId onto the template task inside the modal's own confirm flow (failure folded into the single summary toast, D6-F7) — metadata annotation, not a user-content mutation
 ]
 
 const hits = []

@@ -5,6 +5,7 @@
 const { BrowserWindow, screen } = require('electron')
 const path = require('path')
 const log = require('electron-log')
+require('./log-isolation') // test isolation: redirect electron-log file transport into TODO_DB_DIR/TODO_USER_DATA_DIR
 const { attachLoadGuard } = require('./aux-load-guard')
 const db = require('./db')
 

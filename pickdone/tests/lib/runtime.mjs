@@ -10,6 +10,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
+import assert from 'node:assert/strict'
 
 const require = createRequire(import.meta.url)
 export const ELECTRON = require('electron') // npm 安装的 electron 模块解析即二进制路径（跨平台免手拼 dist/electron.exe）
@@ -64,6 +65,12 @@ export async function spawnApp (opts = {}) {
   // 预置空 todos.db：新库直接走当前 SCHEMA，跳过 legacy 迁移分支（与 integration-ui 的 seed 语义一致）
   try { fs.writeFileSync(path.join(userDataDir, 'todos.db'), '') } catch {}
   if (autoDir) _tempUserDataDirs.add(userDataDir) // 自建临时目录登记,测试进程退出时统一清(复用外部目录的不动,重启持久化类测试还要读)
+  // Isolation assertion (log-isolation fix): every app spawned through this helper MUST be
+  // data-isolated — TODO_USER_DATA_DIR points into a temp dir, never at %APPDATA%/pickdone.
+  // Failing loudly here keeps future tests from regressing to attaching the real user data
+  // (and, via src/main/log-isolation.js, from leaking log lines into the real main.log).
+  assert.ok(userDataDir && path.isAbsolute(userDataDir) && !path.resolve(userDataDir).toLowerCase().includes(process.env.APPDATA ? process.env.APPDATA.toLowerCase() : 'appdata'),
+    `spawnApp refuses non-isolated userData dir: ${userDataDir}`)
   const logFile = path.join(ARTIFACTS, `${opts.name || 'app'}-app.log`)
   const baseArgs = opts.allowFocus ? [] : ['--no-focus']
   const child = spawn(ELECTRON, ['.', ...baseArgs, '--remote-debugging-port=' + port, ...(opts.appArgs || []), ...(process.platform === 'linux' ? ['--no-sandbox'] : [])], {

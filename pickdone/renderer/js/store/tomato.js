@@ -75,6 +75,15 @@ export function todayCountPatch (state, startedAt, endTs) {
   }
 }
 
+/** D14-B2 (2026-10-01, pure/unit-tested): recompute the today ring count from the mutated in-memory
+ *  ledger. removeRecord/updateRecord used to mutate tomatoRecordList without touching
+ *  todayTomatoCount — the only recompute lived in recordsReload (recordsReload recomputes), which
+ *  the main process's broadcast deliberately EXCLUDES for the initiating window, so a deleted or
+ *  re-dated tomato stayed counted (and an edited one miscounted) until restart. */
+export function recountToday (records, todayKey) {
+  return (records || []).filter(r => r && r.succeed !== false && r.dateKey === todayKey).length
+}
+
 export function resolveFocusedTask (attachTodo, todoRows) {
   if (!attachTodo || !attachTodo.taskId) return null
   const row = (todoRows || []).find(t => t && t.taskId === attachTodo.taskId)
@@ -246,16 +255,46 @@ function purgePendingAppends (ids) {
   }
 }
 
-/** Replay still-pending entries; each is only removed from the queue on success (ledger ops are idempotent upserts, so a duplicate in-flight retry is safe) */
+/** D14-C1 (2026-10-01): a resolved dbCall is NOT the same as "the entry landed". Two shapes used to
+ *  splice the entry and erase its LS mirror anyway, permanently dropping user-earned ledger rows:
+ *    - falsy resolution (no todoAPI bridge) — the old `window.todoAPI && dbCall(...)` chain resolved
+ *      `false`/`undefined`, indistinguishable from success;
+ *    - tomatoAppendMany's row-tolerant {accepted, rejected} result with a NON-EMPTY rejected list —
+ *      the accepted rows landed but the rejected rows existed nowhere else; logRejectedRows only
+ *      console.error'ed them ("账本是核心资产" violation).
+ *  Shared handler for both replay sites (replayPendingLedger + quit-flush flushPendingLedger):
+ *    - falsy result → entry KEPT (still pending);
+ *    - rejected rows → they are quarantined DURABLY in LS (tomatoRejectedLedgerRows, capped) with a
+ *      per-row console.error surface, and the entry is retired (retrying a malformed row can never
+ *      succeed — an unbounded replay loop would spin on every later ledger write instead);
+ *    - fully accepted → entry removed. tomatoRemoveByIds/TomatoUpdateById never carry `rejected`,
+ *      so they retire here exactly as before. */
+const REJECTED_LEDGER_KEY = 'tomatoRejectedLedgerRows'
+const REJECTED_LEDGER_CAP = 100
+function quarantineRejectedRows (res, params) {
+  if (!res || !Array.isArray(res.rejected) || !res.rejected.length) return
+  logRejectedRows(res, params)
+  let parked = []
+  try { parked = JSON.parse(localStorage.getItem(REJECTED_LEDGER_KEY)) || [] } catch (e) { /* start fresh */ }
+  if (!Array.isArray(parked)) parked = []
+  const list = Array.isArray(params) ? params : [params]
+  for (const r of res.rejected) {
+    const row = list[r && r.index]
+    if (row) parked.push({ ts: Date.now(), reason: (r && r.reason) || 'unknown', row })
+  }
+  try { safeSet(REJECTED_LEDGER_KEY, JSON.stringify(parked.slice(-REJECTED_LEDGER_CAP))) } catch (e) { console.warn('[tomato] failed to quarantine rejected ledger rows:', e) }
+}
+function settleLedgerEntry (entry, res) {
+  if (!res) return // not handed to a bridge / falsy resolution: still pending, keep for retry
+  quarantineRejectedRows(res, entry.params)
+  const i = _pendingLedger.indexOf(entry)
+  if (i >= 0) { _pendingLedger.splice(i, 1); savePendingQueues() }
+  if (entry.op === 'tomatoRemoveByIds') purgePendingAppends(entry.params)
+}
 function replayPendingLedger () {
   for (const entry of [..._pendingLedger]) {
     Promise.resolve(window.todoAPI && window.todoAPI.dbCall(entry.op, entry.params))
-      .then(res => {
-        const i = _pendingLedger.indexOf(entry)
-        if (i >= 0) { _pendingLedger.splice(i, 1); savePendingQueues() }
-        logRejectedRows(res, entry.params)
-        if (entry.op === 'tomatoRemoveByIds') purgePendingAppends(entry.params)
-      })
+      .then(res => settleLedgerEntry(entry, res))
       .catch(e => console.error('[tomato] ledger DB write failed (queued for retry):', entry.op, e))
   }
 }
@@ -276,12 +315,7 @@ function flushPendingLedger () {
   // ledger ops are idempotent upserts.
   for (const entry of [..._pendingLedger]) {
     Promise.resolve(window.todoAPI && window.todoAPI.dbCall(entry.op, entry.params))
-      .then(res => {
-        const i = _pendingLedger.indexOf(entry)
-        if (i >= 0) { _pendingLedger.splice(i, 1); savePendingQueues() }
-        logRejectedRows(res, entry.params)
-        if (entry.op === 'tomatoRemoveByIds') purgePendingAppends(entry.params)
-      })
+      .then(res => settleLedgerEntry(entry, res))
       .catch(e => console.error('[tomato] ledger flush failed at quit (kept for retry):', entry.op, e))
   }
 }
@@ -300,13 +334,26 @@ function hookQuitFlush () {
  *  completion was booked under. The db layer's bumpSnow honors an optional dedupKey so a replayed
  *  entry (retry queue OR quit-flush) cannot double-credit a focus that already landed. Quit-flush
  *  replays the same params object, so every replay path carries the same key. */
+/** D14-C2 (2026-10-01): a resolved bump is NOT the same as a credited bump. db.bumpSnow resolves a
+ *  STRUCTURED result and never throws on row-level refusal: { ok:false, reason:'deleted'|'missing' }
+ *  for a dead task, and the old `window.todoAPI && commitCommand(...)` chain resolves `false` when
+ *  no bridge exists. All three shapes used to splice the entry in `.then` (the promise RESOLVED),
+ *  silently dropping the task-side focus credit. Now only ok:true retires the entry (ok:true with
+ *  deduped:true = already credited on a previous replay — retiring is correct); every non-accepted
+ *  result stays queued with its reason surfaced (replays are event-driven, not a timer, so a
+ *  permanently dead task costs a bounded log line per future snowWrite, never a hot loop). */
+function settleSnowEntry (entry, res) {
+  if (res && res.ok === true) {
+    const i = _pendingSnow.indexOf(entry)
+    if (i >= 0) { _pendingSnow.splice(i, 1); savePendingQueues() }
+    return
+  }
+  console.error('[tomato] bumpSnow not credited (kept for retry):', (res && res.reason) || String(res), entry.params)
+}
 function replayPendingSnow () {
   for (const entry of [..._pendingSnow]) {
     Promise.resolve(window.todoAPI && commitCommand("todo", "bump", entry.params))
-      .then(() => {
-        const i = _pendingSnow.indexOf(entry)
-        if (i >= 0) { _pendingSnow.splice(i, 1); savePendingQueues() }
-      })
+      .then(res => settleSnowEntry(entry, res))
       .catch(e => console.error('[tomato] bumpSnow failed (queued for retry):', entry.params, e))
   }
 }
@@ -322,10 +369,7 @@ function flushPendingSnow () {
   // idempotent and every replay carries the same dedupKey, so a double-send cannot double-credit).
   for (const entry of [..._pendingSnow]) {
     Promise.resolve(window.todoAPI && commitCommand("todo", "bump", entry.params))
-      .then(() => {
-        const i = _pendingSnow.indexOf(entry)
-        if (i >= 0) { _pendingSnow.splice(i, 1); savePendingQueues() }
-      })
+      .then(res => settleSnowEntry(entry, res))
       .catch(e => console.error('[tomato] bumpSnow flush failed at quit (kept for retry):', entry.params, e))
   }
 }
@@ -415,6 +459,11 @@ export default {
       if (patch.restDuration != null) rec.restDuration = Math.max(0, Math.min(REST_MAX_MINUTES, Math.round(patch.restDuration)))
       if (patch.succeed != null) rec.succeed = !!patch.succeed
       s.tomatoRecordList = [...s.tomatoRecordList]
+      // D14-B2: the mutated list is the truth — re-derive the today count inline (the broadcast
+      // echo that would otherwise fix it excludes this window, so drift persisted until restart)
+      const todayKey = dayjs().format(FMT.date)
+      s.todayTomatoCount = recountToday(s.tomatoRecordList, todayKey)
+      s._countDate = todayKey
       ledgerWrite('tomatoUpdateById', {
         tomatoId,
         patch: { endTime: rec.endTime, dateKey: rec.dateKey, focusDuration: rec.focusDuration, restDuration: rec.restDuration, succeed: rec.succeed }
@@ -424,6 +473,10 @@ export default {
     /** Entry card: delete one record (mistaken backfill/test data); irreversible, confirmed at the entry point */
     removeRecord (s, tomatoId) {
       s.tomatoRecordList = (s.tomatoRecordList || []).filter(r => !r || r.tomatoId !== tomatoId)
+      // D14-B2: same initiating-window recompute as updateRecord (see recountToday)
+      const todayKey = dayjs().format(FMT.date)
+      s.todayTomatoCount = recountToday(s.tomatoRecordList, todayKey)
+      s._countDate = todayKey
       ledgerWrite('tomatoRemoveByIds', [tomatoId])
       persistState(s)
     },

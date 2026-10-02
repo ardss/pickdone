@@ -101,7 +101,13 @@ export default defineComponent({
     },
     saveMgrEdit (c) {
       if (this.mgrEditing !== c.categoryId) return
-      this.$store.commit('category/updateCategory', { categoryId: c.categoryId, categoryName: this.mgrName.trim() || c.categoryName })
+      // D14-A12: a blank name used to silently restore the old name — warn instead (same
+      // inline-rename convention as HabitView's renameEmpty) and keep the editor open for a fix
+      if (!this.mgrName.trim()) {
+        this.$message.warning(this.$t('statsG.SideNav.catNameEmptyWarn'))
+        return
+      }
+      this.$store.commit('category/updateCategory', { categoryId: c.categoryId, categoryName: this.mgrName.trim() })
       this.mgrEditing = null
     },
     dragMgrStart (c, e) {

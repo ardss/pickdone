@@ -58,7 +58,7 @@ test('d11r3[2]: a failed bumpSnow is persisted and replays via quit-flush after 
     calls.push([op, params])
     if (op === 'getById') return { taskId: 7, delete: false }
     if (op === 'bumpSnow' && bumpFails) throw new Error('ipc down')
-    return { accepted: 1, rejected: [] }
+    return { ok: true, minutes: 5 } // D14-C2: real db.bumpSnow contract is {ok:true|false,reason}, never {accepted,rejected}
   } }
   const { default: tomato } = await import('../../../renderer/js/store/tomato.js?d11r3-snow-crash')
   const state = Object.assign({}, tomato.state, {
@@ -87,7 +87,7 @@ test('d11r3[2]: a failed bumpSnow is persisted and replays via quit-flush after 
   const restartCalls = []
   const flushCbs = []
   globalThis.window.todoAPI = {
-    dbCall: async (op, params) => { restartCalls.push([op, params]); return { accepted: 1, rejected: [] } },
+    dbCall: async (op, params) => { restartCalls.push([op, params]); return { ok: true, minutes: 5 } }, // D14-C2: bumpSnow contract is {ok:true|false}
     onAppQuittingFlush (cb) { flushCbs.push(cb) }
   }
   const { default: tomato2 } = await import('../../../renderer/js/store/tomato.js?d11r3-snow-restart')

@@ -36,6 +36,11 @@ export default {
     "cancel": "取消",
     "submit": "提交反馈",
     "submitted": "反馈已提交，感谢你的支持！",
+    "close": "关闭",
+    "submittedLocal": "已保存到本机（当前版本反馈仅暂存在本地，尚未上传）",
+    "pendingNote": "本机已暂存 {n} 条反馈（尚未上传）",
+    "pendingDropped": "本地暂存已满，最早的 {n} 条反馈已被覆盖",
+    "attachLogPending": "日志附带功能尚未开放：当前版本仅记录勾选标记",
     "submitFailed": "提交失败，请稍后重试",
     "needDesc": "请先填写问题描述"
   },
@@ -85,7 +90,7 @@ export default {
     "pairInputLabel": "输入对端配对码",
 
     "addPeerLabel": "按 IP 添加设备",
-    "addPeerHostPh": "如 192.168.1.64（端口默认 58471）",
+    "addPeerHostPh": "如 192.168.1.64 或 192.168.1.64:58471",
     "addPeerBtn": "添加",
     "addPeerTip": "自动发现被路由器/防火墙拦截时使用",
     "addPeerOkMsg": "设备已添加",
@@ -133,6 +138,7 @@ export default {
     "pairWaiting": "正在等待对方确认…（60s）",
     "pairTimeoutMsg": "对方未响应（超时）",
     "pairThrottledMsg": "尝试过于频繁，请稍后再试",
+    "pairBadAddrMsg": "地址无法解析 — 请输入 IP 或 IP:端口（如 192.168.1.64:58471）",
     "pairFailGenericMsg": "配对失败，请重试",
     "egressHydrationFailed": "推送时 {n} 条变更读取失败——本次推送数据不完整（可通过全量快照恢复）",
     "oplogAppendFailed": "本地变更记录写入失败——最近的变更在下次全量快照前不会同步到其他设备",

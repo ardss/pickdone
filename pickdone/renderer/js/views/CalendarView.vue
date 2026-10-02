@@ -155,9 +155,12 @@ export default {
       // Perf-E2: pre-trim to the cursor month ±2 months (cursorTs is maintained by datesSet) so the
       // watcher's setOption('events') no longer hands FullCalendar the whole history to re-parse on
       // every todoList change. The visible grid only ever spans adjacent-month days, well inside the
-      // window; cursorTs=0 (first render, before datesSet) keeps the full set — identical output.
+      // window; a not-yet-set cursor (first render, before datesSet) falls back to TODAY so the very
+      // first render is also trimmed — the month grid always opens on today, so the visible range is
+      // still fully covered, but a dense multi-year corpus is no longer handed over in one chunk
+      // (the 928ms first-paint long task: options build + full-corpus event parse in one task).
       return this.$store.state.todo.todoList
-        .filter(t => !t.delete && t.dayStart && inCursorWindow(t.dayStart, this.cursorTs))
+        .filter(t => !t.delete && t.dayStart && inCursorWindow(t.dayStart, this.cursorTs || today0()))
         .map(t => ({
           id: t.taskId,
           title: t.taskContent,

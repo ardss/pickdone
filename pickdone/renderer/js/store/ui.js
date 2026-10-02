@@ -5,13 +5,31 @@ import { PANEL_FIELD_MAP } from '../utils/editPanelRemoteSync.js'
 /** ui module — right-side editor/dialog control (mirrors the reference ui module semantics) */
 
 /* Complex snapshot values: array fields are copied/parsed, never shared by reference with the
- * store row. Scalar fields fall back to the default declared in PANEL_FIELD_MAP. */
-const SNAPSHOT_VALUE_MAPPERS = {
+ * store row. Scalar fields fall back to the default declared in PANEL_FIELD_MAP.
+ * P1 2026-10-01: the builder is EXPORTED — EditPanel.hydrate used to re-read the open-time
+ * ui.rightSidebarTodoEdit snapshot and discard everything added since open; now it rebuilds
+ * from the live store row through this SAME builder, so both sides always speak one shape. */
+export const SNAPSHOT_VALUE_MAPPERS = {
   reminderOffsets: t => Array.isArray(t.reminderOffsets) ? t.reminderOffsets.slice() : [],
   reminderExtra: t => Array.isArray(t.reminderExtra) ? t.reminderExtra.slice() : [],
   sublist: t => parseSubtasks(t.subtasks),
   todoImageList: t => parseJSONSafe(t.image) || [],
   fileList: t => parseJSONSafe(t.files) || []
+}
+
+/** Build the panel snapshot (PANEL_FIELD_MAP vocabulary) from a store row. Shared by
+ *  ui/openEdit and EditPanel.hydrate. */
+export function buildEditSnapshot (todo) {
+  if (!todo || typeof todo !== 'object') return null
+  const snap = { visible: true, collapsed: false, taskId: todo.taskId }
+  for (const [panelKey, rowKey, dflt] of PANEL_FIELD_MAP) {
+    const v = todo[rowKey]
+    const mapper = SNAPSHOT_VALUE_MAPPERS[panelKey]
+    snap[panelKey] = mapper
+      ? mapper(todo)
+      : (v === undefined || v === null ? dflt : v)
+  }
+  return snap
 }
 
 /* D6-F1 (2026-09-21): calendar inline create commits an "(untitled)" task BEFORE opening the edit
@@ -119,14 +137,7 @@ export default {
       // P0 root fix (2026-09-25): the snapshot keys derive from PANEL_FIELD_MAP (single source with
       // contentFingerprint) — deadlineTs/priority/important used to be dropped here, which broke the
       // deadline row and made the own-save-echo fingerprint mismatch eternal.
-      const snap = { visible: true, collapsed: false, taskId: todo.taskId }
-      for (const [panelKey, rowKey, dflt] of PANEL_FIELD_MAP) {
-        const v = todo[rowKey]
-        snap[panelKey] = SNAPSHOT_VALUE_MAPPERS[panelKey]
-          ? SNAPSHOT_VALUE_MAPPERS[panelKey](todo)
-          : (v === undefined || v === null ? dflt : v)
-      }
-      s.rightSidebarTodoEdit = snap
+      s.rightSidebarTodoEdit = buildEditSnapshot(todo)
     },
     closeEdit (s) { s.rightSidebarTodoEdit.visible = false; s.rightSidebarTodoEdit.taskId = null },
     // D6-F1: mark the panel's current task as inline-created-empty (calendar createAt/tbCreate/grid Enter)
@@ -179,15 +190,35 @@ export default {
     // store, not in the side-nav children — the w5 architecture guard bans dbCall in
     // SnManageTagsModal (lifecycle side effects stay out of the split children). Rename/delete of
     // a placeholder tag must update this meta key or the placeholder silently survives.
-    renameUserTag ({ state, commit }, { from, to }) {
-      const list = (state.userTags || []).map(x => (x === from ? to : x))
+    // D14-B7 (2026-10-01): the meta put is no longer swallowed fire-and-forget — a failed write
+    // used to leave the UI updated while the durable `userTags` meta kept the old list (silent
+    // revert on next startup, SideNav's tag chips). Same revert-safe shape as D13-A4's createTag
+    // fix: optimistic in-memory update first; on failure the previous list is restored and the
+    // rejection is surfaced (console.error; rethrown so awaiting callers — SnManageTagsModal —
+    // can toast instead of reporting success that the next launch reverts).
+    async renameUserTag ({ state, commit }, { from, to }) {
+      const prev = state.userTags || []
+      const list = prev.map(x => (x === from ? to : x))
       commit('setUserTags', list)
-      try { commitCommand("meta", "put", ['userTags', JSON.stringify(list)]).catch(() => {}) } catch (e) { /* best-effort */ }
+      try {
+        await commitCommand("meta", "put", ['userTags', JSON.stringify(list)])
+      } catch (e) {
+        commit('setUserTags', prev)
+        console.error('[ui] userTags rename meta put failed — in-memory rename reverted:', e)
+        throw e
+      }
     },
-    removeUserTag ({ state, commit }, name) {
-      const list = (state.userTags || []).filter(x => x !== name)
+    async removeUserTag ({ state, commit }, name) {
+      const prev = state.userTags || []
+      const list = prev.filter(x => x !== name)
       commit('setUserTags', list)
-      try { commitCommand("meta", "put", ['userTags', JSON.stringify(list)]).catch(() => {}) } catch (e) { /* best-effort */ }
+      try {
+        await commitCommand("meta", "put", ['userTags', JSON.stringify(list)])
+      } catch (e) {
+        commit('setUserTags', prev)
+        console.error('[ui] userTags remove meta put failed — in-memory removal reverted:', e)
+        throw e
+      }
     }
   }
 }

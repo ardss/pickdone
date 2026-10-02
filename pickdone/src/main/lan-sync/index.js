@@ -260,7 +260,12 @@ function createLanSyncNode(opts) {
 
   // Client-side pairing flows (pairWith/requestPair) are extracted to pairing-client.js
   // (line ratchet). Pure orchestration over transport.connect; the factory is pure wiring.
-  const { pairWith, requestPair } = createPairingClient({ peers, deviceId, name, em })
+  // getListenPort (per-instance-port fix 2026-10-01): pairing dials advertise our own listen
+  // port so the acceptor persists a dialable address (lazy — the server binds later).
+  const { pairWith, requestPair } = createPairingClient({
+    peers, deviceId, name, em,
+    getListenPort: () => (server && typeof server.port === 'number' ? server.port : null),
+  })
 
   // Server-role message handling (segments-chunk push receive + ack bookkeeping + snapshot-request
   // serving) is extracted to server-role.js (line ratchet). The handler is pure orchestration over
@@ -312,6 +317,11 @@ function createLanSyncNode(opts) {
   const setLastRoundAt = (t) => { lastRoundAt = t; return t }
   const { syncWithPeer } = createClientRound({
     opts, deviceId, authCode, pairingSecret, em,
+    // Per-instance-port fix (2026-10-01 journey drill): the dial-side per-pair secret lookup.
+    // A live peer entry can lose its secret (self-guard forgetPeer -> secret-less discovery
+    // re-add); without this fallback the round dialed with the STALE global secret and the
+    // peer's server answered auth-failed -> terminal "peer removed this pairing".
+    secretFor: opts.secretFor || null,
     peers, retryTimers, lastRoundBy, failStreakBy, oversizedSegmentBy, unpairedBy, activeClients,
     needSnapshot, needSnapshotForce, clientSnapshotBusy, pullWatermarkBy,
     snapshotFatalCount, snapshotErrorCooldown, flushStallBy, errorBy,
@@ -319,6 +329,9 @@ function createLanSyncNode(opts) {
     buildSegments, ingestSegment, ingestSnapshot, ingestSnapshotChunk,
     getMaxSeq, currentMaxSeq,
     getStopped: () => stopped,
+    // Per-instance-port fix (2026-10-01): round dials advertise our own listen port in hello
+    // so the peer's server-side address refresh (peer-connected) stores a dialable port.
+    getListenPort: () => (server && typeof server.port === 'number' ? server.port : null),
     bumpRounds: (d) => { roundsRunning += d },
     setLastRoundAt, setLastError,
     pushRecent, refreshOnline, scheduleRetry, resetBackoff, tryRefixAddress, forgetPeer,
@@ -480,7 +493,16 @@ function createLanSyncNode(opts) {
       // P1-4: remember the live authenticated socket per peer so an unpair can best-effort
       // notify the peer before the node stops. Cleared on node stop / forgetPeer.
       getHandler: (peer) => (msg, socket) => {
-        try { if (peer && peer.deviceId && socket) liveServerSockets.set(peer.deviceId, socket) } catch { /* best effort */ }
+        try {
+          if (peer && peer.deviceId && socket) {
+            // D14 C14 (2026-10-02): this used to be an unconditional last-writer-wins set — a
+            // STALE half-open connection's late inbound message overwrote the live socket ref,
+            // so notifyUnpaired then "succeeded" by writing into the dead peer. Only adopt the
+            // inbound socket when there is no ref or the incumbent is destroyed; the onPeer
+            // 'close' hook below reclaims genuinely dead entries either way.
+            adoptLiveSocket(liveServerSockets, peer.deviceId, socket)
+          }
+        } catch { /* best effort */ }
         handleServerMessage(peer, msg, socket, sendVia)
       },
       onPeer: (peer, socket) => {
@@ -525,6 +547,8 @@ function createLanSyncNode(opts) {
     pairWith,
     requestPair,
     on: em.on.bind(em),
+    once: em.once.bind(em),
+    off: em.off.bind(em),
 
     /** Start advertising, discovery, and the TCP server. */
     start() {
@@ -675,4 +699,16 @@ function createLanSyncNode(opts) {
   }
 }
 
-module.exports = { createLanSyncNode, BACKOFF_BASE_MS, BACKOFF_MAX_MS, DIAL_FAILURE_BUDGET_DEFAULT, HIBERNATE_BACKOFF_MS_DEFAULT }
+// D14 C14 (2026-10-02): socket-adoption rule for the per-peer live-server-socket map, extracted
+// for unit testing. An inbound message adopts its socket ONLY when the map has no ref, the
+// incumbent is destroyed, or it IS the incumbent — a stale half-open connection's late message
+// must never overwrite the live ref (notifyUnpaired would then write into a dead socket).
+function adoptLiveSocket (map, deviceId, socket) {
+  if (!deviceId || !socket) return false
+  const cur = map.get(deviceId)
+  if (cur && !cur.destroyed && cur !== socket) return false
+  map.set(deviceId, socket)
+  return true
+}
+
+module.exports = { createLanSyncNode, adoptLiveSocket, BACKOFF_BASE_MS, BACKOFF_MAX_MS, DIAL_FAILURE_BUDGET_DEFAULT, HIBERNATE_BACKOFF_MS_DEFAULT }

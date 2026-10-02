@@ -12,6 +12,7 @@
  * does not) and they predate this module.
  */
 const log = require('electron-log')
+require('./log-isolation') // test isolation: redirect electron-log file transport into TODO_DB_DIR/TODO_USER_DATA_DIR
 
 /**
  * Attach the load-failure guard to an aux window.

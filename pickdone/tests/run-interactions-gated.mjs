@@ -79,7 +79,11 @@ if (ALLOW_REUSE && await cdpAlive(CDP)) {
     '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding',
     ...(process.platform === 'linux' ? ['--no-sandbox'] : [])], {
     cwd: appCwd,
-    env: { ...process.env, TODO_USER_DATA_DIR: tmpDir },
+    // TODO_CDP must ride along: the spawned instance listens on the RANDOM debug port picked
+    // above, but the gate script (cssom-integrity / ui-coverage) resolves its CDP target from
+    // TODO_CDP with its own fixed default — without this it waits on the default port forever
+    // and the lane dies as "app not ready within retry budget" even though the app booted fine.
+    env: { ...process.env, TODO_USER_DATA_DIR: tmpDir, TODO_CDP: CDP },
     stdio: ['ignore', fs.openSync(logFile, 'a'), fs.openSync(logFile, 'a')]
   })
   let childExit = null

@@ -10,7 +10,7 @@ import { clearSnapshot } from '../utils/dayPlans.js'
 import { scrubMilestonesForPurged } from '../utils/milestones.js'
 // Cross-cutting concerns, physically split out of this module (pure relocation — the store's action
 // semantics are unchanged; the actions/mutations below delegate to these extracted implementations):
-import { enqueueChipSync, rowChipSync, planSnapshotRowSync, snapshotForDelete, restoreSnapshot } from './helpers/planChips.js'
+import { enqueueChipSync, rowChipSync, planSnapshotRowSync, snapshotForDelete, snapshotForDeleteMany, restoreSnapshot } from './helpers/planChips.js'
 import { historyPush, historyPushKeepRedo, historyClear, historyBreakMerge, historyUndoPop, historyRedoPop, historyRedoPush, historyBarrierCore, undoStep, redoStep, persistSnapshotDiffCore } from './helpers/undo.js'
 import { writeEventBackupCore, writeAutoBackupCore, writeCriticalBackupCore } from './helpers/todoBackup.js'
 import { commit as commitCommand } from "../utils/commandBus.js"
@@ -488,8 +488,10 @@ export default {
         reportError('upsertMany', err)
         try { queuePendingUpsert({ op: 'upsertMany', params: deproxyRows(clean) }) } catch { /* keep the UI flow alive */ }
       }
-      // Chip cascade per task, snapshot to meta first (same as deleteTodo)
-      for (const id of ids) { try { await snapshotForDelete(id) } catch (e) { console.warn('[todo] failed to snapshot chips for deleted task:', e) } }
+      // Chip cascade per task, snapshot to meta first (same as deleteTodo).
+      // D14-C15: ONE shared planAll read for the whole batch (snapshotForDeleteMany) instead of a
+      // full-table scan + 3 IPC round-trips per id — a large batch used to stall for seconds.
+      try { await snapshotForDeleteMany(ids) } catch (e) { console.warn('[todo] failed to batch-snapshot chips for deleted tasks:', e) }
       dispatch('computeViews')
       dispatch('writeCriticalBackup')
       return ids
@@ -506,7 +508,12 @@ export default {
       // the bin view used to dispatch bare updateTodoFields and silently skipped all three.
       const r = await dispatch('updateTodoFields', { taskId: todo.taskId, patch: { delete: false, deletedAt: 0, status: 'update', ...((todo && todo.dayPatch) || {}) } })
       if (r) {
-        try { await restoreSnapshot(todo.taskId) } catch { /* No snapshot = originally unscheduled */ }
+        // D14-B4: a re-dating restore (dayPatch from RecycleBinView's restore-to-today / pick-date)
+        // must re-home the snapshot chips onto the NEW day — verbatim restore used to resurrect
+        // them as ghost blocks on the OLD day until planPrune GC'd them.
+        const patch = (todo && todo.dayPatch) || {}
+        const toDay = patch.dayStart ? dayjs(patch.dayStart).format('YYYY-MM-DD') : undefined
+        try { await restoreSnapshot(todo.taskId, toDay) } catch { /* No snapshot = originally unscheduled */ }
       }
       // [B5 fix] dangling repeatId guard: startup meta GC (computeMetaGc, shared.js) legitimately purges
       // `repeatRule:<rid>` when the rule was referenced only by recycle-bin rows (the deleted:0 filter

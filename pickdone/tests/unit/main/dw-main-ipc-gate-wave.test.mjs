@@ -185,23 +185,23 @@ test('shortcuts: a non-whitelisted sender cannot raise the capture suppression',
   const stranger = { sender: fakeWebContents() }
   ipcHandlers['shortcut-capturing'](stranger, true) // must be REJECTED (gate is MAIN WINDOW ONLY — adversarial review 2026-09-25 narrowed it; aux windows have no legitimate record surface)
   // ctrl+d must still dispatch (suppression must NOT be active)
-  win.webContents.emit('before-input-event', { preventDefault () {} }, { type: 'keyboard', control: true, key: 'd' })
+  win.webContents.emit('before-input-event', { preventDefault () {} }, { type: 'keyDown', control: true, key: 'd' })
   assert.ok(sent.some(x => x[0] === 'shortcut-action'), 'combo must dispatch: stranger never got to suppress shortcuts')
   // a second aux-window-shaped sender is equally rejected (never whitelisted)
   const aux = { sender: fakeWebContents() }
   ipcHandlers['shortcut-capturing'](aux, true)
-  win.webContents.emit('before-input-event', { preventDefault () {} }, { type: 'keyboard', control: true, key: 'd' })
+  win.webContents.emit('before-input-event', { preventDefault () {} }, { type: 'keyDown', control: true, key: 'd' })
   assert.ok(sent.some(x => x[0] === 'shortcut-action'), 'aux-window sender must not suppress either')
 })
 
 test('shortcuts: whitelisted main sender suppresses dispatch, and the armed timeout self-heals', async () => {
   const { ipcHandlers, win, sent } = shortcutSetup()
   ipcHandlers['shortcut-capturing']({ sender: win.webContents }, true)
-  win.webContents.emit('before-input-event', { preventDefault () {} }, { type: 'keyboard', control: true, key: 'd' })
+  win.webContents.emit('before-input-event', { preventDefault () {} }, { type: 'keyDown', control: true, key: 'd' })
   assert.ok(!sent.some(x => x[0] === 'shortcut-action'), 'combo must NOT dispatch mid-record')
   // self-heal: recorder died without sending the stop toggle — the timeout must restore dispatch
   await new Promise(r => setTimeout(r, 60))
-  win.webContents.emit('before-input-event', { preventDefault () {} }, { type: 'keyboard', control: true, key: 'd' })
+  win.webContents.emit('before-input-event', { preventDefault () {} }, { type: 'keyDown', control: true, key: 'd' })
   assert.ok(sent.some(x => x[0] === 'shortcut-action'), 'after the timeout the combo dispatches again (no permanent suppression)')
 })
 
@@ -209,7 +209,7 @@ test('shortcuts: explicit stop toggle from the same sender clears suppression im
   const { ipcHandlers, win, sent } = shortcutSetup()
   ipcHandlers['shortcut-capturing']({ sender: win.webContents }, true)
   ipcHandlers['shortcut-capturing']({ sender: win.webContents }, false)
-  win.webContents.emit('before-input-event', { preventDefault () {} }, { type: 'keyboard', control: true, key: 'd' })
+  win.webContents.emit('before-input-event', { preventDefault () {} }, { type: 'keyDown', control: true, key: 'd' })
   assert.ok(sent.some(x => x[0] === 'shortcut-action'))
 })
 

@@ -3,7 +3,7 @@ import { FMT } from './core.js'
  * Day-level bucketing utility (shared by three views) — aligned with the grouping semantics of the reference RecentTodoList
  * Past completed (R1) / overdue incomplete (R2, reschedulable) / today / tomorrow / day after tomorrow / upcoming / no date
  */
-import { dayjs, tt } from './core.js'
+import { dayjs, tt, rangeDays } from './core.js'
 
 /** Follows the title format of x.e: today/tomorrow/day after tomorrow → "Today WeekX"; further out → M/D WeekX; crossing years → YYYY/M/D */
 export function calTitle (ts, now) {
@@ -19,13 +19,25 @@ export function calTitle (ts, now) {
     : s.format(FMT.cnFull)
 }
 
-export function buildCompletedBuckets (list, today = +dayjs().startOf('day')) {
+/**
+ * B5/D14-B5 (2026-10-02): the hard `agoDays >= 30` cap ignored settings.expiredCompletedTodoRange —
+ * the setting was dead on the Completed page, and with '30d' the 30th-day row appeared on
+ * category/project pages (expiryGroups: dayStart >= today - R1 days) but not here. The cap now
+ * follows the setting (same rangeDays semantics as buildExpiryGroups, defaulting to the legacy
+ * 30 when no setting is passed) and the boundary is INCLUSIVE of the R1-th day, matching
+ * expiryGroups' `>= today - R1 * DAY_MS` comparison.
+ * @param {Array}  list         completed todos
+ * @param {number} today        start-of-day timestamp
+ * @param {string} [rangeSetting] settings.expiredCompletedTodoRange ('7d'|'15d'|'30d'|...)
+ */
+export function buildCompletedBuckets (list, today = +dayjs().startOf('day'), rangeSetting) {
+  const range = rangeDays(rangeSetting, 30)
   const defs = [
     { key: 'done-today', titleKey: 'statsA.core.today', min: 0, max: 1 },
     { key: 'done-yesterday', titleKey: 'statsA.core.yesterday', min: 1, max: 2 },
     { key: 'done-day2', title: 'statsA.core.dayBeforeYesterday', min: 2, max: 3 },
     { key: 'done-d7', title: 'statsA.core.d7Ago', min: 3, max: 7 },
-    { key: 'done-d30', title: 'statsA.core.d30Ago', min: 7, max: 30 }
+    { key: 'done-d30', title: 'statsA.core.d30Ago', min: 7, max: range + 1 }
   ]
   const buckets = defs.map(d => ({ ...d, todos: [] }))
   for (const t of list) {
@@ -33,7 +45,7 @@ export function buildCompletedBuckets (list, today = +dayjs().startOf('day')) {
     if (!doneTs) continue
     // dayjs calendar-diff to compute day distance: millisecond division on a DST switch day (only 23h) would count yesterday's completions into today's bucket
     const agoDays = dayjs(today).startOf('day').diff(dayjs(doneTs).startOf('day'), 'day')
-    if (agoDays >= 30) continue
+    if (agoDays > range) continue
     const b = buckets.find(x => agoDays >= x.min && agoDays < x.max)
     if (b) b.todos.push(t)
   }

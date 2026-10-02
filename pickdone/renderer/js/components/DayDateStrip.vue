@@ -31,6 +31,7 @@
     <transition name="fade">
       <div v-if="showCal" v-click-outside="() => showCal = false" class="ds-cal-pop" @click.stop
            @keydown.esc.prevent="showCal = false"
+           @focusout="calFocusOut"
            @mouseenter="calEnter" @mouseleave="calLeave">
         <div class="ds-cal-head">
           <button @click="calNav(-12)" :title="$t('statsD.DayDateStrip.prevYear')" :aria-label="$t('statsD.DayDateStrip.prevYear')">«</button>
@@ -171,11 +172,24 @@ export default {
       this.showCal = false
     },
     // Auto-collapse 1 second after the mouse leaves the button/popover, saving an extra click
+    // D14-A8: NOT while keyboard focus lives inside the popover — the mouse-leave timer used to
+    // slam the popover shut under keyboard users mid-navigation; focusout/Escape close it instead
+    focusInCal () {
+      const pop = this.$el && this.$el.querySelector ? this.$el.querySelector('.ds-cal-pop') : null
+      return !!(pop && pop.contains(document.activeElement))
+    },
     calEnter () { this.calHover = true; clearTimeout(this._calCloseTimer) },
     calLeave () {
       this.calHover = false
+      if (this.focusInCal()) { clearTimeout(this._calCloseTimer); return }
       clearTimeout(this._calCloseTimer)
       this._calCloseTimer = setTimeout(() => { if (!this.calHover) this.showCal = false }, 1000)
+    },
+    // Focus left the popover entirely (Tab out / click elsewhere): close, mouse-position irrelevant
+    calFocusOut () {
+      this.$nextTick(() => {
+        if (this.showCal && !this.focusInCal()) this.showCal = false
+      })
     },
     shift (dir) {
       store.commit('ui/setDaySelected', this.selectedTs + dir * 7 * DAY_MS)

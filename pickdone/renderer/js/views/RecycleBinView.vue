@@ -110,6 +110,9 @@ export default {
         [
           { icon: 'calendar', label: this.$t('statsC.RecycleBin.btnRestoreDate'), fn: () => this.restore(t, false) },
           { icon: 'clock', label: this.$t('statsC.RecycleBin.btnRestoreToday'), fn: () => this.restore(t, true) },
+          // D14-A15: the row buttons expose 4 actions but the menu only had 3 — add pick-date
+          // restore by opening the row's embedded (tabindex-pinned) date picker
+          { icon: 'calendar', label: this.$t('statsC.RecycleBin.btnPickDate'), fn: () => this.openRowPicker(t, e) },
           { icon: 'trash', label: this.$t('statsC.RecycleBin.btnPurge'), danger: true, fn: () => this.purge(t) }
         ])
     },
@@ -128,7 +131,7 @@ export default {
           repeatId: t.repeatId,
           dayPatch: patchToToday ? crossDayMovePatch(t, today, dayStart) : undefined
         })
-        this.$message.success(patchToToday ? this.$t('statsC.RecycleBin.restoredToToday') : this.$t('statsC.RecycleBin.restored'))
+        this.$message.success(this.$t(patchToToday ? 'statsC.RecycleBin.restoredToToday' : 'statsC.RecycleBin.restored', { name: t.taskContent || this.$t('statsJ.TodoItem.untitled') }))
       } catch (e) {
         this.$message.error(this.$t('statsC.RecycleBin.restoreFailedMsg') + (e && e.message ? e.message : e))
       }
@@ -146,7 +149,7 @@ export default {
             repeatId: t.repeatId,
             dayPatch: crossDayMovePatch(t, day, dayStart)
           })
-        this.$message.success(this.$t('statsC.RecycleBin.restoredToDate'))
+        this.$message.success(this.$t('statsC.RecycleBin.restoredToDate', { name: t.taskContent || this.$t('statsJ.TodoItem.untitled') }))
       } catch (e) {
         this.$message.error(this.$t('statsC.RecycleBin.restoreFailedMsg') + (e && e.message ? e.message : e))
       }
@@ -166,7 +169,12 @@ export default {
         // bin with no user-visible feedback at all.
         const r = await this.$store.dispatch('todo/purgeIds', [t.taskId])
         if (!r || !r.done.length) this.$message.error(this.$t('statsC.RecycleBin.purgeFailedMsg'))
-      }).catch(() => {})
+      }).catch((e) => {
+        // D14-A4: Element's confirm rejects with 'cancel'/'close' on user cancel — only those are
+        // "cancelled"; anything else is a REAL dispatch/IPC failure and used to be swallowed by
+        // the same catch (same filter as SettingsDataTab.purgeRecycle)
+        if (e !== 'cancel' && e !== 'close') this.$message.error(this.$t('statsC.RecycleBin.purgeFailedMsg') + (e && e.message ? e.message : e))
+      })
     },
     clearAll () {
       const list = this.list
@@ -197,7 +205,20 @@ export default {
         const ok = await this.$store.dispatch('todo/purgeAllRecycle')
         if (ok) this.$message.success(this.$t('statsC.RecycleBin.cleared', { n }))
         else this.$message.error(this.$t('statsC.RecycleBin.purgeFailedMsg'))
-      }).catch(() => { /* user cancelled at any step */ })
+      }).catch((e) => {
+        // D14-A4: swallow only the user-cancel rejections ('cancel'/'close' and the deliberate
+        // keyword-mismatch reject); a real purgeAllRecycle failure must not be silenced
+        if (e !== 'cancel' && e !== 'close' && !(e instanceof Error && e.message === 'keyword-mismatch')) {
+          this.$message.error(this.$t('statsC.RecycleBin.purgeFailedMsg') + (e && e.message ? e.message : e))
+        }
+      })
+    },
+    /** D14-A15: context-menu "pick date" — open the row's embedded date picker (the menu closes
+     *  itself after exec, so a direct click on the hidden input reaches the user) */
+    openRowPicker (t, e) {
+      const row = e && e.target && e.target.closest ? e.target.closest('.todo-box-list-item') : null
+      const inp = row && row.querySelector('.rc-pick input')
+      if (inp) inp.click()
     }
   },
 

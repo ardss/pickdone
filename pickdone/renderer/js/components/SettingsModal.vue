@@ -28,7 +28,7 @@
                 <div class="form-item__control">
                   <el-input size="small" class="ctl-md" maxlength="20" :aria-label="$t('statsE.SettingsModal.usernameLabel')"
                             :placeholder="$t('statsE.SettingsModal.enterToSaveHint')"
-                            v-model="nameDraft" @keyup.enter="saveName" @blur="saveName"/>
+                            v-model="nameDraft" @keydown.enter="e => { if (e.isComposing || e.keyCode === 229) return; saveName() }" @blur="saveName"/>
                 </div></div>
             </div>
             <div class="form">

@@ -1,5 +1,6 @@
 /** Todo/DB domain IPC handlers (pure relocation from index.js registerIpc). Each module exports (ctx) => ({ channel: fn }). */
 const log = require('electron-log')
+require('../log-isolation') // test isolation: redirect electron-log file transport into TODO_DB_DIR/TODO_USER_DATA_DIR
 const fs = require('fs')
 const path = require('path')
 const tomatoFloat = require('../tomato-float')

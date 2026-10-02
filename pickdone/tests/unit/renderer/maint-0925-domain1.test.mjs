@@ -188,9 +188,13 @@ test('A7/C7 _uploadOne: 65MB file is rejected with a toast and never reaches arr
 /* ================= A11: QuickAdd route-tag word-boundary match ================= */
 
 test('A11 QuickAdd: exact tag token check (substring like #java in #javascript no longer suppresses)', () => {
+  // D4 (17bddc2b) moved the check into utils/quickAddPaste.js ensureTagSuffix; assert the
+  // behavior still exists rather than the old file layout
+  const impl = read('renderer/js/utils/quickAddPaste.js')
+  assert.match(impl, /new RegExp\('\(\^\|\\\\s\)#' \+ esc/, 'word-boundary regex replaced the includes() substring check')
+  assert.doesNotMatch(impl, /!content\.includes\('#' \+ tag\)/)
   const src = read('renderer/js/components/QuickAdd.vue')
-  assert.match(src, /new RegExp\('\(\^\|\\\\s\)#' \+ esc/, 'word-boundary regex replaced the includes() substring check')
-  assert.doesNotMatch(src, /!content\.includes\('#' \+ tag\)/)
+  assert.match(src, /ensureTagSuffix/, 'QuickAdd routes tag suffixing through the shared helper')
 })
 
 /* ================= A13: view-more pop clamped inside the viewport ================= */

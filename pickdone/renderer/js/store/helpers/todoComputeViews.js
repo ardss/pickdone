@@ -74,7 +74,14 @@ export function computeViewsCore (store, { commit, rootState, dispatch }) {
   const todayDoneIds = new Set(todayDoneList.map(t => t.taskId))
   live.forEach(t => {
     const doneTs = t.completedAt || t.updateTime || 0
-    if (t.complete && t.dayStart && t.dayStart < today && doneTs >= completedCutoff && !todayDoneIds.has(t.taskId)) {
+    // D14-B11 (2026-10-01): no-date completed tasks used to fall out of every grouped surface at
+    // day+1 — the first loop drops them from todayDoneList once completedAt is yesterday, then this
+    // loop's `t.dayStart &&` excluded them from the expired bucket, while recent.noDate/todoBox
+    // filter `!t.complete`. Give the no-date path the same bucket treatment the dated path got:
+    // a no-date completion inside the window lands in recentExpiredCompleted (dayStart 0 sorts it
+    // first; consumers render it like any row in the group) instead of vanishing outside the
+    // uncapped global completed list.
+    if (t.complete && (!t.dayStart || t.dayStart < today) && doneTs >= completedCutoff && !todayDoneIds.has(t.taskId)) {
       recentExpiredCompleted.push(t)
     }
   })

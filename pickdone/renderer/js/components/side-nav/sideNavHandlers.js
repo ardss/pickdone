@@ -45,6 +45,21 @@ export function navLabel (vm, n) {
   return (v && v.i18n) ? i18n.global.t(v.i18n) : v
 }
 
+/* Experimental nav items carry their disclaimer (the string already written for the settings
+   toggle) as a tooltip — label when collapsed, hint when expanded — and as aria text, so a
+   developer hovering the bare "今日·实验" entry can tell what it is without opening settings.
+   Returns '' for ordinary items: they keep the previous no-hint behavior. */
+export function navHint (vm, n) {
+  return n === 'todo-list-today-x' ? i18n.global.t('statsE.SettingsModal.sTodayX') : ''
+}
+
+/* Full aria-label: visible label plus the hint when one exists so screen readers announce both;
+   null for ordinary items (falls back to the element's text content). */
+export function navAria (vm, n) {
+  const hint = navHint(vm, n)
+  return hint ? `${navLabel(vm, n)} — ${hint}` : null
+}
+
 /* Clicking the search icon while collapsed: expand the sidebar and hand focus to the search input.
    In narrow windows (<920px) the expanded state uses the drawer overlay (CSS media query, absolutely positioned over the main column without squeezing the layout),
    so it can be expanded and focused directly at any width */

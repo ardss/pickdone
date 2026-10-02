@@ -182,6 +182,22 @@ async function backupThenClearProjectMeta (id) {
   // Only now (backup key durably written, live keys cleared) may any window's recover proceed
   clearPendingMetaBak(id)
 }
+/** D14-B10 (2026-10-01): milestones written BETWEEN the delete and the recover (CLI `milestone add`)
+ *  re-create the live key — the old unconditional backup put clobbered that newer list irreversibly.
+ *  Merge instead: live entries win per id (they are newer by construction), backup-only entries are
+ *  re-added, result re-sorted by date like saveMilestones does. */
+function mergeMilestoneBlobs (liveRaw, backupRaw) {
+  let liveList, bakList
+  try { liveList = JSON.parse(liveRaw) } catch (e) { return backupRaw }
+  try { bakList = JSON.parse(backupRaw) } catch (e) { return liveRaw }
+  if (!Array.isArray(liveList) || !Array.isArray(bakList)) return liveList && liveList.length ? liveRaw : backupRaw
+  if (!liveList.length) return backupRaw
+  const ids = new Set(liveList.map(m => m && m.id))
+  return JSON.stringify(
+    liveList.concat(bakList.filter(m => m && m.id && !ids.has(m.id))).sort((a, b) => (Number(a.date) || 0) - (Number(b.date) || 0))
+  )
+}
+
 /** U-4 recover path: restore the backed-up project meta to its live keys, then delete the backup.
  *  Resolves true when a backup existed and was restored. */
 async function restoreProjectMetaBackup (id) {
@@ -192,7 +208,11 @@ async function restoreProjectMetaBackup (id) {
   try { if (blob.flag) await commitCommand("meta", "put", [projectFlagKey(id), '1']) } catch (e) { /* best-effort */ }
   try { if (blob.status) await commitCommand("meta", "put", [statusKey(id), blob.status]) } catch (e) { /* best-effort */ }
   try { if (blob.deadline) await commitCommand("meta", "put", [deadlineKey(id), blob.deadline]) } catch (e) { /* best-effort */ }
-  try { if (blob.milestones) await commitCommand("meta", "put", [milestonesKey(id), blob.milestones]) } catch (e) { /* best-effort */ }
+  if (blob.milestones) {
+    let ms = blob.milestones
+    try { ms = mergeMilestoneBlobs((await window.todoAPI.dbCall('getMeta', milestonesKey(id))) || '', blob.milestones) } catch (e) { /* backup verbatim */ }
+    try { if (ms) await commitCommand("meta", "put", [milestonesKey(id), ms]) } catch (e) { /* best-effort */ }
+  }
   try { await commitCommand("meta", "delete", catMetaBakKey(id)) } catch (e) { /* best-effort */ }
   return !!blob.flag
 }
@@ -249,6 +269,35 @@ export { collectCascadeIds }
 // r6: drainLegacyRewrites exported for init()'s ordering contract + the revival regression.
 export { rewriteLegacyProjectIdsWithout, drainLegacyRewrites }
 
+/** D14-B9 (2026-10-01): the purge used to be one-sided — recover restored the row + project meta but
+ *  the saved filters hard-deleted here were gone forever. The doomed filters (read from in-memory
+ *  state, not the DB) are now backed up per victim into `catFiltersBak.<victimId>` in the same
+ *  backup-key family as catProjectMetaBak before the deletes fire; recover re-puts them. */
+const catFiltersBakKey = id => 'catFiltersBak.' + id
+async function backupDoomedFilters (victim, doomed) {
+  const mine = doomed.filter(f => f && f.conds && String(f.conds.catId) === String(victim))
+  if (!mine.length) return
+  try {
+    await commitCommand("meta", "put", [catFiltersBakKey(victim), JSON.stringify(mine)])
+  } catch (e) { console.warn('[category] filter backup write failed for victim', victim, e) }
+}
+/** Restore the backed-up filters of one recovered category (best-effort, then the backup is deleted). */
+async function restoreFiltersBackup (id, commit) {
+  if (typeof window === 'undefined' || !window.todoAPI || !window.todoAPI.dbCall) return
+  let raw = null
+  try { raw = await window.todoAPI.dbCall('getMeta', catFiltersBakKey(id)) } catch (e) { return }
+  if (!raw) return
+  let list = null
+  try { list = JSON.parse(raw) } catch (e) { list = null }
+  if (Array.isArray(list) && list.length) {
+    for (const f of list) {
+      try { await commitCommand("filter", "put", f) } catch (e) { console.error('[category] filter restore put failed:', e) }
+    }
+    try { commit('filters/setList', await window.todoAPI.dbCall('filterList')) } catch (e) { /* list refresh is best-effort */ }
+  }
+  try { await commitCommand("meta", "delete", catFiltersBakKey(id)) } catch (e) { /* best-effort */ }
+}
+
 /** D5: remove saved filters referencing any victim categoryId. `this` = the store (mutations bind it).
  *  Best-effort: a DB failure leaves the in-memory purge skipped too, so state and DB stay consistent
  *  (the filter keeps working as before rather than silently diverging). */
@@ -258,6 +307,12 @@ function purgeFiltersForVictims (victims) {
   const dead = new Set(victims.map(v => String(v)))
   const doomed = fstate.list.filter(f => f && f.conds && dead.has(String(f.conds.catId)))
   if (!doomed.length) return
+  // D14-B9: back up BEFORE the deletes fire (the backup payload comes from in-memory state, so the
+  // put/delete ordering across the IPC pipe cannot corrupt it; a failed backup keeps the delete
+  // one-sided exactly as before rather than blocking the delete).
+  for (const v of victims) {
+    backupDoomedFilters(v, doomed).catch(e => console.warn('[category] filter backup failed:', e))
+  }
   const doomedIds = new Set(doomed.map(f => f.id))
   fstate.list = fstate.list.filter(f => !doomedIds.has(f.id))
   for (const f of doomed) {
@@ -406,6 +461,11 @@ export default {
         // window whose pendingMetaBackups map we cannot see; the marker (shared DB) is visible to all.
         .then(() => waitOutPendingMetaBak(id))
         .then(() => restoreProjectMetaBackup(id))
+        // D14-B9: restore the saved filters the delete-time purge backed up (symmetric reversibility).
+        // The filter restore must NOT swallow the flagRestored result of the previous link — a flat
+        // `.then(() => restoreFiltersBackup(...))` made the next link see `undefined` and the
+        // recovered project id stopped re-entering projectIds.
+        .then(flagRestored => restoreFiltersBackup(id, (m, p) => this.commit(m, p)).then(() => flagRestored))
         .then(flagRestored => {
           if (flagRestored && !state.projectIds.includes(id)) {
             state.projectIds = [...state.projectIds, id]

@@ -17,6 +17,7 @@ export default {
       "giveUp": "Give up",
       "menuTitle": "Pick a task for today",
       "menuEmpty": "Nothing on today's list",
+      "menuTruncated": "Long list — showing the first 30; pick the rest from the main window", // D14-A7
       "menuClear": "No task",
       "noAttach": "No linked task",
       "attachLabel": "Linked: ",
@@ -124,6 +125,7 @@ export default {
       "currentTag": "[Current] ",
       "msEditHint": " (click to edit; remove in the card below)",
       "deadlineWith": "Due {d}",
+      "close": "Close", // D14-A16: modal X announces close, not the dialog title
       "msContent": "Milestone content",
       "msDateField": "Target date",
       "msDatePh": "Pick a date",

@@ -97,6 +97,9 @@
           <span class="depv-task__wait-label">{{ $t('statsA.DepView.waiting') }}</span>
           <span v-for="m in missingOf(t)" :key="m.id" class="depv-miss" :title="m.name"
                 @click.stop="jumpTo(m.id)">{{ m.name }}</span>
+          <!-- D14-A5: the list is capped at 3 chips — make the truncation explicit (EpDependencies pattern) -->
+          <span v-if="missingTotalOf(t) > missingOf(t).length" class="depv-miss depv-miss--more"
+                :title="$t('statsA.DepView.waitMore', { n: missingTotalOf(t) })">+{{ missingTotalOf(t) - 3 }}</span>
         </div>
       </div>
 
@@ -551,6 +554,12 @@ export default {
         .slice(0, 3)
         .map(function (x) { return { id: x.id, name: x.p.taskContent || x.id } })
     },
+    /** D14-A5: full uncapped count of unfinished predecessors (drives the "+N more" chip) */
+    missingTotalOf (t) {
+      var byId = this.allLiveById()
+      return parsePredecessors(t.predecessors)
+        .filter(function (id) { var p = byId[id]; return p && !p.complete }).length
+    },
     completeTask (t) {
       toggleCompleteWithUndo({
         store: this.$store, message: this.$message, todo: this.rawOf(t),
@@ -736,6 +745,9 @@ export default {
   font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--warn-light, rgba(217, 147, 47, .12));
   color: var(--warn, #d9932f); cursor: pointer; }
 .depv-miss:hover { text-decoration: underline; }
+/* D14-A5: +N truncation chip (no click, title explains) */
+.depv-miss--more { cursor: default; }
+.depv-miss--more:hover { text-decoration: none; }
 .depv-task__due { flex-shrink: 0; font-size: 11px; color: var(--text-3, #999); }
 .depv-empty { padding: 18px 10px; text-align: center; font-size: 12px; color: var(--text-3, #999); }
 .depv-wires { position: absolute; inset: 0; pointer-events: none; overflow: visible; z-index: 5; }

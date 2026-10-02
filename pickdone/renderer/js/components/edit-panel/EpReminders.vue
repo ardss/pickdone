@@ -100,14 +100,14 @@ export default {
       const rows = []
       if (this.task.remindTs) rows.push(toRow(this.task.remindTs))
       for (const ts of (Array.isArray(this.task.reminderExtra) ? this.task.reminderExtra : [])) rows.push(toRow(ts))
-      if (!rows.length) rows.push({ date: day0 || null, time: '09:00' })
+      if (!rows.length) rows.push({ date: day0 || null, time: this.defaultRemindTime(day0) })
       this.remindRows = rows
       this.remindOpen = true
     },
     addRemindRow () {
       // New rows default to the task's date (empty if undated); the time is staggered 30 minutes after the previous row to avoid collisions
       const last = this.remindRows[this.remindRows.length - 1]
-      const [h, m] = String((last && last.time) || '09:00').split(':').map(Number)
+      const [h, m] = String((last && last.time) || this.defaultRemindTime((last && last.date) || this.task.dateTs)).split(':').map(Number)
       const nm = (h * 60 + m + 30) % 1440
       // nm is already in 0..1439, so mmToHHmm's clamping is a no-op here (behavior-equivalent)
       this.remindRows.push({ date: (last && last.date) || (this.task.dateTs || null), time: mmToHHmm(nm) })
@@ -136,6 +136,20 @@ export default {
       this.remindRows = []
     },
     /** Sort the edited rows into absolute timestamps and hand them to the parent for persistence. */
+    /** [uiux-2026-10-01 J2 P3] Default slot for a NEW reminder row: 09:00 for a future day, but
+     *  for TODAY (the common case) 09:00 is usually already past — the user believes they will be
+     *  reminded and an in-past reminder never fires. Default to the next half-hour slot instead;
+     *  the past-time warning in EditPanel.onRemindersCommit stays as the backstop. */
+    defaultRemindTime (day0) {
+      const today0 = +dayjs().startOf('day')
+      if (!day0 || day0 !== today0) return '09:00'
+      const t = dayjs()
+      const slot = t.minute() < 30
+        ? t.minute(30).second(0).millisecond(0)
+        : t.add(1, 'hour').minute(0).second(0).millisecond(0)
+      const val = slot.valueOf()
+      return val <= t.valueOf() ? '23:59' : slot.format(FMT.time)
+    },
     commitReminders () {
       if (!this.task) return
       const list = []

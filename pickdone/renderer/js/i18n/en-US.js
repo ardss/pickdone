@@ -36,6 +36,11 @@ export default {
     "cancel": "Cancel",
     "submit": "Submit feedback",
     "submitted": "Feedback submitted. Thank you!",
+    "close": "Close",
+    "submittedLocal": "Saved on this device (feedback is only staged locally in this version; nothing has been uploaded)",
+    "pendingNote": "{n} feedback entries staged on this device (not yet uploaded)",
+    "pendingDropped": "Local staging is full — the oldest {n} entries were overwritten",
+    "attachLogPending": "Log attachment is not available yet: this version only records the checkbox flag",
     "submitFailed": "Submission failed. Please try again later.",
     "needDesc": "Please describe the issue first"
   },
@@ -85,7 +90,7 @@ export default {
     "pairInputLabel": "Enter peer code",
 
     "addPeerLabel": "Add device by IP",
-    "addPeerHostPh": "e.g. 192.168.1.64 (port defaults to 58471)",
+    "addPeerHostPh": "e.g. 192.168.1.64 or 192.168.1.64:58471",
     "addPeerBtn": "Add",
     "addPeerTip": "Use when auto-discovery is blocked by the router/firewall",
     "addPeerOkMsg": "Device added",
@@ -133,6 +138,7 @@ export default {
     "pairWaiting": "Waiting for the other device to confirm… (60s)",
     "pairTimeoutMsg": "No response from the other device (timeout)",
     "pairThrottledMsg": "Too many attempts — please try again later",
+    "pairBadAddrMsg": "Address could not be resolved — enter an IP or IP:port (e.g. 192.168.1.64:58471)",
     "pairFailGenericMsg": "Pairing failed — please try again",
     "egressHydrationFailed": "Egress hydration failed for {n} change(s) — pushed sync data is INCOMPLETE (recoverable via full snapshot)",
     "oplogAppendFailed": "Local change logging failed — recent change(s) will not sync until the next full snapshot",

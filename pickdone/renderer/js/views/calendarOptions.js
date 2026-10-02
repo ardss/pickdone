@@ -7,6 +7,7 @@
 import { dayjs, FMT } from '../utils/core.js'
 import { getLocale } from '../i18n/index.js'
 import { moveWithUndo } from '../utils/confirm.js'
+import { crossDayMovePatch, crossDayRevertPatch } from '../utils/crossDayMove.js'
 import { today0, dayStart } from '../utils/todayBounds.js'
 
 // Date formats follow the locale: FMT.cn* are Chinese format constants; English locale uses English formats, otherwise the toolbar mixes scripts
@@ -52,19 +53,34 @@ export function buildCalendarOptions (self, initialDateTs) {
     eventDurationEditable: false,
     eventDrop (info) {
       self._droppedAt = Date.now()
+      // [uiux-j4 P0 2026-10-01] FullCalendar fires eventDragStop BEFORE eventDrop, and
+      // eventDragStop resets self._dragInfo = null — the old `self._dragInfo &&` guard could never
+      // pass, so day-grid drag-to-reschedule silently persisted nothing while the chip visually
+      // landed on the target day (FullCalendar's optimistic MERGE_EVENTS ghost) until re-sync.
+      // The move is now captured from info.oldEvent (FullCalendar hands us the pre-drop snapshot),
+      // so no drag-state bookkeeping is involved. Reminder re-anchoring rides the shared
+      // crossDayMovePatch invariant (same [R4] rule as tbDrop / TodoItem drag / DayDeck drop):
+      // todoTime/reminder fields anchored to the old day keep their time-of-day on the new day.
+      const origTs = dayStart(info.oldEvent && info.oldEvent.start)
       const ts = dayStart(info.event.start)
-      if (self._dragInfo && ts !== self._dragInfo.origTs) {
-        const origTs = self._dragInfo.origTs
-        // Same semantics as list/card drag: moveWithUndo provides the unified "moved to X + undo"
-        moveWithUndo(self, {
-          label: self.$t('statsJ.TodoItem.movedTo', { d: dayjs(ts).format(FMT.cnDate) }),
-          apply: () => self.$store.dispatch('todo/updateTodoFields', { taskId: info.event.id, patch: { todoTime: ts } }),
-          revert: () => {
-            const raw = self.taskById.get(info.event.id)
-            if (raw) self.$store.dispatch('todo/updateTodoFields', { taskId: info.event.id, patch: { todoTime: origTs } })
-          }
-        })
-      }
+      if (!origTs || ts === origTs) return
+      const raw = self.taskById.get(info.event.id)
+      if (!raw) return
+      const startOf = x => +dayjs(x).startOf('day')
+      const patch = crossDayMovePatch(raw, ts, startOf)
+      // Day-grid drop targets the day, not an hour: a pure midnight marker stays a marker via
+      // crossDayMovePatch; anything without an old-day-anchored todoTime still lands on the day.
+      if (patch.todoTime === undefined) patch.todoTime = ts
+      const revert = crossDayRevertPatch(raw, patch)
+      // Same semantics as list/card drag: moveWithUndo provides the unified "moved to X + undo"
+      moveWithUndo(self, {
+        label: self.$t('statsJ.TodoItem.movedTo', { d: dayjs(ts).format(FMT.cnDate) }),
+        apply: () => self.$store.dispatch('todo/updateTodoFields', { taskId: info.event.id, patch }),
+        revert: () => {
+          const cur = self.taskById.get(info.event.id)
+          if (cur) self.$store.dispatch('todo/updateTodoFields', { taskId: info.event.id, patch: revert })
+        }
+      })
     },
     eventDragStart (info) {
       self._dragInfo = { taskId: info.event.id, origTs: dayStart(info.event.start) }

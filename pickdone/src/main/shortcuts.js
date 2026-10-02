@@ -36,6 +36,21 @@ function hasModifier (accel) {
   return String(accel || '').toLowerCase().split('+').some(p => MODIFIER_KEYS.has(p.trim()))
 }
 
+// D14 C11 (2026-10-02): canonical form for combo COMPARISON. Saved accelerators may carry any
+// modifier synonym (cmd/command/super/hyper/meta, control, option) in any order, while the
+// before-input-event builder emits its own names — the old exact-string compare silently dropped
+// every meta/cmd entry (the combo was built from control/alt/shift only). canonCombo maps
+// synonyms to one vocabulary, orders modifiers deterministically, and is used on BOTH sides of
+// the in-app match.
+const MOD_ORDER = { ctrl: 0, alt: 1, altgr: 2, shift: 3, meta: 4 }
+const MOD_SYNONYMS = { control: 'ctrl', option: 'alt', cmd: 'meta', command: 'meta', super: 'meta', hyper: 'meta' }
+function canonCombo (accel) {
+  const parts = String(accel || '').toLowerCase().split('+').map(p => MOD_SYNONYMS[p.trim()] || p.trim())
+  const mods = parts.filter(p => MOD_ORDER[p] !== undefined).sort((a, b) => MOD_ORDER[a] - MOD_ORDER[b])
+  const keys = parts.filter(p => MOD_ORDER[p] === undefined)
+  return [...mods, ...keys].join('+')
+}
+
 function createShortcuts ({ getMainWindow, showMainOrLock, quickAdd, i18n, log }, opts = {}) {
   const {
     captureSuppressMaxMs = 60000,
@@ -229,11 +244,18 @@ function createShortcuts ({ getMainWindow, showMainOrLock, quickAdd, i18n, log }
     const onProcessGone = () => clearCaptureSuppress()
     const onBeforeInput = (e, input) => {
       const w = getMainWindow()
-      if (input.type !== 'keyboard' || !w || w.isDestroyed()) return
+      // Electron's before-input-event only ever delivers 'keyDown'/'rawKeyDown'/'keyUp'/'char'
+      // — never 'keyboard'. The old `type !== 'keyboard'` guard never passed, killing every
+      // in-app shortcut (ctrl+1..4, ctrl+d, ctrl+s, pin, pomodoro). Accept the real keydown
+      // vocabulary and ignore keyups/char.
+      if ((input.type !== 'keyDown' && input.type !== 'rawKeyDown') || !w || w.isDestroyed()) return
       const parts = []
       if (input.control) parts.push('ctrl')
       if (input.alt) parts.push('alt')
       if (input.shift) parts.push('shift')
+      // D14 C11: the meta/cmd (Win/Cmd) modifier was dropped from the builder, so a saved
+      // cmd+… combo could never match a real keystroke.
+      if (input.meta) parts.push('meta')
       const key = normalizeInputKey(input)
       if (!key) return
       // F-D3: recording in progress — let the combo reach the renderer's capture listener
@@ -243,7 +265,7 @@ function createShortcuts ({ getMainWindow, showMainOrLock, quickAdd, i18n, log }
       const combo = parts.join('+')
       for (const [action] of Object.entries(inApp)) {
         const accNorm = String((s[action] || '')).toLowerCase()
-        if (accNorm && accNorm === combo) {
+        if (accNorm && canonCombo(accNorm) === canonCombo(combo)) {
           e.preventDefault()
           w.webContents.send('shortcut-action', action)
           return
@@ -259,4 +281,4 @@ function createShortcuts ({ getMainWindow, showMainOrLock, quickAdd, i18n, log }
   return { applyShortcuts, unregisterAll: () => globalShortcut.unregisterAll() }
 }
 
-module.exports = { createShortcuts, normalizeKey, normalizeInputKey, hasModifier, KEY_ALIASES }
+module.exports = { createShortcuts, normalizeKey, normalizeInputKey, hasModifier, canonCombo, KEY_ALIASES }

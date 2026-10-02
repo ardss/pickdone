@@ -15,6 +15,7 @@
  */
 
 const log = require('electron-log')
+require('./log-isolation') // test isolation: redirect electron-log file transport into TODO_DB_DIR/TODO_USER_DATA_DIR
 const mergeCore = require('../../shared/sync-core/merge.mjs')
 // Phase-3 (docs/refactor-command-bus.md): buffer drain routes read their op from the manifest
 // so the engine's bulk surfaces stay census-tied to the single command table. The engine still

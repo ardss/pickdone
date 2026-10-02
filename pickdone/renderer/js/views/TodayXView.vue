@@ -35,7 +35,7 @@
         </div>
       </div>
 
-      <div class="tx-sec"><span>{{ $t('statsE.TodayX.settled') }}</span><span class="tx-cnt">{{ settled.length }}</span></div>
+      <div class="tx-sec"><span>{{ $t('statsE.TodayX.settled') }}</span><span class="tx-cnt">{{ settledTotal }}</span></div>
       <div class="tx-settled" v-if="settled.length">
         <div v-for="r in settled" :key="r.key" class="tx-settled__row">
           <span class="tx-settled__time">{{ r.time }}</span>
@@ -143,6 +143,17 @@ export default {
     idleTimerLabel () { return formatMMSS((this.tomato.tomatoTime || 25) * 60) },
     nowRound () { return this.tomatoActualOf(this.nowTask && this.nowTask.taskId) + 1 },
     /* ---- Settled ---- */
+    /* D14-A6: full list first — the badge must show the TRUE count (the visible list is capped
+       below; the badge used to read the sliced array and showed "6" for 11 sessions) */
+    settledTotal () {
+      let n = 0
+      for (const r of (this.tomato.tomatoRecordList || [])) {
+        if (r.succeed === false || !r.endTime) continue
+        if (dayjs(Number(r.endTime)).format(FMT.date) !== dayjs().format(FMT.date)) continue
+        n++
+      }
+      return n
+    },
     settled () {
       const out = []
       for (const r of (this.tomato.tomatoRecordList || [])) {

@@ -95,7 +95,7 @@ test('P0 snapshot: openEdit carries deadlineTs/priority/important (deadline row 
   assert.equal(e.priority, 3, 'prio buttons read task.priority')
   assert.equal(e.important, 1, 'quadrant importance ledger')
   // the actual P0: own-save-echo fingerprint parity — panel snapshot and live row must agree
-  const row = { taskContent: 'a', taskDescribe: 'b', todoTime: 111, reminderTime: 222, deadlineTs: 3333333, priority: 3, important: 1, categoryId: 5 }
+  const row = { taskContent: 'a', taskDescribe: 'b', todoTime: 111, reminderTime: 222, deadlineTs: 3333333, priority: 3, important: 1, categoryId: 5, repeatId: 'r' } // repeatId joined the fingerprint vocabulary (uiux-2026-10-01 J3: the template stamp must re-hydrate the open panel), so the live-row side of the parity fixture carries it too
   assert.equal(RMS.contentFingerprint(e), RMS.contentFingerprint(row),
     'panel-side fingerprint must equal the DB-row-side fingerprint, or shouldRefreshRemote cry-wolves')
 })

@@ -209,10 +209,15 @@ export default {
     },
     /** G1: an aux window's habits edit relayed through the main window — update the main window's Vuex
      *  state so its next persist doesn't resurrect stale data and clobber the aux edit (LS already holds
-     *  the blob; no persist here to avoid an echo loop). Same last-write-wins guard as replaceAll. */
+     *  the blob; no persist here to avoid an echo loop). Last-write-wins guard; D14-B15 (2026-10-01):
+     *  TIES now reject (prior writer wins, `<=` not `<`), aligning this boundary with the
+     *  settings.js initFromDb LWW doctrine (D13-B15: an equal stamp never lets a late-arriving copy
+     *  re-write state that already recorded it). Note replaceAll deliberately KEEPS `<`: it is the
+     *  DB-restore boundary where settings' doctrine resolves ties in the DB blob's favor — applying
+     *  the DB blob on a tie IS the aligned behavior there, no change needed. */
     applyExternal (s, blob) {
       if (!blob || !Array.isArray(blob.habits)) return
-      if ((blob.savedAt || 0) < (s.savedAt || 0)) return
+      if ((blob.savedAt || 0) <= (s.savedAt || 0)) return
       normalizeHabitRecords(blob.habits)
       s.habits = blob.habits
       s.moments = blob.moments || []

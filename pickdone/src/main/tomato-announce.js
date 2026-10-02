@@ -87,6 +87,7 @@ function writeAnnounce (value) {
     return true
   } catch (e) {
     try { require('electron-log').warn('[TomatoAnnounce] write failed:', e && e.message) } catch { /* noop */ }
+    require('./log-isolation') // test isolation: redirect electron-log file transport into TODO_DB_DIR/TODO_USER_DATA_DIR
     return false
   }
 }

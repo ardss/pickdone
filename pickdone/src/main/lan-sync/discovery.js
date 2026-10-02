@@ -231,11 +231,26 @@ function createDiscovery() {
         udp.setBroadcast(true)
         const targets = [...new Set(FALLBACK_PORT_CANDIDATES
           .concat(Number.isInteger(port) && port > 0 ? [port] : []))]
+        // D14 C9 (2026-10-02): a socket that dies AFTER bind (OS removed the interface, handle
+        // reclaimed) used to leave this interval sending into the closed socket — every 2s a sync
+        // throw + warn for the rest of the process lifetime. Count consecutive failed sweeps;
+        // after 3 in a row, declare the advertise channel dead: clear the interval and warn ONCE
+        // with an explicit surface (re-startAdvertising recreates the socket + interval).
+        let failedSweeps = 0
         udpTimer = setInterval(() => {
+          let failed = false
           for (const target of targets) {
             try { udp.send(payload, target, '255.255.255.255', () => {}) } catch (e) {
+              failed = true
               try { require('electron-log').warn('[LanSync] UDP fallback send failed:', e && e.message) } catch { /* noop */ }
+              require('../log-isolation') // test isolation: redirect electron-log file transport into TODO_DB_DIR/TODO_USER_DATA_DIR
             }
+          }
+          failedSweeps = failed ? failedSweeps + 1 : 0
+          if (failedSweeps >= 3) {
+            if (udpTimer) { clearInterval(udpTimer); udpTimer = null }
+            udpBound = false
+            try { require('electron-log').warn('[LanSync] UDP fallback advertise channel dead (3 consecutive failed sweeps) — advertise interval stopped; restart advertising to recreate it') } catch { /* noop */ }
           }
         }, FALLBACK_INTERVAL_MS)
         udpTimer.unref?.()
@@ -278,6 +293,16 @@ function createDiscovery() {
         // '127.0.0.1' placeholder and every UDP-discovered peer was dialed on loopback.)
         upsertPeer({ ...JSON.parse(buf.toString('utf8')), host: (rinfo && rinfo.address) || undefined })
       } catch { /* malformed broadcast */ }
+    })
+    udp.on('close', () => {
+      // D14 C9: an UNEXPECTED post-bind close (not our own stop(), which clears the timer first)
+      // must not leave the advertise interval firing into a closed socket — stop it and surface.
+      if (udpBound && udpTimer) {
+        clearInterval(udpTimer)
+        udpTimer = null
+        udpBound = false
+        try { require('electron-log').warn('[LanSync] UDP fallback socket closed after bind — advertise interval stopped') } catch { /* noop */ }
+      }
     })
     udp.on('error', (err) => {
       // Bind-phase failure (WinNAT excluded range / port occupied): walk to the next candidate
@@ -339,6 +364,9 @@ function createDiscovery() {
     stop,
     getPeers: () => Array.from(peers.values()),
     udpFallbackPort: () => fallbackPort, // test hook: which candidate actually bound
+    // D14 C9 test hooks: raw socket ref + whether the post-bind advertise interval is alive.
+    _udpSocket: () => udp,
+    _udpAdvertiseActive: () => !!(udpBound && udpTimer),
     on: em.on.bind(em),
     _upsertPeer: upsertPeer, // test hook (injected peer lists)
   }

@@ -223,6 +223,7 @@ function createServerRoleHandler(deps) {
       }
     } catch (err) {
       try { require('electron-log').warn('[LanSync] server handler failed:', err && err.message) } catch { /* noop */ }
+      require('../log-isolation') // test isolation: redirect electron-log file transport into TODO_DB_DIR/TODO_USER_DATA_DIR
       onServerError(err)
     }
   }

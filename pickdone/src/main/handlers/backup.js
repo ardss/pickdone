@@ -10,6 +10,7 @@ const { makeAssertMainWindow } = require('./shared')
 
 let log
 try { log = require('electron-log') } catch { log = { warn () {}, error () {} } }
+require('../log-isolation') // test isolation: redirect electron-log file transport into TODO_DB_DIR/TODO_USER_DATA_DIR
 
 /** Atomic JSON write (tmp + rename) with temp-file cleanup on failure (P2 2026-09-17: a failed
  *  writeFileSync/renameSync used to leave .tmp-* residue until the 1h sweep at best — and if the

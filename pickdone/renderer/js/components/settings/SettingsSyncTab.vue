@@ -1,8 +1,12 @@
 <template>
-  <!-- LAN sync tab (P3a, 2026-09-16; Device Center rework 2026-09-17). Rendered lazily: the parent
-       gates this component with v-if on local tab state, so the default settings DOM (visual
-       baseline) is pixel-identical. -->
   <div class="tab-panel">
+    <!-- The root must stay a single element (no comment before the root div): a comment sibling
+         before the root makes the component root a Fragment and Vue cannot apply the parent's
+         v-show directive in dev builds (dev compiler keeps comments; prod strips them). -->
+    <!-- LAN sync tab (P3a, 2026-09-16; Device Center rework 2026-09-17). Rendered lazily: the parent
+         gates this component with v-if on local tab state, so the default settings DOM (visual
+         baseline) is pixel-identical. A leading comment BEFORE the root div would make the component
+         root a Fragment and Vue could not apply the parent's v-show directive. -->
     <div class="form">
       <div class="form-item"><span class="form-item__label"></span>
         <div class="form-item__control"><span class="tip sync-free-tip">{{ $t('sync.freeForever') }}</span></div></div>
@@ -17,7 +21,7 @@
       <div class="form-item"><span class="form-item__label">{{ $t('sync.deviceNameLabel') }}</span>
         <div class="form-item__control">
           <el-input size="small" class="ctl-md" maxlength="40" :aria-label="$t('sync.deviceNameLabel')"
-                    v-model="nameDraft" @keyup.enter="saveName" @blur="saveName"/>
+                    v-model="nameDraft" @keydown.enter="e => { if (e.isComposing || e.keyCode === 229) return; saveName() }" @blur="saveName"/>
         </div></div>
     </div>
 
@@ -42,7 +46,7 @@
                   :disabled="busy" @click="startAlias(p)">✎</button>
           <el-input v-if="aliasEditingId === p.deviceId" size="small" class="ctl-sm sync-alias-input"
                     maxlength="40" v-model="aliasDraft" :placeholder="$t('sync.aliasPh')"
-                    :aria-label="$t('sync.aliasEdit')" @keyup.enter="saveAlias(p)" @blur="saveAlias(p)"/>
+                    :aria-label="$t('sync.aliasEdit')" @keydown.enter="e => { if (e.isComposing || e.keyCode === 229) return; saveAlias(p) }" @blur="saveAlias(p)"/>
           <span class="tip sync-device-meta">{{ p.host }}</span>
           <span class="tip sync-device-meta" v-if="p.lastRoundAt">{{ $t('sync.lastRound', { time: relTime(p.lastRoundAt) }) }}</span>
           <span class="tip sync-device-meta" v-else>{{ $t('sync.neverRan') }}</span>
@@ -204,7 +208,7 @@ import { PAIRING_CODE_TTL_MS } from '../../../../shared/pairing-ttl.mjs'
  *  loose cast keeps vue-tsc green until contracts.d.ts grows the new op names. */
 const dbCallLoose = (op: string, params?: unknown) => (window.todoAPI.dbCall as unknown as (o: string, p?: unknown) => Promise<unknown>)(op, params)
 const syncPairRespond = (opts: { accept: boolean }) => dbCallLoose('syncPairRespond', opts)
-const syncPairRequest = (host: string) => dbCallLoose('syncPairRequest', { host })
+const syncPairRequest = (host, port) => dbCallLoose('syncPairRequest', { host, port })
 
 // [component-fixes] pure-start (extracted verbatim by tests/unit/components) — keep pure & framework-free
 /** Online/offline/error dot class for a peer card: red when lastError is fresh (< 5min),
@@ -232,6 +236,26 @@ function capFeed (recent, cap) {
 function feedIcon (kind) {
   return { push: '↑', pull: '↓', error: '!', pair: '∞', snapshot: '⇄' }[kind] || '·'
 }
+/** D2-b/c (pair-by-IP fallback): parse the add-device field — accepts a bare host OR
+ *  "host:port" (TODO_SYNC_PORT legitimately moves peers off 58471; the old code sent the
+ *  combined string verbatim as the hostname → getaddrinfo ENOTFOUND). Returns
+ *  { host, port } where port is null for a bare host (main then applies DEFAULT_PORT).
+ *  Only ONE colon is treated as a separator, so raw IPv6 literals pass through untouched. */
+function parseConnectAddress (input) {
+  const s = String(input || '').trim()
+  if (!s) return null
+  const m = s.match(/^([^:]+):(\d{1,5})$/)
+  if (m) {
+    const port = Number(m[2])
+    if (port >= 1 && port <= 65535) return { host: m[1], port }
+    return null
+  }
+  // A colon that is NOT a valid host:port separator (e.g. "1.2.3.4:abc") must not be dialed
+  // verbatim — that is the old bug shape (ENOTFOUND '1.2.3.4:abc'). Only multi-colon IPv6
+  // literals pass through untouched.
+  if ((s.match(/:/g) || []).length === 1) return null
+  return { host: s, port: null }
+}
 /** Map a pairing failure (err.reason/err.message from the main process) to an i18n key;
  *  '' means "no specific reason known" → the caller shows the generic confirm-flow message. */
 function pairFailureKey (err) {
@@ -239,6 +263,9 @@ function pairFailureKey (err) {
   if (/reject/i.test(r)) return 'sync.pairRejectedMsg'
   if (/time[- ]?out|timed/i.test(r)) return 'sync.pairTimeoutMsg'
   if (/throttl/i.test(r)) return 'sync.pairThrottledMsg'
+  // D2-c: DNS lookup failure on the dialed address — say the FORMAT is wrong instead of the
+  // generic retry toast (the old host:port-verbatim bug surfaced exactly here).
+  if (/getaddrinfo|ENOTFOUND|EAI_AGAIN/i.test(r)) return 'sync.pairBadAddrMsg'
   return ''
 }
 /** Relative-time bucketing shared by peer cards and the feed: {n, unit} with unit in
@@ -593,18 +620,20 @@ export default {
       if (req) this.refresh()
     },
     async connectPeer () {
-      const host = String(this.connectHost || '').trim()
+      // D2-b: accept "host:port" (and bare host, which main defaults to 58471) — the combined
+      // string used to be dialed verbatim as the hostname (getaddrinfo ENOTFOUND '127.0.0.1:59801').
+      const parsed = parseConnectAddress(this.connectHost)
       // P1-4: ONE in-flight guard for both pairing flows — submitPairing used `busy` while
       // connectPeer used `connecting`, so both could run concurrently and interleave the two
       // secret rotations. connectPeer now holds `busy` too.
-      if (!host || this.busy || this.connecting) return
+      if (!parsed || !parsed.host || this.busy || this.connecting) return
       // P1-4: pairing adopts a NEW single shared secret — existing peers are disconnected and
       // must re-pair. Say so before the user pulls the trigger.
       const proceed = () => {
         this.busy = true
         this.connecting = true // immediate feedback: the 63s await must not leave the user staring at a dead button
         try {
-          syncPairRequest(host).then(() => {
+          syncPairRequest(parsed.host, parsed.port).then(() => {
             this.$message.success(this.$t('sync.connectSent'))
           }).catch(e => {
             const key = pairFailureKey(e)

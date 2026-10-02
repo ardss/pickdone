@@ -36,6 +36,10 @@ const router = VueRouter.createRouter({
           path: '/todo-list',
           name: 'todo-list',
           component: AppShell,
+          // [uiux-2026-10-01 J5 P3] Landing on the bare /todo-list rendered a blank main area with
+          // no view and no nav item highlighted — reading as a crash until a nav item was clicked.
+          // Redirect to the concrete default view (same target as the index redirect above).
+          redirect: '/todo-list/today',
           children: [
             { path: 'today', name: 'todo-list-today', component: TodayView },
             { path: 'today-x', name: 'todo-list-today-x', component: TodayXView },

@@ -11,6 +11,7 @@
  */
 const { autoUpdater } = require('electron-updater')
 const log = require('electron-log')
+require('./log-isolation') // test isolation: redirect electron-log file transport into TODO_DB_DIR/TODO_USER_DATA_DIR
 const { readConfig, isReadFailed } = require('./config-store')
 
 // Portable versions (PORTABLE_EXECUTABLE_DIR injected by the electron-builder portable runtime) do not participate in in-app updates:

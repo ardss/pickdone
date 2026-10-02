@@ -74,9 +74,13 @@ function createWindowManager (ctx) {  const {
     try { applyShortcuts(readConfig().shortcutKeySettings) } catch (e) { log.warn('[Shortcuts] re-init failed', e) }
     win.loadURL('app://app/renderer-dist/index.html').catch(e => log.error('[Window] loadURL failed', e))
     if (isTestEnv) {
-      win.setTitle(i18n.mt('appName') + ' [TEST]')
+      // Multi-instance mode (PICKDONE_MULTI=1, src/main/multi-instance.js): append the userData
+      // dir scope hash so the two instances of a dev-duo session are tellable apart at a glance.
+      const multiSuffix = require('./multi-instance').titleSuffix(process.env, app.getPath('userData'))
+      const testTitle = i18n.mt('appName') + ' [TEST]' + multiSuffix
+      win.setTitle(testTitle)
       win.webContents.on('did-finish-load', () => {
-        win.setTitle(i18n.mt('appName') + ' [TEST]')
+        win.setTitle(testTitle)
         win.webContents.executeJavaScript(`{
           if (!document.getElementById('test-env-badge')) {
             const b = document.createElement('div')
@@ -85,7 +89,7 @@ function createWindowManager (ctx) {  const {
             b.style.cssText = 'position:fixed;top:0;left:0;z-index:99999;background:#f2a63b;color:#fff;font:bold 11px/1 sans-serif;padding:4px 8px;border-radius:0 0 6px 0;pointer-events:none;letter-spacing:1px'
             document.body.appendChild(b)
           }
-          document.title = ${JSON.stringify(i18n.mt('appName'))} + ' [TEST]'
+          document.title = ${JSON.stringify(i18n.mt('appName'))} + ${JSON.stringify(' [TEST]' + multiSuffix)}
         }`).catch(() => {})
       })
     }

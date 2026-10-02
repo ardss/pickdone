@@ -43,7 +43,10 @@ test('h7: EpReminders watches task.taskId to trigger the reset (panel stays open
 })
 
 test('h7: EditPanel hydrate() replaces the task object (so the child watcher fires on switch)', () => {
-  assert.match(PARENT, /this\.e = JSON\.parse\(JSON\.stringify\(s\)\)/)
+  // 2026-10-02: hydrate snapshots from the LIVE store row when it exists (deep-water J2 fix),
+  // so the whole-object assignment now goes through the `snap` local — same contract: `this.e`
+  // is replaced wholesale, never mutated in place.
+  assert.match(PARENT, /this\.e = snap/)
 })
 
 /* ---------------- 2. [P2] undo must not cross tasks ---------------- */

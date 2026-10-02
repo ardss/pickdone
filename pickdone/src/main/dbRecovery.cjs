@@ -13,6 +13,7 @@ let _log = null
 function logWarn (...args) {
   try {
     if (!_log) _log = require('electron-log')
+    require('./log-isolation') // test isolation: redirect electron-log file transport into TODO_DB_DIR/TODO_USER_DATA_DIR
     if (_log && _log.warn) return _log.warn(...args)
   } catch { /* electron-log unavailable (unit tests) */ }
   console.warn(...args)

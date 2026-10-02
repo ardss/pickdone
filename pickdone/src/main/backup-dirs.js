@@ -6,6 +6,7 @@
 const path = require('path')
 const fs = require('fs')
 const log = require('electron-log')
+require('./log-isolation') // test isolation: redirect electron-log file transport into TODO_DB_DIR/TODO_USER_DATA_DIR
 
 // Lazy electron require: this module is also consumed by pure-Node CLI code
 // (cli/lib-restore-backup.cjs) where `electron` cannot resolve at require time.

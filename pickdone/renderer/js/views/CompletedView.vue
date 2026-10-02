@@ -83,7 +83,9 @@ export default {
   },
   computed: {
     list () { return this.$store.state.todo.views.completed },
-    groups () { return buildCompletedBuckets(this.list) },
+    // D14-B5: honor settings.expiredCompletedTodoRange (was a dead hard 30-day cap here, while
+    // category/project pages already followed the setting via buildExpiryGroups)
+    groups () { return buildCompletedBuckets(this.list, undefined, this.$store.state.settings.expiredCompletedTodoRange) },
     anyCollapsed () { return this.groups.some(g => this.collapsedMap[g.key]) }
   },
   methods: {

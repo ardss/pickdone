@@ -34,7 +34,8 @@
     </div>
 
     <nav class="sn-navs">
-      <div v-for="n in filteredNavOrder" :key="n" class="sn-nav-item" role="link" tabindex="0" :title="collapsed ? navLabel(n) : ''"
+      <div v-for="n in filteredNavOrder" :key="n" class="sn-nav-item" role="link" tabindex="0" :title="collapsed ? navLabel(n) : navHint(n)"
+           :aria-label="navAria(n)"
            :class="{active: $route.name===n || (n==='todo-list-projects' && $route.name==='todo-list-project')}"
            :aria-current="$route.name===n ? 'page' : null"
            @click="go(n)" @keydown.enter.prevent="go(n)">
@@ -186,10 +187,15 @@ import { navKeyOfRoute } from '../views/registry.js'
 import { NAV_ICON, NAV_LABEL, NAV_ORDER } from './side-nav/navConfig.js'
 import * as handlers from './side-nav/sideNavHandlers.js'
 import { deleteCategoryWithUndo } from './side-nav/categoryDelete.js'
+// [uiux-2026-10-01 J1/J5 P1] FilterModal was registered as a bare arrow `() => import(...)`:
+// Vue treats that as a functional component whose render returns a Promise, coercing to the
+// literal text '[object Promise]' in the sidebar — the new-filter dialog never mounted.
+// defineAsyncComponent is the correct lazy-component wrapper.
+import { defineAsyncComponent } from 'vue'
 
 export default {
   name: 'SideNav',
-  components: { WeatherWidget, SnTagPanel, SnManageCategoriesModal, SnManageTagsModal, SnCategoryItem, SnFootActions, FilterModal: () => import('./FilterModal.vue') },
+  components: { WeatherWidget, SnTagPanel, SnManageCategoriesModal, SnManageTagsModal, SnCategoryItem, SnFootActions, FilterModal: defineAsyncComponent(() => import('./FilterModal.vue')) },
   data () {
     return {
       catBusyId: null as any, // D6-F4: category row whose delete cascade is running (blocks re-entry)
@@ -301,6 +307,8 @@ export default {
       if (id) this.$router.push({ name: 'todo-list-filter', params: { id: String(id) } }).catch(() => {})
     },
     navLabel (n) { return handlers.navLabel(this, n) },
+    navHint (n) { return handlers.navHint(this, n) },
+    navAria (n) { return handlers.navAria(this, n) },
     toggleCollapse () {
       // U4 (via utils/navCollapse.js): an explicit user toggle resolves against the EFFECTIVE
       // collapsed state (preference OR transient narrow force) and is the ONLY path that writes the

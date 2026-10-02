@@ -89,8 +89,11 @@ export default {
     persist (keyOverride) {
       const key = keyOverride || keyOf(this.catId)
       // 归属再校验:key 指向的项目与当前 docs 的归属项目不一致(防抖跨越了项目切换)时放弃本次写,防止 A 项目文档写进 B 项目 meta
+      // D14-C4: the abandonment is no longer SILENT — the dropped write flips the honest
+      // save-failed state (visible in the footer; the next queueSave retries), so a user who
+      // typed during a project-switch load window at least sees that the edit did not land.
       const keyCat = Number(String(key).slice('projectDocs:'.length))
-      if (this._docsCatId != null && !Number.isNaN(keyCat) && keyCat !== this._docsCatId) return
+      if (this._docsCatId != null && !Number.isNaN(keyCat) && keyCat !== this._docsCatId) { this.saveFailed = true; return }
       try {
         // [projectdocs-false-saved-stamp fix] the old .catch(() => {}) swallowed write failures and
         // then stamped savedAt unconditionally — the UI showed "Saved HH:mm" while the docs never

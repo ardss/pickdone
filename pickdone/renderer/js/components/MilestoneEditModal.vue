@@ -3,7 +3,8 @@
     <div class="modal-container" @click.self="close">
       <div class="modal-tablecloth" @click.self="close">
         <div class="modal" role="dialog" aria-modal="true" :aria-label="title" style="width:420px;max-width:min(420px,92vw)" @keydown.esc="close">
-          <div class="modal__header"><span>{{ title }}</span><div class="modal__close close-x" role="button" tabindex="0" :aria-label="title" @click="close" @keydown.enter.prevent="close"></div></div>
+          <!-- D14-A16: the X must announce "close", not the dialog title (TaskAccountModal pattern) -->
+          <div class="modal__header"><span>{{ title }}</span><div class="modal__close close-x" role="button" tabindex="0" :aria-label="$t('statsB.ProjectView.close')" @click="close" @keydown.enter.prevent="close"></div></div>
           <div class="modal__body">
             <div class="msm-field">
               <label class="msm-label" for="msm-title">{{ $t('statsB.ProjectView.msContent') }}</label>

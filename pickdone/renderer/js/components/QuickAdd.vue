@@ -5,7 +5,9 @@
       <input ref="inp" v-model="text" class="qa-input" :placeholder="$t('statsD.QuickAdd.placeholder')"
              :aria-label="$t('statsD.QuickAdd.ariaLabel')"
              @input="failed = false"
-             @keyup.enter="e => { if (e.isComposing || e.keyCode === 229) return; onEnter() }"/>
+             @paste="onPaste"
+             @keyup.enter="e => { if (e.isComposing || e.keyCode === 229) return; onEnter() }"
+             @keyup.esc="onCancel"/>
       <transition name="fade">
         <!-- Inline failure feedback for the 64px standalone quick-add window: a $message toast is
              clipped there (overflow:hidden), so quiet mode surfaces the error inside the card -->
@@ -38,6 +40,7 @@
 import { parseNaturalDate } from '../utils/nlDate.js'
 import {dayjs, FMT } from '../utils/core.js'
 import { resolveQuickAddDate } from '../utils/quickAddDate.js'
+import { splitPasteLines, ensureTagSuffix } from '../utils/quickAddPaste.js'
 
 export default {
   name: 'QuickAdd',
@@ -101,7 +104,61 @@ export default {
     window.removeEventListener('todo:focus-quickadd', this.focusInput)
   },
   methods: {
+    /* [uiux-2026-10-01 J1 P3] Esc is the universal cancel key: clear the draft (and the failure
+       mark); a non-empty draft is also left so the field blurs — an empty draft only blurs. */
+    onCancel () {
+      this.failed = false
+      if (this.text) this.text = ''
+      const inp = this.$refs.inp
+      if (inp && inp.blur) inp.blur()
+    },
     focusInput () { this.$refs.inp.focus() },
+    // D4-paste fix: a multi-line paste into this single-line <input> used to fold the lines
+    // into one space-joined task with no hint. When the clipboard text carries multiple
+    // lines, intercept it and create one task per line (the current date selection and the
+    // tag/category route context apply to every line); a single-line paste keeps native behavior.
+    async onPaste (e) {
+      const lines = splitPasteLines(e.clipboardData && e.clipboardData.getData('text'))
+      if (lines.length <= 1) return
+      e.preventDefault()
+      await this.createLines(lines)
+    },
+    // Shared bulk-create path for the multi-line paste: same payload rules as onEnter
+    // (date chip selection wins over defaults, tag page context appends the tag, category/
+    // project page context sets categoryId), minus NL date parsing (that only applies to the
+    // whole single-line draft, not to each pasted line).
+    async createLines (lines) {
+      if (this._submitting) return
+      this._submitting = true
+      const tag = this.routeTag
+      const catId = this.routeCategoryId
+      try {
+        for (const raw of lines) {
+          const content = ensureTagSuffix(raw, tag)
+          const payload: any = {
+            todoContent: content,
+            todoDescription: '',
+            todoDate: resolveQuickAddDate({ pickedDate: this.effDate, parsedTs: null, inTodoBox: this.inTodoBox, todayTs: dayjs().startOf('day').valueOf() }),
+            todoReminderTime: 0,
+            todoDifficultyLevel: 0
+          }
+          if (catId != null) payload.categoryId = catId
+          await this.$store.dispatch('todo/addTodo', payload)
+        }
+        const n = lines.length
+        this.text = ''
+        this.pickedDate = null
+        const msg = this.$t('statsD.QuickAdd.created', { c: lines[0] }) + ' …'
+        const when = n > 1 ? ` (${n})` : ''
+        if (!this.quiet) this.$message.success(this.$t('statsD.QuickAdd.createdBulk', { n }) || (msg + when))
+        if (this.$announce) this.$announce(this.$t('statsD.QuickAdd.createdBulk', { n }) || (msg + when))
+        this.$emit('created', { content: lines.join('\n'), date: this.effDate })
+      } catch (err) {
+        console.error('[quick-add] multi-line paste failed:', err)
+        if (this.quiet) this.failed = true
+        else this.$message.error(this.$t('statsD.QuickAdd.createFailed'))
+      } finally { this._submitting = false }
+    },
     clearDate () {
       this.pickedDate = 0 // explicitly "no date" (goes to the todo box); NL parsing no longer applies
     },
@@ -133,8 +190,7 @@ export default {
       // [maint-0925 A11] the includes() check is a substring match: '#java' suppressed '#java' AND
       // '#javascript'. Word-boundary regex so only the exact tag token counts as present.
       const tag = this.routeTag
-      const esc = tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-      if (tag && !new RegExp('(^|\\s)#' + esc + '(?=[\\s#,，。.!?！？]|$)').test(content)) content = content + ' #' + tag
+      content = ensureTagSuffix(content, tag)
       try {
       const payload: any = {
         todoContent: content,

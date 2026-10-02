@@ -18,6 +18,7 @@ export default {
       giveUp: '放弃',
       menuTitle: '选择今日任务',
       menuEmpty: '今日暂无待办',
+      menuTruncated: '任务较多，仅显示前 30 条，其余请到主窗口选择', // D14-A7
       menuClear: '不关联任务',
       noAttach: '未关联任务',
       attachLabel: '关联：',
@@ -118,6 +119,7 @@ export default {
       currentTag: '【当前】',
       msEditHint: '（点击编辑；删除在下方卡片）',
       deadlineWith: '截止 {d}',
+      close: '关闭', // D14-A16: modal X announces close, not the dialog title
       msContent: '里程碑内容',
       msDateField: '目标日期',
       msDatePh: '选择日期',
