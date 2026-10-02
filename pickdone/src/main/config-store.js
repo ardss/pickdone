@@ -50,10 +50,16 @@ const TRANSIENT_ATTEMPTS = 5
 function readBackoffMs (attempt) { return Math.min(100 * Math.pow(2, attempt - 1), 800) } // 100, 200, 400, 800 (≈1.5s total)
 function sleepBackoff (ms) {
   // Synchronous backoff: readConfig's contract is sync (every caller reads the return value).
+  // D15 C14 (2026-10-03): when Atomics.wait/SAB is unavailable the old catch fell through to
+  // an IMMEDIATE retry — the promised ~1.5s AV-lock wait silently degraded to 5 back-to-back
+  // reads. Port the busy-spin fallback from multi-instance.js so the wait actually elapses
+  // (busy, not sleeping, but honest — the retry budget stays the retry budget).
   try {
-    const buf = new SharedArrayBuffer(4)
-    Atomics.wait(new Int32Array(buf), 0, 0, ms)
-  } catch { /* no SAB/Atomics.wait: fall back to an immediate retry */ }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+    return
+  } catch { /* no SAB/Atomics.wait here: busy spin below keeps the delay real */ }
+  const end = Date.now() + ms
+  while (Date.now() < end) { /* spin */ }
 }
 function quarantineConfig () {
   // P2 2026-09-20: the rename itself used to be swallowed silently; when it FAILS the unreadable
@@ -172,4 +178,4 @@ function writeConfig (patch) {
   return result
 }
 
-module.exports = { readConfig, writeConfig, isReadFailed, consumeQuarantineNotice, DEFAULT_SHORTCUTS, __setConfigDir }
+module.exports = { readConfig, writeConfig, isReadFailed, consumeQuarantineNotice, DEFAULT_SHORTCUTS, __setConfigDir, sleepBackoff }

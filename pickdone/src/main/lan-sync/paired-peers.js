@@ -11,11 +11,20 @@ module.exports = function createPairedPeers ({ settingGet, settingPut, log, isDi
     if (h.startsWith('::ffff:')) h = h.slice(7)
     return isDialableHost(h) ? h : null
   }
+  /* D15 C1 (2026-10-03): a read THROW is not the same as "never paired". The old catch{}
+   * returned {} for an unreadable/locked settings table, so persistPairedPeer merged one new
+   * peer into an EMPTY map and settingPut erased EVERY previously paired peer (secrets
+   * included) — exactly on a busy/closed db. Now a read failure THROWS; the persist/remove
+   * paths catch it and ABORT, keeping the old durable map intact. Only a genuinely empty or
+   * malformed-but-readable value yields {}. */
   function loadPairedPeers () {
+    let v
     try {
-      const v = JSON.parse(settingGet(K_PAIRED_PEERS) || '{}')
-      return (v && typeof v === 'object' && !Array.isArray(v)) ? v : {}
-    } catch { return {} }
+      v = JSON.parse(settingGet(K_PAIRED_PEERS) || '{}')
+    } catch (e) {
+      throw new Error('paired-peers read failed (refusing to derive a write from it): ' + (e && e.message))
+    }
+    return (v && typeof v === 'object' && !Array.isArray(v)) ? v : {}
   }
   /** Merge a peer record keyed by deviceId. Writes ONLY on a real change (connection events fire
    *  per dial — this must not turn into a settings-table write amplifier). Returns true when written. */

@@ -91,10 +91,36 @@ const LOCK_RETRY_DELAY_MS = 500
  * mode we wait out the stale handle (unlink is our probe: EBUSY = still held, ENOENT or
  * success = free) before requesting the lock. A LIVE holder keeps the file undeletable
  * for its whole lifetime, so the wait is bounded and times out into the normal lock
- * request (which then correctly denies a real duplicate). */
+ * request (which then correctly denies a real duplicate).
+ *
+ * D15 C2 (2026-10-03): that premise is WINDOWS-ONLY. On POSIX unlink() succeeds even while
+ * a live holder has the file open — the old unlink-loop DELETED a live holder's lockfile,
+ * letting a second instance take the lock on the same data dir (SQLite double-writer
+ * corruption). POSIX now proves staleness from the lockfile CONTENT instead: Chromium
+ * writes 'hostname-pid'; a parseable pid that is still alive means a live holder (never
+ * unlink, report immediately — no wait can free it); a dead/unparseable pid means a
+ * genuine leftover and is unlinked. Unlink-success alone never proves anything here.
+ *
+ * D15 C3: the wait is also bounded lower (20s -> 8s). The stale crashpad handle lives
+ * ~10-15s; the remaining gap is covered by the existing one relaunch hop (500ms pre-lock
+ * delay + retry), so a hard-kill restart still succeeds — the user-facing worst case for
+ * the tail is one extra launch attempt, not a 20s frozen pre-window main thread. The wait
+ * now also logs at start so a visible pre-window stall is attributable. On POSIX the pid
+ * check resolves immediately — no wait loop at all. */
 
-const STALE_LOCKFILE_MAX_WAIT_MS = 20_000
+const STALE_LOCKFILE_MAX_WAIT_MS = 8_000
 const STALE_LOCKFILE_POLL_MS = 250
+
+/** Extract the holder pid from Chromium's singleton lockfile content ('hostname-pid'). */
+function lockfileHolderPid (content) {
+  const m = /-(\d+)\s*$/.exec(String(content || ''))
+  return m ? Number(m[1]) : null
+}
+
+/** Signal-0 liveness probe (EPERM counts as alive: a pid we may not signal still exists). */
+function pidAlive (pid) {
+  try { process.kill(pid, 0); return true } catch (e) { return !!(e && e.code === 'EPERM') }
+}
 
 /** Current retry-attempt count from argv (0 on a normal launch). */
 function lockRetryCount (argv) {
@@ -139,11 +165,35 @@ function sleepSync (ms) {
 
 /** Wait out and clear a stale singleton lockfile in userDataDir (multi mode only).
  *  Returns { cleared, waitedMs }: cleared=true means the file is gone (or never existed),
- *  so the singleton lock request can proceed; cleared=false means it was still held at
- *  the deadline — the caller proceeds anyway and lets the real lock request decide
- *  (a live holder must still deny us). */
-function clearStaleSingletonLockFileSync (userDataDir, { maxWaitMs = STALE_LOCKFILE_MAX_WAIT_MS, pollMs = STALE_LOCKFILE_POLL_MS } = {}) {
+ *  so the singleton lock request can proceed; cleared=false means it was still held (or —
+ *  POSIX — held by a PROVEN-LIVE holder, flagged as liveHolder) — the caller proceeds
+ *  anyway and lets the real lock request decide (a live holder must still deny us). */
+function clearStaleSingletonLockFileSync (userDataDir, { maxWaitMs = STALE_LOCKFILE_MAX_WAIT_MS, pollMs = STALE_LOCKFILE_POLL_MS, platform = process.platform } = {}) {
   const lockPath = require('node:path').join(userDataDir, 'lockfile')
+  if (platform !== 'win32') {
+    // D15 C2: on POSIX, unlink-success is NOT evidence of a stale lock (unlink works on a
+    // live holder's open file). Prove staleness from the content's holder pid before removing.
+    const fs = require('node:fs')
+    let content = null
+    try {
+      content = fs.readFileSync(lockPath, 'utf8')
+    } catch (e) {
+      if (e && e.code === 'ENOENT') return { cleared: true, waitedMs: 0 }
+      // unreadable for another reason: not proven stale — let the lock request decide
+      return { cleared: false, waitedMs: 0 }
+    }
+    const pid = lockfileHolderPid(content)
+    if (pid !== null && pidAlive(pid)) {
+      try { console.warn('[multi-instance] singleton lockfile held by LIVE pid', pid, '— leaving it alone; the lock request will deny a real same-dir duplicate') } catch { /* noop */ }
+      return { cleared: false, waitedMs: 0, liveHolder: true }
+    }
+    // dead pid (or no parseable pid = not a Chromium lock): genuine leftover, safe to remove
+    try { fs.unlinkSync(lockPath); return { cleared: true, waitedMs: 0 } } catch (e) {
+      if (e && e.code === 'ENOENT') return { cleared: true, waitedMs: 0 }
+      return { cleared: false, waitedMs: 0 }
+    }
+  }
+  try { console.warn('[multi-instance] waiting out a possibly-stale singleton lockfile (up to ' + maxWaitMs + 'ms, Windows-only unlink probe): ' + lockPath) } catch { /* noop */ }
   for (let waitedMs = 0; ; waitedMs += pollMs) {
     try {
       require('node:fs').unlinkSync(lockPath)
@@ -159,7 +209,7 @@ function clearStaleSingletonLockFileSync (userDataDir, { maxWaitMs = STALE_LOCKF
 module.exports = {
   isMultiEnabled, dirScopeHash, lockRequestArgs, shouldQuitOnLockLoss, titleSuffix,
   lockRetryCount, relaunchArgv, shouldRelaunchOnLockLoss, preLockDelayMs, sleepSync,
-  clearStaleSingletonLockFileSync,
+  clearStaleSingletonLockFileSync, lockfileHolderPid, pidAlive,
   LOCK_RETRY_FLAG, LOCK_RETRY_MAX, LOCK_RETRY_DELAY_MS,
   STALE_LOCKFILE_MAX_WAIT_MS, STALE_LOCKFILE_POLL_MS
 }
