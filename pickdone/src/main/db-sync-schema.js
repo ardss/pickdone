@@ -16,6 +16,10 @@
  */
 
 const SYNC_BLOB_KEYS = ['db.settingsState', 'db.habitsState']
+// mig-v6-corrupt-blob-freezes-schema-forever: machine-local boot-attempt counter for the corrupt
+// settings-blob retry loop (see migrateV6). 5 failed retries, then escalate (advance anyway).
+const BLOB_MIGRATION_ATTEMPTS_KEY = 'sync.settingsBlobMigrationAttempts'
+const BLOB_MIGRATION_ESCALATE_AT = 5
 // Belt and braces (2026-09-19): pre-rename installs wrote the habits blob under the bare 'habitsState'
 // meta key; normalize either spelling to the canonical db.* key so migrateV6/bridge migrate both.
 const canonBlobKey = k => k === 'habitsState' ? 'db.habitsState' : k
@@ -195,7 +199,32 @@ module.exports = ({ getDb, log }) => {
       d.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
         .run(snapKey, blob.value)
     }
-    return pendingRetry === 0
+    // mig-v6-corrupt-blob-freezes-schema-forever (P2, symptom of the broader defect "one-shot
+    // migrations with retained-input retry loops have no escalation policy"): the migrator loop
+    // (db.js) breaks WITHOUT advancing schemaVersion whenever this returns false, and the corrupt
+    // blob is kept for retry — so an unparseable blob (disk bit-rot, truncated write) used to
+    // freeze the schema at v5 across boots forever. Machine-local attempt counter (TOMATO_PARTIAL
+    // _MIGRATION_ATTEMPTS_KEY pattern from db-tomato-ops.js): after BLOB_MIGRATION_ESCALATE_AT
+    // failed boots, give up retrying, log.error, and return true so the version advances. The
+    // corrupt blob is left untouched (the 'settingsRows.src.<key>' snapshot is only stamped for
+    // parseable docs, so idempotency bookkeeping is unaffected) and a later boot where the blob
+    // became parseable (e.g. restored from backup) still migrates it: success clears the counter.
+    if (pendingRetry === 0) {
+      try { d.prepare('DELETE FROM meta WHERE key = ?').run(BLOB_MIGRATION_ATTEMPTS_KEY) } catch { /* best-effort */ }
+      return true
+    }
+    let attempts = 1
+    try {
+      const prev = d.prepare('SELECT value FROM meta WHERE key = ?').get(BLOB_MIGRATION_ATTEMPTS_KEY)
+      attempts = (Number(prev && prev.value) || 0) + 1
+      d.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+        .run(BLOB_MIGRATION_ATTEMPTS_KEY, String(attempts))
+    } catch { /* counter is best-effort: lose it and the retry window simply restarts */ }
+    if (attempts > BLOB_MIGRATION_ESCALATE_AT) {
+      log.error(`[TodoDB] settings blob migration: still unparseable after ${attempts} boots — advancing schemaVersion, corrupt blob left untouched (recovered blobs migrate on a later boot)`)
+      return true
+    }
+    return false
   }
 
   // Bridge wiring called once from db.js after OPS/WRITE_OPS exist: wraps setMeta so legacy blob
