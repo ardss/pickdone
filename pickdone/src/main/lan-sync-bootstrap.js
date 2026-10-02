@@ -203,6 +203,49 @@ function withPeerDeviceId (body) {
   return body
 }
 
+// d12 (2026-10-02) schemaVersion gate: the snapshot RECEIVE path never read body.schemaVersion,
+// so a NEWER peer's snapshot applied rows silently on both the assembled and streaming paths.
+// Only a newer version is fatal (older versions are forward-compatible by the `|| 1` coercion
+// the senders already apply — server-role.js:149, client-round.js:461/515). The throw propagates
+// into the node's per-round snapshot error budget/backoff; the pull watermark advances only at
+// snapshot-end, so a rejected snapshot never skips missed increments.
+function assertPeerSnapshotSchema (body) {
+  const peerVersion = Number(body && body.schemaVersion) || 1
+  if (peerVersion > SYNC_SCHEMA_VERSION) {
+    throw new Error('peer snapshot schemaVersion ' + (body && body.schemaVersion) + ' newer than supported ' + SYNC_SCHEMA_VERSION)
+  }
+}
+
+// Module-level so unit tests can drive the receivers through __test without a live node
+// (the bodies were previously inline in the createLanSyncNode options inside startSync —
+// behavior-preserving extraction, same guards, same finalizeIngest call order).
+function ingestSnapshotAssembled (body) {
+  assertPeerSnapshotSchema(body)
+  const rows = Array.isArray(body && body.rows) ? body.rows : []
+  state.applyCache = createHydrationCache()
+  try {
+    for (const r of withPeerDeviceId(body).rows || []) applyRowSafe(r)
+    // P0-1: same flush-failure honesty as the streaming path — fail loudly so the watermark
+    // never advances over rows that were dropped.
+    finalizeIngest(null, { snapshot: true })
+  } finally { state.applyCache = null }
+  return { rows: rows.length }
+}
+
+function ingestSnapshotChunked (body) {
+  assertPeerSnapshotSchema(body)
+  const rows = Array.isArray(body && body.rows) ? body.rows : []
+  state.applyCache = createHydrationCache()
+  try {
+    for (const r of withPeerDeviceId(body).rows || []) applyRowSafe(r)
+    // P0-1: a failed flush during a streamed snapshot must fail the ROUND (throw) — the pull
+    // watermark advances only at snapshot-end, so a failed chunk keeps the watermark put and
+    // the next round re-requests the (idempotent) snapshot instead of acking dropped rows.
+    finalizeIngest(null, { snapshot: true, chunk: true })
+  } finally { state.applyCache = null }
+  return { rows: rows.length }
+}
+
 function buildSegmentsWrapped (sinceSeq) {
   const r = state.engine.buildSegments(sinceSeq)
   state.pendingToSeq = r.toSeq
@@ -339,40 +382,15 @@ async function startSync () {
         return finalizeIngest(r)
       } finally { state.applyCache = null }
     },
-    ingestSnapshot: body => {
-      // Snapshot-request protocol receiver (assembled {schemaVersion, deviceId, rows} from the
-      // node): apply the rows through the SAME applyRowInner pipeline as increments (merge rules,
-      // tombstones, per-pass applyCache, buffered bulk writes). Chunk-merge-apply is idempotent,
-      // so a partial snapshot leaves a consistent DB; the node advances the pull watermark ONLY
-      // on snapshot-end, so a failed/partial transfer never skips missed increments. Deliberately
-      // NOT engine.applySnapshot: that is the fresh-device replaceAll path and resets the global
-      // push cursor to 0, which would cause a full oplog re-push to every peer.
-      const rows = Array.isArray(body && body.rows) ? body.rows : []
-      state.applyCache = createHydrationCache()
-      try {
-        for (const r of withPeerDeviceId(body).rows || []) applyRowSafe(r)
-        // P0-1: same flush-failure honesty as the streaming path — fail loudly so the watermark
-        // never advances over rows that were dropped.
-        finalizeIngest(null, { snapshot: true })
-      } finally { state.applyCache = null }
-      return { rows: rows.length }
-    },
+    // d12 (2026-10-02): receivers extracted to module level (ingestSnapshotAssembled /
+    // ingestSnapshotChunked) so the schemaVersion gate is unit-testable via __test; see the
+    // function comments there for the crash/watermark semantics.
+    ingestSnapshot: ingestSnapshotAssembled,
     // Streaming snapshot receiver: the node calls this PER received snapshot-chunk, so the
     // full snapshot never materializes in memory and pendingWrites flush per chunk (bounded
     // buffers). Crash semantics unchanged: the pull watermark still advances only at
     // snapshot-end, and chunk-merge-apply is idempotent.
-    ingestSnapshotChunk: body => {
-      const rows = Array.isArray(body && body.rows) ? body.rows : []
-      state.applyCache = createHydrationCache()
-      try {
-        for (const r of withPeerDeviceId(body).rows || []) applyRowSafe(r)
-        // P0-1: a failed flush during a streamed snapshot must fail the ROUND (throw) — the pull
-        // watermark advances only at snapshot-end, so a failed chunk keeps the watermark put and
-        // the next round re-requests the (idempotent) snapshot instead of acking dropped rows.
-        finalizeIngest(null, { snapshot: true, chunk: true })
-      } finally { state.applyCache = null }
-      return { rows: rows.length }
-    },
+    ingestSnapshotChunk: ingestSnapshotChunked,
     getMaxSeq: () => readMaxOplogSeq(),
     // Oldest oplog seq still retained (the ring prunes from the front): advertised in the round
     // ack so a watermark-behind peer can tell its increments were pruned on our side.
@@ -848,4 +866,7 @@ module.exports.__test = {
   // Round-2 P1 test surface: peer alias op registration + live-todo attachment key collection.
   registerOps,
   missingAttachmentKeys,
+  // d12 schemaVersion gate test surface: the snapshot receivers with the gate applied.
+  ingestSnapshotAssembled,
+  ingestSnapshotChunked,
 }

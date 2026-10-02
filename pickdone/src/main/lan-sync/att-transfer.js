@@ -364,7 +364,11 @@ function createAttachmentPuller (opts = {}) {
     }
     return true
   }
-  const pending = [] // keys queued for THIS round
+  const pending = [] // keys queued for THIS round (FIFO)
+  // perf fix (2026-10-02, d15): noteMissing used to dedupe via pending.includes — O(n) per key,
+  // quadratic when a large snapshot's missing-key set overlaps across rounds. The Set mirrors
+  // the array; entries are removed on shift so a key can be re-noted by a later round.
+  const pendingSet = new Set()
   let busy = false
   let onDone = null
   let current = null // {id, size, hash, chunks: Map<index,buf>, received}
@@ -377,8 +381,11 @@ function createAttachmentPuller (opts = {}) {
   /** Queue keys observed missing on disk (deduped against the session failed-set). */
   function noteMissing (keys) {
     for (const key of keys || []) {
-      if (isFailed(String(key))) continue
-      if (!pending.includes(key)) pending.push(key)
+      const k = String(key)
+      if (isFailed(k)) continue
+      if (pendingSet.has(k)) continue
+      pendingSet.add(k)
+      pending.push(k)
     }
   }
 
@@ -395,6 +402,7 @@ function createAttachmentPuller (opts = {}) {
     const batch = []
     while (pending.length && batch.length < maxFiles) {
       const key = pending.shift()
+      pendingSet.delete(key)
       if (d.exists(key)) continue // arrived via another path/round
       batch.push(key)
     }
