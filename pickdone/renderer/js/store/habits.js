@@ -31,6 +31,17 @@ export function normalizeHabitRecords (habits) {
   return habits
 }
 
+/** D15-B9 (2026-10-03, unit-tested): the module's ONE staleness predicate for inbound external
+ *  rounds — TIES REJECT (prior writer wins, `<=`). applyExternalPatch used to hand-roll `<` and
+ *  accept a same-ms LAN fold round, letting a tie round rewrite whole habits/moments arrays over
+ *  state that had already recorded an equal-stamp write; its sibling applyExternal already used
+ *  `<=` (D14-B15). Every inbound boundary below routes through this predicate so the semantics
+ *  can never drift apart again. (replaceAll keeps the DB-restore tie-goes-to-DB contract and is
+ *  deliberately NOT routed here — see its comment.) */
+export function isStaleExternalRound (incomingSavedAt, currentSavedAt) {
+  return (Number(incomingSavedAt) || 0) <= (Number(currentSavedAt) || 0)
+}
+
 function readLs () {
   try {
     const d = JSON.parse(localStorage.getItem(LS_KEY))
@@ -217,7 +228,7 @@ export default {
      *  the DB blob on a tie IS the aligned behavior there, no change needed. */
     applyExternal (s, blob) {
       if (!blob || !Array.isArray(blob.habits)) return
-      if ((blob.savedAt || 0) <= (s.savedAt || 0)) return
+      if (isStaleExternalRound(blob.savedAt, s.savedAt)) return
       normalizeHabitRecords(blob.habits)
       s.habits = blob.habits
       s.moments = blob.moments || []
@@ -237,8 +248,9 @@ export default {
       const savedAt = Number(payload.savedAt) || Number(fields.savedAt) || 0
       // [patch-savedat-guard fix] a missing/0 savedAt used to bypass the staleness guard and apply
       // unconditionally; siblings replaceAll/applyExternal treat missing savedAt as 0 and reject
-      // against a saved local state. Same rule: an unsaved patch is stale — drop it.
-      if ((savedAt || 0) < (s.savedAt || 0)) return // stale peer round — already superseded
+      // against a saved local state. Same rule via the shared predicate (D15-B9): an unsaved or
+      // tied patch is stale — drop it (ties previously slipped through `<`).
+      if (isStaleExternalRound(savedAt, s.savedAt)) return // stale/tied peer round — already superseded
       let changed = false
       if (Array.isArray(fields.habits)) { normalizeHabitRecords(fields.habits); s.habits = fields.habits; changed = true }
       if (Array.isArray(fields.moments)) { s.moments = fields.moments; changed = true }

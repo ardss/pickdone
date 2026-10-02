@@ -6,6 +6,9 @@ import { genTaskId, nextSort, dayjs, reportError, parsePredecessors } from '../u
 import { wouldCycle, isTaskReady } from '../utils/deps.js'
 import { nextRepeatInstance, isLastRepeatInstance, renewalCarryFields } from '../utils/repeat.js'
 import { setEstimate, pruneEstimates, estimateStateKeys } from '../utils/tomatoEstimate.js'
+// D15-B2 (2026-10-03): renewal estimate semantics come from the SHARED estimate core — the same
+// clamp the CLI twin (cli/lib.js renewal, getEstimateOf → clampEstimate) enforces on its side.
+import { clampEstimate } from '../../../shared/estimate-core.mjs'
 import { clearSnapshot } from '../utils/dayPlans.js'
 import { scrubMilestonesForPurged } from '../utils/milestones.js'
 // Cross-cutting concerns, physically split out of this module (pure relocation — the store's action
@@ -376,6 +379,18 @@ export default {
       const next = nextRepeatInstance(completedTodo, group, rule, this.state.todo.holidayList || [])
       if (!next) return
       const t = completedTodo
+      // D15-B2 (2026-10-03): read the LIVE per-task meta estimate for the instance being renewed —
+      // same semantic as the CLI twin (cli/lib.js:436-439). The row's estimate COLUMN is dead
+      // post-X2 (bumpSnow writes accumulated focus minutes into it), so seeding the renewal with
+      // `t.estimate || 0` turned "focused 150 min" into an estimate of 20 (clamped) tomatoes and
+      // synced that pollution to the new instance's meta key. Per-task meta key first; the stale
+      // column only as a legacy fallback; everything clamped to the 0..20 storage domain.
+      let renewalEstimate = t.estimate || 0
+      try {
+        const live = await window.todoAPI.dbCall('getMeta', 'tomatoEstimateState:' + t.taskId)
+        if (live !== null && live !== undefined && live !== '') renewalEstimate = Number(live) || 0
+      } catch (e) { /* read failure: keep the column fallback, clamp below decides */ }
+      renewalEstimate = clampEstimate(renewalEstimate)
       // Single source: carried attributes (D5 parity set — the renewal used to drop priority/deadlineTs/
       // important/urgent, `t.x || 0` semantics), mapped onto addTodo's todoX argument names
       const carry = renewalCarryFields(t, next)
@@ -392,7 +407,7 @@ export default {
         deadlineTs: carry.deadlineTs,
         important: carry.important,
         urgent: carry.urgent,
-        estimate: t.estimate || 0,
+        estimate: renewalEstimate,
         repeatId: carry.repeatId,
         todoSublist: t.subtasks ? (function(){try{return JSON.parse(t.subtasks)}catch{return[]}})().map(x => ({ ...x, checked: false })) : null,
         addToTop: false
@@ -401,7 +416,7 @@ export default {
       // ignores it for existing-style reasons) — the live value lives in the per-task meta key
       // `tomatoEstimateState:<taskId>` (the field-granular syncable unit). Copy it there so the renewal
       // keeps its estimated workload on BOTH ends (CLI twin: cli/lib.js renewal — F-Main's commit).
-      try { if (nt && nt.taskId) setEstimate(nt.taskId, t.estimate || 0) } catch (e) { /* estimate is advisory */ }
+      try { if (nt && nt.taskId) setEstimate(nt.taskId, renewalEstimate) } catch (e) { /* estimate is advisory */ }
       return nt
     },
     async reorderTodos ({ commit, dispatch }, updates) {

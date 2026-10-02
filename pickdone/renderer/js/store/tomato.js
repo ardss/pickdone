@@ -99,14 +99,27 @@ export function focusTodoPool (storeLike) {
   return [...(todoMod.todoList || []), ...(todoMod.recycleList || [])]
 }
 
+/** D15-B14 (2026-10-03): module-level store reference so a MUTATION (which gets no store) can still
+ *  resolve the todo row pool. updateRecordTask must keep the denormalized `focus` name text in sync
+ *  with focusTaskId in the SAME write — the old mutation relinked the id and left the old task's
+ *  name text stale in the ledger row and every display surface (renames/relinks never propagated).
+ *  Seeded by the initFromDb action at startup (actions receive the store as `this`); tests can seed
+ *  it via the exported seam. Unseeded (headless) → empty pool → name resolves to '' on relink,
+ *  never to a stale foreign task's name. */
+let _todoPoolStore = null
+export function _setTodoPoolStore (s) { _todoPoolStore = s || null }
+
 const DEF = {
   status: 'default', attachTodo: null, todayTomatoCount: 0, tomatoRecordList: [],
-  tomatoTime: 25, restTime: 5, enableNotification: true, enableBeep: true,
+  tomatoTime: 25, restTime: 5, enableNotification: true,
   // F12 (2026-09-24): dead floating-window default removed — zero consumers repo-wide; float
   // visibility and the 'user closed' marker live in main-process tomato-float.js
   // (todo DB meta 'tomatoFloatClosedByUser'; see tomato-float hide/show/undock + renderer main.js auto-show).
+  // D15-B11 (2026-10-03): enableBeep / preTomatoTimes / preRestTimes removed the same way — they
+  // were written, synced (LS blob) and defaulted but had ZERO consumers repo-wide
+  // (notify-sound.js never consulted them); they only kept dead bytes flowing through every
+  // persist/sync round. loadState() strips their residue out of old blobs.
   whiteNoiseAudio: '',
-  preTomatoTimes: [25], preRestTimes: [5],
   remainSec: 1500, startedAt: 0,
   // Wall-clock stamp of the last STATUS transition (patch sets it when status changes). Cross-window
   // sync compares these so a throttled peer's stale blob can never resurrect a phase the local
@@ -148,6 +161,9 @@ function loadState (voidExpired = true) {
       // 账本已迁行表:blob 里的历史记录字段直接忽略(内存副本由 recordsLoad 从 DB 装载)
       if (Array.isArray(merged.tomatoRecordList)) merged.tomatoRecordList = []
       delete merged.unSyncTomatoRecordList
+      // D15-B11: dead preference keys (zero consumers) are stripped from old blobs instead of
+      // lingering forever via the Object.assign merge — same residue-sweep contract as above.
+      delete merged.enableBeep; delete merged.preTomatoTimes; delete merged.preRestTimes
       return merged
     }
   } catch (e) { /* empty */ }
@@ -429,8 +445,16 @@ export default {
       const rec = (s.tomatoRecordList || []).find(r => r && r.tomatoId === tomatoId)
       if (!rec || rec.focusTaskId === focusTaskId) return
       rec.focusTaskId = focusTaskId
+      // D15-B14: the ledger row carries a DENORMALIZED name text (`focus`) — the old relink left
+      // the previous task's name stale in the row and on every display surface. Resolve the live
+      // taskContent in the SAME write (deleted/missing target → '' = the free-focus display
+      // convention used at booking time), so the in-memory row, the DB row and the reload echo
+      // all agree. Read-time derivation was rejected: three surfaces read rec.focus and the row
+      // is the durable asset — fixing the write once is the class-complete fix.
+      const focused = resolveFocusedTask({ taskId: focusTaskId }, focusTodoPool(_todoPoolStore || {}))
+      rec.focus = (focused && focused.taskContent != null) ? focused.taskContent : ''
       s.tomatoRecordList = [...s.tomatoRecordList]
-      ledgerWrite('tomatoUpdateById', { tomatoId, patch: { focusTaskId } })
+      ledgerWrite('tomatoUpdateById', { tomatoId, patch: { focusTaskId, focus: rec.focus } })
       persistState(s)
     },
     /** Entry card: correct the start-end/duration/status of already-recorded facts — the ledger is correctable, corrections go through minute-level patches */
@@ -522,6 +546,10 @@ export default {
   actions: {
     /** 启动:一次性迁移旧 meta blob(如存在且表空),然后整载行表 */
     async initFromDb ({ commit }) {
+      // D15-B14: seed the mutation-side todo-pool reference (actions get the store as `this`;
+      // mutations don't — see _setTodoPoolStore). Also re-seeded by every recordsReload so a
+      // pool rebuilt by todo/init is always the one the resolver reads.
+      try { _setTodoPoolStore(this) } catch (e) { /* store unavailable in tests */ }
       try { await commitCommand('tomato', 'migrateFromMeta') } catch (e) { console.warn('[tomato] meta 迁移跳过/失败(不影响已迁移库):', e && e.message) }
       return commit('recordsReplace', await window.todoAPI.dbCall('tomatoAll'))
     },
