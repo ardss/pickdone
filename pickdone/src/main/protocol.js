@@ -57,6 +57,9 @@ async function fileResponse (file, mime, request, extraHeaders) {
 function handleAppProtocol () {
   const { protocol } = require('electron')
   const root = path.join(__dirname, '../..')
+  /** sec-app-protocol: the only install-tree subtrees the renderer may fetch through app://.
+   *  Exported for the unit gate (root list drift = the gate must be updated consciously). */
+  const APP_ROOTS = ['renderer-dist', 'assets', 'node_modules']
   protocol.handle('app', async (request) => {
     try {
       let u = decodeURIComponent(new URL(request.url).pathname) // /index.html
@@ -64,6 +67,13 @@ function handleAppProtocol () {
       // Guard against path traversal
       const file = path.normalize(path.join(root, u))
       if (!file.startsWith(root + path.sep)) return new Response('forbidden', { status: 403 })
+      // sec-app-protocol (2026-10-02): root allowlist. The handler used to serve the WHOLE install
+      // tree — any file under the app root (stray logs, .err drop files, anything shipped next to
+      // the executable) came back as 200 octet-stream through app://. Only the three trees the
+      // renderer actually loads are served now; everything else is 404. src/preload is NOT a root:
+      // the preload script is loaded via a filesystem path (windows.js), not app://.
+      const top = u.replace(/\\/g, '/').split('/')[0]
+      if (!APP_ROOTS.includes(top)) return new Response('not found', { status: 404 })
       const mime = {
         '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript',
         '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml',
@@ -94,6 +104,13 @@ function handleAppProtocol () {
       const resolved = path.resolve(attachmentPath(key))
       const attachRoot = path.resolve(attachDir())
       if (!(resolved === attachRoot || resolved.startsWith(attachRoot + path.sep))) return new Response('forbidden', { status: 403 }) // 带尾分隔符,防同前缀兄弟目录(2026-09-05 终审 hardening)
+      // sec-local-protocol (2026-10-02): bookkeeping/tmp files are never served. aliases.json is the
+      // LAN conflict alias map (internal state), .att-tmp-* are atomic-write temp files from
+      // writeAtomic / att-transfer — neither is user content. Attachment keys minted by
+      // saveAttachment and conflict renames never start with '.' and never equal aliases.json, so
+      // no legitimate local:// url can land here (see isLocalBookkeepingFile for the unit-tested
+      // decision).
+      if (isLocalBookkeepingFile(path.basename(resolved))) return new Response('nf', { status: 404 })
       // C13/C15 (2026-09-25): single-source mime table + legacy-svg forced download (see the
       // EXT_MIME/localAttachmentHeaders comment at the bottom of this file).
       const { mime, extraHeaders } = localAttachmentHeaders(resolved)
@@ -127,6 +144,16 @@ function handleAppProtocol () {
  * Full ban (404) was weighed and rejected: legitimate legacy assets would silently break;
  * download-only keeps the file reachable with zero script surface. */
 const EXT_MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', bmp: 'image/bmp', ico: 'image/x-icon', pdf: 'application/pdf', txt: 'text/plain', mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', mp4: 'video/mp4', webm: 'video/webm' }
+/** sec-local-protocol (2026-10-02, pure): which files inside the attachment dir are internal
+ *  bookkeeping and must 404 on local:// — the alias map and atomic-write temp files. Keys minted
+ *  by saveAttachment (`<taskId>_<ts>_<name>`) and conflict renames never start with '.' and never
+ *  equal aliases.json, so this cannot block real user content. noise-custom.* stays served (the
+ *  white-noise feature plays it through local://). */
+function isLocalBookkeepingFile (base) {
+  const b = String(base)
+  return b === 'aliases.json' || /^\.att-tmp-/.test(b)
+}
+
 /** MIME for an attachment filename/extension (single source; pure). */
 function attachmentMimeFor (name) {
   const ext = String(name).split('.').pop().toLowerCase()
@@ -143,4 +170,4 @@ function localAttachmentHeaders (file) {
   return { mime: EXT_MIME[ext] || 'application/octet-stream', extraHeaders: {} }
 }
 
-module.exports = { handleAppProtocol, fileResponse, attachmentMimeFor, localAttachmentHeaders } // fileResponse exported for unit tests (Content-Length invariant)
+module.exports = { handleAppProtocol, fileResponse, attachmentMimeFor, localAttachmentHeaders, isLocalBookkeepingFile } // fileResponse exported for unit tests (Content-Length invariant)
