@@ -325,10 +325,17 @@ function initInner (userDataPath) {
     if (!hadKeyFile) throw new Error(i18nM.mt('dbEncNoKey'))
     throw new Error(i18nM.mt('dbEncMismatch', { msg: e.message }))
   }
-  db.pragma('synchronous = NORMAL')
-  // WAL + busy_timeout: avoids SQLITE_BUSY silently dropping writes when the desktop long-lived connection and the CLI write concurrently (a past comment claimed WAL was on when it actually was not)
-  try { db.pragma('journal_mode = WAL') } catch {}
-  try { db.pragma('busy_timeout = 5000') } catch {}
+  // Connection pragmas (ES1): synchronous/busy_timeout are per-connection state and journal_mode
+  // must be re-asserted on a fresh handle — the encryption-finalization block below closes and
+  // reopens the handle, and any reopen silently reverted to synchronous=FULL / busy_timeout=0
+  // (write-loss window under concurrent CLI access). Reapplied after EVERY handle creation.
+  const applyConnPragmas = () => {
+    db.pragma('synchronous = NORMAL')
+    // WAL + busy_timeout: avoids SQLITE_BUSY silently dropping writes when the desktop long-lived connection and the CLI write concurrently (a past comment claimed WAL was on when it actually was not)
+    try { db.pragma('journal_mode = WAL') } catch {}
+    try { db.pragma('busy_timeout = 5000') } catch {}
+  }
+  applyConnPragmas()
 
   // Fresh-install marker: table count BEFORE schema exec (afterwards our own tables exist, so the count is always > 0)
   const preSchemaTables = db.prepare("SELECT COUNT(*) n FROM sqlite_master WHERE type='table'").get().n
@@ -420,6 +427,10 @@ function initInner (userDataPath) {
   } else {
     db.pragma(`key='${key}'`)
   }
+  // ES1: both encryption-finalization paths (plain→encrypted migration and fresh-install
+  // recreate) replaced the handle above — reapply the connection pragmas on whichever
+  // handle survived (idempotent on the hadKeyFile path where the handle was never swapped).
+  applyConnPragmas()
 
   // [D13 #10] repeat-day uniqueness re-ensure (idempotent; after encryption finalization, which recreates fresh DBs from SCHEMA and drops the v9 index; skipped under the C2 test seam)
   if (!migrationsOverride) { try { require('./db-migrations').ensureRepeatDayUniqueness(db) } catch (e) { log.warn('[TodoDB] repeat-day uniqueness ensure failed (non-fatal):', e && e.message) } }
@@ -796,4 +807,4 @@ function close () {
 // Initialized probe: within the same process (the main process's CSV import), reuse the existing connection; a second init rebuilding the handle on the same file is forbidden
 function isOpen () { return !!db }
 
-module.exports = { init, call, queryTodos, normalizeContent, isWriteOp, isOpen, close, setLedgerChangedHook, suppressLedgerHook, LEDGER_WRITE_OPS, WRITE_OPS, SCHEMA, __setMigrateFailHookForTests, __setMigrationsForTests, __revisionsForTests: revisions }
+module.exports = { init, call, queryTodos, normalizeContent, isWriteOp, isOpen, close, setLedgerChangedHook, suppressLedgerHook, LEDGER_WRITE_OPS, WRITE_OPS, SCHEMA, __setMigrateFailHookForTests, __setMigrationsForTests, __revisionsForTests: revisions, __connPragmasForTests: () => (db && db.open ? { journalMode: db.pragma('journal_mode', { simple: true }), synchronous: db.pragma('synchronous', { simple: true }), busyTimeout: db.pragma('busy_timeout', { simple: true }) } : null), __payloadCountForTests: () => db.prepare('SELECT COUNT(*) n FROM sync_revision_payloads').get().n, __currentRevisionIdForTests: entityId => { const r = db.prepare('SELECT revisionId FROM sync_revision_current WHERE entityId = ?').get(entityId); return r && r.revisionId } }
