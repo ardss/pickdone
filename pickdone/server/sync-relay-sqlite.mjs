@@ -38,6 +38,7 @@ export function sqliteStore(dbPath, { Database } = {}) {
       status TEXT NOT NULL DEFAULT 'active',
       lastAck INTEGER NOT NULL DEFAULT 0,
       lastSeen INTEGER NOT NULL DEFAULT 0,
+      deviceSecret TEXT,
       PRIMARY KEY(account, deviceId)
     );
     CREATE TABLE IF NOT EXISTS snapshots (
@@ -47,15 +48,20 @@ export function sqliteStore(dbPath, { Database } = {}) {
       data TEXT NOT NULL
     );
   `)
+  // migration: relay DBs created before per-device bearer secrets lack the column
+  if (!db.prepare('PRAGMA table_info(devices)').all().some(c => c.name === 'deviceSecret')) {
+    db.exec('ALTER TABLE devices ADD COLUMN deviceSecret TEXT')
+  }
   const now = () => Date.now()
   const insEnvelope = db.prepare('INSERT INTO envelopes (account, opId, envelopeJson) VALUES (?, ?, ?)')
   const byOp = db.prepare('SELECT serverSeq FROM envelopes WHERE account = ? AND opId = ?')
   const upsertDevice = db.prepare(`
-    INSERT INTO devices (account, deviceId, status, lastAck, lastSeen) VALUES (?, ?, 'active', 0, ?)
+    INSERT INTO devices (account, deviceId, status, lastAck, lastSeen, deviceSecret) VALUES (?, ?, 'active', 0, ?, ?)
     ON CONFLICT(account, deviceId) DO UPDATE SET
       status = COALESCE(?, status),
       lastAck = COALESCE(?, lastAck),
-      lastSeen = ?
+      lastSeen = ?,
+      deviceSecret = COALESCE(?, deviceSecret)
   `)
   const getDeviceStmt = db.prepare('SELECT * FROM devices WHERE account = ? AND deviceId = ?')
   const activeFloor = account => {
@@ -77,7 +83,7 @@ export function sqliteStore(dbPath, { Database } = {}) {
         .all(account, afterSeq, limit)
         .map(e => ({ serverSeq: e.serverSeq, envelopeJson: e.envelopeJson })),
     upsertDevice: (account, deviceId, patch = {}) => {
-      upsertDevice.run(account, deviceId, now(), patch.status ?? null, patch.lastAck ?? null, now())
+      upsertDevice.run(account, deviceId, now(), patch.deviceSecret ?? null, patch.status ?? null, patch.lastAck ?? null, now(), patch.deviceSecret ?? null)
       return getDeviceStmt.get(account, deviceId)
     },
     getDevice: (account, deviceId) => getDeviceStmt.get(account, deviceId) || null,
