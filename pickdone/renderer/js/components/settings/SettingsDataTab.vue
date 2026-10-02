@@ -113,8 +113,11 @@ function restoreStampLww (row, now) {
 }
 
 /** metaState (2026-09-26): only these meta-key surfaces are restorable — same whitelist as the
- *  startup path (dbRecovery.META_RESTORE_PREFIXES). Transient keys (catProjectMetaBak.*,
- *  pending markers, todosVersion) are deliberately excluded. */
+ *  startup path (dbRecovery.META_RESTORE_PREFIXES) and the same families the collector
+ *  (todoBackup.metaStateKeys) gathers. D15-B3/B4 added `userTags` + `projectDocs:` to all three
+ *  sites in lockstep; tests/unit/main/d15-backup-restore-chain.test.mjs drift-guards the trio.
+ *  Transient keys (catProjectMetaBak.*, catFiltersBak.*, pending markers, todosVersion) are
+ *  deliberately excluded. */
 const META_RESTORE_PREFIXES = [
   'repeatRule:',
   'tomatoEstimateState:',
@@ -123,7 +126,9 @@ const META_RESTORE_PREFIXES = [
   'projectStatus:',
   'projectCategoryFlag:',
   'projectMilestones:',
-  'projectCategoryIds'
+  'projectDocs:',
+  'projectCategoryIds',
+  'userTags'
 ]
 
 export default {

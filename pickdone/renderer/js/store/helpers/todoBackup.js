@@ -95,11 +95,17 @@ export async function collectPlanState () {
 
 /** Meta keys whose ONLY persistence is the DB meta table (2026-09-26, meta-keys-omitted fix):
  *  repeat rules `repeatRule:<rid>` (todo.js single source), per-task tomato estimates
- *  `tomatoEstimateState:<taskId>` (tomatoEstimate.js), project deadline/status/flag/milestones
- *  `project*:<id>` + the `projectCategoryIds` registry (category.js). Derived from live state so
- *  deleted ids are not resurrected; values are batch-read via getMetaMany (same door as exportXlsx). */
+ *  `tomatoEstimateState:<taskId>` (tomatoEstimate.js), project deadline/status/flag/milestones/docs
+ *  `project*:<id>` + the `projectCategoryIds` registry (category.js), the sidebar placeholder-tag
+ *  registry `userTags` (ui.js — D15-B3: idless global registry, nothing to resurrect) and per-project
+ *  documents `projectDocs:<id>` (ProjectDocs.vue — D15-B4: durable user data, not transient).
+ *  Derived from live state so deleted ids are not resurrected; values are batch-read via getMetaMany
+ *  (same door as exportXlsx). */
 export function metaStateKeys (rootState, state) {
   const keys = new Set()
+  // D15-B3: placeholder tags live ONLY in the `userTags` meta row (ui.js setUserTags) — an idless
+  // global registry, so no deleted-id resurrection concern applies.
+  keys.add('userTags')
   const todos = (state.todoList || []).concat(state.recycleList || [])
   for (const t of todos) {
     if (!t) continue
@@ -119,6 +125,9 @@ export function metaStateKeys (rootState, state) {
     keys.add('projectStatus:' + id)
     keys.add('projectCategoryFlag:' + id)
     keys.add('projectMilestones:' + id)
+    // D15-B4: project documents (ProjectDocs.vue persist()) live ONLY in `projectDocs:<id>` —
+    // without collecting them a disaster restore brought the project back but its docs were gone.
+    keys.add('projectDocs:' + id)
   }
   if (((rootState.category && rootState.category.list) || []).some(c => c && c.categoryId != null)) keys.add('projectCategoryIds')
   return [...keys]

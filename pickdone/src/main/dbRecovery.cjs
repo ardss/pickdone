@@ -392,8 +392,11 @@ const RESTORE_SEGMENT_NAMES = RESTORE_SEGMENTS.map(e => e.seg)
 
 /** Meta-key whitelist for the metaState segment restore (2026-09-26, meta-keys-omitted fix).
  *  Only the data surfaces the backup collector gathered — repeat rules, per-task tomato estimates,
- *  project deadline/status/flag/milestones + the project-id registry. Transient keys
- *  (catProjectMetaBak.*, pending markers, todosVersion) are deliberately NOT restorable here. */
+ *  project deadline/status/flag/milestones/docs + the project-id registry and the placeholder-tag
+ *  registry (D15-B3 `userTags`, D15-B4 `projectDocs:<id>` — added in lockstep with
+ *  todoBackup.metaStateKeys and the SettingsDataTab whitelist; the drift-guard test pins the trio).
+ *  Transient keys (catProjectMetaBak.*, catFiltersBak.*, pending markers, todosVersion) are
+ *  deliberately NOT restorable here. */
 const META_RESTORE_PREFIXES = [
   'repeatRule:',
   'tomatoEstimateState:',
@@ -402,7 +405,9 @@ const META_RESTORE_PREFIXES = [
   'projectStatus:',
   'projectCategoryFlag:',
   'projectMilestones:',
-  'projectCategoryIds'
+  'projectDocs:',
+  'projectCategoryIds',
+  'userTags'
 ]
 
 /** metaState restore: entries are {key,value} pairs read from the meta table at dump time
@@ -706,4 +711,4 @@ function jsonRestoreAllowed (recoveredFrom, reinitErr) {
   return !!(recoveredFrom && recoveredFrom.source === 'json' && !reinitErr)
 }
 
-module.exports = { attemptDbRecovery, cleanInitReplayDecision, SUPPORTED_SCHEMA_V, restoreTasksFromCriticalBackup, restoreSegmentsFromCriticalBackup, writeCriticalStateBackupAtomic, criticalBackupPath, backupJsonParseable, restoreCategoriesFromCriticalBackup, restoreTomatoRecordsFromCriticalBackup, restoreMetaEntriesFromCriticalBackup, quarantineKey, sqliteHeaderOk, encryptedProbe, preflightMigrateResidue, sweepPendingDeletes, recoveryDialogAction, jsonRestoreAllowed, loadVendorDriver, RESTORE_SEGMENT_NAMES, recoveryPendingPath, markRecoveryPending, clearRecoveryPending, hasRecoveryPending }
+module.exports = { attemptDbRecovery, cleanInitReplayDecision, SUPPORTED_SCHEMA_V, restoreTasksFromCriticalBackup, restoreSegmentsFromCriticalBackup, writeCriticalStateBackupAtomic, criticalBackupPath, backupJsonParseable, restoreCategoriesFromCriticalBackup, restoreTomatoRecordsFromCriticalBackup, restoreMetaEntriesFromCriticalBackup, quarantineKey, sqliteHeaderOk, encryptedProbe, preflightMigrateResidue, sweepPendingDeletes, recoveryDialogAction, jsonRestoreAllowed, loadVendorDriver, RESTORE_SEGMENT_NAMES, META_RESTORE_PREFIXES, recoveryPendingPath, markRecoveryPending, clearRecoveryPending, hasRecoveryPending }
