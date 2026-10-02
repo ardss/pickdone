@@ -50,7 +50,7 @@ function create () {
   // Same-origin prefix guard aligned with the main window — the old substring check let any scheme
   // through via the route marker (e.g. https://evil.com/#__quick-add)
   win.webContents.on('will-navigate', (e, url) => {
-    if (!/^app:\/\/app\//.test(String(url))) e.preventDefault()
+    if (!/^app:\/\/app\//i.test(String(url))) e.preventDefault()
   })
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   win.loadURL('app://app/renderer-dist/index.html#/__quick-add').catch(e => { try { log.warn('[QuickAdd] loadURL failed', e) } catch {} })
