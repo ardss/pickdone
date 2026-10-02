@@ -112,8 +112,12 @@ test('F1: tomato estimate refresh is throttled to 1s across rounds', async () =>
 test('F1: kindsFromChangedEvent parses the op field (comma-joined round kinds)', async () => {
   const { kindsFromChangedEvent } = await importSrc('renderer/js/utils/externalReload.js')
   assert.deepEqual(kindsFromChangedEvent({ reason: 'lan-sync-apply', op: 'todo,filter,meta' }), ['todo', 'filter', 'meta'])
-  assert.equal(kindsFromChangedEvent({ reason: 'external-db-write' }), null, 'no op → absent kinds')
-  assert.equal(kindsFromChangedEvent({ op: '  ' }), null)
+  // D15-B13 (2026-10-03): reason is now the fallback kind source — the setMeta early-return
+  // broadcast carries reason='setMeta' WITHOUT an op, and unknown reasons still surface as
+  // (conservative) unknown kinds instead of null. Only truly kind-less events resolve to null.
+  assert.deepEqual(kindsFromChangedEvent({ reason: 'external-db-write' }), ['external-db-write'], 'no op → reason becomes the kind (unknown = conservative)')
+  assert.deepEqual(kindsFromChangedEvent({ reason: 'setMeta' }), ['setMeta'])
+  assert.equal(kindsFromChangedEvent({}), null)
   assert.equal(kindsFromChangedEvent(null), null)
 })
 
