@@ -512,10 +512,6 @@
         try { on = localStorage.getItem('appBrowserShim.syncEnabled') === '1' } catch {}
         return { enabled: on, deviceId: 'browser-shim', deviceName: '浏览器调试设备', listening: on, port: on ? 58471 : 0, peers: [], lastRoundAt: 0, lastError: null }
       }
-      case 'syncSetEnabled': {
-        try { localStorage.setItem('appBrowserShim.syncEnabled', (params && params.enabled) ? '1' : '0') } catch {}
-        return { enabled: !!(params && params.enabled) }
-      }
       case 'syncPairRequest':
         // D2 drill support: record exactly what the renderer parsed and dial "main" — a
         // non-resolvable host fails with the same DNS error the real main process throws

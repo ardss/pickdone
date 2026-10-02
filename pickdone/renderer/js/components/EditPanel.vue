@@ -166,7 +166,8 @@ import { toggleCompleteWithUndo } from '../utils/completeAction.js'
 import { getEstimate, setEstimate, ensureEstimate } from '../utils/tomatoEstimate.js'
 import { createSaveQueue } from '../utils/editSave.js'
 import { attachmentUrlPresent } from '../utils/attachmentRefs.js'
-import { contentFingerprint, shouldRefreshRemote } from '../utils/editPanelRemoteSync.js'
+import { contentFingerprint, shouldRefreshRemote, taskAbsentIn } from '../utils/editPanelRemoteSync.js'
+import { buildEditSnapshot } from '../store/ui.js'
 import { findTaskRowEl } from '../utils/todoRowEl.js'
 import EpReminders from './edit-panel/EpReminders.vue'
 import EpSubtasks from './edit-panel/EpSubtasks.vue'
@@ -285,8 +286,21 @@ export default {
     },
     // The task was fully deleted by another window/sync/auto-cleanup (in neither the active nor the recycle list): close the panel automatically. Otherwise it becomes a "zombie editor" -- displaying the hydrated snapshot while all saves are silently lost (updateTodoFields is a no-op for a nonexistent id)
     task (t) {
+      // P1 (2026-10-01): a full reload (todosChanged → todo/init#setAllRows) transiently
+      // evaluates `task` to null while the row array is swapped; the old immediate closeEdit
+      // turned every edit made in that window (say, picking a deadline) into "task deleted by
+      // another window" — panel slammed shut, picked value silently lost. Verify absence in the
+      // post-reload lists instead of trusting the transient; a reappearing row cancels the close.
+      if (t && this._closeVerifyTimer) { clearTimeout(this._closeVerifyTimer); this._closeVerifyTimer = null }
       if (!t && !this.inRecycle && this.$store.state.ui.rightSidebarTodoEdit.visible) {
-        this.$store.commit('ui/closeEdit')
+        if (this._closeVerifyTimer) clearTimeout(this._closeVerifyTimer)
+        this._closeVerifyTimer = setTimeout(() => {
+          this._closeVerifyTimer = null
+          const st = this.$store.state.ui.rightSidebarTodoEdit
+          if (!st.visible || !this.e || st.taskId !== this.e.taskId) return
+          if (!taskAbsentIn(this.$store.state.todo, this.e.taskId)) return // reload landed: row is back
+          this.$store.commit('ui/closeEdit')
+        }, 500)
       }
       // F3 (2026-09-20): inbound sync/CLI changed the open task while the panel is open. Without
       // this the next autosave clobbers the peer edit with the stale open-time snapshot.
@@ -357,6 +371,7 @@ export default {
     if (this.$el && this._onFocusin) this.$el.removeEventListener('focusin', this._onFocusin)
     // Esc 关闭路径不经 close():防抖回调会在卸载后写 this.saving,_sortable 也不会 destroy(2026-09-05 终审 P2)
     try { this.flushSave() } catch (e) { /* 卸载期落库失败不阻断卸载 */ }
+    if (this._closeVerifyTimer) { clearTimeout(this._closeVerifyTimer); this._closeVerifyTimer = null }
     if (this._sortable) { try { this._sortable.destroy() } catch (err) { /* already destroyed */ } this._sortable = null }
   },
   methods: {
@@ -403,16 +418,30 @@ export default {
       if (!force && this._hydKey === key) return
       this._hydKey = key
       this.flushSave()
-      this.subList = JSON.parse(JSON.stringify(s.sublist))
+      // P1 root fix (2026-10-01): rebuild the snapshot from the LIVE store row whenever it
+      // exists. `s` is the open-time ui.rightSidebarTodoEdit snapshot — written once at open —
+      // so the old hydrate re-adopted that frozen copy: a subtask/attachment added since open
+      // was silently discarded on every pristine re-hydrate (echo reload / peer edit), a peer
+      // rename could never appear, and the next save wrote the stale copy back over the store.
+      // Only fall back to `s` when the row genuinely cannot be found (recycle-bin task).
+      // (look the row up by s.taskId, NOT this.task — the computed still tracks the PREVIOUS
+      // task while switching, and reading it here would hydrate B from A's row)
+      const live = this.$store.state.todo.todoList.find(t => t.taskId === s.taskId) || null
+      const src = live ? buildEditSnapshot(live) : s
+      this.subList = JSON.parse(JSON.stringify(src.sublist))
       // Mint stable render keys for rows imported from the store (persisted subtasks carry no _key)
       for (const sub of this.subList) { if (sub && sub._key == null) sub._key = ++this._subKeySeq }
-      this.imgList = JSON.parse(JSON.stringify(s.todoImageList))
-      this.fileList = JSON.parse(JSON.stringify(s.fileList))
-      this.e = JSON.parse(JSON.stringify(s))
+      this.imgList = JSON.parse(JSON.stringify(src.todoImageList))
+      this.fileList = JSON.parse(JSON.stringify(src.fileList))
+      const snap = JSON.parse(JSON.stringify(src))
+      snap.visible = s.visible; snap.collapsed = s.collapsed; snap.taskId = s.taskId
+      this.e = snap
       // F3: record the hydration baseline (live-row updateTime + core-field fingerprint) so
       // checkRemoteUpdate can tell inbound peer edits from the panel's own save echoes.
-      const live = this.task
-      this._remoteUpdateTime = live ? live.updateTime : s.updateTime
+      // (renamed live->liveRow: `live` is taken above by the P1 live-row snapshot lookup —
+      // duplicate declaration was a 500 on the vite SFC compile, dead-ending the whole dev host)
+      const liveRow = this.task
+      this._remoteUpdateTime = liveRow ? liveRow.updateTime : s.updateTime
       this._remoteFingerprint = contentFingerprint(this.e)
       this.remoteStale = false
       this.repeatGroupInfo()

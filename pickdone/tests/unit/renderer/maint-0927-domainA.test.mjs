@@ -129,8 +129,10 @@ test('fix7 static anchors: hint line renders the count with a clear-range action
 
 const { parseNaturalDate } = await import('../../../renderer/js/utils/nlDate.js')
 const { resolveQuickAddDate } = await import('../../../renderer/js/utils/quickAddDate.js')
+const quickAddPaste = await import('../../../renderer/js/utils/quickAddPaste.js')
 const QuickAddComp = loadSFC('renderer/js/components/QuickAdd.vue', {
-  parseNaturalDate, dayjs, FMT: { date: 'YYYY-MM-DD', cnDate: 'YYYY-MM-DD' }, resolveQuickAddDate
+  parseNaturalDate, dayjs, FMT: { date: 'YYYY-MM-DD', cnDate: 'YYYY-MM-DD' }, resolveQuickAddDate,
+  splitPasteLines: quickAddPaste.splitPasteLines, ensureTagSuffix: quickAddPaste.ensureTagSuffix
 })
 
 function quickAddCtx (quiet, dispatch) {

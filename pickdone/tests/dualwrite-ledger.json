@@ -83,6 +83,10 @@
     "authority": "sqlite",
     "note": "maint/d11-r3:账本原子op失败重试队列;权威=SQLite tomato_records行表(重放成功后落库并从队列清除),LS仅pending重放面(崩溃自愈镜像,模块加载时水合)"
   },
+  "renderer/js/store/tomato.js::tomatoRejectedLedgerRows": {
+    "authority": "local-only",
+    "note": "D14-C1:tomatoAppendMany行级被拒账本行的隔离面(附reason/ts,上限100条);畸形行重试永不成功,此为唯一存留面供诊断,无同步语义"
+  },
   "renderer/js/store/tomato.js::tomatoPendingSnow": {
     "authority": "sqlite",
     "note": "maint/d11-r3:bumpSnow失败重试队列;权威=meta snow积分(重放成功落库后清除),LS仅pending重放面(崩溃自愈镜像,模块加载时水合)"
