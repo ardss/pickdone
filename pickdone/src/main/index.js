@@ -488,6 +488,13 @@ if (!app.requestSingleInstanceLock(...__multiLockArgs)) {
     createTray()
     scheduler.setSoundFile(path.join(__dirname, '../../assets/media/confirm1.ogg'))
     scheduler.setShowMainEntry(showMainOrLock) // D10: reminder notification clicks honor the security lock
+    registerIpc()
+    extWatch.watchDbForExternalWrites()
+    // Perf (2026-10-02): reloadAll + Meta GC moved AFTER registerIpc/extWatch — they used to run
+    // before the IPC/bus wiring, blocking the window-ready path on synchronous GC work. No
+    // behavior change: registerIpc is synchronous wiring, reloadAll's fingerprint gate
+    // (scheduler.js) makes re-entry safe, and the bus fanout hooks are wired by the time the GC
+    // commits run (strictly better peer propagation).
     scheduler.reloadAll(dbApi())
     // Meta GC: clean up orphan keys (residue after a repeat rule is deleted / project deadline & milestones become permanent orphans after a category is deleted)
     try {
@@ -498,14 +505,11 @@ if (!app.requestSingleInstanceLock(...__multiLockArgs)) {
       for (const k of computeMetaGc(dbm.call('listMetaKeys'), dbm.call('getAllCategories'), dbm.call('getAll', { deleted: 0 }))) {
         require('./command-bus').commit('meta', 'delete', k, { preserveStamp: true }) // Phase-2: GC via the bus
       }
-      // D6 P2 (2026-09-21): the GC loop runs BEFORE registerIpc wires the bus fanout hooks, so
-      // the deletion deltas sat in the local oplog until the next periodic sync round — peers
-      // kept stale repeat-rule/deadline meta for minutes after boot. One explicit kick mirrors
-      // the GAP-D recovery kick above; kickSyncRound no-ops while sync is lazy-not-initialized.
+      // D6 P2 (2026-09-21): historical note — the GC loop used to run BEFORE registerIpc wired the
+      // bus fanout hooks, so an explicit sync kick was needed. The GC now runs after the wiring;
+      // the kick is retained as a belt-and-suspenders no-op while sync is lazy-not-initialized.
       try { require('./lan-sync-bootstrap').kickSyncRound('meta-gc') } catch { /* sync lazy-not-init */ }
     } catch (e) { log.warn('[MetaGC] skipped:', e && e.message) }
-    registerIpc()
-    extWatch.watchDbForExternalWrites()
     // P3a LAN sync (lazy; never auto-enables — see lan-sync-bootstrap.js header)
     require('./lan-sync-bootstrap').initLanSync({
       db: dbm,
