@@ -558,6 +558,12 @@ export default {
         .map(r => r.tomatoId)
       if (ids.length) ledgerWrite('tomatoRemoveByIds', ids)
       commit('recordsReplace', (state.tomatoRecordList || []).filter(r => !ids.includes(r.tomatoId)))
+      // D15 (maint/deep-r2): removed rows may include TODAY's — recompute the ring count from the
+      // mutated list. The initiating window never receives a recordsReload recompute for its own
+      // write (same defect class as D14-B2 removeRecord/updateRecord), so the count stayed stale
+      // until an unrelated broadcast.
+      const todayKeyAfter = dayjs().format(FMT.date)
+      commit('patch', { todayTomatoCount: recountToday(state.tomatoRecordList, todayKeyAfter), _countDate: todayKeyAfter })
     },
     /** Shared completion decision: dispatched every second by every window (including the float); on expiry it flips/records, idempotency guaranteed by token + deterministic id.
         Does not write back remainSec (the display layer derives it from startedAt, avoiding per-second disk writes + cross-window broadcast storms).

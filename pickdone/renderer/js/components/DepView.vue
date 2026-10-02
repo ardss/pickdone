@@ -595,8 +595,12 @@ export default {
       this.dragTid = ''
       if (!srcId || srcId === t.taskId) return
       // left: 拖的卡成为目标的前置(A 指向 B);right: 目标卡成为拖卡的前置(B 指向 A)
-      if (side === 'right') this.addDependency(this.inScope.find(x => x.taskId === srcId), t.taskId, t, srcId)
-      else this.addDependency(t, srcId, this.inScope.find(x => x.taskId === srcId), t)
+      // D15: resolve the dragged card ONCE and hand the OBJECT to addDependency on both branches —
+      // the right branch used to pass the raw id string as dependentTask, so the undo toast lost
+      // the dragged task's name (a string has no .taskContent).
+      var srcTask = this.inScope.find(x => x.taskId === srcId)
+      if (side === 'right') this.addDependency(srcTask, t.taskId, t, srcTask)
+      else this.addDependency(t, srcId, srcTask, t)
     },
     /** target.prerequisites += prereqId(成环拒绝 + 撤销出口);srcNames 仅用于 toast 文案 */
     addDependency (target, prereqId, prereqTask, dependentTask) {
