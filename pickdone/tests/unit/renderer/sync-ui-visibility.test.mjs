@@ -44,6 +44,51 @@ test('F1: reloader dispatches todo/category always, filters only for filter roun
   assert.ok(dispatched.some(([m]) => m === 'filters/load'), 'absent kinds must reload filters')
 })
 
+test('F1: kind gating skips the full todo/init on meta-only and filter-only rounds', async () => {
+  const { createExternalReloader } = await importSrc('renderer/js/utils/externalReload.js')
+  const dispatched = []
+  const store = { dispatch: (m, p) => { dispatched.push([m, p]); return Promise.resolve() } }
+  let estimateReloads = 0
+  const reload = createExternalReloader({ store, reloadEstimates: () => { estimateReloads++; return Promise.resolve() } })
+  const counts = m => dispatched.filter(([x]) => x === m).length
+  const flush = () => new Promise(r => setTimeout(r, 0))
+
+  // meta-only round: full-table todo/init skipped, estimates still refreshed
+  reload({ kinds: ['meta'] }); await flush()
+  assert.equal(counts('todo/init'), 0, 'meta-only round must not trigger the full todo/init reload')
+  assert.equal(counts('filters/load'), 0, 'meta-only round must not reload filters')
+  assert.equal(estimateReloads, 1, 'meta-only round still refreshes tomato estimates')
+  assert.equal(counts('category/init'), 0, 'meta-only round must not reload categories')
+
+  // filter-only round: filters reload, full-table reload skipped
+  dispatched.length = 0
+  reload({ kinds: ['filter'] })
+  assert.equal(counts('todo/init'), 0, 'filter-only round must not trigger the full todo/init reload')
+  assert.equal(counts('filters/load'), 1, 'filter-only round must reload filters')
+
+  // todo round: full reload still runs
+  dispatched.length = 0
+  reload({ kinds: ['todo'] })
+  assert.equal(counts('todo/init'), 1, 'todo round keeps the full todo/init reload')
+
+  // absent kinds: conservative full reload preserved
+  dispatched.length = 0
+  reload({})
+  assert.equal(counts('todo/init'), 1, 'absent kinds keep the conservative full reload')
+  assert.equal(counts('category/init'), 1, 'absent kinds keep the category reload')
+
+  // mixed meta+category round: todo/init skipped, category/init runs
+  dispatched.length = 0
+  reload({ kinds: ['meta', 'category'] })
+  assert.equal(counts('todo/init'), 0, 'meta+category round must skip the full todo/init reload')
+  assert.equal(counts('category/init'), 1, 'meta+category round still reloads categories')
+
+  // preserveHistory payload shape unchanged when the full reload does run
+  dispatched.length = 0
+  reload({ kinds: ['todo'], preserveHistory: true })
+  assert.deepEqual(dispatched.find(([m]) => m === 'todo/init'), ['todo/init', { preserveHistory: true }])
+})
+
 test('F1: tomato estimate refresh is throttled to 1s across rounds', async () => {
   const { createExternalReloader } = await importSrc('renderer/js/utils/externalReload.js')
   const store = { dispatch: () => Promise.resolve() }

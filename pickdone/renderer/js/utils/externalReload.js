@@ -29,9 +29,14 @@ export function createExternalReloader ({ store, reloadEstimates = () => Promise
   return function reloadExternal ({ preserveHistory = false, kinds = null } = {}) {
     // P1-2 (2026-09-19): LAN-sync-applied rounds reload via the non-clearing variant so the
     // user's own undo stack survives; CLI/watcher external writes keep the clearing behavior.
-    store.dispatch('todo/init', preserveHistory ? { preserveHistory: true } : undefined).catch(() => {})
-    // CLI can write categories too — keep them appearing without a restart.
-    store.dispatch('category/init').catch(() => {})
+    // Perf kind-gating: todo/init is the full-table getAll + computeViews + critical backup,
+    // so rounds whose kinds are all in the non-todo set (meta / filter / category) must not
+    // pay for it. Unknown kinds stay conservative (full reload); null kinds (CLI external
+    // write, older main build, non-sync events) keep the full conservative reload.
+    const hasDataKind = !kinds || kinds.some(k => k !== 'meta' && k !== 'filter' && k !== 'category')
+    if (hasDataKind) store.dispatch('todo/init', preserveHistory ? { preserveHistory: true } : undefined).catch(() => {})
+    // CLI can write categories too — keep them appearing without a restart (category rounds only).
+    if (!kinds || kinds.includes('category')) store.dispatch('category/init').catch(() => {})
     // F1a: inbound filter rounds previously needed an app restart for new smart lists to show.
     // Absent kinds → reload (cheap, conservative).
     if (!kinds || kinds.includes('filter')) store.dispatch('filters/load').catch(() => {})
