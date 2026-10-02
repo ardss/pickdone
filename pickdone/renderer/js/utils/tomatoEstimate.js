@@ -1,4 +1,5 @@
 import { commit as commitCommand } from "./commandBus.js"
+import { getMetaManyWithFallback } from "./core.js"
 /** Tomato estimate — task-level "estimated tomato rounds" storage (dual write to localStorage + main DB meta, same pattern as habits).
  *  Actual rounds are not stored here (attributed from tomatoRecordList by focusTaskId).
  *  reactive: after EditPanel changes the estimate, the inline pill on TodoItem rows updates in the same frame.
@@ -128,10 +129,61 @@ export async function initFromDb (taskIds) {
 
 /** U8 lazy read-through cache: per-task meta keys are fetched on demand (first UI read of an id),
  *  memoized in `fetched`, and invalidated in bulk when inbound meta rounds land (next read
- *  re-fetches once). Keeps boot O(1) meta reads instead of O(N) per known task id. */
+ *  re-fetches once). Keeps boot O(1) meta reads instead of O(N) per known task id.
+ *  Perf (ensure-estimate batch): the volatile `fetched` Set alone is not enough — initFromDb ends
+ *  with invalidateEstimateCache(), so values seeded into `state` before it lose their memoization
+ *  and every list paint re-fetched its ids one getMeta IPC each. Values now also record the cache
+ *  epoch they landed in; a `state` hit whose epoch is current is memoized without an IPC. Cold ids
+ *  are coalesced through a microtask-batched queue so N first-paint reads cost ONE bulk meta read
+ *  (getMetaManyWithFallback, with the per-key dbCall loop as fallback) instead of N. */
 const fetched = new Set()
 let fetchInflight = new Map()
-export function invalidateEstimateCache () { fetched.clear(); fetchInflight = new Map() }
+let cacheEpoch = 0
+const epochOf = new Map()
+export function invalidateEstimateCache () { fetched.clear(); fetchInflight = new Map(); epochOf.clear(); cacheEpoch++ }
+
+// ---- microtask-batched cold-id queue ----
+let pendingCold = new Map() // taskId -> resolve fn
+let flushScheduled = false
+function queueColdFetch (taskId) {
+  return new Promise(resolve => {
+    pendingCold.set(taskId, resolve)
+    if (!flushScheduled) {
+      flushScheduled = true
+      queueMicrotask(() => { flushScheduled = false; flushCold() })
+    }
+  })
+}
+async function flushCold () {
+  const batch = pendingCold
+  pendingCold = new Map()
+  const ids = [...batch.keys()]
+  let values = null
+  try { values = await getMetaManyWithFallback(ids.map(keyOf)) } catch (e) { values = null }
+  let touched = false
+  for (let i = 0; i < ids.length; i++) {
+    const id = ids[i]
+    fetched.add(id) // memoized even on failure: a flaky read must not turn into an infinite retry loop
+    epochOf.set(id, cacheEpoch)
+    try {
+      const raw = values ? values[i] : null
+      if (raw !== null && raw !== undefined && raw !== '') {
+        const n = Number(raw)
+        if (Number.isFinite(n)) {
+          const clamped = Math.max(MIN, Math.min(MAX, Math.round(n)))
+          if (clamped > 0) state[id] = clamped
+          else delete state[id]
+          touched = true
+          // U-6: a value landed asynchronously — views sorted by difficulty may be stale; notify listeners
+          for (const fn of fetchedListeners) { try { fn(id, clamped) } catch (e) { /* listener must not break the fetch */ } }
+        }
+      }
+    } catch (e) { /* absent is fine */ }
+    const resolve = batch.get(id)
+    if (resolve) resolve()
+  }
+  if (touched) { try { localStorage.setItem(LS_KEY, JSON.stringify(state)) } catch (e) { /* ignore */ } }
+}
 
 /** U-6 (2026-09-20): listeners notified when a lazy ensureEstimate fetch lands a value. The todoBox
  *  difficulty sort reads getEstimate during computeViews; a value arriving AFTER the sort ran used to
@@ -144,23 +196,12 @@ export function onEstimateFetched (fn) {
 }
 export function ensureEstimate (taskId) {
   if (!taskId || fetched.has(taskId)) return
-  if (!window.todoAPI || !window.todoAPI.dbCall) return
+  if (typeof window === 'undefined' || !window.todoAPI || !window.todoAPI.dbCall) return
+  // Epoch guard: a value already in the reactive mirror from THIS cache generation needs no IPC
+  // (fetched alone is not durable — initFromDb ends with invalidateEstimateCache()).
+  if (state[taskId] !== undefined && epochOf.get(taskId) === cacheEpoch) { fetched.add(taskId); return }
   if (fetchInflight.has(taskId)) return fetchInflight.get(taskId)
-  const p = (async () => {
-    fetched.add(taskId) // memoized even on failure: a flaky read must not turn into an infinite retry loop
-    try {
-      const raw = await window.todoAPI.dbCall('getMeta', keyOf(taskId))
-      if (raw === null || raw === undefined || raw === '') return
-      const n = Number(raw)
-      if (!Number.isFinite(n)) return
-      const clamped = Math.max(MIN, Math.min(MAX, Math.round(n)))
-      if (clamped > 0) state[taskId] = clamped
-      else delete state[taskId]
-      try { localStorage.setItem(LS_KEY, JSON.stringify(state)) } catch (e) { /* ignore */ }
-      // U-6: a value landed asynchronously — views sorted by difficulty may be stale; notify listeners
-      for (const fn of fetchedListeners) { try { fn(taskId, clamped) } catch (e) { /* listener must not break the fetch */ } }
-    } catch (e) { /* absent is fine */ }
-  })()
+  const p = queueColdFetch(taskId)
   fetchInflight.set(taskId, p)
   p.finally(() => fetchInflight.delete(taskId))
   return p
@@ -176,6 +217,10 @@ export const _testInternals = { state, get MAX_KEYS () { return MAX_KEYS } }
  *  estimate. Main-process MetaGC (src/main/index.js) owns the DB-meta cleanup; this module bounds
  *  its own state. Callers that know the live id set should use pruneEstimates. */
 const MAX_KEYS = 5000
+
+/** Current mirror key list — callers that want to drop a subset via pruneEstimates need the
+ *  complement of that subset over the live keys (purge path: keep everything not purged). */
+export function estimateStateKeys () { return Object.keys(state) }
 
 /** Drop every estimate whose taskId is not in `aliveIds` (task purge/merge callers). Returns true
  *  when anything was removed (state changed). */
@@ -207,6 +252,7 @@ export function setEstimate (taskId, n) {
   if (n > 0) state[taskId] = n
   else delete state[taskId]
   fetched.add(taskId) // U8: the local write is authoritative — no re-fetch needed for this id
+  epochOf.set(taskId, cacheEpoch)
   trimToCapacity()
   persist()
   persistTask(taskId, n) // Y: per-task meta key — the field-granular syncable unit
