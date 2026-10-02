@@ -275,6 +275,19 @@ test('saveSnowGain: same dedupKey applied exactly once; bare-number legacy paylo
   t.mock.timers.reset()
 })
 
+test('gain dedup: the in-memory guard is bounded — oldest keys are evicted and re-apply, recent keys still dedup (leak-gain-dedup-memory-set)', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const h = makeHarness({ snow: 0, tomatoGain: 0 })
+  for (let i = 0; i < 210; i++) await mod.actions.saveSnowGain(h.store, { gain: 1, dedupKey: 'k' + i })
+  assert.equal(h.state.user.snow, 210)
+  await mod.actions.saveSnowGain(h.store, { gain: 1, dedupKey: 'k205' }) // recent — still guarded
+  assert.equal(h.state.user.snow, 210, 'recent dedupKey still dedups inside the bound')
+  await mod.actions.saveSnowGain(h.store, { gain: 1, dedupKey: 'k0' }) // oldest — evicted past the 200 bound
+  assert.equal(h.state.user.snow, 211, 'evicted oldest key re-applies: the memory guard is bounded')
+  t.mock.timers.tick(60000) // flush pending batch, clear module timer
+  t.mock.timers.reset()
+})
+
 test('saveSnowGain batches increments into ≤1 delta per minute window (flush emits one delta)', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const h = makeHarness()

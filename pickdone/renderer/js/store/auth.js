@@ -186,18 +186,31 @@ async function compactOwnOldDeltas (keys, entries) {
  *  mirroring the countPatch/_countedFocus guard in store/tomato.js). Keys are persisted to LS first
  *  (restart-stable) and mirrored in an in-memory Set (LS-unavailable hosts). */
 const _appliedGainKeys = new Set()
+const GAIN_DEDUP_MAX = 200 // same bound as the LS mirror: keys are per-focus-completion, short-lived
+function rememberGainKey (key) {
+  _appliedGainKeys.add(key)
+  // leak-gain-dedup-memory-set: the in-memory Set previously grew without bound for the whole
+  // session; evict the oldest keys (Set iteration order = insertion order) past the bound. A
+  // focus retry replays within seconds, so 200 entries is far beyond any live dedup horizon;
+  // evicted keys still dedup via the restart-stable LS mirror until it evicts them too.
+  while (_appliedGainKeys.size > GAIN_DEDUP_MAX) {
+    const oldest = _appliedGainKeys.values().next().value
+    if (oldest === undefined) break
+    _appliedGainKeys.delete(oldest)
+  }
+}
 function gainAlreadyApplied (key) {
   if (!key) return false
   if (_appliedGainKeys.has(key)) return true
   try {
     const m = readJson(localStorage.getItem(GAIN_DEDUP_LS), {})
-    if (m[key]) { _appliedGainKeys.add(key); return true }
+    if (m[key]) { rememberGainKey(key); return true }
   } catch (e) { /* empty */ }
   return false
 }
 function markGainApplied (key) {
   if (!key) return
-  _appliedGainKeys.add(key)
+  rememberGainKey(key)
   try {
     const m = readJson(localStorage.getItem(GAIN_DEDUP_LS), {})
     m[key] = Date.now()
