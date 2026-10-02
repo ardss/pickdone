@@ -234,6 +234,31 @@ test('folded guard: guards absorbed into a subtotal generation are pruned once t
   assert.equal(h.state.user.snow, s0)
 })
 
+test('shared index: entries whose meta stays null past the grace window are pruned; readable entries never are (leak-gamification-index-dead-peers)', async () => {
+  const h = makeHarness()
+  const DAY = 86400000
+  const deadKey = P + 'gone:1' // retired device — meta row never arrives
+  const liveKey = P + 'live:1'
+  h.meta.set(INDEX_KEY, JSON.stringify([deadKey, liveKey]))
+  h.meta.set(liveKey, peer(3, 0))
+  await mod.actions.initGamification(h.store)
+  assert.equal(h.state.user.snow, 13)
+  const index0 = JSON.parse(h.meta.get(INDEX_KEY))
+  assert.ok(index0.includes(deadKey) && index0.includes(liveKey), 'first null read stays inside the grace window (U2 retry preserved)')
+  assert.ok(JSON.parse(h.ls.getItem('gamification.indexNullSeen'))[deadKey], 'null read tracked with a timestamp')
+  // age the dead entry past the 30d grace window, then re-init
+  const seen = JSON.parse(h.ls.getItem('gamification.indexNullSeen'))
+  seen[deadKey] = Date.now() - 31 * DAY
+  h.ls.setItem('gamification.indexNullSeen', JSON.stringify(seen))
+  await mod.actions.initGamification(h.store)
+  const keys = JSON.parse(h.meta.get(INDEX_KEY))
+  assert.ok(!keys.includes(deadKey), 'dead index entry pruned from the shared index')
+  assert.ok(keys.includes(liveKey), 'readable entry never pruned')
+  assert.equal(JSON.parse(h.ls.getItem('gamification.indexNullSeen'))[deadKey], undefined, 'tracking entry dropped too')
+  // the live delta is not re-folded by the rewrites
+  assert.equal(h.state.user.snow, 13)
+})
+
 test('saveSnowGain: same dedupKey applied exactly once; bare-number legacy payload still works', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] }) // the batch flush is a real 60s timer — mock + tick so no real timer leaks into later tests
   const h = makeHarness()

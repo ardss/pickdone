@@ -46,6 +46,8 @@ const LAST_DELTA_LS = 'gamification.lastDeltaKey' // U9a: self-heal handle
 const OWN_KEYS_LS = 'gamification.ownKeys' // round-1 P0 (2026-09-21): EVERY own emitted delta key (full index self-heal)
 const FOLDED_LS = 'gamification.folded'
 const GAIN_DEDUP_LS = 'gamification.gainDedup' // maint-d7: idempotency keys for saveSnowGain (survives restarts)
+const INDEX_NULL_SEEN_LS = 'gamification.indexNullSeen' // first-null-seen timestamps, per index key
+const INDEX_NULL_GRACE_MS = 30 * 86400000 // null index entries younger than this are kept (U2 retry)
 const FLUSH_MIN_MS = 60000 // batch: at most one delta write per minute
 const COMPACT_AFTER_MS = 7 * 86400000 // U9b: deltas older than 7 days are compacted
 // Subtotal `compacted` retention window: covered keys stay listed in the payload for peers that
@@ -314,6 +316,37 @@ export default {
         // U-18: one batch read of the delta keys instead of an O(N) sequential getMeta loop
         // (getMetaManyWithFallback keeps the per-key loop when the batch op is absent)
         const deltaVals = await getMetaManyWithFallback(keys)
+        // leak-gamification-index-dead-peers: the shared index only ever gains entries, so keys
+        // whose meta row is gone (lost write, compaction race, retired device) are re-read on
+        // every init forever. Track the first null read per key; after a 30d grace window (which
+        // keeps the U2 not-yet-synced retry intact — metas sync in seconds on LAN) prune the
+        // entry from the shared index and from the tracking map.
+        {
+          const nowMs = Date.now()
+          const seen = readJson(localStorage.getItem(INDEX_NULL_SEEN_LS), {})
+          const nextSeen = {}
+          const alive = []
+          let seenChanged = false
+          let pruned = false
+          for (let ki = 0; ki < keys.length; ki++) {
+            const k = keys[ki]
+            if (readJson(deltaVals[ki], null)) {
+              if (seen[k]) seenChanged = true
+              alive.push(k) // readable: never pruned, drop any stale tracking entry
+              continue
+            }
+            const first = Number(seen[k]) || 0
+            if (!first) { nextSeen[k] = nowMs; seenChanged = true; alive.push(k); continue }
+            if ((nowMs - first) < INDEX_NULL_GRACE_MS) { nextSeen[k] = first; alive.push(k); continue }
+            seenChanged = true
+            pruned = true // dead entry: dropped from the index and the tracking map
+          }
+          if (seenChanged) { try { localStorage.setItem(INDEX_NULL_SEEN_LS, JSON.stringify(nextSeen)) } catch (e) { /* empty */ } }
+          if (pruned) {
+            keys = alive
+            db('setMeta', [INDEX_KEY, JSON.stringify(alive)])
+          }
+        }
         const subtotalKeys = []
         for (let ki = 0; ki < keys.length; ki++) {
           const k = keys[ki]
