@@ -147,7 +147,11 @@
     </div>
 
     <div v-if="previewImg" ref="previewMask" tabindex="-1" class="img-preview-mask" role="dialog" aria-modal="true" :aria-label="$t('statsJ.EditPanel.imagePreview')" @click.self="previewImg=null" @keydown.esc="previewImg=null" @keydown.tab.prevent="$refs.previewMask.focus()">
-      <img :src="previewImg"><button class="close-x" :aria-label="$t('statsE.SettingsModal.closeBtn')" @click.stop="previewImg=null"></button>
+      <!-- sec-synced-remote-img-beacon: previewImg is only minted from EpAttachments' gated 'preview'
+           emit (local:// only) — the isRenderableAttachmentUrl check here is defensive so a stale or
+           hostile value can never bind :src and turn the preview mask into a beacon. -->
+      <img v-if="isRenderableAttachmentUrl(previewImg)" :src="previewImg">
+      <span v-else role="img" :aria-label="previewImg"></span><button class="close-x" :aria-label="$t('statsE.SettingsModal.closeBtn')" @click.stop="previewImg=null"></button>
     </div>
   </aside>
   </transition>
@@ -160,7 +164,7 @@
 import {dayjs, DAY_MS, FMT, reportError } from '../utils/core.js'
 import { getLocale } from '../i18n/index.js'
 import { extractTags } from '../utils/search.js'
-import { subsCompleteTarget } from '../utils/core.js'
+import { subsCompleteTarget, isRenderableAttachmentUrl } from '../utils/core.js'
 import { deleteWithUndo, removeWithUndo } from '../utils/confirm.js'
 import { toggleCompleteWithUndo } from '../utils/completeAction.js'
 import { getEstimate, setEstimate, ensureEstimate } from '../utils/tomatoEstimate.js'
@@ -653,6 +657,7 @@ export default {
     /* ===== Attachments: upload/paste/drop orchestration (impl: edit-panel/attachments.js).
        scrollImgsIntoView stays here — focus/scroll timing is the component's concern. ===== */
     pickFiles (kind) { return attachments.pickFiles(this, kind) },
+    isRenderableAttachmentUrl,
     onDescPaste (e) { return attachments.onDescPaste(this, e) },
     onDescDrop (e) { return attachments.onDescDrop(this, e) },
     /* After paste/drop, scroll thumbnails into view for immediate "it landed" feedback */
