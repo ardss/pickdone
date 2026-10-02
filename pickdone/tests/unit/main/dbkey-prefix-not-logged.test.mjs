@@ -8,6 +8,16 @@ import { createRequire } from 'node:module'
 // sec-dbkey-prefix-logged (P3): an invalid db.key used to be logged WITH its first 8 chars of
 // key material. The warn must carry only non-secret facts (length, hex-ness). The logger stub
 // must be require.cache-injected BEFORE requiring db.js (logger is bound at module load).
+//
+// Provenance correction (2026-10-03): the redaction itself landed in commit 33fedc3d
+// (pickdone/src/main/db.js, "[TodoDB] db.key content invalid" warn), inside a
+// WAL-pragma-diagnostics commit whose message never mentioned it. The introducing
+// commit 4770ec26 touched ONLY this test file and its message claimed
+// "red against HEAD, green with the fix" — that claim is FALSE: this test's parent
+// already contains the fix, so it has always been green and was never a red-check.
+// Recorded here because commit messages of existing commits cannot be corrected
+// without a history rewrite. This test stands as green-only documentation of the
+// no-key-material-in-logs invariant, not as failing-without-it coverage.
 
 const require = createRequire(import.meta.url)
 const elogPath = require.resolve('electron-log')

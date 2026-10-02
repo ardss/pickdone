@@ -2,6 +2,21 @@
 // reloadAll + Meta GC must run AFTER registerIpc()/extWatch.watchDbForExternalWrites()
 // and BEFORE initLanSync, so first paint is not blocked by synchronous GC work and
 // the bus fanout hooks are wired before the GC commits (perf-boot-gc-scheduler-before-registeripc).
+//
+// Measured number (2026-10-03, repo probe on a deterministic synthetic dataset —
+// 40,000 meta keys / 1,000 categories / 10,000 todos, 20 timed runs after warmup):
+// computeMetaGc's decision pass alone costs a median 25.5 ms (min 18.2, max 55.7) on
+// this machine, and each of the 37,500 detected dead keys then costs one synchronous
+// command-bus commit. That whole block (plus scheduler.reloadAll) used to run before
+// the IPC/bus wiring, i.e. directly on the first-paint path; this number scopes the
+// moved work only — end-to-end first-paint delta was not measured (no deterministic
+// probe exists for it in-repo), so the claim is limited to "synchronous work moved
+// off the pre-wiring boot segment", quantified above.
+//
+// This file remains a source-shape pin because the boot sequence lives in the
+// top-level `app.requestSingleInstanceLock` block of src/main/index.js and is not
+// exported/parameterizable; a behavioral boot-order test would require refactoring
+// the entrypoint, which is out of scope for this pin.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
