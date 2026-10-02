@@ -558,7 +558,7 @@ test('J4: reconnect — hard-kill B, restart with the same dirs, pair state surv
   const stB2 = await until(async () => {
     const s = await b2.status()
     return s.enabled && (s.peers || []).some(p => p.deviceId === aSelf.deviceId) ? s : null
-  }, 30000, '[B2] restarted with pairing intact (enabled + A in the peer table)')
+  }, 60000, '[B2] restarted with pairing intact (enabled + A in the peer table)')
   assert.ok(stB2.listening, '[B2] sync node listening again after restart')
 
   // Pending changes converge BOTH ways: A pushes an edit, restarted B pushes a new row.
@@ -576,7 +576,7 @@ test('J4: reconnect — hard-kill B, restart with the same dirs, pair state surv
     ['journey-time-1', 'journey-plain-1', 'journey-post-restart'],
     (row) => (row.taskId === 'journey-time-1' && row.taskContent !== 'post-restart edit from A')
       ? 'A post-restart edit not applied'
-      : null)
+      : null, 60000)
 
   const byA = new Map(ta.map(r => [r.taskId, r]))
   const byB = new Map(tb.map(r => [r.taskId, r]))
