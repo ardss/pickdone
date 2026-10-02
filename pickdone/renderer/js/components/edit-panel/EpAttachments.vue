@@ -116,8 +116,11 @@ export default {
         // or a dead IPC bridge). The old empty catch claimed these "keep their existing reporting
         // path", but an explicit catch prevents the global unhandledrejection capture
         // (utils/logger.js installGlobalErrorCapture) from ever firing — the failure was silent.
-        // Route it to the renderer log explicitly; the missing-file toast above is unchanged.
+        // D14-A14: surface it to the user too (same friendly-toast shape as the missing-file case
+        // above), not just the renderer log.
         logger.error('open-file invoke failed: ' + ((err && (err.message || err)) || 'unknown'), err && err.stack)
+        const EP = (window as any).ElementPlus
+        if (EP && EP.ElMessage) EP.ElMessage({ type: 'error', message: (this as any).$t('statsJ.EditPanel.attachmentOpenFailed') + ((err && (err.message || err)) || ''), duration: 6000, showClose: true })
       })
     }
   }

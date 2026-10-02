@@ -48,7 +48,9 @@ function extractPure (src, file, names) {
 test('R2: EpSubtasks declares the rename emit and renders an inline rename editor', () => {
   assert.match(SUBTASKS, /emits: \['add', 'toggle', 'remove', 'move', 'rename'\]/)
   assert.match(SUBTASKS, /@dblclick="startRename\(i\)"/)
-  assert.match(SUBTASKS, /@keydown\.enter\.prevent\.stop="commitRename\(i\)"/)
+  // D4 (17bddc2b) added the IME guard: Enter commits via onRenameEnter (composition-aware),
+  // commitRename remains the blur/normal path
+  assert.match(SUBTASKS, /@keydown\.enter\.prevent\.stop="onRenameEnter\(i, \$event\)"/)
   assert.match(SUBTASKS, /@blur="commitRename\(i\)"/)
 })
 

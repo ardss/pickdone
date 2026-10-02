@@ -11,6 +11,7 @@ export default {
       allProjects: 'All',
       filterLabel: 'Filter by project',
       waiting: 'waits for',
+      waitMore: '{n} more unfinished prerequisites not shown', // D14-A5: truncation notice
       stage: 'Stage',
       dragHint: 'Drag A onto B: drop LEFT half = A precedes B; drop RIGHT half = B precedes A',
       moveHint: 'Drag the dot to move the card',

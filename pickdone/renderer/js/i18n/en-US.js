@@ -36,6 +36,11 @@ export default {
     "cancel": "Cancel",
     "submit": "Submit feedback",
     "submitted": "Feedback submitted. Thank you!",
+    "close": "Close",
+    "submittedLocal": "Saved on this device (feedback is only staged locally in this version; nothing has been uploaded)",
+    "pendingNote": "{n} feedback entries staged on this device (not yet uploaded)",
+    "pendingDropped": "Local staging is full — the oldest {n} entries were overwritten",
+    "attachLogPending": "Log attachment is not available yet: this version only records the checkbox flag",
     "submitFailed": "Submission failed. Please try again later.",
     "needDesc": "Please describe the issue first"
   },

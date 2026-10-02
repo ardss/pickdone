@@ -79,7 +79,23 @@ export default {
     onKeydown (e) {
       const items = [...this.$el.querySelectorAll('.ctx-item[tabindex="0"]')]
       const idx = items.indexOf(document.activeElement)
-      if (e.key === 'ArrowDown') {
+      // D14-A10: Tab used to walk focus out of the open menu — intercept it as roving (Shift
+      // reverses), and add Home/End jumps, matching the dialogA11y keyboard contract elsewhere
+      if (e.key === 'Tab') {
+        e.preventDefault()
+        if (!items.length) return
+        if (idx < 0) { items[0].focus(); return }
+        const next = e.shiftKey
+          ? items[(idx - 1 + items.length) % items.length]
+          : items[(idx + 1) % items.length]
+        next.focus()
+      } else if (e.key === 'Home') {
+        e.preventDefault()
+        if (items.length) items[0].focus()
+      } else if (e.key === 'End') {
+        e.preventDefault()
+        if (items.length) items[items.length - 1].focus()
+      } else if (e.key === 'ArrowDown') {
         e.preventDefault()
         if (idx >= 0) items[(idx + 1) % items.length].focus()
         else if (items.length) items[0].focus()

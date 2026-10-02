@@ -36,6 +36,11 @@ export default {
     "cancel": "取消",
     "submit": "提交反馈",
     "submitted": "反馈已提交，感谢你的支持！",
+    "close": "关闭",
+    "submittedLocal": "已保存到本机（当前版本反馈仅暂存在本地，尚未上传）",
+    "pendingNote": "本机已暂存 {n} 条反馈（尚未上传）",
+    "pendingDropped": "本地暂存已满，最早的 {n} 条反馈已被覆盖",
+    "attachLogPending": "日志附带功能尚未开放：当前版本仅记录勾选标记",
     "submitFailed": "提交失败，请稍后重试",
     "needDesc": "请先填写问题描述"
   },

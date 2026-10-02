@@ -81,6 +81,8 @@
             <i v-if="st && st.attachTodo && st.attachTodo.taskId === t.taskId" class="tf-menu__tick">✓</i>
           </button>
           <div v-if="!tasks.length" class="tf-menu__empty">{{ $t('statsB.TomatoFloatPage.menuEmpty') }}</div>
+          <!-- D14-A7: the list is render-capped at 30 — say so instead of silently hiding the rest -->
+          <div v-if="tasksTruncated" class="tf-menu__empty">{{ $t('statsB.TomatoFloatPage.menuTruncated') }}</div>
         </div>
         <button type="button" class="tf-menu__bare" @click="footerAction">{{ $t('statsB.TomatoFloatPage.menuClear') }}</button>
         </div>
@@ -204,7 +206,8 @@ export default {
     },
     noiseCurrent () { return (this.$store.state.settings.whiteNoiseAudio || '') },
     /* Today's todo candidates: same criteria as the main window's tomato bar attachCandidates; computed as fallback when views aren't ready */
-    tasks () {
+    /* D14-A7: shared candidate-pool builder (the slice cap and the truncation notice must read the same pool) */
+    taskPool () {
       const root = this.$store.state.todo || {}
       let list = (root.views && root.views.todayTodoList) || []
       if (!list.length) {
@@ -214,7 +217,14 @@ export default {
         const today = window.dayjs ? +window.dayjs().startOf('day') : 0
         list = (root.todoList || []).filter(t => t && !t.delete && t.dayStart === today)
       }
-      return list.filter(t => t && !t.complete).slice(0, 30)
+      return list.filter(t => t && !t.complete)
+    },
+    tasks () {
+      return this.taskPool().slice(0, 30)
+    },
+    /* D14-A7: was the pool bigger than the 30-item render cap? Drives the truncation notice */
+    tasksTruncated () {
+      return this.taskPool().length > 30
     }
   },
   methods: {

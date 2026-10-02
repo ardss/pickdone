@@ -14,7 +14,9 @@
  *  The mini window can't host a $message popup; success feedback is conveyed by the task appearing directly in the main window's list. */
 import QuickAdd from '../components/QuickAdd.vue'
 
-/** D6-F12: draft persistence for the mini window (Esc used to silently discard the typed text) */
+/** D6-F12 (updated D14-A9 2026-10-02): draft persistence for the mini window — covers ACCIDENTAL
+ *  hides (blur / focus loss) only. An explicit Esc cancel DISCARDS the draft, matching the main
+ *  window's QuickAdd (J1, uiux-2026-10-01). */
 const DRAFT_KEY = 'quickAddDraft'
 
 export default {
@@ -50,7 +52,9 @@ export default {
     window.removeEventListener('blur', this.persistDraft)
   },
   methods: {
-    // D6-F12 + review P3: draft persistence is idempotent — safe to call from mount, focus and blur
+    // D6-F12 + review P3: draft persistence is idempotent — safe to call from mount, focus and blur.
+    // D14-A9 scope note: persistence now covers ACCIDENTAL hides (blur/focus loss) only; an
+    // explicit Esc cancel discards the draft (aligned with the main window's QuickAdd).
     restoreDraft () {
       try {
         const draft = localStorage.getItem(DRAFT_KEY)
@@ -67,8 +71,12 @@ export default {
     },
     onKey (e) {
       if (e.key === 'Escape') {
-        // D6-F12: persist the draft before hiding instead of silently discarding it
-        this.persistDraft()
+        // D14-A9 (2026-10-02): Esc is an EXPLICIT cancel — discard the draft, matching the main
+        // window's QuickAdd (J1, uiux-2026-10-01) which clears on Esc. The old persist-on-Esc
+        // contradicted that newer behavior (and its own stale D6-F12 comment). Draft persistence
+        // stays for ACCIDENTAL hides only (the blur path below); the restore-on-summon clears it.
+        try { localStorage.removeItem(DRAFT_KEY) } catch { /* best-effort */ }
+        if (this.$refs.qa) this.$refs.qa.text = ''
         window.todoAPI.quickAddHide()
       }
     },

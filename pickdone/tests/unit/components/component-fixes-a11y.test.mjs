@@ -143,9 +143,9 @@ test('SearchView: clear button handles Enter like the date chip pattern', () => 
   assert.match(src, /main-nav-search__clear[^>]*@keydown\.enter\.prevent="clearQ"/)
 })
 
-test('TodoItem: Ctrl+Arrow shortcuts only announced for dated tasks', () => {
+test('TodoItem: shortcuts only announced for dated tasks (D4 added the ArrowUp/Down row moves)', () => {
   const src = read('renderer/js/components/TodoItem.vue')
-  assert.match(src, /:aria-keyshortcuts="todo\.dayStart \? 'Control\+ArrowUp Control\+ArrowDown Shift\+Delete' : 'Shift\+Delete'"/)
+  assert.match(src, /:aria-keyshortcuts="todo\.dayStart \? 'Control\+ArrowUp Control\+ArrowDown ArrowUp ArrowDown Shift\+Delete' : 'ArrowUp ArrowDown Shift\+Delete'"/)
 })
 
 test('DayDateStrip: calendar ‹ › buttons have titles/aria-labels', () => {

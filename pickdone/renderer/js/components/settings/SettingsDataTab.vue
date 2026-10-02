@@ -33,7 +33,7 @@
         </div></div>
       <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.backUpNowLabel') }}</span>
         <div class="form-item__control">
-          <button class="mini" @click="runAutoBackupNow">{{ $t('statsE.SettingsModal.autoBackUpNowBtn') }}</button>
+          <button class="mini" :disabled="backingUp" @click="runAutoBackupNow">{{ $t('statsE.SettingsModal.autoBackUpNowBtn') }}</button>
           <span class="tip">{{ autoBackupStatusLine + eventBackupFailSuffix }} · {{ $t('statsH.SettingsModal.backupRetentionTip') }}</span>
         </div></div>
     </div>
@@ -264,13 +264,19 @@ export default {
       } catch {}
     },
     async runAutoBackupNow () {
-      const ok = await this.$store.dispatch('todo/writeAutoBackup')
-      const rt = loadRuntime()
-      this.autoBackupLastAt = rt.autoBackupLastAt || (ok ? Date.now() : 0)
-      this.autoBackupLastFailAt = rt.autoBackupLastFailAt || 0
-      this.autoBackupLastError = rt.autoBackupLastError || ''
-      // Failures must be reported honestly (an unwritable backupDir / an offline disk once silently faked success for a long time)
-      ok === false ? this.$message.error(this.$t('statsE.SettingsModal.backupFail')) : this.$message.success(this.$t('statsE.SettingsModal.autoBackupWrittenMsg'))
+      // D14-A13: the busy-flag guard every sibling has (writeBackupNow/importFromCsv/purgeRecycle) —
+      // a double-click used to launch concurrent full dumps
+      if (this.backingUp) return
+      this.backingUp = true
+      try {
+        const ok = await this.$store.dispatch('todo/writeAutoBackup')
+        const rt = loadRuntime()
+        this.autoBackupLastAt = rt.autoBackupLastAt || (ok ? Date.now() : 0)
+        this.autoBackupLastFailAt = rt.autoBackupLastFailAt || 0
+        this.autoBackupLastError = rt.autoBackupLastError || ''
+        // Failures must be reported honestly (an unwritable backupDir / an offline disk once silently faked success for a long time)
+        ok === false ? this.$message.error(this.$t('statsE.SettingsModal.backupFail')) : this.$message.success(this.$t('statsE.SettingsModal.autoBackupWrittenMsg'))
+      } finally { this.backingUp = false }
     },
     async exportXlsx () {
       if (this.exporting) return

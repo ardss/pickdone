@@ -112,6 +112,7 @@ export default {
   'statsJ.EditPanel.addSubtaskAria': 'Add subtask ',
   'statsJ.EditPanel.zoomImage': 'Zoom image ',
   'statsJ.EditPanel.attachmentMissing': 'Attachment not synced to this device yet',
+  'statsJ.EditPanel.attachmentOpenFailed': 'Failed to open attachment: ', // D14-A14
   'statsJ.EditPanel.addTitlePlaceholder': 'Add title',
   'statsJ.EditPanel.collapseEditor': 'Collapse editor',
   'statsJ.EditPanel.descPlaceholder': 'Description / paste images',

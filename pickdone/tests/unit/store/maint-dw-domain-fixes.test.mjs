@@ -217,9 +217,10 @@ test('[8] ui exposes openFeedback (showFeedbackModal was permanently unreachable
   assert.equal(state.showFeedbackModal, false)
 })
 
-test('[8b] FeedbackModal stages at most PENDING_CAP entries (oldest dropped)', () => {
+test('[8b] FeedbackModal stages at most PENDING_CAP entries (oldest dropped + warned, D14-A1)', () => {
   const src = read('renderer/js/components/FeedbackModal.vue')
   assert.ok(/const PENDING_CAP = \d+/.test(src), 'the staging cap is declared')
-  assert.ok(/while \(arr\.length > PENDING_CAP\) arr\.shift\(\)/.test(src),
+  assert.ok(/while \(arr\.length > PENDING_CAP\) \{ arr\.shift\(\); dropped\+\+ \}/.test(src),
     'overflow drops the OLDEST entry, never the new feedback')
+  assert.match(src, /pendingDropped/, 'the overwrite is warned to the user, not silent (D14-A1)')
 })
