@@ -59,17 +59,19 @@ const ENTITY_READBACK = {
  *     DELETION was overwritten (and its stamps), but it is not a full row: re-restoring it is
  *     refused by the bulk op's row validation (refuse-to-lose keeps the original backup). A
  *     fuller tombstone shape would need a schema change — deliberately out of scope here.
- *   - tomato: KNOWN GAP — no raw tombstone read exists for tomato_records (tomatoAll filters
- *     deleted=0 and there is no tomatoTombstones read op wired into db.call), so a tomato
- *     tombstone winner still yields no re-backup. Same reversibility gap as before this fix,
- *     scoped unchanged; add the read op before extending this table. */
+ *   - tomato: same live-then-tombstone fallback as plan/filter via the tomatoTombstones read
+ *     (db-tomato-ops.js). It keys on tomatoId (not id) and carries only tomatoId/updatedAt/
+ *     deletedAt — the same PARTIAL tombstone-snapshot caveat as plan/filter applies: the
+ *     snapshot faithfully records that a deletion was overwritten, but re-restoring it is
+ *     refused by row validation (refuse-to-lose keeps the original backup). */
 const ENTITY_CURRENT_ROW = {
   plan: (call, id) => (call('planAll') || []).find(r => String(r.id) === id) ||
     (call('planTombstones') || []).find(r => String(r.id) === id) || null,
   filter: (call, id) => (call('filterList') || []).find(r => String(r.id) === id) ||
     (call('filterTombstones') || []).find(r => String(r.id) === id) || null,
   category: (call, id) => (call('categoriesAllRows') || []).find(r => String(r.id) === id) || null,
-  tomato: (call, id) => (call('tomatoAll') || []).find(r => String(r.tomatoId) === id) || null,
+  tomato: (call, id) => (call('tomatoAll') || []).find(r => String(r.tomatoId) === id) ||
+    (call('tomatoTombstones') || []).find(r => String(r.tomatoId) === id) || null,
   setting: (call, id) => (call('settingsRowsAll') || []).find(r => r.key === id) || null
 }
 
