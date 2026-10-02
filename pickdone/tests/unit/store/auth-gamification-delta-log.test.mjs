@@ -150,6 +150,69 @@ test('U9b compaction: own ≥7d increment deltas fold into a generation-growing 
   assert.deepEqual(JSON.parse(h.ls.getItem('gamification.ownKeys')), [])
 })
 
+test('subtotal payload: compacted list ages out past the retention window (bounded payload, leak-gamification-subtotal-compacted-array)', async () => {
+  const h = makeHarness()
+  await mod.actions.initGamification(h.store) // seed device id + base migration
+  const me = h.ls.getItem('gamification.deviceId')
+  const sk = P + me + ':c'
+  const DAY = 86400000
+  const now = Date.now()
+  // gen 1: compact one ≥7d own delta — the payload lists it with its cover time
+  const k1 = P + me + ':g1'
+  h.meta.set(INDEX_KEY, JSON.stringify([k1]))
+  h.meta.set(k1, JSON.stringify({ snow: 4, tomatoGain: 1, ts: now - 8 * DAY }))
+  h.ls.setItem('gamification.ownKeys', JSON.stringify([k1]))
+  await mod.actions.initGamification(h.store)
+  let subtotal = JSON.parse(h.meta.get(sk))
+  assert.deepEqual(subtotal.compacted, [k1])
+  assert.ok(subtotal.compactedTs && subtotal.compactedTs[k1] > now - 60000, 'cover time recorded')
+  // gen 2 (cover time of k1 aged past the 30d retention window): compact another delta
+  const k2 = P + me + ':g2'
+  const keys = JSON.parse(h.meta.get(INDEX_KEY)); keys.push(k2); h.meta.set(INDEX_KEY, JSON.stringify(keys))
+  h.meta.set(k2, JSON.stringify({ snow: 2, tomatoGain: 0, ts: now - 8 * DAY }))
+  h.ls.setItem('gamification.ownKeys', JSON.stringify([k2]))
+  const st = JSON.parse(h.meta.get(sk)); st.compactedTs[k1] = now - 31 * DAY
+  h.meta.set(sk, JSON.stringify(st))
+  await mod.actions.initGamification(h.store)
+  subtotal = JSON.parse(h.meta.get(sk))
+  assert.equal(subtotal.gen, 2)
+  assert.equal(subtotal.snow, 6)
+  assert.deepEqual(subtotal.compacted, [k2], 'aged compacted entry dropped from the payload')
+  assert.equal(subtotal.compactedTs[k1], undefined, 'aged cover-time entry dropped too')
+})
+
+test('peer subtotal: cumulative absorbed accounting is drift-free across generations even when the payload ages out entries (leak-gamification-subtotal-compacted-array)', async () => {
+  const h = makeHarness()
+  const sk = P + 'pX:c'
+  const k1 = P + 'pX:1'
+  const k2 = P + 'pX:2'
+  const k3 = P + 'pX:3'
+  // gen1: total 50 (k1=20 covered); this device folded k1 individually before the subtotal existed
+  h.ls.setItem('gamification.folded', JSON.stringify({ [k1]: { s: 20, t: 2 } }))
+  h.meta.set(INDEX_KEY, JSON.stringify([sk]))
+  h.meta.set(sk, JSON.stringify({ snow: 50, tomatoGain: 5, ts: Date.now(), gen: 1, compacted: [k1] }))
+  await mod.actions.initGamification(h.store)
+  assert.equal(h.state.user.snow, 10 + 30, 'gen1 contributes only the un-accounted 30')
+  // gen2: k2(10) covered too, total 60 — but this device already folded k2 individually → +0
+  const folded1 = JSON.parse(h.ls.getItem('gamification.folded'))
+  folded1[k2] = { s: 10, t: 1 }
+  h.ls.setItem('gamification.folded', JSON.stringify(folded1))
+  h.meta.set(sk, JSON.stringify({ snow: 60, tomatoGain: 6, ts: Date.now(), gen: 2, compacted: [k1, k2] }))
+  await mod.actions.initGamification(h.store)
+  assert.equal(h.state.user.snow, 40, 'gen2 adds nothing (everything already accounted)')
+  // gen3: k3(5) covered, total 65; the payload has aged k1/k2 out (compacted = [k3] only) —
+  // the guard's cumulative absorbed total must keep the accounting drift-free. This device
+  // folded k3 individually too, so everything is pre-accounted.
+  const folded2 = JSON.parse(h.ls.getItem('gamification.folded'))
+  folded2[k3] = { s: 5, t: 0 }
+  h.ls.setItem('gamification.folded', JSON.stringify(folded2))
+  h.meta.set(sk, JSON.stringify({ snow: 65, tomatoGain: 6, ts: Date.now(), gen: 3, compacted: [k3] }))
+  await mod.actions.initGamification(h.store)
+  assert.equal(h.state.user.snow, 40, 'gen3 adds nothing (k3 5 is inside the absorbed total, not a new gain)')
+  const folded3 = JSON.parse(h.ls.getItem('gamification.folded'))
+  assert.equal(folded3[sk].absorbed, 65, 'guard carries the cumulative accounted amount')
+})
+
 test('saveSnowGain: same dedupKey applied exactly once; bare-number legacy payload still works', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] }) // the batch flush is a real 60s timer — mock + tick so no real timer leaks into later tests
   const h = makeHarness()

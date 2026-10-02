@@ -48,6 +48,12 @@ const FOLDED_LS = 'gamification.folded'
 const GAIN_DEDUP_LS = 'gamification.gainDedup' // maint-d7: idempotency keys for saveSnowGain (survives restarts)
 const FLUSH_MIN_MS = 60000 // batch: at most one delta write per minute
 const COMPACT_AFTER_MS = 7 * 86400000 // U9b: deltas older than 7 days are compacted
+// Subtotal `compacted` retention window: covered keys stay listed in the payload for peers that
+// folded them individually BEFORE the subtotal covered them (the peer must keep subtracting their
+// guards). After the window, every live peer has folded at least one subtotal generation whose
+// `absorbed` total already includes them, so the entries can age out (bounded payload — the
+// previous cumulative list grew forever and was re-synced on every compaction).
+const SUBTOTAL_RETAIN_MS = 30 * 86400000
 
 function db (op, params) {
   try {
@@ -113,7 +119,10 @@ function scheduleFlush () {
 
 /** U9b: fold the device's own old (>=7d) increment deltas into the per-device subtotal, delete the
  *  folded keys, and rewrite the index. `entries` maps index keys to parsed entries; returns the
- *  pruned key list. Base-migration deltas and unreadable entries are never compacted. */
+ *  pruned key list. Base-migration deltas and unreadable entries are never compacted.
+ *  Subtotal-retention fix: the payload's `compacted` list is bounded — entries older than
+ *  SUBTOTAL_RETAIN_MS (measured from their cover time, tracked in the parallel `compactedTs` map)
+ *  are dropped; peers account for them cumulatively via the guard's `absorbed` total. */
 async function compactOwnOldDeltas (keys, entries) {
   const me = deviceId()
   const sk = subtotalKeyOf(me)
@@ -134,12 +143,23 @@ async function compactOwnOldDeltas (keys, entries) {
   }
   // Grow the existing subtotal (generation counter tells peers how much they have already folded)
   const prev = readJson(await db('getMeta', sk), null)
+  const prevCompacted = (prev && Array.isArray(prev.compacted)) ? prev.compacted : []
+  const prevTs = (prev && prev.compactedTs && typeof prev.compactedTs === 'object') ? prev.compactedTs : {}
+  // Cover times: known entries keep theirs; legacy entries (pre-retention payload, no map) are
+  // stamped with this run's time so they age out after one retention window.
+  const retain = {}
+  for (const k of prevCompacted) retain[k] = Number(prevTs[k]) || now
+  for (const k of covered) retain[k] = now
+  const kept = Object.keys(retain).filter(k => (now - retain[k]) < SUBTOTAL_RETAIN_MS)
+  const compactedTs = {}
+  for (const k of kept) compactedTs[k] = retain[k]
   const next = {
     snow: (Number(prev && prev.snow) || 0) + addSnow,
     tomatoGain: (Number(prev && prev.tomatoGain) || 0) + addTomato,
     ts: now,
     gen: ((Number(prev && prev.gen) || 0) + 1),
-    compacted: Array.from(new Set([...((prev && prev.compacted) || []), ...covered]))
+    compacted: kept,
+    compactedTs
   }
   await db('setMeta', [sk, JSON.stringify(next)])
   for (const k of covered) await db('deleteMeta', k)
@@ -276,12 +296,25 @@ export default {
         // compacted-key snapshot of the generation that amount covers — the old guard stored the
         // subtotal's raw total, so the next generation subtracted both it AND the individually
         // folded covered keys again (per-generation undercount compounding).
-        const markFolded = (k, s, t, gen, compacted) => {
-          folded[k] = gen != null ? { s, t, gen, ...(Array.isArray(compacted) ? { compacted } : {}) } : { s, t }
+        // Subtotal-retention fix: the guard also carries `absorbed` — the CUMULATIVE amount this
+        // device has accounted toward the subtotal (subtotal-path contributions + individually
+        // folded covered keys absorbed so far). Contribution arithmetic uses `absorbed` directly
+        // instead of re-deriving it from payload guards each generation (which drifted once the
+        // payload's compacted list stopped being a complete superset — see compactOwnOldDeltas).
+        const markFolded = (k, s, t, gen, compacted, absorbed, absorbedT) => {
+          folded[k] = gen != null
+            ? {
+                s, t, gen,
+                ...(Array.isArray(compacted) ? { compacted } : {}),
+                ...(Number.isFinite(Number(absorbed)) ? { absorbed: Number(absorbed) } : {}),
+                ...(Number.isFinite(Number(absorbedT)) ? { absorbedT: Number(absorbedT) } : {})
+              }
+            : { s, t }
         }
         // U-18: one batch read of the delta keys instead of an O(N) sequential getMeta loop
         // (getMetaManyWithFallback keeps the per-key loop when the batch op is absent)
         const deltaVals = await getMetaManyWithFallback(keys)
+        const subtotalKeys = []
         for (let ki = 0; ki < keys.length; ki++) {
           const k = keys[ki]
           const d = readJson(deltaVals[ki], null)
@@ -293,41 +326,56 @@ export default {
             baseMax.tomatoGain = Math.max(baseMax.tomatoGain, Number(d.tomatoGain) || 0)
             continue
           }
-          // U1: own increment deltas (and own subtotals) are already inside the LS total — skip.
-          if (isOwnKey(k, me)) { entries[k] = d; continue }
           entries[k] = d
+          // U1: own increment deltas (and own subtotals) are already inside the LS total — skip.
+          if (isOwnKey(k, me)) continue
+          if (d.gen != null) { subtotalKeys.push(k); continue } // pass 2: needs complete entries
           const f = folded[k]
-          if (d.gen != null) {
-            // U9b peer subtotal: fold only the not-yet-folded generation. The cumulative subtotal
-            // covers every key ever compacted; subtract EXACTLY what this device already counted:
-            // the subtotal-path contribution recorded in the guard (f.s/f.t — the guard stores the
-            // CONTRIBUTION d.total−accounted, NOT the raw total; storing the raw total was the
-            // round-1 P0 double-subtract undercount) plus every covered key folded INDIVIDUALLY
-            // (key meta is deleted by the owner's compaction, so an individual guard for a
-            // previously-covered key cannot reappear later — disjoint accounting).
-            // Round-2 P1: a LEGACY guard written before generations existed carries no `gen` —
-            // treat it as gen 1 so its (raw-total) amount is not folded a second time; the
-            // contribution arithmetic below still accounts via max(0, total − accounted).
-            const fGen = f ? (Number.isFinite(Number(f.gen)) ? Number(f.gen) : 1) : 0
-            if (fGen >= (Number(d.gen) || 0)) continue
-            const compacted = Array.isArray(d.compacted) ? d.compacted : []
-            let accounted = (f && Number(f.s)) || 0
-            let accountedT = (f && Number(f.t)) || 0
-            for (const ck of compacted) {
-              const cf = folded[ck]
-              if (cf && Number.isFinite(Number(cf.s))) { accounted += Number(cf.s) || 0; accountedT += Number(cf.t) || 0 }
-            }
-            const contribS = Math.max(0, (Number(d.snow) || 0) - accounted)
-            const contribT = Math.max(0, (Number(d.tomatoGain) || 0) - accountedT)
-            addSnow += contribS
-            addTomato += contribT
-            markFolded(k, contribS, contribT, Number(d.gen) || 0, compacted)
-            continue
-          }
           if (f) continue // ordinary peer delta already folded on this device
           addSnow += Number(d.snow) || 0
           addTomato += Number(d.tomatoGain) || 0
           markFolded(k, Number(d.snow) || 0, Number(d.tomatoGain) || 0)
+        }
+        // Pass 2 — peer subtotals. U9b: fold only the not-yet-folded generation; subtract EXACTLY
+        // what this device already counted, carried in the guard's cumulative `absorbed` total
+        // (legacy guards without `absorbed` are migrated on read: their contribution plus the
+        // guards of their compacted snapshot). Drift-free across any number of generations.
+        for (const k of subtotalKeys) {
+          const d = entries[k]
+          const f = folded[k]
+          const fGen = f ? (Number.isFinite(Number(f.gen)) ? Number(f.gen) : 1) : 0
+          if (fGen >= (Number(d.gen) || 0)) continue
+          const compacted = Array.isArray(d.compacted) ? d.compacted : []
+          const prevCovered = (f && Array.isArray(f.compacted)) ? f.compacted : []
+          let absorbed = 0
+          let absorbedT = 0
+          if (f && Number.isFinite(Number(f.absorbed))) {
+            absorbed = Number(f.absorbed)
+            absorbedT = Number.isFinite(Number(f.absorbedT)) ? Number(f.absorbedT) : 0
+          } else {
+            // legacy migration: the old guard stored only this generation's contribution; the
+            // covered keys of its snapshot were subtracted via guards at that time — absorb them.
+            absorbed += (f && Number(f.s)) || 0
+            absorbedT += (f && Number(f.t)) || 0
+            for (const ck of prevCovered) {
+              const cf = folded[ck]
+              if (cf && Number.isFinite(Number(cf.s))) { absorbed += Number(cf.s) || 0; absorbedT += Number(cf.t) || 0 }
+            }
+          }
+          const prevSet = new Set(prevCovered)
+          let newly = 0
+          let newlyT = 0
+          for (const ck of compacted) {
+            if (prevSet.has(ck)) continue // already inside `absorbed` — never counted twice
+            const cf = folded[ck]
+            if (cf && Number.isFinite(Number(cf.s))) { newly += Number(cf.s) || 0; newlyT += Number(cf.t) || 0 }
+          }
+          const contribS = Math.max(0, (Number(d.snow) || 0) - absorbed - newly)
+          const contribT = Math.max(0, (Number(d.tomatoGain) || 0) - absorbedT - newlyT)
+          addSnow += contribS
+          addTomato += contribT
+          markFolded(k, contribS, contribT, Number(d.gen) || 0, compacted,
+            absorbed + newly + contribS, absorbedT + newlyT + contribT)
         }
         // U9b: compact own old deltas into the per-device subtotal for peers (their values are
         // already represented in this device's LS total).
