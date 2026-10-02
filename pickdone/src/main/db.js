@@ -293,7 +293,9 @@ function initInner (userDataPath) {
   // 密钥内容强校验:db.key 被截断/夹带引号换行时,拼进 PRAGMA 即语法错误或注入面(三轮安全深审 H-2);
   // 不合规格式视为无钥/损坏,走正常恢复链而不是把垃圾送进 pragma
   if (hadKeyFile && !/^[0-9a-f]{64}$/.test(key)) {
-    log.warn('[TodoDB] db.key 内容非 64 位 hex(可能损坏),按无钥路径处理:', JSON.stringify(String(key).slice(0, 8)))
+    // sec-dbkey-prefix-logged: never log key material (the old message carried the first 8 hex
+    // chars); length + hex-ness are enough to diagnose a truncated/garbage key file.
+    log.warn('[TodoDB] db.key content invalid (expected 64 hex chars, got length=' + String(key).length + ', hex=' + /^[0-9a-fA-F]+$/.test(String(key)) + ') — continuing without key')
     key = null
     hadKeyFile = false
   }
@@ -335,6 +337,17 @@ function initInner (userDataPath) {
     // WAL + busy_timeout: avoids SQLITE_BUSY silently dropping writes when the desktop long-lived connection and the CLI write concurrently (a past comment claimed WAL was on when it actually was not)
     try { db.pragma('journal_mode = WAL') } catch {}
     try { db.pragma('busy_timeout = 5000') } catch {}
+    // enc-pragma-wal-diagnostic-not-shipped: the try/catch above swallows pragma failures —
+    // WAL/busy_timeout non-application was silent (vs ES1, commit 5cf95eba). Read both back and
+    // say so loudly; a connection running with journal_mode != WAL can drop concurrent CLI writes.
+    try {
+      const jm = db.pragma('journal_mode', { simple: true })
+      if (String(jm).toLowerCase() !== 'wal') log.error('[TodoDB] WAL mode not active (journal_mode=' + jm + ') — concurrent CLI writes may fail with SQLITE_BUSY')
+    } catch { /* introspection is best-effort, never fail init over diagnostics */ }
+    try {
+      const bt = db.pragma('busy_timeout', { simple: true })
+      if (Number(bt) !== 5000) log.error('[TodoDB] busy_timeout not applied (got ' + bt + ', expected 5000)')
+    } catch { /* introspection is best-effort */ }
   }
   applyConnPragmas()
 
