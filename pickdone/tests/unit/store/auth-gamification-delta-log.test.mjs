@@ -213,6 +213,27 @@ test('peer subtotal: cumulative absorbed accounting is drift-free across generat
   assert.equal(folded3[sk].absorbed, 65, 'guard carries the cumulative accounted amount')
 })
 
+test('folded guard: guards absorbed into a subtotal generation are pruned once their meta rows are gone; live-meta guards are kept (leak-gamification-folded-ls-never-pruned)', async () => {
+  const h = makeHarness()
+  const sk = P + 'pY:c'
+  const k1 = P + 'pY:1' // meta deleted by the owner's compaction → guard becomes prunable
+  const k2 = P + 'pY:2' // meta still live (lost owner-side delete) → guard must be kept
+  h.ls.setItem('gamification.folded', JSON.stringify({ [k1]: { s: 20, t: 2 }, [k2]: { s: 10, t: 1 } }))
+  h.meta.set(INDEX_KEY, JSON.stringify([sk, k2]))
+  h.meta.set(sk, JSON.stringify({ snow: 50, tomatoGain: 5, ts: Date.now(), gen: 2, compacted: [k1, k2] }))
+  h.meta.set(k2, peer(10, 1))
+  await mod.actions.initGamification(h.store)
+  assert.equal(h.state.user.snow, 10 + 20, 'contribution = 50 − 20 (k1) − 10 (k2, folded individually)')
+  const folded = JSON.parse(h.ls.getItem('gamification.folded'))
+  assert.equal(folded[k1], undefined, 'absorbed guard with dead meta pruned from FOLDED_LS')
+  assert.ok(folded[k2], 'live-meta guard kept — refold safety if the owner retries the delete')
+  assert.equal(folded[sk].absorbed, 50, 'both amounts now live inside the subtotal guard')
+  // second init: gen unchanged → no new fold, and the live-meta key is still guard-protected
+  const s0 = h.state.user.snow
+  await mod.actions.initGamification(h.store)
+  assert.equal(h.state.user.snow, s0)
+})
+
 test('saveSnowGain: same dedupKey applied exactly once; bare-number legacy payload still works', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] }) // the batch flush is a real 60s timer — mock + tick so no real timer leaks into later tests
   const h = makeHarness()

@@ -365,10 +365,11 @@ export default {
           const prevSet = new Set(prevCovered)
           let newly = 0
           let newlyT = 0
+          const newlyCounted = []
           for (const ck of compacted) {
             if (prevSet.has(ck)) continue // already inside `absorbed` — never counted twice
             const cf = folded[ck]
-            if (cf && Number.isFinite(Number(cf.s))) { newly += Number(cf.s) || 0; newlyT += Number(cf.t) || 0 }
+            if (cf && Number.isFinite(Number(cf.s))) { newly += Number(cf.s) || 0; newlyT += Number(cf.t) || 0; newlyCounted.push(ck) }
           }
           const contribS = Math.max(0, (Number(d.snow) || 0) - absorbed - newly)
           const contribT = Math.max(0, (Number(d.tomatoGain) || 0) - absorbedT - newlyT)
@@ -376,6 +377,14 @@ export default {
           addTomato += contribT
           markFolded(k, contribS, contribT, Number(d.gen) || 0, compacted,
             absorbed + newly + contribS, absorbedT + newlyT + contribT)
+          // leak-gamification-folded-ls-never-pruned: the individual guards of covered keys are
+          // now absorbed into this subtotal guard's cumulative total — prune them so FOLDED_LS
+          // does not grow forever. ONLY when the key's meta row is confirmed gone this init: a
+          // live meta (lost owner-side delete) must keep its guard, otherwise the ordinary-delta
+          // path could refold it on a later init (double count).
+          for (const ck of [...prevCovered, ...newlyCounted]) {
+            if (!entries[ck] && folded[ck]) delete folded[ck]
+          }
         }
         // U9b: compact own old deltas into the per-device subtotal for peers (their values are
         // already represented in this device's LS total).
