@@ -2,7 +2,7 @@
 
   <div class="weather-widget" :class="{ 'is-loading': loading, 'is-stale': stale }" v-if="enabled"
        role="button" tabindex="0" :title="widgetTitle"
-       @click="refresh" @keydown.enter.prevent="refresh">
+       @click="refresh" @keydown="onActivateKey">
     <span class="w-icon">{{icon}}</span>
     <span class="w-temp">{{ temp !== null ? temp + '°' : (loading ? '…' : '--') }}</span>
     <span class="w-desc" v-if="error">{{error}}</span>
@@ -90,6 +90,7 @@ function pruneShapeCache () {
 }
 
 import { lookupCity, geocodeOnline } from '../utils/cnCities.js'
+import { roleButtonActivate } from '../utils/roleButtonKey.js'
 import CITY_SHAPES from '../utils/city-shapes-data.js'
 
 /** fetch with timeout (AbortController) */
@@ -238,6 +239,8 @@ export default {
     clearTimeout(this._retryTimer)
   },
   methods: {
+    // [D15-A13] ARIA button pattern: Space activates too (was Enter-only)
+    onActivateKey: roleButtonActivate(function (e) { this.refresh() }),
     reset () {
       // [Fault-4] bump the shape sequence: an in-flight outline load for the old state must not
       // land after the reset and repopulate the cleared widget
@@ -379,6 +382,10 @@ export default {
 }
 </script>
 <style>/* 刷新按钮已移除：点击组件任意位置即刷新；w-shape = 城市轮廓小图标（Nominatim 边界简化描边） */
+/* [D15-A14] 'is-loading' was bound but never styled: with a cached temp the placeholder never
+   shows and a refresh in flight (up to the 8s timeout, plus retries) looked dead. The cached
+   temp breathes while a fetch is pending — visible feedback without layout shift. */
+.weather-widget.is-loading .w-temp { animation: w-breathe 1.2s ease-in-out infinite; }
 /* D6-F8: stale state — dim temperature, explicit refresh chip */
 .weather-widget.is-stale .w-temp { opacity: .45; }
 .w-stale-chip {

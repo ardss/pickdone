@@ -40,7 +40,13 @@ export default {
     addTag () {
       const name = (this.tagInput || '').trim().replace(/^#+/, '')
       this.tagInput = ''
-      if (!name || this.tags.includes(name)) return
+      if (!name) return
+      // [D15-A9] a duplicate tag used to die as a silent no-op AFTER the input was cleared — the
+      // user's entry just vanished. Say why nothing was added instead.
+      if (this.tags.includes(name)) {
+        try { this.$message.warning(this.$t('statsJ.EditPanel.tagExists', { name })) } catch { /* toast is best-effort */ }
+        return
+      }
       this.$emit('add', name)
     }
   }

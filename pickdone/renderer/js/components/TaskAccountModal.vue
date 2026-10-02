@@ -65,6 +65,7 @@
    Changing "actual" = posting — add/remove/modify entries (vouchers) here and the total follows automatically. Ledger integrity is non-negotiable, yet no detour to the timeline is needed.
    The empty state teaches: users opening it for the first time learn the "actual" semantics right here. */
 import { FMT, dayjs } from '../utils/core.js'
+import { splitRecordStart } from '../utils/recordAnchor.js'
 import { FOCUS_MAX_MINUTES } from '../utils/limits.js'
 import dialogA11y from '../utils/dialogA11y.js'
 
@@ -123,11 +124,11 @@ export default {
         .map(r => {
           const dur = Number(r.focusDuration || 0)
           const rest = r.succeed === false ? 0 : Number(r.restDuration || 0)
-          // 分钟偏移锚定记录所在日零点(2026-09-04 深审 P0 修复:原锚定"今天零点",历史记录 startMin 为大负数,
-          // 时间选择器 clamp 到 0-1439 显示成今天 00:00,一动选择器就把历史账搬进今天)
-          const day0 = dayjs(Number(r.endTime)).startOf('day').valueOf()
-          const startMin = ((Number(r.endTime) - dur * 60000) - day0) / 60000
-          return { ...r, day0, startMin, dur, rest, abandoned: r.succeed === false }
+          // [D15-A3] anchor the minutes-of-day to the record's START day (was the END day:
+          // cross-midnight records produced a negative startMin that the picker clamped to 00:00,
+          // and a casual open+save silently shifted the record — see utils/recordAnchor.js)
+          const s = splitRecordStart(r.endTime, dur)
+          return { ...r, day0: s.day0, startMin: s.startMin, dur, rest, abandoned: r.succeed === false }
         })
         .sort((a, b) => b.endTime - a.endTime)
     },

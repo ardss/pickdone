@@ -70,6 +70,11 @@ export default {
       } catch { /* best-effort */ }
     },
     onKey (e) {
+      // [D15-A2] IME guard (same contract as HabitView add / TomatoAbandonModal / EpTags):
+      // the Enter/Esc key events that COMMIT or CANCEL a composition arrive with keyCode 229 /
+      // isComposing set. Dismissing the IME candidate window with Esc used to be treated as an
+      // explicit cancel — wiping the draft and hiding the mini window mid-composition.
+      if (e.isComposing || e.keyCode === 229) return
       if (e.key === 'Escape') {
         // D14-A9 (2026-10-02): Esc is an EXPLICIT cancel — discard the draft, matching the main
         // window's QuickAdd (J1, uiux-2026-10-01) which clears on Esc. The old persist-on-Esc

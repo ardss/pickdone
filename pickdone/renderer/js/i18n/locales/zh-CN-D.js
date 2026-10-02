@@ -92,6 +92,7 @@ export default {
       "linkedTask": "关联任务",
       "linkedTaskLabel": "关联任务",
       "freeFocusPlaceholder": "自由专注",
+      "truncatedHint": "候选仅列出前 200 个未完成任务，共 {n} 个——更早的任务请用自由专注填写",
       "pickEvent": "选择关联任务",
       "addInfoA": "手动添加的记录用于补记线下专注",
       "addInfoB": "每天最多添加 3 条",

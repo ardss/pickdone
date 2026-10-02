@@ -103,6 +103,9 @@
                          :placeholder="$t('statsD.TomatoFocusRecord.pickEvent')">
                 <el-option v-for="t in attachCandidates" :key="t.taskId" :label="t.taskContent" :value="t.taskId"/>
               </el-select>
+              <!-- [D15-A17] the candidate pool is capped at 200; beyond that the task simply didn't
+                   exist in the filterable select and users assumed the data was lost. Say so. -->
+              <div v-if="attachTruncated" class="tfr-truncate-hint">{{ $t('statsD.TomatoFocusRecord.truncatedHint', { n: attachTotal }) }}</div>
               <el-input v-if="!addForm.focusTaskId" v-model="addForm.focusText" size="small" style="margin-top:8px"
                         maxlength="100" :placeholder="$t('statsD.TomatoFocusRecord.freeFocusPlaceholder')"/>
             </div>
@@ -160,6 +163,9 @@ export default {
     attachCandidates () {
       return [...this.$store.state.todo.todoList].filter(t => !t.complete && t.taskContent).slice(0, 200)
     },
+    // [D15-A17] pool-cap visibility: the 200-entry cap used to be silent
+    attachTotal () { return this.$store.state.todo.todoList.filter(t => !t.complete && t.taskContent).length },
+    attachTruncated () { return this.attachTotal > 200 },
     /** Currently selected day (tlOffset: 0 = today, -1 = yesterday...) */
     selDayStart () { return this.$store.state.todo.todayTimestamp + (this.tlOffset || 0) * 86400000 },
     selDayLabel () {
@@ -378,6 +384,8 @@ html[data-theme="dark"] .tfr-timeline__legend .dot-idle { background: #2a3038; }
 .tfr-form-row { margin-bottom: 16px; }
 .tfr-form-label { display: block; margin-bottom: 6px; color: var(--text-2); font-size: var(--fs-md); }
 .tfr-add-info { margin: 4px 0 0; color: var(--text-3); font-size: var(--fs-sm); }
+/* [D15-A17] attach-pool truncation notice */
+.tfr-truncate-hint { margin-top: 4px; color: var(--text-3); font-size: var(--fs-xs); }
 .tfr-add-info .text-primary { color: var(--brand, #0c8172); }
 /* 专注记录：行点击展开详情 + 时间轴定位高亮 */
 .tomato-record { cursor: pointer; }

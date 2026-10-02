@@ -311,16 +311,25 @@ export default {
     },
     // —— 画布布局:位置持久化 + 自动整理(自由画布是定稿形态,分层只是布局算法) ——
     posKey () { return 'depView.pos.v1:' + (this.projectId == null ? 'all' : String(this.projectId)) },
+    /** [D15-A16] layout loss is INVISIBLE today: a corrupt posMap resets to {} and a failed
+     *  persistence put is swallowed — the user only finds out their saved layout is gone when it
+     *  is gone. Both failures now surface, warn-ONCE per session (savePos debounces at 400ms; a
+     *  persistent failure would otherwise toast-storm on every drag). */
+    warnOncePosFailure (key, detail) {
+      if (this['_posWarn_' + key]) return
+      this['_posWarn_' + key] = true
+      try { this.$message.warning(this.$t('statsA.DepView.' + (key === 'load' ? 'posLoadFailed' : 'posSaveFailed'), { msg: String(detail || '').slice(0, 120) })) } catch { /* toast is best-effort */ }
+    },
     loadPos () {
       this.posMap = {}
       // Sequence token: on rapid project switches, a stale response must not overwrite the newer posMap
       const seq = this._posSeq = (this._posSeq || 0) + 1
       window.todoAPI.dbCall('getMeta', this.posKey()).then(raw => {
         if (seq !== this._posSeq) return
-        try { this.posMap = JSON.parse(raw) || {} } catch (e) { this.posMap = {} }
+        try { this.posMap = JSON.parse(raw) || {} } catch (e) { this.posMap = {}; this.warnOncePosFailure('load', e && e.message) }
         this.ensurePositions()
         this.$nextTick(this.drawWires)
-      }).catch(() => { if (seq === this._posSeq) this.ensurePositions() })
+      }).catch(e => { if (seq === this._posSeq) { this.warnOncePosFailure('load', e && e.message); this.ensurePositions() } })
     },
     savePosTimer: null,
     savePos () {
@@ -329,7 +338,8 @@ export default {
     },
     flushPos () {
       clearTimeout(this.savePosTimer)
-      commitCommand("meta", "put", [this.posKey(), JSON.stringify(this.posMap)]).catch(() => {})
+      commitCommand("meta", "put", [this.posKey(), JSON.stringify(this.posMap)])
+        .catch(e => { console.error('[depview] posMap persist failed:', e); this.warnOncePosFailure('save', e && e.message) })
     },
     /** Auto-layout (user feedback 2026-09-07: the naive depth-grid looked messy):
      *  1) lane = topological depth; 2) order inside each lane by barycenter of already-placed

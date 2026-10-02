@@ -90,6 +90,9 @@
           <div v-else class="rm-base">{{ $t('statsD.RepeatModal.noBase') }}</div>
         </div>
         <div class="modal__footer">
+          <!-- [D15-A6] an undated base event keeps 生成 dead with no explanation — surface the same
+               reason generate() would reject with, BEFORE the click (the old hint only fired on click) -->
+          <span v-if="!templateTodo || !templateTodo.todoTime" class="rm-base-warn">{{ $t('statsD.RepeatModal.noBaseDate') }}</span>
           <el-button size="small" :disabled="generating" @click="close">{{ $t('statsD.RepeatModal.cancel') }}</el-button>
           <el-button size="small" type="primary" :loading="generating" :disabled="!templateTodo || !templateTodo.todoTime" @click="generate">{{ $t('statsD.RepeatModal.generate') }}</el-button>
         </div>
@@ -269,5 +272,7 @@ export default {
 /* 帮助提示「?」(hint-q):F-D4 降级为 role=img + aria-label(去假按钮语义),聚焦可见(与 EditPanel 同规则;renderer 无 base.css,各自持一份) */
 .hint-q { cursor: help; }
 .hint-q:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; border-radius: var(--radius-sm); }
+/* [D15-A6] undated-base explanation beside the disabled 生成 button */
+.rm-base-warn { flex: 1; min-width: 0; font-size: var(--fs-xs, 12px); color: var(--warn, #e6a33c); text-align: left; overflow: hidden; text-overflow: ellipsis; }
 @keyframes modal-pop { from { opacity: 0; transform: translateY(8px) scale(.96); } }
 </style>

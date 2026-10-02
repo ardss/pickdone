@@ -27,7 +27,9 @@ export default {
       connectHint: 'Connect mode: "{a}" selected as the prerequisite candidate. Tab or arrow keys to switch the target card, Enter to create the dependency, Esc to cancel',
       emptyHint: 'Nothing here yet. Drag tasks in from the task list on the right, or create tasks and come back to wire dependencies',
       msLoading: 'Loading milestones…',
-      noTitle: 'Untitled'
+      noTitle: 'Untitled',
+      posLoadFailed: 'Dependency-map layout data failed to load and was reset to auto-layout: {msg}',
+      posSaveFailed: 'Dependency-map layout failed to save; your changes may not persist: {msg}'
     },
     "core": {
     "leftoverMsg": "{n} event(s) left unfinished yesterday ({preview}{more}). Move them to today?",

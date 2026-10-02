@@ -16,6 +16,19 @@ const HOUR = 3600000
 const DAY = 86400000
 
 /**
+ * [D15-A1] The time-block hour window is a single contract shared by the grid renderer and the
+ * bucket builder. It used to be a hardcoded 6-23 constant living ONLY in CalendarView's template,
+ * while buildTbBuckets (correctly) buckets every hour of the day — any task scheduled 00:00-05:59
+ * landed in a bucket no rendered cell ever asked for and silently vanished from the view (no chip,
+ * no unscheduled-pool entry: it looked like data loss). The window is now the full 0-23 range so
+ * no bucket can fall outside what the grid renders; if a compact window ever comes back it must
+ * be defined HERE and also applied as a bucket filter, never re-hardcoded in the view.
+ */
+export const TB_HOUR_START = 0
+export const TB_HOUR_END = 24 // exclusive
+export const TB_HOURS = Array.from({ length: TB_HOUR_END - TB_HOUR_START }, (_, i) => TB_HOUR_START + i)
+
+/**
  * O(1) lookup: taskId → todo row (replaces repeated todoList.find O(n) scans).
  * First-wins on duplicate ids, exactly matching the find() semantics it replaces —
  * find() scans forward and returns the first match; taskIds are unique in

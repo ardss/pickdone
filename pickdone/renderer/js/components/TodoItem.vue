@@ -62,7 +62,11 @@
         </button>
         <img v-if="isRepeat" class="td-ico" src="app://app/assets/img/icon-repeat.svg" :title="$t('statsE.TodoItem.repeatLabel')" alt="">
         <img v-if="fileCount" class="td-ico" src="app://app/assets/img/icon-file.svg" :title="fileCount+$t('statsE.TodoItem.attachmentsUnit')" alt="">
-        <span v-if="(todo.estimate||0)>0" class="td-snow" :title="$t('statsE.TodoItem.pomodoroInvested')"><app-icon name="snow" :size="12"/>{{todo.estimate}}</span>
+        <!-- [D15-B12] `todo.estimate` holds ACCUMULATED FOCUS MINUTES post-X2 (db-rows.js maps
+             estimate: r.focusMinutes; bumpSnow increments minutes) — the old "pomodoro invested" title
+             presented 25 focus minutes as 25 tomato rounds. The project pages sum the same field
+             and label it minutes (statsB focusMin); the pill now uses the same single semantic. -->
+        <span v-if="(todo.estimate||0)>0" class="td-snow" :title="$t('statsE.TodoItem.focusMinutesTitle', { n: todo.estimate })"><app-icon name="snow" :size="12"/>{{todo.estimate}}</span>
         <span v-if="(todo.priority||0)>0" class="td-prio" :class="'p'+todo.priority" :title="$t('statsE.TodoItem.priorityPrefix')+['',$t('statsJ.TodoItem.prioLow'),$t('statsJ.TodoItem.prioMedium'),$t('statsJ.TodoItem.prioHigh')][todo.priority||0]">
           <i class="prio-flag"></i>{{['',$t('statsJ.TodoItem.prioLow'),$t('statsJ.TodoItem.prioMedium'),$t('statsJ.TodoItem.prioHigh')][todo.priority||0]}}
         </span>

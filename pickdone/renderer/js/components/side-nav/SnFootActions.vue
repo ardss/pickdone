@@ -9,8 +9,9 @@
       <path d="M20 6L9 17l-5-5" fill="none" stroke="#0c8172" stroke-width="2.4"
             stroke-linecap="round" stroke-linejoin="round" pathLength="1"/>
     </svg>
-    <img v-else class="sn-sync" :class="{spinning}" src="app://app/assets/img/icon-sync3.svg" :title="$t('statsG.SideNav.syncTitle')"
-         role="button" tabindex="0" :aria-label="$t('statsG.SideNav.syncAria')" @click="$emit('sync')" @keydown.enter.prevent="$emit('sync')">
+    <img v-else class="sn-sync" :class="{spinning}" src="app://app/assets/img/icon-sync3.svg" alt="" :title="$t('statsG.SideNav.syncTitle')"
+         role="button" tabindex="0" :aria-label="$t('statsG.SideNav.syncAria')" data-act="sync"
+         @click="$emit('sync')" @keydown="onActivateKey">
     <button class="sn-account-gear sn-account-trash" :class="{'drag-ready': dragReady, 'drag-over': trashHot}"
             :title="$t('statsG.SideNav.recycleBinBtn')" :aria-label="$t('statsG.SideNav.recycleBinBtn')"
             @click="$emit('recycle')" @keydown.enter.prevent="$emit('recycle')"
@@ -48,6 +49,8 @@
 </template>
 
 <script lang="ts">
+import { roleButtonActivate } from '../../utils/roleButtonKey.js'
+
 /** Sync / recycle-bin / settings trio for the sidebar foot, in both expanded (inside .sn-account)
  *  and collapsed (.sn-collapsed-foot) form. State + handlers live in the parent. */
 export default {
@@ -68,6 +71,11 @@ export default {
     /** updater "ready to install" red dot on the gear */
     updateReady: { type: Boolean, default: false }
   },
-  emits: ['sync', 'recycle', 'settings', 'trash-dragover', 'trash-dragleave', 'trash-drop']
+  emits: ['sync', 'recycle', 'settings', 'trash-dragover', 'trash-dragleave', 'trash-drop'],
+  methods: {
+    // [D15-A13] the expanded sync icon is a role="button" <img>: ARIA button pattern requires
+    // Space as well as Enter (the surrounding trash/gear are real <button>s — natively fine)
+    onActivateKey: roleButtonActivate(function (e) { this.$emit(e.currentTarget.getAttribute('data-act') || 'sync') })
+  }
 }
 </script>

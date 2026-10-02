@@ -26,6 +26,7 @@
 <script lang="ts">
 import { defineComponent } from 'vue'
 import { extractTags } from '../../utils/search.js'
+import { showUndoToast } from '../../utils/undoToast.js'
 
 export default defineComponent({
 
@@ -67,8 +68,14 @@ export default defineComponent({
     },
 
     /* ===== Manage tags: rename/delete = rewrite the #tag across all task content and descriptions in sync ===== */
+    /* [D15-B8] the rewrite corpus is the FULL corpus: live todos AND the recycle bin. Filtering
+       the live todoList only meant binned tasks kept the old tag text — a rename reported
+       success while the bin-held corpus still used the old name, and a restore resurrected the
+       stale tag. updateTodoFields routes rows from either list (store keeps them in separate
+       arrays), so including recycleList closes the gap at the source. */
     tagTodos (name): any[] {
-      return this.$store.state.todo.todoList.filter(t =>
+      const s = this.$store.state.todo
+      return [...(s.todoList || []), ...(s.recycleList || [])].filter(t =>
         extractTags(t.taskContent, t.taskDescribe).includes(name))
     },
     /* Round-1 P0 (2026-09-21): the rewrite regex MUST terminate on the SAME character class as
@@ -135,13 +142,27 @@ export default defineComponent({
         return patch
       })
       if (!r.ok) return
-      await this.$store.dispatch('ui/renameUserTag', { from: t.name, to: next })
+      // [D15-A7] the bookkeeping dispatch can reject (meta put failure — the action reverts its
+      // in-memory rename and rethrows); the old unguarded await died as an unhandled rejection
+      // with no toast while the content rewrite had already landed.
+      try {
+        await this.$store.dispatch('ui/renameUserTag', { from: t.name, to: next })
+      } catch (e) {
+        console.error('[sn-tags] renameUserTag failed:', e)
+        this.$message.error(this.$t('statsG.SideNav.syncFailMsg'))
+        return
+      }
       this.$message.success(this.$t('statsG.SideNav.tagRenamed', { name: next }))
     },
     async removeTag (t) {
+      const targets = this.tagTodos(t.name)
       try {
-        await this.$confirm(this.$t('statsG.SideNav.delTagConfirm', { name: t.name, count: this.tagTodos(t.name).length }), this.$t('statsE.SideNav.tipTitle'), { type: 'warning' })
+        await this.$confirm(this.$t('statsG.SideNav.delTagConfirm', { name: t.name, count: targets.length }), this.$t('statsE.SideNav.tipTitle'), { type: 'warning' })
       } catch { return }
+      // [D15-A8] snapshot before the destructive rewrite so the confirm can be UNDONE via the
+      // app-wide undo toast (same contract as habit delete / task completion) — a tag delete
+      // rewrites N task titles and was previously unrecoverable.
+      const snapshot = targets.map(todo => ({ taskId: todo.taskId, taskContent: todo.taskContent, taskDescribe: todo.taskDescribe }))
       const re = this.tagRewriteRe(t.name, { consume: true })
       const r = await this.rewriteTagTodos(t, todo => {
         const patch: any = {}
@@ -156,8 +177,33 @@ export default defineComponent({
         return patch
       })
       if (!r.ok) return // half-deleted: the placeholder tag must survive until every rewrite succeeded
-      await this.$store.dispatch('ui/removeUserTag', t.name)
-      this.$message.success(this.$t('statsG.SideNav.tagDeleted', { name: t.name }))
+      try {
+        await this.$store.dispatch('ui/removeUserTag', t.name)
+      } catch (e) {
+        console.error('[sn-tags] removeUserTag failed:', e)
+        this.$message.error(this.$t('statsG.SideNav.syncFailMsg'))
+        return
+      }
+      // Undo restores every rewritten content/description verbatim (the tag naturally reappears
+      // in the sidebar via the content-derived tagCounts getter; only the zero-count placeholder
+      // entry stays removed — re-adding it would require a store-layer action, out of this domain)
+      showUndoToast(this.$message.bind(this), [
+        this.$t('statsG.SideNav.tagDeleted', { name: t.name }) + '　',
+        window.Vue.h('a', {
+          style: { color: 'var(--brand)', cursor: 'pointer' },
+          onClick: () => {
+            Promise.all(snapshot.map(snap => {
+              const patch: any = {}
+              if (snap.taskContent != null) patch.taskContent = snap.taskContent
+              if (snap.taskDescribe != null) patch.taskDescribe = snap.taskDescribe
+              return this.$store.dispatch('todo/updateTodoFields', { taskId: snap.taskId, patch })
+            })).then(() => this.$message.closeAll()).catch(e => {
+              console.error('[sn-tags] tag-delete undo failed:', e)
+              this.$message.error(this.$t('statsG.SideNav.syncFailMsg'))
+            })
+          }
+        }, this.$t('statsA.core.undo'))
+      ])
     }
   }
 })

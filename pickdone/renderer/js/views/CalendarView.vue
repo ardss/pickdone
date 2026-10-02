@@ -105,7 +105,7 @@ import { weekGridStart } from '../utils/weekGrid.js'
 import { today0, dayStart } from '../utils/todayBounds.js'
 // Perf (domain-5, 2026-09-23): O(1) time-block bucket lookups + task index + cursor-window
 // event trimming. Pure helpers, equivalence-guarded by tests/unit/renderer/dw5-calendar-perf.test.mjs
-import { buildTbBuckets, tbBucketGet, indexById, inCursorWindow } from '../utils/calendarBuckets.js'
+import { buildTbBuckets, tbBucketGet, indexById, inCursorWindow, TB_HOURS } from '../utils/calendarBuckets.js'
 // solarlunar → FullCalendar adapter lives in utils/lunarAdapter.js (structure-size ratchet)
 import LUNAR from '../utils/lunarAdapter.js'
 
@@ -126,7 +126,9 @@ export default {
         return { ts, label: wdLabel(this.$t.bind(this), dayjs(ts).day()), dom: dayjs(ts).date(), isToday: ts === today }
       })
     },
-    tbHours () { return Array.from({ length: 18 }, (_, i) => i + 6) },
+    // [D15-A1] the rendered hour window is the shared contract (was a local 6-23 constant that
+    // silently swallowed buckets for 00:00-05:59 schedules — see calendarBuckets.TB_HOURS)
+    tbHours () { return TB_HOURS },
     tbRowH () { return 56 },
     // Perf-E1: one O(n) bucketing pass per todoList change replaces 126 full-table
     // filters per render (7×18 grid cells each .filter'ing the whole todoList).

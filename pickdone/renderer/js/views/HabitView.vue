@@ -59,9 +59,16 @@
       <!-- Monthly check-in calendar -->
       <div class="habit-cal-sec">
         <div class="habit-cal-nav">
-          <button class="mini" :title="$t('statsB.HabitView.prevMonthAria')" :aria-label="$t('statsB.HabitView.prevMonthAria')" @click="calOffset--">‹</button>
+          <!-- [D15-A11] the month pager used to be unbounded (`calOffset++/--` inline) with no way
+               back: calOffset could drift years away and the only recovery was re-mounting. Clamped
+               like TomatoFocusRecordModal's ledger offset, with an explicit back-to-today control. -->
+          <button class="mini" :title="$t('statsB.HabitView.prevMonthAria')" :aria-label="$t('statsB.HabitView.prevMonthAria')"
+                  :disabled="calOffset <= calMinOffset" @click="prevMonth">‹</button>
           <span class="habit-cal-label">{{ calLabel }}</span>
-          <button class="mini" :title="$t('statsB.HabitView.nextMonthAria')" :aria-label="$t('statsB.HabitView.nextMonthAria')" @click="calOffset++">›</button>
+          <button class="mini" :title="$t('statsB.HabitView.nextMonthAria')" :aria-label="$t('statsB.HabitView.nextMonthAria')"
+                  :disabled="calOffset >= 0" @click="nextMonth">›</button>
+          <button v-if="calOffset !== 0" class="mini habit-cal-today" :title="$t('statsB.HabitView.calTodayBtn')" :aria-label="$t('statsB.HabitView.calTodayBtn')"
+                  @click="calOffset = 0">{{ $t('statsB.HabitView.calTodayBtn') }}</button>
         </div>
         <div class="habit-cal-grid">
           <span v-for="w in WD" :key="w" class="habit-cal-wd">{{ w }}</span>
@@ -117,6 +124,10 @@ import EmptyState from '../components/EmptyState.vue'
 // Monday-first weekday keys (labels via statsP.HabitView.wd1..wd7)
 const WD_KEYS = ['wd1', 'wd2', 'wd3', 'wd4', 'wd5', 'wd6', 'wd7']
 
+// [D15-A11] month pager bounds: two years back is plenty for a check-in review calendar; forward
+// is pointless (future months can't hold check-ins) so 0 = current month is the ceiling.
+const CAL_MIN_OFFSET = -24
+
 export default {
   name: 'HabitView',
   components: { EmptyState },
@@ -133,6 +144,7 @@ export default {
   computed: {
     /** Monday-first weekday labels (Monday-first) */
     WD () { return WD_KEYS.map(k => this.$t('statsP.HabitView.' + k)) },
+    calMinOffset () { return CAL_MIN_OFFSET },
     habits () { return this.$store.state.habits.habits },
     moments () { return this.$store.state.habits.moments },
     todayKey () { return dayjs().format(FMT.date) },
@@ -231,15 +243,41 @@ export default {
         }, this.$t('statsA.core.undo'))
       ])
     },
-    prevMonth () { this.calOffset-- },
-    nextMonth () { this.calOffset++ },
+    // [D15-A11] clamped navigation (was unbounded calOffset-- / calOffset++ in the template)
+    prevMonth () { if (this.calOffset > CAL_MIN_OFFSET) this.calOffset-- },
+    nextMonth () { if (this.calOffset < 0) this.calOffset++ },
+    // [D15-A10] habit/moment deletes now ride the app-wide undo-toast contract (same as the
+    // check-in toggle above): snapshot the whole blob, restore it on Undo via the store's
+    // replaceAll mutation (the same restore path backups use — no parallel undo channel invented)
+    delHabitWithUndo (h) {
+      const snap = { habits: this.$store.state.habits.habits.map(x => ({ ...x, records: { ...(x.records || {}) } })), moments: this.$store.state.habits.moments.map(m => ({ ...m })), savedAt: Date.now() }
+      this.$store.commit('habits/delHabit', h.id)
+      this.undoToastFor(this.$t('statsB.HabitView.deletedToast', { n: h.name }), snap)
+    },
+    delMomentWithUndo (m) {
+      const snap = { habits: this.$store.state.habits.habits.map(x => ({ ...x, records: { ...(x.records || {}) } })), moments: this.$store.state.habits.moments.map(x => ({ ...x })), savedAt: Date.now() }
+      this.$store.commit('habits/delMoment', m.id)
+      this.undoToastFor(this.$t('statsB.HabitView.momentDeletedToast', { n: m.name }), snap)
+    },
+    undoToastFor (text, snap) {
+      showUndoToast(this.$message.bind(this), [
+        text + '　',
+        window.Vue.h('a', {
+          style: { color: 'var(--brand)', cursor: 'pointer' },
+          onClick: () => {
+            this.$store.commit('habits/replaceAll', snap)
+            this.$message.closeAll()
+          }
+        }, this.$t('statsA.core.undo'))
+      ])
+    },
     async delHabitConfirm (h) {
       try { await this.$confirm(this.$t('statsB.HabitView.delConfirm', { name: h.name }), this.$t('statsB.HabitView.delTitle'), { type: 'warning' }) } catch { return }
-      this.$store.commit('habits/delHabit', h.id)
+      this.delHabitWithUndo(h)
     },
     async delMomentConfirm (m) {
       try { await this.$confirm(this.$t('statsB.HabitView.delMomentConfirm', { name: m.name }), this.$t('statsB.HabitView.delMomentTitle'), { type: 'warning' }) } catch { return }
-      this.$store.commit('habits/delMoment', m.id)
+      this.delMomentWithUndo(m)
     },
     addMoment () {
       if (!this.newMoment.trim() || !this.newMomentDate) return this.$message.warning(this.$t('statsB.HabitView.nameAndDateRequired'))
@@ -317,6 +355,8 @@ export default {
 
 
 .habit-cal-nav { display: flex; align-items: center; justify-content: center; gap: 12px; margin-bottom: 8px; }
+/* [D15-A11] back-to-today chip next to the month pager */
+.habit-cal-today { font-size: var(--fs-xs); }
 
 
 
