@@ -152,7 +152,7 @@ const busCommit = (entity, verb, payload) => require('./command-bus').commit(ent
 // unconsumedSegments / proved) — the plain-bak cleanup gate must know whether EVERY segment of
 // the snapshot was consumed, not just whether todoState imported rows.
 function restoreFromCriticalBackup (ud) {
-  return dbRecovery.restoreSegmentsFromCriticalBackup(ud,
+  const r = dbRecovery.restoreSegmentsFromCriticalBackup(ud,
     list => busCommit('todo', 'putMany', list),
     c => busCommit('category', 'put', c),
     rows => busCommit('tomato', 'appendMany', rows),
@@ -164,6 +164,12 @@ function restoreFromCriticalBackup (ud) {
       // deadline+status+flag+milestones live only in the meta table — re-put them like habits.
       metaPut: pair => busCommit('meta', 'put', pair)
     })
+  // [Sync-13 reader, restore-degraded-segments-marker-never-consumed] the only main-process caller
+  // logs the marker: a degraded dump's missing segments must be visible in the recovery trail.
+  if (r && Array.isArray(r.degradedSegments) && r.degradedSegments.length) {
+    log.warn('[Init] critical backup was collected degraded — segments missing from this dump:', r.degradedSegments.join(', '))
+  }
+  return r
 }
 
 /* ---------------- External-write listener: when the CLI writes the DB directly, the running App refreshes automatically ----------------
@@ -474,13 +480,49 @@ if (!app.requestSingleInstanceLock(...__multiLockArgs)) {
     }
     // init 成功(加密库正常打开)=迁移自愈窗口已关闭:立刻删除 .plain-bak 明文残留,否则用户的
     // 全部任务/账本永远留一份明文拷贝在 userData,at-rest 加密被整体架空(2026-09-05 二轮深审 P1-1)
+    // mig-restore-sentinel-cleared-before-consumer (P2, symptom of "sentinel lifecycle keyed to
+    // init-failure instead of to DB emptiness"): the sentinel used to be cleared unconditionally
+    // here while the replay it stands for only ever ran inside the init-failure catch — a crash in
+    // that window left a parseable critical backup stranded behind a cleared sentinel. Now the
+    // success path re-evaluates the replay gate BEFORE clearing, runs the replay in the same boot
+    // (before createMainWindow/scheduler reload), and mirrors the catch-path follow-ups (sync kick
+    // + watermark invalidation) so restored rows reach peers. The plain-bak cleanup below is
+    // skipped while an unproved replay leaves the snapshot unconsumed (keep the last copy).
+    // Known unrecoverable window (stated, follow-up for crash-atomicity): a hard crash between the
+    // re-init inside the catch block and the markRecoveryPending write still strands the state.
+    const __ud = app.getPath('userData')
+    const replayDecision = dbRecovery.cleanInitReplayDecision(__ud)
+    let replayProved = true
+    if (replayDecision.replay) {
+      log.warn('[Init] recovery-pending sentinel + parseable critical backup survived into a successful init — replaying the JSON restore before the window/scheduler come up')
+      let restored = null
+      try { restored = restoreFromCriticalBackup(__ud) } catch (e1) { log.error('[Init] recovery replay failed:', e1 && e1.message || e1) }
+      replayProved = !!(restored && restored.proved)
+      // Mirror the catch-path GAP-D kick: restored rows must not wait for the periodic sync round.
+      try { require('./lan-sync-bootstrap').kickSyncRound('db-recovery-replay') } catch { /* sync lazy-not-init */ }
+      // Post-recovery watermark invalidation (mirror of the catch path): the replay rebuilt rows in
+      // an older oplog seq space — stale peer watermarks would sit above them forever otherwise.
+      try { require('./lan-sync-bootstrap').invalidateSyncWatermarks('db-recovery-replay') } catch { /* sync lazy-not-init */ }
+      if (replayProved) {
+        dbRecovery.clearRecoveryPending(__ud)
+        log.info('[Init] recovery replay consumed the snapshot provably — sentinel cleared')
+      } else {
+        log.error('[Init] recovery replay did NOT provably consume the snapshot — recovery-pending sentinel kept for the next boot')
+      }
+    }
     try {
-      const pb = path.join(app.getPath('userData'), 'todos.db.plain-bak')
-      if (fs.existsSync(pb)) { fs.rmSync(pb, { force: true }); log.info('[Init] 加密库启动正常,已清除明文残留 todos.db.plain-bak') }
+      const pb = path.join(__ud, 'todos.db.plain-bak')
+      const replayBlocking = replayDecision.replay && !replayProved
+      if (fs.existsSync(pb) && replayBlocking) {
+        log.warn('[Init] plain-bak 保留:recovery replay 未证实消费快照,最后的备份不可删除')
+      } else if (fs.existsSync(pb)) {
+        fs.rmSync(pb, { force: true }); log.info('[Init] 加密库启动正常,已清除明文残留 todos.db.plain-bak')
+      }
     } catch (e0) { log.warn('[Init] plain-bak 清理失败', e0) }
-    // Sync-4/Sync-17: a clean init means any recovery-pending sentinel from a previous interrupted
-    // recovery is stale (either the replay already ran or there is nothing left to replay).
-    try { dbRecovery.clearRecoveryPending(app.getPath('userData')) } catch { /* best-effort */ }
+    // A clean init with NO replayable state means any sentinel is stale (either the replay already
+    // ran or there is nothing left to replay) — clear it. With a replay pending, the block above
+    // owns the lifecycle (clear on proved, keep on unproved).
+    if (!replayDecision.replay) { try { dbRecovery.clearRecoveryPending(__ud) } catch { /* best-effort */ } }
     handleAppProtocol()
     createMainWindow()
     const win = getMainWindow()

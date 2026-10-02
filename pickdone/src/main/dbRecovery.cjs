@@ -8,7 +8,7 @@ const path = require('path')
 
 /** Blob format versions recognizable by the recovery path: corresponds to the schemaV written by each renderer store.
  *  A segment without schemaV is treated as v1 (legacy data compatibility); > 1 = data from a future version being restored by the current one — reject importing that segment (prevents downgrade misreads). */
-const SUPPORTED_SCHEMA_V = 1
+const SUPPORTED_SCHEMA_V = 1 // single source for the main/CLI restore side — exported at the bottom (renderer keeps its own ESM declaration across the process boundary)
 let _log = null
 function logWarn (...args) {
   try {
@@ -183,6 +183,17 @@ function quarantineKey (ud, stamp) {
 function recoveryPendingPath (ud) {
   return path.join(ud, 'recovery-pending.json')
 }
+
+/** Pure decision for the init-SUCCESS boot path (mig-restore-sentinel-cleared-before-consumer):
+ *  the sentinel used to be cleared unconditionally on init success while the replay it stands for
+ *  was only ever consumed inside the dbm.init failure catch — a hard crash in that window left a
+ *  parseable critical backup stranded behind a cleared sentinel. The success path must re-evaluate
+ *  the SAME gate attemptDbRecovery uses at :218: parseability (not mere existence) of the snapshot.
+ *  Returns { replay, jsonPath } so the caller can gate the plain-bak cleanup on the same verdict. */
+function cleanInitReplayDecision (ud) {
+  const jsonPath = criticalBackupPath(ud)
+  return { replay: hasRecoveryPending(ud) && backupJsonParseable(jsonPath), jsonPath }
+}
 function markRecoveryPending (ud, info) {
   try {
     fs.mkdirSync(ud, { recursive: true })
@@ -206,6 +217,14 @@ function attemptDbRecovery (ud, retryInit) {
   // Confirm a recoverable source exists before renaming: transient IO errors (disk full/lock held) also make init fail; renaming unconditionally
   // would mislabel the user's current database as .corrupt and fall back to a stale backup or even an empty DB
   const plainBakExists = fs.existsSync(path.join(ud, 'todos.db.plain-bak'))
+  // restore-plainbak-copied-without-header-gate (P2): the plain-bak branch gated on EXISTENCE only
+  // and the copy below ran without validation, so a torn plain-bak overwrote todos.db — the same
+  // class of hole the JSON side closed with backupJsonParseable. Gate symmetrically with the JSON
+  // one: a plain-bak counts as a recoverable source only when its SQLite header is intact. A
+  // garbage plain-bak is NEVER deleted (forensics doctrine, same as .corrupt-*): with no usable
+  // JSON the recovery returns null ("nothing recoverable") and the file stays on disk for the
+  // caller's dialog / manual salvage.
+  const plainBakUsable = plainBakExists && sqliteHeaderOk(path.join(ud, 'todos.db.plain-bak'))
   // P2 fix (2026-09-26, json-exists-vs-parseable): an existing-but-unparseable JSON no longer
   // counts as a recoverable source — the old existence-only check produced a source:'json'
   // "recovery" that re-inited an EMPTY DB and outranked a usable plain-bak.
@@ -281,9 +300,11 @@ function attemptDbRecovery (ud, retryInit) {
       return { source: 'transient', label: declinedLabel }
     }
   }
-  // (plainBakExists / jsonPath / jsonExists are computed above the healthy-header guard — the
-  // Sync-4/Sync-17 sentinel bypass needs them before that early-return.)
-  if (!plainBakExists && !jsonExists) return null
+  // (plainBakUsable / jsonPath / jsonExists are computed above the healthy-header guard — the
+  // Sync-4/Sync-17 sentinel bypass needs them before that early-return. plainBakUsable replaces
+  // the old existence-only plainBakExists here: a garbage plain-bak with no usable JSON must not
+  // enter the quarantine-and-copy path at all.)
+  if (!plainBakUsable && !jsonExists) return null
   // P1 2026-09-20: quarantine used to swallow rename failures (`catch {}`) and then fall through
   // to copying the backup OVER a possibly-locked/possibly-open target — a silent recovery loop
   // (corrupt file never moved, backup copy fails or hybrids the DB, dialog claims recovery every
@@ -510,7 +531,7 @@ function restoreSegmentsFromCriticalBackup (ud, upsertTasks, upsertCategory, app
     { upsertTasks, upsertCategory, appendTomatoRecords },
     extraCbs || {}
   )
-  const result = { tasks: 0, imported: 0, perSegment: {}, failedSegments: [], unconsumedSegments: [], proved: false }
+  const result = { tasks: 0, imported: 0, perSegment: {}, failedSegments: [], unconsumedSegments: [], proved: false, degradedSegments: [] }
   let raw
   try {
     raw = JSON.parse(fs.readFileSync(criticalBackupPath(ud), 'utf8'))
@@ -520,6 +541,14 @@ function restoreSegmentsFromCriticalBackup (ud, upsertTasks, upsertCategory, app
     logWarn('[dbRecovery] restoreSegmentsFromCriticalBackup failed (0 rows imported):', e && e.message)
     return result
   }
+  // [Sync-13 reader, restore-degraded-segments-marker-never-consumed] the writer put the marker in
+  // every degraded dump but nothing read it back. Parse it into the report: non-empty = the dump's
+  // collector FAILED for the named segments at write time, so those data surfaces are simply
+  // absent from the backup. Honesty surface only — it must NEVER fail the restore or veto `proved`
+  // (the missing data cannot be conjured by refusing the restore).
+  result.degradedSegments = Array.isArray(raw && raw.backup && raw.backup.degradedSegments)
+    ? raw.backup.degradedSegments.filter(s => typeof s === 'string')
+    : []
   for (const entry of RESTORE_SEGMENTS) {
     const cb = entry.enable(cbs)
     if (typeof cb !== 'function') continue
@@ -628,11 +657,24 @@ function preflightMigrateResidue (ud, log) {
       fs.copyFileSync(bak, mainDb)
       warn('迁移中断残留:已从 todos.db.plain-bak 恢复数据库文件')
     } else {
+      // enc-migration-preflight-ignores-key-quarantine-failure (P2): the key rename failure used to
+      // be swallowed (`catch {}`) and the flow CONTINUED — unconditional sidecar rm + copying the
+      // plaintext bak over a fresh todos.db + return true, while the stale db.key was still on
+      // disk. The follow-up init reopened the restored PLAINTEXT db with the OLD WRONG key →
+      // db.js lands in the permanent transient/dbEncMismatch dead-loop state. Root-cause rule
+      // (mirrors M-1 / D13 #14 doctrine): a key that cannot be moved aside ABORTS the migration —
+      // log the specific error, touch nothing (todos.db stays absent, plain-bak + db.key intact)
+      // and return false so the next boot retries the whole preflight.
       const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-      try { fs.renameSync(key, key + '.superseded-' + stamp) } catch {}
+      try {
+        fs.renameSync(key, key + '.superseded-' + stamp)
+      } catch (e) {
+        warn('db.key could not be renamed aside (' + ((e && e.message) || e) + ') — plain-bak restore ABORTED, todos.db left absent, next boot will retry')
+        return false
+      }
       for (const suf of ['-wal', '-shm']) { try { fs.rmSync(mainDb + suf, { force: true }) } catch {} }
       fs.copyFileSync(bak, mainDb)
-      warn('todos.db 缺失但存在明文备份:已从 plain-bak 恢复,旧 db.key 移为 db.key.superseded-*')
+      warn('todos.db missing but a plaintext backup exists: restored from plain-bak, old db.key moved aside as db.key.superseded-*')
     }
     return true
   } catch (e) {
@@ -664,4 +706,4 @@ function jsonRestoreAllowed (recoveredFrom, reinitErr) {
   return !!(recoveredFrom && recoveredFrom.source === 'json' && !reinitErr)
 }
 
-module.exports = { attemptDbRecovery, restoreTasksFromCriticalBackup, restoreSegmentsFromCriticalBackup, writeCriticalStateBackupAtomic, criticalBackupPath, backupJsonParseable, restoreCategoriesFromCriticalBackup, restoreTomatoRecordsFromCriticalBackup, restoreMetaEntriesFromCriticalBackup, quarantineKey, sqliteHeaderOk, encryptedProbe, preflightMigrateResidue, sweepPendingDeletes, recoveryDialogAction, jsonRestoreAllowed, loadVendorDriver, RESTORE_SEGMENT_NAMES, recoveryPendingPath, markRecoveryPending, clearRecoveryPending, hasRecoveryPending }
+module.exports = { attemptDbRecovery, cleanInitReplayDecision, SUPPORTED_SCHEMA_V, restoreTasksFromCriticalBackup, restoreSegmentsFromCriticalBackup, writeCriticalStateBackupAtomic, criticalBackupPath, backupJsonParseable, restoreCategoriesFromCriticalBackup, restoreTomatoRecordsFromCriticalBackup, restoreMetaEntriesFromCriticalBackup, quarantineKey, sqliteHeaderOk, encryptedProbe, preflightMigrateResidue, sweepPendingDeletes, recoveryDialogAction, jsonRestoreAllowed, loadVendorDriver, RESTORE_SEGMENT_NAMES, recoveryPendingPath, markRecoveryPending, clearRecoveryPending, hasRecoveryPending }

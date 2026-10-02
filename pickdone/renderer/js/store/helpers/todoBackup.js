@@ -67,6 +67,22 @@ export function consumeDegradedSegments () {
   return out
 }
 
+/** [Sync-13 reader, restore-degraded-segments-marker-never-consumed] the WRITER side of the
+ *  degradedSegments marker shipped in every degraded dump, but neither restore path read it back
+ *  — a restore (and a human) could NOT tell "this dump simply had no chips/meta" apart from "the
+ *  collector FAILED and the surface is missing". Shared human-readable renderer: each segment name
+ *  is annotated with the data surfaces it carries. Returns '' for a clean (or pre-Sync-13) dump.
+ *  Exported pure so the restore UI and tests consume the same description. */
+export const DEGRADED_SEGMENT_HINTS = {
+  planState: 'schedule chips',
+  metaState: 'repeat rules/estimates/project meta'
+}
+export function describeDegradedSegments (segments) {
+  const list = (Array.isArray(segments) ? segments : []).filter(s => typeof s === 'string')
+  if (!list.length) return ''
+  return list.map(s => s + (DEGRADED_SEGMENT_HINTS[s] ? ' (' + DEGRADED_SEGMENT_HINTS[s] + ')' : '')).join(', ')
+}
+
 /** D6-F14: read the plan_chips rows at dump time (async storage — callers must await this and pass
  *  the segment into buildBackupDump). Chips were never in dumps before: restoring a backup silently
  *  dropped every schedule chip while tasks came back. */
