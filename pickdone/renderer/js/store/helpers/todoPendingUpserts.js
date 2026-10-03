@@ -271,7 +271,10 @@ async function flushPendingUpserts () {
                 const wEntry = { op: 'upsert', params: winner, seq: nextPendingSeq(), ts: Date.now() }
                 _pendingUpserts.push(wEntry)
                 persistQueue()
-                await window.todoAPI.dbCall('upsert', winner)
+                // Immediate confirmation goes through the command bus like every renderer
+                // write (todo.put → op 'upsert'); queued replay entries keep their raw op
+                // shape because flushPendingUpserts dispatches stored entries wholesale.
+                await commitCommand('todo', 'put', winner)
                 removeQueued(wEntry)
               }
             } catch (e2) { console.error('[todo] duplicate-winner adoption failed (loser already dropped; winner is durably in the DB):', e2) }

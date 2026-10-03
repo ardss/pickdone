@@ -237,7 +237,12 @@ function run () {
   // follow the D3 move of the engine from cli/import.js to src/main/import/index.js.
   const PINNED_P2 = [
     { file: 'src/main/import/index.js', frags: ["db.call('upsertMany', rows)"] },
-    { file: 'src/main/import/index.js', frags: ["db.call('upsertCategory', {"] }
+    { file: 'src/main/import/index.js', frags: ["db.call('upsertCategory', {"] },
+    // S3/S6 watermark test surface: makeWatermarkStoresForDb wires the settings store over an
+    // INJECTED db handle so unit tests can drive corrupt-read/degraded-persist scenarios
+    // against a fresh table — same injected-contract class as tomato-announce (routing it
+    // through the module bus would bypass the injected contract the tests stub).
+    { file: 'src/main/lan-sync-bootstrap.js', frags: ["db.call('settingsRowPut', { key, value })"] }
   ]
   // Exact-line anchors for the DYNAMIC wholesale-dispatch surfaces (rec #4): these closures
   // pass the op through variable — mixed read/write injected surfaces that cannot route

@@ -85,7 +85,9 @@ test('C3: the Windows stale-wait bound is no longer 20s (main-thread stall) and 
   // keep the file "held" (EBUSY) so the wait loop actually engages, with a short budget
   fs.unlinkSync = () => { const e = new Error('EBUSY'); e.code = 'EBUSY'; throw e }
   try {
-    const res = mi.clearStaleSingletonLockFileSync(ud, { maxWaitMs: 200, pollMs: 50 })
+    // Pin the Windows branch explicitly (the subject of this test): on POSIX the function
+    // proves staleness from the holder pid and never enters the unlink-probe wait loop.
+    const res = mi.clearStaleSingletonLockFileSync(ud, { platform: 'win32', maxWaitMs: 200, pollMs: 50 })
     assert.equal(res.cleared, false)
     assert.match(warned, /waiting out a possibly-stale singleton lockfile/, 'the stall must be attributable (logged before waiting)')
   } finally {
