@@ -21,6 +21,14 @@ export function focusedElapsedSec (startedAt, now = Date.now()) {
   return Math.max(0, Math.floor((now - startedAt) / 1000))
 }
 
+/** Minutes focused so far, as a display string ("0" when not started). A13 (2026-10-02): this
+ *  formula used to exist as three drifting copies (TomatoBar's dead computed, TomatoAbandonModal's
+ *  focusedMin, TomatoFloatPage's focusedMinText) — single source here, like formatMMSS below. */
+export function focusedMinutesText (startedAt, now = Date.now()) {
+  if (!startedAt) return '0'
+  return String(Math.max(0, Math.floor((now - startedAt) / 60000)))
+}
+
 /** Phase identity token: unique identifier for one "entering a running state" (startedAt changes after resume/giveUp, i.e. a new identity) */
 export function phaseToken (status, startedAt) {
   return `${status}:${startedAt}`

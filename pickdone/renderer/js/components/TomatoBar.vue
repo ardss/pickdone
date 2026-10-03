@@ -94,11 +94,10 @@ export default {
        it must never trigger off "today already has completions" — otherwise every refresh would force a screen overlay once (incident reported by user testing) */
     todayTarget () { return Number(this.$store.state.settings.dailyTomatoTarget) || 8 },
     targetReached () { return this.todayDone >= this.todayTarget },
-    focusedMinText () {
-      // Minutes focused this session (for display in the abandon modal)
-      if (!this.isWork || !this.s.startedAt) return '0'
-      return String(Math.max(0, Math.floor((Date.now() - this.s.startedAt) / 60000)))
-    },
+    // A13 (2026-10-02): the old focusedMinText computed here was dead code (nothing in this
+    // component's template consumed it) and duplicated the measured-duration formula — that now
+    // lives once in utils/tomatoShared.js focusedMinutesText, consumed by the two live sites
+    // (TomatoAbandonModal.focusedMin / TomatoFloatPage.focusedMinText).
     attachCandidates () {
       // No cap: the list is already in memory and truncating silently made tasks beyond the limit unattachable
       return [...this.$store.state.todo.views.todayTodoList].filter(t => !t.complete)

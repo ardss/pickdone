@@ -111,7 +111,7 @@
  *  Top-right mini buttons: minimize / close (abandon + reset) / ⋮ task menu (picking a task only attaches it without starting; can rebind at any phase).
  *  The ⋮ menu and abandon dialog share the "temporarily enlarged window" mechanism; the browser debug host uses widget-preview (class-name enlargement).
  *  Note: never pop a native dialog on a transparent frameless window — Windows will paint a system title bar onto the host window. */
-import { formatMMSS, focusedElapsedSec } from '../utils/tomatoShared.js'
+import { formatMMSS, focusedElapsedSec, focusedMinutesText } from '../utils/tomatoShared.js'
 import { NOISES } from '../utils/mediaRegistry.js'
 import { remainSecOfAnnounce } from '../store/helpers/tomatoAnnounceShared.js'
 import { remainingSecOfState } from '../store/tomato.js'
@@ -157,10 +157,11 @@ export default {
       return formatMMSS(this.remaining)
     },
     knobIcon () { return this.working ? '❚❚' : '▶' },
+    // A13 (2026-10-02): formula moved to utils/tomatoShared.js focusedMinutesText (single source)
     focusedMinText () {
       const s = this.st
       if (!this.working || !s || !s.startedAt) return '0'
-      return String(Math.max(0, Math.floor((Date.now() - s.startedAt) / 60000)))
+      return focusedMinutesText(s.startedAt)
     },
     /* During abandon confirm: another presentation of the same info — the big digits switch
        from countdown to a forward-counting "focused for", showing the user's decision

@@ -21,6 +21,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 const require = createRequire(import.meta.url)
+const { focusedMinutesText } = await import('../../../renderer/js/utils/tomatoShared.js')
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const SFC = path.join(ROOT, 'renderer/js/components/TomatoAbandonModal.vue')
@@ -32,11 +33,11 @@ function loadComponent () {
   const m = src.match(/<script[^>]*>([\s\S]*?)<\/script>/)
   assert.ok(m, 'TomatoAbandonModal.vue: <script> block not found')
   const code = m[1]
-    .replace(/^\s*import\s+dialogA11y\s+from\s+'[^']+'\s*$/m, '')
+    .replace(/^\s*import\s+[^;]+?from\s+'[^']+'\s*$/mg, '') // A13: utils imports (dialogA11y, tomatoShared) are injected below
     .replace(/\bas\s+any\b/g, '')
     .replace(/export\s+default\s*\{/, 'return {')
-  const factory = new Function('dialogA11y', code)
-  return factory({}) // a11y mixin not needed for the guard behavior
+  const factory = new Function('dialogA11y', 'focusedMinutesText', code)
+  return factory({}, focusedMinutesText) // a11y mixin not needed for the guard behavior
 }
 
 before(() => {

@@ -38,7 +38,7 @@
                 :aria-checked="h.records && h.records[todayKey] ? 'true' : 'false'"
                 :class="{ on: h.records && h.records[todayKey] }"
                 :style="h.records && h.records[todayKey] ? { background: h.color, borderColor: h.color } : {}"
-                @click="check(h)" @keydown.enter.prevent="check(h)">✓</span>
+                @click="check(h)" @keydown="onCheckKey(h, $event)">✓</span>
           <template v-if="editingId === h.id">
             <input ref="renameInput" v-model="editName" class="habit-rename" @keydown.enter.prevent="e => { if (e.isComposing || e.keyCode === 229) return; saveRename(h) }" @blur="saveRename(h)"
                    @keydown.esc.prevent="cancelRename(h)"/>
@@ -120,7 +120,9 @@ import { dayjs, FMT } from '../utils/core.js'
 import { clampIntervalN } from '../utils/limits.js'
 import { showUndoToast } from '../utils/undoToast.js'
 import { localDayKey } from '../../../shared/date-key.mjs'
+import { daysDiffFromToday } from '../utils/momentDays.js'
 import EmptyState from '../components/EmptyState.vue'
+import { roleCheckboxActivate } from '../utils/roleButtonKey.js' // [A8] Space+Enter checkbox activation
 
 // Monday-first weekday keys (labels via statsP.HabitView.wd1..wd7)
 const WD_KEYS = ['wd1', 'wd2', 'wd3', 'wd4', 'wd5', 'wd6', 'wd7']
@@ -178,6 +180,10 @@ export default {
     }
   },
   methods: {
+    /* [A8] habit check-in toggle: Space joins Enter (stopPropagation is safe here — the card has no ancestor keydown handler) */
+    onCheckKey (h, e) {
+      roleCheckboxActivate(function () { this.check(h) }).call(this, e)
+    },
     streakOf (id) { return this.$store.getters['habits/streakOf'](id) },
     /** 30-day grid tooltip: localized date (dayjs) instead of the raw YYYY-MM-DD key, check mark appended when checked */
     gridTip (d) { return dayjs(d.key).format(FMT.cnDate) + (d.on ? ' ✓' : '') },
@@ -292,9 +298,11 @@ export default {
       this.newMoment = ''; this.newMomentDate = ''
     },
     daysDiff (m) {
-      const target = +dayjs(m.date).startOf('day')
-      const today = +dayjs().startOf('day')
-      return Math.round((target - today) / 86400000)
+      // A14 (2026-10-02): derive "today" from the reactive store.todo.todayTimestamp instead of the
+      // dayjs() wall clock — same staleness class as todayKey above (a wall-clock computed has no
+      // reactive dependencies and keeps serving its first value after midnight). Pure helper in
+      // utils/momentDays.js so the calendar math is unit-testable without a component harness.
+      return daysDiffFromToday(m.date, this.$store.state.todo.todayTimestamp)
     },
     daysText (m) {
       const diff = this.daysDiff(m)

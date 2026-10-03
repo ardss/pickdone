@@ -200,3 +200,35 @@ function todoToRow (t) {
 }
 
 module.exports = { normalizeContent, parseOffsets, parseReminders, packReminders, rowToTodo, rowToCategory, todoToRow, setSyncAuthor, selfSyncAuthor }
+
+/* ---------- B8 (2026-10-02): --keyword matcher (queryTodos post-filter) ----------
+ * Aligns the CLI/db search surface with the renderer's utils/search.js matchTodo contract
+ * (NFKC folding, whitespace-split multi-term AND, subtask scope). Pinyin/fuzzy matching stays
+ * renderer-only: it depends on the pinyin-pro UMD bundle and is a UI affordance, not a data
+ * contract — a fullwidth/ASCII + subtask-faithful includes() is the honest DB-side floor.
+ * Pure functions (no db handle) so tests can pin the contract directly. */
+
+/** Split a keyword into NFKC-folded lowercase terms (empty/whitespace keyword -> null = no filter) */
+function matchTodoKeywordTerms (keyword) {
+  if (keyword == null) return null
+  const terms = String(keyword).normalize('NFKC').toLowerCase().trim().split(/\s+/).filter(Boolean)
+  return terms.length ? terms : null
+}
+
+/** True when every term appears in content, description or any subtask text (NFKC-folded contains) */
+function matchTodoKeyword (todo, terms) {
+  if (!terms) return true
+  const fields = [todo && todo.taskContent, todo && todo.taskDescribe]
+  try {
+    const subs = typeof (todo && todo.subtasks) === 'string' ? JSON.parse(todo.subtasks) : todo && todo.subtasks
+    if (Array.isArray(subs)) {
+      for (const s of subs) {
+        const text = s && (s.text != null ? s.text : s.content)
+        if (text) fields.push(text)
+      }
+    }
+  } catch { /* malformed subtask JSON: fall back to the plain fields */ }
+  return terms.every(term => fields.some(f => typeof f === 'string' && f.normalize('NFKC').toLowerCase().includes(term)))
+}
+
+module.exports = { normalizeContent, parseOffsets, parseReminders, packReminders, rowToTodo, rowToCategory, todoToRow, setSyncAuthor, selfSyncAuthor, matchTodoKeywordTerms, matchTodoKeyword }

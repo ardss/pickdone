@@ -24,17 +24,17 @@
  */
 
 import dialogA11y from '../utils/dialogA11y.js'
+import { focusedMinutesText } from '../utils/tomatoShared.js'
 
 export default {
   name: 'TomatoAbandonModal',
   mixins: [dialogA11y],
   data () { return { reason: '' } },
   computed: {
-    // Minutes focused so far (store.startedAt is non-reactive; the value captured when the modal opens is enough)
+    // Minutes focused so far (store.startedAt is non-reactive; the value captured when the modal opens is enough).
+    // A13 (2026-10-02): formula moved to utils/tomatoShared.js focusedMinutesText (single source).
     focusedMin () {
-      const s = this.$store.state.tomato
-      if (!s.startedAt) return '0'
-      return String(Math.max(0, Math.floor((Date.now() - s.startedAt) / 60000)))
+      return focusedMinutesText(this.$store.state.tomato.startedAt)
     }
   },
   methods: {

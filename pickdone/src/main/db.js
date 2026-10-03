@@ -7,7 +7,7 @@ const i18nM = require('./i18n')
 const fs = require('fs')
 const crypto = require('crypto')
 const LIMITS = require('../../shared/limits.mjs') // focus-duration clamp constants (single source, audit item 4); require(esm) — Node >= 22.12
-const { normalizeContent, rowToTodo, todoToRow, setSyncAuthor, selfSyncAuthor } = require('./db-rows')
+const { normalizeContent, rowToTodo, todoToRow, setSyncAuthor, selfSyncAuthor, matchTodoKeywordTerms, matchTodoKeyword } = require('./db-rows')
 // snowDedup key-cap (R5 P3): past the cap, older-than-30d entries are pruned (see bumpSnow).
 const SNOW_DEDUP_CAP = 2000
 const SNOW_DEDUP_MAX_AGE_MS = 30 * 24 * 3600 * 1000
@@ -487,12 +487,15 @@ function queryTodos ({ deleted = 0, complete = null, categoryId = null, repeatId
     if (dayStartFrom !== null || dayStartTo !== null) where.push('scheduledDay != 0')
   }
   let sql = `SELECT * FROM todos WHERE ${where.join(' AND ')}`
-  if (keyword) {
-    // Escape LIKE wildcards, otherwise input like %/_ changes the match semantics (searching "100%" hits everything)
-    const esc = String(keyword).replace(/[\\%_]/g, ch => '\\' + ch)
-    sql += " AND (content LIKE @kw ESCAPE '\\' OR description LIKE @kw ESCAPE '\\')"
-    p.kw = `%${esc}%`
-  }
+  // B8 (2026-10-02): --keyword used to be a raw SQL LIKE (ASCII-case-insensitive only), diverging
+  // from the renderer's search (utils/search.js matchTodo: NFKC folding, whitespace-split
+  // multi-term AND, subtask scope). Chosen root fix: a JS post-filter via matchTodoKeyword
+  // (db-rows.js) applied to the filtered row set. NOT a DB-side fix: todoToRow stores
+  // content/description verbatim (whitespace sanitization only, no NFKC), so a normalized row
+  // haystack simply does not exist in SQLite and a LIKE prefilter could never be a safe superset
+  // of the NFKC contract (a fullwidth row 'Ａ１' contains neither 'a1' nor 'Ａ１' when the query
+  // is 'a1' and vice versa). The local CLI/db scale makes a full post-filter cheap and honest.
+  const keywordTerms = matchTodoKeywordTerms(keyword)
   // orderBy is exposed via IPC; whitelist-validate to prevent SQL injection (only column name + ASC/DESC combinations allowed)
   const cols = new Set(['id', 'createdAt', 'updatedAt', 'scheduledDay', 'scheduledAt', 'completedAt', 'complete', 'remindAt', 'sort', 'priority', 'deadlineTs', 'important', 'urgent', 'categoryId', 'recurGroupId', 'status', 'content'])
   const parts = String(orderBy).split(',').map(x => x.trim().split(/\s+/))
@@ -502,7 +505,8 @@ function queryTodos ({ deleted = 0, complete = null, categoryId = null, repeatId
   sql += ` ORDER BY ${orderBy}`
   // F2 fix: `if (limit)` made limit=0 fail-open (0 === unlimited, while negatives threw) — validate on presence (null/undefined only), so 0 is an explicit "zero rows" and all invalid values fail closed.
   if (limit !== null && limit !== undefined) { const n = Number(limit); if (!Number.isFinite(n) || n < 0) throw new Error('queryTodos: invalid limit'); sql += ' LIMIT ' + n }
-  return db.prepare(sql).all(p).map(rowToTodo)
+  const rows = db.prepare(sql).all(p).map(rowToTodo)
+  return keywordTerms ? rows.filter(r => matchTodoKeyword(r, keywordTerms)) : rows
 }
 
 // F2 2026-09-15:SQLite TEXT PRIMARY KEY 不隐含 NOT NULL — taskId:null/undefined/'' 一路落到这里

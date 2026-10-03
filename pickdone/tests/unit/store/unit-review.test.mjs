@@ -102,9 +102,13 @@ test('buildReviewMetrics: peak-hour identification', () => {
   for (let i = 0; i < 6; i++) records.push(record({ endTime: start + 9 * 3600000 + i * 3600000, focusDuration: 25 }))
   for (let i = 0; i < 1; i++) records.push(record({ endTime: start + 22 * 3600000 + i * 3600000, focusDuration: 25 }))
   const m = buildReviewMetrics({ todos: [], records, catNameOf }, thisWeek(now))
+  // B14 (2026-10-02): peak = 2-hour window (2 bins, exclusive end). 6x25min spread over hours
+  // 9-14 peaks at the (9,10) window = 50min of the 175min total; the former 3-bin sum (75min,
+  // share ~43%) no longer matches the "2-hour window" copy the UI shows.
   assert.ok(m.peakHours)
   assert.equal(m.peakHours.startHour, 9)
-  assert.ok(m.peakHours.share >= 30)
+  assert.equal(m.peakHours.endHour, 11, 'endHour is exclusive (h+2)')
+  assert.equal(m.peakHours.share, 29)
 })
 
 test('composeReview: a calm period outputs a gentle summary with no fabricated insights', () => {
