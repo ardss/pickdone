@@ -13,3 +13,10 @@ export { FOCUS_MAX_MINUTES, FOCUS_INPUT_MAX_MINUTES, REST_MAX_MINUTES } from '..
 export function clampIntervalN (v) {
   return Math.min(30, Math.max(2, Number(v) || 2))
 }
+
+/** [A11/A15] Number of items hidden by a fixed display cap: total - cap, floored at 0.
+ *  Consumed by TodayXView's done-chips "+N" badge and TomatoPanel's "+N more" row so the
+ *  overflow indicator and the true total can never disagree. */
+export function hiddenCount (total, cap) {
+  return Math.max(0, (Number(total) || 0) - (Number(cap) || 0))
+}

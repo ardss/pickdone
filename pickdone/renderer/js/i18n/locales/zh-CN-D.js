@@ -57,7 +57,8 @@ export default {
       "floatTitle": "番茄悬浮窗",
       "today": "今天",
       "todayRecords": "今日番茄记录",
-      "emptyTip": "暂无记录"
+      "emptyTip": "暂无记录",
+      "moreRecords": "还有 {n} 条"
 
     },
     "TomatoFocusRecord": {

@@ -242,7 +242,8 @@ export default {
       "focusMinutesTitle": "Focus time: {n} min",
       "togglePomodoroFocus": "Toggle pomodoro focus",
       "subCheckedAnnounce": "Subtask checked: {s}",
-      "subUncheckedAnnounce": "Subtask unchecked: {s}"
+      "subUncheckedAnnounce": "Subtask unchecked: {s}",
+      "subSaveFailed": "Failed to save subtask"
 
     },
     "TodoGroups": {
@@ -372,7 +373,9 @@ export default {
       "overduePrefix": "Overdue (",
       "upcomingLabel": "Upcoming",
       "noDateLabel": "No date",
-      "overdueRescheduledMsg": "Overdue events rescheduled to today"
+      "overdueRescheduledMsg": "Overdue events rescheduled to today",
+      "rescheduleFailed": "Reschedule failed",
+      "nothingToReschedule": "Nothing to reschedule"
 
     },
     "TodoBoxView": {

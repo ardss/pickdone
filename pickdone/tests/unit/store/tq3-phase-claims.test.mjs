@@ -38,15 +38,15 @@ test('tq3[B]: a non-owner release leaves the claim intact; only the owner token 
   assert.equal(c.release('startRestTime:333', token), true, 'owner release succeeds')
   assert.equal(c.isClaimed('startRestTime:333'), false)
   // release of a never-claimed phase is a harmless false
-  assert.equal(c.release('nope', 'x'), false)
+  assert.equal(c.release('startRestTime:999999', 'x'), false)
 })
 
 test('tq3[B2]: the shared process-lifetime singleton behaves identically (handlers use it)', () => {
-  const r = claims.claim('singleton:1')
+  const r = claims.claim('startTomatoTime:777777')
   assert.equal(r.won, true)
-  assert.equal(claims.claim('singleton:1').won, false)
-  assert.equal(claims.release('singleton:1', 'wrong'), false)
-  assert.equal(claims.release('singleton:1', r.token), true)
+  assert.equal(claims.claim('startTomatoTime:777777').won, false)
+  assert.equal(claims.release('startTomatoTime:777777', 'wrong'), false)
+  assert.equal(claims.release('startTomatoTime:777777', r.token), true)
 })
 
 /* ---- [C] the renderer store funnels every completion transition through the bridge ---- */

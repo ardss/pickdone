@@ -5,9 +5,9 @@
 import { genTaskId, nextSort, dayjs, reportError, parsePredecessors } from '../utils/core.js'
 import { wouldCycle, isTaskReady } from '../utils/deps.js'
 import { nextRepeatInstance, isLastRepeatInstance, renewalCarryFields } from '../utils/repeat.js'
+import { removeRenewedInstance } from '../utils/repeatUndo.js'
 import { setEstimate, pruneEstimatesForPurged } from '../utils/tomatoEstimate.js'
-// D15-B2 (2026-10-03): renewal estimate semantics come from the SHARED estimate core — the same
-// clamp the CLI twin (cli/lib.js renewal, getEstimateOf → clampEstimate) enforces on its side.
+// D15-B2 (2026-10-03): renewal estimate semantics come from the SHARED estimate core (same clamp the CLI twin enforces).
 import { clampEstimate } from '../../../shared/estimate-core.mjs'
 import { clearSnapshot } from '../utils/dayPlans.js'
 import { scrubMilestonesForPurged } from '../utils/milestones.js'
@@ -360,6 +360,9 @@ export default {
       }
       if (target && todo.repeatId) dispatch('ensureNextRepeatInstance', { ...todo, complete: true })
       const r = await dispatch('updateTodoFields', { taskId: todo.taskId, patch })
+      if (!target) {
+        await removeRenewedInstance({ todo, state, commit, dispatch, safeUpsert, snapshotForDelete })
+      }
       // Discrete op: break the 400ms undo merge so a following edit doesn't fuse into the check step
       commit('historyBreakMerge')
       return r
@@ -382,12 +385,9 @@ export default {
       const next = nextRepeatInstance(completedTodo, group, rule, this.state.todo.holidayList || [])
       if (!next) return
       const t = completedTodo
-      // D15-B2 (2026-10-03): read the LIVE per-task meta estimate for the instance being renewed —
-      // same semantic as the CLI twin (cli/lib.js:436-439). The row's estimate COLUMN is dead
-      // post-X2 (bumpSnow writes accumulated focus minutes into it), so seeding the renewal with
-      // `t.estimate || 0` turned "focused 150 min" into an estimate of 20 (clamped) tomatoes and
-      // synced that pollution to the new instance's meta key. Per-task meta key first; the stale
-      // column only as a legacy fallback; everything clamped to the 0..20 storage domain.
+      // D15-B2 (2026-10-03): read the LIVE per-task meta estimate (same as the CLI twin) — the
+      // row estimate COLUMN is dead post-X2 (bumpSnow writes focus minutes into it), so seeding
+      // from it polluted the new instance. Meta key first; column only as legacy fallback; 0..20.
       let renewalEstimate = t.estimate || 0
       try {
         const live = await window.todoAPI.dbCall('getMeta', 'tomatoEstimateState:' + t.taskId)

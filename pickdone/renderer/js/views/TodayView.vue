@@ -28,7 +28,7 @@
                 <template #reference>
                   <span class="dropdown-select__label" role="button" tabindex="0"
                         :title="$t('todayT.filterLabel')" :aria-label="$t('todayT.filterLabel')" aria-haspopup="menu"
-                        @keydown.enter.prevent="projTriggerKey"><span class="pd-proj-cur">{{ projFilterLabel }}</span><i class="dd-caret">&#9662;</i></span>
+                        @keydown="onProjTriggerKey"><span class="pd-proj-cur">{{ projFilterLabel }}</span><i class="dd-caret">&#9662;</i></span>
                 </template>
               </el-popover>
             </div>
@@ -56,6 +56,7 @@ import MatrixGrid from '../components/MatrixGrid.vue'
 import DayDeck from '../components/DayDeck.vue'
 import DepView from '../components/DepView.vue'
 import DayRail from '../components/DayRail.vue'
+import { roleButtonActivate } from '../utils/roleButtonKey.js' // [A9] Space+Enter button activation
 
 // [navgate-fix] pure-start (extracted by tests/unit-navgate-fix-ui.test.mjs)
 /** Restore the persisted today view mode: unknown/missing values fall back (matrix deep link
@@ -113,6 +114,8 @@ export default {
       return this.projFilter ? list.filter(t => t.categoryId === this.projFilter) : list
     },
     projTriggerKey (e) { (e.currentTarget as HTMLElement).click() },
+    /* [A9] dropdown trigger button: Space joins Enter as activation keys (same .prevent, no .stop, as before) */
+    onProjTriggerKey: roleButtonActivate(function (e) { this.projTriggerKey(e) }),
   },
   watch: {
     viewMode (m) { try { localStorage.setItem('todayViewMode', m) } catch {} },

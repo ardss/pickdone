@@ -54,3 +54,21 @@ export function buildExpiryGroups ({ list, settings, today, t, keys, extraGroups
   }
   return g
 }
+
+/**
+ * [B9] TagView's completed fallback predicate (the manual-builder twin of the D13-A2 projDone
+ * extraGroup). TagView never received the fallback CategoryView/ProjectView got, so a completed
+ * task 3+ days in the future (tagUpcoming requires !complete) or older than the R1 completed
+ * window matched NO bucket and vanished from the tag page. True only for completions OUTSIDE
+ * every other tag bucket (today / R1 window / tomorrow / day+2), keeping the exactly-one-group
+ * invariant intact. Pure so the boundary behavior is unit-testable.
+ *
+ * @param {Object} t todo row ({ complete, dayStart })
+ * @param {number} today start-of-day timestamp
+ * @param {number} r1 expiredCompletedTodoRange in days
+ */
+export function tagStaleDone (t, today, r1) {
+  if (!t || !t.complete || !t.dayStart) return false
+  if (t.dayStart === today) return false
+  return t.dayStart > dayShift(today, 2) || t.dayStart < dayShift(today, -r1)
+}

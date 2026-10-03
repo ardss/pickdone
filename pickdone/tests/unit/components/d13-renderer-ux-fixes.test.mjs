@@ -123,12 +123,17 @@ test('A11: empty-name rename warning re-focuses the inline editor after nextTick
 })
 
 /* ---------------- A14: TomatoPanel count vs rendered rows ---------------- */
+/* [A15 supersedes the count rule] the rendered window stays the single 6-row slice, but the
+   header count is now the TRUE total and the overflow gets an explicit "+N more" row — the
+   old "count must not exceed the visible rows" rule was the interim fix that hid 9 records
+   behind "今日记录 6". */
 
-test('A14: the record count and the rendered rows come from the same shownRecords slice', () => {
+test('A14/A15: the rendered rows share one shownRecords window; the count is the true total with a +N row', () => {
   assert.match(TOMATO, /shownRecords \(\) \{\s*\n\s*return this\.todayRecords\.slice\(0, 6\)/, 'single shared window computed')
-  // header count must use the shown window, not the untruncated length
-  assert.match(TOMATO, /countN', \{ n: shownRecords\.length \}/)
-  assert.doesNotMatch(TOMATO, /countN', \{ n: todayRecords\.length \}/, 'count must not exceed the visible rows')
+  // header count is the true total (A15) and the overflow row covers the hidden records
+  assert.match(TOMATO, /countN', \{ n: todayRecords\.length \}/)
+  assert.match(TOMATO, /hiddenRecords \(\) \{ return hiddenCount\(this\.todayRecords\.length, 6\) \}/)
+  assert.match(TOMATO, /v-if="hiddenRecords"[\s\S]*moreRecords/, '"+N more" overflow row')
   // the v-for renders that same window (no independent slice)
   assert.match(TOMATO, /v-for="r in shownRecords"/)
   assert.doesNotMatch(TOMATO, /todayRecords\.slice\(0,6\)/)

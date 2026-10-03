@@ -45,6 +45,8 @@
       </div>
       <div class="tx-chips" v-if="doneChips.length">
         <span class="tx-chip" v-for="(c,i) in doneChips" :key="i"><app-icon name="check" :size="11"/>{{ c }}</span>
+        <!-- [A11] +N overflow chip for completions beyond the first 5 (title lists the hidden ones) -->
+        <span v-if="doneHidden" class="tx-chip" :title="doneOverflowTitles">+{{ doneHidden }}</span>
       </div>
 
       <div class="tx-sec"><span>{{ $t('statsE.TodayX.next') }}</span><span class="tx-cnt">{{ groups.reduce((n,g)=>n+g.todos.length,0) }}</span></div>
@@ -62,6 +64,7 @@
 import { FMT, dayjs } from '../utils/core.js'
 import { getEstimate } from '../utils/tomatoEstimate.js'
 import { formatMMSS } from '../utils/tomatoShared.js'
+import { hiddenCount } from '../utils/limits.js' // [A11] "+N" chip overflow count
 import { remainingSecOfState } from '../store/tomato.js'
 import DayDateStrip from '../components/DayDateStrip.vue'
 import DayRail from '../components/DayRail.vue'
@@ -168,7 +171,11 @@ export default {
       }
       return out.sort((a, b) => b.time.localeCompare(a.time)).slice(0, 6)
     },
+    // [A11] the first 5 completions surface as chips; the rest surface as a single "+N" chip
+    // (same overflow pattern as TodoItem's tag chips) instead of being silently capped.
     doneChips () { return (this.v.todayDoneList || []).slice(0, 5).map(t => t.taskContent) },
+    doneHidden () { return hiddenCount((this.v.todayDoneList || []).length, 5) },
+    doneOverflowTitles () { return (this.v.todayDoneList || []).slice(5).map(t => t.taskContent).join(', ') },
     /* ---- Next (today + overdue uncompleted) ---- */
     /* Grouping is delegated to the generic TodoGroups component: drag sort / click-row edit / hover delete / check / pomodoro select, all interactions retained */
     groups () {

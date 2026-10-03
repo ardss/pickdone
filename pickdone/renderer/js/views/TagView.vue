@@ -25,6 +25,7 @@
  */
 import { calTitle } from '../utils/buckets.js'
 import { dayShift } from '../utils/todayBounds.js'
+import { tagStaleDone } from '../utils/expiryGroups.js' // [B9] completed fallback predicate
 import { rescheduleExpired, rangeLabel } from '../utils/core.js'
 import { batchMoveWithUndo } from '../utils/confirm.js'
 import { extractTags } from '../utils/search.js'
@@ -76,9 +77,13 @@ export default {
       if (dat.length) g.push({ key: 'tagDat', title: this.calTitle(dayShift(today, 2)), todos: dat, color: 'color3' })
       const up = bucket(t => !t.complete && t.dayStart > dayShift(today, 2))
       if (up.length) g.push({ key: 'tagUpcoming', title: this.$t('statsC.Tag.upcomingTitle'), todos: up, showDate: true, color: 'color3', hasSettings: true })
+      // [B9] completed fallback (same D13-A2 projDone extraGroup as CategoryView/ProjectView):
+      // a completion 3+ days out (tagUpcoming requires !complete) or older than the R1 window
+      // matched NO bucket and vanished — its stale comment cited the project baseline wrongly.
+      const staleDone = bucket(t => tagStaleDone(t, today, R1))
+      if (staleDone.length) g.push({ key: 'projDone', title: this.$t('statsB.ProjectView.done'), todos: staleDone, showDate: true, color: 'color3' })
       const nd = bucket(t => !t.complete && !t.dayStart)
       if (nd.length) g.push({ key: 'tagNoDate', title: this.$t('statsC.Tag.noDateTitle'), todos: nd, hasSettings: true })
-      // Completed items outside the past window are also left out of the later segment: omitted to follow the project baseline
       return g
     }
   },
@@ -87,12 +92,22 @@ export default {
     setCol (key, val) { this.collapsedMap[key] = val },
     async recomplete () {
       const ts = this.todayTs
-      const { n, snap }: any = await rescheduleExpired(this.$store.dispatch, this.$store.state.todo.todoList.filter(t => { const tags = extractTags(t.taskContent, t.taskDescribe); return tags.some(x => x.toLowerCase() === String(this.tag).toLowerCase()) }), ts)
-      if (n) batchMoveWithUndo(this, {
-        label: this.$t('statsC.Tag.rescheduled'),
-        snap,
-        revertOf: r => this.$store.dispatch('todo/updateTodoFields', { taskId: r.id, patch: { dayStart: r.dayStart, todoTime: r.todoTime } })
-      })
+      // [A4] a failed reschedule used to bubble as an unhandled rejection with no toast (same
+      // guard FilterView's delete already has), and n===0 fell through silently. Surface both.
+      try {
+        const { n, snap }: any = await rescheduleExpired(this.$store.dispatch, this.$store.state.todo.todoList.filter(t => { const tags = extractTags(t.taskContent, t.taskDescribe); return tags.some(x => x.toLowerCase() === String(this.tag).toLowerCase()) }), ts)
+        if (n) {
+          batchMoveWithUndo(this, {
+            label: this.$t('statsC.Tag.rescheduled'),
+            snap,
+            revertOf: r => this.$store.dispatch('todo/updateTodoFields', { taskId: r.id, patch: { dayStart: r.dayStart, todoTime: r.todoTime } })
+          })
+        } else {
+          this.$message.info(this.$t('statsC.Tag.nothingToReschedule'))
+        }
+      } catch (e) {
+        this.$message.error(this.$t('statsC.Tag.rescheduleFailed') + ': ' + (e && e.message ? e.message : e))
+      }
     }
   },
 

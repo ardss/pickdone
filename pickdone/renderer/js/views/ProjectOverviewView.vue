@@ -37,7 +37,7 @@
                   :title="$t('projQ.statusChangeTip', { s: $t(statusKey(p.status)) })"
                   :aria-label="$t('projQ.statusAria', { s: $t(statusKey(p.status)) })"
                   @click.stop="cycleStatus(p.cat.categoryId, p.status)"
-                  @keydown.enter.prevent.stop="cycleStatus(p.cat.categoryId, p.status)">{{ $t(statusKey(p.status)) }}</span>
+                  @keydown="onStatusKey(p, $event)">{{ $t(statusKey(p.status)) }}</span>
             <span>{{ $t('statsB.ProjectsView.tasks', { done: p.stats.doneCount, total: p.stats.total }) }}</span>
             <span :title="$t('statsB.ProjectsView.focusTip')">{{ $t('statsB.ProjectsView.focusMin', { n: p.stats.focusMinutes }) }}</span>
             <span v-if="loadThreshold > 0" class="proj-load" :class="{'proj-load--warn': p.loadWarn}"
@@ -78,6 +78,7 @@ import { dayPlannedLoad, loadLevel } from '../utils/loadWarn.js'
 import { getEstimate } from '../utils/tomatoEstimate.js'
 import { PROJECT_STATUSES, normalizeStatus, statusI18nKey, STATUS_FILTER_I18N_KEYS } from '../utils/projectStatus.js'
 import EmptyState from '../components/EmptyState.vue'
+import { roleButtonActivate } from '../utils/roleButtonKey.js' // [A9] Space+Enter button activation
 
 /** Project stats sharing the same semantics as ProjectView/stats and the CLI's projectStatus */
 function projectStats (list, today0) {
@@ -133,6 +134,10 @@ export default {
     }
   },
   methods: {
+    /* [A9] status pill button: Space joins Enter, stopped so the card's open activation doesn't double-fire */
+    onStatusKey (p, e) {
+      roleButtonActivate(function () { this.cycleStatus(p.cat.categoryId, p.status) }, { stop: true }).call(this, e)
+    },
     statusKey (s) { return statusI18nKey(s) },
     filterKey (f) { return STATUS_FILTER_I18N_KEYS[f] || STATUS_FILTER_I18N_KEYS.all },
     /** Status pill on the card cycles through the lifecycle (compact card layout beats a dropdown here).

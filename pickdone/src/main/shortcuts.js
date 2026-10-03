@@ -278,7 +278,19 @@ function createShortcuts ({ getMainWindow, showMainOrLock, quickAdd, i18n, log }
     bound = { wc: cur.webContents, onBeforeInput, onFinishedLoad, onProcessGone }
   }
 
-  return { applyShortcuts, unregisterAll: () => globalShortcut.unregisterAll() }
+  // C8 (2026-10-02): the returned unregisterAll (shutdown/relaunch path) used to call
+  // globalShortcut.unregisterAll() ONLY — pending 3s/12s/30s backoff retry timers kept firing
+  // afterwards and re-registered hotkeys into a tearing-down app (a retry that won re-armed a
+  // global hook with nobody left to unregister it). Same hygiene applyShortcuts already applies
+  // on rebind: disarm every pending retry before dropping the registrations.
+  return {
+    applyShortcuts,
+    unregisterAll: () => {
+      for (const t of retryTimers) disarmTimer(t)
+      retryTimers.clear()
+      globalShortcut.unregisterAll()
+    }
+  }
 }
 
 module.exports = { createShortcuts, normalizeKey, normalizeInputKey, hasModifier, canonCombo, KEY_ALIASES }

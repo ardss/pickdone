@@ -32,12 +32,12 @@
                 @keydown.shift.delete.prevent.stop="del(t)">
               <span class="pd-day-deck__chk td-check" :class="{on: t.complete}" :style="chkStyleOf(t)" role="checkbox" :aria-checked="t.complete ? 'true' : 'false'"
                  :aria-label="$t('statsE.TodoItem.markComplete')"
-                 tabindex="0" @click.stop="toggle(t, $event)" @keydown.enter.prevent.stop="toggle(t, $event)"><svg v-if="t.complete" class="td-check-svg" viewBox="0 0 12 12" aria-hidden="true"><polyline points="2,6.2 5,9 10,3" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" pathLength="1"/></svg></span>
+                 tabindex="0" @click.stop="toggle(t, $event)" @keydown="onCheckKey(t, $event)"><svg v-if="t.complete" class="td-check-svg" viewBox="0 0 12 12" aria-hidden="true"><polyline points="2,6.2 5,9 10,3" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" pathLength="1"/></svg></span>
               <span class="pd-day-deck__overdue-date">{{ fmtMd(t.dayStart) }}</span>
               <span class="pd-day-deck__title" role="button" tabindex="0"
                     :title="$t('statsE.TodayView.overdueSince', { d: dayjs(t.dayStart).format(FMT.cnDate) })"
                     :aria-label="$t('statsE.TodoItem.openEditor')"
-                    @click.stop="openEdit(t)" @keydown.enter.prevent.stop="openEdit(t)">{{ t.taskContent || $t('statsE.TodayView.untitled') }}</span>
+                    @click.stop="openEdit(t)" @keydown="onTitleKey(t, $event)">{{ t.taskContent || $t('statsE.TodayView.untitled') }}</span>
               <button class="pd-day-deck__tomato" :class="{ghost: t.complete}"
                       :tabindex="t.complete?-1:0"
                       :title="$t('statsE.TodoItem.togglePomodoroFocus')" :aria-label="$t('statsE.TodoItem.togglePomodoroFocus')"
@@ -58,10 +58,10 @@
               @keydown.shift.delete.prevent.stop="del(t)">
             <span class="pd-day-deck__chk td-check" :class="{on: t.complete}" :style="chkStyleOf(t)" role="checkbox" :aria-checked="t.complete ? 'true' : 'false'"
                :aria-label="$t('statsE.TodoItem.markComplete')"
-               tabindex="0" @click.stop="toggle(t, $event)" @keydown.enter.prevent.stop="toggle(t, $event)"><svg v-if="t.complete" class="td-check-svg" viewBox="0 0 12 12" aria-hidden="true"><polyline points="2,6.2 5,9 10,3" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" pathLength="1"/></svg></span>
+               tabindex="0" @click.stop="toggle(t, $event)" @keydown="onCheckKey(t, $event)"><svg v-if="t.complete" class="td-check-svg" viewBox="0 0 12 12" aria-hidden="true"><polyline points="2,6.2 5,9 10,3" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" pathLength="1"/></svg></span>
             <span class="pd-day-deck__title" role="button" tabindex="0"
                   :aria-label="$t('statsE.TodoItem.openEditor')"
-                  @click.stop="openEdit(t)" @keydown.enter.prevent.stop="openEdit(t)">{{ t.taskContent || $t('statsE.TodayView.untitled') }}</span>
+                  @click.stop="openEdit(t)" @keydown="onTitleKey(t, $event)">{{ t.taskContent || $t('statsE.TodayView.untitled') }}</span>
             <button class="pd-day-deck__tomato"
                     :class="{ ghost: t.complete, 'pd-is-active': $store.state.tomato.attachTodo && $store.state.tomato.attachTodo.taskId === t.taskId }"
                     :tabindex="t.complete?-1:0"
@@ -95,6 +95,8 @@ import { toggleTomatoAttach, chkStyle } from '../utils/taskRow.js'
 import { FMT } from '../utils/core.js'
 import { crossDayMovePatch, crossDayRevertPatch } from '../utils/crossDayMove.js' // [maint-0924 A2]
 import { getLocale } from '../i18n/index.js'
+import { roleButtonActivate, roleCheckboxActivate } from '../utils/roleButtonKey.js' // [A8/A9] Space+Enter activation
+import { clampToDayWindow } from '../utils/dayWindow.js' // [A3] out-of-window daySelectedTs clamps to the window edge
 
 // Bare dayjs is the window.dayjs global (injected by the browser host); taking an explicit reference satisfies lint and avoids global lookups
 const dayjs = window.dayjs
@@ -182,17 +184,25 @@ export default {
     // Reverse sync (fixed 2026-09-02): the date strip's "back to today" / calendar popover day-pick only wrote the store, and the deck had no
     // listener, so the card stack never moved. Store change → if the target day is within the ±7-day window, rotate that card to the center;
     // when the front watcher writes back the values are already equal so it won't re-trigger — no loop
+    // [A3] a daySelectedTs OUTSIDE the ±7-day window used to fall through silently (findIndex -1):
+    // the strip highlighted a far day while the stack stayed put. Now it clamps to the nearest
+    // window edge, and the front watcher writes the edge day back so the strip follows — both stay true.
     '$store.state.ui.daySelectedTs' (ts) {
       if (!ts) return
-      const idx = this.days.findIndex(d => d === +ts)
+      const clamped = clampToDayWindow(this.days, +ts)
+      const idx = this.days.findIndex(d => d === clamped)
       if (idx >= 0 && idx !== this.front) this.front = idx
     }
   },
   mounted () {
-    // Align to the currently selected day when entering the view (position if within the ±7 day window, otherwise stay on today)
+    // Align to the currently selected day when entering the view: within the ±7 day window the
+    // matching card fronts; outside it the selection clamps to the nearest window edge ([A3],
+    // same rule as the store watcher) instead of silently staying on today while the strip
+    // highlights a far-away day.
     const sel = this.$store.state.ui.daySelectedTs
     if (sel) {
-      const idx = this.days.findIndex(ts => ts === +sel)
+      const clamped = clampToDayWindow(this.days, +sel)
+      const idx = this.days.findIndex(ts => ts === clamped)
       if (idx >= 0) this.front = idx
     }
     // 30s tick: days/today0 are recomputed after crossing midnight (dayjs is non-reactive; without the tick the computed freezes at mount time)
@@ -202,6 +212,14 @@ export default {
     clearInterval(this._tick)
   },
   methods: {
+    /* [A8] deck checkboxes: Space joins Enter, stopped so the row/list activation doesn't double-fire */
+    onCheckKey (t, e) {
+      roleCheckboxActivate(function () { this.toggle(t, e) }).call(this, e)
+    },
+    /* [A9] task-title button: Space joins Enter */
+    onTitleKey (t, e) {
+      roleButtonActivate(function () { this.openEdit(t) }, { stop: true }).call(this, e)
+    },
     // Locale-aware month/day label (same convention as CalendarView's fmtDate): hardcoded 'M/D'
     // once showed numeric-only dates under the English UI, off-contract with the FMT format system
     fmtMd (ts) { return getLocale() === 'en-US' ? dayjs(ts).format('MMM D') : dayjs(ts).format(FMT.cnDate) },

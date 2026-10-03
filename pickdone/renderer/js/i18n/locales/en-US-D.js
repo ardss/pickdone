@@ -57,7 +57,8 @@ export default {
       "float": "Pomodoro floating window",
       "floatTitle": "Pomodoro floating window",
       "today": "Today",
-      "emptyTip": "No records yet"
+      "emptyTip": "No records yet",
+      "moreRecords": "+{n} more"
 
     },
     "TomatoFocusRecord": {

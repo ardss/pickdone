@@ -64,6 +64,14 @@ module.exports = function attachmentHandlers (ctx) {
       // was told "deleted" while nothing was (and could never be) deleted. open-file /
       // download-file-and-open already answer false for unknown schemes; same honesty here.
       if (!url.startsWith('local://')) return false
+      // B5 (2026-10-02): url.slice(8) is still PERCENT-ENCODED, but the device-local alias map
+      // is keyed by DECODED names (lan-sync/att-transfer.js decodes before setAlias). Passing
+      // the encoded key to deleteAlias meant a conflict-renamed attachment (alias keyed by the
+      // decoded name) never had its alias dropped — the stale entry kept resolving the dead key
+      // forever and the missing-file guard could never re-pull the original. Decode ONLY for the
+      // alias delete (attachmentPath already decodes internally; decoding here too would
+      // double-decode names that legitimately contain '%'), with attachmentPath's same fallback
+      // (malformed encoding falls back to the raw key).
       const key = url.slice(8)
       try { fs.unlinkSync(attachmentPath(key)) } catch (err) {
         // Already-gone is success (idempotent delete); anything else is a real failure
@@ -73,7 +81,9 @@ module.exports = function attachmentHandlers (ctx) {
       // target (aliased from the row's original local://key), drop the alias too — otherwise
       // the stale entry keeps resolving the dead key to the now-missing renamed file and the
       // missing-file guard can never re-pull the original key.
-      try { require('../attachments').deleteAlias(key) } catch { /* best-effort */ }
+      let aliasKey = key
+      try { aliasKey = decodeURIComponent(key) } catch { /* malformed encoding: use raw (matches attachmentPath) */ }
+      try { require('../attachments').deleteAlias(aliasKey) } catch { /* best-effort */ }
       return true
     },
     'delete-todo-files': (e, taskId) => {

@@ -189,13 +189,17 @@ async function mountQuickAdd (dispatchLog) {
   const core = await import('../../../renderer/js/utils/core.js')
   const qad = await import('../../../renderer/js/utils/quickAddDate.js')
   const qap = await import('../../../renderer/js/utils/quickAddPaste.js')
+  const rbk = await import('../../../renderer/js/utils/roleButtonKey.js')
+  const elUtil = await import('../../../renderer/js/utils/el.js')
   const Comp = loadScript(QA_SFC, {
     parseNaturalDate: nlDate.parseNaturalDate,
     dayjs: core.dayjs,
     FMT: core.FMT,
     resolveQuickAddDate: qad.resolveQuickAddDate,
     splitPasteLines: qap.splitPasteLines,
-    ensureTagSuffix: qap.ensureTagSuffix
+    ensureTagSuffix: qap.ensureTagSuffix,
+    $elOf: elUtil.$elOf,
+    roleButtonActivate: rbk.roleButtonActivate // [A9] date-chip key handler now uses the shared factory
   })
   const vm = mount(Comp, makeStore(dispatchLog))
   return vm

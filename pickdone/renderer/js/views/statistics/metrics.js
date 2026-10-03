@@ -163,16 +163,18 @@ export function buildReviewMetrics ({ todos, records, catNameOf }, period) {
     else break
   }
 
-  // Peak hours: 2-hour sliding window sum, take the peak
+  // Peak hours: 2-hour sliding window sum, take the peak. B14 (2026-10-02): the code summed 3 bins
+  // with endHour=(h+3)%24 while this comment and the user-facing copy both say a 2-hour window —
+  // the code was the wrong side; fixed to 2 bins with endHour=(h+2)%24 (exclusive end).
   let peak = null
   const totalFocus = cur.focusMins
   if (totalFocus >= 30) {
     let bestSum = -1; let bestH = 0
     for (let h = 0; h < 24; h++) {
-      const s = cur.hourDist[h] + cur.hourDist[(h + 1) % 24] + cur.hourDist[(h + 2) % 24]
+      const s = cur.hourDist[h] + cur.hourDist[(h + 1) % 24]
       if (s > bestSum) { bestSum = s; bestH = h }
     }
-    if (bestSum > 0) peak = { startHour: bestH, endHour: (bestH + 3) % 24, share: Math.round(bestSum / totalFocus * 100) }
+    if (bestSum > 0) peak = { startHour: bestH, endHour: (bestH + 2) % 24, share: Math.round(bestSum / totalFocus * 100) }
   }
 
   const byDaySeries = map => {

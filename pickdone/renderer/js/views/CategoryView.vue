@@ -78,12 +78,22 @@ export default {
     /** "Reschedule": expired uncompleted in this list -> today */
     async recomplete () {
       const ts = this.todayTs
-      const { n, snap }: any = await rescheduleExpired(this.$store.dispatch, this.inCat, ts)
-      if (n) batchMoveWithUndo(this, {
-        label: this.$t('statsE.CategoryView.overdueRescheduledMsg'),
-        snap,
-        revertOf: r => this.$store.dispatch('todo/updateTodoFields', { taskId: r.id, patch: { dayStart: r.dayStart, todoTime: r.todoTime } })
-      })
+      // [A4] a failed reschedule used to bubble as an unhandled rejection with no toast (same
+      // guard FilterView's delete already has), and n===0 fell through silently. Surface both.
+      try {
+        const { n, snap }: any = await rescheduleExpired(this.$store.dispatch, this.inCat, ts)
+        if (n) {
+          batchMoveWithUndo(this, {
+            label: this.$t('statsE.CategoryView.overdueRescheduledMsg'),
+            snap,
+            revertOf: r => this.$store.dispatch('todo/updateTodoFields', { taskId: r.id, patch: { dayStart: r.dayStart, todoTime: r.todoTime } })
+          })
+        } else {
+          this.$message.info(this.$t('statsE.CategoryView.nothingToReschedule'))
+        }
+      } catch (e) {
+        this.$message.error(this.$t('statsE.CategoryView.rescheduleFailed') + ': ' + (e && e.message ? e.message : e))
+      }
     }
   },
 

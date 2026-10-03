@@ -41,6 +41,7 @@ const net = require('node:net')
 const { randomBytes } = require('node:crypto')
 const { verifyAuthCode } = require('./pairing')
 const cipher = require('./cipher')
+const { MAX_LINE_BYTES, PRE_AUTH_LINE_BYTES, LINE_BUFFER_BUDGET_BYTES, __setLineBufferBudget, ProtocolError, cleanDeviceName, LineReader } = require('./line-reader')
 
 const PROTO_VER = 2
 // TODO_SYNC_PORT (2026-10-01): per-instance sync port for single-machine multi-instance debugging
@@ -56,13 +57,7 @@ const DEFAULT_PORT = resolveSyncPort(process.env)
 // A round's push travels as bounded `segments-chunk` lines (~1MB payload each, see
 // segments-chunk.js) since 2026-09-18: one whole-backlog line used to exceed this cap once
 // AES-GCM base64 framing inflated it, destroying first-sync rounds permanently. The cap stays
-// as abuse/oversize protection, not as the transfer mechanism. Pre-auth abuse is bounded by
-// the hello/pair gate below — only peers holding the pairing secret can push large lines.
-const MAX_LINE_BYTES = 32 * 1024 * 1024
-// Pre-auth lines (before hello-ack / pair-accept) are bounded to 4KB: hello and pair-request are
-// heartbeat-sized, so an unauthenticated peer has no reason to stream megabytes into our buffers.
-// After auth the cap is raised to MAX_LINE_BYTES (a round carries a whole first-sync backlog).
-const PRE_AUTH_LINE_BYTES = 4 * 1024
+// as abuse/oversize protection, not as the transfer mechanism. Pre-auth abuse is bounded by — the hello/pair gate below: only peers holding the pairing secret can push large lines.
 // Two-way confirmed pairing: an unanswered pair-request is auto-rejected after this window
 // (the pending decision dialog must not stay open forever). Injectable per server for tests.
 const PAIR_CONFIRM_TIMEOUT_MS = 60 * 1000
@@ -74,73 +69,8 @@ const PAIR_CONFIRM_TIMEOUT_MS = 60 * 1000
 // 120s round deadline so a legitimately slow round is never killed between frames.
 const AUTH_IDLE_TIMEOUT_MS = 120 * 1000
 
-class ProtocolError extends Error {
-  constructor(message) {
-    super(message)
-    this.name = 'ProtocolError'
-  }
-}
 
-/** Sanitize a wire-supplied deviceName (round-3 review): strip control characters (terminal
- *  escape / log-forging injection) and clamp to 40 chars — mirrors the bootstrap's syncSetName
- *  rules. Anything non-string collapses to ''. */
-function cleanDeviceName(value) {
-  if (typeof value !== 'string') return ''
-  // eslint-disable-next-line no-control-regex -- control characters are exactly what we strip
-  return value.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 40)
-}
 
-/** Line-framing reader: buffers socket data, emits parsed JSON objects.
- *  The line cap is dynamic (setLimit): 4KB until the peer authenticates, 32MB after. Buffer size
- *  is tracked by byte ACCUMULATION (chunk bytes in, consumed line bytes out) instead of a full
- *  Buffer.byteLength rescan per chunk, so a slow-loris drip of small chunks stays O(n) total. */
-class LineReader {
-  constructor(socket, onMessage, onError, limit = PRE_AUTH_LINE_BYTES) {
-    this.buffer = ''
-    this.bufferBytes = 0
-    this.limit = limit
-    this.socket = socket
-    this.onMessage = onMessage
-    this.onError = onError
-    socket.setEncoding('utf8')
-    socket.on('data', (chunk) => this.#feed(chunk))
-  }
-
-  setLimit(limit) {
-    this.limit = limit
-    if (this.bufferBytes > limit) this.#overLimit()
-  }
-
-  #overLimit() {
-    this.onError(new ProtocolError(`line exceeds ${this.limit} byte cap`))
-    this.socket.destroy()
-  }
-
-  #feed(chunk) {
-    const chunkBytes = Buffer.byteLength(chunk, 'utf8')
-    this.bufferBytes += chunkBytes
-    this.buffer += chunk
-    let idx
-    while ((idx = this.buffer.indexOf('\n')) !== -1) {
-      const line = this.buffer.slice(0, idx)
-      this.buffer = this.buffer.slice(idx + 1)
-      this.bufferBytes -= Buffer.byteLength(line, 'utf8') + 1 // + the consumed '\n'
-      if (Buffer.byteLength(line, 'utf8') > this.limit) {
-        this.#overLimit()
-        return
-      }
-      if (line.length === 0) continue
-      try {
-        this.onMessage(JSON.parse(line))
-      } catch (err) {
-        this.onError(new ProtocolError(`bad JSON line: ${err.message}`))
-        this.socket.destroy()
-        return
-      }
-    }
-    if (this.bufferBytes > this.limit) this.#overLimit()
-  }
-}
 
 /** Serialize + (optionally) encrypt one message onto the socket. Returns TRUE when the frame
  *  was handed to the socket, FALSE when the socket is dead/not writable (or the kernel write
@@ -791,4 +721,4 @@ function connect(host, port, opts) {
   return em
 }
 
-module.exports = { createLanServer, connect, send, wireConnection, ProtocolError, PROTO_VER, DEFAULT_PORT, resolveSyncPort, MAX_LINE_BYTES, PRE_AUTH_LINE_BYTES, PAIR_CONFIRM_TIMEOUT_MS, AUTH_IDLE_TIMEOUT_MS, cleanDeviceName }
+module.exports = { createLanServer, connect, send, wireConnection, ProtocolError, PROTO_VER, DEFAULT_PORT, resolveSyncPort, MAX_LINE_BYTES, PRE_AUTH_LINE_BYTES, PAIR_CONFIRM_TIMEOUT_MS, AUTH_IDLE_TIMEOUT_MS, cleanDeviceName, LINE_BUFFER_BUDGET_BYTES, __setLineBufferBudget }

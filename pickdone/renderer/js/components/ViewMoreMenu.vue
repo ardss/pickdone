@@ -24,6 +24,7 @@
  * Page ⋮ view settings menu -- aligned with the PureIconButton--more + custom-menu reference:
  * Menu items differ per route and all map to real settings/actions (no decoration)
  */
+import { clampPopPosition } from '../utils/popPos.js' // [A1] viewport clamp (left AND top)
 
 const SORT_VALUE = {
   'viewMore.sortCustom': 'custom',
@@ -76,10 +77,13 @@ export default {
       this.$nextTick(() => {
         const el = this.$refs.pop
         if (el) {
-          // [maint-0925 A13] clamp to the viewport on both sides: near the left edge clientX-190
+          // [maint-0925 A13] clamp to the viewport on the left side: near the left edge clientX-190
           // went negative and the pop was cut off / off-screen
-          el.style.left = Math.max(0, Math.min(e.clientX - 190, window.innerWidth - 220)) + 'px'
-          el.style.top = (e.clientY + 8) + 'px'
+          // [A1] top is clamped too now (height measured in the SAME $nextTick): near a window's
+          // bottom edge the old clientY+8 pushed items below the viewport and unreachable.
+          const pos = clampPopPosition(e.clientX, e.clientY, el.offsetHeight, window.innerWidth, window.innerHeight)
+          el.style.left = pos.left + 'px'
+          el.style.top = pos.top + 'px'
           const first = el.querySelector('.vm-item[tabindex="0"]')
           if (first) first.focus()
         }

@@ -70,6 +70,48 @@ function newestSameTag (namesNewestFirst, tag) {
   return (namesNewestFirst || []).find(f => typeof f === 'string' && f.startsWith(prefix)) || null
 }
 
+// C2 (2026-10-02): 'write-critical-state-backup' / 'run-auto-backup' both take renderer-supplied
+// JSON verbatim — an unbounded payload (compromised or buggy renderer) used to be spooled into
+// main-process memory (dedup read + atomic write) with no ceiling. The legit critical-state JSON
+// is a few MB at worst; 64MB matches the sibling ingress-cap caliber. Enforced at the handler
+// entry (the single door for both channels), rejected with a coded error the renderer can
+// classify. Exported constants/helpers are for unit tests.
+const INGRESS_MAX_BYTES = 64 * 1024 * 1024
+function assertIngressSize (jsonText, channel) {
+  const bytes = typeof jsonText === 'string' ? Buffer.byteLength(jsonText, 'utf8') : 0
+  if (bytes > INGRESS_MAX_BYTES) {
+    const err = new Error(channel + ' payload too large: ' + bytes + ' > ' + INGRESS_MAX_BYTES + ' bytes')
+    err.code = 'PAYLOAD_TOO_LARGE'
+    throw err
+  }
+}
+
+// C7 (2026-10-02): the dedup twin compare used a full readFileSync + whole-string equality on
+// the main thread — two allocations of the entire snapshot per run. Now: (1) size short-circuit —
+// different byte length can never be equal (one statSync, zero content reads); (2) chunked
+// positional compare — 1MB readSync windows compared against the same offsets of the payload
+// buffer, so memory stays O(chunk) instead of O(file) and an unequal prefix bails on the first
+// mismatched chunk. fsMod is injected for tests. Exported for unit tests.
+function twinMatches (fsMod, filePath, jsonText) {
+  let st
+  try { st = fsMod.statSync(filePath) } catch { return false }
+  const expected = Buffer.byteLength(jsonText, 'utf8')
+  if (st.size !== expected) return false
+  const buf = Buffer.from(jsonText, 'utf8')
+  const CHUNK = 1024 * 1024
+  let fd
+  try {
+    fd = fsMod.openSync(filePath, 'r')
+    const scratch = Buffer.alloc(Math.min(CHUNK, expected))
+    for (let off = 0; off < expected; off += CHUNK) {
+      const len = Math.min(CHUNK, expected - off)
+      if (fsMod.readSync(fd, scratch, 0, len, off) !== len) return false
+      if (scratch.compare(buf, off, off + len, 0, len) !== 0) return false // scratch[0..len) vs buf[off..off+len)
+    }
+    return true
+  } catch { return false } finally { try { if (fd != null) fsMod.closeSync(fd) } catch { /* best-effort */ } }
+}
+
 
 module.exports = function backupHandlers (ctx) {
   const { isLocked, app, getMainWindow } = ctx
@@ -81,6 +123,8 @@ module.exports = function backupHandlers (ctx) {
       // 灾备唯一源通道:主窗限定+锁定态拒绝(被攻陷的浮窗/快加窗可覆写 critical JSON 投毒恢复源,三轮安全深审 C-2)
       assertMainWindow(e) // main-window guard via getMainWindow (isDestroyed-safe; bare module var win threw "Object has been destroyed" after X-close→tray)
       if (isLocked()) throw new Error('app is locked')
+      // C2 (2026-10-02): clamp the renderer-supplied JSON at the door (see assertIngressSize).
+      assertIngressSize(jsonText, 'write-critical-state-backup')
       // External default root (userData parent dir / pickdone-backups): separated from todos.db, so disaster backup remains recoverable even if userData is wiped
       dbRecovery.writeCriticalStateBackupAtomic(defaultBackupRoot(), String(jsonText))
       return true
@@ -113,6 +157,10 @@ module.exports = function backupHandlers (ctx) {
     'run-auto-backup': (e, jsonText, opts) => {
       assertMainWindow(e) // main-window guard via getMainWindow (isDestroyed-safe; bare module var win threw "Object has been destroyed" after X-close→tray)
       if (isLocked()) throw new Error('app is locked')
+      // C2 (2026-10-02): clamp the renderer-supplied JSON at the door (see assertIngressSize) —
+      // raised OUTSIDE the try so the coded PAYLOAD_TOO_LARGE rejection reaches the renderer
+      // intact instead of degrading to a generic {ok:false,error} string.
+      assertIngressSize(jsonText, 'run-auto-backup')
       try {
         const o = typeof opts === 'number' ? { recent: opts } : (opts || {})
         const dir = resolveBackupDir(o.backupDir)
@@ -153,8 +201,11 @@ module.exports = function backupHandlers (ctx) {
         // 去重会拿一个陈旧文件当"最新"比对 → 误判 dedup 丢快照。复用 fix-util 的纯排序(与 autoBackup.nameToTs 同规则)。
         const twin = newestSameTag(existing, tag)
         if (twin) {
+          // C7 (2026-10-02): size short-circuit + chunked positional compare (see twinMatches) —
+          // the old full readFileSync + whole-string equality spooled the entire twin on the
+          // main thread for every run.
           try {
-            if (fs.readFileSync(path.join(dir, twin), 'utf8') === jsonText) {
+            if (twinMatches(fs, path.join(dir, twin), jsonText)) {
               return { ok: true, file: twin, dedup: true }
             }
           } catch {}
@@ -219,3 +270,6 @@ module.exports = function backupHandlers (ctx) {
 module.exports.atomicWriteJson = atomicWriteJson
 module.exports.uniqueSnapshotName = uniqueSnapshotName
 module.exports.newestSameTag = newestSameTag
+module.exports.assertIngressSize = assertIngressSize
+module.exports.INGRESS_MAX_BYTES = INGRESS_MAX_BYTES
+module.exports.twinMatches = twinMatches

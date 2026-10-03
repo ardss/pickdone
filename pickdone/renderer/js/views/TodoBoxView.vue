@@ -18,7 +18,7 @@
                 <li v-for="m in sortMethodOptions" :key="m.value" tabindex="0" role="option" :aria-selected="m.value === settings.todoBoxSortMethod ? 'true' : 'false'"
                     :class="{ on: m.value === settings.todoBoxSortMethod }" @click="setSort(m.value)" @keydown.enter.prevent="setSort(m.value)">{{ m.label }}</li>
               </ul>
-              <template #reference><span class="dropdown-select__label" role="button" tabindex="0" @keydown.enter.prevent="tbTriggerKey">{{ sortMethodLabel }}<i class="dd-caret">&#9662;</i></span></template>
+              <template #reference><span class="dropdown-select__label" role="button" tabindex="0" aria-haspopup="listbox" :aria-expanded="openDd === 'sort' ? 'true' : 'false'" @keydown="onTriggerKey">{{ sortMethodLabel }}<i class="dd-caret">&#9662;</i></span></template>
             </el-popover>
           </div>
           <div class="dropdown-select" :class="{ 'is-open': openDd === 'order' }">
@@ -27,7 +27,7 @@
                 <li v-for="o in sortOrderOptions" :key="o.value" tabindex="0" role="option" :aria-selected="o.value === settings.todoBoxSortOrder ? 'true' : 'false'"
                     :class="{ on: o.value === settings.todoBoxSortOrder }" @click="setOrder(o.value)" @keydown.enter.prevent="setOrder(o.value)">{{ o.label }}</li>
               </ul>
-              <template #reference><span class="dropdown-select__label" role="button" tabindex="0" @keydown.enter.prevent="tbTriggerKey">{{ sortOrderLabel }}<i class="dd-caret">&#9662;</i></span></template>
+              <template #reference><span class="dropdown-select__label" role="button" tabindex="0" aria-haspopup="listbox" :aria-expanded="openDd === 'order' ? 'true' : 'false'" @keydown="onTriggerKey">{{ sortOrderLabel }}<i class="dd-caret">&#9662;</i></span></template>
             </el-popover>
           </div>
           <div class="dropdown-select" :class="{ 'is-open': openDd === 'cat' }">
@@ -37,7 +37,7 @@
                 <li v-for="c in cats" :key="c.categoryId" tabindex="0" role="option" :aria-selected="c.categoryId === settings.todoBoxCategoryId ? 'true' : 'false'"
                     :class="{ on: c.categoryId === settings.todoBoxCategoryId }" @click="setCat(c.categoryId)" @keydown.enter.prevent="setCat(c.categoryId)">{{ c.categoryName }}</li>
               </ul>
-              <template #reference><span class="dropdown-select__label" role="button" tabindex="0" @keydown.enter.prevent="tbTriggerKey">{{ settings.todoBoxCategoryId === -1 ? $t('statsC.TodoBox.allCats') : catNameOf(settings.todoBoxCategoryId) }}<i class="dd-caret">&#9662;</i></span></template>
+              <template #reference><span class="dropdown-select__label" role="button" tabindex="0" aria-haspopup="listbox" :aria-expanded="openDd === 'cat' ? 'true' : 'false'" @keydown="onTriggerKey">{{ settings.todoBoxCategoryId === -1 ? $t('statsC.TodoBox.allCats') : catNameOf(settings.todoBoxCategoryId) }}<i class="dd-caret">&#9662;</i></span></template>
             </el-popover>
           </div>
           <button class="mini" :class="{ primary: batchMode }" @click="toggleBatch">{{ batchMode ? $t('statsC.TodoBox.batchExit') : $t('statsC.TodoBox.batchManage') }}</button>
@@ -47,20 +47,23 @@
     <div class="page__main page__main--flow-top">
       <empty-state v-if="!list.length"><template #text>{{ $t('statsC.TodoBox.empty') }}</template></empty-state>
       <div v-else class="todo-box-list">
+        <!-- [A7] role=button demoted from the row to the content (same TodoItem pattern): a button
+             role wrapping role=checkbox children is broken ARIA nesting; the row stays a focusable
+             container, the "open/check" semantics live on the content -->
         <div v-for="t in list" :key="t.taskId" class="todo-box-list-item"
              :class="{ 'todo-box-list-item--selected': selectedId === t.taskId, 'todo-box-list-item--checked': batchMode && checkedIds.includes(t.taskId) }"
-             role="button" tabindex="0" :aria-label="t.taskContent"
+             tabindex="0"
              @click="batchMode ? toggleCheck(t) : openEdit(t)" @keydown.enter.prevent="batchMode ? toggleCheck(t) : openEdit(t)" @contextmenu.prevent="ctxMenu(t, $event)">
           <span v-if="batchMode" class="tb-batch-check" :class="{ on: checkedIds.includes(t.taskId) }" role="checkbox" tabindex="0"
-                :aria-checked="checkedIds.includes(t.taskId) ? 'true' : 'false'" :aria-label="$t('statsC.TodoBox.ariaCheck')" @click.stop="toggleCheck(t)" @keydown.enter.prevent.stop="toggleCheck(t)">✓</span>
+                :aria-checked="checkedIds.includes(t.taskId) ? 'true' : 'false'" :aria-label="$t('statsC.TodoBox.ariaCheck')" @click.stop="toggleCheck(t)" @keydown="onBatchCheckKey(t, $event)">✓</span>
           <span class="todo-box-list-item__category-dot tb-dot-check" :style="{ color: dotColor(t) }" role="checkbox"
                 :aria-checked="t.complete ? 'true' : 'false'" :aria-label="$t('statsC.TodoBox.ariaComplete')" :title="$t('statsC.TodoBox.titleComplete', { name: t.taskContent })" tabindex="0"
-                @click.stop="completeItem(t)" @keydown.enter.prevent.stop="completeItem(t)">
+                @click.stop="completeItem(t)" @keydown="onCompleteKey(t, $event)">
             <svg viewBox="0 0 512 512"><path fill="currentColor" d="M256 8C119 8 8 119 8 256s111 248 248 248 248-111 248-248S393 8 256 8zm0 448c-110.5 0-200-89.5-200-200S145.5 56 256 56s200 89.5 200 200-89.5 200-200 200z"/></svg>
           </span>
           <div class="todo-box-list-item__container">
             <div class="todo-box-list-item__drop-placeholder"></div>
-            <div class="todo-box-list-item__content"> {{ t.taskContent }} </div>
+            <div class="todo-box-list-item__content" role="button" tabindex="0" :aria-label="t.taskContent"> {{ t.taskContent }} </div>
             <!-- Workload bar: the difficulty field is retired, tiered by estimated pomodoros (1-2/3-4/5+) — estimated pomodoros are the single workload ledger -->
             <div class="todo-box-list-item__workload"
                  :class="{ 'todo-box-list-item__workload--lv2': estOf(t) >= 3 && estOf(t) <= 4, 'todo-box-list-item__workload--lv3': estOf(t) >= 5 }"></div>
@@ -108,6 +111,7 @@ import { batchMoveWithUndo, isRepeatTask } from '../utils/confirm.js'
 import { getEstimate } from '../utils/tomatoEstimate.js'
 import { crossDayMovePatch, crossDayRevertPatch } from '../utils/crossDayMove.js' // [maint-0924 A1]
 import EmptyState from '../components/EmptyState.vue'
+import { roleButtonActivate, roleCheckboxActivate } from '../utils/roleButtonKey.js' // [A8/A9] Space+Enter activation
 
 // [navgate-fix] pure-start (extracted by tests/unit-navgate-fix-ui.test.mjs)
 /** Split a batch selection for deletion (same repeat criterion as utils/confirm.js deleteWithUndo:
@@ -161,6 +165,16 @@ export default {
     // keyboard activation for the sort/filter dropdown triggers; the cast lives here because the
     // structure guard rejects TS `as` expressions inside templates (silent-undefined identifier scan)
     tbTriggerKey (e) { (e.currentTarget as HTMLElement).click() },
+    /* [A9] dropdown trigger buttons: Space joins Enter as activation keys (same .prevent, no .stop, as before) */
+    onTriggerKey: roleButtonActivate(function (e) { this.tbTriggerKey(e) }),
+    /* [A8] batch check checkbox: Space joins Enter, stopped so the row's own activation doesn't double-fire */
+    onBatchCheckKey (t, e) {
+      roleCheckboxActivate(function () { this.toggleCheck(t) }).call(this, e)
+    },
+    /* [A8] complete checkbox: Space joins Enter, stopped so the row's own activation doesn't double-fire */
+    onCompleteKey (t, e) {
+      roleCheckboxActivate(function () { this.completeItem(t) }).call(this, e)
+    },
     // [maint-0924 A8] listbox keyboard semantics for the three custom dd-menus: ArrowDown/ArrowUp
     // cycle focus across the options, Escape closes the popover and returns focus to its trigger
     ddMenuKey (e, popRef) {

@@ -7,8 +7,13 @@ module.exports = (deps) => {
 function listTodos (opts = {}) {
   const q = { deleted: 0, orderBy: 'scheduledDay ASC, sort ASC' }
   // Context protection: truncate by default when no limit is given, to avoid flooding the AI's context in one shot
-  // Invalid --limit (NaN) must fall back to the same default 200 as absent, not a silent 50-row cap
-  q.limit = opts.limit ? Math.min(parseInt(opts.limit, 10) || 200, 500) : 200
+  // B12: `--limit 0` must pass 0 through (db.js queryTodos fails closed: 0 = zero rows) — the old
+  // truthy check folded 0 into the 200-row default. Distinguish flag-absent (default 200) from an
+  // explicit 0; a non-numeric value still falls back to the same default 200 as absent.
+  if (opts.limit !== undefined) {
+    const n = parseInt(opts.limit, 10)
+    q.limit = Number.isFinite(n) ? Math.min(n, 500) : 200
+  } else q.limit = 200
   const now = dayjs()
   if (opts.done != null) q.complete = opts.done
   if (opts.category != null) q.categoryId = opts.category

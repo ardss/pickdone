@@ -22,14 +22,14 @@
             <span class="td-check rc-check" :class="{on:t.complete}"
                   :style="t.complete ? { background: 'var(--brand)', borderColor: 'var(--brand)' } : {}"
                   role="checkbox" :aria-checked="t.complete ? 'true' : 'false'" :aria-label="$t('statsC.RecycleBin.ariaMarkComplete')"
-                  tabindex="0" @click.stop="toggleComplete(t)" @keydown.enter.prevent.stop="toggleComplete(t)">
+                  tabindex="0" @click.stop="toggleComplete(t)" @keydown="onCheckKey(t, $event)">
               <svg v-if="t.complete" class="td-check-svg" viewBox="0 0 12 12" aria-hidden="true">
                 <polyline points="2,6.2 5,9 10,3" fill="none" stroke="#fff" stroke-width="1.8"
                           stroke-linecap="round" stroke-linejoin="round" pathLength="1"/>
               </svg>
             </span>
             <div class="todo-box-list-item__content rc-editable" :title="$t('statsC.RecycleBin.clickEdit')" :class="{ 'rc-done': t.complete }"
-                 role="button" tabindex="0" @click.stop="openEdit(t)" @keydown.enter.prevent.stop="openEdit(t)"> {{ t.taskContent }} </div>
+                 role="button" tabindex="0" @click.stop="openEdit(t)" @keydown="onEditKey"> {{ t.taskContent }} </div>
             <div class="todo-box-list-item__tools">
               <div class="btn-group">
                 <button class="btn" @click.stop="restore(t, false)"> {{ $t('statsC.RecycleBin.btnRestoreDate') }} </button>
@@ -68,6 +68,7 @@ import { dayStart } from '../utils/todayBounds.js'
 import { taskContextMenu } from '../utils/taskMenu.js'
 import { toggleCompleteWithUndo } from '../utils/completeAction.js'
 import EmptyState from '../components/EmptyState.vue'
+import { roleCheckboxActivate, roleButtonActivate } from '../utils/roleButtonKey.js' // [A8/A9] Space+Enter activation
 
 export default {
   name: 'RecycleBinView',
@@ -86,6 +87,12 @@ export default {
     list () { this.pinPickTabindex() }
   },
   methods: {
+    /* [A8] recycle-bin checkbox: Space joins Enter, stopped so the row's edit activation doesn't double-fire */
+    onCheckKey (t, e) {
+      roleCheckboxActivate(function () { this.toggleComplete(t) }).call(this, e)
+    },
+    /* [A9] row edit button: Space joins Enter */
+    onEditKey: roleButtonActivate(function (e) { this.openEdit(e) }, { stop: true }),
     pinPickTabindex () {
       this.$nextTick(() => {
         if (!this.$el || typeof this.$el.querySelectorAll !== 'function') return
@@ -226,7 +233,10 @@ export default {
 </script>
 <style>/* Header icon: data-uri SVG had hardcoded fill=%23ccc (invisible on dark) — use mask + currentColor, same pattern as QuickAdd's calendar icon */
 .recycle-page .icon-prepend{background-color:currentColor;-webkit-mask:url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22><circle cx=%228%22 cy=%228%22 r=%226%22/></svg>') no-repeat 50% / contain;mask:url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22><circle cx=%228%22 cy=%228%22 r=%226%22/></svg>') no-repeat 50% / contain}
-.datetime--alert{color:#bd401e}
+/* [A12] alert date uses the danger token (the hardcoded #bd401e never adapted to dark); the dark
+   override lightens it the same way the sibling .rc-danger-btn's dark rule lightens its background */
+.datetime--alert{color:var(--danger-strong, #bd401e)}
+html[data-theme="dark"] .datetime--alert{color:var(--danger, #f56c6c)}
 .datetime--gray{color:var(--text-dim)}
 /* 完成/标签/清单等页在条目右侧的悬停操作（恢复为未完成等），颜色取自设计稿 .btn-group .btn */
 .row-btn{flex-shrink:0;align-self:center;margin-right:14px;padding:0;color:var(--brand-dark);font-size: var(--fs-sm);background:none;border:none;cursor:pointer;transition:all .2s;opacity:0}
