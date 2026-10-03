@@ -69,7 +69,7 @@ test('B6 initFromDb merges onboardingToursSeen per-key instead of adopting the D
 test('B7 renameUserTag/removeUserTag revert the in-memory list and rethrow on meta put failure', async () => {
   const ui = (await import('../../../renderer/js/store/ui.js')).default
   const state = { userTags: ['a', 'b'] }
-  const ctx = { state, commit (m, p) { ui.mutations[m](state, p) } }
+  const ctx = { state, commit (m, p) { ui.mutations[m](state, p) }, dispatch (a, p) { return ui.actions.commitUserTags.call(ctx, ctx, p) } }
   failSetMeta = true
   await assert.rejects(ui.actions.renameUserTag.call(ctx, ctx, { from: 'a', to: 'A' }), /disk full/)
   assert.deepEqual(state.userTags, ['a', 'b'], 'failed rename is reverted (no silent revert at next startup)')

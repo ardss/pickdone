@@ -4,7 +4,6 @@
  * exactly the way the original `this`-bound method did -- no logic was reordered or renamed.
  */
 import { NAV_LABEL } from './navConfig.js'
-import { commit as commitCommand } from '../../utils/commandBus.js'
 import i18n from '../../i18n/index.js'
 
 /* ===== computed bodies ===== */
@@ -132,12 +131,14 @@ export async function createTag (vm) {
     const prev = vm.$store.state.ui.userTags.slice()
     const list = prev.slice()
     if (!list.includes(name) && !vm.tags.some(t => t.name === name)) list.push(name)
-    vm.$store.commit('ui/setUserTags', list)
+    if (list.length === prev.length) return
+    // D15 single-writer (KV-USERTAGS-TRIPLE-WRITER): creation goes through the ONE owner action
+    // ui/commitUserTags (same revert + surface policy as rename/remove); the toast here is just
+    // this call site's surface for the rethrown failure.
     if (window.todoAPI && window.todoAPI.dbCall) {
       try {
-        await commitCommand("meta", "put", ['userTags', JSON.stringify(list)])
+        await vm.$store.dispatch('ui/commitUserTags', list)
       } catch (e) {
-        vm.$store.commit('ui/setUserTags', prev)
         vm.$message.error(vm.$t('statsG.SideNav.syncFailMsg') + ((e && e.message) ? `: ${e.message}` : ''))
       }
     }

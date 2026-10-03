@@ -137,7 +137,13 @@ test('A4 createTag: a rejected userTags put reverts the in-memory list and surfa
     $message: { error: m => errors.push(m), warning: m => errors.push(m) },
     $store: {
       state,
-      commit (m, p) { commits.push(m); if (m === 'ui/setUserTags') state.ui.userTags = p }
+      commit (m, p) { commits.push(m); if (m === 'ui/setUserTags') state.ui.userTags = p },
+      // D15 single-writer: createTag routes through the ui/commitUserTags owner action
+      async dispatch (a, p) {
+        const ui = (await import('../../../renderer/js/store/ui.js')).default
+        const ctx = { state: state.ui, commit (m, v) { commits.push(`ui/${m}`); if (m === 'setUserTags') state.ui.userTags = v } }
+        return ui.actions.commitUserTags.call(ctx, ctx, p)
+      }
     }
   }
   globalThis.window.todoAPI = { dbCall: () => Promise.reject(new Error('db locked')) }
