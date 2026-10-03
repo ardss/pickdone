@@ -423,7 +423,10 @@ async function main () {
         const patch = {}
         if (opts.content) patch.taskContent = opts.content
         if (opts.date !== undefined) patch.todoTime = isDateClear(opts.date) ? 0 : lib.parseDate(opts.date)
-        if (opts.reminder !== undefined) patch.reminderTime = isReminderClear(opts.reminder) ? 0 : lib.parseDate(opts.reminder)
+        // B3/B13 (dry-run mirror): a reminder clear also drops the anchored rows (EditPanel onRemindersClear contract) — otherwise the dry-run patch would not show what the real write does
+        if (opts.reminder !== undefined) {
+          if (isReminderClear(opts.reminder)) { patch.reminderTime = 0; patch.reminderOffsets = []; patch.reminderExtra = [] } else patch.reminderTime = lib.parseDate(opts.reminder)
+        }
         if (opts.important != null) patch.important = parseInt(opts.important, 10) ? 1 : 0
         if (opts.urgent != null) patch.urgent = parseInt(opts.urgent, 10) ? 1 : 0
         if (opts.priority != null) patch.priority = parseInt(opts.priority, 10)
@@ -436,7 +439,12 @@ async function main () {
       if (opts.content) patch.taskContent = opts.content
       if (opts.desc) patch.taskDescribe = opts.desc
       if (opts.date !== undefined && !dateClear) patch.todoTime = lib.parseDate(opts.date)
-      if (opts.reminder !== undefined) patch.reminderTime = isReminderClear(opts.reminder) ? 0 : lib.parseDate(opts.reminder)
+      // B3/B13: a reminder clear must also drop reminderOffsets/reminderExtra (EditPanel onRemindersClear
+      // contract): offsets are anchored to the main reminder, so zeroing only reminderTime left stale
+      // offsets that silently revived old early-warning chips when a reminder was re-added.
+      if (opts.reminder !== undefined) {
+        if (isReminderClear(opts.reminder)) { patch.reminderTime = 0; patch.reminderOffsets = []; patch.reminderExtra = [] } else patch.reminderTime = lib.parseDate(opts.reminder)
+      }
       if (opts.category !== undefined) patch.categoryId = lib.resolveCategory(opts.category) || 0
       if (opts.important != null) patch.important = parseInt(opts.important, 10) ? 1 : 0
       if (opts.urgent != null) patch.urgent = parseInt(opts.urgent, 10) ? 1 : 0

@@ -347,7 +347,10 @@ function patchTodo (input, patch, { action, note } = {}) {
  *  date-removed path exactly (EditPanel.setDate('none') → applyDate(0) → queueSave → store/todo.js
  *  updateTodoFields): todoTime=0 with derived dayStart=0, and the main reminder drops to 0 along with the
  *  date (the App's applyDate(0) zeroes remindTs; reminders are date-anchored — scheduleReminder gates on
- *  dayStart); reminderExtra rows are kept as-is, same as the App. Schedule chips cannot survive without a
+ *  dayStart); reminderExtra rows are kept as-is, same as the App. B3/B13: reminderOffsets are
+ *  dropped along with the main reminder (offsets are anchored to it — keeping them revives stale
+ *  early-warning chips when a reminder is re-added; the reminder-clear lifecycle rule in
+ *  EditPanel.onRemindersClear). Schedule chips cannot survive without a
  *  day to live on: same snapshot→clear cascade as the App's rowChipSync date-removed branch
  *  (snapshotForDelete + clearTaskChips = snapshot to meta, then planDeleteTask) — the snapshot stays in
  *  meta so a later `restore` can still backfill. Already-undated task → no-op ({changed:false}, nothing
@@ -355,7 +358,7 @@ function patchTodo (input, patch, { action, note } = {}) {
 function clearTodoDate (input) {
   const t = resolveTask(input, liveTasks())
   if (!t.todoTime && !t.dayStart) return { task: t, changed: false }
-  const patch = { todoTime: 0 }
+  const patch = { todoTime: 0, reminderOffsets: [] } // offsets die with the main reminder (B3/B13)
   if (t.reminderTime) patch.reminderTime = 0 // same as the App: the main reminder cannot outlive its date
   const after = patchTodo(t.taskId, patch, { action: 'edit', note: 'date cleared → todo box' })
   chipsSnapshotForDelete(t.taskId)
