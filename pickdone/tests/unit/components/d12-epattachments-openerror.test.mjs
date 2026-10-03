@@ -32,8 +32,22 @@ export const logger = {
 export const __calls = calls
 `)
   js = js.replace("from '../../utils/logger.js'", "from './logger-stub.mjs'")
+  // Every remaining RELATIVE import must resolve against the real renderer tree: the script text
+  // is executed from a temp copy, so any '../../x.js' left in place silently resolves against
+  // os.tmpdir()'s parent and dies with ERR_MODULE_NOT_FOUND (this broke when EpAttachments grew
+  // its second import, core.js's isRenderableAttachmentUrl). Rewriting the whole class — not one
+  // specifier — keeps the harness immune to future imports.
+  js = js.replace(/from '((?:\.\.\/)+[^']+)'/g,
+    (_, rel) => `from '${pathToFileURL(path.join(ROOT, 'renderer/js/components/edit-panel', rel)).href}'`)
   const modPath = path.join(dir, 'component.mjs')
   writeFileSync(modPath, js)
+  // The relative rewrite now pulls in real renderer modules (core.js → i18n) that touch `window`
+  // at module load, so the shell stub must exist BEFORE the import — per-test todoAPI/ElementPlus
+  // still override afterwards (tests assign onto the same object).
+  globalThis.window = globalThis.window || { location: { hash: '' } }
+  globalThis.localStorage = globalThis.localStorage || {
+    getItem: () => null, setItem: () => {}, removeItem: () => {}
+  }
   const stub = await import(pathToFileURL(path.join(dir, 'logger-stub.mjs')).href)
   const mod = await import(pathToFileURL(modPath).href)
   return { comp: mod.default, calls: stub.__calls }
