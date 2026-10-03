@@ -284,8 +284,19 @@ function loadPeerWatermarks () { return watermarkStore.load().map }
 function persistPeerWatermarks () { return watermarkStore.persist(state && state.peerWatermarks) }
 
 /* ---------- security ring persistence (survives restarts; recent ring stays ephemeral) ---------- */
+// S6 (2026-10-03): the security ring is the second member of the settings-backed whole-store
+// class — the same read-throw/abort-write contract that D15 C1 gave sync.peers and S3 gave the
+// watermark store: a failed read latches degraded and BOTH writers (the throttled tick and the
+// stopSync flush) then skip, so a corrupt read can never shrink/erase the durable 20-entry ring.
+const securitySettingStore = createJsonSettingStore({ settingGet, settingPut, log, key: K_SECURITY_LOG, name: 'security log', defaultValue: '[]', validate: v => Array.isArray(v) })
 function loadSecurityLog () {
-  try { const v = JSON.parse(settingGet(K_SECURITY_LOG) || '[]'); return Array.isArray(v) ? v.slice(-20) : [] } catch { return [] }
+  try {
+    const v = securitySettingStore.load()
+    return Array.isArray(v) ? v.slice(-20) : []
+  } catch (e) {
+    log.warn('[LanSync] security log seeded empty — persistence stays degraded until a successful read:', e.message)
+    return []
+  }
 }
 let securityPersistTimer = null
 function scheduleSecurityPersist () {
@@ -296,6 +307,8 @@ function scheduleSecurityPersist () {
     securityPersistTimer = null
     try {
       if (!state.node) return
+      // S6: abort the whole-array write while degraded — never derive a write from a failed read.
+      if (!securitySettingStore.canPersist()) return
       settingPut(K_SECURITY_LOG, JSON.stringify(state.node.getStatus().security.slice(-20)))
     } catch (e) { log.warn('[LanSync] security log persist failed:', e.message) }
   }, SECURITY_PERSIST_MIN_MS)
@@ -556,7 +569,8 @@ async function stopSync () {
     if (securityPersistTimer) { clearTimeout(securityPersistTimer); securityPersistTimer = null }
     // Round-1 P0: guard getStatus — a stale/mocked node reference threw
     // `n.getStatus is not a function` and masked the flush with a warning.
-    if (n && typeof n.getStatus === 'function') settingPut(K_SECURITY_LOG, JSON.stringify(n.getStatus().security.slice(-20)))
+    // S6: the flush also aborts while degraded — a corrupt read must never shrink the ring.
+    if (n && typeof n.getStatus === 'function' && securitySettingStore.canPersist()) settingPut(K_SECURITY_LOG, JSON.stringify(n.getStatus().security.slice(-20)))
   } catch (e) { log.warn('[LanSync] security log flush on stop failed:', e.message) }
   state.node = null
   state.pendingPair = null
@@ -896,6 +910,9 @@ module.exports.__test = {
   loadPeerWatermarks,
   // S3/S6 test surface: db-injectable store wiring (corrupt-read / degraded-persist scenarios).
   makeWatermarkStoresForDb,
+  // S6 test surface: security-ring store contract (read-throw seeds empty + degrades writes).
+  loadSecurityLog,
+  scheduleSecurityPersist,
   // P0-1/P1-2/P1-5 test surface: post-round applied bookkeeping -> renderer broadcasts.
   emitAppliedRound: () => emitAppliedRound(),
   finalizeIngest,
