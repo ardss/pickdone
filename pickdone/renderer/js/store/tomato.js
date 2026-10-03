@@ -64,14 +64,39 @@ const CLAIM_KEY = 'tomatoLastPhaseDone'
  *  shared LS key and any later claimer of the SAME phase loses, regardless of elapsed time. The old
  *  `Date.now() - ts < 1500` window let a background-throttled window's late tick (>1.5s) re-claim the same
  *  completed phase → double snow gain + double notification. startedAt = Date.now() never repeats, so a
- *  permanent per-phase mark can never block a legitimate new phase. */
+ *  permanent per-phase mark can never block a legitimate new phase.
+ *  TQ-3 (2026-10-03) root fix: the claim now lives in the SINGLE-WRITER main process
+ *  ('tomato-claim-phase' IPC, src/main/phase-claims.js). The shared-LS check-then-set was
+ *  non-atomic across the main+float windows and carried an OWNERLESS claim value, so two windows
+ *  could both win a phase and a contender's release-on-failure path could delete the owner's live
+ *  claim. The main-process CAS returns an owner token; release only deletes on a token match.
+ *  A localStorage fallback (same single-window semantics as before) survives only where no
+ *  main-process bridge exists (browser hosts / plain-node tests) — never in the desktop app. */
 function claimPhase (status, startedAt) {
   const phase = status + ':' + (startedAt || 0)
   try {
-    if (localStorage.getItem(CLAIM_KEY) === phase) return false
+    if (window.todoAPI && window.todoAPI.tomatoClaimPhase) {
+      const res = window.todoAPI.tomatoClaimPhase(phase)
+      return (res && res.won) ? { phase, token: res.token } : null
+    }
+  } catch (e) { /* bridge failure falls through to the LS fallback; losing the claim is the safe side */ }
+  try {
+    if (localStorage.getItem(CLAIM_KEY) === phase) return null
+    localStorage.setItem(CLAIM_KEY, phase)
   } catch (e) { /* empty */ }
-  try { localStorage.setItem(CLAIM_KEY, phase) } catch (e) { /* empty */ }
-  return true
+  return { phase, token: null }
+}
+/** Owner-checked release: with a token (main-process claim) only the owner can delete; with the
+ *  LS fallback the value-equality check keeps the old single-window semantics. */
+function releasePhaseClaim (claim) {
+  if (!claim) return
+  if (claim.token != null) {
+    try {
+      if (window.todoAPI && window.todoAPI.tomatoReleasePhase) window.todoAPI.tomatoReleasePhase(claim.phase, claim.token)
+    } catch (e) { /* dying bridge — an orphaned claim only blocks a phase identity that never repeats */ }
+    return
+  }
+  try { if (localStorage.getItem(CLAIM_KEY) === claim.phase) localStorage.removeItem(CLAIM_KEY) } catch (e) { /* empty */ }
 }
 
 /** Pure resolver (unit-tested): is the attached task still live at accounting time? The attach happens at
@@ -649,10 +674,10 @@ export default {
       }
       const running = s.status === 'startTomatoTime' && s.startedAt
       // Cross-window claim: when the user clicks "give up" at the exact expiry moment while the shared tick is completing, only the side that claimed first records (prevents succeed+abandon double records for the same focus)
-      const claimed = running && record
+      const claim = running && record
         ? claimPhase('startTomatoTime', s.startedAt)
-        : true
-      if (running && record && !claimed) {
+        : {}
+      if (running && record && !claim) {
         // 已被他窗完成/认领:不能盲写 default 归零——他窗此刻可能已进入休息(浮窗显示滞后 ≤1 拍的经典竞态),
         // 正确动作是重读共享瞬态跟随他窗状态(2026-09-04 深审 P1 实锤:旧写法会静默取消刚开始的休息)
         const fresh = loadState(false)
@@ -685,15 +710,14 @@ export default {
       // State precheck (mirrors startFocus): an anomalous call with no running focus must not mint a free tomato
       if (s.status !== 'startTomatoTime' || !s.startedAt) return
       // Idempotency token: only one set of side effects per focus. Cross-window claim (including the give-up side) + deterministic id as double insurance
-      if (!claimPhase('startTomatoTime', s.startedAt)) return
+      const claim = claimPhase('startTomatoTime', s.startedAt)
+      if (!claim) return
       // G1: once claimed, any failure between here and addRecord/saveSnowGain would otherwise leave the
       // phase permanently claimed with no record — the tomato is lost with no retry possible. On failure
-      // release the claim (only if still ours) so the next tick can re-complete.
+      // release the claim (owner-checked: only OUR token/phase, so a peer's claim is never touched)
+      // so the next tick can re-complete.
       const startedAt = s.startedAt
-      const phase = 'startTomatoTime:' + (startedAt || 0)
-      const releaseClaim = () => {
-        try { if (localStorage.getItem(CLAIM_KEY) === phase) localStorage.removeItem(CLAIM_KEY) } catch (e) { /* empty */ }
-      }
+      const releaseClaim = () => releasePhaseClaim(claim)
       const endTs = Date.now()
       // Measured duration, not the current setting: a mid-focus duration change would otherwise skew the ledger (unified with giveUp's elapsed basis)
       const focusMin = Math.max(1, Math.min(FOCUS_MAX_MINUTES, Math.round((endTs - startedAt) / 60000)))
@@ -777,7 +801,8 @@ export default {
       }
     },
     finishRest ({ state, commit }) {
-      if (!claimPhase('startRestTime', state.startedAt)) return
+      const claim = claimPhase('startRestTime', state.startedAt)
+      if (!claim) return
       if (state.enableNotification !== false) { try { window.todoAPI.notification({ title: tt('statsA.core.restOverTitle'), body: tt('statsA.core.restOverBody') }) } catch (e) { /* locked screen rejects the channel — fire-and-forget */ } }
       commit('patch', { status: 'default', startedAt: 0, remainSec: state.tomatoTime * 60 })
       reportRunningTransition('clear', state) // TQ-1: rest finished — release the durable row

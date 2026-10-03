@@ -164,6 +164,28 @@ module.exports = function tomatoHandlers (ctx) {
       return tomatoSession.applyTransition(p)
     },
 
+    // TQ-3 (2026-10-03): cross-window completion claims move into the single-writer main process.
+    // The old renderer localStorage check-then-set was non-atomic across the main+float windows
+    // and carried an ownerless claim value, so two windows could both win a phase AND a
+    // contender's release-on-failure path could delete the owner's live claim. claim() is a
+    // main-process Map CAS (IPC serialized) returning an owner token; release() only deletes on
+    // a matching token. Gate: main window or float — the two windows that run the completion tick.
+    'tomato-claim-phase': (e, phase) => {
+      if (!senderIsMain(e) && !isFloatSelf(e && e.sender)) {
+        log.warn('[IPC] 拒绝非主窗/非浮窗调用 tomato-claim-phase, sender:', e && e.sender && e.sender.id)
+        throw new Error('forbidden: main window or tomato float only')
+      }
+      return require('../phase-claims').claims.claim(phase)
+    },
+    'tomato-release-phase': (e, p) => {
+      if (!senderIsMain(e) && !isFloatSelf(e && e.sender)) {
+        log.warn('[IPC] 拒绝非主窗/非浮窗调用 tomato-release-phase, sender:', e && e.sender && e.sender.id)
+        throw new Error('forbidden: main window or tomato float only')
+      }
+      const { phase, token } = p || {}
+      return require('../phase-claims').claims.release(phase, token)
+    },
+
     // --- Window controls (win may be destroyed: null-guarded via getMainWindow, avoiding throws after destruction) ---
     // main-ipc wave (2026-09-25): side-effecting controls are main-window only + locked-state gate
     // (isLocked, symmetric with backup.js write channels); 'is-maximized' stays open (read-only).
