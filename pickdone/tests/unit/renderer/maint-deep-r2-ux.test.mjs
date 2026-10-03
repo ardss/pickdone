@@ -138,7 +138,7 @@ test('B13 applyDate(0) clears reminderOffsets/reminderExtra and persists the cle
   assert.match(fn, /offsetsCleared = true/, 'zeroing the reminder flags the clear')
   assert.match(fn, /this\.e\.reminderOffsets = \[\]/, 'component state honors the offsets-die invariant')
   assert.match(fn, /next = \[\]/, 'extra reminders die with the main reminder (sibling contract)')
-  assert.match(fn, /patch\.reminderOffsets = \[\]/, 'queueSave patch carries the cleared offsets')
+  assert.match(fn, /reminderOffsets: offsetsCleared \? \[\] : this\.e\.reminderOffsets/, 'queueSave patch carries the cleared offsets (ternary keeps non-clear cases intact)')
 })
 
 /* ---------- B9: TagView gets the projDone completed fallback ---------- */

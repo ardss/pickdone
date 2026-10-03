@@ -22,3 +22,29 @@ export function findRenewedNextInstance (undoneTodo, group) {
   if (renewedNext && !renewedNext.complete && renewedNext.dayStart === last.dayStart) return renewedNext
   return null
 }
+
+/** Store-side wiring for the B2 undo: find the instance renewal created and soft-delete it the
+ *  same way deleteTodo does (version reset to 0 so the soft delete re-enters the sync snapshot;
+ *  `deleting` stripped before persisting), plus the schedule-chip snapshot cascade and view
+ *  recompute — all best-effort: the undo itself must succeed even if the removal hits a snag.
+ *  Deps are injected (Vuex context pieces + the persistence helpers) to keep this module pure. */
+export async function removeRenewedInstance ({ todo, state, commit, dispatch, safeUpsert, snapshotForDelete }) {
+  try {
+    const rid = todo && todo.repeatId
+    if (!rid || !(todo.dayStart > 0)) return
+    const group = state.todoList
+      .filter(x => x.repeatId === rid && !x.delete && x.taskId !== todo.taskId && x.dayStart > 0)
+      .sort((a, b) => a.dayStart - b.dayStart)
+    const renewedNext = findRenewedNextInstance(todo, group)
+    if (!renewedNext) return
+    const now = Date.now()
+    const merged = { ...renewedNext, delete: true, deleting: true, deletedAt: now, updateTime: now, status: 'delete', version: 0 }
+    commit('upsertLocal', merged)
+    const row = { ...merged }; delete row.deleting
+    safeUpsert(row)
+    // Schedule chips follow the removal: same snapshot→clear cascade as deleteTodo
+    try { await snapshotForDelete(renewedNext.taskId) } catch (e) { console.warn('[todo] failed to snapshot chips for the removed renewed instance:', e) }
+    dispatch('computeViews')
+    dispatch('writeCriticalBackup')
+  } catch (e) { /* best-effort cleanup */ }
+}

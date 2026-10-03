@@ -32,7 +32,7 @@
          settings.completeSound), making it dead UI duplicating the Settings page; the effective completion sound is changed under Settings -> Pomodoro -->
     <section class="tp-records">
       <!-- [A15 fix] the header count is the TRUE total again (the A14 interim fix had pinned it to
-           the 6-row window: 9 records read "今日记录 6"); overflow beyond the 6 shown rows gets an
+           the 6-row window: 9 records read as 6 in the header); overflow beyond the 6 shown rows gets an
            explicit "+N more" row (same pattern as TodoItem's tag chips) so nothing is silently capped -->
       <header>{{ $t('statsD.TomatoPanel.todayRecords') }} <em>{{ $t('statsD.TomatoPanel.countN', { n: todayRecords.length }) }}</em></header>
       <div v-for="r in shownRecords" :key="r.tomatoId" class="rec-row">

@@ -5,10 +5,9 @@
 import { genTaskId, nextSort, dayjs, reportError, parsePredecessors } from '../utils/core.js'
 import { wouldCycle, isTaskReady } from '../utils/deps.js'
 import { nextRepeatInstance, isLastRepeatInstance, renewalCarryFields } from '../utils/repeat.js'
-import { findRenewedNextInstance } from '../utils/repeatUndo.js'
+import { removeRenewedInstance } from '../utils/repeatUndo.js'
 import { setEstimate, pruneEstimatesForPurged } from '../utils/tomatoEstimate.js'
-// D15-B2 (2026-10-03): renewal estimate semantics come from the SHARED estimate core — the same
-// clamp the CLI twin (cli/lib.js renewal, getEstimateOf → clampEstimate) enforces on its side.
+// D15-B2 (2026-10-03): renewal estimate semantics come from the SHARED estimate core (same clamp the CLI twin enforces).
 import { clampEstimate } from '../../../shared/estimate-core.mjs'
 import { clearSnapshot } from '../utils/dayPlans.js'
 import { scrubMilestonesForPurged } from '../utils/milestones.js'
@@ -362,37 +361,7 @@ export default {
       if (target && todo.repeatId) dispatch('ensureNextRepeatInstance', { ...todo, complete: true })
       const r = await dispatch('updateTodoFields', { taskId: todo.taskId, patch })
       if (!target) {
-        // B2 (2026-10-02): undoing an auto-renewed completion used to leave the renewed next instance
-        // behind — an accidental check on the group's last instance permanently seeded a phantom
-        // tomorrow/future sibling that only a manual delete would clear. Port of the CLI's fix
-        // (cli/lib.js toggleComplete, "F3 P2 2026-09-21" — whose comment wrongly claimed the App
-        // already did this): the renewal above only fires when the completed row is the group's LAST
-        // live instance, so on undo remove the instance renewal created — same rid, nearest LATER
-        // dayStart, still the group's last, not itself completed (shared contract in
-        // utils/repeatUndo.js). Any earlier sibling (a genuine older instance the user un-did) is
-        // left alone. Runs inside the same undo step (before historyBreakMerge) as one history unit.
-        try {
-          const rid = todo.repeatId
-          if (rid && todo.dayStart > 0) {
-            const group = state.todoList
-              .filter(x => x.repeatId === rid && !x.delete && x.taskId !== todo.taskId && x.dayStart > 0)
-              .sort((a, b) => a.dayStart - b.dayStart)
-            const renewedNext = findRenewedNextInstance(todo, group)
-            if (renewedNext) {
-              const now = Date.now()
-              // Row shape mirrors deleteTodo: version reset to 0 so the soft delete re-enters the
-              // sync snapshot; `deleting` is a UI flag and is stripped before persisting.
-              const merged = { ...renewedNext, delete: true, deleting: true, deletedAt: now, updateTime: now, status: 'delete', version: 0 }
-              commit('upsertLocal', merged)
-              const row = { ...merged }; delete row.deleting
-              safeUpsert(row)
-              // Schedule chips follow the removal: same snapshot→clear cascade as deleteTodo
-              try { await snapshotForDelete(renewedNext.taskId) } catch (e) { console.warn('[todo] failed to snapshot chips for the removed renewed instance:', e) }
-              dispatch('computeViews')
-              dispatch('writeCriticalBackup')
-            }
-          }
-        } catch (e) { /* best-effort cleanup: the undo itself must succeed even if the removal hits a snag */ }
+        await removeRenewedInstance({ todo, state, commit, dispatch, safeUpsert, snapshotForDelete })
       }
       // Discrete op: break the 400ms undo merge so a following edit doesn't fuse into the check step
       commit('historyBreakMerge')
@@ -416,12 +385,9 @@ export default {
       const next = nextRepeatInstance(completedTodo, group, rule, this.state.todo.holidayList || [])
       if (!next) return
       const t = completedTodo
-      // D15-B2 (2026-10-03): read the LIVE per-task meta estimate for the instance being renewed —
-      // same semantic as the CLI twin (cli/lib.js:436-439). The row's estimate COLUMN is dead
-      // post-X2 (bumpSnow writes accumulated focus minutes into it), so seeding the renewal with
-      // `t.estimate || 0` turned "focused 150 min" into an estimate of 20 (clamped) tomatoes and
-      // synced that pollution to the new instance's meta key. Per-task meta key first; the stale
-      // column only as a legacy fallback; everything clamped to the 0..20 storage domain.
+      // D15-B2 (2026-10-03): read the LIVE per-task meta estimate (same as the CLI twin) — the
+      // row estimate COLUMN is dead post-X2 (bumpSnow writes focus minutes into it), so seeding
+      // from it polluted the new instance. Meta key first; column only as legacy fallback; 0..20.
       let renewalEstimate = t.estimate || 0
       try {
         const live = await window.todoAPI.dbCall('getMeta', 'tomatoEstimateState:' + t.taskId)

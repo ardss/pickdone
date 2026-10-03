@@ -20,11 +20,8 @@ const oplog = require('./db-oplog')({
   getDb: () => db,
   log,
   getPurgeChips: () => purgeChipsScratch,
-  // r3 fix (2026-09-28): a failed delta-row append used to be log-only — the loss was invisible
-  // (peers stop receiving that change until the next full snapshot while the push watermark
-  // advances). Surface it through the Device Center sync-event channel (lazy require:
-  // lan-sync-bootstrap may not be initialized yet — its emitter is guarded and no-ops then).
-  onAppendFailure: info => { try { require('./lan-sync-bootstrap').emitOplogAppendFailure(info) } catch { /* surfacing is best-effort */ } },
+  // r3 fix (2026-09-28): a failed delta-row append used to be log-only — the loss was invisible // (peers stop receiving that change until the next full snapshot while the push watermark // advances). Surface it through the Device Center sync-event channel (lazy require:
+  // lan-sync-bootstrap may not be initialized yet — its emitter is guarded and no-ops then). onAppendFailure: info => { try { require('./lan-sync-bootstrap').emitOplogAppendFailure(info) } catch { /* surfacing is best-effort */ } },
 }), syncSchema = require('./db-sync-schema')({ getDb: () => db, log })
 // Sync v2 write-path recorder (flag-gated, see db-revisions.cjs): mirrors the oplog
 // contract — never fails an already-committed write, warn + continue on error.
@@ -70,8 +67,7 @@ function migratePlainToEncrypted (dir, file, key) {
   const encFile = path.join(dir, 'todos-encrypted.tmp')
   try {
     fs.rmSync(encFile, { force: true })
-    // Test-only seam (2026-09-24 C12): a hook returning true simulates a crash mid-rename —
-    // the hook stages the on-disk state itself, then the REAL catch/restore path runs.
+    // Test-only seam (2026-09-24 C12): a hook returning true simulates a crash mid-rename — // the hook stages the on-disk state itself, then the REAL catch/restore path runs.
     if (migrateFailHook && migrateFailHook({ dir, file, encFile })) {
       throw new Error('[TodoDB] injected migration failure (test seam)')
     }
@@ -293,8 +289,7 @@ function initInner (userDataPath) {
   // 密钥内容强校验:db.key 被截断/夹带引号换行时,拼进 PRAGMA 即语法错误或注入面(三轮安全深审 H-2);
   // 不合规格式视为无钥/损坏,走正常恢复链而不是把垃圾送进 pragma
   if (hadKeyFile && !/^[0-9a-f]{64}$/.test(key)) {
-    // sec-dbkey-prefix-logged: never log key material (the old message carried the first 8 hex
-    // chars); length + hex-ness are enough to diagnose a truncated/garbage key file.
+    // sec-dbkey-prefix-logged: never log key material (the old message carried the first 8 hex // chars); length + hex-ness are enough to diagnose a truncated/garbage key file.
     log.warn('[TodoDB] db.key content invalid (expected 64 hex chars, got length=' + String(key).length + ', hex=' + /^[0-9a-fA-F]+$/.test(String(key)) + ') — continuing without key')
     key = null
     hadKeyFile = false

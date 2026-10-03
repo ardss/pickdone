@@ -567,8 +567,8 @@ export default {
       this.e.reminderExtra = next
       if (offsetsCleared) this.e.reminderOffsets = []
       // [B4] the save patch carries the cleared arrays too so the store row cannot keep stale offsets
-      const patch = { todoTime: ts || 0, reminderTime: remind, reminderExtra: next }
-      if (offsetsCleared) patch.reminderOffsets = []
+      // reminderOffsets rides in the literal so the queued patch type always carries it
+      const patch = { todoTime: ts || 0, reminderTime: remind, reminderExtra: next, reminderOffsets: offsetsCleared ? [] : this.e.reminderOffsets }
       this.queueSave(patch)
     },
     onPickDate (ts) { this.applyDate(ts || 0) },

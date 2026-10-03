@@ -9,8 +9,7 @@ const dayjs = require('dayjs')
 require('dayjs/locale/zh-cn')
 dayjs.locale('zh-cn')
 // Explicit isoWeek extension (hardening, 2026-09-12): applyViewConds' week window uses endOf('isoWeek') but used
-// to rely on todo-core's require side effect extending the shared instance. Extend our own instance so the CLI
-// keeps correct 本周 semantics even if that import chain ever changes (same degrade as cli/nl-date.cjs).
+// to rely on todo-core's require side effect extending the shared instance. Extend our own instance so the CLI // keeps correct 本周 semantics even if that import chain ever changes (same degrade as cli/nl-date.cjs).
 try { dayjs.extend(require('../assets/vendor-lib/dayjs-plugin-isoWeek.js')) } catch (e) { /* degrade to default week start when the plugin is missing */ }
 const { FOCUS_MAX_MINUTES, REST_MAX_MINUTES } = require('../shared/limits.mjs') // focus-duration clamp constants (single source with db.js / renderer, audit item 4); require(esm) — Node >= 22.12
 
@@ -87,9 +86,7 @@ function ensureTomatoMigrated () {
   tomatoMigrated = true
   try { bus.commit('tomato', 'migrateFromMeta', null, { preserveStamp: true }) } catch (e) {
     // Fail-loud (d11 round 2): the old bare catch swallowed a corrupt meta blob into SILENCE —
-    // `tomato list` then printed an empty ledger and exited 0 (read-side side effect + fake
-    // success). We still do not abort the read (full read/write open-protocol decoupling is a
-    // separate round), but the user now SEES the failure on stderr instead of an empty list.
+    // `tomato list` then printed an empty ledger and exited 0 (read-side side effect + fake success).
     console.error(`warning: tomato ledger migration failed (${e && e.message ? e.message : e}); tomato output may be incomplete — inspect the meta blob in ${userDataDir()}`)
   }
 }

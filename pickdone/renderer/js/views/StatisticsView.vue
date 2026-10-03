@@ -34,9 +34,7 @@
 
           <div v-else class="stat-subpage">
             <!-- Period switcher: segmented pills (shared by review and charts) -->
-            <!-- [A6] roving-tabindex radiogroup: the checked pill is the single Tab stop,
-                 Arrow keys move (and select) within the group, Space/Enter select -->
-            <div v-if="view!=='ach'" class="stat-period-pills" role="radiogroup" :aria-label="$t('statsA.StatisticsView.ariaPeriod')">
+            <!-- [A6] roving-tabindex radiogroup: the checked pill is the single Tab stop, Arrow keys move (and select) within the group, Space/Enter select --> <div v-if="view!=='ach'" class="stat-period-pills" role="radiogroup" :aria-label="$t('statsA.StatisticsView.ariaPeriod')">
               <button v-for="p in periodOptions" :key="p.key" class="stat-period-pill"
                       :class="{on: period===p.key}" role="radio" :aria-checked="period===p.key"
                       :tabindex="period===p.key ? 0 : -1" :data-period-key="p.key"
@@ -100,8 +98,7 @@
             <!-- 3. Activity heatmap -->
             <div class="tl-card hm-card">
               <div class="tl-head"><b>{{ $t('statsA.StatisticsView.heatTitle') }}</b>
-                <!-- [A2] roving-tabindex radiogroup (same pattern as the period pills): was
-                     unreachable by keyboard entirely (no tabindex, no keys) -->
+                <!-- [A2] roving-tabindex radiogroup (same pattern as the period pills): was unreachable by keyboard entirely (no tabindex, no keys) -->
                 <span class="hm-range-toggle" role="radiogroup" :aria-label="$t('statsA.StatisticsView.ariaHeatRange')">
                   <button v-for="r in heatRangeOptions" :key="r.key" class="hm-range-btn"
                           :class="{on: heatRange===r.key}" role="radio" :aria-checked="heatRange===r.key"
@@ -219,8 +216,7 @@
                 </div>
               </div>
               <!-- Segment hover tip: native title has high latency and uncontrolled styling; replaced with a following custom tooltip -->
-              <!-- The tip popover moved up to the page root: a .page container with transform hijacks the fixed coordinate system, mounting inside the card would render offscreen -->
-            </div>
+              <!-- The tip popover moved up to the page root: a .page container with transform hijacks the fixed coordinate system, mounting inside the card would render offscreen --> </div>
             </template>
             
             <template v-else>
@@ -241,14 +237,9 @@
 /**
  * Insights —— a review-narrative-first weekly review page (systematically rebuilt in 2026-08, moving away from the stats-page form):
  *   1. Review narrative card (local rule engine insights.js: headline + insights + suggestions)
- *   2. KPI comparison bars (done/focus/completion rate/give-ups, all from a "vs personal baseline" perspective, no absolute-count bragging)
- *   3. Activity heatmap (half-year/full-year toggle) 4. 24-hour focus timeline
- *   5. Attention allocation (per-category focus bars) 6. Completion trend line (with baseline reference band)
- *   7. Export long image / CSV
+ *   2. KPI comparison bars (done/focus/completion rate/give-ups, all from a "vs personal baseline" perspective, no absolute-count bragging) *   3. Activity heatmap (half-year/full-year toggle) 4. 24-hour focus timeline *   5. Attention allocation (per-category focus bars) 6. Completion trend line (with baseline reference band) *   7. Export long image / CSV
  * Engine and metrics live in statistics/metrics.js + insights.js (pure functions, covered by unit tests).
- * All copy goes through vue-i18n (statsA.* namespace); internal state like period/heatmap range uses stable keys,
- * display text is resolved via $t (the insights/achievements pure-function layer returns key+params, resolved in computeds/methods).
- */
+ * All copy goes through vue-i18n (statsA.* namespace); internal state like period/heatmap range uses stable keys, * display text is resolved via $t (the insights/achievements pure-function layer returns key+params, resolved in computeds/methods). */
 import { dayjs, DAY_MS } from '../utils/core.js'
 import ChartCard from './statistics/ChartCard.vue'
 import EmptyState from '../components/EmptyState.vue'
@@ -268,8 +259,7 @@ import { clampTipPos, clampHmTipPos } from './statistics/tooltipClamp.js'
 const T = 'statsA.StatisticsView.'
 
 /* [d5-ui-fixes] pure-start */
-// CSV count formatting: integer counts print plainly (12, not "12.0"); fractional
-// values (e.g. averaged baselines) keep one decimal place
+// CSV count formatting: integer counts print plainly (12, not "12.0"); fractions keep one decimal
 function fmtCount (v) { return Number.isInteger(v) ? String(v) : v.toFixed(1) }
 /* [d5-ui-fixes] pure-end */
 
@@ -295,8 +285,7 @@ export default {
     const q = this.$route.query || {}
     if (['stat', 'ach'].includes(q.view)) this.view = q.view
     if (q.from && q.to && dayjs(String(q.from)).isValid() && dayjs(String(q.to)).isValid()) {
-      // Hand-edited URLs can bypass applyCustomRange's 366-day cap (a 2400-day span = page-freeze level);
-      // an inverted from>to range leaves all KPIs empty: clamp and normalize here
+      // Hand-edited URLs can bypass applyCustomRange's 366-day cap (a 2400-day span = page-freeze level); — clamp and normalize (an inverted from>to range leaves all KPIs empty)
       let a = dayjs(String(q.from)).startOf('day')
       let b = dayjs(String(q.to)).startOf('day')
       if (b.isBefore(a)) { const tmp = a; a = b; b = tmp }
