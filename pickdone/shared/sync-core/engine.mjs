@@ -142,20 +142,33 @@ export function createEngine({ localStore, deviceId, clock = monotonicClock() })
    * PULL — validate and apply a received segment body. Rows are applied in
    * segment order (the codec guarantees strictly increasing seq). Segments
    * originated by this device are ignored wholesale (loopback echo).
-   * @returns {{ applied: number, rejected: number }}
+   * S7 (2026-10-03): the returned fromSeq/toSeq span is derived from the UNPACKED rows this
+   * call actually validated — NEVER from the outer {body, fromSeq, toSeq} envelope, whose wire
+   * fields are produced independently at pack time and can desynchronize from the body (corrupt
+   * peer build, codec drift). Receivers must advance pull watermarks / appliedToSeq acks ONLY
+   * from this span: 'the pull watermark never exceeds the highest seq actually applied'
+   * (sync-matrix.md §5.3). A legacy consumer/ingest that predates the fields gets NO span
+   * (null) and must keep the watermark put — no fallback to unvalidated envelope values.
+   * @returns {{ applied: number, rejected: number, fromSeq: number|null, toSeq: number|null }}
    */
   function ingestSegment(input) {
     // Accept either the packed body string or the {body} envelope as delivered by a transport
     // (transports carry the envelope object; the 2026-09-17 live drill caught the mismatch).
     const envelope = unpack(input && typeof input === 'object' && typeof input.body === 'string' ? input.body : input)
-    if (envelope.deviceId === deviceId) return { applied: 0, rejected: 0 }
+    if (envelope.deviceId === deviceId) return { applied: 0, rejected: 0, fromSeq: null, toSeq: null }
     let applied = 0
     let rejected = 0
     for (const row of envelope.rows) {
       if (localStore.applyRow(row)) applied++
       else rejected++
     }
-    return { applied, rejected }
+    const rows = envelope.rows
+    return {
+      applied,
+      rejected,
+      fromSeq: rows.length ? rows[0].seq : null,
+      toSeq: rows.length ? rows[rows.length - 1].seq : null,
+    }
   }
 
   /**

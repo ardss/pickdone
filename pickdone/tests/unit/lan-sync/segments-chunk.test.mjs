@@ -69,7 +69,9 @@ test('segments-chunk: a backlog over the 32MB wire cap syncs end-to-end over TCP
       const body = typeof seg.body === 'string' ? seg.body : JSON.stringify(seg.body)
       receivedLineLens.push(body.length)
       ingested.push(seg)
-      return { applied: 1, rejected: 0 }
+      // S7 contract: the span comes from the row this mock "applied" (fixture rows carry seq).
+      const row = seg.rows && seg.rows[0]
+      return { applied: 1, rejected: 0, fromSeq: row ? row.seq : seg.fromSeq, toSeq: row ? row.seq : seg.toSeq }
     },
     ingestSnapshot: () => {},
     buildSegments: () => [],

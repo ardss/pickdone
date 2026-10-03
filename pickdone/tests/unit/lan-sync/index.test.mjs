@@ -204,7 +204,10 @@ test('glue: peer ack appliedToSeq advances the push watermark; second round ship
     discoverFn: fakeDiscovery(),
     ingestSegment: (seg) => {
       ingestedByB.push(seg)
-      for (const r of seg.rows || []) bMaxSeq = Math.max(bMaxSeq, Number(r.seq) || 0)
+      const rows = seg.rows || []
+      for (const r of rows) bMaxSeq = Math.max(bMaxSeq, Number(r.seq) || 0)
+      // S7 engine contract: the span comes from the rows this ingest validated, not the envelope.
+      return { applied: rows.length, rejected: 0, fromSeq: rows.length ? rows[0].seq : null, toSeq: rows.length ? rows[rows.length - 1].seq : null }
     },
     ingestSnapshot: () => {},
     getMaxSeq: () => bMaxSeq,
@@ -274,7 +277,13 @@ test('watermark: ack stays in the SENDER seq space even when the receiver oplog 
     discoverFn: fakeDiscovery(),
     // B's local oplog is FAR ahead (it relayed peer C's rows up to seq 1000).
     getMaxSeq: () => 1000,
-    ingestSegment: (seg) => ingestedByB.push(seg),
+    // S7 engine contract: the span rides the RECEIVED rows (sender seq space), so the ack
+    // reports 3 even though B's own oplog runs to 1000.
+    ingestSegment: (seg) => {
+      const rows = seg.rows || []
+      ingestedByB.push(seg)
+      return { applied: rows.length, rejected: 0, fromSeq: rows.length ? rows[0].seq : null, toSeq: rows.length ? rows[rows.length - 1].seq : null }
+    },
     ingestSnapshot: () => {},
     buildSegments: () => [],
   })
@@ -345,7 +354,10 @@ test('watermark: 3-node chain A -> B -> C, B relays — A cursor never overshoot
         bRows.push(row)
         fresh.push(row)
       }
-      return { applied: fresh.length, rejected: 0 }
+      // S7 engine contract: the span is over the RECEIVED rows (the sender's seq space), like
+      // the engine's envelope.rows — never the recaptured local rows.
+      const got = seg.rows || []
+      return { applied: fresh.length, rejected: 0, fromSeq: got.length ? got[0].seq : null, toSeq: got.length ? got[got.length - 1].seq : null }
     },
     ingestSnapshot: () => {},
     buildSegments: (since = 0) => {
@@ -362,8 +374,10 @@ test('watermark: 3-node chain A -> B -> C, B relays — A cursor never overshoot
     discoverFn: fakeDiscovery(),
     getMaxSeq: () => 500,
     ingestSegment: (seg) => {
-      for (const r of seg.rows || []) receivedByC.push(r.id)
-      return { applied: (seg.rows || []).length, rejected: 0 }
+      const rows = seg.rows || []
+      for (const r of rows) receivedByC.push(r.id)
+      // S7 engine contract: span over the rows actually applied.
+      return { applied: rows.length, rejected: 0, fromSeq: rows.length ? rows[0].seq : null, toSeq: rows.length ? rows[rows.length - 1].seq : null }
     },
     ingestSnapshot: () => {},
     buildSegments: () => [],

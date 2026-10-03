@@ -146,6 +146,11 @@ test('P1-3: unpair deletes the peer record + watermark and revokes the shared se
     ]),
   })
   m.state.peerWatermarks = new Map([['peer-xyz', 4321], ['other', 10]])
+  // S5 (2026-10-03): the unpair restart is awaited + fail-closed now — a bind collision would
+  // REJECT the op instead of being logged away, so pin the test-only ephemeral bind (the
+  // 'sync.port' row below was never read by startSync; the old fire-and-forget start merely
+  // hid that).
+  m.state.syncBindOverride = { port: 0, host: '127.0.0.1' }
   m.state.node = {
     getStatus: () => ({ peers, listening: true, port: 58471, recent: [], security: [], self: {} }),
     removePeer: () => {},
@@ -168,6 +173,10 @@ test('P1-3: unpair deletes the peer record + watermark and revokes the shared se
   // secret revoked
   const secret = putCalls.find(c => c.params.key === 'sync.pairingSecret')
   assert.ok(secret && secret.params.value !== 'OLDSECRET', 'shared pairing secret revoked (both sides must re-pair)')
+  // S5: the awaited restart spun up a REAL node (ephemeral bind) — tear it down so the test
+  // process does not outlive the test on its discovery/round handles.
+  await __test.stopSync()
+  await new Promise(r => setTimeout(r, 20))
 })
 
 test('P1-5: an LWW conflict emits exactly one sync-conflict syncEvent per round', () => {

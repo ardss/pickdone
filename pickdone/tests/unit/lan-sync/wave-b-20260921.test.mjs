@@ -76,9 +76,10 @@ test('P1: pull-side flushFailed + same-round partial apply still force-arms the 
   server.on('error', () => {})
   const port = await listen(server)
   const node = makeNode({
+    // S7 contract: the mock carries the engine-derived span (fixture chunk ranges).
     ingestSegment: seg => (seg.body === 'poison'
-      ? { applied: 0, rejected: 0, flushFailed: true }
-      : { applied: 1, rejected: 0 }),
+      ? { applied: 0, rejected: 0, flushFailed: true, fromSeq: seg.fromSeq, toSeq: seg.toSeq }
+      : { applied: 1, rejected: 0, fromSeq: seg.fromSeq, toSeq: seg.toSeq }),
   })
   node.start()
   await node.whenListening()

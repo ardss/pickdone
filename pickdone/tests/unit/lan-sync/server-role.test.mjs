@@ -24,7 +24,12 @@ function fakeSocket() {
 function stubDeps(extra = {}) {
   const calls = { buildSegmentsFrom: [], ingested: [], ackedSeqs: [] }
   const deps = {
-    ingestSegment: (seg) => { calls.ingested.push(seg); return { applied: 1, rejected: 0 } },
+    // S7 contract: the stub derives the span from the rows it "validated", not the envelope.
+    ingestSegment: (seg) => {
+      calls.ingested.push(seg)
+      const rows = (seg && seg.rows) || []
+      return { applied: 1, rejected: 0, fromSeq: rows.length ? rows[0].seq : null, toSeq: rows.length ? rows[rows.length - 1].seq : null }
+    },
     buildSegments: (since) => { calls.buildSegmentsFrom.push(since); return [] },
     buildSnapshotRows: () => [],
     getMaxSeq: () => 100,
@@ -115,4 +120,21 @@ test('server-role: a snapshot-request while busy answers snapshot-busy and serve
   handle(peer, { type: 'snapshot-request' }, socket, (s, m) => socket._lanSend(m))
   assert.equal(socket.sent.length, 1)
   assert.equal(socket.sent[0].type, 'snapshot-busy')
+})
+
+test('S7: appliedToSeq comes from the engine-validated span, never the outer envelope toSeq', () => {
+  // The outer {fromSeq, toSeq} are pack-time wire values a corrupt/mismatched peer build can
+  // raise above the body's real max row. The receiver must ack only what ingestSegment actually
+  // validated and applied: 'the pull watermark never exceeds the highest seq actually applied'
+  // (docs/sync-matrix.md §5.3). Pre-fix acc.maxSeq took seg.toSeq at face value (99 here).
+  const { deps, calls } = stubDeps()
+  const handle = createServerRoleHandler(deps)
+  const socket = fakeSocket()
+  handle(peer, { type: 'segments-chunk', segments: [
+    // rows actually validated: seq 3 only; the envelope claims a span up to 99.
+    { fromSeq: 1, toSeq: 99, rows: [{ id: 'a', seq: 3 }] },
+  ], final: true }, socket, (s, m) => socket._lanSend(m))
+  const ack = socket.sent.find((m) => m.type === 'ack')
+  assert.equal(ack.appliedToSeq, 3, 'the ack reports the highest seq the engine actually applied (3), not the envelope 99')
+  void calls
 })

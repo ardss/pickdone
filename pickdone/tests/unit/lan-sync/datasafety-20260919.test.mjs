@@ -51,7 +51,10 @@ function makeNode (extra = {}) {
 test('P0-1: server role keeps appliedToSeq below a flush-failed segment and flags the ack', () => {
   const sent = []
   const handler = createServerRoleHandler({
-    ingestSegment: seg => (seg.body === 'poison' ? { applied: 0, rejected: 0, flushFailed: true } : { applied: 1, rejected: 0 }),
+    // S7 contract: the span rides the rows the mock "applied" (fixture rows below).
+    ingestSegment: seg => (seg.body === 'poison'
+      ? { applied: 0, rejected: 0, flushFailed: true, fromSeq: seg.fromSeq, toSeq: seg.toSeq }
+      : { applied: 1, rejected: 0, fromSeq: seg.fromSeq, toSeq: seg.toSeq }),
     buildSegments: () => [],
     serverSnapshotBusy: new Set(),
     serverPullAck: new Map(),
@@ -127,7 +130,7 @@ test('P1-2: a flush-failed pull segment keeps the pull watermark and arms the sn
   const port = await listen(server)
   const node = makeNode({
     dialFailureBudget: 1000,
-    ingestSegment: seg => { seen.ingested.push(seg); return { applied: 0, rejected: 0, flushFailed: true } },
+    ingestSegment: seg => { seen.ingested.push(seg); return { applied: 0, rejected: 0, flushFailed: true, fromSeq: seg.fromSeq, toSeq: seg.toSeq } },
   })
   node.start()
   await node.whenListening()

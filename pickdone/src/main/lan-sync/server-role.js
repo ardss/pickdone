@@ -73,8 +73,10 @@ function createServerRoleHandler(deps) {
           // failed segment's fromSeq (the sender keeps its watermark and re-pushes) and flag the
           // ack so the sender force-arms its snapshot trigger (recovery path).
           if (ing && ing.flushFailed) {
-            const fFrom = Number(seg && seg.fromSeq)
-            if (Number.isFinite(fFrom) && (acc.flushFailedFrom == null || fFrom < acc.flushFailedFrom)) acc.flushFailedFrom = fFrom
+            // S7: the cap comes from the engine-returned span (the rows it actually saw), not
+            // the outer envelope — same versioned contract as the client role below.
+            const fFrom = (ing && Number.isFinite(Number(ing.fromSeq))) ? Number(ing.fromSeq) : null
+            if (fFrom != null && (acc.flushFailedFrom == null || fFrom < acc.flushFailedFrom)) acc.flushFailedFrom = fFrom
             // Layer-2: arm the engine's recovery trigger toward THIS peer, too (previously the
             // server role armed nothing here — the sender's force-armed snapshot was the only
             // recovery path).
@@ -82,15 +84,15 @@ function createServerRoleHandler(deps) {
             continue
           }
           acc.segments += 1
-          // Wire envelopes are {body, fromSeq, toSeq}: the rows live INSIDE the packed body and
-          // seg.rows NEVER exists. The old per-row loop iterated nothing, so acc.maxSeq stayed 0
-          // and every ack omitted appliedToSeq — the sender's push watermark never advanced and
-          // the full retained oplog window was re-pushed EVERY round (the 2026-09-19 live 7-18s
-          // rounds). toSeq is the codec's highest-included seq for this segment (enforced by
-          // SegmentRange validation at pack time) — exactly the max row seq the loop meant to
-          // collect, in the SENDER's seq space.
-          const to = Number(seg && seg.toSeq)
-          if (Number.isFinite(to) && to > acc.maxSeq) acc.maxSeq = to
+          // S7 (2026-10-03): appliedToSeq is derived from the engine-returned span — the seq
+          // range ingestSegment actually validated and applied from the UNPACKED body — never
+          // from the outer envelope's fromSeq/toSeq wire fields (independent pack-time values a
+          // corrupt/mismatched peer build can desynchronize from the body). Invariant:
+          // 'the pull watermark never exceeds the highest seq actually applied'
+          // (docs/sync-matrix.md §5.3). An ingest that predates the span fields yields NO
+          // advance (no fallback to unvalidated envelope values).
+          const to = (ing && Number.isFinite(Number(ing.toSeq))) ? Number(ing.toSeq) : null
+          if (to != null && to > acc.maxSeq) acc.maxSeq = to
         }
           if (msg.final) {
             // The response pull travels through the SAME bounded chunking (the server's own

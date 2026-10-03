@@ -64,7 +64,7 @@ test('push/pull roundtrip: rows cross devices and merge', () => {
   assert.equal(segments.length, 1)
   assert.equal(toSeq, 2)
   const res = eb.ingestSegment(segments[0].body)
-  assert.deepEqual(res, { applied: 2, rejected: 0 })
+  assert.deepEqual(res, { applied: 2, rejected: 0, fromSeq: 1, toSeq: 2 })
   assert.equal(b.allRows().find((r) => r.id === 't1').title, 'hello')
 
   // reverse direction: B's own new op pushes back to A; oplog stays own-origin
@@ -73,12 +73,12 @@ test('push/pull roundtrip: rows cross devices and merge', () => {
   const back = eb.buildSegments()
   assert.equal(back.segments.length, 1)
   const res2 = ea.ingestSegment(back.segments[0].body)
-  assert.deepEqual(res2, { applied: 1, rejected: 0 })
+  assert.deepEqual(res2, { applied: 1, rejected: 0, fromSeq: 1, toSeq: 1 })
   assert.equal(a.allRows().find((r) => r.id === 't3').title, 'from B')
 
   // loopback: A ingesting its own segment is a no-op
   const loop = ea.ingestSegment(segments[0].body)
-  assert.deepEqual(loop, { applied: 0, rejected: 0 })
+  assert.deepEqual(loop, { applied: 0, rejected: 0, fromSeq: null, toSeq: null })
 })
 
 test('cursor crash semantics: unconfirmed push re-delivers everything', () => {
@@ -284,4 +284,30 @@ test('S2: a failed hydration truncates the delta — no segment claims a toSeq c
   for (const seg of second.segments) eb.ingestSegment(seg.body)
   assert.deepEqual(Object.fromEntries(b.allRows().map((r) => [r.id, r.title])),
     { u1: 'v', u2: 'v', u3: 'v', u4: 'v' }, 'the previously lost row converges')
+})
+
+test('S7: ingestSegment derives the seq span from the VALIDATED rows, never the outer envelope', () => {
+  // The outer {body, fromSeq, toSeq} wire fields are produced independently at pack time; a
+  // corrupt/mismatched peer build can raise toSeq above the body's real max row. The engine —
+  // not the receiver call sites — is the single source of the span: after ingest, the returned
+  // toSeq equals the actual max applied row seq, so a receiver advancing its pull watermark or
+  // appliedToSeq ack from it can NEVER exceed the highest seq actually applied
+  // (docs/sync-matrix.md §5.3).
+  const storeA = makeStore('span-a')
+  const a = createEngine({ localStore: storeA, deviceId: 'span-a' })
+  const b = createEngine({ localStore: makeStore('span-b'), deviceId: 'span-b' })
+  for (let i = 1; i <= 3; i++) storeA.append({ id: `sp${i}`, title: 'v', updatedAt: i })
+  const seg = a.buildSegments().segments[0]
+  const tampered = { ...seg, fromSeq: 0, toSeq: 999 } // envelope claims rows that were never sent
+  const r = b.ingestSegment(tampered)
+  assert.equal(r.toSeq, 3, 'the returned toSeq is the real max applied row seq, not the envelope value 999')
+  assert.equal(r.fromSeq, 1)
+  assert.equal(r.applied, 3)
+  // Loopback ingests report no span at all (nothing was applied).
+  const loop = a.ingestSegment(tampered)
+  assert.equal(loop.toSeq, null)
+  assert.equal(loop.applied, 0)
+  // An empty body yields a null span (nothing to advance over).
+  const empty = b.ingestSegment({ body: JSON.stringify({ v: 1, deviceId: 'span-a', fromSeq: 1, toSeq: 1, rows: [] }), fromSeq: 1, toSeq: 1 })
+  assert.equal(empty.toSeq, null)
 })

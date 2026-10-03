@@ -73,7 +73,10 @@ test('F1: a failing segment caps the final ack even when later segments run high
     deviceId: 'self-f1', pairingSecret: 's3cret', port: 0, host: '127.0.0.1',
     discoverFn: fakeDiscovery(),
     // Segment 4..5 fails its local flush (rows dropped); everything else applies.
-    ingestSegment: (seg) => (Number(seg && seg.toSeq) === 5 ? { flushFailed: true, applied: 0 } : { applied: 1 }),
+    // S7 contract: the mock carries the engine-derived span (failed segment is 4..5).
+    ingestSegment: (seg) => (Number(seg && seg.toSeq) === 5
+      ? { flushFailed: true, applied: 0, fromSeq: seg.fromSeq, toSeq: seg.toSeq }
+      : { applied: 1, fromSeq: seg.fromSeq, toSeq: seg.toSeq }),
     ingestSnapshot: () => {},
     buildSegments: () => [{ fromSeq: 1, toSeq: 1, deviceId: 'self-f1', rows: [{ id: 'x1', seq: 1 }] }],
   })

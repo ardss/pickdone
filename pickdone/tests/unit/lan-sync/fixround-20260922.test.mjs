@@ -226,7 +226,8 @@ test('R5: a rollback peer (low seqs, lower cursor) re-syncs instead of wedging f
   const node = createLanSyncNode({
     deviceId: 'self-r5', pairingSecret: 's3cret', port: 0, host: '127.0.0.1',
     discoverFn: fakeDiscovery(),
-    ingestSegment: () => ({ applied: 0 }),
+    // S7 contract: the mock carries the engine-derived span (the fixture push is 2..3).
+    ingestSegment: (seg) => ({ applied: 0, fromSeq: seg && seg.fromSeq, toSeq: seg && seg.toSeq }),
     ingestSnapshot: (snap) => snapshots.push(snap),
     buildSegments: () => [],
   })

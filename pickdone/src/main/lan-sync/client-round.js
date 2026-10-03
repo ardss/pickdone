@@ -424,18 +424,20 @@ function createClientRound(ctx) {
               // trigger (the oldest > wm+1 check could never fire again). The hole itself is what
               // must arm the trigger (see evaluateSnapshotTrigger). P0-1/P1-2: a flush-failed
               // segment keeps the watermark put as well (never advance over unapplied rows).
-              const from = Number(seg && seg.fromSeq)
-              const to = Number(seg && seg.toSeq)
-              if (Number.isFinite(from) && Number.isFinite(to)) {
+              // S7 (2026-10-03): from/to come from the ENGINE's returned span (the unpacked rows
+              // it actually validated), never from the outer envelope's wire fields — those are
+              // independent pack-time values a corrupt/mismatched peer build can desynchronize
+              // from the body, and advancing the watermark over them acks rows never received.
+              // An ingest without a span (predates the versioned engine contract) keeps the
+              // watermark put — no fallback to unvalidated envelope values.
+              const from = (r && Number.isFinite(Number(r.fromSeq))) ? Number(r.fromSeq) : null
+              const to = (r && Number.isFinite(Number(r.toSeq))) ? Number(r.toSeq) : null
+              if (from != null && to != null) {
                 if (!segFlushFailed) {
                   const wm = pullWatermarkBy.get(peer.deviceId) || 0
                   if (from <= wm + 1 && to > wm) pullWatermarkBy.set(peer.deviceId, to)
-                  // pullAckSeq must come from the ENVELOPE, not seg.rows: the wire shape is
-                  // {body, fromSeq, toSeq} — rows live inside the packed body and seg.rows never
-                  // exists (the old per-row loop collected nothing, so our acks never carried
-                  // appliedToSeq and the peer's serverPullAck never advanced — its pull response
-                  // re-sent the full oplog window every round). toSeq is the segment's highest
-                  // included seq in the PEER's seq space — same quantity the loop meant to take.
+                  // pullAckSeq comes from the engine-validated span (in the PEER's seq space) —
+                  // the ack is what the peer feeds into buildSegments(fromSeq) against ITS oplog.
                   if (to > pullAckSeq) pullAckSeq = to
                 } else {
                   // P0-1: a flush-failed segment is NOT acked — cap our appliedToSeq below it
@@ -445,8 +447,7 @@ function createClientRound(ctx) {
                   // a later segment with a higher toSeq used to re-raise pullAckSeq past the
                   // failure, so the final-chunk ack re-acked the failed segment's rows and the
                   // sender advanced its watermark over rows we actually dropped.
-                  const fFrom = Number.isFinite(from) ? from : 0
-                  if (roundFlushFailedFrom == null || fFrom < roundFlushFailedFrom) roundFlushFailedFrom = fFrom
+                  if (roundFlushFailedFrom == null || from < roundFlushFailedFrom) roundFlushFailedFrom = from
                   needSnapshot.add(peer.deviceId)
                   needSnapshotForce.add(peer.deviceId) // survives roundApplied > 0 (Wave-B P1)
                 }

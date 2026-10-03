@@ -92,7 +92,8 @@ test('P0-1: a wrong stored address re-resolves via discovery within the round an
   const ingestedA = []
   const nodeB = createLanSyncNode({
     deviceId: 'node-b', name: 'Node B', pairingSecret: 'sec-r1', port: 0, host: '127.0.0.1',
-    discoverFn: fakeDiscovery(), ingestSegment: () => ({ applied: 0 }),
+    // S7 contract: the mock returns the engine-derived span (A's only row is seq 1).
+    discoverFn: fakeDiscovery(), ingestSegment: () => ({ applied: 0, fromSeq: 1, toSeq: 1 }),
     buildSegments: () => [],
   })
   const nodeA = createLanSyncNode({
