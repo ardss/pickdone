@@ -54,6 +54,7 @@ const GROUPS = [
       ['命令总线单写门（渲染端写形 dbCall 直连=0,manifest↔db.OPS/白名单互查,refactor-command-bus P1）', 'node', ['cli/check-command-bus.cjs']],
       ['sync-matrix contract (docs/sync-matrix.md entities <-> SYNCABLE_ENTITIES/command manifest/DATA_CHANNEL_KINDS, both directions — silent drop-out of sync coverage bug class)', 'node', ['cli/check-sync-matrix.cjs']],
       ['双写台账（渲染端每个 localStorage 写点须声明权威源,防 LS 镜像与 DB 漂移——CLI/UI 联动 bug 根治防线）', 'node', ['cli/check-dualwrite.cjs']],
+      ['SCHEMA/MIGRATIONS 双清单收敛（todoToRow⊆SCHEMA、迁移补列⊆SCHEMA、运行时自愈兜底不得回潮——PA-3 静态拦截替代 db.js 启动补列）', 'node', ['cli/check-schema-manifests.cjs']],
       ['ESM 模块图（import/export 匹配——白屏级事故在门禁拦截）', 'node', ['cli/check-esm-graph.cjs']],
       ['i18n 全量', 'node', ['cli/check-i18n.js', '--all']],
       ['i18n 体系（缺失/占位符/双形态/异值/主进程）', 'node', ['renderer/js/i18n/check-i18n.mjs']],

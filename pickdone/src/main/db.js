@@ -383,26 +383,11 @@ function initInner (userDataPath) {
     const idr = db.prepare("SELECT value FROM settings_rows WHERE key='sync.deviceId'").get()
     if (idr && idr.value) setSyncAuthor(idr.value)
   } catch { /* settings_rows not ready: writes stay author-NULL until ensureIdentity */ }
-  // SCHEMA/MIGRATIONS dual-manifest decoupling backstop: if a future SCHEMA column addition is forgotten in MIGRATIONS, CREATE TABLE IF NOT EXISTS is
-  // a no-op for existing tables and the upsert prepare dies at startup referencing the missing column. Here, probe and add columns uniformly via PRAGMA
-  // based on todoToRow's real column set (NOT NULL columns get default values)
-  {
-    const want = Object.keys(todoToRow({ taskId: '' }))
-    const have = new Set(db.prepare('PRAGMA table_info(todos)').all().map(c => c.name))
-    for (const col of want) {
-      if (!have.has(col)) {
-        const def = todoToRow({ taskId: '' })[col]
-        const sqlDefault = typeof def === 'number' ? def
-          : typeof def === 'boolean' ? (def ? 1 : 0)
-          : typeof def === 'string' ? `'${def.replace(/'/g, "''")}'`
-          : 'NULL'
-        const affinity = typeof def === 'number' || typeof def === 'boolean' ? 'INTEGER' : 'TEXT'
-        db.exec(`ALTER TABLE todos ADD COLUMN ${col} ${affinity} DEFAULT ${sqlDefault}`)
-        log.warn('[TodoDB] 探测补列(迁移清单漏登记兜底):', col)
-      }
-    }
-  }
-
+  // PA-3: the SCHEMA/MIGRATIONS dual-manifest self-healing backstop (probe + silent ALTER of
+  // missing todoToRow columns) was DELETED, not replaced by another runtime guard. A missed
+  // manifest registration now fails red at CI (cli/check-schema-manifests.cjs, executed by the
+  // unit suite) and, if it ever slipped through, dies loudly at the upsert prepare below —
+  // schema drift must never silently ALTER itself away on the shared main/CLI startup path.
   // ===== Encryption finalization (runs after schema migration completes) =====
   // The key is stored as db.key in the same directory (the CLI opening in the same directory is automatically compatible). Threat model: prevents the single todos.db file from being read directly by sync drives/copies/forensic tools; the key lives on the same machine, so "entire userData readable" is not covered. Both fresh installs (empty DB) and existing DBs (after schema migration) reach here and uniformly switch to the encrypted state.
   if (!hadKeyFile) {
