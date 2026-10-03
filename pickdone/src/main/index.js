@@ -632,7 +632,13 @@ const quitAckGone = new WeakMap()
 app.on('before-quit', () => {
   // Second pass (the re-issued app.quit() below): the DB is already closed, re-broadcasting the flush
   // would only be a dead letter — renderer invokes would fail against a closed handle.
-  if (flushDone) return
+  // TQ-7 (2026-10-03): the singleton-winner-only quit-chain invariant is now enforced by ONE shared
+  // predicate in BOTH chained quit phases. before-quit used to guard on flushDone alone while
+  // will-quit consulted shouldRunQuitFlush({ranFullInit,...}) — the acting phase was the unguarded
+  // one, so any side effect added here (announceIdleForQuit, shipQuitRound, flush broadcast, and
+  // state.quitByUser itself) executed in a singleton-lock loser the will-quit guard explicitly
+  // declares must not run the chain. Split-guard root removed: one predicate, both phases.
+  if (!shouldRunQuitFlush({ ranFullInit, flushDone, quitting })) return
   state.quitByUser = true
   // Running-tomato announcement: flip this device's announce to idle BEFORE the sync node stops
   // (P1-7 2026-09-19 UX review: the old order ran stopSyncForQuit first, so the idle write's

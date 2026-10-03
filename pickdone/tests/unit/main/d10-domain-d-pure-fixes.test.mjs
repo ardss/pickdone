@@ -100,3 +100,21 @@ test('d10: shouldRunQuitFlush — second instance short-circuits the quit-flush 
   assert.equal(shouldRunQuitFlush({ ranFullInit: true, flushDone: true, quitting: false }), false, 'flush done: passthrough')
   assert.equal(shouldRunQuitFlush({ ranFullInit: true, flushDone: false, quitting: true }), false, 'flush window already open')
 })
+
+/* ---- TQ-7 (2026-10-03): the singleton-winner-only invariant is enforced in BOTH quit phases ----
+ * index.js cannot be require()d under plain node (Electron bootstrap), so the before-quit entry
+ * itself is out of reach; the regression anchors the SOURCE: before-quit must gate on the shared
+ * predicate, not on the bare flushDone flag that let a singleton-lock loser run the acting phase. */
+test('tq7: before-quit shares the shouldRunQuitFlush predicate (no bare flushDone guard left)', async () => {
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const { dirname, join } = await import('node:path')
+  const root = join(dirname(fileURLToPath(import.meta.url)), '../../..')
+  const src = readFileSync(join(root, 'src/main/index.js'), 'utf8')
+  const beforeQuit = src.slice(src.indexOf("app.on('before-quit'"), src.indexOf("app.on('window-all-closed'"))
+  assert.ok(beforeQuit.length > 0, 'before-quit handler located')
+  assert.ok(beforeQuit.includes('shouldRunQuitFlush({ ranFullInit, flushDone, quitting })'),
+    'before-quit gates on the shared predicate — the acting quit phase enforces the same singleton-winner contract as will-quit')
+  assert.ok(!beforeQuit.includes('if (flushDone) return'),
+    'no bare flushDone guard: the split-guard root (acting phase unguarded) is removed')
+})
