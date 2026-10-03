@@ -439,6 +439,10 @@ function purgePendingAppends (ids) {
  *      so they retire here exactly as before. */
 const REJECTED_LEDGER_KEY = 'tomatoRejectedLedgerRows'
 const REJECTED_LEDGER_CAP = 100
+// TQ-4 (2026-10-03): same capped-quarantine policy for the snow queue's structurally-terminal
+// bumpSnow refusals ({ok:false, reason:'deleted'|'missing'}) — one settlement contract.
+const REJECTED_SNOW_KEY = 'tomatoRejectedSnowEntries'
+const REJECTED_SNOW_CAP = 100
 function quarantineRejectedRows (res, params) {
   if (!res || !Array.isArray(res.rejected) || !res.rejected.length) return
   logRejectedRows(res, params)
@@ -521,6 +525,26 @@ function settleSnowEntry (entry, res) {
       _pendingSnow.splice(i, 1)
       removePendingEntry(entry, PENDING_SNOW_PREFIX) // TQ-2: delete-own-key
     }
+    return
+  }
+  // TQ-4 (2026-10-03): the two durable queues share ONE settlement contract. The ledger queue
+  // already implemented "permanently-unacceptable → durable quarantine + retire"; the snow queue
+  // retried everything except ok:true, so db.bumpSnow's STRUCTURALLY-TERMINAL refusals
+  // ({ok:false, reason:'deleted'|'missing'} — the UPDATE runs WHERE id=@taskId AND deleted=0, so
+  // a hard-deleted/missing task can NEVER accept the bump) replayed forever: monotonic queue
+  // growth across restarts plus a dbCall round-trip + error line on every future snowWrite.
+  // Terminal refusals are quarantined durably (same capped shape as tomatoRejectedLedgerRows,
+  // through the same shared primitive) and retired; falsy/throw/unknown shapes stay retryable.
+  if (res && res.ok === false && (res.reason === 'deleted' || res.reason === 'missing')) {
+    // Quarantine BEFORE retirement (TQ-6 ordering): if the quarantine write throws, the entry
+    // stays pending — retirement requires the data to exist durably somewhere.
+    quarantineAppend(REJECTED_SNOW_KEY, REJECTED_SNOW_CAP, { ts: Date.now(), reason: res.reason, params: entry.params })
+    const i = _pendingSnow.indexOf(entry)
+    if (i >= 0) {
+      _pendingSnow.splice(i, 1)
+      removePendingEntry(entry, PENDING_SNOW_PREFIX)
+    }
+    console.error('[tomato] bumpSnow permanently refused (quarantined, retired):', res.reason, entry.params)
     return
   }
   console.error('[tomato] bumpSnow not credited (kept for retry):', (res && res.reason) || String(res), entry.params)

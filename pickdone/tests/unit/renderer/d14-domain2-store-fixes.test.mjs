@@ -142,13 +142,15 @@ test('C1 falsy resolution (no bridge / undefined result) keeps the entry queued'
 
 /* ==================== C2: snow queue keeps non-accepted results ==================== */
 
-test('C2 bumpSnow {ok:false} keeps the entry; ok:true (incl. deduped echo) retires it', async () => {
+test('C2 bumpSnow: retryable failure keeps the entry; ok:true (incl. deduped echo) retires it', async () => {
   assert.ok(pendingSnowEntries().some(e => e.params.taskId === 't9'), 'seeded snow entry hydrated')
-  bumpResult = { ok: false, reason: 'deleted' }
+  // TQ-4: 'deleted' is a STRUCTURALLY-TERMINAL refusal (quarantined + retired — see its own test);
+  // a transient/unknown non-accepted shape stays the retryable set.
+  bumpResult = { ok: false, reason: 'unknown' }
   fireQuitFlush()
   await tick()
   assert.ok(pendingSnowEntries().some(e => e.params.taskId === 't9'),
-    'a structured non-accepted bump result is a failure — the entry stays queued')
+    'a non-terminal non-accepted bump result is a failure — the entry stays queued')
   bumpResult = { ok: true, minutes: 0, deduped: true } // replay echo: already credited → retire
   fireQuitFlush()
   await tick()
