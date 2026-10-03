@@ -100,6 +100,9 @@ interface TodoAPI {
   purgeRecycleBin: (...args: any[]) => any
   purgeSeedTodos: (...args: any[]) => any
   pushTomatoTaskbar: (...args: any[]) => any
+  tomatoRunningSession: (...args: any[]) => any
+  tomatoClaimPhase: (...args: any[]) => any
+  tomatoReleasePhase: (...args: any[]) => any
   quickAddHide: (...args: any[]) => any
   quitAndInstall: (...args: any[]) => any
   readAutoBackup: (...args: any[]) => any
