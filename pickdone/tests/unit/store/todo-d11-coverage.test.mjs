@@ -109,7 +109,11 @@ test('actions.updateTodoFields: dependency cycle is rejected; missing task is a 
     'a→b→a closes a loop and must throw'
   )
   const missing = await todoMod.actions.updateTodoFields.call(a.storeThis, a.ctx, { taskId: 'ghost', patch: { taskContent: 'x' } })
-  assert.equal(missing, undefined)
+  // Reconciled with TL-5 (c715ffc2): the memory-miss no-op grew a STRUCTURED result at the single
+  // resolveForEdit choke point — { notFound: true, taskId } — so callers can surface the miss
+  // instead of mistaking it for a successful edit of a real row. The row must still be untouched.
+  assert.deepEqual(missing, { notFound: true, taskId: 'ghost' })
+  assert.ok(!a.state.todoList.some(r => r.taskId === 'ghost'), 'no ghost row is materialized')
   const at = new Date().getTime() + 86400000
   const moved = await todoMod.actions.updateTodoFields.call(a.storeThis, a.ctx, { taskId: 'a', patch: { todoTime: at } })
   assert.equal(moved.dayStart, +globalThis.window.dayjs(at).startOf('day'), 'dayStart follows todoTime in memory too')

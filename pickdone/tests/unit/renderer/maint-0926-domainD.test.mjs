@@ -281,10 +281,13 @@ test('[C5] the 60s day-rollover/computeViews interval runs in the main shell onl
 
 test('[C15] deleteTodoFilesRelevant failures are reported, not swallowed by an empty catch', () => {
   const todo = read('renderer/js/store/todo.js')
-  assert.doesNotMatch(todo, /deleteTodoFilesRelevant\?\.\(id\) \} catch \{\}/, 'purgeIds: no empty catch left')
-  assert.doesNotMatch(todo, /deleteTodoFilesRelevant\?\.\(id\) \} catch \{\}/, 'purgeAllRecycle: no empty catch left')
-  const hits = todo.match(/reportError\('deleteTodoFilesRelevant', err\)/g) || []
-  assert.equal(hits.length, 2, 'both purge paths (per-item + empty-bin) report cleanup failures')
+  // Reconciled with the batched IPC (4fd083b6): both purge paths now call the batch twin
+  // deleteTodoFilesMany (one readdir per purge) instead of per-item deleteTodoFilesRelevant.
+  // The invariant is unchanged — EVERY purge-path attachment-cleanup call reports its failure;
+  // none may hide behind an empty catch.
+  assert.doesNotMatch(todo, /deleteTodoFiles(?:Relevant|Many)\?\.\(ids?\) \} catch \{\}/, 'no purge cleanup call hides behind an empty catch')
+  const hits = todo.match(/reportError\('deleteTodoFilesMany', err\)/g) || []
+  assert.equal(hits.length, 2, 'both purge paths (batch + empty-bin) report cleanup failures')
 })
 
 /* ================= [tags-drag] SnManageTagsModal stops advertising a nonexistent reorder ===== */
