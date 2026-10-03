@@ -14,7 +14,7 @@
             </ul>
             <template #reference>
               <span class="tip-icon tip-q" role="button" tabindex="0" :aria-label="$t('statsC.Completed.tipAria')"
-                    @keydown.enter.prevent="triggerTip($event)">?</span>
+                    @keydown="onTipKey">?</span>
             </template>
           </el-popover>
         </div>
@@ -72,6 +72,7 @@
 import TodoItem from '../components/TodoItem.vue'
 import EmptyState from '../components/EmptyState.vue'
 import { buildCompletedBuckets } from '../utils/buckets.js'
+import { roleButtonActivate } from '../utils/roleButtonKey.js'
 
 import { toggleCompleteWithUndo } from '../utils/completeAction.js'
 
@@ -92,6 +93,8 @@ export default {
     isCol (key) { return !!this.collapsedMap[key] },
     // TS cast lives here: the structure guard rejects `as` expressions inside templates
     triggerTip (e) { (e.currentTarget as HTMLElement).click() },
+    // [D15-A13] ARIA button pattern on the tip widget: Space activates too (was Enter-only)
+    onTipKey: roleButtonActivate(function (e) { this.triggerTip(e) }),
     toggleCol (key) { this.collapsedMap = { ...this.collapsedMap, [key]: !this.collapsedMap[key] } },
     toggleAllGroups () {
       const expand = this.anyCollapsed

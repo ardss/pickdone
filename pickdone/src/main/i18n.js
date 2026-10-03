@@ -77,7 +77,8 @@ const MESSAGES = {
     lockTitle: '应用已锁定',
     lockPlaceholder: '输入密码解锁',
     lockUnlock: '解锁',
-    lockWrongPassword: '密码错误'
+    lockWrongPassword: '密码错误',
+    quarantineBody: '配置文件（config.json）已损坏且无法读取，原文件已保留为 config.json.bad。本次会话的设置已重置，应用锁也已停用，如需要请重新开启。'
   },
   'en-US': {
     appName: 'PickDone',
@@ -126,15 +127,20 @@ const MESSAGES = {
     lockTitle: 'App locked',
     lockPlaceholder: 'Enter password to unlock',
     lockUnlock: 'Unlock',
-    lockWrongPassword: 'Wrong password'
+    lockWrongPassword: 'Wrong password',
+    quarantineBody: 'Your config file (config.json) was corrupted and could not be read. The previous file was preserved as config.json.bad. Settings are reset for this session and the security lock is disabled until you re-enable it.'
   }
 }
 
-function mt (key, params) {
-  const dict = MESSAGES[currentLocale()] || MESSAGES['zh-CN']
+// Resolve a message for an explicit locale (falling back to zh-CN), so callers that already
+// know the target locale (e.g. notice builders passed a locale) skip currentLocale resolution.
+function mtIn (locale, key, params) {
+  const dict = MESSAGES[normalizeLocale(locale)] || MESSAGES['zh-CN']
   let v = dict[key] !== undefined ? dict[key] : (MESSAGES['zh-CN'][key] !== undefined ? MESSAGES['zh-CN'][key] : key)
   if (params) v = String(v).replace(/\{(\w+)\}/g, (m, p) => params[p] !== undefined ? params[p] : m)
   return v
 }
 
-module.exports = { mt, setLocale, currentLocale, normalizeLocale }
+function mt (key, params) { return mtIn(currentLocale(), key, params) }
+
+module.exports = { mt, mtIn, setLocale, currentLocale, normalizeLocale }

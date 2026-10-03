@@ -88,7 +88,7 @@ import { dayjs, FMT } from '../../utils/core.js'
 import { confirmRecycleClear } from '../../utils/confirm.js'
 import { loadRuntime } from '../../store/helpers/runtimeState.js'
 import { commit as commitCommand } from "../../utils/commandBus.js"
-import { SCHEMA_V } from '../../store/helpers/todoBackup.js'
+import { SCHEMA_V, describeDegradedSegments } from '../../store/helpers/todoBackup.js'
 import { repeatRuleMetaKeys, ruleMapFromMetaRows, repeatRuleCell } from '../../utils/exportRepeatRules.js'
 import { invalidateEstimateCache } from '../../utils/tomatoEstimate.js'
 
@@ -113,8 +113,11 @@ function restoreStampLww (row, now) {
 }
 
 /** metaState (2026-09-26): only these meta-key surfaces are restorable — same whitelist as the
- *  startup path (dbRecovery.META_RESTORE_PREFIXES). Transient keys (catProjectMetaBak.*,
- *  pending markers, todosVersion) are deliberately excluded. */
+ *  startup path (dbRecovery.META_RESTORE_PREFIXES) and the same families the collector
+ *  (todoBackup.metaStateKeys) gathers. D15-B3/B4 added `userTags` + `projectDocs:` to all three
+ *  sites in lockstep; tests/unit/main/d15-backup-restore-chain.test.mjs drift-guards the trio.
+ *  Transient keys (catProjectMetaBak.*, catFiltersBak.*, pending markers, todosVersion) are
+ *  deliberately excluded. */
 const META_RESTORE_PREFIXES = [
   'repeatRule:',
   'tomatoEstimateState:',
@@ -123,7 +126,9 @@ const META_RESTORE_PREFIXES = [
   'projectStatus:',
   'projectCategoryFlag:',
   'projectMilestones:',
-  'projectCategoryIds'
+  'projectDocs:',
+  'projectCategoryIds',
+  'userTags'
 ]
 
 export default {
@@ -466,6 +471,16 @@ export default {
       try { await this.restoreSavedFilters(b) } catch (e) { console.error('[settings] restore segment failed: filters', e); failed.push('filters') }
       try { await this.restorePlanChips(b) } catch (e) { console.error('[settings] restore segment failed: planChips', e); failed.push('planChips') }
       try { await this.restoreMetaState(b) } catch (e) { console.error('[settings] restore segment failed: metaState', e); failed.push('metaState') }
+      // [Sync-13 reader, restore-degraded-segments-marker-never-consumed]: dump.backup.degradedSegments
+      // non-empty = the collector FAILED for the named segments when the backup was WRITTEN, so those
+      // data surfaces are simply absent from the dump. Honesty surface, never a gate — the restore
+      // itself is still a success; warn non-blocking after reportRestoreResult so the toast chain
+      // stays intact. (Clean dumps and pre-Sync-13 backups: marker absent, nothing is shown.)
+      const degraded = describeDegradedSegments(b.degradedSegments)
+      if (degraded) {
+        console.warn('[settings] restore: backup was written with degraded collection — missing segments:', degraded)
+        this.$message.warning('Backup missing segments (failed to collect when the backup was written): ' + degraded)
+      }
       this.$store.dispatch('_rt/refreshFromDb')
       this.$store.dispatch('tomato/recordsReload').catch(e => console.error('[settings] tomato/recordsReload after restore failed:', e))
       this.reportRestoreResult(rows.length + habitCount, failed) // F6: habits counted honestly

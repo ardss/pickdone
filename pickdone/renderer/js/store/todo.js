@@ -5,7 +5,10 @@
 import { genTaskId, nextSort, dayjs, reportError, parsePredecessors } from '../utils/core.js'
 import { wouldCycle, isTaskReady } from '../utils/deps.js'
 import { nextRepeatInstance, isLastRepeatInstance, renewalCarryFields } from '../utils/repeat.js'
-import { setEstimate } from '../utils/tomatoEstimate.js'
+import { setEstimate, pruneEstimatesForPurged } from '../utils/tomatoEstimate.js'
+// D15-B2 (2026-10-03): renewal estimate semantics come from the SHARED estimate core — the same
+// clamp the CLI twin (cli/lib.js renewal, getEstimateOf → clampEstimate) enforces on its side.
+import { clampEstimate } from '../../../shared/estimate-core.mjs'
 import { clearSnapshot } from '../utils/dayPlans.js'
 import { scrubMilestonesForPurged } from '../utils/milestones.js'
 // Cross-cutting concerns, physically split out of this module (pure relocation — the store's action
@@ -14,7 +17,7 @@ import { enqueueChipSync, rowChipSync, planSnapshotRowSync, snapshotForDelete, s
 import { historyPush, historyPushKeepRedo, historyClear, historyBreakMerge, historyUndoPop, historyRedoPop, historyRedoPush, historyBarrierCore, undoStep, redoStep, persistSnapshotDiffCore } from './helpers/undo.js'
 import { writeEventBackupCore, writeAutoBackupCore, writeCriticalBackupCore } from './helpers/todoBackup.js'
 import { commit as commitCommand } from "../utils/commandBus.js"
-import { safeUpsert, flushPendingUpserts, queuePendingUpsert, pendingUpserts, supersedePendingRow } from './helpers/todoPendingUpserts.js'
+import { safeUpsert, flushPendingUpserts, queuePendingUpsert, pendingUpserts, supersedePendingRow, adoptDuplicateWinnerRow } from './helpers/todoPendingUpserts.js'
 import { DEFAULT_VIEWS, VIEW_AFFECTING_FIELDS, VIEWS_DEBOUNCE_MS, deproxyRows } from './helpers/todoViews.js'
 import { snapshotString } from './helpers/snapshotString.js'
 // View-computation + sync cores (pure relocation, structure-size ratchet — actions below are thin wrappers)
@@ -248,11 +251,13 @@ export default {
           if (/UNIQUE constraint failed/.test(String((e && e.message) || e))) {
             commit('removeLocal', t.taskId)
             try {
-              const existing = await window.todoAPI.dbCall('queryTodos', { deleted: 0, repeatId, dayStartFrom: targetDay, dayStartTo: targetDay })
-              if (Array.isArray(existing) && existing.length) {
-                commit('upsertLocal', existing[0])
+              // [TL-1] the adopt-the-winner routine is the shared adoptDuplicateWinnerRow (todoPendingUpserts.js) —
+              // the same query the quit-flush replay uses to convert a UNIQUE-loser entry
+              const existing = await adoptDuplicateWinnerRow(t)
+              if (existing) {
+                commit('upsertLocal', existing)
                 dispatch('computeViews')
-                return existing[0] // the other trigger's instance wins; both callers resolve to the same row
+                return existing // the other trigger's instance wins; both callers resolve to the same row
               }
             } catch (e2) { /* fall through to the queued-retry path below */ }
           }
@@ -277,11 +282,12 @@ export default {
         if (wouldCycle(state.todoList, taskId, next)) throw new Error('dependency-cycle')
         patch.predecessors = next.length ? JSON.stringify(next) : null
       }
-      const all = [...state.todoList, ...state.recycleList]
-      const i = all.findIndex(t => t.taskId === taskId)
-      if (i < 0) return
-      const prevDayStart = all[i].dayStart // capture BEFORE upsertLocal mutates the row in place: the chip-sync job runs in a microtask and must migrate from the day the task is leaving
-      const merged = { ...all[i], ...patch, updateTime: Date.now(), status: 'update' }
+      // [TL-5] durable-store existence authority: a memory miss resolves once via getById — the
+      // row may exist in the DB but not yet in this window's memory (broadcast reload window).
+      const raw = await resolveForEdit(state, taskId)
+      if (raw.notFound) return raw // structured not-found: callers see the rejection, not a fake success
+      const prevDayStart = raw.dayStart // capture BEFORE upsertLocal mutates the row in place: the chip-sync job runs in a microtask and must migrate from the day the task is leaving
+      const merged = { ...raw, ...patch, updateTime: Date.now(), status: 'update' }
       delete merged.deleting
       // When the due date changes, sync the derived field dayStart, consistent with the main process's persistence logic (db.js:124);
       // otherwise the task stays in the old group in memory until restart
@@ -303,7 +309,7 @@ export default {
       // Schedule chips follow (after the storage-layer root fix, via db row ops, broadcast-driven full-end sync): reschedule → migrate; remove date/delete → clear.
       // Placed after commit, based on merged (new state); serialized per taskId to prevent migration disorder from EditPanel's 350ms debounced bursts
       if (patch.todoTime !== undefined || patch.delete === true) {
-        enqueueChipSync(all[i].taskId, () => rowChipSync(all[i].taskId, prevDayStart, merged))
+        enqueueChipSync(raw.taskId, () => rowChipSync(raw.taskId, prevDayStart, merged))
       }
       dispatch('writeCriticalBackup')
       return unlocked ? Object.assign({}, merged, { _unlocked: unlocked }) : merged
@@ -314,9 +320,22 @@ export default {
       if (target) {
         // dependency linkage: completing this task may unlock dependents — attach their names so the completion toast can mention it
         try {
-          const newlyReady = state.todoList.filter(t => !t.delete && !t.complete &&
-            parsePredecessors(t.predecessors).includes(todo.taskId) &&
-            isTaskReady(state.todoList.map(x => x.taskId === t.taskId ? { ...x } : x), t))
+          // Perf (toggle-complete dep scan): one O(N) pass parses each row's predecessors ONCE and
+          // feeds both the reverse-dependents index and the readiness check — the old shape ran
+          // ~N + D parsePredecessors invocations per toggle (filter re-parse + isTaskReady re-parse
+          // per dependent) and rebuilt an O(N) byId map for every candidate dependent. The scan
+          // runs BEFORE any mutation, so reading rows directly (no defensive {...x} copy) keeps
+          // the output identical.
+          const live = state.todoList
+          const byId = {}
+          const predsByRow = new Map()
+          for (const x of live) {
+            if (!x.delete) byId[x.taskId] = x
+            predsByRow.set(x, parsePredecessors(x.predecessors))
+          }
+          const newlyReady = live.filter(t => !t.delete && !t.complete &&
+            predsByRow.get(t).includes(todo.taskId) &&
+            isTaskReady(live, t, { byId, predsOf: r => predsByRow.get(r) }))
           if (newlyReady.length) patch._unlocked = newlyReady.map(t => t.taskContent || t.taskId)
         } catch { /* dep info is advisory; never block completion */ }
       }
@@ -363,6 +382,18 @@ export default {
       const next = nextRepeatInstance(completedTodo, group, rule, this.state.todo.holidayList || [])
       if (!next) return
       const t = completedTodo
+      // D15-B2 (2026-10-03): read the LIVE per-task meta estimate for the instance being renewed —
+      // same semantic as the CLI twin (cli/lib.js:436-439). The row's estimate COLUMN is dead
+      // post-X2 (bumpSnow writes accumulated focus minutes into it), so seeding the renewal with
+      // `t.estimate || 0` turned "focused 150 min" into an estimate of 20 (clamped) tomatoes and
+      // synced that pollution to the new instance's meta key. Per-task meta key first; the stale
+      // column only as a legacy fallback; everything clamped to the 0..20 storage domain.
+      let renewalEstimate = t.estimate || 0
+      try {
+        const live = await window.todoAPI.dbCall('getMeta', 'tomatoEstimateState:' + t.taskId)
+        if (live !== null && live !== undefined && live !== '') renewalEstimate = Number(live) || 0
+      } catch (e) { /* read failure: keep the column fallback, clamp below decides */ }
+      renewalEstimate = clampEstimate(renewalEstimate)
       // Single source: carried attributes (D5 parity set — the renewal used to drop priority/deadlineTs/
       // important/urgent, `t.x || 0` semantics), mapped onto addTodo's todoX argument names
       const carry = renewalCarryFields(t, next)
@@ -379,7 +410,7 @@ export default {
         deadlineTs: carry.deadlineTs,
         important: carry.important,
         urgent: carry.urgent,
-        estimate: t.estimate || 0,
+        estimate: renewalEstimate,
         repeatId: carry.repeatId,
         todoSublist: t.subtasks ? (function(){try{return JSON.parse(t.subtasks)}catch{return[]}})().map(x => ({ ...x, checked: false })) : null,
         addToTop: false
@@ -388,7 +419,7 @@ export default {
       // ignores it for existing-style reasons) — the live value lives in the per-task meta key
       // `tomatoEstimateState:<taskId>` (the field-granular syncable unit). Copy it there so the renewal
       // keeps its estimated workload on BOTH ends (CLI twin: cli/lib.js renewal — F-Main's commit).
-      try { if (nt && nt.taskId) setEstimate(nt.taskId, t.estimate || 0) } catch (e) { /* estimate is advisory */ }
+      try { if (nt && nt.taskId) setEstimate(nt.taskId, renewalEstimate) } catch (e) { /* estimate is advisory */ }
       return nt
     },
     async reorderTodos ({ commit, dispatch }, updates) {
@@ -396,9 +427,18 @@ export default {
       // Look up within a single table-building loop: previously each update copied the whole table + findIndex; batch-sorting a thousand entries was O(n·u) ≈ millions of comparisons, janking one frame
       const index = new Map([...this.state.todo.todoList, ...this.state.todo.recycleList].map(t => [t.taskId, t]))
       const rows = []
+      const notFoundIds = []
       for (const u of updates) {
-        const raw = index.get(u.taskId)
-        if (!raw) continue
+        // [TL-5] durable-store existence authority: a memory miss resolves once via getById —
+        // an external (peer/CLI) row the broadcast reload has not delivered yet is still editable.
+        let raw = index.get(u.taskId)
+        if (!raw) {
+          const r = await resolveForEdit(this.state.todo, u.taskId)
+          if (r.notFound) { notFoundIds.push(u.taskId); continue }
+          commit('upsertLocal', r)
+          index.set(u.taskId, r)
+          raw = r
+        }
         // [reorder-only no-LWW-re-age fix] a row whose taskSort did not actually change keeps its
         // stamps: re-aging it (fresh updateTime + status='update') made a pure drag-reorder win
         // LWW over a peer's concurrent CONTENT edit of the same row and silently revert it.
@@ -407,7 +447,7 @@ export default {
         commit('upsertLocal', merged)
         rows.push(merged)
       }
-      if (!rows.length) return
+      if (!rows.length) return { applied: 0, notFound: notFoundIds } // [TL-5] not-found ids surface instead of a silent fake success
       // Same pending-queue guarantee as safeUpsert: a transient IPC/db failure must not silently drop the
       // whole batch (the rows were already re-sorted in memory, so a lost write resurfaces as a wrong order
       // after restart). flushPendingUpserts replays any queued op verbatim, 'upsertMany' included.
@@ -427,9 +467,9 @@ export default {
     async deleteTodo ({ commit, dispatch, rootState }, todo) {
       // Discrete op: break the 400ms undo merge so following edits don't fuse into the delete step
       commit('historyBreakMerge')
-      const all = [...this.state.todo.todoList, ...this.state.todo.recycleList]
-      const raw = all.find(t => t.taskId === todo.taskId)
-      if (!raw) return
+      // [TL-5] durable-store existence authority (same resolveForEdit choke point as updateTodoFields)
+      const raw = await resolveForEdit(this.state.todo, todo.taskId)
+      if (raw.notFound) return raw
       // The deleted task is bound by tomato focus: detach first, otherwise after focus completes the record is booked to a taskId in the recycle bin
       if (rootState.tomato && rootState.tomato.attachTodo && rootState.tomato.attachTodo.taskId === todo.taskId) {
         dispatch('tomato/attach', null, { root: true })
@@ -462,14 +502,23 @@ export default {
       const now = Date.now()
       const rows = []
       const ids = []
+      const notFoundIds = []
       for (const todo of (todos || [])) {
-        const raw = index.get(todo && todo.taskId)
-        if (!raw) continue
+        // [TL-5] durable-store existence authority (same resolveForEdit choke point): an id the
+        // broadcast reload has not delivered yet is still deletable from the durable store.
+        let raw = index.get(todo && todo.taskId)
+        if (!raw) {
+          const r = await resolveForEdit(this.state.todo, todo && todo.taskId)
+          if (r.notFound) { notFoundIds.push(todo && todo.taskId); continue }
+          commit('upsertLocal', r)
+          index.set(r.taskId, r)
+          raw = r
+        }
         ids.push(raw.taskId)
         // version reset to 0: same re-delete-after-restore sync semantics as deleteTodo
         rows.push({ ...raw, delete: true, deleting: true, deletedAt: now, updateTime: now, status: 'delete', version: 0 })
       }
-      if (!rows.length) return []
+      if (!rows.length) { if (notFoundIds.length) console.warn('[todo] deleteTodosMany: ids absent from both memory and the durable store:', notFoundIds); return [] }
       // Single pre-batch snapshot (same shape the before-hook pushes for deleteTodo); round-3 perf:
       // fragment-cache stringify, byte-identical to the old whole-table one (helpers/snapshotString.js)
       const snap = this.state.todo
@@ -494,6 +543,7 @@ export default {
       try { await snapshotForDeleteMany(ids) } catch (e) { console.warn('[todo] failed to batch-snapshot chips for deleted tasks:', e) }
       dispatch('computeViews')
       dispatch('writeCriticalBackup')
+      if (notFoundIds.length) console.warn('[todo] deleteTodosMany: ids absent from both memory and the durable store:', notFoundIds) // [TL-5] surfaced, not silently skipped
       return ids
     },
 
@@ -547,19 +597,35 @@ export default {
       // Permanently deleted tasks still bound by focus: detach (same as deleteTodo)
       const at = rootState.tomato && rootState.tomato.attachTodo
       if (at && ids.includes(at.taskId)) dispatch('tomato/attach', null, { root: true })
-      // Delete per id and remove locally only the successful ones: Promise.all swallowing errors then hardRemove-ing the whole batch once let failed ids "revive" back into the recycle bin after restart
-      const done = []
-      for (const id of ids) {
-        try { await commitCommand("todo", "hardDelete", id); done.push(id); clearSnapshot(id) } catch (err) { reportError('hardDelete', err) }
+      // Delete per id and remove locally only the successful ones: Promise.all swallowing errors then hardRemove-ing the whole batch once let failed ids "revive" back into the recycle bin after restart.
+      // Perf (purge batch): one hardDeleteMany commit replaces the per-id hardDelete loop — the
+      // server-side bulk op already GCs chips/snow/estimate meta keys per id and returns only the
+      // PHYSICALLY deleted ids (absent ids excluded, same per-id honesty as the old loop). If the
+      // bulk op rejects wholesale (older host / bus error), fall back to the per-id loop so the
+      // failure isolation is preserved.
+      let done = []
+      try {
+        const deleted = await commitCommand("todo", "hardDeleteMany", ids)
+        if (!Array.isArray(deleted)) throw new Error('hardDeleteMany returned no per-id result — falling back to per-id hardDelete')
+        done = deleted.map(String)
+        for (const id of done) clearSnapshot(id)
+      } catch (err) {
+        reportError('hardDeleteMany', err)
+        for (const id of ids) {
+          try { await commitCommand("todo", "hardDelete", id); done.push(id); clearSnapshot(id) } catch (e) { reportError('hardDelete', e) }
+        }
       }
       // [C15 fix] the empty catch here silently orphaned attachment files on disk when cleanup failed
       // (main throws a structured per-file failure list). Log it like the adjacent hardDelete failures;
       // rows are already hard-deleted, so the purge (and the mandatory historyClear below) still proceeds.
-      try { for (const id of done) await window.todoAPI.deleteTodoFilesRelevant?.(id) } catch (err) { reportError('deleteTodoFilesRelevant', err) }
-      // Drop the purged tasks' pomodoro-estimate meta keys (setEstimate(id,0) deletes the key):
-      // MetaGC covers the DB side, this covers the renderer mirror so a recycled numeric id cannot
-      // resurrect a stale estimate (review M-C5)
-      try { for (const id of done) setEstimate(id, 0) } catch {}
+      // Perf (purge batch): ONE delete-todo-files-many IPC for the whole batch instead of a per-id
+      // readdir+unlink IPC each.
+      try { if (done.length && window.todoAPI.deleteTodoFilesMany) await window.todoAPI.deleteTodoFilesMany(done) } catch (err) { reportError('deleteTodoFilesMany', err) }
+      // Drop the purged tasks' pomodoro-estimate meta keys from the renderer mirror: hardDeleteMany
+      // already deleted the DB keys server-side (deleteEstimateKeysFor per id, incl. the legacy
+      // per-id fallback) — MetaGC/DB owns the DB side; the id-based prune drops the local mirror
+      // entries so a recycled numeric id cannot resurrect a stale estimate (review M-C5).
+      try { if (done.length) pruneEstimatesForPurged(done) } catch {}
       if (done.length) {
         // Capture the doomed rows BEFORE hardRemove pulls them out of recycleList
         const purgedCatIds = [...new Set(((state && state.recycleList) || []).filter(t => done.includes(t.taskId)).map(t => t.categoryId).filter(Boolean))]
@@ -570,10 +636,12 @@ export default {
         // 'done' branch, flipping an UNMET milestone to done. Milestones keep their other links.
         // (Round-3 P1: shared with purgeAllRecycle — see scrubMilestonesForPurged below.)
         await scrubMilestonesForPurged(purgedCatIds, done)
-        // Rows are physically gone (hardDelete + attachment files + chip snapshot meta): any later undo replaying a
-        // pre-purge snapshot would safeUpsert the deleted rows straight back from the dead. Void history so undo
-        // can never cross the purge generation.
-        commit('historyClear')
+        // Rows are physically gone (hardDelete + attachment files + chip snapshot meta): undo must not
+        // resurrect them. [TL-6] historyBarrier instead of historyClear: the barrier bumps the reload
+        // epoch and re-baselines the post-purge table, which invalidates exactly the stale pre-purge
+        // baselines — the whole user history stays reachable, and the purged-generation guard in
+        // persistSnapshotDiffCore (durable-existence read) makes replaying even a stale baseline safe.
+        commit('historyBarrier')
       }
       dispatch('computeViews')
       dispatch('writeCriticalBackup')
@@ -601,21 +669,25 @@ export default {
       if (!purged) { dispatch('computeViews'); return false }
       // Attachment cleanup aligned with per-item permanent deletion (the main process's purgeRecycleBin only deletes rows, not files/)
       // [C15 fix, same class as purgeIds] attachment-file cleanup failures are logged, not swallowed
-      try { for (const id of ids) await window.todoAPI.deleteTodoFilesRelevant?.(id) } catch (err) { reportError('deleteTodoFilesRelevant', err) }
+      // Perf (purge batch): ONE delete-todo-files-many IPC for the whole bin instead of a per-id readdir+unlink IPC each.
+      try { if (window.todoAPI.deleteTodoFilesMany) await window.todoAPI.deleteTodoFilesMany(ids) } catch (err) { reportError('deleteTodoFilesMany', err) }
       // Drop the pre-delete chip snapshot meta too (rows are gone, the snapshot can never be restored)
       for (const id of ids) clearSnapshot(id)
       // maint-d7: drop the purged tasks' pomodoro-estimate meta keys too — parity with purgeIds
       // (review M-C5) and the CLI purge path (cli/lib.js deletes ESTIMATE_KEY_PREFIX per row); a
       // recycled numeric taskId used to resurrect a stale estimate on the bulk "empty bin" path.
-      try { for (const id of ids) setEstimate(id, 0) } catch {}
+      // The DB keys are purged server-side by purgeRecycleBin's per-row GC; this prunes the local
+      // mirror via the id-based prune (the former key-vs-id Set.has complement never matched).
+      try { pruneEstimatesForPurged(ids) } catch {}
       // Round-3 P1: the bulk path used to SKIP the milestone scrub purgeIds does — emptying the
       // bin left phantom taskIds in `projectMilestones:<catId>` (an unmet milestone with zero
       // surviving links could flip to 'done', mirroring the D5 bug on the per-item path).
       const purgedCatIds = [...new Set(((state.recycleList) || []).filter(t => ids.includes(t.taskId)).map(t => t.categoryId).filter(Boolean))]
       commit('hardRemove', ids)
       await scrubMilestonesForPurged(purgedCatIds, ids)
-      // Same resurrect guard as purgeIds: rows + files + snapshots are gone, undo must not cross this generation
-      commit('historyClear')
+      // Same resurrect guard as purgeIds: rows + files + snapshots are gone, undo must not cross this
+      // generation. [TL-6] historyBarrier (see purgeIds): targeted re-baseline instead of a whole-stack wipe.
+      commit('historyBarrier')
       dispatch('computeViews')
       dispatch('writeCriticalBackup')
       return true // QC r1: boolean success flag — RecycleBinView.clearAll toasts error instead of false success
@@ -679,6 +751,26 @@ export default {
 
 /* Small helper for reading root settings (module-internal access) */
 function root_getCompleteWithSub (rootState) { return rootState && rootState.settings ? rootState.settings.isCompleteWithSubtasks !== false : true }
+
+/** D15 (TL-5): durable-store existence authority for renderer write actions — ONE choke point.
+ *  Previously every write action treated the in-memory table as the existence authority: on a
+ *  memory miss (the window between a peer/CLI write and the todos-changed broadcast reload —
+ *  docs/sync-matrix.md:60) updateTodoFields/deleteTodo/reorderTodos/deleteTodosMany silently
+ *  returned fake success and the user's edit vanished with no rejection and no queue entry,
+ *  violating op-feedback (a write either lands or rejects). Resolution: memory hit → row; else
+ *  one getById on the durable store (the same allowlisted read door the CLI uses) — a DB hit is
+ *  upserted into memory and handed to the caller to merge; a DB miss is a structured not-found
+ *  the caller surfaces. Class-complete: every renderer write action routes through this one
+ *  helper instead of re-declaring its own memory-miss behavior. */
+async function resolveForEdit (state, taskId) {
+  const hit = [...(state.todoList || []), ...(state.recycleList || [])].find(t => t.taskId === taskId)
+  if (hit) return hit
+  try {
+    const row = await window.todoAPI.dbCall('getById', taskId)
+    if (row && row.taskId != null) return row
+  } catch (err) { reportError('resolveForEdit:getById', err) }
+  return { notFound: true, taskId }
+}
 
 /** Test seams (unit-tested in tests/store-fixes-domain.test.mjs): pending-write requeue and the de-proxy round-trip */
 export const _testInternals = { pendingUpserts: pendingUpserts(), safeUpsert, flushPendingUpserts, deproxyRows }

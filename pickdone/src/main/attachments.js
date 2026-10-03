@@ -29,11 +29,16 @@ const MAX_FILES = 200
 // exceeded). Excluded from BOTH the byte sum and the file count.
 const NOISE_CUSTOM_RE = /^noise-custom\./
 function isUnownedNoiseFile (f) { return NOISE_CUSTOM_RE.test(String(f)) }
+// Lifecycle fix (2026-10-02): aliases.json is the device-local alias map's own storage (see the
+// alias-map block below) — bookkeeping, not an attachment. It used to be counted by BOTH quota
+// scanners (dirUsage/dirTotalBytes): 1 phantom file toward MAX_FILES=200 and its bytes toward the
+// 64MB budget. Same rationale as the C14 noise-slot exclusion.
+function isAppOwnedBookkeeping (f) { return isUnownedNoiseFile(f) || String(f) === 'aliases.json' }
 function dirUsage (dir) {
   let bytes = 0
   let count = 0
   for (const f of fs.readdirSync(dir)) {
-    if (isUnownedNoiseFile(f)) continue // C14: white-noise slot is not attachment quota
+    if (isAppOwnedBookkeeping(f)) continue // C14: white-noise slot; lifecycle: alias map — neither is attachment quota
     try { bytes += fs.statSync(path.join(dir, f)).size; count++ } catch { /* vanished mid-scan */ }
   }
   return { bytes, count }
@@ -56,7 +61,7 @@ function withinStorageQuota (existingBytes, incomingBytes, quotaBytes) {
 function dirTotalBytes (dir) {
   let n = 0
   for (const f of fs.readdirSync(dir)) {
-    if (isUnownedNoiseFile(f)) continue
+    if (isAppOwnedBookkeeping(f)) continue
     try { n += fs.statSync(path.join(dir, f)).size } catch { /* raced delete */ }
   }
   return n
@@ -136,10 +141,31 @@ function deleteAlias (key) {
   try { fs.writeFileSync(aliasesPath(), JSON.stringify(map, null, 1)) } catch { /* best-effort */ }
   return true
 }
+/** Lifecycle fix (2026-10-02): purge/delete-todo-files/hardDelete remove owned files in bulk but
+ *  never touched the alias map — entries whose TARGET file died with the purge leaked forever
+ *  (aliases.json grew unbounded) and, worse, stayed STALE: attachmentPath() kept translating the
+ *  dead logical key to the now-missing renamed file, so the missing-file guard in open-file could
+ *  never recognize the gap and re-pull the original key (the exact failure the single-file
+ *  delete-file path already cleans up at handlers/attachments.js). Dropping an alias whose target
+ *  is missing is always safe: resolution falls back to the base name, which is also missing, and
+ *  the missing-file guard takes over. `exists` is injectable for tests. Returns count removed. */
+function pruneMissingAliases (exists = p => fs.existsSync(p)) {
+  const map = readAliases()
+  let removed = 0
+  for (const k of Object.keys(map)) {
+    let gone = false
+    try { gone = !exists(path.join(attachDir(), path.basename(String(map[k] || '')))) } catch { gone = false }
+    if (gone) { delete map[k]; removed++ }
+  }
+  if (removed) {
+    try { fs.writeFileSync(aliasesPath(), JSON.stringify(map, null, 1)) } catch { /* best-effort */ }
+  }
+  return removed
+}
 
 module.exports = { attachDir, saveAttachment, attachmentPath, withinStorageQuota, dirTotalBytes, MAX_TOTAL_BYTES, __setTotalQuota,
   // Alias map (LAN same-name conflict resolution): read/set/delete + list for tests/consumers.
-  readAliases, setAlias, deleteAlias, aliasesPath,
+  readAliases, setAlias, deleteAlias, aliasesPath, pruneMissingAliases,
   // C5/C14 (2026-09-25): MAX_BYTES/MAX_FILES and the noise-slot classifier are exported so
   // attachments-guards.js is the shared gate for every write entry without duplicating caps.
   MAX_BYTES, MAX_FILES, isUnownedNoiseFile, dirUsage,

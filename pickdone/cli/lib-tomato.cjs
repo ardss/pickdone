@@ -8,6 +8,17 @@ const fixUtil = require('../src/main/fix-util.js') // P3-8: localDayKey single s
 
 module.exports = async function runTomato ({ opts, lib, emit, emitNext }) {
       const [op, ...rest] = opts._
+      /* The App REJECTS a stale command (>60s TTL, crash-replay protection) by writing an expired
+       * receipt {status:'expired', error} — which still satisfies waitForTomatoAck's seq match.
+       * Treating that truthy ack as success printed "✓ focus started" for a command the App never
+       * executed: the exact fake-success the waitForTomatoAck gate exists to prevent. Surface it
+       * as a real error, same shape as the null-ack APP_NOT_RUNNING path. */
+      function assertLiveAck (ack, what) {
+        if (ack && ack.status === 'expired') {
+          throw new lib.CliError('tomato ' + what + ' failed: command expired before the App consumed it (' + ((ack && ack.error) || 'stale command') + ')', 'CMD_EXPIRED')
+        }
+        return ack
+      }
       /* ---- tomato list: read-only query of the focus ledger (SQLite tomato_records row table; same source as the statistics page, works without the App) ---- */
       if (op === 'list') {
         let recs = lib.tomatoRecords().sort((a, b) => (b.endTime || 0) - (a.endTime || 0))
@@ -96,7 +107,7 @@ module.exports = async function runTomato ({ opts, lib, emit, emitNext }) {
         const minutes = parseInt(opts.minutes, 10)
         const seq = lib.writeTomatoCmd({ action: 'start', taskId, minutes: minutes > 0 ? minutes : null })
         // HELP contract: error out when the App is not running instead of faking success. Wait for the receipt to catch up; timeout = command not consumed
-        const ack = await lib.waitForTomatoAck(seq)
+        const ack = assertLiveAck(await lib.waitForTomatoAck(seq), 'start')
         if (!ack) throw new lib.CliError('tomato start failed: App is not running or did not consume the command (launch with: open)', 'APP_NOT_RUNNING')
         if (opts.json) return emitNext({ seq, taskId, minutes: minutes > 0 ? minutes : null, acknowledged: true }, ['tomato status --json for countdown', 'tomato stop to stop'])
         console.log('✓ focus started' + (taskId ? ' (attached task ' + taskId + ')' : '') + (minutes > 0 ? ' for ' + minutes + ' min' : ''))
@@ -104,7 +115,7 @@ module.exports = async function runTomato ({ opts, lib, emit, emitNext }) {
       }
       if (op === 'stop') {
         const seq = lib.writeTomatoCmd({ action: 'stop', reason: opts.reason || '', record: !opts['no-record'] })
-        const ack = await lib.waitForTomatoAck(seq)
+        const ack = assertLiveAck(await lib.waitForTomatoAck(seq), 'stop')
         if (!ack) throw new lib.CliError('tomato stop failed: App is not running or did not consume the command', 'APP_NOT_RUNNING')
         if (opts.json) return emitNext({ seq, record: !opts['no-record'], acknowledged: true }, ['tomato status --json to confirm idle', 'stats --json to see focus records'])
         console.log('✓ stopped' + (opts['no-record'] ? ' (no record)' : ' (records by focused minutes)'))
@@ -118,7 +129,7 @@ module.exports = async function runTomato ({ opts, lib, emit, emitNext }) {
         }
         const seq = lib.writeTomatoCmd({ action: 'attach', taskId })
         // 与 start/stop 同契约等回执:App 未运行时不再谎报成功(2026-09-04 深审 P0,同命令族三种契约曾让 JSON 消费者无统一判断路径)
-        const ack = await lib.waitForTomatoAck(seq)
+        const ack = assertLiveAck(await lib.waitForTomatoAck(seq), 'attach')
         if (!ack) throw new lib.CliError('tomato attach failed: App is not running or did not consume the command', 'APP_NOT_RUNNING')
         if (opts.json) return emit({ seq, taskId, acknowledged: true })
         console.log(taskId ? '✓ tomato task attached ' + taskId : '✓ tomato task detached')

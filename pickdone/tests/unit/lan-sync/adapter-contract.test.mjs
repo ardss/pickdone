@@ -14,7 +14,8 @@ const ROOT = path.join(import.meta.dirname, '../../..')
 
 test('lan-sync-bootstrap localStore adapter implements the full engine contract', () => {
   const REQUIRED = ['getRowsSince', 'applyRow', 'getCursor', 'setCursor', 'allRows', 'replaceAll']
-  const src = fs.readFileSync(path.join(ROOT, 'src/main/lan-sync-bootstrap.js'), 'utf8')
+  // adapter moved to its own module (structure-size ratchet split) — the contract guard follows the code
+  const src = fs.readFileSync(path.join(ROOT, 'src/main/lan-sync-egress.js'), 'utf8')
   const start = src.indexOf('function createLocalStoreAdapter')
   assert.ok(start >= 0, 'createLocalStoreAdapter not found')
   const next = src.indexOf('\nfunction ', start + 10)

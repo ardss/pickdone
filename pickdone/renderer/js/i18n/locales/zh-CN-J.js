@@ -122,6 +122,7 @@ export default {
   'statsJ.EditPanel.depsRemove': '移除前置',
   'statsJ.EditPanel.tagsPlaceholder': '标签（可多个，写入正文 #标签）',
   'statsJ.EditPanel.addTagHint': '添加标签，回车确认',
+  'statsJ.EditPanel.tagExists': '标签 #{name} 已存在',
   'statsJ.EditPanel.addTag': '添加标签',
   'statsJ.EditPanel.doneBtn': '完成',
   'statsJ.EditPanel.clearReminder': '清除提醒',

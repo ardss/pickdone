@@ -102,9 +102,7 @@ function ensureIdentity () {
  * the delegates below bind the bootstrap's module-level `state` singleton to it. */
 const syncApply = require('./sync-apply')
 const { SYNC_OPLOG_KEEP, oplogKeepLimit } = require('./db-oplog') // D3 2026-09-24: oplog page size derives from the ring retention (was bare 10000s)
-const { isMachineLocalSettingKey } = syncApply
 const createHydrationCache = () => syncApply.createHydrationCache(state)
-const hydrateRow = (ptr, cache) => syncApply.hydrateRow(state, ptr, cache)
 const localUserId = () => syncApply.localUserId(state)
 const applyRowSafe = row => syncApply.applyRowSafe(state, row)
 // Arch review 2026-09-22 rec #1 (twin-door convergence): manifest-op writes route through the
@@ -115,79 +113,14 @@ const busWrite = (op, payload) => syncApply.busWrite(state, op, payload)
 const flushPendingWrites = () => syncApply.flushPendingWrites(state)
 const readMaxOplogSeq = () => syncApply.readMaxOplogSeq(state)
 
-function createLocalStoreAdapter () {
-  return {
-    getRowsSince (seq) {
-      const ptrs = state.db.call('syncOplogSince', { sinceSeq: seq, limit: oplogKeepLimit(SYNC_OPLOG_KEEP) }) || [] // D3 2026-09-24: was bare 10000
-      const cache = createHydrationCache()
-      // r2 2026-09-28: hydrateRow now RETHROWS on DB read failure (only legitimate skips return
-      // null). A failure must not be silently filtered out with the cursor advancing past the
-      // pointer — that lost changes one-way between full snapshots. Count it here, surface it in
-      // the egress report (state.egressHydrationFailures) and log it; the row itself is still
-      // skipped (cursor semantics unchanged — the loss is now VISIBLE, not silent).
-      const rows = []
-      const failures = []
-      for (const ptr of ptrs) {
-        let row = null
-        try { row = hydrateRow(ptr, cache) } catch (e) {
-          failures.push({ ...(e.egressHydration || { entity: ptr.entity, id: ptr.entityId, seq: ptr.seq }), error: e.message })
-          continue
-        }
-        if (row) rows.push(row)
-      }
-      state.egressHydrationFailures = failures
-      if (failures.length) {
-        log.warn('[LanSync] egress hydration failed for ' + failures.length + ' oplog pointer(s) — pushed rows are INCOMPLETE:',
-          failures.map(f => f.entity + ':' + f.id).join(', '))
-        try { emitSyncEvent('egress-hydration-failed', { count: failures.length, failures }) } catch { /* event surface is best-effort */ }
-      }
-      return rows
-    },
-    getCursor () { const v = state.db.call('getMeta', CURSOR_META_KEY); const n = Number(v); return Number.isFinite(n) && n > 0 ? n : 0 },
-    setCursor (seq) { busWrite('setMeta', [CURSOR_META_KEY, String(seq)]) },
-    applyRow: row => applyRowSafe(row),
-    /** Current live rows incl. tombstones, for buildSnapshot (seq-less; engine sorts by id). */
-    allRows () {
-      const out = []
-      for (const t of state.db.call('getAll', { deleted: null }) || []) {
-        out.push({ entity: 'todo', id: t.taskId, updatedAt: t.updateTime || 0, deleted: !!t.delete, deletedAt: t.deletedAt || 0, data: t })
-      }
-      for (const r of state.db.call('settingsRowsAll', {}) || []) {
-        // 'sync.' = identity namespace; 'securityLock*' = password/question ciphertext — both must never leave this device (round-3 review: the settingsState bridge mirrors securityLock rows into settings_rows).
-        if (isMachineLocalSettingKey(r.key)) continue
-        out.push({ entity: 'setting', id: r.key, updatedAt: r.updatedAt, deleted: !!r.deleted, deletedAt: r.deletedAt || 0, data: { key: r.key, value: r.value } })
-      }
-      for (const r of state.db.call('tomatoAll', {}) || []) out.push({ entity: 'tomato', id: r.tomatoId, updatedAt: r.updatedAt || 0, deleted: false, deletedAt: 0, data: r })
-      for (const r of state.db.call('tomatoTombstones', {}) || []) out.push({ entity: 'tomato', id: r.tomatoId, updatedAt: r.updatedAt || 0, deleted: true, deletedAt: r.deletedAt || 0, data: null }) // X1: snapshot tombstones (rationale in sync-apply.js tomato localRow)
-      // M1/M3 (2026-09-20): categories snapshot from the RAW row table — peers apply category data
-      // through upsertCategory (row columns), and local tombstones must ride along (data:null) so a
-      // fresh device learns about deletions. Same tombstone rule for plans/filters (delete-wins for locally deleted rows on the receiving side).
-      for (const c of state.db.call('categoriesAllRows', {}) || []) out.push({ entity: 'category', id: String(c.id), updatedAt: c.updatedAt || 0, deleted: !!c.deleted, deletedAt: c.deletedAt || 0, data: c.deleted ? null : c })
-      for (const c of state.db.call('planAll', {}) || []) out.push({ entity: 'plan', id: c.id, updatedAt: c.updatedAt || 0, deleted: false, deletedAt: 0, data: c })
-      for (const t of state.db.call('planTombstones', {}) || []) out.push({ entity: 'plan', id: t.id, updatedAt: t.updatedAt || 0, deleted: true, deletedAt: t.deletedAt || 0, data: null })
-      for (const f of state.db.call('filterList', {}) || []) out.push({ entity: 'filter', id: String(f.id), updatedAt: f.updatedAt || 0, deleted: false, deletedAt: 0, data: f })
-      for (const t of state.db.call('filterTombstones', {}) || []) out.push({ entity: 'filter', id: String(t.id), updatedAt: t.updatedAt || 0, deleted: true, deletedAt: t.deletedAt || 0, data: null })
-      // Meta entity (GAP-A fix 2026-09-19): meta has no list-read op (db.js is size-ratcheted), so
-      // syncable meta keys used to be enumerated from their oplog pointers only — a live key whose
-      // pointers fell out of the ring never appeared in a snapshot AND was refused on ingress
-      // (B13 age-unknown gate): unsyncable in both directions until a local rewrite. D11 finding 4:
-      // enumeration moved to sync-apply.metaSnapshotRows — the meta TABLE (listMetaKeys) with the
-      // retained-pointer age, or the ring-floor bound for a trimmed key (paired ingress rule there).
-      // Meta tombstones still propagate via increments only (a pointer whose value is already gone
-      // reads as deleted in hydrateRow).
-      for (const row of syncApply.metaSnapshotRows(state)) out.push(row)
-      return out
-    },
-    /** Fresh-device path. P3a: merge-apply (non-destructive) — see header scope cuts. */
-    replaceAll (rows) {
-      for (const r of rows || []) applyRowSafe(r)
-      // R7-B P2: a dropped bulk write here used to vanish silently (ingest paths stamp
-      // flushFailed / throw; this path didn't). Surface the failure to the engine.
-      const flush = flushPendingWrites()
-      if (flush && flush.ok === false) throw new Error('replaceAll flush failed: ' + ((flush.error && flush.error.message) || 'unknown'))
-    }
-  }
-}
+
+// Egress/ingress surface extracted to ./lan-sync-egress.js (structure-size ratchet). The
+// factory closes over THIS module's state singleton via getState (state is assigned in
+// initLanSync, after this require line runs — the accessor defers to call time).
+const { createLocalStoreAdapter, withPeerDeviceId, ingestSnapshotAssembled, ingestSnapshotChunked, buildSegmentsWrapped } = require('./lan-sync-egress').createEgressSurface({
+  getState: () => state, log, emitSyncEvent, syncApply, busWrite, flushPendingWrites, finalizeIngest,
+  oplogKeepLimit, SYNC_OPLOG_KEEP, CURSOR_META_KEY, SYNC_SCHEMA_VERSION
+})
 
 /* ---------- engine + node lifecycle (lazy; only while enabled) ---------- */
 /**
@@ -196,31 +129,36 @@ function createLocalStoreAdapter () {
  * winner on both peers. Without this the local side has no deviceId at all and tie outcomes
  * depended on which side happened to be applying (loop fix 2026-09-18).
  */
-function withPeerDeviceId (body) {
-  if (body && typeof body === 'object' && body.deviceId && Array.isArray(body.rows)) {
-    return { ...body, rows: body.rows.map(r => ({ ...r, deviceId: body.deviceId })) }
-  }
-  return body
-}
 
-function buildSegmentsWrapped (sinceSeq) {
-  const r = state.engine.buildSegments(sinceSeq)
-  state.pendingToSeq = r.toSeq
-  return r.segments
-}
+/* ---------- S3/S6 (2026-10-03): per-peer watermark store — ONE owner for
+ * 'sync.peerWatermarks.v2' (lan-sync/watermark-store.js) built on the shared read-throw/
+ * abort-write settings-map-store helper. loadPeerWatermarks now THROWS on an unreadable row
+ * (D15 C1 contract, previously silently {} for this key) and persistPeerWatermarks skips while
+ * degraded (never writes a map derived from a failed read over the durable row). */
+const createJsonSettingStore = require('./lan-sync/settings-map-store')
+const createPeerWatermarkStore = require('./lan-sync/watermark-store')
+const watermarkSettingStore = createJsonSettingStore({ settingGet, settingPut, log, key: K_PEER_WATERMARKS, name: 'peer watermarks', defaultValue: '{}' })
+const watermarkStore = createPeerWatermarkStore({ settingGet, settingPut, log, key: K_PEER_WATERMARKS, store: watermarkSettingStore })
 
-/** Load persisted per-peer push watermarks into the live Map the node reads on every round. */
-function loadPeerWatermarks () {
-  try { return JSON.parse(settingGet(K_PEER_WATERMARKS) || '{}') || {} } catch { return {} }
-}
+/** Load persisted per-peer push watermarks (throws on a settings read failure — S6). */
+function loadPeerWatermarks () { return watermarkStore.load().map }
 
-function persistPeerWatermarks () {
-  try { settingPut(K_PEER_WATERMARKS, JSON.stringify(state.peerWatermarks.raw())) } catch (e) { log.warn('[LanSync] watermark persist failed:', e.message) }
-}
+function persistPeerWatermarks () { return watermarkStore.persist(state && state.peerWatermarks) }
 
 /* ---------- security ring persistence (survives restarts; recent ring stays ephemeral) ---------- */
+// S6 (2026-10-03): the security ring is the second member of the settings-backed whole-store
+// class — the same read-throw/abort-write contract that D15 C1 gave sync.peers and S3 gave the
+// watermark store: a failed read latches degraded and BOTH writers (the throttled tick and the
+// stopSync flush) then skip, so a corrupt read can never shrink/erase the durable 20-entry ring.
+const securitySettingStore = createJsonSettingStore({ settingGet, settingPut, log, key: K_SECURITY_LOG, name: 'security log', defaultValue: '[]', validate: v => Array.isArray(v) })
 function loadSecurityLog () {
-  try { const v = JSON.parse(settingGet(K_SECURITY_LOG) || '[]'); return Array.isArray(v) ? v.slice(-20) : [] } catch { return [] }
+  try {
+    const v = securitySettingStore.load()
+    return Array.isArray(v) ? v.slice(-20) : []
+  } catch (e) {
+    log.warn('[LanSync] security log seeded empty — persistence stays degraded until a successful read:', e.message)
+    return []
+  }
 }
 let securityPersistTimer = null
 function scheduleSecurityPersist () {
@@ -231,6 +169,8 @@ function scheduleSecurityPersist () {
     securityPersistTimer = null
     try {
       if (!state.node) return
+      // S6: abort the whole-array write while degraded — never derive a write from a failed read.
+      if (!securitySettingStore.canPersist()) return
       settingPut(K_SECURITY_LOG, JSON.stringify(state.node.getStatus().security.slice(-20)))
     } catch (e) { log.warn('[LanSync] security log persist failed:', e.message) }
   }, SECURITY_PERSIST_MIN_MS)
@@ -283,13 +223,28 @@ function manualPeers () {
  * Extracted to lan-sync/paired-peers.js (structure size ratchet) — settings access is
  * injected, so the swappable module-level `state` (__test.setState) still applies. */
 const { normalizeHost, loadPairedPeers, persistPairedPeer, removePairedPeer } =
-  require('./lan-sync/paired-peers')({ settingGet, settingPut, log, isDialableHost, DEFAULT_PORT, K_PAIRED_PEERS })
+  require('./lan-sync/paired-peers')({
+    settingGet, settingPut, log, isDialableHost, DEFAULT_PORT, K_PAIRED_PEERS,
+    // S3: a successful persist of a peer record (both pairing ops + paired-inbound funnel
+    // here) is the only event that clears that id's watermark revocation.
+    onPeerPersisted: (id) => {
+      const wm = state && state.peerWatermarks
+      if (wm && typeof wm.reinstate === 'function') wm.reinstate(id)
+    },
+  })
 
-/** Map wrapper exposing .raw() for persistence; seeded from settings_rows so progress survives restarts. */
-function createTrackedWatermarks () {
-  const m = new Map(Object.entries(loadPeerWatermarks()).map(([k, v]) => [k, Number(v) || 0]))
-  m.raw = () => Object.fromEntries(m)
-  return m
+/** Map wrapper exposing .raw() for persistence; seeded from settings_rows via the watermark
+ *  store (S3/S6: read-throw on a failed read, revocation filtering on every writer). */
+function createTrackedWatermarks () { return watermarkStore.createTracked() }
+
+/** S3/S6 test surface: the same store wiring over an INJECTED db handle, so regression tests
+ *  can drive corrupt-read/degraded-persist scenarios against a fresh settings table without
+ *  swapping the module-level state singleton. */
+function makeWatermarkStoresForDb (db) {
+  const get = key => { const row = db.call('settingsRowsAll', {}).find(r => r.key === key && !r.deleted); return row ? row.value : null }
+  const put = (key, value) => db.call('settingsRowPut', { key, value })
+  const store = createJsonSettingStore({ settingGet: get, settingPut: put, log, key: K_PEER_WATERMARKS, name: 'peer watermarks', defaultValue: '{}' })
+  return { store, wm: createPeerWatermarkStore({ settingGet: get, settingPut: put, log, key: K_PEER_WATERMARKS, store }) }
 }
 
 async function startSync () {
@@ -319,8 +274,18 @@ async function startSync () {
     pairingSecret: settingGet(K_PAIRING_SECRET),
     // F1 (2026-09-28 drill): per-pair secret lookup for server-side hello auth — prefer the
     // peer's own secret from the paired-peer table; null falls back to the global secret.
+    // S1 (2026-10-03) read-failure taxonomy: loadPairedPeers THROWS on a settings read failure
+    // (paired-peers.js D15 C1 contract: a read throw is not the same as never paired) and that
+    // throw now propagates. The old catch{ return null } collapsed read-failure into
+    // record-absent, so both sides fell back to the global secret, the verify mismatched the
+    // per-pair auth code, and a transient read failure landed the peer in the TERMINAL unpaired
+    // state. Consumers branch on the class: transport answers hello-ack 'secret-unavailable'
+    // (no unauthorized classification, no per-IP failure count) and client-round aborts the
+    // round as a retryable failure. secretFor is consumed at exactly two sites (transport.js
+    // hello verify + client-round dial auth), both fed this same resolver.
     secretFor: (id) => {
-      try { const rec = loadPairedPeers()[String(id)]; return (rec && rec.secret) ? String(rec.secret) : null } catch { return null }
+      const rec = loadPairedPeers()[String(id)]
+      return (rec && rec.secret) ? String(rec.secret) : null
     },
     securityLog: loadSecurityLog(),
     verifyPairingCode: code => !!state.pairingCode && state.pairingCode.expiresAt > Date.now() &&
@@ -339,40 +304,15 @@ async function startSync () {
         return finalizeIngest(r)
       } finally { state.applyCache = null }
     },
-    ingestSnapshot: body => {
-      // Snapshot-request protocol receiver (assembled {schemaVersion, deviceId, rows} from the
-      // node): apply the rows through the SAME applyRowInner pipeline as increments (merge rules,
-      // tombstones, per-pass applyCache, buffered bulk writes). Chunk-merge-apply is idempotent,
-      // so a partial snapshot leaves a consistent DB; the node advances the pull watermark ONLY
-      // on snapshot-end, so a failed/partial transfer never skips missed increments. Deliberately
-      // NOT engine.applySnapshot: that is the fresh-device replaceAll path and resets the global
-      // push cursor to 0, which would cause a full oplog re-push to every peer.
-      const rows = Array.isArray(body && body.rows) ? body.rows : []
-      state.applyCache = createHydrationCache()
-      try {
-        for (const r of withPeerDeviceId(body).rows || []) applyRowSafe(r)
-        // P0-1: same flush-failure honesty as the streaming path — fail loudly so the watermark
-        // never advances over rows that were dropped.
-        finalizeIngest(null, { snapshot: true })
-      } finally { state.applyCache = null }
-      return { rows: rows.length }
-    },
+    // d12 (2026-10-02): receivers extracted to module level (ingestSnapshotAssembled /
+    // ingestSnapshotChunked) so the schemaVersion gate is unit-testable via __test; see the
+    // function comments there for the crash/watermark semantics.
+    ingestSnapshot: ingestSnapshotAssembled,
     // Streaming snapshot receiver: the node calls this PER received snapshot-chunk, so the
     // full snapshot never materializes in memory and pendingWrites flush per chunk (bounded
     // buffers). Crash semantics unchanged: the pull watermark still advances only at
     // snapshot-end, and chunk-merge-apply is idempotent.
-    ingestSnapshotChunk: body => {
-      const rows = Array.isArray(body && body.rows) ? body.rows : []
-      state.applyCache = createHydrationCache()
-      try {
-        for (const r of withPeerDeviceId(body).rows || []) applyRowSafe(r)
-        // P0-1: a failed flush during a streamed snapshot must fail the ROUND (throw) — the pull
-        // watermark advances only at snapshot-end, so a failed chunk keeps the watermark put and
-        // the next round re-requests the (idempotent) snapshot instead of acking dropped rows.
-        finalizeIngest(null, { snapshot: true, chunk: true })
-      } finally { state.applyCache = null }
-      return { rows: rows.length }
-    },
+    ingestSnapshotChunk: ingestSnapshotChunked,
     getMaxSeq: () => readMaxOplogSeq(),
     // Oldest oplog seq still retained (the ring prunes from the front): advertised in the round
     // ack so a watermark-behind peer can tell its increments were pruned on our side.
@@ -478,6 +418,32 @@ async function startSync () {
   log.info('[LanSync] node started for', deviceId)
 }
 
+/**
+ * S5 (2026-10-03): ONE restart path owning the fail-closed 'sync enabled ⇒ node listening'
+ * contract (the same invariant syncSetEnabledOp enforces via the startSync throw). The four
+ * pairing/rename restart sites in pair-ops previously used fire-and-forget startSync().catch(log)
+ * — a bind failure after a pairing/rename/unpair left K_ENABLED=true with state.node=null
+ * (the enabled-without-listening dead-toggle state the D2-c contract exists to prevent), and
+ * the failure was swallowed into log.error. Any future restart site routed through this helper
+ * inherits the invariant.
+ *
+ * preserveEnabled=false means the caller already knows sync is disabled (no restart at all);
+ * preserveEnabled=true awaits the start and, on failure, applies the same fail-closed rollback
+ * syncSetEnabledOp uses (K_ENABLED=false + renderer notify) and RETHROWS so the IPC op rejects
+ * like syncSetEnabledOp does.
+ */
+async function restartSync ({ preserveEnabled = true } = {}) {
+  await stopSync()
+  if (!preserveEnabled) return
+  try {
+    await startSync()
+  } catch (e) {
+    log.error('[LanSync] restart failed — sync stays OFF:', e.message)
+    try { settingPut(K_ENABLED, false); notifyRenderers('enabled-changed') } catch { /* rollback is best-effort; the rethrow still surfaces */ }
+    throw e
+  }
+}
+
 async function stopSync () {
   if (!state.node) return
   for (const t of state.timers) { clearTimeout(t); clearInterval(t) }
@@ -491,7 +457,8 @@ async function stopSync () {
     if (securityPersistTimer) { clearTimeout(securityPersistTimer); securityPersistTimer = null }
     // Round-1 P0: guard getStatus — a stale/mocked node reference threw
     // `n.getStatus is not a function` and masked the flush with a warning.
-    if (n && typeof n.getStatus === 'function') settingPut(K_SECURITY_LOG, JSON.stringify(n.getStatus().security.slice(-20)))
+    // S6: the flush also aborts while degraded — a corrupt read must never shrink the ring.
+    if (n && typeof n.getStatus === 'function' && securitySettingStore.canPersist()) settingPut(K_SECURITY_LOG, JSON.stringify(n.getStatus().security.slice(-20)))
   } catch (e) { log.warn('[LanSync] security log flush on stop failed:', e.message) }
   state.node = null
   state.pendingPair = null
@@ -634,12 +601,10 @@ function finalizeIngest (r, { snapshot = false, chunk = false } = {}) {
  * (no-op for the live map) — the settings row is the persistence authority.
  */
 function invalidateSyncWatermarks (reason) {
-  try {
-    settingPut(K_PEER_WATERMARKS, JSON.stringify({}))
-  } catch (e) { log.warn('[LanSync] watermark invalidation persist failed:', e.message) }
-  try {
-    if (state && state.peerWatermarks && typeof state.peerWatermarks.clear === 'function') state.peerWatermarks.clear()
-  } catch (e) { log.warn('[LanSync] live watermark map clear failed:', e.message) } // round-2 P1: no silent swallow
+  // S3: invalidation goes through the watermark store — the live map clears and the durable row
+  // is rewritten {__revoked:[...]} (revocations survive recovery); a whole-map flush from any
+  // writer then cannot resurrect a revoked pairing's watermark.
+  try { watermarkStore.invalidate(state && state.peerWatermarks) } catch (e) { log.warn('[LanSync] watermark invalidation persist failed:', e.message) }
   log.warn('[LanSync] peer watermarks invalidated (' + String(reason || 'recovery') + ') — full re-push + peer re-snapshot on next round')
   try { kickSyncRound('watermarks-invalidated') } catch { /* node not started yet */ }
 }
@@ -727,6 +692,7 @@ const { K_PEER_ALIAS_PREFIX, peerAliasOf, missingAttachmentKeys } = require('./l
 const pairOps = require('./lan-sync/pair-ops')({
   getState: () => state, settingGet, settingPut, busWrite, getSettingsPayload, ensureIdentity,
   stopSync, startSync, runRound, persistPeerWatermarks, persistPairedPeer, removePairedPeer,
+  restartSync, // S5: one fail-closed restart path for every pairing/rename/unpair restart site
   manualPeers, loadPeerWatermarks, notifyRenderers, emitSyncEvent,
   K_PAIRING_SECRET, K_DEVICE_NAME, K_MANUAL_PEERS, K_PEER_WATERMARKS, K_ENABLED,
   K_PEER_ALIAS_PREFIX, PAIRING_CODE_TTL_MS, DEFAULT_PORT, log,
@@ -831,6 +797,11 @@ module.exports.__test = {
   persistPeerWatermarks,
   createTrackedWatermarks,
   loadPeerWatermarks,
+  // S3/S6 test surface: db-injectable store wiring (corrupt-read / degraded-persist scenarios).
+  makeWatermarkStoresForDb,
+  // S6 test surface: security-ring store contract (read-throw seeds empty + degrades writes).
+  loadSecurityLog,
+  scheduleSecurityPersist,
   // P0-1/P1-2/P1-5 test surface: post-round applied bookkeeping -> renderer broadcasts.
   emitAppliedRound: () => emitAppliedRound(),
   finalizeIngest,
@@ -844,8 +815,15 @@ module.exports.__test = {
   // P1-4/P1-6 test surface: stop ordering (engine alive until the node stopped) + watermark
   // invalidation (recovery path clears persisted per-peer progress).
   stopSync,
+  // S5 test surface: the ONE fail-closed restart path + the pair-ops handlers that route
+  // through it (bind-failure rollback / op-rejection contract).
+  restartSync,
+  pairOps,
   invalidateSyncWatermarks,
   // Round-2 P1 test surface: peer alias op registration + live-todo attachment key collection.
   registerOps,
   missingAttachmentKeys,
+  // d12 schemaVersion gate test surface: the snapshot receivers with the gate applied.
+  ingestSnapshotAssembled,
+  ingestSnapshotChunked,
 }

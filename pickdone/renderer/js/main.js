@@ -17,6 +17,10 @@ import { onExternalHabitBlob } from './store/habits.js'
 import { createExternalReloader, kindsFromChangedEvent } from './utils/externalReload.js'
 import { loadRuntime } from './store/helpers/runtimeState.js'
 import { criticalBackupWrite, ackQuitFlushAfterWrite } from './store/helpers/todoBackup.js'
+// D15 (TL-2): boot drain of the crash-proof pending-write queue — entries persisted by a previous
+// process life hydrate at module load; replaying right after todo/init (before any user-editing
+// code runs) makes the boot drain the primary recovery path and the quit flush an optimization.
+import { flushPendingUpserts as drainPendingUpsertsAtBoot } from './store/helpers/todoPendingUpserts.js'
 import router from './router.js'
 import App from './app-root.vue'
 import { setLunarLib } from './utils/repeat.js'
@@ -197,6 +201,10 @@ async function bootstrap () {
   try {
     await store.dispatch('todo/init')
     bootMark('todo/init')
+    // D15 (TL-2): replay entries the previous process life queued but never landed (crash/force-kill
+    // before the quit flush). The freshness gate inside the drain drops rows the DB already
+    // supersedes, so replaying after init cannot stamp stale content over newer rows.
+    drainPendingUpsertsAtBoot().catch(e => console.error('[todo] boot drain of the pending-write queue failed:', e))
     await store.dispatch('category/init') // Categories unified into SQLite (CLI and UI share one source; auto-migrates localStorage on first run)
     bootMark('category/init')
     // Primary-data mirror restore: backfill settings/habits/tomato records from the DB archive when it is newer than LS (no more loss when LS is cleared)
@@ -247,13 +255,13 @@ async function bootstrap () {
       if (Date.now() - (store.state.todo._lastLocalWriteAt || 0) < 1500) {
         // External updates arriving within the echo-suppression window are not dropped outright: schedule a trailing reload, otherwise tasks just created in the quick-add window/peer would wait for the next change to appear
         clearTimeout(_todosChangedTail)
-        _todosChangedTail = setTimeout(() => _reloadExternal({ preserveHistory: _todosChangedSyncApply, kinds: _todosChangedSyncApply ? _todosChangedKinds : null }), 1600)
+        _todosChangedTail = setTimeout(() => _reloadExternal({ preserveHistory: _todosChangedSyncApply, kinds: _todosChangedKinds }), 1600)
         return
       }
       // Direct path must cancel any pending trailing reload — otherwise an echo-window trailing
       // timer followed by a direct reload runs _reloadExternal twice (double full reload)
       clearTimeout(_todosChangedTail)
-      _reloadExternal({ preserveHistory: _todosChangedSyncApply, kinds: _todosChangedSyncApply ? _todosChangedKinds : null })
+      _reloadExternal({ preserveHistory: _todosChangedSyncApply, kinds: _todosChangedKinds })
     }, 500)
   })
 

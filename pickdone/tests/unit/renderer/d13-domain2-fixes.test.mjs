@@ -119,8 +119,12 @@ test('A3 views no longer commit the removed mutation (they dispatch the awaited 
     const src = read(f)
     assert.doesNotMatch(src, /commit\('category\/setProjectStatus'/, `${f} must not use the memory-only mutation directly`)
     assert.match(src, /dispatch\('category\/setProjectStatus'/, `${f} goes through the awaited action`)
+    // Invariant: the action rethrows after rolling the status back; NO dispatch site of this
+    // action may swallow that rejection (.catch(() => {})) — a swallowed failure shows the
+    // optimistic UI while the write silently reverts on the next launch.
+    assert.doesNotMatch(src, /dispatch\('category\/setProjectStatus'[^)]*\)\s*\.catch\(\s*\(\)\s*=>\s*\{\s*\}\s*\)/, `${f} must not swallow the awaited action's rejection`)
+    assert.match(src, /statusChangeFailed/, `${f} toasts the surfaced failure (same contract as the store action's revert+rethrow)`)
   }
-  assert.match(read('renderer/js/views/ProjectOverviewView.vue'), /statusChangeFailed/, 'failure path toasts an error, not success')
 })
 
 /* ==================== A4: createTag persist failure ==================== */
@@ -137,7 +141,13 @@ test('A4 createTag: a rejected userTags put reverts the in-memory list and surfa
     $message: { error: m => errors.push(m), warning: m => errors.push(m) },
     $store: {
       state,
-      commit (m, p) { commits.push(m); if (m === 'ui/setUserTags') state.ui.userTags = p }
+      commit (m, p) { commits.push(m); if (m === 'ui/setUserTags') state.ui.userTags = p },
+      // D15 single-writer: createTag routes through the ui/commitUserTags owner action
+      async dispatch (a, p) {
+        const ui = (await import('../../../renderer/js/store/ui.js')).default
+        const ctx = { state: state.ui, commit (m, v) { commits.push(`ui/${m}`); if (m === 'setUserTags') state.ui.userTags = v } }
+        return ui.actions.commitUserTags.call(ctx, ctx, p)
+      }
     }
   }
   globalThis.window.todoAPI = { dbCall: () => Promise.reject(new Error('db locked')) }

@@ -106,7 +106,7 @@ test('r6-7: tray quit confirms before abandoning a running pomodoro', () => {
   // The confirm keys off the live pomodoro signal, not an unconditional dialog. D10: the signal
   // is a LEASE — isLiveTextFresh(tomatoLiveText, tomatoLiveAt) so a dead renderer's stale text
   // cannot show a false confirm on every quit forever.
-  assert.match(body, /isLiveTextFresh\(tomatoLiveText/, 'confirm only while the pomodoro live-lease is fresh')
+  assert.match(body, /hasRunningSession\(\)/, 'confirm only while a pomodoro session is durably live')
   assert.match(body, /dialog\.showMessageBox/, 'main-process dialog is the confirm vehicle')
   assert.match(body, /cancelId: 1/, 'cancel is the safe default choice')
   assert.match(body, /response !== 0[\s\S]*?quitByUser = false/, 'cancelling restores the quit intent (no zombie half-quit state)')

@@ -112,7 +112,9 @@ test('[R1] recover without an in-flight backup still works (plain path unchanged
 test('[R3] SettingsDataTab guards schemaV over every stamped segment via a shared helper', () => {
   const src = read('renderer/js/components/settings/SettingsDataTab.vue')
   assert.ok(src.includes('parseStampedSeg'), 'shared segment guard helper exists')
-  assert.ok(src.includes("import { SCHEMA_V } from '../../store/helpers/todoBackup.js'"), 'threshold comes from the single SCHEMA_V source')
+  // Named-import shape, not an exact literal: other members (e.g. describeDegradedSegments) may
+  // legitimately share the import — the invariant is that SCHEMA_V comes from the single source.
+  assert.match(src, /import \{[^}]*SCHEMA_V[^}]*\} from '\.\.\/\.\.\/store\/helpers\/todoBackup\.js'/, 'threshold comes from the single SCHEMA_V source')
   for (const seg of ['b.categoryState', 'b.habitsState', 'b.filterState', 'b.planState']) {
     assert.ok(src.includes('this.parseStampedSeg(' + seg + ')'), 'stamped segment guarded: ' + seg)
   }

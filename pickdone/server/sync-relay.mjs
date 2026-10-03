@@ -15,9 +15,18 @@
  *
  * Run standalone (self-host, spec §54):
  *   node server/sync-relay.mjs --port 58480 --data ./relay-data
+ *
+ * SECURITY / SELF-HOST GUIDANCE: every data route (push/pull/ack/snapshot-put/
+ * snapshot-latest/device-state) requires `Authorization: Bearer <deviceSecret>`,
+ * minted per device at /v1/device/register and shown exactly once. The secret is
+ * a bearer credential: anyone holding it can read and write the account's sync
+ * stream. Plain HTTP therefore leaks it on the wire — when exposing the relay
+ * beyond loopback/LAN, terminate TLS in front (reverse proxy or a TLS-enabled
+ * host) and restrict direct 0.0.0.0 exposure to trusted networks.
  */
 
 import { createServer } from 'node:http'
+import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
@@ -119,7 +128,33 @@ export function fileStore(dir) {
 export function createRelay(store) {
   return {
     store,
-    registerDevice(account, deviceId) { return store.upsertDevice(account, deviceId, { lastSeen: Date.now() }) },
+    registerDevice(account, deviceId) {
+      // per-device bearer secret: minted fresh on every register, shown once
+      const deviceSecret = randomBytes(32).toString('hex')
+      return store.upsertDevice(account, deviceId, { lastSeen: Date.now(), deviceSecret })
+    },
+    /**
+     * Bearer auth for data routes: timing-safe compare of the supplied secret
+     * against the stored device row. Routes that carry a deviceId (push/pull/
+     * ack/device-state) check that device's row; routes that carry only an
+     * account (snapshot-put/snapshot-latest) accept any of the account's
+     * devices' secrets — the secret still proves possession of a registered
+     * device for that account.
+     */
+    authorize(account, deviceId, authz) {
+      const m = /^Bearer\s+(\S+)$/i.exec(authz || '')
+      const supplied = m ? Buffer.from(m[1]) : null
+      const candidates = (account && deviceId)
+        ? [store.getDevice(account, deviceId)].filter(Boolean)
+        : (account ? store.listDevices(account) : [])
+      const ok = supplied && candidates.some(row => {
+        const expected = typeof row.deviceSecret === 'string' ? row.deviceSecret : ''
+        if (!expected) return false
+        const b = Buffer.from(expected)
+        return supplied.length === b.length && timingSafeEqual(supplied, b)
+      })
+      if (!ok) throw err(401, 'unauthorized: missing or invalid device bearer secret')
+    },
     setDeviceState(account, deviceId, patch) { return store.upsertDevice(account, deviceId, patch) },
     push(account, deviceId, items) {
       const acked = {}
@@ -183,7 +218,7 @@ export function startRelayServer(relay, { port = 0, host = '127.0.0.1' } = {}) {
       let body = {}
       try {
         if (chunks.length) body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
-        const out = route(relay, req.method, req.url, body)
+        const out = route(relay, req.method, req.url, body, req.headers.authorization)
         res.writeHead(200, { 'content-type': 'application/json', 'x-protocol-version': String(PROTOCOL_VERSION) })
         res.end(JSON.stringify({ protocolVersion: PROTOCOL_VERSION, ...out }))
       } catch (err) {
@@ -199,9 +234,24 @@ export function startRelayServer(relay, { port = 0, host = '127.0.0.1' } = {}) {
   return new Promise(resolve => server.listen(port, host, () => resolve(server)))
 }
 
-function route(relay, method, url, body) {
+/** Data routes all require the per-device bearer secret (register is the only
+ *  way to obtain one; everything else is unauthenticated by design). */
+const PROTECTED_ROUTES = new Set([
+  '/v1/sync/push',
+  '/v1/sync/pull',
+  '/v1/sync/ack',
+  '/v1/device/state',
+  '/v1/snapshot/put',
+  '/v1/snapshot/latest',
+])
+
+function route(relay, method, url, body, authz) {
   const path = url.split('?')[0]
   const post = () => { if (method !== 'POST') throw err(405, 'POST only'); return body }
+  if (PROTECTED_ROUTES.has(path)) {
+    const { account, device } = body || {}
+    relay.authorize(account, device, authz)
+  }
   switch (path) {
     case '/v1/sync/push': {
       const { account, device, items } = post()

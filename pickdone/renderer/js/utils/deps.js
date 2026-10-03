@@ -29,11 +29,18 @@ function wouldCycle (list, taskId, newPreds) {
   }
   return walk(taskId)
 }
-function isTaskReady (list, t) {
-  const preds = parsePredecessors(t.predecessors)
+/** `pre` (optional) lets a caller that already parsed the whole list reuse its work:
+ *  byId — a prebuilt id→row map (only !delete rows, same rule as the local build);
+ *  predsOf — t => parsed predecessors for t (avoids re-parsing per candidate).
+ *  The 2-arg signature is unchanged for every existing caller. */
+function isTaskReady (list, t, pre) {
+  const preds = (pre && pre.predsOf) ? pre.predsOf(t) : parsePredecessors(t.predecessors)
   if (!preds.length) return true
-  const byId = {}
-  for (const x of list) { if (!x.delete) byId[x.taskId] = x }
+  let byId
+  if (pre && pre.byId) { byId = pre.byId } else {
+    byId = {}
+    for (const x of list) { if (!x.delete) byId[x.taskId] = x }
+  }
   return preds.every(pid => { const p = byId[pid]; return !p || p.complete })
 }
 

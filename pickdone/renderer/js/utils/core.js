@@ -270,7 +270,13 @@ export function versionCodeOf (v) {
 
 
 /** Safe localStorage write: doesn't throw on quota exceeded/private mode, only warns.
- *  Returns whether it actually persisted: callers (e.g. tomato persistState) trigger compensation paths (forced DB mirror) based on it; previously warn-only = silent corruption */
+ *  TQ-6 (2026-10-03): the return value is a FAIL-SILENT signal — verify your consumer before
+ *  using this for a durability asset. The comment here used to claim tomato persistState
+ *  compensates on false; no caller ever did, which let a silently failed write retire data that
+ *  existed nowhere. The tomato store's durability writes (pending-queue mirror, quarantines)
+ *  now use the RAW throwing localStorage.setItem; safeSet remains for transient preference
+ *  blobs where loud degradation is handled by the caller (e.g. tomato persistState's own
+ *  degraded-flag try/catch around its direct setItem). */
 export function safeSet (key, value) {
   try { localStorage.setItem(key, value); return true } catch (e) { console.warn('[storage] write failed:', key, e); return false }
 }
@@ -284,6 +290,19 @@ export function cssVar (name) {
 export function parsePredecessors (v) {
   if (Array.isArray(v)) return v.filter(Boolean)
   try { const a = JSON.parse(v || '[]'); return Array.isArray(a) ? a.filter(Boolean) : [] } catch { return [] }
+}
+
+/** sec-synced-remote-img-beacon (2026-10-02, pure): may this url be rendered as an attachment
+ *  image? The todo row `image` JSON flows straight from sync — a peer (or an attacker shaping a
+ *  synced row) can put ANY https url in it, and rendering it as <img src> turns every list paint
+ *  into a tracking beacon / IP leak. Only locally minted attachment urls (saveAttachment in
+ *  main/attachments.js returns `local://<encoded-key>`; no data:/app:/http image path exists in
+ *  the minting sites) are renderable. Non-local urls get a placeholder cell that cannot emit
+ *  'preview' and never binds :src. NOTE: callers must NOT strip non-local entries from the
+ *  persisted lists — EditPanel writes imgList back into the unified save pipeline, so dropping
+ *  entries would delete the peer's attachment record on next save. */
+export function isRenderableAttachmentUrl (url) {
+  return typeof url === 'string' && /^local:\/\//.test(url)
 }
 
 /** U-18 (2026-09-20): batch meta read — consume the main process's getMetaMany op (preload

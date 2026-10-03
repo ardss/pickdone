@@ -5,7 +5,8 @@
  * icons are inline SVG (stroke currentColor, automatically follows the theme color); no emoji.
  * Name/description copy is stored as i18n keys (statsA.Achievements.*), resolved by the consuming component via $t.
  */
-import { dayjs, DAY_MS, FMT } from '../../utils/core.js'
+import { dayjs, FMT } from '../../utils/core.js'
+import { dayShift } from '../../utils/todayBounds.js'
 import { doneTsOf } from './metrics.js'
 
 /* 24x24 line icons (Feather/Lucide style standard paths, stroke=currentColor follows the theme color) */
@@ -94,7 +95,7 @@ export function buildAchievements ({ todos, records }) {
   // Current streak (today being unfinished doesn't break it; counting continues from yesterday)
   let streak = 0
   for (let i = byDay.has(dayjs().format(FMT.date)) ? 0 : 1; i < 3650; i++) {
-    if (byDay.has(dayjs(Date.now() - i * DAY_MS).format(FMT.date))) streak++
+    if (byDay.has(dayjs(dayShift(Date.now(), -i)).format(FMT.date))) streak++
     else break
   }
   const dayPeak = Math.max(0, ...byDay.values())

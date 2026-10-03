@@ -81,6 +81,7 @@ test('e2e: snapshot upload/bootstrap works sealed; tampered snapshot aborts boot
   parts[3] = parts[3].slice(0, -4) + 'AAAA'
   relay.store.putSnapshot(ACCOUNT, { ...snap, entities: parts.join('.') })
   const c = createRelayClient({ nodeId: 'devC', account: ACCOUNT, baseUrl, dataKey })
+  await c.register() // bearer gate (b962d54c): the probe must be a registered device — we are testing the crypto failure, not auth
   await assert.rejects(() => c.bootstrap(), /hash mismatch|e2e|authenticate/)
 })
 

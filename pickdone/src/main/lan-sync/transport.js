@@ -427,7 +427,19 @@ function wireConnection(socket, { deviceId, pairingSecret, secretFor, getHandler
         // table; the global pairingSecret remains the fallback for legacy peers paired before
         // per-peer secrets existed. A new pairing overwriting the global no longer breaks
         // earlier pairs.
-        const peerSecret = (typeof secretFor === 'function' && secretFor(claimed)) || pairingSecret
+        // S1 (2026-10-03) read-failure taxonomy: a secretFor read THROW is a transient settings
+        // failure, NOT an auth failure — it must never fire onUnauthorized (no 'auth-rejected'
+        // security entry, no terminal unpaired on the dialer) and never feed the per-IP failure
+        // gate. Answer the distinct 'secret-unavailable' class so the dialer retries.
+        let peerSecret
+        try {
+          peerSecret = (typeof secretFor === 'function' && secretFor(claimed)) || pairingSecret
+        } catch (err) {
+          try { require('electron-log').warn(`[LanSync] secret lookup failed for ${claimed} — answering secret-unavailable: ${err && err.message}`) } catch { /* logging is best-effort */ }
+          send(socket, { type: 'hello-ack', ok: false, protoVer: PROTO_VER, error: 'secret-unavailable' })
+          socket.destroy()
+          return
+        }
         if (!verifyAuthCode(peerSecret, claimed, msg.authCode)) {
           if (onUnauthorized) onUnauthorized({ deviceId: claimed, host: socket.remoteAddress })
           // Online-guessing throttle: FAILED hello attempts feed the same server-level

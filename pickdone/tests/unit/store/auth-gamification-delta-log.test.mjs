@@ -150,6 +150,115 @@ test('U9b compaction: own ≥7d increment deltas fold into a generation-growing 
   assert.deepEqual(JSON.parse(h.ls.getItem('gamification.ownKeys')), [])
 })
 
+test('subtotal payload: compacted list ages out past the retention window (bounded payload, leak-gamification-subtotal-compacted-array)', async () => {
+  const h = makeHarness()
+  await mod.actions.initGamification(h.store) // seed device id + base migration
+  const me = h.ls.getItem('gamification.deviceId')
+  const sk = P + me + ':c'
+  const DAY = 86400000
+  const now = Date.now()
+  // gen 1: compact one ≥7d own delta — the payload lists it with its cover time
+  const k1 = P + me + ':g1'
+  h.meta.set(INDEX_KEY, JSON.stringify([k1]))
+  h.meta.set(k1, JSON.stringify({ snow: 4, tomatoGain: 1, ts: now - 8 * DAY }))
+  h.ls.setItem('gamification.ownKeys', JSON.stringify([k1]))
+  await mod.actions.initGamification(h.store)
+  let subtotal = JSON.parse(h.meta.get(sk))
+  assert.deepEqual(subtotal.compacted, [k1])
+  assert.ok(subtotal.compactedTs && subtotal.compactedTs[k1] > now - 60000, 'cover time recorded')
+  // gen 2 (cover time of k1 aged past the 30d retention window): compact another delta
+  const k2 = P + me + ':g2'
+  const keys = JSON.parse(h.meta.get(INDEX_KEY)); keys.push(k2); h.meta.set(INDEX_KEY, JSON.stringify(keys))
+  h.meta.set(k2, JSON.stringify({ snow: 2, tomatoGain: 0, ts: now - 8 * DAY }))
+  h.ls.setItem('gamification.ownKeys', JSON.stringify([k2]))
+  const st = JSON.parse(h.meta.get(sk)); st.compactedTs[k1] = now - 31 * DAY
+  h.meta.set(sk, JSON.stringify(st))
+  await mod.actions.initGamification(h.store)
+  subtotal = JSON.parse(h.meta.get(sk))
+  assert.equal(subtotal.gen, 2)
+  assert.equal(subtotal.snow, 6)
+  assert.deepEqual(subtotal.compacted, [k2], 'aged compacted entry dropped from the payload')
+  assert.equal(subtotal.compactedTs[k1], undefined, 'aged cover-time entry dropped too')
+})
+
+test('peer subtotal: cumulative absorbed accounting is drift-free across generations even when the payload ages out entries (leak-gamification-subtotal-compacted-array)', async () => {
+  const h = makeHarness()
+  const sk = P + 'pX:c'
+  const k1 = P + 'pX:1'
+  const k2 = P + 'pX:2'
+  const k3 = P + 'pX:3'
+  // gen1: total 50 (k1=20 covered); this device folded k1 individually before the subtotal existed
+  h.ls.setItem('gamification.folded', JSON.stringify({ [k1]: { s: 20, t: 2 } }))
+  h.meta.set(INDEX_KEY, JSON.stringify([sk]))
+  h.meta.set(sk, JSON.stringify({ snow: 50, tomatoGain: 5, ts: Date.now(), gen: 1, compacted: [k1] }))
+  await mod.actions.initGamification(h.store)
+  assert.equal(h.state.user.snow, 10 + 30, 'gen1 contributes only the un-accounted 30')
+  // gen2: k2(10) covered too, total 60 — but this device already folded k2 individually → +0
+  const folded1 = JSON.parse(h.ls.getItem('gamification.folded'))
+  folded1[k2] = { s: 10, t: 1 }
+  h.ls.setItem('gamification.folded', JSON.stringify(folded1))
+  h.meta.set(sk, JSON.stringify({ snow: 60, tomatoGain: 6, ts: Date.now(), gen: 2, compacted: [k1, k2] }))
+  await mod.actions.initGamification(h.store)
+  assert.equal(h.state.user.snow, 40, 'gen2 adds nothing (everything already accounted)')
+  // gen3: k3(5) covered, total 65; the payload has aged k1/k2 out (compacted = [k3] only) —
+  // the guard's cumulative absorbed total must keep the accounting drift-free. This device
+  // folded k3 individually too, so everything is pre-accounted.
+  const folded2 = JSON.parse(h.ls.getItem('gamification.folded'))
+  folded2[k3] = { s: 5, t: 0 }
+  h.ls.setItem('gamification.folded', JSON.stringify(folded2))
+  h.meta.set(sk, JSON.stringify({ snow: 65, tomatoGain: 6, ts: Date.now(), gen: 3, compacted: [k3] }))
+  await mod.actions.initGamification(h.store)
+  assert.equal(h.state.user.snow, 40, 'gen3 adds nothing (k3 5 is inside the absorbed total, not a new gain)')
+  const folded3 = JSON.parse(h.ls.getItem('gamification.folded'))
+  assert.equal(folded3[sk].absorbed, 65, 'guard carries the cumulative accounted amount')
+})
+
+test('folded guard: guards absorbed into a subtotal generation are pruned once their meta rows are gone; live-meta guards are kept (leak-gamification-folded-ls-never-pruned)', async () => {
+  const h = makeHarness()
+  const sk = P + 'pY:c'
+  const k1 = P + 'pY:1' // meta deleted by the owner's compaction → guard becomes prunable
+  const k2 = P + 'pY:2' // meta still live (lost owner-side delete) → guard must be kept
+  h.ls.setItem('gamification.folded', JSON.stringify({ [k1]: { s: 20, t: 2 }, [k2]: { s: 10, t: 1 } }))
+  h.meta.set(INDEX_KEY, JSON.stringify([sk, k2]))
+  h.meta.set(sk, JSON.stringify({ snow: 50, tomatoGain: 5, ts: Date.now(), gen: 2, compacted: [k1, k2] }))
+  h.meta.set(k2, peer(10, 1))
+  await mod.actions.initGamification(h.store)
+  assert.equal(h.state.user.snow, 10 + 20, 'contribution = 50 − 20 (k1) − 10 (k2, folded individually)')
+  const folded = JSON.parse(h.ls.getItem('gamification.folded'))
+  assert.equal(folded[k1], undefined, 'absorbed guard with dead meta pruned from FOLDED_LS')
+  assert.ok(folded[k2], 'live-meta guard kept — refold safety if the owner retries the delete')
+  assert.equal(folded[sk].absorbed, 50, 'both amounts now live inside the subtotal guard')
+  // second init: gen unchanged → no new fold, and the live-meta key is still guard-protected
+  const s0 = h.state.user.snow
+  await mod.actions.initGamification(h.store)
+  assert.equal(h.state.user.snow, s0)
+})
+
+test('shared index: entries whose meta stays null past the grace window are pruned; readable entries never are (leak-gamification-index-dead-peers)', async () => {
+  const h = makeHarness()
+  const DAY = 86400000
+  const deadKey = P + 'gone:1' // retired device — meta row never arrives
+  const liveKey = P + 'live:1'
+  h.meta.set(INDEX_KEY, JSON.stringify([deadKey, liveKey]))
+  h.meta.set(liveKey, peer(3, 0))
+  await mod.actions.initGamification(h.store)
+  assert.equal(h.state.user.snow, 13)
+  const index0 = JSON.parse(h.meta.get(INDEX_KEY))
+  assert.ok(index0.includes(deadKey) && index0.includes(liveKey), 'first null read stays inside the grace window (U2 retry preserved)')
+  assert.ok(JSON.parse(h.ls.getItem('gamification.indexNullSeen'))[deadKey], 'null read tracked with a timestamp')
+  // age the dead entry past the 30d grace window, then re-init
+  const seen = JSON.parse(h.ls.getItem('gamification.indexNullSeen'))
+  seen[deadKey] = Date.now() - 31 * DAY
+  h.ls.setItem('gamification.indexNullSeen', JSON.stringify(seen))
+  await mod.actions.initGamification(h.store)
+  const keys = JSON.parse(h.meta.get(INDEX_KEY))
+  assert.ok(!keys.includes(deadKey), 'dead index entry pruned from the shared index')
+  assert.ok(keys.includes(liveKey), 'readable entry never pruned')
+  assert.equal(JSON.parse(h.ls.getItem('gamification.indexNullSeen'))[deadKey], undefined, 'tracking entry dropped too')
+  // the live delta is not re-folded by the rewrites
+  assert.equal(h.state.user.snow, 13)
+})
+
 test('saveSnowGain: same dedupKey applied exactly once; bare-number legacy payload still works', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] }) // the batch flush is a real 60s timer — mock + tick so no real timer leaks into later tests
   const h = makeHarness()
@@ -163,6 +272,19 @@ test('saveSnowGain: same dedupKey applied exactly once; bare-number legacy paylo
   assert.ok([...h.meta.keys()].some(k => k.startsWith('gamification.delta.')), 'batched delta emitted')
   // dedup guard is restart-stable (persisted to LS)
   assert.ok(JSON.parse(h.ls.getItem('gamification.gainDedup'))['focus-k1'])
+  t.mock.timers.reset()
+})
+
+test('gain dedup: the in-memory guard is bounded — oldest keys are evicted and re-apply, recent keys still dedup (leak-gain-dedup-memory-set)', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const h = makeHarness({ snow: 0, tomatoGain: 0 })
+  for (let i = 0; i < 210; i++) await mod.actions.saveSnowGain(h.store, { gain: 1, dedupKey: 'k' + i })
+  assert.equal(h.state.user.snow, 210)
+  await mod.actions.saveSnowGain(h.store, { gain: 1, dedupKey: 'k205' }) // recent — still guarded
+  assert.equal(h.state.user.snow, 210, 'recent dedupKey still dedups inside the bound')
+  await mod.actions.saveSnowGain(h.store, { gain: 1, dedupKey: 'k0' }) // oldest — evicted past the 200 bound
+  assert.equal(h.state.user.snow, 211, 'evicted oldest key re-applies: the memory guard is bounded')
+  t.mock.timers.tick(60000) // flush pending batch, clear module timer
   t.mock.timers.reset()
 })
 

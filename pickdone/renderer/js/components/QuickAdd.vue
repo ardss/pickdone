@@ -41,6 +41,7 @@ import { parseNaturalDate } from '../utils/nlDate.js'
 import {dayjs, FMT } from '../utils/core.js'
 import { resolveQuickAddDate } from '../utils/quickAddDate.js'
 import { splitPasteLines, ensureTagSuffix } from '../utils/quickAddPaste.js'
+import { $elOf } from '../utils/el.js'
 
 export default {
   name: 'QuickAdd',
@@ -91,12 +92,9 @@ export default {
   },
   mounted () {
     window.addEventListener('todo:focus-quickadd', this.focusInput)
-    // The hidden calendar picker input stays out of the Tab focus chain (invoked programmatically by the calendar
-    // button only) — same fix as EditPanel's hidden date/deadline pickers; $el may be a comment node, so fall back
-    // to the parent element defensively
     this.$nextTick(() => {
-      const pickEl = this.$refs.calPick && this.$refs.calPick.$el
-      const inp = pickEl && typeof pickEl.querySelector === 'function' ? pickEl.querySelector('input') : (pickEl && pickEl.parentElement ? pickEl.parentElement.querySelector('input') : null)
+      const pickEl = $elOf(this.$refs.calPick)
+      const inp = pickEl && pickEl.querySelector('input')
       if (inp) inp.setAttribute('tabindex', '-1')
     })
   },

@@ -3,7 +3,7 @@
  * Extracted verbatim from lan-sync-bootstrap.js for the structure size ratchet —
  * behavior identical. Settings access and limits are injected by the bootstrap so
  * the module-level swappable `state` (tests use __test.setState) keeps working. */
-module.exports = function createPairedPeers ({ settingGet, settingPut, log, isDialableHost, DEFAULT_PORT, K_PAIRED_PEERS }) {
+module.exports = function createPairedPeers ({ settingGet, settingPut, log, isDialableHost, DEFAULT_PORT, K_PAIRED_PEERS, onPeerPersisted }) {
   /** Normalize a wire/host address to a dialable form: strip IPv4-mapped IPv6 (::ffff:a.b.c.d);
    *  return null for junk (scope-less link-local, 169.254.*, virtual ranges). */
   function normalizeHost (host) {
@@ -11,11 +11,20 @@ module.exports = function createPairedPeers ({ settingGet, settingPut, log, isDi
     if (h.startsWith('::ffff:')) h = h.slice(7)
     return isDialableHost(h) ? h : null
   }
+  /* D15 C1 (2026-10-03): a read THROW is not the same as "never paired". The old catch{}
+   * returned {} for an unreadable/locked settings table, so persistPairedPeer merged one new
+   * peer into an EMPTY map and settingPut erased EVERY previously paired peer (secrets
+   * included) — exactly on a busy/closed db. Now a read failure THROWS; the persist/remove
+   * paths catch it and ABORT, keeping the old durable map intact. Only a genuinely empty or
+   * malformed-but-readable value yields {}. */
   function loadPairedPeers () {
+    let v
     try {
-      const v = JSON.parse(settingGet(K_PAIRED_PEERS) || '{}')
-      return (v && typeof v === 'object' && !Array.isArray(v)) ? v : {}
-    } catch { return {} }
+      v = JSON.parse(settingGet(K_PAIRED_PEERS) || '{}')
+    } catch (e) {
+      throw new Error('paired-peers read failed (refusing to derive a write from it): ' + (e && e.message))
+    }
+    return (v && typeof v === 'object' && !Array.isArray(v)) ? v : {}
   }
   /** Merge a peer record keyed by deviceId. Writes ONLY on a real change (connection events fire
    *  per dial — this must not turn into a settings-table write amplifier). Returns true when written. */
@@ -40,6 +49,10 @@ module.exports = function createPairedPeers ({ settingGet, settingPut, log, isDi
       if (prev.host === next.host && prev.port === next.port && prev.name === next.name && prev.secret === next.secret) return false
       all[entry.deviceId] = next
       settingPut(K_PAIRED_PEERS, JSON.stringify(all))
+      // S3 (2026-10-03): a successful persist for a deviceId is the REAL pairing event — it is
+      // the ONLY thing allowed to clear that id's watermark revocation (the unpair/recovery
+      // revocation set lives in the watermark store; wiring lives in the bootstrap closure).
+      if (typeof onPeerPersisted === 'function') { try { onPeerPersisted(entry.deviceId) } catch { /* reinstatement must never fail the persist */ } }
       return true
     } catch (e) { log.warn('[LanSync] paired-peer persist failed:', e.message); return false }
   }

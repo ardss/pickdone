@@ -16,10 +16,31 @@ let win = null
 let ignoreBlur = false // toggle path: while show→focus is still in flight the blur event is untrustworthy; swallow it once to prevent a flash-hide
 let lockProbe = null // lock-screen probe, injected by index.js (setLockProbe): while locked, the global shortcut does not summon the quick-add window (a submit would be rejected = silently lost task)
 
+/** Pure helper (unit-testable): center the 480×64 bar on the given display's work area.
+ *  C11 (P3 2026-10-02): the summon used to ALWAYS land on the primary display even when the user
+ *  was working on a secondary one. The caller now resolves the cursor's display; same bounds
+ *  contract (upper-center of the work area), just the right screen. */
+function boundsForDisplay (display) {
+  const d = display || null
+  const width = d && d.bounds ? d.bounds.width : 0
+  const workArea = (d && d.workArea) || { x: 0, y: 0, width: d && d.bounds ? d.bounds.width : 0, height: 0 }
+  return {
+    x: (workArea.x || 0) + Math.round(((workArea.width || width) - W) / 2),
+    y: (workArea.y || 0) + Math.round((workArea.height || 0) * 0.18),
+    width: W,
+    height: H
+  }
+}
+
 function defaultBounds () {
-  const { width } = screen.getPrimaryDisplay().bounds
-  const { workArea } = screen.getPrimaryDisplay()
-  return { x: Math.round((width - W) / 2), y: workArea.y + Math.round(workArea.height * 0.18), width: W, height: H }
+  // C11: prefer the display the user is currently working on (cursor position); fall back to the
+  // primary display when the cursor probe fails (headless/test environments, races at startup).
+  let display = null
+  try { display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()) } catch { /* fall back below */ }
+  if (!display) {
+    try { display = screen.getPrimaryDisplay() } catch { /* boundsForDisplay tolerates null */ }
+  }
+  return boundsForDisplay(display)
 }
 
 function create () {
@@ -50,7 +71,7 @@ function create () {
   // Same-origin prefix guard aligned with the main window — the old substring check let any scheme
   // through via the route marker (e.g. https://evil.com/#__quick-add)
   win.webContents.on('will-navigate', (e, url) => {
-    if (!/^app:\/\/app\//.test(String(url))) e.preventDefault()
+    if (!/^app:\/\/app\//i.test(String(url))) e.preventDefault()
   })
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   win.loadURL('app://app/renderer-dist/index.html#/__quick-add').catch(e => { try { log.warn('[QuickAdd] loadURL failed', e) } catch {} })
@@ -131,4 +152,4 @@ function isSelfSender (sender) {
 /** Lock-screen probe injection (index.js holds isLocked, avoiding a circular require) */
 function setLockProbe (fn) { lockProbe = fn }
 
-module.exports = { toggle, hide, isVisible: is_visible, setLockProbe, isSelfSender }
+module.exports = { toggle, hide, isVisible: is_visible, setLockProbe, isSelfSender, boundsForDisplay }

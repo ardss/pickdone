@@ -157,3 +157,62 @@ test('Sync-4/17: sentinel lifecycle round-trip (mark/has/clear)', () => {
   dbRecovery.clearRecoveryPending(ud)
   assert.equal(dbRecovery.hasRecoveryPending(ud), false)
 })
+
+/* ---------------- mig-restore-sentinel-cleared-before-consumer ----------------
+ * The sentinel used to be cleared unconditionally on init SUCCESS (index.js) while the replay it
+ * stands for was only ever consumed inside the dbm.init failure catch — a crash in that window
+ * left a parseable critical backup stranded behind a cleared sentinel. The success path must
+ * re-evaluate the SAME gate attemptDbRecovery uses (parseability, not mere existence). */
+
+test('replay gate: sentinel + parseable critical backup → cleanInitReplayDecision.replay = true', () => {
+  const ud = sandbox()
+  writeBackupWithBrokenFilter(ud) // parseable whole-file JSON
+  dbRecovery.markRecoveryPending(ud, { reason: 'json-restore-blocked' })
+  const d = dbRecovery.cleanInitReplayDecision(ud)
+  assert.equal(d.replay, true, 'red before the fix: the export did not exist and index.js:483 cleared the sentinel unconditionally')
+  assert.equal(typeof d.jsonPath, 'string', 'the caller gets the snapshot path for its plain-bak gating')
+})
+
+test('replay gate: no sentinel → replay = false', () => {
+  const ud = sandbox()
+  writeBackupWithBrokenFilter(ud)
+  const d = dbRecovery.cleanInitReplayDecision(ud)
+  assert.equal(d.replay, false, 'no sentinel = nothing to replay, the stale-sentinel cleanup stands')
+})
+
+test('replay gate: sentinel with an UNPARSEABLE JSON → replay = false (existence is not enough)', () => {
+  const ud = sandbox()
+  fs.writeFileSync(path.join(ud, 'critical-state-backup.json'), '{torn')
+  dbRecovery.markRecoveryPending(ud, {})
+  const d = dbRecovery.cleanInitReplayDecision(ud)
+  assert.equal(d.replay, false, 'must match the attemptDbRecovery gate at dbRecovery.cjs:218 — parseability, not mere existence')
+})
+
+/* ---------------- restore-degraded-segments-marker-never-consumed ----------------
+ * The writer put degradedSegments into every degraded dump (Sync-13) but nothing read it back.
+ * restoreSegmentsFromCriticalBackup must surface the marker in its report — honesty surface
+ * only: it must never fail the restore nor veto `proved`. */
+
+test('degradedSegments: the restore report carries the dump marker; proved stays true', () => {
+  const ud = sandbox()
+  const backup = {
+    backup: {
+      degradedSegments: ['planState', 'metaState'], // the collector failed at write time
+      todoState: JSON.stringify({ todoList: [{ taskId: 't1' }], recycleList: [] })
+    }
+  }
+  fs.writeFileSync(path.join(ud, 'critical-state-backup.json'), JSON.stringify(backup))
+  const r = dbRecovery.restoreSegmentsFromCriticalBackup(ud, () => {})
+  assert.deepEqual(r.degradedSegments, ['planState', 'metaState'],
+    'red before the fix: the field was absent from the restore result (writer without reader)')
+  assert.equal(r.proved, true, 'the marker is an honesty surface, NOT a gate — a clean consume of the present segments still proves the restore')
+})
+
+test('degradedSegments: absent marker (clean or pre-Sync-13 dump) → empty array, restore unaffected', () => {
+  const ud = sandbox()
+  const backup = { backup: { todoState: JSON.stringify({ todoList: [{ taskId: 't1' }], recycleList: [] }) } }
+  fs.writeFileSync(path.join(ud, 'critical-state-backup.json'), JSON.stringify(backup))
+  const r = dbRecovery.restoreSegmentsFromCriticalBackup(ud, () => {})
+  assert.deepEqual(r.degradedSegments, [])
+  assert.equal(r.proved, true)
+})

@@ -147,7 +147,11 @@
     </div>
 
     <div v-if="previewImg" ref="previewMask" tabindex="-1" class="img-preview-mask" role="dialog" aria-modal="true" :aria-label="$t('statsJ.EditPanel.imagePreview')" @click.self="previewImg=null" @keydown.esc="previewImg=null" @keydown.tab.prevent="$refs.previewMask.focus()">
-      <img :src="previewImg"><button class="close-x" :aria-label="$t('statsE.SettingsModal.closeBtn')" @click.stop="previewImg=null"></button>
+      <!-- sec-synced-remote-img-beacon: previewImg is only minted from EpAttachments' gated 'preview'
+           emit (local:// only) — the isRenderableAttachmentUrl check here is defensive so a stale or
+           hostile value can never bind :src and turn the preview mask into a beacon. -->
+      <img v-if="isRenderableAttachmentUrl(previewImg)" :src="previewImg">
+      <span v-else role="img" :aria-label="previewImg"></span><button class="close-x" :aria-label="$t('statsE.SettingsModal.closeBtn')" @click.stop="previewImg=null"></button>
     </div>
   </aside>
   </transition>
@@ -157,10 +161,11 @@
 /**
  * Right edit panel -- aligned with the right-sidebar reference: Category chips / complete + expand / title / description / date chips (today, tomorrow, pick a date, no date) / add reminder / subtasks (x, drag handle) / add subtask (n/20) / three difficulty levels / upload images / bottom tool row S4 split (2026-09-12): reminders/subtasks/attachments/dependencies views moved to ./edit-panel/Ep*.vue -- children only EMIT change events; this component owns the state (e/subList/imgList/fileList) and funnels every mutation through the unified queueSave pipeline (utils/editSave.js). The save pipeline is the global lifeline: it is the only place that dispatches todo/updateTodoFields for panel edits.
  */
-import {dayjs, DAY_MS, FMT, reportError } from '../utils/core.js'
+import {dayjs, FMT, reportError } from '../utils/core.js'
+import { dayShift } from '../utils/todayBounds.js'
 import { getLocale } from '../i18n/index.js'
 import { extractTags } from '../utils/search.js'
-import { subsCompleteTarget } from '../utils/core.js'
+import { subsCompleteTarget, isRenderableAttachmentUrl } from '../utils/core.js'
 import { deleteWithUndo, removeWithUndo } from '../utils/confirm.js'
 import { toggleCompleteWithUndo } from '../utils/completeAction.js'
 import { getEstimate, setEstimate, ensureEstimate } from '../utils/tomatoEstimate.js'
@@ -169,6 +174,7 @@ import { attachmentUrlPresent } from '../utils/attachmentRefs.js'
 import { contentFingerprint, shouldRefreshRemote, taskAbsentIn } from '../utils/editPanelRemoteSync.js'
 import { buildEditSnapshot } from '../store/ui.js'
 import { findTaskRowEl } from '../utils/todoRowEl.js'
+import { $elOf } from '../utils/el.js'
 import EpReminders from './edit-panel/EpReminders.vue'
 import EpSubtasks from './edit-panel/EpSubtasks.vue'
 import EpAttachments from './edit-panel/EpAttachments.vue'
@@ -255,7 +261,7 @@ export default {
       if (!this.e.dateTs) return ''
       const d = dayjs(this.e.dateTs).startOf('day').valueOf()
       if (d === this.today0) return this.todayLabel
-      if (d === this.today0 + DAY_MS) return this.tomorrowLabel
+      if (d === dayShift(this.today0, 1)) return this.tomorrowLabel
       return dayjs(this.e.dateTs).format(FMT.cnDate)
     }
   },
@@ -359,9 +365,8 @@ export default {
     this.$el.addEventListener('focusin', this._onFocusin)
     // The hidden date picker input stays out of the Tab focus chain (programmatic "pick a date" only)
     this.$nextTick(() => {
-      // Under Element Plus, $refs.datePick.$el may be a comment/text node (no querySelector); defensively type-check
-      const pickEl = this.$refs.datePick && this.$refs.datePick.$el
-      const inp = pickEl && typeof pickEl.querySelector === 'function' ? pickEl.querySelector('input') : (pickEl && pickEl.parentElement ? pickEl.parentElement.querySelector('input') : null)
+      const pickEl = $elOf(this.$refs.datePick)
+      const inp = pickEl && pickEl.querySelector('input')
       if (inp) inp.setAttribute('tabindex', '-1')
     })
   },
@@ -514,14 +519,15 @@ export default {
     },
     setDate (mode) {
       if (mode === 'today') this.applyDate(this.today0)
-      else if (mode === 'tomorrow') this.applyDate(this.today0 + DAY_MS)
+      else if (mode === 'tomorrow') this.applyDate(dayShift(this.today0, 1))
       else if (mode === 'none') this.applyDate(0)
       else if (mode === 'pick') {
         // focus() invokes the calendar panel (simulating a click on the 0-size hidden input is flaky), plus one extra click as a fallback
         const p = this.$refs.datePick
         if (!p) return
         if (p.focus) p.focus()
-        const inp = p.$el && p.$el.querySelector('input')
+        const pickEl = $elOf(p)
+        const inp = pickEl && pickEl.querySelector('input')
         if (inp) inp.click()
       }
     },
@@ -530,9 +536,8 @@ export default {
       const p = this.$refs.deadlinePick
       if (!p) return
       if (p.focus) p.focus()
-      // $el may be a comment/text node (no querySelector); defensively take the parent element's input — same pitfall as mounted's datePick
-      const el = p.$el
-      const inp = el && typeof el.querySelector === 'function' ? el.querySelector('input') : (el && el.parentElement ? el.parentElement.querySelector('input') : null)
+      const el = $elOf(p)
+      const inp = el && el.querySelector('input')
       if (inp) inp.click()
     },
     applyDate (ts) {
@@ -653,6 +658,7 @@ export default {
     /* ===== Attachments: upload/paste/drop orchestration (impl: edit-panel/attachments.js).
        scrollImgsIntoView stays here — focus/scroll timing is the component's concern. ===== */
     pickFiles (kind) { return attachments.pickFiles(this, kind) },
+    isRenderableAttachmentUrl,
     onDescPaste (e) { return attachments.onDescPaste(this, e) },
     onDescDrop (e) { return attachments.onDescDrop(this, e) },
     /* After paste/drop, scroll thumbnails into view for immediate "it landed" feedback */

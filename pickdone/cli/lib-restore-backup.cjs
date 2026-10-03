@@ -84,9 +84,14 @@ module.exports = function restoreBackup ({ opts, lib, emit }) {
   // promises "comment and code can no longer drift") — the previous hand-copied 6-segment literal
   // missed tomatoRecords, so a schemaV=2 tomatoRecords segment passed this CLI's validation while
   // the App's restore refused the dump.
+  // restore-schema-gate-three-copies (P3, symptom of "restore gates not single-sourced"): the
+  // `> 1` literal here was a third copy of the schema gate (renderer SCHEMA_V / dbRecovery
+  // SUPPORTED_SCHEMA_V / this one) — it stayed behind the moment the constant moves. Consume the
+  // exported binding so a future bump cannot drift the CLI from the App. (Renderer↔main remain
+  // two declarations by necessity: ESM↔CJS across the process boundary.)
   for (const key of dbRecovery.RESTORE_SEGMENT_NAMES) {
     const seg = parseSeg(key)
-    if (seg && Number(seg.schemaV || 1) > 1) {
+    if (seg && Number(seg.schemaV || 1) > dbRecovery.SUPPORTED_SCHEMA_V) {
       throw new lib.CliError(`snapshot ${key}.schemaV=${seg.schemaV} is newer than this CLI supports — upgrade the App and restore from its Settings -> Backup`, 'SNAPSHOT_FUTURE')
     }
   }

@@ -25,6 +25,9 @@ export const ANCHORS = {
   cliLib: 'cli/lib.js',
   /** Renderer (non-view) */
   rendererMain: 'renderer/js/main.js',
+  /** Day-caliber single source (dayShift/dayStart/today0) + its enforcement scan root */
+  todayBounds: 'renderer/js/utils/todayBounds.js',
+  rendererJsDir: 'renderer/js',
   browserShim: 'browser-dev/todo-browser-shim.js',
   settingsStore: 'renderer/js/store/settings.js',
   /** Renderer views/components/i18n (anchored by contract/guard tests only) */

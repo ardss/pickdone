@@ -239,6 +239,7 @@ export default {
       "moveDown": "Move down",
       "repeatLabel": "Repeat",
       "pomodoroInvested": "Pomodoro invested",
+      "focusMinutesTitle": "Focus time: {n} min",
       "togglePomodoroFocus": "Toggle pomodoro focus",
       "subCheckedAnnounce": "Subtask checked: {s}",
       "subUncheckedAnnounce": "Subtask unchecked: {s}"

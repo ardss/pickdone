@@ -103,6 +103,9 @@
                          :placeholder="$t('statsD.TomatoFocusRecord.pickEvent')">
                 <el-option v-for="t in attachCandidates" :key="t.taskId" :label="t.taskContent" :value="t.taskId"/>
               </el-select>
+              <!-- [D15-A17] the candidate pool is capped at 200; beyond that the task simply didn't
+                   exist in the filterable select and users assumed the data was lost. Say so. -->
+              <div v-if="attachTruncated" class="tfr-truncate-hint">{{ $t('statsD.TomatoFocusRecord.truncatedHint', { n: attachTotal }) }}</div>
               <el-input v-if="!addForm.focusTaskId" v-model="addForm.focusText" size="small" style="margin-top:8px"
                         maxlength="100" :placeholder="$t('statsD.TomatoFocusRecord.freeFocusPlaceholder')"/>
             </div>
@@ -127,6 +130,7 @@ import { genTomatoId } from '../utils/core.js'
 import { loadRuntime, saveRuntime } from '../store/helpers/runtimeState.js'
 import dialogA11y from '../utils/dialogA11y.js'
 import { secToHHmmss } from '../utils/tomatoShared.js'
+import { dayShift } from '../utils/todayBounds.js'
 
 // thin delegate — single source in utils/tomatoShared.js (extracted verbatim 2026-09-23)
 const fmtSec = secToHHmmss
@@ -160,18 +164,24 @@ export default {
     attachCandidates () {
       return [...this.$store.state.todo.todoList].filter(t => !t.complete && t.taskContent).slice(0, 200)
     },
-    /** Currently selected day (tlOffset: 0 = today, -1 = yesterday...) */
-    selDayStart () { return this.$store.state.todo.todayTimestamp + (this.tlOffset || 0) * 86400000 },
+    // [D15-A17] pool-cap visibility: the 200-entry cap used to be silent
+    attachTotal () { return this.$store.state.todo.todoList.filter(t => !t.complete && t.taskContent).length },
+    attachTruncated () { return this.attachTotal > 200 },
+    /** Currently selected day (tlOffset: 0 = today, -1 = yesterday...). Stepped via dayShift
+     *  (calendar semantics): ms arithmetic off todayTimestamp lands off-midnight across DST, so
+     *  the [selDayStart, selDayStart+1day) bins and the exact yesterday-label check silently
+     *  binned/mis-labeled the wrong local day. */
+    selDayStart () { return dayShift(this.$store.state.todo.todayTimestamp, this.tlOffset || 0) },
     selDayLabel () {
       const t = this.$store.state.todo.todayTimestamp
       const d = this.selDayStart
       if (d === t) return d + this.$t('statsD.TomatoFocusRecord.todaySuffix')
-      if (d === t - 86400000) return d + this.$t('statsD.TomatoFocusRecord.yesterdaySuffix')
+      if (d === dayShift(t, -1)) return d + this.$t('statsD.TomatoFocusRecord.yesterdaySuffix')
       return String(d)
     },
     /** Records of the selected day (sorted by end time, descending) */
     dayRecords () {
-      const start = this.selDayStart; const end = start + 86400000
+      const start = this.selDayStart; const end = dayShift(start, 1)
       return this.records.filter(r => { const e = r.endTime || 0; return e > start && e < end })
         .sort((a, b) => (b.endTime || 0) - (a.endTime || 0))
     },
@@ -179,7 +189,7 @@ export default {
     timeline () {
       const list = this.dayRecords
       const dayStart = this.selDayStart
-      const dayEnd = dayStart + 86400000
+      const dayEnd = dayShift(dayStart, 1)
       const segs = []
       let totalMin = 0
       for (const r of list) {
@@ -378,6 +388,8 @@ html[data-theme="dark"] .tfr-timeline__legend .dot-idle { background: #2a3038; }
 .tfr-form-row { margin-bottom: 16px; }
 .tfr-form-label { display: block; margin-bottom: 6px; color: var(--text-2); font-size: var(--fs-md); }
 .tfr-add-info { margin: 4px 0 0; color: var(--text-3); font-size: var(--fs-sm); }
+/* [D15-A17] attach-pool truncation notice */
+.tfr-truncate-hint { margin-top: 4px; color: var(--text-3); font-size: var(--fs-xs); }
 .tfr-add-info .text-primary { color: var(--brand, #0c8172); }
 /* 专注记录：行点击展开详情 + 时间轴定位高亮 */
 .tomato-record { cursor: pointer; }

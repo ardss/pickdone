@@ -72,19 +72,19 @@ function giveUpCtx (statePatch = {}) {
 
 beforeEach(() => { lsRef.removeItem('tomatoLastPhaseDone') })
 
-test('giveUp: duration setting lowered mid-focus books MEASURED minutes, not the new setting', () => {
+test('giveUp: duration setting lowered mid-focus books MEASURED minutes, not the new setting', async () => {
   const startedAt = Date.now() - (5 * 60 + 30) * 1000 // 5.5 focused minutes
   const ctx = giveUpCtx({ startedAt, tomatoTime: 3 }) // user lowered the duration to 3 mid-focus
-  tomato.actions.giveUp(ctx, { record: true, reason: '' })
+  await tomato.actions.giveUp(ctx, { record: true, reason: '' })
   assert.equal(ctx.state.tomatoRecordList.length, 1)
   assert.equal(ctx.state.tomatoRecordList[0].focusDuration, 6,
     'measured round(5.5) minutes booked (D5 2026-09-20 unified with completeFocus; old code capped at the current setting=3)')
 })
 
-test('giveUp: measured minutes are clamped at FOCUS_MAX_MINUTES (600)', () => {
+test('giveUp: measured minutes are clamped at FOCUS_MAX_MINUTES (600)', async () => {
   const startedAt = Date.now() - 700 * 60 * 1000
   const ctx = giveUpCtx({ startedAt, tomatoTime: 25 })
-  tomato.actions.giveUp(ctx, { record: true, reason: '' })
+  await tomato.actions.giveUp(ctx, { record: true, reason: '' })
   assert.equal(ctx.state.tomatoRecordList[0].focusDuration, 600, 'FOCUS_MAX_MINUTES cap applies')
 })
 

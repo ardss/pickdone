@@ -123,6 +123,7 @@ export default {
   'statsJ.EditPanel.depsRemove': 'Remove predecessor',
   'statsJ.EditPanel.tagsPlaceholder': 'Tags (multiple, saved as #tag in text)',
   'statsJ.EditPanel.addTagHint': 'Add tag, press Enter',
+  'statsJ.EditPanel.tagExists': 'Tag #{name} already exists',
   'statsJ.EditPanel.addTag': 'Add tag',
   'statsJ.EditPanel.doneBtn': 'Done',
   'statsJ.EditPanel.clearReminder': 'Clear reminder',

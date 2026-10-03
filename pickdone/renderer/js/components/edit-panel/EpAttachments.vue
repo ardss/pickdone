@@ -18,9 +18,14 @@
   <template v-else>
     <div class="ep-imgs" v-if="imgList.length" :key="'imgs' + arriveTick">
       <div v-for="(im,i) in imgList" :key="i" class="ep-img-cell">
-        <button type="button" class="ep-img-btn" :aria-label="$t('statsJ.EditPanel.zoomImage') + (Number(i)+1)" @click="$emit('preview', im.url)">
+        <!-- sec-synced-remote-img-beacon: only local:// urls render as <img>. A synced remote url
+             gets an inert placeholder cell — no :src binding (no beacon on paint), no 'preview'
+             emit. The entry STAYS in imgList (EditPanel persists the list verbatim; stripping it
+             would delete the peer's attachment record on next save). -->
+        <button v-if="isRenderableAttachmentUrl(im.url)" type="button" class="ep-img-btn" :aria-label="$t('statsJ.EditPanel.zoomImage') + (Number(i)+1)" @click="$emit('preview', im.url)">
           <img :src="im.url" alt="" loading="lazy" @error="onImgErr($event)">
         </button>
+        <span v-else class="ep-img-btn" role="img" :aria-label="(im && im.name) ? String(im.name) : 'external image'"></span>
         <b class="x close-x close-x--sm" role="button" tabindex="0" :aria-label="$t('statsJ.EditPanel.removeImage')" @click.stop="$emit('remove', 'imgList', i)" @keydown.enter.prevent.stop="$emit('remove', 'imgList', i)"></b>
       </div>
     </div>
@@ -61,6 +66,7 @@ function arrivalTouchesCurrent (lists, key) {
 }
 // [component-fixes] pure-end
 import { logger } from '../../utils/logger.js'
+import { isRenderableAttachmentUrl } from '../../utils/core.js'
 
 export default {
   name: 'EpAttachments',
@@ -93,6 +99,7 @@ export default {
     if (this._offArrive) { try { this._offArrive() } catch (e) { /* already gone */ } this._offArrive = null }
   },
   methods: {
+    isRenderableAttachmentUrl,
     /* 粘贴/上传失败的兜底：不显示 Chromium 碎图图标，改用居中感叹号占位（视觉上与关闭✕可区分） */
     onImgErr (e) { (e.target as HTMLElement).classList.add('ep-img-broken') },
     openFileUrl (f) {

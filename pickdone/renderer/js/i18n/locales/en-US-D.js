@@ -90,6 +90,7 @@ export default {
       "linkedTaskLabel": "Linked task",
       "freeFocusPlaceholder": "Free focus",
       "pickDateTime": "Pick date & time",
+      "truncatedHint": "Showing the first 200 open tasks of {n} total — use free-form focus for older ones",
       "pickEvent": "Pick a task",
       "addInfoA": "Manual records are for offline focus sessions",
       "addInfoB": "Up to 3 per day",

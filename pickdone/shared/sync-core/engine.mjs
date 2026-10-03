@@ -9,6 +9,11 @@
  *
  * LOCAL STORE ADAPTER CONTRACT (implemented by the app over its real DB):
  *   getRowsSince(seq) -> rows [{seq, entity?, entityId?, ts?, ...}] from oplog
+ *     (S2 2026-10-03: an adapter MAY return { rows, incompleteAtSeq } instead — a failed
+ *     hydration TRUNCATES the delta at incompleteAtSeq, and buildSegments then never packs a
+ *     row at/past it. Invariant: no segment claims a toSeq covering a row that was not
+ *     included, because the receiver acks seg.toSeq at face value and the sender advances its
+ *     watermark/cursor to the ack.)
  *   applyRow(row)     -> boolean; runs merge rules, true when state changed
  *   getCursor() / setCursor(pushedSeq)  — persisted push cursor
  *   allRows()         -> current live rows (incl. tombstones)
@@ -62,7 +67,16 @@ export function createEngine({ localStore, deviceId, clock = monotonicClock() })
    */
   function buildSegments(fromSeq) {
     const cursor = Number.isInteger(fromSeq) ? fromSeq : (localStore.getCursor() ?? 0)
-    const rows = localStore.getRowsSince(cursor)
+    // S2 (2026-10-03): the adapter may report an egress truncation ({ rows, incompleteAtSeq }).
+    // Honoring it HERE (single egress boundary, all adapters/segments) — never at a call site —
+    // is what makes 'acked toSeq => every oplog row <= toSeq was delivered' structural: a
+    // second failure farther in truncates again, and the truncated tail re-pushes next round.
+    const fetched = localStore.getRowsSince(cursor)
+    const rawRows = Array.isArray(fetched) ? fetched : (fetched && Array.isArray(fetched.rows)) ? fetched.rows : []
+    const incompleteAtSeq = (!Array.isArray(fetched) && fetched && Number.isFinite(Number(fetched.incompleteAtSeq)) && Number(fetched.incompleteAtSeq) > 0)
+      ? Number(fetched.incompleteAtSeq)
+      : null
+    const rows = incompleteAtSeq != null ? rawRows.filter((r) => Number(r.seq) < incompleteAtSeq) : rawRows
     const segments = []
     // Pack budget: leave headroom for the segment header + JSON overhead;
     // pack() still enforces the hard cap and throws SegmentTooLarge if a
@@ -128,20 +142,33 @@ export function createEngine({ localStore, deviceId, clock = monotonicClock() })
    * PULL — validate and apply a received segment body. Rows are applied in
    * segment order (the codec guarantees strictly increasing seq). Segments
    * originated by this device are ignored wholesale (loopback echo).
-   * @returns {{ applied: number, rejected: number }}
+   * S7 (2026-10-03): the returned fromSeq/toSeq span is derived from the UNPACKED rows this
+   * call actually validated — NEVER from the outer {body, fromSeq, toSeq} envelope, whose wire
+   * fields are produced independently at pack time and can desynchronize from the body (corrupt
+   * peer build, codec drift). Receivers must advance pull watermarks / appliedToSeq acks ONLY
+   * from this span: 'the pull watermark never exceeds the highest seq actually applied'
+   * (sync-matrix.md §5.3). A legacy consumer/ingest that predates the fields gets NO span
+   * (null) and must keep the watermark put — no fallback to unvalidated envelope values.
+   * @returns {{ applied: number, rejected: number, fromSeq: number|null, toSeq: number|null }}
    */
   function ingestSegment(input) {
     // Accept either the packed body string or the {body} envelope as delivered by a transport
     // (transports carry the envelope object; the 2026-09-17 live drill caught the mismatch).
     const envelope = unpack(input && typeof input === 'object' && typeof input.body === 'string' ? input.body : input)
-    if (envelope.deviceId === deviceId) return { applied: 0, rejected: 0 }
+    if (envelope.deviceId === deviceId) return { applied: 0, rejected: 0, fromSeq: null, toSeq: null }
     let applied = 0
     let rejected = 0
     for (const row of envelope.rows) {
       if (localStore.applyRow(row)) applied++
       else rejected++
     }
-    return { applied, rejected }
+    const rows = envelope.rows
+    return {
+      applied,
+      rejected,
+      fromSeq: rows.length ? rows[0].seq : null,
+      toSeq: rows.length ? rows[rows.length - 1].seq : null,
+    }
   }
 
   /**

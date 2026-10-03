@@ -89,3 +89,19 @@ test('plan: a live chip hidden by a tombstone winner is re-backed up through the
   assert.equal(Number(snap.value.deletedAt), 555, 'the deletion stamps survive in the snapshot')
   assert.equal(db.call('planAll').find(c => String(c.id) === 'chipZ').mm, '11:30', 'the restore landed')
 })
+
+test('tomato: restoring over a TOMBSTONE winner mints a re-backup via the tomatoTombstones fallback (partial row — documented)', () => {
+  db.call('tomatoAppendMany', [{ tomatoId: 'tom-t1', endTime: 1700000000000, focus: 25, focusTaskId: 'tp1', updatedAt: 100 }])
+  db.call('tomatoRemoveByIds', [{ tomatoId: 'tom-t1', deletedAt: 666, updatedAt: 667 }])
+  assert.equal(db.call('tomatoAll').some(r => String(r.tomatoId) === 'tom-t1'), false, 'precondition: tomato is a tombstone (hidden from tomatoAll)')
+
+  const key = mintBackup('tomato:tom-t1', { tomatoId: 'tom-t1', endTime: 1700000060000, focus: 30, updatedAt: 950 })
+  const r = restoreOps.syncConflictBackupRestore({ key })
+  assert.equal(r.ok, true)
+  const snaps = rebackupKeys('tomato:tom-t1')
+  assert.equal(snaps.length, 1, 'THE FIX: tombstone winner re-backed up via tomatoTombstones fallback')
+  const snap = JSON.parse(db.call('getMeta', snaps[0]))
+  assert.equal(String(snap.value.tomatoId), 'tom-t1')
+  assert.equal(Number(snap.value.deletedAt), 666, 'the deletion stamps survive in the snapshot')
+  assert.equal(Number(db.call('tomatoAll').find(x => String(x.tomatoId) === 'tom-t1').focus), 30, 'the restore landed')
+})

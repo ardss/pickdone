@@ -35,4 +35,13 @@ function assertWhiteNoiseCopyAllowed (srcPath, dir) {
   assertWriteAllowed({ incomingBytes: st.size, dir })
 }
 
-module.exports = { assertWriteAllowed, assertWhiteNoiseCopyAllowed }
+/** C13 (2026-10-02): post-copy size check for the white-noise pick. The pre-copy stat above is
+ *  advisory only — the source can be swapped for a bigger file between stat and copyFile
+ *  (TOCTOU, same class csv-import.js closes with its run-time re-check). The copied BYTES are
+ *  verified here so the cap holds regardless of what the source became mid-copy. */
+function assertCopiedWhiteNoiseSize (bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) throw new Error('white-noise: empty copy')
+  if (bytes > attachments.MAX_BYTES) throw new Error('white-noise: copied file too large (max 50MB)')
+}
+
+module.exports = { assertWriteAllowed, assertWhiteNoiseCopyAllowed, assertCopiedWhiteNoiseSize }

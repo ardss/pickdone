@@ -28,8 +28,17 @@ export function createRelayClient({ nodeId, account, baseUrl, fetchImpl = fetch,
   const clock = new Hlc(nodeId)
   const cursorState = { cursor: 0, pushed: new Set() }
 
+  // Per-device bearer credential (server: register is the only unauthenticated route; every data
+  // route demands 'Authorization: Bearer <deviceSecret>' — b962d54c). The client half of the same
+  // contract: register() captures the minted secret and EVERY post through this single choke point
+  // presents it. A client that registered but stayed header-less could never sync (401 on the
+  // first pull) — the auth feature was shipped server-only.
+  let deviceSecret = null
+
   async function post(path, body) {
-    const res = await fetchImpl(baseUrl + path, { method: 'POST', body: JSON.stringify(body) })
+    const headers = { 'content-type': 'application/json' }
+    if (deviceSecret) headers.authorization = `Bearer ${deviceSecret}`
+    const res = await fetchImpl(baseUrl + path, { method: 'POST', body: JSON.stringify(body), headers })
     if (!res.ok) throw new Error(`relay ${path} -> ${res.status}`)
     return res.json()
   }
@@ -83,7 +92,12 @@ export function createRelayClient({ nodeId, account, baseUrl, fetchImpl = fetch,
       if (applied > 0) ackInfo = await post('/v1/sync/ack', { account, device: nodeId, ackSeq: applied })
       return { pushed: items.length, pulled: pull.items.length, quarantined, cursor: cursorState.cursor, ack: ackInfo }
     },
-    async register() { return post('/v1/device/register', { account, device: nodeId }) },
+    async register() {
+      const res = await post('/v1/device/register', { account, device: nodeId })
+      const secret = res && res.device && res.device.deviceSecret
+      if (typeof secret === 'string' && secret) deviceSecret = secret
+      return res
+    },
     materialized() { return materializedAll(s) },
 
     /**

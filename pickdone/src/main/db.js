@@ -256,6 +256,7 @@ CREATE TABLE IF NOT EXISTS sync_revisions (
   createdAt      INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_sync_revisions_entity ON sync_revisions(entityId, hlcPhysical, hlcLogical);
+CREATE INDEX IF NOT EXISTS idx_sync_revisions_hlc ON sync_revisions(hlcPhysical DESC, hlcLogical DESC);
 CREATE TABLE IF NOT EXISTS sync_revision_payloads (
   revisionId TEXT PRIMARY KEY,
   payload    TEXT NOT NULL
@@ -292,7 +293,9 @@ function initInner (userDataPath) {
   // 密钥内容强校验:db.key 被截断/夹带引号换行时,拼进 PRAGMA 即语法错误或注入面(三轮安全深审 H-2);
   // 不合规格式视为无钥/损坏,走正常恢复链而不是把垃圾送进 pragma
   if (hadKeyFile && !/^[0-9a-f]{64}$/.test(key)) {
-    log.warn('[TodoDB] db.key 内容非 64 位 hex(可能损坏),按无钥路径处理:', JSON.stringify(String(key).slice(0, 8)))
+    // sec-dbkey-prefix-logged: never log key material (the old message carried the first 8 hex
+    // chars); length + hex-ness are enough to diagnose a truncated/garbage key file.
+    log.warn('[TodoDB] db.key content invalid (expected 64 hex chars, got length=' + String(key).length + ', hex=' + /^[0-9a-fA-F]+$/.test(String(key)) + ') — continuing without key')
     key = null
     hadKeyFile = false
   }
@@ -325,10 +328,28 @@ function initInner (userDataPath) {
     if (!hadKeyFile) throw new Error(i18nM.mt('dbEncNoKey'))
     throw new Error(i18nM.mt('dbEncMismatch', { msg: e.message }))
   }
-  db.pragma('synchronous = NORMAL')
-  // WAL + busy_timeout: avoids SQLITE_BUSY silently dropping writes when the desktop long-lived connection and the CLI write concurrently (a past comment claimed WAL was on when it actually was not)
-  try { db.pragma('journal_mode = WAL') } catch {}
-  try { db.pragma('busy_timeout = 5000') } catch {}
+  // Connection pragmas (ES1): synchronous/busy_timeout are per-connection state and journal_mode
+  // must be re-asserted on a fresh handle — the encryption-finalization block below closes and
+  // reopens the handle, and any reopen silently reverted to synchronous=FULL / busy_timeout=0
+  // (write-loss window under concurrent CLI access). Reapplied after EVERY handle creation.
+  const applyConnPragmas = () => {
+    db.pragma('synchronous = NORMAL')
+    // WAL + busy_timeout: avoids SQLITE_BUSY silently dropping writes when the desktop long-lived connection and the CLI write concurrently (a past comment claimed WAL was on when it actually was not)
+    try { db.pragma('journal_mode = WAL') } catch {}
+    try { db.pragma('busy_timeout = 5000') } catch {}
+    // enc-pragma-wal-diagnostic-not-shipped: the try/catch above swallows pragma failures —
+    // WAL/busy_timeout non-application was silent (vs ES1, commit 5cf95eba). Read both back and
+    // say so loudly; a connection running with journal_mode != WAL can drop concurrent CLI writes.
+    try {
+      const jm = db.pragma('journal_mode', { simple: true })
+      if (String(jm).toLowerCase() !== 'wal') log.error('[TodoDB] WAL mode not active (journal_mode=' + jm + ') — concurrent CLI writes may fail with SQLITE_BUSY')
+    } catch { /* introspection is best-effort, never fail init over diagnostics */ }
+    try {
+      const bt = db.pragma('busy_timeout', { simple: true })
+      if (Number(bt) !== 5000) log.error('[TodoDB] busy_timeout not applied (got ' + bt + ', expected 5000)')
+    } catch { /* introspection is best-effort */ }
+  }
+  applyConnPragmas()
 
   // Fresh-install marker: table count BEFORE schema exec (afterwards our own tables exist, so the count is always > 0)
   const preSchemaTables = db.prepare("SELECT COUNT(*) n FROM sqlite_master WHERE type='table'").get().n
@@ -362,26 +383,11 @@ function initInner (userDataPath) {
     const idr = db.prepare("SELECT value FROM settings_rows WHERE key='sync.deviceId'").get()
     if (idr && idr.value) setSyncAuthor(idr.value)
   } catch { /* settings_rows not ready: writes stay author-NULL until ensureIdentity */ }
-  // SCHEMA/MIGRATIONS dual-manifest decoupling backstop: if a future SCHEMA column addition is forgotten in MIGRATIONS, CREATE TABLE IF NOT EXISTS is
-  // a no-op for existing tables and the upsert prepare dies at startup referencing the missing column. Here, probe and add columns uniformly via PRAGMA
-  // based on todoToRow's real column set (NOT NULL columns get default values)
-  {
-    const want = Object.keys(todoToRow({ taskId: '' }))
-    const have = new Set(db.prepare('PRAGMA table_info(todos)').all().map(c => c.name))
-    for (const col of want) {
-      if (!have.has(col)) {
-        const def = todoToRow({ taskId: '' })[col]
-        const sqlDefault = typeof def === 'number' ? def
-          : typeof def === 'boolean' ? (def ? 1 : 0)
-          : typeof def === 'string' ? `'${def.replace(/'/g, "''")}'`
-          : 'NULL'
-        const affinity = typeof def === 'number' || typeof def === 'boolean' ? 'INTEGER' : 'TEXT'
-        db.exec(`ALTER TABLE todos ADD COLUMN ${col} ${affinity} DEFAULT ${sqlDefault}`)
-        log.warn('[TodoDB] 探测补列(迁移清单漏登记兜底):', col)
-      }
-    }
-  }
-
+  // PA-3: the SCHEMA/MIGRATIONS dual-manifest self-healing backstop (probe + silent ALTER of
+  // missing todoToRow columns) was DELETED, not replaced by another runtime guard. A missed
+  // manifest registration now fails red at CI (cli/check-schema-manifests.cjs, executed by the
+  // unit suite) and, if it ever slipped through, dies loudly at the upsert prepare below —
+  // schema drift must never silently ALTER itself away on the shared main/CLI startup path.
   // ===== Encryption finalization (runs after schema migration completes) =====
   // The key is stored as db.key in the same directory (the CLI opening in the same directory is automatically compatible). Threat model: prevents the single todos.db file from being read directly by sync drives/copies/forensic tools; the key lives on the same machine, so "entire userData readable" is not covered. Both fresh installs (empty DB) and existing DBs (after schema migration) reach here and uniformly switch to the encrypted state.
   if (!hadKeyFile) {
@@ -420,13 +426,29 @@ function initInner (userDataPath) {
   } else {
     db.pragma(`key='${key}'`)
   }
+  // ES1: both encryption-finalization paths (plain→encrypted migration and fresh-install
+  // recreate) replaced the handle above — reapply the connection pragmas on whichever
+  // handle survived (idempotent on the hadKeyFile path where the handle was never swapped).
+  applyConnPragmas()
 
   // [D13 #10] repeat-day uniqueness re-ensure (idempotent; after encryption finalization, which recreates fresh DBs from SCHEMA and drops the v9 index; skipped under the C2 test seam)
   if (!migrationsOverride) { try { require('./db-migrations').ensureRepeatDayUniqueness(db) } catch (e) { log.warn('[TodoDB] repeat-day uniqueness ensure failed (non-fatal):', e && e.message) } }
 
 
   const cols = Object.keys(todoToRow({ taskId: '' }))
-  stmts.upsert = db.prepare(`INSERT INTO todos (${cols.join(', ')}) VALUES (${cols.map(c => '@' + c).join(', ')}) ON CONFLICT(id) DO UPDATE SET ${cols.filter(c => c !== 'id').map(c => `${c} = excluded.${c}`).join(', ')}`)
+  // B1 (2026-10-03) — focusMinutes accumulate-vs-replace duality. The renderer's contract
+  // (store todo.js "U-1 write-once at the DB layer") treats focus minutes as MONOTONIC:
+  // the only mutation that ever lowers nothing is bumpSnow's DB-side `focusMinutes = focusMinutes + ?`
+  // (see stmts.bumpSnow below); writers never send a decreasing value. But a whole-row upsert
+  // from a STALE cross-window snapshot (e.g. stampLocalWrite skips its own reload, so the
+  // in-memory row still carries the pre-bump estimate) used to overwrite the accumulated
+  // column back to the old value and sync the erasure. MAX(existing, excluded) preserves the
+  // higher accumulated total: identical to `= excluded` for inserts and fresh writers, and
+  // only ever rejects a DECREASE, which no legitimate writer performs. This is the class root:
+  // focusMinutes is the only todos column with an accumulate-vs-replace duality (every other
+  // column is last-writer-wins by design), so it gets the guard and an explicit contract
+  // comment here rather than a per-call-site workaround.
+  stmts.upsert = db.prepare(`INSERT INTO todos (${cols.join(', ')}) VALUES (${cols.map(c => '@' + c).join(', ')}) ON CONFLICT(id) DO UPDATE SET ${cols.filter(c => c !== 'id').map(c => c === 'focusMinutes' ? 'focusMinutes = MAX(todos.focusMinutes, excluded.focusMinutes)' : `${c} = excluded.${c}`).join(', ')}`)
   stmts.getById = db.prepare('SELECT * FROM todos WHERE id = ?')
   stmts.hardDelete = db.prepare('DELETE FROM todos WHERE id = ?')
   stmts.getMeta = db.prepare('SELECT value FROM meta WHERE key = ?')
@@ -796,4 +818,4 @@ function close () {
 // Initialized probe: within the same process (the main process's CSV import), reuse the existing connection; a second init rebuilding the handle on the same file is forbidden
 function isOpen () { return !!db }
 
-module.exports = { init, call, queryTodos, normalizeContent, isWriteOp, isOpen, close, setLedgerChangedHook, suppressLedgerHook, LEDGER_WRITE_OPS, WRITE_OPS, SCHEMA, __setMigrateFailHookForTests, __setMigrationsForTests, __revisionsForTests: revisions }
+module.exports = { init, call, queryTodos, normalizeContent, isWriteOp, isOpen, close, setLedgerChangedHook, suppressLedgerHook, LEDGER_WRITE_OPS, WRITE_OPS, SCHEMA, __setMigrateFailHookForTests, __setMigrationsForTests, __revisionsForTests: revisions, __connPragmasForTests: () => (db && db.open ? { journalMode: db.pragma('journal_mode', { simple: true }), synchronous: db.pragma('synchronous', { simple: true }), busyTimeout: db.pragma('busy_timeout', { simple: true }) } : null), __payloadCountForTests: () => db.prepare('SELECT COUNT(*) n FROM sync_revision_payloads').get().n, __currentRevisionIdForTests: entityId => { const r = db.prepare('SELECT revisionId FROM sync_revision_current WHERE entityId = ?').get(entityId); return r && r.revisionId } }

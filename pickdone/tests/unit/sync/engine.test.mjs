@@ -64,7 +64,7 @@ test('push/pull roundtrip: rows cross devices and merge', () => {
   assert.equal(segments.length, 1)
   assert.equal(toSeq, 2)
   const res = eb.ingestSegment(segments[0].body)
-  assert.deepEqual(res, { applied: 2, rejected: 0 })
+  assert.deepEqual(res, { applied: 2, rejected: 0, fromSeq: 1, toSeq: 2 })
   assert.equal(b.allRows().find((r) => r.id === 't1').title, 'hello')
 
   // reverse direction: B's own new op pushes back to A; oplog stays own-origin
@@ -73,12 +73,12 @@ test('push/pull roundtrip: rows cross devices and merge', () => {
   const back = eb.buildSegments()
   assert.equal(back.segments.length, 1)
   const res2 = ea.ingestSegment(back.segments[0].body)
-  assert.deepEqual(res2, { applied: 1, rejected: 0 })
+  assert.deepEqual(res2, { applied: 1, rejected: 0, fromSeq: 1, toSeq: 1 })
   assert.equal(a.allRows().find((r) => r.id === 't3').title, 'from B')
 
   // loopback: A ingesting its own segment is a no-op
   const loop = ea.ingestSegment(segments[0].body)
-  assert.deepEqual(loop, { applied: 0, rejected: 0 })
+  assert.deepEqual(loop, { applied: 0, rejected: 0, fromSeq: null, toSeq: null })
 })
 
 test('cursor crash semantics: unconfirmed push re-delivers everything', () => {
@@ -245,4 +245,69 @@ test('shed carry landing as the TERMINAL segment keeps fromSeq/toSeq consistent'
     prevTo = seg.toSeq
   }
   assert.equal(prevTo, 11000, 'segment ranges tile the whole backlog')
+})
+
+test('S2: a failed hydration truncates the delta — no segment claims a toSeq covering the failed row', () => {
+  // Adapter contract (S2 2026-10-03): getRowsSince may return { rows, incompleteAtSeq } when a
+  // hydration failure truncates the egress window. The receiver acks seg.toSeq at face value
+  // and the sender advances its watermark/cursor to the ack, so a segment claiming a toSeq over
+  // a row it did not include makes the loss PERMANENT once the oplog ring prunes. Invariant:
+  // final segment toSeq < incompleteAtSeq, and a healthy subsequent round re-attempts from
+  // below it.
+  const a = makeStore('trunc-a')
+  const ea = createEngine({ localStore: a, deviceId: 'trunc-a' })
+  const b = makeStore('trunc-b')
+  const eb = createEngine({ localStore: b, deviceId: 'trunc-b' })
+  for (let i = 1; i <= 4; i++) a.append({ id: `u${i}`, title: 'v', updatedAt: i })
+  // Hydration fails at seq 3: rows 1,2 hydrate, 3 fails, 4 hydrates (must NOT be packed).
+  const origGet = a.getRowsSince.bind(a)
+  let failOnce = true
+  a.getRowsSince = (s) => {
+    const rows = origGet(s)
+    if (!failOnce) return rows
+    failOnce = false
+    return { rows: rows.filter((r) => r.seq !== 3), incompleteAtSeq: 3 }
+  }
+  const first = ea.buildSegments()
+  assert.ok(first.segments.length >= 1, 'fixture produced segments')
+  const finalSeg = first.segments[first.segments.length - 1]
+  assert.equal(finalSeg.toSeq, 2, 'the terminal segment stops BELOW the failed seq (was 4 pre-fix)')
+  assert.equal(first.toSeq, 2, 'the round toSeq never covers the failed row')
+  // Deliver what was packed; the sender's cursor/watermark advances honestly to 2.
+  for (const seg of first.segments) eb.ingestSegment(seg.body)
+  ea.markPushed(first.toSeq)
+  assert.equal(a.getCursor(), 2)
+  // Recovery: the read is healthy again — the next round re-attempts from BELOW the failed seq.
+  const second = ea.buildSegments()
+  assert.equal(second.toSeq, 4, 'the truncated tail re-pushes on a later round')
+  assert.ok(second.segments.every((s) => s.fromSeq >= 3), 'the retry starts at the failed seq, not past it')
+  for (const seg of second.segments) eb.ingestSegment(seg.body)
+  assert.deepEqual(Object.fromEntries(b.allRows().map((r) => [r.id, r.title])),
+    { u1: 'v', u2: 'v', u3: 'v', u4: 'v' }, 'the previously lost row converges')
+})
+
+test('S7: ingestSegment derives the seq span from the VALIDATED rows, never the outer envelope', () => {
+  // The outer {body, fromSeq, toSeq} wire fields are produced independently at pack time; a
+  // corrupt/mismatched peer build can raise toSeq above the body's real max row. The engine —
+  // not the receiver call sites — is the single source of the span: after ingest, the returned
+  // toSeq equals the actual max applied row seq, so a receiver advancing its pull watermark or
+  // appliedToSeq ack from it can NEVER exceed the highest seq actually applied
+  // (docs/sync-matrix.md §5.3).
+  const storeA = makeStore('span-a')
+  const a = createEngine({ localStore: storeA, deviceId: 'span-a' })
+  const b = createEngine({ localStore: makeStore('span-b'), deviceId: 'span-b' })
+  for (let i = 1; i <= 3; i++) storeA.append({ id: `sp${i}`, title: 'v', updatedAt: i })
+  const seg = a.buildSegments().segments[0]
+  const tampered = { ...seg, fromSeq: 0, toSeq: 999 } // envelope claims rows that were never sent
+  const r = b.ingestSegment(tampered)
+  assert.equal(r.toSeq, 3, 'the returned toSeq is the real max applied row seq, not the envelope value 999')
+  assert.equal(r.fromSeq, 1)
+  assert.equal(r.applied, 3)
+  // Loopback ingests report no span at all (nothing was applied).
+  const loop = a.ingestSegment(tampered)
+  assert.equal(loop.toSeq, null)
+  assert.equal(loop.applied, 0)
+  // An empty body yields a null span (nothing to advance over).
+  const empty = b.ingestSegment({ body: JSON.stringify({ v: 1, deviceId: 'span-a', fromSeq: 1, toSeq: 1, rows: [] }), fromSeq: 1, toSeq: 1 })
+  assert.equal(empty.toSeq, null)
 })

@@ -8,7 +8,7 @@ const { makeAssertMainWindow, makeSenderIsMain } = require('./shared')
 const { formatMMSS } = require('../../../shared/format-mmss.cjs') // F-A6: single mm:ss source (floor + negative clamp)
 
 module.exports = function tomatoHandlers (ctx) {
-  const { getMainWindow, showMainOrLock, rebuildTrayMenu, updateTomatoTray, isLocked } = ctx
+  const { getMainWindow, showMainOrLock, rebuildTrayMenu, updateTomatoTray, isLocked, tomatoSession } = ctx
   const assertMainWindow = makeAssertMainWindow(getMainWindow)
   // main-ipc wave (2026-09-25): the main-window control channels below had NO sender gate — any
   // renderer window (trapped float / injected page) could minimize/hide/close the main window,
@@ -147,6 +147,43 @@ module.exports = function tomatoHandlers (ctx) {
       // F-A6 (2026-09-23): mm:ss via the shared formatter — the inline copy had no floor/
       // negative clamp, so a remainSec of -1 rendered "-1:-1" in the tray for a tick.
       updateTomatoTray(`${p.phaseText || ''} ${formatMMSS(p.remainSec)}`)
+    },
+
+    // TQ-1 (2026-10-03): durable running-session transition channel. The renderer reports every
+    // FSM transition (start on focus/rest begin; clear on complete/giveUp/finishRest); main owns
+    // the 'tomatoRunningSession' meta row, which the quit guards and the next boot's startup
+    // reconciliation consume. Gate: main window OR the float window — a float-originated focus
+    // must write the row too (the main-window-gated update-tomato-taskbar above is exactly the
+    // blindness this channel exists to remove). Spoof surface is bounded: a forged row costs at
+    // worst a false quit confirm or a visible book-or-void record.
+    'tomato-running-session': (e, p) => {
+      if (!senderIsMain(e) && !isFloatSelf(e && e.sender)) {
+        log.warn('[IPC] 拒绝非主窗/非浮窗调用 tomato-running-session, sender:', e && e.sender && e.sender.id)
+        throw new Error('forbidden: main window or tomato float only')
+      }
+      return tomatoSession.applyTransition(p)
+    },
+
+    // TQ-3 (2026-10-03): cross-window completion claims move into the single-writer main process.
+    // The old renderer localStorage check-then-set was non-atomic across the main+float windows
+    // and carried an ownerless claim value, so two windows could both win a phase AND a
+    // contender's release-on-failure path could delete the owner's live claim. claim() is a
+    // main-process Map CAS (IPC serialized) returning an owner token; release() only deletes on
+    // a matching token. Gate: main window or float — the two windows that run the completion tick.
+    'tomato-claim-phase': (e, phase) => {
+      if (!senderIsMain(e) && !isFloatSelf(e && e.sender)) {
+        log.warn('[IPC] 拒绝非主窗/非浮窗调用 tomato-claim-phase, sender:', e && e.sender && e.sender.id)
+        throw new Error('forbidden: main window or tomato float only')
+      }
+      return require('../phase-claims').claims.claim(phase)
+    },
+    'tomato-release-phase': (e, p) => {
+      if (!senderIsMain(e) && !isFloatSelf(e && e.sender)) {
+        log.warn('[IPC] 拒绝非主窗/非浮窗调用 tomato-release-phase, sender:', e && e.sender && e.sender.id)
+        throw new Error('forbidden: main window or tomato float only')
+      }
+      const { phase, token } = p || {}
+      return require('../phase-claims').claims.release(phase, token)
     },
 
     // --- Window controls (win may be destroyed: null-guarded via getMainWindow, avoiding throws after destruction) ---

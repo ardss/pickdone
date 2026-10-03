@@ -131,12 +131,21 @@ test('[3b] todo: a pending upsert that fails the quit-flush stays queued and rep
   assert.equal(sendCount(), 4, 'after success the entry is removed (no infinite resend)')
 })
 
-test('[4] purgeAllRecycle deletes the purged tasks tomato-estimate meta keys (M-C5 parity)', async () => {
-  const calls = []
+test('[4] purgeAllRecycle prunes the purged tasks estimate mirror entries (M-C5 parity)', async () => {
+  // Reconciled with the batch-purge wave (b265b56d): DB meta keys are owned server-side
+  // (purgeRecycleBin's per-row GC); the renderer's duty is the LOCAL mirror. The former
+  // key-vs-id complement (estimateStateKeys().filter(k => !purgedSet.has(k))) compared
+  // 'tomatoEstimateState:42' strings against a Set of numeric ids — Set.has never matched,
+  // so the prune was a silent no-op. The invariant survives: a recycled numeric taskId must
+  // not resurrect a stale estimate after emptying the bin.
+  // seed through the module's own state seam: the mirror is module-private and may already be
+  // loaded (empty) by an earlier test in this file — LS seeding after import never reaches it.
+  const est = await import('../../../renderer/js/utils/tomatoEstimate.js')
+  Object.assign(est._testInternals.state, { 42: 5, 43: 2, 44: 9 })
   globalThis.window.todoAPI = {
-    dbCall: async (op, params) => { calls.push([op, params]); return 'ok' },
+    dbCall: async () => 'ok',
     purgeRecycleBin: async () => true,
-    deleteTodoFilesRelevant: async () => {}
+    deleteTodoFilesMany: async () => {}
   }
   const { default: todo } = await import('../../../renderer/js/store/todo.js?purge')
   const state = {
@@ -152,9 +161,8 @@ test('[4] purgeAllRecycle deletes the purged tasks tomato-estimate meta keys (M-
   }
   const r = await todo.actions.purgeAllRecycle(ctx)
   assert.equal(r, true, 'purge succeeded')
-  const deleted = calls.filter(c => c[0] === 'deleteMeta').map(c => c[1])
-  assert.ok(deleted.includes('tomatoEstimateState:42'), 'estimate meta key of task 42 is deleted')
-  assert.ok(deleted.includes('tomatoEstimateState:43'), 'estimate meta key of task 43 is deleted')
+  const remaining = Object.keys(est._testInternals.state)
+  assert.deepEqual(remaining.sort(), ['44'], 'purged ids 42/43 are pruned from the mirror; survivor 44 stays')
 })
 
 test('[5] settings: live duration keys are declared and legacy keys migrate', async () => {

@@ -147,19 +147,32 @@ function createClientRound(ctx) {
         done.unref?.()
       }
       const progressDeadline = () => { if (!settled) armDeadline(roundProgressMs) }
-      const client = (() => {
-        // Round-4 P1: any synchronous throw from connect() (range/option errors) must land in
-        // finish(), not escape the promise executor and leak the roundsInFlight mutex.
+      // S1 (2026-10-03): `client` is a `let` declared BEFORE the dial block so a synchronous
+      // finish() (secretFor read failure, connect() option throw) sees a defined null instead
+      // of a TDZ reference, and the executor returns before touching a null client below.
+      let client = null
+      // Round-4 P1: any synchronous throw from the dial block (connect option errors, and since
+      // S1 a secretFor read failure) must land in finish(), not escape the promise executor and
+      // leak the roundsInFlight mutex.
+      try {
+        // Per-instance-port fix (2026-10-01 journey drill): resolve the dial secret as
+        // live-entry secret -> persisted per-pair record (secretFor) -> global. The middle
+        // step matters: after a self-guard forgetPeer, discovery re-adds the entry WITHOUT
+        // the per-pair secret, and dialing the stale global made the peer's server answer
+        // auth-failed (terminal 'unpaired') even though the pairing was intact.
+        // S1 (2026-10-03) read-failure taxonomy: a secretFor read THROW is a transient
+        // settings failure, not record-absent — abort the round as a RETRYABLE failure
+        // instead of dialing with the (stale) global secret, which the peer's server would
+        // answer auth-failed -> terminal unpaired on a transient error.
+        let dialSecret
         try {
-          // Per-instance-port fix (2026-10-01 journey drill): resolve the dial secret as
-          // live-entry secret -> persisted per-pair record (secretFor) -> global. The middle
-          // step matters: after a self-guard forgetPeer, discovery re-adds the entry WITHOUT
-          // the per-pair secret, and dialing the stale global made the peer's server answer
-          // auth-failed (terminal 'unpaired') even though the pairing was intact.
-          const dialSecret = (peer && typeof peer.secret === 'string' && peer.secret)
+          dialSecret = (peer && typeof peer.secret === 'string' && peer.secret)
             ? peer.secret
             : (((typeof secretFor === 'function' && secretFor(peer.deviceId)) || pairingSecret))
-          return connect(peer.host, peer.port, {
+        } catch (err) {
+          throw Object.assign(new Error('per-pair secret lookup failed: ' + (err && err.message)), { secretLookupFailed: true })
+        }
+        client = connect(peer.host, peer.port, {
         deviceId,
         // F1 (2026-09-28 drill): prefer the peer's per-pair secret from the paired-peer table;
         // the global pairingSecret stays the fallback (legacy peers / not-yet-persisted records).
@@ -177,17 +190,27 @@ function createClientRound(ctx) {
         // P1-3: the peer's server REJECTED our authenticated hello — the pairing was revoked on
         // their side. Terminal for this session: no more dialing until the user re-pairs/unpairs
         // or restarts (a re-announced/re-added peer clears the state via rememberPeer).
-        onUnauthorized: (info) => { authRejected = true; em.emit('peer-unauthorized', info) },
+        // S1 (2026-10-03) read-failure taxonomy: branch on the peer's failure CLASS, not on the
+        // mere presence of a failure. Only a genuine auth rejection ('auth failed', or a legacy
+        // peer answering without a reason) is the terminal unpaired state; the receiver-side
+        // transient classes ('secret-unavailable' = the peer's settings read failed,
+        // 'auth throttled' = its per-IP rate gate) must stay retryable — a transient error must
+        // never reach the only-documented-exit-is-re-pair terminal.
+        onUnauthorized: (info) => {
+          const reason = info && info.error
+          if (reason !== 'secret-unavailable' && reason !== 'auth throttled') authRejected = true
+          em.emit('peer-unauthorized', info)
+        },
           })
-        } catch (err) {
-          finish(err)
-          return null
-        }
-      })()
-      if (client) activeClients.add(client) // fix-round lan-sync-4: stop() closes in-flight clients
-      // Round-4 P1: `function` declaration (hoisted) so the connect IIFE below can call finish
-      // from its catch path even though connect() textually precedes the body — a synchronous
-      // throw must reach finish (mutex release) instead of escaping the promise executor.
+      } catch (err) {
+        finish(err)
+      }
+      if (!client) return // finish() already settled the round (synchronous dial failure)
+      activeClients.add(client) // fix-round lan-sync-4: stop() closes in-flight clients
+      // Round-4 P1 / S1: `function` declaration (hoisted) so the dial block above can call
+      // finish before its textual definition — a synchronous failure must reach finish
+      // (mutex release + round settlement) and the executor must then bail out (see the
+      // `if (!client) return` guard above) instead of attaching handlers to a null client.
       function finish (err) {
         if (settled) return
         settled = true
@@ -401,18 +424,20 @@ function createClientRound(ctx) {
               // trigger (the oldest > wm+1 check could never fire again). The hole itself is what
               // must arm the trigger (see evaluateSnapshotTrigger). P0-1/P1-2: a flush-failed
               // segment keeps the watermark put as well (never advance over unapplied rows).
-              const from = Number(seg && seg.fromSeq)
-              const to = Number(seg && seg.toSeq)
-              if (Number.isFinite(from) && Number.isFinite(to)) {
+              // S7 (2026-10-03): from/to come from the ENGINE's returned span (the unpacked rows
+              // it actually validated), never from the outer envelope's wire fields — those are
+              // independent pack-time values a corrupt/mismatched peer build can desynchronize
+              // from the body, and advancing the watermark over them acks rows never received.
+              // An ingest without a span (predates the versioned engine contract) keeps the
+              // watermark put — no fallback to unvalidated envelope values.
+              const from = (r && Number.isFinite(Number(r.fromSeq))) ? Number(r.fromSeq) : null
+              const to = (r && Number.isFinite(Number(r.toSeq))) ? Number(r.toSeq) : null
+              if (from != null && to != null) {
                 if (!segFlushFailed) {
                   const wm = pullWatermarkBy.get(peer.deviceId) || 0
                   if (from <= wm + 1 && to > wm) pullWatermarkBy.set(peer.deviceId, to)
-                  // pullAckSeq must come from the ENVELOPE, not seg.rows: the wire shape is
-                  // {body, fromSeq, toSeq} — rows live inside the packed body and seg.rows never
-                  // exists (the old per-row loop collected nothing, so our acks never carried
-                  // appliedToSeq and the peer's serverPullAck never advanced — its pull response
-                  // re-sent the full oplog window every round). toSeq is the segment's highest
-                  // included seq in the PEER's seq space — same quantity the loop meant to take.
+                  // pullAckSeq comes from the engine-validated span (in the PEER's seq space) —
+                  // the ack is what the peer feeds into buildSegments(fromSeq) against ITS oplog.
                   if (to > pullAckSeq) pullAckSeq = to
                 } else {
                   // P0-1: a flush-failed segment is NOT acked — cap our appliedToSeq below it
@@ -422,8 +447,7 @@ function createClientRound(ctx) {
                   // a later segment with a higher toSeq used to re-raise pullAckSeq past the
                   // failure, so the final-chunk ack re-acked the failed segment's rows and the
                   // sender advanced its watermark over rows we actually dropped.
-                  const fFrom = Number.isFinite(from) ? from : 0
-                  if (roundFlushFailedFrom == null || fFrom < roundFlushFailedFrom) roundFlushFailedFrom = fFrom
+                  if (roundFlushFailedFrom == null || from < roundFlushFailedFrom) roundFlushFailedFrom = from
                   needSnapshot.add(peer.deviceId)
                   needSnapshotForce.add(peer.deviceId) // survives roundApplied > 0 (Wave-B P1)
                 }

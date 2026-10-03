@@ -351,7 +351,7 @@ test('[13] giveUp books the measured duration with Math.round (same as completeF
   const commit = (n, p) => tomato.mutations[n](st, p)
   const dispatch = () => {}
   const fakeThis = { state: { todo: { todoList: [], recycleList: [] } } }
-  tomato.actions.giveUp.call(fakeThis, { state: st, commit, dispatch })
+  await tomato.actions.giveUp.call(fakeThis, { state: st, commit, dispatch })
   const rec = st.tomatoRecordList[0]
   assert.ok(rec, 'abandon recorded')
   assert.equal(rec.focusDuration, 26, '25:40 rounds to 26 (floor booked 25, complete booked 26)')

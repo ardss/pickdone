@@ -196,29 +196,30 @@ export default {
     // fix: optimistic in-memory update first; on failure the previous list is restored and the
     // rejection is surfaced (console.error; rethrown so awaiting callers — SnManageTagsModal —
     // can toast instead of reporting success that the next launch reverts).
-    async renameUserTag ({ state, commit }, { from, to }) {
+    // D15 single-writer (KV-USERTAGS-TRIPLE-WRITER): the 'userTags' meta row used to have THREE
+    // hand-rolled copies of the same optimistic-set + awaited meta put + revert-on-rejection
+    // discipline (renameUserTag, removeUserTag, and sideNavHandlers.createTag). Now this action
+    // is the ONLY function that writes the key: it owns the full policy — optimistic in-memory
+    // update, awaited durable put, revert on rejection, surface (console.error + rethrow). Call
+    // sites pass a next list; failure-handling policy cannot drift per call site again.
+    async commitUserTags ({ state, commit }, nextList) {
       const prev = state.userTags || []
-      const list = prev.map(x => (x === from ? to : x))
-      commit('setUserTags', list)
+      commit('setUserTags', nextList)
       try {
-        await commitCommand("meta", "put", ['userTags', JSON.stringify(list)])
+        await commitCommand("meta", "put", ['userTags', JSON.stringify(nextList)])
       } catch (e) {
         commit('setUserTags', prev)
-        console.error('[ui] userTags rename meta put failed — in-memory rename reverted:', e)
+        console.error('[ui] userTags meta put failed — in-memory update reverted:', e)
         throw e
       }
     },
-    async removeUserTag ({ state, commit }, name) {
+    async renameUserTag ({ state, commit, dispatch }, { from, to }) {
       const prev = state.userTags || []
-      const list = prev.filter(x => x !== name)
-      commit('setUserTags', list)
-      try {
-        await commitCommand("meta", "put", ['userTags', JSON.stringify(list)])
-      } catch (e) {
-        commit('setUserTags', prev)
-        console.error('[ui] userTags remove meta put failed — in-memory removal reverted:', e)
-        throw e
-      }
+      await dispatch('commitUserTags', prev.map(x => (x === from ? to : x)))
+    },
+    async removeUserTag ({ state, commit, dispatch }, name) {
+      const prev = state.userTags || []
+      await dispatch('commitUserTags', prev.filter(x => x !== name))
     }
   }
 }

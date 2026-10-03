@@ -1,7 +1,8 @@
-import { safeSet, dayjs, getMetaManyWithFallback } from '../utils/core.js'
+import { safeSet, getMetaManyWithFallback } from '../utils/core.js'
 import { loadMilestones } from '../utils/milestones.js'
 import { normalizeStatus } from '../utils/projectStatus.js'
 import { commit as commitCommand } from "../utils/commandBus.js"
+import { today0, dayStart, dayShift } from '../utils/todayBounds.js'
 /** Category module (offline persistence via localStorage; cloud APIs like getCategoryList reserved) */
 const LS_KEY = 'categoryState'
 export const COLOR_PALETTE = ['#0f9d8f', '#f76e6e', '#f2a63b', '#7ac74f', '#5aa9e6', '#9d8df1', '#eb96c3', '#98a4ae']
@@ -60,8 +61,18 @@ function toRow (c, { restore = false } = {}) {
  *       changes, so even a full-list caller rewrites only the rows that actually moved. A failed commit is
  *       not remembered, so the next persist retries it (LS is already updated — SQLite must converge). */
 const lastPersistedRows = new Map() // categoryId → JSON of the row last committed successfully
+// Exported read-only for the leak regression (see pendingMetaBackups below): keys must track the live list.
+export { lastPersistedRows }
+/** Leak fix (dw wave 2026-10-02): the diff baseline kept an entry for every id ever persisted, even
+ *  after the row left the list (purged tombstone, hard delete) — unbounded growth over a long session.
+ *  Every persist()/setListFromDb() caller passes the FULL list, so a key absent from it is dead. */
+function prunePersistBaseline (list) {
+  const live = new Set(list.map(c => c.categoryId))
+  for (const id of [...lastPersistedRows.keys()]) if (!live.has(id)) lastPersistedRows.delete(id)
+}
 function persist (list, opts = {}) {
   safeSet(LS_KEY, JSON.stringify({ list }))
+  prunePersistBaseline(list)
   try {
     // Failures must be visible: LS is already updated above, so a silent per-row catch meant the user
     // believed categories were saved while SQLite (the CLI-visible authority) silently diverged
@@ -103,16 +114,35 @@ const PROJECT_IDS_KEY = 'projectCategoryIds'
  *  other. Per-cat flags sync field-granular; the legacy blob is READ-ONLY now (U7, 2026-09-20: the
  *  renderer never writes it anymore — init() still unions it so old data survives). */
 const projectFlagKey = id => 'projectCategoryFlag:' + id
-function writeProjectFlag (id, flag) {
+/** Error-safety fix (dw wave 2026-10-02): a failed meta put/delete used to vanish into
+ *  `.catch(() => {})` — the in-memory projectIds said "project flagged" while the durable per-cat
+ *  flag said otherwise, so the project silently resurrected (failed delete) or silently vanished
+ *  (failed put) at next init. The failure is now surfaced AND `onFail` lets the caller revert the
+ *  in-memory state to match what is actually durable (D13-A4 / D14-B7 pattern). */
+function writeProjectFlag (id, flag, onFail) {
   try {
-    if (flag) commitCommand("meta", "put", [projectFlagKey(id), '1']).catch(() => {})
-    else commitCommand("meta", "delete", projectFlagKey(id)).catch(() => {})
-  } catch (e) { /* degraded host */ }
+    const p = flag
+      ? commitCommand("meta", "put", [projectFlagKey(id), '1'])
+      : commitCommand("meta", "delete", projectFlagKey(id))
+    p.catch(e => {
+      console.error('[category] project flag write failed for', id, flag ? '(put)' : '(delete)', e)
+      if (typeof onFail === 'function') { try { onFail(e) } catch (e2) { /* revert must not throw */ } }
+    })
+  } catch (e) {
+    // degraded host: the durable write never even started, so the in-memory flip is a lie too
+    console.error('[category] project flag write unavailable (degraded host) for', id, e)
+    if (typeof onFail === 'function') { try { onFail(e) } catch (e2) { /* revert must not throw */ } }
+  }
 }
 const deadlineKey = id => 'projectDeadline:' + id
 /** Project lifecycle status (contract shared with the CLI): string active|paused|done|cancelled, absent = 'active' */
 const statusKey = id => 'projectStatus:' + id
 const milestonesKey = id => 'projectMilestones:' + id
+/** D15-B4: project documents (ProjectDocs.vue persist) live in `projectDocs:<id>` — the same
+ *  durable, recoverable category-meta family as deadline/status/milestones, so the soft-delete
+ *  backup roundtrip below treats it identically (backed up into catProjectMetaBak.<id>, cleared
+ *  from the live key, restored on recover). */
+const projectDocsKey = id => 'projectDocs:' + id
 /** U-4 (2026-09-20): machine-local backup of a soft-deleted project category's meta. The old code
  *  hard-deleted projectCategoryFlag/Status/Deadline (and left milestones orphaned), so recovering the
  *  category irreversibly lost its project metadata. Pattern mirrors metaConflictBackup.*: the live keys
@@ -126,6 +156,9 @@ const catMetaBakKey = id => 'catProjectMetaBak.' + id
  *  promise before restoring, so the category only becomes recoverable once its meta is safely
  *  backed up (or provably absent). */
 const pendingMetaBackups = new Map()
+// Exported read-only for the leak regression (r5/r6 precedent of exporting internals for tests):
+// the map must hold only IN-FLIGHT roundtrips, never settled promises of never-recovered victims.
+export { pendingMetaBackups }
 /** renderer-5 (sharp-review 2026-09-22): pendingMetaBackups above is per-window module state, so a
  *  recover in window B never sees window A's in-flight delete-time backup and used to read the backup
  *  key before A's write landed — deadline/milestones/status permanently lost. A durable in-DB marker
@@ -136,10 +169,16 @@ const pendingMetaBackups = new Map()
 const pendingMetaBakKey = id => 'catProjectMetaBak.pending.' + id
 const PENDING_META_BAK_WAIT_MS = 3000
 function markPendingMetaBak (id) {
-  try { commitCommand('meta', 'put', [pendingMetaBakKey(id), '1']).catch(() => {}) } catch (e) { /* degraded host */ }
+  // Error-safety fix: this marker is the cross-window gate that keeps recover from reading the
+  // backup key before the roundtrip wrote it (renderer-5). A failed write previously vanished into
+  // `.catch(() => {})` — recover could then proceed up to PENDING_META_BAK_WAIT_MS early and read a
+  // not-yet-written backup. Surfaced loudly; the bounded wait stays the last-line guard.
+  try { commitCommand('meta', 'put', [pendingMetaBakKey(id), '1']).catch(e => console.error('[category] pending-meta-backup MARKER write failed for', id, '— cross-window recover may race the backup roundtrip:', e)) } catch (e) { console.error('[category] pending-meta-backup marker unavailable (degraded host) for', id, e) }
 }
 function clearPendingMetaBak (id) {
-  try { commitCommand('meta', 'delete', pendingMetaBakKey(id)).catch(() => {}) } catch (e) { /* degraded host */ }
+  // A failed clear is tolerated (waitOutPendingMetaBak's bounded wait clears stale markers), but it
+  // must not be invisible: every recover of this id would otherwise burn the full 3s wait silently.
+  try { commitCommand('meta', 'delete', pendingMetaBakKey(id)).catch(e => console.warn('[category] pending-meta-backup marker clear failed for', id, '(bounded wait will clear it):', e)) } catch (e) { /* degraded host: no marker to clear */ }
 }
 /** Resolves once the durable marker is gone (backup roundtrip finished in whichever window) or the
  *  bounded wait expires — a leaked marker (crash mid-roundtrip) must not wedge recover forever, so the
@@ -165,7 +204,10 @@ async function backupThenClearProjectMeta (id) {
   try { blob.status = (await window.todoAPI.dbCall('getMeta', statusKey(id))) || '' } catch (e) { /* absent */ }
   try { blob.deadline = (await window.todoAPI.dbCall('getMeta', deadlineKey(id))) || '' } catch (e) { /* absent */ }
   try { blob.milestones = (await window.todoAPI.dbCall('getMeta', milestonesKey(id))) || '' } catch (e) { /* absent */ }
-  if (blob.flag || blob.status || blob.deadline || blob.milestones) {
+  // D15-B4: docs ride the same blob — absent raw ('' after the ||) stays falsy so an
+  // old backup blob without the field restores cleanly.
+  try { blob.docs = (await window.todoAPI.dbCall('getMeta', projectDocsKey(id))) || '' } catch (e) { /* absent */ }
+  if (blob.flag || blob.status || blob.deadline || blob.milestones || blob.docs) {
     try {
       await commitCommand("meta", "put", [catMetaBakKey(id), JSON.stringify(blob)])
     } catch (e) {
@@ -179,6 +221,7 @@ async function backupThenClearProjectMeta (id) {
   try { await commitCommand("meta", "delete", statusKey(id)) } catch (e) { /* absent is fine */ }
   try { await commitCommand("meta", "delete", deadlineKey(id)) } catch (e) { /* absent is fine */ }
   try { await commitCommand("meta", "delete", milestonesKey(id)) } catch (e) { /* absent is fine */ }
+  try { await commitCommand("meta", "delete", projectDocsKey(id)) } catch (e) { /* absent is fine */ }
   // Only now (backup key durably written, live keys cleared) may any window's recover proceed
   clearPendingMetaBak(id)
 }
@@ -212,6 +255,11 @@ async function restoreProjectMetaBackup (id) {
     let ms = blob.milestones
     try { ms = mergeMilestoneBlobs((await window.todoAPI.dbCall('getMeta', milestonesKey(id))) || '', blob.milestones) } catch (e) { /* backup verbatim */ }
     try { if (ms) await commitCommand("meta", "put", [milestonesKey(id), ms]) } catch (e) { /* best-effort */ }
+  }
+  // D15-B4: documents restore verbatim (a purged category has no newer live docs to merge with;
+  // ProjectDocs.vue reloads from the live key on its next mount).
+  if (blob.docs) {
+    try { await commitCommand("meta", "put", [projectDocsKey(id), blob.docs]) } catch (e) { /* best-effort */ }
   }
   try { await commitCommand("meta", "delete", catMetaBakKey(id)) } catch (e) { /* best-effort */ }
   return !!blob.flag
@@ -271,21 +319,41 @@ export { rewriteLegacyProjectIdsWithout, drainLegacyRewrites }
 
 /** D14-B9 (2026-10-01): the purge used to be one-sided — recover restored the row + project meta but
  *  the saved filters hard-deleted here were gone forever. The doomed filters (read from in-memory
- *  state, not the DB) are now backed up per victim into `catFiltersBak.<victimId>` in the same
- *  backup-key family as catProjectMetaBak before the deletes fire; recover re-puts them. */
+ *  state, not the DB) are now backed up per victim into the `catFiltersBak` family in the same
+ *  backup-key family as catProjectMetaBak before the deletes fire; recover re-puts them.
+ *  D15-B6 (2026-10-03): the backup key carries the deletion stamp — `catFiltersBak.<deletedAt>.<id>`
+ *  — so the startup meta GC (computeMetaGc) can bound its retention to the recover window (same
+ *  30-day fallback as the tombstone expiry in init()); the legacy `catFiltersBak.<id>` shape (the
+ *  CLI twin still writes it, and pre-fix renderer backups) stays readable and is GC'd only when the
+ *  id is live again (recovered/re-created leftover — recover itself deletes the backup). */
 const catFiltersBakKey = id => 'catFiltersBak.' + id
-async function backupDoomedFilters (victim, doomed) {
+const catFiltersBakKeyTs = (deletedAt, id) => 'catFiltersBak.' + deletedAt + '.' + id
+async function backupDoomedFilters (victim, doomed, deletedAt) {
   const mine = doomed.filter(f => f && f.conds && String(f.conds.catId) === String(victim))
   if (!mine.length) return
+  // No stamp (legacy tombstone without deletedAt) → fall back to the legacy key shape: an
+  // unstamped key's age is unknowable, so the GC conservatively keeps it (same rule init() uses
+  // for no-stamp tombstones) instead of inventing a now-stamp recover could never re-derive.
+  const key = deletedAt ? catFiltersBakKeyTs(deletedAt, victim) : catFiltersBakKey(victim)
   try {
-    await commitCommand("meta", "put", [catFiltersBakKey(victim), JSON.stringify(mine)])
+    await commitCommand("meta", "put", [key, JSON.stringify(mine)])
   } catch (e) { console.warn('[category] filter backup write failed for victim', victim, e) }
 }
-/** Restore the backed-up filters of one recovered category (best-effort, then the backup is deleted). */
-async function restoreFiltersBackup (id, commit) {
+/** Restore the backed-up filters of one recovered category (best-effort, then the backup is deleted).
+ *  Reads the stamped key first (renderer writes since D15-B6, using the tombstone's deletedAt) and
+ *  falls back to the legacy shape (CLI twin / pre-fix backups). */
+async function restoreFiltersBackup (id, commit, deletedAt) {
   if (typeof window === 'undefined' || !window.todoAPI || !window.todoAPI.dbCall) return
   let raw = null
-  try { raw = await window.todoAPI.dbCall('getMeta', catFiltersBakKey(id)) } catch (e) { return }
+  let bakKey = catFiltersBakKey(id)
+  if (deletedAt) {
+    bakKey = catFiltersBakKeyTs(deletedAt, id)
+    try { raw = await window.todoAPI.dbCall('getMeta', bakKey) } catch (e) { raw = null }
+  }
+  if (!raw) {
+    bakKey = catFiltersBakKey(id)
+    try { raw = await window.todoAPI.dbCall('getMeta', bakKey) } catch (e) { return }
+  }
   if (!raw) return
   let list = null
   try { list = JSON.parse(raw) } catch (e) { list = null }
@@ -295,7 +363,7 @@ async function restoreFiltersBackup (id, commit) {
     }
     try { commit('filters/setList', await window.todoAPI.dbCall('filterList')) } catch (e) { /* list refresh is best-effort */ }
   }
-  try { await commitCommand("meta", "delete", catFiltersBakKey(id)) } catch (e) { /* best-effort */ }
+  try { await commitCommand("meta", "delete", bakKey) } catch (e) { /* best-effort */ }
 }
 
 /** D5: remove saved filters referencing any victim categoryId. `this` = the store (mutations bind it).
@@ -309,9 +377,12 @@ function purgeFiltersForVictims (victims) {
   if (!doomed.length) return
   // D14-B9: back up BEFORE the deletes fire (the backup payload comes from in-memory state, so the
   // put/delete ordering across the IPC pipe cannot corrupt it; a failed backup keeps the delete
-  // one-sided exactly as before rather than blocking the delete).
+  // one-sided exactly as before rather than blocking the delete). D15-B6: pass the victim's
+  // deletion stamp so the backup key carries the age the startup GC needs to bound its retention.
+  const catList = (this.state && this.state.category && this.state.category.list) || []
   for (const v of victims) {
-    backupDoomedFilters(v, doomed).catch(e => console.warn('[category] filter backup failed:', e))
+    const vRow = catList.find(c => c && c.categoryId === v)
+    backupDoomedFilters(v, doomed, (vRow && vRow.deletedAt) || 0).catch(e => console.warn('[category] filter backup failed:', e))
   }
   const doomedIds = new Set(doomed.map(f => f.id))
   fstate.list = fstate.list.filter(f => !doomedIds.has(f.id))
@@ -324,7 +395,37 @@ function purgeFiltersForVictims (victims) {
 /** Deleted categories cannot come back through getAllCategories (WHERE deleted = 0), so they are mirrored
  *  in the LS cache by persist() and re-merged here on startup. Without this a soft-deleted category
  *  vanished from state on restart: visibleCount dropped to 0 and the recover-in-place entry went blind,
- *  contradicting the CLI's "recoverable in App" promise. Entries already re-added (same id, live in DB) win. */
+ *  contradicting the CLI's "recoverable in App" promise. Entries already re-added (same id, live in DB) win.
+ *  Pure + exported for the D15-B15 regression: init() must apply it on EVERY successful DB read —
+ *  including the zero-live-categories boot (delete ALL categories, restart), where the old
+ *  `if (rows.length)` gate dropped in-retention tombstones from memory and the recover entry went
+ *  blind exactly when it was needed most. */
+function mergeableLsTombstones (rows, recycleBinAutoDeleteDays) {
+  // G1 tombstone expiry: a tombstone whose category was already PURGED (hard-deleted from the
+  // recycle bin) is invisible to the live-rows check and used to be re-merged forever —
+  // the "permanently deleted" category resurrected as a ghost on every restart. Only re-attach
+  // tombstones inside the recycle-bin retention window; old tombstones without deletedAt are
+  // conservatively kept (pre-dates the stamp, may still be within an unknown window).
+  // [tombstone-zero fix] 0 is the shipped 'never purge' option (SettingsDataTab radio): the
+  // old `Number(...) || 30` read it as 30, so a 'never' user still lost the category
+  // recovery entry after a month — diverging from the todo-row purge, which honors 0 via
+  // `if (!days) return` (store/todo.js). 0 now keeps tombstones unconditionally; junk/NaN
+  // still falls back to 30.
+  const rawDays = Number(recycleBinAutoDeleteDays)
+  const retentionDays = rawDays === 0 ? 0 : (rawDays > 0 ? rawDays : 30)
+  // P3-6 (maint/dw 2026-09-23) + day-caliber (2026-10-03): same calendar-day cutoff as the
+  // todo-row purge (store/todo.js: startOf('day').subtract(days,'day') = local midnight minus
+  // N CALENDAR days) — computed via todayBounds.dayShift so this path stays independent of the
+  // window.dayjs UMD global while keeping calendar semantics. The former
+  // `_localMidnight - retentionDays * day-in-ms` arithmetic diverged from the purge cutoff by
+  // 1h on DST-affected days: on such a day the recovery entry could expire while the rows it
+  // would recover were still inside the retention window.
+  const cutoff = retentionDays === 0 ? 0 : dayShift(dayStart(Date.now()), -retentionDays)
+  return deletedFromLs().filter(d =>
+    !rows.some(r => r.categoryId === d.categoryId) &&
+    (retentionDays === 0 || !d.deletedAt || d.deletedAt > cutoff))
+}
+export { mergeableLsTombstones }
 function deletedFromLs () {
   try {
     const d = JSON.parse(localStorage.getItem(LS_KEY))
@@ -375,6 +476,7 @@ export default {
      *  real user edit after load commits just that row, not the whole list re-synced. */
     setListFromDb (state, list) {
       state.list = list
+      prunePersistBaseline(list)
       for (const c of list) lastPersistedRows.set(c.categoryId, JSON.stringify(toRow(c)))
     },
     addCategory (state, { categoryName = 'New Category', categoryColor = COLOR_PALETTE[state.list.length % COLOR_PALETTE.length], folderIs = false, folderId = 0 }) {
@@ -398,12 +500,22 @@ export default {
       const ids = state.projectIds.filter(x => !victims.includes(x))
       if (ids.length !== state.projectIds.length) state.projectIds = ids
       for (const vid of victims) {
-        // U-4: back up then clear the project meta (flag/status/deadline/milestones) — recover restores it.
+        // U-4: back up then clear the project meta (flag/status/deadline/milestones/docs) — recover restores it.
         // Review P2: the promise is retained per id; recover/undo awaits it before reading the backup key.
         const p = Promise.resolve().then(() => backupThenClearProjectMeta(vid))
         markPendingMetaBak(vid) // durable cross-window marker: written BEFORE the roundtrip's reads
         pendingMetaBackups.set(vid, p)
-        p.catch(() => {}) // backupThenClear never throws by design; guard against unhandled rejections anyway
+        // D15-B7 (2026-10-03): prune the durable legacy `projectCategoryIds` blob exactly like the
+        // CLI twin (cli/lib-categories.cjs deleteCategory) — the renderer only trimmed the
+        // in-memory list, so init()'s read-only legacy union resurrected every deleted project id
+        // on the next launch (3 dead meta reads per id per load, stale project sidebar entries).
+        rewriteLegacyProjectIdsWithout(vid)
+        // Leak fix (dw wave 2026-10-02): the entry used to be deleted ONLY in recover(), so a victim
+        // never recovered (purged, or recovered in another window) kept its settled promise — with its
+        // closure — alive forever. A settled promise needs no awaiting: recover falls through
+        // Promise.resolve(undefined) to waitOutPendingMetaBak, whose DURABLE marker (cleared only when
+        // the backup roundtrip finished) remains the correctness gate.
+        p.catch(() => {}).then(() => { if (pendingMetaBackups.get(vid) === p) pendingMetaBackups.delete(vid) })
         delete state.projectMeta[vid]
       }
       // D5 (2026-09-20): purge saved filters whose conds.catId references a victim — a filter on a
@@ -436,10 +548,22 @@ export default {
      *  written anymore EXCEPT the sanctioned U-5 unmark rewrite below; caller removes the flag first
      *  when a category is deleted) */
     setProject (state, { id, flag }) {
-      const ids = state.projectIds.filter(x => x !== id)
+      const prev = state.projectIds
+      const ids = prev.filter(x => x !== id)
       if (flag) ids.push(id)
       state.projectIds = ids
-      writeProjectFlag(id, flag) // Y/X3: field-granular unit — the only persisted/synced write
+      // Error-safety fix: on a failed durable flag write the in-memory flip is reverted to match what
+      // is actually on disk (previously the optimistic list survived while the durable flag did not —
+      // the project silently vanished/resurrected at next init with zero feedback). One write, one
+      // failure callback — no identity guard (a reactive proxy never === the raw array).
+      let flagWriteFailed = false
+      writeProjectFlag(id, flag, () => {
+        if (flagWriteFailed) return
+        flagWriteFailed = true
+        state.projectIds = flag
+          ? prev.filter(x => x !== id) // put failed → durable has no flag → drop the id again
+          : (ids.includes(id) ? ids : ids.concat(id)) // delete failed → durable still flagged → keep it
+      }) // Y/X3: field-granular unit — the only persisted/synced write
       if (!flag) rewriteLegacyProjectIdsWithout(id) // U-5: unset must also scrub the stale legacy blob, else init()'s union resurrects the project
     },
     /** U-4 (2026-09-20): recover a soft-deleted category in place and restore its backed-up project
@@ -448,6 +572,9 @@ export default {
     recover (state, id) {
       const c = state.list.find(x => x.categoryId === id)
       if (!c || !c.delete) return
+      // D15-B6: capture the stamp BEFORE it is reset below — the async filter-restore link needs
+      // the tombstone's deletedAt to address the stamped catFiltersBak key.
+      const tombstoneDeletedAt = c.deletedAt || 0
       c.delete = false
       c.deletedAt = 0
       persist(state.list)
@@ -462,10 +589,12 @@ export default {
         .then(() => waitOutPendingMetaBak(id))
         .then(() => restoreProjectMetaBackup(id))
         // D14-B9: restore the saved filters the delete-time purge backed up (symmetric reversibility).
+        // D15-B6: pass the tombstone's deletedAt so the stamped backup key (`catFiltersBak.<deletedAt>.<id>`)
+        // can be read directly (legacy-shape keys remain the fallback).
         // The filter restore must NOT swallow the flagRestored result of the previous link — a flat
         // `.then(() => restoreFiltersBackup(...))` made the next link see `undefined` and the
         // recovered project id stopped re-entering projectIds.
-        .then(flagRestored => restoreFiltersBackup(id, (m, p) => this.commit(m, p)).then(() => flagRestored))
+        .then(flagRestored => restoreFiltersBackup(id, (m, p) => this.commit(m, p), tombstoneDeletedAt).then(() => flagRestored))
         .then(flagRestored => {
           if (flagRestored && !state.projectIds.includes(id)) {
             state.projectIds = [...state.projectIds, id]
@@ -512,7 +641,9 @@ export default {
     async loadProjectMeta ({ state, commit }) {
       if (!state.projectIds.length || !window.todoAPI || !window.todoAPI.dbCall) return
       const patch = {}
-      const today0 = +dayjs().startOf('day')
+      // Day-caliber (2026-10-03): routed through todayBounds.today0 — the single non-reactive
+      // day-start source. The inline wall-clock dayjs expression it replaced was an un-routed now-read.
+      const today0Ts = today0()
       for (const id of state.projectIds) {
         const entry = {}
         // Status/deadline re-read UNCONDITIONALLY (review P1 2026-09-10): an `undefined` guard made both
@@ -525,7 +656,7 @@ export default {
         // a rolled-over date kept showing a stale milestone. Read failure falls back to null.
         try {
           const ms = await loadMilestones(id)
-          entry.nextMilestone = ms.filter(m => m.date >= today0)[0] || null
+          entry.nextMilestone = ms.filter(m => m.date >= today0Ts)[0] || null
         } catch { entry.nextMilestone = null }
         patch[id] = entry
       }
@@ -561,48 +692,29 @@ export default {
         if (merged.length) commit('setProjectIds', merged)
       } catch (e) { /* stays empty when no project flags */ }
       await this.dispatch('category/loadProjectMeta')
-      if (rows.length) {
-        // Re-attach soft-deleted rows mirrored in LS (getAllCategories is live-only) so the in-app
-        // recovery entry survives a restart; live DB rows win over a stale LS tombstone of the same id
-        // G1 tombstone expiry: a tombstone whose category was already PURGED (hard-deleted from the
-        // recycle bin) is invisible to the live-rows check above and used to be re-merged forever —
-        // the "permanently deleted" category resurrected as a ghost on every restart. Only re-attach
-        // tombstones inside the recycle-bin retention window; old tombstones without deletedAt are
-        // conservatively kept (pre-dates the stamp, may still be within an unknown window).
-        // [tombstone-zero fix] 0 is the shipped 'never purge' option (SettingsDataTab radio): the
-        // old `Number(...) || 30` read it as 30, so a 'never' user still lost the category
-        // recovery entry after a month — diverging from the todo-row purge, which honors 0 via
-        // `if (!days) return` (store/todo.js). 0 now keeps tombstones unconditionally; junk/NaN
-        // still falls back to 30.
-        const rawDays = Number(rootState && rootState.settings && rootState.settings.recycleBinAutoDeleteDays)
-        const retentionDays = rawDays === 0 ? 0 : (rawDays > 0 ? rawDays : 30)
-        // P3-6 (maint/dw 2026-09-23): same calendar-day cutoff as the todo-row purge (store/todo.js:
-        // startOf('day').subtract(days,'day') = local midnight minus N calendar days — computed here
-        // with plain Date math so this path stays independent of the window.dayjs UMD global). The
-        // old rolling-24h arithmetic let this entry expire up to 24h EARLIER than the rows it would
-        // recover — a restart inside that window silently dropped the recovery entry while the rows
-        // were still inside the retention window.
-        const _now = new Date()
-        const _localMidnight = new Date(_now.getFullYear(), _now.getMonth(), _now.getDate()).getTime()
-        const cutoff = _localMidnight - retentionDays * 86400000
-        const dels = deletedFromLs().filter(d =>
-          !rows.some(r => r.categoryId === d.categoryId) &&
-          (retentionDays === 0 || !d.deletedAt || d.deletedAt > cutoff))
-        commit('setListFromDb', rows.concat(dels))
-        return rows.length
-      }
-      // [LS-migration DB-fail fix] a failed DB read is NOT an empty table: skip the migration and
-      // the seed ids entirely (no category.put / no categoryLsMigrated stamp). The LS cache stays
-      // memory-only (setListFromDb never persists) so nothing can overwrite real DB rows.
+      // D15-B15: the LS-tombstone re-merge runs on EVERY successful DB read — not gated behind
+      // rows.length. Deleting ALL categories and restarting used to fall through to the
+      // `setListFromDb([])` migrated branch, dropping every in-retention tombstone from memory:
+      // visibleCount read 0 and the recover-in-place entry went blind, contradicting the
+      // documented recoverability promise precisely when the user needs it. (A failed DB read is
+      // NOT a successful read: the dbReadFailed path below keeps the whole LS cache, tombstones
+      // included, so nothing changes there.)
       if (dbReadFailed) {
         const lsCache = loadList()
         commit('setListFromDb', lsCache)
         return -1
       }
+      const lsDels = mergeableLsTombstones(rows, rootState && rootState.settings && rootState.settings.recycleBinAutoDeleteDays)
+      if (rows.length) {
+        // Re-attach soft-deleted rows mirrored in LS (getAllCategories is live-only) so the in-app
+        // recovery entry survives a restart; live DB rows win over a stale LS tombstone of the same id
+        commit('setListFromDb', rows.concat(lsDels))
+        return rows.length
+      }
       // One-time migration flag: otherwise "migrate only when the table is empty" would resurrect old localStorage caches after the user deletes all categories
       let migrated = false
       try { migrated = (await window.todoAPI.dbCall('getMeta', 'categoryLsMigrated')) === '1' } catch (e) { /* empty */ }
-      if (migrated) { commit('setListFromDb', []); return 0 }
+      if (migrated) { commit('setListFromDb', lsDels); return 0 } // D15-B15: zero live categories ≠ zero recoverable categories
       const ls = loadList()
       try {
         // [D13 #7] the migration is restore-shaped (an empty DB being seeded from a cached copy):

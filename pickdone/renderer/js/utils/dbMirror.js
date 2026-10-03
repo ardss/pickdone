@@ -1,5 +1,6 @@
 import { commit as commitCommand } from "./commandBus.js"
 import { isAuxWindow } from "./auxWindow.js"
+import { preserveCorrupt } from "./corrupt-quarantine.js"
 /**
  * localStorage → SQLite persistence mirror — the three "master data that should live in the DB" states all go through here:
  *   db.settingsState (all settings) / db.habitsState (habit check-ins) / (db.tomatoState 已退役:账本迁 tomato_records 行表,mirror 仅剩 settings/habits)
@@ -76,13 +77,32 @@ function clearUnflushed (metaKey) {
 }
 /** Consumer-side (startup restore) probe: returns the parked blob when the previous session gave
  *  up mirroring this key, and clears the marker (the caller re-queues via mirrorToDb with a fresh
- *  retry budget). Null when nothing is parked. */
+ *  retry budget). Null when nothing is parked.
+ *  A corrupt park is quarantined (corruptQuarantine.dbMirror), not silently destroyed: the parked
+ *  blob is by construction NEWER than what reached the DB (it exists only after the retry ladder
+ *  was exhausted), so clearing the marker on a failed parse would hand boot to the stale DB copy
+ *  and destroy the newest copy of the state. The marker is only cleared once the raw bytes are
+ *  safely quarantined (retry-keep-in-place on quarantine failure, the db-sync-schema policy);
+ *  the caller still gets null — the degrade path is unchanged, just non-destructive. */
 export function consumeUnflushed (metaKey) {
   let raw = null
   try { raw = localStorage.getItem(unflushedKey(metaKey)) } catch (e) { return null }
   if (!raw) return null
+  let parsed = null
+  try { parsed = JSON.parse(raw) } catch (e) { parsed = undefined }
+  if (parsed === undefined) {
+    console.error('[dbMirror] parked blob for', metaKey, 'is corrupt — quarantining raw bytes (corruptQuarantine.dbMirror) before clearing the park marker')
+    try {
+      preserveCorrupt('dbMirror', metaKey, raw)
+    } catch (q) {
+      console.error('[dbMirror] corrupt-blob quarantine failed — park marker kept in place (retry-keep-in-place, the copy must not be destroyed):', q)
+      return null
+    }
+    clearUnflushed(metaKey)
+    return null
+  }
   clearUnflushed(metaKey)
-  try { return JSON.parse(raw) } catch (e) { return null }
+  return parsed
 }
 
 /** D14-B3 (2026-10-01): true once the quit-flush broadcast has been received. After it, scheduleRetry's

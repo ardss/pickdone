@@ -19,6 +19,20 @@ const { createEnvelope, hashPayload } = require('../../shared/sync-core/revision
 const FLAG_KEY = 'sync.revisions.v2'
 const HLC_KEY = 'sync.hlc'
 
+// Payload retention (leak-sync-revisions-no-gc): every recorded write stores the full row JSON
+// into sync_revision_payloads; superseded payloads were never removed, so a long-lived flag-on
+// database grew the table without bound (full row content per edit, forever). Retention keeps
+// payloads for the CURRENT revision of each entity (live materialization) plus the newest
+// REVISION_PAYLOAD_KEEP revisions by HLC (recent concurrency window for merge/conflict
+// resolution); older non-current payloads are pruned while their sync_revisions rows stay as
+// ancestry-only lines — exportToStore already skips pruned payloads by design.
+const REVISION_PAYLOAD_KEEP = 2000
+// Hysteresis: prune only once the table exceeds keep * 1.25 so we don't re-scan on every write.
+const payloadKeep = () => {
+  const v = Number(process.env.TODO_REVISION_PAYLOAD_KEEP)
+  return Number.isInteger(v) && v > 10 ? v : REVISION_PAYLOAD_KEEP
+}
+
 /** entity (oplog space) -> table + id column for write-time row reads. */
 const READERS = {
   todo: { table: 'todos', id: 'id' },
@@ -105,7 +119,44 @@ module.exports = function createRevisionRecorder ({ getDb, log }) {
       saveClock(d)
     })
     run()
+    // perf-sync-revisions-prune-inline-write-stall (P3, symptom of "v2 write path does synchronous
+    // maintenance inline"): the prune (per-write COUNT + bulk DELETE) used to run inside record(),
+    // stalling every write behind maintenance work. It already runs strictly AFTER the commit, and
+    // exportToStore tolerates pruned payloads (ancestry-only rows are skipped), so deferring it to
+    // setImmediate keeps the write hot path clean without changing retention semantics.
+    setImmediate(() => prunePayloads(d))
     return { recorded }
+  }
+
+  /** Retention GC: drop payloads of non-current revisions outside the recent-keep window.
+   *  Never throws into the write path — a failed prune only means one more cycle of growth. */
+  const PRUNE_CHUNK = 2000
+  function prunePayloads (d) {
+    const keep = payloadKeep()
+    try {
+      const n = d.prepare('SELECT COUNT(*) n FROM sync_revision_payloads').get().n
+      if (n <= keep + Math.floor(keep / 4)) return 0
+      // Chunked so even a deferred prune of a very large backlog stays bounded per statement.
+      const del = d.prepare(`DELETE FROM sync_revision_payloads WHERE revisionId IN (
+        SELECT p.revisionId FROM sync_revision_payloads p
+        JOIN sync_revisions r ON r.revisionId = p.revisionId
+        WHERE p.revisionId NOT IN (SELECT revisionId FROM sync_revision_current)
+          AND p.revisionId NOT IN (
+            SELECT revisionId FROM sync_revisions ORDER BY hlcPhysical DESC, hlcLogical DESC LIMIT ?
+          )
+        LIMIT ?
+      )`)
+      let total = 0
+      let changes
+      do {
+        changes = del.run(keep, PRUNE_CHUNK).changes
+        total += changes
+      } while (changes >= PRUNE_CHUNK)
+      return total
+    } catch (e) {
+      log && log.warn && log.warn('[db-revisions] payload prune failed (non-fatal): ' + (e && e.message))
+      return 0
+    }
   }
 
   /** Introspection for tests / Device Center visibility. */
@@ -153,5 +204,5 @@ module.exports = function createRevisionRecorder ({ getDb, log }) {
     return r.payloadHash === hashPayload(JSON.parse(p.payload))
   }
 
-  return { record, list, exportToStore, verifyHash, flagEnabled, FLAG_KEY, cmpHlc }
+  return { record, list, exportToStore, verifyHash, flagEnabled, FLAG_KEY, cmpHlc, prunePayloads, payloadKeep }
 }

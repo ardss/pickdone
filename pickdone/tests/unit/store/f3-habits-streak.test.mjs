@@ -64,3 +64,24 @@ test('streak: daily 习惯无记录不断言为正数;interval 习惯回溯到 c
   s2.habits = [{ id: 'h2', name: 'i', createdAt: Date.now(), frequency: { type: 'interval', intervalN: 2 }, records: {} }]
   assert.equal(habitsStore.getters.streakOf(s2)('h2'), 0, 'createdAt 护栏使回溯终止')
 })
+
+test('[day-caliber 2026-10-03] streakOf re-evaluates from the REACTIVE todayTimestamp alone (no wall clock)', () => {
+  // Invariant: after store/todo.js setTodayTs rolls the day owner past midnight (the 60s
+  // rollover loop commits it every compute cycle), the due-but-unchecked leniency must move to
+  // the new day with NO other state change. The former window.dayjs() wall-clock todayKey kept
+  // answering with yesterday's day key until an unrelated rerender.
+  const { default: store } = { default: habitsStore }
+  const D = new Date(2026, 5, 1, 12).getTime() // noon Jun 1, tz-independent
+  const D1 = new Date(2026, 5, 2, 12).getTime()
+  const keyOf = ts => { const d = new Date(ts); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') }
+  const s = store.state()
+  // D-1 checked, D unchecked: with owner = D, D is the lenient today and the streak reads 1;
+  // after the rollover commit (owner = D+1, no other state change) D is a due-but-unchecked
+  // PAST day and must BREAK the streak -> 0. The former wall-clock todayKey kept treating D as
+  // lenient (and kept reporting 1) until an unrelated state change.
+  s.habits = [{ id: 'h1', name: 'x', createdAt: new Date(2026, 4, 1).getTime(), frequency: { type: 'daily' }, records: { [keyOf(D - 86400000)]: true } }]
+  const rootStateOf = ts => ({ todo: { todayTimestamp: ts } })
+  assert.equal(store.getters.streakOf(s, {}, rootStateOf(D))('h1'), 1, 'on day D: D is the lenient unchecked today, D-1 counts -> streak 1')
+  assert.equal(store.getters.streakOf(s, {}, rootStateOf(D1))('h1'), 0,
+    'after the rollover commit (owner now D+1, no other state change): D is no longer lenient and breaks the streak')
+})

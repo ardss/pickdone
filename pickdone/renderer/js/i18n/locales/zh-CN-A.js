@@ -27,7 +27,9 @@ export default {
       connectHint: '连接模式:已选「{a}」为前置候选。Tab 或方向键切换目标卡,Enter 确认建立依赖,Esc 取消',
       emptyHint: '这里还没有任务。从右侧任务列表把任务拖进来,或新建任务后再回到本页编排依赖',
       msLoading: '里程碑加载中…',
-      noTitle: '无标题'
+      noTitle: '无标题',
+      posLoadFailed: '依赖图布局数据读取失败，已重置为自动布局：{msg}',
+      posSaveFailed: '依赖图布局保存失败，本次调整可能不会保留：{msg}'
     },
     "core": {
     "leftoverMsg": "昨天还剩 {n} 件日程未完成（{preview}{more}）。要把它们移到今天吗？",

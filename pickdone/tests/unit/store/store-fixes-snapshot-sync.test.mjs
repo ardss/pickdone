@@ -161,6 +161,9 @@ test('persistSnapshotDiff: dayStart change in a replayed row migrates chips (pla
   const from = { todoList: [row('C', { dayStart: MON })], recycleList: [] }
   const to = { todoList: [row('C', { dayStart: WED, updateTime: 2 })], recycleList: [] }
   const committed = []
+  // TL-6 purged-generation guard: persistSnapshotDiffCore reads durable existence via getAll;
+  // the stub must report the replayed row as durably existing or the upsert arm skips it.
+  dbHandler = (op, params) => { dbCalls.push([op, params]); return op === 'getAll' ? Promise.resolve([{ taskId: 'C' }]) : Promise.resolve([]) }
   await actions.persistSnapshotDiff({ commit: (t, p) => committed.push([t, p]) }, { from, to })
   await waitFor(() => dbCalls.some(([op, p]) => op === 'planMoveTask' && p.taskId === 'C'))
   assert.deepEqual(dbCalls.find(([op]) => op === 'planMoveTask')[1],
@@ -187,6 +190,7 @@ test('persistSnapshotDiff: undone soft-delete restores the pre-delete chip snaps
   const chips = JSON.stringify([{ taskId: 'A', day: '2026-01-05', mm: '10:30', id: 'y' }])
   dbHandler = (op, params) => {
     dbCalls.push([op, params])
+    if (op === 'getAll') return Promise.resolve([{ taskId: 'A' }]) // TL-6 durability read: the restored row exists
     if (op === 'getMeta') return Promise.resolve(params === 'planChipsSnapshot:A' ? chips : null)
     return Promise.resolve([])
   }

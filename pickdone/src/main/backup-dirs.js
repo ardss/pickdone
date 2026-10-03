@@ -65,10 +65,24 @@ function migrateLegacyBackups (legacyDir, root) {
 }
 function loadAllowedBackupDirs () {
   if (allowedBackupDirs.size) return
-  try { for (const d of JSON.parse(fs.readFileSync(allowedBackupDirsFile(), 'utf8'))) allowedBackupDirs.add(path.resolve(d)) } catch {}
+  let raw
+  try { raw = fs.readFileSync(allowedBackupDirsFile(), 'utf8') } catch (e) {
+    // ENOENT = first run, normal empty state — stay silent; anything else must be visible
+    if (!e || e.code !== 'ENOENT') log.warn('[Backup] allowed-backup-dirs 读取失败:', e && e.message)
+    return
+  }
+  try { for (const d of JSON.parse(raw)) allowedBackupDirs.add(path.resolve(d)) } catch (e) {
+    log.warn('[Backup] allowed-backup-dirs 内容损坏，忽略:', e && e.message)
+  }
 }
+// ES4 fix (2026-10-02): persist failures used to be swallowed here while the caller reported
+// success — a user-picked directory silently unregistered itself on the next launch. The
+// structured result lets handlers/backup.js propagate the failure to the renderer instead.
 function saveAllowedBackupDirs () {
-  try { fs.writeFileSync(allowedBackupDirsFile(), JSON.stringify([...allowedBackupDirs])) } catch {}
+  try { fs.writeFileSync(allowedBackupDirsFile(), JSON.stringify([...allowedBackupDirs])); return { ok: true } } catch (e) {
+    log.warn('[Backup] allowed-backup-dirs 持久化失败:', e && e.message)
+    return { ok: false, error: (e && e.message) || String(e) }
+  }
 }
 function resolveBackupDir (configured) {
   const fallback = defaultBackupRoot() // default root: TODO_BACKUP_DIR or <userData>/backups (single source: defaultBackupRootCandidates)

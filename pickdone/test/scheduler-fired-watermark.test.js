@@ -68,15 +68,20 @@ test('all-unwritten eviction persists the victim watermark BEFORE deleting it, b
   assert.ok(scheduler._fired.size <= FIRED_MAX, 'map stays within the bound after a successful flush, got ' + scheduler._fired.size)
 })
 
-test('when the flush fails the eviction is skipped (map exceeds the bound by one, nothing dropped)', () => {
+test('when the flush fails the bound STILL holds (C9: oldest unwritten evicted, potential re-fire logged)', () => {
   scheduler._clearStateForTest()
   commits.length = 0
   commitShouldFail = true // persist-retry path: flushFiredNow swallows, written flags stay false
   fillUnwritten(FIRED_MAX, 'j')
   scheduler._markFired('brand-new-2')
-  assert.ok(scheduler._fired.has('j0'), "the would-be victim's watermark must NOT be dropped on a failed flush")
+  // C9 (2026-10-02, supersedes the R3 overshoot-by-one fallback): under SUSTAINED persist failure
+  // the old "skip the eviction, exceed by one, self-heals later" path let the map grow without
+  // bound — the LRU was suspended exactly when the process was struggling. The bound holds per
+  // admission: the oldest unwritten watermark is evicted (logged as a potential post-restart
+  // re-fire) after one best-effort flush.
+  assert.ok(!scheduler._fired.has('j0'), 'the oldest unwritten entry was evicted to keep the bound')
   assert.ok(scheduler._fired.has('brand-new-2'), 'the new watermark is still recorded')
-  assert.equal(scheduler._fired.size, FIRED_MAX + 1, 'bound may be exceeded by exactly one entry; it self-heals on the next flush')
+  assert.equal(scheduler._fired.size, FIRED_MAX, 'bound holds exactly at FIRED_MAX even when every persist fails')
 })
 
 test('behavior preserved: written-first eviction unchanged (oldest WRITTEN entry goes, no flush needed)', () => {

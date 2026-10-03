@@ -53,7 +53,7 @@ function setMaxBytes (n) { if (Number.isFinite(n) && n > 0) maxBytes = n }
  *  every line; dirReady is reset so a re-pointed resolver gets a fresh mkdir; writeChain is reset
  *  so a pending async drain from a previous test cannot land stale lines into a NEW directory
  *  after this reset — test-seam-only ordering hazard, production has no flushNow/pending mix). */
-function resetForTests () { flushNow(); writeChain = Promise.resolve(); resolveDir = defaultDirResolver; maxBytes = MAX_BYTES_DEFAULT; dirReady = false; refusedDirWarned = false; lastNoop = null }
+function resetForTests () { flushNow(); inFlight.length = 0; resolveDir = defaultDirResolver; maxBytes = MAX_BYTES_DEFAULT; dirReady = false; refusedDirWarned = false; lastNoop = null }
 
 function auditFile () {
   const dir = resolveDir()
@@ -311,31 +311,36 @@ function rotateIfNeeded () {
   } catch (e) { /* no file on first write */ }
 }
 
-/** Split buffered lines into ≤maxBytes chunks, rotating between chunks — preserves the old
+/** Split buffered entries into ≤maxBytes chunks, rotating between chunks — preserves the old
  *  per-line "rotate when the file exceeds the threshold" semantics while still writing each
- *  chunk as ONE append call. Chunk sizes measured in BYTES (Buffer.byteLength — the threshold
- *  compares against st.size; CJK content is 3 bytes/char in UTF-8, so char count under-splits). */
-function chunkByThreshold (lines) {
+ *  chunk as ONE append call. Chunk sizes measured in BYTES (Buffer.byteLength of the serialized
+ *  line — the threshold compares against st.size; CJK content is 3 bytes/char in UTF-8, so char
+ *  count under-splits). Takes ENTRIES; the caller serializes each chunk to text exactly once. */
+function chunkByThreshold (entries) {
   const chunks = []
   let cur = []
   let bytes = 0
-  for (const line of lines) {
-    const lineBytes = Buffer.byteLength(line)
+  for (const e of entries) {
+    const lineBytes = Buffer.byteLength(JSON.stringify(e)) + 1 // + newline
     if (cur.length && bytes + lineBytes > maxBytes) { chunks.push(cur); cur = []; bytes = 0 }
-    cur.push(line)
+    cur.push(e)
     bytes += lineBytes
   }
   if (cur.length) chunks.push(cur)
   return chunks
 }
 
-/** Drain the buffer synchronously (quit path / tests).
- *  C5 (P1 2026-09-24): chunks already handed to the async writer (flushAsync) used to be invisible
- *  here — the quit-flush only wrote buffer remnants, so an in-flight async batch was silently lost
- *  on process exit. They are now REGISTERED in `inFlight` and synchronously flushed first.
- *  C13 (P2 2026-09-24): a chunk that fails both append attempts used to `return` and drag every
- *  later chunk of the same drain down with it — one bad chunk dropped the whole rest of the batch.
- *  Failure is now per-chunk: the chunk is dropped (fire-and-forget contract) and the drain continues. */
+/** C4 (P3 2026-10-02): ONE ownership rule for in-flight chunks. Chunks are written by a SYNCHRONOUS
+ *  pump scheduled on setImmediate: a chunk is either (a) not yet issued — it sits in `inFlight` and
+ *  flushNow may steal it wholesale (splice + sync write), or (b) fully written within its pump tick —
+ *  no chunk is EVER mid-write across a tick boundary. That removes the old fs.appendFile race where
+ *  flushNow's sync write and the unrevokable threadpool append both landed (duplicate lines in
+ *  cli-audit.jsonl at quit/flush time). Quit flush: the 'exit' hook runs flushNow, which drains
+ *  everything not yet pumped — nothing is lost (C5) and nothing is written twice (C4).
+ *  C13 (P2 2026-09-24): a chunk that fails both append attempts is dropped alone; the pump continues.
+ *  Blocking note: the pump writes at most one 100ms/64-entry batch per tick with appendFileSync —
+ *  the F-B7 win (no per-op mkdir+stat+append on the IPC path) is preserved; only the batch write
+ *  moved from the threadpool onto the loop, where its atomicity is exactly what ownership requires. */
 let rotationWarned = false
 function warnRotationFailure (e) {
   if (rotationWarned) return
@@ -346,55 +351,57 @@ function warnRotationFailure (e) {
 function flushNow () {
   if (flushTimer) { clearTimeout(flushTimer); flushTimer = null }
   if (!resolveDir()) return // fail-safe resolver refused the dir — entries stay dropped
-  const pending = inFlight.splice(0) // C5: sync-write whatever the async path has not finished
+  const pendingChunks = inFlight.splice(0) // C5: sync-write whatever the pump has not written yet
+  const pendingEntries = []
+  for (const c of pendingChunks) pendingEntries.push(...c.entries)
   const drained = buffer.splice(0)
-  if (!pending.length && !drained.length) return
-  sealNoopIfDrained(drained)
-  const lines = drained.map(e => JSON.stringify(e) + '\n')
+  if (!pendingChunks.length && !drained.length) return
+  sealNoopIfDrained(pendingEntries.concat(drained)) // C16: seal folded entries leaving via either path
   ensureDir()
-  const texts = pending.concat(chunkByThreshold(lines).map(chunk => chunk.join('')))
-  for (const text of texts) {
+  writeChunksSync(pendingChunks)
+  writeChunksSync(chunkByThreshold(drained).map(chunk => ({
+    entries: chunk,
+    text: chunk.map(e => JSON.stringify(e) + '\n').join('')
+  })))
+}
+
+/** Append chunks to the audit file synchronously, in order, rotation-checked per chunk.
+ *  Failure is per-chunk: the chunk is dropped (fire-and-forget contract) and the drain continues. */
+function writeChunksSync (chunks) {
+  for (const chunk of chunks) {
     try { rotateIfNeeded() } catch (e) { warnRotationFailure(e) } // 2026-09-25: never silent — one-time warn
     for (let attempt = 0; attempt < 2; attempt++) {
-      try { fs.appendFileSync(auditFile(), text); break } catch (e) { if (attempt > 0) break /* C13: drop this chunk alone, keep draining */ }
+      try { fs.appendFileSync(auditFile(), chunk.text); break } catch (e) { if (attempt > 0) break /* drop this chunk alone, keep draining */ }
     }
   }
 }
 
-// Async chunk writes are SERIALIZED through this chain: two fs.appendFile calls for the same file
-// issued in parallel could complete out of order in the threadpool and flip adjacent lines (the
-// CLI appends the SAME file from another process, so line order across processes is already
-// best-effort — within this process we keep it strict).
-let writeChain = Promise.resolve()
-
-// C5 (P1 2026-09-24): chunks handed to the async writer but not yet persisted. flushAsync registers
-// them here; the serialized writer removes each head as its write completes. flushNow (quit path)
-// splices and sync-writes whatever is left, so an in-flight batch survives process exit.
+// Chunks handed to the writer but not yet pumped. flushNow (quit path) splices them and writes them
+// synchronously; the pump skips anything already spliced away — one owner at a time, by construction.
 let inFlight = []
+let pumpScheduled = false
 
-/** Drain the buffer as one async appendFile batch per threshold chunk (chunks written in order). */
+/** Drain the buffer as one sync batch per threshold chunk, scheduled off the current tick. */
 function flushAsync () {
   flushTimer = null
   if (!buffer.length || !resolveDir()) return
   const drained = buffer.splice(0)
   sealNoopIfDrained(drained)
-  const lines = drained.map(e => JSON.stringify(e) + '\n')
   ensureDir()
-  const chunks = chunkByThreshold(lines).map(chunk => chunk.join(''))
-  inFlight.push(...chunks)
-  writeChain = writeChain.then(() => {
-    const writeNext = () => {
-      const text = inFlight[0]
-      if (text === undefined) return Promise.resolve()
-      return new Promise(resolve => {
-        fs.appendFile(auditFile(), text, err => {
-          if (err) { try { fs.appendFileSync(auditFile(), text) } catch { /* dropped by contract */ } }
-          if (inFlight[0] === text) inFlight.shift()
-          resolve()
-        })
-      }).then(writeNext)
-    }
-    return writeNext()
+  inFlight.push(...chunkByThreshold(drained).map(chunk => ({
+    entries: chunk,
+    text: chunk.map(e => JSON.stringify(e) + '\n').join('')
+  })))
+  if (pumpScheduled) return
+  pumpScheduled = true
+  setImmediate(() => {
+    pumpScheduled = false
+    if (!resolveDir()) { inFlight.length = 0; return }
+    // Whatever is left here belongs to this pump alone: write it synchronously, in order.
+    // A concurrent flushNow would have to run on this same thread — before or after this tick,
+    // never during it — so splices and writes cannot interleave.
+    const chunks = inFlight.splice(0)
+    if (chunks.length) writeChunksSync(chunks)
   })
 }
 

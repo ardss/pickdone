@@ -148,6 +148,7 @@
  * Task list reuses the category list view's grouping semantics (past completed/expired uncompleted/today/tomorrow/day after tomorrow/later/no date) + a fully collapsed final "completed" group.
  */
 import {dayjs, DAY_MS, rescheduleExpired, FMT } from '../utils/core.js'
+import { dayShift } from '../utils/todayBounds.js'
 import { batchMoveWithUndo } from '../utils/confirm.js'
 import { buildExpiryGroups } from '../utils/expiryGroups.js'
 import { loadMilestones, saveMilestones, parseMilestoneDate, milestoneState, milestoneProgress, dueStateOf, newMilestoneId } from '../utils/milestones.js'
@@ -271,8 +272,8 @@ export default {
     trend7 () {
       const days = []
       for (let i = 6; i >= 0; i--) {
-        const d0 = this.todayTs - i * DAY_MS
-        const d1 = d0 + DAY_MS
+        const d0 = dayShift(this.todayTs, -i)
+        const d1 = dayShift(d0, 1)
         days.push({
           n: this.inCat.filter(t => t.complete && t.completedAt >= d0 && t.completedAt < d1).length,
           label: i === 0 ? this.$t('statsB.ProjectView.today') : dayjs(d0).format('MM-DD')
@@ -371,12 +372,17 @@ export default {
       bd.style.setProperty('--depv-board-h', h + 'px')
     },
     statusKey (s) { return statusI18nKey(s) },
-    setStatus (status) {
+    async setStatus (status) {
       if (!status) return
-      // [D13 A3] persistence moved to the awaited setProjectStatus action (failure rolls the
-      // in-memory status back); this caller keeps its fire-and-forget UX but must not leave the
-      // rejection unhandled.
-      this.$store.dispatch('category/setProjectStatus', { id: this.catId, status }).catch(() => {})
+      // [D13 A3] Same class-complete contract as ProjectOverviewView.cycleStatus: the awaited
+      // setProjectStatus action rethrows on a failed meta put (after rolling the in-memory
+      // status back), and this caller must surface that failure — swallowing the rejection
+      // showed the optimistic status while the write silently reverted on the next launch.
+      try {
+        await this.$store.dispatch('category/setProjectStatus', { id: this.catId, status })
+      } catch (e) {
+        if (this.$message) this.$message.error(this.$t('projQ.statusChangeFailed', { m: (e && e.message) ? e.message : e }))
+      }
     },
     /** Countdown in plain words: due today / due tomorrow / N days left / overdue by N days; returns empty when done (the card shows the done state) */
     countdownOf (m, state) {

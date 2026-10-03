@@ -109,6 +109,7 @@
  *  Plan data lives in SQLite plan_chips rows (2026-09-03 root fix), all writes via utils/dayPlans.js atomic ops; bucketed by date, pruned outside [-7d,+31d] */
 import { FMT, dayjs } from '../utils/core.js'
 import { FOCUS_INPUT_MAX_MINUTES } from '../../../shared/limits.mjs'
+import { localDayKey } from '../../../shared/date-key.mjs'
 import { toggleCompleteWithUndo } from '../utils/completeAction.js'
 import { removeWithUndo } from '../utils/confirm.js'
 import { taskContextMenu } from '../utils/taskMenu.js'
@@ -116,7 +117,7 @@ import * as dayPlans from '../utils/dayPlans.js'
 import { dayPlannedLoad, loadLevel } from '../utils/loadWarn.js'
 import { getEstimate } from '../utils/tomatoEstimate.js'
 import { mmToHHmm } from '../utils/tomatoShared.js'
-import { today0 } from '../utils/todayBounds.js'
+import { today0, dayShift } from '../utils/todayBounds.js'
 const DAY_START_H = 0
 const DAY_END_H = 23
 
@@ -710,9 +711,13 @@ export default {
     },
     prune () {
       // Keep plan buckets in the window [today-7d, today+31d]: planning the future is a finalized feature; only prune expired, never delete future
+      // 2026-10-03: keep-window keys via the shared localDayKey with calendar day stepping —
+      // was an un-routed window.dayjs() now-read (day-caliber domain: one day-key definition).
+      // Day stepping routes through the single sanctioned primitive dayShift (todayBounds) —
+      // NOT a second Date#setDate stepper and NOT n*86400000 ms arithmetic.
       const keep = new Set()
-      const dayjs = window.dayjs
-      for (let i = -31; i <= 7; i++) keep.add(dayjs().subtract(i, 'day').format(FMT.date))
+      const now = Date.now()
+      for (let i = -31; i <= 7; i++) keep.add(localDayKey(dayShift(now, -i)))
       let dirty = false
       for (const k of Object.keys(this.plans)) {
         if (!keep.has(k)) { delete this.plans[k]; dirty = true }

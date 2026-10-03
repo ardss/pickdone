@@ -33,7 +33,12 @@ module.exports = function securityHandlers (ctx) {
 
   return {
     // --- Security lock (verification happens entirely in the main process; the plaintext password is never returned to the renderer) ---
-    'lock-app': () => { lockAppNow() },
+    // C15 (P3 2026-10-02): sender gate on the lock path, symmetric with unlock-app's lock-window
+    // gate — every sibling control channel already asserts the main window, but lock-app was
+    // callable from ANY renderer window (a compromised float/quick-add could lock the user out
+    // at will, or race the lock/unlock ping-pong). Only the main window's settings page
+    // (SettingsModal.vue) legitimately locks; gate it with assertMainWindow like the rest.
+    'lock-app': (e) => { assertMainWindow(e); lockAppNow() },
     // Unlock may only be initiated by the lock-screen window itself (prevents the float/other windows from calling without a password)
     'unlock-app': (e) => { if (isLockWindow(e.sender)) unlockAppNow() },
     // Password verification: (1) must be initiated by the lock-screen window (prevents brute force from any renderer window) (2) 5 failures trip a 60s cooldown (prevents dictionary attacks)

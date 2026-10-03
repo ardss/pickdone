@@ -3,28 +3,29 @@
 <head>
   <meta charset="utf-8">
   <link rel="icon" type="image/svg+xml" href="app://app/assets/img/favicon.svg">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self' app://app; script-src 'self' app://app 'unsafe-inline'; style-src 'self' app://app 'unsafe-inline'; img-src 'self' app://app data: blob: https:; media-src 'self' app://app; font-src 'self' app://app data:; connect-src 'self' app://app https:">
+  <!-- CSP (sec-renderer-csp): script-src drops 'unsafe-inline' — all scripts load as files (defer tags above / the module entry), no inline script exists. style-src KEEPS 'unsafe-inline' (element-plus/driver inject runtime styles). connect-src is an allowlist of the six geocoding/weather hosts the app actually calls (WeatherWidget/cnCities) instead of any-HTTPS. img-src drops the open https: (synced remote image urls are placeholdered by the renderer, see isRenderableAttachmentUrl). -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' app://app; script-src 'self' app://app; style-src 'self' app://app 'unsafe-inline'; img-src 'self' app://app data: blob:; media-src 'self' app://app; font-src 'self' app://app data:; connect-src 'self' app://app https://api.open-meteo.com https://geocoding-api.open-meteo.com https://nominatim.openstreetmap.org https://wttr.in https://ipapi.co https://photon.komoot.io">
   <title>拾事</title>
   <link rel="stylesheet" href="app://app/assets/vendor-lib/element-plus/index.css">
   <link rel="stylesheet" href="app://app/assets/vendor-lib/driver.css">
-  <link rel="stylesheet" href="app://app/assets/css/base.css?v=1789423807901">
-  <link rel="stylesheet" href="app://app/assets/css/theme-dark.css?v=1789423807901">
+  <link rel="stylesheet" href="app://app/assets/css/base.css?v=1791043178934">
+  <link rel="stylesheet" href="app://app/assets/css/theme-dark.css?v=1791043178934">
   <!-- Vue 3 运行时（纯 Vue3.5 全局构建）。All external scripts carry defer: the parser no longer
        blocks on ~1.9MB of vendor JS. Execution order is preserved (deferred classics run in document
        order) and the type=module main.js runs after all of them, so window.Vue/ElementPlus/dayjs are
        in place when it evaluates. The two former inline head one-liners (isoWeek extension, dayjs
        global fallback) moved to the top of js/main.js - inline scripts cannot defer. -->
-  <script defer src="app://app/assets/vendor-lib/vue3.global.prod.js?v=1789423807901"></script>
+  <script defer src="app://app/assets/vendor-lib/vue3.global.prod.js?v=1791043178934"></script>
   <script defer src="app://app/assets/vendor-lib/vue-i18n.global.prod.js"></script>
-  <script defer src="app://app/assets/vendor-lib/vuex4.global.prod.js?v=1789423807901"></script>
-  <script defer src="app://app/assets/vendor-lib/vue-router4.global.prod.js?v=1789423807901"></script>
-  <script defer src="app://app/assets/vendor-lib/element-plus.full.min.js?v=1789423807901"></script>
+  <script defer src="app://app/assets/vendor-lib/vuex4.global.prod.js?v=1791043178934"></script>
+  <script defer src="app://app/assets/vendor-lib/vue-router4.global.prod.js?v=1791043178934"></script>
+  <script defer src="app://app/assets/vendor-lib/element-plus.full.min.js?v=1791043178934"></script>
   <script defer src="app://app/assets/vendor-lib/element-plus/locale-zh-cn.min.js"></script>
   <script defer src="app://app/assets/vendor-lib/element-plus/locale-en.min.js"></script>
   <script defer src="app://app/assets/vendor-lib/pinyin-pro.umd.js"></script>
   <script defer src="app://app/assets/vendor-lib/dayjs.min.js"></script>
   <script defer src="app://app/assets/vendor-lib/dayjs-plugin-isoWeek.js"></script>
-  <script defer src="app://app/node_modules/sortablejs/Sortable.min.js"></script>
+  <script defer src="app://app/assets/vendor-lib/Sortable.min.js"></script>
   <script defer src="app://app/assets/vendor-lib/driver.iife.js"></script>
 </head>
 <body>

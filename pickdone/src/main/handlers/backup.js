@@ -97,8 +97,16 @@ module.exports = function backupHandlers (ctx) {
       const r = await dialog.showOpenDialog(getMainWindow() || undefined, { title: i18nM.mt('pickBackupDir'), properties: ['openDirectory', 'createDirectory'] })
       if (r.canceled || !r.filePaths[0]) return null
       loadAllowedBackupDirs()
-      allowedBackupDirs.add(path.resolve(r.filePaths[0])) // only user-explicitly-picked directories enter the whitelist
-      saveAllowedBackupDirs()
+      const dir = path.resolve(r.filePaths[0])
+      allowedBackupDirs.add(dir) // only user-explicitly-picked directories enter the whitelist
+      // ES4 fix (2026-10-02): persist failure must propagate — the old code returned the path
+      // unconditionally, so the renderer showed "location updated" while the whitelist file kept
+      // its old content and the picked dir silently fell back to the default on the next launch.
+      const saved = saveAllowedBackupDirs()
+      if (!saved || saved.ok !== true) {
+        allowedBackupDirs.delete(dir) // never keep an in-memory registration that is not durable
+        throw new Error('failed to persist backup-dir whitelist: ' + ((saved && saved.error) || 'unknown'))
+      }
       return r.filePaths[0]
     },
     // --- Auto backup (GFS tiered retention: recent N + daily anchors + weekly anchors; content dedup; atomic write) ---

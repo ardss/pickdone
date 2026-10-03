@@ -92,6 +92,7 @@ contextBridge.exposeInMainWorld('todoAPI', {
   openFile: url => invoke('open-file', url),
   deleteFile: url => invoke('delete-file', url),
   deleteTodoFilesRelevant: id => invoke('delete-todo-files', id), // clean up attachments when a task is permanently deleted
+  deleteTodoFilesMany: ids => invoke('delete-todo-files-many', ids), // batch twin — one IPC for a multi-id purge
 
   // ---- Running-tomato cross-device announcements (feature: live remote focus chip) ----
   // Report a local focus transition (start/attach change/give up/complete) to the main
@@ -124,6 +125,12 @@ contextBridge.exposeInMainWorld('todoAPI', {
   showMainFromFloat: () => invoke('show-main-from-float'),
   // Taskbar trio state push (progress bar/title countdown/thumbnail toolbar) + taskbar button callback
   pushTomatoTaskbar: payload => invoke('update-tomato-taskbar', payload),
+  // TQ-1 (2026-10-03): durable running-session transition report (start|clear). Main owns the
+  // 'tomatoRunningSession' meta row consumed by the quit guards + startup reconciliation.
+  tomatoRunningSession: payload => invoke('tomato-running-session', payload),
+  // TQ-3 (2026-10-03): main-process compare-and-set phase claims (cross-window completion dedupe).
+  tomatoClaimPhase: phase => invoke('tomato-claim-phase', phase),
+  tomatoReleasePhase: (phase, token) => invoke('tomato-release-phase', { phase, token }),
   onTomatoTaskbarCmd: fn => {
     const h = (_e, p) => fn(p)
     ipcRenderer.on('tomato-taskbar-cmd', h)

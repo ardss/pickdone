@@ -15,8 +15,17 @@ const SNOW_KEY = 'tomatoPendingSnow'
 const CLAIM_KEY = 'tomatoLastPhaseDone'
 const LS_KEY = 'tomatoState'
 
-function readQueue (key) {
-  try { return JSON.parse(globalThis.localStorage.getItem(key)) } catch (e) { return null }
+// TQ-2: the mirror is per-entry (`<prefix><uid>` keys, each carrying one entry). Scan by prefix.
+function readQueue (prefix) {
+  const entries = []
+  const ls = globalThis.localStorage
+  for (let i = 0; i < ls.length; i++) {
+    const k = ls.key(i)
+    // the TQ-5 quarantine key shares the prefix but holds raw corrupt bytes, not entries
+    if (!k || k.indexOf(prefix) !== 0 || k === prefix + 'corrupt') continue
+    try { entries.push(JSON.parse(ls.getItem(k)).entry) } catch (e) { /* skip */ }
+  }
+  return { entries }
 }
 
 test('d11r3[1]: a failed ledger write is persisted to LS and replayed after a simulated crash+restart', async () => {
@@ -27,8 +36,8 @@ test('d11r3[1]: a failed ledger write is persisted to LS and replayed after a si
   mod1.default.mutations.addRecord(s, { tomatoId: 'tmt_d11r3_1', endTime: Date.now(), dateKey: '2026-09-28', focusDuration: 25 })
   await new Promise(r => setTimeout(r, 20)) // let the failed dbCall settle; entry must stay queued
 
-  const persisted = readQueue(LEDGER_KEY)
-  assert.ok(persisted && persisted.v === 1 && Array.isArray(persisted.entries), 'queue blob written to localStorage')
+  const persisted = readQueue('tomatoPendingLedger.')
+  assert.ok(persisted && Array.isArray(persisted.entries) && persisted.entries.length >= 1, 'per-entry mirror key written to localStorage')
   const entry = persisted.entries.find(e => e.op === 'tomatoAppendMany' && e.params && e.params.tomatoId === 'tmt_d11r3_1')
   assert.ok(entry, 'the failed append is in the persisted queue')
   assert.equal(typeof entry.seq, 'number', 'entry carries a seq')
@@ -44,7 +53,7 @@ test('d11r3[1]: a failed ledger write is persisted to LS and replayed after a si
   await new Promise(r => setTimeout(r, 20))
   const replayed = seen.filter(([op, p]) => op === 'tomatoAppendMany' && p.tomatoId === 'tmt_d11r3_1')
   assert.equal(replayed.length, 1, 'the pre-crash entry is replayed into the recovered db exactly once')
-  const after = readQueue(LEDGER_KEY)
+  const after = readQueue('tomatoPendingLedger.')
   assert.ok(!after.entries.some(e => e.params && e.params.tomatoId === 'tmt_d11r3_1'), 'LS copy drops the entry after successful replay')
 })
 
@@ -73,7 +82,7 @@ test('d11r3[2]: a failed bumpSnow is persisted and replays via quit-flush after 
   }
   await tomato.actions.completeFocus.call({ rootState: ctx.rootState, state }, ctx)
   await new Promise(r => setTimeout(r, 20))
-  const persisted = readQueue(SNOW_KEY)
+  const persisted = readQueue('tomatoPendingSnow.')
   assert.ok(persisted && Array.isArray(persisted.entries) && persisted.entries.length === 1, 'failed bump is persisted to LS')
   assert.equal(persisted.entries[0].params.taskId, 7, 'snow entry payload persisted')
   assert.equal(typeof persisted.entries[0].seq, 'number', 'seq stamped')
@@ -99,7 +108,7 @@ test('d11r3[2]: a failed bumpSnow is persisted and replays via quit-flush after 
   await new Promise(r => setTimeout(r, 20))
   const bumps = restartCalls.filter(([op, p]) => op === 'bumpSnow' && p && p.taskId === 7)
   assert.equal(bumps.length, 1, 'the hydrated snow entry replays exactly once at quit-flush (restart phase only)')
-  const after = readQueue(SNOW_KEY)
+  const after = readQueue('tomatoPendingSnow.')
   assert.equal(after.entries.length, 0, 'LS snow queue drains after successful replay')
 })
 
@@ -112,7 +121,6 @@ test('d11r3[3]: a corrupt queue blob hydrates to an empty queue without throwing
   // Any subsequent write still works (hydration failure is non-fatal)
   tomato.mutations.addRecord(s, { tomatoId: 'tmt_d11r3_c', endTime: Date.now(), dateKey: '2026-09-28', focusDuration: 1 })
   await new Promise(r => setTimeout(r, 20))
-  const blob = readQueue(LEDGER_KEY)
-  assert.ok(blob && blob.v === 1 && Array.isArray(blob.entries), 'queue blob is rewritten in the current schema after the next write')
+  const blob = readQueue('tomatoPendingLedger.')
   assert.equal(blob.entries.length, 0, 'the successful write drained the queue (corrupt leftovers did not resurrect)')
 })

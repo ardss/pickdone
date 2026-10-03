@@ -1,6 +1,6 @@
 /** 番茄计时状态机。账本(专注记录)唯一事实源 = SQLite tomato_records 行表(2026-09-04 根修):
  *  本文件只持有内存副本供渲染,所有增删改走原子 op 落库 + 主进程广播回灌;LS blob 只存计时瞬态(丢了无所谓)。 */
-import { dayjs, safeSet, FMT } from '../utils/core.js'
+import { dayjs, FMT } from '../utils/core.js'
 import { remainSecOf } from '../utils/tomatoShared.js'
 import { confirmUrl } from '../utils/mediaRegistry.js'
 import { tt } from '../utils/core.js'
@@ -10,6 +10,10 @@ import { commit as commitCommand } from "../utils/commandBus.js"
 // duration keys here as a bottom-line guard even for callers that bypass sanitizeSettingsPatch
 // (raw commit('tomato/patch') from float/quick-add windows, main.js CLI hooks).
 import { clampNumericSettings } from './settings.js'
+// Durability queues (ledger + snow) live in helpers/tomatoPendingQueue.js (structure-size
+// ratchet split; behavior-preserving: hydrate still runs at module load via the import).
+import { ledgerWrite, snowWrite, hydratePendingQueues } from './helpers/tomatoPendingQueue.js'
+hydratePendingQueues()
 
 /** Running-tomato cross-device announce (feature: live remote focus chip). Fire-and-forget;
  * announce failures never break the focus flow (peers' staleness TTL self-heals). */
@@ -30,6 +34,26 @@ function announceUi (key, params) {
   } catch (e) { /* announce is optional */ }
 }
 
+/** TQ-1 (2026-10-03): report an FSM transition to the main process's durable running-session row
+ *  ('tomatoRunningSession' meta row via the 'tomato-running-session' channel). This is the
+ *  renderer half of the durable-ownership contract: the tray-text lease is display-only, so the
+ *  ONLY running-session signal main has is what this writes. Called on every phase boundary from
+ *  BOTH windows (main + float) — a float-originated focus must write the row too. Fire-and-forget:
+ *  an unreported transition degrades to the previous world (lease-only), never breaks the phase. */
+function reportRunningTransition (transition, s) {
+  try {
+    if (!window.todoAPI || !window.todoAPI.tomatoRunningSession) return
+    window.todoAPI.tomatoRunningSession({
+      transition,
+      status: s.status,
+      startedAt: s.startedAt || 0,
+      attachTaskId: (s.attachTodo && s.attachTodo.taskId != null) ? s.attachTodo.taskId : null,
+      tomatoTime: s.tomatoTime,
+      restTime: s.restTime
+    })
+  } catch (e) { /* the durable row is main-owned; a missed report must not break the phase */ }
+}
+
 const LS_KEY = 'tomatoState'
 /** Persistence blob format version: incremented on future incompatible field semantics; readers tolerate old unstamped data as v1 */
 const SCHEMA_V = 1
@@ -44,14 +68,42 @@ const CLAIM_KEY = 'tomatoLastPhaseDone'
  *  shared LS key and any later claimer of the SAME phase loses, regardless of elapsed time. The old
  *  `Date.now() - ts < 1500` window let a background-throttled window's late tick (>1.5s) re-claim the same
  *  completed phase → double snow gain + double notification. startedAt = Date.now() never repeats, so a
- *  permanent per-phase mark can never block a legitimate new phase. */
-function claimPhase (status, startedAt) {
+ *  permanent per-phase mark can never block a legitimate new phase.
+ *  TQ-3 (2026-10-03) root fix: the claim now lives in the SINGLE-WRITER main process
+ *  ('tomato-claim-phase' IPC, src/main/phase-claims.js). The shared-LS check-then-set was
+ *  non-atomic across the main+float windows and carried an OWNERLESS claim value, so two windows
+ *  could both win a phase and a contender's release-on-failure path could delete the owner's live
+ *  claim. The main-process CAS returns an owner token; release only deletes on a token match.
+ *  A localStorage fallback (same single-window semantics as before) survives only where no
+ *  main-process bridge exists (browser hosts / plain-node tests) — never in the desktop app. */
+async function claimPhase (status, startedAt) {
   const phase = status + ':' + (startedAt || 0)
   try {
-    if (localStorage.getItem(CLAIM_KEY) === phase) return false
+    if (window.todoAPI && window.todoAPI.tomatoClaimPhase) {
+      // The bridge is ipcRenderer.invoke — ASYNC. Reading its return synchronously saw a Promise
+      // (always truthy, `.won` undefined) and lost every claim, so completeFocus/finishRest/giveUp
+      // aborted at the claim gate forever (2026-10-04 ui-smoke catch). Await the CAS result.
+      const res = await window.todoAPI.tomatoClaimPhase(phase)
+      return (res && res.won) ? { phase, token: res.token } : null
+    }
+  } catch (e) { /* bridge failure falls through to the LS fallback; losing the claim is the safe side */ }
+  try {
+    if (localStorage.getItem(CLAIM_KEY) === phase) return null
+    localStorage.setItem(CLAIM_KEY, phase)
   } catch (e) { /* empty */ }
-  try { localStorage.setItem(CLAIM_KEY, phase) } catch (e) { /* empty */ }
-  return true
+  return { phase, token: null }
+}
+/** Owner-checked release: with a token (main-process claim) only the owner can delete; with the
+ *  LS fallback the value-equality check keeps the old single-window semantics. */
+function releasePhaseClaim (claim) {
+  if (!claim) return
+  if (claim.token != null) {
+    try {
+      if (window.todoAPI && window.todoAPI.tomatoReleasePhase) window.todoAPI.tomatoReleasePhase(claim.phase, claim.token)
+    } catch (e) { /* dying bridge — an orphaned claim only blocks a phase identity that never repeats */ }
+    return
+  }
+  try { if (localStorage.getItem(CLAIM_KEY) === claim.phase) localStorage.removeItem(CLAIM_KEY) } catch (e) { /* empty */ }
 }
 
 /** Pure resolver (unit-tested): is the attached task still live at accounting time? The attach happens at
@@ -99,14 +151,27 @@ export function focusTodoPool (storeLike) {
   return [...(todoMod.todoList || []), ...(todoMod.recycleList || [])]
 }
 
+/** D15-B14 (2026-10-03): module-level store reference so a MUTATION (which gets no store) can still
+ *  resolve the todo row pool. updateRecordTask must keep the denormalized `focus` name text in sync
+ *  with focusTaskId in the SAME write — the old mutation relinked the id and left the old task's
+ *  name text stale in the ledger row and every display surface (renames/relinks never propagated).
+ *  Seeded by the initFromDb action at startup (actions receive the store as `this`); tests can seed
+ *  it via the exported seam. Unseeded (headless) → empty pool → name resolves to '' on relink,
+ *  never to a stale foreign task's name. */
+let _todoPoolStore = null
+export function _setTodoPoolStore (s) { _todoPoolStore = s || null }
+
 const DEF = {
   status: 'default', attachTodo: null, todayTomatoCount: 0, tomatoRecordList: [],
-  tomatoTime: 25, restTime: 5, enableNotification: true, enableBeep: true,
+  tomatoTime: 25, restTime: 5, enableNotification: true,
   // F12 (2026-09-24): dead floating-window default removed — zero consumers repo-wide; float
   // visibility and the 'user closed' marker live in main-process tomato-float.js
   // (todo DB meta 'tomatoFloatClosedByUser'; see tomato-float hide/show/undock + renderer main.js auto-show).
+  // D15-B11 (2026-10-03): enableBeep / preTomatoTimes / preRestTimes removed the same way — they
+  // were written, synced (LS blob) and defaulted but had ZERO consumers repo-wide
+  // (notify-sound.js never consulted them); they only kept dead bytes flowing through every
+  // persist/sync round. loadState() strips their residue out of old blobs.
   whiteNoiseAudio: '',
-  preTomatoTimes: [25], preRestTimes: [5],
   remainSec: 1500, startedAt: 0,
   // Wall-clock stamp of the last STATUS transition (patch sets it when status changes). Cross-window
   // sync compares these so a throttled peer's stale blob can never resurrect a phase the local
@@ -148,6 +213,9 @@ function loadState (voidExpired = true) {
       // 账本已迁行表:blob 里的历史记录字段直接忽略(内存副本由 recordsLoad 从 DB 装载)
       if (Array.isArray(merged.tomatoRecordList)) merged.tomatoRecordList = []
       delete merged.unSyncTomatoRecordList
+      // D15-B11: dead preference keys (zero consumers) are stripped from old blobs instead of
+      // lingering forever via the Object.assign merge — same residue-sweep contract as above.
+      delete merged.enableBeep; delete merged.preTomatoTimes; delete merged.preRestTimes
       return merged
     }
   } catch (e) { /* empty */ }
@@ -160,219 +228,36 @@ function newPingToken (seq) {
   return Date.now().toString(36) + ':' + (seq || 0) + ':' + Math.random().toString(36).slice(2, 8)
 }
 
+/** TQ-6 (2026-10-03): the transient LS blob is a LOUD-degradation surface, not a fail-silent one.
+ *  persistState runs on every mutation, so a quota failure must not throw into unrelated UI —
+ *  but the old safeSet call returned a boolean NOBODY consumed, so an unhealthy mirror was
+ *  invisible. The degraded flag latches for the process lifetime: one look, one surface. */
+let _mirrorDegraded = false
+export function tomatoMirrorDegraded () { return _mirrorDegraded }
 function persistState (state) {
   // Write sequence number: increments once per real disk flush; the ping carries only the sequence, and receivers skip the full re-read when the sequence matches
   state._syncSeq = (state._syncSeq || 0) + 1
   state.schemaV = SCHEMA_V
   // 账本字段从 blob 中剔除(唯一源=DB 行表),blob 只承载计时瞬态与偏好
   const blob = Object.assign({}, state, { tomatoRecordList: [], _recordsInDb: true })
-  safeSet(LS_KEY, JSON.stringify(blob))
+  try {
+    localStorage.setItem(LS_KEY, JSON.stringify(blob))
+  } catch (e) {
+    _mirrorDegraded = true
+    console.error('[tomato] transient state persist FAILED (degraded; in-memory state continues, peers may diverge):', e)
+  }
   const ping = newPingToken(state._syncSeq)
-  try { window.localStorage.setItem(PING_KEY, ping) } catch (e) { /* empty */ }
+  try { window.localStorage.setItem(PING_KEY, ping) } catch (e) {
+    _mirrorDegraded = true
+    console.error('[tomato] cross-window sync ping write failed (peer windows will not re-read):', e)
+  }
   lastAppliedPing = ping // This window's own write counts as applied
 }
 
 /** 账本原子 op 落库(幂等:确定性 tomatoId);失败打日志不静默——账本是核心资产。
  *  退出冲刷:pending 账本写挂到 app-quitting-flush(完成番茄后立刻退出是丢账最高频场景,三轮深审发布 blocker);
  *  失败留在重试队列,下一次任意账本写时重放(锁屏/瞬时 IO 失败自愈)。 */
-const _pendingLedger = []
-/** maint/d11-r4: _pendingSnow lives here (next to _pendingLedger) instead of further down — the
- *  module-top-level hydratePendingQueue(PENDING_SNOW_KEY) revive closure pushes into it, and with
- *  the const below its use site the closure hit the TDZ and the ReferenceError was swallowed by
- *  the "corrupt blob" catch, so snow entries persisted before a crash never replayed. */
-const _pendingSnow = []
-let _flushHooked = false
 
-/** maint/d11-r3: the retry queues are now crash-proof. They used to be pure memory arrays — a quit
- *  flush that still failed (main-process quit-ack caps at 2s then closes the db, so the in-flight
- *  dbCall rejects) or a renderer crash dropped every queued entry with the process, and the
- *  "replayed on the next ledger write" promise could never be kept. Both queues now mirror to
- *  localStorage ({v, seq, ts, ...entry}), hydrate at module load, and replay on the next write or
- *  quit-flush exactly as before. Removal on success re-saves, so the LS copy always tracks memory. */
-const PENDING_LEDGER_KEY = 'tomatoPendingLedger'
-const PENDING_SNOW_KEY = 'tomatoPendingSnow'
-const PENDING_QUEUE_V = 1
-let _pendingSeq = 0
-function nextPendingSeq () { _pendingSeq += 1; return _pendingSeq }
-function savePendingQueues () {
-  const pack = (entries, keep) => ({ v: PENDING_QUEUE_V, entries: entries.map(keep) })
-  safeSet(PENDING_LEDGER_KEY, JSON.stringify(pack(_pendingLedger, e => ({ seq: e.seq, ts: e.ts, op: e.op, params: e.params }))))
-  safeSet(PENDING_SNOW_KEY, JSON.stringify(pack(_pendingSnow, e => ({ seq: e.seq, ts: e.ts, params: e.params }))))
-}
-function hydratePendingQueue (key, revive) {
-  // maint/d11-r4: parse failures degrade (corrupt blob → start empty + log); revive failures
-  // propagate. The old single try/catch around both mislabeled any revive bug as a corrupt blob
-  // and silently swallowed it — a real code bug looked exactly like expected degradation.
-  let v
-  try {
-    v = JSON.parse(localStorage.getItem(key))
-  } catch (e) {
-    console.error('[tomato] pending queue "' + key + '" is corrupt, starting empty:', e)
-    return
-  }
-  if (!v || typeof v !== 'object' || v.v !== PENDING_QUEUE_V || !Array.isArray(v.entries)) return
-  for (const raw of v.entries) {
-    const e = revive(raw)
-    if (!e) continue
-    if (typeof e.seq === 'number' && e.seq > _pendingSeq) _pendingSeq = e.seq
-  }
-}
-/** Startup hydration: entries queued in a previous process life come back (seq/ts stamped at enqueue
- *  time), then replay through the normal ledgerWrite/snowWrite paths. */
-hydratePendingQueue(PENDING_LEDGER_KEY, raw => {
-  if (!raw || typeof raw !== 'object' || typeof raw.op !== 'string' || !raw.params) return null
-  _pendingLedger.push({ op: raw.op, params: raw.params, seq: typeof raw.seq === 'number' ? raw.seq : nextPendingSeq(), ts: typeof raw.ts === 'number' ? raw.ts : Date.now() })
-  return _pendingLedger[_pendingLedger.length - 1]
-})
-hydratePendingQueue(PENDING_SNOW_KEY, raw => {
-  if (!raw || typeof raw !== 'object' || !raw.params) return null
-  _pendingSnow.push({ params: raw.params, seq: typeof raw.seq === 'number' ? raw.seq : nextPendingSeq(), ts: typeof raw.ts === 'number' ? raw.ts : Date.now() })
-  return _pendingSnow[_pendingSnow.length - 1]
-})
-/** H1 (2026-09-16): the db layer's tomatoAppendMany now returns a row-tolerant {accepted,rejected}
- *  result; rejected rows (missing tomatoId/endTime etc.) used to vanish silently — report each per contract. */
-function logRejectedRows (res, params) {
-  if (!res || !Array.isArray(res.rejected) || !res.rejected.length) return
-  const list = Array.isArray(params) ? params : [params]
-  for (const r of res.rejected) {
-    let row
-    try { row = JSON.stringify(list[r && r.index]) } catch (e) { row = String(list[r && r.index]) }
-    console.error('[tomato] ledger row rejected:', r && r.reason, 'row:', row)
-  }
-}
-
-/** H1 (2026-09-16): after a remove persists, drop pending appends for the same tomatoIds — the db
- *  layer's ON CONFLICT DO UPDATE SET deleted=0 would resurrect the deleted row, so replaying the old
- *  append equals undoing the delete. params is the tomatoRemoveByIds id array. */
-function purgePendingAppends (ids) {
-  const dead = new Set(ids || [])
-  if (!dead.size) return
-  for (let i = _pendingLedger.length - 1; i >= 0; i--) {
-    const e = _pendingLedger[i]
-    if (!e || e.op !== 'tomatoAppendMany') continue
-    const recs = Array.isArray(e.params) ? e.params : [e.params]
-    if (recs.some(r => r && dead.has(r.tomatoId))) { _pendingLedger.splice(i, 1); savePendingQueues() }
-  }
-}
-
-/** D14-C1 (2026-10-01): a resolved dbCall is NOT the same as "the entry landed". Two shapes used to
- *  splice the entry and erase its LS mirror anyway, permanently dropping user-earned ledger rows:
- *    - falsy resolution (no todoAPI bridge) — the old `window.todoAPI && dbCall(...)` chain resolved
- *      `false`/`undefined`, indistinguishable from success;
- *    - tomatoAppendMany's row-tolerant {accepted, rejected} result with a NON-EMPTY rejected list —
- *      the accepted rows landed but the rejected rows existed nowhere else; logRejectedRows only
- *      console.error'ed them ("账本是核心资产" violation).
- *  Shared handler for both replay sites (replayPendingLedger + quit-flush flushPendingLedger):
- *    - falsy result → entry KEPT (still pending);
- *    - rejected rows → they are quarantined DURABLY in LS (tomatoRejectedLedgerRows, capped) with a
- *      per-row console.error surface, and the entry is retired (retrying a malformed row can never
- *      succeed — an unbounded replay loop would spin on every later ledger write instead);
- *    - fully accepted → entry removed. tomatoRemoveByIds/TomatoUpdateById never carry `rejected`,
- *      so they retire here exactly as before. */
-const REJECTED_LEDGER_KEY = 'tomatoRejectedLedgerRows'
-const REJECTED_LEDGER_CAP = 100
-function quarantineRejectedRows (res, params) {
-  if (!res || !Array.isArray(res.rejected) || !res.rejected.length) return
-  logRejectedRows(res, params)
-  let parked = []
-  try { parked = JSON.parse(localStorage.getItem(REJECTED_LEDGER_KEY)) || [] } catch (e) { /* start fresh */ }
-  if (!Array.isArray(parked)) parked = []
-  const list = Array.isArray(params) ? params : [params]
-  for (const r of res.rejected) {
-    const row = list[r && r.index]
-    if (row) parked.push({ ts: Date.now(), reason: (r && r.reason) || 'unknown', row })
-  }
-  try { safeSet(REJECTED_LEDGER_KEY, JSON.stringify(parked.slice(-REJECTED_LEDGER_CAP))) } catch (e) { console.warn('[tomato] failed to quarantine rejected ledger rows:', e) }
-}
-function settleLedgerEntry (entry, res) {
-  if (!res) return // not handed to a bridge / falsy resolution: still pending, keep for retry
-  quarantineRejectedRows(res, entry.params)
-  const i = _pendingLedger.indexOf(entry)
-  if (i >= 0) { _pendingLedger.splice(i, 1); savePendingQueues() }
-  if (entry.op === 'tomatoRemoveByIds') purgePendingAppends(entry.params)
-}
-function replayPendingLedger () {
-  for (const entry of [..._pendingLedger]) {
-    Promise.resolve(window.todoAPI && window.todoAPI.dbCall(entry.op, entry.params))
-      .then(res => settleLedgerEntry(entry, res))
-      .catch(e => console.error('[tomato] ledger DB write failed (queued for retry):', entry.op, e))
-  }
-}
-function ledgerWrite (op, params) {
-  const entry = { op, params, seq: nextPendingSeq(), ts: Date.now() }
-  _pendingLedger.push(entry)
-  savePendingQueues()
-  // Retry queue: replay any still-pending entries (incl. this one) before/with the new write
-  replayPendingLedger()
-  hookQuitFlush()
-}
-function flushPendingLedger () {
-  // maint-d7: failed entries NEVER leave the queue — splice happens per-entry only on success
-  // (same keep-until-success shape as replayPendingLedger). The old splice-all-then-requeue-in-
-  // Promise.all lost every failed entry when the process exited between the IPC dispatch and the
-  // aggregate callback (quit-flush: the ack defer can outrun Promise.all), so a transient flush
-  // failure permanently dropped the ledger write. Replaying an entry that actually landed is safe:
-  // ledger ops are idempotent upserts.
-  for (const entry of [..._pendingLedger]) {
-    Promise.resolve(window.todoAPI && window.todoAPI.dbCall(entry.op, entry.params))
-      .then(res => settleLedgerEntry(entry, res))
-      .catch(e => console.error('[tomato] ledger flush failed at quit (kept for retry):', entry.op, e))
-  }
-}
-function hookQuitFlush () {
-  if (_flushHooked || !window.todoAPI || !window.todoAPI.onAppQuittingFlush) return
-  _flushHooked = true
-  window.todoAPI.onAppQuittingFlush(() => { flushPendingLedger(); flushPendingSnow() })
-}
-
-/** Task-side focus credit (bumpSnow) retry queue — same pending-retry pattern as _pendingLedger.
- *  The old fire-and-forget `commitCommand("todo", "bump", …).catch(() => {})` silently dropped the credit on
- *  a transient IPC/DB failure (lock screen, quit race): the ledger recorded the focus but the task's
- *  focusMinutes/snow never advanced. Entries are removed only on success (bumpSnow is idempotent
- *  per the db layer) and replayed on the next write or at quit-flush.
- *  D5 (2026-09-20): each entry carries `dedupKey = String(startedAt)` — the phase identity the
- *  completion was booked under. The db layer's bumpSnow honors an optional dedupKey so a replayed
- *  entry (retry queue OR quit-flush) cannot double-credit a focus that already landed. Quit-flush
- *  replays the same params object, so every replay path carries the same key. */
-/** D14-C2 (2026-10-01): a resolved bump is NOT the same as a credited bump. db.bumpSnow resolves a
- *  STRUCTURED result and never throws on row-level refusal: { ok:false, reason:'deleted'|'missing' }
- *  for a dead task, and the old `window.todoAPI && commitCommand(...)` chain resolves `false` when
- *  no bridge exists. All three shapes used to splice the entry in `.then` (the promise RESOLVED),
- *  silently dropping the task-side focus credit. Now only ok:true retires the entry (ok:true with
- *  deduped:true = already credited on a previous replay — retiring is correct); every non-accepted
- *  result stays queued with its reason surfaced (replays are event-driven, not a timer, so a
- *  permanently dead task costs a bounded log line per future snowWrite, never a hot loop). */
-function settleSnowEntry (entry, res) {
-  if (res && res.ok === true) {
-    const i = _pendingSnow.indexOf(entry)
-    if (i >= 0) { _pendingSnow.splice(i, 1); savePendingQueues() }
-    return
-  }
-  console.error('[tomato] bumpSnow not credited (kept for retry):', (res && res.reason) || String(res), entry.params)
-}
-function replayPendingSnow () {
-  for (const entry of [..._pendingSnow]) {
-    Promise.resolve(window.todoAPI && commitCommand("todo", "bump", entry.params))
-      .then(res => settleSnowEntry(entry, res))
-      .catch(e => console.error('[tomato] bumpSnow failed (queued for retry):', entry.params, e))
-  }
-}
-function snowWrite (params) {
-  _pendingSnow.push({ params, seq: nextPendingSeq(), ts: Date.now() })
-  savePendingQueues()
-  replayPendingSnow()
-  hookQuitFlush()
-}
-function flushPendingSnow () {
-  // maint-d7: same keep-until-success shape as flushPendingLedger — a failed bump never leaves the
-  // queue, so a quit-flush failure cannot permanently drop the task-side focus credit (bumpSnow is
-  // idempotent and every replay carries the same dedupKey, so a double-send cannot double-credit).
-  for (const entry of [..._pendingSnow]) {
-    Promise.resolve(window.todoAPI && commitCommand("todo", "bump", entry.params))
-      .then(res => settleSnowEntry(entry, res))
-      .catch(e => console.error('[tomato] bumpSnow flush failed at quit (kept for retry):', entry.params, e))
-  }
-}
 
 /** maint/d11-r4: single source for the tomato countdown's remaining seconds. Five hand-written
  *  copies (TomatoBar clock/remainSecNow/pushTaskbar, TomatoPanel, TomatoFloatPage) drifted-able —
@@ -429,8 +314,16 @@ export default {
       const rec = (s.tomatoRecordList || []).find(r => r && r.tomatoId === tomatoId)
       if (!rec || rec.focusTaskId === focusTaskId) return
       rec.focusTaskId = focusTaskId
+      // D15-B14: the ledger row carries a DENORMALIZED name text (`focus`) — the old relink left
+      // the previous task's name stale in the row and on every display surface. Resolve the live
+      // taskContent in the SAME write (deleted/missing target → '' = the free-focus display
+      // convention used at booking time), so the in-memory row, the DB row and the reload echo
+      // all agree. Read-time derivation was rejected: three surfaces read rec.focus and the row
+      // is the durable asset — fixing the write once is the class-complete fix.
+      const focused = resolveFocusedTask({ taskId: focusTaskId }, focusTodoPool(_todoPoolStore || {}))
+      rec.focus = (focused && focused.taskContent != null) ? focused.taskContent : ''
       s.tomatoRecordList = [...s.tomatoRecordList]
-      ledgerWrite('tomatoUpdateById', { tomatoId, patch: { focusTaskId } })
+      ledgerWrite('tomatoUpdateById', { tomatoId, patch: { focusTaskId, focus: rec.focus } })
       persistState(s)
     },
     /** Entry card: correct the start-end/duration/status of already-recorded facts — the ledger is correctable, corrections go through minute-level patches */
@@ -522,6 +415,10 @@ export default {
   actions: {
     /** 启动:一次性迁移旧 meta blob(如存在且表空),然后整载行表 */
     async initFromDb ({ commit }) {
+      // D15-B14: seed the mutation-side todo-pool reference (actions get the store as `this`;
+      // mutations don't — see _setTodoPoolStore). Also re-seeded by every recordsReload so a
+      // pool rebuilt by todo/init is always the one the resolver reads.
+      try { _setTodoPoolStore(this) } catch (e) { /* store unavailable in tests */ }
       try { await commitCommand('tomato', 'migrateFromMeta') } catch (e) { console.warn('[tomato] meta 迁移跳过/失败(不影响已迁移库):', e && e.message) }
       return commit('recordsReplace', await window.todoAPI.dbCall('tomatoAll'))
     },
@@ -558,6 +455,12 @@ export default {
         .map(r => r.tomatoId)
       if (ids.length) ledgerWrite('tomatoRemoveByIds', ids)
       commit('recordsReplace', (state.tomatoRecordList || []).filter(r => !ids.includes(r.tomatoId)))
+      // D15 (maint/deep-r2): removed rows may include TODAY's — recompute the ring count from the
+      // mutated list. The initiating window never receives a recordsReload recompute for its own
+      // write (same defect class as D14-B2 removeRecord/updateRecord), so the count stayed stale
+      // until an unrelated broadcast.
+      const todayKeyAfter = dayjs().format(FMT.date)
+      commit('patch', { todayTomatoCount: recountToday(state.tomatoRecordList, todayKeyAfter), _countDate: todayKeyAfter })
     },
     /** Shared completion decision: dispatched every second by every window (including the float); on expiry it flips/records, idempotency guaranteed by token + deterministic id.
         Does not write back remainSec (the display layer derives it from startedAt, avoiding per-second disk writes + cross-window broadcast storms).
@@ -576,9 +479,10 @@ export default {
     startFocus ({ state, commit }) {
       if (state.status !== 'default') return // triggering during focus/rest = illegal transition, prevents silently zeroing already-focused time
       commit('patch', { status: 'startTomatoTime', startedAt: Date.now(), remainSec: state.tomatoTime * 60 })
+      reportRunningTransition('start', state) // TQ-1: durable row (main + float windows both report)
       announceCrossDevice(this, 'running')
     },
-    giveUp ({ state, commit, dispatch }, { record = true, reason = '' } = {}) {
+    async giveUp ({ state, commit, dispatch }, { record = true, reason = '' } = {}) {
       let s = state
       // 本窗副本陈旧防改:本窗为 default 而共享 LS 显示专注进行中(他窗启动、storage 事件未达)时,
       // 旧写法会走到底部盲写 default 归零,把他窗正在进行的专注瞬态杀掉且零记录(2026-09-04 二轮深审 P1)
@@ -594,10 +498,10 @@ export default {
       }
       const running = s.status === 'startTomatoTime' && s.startedAt
       // Cross-window claim: when the user clicks "give up" at the exact expiry moment while the shared tick is completing, only the side that claimed first records (prevents succeed+abandon double records for the same focus)
-      const claimed = running && record
-        ? claimPhase('startTomatoTime', s.startedAt)
-        : true
-      if (running && record && !claimed) {
+      const claim = running && record
+        ? await claimPhase('startTomatoTime', s.startedAt)
+        : {}
+      if (running && record && !claim) {
         // 已被他窗完成/认领:不能盲写 default 归零——他窗此刻可能已进入休息(浮窗显示滞后 ≤1 拍的经典竞态),
         // 正确动作是重读共享瞬态跟随他窗状态(2026-09-04 深审 P1 实锤:旧写法会静默取消刚开始的休息)
         const fresh = loadState(false)
@@ -622,6 +526,7 @@ export default {
         dispatch('todo/writeCriticalBackup', null, { root: true })
       }
       commit('patch', { status: 'default', startedAt: 0, remainSec: s.tomatoTime * 60 })
+      reportRunningTransition('clear', s) // TQ-1: the phase was explicitly given up — release the durable row
       announceCrossDevice(this, 'idle')
     },
     async completeFocus ({ state, commit, rootState, dispatch }) {
@@ -629,15 +534,14 @@ export default {
       // State precheck (mirrors startFocus): an anomalous call with no running focus must not mint a free tomato
       if (s.status !== 'startTomatoTime' || !s.startedAt) return
       // Idempotency token: only one set of side effects per focus. Cross-window claim (including the give-up side) + deterministic id as double insurance
-      if (!claimPhase('startTomatoTime', s.startedAt)) return
+      const claim = await claimPhase('startTomatoTime', s.startedAt)
+      if (!claim) return
       // G1: once claimed, any failure between here and addRecord/saveSnowGain would otherwise leave the
       // phase permanently claimed with no record — the tomato is lost with no retry possible. On failure
-      // release the claim (only if still ours) so the next tick can re-complete.
+      // release the claim (owner-checked: only OUR token/phase, so a peer's claim is never touched)
+      // so the next tick can re-complete.
       const startedAt = s.startedAt
-      const phase = 'startTomatoTime:' + (startedAt || 0)
-      const releaseClaim = () => {
-        try { if (localStorage.getItem(CLAIM_KEY) === phase) localStorage.removeItem(CLAIM_KEY) } catch (e) { /* empty */ }
-      }
+      const releaseClaim = () => releasePhaseClaim(claim)
       const endTs = Date.now()
       // Measured duration, not the current setting: a mid-focus duration change would otherwise skew the ledger (unified with giveUp's elapsed basis)
       const focusMin = Math.max(1, Math.min(FOCUS_MAX_MINUTES, Math.round((endTs - startedAt) / 60000)))
@@ -705,6 +609,9 @@ export default {
         try { new Audio(confirmUrl(rootState.settings.completeSound)).play().catch(() => {}) } catch (e) { /* empty */ }
         if (s.enableNotification !== false) { try { window.todoAPI.notification({ title: tt('statsA.core.tomatoDoneTitle'), body: tt('statsA.core.tomatoDoneBody', { n: focusMin }) }) } catch (e) { /* locked screen rejects the channel — fire-and-forget */ } }
         commit('patch', { status: 'startRestTime', startedAt: Date.now(), remainSec: s.restTime * 60, _countDate: dayjs().format(FMT.date) })
+        // TQ-1: the focus phase completed; the durable row now tracks the rest phase (also a
+        // running phase for the quit confirm; rest itself is never a ledger asset).
+        reportRunningTransition('start', s)
         // Focus complete: announce idle right away so peers' chips stop counting (display-only;
         // the rest phase is local and intentionally not broadcast).
         announceCrossDevice(this, 'idle')
@@ -717,10 +624,12 @@ export default {
         console.error('[tomato] completeFocus failed after claiming; claim released for retry:', e)
       }
     },
-    finishRest ({ state, commit }) {
-      if (!claimPhase('startRestTime', state.startedAt)) return
+    async finishRest ({ state, commit }) {
+      const claim = await claimPhase('startRestTime', state.startedAt)
+      if (!claim) return
       if (state.enableNotification !== false) { try { window.todoAPI.notification({ title: tt('statsA.core.restOverTitle'), body: tt('statsA.core.restOverBody') }) } catch (e) { /* locked screen rejects the channel — fire-and-forget */ } }
       commit('patch', { status: 'default', startedAt: 0, remainSec: state.tomatoTime * 60 })
+      reportRunningTransition('clear', state) // TQ-1: rest finished — release the durable row
       // [maint-0924 A9] phase flip feedback: rest over, back to ready
       announceUi('statsH.tomato.restOverAnnounce')
     },

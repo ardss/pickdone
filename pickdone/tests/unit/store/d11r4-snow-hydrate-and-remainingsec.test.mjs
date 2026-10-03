@@ -48,9 +48,20 @@ test('d11r4[1]: a snow entry persisted before a crash is hydrated and replayed i
 
   assert.equal(bumps.filter(p => p && p.taskId === 77).length, 1,
     'the pre-crash snow entry hydrated at module load and replayed exactly once (pre-fix: hydrate hit the _pendingSnow TDZ, the ReferenceError was swallowed as "corrupt blob", and this bump never fired)')
-  const after = JSON.parse(globalThis.localStorage.getItem(SNOW_KEY))
-  assert.equal(after.entries.length, 0, 'LS snow queue drains after successful replay')
+  const after = readSnowEntries()
+  assert.equal(after.length, 0, 'LS snow queue drains after successful replay')
 })
+
+// TQ-2: the mirror is per-entry keys (tomatoPendingSnow.<uid>); collect by prefix scan.
+function readSnowEntries () {
+  const out = []
+  const ls = globalThis.localStorage
+  for (let i = 0; i < ls.length; i++) {
+    const k = ls.key(i)
+    if (k && k.indexOf('tomatoPendingSnow.') === 0 && k !== 'tomatoPendingSnow.corrupt') { try { out.push(JSON.parse(ls.getItem(k)).entry) } catch (e) { /* skip */ } }
+  }
+  return out
+}
 
 test('d11r4[2]: a corrupt (unparseable) snow blob still degrades non-fatally but logs, and does not poison hydration', async () => {
   globalThis.localStorage.setItem(LEDGER_KEY, '{not json either')
@@ -63,13 +74,19 @@ test('d11r4[2]: a corrupt (unparseable) snow blob still degrades non-fatally but
     globalThis.window.todoAPI = { dbCall: async () => ({ accepted: 1, rejected: [] }) }
     const s = { tomatoRecordList: [] }
     tomato.mutations.addRecord(s, { tomatoId: 'tmt_d11r4_c', endTime: Date.now(), dateKey: '2026-09-28', focusDuration: 1 })
+    // per-entry mirror exists synchronously at enqueue (the healthy dbCall below retires it later)
+    let ledgerKeys = 0
+    for (let i = 0; i < globalThis.localStorage.length; i++) {
+      const k = globalThis.localStorage.key(i)
+      if (k && k.indexOf('tomatoPendingLedger.') === 0) ledgerKeys += 1
+    }
+    assert.ok(ledgerKeys >= 1, 'the post-degrade ledger write is mirrored per-entry')
     await new Promise(r => setTimeout(r, 20))
   } finally {
     console.error = origErr
   }
-  const blob = JSON.parse(globalThis.localStorage.getItem(SNOW_KEY))
-  assert.ok(blob && blob.v === 1 && Array.isArray(blob.entries), 'module loaded and rewrote the blob (degradation was non-fatal)')
-  assert.equal(blob.entries.length, 0, 'corrupt leftovers did not resurrect')
+  assert.equal(readSnowEntries().length, 0, 'no snow entries (this test writes none; corrupt leftovers did not resurrect)')
+  assert.equal(globalThis.localStorage.getItem(SNOW_KEY), null, 'the corrupt legacy blob did not survive (no stale resurrection)')
   assert.ok(errs.some(t => t.includes('tomatoPendingSnow') && t.includes('corrupt')), 'parse failure is now logged with the offending key (was a silent comment-only catch)')
 })
 

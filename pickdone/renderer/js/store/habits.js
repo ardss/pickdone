@@ -2,7 +2,6 @@
  *  habit: { id, name, color, createdAt, records: { 'YYYY-MM-DD': true },
  *           frequency: { type: 'daily'|'weekdays'|'interval', weekdays: [1,3,5], intervalN: 2 } }
  *  moment: { id, name, date(YYYY-MM-DD), kind: 'countdown' | 'memorial' } */
-import { FMT } from '../utils/core.js'
 import { commit as commitCommand } from "../utils/commandBus.js"
 
 const LS_KEY = 'habitsState'
@@ -29,6 +28,17 @@ export function normalizeHabitRecords (habits) {
     if (!h.records || typeof h.records !== 'object') h.records = {}
   }
   return habits
+}
+
+/** D15-B9 (2026-10-03, unit-tested): the module's ONE staleness predicate for inbound external
+ *  rounds — TIES REJECT (prior writer wins, `<=`). applyExternalPatch used to hand-roll `<` and
+ *  accept a same-ms LAN fold round, letting a tie round rewrite whole habits/moments arrays over
+ *  state that had already recorded an equal-stamp write; its sibling applyExternal already used
+ *  `<=` (D14-B15). Every inbound boundary below routes through this predicate so the semantics
+ *  can never drift apart again. (replaceAll keeps the DB-restore tie-goes-to-DB contract and is
+ *  deliberately NOT routed here — see its comment.) */
+export function isStaleExternalRound (incomingSavedAt, currentSavedAt) {
+  return (Number(incomingSavedAt) || 0) <= (Number(currentSavedAt) || 0)
 }
 
 function readLs () {
@@ -128,8 +138,17 @@ if (typeof window !== 'undefined' && typeof window.addEventListener === 'functio
   try { if (localStorage.getItem(SYNC_KEY)) relayAuxBlob() } catch (e) { /* empty */ }
 }
 
-// Uses dayjs+FMT.date uniformly like the rest of the app (previously hand-rolled concatenation could disagree with HabitView's dayjs convention at day boundaries)
-const todayKey = () => window.dayjs().format(FMT.date)
+/** Habit domain day reads are owned by the REACTIVE store.todo.todayTimestamp (refreshed by the
+ *  60s day-rollover loop via store/todo.js setTodayTs). The former `todayKey()` read the wall
+ *  clock through window.dayjs() with no reactive dependency, so streakOf's due-but-unchecked
+ *  leniency kept answering with YESTERDAY's day key after midnight until an unrelated state
+ *  change. Getters below derive the day key from localDayKey(rootState.todo.todayTimestamp) —
+ *  one definition (shared/date-key.mjs), reactively refreshed. */
+
+/** Reactive day owner, with a wall-clock fallback for direct getter calls without rootState (unit tests) */
+function reactiveTodayTs (rootState) {
+  return (rootState && rootState.todo && rootState.todo.todayTimestamp) || Date.now()
+}
 
 /** Whether a date is a check-in day for the habit (frequency filter) */
 export function isDueOn (habit, dateKey) {
@@ -152,30 +171,34 @@ export default {
   namespaced: true,
   state: () => load(),
   getters: {
-    streakOf: s => id => {
+    streakOf: (s, g, rootState) => id => {
       const h = s.habits.find(x => x.id === id)
       if (!h) return 0
       let streak = 0
-      const d = new Date()
-      // Walk back day by day; non-due days (frequency filter) are skipped without breaking the streak.
+      // Walk back day by day from the REACTIVE today (2026-10-03: the walk used to start at the
+      // `new Date()` wall clock, so after midnight the lenient-today exclusion below was
+      // evaluated against yesterday's day key until an unrelated state change).
+      // Non-due days (frequency filter) are skipped without breaking the streak.
       // P2 root fix: the loop used to ignore isDueOn, so a Mon/Wed/Fri habit "broke" on an idle Sunday.
       // Today being due-but-unchecked doesn't break either (same lenient semantics as before).
-      const createdKey = h.createdAt ? window.dayjs(h.createdAt).format(FMT.date) : null
+      const d = new Date(reactiveTodayTs(rootState))
+      const todayKey = localDayKey(d)
+      const createdKey = h.createdAt ? localDayKey(h.createdAt) : null
       // G1 hard cap: `frequency:{type:'weekdays',weekdays:[]}` with a missing createdAt used to make both
       // loop-exit conditions unreachable (no due day ever breaks, no createdKey guard) → infinite loop,
       // frozen renderer. Two years of look-back is far beyond any meaningful streak.
       for (let guard = 0; guard < 730; guard++) {
         const k = localDayKey(d) // F-C7: shared/date-key.mjs — was the third hand-rolled copy of the same concatenation
-        if (h.records[k]) { streak++ } else if (k !== todayKey() && isDueOn(h, k)) break
+        if (h.records[k]) { streak++ } else if (k !== todayKey && isDueOn(h, k)) break
         if (createdKey && k < createdKey) break // walked back before the habit's creation: nothing earlier can be due (loop guard)
         d.setDate(d.getDate() - 1)
       }
       return streak
     },
-    last30: s => id => {
+    last30: (s, g, rootState) => id => {
       const h = s.habits.find(x => x.id === id)
       const out = []
-      const d = new Date(); d.setDate(d.getDate() - 29)
+      const d = new Date(reactiveTodayTs(rootState)); d.setDate(d.getDate() - 29)
       for (let i = 0; i < 30; i++) {
         const k = localDayKey(d) // F-C7: shared/date-key.mjs
         out.push({ key: k, on: !!(h && h.records[k]) })
@@ -217,7 +240,7 @@ export default {
      *  the DB blob on a tie IS the aligned behavior there, no change needed. */
     applyExternal (s, blob) {
       if (!blob || !Array.isArray(blob.habits)) return
-      if ((blob.savedAt || 0) <= (s.savedAt || 0)) return
+      if (isStaleExternalRound(blob.savedAt, s.savedAt)) return
       normalizeHabitRecords(blob.habits)
       s.habits = blob.habits
       s.moments = blob.moments || []
@@ -237,8 +260,9 @@ export default {
       const savedAt = Number(payload.savedAt) || Number(fields.savedAt) || 0
       // [patch-savedat-guard fix] a missing/0 savedAt used to bypass the staleness guard and apply
       // unconditionally; siblings replaceAll/applyExternal treat missing savedAt as 0 and reject
-      // against a saved local state. Same rule: an unsaved patch is stale — drop it.
-      if ((savedAt || 0) < (s.savedAt || 0)) return // stale peer round — already superseded
+      // against a saved local state. Same rule via the shared predicate (D15-B9): an unsaved or
+      // tied patch is stale — drop it (ties previously slipped through `<`).
+      if (isStaleExternalRound(savedAt, s.savedAt)) return // stale/tied peer round — already superseded
       let changed = false
       if (Array.isArray(fields.habits)) { normalizeHabitRecords(fields.habits); s.habits = fields.habits; changed = true }
       if (Array.isArray(fields.moments)) { s.moments = fields.moments; changed = true }

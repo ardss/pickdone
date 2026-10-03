@@ -152,7 +152,7 @@ const busCommit = (entity, verb, payload) => require('./command-bus').commit(ent
 // unconsumedSegments / proved) — the plain-bak cleanup gate must know whether EVERY segment of
 // the snapshot was consumed, not just whether todoState imported rows.
 function restoreFromCriticalBackup (ud) {
-  return dbRecovery.restoreSegmentsFromCriticalBackup(ud,
+  const r = dbRecovery.restoreSegmentsFromCriticalBackup(ud,
     list => busCommit('todo', 'putMany', list),
     c => busCommit('category', 'put', c),
     rows => busCommit('tomato', 'appendMany', rows),
@@ -164,6 +164,12 @@ function restoreFromCriticalBackup (ud) {
       // deadline+status+flag+milestones live only in the meta table — re-put them like habits.
       metaPut: pair => busCommit('meta', 'put', pair)
     })
+  // [Sync-13 reader, restore-degraded-segments-marker-never-consumed] the only main-process caller
+  // logs the marker: a degraded dump's missing segments must be visible in the recovery trail.
+  if (r && Array.isArray(r.degradedSegments) && r.degradedSegments.length) {
+    log.warn('[Init] critical backup was collected degraded — segments missing from this dump:', r.degradedSegments.join(', '))
+  }
+  return r
 }
 
 /* ---------------- External-write listener: when the CLI writes the DB directly, the running App refreshes automatically ----------------
@@ -185,12 +191,11 @@ function isSafeExternal (url) {
 const attachments = require('./attachments')
 const { attachDir } = attachments
 
-// D10 (2026-09-27): timestamp of the last renderer push — tomatoLiveText is a LEASE (fresh only
-// within TOMATO_LIVE_TTL_MS), not a latch; a dead renderer must not hold quit hostage forever.
-let tomatoLiveAt = 0
-// D10 (2026-09-27): wired into windows.js's render-process-gone hook — a crashed renderer clears
-// its own lease immediately (the TTL alone would still show a stale confirm for up to 10s).
-function clearTomatoLiveText () { tomatoLiveText = ''; tomatoLiveAt = 0 }
+
+// TQ-1 (2026-10-03): durable running-session ownership — created in registerIpc (db handle is
+// module-initialized before whenReady). From here on the tray-text lease below is DISPLAY-ONLY:
+// quit guards and startup reconciliation consult the durable 'tomatoRunningSession' meta row.
+let tomatoSession = null
 
 /* ================= Tray ================= */
 function createTray () {
@@ -204,10 +209,13 @@ function createTray () {
 }
 // Tray carries pomodoro state: the tooltip is composed solely by the main process (single writer; shows just the app name when text is empty)
 let tomatoLiveText = '' // non-empty = a focus/rest pomodoro is live (per-second push from the renderer; the main process's only running-state signal)
+// D10 (2026-09-27): wired into windows.js's render-process-gone hook — a crashed renderer clears
+// its own lease immediately (TQ-1: the quit-confirm GATE reads the durable session row, not this
+// display-only lease, so no timestamp reader is needed).
+function clearTomatoLiveText () { tomatoLiveText = '' }
 function updateTomatoTray (text) {
   const t = String(text || '').trim()
   tomatoLiveText = t
-  tomatoLiveAt = t ? Date.now() : 0 // D10: lease timestamp — emptiness (idle push) also clears the lease
   if (tray) { try { tray.setToolTip(i18nM.mt('appName') + (t ? ' · ' + t : '')) } catch (e) { /* empty */ } }
 }
 
@@ -226,9 +234,14 @@ async function quitFromTrayInner () {
   // P2 2026-09-23: a running pomodoro used to die silently on tray-quit — the ledger only ever
   // records on completeFocus/giveUp, so the in-progress session vanished with no confirm and no
   // record. Ask before tearing everything down (the tray stays alive until confirmed).
-  // D10 (2026-09-27): tomatoLiveText is a LEASE, not a latch — require a push within the TTL so a
-  // dead renderer's stale text cannot show a false "focus in progress" confirm on every quit.
-  if (require('./handlers/shared').isLiveTextFresh(tomatoLiveText, tomatoLiveAt)) {
+  // TQ-1 (2026-10-03): the confirm gate now consults the DURABLE 'tomatoRunningSession' meta row
+  // (written by every renderer FSM transition, main or float window), not the tray-text lease.
+  // The lease (tomatoLiveText) was a display artifact: a throttled/crashed renderer let a live
+  // focus quit with no confirm, and a float-originated focus never refreshed the lease at all
+  // (update-tomato-taskbar is main-window-gated). The lease remains for the tooltip detail text
+  // only; isLiveTextFresh stays exported for its lease-semantics unit tests.
+  const sessionLive = tomatoSession ? tomatoSession.hasRunningSession() : false
+  if (sessionLive) {
     try {
       const { dialog } = require('electron')
       const { response } = await dialog.showMessageBox({
@@ -474,13 +487,62 @@ if (!app.requestSingleInstanceLock(...__multiLockArgs)) {
     }
     // init 成功(加密库正常打开)=迁移自愈窗口已关闭:立刻删除 .plain-bak 明文残留,否则用户的
     // 全部任务/账本永远留一份明文拷贝在 userData,at-rest 加密被整体架空(2026-09-05 二轮深审 P1-1)
+    // mig-restore-sentinel-cleared-before-consumer (P2, symptom of "sentinel lifecycle keyed to
+    // init-failure instead of to DB emptiness"): the sentinel used to be cleared unconditionally
+    // here while the replay it stands for only ever ran inside the init-failure catch — a crash in
+    // that window left a parseable critical backup stranded behind a cleared sentinel. Now the
+    // success path re-evaluates the replay gate BEFORE clearing, runs the replay in the same boot
+    // (before createMainWindow/scheduler reload), and mirrors the catch-path follow-ups (sync kick
+    // + watermark invalidation) so restored rows reach peers. The plain-bak cleanup below is
+    // skipped while an unproved replay leaves the snapshot unconsumed (keep the last copy).
+    // Known unrecoverable window (stated, follow-up for crash-atomicity): a hard crash between the
+    // re-init inside the catch block and the markRecoveryPending write still strands the state.
+    const __ud = app.getPath('userData')
+    const replayDecision = dbRecovery.cleanInitReplayDecision(__ud)
+    let replayProved = true
+    if (replayDecision.replay) {
+      log.warn('[Init] recovery-pending sentinel + parseable critical backup survived into a successful init — replaying the JSON restore before the window/scheduler come up')
+      let restored = null
+      try { restored = restoreFromCriticalBackup(__ud) } catch (e1) { log.error('[Init] recovery replay failed:', e1 && e1.message || e1) }
+      replayProved = !!(restored && restored.proved)
+      // Mirror the catch-path GAP-D kick: restored rows must not wait for the periodic sync round.
+      try { require('./lan-sync-bootstrap').kickSyncRound('db-recovery-replay') } catch { /* sync lazy-not-init */ }
+      // Post-recovery watermark invalidation (mirror of the catch path): the replay rebuilt rows in
+      // an older oplog seq space — stale peer watermarks would sit above them forever otherwise.
+      try { require('./lan-sync-bootstrap').invalidateSyncWatermarks('db-recovery-replay') } catch { /* sync lazy-not-init */ }
+      if (replayProved) {
+        dbRecovery.clearRecoveryPending(__ud)
+        log.info('[Init] recovery replay consumed the snapshot provably — sentinel cleared')
+      } else {
+        log.error('[Init] recovery replay did NOT provably consume the snapshot — recovery-pending sentinel kept for the next boot')
+      }
+    }
     try {
-      const pb = path.join(app.getPath('userData'), 'todos.db.plain-bak')
-      if (fs.existsSync(pb)) { fs.rmSync(pb, { force: true }); log.info('[Init] 加密库启动正常,已清除明文残留 todos.db.plain-bak') }
+      const pb = path.join(__ud, 'todos.db.plain-bak')
+      const replayBlocking = replayDecision.replay && !replayProved
+      if (fs.existsSync(pb) && replayBlocking) {
+        log.warn('[Init] plain-bak 保留:recovery replay 未证实消费快照,最后的备份不可删除')
+      } else if (fs.existsSync(pb)) {
+        fs.rmSync(pb, { force: true }); log.info('[Init] 加密库启动正常,已清除明文残留 todos.db.plain-bak')
+      }
     } catch (e0) { log.warn('[Init] plain-bak 清理失败', e0) }
-    // Sync-4/Sync-17: a clean init means any recovery-pending sentinel from a previous interrupted
-    // recovery is stale (either the replay already ran or there is nothing left to replay).
-    try { dbRecovery.clearRecoveryPending(app.getPath('userData')) } catch { /* best-effort */ }
+    // A clean init with NO replayable state means any sentinel is stale (either the replay already
+    // ran or there is nothing left to replay) — clear it. With a replay pending, the block above
+    // owns the lifecycle (clear on proved, keep on unproved).
+    if (!replayDecision.replay) { try { dbRecovery.clearRecoveryPending(__ud) } catch { /* best-effort */ } }
+    // TQ-1 (2026-10-03): startup reconciliation — a focus whose renderer died (crash / hard kill /
+    // throttled death without a terminal transition) left a durable 'tomatoRunningSession' row.
+    // Book-or-void from that row instead of trusting the renderer's silent localStorage
+    // voidExpired: the phase is recorded (idempotent deterministic id) or explicitly voided,
+    // never silently dropped. Runs before any window comes up.
+    try {
+      if (!tomatoSession) {
+        tomatoSession = require('./tomato-session').createTomatoSession({
+          call: (op, p) => dbm.call(op, p), log
+        })
+      }
+      tomatoSession.reconcile()
+    } catch (e) { log.warn('[TomatoSession] startup reconcile skipped:', e && e.message) }
     handleAppProtocol()
     createMainWindow()
     const win = getMainWindow()
@@ -488,6 +550,13 @@ if (!app.requestSingleInstanceLock(...__multiLockArgs)) {
     createTray()
     scheduler.setSoundFile(path.join(__dirname, '../../assets/media/confirm1.ogg'))
     scheduler.setShowMainEntry(showMainOrLock) // D10: reminder notification clicks honor the security lock
+    registerIpc()
+    extWatch.watchDbForExternalWrites()
+    // Perf (2026-10-02): reloadAll + Meta GC moved AFTER registerIpc/extWatch — they used to run
+    // before the IPC/bus wiring, blocking the window-ready path on synchronous GC work. No
+    // behavior change: registerIpc is synchronous wiring, reloadAll's fingerprint gate
+    // (scheduler.js) makes re-entry safe, and the bus fanout hooks are wired by the time the GC
+    // commits run (strictly better peer propagation).
     scheduler.reloadAll(dbApi())
     // Meta GC: clean up orphan keys (residue after a repeat rule is deleted / project deadline & milestones become permanent orphans after a category is deleted)
     try {
@@ -498,14 +567,11 @@ if (!app.requestSingleInstanceLock(...__multiLockArgs)) {
       for (const k of computeMetaGc(dbm.call('listMetaKeys'), dbm.call('getAllCategories'), dbm.call('getAll', { deleted: 0 }))) {
         require('./command-bus').commit('meta', 'delete', k, { preserveStamp: true }) // Phase-2: GC via the bus
       }
-      // D6 P2 (2026-09-21): the GC loop runs BEFORE registerIpc wires the bus fanout hooks, so
-      // the deletion deltas sat in the local oplog until the next periodic sync round — peers
-      // kept stale repeat-rule/deadline meta for minutes after boot. One explicit kick mirrors
-      // the GAP-D recovery kick above; kickSyncRound no-ops while sync is lazy-not-initialized.
+      // D6 P2 (2026-09-21): historical note — the GC loop used to run BEFORE registerIpc wired the
+      // bus fanout hooks, so an explicit sync kick was needed. The GC now runs after the wiring;
+      // the kick is retained as a belt-and-suspenders no-op while sync is lazy-not-initialized.
       try { require('./lan-sync-bootstrap').kickSyncRound('meta-gc') } catch { /* sync lazy-not-init */ }
     } catch (e) { log.warn('[MetaGC] skipped:', e && e.message) }
-    registerIpc()
-    extWatch.watchDbForExternalWrites()
     // P3a LAN sync (lazy; never auto-enables — see lan-sync-bootstrap.js header)
     require('./lan-sync-bootstrap').initLanSync({
       db: dbm,
@@ -586,7 +652,13 @@ const quitAckGone = new WeakMap()
 app.on('before-quit', () => {
   // Second pass (the re-issued app.quit() below): the DB is already closed, re-broadcasting the flush
   // would only be a dead letter — renderer invokes would fail against a closed handle.
-  if (flushDone) return
+  // TQ-7 (2026-10-03): the singleton-winner-only quit-chain invariant is now enforced by ONE shared
+  // predicate in BOTH chained quit phases. before-quit used to guard on flushDone alone while
+  // will-quit consulted shouldRunQuitFlush({ranFullInit,...}) — the acting phase was the unguarded
+  // one, so any side effect added here (announceIdleForQuit, shipQuitRound, flush broadcast, and
+  // state.quitByUser itself) executed in a singleton-lock loser the will-quit guard explicitly
+  // declares must not run the chain. Split-guard root removed: one predicate, both phases.
+  if (!shouldRunQuitFlush({ ranFullInit, flushDone, quitting })) return
   state.quitByUser = true
   // Running-tomato announcement: flip this device's announce to idle BEFORE the sync node stops
   // (P1-7 2026-09-19 UX review: the old order ran stopSyncForQuit first, so the idle write's
@@ -687,6 +759,11 @@ app.on('will-quit', (event) => {
     // peer watermarks) run via db.call and must beat dbm.close(); fire-and-forget lost the
     // in-flight round's watermark confirmations.
     try { await require('./lan-sync-bootstrap').stopSyncForQuit() } catch { /* sync never initialized */ }
+    // TQ-1 (2026-10-03): the quit is now committed (confirm resolved / will-quit teardown) — clear
+    // the durable running-session row before the DB closes, so the next boot does not reconcile a
+    // phase the user explicitly ended. A phase that survives only because a crash skipped this
+    // line is exactly what startup reconciliation books-or-voids.
+    try { if (tomatoSession) tomatoSession.clear() } catch { /* best-effort */ }
     try { if (dbm && dbm.close) dbm.close() } catch {}
     flushDone = true
     app.quit()
@@ -716,6 +793,14 @@ function registerIpc () {
   const hctx = {
     app, readConfig, writeConfig, i18n: i18nM, log,
     dbm, dbApi, scheduler,
+    // TQ-1: durable running-session tracker (created lazily here; the startup reconcile above
+    // may have created it first — share the one instance).
+    get tomatoSession () {
+      if (!tomatoSession) {
+        tomatoSession = require('./tomato-session').createTomatoSession({ call: (op, p) => dbm.call(op, p), log })
+      }
+      return tomatoSession
+    },
     getMainWindow, showMainOrLock,
     isLocked, isLockWindow, lockAppNow, unlockAppNow, verifyLockPassword, allowWithinRate,
     isSafeExternal, attachDir,

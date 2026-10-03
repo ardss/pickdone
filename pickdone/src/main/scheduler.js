@@ -39,17 +39,15 @@ function markFired (key) {
       // (and every other pending one) is persisted before the eviction; deleting an unwritten
       // entry here used to drop that watermark on the floor and re-fire it after restart.
       flushFiredNow()
-      // flushFiredNow swallows persist failures (M-10 retry path) — detect via the written flags:
-      // if anything is STILL unwritten the flush failed, so skip the eviction and let the map
-      // exceed FIRED_MAX by one entry; the bound self-heals on the next successful flush.
-      let stillUnwritten = false
-      for (const v of firedReminders.values()) { if (v && !v.written) { stillUnwritten = true; break } }
-      if (stillUnwritten) {
-        firedReminders.set(key, { ts: Date.now(), written: false })
-        schedulePersistFired()
-        return
-      }
+      // C9 (P3 2026-10-02): the bound must hold PER ADMISSION. The old code skipped the eviction
+      // when the flush failed ("let the map exceed FIRED_MAX by one; it self-heals") — under a
+      // SUSTAINED persist failure every further markFired repeated that path and the map grew
+      // without bound (the LRU was suspended exactly when the process was struggling). Evict the
+      // oldest entry regardless; if it was still unwritten, log the potential re-fire (the
+      // fire-and-forget-of-one tradeoff) — the memory ceiling is never traded away.
       victim = firedReminders.keys().next().value
+      const v = victim !== undefined ? firedReminders.get(victim) : null
+      if (v && !v.written) log.warn('[Scheduler] persist failing: evicting UNWRITTEN fired-reminder watermark (may re-fire after restart):', victim)
     }
     if (victim !== undefined) firedReminders.delete(victim)
   }

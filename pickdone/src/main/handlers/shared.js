@@ -94,7 +94,10 @@ function makeSyncKick (notify, { timerMs = 750, setTimeout: st = setTimeout, cle
 // re-exported here so every existing consumer (handlers/*, tests) keeps its import path.
 const { ownsAttachmentFile } = require('../attachment-ownership')
 
-/** Purge disk attachments after hard delete (filename prefix = taskId_, same rule as saveAttachment): warn-only on failure, never blocking */
+/** Purge disk attachments after hard delete (filename prefix = taskId_, same rule as saveAttachment): warn-only on failure, never blocking.
+ *  Lifecycle (2026-10-02): after the bulk unlink the device-local alias map is pruned — entries
+ *  whose target file this purge just removed must die with it, or they keep resolving the dead
+ *  logical key to a missing file forever (leak + blocks the missing-file re-pull). */
 function purgeAttachmentFiles (attachDir, ids) {
   if (!ids || !ids.length) return
   try {
@@ -104,6 +107,7 @@ function purgeAttachmentFiles (attachDir, ids) {
         try { fs.unlinkSync(path.join(dir, f)) } catch (err) { log.warn('[Purge] 附件删除失败:', f, err.message) }
       }
     }
+    try { require('../attachments').pruneMissingAliases() } catch { /* alias prune is best-effort */ }
   } catch (err) { log.warn('[Purge] 附件目录遍历失败:', err.message) }
 }
 
@@ -115,8 +119,20 @@ function purgeAttachmentFiles (attachDir, ids) {
  *  never keep repeatRule meta alive. Pure: returns keys, never performs IO.
  *  M-11 (2026-09-20): per-task tomato estimate keys (`tomatoEstimateState:<taskId>`) are GC'd too
  *  — the X2 split created one meta row per task but nothing ever removed them, so purged tasks
- *  leaked their keys forever. A key whose taskId is absent from the live todos set is dead. */
-function computeMetaGc (metaKeys, categories, todos) {
+ *  leaked their keys forever. A key whose taskId is absent from the live todos set is dead.
+ *  D15-B5 (2026-10-03): `projectDocs:<catId>` follows the projectDeadline/projectStatus lifecycle —
+ *  a purged category's documents row can never be read again.
+ *  D15-B6 (2026-10-03): `catFiltersBak` is bounded. The renderer stamps its keys
+ *  `catFiltersBak.<deletedAt>.<id>` (category.js backupDoomedFilters), so age is decidable from the
+ *  key: past the recover window (the same 30-day fallback the tombstone expiry uses) the filters
+ *  can no longer be restored by recover and the row is dead. Legacy unstamped keys
+ *  (`catFiltersBak.<id>` — the CLI twin's shape, and pre-fix renderer backups) have an unknowable
+ *  age and are conservatively kept UNLESS the id is live again (a recovered category deletes its
+ *  own backup in recover; a live id with a leftover backup is a stale re-created-id orphan). */
+const CAT_FILTERS_BAK_RETENTION_MS = 30 * 86400000
+function computeMetaGc (metaKeys, categories, todos, opts = {}) {
+  const now = Number(opts.now) || Date.now()
+  const retentionMs = Number(opts.catFiltersBakRetentionMs) || CAT_FILTERS_BAK_RETENTION_MS
   const live = new Set((categories || []).map(c => String(c.id || c.categoryId)))
   const liveRids = new Set((todos || []).map(t => t.repeatId).filter(Boolean))
   const liveTaskIds = new Set((todos || []).map(t => String(t.taskId)))
@@ -146,6 +162,16 @@ function computeMetaGc (metaKeys, categories, todos) {
     if (m && !live.has(m[1])) { dead.push(k); continue }
     m = k.match(/^projectCategoryFlag:(.+)$/)
     if (m && !live.has(m[1])) { dead.push(k); continue }
+    // D15-B5: project documents die with their category, same rule as projectStatus above.
+    m = k.match(/^projectDocs:(.+)$/)
+    if (m && !live.has(m[1])) { dead.push(k); continue }
+    // D15-B6: stamped `catFiltersBak.<deletedAt>.<id>` — bounded by the recover window; the
+    // unstamped legacy shape is GC'd only when its id is live again (stale recovered/re-created
+    // leftover — recover itself deletes the backup it consumed).
+    m = k.match(/^catFiltersBak\.(\d+)\.(\d+)$/)
+    if (m) { if (now - Number(m[1]) > retentionMs) dead.push(k); continue }
+    m = k.match(/^catFiltersBak\.(.+)$/)
+    if (m && live.has(m[1])) { dead.push(k); continue }
     // D10 (2026-09-27): `catProjectMetaBak.pending.<id>` is a bracketed softDelete→rename roundtrip
     // crash marker — the roundtrip either completed or never started, and this GC runs at startup
     // before any NEW softDelete can mint a marker, so every pending marker is dead. The NON-pending

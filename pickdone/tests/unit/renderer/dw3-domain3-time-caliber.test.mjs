@@ -15,6 +15,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { anchorPath } from '../../lib/source-anchors.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const read = p => fs.readFileSync(path.join(ROOT, p), 'utf8')
@@ -111,4 +112,100 @@ test('[D3-3] all four former inline sites delegate to the shared formatters', ()
   assert.ok(nl.includes('mmToHHmm(h * 60 + min)'), 'nlDate English branch labels via mmToHHmm')
   assert.ok(nl.includes('mmToHHmm(peeled.h * 60 + peeled.min)'), 'nlDate mixed CJK branch labels via mmToHHmm')
   assert.ok(!nl.includes("padStart(2, '0')}:${String("), 'no inline HH:mm template concatenation left in nlDate')
+})
+
+/* ---------- [day-caliber 2026-10-03] dayShift single source + day-step guard ---------- */
+
+test('[day-caliber] dayShift steps calendar days, not 24h blocks (plain-TZ semantics)', () => {
+  const { dayShift } = todayBounds
+  const noon = +dayjs('2026-09-23').hour(12)
+  assert.equal(dayShift(noon, 1), +dayjs('2026-09-24').hour(12), '+1 calendar day keeps time-of-day')
+  assert.equal(dayShift(noon, -1), +dayjs('2026-09-22').hour(12), '-1 calendar day')
+  assert.equal(dayShift(todayBounds.dayStart(noon), 2), +dayjs('2026-09-25'), 'from a midnight base, +2 lands the target midnight')
+})
+
+test('[day-caliber] migrated sibling-day sites consume dayShift; no ms day-step left in them', () => {
+  // expiryGroups (TD-D1a): exact-equality tomorrow/day-after/upcoming filters
+  const eg = read('renderer/js/utils/expiryGroups.js')
+  assert.ok(eg.includes("from './todayBounds.js'"), 'expiryGroups imports the day-shift primitive')
+  assert.ok(!/today\s*\+\s*(2\s*\*\s*)?(DAY_MS|86400000)/.test(eg), 'no `today + n*DAY_MS` sibling-day ms step left')
+  // TomatoFocusRecordModal (TD-D1b): selDayStart / yesterday label / day bins
+  const modal = read('renderer/js/components/TomatoFocusRecordModal.vue')
+  assert.ok(modal.includes("dayShift } from '../utils/todayBounds.js'"), 'modal imports the day-shift primitive')
+  assert.ok(!/todayTimestamp\s*\+/.test(modal), 'selDayStart must not ms-step off todayTimestamp')
+  assert.ok(!/[-+]\s*(86400000|DAY_MS)/.test(modal), 'no +/- ms day-step left (day-fraction /86400000 divisors are NOT day stepping and stay)')
+  // category (TD-D1c): tombstone cutoff + loadProjectMeta today0
+  const cat = read('renderer/js/store/category.js')
+  assert.ok(cat.includes('dayShift(dayStart(Date.now()), -retentionDays)'), 'tombstone cutoff uses the calendar-day primitive')
+  assert.ok(!cat.includes('86400000'), 'no ms day arithmetic left in category store')
+  assert.ok(cat.includes('today0()'), 'loadProjectMeta resolves the day boundary through todayBounds')
+  assert.ok(!cat.includes("dayjs().startOf('day')"), 'no inline day-start left in category store')
+})
+
+test('[day-caliber] habit day keys derive from the reactive todayTimestamp (one definition)', () => {
+  const habits = read('renderer/js/store/habits.js')
+  assert.ok(!habits.includes('window.dayjs().format'), 'no second wall-clock day-key definition left in the store')
+  assert.ok(habits.includes('rootState.todo.todayTimestamp'), 'streakOf/last30 take the reactive day owner from rootState')
+  const hv = read('renderer/js/views/HabitView.vue')
+  assert.ok(hv.includes('localDayKey(this.$store.state.todo.todayTimestamp)'),
+    'HabitView.todayKey reads the reactive owner (was a zero-dep wall-clock computed)')
+  assert.ok(!hv.includes('todayKey () { return dayjs().format'), 'old wall-clock computed gone')
+  const rail = read('renderer/js/components/DayRail.vue')
+  assert.ok(rail.includes("from '../../../shared/date-key.mjs'"), 'DayRail prune keys via the shared day-key module')
+  assert.ok(!/keep\.add\(dayjs\(\)/.test(rail), 'prune keep-window no longer reads the UMD wall clock inline')
+})
+
+test('[day-caliber] counted ratchet: renderer startOf(\'day\') sites shrink, never grow', () => {
+  // The class is "inline dayjs().startOf('day') reinvented per file" (todayBounds.js header:
+  // 37 sites / 22 files). A 100-entry allowlist would ratify the disease; a COUNTED baseline
+  // makes any new inline site fail CI while letting waves migrate call sites down over time.
+  const root = anchorPath('rendererJsDir')
+  let count = 0
+  const walk = d => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name)
+      if (e.isDirectory()) { walk(p); continue }
+      if (!/\.(js|vue)$/.test(e.name)) continue
+      if (p.includes('utils' + path.sep + 'todayBounds.js')) continue // the single source itself
+      count += (fs.readFileSync(p, 'utf8').match(/startOf\('day'\)/g) || []).length
+    }
+  }
+  walk(root)
+  // Baseline measured 2026-10-03 right after the day-caliber wave migrated its own files.
+  const BASELINE = 128
+  assert.ok(count <= BASELINE, `renderer has ${count} inline startOf('day') sites > baseline ${BASELINE} — route new ones through utils/todayBounds.js and shrink the baseline when migrating`)
+})
+
+test('[day-caliber] counted ratchet: no additive/multiplicative ms day-step left anywhere in renderer/js', () => {
+  // Class-completeness: the earlier guard only banned ms steps inside the files the wave
+  // happened to migrate — the stepping class could grow freely everywhere else (TodoGroups
+  // cutoff, CalendarView week stepping, TagView windows, DayDateStrip grid, EditPanel
+  // tomorrow chip, statistics day bins, ...). The class is "sibling-day arithmetic done as
+  // `base ± n*86400000`/`base ± n*DAY_MS`": local midnights are 23h/25h apart across DST, so
+  // exact-equality dayStart filters drop or duplicate rows. Every site must route through
+  // dayShift(todayBounds). Day-fraction DIVISORS (`/ 86400000`, `864e5`) are not day stepping
+  // and stay legal; so does ms arithmetic that never crosses a day boundary.
+  const root = anchorPath('rendererJsDir')
+  // additive/multiplicative day-step: `+/- ... * DAY_MS|86400000` or `+/- DAY_MS|86400000`
+  const STEP = /[-+][^/\n]{0,40}[*]\s*(?:86400000|DAY_MS)|[-+]\s*(?:86400000|DAY_MS)/
+  const hits = []
+  const walk = d => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name)
+      if (e.isDirectory()) { walk(p); continue }
+      if (!/\.(js|vue)$/.test(e.name)) continue
+      const src = fs.readFileSync(p, 'utf8')
+      // strip line comments so guard prose ("was `today - R1 * DAY_MS`") cannot self-trigger
+      const code = src.replace(/^\s*\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '')
+      if (STEP.test(code)) hits.push(path.relative(root, p))
+    }
+  }
+  walk(root)
+  assert.deepStrictEqual(hits, [], `ms sibling-day stepping must route through dayShift(todayBounds) — found in: ${hits.join(', ')}`)
+})
+
+test('[day-caliber] DayRail steps through the single sanctioned primitive (no second stepper)', () => {
+  const rail = read('renderer/js/components/DayRail.vue')
+  assert.ok(rail.includes('localDayKey(dayShift('), 'prune keep-window keys derive from dayShift')
+  assert.ok(!/setDate\(/.test(rail), 'no Date#setDate day-stepping primitive alongside dayShift')
 })

@@ -88,6 +88,9 @@ function projectStats (list, today0) {
     total: list.length,
     doneCount: done.length,
     progress: list.length ? Math.round(done.length / list.length * 100) : 0,
+    // [D15-A5] `estimate` IS accumulated focus minutes post-X2 (db-rows.js: estimate=r.focusMinutes) —
+    // summing it yields MINUTES and the "专注 {n} 分钟" label is the correct rendering. Same field,
+    // same semantic as ProjectView's stats.focusMinutes and TodoItem's focus-minutes pill.
     focusMinutes: list.reduce((s, t) => s + (t.estimate || 0), 0),
     startedAt: isFinite(started) ? started : 0,
     lastActivity: done.reduce((m, t) => Math.max(m, t.completedAt || 0), 0),

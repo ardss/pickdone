@@ -26,6 +26,7 @@ const SFC = path.join(ROOT, 'renderer/js/components/TodoGroups.vue')
 
 let cleanupGlobals = () => {}
 let dayjs
+let dayShift
 
 /** Minimal SFC loader: pull the <script lang="ts"> block, strip imports / TS casts,
  *  turn `export default` into a return value, inject dependency doubles. */
@@ -36,14 +37,16 @@ function loadTodoGroupsComponent () {
   const code = m[1]
     .replace(/^\s*import\s+TodoItem\s+from\s+'\.\/TodoItem\.vue'\s*$/m, '')
     .replace(/^\s*import\s*\{\s*dayjs\s*\}\s+from\s+'[^']+'\s*$/m, '')
+    .replace(/^\s*import\s*\{\s*dayShift\s*\}\s+from\s+'[^']+'\s*$/m, '')
     .replace(/\bas\s+any\b/g, '')
     .replace(/export\s+default\s*\{/, 'return {')
-  const factory = new Function('TodoItem', 'dayjs', code)
-  // TodoItem stub: the fold logic under test never touches row rendering
-  return factory({ name: 'TodoItem', props: ['todo'], template: '<div class="todo-item-stub"></div>' }, dayjs)
+  const factory = new Function('TodoItem', 'dayjs', 'dayShift', code)
+  // TodoItem stub: the fold logic under test never touches row rendering.
+  // dayShift is injected as the REAL calendar-day primitive (same module the SFC imports).
+  return factory({ name: 'TodoItem', props: ['todo'], template: '<div class="todo-item-stub"></div>' }, dayjs, dayShift)
 }
 
-before(() => {
+before(async () => {
   // Fresh jsdom as the renderer-ish environment (jsdom is already a devDependency)
   const { JSDOM } = require('jsdom')
   const dom = new JSDOM('<!doctype html><html><body><div id="host"></div></body></html>', { url: 'http://localhost/' })
@@ -70,6 +73,10 @@ before(() => {
   // vm-context load whose timing flaked under parallel test load (2026-09-13)
   dayjs = require('dayjs')
   assert.equal(typeof dayjs, 'function', 'dayjs failed to load')
+  // dayShift double built on the same real dayjs instance. todayBounds.js itself cannot be
+  // imported here (its utils/core.js expects the renderer UMD global bundle), but this is the
+  // verbatim single-source implementation (todayBounds.dayShift = +dayjs(ts).add(n, 'day')).
+  dayShift = (ts, n) => +dayjs(ts).add(n, 'day')
 })
 
 

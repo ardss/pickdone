@@ -62,7 +62,11 @@ test('watermark: round-1 ack populates the injected peerProgress map (packed-bod
   const nodeB = createLanSyncNode({
     deviceId: 'node-b', name: 'Node B', pairingSecret: SECRET, port: 0, host: '127.0.0.1',
     discoverFn: fakeDiscovery(),
-    ingestSegment: (seg) => { void unpack(typeof seg === 'object' && typeof seg.body === 'string' ? seg.body : seg) ; return { applied: 2, rejected: 0 } },
+    ingestSegment: (seg) => {
+      const env = unpack(typeof seg === 'object' && typeof seg.body === 'string' ? seg.body : seg)
+      // S7 contract: the mock returns the engine-derived span over the unpacked rows.
+      return { applied: 2, rejected: 0, fromSeq: env.rows[0].seq, toSeq: env.rows[env.rows.length - 1].seq }
+    },
     ingestSnapshot: () => {},
     buildSegments: makeBuilder(oplogB, 'node-b'),
   })
@@ -87,7 +91,8 @@ test('watermark: round 2 pushes ONLY the incremental delta, not the full window'
   const ingestB = (seg) => {
     const env = unpack(typeof seg === 'object' && typeof seg.body === 'string' ? seg.body : seg)
     roundBIngest.push(...env.rows.map(r => r.id))
-    return { applied: env.rows.length, rejected: 0 }
+    // S7 contract: the span comes from the unpacked rows actually applied.
+    return { applied: env.rows.length, rejected: 0, fromSeq: env.rows.length ? env.rows[0].seq : null, toSeq: env.rows.length ? env.rows[env.rows.length - 1].seq : null }
   }
   let roundBIngest = []
 
@@ -133,7 +138,8 @@ test('watermark: client acks the peer\'s push with appliedToSeq so serverPullAck
   const ackedFromA = []
   const ingestA = (seg) => {
     const env = unpack(typeof seg === 'object' && typeof seg.body === 'string' ? seg.body : seg)
-    return { applied: env.rows.length, rejected: 0 }
+    // S7 contract: the span comes from the unpacked rows actually applied.
+    return { applied: env.rows.length, rejected: 0, fromSeq: env.rows.length ? env.rows[0].seq : null, toSeq: env.rows.length ? env.rows[env.rows.length - 1].seq : null }
   }
   // Wrap B's builder to record the `since` cursor its server role feeds each pull response:
   // round 1 must use the full window (unknown peer), round 2 must start past the acked seq.
@@ -186,6 +192,10 @@ test('watermark: persistPeerWatermarks writes the live map to settings_rows v2 k
       return null
     },
   }
+  // S6: the store seeds from a SUCCESSFUL read — state must be wired before seeding (the old
+  // silent catch{} tolerated a null-state seed and then persisted over it; degraded stores
+  // refuse to persist by contract now).
+  bootstrap.__test.setState({ db, peerWatermarks: new Map(), node: null, timers: [] })
   const watermarks = bootstrap.__test.createTrackedWatermarks()
   watermarks.set('peer-x', 42)
   bootstrap.__test.setState({ db, peerWatermarks: watermarks, node: null, timers: [] })
@@ -207,4 +217,47 @@ test('watermark: createTrackedWatermarks seeds from persisted settings (restart 
   const seeded = bootstrap.__test.createTrackedWatermarks()
   assert.equal(seeded.get('peer-y'), 7, 'a restart must resume from the persisted per-peer watermark')
   assert.equal(typeof seeded.raw, 'function', 'the seeded map must expose raw() for persistence')
+})
+
+test('S7: the pull watermark never advances past the highest seq actually applied (tampered envelope)', async () => {
+  // nodeB "sends" a segment whose OUTER toSeq (999) exceeds the body's real max row seq (42) —
+  // the desynchronization a corrupt/mismatched peer build can produce. The receiver must derive
+  // its pull watermark from the engine's validated span (42), never from the envelope (999);
+  // pre-fix pullWatermarkBy jumped to 999 and acked appliedToSeq 999.
+  const oplogB = []
+  for (let i = 1; i <= 3; i++) oplogB.push({ id: `b${i}`, seq: i, content: 'z' })
+  const tamperBuild = (since = 0) => {
+    const rows = oplogB.filter(r => r.seq > since)
+    if (!rows.length) return []
+    const maxSeq = Math.max(...rows.map(r => r.seq))
+    const body = pack(rows, { fromSeq: since + 1, toSeq: maxSeq, deviceId: 'node-b' })
+    return [{ body, fromSeq: since + 1, toSeq: 999 }] // tampered envelope
+  }
+  const nodeA = createLanSyncNode({
+    deviceId: 'node-a', name: 'Node A', pairingSecret: SECRET, port: 0, host: '127.0.0.1',
+    discoverFn: fakeDiscovery(),
+    // Span-mimicking engine stub (the fixed engine contract): span over the unpacked rows.
+    ingestSegment: (seg) => {
+      const env = unpack(typeof seg === 'object' && typeof seg.body === 'string' ? seg.body : seg)
+      return { applied: env.rows.length, rejected: 0, fromSeq: env.rows[0].seq, toSeq: env.rows[env.rows.length - 1].seq }
+    },
+    ingestSnapshot: () => {},
+    buildSegments: () => [],
+  })
+  const nodeB = createLanSyncNode({
+    deviceId: 'node-b', name: 'Node B', pairingSecret: SECRET, port: 0, host: '127.0.0.1',
+    discoverFn: fakeDiscovery(),
+    ingestSegment: () => ({ applied: 0, rejected: 0 }),
+    ingestSnapshot: () => {},
+    buildSegments: tamperBuild,
+  })
+  nodeA.start(); nodeB.start()
+  const [, portB] = await Promise.all([nodeA.whenListening(), nodeB.whenListening()])
+  nodeA.addPeer({ deviceId: 'node-b', host: '127.0.0.1', port: portB, name: 'Node B' })
+
+  const ok = await nodeA.startSyncRound()
+  assert.ok(ok, 'round confirmed')
+  const st = nodeA.getStatus().peers.find(p => p.deviceId === 'node-b')
+  assert.equal(st.pullWatermark, 3, 'the pull watermark equals the highest seq actually applied (3), NOT the envelope 999')
+  await nodeA.stop(); await nodeB.stop()
 })

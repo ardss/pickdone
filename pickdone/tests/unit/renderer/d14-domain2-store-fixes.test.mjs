@@ -90,11 +90,22 @@ LS.setItem('tomatoPendingSnow', JSON.stringify({ v: 1, entries: [
 
 const tomato = (await import('../../../renderer/js/store/tomato.js')).default
 
+// TQ-2: per-entry mirror — collect entries by prefix scan (legacy whole-blob seeds are migrated at hydrate)
 const pendingLedgerEntries = () => {
-  try { return (JSON.parse(LS.getItem('tomatoPendingLedger')) || { entries: [] }).entries } catch (e) { return [] }
+  const out = []
+  for (let i = 0; i < LS.length; i++) {
+    const k = LS.key(i)
+    if (k && k.indexOf('tomatoPendingLedger.') === 0) { try { out.push(JSON.parse(LS.getItem(k)).entry) } catch (e) { /* skip */ } }
+  }
+  return out
 }
 const pendingSnowEntries = () => {
-  try { return (JSON.parse(LS.getItem('tomatoPendingSnow')) || { entries: [] }).entries } catch (e) { return [] }
+  const out = []
+  for (let i = 0; i < LS.length; i++) {
+    const k = LS.key(i)
+    if (k && k.indexOf('tomatoPendingSnow.') === 0) { try { out.push(JSON.parse(LS.getItem(k)).entry) } catch (e) { /* skip */ } }
+  }
+  return out
 }
 
 /* ==================== C1: ledger queue keeps/quarantines on non-accepted results ==================== */
@@ -131,13 +142,15 @@ test('C1 falsy resolution (no bridge / undefined result) keeps the entry queued'
 
 /* ==================== C2: snow queue keeps non-accepted results ==================== */
 
-test('C2 bumpSnow {ok:false} keeps the entry; ok:true (incl. deduped echo) retires it', async () => {
+test('C2 bumpSnow: retryable failure keeps the entry; ok:true (incl. deduped echo) retires it', async () => {
   assert.ok(pendingSnowEntries().some(e => e.params.taskId === 't9'), 'seeded snow entry hydrated')
-  bumpResult = { ok: false, reason: 'deleted' }
+  // TQ-4: 'deleted' is a STRUCTURALLY-TERMINAL refusal (quarantined + retired — see its own test);
+  // a transient/unknown non-accepted shape stays the retryable set.
+  bumpResult = { ok: false, reason: 'unknown' }
   fireQuitFlush()
   await tick()
   assert.ok(pendingSnowEntries().some(e => e.params.taskId === 't9'),
-    'a structured non-accepted bump result is a failure — the entry stays queued')
+    'a non-terminal non-accepted bump result is a failure — the entry stays queued')
   bumpResult = { ok: true, minutes: 0, deduped: true } // replay echo: already credited → retire
   fireQuitFlush()
   await tick()
@@ -187,6 +200,29 @@ test('B3 quit-flush rejection parks the blob durably (both the reject branch and
 })
 
 /* ==================== B4 + C15: dayPlans snapshot restore re-dating / batch snapshot ==================== */
+
+test('B3b a corrupt parked blob is quarantined, not silently destroyed (consumeUnflushed degrade stays non-destructive)', async () => {
+  const { consumeUnflushed } = await import('../../../renderer/js/utils/dbMirror.js')
+  // B3's consumeUnflushed calls above parked valid blobs; clear the quarantine surface first
+  LS.removeItem('corruptQuarantine.dbMirror')
+  LS.removeItem('dbMirror.unflushed.db.m3c')
+  const corruptRaw = '{corrupt-parked-blob'
+  LS.setItem('dbMirror.unflushed.db.m3c', corruptRaw)
+  const errs = []
+  const origErr = console.error
+  console.error = (...a) => { errs.push(a.join(' ')) }
+  let parked = null
+  try { parked = consumeUnflushed('db.m3c') } finally { console.error = origErr }
+  assert.equal(parked, null, 'the degrade path is unchanged: a corrupt park still reads as "nothing parked"')
+  let quarantined = []
+  try { quarantined = JSON.parse(LS.getItem('corruptQuarantine.dbMirror')) || [] } catch (e) { /* empty */ }
+  const hit = quarantined.find(q => q.key === 'db.m3c')
+  assert.ok(hit, 'the corrupt park marker is cleared only after the raw bytes are quarantined')
+  assert.equal(hit.raw, corruptRaw, 'the RAW bytes of the newest-copy park survive the parse failure (the stale DB copy must not win boot by destroying them)')
+  assert.ok(hit.ts > 0, 'quarantine entry carries a timestamp')
+  assert.equal(LS.getItem('dbMirror.unflushed.db.m3c'), null, 'the park marker is retired after successful quarantine')
+  assert.ok(errs.some(t => t.includes('corrupt')), 'the degradation is logged loudly')
+})
 
 const dayPlans = (await import('../../../renderer/js/utils/dayPlans.js'))
 

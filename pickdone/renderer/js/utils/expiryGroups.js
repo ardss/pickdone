@@ -1,4 +1,5 @@
-import { rangeDays, rangeLabel, DAY_MS } from './core.js'
+import { rangeDays, rangeLabel } from './core.js'
+import { dayShift } from './todayBounds.js'
 import { calTitle } from './buckets.js'
 
 /**
@@ -24,9 +25,9 @@ export function buildExpiryGroups ({ list, settings, today, t, keys, extraGroups
   const R2 = rangeDays(settings.expiredUncompletedTodoRange, 30)
   const bucket = f => list.filter(f).sort((a, b) => b.taskSort - a.taskSort || b.createTime - a.createTime)
   const g = []
-  const expDone = bucket(x => x.complete && x.dayStart && x.dayStart < today && x.dayStart >= today - R1 * DAY_MS)
+  const expDone = bucket(x => x.complete && x.dayStart && x.dayStart < today && x.dayStart >= dayShift(today, -R1))
   if (expDone.length) g.push({ key: 'catExpDone', title: t(keys.expDone, { r: rangeLabel(settings.expiredCompletedTodoRange, t) }), todos: expDone, showDate: true, hasSettings: true })
-  const expUndo = bucket(x => !x.complete && x.dayStart && x.dayStart < today && x.dayStart >= today - R2 * DAY_MS).sort((a, b) => a.dayStart - b.dayStart)
+  const expUndo = bucket(x => !x.complete && x.dayStart && x.dayStart < today && x.dayStart >= dayShift(today, -R2)).sort((a, b) => a.dayStart - b.dayStart)
   if (expUndo.length) g.push({ key: 'catExpUndo', title: t(keys.expUndo, { r: rangeLabel(settings.expiredUncompletedTodoRange, t) }), todos: expUndo, showDate: true, color: 'color2', hasSettings: true, hasRecomplete: true })
   const td = bucket(x => !x.complete && x.dayStart === today)
   if (td.length) g.push({ key: 'catToday', title: calTitle(today), todos: td, color: 'color3' })
@@ -36,11 +37,14 @@ export function buildExpiryGroups ({ list, settings, today, t, keys, extraGroups
   // exactly one group: completed today lives here.
   const tdd = bucket(x => x.complete && x.dayStart === today)
   if (tdd.length) g.push({ key: 'catTodayDone', title: calTitle(today), todos: tdd, color: 'color3' })
-  const tm = bucket(x => x.dayStart === today + DAY_MS)
-  if (tm.length) g.push({ key: 'catTomorrow', title: calTitle(today + DAY_MS), todos: tm, color: 'color3' })
-  const dat = bucket(x => x.dayStart === today + 2 * DAY_MS)
-  if (dat.length) g.push({ key: 'catDat', title: calTitle(today + 2 * DAY_MS), todos: dat, color: 'color3' })
-  const up = bucket(x => !x.complete && x.dayStart > today + 2 * DAY_MS)
+  // Sibling-day buckets step via dayShift (calendar semantics): `today + n*86400000` misses
+  // stored dayStart rows across a DST transition (local midnights 23h/25h apart) — the exact
+  // === filters silently dropped the whole bucket.
+  const tm = bucket(x => x.dayStart === dayShift(today, 1))
+  if (tm.length) g.push({ key: 'catTomorrow', title: calTitle(dayShift(today, 1)), todos: tm, color: 'color3' })
+  const dat = bucket(x => x.dayStart === dayShift(today, 2))
+  if (dat.length) g.push({ key: 'catDat', title: calTitle(dayShift(today, 2)), todos: dat, color: 'color3' })
+  const up = bucket(x => !x.complete && x.dayStart > dayShift(today, 2))
   if (up.length) g.push({ key: 'catUpcoming', title: t(keys.upcoming), todos: up, showDate: true, color: 'color3', hasSettings: true })
   const nd = bucket(x => !x.complete && !x.dayStart)
   if (nd.length) g.push({ key: 'catNoDate', title: t(keys.noDate), todos: nd, hasSettings: true })

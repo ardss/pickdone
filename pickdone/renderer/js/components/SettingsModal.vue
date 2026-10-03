@@ -467,7 +467,14 @@ export default {
         if (r && r.active === false) this.$message.info(this.$t('update.devEnv'))
         if (r && r.status === 'uptodate') this.$message.success(this.$t('update.upToDate'))
         if (r && r.status === 'error') this.$message.error(this.$t('update.failedReason', { msg: String((r.info && r.info.message) || '').slice(0, 120) }))
-      } catch (e) { this.updStatus = 'idle'; this.$message.info(this.$t('update.devEnv')) }
+        // [D15-A15] a REJECTED check in a packaged build is a real failure (network down, update
+        // server unreachable, IPC error) — it used to be swallowed as a benign "dev environment"
+        // notice. Only the resolved `active === false` reply means "no updater in this build";
+        // a throw is reported like any other error status, with the reason.
+      } catch (e) {
+        this.updStatus = 'idle'
+        this.$message.error(this.$t('update.failedReason', { msg: String((e && e.message) || e || '').slice(0, 120) }))
+      }
     },
     async restartToUpdate () {
       const okq = await window.todoAPI.quitAndInstall()

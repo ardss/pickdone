@@ -90,6 +90,10 @@ module.exports = function buildMigrations (syncSchema, migrationsOverride) {
         createdAt INTEGER NOT NULL
       )`)
       d.exec('CREATE INDEX IF NOT EXISTS idx_sync_revisions_entity ON sync_revisions(entityId, hlcPhysical, hlcLogical)')
+      // perf-sync-revisions-prune-inline-write-stall: prunePayloads picks the recent-keep window
+      // with ORDER BY hlcPhysical DESC, hlcLogical DESC — without this index every prune sorts
+      // the whole revisions table (TEMP B-TREE per write).
+      d.exec('CREATE INDEX IF NOT EXISTS idx_sync_revisions_hlc ON sync_revisions(hlcPhysical DESC, hlcLogical DESC)')
       d.exec(`CREATE TABLE IF NOT EXISTS sync_revision_payloads (
         revisionId TEXT PRIMARY KEY,
         payload TEXT NOT NULL

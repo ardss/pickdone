@@ -239,6 +239,7 @@ export default {
       "moveDown": "下移排序",
       "repeatLabel": "重复",
       "pomodoroInvested": "番茄投入",
+      "focusMinutesTitle": "专注投入 {n} 分钟",
       "togglePomodoroFocus": "选中/取消番茄专注",
       "subCheckedAnnounce": "已勾选子任务：{s}",
       "subUncheckedAnnounce": "已取消勾选子任务：{s}"
