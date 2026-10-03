@@ -207,9 +207,33 @@ export async function persistSnapshotDiffCore ({ commit }, { from, to, allowDele
   const toIds = new Set(toRows.map(t => t.taskId))
   const changedRows = []
   const effects = []
+  // [TL-6 purged-generation guard, at the single write point] The upsert arm runs for ALL epochs
+  // by design (see the module header), so it is the one place an undo can durably resurrect rows a
+  // purge physically deleted — which is exactly why purgeIds/purgeAllRecycle had to commit
+  // historyClear (a WHOLE-stack wipe) for any auto recycle purge. With a durable-existence read
+  // here, the guard lives at the write point instead: an id absent from the durable store (neither
+  // live NOR tombstoned — soft-deleted rows count as existing) is a purged generation and is
+  // skipped AND dropped from the restored in-memory table, so memory and the DB converge in the
+  // same step. The rest of the undo stack stays reachable (historyBarrier instead of historyClear
+  // in purgeIds/purgeAllRecycle). A failed read degrades to the old unconditional behavior, loudly
+  // logged — the guard can never silently skip live rows.
+  let durableIds = null
+  try {
+    if (typeof window !== 'undefined' && window.todoAPI && typeof window.todoAPI.dbCall === 'function') {
+      const rows = await window.todoAPI.dbCall('getAll', {})
+      if (Array.isArray(rows)) durableIds = new Set(rows.map(r => r && r.taskId))
+    }
+  } catch (e) { console.error('[todo] undo durable-existence read failed (purged-generation guard skipped this step):', e) }
   for (const row of toRows) {
     const before = fromMap.get(row.taskId)
     if (!before || before.updateTime !== row.updateTime) {
+      if (durableIds && !durableIds.has(row.taskId)) {
+        // Purged generation: writing it would fight the sync tombstone contract (docs/sync-matrix.md:
+        // purges propagate as real tombstones). Skip the upsert AND remove the row historyRestore
+        // just put back into memory — the restored table must not show a row the DB lacks.
+        commit('removeLocal', row.taskId)
+        continue
+      }
       commit('upsertLocal', row)
       safeUpsert({ ...row, status: 'update' })
       changedRows.push(row)
