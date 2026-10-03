@@ -115,7 +115,11 @@ test('relay: body over 8MB is rejected 413 before buffering (memory-DoS cap)', a
 
 test('relay: non-string envelope is rejected 400 at push (pull-poisoning fix)', async t => {
   const { relay, baseUrl } = await withRelay(t, memoryStore())
-  const res = await fetch(baseUrl + '/v1/sync/push', { method: 'POST', body: JSON.stringify({ account: ACCOUNT, device: 'd', items: [{ opId: 'o1', envelope: { bad: 'object' } }] }) })
+  // Reconciled with the per-device bearer gate (b962d54c): data routes answer 401 before body
+  // validation, so the malformed-envelope probe must present a registered device's secret — the
+  // invariant under test is unchanged: the push is rejected and the pull log stays clean.
+  const { deviceSecret } = relay.registerDevice(ACCOUNT, 'd')
+  const res = await fetch(baseUrl + '/v1/sync/push', { method: 'POST', headers: { authorization: `Bearer ${deviceSecret}` }, body: JSON.stringify({ account: ACCOUNT, device: 'd', items: [{ opId: 'o1', envelope: { bad: 'object' } }] }) })
   assert.equal(res.status, 400)
   assert.equal(relay.pull(ACCOUNT, 0).items.length, 0, 'account pull must stay clean')
 })
