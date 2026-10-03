@@ -43,6 +43,12 @@ export async function syncTodosCore ({ state, commit, dispatch }) {
     // intermediate state: after a crash the batch is either fully re-sent (old dirty semantics) or
     // fully acknowledged (new semantics). The db layer forces status='sync' on every row.
     await commitCommand("todo", "commitBatch", { rows: deproxyRows(snapshot), version: serverV })
+    // [TL-1 doom-loop fix] a commitSyncBatch queued by an EARLIER transient failure (version <=
+    // serverV) is doomed from here on: the quit-flush replay would be rejected as stale on every
+    // flush forever, because the success path used to run no supersede (only the catch paths did).
+    // The successful batch covered every row that was dirty at snapshot time — a superset of any
+    // older queued batch's rows — so dropping queued copies with version <= serverV loses nothing.
+    supersedePendingBatch(serverV)
     // Only rows in the snapshot that weren't re-edited during the await are marked synced (can't do a wholesale markSyncedAll).
     // Recycle-bin rows (status==='delete' in memory) keep that status — but get the server version
     // stamped so they stop re-entering the dirty snapshot on every sync (P3 2026-09-12)
