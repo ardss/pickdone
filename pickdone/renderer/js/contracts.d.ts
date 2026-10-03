@@ -55,6 +55,7 @@ interface TodoAPI {
   closeRequest: (...args: any[]) => any
   deleteFile: (...args: any[]) => any
   deleteTodoFilesRelevant: (...args: any[]) => any
+  deleteTodoFilesMany: (...args: any[]) => any
   downloadUpdate: (...args: any[]) => any
   encryptSecret: (...args: any[]) => any
   ensureWindowWidth: (...args: any[]) => any
