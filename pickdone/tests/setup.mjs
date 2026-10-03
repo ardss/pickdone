@@ -49,7 +49,11 @@ if (!globalThis.localStorage) {
   const mem = new Map()
   globalThis.localStorage = {
     getItem: k => (mem.has(k) ? mem.get(k) : null),
-    setItem: (k, v) => mem.set(k, String(v)),
-    removeItem: k => mem.delete(k)
+    setItem: (k, v) => mem.set(String(k), String(v)),
+    removeItem: k => mem.delete(k),
+    // TQ-2: the pending-queue mirror is per-entry keys enumerated by prefix, so the stub must
+    // expose the same enumeration surface as a browser LS (length + key(i)).
+    get length () { return mem.size },
+    key (i) { return Array.from(mem.keys())[i] != null ? Array.from(mem.keys())[i] : null }
   }
 }

@@ -247,49 +247,110 @@ let _flushHooked = false
 /** maint/d11-r3: the retry queues are now crash-proof. They used to be pure memory arrays — a quit
  *  flush that still failed (main-process quit-ack caps at 2s then closes the db, so the in-flight
  *  dbCall rejects) or a renderer crash dropped every queued entry with the process, and the
- *  "replayed on the next ledger write" promise could never be kept. Both queues now mirror to
- *  localStorage ({v, seq, ts, ...entry}), hydrate at module load, and replay on the next write or
- *  quit-flush exactly as before. Removal on success re-saves, so the LS copy always tracks memory. */
-const PENDING_LEDGER_KEY = 'tomatoPendingLedger'
-const PENDING_SNOW_KEY = 'tomatoPendingSnow'
+ *  "replayed on the next ledger write" promise could never be kept. Both queues mirror to
+ *  localStorage, hydrate at module load, and replay on the next write or quit-flush exactly as
+ *  before. TQ-2 (2026-10-03) root fix: the mirror is PER-ENTRY (`<prefix><uid>` keys), not two
+ *  whole blobs. The old savePendingQueues rewrote the ENTIRE blob from the calling process's
+ *  private array — last-writer-wins — and this module loads in TWO same-origin renderer processes
+ *  (main window + float window) with no re-sync after hydrate, so each writer's save erased every
+ *  peer entry it didn't hold: a float-enqueued entry died with the float's crash even though the
+ *  "crash-proof" mirror still held the main window's blob. Per-entry keys make every write
+ *  put-own-key and every settlement delete-own-key; a peer can no longer erase what it never
+ *  saw. The uid is a random suffix, deliberately NOT the process-local nextPendingSeq — a fresh
+ *  process allocating the same seq would recreate the collision in narrower form. LS keys need no
+ *  ordering; hydrate revives entries and replay order follows seq/ts as before. */
+const PENDING_LEDGER_PREFIX = 'tomatoPendingLedger.'
+const PENDING_SNOW_PREFIX = 'tomatoPendingSnow.'
+// Legacy whole-blob keys (pre per-entry mirror): read once at hydrate, migrated, then removed.
+const LEGACY_LEDGER_KEY = 'tomatoPendingLedger'
+const LEGACY_SNOW_KEY = 'tomatoPendingSnow'
 const PENDING_QUEUE_V = 1
 let _pendingSeq = 0
 function nextPendingSeq () { _pendingSeq += 1; return _pendingSeq }
-function savePendingQueues () {
-  const pack = (entries, keep) => ({ v: PENDING_QUEUE_V, entries: entries.map(keep) })
-  safeSet(PENDING_LEDGER_KEY, JSON.stringify(pack(_pendingLedger, e => ({ seq: e.seq, ts: e.ts, op: e.op, params: e.params }))))
-  safeSet(PENDING_SNOW_KEY, JSON.stringify(pack(_pendingSnow, e => ({ seq: e.seq, ts: e.ts, params: e.params }))))
+function newPendingUid () {
+  return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10)
 }
-function hydratePendingQueue (key, revive) {
-  // maint/d11-r4: parse failures degrade (corrupt blob → start empty + log); revive failures
-  // propagate. The old single try/catch around both mislabeled any revive bug as a corrupt blob
-  // and silently swallowed it — a real code bug looked exactly like expected degradation.
-  let v
+const packLedgerEntry = e => ({ uid: e.uid, seq: e.seq, ts: e.ts, op: e.op, params: e.params })
+const packSnowEntry = e => ({ uid: e.uid, seq: e.seq, ts: e.ts, params: e.params })
+/** Put-own-key write: writes ONLY this entry's key (TQ-2) through the RAW, throwing primitive —
+ *  the mirror is a durability asset, so a storage failure must be loud, never a swallowed boolean
+ *  (TQ-6; the old safeSet's return value had zero consumers, so a failed mirror write retired
+ *  entries that existed nowhere). */
+function savePendingEntry (entry, prefix, pack) {
+  localStorage.setItem(prefix + entry.uid, JSON.stringify({ v: PENDING_QUEUE_V, entry: pack(entry) }))
+}
+/** Delete-own-key settlement. Failure here is benign-by-construction: an orphan blob revives an
+ *  entry whose op already landed in the DB, and every ledger/snow op is idempotent (deterministic
+ *  tomatoId / dedupKey), so the replay converges instead of double-writing. Loud, not silent. */
+function removePendingEntry (entry, prefix) {
+  try { localStorage.removeItem(prefix + entry.uid) } catch (e) {
+    console.error('[tomato] failed to clear the LS mirror of a settled queue entry:', prefix + entry.uid, e)
+  }
+}
+function listPrefixKeys (prefix) {
+  const keys = []
   try {
-    v = JSON.parse(localStorage.getItem(key))
-  } catch (e) {
-    console.error('[tomato] pending queue "' + key + '" is corrupt, starting empty:', e)
+    const n = localStorage.length
+    for (let i = 0; i < n; i++) {
+      const k = localStorage.key(i)
+      if (k && k.indexOf(prefix) === 0) keys.push(k)
+    }
+  } catch (e) { /* no storage: nothing to hydrate */ }
+  return keys
+}
+function hydratePendingQueue (prefix, legacyKey, revive, pack) {
+  // Per-entry hydrate: each key carries exactly one entry; a corrupt/unknown entry degrades to
+  // dropping THAT key (logged) without poisoning the peer entries. maint/d11-r4 contract kept:
+  // parse/shape failures log, revive failures propagate (a code bug must not masquerade as rot).
+  for (const k of listPrefixKeys(prefix)) {
+    let raw = null
+    try { raw = localStorage.getItem(k) } catch (e) { /* unreadable key: skip, keep bytes */ continue }
+    let v = null
+    let corrupt = false
+    try { v = JSON.parse(raw) } catch (e) { corrupt = true }
+    if (!corrupt && (!v || typeof v !== 'object' || v.v !== PENDING_QUEUE_V || !v.entry || typeof v.entry !== 'object')) corrupt = true
+    if (corrupt) {
+      console.error('[tomato] pending queue entry "' + k + '" is corrupt, starting without it')
+      try { localStorage.removeItem(k) } catch { /* bytes stay; re-logged next boot */ }
+      continue
+    }
+    const e = revive(v.entry)
+    if (!e) { try { localStorage.removeItem(k) } catch { /* unusable payload stays for inspection */ } }
+  }
+  // One-time migration of the legacy whole-blob mirror: split into per-entry keys, then drop the
+  // blob key. A blob that fails to parse is removed as part of the degrade (logged) so it cannot
+  // resurrect stale entries after its entries were migrated by an earlier boot.
+  let legacyRaw = null
+  try { legacyRaw = localStorage.getItem(legacyKey) } catch (e) { return }
+  if (legacyRaw == null) return
+  let v = null
+  try { v = JSON.parse(legacyRaw) } catch (e) {
+    console.error('[tomato] pending queue "' + legacyKey + '" is corrupt, starting empty:', e)
+    try { localStorage.removeItem(legacyKey) } catch { /* keep bytes */ }
     return
   }
+  try { localStorage.removeItem(legacyKey) } catch { /* leave; migration is idempotent */ }
   if (!v || typeof v !== 'object' || v.v !== PENDING_QUEUE_V || !Array.isArray(v.entries)) return
-  for (const raw of v.entries) {
-    const e = revive(raw)
-    if (!e) continue
-    if (typeof e.seq === 'number' && e.seq > _pendingSeq) _pendingSeq = e.seq
+  for (const rawEntry of v.entries) {
+    const withUid = Object.assign({}, rawEntry, { uid: rawEntry && typeof rawEntry.uid === 'string' && rawEntry.uid ? rawEntry.uid : newPendingUid() })
+    const e = revive(withUid)
+    if (e) savePendingEntry(e, prefix, pack)
   }
 }
 /** Startup hydration: entries queued in a previous process life come back (seq/ts stamped at enqueue
  *  time), then replay through the normal ledgerWrite/snowWrite paths. */
-hydratePendingQueue(PENDING_LEDGER_KEY, raw => {
+hydratePendingQueue(PENDING_LEDGER_PREFIX, LEGACY_LEDGER_KEY, raw => {
   if (!raw || typeof raw !== 'object' || typeof raw.op !== 'string' || !raw.params) return null
-  _pendingLedger.push({ op: raw.op, params: raw.params, seq: typeof raw.seq === 'number' ? raw.seq : nextPendingSeq(), ts: typeof raw.ts === 'number' ? raw.ts : Date.now() })
+  if (typeof raw.seq === 'number' && raw.seq > _pendingSeq) _pendingSeq = raw.seq // seq stays monotonic across restarts
+  _pendingLedger.push({ op: raw.op, params: raw.params, seq: typeof raw.seq === 'number' ? raw.seq : nextPendingSeq(), ts: typeof raw.ts === 'number' ? raw.ts : Date.now(), uid: typeof raw.uid === 'string' && raw.uid ? raw.uid : newPendingUid() })
   return _pendingLedger[_pendingLedger.length - 1]
-})
-hydratePendingQueue(PENDING_SNOW_KEY, raw => {
+}, packLedgerEntry)
+hydratePendingQueue(PENDING_SNOW_PREFIX, LEGACY_SNOW_KEY, raw => {
   if (!raw || typeof raw !== 'object' || !raw.params) return null
-  _pendingSnow.push({ params: raw.params, seq: typeof raw.seq === 'number' ? raw.seq : nextPendingSeq(), ts: typeof raw.ts === 'number' ? raw.ts : Date.now() })
+  if (typeof raw.seq === 'number' && raw.seq > _pendingSeq) _pendingSeq = raw.seq
+  _pendingSnow.push({ params: raw.params, seq: typeof raw.seq === 'number' ? raw.seq : nextPendingSeq(), ts: typeof raw.ts === 'number' ? raw.ts : Date.now(), uid: typeof raw.uid === 'string' && raw.uid ? raw.uid : newPendingUid() })
   return _pendingSnow[_pendingSnow.length - 1]
-})
+}, packSnowEntry)
 /** H1 (2026-09-16): the db layer's tomatoAppendMany now returns a row-tolerant {accepted,rejected}
  *  result; rejected rows (missing tomatoId/endTime etc.) used to vanish silently — report each per contract. */
 function logRejectedRows (res, params) {
@@ -312,7 +373,10 @@ function purgePendingAppends (ids) {
     const e = _pendingLedger[i]
     if (!e || e.op !== 'tomatoAppendMany') continue
     const recs = Array.isArray(e.params) ? e.params : [e.params]
-    if (recs.some(r => r && dead.has(r.tomatoId))) { _pendingLedger.splice(i, 1); savePendingQueues() }
+    if (recs.some(r => r && dead.has(r.tomatoId))) {
+      _pendingLedger.splice(i, 1)
+      removePendingEntry(e, PENDING_LEDGER_PREFIX) // TQ-2: delete-own-key (a peer's entries are untouched)
+    }
   }
 }
 
@@ -349,7 +413,10 @@ function settleLedgerEntry (entry, res) {
   if (!res) return // not handed to a bridge / falsy resolution: still pending, keep for retry
   quarantineRejectedRows(res, entry.params)
   const i = _pendingLedger.indexOf(entry)
-  if (i >= 0) { _pendingLedger.splice(i, 1); savePendingQueues() }
+  if (i >= 0) {
+    _pendingLedger.splice(i, 1)
+    removePendingEntry(entry, PENDING_LEDGER_PREFIX) // TQ-2: delete-own-key
+  }
   if (entry.op === 'tomatoRemoveByIds') purgePendingAppends(entry.params)
 }
 function replayPendingLedger () {
@@ -360,9 +427,9 @@ function replayPendingLedger () {
   }
 }
 function ledgerWrite (op, params) {
-  const entry = { op, params, seq: nextPendingSeq(), ts: Date.now() }
+  const entry = { op, params, seq: nextPendingSeq(), ts: Date.now(), uid: newPendingUid() }
   _pendingLedger.push(entry)
-  savePendingQueues()
+  savePendingEntry(entry, PENDING_LEDGER_PREFIX, packLedgerEntry) // TQ-2: put-own-key mirror
   // Retry queue: replay any still-pending entries (incl. this one) before/with the new write
   replayPendingLedger()
   hookQuitFlush()
@@ -406,7 +473,10 @@ function hookQuitFlush () {
 function settleSnowEntry (entry, res) {
   if (res && res.ok === true) {
     const i = _pendingSnow.indexOf(entry)
-    if (i >= 0) { _pendingSnow.splice(i, 1); savePendingQueues() }
+    if (i >= 0) {
+      _pendingSnow.splice(i, 1)
+      removePendingEntry(entry, PENDING_SNOW_PREFIX) // TQ-2: delete-own-key
+    }
     return
   }
   console.error('[tomato] bumpSnow not credited (kept for retry):', (res && res.reason) || String(res), entry.params)
@@ -419,8 +489,9 @@ function replayPendingSnow () {
   }
 }
 function snowWrite (params) {
-  _pendingSnow.push({ params, seq: nextPendingSeq(), ts: Date.now() })
-  savePendingQueues()
+  const entry = { params, seq: nextPendingSeq(), ts: Date.now(), uid: newPendingUid() }
+  _pendingSnow.push(entry)
+  savePendingEntry(entry, PENDING_SNOW_PREFIX, packSnowEntry) // TQ-2: put-own-key mirror
   replayPendingSnow()
   hookQuitFlush()
 }

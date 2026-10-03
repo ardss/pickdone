@@ -90,11 +90,22 @@ LS.setItem('tomatoPendingSnow', JSON.stringify({ v: 1, entries: [
 
 const tomato = (await import('../../../renderer/js/store/tomato.js')).default
 
+// TQ-2: per-entry mirror — collect entries by prefix scan (legacy whole-blob seeds are migrated at hydrate)
 const pendingLedgerEntries = () => {
-  try { return (JSON.parse(LS.getItem('tomatoPendingLedger')) || { entries: [] }).entries } catch (e) { return [] }
+  const out = []
+  for (let i = 0; i < LS.length; i++) {
+    const k = LS.key(i)
+    if (k && k.indexOf('tomatoPendingLedger.') === 0) { try { out.push(JSON.parse(LS.getItem(k)).entry) } catch (e) { /* skip */ } }
+  }
+  return out
 }
 const pendingSnowEntries = () => {
-  try { return (JSON.parse(LS.getItem('tomatoPendingSnow')) || { entries: [] }).entries } catch (e) { return [] }
+  const out = []
+  for (let i = 0; i < LS.length; i++) {
+    const k = LS.key(i)
+    if (k && k.indexOf('tomatoPendingSnow.') === 0) { try { out.push(JSON.parse(LS.getItem(k)).entry) } catch (e) { /* skip */ } }
+  }
+  return out
 }
 
 /* ==================== C1: ledger queue keeps/quarantines on non-accepted results ==================== */

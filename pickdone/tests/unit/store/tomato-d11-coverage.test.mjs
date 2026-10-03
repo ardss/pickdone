@@ -370,10 +370,17 @@ test('ledger retry queue: a failed remove keeps queueing, a later success purges
   } })
   globalThis.localStorage.removeItem('tomatoPendingLedger')
   const { state } = makeCtx({ tomatoRecordList: [{ tomatoId: 'seed' }] })
+  // TQ-2: per-entry mirror keys (tomatoPendingLedger.<uid>) — assert SYNCHRONOUSLY at enqueue,
+  // before the replay settles the (db-accepted) entry and deletes its own key.
   tomato.mutations.addRecord(state, { tomatoId: 'k1', endTime: 1 })
+  const lsNow = globalThis.localStorage
+  let mirrored = false
+  for (let i = 0; i < lsNow.length; i++) {
+    const k = lsNow.key(i)
+    if (k && k.indexOf('tomatoPendingLedger.') === 0) { mirrored = true; break }
+  }
+  assert.ok(mirrored, 'addRecord mirrors its ledger entry to a per-entry LS key')
   await new Promise(r => setTimeout(r, 20))
-  const ledgerAfterAdd = JSON.parse(globalThis.localStorage.getItem('tomatoPendingLedger'))
-  assert.ok(Array.isArray(ledgerAfterAdd.entries), 'addRecord mirrors its ledger entry to LS')
 
   tomato.mutations.removeRecord(state, 'k1') // remove fails this round → stays queued
   await new Promise(r => setTimeout(r, 30))
