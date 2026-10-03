@@ -556,6 +556,32 @@ async function startSync () {
   log.info('[LanSync] node started for', deviceId)
 }
 
+/**
+ * S5 (2026-10-03): ONE restart path owning the fail-closed 'sync enabled ⇒ node listening'
+ * contract (the same invariant syncSetEnabledOp enforces via the startSync throw). The four
+ * pairing/rename restart sites in pair-ops previously used fire-and-forget startSync().catch(log)
+ * — a bind failure after a pairing/rename/unpair left K_ENABLED=true with state.node=null
+ * (the enabled-without-listening dead-toggle state the D2-c contract exists to prevent), and
+ * the failure was swallowed into log.error. Any future restart site routed through this helper
+ * inherits the invariant.
+ *
+ * preserveEnabled=false means the caller already knows sync is disabled (no restart at all);
+ * preserveEnabled=true awaits the start and, on failure, applies the same fail-closed rollback
+ * syncSetEnabledOp uses (K_ENABLED=false + renderer notify) and RETHROWS so the IPC op rejects
+ * like syncSetEnabledOp does.
+ */
+async function restartSync ({ preserveEnabled = true } = {}) {
+  await stopSync()
+  if (!preserveEnabled) return
+  try {
+    await startSync()
+  } catch (e) {
+    log.error('[LanSync] restart failed — sync stays OFF:', e.message)
+    try { settingPut(K_ENABLED, false); notifyRenderers('enabled-changed') } catch { /* rollback is best-effort; the rethrow still surfaces */ }
+    throw e
+  }
+}
+
 async function stopSync () {
   if (!state.node) return
   for (const t of state.timers) { clearTimeout(t); clearInterval(t) }
@@ -804,6 +830,7 @@ const { K_PEER_ALIAS_PREFIX, peerAliasOf, missingAttachmentKeys } = require('./l
 const pairOps = require('./lan-sync/pair-ops')({
   getState: () => state, settingGet, settingPut, busWrite, getSettingsPayload, ensureIdentity,
   stopSync, startSync, runRound, persistPeerWatermarks, persistPairedPeer, removePairedPeer,
+  restartSync, // S5: one fail-closed restart path for every pairing/rename/unpair restart site
   manualPeers, loadPeerWatermarks, notifyRenderers, emitSyncEvent,
   K_PAIRING_SECRET, K_DEVICE_NAME, K_MANUAL_PEERS, K_PEER_WATERMARKS, K_ENABLED,
   K_PEER_ALIAS_PREFIX, PAIRING_CODE_TTL_MS, DEFAULT_PORT, log,
@@ -926,6 +953,10 @@ module.exports.__test = {
   // P1-4/P1-6 test surface: stop ordering (engine alive until the node stopped) + watermark
   // invalidation (recovery path clears persisted per-peer progress).
   stopSync,
+  // S5 test surface: the ONE fail-closed restart path + the pair-ops handlers that route
+  // through it (bind-failure rollback / op-rejection contract).
+  restartSync,
+  pairOps,
   invalidateSyncWatermarks,
   // Round-2 P1 test surface: peer alias op registration + live-todo attachment key collection.
   registerOps,

@@ -7,6 +7,7 @@ const { generatePairingSecret, derivePairingCode } = require('../../../shared/sy
 
 module.exports = ({ getState, settingGet, settingPut, busWrite, getSettingsPayload, ensureIdentity,
   stopSync, startSync, runRound, persistPeerWatermarks, persistPairedPeer, removePairedPeer,
+  restartSync, // S5: the ONE fail-closed restart path (bootstrap) — awaited everywhere below
   manualPeers, loadPeerWatermarks, notifyRenderers, emitSyncEvent,
   K_PAIRING_SECRET, K_DEVICE_NAME, K_MANUAL_PEERS, K_PEER_WATERMARKS, K_ENABLED,
   K_PEER_ALIAS_PREFIX, PAIRING_CODE_TTL_MS, DEFAULT_PORT, log }) => {
@@ -69,9 +70,9 @@ module.exports = ({ getState, settingGet, settingPut, busWrite, getSettingsPaylo
     if (state.node && typeof state.node.notifyUnpaired === 'function') {
       try { const notified = state.node.notifyUnpaired(deviceId); log.info('[LanSync] unpaired notify to', deviceId, notified ? 'delivered' : 'no live connection (peer will discover via auth rejection)') } catch (e) { log.warn('[LanSync] unpaired notify failed:', e.message) }
     }
-    await stopSync()
-    // D2-c: startSync is async/fail-closed now — log a bind failure instead of an unhandled rejection.
-    if (settingGet(K_ENABLED) === true) startSync().catch(e => log.error('[LanSync] restart after unpair failed:', e.message))
+    // S5: the restart owns the fail-closed contract — only restart while sync is enabled, and a
+    // failed bind rolls K_ENABLED back to false and REJECTS (never enabled-with-node-null).
+    await restartSync({ preserveEnabled: settingGet(K_ENABLED) === true })
     notifyRenderers('peer-unpaired')
     emitSyncEvent('peer-unpaired', { deviceId, host })
     log.info('[LanSync] unpaired', deviceId, '- shared secret revoked (all peers must re-pair)')
@@ -94,8 +95,9 @@ module.exports = ({ getState, settingGet, settingPut, busWrite, getSettingsPaylo
     }
     log.info('[LanSync] paired with peer', r.peer && r.peer.deviceId, '- shared secret adopted, restarting node')
     state.pairingCode = null // consumed; issue a fresh code on next click
-    await stopSync()
-    startSync().catch(e => log.error('[LanSync] restart after pairing failed:', e.message))
+    // S5: awaited + fail-closed — a bind failure after pairing surfaces to the renderer as a
+    // rejected pairing op with sync OFF, not as a silent dead toggle.
+    await restartSync({ preserveEnabled: true })
     runRound().then(persistPeerWatermarks)
     return { ...getSettingsPayload(), peer: r.peer }
   }
@@ -128,8 +130,8 @@ module.exports = ({ getState, settingGet, settingPut, busWrite, getSettingsPaylo
     settingPut(K_PAIRING_SECRET, String(r.secret))
     if (r.deviceId) persistPairedPeer({ deviceId: r.deviceId, host: r.host, port: r.port, secret: r.secret })
     log.info('[LanSync] two-way pairing accepted by', host, '- shared secret adopted, restarting node')
-    await stopSync()
-    startSync().catch(e => log.error('[LanSync] restart after pairing failed:', e.message))
+    // S5: awaited + fail-closed (same contract as syncPairWithCode above).
+    await restartSync({ preserveEnabled: true })
     runRound().then(persistPeerWatermarks)
     return { ...getSettingsPayload(), host: r.host, port: r.port }
   }
@@ -156,12 +158,14 @@ module.exports = ({ getState, settingGet, settingPut, busWrite, getSettingsPaylo
     return state.pairingCode
   }
 
-  const syncSetName = p => {
+  const syncSetName = async p => {
     const name = String((p && p.name) || '').trim().slice(0, 40)
     if (!name) throw new Error('syncSetName: name is required')
     settingPut(K_DEVICE_NAME, name)
     if (getState().node) { // advertising payload carries the name: restart to re-broadcast
-      stopSync().then(() => { if (settingGet(K_ENABLED) === true) return startSync() }).catch(e => log.error('[LanSync] restart after rename failed:', e.message))
+      // S5: the restart is awaited and fail-closed — a bind failure rolls sync OFF and rejects
+      // the rename op instead of reporting enabled with a dead node.
+      await restartSync({ preserveEnabled: settingGet(K_ENABLED) === true })
     }
     return getSettingsPayload()
   }
