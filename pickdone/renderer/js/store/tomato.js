@@ -76,11 +76,14 @@ const CLAIM_KEY = 'tomatoLastPhaseDone'
  *  claim. The main-process CAS returns an owner token; release only deletes on a token match.
  *  A localStorage fallback (same single-window semantics as before) survives only where no
  *  main-process bridge exists (browser hosts / plain-node tests) — never in the desktop app. */
-function claimPhase (status, startedAt) {
+async function claimPhase (status, startedAt) {
   const phase = status + ':' + (startedAt || 0)
   try {
     if (window.todoAPI && window.todoAPI.tomatoClaimPhase) {
-      const res = window.todoAPI.tomatoClaimPhase(phase)
+      // The bridge is ipcRenderer.invoke — ASYNC. Reading its return synchronously saw a Promise
+      // (always truthy, `.won` undefined) and lost every claim, so completeFocus/finishRest/giveUp
+      // aborted at the claim gate forever (2026-10-04 ui-smoke catch). Await the CAS result.
+      const res = await window.todoAPI.tomatoClaimPhase(phase)
       return (res && res.won) ? { phase, token: res.token } : null
     }
   } catch (e) { /* bridge failure falls through to the LS fallback; losing the claim is the safe side */ }
@@ -479,7 +482,7 @@ export default {
       reportRunningTransition('start', state) // TQ-1: durable row (main + float windows both report)
       announceCrossDevice(this, 'running')
     },
-    giveUp ({ state, commit, dispatch }, { record = true, reason = '' } = {}) {
+    async giveUp ({ state, commit, dispatch }, { record = true, reason = '' } = {}) {
       let s = state
       // 本窗副本陈旧防改:本窗为 default 而共享 LS 显示专注进行中(他窗启动、storage 事件未达)时,
       // 旧写法会走到底部盲写 default 归零,把他窗正在进行的专注瞬态杀掉且零记录(2026-09-04 二轮深审 P1)
@@ -496,7 +499,7 @@ export default {
       const running = s.status === 'startTomatoTime' && s.startedAt
       // Cross-window claim: when the user clicks "give up" at the exact expiry moment while the shared tick is completing, only the side that claimed first records (prevents succeed+abandon double records for the same focus)
       const claim = running && record
-        ? claimPhase('startTomatoTime', s.startedAt)
+        ? await claimPhase('startTomatoTime', s.startedAt)
         : {}
       if (running && record && !claim) {
         // 已被他窗完成/认领:不能盲写 default 归零——他窗此刻可能已进入休息(浮窗显示滞后 ≤1 拍的经典竞态),
@@ -531,7 +534,7 @@ export default {
       // State precheck (mirrors startFocus): an anomalous call with no running focus must not mint a free tomato
       if (s.status !== 'startTomatoTime' || !s.startedAt) return
       // Idempotency token: only one set of side effects per focus. Cross-window claim (including the give-up side) + deterministic id as double insurance
-      const claim = claimPhase('startTomatoTime', s.startedAt)
+      const claim = await claimPhase('startTomatoTime', s.startedAt)
       if (!claim) return
       // G1: once claimed, any failure between here and addRecord/saveSnowGain would otherwise leave the
       // phase permanently claimed with no record — the tomato is lost with no retry possible. On failure
@@ -621,8 +624,8 @@ export default {
         console.error('[tomato] completeFocus failed after claiming; claim released for retry:', e)
       }
     },
-    finishRest ({ state, commit }) {
-      const claim = claimPhase('startRestTime', state.startedAt)
+    async finishRest ({ state, commit }) {
+      const claim = await claimPhase('startRestTime', state.startedAt)
       if (!claim) return
       if (state.enableNotification !== false) { try { window.todoAPI.notification({ title: tt('statsA.core.restOverTitle'), body: tt('statsA.core.restOverBody') }) } catch (e) { /* locked screen rejects the channel — fire-and-forget */ } }
       commit('patch', { status: 'default', startedAt: 0, remainSec: state.tomatoTime * 60 })

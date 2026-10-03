@@ -31,23 +31,23 @@ function makeCtx (statePatch = {}) {
   return { ctx, state }
 }
 
-test('giveUp: 本窗陈旧 default、他窗已进入休息时,跟随共享休息态而不是杀掉它', () => {
+test('giveUp: 本窗陈旧 default、他窗已进入休息时,跟随共享休息态而不是杀掉它', async () => {
   globalThis.localStorage.removeItem(CLAIM_KEY)
   const restStartedAt = Date.now() - 30000 // 休息进行中(5 分钟休息刚开 30s)
   seedShared({ status: 'startRestTime', startedAt: restStartedAt, tomatoTime: 25, restTime: 5, remainSec: 270 })
   const { ctx, state } = makeCtx() // 本窗副本还是 default(storage 事件未达)
-  tomato.actions.giveUp(ctx, { record: true, reason: '想取消专注' })
+  await tomato.actions.giveUp(ctx, { record: true, reason: '想取消专注' })
   assert.equal(state.status, 'startRestTime', '刚开的休息不被盲写 default 杀掉')
   assert.equal(state.startedAt, restStartedAt, '跟随共享 startedAt')
   assert.equal(state.tomatoRecordList.length, 0, '休息期 giveUp 不产生任何账目')
 })
 
-test('giveUp: 本窗陈旧 default、他窗专注进行中时,原 startTomatoTime 分支行为保留(记放弃账)', () => {
+test('giveUp: 本窗陈旧 default、他窗专注进行中时,原 startTomatoTime 分支行为保留(记放弃账)', async () => {
   globalThis.localStorage.removeItem(CLAIM_KEY)
   const startedAt = Date.now() - 10 * 60000
   seedShared({ status: 'startTomatoTime', startedAt, tomatoTime: 25, restTime: 5 })
   const { ctx, state } = makeCtx()
-  tomato.actions.giveUp(ctx, { record: true, reason: '测试' })
+  await tomato.actions.giveUp(ctx, { record: true, reason: '测试' })
   assert.equal(state.tomatoRecordList.length, 1)
   assert.equal(state.tomatoRecordList[0].tomatoId, 'tmt_a_' + startedAt)
   assert.equal(state.tomatoRecordList[0].succeed, false)

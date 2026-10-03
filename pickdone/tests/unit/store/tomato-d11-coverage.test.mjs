@@ -204,30 +204,30 @@ test('actions.tick completes an expired focus and finishes an expired rest', () 
   assert.deepEqual(b.dispatched.map(d => d[0]), ['finishRest'])
 })
 
-test('actions.finishRest: claims once, honors the notification gate, returns to default', () => {
+test('actions.finishRest: claims once, honors the notification gate, returns to default', async () => {
   globalThis.localStorage.removeItem('tomatoLastPhaseDone')
   const notifs = []
   freshApi({ notification: n => notifs.push(n) })
   const a = makeCtx({ status: 'startRestTime', startedAt: 42, enableNotification: true, tomatoTime: 25 })
-  tomato.actions.finishRest(a.ctx)
+  await tomato.actions.finishRest(a.ctx)
   assert.equal(a.state.status, 'default')
   assert.equal(a.state.startedAt, 0)
   assert.equal(a.state.remainSec, 25 * 60)
   assert.equal(notifs.length, 1)
   // second window in the same phase loses the claim
   const b = makeCtx({ status: 'startRestTime', startedAt: 42, enableNotification: true })
-  tomato.actions.finishRest(b.ctx)
+  await tomato.actions.finishRest(b.ctx)
   assert.equal(notifs.length, 1, 'same-phase claim blocks double notification')
   globalThis.localStorage.removeItem('tomatoLastPhaseDone')
 })
 
-test('actions.giveUp: follows a peer that already entered rest; books a measured abandon when recording; record=false cancels silently', () => {
+test('actions.giveUp: follows a peer that already entered rest; books a measured abandon when recording; record=false cancels silently', async () => {
   globalThis.localStorage.removeItem('tomatoLastPhaseDone')
   freshApi()
   // local copy is default but the shared LS shows rest running → must not blind-write default
   globalThis.localStorage.setItem('tomatoState', JSON.stringify({ status: 'startRestTime', startedAt: Date.now(), tomatoTime: 25, restTime: 5, schemaV: 1 }))
   const a = makeCtx({ status: 'default', startedAt: 0 })
-  tomato.actions.giveUp(a.ctx, { record: true })
+  await tomato.actions.giveUp(a.ctx, { record: true })
   assert.equal(a.state.status, 'startRestTime', 'giveUp follows the peer rest phase instead of killing it')
 
   // claimed abandon records succeed:false with measured minutes and abandonReason
@@ -235,7 +235,7 @@ test('actions.giveUp: follows a peer that already entered rest; books a measured
   const startedAt = Date.now() - 3 * 60_000 - 30_000 // 3.5 minutes ago
   const b = makeCtx({ status: 'startTomatoTime', startedAt, attachTodo: { taskId: 't1', taskContent: 'w' } },
     { rootState: { todo: { todoList: [{ taskId: 't1', taskContent: 'w' }], recycleList: [] } } })
-  tomato.actions.giveUp.call({ rootState: b.ctx.rootState }, b.ctx, { record: true, reason: '  interrupted  ' })
+  await tomato.actions.giveUp.call({ rootState: b.ctx.rootState }, b.ctx, { record: true, reason: '  interrupted  ' })
   const rec = b.state.tomatoRecordList.find(r => r.tomatoId === 'tmt_a_' + startedAt)
   assert.ok(rec, 'abandon record booked with deterministic id')
   assert.equal(rec.succeed, false)
@@ -253,14 +253,14 @@ test('actions.giveUp: follows a peer that already entered rest; books a measured
   globalThis.localStorage.removeItem('tomatoLastPhaseDone')
 })
 
-test('actions.giveUp: a lost cross-window claim follows the shared state instead of double-booking', () => {
+test('actions.giveUp: a lost cross-window claim follows the shared state instead of double-booking', async () => {
   // Simulate the other window having already claimed + completed this phase: LS claim matches,
   // and the shared blob already moved on to rest.
   const startedAt = Date.now() - 60_000
   globalThis.localStorage.setItem('tomatoLastPhaseDone', 'startTomatoTime:' + startedAt)
   globalThis.localStorage.setItem('tomatoState', JSON.stringify({ status: 'startRestTime', startedAt: Date.now(), tomatoTime: 25, restTime: 5, schemaV: 1, phaseTs: Date.now() }))
   const a = makeCtx({ status: 'startTomatoTime', startedAt, tomatoRecordList: [] })
-  tomato.actions.giveUp(a.ctx, { record: true })
+  await tomato.actions.giveUp(a.ctx, { record: true })
   assert.equal(a.state.tomatoRecordList.length, 0, 'no abandon record when the phase was already claimed')
   assert.equal(a.state.status, 'startRestTime', 'follows the peer state')
   globalThis.localStorage.removeItem('tomatoLastPhaseDone')

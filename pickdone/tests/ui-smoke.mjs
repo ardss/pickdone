@@ -308,7 +308,9 @@ await gotoHash('#/todo-list/calendar', '.cal-seg button')
 await send('Runtime.evaluate', { expression: `[...document.querySelectorAll('.cal-seg button')].find(b => b.textContent.trim() === 'Time blocks')?.click()` })
 for (let i = 0; i < 30; i++) { await sleep(1000); if (await evalJson(`document.querySelectorAll('.cal-tb__cell').length > 0`)) break } // 10s→30s:并行满载下 FC 网格首渲染可超 10s(2026-09-25 check:all 实锤 got 0)
 const tb = await evalJson(`({cells: document.querySelectorAll('.cal-tb__cell').length, pool: !!document.querySelector('.cal-tb__pool')})`)
-ok('time blocks: 7 days x 18 hours = 126 cells', tb.cells === 126, 'got ' + tb.cells)
+// D15 A1 (2026-10-03): the time-block grid renders the full 0-23 day (TB_HOURS contract in
+// calendarBuckets.js) — a task scheduled 00:00-05:59 used to vanish from the view entirely.
+ok('time blocks: 7 days x 24 hours = 168 cells', tb.cells === 168, 'got ' + tb.cells)
 ok('time blocks: unscheduled task pool exists', tb.pool)
 // Month-view ‹/› pagination: both the internal date and the visible grid must keep up (regression defense: Vue's reactive proxy wrapping the FC instance made renders never reach the DOM)
 await gotoHash('#/todo-list/calendar', '.cal-nav-group button')
