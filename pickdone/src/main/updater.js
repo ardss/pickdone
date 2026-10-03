@@ -171,12 +171,21 @@ function downloadUpdate () {
   if (_manualDownload) return _manualDownload
   if (!isActive() || state.status !== 'available') return Promise.resolve(false)
   _manualDownload = (async () => {
+    // C5 (2026-10-02): the manual path set autoDownload=true and NEVER restored the user's
+    // opt-out — after one "Download now" the setting behaved as auto-download-on for the rest
+    // of the process (the next check() downloaded without consent until the settings toggle
+    // was re-saved). Capture the prior value and restore it in finally: success, failure and
+    // the idempotent-reentry path all leave the consent flag exactly as they found it.
+    const priorAutoDownload = autoUpdater.autoDownload !== false
     autoUpdater.autoDownload = true
     state.status = 'downloading'; broadcast()
     try { await autoUpdater.downloadUpdate(); return true } catch (e) {
       state.status = 'error'; state.info = { message: String(e && e.message || e).slice(0, 200) }; broadcast()
       return false
-    } finally { _manualDownload = null }
+    } finally {
+      _manualDownload = null
+      autoUpdater.autoDownload = priorAutoDownload
+    }
   })()
   return _manualDownload
 }

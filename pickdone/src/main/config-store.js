@@ -158,7 +158,18 @@ function writeConfig (patch) {
   }
   const exec = () => {
     // D6 P2 (2026-09-21): mergeConfig replaces Object.assign — prototype-pollution-safe (see above).
-    const c = mergeConfig(readConfig(), patch)
+    const base = readConfig()
+    // C3 (2026-10-02): the read-failure gate was consulted at writeConfig ENTRY only — the inner
+    // readConfig() can itself discover corruption mid-write (transient-IO budget exhausted, or a
+    // quarantine rename that fails) and set _readFailed, yet the old code persisted
+    // defaults+patch anyway, clobbering the very on-disk state the gate exists to protect.
+    // Re-consult the flag AFTER the inner read: bail with the same degrade contract as the
+    // entry gate (return null, write nothing, wait for a successful read to clear the gate).
+    if (_readFailed) {
+      console.warn('[config-store] writeConfig skipped: the pre-write readConfig failed (corruption/lock) — preserving on-disk state')
+      return null
+    }
+    const c = mergeConfig(base, patch)
     fs.mkdirSync(path.dirname(configFile()), { recursive: true })
     // Atomic write (tmp+rename) — main-ipc-2 fsync fix (2026-09-22): writeFileDurable adds an
     // fsync of the file data before the rename (and a best-effort dir fsync), so a power cut can

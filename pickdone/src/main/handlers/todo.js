@@ -11,6 +11,9 @@ const { evalFloatLedger } = require('../float-ledger')
 const { collectOwnedAttachmentFiles } = require('../attachment-ownership')
 const bus = require('../command-bus')
 
+// C6 (2026-10-02): see 'commands:commit' — one constant, one door.
+const COMMANDS_COMMIT_MAX = 1000
+
 module.exports = function todoHandlers (ctx) {
   const {
     isLocked, isLockWindow, getMainWindow,
@@ -277,6 +280,16 @@ module.exports = function todoHandlers (ctx) {
     // never attempted.
     'commands:commit': (e, batch) => {
       const list = Array.isArray(batch) ? batch : [batch]
+      // C6 (2026-10-02): the batch length was unbounded — a compromised/buggy renderer could
+      // hand the write door an arbitrarily large array and tie up the main process resolving
+      // + executing every entry. The legit surface (store/utils command-bus flushes) commits
+      // at most a handful of commands per round; 1000 is orders of magnitude above any real
+      // batch. Rejected with a coded error BEFORE any entry resolves (never a partial commit).
+      if (list.length > COMMANDS_COMMIT_MAX) {
+        const err = new Error('commands:commit batch too large: ' + list.length + ' > ' + COMMANDS_COMMIT_MAX)
+        err.code = 'TOO_LARGE'
+        throw err
+      }
       const rows = list.map(cmd => {
         const { entity, verb } = cmd || {}
         return bus.resolve(entity, verb) // throws USAGE on unknown commands (before ANY execution)

@@ -66,6 +66,16 @@ const PRE_AUTH_LINE_BYTES = 4 * 1024
 // Two-way confirmed pairing: an unanswered pair-request is auto-rejected after this window
 // (the pending decision dialog must not stay open forever). Injectable per server for tests.
 const PAIR_CONFIRM_TIMEOUT_MS = 60 * 1000
+// C4 (2026-10-02): per-reader caps bound ONE socket, but 64 concurrent (maxSockets) authenticated
+// sockets x the 32MB post-auth cap = a 2GB worst-case aggregate on the main process. This
+// per-process budget (shared by every live LineReader) bounds the TOTAL buffered line bytes:
+// when a feed pushes the aggregate past the cap, the OFFENDING socket (the one that just grew
+// the total) is closed and its bytes released. A single legitimate round (32MB) still fits.
+const LINE_BUFFER_BUDGET_BYTES = 64 * 1024 * 1024
+// Test seam: the cap is mutable (__setLineBufferBudget) so unit tests can exercise the
+// aggregate eviction without pushing gigabytes through a real socket. `total` is the live sum.
+const lineBufferState = { cap: LINE_BUFFER_BUDGET_BYTES, total: 0 }
+function __setLineBufferBudget (bytes) { lineBufferState.cap = bytes }
 // Wave-B P2-1: post-auth idle timeout. The pre-auth 30s timer is DISARMED at hello-ack (snapshot
 // builds can sit silent), but with no replacement an authenticated socket whose peer vanished
 // (sleep, Wi-Fi drop, crash without FIN) held its maxSockets slot forever — 64 zombies plugged
@@ -102,8 +112,23 @@ class LineReader {
     this.socket = socket
     this.onMessage = onMessage
     this.onError = onError
+    // C4: join the per-process aggregate buffer budget (see LINE_BUFFER_BUDGET_BYTES).
+    // `_accountedBytes` mirrors how much of this reader's buffer is currently counted in the
+    // process-wide total, so every early-return path (over-limit destroy mid-feed included)
+    // reconciles exactly and the socket-close release subtracts only what is outstanding.
+    this._accountedBytes = 0
+    socket.on('close', () => {
+      lineBufferState.total -= this._accountedBytes
+      this._accountedBytes = 0
+    })
     socket.setEncoding('utf8')
     socket.on('data', (chunk) => this.#feed(chunk))
+  }
+
+  /** Sync the process-wide total with this reader's current buffer size. */
+  #account() {
+    lineBufferState.total += this.bufferBytes - this._accountedBytes
+    this._accountedBytes = this.bufferBytes
   }
 
   setLimit(limit) {
@@ -112,6 +137,7 @@ class LineReader {
   }
 
   #overLimit() {
+    this.#account()
     this.onError(new ProtocolError(`line exceeds ${this.limit} byte cap`))
     this.socket.destroy()
   }
@@ -125,6 +151,7 @@ class LineReader {
       const line = this.buffer.slice(0, idx)
       this.buffer = this.buffer.slice(idx + 1)
       this.bufferBytes -= Buffer.byteLength(line, 'utf8') + 1 // + the consumed '\n'
+      this.#account()
       if (Buffer.byteLength(line, 'utf8') > this.limit) {
         this.#overLimit()
         return
@@ -133,12 +160,20 @@ class LineReader {
       try {
         this.onMessage(JSON.parse(line))
       } catch (err) {
+        this.#account()
         this.onError(new ProtocolError(`bad JSON line: ${err.message}`))
         this.socket.destroy()
         return
       }
     }
-    if (this.bufferBytes > this.limit) this.#overLimit()
+    if (this.bufferBytes > this.limit) { this.#overLimit(); return }
+    // C4: aggregate-budget gate — when the process-wide buffered total crosses the cap, the
+    // offending reader's socket is closed (its bytes are released on the 'close' handler).
+    this.#account()
+    if (lineBufferState.total > lineBufferState.cap) {
+      this.onError(new ProtocolError(`aggregate line-buffer budget exceeded (${lineBufferState.total} > ${lineBufferState.cap} bytes)`))
+      this.socket.destroy()
+    }
   }
 }
 
@@ -791,4 +826,4 @@ function connect(host, port, opts) {
   return em
 }
 
-module.exports = { createLanServer, connect, send, wireConnection, ProtocolError, PROTO_VER, DEFAULT_PORT, resolveSyncPort, MAX_LINE_BYTES, PRE_AUTH_LINE_BYTES, PAIR_CONFIRM_TIMEOUT_MS, AUTH_IDLE_TIMEOUT_MS, cleanDeviceName }
+module.exports = { createLanServer, connect, send, wireConnection, ProtocolError, PROTO_VER, DEFAULT_PORT, resolveSyncPort, MAX_LINE_BYTES, PRE_AUTH_LINE_BYTES, PAIR_CONFIRM_TIMEOUT_MS, AUTH_IDLE_TIMEOUT_MS, cleanDeviceName, LINE_BUFFER_BUDGET_BYTES, __setLineBufferBudget }
