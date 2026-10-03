@@ -173,6 +173,7 @@ import { attachmentUrlPresent } from '../utils/attachmentRefs.js'
 import { contentFingerprint, shouldRefreshRemote, taskAbsentIn } from '../utils/editPanelRemoteSync.js'
 import { buildEditSnapshot } from '../store/ui.js'
 import { findTaskRowEl } from '../utils/todoRowEl.js'
+import { $elOf } from '../utils/el.js'
 import EpReminders from './edit-panel/EpReminders.vue'
 import EpSubtasks from './edit-panel/EpSubtasks.vue'
 import EpAttachments from './edit-panel/EpAttachments.vue'
@@ -363,9 +364,8 @@ export default {
     this.$el.addEventListener('focusin', this._onFocusin)
     // The hidden date picker input stays out of the Tab focus chain (programmatic "pick a date" only)
     this.$nextTick(() => {
-      // Under Element Plus, $refs.datePick.$el may be a comment/text node (no querySelector); defensively type-check
-      const pickEl = this.$refs.datePick && this.$refs.datePick.$el
-      const inp = pickEl && typeof pickEl.querySelector === 'function' ? pickEl.querySelector('input') : (pickEl && pickEl.parentElement ? pickEl.parentElement.querySelector('input') : null)
+      const pickEl = $elOf(this.$refs.datePick)
+      const inp = pickEl && pickEl.querySelector('input')
       if (inp) inp.setAttribute('tabindex', '-1')
     })
   },
@@ -525,7 +525,8 @@ export default {
         const p = this.$refs.datePick
         if (!p) return
         if (p.focus) p.focus()
-        const inp = p.$el && p.$el.querySelector('input')
+        const pickEl = $elOf(p)
+        const inp = pickEl && pickEl.querySelector('input')
         if (inp) inp.click()
       }
     },
@@ -534,9 +535,8 @@ export default {
       const p = this.$refs.deadlinePick
       if (!p) return
       if (p.focus) p.focus()
-      // $el may be a comment/text node (no querySelector); defensively take the parent element's input — same pitfall as mounted's datePick
-      const el = p.$el
-      const inp = el && typeof el.querySelector === 'function' ? el.querySelector('input') : (el && el.parentElement ? el.parentElement.querySelector('input') : null)
+      const el = $elOf(p)
+      const inp = el && el.querySelector('input')
       if (inp) inp.click()
     },
     applyDate (ts) {
