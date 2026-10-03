@@ -103,8 +103,10 @@ test('#1 deproxyRows drops proxy wrappers while keeping values', () => {
   assert.doesNotThrow(() => structuredClone(out))
 })
 
-// ---- #2 purge clears undo history ----
-test('#2 purgeIds clears history after a successful hard delete (no resurrect via undo)', async () => {
+// ---- #2 purge invalidates stale undo baselines (D15 TL-6: targeted historyBarrier re-baseline,
+// not a whole-stack historyClear — the purged-generation guard in persistSnapshotDiffCore makes
+// replaying even a stale baseline safe, so the user's remaining history stays reachable) ----
+test('#2 purgeIds re-baselines history after a successful hard delete (barrier, no whole-stack wipe)', async () => {
   const commits = []
   const ctx = {
     commit: (t, p) => commits.push([t, p]),
@@ -114,27 +116,29 @@ test('#2 purgeIds clears history after a successful hard delete (no resurrect vi
   dbHandler = op => (op === 'hardDelete' ? Promise.resolve(true) : Promise.resolve(null))
   await todoActions.purgeIds.call({}, ctx, ['a', 'b'])
   const hardRemoveIdx = commits.findIndex(c => c[0] === 'hardRemove')
-  const clearIdx = commits.findIndex(c => c[0] === 'historyClear')
+  const barrierIdx = commits.findIndex(c => c[0] === 'historyBarrier')
   assert.ok(hardRemoveIdx >= 0, 'hardRemove committed')
-  assert.ok(clearIdx > hardRemoveIdx, 'historyClear only after the rows are really gone')
+  assert.ok(barrierIdx > hardRemoveIdx, 'historyBarrier only after the rows are really gone')
+  assert.ok(!commits.some(c => c[0] === 'historyClear'), 'the purge does NOT wipe the whole undo/redo stack')
 })
 
 test('#2 purgeIds does not clear history when every hardDelete failed', async () => {
   const commits = []
   dbHandler = () => Promise.reject(new Error('db down'))
   await todoActions.purgeIds.call({}, { commit: (t, p) => commits.push([t, p]), dispatch: async () => ({}), rootState: {} }, ['a'])
-  assert.equal(commits.some(c => c[0] === 'historyClear'), false)
+  assert.equal(commits.some(c => c[0] === 'historyClear' || c[0] === 'historyBarrier'), false)
   assert.equal(commits.some(c => c[0] === 'hardRemove'), false)
 })
 
-test('#2 purgeAllRecycle clears history after emptying the bin', async () => {
+test('#2 purgeAllRecycle re-baselines history after emptying the bin (barrier, no whole-stack wipe)', async () => {
   const commits = []
   const state = { recycleList: [row('a', { delete: true }), row('b', { delete: true })] }
   await todoActions.purgeAllRecycle.call({}, { commit: (t, p) => commits.push([t, p]), dispatch: async () => ({}), state })
   const hardRemoveIdx = commits.findIndex(c => c[0] === 'hardRemove')
-  const clearIdx = commits.findIndex(c => c[0] === 'historyClear')
+  const barrierIdx = commits.findIndex(c => c[0] === 'historyBarrier')
   assert.ok(hardRemoveIdx >= 0)
-  assert.ok(clearIdx > hardRemoveIdx, 'historyClear strictly after hardRemove')
+  assert.ok(barrierIdx > hardRemoveIdx, 'historyBarrier strictly after hardRemove')
+  assert.ok(!commits.some(c => c[0] === 'historyClear'), 'the bulk purge does NOT wipe the whole undo/redo stack')
 })
 
 // ---- #3 break the 400ms merge window ----

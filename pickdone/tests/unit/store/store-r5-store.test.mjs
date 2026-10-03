@@ -109,14 +109,15 @@ test('P1-1 purgeAllRecycle treats a falsy purge result as failure too', async ()
   assert.equal(commits.some(c => c[0] === 'hardRemove'), false)
 })
 
-test('P1-1 purgeAllRecycle still hard-removes + clears history on success', async () => {
+test('P1-1 purgeAllRecycle still hard-removes + re-baselines history on success (D15 TL-6 barrier, no whole-stack wipe)', async () => {
   const commits = []
   const state = { recycleList: [row('a', { delete: true }), row('b', { delete: true })] }
   await todoActions.purgeAllRecycle.call({}, { commit: (t, p) => commits.push([t, p]), dispatch: async () => ({}), state })
   const hardRemoveIdx = commits.findIndex(c => c[0] === 'hardRemove')
-  const clearIdx = commits.findIndex(c => c[0] === 'historyClear')
+  const barrierIdx = commits.findIndex(c => c[0] === 'historyBarrier')
   assert.ok(hardRemoveIdx >= 0, 'hardRemove committed on success')
-  assert.ok(clearIdx > hardRemoveIdx, 'historyClear strictly after hardRemove')
+  assert.ok(barrierIdx > hardRemoveIdx, 'historyBarrier strictly after hardRemove')
+  assert.ok(!commits.some(c => c[0] === 'historyClear'), 'the purge does NOT wipe the whole undo/redo stack')
 })
 
 // ---- P1-2 numeric settings coercion ----
