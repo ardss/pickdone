@@ -362,8 +362,18 @@ async function startSync () {
     pairingSecret: settingGet(K_PAIRING_SECRET),
     // F1 (2026-09-28 drill): per-pair secret lookup for server-side hello auth — prefer the
     // peer's own secret from the paired-peer table; null falls back to the global secret.
+    // S1 (2026-10-03) read-failure taxonomy: loadPairedPeers THROWS on a settings read failure
+    // (paired-peers.js D15 C1 contract: a read throw is not the same as never paired) and that
+    // throw now propagates. The old catch{ return null } collapsed read-failure into
+    // record-absent, so both sides fell back to the global secret, the verify mismatched the
+    // per-pair auth code, and a transient read failure landed the peer in the TERMINAL unpaired
+    // state. Consumers branch on the class: transport answers hello-ack 'secret-unavailable'
+    // (no unauthorized classification, no per-IP failure count) and client-round aborts the
+    // round as a retryable failure. secretFor is consumed at exactly two sites (transport.js
+    // hello verify + client-round dial auth), both fed this same resolver.
     secretFor: (id) => {
-      try { const rec = loadPairedPeers()[String(id)]; return (rec && rec.secret) ? String(rec.secret) : null } catch { return null }
+      const rec = loadPairedPeers()[String(id)]
+      return (rec && rec.secret) ? String(rec.secret) : null
     },
     securityLog: loadSecurityLog(),
     verifyPairingCode: code => !!state.pairingCode && state.pairingCode.expiresAt > Date.now() &&
