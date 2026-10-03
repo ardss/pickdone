@@ -32,12 +32,12 @@ test('recovery drill: only plaintext backup exists -> restore from it, corrupt D
   const ud = tmpDir()
   fs.writeFileSync(path.join(ud, 'todos.db'), 'CORRUPT-BYTES')
   fs.writeFileSync(path.join(ud, 'todos.db-wal'), 'WAL')
-  fs.writeFileSync(path.join(ud, 'todos.db.plain-bak'), 'PLAIN-OK-DATA')
+  fs.writeFileSync(path.join(ud, 'todos.db.plain-bak'), Buffer.from('SQLite format 3\x00' + '.'.repeat(32), 'binary')) // usable plaintext backup (SQLite header gate)
 
   const from = dbRecovery.attemptDbRecovery(ud)
 
   assert.equal(from.source, 'plain-bak')
-  assert.equal(fs.readFileSync(path.join(ud, 'todos.db'), 'utf8'), 'PLAIN-OK-DATA', 'todos.db was overwritten by the plaintext backup')
+  assert.equal(fs.readFileSync(path.join(ud, 'todos.db'), 'binary').slice(0, 16), 'SQLite format 3\x00', 'todos.db was overwritten by the plaintext backup')
   // The corrupt file is renamed and kept (for manual forensics), not deleted
   const kept = fs.readdirSync(ud).filter(f => f.includes('.corrupt-'))
   assert.ok(kept.length >= 2, `corrupt files must be kept, got: ${kept}`)

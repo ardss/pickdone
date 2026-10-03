@@ -69,7 +69,7 @@ function isolatedUd (prefix) {
 test('M-1: key rename SUCCESS path — recovery proceeds, db.key is renamed aside', () => {
   const ud = isolatedUd('m1-ok-')
   fs.writeFileSync(path.join(ud, 'todos.db'), 'garbage-not-sqlite') // wrong header → recovery branch
-  fs.writeFileSync(path.join(ud, 'todos.db.plain-bak'), 'plain')
+  fs.writeFileSync(path.join(ud, 'todos.db.plain-bak'), Buffer.from('SQLite format 3\x00' + '.'.repeat(32), 'binary')) // usable plaintext backup (SQLite header gate)
   fs.writeFileSync(path.join(ud, 'db.key'), 'stale-key')
   const r = rec.attemptDbRecovery(ud, null)
   assert.equal(r.source, 'plain-bak')
@@ -81,7 +81,7 @@ test('M-1: key rename SUCCESS path — recovery proceeds, db.key is renamed asid
 test('M-1: key quarantine TOTAL failure — source:error, no false "recovery succeeded"', () => {
   const ud = isolatedUd('m1-fail-')
   fs.writeFileSync(path.join(ud, 'todos.db'), 'garbage-not-sqlite')
-  fs.writeFileSync(path.join(ud, 'todos.db.plain-bak'), 'plain')
+  fs.writeFileSync(path.join(ud, 'todos.db.plain-bak'), Buffer.from('SQLite format 3\x00' + '.'.repeat(32), 'binary')) // usable plaintext backup (SQLite header gate)
   fs.writeFileSync(path.join(ud, 'db.key'), 'stale-key')
   // Inject failure of every quarantine strategy (rename×2 + delete): locked by AV/AV-like hold.
   const realRename = fs.renameSync
@@ -102,7 +102,7 @@ test('M-1: key quarantine TOTAL failure — source:error, no false "recovery suc
 test('M-1: no db.key present → recovery proceeds (plaintext-continuation shape)', () => {
   const ud = isolatedUd('m1-nok-')
   fs.writeFileSync(path.join(ud, 'todos.db'), 'garbage-not-sqlite')
-  fs.writeFileSync(path.join(ud, 'todos.db.plain-bak'), 'plain')
+  fs.writeFileSync(path.join(ud, 'todos.db.plain-bak'), Buffer.from('SQLite format 3\x00' + '.'.repeat(32), 'binary')) // usable plaintext backup (SQLite header gate)
   const r = rec.attemptDbRecovery(ud, null)
   assert.equal(r.source, 'plain-bak')
 })

@@ -27,7 +27,8 @@ afterEach(() => { try { fs.rmSync(ud, { recursive: true, force: true }) } catch 
 const writeCorruptDb = () => fs.writeFileSync(path.join(ud, 'todos.db'), 'THIS IS NOT A SQLITE FILE')
 const backupJson = () => path.join(ud, 'backups', 'critical-state-backup.json')
 const writeBackupJson = (text) => { fs.mkdirSync(path.join(ud, 'backups'), { recursive: true }); fs.writeFileSync(backupJson(), text) }
-const writePlainBak = () => fs.writeFileSync(path.join(ud, 'todos.db.plain-bak'), 'PLAINBAK-CONTENT')
+const PLAINBAK = Buffer.from('SQLite format 3\x00' + '.'.repeat(32), 'binary') // usable plaintext backup (SQLite header gate)
+const writePlainBak = () => fs.writeFileSync(path.join(ud, 'todos.db.plain-bak'), PLAINBAK)
 
 test('backupJsonParseable: parseable object → true; torn JSON / array-free garbage / missing file → false', () => {
   writeBackupJson('{"backup":{}}')
@@ -47,7 +48,7 @@ test('corrupt JSON + usable plain-bak → recovery comes from plain-bak, NOT a f
   // Pre-fix this returned { source: 'json' } — steering recovery away from the usable bak onto an empty DB.
   assert.equal(r.source, 'plain-bak')
   assert.match(r.label, /unparseable/, 'the dialog label must tell the truth about why plain-bak was used')
-  assert.equal(fs.readFileSync(path.join(ud, 'todos.db'), 'utf8'), 'PLAINBAK-CONTENT')
+  assert.equal(fs.readFileSync(path.join(ud, 'todos.db'), 'binary').slice(0, 16), 'SQLite format 3\x00')
 })
 
 test('corrupt JSON + NO plain-bak → nothing recoverable (null), never an empty-db "json" recovery', () => {

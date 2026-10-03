@@ -108,7 +108,7 @@ test('d5-3: unquarantineable corrupt DB aborts with source:error, no backup clob
   // Corrupt main DB (wrong header) + a recoverable plain-bak with DISTINCT content.
   fs.writeFileSync(path.join(ud, 'todos.db'), 'not-a-sqlite-file-at-all')
   fs.writeFileSync(path.join(ud, 'todos.db-wal'), 'wal-junk')
-  fs.writeFileSync(path.join(ud, 'todos.db.plain-bak'), 'BACKUP-CONTENT')
+  fs.writeFileSync(path.join(ud, 'todos.db.plain-bak'), Buffer.from('SQLite format 3\x00' + '.'.repeat(32), 'binary')) // recoverable plaintext backup (SQLite header gate)
   try {
     const r = attemptDbRecovery(ud, null)
     assert.equal(r.source, 'error', 'rename failure must abort the branch with source:error, got ' + JSON.stringify(r))
@@ -121,7 +121,7 @@ test('d5-3: unquarantineable corrupt DB aborts with source:error, no backup clob
     // the old main-first order left todos.db MISSING with a live -wal beside it (the next init
     // then created a fresh empty DB and recovery never re-fired).
     assert.equal(fs.readFileSync(path.join(ud, 'todos.db'), 'utf8'), 'not-a-sqlite-file-at-all', 'the corrupt main DB was NOT renamed aside before the failing -wal rename')
-    assert.equal(fs.readFileSync(path.join(ud, 'todos.db.plain-bak'), 'utf8'), 'BACKUP-CONTENT')
+    assert.equal(fs.readFileSync(path.join(ud, 'todos.db.plain-bak'), 'binary').slice(0, 16), 'SQLite format 3\x00', 'plain-bak untouched by the aborted recovery')
   } finally {
     realFs.renameSync = origRename
     fs.rmSync(ud, { recursive: true, force: true })

@@ -297,7 +297,7 @@ test('d4 dbRecovery: a WRONG header (real corruption) still enters the rename re
   const ud = path.join(parent, 'ud')
   fs.mkdirSync(ud) // nested: keep criticalBackupPath's dirname(ud)/pickdone-backups lookup isolated
   fs.writeFileSync(path.join(ud, 'todos.db'), Buffer.alloc(4096, 0)) // garbage header
-  fs.writeFileSync(path.join(ud, 'todos.db.plain-bak'), 'backup')
+  fs.writeFileSync(path.join(ud, 'todos.db.plain-bak'), Buffer.from('SQLite format 3 ' + '.'.repeat(32), 'binary')) // usable plaintext backup (SQLite header gate)
   try {
     const r = dbRecovery.attemptDbRecovery(ud, () => { throw new Error('still broken') })
     assert.equal(r.source, 'plain-bak', 'genuinely corrupt DB recovers from the plaintext backup')
