@@ -79,22 +79,6 @@
     "authority": "local-only",
     "note": "相位完成防重放令牌(跨窗口tick协调),单会话生命周期"
   },
-  "renderer/js/store/tomato.js::#prefix": {
-    "authority": "sqlite",
-    "note": "maint/d11-r3 per-entry refactor: pending queue keys = prefix + entry.uid (ledger queue AND snow queue share this identifier). Authority = SQLite tomato_records rows / meta snow: replay-then-delete settlement (op lands in DB, removePendingEntry clears the key), module-load hydrate re-queues survivors. One identifier entry covers every dynamic key in the family; a new write shape on the same identifier stays covered."
-  },
-  "renderer/js/store/tomato.js::#k": {
-    "authority": "sqlite",
-    "note": "maint/d11-r3 per-entry refactor: settlement removeItem of a single queue key (k = prefix + entry.uid). Authority = SQLite (tomato_records rows / meta snow); removal is the post-replay cleanup, orphan blobs converge because every ledger/snow op is idempotent (deterministic tomatoId / dedupKey). Same key family as ::#prefix."
-  },
-  "renderer/js/store/tomato.js::#key": {
-    "authority": "local-only",
-    "note": "TQ-5 quarantine surface (key param = prefix + 'corrupt'): RAW bytes of corrupt queue entries / corrupt legacy blobs parked before degradation, capped at 10 (newest kept). No sync obligation and no DB mirror by design - this is the raw-bytes preservation surface; calibration = manual recovery via prefix+'corrupt' (absorbs the retired tomatoRejectedLedgerRows diagnostic surface)."
-  },
-  "renderer/js/store/tomato.js::#legacyKey": {
-    "authority": "sqlite",
-    "note": "One-time migration of the legacy whole-blob queue mirrors (tomatoPendingLedger / tomatoPendingSnow, authority migrated with them = SQLite): read blob, split into per-entry keys under prefix, then removeItem the blob key. Idempotent (absent key = already migrated); corrupt blob quarantined under ::#key before the degrade."
-  },
   "renderer/js/store/tomato.js::tomatoState": {
     "authority": "sqlite",
     "note": "番茄计时瞬态+偏好;账本(专注记录)权威=SQLite tomato_records 行表(2026-09-04根修),LS blob 已剔除记录只存计时瞬态,跨窗口同步层"
@@ -202,5 +186,21 @@
   "renderer/js/utils/dbMirror.js::#unflushedKey": {
     "authority": "sqlite",
     "note": "D13 #12 durable parking for failed setMeta blobs - DB (meta) stays authoritative; LS blob is a retry buffer consumed by consumeUnflushed() at startup, which re-queues mirrorToDb and clears the marker (calibration: startup consume)"
+  },
+  "renderer/js/store/helpers/tomatoPendingQueue.js::#prefix": {
+    "authority": "sqlite",
+    "note": "maint/d11-r3 per-entry refactor: pending queue keys = prefix + entry.uid (ledger queue AND snow queue share this identifier). Authority = SQLite tomato_records rows / meta snow: replay-then-delete settlement (op lands in DB, removePendingEntry clears the key), module-load hydrate re-queues survivors. One identifier entry covers every dynamic key in the family; a new write shape on the same identifier stays covered."
+  },
+  "renderer/js/store/helpers/tomatoPendingQueue.js::#k": {
+    "authority": "sqlite",
+    "note": "maint/d11-r3 per-entry refactor: settlement removeItem of a single queue key (k = prefix + entry.uid). Authority = SQLite (tomato_records rows / meta snow); removal is the post-replay cleanup, orphan blobs converge because every ledger/snow op is idempotent (deterministic tomatoId / dedupKey). Same key family as ::#prefix."
+  },
+  "renderer/js/store/helpers/tomatoPendingQueue.js::#key": {
+    "authority": "local-only",
+    "note": "TQ-5 quarantine surface (key param = prefix + 'corrupt'): RAW bytes of corrupt queue entries / corrupt legacy blobs parked before degradation, capped at 10 (newest kept). No sync obligation and no DB mirror by design - this is the raw-bytes preservation surface; calibration = manual recovery via prefix+'corrupt' (absorbs the retired tomatoRejectedLedgerRows diagnostic surface)."
+  },
+  "renderer/js/store/helpers/tomatoPendingQueue.js::#legacyKey": {
+    "authority": "sqlite",
+    "note": "One-time migration of the legacy whole-blob queue mirrors (tomatoPendingLedger / tomatoPendingSnow, authority migrated with them = SQLite): read blob, split into per-entry keys under prefix, then removeItem the blob key. Idempotent (absent key = already migrated); corrupt blob quarantined under ::#key before the degrade."
   }
 }

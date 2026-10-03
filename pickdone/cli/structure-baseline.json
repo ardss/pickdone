@@ -1,7 +1,10 @@
 {
   "src/main/sync-apply.js": 890,
   "cli/lib.js": 817,
-  "src/main/lan-sync-bootstrap.js": 852,
+  "src/main/lan-sync-bootstrap.js": 832,
   "renderer/js/components/settings/SettingsSyncTab.vue": 809,
-  "renderer/js/store/tomato.js": 736
+  "renderer/js/store/category.js": 734,
+  "renderer/js/store/todo.js": 777,
+  "src/main/db.js": 822,
+  "src/main/index.js": 854
 }
