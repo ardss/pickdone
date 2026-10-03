@@ -26,6 +26,9 @@ globalThis.window = {
 const resetDb = () => { meta.clear(); chips = [] }
 dbHandler = async (op, p) => {
   if (op === 'planAll') return chips.slice()
+  // TL-6 purged-generation guard: the replay reads durable existence via getAll — the scenario's
+  // task durably exists, otherwise every replayed row is skipped as purged and no chip effects run.
+  if (op === 'getAll') return [{ taskId: 't1' }]
   if (op === 'setMeta') { meta.set(p[0], p[1]); return }
   if (op === 'getMeta') return meta.get(p) ?? null
   if (op === 'deleteMeta') { meta.delete(p); return }
