@@ -38,7 +38,7 @@ test('tq6[a]: a throwing quarantine write keeps the ledger entry pending (retire
     // quarantines it BEFORE splicing; with the quarantine write failing, the entry must stay.
     failQuarantine = true
     globalThis.window.todoAPI = { dbCall: async () => ({ accepted: 0, rejected: [{ index: 0, reason: 'bad endTime' }] }) }
-    const { default: tomato, tomatoMirrorDegraded } = await import('../../../renderer/js/store/tomato.js?tq6-quarantine')
+    const { default: tomato } = await import('../../../renderer/js/store/tomato.js?tq6-quarantine')
     tomato.mutations.addRecord({ tomatoRecordList: [], todayTomatoCount: 0 }, { tomatoId: 'tmt_tq6_rej', endTime: 0, dateKey: '2026-09-28', succeed: true })
     await new Promise(r => setTimeout(r, 20))
     let quarantined = []

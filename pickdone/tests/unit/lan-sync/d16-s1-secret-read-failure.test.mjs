@@ -51,7 +51,7 @@ test('S1: server-side secretFor read failure answers secret-unavailable — neve
   })
   nodeA.on('peer-unauthorized', info => { clientAuthFailureInfo = info })
   nodeA.start(); nodeB.start()
-  const [portA, portB] = await Promise.all([nodeA.whenListening(), nodeB.whenListening()])
+  const [, portB] = await Promise.all([nodeA.whenListening(), nodeB.whenListening()])
   nodeA.addPeer({ deviceId: 's1-server', host: '127.0.0.1', port: portB, name: 'S1 Server' })
 
   const r = await nodeA.startSyncRound()
@@ -91,7 +91,7 @@ test('S1: dial-side secretFor read failure aborts the round retryable — no glo
     buildSegments: () => [],
   })
   nodeA.start(); nodeB.start()
-  const [portA, portB] = await Promise.all([nodeA.whenListening(), nodeB.whenListening()])
+  const [, portB] = await Promise.all([nodeA.whenListening(), nodeB.whenListening()])
   nodeA.addPeer({ deviceId: 's1b-server', host: '127.0.0.1', port: portB, name: 'S1b Server' })
 
   const r = await nodeA.startSyncRound()

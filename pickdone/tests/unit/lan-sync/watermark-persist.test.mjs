@@ -252,7 +252,7 @@ test('S7: the pull watermark never advances past the highest seq actually applie
     buildSegments: tamperBuild,
   })
   nodeA.start(); nodeB.start()
-  const [portA, portB] = await Promise.all([nodeA.whenListening(), nodeB.whenListening()])
+  const [, portB] = await Promise.all([nodeA.whenListening(), nodeB.whenListening()])
   nodeA.addPeer({ deviceId: 'node-b', host: '127.0.0.1', port: portB, name: 'Node B' })
 
   const ok = await nodeA.startSyncRound()

@@ -191,12 +191,6 @@ function isSafeExternal (url) {
 const attachments = require('./attachments')
 const { attachDir } = attachments
 
-// D10 (2026-09-27): timestamp of the last renderer push — tomatoLiveText is a LEASE (fresh only
-// within TOMATO_LIVE_TTL_MS), not a latch; a dead renderer must not hold quit hostage forever.
-let tomatoLiveAt = 0
-// D10 (2026-09-27): wired into windows.js's render-process-gone hook — a crashed renderer clears
-// its own lease immediately (the TTL alone would still show a stale confirm for up to 10s).
-function clearTomatoLiveText () { tomatoLiveText = ''; tomatoLiveAt = 0 }
 
 // TQ-1 (2026-10-03): durable running-session ownership — created in registerIpc (db handle is
 // module-initialized before whenReady). From here on the tray-text lease below is DISPLAY-ONLY:
@@ -215,10 +209,13 @@ function createTray () {
 }
 // Tray carries pomodoro state: the tooltip is composed solely by the main process (single writer; shows just the app name when text is empty)
 let tomatoLiveText = '' // non-empty = a focus/rest pomodoro is live (per-second push from the renderer; the main process's only running-state signal)
+// D10 (2026-09-27): wired into windows.js's render-process-gone hook — a crashed renderer clears
+// its own lease immediately (TQ-1: the quit-confirm GATE reads the durable session row, not this
+// display-only lease, so no timestamp reader is needed).
+function clearTomatoLiveText () { tomatoLiveText = '' }
 function updateTomatoTray (text) {
   const t = String(text || '').trim()
   tomatoLiveText = t
-  tomatoLiveAt = t ? Date.now() : 0 // D10: lease timestamp — emptiness (idle push) also clears the lease
   if (tray) { try { tray.setToolTip(i18nM.mt('appName') + (t ? ' · ' + t : '')) } catch (e) { /* empty */ } }
 }
 

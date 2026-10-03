@@ -218,7 +218,13 @@ function createDiscovery() {
     // A fresh socket per attempt: a socket whose bind failed is closed and cannot be re-bound.
     const tryBind = () => {
       if (udp) { try { udp.close() } catch { /* noop */ } }
-      udp = dgram.createSocket({ type: 'udp4', reuseAddr: true })
+      // NO reuseAddr: on Windows SO_REUSEADDR lets a later bind SILENTLY succeed over an
+      // existing socket, which defeats the whole candidate-walk contract — two instances (or a
+      // test's port blocker) co-bind one candidate, no EADDRINUSE ever fires, and the
+      // close-on-total-bind-failure path (D15 C5) becomes unreachable while both channels
+      // broadcast on the same port. UDP has no TIME_WAIT, so unicast rebinding after a crash
+      // needs no reuseAddr either. A taken port must be a REAL EADDRINUSE.
+      udp = dgram.createSocket({ type: 'udp4' })
       attachUdpHandlers()
       // 2026-09-28: renamed (was `port`, shadowing the destructured TCP port argument) — the
       // fallback used to broadcast ONLY to its own bound candidate port, so a host whose

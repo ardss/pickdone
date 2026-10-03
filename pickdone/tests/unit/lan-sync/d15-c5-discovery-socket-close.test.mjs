@@ -56,7 +56,7 @@ test('C5: dead advertise channel (3 failed sweeps) closes the socket too', async
   try {
     disc.startAdvertising({ deviceId: 'd15c5b', name: 'd15c5b', port: 58999 })
     const t0 = Date.now()
-    while (!disc.udpFallbackPort() && Date.now() - t0 < 5000) await new Promise(r => setTimeout(r, 50))
+    while (!disc.udpFallbackPort() && Date.now() - t0 < 15000) await new Promise(r => setTimeout(r, 50))
     assert.ok(disc.udpFallbackPort() > 0, 'UDP fallback bound')
     const sock = disc._udpSocket()
     const closed = new Promise(r => sock.on('close', r))

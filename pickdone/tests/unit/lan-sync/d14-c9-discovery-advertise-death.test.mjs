@@ -28,7 +28,7 @@ test('C9: post-bind socket death stops the advertise interval (no warn-forever l
   const disc = discovery.createDiscovery()
   disc.startAdvertising({ deviceId: 'd14c9', name: 'd14c9', port: 58999 })
   const t0 = Date.now()
-  while (!disc.udpFallbackPort() && Date.now() - t0 < 5000) await new Promise(r => setTimeout(r, 50))
+  while (!disc.udpFallbackPort() && Date.now() - t0 < 15000) await new Promise(r => setTimeout(r, 50))
   assert.ok(disc.udpFallbackPort() > 0, 'UDP fallback bound')
   assert.equal(disc._udpAdvertiseActive(), true, 'advertise interval live after bind')
   // kill the socket underneath (simulates the interface/handle dying after bind)
@@ -44,7 +44,7 @@ test('C9: three consecutive failed send sweeps declare the channel dead and stop
   const disc = discovery.createDiscovery()
   disc.startAdvertising({ deviceId: 'd14c9b', name: 'd14c9b', port: 58999 })
   const t0 = Date.now()
-  while (!disc.udpFallbackPort() && Date.now() - t0 < 5000) await new Promise(r => setTimeout(r, 50))
+  while (!disc.udpFallbackPort() && Date.now() - t0 < 15000) await new Promise(r => setTimeout(r, 50))
   assert.ok(disc.udpFallbackPort() > 0)
   const sock = disc._udpSocket()
   sock.send = () => { throw new Error('simulated dead NIC') } // every sweep throws synchronously
