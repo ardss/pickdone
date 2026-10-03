@@ -161,7 +161,8 @@
 /**
  * Right edit panel -- aligned with the right-sidebar reference: Category chips / complete + expand / title / description / date chips (today, tomorrow, pick a date, no date) / add reminder / subtasks (x, drag handle) / add subtask (n/20) / three difficulty levels / upload images / bottom tool row S4 split (2026-09-12): reminders/subtasks/attachments/dependencies views moved to ./edit-panel/Ep*.vue -- children only EMIT change events; this component owns the state (e/subList/imgList/fileList) and funnels every mutation through the unified queueSave pipeline (utils/editSave.js). The save pipeline is the global lifeline: it is the only place that dispatches todo/updateTodoFields for panel edits.
  */
-import {dayjs, DAY_MS, FMT, reportError } from '../utils/core.js'
+import {dayjs, FMT, reportError } from '../utils/core.js'
+import { dayShift } from '../utils/todayBounds.js'
 import { getLocale } from '../i18n/index.js'
 import { extractTags } from '../utils/search.js'
 import { subsCompleteTarget, isRenderableAttachmentUrl } from '../utils/core.js'
@@ -260,7 +261,7 @@ export default {
       if (!this.e.dateTs) return ''
       const d = dayjs(this.e.dateTs).startOf('day').valueOf()
       if (d === this.today0) return this.todayLabel
-      if (d === this.today0 + DAY_MS) return this.tomorrowLabel
+      if (d === dayShift(this.today0, 1)) return this.tomorrowLabel
       return dayjs(this.e.dateTs).format(FMT.cnDate)
     }
   },
@@ -518,7 +519,7 @@ export default {
     },
     setDate (mode) {
       if (mode === 'today') this.applyDate(this.today0)
-      else if (mode === 'tomorrow') this.applyDate(this.today0 + DAY_MS)
+      else if (mode === 'tomorrow') this.applyDate(dayShift(this.today0, 1))
       else if (mode === 'none') this.applyDate(0)
       else if (mode === 'pick') {
         // focus() invokes the calendar panel (simulating a click on the 0-size hidden input is flaky), plus one extra click as a fallback

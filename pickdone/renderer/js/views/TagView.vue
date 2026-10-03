@@ -24,7 +24,8 @@
  * Tag filtering is exact match (fuzzy matching would wrongly fold #worksummary into #work and also affect batch re-sorting); rows reuse <todo-item>.
  */
 import { calTitle } from '../utils/buckets.js'
-import { DAY_MS, rescheduleExpired, rangeLabel } from '../utils/core.js'
+import { dayShift } from '../utils/todayBounds.js'
+import { rescheduleExpired, rangeLabel } from '../utils/core.js'
 import { batchMoveWithUndo } from '../utils/confirm.js'
 import { extractTags } from '../utils/search.js'
 import TodoGroupBlock from '../components/TodoGroupBlock.vue'
@@ -54,8 +55,8 @@ export default {
       const R2 = num(s.expiredUncompletedTodoRange || '30d')
       const list = this.tagged
       const today = this.todayTs
-      const doneIn = arr => arr.filter(t => t.complete && t.dayStart && t.dayStart < today && t.dayStart >= today - R1 * DAY_MS)
-      const undoIn = arr => arr.filter(t => !t.complete && t.dayStart && t.dayStart < today && t.dayStart >= today - R2 * DAY_MS)
+      const doneIn = arr => arr.filter(t => t.complete && t.dayStart && t.dayStart < today && t.dayStart >= dayShift(today, -R1))
+      const undoIn = arr => arr.filter(t => !t.complete && t.dayStart && t.dayStart < today && t.dayStart >= dayShift(today, -R2))
       const g = []
       const expDone = doneIn(list)
       if (expDone.length) g.push({ key: 'tagExpDone', title: this.$t('statsC.Tag.expDoneTitle', { n: rangeLabel(s.expiredCompletedTodoRange, this.$t) }), todos: expDone, showDate: true, hasSettings: true })
@@ -69,11 +70,11 @@ export default {
       // until tomorrow. Same shared invariant as buildExpiryGroups' catTodayDone bucket.
       const tdd = bucket(t => t.complete && t.dayStart === today)
       if (tdd.length) g.push({ key: 'tagTodayDone', title: this.calTitle(today), todos: tdd, color: 'color3' })
-      const tm = bucket(t => t.dayStart === today + DAY_MS)
-      if (tm.length) g.push({ key: 'tagTomorrow', title: this.calTitle(today + DAY_MS), todos: tm, color: 'color3' })
-      const dat = bucket(t => t.dayStart === today + 2 * DAY_MS)
-      if (dat.length) g.push({ key: 'tagDat', title: this.calTitle(today + 2 * DAY_MS), todos: dat, color: 'color3' })
-      const up = bucket(t => !t.complete && t.dayStart > today + 2 * DAY_MS)
+      const tm = bucket(t => t.dayStart === dayShift(today, 1))
+      if (tm.length) g.push({ key: 'tagTomorrow', title: this.calTitle(dayShift(today, 1)), todos: tm, color: 'color3' })
+      const dat = bucket(t => t.dayStart === dayShift(today, 2))
+      if (dat.length) g.push({ key: 'tagDat', title: this.calTitle(dayShift(today, 2)), todos: dat, color: 'color3' })
+      const up = bucket(t => !t.complete && t.dayStart > dayShift(today, 2))
       if (up.length) g.push({ key: 'tagUpcoming', title: this.$t('statsC.Tag.upcomingTitle'), todos: up, showDate: true, color: 'color3', hasSettings: true })
       const nd = bucket(t => !t.complete && !t.dayStart)
       if (nd.length) g.push({ key: 'tagNoDate', title: this.$t('statsC.Tag.noDateTitle'), todos: nd, hasSettings: true })

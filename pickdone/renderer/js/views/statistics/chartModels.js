@@ -11,6 +11,7 @@
  *  - `dayjs` / DAY_MS / FMT come from the shared core util, exactly as before.
  */
 import { dayjs, DAY_MS, FMT } from '../../utils/core.js'
+import { dayShift } from '../../utils/todayBounds.js'
 import { calGridOffset, isoWeekStart } from '../../utils/weekGrid.js'
 
 const T = 'statsA.StatisticsView.'
@@ -169,7 +170,7 @@ export function buildTimelineRows ({ records, todos, t, now = Date.now() }) {
   }
   const rows = []
   for (let d = 6; d >= 0; d--) {
-    const dayStart = dayjs(now).startOf('day').valueOf() - d * DAY_MS
+    const dayStart = dayShift(+dayjs(now).startOf('day'), -d)
     const key = dayjs(dayStart).format(FMT.date)
     const segs = []
     let count = 0

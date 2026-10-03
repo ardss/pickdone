@@ -31,6 +31,10 @@ function pureFns (file, names) {
  * regression where expired groups could never collapse). Only keys older than the 7-day grace
  * window are stale enough to drop. */
 const GRACE_MS = 7 * 86400000
+// The pure block takes the cutoff as a parameter; the component computes it via the calendar-day
+// primitive dayShift, and so does this harness (same primitive the production caller uses).
+const { dayShift } = await import(pathToFileURL(path.join(ROOT, 'renderer/js/utils/todayBounds.js')).href)
+const cutoffOf = today0 => dayShift(today0, -7)
 
 test('pruneExpiredFoldKeys: fold state for recent expired groups survives (collapse works)', () => {
   const { pruneExpiredFoldKeys } = pureFns('renderer/js/components/TodoGroups.vue', ['pruneExpiredFoldKeys'])
@@ -38,12 +42,12 @@ test('pruneExpiredFoldKeys: fold state for recent expired groups survives (colla
   const yesterday = today0 - 86400000
   const tomorrow = today0 + 86400000
   assert.deepEqual(
-    pruneExpiredFoldKeys([`expired-${yesterday}`, 'today-today', 'day-done', `expired-${tomorrow}`], today0),
+    pruneExpiredFoldKeys([`expired-${yesterday}`, 'today-today', 'day-done', `expired-${tomorrow}`], cutoffOf(today0)),
     [`expired-${yesterday}`, 'today-today', 'day-done', `expired-${tomorrow}`] // nothing recent is dropped
   )
-  assert.deepEqual(pruneExpiredFoldKeys([`expired-${yesterday}`], today0), [`expired-${yesterday}`])
-  assert.deepEqual(pruneExpiredFoldKeys([], today0), [])
-  assert.deepEqual(pruneExpiredFoldKeys(undefined, today0), []) // defensive: unset settings value
+  assert.deepEqual(pruneExpiredFoldKeys([`expired-${yesterday}`], cutoffOf(today0)), [`expired-${yesterday}`])
+  assert.deepEqual(pruneExpiredFoldKeys([], cutoffOf(today0)), [])
+  assert.deepEqual(pruneExpiredFoldKeys(undefined, cutoffOf(today0)), []) // defensive: unset settings value
 })
 
 test('pruneExpiredFoldKeys: keys older than the 7-day grace window are dropped (no unbounded growth)', () => {
@@ -52,7 +56,7 @@ test('pruneExpiredFoldKeys: keys older than the 7-day grace window are dropped (
   const ancient = today0 - GRACE_MS - 1
   const edge = today0 - GRACE_MS // exactly at the cutoff counts as still-recent
   assert.deepEqual(
-    pruneExpiredFoldKeys([`expired-${ancient}`, `expired-${edge}`], today0),
+    pruneExpiredFoldKeys([`expired-${ancient}`, `expired-${edge}`], cutoffOf(today0)),
     [`expired-${edge}`]
   )
 })
@@ -60,7 +64,7 @@ test('pruneExpiredFoldKeys: keys older than the 7-day grace window are dropped (
 test('pruneExpiredFoldKeys: boundary — a key exactly at today start is not expired', () => {
   const { pruneExpiredFoldKeys } = pureFns('renderer/js/components/TodoGroups.vue', ['pruneExpiredFoldKeys'])
   const today0 = 1700000000000
-  assert.deepEqual(pruneExpiredFoldKeys([`expired-${today0}`], today0), [`expired-${today0}`])
+  assert.deepEqual(pruneExpiredFoldKeys([`expired-${today0}`], cutoffOf(today0)), [`expired-${today0}`])
 })
 
 /* ---------- #9 DayDateStrip: week-start-aware calendar grid ----------

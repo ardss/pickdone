@@ -175,3 +175,37 @@ test('[day-caliber] counted ratchet: renderer startOf(\'day\') sites shrink, nev
   const BASELINE = 128
   assert.ok(count <= BASELINE, `renderer has ${count} inline startOf('day') sites > baseline ${BASELINE} — route new ones through utils/todayBounds.js and shrink the baseline when migrating`)
 })
+
+test('[day-caliber] counted ratchet: no additive/multiplicative ms day-step left anywhere in renderer/js', () => {
+  // Class-completeness: the earlier guard only banned ms steps inside the files the wave
+  // happened to migrate — the stepping class could grow freely everywhere else (TodoGroups
+  // cutoff, CalendarView week stepping, TagView windows, DayDateStrip grid, EditPanel
+  // tomorrow chip, statistics day bins, ...). The class is "sibling-day arithmetic done as
+  // `base ± n*86400000`/`base ± n*DAY_MS`": local midnights are 23h/25h apart across DST, so
+  // exact-equality dayStart filters drop or duplicate rows. Every site must route through
+  // dayShift(todayBounds). Day-fraction DIVISORS (`/ 86400000`, `864e5`) are not day stepping
+  // and stay legal; so does ms arithmetic that never crosses a day boundary.
+  const root = anchorPath('rendererJsDir')
+  // additive/multiplicative day-step: `+/- ... * DAY_MS|86400000` or `+/- DAY_MS|86400000`
+  const STEP = /[-+][^/\n]{0,40}[*]\s*(?:86400000|DAY_MS)|[-+]\s*(?:86400000|DAY_MS)/
+  const hits = []
+  const walk = d => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name)
+      if (e.isDirectory()) { walk(p); continue }
+      if (!/\.(js|vue)$/.test(e.name)) continue
+      const src = fs.readFileSync(p, 'utf8')
+      // strip line comments so guard prose ("was `today - R1 * DAY_MS`") cannot self-trigger
+      const code = src.replace(/^\s*\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '')
+      if (STEP.test(code)) hits.push(path.relative(root, p))
+    }
+  }
+  walk(root)
+  assert.deepStrictEqual(hits, [], `ms sibling-day stepping must route through dayShift(todayBounds) — found in: ${hits.join(', ')}`)
+})
+
+test('[day-caliber] DayRail steps through the single sanctioned primitive (no second stepper)', () => {
+  const rail = read('renderer/js/components/DayRail.vue')
+  assert.ok(rail.includes('localDayKey(dayShift('), 'prune keep-window keys derive from dayShift')
+  assert.ok(!/setDate\(/.test(rail), 'no Date#setDate day-stepping primitive alongside dayShift')
+})

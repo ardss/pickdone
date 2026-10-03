@@ -25,7 +25,7 @@ export function calTitle (ts, now) {
  * category/project pages (expiryGroups: dayStart >= today - R1 days) but not here. The cap now
  * follows the setting (same rangeDays semantics as buildExpiryGroups, defaulting to the legacy
  * 30 when no setting is passed) and the boundary is INCLUSIVE of the R1-th day, matching
- * expiryGroups' `>= today - R1 * DAY_MS` comparison.
+ * expiryGroups' `>= dayShift(today, -R1)` comparison.
  * @param {Array}  list         completed todos
  * @param {number} today        start-of-day timestamp
  * @param {string} [rangeSetting] settings.expiredCompletedTodoRange ('7d'|'15d'|'30d'|...)

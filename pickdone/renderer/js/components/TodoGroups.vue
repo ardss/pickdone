@@ -32,18 +32,20 @@
 /** Grouped list -- group header style aligned with the project baseline (▾ Today Thu 13) */
 import TodoItem from './TodoItem.vue'
 import { dayjs } from '../utils/core.js'
+import { dayShift } from '../utils/todayBounds.js'
 
 // [component-fixes] pure-start (extracted verbatim by tests/component-fixes-renderer.test.mjs)
 /** Drop stale persisted fold keys: an `expired-<dayStartTs>` key whose timestamp is before today's
  *  start can never match a group again (the timestamp drifts daily) and would accumulate forever
  *  in settings.foldedTodoList. Non-expired keys pass through untouched. */
-function pruneExpiredFoldKeys (list, todayStart0) {
+function pruneExpiredFoldKeys (list, cutoff) {
   // 2026-09-12 fix: the original version pruned ALL expired-* keys before today, which made it
   // impossible to collapse recent expired groups (toggle added the key → prune immediately
   // removed it → group stayed expanded forever). The pruning now uses a 7-day grace period:
   // only keys for dates >7 days old are pruned, so users can still collapse yesterday's and
   // last week's groups. Keys older than 7 days are stale enough to safely drop.
-  const cutoff = todayStart0 - 7 * 86400000
+  // The 7-day cutoff is computed by the caller via dayShift (calendar-day primitive) so this
+  // pure block stays dependency-free for the verbatim test extraction.
   return (list || []).filter(k => {
     const s = String(k)
     return !(s.startsWith('expired-') && Number(s.slice('expired-'.length)) < cutoff)
@@ -71,7 +73,7 @@ export default {
     toggle (key) {
       const next = this.folded.includes(key) ? this.folded.filter(k => k !== key) : [...this.folded, key]
       // Persist only still-matchable keys: expired groups from previous days drift away daily and must not pile up in settings
-      const list = pruneExpiredFoldKeys(next, +dayjs().startOf('day'))
+      const list = pruneExpiredFoldKeys(next, dayShift(+dayjs().startOf('day'), -7))
       this.$store.commit('settings/updateSettings', { foldedTodoList: list })
     },
     weekLabel (g) {

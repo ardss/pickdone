@@ -61,7 +61,8 @@
  * ‹ 25 26 27 [Today] 29 30 31 ›  📅  Aug 28, 2026 Today  ☀
  * 📅 Click to open the calendar popover: days with tasks show a green dot
  */
-import { dayjs, DAY_MS } from '../utils/core.js'
+import { dayjs } from '../utils/core.js'
+import { dayShift } from '../utils/todayBounds.js'
 import store from '../store/index.js'
 import { calGridOffset, weekHeaderOrder } from '../utils/weekGrid.js'
 
@@ -112,10 +113,10 @@ export default {
       // Map week start order to the wd0(Sun)..wd6(Sat) i18n keys
       const order = weekHeaderOrder(weekFromSun)
       return Array.from({ length: 7 }, (_, i) => {
-        const ts = start + i * DAY_MS
+        const ts = dayShift(start, i)
         const dd = dayjs(ts)
         // Cross-month/cross-year weeks: mark newMonth when the cell's month differs from the previous one (renders a seam), mark dim when not in the selected month (faded)
-        const prev = i > 0 ? dayjs(start + (i - 1) * DAY_MS) : null
+        const prev = i > 0 ? dayjs(dayShift(start, i - 1)) : null
         return {
           ts, n: dd.date(), wd: this.$t('statsD.DayDateStrip.wd' + order[i]),
           isSel: ts === base, isToday: ts === this.today0,
@@ -192,7 +193,7 @@ export default {
       })
     },
     shift (dir) {
-      store.commit('ui/setDaySelected', this.selectedTs + dir * 7 * DAY_MS)
+      store.commit('ui/setDaySelected', dayShift(this.selectedTs, dir * 7))
     },
     backToday () { store.commit('ui/setDaySelected', this.today0) },
     calNav (dir) { this.calMonth = dayjs(this.calMonth + '-01').add(dir, 'month').format('YYYY-MM') },

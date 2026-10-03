@@ -1,4 +1,4 @@
-import { rangeDays, rangeLabel, DAY_MS } from './core.js'
+import { rangeDays, rangeLabel } from './core.js'
 import { dayShift } from './todayBounds.js'
 import { calTitle } from './buckets.js'
 
@@ -25,9 +25,9 @@ export function buildExpiryGroups ({ list, settings, today, t, keys, extraGroups
   const R2 = rangeDays(settings.expiredUncompletedTodoRange, 30)
   const bucket = f => list.filter(f).sort((a, b) => b.taskSort - a.taskSort || b.createTime - a.createTime)
   const g = []
-  const expDone = bucket(x => x.complete && x.dayStart && x.dayStart < today && x.dayStart >= today - R1 * DAY_MS)
+  const expDone = bucket(x => x.complete && x.dayStart && x.dayStart < today && x.dayStart >= dayShift(today, -R1))
   if (expDone.length) g.push({ key: 'catExpDone', title: t(keys.expDone, { r: rangeLabel(settings.expiredCompletedTodoRange, t) }), todos: expDone, showDate: true, hasSettings: true })
-  const expUndo = bucket(x => !x.complete && x.dayStart && x.dayStart < today && x.dayStart >= today - R2 * DAY_MS).sort((a, b) => a.dayStart - b.dayStart)
+  const expUndo = bucket(x => !x.complete && x.dayStart && x.dayStart < today && x.dayStart >= dayShift(today, -R2)).sort((a, b) => a.dayStart - b.dayStart)
   if (expUndo.length) g.push({ key: 'catExpUndo', title: t(keys.expUndo, { r: rangeLabel(settings.expiredUncompletedTodoRange, t) }), todos: expUndo, showDate: true, color: 'color2', hasSettings: true, hasRecomplete: true })
   const td = bucket(x => !x.complete && x.dayStart === today)
   if (td.length) g.push({ key: 'catToday', title: calTitle(today), todos: td, color: 'color3' })

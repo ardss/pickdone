@@ -102,7 +102,7 @@ import { ensureFullCalendar } from '../utils/lazy-script.js'
 import { fmtMonth, fmtDate, fmtFull, wdLabel, buildCalendarOptions } from './calendarOptions.js'
 
 import { weekGridStart } from '../utils/weekGrid.js'
-import { today0, dayStart } from '../utils/todayBounds.js'
+import { today0, dayStart, dayShift } from '../utils/todayBounds.js'
 // Perf (domain-5, 2026-09-23): O(1) time-block bucket lookups + task index + cursor-window
 // event trimming. Pure helpers, equivalence-guarded by tests/unit/renderer/dw5-calendar-perf.test.mjs
 import { buildTbBuckets, tbBucketGet, indexById, inCursorWindow, TB_HOURS } from '../utils/calendarBuckets.js'
@@ -122,7 +122,7 @@ export default {
       const start = this.tbWeekStart || weekGridStart(Date.now(), this.settings.weekStartDay === 'sun')
       const today = today0()
       return Array.from({ length: 7 }, (_, i) => {
-        const ts = start + i * 86400000
+        const ts = dayShift(start, i)
         return { ts, label: wdLabel(this.$t.bind(this), dayjs(ts).day()), dom: dayjs(ts).date(), isToday: ts === today }
       })
     },
@@ -137,7 +137,7 @@ export default {
     taskById () { return indexById(this.$store.state.todo.todoList) },
     tbPool () {
       const start = this.tbWeekStart || weekGridStart(Date.now(), this.settings.weekStartDay === 'sun')
-      const end = start + 7 * 86400000
+      const end = dayShift(start, 7)
       return this.$store.state.todo.todoList.filter(t => {
         if (t.complete || t.delete || !t.dayStart || t.dayStart < start || t.dayStart >= end) return false
         return !t.todoTime || t.todoTime === t.dayStart
@@ -334,7 +334,7 @@ export default {
     },
     nav (dir) {
       if (this.view === 'timeblock') {
-        this.tbWeekStart = (this.tbWeekStart || weekGridStart(Date.now(), this.settings.weekStartDay === 'sun')) + dir * 7 * 86400000
+        this.tbWeekStart = dayShift(this.tbWeekStart || weekGridStart(Date.now(), this.settings.weekStartDay === 'sun'), dir * 7)
         return
       }
       if (!this.cal) return
