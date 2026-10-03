@@ -80,3 +80,23 @@ test('tq5[c]: a corrupt LEGACY whole-blob key is quarantined the same way (singl
   assert.ok(quarantined.some(q => q.raw === legacyRaw), 'the corrupt legacy blob\'s bytes are preserved')
   assert.equal(LS.getItem('tomatoPendingLedger'), null, 'the legacy key is retired after quarantine')
 })
+
+test('tq5[d]: the quarantine itself honors the invariant — a rotted quarantine file keeps its bytes (quarantine-of-quarantine)', async () => {
+  clearMirror()
+  for (const k of ['corruptQuarantine.tomato.quarantine', 'corruptQuarantine.tomato.quarantine.bad']) LS.removeItem(k)
+  // pre-fix behavior: quarantineAppend's `catch { parked = [] }` on a rotted quarantine file
+  // destroyed the previously quarantined payloads with a setItem overwrite.
+  LS.setItem(CORRUPT_KEY, '{rotted-quarantine')
+  LS.setItem('corruptQuarantine.tomato.quarantine', '{rotted-quarantine-of-quarantine')
+  LS.setItem('tomatoPendingLedger.broken2', '{also-broken')
+  globalThis.window.todoAPI = { dbCall: async () => ({ accepted: 1, rejected: [] }) }
+  await import('../../../renderer/js/store/tomato.js?tq5-selfrot')
+  assert.equal(LS.getItem('corruptQuarantine.tomato.quarantine.bad'), '{rotted-quarantine-of-quarantine',
+    'the rotted quarantine-of-quarantine file keeps its RAW bytes under the .bad sibling instead of being discarded')
+  const q2 = JSON.parse(LS.getItem('corruptQuarantine.tomato.quarantine'))
+  assert.ok(Array.isArray(q2) && q2.some(e => e.raw === '{rotted-quarantine'),
+    'the rotted quarantine file keeps its own raw bytes in the shared quarantine')
+  const fresh = JSON.parse(LS.getItem(CORRUPT_KEY))
+  assert.ok(Array.isArray(fresh) && fresh.length === 1, 'a fresh readable quarantine started')
+  assert.equal(fresh[0].raw, '{also-broken', 'the new corrupt entry still landed after the self-rot quarantine')
+})

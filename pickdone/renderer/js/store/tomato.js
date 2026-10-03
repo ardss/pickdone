@@ -6,6 +6,7 @@ import { confirmUrl } from '../utils/mediaRegistry.js'
 import { tt } from '../utils/core.js'
 import { FOCUS_MAX_MINUTES, REST_MAX_MINUTES } from '../utils/limits.js'
 import { commit as commitCommand } from "../utils/commandBus.js"
+import { preserveCorrupt } from '../utils/corrupt-quarantine.js'
 // F-C3 (maint/dw wave3): the ledger patch is the last hop into the RUNNING countdown — clamp the
 // duration keys here as a bottom-line guard even for callers that bypass sanitizeSettingsPatch
 // (raw commit('tomato/patch') from float/quick-add windows, main.js CLI hooks).
@@ -294,10 +295,25 @@ function newPendingUid () {
  *  degradation contexts (module-load hydrate) wrap it in their own loud catch; settlement callers
  *  let it propagate so the entry stays pending (retirement requires the data to exist somewhere). */
 const CORRUPT_BLOB_CAP = 10 // quarantined corrupt blobs per queue: newest kept, manual recovery surface
+/** Self-load of the quarantine file honors the same invariant it enforces: a parse failure may
+ *  start a fresh quarantine but must first park the OLD file's raw bytes (corruptQuarantine.
+ *  tomato.quarantine) — the old `catch { parked = [] }` then setItem-overwrite destroyed up to
+ *  cap previously quarantined payloads in one stroke, the exact destruction the quarantine
+ *  exists to prevent. */
 function quarantineAppend (key, cap, item) {
   let parked = []
-  try { parked = JSON.parse(localStorage.getItem(key)) || [] } catch (e) { parked = [] }
-  if (!Array.isArray(parked)) parked = []
+  let existing = null
+  try { existing = localStorage.getItem(key) } catch (e) { existing = null }
+  if (existing != null) {
+    try { parked = JSON.parse(existing) } catch (e) {
+      preserveCorrupt('tomato.quarantine', key, existing)
+      parked = []
+    }
+  }
+  if (!Array.isArray(parked)) {
+    if (existing != null) preserveCorrupt('tomato.quarantine', key, existing)
+    parked = []
+  }
   parked.push(item)
   localStorage.setItem(key, JSON.stringify(parked.slice(-cap)))
 }

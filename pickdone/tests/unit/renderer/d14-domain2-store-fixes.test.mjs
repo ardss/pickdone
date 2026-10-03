@@ -201,6 +201,29 @@ test('B3 quit-flush rejection parks the blob durably (both the reject branch and
 
 /* ==================== B4 + C15: dayPlans snapshot restore re-dating / batch snapshot ==================== */
 
+test('B3b a corrupt parked blob is quarantined, not silently destroyed (consumeUnflushed degrade stays non-destructive)', async () => {
+  const { consumeUnflushed } = await import('../../../renderer/js/utils/dbMirror.js')
+  // B3's consumeUnflushed calls above parked valid blobs; clear the quarantine surface first
+  LS.removeItem('corruptQuarantine.dbMirror')
+  LS.removeItem('dbMirror.unflushed.db.m3c')
+  const corruptRaw = '{corrupt-parked-blob'
+  LS.setItem('dbMirror.unflushed.db.m3c', corruptRaw)
+  const errs = []
+  const origErr = console.error
+  console.error = (...a) => { errs.push(a.join(' ')) }
+  let parked = null
+  try { parked = consumeUnflushed('db.m3c') } finally { console.error = origErr }
+  assert.equal(parked, null, 'the degrade path is unchanged: a corrupt park still reads as "nothing parked"')
+  let quarantined = []
+  try { quarantined = JSON.parse(LS.getItem('corruptQuarantine.dbMirror')) || [] } catch (e) { /* empty */ }
+  const hit = quarantined.find(q => q.key === 'db.m3c')
+  assert.ok(hit, 'the corrupt park marker is cleared only after the raw bytes are quarantined')
+  assert.equal(hit.raw, corruptRaw, 'the RAW bytes of the newest-copy park survive the parse failure (the stale DB copy must not win boot by destroying them)')
+  assert.ok(hit.ts > 0, 'quarantine entry carries a timestamp')
+  assert.equal(LS.getItem('dbMirror.unflushed.db.m3c'), null, 'the park marker is retired after successful quarantine')
+  assert.ok(errs.some(t => t.includes('corrupt')), 'the degradation is logged loudly')
+})
+
 const dayPlans = (await import('../../../renderer/js/utils/dayPlans.js'))
 
 test('B4 restoreSnapshot(taskId, toDay) re-homes snapshot chips onto the restored day; without toDay stays verbatim', async () => {
