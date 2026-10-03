@@ -105,3 +105,25 @@ function writeSvcLiveUpdate (tmp, rel) {
   writeSfc(tmp, rel,
     "<script setup>\nimport { useStore } from 'vuex'\nconst store = useStore()\nstore.dispatch('todo/updateTodoFields', {})\n</script>\n")
 }
+
+test('cross-kind staleness fails the gate: a file dispatching todo/deleteTodo must not keep a stale UPDATE_FIELDS entry green', () => {
+  // Invariant: an allowlist entry is alive only via a matching dispatch of ITS kind.
+  // Previously the hits were one basename-keyed Map overwritten per kind, so a basename that
+  // still dispatched todo/deleteTodo masked a dead UPDATE_FIELDS_ALLOWLIST entry.
+  const tmp = makeTree()
+  // CrossView.vue dispatches ONLY todo/deleteTodo — the updateTodoFields kind has no dispatch.
+  writeSfc(tmp, 'renderer/js/views/CrossView.vue',
+    "<script setup>\nimport { useStore } from 'vuex'\nconst store = useStore()\nstore.dispatch('todo/deleteTodo', {})\n</script>\n")
+  // CrossView.vue also still carries the (permitted) delete entry, so ONLY the update kind is stale.
+  let gate = fs.readFileSync(path.join(tmp, 'cli/check-op-feedback.js'), 'utf8')
+  gate = gate
+    .replace(/const UPDATE_FIELDS_ALLOWLIST = \[[\s\S]*?\]/,
+      "const UPDATE_FIELDS_ALLOWLIST = [\n  'CrossView.vue',\n]")
+    .replace(/const DELETE_ALLOWLIST = \[[\s\S]*?\]/,
+      "const DELETE_ALLOWLIST = [\n  'CrossView.vue',\n]")
+  fs.writeFileSync(path.join(tmp, 'cli/check-op-feedback.js'), gate)
+  const r = runGate(tmp)
+  assert.equal(r.status, 1, `expected exit 1 (stale update-kind entry), got ${r.status}: ${r.stderr}`)
+  assert.match(r.stderr, /CrossView\.vue[^\n]*R2 死条目/)
+  fs.rmSync(tmp, { recursive: true, force: true })
+})

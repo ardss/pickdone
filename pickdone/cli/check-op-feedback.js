@@ -51,7 +51,11 @@ const UPDATE_FIELDS_ALLOWLIST = [
 // anywhere in the scanned union is a dead exemption and turns the gate red (same lifecycle the
 // sibling gate check-command-bus.cjs enforces on WRITE_OPS). Without this the allowlist is
 // grow-only: it permanently passes once its dispatch is removed or renamed.
-const deadEntries = allowlist => allowlist.filter(name => !allowlistedHits.get(name))
+// Per-kind hit sets: an entry is dead only when NO file still dispatches ITS kind. A single
+// kind-blind Map let a file that still dispatches todo/deleteTodo keep a stale
+// UPDATE_FIELDS_ALLOWLIST entry green (cross-kind false negative — the invariant is
+// "entry has a matching dispatch of ITS kind", not "basename is touched by any dispatch").
+const deadEntries = (allowlist, kind) => allowlist.filter(name => !allowlistedHits[kind].has(name))
 
 const hits = []
 const files = [] // union across all scan dirs: walkSfc collects by `name`, so the dead-entry check must key on that union, not per-dir
@@ -74,17 +78,17 @@ for (const dir of SCAN_DIRS) {
   files.push(...walkSfc(abs))
 }
 
-// which basenames still carry each kind of dispatch
-const allowlistedHits = new Map()
+// which basenames still carry each kind of dispatch (kind-keyed sets)
+const allowlistedHits = { deleteTodo: new Set(), updateTodoFields: new Set() }
 for (const { name, p } of files) {
   const src = fs.readFileSync(p, 'utf8')
-  if (/dispatch\(\s*['"]todo\/deleteTodo['"]/.test(src)) allowlistedHits.set(name, 'deleteTodo')
-  if (/dispatch\(\s*['"]todo\/updateTodoFields['"]/.test(src)) allowlistedHits.set(name, 'updateTodoFields')
+  if (/dispatch\(\s*['"]todo\/deleteTodo['"]/.test(src)) allowlistedHits.deleteTodo.add(name)
+  if (/dispatch\(\s*['"]todo\/updateTodoFields['"]/.test(src)) allowlistedHits.updateTodoFields.add(name)
 }
-for (const name of deadEntries(DELETE_ALLOWLIST)) {
+for (const name of deadEntries(DELETE_ALLOWLIST, 'deleteTodo')) {
   hits.push(`${name}  [R1b 死条目: DELETE_ALLOWLIST 中已无对应 dispatch('todo/deleteTodo') — 自动退役该白名单项]`)
 }
-for (const name of deadEntries(UPDATE_FIELDS_ALLOWLIST)) {
+for (const name of deadEntries(UPDATE_FIELDS_ALLOWLIST, 'updateTodoFields')) {
   hits.push(`${name}  [R2 死条目: UPDATE_FIELDS_ALLOWLIST 中已无对应 dispatch('todo/updateTodoFields') — 自动退役该白名单项]`)
 }
 
