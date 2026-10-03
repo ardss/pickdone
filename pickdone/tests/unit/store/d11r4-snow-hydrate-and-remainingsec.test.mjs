@@ -58,7 +58,7 @@ function readSnowEntries () {
   const ls = globalThis.localStorage
   for (let i = 0; i < ls.length; i++) {
     const k = ls.key(i)
-    if (k && k.indexOf('tomatoPendingSnow.') === 0) { try { out.push(JSON.parse(ls.getItem(k)).entry) } catch (e) { /* skip */ } }
+    if (k && k.indexOf('tomatoPendingSnow.') === 0 && k !== 'tomatoPendingSnow.corrupt') { try { out.push(JSON.parse(ls.getItem(k)).entry) } catch (e) { /* skip */ } }
   }
   return out
 }

@@ -21,7 +21,8 @@ function readQueue (prefix) {
   const ls = globalThis.localStorage
   for (let i = 0; i < ls.length; i++) {
     const k = ls.key(i)
-    if (!k || k.indexOf(prefix) !== 0) continue
+    // the TQ-5 quarantine key shares the prefix but holds raw corrupt bytes, not entries
+    if (!k || k.indexOf(prefix) !== 0 || k === prefix + 'corrupt') continue
     try { entries.push(JSON.parse(ls.getItem(k)).entry) } catch (e) { /* skip */ }
   }
   return { entries }

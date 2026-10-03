@@ -270,6 +270,23 @@ function nextPendingSeq () { _pendingSeq += 1; return _pendingSeq }
 function newPendingUid () {
   return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10)
 }
+/** TQ-5 (2026-10-03): the codebase's quarantine-first contract (config-store's config.json.bad,
+ *  sync layer's sync.flushQuarantine.<op> per-op cap) applied to the durable queues. A corrupt
+ *  payload's RAW BYTES are parked under a capped quarantine key BEFORE the queue degrades —
+ *  degradation may stop replay but must never destroy the bytes, because the next save/hydrate
+ *  would otherwise overwrite the only copy of data the mirror exists to protect. Single primitive
+ *  for every quarantine in this module (ledger rejections, snow refusals, corrupt blobs): append
+ *  + cap (newest kept) + RAW throwing setItem (TQ-6: durability writes are loud). Callers in
+ *  degradation contexts (module-load hydrate) wrap it in their own loud catch; settlement callers
+ *  let it propagate so the entry stays pending (retirement requires the data to exist somewhere). */
+const CORRUPT_BLOB_CAP = 10 // quarantined corrupt blobs per queue: newest kept, manual recovery surface
+function quarantineAppend (key, cap, item) {
+  let parked = []
+  try { parked = JSON.parse(localStorage.getItem(key)) || [] } catch (e) { parked = [] }
+  if (!Array.isArray(parked)) parked = []
+  parked.push(item)
+  localStorage.setItem(key, JSON.stringify(parked.slice(-cap)))
+}
 const packLedgerEntry = e => ({ uid: e.uid, seq: e.seq, ts: e.ts, op: e.op, params: e.params })
 const packSnowEntry = e => ({ uid: e.uid, seq: e.seq, ts: e.ts, params: e.params })
 /** Put-own-key write: writes ONLY this entry's key (TQ-2) through the RAW, throwing primitive —
@@ -289,11 +306,14 @@ function removePendingEntry (entry, prefix) {
 }
 function listPrefixKeys (prefix) {
   const keys = []
+  const corruptKey = prefix + 'corrupt'
   try {
     const n = localStorage.length
     for (let i = 0; i < n; i++) {
       const k = localStorage.key(i)
-      if (k && k.indexOf(prefix) === 0) keys.push(k)
+      // The quarantine key shares the prefix by design — it is NOT an entry and must never be
+      // re-hydrated (otherwise hydrate would quarantine itself and grow the cap every boot).
+      if (k && k.indexOf(prefix) === 0 && k !== corruptKey) keys.push(k)
     }
   } catch (e) { /* no storage: nothing to hydrate */ }
   return keys
@@ -311,6 +331,11 @@ function hydratePendingQueue (prefix, legacyKey, revive, pack) {
     if (!corrupt && (!v || typeof v !== 'object' || v.v !== PENDING_QUEUE_V || !v.entry || typeof v.entry !== 'object')) corrupt = true
     if (corrupt) {
       console.error('[tomato] pending queue entry "' + k + '" is corrupt, starting without it')
+      // TQ-5: quarantine the raw bytes BEFORE dropping the key — a parse failure must not
+      // destroy the durability payload the mirror exists to protect.
+      try {
+        quarantineAppend(prefix + 'corrupt', CORRUPT_BLOB_CAP, { key: k, ts: Date.now(), raw })
+      } catch (e) { console.error('[tomato] corrupt-entry quarantine failed (bytes left in place):', e) }
       try { localStorage.removeItem(k) } catch { /* bytes stay; re-logged next boot */ }
       continue
     }
@@ -326,6 +351,10 @@ function hydratePendingQueue (prefix, legacyKey, revive, pack) {
   let v = null
   try { v = JSON.parse(legacyRaw) } catch (e) {
     console.error('[tomato] pending queue "' + legacyKey + '" is corrupt, starting empty:', e)
+    // TQ-5: quarantine the corrupt legacy blob before dropping it (same preserve-then-degrade).
+    try {
+      quarantineAppend(prefix + 'corrupt', CORRUPT_BLOB_CAP, { key: legacyKey, ts: Date.now(), raw: legacyRaw })
+    } catch (e2) { console.error('[tomato] corrupt-blob quarantine failed (bytes left in place):', e2) }
     try { localStorage.removeItem(legacyKey) } catch { /* keep bytes */ }
     return
   }
