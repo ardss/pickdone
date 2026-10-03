@@ -198,6 +198,11 @@ let tomatoLiveAt = 0
 // its own lease immediately (the TTL alone would still show a stale confirm for up to 10s).
 function clearTomatoLiveText () { tomatoLiveText = ''; tomatoLiveAt = 0 }
 
+// TQ-1 (2026-10-03): durable running-session ownership — created in registerIpc (db handle is
+// module-initialized before whenReady). From here on the tray-text lease below is DISPLAY-ONLY:
+// quit guards and startup reconciliation consult the durable 'tomatoRunningSession' meta row.
+let tomatoSession = null
+
 /* ================= Tray ================= */
 function createTray () {
   const iconPath = path.join(__dirname, '../../assets/tray/tray.png')
@@ -232,9 +237,14 @@ async function quitFromTrayInner () {
   // P2 2026-09-23: a running pomodoro used to die silently on tray-quit — the ledger only ever
   // records on completeFocus/giveUp, so the in-progress session vanished with no confirm and no
   // record. Ask before tearing everything down (the tray stays alive until confirmed).
-  // D10 (2026-09-27): tomatoLiveText is a LEASE, not a latch — require a push within the TTL so a
-  // dead renderer's stale text cannot show a false "focus in progress" confirm on every quit.
-  if (require('./handlers/shared').isLiveTextFresh(tomatoLiveText, tomatoLiveAt)) {
+  // TQ-1 (2026-10-03): the confirm gate now consults the DURABLE 'tomatoRunningSession' meta row
+  // (written by every renderer FSM transition, main or float window), not the tray-text lease.
+  // The lease (tomatoLiveText) was a display artifact: a throttled/crashed renderer let a live
+  // focus quit with no confirm, and a float-originated focus never refreshed the lease at all
+  // (update-tomato-taskbar is main-window-gated). The lease remains for the tooltip detail text
+  // only; isLiveTextFresh stays exported for its lease-semantics unit tests.
+  const sessionLive = tomatoSession ? tomatoSession.hasRunningSession() : false
+  if (sessionLive) {
     try {
       const { dialog } = require('electron')
       const { response } = await dialog.showMessageBox({
@@ -523,6 +533,19 @@ if (!app.requestSingleInstanceLock(...__multiLockArgs)) {
     // ran or there is nothing left to replay) — clear it. With a replay pending, the block above
     // owns the lifecycle (clear on proved, keep on unproved).
     if (!replayDecision.replay) { try { dbRecovery.clearRecoveryPending(__ud) } catch { /* best-effort */ } }
+    // TQ-1 (2026-10-03): startup reconciliation — a focus whose renderer died (crash / hard kill /
+    // throttled death without a terminal transition) left a durable 'tomatoRunningSession' row.
+    // Book-or-void from that row instead of trusting the renderer's silent localStorage
+    // voidExpired: the phase is recorded (idempotent deterministic id) or explicitly voided,
+    // never silently dropped. Runs before any window comes up.
+    try {
+      if (!tomatoSession) {
+        tomatoSession = require('./tomato-session').createTomatoSession({
+          call: (op, p) => dbm.call(op, p), log
+        })
+      }
+      tomatoSession.reconcile()
+    } catch (e) { log.warn('[TomatoSession] startup reconcile skipped:', e && e.message) }
     handleAppProtocol()
     createMainWindow()
     const win = getMainWindow()
@@ -739,6 +762,11 @@ app.on('will-quit', (event) => {
     // peer watermarks) run via db.call and must beat dbm.close(); fire-and-forget lost the
     // in-flight round's watermark confirmations.
     try { await require('./lan-sync-bootstrap').stopSyncForQuit() } catch { /* sync never initialized */ }
+    // TQ-1 (2026-10-03): the quit is now committed (confirm resolved / will-quit teardown) — clear
+    // the durable running-session row before the DB closes, so the next boot does not reconcile a
+    // phase the user explicitly ended. A phase that survives only because a crash skipped this
+    // line is exactly what startup reconciliation books-or-voids.
+    try { if (tomatoSession) tomatoSession.clear() } catch { /* best-effort */ }
     try { if (dbm && dbm.close) dbm.close() } catch {}
     flushDone = true
     app.quit()
@@ -768,6 +796,14 @@ function registerIpc () {
   const hctx = {
     app, readConfig, writeConfig, i18n: i18nM, log,
     dbm, dbApi, scheduler,
+    // TQ-1: durable running-session tracker (created lazily here; the startup reconcile above
+    // may have created it first — share the one instance).
+    get tomatoSession () {
+      if (!tomatoSession) {
+        tomatoSession = require('./tomato-session').createTomatoSession({ call: (op, p) => dbm.call(op, p), log })
+      }
+      return tomatoSession
+    },
     getMainWindow, showMainOrLock,
     isLocked, isLockWindow, lockAppNow, unlockAppNow, verifyLockPassword, allowWithinRate,
     isSafeExternal, attachDir,

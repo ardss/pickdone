@@ -30,6 +30,26 @@ function announceUi (key, params) {
   } catch (e) { /* announce is optional */ }
 }
 
+/** TQ-1 (2026-10-03): report an FSM transition to the main process's durable running-session row
+ *  ('tomatoRunningSession' meta row via the 'tomato-running-session' channel). This is the
+ *  renderer half of the durable-ownership contract: the tray-text lease is display-only, so the
+ *  ONLY running-session signal main has is what this writes. Called on every phase boundary from
+ *  BOTH windows (main + float) — a float-originated focus must write the row too. Fire-and-forget:
+ *  an unreported transition degrades to the previous world (lease-only), never breaks the phase. */
+function reportRunningTransition (transition, s) {
+  try {
+    if (!window.todoAPI || !window.todoAPI.tomatoRunningSession) return
+    window.todoAPI.tomatoRunningSession({
+      transition,
+      status: s.status,
+      startedAt: s.startedAt || 0,
+      attachTaskId: (s.attachTodo && s.attachTodo.taskId != null) ? s.attachTodo.taskId : null,
+      tomatoTime: s.tomatoTime,
+      restTime: s.restTime
+    })
+  } catch (e) { /* the durable row is main-owned; a missed report must not break the phase */ }
+}
+
 const LS_KEY = 'tomatoState'
 /** Persistence blob format version: incremented on future incompatible field semantics; readers tolerate old unstamped data as v1 */
 const SCHEMA_V = 1
@@ -610,6 +630,7 @@ export default {
     startFocus ({ state, commit }) {
       if (state.status !== 'default') return // triggering during focus/rest = illegal transition, prevents silently zeroing already-focused time
       commit('patch', { status: 'startTomatoTime', startedAt: Date.now(), remainSec: state.tomatoTime * 60 })
+      reportRunningTransition('start', state) // TQ-1: durable row (main + float windows both report)
       announceCrossDevice(this, 'running')
     },
     giveUp ({ state, commit, dispatch }, { record = true, reason = '' } = {}) {
@@ -656,6 +677,7 @@ export default {
         dispatch('todo/writeCriticalBackup', null, { root: true })
       }
       commit('patch', { status: 'default', startedAt: 0, remainSec: s.tomatoTime * 60 })
+      reportRunningTransition('clear', s) // TQ-1: the phase was explicitly given up — release the durable row
       announceCrossDevice(this, 'idle')
     },
     async completeFocus ({ state, commit, rootState, dispatch }) {
@@ -739,6 +761,9 @@ export default {
         try { new Audio(confirmUrl(rootState.settings.completeSound)).play().catch(() => {}) } catch (e) { /* empty */ }
         if (s.enableNotification !== false) { try { window.todoAPI.notification({ title: tt('statsA.core.tomatoDoneTitle'), body: tt('statsA.core.tomatoDoneBody', { n: focusMin }) }) } catch (e) { /* locked screen rejects the channel — fire-and-forget */ } }
         commit('patch', { status: 'startRestTime', startedAt: Date.now(), remainSec: s.restTime * 60, _countDate: dayjs().format(FMT.date) })
+        // TQ-1: the focus phase completed; the durable row now tracks the rest phase (also a
+        // running phase for the quit confirm; rest itself is never a ledger asset).
+        reportRunningTransition('start', s)
         // Focus complete: announce idle right away so peers' chips stop counting (display-only;
         // the rest phase is local and intentionally not broadcast).
         announceCrossDevice(this, 'idle')
@@ -755,6 +780,7 @@ export default {
       if (!claimPhase('startRestTime', state.startedAt)) return
       if (state.enableNotification !== false) { try { window.todoAPI.notification({ title: tt('statsA.core.restOverTitle'), body: tt('statsA.core.restOverBody') }) } catch (e) { /* locked screen rejects the channel — fire-and-forget */ } }
       commit('patch', { status: 'default', startedAt: 0, remainSec: state.tomatoTime * 60 })
+      reportRunningTransition('clear', state) // TQ-1: rest finished — release the durable row
       // [maint-0924 A9] phase flip feedback: rest over, back to ready
       announceUi('statsH.tomato.restOverAnnounce')
     },
