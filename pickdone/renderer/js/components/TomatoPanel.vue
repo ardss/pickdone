@@ -31,15 +31,17 @@
     <!-- [Removed enableCompleteAudio dropdown]: no playback logic ever reads the tomato store key it wrote (the actual completion sound uses
          settings.completeSound), making it dead UI duplicating the Settings page; the effective completion sound is changed under Settings -> Pomodoro -->
     <section class="tp-records">
-      <!-- [A14 fix] count and rows come from the same shownRecords slice — the old count used the
-           untruncated length, so 8 records displayed "8" above 6 rows with no overflow indicator -->
-      <header>{{ $t('statsD.TomatoPanel.todayRecords') }} <em>{{ $t('statsD.TomatoPanel.countN', { n: shownRecords.length }) }}</em></header>
+      <!-- [A15 fix] the header count is the TRUE total again (the A14 interim fix had pinned it to
+           the 6-row window: 9 records read "今日记录 6"); overflow beyond the 6 shown rows gets an
+           explicit "+N more" row (same pattern as TodoItem's tag chips) so nothing is silently capped -->
+      <header>{{ $t('statsD.TomatoPanel.todayRecords') }} <em>{{ $t('statsD.TomatoPanel.countN', { n: todayRecords.length }) }}</em></header>
       <div v-for="r in shownRecords" :key="r.tomatoId" class="rec-row">
         <app-icon :name="r.succeed ? 'check' : 'x'" :size="12" :style="{ color: r.succeed ? 'var(--brand)' : 'var(--danger)' }"/>
         <span class="rf">{{r.focus||$t('statsD.TomatoPanel.freeFocus')}}</span>
         <span class="rd">{{ $t('statsD.TomatoPanel.minutesN', { n: r.focusDuration }) }}</span>
         <time>{{dfmt(r.endTime)}}</time>
       </div>
+      <div v-if="hiddenRecords" class="rec-row rec-row--more">{{ $t('statsD.TomatoPanel.moreRecords', { n: hiddenRecords }) }}</div>
       <div v-if="!todayRecords.length" class="empty-tip">{{ $t('statsD.TomatoPanel.emptyTip') }}</div>
     </section>
   </div>
@@ -48,6 +50,7 @@
 <script lang="ts">
 /** Full pomodoro settings panel (opened via shortcut / the ⚙ on the bottom bar): ring timer / duration config / today's records / float window */
 import {dayjs, FMT } from '../utils/core.js'
+import { hiddenCount } from '../utils/limits.js' // [A15] "+N more" overflow count
 import { formatMMSS } from '../utils/tomatoShared.js'
 import { remainSecOfAnnounce } from '../store/helpers/tomatoAnnounceShared.js'
 import { remainingSecOfState } from '../store/tomato.js'
@@ -77,11 +80,12 @@ export default {
       const key = dayjs().format(FMT.date)
       return this.$store.getters['tomato/recordsByDate'].get(key) || []
     },
-    /* [A14 fix] the rendered window (max 6 rows); the header count uses this so it never
-       exceeds the visible rows */
+    /* [A14 fix → A15] the rendered window stays capped at 6 rows, but the header count now uses
+       the TRUE total and the overflow gets an explicit "+N more" row */
     shownRecords () {
       return this.todayRecords.slice(0, 6)
-    }
+    },
+    hiddenRecords () { return hiddenCount(this.todayRecords.length, 6) }
   },
   mounted () {
     this.recalc()
@@ -124,4 +128,6 @@ export default {
 .tp-remote { display: flex; align-items: center; gap: 5px; font-size: var(--fs-xs); color: var(--brand); background: var(--brand-light); border-radius: var(--radius-sm); padding: 3px 8px; margin-bottom: 6px; cursor: pointer; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tp-remote:hover { filter: brightness(0.97); }
 .tp-remote:focus-visible { outline: 2px solid var(--brand); outline-offset: -1px; }
+/* [A15] the "+N more" overflow row (dimmed, non-interactive info row under the 6 shown records) */
+.rec-row--more { color: var(--text-dim); font-size: var(--fs-xs); }
 </style>

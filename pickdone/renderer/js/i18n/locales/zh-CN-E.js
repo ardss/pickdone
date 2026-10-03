@@ -242,7 +242,8 @@ export default {
       "focusMinutesTitle": "专注投入 {n} 分钟",
       "togglePomodoroFocus": "选中/取消番茄专注",
       "subCheckedAnnounce": "已勾选子任务：{s}",
-      "subUncheckedAnnounce": "已取消勾选子任务：{s}"
+      "subUncheckedAnnounce": "已取消勾选子任务：{s}",
+      "subSaveFailed": "子任务保存失败"
 
     },
     "TodoGroups": {
@@ -372,7 +373,9 @@ export default {
       "overduePrefix": "过期未达成 (",
       "upcomingLabel": "后续日程",
       "noDateLabel": "没有日期",
-      "overdueRescheduledMsg": "过期未达成事件已重新安排到今天"
+      "overdueRescheduledMsg": "过期未达成事件已重新安排到今天",
+      "rescheduleFailed": "重新安排失败",
+      "nothingToReschedule": "没有需要重新安排的过期日程"
 
     },
     "TodoBoxView": {

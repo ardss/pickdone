@@ -198,10 +198,13 @@ test('A11 QuickAdd: exact tag token check (substring like #java in #javascript n
 })
 
 /* ================= A13: view-more pop clamped inside the viewport ================= */
+/* [A1 extends A13] the clamp moved into utils/popPos.js and now covers top as well as left. */
 
-test('A13 ViewMoreMenu: left coordinate is clamped to >= 0', () => {
+test('A13/A1 ViewMoreMenu: pop position is clamped via the shared clampPopPosition util', () => {
   const src = read('renderer/js/components/ViewMoreMenu.vue')
-  assert.match(src, /Math\.max\(0, Math\.min\(e\.clientX - 190, window\.innerWidth - 220\)\)/)
+  assert.match(src, /import \{ clampPopPosition \} from '\.\.\/utils\/popPos\.js'/)
+  assert.match(src, /clampPopPosition\(e\.clientX, e\.clientY, el\.offsetHeight, window\.innerWidth, window\.innerHeight\)/)
+  assert.ok(!/el\.style\.top = \(e\.clientY \+ 8\)/.test(src), 'unclamped top write must stay deleted')
 })
 
 /* ================= A14: over-limit manual backfill rejected with a hint; copy says 1–600 ================= */

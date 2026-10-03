@@ -52,6 +52,8 @@ export default {
       upcomingTitle: '后续日程',
       noDateTitle: '没有日期',
       rescheduled: '过期未达成事件已重新安排到今天',
+      rescheduleFailed: '重新安排失败',
+      nothingToReschedule: '没有需要重新安排的过期日程',
       empty: '暂无日程'
     },
     TagAll: {

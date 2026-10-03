@@ -543,10 +543,17 @@ export default {
     applyDate (ts) {
       const oldDay = this.e.dateTs ? dayjs(this.e.dateTs).startOf('day') : null
       let remind = this.e.remindTs
+      let offsetsCleared = false
       if (this.e.remindTs && ts) {
         const t = dayjs(this.e.remindTs)
         remind = dayjs(ts).hour(t.hour()).minute(t.minute()).valueOf()
-      } else if (!ts) remind = 0
+      } else if (!ts) {
+        remind = 0
+        // [B13] offsets/extra die with the main reminder (same invariant as onRemindersClear):
+        // zeroing the reminder while keeping reminderOffsets let stale offsets silently revive
+        // the next time a reminder was set.
+        offsetsCleared = true
+      }
       // Multiple reminders: extra absolute reminders shift by the same number of days when the date changes (keeping their own time of day), otherwise they would all become past dates after a date change
       const extras = Array.isArray(this.e.reminderExtra) ? this.e.reminderExtra : []
       let next = extras
@@ -554,10 +561,15 @@ export default {
         const shift = dayjs(ts).startOf('day').diff(oldDay, 'day')
         if (shift) next = extras.map(x => dayjs(x).add(shift, 'day').valueOf())
       }
+      if (offsetsCleared) next = []
       this.e.dateTs = ts || 0
       this.e.remindTs = remind
       this.e.reminderExtra = next
-      this.queueSave({ todoTime: ts || 0, reminderTime: remind, reminderExtra: next })
+      if (offsetsCleared) this.e.reminderOffsets = []
+      // [B4] the save patch carries the cleared arrays too so the store row cannot keep stale offsets
+      const patch = { todoTime: ts || 0, reminderTime: remind, reminderExtra: next }
+      if (offsetsCleared) patch.reminderOffsets = []
+      this.queueSave(patch)
     },
     onPickDate (ts) { this.applyDate(ts || 0) },
     /* ===== Reminders: EpReminders emits; the task snapshot + persistence stay here ===== */

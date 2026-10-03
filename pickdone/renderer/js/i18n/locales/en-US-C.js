@@ -52,6 +52,8 @@ export default {
       upcomingTitle: 'Upcoming',
       noDateTitle: 'No date',
       rescheduled: 'Overdue uncompleted events have been rescheduled to today',
+      rescheduleFailed: 'Reschedule failed',
+      nothingToReschedule: 'Nothing to reschedule',
       empty: 'No events'
     },
     TagAll: {
