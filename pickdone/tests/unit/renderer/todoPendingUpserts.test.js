@@ -10,9 +10,9 @@
  * [TL-6] purge/undo invariant: undo across a purge never durably writes a purged id, the purged
  *        row leaves the restored in-memory table, and a purge installs a historyBarrier (not a
  *        whole-stack historyClear).
- * Run: node --test tests/renderer/todoPendingUpserts.test.js
+ * Run: node --test tests/unit/renderer/todoPendingUpserts.test.js
  */
-import '../setup.mjs'
+import '../../setup.mjs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
@@ -30,7 +30,7 @@ test('[TL-1a] a stale-batch queue entry reaches a terminal state on replay (no d
     },
     onAppQuittingFlush () {}
   }
-  const m = await import('../../renderer/js/store/helpers/todoPendingUpserts.js?tl1a')
+  const m = await import('../../../renderer/js/store/helpers/todoPendingUpserts.js?tl1a')
   m.queuePendingUpsert({ op: 'commitSyncBatch', params: { rows: [{ taskId: 'x1', updateTime: 1 }], version: 5 } })
   await m.flushPendingUpserts()
   await sleep(10)
@@ -55,7 +55,7 @@ test('[TL-1b] a UNIQUE-loser entry converts to the winner row on replay instead 
     },
     onAppQuittingFlush () {}
   }
-  const m = await import('../../renderer/js/store/helpers/todoPendingUpserts.js?tl1b')
+  const m = await import('../../../renderer/js/store/helpers/todoPendingUpserts.js?tl1b')
   // The loser carries its OWN distinct taskId, so supersedePendingRow can never match it — exactly
   // the todo.js renewal race shape.
   m.queuePendingUpsert({ op: 'upsert', params: { taskId: 'loser-1', repeatId: 'r1', dayStart: 123, updateTime: 1 } })
@@ -75,7 +75,7 @@ test('[TL-2] a queued entry survives a simulated renderer restart and is replaye
     dbCall: async () => { throw new Error('db down at enqueue time') },
     onAppQuittingFlush () {}
   }
-  const m1 = await import('../../renderer/js/store/helpers/todoPendingUpserts.js?tl2a')
+  const m1 = await import('../../../renderer/js/store/helpers/todoPendingUpserts.js?tl2a')
   m1.safeUpsert({ taskId: 'tl2_1', taskContent: 'survives the crash', updateTime: 1 })
   await sleep(10)
   const blob = JSON.parse(localStorage.getItem(QKEY))
@@ -89,7 +89,7 @@ test('[TL-2] a queued entry survives a simulated renderer restart and is replaye
     dbCall: async (op, p) => { seen.push([op, p]); if (op === 'getAll') return []; return 'ok' },
     onAppQuittingFlush () {}
   }
-  const m2 = await import('../../renderer/js/store/helpers/todoPendingUpserts.js?tl2b')
+  const m2 = await import('../../../renderer/js/store/helpers/todoPendingUpserts.js?tl2b')
   assert.notEqual(m1, m2, 'sanity: distinct module instance = restart')
   assert.ok(m2.pendingUpserts().some(e => e.params && e.params.taskId === 'tl2_1'), 'the pre-crash entry hydrated into the fresh instance')
   await m2.flushPendingUpserts()
@@ -110,7 +110,7 @@ test('[TL-4] the replay freshness gate skips rows the durable store already supe
     },
     onAppQuittingFlush () {}
   }
-  const m = await import('../../renderer/js/store/helpers/todoPendingUpserts.js?tl4')
+  const m = await import('../../../renderer/js/store/helpers/todoPendingUpserts.js?tl4')
   // Queued frozen copy: row 1 is strictly older than the DB (a peer edit landed via upsertMany
   // ingress, which never advances todosVersion, so the batch-version fence cannot catch this).
   m.queuePendingUpsert({ op: 'commitSyncBatch', params: { rows: [
@@ -143,7 +143,7 @@ test('[TL-4] the replay freshness gate skips rows the durable store already supe
 })
 
 test('[TL-5] updateTodoFields resolves a memory-miss row from the durable store; a DB-absent id is a structured not-found', async () => {
-  const { default: todo } = await import('../../renderer/js/store/todo.js?tl5')
+  const { default: todo } = await import('../../../renderer/js/store/todo.js?tl5')
   const state = todo.state()
   state.todoList = []
   state.recycleList = []
@@ -171,7 +171,7 @@ test('[TL-5] updateTodoFields resolves a memory-miss row from the durable store;
 })
 
 test('[TL-6a] undo across a purge never durably writes a purged id and drops it from restored memory', async () => {
-  const undo = await import('../../renderer/js/store/helpers/undo.js?tl6a')
+  const undo = await import('../../../renderer/js/store/helpers/undo.js?tl6a')
   const commits = []
   const writes = []
   globalThis.window.todoAPI = {
@@ -194,7 +194,7 @@ test('[TL-6a] undo across a purge never durably writes a purged id and drops it 
 })
 
 test('[TL-6b] a purge installs a historyBarrier (targeted re-baseline), not a whole-stack historyClear', async () => {
-  const { default: todo } = await import('../../renderer/js/store/todo.js?tl6b')
+  const { default: todo } = await import('../../../renderer/js/store/todo.js?tl6b')
   const state = todo.state()
   state.todoList = []
   state.recycleList = [{ taskId: 'p_1', taskContent: 'old trash', delete: true, categoryId: 3, updateTime: 1, deletedAt: 1 }]
