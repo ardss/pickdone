@@ -1,6 +1,6 @@
 /** 番茄计时状态机。账本(专注记录)唯一事实源 = SQLite tomato_records 行表(2026-09-04 根修):
  *  本文件只持有内存副本供渲染,所有增删改走原子 op 落库 + 主进程广播回灌;LS blob 只存计时瞬态(丢了无所谓)。 */
-import { dayjs, safeSet, FMT } from '../utils/core.js'
+import { dayjs, FMT } from '../utils/core.js'
 import { remainSecOf } from '../utils/tomatoShared.js'
 import { confirmUrl } from '../utils/mediaRegistry.js'
 import { tt } from '../utils/core.js'
@@ -221,15 +221,29 @@ function newPingToken (seq) {
   return Date.now().toString(36) + ':' + (seq || 0) + ':' + Math.random().toString(36).slice(2, 8)
 }
 
+/** TQ-6 (2026-10-03): the transient LS blob is a LOUD-degradation surface, not a fail-silent one.
+ *  persistState runs on every mutation, so a quota failure must not throw into unrelated UI —
+ *  but the old safeSet call returned a boolean NOBODY consumed, so an unhealthy mirror was
+ *  invisible. The degraded flag latches for the process lifetime: one look, one surface. */
+let _mirrorDegraded = false
+export function tomatoMirrorDegraded () { return _mirrorDegraded }
 function persistState (state) {
   // Write sequence number: increments once per real disk flush; the ping carries only the sequence, and receivers skip the full re-read when the sequence matches
   state._syncSeq = (state._syncSeq || 0) + 1
   state.schemaV = SCHEMA_V
   // 账本字段从 blob 中剔除(唯一源=DB 行表),blob 只承载计时瞬态与偏好
   const blob = Object.assign({}, state, { tomatoRecordList: [], _recordsInDb: true })
-  safeSet(LS_KEY, JSON.stringify(blob))
+  try {
+    localStorage.setItem(LS_KEY, JSON.stringify(blob))
+  } catch (e) {
+    _mirrorDegraded = true
+    console.error('[tomato] transient state persist FAILED (degraded; in-memory state continues, peers may diverge):', e)
+  }
   const ping = newPingToken(state._syncSeq)
-  try { window.localStorage.setItem(PING_KEY, ping) } catch (e) { /* empty */ }
+  try { window.localStorage.setItem(PING_KEY, ping) } catch (e) {
+    _mirrorDegraded = true
+    console.error('[tomato] cross-window sync ping write failed (peer windows will not re-read):', e)
+  }
   lastAppliedPing = ping // This window's own write counts as applied
 }
 
@@ -428,15 +442,16 @@ const REJECTED_LEDGER_CAP = 100
 function quarantineRejectedRows (res, params) {
   if (!res || !Array.isArray(res.rejected) || !res.rejected.length) return
   logRejectedRows(res, params)
-  let parked = []
-  try { parked = JSON.parse(localStorage.getItem(REJECTED_LEDGER_KEY)) || [] } catch (e) { /* start fresh */ }
-  if (!Array.isArray(parked)) parked = []
   const list = Array.isArray(params) ? params : [params]
+  // TQ-6: this quarantine write uses the LOUD primitive (quarantineAppend → raw setItem) and
+  // propagates its failure. settleLedgerEntry calls this BEFORE the entry splice, so a failed
+  // quarantine leaves the entry pending — the invariant "no entry retired until it exists
+  // durably somewhere" is structural, not caller discipline. The old safeSet boolean had zero
+  // consumers: a silently failed quarantine retired rejected rows that existed NOWHERE.
   for (const r of res.rejected) {
     const row = list[r && r.index]
-    if (row) parked.push({ ts: Date.now(), reason: (r && r.reason) || 'unknown', row })
+    if (row) quarantineAppend(REJECTED_LEDGER_KEY, REJECTED_LEDGER_CAP, { ts: Date.now(), reason: (r && r.reason) || 'unknown', row })
   }
-  try { safeSet(REJECTED_LEDGER_KEY, JSON.stringify(parked.slice(-REJECTED_LEDGER_CAP))) } catch (e) { console.warn('[tomato] failed to quarantine rejected ledger rows:', e) }
 }
 function settleLedgerEntry (entry, res) {
   if (!res) return // not handed to a bridge / falsy resolution: still pending, keep for retry

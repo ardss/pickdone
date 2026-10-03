@@ -270,7 +270,13 @@ export function versionCodeOf (v) {
 
 
 /** Safe localStorage write: doesn't throw on quota exceeded/private mode, only warns.
- *  Returns whether it actually persisted: callers (e.g. tomato persistState) trigger compensation paths (forced DB mirror) based on it; previously warn-only = silent corruption */
+ *  TQ-6 (2026-10-03): the return value is a FAIL-SILENT signal — verify your consumer before
+ *  using this for a durability asset. The comment here used to claim tomato persistState
+ *  compensates on false; no caller ever did, which let a silently failed write retire data that
+ *  existed nowhere. The tomato store's durability writes (pending-queue mirror, quarantines)
+ *  now use the RAW throwing localStorage.setItem; safeSet remains for transient preference
+ *  blobs where loud degradation is handled by the caller (e.g. tomato persistState's own
+ *  degraded-flag try/catch around its direct setItem). */
 export function safeSet (key, value) {
   try { localStorage.setItem(key, value); return true } catch (e) { console.warn('[storage] write failed:', key, e); return false }
 }
