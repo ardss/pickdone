@@ -16,7 +16,7 @@
       <transition name="fade">
         <span v-if="nlHasLabel()" class="qa-date-chip" role="button" tabindex="0"
               :aria-label="$t('statsD.QuickAdd.clearDateAria', { d: nlLabel() })" @click="clearDate"
-              @keydown.enter.prevent="clearDate">
+              @keydown="onClearDateKey">
           <i class="ico" style="--ico:url('app://app/assets/img/calendar_month_black_24dp.svg');width:16px;height:16px"></i>{{nlLabel()}}<i class="close-x close-x--sm" style="margin-left:2px"></i>
         </span>
       </transition>
@@ -42,6 +42,7 @@ import {dayjs, FMT } from '../utils/core.js'
 import { resolveQuickAddDate } from '../utils/quickAddDate.js'
 import { splitPasteLines, ensureTagSuffix } from '../utils/quickAddPaste.js'
 import { $elOf } from '../utils/el.js'
+import { roleButtonActivate } from '../utils/roleButtonKey.js' // [A9/A16] Space+Enter button activation
 
 export default {
   name: 'QuickAdd',
@@ -102,6 +103,8 @@ export default {
     window.removeEventListener('todo:focus-quickadd', this.focusInput)
   },
   methods: {
+    /* [A9/A16] date-chip clear button: Space joins Enter as activation keys (same .prevent, no .stop, as before) */
+    onClearDateKey: roleButtonActivate(function () { this.clearDate() }),
     /* [uiux-2026-10-01 J1 P3] Esc is the universal cancel key: clear the draft (and the failure
        mark); a non-empty draft is also left so the field blurs — an empty draft only blurs. */
     onCancel () {

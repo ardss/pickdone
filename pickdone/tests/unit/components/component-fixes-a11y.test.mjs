@@ -138,9 +138,10 @@ test('EditPanel: dependency candidate truncation is announced', () => {
 
 /* ---------------- SearchView / TodoItem / DayDateStrip / QuickAdd / TodayXView ---------------- */
 
-test('SearchView: clear button handles Enter like the date chip pattern', () => {
+test('SearchView: clear button handles Enter AND Space (shared roleButtonActivate)', () => {
   const src = read('renderer/js/views/SearchView.vue')
-  assert.match(src, /main-nav-search__clear[^>]*@keydown\.enter\.prevent="clearQ"/)
+  assert.match(src, /main-nav-search__clear[^>]*@keydown="onClearKey"/)
+  assert.match(src, /onClearKey: roleButtonActivate\(function \(\) { this\.clearQ\(\) }\)/)
 })
 
 test('TodoItem: shortcuts only announced for dated tasks (D4 added the ArrowUp/Down row moves)', () => {
@@ -166,11 +167,15 @@ test('TodayXView: collapsed drawer is visibility:hidden (content out of Tab chai
   assert.match(src, /\.tx-drawer\.open\{[^}]*visibility:visible/)
 })
 
-test('TodoBoxView: dropdown triggers are focusable and open via Enter; menu items keyboard-activatable', () => {
+test('TodoBoxView: dropdown triggers are focusable, advertise listbox state, and open via Enter/Space', () => {
   const src = read('renderer/js/views/TodoBoxView.vue')
-  const triggers = src.match(/dropdown-select__label" role="button" tabindex="0"/g) || []
-  assert.equal(triggers.length, 3, 'all three triggers focusable')
-  assert.match(src, /@keydown\.enter\.prevent="tbTriggerKey"/)
+  const triggers = src.match(/dropdown-select__label" role="button" tabindex="0" aria-haspopup="listbox"/g) || []
+  assert.equal(triggers.length, 3, 'all three triggers focusable with listbox semantics')
+  assert.match(src, /:aria-expanded="openDd === 'sort' \? 'true' : 'false'"/)
+  assert.match(src, /:aria-expanded="openDd === 'order' \? 'true' : 'false'"/)
+  assert.match(src, /:aria-expanded="openDd === 'cat' \? 'true' : 'false'"/)
+  assert.match(src, /@keydown="onTriggerKey"/)
+  assert.match(src, /onTriggerKey: roleButtonActivate\(function \(e\) { this\.tbTriggerKey\(e\) }\)/)
   // the TS cast lives in the tbTriggerKey method (structure guard rejects `as` in templates)
   assert.match(src, /tbTriggerKey \(e\) { \(e\.currentTarget as HTMLElement\)\.click\(\) }/)
   assert.ok(!/class="dd-menu">\s*<li[^>]*@click="setSort\(m\.value\)"[^>]*>\{\{ m\.label \}\}<\/li>\s*<\/ul>\s*<template #reference><span class="dropdown-select__label">{{/.test(src.replace(/\n\s+/g, ' ')), 'sort li lacks keyboard') // sanity regex

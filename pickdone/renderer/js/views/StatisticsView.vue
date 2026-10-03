@@ -34,14 +34,18 @@
 
           <div v-else class="stat-subpage">
             <!-- Period switcher: segmented pills (shared by review and charts) -->
+            <!-- [A6] roving-tabindex radiogroup: the checked pill is the single Tab stop,
+                 Arrow keys move (and select) within the group, Space/Enter select -->
             <div v-if="view!=='ach'" class="stat-period-pills" role="radiogroup" :aria-label="$t('statsA.StatisticsView.ariaPeriod')">
               <button v-for="p in periodOptions" :key="p.key" class="stat-period-pill"
                       :class="{on: period===p.key}" role="radio" :aria-checked="period===p.key"
-                      tabindex="0" @click="period=p.key" @keydown.enter.prevent="period=p.key">{{ p.label }}</button>
+                      :tabindex="period===p.key ? 0 : -1" :data-period-key="p.key"
+                      @click="period=p.key" @keydown="onPeriodRadioKey">{{ p.label }}</button>
               <el-popover ref="rangePop" placement="bottom-end" :width="360" trigger="click" @show="initCustomDraft">
                 <template #reference>
                   <span class="stat-period-range" :class="{custom: period==='custom'}" role="button" tabindex="0"
-                        :title="$t('statsA.StatisticsView.customTitle')" aria-haspopup="dialog">{{ periodRangeLabel }}</span>
+                        :title="$t('statsA.StatisticsView.customTitle')" aria-haspopup="dialog"
+                        @keydown="onRangeActivateKey">{{ periodRangeLabel }}</span>
                 </template>
                 <!-- Custom range popover (finalized by user 2026-08-31: pops up directly, does not expand into a row): after applying, the whole page recomputes for the chosen range -->
                 <div class="stat-custom-range" @keydown.enter.prevent="applyCustomRange">
@@ -96,10 +100,13 @@
             <!-- 3. Activity heatmap -->
             <div class="tl-card hm-card">
               <div class="tl-head"><b>{{ $t('statsA.StatisticsView.heatTitle') }}</b>
+                <!-- [A2] roving-tabindex radiogroup (same pattern as the period pills): was
+                     unreachable by keyboard entirely (no tabindex, no keys) -->
                 <span class="hm-range-toggle" role="radiogroup" :aria-label="$t('statsA.StatisticsView.ariaHeatRange')">
                   <button v-for="r in heatRangeOptions" :key="r.key" class="hm-range-btn"
                           :class="{on: heatRange===r.key}" role="radio" :aria-checked="heatRange===r.key"
-                          @click="heatRange=r.key">{{ r.label }}</button>
+                          :tabindex="heatRange===r.key ? 0 : -1" :data-heat-key="r.key"
+                          @click="heatRange=r.key" @keydown="onHeatRadioKey">{{ r.label }}</button>
                 </span>
                 <span class="tl-sub">{{ $t('statsA.StatisticsView.hmStats', { n: heatmap.streak, m: heatmap.totalDone, g: giveUps7 }) }}</span></div>
               <div class="hm-scroll" @scroll="hmTipHide">
@@ -245,6 +252,7 @@
 import { dayjs, DAY_MS } from '../utils/core.js'
 import ChartCard from './statistics/ChartCard.vue'
 import EmptyState from '../components/EmptyState.vue'
+import { roleButtonActivate, roleRadioActivate } from '../utils/roleButtonKey.js' // [A2/A6/A9] radiogroup + button activation
 import StatsShareCard from './statistics/StatsShareCard.vue'
 import StatsAchievements from './statistics/StatsAchievements.vue'
 
@@ -392,6 +400,20 @@ export default {
     }
   },
   methods: {
+    /* [A6] period pills radiogroup: roving tabindex (checked pill = the Tab stop) + arrows that
+       move and select + Space/Enter select. The radio element carries its option key in
+       data-period-key, so one shared handler maps element -> state. */
+    onPeriodRadioKey: roleRadioActivate(function (el) {
+      const key = el.getAttribute && el.getAttribute('data-period-key')
+      if (key) this.period = key
+    }),
+    /* [A2] heatmap range radiogroup: same roving-tabindex pattern as the period pills */
+    onHeatRadioKey: roleRadioActivate(function (el) {
+      const key = el.getAttribute && el.getAttribute('data-heat-key')
+      if (key) this.heatRange = key
+    }),
+    /* [A9] custom-range trigger: Space joins Enter; the popover opens on click, so synthesize one */
+    onRangeActivateKey: roleButtonActivate(function (e) { (e.currentTarget).click() }),
     /** Hover 3-hour dashed-grid toggle: state persisted to localStorage('tlHoverGrid'), on by default */
     toggleTlGrid () {
       this.tlGrid = !this.tlGrid

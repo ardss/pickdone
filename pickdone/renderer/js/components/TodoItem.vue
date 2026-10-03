@@ -17,7 +17,7 @@
             shortcut is only announced for dated tasks; Shift+Delete always applies -->
     <span class="td-check" :class="{on:todo.complete}" :style="todo.complete?{background:checkboxColor,borderColor:checkboxColor}:{}"
           role="checkbox" :aria-checked="todo.complete ? 'true' : 'false'" :aria-label="$t('statsE.TodoItem.markComplete')"
-          tabindex="0" @click.stop="onCheckClick" @keydown.enter.prevent.stop="onCheckClick($event)">
+          tabindex="0" @click.stop="onCheckClick" @keydown="onCheckKey">
       <svg v-if="todo.complete" class="td-check-svg" viewBox="0 0 12 12" aria-hidden="true">
         <polyline points="2,6.2 5,9 10,3" fill="none" stroke="#fff" stroke-width="1.8"
                   stroke-linecap="round" stroke-linejoin="round" pathLength="1"/>
@@ -26,7 +26,7 @@
     <div class="td-body">
       <div class="td-title" :class="{'td-title--empty': !todo.taskContent}" :title="todo.taskContent"
            role="button" tabindex="0" :aria-label="$t('statsE.TodoItem.openTaskAria', { name: todo.taskContent || $t('statsE.TodoItem.untitled') })"
-           @click.stop="openEdit" @keydown.enter.prevent.stop="openEdit">
+           @click.stop="openEdit" @keydown="onTitleKey">
         <!-- U-15: wire the search highlight (query prop existed but was never rendered; SearchView passes it) -->
         <span v-if="query" v-html="highlightedTitle"></span>
         <template v-else>{{ todo.taskContent || $t('statsE.TodoItem.untitled') }}</template>
@@ -35,7 +35,7 @@
       <div v-if="subtasks.length" class="td-subs">
         <div v-for="(s, si) in subtasks" :key="s.text + '#' + si" class="td-sub" role="checkbox"
              :aria-checked="s.checked ? 'true' : 'false'" tabindex="0"
-             @click.stop="toggleSub(s)" @keydown.enter.prevent.stop="toggleSub(s)">
+             @click.stop="toggleSub(s)" @keydown="onSubKey(s, $event)">
           <span class="td-sub-check" :class="{on:s.checked}">✓</span>
           <span :class="{strike:s.checked}">{{s.text}}</span>
         </div>
@@ -85,7 +85,7 @@
       <span class="td-tom" role="button" tabindex="0"
             :class="{ghost: todo.complete, active: $store.state.tomato.attachTodo && $store.state.tomato.attachTodo.taskId === todo.taskId}"
             :title="$t('statsE.TodoItem.togglePomodoroFocus')"
-            @click.stop="setTomatoTimer" @keydown.enter.prevent.stop="setTomatoTimer">
+            @click.stop="setTomatoTimer" @keydown="onTomatoKey">
         <span class="td-tom__start">
           <i class="ico" style="--ico:url('app://app/assets/img/icon-tomato-timer2.svg');width:13px;height:13px"></i>
         </span>
@@ -117,6 +117,7 @@ import { reorderScale } from '../../../shared/sort-core.mjs' // F-B2: reorder sc
 import { crossDayMovePatch, crossDayRevertPatch } from '../utils/crossDayMove.js' // [maint-0924 A1] shared cross-day rules
 import { taskContextMenu } from '../utils/taskMenu.js' // [maint-0925 A16] one menu builder for all views
 import { descLineClampStyle } from '../utils/descLines.js' // [B6 fix] consumes settings.todoDescriptionDisplayLineNumber
+import { roleButtonActivate, roleCheckboxActivate } from '../utils/roleButtonKey.js' // [A8/A9] Space+Enter activation
 
 // Module-level drag-in-progress flag: a document.querySelector('.td-item.dragging') on every
 // dragover is O(document); this is set on dragstart and cleared on dragend/drop.
@@ -198,6 +199,15 @@ export default {
     }
   },
   methods: {
+    /* [A8] checkbox keys: Space + Enter both toggle, stop so the row's own activation doesn't double-fire */
+    onCheckKey: roleCheckboxActivate(function (e) { this.onCheckClick(e) }),
+    /* [A8] subtask checkboxes: factory re-created per event is fine (cheap closure); `this` is the component */
+    onSubKey (s, e) {
+      roleCheckboxActivate(function () { this.toggleSub(s) }).call(this, e)
+    },
+    /* [A9] title button + tomato capsule: Space joins Enter as activation keys */
+    onTitleKey: roleButtonActivate(function (e) { this.openEdit(e) }, { stop: true }),
+    onTomatoKey: roleButtonActivate(function (e) { this.setTomatoTimer(e) }, { stop: true }),
     /* ===== Drag sorting (midpoint insertion into taskSort, aligned with the task_sort reference semantics) ===== */
     onDragStart (e) {
       e.dataTransfer.effectAllowed = 'move'
@@ -393,9 +403,17 @@ export default {
       if (!this.projCat) return
       this.$router.push({ name: 'todo-list-project', params: { id: this.projCat.categoryId } }).catch(() => {})
     },
-    toggleSub (s) {
+    // [A5] the optimistic checkbox flip is now guarded: a failed write reverts s.checked and toasts
+    // (same failure semantics as EditPanel's saveFailed banner) instead of leaving the UI lying.
+    async toggleSub (s) {
       s.checked = !s.checked
-      this.$store.dispatch('todo/updateTodoFields', { taskId: this.todo.taskId, patch: { subtasks: JSON.stringify(this.subtasks) } })
+      try {
+        await this.$store.dispatch('todo/updateTodoFields', { taskId: this.todo.taskId, patch: { subtasks: JSON.stringify(this.subtasks) } })
+      } catch (e) {
+        s.checked = !s.checked
+        if (this.$message) this.$message.error(this.$t('statsE.TodoItem.subSaveFailed') + ': ' + (e && e.message ? e.message : e))
+        return
+      }
       // [maint-0924 A5] read-screen feedback for the toggle itself (the parent-linkage announce
       // below only fires when the flip completes/uncompletes the WHOLE task, not on plain toggles)
       if (this.$announce) this.$announce(this.$t(s.checked ? 'statsE.TodoItem.subCheckedAnnounce' : 'statsE.TodoItem.subUncheckedAnnounce', { s: s.text }))

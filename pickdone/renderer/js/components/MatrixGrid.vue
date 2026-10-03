@@ -20,7 +20,7 @@
              aria-keyshortcuts="Control+1 Control+2 Control+3 Control+4">
           <span class="td-check" :class="{on: isComplete(t)}" :style="isComplete(t) ? { background: chkColor(t), borderColor: chkColor(t) } : {}" role="checkbox"
                 :aria-checked="isComplete(t) ? 'true' : 'false'" :aria-label="$t('statsJ.TodoItem.markDone')"
-                tabindex="0" @click.stop="completeTask(t)" @keydown.enter.prevent.stop="completeTask(t)">
+                tabindex="0" @click.stop="completeTask(t)" @keydown="onCheckKey(t, $event)">
             <svg v-if="isComplete(t)" class="td-check-svg" viewBox="0 0 12 12" aria-hidden="true">
               <polyline points="2,6.2 5,9 10,3" fill="none" stroke="#fff" stroke-width="1.8"
                         stroke-linecap="round" stroke-linejoin="round" pathLength="1"/>
@@ -55,6 +55,7 @@ import { chkColor, toggleTomatoAttach } from '../utils/taskRow.js'
 import { toggleCompleteWithUndo } from '../utils/completeAction.js'
 import { deleteWithUndo, moveWithUndo, moveSnapshot } from '../utils/confirm.js'
 import { taskContextMenu } from '../utils/taskMenu.js'
+import { roleCheckboxActivate } from '../utils/roleButtonKey.js' // [A8] Space+Enter checkbox activation
 
 /* Quadrant titles store i18n keys (statsA.MatrixGrid.*), resolved with $t at render time (no component instance at module level) */
 const QUADRANTS = [
@@ -83,6 +84,10 @@ export default {
     }
   },
   methods: {
+    /* [A8] complete checkbox: Space joins Enter, stopped so the row's own activation doesn't double-fire */
+    onCheckKey (t, e) {
+      roleCheckboxActivate(function () { this.completeTask(t) }).call(this, e)
+    },
     taskContextMenu (t, e) { taskContextMenu(this, t, e) },
     openEdit (t) {
       const raw = this.$store.state.todo.todoList.find(x => x.taskId === t.taskId) || t

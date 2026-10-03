@@ -87,7 +87,8 @@ test('fix1 static anchors: data() declares `now`, the refresh loop ticks it', ()
 /* ================= Fix 7: SearchView undated tasks hidden by a date range ================= */
 
 const { matchTodo } = await import('../../../renderer/js/utils/search.js')
-const SearchComp = loadSFC('renderer/js/views/SearchView.vue', { matchTodo, dayjs, TodoItem: {}, EmptyState: {} })
+const rbkMod = await import('../../../renderer/js/utils/roleButtonKey.js')
+const SearchComp = loadSFC('renderer/js/views/SearchView.vue', { matchTodo, dayjs, TodoItem: {}, EmptyState: {}, roleButtonActivate: rbkMod.roleButtonActivate })
 
 function searchCtx (tasks, range) {
   return {
@@ -132,7 +133,11 @@ const { resolveQuickAddDate } = await import('../../../renderer/js/utils/quickAd
 const quickAddPaste = await import('../../../renderer/js/utils/quickAddPaste.js')
 const QuickAddComp = loadSFC('renderer/js/components/QuickAdd.vue', {
   parseNaturalDate, dayjs, FMT: { date: 'YYYY-MM-DD', cnDate: 'YYYY-MM-DD' }, resolveQuickAddDate,
-  splitPasteLines: quickAddPaste.splitPasteLines, ensureTagSuffix: quickAddPaste.ensureTagSuffix
+  splitPasteLines: quickAddPaste.splitPasteLines, ensureTagSuffix: quickAddPaste.ensureTagSuffix,
+  // [A9] the date-chip key handler now routes through the shared factory (this harness strips imports)
+  roleButtonActivate: (await import('../../../renderer/js/utils/roleButtonKey.js')).roleButtonActivate,
+  // onEnter's calendar-ref resolution also needs $elOf (imports are stripped by this harness)
+  $elOf: (await import('../../../renderer/js/utils/el.js')).$elOf
 })
 
 function quickAddCtx (quiet, dispatch) {
@@ -260,7 +265,8 @@ test('fix14 static anchor: pending poll timer is cleared on unmount', () => {
 /* ================= Fix 16: cancelled drags clear the quadrant highlight ================= */
 
 const MatrixComp = loadSFC('renderer/js/components/MatrixGrid.vue', {
-  dayjs, FMT: { cnDate: 'YYYY-MM-DD' }
+  dayjs, FMT: { cnDate: 'YYYY-MM-DD' },
+  roleCheckboxActivate: rbkMod.roleCheckboxActivate // [A8] the complete checkbox now uses the shared factory
 })
 
 test('fix16 endDrag: dragend resets BOTH dragId and overKey (cancelled drag no stale highlight)', () => {

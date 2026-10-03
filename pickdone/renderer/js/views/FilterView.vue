@@ -19,17 +19,20 @@
       <empty-state v-if="!filter"><template #text>{{ $t('statsJ.FilterView.notFound') }}</template></empty-state>
       <empty-state v-else-if="!list.length"><template #text>{{ $t('statsC.TodoBox.empty') }}</template></empty-state>
       <div v-else class="todo-box-list">
+        <!-- [A7] role=button demoted from the row to the content (same TodoItem pattern): a button
+             role wrapping role=checkbox children is broken ARIA nesting; the row stays a focusable
+             container, the "open" semantics live on the content -->
         <div v-for="t in list" :key="t.taskId" class="todo-box-list-item"
              :class="{ 'todo-box-list-item--selected': selectedId === t.taskId }"
-             role="button" tabindex="0" :aria-label="t.taskContent"
+             tabindex="0"
              @click="openEdit(t)" @keydown.enter.prevent="openEdit(t)" @contextmenu.prevent="ctxMenu(t, $event)">
           <span class="todo-box-list-item__category-dot tb-dot-check" :style="{ color: dotColor(t) }" role="checkbox"
                 :aria-checked="t.complete ? 'true' : 'false'" :aria-label="$t('statsC.TodoBox.ariaComplete')" :title="$t('statsC.TodoBox.titleComplete', { name: t.taskContent })" tabindex="0"
-                @click.stop="completeItem(t)" @keydown.enter.prevent.stop="completeItem(t)">
+                @click.stop="completeItem(t)" @keydown="onCompleteKey(t, $event)">
             <svg viewBox="0 0 512 512"><path fill="currentColor" d="M256 8C119 8 8 119 8 256s111 248 248 248 248-111 248-248S393 8 256 8zm0 448c-110.5 0-200-89.5-200-200S145.5 56 256 56s200 89.5 200 200-89.5 200-200 200z"/></svg>
           </span>
           <div class="todo-box-list-item__container">
-            <div class="todo-box-list-item__content"> {{ t.taskContent }} </div>
+            <div class="todo-box-list-item__content" role="button" tabindex="0" :aria-label="t.taskContent"> {{ t.taskContent }} </div>
             <div class="todo-box-list-item__workload"
                  :class="{ 'todo-box-list-item__workload--lv2': estOf(t) >= 3 && estOf(t) <= 4, 'todo-box-list-item__workload--lv3': estOf(t) >= 5 }"></div>
           </div>
@@ -55,6 +58,7 @@ import { toggleCompleteWithUndo } from '../utils/completeAction.js'
 import { getEstimate } from '../utils/tomatoEstimate.js'
 import FilterModal from '../components/FilterModal.vue'
 import EmptyState from '../components/EmptyState.vue'
+import { roleCheckboxActivate } from '../utils/roleButtonKey.js' // [A8] Space+Enter checkbox activation
 
 export default {
   name: 'FilterView',
@@ -107,6 +111,10 @@ export default {
     if (this.$store.state.ui.showFilterModal) this.$store.commit('ui/toggleFilterModal', false)
   },
   methods: {
+    /* [A8] complete checkbox: Space joins Enter, stopped so the row's edit activation doesn't double-fire */
+    onCompleteKey (t, e) {
+      roleCheckboxActivate(function () { this.completeItem(t) }).call(this, e)
+    },
     taskContextMenu (t, e) { taskContextMenu(this, t, e) },
     openEdit (t) {
       const raw = this.$store.state.todo.todoList.find(x => x.taskId === t.taskId) || t

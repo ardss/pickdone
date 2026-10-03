@@ -8,7 +8,7 @@
           <div class="main-nav-search__icon"></div>
           <input ref="inp" v-model="qText" spellcheck="false" autocomplete="off" :aria-label="$t('statsC.Search.searchAria')"
                  class="main-nav-search__input" type="text" :placeholder="$t('statsC.Search.searchPlaceholder')"/>
-          <div v-if="qText.trim()!==''" class="main-nav-search__clear close-x close-x--sm" role="button" tabindex="0" :aria-label="$t('statsC.Search.clearAria')" @click="clearQ" @keydown.enter.prevent="clearQ"></div>
+          <div v-if="qText.trim()!==''" class="main-nav-search__clear close-x close-x--sm" role="button" tabindex="0" :aria-label="$t('statsC.Search.clearAria')" @click="clearQ" @keydown="onClearKey"></div>
         </div>
         <!-- filters (correspond to the project baseline's three dropdown-selects) -->
         <el-select size="small" class="search-filter-el" style="width:110px"
@@ -68,6 +68,7 @@ import { matchTodo, highlightHTML, escapeHtml } from '../utils/search.js'
 import { dayjs } from '../utils/core.js'
 import TodoItem from '../components/TodoItem.vue'
 import EmptyState from '../components/EmptyState.vue'
+import { roleButtonActivate } from '../utils/roleButtonKey.js' // [A9] Space+Enter button activation
 
 // Option value is the persisted stable key (previously persisted Chinese words were used as enum values, which mismatched every logic branch under an English UI — audit S1 fix);
 // label stores an i18n key resolved via $t at render time
@@ -154,6 +155,8 @@ export default {
   },
   mounted () { this.$refs.inp && this.$refs.inp.focus() },
   methods: {
+    /* [A9] clear chip: Space joins Enter as activation keys (same .prevent, no .stop, as before) */
+    onClearKey: roleButtonActivate(function () { this.clearQ() }),
     // Shared match pipeline for matched/undatedHidden so the exclusion count and the result list
     // can never disagree (computed twice per render at most; the pool is small and matchTodo is cheap)
     matchTasks () {
