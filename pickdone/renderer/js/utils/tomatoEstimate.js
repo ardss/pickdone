@@ -218,17 +218,29 @@ export const _testInternals = { state, get MAX_KEYS () { return MAX_KEYS } }
  *  its own state. Callers that know the live id set should use pruneEstimates. */
 const MAX_KEYS = 5000
 
-/** Current mirror key list — callers that want to drop a subset via pruneEstimates need the
- *  complement of that subset over the live keys (purge path: keep everything not purged). */
-export function estimateStateKeys () { return Object.keys(state) }
-
 /** Drop every estimate whose taskId is not in `aliveIds` (task purge/merge callers). Returns true
  *  when anything was removed (state changed). */
 export function pruneEstimates (aliveIds) {
-  const alive = new Set(aliveIds || [])
+  const alive = new Set((aliveIds || []).map(String))
   let removed = 0
   for (const k of Object.keys(state)) {
     if (!alive.has(k)) { delete state[k]; removed++ }
+  }
+  if (removed) persist()
+  return removed > 0
+}
+
+/** Purge-path twin: drop exactly the purged ids' mirror entries (purgeIds/purgeAllRecycle).
+ *  Id-based, complement-free: the former caller-side `estimateStateKeys().filter(k => !purgedSet.has(k))`
+  *  compared STRING keys against a Set of (often numeric) task ids — Set.has never matched, so the
+  *  mirror prune was a silent no-op and a recycled numeric id resurrected the stale estimate.
+  *  Normalizes both sides through String so the id domain can never fork the comparison again.
+  *  DB-meta keys stay owned server-side (deleteEstimateKeysFor / MetaGC). */
+export function pruneEstimatesForPurged (purgedIds) {
+  const doomed = new Set((purgedIds || []).map(String))
+  let removed = 0
+  for (const k of Object.keys(state)) {
+    if (doomed.has(String(k))) { delete state[k]; removed++ }
   }
   if (removed) persist()
   return removed > 0

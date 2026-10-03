@@ -5,7 +5,7 @@
 import { genTaskId, nextSort, dayjs, reportError, parsePredecessors } from '../utils/core.js'
 import { wouldCycle, isTaskReady } from '../utils/deps.js'
 import { nextRepeatInstance, isLastRepeatInstance, renewalCarryFields } from '../utils/repeat.js'
-import { setEstimate, pruneEstimates, estimateStateKeys } from '../utils/tomatoEstimate.js'
+import { setEstimate, pruneEstimatesForPurged } from '../utils/tomatoEstimate.js'
 // D15-B2 (2026-10-03): renewal estimate semantics come from the SHARED estimate core — the same
 // clamp the CLI twin (cli/lib.js renewal, getEstimateOf → clampEstimate) enforces on its side.
 import { clampEstimate } from '../../../shared/estimate-core.mjs'
@@ -623,14 +623,9 @@ export default {
       try { if (done.length && window.todoAPI.deleteTodoFilesMany) await window.todoAPI.deleteTodoFilesMany(done) } catch (err) { reportError('deleteTodoFilesMany', err) }
       // Drop the purged tasks' pomodoro-estimate meta keys from the renderer mirror: hardDeleteMany
       // already deleted the DB keys server-side (deleteEstimateKeysFor per id, incl. the legacy
-      // per-id fallback) — MetaGC/DB owns the DB side; pruneEstimates(alive-complement) drops the
-      // local mirror entries so a recycled numeric id cannot resurrect a stale estimate (review M-C5).
-      try {
-        if (done.length) {
-          const purgedSet = new Set(done)
-          pruneEstimates(estimateStateKeys().filter(k => !purgedSet.has(k)))
-        }
-      } catch {}
+      // per-id fallback) — MetaGC/DB owns the DB side; the id-based prune drops the local mirror
+      // entries so a recycled numeric id cannot resurrect a stale estimate (review M-C5).
+      try { if (done.length) pruneEstimatesForPurged(done) } catch {}
       if (done.length) {
         // Capture the doomed rows BEFORE hardRemove pulls them out of recycleList
         const purgedCatIds = [...new Set(((state && state.recycleList) || []).filter(t => done.includes(t.taskId)).map(t => t.categoryId).filter(Boolean))]
@@ -681,11 +676,9 @@ export default {
       // maint-d7: drop the purged tasks' pomodoro-estimate meta keys too — parity with purgeIds
       // (review M-C5) and the CLI purge path (cli/lib.js deletes ESTIMATE_KEY_PREFIX per row); a
       // recycled numeric taskId used to resurrect a stale estimate on the bulk "empty bin" path.
-      // The DB keys are purged server-side by purgeRecycleBin's per-row GC; this prunes the local mirror.
-      try {
-        const purgedSet = new Set(ids)
-        pruneEstimates(estimateStateKeys().filter(k => !purgedSet.has(k)))
-      } catch {}
+      // The DB keys are purged server-side by purgeRecycleBin's per-row GC; this prunes the local
+      // mirror via the id-based prune (the former key-vs-id Set.has complement never matched).
+      try { pruneEstimatesForPurged(ids) } catch {}
       // Round-3 P1: the bulk path used to SKIP the milestone scrub purgeIds does — emptying the
       // bin left phantom taskIds in `projectMilestones:<catId>` (an unmet milestone with zero
       // surviving links could flip to 'done', mirroring the D5 bug on the per-item path).
