@@ -186,6 +186,10 @@ test('watermark: persistPeerWatermarks writes the live map to settings_rows v2 k
       return null
     },
   }
+  // S6: the store seeds from a SUCCESSFUL read — state must be wired before seeding (the old
+  // silent catch{} tolerated a null-state seed and then persisted over it; degraded stores
+  // refuse to persist by contract now).
+  bootstrap.__test.setState({ db, peerWatermarks: new Map(), node: null, timers: [] })
   const watermarks = bootstrap.__test.createTrackedWatermarks()
   watermarks.set('peer-x', 42)
   bootstrap.__test.setState({ db, peerWatermarks: watermarks, node: null, timers: [] })

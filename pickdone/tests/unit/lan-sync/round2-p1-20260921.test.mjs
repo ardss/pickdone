@@ -402,9 +402,16 @@ test('F9a: onShortcutAction / onSecurityLock subscriptions are existence-guarded
   assert.ok(src.includes('if (window.todoAPI.onSecurityLock)'), 'security-lock subscription guarded')
 })
 
-test('F9b: invalidateSyncWatermarks logs a live-map clear failure instead of swallowing it', () => {
+test('F9b (S3 amended): invalidateSyncWatermarks routes through the watermark store — point invalidation is structurally protected', () => {
+  // S3 (2026-10-03): the whole-map-vs-point-invalidation race was removed at the ownership
+  // point, not by call-site discipline — the bootstrap's invalidate is a store call, and the
+  // store module (loaded by the bootstrap) owns load/advance/revoke/persist/invalidate.
   const src = fs.readFileSync(here('../../../src/main/lan-sync-bootstrap.js'), 'utf8')
-  assert.ok(src.includes('live watermark map clear failed'))
+  assert.ok(src.includes('watermarkStore.invalidate'), 'invalidateSyncWatermarks must go through the watermark store')
+  const storeSrc = fs.readFileSync(here('../../../src/main/lan-sync/watermark-store.js'), 'utf8')
+  for (const fn of ['function load ()', 'function createTracked ()', 'function persist (', 'function invalidate (']) {
+    assert.ok(storeSrc.includes(fn), 'watermark store must own ' + fn)
+  }
 })
 
 test('F9c/d: legacy folded guards treat missing gen as 1; OWN_KEYS_LS pruned after compaction', () => {

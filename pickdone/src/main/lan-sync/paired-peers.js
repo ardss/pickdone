@@ -3,7 +3,7 @@
  * Extracted verbatim from lan-sync-bootstrap.js for the structure size ratchet —
  * behavior identical. Settings access and limits are injected by the bootstrap so
  * the module-level swappable `state` (tests use __test.setState) keeps working. */
-module.exports = function createPairedPeers ({ settingGet, settingPut, log, isDialableHost, DEFAULT_PORT, K_PAIRED_PEERS }) {
+module.exports = function createPairedPeers ({ settingGet, settingPut, log, isDialableHost, DEFAULT_PORT, K_PAIRED_PEERS, onPeerPersisted }) {
   /** Normalize a wire/host address to a dialable form: strip IPv4-mapped IPv6 (::ffff:a.b.c.d);
    *  return null for junk (scope-less link-local, 169.254.*, virtual ranges). */
   function normalizeHost (host) {
@@ -49,6 +49,10 @@ module.exports = function createPairedPeers ({ settingGet, settingPut, log, isDi
       if (prev.host === next.host && prev.port === next.port && prev.name === next.name && prev.secret === next.secret) return false
       all[entry.deviceId] = next
       settingPut(K_PAIRED_PEERS, JSON.stringify(all))
+      // S3 (2026-10-03): a successful persist for a deviceId is the REAL pairing event — it is
+      // the ONLY thing allowed to clear that id's watermark revocation (the unpair/recovery
+      // revocation set lives in the watermark store; wiring lives in the bootstrap closure).
+      if (typeof onPeerPersisted === 'function') { try { onPeerPersisted(entry.deviceId) } catch { /* reinstatement must never fail the persist */ } }
       return true
     } catch (e) { log.warn('[LanSync] paired-peer persist failed:', e.message); return false }
   }

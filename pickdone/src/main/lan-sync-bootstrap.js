@@ -268,14 +268,20 @@ function buildSegmentsWrapped (sinceSeq) {
   return r.segments
 }
 
-/** Load persisted per-peer push watermarks into the live Map the node reads on every round. */
-function loadPeerWatermarks () {
-  try { return JSON.parse(settingGet(K_PEER_WATERMARKS) || '{}') || {} } catch { return {} }
-}
+/* ---------- S3/S6 (2026-10-03): per-peer watermark store — ONE owner for
+ * 'sync.peerWatermarks.v2' (lan-sync/watermark-store.js) built on the shared read-throw/
+ * abort-write settings-map-store helper. loadPeerWatermarks now THROWS on an unreadable row
+ * (D15 C1 contract, previously silently {} for this key) and persistPeerWatermarks skips while
+ * degraded (never writes a map derived from a failed read over the durable row). */
+const createJsonSettingStore = require('./lan-sync/settings-map-store')
+const createPeerWatermarkStore = require('./lan-sync/watermark-store')
+const watermarkSettingStore = createJsonSettingStore({ settingGet, settingPut, log, key: K_PEER_WATERMARKS, name: 'peer watermarks', defaultValue: '{}' })
+const watermarkStore = createPeerWatermarkStore({ settingGet, settingPut, log, key: K_PEER_WATERMARKS, store: watermarkSettingStore })
 
-function persistPeerWatermarks () {
-  try { settingPut(K_PEER_WATERMARKS, JSON.stringify(state.peerWatermarks.raw())) } catch (e) { log.warn('[LanSync] watermark persist failed:', e.message) }
-}
+/** Load persisted per-peer push watermarks (throws on a settings read failure — S6). */
+function loadPeerWatermarks () { return watermarkStore.load().map }
+
+function persistPeerWatermarks () { return watermarkStore.persist(state && state.peerWatermarks) }
 
 /* ---------- security ring persistence (survives restarts; recent ring stays ephemeral) ---------- */
 function loadSecurityLog () {
@@ -342,13 +348,28 @@ function manualPeers () {
  * Extracted to lan-sync/paired-peers.js (structure size ratchet) — settings access is
  * injected, so the swappable module-level `state` (__test.setState) still applies. */
 const { normalizeHost, loadPairedPeers, persistPairedPeer, removePairedPeer } =
-  require('./lan-sync/paired-peers')({ settingGet, settingPut, log, isDialableHost, DEFAULT_PORT, K_PAIRED_PEERS })
+  require('./lan-sync/paired-peers')({
+    settingGet, settingPut, log, isDialableHost, DEFAULT_PORT, K_PAIRED_PEERS,
+    // S3: a successful persist of a peer record (both pairing ops + paired-inbound funnel
+    // here) is the only event that clears that id's watermark revocation.
+    onPeerPersisted: (id) => {
+      const wm = state && state.peerWatermarks
+      if (wm && typeof wm.reinstate === 'function') wm.reinstate(id)
+    },
+  })
 
-/** Map wrapper exposing .raw() for persistence; seeded from settings_rows so progress survives restarts. */
-function createTrackedWatermarks () {
-  const m = new Map(Object.entries(loadPeerWatermarks()).map(([k, v]) => [k, Number(v) || 0]))
-  m.raw = () => Object.fromEntries(m)
-  return m
+/** Map wrapper exposing .raw() for persistence; seeded from settings_rows via the watermark
+ *  store (S3/S6: read-throw on a failed read, revocation filtering on every writer). */
+function createTrackedWatermarks () { return watermarkStore.createTracked() }
+
+/** S3/S6 test surface: the same store wiring over an INJECTED db handle, so regression tests
+ *  can drive corrupt-read/degraded-persist scenarios against a fresh settings table without
+ *  swapping the module-level state singleton. */
+function makeWatermarkStoresForDb (db) {
+  const get = key => { const row = db.call('settingsRowsAll', {}).find(r => r.key === key && !r.deleted); return row ? row.value : null }
+  const put = (key, value) => db.call('settingsRowPut', { key, value })
+  const store = createJsonSettingStore({ settingGet: get, settingPut: put, log, key: K_PEER_WATERMARKS, name: 'peer watermarks', defaultValue: '{}' })
+  return { store, wm: createPeerWatermarkStore({ settingGet: get, settingPut: put, log, key: K_PEER_WATERMARKS, store }) }
 }
 
 async function startSync () {
@@ -678,12 +699,10 @@ function finalizeIngest (r, { snapshot = false, chunk = false } = {}) {
  * (no-op for the live map) — the settings row is the persistence authority.
  */
 function invalidateSyncWatermarks (reason) {
-  try {
-    settingPut(K_PEER_WATERMARKS, JSON.stringify({}))
-  } catch (e) { log.warn('[LanSync] watermark invalidation persist failed:', e.message) }
-  try {
-    if (state && state.peerWatermarks && typeof state.peerWatermarks.clear === 'function') state.peerWatermarks.clear()
-  } catch (e) { log.warn('[LanSync] live watermark map clear failed:', e.message) } // round-2 P1: no silent swallow
+  // S3: invalidation goes through the watermark store — the live map clears and the durable row
+  // is rewritten {__revoked:[...]} (revocations survive recovery); a whole-map flush from any
+  // writer then cannot resurrect a revoked pairing's watermark.
+  try { watermarkStore.invalidate(state && state.peerWatermarks) } catch (e) { log.warn('[LanSync] watermark invalidation persist failed:', e.message) }
   log.warn('[LanSync] peer watermarks invalidated (' + String(reason || 'recovery') + ') — full re-push + peer re-snapshot on next round')
   try { kickSyncRound('watermarks-invalidated') } catch { /* node not started yet */ }
 }
@@ -875,6 +894,8 @@ module.exports.__test = {
   persistPeerWatermarks,
   createTrackedWatermarks,
   loadPeerWatermarks,
+  // S3/S6 test surface: db-injectable store wiring (corrupt-read / degraded-persist scenarios).
+  makeWatermarkStoresForDb,
   // P0-1/P1-2/P1-5 test surface: post-round applied bookkeeping -> renderer broadcasts.
   emitAppliedRound: () => emitAppliedRound(),
   finalizeIngest,

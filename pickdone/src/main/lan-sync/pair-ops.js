@@ -39,12 +39,23 @@ module.exports = ({ getState, settingGet, settingPut, busWrite, getSettingsPaylo
     // record mirrored); re-pairing then starts from a clean table instead of merging into it.
     removePairedPeer(deviceId)
     // Drop the per-peer push watermark (a stale watermark must not survive a revoked pairing).
+    // S3 (2026-10-03): revocation goes through the watermark store, not a bare point-delete —
+    // the id is marked REVOKED (and persisted), so the in-flight ack path (client-round's
+    // peerProgress.set into the same Map while stopSync awaits n.stop()) and stopSync's
+    // whole-map settle-point flush are filtered at the store and cannot resurrect the deleted
+    // watermark into the settings row. Cleared only by a real pairing (persistPairedPeer).
     try {
-      const wm = loadPeerWatermarks()
-      if (wm[deviceId] != null) {
-        delete wm[deviceId]
-        settingPut(K_PEER_WATERMARKS, JSON.stringify(wm))
-        if (state.peerWatermarks && typeof state.peerWatermarks.delete === 'function') state.peerWatermarks.delete(deviceId)
+      if (state.peerWatermarks && typeof state.peerWatermarks.revoke === 'function') {
+        state.peerWatermarks.revoke(deviceId)
+        persistPeerWatermarks()
+      } else {
+        // Legacy map (pre-store tests/hosts): plain point-delete as before.
+        const wm = loadPeerWatermarks()
+        if (wm[deviceId] != null) {
+          delete wm[deviceId]
+          settingPut(K_PEER_WATERMARKS, JSON.stringify(wm))
+          if (state.peerWatermarks && typeof state.peerWatermarks.delete === 'function') state.peerWatermarks.delete(deviceId)
+        }
       }
     } catch (e) { log.warn('[LanSync] watermark drop failed:', e.message) }
     // Revoke the shared secret: the removed peer (and any other existing peer) can no longer
