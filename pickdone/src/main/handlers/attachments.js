@@ -139,7 +139,22 @@ module.exports = function attachmentHandlers (ctx) {
       require('../attachments-guards').assertWhiteNoiseCopyAllowed(src, attachments.attachDir())
       const ext = path.extname(src).toLowerCase()
       const key = 'noise-custom' + ext
-      await fs.promises.copyFile(src, path.join(attachments.attachDir(), key))
+      // C13 (P3 2026-10-02): close the stat→copy TOCTOU and make the overwrite atomic. The
+      // pre-copy stat is advisory only (the source can be swapped between stat and copyFile —
+      // exactly the pattern csv-import.js guards with its run-time re-check); the copied BYTES
+      // are size-checked post-copy, and the final key appears atomically via tmp+rename so a
+      // failed/interrupted copy can no longer leave a truncated file where the player expects
+      // a complete audio file. (In-repo precedent: handlers/csv-import.js run-time re-checks.)
+      const tmpPath = path.join(attachments.attachDir(), key + '.tmp-' + process.pid + '-' + Date.now())
+      try {
+        await fs.promises.copyFile(src, tmpPath)
+        const st = await fs.promises.stat(tmpPath)
+        require('../attachments-guards').assertCopiedWhiteNoiseSize(st.size)
+        await fs.promises.rename(tmpPath, path.join(attachments.attachDir(), key))
+      } catch (copyErr) {
+        try { await fs.promises.rm(tmpPath, { force: true }) } catch { /* best-effort cleanup */ }
+        throw copyErr
+      }
       // 2026-09-10 P2:保存自定义白噪音后广播所有存活窗(渲染端另一代理会加监听,通道名固定);
       // 此前只更新发起窗的本地状态,其他窗(如浮窗)的噪音列表不刷新
       broadcastWhiteNoiseUpdated()

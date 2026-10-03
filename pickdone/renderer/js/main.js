@@ -247,13 +247,13 @@ async function bootstrap () {
       if (Date.now() - (store.state.todo._lastLocalWriteAt || 0) < 1500) {
         // External updates arriving within the echo-suppression window are not dropped outright: schedule a trailing reload, otherwise tasks just created in the quick-add window/peer would wait for the next change to appear
         clearTimeout(_todosChangedTail)
-        _todosChangedTail = setTimeout(() => _reloadExternal({ preserveHistory: _todosChangedSyncApply, kinds: _todosChangedSyncApply ? _todosChangedKinds : null }), 1600)
+        _todosChangedTail = setTimeout(() => _reloadExternal({ preserveHistory: _todosChangedSyncApply, kinds: _todosChangedKinds }), 1600)
         return
       }
       // Direct path must cancel any pending trailing reload — otherwise an echo-window trailing
       // timer followed by a direct reload runs _reloadExternal twice (double full reload)
       clearTimeout(_todosChangedTail)
-      _reloadExternal({ preserveHistory: _todosChangedSyncApply, kinds: _todosChangedSyncApply ? _todosChangedKinds : null })
+      _reloadExternal({ preserveHistory: _todosChangedSyncApply, kinds: _todosChangedKinds })
     }, 500)
   })
 

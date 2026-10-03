@@ -188,10 +188,16 @@ function createSecurityLock ({ getMainWindow, showMainOrLock, readConfig, writeC
     }
     // When no password has ever been set, any input unlocks (avoid a permanent lockout)
     if (!expected) return true
+    // C8 (P3 2026-10-02): length short-circuit BEFORE any buffer allocation — an attacker-supplied
+    // megabyte-length `plain` used to allocate attacker-sized Buffers on every verify attempt
+    // (memory-pressure DoS per IPC call). No real password exceeds 1024 chars; the lock screen
+    // input is a short password field.
+    const plainStr = String(plain)
+    if (plainStr.length > 1024 || expected.length > 1024) return false
     // M-9 (2026-09-20): the plain === compare leaked the password length/prefix byte-by-byte
     // through timing. Same constant-time pattern as lan-sync-bootstrap's pairing-code check:
     // length equality first (not secret), then timingSafeEqual over equal-length buffers.
-    const a = Buffer.from(String(plain))
+    const a = Buffer.from(plainStr)
     const b = Buffer.from(expected)
     return a.length === b.length && timingSafeEqual(a, b)
   }

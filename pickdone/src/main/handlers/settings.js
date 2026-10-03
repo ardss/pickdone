@@ -46,7 +46,22 @@ module.exports = function settingsHandlers (ctx) {
       const norm = i18nM.normalizeLocale(locale)
       if (!norm) throw new Error('unsupported locale: ' + String(locale))
       const main = getMainWindow()
-      i18nM.setLocale(norm); const c = writeConfig({ appLocale: norm }); rebuildTrayMenu(); const tray = getTray(); if (tray) { try { tray.setToolTip(i18nM.mt('appName')) } catch (err) { /* empty */ } }
+      i18nM.setLocale(norm)
+      const c = writeConfig({ appLocale: norm })
+      // C12 (P3 2026-10-02): under the config read-failed write gate, writeConfig returns null —
+      // the old code returned `sanitizeConfigOut(null)` = null, so the renderer saw a null body
+      // while the locale HAD been applied in memory (silent divergence between live state and
+      // disk). Surface the degradation as a structured error: the in-memory apply above stands,
+      // but the IPC rejects with an explicit code so no caller can mistake it for a success
+      // shape. Renderer callers (renderer/js/i18n/index.js setLocale, store/settings.js hot-apply)
+      // currently swallow rejections — they must branch on `code === 'CONFIG_READ_FAILED'`;
+      // coordinated via commit note (those files are owned by another fixer domain).
+      if (c == null) {
+        const err = new Error('set-app-locale: config is unreadable (read-failed gate) — locale applied in memory but NOT persisted')
+        err.code = 'CONFIG_READ_FAILED'
+        throw err
+      }
+      rebuildTrayMenu(); const tray = getTray(); if (tray) { try { tray.setToolTip(i18nM.mt('appName')) } catch (err) { /* empty */ } }
       // P2 2026-09-12: previously this looped EVERY live window and setTitle(appName), flattening
       // semantic titles (float window task title, lock window title). Auxiliary windows pick up the
       // new locale via their own per-second title pushes (tomato-float countdown, same pattern as the

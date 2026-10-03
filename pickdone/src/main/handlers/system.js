@@ -18,7 +18,32 @@ module.exports = function systemHandlers (ctx) {
   const { makeAssertMainWindow } = require('./shared')
   const assertMainWindow = makeAssertMainWindow(getMainWindow)
   const { exportTodosToXlsx } = createExporter({ getMainWindow: ctx.getMainWindow, i18n, log })
-  const notificationSendTimes = [] // sliding window for the notification channel rate limit (10 per 10s)
+  // C6 (P3 2026-10-02): the notification rate limiter used to be ONE process-global sliding window —
+  // a chatty auxiliary window consumed the whole 10/10s budget and starved the main window's real
+  // reminders. Budgets are now PER SENDER (webContents id): every window gets its own 10/10s budget,
+  // so one noisy window can only silence itself. Sender maps are bounded: entries are dropped as soon
+  // as their window drains, with a size-based sweep for dead senders that never call again.
+  // C7 (P3 2026-10-02): log:write gets the same per-sender gating class, sized generously
+  // (120 calls / 10s ≈ 12 batches/s sustained) so legitimate renderer logging never trips it —
+  // only an unbounded spam loop does. The gate sits BEFORE any mkdir/stat/append work.
+  const senderRateBuckets = new Map() // sender id -> timestamps[] (oldest first)
+  function allowWithinRatePerSender (e, opts) {
+    const id = (e && e.sender && e.sender.id != null) ? String(e.sender.id) : 'unknown'
+    let stamps = senderRateBuckets.get(id)
+    if (!stamps) { stamps = []; senderRateBuckets.set(id, stamps) }
+    const ok = allowWithinRate(stamps, Date.now(), opts)
+    if (!stamps.length) senderRateBuckets.delete(id) // drained window: drop the map entry immediately
+    if (senderRateBuckets.size > 64) {
+      // Sweep dead senders whose newest stamp is older than the largest window we use here (10s)
+      const now = Date.now()
+      for (const [k, v] of senderRateBuckets) {
+        if (!v.length || now - v[v.length - 1] > 10000) senderRateBuckets.delete(k)
+      }
+    }
+    return ok
+  }
+  const NOTIFICATION_RATE = { limit: 10, windowMs: 10000 }
+  const LOG_WRITE_RATE = { limit: 120, windowMs: 10000 }
 
   return {
     // --- Reminders ---
@@ -29,7 +54,7 @@ module.exports = function systemHandlers (ctx) {
       // F2 2026-09-15 形状守卫:opt undefined/非对象时 `opt.title` 曾直接 TypeError(invoke reject 成裸异常);
       // 缺 title 时走 i18n 安全默认,非字符串字段按空串清洗 —— 通知通道永不因坏入参崩溃。
       const o = (opt && typeof opt === 'object') ? opt : {}
-      if (!allowWithinRate(notificationSendTimes, Date.now())) {
+      if (!allowWithinRatePerSender(e, NOTIFICATION_RATE)) {
         log.warn('[IPC] notification 频控拦截, sender:', e.sender.id)
         return false
       }
@@ -72,6 +97,14 @@ module.exports = function systemHandlers (ctx) {
     'log:write': (e, entries) => {
       try {
         if (!Array.isArray(entries)) return false
+        // C7 (2026-10-02): per-sender rate gate BEFORE any disk work — the old handler ran
+        // mkdirSync + statSync + appendFileSync on EVERY call with no gate at all, so a runaway
+        // renderer could hammer the disk at IPC frequency (up to 200×4000 chars per call).
+        // Sized generously (see LOG_WRITE_RATE above) so legitimate logging never trips it.
+        if (!allowWithinRatePerSender(e, LOG_WRITE_RATE)) {
+          log.warn('[IPC] log:write 频控拦截, sender:', e && e.sender && e.sender.id)
+          return false
+        }
         // D13 C14 (2026-10-01): a dead `electron-log` require + `rlog.scope('renderer')` call used
         // to sit here — the scope object was created and discarded, the actual write below goes to
         // renderer.log via fs directly. Removed (no behavior change).
