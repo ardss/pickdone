@@ -246,3 +246,42 @@ test('shed carry landing as the TERMINAL segment keeps fromSeq/toSeq consistent'
   }
   assert.equal(prevTo, 11000, 'segment ranges tile the whole backlog')
 })
+
+test('S2: a failed hydration truncates the delta — no segment claims a toSeq covering the failed row', () => {
+  // Adapter contract (S2 2026-10-03): getRowsSince may return { rows, incompleteAtSeq } when a
+  // hydration failure truncates the egress window. The receiver acks seg.toSeq at face value
+  // and the sender advances its watermark/cursor to the ack, so a segment claiming a toSeq over
+  // a row it did not include makes the loss PERMANENT once the oplog ring prunes. Invariant:
+  // final segment toSeq < incompleteAtSeq, and a healthy subsequent round re-attempts from
+  // below it.
+  const a = makeStore('trunc-a')
+  const ea = createEngine({ localStore: a, deviceId: 'trunc-a' })
+  const b = makeStore('trunc-b')
+  const eb = createEngine({ localStore: b, deviceId: 'trunc-b' })
+  for (let i = 1; i <= 4; i++) a.append({ id: `u${i}`, title: 'v', updatedAt: i })
+  // Hydration fails at seq 3: rows 1,2 hydrate, 3 fails, 4 hydrates (must NOT be packed).
+  const origGet = a.getRowsSince.bind(a)
+  let failOnce = true
+  a.getRowsSince = (s) => {
+    const rows = origGet(s)
+    if (!failOnce) return rows
+    failOnce = false
+    return { rows: rows.filter((r) => r.seq !== 3), incompleteAtSeq: 3 }
+  }
+  const first = ea.buildSegments()
+  assert.ok(first.segments.length >= 1, 'fixture produced segments')
+  const finalSeg = first.segments[first.segments.length - 1]
+  assert.equal(finalSeg.toSeq, 2, 'the terminal segment stops BELOW the failed seq (was 4 pre-fix)')
+  assert.equal(first.toSeq, 2, 'the round toSeq never covers the failed row')
+  // Deliver what was packed; the sender's cursor/watermark advances honestly to 2.
+  for (const seg of first.segments) eb.ingestSegment(seg.body)
+  ea.markPushed(first.toSeq)
+  assert.equal(a.getCursor(), 2)
+  // Recovery: the read is healthy again — the next round re-attempts from BELOW the failed seq.
+  const second = ea.buildSegments()
+  assert.equal(second.toSeq, 4, 'the truncated tail re-pushes on a later round')
+  assert.ok(second.segments.every((s) => s.fromSeq >= 3), 'the retry starts at the failed seq, not past it')
+  for (const seg of second.segments) eb.ingestSegment(seg.body)
+  assert.deepEqual(Object.fromEntries(b.allRows().map((r) => [r.id, r.title])),
+    { u1: 'v', u2: 'v', u3: 'v', u4: 'v' }, 'the previously lost row converges')
+})

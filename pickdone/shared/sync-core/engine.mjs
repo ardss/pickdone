@@ -9,6 +9,11 @@
  *
  * LOCAL STORE ADAPTER CONTRACT (implemented by the app over its real DB):
  *   getRowsSince(seq) -> rows [{seq, entity?, entityId?, ts?, ...}] from oplog
+ *     (S2 2026-10-03: an adapter MAY return { rows, incompleteAtSeq } instead — a failed
+ *     hydration TRUNCATES the delta at incompleteAtSeq, and buildSegments then never packs a
+ *     row at/past it. Invariant: no segment claims a toSeq covering a row that was not
+ *     included, because the receiver acks seg.toSeq at face value and the sender advances its
+ *     watermark/cursor to the ack.)
  *   applyRow(row)     -> boolean; runs merge rules, true when state changed
  *   getCursor() / setCursor(pushedSeq)  — persisted push cursor
  *   allRows()         -> current live rows (incl. tombstones)
@@ -62,7 +67,16 @@ export function createEngine({ localStore, deviceId, clock = monotonicClock() })
    */
   function buildSegments(fromSeq) {
     const cursor = Number.isInteger(fromSeq) ? fromSeq : (localStore.getCursor() ?? 0)
-    const rows = localStore.getRowsSince(cursor)
+    // S2 (2026-10-03): the adapter may report an egress truncation ({ rows, incompleteAtSeq }).
+    // Honoring it HERE (single egress boundary, all adapters/segments) — never at a call site —
+    // is what makes 'acked toSeq => every oplog row <= toSeq was delivered' structural: a
+    // second failure farther in truncates again, and the truncated tail re-pushes next round.
+    const fetched = localStore.getRowsSince(cursor)
+    const rawRows = Array.isArray(fetched) ? fetched : (fetched && Array.isArray(fetched.rows)) ? fetched.rows : []
+    const incompleteAtSeq = (!Array.isArray(fetched) && fetched && Number.isFinite(Number(fetched.incompleteAtSeq)) && Number(fetched.incompleteAtSeq) > 0)
+      ? Number(fetched.incompleteAtSeq)
+      : null
+    const rows = incompleteAtSeq != null ? rawRows.filter((r) => Number(r.seq) < incompleteAtSeq) : rawRows
     const segments = []
     // Pack budget: leave headroom for the segment header + JSON overhead;
     // pack() still enforces the hard cap and throws SegmentTooLarge if a

@@ -123,25 +123,41 @@ function createLocalStoreAdapter () {
       // r2 2026-09-28: hydrateRow now RETHROWS on DB read failure (only legitimate skips return
       // null). A failure must not be silently filtered out with the cursor advancing past the
       // pointer — that lost changes one-way between full snapshots. Count it here, surface it in
-      // the egress report (state.egressHydrationFailures) and log it; the row itself is still
-      // skipped (cursor semantics unchanged — the loss is now VISIBLE, not silent).
+      // the egress report (state.egressHydrationFailures) and log it.
+      // S2 (2026-10-03) egress truncation contract: a failed hydration TRUNCATES the delta.
+      // The old behavior kept pushing rows PAST the failure while buildSegments stamped the
+      // segment's toSeq from the rows actually packed — but the ack contract is
+      // 'acked toSeq => every oplog row <= toSeq was delivered', and the receiver acks seg.toSeq
+      // at face value (server-role.js) with the sender advancing its watermark to the ack
+      // (client-round peerProgress). One hydration failure therefore acked a seq range covering
+      // a row that never left the device, and once the oplog ring pruned it the loss was
+      // structurally permanent. Now egress stops at the first failed seq and reports it as
+      // incompleteAtSeq; engine.buildSegments honors the marker so no segment can ever claim a
+      // toSeq covering a row it did not include (whole class, single egress boundary).
       const rows = []
       const failures = []
+      let incompleteAtSeq = null
       for (const ptr of ptrs) {
         let row = null
         try { row = hydrateRow(ptr, cache) } catch (e) {
-          failures.push({ ...(e.egressHydration || { entity: ptr.entity, id: ptr.entityId, seq: ptr.seq }), error: e.message })
+          const f = { ...(e.egressHydration || { entity: ptr.entity, id: ptr.entityId, seq: ptr.seq }), error: e.message }
+          failures.push(f)
+          if (incompleteAtSeq == null || Number(ptr.seq) < incompleteAtSeq) incompleteAtSeq = Number(ptr.seq)
           continue
         }
-        if (row) rows.push(row)
+        // Rows at/past the truncation point are scanned for failure VISIBILITY but never pushed.
+        if (row && incompleteAtSeq == null) rows.push(row)
       }
       state.egressHydrationFailures = failures
       if (failures.length) {
-        log.warn('[LanSync] egress hydration failed for ' + failures.length + ' oplog pointer(s) — pushed rows are INCOMPLETE:',
+        log.warn('[LanSync] egress hydration failed for ' + failures.length + ' oplog pointer(s) — delta TRUNCATED at seq ' + incompleteAtSeq + ':',
           failures.map(f => f.entity + ':' + f.id).join(', '))
-        try { emitSyncEvent('egress-hydration-failed', { count: failures.length, failures }) } catch { /* event surface is best-effort */ }
+        try { emitSyncEvent('egress-hydration-failed', { count: failures.length, failures, incompleteAtSeq }) } catch { /* event surface is best-effort */ }
       }
-      return rows
+      // S2: adapters return { rows, incompleteAtSeq } (engine buildSegments contract); the
+      // cursor semantics are unchanged — the sender's watermark can only advance over rows it
+      // actually packed and the peer acked, so the truncated tail re-pushes on a later round.
+      return incompleteAtSeq != null ? { rows, incompleteAtSeq } : rows
     },
     getCursor () { const v = state.db.call('getMeta', CURSOR_META_KEY); const n = Number(v); return Number.isFinite(n) && n > 0 ? n : 0 },
     setCursor (seq) { busWrite('setMeta', [CURSOR_META_KEY, String(seq)]) },

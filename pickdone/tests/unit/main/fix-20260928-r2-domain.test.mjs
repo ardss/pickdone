@@ -174,36 +174,72 @@ test('hydrateRow: legitimate skips still return null (gc marker, unknown entity)
   assert.equal(tomb.deleted, true, 'unknown-id todo hydrates as a legit tombstone — distinct from a thrown read failure')
 })
 
-test('getRowsSince: a failing pointer is counted into the egress report, good rows still push', () => {
+test('getRowsSince: a failing pointer is counted into the egress report; the delta TRUNCATES at the failed seq (S2)', () => {
   let failOnes = 0 // fail only the FIRST getAll read, so exactly one pointer hits the bad read
   const state = {
     db: {
       call (op, p) {
         if (op === 'syncOplogSince') {
           return [
-            { entity: 'todo', entityId: 'ok', seq: 1, ts: 5 },
-            { entity: 'todo', entityId: 'bad', seq: 2, ts: 6 },
+            { entity: 'todo', entityId: 'bad', seq: 1, ts: 5 },
+            { entity: 'todo', entityId: 'ok', seq: 2, ts: 6 },
           ]
         }
         if (op === 'getAll') {
           if (failOnes++ === 0) throw new Error('hydr read boom')
-          return [{ taskId: 'ok', updateTime: 5, delete: 0, deletedAt: 0 }, { taskId: 'bad', updateTime: 6, delete: 0, deletedAt: 0 }]
+          return [{ taskId: 'bad', updateTime: 5, delete: 0, deletedAt: 0 }, { taskId: 'ok', updateTime: 6, delete: 0, deletedAt: 0 }]
         }
         return EMPTY_TABLES[op] ? EMPTY_TABLES[op](p) : []
       },
     },
   }
   boot.setState(state)
-  const rows = boot.getRowsSince(0)
-  // whichever pointer hit the throwing read, the failure must be VISIBLE and the good row present
+  const out = boot.getRowsSince(0)
+  // S2 contract: the failure is visible AND the delta truncates at the failed seq — the healthy
+  // row at seq 2 is NOT pushed, because no segment may claim a toSeq covering the failed seq
+  // (the receiver acks seg.toSeq at face value and the sender advances its watermark to the ack).
   assert.equal(state.egressHydrationFailures.length, 1, 'exactly one pointer counted as failed')
   const f = state.egressHydrationFailures[0]
   assert.equal(f.entity, 'todo')
   assert.match(f.error, /hydr read boom/)
-  assert.equal(rows.length, 1, 'the healthy pointer still hydrates and pushes')
-  assert.equal(rows[0].id, f.id === 'ok' ? 'bad' : 'ok', 'the pushed row is the OTHER pointer — loss is no longer silent')
-  // recovery: with the read healthy, a subsequent pass reports zero failures
+  assert.equal(out && out.incompleteAtSeq, 1, 'the adapter reports the truncation point incompleteAtSeq=1')
+  assert.equal(out.rows.length, 0, 'rows at/past the failed seq are never packed into a segment')
+  // recovery: with the read healthy, a subsequent pass reports zero failures and pushes both
   const rows2 = boot.getRowsSince(0)
+  assert.ok(Array.isArray(rows2), 'a clean pass returns plain rows again')
   assert.equal(rows2.length, 2)
   assert.deepEqual(state.egressHydrationFailures, [], 'report resets on a clean pass')
+})
+
+test('getRowsSince: a failure AFTER healthy rows keeps only the rows strictly BELOW the truncation point', () => {
+  // Mid-window failure: the todo hydration cache makes getAll one call per pass, so the failing
+  // pointer is a TOMATO at seq 2 (its tomatoAll read throws once) between healthy todos.
+  let tomatoCalls = 0
+  const state = {
+    db: {
+      call (op, p) {
+        if (op === 'syncOplogSince') {
+          return [
+            { entity: 'todo', entityId: 'a', seq: 1, ts: 5 },
+            { entity: 'tomato', entityId: 'tb', seq: 2, ts: 6 },
+            { entity: 'todo', entityId: 'c', seq: 3, ts: 7 },
+          ]
+        }
+        if (op === 'getAll') {
+          return [{ taskId: 'a', updateTime: 5, delete: 0, deletedAt: 0 }, { taskId: 'c', updateTime: 7, delete: 0, deletedAt: 0 }]
+        }
+        if (op === 'tomatoAll') {
+          if (tomatoCalls++ === 0) throw new Error('hydr read boom 2')
+          return []
+        }
+        return EMPTY_TABLES[op] ? EMPTY_TABLES[op](p) : []
+      },
+    },
+  }
+  boot.setState(state)
+  const out = boot.getRowsSince(0)
+  assert.equal(out.incompleteAtSeq, 2, 'the first failed seq is the truncation point')
+  assert.equal(out.rows.length, 1, 'only rows strictly below the failed seq are pushed')
+  assert.equal(out.rows[0].id, 'a')
+  assert.equal(state.egressHydrationFailures.length, 1)
 })
