@@ -119,8 +119,12 @@ test('A3 views no longer commit the removed mutation (they dispatch the awaited 
     const src = read(f)
     assert.doesNotMatch(src, /commit\('category\/setProjectStatus'/, `${f} must not use the memory-only mutation directly`)
     assert.match(src, /dispatch\('category\/setProjectStatus'/, `${f} goes through the awaited action`)
+    // Invariant: the action rethrows after rolling the status back; NO dispatch site of this
+    // action may swallow that rejection (.catch(() => {})) — a swallowed failure shows the
+    // optimistic UI while the write silently reverts on the next launch.
+    assert.doesNotMatch(src, /dispatch\('category\/setProjectStatus'[^)]*\)\s*\.catch\(\s*\(\)\s*=>\s*\{\s*\}\s*\)/, `${f} must not swallow the awaited action's rejection`)
+    assert.match(src, /statusChangeFailed/, `${f} toasts the surfaced failure (same contract as the store action's revert+rethrow)`)
   }
-  assert.match(read('renderer/js/views/ProjectOverviewView.vue'), /statusChangeFailed/, 'failure path toasts an error, not success')
 })
 
 /* ==================== A4: createTag persist failure ==================== */
