@@ -200,10 +200,16 @@ test('[6c-alt] the task-switched flush re-queues the old task patch with its ORI
 
 test('[7] category tombstone cutoff matches the todo purge calendar-day arithmetic', () => {
   const cat = read('renderer/js/store/category.js')
-  // local-midnight minus N whole calendar days (equivalent to store/todo.js's
-  // startOf('day').subtract(days,'day')), computed with plain Date math (no window.dayjs dependency)
-  assert.ok(cat.includes('_localMidnight - retentionDays * 86400000'),
-    'the cutoff rolls back whole calendar days from local midnight (same basis as todo.js purgeRecycleBin)')
+  // Reconciled with the day-caliber domain (2026-10-03): the former inline
+  // `_localMidnight - retentionDays * 86400000` rolled back fixed 24h blocks, diverging from
+  // store/todo.js's startOf('day').subtract(days,'day') by an hour on DST-affected days, and is
+  // now banned class-wide by the dw3-domain3 day-arithmetic guard. The cutoff must route through
+  // the single sanctioned calendar-day primitive (todayBounds.dayShift over dayStart) — the same
+  // basis as the todo purge — and no ms day-stepping may reappear in this file.
+  assert.ok(cat.includes('dayShift(dayStart('),
+    'the cutoff rolls back whole CALENDAR days from local midnight via todayBounds.dayShift (same basis as todo.js purgeRecycleBin)')
+  assert.ok(!/retentionDays \* 86400000|86400000 \* retentionDays/.test(cat),
+    'no ms day-stepping in category.js — sibling-day stepping routes through dayShift')
   assert.ok(!cat.includes('Date.now() - retentionDays'), 'the drifting rolling-24h arithmetic is gone')
 })
 

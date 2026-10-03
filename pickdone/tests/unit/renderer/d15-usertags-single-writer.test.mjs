@@ -9,12 +9,11 @@
 import '../../setup.mjs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createRequire } from 'module'
+
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import fs from 'node:fs'
 
-const require_ = createRequire(import.meta.url)
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const read = p => fs.readFileSync(path.join(ROOT, p), 'utf8')
 

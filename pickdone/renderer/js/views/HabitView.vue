@@ -119,7 +119,7 @@
 import { dayjs, FMT } from '../utils/core.js'
 import { clampIntervalN } from '../utils/limits.js'
 import { showUndoToast } from '../utils/undoToast.js'
-import { localDayKey } from '../../shared/date-key.mjs'
+import { localDayKey } from '../../../shared/date-key.mjs'
 import EmptyState from '../components/EmptyState.vue'
 
 // Monday-first weekday keys (labels via statsP.HabitView.wd1..wd7)
