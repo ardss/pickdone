@@ -119,6 +119,7 @@
 import { dayjs, FMT } from '../utils/core.js'
 import { clampIntervalN } from '../utils/limits.js'
 import { showUndoToast } from '../utils/undoToast.js'
+import { localDayKey } from '../../shared/date-key.mjs'
 import EmptyState from '../components/EmptyState.vue'
 
 // Monday-first weekday keys (labels via statsP.HabitView.wd1..wd7)
@@ -147,7 +148,10 @@ export default {
     calMinOffset () { return CAL_MIN_OFFSET },
     habits () { return this.$store.state.habits.habits },
     moments () { return this.$store.state.habits.moments },
-    todayKey () { return dayjs().format(FMT.date) },
+    // 2026-10-03: derived from the REACTIVE store.todo.todayTimestamp (the previous
+    // dayjs()-wall-clock computed had zero reactive dependencies and cached its first value, so
+    // post-midnight check-ins were written into YESTERDAY's bucket until an unrelated rerender)
+    todayKey () { return localDayKey(this.$store.state.todo.todayTimestamp) },
     /** Start date of the current calendar month (Monday) */
     calMonth () { return dayjs().startOf('month').add(this.calOffset, 'month') },
     calLabel () { return this.$t('statsP.HabitView.calLabel', { y: this.calMonth.year(), m: this.calMonth.month() + 1 }) },

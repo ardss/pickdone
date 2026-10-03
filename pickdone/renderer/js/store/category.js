@@ -1,7 +1,8 @@
-import { safeSet, dayjs, getMetaManyWithFallback } from '../utils/core.js'
+import { safeSet, getMetaManyWithFallback } from '../utils/core.js'
 import { loadMilestones } from '../utils/milestones.js'
 import { normalizeStatus } from '../utils/projectStatus.js'
 import { commit as commitCommand } from "../utils/commandBus.js"
+import { today0, dayStart, dayShift } from '../utils/todayBounds.js'
 /** Category module (offline persistence via localStorage; cloud APIs like getCategoryList reserved) */
 const LS_KEY = 'categoryState'
 export const COLOR_PALETTE = ['#0f9d8f', '#f76e6e', '#f2a63b', '#7ac74f', '#5aa9e6', '#9d8df1', '#eb96c3', '#98a4ae']
@@ -412,15 +413,14 @@ function mergeableLsTombstones (rows, recycleBinAutoDeleteDays) {
   // still falls back to 30.
   const rawDays = Number(recycleBinAutoDeleteDays)
   const retentionDays = rawDays === 0 ? 0 : (rawDays > 0 ? rawDays : 30)
-  // P3-6 (maint/dw 2026-09-23): same calendar-day cutoff as the todo-row purge (store/todo.js:
-  // startOf('day').subtract(days,'day') = local midnight minus N calendar days — computed here
-  // with plain Date math so this path stays independent of the window.dayjs UMD global). The
-  // old rolling-24h arithmetic let this entry expire up to 24h EARLIER than the rows it would
-  // recover — a restart inside that window silently dropped the recovery entry while the rows
-  // were still inside the retention window.
-  const _now = new Date()
-  const _localMidnight = new Date(_now.getFullYear(), _now.getMonth(), _now.getDate()).getTime()
-  const cutoff = _localMidnight - retentionDays * 86400000
+  // P3-6 (maint/dw 2026-09-23) + day-caliber (2026-10-03): same calendar-day cutoff as the
+  // todo-row purge (store/todo.js: startOf('day').subtract(days,'day') = local midnight minus
+  // N CALENDAR days) — computed via todayBounds.dayShift so this path stays independent of the
+  // window.dayjs UMD global while keeping calendar semantics. The former
+  // `_localMidnight - retentionDays * day-in-ms` arithmetic diverged from the purge cutoff by
+  // 1h on DST-affected days: on such a day the recovery entry could expire while the rows it
+  // would recover were still inside the retention window.
+  const cutoff = retentionDays === 0 ? 0 : dayShift(dayStart(Date.now()), -retentionDays)
   return deletedFromLs().filter(d =>
     !rows.some(r => r.categoryId === d.categoryId) &&
     (retentionDays === 0 || !d.deletedAt || d.deletedAt > cutoff))
@@ -641,7 +641,9 @@ export default {
     async loadProjectMeta ({ state, commit }) {
       if (!state.projectIds.length || !window.todoAPI || !window.todoAPI.dbCall) return
       const patch = {}
-      const today0 = +dayjs().startOf('day')
+      // Day-caliber (2026-10-03): routed through todayBounds.today0 — the single non-reactive
+      // day-start source. The inline wall-clock dayjs expression it replaced was an un-routed now-read.
+      const today0Ts = today0()
       for (const id of state.projectIds) {
         const entry = {}
         // Status/deadline re-read UNCONDITIONALLY (review P1 2026-09-10): an `undefined` guard made both
@@ -654,7 +656,7 @@ export default {
         // a rolled-over date kept showing a stale milestone. Read failure falls back to null.
         try {
           const ms = await loadMilestones(id)
-          entry.nextMilestone = ms.filter(m => m.date >= today0)[0] || null
+          entry.nextMilestone = ms.filter(m => m.date >= today0Ts)[0] || null
         } catch { entry.nextMilestone = null }
         patch[id] = entry
       }

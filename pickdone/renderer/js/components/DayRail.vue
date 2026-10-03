@@ -109,6 +109,7 @@
  *  Plan data lives in SQLite plan_chips rows (2026-09-03 root fix), all writes via utils/dayPlans.js atomic ops; bucketed by date, pruned outside [-7d,+31d] */
 import { FMT, dayjs } from '../utils/core.js'
 import { FOCUS_INPUT_MAX_MINUTES } from '../../../shared/limits.mjs'
+import { localDayKey } from '../../../shared/date-key.mjs'
 import { toggleCompleteWithUndo } from '../utils/completeAction.js'
 import { removeWithUndo } from '../utils/confirm.js'
 import { taskContextMenu } from '../utils/taskMenu.js'
@@ -710,9 +711,11 @@ export default {
     },
     prune () {
       // Keep plan buckets in the window [today-7d, today+31d]: planning the future is a finalized feature; only prune expired, never delete future
+      // 2026-10-03: keep-window keys via the shared localDayKey with calendar day stepping —
+      // was an un-routed window.dayjs() now-read (day-caliber domain: one day-key definition).
       const keep = new Set()
-      const dayjs = window.dayjs
-      for (let i = -31; i <= 7; i++) keep.add(dayjs().subtract(i, 'day').format(FMT.date))
+      const d = new Date()
+      for (let i = -31; i <= 7; i++) { const x = new Date(d); x.setDate(x.getDate() - i); keep.add(localDayKey(x)) }
       let dirty = false
       for (const k of Object.keys(this.plans)) {
         if (!keep.has(k)) { delete this.plans[k]; dirty = true }
