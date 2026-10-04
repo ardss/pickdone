@@ -115,12 +115,15 @@ function addMilestone (categoryInput, title, dateInput) {
   const date = parseMilestoneDate(dateInput)
   if (!date) throw new CliError(`cannot parse date: "${dateInput}" (supported: YYYY-MM-DD / MM-DD / today / +14d)`, 'BAD_DATE')
   const cat = open().call('getAllCategories').find(c => c.categoryId === categoryId)
-  const added = { title: String(title).trim(), date }
+  // D20-DOMB9 (2026-10-02): pre-stamp the id BEFORE the write (same mint as the renderer's
+  // newMilestoneId in renderer/js/utils/milestones.js — saveMilestones keeps caller ids) and
+  // echo by id. The old title+date match echoed the FIRST equal row, i.e. a PRE-EXISTING
+  // duplicate milestone whenever one with the same title/date was already in the list.
+  const added = { id: 'ms_' + Date.now() + Math.random().toString(36).slice(2, 6), title: String(title).trim(), date }
   const list = msNormalize(getMilestones(categoryId).milestones.concat([added]))
   commit('meta', 'put', [MS_KEY(categoryId), JSON.stringify(list)])
   audit.record({ action: 'milestone.add', targets: [{ taskId: 'cat:' + categoryId, content: cat ? cat.categoryName : String(categoryId) }], note: `milestone "${title.trim()}" → ${dayjs(date).format('YYYY-MM-DD')}` })
-  // `added` echoes the milestone this call actually inserted (the list is date-sorted, so the CLI used to echo milestones.at(-1) — a different row whenever the new date was not the latest)
-  const stored = list.find(m => m.title === added.title && m.date === added.date) || added
+  const stored = list.find(m => m.id === added.id) || added
   return { categoryId, milestones: list, added: stored }
 }
 

@@ -146,17 +146,19 @@ test('#5 add without --category uses settings.newTodoCategoryId; explicit --cate
 test('#6 renewalCarryFields carries attachments AND quadrant/extra attributes (converged superset)', async () => {
   const { renewalCarryFields } = await import('../../../shared/repeat-core.mjs')
   const tpl = {
-    reminderOffsets: [-300], reminderExtra: [{ at: 1000 }], difficulty: 2,
+    dayStart: 1000, reminderOffsets: [-300], reminderExtra: [1000], difficulty: 2,
     priority: 3, deadlineTs: 12345, important: 1, urgent: 1,
     image: 'img://a.png', files: JSON.stringify([{ name: 'a.txt' }]), repeatId: 'repeat_x'
   }
-  const carry = renewalCarryFields(tpl, { todoTime: 1, reminderTime: 2 })
+  const carry = renewalCarryFields(tpl, { todoTime: 1000 + 864e5, reminderTime: 2 })
   // quadrant/extra (the CLI half)
   assert.equal(carry.priority, 3)
   assert.equal(carry.deadlineTs, 12345)
   assert.equal(carry.important, 1)
   assert.equal(carry.urgent, 1)
-  assert.deepEqual(carry.reminderExtra, [{ at: 1000 }])
+  // D20-DOMB3: extras are SHIFTED by the renewal day-diff (never carried verbatim onto a
+  // later-dated instance — stale past-dated extras forced scheduler needsCatchUp reloads)
+  assert.deepEqual(carry.reminderExtra, [1000 + 864e5])
   // attachments (the RepeatModal half) — files persist as the row's JSON string
   assert.equal(carry.image, 'img://a.png')
   assert.deepEqual(JSON.parse(carry.files), [{ name: 'a.txt' }])

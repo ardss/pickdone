@@ -17,7 +17,13 @@ const { defaultBackupRootCandidates } = require('../src/main/backup-dirs.js')
 const dbRecovery = require('../src/main/dbRecovery.cjs')
 
 module.exports = function restoreBackup ({ opts, lib, emit }) {
-  const SNAP = 'auto-'
+  // D20-DOMB6 (2026-10-02): discovery used to match only auto-* while the App restores BOTH
+  // families (handlers/backup.js accepts /^(auto|evt)-/) — evt-* pre-delete event snapshots were
+  // invisible to the CLI's discover/validate guide. D20-DOMB14: the filter is now the STRICT
+  // stamp regexes from src/main/autoBackup.js (single source) — collision-suffixed names
+  // ("...json (1)" style copies) fail the regexes and no longer sort in as epoch-0 stamps.
+  const { RE_AUTO, RE_EVT } = require('../src/main/autoBackup.js')
+  const SNAP_TEST = f => RE_AUTO.test(f) || RE_EVT.test(f)
   // Active default root first (<userData>/backups, or TODO_BACKUP_DIR), then the legacy external
   // parent-of-userData/pickdone-backups kept for old snapshots discovery.
   const defaultRoots = defaultBackupRootCandidates(lib.userDataDir())
@@ -37,7 +43,7 @@ module.exports = function restoreBackup ({ opts, lib, emit }) {
   const listSnapshots = root => {
     try {
       return fs.existsSync(root)
-        ? fs.readdirSync(root).filter(f => f.startsWith(SNAP) && f.endsWith('.json'))
+        ? fs.readdirSync(root).filter(SNAP_TEST)
           .map(f => { const st = fs.statSync(path.join(root, f)); return { dir: root, file: f, mtime: st.mtimeMs, size: st.size } })
         : []
     } catch { return [] }
@@ -49,7 +55,7 @@ module.exports = function restoreBackup ({ opts, lib, emit }) {
       .filter(f => { const k = f.dir + '\n' + f.file; if (seen.has(k)) return false; seen.add(k); return true })
       .sort((a, b) => b.mtime - a.mtime)
     if (opts.json) return emit({ backupDir: candidateDirs, snapshots: files })
-    if (!files.length) { console.log(`(no auto-*.json snapshots in ${candidateDirs.join(', ')})`); return }
+    if (!files.length) { console.log(`(no auto-*/evt-*.json snapshots in ${candidateDirs.join(', ')})`); return }
     console.log('Recoverable snapshots (newest first):')
     files.forEach(f => console.log(`  ${path.join(f.dir, f.file)}  modified ${dayjs(f.mtime).format('YYYY-MM-DD HH:mm:ss')}  (${f.size} bytes)`))
     console.log('Run `restore-backup <path>` to validate one and see how to restore it.')

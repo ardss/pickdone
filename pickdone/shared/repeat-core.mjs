@@ -92,10 +92,20 @@ export function isLastRepeatInstance (completedTodo, group) {
  * exact set — do NOT re-diverge one end without changing both.
  */
 export function renewalCarryFields (t, next) {
+  // D20-DOMB3 (2026-10-02, behavior CHOSEN = SHIFT, not drop): reminderExtra are ABSOLUTE
+  // timestamps anchored to the instance's day; carrying them verbatim onto a renewed instance
+  // dated dayDiff days later kept every extra stuck in the past forever, and each generation
+  // added another stale entry — past-dated extras force the scheduler's needsCatchUp full
+  // reloads. Shift each extra by the renewal day-diff (next.todoTime - t.dayStart), the same
+  // re-anchor semantic as cli/lib-date.cjs dateChangeReminderPatch (edit --date) and the
+  // EditPanel date change. When the anchor is unknown (no dayStart on either side) the extras
+  // are DROPPED rather than carried at a wrong day; non-finite/non-positive junk is filtered.
+  const dayDiff = (next && next.todoTime > 0 && t.dayStart > 0) ? next.todoTime - t.dayStart : null
+  const extras = Array.isArray(t.reminderExtra) ? t.reminderExtra : []
   return {
     reminderTime: next.reminderTime,
     reminderOffsets: Array.isArray(t.reminderOffsets) ? t.reminderOffsets : [],
-    reminderExtra: Array.isArray(t.reminderExtra) ? t.reminderExtra : [],
+    reminderExtra: dayDiff == null ? [] : extras.filter(v => Number.isFinite(v) && v > 0).map(v => v + dayDiff),
     difficulty: t.difficulty || 0,
     priority: t.priority || 0,
     deadlineTs: t.deadlineTs || 0,

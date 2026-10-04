@@ -30,8 +30,16 @@ module.exports = ({ open, commit, audit, CliError, resolveCategory, projectFlagK
       if (folder) throw new CliError('nested folders are not supported — the App renders folders as roots only (same guard as category move)', 'CATEGORY_NESTED_FOLDER')
       parentId = pid
     }
+    // D20-DOMB8 (2026-10-02): the mint (Date.now()*1000 + rand(1000)) collided within the same
+    // millisecond and the category upsert silently OVERWROTE the earlier row. Re-mint in a
+    // bounded loop until the id is free (wider jitter space when the fast path keeps colliding).
+    let cid = Date.now() * 1000 + Math.floor(Math.random() * 1000)
+    const taken = new Set(cats.map(c => c.categoryId))
+    for (let i = 0; taken.has(cid) && i < 16; i++) {
+      cid = Date.now() * 1000 + Math.floor(Math.random() * 1000000)
+    }
     const cat = {
-      categoryId: Date.now() * 1000 + Math.floor(Math.random() * 1000), userId: 840001,
+      categoryId: cid, userId: 840001,
       categoryName: String(name), categoryColor: color && CAT_COLORS.includes(color) ? color : CAT_COLORS[cats.length % CAT_COLORS.length],
       createTime: Date.now(), listSort: Math.max(0, ...cats.map(c => c.listSort)) + 100,
       folderIs: !!folder, folderId: parentId, delete: false

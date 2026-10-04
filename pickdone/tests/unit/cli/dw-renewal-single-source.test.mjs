@@ -34,16 +34,17 @@ test('P2-4: shared core and todo-core re-export are the same functions (single s
 
 test('P2-4: renewalCarryFields — D5 parity set with `t.x || 0` fallbacks', () => {
   const t = {
-    reminderOffsets: [5], reminderExtra: [{ ts: 1 }], difficulty: 2, priority: 3,
+    dayStart: 1000, reminderOffsets: [5], reminderExtra: [1500], difficulty: 2, priority: 3,
     deadlineTs: 12345, important: 1, urgent: 0, repeatId: 'r1',
     estimate: 7 // NOT carried here (CLI resolves the live meta estimate separately)
   }
-  const out = renewalCarryFields(t, { reminderTime: 999 })
+  // D20-DOMB3: extras shift by the renewal day-diff (next.todoTime - t.dayStart = 1000)
+  const out = renewalCarryFields(t, { todoTime: 2000, reminderTime: 999 })
   // D18-DOM2 (B6 convergence): attachments joined the carry set — image/files default to null
   // (`t.x || null`) alongside the quadrant/extra `t.x || 0` fallbacks.
   assert.deepEqual(out, {
     reminderTime: 999,
-    reminderOffsets: [5], reminderExtra: [{ ts: 1 }],
+    reminderOffsets: [5], reminderExtra: [2500],
     difficulty: 2, priority: 3, deadlineTs: 12345, important: 1, urgent: 0,
     image: null, files: null,
     repeatId: 'r1'

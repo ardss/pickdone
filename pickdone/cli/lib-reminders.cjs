@@ -14,6 +14,10 @@ module.exports = ({ resolveTask, liveTasks, patchTodo, CliError, dayjs, parseDat
       offsets = String(csv).split(/[,，\s]+/).filter(Boolean).map(s => {
         const v = parseInt(s, 10)
         if (isNaN(v)) throw new CliError(`bad offset "${s}" (minutes before the main reminder, e.g. "10,30"; 0=on-time; none=clear)`, 'USAGE')
+        // D20-DOMB5: db normOffsets (src/main/db-rows.js) silently drops |v| > 43200 minutes
+        // (30 days) — a huge offset used to vanish without a word. Reject at the CLI with the
+        // limit echoed instead.
+        if (Math.abs(v) > 43200) throw new CliError(`bad offset "${s}" (|offset| must be at most 43200 minutes = 30 days — larger values are dropped by the DB)`, 'USAGE')
         // "0" (on-time) is explicitly absorbed: db normOffsets filters 0 out, so writing [0] would silently vanish — map to "no offset" instead
         return v === 0 ? null : -Math.abs(v)
       })
