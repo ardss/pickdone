@@ -136,8 +136,8 @@ test('[F8] onDragOver skips the drop-ok outline when the dragged task already si
 
 test('[F9] the undo restore re-reads and rewrites the ORIGINAL project meta after a switch', () => {
   const src = read('renderer/js/components/ProjectDocs.vue')
-  // restore must branch on catId and write the original project's key directly — not early-return
-  assert.match(src, /}, async \(\) => \{[\s\S]{0,600}?if \(this\.catId !== catId \|\| this\._docsCatId !== catId\) \{[\s\S]{0,600}?dbCall\('getMeta', keyOf\(catId\)\)[\s\S]{0,600}?dbCall\('setMeta', \[keyOf\(catId\),/)
+  // restore must branch on catId and write the original project's key via the command bus — not early-return
+  assert.match(src, /}, async \(\) => \{[\s\S]{0,600}?if \(this\.catId !== catId \|\| this\._docsCatId !== catId\) \{[\s\S]{0,600}?dbCall\('getMeta', keyOf\(catId\)\)[\s\S]{0,600}?commit\('meta', 'put', \[keyOf\(catId\),/)
   assert.ok(!/if \(this\.catId !== catId\) return\r?\n\s*this\.docs\.splice/.test(src),
     'the silent early-return restore is gone')
   // same-project path keeps the in-memory splice + persist
