@@ -94,7 +94,12 @@ exports.tomatoAppendMany = (db, rows) => {
       reason
     })
     if (!raw || !raw.tomatoId) { reject('tomatoId required'); return }
-    if (!raw.endTime) { reject('endTime required'); return }
+    // D19-DOM1 (2026-10-02): endTime must be a finite positive NUMBER before any coercion.
+    // The old `!raw.endTime` gate let truthy NON-numeric values through ('abc', true) —
+    // Math.round(Number(v) || 0) then coerced them to 0 and the row landed as a 1970-01-01
+    // ledger entry that synced to every peer. Same rejected-row contract as the other gates.
+    const endNum = raw.endTime
+    if (typeof endNum !== 'number' || !Number.isFinite(endNum) || endNum <= 0) { reject('endTime required'); return }
     // Strip the explicit updatedAt BEFORE _recToRow snapshots unknown keys into the extra blob
     // (main-ipc-9, see below); the stamp itself is re-read from raw at the ins.run site.
     const clean = Object.assign({}, raw); delete clean.updatedAt

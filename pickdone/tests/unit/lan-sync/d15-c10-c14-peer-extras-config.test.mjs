@@ -63,14 +63,20 @@ test('C10: an unchanged seq PAST the TTL recomputes (blind spots: sync-ack echo 
 
 /* ---------- C14: sleepBackoff busy-spin fallback ---------- */
 
-test('C14: sleepBackoff still elapses the delay when Atomics.wait is unavailable', () => {
+test('C14/D19: sleepBackoff without Atomics.wait still elapses a REAL (capped) delay', () => {
   const orig = Atomics.wait
   Atomics.wait = () => { throw new TypeError('simulated environment without Atomics.wait/SAB') }
   try {
     const t0 = Date.now()
     cfg.sleepBackoff(80)
     const elapsed = Date.now() - t0
-    assert.ok(elapsed >= 60, 'red before the fix: returned immediately (promised ~1.5s AV backoff degraded to zero-wait); got ' + elapsed + 'ms')
+    // D19-DOM1 (2026-10-02): the fallback spin is now CAPPED (~50ms per wait) — the old
+    // full-slice spin (up to 800ms of full-core main-thread burn per read) was the price of
+    // the D15 honesty contract; the documented degrade is: a real delay stays (never
+    // zero-wait), the rest of the slice is given up and the read proceeds to the
+    // non-destructive transient path sooner (no quarantine, writes gated off).
+    assert.ok(elapsed >= 30, 'still elapses a real delay (never zero-wait); got ' + elapsed + 'ms')
+    assert.ok(elapsed < 80, 'capped below the requested slice; got ' + elapsed + 'ms')
   } finally { Atomics.wait = orig }
 })
 

@@ -79,9 +79,14 @@ function createWindowManager (ctx) {  const {
       const multiSuffix = require('./multi-instance').titleSuffix(process.env, app.getPath('userData'))
       const testTitle = i18n.mt('appName') + ' [TEST]' + multiSuffix
       win.setTitle(testTitle)
-      win.webContents.on('did-finish-load', () => {
-        win.setTitle(testTitle)
-        win.webContents.executeJavaScript(`{
+      // D19-DOM1 (2026-10-02): the closure used to re-read the module-level `win` on every fire —
+      // after a close-then-tray recreation the badge/title landed on (or queried) the NEW window
+      // mid-load instead of the load that actually finished. Use the event's own sender, same fix
+      // did-fail-load got with wcAtFail.
+      win.webContents.on('did-finish-load', (e) => {
+        const wc = (e && e.sender) || win.webContents
+        try { wc.setTitle(testTitle) } catch { /* destroyed */ }
+        wc.executeJavaScript(`{
           if (!document.getElementById('test-env-badge')) {
             const b = document.createElement('div')
             b.id = 'test-env-badge'

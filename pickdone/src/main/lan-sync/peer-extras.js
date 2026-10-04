@@ -32,20 +32,29 @@ module.exports = ({ settingGet }) => {
  * advances OR the TTL expires" — seq-only memoization was not an invariant. */
 const MISSING_CACHE_TTL_MS = 1000
 let missingCache = { seq: null, keys: null, at: 0 }
+/** D19-DOM1 (2026-10-02): a READ FAILURE inside the collection used to be swallowed by the
+ *  catch and returned as [] — which the round consumes as "nothing missing", silently skipping
+ *  attachment-pull planning for as long as reads kept failing. Failure is now distinct from
+ *  "nothing missing": returns NULL (caller-side noteMissing(null) is a benign no-op), warns
+ *  loudly, and leaves the cache untouched (a later successful read repopulates it). */
 function missingAttachmentKeys (st, inject = {}) {
   try {
     const fs = require('node:fs')
     const path = require('node:path')
     const { collectMissingKeys } = require('./att-transfer')
     const now = inject.now || Date.now
-    const seq = require('../sync-apply').readMaxOplogSeq(st)
+    const seq = (inject.readMaxOplogSeq || require('../sync-apply').readMaxOplogSeq)(st)
     if (missingCache.seq === seq && missingCache.keys && now() - missingCache.at < MISSING_CACHE_TTL_MS) return missingCache.keys
     const dir = inject.attachDir || require('../attachments').attachDir()
     const exists = inject.existsSync || (key => fs.existsSync(path.join(dir, path.basename(String(key)))))
     const keys = collectMissingKeys(st.db.call('getAll', { deleted: 0 }), exists)
     missingCache = { seq, keys, at: now() }
     return keys
-  } catch { return [] }
+  } catch (e) {
+    try { require('electron-log').warn('[LanSync] missing-attachment key collection failed this round:', e && e.message) } catch { /* noop */ }
+    try { require('../log-isolation') } catch { /* standalone test context */ }
+    return null
+  }
 }
 
   return { K_PEER_ALIAS_PREFIX, peerAliasOf, missingAttachmentKeys }

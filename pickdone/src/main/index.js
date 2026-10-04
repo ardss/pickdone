@@ -1,9 +1,6 @@
 /**
- * Main process entry — PickDone offline implementation
- * IPC channel names stay aligned with the project baseline, easing a later swap to a real cloud backend
- * Window lifecycle lives in windows.js; IPC handlers live in handlers/*.js — this file stays the
- * assembly point (wiring + unified handler error-wrap loop + tray + quit chain).
- */
+ * Main process entry — PickDone offline implementation * IPC channel names stay aligned with the project baseline, easing a later swap to a real cloud backend * Window lifecycle lives in windows.js; IPC handlers live in handlers/*.js — this file stays the
+ * assembly point (wiring + unified handler error-wrap loop + tray + quit chain). */
 const { app, BrowserWindow, ipcMain, Tray, Menu, dialog } = require('electron')
 // globalShortcut is required by quick-add/pomodoro-float and other modules (avoid duplicates)
 const path = require('path')
@@ -211,8 +208,7 @@ async function quitFromTrayInner () {
   state.quitByUser = true
   // P2 2026-09-23: a running pomodoro used to die silently on tray-quit — the ledger only ever // records on completeFocus/giveUp, so the in-progress session vanished with no confirm and no // record. Ask before tearing everything down (the tray stays alive until confirmed).
   // TQ-1 (2026-10-03): the confirm gate now consults the DURABLE 'tomatoRunningSession' meta row // (written by every renderer FSM transition, main or float window), not the tray-text lease. // The lease (tomatoLiveText) was a display artifact: a throttled/crashed renderer let a live
-  // focus quit with no confirm, and a float-originated focus never refreshed the lease at all // (update-tomato-taskbar is main-window-gated). The lease remains for the tooltip detail text
-  // only; isLiveTextFresh stays exported for its lease-semantics unit tests.
+  // focus quit with no confirm, and a float-originated focus never refreshed the lease at all // (update-tomato-taskbar is main-window-gated). The lease remains for the tooltip detail text // only; isLiveTextFresh stays exported for its lease-semantics unit tests.
   const sessionLive = tomatoSession ? tomatoSession.hasRunningSession() : false
   if (sessionLive) {
     try {
@@ -230,16 +226,11 @@ async function quitFromTrayInner () {
       if (response !== 0) { state.quitByUser = false; return } // cancelled: restore quit intent
     } catch (e) { log.warn('[Tray] quit confirm dialog failed, proceeding with quit', e) }
   }
-  // win can be a DESTROYED instance here (closeActionMinimize=false destroys the window on X but only
-  // createMainWindow reassigns the module var) — getBounds on it throws "Object has been destroyed" and
-  // kills the whole quit chain. Route through the live-window guard.
+  // win can be a DESTROYED instance here (closeActionMinimize=false destroys the window on X but only // createMainWindow reassigns the module var) — getBounds on it throws "Object has been destroyed" and // kills the whole quit chain. Route through the live-window guard.
   const qw = getMainWindow()
-  // P1 2026-09-12: writeConfig here used to run bare — a disk-full/locked config.json threw straight
-  // out of the tray-menu click handler. The tray was already destroyed below, so the quit died
-  // mid-chain leaving a zombie process (no window, no tray). Same try-wrap as windows.js close path.
+  // P1 2026-09-12: writeConfig here used to run bare — a disk-full/locked config.json threw straight // out of the tray-menu click handler. The tray was already destroyed below, so the quit died // mid-chain leaving a zombie process (no window, no tray). Same try-wrap as windows.js close path.
   if (qw) { try { writeConfig({ winBounds: qw.getBounds() }) } catch (err) { log.warn('[Tray] winBounds 写入失败(退出路径)', err) } }
-  // Destroy the tray icon first: the icon only disappears on Windows when the process exits,
-  // while the quit path (renderer flush + scheduler persist + WAL close) can take seconds — without this, the icon lingers and reads as "quit is slow"
+  // Destroy the tray icon first: the icon only disappears on Windows when the process exits, // while the quit path (renderer flush + scheduler persist + WAL close) can take seconds — without this, the icon lingers and reads as "quit is slow"
   if (tray) { try { tray.destroy() } catch (e) { /* empty */ } tray = null }
   app.quit()
 }
@@ -563,7 +554,16 @@ if (!app.requestSingleInstanceLock(...__multiLockArgs)) {
       // only by a deleted task kept its repeatRule: meta forever (never GC'd). Only LIVE rows keep
       // a rule alive — deleted:0. Decision logic extracted to handlers/shared.computeMetaGc for tests.
       const { computeMetaGc } = require('./handlers/shared')
-      for (const k of computeMetaGc(dbm.call('listMetaKeys'), dbm.call('getAllCategories'), dbm.call('getAll', { deleted: 0 }))) {
+      // D19-DOM1: tomatoRunAnnounce family rule inputs — the paired-device set (from the LAN sync
+      // bootstrap's peer table) plus OUR own id (our announce row is never GC-able). On any read
+      // failure the option stays undefined and the family rule is inert (nothing deleted).
+      let pairedDeviceIds, ownDeviceId
+      try {
+        const lanSync = require('./lan-sync-bootstrap')
+        pairedDeviceIds = new Set(lanSync.loadPairedPeers().map(p => String((p && p.deviceId) || '')))
+        ownDeviceId = lanSync.ensureIdentity().deviceId
+      } catch { /* sync module/settings read unavailable: family rule inert */ }
+      for (const k of computeMetaGc(dbm.call('listMetaKeys'), dbm.call('getAllCategories'), dbm.call('getAll', { deleted: 0 }), { pairedDeviceIds, ownDeviceId })) {
         require('./command-bus').commit('meta', 'delete', k, { preserveStamp: true }) // Phase-2: GC via the bus
       }
       // D6 P2 (2026-09-21): historical note — the GC loop used to run BEFORE registerIpc wired the

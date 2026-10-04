@@ -7,6 +7,10 @@ const { app } = require('electron')
 function attachDir () {
   const d = path.join(app.getPath('userData'), 'files')
   fs.mkdirSync(d, { recursive: true })
+  if (!_tmpSweepDone) {
+    _tmpSweepDone = true
+    try { sweepTmpResidue(d) } catch { /* sweep is best-effort, never blocks attachDir */ }
+  }
   return d
 }
 // Attachment constraints: 50MB max per file; extension **whitelist** (after saving, open-file → shell.openPath can execute directly; a blacklist
@@ -34,11 +38,40 @@ function isUnownedNoiseFile (f) { return NOISE_CUSTOM_RE.test(String(f)) }
 // scanners (dirUsage/dirTotalBytes): 1 phantom file toward MAX_FILES=200 and its bytes toward the
 // 64MB budget. Same rationale as the C14 noise-slot exclusion.
 function isAppOwnedBookkeeping (f) { return isUnownedNoiseFile(f) || String(f) === 'aliases.json' }
+// D19-DOM1 (2026-10-02): crash-residue `.att-tmp-*` files (att-transfer.js writeAtomic spool
+// files left behind by a crash/power-cut between writeFileSync and rename) used to be counted
+// by BOTH quota scanners (dirUsage/dirTotalBytes) forever — they are invisible to the sync
+// protocol (peers never see them, nothing ever reads them), so counting them punishes the
+// crash victim with a permanently shrunken 64MB/200-file budget. Excluded from accounting
+// here AND age-swept on startup (sweepTmpResidue below) so they cannot accumulate either.
+const ATT_TMP_RE = /\.att-tmp-\d+-\d+$/
+const TMP_SWEEP_MAX_AGE_MS = 24 * 60 * 60 * 1000
+function isCrashTmpResidue (f) { return ATT_TMP_RE.test(String(f)) }
+/** Age-based crash-residue sweep: unlink `.att-tmp-*` older than 24h. A YOUNG tmp file may be
+ *  a concurrent transfer's in-flight spool — never touched. Pure-ish over injected fs for tests;
+ *  returns the removed count. */
+function sweepTmpResidue (dir, { now = Date.now(), maxAgeMs = TMP_SWEEP_MAX_AGE_MS, fsMod = fs } = {}) {
+  let removed = 0
+  try {
+    for (const f of fsMod.readdirSync(dir)) {
+      if (!isCrashTmpResidue(f)) continue
+      let old = false
+      try { old = now - fsMod.statSync(path.join(dir, f)).mtimeMs > maxAgeMs } catch { old = false }
+      if (!old) continue
+      try { fsMod.unlinkSync(path.join(dir, f)); removed++ } catch { /* best-effort */ }
+    }
+  } catch { /* unreadable dir: nothing to sweep */ }
+  return removed
+}
+// Startup sweep runs ONCE per process, lazily, on the first attachDir() (every quota/write/
+// resolve path funnels through it) — no separate init hook needed.
+let _tmpSweepDone = false
 function dirUsage (dir) {
   let bytes = 0
   let count = 0
   for (const f of fs.readdirSync(dir)) {
-    if (isAppOwnedBookkeeping(f)) continue // C14: white-noise slot; lifecycle: alias map — neither is attachment quota
+    // C14: white-noise slot; lifecycle: alias map; D19: crash-residue .att-tmp-* — none are attachment quota
+    if (isAppOwnedBookkeeping(f) || isCrashTmpResidue(f)) continue
     try { bytes += fs.statSync(path.join(dir, f)).size; count++ } catch { /* vanished mid-scan */ }
   }
   return { bytes, count }
@@ -61,7 +94,7 @@ function withinStorageQuota (existingBytes, incomingBytes, quotaBytes) {
 function dirTotalBytes (dir) {
   let n = 0
   for (const f of fs.readdirSync(dir)) {
-    if (isAppOwnedBookkeeping(f)) continue
+    if (isAppOwnedBookkeeping(f) || isCrashTmpResidue(f)) continue
     try { n += fs.statSync(path.join(dir, f)).size } catch { /* raced delete */ }
   }
   return n
@@ -174,6 +207,8 @@ module.exports = { attachDir, saveAttachment, attachmentPath, withinStorageQuota
   // C5/C14 (2026-09-25): MAX_BYTES/MAX_FILES and the noise-slot classifier are exported so
   // attachments-guards.js is the shared gate for every write entry without duplicating caps.
   MAX_BYTES, MAX_FILES, isUnownedNoiseFile, dirUsage,
+  // D19-DOM1: crash-residue classifier + age sweep (exported for unit tests / the att-tmp quota fix).
+  isCrashTmpResidue, sweepTmpResidue, TMP_SWEEP_MAX_AGE_MS,
   // Domain-1 F-A2 refactor (2026-09-23): the whitelist is exported so the LAN attachment
   // receiver (lan-sync/att-transfer.js) enforces the SAME extension set on inbound files —
   // one whitelist, two doors (upload IPC + sync ingress); keep it tighten-only (D6 svg root-fix).

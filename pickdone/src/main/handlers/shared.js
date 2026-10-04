@@ -178,6 +178,20 @@ function computeMetaGc (metaKeys, categories, todos, opts = {}) {
     // `catProjectMetaBak.<id>` is deliberately left alone: it anchors the recovery entry of
     // soft-deleted categories, which a live-only category set cannot see.
     if (/^catProjectMetaBak\.pending\./.test(k)) { dead.push(k); continue }
+    // D19-DOM1 (2026-10-02): tomato run-announce family rule. `tomatoRunAnnounce.<deviceId>`
+    // rows are written per paired device and propagated via the meta entity; a device that is
+    // unpaired elsewhere (or whose pairing was removed without the announce-delete hook firing)
+    // left its row forever. When the caller supplies `pairedDeviceIds`, a row whose deviceId is
+    // neither paired nor THIS device is unreadable garbage → GC-able. The rule is INERT when the
+    // option is omitted (legacy callers/tests, or a paired-table read failure at the call site):
+    // without a trustworthy paired set nothing is deleted.
+    m = k.match(/^tomatoRunAnnounce\.(.+)$/)
+    if (m && opts.pairedDeviceIds) {
+      const id = m[1]
+      const paired = opts.pairedDeviceIds instanceof Set ? opts.pairedDeviceIds : new Set(opts.pairedDeviceIds)
+      if (!paired.has(id) && id !== opts.ownDeviceId) dead.push(k)
+      continue
+    }
   }
   return dead
 }

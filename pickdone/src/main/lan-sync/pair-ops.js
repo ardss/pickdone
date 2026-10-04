@@ -39,6 +39,11 @@ module.exports = ({ getState, settingGet, settingPut, busWrite, getSettingsPaylo
     // Round-1 P0: drop the persisted paired-peer record too (it keyed the stale address the manual
     // record mirrored); re-pairing then starts from a clean table instead of merging into it.
     removePairedPeer(deviceId)
+    // D19-DOM1 (2026-10-02): the removed peer's `tomatoRunAnnounce.<deviceId>` meta row is
+    // immortal otherwise — unpair never touched it, the Meta GC had no family rule for it, and
+    // the ids map in tomato-announce pruned only after a value read went dead. Delete the row
+    // here (best-effort; peers hear about the removal via their own unpair/notify path).
+    try { busWrite('deleteMeta', require('../tomato-announce').keyFor(deviceId)) } catch (e) { log.warn('[LanSync] announce row drop failed:', e && e.message) }
     // Drop the per-peer push watermark (a stale watermark must not survive a revoked pairing).
     // S3 (2026-10-03): revocation goes through the watermark store, not a bare point-delete —
     // the id is marked REVOKED (and persisted), so the in-flight ack path (client-round's
@@ -87,7 +92,13 @@ module.exports = ({ getState, settingGet, settingPut, busWrite, getSettingsPaylo
     const r = await state.node.pairWith(p && p.deviceId || undefined, code)
     // F1 (2026-09-28 drill): the global secret is still adopted as a LEGACY fallback, but the
     // per-pair secret now lives in the peer record — a later pairing must not invalidate this one.
-    settingPut(K_PAIRING_SECRET, String(r.secret))
+    // D19-DOM1 (2026-10-02): "adopted as fallback" used to mean OVERWRITTEN on EVERY successful
+    // pairing — transport auth resolves `secretFor(claimed) || pairingSecret`, so a legacy peer
+    // still authenticating against the OLD global secret was terminally un-paired by the next
+    // pairing of an unrelated device. The global secret is now mint-once: only adopted when
+    // absent (first pairing on a fresh install); later pairings keep it (rotation stays the
+    // unpair flow's job — syncUnpairPeerOp below — which is the documented revoke point).
+    if (!settingGet(K_PAIRING_SECRET)) settingPut(K_PAIRING_SECRET, String(r.secret))
     // Round-1 P0: persist the paired peer from the address the pair ACTUALLY succeeded on (the
     // dialed host:port), so the record survives restart and re-pairing overwrites any stale one.
     if (r.peer && r.peer.deviceId) {
@@ -127,7 +138,9 @@ module.exports = ({ getState, settingGet, settingPut, busWrite, getSettingsPaylo
     const r = await state.node.requestPair(host, port)
     // F1: legacy global adoption stays as fallback; the per-pair secret is persisted in the
     // peer record (deviceId comes back in the pair-accept since this flow has no discovered peer).
-    settingPut(K_PAIRING_SECRET, String(r.secret))
+    // D19-DOM1: mint-once contract (see syncPairWithCode above) — an existing global secret is
+    // PRESERVED so legacy global-secret peers keep authenticating across new pairings.
+    if (!settingGet(K_PAIRING_SECRET)) settingPut(K_PAIRING_SECRET, String(r.secret))
     if (r.deviceId) persistPairedPeer({ deviceId: r.deviceId, host: r.host, port: r.port, secret: r.secret })
     log.info('[LanSync] two-way pairing accepted by', host, '- shared secret adopted, restarting node')
     // S5: awaited + fail-closed (same contract as syncPairWithCode above).

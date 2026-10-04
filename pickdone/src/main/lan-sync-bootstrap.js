@@ -1,8 +1,5 @@
 /* P3a LAN sync bootstrap (2026-09-16, docs/sync/同步整体方案-2026-09-15.md §9).
- * Extracted from index.js for the size ratchet: index.js keeps one thin require+call after db init.
- *
- * Responsibilities:
- *   - Device identity: deviceId (UUID, persisted in settings_rows 'sync.deviceId' on first run),
+ * Extracted from index.js for the size ratchet: index.js keeps one thin require+call after db init. * * Responsibilities: *   - Device identity: deviceId (UUID, persisted in settings_rows 'sync.deviceId' on first run),
  *     deviceName (default os.hostname(), user-renamable), pairingSecret (32-byte hex, generated on
  *     FIRST ENABLE only — never auto-enable; the app must boot with sync off by default).
  *   - Engine adapter: implements the shared/sync-core engine.mjs localStore contract against the
@@ -778,7 +775,11 @@ function initLanSync ({ db, getWindowSenders, resyncExternalWatch } = {}) {
   } catch (e) { log.warn('[LanSync] startup enable failed:', e.message) }
 }
 
-module.exports = { initLanSync, stopSyncForQuit, kickSyncRound, shipQuitRound, invalidateSyncWatermarks, emitOplogAppendFailure }
+module.exports = { initLanSync, stopSyncForQuit, kickSyncRound, shipQuitRound, invalidateSyncWatermarks, emitOplogAppendFailure,
+  // D19-DOM1: production surface for the startup Meta GC's tomatoRunAnnounce family rule
+  // (index.js reads the paired-device set + our own identity). Same functions as the __test
+  // entries below — single source.
+  loadPairedPeers, ensureIdentity }
 
 // Test-only hooks: applyRowInner/flushPendingWrites operate on the module-level `state` singleton;
 // unit tests swap in a mock state via __test.setState. Production paths never touch __test.
