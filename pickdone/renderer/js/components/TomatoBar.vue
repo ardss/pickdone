@@ -62,7 +62,6 @@ import { formatMMSS } from '../utils/tomatoShared.js'
 import { remainingSecOfState } from '../store/tomato.js'
 import store from '../store/index.js'
 import { roleButtonActivate } from '../utils/roleButtonKey.js' // [D18-DOM3] Space+Enter button activation
-import { roleButtonActivate } from '../utils/roleButtonKey.js' // [D18-DOM3] Space+Enter button activation
 
 // The noise list/files/prefix have been consolidated into utils/mediaRegistry.js (single source of truth); only the "labelKey tail segment" is adapted here
 
@@ -203,8 +202,6 @@ export default {
     cancelAttach () { store.dispatch('tomato/attach', null) },
     openPanel () { store.commit('ui/toggleTomatoPanel', true) },
     // Following the common showTomatoRecordList pattern: open the modal then fetch data; with no records, show a message instead of the modal
-    /* [D18-DOM3] records button: Space joins Enter (ARIA button pattern) */
-    onRecordsKey: roleButtonActivate(function () { this.showRecordList() }),
     /* [D18-DOM3] records button: Space joins Enter (ARIA button pattern) */
     onRecordsKey: roleButtonActivate(function () { this.showRecordList() }),
     showRecordList () {
