@@ -60,6 +60,7 @@ test('P1: manual pairing — a refused write (socket backpressure) must NOT reco
   socket.emit('data', pairRequestLine({ code: '123456' }))
   assert.equal(pairedCalls, 0, 'red before the fix: onPaired fired even though the accept frame was never handed to the socket')
   await new Promise((r) => setTimeout(r, 20))
+  for (let t = 0; t < 40 && !socket.destroyed; t++) await new Promise((r) => setTimeout(r, 50)) // poll: flush-then-destroy may legally take up to its 1s cap under load
   assert.equal(socket.destroyed, true, 'the dead flow is still torn down')
 })
 
