@@ -139,7 +139,11 @@ if (hasBoxItems) {
   await click('.tb-dot-check'); await sleep(700)
   const n1 = await evalJson(`document.querySelectorAll('.tb-dot-check').length`)
   ok('dot completion takes effect (item leaves the inbox)', n1 === n0 - 1, `${n0} -> ${n1}`)
-  const undo = await evalJson(`(() => { var a = [...document.querySelectorAll('.el-message a')].find(x => ['Undo','撤销'].includes(x.textContent.trim())); if (a) { a.click(); return true } return false })()`)
+  let undo = false
+  for (let t = 0; t < 20 && !undo; t++) { // poll: completion->toast latency exceeds a fixed 800ms sleep under pool load
+    undo = await evalJson(`(() => { var a = [...document.querySelectorAll('.el-message a')].find(x => ['Undo','撤销'].includes(x.textContent.trim())); if (a) { a.click(); return true } return false })()`)
+    if (!undo) await sleep(300)
+  }
   await sleep(700)
   const n2 = await evalJson(`document.querySelectorAll('.tb-dot-check').length`)
   if (undo) ok('undo restores the item', n2 === n0, `${n1} -> ${n2}`)
