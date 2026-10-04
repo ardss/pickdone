@@ -31,6 +31,8 @@ let parseTimeoutMs = IMPORT_WORKER_TIMEOUT_MS
 function __setParseTimeoutMs (ms) { parseTimeoutMs = Number(ms) > 0 ? Number(ms) : IMPORT_WORKER_TIMEOUT_MS }
 const outstandingWorkers = new Set()
 const leakedWorkers = new Set()
+let _lastWorkerRun = null // D18 test seam: { timedOut, exitCode } of the most recent parse worker
+function __lastRunStats () { return _lastWorkerRun }
 function __workerRegistry () { return { outstanding: outstandingWorkers.size, leaked: leakedWorkers.size } } // test seam
 function __resetWorkerRegistry () { outstandingWorkers.clear(); leakedWorkers.clear() } // test-only
 
@@ -55,7 +57,11 @@ function runImportParse (text, format = 'auto') {
   return new Promise((resolve, reject) => {
     let settled = false
     let timedOut = false
-    const finish = (fn, arg) => {
+    // D18 (2026-10-02): finish() used to terminate() the worker on EVERY path — including the
+    // success resolve — so a successful parse still killed its thread mid-teardown (exit code 1,
+    // masked by the settled guard). A success now lets the worker exit naturally; only timeouts
+    // and error paths terminate.
+    const finish = (fn, arg, terminate = true) => {
       if (settled) return
       settled = true
       clearTimeout(timer)
@@ -65,11 +71,13 @@ function runImportParse (text, format = 'auto') {
         // it against the leak breaker so unbounded thread accumulation is impossible.
         leakedWorkers.add(worker)
       }
-      // H7 (2026-09-12): terminate() is async and can reject (e.g. while the worker is stuck in a
-      // structured-clone of a huge buffer) — an unhandled rejection here would crash the main process.
-      // It still cannot FORCE-reclaim such a worker (structural V8 limitation: a clone in flight is not
-      // interruptible; the 30s timeout abandons the thread to the OS at app exit) — logged, not hidden.
-      try { Promise.resolve(worker.terminate()).catch(err => logTerminationFailure(err)) } catch (err) { logTerminationFailure(err) }
+      if (terminate) {
+        // H7 (2026-09-12): terminate() is async and can reject (e.g. while the worker is stuck in a
+        // structured-clone of a huge buffer) — an unhandled rejection here would crash the main process.
+        // It still cannot FORCE-reclaim such a worker (structural V8 limitation: a clone in flight is not
+        // interruptible; the 30s timeout abandons the thread to the OS at app exit) — logged, not hidden.
+        try { Promise.resolve(worker.terminate()).catch(err => logTerminationFailure(err)) } catch (err) { logTerminationFailure(err) }
+      }
       fn(arg)
     }
     // Packaged: prefer the extraResources copy (worker bootstrap from inside asar is a historical
@@ -82,7 +90,7 @@ function runImportParse (text, format = 'auto') {
     outstandingWorkers.add(worker) // D10: tracked so concurrent parses are capped
     const timer = setTimeout(() => { timedOut = true; finish(reject, new Error('import: parse worker timed out after ' + parseTimeoutMs + 'ms')) }, parseTimeoutMs)
     worker.on('message', m => {
-      if (m && m.ok) finish(resolve, m)
+      if (m && m.ok) finish(resolve, m, false) // D18: success — no terminate, natural exit
       else {
         // H8 (2026-09-12): Electron's invoke() rejection serialization strips custom Error props
         // (only name+message survive the context bridge), so a bare perr.code never reaches the
@@ -102,6 +110,7 @@ function runImportParse (text, format = 'auto') {
       // leak breaker and bricked CSV import with [BUSY]. Only a worker that never exits
       // (clone-stuck) keeps counting against the breaker.
       if (timedOut) leakedWorkers.delete(worker)
+      _lastWorkerRun = { timedOut, exitCode: code } // D18 test seam: success exits naturally (code 0, no terminate)
       if (code !== 0) finish(reject, new Error('import: parse worker exited with code ' + code))
     })
   })
@@ -283,6 +292,7 @@ module.exports.runImportParse = runImportParse
 module.exports.__workerRegistry = __workerRegistry
 module.exports.__resetWorkerRegistry = __resetWorkerRegistry
 module.exports.__setParseTimeoutMs = __setParseTimeoutMs // D17: unit-test seam
+module.exports.__lastRunStats = __lastRunStats // D18: unit-test seam (success = natural exit code 0)
 // r4 (2026-09-28): IMPORT_MAX_OUTSTANDING / IMPORT_MAX_LEAKED are back to file-private consts —
 // they were exported "for future tests" but had zero references repo-wide (incl. tests), a fake
 // public-contract surface. The caps stay behaviorally anchored by the BUSY / breaker paths.

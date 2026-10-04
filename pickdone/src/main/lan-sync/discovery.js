@@ -351,6 +351,12 @@ function createDiscovery() {
       em.on('found', onFound)
     }
     if (bonjourModule) {
+      // D18 (2026-10-02): repeated discover() used to overwrite the module-level `browser` handle
+      // without stopping the previous one — each call leaked a live mDNS browser (duplicated
+      // 'found' callbacks, unbounded handle growth), the same hygiene startAdvertising applies
+      // with its destroy-then-recreate of the advertised service. Stop the stale browser BEFORE
+      // minting the new one.
+      if (browser) { try { browser.stop() } catch { /* noop */ } browser = null }
       bonjour = bonjour || new bonjourModule.Bonjour()
       browser = bonjour.find({ type: SERVICE_TYPE }, (svc) => {
         upsertPeer({

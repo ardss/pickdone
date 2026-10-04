@@ -123,13 +123,20 @@ function readAliases () {
   try { const o = JSON.parse(fs.readFileSync(aliasesPath(), 'utf8')); if (o && typeof o === 'object' && !Array.isArray(o)) return o } catch { /* no map / unreadable: empty */ }
   return {}
 }
+// D18 (2026-10-02): the alias map used to be written with a bare writeFileSync — a torn write
+// (crash/power-cut mid-write) silently WIPED the LAN conflict alias map (readAliases' catch→{}
+// loses every entry). Route all three write sites through the repo's durable write
+// (durable-fs.writeFileDurable: tmp + fsync + atomic rename, no residue on failure).
+function writeAliasesDurable (map) {
+  try { require('./durable-fs').writeFileDurable(aliasesPath(), JSON.stringify(map, null, 1)) } catch { /* best-effort */ }
+}
 function setAlias (key, diskName) {
   const k = path.basename(String(key || ''))
   const n = path.basename(String(diskName || ''))
   if (!k || !n || k === n) return false
   const map = readAliases()
   map[k] = n
-  try { fs.writeFileSync(aliasesPath(), JSON.stringify(map, null, 1)) } catch { /* best-effort */ }
+  writeAliasesDurable(map)
   return true
 }
 function deleteAlias (key) {
@@ -138,7 +145,7 @@ function deleteAlias (key) {
   const map = readAliases()
   if (!(k in map)) return false
   delete map[k]
-  try { fs.writeFileSync(aliasesPath(), JSON.stringify(map, null, 1)) } catch { /* best-effort */ }
+  writeAliasesDurable(map)
   return true
 }
 /** Lifecycle fix (2026-10-02): purge/delete-todo-files/hardDelete remove owned files in bulk but
@@ -157,9 +164,7 @@ function pruneMissingAliases (exists = p => fs.existsSync(p)) {
     try { gone = !exists(path.join(attachDir(), path.basename(String(map[k] || '')))) } catch { gone = false }
     if (gone) { delete map[k]; removed++ }
   }
-  if (removed) {
-    try { fs.writeFileSync(aliasesPath(), JSON.stringify(map, null, 1)) } catch { /* best-effort */ }
-  }
+  if (removed) writeAliasesDurable(map)
   return removed
 }
 

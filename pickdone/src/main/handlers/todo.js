@@ -328,6 +328,12 @@ module.exports = function todoHandlers (ctx) {
       // fails, recycle-bin rows survive pointing at already-deleted files — the renderer's
       // missing-file guard shows "not yet synced" instead, a benign outcome vs. an orphaned
       // private file that nothing can ever reach again.
+      // D18-DOM2 (#10, 2026-10-02, documented divergence — do NOT "align" blindly): the CLI purge
+      // (cli/lib.js purgeRecycleBin, cli-4 invariant) does the OPPOSITE order — rows commit FIRST,
+      // files/meta die after — because its failure model is the command bus, where a failed commit
+      // must never leave rows pointing at already-deleted files. Each channel's order is load-bearing
+      // for its own failure surface (main = IPC with a renderer missing-file guard; CLI = bus commit);
+      // re-derive BOTH failure models before changing either side.
       // D6 P1 (2026-09-21): a collect failure aborts the purge BEFORE any deletion (see below).
       let ids
       try {

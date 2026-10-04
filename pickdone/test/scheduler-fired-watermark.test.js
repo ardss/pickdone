@@ -62,7 +62,7 @@ test('all-unwritten eviction persists the victim watermark BEFORE deleting it, b
   // (present in the packed meta payload passed to command-bus.commit) before the delete.
   assert.equal(commits.length, 1, 'a flush must have run synchronously before the eviction')
   const packed = commits[0][1]
-  assert.ok(typeof packed === 'string' && packed.split('\u001f').some(p => p.startsWith('k0|')),
+  assert.ok(typeof packed === 'string' && packed.includes(String.fromCharCode(34) + "k0" + String.fromCharCode(34)),
     "the evicted victim's watermark must be in the persisted payload")
   assert.ok(scheduler._fired.has('brand-new'), 'the new watermark is recorded')
   assert.ok(scheduler._fired.size <= FIRED_MAX, 'map stays within the bound after a successful flush, got ' + scheduler._fired.size)

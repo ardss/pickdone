@@ -34,3 +34,52 @@ function rowContentDiffers (a, b) {
 }
 
 module.exports = { rowContentDiffers }
+
+/* ---------- D18 (2026-10-02) move from sync-apply.js (structure-size ratchet; sync-apply.js
+ * re-exports both — tests import from there). ---------- */
+
+/** Content key for conflict-copy dedup: the losing payload modulo bookkeeping (taskId/
+ *  updateTime/tombstone markers) and the per-device userId stamp. Two copies of the same
+ *  base row with equal keys carry the same user-visible lost content. */
+function conflictCopyContentKey (data) {
+  const rest = { ...data }
+  delete rest.taskId
+  delete rest.userId
+  delete rest.updateTime
+  delete rest.deletedAt
+  delete rest.delete
+  return mergeCore.contentFingerprint(rest)
+}
+
+/** Idempotent copy materialization (loop fix 2026-09-18): true when the recycle bin already
+ *  holds a `-conflict-` copy of `baseId` with the same content key — minting another would
+ *  grow the bin by one copy per round for as long as the (now normalized) row keeps bouncing.
+ *  D18: a scan failure (persistent getAll throw) used to return false — the caller then minted
+ *  a NEW -conflict- row EVERY round (unbounded recycle growth). Returns null on failure =
+ *  INDETERMINATE: the caller skips minting this round (the conflict stays pending and
+ *  re-arrives with the next push) instead of duplicating. */
+function hasEquivalentConflictCopy (state, baseId, loserData) {
+  try {
+    const prefix = `${baseId}-conflict-`
+    const key = conflictCopyContentKey(loserData)
+    for (const t of state.db.call('getAll', { deleted: null }) || []) {
+      const id = String(t.taskId || '')
+      if (id.startsWith(prefix) && conflictCopyContentKey(t) === key) return true
+    }
+    // Batch-safety (2026-09-28 3-machine drill): a copy minted earlier in THIS apply batch is
+    // still sitting in pendingWrites (commitSyncBatch defers the flush), invisible to the
+    // getAll scan above — a second conflict on the same base row in the same round then minted
+    // a duplicate recycle-bin copy. Scan the pending buffer with the same fingerprint.
+    for (const t of state.pendingWrites.todos || []) {
+      const id = String(t.taskId || '')
+      if (id.startsWith(prefix) && conflictCopyContentKey(t) === key) return true
+    }
+    return false
+  } catch (e) {
+    try { require('electron-log').warn('[LanSync] conflict-copy dedup scan failed (treated as indeterminate):', e.message) } catch { console.warn('[LanSync] conflict-copy dedup scan failed (treated as indeterminate):', e.message) }
+    return null
+  }
+}
+
+module.exports.conflictCopyContentKey = conflictCopyContentKey
+module.exports.hasEquivalentConflictCopy = hasEquivalentConflictCopy

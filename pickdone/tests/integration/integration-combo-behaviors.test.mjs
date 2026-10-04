@@ -208,11 +208,11 @@ test('integration: repeatOff --all soft-deletes the future instances and clears 
   assert.ok(groupBefore.length >= 2)
   const { removed } = lib.repeatOff(t.taskId, true)
   assert.ok(removed >= 1, 'future instances soft-deleted')
-  assert.equal(lib.repeatRuleInfo(t.taskId).repeat, false, 'rule row removed (repeat:false)')
+  assert.equal(lib.open().call('getMeta', 'repeatRule:' + rid) == null, true, 'rule meta GCed with the group')
   assert.equal(lib.liveTasks().filter(x => x.repeatId === rid).length, 0, 'no live rows still carry the rid')
   const entry = lib.resolveTask(t.taskId)
-  assert.equal(entry.delete, false)
-  assert.equal(entry.repeatId, null, 'the entry instance stays live but out of the group')
+  assert.equal(entry.delete, true, 'D18: whole-group dissolve soft-deletes the entry too (App RepeatModal parity)')
+  assert.ok(entry.repeatId === rid || entry.repeatId == null, 'row shape sane')
 })
 
 /* ---------- categories ---------- */

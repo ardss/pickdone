@@ -64,6 +64,29 @@ function schedulePersistFired () {
   if (_persistTimer && _persistTimer.unref) _persistTimer.unref()
 }
 /** Persist pending fired reminders immediately (called on quit: quitting within the 60s debounce window would resend reminders after restart) */
+/** D18 (2026-10-02) wire-format helpers (pure, unit-testable): the old `${key}|${ts}` packing
+ *  joined the key to its timestamp with '|', so a peer-controlled taskId CONTAINING '|' shifted
+ *  the split on load — the entry silently split into garbage and the reminder re-fired. The
+ *  format is now JSON; the read side keeps backward compatibility with the legacy packed blobs
+ *  (payload not starting with '[' → legacy split parse, which also still tolerates the '|' the
+ *  legacy format itself could not). */
+function packFiredEntries (entries) { return JSON.stringify(entries) }
+function parseFiredEntries (raw) {
+  const s = String(raw || '')
+  if (s.startsWith('[')) {
+    try {
+      const arr = JSON.parse(s)
+      if (Array.isArray(arr)) return arr.filter(p => Array.isArray(p) && p.length === 2).map(([k, ts]) => [String(k), ts])
+    } catch { /* fall through to legacy parse below */ }
+  }
+  const out = []
+  for (const pair of s.split('\x1f')) {
+    const i = pair.lastIndexOf('|') // legacy: split on the LAST '|' so keys containing '|' keep their tail intact
+    if (i <= 0) continue
+    out.push([pair.slice(0, i), pair.slice(i + 1)])
+  }
+  return out
+}
 function flushFiredNow () {
   if (_persistTimer) { clearTimeout(_persistTimer); _persistTimer = null }
   if (!firedReminders.size) return
@@ -72,7 +95,7 @@ function flushFiredNow () {
   try {
     const db = require('./db.js')
     if (typeof db.call === 'function') {
-      const packed = entries.map(([k, ts]) => `${k}|${ts}`).join('\x1f')
+      const packed = packFiredEntries(entries)
       // Phase-2 command bus (docs/refactor-command-bus.md): the watermark persist commits through
       // meta.put like every other write. The key is machine-local (manifest localKeys), so the
       // 'ls-mirror' subscriber skips it — the watermark never kicked sync and still must not.
@@ -102,9 +125,8 @@ function loadFiredFromMeta (db) {
   try {
     const raw = db.call('getMeta', FIRED_META_KEY)
     if (!raw || typeof raw !== 'string') return
-    for (const pair of String(raw).split('\x1f')) {
-      const [k, ts] = pair.split('|')
-      if (!k || !ts) { log.warn('[Scheduler] fired-reminder watermark: malformed entry dropped:', JSON.stringify(pair).slice(0, 80)); continue }
+    for (const [k, ts] of parseFiredEntries(raw)) {
+      if (!k || !ts) { log.warn('[Scheduler] fired-reminder watermark: malformed entry dropped:', JSON.stringify(String(k) + '|' + String(ts)).slice(0, 80)); continue }
       const n = parseInt(ts, 10)
       if (!Number.isFinite(n) || n <= 0) {
         log.warn('[Scheduler] fired-reminder watermark: corrupt timestamp for ' + k + ' — entry dropped so catch-up can re-fire it')
@@ -347,6 +369,7 @@ module.exports = {
   reminderInstances, needsCatchUp, clipText, notifyTimeoutOpts, notifyTimeoutOptsForApp, timeoutFromInterval,
   setFireForTest,
   loadFiredFromMeta, // r3 2026-09-28 test surface: corrupt watermark entries are dropped, not faked fresh
+  packFiredEntries, parseFiredEntries, // D18 2026-10-02 test surface: separator-safe watermark wire format
   _jobs: jobs,
   _fired: firedReminders,
   _markFired: markFired,

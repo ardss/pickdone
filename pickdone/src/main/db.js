@@ -11,8 +11,7 @@ const { normalizeContent, rowToTodo, todoToRow, setSyncAuthor, selfSyncAuthor, m
 // snowDedup key-cap (R5 P3): past the cap, older-than-30d entries are pruned (see bumpSnow).
 const SNOW_DEDUP_CAP = 2000
 const SNOW_DEDUP_MAX_AGE_MS = 30 * 24 * 3600 * 1000
-// electron-log only exists inside the packaged App; the standalone CLI (extraResources bundle) has no
-// node_modules/electron-log, so fall back to a no-op logger instead of crashing at require time
+// electron-log only exists inside the packaged App; the standalone CLI (extraResources bundle) has no // node_modules/electron-log, so fall back to a no-op logger instead of crashing at require time
 let log
 try { log = require('electron-log') } catch { log = { info () {}, warn () {}, error () {} } }
 require('./log-isolation') // test isolation: file transport -> TODO_DB_DIR/TODO_USER_DATA_DIR
@@ -23,8 +22,7 @@ const oplog = require('./db-oplog')({
   // r3 fix (2026-09-28): a failed delta-row append used to be log-only — the loss was invisible // (peers stop receiving that change until the next full snapshot while the push watermark // advances). Surface it through the Device Center sync-event channel (lazy require:
   // lan-sync-bootstrap may not be initialized yet — its emitter is guarded and no-ops then). onAppendFailure: info => { try { require('./lan-sync-bootstrap').emitOplogAppendFailure(info) } catch { /* surfacing is best-effort */ } },
 }), syncSchema = require('./db-sync-schema')({ getDb: () => db, log })
-// Sync v2 write-path recorder (flag-gated, see db-revisions.cjs): mirrors the oplog
-// contract — never fails an already-committed write, warn + continue on error.
+// Sync v2 write-path recorder (flag-gated, see db-revisions.cjs): mirrors the oplog // contract — never fails an already-committed write, warn + continue on error.
 const revisions = require('./db-revisions.cjs')({ getDb: () => db, log })
 const oplogKeepLimit = require('./db-oplog').oplogKeepLimit // D3 2026-09-24: SYNC_OPLOG_KEEP single source (was a bare 10000 clamp literal)
 
@@ -86,11 +84,8 @@ function migratePlainToEncrypted (dir, file, key) {
     // Explicit wal_checkpoint(TRUNCATE) before closing: ensure the plaintext WAL tail writes have landed in the main file before the WAL can be safely deleted (otherwise .plain-bak may miss tail data)
     db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
     db.close()
-    // main-ipc-2 fsync fix (2026-09-22): the key must be PERSISTENTLY on disk before the renames
-    // below. The old writeFileSync (at the caller, after these renames) without fsync let a power
-    // cut persist the encrypted-DB rename while the key was still OS-cached-only — encrypted DB
-    // on disk, key lost, library unrecoverable. Durable write here closes that window; the
-    // caller's key write afterwards becomes an idempotent confirmation.
+    // main-ipc-2 fsync fix (2026-09-22): the key must be PERSISTENTLY on disk before the renames // below. The old writeFileSync (at the caller, after these renames) without fsync let a power // cut persist the encrypted-DB rename while the key was still OS-cached-only — encrypted DB
+    // on disk, key lost, library unrecoverable. Durable write here closes that window; the // caller's key write afterwards becomes an idempotent confirmation.
     require('./durable-fs').writeFileDurable(path.join(path.dirname(file), 'db.key'), key)
     fs.renameSync(file, file + '.plain-bak')
     fs.renameSync(encFile, file)
@@ -101,9 +96,7 @@ function migratePlainToEncrypted (dir, file, key) {
     log.error('[TodoDB] 明文→加密迁移失败，回退明文打开', e)
     try { db.close() } catch {}
     try { fs.rmSync(encFile, { force: true }) } catch {}
-    // 两步 rename 中途失败的自愈:第一步(file→plain-bak)已成功而第二步(enc→file)失败时,
-    // todos.db 缺位,init 随后的无驱动重开会让 better-sqlite3 静默新建空库——本次会话跑在空库上,
-    // 且下次启动"无 todos.db 才恢复"的预检被跳过,旧数据永不自愈(2026-09-05 终审 P1)。把明文库放回
+    // 两步 rename 中途失败的自愈:第一步(file→plain-bak)已成功而第二步(enc→file)失败时, // todos.db 缺位,init 随后的无驱动重开会让 better-sqlite3 静默新建空库——本次会话跑在空库上, // 且下次启动"无 todos.db 才恢复"的预检被跳过,旧数据永不自愈(2026-09-05 终审 P1)。把明文库放回
     try {
       if (!fs.existsSync(file) && fs.existsSync(file + '.plain-bak')) {
         fs.renameSync(file + '.plain-bak', file)
@@ -262,8 +255,7 @@ CREATE TABLE IF NOT EXISTS sync_revision_current (
   revisionId TEXT NOT NULL
 );` + syncSchema.DDL
 
-// D4 2026-09-24: filter conds whitelist/parse live in shared/filter-core.mjs via db-filter-ops.js
-// (single source with cli/lib.js applyViewConds and renderer FilterView.vue)
+// D4 2026-09-24: filter conds whitelist/parse live in shared/filter-core.mjs via db-filter-ops.js // (single source with cli/lib.js applyViewConds and renderer FilterView.vue)
 
 function init (userDataPath) {
   // Re-entry policy (P2 2026-09-11): a second init while a handle is open closes the old handle cleanly first instead of throwing — rebuilding against a live handle would orphan prepared statements mid-write, and an abrupt throw broke the same-process restart idiom used across the unit tests (init without close = simulated restart). Closing first leaves no stale stmts and keeps the recovery re-init path (index.js db-fail dialog → attemptDbRecovery) working.
@@ -284,10 +276,18 @@ function initInner (userDataPath) {
   fs.mkdirSync(userDataPath, { recursive: true })
   // Open in plaintext first to complete schema migration, then switch to encryption at the end (see "encryption finalization" at the end of init)
   const keyFile = path.join(userDataPath, 'db.key')
-  let hadKeyFile = fs.existsSync(keyFile)
-  let key = hadKeyFile ? fs.readFileSync(keyFile, 'utf8').trim() : null
-  // 密钥内容强校验:db.key 被截断/夹带引号换行时,拼进 PRAGMA 即语法错误或注入面(三轮安全深审 H-2);
-  // 不合规格式视为无钥/损坏,走正常恢复链而不是把垃圾送进 pragma
+  // D18 (2026-10-02): the bare fs.readFileSync here threw on a transient Windows file lock // (EPERM/EBUSY from AV/indexer) — init failed, recovery saw an intact header and answered // 'transient' with NO backoff, and the immediate re-init failure surfaced the reset-data
+  // dialog for a HEALTHY db. Bounded backoff retries inside init; still unreadable → the // coded DB_KEY_TRANSIENT_UNREADABLE error keeps the recovery path conservative (index.js // classifies it: no rename, no reset-data offer — see db-key-read.js).
+  let key = null
+  let hadKeyFile = false
+  try {
+    key = require('./db-key-read').readDbKeyWithRetry(keyFile)
+    hadKeyFile = key != null
+  } catch (e) {
+    log.warn('[TodoDB] db.key unreadable after backoff retries — failing init as transient:', e.message)
+    throw e
+  }
+  // 密钥内容强校验:db.key 被截断/夹带引号换行时,拼进 PRAGMA 即语法错误或注入面(三轮安全深审 H-2); // 不合规格式视为无钥/损坏,走正常恢复链而不是把垃圾送进 pragma
   if (hadKeyFile && !/^[0-9a-f]{64}$/.test(key)) {
     // sec-dbkey-prefix-logged: never log key material (the old message carried the first 8 hex // chars); length + hex-ness are enough to diagnose a truncated/garbage key file.
     log.warn('[TodoDB] db.key content invalid (expected 64 hex chars, got length=' + String(key).length + ', hex=' + /^[0-9a-fA-F]+$/.test(String(key)) + ') — continuing without key')

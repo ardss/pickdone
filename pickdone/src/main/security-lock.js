@@ -25,7 +25,7 @@ function allowWithinRate (timestamps, now, { limit = 10, windowMs = 10000 } = {}
   return true
 }
 
-function createSecurityLock ({ getMainWindow, showMainOrLock, readConfig, writeConfig, i18n, log }) {
+function createSecurityLock ({ getMainWindow, showMainOrLock, readConfig, writeConfig, i18n, log, configVersion = () => { try { return require('./config-store').configWriteVersion() } catch { return null } } }) {
   let lockWin = null
   let lockCrashRebuilds = 0 // rebuild counter since the last successful load; caps the crash→rebuild loop
   // P2 2026-09-19: locking intent is held INDEPENDENTLY of the lock window's liveness. The crash
@@ -35,10 +35,28 @@ function createSecurityLock ({ getMainWindow, showMainOrLock, readConfig, writeC
   // disable-lock fallback.
   let lockingIntent = false
 
+  // D18 (2026-10-02): isLocked() sits on EVERY gated IPC call (todo-db:call, the fix-util poll
+  // every 500ms) and used to readConfig() — a full config.json read with up to ~1.5s of
+  // synchronous AV-lock backoff — on each one, freezing the main thread per DB op under file
+  // contention. Cache the enableSecurityLock flag with a short TTL, invalidated IMMEDIATELY by
+  // config-store's write-version counter (any writeConfig — settings toggle, lock fallback —
+  // bumps it), so enabling/disabling the lock takes effect without losing correctness.
+  const LOCK_FLAG_TTL_MS = 2000
+  let lockFlagCache = { value: false, version: -1, at: 0 }
+  function cachedLockFlag () {
+    let version = null
+    try { version = configVersion() } catch { /* no version source (isolated unit tests): TTL-only caching */ }
+    const now = Date.now()
+    if (now - lockFlagCache.at < LOCK_FLAG_TTL_MS && (version === null || version === lockFlagCache.version)) return lockFlagCache.value
+    const v = readConfig().enableSecurityLock === true
+    lockFlagCache = { value: v, version, at: now }
+    return v
+  }
+
   function isLocked () {
     try {
       if (lockingIntent) return true
-      return readConfig().enableSecurityLock === true && !!lockWin && !lockWin.isDestroyed()
+      return cachedLockFlag() && !!lockWin && !lockWin.isDestroyed()
     } catch { return false }
   }
 
