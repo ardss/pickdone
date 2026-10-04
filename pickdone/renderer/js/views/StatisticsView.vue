@@ -47,12 +47,12 @@
                 </template>
                 <!-- Custom range popover (finalized by user 2026-08-31: pops up directly, does not expand into a row): after applying, the whole page recomputes for the chosen range -->
                 <div class="stat-custom-range" @keydown.enter.prevent="applyCustomRange">
-                  <el-date-picker v-model="customDraft" type="daterange" value-format="YYYY-MM-DD"
-                                  :clearable="false" unlink-panels teleported
+                  <el-date-picker v-model="customDraft" type="daterange" value-format="YYYY-MM-DD" :clearable="false" unlink-panels teleported
                                   :start-placeholder="$t('statsA.StatisticsView.customStart')" :end-placeholder="$t('statsA.StatisticsView.customEnd')"/>
                   <div class="stat-custom-range__actions">
                     <button class="mini" @click="applyCustomRange">{{ $t('statsA.StatisticsView.customApply') }}</button>
-                    <span v-if="customDraftDays > 366" class="stat-custom-warn">{{ $t('statsA.StatisticsView.customTooLong', { n: 366 }) }}</span>
+                    <span v-if="!customDraft || !customDraft[0] || !customDraft[1]" class="stat-custom-warn">{{ $t('statsA.StatisticsView.customEmpty') }}</span>
+                    <span v-else-if="customDraftDays > 366" class="stat-custom-warn">{{ $t('statsA.StatisticsView.customTooLong', { n: 366 }) }}</span>
                   </div>
                 </div>
               </el-popover>

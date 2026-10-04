@@ -4,7 +4,7 @@
       <div class="modal-tablecloth" @click.self="close">
         <div class="modal" role="dialog" aria-modal="true" :aria-label="title" style="width:420px;max-width:min(420px,92vw)" @keydown.esc="close">
           <!-- D14-A16: the X must announce "close", not the dialog title (TaskAccountModal pattern) -->
-          <div class="modal__header"><span>{{ title }}</span><div class="modal__close close-x" role="button" tabindex="0" :aria-label="$t('statsB.ProjectView.close')" @click="close" @keydown.enter.prevent="close"></div></div>
+          <div class="modal__header"><span>{{ title }}</span><div class="modal__close close-x" role="button" tabindex="0" :aria-label="$t('statsB.ProjectView.close')" @click="close" @keydown="onCloseKey"></div></div>
           <div class="modal__body">
             <div class="msm-field">
               <label class="msm-label" for="msm-title">{{ $t('statsB.ProjectView.msContent') }}</label>
@@ -36,6 +36,7 @@
  * `milestone` null = add mode, otherwise pre-fills for edit. Emits save({title, date: 'YYYY-MM-DD'}).
  */
 import dialogA11y from '../utils/dialogA11y.js'
+import { roleButtonActivate } from '../utils/roleButtonKey.js' // [D18-DOM3] Space+Enter button activation
 // F-C7 (maint/dw wave3): shared local day-key — was the third hand-rolled copy in the renderer
 import { localDayKey } from '../../../shared/date-key.mjs'
 
@@ -63,6 +64,8 @@ export default {
     this.$nextTick(() => { try { this.$refs.titleInput.focus() } catch { /* headless */ } })
   },
   methods: {
+    /* [D18-DOM3] dialog close: Space joins Enter (ARIA button pattern) */
+    onCloseKey: roleButtonActivate(function () { this.close() }),
     close () { this.$emit('close') },
     save () {
       if (!this.title.trim() || !this.date) return

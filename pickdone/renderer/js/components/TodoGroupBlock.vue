@@ -4,7 +4,7 @@
     <div class="todo-list-item-group__header-container">
       <div class="todo-list-item-group__header" role="button" tabindex="0"
            :aria-expanded="collapsed ? 'false' : 'true'"
-           @click="toggle" @keydown.enter.prevent="toggle">
+           @click="toggle" @keydown="onToggleKey">
         <div class="todo-list-item-group__arrow">
           <svg viewBox="0 0 256 512" aria-hidden="true"><path fill="currentColor" d="M143 352.3L7 216.3c-9.4-9.4-9.4-24.6 0-33.9l22.6-22.6c9.4-9.4 24.6-9.4 34 0l96.4 96.4 96.4-96.4c9.4-9.4 24.6-9.4 34 0l22.6 22.6c9.4 9.4 9.4 24.6 0 33.9l-136 136c-9.2 9.4-24.4 9.4-33.8 0z"/></svg>
         </div>
@@ -13,11 +13,11 @@
       </div>
       <div v-if="hasSettings" class="todo-list-item-group__header-append" role="button" tabindex="0"
            :title="$t('statsE.TodoGroupBlock.groupViewOptions')" :aria-label="$t('statsE.TodoGroupBlock.groupSettingsAria')"
-           @click.stop="gear" @keydown.enter.prevent="gear">
+           @click.stop="gear" @keydown="onGearKey">
         <i class="todo-list-item-group__btn-settings todo-list-item-group__btn-settings-char">&#9881;</i>
       </div>
       <div v-if="hasRecomplete" class="todo-list-item-group__header-append" role="button" tabindex="0"
-           style="margin-left:8px;color:var(--danger)" @click.stop="recomplete" @keydown.enter.prevent="recomplete">{{ $t('statsE.TodoGroupBlock.rescheduleBtn') }}</div>
+           style="margin-left:8px;color:var(--danger)" @click.stop="recomplete" @keydown="onRecompleteKey">{{ $t('statsE.TodoGroupBlock.rescheduleBtn') }}</div>
     </div>
     <div class="todo-list-item-group-container">
       <!-- transition-group: when a task completes, the old group fades out, the new group fades in, and remaining entries FLIP smoothly into place -->
@@ -34,6 +34,7 @@
  * a11y: the header supports Tab + Enter to toggle collapse
  */
 import TodoItem from './TodoItem.vue'
+import { roleButtonActivate } from '../utils/roleButtonKey.js' // [D18-DOM3] Space+Enter button activation
 
 export default {
   name: 'TodoGroupBlock',
@@ -58,6 +59,11 @@ export default {
     }
   },
   methods: {
+    /* [D18-DOM3] ARIA button pattern on all three header buttons: Space joins Enter as the
+       activation key; gear/recomplete stop propagation so the header's own toggle never double-fires */
+    onToggleKey: roleButtonActivate(function () { this.toggle() }),
+    onGearKey: roleButtonActivate(function () { this.gear() }, { stop: true }),
+    onRecompleteKey: roleButtonActivate(function () { this.recomplete() }, { stop: true }),
     toggle () { this.$emit('update:collapsed', !this.collapsed) },
     gear () { this.$store.commit('ui/toggleSettings', true) },
     recomplete () { this.$emit('recomplete') }

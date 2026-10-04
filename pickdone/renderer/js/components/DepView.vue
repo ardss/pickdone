@@ -67,6 +67,10 @@
            @contextmenu="taskContextMenu(t, $event)"
            @dragstart="onDragStart(t, $event)" @dragend="onDragEnd"
            @dragover.prevent="onDragOver(t, $event)" @dragleave="onDragLeave(t)" @drop.prevent="onDrop(t, $event)">
+        <!-- [D18-DOM3] The grip stays pointer-only (tabindex=-1, no button role): moving a card is a
+             drag gesture with no keyboard equivalent. Keyboard users still get the per-card menu via
+             Shift+F10 on the focused card (remove-prerequisite entries) and Ctrl+Enter connect mode,
+             so nothing is silently unreachable — do NOT fake role="button" on a non-activatable grip. -->
         <button class="depv-task__grip" draggable="false" tabindex="-1"
                 :title="$t('statsA.DepView.moveHint')" :aria-label="$t('statsA.DepView.moveHint')"
                 @pointerdown.prevent.stop="onGripDown(t, $event)">
@@ -78,7 +82,7 @@
         <div class="depv-task__main">
               <span class="td-check" :class="{on: !!t.complete}" role="checkbox" :aria-checked="t.complete ? 'true' : 'false'"
                     :aria-label="$t('statsJ.TodoItem.markDone')" tabindex="0"
-                    @click.stop="completeTask(t)" @keydown.enter.prevent.stop="completeTask(t)">
+                    @click.stop="completeTask(t)" @keydown="onCompleteKey(t, $event)">
                 <svg v-if="t.complete" class="td-check-svg" viewBox="0 0 12 12" aria-hidden="true">
                   <polyline points="2,6.2 5,9 10,3" fill="none" stroke="#fff" stroke-width="1.8"
                             stroke-linecap="round" stroke-linejoin="round" pathLength="1"/>
@@ -96,7 +100,8 @@
         <div v-if="!t.complete && missingOf(t).length" class="depv-task__wait">
           <span class="depv-task__wait-label">{{ $t('statsA.DepView.waiting') }}</span>
           <span v-for="m in missingOf(t)" :key="m.id" class="depv-miss" :title="m.name"
-                @click.stop="jumpTo(m.id)">{{ m.name }}</span>
+                role="button" tabindex="0"
+                @click.stop="jumpTo(m.id)" @keydown.stop="onMissKey(m, $event)">{{ m.name }}</span>
           <!-- D14-A5: the list is capped at 3 chips — make the truncation explicit (EpDependencies pattern) -->
           <span v-if="missingTotalOf(t) > missingOf(t).length" class="depv-miss depv-miss--more"
                 :title="$t('statsA.DepView.waitMore', { n: missingTotalOf(t) })">+{{ missingTotalOf(t) - 3 }}</span>
@@ -132,6 +137,7 @@ import { deleteWithUndo, moveWithUndo } from '../utils/confirm.js'
 import { taskContextMenu } from '../utils/taskMenu.js'
 import { loadMilestones } from '../utils/milestones.js'
 import { commit as commitCommand } from "../utils/commandBus.js"
+import { roleButtonActivate, roleCheckboxActivate } from '../utils/roleButtonKey.js' // [D18-DOM3] Space+Enter activation
 
 export default {
   name: 'DepView',
@@ -569,6 +575,16 @@ export default {
       var byId = this.allLiveById()
       return parsePredecessors(t.predecessors)
         .filter(function (id) { var p = byId[id]; return p && !p.complete }).length
+    },
+    /* [D18-DOM3] ARIA checkbox pattern: Space joins Enter on the complete toggle (stopped so the
+       card's own activation doesn't double-fire) */
+    onCompleteKey (t, e) {
+      roleCheckboxActivate(function () { this.completeTask(t) }).call(this, e)
+    },
+    /* [D18-DOM3] Predecessor chips are buttons now (was click-only): Space/Enter jump to the
+       prerequisite, stopped so the card's edit activation doesn't double-fire */
+    onMissKey (m, e) {
+      roleButtonActivate(function () { this.jumpTo(m.id) }, { stop: true }).call(this, e)
     },
     completeTask (t) {
       toggleCompleteWithUndo({

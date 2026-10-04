@@ -181,6 +181,7 @@ export default {
       customApply: '应用',
       customTitle: '点击选择日期区间',
       customTooLong: '区间过长，请控制在 {n} 天以内',
+      customEmpty: '请先选择起止日期',
       saveImage: '保存图片',
       emptyState: '暂无数据 · 完成任务或开始番茄后显示',
       reviewCardHead: '{label}复盘',

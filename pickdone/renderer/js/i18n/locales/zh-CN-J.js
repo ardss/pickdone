@@ -85,6 +85,7 @@ export default {
   'statsJ.FilterModal.name': '名称',
   'statsJ.FilterModal.namePh': '例如：本周高优先级',
   'statsJ.FilterModal.nameRequired': '请先填写名称',
+  'statsJ.FilterModal.nameTaken': '已存在同名过滤器',
   'statsJ.FilterModal.cat': '清单',
   'statsJ.FilterModal.anyCat': '全部清单',
   'statsJ.FilterModal.prio': '优先级',

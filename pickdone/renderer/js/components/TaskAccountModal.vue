@@ -3,7 +3,7 @@
   <div v-if="taskId" class="modal-container" style="z-index: calc(var(--z-modal) + 20) !important; cursor: default;"
        @click="e => { if (e.target.classList && (e.target.classList.contains('modal-container') || e.target.classList.contains('modal-tablecloth'))) close() }">
     <div class="modal-tablecloth">
-      <div class="task-account" role="dialog" aria-modal="true" @keydown.esc="close">
+      <div class="task-account" role="dialog" aria-modal="true" :aria-label="$t('statsK.TomatoAccount.title', { name: task ? task.taskContent : '' })" @keydown.esc="close">
         <div class="task-account__head">
           <b>{{ $t('statsK.TomatoAccount.title', { name: task ? task.taskContent : '' }) }}</b>
           <button type="button" class="close-x close-x--sm ta-x" :aria-label="$t('statsK.TomatoAccount.close')" @click="close"></button>

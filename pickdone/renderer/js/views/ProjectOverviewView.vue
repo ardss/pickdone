@@ -17,9 +17,10 @@
         <!-- No role=link wrapper: a link role with an interactive role=button nested inside breaks the
              a11y tree; the card stays keyboard-openable via tabindex+enter while the status pill is an
              independently reachable button -->
-        <div v-for="p in filteredProjects" :key="p.cat.categoryId" class="proj-card" tabindex="0"
+        <div v-for="p in filteredProjects" :key="p.cat.categoryId" class="proj-card" tabindex="0" role="button"
              :title="$t('statsB.ProjectsView.enterProject', { name: p.cat.categoryName })"
-             @click="open(p.cat.categoryId)" @keydown.enter.prevent="open(p.cat.categoryId)">
+             :aria-label="$t('statsB.ProjectsView.enterProject', { name: p.cat.categoryName })"
+             @click="open(p.cat.categoryId)" @keydown="onOpenKey(p, $event)">
           <div class="proj-card__head">
             <span class="sn-dot" :style="{borderColor:p.cat.categoryColor, background:p.cat.categoryColor}"></span>
             <span class="proj-card__name">{{p.cat.categoryName}}</span>
@@ -135,6 +136,10 @@ export default {
   },
   methods: {
     /* [A9] status pill button: Space joins Enter, stopped so the card's open activation doesn't double-fire */
+    /* [D18-DOM3] project card: ARIA button pattern (Space joins Enter); name ships as aria-label */
+    onOpenKey (p, e) {
+      roleButtonActivate(function () { this.open(p.cat.categoryId) }).call(this, e)
+    },
     onStatusKey (p, e) {
       roleButtonActivate(function () { this.cycleStatus(p.cat.categoryId, p.status) }, { stop: true }).call(this, e)
     },

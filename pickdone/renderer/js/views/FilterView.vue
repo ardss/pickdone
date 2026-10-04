@@ -32,9 +32,10 @@
             <svg viewBox="0 0 512 512"><path fill="currentColor" d="M256 8C119 8 8 119 8 256s111 248 248 248 248-111 248-248S393 8 256 8zm0 448c-110.5 0-200-89.5-200-200S145.5 56 256 56s200 89.5 200 200-89.5 200-200 200z"/></svg>
           </span>
           <div class="todo-box-list-item__container">
-            <div class="todo-box-list-item__content" role="button" tabindex="0" :aria-label="t.taskContent"> {{ t.taskContent }} </div>
-            <div class="todo-box-list-item__workload"
-                 :class="{ 'todo-box-list-item__workload--lv2': estOf(t) >= 3 && estOf(t) <= 4, 'todo-box-list-item__workload--lv3': estOf(t) >= 5 }"></div>
+            <div class="todo-box-list-item__content" role="button" tabindex="0" :aria-label="t.taskContent" @keydown="onContentKey(t, $event)"> {{ t.taskContent }} </div>
+            <!-- [D18-DOM3] no estimate = no bar; tiering shared with TodoBoxView -->
+            <div v-if="tierOf(t)" class="todo-box-list-item__workload"
+                 :class="{ 'todo-box-list-item__workload--lv2': tierOf(t) === 2, 'todo-box-list-item__workload--lv3': tierOf(t) === 3 }"></div>
           </div>
         </div>
       </div>
@@ -55,10 +56,10 @@ import { today0 } from '../utils/todayBounds.js'
 import { isoWeekEnd } from '../utils/weekGrid.js'
 import { matchesViewConds } from '../../../shared/filter-core.mjs' // D4 2026-09-24: saved-view matcher single source with db.js / cli applyViewConds
 import { toggleCompleteWithUndo } from '../utils/completeAction.js'
-import { getEstimate } from '../utils/tomatoEstimate.js'
+import { getEstimate, estimateTier } from '../utils/tomatoEstimate.js'
 import FilterModal from '../components/FilterModal.vue'
 import EmptyState from '../components/EmptyState.vue'
-import { roleCheckboxActivate } from '../utils/roleButtonKey.js' // [A8] Space+Enter checkbox activation
+import { roleCheckboxActivate, roleButtonActivate } from '../utils/roleButtonKey.js' // [A8/D18-DOM3] Space+Enter activation
 
 export default {
   name: 'FilterView',
@@ -130,6 +131,10 @@ export default {
     },
     // 工作量条口径与待办箱对齐:按预估番茄分档,difficulty 字段已退役(2026-09-05 终审 P2)
     estOf (t) { return getEstimate(t.taskId) },
+    /* [D18-DOM3] workload tiering shared with TodoBoxView: 0=unset(no bar) 1=1-2 2=3-4 3=5+ */
+    tierOf (t) { return estimateTier(getEstimate(t.taskId)) },
+    /* [D18-DOM3] row __content "open" button: Space joins Enter, stopped vs the row's own activation */
+    onContentKey (t, e) { roleButtonActivate(function () { this.openEdit(t) }, { stop: true }).call(this, e) },
     dotColor (t) {
       const c = t.categoryId && this.$store.getters['category/byId'](t.categoryId)
       return (c && c.categoryColor) || DEFAULT_CAT_COLOR

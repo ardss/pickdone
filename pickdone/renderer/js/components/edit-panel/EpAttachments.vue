@@ -6,11 +6,11 @@
     <!-- Content toolbar: image/attachment entries unified on the description area (the standalone "upload image" row was merged in, Option B) -->
     <div class="ep-attach-bar">
       <span class="ep-attach-btn" role="button" tabindex="0" :aria-label="$t('statsJ.EditPanel.imagesLabel')"
-            @click="$emit('pick', 'img')" @keydown.enter.prevent="$emit('pick', 'img')">
+            @click="$emit('pick', 'img')" @keydown="onPickKey('img', $event)">
         <img class="ep-ico" src="app://app/assets/img/icon-pic.svg">{{ $t('statsJ.EditPanel.imagesLabel') }}<b v-if="imgList.length" class="ep-attach-n">{{ imgList.length }}</b>
       </span>
       <span class="ep-attach-btn" role="button" tabindex="0" :aria-label="$t('statsJ.EditPanel.attachmentsLabel')"
-            @click="$emit('pick', 'file')" @keydown.enter.prevent="$emit('pick', 'file')">
+            @click="$emit('pick', 'file')" @keydown="onPickKey('file', $event)">
         <app-icon name="file" :size="12"/>{{ $t('statsJ.EditPanel.attachmentsLabel') }}<b v-if="fileList.length" class="ep-attach-n">{{ fileList.length }}</b>
       </span>
     </div>
@@ -26,11 +26,11 @@
           <img :src="im.url" alt="" loading="lazy" @error="onImgErr($event)">
         </button>
         <span v-else class="ep-img-btn" role="img" :aria-label="(im && im.name) ? String(im.name) : 'external image'"></span>
-        <b class="x close-x close-x--sm" role="button" tabindex="0" :aria-label="$t('statsJ.EditPanel.removeImage')" @click.stop="$emit('remove', 'imgList', i)" @keydown.enter.prevent.stop="$emit('remove', 'imgList', i)"></b>
+        <b class="x close-x close-x--sm" role="button" tabindex="0" :aria-label="$t('statsJ.EditPanel.removeImage')" @click.stop="$emit('remove', 'imgList', i)" @keydown="onRemoveKey('imgList', i, $event)"></b>
       </div>
     </div>
     <div v-for="(f,i) in fileList" :key="'f'+i" class="ep-file">
-      <app-icon name="file" :size="12" style="opacity:.6"/> {{f.name}} <a role="button" tabindex="0" @click.prevent.stop="openFileUrl(f)" @keydown.enter.prevent.stop="openFileUrl(f)">{{ $t('statsJ.EditPanel.openBtn') }}</a> <b class="x close-x close-x--sm" role="button" tabindex="0" :aria-label="$t('statsJ.EditPanel.removeFile')" @click.stop="$emit('remove', 'fileList', i)" @keydown.enter.prevent.stop="$emit('remove', 'fileList', i)"></b>
+      <app-icon name="file" :size="12" style="opacity:.6"/> {{f.name}} <a role="button" tabindex="0" @click.prevent.stop="openFileUrl(f)" @keydown="onOpenFileKey(f, $event)">{{ $t('statsJ.EditPanel.openBtn') }}</a> <b class="x close-x close-x--sm" role="button" tabindex="0" :aria-label="$t('statsJ.EditPanel.removeFile')" @click.stop="$emit('remove', 'fileList', i)" @keydown="onRemoveKey('fileList', i, $event)"></b>
     </div>
   </template>
 </template>
@@ -67,6 +67,7 @@ function arrivalTouchesCurrent (lists, key) {
 // [component-fixes] pure-end
 import { logger } from '../../utils/logger.js'
 import { isRenderableAttachmentUrl } from '../../utils/core.js'
+import { roleButtonActivate } from '../../utils/roleButtonKey.js' // [D18-DOM3] Space+Enter button activation
 
 export default {
   name: 'EpAttachments',
@@ -99,6 +100,10 @@ export default {
     if (this._offArrive) { try { this._offArrive() } catch (e) { /* already gone */ } this._offArrive = null }
   },
   methods: {
+    /* [D18-DOM3] ARIA button pattern: Space joins Enter on the pickers, image/file removes and open links */
+    onPickKey (what, e) { roleButtonActivate(function () { this.$emit('pick', what) }).call(this, e) },
+    onRemoveKey (list, i, e) { roleButtonActivate(function () { this.$emit('remove', list, i) }, { stop: true }).call(this, e) },
+    onOpenFileKey (f, e) { roleButtonActivate(function () { this.openFileUrl(f) }, { stop: true }).call(this, e) },
     isRenderableAttachmentUrl,
     /* 粘贴/上传失败的兜底：不显示 Chromium 碎图图标，改用居中感叹号占位（视觉上与关闭✕可区分） */
     onImgErr (e) { (e.target as HTMLElement).classList.add('ep-img-broken') },

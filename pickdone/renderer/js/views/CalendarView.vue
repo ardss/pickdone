@@ -66,7 +66,9 @@
                  @click="tbCreate(d.ts, h)">
               <div v-for="t in tbTasksOf(d.ts, h)" :key="t.taskId" class="cal-tb__task"
                    draggable="true" :title="t.taskContent + $t('statsE.CalendarView.dragToAdjustTimeTip')"
+                   role="button" tabindex="0"
                    @dragstart="tbDragStart(t, $event)" @click.stop="openTaskEditById(t.taskId)"
+                   @keydown.stop="onTbTaskKey(t, $event)"
                          @contextmenu="taskContextMenu(t, $event)">
                 {{ (t.taskContent || $t('statsE.TodoItem.untitled')) }}
               </div>
@@ -75,14 +77,14 @@
         </div>
       </div>
     </div>
-    <div v-if="morePop" v-click-outside="() => morePop = null" class="cal-more-pop" :style="{left: morePop.left+'px', top: morePop.top+'px'}" role="dialog" :aria-label="fmtDate(morePop.date)+$t('statsE.CalendarView.allEventsSuffix')">
+    <div v-if="morePop" v-click-outside="() => morePop = null" class="cal-more-pop" :style="{left: morePop.left+'px', top: morePop.top+'px'}" role="dialog" tabindex="-1" ref="morePopEl" @keydown.esc="morePop = null" :aria-label="fmtDate(morePop.date)+$t('statsE.CalendarView.allEventsSuffix')">
       <div class="cal-more-pop__head"><b>{{ fmtDate(morePop.date) }}</b>
         <button type="button" class="cal-more-pop__x close-x close-x--sm" :title="$t('statsE.SettingsModal.closeBtn')" :aria-label="$t('statsE.SettingsModal.closeBtn')"
               @click="morePop=null" @keydown.enter.prevent="morePop=null"></button></div>
       <div class="cal-more-pop__body">
         <div v-for="e in morePop.events" :key="e.id" class="cal-more-pop__item"
              :style="{background: e.backgroundColor}" role="button" tabindex="0"
-             @click="openEvent(e.id)" @keydown.enter.prevent="openEvent(e.id)">{{ e.title || $t('statsE.TodoItem.untitled') }}</div>
+             @click="openEvent(e.id)" @keydown="onPopEventKey(e.id, $event)">{{ e.title || $t('statsE.TodoItem.untitled') }}</div>
       </div>
     </div>
   </div>
@@ -108,6 +110,7 @@ import { today0, dayStart, dayShift } from '../utils/todayBounds.js'
 import { buildTbBuckets, tbBucketGet, indexById, inCursorWindow, TB_HOURS } from '../utils/calendarBuckets.js'
 // solarlunar → FullCalendar adapter lives in utils/lunarAdapter.js (structure-size ratchet)
 import LUNAR from '../utils/lunarAdapter.js'
+import { roleButtonActivate } from '../utils/roleButtonKey.js' // [D18-DOM3] Space+Enter button activation
 
 export default {
   name: 'CalendarView',
@@ -379,6 +382,15 @@ export default {
       const d = dayjs(ts)
       return this.$t('statsJ.CalendarView.dateWithWeek', { d: fmtDate(d), w: wdLabel(this.$t.bind(this), d.day()) })
     },
+    /* [D18-DOM3] ARIA button pattern on the time-grid task rows (was click-only): Space/Enter open
+       the same editor as the click; stopped so the host cell's click-to-create never double-fires */
+    onTbTaskKey (t, e) {
+      roleButtonActivate(function () { this.openTaskEditById(t.taskId) }, { stop: true }).call(this, e)
+    },
+    /* [D18-DOM3] "+N more" popup event rows: Space joins Enter as activation */
+    onPopEventKey (id, e) {
+      roleButtonActivate(function () { this.openEvent(id) }).call(this, e)
+    },
     openTaskEditById (taskId) {
       const raw = this.taskById.get(taskId)
       this.morePop = null
@@ -403,6 +415,9 @@ export default {
         left: Math.min(Math.max(8, anchorX - hr.left - 110), Math.max(8, hr.width - 228)),
         top: Math.min(Math.max(8, anchorY - hr.top), Math.max(8, hr.height - 120))
       }
+      // [D18-DOM3] the popup is a role=dialog: move keyboard focus into it on open (Esc is bound on
+      // the container itself, so focus must land there for the close key to be reachable)
+      this.$nextTick(() => { const el = this.$refs.morePopEl; if (el && el.focus) el.focus() })
     }
   },
   mounted () {

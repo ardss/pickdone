@@ -4,7 +4,7 @@
     <div v-if="m.visible" class="ctx-menu" role="menu" :style="{left:pos.x+'px', top:pos.y+'px'}"
          @keydown.esc.stop="$store.commit('ui/closeMenu')" @keydown.down="onKeydown" @keydown.up="onKeydown">
       <template v-for="(it,i) in m.items" :key="i">
-        <div v-if="it.sep" class="ctx-item sep" role="separator" aria-disabled="true"></div>
+        <div v-if="it.sep" class="ctx-item sep" role="separator"></div>
         <div v-else class="ctx-item" :class="{danger:it.danger}"
              role="menuitem" tabindex="0"
              @click.stop="exec(it)"

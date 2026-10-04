@@ -86,6 +86,7 @@ export default {
   'statsJ.FilterModal.name': 'Name',
   'statsJ.FilterModal.namePh': 'e.g. High priority this week',
   'statsJ.FilterModal.nameRequired': 'Please enter a name',
+  'statsJ.FilterModal.nameTaken': 'A filter with this name already exists',
   'statsJ.FilterModal.cat': 'List',
   'statsJ.FilterModal.anyCat': 'All lists',
   'statsJ.FilterModal.prio': 'Priority',

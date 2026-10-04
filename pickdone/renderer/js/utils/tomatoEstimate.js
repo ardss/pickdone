@@ -209,6 +209,18 @@ export function ensureEstimate (taskId) {
 
 export function getEstimate (taskId) { return state[taskId] || 0 }
 
+/** [D18-DOM3] Pure workload tiering for the list views' colored bar (TodoBoxView / FilterView).
+ *  0 = unset (no bar rendered — a full level-1 bar used to make "no estimate" look like 1-2
+ *  pomodoros), 1 = 1-2 (default bar), 2 = 3-4, 3 = 5+. Single source so the two views can never
+ *  drift apart on the tiering again. */
+export function estimateTier (n) {
+  const v = Math.round(Number(n) || 0)
+  if (v <= 0) return 0
+  if (v <= 2) return 1
+  if (v <= 4) return 2
+  return 3
+}
+
 /** Test seam: the reactive map is module-private; behavior tests seed/inspect it through here. */
 export const _testInternals = { state, get MAX_KEYS () { return MAX_KEYS } }
 
