@@ -20,11 +20,11 @@ exports.filterUpsert = (db, f) => {
     // P2 2026-09-17 no-op suppression (same rule as upsertCategory): re-saving identical content
     // used to overwrite updatedAt=now (faking LWW freshness) and emit a fake oplog delta per save.
     // Un-deletes on conflict are intentional, so a resurrected tombstone still writes.
-    const cur = db.prepare('SELECT name, conds, sort, deleted FROM filters WHERE id = ?').get(f.id)
+    const cur = db.prepare('SELECT name, conds, sort, deleted, updatedAt FROM filters WHERE id = ?').get(f.id)
     if (cur && cur.deleted === 0 && cur.name === name && cur.conds === conds && cur.sort === (f.sort || 0)) return false
     // M2 (2026-09-20): preserve an explicit updatedAt (sync apply carries the peer row's LWW age)
     // instead of re-stamping now() — same rationale as planAddMany above. Renderer callers omit it and get now().
-    const stamp = Number(f.updatedAt) > 0 ? Number(f.updatedAt) : Date.now()
+    const stamp = Number(f.updatedAt) > 0 ? Number(f.updatedAt) : Math.max(Date.now(), ((cur && cur.updatedAt) || 0) + 1) // D20: strictly monotonic vs the row's own stamp — two same-ms edits must still advance LWW (F3b red on fast CI disks)
     const info = db.prepare('UPDATE filters SET name=?, conds=?, sort=?, deleted=0, deletedAt=0, updatedAt=? WHERE id=?').run(name, conds, f.sort || 0, stamp, f.id)
     // Round-1 P0 (2026-09-21): sync apply passes an explicit id — when the row does not exist
     // locally the UPDATE matched 0 rows, yet the oplog still logged a phantom pointer and the
