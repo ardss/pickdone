@@ -42,7 +42,9 @@ test('viewFetchOpts pushes dateMode/category/done into the fetch and raises the 
   assert.equal(o.noDate, false)
   assert.equal(o.done, false)
   assert.equal(o.category, 7)
-  assert.equal(o.limit, 500)
+  // D19-DOM2 (#11) re-anchor: the view fetch ceiling was raised 500 → 5000 (views/projects can
+  // hold more matching tasks than the old cap; the App's FilterView shows all of them)
+  assert.equal(o.limit, 5000)
   assert.equal(lib.viewFetchOpts({ dateMode: 'none' }).noDate, true)
   assert.equal(lib.viewFetchOpts({ dateMode: 'all' }).range, null)
   assert.equal(lib.viewFetchOpts({}).category, null)

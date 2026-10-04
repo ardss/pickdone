@@ -23,7 +23,8 @@
          @keydown.down.prevent="e => { if (e.altKey) mgrMove(c, 1) }"><app-icon name="dots" :size="13"/></i>
       <span class="sn-dot" :style="{borderColor:c.categoryColor, background:c.categoryColor}"></span>
       <input v-if="mgrEditing===c.categoryId" v-model="mgrName" class="sn-cat-edit"
-             @keydown.enter.prevent="e => { if (e.isComposing || e.keyCode === 229) return; saveMgrEdit(c) }" @blur="saveMgrEdit(c)"/>
+             @keydown.enter.prevent="e => { if (e.isComposing || e.keyCode === 229) return; saveMgrEdit(c) }"
+             @keydown.esc.prevent="cancelMgrEdit(c)" @blur="saveMgrEdit(c)"/>
       <span v-else class="cat-mgr-name" role="button" tabindex="0" :title="$t('statsG.SideNav.clickRenameTitle')"
             @click="startMgrEdit(c)" @keydown.enter.prevent="startMgrEdit(c)">{{c.categoryName}}</span>
       <em class="cat-mgr-count" role="button" tabindex="0" :title="$t('statsG.SideNav.previewTitle')"
@@ -109,6 +110,13 @@ export default defineComponent({
       }
       this.$store.commit('category/updateCategory', { categoryId: c.categoryId, categoryName: this.mgrName.trim() })
       this.mgrEditing = null
+    },
+    /** [D19] Esc cancels an abandoned rename instead of committing it via blur-save
+     *  (same idiom as SnManageTagsModal's cancelTagEdit / SnCategoryItem's edit-cancel). */
+    cancelMgrEdit (c) {
+      if (this.mgrEditing !== c.categoryId) return
+      this.mgrEditing = null
+      this.mgrName = ''
     },
     dragMgrStart (c, e) {
       this.mgrDragId = c.categoryId

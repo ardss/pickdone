@@ -74,9 +74,12 @@ module.exports = ({ open, commit, audit, CliError, dayjs, resolveCategory }) => 
   }
 
   /** listTodos fetch options for a saved view: push the view's dateMode/category down into the QUERY so the
-   *  row cap (500) can no longer truncate away matching tasks before applyViewConds runs (review P1 2026-09-10:
+   *  row cap can no longer truncate away matching tasks before applyViewConds runs (review P1 2026-09-10:
    *  a 200-cap fetch filtered afterwards hid valid rows for >cap libraries). applyViewConds stays as the
-   *  authoritative post-filter so the semantics remain byte-identical to the app's FilterView. */
+   *  authoritative post-filter so the semantics remain byte-identical to the app's FilterView.
+   *  D19-DOM2 (#11): cap raised 500 → 5000 — a view matching >500 tasks was truncated while the App's
+   *  FilterView shows all of them. The bound stays finite deliberately (memory tradeoff: applyViewConds
+   *  post-filters the full mapped set in JS, so 5000 rows is the accepted worst case). */
   function viewFetchOpts (conds) {
     const c = conds || {}
     const mode = c.dateMode
@@ -85,7 +88,7 @@ module.exports = ({ open, commit, audit, CliError, dayjs, resolveCategory }) => 
       noDate: mode === 'none',
       done: false, // views are undone-only (FilterView parity, same as applyViewConds)
       category: c.catId != null && c.catId !== -1 ? c.catId : null,
-      limit: 500 // fetch max; user --limit narrows AFTER applyViewConds
+      limit: 5000 // fetch max; user --limit narrows AFTER applyViewConds
     }
   }
 

@@ -50,6 +50,7 @@ export default {
       "selectedPrefix": "已选择：",
       "shortcutConflictTitle": "快捷键冲突",
       "shortcutConflictMsg": "快捷键冲突：{combo}",
+      "shortcutBareKeyMsg": "单独的字母/数字不能设为快捷键：{combo}，请加上 Ctrl/Alt/Shift",
       "shortcutSavedMsg": "快捷键已保存",
       "backupLocationUpdatedMsg": "备份位置已更新",
       "autoBackupWrittenMsg": "已写入自动备份",

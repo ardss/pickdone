@@ -106,7 +106,14 @@ export function clearSearch (vm) {
 
 export function createCategory (vm) {
   const name = vm.$t('statsE.SideNav.newCategory')
-  vm.$store.commit('category/addCategory', { categoryName: name })
+  // D19-DOM2 (#9): addCategory now rejects duplicate live names (CATEGORY_EXISTS) — surface via
+  // the existing $message.warning idiom instead of an unhandled throw from the click handler.
+  try {
+    vm.$store.commit('category/addCategory', { categoryName: name })
+  } catch (e) {
+    if (e && e.code === 'CATEGORY_EXISTS') { vm.$message.warning(vm.$t('statsG.SideNav.catNameExistsWarn')); return }
+    throw e
+  }
   const list = vm.$store.state.category.list
   vm.catEditing = list[list.length - 1].categoryId
   vm.newCatName = name
@@ -147,7 +154,14 @@ export async function createTag (vm) {
 
 export function addCategory (vm) {
   const name = vm.newCatName.trim() || (vm.$t('statsE.SideNav.categoriesLabel') + (vm.categories.length + 1))
-  vm.$store.commit('category/addCategory', { categoryName: name })
+  // D19-DOM2 (#9): duplicate live names are rejected by the store (CATEGORY_EXISTS) — surface
+  // via the existing warning idiom and keep the editor open instead of an unhandled throw.
+  try {
+    vm.$store.commit('category/addCategory', { categoryName: name })
+  } catch (e) {
+    if (e && e.code === 'CATEGORY_EXISTS') { vm.$message.warning(vm.$t('statsG.SideNav.catNameExistsWarn')); return }
+    throw e
+  }
   vm.newCatName = ''
 }
 

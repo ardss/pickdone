@@ -50,6 +50,7 @@ export default {
       "selectedPrefix": "Selected: ",
       "shortcutConflictTitle": "Shortcut conflict",
       "shortcutConflictMsg": "Shortcut conflict: {combo}",
+      "shortcutBareKeyMsg": "Bare letters/digits cannot be global shortcuts: {combo} — add Ctrl/Alt/Shift",
       "shortcutSavedMsg": "Shortcut saved",
       "backupLocationUpdatedMsg": "Backup location updated",
       "autoBackupWrittenMsg": "Auto backup written",

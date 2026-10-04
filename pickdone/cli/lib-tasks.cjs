@@ -5,14 +5,19 @@ module.exports = (deps) => {
   const { open, CliError, parseDate, dayjs, normKey } = deps // F-B5: keyword normalization single source (NFKC-aligned with the renderer's search)
 /* ================= Read commands ================= */
 function listTodos (opts = {}) {
-  const q = { deleted: 0, orderBy: 'scheduledDay ASC, sort ASC' }
+  // D19-DOM2 (#4): 'sort DESC' = App display order within a day (shared/sort-core.mjs contract —
+  // sortMode.js custom mode renders taskSort descending). The old ASC listed days upside-down.
+  const q = { deleted: 0, orderBy: 'scheduledDay ASC, sort DESC' }
   // Context protection: truncate by default when no limit is given, to avoid flooding the AI's context in one shot
   // B12: `--limit 0` must pass 0 through (db.js queryTodos fails closed: 0 = zero rows) — the old
   // truthy check folded 0 into the 200-row default. Distinguish flag-absent (default 200) from an
   // explicit 0; a non-numeric value still falls back to the same default 200 as absent.
   if (opts.limit !== undefined) {
     const n = parseInt(opts.limit, 10)
-    q.limit = Number.isFinite(n) ? Math.min(n, 500) : 200
+    // D19-DOM2 (#11): clamp raised 500 → 5000 — saved views / projects can hold more tasks than
+    // the old ceiling, and the App shows all of them while the CLI truncated (viewFetchOpts and
+    // runProject now ask for 5000). The clamp stays (memory/context bound), just higher.
+    q.limit = Number.isFinite(n) ? Math.min(n, 5000) : 200
   } else q.limit = 200
   const now = dayjs()
   if (opts.done != null) q.complete = opts.done

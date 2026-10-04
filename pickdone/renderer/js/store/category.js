@@ -14,8 +14,7 @@ function loadList () {
     if (d && Array.isArray(d.list)) return d.list
     corrupt = true
   } catch { corrupt = true }
-  // Initial example categories (colors aligned with the project baseline defaults)
-  // Don't persist-overwrite immediately when LS is corrupted: the DB-side init may still have recoverable real data; just let the seeds enter memory for now
+  // Initial example categories (colors aligned with the project baseline defaults) // Don't persist-overwrite immediately when LS is corrupted: the DB-side init may still have recoverable real data; just let the seeds enter memory for now
   const now = Date.now()
   const mk = (i, name, color) => ({ categoryId: 100000 + i, userId: 840001, categoryName: name, categoryColor: color, createTime: now + i, listSort: 100 * i, folderIs: false, folderId: 0, delete: false })
   // Names follow the UI language so an en-US first boot doesn't grow Chinese categories
@@ -38,34 +37,25 @@ function toRow (c, { restore = false } = {}) {
     isFolder: c.folderIs ? 1 : 0,
     parentId: c.folderId || 0,
     deleted: c.delete ? 1 : 0,
-    // D5 (2026-09-20): carry the tombstone stamp — markCascade sets deletedAt, but toRow dropped it,
-    // so the DB row never saw the value. The db layer preserves an existing stamp and stamps when
-    // absent; carrying the value here keeps renderer/CLI/db in one shape.
+    // D5 (2026-09-20): carry the tombstone stamp — markCascade sets deletedAt, but toRow dropped it, // so the DB row never saw the value. The db layer preserves an existing stamp and stamps when // absent; carrying the value here keeps renderer/CLI/db in one shape.
     deletedAt: c.deletedAt || 0,
-    // Round-6 P2: a restored backup carries no category timestamp, so the db layer's now-stamp made
-    // backup-time tombstones win category LWW and re-delete categories a peer has since recovered or
-    // renamed. Restored tombstones get the epoch-oldest stamp (any real peer row — live or tombstone
+    // Round-6 P2: a restored backup carries no category timestamp, so the db layer's now-stamp made // backup-time tombstones win category LWW and re-delete categories a peer has since recovered or // renamed. Restored tombstones get the epoch-oldest stamp (any real peer row — live or tombstone
     // — wins the next LWW round); live restored rows still take the now-stamp (backup wins locally).
     updatedAt: restore && c.delete ? 1 : undefined
   }
 }
 
 /** Dual write: localStorage stays as cache/disaster recovery, SQLite is authoritative (unified CLI/UI data source).
- *  Write-amplification fix (2026-09-25): persist used to re-commit EVERY row as category.put on every call,
- *  and setList was reachable from the DB-read path (category/init) — externalReload → init → setList(rows) →
- *  persist → N × upsertCategory writes → each audited as category.upsert → the writes broadcast todos-changed →
- *  reload fires again. That read-back→persist loop was the ~80 lines/s category.upsert audit storm (~5MB per
- *  7-10 min, 24MB+ archives on the real %APPDATA% side, 51MB+ un-rotated on .dev-data). Two guards now:
- *    1. the read-back path goes through setListFromDb (NEVER persists — see that mutation);
- *    2. persist diffs each row against the last SUCCESSFULLY committed row (per id) and only commits real
- *       changes, so even a full-list caller rewrites only the rows that actually moved. A failed commit is
+ *  Write-amplification fix (2026-09-25): persist used to re-commit EVERY row as category.put on every call, *  and setList was reachable from the DB-read path (category/init) — externalReload → init → setList(rows) →
+ *  persist → N × upsertCategory writes → each audited as category.upsert → the writes broadcast todos-changed → *  reload fires again. That read-back→persist loop was the ~80 lines/s category.upsert audit storm (~5MB per
+ *  7-10 min, 24MB+ archives on the real %APPDATA% side, 51MB+ un-rotated on .dev-data). Two guards now: *    1. the read-back path goes through setListFromDb (NEVER persists — see that mutation);
+ *    2. persist diffs each row against the last SUCCESSFULLY committed row (per id) and only commits real *       changes, so even a full-list caller rewrites only the rows that actually moved. A failed commit is
  *       not remembered, so the next persist retries it (LS is already updated — SQLite must converge). */
 const lastPersistedRows = new Map() // categoryId → JSON of the row last committed successfully
 // Exported read-only for the leak regression (see pendingMetaBackups below): keys must track the live list.
 export { lastPersistedRows }
 /** Leak fix (dw wave 2026-10-02): the diff baseline kept an entry for every id ever persisted, even
- *  after the row left the list (purged tombstone, hard delete) — unbounded growth over a long session.
- *  Every persist()/setListFromDb() caller passes the FULL list, so a key absent from it is dead. */
+ *  after the row left the list (purged tombstone, hard delete) — unbounded growth over a long session. *  Every persist()/setListFromDb() caller passes the FULL list, so a key absent from it is dead. */
 function prunePersistBaseline (list) {
   const live = new Set(list.map(c => c.categoryId))
   for (const id of [...lastPersistedRows.keys()]) if (!live.has(id)) lastPersistedRows.delete(id)
@@ -480,6 +470,15 @@ export default {
       for (const c of list) lastPersistedRows.set(c.categoryId, JSON.stringify(toRow(c)))
     },
     addCategory (state, { categoryName = 'New Category', categoryColor = COLOR_PALETTE[state.list.length % COLOR_PALETTE.length], folderIs = false, folderId = 0 }) {
+      // D19-DOM2 (#9, CLI parity CATEGORY_EXISTS): duplicate LIVE names are rejected — the CLI's
+      // whole addressing model (resolve by name) needs uniqueness; duplicates produced
+      // AMBIGUOUS_MATCH and locked the CLI out. Same contract as cli/lib-categories.cjs addCategory.
+      // Component callers catch this and surface catNameExistsWarn via $message.warning.
+      if (state.list.some(c => !c.delete && c.categoryName === categoryName)) {
+        const e = new Error('category "' + categoryName + '" already exists (names must stay unique so the CLI can address them)')
+        e.code = 'CATEGORY_EXISTS'
+        throw e
+      }
       state.list.push({ categoryId: nextId(), userId: 840001, categoryName, categoryColor, createTime: Date.now(), listSort: Math.max(0, ...state.list.map(c => c.listSort)) + 100, folderIs, folderId, delete: false })
       persist(state.list)
     },
