@@ -19,7 +19,7 @@
             <el-popover ref="popSort" placement="bottom-start" width="160" trigger="click" :hide-after="0" popper-class="dd-pop" @show="openDd = 'sort'" @hide="openDd = null">
               <ul class="dd-menu" role="listbox" :aria-label="$t('statsC.TodoBox.ariaSortList')" @keydown="ddMenuKey($event, 'popSort')">
                 <li v-for="m in sortMethodOptions" :key="m.value" tabindex="0" role="option" :aria-selected="m.value === settings.todoBoxSortMethod ? 'true' : 'false'"
-                    :class="{ on: m.value === settings.todoBoxSortMethod }" @click="setSort(m.value)" @keydown.enter.prevent="setSort(m.value)">{{ m.label }}</li>
+                    :class="{ on: m.value === settings.todoBoxSortMethod }" @click="setSort(m.value)" @keydown="onSortKey(m.value, $event)">{{ m.label }}</li>
               </ul>
               <template #reference><span class="dropdown-select__label" role="button" tabindex="0" aria-haspopup="listbox" :aria-expanded="openDd === 'sort' ? 'true' : 'false'" @keydown="onTriggerKey">{{ sortMethodLabel }}<i class="dd-caret">&#9662;</i></span></template>
             </el-popover>
@@ -28,7 +28,7 @@
             <el-popover ref="popOrder" placement="bottom-start" width="120" trigger="click" :hide-after="0" popper-class="dd-pop" @show="openDd = 'order'" @hide="openDd = null">
               <ul class="dd-menu" role="listbox" :aria-label="$t('statsC.TodoBox.ariaOrderList')" @keydown="ddMenuKey($event, 'popOrder')">
                 <li v-for="o in sortOrderOptions" :key="o.value" tabindex="0" role="option" :aria-selected="o.value === settings.todoBoxSortOrder ? 'true' : 'false'"
-                    :class="{ on: o.value === settings.todoBoxSortOrder }" @click="setOrder(o.value)" @keydown.enter.prevent="setOrder(o.value)">{{ o.label }}</li>
+                    :class="{ on: o.value === settings.todoBoxSortOrder }" @click="setOrder(o.value)" @keydown="onOrderKey(o.value, $event)">{{ o.label }}</li>
               </ul>
               <template #reference><span class="dropdown-select__label" role="button" tabindex="0" aria-haspopup="listbox" :aria-expanded="openDd === 'order' ? 'true' : 'false'" @keydown="onTriggerKey">{{ sortOrderLabel }}<i class="dd-caret">&#9662;</i></span></template>
             </el-popover>
@@ -36,9 +36,9 @@
           <div class="dropdown-select" :class="{ 'is-open': openDd === 'cat' }">
             <el-popover ref="popCat" placement="bottom-start" width="180" trigger="click" :hide-after="0" popper-class="dd-pop" @show="openDd = 'cat'" @hide="openDd = null">
               <ul class="dd-menu" role="listbox" :aria-label="$t('statsC.TodoBox.ariaCatList')" @keydown="ddMenuKey($event, 'popCat')">
-                <li :class="{ on: settings.todoBoxCategoryId === -1 }" tabindex="0" role="option" :aria-selected="settings.todoBoxCategoryId === -1 ? 'true' : 'false'" @click="setCat(-1)" @keydown.enter.prevent="setCat(-1)">{{ $t('statsC.TodoBox.allCats') }}</li>
+                <li :class="{ on: settings.todoBoxCategoryId === -1 }" tabindex="0" role="option" :aria-selected="settings.todoBoxCategoryId === -1 ? 'true' : 'false'" @click="setCat(-1)" @keydown="onCatKey(-1, $event)">{{ $t('statsC.TodoBox.allCats') }}</li>
                 <li v-for="c in cats" :key="c.categoryId" tabindex="0" role="option" :aria-selected="c.categoryId === settings.todoBoxCategoryId ? 'true' : 'false'"
-                    :class="{ on: c.categoryId === settings.todoBoxCategoryId }" @click="setCat(c.categoryId)" @keydown.enter.prevent="setCat(c.categoryId)">{{ c.categoryName }}</li>
+                    :class="{ on: c.categoryId === settings.todoBoxCategoryId }" @click="setCat(c.categoryId)" @keydown="onCatKey(c.categoryId, $event)">{{ c.categoryName }}</li>
               </ul>
               <template #reference><span class="dropdown-select__label" role="button" tabindex="0" aria-haspopup="listbox" :aria-expanded="openDd === 'cat' ? 'true' : 'false'" @keydown="onTriggerKey">{{ settings.todoBoxCategoryId === -1 ? $t('statsC.TodoBox.allCats') : catNameOf(settings.todoBoxCategoryId) }}<i class="dd-caret">&#9662;</i></span></template>
             </el-popover>
@@ -66,10 +66,11 @@
           </span>
           <div class="todo-box-list-item__container">
             <div class="todo-box-list-item__drop-placeholder"></div>
-            <div class="todo-box-list-item__content" role="button" tabindex="0" :aria-label="t.taskContent"> {{ t.taskContent }} </div>
+            <div class="todo-box-list-item__content" role="button" tabindex="0" :aria-label="t.taskContent" @keydown="onContentKey(t, $event)"> {{ t.taskContent }} </div>
             <!-- Workload bar: the difficulty field is retired, tiered by estimated pomodoros (1-2/3-4/5+) — estimated pomodoros are the single workload ledger -->
-            <div class="todo-box-list-item__workload"
-                 :class="{ 'todo-box-list-item__workload--lv2': estOf(t) >= 3 && estOf(t) <= 4, 'todo-box-list-item__workload--lv3': estOf(t) >= 5 }"></div>
+            <!-- [D18-DOM3] no estimate = no bar (a full level-1 bar read as 1-2 pomodoros); tiering via utils/tomatoEstimate.estimateTier -->
+            <div v-if="tierOf(t)" class="todo-box-list-item__workload"
+                 :class="{ 'todo-box-list-item__workload--lv2': tierOf(t) === 2, 'todo-box-list-item__workload--lv3': tierOf(t) === 3 }"></div>
           </div>
         </div>
       </div>
@@ -111,7 +112,7 @@ import { taskContextMenu } from '../utils/taskMenu.js'
 import { DEFAULT_CAT_COLOR } from '../utils/core.js'
 import { toggleCompleteWithUndo } from '../utils/completeAction.js'
 import { batchMoveWithUndo, isRepeatTask } from '../utils/confirm.js'
-import { getEstimate } from '../utils/tomatoEstimate.js'
+import { getEstimate, estimateTier } from '../utils/tomatoEstimate.js'
 import { crossDayMovePatch, crossDayRevertPatch } from '../utils/crossDayMove.js' // [maint-0924 A1]
 import EmptyState from '../components/EmptyState.vue'
 import { roleButtonActivate, roleCheckboxActivate } from '../utils/roleButtonKey.js' // [A8/A9] Space+Enter activation
@@ -205,6 +206,15 @@ export default {
       }
     },
     estOf (t) { return getEstimate(t.taskId) },
+    /* [D18-DOM3] workload tiering: 0=unset(no bar) 1=1-2 2=3-4 3=5+ (pure helper, unit-tested) */
+    tierOf (t) { return estimateTier(getEstimate(t.taskId)) },
+    /* [D18-DOM3] listbox options: Space joins Enter as selection */
+    onSortKey (v, e) { roleButtonActivate(function () { this.setSort(v) }).call(this, e) },
+    onOrderKey (v, e) { roleButtonActivate(function () { this.setOrder(v) }).call(this, e) },
+    onCatKey (v, e) { roleButtonActivate(function () { this.setCat(v) }).call(this, e) },
+    /* [D18-DOM3] row __content is the focusable "open" button: Space joins Enter; stopped so the
+       row container's own Enter activation never double-fires the edit */
+    onContentKey (t, e) { roleButtonActivate(function () { this.openEdit(t) }, { stop: true }).call(this, e) },
     taskContextMenu (t, e) { taskContextMenu(this, t, e) },
     set (patch) { this.$store.commit('settings/updateSettings', patch); this.$store.dispatch('todo/computeViews') },
     setSort (v) { this.set({ todoBoxSortMethod: v }) },

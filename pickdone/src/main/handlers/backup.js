@@ -216,8 +216,15 @@ module.exports = function backupHandlers (ctx) {
           for (const dead of stale) { try { fs.rmSync(path.join(dir, dead), { force: true }) } catch {} }
         } catch { /* sweep is best-effort */ }
         // Both tiers, regardless of this run's tag — the two tiers age on ONE shared directory.
+        // D18 (2026-10-02) write-then-prune: the prune UNLINKS used to run BEFORE the new
+        // snapshot write, so a failed write left the tier strictly thinner with nothing added.
+        // The prune execution moved to AFTER the outcome is known (dedup hit or successful
+        // write — see the two pruneNow call sites); a failed write skips it. Selection still
+        // uses the PRE-write `existing` list — the new file does not exist yet, so selectPrunes'
+        // newest-of-tier keeps are computed over the old set and the dedup twin (the newest of
+        // its tag) always survives.
         const pruneList = existing
-        for (const dead of autoBackup.selectPrunes(pruneList, o)) { try { fs.unlinkSync(path.join(dir, dead)) } catch {} }
+        const pruneNow = () => { for (const dead of autoBackup.selectPrunes(pruneList, o)) { try { fs.unlinkSync(path.join(dir, dead)) } catch {} } }
         // Content dedup: only compare against the newest file OF THE SAME TAG (D11 finding 17 —
         // see newestSameTag). (The original implementation compared against any old file — when the data was changed back to its original state
         // it would return dedup without writing the new snapshot, yet prune would delete that old snapshot → that point in time ends up with no backup)
@@ -230,6 +237,7 @@ module.exports = function backupHandlers (ctx) {
           // main thread for every run.
           try {
             if (twinMatches(fs, path.join(dir, twin), jsonText)) {
+              pruneNow() // D18 write-then-prune: aging continues on a dedup hit (D12 invariant), twin survives as newest-of-tier
               return { ok: true, file: twin, dedup: true }
             }
           } catch {}
@@ -237,7 +245,8 @@ module.exports = function backupHandlers (ctx) {
         // Atomic write: temp file + rename, prevents corruption on interruption; on failure the temp
         // file is cleaned up inline (P2 2026-09-17) and the structured error is returned
         const w = atomicWriteJson(fs, dir, name, jsonText)
-        if (!w.ok) return { ok: false, error: w.error }
+        if (!w.ok) return { ok: false, error: w.error } // D18: a failed write must NOT thin the tier
+        pruneNow() // D18 write-then-prune: prune only AFTER the new snapshot landed
         return { ok: true, file: name }
       } catch (err) { return { ok: false, error: String(err && err.message || err) } }
     },

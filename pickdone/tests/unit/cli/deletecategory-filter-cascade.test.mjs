@@ -38,15 +38,22 @@ test('deleteCategory tombstones victim filters, backs them up, reports the count
   assert.ok(liveFilters.includes('survivor'), 'unrelated filter survives')
   assert.ok(!liveFilters.includes('doomed-folder') && !liveFilters.includes('doomed-child'), 'doomed filters are tombstoned')
 
-  const bak = JSON.parse(db.call('getMeta', 'catFiltersBak.' + folder.categoryId) || '[]')
+  // D18-DOM2 (#8, D15-B6 parity): the backup key is the STAMPED catFiltersBak.<deletedAt>.<id>
+  // shape (the legacy unstamped key is legacy-only, still READ as a fallback but never written)
+  const tomb = db.call('categoriesAllRows', {}).find(c => c.id === folder.categoryId)
+  assert.ok(tomb.deletedAt > 0, 'tombstone carries the deletedAt stamp')
+  const bak = JSON.parse(db.call('getMeta', 'catFiltersBak.' + tomb.deletedAt + '.' + folder.categoryId) || '[]')
   assert.equal(bak.length, 2, 'recover backup holds both doomed filters')
   assert.deepEqual(bak.map(f => f.name).sort(), ['doomed-child', 'doomed-folder'])
   for (const f of bak) assert.ok(f.id && f.name && f.conds, 'backup entries keep id/name/conds')
+  assert.equal(db.call('getMeta', 'catFiltersBak.' + folder.categoryId) || '', '', 'legacy unstamped key is no longer written')
 })
 
 test('deleting a category with no filters reports removedFilters = 0 and writes no backup', () => {
   const c = lib.addCategory('catfilter-nofilters')
   const r = lib.deleteCategory(String(c.categoryId))
   assert.equal(r.removedFilters, 0)
-  assert.equal(db.call('getMeta', 'catFiltersBak.' + c.categoryId) || '', '', 'no backup blob when nothing was cascaded')
+  const tomb = db.call('categoriesAllRows', {}).find(x => x.id === c.categoryId)
+  assert.equal(db.call('getMeta', 'catFiltersBak.' + tomb.deletedAt + '.' + c.categoryId) || '', '', 'no backup blob when nothing was cascaded')
+  assert.equal(db.call('getMeta', 'catFiltersBak.' + c.categoryId) || '', '', 'no legacy backup blob either')
 })

@@ -81,6 +81,15 @@ export function isLastRepeatInstance (completedTodo, group) {
  * the CLI twin (cli/lib.js renewal) and the renderer twin (store/todo.js ensureNextRepeatInstance
  * → addTodo payload) must agree on exactly this set; the D5 parity fixes had to be applied twice
  * before this was extracted). `t.x || 0` semantics are the established contract on both ends.
+ *
+ * D18-DOM2 (B6 carry-set convergence, 2026-10-02): the two ends used to carry DIVERGENT halves —
+ * the CLI renewal kept priority/important/urgent/deadlineTs/reminderExtra but dropped attachments
+ * (image/files hard-nulled), while the App's RepeatModal generation kept todoImage/fileList but
+ * dropped the quadrant/extra attributes. Converged on the SUPERSET (attachments AND quadrant/extra):
+ * a repeated task is a user-authored template, and silently losing either half of it on renewal is
+ * a data-loss surprise. Both the CLI expansion (cli/lib-repeat.cjs buildRenewalInstance) and the
+ * App's RepeatModal generation payload (renderer/js/components/RepeatModal.vue) now consume this
+ * exact set — do NOT re-diverge one end without changing both.
  */
 export function renewalCarryFields (t, next) {
   return {
@@ -92,6 +101,8 @@ export function renewalCarryFields (t, next) {
     deadlineTs: t.deadlineTs || 0,
     important: t.important || 0,
     urgent: t.urgent || 0,
+    image: t.image || null,
+    files: t.files || null,
     repeatId: t.repeatId
   }
 }

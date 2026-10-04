@@ -3,7 +3,7 @@
  * Subtasks (subtasks JSON: [{text, checked}], structure aligned with EditPanel). */
 // D17: the parent-toggle rule is shared with the renderer (utils/core.js re-exports shared/subs-core.mjs)
 const { subsCompleteTarget } = require('../shared/subs-core.mjs')
-module.exports = ({ resolveTask, liveTasks, patchTodo, CliError }) => {
+module.exports = ({ resolveTask, liveTasks, patchTodo, CliError, open, renewRepeatAfterComplete }) => {
   /* ================= Subtasks (subtasks JSON: [{text, checked}], structure aligned with EditPanel) ================= */
   function parseSubs (t) {
     try { const a = JSON.parse(t.subtasks || '[]'); return Array.isArray(a) ? a : [] } catch { return [] }
@@ -38,7 +38,13 @@ module.exports = ({ resolveTask, liveTasks, patchTodo, CliError }) => {
   /** Check/uncheck one subtask + parent completion sync (App parity: TodoItem._applySubCheck /
    *  EditPanel via subsCompleteTarget). Checking the last unchecked sub completes the parent
    *  (completedAt = now, same shape as toggleComplete); unchecking any sub of a complete parent
-   *  un-completes it (completedAt = 0). No subtasks / partial state → parent untouched (null target). */
+   *  un-completes it (completedAt = 0). No subtasks / partial state → parent untouched (null target).
+   *  D18-DOM2 (#1, HIGH): completing the parent through the sub-check also RENEWS the repeat chain —
+   *  the App renews on every completion route (store/todo.js toggleComplete dispatches
+   *  ensureNextRepeatInstance after the parent-complete patch, and the sub-check path lands there
+   *  too); the CLI sub-check used to complete the parent while silently killing the chain. The
+   *  renewal goes through the SAME shared machinery as the `done` path (lib-repeat.cjs
+   *  renewRepeatAfterComplete → shared/repeat-core.mjs — not a third generator). */
   const checkSubtask = (input, key, checked = true) => {
     const t = resolveTask(input)
     const subs = parseSubs(t)
@@ -48,7 +54,14 @@ module.exports = ({ resolveTask, liveTasks, patchTodo, CliError }) => {
     if (target === true) { patch.complete = true; patch.completedAt = Date.now() } else if (target === false) { patch.complete = false; patch.completedAt = 0 }
     const note = (checked ? 'check' : 'uncheck') + ' subtask: ' + key +
       (target != null ? ` (parent ${target ? 'completed' : 'un-completed'} in sync)` : '')
-    return patchTodo(t.taskId, patch, { action: 'subtask', note })
+    const after = patchTodo(t.taskId, patch, { action: 'subtask', note })
+    // Renewal AFTER the parent-complete patch is persisted (same order as toggleComplete: the
+    // computation reads the completed row + the live group, then mints the next instance)
+    let renewed = null
+    if (target === true && after && t.repeatId) {
+      renewed = renewRepeatAfterComplete(open(), t, after)
+    }
+    return after && typeof after === 'object' ? Object.assign(after, { renewed }) : after
   }
   const removeSubtask = (input, key) => mutateSubs(input, subs => subs.splice(findSub(subs, key), 1), { note: 'subtask removed: ' + key })
 

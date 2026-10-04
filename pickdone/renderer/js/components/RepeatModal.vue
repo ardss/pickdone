@@ -229,6 +229,13 @@ export default {
               todoReminderTime: remind,
               todoReminderOffsets: Array.isArray(tpl.reminderOffsets) ? tpl.reminderOffsets : [],
               todoDifficultyLevel: tpl.difficulty || 0,
+              // D18-DOM2 (B6 convergence via shared/repeat-core.mjs renewalCarryFields — see its doc):
+              // quadrant/extra attrs now carry into generated instances (attachments already did)
+              priority: tpl.priority || 0,
+              deadlineTs: tpl.deadlineTs || 0,
+              important: tpl.important || 0,
+              urgent: tpl.urgent || 0,
+              todoReminderExtra: Array.isArray(tpl.reminderExtra) ? tpl.reminderExtra : [],
               repeatId,
               // Generated instances always start unchecked, matching the store's ensureNextRepeatInstance semantics
               todoSublist: (function(){ try { const list = JSON.parse(tpl.subtasks || 'null'); return Array.isArray(list) ? list.map(x => ({ ...x, checked: false })) : list } catch (e) { return null } })(),

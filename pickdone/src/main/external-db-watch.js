@@ -53,15 +53,23 @@ function createExternalDbWatch (deps) {
     // reload). Take the value only when two consecutive reads agree (fix-util.stableRead); persistent
     // disagreement (extremely rare) yields null and this poll is skipped, the next one re-reads.
     const readWatchMtime = () => {
-      const statOne = () => Math.max(fs.statSync(dbFile).mtimeMs, fs.existsSync(walFile) ? fs.statSync(walFile).mtimeMs : 0)
+      // D18 (2026-10-02): while todos.db is ABSENT (recovery just unlinked it, or the watcher
+      // starts before init recreates it) statSync throws — stableRead turns that into null, and
+      // a null baseline is the existing 'disarmed, arm on first non-null read' state, so the
+      // poller now keeps running in waiting-for-file mode instead of the whole setup throwing
+      // (watchDbForExternalWrites used to die at the startup baseline read = external-write
+      // reloads permanently disarmed for the session). The WAL stat is equally guarded (the wal
+      // can vanish between existsSync and statSync); a missing wal just contributes 0.
+      const statOne = () => {
+        let dbM
+        try { dbM = fs.statSync(dbFile).mtimeMs } catch { return null } // waiting-for-file
+        try { return Math.max(dbM, fs.existsSync(walFile) ? fs.statSync(walFile).mtimeMs : 0) } catch { return dbM }
+      }
       return fixUtil.stableRead(statOne)
     }
-    // P2 2026-09-19: `readWatchMtime() || 0` mapped a null baseline (torn read at startup) to 0, so
-    // the first poll was a GUARANTEED false external-write (full reload + undo-stack wipe) the moment
-    // the real mtime came in. Keep the baseline null instead and let onChange establish it from the
-    // first non-null read WITHOUT kicking — a null baseline means "disarmed", not "everything changed".
+    let waitingForFile = false
     let lastMtime = readWatchMtime()
-    if (lastMtime == null) log.warn('[TodoDB] 启动基线读取未定（torn read），首轮轮询仅建立基线不触发刷新')
+    if (lastMtime == null) { waitingForFile = true; log.warn('[TodoDB] todos.db 不可读(缺失/被占用),外部写监视进入等待文件状态,文件恢复后自动重新武装') }
     let lastTomatoCmdRaw = null
     // Round-1 P0 (2026-09-21): seed the tomato command watermark from the persisted cliTomatoSeq
     // counter (same restart-replay fix as the cliSyncCmd channel) — a stale slot command must not
@@ -232,9 +240,15 @@ function createExternalDbWatch (deps) {
         if (!extWatchGate.canPoll()) return
         const m = readWatchMtime()
         if (m == null) return
-        // Disarmed baseline (startup torn read): the first non-null read only ARMS the watcher —
-        // it is a baseline, not a change, so it must not kick a spurious external-write reload.
-        if (lastMtime == null) { lastMtime = m; forwardTomatoCmd(); forwardSyncCmd(); return }
+        // Disarmed baseline (startup torn read / D18 waiting-for-file): the first non-null read only
+        // ARMS the watcher — it is a baseline, not a change, so it must not kick a spurious
+        // external-write reload. (P2 2026-09-19: null never maps to 0 — that made the first poll a
+        // guaranteed false external-write. A null baseline means "disarmed", not "everything changed".)
+        if (lastMtime == null) { lastMtime = m
+          // D18: coming out of waiting-for-file mode, announce the re-arm (same arm-not-kick rule).
+          if (waitingForFile) { waitingForFile = false; log.info('[TodoDB] todos.db 重新可读,外部写监视已重新武装(本轮仅建立基线)') }
+          forwardTomatoCmd(); forwardSyncCmd(); return
+        }
         if (m === lastMtime) { forwardTomatoCmd(); forwardSyncCmd(); return } // check commands even when mtime is unchanged (guards against watchFile dropping events)
         lastMtime = m
         kick()

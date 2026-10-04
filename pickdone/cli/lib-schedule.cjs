@@ -130,7 +130,10 @@ function runRepeat ({ opts, lib, emit, emitNext }) {
   if (op === 'off') {
     const r = lib.repeatOff(task, opts.all)
     if (opts.json) return emitNext(r, ['list --json to read back'])
-    console.log('✓ left repeat group' + (opts.all ? ' (soft-deleted ' + r.removed + ' future instance(s))' : ''))
+    // D18-DOM2 #2/#3: both scopes now DELETE (App RepeatDeleteModal parity) — the single scope
+    // soft-deletes the instance ([A2 fix]: "the user pressed Delete and nothing disappeared"),
+    // --all dissolves the whole group (completed instances included)
+    console.log('✓ repeat off' + (opts.all ? ': group dissolved (soft-deleted ' + r.removed + ' instance(s), completed included)' : ': instance soft-deleted (this event only)'))
     return
   }
   if (op === 'rule') {

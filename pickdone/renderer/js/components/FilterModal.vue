@@ -45,6 +45,7 @@
 <script lang="ts">
 /** Filter create/edit modal -- name + conditions (category/priority/date range); saving goes through filters/save */
 import dialogA11y from '../utils/dialogA11y.js'
+import { filterNameTaken } from '../store/filters.js' // [D18-DOM3] duplicate smart-list name guard
 
 export default {
   name: 'FilterModal',
@@ -69,6 +70,8 @@ export default {
     async save () {
       const name = String(this.name || '').trim()
       if (!name) { this.$message.warning(this.$t('statsJ.FilterModal.nameRequired')); return }
+      // [D18-DOM3] another smart list with the same trimmed name would silently fork; abort like the empty-name case
+      if (filterNameTaken(this.$store.state.filters.list, name, this.filter && this.filter.id)) { this.$message.warning(this.$t('statsJ.FilterModal.nameTaken')); return }
       try {
         const id = await this.$store.dispatch('filters/save', {
           id: this.filter && this.filter.id,

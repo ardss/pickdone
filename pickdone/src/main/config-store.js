@@ -177,6 +177,7 @@ function writeConfig (patch) {
     // stale config.json = lost winBounds/locale/security-lock state). The helper owns the tmp
     // lifecycle and guarantees no residue on failure.
     require('./durable-fs').writeFileDurable(configFile(), JSON.stringify(c, null, '\t'))
+    _writeVersion++ // D18: bumped on every successful write — security-lock's isLocked cache invalidates against it
     return c
   }
   if (_pending === 0) {
@@ -189,4 +190,9 @@ function writeConfig (patch) {
   return result
 }
 
-module.exports = { readConfig, writeConfig, isReadFailed, consumeQuarantineNotice, DEFAULT_SHORTCUTS, __setConfigDir, sleepBackoff }
+// D18 (2026-10-02): monotonic counter bumped on every successful writeConfig. Consumers that
+// cache config-derived state (security-lock.js isLocked) compare it to invalidate immediately
+// on ANY write path (settings toggle, lock fallback write) instead of re-reading config.json —
+// with its up-to-~1.5s AV-lock backoff — on every gated IPC call.
+let _writeVersion = 0
+module.exports = { readConfig, writeConfig, isReadFailed, consumeQuarantineNotice, DEFAULT_SHORTCUTS, __setConfigDir, sleepBackoff, configWriteVersion: () => _writeVersion }

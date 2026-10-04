@@ -44,7 +44,7 @@
                    @keydown.esc.prevent="cancelRename(h)"/>
           </template>
           <template v-else>
-            <span class="habit-name" role="button" tabindex="0" :title="$t('statsE.HabitView.renameTip')" @click="startRename(h)" @keydown.enter.prevent="startRename(h)">{{ h.name }}</span>
+            <span class="habit-name" role="button" tabindex="0" :title="$t('statsE.HabitView.renameTip')" :aria-label="$t('statsE.HabitView.renameTip')" @click="startRename(h)" @keydown="onRenameKey(h, $event)">{{ h.name }}</span>
           </template>
           <span class="habit-freq-label">{{ freqLabel(h) }}</span>
           <span class="habit-streak" :title="$t('statsB.HabitView.streakTip')"><app-icon name="flame" :size="12"/> {{ $t('statsB.HabitView.streak', { n: streakOf(h.id) }) }}</span>
@@ -122,7 +122,7 @@ import { showUndoToast } from '../utils/undoToast.js'
 import { localDayKey } from '../../../shared/date-key.mjs'
 import { daysDiffFromToday } from '../utils/momentDays.js'
 import EmptyState from '../components/EmptyState.vue'
-import { roleCheckboxActivate } from '../utils/roleButtonKey.js' // [A8] Space+Enter checkbox activation
+import { roleCheckboxActivate, roleButtonActivate } from '../utils/roleButtonKey.js' // [A8/D18-DOM3] Space+Enter activation
 
 // Monday-first weekday keys (labels via statsP.HabitView.wd1..wd7)
 const WD_KEYS = ['wd1', 'wd2', 'wd3', 'wd4', 'wd5', 'wd6', 'wd7']
@@ -217,6 +217,11 @@ export default {
       // [maint-0924 A12] creation feedback (was silent)
       this.$message.success(this.$t('statsB.HabitView.addedToast', { n }))
       this.newHabit = ''
+    },
+    /* [D18-DOM3] rename button: Space joins Enter (ARIA button pattern); the tip also ships as
+       aria-label so it is announced instead of being hover-only via the native title */
+    onRenameKey (h, e) {
+      roleButtonActivate(function () { this.startRename(h) }).call(this, e)
     },
     startRename (h) { this.editingId = h.id; this.editName = h.name },
     // [component-r5] Esc restores the original name and leaves edit mode (blur-save semantics kept; cancel channel added)

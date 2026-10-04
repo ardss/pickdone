@@ -179,9 +179,9 @@ test('TodoBoxView: dropdown triggers are focusable, advertise listbox state, and
   // the TS cast lives in the tbTriggerKey method (structure guard rejects `as` in templates)
   assert.match(src, /tbTriggerKey \(e\) { \(e\.currentTarget as HTMLElement\)\.click\(\) }/)
   assert.ok(!/class="dd-menu">\s*<li[^>]*@click="setSort\(m\.value\)"[^>]*>\{\{ m\.label \}\}<\/li>\s*<\/ul>\s*<template #reference><span class="dropdown-select__label">{{/.test(src.replace(/\n\s+/g, ' ')), 'sort li lacks keyboard') // sanity regex
-  assert.match(src, /@keydown\.enter\.prevent="setSort\(m\.value\)"/)
-  assert.match(src, /@keydown\.enter\.prevent="setOrder\(o\.value\)"/)
-  assert.match(src, /@keydown\.enter\.prevent="setCat\(c\.categoryId\)"/)
+  assert.match(src, /@keydown=.onSortKey./) // D18: Space+Enter via roleButtonActivate (options select on Space too)
+  assert.match(src, /@keydown=.onOrderKey./)
+  assert.match(src, /@keydown=.onCatKey./)
 })
 
 test('SideNav: category rows advertise double-click rename via title', () => {

@@ -24,8 +24,8 @@
       <!-- Only the inner span is clickable; no row-level cursor (a cursor here advertised a dead click area) -->
       <div class="tb-row tb-row--harvest" v-if="!slim" style="display:flex;align-items:center;gap:8px">
         <span role="button" tabindex="0" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px"
-              :title="$t('statsE.TomatoBar.viewRecordsBtn')" :aria-label="$t('statsE.TomatoBar.viewRecordsBtn')"
-              @click="showRecordList" @keydown.enter.prevent="showRecordList">
+              :title="$t('statsE.TomatoBar.viewRecordsBtn')" :aria-label="$t('statsE.TomatoBar.viewRecordsBtn')" aria-haspopup="dialog"
+              @click="showRecordList" @keydown="onRecordsKey">
           <app-icon name="list" :size="12" style="opacity:.6"/>
           <span>{{ $t('statsE.TomatoBar.todayHarvestPrefix') }}<b :style="{color: targetReached ? 'var(--tt-reached)' : 'var(--tt-open)'}" :title="$t('statsH.TomatoBar.harvestTip', { d: todayDone, n: todayTarget })">{{todayDone}}/{{todayTarget}}</b></span>
         </span>
@@ -61,6 +61,7 @@ import {dayjs, FMT } from '../utils/core.js'
 import { formatMMSS } from '../utils/tomatoShared.js'
 import { remainingSecOfState } from '../store/tomato.js'
 import store from '../store/index.js'
+import { roleButtonActivate } from '../utils/roleButtonKey.js' // [D18-DOM3] Space+Enter button activation
 
 // The noise list/files/prefix have been consolidated into utils/mediaRegistry.js (single source of truth); only the "labelKey tail segment" is adapted here
 
@@ -201,6 +202,8 @@ export default {
     cancelAttach () { store.dispatch('tomato/attach', null) },
     openPanel () { store.commit('ui/toggleTomatoPanel', true) },
     // Following the common showTomatoRecordList pattern: open the modal then fetch data; with no records, show a message instead of the modal
+    /* [D18-DOM3] records button: Space joins Enter (ARIA button pattern) */
+    onRecordsKey: roleButtonActivate(function () { this.showRecordList() }),
     showRecordList () {
       if (!(this.s.tomatoRecordList || []).length) { this.$message.info(this.$t('statsE.TomatoBar.noHarvestMsg')); return }
       store.commit('ui/toggleTomatoFocusRecord', true)

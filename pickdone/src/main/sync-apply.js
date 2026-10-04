@@ -168,41 +168,9 @@ function clampSkew (row) {
   return out
 }
 
-/** Content key for conflict-copy dedup: the losing payload modulo bookkeeping (taskId/
- *  updateTime/tombstone markers) and the per-device userId stamp. Two copies of the same
- *  base row with equal keys carry the same user-visible lost content. */
-function conflictCopyContentKey (data) {
-  const rest = { ...data }
-  delete rest.taskId
-  delete rest.userId
-  delete rest.updateTime
-  delete rest.deletedAt
-  delete rest.delete
-  return mergeCore.contentFingerprint(rest)
-}
-
-/** Idempotent copy materialization (loop fix 2026-09-18): true when the recycle bin already
- *  holds a `-conflict-` copy of `baseId` with the same content key — minting another would
- *  grow the bin by one copy per round for as long as the (now normalized) row keeps bouncing. */
-function hasEquivalentConflictCopy (state, baseId, loserData) {
-  try {
-    const prefix = `${baseId}-conflict-`
-    const key = conflictCopyContentKey(loserData)
-    for (const t of state.db.call('getAll', { deleted: null }) || []) {
-      const id = String(t.taskId || '')
-      if (id.startsWith(prefix) && conflictCopyContentKey(t) === key) return true
-    }
-    // Batch-safety (2026-09-28 3-machine drill): a copy minted earlier in THIS apply batch is
-    // still sitting in pendingWrites (commitSyncBatch defers the flush), invisible to the
-    // getAll scan above — a second conflict on the same base row in the same round then minted
-    // a duplicate recycle-bin copy. Scan the pending buffer with the same fingerprint.
-    for (const t of state.pendingWrites.todos || []) {
-      const id = String(t.taskId || '')
-      if (id.startsWith(prefix) && conflictCopyContentKey(t) === key) return true
-    }
-  } catch (e) { log.warn('[LanSync] conflict-copy dedup scan failed:', e.message) }
-  return false
-}
+/** Content key for conflict-copy dedup + the dedup scan both live in sync-apply-content.js
+ *  (D18 structure-size ratchet move; sync-apply.js re-exports them — tests import from here). */
+const { hasEquivalentConflictCopy } = require('./sync-apply-content')
 
 /**
  * P1-5: persist one losing meta value under a dated backup key and prune older backups for the
@@ -404,7 +372,13 @@ function applyRowInner (state, incoming) {
     if (baseId.includes('-conflict-')) {
       log.warn('[LanSync] conflict on copy row', baseId, '— dropped (copies are terminal)')
     } else if (entity === 'todo' && conflictCopy.data) {
-      if (hasEquivalentConflictCopy(state, baseId, conflictCopy.data)) {
+      // D18: null = dedup scan failed (indeterminate) — skip minting THIS round (the losing
+      // edit stays pending and re-arrives with the next push) rather than risk an unbounded
+      // per-round recycle-bin growth on a persistent getAll failure.
+      const equiv = hasEquivalentConflictCopy(state, baseId, conflictCopy.data)
+      if (equiv == null) {
+        log.warn('[LanSync] conflict on', entity, baseId, '— dedup scan failed, copy minting skipped this round (conflict stays pending)')
+      } else if (equiv) {
         log.warn('[LanSync] conflict on', entity, baseId, '— equivalent copy already in recycle bin, not duplicating')
       } else {
         // MS-collision fix (2026-09-26): same-counter suffix as writeMetaConflictBackup — two
@@ -762,8 +736,7 @@ function flushPendingWrites (state) {
       // can raise a Device Center syncEvent instead of failing silently.
       const entry = quarantineFlushRows(state, op, list, e)
       if (entry) quarantined.push(entry)
-      else ok = false // parking failed: log-only drop, fail closed so the segment is not acked
-      return
+      else { ok = false; return false } // D18: parking failed — caller RETAINS the buffer segment
     }
     // D13 finding 3 (per-row rejection quarantine): the bulk ops no longer drop rows silently —
     // settingsRowPutMany / planAddMany / tomatoAppendMany surface their skipped rows as a
@@ -779,12 +752,17 @@ function flushPendingWrites (state) {
       const err = new Error('per-row rejection: ' + rejected.map(r => (r && r.reason) || 'unknown').join('; ').slice(0, 300))
       const entry = quarantineFlushRows(state, op, rejected.map((r, i) => ({ ...list[r && r.index != null ? r.index : i], __rejectReason: (r && r.reason) || 'unknown' })), err)
       if (entry) quarantined.push(entry)
-      else ok = false // parking failed: log-only drop, fail closed so the segment is not acked
+      else { ok = false; return false } // D18: parking failed — caller RETAINS the buffer segment
     }
+    return true
   }
   for (const r of flushRoutes) {
-    flushOne(buf[r.buf], r.op)
-    buf[r.buf] = []
+    // D18 (2026-10-02): the buffer segment used to clear UNCONDITIONALLY — when BOTH the bulk
+    // write AND quarantine parking failed, the rows were silently destroyed (silent row loss
+    // behind a flushFailed ack). Retain the segment for the next flush attempt instead; the
+    // throw path already logged loudly, so keep one explicit retain trace here.
+    if (flushOne(buf[r.buf], r.op) !== false) buf[r.buf] = []
+    else log.error(`[LanSync] flush ${r.op}: quarantine parking failed — ${buf[r.buf].length} buffered rows RETAINED for retry (silent drop avoided)`)
   }
   // Coalesced remote-announce fan-out (P2 2026-09-20): one emit per committed ingest pass
   // instead of one per announce row. Runs even when a bulk flush failed above — the meta rows
@@ -861,6 +839,7 @@ module.exports = {
   META_CONFLICT_BACKUP_CAP,
   compareMetaBackupKeys, // D17: exported for unit tests (prune age order)
   parseMetaBackupKeySuffix,
+  hasEquivalentConflictCopy, // D18: exported for unit tests (scan-failure = indeterminate)
   // 2026-09-26 poison-row quarantine: where a failed flush parks its dropped rows.
   META_FLUSH_QUARANTINE_PREFIX,
   // Exported (2026-09-19): lan-sync-bootstrap destructures this for allRows()/hydration skips —

@@ -90,8 +90,9 @@ test('R5: an all-null commit does not close the editor while rows are still bein
 
 test('R7: gear button carries an accessible label, not just a hover title', () => {
   assert.match(GROUP, /:aria-label="\$t\('statsE\.TodoGroupBlock\.groupSettingsAria'\)"/)
-  assert.match(EN_E, /"groupSettingsAria": "Open this group's view settings"/)
-  assert.match(ZH_E, /"groupSettingsAria": "打开本组视图设置"/)
+  // [D18-DOM3] copy made honest: the gear opens the GLOBAL settings modal, so the label no longer claims a group-scoped surface
+  assert.match(EN_E, /"groupSettingsAria": "Open view settings"/)
+  assert.match(ZH_E, /"groupSettingsAria": "打开视图设置"/)
 })
 
 test('R8: header-append buttons are revealed on focus-within, matching hover', () => {

@@ -30,12 +30,10 @@ const updater = require('./updater')
 const appAudit = require('./audit')
 
 app.setName('pickdone') // standalone userData directory, does not affect the project baseline
-// Windows toast notifications resolve the app name/icon via the AppUserModelID; without this they show "electron.app".
-// Must match package.json build.appId — the electron-builder Start Menu shortcut carries the same AUMID.
+// Windows toast notifications resolve the app name/icon via the AppUserModelID; without this they show "electron.app". // Must match package.json build.appId — the electron-builder Start Menu shortcut carries the same AUMID.
 app.setAppUserModelId('com.pickdone.app')
 
-// EPIPE tolerance: in dev, when the parent shell exits it takes the inherited stdout/stderr pipes with it; after that, any write from console.log /
-// electron-log's console transport raises an uncaught EPIPE exception → the main process pops an error dialog (verified P0 on 2026-08-30).
+// EPIPE tolerance: in dev, when the parent shell exits it takes the inherited stdout/stderr pipes with it; after that, any write from console.log / // electron-log's console transport raises an uncaught EPIPE exception → the main process pops an error dialog (verified P0 on 2026-08-30).
 // Node's default behavior for failed pipe writes is to throw; swallow it here: failing to write logs must not drag down the whole app.
 for (const stream of [process.stdout, process.stderr]) {
   if (stream && typeof stream.on === 'function') stream.on('error', () => {})
@@ -43,19 +41,16 @@ for (const stream of [process.stdout, process.stderr]) {
 process.on('uncaughtException', (e) => {
   // Fully tolerate pipe/stream-destroyed errors (a broken log stream does not affect functionality); rethrow everything else through the default dialog without masking real bugs
   if (e && (e.code === 'EPIPE' || e.code === 'ERR_STREAM_DESTROYED' || e.code === 'ERR_STREAM_WRITE_AFTER_END')) return
-  // P2 2026-09-17: leave a breadcrumb before the rethrow — the default dialog can be dismissed/skipped
-  // and the crash then leaves no trace in the log file for post-mortem diagnosis
+  // P2 2026-09-17: leave a breadcrumb before the rethrow — the default dialog can be dismissed/skipped // and the crash then leaves no trace in the log file for post-mortem diagnosis
   try { log.error('[uncaughtException]', e && e.stack || e) } catch {}
   throw e
 })
-// Promise 侧兜底:只记日志不退出(与 uncaughtException 的 rethrow 不同——rejection 多为单点 IO 失败,
-// 静默吞掉比整窗崩溃更符合本地优先应用的可用性;但必须留痕,否则不可诊断)(2026-09-05 终审 P2)
+// Promise 侧兜底:只记日志不退出(与 uncaughtException 的 rethrow 不同——rejection 多为单点 IO 失败, // 静默吞掉比整窗崩溃更符合本地优先应用的可用性;但必须留痕,否则不可诊断)(2026-09-05 终审 P2)
 process.on('unhandledRejection', (reason) => {
   try { log.warn('[unhandledRejection]', reason && (reason.stack || reason.message || reason)) } catch {}
 })
 
-// Disable HTTP disk cache for renderer ESM modules (app:// already sends no-cache but Chromium still caches,
-// which once made revised JS ineffective — the root cause of both blank-screen and stale-logic incidents); reading local resources directly has no performance cost
+// Disable HTTP disk cache for renderer ESM modules (app:// already sends no-cache but Chromium still caches, // which once made revised JS ineffective — the root cause of both blank-screen and stale-logic incidents); reading local resources directly has no performance cost
 app.commandLine.appendSwitch('disable-http-cache')
 // Test isolation: TODO_USER_DATA_DIR gives test instances a separate data directory coexisting with the dev instance (SQLite WAL multi-process safety is backstopped by external-write detection)
 if (process.env.TODO_USER_DATA_DIR) app.setPath('userData', process.env.TODO_USER_DATA_DIR)
@@ -74,8 +69,7 @@ const { readConfig, writeConfig } = require('./config-store')
 const windowRef = require('./window-ref')
 
 function showMainOrLock () {
-  // --no-focus: e2e/smoke instances never steal focus or cover the user's screen —
-  // parked on the secondary display (or off-screen when none) via window-ref.parkForTest
+  // --no-focus: e2e/smoke instances never steal focus or cover the user's screen — // parked on the secondary display (or off-screen when none) via window-ref.parkForTest
   const inactive = process.argv.includes('--no-focus')
   if (isLocked()) { securityLock.focusLock(); return }
   const w = getMainWindow()
@@ -105,8 +99,7 @@ const windowManager = createWindowManager({
   tomatoTaskbar, updater, applyShortcuts, shortcuts, scheduler,
   isLocked, lockAppNow, showMainOrLock,
   isQuitting: () => quitting, getState: () => state, getTray: () => tray,
-  // D10 (2026-09-27): renderer-death hooks — clear the stale tomato countdown lease and let the
-  // crash counter health window live in windows.js (see crashRelaunchDecision in handlers/shared).
+  // D10 (2026-09-27): renderer-death hooks — clear the stale tomato countdown lease and let the // crash counter health window live in windows.js (see crashRelaunchDecision in handlers/shared).
   onRendererGone: clearTomatoLiveText
 })
 const createMainWindow = windowManager.createMainWindow
@@ -139,18 +132,11 @@ function broadcastWhiteNoiseUpdated () {
 
 /* ---------------- Tiered recovery from DB corruption (P0 data-loss prevention) — implementation extracted to dbRecovery.cjs (independently testable) ---------------- */
 function attemptDbRecovery (ud, retryInit) { return dbRecovery.attemptDbRecovery(ud, retryInit) }
-// Phase-2 command bus: the critical-backup restore pipeline commits through the bus
-// (todo.putMany / category.put / tomato.appendMany) like every other write path. preserveStamp:
-// restore replays the backup's own row ages verbatim — re-stamping here would skew LWW against
-// peers. The 'undo-barrier'/'ls-mirror' subscribers only exist after registerIpc, so the
-// startup recovery path commits with no fanout, exactly as before.
+// Phase-2 command bus: the critical-backup restore pipeline commits through the bus // (todo.putMany / category.put / tomato.appendMany) like every other write path. preserveStamp: // restore replays the backup's own row ages verbatim — re-stamping here would skew LWW against
+// peers. The 'undo-barrier'/'ls-mirror' subscribers only exist after registerIpc, so the // startup recovery path commits with no fanout, exactly as before.
 const busCommit = (entity, verb, payload) => require('./command-bus').commit(entity, verb, payload, { preserveStamp: true })
-// F11 (dw wave6): startup recovery now re-imports the SAME segment set the UI restore accepts —
-// filter.putMany / plan.putMany / meta.put ride the same command-bus doors as the renderer, all
-// idempotent by id (dbRecovery skips rows without id; the db ops upsert ON CONFLICT).
-// Sync-3 (D12): the wrapper returns the per-segment REPORT (tasks / imported / failedSegments /
-// unconsumedSegments / proved) — the plain-bak cleanup gate must know whether EVERY segment of
-// the snapshot was consumed, not just whether todoState imported rows.
+// F11 (dw wave6): startup recovery now re-imports the SAME segment set the UI restore accepts — // filter.putMany / plan.putMany / meta.put ride the same command-bus doors as the renderer, all // idempotent by id (dbRecovery skips rows without id; the db ops upsert ON CONFLICT).
+// Sync-3 (D12): the wrapper returns the per-segment REPORT (tasks / imported / failedSegments / // unconsumedSegments / proved) — the plain-bak cleanup gate must know whether EVERY segment of // the snapshot was consumed, not just whether todoState imported rows.
 function restoreFromCriticalBackup (ud) {
   const r = dbRecovery.restoreSegmentsFromCriticalBackup(ud,
     list => busCommit('todo', 'putMany', list),
@@ -160,12 +146,10 @@ function restoreFromCriticalBackup (ud) {
       filterPutMany: rows => busCommit('filter', 'putMany', rows),
       planPutMany: chips => busCommit('plan', 'putMany', chips),
       habitsPut: pair => busCommit('meta', 'put', pair),
-      // metaState (2026-09-26, meta-keys-omitted): repeat rules / tomato estimates / project
-      // deadline+status+flag+milestones live only in the meta table — re-put them like habits.
+      // metaState (2026-09-26, meta-keys-omitted): repeat rules / tomato estimates / project // deadline+status+flag+milestones live only in the meta table — re-put them like habits.
       metaPut: pair => busCommit('meta', 'put', pair)
     })
-  // [Sync-13 reader, restore-degraded-segments-marker-never-consumed] the only main-process caller
-  // logs the marker: a degraded dump's missing segments must be visible in the recovery trail.
+  // [Sync-13 reader, restore-degraded-segments-marker-never-consumed] the only main-process caller // logs the marker: a degraded dump's missing segments must be visible in the recovery trail.
   if (r && Array.isArray(r.degradedSegments) && r.degradedSegments.length) {
     log.warn('[Init] critical backup was collected degraded — segments missing from this dump:', r.degradedSegments.join(', '))
   }
@@ -192,9 +176,7 @@ const attachments = require('./attachments')
 const { attachDir } = attachments
 
 
-// TQ-1 (2026-10-03): durable running-session ownership — created in registerIpc (db handle is
-// module-initialized before whenReady). From here on the tray-text lease below is DISPLAY-ONLY:
-// quit guards and startup reconciliation consult the durable 'tomatoRunningSession' meta row.
+// TQ-1 (2026-10-03): durable running-session ownership — created in registerIpc (db handle is // module-initialized before whenReady). From here on the tray-text lease below is DISPLAY-ONLY: // quit guards and startup reconciliation consult the durable 'tomatoRunningSession' meta row.
 let tomatoSession = null
 
 /* ================= Tray ================= */
@@ -209,9 +191,7 @@ function createTray () {
 }
 // Tray carries pomodoro state: the tooltip is composed solely by the main process (single writer; shows just the app name when text is empty)
 let tomatoLiveText = '' // non-empty = a focus/rest pomodoro is live (per-second push from the renderer; the main process's only running-state signal)
-// D10 (2026-09-27): wired into windows.js's render-process-gone hook — a crashed renderer clears
-// its own lease immediately (TQ-1: the quit-confirm GATE reads the durable session row, not this
-// display-only lease, so no timestamp reader is needed).
+// D10 (2026-09-27): wired into windows.js's render-process-gone hook — a crashed renderer clears // its own lease immediately (TQ-1: the quit-confirm GATE reads the durable session row, not this // display-only lease, so no timestamp reader is needed).
 function clearTomatoLiveText () { tomatoLiveText = '' }
 function updateTomatoTray (text) {
   const t = String(text || '').trim()
@@ -221,9 +201,7 @@ function updateTomatoTray (text) {
 
 /* ================= Tray quit with focus-in-progress confirmation ================= */
 async function quitFromTray () {
-  // D10 (2026-09-27): re-entrancy guard — a second tray-quit click while the confirm dialog is
-  // open used to enter again (two dialogs, two quit chains, quitByUser race). Rejected before the
-  // first await.
+  // D10 (2026-09-27): re-entrancy guard — a second tray-quit click while the confirm dialog is // open used to enter again (two dialogs, two quit chains, quitByUser race). Rejected before the // first await.
   if (!quitFromTrayGuard.enter()) return
   try {
     return await quitFromTrayInner()
@@ -231,14 +209,9 @@ async function quitFromTray () {
 }
 async function quitFromTrayInner () {
   state.quitByUser = true
-  // P2 2026-09-23: a running pomodoro used to die silently on tray-quit — the ledger only ever
-  // records on completeFocus/giveUp, so the in-progress session vanished with no confirm and no
-  // record. Ask before tearing everything down (the tray stays alive until confirmed).
-  // TQ-1 (2026-10-03): the confirm gate now consults the DURABLE 'tomatoRunningSession' meta row
-  // (written by every renderer FSM transition, main or float window), not the tray-text lease.
-  // The lease (tomatoLiveText) was a display artifact: a throttled/crashed renderer let a live
-  // focus quit with no confirm, and a float-originated focus never refreshed the lease at all
-  // (update-tomato-taskbar is main-window-gated). The lease remains for the tooltip detail text
+  // P2 2026-09-23: a running pomodoro used to die silently on tray-quit — the ledger only ever // records on completeFocus/giveUp, so the in-progress session vanished with no confirm and no // record. Ask before tearing everything down (the tray stays alive until confirmed).
+  // TQ-1 (2026-10-03): the confirm gate now consults the DURABLE 'tomatoRunningSession' meta row // (written by every renderer FSM transition, main or float window), not the tray-text lease. // The lease (tomatoLiveText) was a display artifact: a throttled/crashed renderer let a live
+  // focus quit with no confirm, and a float-originated focus never refreshed the lease at all // (update-tomato-taskbar is main-window-gated). The lease remains for the tooltip detail text
   // only; isLiveTextFresh stays exported for its lease-semantics unit tests.
   const sessionLive = tomatoSession ? tomatoSession.hasRunningSession() : false
   if (sessionLive) {
@@ -353,10 +326,35 @@ if (!app.requestSingleInstanceLock(...__multiLockArgs)) {
     dbRecovery.sweepPendingDeletes(app.getPath('userData'), log)
     try {
       dbm.init(app.getPath('userData'))
-    } catch (e) {
-      log.error('[Init] DB 初始化失败：', e)
+    } catch (e0) {
+      log.error('[Init] DB 初始化失败：', e0)
+      // D18 (2026-10-02): a transiently locked db.key (AV/indexer EPERM/EBUSY) fails init with
+      // code DB_KEY_TRANSIENT_UNREADABLE while the DATABASE itself is healthy. Never enter the
+      // recovery flow (rename/reset) for it: wait the lock out with a bounded sync backoff and
+      // retry init once; only a lock persisting past that surfaces the dedicated dialog below
+      // (no recovery rename, no reset-data button — resetting would destroy a healthy db).
+      let e = e0
+      if (e0 && e0.code === 'DB_KEY_TRANSIENT_UNREADABLE') {
+        const keySleep = require('./db-key-read').sleepSync
+        keySleep(500); keySleep(500)
+        try { dbm.init(app.getPath('userData')); e = null } catch (e2) { e = e2 }
+        if (!e) log.info('[Init] db.key lock cleared — init succeeded on retry (no recovery performed)')
+      }
+      if (e) {
       const { dialog, shell } = require('electron')
       const ud = app.getPath('userData')
+      // D18: a db.key lock persisting past the retry is still NOT corruption — surface a
+      // dedicated dialog WITHOUT the reset-data button instead of the recovery flow.
+      if (e.code === 'DB_KEY_TRANSIENT_UNREADABLE') {
+        dialog.showMessageBoxSync({
+          type: 'error', title: i18nM.mt('appName'), message: i18nM.mt('dbFailMessage'),
+          detail: e.message + ' — db.key is held by another process (antivirus/sync tool); the database itself is intact. Close the locking program and relaunch the app.',
+          buttons: [i18nM.mt('btnOpenDataDirBackup'), i18nM.mt('btnQuit')], defaultId: 0, cancelId: 1
+        })
+        shell.openPath(ud)
+        app.quit()
+        return
+      }
       // P2 2026-09-19: pass the retry hook — attemptDbRecovery now verifies the SQLite header magic
       // first and retries init once before renaming anything, so a healthy DB can no longer be
       // mislabeled .corrupt by a transient init failure (lock held / WAL race).
@@ -484,6 +482,7 @@ if (!app.requestSingleInstanceLock(...__multiLockArgs)) {
         relaunchClean()
       } else { app.quit() }
       return
+      } // if (e) — D18: the transient db.key retry path above skips this whole recovery block
     }
     // init 成功(加密库正常打开)=迁移自愈窗口已关闭:立刻删除 .plain-bak 明文残留,否则用户的
     // 全部任务/账本永远留一份明文拷贝在 userData,at-rest 加密被整体架空(2026-09-05 二轮深审 P1-1)

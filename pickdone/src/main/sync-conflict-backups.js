@@ -86,7 +86,12 @@ function parseBackup (raw) {
 function pruneBackups (call, originalKey) {
   try {
     const prefix = META_CONFLICT_BACKUP_PREFIX + originalKey + '.'
-    const keys = (call('listMetaKeys') || []).map(String).filter(k => k.startsWith(prefix)).sort()
+    // D18 (2026-10-02): the bare lexicographic .sort() ranked a same-millisecond base-36 seq
+    // rollover ('...y','z','10'...) BACKWARDS — '10' sorts below 'z', so the prune deleted the
+    // FRESHEST snapshot. D17 already root-fixed the identical bug in sync-apply.js
+    // (compareMetaBackupKeys parses the `<ts36>-<seq36>` suffix); reuse that comparator — no
+    // third copy of the ordering rule.
+    const keys = (call('listMetaKeys') || []).map(String).filter(k => k.startsWith(prefix)).sort(require('./sync-apply').compareMetaBackupKeys)
     for (const old of keys.slice(0, Math.max(0, keys.length - 20))) {
       try { call('deleteMeta', old) } catch { /* prune is best-effort */ }
     }
