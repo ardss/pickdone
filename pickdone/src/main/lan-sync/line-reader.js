@@ -47,6 +47,14 @@ class LineReader {
     this.socket = socket
     this.onMessage = onMessage
     this.onError = onError
+    // D17 (2026-10-02): `buffer += chunk` was O(n²) across many chunks of one large line
+    // (authenticated rounds push ~1MB segments-chunks in many small socket reads — each += rescan
+    // copied the whole accumulated string). Chunks now accumulate in an array and are joined ONCE
+    // when the arriving chunk contains a newline. `bufferBytes` stays the single byte authority
+    // (chunk bytes in, consumed-line bytes out), so the aggregate-budget accounting below is
+    // unchanged. `buffer` is the parsed-out remainder cache; it lags the fast path and is
+    // reconciled at the next join.
+    this._chunks = []
     // C4: join the per-process aggregate buffer budget (see LINE_BUFFER_BUDGET_BYTES).
     // `_accountedBytes` mirrors how much of this reader's buffer is currently counted in the
     // process-wide total, so every early-return path (over-limit destroy mid-feed included)
@@ -77,10 +85,30 @@ class LineReader {
     this.socket.destroy()
   }
 
+  /** Post-feed limit gates: per-reader line cap, then the C4 aggregate budget. */
+  #enforceLimits() {
+    if (this.bufferBytes > this.limit) { this.#account(); this.#overLimit(); return }
+    // C4: aggregate-budget gate — when the process-wide buffered total crosses the cap, the
+    // offending reader's socket is closed (its bytes are released on the 'close' handler).
+    this.#account()
+    if (lineBufferState.total > lineBufferState.cap) {
+      this.onError(new ProtocolError(`aggregate line-buffer budget exceeded (${lineBufferState.total} > ${lineBufferState.cap} bytes)`))
+      this.socket.destroy()
+    }
+  }
+
   #feed(chunk) {
-    const chunkBytes = Buffer.byteLength(chunk, 'utf8')
-    this.bufferBytes += chunkBytes
-    this.buffer += chunk
+    this.bufferBytes += Buffer.byteLength(chunk, 'utf8')
+    this._chunks.push(chunk)
+    if (!chunk.includes('\n')) {
+      // D17 fast path: no new line boundary — keep the chunk and defer the join (O(1) amortized
+      // instead of re-copying the whole accumulated line per chunk).
+      this.#enforceLimits()
+      return
+    }
+    if (this.buffer) this._chunks.unshift(this.buffer) // leftover of previous feeds precedes the new chunks
+    this.buffer = this._chunks.join('')
+    this._chunks = []
     let idx
     while ((idx = this.buffer.indexOf('\n')) !== -1) {
       const line = this.buffer.slice(0, idx)
@@ -101,14 +129,7 @@ class LineReader {
         return
       }
     }
-    if (this.bufferBytes > this.limit) { this.#overLimit(); return }
-    // C4: aggregate-budget gate — when the process-wide buffered total crosses the cap, the
-    // offending reader's socket is closed (its bytes are released on the 'close' handler).
-    this.#account()
-    if (lineBufferState.total > lineBufferState.cap) {
-      this.onError(new ProtocolError(`aggregate line-buffer budget exceeded (${lineBufferState.total} > ${lineBufferState.cap} bytes)`))
-      this.socket.destroy()
-    }
+    this.#enforceLimits()
   }
 
 }

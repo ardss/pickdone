@@ -23,18 +23,7 @@ export function deleteWithUndo (vm, store, task) {
     return Promise.resolve(false)
   }
   return store.dispatch('todo/deleteTodo', task).then(() => {
-    const undo = () => {
-      const cur = store.state.todo.recycleList.find(t => t.taskId === task.taskId)
-      if (!cur) return
-      // [undo-delete-bypasses-restoreFromRecycle fix] the undo used to dispatch a bare
-      // updateTodoFields {delete:false,...}, skipping restoreFromRecycle's planChips snapshot
-      // restore (delete→undo lost the schedule chips) and the B5 dangling-repeatId guard.
-      // Every restore path goes through the single todo/restoreFromRecycle entry. Only a REAL
-      // repeatId feeds the B5 guard — the legacy 'null' string sentinel must not trigger a
-      // pointless repeatRule meta lookup on every undo.
-      store.dispatch('todo/restoreFromRecycle', { taskId: task.taskId, repeatId: isRepeatTask(cur) ? cur.repeatId : undefined })
-      vm.$message.success(tt('statsJ.Confirm.restored'))
-    }
+    const undo = () => restoreAndToast(vm, store, task)
     // Must use the component instance $message (EP 2.x): the old window.ELEMENT.Message is the element-ui (Vue2) global,
     // which doesn't exist in this stack — it once caused the undo toast to silently never appear on all delete paths
     if (vm.$message && window.Vue) {
@@ -53,6 +42,25 @@ export function deleteWithUndo (vm, store, task) {
     } catch { /* toast must never become the new failure */ }
     return false
   })
+}
+
+/**
+ * Shared undo-link step for deleteWithUndo: dispatch the single-path todo/restoreFromRecycle
+ * and converge the toast on reality. [P2 fix] the old inline undo fired the dispatch
+ * fire-and-forget and showed the "Restored" success toast unconditionally — a failed restore
+ * (IPC/db error) told the user the task was back while it was still in the bin. Now: success
+ * toast only after the dispatch resolves; a rejection shows the honest-failure toast (same
+ * shape as moveFailToast/observeMove above). Only a REAL repeatId feeds the B5 guard — the
+ * legacy 'null' string sentinel must not trigger a pointless repeatRule meta lookup on every undo.
+ */
+export function restoreAndToast (vm, store, task) {
+  const cur = store.state.todo.recycleList.find(t => t.taskId === task.taskId)
+  if (!cur) return
+  store.dispatch('todo/restoreFromRecycle', { taskId: task.taskId, repeatId: isRepeatTask(cur) ? cur.repeatId : undefined })
+    .then(
+      () => { if (vm && vm.$message) vm.$message.success(tt('statsJ.Confirm.restored')) },
+      e => moveFailToast(vm, e)
+    )
 }
 
 /** Unified undo exit for irreversible removals inside the edit panel (tags/subtasks/reminder rows/attachments):

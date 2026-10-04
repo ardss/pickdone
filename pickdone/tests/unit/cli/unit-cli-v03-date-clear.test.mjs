@@ -1,7 +1,7 @@
 /** CLI v0.3 — `edit --date none|clear` moves a dated task back to the todo box (replaces the old
  *  create-new + delete-old workaround). Parity source for the cleared field shape was READ, not guessed:
  *  renderer EditPanel.setDate('none') → applyDate(0) → queueSave({ todoTime: 0, reminderTime: 0,
- *  reminderExtra: kept }) → store/todo.js updateTodoFields (derived dayStart = 0) + rowChipSync
+ *  reminderExtra: [] }) → store/todo.js updateTodoFields (derived dayStart = 0) + rowChipSync
  *  date-removed branch (snapshotForDelete → meta planChipsSnapshot:<id>, then clearTaskChips = planDeleteTask).
  *  Isolated temp DB via TODO_DB_DIR, never touches real data; CLI-surface checks spawn cli/pickdone.js
  *  with the same TODO_DB_DIR (cli-smoke.js / unit-cli-v02 pattern).
@@ -45,7 +45,7 @@ function seed (over = {}) {
 const chipsOf = taskId => db.call('planAll', []).filter(r => r.taskId === taskId)
 const tomorrow930 = () => +dayjs().add(1, 'day').hour(9).minute(30).second(0).millisecond(0)
 
-test('clearTodoDate writes the renderer\'s exact cleared shape (todoTime=0, dayStart=0, main reminder drops, extras kept) and the task lands in list --no-date', () => {
+test('clearTodoDate writes the renderer\'s exact cleared shape (todoTime=0, dayStart=0, main reminder drops, offsets+extras die) and the task lands in list --no-date', () => {
   const extraTs = +dayjs().add(2, 'day').hour(10).minute(0).second(0).millisecond(0)
   const noBefore = lib.overview().noDate
   const t = seed({
@@ -62,7 +62,7 @@ test('clearTodoDate writes the renderer\'s exact cleared shape (todoTime=0, dayS
   assert.equal(row.todoTime, 0)
   assert.equal(row.dayStart, 0, 'dayStart (today grouping) must be cleared consistently with todoTime')
   assert.equal(row.reminderTime, 0, 'the App zeroes the main reminder along with its date')
-  assert.deepEqual(row.reminderExtra, [extraTs], 'extra reminders are kept as-is, same as the App')
+  assert.deepEqual(row.reminderExtra, [], 'D17 re-anchor: extras die with the date (EditPanel applyDate(0) offsetsCleared)')
   assert.equal(row.status, 'update', 'edit semantics: status=update like the renderer\'s updateTodoFields')
   assert.ok(row.updateTime >= t.updateTime, 'updateTime must be bumped')
   // todo box visibility: noDate listing + overview counter

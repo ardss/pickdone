@@ -301,7 +301,8 @@ test('[11] purgeIds removes purged ids from projectMilestones taskIds; an unmet 
     commit: (n, p) => { committed.push([n, p]); if (todo.mutations[n]) todo.mutations[n](st, p) },
     dispatch: () => {},
     state: st,
-    rootState: { tomato: {}, settings: { recycleBinAutoDeleteDays: 30 } }
+    // D17: purgeIds scrubs across ALL live categories (rootState.category.list), CLI parity
+    rootState: { tomato: {}, settings: { recycleBinAutoDeleteDays: 30 }, category: { list: [{ categoryId: 7, delete: false }, { categoryId: 9, delete: false }] } }
   }
   const fakeThis = { state: { todo: st } }
   await todo.actions.purgeIds.call(fakeThis, ctx, ['purgeme'])

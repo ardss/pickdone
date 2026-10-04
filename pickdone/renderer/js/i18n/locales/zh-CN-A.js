@@ -214,7 +214,8 @@ export default {
     ChartCard: {
       empty: '暂无数据',
       upgrade: '开通高级账户',
-      notAdapted: ' 此图表未被适配'
+      notAdapted: ' 此图表未被适配',
+      openExternalFallback: '弹窗被拦截，请手动打开 {url}'
     },
     ChartConfigs: {
       range7d: '最近7天',

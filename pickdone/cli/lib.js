@@ -23,20 +23,13 @@ try {
 } catch (e) { /* ignore when electron-log is not installed */ }
 
 const dbm = require('../src/main/db.js')
-// Phase-2 command-bus write door (docs/refactor-command-bus.md): every CLI write goes through
-// the bus (manifest entity/verb) — op-keyed db writes from the CLI are gone. preserveStamp: the
-// CLI derives its own row ages exactly as before; the bus must not add fields the legacy calls
-// never sent (sync LWW unchanged). P2-1 (R5) contract precision: preserveStamp keeps PAST
-// stamps untouched, but an explicit stamp more than STAMP_CLAMP_MS into the future is still
-// clamped to now (shared forgery guard — see command-bus.stampPayload).
+// Phase-2 command-bus write door (docs/refactor-command-bus.md): every CLI write goes through the bus // (manifest entity/verb) — op-keyed db writes from the CLI are gone. preserveStamp keeps PAST stamps
+// untouched, but an explicit stamp more than STAMP_CLAMP_MS into the future is still clamped to now // (shared forgery guard — see command-bus.stampPayload).
 const bus = require('../src/main/command-bus')
-// open() first: several call sites used `open().call(op, …)` as their only DB touch — the bus
-// commit must keep guaranteeing an initialized handle in pure-CLI sessions.
+// open() first: several call sites used `open().call(op, …)` as their only DB touch — the bus // commit must keep guaranteeing an initialized handle in pure-CLI sessions.
 const commit = (entity, verb, payload) => { open(); ensureTomatoMigrated(); return bus.commit(entity, verb, payload, { preserveStamp: true }) }
 const core = require('../src/main/core/todo-core.js')
-// Round-3 P1: ownership guard for attachment filenames (single source with the App's purge path —
-// pure, electron-free; D3 2026-09-24 now required directly from its electron-free domain module
-// src/main/attachment-ownership.js instead of through handlers/shared.js + its electron-log require).
+// Round-3 P1: ownership guard for attachment filenames (single source with the App's purge path — // pure, electron-free; D3 2026-09-24 now required directly from its electron-free domain module // src/main/attachment-ownership.js instead of through handlers/shared.js + its electron-log require).
 const { ownsAttachmentFile } = require('../src/main/attachment-ownership.js')
 const audit = require('./audit.js')
 const nlDate = require('./nl-date.cjs')
@@ -46,8 +39,7 @@ const { nextSort, moveWithin } = require('../shared/sort-core.mjs') // P3-7 / F-
 const { localDayKey } = require('../src/main/fix-util.js') // P3-8: single source for the local YYYY-MM-DD key (same require the lib-attachments module already uses)
 
 let opened = false
-// P3-9 (dw wave): the userData directory has ONE source — src/main/user-dir.js (no third copy;
-// audit.js defaultDirResolver reads the same module). Env priority: TODO_DB_DIR > TODO_USER_DATA_DIR > platform default.
+// P3-9 (dw wave): the userData directory has ONE source — src/main/user-dir.js (no third copy; // audit.js defaultDirResolver reads the same module). Env priority: TODO_DB_DIR > TODO_USER_DATA_DIR > platform default.
 const { userDataDir, hasIsolationEnv } = require('../src/main/user-dir.js')
 
 /* ================= data-safety isolation gate (P0, single point) =================
@@ -85,8 +77,7 @@ function ensureTomatoMigrated () {
   if (tomatoMigrated) return
   tomatoMigrated = true
   try { bus.commit('tomato', 'migrateFromMeta', null, { preserveStamp: true }) } catch (e) {
-    // Fail-loud (d11 round 2): the old bare catch swallowed a corrupt meta blob into SILENCE —
-    // `tomato list` then printed an empty ledger and exited 0 (read-side side effect + fake success).
+    // Fail-loud (d11 round 2): the old bare catch swallowed a corrupt meta blob into SILENCE — // `tomato list` then printed an empty ledger and exited 0 (read-side side effect + fake success).
     console.error(`warning: tomato ledger migration failed (${e && e.message ? e.message : e}); tomato output may be incomplete — inspect the meta blob in ${userDataDir()}`)
   }
 }
@@ -102,10 +93,8 @@ class CliError extends Error {
 const { parseDate, dayStartOf, lunarOf, lunarAnnotate } = require('./lib-date.cjs')({ CliError, dayjs, nlDate })
 
 /* ================= Task resolution ================= */
-// F-B5 (dw wave 3): single keyword normalization — was 3 verbatim copies (resolveTask, resolveRepeatEntry,
-// lib-tasks.cjs resolveCategory; the last now receives it via the existing deps injection). NFKC aligns
-// the CLI with the renderer's search normalization (utils/search.js normalize('NFKC')) — full-width
-// input ('Ａ１') used to match in the App but not in the CLI. BEHAVIOR CHANGE (NFKC alignment), noted.
+// F-B5 (dw wave 3): single keyword normalization — was 3 verbatim copies (resolveTask, resolveRepeatEntry, // lib-tasks.cjs resolveCategory; the last now receives it via the existing deps injection). NFKC aligns
+// the CLI with the renderer's search normalization (utils/search.js normalize('NFKC')) — full-width // input ('Ａ１') used to match in the App but not in the CLI. BEHAVIOR CHANGE (NFKC alignment), noted.
 const normKey = v => String(v).normalize('NFKC').toLowerCase().replace(/[\s\u00A0\u3000\u200B\u2003]/g, '')
 function liveTasks () { return open().call('queryTodos', { deleted: 0, orderBy: 'scheduledDay ASC, sort ASC' }) }
 function recycleTasks () { return open().call('queryTodos', { deleted: 1, orderBy: 'updatedAt DESC' }) }
@@ -264,9 +253,11 @@ function addTodo ({ content, desc, date, reminder, category, difficulty, priorit
   const t = {
     complete: false, createTime: createdTs, delete: false,
     reminderTime: reminder ? parseDate(reminder) : 0,
-    estimate: 0, difficulty: difficulty != null ? Number(difficulty) : null,
+    estimate: 0, difficulty: difficulty != null ? Number(difficulty) : 0,
+    // App addTodo parity: NO priority⇔important derivation at create time — the quadrant coupling
+    // belongs to EDIT only (EditPanel fieldPatch); the App's addTodo defaults both to 0
     priority: priority != null ? Number(priority) : 0,
-    important: important != null ? Number(important) : (Number(priority) === 3 ? 1 : 0),
+    important: important != null ? Number(important) : 0,
     urgent: urgent != null ? Number(urgent) : 0,
     repeatId, subtasks: null, image: null, files: null,
     predecessors: (after && after.length) ? JSON.stringify(after) : null,
@@ -350,13 +341,13 @@ function patchTodo (input, patch, { action, note } = {}) {
  *  EditPanel.onRemindersClear). Schedule chips cannot survive without a
  *  day to live on: same snapshot→clear cascade as the App's rowChipSync date-removed branch
  *  (snapshotForDelete + clearTaskChips = snapshot to meta, then planDeleteTask) — the snapshot stays in
- *  meta so a later `restore` can still backfill. Already-undated task → no-op ({changed:false}, nothing
- *  written, no audit entry). */
+ *  meta so a later `restore` can still backfill. B13 exact shape (EditPanel.applyDate(0), offsetsCleared):
+ *  reminderTime drops to 0 and BOTH reminder arrays empty — offsets AND extras are anchored to the main
+ *  reminder and die with it. Already-undated task → no-op ({changed:false}, nothing written, no audit entry). */
 function clearTodoDate (input) {
   const t = resolveTask(input, liveTasks())
   if (!t.todoTime && !t.dayStart) return { task: t, changed: false }
-  const patch = { todoTime: 0, reminderOffsets: [] } // offsets die with the main reminder (B3/B13)
-  if (t.reminderTime) patch.reminderTime = 0 // same as the App: the main reminder cannot outlive its date
+  const patch = { todoTime: 0, reminderTime: 0, reminderOffsets: [], reminderExtra: [] } // reminders die with the date (B3/B13)
   const after = patchTodo(t.taskId, patch, { action: 'edit', note: 'date cleared → todo box' })
   chipsSnapshotForDelete(t.taskId)
   return { task: after, changed: true }
@@ -373,6 +364,11 @@ function toggleComplete (input, target, { withSubtasks, completedAt } = {}) {
   // isCompleteWithSubtasks gate (default on) — same gate as the renderer's toggleComplete (store/todo.js);
   // an explicit caller override (--no-sub-cascade) wins over the setting
   const cascade = withSubtasks != null ? !!withSubtasks : settingsDoc().isCompleteWithSubtasks !== false
+  if (target && t.complete) {
+    // Already-complete skip (review P2 2026-09-10, batch parity with lib-tags.cjs batchRun): a single
+    // `done` on a complete task used to rewrite completedAt and mint a duplicate audit entry.
+    return { completed: t, renewed: null, skipped: true }
+  }
   if (!target) {
     // Undo unchecks all subtasks too (symmetric with the complete cascade): without this, the UI's
     // subsCompleteTarget would instantly re-complete a parent whose subs are all checked (same as store/todo.js)
@@ -428,18 +424,12 @@ function toggleComplete (input, target, { withSubtasks, completedAt } = {}) {
       const existing = db.call('queryTodos', { deleted: 0, repeatId: rid, dayStartFrom: next.todoTime, dayStartTo: next.todoTime })
       if (Array.isArray(existing) && existing.length) {
         renewed = existing[0]
-      } else {
-        // F3 P2 (2026-09-21, D5 renderer parity — store/todo.js ensureNextRepeatInstance carries
-        // `estimate: t.estimate || 0` AND copies it into the per-task meta key, while the CLI twin
-        // hardcoded estimate:0): a renewed instance used to silently lose its estimated workload.
-        // Fix (2026-09-22): read the LIVE meta estimate of the instance being renewed
-        // (getEstimateOf(旧taskId)) — the row's estimate COLUMN is dead post-X2 (bumpSnow writes
-        // accumulated focus minutes into it), so clamping it 0-20 turned "focused 150 min" into
-        // "estimated 20 tomatoes" on the renewed instance.
+          } else {
+        // F3 P2 (D5 renderer parity): carry the LIVE meta estimate of the instance being renewed
+        // (getEstimateOf) — the row's estimate COLUMN is dead post-X2 (bumpSnow writes accumulated
+        // focus minutes into it), so clamping it 0-20 turned "focused 150 min" into "20 tomatoes".
+        // Carry set: core.renewalCarryFields via buildRenewalInstance (F-B4, single source).
         const estimate = clampEstimate(getEstimateOf(t.taskId, t.estimate))
-        // F3 P2-4 single source: carried attributes come from core.renewalCarryFields via
-        // buildRenewalInstance (F-B4) — the exact same set the renderer's ensureNextRepeatInstance
-        // maps onto addTodo.
         const nt = buildRenewalInstance(t, next, { estimate })
         commit('todo', 'put', nt)
         // F3 P2: the estimate column is write-once at the DB layer (U-1) — the live value lives in the
@@ -522,6 +512,15 @@ function restoreTodo (input) {
   const db = open()
   const t = resolveTask(input, recycleTasks())
   const merged = { ...t, delete: false, deletedAt: 0, updateTime: Date.now(), status: 'update' }
+  // B5 guard (renderer parity: store/todo.js restoreFromRecycle): startup meta GC may have purged
+  // `repeatRule:<rid>` while the row sat in the bin — restoring the dangling repeatId used to let
+  // completion fall into ensureNextRepeatInstance's silent !rule return (chain just dies). Demote to
+  // non-repeating with the same console warning semantics as the App.
+  if (t.repeatId) {
+    let rule = null
+    try { rule = JSON.parse(db.call('getMeta', 'repeatRule:' + t.repeatId) || 'null') } catch { /* treated as gone */ }
+    if (!rule) { merged.repeatId = null; console.error(`warning: restored task ${t.taskId} had a dangling repeatId (rule meta GCed) — restored as a non-repeating task`) }
+  }
   commit('todo', 'put', merged)
   const after = db.call('getById', t.taskId)
   try { chipsRestoreSnapshot(t.taskId) } catch { /* no snapshot = originally had no schedule */ }

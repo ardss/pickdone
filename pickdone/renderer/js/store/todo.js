@@ -617,7 +617,7 @@ export default {
       }
       // [C15 fix] the empty catch here silently orphaned attachment files on disk when cleanup failed
       // (main throws a structured per-file failure list). Log it like the adjacent hardDelete failures;
-      // rows are already hard-deleted, so the purge (and the mandatory historyClear below) still proceeds.
+      // rows are already hard-deleted, so the purge (and the historyBarrier re-baseline below) still proceeds.
       // Perf (purge batch): ONE delete-todo-files-many IPC for the whole batch instead of a per-id
       // readdir+unlink IPC each.
       try { if (done.length && window.todoAPI.deleteTodoFilesMany) await window.todoAPI.deleteTodoFilesMany(done) } catch (err) { reportError('deleteTodoFilesMany', err) }
@@ -627,13 +627,14 @@ export default {
       // entries so a recycled numeric id cannot resurrect a stale estimate (review M-C5).
       try { if (done.length) pruneEstimatesForPurged(done) } catch {}
       if (done.length) {
-        // Capture the doomed rows BEFORE hardRemove pulls them out of recycleList
-        const purgedCatIds = [...new Set(((state && state.recycleList) || []).filter(t => done.includes(t.taskId)).map(t => t.categoryId).filter(Boolean))]
+        // D17: scrub across ALL live categories, not just the purged rows' own ones — a milestone of
+        // ANOTHER project category may link the purged id (CLI parity: cli/lib.js scans every key);
+        // unaffected blobs are skipped by scrubMilestoneTaskIds' same-reference shortcut.
+        const purgedCatIds = [...new Set((((rootState && rootState.category) || {}).list || []).filter(c => c && !c.delete).map(c => c.categoryId))]
         commit('hardRemove', done)
         // D5 (2026-09-20): scrub the purged ids from `projectMilestones:<catId>` taskIds — a past
-        // milestone whose last link was purged otherwise kept a phantom taskId set, and
-        // milestoneState (ids.size > 0, zero existing linked tasks) fell through to the date-driven
-        // 'done' branch, flipping an UNMET milestone to done. Milestones keep their other links.
+        // milestone whose last link was purged otherwise kept a phantom taskId set (milestoneState
+        // fell through to the date-driven 'done' branch, flipping an UNMET milestone to done).
         // (Round-3 P1: shared with purgeAllRecycle — see scrubMilestonesForPurged below.)
         await scrubMilestonesForPurged(purgedCatIds, done)
         // Rows are physically gone (hardDelete + attachment files + chip snapshot meta): undo must not
@@ -676,13 +677,12 @@ export default {
       // maint-d7: drop the purged tasks' pomodoro-estimate meta keys too — parity with purgeIds
       // (review M-C5) and the CLI purge path (cli/lib.js deletes ESTIMATE_KEY_PREFIX per row); a
       // recycled numeric taskId used to resurrect a stale estimate on the bulk "empty bin" path.
-      // The DB keys are purged server-side by purgeRecycleBin's per-row GC; this prunes the local
-      // mirror via the id-based prune (the former key-vs-id Set.has complement never matched).
+      // DB keys are purged server-side per row; this prunes the local mirror (id-based prune).
       try { pruneEstimatesForPurged(ids) } catch {}
-      // Round-3 P1: the bulk path used to SKIP the milestone scrub purgeIds does — emptying the
-      // bin left phantom taskIds in `projectMilestones:<catId>` (an unmet milestone with zero
-      // surviving links could flip to 'done', mirroring the D5 bug on the per-item path).
-      const purgedCatIds = [...new Set(((state.recycleList) || []).filter(t => ids.includes(t.taskId)).map(t => t.categoryId).filter(Boolean))]
+      // Round-3 P1: the bulk path used to SKIP the milestone scrub (phantom taskIds → unmet
+      // milestone flipping to 'done'). D17: same widening as purgeIds — ALL live categories
+      // (cross-category links), CLI parity.
+      const purgedCatIds = [...new Set((((rootState && rootState.category) || {}).list || []).filter(c => c && !c.delete).map(c => c.categoryId))]
       commit('hardRemove', ids)
       await scrubMilestonesForPurged(purgedCatIds, ids)
       // Same resurrect guard as purgeIds: rows + files + snapshots are gone, undo must not cross this

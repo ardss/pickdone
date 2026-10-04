@@ -216,7 +216,7 @@ test('fix10 static anchor: openAdd builds its draft through manualDraft (no Math
 
 /* ================= Fix 13: calendar day cells carry an accessible name ================= */
 
-const StripComp = loadSFC('renderer/js/components/DayDateStrip.vue', { dayjs, DAY_MS: 86400000 })
+const StripComp = loadSFC('renderer/js/components/DayDateStrip.vue', { dayjs, DAY_MS: 86400000, roleButtonActivate: rbkMod.roleButtonActivate })
 
 test('fix13 calCellLabel: full YYYY-MM-DD accessible name with month context', () => {
   const label = StripComp.methods.calCellLabel.call({ $t: k => k }, { key: +dayjs('2026-03-05'), hasTasks: false })

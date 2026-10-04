@@ -47,7 +47,9 @@ export function buildTaskMenu (vm, t, caps = {}, extra = []) {
       const patch = crossDayMovePatch(cur, target, startOf)
       const revertPatch = crossDayRevertPatch(cur, patch)
       moveWithUndo(vm, {
-        label: vm.$t(offset === 0 ? 'statsJ.TodoItem.movedToToday' : 'statsJ.TodoItem.movedToTomorrow'),
+        // [D17-DOM4] honest copy: same rationale as TodoItem.moveDay — the postpone target is
+        // max(today+1, base+1); announce the real destination date instead of a flat "tomorrow"
+        label: vm.$t(offset === 0 ? 'statsJ.TodoItem.movedToToday' : 'statsJ.TodoItem.movedTo', { d: dayjs(target).format(FMT.cnDate) }),
         apply: () => vm.$store.dispatch('todo/updateTodoFields', { taskId: cur.taskId, patch: { ...patch, status: 'update' } }),
         revert: () => vm.$store.dispatch('todo/updateTodoFields', { taskId: cur.taskId, patch: { ...revertPatch, status: 'update' } })
       })

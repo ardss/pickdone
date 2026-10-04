@@ -110,11 +110,14 @@ module.exports = ({ open, commit, audit, CliError, dayjs, resolveTask, liveTasks
   function recordFix (ref, { minutes, date, at, rest, succeed, task, free }) {
     const rec = resolveRecord(ref)
     const patch = {}
-    // FOCUS_MAX_MINUTES is the DB-layer clamp (shared/limits.mjs, db.js _recToRow): accepting 720 used to report success while 600 landed (audit drift)
+    // FOCUS_MAX_MINUTES is the DB-layer clamp (shared/limits.mjs, db.js _recToRow). D17 strict parse
+    // (same contract as backfillRecord): the old `parseInt||0` + Math.max(1,n) silently floored
+    // garbage/0 into a 1-minute row — an explicit bad value must be a USAGE error instead.
     if (minutes != null) {
-      const n = parseInt(minutes, 10) || 0
-      if (n > FOCUS_MAX_MINUTES) throw new CliError('focus duration max is ' + FOCUS_MAX_MINUTES + ' minutes (DB-layer clamp); got ' + n, 'USAGE')
-      patch.focusDuration = Math.max(1, n)
+      const raw = /^\d+$/.test(String(minutes).trim()) ? parseInt(minutes, 10) : NaN
+      if (!Number.isFinite(raw) || raw < 1) throw new CliError('focus duration must be a positive integer; got ' + JSON.stringify(minutes), 'USAGE')
+      if (raw > FOCUS_MAX_MINUTES) throw new CliError('focus duration max is ' + FOCUS_MAX_MINUTES + ' minutes (DB-layer clamp); got ' + raw, 'USAGE')
+      patch.focusDuration = raw
     }
     // restDuration clamp = REST_MAX_MINUTES, the same cap the db layer applies (_recToRow); the old CLI-only
     // 120 clamp silently rewrote a legitimate 300-min rest to 120 while a direct db append kept 600.

@@ -101,6 +101,7 @@ export default {
   'statsJ.EditPanel.priorityNormal': '一般',
   'statsJ.EditPanel.priorityHigh': '高',
   'statsJ.EditPanel.reminderPastTip': '设置的提醒时间已经过去，将不会触发通知',
+  'statsJ.EditPanel.remindNeedsDate': '该行没有日期且任务本身未排时 — 请选择日期后才能提交提醒',
   'statsJ.EditPanel.restoredMsg': '已恢复',
   'statsJ.EditPanel.uploadFailedMsg': '上传失败：',
   'statsJ.EditPanel.pickDateAria': '选择日期',

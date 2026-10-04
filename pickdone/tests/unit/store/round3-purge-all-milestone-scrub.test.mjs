@@ -71,7 +71,9 @@ test('round3: purgeAllRecycle scrubs the purged ids from projectMilestones:<catI
   const ctx = {
     commit: () => {},
     dispatch: async (name) => { if (name === 'tomato/attach') detached.push(name); return {} },
-    rootState: { tomato: { attachTodo: null } },
+    // D17 re-anchor: purgeAllRecycle enumerates ALL live categories (rootState.category.list) —
+    // the old purged-rows'-own-category filter missed cross-category links
+    rootState: { tomato: { attachTodo: null }, category: { list: [{ categoryId: 7, delete: false }] } },
     state
   }
   const ok = await todoActions.purgeAllRecycle.call({}, ctx)

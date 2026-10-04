@@ -170,7 +170,8 @@ export default {
       toggleCompleteWithUndo({ store: this.$store, message: m => this.$message(m), todo: t, announce: m => this.$announce && this.$announce(m) })
     },
     purge (t) {
-      this.$confirm(this.$t('statsC.RecycleBin.purgeConfirm', { name: t.taskContent }), this.$t('statsC.RecycleBin.dangerAction'), { type: 'error' }).then(async () => {
+      // [P2 fix] raw t.taskContent interpolated an empty title as an empty string; sibling toasts in this file fall back to the untitled label — same guard here
+      this.$confirm(this.$t('statsC.RecycleBin.purgeConfirm', { name: t.taskContent || this.$t('statsJ.TodoItem.untitled') }), this.$t('statsC.RecycleBin.dangerAction'), { type: 'error' }).then(async () => {
         // Await the dispatch and converge only on success: purgeIds swallows per-id failures
         // (reportError is console-only), so a silent IPC failure used to leave the row in the
         // bin with no user-visible feedback at all.

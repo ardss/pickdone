@@ -70,7 +70,11 @@ export default {
       type: 'bug',
       desc: '',
       contact: '',
-      attachLog: true,
+      // [P2 fix] this used to be `true`: the disabled-but-CHECKED box claimed a diagnostic log
+      // was being attached. Reality: the renderer cannot read the log (D14-A2 above) and the
+      // payload only stages the boolean locally — nothing attaches. Render the truth: unchecked
+      // + disabled, with the tooltip explaining why.
+      attachLog: false,
       submitting: false,
       pendingCount: 0
     }

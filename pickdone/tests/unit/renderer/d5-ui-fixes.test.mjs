@@ -86,7 +86,10 @@ test('TodoBoxView batchDelete: one aggregated batchMoveWithUndo undo toast, clos
 test('EditPanel restoreFromBin: await wrapped in try/catch, error toast, item kept in bin', () => {
   const src = read('renderer/js/components/EditPanel.vue')
   const body = src.slice(src.indexOf('async restoreFromBin'), src.indexOf('addSub ('))
-  assert.match(body, /try \{[\s\S]*await this\.\$store\.dispatch\('todo\/updateTodoFields'[\s\S]*\} catch \(e\) \{/, 'dispatch is awaited inside try/catch')
+  // D17-DOM3: the bare updateTodoFields restore was replaced by the single-path
+  // todo/restoreFromRecycle entry (chip snapshot backfill + deletedAt reset + B5 guard);
+  // the try/catch contract this test pins is unchanged.
+  assert.match(body, /try \{[\s\S]*await this\.\$store\.dispatch\('todo\/restoreFromRecycle'[\s\S]*\} catch \(e\) \{/, 'dispatch is awaited inside try/catch')
   assert.match(body, /statsC\.RecycleBin\.restoreFailedMsg/, 'failure reuses the restore-failed i18n key')
   assert.match(body, /return/, 'failure returns early: success toast + hydrate skipped, item stays in bin')
 })

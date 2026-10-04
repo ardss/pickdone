@@ -14,7 +14,7 @@
     <!-- Date label: click to open the calendar (replaces the standalone 📅 button); "back to today" only appears when not today -->
     <span class="ds-label" :class="{on:showCal}" role="button" tabindex="0" :title="$t('statsD.DayDateStrip.selectDate')"
           aria-haspopup="dialog" :aria-expanded="showCal ? 'true' : 'false'"
-          @click.stop="showCal=!showCal" @keydown.enter.prevent="showCal=!showCal"
+          @click.stop="showCal=!showCal" @keydown="onLabelKey"
           @mouseenter="calEnter" @mouseleave="calLeave">
       <app-icon name="calendar" :size="13"/>{{label}}
     </span>
@@ -65,6 +65,7 @@ import { dayjs } from '../utils/core.js'
 import { dayShift } from '../utils/todayBounds.js'
 import store from '../store/index.js'
 import { calGridOffset, weekHeaderOrder } from '../utils/weekGrid.js'
+import { roleButtonActivate } from '../utils/roleButtonKey.js' // [A9] Space+Enter button activation
 
 // [component-fixes] pure-start — calGridOffset/weekHeaderOrder moved 2026-09-23 to utils/weekGrid.js
 // (single source shared with CalendarView/FilterView/chartModels; the component imports them above).
@@ -156,6 +157,8 @@ export default {
     }
   },
   methods: {
+    /* [D17-DOM4] ARIA button pattern on the date label: Space joins Enter as activation keys (same .prevent, no .stop, as before) */
+    onLabelKey: roleButtonActivate(function () { this.showCal = !this.showCal }),
     calCell (d, inMonth) {
       const ts = d.startOf('day').valueOf()
       return {

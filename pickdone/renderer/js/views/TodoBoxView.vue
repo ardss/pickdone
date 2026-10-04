@@ -6,9 +6,12 @@
         <div class="title__prepend">
           <i class="icon-prepend"></i>
           <div class="title__text"> {{ $t('statsC.TodoBox.title') }} </div>
-          <el-popover placement="top-start" width="300" trigger="hover"
+          <!-- [D17-DOM4] click trigger + focusable reference (same fixed pattern as CompletedView's tip):
+               hover-only was unreachable by keyboard/touch; default (closed) rendering unchanged -->
+          <el-popover placement="top-start" width="300" trigger="click"
                       :content="$t('statsC.TodoBox.tip')">
-            <template #reference><span class="icon-append tip-icon dd-q">?</span></template>
+            <template #reference><span class="icon-append tip-icon dd-q" role="button" tabindex="0"
+                                       :aria-label="$t('statsC.TodoBox.tip')" @keydown="onTipKey">?</span></template>
           </el-popover>
         </div>
         <div class="title__append">
@@ -167,6 +170,10 @@ export default {
     tbTriggerKey (e) { (e.currentTarget as HTMLElement).click() },
     /* [A9] dropdown trigger buttons: Space joins Enter as activation keys (same .prevent, no .stop, as before) */
     onTriggerKey: roleButtonActivate(function (e) { this.tbTriggerKey(e) }),
+    // TS cast lives here (same reason as tbTriggerKey): the structure guard rejects `as` in templates
+    tipTrigger (e) { (e.currentTarget as HTMLElement).click() },
+    /* [D17-DOM4] "?" tip widget: Space joins Enter as activation keys (CompletedView tip pattern) */
+    onTipKey: roleButtonActivate(function (e) { this.tipTrigger(e) }),
     /* [A8] batch check checkbox: Space joins Enter, stopped so the row's own activation doesn't double-fire */
     onBatchCheckKey (t, e) {
       roleCheckboxActivate(function () { this.toggleCheck(t) }).call(this, e)

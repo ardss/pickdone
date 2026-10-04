@@ -66,3 +66,49 @@ test('meta conflict backups for DIFFERENT keys in the same ms stay independent a
     Date.now = realNow
   }
 })
+
+/* ---------------- D17 (2026-10-02): prune age order is PARSED (ts, seq), not string order ----------------
+ * Within one ms the base-36 counter crosses a digit boundary: seq 35 → 'z', seq 36 → '10'. A raw
+ * lexicographic sort ranks '10' BELOW 'z', so the NEWEST backup sorted as if oldest and the
+ * count-based prune deleted the freshest losing value. */
+
+test('D17: comparator orders the seq rollover numerically (z=35 < 10=36)', () => {
+  const { compareMetaBackupKeys } = syncApply
+  const z = 'metaConflictBackup.k.abc-z' // seq 35
+  const ten = 'metaConflictBackup.k.abc-10' // seq 36 — lexicographically BELOW 'z'
+  assert.ok(compareMetaBackupKeys(z, ten) < 0, "'10' (newer) must sort ABOVE 'z' (older)")
+  assert.ok(compareMetaBackupKeys(ten, z) > 0)
+  assert.ok(compareMetaBackupKeys(z, z) === 0)
+  assert.ok(compareMetaBackupKeys('metaConflictBackup.k.junk', z) < 0, 'unparsable keys sort oldest (pruned first)')
+  assert.ok(compareMetaBackupKeys('metaConflictBackup.k.a-5', 'metaConflictBackup.k.b-1') < 0, 'ts dominates seq across milliseconds')
+})
+
+test('D17: the count-based prune keeps the numerically NEWEST backups across the seq rollover', () => {
+  const realNow = Date.now
+  Date.now = () => 1700000000000 // frozen: all 40 mints share one ms → the counter crosses 'z'→'10'
+  try {
+    const state = mockState()
+    const minted = []
+    const origCall = state.db.call.bind(state.db)
+    state.db.call = (op, p) => {
+      if (op === 'setMeta') minted.push(p[0])
+      return origCall(op, p)
+    }
+    const MINTS = 40 // 36+ mints guarantee the base-36 rollover ('z' → '10') inside the window
+    for (let i = 0; i < MINTS; i++) syncApply.writeMetaConflictBackup(state, 'roll', 'loser-' + i)
+    assert.equal(minted.length, MINTS)
+    const kept = [...state.db.call('listMetaKeys')].filter(k => k.startsWith('metaConflictBackup.roll.'))
+    assert.equal(kept.length, syncApply.META_CONFLICT_BACKUP_CAP)
+    const { parseMetaBackupKeySuffix } = syncApply
+    const keptSeqs = kept.map(parseMetaBackupKeySuffix).map(p => p.seq).sort((a, b) => a - b)
+    // The 40 minted seqs are S..S+39 (whatever the shared counter started at); the kept 20 must be
+    // exactly the LAST 20 minted. Under the old lexicographic prune, the post-rollover keys
+    // ('10','11',...) sorted as if oldest and the freshest losers were deleted instead.
+    const mintedSeqs = minted.map(parseMetaBackupKeySuffix).map(p => p.seq)
+    const expected = mintedSeqs.slice(MINTS - syncApply.META_CONFLICT_BACKUP_CAP).sort((a, b) => a - b)
+    assert.ok(mintedSeqs.some(s => String(s).length > 1), 'setup: the window actually crossed the digit rollover')
+    assert.deepEqual(keptSeqs, expected, 'red before the fix: the newest (post-rollover) losers were pruned first')
+  } finally {
+    Date.now = realNow
+  }
+})

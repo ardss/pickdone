@@ -7,7 +7,7 @@
     <span v-for="t in tags" :key="t" class="ep-tag-chip">
       #{{ t }}
       <span class="ep-tag-x close-x" role="button" tabindex="0" :title="$t('statsJ.EditPanel.removePrefix') + t" :aria-label="$t('statsJ.EditPanel.removeTag', { t: t })"
-            @click.stop="$emit('remove', t)" @keydown.enter.prevent.stop="$emit('remove', t)"></span>
+            @click.stop="$emit('remove', t)" @keydown="onRemoveKey(t, $event)"></span>
     </span>
     <!-- [R15] Enter-only commit: @blur used to fire addTag on click-away, silently rewriting the
          task title mid-drag / mid-IME. The IME guard lives in onTagEnter (keydown sees the 229 flag). -->
@@ -18,6 +18,7 @@
 
 <script lang="ts">
 import type { PropType } from 'vue'
+import { roleButtonActivate } from '../../utils/roleButtonKey.js' // [A9] Space+Enter button activation
 /** Hash-tag chips + add-input row; the parent owns the title rewrite (addTag/removeTag). */
 export default {
   name: 'EpTags',
@@ -32,6 +33,10 @@ export default {
     }
   },
   methods: {
+    /* [D17-DOM4] ARIA button pattern on the tag-remove chip: Space joins Enter (was Enter-only) */
+    onRemoveKey (t, e) {
+      roleButtonActivate(() => { this.$emit('remove', t) }, { stop: true }).call(this, e)
+    },
     // IME guard: the Enter that commits a composition (keyCode 229) must not add a half-typed tag
     onTagEnter (e) {
       if (e.isComposing || e.keyCode === 229) return

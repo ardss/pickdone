@@ -25,6 +25,10 @@ const IMPORT_WORKER_TIMEOUT_MS = 30000
 // reclaim them — stop minting new threads for this process lifetime).
 const IMPORT_MAX_OUTSTANDING = 2
 const IMPORT_MAX_LEAKED = 3
+// D17: injectable for unit tests (the leaked-worker cleanup needs a parse that times out fast);
+// production behavior is untouched.
+let parseTimeoutMs = IMPORT_WORKER_TIMEOUT_MS
+function __setParseTimeoutMs (ms) { parseTimeoutMs = Number(ms) > 0 ? Number(ms) : IMPORT_WORKER_TIMEOUT_MS }
 const outstandingWorkers = new Set()
 const leakedWorkers = new Set()
 function __workerRegistry () { return { outstanding: outstandingWorkers.size, leaked: leakedWorkers.size } } // test seam
@@ -76,7 +80,7 @@ function runImportParse (text, format = 'auto') {
       : path.join(__dirname, '..', 'import-worker.js')
     const worker = new Worker(workerEntry, { workerData: { text, format } })
     outstandingWorkers.add(worker) // D10: tracked so concurrent parses are capped
-    const timer = setTimeout(() => { timedOut = true; finish(reject, new Error('import: parse worker timed out after ' + IMPORT_WORKER_TIMEOUT_MS + 'ms')) }, IMPORT_WORKER_TIMEOUT_MS)
+    const timer = setTimeout(() => { timedOut = true; finish(reject, new Error('import: parse worker timed out after ' + parseTimeoutMs + 'ms')) }, parseTimeoutMs)
     worker.on('message', m => {
       if (m && m.ok) finish(resolve, m)
       else {
@@ -91,7 +95,15 @@ function runImportParse (text, format = 'auto') {
       }
     })
     worker.on('error', err => finish(reject, err))
-    worker.on('exit', code => { if (code !== 0) finish(reject, new Error('import: parse worker exited with code ' + code)) })
+    worker.on('exit', code => {
+      // D17: a worker that was terminate()d on timeout but DID exit is NOT leaked — terminate()
+      // reclaimed it. The old registry never removed it, so 3 slow-but-valid parses (each timing
+      // out just past the deadline, then exiting cleanly on terminate) permanently tripped the
+      // leak breaker and bricked CSV import with [BUSY]. Only a worker that never exits
+      // (clone-stuck) keeps counting against the breaker.
+      if (timedOut) leakedWorkers.delete(worker)
+      if (code !== 0) finish(reject, new Error('import: parse worker exited with code ' + code))
+    })
   })
 }
 /** sha256 of the exact previewed text (TOCTOU guard, fix 2026-09-19): import:run compares the file's
@@ -270,6 +282,7 @@ module.exports = function importHandlers (ctx) {
 module.exports.runImportParse = runImportParse
 module.exports.__workerRegistry = __workerRegistry
 module.exports.__resetWorkerRegistry = __resetWorkerRegistry
+module.exports.__setParseTimeoutMs = __setParseTimeoutMs // D17: unit-test seam
 // r4 (2026-09-28): IMPORT_MAX_OUTSTANDING / IMPORT_MAX_LEAKED are back to file-private consts —
 // they were exported "for future tests" but had zero references repo-wide (incl. tests), a fake
 // public-contract surface. The caps stay behaviorally anchored by the BUSY / breaker paths.

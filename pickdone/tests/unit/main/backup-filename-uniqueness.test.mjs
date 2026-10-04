@@ -1,13 +1,11 @@
 /**
- * dw-wave6 F21 — same-tag same-second snapshots must not silently overwrite each other.
- * Regression for: run-auto-backup built the snapshot name as tag+YYYYMMDD-HHMMSS.json with no
- * uniqueness suffix; two evt-<reason> events in the same second (todoBackup.js fires evt snapshots
- * on back-to-back dangerous ops) renamed the second file onto the first — the earlier snapshot was
- * gone while {ok:true} was still returned. content-dedup cannot help (different content by design).
- * Fix: uniqueSnapshotName bumps the embedded stamp +1s per taken name (never a "-1" suffix: the
- * GFS sort/prune parsers only recognize the strict <tag>YYYYMMDD-HHMMSS.json shape, and a suffixed
- * name would parse as ts=0, sort oldest and get pruned first).
- * Run: node --test tests/unit/main/dw6-backup-filename-uniqueness.test.mjs
+ * dw-wave6 F21 + D17 (2026-10-02) — same-tag same-second snapshots must not silently overwrite
+ * each other, and the collision resolution must not mint FUTURE-dated names. Regression for the
+ * old +1s..+900s stamp bumps: a bumped name could collide with a REAL snapshot landing seconds
+ * later (the dup snapshot was dedup'd away, so the future name looked free — the real snapshot
+ * then atomically overwrote it and the recovery point was gone). Collisions now resolve to a
+ * `-dup<n>` suffix AFTER the stamp; the common (no-collision) path keeps the historical naming.
+ * Run: node --test tests/unit/main/backup-filename-uniqueness.test.mjs
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -27,31 +25,46 @@ const stampOf = ms => {
   return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds())
 }
 
-test('F21: a taken snapshot name bumps the embedded stamp +1s instead of overwriting', () => {
+test('D17/F21: a taken snapshot name resolves to a -dup suffix, never a future-dated stamp', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dw6-snapname-'))
   try {
     const base = Date.now()
     const stamp = stampOf(base)
     fs.writeFileSync(path.join(dir, `evt-purge-${stamp}.json`), '{}')
     const name = backup.uniqueSnapshotName(fs.existsSync.bind(fs), dir, 'evt-purge-', stamp, base)
-    assert.notEqual(name, `evt-purge-${stamp}.json`, 'the taken name is not reused (old code silently overwrote it)')
-    assert.equal(name, `evt-purge-${stampOf(base + 1000)}.json`, 'the collision resolves to the +1s stamped name')
-    assert.ok(fixUtil.backupNameTs(name) > 0, 'the bumped name stays parseable by the GFS sort (a "-1" suffix would parse as ts=0 and get pruned first)')
-    assert.ok(fixUtil.sortBackupNamesNewestFirst([`evt-purge-${stamp}.json`, name])[0] === name, 'the bumped snapshot sorts newest')
+    assert.equal(name, `evt-purge-${stamp}-dup1.json`, 'the collision resolves to the -dup1 suffix (not a +1s future stamp)')
+    assert.ok(!/\.json$/.test(name.replace(/-dup\d+\.json$/, '.json')) || !name.includes(stampOf(base + 1000)), 'no future stamp minted')
   } finally { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 }) }
 })
 
-test('F21: two same-second collisions chain +2s; a free name is returned untouched', () => {
+test('D17/F21: same-second collisions chain -dup1, -dup2, ...; a free name is returned untouched', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dw6-snapname-'))
   try {
     const base = Date.now()
     const stamp = stampOf(base)
     fs.writeFileSync(path.join(dir, `auto-${stamp}.json`), '1')
-    fs.writeFileSync(path.join(dir, `auto-${stampOf(base + 1000)}.json`), '2')
-    assert.equal(backup.uniqueSnapshotName(fs.existsSync.bind(fs), dir, 'auto-', stamp, base), `auto-${stampOf(base + 2000)}.json`, 'collisions chain until a free name is found')
+    fs.writeFileSync(path.join(dir, `auto-${stamp}-dup1.json`), '2')
+    assert.equal(backup.uniqueSnapshotName(fs.existsSync.bind(fs), dir, 'auto-', stamp, base), `auto-${stamp}-dup2.json`, 'collisions chain through the dup space')
     const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dw6-snapname-'))
     try {
       assert.equal(backup.uniqueSnapshotName(fs.existsSync.bind(fs), emptyDir, 'auto-', stamp, base), `auto-${stamp}.json`, 'no collision → the original name is untouched (behavior unchanged in the common case)')
     } finally { fs.rmSync(emptyDir, { recursive: true, force: true, maxRetries: 3 }) }
   } finally { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 }) }
+})
+
+test('D17/F21: a -dup name never shadows a real timestamped snapshot in the GFS sort', () => {
+  const base = Date.now()
+  const stamp = stampOf(base)
+  const dup = `auto-${stamp}-dup1.json`
+  const later = `auto-${stampOf(base + 5000)}.json`
+  // ts=0 for the dup: it sorts oldest and is pruned first — it can never be mistaken for the
+  // newest twin in dedup (newestSameTag) nor shielded in retention.
+  assert.equal(fixUtil.backupNameTs(dup), 0)
+  assert.equal(fixUtil.sortBackupNamesNewestFirst([dup, later])[0], later)
+})
+
+test('D17/F21: an exhausted 900-dup-name space returns null (never an already-taken name)', () => {
+  const alwaysTaken = () => true
+  assert.equal(backup.uniqueSnapshotName(alwaysTaken, 'C:\\dir', 'auto-', '20260925-120000', 1e12), null,
+    'exhaustion must return null so the caller can report failure instead of silently overwriting an existing snapshot')
 })

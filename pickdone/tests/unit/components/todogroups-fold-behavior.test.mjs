@@ -36,14 +36,24 @@ function loadTodoGroupsComponent () {
   assert.ok(m, 'TodoGroups.vue: <script> block not found')
   const code = m[1]
     .replace(/^\s*import\s+TodoItem\s+from\s+'\.\/TodoItem\.vue'\s*$/m, '')
-    .replace(/^\s*import\s*\{\s*dayjs\s*\}\s+from\s+'[^']+'\s*$/m, '')
+    .replace(/^\s*import\s*\{\s*dayjs,\s*rangeDays\s*\}\s+from\s+'[^']+'\s*$/m, '')
     .replace(/^\s*import\s*\{\s*dayShift\s*\}\s+from\s+'[^']+'\s*$/m, '')
+    .replace(/^\s*import\s*\{\s*roleButtonActivate\s*\}\s+from\s+'[^']+'.*$/m, '')
     .replace(/\bas\s+any\b/g, '')
     .replace(/export\s+default\s*\{/, 'return {')
-  const factory = new Function('TodoItem', 'dayjs', 'dayShift', code)
+  const factory = new Function('TodoItem', 'dayjs', 'dayShift', 'rangeDays', 'roleButtonActivate', code)
   // TodoItem stub: the fold logic under test never touches row rendering.
   // dayShift is injected as the REAL calendar-day primitive (same module the SFC imports).
-  return factory({ name: 'TodoItem', props: ['todo'], template: '<div class="todo-item-stub"></div>' }, dayjs, dayShift)
+  // rangeDays double: verbatim single-source semantics (utils/core.js) with the caller's 30d
+  // fallback; core.js itself cannot be imported here (renderer UMD global bundle dependency).
+  // roleButtonActivate double: verbatim ARIA button-pattern handler (utils/roleButtonKey.js).
+  return factory(
+    { name: 'TodoItem', props: ['todo'], template: '<div class="todo-item-stub"></div>' },
+    dayjs,
+    dayShift,
+    v => { const t = String(v || ''); if (t === 'today') return 1; if (t === 'yesterday') return 2; return parseInt(t.replace(/[^0-9]/g, ''), 10) || 30 },
+    handler => function onKey (e) { if (e.key !== 'Enter' && e.key !== ' ') return; e.preventDefault(); handler.call(this, e) }
+  )
 }
 
 before(async () => {
@@ -147,12 +157,27 @@ test('today group: collapse/expand round trip via store state', () => {
   assert.equal(vm.isOpen(key), true)
 })
 
-/* ---------- Scenario 3: anti-accumulation — keys older than the 7-day grace window are pruned ---------- */
+/* ---------- Scenario 3: anti-accumulation follows the ACTIVE expired window (D17-DOM4) ---------- */
+/* The prune cutoff derives from settings.expiredUncompletedTodoRange (default 30d), NOT a fixed
+ * 7-day grace: under the default range an 8-day-old key is still renderable by the today view
+ * and MUST survive (the old 7-day grace killed its collapse toggle). */
 
-test('prune still runs: an 8-day-old expired key is dropped on the next toggle', () => {
-  const ancientKey = `expired-${today0() - 8 * DAY}`
+test('prune does not eat in-window keys: an 8-day-old expired key survives under the default 30d range', () => {
+  const oldKey = `expired-${today0() - 8 * DAY}`
   const key = 'today'
-  // seed settings with a stale key from 8 days ago, then fold a live group
+  const { vm, store } = mountTodoGroups([group(key)], [oldKey])
+
+  assert.ok(store.state.settings.foldedTodoList.includes(oldKey), 'precondition: in-window key seeded')
+  vm.toggle(key)
+
+  const after = store.state.settings.foldedTodoList
+  assert.ok(after.includes(key), 'new fold key written')
+  assert.ok(after.includes(oldKey), '8-day-old key survives: the 30d view can still render its group (old 7-day grace broke this toggle)')
+})
+
+test('prune still runs: beyond the active window the key is dropped on the next toggle', () => {
+  const ancientKey = `expired-${today0() - 31 * DAY}`
+  const key = 'today'
   const { vm, store } = mountTodoGroups([group(key)], [ancientKey])
 
   assert.ok(store.state.settings.foldedTodoList.includes(ancientKey), 'precondition: stale key seeded')
@@ -160,5 +185,18 @@ test('prune still runs: an 8-day-old expired key is dropped on the next toggle',
 
   const after = store.state.settings.foldedTodoList
   assert.ok(after.includes(key), 'new fold key written')
-  assert.equal(after.includes(ancientKey), false, 'stale >7-day key pruned by the same toggle (settings do not grow unbounded)')
+  assert.equal(after.includes(ancientKey), false, 'key older than the active expiredUncompletedTodoRange window is pruned (settings do not grow unbounded)')
+})
+
+test('prune cutoff follows a narrowed range: expiredUncompletedTodoRange=7d prunes an 8-day-old key', () => {
+  const oldKey = `expired-${today0() - 8 * DAY}`
+  const key = 'today'
+  const { vm, store } = mountTodoGroups([group(key)], [oldKey])
+  store.state.settings.expiredUncompletedTodoRange = '7d'
+
+  vm.toggle(key)
+
+  const after = store.state.settings.foldedTodoList
+  assert.ok(after.includes(key), 'new fold key written')
+  assert.equal(after.includes(oldKey), false, '8-day-old key pruned when the active window is only 7 days')
 })

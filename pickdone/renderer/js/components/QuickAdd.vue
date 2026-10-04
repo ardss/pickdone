@@ -147,13 +147,21 @@ export default {
           await this.$store.dispatch('todo/addTodo', payload)
         }
         const n = lines.length
+        // [P2 fix] the bulk toast omitted WHERE the lines landed — with a date chip active every
+        // created task went to that day, and the toast said only "Added N tasks". Same date
+        // suffix idiom as onEnter's single-line toast (reuses scheduledAt/today/movedToInbox).
+        // Read the effective date BEFORE clearing it (the computed goes stale once reset).
+        let d = this.effDate
         this.text = ''
         this.pickedDate = null
+        // Mirror onEnter's default-date semantics: other pages default to today, the todo box stays undated
+        if (d == null && !this.inTodoBox) d = dayjs().startOf('day').valueOf()
+        const when = d && d !== 0 ? this.$t('statsD.QuickAdd.scheduledAt') + (dayjs(d).isSame(dayjs(), 'day') ? this.$t('statsD.QuickAdd.today') : dayjs(d).format(FMT.cnDate)) : this.$t('statsD.QuickAdd.movedToInbox')
         const msg = this.$t('statsD.QuickAdd.created', { c: lines[0] }) + ' …'
-        const when = n > 1 ? ` (${n})` : ''
-        if (!this.quiet) this.$message.success(this.$t('statsD.QuickAdd.createdBulk', { n }) || (msg + when))
-        if (this.$announce) this.$announce(this.$t('statsD.QuickAdd.createdBulk', { n }) || (msg + when))
-        this.$emit('created', { content: lines.join('\n'), date: this.effDate })
+        const bulkMsg = (this.$t('statsD.QuickAdd.createdBulk', { n }) || (msg + ` (${n})`)) + when
+        if (!this.quiet) this.$message.success(bulkMsg)
+        if (this.$announce) this.$announce(bulkMsg)
+        this.$emit('created', { content: lines.join('\n'), date: d })
       } catch (err) {
         console.error('[quick-add] multi-line paste failed:', err)
         if (this.quiet) this.failed = true

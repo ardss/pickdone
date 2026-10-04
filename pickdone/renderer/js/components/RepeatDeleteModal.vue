@@ -76,7 +76,15 @@ export default {
       await this.$store.dispatch('todo/deleteTodosMany', ids.map(id => ({ taskId: id })))
       // Batch delete shares the single-item semantics: 5s undo toast; the single pre-batch snapshot guarantees one undo restores the whole group
       if (this.$message && window.Vue) {
-        const undo = () => this.$store.dispatch('todo/undo').then(() => this.$message.closeAll())
+        // [P2 fix] the undo used to fire-and-forget the dispatch — a failed undo (snapshot
+        // replay / IPC error) died as an unhandled rejection while the toast just closed.
+        // Same honest-failure shape as confirm.js deleteWithUndo's undo link.
+        const undo = () => this.$store.dispatch('todo/undo')
+          .then(() => this.$message.closeAll())
+          .catch(e => {
+            console.error('[repeat] undo failed:', e)
+            this.$message.error(this.$t('statsH.main.actionFailedMsg') + ((e && e.message) || ''))
+          })
         this.$message({
           type: 'success', duration: 5000,
           message: this.$createElement('span', [

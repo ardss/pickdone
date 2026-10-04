@@ -213,7 +213,8 @@ export default {
     ChartCard: {
       empty: 'No data yet · Complete your first task to light it up',
       upgrade: 'Upgrade to Pro',
-      notAdapted: ' This chart is not adapted'
+      notAdapted: ' This chart is not adapted',
+      openExternalFallback: 'Popup blocked — open {url} manually'
     },
     ChartConfigs: {
       range7d: 'Last 7 days',

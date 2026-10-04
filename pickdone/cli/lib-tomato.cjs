@@ -161,9 +161,21 @@ module.exports = async function runTomato ({ opts, lib, emit, emitNext }) {
         if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
           throw new lib.CliError('bad --date "' + opts.date + '" (use today/tomorrow/+Nd/YYYY-MM-DD)', 'USAGE')
         }
-        const at = (opts.at && opts.at !== true) ? String(opts.at) : '20:00'
+        // Default anchor = NOW (D17 parity: the App's one-click backfill anchors endTime to now,
+        // renderer/js/utils/taskMenu.js startTs = Date.now() - min) — the old hardcoded '20:00'
+        // planted the block in the evening regardless of when it actually happened.
+        const at = (opts.at && opts.at !== true) ? String(opts.at) : dayjs().format('HH:mm')
+        if (opts.at === true) throw new lib.CliError('--at needs a value (HH:mm, 24h)', 'USAGE')
         if (!/^([01]?\d|2[0-3]):[0-5]\d$/.test(at)) throw new lib.CliError('bad --at "' + opts.at + '" (use HH:mm, 24h)', 'USAGE')
-        const minutes = parseInt(opts.minutes, 10) > 0 ? parseInt(opts.minutes, 10) : 25
+        // Strict parse (B10 contract, lib-focus backfillRecord twin): the usage line's "25" is the
+        // ABSENT-flag default only — an explicit --minutes of 0/garbage used to silently become 25.
+        let minutes = 25
+        if (opts.minutes !== undefined) {
+          if (opts.minutes === true) throw new lib.CliError('backfill --minutes needs a value (positive integer)', 'USAGE')
+          const raw = /^\d+$/.test(String(opts.minutes).trim()) ? parseInt(opts.minutes, 10) : NaN
+          if (!Number.isFinite(raw) || raw < 1) throw new lib.CliError('backfill --minutes must be a positive integer; got ' + JSON.stringify(opts.minutes), 'USAGE')
+          minutes = raw
+        }
         const rec = lib.backfillRecord({ taskId, content, date: dateStr, at, minutes })
         if (opts.json) return emitNext({ tomatoId: rec.tomatoId, dateKey: rec.dateKey, minutes: rec.focusDuration, acknowledged: true }, ['stats --json to see focus minutes', 'list --json to read back'])
         console.log(`✓ backfilled ${rec.focusDuration} min on ${rec.dateKey} ${at}` + (taskId ? ' → ' + (content || taskId) : ' (free focus, no task)'))

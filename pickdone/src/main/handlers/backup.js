@@ -37,25 +37,23 @@ function atomicWriteJson (fsMod, dir, name, text) {
 /** F21 (dw wave6 2026-09-24): pick a collision-free snapshot filename. Same-tag same-second
  *  snapshots used to silently overwrite each other (evt-<reason> events fire back-to-back; the
  *  atomic rename lands on the same name, the earlier snapshot is gone, yet {ok:true} is still
- *  returned). Collision is resolved by bumping the embedded stamp +1s per taken name instead of a
- *  "-1" suffix: the GFS sort/prune parsers (fix-util.backupNameTs / autoBackup.nameToTs) only
- *  recognize the strict auto-YYYYMMDD-HHMMSS.json / evt-<reason>-... shape — a suffixed name
- *  parses as ts=0, sorts oldest and gets pruned first, which would defeat the fix itself. */
+ *  returned). D17 (2026-10-02): the collision resolution is a `-dup<n>` suffix AFTER the stamp
+ *  instead of the old +1s..+900s stamp bumps — the bumps minted FUTURE-dated names, so a real
+ *  snapshot landing seconds later collided with (and atomically overwrote) a dedup'd-away dup.
+ *  A suffixed name parses as ts=0 in the GFS sort (fix-util.backupNameTs), i.e. it sorts oldest
+ *  and is pruned first — acceptable by design: it is a same-second duplicate point, and it must
+ *  never shadow a real timestamped snapshot in dedup/retention. Exhaustion (900 dup names)
+ *  returns null and the caller reports failure. baseMs is kept in the signature for callers. */
 function uniqueSnapshotName (existsSync, dir, tag, stamp, baseMs) {
-  const pad = n => String(n).padStart(2, '0')
-  const fmt = x => { const d = new Date(x); return d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '-' + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds()) }
-  let name = tag + stamp + '.json'
-  // P3 fix (2026-09-25): after the 900-name space is exhausted the old loop returned the LAST
-  // already-taken name — atomicWriteJson then silently overwrote an existing snapshot and still
-  // reported {ok:true} (a lost backup). Exhaustion now returns null and the caller reports failure.
-  if (existsSync(path.join(dir, name))) {
-    for (let bump = 1; bump <= 900; bump++) {
-      name = tag + fmt(baseMs + bump * 1000) + '.json' // 900 bumped names deep: give up deterministically rather than loop forever
-      if (!existsSync(path.join(dir, name))) return name
-    }
-    return null
+  void baseMs
+  const name = tag + stamp + '.json'
+  // Common path (no collision) is byte-identical to the historical naming.
+  if (!existsSync(path.join(dir, name))) return name
+  for (let n = 1; n <= 900; n++) {
+    const dup = tag + stamp + '-dup' + n + '.json'
+    if (!existsSync(path.join(dir, dup))) return dup
   }
-  return name
+  return null
 }
 
 /** D11 finding 17: the content-dedup twin must come from the SAME tag prefix. The old compare
@@ -82,6 +80,29 @@ function assertIngressSize (jsonText, channel) {
   if (bytes > INGRESS_MAX_BYTES) {
     const err = new Error(channel + ' payload too large: ' + bytes + ' > ' + INGRESS_MAX_BYTES + ' bytes')
     err.code = 'PAYLOAD_TOO_LARGE'
+    throw err
+  }
+}
+
+// D17 P2: the disaster-recovery JSON must be plausible before it is allowed to become the
+// FRESHEST snapshot. writeCriticalStateBackupAtomic wrote renderer jsonText verbatim — an empty
+// string or non-JSON garbage (crashed renderer, corrupted transfer) overwrote a good
+// critical-state-backup.json and poisoned the recovery source. Aligned with the reader-side
+// plausibility bar (dbRecovery.backupJsonParseable: must parse; per-segment tolerance stays in
+// the restore functions) plus a non-triviality floor: the payload must parse to an OBJECT with
+// at least one key (the renderer writes { backup: { todoState, metaState, ... }, ... } — a bare
+// 'null' / '123' / empty string is garbage by construction). Exported for unit tests.
+function criticalJsonPlausible (jsonText) {
+  if (typeof jsonText !== 'string' || !jsonText.trim()) return false
+  try {
+    const raw = JSON.parse(jsonText)
+    return !!(raw && typeof raw === 'object' && !Array.isArray(raw) && Object.keys(raw).length > 0)
+  } catch { return false }
+}
+function assertCriticalJsonPlausible (jsonText) {
+  if (!criticalJsonPlausible(jsonText)) {
+    const err = new Error('write-critical-state-backup payload is not plausible backup JSON (empty or unparsable/non-object)')
+    err.code = 'INVALID_BACKUP_JSON'
     throw err
   }
 }
@@ -125,6 +146,9 @@ module.exports = function backupHandlers (ctx) {
       if (isLocked()) throw new Error('app is locked')
       // C2 (2026-10-02): clamp the renderer-supplied JSON at the door (see assertIngressSize).
       assertIngressSize(jsonText, 'write-critical-state-backup')
+      // D17 P2: garbage (empty / unparsable / non-object) must never replace the freshest
+      // disaster-recovery snapshot — coded rejection, same convention as the size gate above.
+      assertCriticalJsonPlausible(jsonText)
       // External default root (userData parent dir / pickdone-backups): separated from todos.db, so disaster backup remains recoverable even if userData is wiped
       dbRecovery.writeCriticalStateBackupAtomic(defaultBackupRoot(), String(jsonText))
       return true
@@ -236,13 +260,21 @@ module.exports = function backupHandlers (ctx) {
     'list-auto-backups': (e, backupDir) => {
       assertMainWindow(e) // main-window guard via getMainWindow (isDestroyed-safe; bare module var win threw "Object has been destroyed" after X-close→tray)
       if (isLocked()) throw new Error('app is locked')
+      // D17 P2: a MISSING directory is only a benign empty state when it is the never-configured
+      // default root. A user-CONFIGURED external dir that vanished (unplugged drive, deleted
+      // folder) used to surface as silent {ok:true, files:[]} — the backup list looked empty and
+      // healthy while every snapshot was gone. Distinguish the two states explicitly.
+      const configured = backupDir !== undefined && backupDir !== null && String(backupDir) !== ''
       const dir = resolveBackupDir(backupDir)
       let names
       try {
         names = fs.readdirSync(dir)
       } catch (err) {
         // 目录不存在 = 正常空态(用户尚未选过备份目录),不算错误;其余读取失败必须上报
-        if (fixUtil.classifyBackupError(err) === 'missing') return { ok: true, missing: true, files: [] }
+        if (fixUtil.classifyBackupError(err) === 'missing') {
+          if (configured) return { ok: false, files: [], missing: true, configured: true, error: 'configured backup directory does not exist: ' + dir }
+          return { ok: true, missing: true, files: [] }
+        }
         return { ok: false, files: [], error: String(err && err.message || err) }
       }
       // 新→旧展示排序也按内嵌时间戳(字典序会把 evt-/auto- 前缀排在时间之前,同日错位)
@@ -273,3 +305,4 @@ module.exports.newestSameTag = newestSameTag
 module.exports.assertIngressSize = assertIngressSize
 module.exports.INGRESS_MAX_BYTES = INGRESS_MAX_BYTES
 module.exports.twinMatches = twinMatches
+module.exports.criticalJsonPlausible = criticalJsonPlausible // D17: unit-test seam

@@ -111,8 +111,8 @@ test('B7: attachment-add refuses when the storage quota is exhausted (attachment
   assert.equal(db.call('getById', t.taskId).image, null, 'row untouched for a quota-refused upload')
 })
 
-/* ================= B3: clearTodoDate drops reminderOffsets ================= */
-test('B3: clearTodoDate zeroes the reminder AND drops reminderOffsets (stale offsets must not survive)', () => {
+/* ================= B3: clearTodoDate drops reminderOffsets + reminderExtra ================= */
+test('B3: clearTodoDate zeroes the reminder AND drops reminderOffsets/reminderExtra (stale rows must not survive)', () => {
   const tomorrow = () => +dayjs().add(1, 'day').hour(9).minute(0).second(0).millisecond(0)
   const extraTs = +dayjs().add(2, 'day').hour(10).minute(0).second(0).millisecond(0)
   const t = seed({
@@ -128,7 +128,9 @@ test('B3: clearTodoDate zeroes the reminder AND drops reminderOffsets (stale off
   assert.equal(after.todoTime, 0)
   assert.equal(after.reminderTime, 0)
   assert.deepEqual(after.reminderOffsets, [], 'offsets are anchored to the main reminder — they must die with it')
-  assert.deepEqual(after.reminderExtra, [extraTs], 'extras are kept as-is, same as the App applyDate(0) contract')
+  // Re-anchored D17: the App's applyDate(0) empties reminderExtra too (offsetsCleared → next = []) —
+  // extras are anchored to the same date; the old "extras kept" pin no longer matches the App.
+  assert.deepEqual(after.reminderExtra, [], 'extras die with the date (EditPanel applyDate(0) offsetsCleared)')
 })
 
 /* ================= B13: edit --reminder clear drops offsets + extras ================= */

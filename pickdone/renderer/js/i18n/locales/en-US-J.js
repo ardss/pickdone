@@ -102,6 +102,7 @@ export default {
   'statsJ.EditPanel.priorityNormal': 'Low',
   'statsJ.EditPanel.priorityHigh': 'High',
   'statsJ.EditPanel.reminderPastTip': 'The reminder time has passed and will not fire',
+  'statsJ.EditPanel.remindNeedsDate': 'This row has no date and the task itself is undated — pick a date for the reminder to commit',
   'statsJ.EditPanel.restoredMsg': 'Restored',
   'statsJ.EditPanel.uploadFailedMsg': 'Upload failed: ',
   'statsJ.EditPanel.pickDateAria': 'Pick date',

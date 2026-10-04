@@ -4,20 +4,20 @@
          rows after Sortable moved DOM nodes / concurrent removals -->
     <div v-for="(s,i) in subs" :key="s._key != null ? s._key : s.text + '_' + i" class="ep-sub">
       <span class="ep-sub-check" :class="{on:s.checked}" role="checkbox" :aria-checked="s.checked ? 'true' : 'false'"
-            tabindex="0" @click.stop="toggleSub(s)" @keydown.enter.prevent.stop="toggleSub(s)">{{ s.checked ? '✓' : '' }}</span>
+            tabindex="0" @click.stop="toggleSub(s)" @keydown="onCheckKey(s, $event)">{{ s.checked ? '✓' : '' }}</span>
       <span v-if="renameIndex !== i" class="ep-sub-text" :class="{strike:s.checked}" role="button" tabindex="0"
             :aria-label="s.text" @click="toggleSub(s)" @dblclick="startRename(i)"
-            @keydown.enter.prevent.stop="startRename(i)">{{s.text}}</span>
-      <!-- [R2] Inline rename: double-click (or Enter on the focused text) opens the editor; Enter/blur
+            @keydown="onTextKey(i, $event)">{{s.text}}</span>
+      <!-- [R2] Inline rename: double-click (or Enter/Space on the focused text) opens the editor; Enter/blur
            commits via the 'rename' emit, Esc cancels. commitRename is re-entrant-safe (blur after the
            Enter commit is a no-op because renameIndex was already reset). -->
       <input v-else v-model="renameText" class="ep-sub-rename-input" :aria-label="$t('statsJ.EditPanel.addSubtask')"
              @keydown.enter.prevent.stop="onRenameEnter(i, $event)" @keydown.esc.prevent.stop="cancelRename" @blur="commitRename(i)"/>
       <b class="ep-sub-x close-x close-x--sm" role="button" tabindex="0" :aria-label="$t('statsJ.EditPanel.deleteSubtask')"
-         @click.stop="delSub(i)" @keydown.enter.prevent.stop="delSub(i)"></b>
+         @click.stop="delSub(i)" @keydown="onDelKey(i, $event)"></b>
       <b class="ep-sub-drag">≡</b>
       <span class="ep-sub-move">
-        <i role="button" tabindex="0" :aria-label="$t('statsJ.EditPanel.moveSubtaskUp')" @click.stop="moveSub(i,-1)" @keydown.enter.prevent.stop="moveSub(i,-1)">↑</i><i role="button" tabindex="0" :aria-label="$t('statsJ.EditPanel.moveSubtaskDown')" @click.stop="moveSub(i,1)" @keydown.enter.prevent.stop="moveSub(i,1)">↓</i>
+        <i role="button" tabindex="0" :aria-label="$t('statsJ.EditPanel.moveSubtaskUp')" @click.stop="moveSub(i,-1)" @keydown="onMoveKey(i, -1, $event)">↑</i><i role="button" tabindex="0" :aria-label="$t('statsJ.EditPanel.moveSubtaskDown')" @click.stop="moveSub(i,1)" @keydown="onMoveKey(i, 1, $event)">↓</i>
       </span>
     </div>
     <div class="ep-row ep-addsub">
@@ -34,6 +34,7 @@
  * feeds the parent's save pipeline; this component only emits granular change
  * events (add/toggle/remove/move) and the parent owns subList + the save pipeline.
  */
+import { roleButtonActivate, roleCheckboxActivate } from '../../utils/roleButtonKey.js' // [A8/A9] Space+Enter activation
 export default {
   name: 'EpSubtasks',
   props: {
@@ -56,6 +57,22 @@ export default {
     }
   },
   methods: {
+    /* [D17-DOM4] ARIA checkbox pattern on the subtask check: Space joins Enter (was Enter-only) */
+    onCheckKey (s, e) {
+      roleCheckboxActivate(() => { this.toggleSub(s) }).call(this, e)
+    },
+    /* [D17-DOM4] ARIA button pattern on the row text: Enter/Space opens the inline rename (was Enter-only) */
+    onTextKey (i, e) {
+      roleButtonActivate(() => { this.startRename(i) }, { stop: true }).call(this, e)
+    },
+    /* [D17-DOM4] ARIA button pattern on the subtask delete: Enter/Space (was Enter-only) */
+    onDelKey (i, e) {
+      roleButtonActivate(() => { this.delSub(i) }, { stop: true }).call(this, e)
+    },
+    /* [D17-DOM4] ARIA button pattern on the up/down move fallbacks: Enter/Space (was Enter-only) */
+    onMoveKey (i, dir, e) {
+      roleButtonActivate(() => { this.moveSub(i, dir) }, { stop: true }).call(this, e)
+    },
     // IME guard: keyup.enter can't see the 229 composition flag, so listen on keydown and
     // skip the Enter that commits an IME composition
     onSubEnter (e) {

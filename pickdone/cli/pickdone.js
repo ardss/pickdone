@@ -403,6 +403,11 @@ async function main () {
       const at = opts.at ? lib.parseDate(opts.at) : null // done --at "YYYY-MM-DD HH:mm": backdated completion for backfill/reconstruction
       // Only the explicit override reaches lib; absent flag defers to the isCompleteWithSubtasks setting (lib default)
       const r = lib.toggleComplete(opts._[0], true, { withSubtasks: opts['no-sub-cascade'] ? false : undefined, completedAt: at })
+      if (r.skipped) {
+        // Already-complete skip (review P2 2026-09-10, batch parity): nothing was written, no audit entry
+        if (opts.json) return emitNext({ ok: true, command: cmd, skipped: true, taskId: r.completed.taskId, completedAt: r.completed.completedAt, renewed: null, note: 'already complete — completedAt untouched' })
+        return console.log('= already complete: ' + r.completed.taskId + ' (nothing written, completedAt untouched)')
+      }
       if (opts.json) {
         // JSON contract: renewed always present (null when no renewal); smoke/agents rely on this field
         console.log(JSON.stringify({ ok: true, command: cmd, data: r.completed, renewed: r.renewed ?? null, next: ['undo ' + r.completed.taskId + ' to revert', 'stats --json to see today completions'] }, null, 2))
@@ -430,6 +435,9 @@ async function main () {
         if (opts.important != null) patch.important = parseInt(opts.important, 10) ? 1 : 0
         if (opts.urgent != null) patch.urgent = parseInt(opts.urgent, 10) ? 1 : 0
         if (opts.priority != null) patch.priority = parseInt(opts.priority, 10)
+        // D17 dry-run mirror: the priority⇔important coupling below is part of the real write — the preview must equal it
+        if (opts.priority != null && opts.important == null) patch.important = parseInt(opts.priority, 10) === 3 ? 1 : 0
+        if (opts.important != null && opts.priority == null) patch.priority = parseInt(opts.important, 10) ? 3 : 1
         if (opts.deadline) patch.deadlineTs = opts.deadline === 'none' ? 0 : lib.parseDate(opts.deadline)
         return emitNext({ dryRun: true, taskId: lib.resolveTask(opts._[0]).taskId, patch }, ['remove --dry-run to actually run'])
       }
@@ -474,17 +482,16 @@ async function main () {
       // cleared/sub-ops reuse the same taskId — no re-resolution after a possible --content rename
       const cleared = dateClear ? lib.clearTodoDate(tid2) : null
       const updated = lib.open().call('getById', tid2)
-      // Timeline chips follow the task (UI moveTaskChips semantics, 2026-09-03 review): day change → chips migrate (times unchanged, no collapsing); no chips + explicit time → add one
+      // Timeline chips follow the task (UI moveTaskChips semantics, 2026-09-03 review): day change →
+      // EXISTING chips migrate (times unchanged, no collapsing). D17: an edit never MINTS a chip —
+      // chips are creation-time only in the App (addTodo), so `edit --date <explicit time>` on a
+      // chipless task no longer fabricates one.
       if (opts.date !== undefined && !dateClear) {
-        const mm = lib.dateExplicitTime(opts.date)
         const dayStr = fixUtil.localDayKey // P3-8: single source (src/main/fix-util.js), inline copy removed
         const oldDay = before && before.dayStart ? dayStr(before.dayStart) : null
         const newDay = updated && updated.dayStart ? dayStr(updated.dayStart) : null
         try {
           if (oldDay && newDay && oldDay !== newDay) lib.commit('plan', 'moveTask', { taskId: tid2, fromDay: oldDay, toDay: newDay })
-          if (mm && !lib.open().call('planAll', []).some(r => r.taskId === tid2)) {
-            lib.planSet(tid2, mm, { date: newDay })
-          }
         } catch (e) { console.error('[plan] chip follow-up failed (non-blocking):', e.message) }
       }
       // Documented no-op semantics: `--date none` on an already undated task = changed:0 (nothing written, no audit entry);

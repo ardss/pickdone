@@ -250,7 +250,12 @@ export async function persistSnapshotDiffCore ({ commit }, { from, to, allowDele
       // version reset to 0 (same as deleteTodo): a re-delete after restore must re-enter the sync
       // snapshot — syncTodos excludes delete rows already acked with version > 0, so without the
       // reset the undo-of-create soft delete never propagated
-      const merged = { ...row, delete: true, updateTime: Date.now(), status: 'delete', version: 0 }
+      // deletedAt: same stamp as every other soft-delete path (deleteTodo/deleteTodosMany/CLI) —
+      // purgeExpiredRecycle reads deletedAt (falling back to updateTime) for the auto-purge
+      // cutoff, so an unstamped undo-of-create row would age from a different field than its
+      // siblings and could linger past the bin's expiry window.
+      const now = Date.now()
+      const merged = { ...row, delete: true, deletedAt: now, updateTime: now, status: 'delete', version: 0 }
       commit('upsertLocal', merged)
       safeUpsert(merged)
       changedRows.push(merged)
