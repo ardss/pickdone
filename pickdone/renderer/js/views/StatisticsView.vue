@@ -591,7 +591,7 @@ html[data-theme="dark"] .review-card { background: var(--panel); }
    消除"一块专注一块休息"的砖块感,hover 带体报整段摘要(块级 hover 保留单番茄明细) */
 .tl-band { position: absolute; top: 0; bottom: 0; border-radius: var(--radius-sm, 4px); background: var(--line, var(--line-strong, #c9ced6)); cursor: default; }
 .tl-band .tl-seg.unit { top: 2px; bottom: 2px; border-radius: 0; background: var(--brand); box-shadow: 1px 0 0 var(--panel, #fff); }
-/* 带内纯品牌色直角相连(圆角会产生接缝);1px 白线仅作番茄分隔刻度 */ 一个番茄=一个单元块：专注主体(品牌绿)+紧连的休息尾巴(灰)，--ff 为专注占比分割点(内联覆盖) */
+/* 带内纯品牌色直角相连(圆角会产生接缝);1px 白线仅作番茄分隔刻度;一个番茄=一个单元块：专注主体(品牌绿)+紧连的休息尾巴(灰)，--ff 为专注占比分割点(内联覆盖) */
 .tl-seg.unit { --ff: 80%; background: linear-gradient(to right, var(--brand) var(--ff), var(--line-strong) var(--ff)); }
 .tl-seg.unit:hover { filter: brightness(.94); }
 .tl-seg.focus { background: var(--brand); }
