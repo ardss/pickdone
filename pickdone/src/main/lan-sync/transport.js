@@ -103,13 +103,11 @@ function send(socket, msg) {
     line = JSON.stringify(msg)
   }
   try {
-    // D21 (P3 2026-10-02): `line + '\n'` duplicated a near-32MB string per frame (segments-chunk
-    // payloads). Two writes keep the same wire bytes and the same truthiness contract (false =
-    // backpressure or dead socket); Node sockets are write-ordered, so the peer still sees the
-    // frame terminated by exactly one newline.
-    const bodyOk = socket.write(line) !== false
-    const nlOk = socket.write('\n') !== false
-    return bodyOk && nlOk
+    // Single concat write, deliberately: a D21 two-write variant was legal framing-wise (write
+    // ordering holds) but delivered the newline as its own TCP segment on Linux, which broke
+    // naive per-data-event line parsers (our own snapshot mutual-busy harness). One write keeps
+    // one segment per frame; the near-32MB concat copy stays an accepted cost.
+    return socket.write(line + '\n') !== false
   } catch {
     return false
   }

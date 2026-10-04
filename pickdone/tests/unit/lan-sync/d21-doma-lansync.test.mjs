@@ -59,16 +59,15 @@ test('D21: a dispatch (handler) throw is logged honestly and does NOT destroy th
   assert.match(errors[0].message, /^bad JSON line:/)
 })
 
-test('D21: transport.send writes line and newline separately (no concat duplicate)', () => {
+test('D21 revert: transport.send emits ONE write per frame (body+newline concatenated)', () => {
+  // The two-write variant was legal framing-wise but delivered the newline as its own TCP
+  // segment on Linux, breaking naive per-data-event line parsers (snapshot mutual-busy harness
+  // red on CI). The single concat write is the contract: exactly one segment per frame.
   const sock = fakeSocket()
-  const big = 'x'.repeat(1024)
   const ok = transport.send(sock, { type: 'ping' })
   assert.equal(ok, true, 'truthy contract on a healthy socket')
-  assert.equal(sock.writes.length, 2, 'exactly two writes: body, then newline')
-  assert.equal(sock.writes[1], '\n')
-  assert.equal(sock.writes[0] + sock.writes[1], JSON.stringify({ type: 'ping' }) + '\n', 'same wire bytes')
-  assert.ok(sock.writes[0].length > 0)
-  assert.ok(big.length > 0) // keep the size reference honest (no behavior)
+  assert.equal(sock.writes.length, 1, 'exactly one write: body terminated by the newline')
+  assert.equal(sock.writes[0], JSON.stringify({ type: 'ping' }) + '\n', 'wire bytes are the frame plus one newline')
 })
 
 test('D21: transport.send still reports false on a dead socket', () => {
