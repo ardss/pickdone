@@ -37,15 +37,23 @@ export function toggleCompleteWithUndo ({ store, message, todo, announce, fromEl
     const undo = () => {
       const cur = store.state.todo.todoList.find(t => t.taskId === todo.taskId)
       if (!cur) return
-      store.dispatch('todo/toggleComplete', cur)
-      if (announce) announce(tt('statsA.core.' + (wasComplete ? 'doneAnnounce' : 'undoneAnnounce'), { c: content }))
-      // [uiux-2026-10-01 J2 P3] The undo is the feedback moment this toast exists for: leaving the
-      // stale "已完成：… 撤销" toast on screen read as if the click never registered (and invited a
-      // second click on a dead control). Close the undo toast and confirm the revert with the
-      // mirrored announce copy — same visible-confirmation contract as moveWithUndo's closeAll.
-      const doneText = tt('statsA.core.' + (wasComplete ? 'doneAnnounce' : 'undoneAnnounce'), { c: content || tt('statsJ.TodoItem.untitled') })
-      try { message.closeAll() } catch { /* mock or already closed */ }
-      message({ type: 'success', message: doneText, duration: 2000 })
+      // [d21-A2] the undo dispatch used to be fire-and-forget: the "restored" success toast fired
+      // unconditionally even when the write rejected. Observe the promise — success feedback (and
+      // the stale-toast closeAll) only after it RESOLVES; on rejection surface the shared
+      // actionFailedMsg pattern (same shape as confirm.js restoreAndToast's moveFailToast path).
+      Promise.resolve(store.dispatch('todo/toggleComplete', cur)).then(() => {
+        if (announce) announce(tt('statsA.core.' + (wasComplete ? 'doneAnnounce' : 'undoneAnnounce'), { c: content }))
+        // [uiux-2026-10-01 J2 P3] The undo is the feedback moment this toast exists for: leaving the
+        // stale "已完成：… 撤销" toast on screen read as if the click never registered (and invited a
+        // second click on a dead control). Close the undo toast and confirm the revert with the
+        // mirrored announce copy — same visible-confirmation contract as moveWithUndo's closeAll.
+        const doneText = tt('statsA.core.' + (wasComplete ? 'doneAnnounce' : 'undoneAnnounce'), { c: content || tt('statsJ.TodoItem.untitled') })
+        try { message.closeAll() } catch { /* mock or already closed */ }
+        message({ type: 'success', message: doneText, duration: 2000 })
+      }, (e) => {
+        try { console.error('[completeAction] undo failed:', e) } catch { /* console may be gone */ }
+        try { message({ type: 'error', message: tt('statsH.main.actionFailedMsg') + ((e && e.message) || ''), duration: 3000 }) } catch { /* toast must not throw */ }
+      })
     }
     showUndoToast(message, [
       tt('statsA.core.' + (wasComplete ? 'undoneAnnounce' : 'doneAnnounce'), { c: content || tt('statsJ.TodoItem.untitled') }) + '　',

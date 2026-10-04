@@ -94,7 +94,12 @@ module.exports = ({ open, commit, audit, CliError, dayjs, core, resolveTask, liv
 
   /* ---------------- Repeat rules (meta repeatRule:<rid>; generation reuses the todo-core engine) ---------------- */
   function buildRepeatRule (opts) {
-    const rule = Object.assign({}, core.REPEAT_DEFAULTS)
+    // B9-P3 (2026-10-02, App parity): the App seeds a new rule from the synced settings doc's
+    // repeatDefaultSettings (renderer/js/store/repeatSettings.js — field-granular via settings_rows);
+    // the CLI seeded from core.REPEAT_DEFAULTS only, so a user's custom default interval/counts were
+    // silently ignored by `repeat on`. Absent per-field values fall back to REPEAT_DEFAULTS.
+    const userDefaults = (settingsDoc && settingsDoc().repeatDefaultSettings) || {}
+    const rule = Object.assign({}, core.REPEAT_DEFAULTS, (userDefaults && typeof userDefaults === 'object') ? userDefaults : {})
     const type = opts.type || 'daily'
     const interval = Math.max(1, parseInt(opts.interval, 10) || 1)
     // count: 0 = unspecified → keep the engine defaults (day 90 / week 52 / month 24 / year 5, same as the renderer's RepeatModal form);

@@ -340,6 +340,7 @@ export default {
       // F-C1: batch delete — ONE snapshot push / ONE computeViews / ONE putMany (the per-row
       // deleteTodo loop used to push a whole-table undo snapshot per row)
       let snap = []
+      let failed = 0 // [d21-A1] a failed deleteTodosMany must surface, not vanish
       try {
         const ids = await this.$store.dispatch('todo/deleteTodosMany', plain)
         // [undo-delete-bypasses-restoreFromRecycle fix] capture each row's repeatId at delete time;
@@ -351,15 +352,17 @@ export default {
           // trigger a pointless repeatRule meta lookup on every undo
           return { id, repeatId: isRepeatTask(row) ? row.repeatId : undefined }
         })
-      } catch { /* dead rows: skip */ }
+      } catch { failed++ } // [d21-A1] a TOTAL delete failure used to be swallowed silently — count it like the per-row siblings do
+      this.$message.closeAll()
       if (snap.length) {
-        this.$message.closeAll()
         batchMoveWithUndo(this, {
           label: this.$t('statsC.TodoBox.msgDeleted', { n: snap.length }),
           snap,
           revertOf: r => this.$store.dispatch('todo/restoreFromRecycle', { taskId: r.id, repeatId: r.repeatId })
         })
       }
+      // [d21-A1] honest-failure feedback, same shape as batchToday/batchCat (msgPartialFail reuse)
+      if (failed) this.$message.warning(this.$t('statsC.TodoBox.msgPartialFail', { n: failed }))
       if (repeatAsk) this.$store.commit('ui/askRepeatDelete', repeatAsk.taskId)
     },
     ctxMenu (t, e) {

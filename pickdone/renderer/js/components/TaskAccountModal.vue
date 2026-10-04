@@ -193,10 +193,14 @@ export default {
       const d = this.draft
       if (!d || !d.create) return
       const startTs = dayjs().startOf('day').valueOf() + d.startMin * 60000
+      // [d21-A4] dateKey must derive from endTime, not startTs: the DB layer unconditionally
+      // re-derives dateKey from endTime (see taskMenu.js's backfill), so a record straddling
+      // midnight (endTime past 00:00) landed on the PREVIOUS day here and diverged from the DB.
+      const endTime = startTs + d.dur * 60000
       this.$store.commit('tomato/addRecord', {
         // Manually added records get a random tail: two backfills with the same minute and duration are no longer silently swallowed by deterministic-id idempotent dedup
-        tomatoId: 'tmt_a2_' + startTs + '_' + d.dur + '_' + Math.random().toString(36).slice(2, 7), endTime: startTs + d.dur * 60000,
-        dateKey: dayjs(startTs).format(FMT.date),
+        tomatoId: 'tmt_a2_' + startTs + '_' + d.dur + '_' + Math.random().toString(36).slice(2, 7), endTime,
+        dateKey: dayjs(endTime).format(FMT.date),
         focus: this.task ? this.task.taskContent : '', focusTaskId: this.taskId,
         focusDuration: d.dur, rest: d.rest, restDuration: d.rest,
         succeed: true, status: 'local', manual: true

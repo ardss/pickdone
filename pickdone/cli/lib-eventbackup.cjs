@@ -49,12 +49,26 @@ function writePurgeEventSnapshot ({ dir, rows, liveRows, metaEntries, reason = '
       }
     }
     atomicWriteJson(dir, name, JSON.stringify(dump))
-    // Rolling keep: prune the oldest evt-* snapshots beyond EVT_KEEP (same tier policy as the App —
-    // the auto- tier is never touched by an evt run).
+    // Rolling keep: prune the oldest evt-* snapshots (same tier policy as the App — the auto-
+    // tier is never touched by an evt run). Newest first (mtime), grouped by reason below.
     const evts = fs.readdirSync(dir).filter(f => /^evt-/.test(f) && f.endsWith('.json'))
       .map(f => { try { return { f, m: fs.statSync(path.join(dir, f)).mtimeMs } } catch { return null } })
       .filter(Boolean).sort((a, b) => b.m - a.m)
-    for (const old of evts.slice(EVT_KEEP)) { try { fs.unlinkSync(path.join(dir, old.f)) } catch { /* best-effort */ } }
+    // B8-P3 (2026-10-02, App parity autoBackup.selectPrunes): the flat newest-10-total prune used to
+    // starve one reason when another fired more often (10 evt-cleanup snapshots evicted every
+    // evt-purge snapshot). The App's GFS keeps eventKeep PER REASON (autoBackup.evtGroups); the
+    // importable selectPrunes also runs the auto-tier day/week anchors, so the CLI replicates just
+    // the per-reason grouping here (source: src/main/autoBackup.js evtGroups block).
+    const groups = new Map()
+    for (const e of evts) {
+      const m = /^evt-([a-z0-9-]+?)-\d{8}-\d{6}(?:-[A-Za-z0-9]+)?\.json$/.exec(e.f) // same shape as autoBackup RE_EVT
+      const key = (m && m[1]) || '(unparsed)'
+      if (!groups.has(key)) groups.set(key, [])
+      groups.get(key).push(e)
+    }
+    for (const [, list] of groups) {
+      for (const old of list.slice(EVT_KEEP)) { try { fs.unlinkSync(path.join(dir, old.f)) } catch { /* best-effort */ } }
+    }
     return { ok: true, file: name }
   } catch (e) {
     return { ok: false, error: String((e && e.message) || e).slice(0, 160) }

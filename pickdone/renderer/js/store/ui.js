@@ -63,7 +63,17 @@ async function cleanupInlineCreated ({ state, rootState, dispatch }, createdId) 
     // restoreSnapshot) so the schedule survives the undo like any other soft-delete reversal.
     const undo = () => {
       const cur = rootState.todo.recycleList.find(x => x.taskId === createdId)
-      if (cur) dispatch('todo/restoreFromRecycle', { taskId: createdId }, { root: true })
+      if (!cur) return
+      // [d21-A8] the restore dispatch was fire-and-forget: a rejected write left the task deleted
+      // while the user believed they had undone it. Observe the promise — mirrored
+      // restoreAndToast contract (confirm.js): success toast on resolve, honest failure on reject.
+      dispatch('todo/restoreFromRecycle', { taskId: createdId }, { root: true }).then(
+        () => { if (msg) try { msg.success(tt('statsJ.Confirm.restored')) } catch { /* toast must not throw */ } },
+        (e) => {
+          console.error('[ui] orphan-cleanup undo restore failed:', e)
+          if (msg) try { msg.error(tt('statsH.main.actionFailedMsg') + ((e && e.message) || '')) } catch { /* toast must not throw */ }
+        }
+      )
     }
     if (h && msg && window.Vue) {
       showUndoToast(msg, [

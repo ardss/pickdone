@@ -65,6 +65,17 @@ test('ES4: pick-backup-dir propagates a whitelist persist failure instead of rep
     }
     return origWrite.call(fs, file, data, opts)
   }
+  // D21 (2026-10-02): the whitelist persist moved to writeFileDurable (tmp -> fsync -> rename),
+  // so the injected failure must also cover the final rename — that is now the step that
+  // publishes the whitelist file.
+  const origRename = fs.renameSync
+  fs.renameSync = (from, to) => {
+    if (String(to).endsWith('allowed-backup-dirs.json')) {
+      const e = new Error('EACCES: permission denied, rename whitelist'); e.code = 'EACCES'
+      throw e
+    }
+    return origRename.call(fs, from, to)
+  }
   try {
     await assert.rejects(
       () => backupHandlers(freshCtx())['pick-backup-dir'](eMain),
@@ -76,6 +87,7 @@ test('ES4: pick-backup-dir propagates a whitelist persist failure instead of rep
       'failed-persist directory must not stay registered in memory')
   } finally {
     fs.writeFileSync = origWrite
+    fs.renameSync = origRename
   }
 })
 

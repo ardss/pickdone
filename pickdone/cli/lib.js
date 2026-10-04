@@ -232,19 +232,20 @@ function normalizePreds (db, taskId, preds) {
  *  P3-7: the CLI's verbatim nextSortCli copy is gone; shared/sort-core.mjs is imported as nextSort above. */
 function addTodo ({ content, desc, date, reminder, category, difficulty, priority, important, urgent, repeatId = null, createTime = null, after = null }) {
   if (!content || !String(content).trim()) throw new CliError('task content required', 'EMPTY_CONTENT')
+  // B10-P3 (App parity EditPanel): the App bounds priority/difficulty to 0-3 — an unbounded CLI value
+  // used to write a quadrant level the UI can never render. Loud CliError, same as the edit path.
+  if ((priority != null && !(Number(priority) >= 0 && Number(priority) <= 3)) || (difficulty != null && !(Number(difficulty) >= 0 && Number(difficulty) <= 3))) throw new CliError('priority/difficulty must be within 0-3 (App parity)', 'USAGE')
   const db = open()
   const now = Date.now()
-  // createTime 可回填(--created-at):重建历史日程时「新增」统计才不失真;缺省=现在
-  const createdTs = createTime ? parseDate(createTime) : now
-  const todoTime = date ? parseDate(date) : 0
+  const createdTs = createTime ? parseDate(createTime) : now // createTime 可回填(--created-at):重建历史日程时「新增」统计才不失真;缺省=现在
+  const todoTime = date ? parseDate(date) : (reminderDateBackfill(null, { reminderTime: reminder ? parseDate(reminder) : 0 }).todoTime || 0) // D19-DOM2 (#3, App parity): a reminder on a dateless add backfills the date (edit-path twin, cli/pickdone.js reminderDateBackfill)
       // Renewal-instance idempotency: skip when an instance with the same rid + same dayStart exists (prevents duplicate CLI runs + concurrent multi-window generation creating two)
   if (repeatId && todoTime) {
     const targetDay = +dayjs(todoTime).startOf('day')
     const existing = db.call('queryTodos', { deleted: 0, repeatId, dayStartFrom: targetDay, dayStartTo: targetDay })
     if (Array.isArray(existing) && existing.length) return existing[0]
   }
-  // Insert sort unified on renderer nextSort semantics (F3 2026-09-21, shared nextSort): the side
-  // (top/bottom) follows newTodoDefaultSort; the ±32 jitter keeps concurrently identical sorts distinct.
+  // Insert sort unified on renderer nextSort semantics (F3 2026-09-21, shared nextSort): the side (top/bottom) follows newTodoDefaultSort; the ±32 jitter keeps concurrently identical sorts distinct.
   const targetDay = todoTime ? +dayjs(todoTime).startOf('day') : 0
   const daySorts = db.call('queryTodos', { deleted: 0 })
     .filter(x => (x.dayStart || 0) === targetDay)
@@ -316,15 +317,15 @@ function patchTodo (input, patch, { action, note } = {}) {
  *  date-removed path exactly (EditPanel.setDate('none') → applyDate(0) → queueSave → store/todo.js
  *  updateTodoFields): todoTime=0 with derived dayStart=0, and the main reminder drops to 0 along with the
  *  date (the App's applyDate(0) zeroes remindTs; reminders are date-anchored — scheduleReminder gates on
- *  dayStart); reminderExtra rows are kept as-is, same as the App. B3/B13: reminderOffsets are
- *  dropped along with the main reminder (offsets are anchored to it — keeping them revives stale
- *  early-warning chips when a reminder is re-added; the reminder-clear lifecycle rule in
- *  EditPanel.onRemindersClear). Schedule chips cannot survive without a
+ *  dayStart). B3/B13: reminderOffsets are dropped along with the main reminder (offsets are anchored to it
+ *  — keeping them revives stale early-warning chips when a reminder is re-added; the reminder-clear
+ *  lifecycle rule in EditPanel.onRemindersClear). Schedule chips cannot survive without a
  *  day to live on: same snapshot→clear cascade as the App's rowChipSync date-removed branch
  *  (snapshotForDelete + clearTaskChips = snapshot to meta, then planDeleteTask) — the snapshot stays in
  *  meta so a later `restore` can still backfill. B13 exact shape (EditPanel.applyDate(0), offsetsCleared):
  *  reminderTime drops to 0 and BOTH reminder arrays empty — offsets AND extras are anchored to the main
- *  reminder and die with it. Already-undated task → no-op ({changed:false}, nothing written, no audit entry). */
+ *  reminder and die with it (the old "extras kept as-is" sentence here contradicted the code below).
+ *  Already-undated task → no-op ({changed:false}, nothing written, no audit entry). */
 function clearTodoDate (input) {
   const t = resolveTask(input, liveTasks())
   if (!t.todoTime && !t.dayStart) return { task: t, changed: false }
@@ -765,8 +766,7 @@ async function importEvents (events, { onProgress = () => {} } = {}) {
   // cli-6: hasRecord used to be returned as a LIVE CLOSURE — a function on the result object.
   // Nothing JSON-serializes a function, so every consumer that emitted/serialized the result
   // silently dropped the field, and `res.hasRecord` reads as `function` not data. Materialize it:
-  // a plain boolean re-read from the ledger at return time (the d4 re-read property is preserved —
-  // it now sees rows the import itself just created).
+  // a plain boolean re-read from the ledger at return time (the d4 re-read property is preserved — it now sees rows the import itself just created).
   const hasRecord = createdIds.some(tid => (tomatoRecords() || []).some(r => r.manual && r.focusTaskId === tid))
   return { created, skipped, clamped, failed, total: events.length, hasRecord }
 }

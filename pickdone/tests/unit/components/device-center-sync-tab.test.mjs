@@ -166,7 +166,9 @@ test('pendingPair from syncGetStatus is consumed on mount (recovers the dialog a
 
 test('respondPair inspects the result: ok:false on accept toasts expiry, not success', () => {
   assert.match(src, /const r = \(await syncPairRespond\(\{ accept: !!accept \}\)\) as \{ ok\?: boolean \} \| null/)
-  assert.match(src, /r && r\.ok === false\)[^\n]*pairExpiredMsg/, 'expired accept → 配对请求已过期 toast')
+  // D21 (null response = unconfirmed): accept requires truthy r && r.ok for the success toast;
+  // ok:false AND null/undefined both fall to the expiry warning.
+  assert.match(src, /\(r && r\.ok\) \? this\.\$message\.success\(this\.\$t\('sync\.pairOkMsg'\)\) : this\.\$message\.warning\(this\.\$t\('sync\.pairExpiredMsg'\)\)/, 'accept: ok -> success, false/null -> expired toast')
   assert.match(src, /pairOkMsg/, 'successful accept still toasts success')
 })
 

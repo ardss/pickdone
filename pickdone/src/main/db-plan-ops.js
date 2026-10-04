@@ -30,11 +30,23 @@ exports.planAddMany = (db, chips) => {
   // silently filtering them — a buffered segment whose tail never landed used to ack ok=true
   // past lost chips. `rejected` rides the accepted-ids array as a NON-enumerable property.
   const rejected = []
+  // B8-P2 (2026-10-02, D20 category-mint parity cli/lib-categories.cjs): the bare
+  // Date.now()+rand mint collided within the same millisecond and the ON CONFLICT upsert silently
+  // MOVED an unrelated chip onto the colliding id. Re-mint in a bounded loop until the id is free
+  // (wider jitter space when the fast path keeps colliding).
+  const seenBatch = new Set() // same-batch mints collide too (DB check cannot see unsent rows)
+  const taken = id => seenBatch.has(id) || !!db.prepare('SELECT 1 FROM plan_chips WHERE id = ?').get(id)
+  const mintId = () => {
+    let id = 'pl_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7)
+    for (let i = 0; taken(id) && i < 16; i++) id = 'pl_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 9)
+    seenBatch.add(id)
+    return id
+  }
   for (let i = 0; i < rawList.length; i++) {
     const c = rawList[i]
     if (c && c.taskId && /^\d{4}-\d{2}-\d{2}$/.test(String(c.day)) && /^([01]\d|2[0-3]):[0-5]\d$/.test(String(c.mm))) {
       list.push({
-        id: (c && c.id) || 'pl_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+        id: (c && c.id) || mintId(),
         taskId: String(c.taskId || ''), day: String(c.day || ''), mm: String(c.mm || ''), sort: Number(c.sort) || 0,
         // M2 (2026-09-20): an explicit updatedAt (the sync apply path carries the peer row's age)
         // must survive — re-stamping now() here made the applied chip differ from the peer's row
@@ -61,6 +73,12 @@ exports.planAddMany = (db, chips) => {
 exports.planUpdateChip = (db, { id, day, mm }) => {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(day))) throw new Error('planUpdateChip: day must be YYYY-MM-DD')
   if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(String(mm))) throw new Error('planUpdateChip: mm must be HH:mm')
+  // B7-P3 (2026-10-02, planDeleteTask idempotency parity): a chip update that does not actually
+  // change day/mm used to re-stamp updatedAt and mint another oplog delta per no-op call — peers
+  // churned on phantom plan pointers every round. Read-compare first; a no-op returns false
+  // (no stamp, no oplog) exactly like planDeleteTask's already-deleted no-op.
+  const cur = db.prepare('SELECT day, mm FROM plan_chips WHERE id=? AND deleted=0').get(String(id))
+  if (!cur || (cur.day === String(day) && cur.mm === String(mm))) return false
   const r = db.prepare('UPDATE plan_chips SET day=?, mm=?, updatedAt=? WHERE id=? AND deleted=0').run(String(day), String(mm), Date.now(), String(id))
   return r.changes > 0
 }

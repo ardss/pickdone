@@ -78,12 +78,22 @@ const MS_KEY = id => 'projectMilestones:' + id
 function msNormalize (list) {
   return (Array.isArray(list) ? list : []).filter(m => m && m.title && m.date)
     .map(m => ({
-      id: m.id || ('ms_' + Date.now() + Math.random().toString(36).slice(2, 6)),
+      id: m.id || msMint(list),
       title: String(m.title),
       date: Number(m.date),
       taskIds: Array.isArray(m.taskIds) ? m.taskIds.filter(Boolean) : []
     }))
     .sort((a, b) => a.date - b.date)
+}
+// B9b-P3 (2026-10-02, D20-DOMB9 parity): the old mint (`Date.now()` + 4 random base36 chars) was
+// weaker than the task-id mints — two milestones created in the same millisecond silently collapsed
+// onto one id (later `list.find(m => m.id === added.id)` echoed the WRONG row). Longer randomness
+// plus a collision re-mint against the ids already in the blob before write.
+function msMint (existing) {
+  const taken = new Set((Array.isArray(existing) ? existing : []).map(m => m && m.id))
+  let id = 'ms_' + Date.now() + Math.random().toString(36).slice(2, 10)
+  for (let i = 0; taken.has(id) && i < 16; i++) id = 'ms_' + Date.now() + Math.random().toString(36).slice(2, 12)
+  return id
 }
 
 /** Milestone progress (N2): linked tasks → completion ratio; none linked → null (purely date-driven) */
@@ -119,7 +129,7 @@ function addMilestone (categoryInput, title, dateInput) {
   // newMilestoneId in renderer/js/utils/milestones.js — saveMilestones keeps caller ids) and
   // echo by id. The old title+date match echoed the FIRST equal row, i.e. a PRE-EXISTING
   // duplicate milestone whenever one with the same title/date was already in the list.
-  const added = { id: 'ms_' + Date.now() + Math.random().toString(36).slice(2, 6), title: String(title).trim(), date }
+  const added = { id: msMint(getMilestones(categoryId).milestones), title: String(title).trim(), date }
   const list = msNormalize(getMilestones(categoryId).milestones.concat([added]))
   commit('meta', 'put', [MS_KEY(categoryId), JSON.stringify(list)])
   audit.record({ action: 'milestone.add', targets: [{ taskId: 'cat:' + categoryId, content: cat ? cat.categoryName : String(categoryId) }], note: `milestone "${title.trim()}" → ${dayjs(date).format('YYYY-MM-DD')}` })

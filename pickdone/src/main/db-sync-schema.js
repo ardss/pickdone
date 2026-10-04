@@ -281,7 +281,10 @@ module.exports = ({ getDb, log }) => {
     rowPut: p => {
       const key = p && p.key != null ? String(p.key) : ''
       if (!key) throw new Error('settingsRowPut: key is required')
-      return putRow(key, p.value, Date.now())
+      // D21 (P3 2026-10-02): honor an explicit updatedAt — rowPutMany already does (sync apply
+      // path preserves the winner's LWW age), but single rowPut dropped it and stamped every
+      // remote-applied row with now, silently re-aging it against LWW merges.
+      return putRow(key, p.value, (p && p.updatedAt) || Date.now())
     },
     rowPutMany: list => {
       const arr = Array.isArray(list) ? list : [list]

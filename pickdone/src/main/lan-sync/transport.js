@@ -103,6 +103,10 @@ function send(socket, msg) {
     line = JSON.stringify(msg)
   }
   try {
+    // Single concat write, deliberately: a D21 two-write variant was legal framing-wise (write
+    // ordering holds) but delivered the newline as its own TCP segment on Linux, which broke
+    // naive per-data-event line parsers (our own snapshot mutual-busy harness). One write keeps
+    // one segment per frame; the near-32MB concat copy stays an accepted cost.
     return socket.write(line + '\n') !== false
   } catch {
     return false
@@ -768,10 +772,7 @@ function connect(host, port, opts) {
   em.send = (msg) => send(socket, msg)
   // Fix-round (2026-09-22, lan-sync-9): close() used to end()+destroy() in the same tick —
   // frames still in the user-space/kernel write buffer (e.g. the round's final ack) were
-  // DISCARDED, the peer's watermark never advanced, and the next round re-pushed the whole
-  // window. end() alone flushes buffered frames + FIN; destroy() runs only after the flush
-  // completes (socket 'close'), an already-dead socket, or a 1s cap so a stalled peer can
-  // never hold close() open.
+  // DISCARDED, the peer's watermark never advanced, and the next round re-pushed the whole window. end() alone flushes buffered frames + FIN; destroy() runs only after the flush completes (socket 'close'), an already-dead socket, or a 1s cap so a stalled peer can never hold close() open.
   em.close = () => new Promise((resolve) => {
     let settled = false
     const finish = () => {

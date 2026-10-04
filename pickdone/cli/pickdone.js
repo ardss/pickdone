@@ -456,15 +456,23 @@ async function main () {
         if (isReminderClear(opts.reminder)) { patch.reminderTime = 0; patch.reminderOffsets = []; patch.reminderExtra = [] } else patch.reminderTime = lib.parseDate(opts.reminder)
       }
       if (opts.category !== undefined) patch.categoryId = lib.resolveCategory(opts.category) || 0
+      // B10-P3 (App parity EditPanel): priority/difficulty are bounded 0-3 — an unbounded value used
+      // to write a quadrant level the UI can never render. Loud CliError naming the allowed range
+      // (the add path validates the same bound in cli/lib.js addTodo).
+      const range3 = (v, name) => {
+        const n = parseInt(v, 10)
+        if (!(n >= 0 && n <= 3)) throw new lib.CliError(name + ' must be within 0-3 (App parity)', 'USAGE')
+        return n
+      }
       if (opts.important != null) patch.important = parseInt(opts.important, 10) ? 1 : 0
       if (opts.urgent != null) patch.urgent = parseInt(opts.urgent, 10) ? 1 : 0
-      if (opts.priority != null) patch.priority = parseInt(opts.priority, 10)
+      if (opts.priority != null) patch.priority = range3(opts.priority, 'priority')
       // priority ↔ important quadrant two-way coupling (same semantics as EditPanel fieldPatch / MatrixGrid drag, one ledger):
       // high(3)↔important=1, low/none↔important=0; whichever is explicitly specified wins
       if (opts.priority != null && opts.important == null) patch.important = parseInt(opts.priority, 10) === 3 ? 1 : 0
       if (opts.important != null && opts.priority == null) patch.priority = parseInt(opts.important, 10) ? 3 : 1
       if (opts.deadline) patch.deadlineTs = opts.deadline === 'none' ? 0 : lib.parseDate(opts.deadline)
-      if (opts.difficulty != null && opts.difficulty !== true) patch.difficulty = parseInt(opts.difficulty, 10) || 0
+      if (opts.difficulty != null && opts.difficulty !== true) patch.difficulty = range3(opts.difficulty, 'difficulty')
       if (!Object.keys(patch).length && !dateClear && opts.estimate == null && opts['remind-offset'] == null && opts['remind-extra'] == null) throw new lib.CliError('edit requires at least one field')
       // Apply the main patch before reminder/tomato branches: with --reminder + --remind-offset in one command, the main reminder must be written first (offsets anchor to it)
       // Resolve exactly ONCE for the whole command (review P2 2026-09-12): the main patch used to commit with the

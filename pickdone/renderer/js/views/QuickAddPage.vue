@@ -32,8 +32,9 @@ export default {
     }
     this._offFocus = window.todoAPI.onQuickAddFocus
       ? window.todoAPI.onQuickAddFocus(() => {
-        // Review P3 (2026-09-22): the window is hidden-not-destroyed on hide, so mounted()'s one-shot
-        // restore never ran again — draft restore moved into the focus callback (runs on EVERY summon)
+        // Review P3 (2026-09-22): draft restore moved into the focus callback (runs on EVERY summon);
+        // [d21-A12] a re-summon during the pending auto-hide cancels it — the user wants the window
+        if (this._hideTimer) { clearTimeout(this._hideTimer); this._hideTimer = null }
         this.$nextTick(() => { this.restoreDraft(); this.$refs.qa && this.$refs.qa.focusInput() })
       })
       : null
@@ -45,6 +46,7 @@ export default {
     this.restoreDraft()
     this.$nextTick(() => this.$refs.qa && this.$refs.qa.focusInput())
   },
+
   beforeUnmount () {
     document.documentElement.classList.remove('widget-transparent')
     if (this._offFocus) this._offFocus()
@@ -70,6 +72,9 @@ export default {
       } catch { /* best-effort */ }
     },
     onKey (e) {
+      // [d21-A12] any real keystroke cancels the pending post-create auto-hide (fast typing right
+      // after creation used to race the 250ms timer). Esc still hides explicitly below.
+      if (this._hideTimer && e.key !== 'Escape') { clearTimeout(this._hideTimer); this._hideTimer = null }
       // [D15-A2] IME guard (same contract as HabitView add / TomatoAbandonModal / EpTags):
       // the Enter/Esc key events that COMMIT or CANCEL a composition arrive with keyCode 229 /
       // isComposing set. Dismissing the IME candidate window with Esc used to be treated as an
@@ -88,8 +93,16 @@ export default {
     onCreated () {
       // The draft is consumed by a successful creation; clear it so a stale line never resurfaces
       try { localStorage.removeItem(DRAFT_KEY) } catch { /* best-effort */ }
-      // Pause briefly so the input clearing is visible, then hide
-      setTimeout(() => window.todoAPI.quickAddHide(), 250)
+      // [d21-A12] the 250ms auto-hide used to be a fire-and-forget timer: fast typing (or a
+      // re-summon focus) within the window raced it. Store the handle, cancel it on keydown and
+      // on re-summon focus, and hide only when the input is STILL empty.
+      if (this._hideTimer) { clearTimeout(this._hideTimer); this._hideTimer = null }
+      this._hideTimer = setTimeout(() => {
+        this._hideTimer = null
+        const qa = this.$refs.qa
+        if (qa && qa.text && String(qa.text).trim()) return // user already typed again — keep the window up
+        window.todoAPI.quickAddHide()
+      }, 250)
     }
   },
 

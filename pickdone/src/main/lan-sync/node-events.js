@@ -92,7 +92,12 @@ module.exports = ({ getState, emitSyncEvent, notifyRenderers, kickSyncRound, sch
     }
     // Round-1 P0: restore PAIRED peers — without this the peer table was memory-only and
     // `sync status` reported peers:(none) after every restart even though pairing state survived.
-    for (const p of Object.values(loadPairedPeers())) {
+    // D21 (P3 2026-10-02): loadPairedPeers() itself used to run OUTSIDE any try — one throw
+    // (torn settings row, IO error) skipped peer restore for the ENTIRE session. Guard the load
+    // and restore an empty table on failure; the per-peer try below already isolates individuals.
+    let pairedPeers = []
+    try { pairedPeers = Object.values(loadPairedPeers()) } catch (e) { log.warn('[LanSync] paired peer table load failed, skipping restore:', e && e.message) }
+    for (const p of pairedPeers) {
       try {
         if (!p || !p.deviceId || p.deviceId === deviceId || !p.host) continue
         state.node.addPeer({ deviceId: p.deviceId, name: p.name, host: p.host, port: Number(p.port) || DEFAULT_PORT, secret: p.secret })

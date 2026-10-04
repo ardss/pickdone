@@ -155,7 +155,11 @@ module.exports = function attachmentHandlers (ctx) {
       // are size-checked post-copy, and the final key appears atomically via tmp+rename so a
       // failed/interrupted copy can no longer leave a truncated file where the player expects
       // a complete audio file. (In-repo precedent: handlers/csv-import.js run-time re-checks.)
-      const tmpPath = path.join(attachments.attachDir(), key + '.tmp-' + process.pid + '-' + Date.now())
+      // D21 (P3 2026-10-02): the tmp suffix used to be `.tmp-<pid>-<ts>`, which the D19 crash-residue
+      // sweep (attachments.js ATT_TMP_RE /\.att-tmp-\d+-\d+$/) never matched — a crash between
+      // copyFile and rename left a PERMANENT uncounted orphan in the attachment dir. Use the same
+      // `.att-tmp-<ts>-<rand>` convention as the D20 attach save path so the 24h sweep ages it out.
+      const tmpPath = path.join(attachments.attachDir(), key + '.att-tmp-' + Date.now() + '-' + Math.floor(Math.random() * 1e6))
       try {
         await fs.promises.copyFile(src, tmpPath)
         const st = await fs.promises.stat(tmpPath)

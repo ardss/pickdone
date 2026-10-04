@@ -63,7 +63,18 @@ module.exports = ({ resolveTask, liveTasks, patchTodo, userDataDir, CliError }) 
     // Same-millisecond same-name uploads used to silently overwrite each other via writeFileSync; reuse the
     // main process's fix (pure helper, src/main/fix-util.js nextFreePath) so every upload lands on its own file.
     const safe = path.basename(fixUtil.nextFreePath(dir, base, p => fs.existsSync(p)))
-    fs.writeFileSync(path.join(dir, safe), raw)
+    // B4-P3 (2026-10-02, App parity attachments.js saveAttachment): the bare writeFileSync left a
+    // TORN file looking healthy forever (readers gate on existence only). Spool to `.att-tmp-<ts>-<rand>`
+    // + rename — a crash mid-write now leaves only .att-tmp residue, which the App's D19 startup
+    // sweep ages out (the CLI writes into the SAME userData/files dir the App sweeps).
+    const tmp = path.join(dir, `${safe}.att-tmp-${Date.now()}-${Math.floor(Math.random() * 1e6)}`)
+    const dest = path.join(dir, safe)
+    try {
+      fs.writeFileSync(tmp, raw)
+      fs.renameSync(tmp, dest)
+    } finally {
+      try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp) } catch { /* best-effort cleanup */ }
+    }
     // D19-DOM2 (#10, App parity): the row's `name` keeps the RAW basename — the App's
     // saveAttachment (src/main/attachments.js) persists the raw `name` and strips trailing
     // dots/spaces only for the on-disk key. The CLI used to persist the STRIPPED name, so the
