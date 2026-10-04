@@ -14,10 +14,10 @@
         </button>
       </div>
       <div v-if="filteredProjects.length" class="proj-grid">
-        <!-- No role=link wrapper: a link role with an interactive role=button nested inside breaks the
-             a11y tree; the card stays keyboard-openable via tabindex+enter while the status pill is an
-             independently reachable button -->
-        <div v-for="p in filteredProjects" :key="p.cat.categoryId" class="proj-card" tabindex="0" role="button"
+        <!-- [A11 fix] no role=button on the card: it nested a role=button (status pill) inside a
+             role=button (card), which is invalid ARIA. The card keeps tabindex+keydown so it stays
+             keyboard-openable (TodoBoxView precedent); only the pill carries the button role. -->
+        <div v-for="p in filteredProjects" :key="p.cat.categoryId" class="proj-card" tabindex="0"
              :title="$t('statsB.ProjectsView.enterProject', { name: p.cat.categoryName })"
              :aria-label="$t('statsB.ProjectsView.enterProject', { name: p.cat.categoryName })"
              @click="open(p.cat.categoryId)" @keydown="onOpenKey(p, $event)">
@@ -187,15 +187,22 @@ export default {
     },
     /** One-click project creation: name -> create category -> flag as project, done in one step */
     async createProject () {
+      // [A3 fix] ONLY the prompt cancellation may be swallowed: a real error after the dialog
+      // (add/setProject throw, lookup miss) used to land in the same catch and strand the
+      // placeholder category with no feedback. The creation steps below get their own guard.
+      let value
       try {
-        const { value } = await this.$prompt(this.$t('statsB.ProjectsView.promptText'), this.$t('statsB.ProjectsView.promptTitle'), {
+        ({ value } = await this.$prompt(this.$t('statsB.ProjectsView.promptText'), this.$t('statsB.ProjectsView.promptTitle'), {
           inputValue: '', inputPattern: /\S/, inputErrorMessage: this.$t('statsB.ProjectsView.nameRequired')
-        })
-        const name = (value || '').trim()
-        if (!name) return
-        // Exact-match the created entity by id delta + name, not `list[list.length-1]`: sort/order changes
-        // or a concurrent add could make the last row a different category.
-        const before = new Set(this.$store.state.category.list.map(c => c.categoryId))
+        }))
+      } catch { return /* cancelled */ }
+      const name = (value || '').trim()
+      if (!name) return
+      // Exact-match the created entity by id delta + name, not `list[list.length-1]`: sort/order changes
+      // or a concurrent add could make the last row a different category.
+      const before = new Set(this.$store.state.category.list.map(c => c.categoryId))
+      let created = null
+      try {
         // D19-DOM2 (#9): duplicate live names are rejected by the store (CATEGORY_EXISTS) — the
         // outer catch would swallow it as a "cancel", so surface the warning explicitly.
         try {
@@ -204,7 +211,7 @@ export default {
           if (e && e.code === 'CATEGORY_EXISTS') { this.$message.warning(this.$t('statsG.SideNav.catNameExistsWarn')); return }
           throw e
         }
-        const created = this.$store.state.category.list
+        created = this.$store.state.category.list
           .find(c => !before.has(c.categoryId) && c.categoryName === name)
         // [D13 A15] the lookup-miss path used to end in total silence (no toast, dialog already
         // closed) — surface a failure instead. Also roll the placeholder row back so a concurrent
@@ -215,7 +222,12 @@ export default {
         }
         this.$store.commit('category/setProject', { id: created.categoryId, flag: true })
         this.$message.success(this.$t('statsB.ProjectsView.created', { name }))
-      } catch { /* cancelled */ }
+      } catch (e) {
+        // [A3 fix] real failure: roll the placeholder row back and say so (was: silent swallow)
+        const stray = created || this.$store.state.category.list.find(c => !before.has(c.categoryId) && c.categoryName === name)
+        if (stray) this.$store.commit('category/rollbackAdd', stray.categoryId)
+        this.$message.error(this.$t('statsB.ProjectsView.createFailed', { name }) + (e && e.message ? ': ' + e.message : ''))
+      }
     }
   },
 

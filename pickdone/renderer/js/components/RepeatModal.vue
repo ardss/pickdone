@@ -94,7 +94,7 @@
                reason generate() would reject with, BEFORE the click (the old hint only fired on click) -->
           <span v-if="!templateTodo || !templateTodo.todoTime" class="rm-base-warn">{{ $t('statsD.RepeatModal.noBaseDate') }}</span>
           <el-button size="small" :disabled="generating" @click="close">{{ $t('statsD.RepeatModal.cancel') }}</el-button>
-          <el-button size="small" type="primary" :loading="generating" :disabled="!templateTodo || !templateTodo.todoTime" @click="generate">{{ $t('statsD.RepeatModal.generate') }}</el-button>
+          <el-button size="small" type="primary" :loading="generating" :disabled="!templateTodo || !templateTodo.todoTime" @click="generate">{{ generating && genCancelled ? $t('statsD.RepeatModal.cancelling') : $t('statsD.RepeatModal.generate') }}</el-button>
         </div>
       </div>
     </div>
@@ -166,8 +166,21 @@ export default {
   },
   created () {
     this.form = JSON.parse(JSON.stringify(this.$store.state.repeatSettings))
+    // [A1 fix] editing a task that already belongs to a series: seed the form from the series'
+    // PERSISTED rule (meta `repeatRule:<repeatId>`), not the global default — the old path showed
+    // the default values, and confirm minted a NEW repeatId, silently forking the series.
+    this.hydrateSeries()
   },
   methods: {
+    async hydrateSeries () {
+      const tpl = this.templateTodo
+      if (!tpl || !tpl.repeatId) return
+      try {
+        const raw = await window.todoAPI.dbCall('getMeta', 'repeatRule:' + tpl.repeatId)
+        const rule = typeof raw === 'string' ? JSON.parse(raw) : (raw || null)
+        if (rule && typeof rule === 'object' && this.form) Object.assign(this.form, rule)
+      } catch { /* unreadable rule: keep the default-seeded form */ }
+    },
     patch (p) { Object.assign(this.form, p) },
     async generate () {
       if (!this.templateTodo) return
@@ -189,7 +202,9 @@ export default {
         // Respect the "max recurring task group count" setting
         let truncated = false
         if (dates.length > this.maxRepeat) { dates = dates.slice(0, this.maxRepeat); truncated = true }
-        const repeatId = `repeat_${tpl.userId}${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`
+        // [A1 fix] REUSE the template task's existing repeatId when it has one (editing an existing
+        // series keeps one series); mint a fresh id only for a brand-new rule.
+        const repeatId = tpl.repeatId || `repeat_${tpl.userId}${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`
         // The rule is persisted with the group: when the last item in the group completes, toggleComplete can use it to auto-renew
         const ruleJson = JSON.stringify(this.form)
         // [uiux-2026-10-01 J3 P2] The template task IS the series' first instance (effectiveDates

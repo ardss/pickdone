@@ -76,6 +76,7 @@ export default {
     },
     StatisticsView: {
       pageTitle: "Insights",
+      cardError: "A summary card failed to render",
       period_thisWeek: 'This week',
       period_lastWeek: 'Last week',
       period_thisMonth: 'This month',

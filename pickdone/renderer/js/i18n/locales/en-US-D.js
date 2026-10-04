@@ -201,6 +201,7 @@ export default {
       "workdaysOnly": "Workdays only (incl. adjusted)",
       "workdayHint": "Repeat dates fall on workdays only; holidays and weekends are shifted",
       "generate": "Generate",
+      "cancelling": "Cancelling…",
       "baseEvent": "Base event",
       "noBase": "Base event not found",
       "noDate": "No date",

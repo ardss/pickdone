@@ -257,7 +257,10 @@ export default {
         this.$t(was ? 'statsB.HabitView.uncheckedToast' : 'statsB.HabitView.checkedToast', { n: h.name }) + '　',
         window.Vue.h('a', {
           style: { color: 'var(--brand)', cursor: 'pointer' },
-          onClick: () => { this.$store.commit('habits/toggleCheck', { id: h.id, day: this.todayKey }); this.$message.closeAll() }
+          // [A6 fix] undo restores the PRE-action snapshot via the store's explicit setter —
+          // a second toggleCheck here re-toggled whatever the current state is, so a fast
+          // double-check (or an interleaved action) silently corrupted the day's state.
+          onClick: () => { this.$store.commit('habits/setCheck', { id: h.id, day: this.todayKey, on: was }); this.$message.closeAll() }
         }, this.$t('statsA.core.undo'))
       ])
     },

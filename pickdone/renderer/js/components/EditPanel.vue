@@ -770,13 +770,15 @@ export default {
       const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
       const tokenRe = new RegExp('\\s*#' + esc + '(?=[\\s#,，。.!?！？]|$)')
       const m = (this.e.title || '').match(new RegExp('#' + esc + '(?=[\\s#,，。.!?！？]|$)'))
-      this._removedTagAt = m ? m.index : null
+      // [A8 fix] capture the index per call: the shared component-level _removedTagAt slot was
+      // clobbered by stacked undo toasts, so the last removal's index won for every toast
+      const removedAt = m ? m.index : null
       removeWithUndo(this,
         () => this.fieldPatch('title', (this.e.title || '').replace(tokenRe, '')),
         () => {
           const cur = this.e ? (this.e.title || '') : ''
           if (new RegExp('(^|\\s)#' + esc + '(?=[\\s#,，。.!?！？]|$)').test(cur)) return // re-added during the toast: nothing to restore
-          const at = Math.min(this._removedTagAt == null ? cur.length : this._removedTagAt, cur.length)
+          const at = Math.min(removedAt == null ? cur.length : removedAt, cur.length)
           const before = cur.slice(0, at).replace(/\s+$/, '')
           this.fieldPatch('title', (before ? before + ' ' : '') + '#' + name + cur.slice(before.length))
         })

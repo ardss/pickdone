@@ -27,12 +27,13 @@
                         :kpis="kpis" :heatmap-streak="heatmap.streak"
                         :share-date="shareDate" :period="period"/>
 
-
       <div class="page__main">
         <div class="container">
           <empty-state v-if="!hasAnyData"><template #text>{{ $t('statsA.StatisticsView.emptyState') }}</template></empty-state>
 
           <div v-else class="stat-subpage">
+            <!-- [A12 fix] one visible line when errorCaptured swallowed a broken card (was console-only) -->
+            <div v-if="cardError" class="stat-card-error" role="alert">{{ $t('statsA.StatisticsView.cardError') }}</div>
             <!-- Period switcher: segmented pills (shared by review and charts) -->
             <!-- [A6] roving-tabindex radiogroup: the checked pill is the single Tab stop, Arrow keys move (and select) within the group, Space/Enter select --> <div v-if="view!=='ach'" class="stat-period-pills" role="radiogroup" :aria-label="$t('statsA.StatisticsView.ariaPeriod')">
               <button v-for="p in periodOptions" :key="p.key" class="stat-period-pill"
@@ -187,7 +188,7 @@
                 <div v-for="row in timelineRows" :key="row.dateKey" class="tl-row" :class="{'tl-row--empty': row.empty}">
                   <span class="tl-date">{{row.dateKey.slice(5)}}</span>
                   <div class="tl-track">
-                    <template v-for="b in (row.bands || [])" :key="b.left+'_'+b.width">
+                    <template v-for="(b, bi) in (row.bands || [])" :key="row.dateKey + '_' + bi">
                       <div class="tl-band" :style="{left:b.left+'%', width:b.width+'%'}"
                            @mouseenter="e => tlTip = { text: b.title, x: e.clientX, y: e.clientY }"
                            @mousemove="e => { if (tlTip) { tlTip.x = e.clientX; tlTip.y = e.clientY } }"
@@ -234,9 +235,7 @@
 </template>
 
 <script lang="ts">
-/**
- * Insights —— a review-narrative-first weekly review page (systematically rebuilt in 2026-08, moving away from the stats-page form):
- *   1. Review narrative card (local rule engine insights.js: headline + insights + suggestions)
+/** Insights —— a review-narrative-first weekly review page (systematically rebuilt in 2026-08, moving away from the stats-page form):   1. Review narrative card (local rule engine insights.js: headline + insights + suggestions)
  *   2. KPI comparison bars (done/focus/completion rate/give-ups, all from a "vs personal baseline" perspective, no absolute-count bragging) *   3. Activity heatmap (half-year/full-year toggle) 4. 24-hour focus timeline *   5. Attention allocation (per-category focus bars) 6. Completion trend line (with baseline reference band) *   7. Export long image / CSV
  * Engine and metrics live in statistics/metrics.js + insights.js (pure functions, covered by unit tests).
  * All copy goes through vue-i18n (statsA.* namespace); internal state like period/heatmap range uses stable keys, * display text is resolved via $t (the insights/achievements pure-function layer returns key+params, resolved in computeds/methods). */
@@ -258,20 +257,21 @@ import { clampTipPos, clampHmTipPos } from './statistics/tooltipClamp.js'
 
 const T = 'statsA.StatisticsView.'
 
-/* [d5-ui-fixes] pure-start */
-// CSV count formatting: integer counts print plainly (12, not "12.0"); fractions keep one decimal
+/* [d5-ui-fixes] pure-start */ CSV count formatting: integer counts print plainly (12, not "12.0"); fractions keep one decimal
 function fmtCount (v) { return Number.isInteger(v) ? String(v) : v.toFixed(1) }
 /* [d5-ui-fixes] pure-end */
 
 export default {
   errorCaptured (err, vm, info) {
     console.error('[Stats-ErrorBoundary]', info, err && (err as any).stack || err)
+    // [A12 fix] broken cards were console-only: flip a reactive flag so the page renders a small visible "a card failed" note instead of a silently blank region
+    this.cardError = true
     return false
   },
   name: 'StatisticsView',
   components: { ChartCard, EmptyState, StatsShareCard, StatsAchievements },
   data () {
-    return { view: 'stat', period: 'thisWeek', heatRange: 'halfYear', shareOpen: false, tlTip: null, customRange: null, customDraft: null, tlGrid: (() => { try { return localStorage.getItem('tlHoverGrid') !== '0' } catch { return true } })(), hmTip: { show: false, text: '', x: 0, y: 0 } as any, nowTick: Date.now() }
+    return { view: 'stat', period: 'thisWeek', heatRange: 'halfYear', shareOpen: false, tlTip: null, customRange: null, customDraft: null, cardError: false, /* [A12 fix] flipped by errorCaptured so a swallowed card failure renders one visible note */ tlGrid: (() => { try { return localStorage.getItem('tlHoverGrid') !== '0' } catch { return true } })(), hmTip: { show: false, text: '', x: 0, y: 0 } as any, nowTick: Date.now() }
   },
   /* Period/view state goes to the route query (calendar page convention): refresh/back keeps the selection */
   watch: {
@@ -579,6 +579,8 @@ html[data-theme="dark"] .review-card { background: var(--panel); }
 .tl-head b { font-size: var(--fs-base); color: var(--text-1); }
 .tl-sub { font-size: var(--fs-xs); color: var(--text-3); }
 .tl-rows { display: flex; flex-direction: column; gap: 6px; }
+/* [A12 fix] inline note for a card that errorCaptured swallowed */
+.stat-card-error { margin: 0 0 10px; padding: 6px 12px; border: 1px solid var(--warn, #e6a33c); border-radius: var(--radius-sm, 6px); background: rgba(230, 163, 60, .1); color: var(--warn, #c07f1f); font-size: var(--fs-xs, 12px); }
 .tl-row { display: flex; align-items: center; gap: 10px; }
 .tl-date { width: 42px; font-size: var(--fs-xs); color: var(--text-2); text-align: right; flex-shrink: 0; }
 .tl-track {
@@ -590,8 +592,7 @@ html[data-theme="dark"] .review-card { background: var(--panel); }
    消除"一块专注一块休息"的砖块感,hover 带体报整段摘要(块级 hover 保留单番茄明细) */
 .tl-band { position: absolute; top: 0; bottom: 0; border-radius: var(--radius-sm, 4px); background: var(--line, var(--line-strong, #c9ced6)); cursor: default; }
 .tl-band .tl-seg.unit { top: 2px; bottom: 2px; border-radius: 0; background: var(--brand); box-shadow: 1px 0 0 var(--panel, #fff); }
-/* 带内纯品牌色直角相连(圆角会产生接缝);1px 白线仅作番茄分隔刻度 */
-/* 一个番茄=一个单元块：专注主体(品牌绿)+紧连的休息尾巴(灰)，--ff 为专注占比分割点(内联覆盖) */
+/* 带内纯品牌色直角相连(圆角会产生接缝);1px 白线仅作番茄分隔刻度 */ 一个番茄=一个单元块：专注主体(品牌绿)+紧连的休息尾巴(灰)，--ff 为专注占比分割点(内联覆盖) */
 .tl-seg.unit { --ff: 80%; background: linear-gradient(to right, var(--brand) var(--ff), var(--line-strong) var(--ff)); }
 .tl-seg.unit:hover { filter: brightness(.94); }
 .tl-seg.focus { background: var(--brand); }
@@ -600,8 +601,7 @@ html[data-theme="dark"] .review-card { background: var(--panel); }
 /* 空行不塌缩:无记录日保持整行轨道高度(压成细线曾显突兀),仅降透明度+日期变淡让注意力给有数据的日子 */
 .tl-row--empty .tl-track { opacity: .45; }
 .tl-row--empty .tl-date { color: var(--text-4); }
-/* 悬停行显示 3 小时虚线分隔(3/6/…/21,即 12.5% 步进):竖线由 mask 切出列,虚线由纵向 repeating-gradient 画出 */
-/* 悬停虚线开关:关闭时不画(::after 仅在非 nogrid 行悬停时出现);开关本体=头部小药丸,默认开 */
+/* 悬停行显示 3 小时虚线分隔(3/6/…/21,即 12.5% 步进):竖线由 mask 切出列,虚线由纵向 repeating-gradient 画出 */ 悬停虚线开关:关闭时不画(::after 仅在非 nogrid 行悬停时出现);开关本体=头部小药丸,默认开 */
 .tl-rows--nogrid .tl-track::after { content: none !important; }
 .tl-grid-toggle {
   margin-left: auto; border: 1px solid var(--line-strong, #d8dde2); background: transparent; color: var(--text-3);

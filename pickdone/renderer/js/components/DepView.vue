@@ -634,8 +634,9 @@ export default {
       var cur = parsePredecessors(target.predecessors)
       if (cur.indexOf(prereqId) >= 0) return
       // 成环检测:prereq 的前置链里若已(直接或间接)依赖 target,再加边就闭环
-      var byId = {}
-      this.inScope.forEach(x => { byId[x.taskId] = x })
+      // [A14 fix] traverse the FULL live list (allLiveById), not inScope: a cross-project
+      // predecessor chain bypassed the byId lookups, silently skipping a real cycle
+      var byId = this.allLiveById()
       var seen = {}
       var stack = [prereqId]
       while (stack.length) {
@@ -745,7 +746,7 @@ export default {
   background-image: radial-gradient(var(--line, #e6e8eb) 1px, transparent 1px);
   background-size: 24px 24px; background-position: 12px 12px; }
 .depv-task { position: absolute; width: 236px; border: 1px solid var(--line, #e6e8eb); border-radius: 8px;
-  padding: 6px 8px 6px 6px; cursor: pointer; background: var(--panel, #fff); }
+  padding: 6px 8px 6px 6px; cursor: pointer; background: var(--panel, #fff); z-index: 2; }
 .depv-task:hover { border-color: var(--brand); box-shadow: 0 2px 8px rgba(0, 0, 0, .08); }
 .depv-task__grip { position: absolute; left: 2px; top: 2px; width: 14px; height: 14px; padding: 0;
   border: 0; background: none; color: var(--text-3, #999); cursor: grab; opacity: 0; transition: opacity .15s; }
@@ -780,7 +781,8 @@ export default {
 .depv-miss--more:hover { text-decoration: none; }
 .depv-task__due { flex-shrink: 0; font-size: 11px; color: var(--text-3, #999); }
 .depv-empty { padding: 18px 10px; text-align: center; font-size: 12px; color: var(--text-3, #999); }
-.depv-wires { position: absolute; inset: 0; pointer-events: none; overflow: visible; z-index: 5; }
+/* [A10 fix] wires sit BELOW cards now (cards carry z-index:2; was wires z-index:5 over card content) */
+.depv-wires { position: absolute; inset: 0; pointer-events: none; overflow: visible; z-index: 1; }
 /* Connect mode (keyboard wiring): additive styles only - normal rendering untouched */
 .depv-connect { padding: 4px 12px; border-radius: 8px; border: 1px solid var(--brand);
   background: var(--brand-light, rgba(15, 157, 143, .08)); color: var(--brand); font-size: 12px; }

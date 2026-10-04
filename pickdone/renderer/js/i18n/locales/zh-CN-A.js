@@ -76,6 +76,7 @@ export default {
     },
     StatisticsView: {
       pageTitle: "数据复盘",
+      cardError: "有一张卡片渲染失败",
       period_thisWeek: '本周',
       period_lastWeek: '上周',
       period_thisMonth: '本月',

@@ -201,6 +201,7 @@ export default {
       "renewalDisabledWarn": "；本组已停用自动续期，请在最后一项完成时手动创建下次任务",
       "wd0": "日",
       "generate": "生成",
+      "cancelling": "正在取消…",
       "baseEvent": "基准事件",
       "noBase": "未找到基准事件",
       "noDate": "没有日期",
