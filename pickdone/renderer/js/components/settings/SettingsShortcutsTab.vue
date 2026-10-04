@@ -158,10 +158,11 @@ export default {
       if (k === 'escape') { this.stopCapture(); return } // Esc = cancel capture
       if (!k || k === 'control' || k === 'alt' || k === 'shift' || k === 'meta') return // do not commit when only modifier keys are pressed
       const combo = captureCombo(e, k)
-      // D10 domain-B (#3): reject modifier-less typing keys (bare letters/digits) with the same
-      // warning-toast path as a conflict — a saved bare key would be registered system-wide.
+      // D10 domain-B (#3): reject modifier-less typing keys (bare letters/digits) — a saved bare
+      // key would be registered system-wide. [D19] distinct message: this is a policy rejection,
+      // not a conflict with another shortcut (the old copy claimed a conflict that did not exist).
       if (!isCommittableCapture(e, k)) {
-        this.$message.warning(this.$t('statsE.SettingsModal.shortcutConflictMsg', { combo }))
+        this.$message.warning(this.$t('statsE.SettingsModal.shortcutBareKeyMsg', { combo }))
         this.stopCapture()
         return
       }

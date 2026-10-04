@@ -48,18 +48,25 @@ function consumeQuarantineNotice () {
 const TRANSIENT_READ_CODES = new Set(['EACCES', 'EBUSY', 'EIO', 'EPERM'])
 const TRANSIENT_ATTEMPTS = 5
 function readBackoffMs (attempt) { return Math.min(100 * Math.pow(2, attempt - 1), 800) } // 100, 200, 400, 800 (≈1.5s total)
-function sleepBackoff (ms) {
-  // Synchronous backoff: readConfig's contract is sync (every caller reads the return value).
-  // D15 C14 (2026-10-03): when Atomics.wait/SAB is unavailable the old catch fell through to
-  // an IMMEDIATE retry — the promised ~1.5s AV-lock wait silently degraded to 5 back-to-back
-  // reads. Port the busy-spin fallback from multi-instance.js so the wait actually elapses
-  // (busy, not sleeping, but honest — the retry budget stays the retry budget).
-  try {
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
-    return
-  } catch { /* no SAB/Atomics.wait here: busy spin below keeps the delay real */ }
-  const end = Date.now() + ms
-  while (Date.now() < end) { /* spin */ }
+// D19-DOM1 (2026-10-02): cap the TOTAL busy spin per fallback wait at 50ms. The old fallback
+// spun the FULL backoff slice (up to 800ms, ~1.5s across a read's 4 backoffs) on the main
+// thread per read — full-core burn. Honest degrade (D15-C14 contract, restated): without
+// Atomics.wait the wait is no longer fully real — each slice spins at most 50ms, so the
+// effective retry budget shrinks (worst case ~200ms of the ~1.5s budget) and a read may reach
+// the transient-exhausted path sooner. That path is already non-destructive (no quarantine,
+// writes gated off, next read resumes) — the degradation is throughput, not honesty.
+const FALLBACK_SPIN_CAP_MS = 50
+function sleepBackoff (ms, { forceSpin = false, spinCapMs = FALLBACK_SPIN_CAP_MS } = {}) {
+  if (!forceSpin) {
+    try {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+      return 0
+    } catch { /* no SAB/Atomics.wait here: capped busy spin below keeps SOME real delay */ }
+  }
+  const end = Date.now() + Math.max(0, Math.min(Number(ms) || 0, Number(spinCapMs) || FALLBACK_SPIN_CAP_MS))
+  const t0 = Date.now()
+  while (Date.now() < end) { /* spin (capped) */ }
+  return Date.now() - t0 // elapsed ms, for tests of the cap
 }
 function quarantineConfig () {
   // P2 2026-09-20: the rename itself used to be swallowed silently; when it FAILS the unreadable

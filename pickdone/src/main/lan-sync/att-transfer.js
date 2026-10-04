@@ -185,28 +185,34 @@ function defaultDeps () {
       // (disk-layer twin of the puller gate below — defense in depth, same as F-A2).
       if (reservedNoiseSlot(key)) throw new Error('attachment: reserved white-noise slot name')
       const dst = path.join(attachDir(), path.basename(String(key)))
+      // D19-DOM1 (C9 quota precheck ordering): the cheap dedup check runs FIRST and the quota
+      // gate runs BEFORE the tmp spool — the old order wrote up to 50MB of tmp + hashed it and
+      // only THEN consulted assertWriteAllowed. An identical-content dedup no-op stays
+      // quota-exempt (it lands no new file), now without ever spooling tmp.
+      if (fs.existsSync(dst)) {
+        let same = false
+        try { same = sha256FileChunked(fs, dst) === sha256Hex(buf) } catch { same = false }
+        if (same) return path.basename(dst)
+      }
+      // att-transfer-quota-bypass fix: the LAN receive door enforces the SAME caps as the
+      // upload door (attachments-guards.assertWriteAllowed: 50MB/file + 64MB total + 200-file
+      // count). A refusal throws into the puller's catch → markFailed (24h failed-set, no
+      // retry loop) BEFORE anything touched the disk.
+      require('../attachments-guards').assertWriteAllowed({ incomingBytes: buf.length, dir: attachDir() })
       const tmp = `${dst}.att-tmp-${Date.now()}-${Math.floor(Math.random() * 1e6)}`
       let finalDst = dst
       try {
         fs.writeFileSync(tmp, buf)
         if (fs.existsSync(dst)) {
-          let same = false
-          // D14 C7: chunked hash of the on-disk file (was a full readFileSync per conflict).
-          try { same = sha256FileChunked(fs, dst) === sha256Hex(buf) } catch { same = false }
-          if (same) return path.basename(dst) // dedup no-op: not a new file, stays quota-exempt
+          // Non-dedup conflict: same-name DIFFERENT content (the identical case returned above).
           const ext = path.extname(dst)
           const stem = dst.slice(0, dst.length - ext.length)
           let n = 1
           while (fs.existsSync(`${stem}-${n}${ext}`)) n += 1
           finalDst = `${stem}-${n}${ext}`
         }
-        // att-transfer-quota-bypass fix: the LAN receive door now enforces the SAME caps as the
-        // upload door (attachments-guards.assertWriteAllowed: 50MB/file + 64MB total + 200-file
-        // count) — the guards module's contract said every write entry funnels through it, but
-        // this ingress never called it. Identical-content dedup above stays quota-exempt (it
-        // lands no new file). A refusal throws into the puller's catch → markFailed (24h
-        // failed-set, no retry loop) — no behavior change for legitimate small transfers.
-        require('../attachments-guards').assertWriteAllowed({ incomingBytes: buf.length, dir: attachDir() })
+        // D19-DOM1: authoritative POST-write re-check kept for TOCTOU (the dir state can change
+        // between the precheck and the rename — the rename still only happens inside quota).
         fs.renameSync(tmp, finalDst)
         if (finalDst !== dst) {
           // conflict rename landed: alias the original key to the new on-disk name so the

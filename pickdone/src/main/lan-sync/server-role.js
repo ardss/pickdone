@@ -145,6 +145,15 @@ function createServerRoleHandler(deps) {
           return
         }
         serverSnapshotBusy.add(peer.deviceId)
+        // D19-DOM1 (2026-10-02) dead-peer abort: the chunk loops used to ignore sendVia's
+        // boolean delivery report and stream the ENTIRE snapshot into a destroyed socket,
+        // then report onSnapshotSync 'sent'. Mirror att-transfer.js's established abort
+        // pattern (send() false => the peer's socket is dead): stop on the FIRST failed
+        // frame, log the abort, and skip the success report — the requester's connection-
+        // error handler surfaces the round failure promptly instead of its 120s deadline.
+        const emit = (m) => {
+          try { return sendVia(socket, m) !== false } catch { return false }
+        }
         try {
           const cursor = currentMaxSeq()
           let totalRows = 0
@@ -168,12 +177,15 @@ function createServerRoleHandler(deps) {
               // Transfer ceiling (round-3 review): refuse unboundedly large snapshots with a
               // clean snapshot-error terminal instead of streaming forever.
               if (sent >= maxSnapshotChunks) {
-                sendVia(socket, { type: 'snapshot-error', reason: 'too-large' })
+                emit({ type: 'snapshot-error', reason: 'too-large' })
                 pushRecent({ at: Date.now(), kind: 'error', peer: peer.deviceId, detail: { error: `snapshot too large: more than ${maxSnapshotChunks} chunks` } })
                 onSnapshotError({ peer: peer.deviceId, reason: 'too-large' })
                 return
               }
-              sendVia(socket, { type: 'snapshot-chunk', index: sent, totalChunks: 0, schemaVersion, rows: c.rows })
+              if (!emit({ type: 'snapshot-chunk', index: sent, totalChunks: 0, schemaVersion, rows: c.rows })) {
+                try { require('electron-log').warn('[LanSync] snapshot send failed, aborting serve for', peer.deviceId) } catch { /* noop */ }
+                return
+              }
               sent += 1
             }
             } else {
@@ -181,17 +193,23 @@ function createServerRoleHandler(deps) {
               totalRows = built.totalRows
               schemaVersion = built.schemaVersion
               if (built.chunks.length > maxSnapshotChunks) {
-                sendVia(socket, { type: 'snapshot-error', reason: 'too-large' })
+                emit({ type: 'snapshot-error', reason: 'too-large' })
                 pushRecent({ at: Date.now(), kind: 'error', peer: peer.deviceId, detail: { error: `snapshot too large: more than ${maxSnapshotChunks} chunks` } })
                 onSnapshotError({ peer: peer.deviceId, reason: 'too-large' })
                 return
               }
               for (const c of built.chunks) {
-              sendVia(socket, { type: 'snapshot-chunk', index: c.index, totalChunks: built.chunks.length, schemaVersion, rows: c.rows })
+              if (!emit({ type: 'snapshot-chunk', index: c.index, totalChunks: built.chunks.length, schemaVersion, rows: c.rows })) {
+                try { require('electron-log').warn('[LanSync] snapshot send failed, aborting serve for', peer.deviceId) } catch { /* noop */ }
+                return
+              }
               sent += 1
             }
           }
-          sendVia(socket, { type: 'snapshot-end', totalChunks: sent, totalRows, cursor, schemaVersion })
+          if (!emit({ type: 'snapshot-end', totalChunks: sent, totalRows, cursor, schemaVersion })) {
+            try { require('electron-log').warn('[LanSync] snapshot send failed (trailer), aborting serve for', peer.deviceId) } catch { /* noop */ }
+            return
+          }
           pushRecent({
             at: Date.now(), kind: 'snapshot', peer: peer.deviceId,
             // Locale-neutral detail (round-3 review): the raw detail is rendered verbatim by

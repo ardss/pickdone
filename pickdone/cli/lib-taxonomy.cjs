@@ -122,7 +122,11 @@ function runProject ({ opts, lib, emit }) {
   const dl = p.deadline ? `   deadline ${dayjs(p.deadline).format('YYYY-MM-DD')} (${Math.ceil((p.deadline - Date.now()) / 864e5)} days left)` : ''
   console.log(`${p.name}  ${p.progress}%  (${p.done}/${p.total})   status ${p.status}${dl}`)
   console.log(`Started ${p.startedAt ? dayjs(p.startedAt).format('YYYY-MM-DD') : '—'}   Focus ${p.focusMinutes} min   Overdue ${p.overdue}   Next 7 days ${p.next7days}`)
-  const list = lib.listTodos({ category: id, limit: 100 })
+  // D19-DOM2 (#11): a project can hold more tasks than the old 100-row cap — the App shows all of
+  // them while the CLI truncated its own listing. Raised to 5000 (listTodos still clamps ≤ 5000);
+  // a bound is kept (instead of unbounded) so a pathological library cannot exhaust memory in one
+  // text listing.
+  const list = lib.listTodos({ category: id, limit: 5000 })
   console.log(list.length ? '\n' + list.map(t => fmtTodoLine(t)).join('\n') : '\n(no tasks)')
   return
 }

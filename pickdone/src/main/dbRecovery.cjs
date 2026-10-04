@@ -338,11 +338,21 @@ function attemptDbRecovery (ud, retryInit) {
   }
   pruneCorruptScenes(ud)
   if (jsonExists) return { source: 'json', label: 'disaster-backup JSON (fresh)' }
-  fs.copyFileSync(path.join(ud, 'todos.db.plain-bak'), path.join(ud, 'todos.db'))
+  copyFileAtomicRestore(path.join(ud, 'todos.db.plain-bak'), path.join(ud, 'todos.db'))
   // Truthful label: when the JSON existed but failed the parseability gate, the caller's dialog
   // must say the restore came from the (possibly stale) plain-bak, not from the JSON.
   if (jsonFileExists) return { source: 'plain-bak', label: 'disaster-backup JSON unparseable, restored from plain-bak (todos.db.plain-bak, possibly stale)' }
   return { source: 'plain-bak', label: 'local plaintext backup (todos.db.plain-bak, possibly stale)' }
+}
+
+/** D19-DOM1 (2026-10-02): atomic restore copy. Both plain-bak restore sites used bare
+ *  fs.copyFileSync — a torn copy of a multi-MB backup (power cut / crash mid-copy) left a
+ *  todos.db TRUNCATED but with an intact first page, which SQLite's healthy-header probe
+ *  classified as 'transient' forever and permanently bypassed recovery. Route through
+ *  durable-fs (tmp + fsync + atomic rename): the target is either fully absent or fully
+ *  the backup, never a hybrid. Exported so the restore contract is unit-testable. */
+function copyFileAtomicRestore (src, dest) {
+  return require('./durable-fs').writeFileDurable(dest, fs.readFileSync(src))
 }
 
 /** 只保留最近 3 套 .corrupt-<stamp> 现场文件,按 stamp 分组,更早的删除 */
@@ -659,7 +669,7 @@ function preflightMigrateResidue (ud, log) {
     const key = path.join(ud, 'db.key')
     if (!fs.existsSync(key)) {
       for (const suf of ['-wal', '-shm']) { try { fs.rmSync(mainDb + suf, { force: true }) } catch {} }
-      fs.copyFileSync(bak, mainDb)
+      copyFileAtomicRestore(bak, mainDb)
       warn('迁移中断残留:已从 todos.db.plain-bak 恢复数据库文件')
     } else {
       // enc-migration-preflight-ignores-key-quarantine-failure (P2): the key rename failure used to
@@ -678,7 +688,7 @@ function preflightMigrateResidue (ud, log) {
         return false
       }
       for (const suf of ['-wal', '-shm']) { try { fs.rmSync(mainDb + suf, { force: true }) } catch {} }
-      fs.copyFileSync(bak, mainDb)
+      copyFileAtomicRestore(bak, mainDb)
       warn('todos.db missing but a plaintext backup exists: restored from plain-bak, old db.key moved aside as db.key.superseded-*')
     }
     return true
@@ -711,4 +721,4 @@ function jsonRestoreAllowed (recoveredFrom, reinitErr) {
   return !!(recoveredFrom && recoveredFrom.source === 'json' && !reinitErr)
 }
 
-module.exports = { attemptDbRecovery, cleanInitReplayDecision, SUPPORTED_SCHEMA_V, restoreTasksFromCriticalBackup, restoreSegmentsFromCriticalBackup, writeCriticalStateBackupAtomic, criticalBackupPath, backupJsonParseable, restoreCategoriesFromCriticalBackup, restoreTomatoRecordsFromCriticalBackup, restoreMetaEntriesFromCriticalBackup, quarantineKey, sqliteHeaderOk, encryptedProbe, preflightMigrateResidue, sweepPendingDeletes, recoveryDialogAction, jsonRestoreAllowed, loadVendorDriver, RESTORE_SEGMENT_NAMES, META_RESTORE_PREFIXES, recoveryPendingPath, markRecoveryPending, clearRecoveryPending, hasRecoveryPending }
+module.exports = { attemptDbRecovery, cleanInitReplayDecision, SUPPORTED_SCHEMA_V, restoreTasksFromCriticalBackup, restoreSegmentsFromCriticalBackup, writeCriticalStateBackupAtomic, criticalBackupPath, backupJsonParseable, restoreCategoriesFromCriticalBackup, restoreTomatoRecordsFromCriticalBackup, restoreMetaEntriesFromCriticalBackup, quarantineKey, sqliteHeaderOk, encryptedProbe, preflightMigrateResidue, sweepPendingDeletes, recoveryDialogAction, jsonRestoreAllowed, loadVendorDriver, RESTORE_SEGMENT_NAMES, META_RESTORE_PREFIXES, recoveryPendingPath, markRecoveryPending, clearRecoveryPending, hasRecoveryPending, copyFileAtomicRestore }

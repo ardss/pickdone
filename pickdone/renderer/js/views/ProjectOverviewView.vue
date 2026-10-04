@@ -196,7 +196,14 @@ export default {
         // Exact-match the created entity by id delta + name, not `list[list.length-1]`: sort/order changes
         // or a concurrent add could make the last row a different category.
         const before = new Set(this.$store.state.category.list.map(c => c.categoryId))
-        this.$store.commit('category/addCategory', { categoryName: name })
+        // D19-DOM2 (#9): duplicate live names are rejected by the store (CATEGORY_EXISTS) — the
+        // outer catch would swallow it as a "cancel", so surface the warning explicitly.
+        try {
+          this.$store.commit('category/addCategory', { categoryName: name })
+        } catch (e) {
+          if (e && e.code === 'CATEGORY_EXISTS') { this.$message.warning(this.$t('statsG.SideNav.catNameExistsWarn')); return }
+          throw e
+        }
         const created = this.$store.state.category.list
           .find(c => !before.has(c.categoryId) && c.categoryName === name)
         // [D13 A15] the lookup-miss path used to end in total silence (no toast, dialog already

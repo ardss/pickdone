@@ -48,10 +48,11 @@ test('r6-2: listTodos invalid --limit falls back to the 200 default', async () =
   }
   // Source regex kept as a secondary seam guard (re-anchored 2026-10-04 to the B12 contract:
   // flag-absent and non-numeric fall back to 200; an explicit 0 passes through to the db's
-  // fail-closed zero-rows semantics)
+  // fail-closed zero-rows semantics; re-anchored again for D19-DOM2 #11: clamp 500 → 5000 so
+  // saved-view/project reads no longer truncate below what the App shows)
   const src = require_('fs').readFileSync(path.join(root, 'cli/lib-tasks.cjs'), 'utf8')
   assert.match(src, /opts\.limit !== undefined/)
-  assert.match(src, /Number\.isFinite\(n\) \? Math\.min\(n, 500\) : 200/)
+  assert.match(src, /Number\.isFinite\(n\) \? Math\.min\(n, 5000\) : 200/)
   assert.ok(typeof lib.listTodos === 'function')
 })
 

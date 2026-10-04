@@ -130,6 +130,7 @@ import { genTomatoId } from '../utils/core.js'
 import { loadRuntime, saveRuntime } from '../store/helpers/runtimeState.js'
 import dialogA11y from '../utils/dialogA11y.js'
 import { secToHHmmss } from '../utils/tomatoShared.js'
+import { validManualStartTs } from '../utils/tomatoShared.js'
 import { dayShift } from '../utils/todayBounds.js'
 
 // thin delegate — single source in utils/tomatoShared.js (extracted verbatim 2026-09-23)
@@ -283,6 +284,12 @@ export default {
         this.$store.commit('ui/toggleTomatoRecordAdd', false)
         return
       }
+      // [D19] A cleared start time (the date picker hands back null) used to save endTime ~=
+      // 1500000 (1970-01-01) behind a success toast — a record invisible in every day view.
+      if (!validManualStartTs(this.addForm.startTs)) {
+        this.$message.error(this.$t('statsD.TomatoFocusRecord.invalidStartTime'))
+        return
+      }
       this.addSaving = true
       try {
         const f = this.addForm
@@ -370,6 +377,8 @@ export default {
 html[data-theme="dark"] .tfr-timeline__bar { background: #2a3038; }
 html[data-theme="dark"] .tfr-timeline__grid i { background: rgba(255, 255, 255, .07); }
 html[data-theme="dark"] .tfr-timeline__legend .dot-idle { background: #2a3038; }
+/* [D19] expanded record row: the hardcoded light surface needs the same dark override as the timeline above */
+html[data-theme="dark"] .tomato-record--open { background: #2a3038; }
 .tomato-record:last-of-type { border-bottom: 1px solid transparent; }
 .tomato-record:hover { background-color: var(--gray-bg, #f7f8fa); }
 .tomato-record__title { display: flex; align-items: center; justify-content: space-between; color: var(--text-1, #333); font-weight: 400; font-size: var(--fs-base); line-height: 20px; }

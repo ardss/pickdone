@@ -439,6 +439,8 @@ async function main () {
         if (opts.priority != null && opts.important == null) patch.important = parseInt(opts.priority, 10) === 3 ? 1 : 0
         if (opts.important != null && opts.priority == null) patch.priority = parseInt(opts.important, 10) ? 3 : 1
         if (opts.deadline) patch.deadlineTs = opts.deadline === 'none' ? 0 : lib.parseDate(opts.deadline)
+        // D19-DOM2 (#3) dry-run mirror: the dateless-task reminder backfill is part of the real write
+        lib.reminderDateBackfill(lib.resolveTask(opts._[0]), patch)
         return emitNext({ dryRun: true, taskId: lib.resolveTask(opts._[0]).taskId, patch }, ['remove --dry-run to actually run'])
       }
       if (!opts._[0]) throw new lib.CliError('usage: edit <taskId|keyword> [--content ..] [--desc ..] [--date ..|none] [--reminder ..] [--category ..] [--important 0|1] [--urgent 0|1] [--priority 0-3] [--deadline date|none] [--estimate 0-20] [--difficulty 0-3]', 'USAGE')
@@ -471,6 +473,9 @@ async function main () {
       // immutable, so every sub-op below reuses the same id.
       const before = lib.resolveTask(opts._[0])
       const tid2 = before.taskId
+      // D19-DOM2 (#3, EditPanel.onRemindersCommit parity): a reminder set on a DATELESS task
+      // backfills todoTime to the start of the reminder's day (dry-run mirror below shares it).
+      lib.reminderDateBackfill(before, patch)
       // Reschedule re-anchor (review P1 2026-09-10; renderer parity: EditPanel.applyDate) — moving the date must
       // carry reminders along. The rule lives in lib.dateChangeReminderPatch, shared with `batch date` (review P1
       // 2026-09-11: the batch channel used to bypass this and leave the main reminder on the old day). An explicit

@@ -44,7 +44,8 @@
            Esc closes without saving (focus card on open so a single Esc works from anywhere in the panel) -->
       <div v-if="entryDraft" class="dr-card" :style="{ top: cardTop }" tabindex="-1" ref="drCard"
            @dblclick.stop @contextmenu.prevent.stop @keydown.esc.stop.prevent="entryDraft = null">
-        <button class="close-x close-x--sm dr-card-x" :aria-label="$t('statsG.DayRail.cardEdit')" @click="entryDraft = null"></button>
+        <!-- [D19] the close X advertised itself as "Focus record" (the card title key); use a close label -->
+        <button class="close-x close-x--sm dr-card-x" :aria-label="$t('statsG.DayRail.cardClose')" @click="entryDraft = null"></button>
         <b>{{ entryDraft.create ? $t('statsG.DayRail.cardCreate') : $t('statsG.DayRail.cardEdit') }}</b>
         <div class="dr-card-row"><span>{{ $t('statsG.DayRail.cardStart') }}</span>
           <el-time-picker size="small" format="HH:mm" :model-value="minToDate(entryDraft.startMin)"

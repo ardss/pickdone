@@ -61,7 +61,11 @@ module.exports = function settingsHandlers (ctx) {
         err.code = 'CONFIG_READ_FAILED'
         throw err
       }
-      rebuildTrayMenu(); const tray = getTray(); if (tray) { try { tray.setToolTip(i18nM.mt('appName')) } catch (err) { /* empty */ } }
+      // D19-DOM1 (2026-10-02): rebuildTrayMenu was the only unguarded sibling here — a throw after
+      // the locale write had already landed left the op half-applied (persisted locale, stale tray,
+      // rejected IPC). Guard like setTitle/taskbar below: log-and-continue.
+      try { rebuildTrayMenu() } catch (err) { log.warn('[IPC] rebuildTrayMenu failed after locale change:', err && err.message) }
+      const tray = getTray(); if (tray) { try { tray.setToolTip(i18nM.mt('appName')) } catch (err) { /* empty */ } }
       // P2 2026-09-12: previously this looped EVERY live window and setTitle(appName), flattening
       // semantic titles (float window task title, lock window title). Auxiliary windows pick up the
       // new locale via their own per-second title pushes (tomato-float countdown, same pattern as the

@@ -53,12 +53,37 @@ module.exports = ({ open, commit, audit, CliError }) => {
       ...Object.entries(SETTINGS_MANIFEST.enum).map(([k, o]) => [k, { type: 'enum', options: o }]),
       ...SETTINGS_MANIFEST.string.map(k => [k, { type: 'string' }])
     ]
-    for (const [key, info] of all) rows.push({ key, type: info.type, options: info.options || null, value: key in doc ? doc[key] : null })
+    for (const [key, info] of all) rows.push({ key, type: info.type, options: info.options || null, value: settingsEffective(doc, key) })
     return rows
   }
+  /** D19-DOM2 (#6): report the EFFECTIVE value — an unset key reads the manifest's mirrored
+   *  DEFAULT_SETTINGS default (the value the App actually runs with), not a misleading null. */
+  function settingsEffective (doc, key) {
+    if (key in doc) return doc[key]
+    const def = SETTINGS_MANIFEST.defaults ? SETTINGS_MANIFEST.defaults[key] : undefined
+    return def !== undefined ? def : null
+  }
   function settingsSet (key, value, { force = false } = {}) {
-    if (SETTINGS_DENIED.has(key) || isMachineLocalSettingKey(key)) throw new CliError('"' + key + '" is a protected key and cannot be set via CLI', 'DENIED_KEY')
-    const info = settingsKnown(key)
+    // D19-DOM2 (#7): --force is wired (it used to be a dead flag). It bypasses the operator
+    // DENY allowlist — but ONLY for keys the manifest declares (full type/range validation still
+    // applies, never waived). Two families stay hard-denied even under force:
+    //   - schemaV (SETTINGS_DENIED bookkeeping: not a manifest key, writing it would corrupt the
+    //     blob shape the schema gate reads), and
+    //   - machine-local keys WITHOUT a manifest declaration (the securityLock secret family —
+    //     they must neither egress nor be overwritten; a CLI-written secret would sit in
+    //     settings_rows outside every gate).
+    // A manifest-declared machine-local key (enableSecurityLock) CAN be forced: it is typed,
+    // validated, and stays machine-local downstream (sync-apply never replicates it).
+    const known = settingsKnown(key)
+    if (SETTINGS_DENIED.has(key)) throw new CliError('"' + key + '" is a protected key and cannot be set via CLI', 'DENIED_KEY')
+    if (isMachineLocalSettingKey(key)) {
+      if (!known || !force) {
+        throw new CliError('"' + key + '" is a machine-local key and cannot be set via CLI' +
+          (known ? ' (pass --force to override the operator allowlist — the key stays machine-local and is never synced)' : ' (not even with --force)'), 'DENIED_KEY')
+      }
+      console.error('warning: --force bypasses the operator allowlist for "' + key + '" — the key remains machine-local (never synced)')
+    }
+    const info = known
     if (!info) throw new CliError('unknown setting "' + key + '" — settings list to browse keys', 'UNKNOWN_KEY')
     let v = value
     if (info.type === 'boolean') {
@@ -71,7 +96,10 @@ module.exports = ({ open, commit, audit, CliError }) => {
       // null in the settings blob. Negative values are meaningless for every numeric setting (targets,
       // thresholds, intervals, volumes, counts), so both are rejected now.
       if (!Number.isFinite(v)) throw new CliError('"' + key + '" expects a finite number (got "' + value + '")', 'USAGE')
-      if (v < 0) throw new CliError('"' + key + '" must be >= 0 (got "' + value + '")', 'USAGE')
+      // D19-DOM2 (#5): keys whose legal domain includes -1 (todoBoxCategoryId, App shipped default =
+      // all-categories) are exempt from the blanket >= 0 gate — manifest-declared via allowNegative.
+      // --force does NOT waive range/bounds validation, only the operator allowlist above.
+      if (v < 0 && !(SETTINGS_MANIFEST.allowNegative || []).includes(key)) throw new CliError('"' + key + '" must be >= 0 (got "' + value + '")', 'USAGE')
       // P3-6 (dw wave): per-key bounds mirroring the UI's input controls (SETTINGS_MANIFEST.ranges) —
       // the CLI used to accept any non-negative number where the App's slider/input clamps
       // (e.g. tomatoTime 5-180), so a CLI-written value silently displayed out of bounds in the App.
@@ -129,5 +157,5 @@ module.exports = ({ open, commit, audit, CliError }) => {
     return { key, value: v, previous: before }
   }
 
-  return { settingsDoc, setSettingsRaceHookForTests, settingsKnown, settingsList, settingsSet, SETTINGS_MANIFEST }
+  return { settingsDoc, setSettingsRaceHookForTests, settingsKnown, settingsList, settingsEffective, settingsSet, SETTINGS_MANIFEST }
 }

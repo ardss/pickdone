@@ -2,7 +2,7 @@
   "_comment": "ratchet baseline per platform (win32/linux/darwin file sets differ ~10pt): each metric = last passing run on that platform, floored to whole percent",
   "baselines": {
     "win32@node22": {
-      "lines": 82,
+      "lines": 83,
       "branches": 82,
       "functions": 75
     },

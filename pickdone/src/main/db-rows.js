@@ -108,7 +108,11 @@ function rowToCategory (r) {
     listSort: r.sort,
     folderIs: !!r.isFolder,
     folderId: r.parentId || 0,
-    delete: !!r.deleted
+    delete: !!r.deleted,
+    // D19-DOM2 (#8): deletedAt was write-only (categoryToRow persists the tombstone stamp, this
+    // mapper dropped it on read) — the recover/GC aging of a tombstone degraded cross-machine
+    // because the read-back row had no stamp. Mirror categoryToRow (0 when absent).
+    deletedAt: r.deletedAt || 0
   }
 }
 
@@ -231,4 +235,21 @@ function matchTodoKeyword (todo, terms) {
   return terms.every(term => fields.some(f => typeof f === 'string' && f.normalize('NFKC').toLowerCase().includes(term)))
 }
 
-module.exports = { normalizeContent, parseOffsets, parseReminders, packReminders, rowToTodo, rowToCategory, todoToRow, setSyncAuthor, selfSyncAuthor, matchTodoKeywordTerms, matchTodoKeyword }
+/** D19-DOM1 (2026-10-02): limit window for a keyword query. The SQL LIMIT used to run BEFORE the
+ *  JS keyword post-filter, so matches beyond the cap were silently invisible (list --keyword
+ *  over a table bigger than the limit could miss every match). When a keyword IS present, the
+ *  SQL window is raised to the scan ceiling (5000 — sane bound for the local DB scale), the
+ *  filter runs over that window, and the output is capped at the caller's limit afterwards.
+ *  Returns { sqlLimit, outLimit } (null = no LIMIT). Validates limit like queryTodos did
+ *  (fail closed). Non-keyword paths are byte-identical to before. Pure: no db handle, so the
+ *  ordering contract is directly unit-testable. */
+const KEYWORD_SCAN_CEILING = 5000
+function keywordLimitWindow (keywordTerms, limit) {
+  if (limit === null || limit === undefined) return { sqlLimit: null, outLimit: null }
+  const n = Number(limit)
+  if (!Number.isFinite(n) || n < 0) throw new Error('queryTodos: invalid limit')
+  if (!keywordTerms) return { sqlLimit: n, outLimit: null } // non-keyword path: unchanged
+  return { sqlLimit: Math.max(n, KEYWORD_SCAN_CEILING), outLimit: n }
+}
+
+module.exports = { normalizeContent, parseOffsets, parseReminders, packReminders, rowToTodo, rowToCategory, todoToRow, setSyncAuthor, selfSyncAuthor, matchTodoKeywordTerms, matchTodoKeyword, keywordLimitWindow, KEYWORD_SCAN_CEILING }

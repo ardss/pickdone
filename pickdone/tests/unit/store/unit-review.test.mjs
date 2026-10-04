@@ -285,3 +285,33 @@ test('composeReview: sync-up triggers when focus days clearly out-complete no-fo
   const r = composeReview(m)
   assert.ok(r.insights.some(i => i.id === 'sync-up'))
 })
+
+// D19: the delta rules must respect the same significance guard as the headline. A
+// small POSITIVE delta used to fall through to the "down" copy ("focus down 5%").
+const baseMetrics = over => Object.assign({
+  label: "test", done: 3, added: 3, focusMins: 105, tomatoCount: 4, giveUps: 0,
+  planned: 6, doneRate: 0.9, days: 7, doneByDay: [], hourDist: [], peakHours: null,
+  catFocus: [], taskFocus: [], giveupNotes: [], focusDaysAvgDone: 0, noFocusDaysAvgDone: 0,
+  baseline: { hasHistory: true, focus: 100, done: 3 }
+}, over)
+
+test("composeReview: delta rules honor the significance threshold and pick copy by sign", () => {
+  // +5% (positive but below SIG=15): no delta insight at all, neutral headline
+  const small = composeReview(baseMetrics())
+  assert.ok(!small.insights.some(i => i.id === "focus-delta"))
+  assert.equal(small.headline.toneKey, null)
+  // +25%: up copy with the positive delta
+  const up = composeReview(baseMetrics({ focusMins: 125 }))
+  const upIns = up.insights.find(i => i.id === "focus-delta")
+  assert.ok(upIns && upIns.mainKey.endsWith("focusDeltaUp"))
+  assert.equal(upIns.mainParams.d, 25)
+  // -25%: down copy with the magnitude (not the negative raw value)
+  const down = composeReview(baseMetrics({ focusMins: 75 }))
+  const dnIns = down.insights.find(i => i.id === "focus-delta")
+  assert.ok(dnIns && dnIns.mainKey.endsWith("focusDeltaDown"))
+  assert.equal(dnIns.mainParams.d, 25)
+  // done-delta behaves the same way
+  assert.ok(!composeReview(baseMetrics({ done: 3 })).insights.some(i => i.id === "done-delta" && true))
+  const doneUp = composeReview(baseMetrics({ done: 5, baseline: { hasHistory: true, focus: 100, done: 4 } }))
+  assert.ok(doneUp.insights.some(i => i.id === "done-delta" && i.mainKey.endsWith("doneDeltaUp")))
+})

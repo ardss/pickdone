@@ -1,13 +1,12 @@
 /**
- * Database layer — independently implemented local task-store schema
- * (todos.db / WAL / two tables todos + meta / prepared statements under the same names)
+ * Database layer — independently implemented local task-store schema * (todos.db / WAL / two tables todos + meta / prepared statements under the same names)
  */
 const path = require('path')
 const i18nM = require('./i18n')
 const fs = require('fs')
 const crypto = require('crypto')
 const LIMITS = require('../../shared/limits.mjs') // focus-duration clamp constants (single source, audit item 4); require(esm) — Node >= 22.12
-const { normalizeContent, rowToTodo, todoToRow, setSyncAuthor, selfSyncAuthor, matchTodoKeywordTerms, matchTodoKeyword } = require('./db-rows')
+const { normalizeContent, rowToTodo, todoToRow, setSyncAuthor, selfSyncAuthor, matchTodoKeywordTerms, matchTodoKeyword, keywordLimitWindow } = require('./db-rows')
 // snowDedup key-cap (R5 P3): past the cap, older-than-30d entries are pruned (see bumpSnow).
 const SNOW_DEDUP_CAP = 2000
 const SNOW_DEDUP_MAX_AGE_MS = 30 * 24 * 3600 * 1000
@@ -498,10 +497,12 @@ function queryTodos ({ deleted = 0, complete = null, categoryId = null, repeatId
     if (!cols.has(part[0]) || (part[1] && !/^(ASC|DESC)$/i.test(part[1]))) throw new Error('queryTodos: 非法 orderBy: ' + orderBy)
   }
   sql += ` ORDER BY ${orderBy}`
-  // F2 fix: `if (limit)` made limit=0 fail-open (0 === unlimited, while negatives threw) — validate on presence (null/undefined only), so 0 is an explicit "zero rows" and all invalid values fail closed.
-  if (limit !== null && limit !== undefined) { const n = Number(limit); if (!Number.isFinite(n) || n < 0) throw new Error('queryTodos: invalid limit'); sql += ' LIMIT ' + n }
-  const rows = db.prepare(sql).all(p).map(rowToTodo)
-  return keywordTerms ? rows.filter(r => matchTodoKeyword(r, keywordTerms)) : rows
+  // F2: limit validated on presence (0 = explicit zero rows, negatives throw). D19-DOM1: the SQL LIMIT must not precede the JS keyword filter — window/ceiling/cap in db-rows.keywordLimitWindow.
+  const win = keywordLimitWindow(keywordTerms, limit)
+  if (win.sqlLimit !== null) sql += ' LIMIT ' + win.sqlLimit
+  let rows = db.prepare(sql).all(p).map(rowToTodo)
+  if (keywordTerms) rows = rows.filter(r => matchTodoKeyword(r, keywordTerms))
+  return win.outLimit !== null ? rows.slice(0, win.outLimit) : rows
 }
 
 // F2 2026-09-15:SQLite TEXT PRIMARY KEY 不隐含 NOT NULL — taskId:null/undefined/'' 一路落到这里

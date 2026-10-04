@@ -71,6 +71,39 @@ export const SETTINGS_MANIFEST = {
   // they deliberately have no boolean/number/enum/string entry. settingsSet's blob write-back
   // whitelist (cli/lib.js) still carries them, or every CLI write would strip them from the blob.
   blobOnly: ['repeatDefaultSettings', 'onboardingToursSeen'],
+  // D19-DOM2 (#5): keys whose LEGAL domain includes -1 — the blanket >= 0 gate in cli/lib-settings
+  // settingsSet rejected them, but todoBoxCategoryId's shipped default IS -1 (all-categories;
+  // renderer DEFAULT_SETTINGS todoBoxCategoryId: -1, and store/todo.js filters on !== -1).
+  allowNegative: ['todoBoxCategoryId'],
+  // D19-DOM2 (#6): effective defaults, mirrored from renderer store/settings.js DEFAULT_SETTINGS
+  // (manifest keys only — keep in sync; the renderer's copy stays the App-side source of truth).
+  // cli/lib-settings settingsList/get report `key in doc ? doc[key] : default` so an unset key
+  // shows the value the App would actually run with instead of a misleading null.
+  defaults: {
+    // boolean
+    autoDownloadUpdates: true, enableTomatoFloating: true, weatherEnabled: false, taskFlyAnimation: true,
+    closeActionMinimize: true, isCompleteWithSubtasks: true, isTodoEditModalCloseAutoSave: true,
+    isCompleteCheckboxColorFollow: true, runWhenComputerStart: false, hideMainWindowOnStartup: false,
+    enableHardwareAcceleration: true, showNoDate: true, showCompleteNoDate: true, showComplete: true,
+    developerMode: false, showTodayXModule: false, showHabitModule: false, showProjectsModule: false,
+    showDepsModule: false, isShowSubTask: true, isCalendarDimUncompleted: true, isShowCalendarPrivacyMode: false,
+    isDefaultSubTaskFolded: false, showHolidayMarkers: true, showTodoCheckboxOrder: true,
+    enableSecurityLock: false, autoBackupEnabled: true, isCalendarBackgroundUserSelected: false,
+    isShowCalendarCompleted: false, sidebarCollapsed: false, catFold: false, showTagPanel: true,
+    // number
+    dailyTomatoTarget: 8, dailyLoadWarnThreshold: 10, recycleBinAutoDeleteDays: 30,
+    notificationTimeoutInterval: 300000, todoDescriptionDisplayLineNumber: 3, autoBackupIntervalMin: 30,
+    autoBackupKeep: 10, whiteNoiseVolume: 0.55, tomatoTime: 25, restTime: 5,
+    newTodoCategoryId: 0, todoBoxCategoryId: -1, calendarCategory: 0,
+    // enum
+    colorMode: 'light', calendarFontSize: 'medium', weekStartDay: 'mon', newTodoDefaultSort: 'top',
+    calendarBackground: 'list', calendarFontColor: 'white', sortMode: 'custom',
+    expiredCompletedTodoRange: '7d', expiredUncompletedTodoRange: '30d', upcomingTodoRange: '30d',
+    weatherSource: 'open-meteo', todoBoxSortMethod: 'created', todoBoxSortOrder: 'desc', appLocale: 'zh-CN',
+    // string
+    backupDir: '', whiteNoiseAudio: '', weatherCity: '', searchDateRange: '', searchComplete: '',
+    searchCategory: '', maxRepeat: '2'
+  },
   // calendarCategory is a numeric category id in the app (DEFAULT_SETTINGS calendarCategory: 0);
   // declaring it string made `settings list` report the wrong type (value only survived via coercion)
   string: ['backupDir', 'whiteNoiseAudio', 'weatherCity', 'searchDateRange', 'searchComplete', 'searchCategory', 'maxRepeat']

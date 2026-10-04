@@ -39,5 +39,16 @@ module.exports = ({ resolveTask, liveTasks, patchTodo, CliError, dayjs, parseDat
     return { taskId: t.taskId, reminderExtra: extras.map(ts => dayjs(ts).format('YYYY-MM-DD HH:mm')) }
   }
 
-  return { setReminderOffsets, setReminderExtra }
+  /** D19-DOM2 (#3, App parity EditPanel.onRemindersCommit): setting a reminder on a DATELESS task
+   *  backfills the date to the start of the reminder's day (`if (!this.e.dateTs) this.e.dateTs =
+   *  dayjs(mainTs).startOf('day').valueOf()`). The CLI used to write a bare reminderTime, leaving
+   *  a dated reminder on a no-date task the App's todo box never showed. Only fires when the
+   *  effective date is 0 (an explicit --date on the same command, or an existing date, wins). */
+  function reminderDateBackfill (before, patch) {
+    const effective = patch.todoTime !== undefined ? patch.todoTime : (before ? before.todoTime : 0)
+    if (patch.reminderTime && !effective) patch.todoTime = dayjs(patch.reminderTime).startOf('day').valueOf()
+    return patch
+  }
+
+  return { setReminderOffsets, setReminderExtra, reminderDateBackfill }
 }

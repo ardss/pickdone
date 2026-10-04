@@ -74,6 +74,14 @@ export function secToHHmmss (sec) {
   return `${String(Math.floor(s / 3600)).padStart(2, '0')}:${String(Math.floor(s % 3600 / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
 }
 
+/** [D19] Manual-add start timestamp guard: el-date-picker (value-format "x") hands back null /
+ *  an empty string when the field is cleared. Saving with startTs=0 produced endTime=1,500,000
+ *  (~1970-01-01) behind a success toast — a record invisible in every day view. Accept only a
+ *  value that converts to a finite, strictly positive timestamp. */
+export function validManualStartTs (ts) {
+  const n = Number(ts)
+  return Number.isFinite(n) && n > 0
+}
 /** CLI tomato command staleness + expired receipt (extracted 2026-09-11 so the rejection path is
  *  unit-testable; renderer/js/main.js consumes both). A command whose `at` is missing or older than
  *  the TTL must never execute (crash-replay protection), but — before the receipt existed — the main

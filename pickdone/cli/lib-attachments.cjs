@@ -64,7 +64,12 @@ module.exports = ({ resolveTask, liveTasks, patchTodo, userDataDir, CliError }) 
     // main process's fix (pure helper, src/main/fix-util.js nextFreePath) so every upload lands on its own file.
     const safe = path.basename(fixUtil.nextFreePath(dir, base, p => fs.existsSync(p)))
     fs.writeFileSync(path.join(dir, safe), raw)
-    const item = { url: 'local://' + encodeURIComponent(safe), name: cleanName, size: raw.length }
+    // D19-DOM2 (#10, App parity): the row's `name` keeps the RAW basename — the App's
+    // saveAttachment (src/main/attachments.js) persists the raw `name` and strips trailing
+    // dots/spaces only for the on-disk key. The CLI used to persist the STRIPPED name, so the
+    // same file displayed differently (and de-duplicated differently) per channel. cleanName
+    // remains the extension-validation + filesystem-key surface only.
+    const item = { url: 'local://' + encodeURIComponent(safe), name: path.basename(file), size: raw.length }
     const field = ATTACH_IMG_EXT.has(ext) ? 'image' : 'files'
     let list = []
     try { list = JSON.parse(t[field] || '[]'); if (!Array.isArray(list)) list = [] } catch { list = [] }

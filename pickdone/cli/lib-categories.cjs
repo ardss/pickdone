@@ -74,15 +74,23 @@ module.exports = ({ open, commit, audit, CliError, resolveCategory, projectFlagK
     // making a recovered category lose its project flag/status/deadline/milestones irreversibly.
     // (Must run before ANY live-key deletion below.)
     const catMetaBakKey = vid => 'catProjectMetaBak.' + vid
+    // D19-DOM2 (#1, App parity renderer category.js backupThenClearProjectMeta): project documents
+    // (ProjectDocs.vue persist) live in `projectDocs:<id>` — the App backs them up into the same
+    // catProjectMetaBak blob and clears the live key on soft-delete; the CLI used to skip docs
+    // entirely, so `purge` then hard-deleted the key and the project's documents were gone forever.
+    const projectDocsKey = id => 'projectDocs:' + id
     for (const v of victims) {
       const vid = String(v.categoryId)
       const blob = {
         flag: (safeGetMeta(projectFlagKey(vid)) === '1'),
         status: safeGetMeta(projectStatusKey(vid)) || '',
         deadline: safeGetMeta('projectDeadline:' + vid) || '',
-        milestones: safeGetMeta(MS_KEY(vid)) || ''
+        milestones: safeGetMeta(MS_KEY(vid)) || '',
+        // D15-B4 (App): absent raw ('' after the ||) stays falsy so an old backup blob without
+        // the field restores cleanly.
+        docs: safeGetMeta(projectDocsKey(vid)) || ''
       }
-      if (blob.flag || blob.status || blob.deadline || blob.milestones) {
+      if (blob.flag || blob.status || blob.deadline || blob.milestones || blob.docs) {
         commit('meta', 'put', [catMetaBakKey(vid), JSON.stringify(blob)])
       }
     }
@@ -101,6 +109,9 @@ module.exports = ({ open, commit, audit, CliError, resolveCategory, projectFlagK
       try { commit('meta', 'delete', projectStatusKey(v.categoryId)) } catch { /* absent is fine */ }
       // milestones die with the deletion too (backed up above — renderer parity backupThenClearProjectMeta)
       try { commit('meta', 'delete', MS_KEY(v.categoryId)) } catch { /* absent is fine */ }
+      // D19-DOM2 (#1): project docs die with the deletion too (backed up above — App parity
+      // backupThenClearProjectMeta clears projectDocs:<id> after the backup write)
+      try { commit('meta', 'delete', projectDocsKey(v.categoryId)) } catch { /* absent is fine */ }
     }
     // P1-3 (R5, sync-visible parity with renderer category.js purgeFiltersForVictims): saved
     // filters whose conds.catId references a cascade victim must die with the category — the

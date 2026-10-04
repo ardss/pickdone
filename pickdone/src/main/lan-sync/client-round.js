@@ -610,8 +610,19 @@ function createClientRound(ctx) {
             finish(new Error('peer removed this pairing (unpaired)'))
           } else if (att.handles(msg.type)) { // attachment frames: att-end settles the round
             progressDeadline()
-            let attOpen = true; try { attOpen = att.onMessage(msg) } catch (err) { try { require('electron-log').warn('[LanSync] att frame error:', err && err.message) } catch { /* noop */ } } // round isolation: a transfer error ends the round cleanly, never rejects it
-            require('../log-isolation') // test isolation: redirect electron-log file transport into TODO_DB_DIR/TODO_USER_DATA_DIR
+            // D19-DOM1 (2026-10-02): a THROW inside att.onMessage used to be swallowed here while
+            // `attOpen` kept its pre-set true — the transfer stayed open, the round hung until its
+            // 120s deadline, and EVERY retry re-hung on the same poisoned batch. An att-frame
+            // error is now terminal for the round: finish(err) (sibling branches like
+            // 'unsolicited snapshot-end' use the same throw->finish(err) path) so the round
+            // fails promptly within the retry budget instead of burning the full deadline.
+            let attOpen = true
+            try { attOpen = att.onMessage(msg) } catch (err) {
+              try { require('electron-log').warn('[LanSync] att frame error:', err && err.message) } catch { /* noop */ }
+              require('../log-isolation') // test isolation: redirect electron-log file transport into TODO_DB_DIR/TODO_USER_DATA_DIR
+              finish(err)
+              return
+            }
             if (!attOpen) finish(null)
           }
         } catch (err) {

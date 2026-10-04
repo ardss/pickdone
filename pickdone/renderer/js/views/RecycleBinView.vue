@@ -34,7 +34,14 @@
               <div class="btn-group">
                 <button class="btn" @click.stop="restore(t, false)"> {{ $t('statsC.RecycleBin.btnRestoreDate') }} </button>
                 <button class="btn" @click.stop="restore(t, true)"> {{ $t('statsC.RecycleBin.btnRestoreToday') }} </button>
-                <div class="btn rc-pick-btn" @click.stop> {{ $t('statsC.RecycleBin.btnPickDate') }}
+                <!-- [D19] This pill used to be a click no-op: only a click landing exactly on the
+                     overlaid tabindex=-1 input opened the picker, and the keyboard path was unreachable.
+                     Now it is a real button-like control (Enter/Space/click synthesize the input click). -->
+                <div class="btn rc-pick-btn" role="button" tabindex="0"
+                     :aria-label="$t('statsC.RecycleBin.btnPickDate')"
+                     @click.stop="openPickDate($event)"
+                     @keydown.enter.prevent="openPickDate($event)"
+                     @keydown.space.prevent="openPickDate($event)"> {{ $t('statsC.RecycleBin.btnPickDate') }}
                   <el-date-picker class="rc-pick" size="small" value-format="x" type="date"
                                   :model-value="t.dayStart || null" @update:model-value="pickDate(t, $event)"/>
                 </div>
@@ -98,6 +105,14 @@ export default {
         if (!this.$el || typeof this.$el.querySelectorAll !== 'function') return
         this.$el.querySelectorAll('.rc-pick input').forEach(inp => inp.setAttribute('tabindex', '-1'))
       })
+    },
+    /** [D19] Open the embedded date picker for this row. Direct clicks on the overlaid input
+     *  keep el-date-picker's own toggle; every other activation (label click / Enter / Space)
+     *  synthesizes the same input click. */
+    openPickDate (e) {
+      const wrap = e.currentTarget
+      const inp = wrap && wrap.querySelector ? wrap.querySelector('.rc-pick input') : null
+      if (inp && e.target !== inp) inp.click()
     },
     isOverdue (t) {
       return t.dayStart && dayjs(t.dayStart).startOf('day').valueOf() < dayjs().startOf('day').valueOf()

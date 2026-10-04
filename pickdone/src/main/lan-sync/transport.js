@@ -68,6 +68,15 @@ const PAIR_CONFIRM_TIMEOUT_MS = 60 * 1000
 // destroyed; live rounds re-arm the timer implicitly with every inbound frame. Matches the
 // 120s round deadline so a legitimately slow round is never killed between frames.
 const AUTH_IDLE_TIMEOUT_MS = 120 * 1000
+// D19-DOM1 (2026-10-02): TOTAL pre-auth connection lifetime cap. The 30s pre-auth timer is a
+// Node socket timeout — it re-arms on EVERY inbound byte, so an unauthenticated peer that
+// answers our pings (or drips any traffic) every <30s never trips it and holds one of the 64
+// maxSockets slots forever. Pairing legitimately needs pre-auth ping/pong kept alive (the
+// pairing flows can sit in a human-decision window), so the fix is not a tighter idle bound
+// but a TOTAL lifetime budget measured from accept: when it fires and the connection is
+// still unauthenticated, the socket is destroyed regardless of how "active" it was.
+// Injectable for tests (opts.preAuthMaxLifeMs); <= 0 disables.
+const PRE_AUTH_MAX_LIFE_MS = 10 * 60 * 1000
 
 
 
@@ -444,6 +453,9 @@ function wireConnection(socket, { deviceId, pairingSecret, secretFor, getHandler
         // active round (even a slow one, as long as frames keep arriving) is never killed.
         // authIdleMs <= 0 opts out entirely (the legacy disarm behavior).
         if (socket.setTimeout) socket.setTimeout(authIdleMs != null ? authIdleMs : AUTH_IDLE_TIMEOUT_MS)
+        // D19-DOM1: authenticated — the total pre-auth lifetime cap no longer applies
+        // (clear the createLanServer accept-time timer so it can never fire post-auth).
+        if (socket._preAuthLifeTimer) { clearTimeout(socket._preAuthLifeTimer); socket._preAuthLifeTimer = null }
         socket._lanKey = state.sessionKey
         // Authenticated peers may stream full sync rounds: raise the line cap from 4KB to 32MB.
         reader.setLimit(MAX_LINE_BYTES)
@@ -519,6 +531,9 @@ function createLanServer(opts) {
   // the rest of the app. Authenticated peers count toward the same cap; normal operation uses
   // at most a handful of sockets (one per paired peer).
   const maxSockets = Number.isInteger(opts.maxSockets) ? opts.maxSockets : 64
+  // D19-DOM1: total pre-auth lifetime cap (see PRE_AUTH_MAX_LIFE_MS above). Armed on accept,
+  // cleared by wireConnection at hello-ack. Injectable for tests; <= 0 disables.
+  const preAuthMaxLifeMs = opts.preAuthMaxLifeMs !== undefined ? opts.preAuthMaxLifeMs : PRE_AUTH_MAX_LIFE_MS
 
   const server = net.createServer((socket) => {
     if (sockets.size >= maxSockets) {
@@ -527,6 +542,17 @@ function createLanServer(opts) {
     }
     sockets.add(socket)
     socket.on('close', () => sockets.delete(socket))
+    if (preAuthMaxLifeMs > 0) {
+      // D19-DOM1: unbounded pre-auth lifetime fix. Unlike the idle timer below, this one is a
+      // plain setTimeout measured from accept — peer traffic (ping/pong keepalives) cannot
+      // re-arm it. Destroyed pre-auth = the slot is released; authenticated sockets cleared
+      // the timer at hello-ack.
+      socket._preAuthLifeTimer = setTimeout(() => {
+        socket._preAuthLifeTimer = null
+        try { if (!socket.destroyed) socket.destroy() } catch { /* best-effort */ }
+      }, preAuthMaxLifeMs)
+      if (typeof socket._preAuthLifeTimer.unref === 'function') socket._preAuthLifeTimer.unref()
+    }
     if (preAuthIdleMs > 0) {
       socket.setTimeout(preAuthIdleMs)
       socket.on('timeout', () => {
@@ -768,4 +794,4 @@ function connect(host, port, opts) {
   return em
 }
 
-module.exports = { createLanServer, connect, send, wireConnection, ProtocolError, PROTO_VER, DEFAULT_PORT, resolveSyncPort, MAX_LINE_BYTES, PRE_AUTH_LINE_BYTES, PAIR_CONFIRM_TIMEOUT_MS, AUTH_IDLE_TIMEOUT_MS, cleanDeviceName, LINE_BUFFER_BUDGET_BYTES, __setLineBufferBudget }
+module.exports = { createLanServer, connect, send, wireConnection, ProtocolError, PROTO_VER, DEFAULT_PORT, resolveSyncPort, MAX_LINE_BYTES, PRE_AUTH_LINE_BYTES, PAIR_CONFIRM_TIMEOUT_MS, AUTH_IDLE_TIMEOUT_MS, PRE_AUTH_MAX_LIFE_MS, cleanDeviceName, LINE_BUFFER_BUDGET_BYTES, __setLineBufferBudget }

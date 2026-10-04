@@ -1,6 +1,5 @@
 /**
- * Todo CLI core library — reuses the main process's db.js OPS table; write semantics aligned with renderer/js/store/todo.js
- * (add→status:'add' / update→'update' / delete→'delete'; completedAt written only on complete/undo;
+ * Todo CLI core library — reuses the main process's db.js OPS table; write semantics aligned with renderer/js/store/todo.js * (add→status:'add' / update→'update' / delete→'delete'; completedAt written only on complete/undo;
  *   dayStart is derived from todoTime by db.js todoToRow; local writes do not advance meta.todosVersion — managed by the cloud-sync pipeline)
  */
 const path = require('path')
@@ -97,7 +96,10 @@ const { parseDate, dayStartOf, lunarOf, lunarAnnotate, dateChangeReminderPatch }
 // F-B5 (dw wave 3): single keyword normalization — was 3 verbatim copies (resolveTask, resolveRepeatEntry, // lib-tasks.cjs resolveCategory; the last now receives it via the existing deps injection). NFKC aligns
 // the CLI with the renderer's search normalization (utils/search.js normalize('NFKC')) — full-width // input ('Ａ１') used to match in the App but not in the CLI. BEHAVIOR CHANGE (NFKC alignment), noted.
 const normKey = v => String(v).normalize('NFKC').toLowerCase().replace(/[\s\u00A0\u3000\u200B\u2003]/g, '')
-function liveTasks () { return open().call('queryTodos', { deleted: 0, orderBy: 'scheduledDay ASC, sort ASC' }) }
+// D19-DOM2 (#4): CLI listing is APP DISPLAY order — taskSort DESC within a day (shared/sort-core.mjs
+// documents the contract: sortMode.js custom mode renders `b.taskSort - a.taskSort`). The old ASC
+// orderBy printed every day's list upside-down; db.js stays generic, the contract lives at this read layer.
+function liveTasks () { return open().call('queryTodos', { deleted: 0, orderBy: 'scheduledDay ASC, sort DESC' }) }
 function recycleTasks () { return open().call('queryTodos', { deleted: 1, orderBy: 'updatedAt DESC' }) }
 
 /** Resolve user input into a task: exact match on a full taskId → otherwise unique substring match on content (case-insensitive).
@@ -660,7 +662,7 @@ function listOn (date) {
 
 /* Multiple reminders: extracted verbatim to lib-reminders.cjs (2026-09-27 size-ratchet split) */
 const {
-  setReminderOffsets, setReminderExtra,
+  setReminderOffsets, setReminderExtra, reminderDateBackfill,
 } = require('./lib-reminders.cjs')({ resolveTask, liveTasks, patchTodo, CliError, dayjs, parseDate })
 
 const settingsApi = require('./lib-settings.cjs')
@@ -807,7 +809,7 @@ module.exports = {
   viewsList, resolveView, viewAdd, viewRm, applyViewConds, viewFetchOpts, viewCondsSummary,
   lunarOf, lunarAnnotate,
   setEstimate, getEstimateOf, sortTask, listOn, resolveRecord, recordFix, recordRemove, moveSubtask,
-  setReminderOffsets, setReminderExtra, addAttachment, listAttachments, removeAttachment,
+  setReminderOffsets, setReminderExtra, reminderDateBackfill, addAttachment, listAttachments, removeAttachment,
   settingsList, settingsSet, settingsDoc, setSettingsRaceHookForTests, planSet, planList, planRemove, dateChangeReminderPatch,
   SETTINGS_MANIFEST, settingsKnown, normKey, buildRenewalInstance,
   importEvents, eventFocusMinutes, eventKey

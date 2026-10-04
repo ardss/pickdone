@@ -31,6 +31,7 @@
  *  删除走全局撤销契约:5s undo toast(utils/confirm.js 的 removeWithUndo),不再用两段红字确认。 */
 import { dayjs, FMT } from '../utils/core.js'
 import { removeWithUndo } from '../utils/confirm.js'
+import { commit } from '../utils/commandBus.js'
 
 const keyOf = (catId: number) => 'projectDocs:' + catId
 const genId = () => 'doc_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
@@ -99,6 +100,8 @@ export default {
         // then stamped savedAt unconditionally — the UI showed "Saved HH:mm" while the docs never
         // landed. savedAt is stamped only in .then; a rejection flips to an honest failed state
         // (inline notice; the next queueSave retries, mirroring the await-before-toast doctrine).
+        // persist keeps the legacy dbCall shape: unit pins inject a fake window here, and the
+        // gate's ratchet tolerates this pre-existing site; new writes (undo restore) go through commit().
         this._saving = (window.todoAPI.dbCall('setMeta', [key, JSON.stringify(this.docs)]) || Promise.resolve())
           .then(() => { this.saveFailed = false; this.savedAt = Date.now() })
           .catch(() => { this.saveFailed = true })
@@ -127,9 +130,23 @@ export default {
         this.docs = this.docs.filter(d => d.id !== doc.id)
         if (this.activeId === doc.id) this.activeId = ''
         this.persist()
-      }, () => {
-        // 撤销可能发生在切到别的项目之后:恢复前先确认还在原项目的文档组里
-        if (this.catId !== catId) return
+      }, async () => {
+        // [D19] The undo used to silently early-return once the user had switched to another
+        // project — while the toast still promised "undo". The payload is doc-scoped, so restore
+        // into the ORIGINAL project's meta list regardless of what the view currently shows:
+        // re-read that project's docs array, splice the doc back at its old position, write it
+        // back directly (NOT via persist(), which is bound to the now-current project).
+        if (this.catId !== catId || this._docsCatId !== catId) {
+          try {
+            const raw = await window.todoAPI.dbCall('getMeta', keyOf(catId))
+            const arr = JSON.parse(raw || '[]')
+            if (Array.isArray(arr) && !arr.some(d => d.id === doc.id)) {
+              arr.splice(Math.min(idx, arr.length), 0, doc)
+              await commit('meta', 'put', [keyOf(catId), JSON.stringify(arr)])
+            }
+          } catch (e) { /* best-effort restore; the doc stays deleted as before */ }
+          return
+        }
         this.docs.splice(Math.min(idx, this.docs.length), 0, doc)
         this.activeId = doc.id
         this.persist()
