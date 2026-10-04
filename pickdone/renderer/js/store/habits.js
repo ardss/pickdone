@@ -297,6 +297,15 @@ export default {
       else h.records[day] = true
       persist(s)
     },
+    /** [A6 fix] set a specific day to an explicit value (not a toggle): the check-in Undo must
+     *  restore the PRE-action snapshot, not re-toggle (a toggle double-fired by a stray second
+     *  click or an interleaved action would corrupt the day's state). */
+    setCheck (s, { id, day, on }) {
+      const h = s.habits.find(x => x.id === id); if (!h) return
+      if (on) h.records[day] = true
+      else delete h.records[day]
+      persist(s)
+    },
     addMoment (s, { name, date, kind }) {
       // Same collision guard as addHabit
       s.moments.push({ id: Date.now() + '-' + Math.random().toString(36).slice(2, 7), name, date, kind })

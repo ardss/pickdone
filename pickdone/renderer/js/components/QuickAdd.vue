@@ -20,7 +20,12 @@
           <i class="ico" style="--ico:url('app://app/assets/img/calendar_month_black_24dp.svg');width:16px;height:16px"></i>{{nlLabel()}}<i class="close-x close-x--sm" style="margin-left:2px"></i>
         </span>
       </transition>
-      <span class="qa-cal" :title="$t('statsD.QuickAdd.selectDate')">
+      <!-- [A5 fix] the picker overlay is mouse-only (its input is tabindex=-1): the visible shell
+           is now a button-like control whose Enter/Space synthesize the hidden input click
+           (RecycleBinView rc-pick-btn precedent) -->
+      <span class="qa-cal" role="button" tabindex="0" :title="$t('statsD.QuickAdd.selectDate')"
+            :aria-label="$t('statsD.QuickAdd.selectDate')"
+            @keydown.enter.prevent="openCal" @keydown.space.prevent="openCal">
         <span class="todo-input-add__calender"></span>
         <el-date-picker ref="calPick" class="qa-cal-picker" size="small" value-format="x" type="date"
                         :aria-label="$t('statsD.QuickAdd.selectDate')"
@@ -121,8 +126,18 @@ export default {
     async onPaste (e) {
       const lines = splitPasteLines(e.clipboardData && e.clipboardData.getData('text'))
       if (lines.length <= 1) return
+      // [A9 fix] the _submitting check must come BEFORE preventDefault: while a submit is in
+      // flight the multi-line paste used to be swallowed silently. Return WITHOUT preventing so
+      // the native paste lands in the input (draft preserved) when busy.
+      if (this._submitting) return
       e.preventDefault()
       await this.createLines(lines)
+    },
+    // [A5 fix] keyboard surrogate for the hidden picker input: focus + click it (same synthesis RecycleBinView uses)
+    openCal () {
+      const pickEl = $elOf(this.$refs.calPick)
+      const inp = pickEl && pickEl.querySelector('input')
+      if (inp) { inp.focus(); inp.click() }
     },
     // Shared bulk-create path for the multi-line paste: same payload rules as onEnter
     // (date chip selection wins over defaults, tag page context appends the tag, category/

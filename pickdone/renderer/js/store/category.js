@@ -77,13 +77,16 @@ function persist (list, opts = {}) {
           .catch(e => ({ err: e, id: c.categoryId }))
       )
     }
-    if (!jobs.length) return
-    Promise.all(jobs).then(results => {
+    if (!jobs.length) return Promise.resolve(true)
+    return Promise.all(jobs).then(results => {
       for (const r of results) if (r && r.err) lastPersistedRows.delete(r.id)
       const failed = results.filter(r => r && r.err)
       if (failed.length) console.error('[category] save failed for', failed.length, 'of', list.length, 'rows:', failed[0].err)
-    }).catch(e => console.error('[category] save failed:', e))
-  } catch (e) { console.warn('[category] SQLite write failed (cached locally only):', e) }
+      // [A4 fix] callers (ProjectView rename/color) need a success indicator: true = every row
+      // landed in SQLite, false = at least one write failed (LS cache is already updated either way)
+      return !failed.length
+    }).catch(e => { console.error('[category] save failed:', e); return false })
+  } catch (e) { console.warn('[category] SQLite write failed (cached locally only):', e); return Promise.resolve(false) }
 }
 
 let idSeed = null
@@ -482,9 +485,19 @@ export default {
       state.list.push({ categoryId: nextId(), userId: 840001, categoryName, categoryColor, createTime: Date.now(), listSort: Math.max(0, ...state.list.map(c => c.listSort)) + 100, folderIs, folderId, delete: false })
       persist(state.list)
     },
+    // [A4 fix] returns persist()'s Promise<boolean>: true = the SQLite write confirmed, false =
+    // the durable write failed (fire-and-forget callers just ignore the return value)
     updateCategory (state, patch) {
       const i = state.list.findIndex(c => c.categoryId === patch.categoryId)
-      if (i >= 0) { state.list[i] = { ...state.list[i], ...patch }; persist(state.list) }
+      if (i >= 0) { state.list[i] = { ...state.list[i], ...patch }; return persist(state.list) }
+      return Promise.resolve(true)
+    },
+    /** [A3 fix] hard-remove a just-created placeholder row whose follow-up steps failed
+     *  (ProjectOverviewView.createProject) — unlike softDelete there is nothing to cascade: the
+     *  row never became a real category/project. */
+    rollbackAdd (state, id) {
+      const i = state.list.findIndex(c => c.categoryId === id)
+      if (i >= 0) { state.list.splice(i, 1); persist(state.list) }
     },
     softDelete (state, id) {
       // Meta cleanup aligned with the CLI delete path (cli/lib.js deletes projectDeadline:<id> and prunes
@@ -674,14 +687,11 @@ export default {
       let dbReadFailed = false
       try { rows = (await window.todoAPI.dbCall('getAllCategories')) || [] } catch (e) { dbReadFailed = true; console.warn('[category] SQLite read failed, using local cache', e) }
       try {
-        // r6 ordering contract: the legacy blob may have an un-scrub rewrite in flight (setProject
-        // unmark fired just before a reload) — drain it FIRST, else the union below resurrects a
-        // project the user just cancelled from the not-yet-cleaned legacy array.
+        // r6 ordering contract: the legacy blob may have an un-scrub rewrite in flight (setProject unmark fired just before a reload) — drain it FIRST, else the union below resurrects a project the user just cancelled from the not-yet-cleaned legacy array.
         await drainLegacyRewrites()
         const raw = await window.todoAPI.dbCall('getMeta', PROJECT_IDS_KEY)
         const ids = JSON.parse(raw || '[]')
-        // Y/X3 legacy union: per-cat flag keys for every known row id, merged over the legacy blob
-        // (a flag present only on a peer device arrives via its own per-cat key and must survive).
+        // Y/X3 legacy union: per-cat flag keys for every known row id, merged over the legacy blob (a flag present only on a peer device arrives via its own per-cat key and must survive).
         const merged = (Array.isArray(ids) ? ids.slice() : [])
         // U-18: one batch read instead of an O(N) sequential getMeta per row (fallback keeps the loop)
         const flagVals = await getMetaManyWithFallback(rows.map(r => projectFlagKey(r.categoryId)))
@@ -691,13 +701,8 @@ export default {
         if (merged.length) commit('setProjectIds', merged)
       } catch (e) { /* stays empty when no project flags */ }
       await this.dispatch('category/loadProjectMeta')
-      // D15-B15: the LS-tombstone re-merge runs on EVERY successful DB read — not gated behind
-      // rows.length. Deleting ALL categories and restarting used to fall through to the
-      // `setListFromDb([])` migrated branch, dropping every in-retention tombstone from memory:
-      // visibleCount read 0 and the recover-in-place entry went blind, contradicting the
-      // documented recoverability promise precisely when the user needs it. (A failed DB read is
-      // NOT a successful read: the dbReadFailed path below keeps the whole LS cache, tombstones
-      // included, so nothing changes there.)
+      // D15-B15: the LS-tombstone re-merge runs on EVERY successful DB read — not gated behind rows.length. Deleting ALL categories and restarting used to fall through to the `setListFromDb([])` migrated branch, dropping every in-retention tombstone from memory:
+      // visibleCount read 0 and the recover-in-place entry went blind, contradicting the documented recoverability promise precisely when the user needs it. (A failed DB read is NOT a successful read: the dbReadFailed path below keeps the whole LS cache, tombstones included, so nothing changes there.)
       if (dbReadFailed) {
         const lsCache = loadList()
         commit('setListFromDb', lsCache)
@@ -705,8 +710,7 @@ export default {
       }
       const lsDels = mergeableLsTombstones(rows, rootState && rootState.settings && rootState.settings.recycleBinAutoDeleteDays)
       if (rows.length) {
-        // Re-attach soft-deleted rows mirrored in LS (getAllCategories is live-only) so the in-app
-        // recovery entry survives a restart; live DB rows win over a stale LS tombstone of the same id
+        // Re-attach soft-deleted rows mirrored in LS (getAllCategories is live-only) so the in-app recovery entry survives a restart; live DB rows win over a stale LS tombstone of the same id
         commit('setListFromDb', rows.concat(lsDels))
         return rows.length
       }
@@ -716,12 +720,8 @@ export default {
       if (migrated) { commit('setListFromDb', lsDels); return 0 } // D15-B15: zero live categories ≠ zero recoverable categories
       const ls = loadList()
       try {
-        // [D13 #7] the migration is restore-shaped (an empty DB being seeded from a cached copy):
-        // without {restore:true}, toRow left LS-cached tombstones stampless and upsertCategory
-        // stamped them `now` — after the first sync a peer's recovered/renamed category (real,
-        // older updatedAt) lost LWW to the fresh now-tombstone and was re-deleted (Round-6 P2
-        // hazard, unapplied to this path). restore:true gives only tombstones the epoch-oldest
-        // stamp; live rows still take the now-stamp ('backup wins locally').
+        // [D13 #7] the migration is restore-shaped (an empty DB being seeded from a cached copy): without {restore:true}, toRow left LS-cached tombstones stampless and upsertCategory stamped them `now` — after the first sync a peer's recovered/renamed category (real,
+        // older updatedAt) lost LWW to the fresh now-tombstone and was re-deleted (Round-6 P2 hazard, unapplied to this path). restore:true gives only tombstones the epoch-oldest stamp; live rows still take the now-stamp ('backup wins locally').
         for (const c of ls) await commitCommand("category", "put", toRow(c, { restore: true }))
         await commitCommand("meta", "put", ['categoryLsMigrated', '1'])
       } catch (e) { console.warn('[category] migration failed (local cache still usable):', e) }

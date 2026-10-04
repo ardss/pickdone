@@ -28,7 +28,7 @@ function extractPure (src, file) {
   const codeEnd = src.indexOf('[h7-fixes] pure-end')
   const exports = {}
   // eslint-disable-next-line no-new-func
-  new Function('exports', src.slice(codeStart, codeEnd) + '\nObject.assign(exports, { clampInsertIndex, sameTask })')(exports)
+  new Function('exports', src.slice(codeStart, codeEnd) + '\nObject.assign(exports, { sameTask })')(exports)
   return exports
 }
 
@@ -65,20 +65,17 @@ test('h7: EpReminders.removeRemindRow undo captures the taskId and bails on mism
   assert.match(undo, /if \(!sameTask\(this\.task && this\.task\.taskId, tid\)\) return/)
 })
 
-/* ---------------- 3. [P2] undo re-insert uses a clamped index ---------------- */
+/* ---------------- 3. [A7] removal + undo place rows by REFERENCE (stale-index-proof) ---------------- */
 
-test('h7: pure helpers — clampInsertIndex keeps the re-insert inside the current list', () => {
-  const { clampInsertIndex } = extractPure(REMINDERS, 'EpReminders.vue')
-  assert.equal(clampInsertIndex(3, 1), 1)
-  assert.equal(clampInsertIndex(1, 5), 1) // captured index beyond current length
-  assert.equal(clampInsertIndex(2, -1), 0)
-  assert.equal(clampInsertIndex(0, 0), 0)
-})
-
-test('h7: EpReminders.removeRemindRow undo splices with the clamped index, not the stale one', () => {
-  const undo = REMINDERS.slice(REMINDERS.indexOf('removeRemindRow'))
-  assert.match(undo, /splice\(clampInsertIndex\(this\.remindRows\.length, i\), 0, row\)/)
-  assert.doesNotMatch(undo, /splice\(i, 0, row\)/)
+test('h7: EpReminders.removeRemindRow splices via indexOf on the row object (rapid-click safe)', () => {
+  // [A7 fix] the captured v-for index goes stale when an earlier row is removed first; both the
+  // delete and the undo now locate the row by reference (EditPanel.delSub precedent), replacing
+  // the old clampInsertIndex band-aid which still re-inserted at a stale position.
+  const body = REMINDERS.match(/removeRemindRow \(i\) \{[\s\S]*?\r?\n {4}\},/)[0]
+  assert.match(body, /const at = this\.remindRows\.indexOf\(row\)/)
+  assert.doesNotMatch(body, /splice\(i, 1\)/)
+  assert.doesNotMatch(body, /clampInsertIndex/)
+  assert.doesNotMatch(body, /splice\(i, 0, row\)/)
 })
 
 /* ---------------- 4. [P2] EpSubtasks stable row keys ---------------- */

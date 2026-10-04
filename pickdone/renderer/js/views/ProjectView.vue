@@ -455,12 +455,17 @@ export default {
         const { value } = await this.$prompt(this.$t('statsB.ProjectView.namePrompt'), this.$t('statsB.ProjectView.renameTitle'), { inputValue: this.cat.categoryName, inputPattern: /\S/, inputErrorMessage: this.$t('statsB.ProjectView.nameRequired') })
         const name = (value || '').trim()
         if (!name || name === this.cat.categoryName) return
-        this.$store.commit('category/updateCategory', { categoryId: this.catId, categoryName: name })
+        // [A4 fix] the store persist is async: only toast success once the SQLite write confirmed;
+        // on failure keep the in-memory rename but say so (was: unconditional success toast).
+        const ok = await this.$store.commit('category/updateCategory', { categoryId: this.catId, categoryName: name })
+        if (ok === false) return this.$message.error(this.$t('statsH.main.actionFailedMsg'))
         this.$message.success(this.$t('statsB.ProjectView.renamed'))
       } catch { /* cancelled */ }
     },
-    setColor (color) {
-      this.$store.commit('category/updateCategory', { categoryId: this.catId, categoryColor: color })
+    async setColor (color) {
+      // [A4 fix] same confirmed-write contract as renameProject: surface a failed persist
+      const ok = await this.$store.commit('category/updateCategory', { categoryId: this.catId, categoryColor: color })
+      if (ok === false) this.$message.error(this.$t('statsH.main.actionFailedMsg'))
     },
     async setDeadline () {
       try {
@@ -509,16 +514,22 @@ export default {
     /** "Reschedule": expired uncompleted in this project -> today */
     async recomplete () {
       const ts = this.todayTs
-      const { n, snap }: any = await rescheduleExpired(this.$store.dispatch, this.inCat, ts)
-      if (n) {
-        batchMoveWithUndo(this, {
-          label: this.$t('statsB.ProjectView.rescheduled'),
-          snap,
-          revertOf: r => this.$store.dispatch('todo/updateTodoFields', { taskId: r.id, patch: { dayStart: r.dayStart, todoTime: r.todoTime } })
-        })
-      } else {
-        // [maint-0924 A13] n=0 was silent — say there is nothing to reschedule
-        this.$message.info(this.$t('statsB.ProjectView.noOverdue'))
+      // [A2 fix] mirror CategoryView's guard: a failed reschedule used to bubble as an unhandled
+      // rejection with no toast; surface it with the same i18n key.
+      try {
+        const { n, snap }: any = await rescheduleExpired(this.$store.dispatch, this.inCat, ts)
+        if (n) {
+          batchMoveWithUndo(this, {
+            label: this.$t('statsB.ProjectView.rescheduled'),
+            snap,
+            revertOf: r => this.$store.dispatch('todo/updateTodoFields', { taskId: r.id, patch: { dayStart: r.dayStart, todoTime: r.todoTime } })
+          })
+        } else {
+          // [maint-0924 A13] n=0 was silent — say there is nothing to reschedule
+          this.$message.info(this.$t('statsB.ProjectView.noOverdue'))
+        }
+      } catch (e) {
+        this.$message.error(this.$t('statsE.CategoryView.rescheduleFailed') + ': ' + (e && e.message ? e.message : e))
       }
     }
   },

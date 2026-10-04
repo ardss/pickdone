@@ -23,14 +23,12 @@ exports.planAll = db => db.prepare('SELECT id, taskId, day, mm, sort, updatedAt 
 
 exports.planAddMany = (db, chips) => {
   // Skip-and-collect (round-3 review): one malformed chip used to throw for the WHOLE batch —
-  // a poison pill in the sync flush wedged plan ingestion forever. Invalid rows are skipped
-  // (never applied); the valid rows commit and their ids are returned.
+  // a poison pill in the sync flush wedged plan ingestion forever. Invalid rows are skipped.
   const rawList = (Array.isArray(chips) ? chips : [chips])
   const list = []
   // D13 finding 3 (uniform bulk-flush rejection contract): surface the skipped rows instead of
-  // silently filtering them — a buffered segment whose tail never landed used to ack ok=true and
-  // advance the sender's watermark past lost chips. `rejected` rides the returned accepted-ids
-  // array as a NON-enumerable property (array consumers — oplog expansion, renderer — unaffected).
+  // silently filtering them — a buffered segment whose tail never landed used to ack ok=true
+  // past lost chips. `rejected` rides the accepted-ids array as a NON-enumerable property.
   const rejected = []
   for (let i = 0; i < rawList.length; i++) {
     const c = rawList[i]
@@ -40,8 +38,7 @@ exports.planAddMany = (db, chips) => {
         taskId: String(c.taskId || ''), day: String(c.day || ''), mm: String(c.mm || ''), sort: Number(c.sort) || 0,
         // M2 (2026-09-20): an explicit updatedAt (the sync apply path carries the peer row's age)
         // must survive — re-stamping now() here made the applied chip differ from the peer's row
-        // (fresh LWW age + a new oplog delta per applied chip = apply/push ping-pong). Mirrors
-        // upsertCategory's `(c && c.updatedAt) || now`; renderer callers omit it and get now().
+        // (fresh LWW age + a new oplog delta per applied chip = apply/push ping-pong).
         updatedAt: Number(c && c.updatedAt) > 0 ? Number(c.updatedAt) : 0
       })
     } else {
@@ -49,6 +46,10 @@ exports.planAddMany = (db, chips) => {
     }
   }
   if (rejected.length) log.warn(`[TodoDB] planAddMany: rejected ${rejected.length} of ${rawList.length} chips (invalid taskId/day/mm)`)
+  // D20-B12 note: a storage-level LWW gate here (DO UPDATE ... WHERE excluded.updatedAt > existing)
+  // was tried and REVERTED — sync-apply already adjudicates plan winners before the flush write
+  // (tombstone-winner branch, planRemoveIds carries the winner stamps), while the conflict-backup
+  // restore path legitimately re-applies OLDER values (its whole purpose), which the gate broke.
   const ins = db.prepare('INSERT INTO plan_chips (id, taskId, day, mm, sort, deleted, deletedAt, updatedAt) VALUES (@id,@taskId,@day,@mm,@sort,0,0,@updatedAt) ON CONFLICT(id) DO UPDATE SET taskId=excluded.taskId, day=excluded.day, mm=excluded.mm, sort=excluded.sort, deleted=0, deletedAt=0, updatedAt=excluded.updatedAt')
   const now = Date.now()
   const tr = db.transaction(() => list.forEach(c => ins.run({ ...c, updatedAt: c.updatedAt || now }))); tr()
@@ -58,8 +59,8 @@ exports.planAddMany = (db, chips) => {
 }
 
 exports.planUpdateChip = (db, { id, day, mm }) => {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(day))) throw new Error('planUpdateChip: day 必须 YYYY-MM-DD')
-  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(String(mm))) throw new Error('planUpdateChip: mm 必须 HH:mm')
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(day))) throw new Error('planUpdateChip: day must be YYYY-MM-DD')
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(String(mm))) throw new Error('planUpdateChip: mm must be HH:mm')
   const r = db.prepare('UPDATE plan_chips SET day=?, mm=?, updatedAt=? WHERE id=? AND deleted=0').run(String(day), String(mm), Date.now(), String(id))
   return r.changes > 0
 }

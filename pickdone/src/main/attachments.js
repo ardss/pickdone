@@ -38,12 +38,10 @@ function isUnownedNoiseFile (f) { return NOISE_CUSTOM_RE.test(String(f)) }
 // scanners (dirUsage/dirTotalBytes): 1 phantom file toward MAX_FILES=200 and its bytes toward the
 // 64MB budget. Same rationale as the C14 noise-slot exclusion.
 function isAppOwnedBookkeeping (f) { return isUnownedNoiseFile(f) || String(f) === 'aliases.json' }
-// D19-DOM1 (2026-10-02): crash-residue `.att-tmp-*` files (att-transfer.js writeAtomic spool
-// files left behind by a crash/power-cut between writeFileSync and rename) used to be counted
-// by BOTH quota scanners (dirUsage/dirTotalBytes) forever — they are invisible to the sync
-// protocol (peers never see them, nothing ever reads them), so counting them punishes the
-// crash victim with a permanently shrunken 64MB/200-file budget. Excluded from accounting
-// here AND age-swept on startup (sweepTmpResidue below) so they cannot accumulate either.
+// D19-DOM1 (2026-10-02): crash-residue `.att-tmp-*` files (crash spool leftovers) are invisible
+// to the sync protocol and nothing reads them — counting them punished the crash victim with a
+// permanently shrunken 64MB/200-file budget. Excluded from quota accounting here AND age-swept
+// on startup (sweepTmpResidue below) so they cannot accumulate either.
 const ATT_TMP_RE = /\.att-tmp-\d+-\d+$/
 const TMP_SWEEP_MAX_AGE_MS = 24 * 60 * 60 * 1000
 function isCrashTmpResidue (f) { return ATT_TMP_RE.test(String(f)) }
@@ -124,7 +122,16 @@ async function saveAttachment ({ taskId, name, dataBase64 }) {
   // Date.now() filename and writeFileSync silently overwrote the first attachment. Suffix -1/-2…
   // (pure helper in fix-util, testable) so every upload lands on its own file.
   const dest = fixUtil.nextFreePath(attachDir(), safe, p => fs.existsSync(p))
-  fs.writeFileSync(dest, raw)
+  // D20-B11: atomic write (spool to .att-tmp-* + rename, mirroring att-transfer.js writeAtomic).
+  // The bare writeFileSync left a TORN file looking healthy forever (existence-only guards);
+  // a crash mid-write now leaves only .att-tmp residue, which the D19 startup sweep ages out.
+  const tmp = `${dest}.att-tmp-${Date.now()}-${Math.floor(Math.random() * 1e6)}`
+  try {
+    fs.writeFileSync(tmp, raw)
+    fs.renameSync(tmp, dest)
+  } finally {
+    try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp) } catch { /* best-effort cleanup */ }
+  }
   const finalName = path.basename(dest)
   const url = `local://${encodeURIComponent(finalName)}`
   return { url, key: finalName, name, size: fs.statSync(dest).size, ext }
@@ -147,19 +154,15 @@ function attachmentPath (key) {
 
 /* ---------- device-local attachment alias map (never synced) ----------
  * Logical local:// key -> actual on-disk name, recorded when the LAN pull renames a
- * same-name-different-content conflict to `name-1` (att-transfer.js writeAtomic). The synced
- * rows keep referencing the ORIGINAL name, so every local:// resolution on this device must
- * translate through this map. Device-local by design: the peer has no such collision and its
- * own map (if any) would name the conflict differently — syncing it would corrupt both ends. */
+ * same-name-different-content conflict to `name-1` (att-transfer.js writeAtomic). Synced rows
+ * keep the ORIGINAL name; device-local by design — syncing the map would corrupt both ends. */
 function aliasesPath () { return path.join(attachDir(), 'aliases.json') }
 function readAliases () {
   try { const o = JSON.parse(fs.readFileSync(aliasesPath(), 'utf8')); if (o && typeof o === 'object' && !Array.isArray(o)) return o } catch { /* no map / unreadable: empty */ }
   return {}
 }
 // D18 (2026-10-02): the alias map used to be written with a bare writeFileSync — a torn write
-// (crash/power-cut mid-write) silently WIPED the LAN conflict alias map (readAliases' catch→{}
-// loses every entry). Route all three write sites through the repo's durable write
-// (durable-fs.writeFileDurable: tmp + fsync + atomic rename, no residue on failure).
+// silently WIPED the map (readAliases' catch→{}). Route writes through durable-fs (fsync+rename).
 function writeAliasesDurable (map) {
   try { require('./durable-fs').writeFileDurable(aliasesPath(), JSON.stringify(map, null, 1)) } catch { /* best-effort */ }
 }
@@ -182,13 +185,10 @@ function deleteAlias (key) {
   return true
 }
 /** Lifecycle fix (2026-10-02): purge/delete-todo-files/hardDelete remove owned files in bulk but
- *  never touched the alias map — entries whose TARGET file died with the purge leaked forever
- *  (aliases.json grew unbounded) and, worse, stayed STALE: attachmentPath() kept translating the
- *  dead logical key to the now-missing renamed file, so the missing-file guard in open-file could
- *  never recognize the gap and re-pull the original key (the exact failure the single-file
- *  delete-file path already cleans up at handlers/attachments.js). Dropping an alias whose target
- *  is missing is always safe: resolution falls back to the base name, which is also missing, and
- *  the missing-file guard takes over. `exists` is injectable for tests. Returns count removed. */
+ *  never touched the alias map — entries whose TARGET died with the purge leaked forever AND went
+ *  stale: attachmentPath() kept translating the dead key to the missing renamed file, so the
+ *  missing-file guard could never recognize the gap and re-pull. Dropping an alias whose target
+ *  is missing is always safe (resolution falls back to the base name). `exists` injectable. */
 function pruneMissingAliases (exists = p => fs.existsSync(p)) {
   const map = readAliases()
   let removed = 0

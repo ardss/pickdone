@@ -189,9 +189,14 @@ test('[F10] FilterModal.save aborts on a duplicate name with the modal warning i
 
 /* ---------- [F11] ProjectOverviewView proj-card ---------- */
 
-test('[F11] proj-card is role=button with a name aria-label and Space activation', () => {
+test('[F11] proj-card keeps keyboard activation but no role=button (A11: the nested status pill owns the button role)', () => {
   const src = read('renderer/js/views/ProjectOverviewView.vue')
-  assert.match(src, /class="proj-card" tabindex="0" role="button"/)
+  // [A11 fix] role=button demoted from the card: a role=button (pill) nested inside a role=button
+  // (card) is invalid ARIA — the card keeps tabindex + keydown (TodoBoxView precedent)
+  const card = src.match(/v-for="p in filteredProjects"[^>]*class="proj-card"[^>]*>/)
+  assert.ok(card, 'card open tag found')
+  assert.ok(!card[0].includes('role="button"'), 'card must not carry role=button')
+  assert.match(card[0], /tabindex="0"/)
   assert.match(src, /:aria-label="\$t\('statsB\.ProjectsView\.enterProject', \{ name: p\.cat\.categoryName \}\)"/)
   assert.match(src, /@click="open\(p\.cat\.categoryId\)" @keydown="onOpenKey\(p, \$event\)"/)
   assert.match(src, /onOpenKey \(p, e\) \{[\s\S]{0,160}?roleButtonActivate\(function \(\) \{ this\.open\(p\.cat\.categoryId\) \}\)[\s\S]{0,60}?\.call\(this, e\)/)

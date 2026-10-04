@@ -17,6 +17,8 @@
 const log = require('electron-log')
 require('./log-isolation') // test isolation: redirect electron-log file transport into TODO_DB_DIR/TODO_USER_DATA_DIR
 const mergeCore = require('../../shared/sync-core/merge.mjs')
+// D20-DOMB1: pure milestone-blob scrub shared with the CLI purge (shared/milestone-gc.mjs).
+const { scrubMilestoneBlob } = require('../../shared/milestone-gc.mjs')
 // Phase-3 (docs/refactor-command-bus.md): buffer drain routes read their op from the manifest
 // so the engine's bulk surfaces stay census-tied to the single command table. The engine still // applies rows DIRECTLY (peer-carried LWW stamps — see the gate's sync-ingress exemption for // this file); the manifest is used for dispatch naming only, never for stamping.
 const manifest = require('./command-manifest')
@@ -121,6 +123,22 @@ function persistLocalUserId (state, id) {
       busWrite(state, 'setMeta', [LOCAL_USER_ID_META_KEY, String(id)])
     }
   } catch { /* the scan result still applies for this session */ }
+}
+
+/** D20-DOMB1: scrub dead task ids from every projectMilestones:<catId> meta blob (pure logic in
+ *  shared/milestone-gc.mjs; writes through the sync write door). Mirrors cli/lib.js purgeBin:
+ *  every blob's taskIds, no backup copy, corrupt blobs left alone. @returns blobs rewritten. */
+function scrubMilestoneBlobsFor (state, taskIds) {
+  const dead = taskIds instanceof Set ? taskIds : new Set(taskIds)
+  if (!dead.size) return 0
+  let scrubbed = 0
+  for (const k of state.db.call('listMetaKeys') || []) {
+    if (!String(k).startsWith('projectMilestones:')) continue
+    const next = scrubMilestoneBlob(state.db.call('getMeta', k), dead)
+    if (next == null) continue
+    try { busWrite(state, 'setMeta', [k, next]); scrubbed++ } catch { /* best-effort */ }
+  }
+  return scrubbed
 }
 
 /**
@@ -460,6 +478,10 @@ function applyRowInner (state, incoming) {
       // with updatedAt 0 (epoch-oldest) and the deletion resurrected on the next LWW round.
       // todoToRow now also falls back to deletedAt for deleted rows (belt and braces for callers
       // that only carry deletedAt).
+      // D20-DOMB1: a sync-landed deletion must scrub the dead id from the projectMilestones:*
+      // blobs like the local purge routes (renderer scrubMilestonesForPurged, cli purgeBin) —
+      // a peer purge otherwise leaves a phantom taskId and flips an UNMET milestone to done.
+      try { scrubMilestoneBlobsFor(state, [incoming.id]) } catch { /* best-effort, never block the delete */ }
       state.pendingWrites.todos.push({ taskId: incoming.id, delete: 1, deletedAt: winner.deletedAt || incoming.deletedAt || 0, updateTime: winner.deletedAt || incoming.deletedAt || 0, syncAuthor: incoming.author || '' })
       return true
     }
@@ -840,13 +862,13 @@ module.exports = {
   compareMetaBackupKeys, // D17: exported for unit tests (prune age order)
   parseMetaBackupKeySuffix,
   hasEquivalentConflictCopy, // D18: exported for unit tests (scan-failure = indeterminate)
+  scrubMilestoneBlobsFor, // D20-DOMB1: exported for unit tests (sync tombstone milestone scrub)
   // 2026-09-26 poison-row quarantine: where a failed flush parks its dropped rows.
   META_FLUSH_QUARANTINE_PREFIX,
   // Exported (2026-09-19): lan-sync-bootstrap destructures this for allRows()/hydration skips —
   // the missing export made every allRows() call (legacy seed, snapshot serving) throw TypeError.
   isMachineLocalSettingKey,
-  // Exported (2026-09-19, GAP-A): lan-sync-bootstrap's allRows() uses both to keep machine-local
-  // meta and the settings/habits blobs out of snapshot/seed pushes.
+  // Exported (2026-09-19, GAP-A): lan-sync-bootstrap's allRows() uses both to keep machine-local meta and the settings/habits blobs out of snapshot/seed pushes.
   isMachineLocalMetaKey,
   isSyncBlobMetaKey,
   createHydrationCache,
@@ -860,8 +882,7 @@ module.exports = {
   flushPendingWrites,
   readMaxOplogSeq,
   writeMetaConflictBackup,
-  // Arch review 2026-09-22 rec #1: the injected-ingress write door (lan-sync-bootstrap routes
-  // its manifest-op writes through the same helper so the engine stays one bus-routed surface).
+  // Arch review 2026-09-22 rec #1: the injected-ingress write door (lan-sync-bootstrap routes its manifest-op writes through the same helper so the engine stays one bus-routed surface).
   busFor,
   busWrite,
 }

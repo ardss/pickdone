@@ -77,9 +77,9 @@ const AUTH_IDLE_TIMEOUT_MS = 120 * 1000
 // still unauthenticated, the socket is destroyed regardless of how "active" it was.
 // Injectable for tests (opts.preAuthMaxLifeMs); <= 0 disables.
 const PRE_AUTH_MAX_LIFE_MS = 10 * 60 * 1000
-
-
-
+// D20-C13: flush cap for pair accept/reject teardown — the 1s default is for data paths; a
+// control frame needs only a short window (a stalled peer must not hold the pairing flow).
+const PAIR_FLUSH_CAP_MS = 250
 
 /** Serialize + (optionally) encrypt one message onto the socket. Returns TRUE when the frame
  *  was handed to the socket, FALSE when the socket is dead/not writable (or the kernel write
@@ -123,8 +123,9 @@ function sendEnc(socket, key, msg) {
  *  still sitting in the user-space/kernel write buffer — the requester never saw the accept and
  *  the pairing dead-locked (acceptor had persisted, requester had nothing). Same flush discipline
  *  as connect()'s em.close (end() flushes buffered frames + FIN; destroy after 'close', a dead
- *  socket, or a 1s cap so a stalled peer can never hold the flow open). */
-function flushThenDestroy(socket) {
+ *  socket, or a cap (default 1s; D20-C13 pair accept/reject paths pass 250ms) so a stalled
+ *  peer can never hold the flow open). */
+function flushThenDestroy(socket, capMs) {
   if (!socket || socket.destroyed || !socket.writable) { try { socket.destroy() } catch { /* already dead */ } return }
   let settled = false
   const finish = () => {
@@ -132,7 +133,7 @@ function flushThenDestroy(socket) {
     settled = true
     try { socket.destroy() } catch { /* already dead */ }
   }
-  const cap = setTimeout(finish, 1000)
+  const cap = setTimeout(finish, capMs > 0 ? capMs : 1000)
   cap.unref?.()
   socket.once('close', () => { clearTimeout(cap); finish() })
   try {
@@ -297,7 +298,7 @@ function wireConnection(socket, { deviceId, pairingSecret, secretFor, getHandler
               // Per-instance-port fix: the requester's LISTEN port from the pair-request, so the
               // acceptor persists a dialable address (null on legacy requesters — node-events falls back).
               port: Number.isInteger(msg.listenPort) && msg.listenPort > 0 && msg.listenPort <= 65535 ? msg.listenPort : null })
-            flushThenDestroy(socket)
+            flushThenDestroy(socket, PAIR_FLUSH_CAP_MS) // D20-C13: short cap for control frames
             return
           }
           // Two-way confirmed pairing: an unpaired client asks {type:'pair-request', deviceName,
@@ -352,10 +353,10 @@ function wireConnection(socket, { deviceId, pairingSecret, secretFor, getHandler
                 // Per-instance-port fix: same as the manual-code path above.
                 port: Number.isInteger(msg.listenPort) && msg.listenPort > 0 && msg.listenPort <= 65535 ? msg.listenPort : null,
               })
-              if (acceptSent) { flushThenDestroy(socket); return }
+              if (acceptSent) { flushThenDestroy(socket, PAIR_FLUSH_CAP_MS); return } // D20-C13
             } else {
               const rejectSent = send(socket, { type: 'pair-reject', error: 'rejected' })
-              if (rejectSent) { flushThenDestroy(socket); return }
+              if (rejectSent) { flushThenDestroy(socket, PAIR_FLUSH_CAP_MS); return } // D20-C13
             }
             socket.destroy()
           }
@@ -553,15 +554,13 @@ function createLanServer(opts) {
       }, preAuthMaxLifeMs)
       if (typeof socket._preAuthLifeTimer.unref === 'function') socket._preAuthLifeTimer.unref()
     }
-    if (preAuthIdleMs > 0) {
-      socket.setTimeout(preAuthIdleMs)
-      socket.on('timeout', () => {
-        // Fatal in BOTH phases: pre-auth idleness (slow-loris) and authenticated idleness
-        // (Wave-B P2-1 zombie peer holding a maxSockets slot — wireConnection re-arms the
-        // timer at hello-ack with the longer authIdleMs budget).
-        try { socket.destroy() } catch { /* best-effort */ }
-      })
-    }
+    // D20-C1: the destroy-on-fire 'timeout' handler must exist in BOTH phases. It used to be
+    // attached only under preAuthIdleMs > 0 — with that budget disabled (<= 0) the socket kept
+    // wireConnection's hello-ack re-arm (setTimeout(authIdleMs)) with NO listener, so a dead
+    // authenticated peer held its maxSockets slot forever. The pre-auth branch still arms the
+    // shorter budget; the disabled branch gets the auth-phase idle timeout via this handler.
+    socket.on('timeout', () => { try { socket.destroy() } catch { /* best-effort */ } })
+    if (preAuthIdleMs > 0) socket.setTimeout(preAuthIdleMs)
     wireConnection(socket, { deviceId, pairingSecret, secretFor, getHandler, onPeer, onUnauthorized, verifyPairingCode, onPaired, pairGate, onPairRequest, onPairThrottled, pairConfirmTimeoutMs, seenPairNonces, authIdleMs })
   })
   server.on('error', (err) => {
@@ -794,4 +793,4 @@ function connect(host, port, opts) {
   return em
 }
 
-module.exports = { createLanServer, connect, send, wireConnection, ProtocolError, PROTO_VER, DEFAULT_PORT, resolveSyncPort, MAX_LINE_BYTES, PRE_AUTH_LINE_BYTES, PAIR_CONFIRM_TIMEOUT_MS, AUTH_IDLE_TIMEOUT_MS, PRE_AUTH_MAX_LIFE_MS, cleanDeviceName, LINE_BUFFER_BUDGET_BYTES, __setLineBufferBudget }
+module.exports = { createLanServer, connect, send, wireConnection, flushThenDestroy, PAIR_FLUSH_CAP_MS, ProtocolError, PROTO_VER, DEFAULT_PORT, resolveSyncPort, MAX_LINE_BYTES, PRE_AUTH_LINE_BYTES, PAIR_CONFIRM_TIMEOUT_MS, AUTH_IDLE_TIMEOUT_MS, PRE_AUTH_MAX_LIFE_MS, cleanDeviceName, LINE_BUFFER_BUDGET_BYTES, __setLineBufferBudget }

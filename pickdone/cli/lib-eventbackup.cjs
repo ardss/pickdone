@@ -15,17 +15,14 @@ const path = require('path')
 /** Rolling keep for evt-* snapshots (same eventKeep: 10 policy as writeEventBackupCore) */
 const EVT_KEEP = 10
 
-/** Atomic JSON write (temp file + rename, same crash-safety shape as handlers/backup.js) */
+/** D20-DOMB7 (2026-10-02): the write is now the App twin's durable-fs.writeFileDurable
+ *  (tmp + fsync(file) + rename + best-effort dir fsync — handlers/backup.js uses the same
+ *  helper for its snapshots). The hand-rolled writeFileSync+renameSync ordered nothing: after
+ *  a power cut the rename could persist while the snapshot data was still only in the OS cache.
+ *  tmp residue on failure is removed inside writeFileDurable. */
 function atomicWriteJson (dir, name, text) {
-  const tmp = path.join(dir, '.' + name + '.tmp')
-  try {
-    fs.writeFileSync(tmp, text, 'utf8')
-    fs.renameSync(tmp, path.join(dir, name))
-    return true
-  } catch (e) {
-    try { fs.rmSync(tmp, { force: true }) } catch { /* best-effort */ }
-    throw e
-  }
+  require('../src/main/durable-fs').writeFileDurable(path.join(dir, name), text)
+  return true
 }
 
 /** Write the best-effort pre-purge event snapshot. @returns {ok, file?, error?} — never throws. */

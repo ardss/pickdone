@@ -1,12 +1,17 @@
 /**
- * Automatic backup strategy (pure functions, no Electron dependency — shared by the main process and unit tests)
- * File naming: auto-YYYYMMDD-HHMMSS.json (periodic snapshot) / evt-<reason>-YYYYMMDD-HHMMSS.json (pre-dangerous-operation snapshot)
- * Retention policy (GFS tiers): auto files keep the most recent N + daily anchors (latest one per day, kept for D days) + weekly anchors (latest one per week, kept for W weeks);
- *                     evt files are grouped by reason, keeping K per group.
+ * Automatic backup strategy (pure functions, no Electron dependency — shared by the main process
+ * and unit tests). File naming: auto-YYYYMMDD-HHMMSS.json (periodic) / evt-<reason>-<stamp>.json
+ * (pre-dangerous-operation). Retention (GFS tiers): auto keeps recent N + daily anchors (D days)
+ * + weekly anchors (W weeks); evt files grouped by reason keep K per group.
  */
 
-const RE_AUTO = /^auto-(\d{8})-(\d{6})\.json$/
-const RE_EVT = /^evt-([a-z0-9-]+)-(\d{8})-(\d{6})\.json$/
+// D20-B4: same-stamp collision snapshots carry a SUFFIX — `auto-...-dup<n>.json` (handlers/
+// backup.js uniqueSnapshotName) and `evt-<reason>-...-<epochMs>.json` (cli/lib-eventbackup.cjs).
+// The bare-stamp regexes never matched them, so they accumulated FOREVER outside the GFS tiers.
+// The optional `(?:-[A-Za-z0-9]+)?` suffix group classifies them into their tag's tier (the base
+// stamp capture groups are unchanged, so nameToTs/dayKey/week anchors keep working).
+const RE_AUTO = /^auto-(\d{8})-(\d{6})(?:-[A-Za-z0-9]+)?\.json$/
+const RE_EVT = /^evt-([a-z0-9-]+)-(\d{8})-(\d{6})(?:-[A-Za-z0-9]+)?\.json$/
 
 function nameToTs (name) {
   const m = RE_AUTO.exec(name) || RE_EVT.exec(name)
@@ -14,9 +19,8 @@ function nameToTs (name) {
   const [, a, b] = RE_EVT.exec(name) ? [null, m[2], m[3]] : [null, m[1], m[2]]
   const s = a // YYYYMMDD
   const t = b // HHMMSS
-  // Fix (2026-09-19): the filename stamps are written from LOCAL time (auto-YYYYMMDD-HHMMSS generated
-  // by new Date() local formatting) — parsing them as Date.UTC shifted every non-UTC backup's age by the
-  // UTC offset, skewing the daily/weekly GFS anchor selection. Parse as local time to match the writer.
+  // Fix (2026-09-19): filename stamps are LOCAL time (from new Date() formatting) — parse as
+  // local, not UTC, or every non-UTC backup's GFS anchor age skews by the UTC offset.
   return +new Date(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8), +t.slice(0, 2), +t.slice(2, 4), +t.slice(4, 6))
 }
 
@@ -69,14 +73,10 @@ function selectPrunes (names, o = {}) {
 }
 
 /** Stale atomic-write residue picker (pure, unit-testable): a crash between writeFileSync(tmp) and
- *  renameSync used to leave temp files in the backup dir forever (run-auto-backup's prune filter only
- *  matches ^(auto|evt)-). An entry is stale when it is a temp file AND its mtime is older than
- *  maxAgeMs (1h default — a concurrent in-flight write must never be swept). Caller supplies mtimes.
- *  C7 (P2 2026-09-24): durable writes name their residue `<file>.<pid>.<ms>.dtmp` (and the legacy
- *  fixed `<file>.dtmp` / historical `.tmp-*` spellings existed too) — the picker used to match only
- *  the `.tmp-` prefix, so durable residue accumulated forever. /\.dtmp(\.|$)/ matches all three.
- *  @param {{name: string, mtimeMs: number}[]} entries
- *  @returns {string[]} stale temp file names */
+ *  renameSync used to leave temp files in the backup dir forever. Stale = temp file AND mtime
+ *  older than maxAgeMs (1h default — an in-flight write is never swept). C7 (P2 2026-09-24):
+ *  /\.dtmp(\.|$)/ matches the durable `<file>.<pid>.<ms>.dtmp` spelling and the legacy fixed
+ *  `<file>.dtmp` / historical `.tmp-*` spellings. Caller supplies mtimes. */
 function selectStaleTmp (entries, { now = Date.now(), maxAgeMs = 60 * 60 * 1000 } = {}) {
   return (entries || [])
     .filter(e => e && typeof e.name === 'string' &&

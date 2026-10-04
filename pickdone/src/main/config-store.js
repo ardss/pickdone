@@ -36,15 +36,12 @@ function consumeQuarantineNotice () {
 // scan / EBUSY lock on a perfectly good config.json used to rename it to .bad immediately, and the
 // next writeConfig persisted an amputated defaults object while the real config sat orphaned.
 // Only JSON parse errors (definitively corrupt content) quarantine immediately.
-// D14 C3 (2026-10-02): the D10 budget (3 reads, 50+100ms ≈ 150ms total) is far below real AV
-// on-access lock durations (100ms-2s+ on Windows), so a HEALTHY config.json under a sustained
-// scan was still renamed to .bad — a lock TIMEOUT is not corruption. Two changes:
-//   - the retry budget scales to realistic AV locks: exponential 100/200/400/800ms ≈ 1.5s of
-//     backoff across 5 read attempts;
+// D14 C3 (2026-10-02): the D10 budget (~150ms) is far below real AV on-access lock durations
+// (100ms-2s+ on Windows), so a HEALTHY config.json under a sustained scan was still renamed to
+// .bad — a lock TIMEOUT is not corruption. Two changes:
+//   - the retry budget scales to realistic AV locks: 100/200/400/800ms ≈ 1.5s across 5 reads;
 //   - exhausting that budget on transient IO sets the read-failed WRITE gate (no clobber of the
-//     still-locked file) but does NOT quarantine — the healthy file stays in place and the next
-//     successful read resumes normally. Quarantine remains reserved for definitive corruption
-//     (JSON parse error) and non-transient IO.
+//     still-locked file) but does NOT quarantine — the next successful read resumes normally.
 const TRANSIENT_READ_CODES = new Set(['EACCES', 'EBUSY', 'EIO', 'EPERM'])
 const TRANSIENT_ATTEMPTS = 5
 function readBackoffMs (attempt) { return Math.min(100 * Math.pow(2, attempt - 1), 800) } // 100, 200, 400, 800 (≈1.5s total)
@@ -114,15 +111,11 @@ function readConfig () {
       break
     }
   }
-  // 2026-09-10 P2: any OTHER failure (JSON parse error from a truncated write, persistent EACCES/EBUSY
-  // IO after the retries) used to fall through to the same fresh-install default — and the next
-  // writeConfig() persisted that amputated object, permanently resetting winBounds/locale/lockPassword.
-  // Keep the evidence instead. D14 C3: the two residual classes get DIFFERENT treatment —
-  //   - transient IO exhausted: the file is most likely HEALTHY but locked (a timeout is not
-  //     corruption). Do NOT rename it aside; set the read-failed gate (writeConfig is gated off,
-  //     so the still-on-disk config cannot be clobbered) and return defaults for this session.
-  //   - JSON parse error / non-transient IO: quarantine to .bad as before (genuine corruption or
-  //     an unopenable path).
+// 2026-09-10 P2: other failures used to fall through to fresh-install defaults — and the next
+// writeConfig() persisted that amputated object, permanently resetting winBounds/locale/lock.
+// Keep the evidence instead. D14 C3: transient IO exhausted = file likely HEALTHY but locked —
+// do NOT rename it aside; set the read-failed gate and return defaults for this session.
+// JSON parse error / non-transient IO: quarantine to .bad (genuine corruption or unopenable path).
   if (transientExhausted) {
     _readFailed = true
     console.warn(`[config-store] config.json stayed locked (${TRANSIENT_ATTEMPTS} attempts, ~1.5s backoff) — treating as AV/lock contention, NOT quarantining; writes gated off until a read succeeds`)
@@ -191,7 +184,11 @@ function writeConfig (patch) {
     _pending++
     try { return exec() } finally { _pending-- }
   }
-  // Only reachable if exec ever becomes async: serialize behind the chain (single-flight).
+  // Only reachable if exec ever becomes async (it is synchronous today): serialize behind the
+  // chain (single-flight). SYNC CONTRACT (D20-C9, do not change the return shape): callers use
+  // try/catch around the RETURNED MERGED OBJECT — if this branch is ever taken it returns a
+  // Promise instead, breaking that contract, so it is surfaced LOUDLY.
+  console.error('[config-store] D20-C9 writeConfig async path taken (_pending > 0) — returning a Promise violates the documented synchronous try/catch contract; investigate the reentrancy')
   const result = _writeChain.then(exec, exec)
   _writeChain = result.then(() => {}, () => {})
   return result

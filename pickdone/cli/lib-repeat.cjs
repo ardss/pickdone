@@ -65,7 +65,21 @@ module.exports = ({ open, commit, audit, CliError, dayjs, core, resolveTask, liv
     // Carry set: core.renewalCarryFields via buildRenewalInstance (F-B4, single source).
     const estimate = clampEstimate(getEstimateOf(t.taskId, t.estimate))
     const nt = buildRenewalInstance(t, next, { estimate })
-    commit('todo', 'put', nt)
+    try {
+      commit('todo', 'put', nt)
+    } catch (e) {
+      // D20-DOMB2 (2026-10-02): the UNIQUE index idx_todos_repeat_day (todos.recurGroupId +
+      // scheduledDay, live rows only — db-migrations.js) can reject this insert AFTER the
+      // completion write already persisted — a concurrent window/renderer minted the same
+      // rid+day instance between the pre-check above and the commit. Same semantics as the
+      // idempotent pre-check: resolve to the existing twin instead of throwing past the done
+      // path. The SQLite message names the COLUMNS ("UNIQUE constraint failed: todos.
+      // recurGroupId, todos.scheduledDay"), not the index — match both spellings.
+      if (!/repeat_day|scheduledDay|UNIQUE/i.test(String((e && e.message) || e))) throw e
+      const twin = db.call('queryTodos', { deleted: 0, repeatId: rid, dayStartFrom: next.todoTime, dayStartTo: next.todoTime })
+      if (Array.isArray(twin) && twin.length) return twin[0]
+      throw e // index says it exists but the read disagrees — surface the real error
+    }
     // F3 P2: the estimate column is write-once at the DB layer (U-1) — the live value lives in the
     // per-task meta key `tomatoEstimateState:<taskId>`; copy it there so the renewal keeps its
     // estimate on both ends (renderer twin: setEstimate in ensureNextRepeatInstance).

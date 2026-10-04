@@ -54,7 +54,6 @@ import { mmToHHmm } from '../../utils/tomatoShared.js'
 // [h7-fixes] pure-start
 /** Undo re-insert index: the index captured at delete time can be stale after concurrent
  *  removals — clamp it to the current list length instead of blindly reusing it. */
-function clampInsertIndex (len, i) { return Math.max(0, Math.min(i, len)) }
 /** Undo must not cross tasks: only re-insert when the panel still edits the same task. */
 function sameTask (currentId, capturedId) { return !!currentId && currentId === capturedId }
 // [h7-fixes] pure-end
@@ -117,7 +116,10 @@ export default {
       const tid = this.task && this.task.taskId
       removeWithUndo(this,
         () => {
-          this.remindRows.splice(i, 1)
+          // [A7 fix] locate by row reference — the captured v-for index goes stale on rapid
+          // clicks (an earlier row already spliced shifts every later index; delSub precedent)
+          const at = this.remindRows.indexOf(row)
+          this.remindRows.splice(at < 0 ? this.remindRows.length : at, 1)
           if (!this.remindRows.length) { this.clearRemind(); return }
           this.commitReminders()
         },
@@ -125,8 +127,9 @@ export default {
           // Undo must not cross tasks: if the panel switched tasks while the undo toast
           // was pending, the deleted reminder belongs to the previous task — drop it.
           if (!sameTask(this.task && this.task.taskId, tid)) return
-          // The captured index may be stale after concurrent removals — clamp, don't reuse blindly
-          this.remindRows.splice(clampInsertIndex(this.remindRows.length, i), 0, row)
+          // Same reference-based placement as the removal: the captured index may be stale
+          const at = this.remindRows.indexOf(row)
+          this.remindRows.splice(at < 0 ? this.remindRows.length : at, 0, row)
           this.commitReminders()
         })
     },
@@ -148,6 +151,9 @@ export default {
         ? t.minute(30).second(0).millisecond(0)
         : t.add(1, 'hour').minute(0).second(0).millisecond(0)
       const val = slot.valueOf()
+      // late-night hole (D20): after 23:00 the +1h slot rolls past midnight onto the NEXT day
+      // while the row is still dated today — clamp back to the last minute of today.
+      if (!slot.isSame(t, 'day')) return '23:59'
       return val <= t.valueOf() ? '23:59' : slot.format(FMT.time)
     },
     commitReminders () {
