@@ -31,6 +31,7 @@
  *  删除走全局撤销契约:5s undo toast(utils/confirm.js 的 removeWithUndo),不再用两段红字确认。 */
 import { dayjs, FMT } from '../utils/core.js'
 import { removeWithUndo } from '../utils/confirm.js'
+import { commit } from '../utils/commandBus.js'
 
 const keyOf = (catId: number) => 'projectDocs:' + catId
 const genId = () => 'doc_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
@@ -99,6 +100,8 @@ export default {
         // then stamped savedAt unconditionally — the UI showed "Saved HH:mm" while the docs never
         // landed. savedAt is stamped only in .then; a rejection flips to an honest failed state
         // (inline notice; the next queueSave retries, mirroring the await-before-toast doctrine).
+        // persist keeps the legacy dbCall shape: unit pins inject a fake window here, and the
+        // gate's ratchet tolerates this pre-existing site; new writes (undo restore) go through commit().
         this._saving = (window.todoAPI.dbCall('setMeta', [key, JSON.stringify(this.docs)]) || Promise.resolve())
           .then(() => { this.saveFailed = false; this.savedAt = Date.now() })
           .catch(() => { this.saveFailed = true })
@@ -139,7 +142,7 @@ export default {
             const arr = JSON.parse(raw || '[]')
             if (Array.isArray(arr) && !arr.some(d => d.id === doc.id)) {
               arr.splice(Math.min(idx, arr.length), 0, doc)
-              await window.todoAPI.dbCall('setMeta', [keyOf(catId), JSON.stringify(arr)])
+              await commit('meta', 'put', [keyOf(catId), JSON.stringify(arr)])
             }
           } catch (e) { /* best-effort restore; the doc stays deleted as before */ }
           return
