@@ -69,7 +69,7 @@ Write commands:
   attachment list <task>            list a task's attachments
   attachment rm <task> img|file <n> remove the n-th attachment (n from attachment list)
   repeat on <task> [--type daily|weekly|monthly|yearly] [--interval N] [--weekdays 1,3,5] [--monthday D] [--count N] [--skip-weekends] [--skip-holidays]
-  repeat off <task> [--all]        leave repeat group (--all also removes future instances); repeat rule <task> to inspect
+  repeat off <task> [--all]        delete this instance from the repeat group (--all dissolves the whole group, completed instances included); repeat rule <task> to inspect
   tomato status                          tomato status (running?/seconds left/attached task/today count)
   events import --file <events.json>   rebuild a schedule from a structured event JSON array (idempotent; each event = task + backdated done + linked focus record)
   tomato list [--date today|yesterday|YYYY-MM-DD] [<task|keyword>] [--n 30]   query focus records (read-only, works without the App)

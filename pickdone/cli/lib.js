@@ -90,7 +90,8 @@ class CliError extends Error {
 /* ---------------- Split sub-modules (2026-09-23, #132 skipped P3-11 continuation; 2026-09-27 size-ratchet continuation) ----------------
    Read commands and the projects/milestones/status block moved verbatim to lib-tasks.cjs /
    lib-projects.cjs; deps are injected so the db/bus/audit seams stay single-sourced here. */
-const { parseDate, dayStartOf, lunarOf, lunarAnnotate } = require('./lib-date.cjs')({ CliError, dayjs, nlDate })
+const { parseDate, dayStartOf, lunarOf, lunarAnnotate, dateChangeReminderPatch } = require('./lib-date.cjs')({ CliError, dayjs, nlDate })
+// D18-DOM2 size-ratchet: dateChangeReminderPatch moved verbatim into lib-date.cjs (dayjs-only helper).
 
 /* ================= Task resolution ================= */
 // F-B5 (dw wave 3): single keyword normalization — was 3 verbatim copies (resolveTask, resolveRepeatEntry, // lib-tasks.cjs resolveCategory; the last now receives it via the existing deps injection). NFKC aligns
@@ -261,7 +262,13 @@ function addTodo ({ content, desc, date, reminder, category, difficulty, priorit
     urgent: urgent != null ? Number(urgent) : 0,
     repeatId, subtasks: null, image: null, files: null,
     predecessors: (after && after.length) ? JSON.stringify(after) : null,
-    categoryId: resolveCategory(category) || 0,
+    // D18-DOM2 (#5, App parity store/todo.js addTodo `categoryId = settings.newTodoCategoryId || 0`):
+    // with no explicit --category, the App defaults to the user's settings.newTodoCategoryId; the CLI
+    // used to hard-default to 0 and silently ignored the setting. A 0/absent setting stays "unset"
+    // (0) — resolveCategory(0) would otherwise throw NO_CATEGORIES on a category-less DB.
+    categoryId: resolveCategory(category != null && String(category).trim() !== ''
+      ? category
+      : ((Number(settingsDoc().newTodoCategoryId) || 0) || null)) || 0,
     updateTime: now, syncTime: 0,
     taskContent: String(content).trim(),
     taskDescribe: desc ? String(desc) : '',
@@ -273,13 +280,10 @@ function addTodo ({ content, desc, date, reminder, category, difficulty, priorit
   commit('todo', 'put', t)
   const rowAfter = db.call('getById', t.taskId)
   audit.record({ action: 'add', targets: [t], changes: [{ after: rowAfter }] })
-  // Tasks with an explicit time are auto-placed on the day timeline (user-finalized 2026-09-03): the reminder answers "when will you call me", the schedule chip answers "what should I do in this slot" — both are kept
-  // Fix (2026-09-19): NL times (明天9点/下午3点) resolved a timed todoTime but no chip — derive HH:mm from todoTime when the raw string has an NL marker and no HH:mm (bare dates must not fabricate chips).
-  let mm = dateExplicitTime(date)
-  if (!mm && todoTime && NL_TIME_MARKER_RE.test(String(date || '')) && !dayjs(todoTime).startOf('day').isSame(dayjs(todoTime))) {
-    mm = dayjs(todoTime).format('HH:mm')
-  }
-  if (mm) { try { planSet(t.taskId, mm) } catch { /* chip write failure must not block task creation */ } }
+  // D18-DOM2 (#7, App parity): NO schedule chip is minted at add time — the App's addTodo writes no
+  // planAdd (the old comment here claiming a timeline chip was "user-finalized 2026-09-03" was wrong;
+  // chips are set explicitly via `plan <task> <HH:mm>` / the App's day-plan UI). D17 already removed
+  // the mint from `edit`; this removes it from `add` so both CLI verbs match the App.
   return rowAfter
 }
 
@@ -289,32 +293,7 @@ function dateExplicitTime (s) {
   return m ? m[1].padStart(2, '0') + ':' + m[2] : null
 }
 
-/** Natural-language time markers (明天9点 / 下午3点 / 9点半 / 3pm): the raw string carries a time of day even without HH:mm */
-const NL_TIME_MARKER_RE = /(\d{1,2}\s*[点:：]|\d{1,2}\s*[:：]\s*\d{1,2}|[上午下午晚上早上凌晨中午]|半|\d{1,2}\s*(?:am|pm)\b)/i
-
-/** Reminder re-anchor on a reschedule (review P1 2026-09-11; renderer parity: EditPanel.applyDate).
- *  Shared by `edit --date` (pickdone.js) and `batch date` (batchRun) — the two channels used to diverge:
- *  batch bypassed the entry-layer re-anchor and left the main reminder on the old day. Moving the date
- *  carries reminders along: the main reminder re-anchors to the new date at its original time-of-day
- *  (stays absent when there was none) and reminderExtra rows shift by the same day-diff. Returns the
- *  fields to merge into the patch; empty object when there is nothing to carry. */
-function dateChangeReminderPatch (before, newTodoTime) {
-  const patch = {}
-  if (!newTodoTime || !before) return patch
-  if (before.reminderTime) {
-    // EditPanel.applyDate takes hour/minute from the OLD reminder; seconds/millis too, so relative date
-    // parses (which carry the current clock's seconds) stay deterministic
-    const r = dayjs(before.reminderTime)
-    patch.reminderTime = +dayjs(newTodoTime).hour(r.hour()).minute(r.minute()).second(r.second()).millisecond(r.millisecond())
-  }
-  const extras = Array.isArray(before.reminderExtra) ? before.reminderExtra : []
-  const oldDay = before.todoTime ? +dayjs(before.todoTime).startOf('day') : 0
-  if (extras.length && oldDay) {
-    const shift = +dayjs(newTodoTime).startOf('day').diff(oldDay, 'day')
-    if (shift) patch.reminderExtra = extras.map(x => +dayjs(x).add(shift, 'day'))
-  }
-  return patch
-}
+/** NL time marker regex removed (D18-DOM2 #7): it only served the deleted add-time chip minting. */
 
 /** patch + audit. action explicitly states the semantics (edit/delete/restore/undo/subtask); defaults to edit */
 function patchTodo (input, patch, { action, note } = {}) {
@@ -389,6 +368,11 @@ function toggleComplete (input, target, { withSubtasks, completedAt } = {}) {
     // undo, remove the instance that renewal created: same rid, nearest later dayStart, still the
     // group's last, and not itself completed. Any earlier sibling (a genuine older instance the user
     // un-did) is left alone.
+    // D18-DOM2 (#12): row shape aligned with the renderer's deleteTodo/deleteTodosMany — `delete: true`
+    // (not the numeric `delete: 1`), version 0. `deleting` is a renderer UI-dialect flag that the App
+    // strips before persisting, so the CLI simply never sets it. Known CLI-side differences (not ported):
+    // no critical-backup/writeEventBackup and no view recompute on this channel (the CLI has no
+    // renderer views to recompute; backups land via the purge event snapshot, cli/lib-eventbackup.cjs).
     try {
       if (t.repeatId && t.dayStart) {
         const group = db.call('queryTodos', { deleted: 0, repeatId: t.repeatId })
@@ -399,52 +383,27 @@ function toggleComplete (input, target, { withSubtasks, completedAt } = {}) {
         if (renewedNext && !renewedNext.complete && renewedNext.dayStart === lastDay) {
           const now = Date.now()
           // version: 0 (deleteTodo parity) so the soft delete re-enters the sync snapshot
-          commit('todo', 'put', Object.assign({}, renewedNext, { delete: 1, deletedAt: now, updateTime: now, version: 0, status: 'delete' }))
+          commit('todo', 'put', Object.assign({}, renewedNext, { delete: true, deletedAt: now, updateTime: now, version: 0, status: 'delete' }))
           chipsSnapshotForDelete(renewedNext.taskId) // same snapshot→clear cascade as deleteTodo
           audit.record({ action: 'undo', targets: [renewedNext], changes: [{ before: renewedNext, after: null }], note: 'auto-renewed instance removed with the undo' })
         }
       }
-    } catch { /* best-effort: the undo itself must succeed even if the cleanup hits a snag */ }
+    } catch (e) {
+      // Best-effort: the undo itself must succeed even if the cleanup hits a snag — but not silently
+      // (the old bare catch left an orphan phantom instance with zero signal)
+      console.error(`warning: undo could not remove the auto-renewed instance for task ${t.taskId} (${e && e.message ? e.message : e})`)
+    }
     return undone
   }
   const patch = core.completePatch(t, { withSubtasks: cascade, completedAt })
   const merged = { ...t, ...patch, updateTime: Date.now(), status: 'update' }
   commit('todo', 'put', merged)
 
-  // Repeat-group renewal (the store's ensureNextRepeatInstance semantics)
-  let renewed = null
-  if (t.repeatId) {
-    const rid = t.repeatId
-    const group = db.call('queryTodos', { deleted: 0, repeatId: rid })
-    let rule = null
-    try { rule = JSON.parse(db.call('getMeta', 'repeatRule:' + rid) || 'null') } catch { /* no rule means no renewal */ }
-    const next = core.nextRepeatInstance(merged, group, rule, require('../shared/holidays.mjs').getHolidayList())
-    if (next) {
-      // Renewal-instance idempotency: skip when an instance with the same rid + same dayStart exists (prevents duplicate CLI runs + concurrent multi-window generation creating two)
-      const existing = db.call('queryTodos', { deleted: 0, repeatId: rid, dayStartFrom: next.todoTime, dayStartTo: next.todoTime })
-      if (Array.isArray(existing) && existing.length) {
-        renewed = existing[0]
-          } else {
-        // F3 P2 (D5 renderer parity): carry the LIVE meta estimate of the instance being renewed
-        // (getEstimateOf) — the row's estimate COLUMN is dead post-X2 (bumpSnow writes accumulated
-        // focus minutes into it), so clamping it 0-20 turned "focused 150 min" into "20 tomatoes".
-        // Carry set: core.renewalCarryFields via buildRenewalInstance (F-B4, single source).
-        const estimate = clampEstimate(getEstimateOf(t.taskId, t.estimate))
-        const nt = buildRenewalInstance(t, next, { estimate })
-        commit('todo', 'put', nt)
-        // F3 P2: the estimate column is write-once at the DB layer (U-1) — the live value lives in the
-        // per-task meta key `tomatoEstimateState:<taskId>`; copy it there so the renewal keeps its
-        // estimate on both ends (renderer twin: setEstimate in ensureNextRepeatInstance).
-        if (estimate > 0) {
-          try {
-            commit('meta', 'put', [estimateKey(nt.taskId), String(estimate)])
-            commit('meta', 'put', ['tomatoEstimateStateAt', String(Date.now())]) // same stamp convention as setEstimate
-          } catch { /* estimate is advisory */ }
-        }
-        renewed = db.call('getById', nt.taskId)
-      }
-    }
-  }
+  // Repeat-group renewal (the store's ensureNextRepeatInstance semantics) — D18-DOM2 #1: the block
+  // moved verbatim into lib-repeat.cjs renewRepeatAfterComplete so the subtask-driven parent
+  // completion (lib-subs.cjs checkSubtask) renews the chain through the SAME code path (App parity:
+  // every completion route dispatches ensureNextRepeatInstance, not just the direct toggle).
+  const renewed = renewRepeatAfterComplete(db, t, merged)
   const completed = db.call('getById', t.taskId)
   audit.record({
     action: 'done',
@@ -465,13 +424,19 @@ function deleteTodo (input) {
   return after
 }
 
-/** Snapshot all of a task's chips into meta (planChipsSnapshot:<taskId>) before clearing its rows */
+/** Snapshot all of a task's chips into meta (planChipsSnapshot:<taskId>) before clearing its rows.
+ *  D18-DOM2 (#11): a cascade failure used to be a SILENT bare catch — orphan chips with zero
+ *  signal. It now warns to stderr with the task id and the deletion still proceeds (App parity:
+ *  warn + continue). */
 function chipsSnapshotForDelete (taskId) {
   try {
     const rows = open().call('planAll', []).filter(r => r.taskId === taskId)
     if (rows.length) commit('meta', 'put', ['planChipsSnapshot:' + taskId, JSON.stringify(rows)])
     commit('plan', 'deleteTask', taskId)
-  } catch { /* snapshot failure must not block deletion */ }
+  } catch (e) {
+    // snapshot failure must not block deletion — but it must be loud (orphan-chip signal)
+    console.error(`warning: chip snapshot/cascade failed for task ${taskId} (${e && e.message ? e.message : e}) — schedule chips may be orphaned`)
+  }
 }
 
 /** P3-10 (dw wave): chipsRemoveTask deleted — dead export (zero callers repo-wide; deleteTodo goes
@@ -532,12 +497,37 @@ function restoreTodo (input) {
 function purgeRecycleBin () {
   open() // ensure the DB is open — the purge commits through the bus, which resolves this same module
   const rows = recycleTasks()
+  // D18-DOM2 (#9, App parity store/todo.js purgeIds → writeEventBackup('purge')): write a
+  // best-effort pre-purge event snapshot (evt-purge-*.json) BEFORE anything is deleted — the App
+  // refuses to purge silently without one, so does the CLI now (loud failure, purge still proceeds:
+  // blocking a user's explicit destructive command on a backup IO failure trades one bug for worse).
+  // The snapshot is the CLI-side port (renderer ESM/IPC is unreachable from pure Node) — see
+  // cli/lib-eventbackup.cjs for the shape/directory contract.
+  {
+    const db = open()
+    const liveRows = db.call('queryTodos', { deleted: 0 })
+    const metaEntries = []
+    for (const r of rows) {
+      for (const k of ['planChipsSnapshot:' + r.taskId, ESTIMATE_KEY_PREFIX + r.taskId]) {
+        try { const v = db.call('getMeta', k); if (v != null && v !== '') metaEntries.push({ key: k, value: v }) } catch { /* absent is fine */ }
+      }
+    }
+    const backupDir = String(settingsDoc().backupDir || '') || path.join(userDataDir(), 'backups')
+    const snap = writePurgeEventSnapshot({ dir: backupDir, rows, liveRows, metaEntries, reason: 'purge' })
+    if (!snap.ok) console.error(`warning: purge proceeded WITHOUT its pre-purge event snapshot (${snap.error}) — no evt-purge-*.json was written to ${backupDir}`)
+  }
   // cli-4 (root-cause ordering invariant): IRREVERSIBLE side effects must come AFTER the
   // transactional state change, never before. The old files-first order deleted attachment
   // files and THEN committed the purge — if the commit failed (bus rejection, mid-way error),
   // live recycle-bin rows were left pointing at files that no longer exist: unrecoverable data
   // loss. Rows now die first; a best-effort file pass that fails midway only leaves ORPHANED
   // files (recoverable garbage), never a live row without its files.
+  // D18-DOM2 (#10, documented divergence): the MAIN process deliberately does the OPPOSITE order —
+  // files BEFORE rows (src/main/handlers/todo.js 'db:purge-recycle-bin', main-ipc-8 invariant:
+  // a failed file delete after the commit orphans a private attachment nothing can ever reach,
+  // while rows surviving a failed commit merely show "not yet synced"). Each channel's order is
+  // load-bearing for its own failure model (CLI = bus commit; main = IPC with a renderer
+  // missing-file guard); DO NOT "align" either side without re-deriving both failure models.
   commit('todo', 'purgeBin')
   // Attachment files die after the rows (files/<taskId>_<ts>_<name>, same prefix rule as the
   // App's purgeAttachmentFiles in src/main/index.js).
@@ -591,10 +581,10 @@ function purgeRecycleBin () {
   return true
 }
 
-/* Subtasks + environment (doctor/launchApp): extracted verbatim to lib-subs.cjs / lib-env.cjs (2026-09-27 size-ratchet split) */
-const {
-  parseSubs, addSubtask, checkSubtask, removeSubtask, moveSubtask,
-} = require('./lib-subs.cjs')({ resolveTask, liveTasks, patchTodo, CliError })
+/* Subtasks + environment (doctor/launchApp): extracted verbatim to lib-subs.cjs / lib-env.cjs (2026-09-27 size-ratchet split)
+   D18-DOM2 #1: the sub module also receives open + the shared renewal helper so checking the last
+   unchecked subtask of a repeating parent renews the repeat chain (App parity: every completion route).
+   NOTE: kept AFTER the lib-repeat require below — it consumes renewRepeatAfterComplete. */
 const { doctor, launchApp } = require('./lib-env.cjs')({ open, CliError, userDataDir, assertIsolationForWrite })
 
 /* ---------------- Tomato/sync command channels: extracted verbatim to lib-channels.cjs (2026-09-27 size-ratchet split) ---------------- */
@@ -676,9 +666,12 @@ const {
 const settingsApi = require('./lib-settings.cjs')
 const { settingsDoc, setSettingsRaceHookForTests, settingsKnown, settingsList, settingsSet, SETTINGS_MANIFEST } = settingsApi({ open, commit, audit, CliError })
 
+/* D18-DOM2 #9: pre-purge event snapshot port (best-effort, loud on failure) — see lib-eventbackup.cjs */
+const { writePurgeEventSnapshot } = require('./lib-eventbackup.cjs')
+
 const {
-  buildRenewalInstance, buildRepeatRule, repeatOn, repeatOff, repeatRuleInfo,
-} = require('./lib-repeat.cjs')({ open, commit, audit, CliError, dayjs, core, resolveTask, liveTasks, normKey, settingsDoc, chipsSnapshotForDelete, dayStartOf })
+  buildRenewalInstance, buildRepeatRule, repeatOn, renewRepeatAfterComplete, repeatOff, repeatRuleInfo,
+} = require('./lib-repeat.cjs')({ open, commit, audit, CliError, dayjs, core, resolveTask, liveTasks, normKey, settingsDoc, chipsSnapshotForDelete, dayStartOf, clampEstimate, getEstimateOf, estimateKey })
 
 /* Day-plan (schedule chips): extracted verbatim to lib-plan.cjs (2026-09-27 size-ratchet split) */
 const {
@@ -687,6 +680,12 @@ const {
 
 const evu = require('./event-utils.cjs')
 const { eventFocusMinutes, eventEnd } = evu
+
+/* Subtasks (lib-subs.cjs) — required here (AFTER lib-repeat) because checkSubtask consumes the
+   shared renewRepeatAfterComplete helper (D18-DOM2 #1); see the note at lib-env above. */
+const {
+  parseSubs, addSubtask, checkSubtask, removeSubtask, moveSubtask,
+} = require('./lib-subs.cjs')({ resolveTask, liveTasks, patchTodo, CliError, open, renewRepeatAfterComplete })
 
 /* ---------------- Events import: rebuild a whole day's schedule from a structured event list (backfill/reconstruction scenarios) ----------------
    Event shape: { date, start, end|24:00, title, category, important, urgent, tags, estimate }

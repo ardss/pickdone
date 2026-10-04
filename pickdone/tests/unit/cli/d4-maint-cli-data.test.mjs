@@ -6,7 +6,7 @@
  *   - repeatOn yearly anchors to the task's own date (was engine-default Jan 1)
  *   - repeatOff --all removes the rule via deleteMeta (was setMeta '')
  *   - importEvents hasRecord re-reads records (was a frozen pre-import snapshot)
- *   - addTodo places a timeline chip for natural-language timed dates like 明天9点 (and NOT for bare 明天)
+ *   - addTodo mints NO chip (D18-DOM2 #7 re-anchor; App addTodo parity)
  *  Run: node --test tests/unit/cli/d4-maint-cli-data.test.mjs */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -117,12 +117,16 @@ test('importEvents hasRecord sees records created BY the import itself', async (
   assert.equal(JSON.parse(JSON.stringify(res)).hasRecord, true, 'hasRecord must survive JSON serialization')
 })
 
-test('addTodo derives a chip from natural-language timed dates; bare dates stay chip-less', () => {
+/* D18-DOM2 (#7) re-anchor: addTodo NO LONGER derives any chip — the App's addTodo writes no planAdd
+ * (the old "user-finalized 2026-09-03" chip-minting comment was wrong), so the CLI add matches it.
+ * The old pin asserted the chip EXISTS for NL timed dates; the aligned behavior asserts neither a
+ * timed NL date nor a bare date fabricates one. Chips are set explicitly via `plan <task> <HH:mm>`. */
+test('addTodo mints NO chip (NL timed dates included; App addTodo parity)', () => {
   const timed = lib.addTodo({ content: 'D4自然语言时间任务', date: '明天9点' })
+  assert.ok(timed.todoTime > 0, 'timed NL date still resolves a todoTime')
   const timedDay = dayjs(timed.todoTime).format('YYYY-MM-DD')
   const timedRow = lib.planList(timedDay).tasks.find(x => x.taskId === timed.taskId)
-  assert.ok(timedRow, 'timed NL date must get a timeline chip')
-  assert.ok(timedRow.chips.includes('09:00'), 'chip at 09:00, got ' + JSON.stringify(timedRow && timedRow.chips))
+  assert.ok(!timedRow, 'timed NL date must NOT fabricate a chip anymore')
 
   const bare = lib.addTodo({ content: 'D4无时间任务', date: '明天' })
   const bareDay = dayjs(bare.todoTime).format('YYYY-MM-DD')

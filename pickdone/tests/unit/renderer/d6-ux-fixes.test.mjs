@@ -209,7 +209,9 @@ test('i18n parity: delCat keys in BOTH zh and en G shards', () => {
 
 test('[F7] generate() isolates per-date failures and merges toasts into one summary', () => {
   const src = read('renderer/js/components/RepeatModal.vue')
-  assert.ok(/for \(let i = 0; i < dates\.length; i\+\+\)[\s\S]{0,600}try \{[\s\S]{0,1200}catch \(e\) \{[\s\S]{0,400}failed\+\+/.test(src),
+  // D18-DOM2 re-anchor: the payload gained the converged B6 carry fields (priority/deadlineTs/
+  // important/urgent/reminderExtra), so the try→catch window grew from 1200 to 1600 chars.
+  assert.ok(/for \(let i = 0; i < dates\.length; i\+\+\)[\s\S]{0,600}try \{[\s\S]{0,1600}catch \(e\) \{[\s\S]{0,400}failed\+\+/.test(src),
     'each addTodo is wrapped in try/catch counting failures')
   assert.ok(src.includes('statsD.RepeatModal.partialFail'), 'summary reports failed/total')
   assert.ok(src.includes('statsD.RepeatModal.renewalDisabledWarn'), 'rule-save failure appends the renewal-disabled warning')

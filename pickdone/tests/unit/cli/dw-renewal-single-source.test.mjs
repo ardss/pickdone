@@ -39,10 +39,13 @@ test('P2-4: renewalCarryFields — D5 parity set with `t.x || 0` fallbacks', () 
     estimate: 7 // NOT carried here (CLI resolves the live meta estimate separately)
   }
   const out = renewalCarryFields(t, { reminderTime: 999 })
+  // D18-DOM2 (B6 convergence): attachments joined the carry set — image/files default to null
+  // (`t.x || null`) alongside the quadrant/extra `t.x || 0` fallbacks.
   assert.deepEqual(out, {
     reminderTime: 999,
     reminderOffsets: [5], reminderExtra: [{ ts: 1 }],
     difficulty: 2, priority: 3, deadlineTs: 12345, important: 1, urgent: 0,
+    image: null, files: null,
     repeatId: 'r1'
   })
   const zeros = renewalCarryFields({ repeatId: 'r2' }, { reminderTime: 0 })
@@ -51,6 +54,8 @@ test('P2-4: renewalCarryFields — D5 parity set with `t.x || 0` fallbacks', () 
   assert.equal(zeros.deadlineTs, 0)
   assert.equal(zeros.important, 0)
   assert.equal(zeros.urgent, 0)
+  assert.equal(zeros.image, null)
+  assert.equal(zeros.files, null)
   assert.deepEqual(zeros.reminderOffsets, [])
   assert.deepEqual(zeros.reminderExtra, [])
 })

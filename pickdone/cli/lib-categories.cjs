@@ -8,7 +8,12 @@ module.exports = ({ open, commit, audit, CliError, resolveCategory, projectFlagK
       id: c.categoryId, userId: c.userId != null ? c.userId : 840001,
       name: c.categoryName, color: c.categoryColor || null,
       createdAt: c.createTime || 0, sort: c.listSort || 0,
-      isFolder: c.folderIs ? 1 : 0, parentId: c.folderId || 0, deleted: c.delete ? 1 : 0
+      isFolder: c.folderIs ? 1 : 0, parentId: c.folderId || 0, deleted: c.delete ? 1 : 0,
+      // D18-DOM2 (#8, App parity store/category.js toRow): carry the tombstone stamp — markCascade
+      // (App) sets deletedAt and toRow persists it; the CLI tombstones used to drop it, leaving the
+      // stamped catFiltersBak.<deletedAt>.<id> key un-derivable on recover and the tombstone
+      // age unknowable for the 30-day GC.
+      deletedAt: c.deletedAt || 0
     }
   }
   function addCategory (name, { color, parent, folder } = {}) {
@@ -58,7 +63,11 @@ module.exports = ({ open, commit, audit, CliError, resolveCategory, projectFlagK
       const mark = pid => { all.filter(c => c.folderId === pid).forEach(c => { victims.push(c); if (c.folderIs) mark(c.categoryId) }) }
       mark(id)
     }
-    for (const c of victims) commit('category', 'put', catToRow(Object.assign({}, c, { delete: true })))
+    // D18-DOM2 (#8): ONE shared tombstone stamp for the whole cascade — recover re-derives the
+    // stamped catFiltersBak key from the tombstone's deletedAt, so all victims of one delete
+    // must stamp identically.
+    const deletedAt = Date.now()
+    for (const c of victims) commit('category', 'put', catToRow(Object.assign({}, c, { delete: true, deletedAt })))
     // Round-3 P1 (U-4 parity with renderer category.js backupThenClearProjectMeta): back up the
     // project meta surfaces into `catProjectMetaBak.<id>` BEFORE clearing them — the UI's recover
     // path restores exactly this blob, and the CLI used to hard-delete the keys with no backup,
@@ -97,10 +106,13 @@ module.exports = ({ open, commit, audit, CliError, resolveCategory, projectFlagK
     // filters whose conds.catId references a cascade victim must die with the category — the
     // renderer cascades them (and its undo reports "{n} saved filter(s) removed"), the CLI used
     // to leave them behind pointing at a dead category id. Tombstone each victim filter through
-    // the bus (filter.delete), back the set up in `catFiltersBak.<rootId>` for recover symmetry
-    // (same pattern as catProjectMetaBak above), and report the count in the command output.
+    // the bus (filter.delete), back the set up for recover symmetry, and report the count in the
+    // command output. D18-DOM2 (#8, D15-B6 parity): the backup key is now the STAMPED
+    // `catFiltersBak.<deletedAt>.<id>` shape the renderer writes (so the startup meta GC can bound
+    // its retention to the recover window); the legacy `catFiltersBak.<id>` shape stays readable
+    // as a fallback (restoreFiltersBackup reads stamped first, legacy second — same as the App).
     const deadCatIds = new Set(victims.map(v => String(v.categoryId)))
-    const catFiltersBakKey = 'catFiltersBak.' + id
+    const catFiltersBakKey = 'catFiltersBak.' + deletedAt + '.' + id
     let removedFilters = 0
     let doomedFilters = []
     try {

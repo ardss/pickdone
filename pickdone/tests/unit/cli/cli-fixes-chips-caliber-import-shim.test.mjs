@@ -52,13 +52,17 @@ test('#1 repeatOff --all snapshots + clears plan chips of soft-deleted future in
   assert.equal(chipsOf(future.taskId).length, 1)
 
   const r = lib.repeatOff(base.taskId, true)
-  assert.equal(r.removed, group.length - 1, 'all other incomplete instances soft-deleted')
+  // D18-DOM2 (#3, App RepeatDeleteModal 'all' parity): the whole group dissolves — the template
+  // counts too, so removed === group.length (was group.length - 1 when the template survived)
+  assert.equal(r.removed, group.length, 'all live instances soft-deleted (template included)')
   // Soft-deleted instance: chips cleared from plan_chips + snapshot kept for restore
   assert.equal(chipsOf(future.taskId).length, 0, 'soft-deleted instance must not keep orphan chips')
   const snap = JSON.parse(db.call('getMeta', 'planChipsSnapshot:' + future.taskId) || '[]')
   assert.ok(Array.isArray(snap) && snap.some(c => c.mm === '10:00'), 'chip snapshot kept for restore backfill')
-  // Template task (left alive, repeatId stripped) keeps its chips
-  assert.equal(chipsOf(base.taskId).length, 1)
+  // Template task is soft-deleted like every other instance — its chips cascade too
+  assert.equal(chipsOf(base.taskId).length, 0, 'template no longer survives the --all scope')
+  const baseSnap = JSON.parse(db.call('getMeta', 'planChipsSnapshot:' + base.taskId) || '[]')
+  assert.ok(Array.isArray(baseSnap) && baseSnap.some(c => c.mm === '09:00'), 'template chips snapshotted for restore backfill')
 })
 
 test('#2/#3 overview doneToday (completedAt caliber) and stats doneCompleted split', () => {

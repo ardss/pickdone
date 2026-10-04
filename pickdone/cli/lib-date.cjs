@@ -90,5 +90,30 @@ module.exports = ({ CliError, dayjs, nlDate }) => {
     return dayjs(t.todoTime || t.dayStart).format('YYYY-MM-DD') + ' · ' + short
   }
 
-  return { parseDate, dayStartOf, lunarOf, lunarAnnotate }
+  /* ---------------- Reminder re-anchor on a reschedule (moved verbatim from lib.js, D18-DOM2 size-ratchet) ----------------
+   * Review P1 2026-09-11; renderer parity: EditPanel.applyDate. Shared by `edit --date` (pickdone.js)
+   * and `batch date` (batchRun) — the two channels used to diverge: batch bypassed the entry-layer
+   * re-anchor and left the main reminder on the old day. Moving the date carries reminders along:
+   * the main reminder re-anchors to the new date at its original time-of-day (stays absent when
+   * there was none) and reminderExtra rows shift by the same day-diff. Returns the fields to merge
+   * into the patch; empty object when there is nothing to carry. */
+  function dateChangeReminderPatch (before, newTodoTime) {
+    const patch = {}
+    if (!newTodoTime || !before) return patch
+    if (before.reminderTime) {
+      // EditPanel.applyDate takes hour/minute from the OLD reminder; seconds/millis too, so relative date
+      // parses (which carry the current clock's seconds) stay deterministic
+      const r = dayjs(before.reminderTime)
+      patch.reminderTime = +dayjs(newTodoTime).hour(r.hour()).minute(r.minute()).second(r.second()).millisecond(r.millisecond())
+    }
+    const extras = Array.isArray(before.reminderExtra) ? before.reminderExtra : []
+    const oldDay = before.todoTime ? +dayjs(before.todoTime).startOf('day') : 0
+    if (extras.length && oldDay) {
+      const shift = +dayjs(newTodoTime).startOf('day').diff(oldDay, 'day')
+      if (shift) patch.reminderExtra = extras.map(x => +dayjs(x).add(shift, 'day'))
+    }
+    return patch
+  }
+
+  return { parseDate, dayStartOf, lunarOf, lunarAnnotate, dateChangeReminderPatch }
 }

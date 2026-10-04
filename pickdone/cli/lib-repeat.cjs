@@ -1,7 +1,7 @@
 /* Repeat-rules sub-module extracted from cli/lib.js (2026-09-27 size-ratchet split).
  * Factory-injected deps keep it decoupled from lib.js (no circular require), same pattern as lib-settings.cjs.
  * Repeat rules (meta repeatRule:<rid>; generation reuses the todo-core engine) + the shared renewal-instance constructor. */
-module.exports = ({ open, commit, audit, CliError, dayjs, core, resolveTask, liveTasks, normKey, settingsDoc, chipsSnapshotForDelete, dayStartOf }) => {
+module.exports = ({ open, commit, audit, CliError, dayjs, core, resolveTask, liveTasks, normKey, settingsDoc, chipsSnapshotForDelete, dayStartOf, clampEstimate, getEstimateOf, estimateKey }) => {
   /** F-B4 (dw wave 3): single constructor for CLI renewal instances — the done path (repeat renewal on
    *  complete) and repeatOn's future-instance expansion (expand) carried two ~40-line near-verbatim
    *  object literals. Behavior preserved exactly, including expand's historical estimate:0 (no silent
@@ -21,11 +21,12 @@ module.exports = ({ open, commit, audit, CliError, dayjs, core, resolveTask, liv
     try { subs = t.subtasks ? JSON.parse(t.subtasks) : null } catch { /* keep null */ }
     return {
       complete: false, createTime: now, delete: false,
+      // D18-DOM2 (B6 convergence): attachments now ride in via renewalCarryFields (image/files carry
+      // from the template) — the old hard `image: null, files: null` literals here used to drop them.
       ...core.renewalCarryFields(t, next),
       reminderTime: reminderTime !== undefined ? reminderTime : next.reminderTime,
       estimate,
       subtasks: subs ? JSON.stringify(subs.map(s => ({ ...s, checked: false }))) : null,
-      image: null, files: null,
       categoryId: t.categoryId,
       updateTime: now, syncTime: 0,
       taskContent: t.taskContent,
@@ -36,6 +37,45 @@ module.exports = ({ open, commit, audit, CliError, dayjs, core, resolveTask, liv
       userId: t.userId, status: 'add', version: 0,
       ...extra
     }
+  }
+
+  /* ---------------- Renewal after completion (D18-DOM2 #1: shared by BOTH completion paths) ----------------
+   * D18-DOM2 (#1, 2026-10-02): the subtask-driven parent completion (lib-subs.cjs checkSubtask)
+   * never renewed the repeat chain, while the direct `done` path did — but the App renews on EVERY
+   * completion route (store/todo.js toggleComplete → dispatch('ensureNextRepeatInstance'), which
+   * also fires for the sub-check parent completion). The renewal block therefore moved here, out of
+   * cli/lib.js toggleComplete, so both CLI completion paths mint the next instance through the same
+   * shared repeat-core machinery (core.nextRepeatInstance + buildRenewalInstance — NOT a third
+   * generator). @param t the row BEFORE the completion patch; @param completed the persisted
+   * post-patch row (complete: true). Returns the renewed row, the existing idempotent twin, or null. */
+  function renewRepeatAfterComplete (db, t, completed) {
+    if (!t || !t.repeatId) return null
+    const rid = t.repeatId
+    const group = db.call('queryTodos', { deleted: 0, repeatId: rid })
+    let rule = null
+    try { rule = JSON.parse(db.call('getMeta', 'repeatRule:' + rid) || 'null') } catch { /* no rule means no renewal */ }
+    const next = core.nextRepeatInstance(completed, group, rule, require('../shared/holidays.mjs').getHolidayList())
+    if (!next) return null
+    // Renewal-instance idempotency: skip when an instance with the same rid + same dayStart exists (prevents duplicate CLI runs + concurrent multi-window generation creating two)
+    const existing = db.call('queryTodos', { deleted: 0, repeatId: rid, dayStartFrom: next.todoTime, dayStartTo: next.todoTime })
+    if (Array.isArray(existing) && existing.length) return existing[0]
+    // F3 P2 (D5 renderer parity): carry the LIVE meta estimate of the instance being renewed
+    // (getEstimateOf) — the row's estimate COLUMN is dead post-X2 (bumpSnow writes accumulated
+    // focus minutes into it), so clamping it 0-20 turned "focused 150 min" into "20 tomatoes".
+    // Carry set: core.renewalCarryFields via buildRenewalInstance (F-B4, single source).
+    const estimate = clampEstimate(getEstimateOf(t.taskId, t.estimate))
+    const nt = buildRenewalInstance(t, next, { estimate })
+    commit('todo', 'put', nt)
+    // F3 P2: the estimate column is write-once at the DB layer (U-1) — the live value lives in the
+    // per-task meta key `tomatoEstimateState:<taskId>`; copy it there so the renewal keeps its
+    // estimate on both ends (renderer twin: setEstimate in ensureNextRepeatInstance).
+    if (estimate > 0) {
+      try {
+        commit('meta', 'put', [estimateKey(nt.taskId), String(estimate)])
+        commit('meta', 'put', ['tomatoEstimateStateAt', String(Date.now())]) // same stamp convention as setEstimate
+      } catch { /* estimate is advisory */ }
+    }
+    return db.call('getById', nt.taskId)
   }
 
   /* ---------------- Repeat rules (meta repeatRule:<rid>; generation reuses the todo-core engine) ---------------- */
@@ -123,21 +163,41 @@ module.exports = ({ open, commit, audit, CliError, dayjs, core, resolveTask, liv
     let removed = 0
     if (all) {
       const now = Date.now()
+      // D18-DOM2 (#3, App parity RepeatDeleteModal.vue 'all' scope): EVERY live instance of the
+      // group dies — completed ones included (the App's mode==='all' branch collects the whole
+      // group regardless of completion, then cleanupOrphanRule GCs the rule). The old
+      // `!x.complete` filter left finished instances in the recycle bin's alive-but-binned
+      // siblings while the rule was already gone.
       for (const x of open().call('queryTodos', { deleted: 0 })) {
-        if (x.repeatId === rid && x.taskId !== t.taskId && !x.complete) {
+        if (x.repeatId === rid) {
           // version: 0 (deleteTodo parity, 2026-09-12 P3): syncTodos excludes delete rows already acked
           // with version > 0, so keeping the old version meant the soft-deleted repeat instances never
           // re-entered the sync snapshot and the deletion silently never propagated.
-          commit('todo', 'put', Object.assign({}, x, { delete: 1, deletedAt: now, updateTime: now, version: 0, status: 'delete' }))
+          commit('todo', 'put', Object.assign({}, x, { delete: true, deletedAt: now, updateTime: now, version: 0, status: 'delete' }))
           chipsSnapshotForDelete(x.taskId) // same snapshot→clear cascade as deleteTodo: soft-deleted instances must not leave orphan chips
           removed++
         }
       }
       // Fix (2026-09-19): '' → deleteMeta (file-wide convention) so the rule row is actually removed.
       commit('meta', 'delete', 'repeatRule:' + rid)
+    } else {
+      // D18-DOM2 (#2, App parity RepeatDeleteModal.vue [A2 fix] 'this event only'): the single
+      // scope is a DELETE, not a detach. The CLI used to merely clear repeatId and keep the row —
+      // the exact bug the App removed ("the user pressed Delete and nothing disappeared"). The
+      // instance now soft-deletes (deleteTodo shape) and the rule is GCed when no live instances
+      // remain (same cleanupOrphanRepeatRule semantics the App runs after every delete scope).
+      const now = Date.now()
+      commit('todo', 'put', Object.assign({}, t, { delete: true, deletedAt: now, updateTime: now, version: 0, status: 'delete' }))
+      chipsSnapshotForDelete(t.taskId)
+      removed++
+      // Rule GC: delete the meta rule only when the group has no live instances left
+      const liveLeft = open().call('queryTodos', { deleted: 0, repeatId: rid })
+      if (!Array.isArray(liveLeft) || !liveLeft.length) commit('meta', 'delete', 'repeatRule:' + rid)
     }
-    commit('todo', 'put', Object.assign({}, t, { repeatId: null, updateTime: Date.now(), status: 'update' }))
-    audit.record({ action: 'repeat.off', targets: [t], changes: [{ before: { rid } }], note: all ? 'repeat group dissolved (soft-deleted ' + removed + ' future instance(s))' : 'left repeat group (this instance only)' })
+    audit.record({
+      action: 'repeat.off', targets: [t], changes: [{ before: { rid } }],
+      note: all ? 'repeat group dissolved (soft-deleted ' + removed + ' instance(s), completed included)' : 'this instance deleted (repeat group kept)'
+    })
     return { rid, removed }
   }
   function repeatRuleInfo (input) {
@@ -149,5 +209,5 @@ module.exports = ({ open, commit, audit, CliError, dayjs, core, resolveTask, liv
     return { taskId: t.taskId, repeat: true, rid, rule }
   }
 
-  return { buildRenewalInstance, buildRepeatRule, repeatOn, resolveRepeatEntry, repeatOff, repeatRuleInfo }
+  return { buildRenewalInstance, buildRepeatRule, repeatOn, renewRepeatAfterComplete, resolveRepeatEntry, repeatOff, repeatRuleInfo }
 }
