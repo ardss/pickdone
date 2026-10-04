@@ -257,8 +257,7 @@ import { clampTipPos, clampHmTipPos } from './statistics/tooltipClamp.js'
 
 const T = 'statsA.StatisticsView.'
 
-/* [d5-ui-fixes] pure-start */
-// CSV count formatting: integer counts print plainly (12, not "12.0"); fractions keep one decimal
+/* [d5-ui-fixes] pure-start — CSV count formatting: integer counts print plainly (12, not "12.0"); fractions keep one decimal */
 function fmtCount (v) { return Number.isInteger(v) ? String(v) : v.toFixed(1) }
 /* [d5-ui-fixes] pure-end */
 export default {
@@ -601,7 +600,8 @@ html[data-theme="dark"] .review-card { background: var(--panel); }
 /* 空行不塌缩:无记录日保持整行轨道高度(压成细线曾显突兀),仅降透明度+日期变淡让注意力给有数据的日子 */
 .tl-row--empty .tl-track { opacity: .45; }
 .tl-row--empty .tl-date { color: var(--text-4); }
-/* 悬停行显示 3 小时虚线分隔(3/6/…/21,即 12.5% 步进):竖线由 mask 切出列,虚线由纵向 repeating-gradient 画出 */ 悬停虚线开关:关闭时不画(::after 仅在非 nogrid 行悬停时出现);开关本体=头部小药丸,默认开 */
+/* 悬停行显示 3 小时虚线分隔(3/6/…/21,即 12.5% 步进):竖线由 mask 切出列,虚线由纵向 repeating-gradient 画出 */
+/* 悬停虚线开关:关闭时不画(::after 仅在非 nogrid 行悬停时出现);开关本体=头部小药丸,默认开 */
 .tl-rows--nogrid .tl-track::after { content: none !important; }
 .tl-grid-toggle {
   margin-left: auto; border: 1px solid var(--line-strong, #d8dde2); background: transparent; color: var(--text-3);
