@@ -27,7 +27,7 @@
           <div v-if="c.overdue.length" class="pd-day-deck__overdue-label">{{ $t('statsE.TodayView.deckOverdue', { n: c.overdue.length }) }}</div>
           <ul v-if="c.overdue.length" class="pd-day-deck__list pd-day-deck__list--overdue">
             <li v-for="t in c.overdue" :key="t.taskId" class="overdue"
-                draggable="true" @dragstart="onDragStart(t, $event)"
+                tabindex="0" @dragstart="onDragStart(t, $event)"
                 @contextmenu="taskContextMenu(t, $event)"
                 @keydown.shift.delete.prevent.stop="del(t)">
               <span class="pd-day-deck__chk td-check" :class="{on: t.complete}" :style="chkStyleOf(t)" role="checkbox" :aria-checked="t.complete ? 'true' : 'false'"
@@ -53,6 +53,7 @@
           <ul v-if="c.all.length" class="pd-day-deck__list">
           <li v-for="t in c.all" :key="t.taskId"
               :class="{ done: t.complete }"
+              tabindex="0"
               draggable="true" @dragstart="onDragStart(t, $event)"
               @contextmenu="taskContextMenu(t, $event)"
               @keydown.shift.delete.prevent.stop="del(t)">
@@ -97,11 +98,11 @@ import { crossDayMovePatch, crossDayRevertPatch } from '../utils/crossDayMove.js
 import { getLocale } from '../i18n/index.js'
 import { roleButtonActivate, roleCheckboxActivate } from '../utils/roleButtonKey.js' // [A8/A9] Space+Enter activation
 import { clampToDayWindow } from '../utils/dayWindow.js' // [A3] out-of-window daySelectedTs clamps to the window edge
+import { dayShift, dayStart } from '../utils/todayBounds.js' // [D19] sanctioned calendar-day stepping (raw ms arithmetic drifts off local midnight across DST)
 
 // Bare dayjs is the window.dayjs global (injected by the browser host); taking an explicit reference satisfies lint and avoids global lookups
 const dayjs = window.dayjs
 
-const DAY = 86400000
 const SPAN = 7 // 7 days on each side of today
 const VISIBLE = 3 // Number of layers revealed on each side of the center
 
@@ -144,7 +145,9 @@ export default {
       // Depends on nowTs (30s tick): the window is recomputed after crossing midnight, otherwise the computed cache freezes at mount time
       void this.nowTs
       const t0 = +this.dayjs().startOf('day')
-      return Array.from({ length: SPAN * 2 + 1 }, (_, i) => t0 + (i - SPAN) * DAY)
+      // [D19] dayShift, not raw `t0 + (i-SPAN)*DAY`: across a DST transition the raw product
+      // lands 23:00 of the target day, so the exact-equality dayStart bucketing rendered the cards empty
+      return Array.from({ length: SPAN * 2 + 1 }, (_, i) => dayShift(t0, i - SPAN))
     },
     today0 () { void this.nowTs; return +this.dayjs().startOf('day') },
     cards () {
@@ -163,8 +166,9 @@ export default {
         const d = this.dayjs(ts)
         const today = +this.dayjs().startOf('day')
         if (ts === today) return this.$t('statsA.core.today')
-        if (ts === today - DAY) return this.$t('statsA.core.yesterday')
-        if (ts === today + DAY) return this.$t('statsA.core.tomorrow')
+        // [D19] calendar-day steps, same reasoning as days above
+        if (ts === dayShift(today, -1)) return this.$t('statsA.core.yesterday')
+        if (ts === dayShift(today, 1)) return this.$t('statsA.core.tomorrow')
         return this.$t('statsA.core.calMd', { m: d.month() + 1, d: d.date(), w: this.$t('statsA.core.weekOf', { w: this.$t('statsA.core.wd' + d.day()) }) })
       }
     }
@@ -268,8 +272,14 @@ export default {
     onDragStart (t, e) {
       e.dataTransfer.setData('text/plain', t.taskId)
       e.dataTransfer.effectAllowed = 'move'
+      // dataTransfer.getData is protected during dragover, so remember the id for the guard below
+      this._dragTaskId = t.taskId
     },
     onDragOver (idx, e) {
+      // [D19] a drop on the task's own day silently no-ops in onDrop; do not arm the drop-ok
+      // outline for that case — the outline promised a move that would never happen
+      const dragged = this.$store.state.todo.todoList.find(x => x.taskId === this._dragTaskId)
+      if (dragged && dayStart(dragged.dayStart || 0) === this.days[idx]) return
       if (this.dropHover !== idx) this.dropHover = idx
       e.dataTransfer.dropEffect = 'move'
     },

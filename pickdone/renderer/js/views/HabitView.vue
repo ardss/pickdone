@@ -154,8 +154,11 @@ export default {
     // dayjs()-wall-clock computed had zero reactive dependencies and cached its first value, so
     // post-midnight check-ins were written into YESTERDAY's bucket until an unrelated rerender)
     todayKey () { return localDayKey(this.$store.state.todo.todayTimestamp) },
-    /** Start date of the current calendar month (Monday) */
-    calMonth () { return dayjs().startOf('month').add(this.calOffset, 'month') },
+    /** Start date of the current calendar month (Monday). [D19] Derives from the REACTIVE
+     *  store.todo.todayTimestamp, not the dayjs() wall clock: with only calOffset reactive the
+     *  computed cached its month across a midnight rollover and the calendar stayed on the old
+     *  month until an unrelated rerender (same class of fix as todayKey above). */
+    calMonth () { return dayjs(this.$store.state.todo.todayTimestamp).startOf('month').add(this.calOffset, 'month') },
     calLabel () { return this.$t('statsP.HabitView.calLabel', { y: this.calMonth.year(), m: this.calMonth.month() + 1 }) },
     /** Calendar cells: 42 cells (6 rows x 7 columns), Monday-first */
     calDays () {

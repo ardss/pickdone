@@ -24,10 +24,12 @@ const SIG = 15
 const RULES = [
   {
     id: 'focus-delta', kind: 'insight', prio: 1,
-    when: m => m.baseline.hasHistory && pctDiff(m.focusMins, m.baseline.focus) != null,
+    when: m => m.baseline.hasHistory && pctDiff(m.focusMins, m.baseline.focus) != null &&
+      Math.abs(pctDiff(m.focusMins, m.baseline.focus)) >= SIG,
     weight: m => Math.abs(pctDiff(m.focusMins, m.baseline.focus)),
     text: m => {
       const d = pctDiff(m.focusMins, m.baseline.focus)
+      // |d| >= SIG is guaranteed by when: d >= SIG means up, otherwise a genuine significant down
       return d >= SIG
         ? msg('focusDeltaUp', { d }, 'hlPct', { d })
         : msg('focusDeltaDown', { d: Math.abs(d) }, 'hlPct', { d: Math.abs(d) })
@@ -35,10 +37,12 @@ const RULES = [
   },
   {
     id: 'done-delta', kind: 'insight', prio: 2,
-    when: m => m.baseline.hasHistory && pctDiff(m.done, m.baseline.done) != null && m.done > 0,
+    when: m => m.baseline.hasHistory && pctDiff(m.done, m.baseline.done) != null && m.done > 0 &&
+      Math.abs(pctDiff(m.done, m.baseline.done)) >= SIG,
     weight: m => Math.abs(pctDiff(m.done, m.baseline.done)),
     text: m => {
       const d = pctDiff(m.done, m.baseline.done)
+      // Same guard as the headline: only significant deltas enter the rule; pick copy by sign
       return d >= SIG
         ? msg('doneDeltaUp', { d }, 'hlPct', { d })
         : msg('doneDeltaDown', { d: Math.abs(d) }, 'hlPct', { d: Math.abs(d) })

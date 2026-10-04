@@ -10,6 +10,8 @@
     <!-- D6-F8: after the final retry failure the cached temp is stale — dim it and show an explicit
          refresh affordance instead of silently presenting hours-old data as current -->
     <span v-if="stale" class="w-stale-chip" aria-live="polite">{{ $t('statsD.WeatherWidget.staleChip') }} ⟳</span>
+    <!-- [D19] honest labeling: the Beijing fallback must not present itself as the user's located city -->
+    <span v-if="locUnavailable" class="w-stale-chip" aria-live="polite">{{ $t('statsD.WeatherWidget.locFallback') }}</span>
     <!-- City outline sits next to the city name (user-finalized), not occupying the widget's leftmost position -->
     <svg v-if="shape" class="w-shape" :viewBox="shape.vb" aria-hidden="true">
       <path :d="shape.d"/>
@@ -207,7 +209,9 @@ export default {
       error: '',
       // D6-F8: true after the final retry failure with only cached data left — dims the temp and
       // shows the explicit refresh chip until a successful fetch lands
-      stale: false
+      stale: false,
+      // [D19] true while the hardcoded Beijing fallback is being shown after IP location failed
+      locUnavailable: false
     }
   },
   computed: {
@@ -224,7 +228,13 @@ export default {
   },
   watch: {
     enabled (v) { if (v) this.fetchWeather(); else this.reset() },
-    manualCity () { if (this.enabled) this.fetchWeather() },
+    manualCity () {
+      if (!this.enabled) return
+      // [D19] a city change during an in-flight fetch (loading lock up to ~24s with retries)
+      // used to be silently dropped — queue exactly one re-run for the newest desired city
+      if (this.loading) { this._pendingFetch = true; return }
+      this.fetchWeather()
+    },
     source () { if (this.enabled) this.fetchWeather() }
   },
   mounted () {
@@ -246,6 +256,7 @@ export default {
       // land after the reset and repopulate the cleared widget
       this._shapeSeq = (this._shapeSeq || 0) + 1
       this.temp = null; this.code = null; this.city = ''; this.shape = null; this.error = ''
+      this.locUnavailable = false
     },
     /** City outline mini icon (async, may fail -- failure just means no icon).
      *  [Fault-4] response-order token: loadCityShape runs concurrently (auto-refresh + failure-path
@@ -286,6 +297,9 @@ export default {
     },
     async fetchWeather () {
       if (!this.enabled || this.loading) return // re-entry guard: triggers during a fetch are ignored
+      // [D19] a fresh fetch starts from a clean slate: neither a leftover cityNotFound error nor a
+      // stale Beijing-fallback label may survive next to the new result
+      this.locUnavailable = false
       this.loading = true
       try {
         // 1) Location: manual city from Settings takes priority (wttr source passes the city name directly; open-meteo geocodes first), otherwise IP location
@@ -317,7 +331,10 @@ export default {
           }
           if (!lat) {
             this.error = this.$t('statsD.WeatherWidget.cityNotFound', { city: manual })
-            this.city = '' // clear the stale old city name to avoid showing it next to the error message, which would be contradictory
+            // [D19] clear the stale temp/code too — they belonged to another city and rendered
+            // beside the error as if they described the city that was not found
+            this.city = ''
+            this.temp = null; this.code = null
             this.loading = false
             return
           }
@@ -328,7 +345,13 @@ export default {
             lat = j.latitude; lon = j.longitude
             city = j.city || j.region || ''
           } catch (e) { /* IP failure -> default coordinates */ }
-          if (!lat) { lat = 39.9; lon = 116.4; city = city || this.$t('statsD.WeatherWidget.fallbackCity') } // fallback
+          if (!lat) {
+            lat = 39.9; lon = 116.4
+            city = city || this.$t('statsD.WeatherWidget.fallbackCity') // fallback
+            // [D19] honest labeling: keep the data, but say the location lookup failed instead of
+            // presenting hardcoded Beijing as the user's current location
+            this.locUnavailable = true
+          }
         }
 
         // 2) Query by data source (every step has a fallback: wttr <- open-meteo coordinates, open-meteo <- wttr lat/lon)
@@ -374,7 +397,14 @@ export default {
             if (this.enabled) this.fetchWeather()
           }, this._retryCount === 1 ? 15000 : 30000)
         }
-      } finally { this.loading = false }
+      } finally {
+        this.loading = false
+        // [D19] run the queued city-change fetch once, now that the loading lock is released
+        if (this._pendingFetch) {
+          this._pendingFetch = false
+          this.fetchWeather()
+        }
+      }
     },
     refresh () { this.fetchWeather() }
   },

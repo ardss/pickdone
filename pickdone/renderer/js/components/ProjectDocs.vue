@@ -127,9 +127,23 @@ export default {
         this.docs = this.docs.filter(d => d.id !== doc.id)
         if (this.activeId === doc.id) this.activeId = ''
         this.persist()
-      }, () => {
-        // 撤销可能发生在切到别的项目之后:恢复前先确认还在原项目的文档组里
-        if (this.catId !== catId) return
+      }, async () => {
+        // [D19] The undo used to silently early-return once the user had switched to another
+        // project — while the toast still promised "undo". The payload is doc-scoped, so restore
+        // into the ORIGINAL project's meta list regardless of what the view currently shows:
+        // re-read that project's docs array, splice the doc back at its old position, write it
+        // back directly (NOT via persist(), which is bound to the now-current project).
+        if (this.catId !== catId || this._docsCatId !== catId) {
+          try {
+            const raw = await window.todoAPI.dbCall('getMeta', keyOf(catId))
+            const arr = JSON.parse(raw || '[]')
+            if (Array.isArray(arr) && !arr.some(d => d.id === doc.id)) {
+              arr.splice(Math.min(idx, arr.length), 0, doc)
+              await window.todoAPI.dbCall('setMeta', [keyOf(catId), JSON.stringify(arr)])
+            }
+          } catch (e) { /* best-effort restore; the doc stays deleted as before */ }
+          return
+        }
         this.docs.splice(Math.min(idx, this.docs.length), 0, doc)
         this.activeId = doc.id
         this.persist()
