@@ -189,8 +189,11 @@ export default {
     /** 直接在该日创建「未命名」事件并打开编辑(格子角标 + / 键盘 Enter 共用) */
     createAt (ts) {
       // D6-F1: mark the panel task as inline-created so an empty close (Esc/outside click) cleans it up
+      // [A9 fix] IPC failure must surface a toast instead of dying as a silent no-op
+      // (same guard as the sibling tbCreate inline-create path)
       return this.$store.dispatch('todo/addTodo', { todoContent: '', todoDate: ts })
         .then(t => { this.$store.commit('ui/openEdit', t); this.$store.commit('ui/markInlineCreate', t && t.taskId) })
+        .catch(e => { console.error('[calendar] createAt addTodo failed:', e); this.$message.error(this.$t('statsD.QuickAdd.createFailed')) })
     },
     catColor (t) {
       const c = this.$store.getters['category/byId'](t.categoryId)
@@ -413,6 +416,9 @@ export default {
       // D6-F1: same inline-create marking as createAt
       this.$store.dispatch('todo/addTodo', { todoContent: '', todoDate: +dayjs(cell.dataset.date) })
         .then(t => { this.$store.commit('ui/openEdit', t); this.$store.commit('ui/markInlineCreate', t && t.taskId) })
+      // [A9 fix] IPC failure must surface a toast instead of dying as a silent no-op
+      // (same guard as the sibling tbCreate inline-create path)
+        .catch(e => { console.error('[calendar] cell keydown addTodo failed:', e); this.$message.error(this.$t('statsD.QuickAdd.createFailed')) })
     }
     if (this.$refs.fcEl) this.$refs.fcEl.addEventListener('keydown', this._onKey)
     // 格子右上角展开钮:FC 动态重绘格子,事件委托到容器;挡住冒泡防触发 dateClick 建任务

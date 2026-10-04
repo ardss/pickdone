@@ -121,11 +121,17 @@ const ChartCard = {
       if (this._chart) { this._chart.destroy(); this._chart = null }
     },
     /** Upgrade CTA (chart-h): the button was a dead no-op. There is no in-app purchase flow, so —
-     *  same pattern as SettingsModal.openOfficialSite — hand off to the official site. */
+     *  same pattern as SettingsModal.openOfficialSite — hand off to the official site.
+     *  [D17-DOM4] when the IPC bridge is missing (preload not injected / stale window), fall back
+     *  to window.open in a new tab instead of silently swallowing the click. */
     onUpgrade () {
       if (window.todoAPI && typeof window.todoAPI.openExternal === 'function') {
         window.todoAPI.openExternal('https://pickdone.app')
+        return
       }
+      const url = 'https://pickdone.app'
+      const win = window.open(url, '_blank', 'noopener')
+      if (!win) this.$message.warning(this.$t('statsA.ChartCard.openExternalFallback', { url }))
     },
     renderChart () {
       this.destroyChart()

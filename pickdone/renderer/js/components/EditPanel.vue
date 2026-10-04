@@ -125,7 +125,8 @@
               :class="{ 'ep-deadline-pill--set': !!(e&&e.deadlineTs) }">
           {{ e&&e.deadlineTs ? fmtMd(e.deadlineTs) : $t('statsJ.EditPanel.pickDueDate') }}
         </span>
-        <b v-if="e&&e.deadlineTs" class="ep-remind-clear close-x" role="button" tabindex="0" :title="$t('statsJ.EditPanel.clearDueDate')" :aria-label="$t('statsJ.EditPanel.clearDueDate')" @click.stop="fieldPatch('deadlineTs',0)"></b>
+        <!-- [D17-DOM4] ARIA button pattern on the deadline clear chip: Enter/Space both activate (had NO keydown at all) -->
+        <b v-if="e&&e.deadlineTs" class="ep-remind-clear close-x" role="button" tabindex="0" :title="$t('statsJ.EditPanel.clearDueDate')" :aria-label="$t('statsJ.EditPanel.clearDueDate')" @click.stop="fieldPatch('deadlineTs',0)" @keydown="onDeadlineClearKey"></b>
         <el-date-picker ref="deadlinePick" size="small" value-format="x" type="date"
                         style="width:0;height:0;border:0;padding:0;position:absolute;opacity:0" class="ep-deadline-pick"
                         :aria-label="$t('statsJ.EditPanel.setDeadline')" popper-class="ep-date-popper"
@@ -175,6 +176,7 @@ import { contentFingerprint, shouldRefreshRemote, taskAbsentIn } from '../utils/
 import { buildEditSnapshot } from '../store/ui.js'
 import { findTaskRowEl } from '../utils/todoRowEl.js'
 import { $elOf } from '../utils/el.js'
+import { roleButtonActivate } from '../utils/roleButtonKey.js' // [A9] Space+Enter button activation
 import EpReminders from './edit-panel/EpReminders.vue'
 import EpSubtasks from './edit-panel/EpSubtasks.vue'
 import EpAttachments from './edit-panel/EpAttachments.vue'
@@ -505,6 +507,9 @@ export default {
         }
       })
     },
+    /* [D17-DOM4] ARIA button pattern on the deadline clear chip: Space joins Enter, stopped so the
+       surrounding reminder row never sees the key (net-zero line budget: shares fieldPatch above) */
+    onDeadlineClearKey: roleButtonActivate(function () { this.fieldPatch('deadlineTs', 0) }, { stop: true }),
     fieldPatch (key, val) {
       this.e[key] = val
       const patch: any = {}
@@ -605,10 +610,19 @@ export default {
       // queueSave is a 350ms debounce timer (returns no promise); before restoring, synchronously flush unsaved dirty fields and clear the timer to prevent double writes
       this._save.clearTimer()
       const all: any = this._save.takeDirty(['subtasks', 'imgs', 'files'])
-      all.delete = false
-      all.status = 'update'
       try {
-        await this.$store.dispatch('todo/updateTodoFields', { taskId: this.e.taskId, patch: all })
+        // [restore single-path fix] this banner used to dispatch a bare updateTodoFields
+        // {delete:false,status:'update'} — it left the stale deletedAt on the row, skipped the
+        // one-shot planChips snapshot restore and skipped the B5 dangling-repeatId guard,
+        // exactly the gaps RecycleBinView's restore() already fixed by going through the single
+        // todo/restoreFromRecycle entry. Same entry here; the dirty-field flush rides the same
+        // atomic restore patch via dayPatch (the action spreads it into the updateTodoFields
+        // patch; it carries no date fields, so chip re-homing is a no-op).
+        await this.$store.dispatch('todo/restoreFromRecycle', {
+          taskId: this.e.taskId,
+          repeatId: this.e.repeatId,
+          dayPatch: all
+        })
       } catch (e) {
         // Restore failed: keep the item in the bin and surface the error instead of a false-success toast
         this.$message.error(this.$t('statsC.RecycleBin.restoreFailedMsg') + (e && e.message ? e.message : e))

@@ -10,7 +10,7 @@
       <div class="tx-sec"><span>{{ $t('statsE.TodayX.now') }}</span><span class="tx-clock">{{ tick > -1 ? dayjs().format('HH:mm:ss') : '' }}</span></div>
       <div class="tx-now" v-if="nowTask">
         <div class="tx-now__main">
-          <div class="tx-now__tag">{{ running ? $t('statsE.TodayX.focusingTag', { n: nowRound }) : $t('statsE.TodayX.selectedTag') }}</div>
+          <div class="tx-now__tag">{{ resting ? $t('statsE.TodayX.restingTag') : running ? $t('statsE.TodayX.focusingTag', { n: nowRound }) : $t('statsE.TodayX.selectedTag') }}</div>
           <div class="tx-now__title">{{ nowTask.taskContent }}</div>
           <div class="tx-now__meta">
             <span>{{ $t('statsE.TodayX.estN', { n: estimateOf(nowTask.taskId) }) }}</span>
@@ -21,6 +21,13 @@
           <template v-if="running">
             <div class="tx-now__timer">{{ timerLabel }}</div>
             <button class="tx-giveup" @click="askGiveUp">{{ $t('statsE.TodayX.giveUp') }}</button>
+          </template>
+          <!-- [rest-phase fix] during a rest phase the old v-else showed the idle 25:00 preview plus a
+               Start button that is a silent no-op (tomato.js startFocus guards status!=='default').
+               The rest countdown (remainingSecOfState already serves rest) is shown instead; no Start. -->
+          <template v-else-if="resting">
+            <div class="tx-now__timer">{{ timerLabel }}</div>
+            <div class="tx-rest-note">{{ $t('statsE.TodayX.restingHint') }}</div>
           </template>
           <template v-else>
             <div class="tx-now__timer tx-now__timer--idle">{{ idleTimerLabel }}</div>
@@ -101,6 +108,7 @@ const X_CSS = `
 .tx-chip{background:var(--panel);border:1px solid var(--line);border-radius:7px;padding:5px 10px;font-size:11.5px;color:var(--text-3)}
 .tx-tasks{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:4px 0}
 .tx-now__timer--idle{opacity:.5}
+.tx-rest-note{margin-top:10px;font-size:12px;opacity:.9}
 .tx-startbtn{border:0;background:var(--panel, #fff);color:var(--brand-dark);font-weight:600;border-radius:9px;padding:9px 20px;font-size:12px;cursor:pointer}
 .tx-startbtn:hover{background:var(--brand-light);color:var(--brand-dark)}
 .tx-empty{padding:8px 2px;font-size:12px;color:var(--text-4)}
@@ -142,6 +150,9 @@ export default {
       return remainingSecOfState(this.tomato, Date.now())
     },
     timerLabel () { return formatMMSS(Math.max(0, this.remainSec)) },
+    /* [rest-phase fix] the store sets status='startRestTime' for the automatic break after a
+     * completed focus; during it the Now card must show the running rest, not the idle preview */
+    resting () { return this.tomato.status === 'startRestTime' && !!this.tomato.startedAt },
     /* Idle state previews the configured focus length instead of a hardcoded 25:00 (aligned with TomatoBar) */
     idleTimerLabel () { return formatMMSS((this.tomato.tomatoTime || 25) * 60) },
     nowRound () { return this.tomatoActualOf(this.nowTask && this.nowTask.taskId) + 1 },

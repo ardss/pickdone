@@ -12,7 +12,7 @@
         <div v-for="t in q.tasks" :key="t.taskId" class="matrix-task" draggable="true"
              :class="{ dragging: dragId===t.taskId }"
              @dragstart="dragStart(t,$event)" @dragend="endDrag"
-             @click="openEdit(t)" @keydown.enter.prevent="openEdit(t)"
+             @click="openEdit(t)" @keydown="onRowKey(t, $event)"
              @keydown.ctrl.1.prevent="kbdQuadrant(t, 0)" @keydown.ctrl.2.prevent="kbdQuadrant(t, 1)"
              @keydown.ctrl.3.prevent="kbdQuadrant(t, 2)" @keydown.ctrl.4.prevent="kbdQuadrant(t, 3)"
              @contextmenu="taskContextMenu(t, $event)"
@@ -55,7 +55,7 @@ import { chkColor, toggleTomatoAttach } from '../utils/taskRow.js'
 import { toggleCompleteWithUndo } from '../utils/completeAction.js'
 import { deleteWithUndo, moveWithUndo, moveSnapshot } from '../utils/confirm.js'
 import { taskContextMenu } from '../utils/taskMenu.js'
-import { roleCheckboxActivate } from '../utils/roleButtonKey.js' // [A8] Space+Enter checkbox activation
+import { roleCheckboxActivate, roleButtonActivate } from '../utils/roleButtonKey.js' // [A8/A9] Space+Enter activation
 
 /* Quadrant titles store i18n keys (statsA.MatrixGrid.*), resolved with $t at render time (no component instance at module level) */
 const QUADRANTS = [
@@ -87,6 +87,11 @@ export default {
     /* [A8] complete checkbox: Space joins Enter, stopped so the row's own activation doesn't double-fire */
     onCheckKey (t, e) {
       roleCheckboxActivate(function () { this.completeTask(t) }).call(this, e)
+    },
+    /* [D17-DOM4] ARIA button pattern on the task row: Space joins Enter (non-activation keys like
+       the Ctrl+1..4 quadrant shortcuts fall through to their own .ctrl.N bindings untouched) */
+    onRowKey (t, e) {
+      roleButtonActivate(function () { this.openEdit(t) }).call(this, e)
     },
     taskContextMenu (t, e) { taskContextMenu(this, t, e) },
     openEdit (t) {

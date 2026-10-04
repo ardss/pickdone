@@ -8,7 +8,7 @@
     <section v-for="g in groups.filter(x=>x.todos.length||!x.hideEmpty)" :key="g.key" class="tg-group">
       <header class="tg-head" role="button" tabindex="0"
               :aria-expanded="isOpen(g.key) ? 'true' : 'false'" :aria-label="$t('statsH.TodoGroups.toggleGroup', { label: g.label })"
-              @click="toggle(g.key)" @keydown.enter.prevent="toggle(g.key)">
+              @click="toggle(g.key)" @keydown="onHeadKey(g.key, $event)">
         <i class="arrow" :class="{open:isOpen(g.key)}" aria-hidden="true"><svg viewBox="0 0 256 512"><path fill="currentColor" d="M143 352.3L7 216.3c-9.4-9.4-9.4-24.6 0-33.9l22.6-22.6c9.4-9.4 24.6-9.4 34 0l96.4 96.4 96.4-96.4c9.4-9.4 24.6-9.4 34 0l22.6 22.6c9.4 9.4 9.4 24.6 0 33.9l-136 136c-9.2 9.4-24.4 9.4-33.8 0z"/></svg></i>
         <h3 :class="{brand:g.brand}">{{g.label}}</h3>
         <span v-if="weekLabel(g)" class="tg-week">{{weekLabel(g)}}</span>
@@ -31,8 +31,9 @@
 <script lang="ts">
 /** Grouped list -- group header style aligned with the project baseline (▾ Today Thu 13) */
 import TodoItem from './TodoItem.vue'
-import { dayjs } from '../utils/core.js'
+import { dayjs, rangeDays } from '../utils/core.js'
 import { dayShift } from '../utils/todayBounds.js'
+import { roleButtonActivate } from '../utils/roleButtonKey.js' // [A9] Space+Enter button activation
 
 // [component-fixes] pure-start (extracted verbatim by tests/component-fixes-renderer.test.mjs)
 /** Drop stale persisted fold keys: an `expired-<dayStartTs>` key whose timestamp is before today's
@@ -41,10 +42,13 @@ import { dayShift } from '../utils/todayBounds.js'
 function pruneExpiredFoldKeys (list, cutoff) {
   // 2026-09-12 fix: the original version pruned ALL expired-* keys before today, which made it
   // impossible to collapse recent expired groups (toggle added the key → prune immediately
-  // removed it → group stayed expanded forever). The pruning now uses a 7-day grace period:
-  // only keys for dates >7 days old are pruned, so users can still collapse yesterday's and
-  // last week's groups. Keys older than 7 days are stale enough to safely drop.
-  // The 7-day cutoff is computed by the caller via dayShift (calendar-day primitive) so this
+  // removed it → group stayed expanded forever).
+  // [D17-DOM4] fix: the grace is NOT a fixed 7 days — the cutoff is derived from the SAME
+  // window the today view renders (settings.expiredUncompletedTodoRange, default 30d). A
+  // fixed 7-day grace killed the collapse toggles of 8-30-day-old groups (key pruned while
+  // the view still rendered the group → toggle flipped visually then re-expanded). Keys older
+  // than the active window can never be re-minted by the view and are stale enough to drop.
+  // The cutoff is computed by the caller via dayShift (calendar-day primitive) so this
   // pure block stays dependency-free for the verbatim test extraction.
   return (list || []).filter(k => {
     const s = String(k)
@@ -72,10 +76,15 @@ export default {
     isOpen (key) { return !this.folded.includes(key) },
     toggle (key) {
       const next = this.folded.includes(key) ? this.folded.filter(k => k !== key) : [...this.folded, key]
-      // Persist only still-matchable keys: expired groups from previous days drift away daily and must not pile up in settings
-      const list = pruneExpiredFoldKeys(next, dayShift(+dayjs().startOf('day'), -7))
+      // Persist only still-matchable keys: the prune cutoff follows the active expired window
+      // (expiredUncompletedTodoRange), so a key stays alive exactly as long as the today view
+      // can still render its group (was a fixed 7-day grace — broke 8-30d collapse toggles)
+      const range = rangeDays(this.$store.state.settings.expiredUncompletedTodoRange, 30)
+      const list = pruneExpiredFoldKeys(next, dayShift(+dayjs().startOf('day'), -range))
       this.$store.commit('settings/updateSettings', { foldedTodoList: list })
     },
+    /* [D17-DOM4] ARIA button pattern on the group header: Space joins Enter as activation keys */
+    onHeadKey (key, e) { roleButtonActivate(() => { this.toggle(key) }).call(this, e) },
     weekLabel (g) {
       // "Today Thu"-style sub-label (reuses DayDateStrip's weekday keys)
       if (!g.weekOf) return ''

@@ -35,7 +35,7 @@
           <div class="todo-list-item-group__header" role="button" tabindex="0"
                :aria-expanded="isCol(g.key) ? 'false' : 'true'"
                :aria-label="$t('statsC.Completed.ariaGroup', { name: g.title })"
-               @click="toggleCol(g.key)" @keydown.enter.prevent="toggleCol(g.key)">
+               @click="toggleCol(g.key)" @keydown="onHeadKey(g.key, $event)">
             <div class="todo-list-item-group__arrow">
               <svg viewBox="0 0 256 512"><path fill="currentColor" d="M143 352.3L7 216.3c-9.4-9.4-9.4-24.6 0-33.9l22.6-22.6c9.4-9.4 24.6-9.4 34 0l96.4 96.4 96.4-96.4c9.4-9.4 24.6-9.4 34 0l22.6 22.6c9.4 9.4 9.4 24.6 0 33.9l-136 136c-9.2 9.4-24.4 9.4-33.8 0z"/></svg>
             </div>
@@ -95,6 +95,8 @@ export default {
     triggerTip (e) { (e.currentTarget as HTMLElement).click() },
     // [D15-A13] ARIA button pattern on the tip widget: Space activates too (was Enter-only)
     onTipKey: roleButtonActivate(function (e) { this.triggerTip(e) }),
+    /* [D17-DOM4] ARIA button pattern on group headers: Space joins Enter as activation keys */
+    onHeadKey (key, e) { roleButtonActivate(() => { this.toggleCol(key) }).call(this, e) },
     toggleCol (key) { this.collapsedMap = { ...this.collapsedMap, [key]: !this.collapsedMap[key] } },
     toggleAllGroups () {
       const expand = this.anyCollapsed

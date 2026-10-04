@@ -411,6 +411,8 @@ export default {
       "giveUp": "Give up",
       "idleTag": "Not focusing",
       "idleHint": "Pick one from 'Next up' and press Start",
+      "restingTag": "Resting",
+      "restingHint": "Break in progress — the next focus starts when the break ends",
       "settled": "Settled",
       "focusMin": "{n} min focus",
       "freeFocus": "Free focus (no task)",

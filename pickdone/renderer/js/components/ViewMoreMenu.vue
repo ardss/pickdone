@@ -7,11 +7,21 @@
     </button>
     <div v-if="open" ref="pop" class="view-more-pop" role="menu" :aria-label="$t('viewMore.titleMenu')"
          @keydown="onMenuKeydown">
-      <template v-for="(it,i) in items" :key="i">
+      <!-- [D17-DOM4] mutually-exclusive sort entries are menuitemradio inside a role=group (was
+           menuitemcheckbox, which promises independent check state); Space joins Enter per the
+           ARIA menu button contract. Non-sort toggles stay menuitemcheckbox. -->
+      <div v-if="sortItems.length" role="group" :aria-label="$t('viewMore.sortGroup')">
+        <div v-for="(it,i) in sortItems" :key="'s'+i" class="vm-item" role="menuitemradio" tabindex="0"
+             :class="{active:isActive(it)}" :aria-checked="isActive(it)&&!it.info ? 'true' : 'false'"
+             @click.stop="click(it)" @keydown="onItemKey(it, $event)">
+          {{it.label}} <b v-if="isActive(it)&&!it.info">✓</b>
+        </div>
+      </div>
+      <template v-for="(it,i) in otherItems" :key="i">
         <div v-if="it.sep" class="vm-sep"></div>
         <div v-else class="vm-item" role="menuitemcheckbox" tabindex="0"
              :class="{active:isActive(it)}" :aria-checked="isActive(it)&&!it.info ? 'true' : 'false'"
-             @click.stop="click(it)" @keydown.enter.prevent.stop="click(it)">
+             @click.stop="click(it)" @keydown="onItemKey(it, $event)">
           {{it.label}} <b v-if="isActive(it)&&!it.info">✓</b>
         </div>
       </template>
@@ -25,6 +35,7 @@
  * Menu items differ per route and all map to real settings/actions (no decoration)
  */
 import { clampPopPosition } from '../utils/popPos.js' // [A1] viewport clamp (left AND top)
+import { roleButtonActivate } from '../utils/roleButtonKey.js' // [D17-DOM4] Enter+Space menu item activation
 
 const SORT_VALUE = {
   'viewMore.sortCustom': 'custom',
@@ -65,7 +76,11 @@ export default {
   computed: {
     routeName () { return this.$route.name },
     // When this page has no menu items, do not render the button at all (e.g. the todo box: the toolbar already has all view controls)
-    hasMenu () { return !!(MENUS[this.routeName] && MENUS[this.routeName].length) }
+    hasMenu () { return !!(MENUS[this.routeName] && MENUS[this.routeName].length) },
+    // [D17-DOM4] mutually-exclusive sort items split out of the flat list so they can render as
+    // menuitemradio inside their own role=group; separators and toggles stay in original order
+    sortItems () { return this.items.filter(it => it.group === 'sort') },
+    otherItems () { return this.items.filter(it => it.group !== 'sort') }
   },
   methods: {
     toggle (e) {
@@ -104,6 +119,8 @@ export default {
         if (btn) btn.focus()
       })
     },
+    /* [D17-DOM4] menu item activation: Space joins Enter (same .prevent/.stop semantics as the old Enter-only binding) */
+    onItemKey (it, e) { roleButtonActivate(() => { this.click(it) }, { stop: true }).call(this, e) },
     onMenuKeydown (e) {
       const items = [...this.$el.querySelectorAll('.vm-item[tabindex="0"]')]
       if (!items.length) return

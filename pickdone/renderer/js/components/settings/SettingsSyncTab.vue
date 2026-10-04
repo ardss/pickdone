@@ -198,9 +198,7 @@
  *  confirm-style pairing, activity feed, security notices). All state lives in the main-process
  *  DB (syncGetStatus / syncEvent channel) — no localStorage writes here. */
 import { getSyncSettings, getSyncStatus, setSyncEnabled, getPairingCode, setSyncDeviceName, pairWithCode } from '../../utils/lanSync.js'
-// r6: the pairing-code TTL fallback comes from the SHARED constant (shared/pairing-ttl.mjs) —
-// the old inline 5*60*1000 drifted from main's PAIRING_CODE_TTL_MS (10 min), so the UI cleared
-// the code at minute 5 while main still accepted it until minute 10.
+// r6: the pairing-code TTL fallback comes from the SHARED constant (shared/pairing-ttl.mjs) — // the old inline 5*60*1000 drifted from main's PAIRING_CODE_TTL_MS (10 min), so the UI cleared // the code at minute 5 while main still accepted it until minute 10.
 import { PAIRING_CODE_TTL_MS } from '../../../../shared/pairing-ttl.mjs'
 
 /** Device Center IPC ops (main-process agent's contract): answered pair-requests + outbound pairing.
@@ -215,9 +213,7 @@ const syncPairRequest = (host, port) => dbCallLoose('syncPairRequest', { host, p
  *  green when online, gray otherwise. */
 function peerDotClass (peer, now = null) {
   const nowMs = now || Date.now()
-  // 2026-09-27 sync wave: a 'flush-stalled' peer is a persistent fault (budget of consecutive
-  // flush-failed rounds, not a transient lastError) — the dot stays red until main clears the
-  // state; it must NOT age out via the 5min lastError window.
+  // 2026-09-27 sync wave: a 'flush-stalled' peer is a persistent fault (budget of consecutive // flush-failed rounds, not a transient lastError) — the dot stays red until main clears the // state; it must NOT age out via the 5min lastError window.
   if (peer && peer.peerState === 'flush-stalled') return 'sync-dot--err'
   if (peer && peer.lastError && peer.lastErrorAt && (nowMs - peer.lastErrorAt) < 5 * 60 * 1000) return 'sync-dot--err'
   return peer && peer.online ? 'sync-dot--ok' : 'sync-dot--off'
@@ -250,8 +246,7 @@ function parseConnectAddress (input) {
     if (port >= 1 && port <= 65535) return { host: m[1], port }
     return null
   }
-  // A colon that is NOT a valid host:port separator (e.g. "1.2.3.4:abc") must not be dialed
-  // verbatim — that is the old bug shape (ENOTFOUND '1.2.3.4:abc'). Only multi-colon IPv6
+  // A colon that is NOT a valid host:port separator (e.g. "1.2.3.4:abc") must not be dialed // verbatim — that is the old bug shape (ENOTFOUND '1.2.3.4:abc'). Only multi-colon IPv6
   // literals pass through untouched.
   if ((s.match(/:/g) || []).length === 1) return null
   return { host: s, port: null }
@@ -626,7 +621,11 @@ export default {
       // P1-4: ONE in-flight guard for both pairing flows — submitPairing used `busy` while
       // connectPeer used `connecting`, so both could run concurrently and interleave the two
       // secret rotations. connectPeer now holds `busy` too.
-      if (!parsed || !parsed.host || this.busy || this.connecting) return
+      if (this.busy || this.connecting) return
+      // [P2 fix] a malformed address used to return SILENTLY — the button appeared dead.
+      // Inline warning (same $message idiom as the sibling toasts in this tab); the
+      // button-enabled logic stays unchanged.
+      if (!parsed || !parsed.host) { this.$message.warning(this.$t('sync.connectInvalidAddress')); return }
       // P1-4: pairing adopts a NEW single shared secret — existing peers are disconnected and
       // must re-pair. Say so before the user pulls the trigger.
       const proceed = () => {

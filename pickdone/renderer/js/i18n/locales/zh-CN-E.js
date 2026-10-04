@@ -411,6 +411,8 @@ export default {
       "giveUp": "放弃专注",
       "idleTag": "未在专注",
       "idleHint": "从「接下来」挑一件事，点「开始」进入专注",
+      "restingTag": "休息中",
+      "restingHint": "休息进行中 — 休息结束后再开始下一个专注",
       "settled": "已沉淀",
       "focusMin": "专注 {n} 分钟",
       "freeFocus": "自由专注（未关联任务）",

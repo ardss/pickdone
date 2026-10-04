@@ -360,7 +360,10 @@ export default {
       const patch = crossDayMovePatch(cur, target, startOf)
       const revertPatch = crossDayRevertPatch(cur, patch)
       moveWithUndo(this, {
-        label: offset === 1 ? this.$t('statsJ.TodoItem.movedToTomorrow') : this.$t('statsJ.TodoItem.movedToToday'),
+        // [D17-DOM4] honest copy: the postpone target is max(today+1, base+1), so for a task not
+        // scheduled today it lands on ITS next day, not "tomorrow" — announce the real date
+        // (reuses the existing movedTo key with date interpolation; movedToToday stays accurate)
+        label: offset === 1 ? this.$t('statsJ.TodoItem.movedTo', { d: dayjs(target).format(FMT.cnDate) }) : this.$t('statsJ.TodoItem.movedToToday'),
         apply: () => this.$store.dispatch('todo/updateTodoFields', {
           taskId: cur.taskId,
           patch: { ...patch, status: 'update' }

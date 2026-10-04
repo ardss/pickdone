@@ -15,12 +15,13 @@
         <img class="ep-tom-ico" src="app://app/assets/img/icon-tomato-timer2.svg" alt="">
       </span>
       <span class="ep-tom-seg ep-tom-seg--act" role="button" tabindex="0"
-            :title="$t('statsG.EpTomato.actTip')" @click.stop="$emit('open')" @keydown.enter.prevent.stop="$emit('open')">{{ $t('statsG.EpTomato.act') }} <b>{{ actual }}</b></span>
+            :title="$t('statsG.EpTomato.actTip')" @click.stop="$emit('open')" @keydown="onSegKey">{{ $t('statsG.EpTomato.act') }} <b>{{ actual }}</b></span>
     </span>
   </div>
 </template>
 
 <script lang="ts">
+import { roleButtonActivate } from '../../utils/roleButtonKey.js' // [A9] Space+Enter button activation
 /** Pomodoro estimate/actual row; purely presentational — the parent owns estDelta/openAccount and
  *  the tomatoEstimate/actualCountByTask data sources. */
 export default {
@@ -31,6 +32,10 @@ export default {
     /** actual attributed focus count (parent getter tomato/actualCountByTask) */
     actual: { type: Number, default: 0 }
   },
-  emits: ['est-delta', 'open']
+  emits: ['est-delta', 'open'],
+  methods: {
+    /* [D17-DOM4] ARIA button pattern on the actual segment: Space joins Enter (was Enter-only) */
+    onSegKey: roleButtonActivate(function () { this.$emit('open') }, { stop: true })
+  }
 }
 </script>

@@ -153,8 +153,14 @@ export default {
     commitReminders () {
       if (!this.task) return
       const list = []
+      let undatedSkipped = false
       for (const r of this.remindRows) {
-        const baseDay = r.date || this.task.dateTs || this.today0
+        // [P2 fix] `r.date || this.task.dateTs || this.today0` silently anchored a DATELESS row on
+        // an undated task to TODAY — the user set a time, the reminder committed for today without
+        // ever saying so. Such a row is now not committed (stays in the editor, like the null-time
+        // case below) and one warning surfaces the reason (EditPanel's reminderPastTip idiom).
+        if (!r.date && !this.task.dateTs) { undatedSkipped = true; continue }
+        const baseDay = r.date || this.task.dateTs
         if (!baseDay) continue
         // [maint-0925 A12] an explicitly cleared time (null) used to fall back to 09:00 silently —
         // a reminder the user never chose. A null-time row is simply not committed (the row stays
@@ -162,6 +168,9 @@ export default {
         if (!r.time) continue
         const [h, m] = String(r.time).split(':').map(Number)
         list.push(dayjs(baseDay).hour(h || 0).minute(m || 0).second(0).millisecond(0).valueOf())
+      }
+      if (undatedSkipped && this.$message) {
+        this.$message.warning(this.$t('statsJ.EditPanel.remindNeedsDate'))
       }
       // [R5 null-time retention] an all-null commit (e.g. the user cleared the time picker on the only
       // row) must NOT close the popover: that wiped the uncommitted row and the user's in-progress edit.
