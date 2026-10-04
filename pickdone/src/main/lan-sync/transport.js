@@ -103,7 +103,13 @@ function send(socket, msg) {
     line = JSON.stringify(msg)
   }
   try {
-    return socket.write(line + '\n') !== false
+    // D21 (P3 2026-10-02): `line + '\n'` duplicated a near-32MB string per frame (segments-chunk
+    // payloads). Two writes keep the same wire bytes and the same truthiness contract (false =
+    // backpressure or dead socket); Node sockets are write-ordered, so the peer still sees the
+    // frame terminated by exactly one newline.
+    const bodyOk = socket.write(line) !== false
+    const nlOk = socket.write('\n') !== false
+    return bodyOk && nlOk
   } catch {
     return false
   }
@@ -768,10 +774,7 @@ function connect(host, port, opts) {
   em.send = (msg) => send(socket, msg)
   // Fix-round (2026-09-22, lan-sync-9): close() used to end()+destroy() in the same tick —
   // frames still in the user-space/kernel write buffer (e.g. the round's final ack) were
-  // DISCARDED, the peer's watermark never advanced, and the next round re-pushed the whole
-  // window. end() alone flushes buffered frames + FIN; destroy() runs only after the flush
-  // completes (socket 'close'), an already-dead socket, or a 1s cap so a stalled peer can
-  // never hold close() open.
+  // DISCARDED, the peer's watermark never advanced, and the next round re-pushed the whole window. end() alone flushes buffered frames + FIN; destroy() runs only after the flush completes (socket 'close'), an already-dead socket, or a 1s cap so a stalled peer can never hold close() open.
   em.close = () => new Promise((resolve) => {
     let settled = false
     const finish = () => {

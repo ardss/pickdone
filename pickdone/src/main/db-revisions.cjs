@@ -159,6 +159,18 @@ module.exports = function createRevisionRecorder ({ getDb, log }) {
     }
   }
 
+  // D21 (P2 2026-10-02): one torn JSON row (crash mid-write, external tooling) used to throw out
+  // of list()/exportToStore and kill the WHOLE export. Failure granularity is per-ROW (mirror the
+  // clock.restore policy above): parse defensively, skip the torn row, count and log it.
+
+  function parseOrSkip (raw, what) {
+    try { return JSON.parse(raw) } catch (e) {
+
+      log && log.warn && log.warn(`[db-revisions] skipping torn JSON ${what} (row skipped): ` + (e && e.message))
+      return null
+    }
+  }
+
   /** Introspection for tests / Device Center visibility. */
   function list (entityId, limit = 50) {
     const d = getDb()
@@ -166,11 +178,17 @@ module.exports = function createRevisionRecorder ({ getDb, log }) {
     const rows = entityId
       ? d.prepare('SELECT * FROM sync_revisions WHERE entityId = ? ORDER BY hlcPhysical, hlcLogical LIMIT ?').all(String(entityId), limit)
       : d.prepare('SELECT * FROM sync_revisions ORDER BY hlcPhysical, hlcLogical LIMIT ?').all(limit)
-    return rows.map(r => ({
-      revisionId: r.revisionId, entity: r.entity, entityId: r.entityId,
-      hlc: { physical: r.hlcPhysical, logical: r.hlcLogical, nodeId: r.authorDeviceId },
-      parents: JSON.parse(r.parents || '[]'), payloadHash: r.payloadHash, status: r.status,
-    }))
+    const out = []
+    for (const r of rows) {
+      const parents = parseOrSkip(r.parents || '[]', 'parents for ' + r.revisionId)
+      if (!parents) continue // torn row: skip, keep the rest of the export alive
+      out.push({
+        revisionId: r.revisionId, entity: r.entity, entityId: r.entityId,
+        hlc: { physical: r.hlcPhysical, logical: r.hlcLogical, nodeId: r.authorDeviceId },
+        parents, payloadHash: r.payloadHash, status: r.status,
+      })
+    }
+    return out
   }
 
   /** Load the full local DAG into a sync-core store (test/bootstrap bridge). */
@@ -183,12 +201,15 @@ module.exports = function createRevisionRecorder ({ getDb, log }) {
     for (const r of rows) {
       const payloadJson = payloads.get(r.revisionId)
       if (payloadJson == null) continue // pruned payload: ancestry-only row
+      const parents = parseOrSkip(r.parents || '[]', 'parents for ' + r.revisionId)
+      const payload = parents !== null ? parseOrSkip(payloadJson, 'payload for ' + r.revisionId) : null
+      if (!parents || payload == null) continue // torn row: skip, keep the rest of the DAG alive
       applyEnvelopeFn(store, {
         revisionId: r.revisionId, entity: r.entity, entityId: r.entityId,
         authorDeviceId: r.authorDeviceId,
         hlc: { physical: r.hlcPhysical, logical: r.hlcLogical, nodeId: r.authorDeviceId },
-        parents: JSON.parse(r.parents || '[]'), payloadHash: r.payloadHash,
-        payload: JSON.parse(payloadJson),
+        parents, payloadHash: r.payloadHash,
+        payload,
       })
     }
     return store
@@ -201,7 +222,9 @@ module.exports = function createRevisionRecorder ({ getDb, log }) {
     const r = d.prepare('SELECT payloadHash FROM sync_revisions WHERE revisionId = ?').get(revisionId)
     const p = d.prepare('SELECT payload FROM sync_revision_payloads WHERE revisionId = ?').get(revisionId)
     if (!r || !p) return false
-    return r.payloadHash === hashPayload(JSON.parse(p.payload))
+    const payload = parseOrSkip(p.payload, 'payload for ' + revisionId)
+    if (payload == null) return false // torn row: cannot verify, do not throw
+    return r.payloadHash === hashPayload(payload)
   }
 
   return { record, list, exportToStore, verifyHash, flagEnabled, FLAG_KEY, cmpHlc, prunePayloads, payloadKeep }

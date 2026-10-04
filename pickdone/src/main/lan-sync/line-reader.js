@@ -79,6 +79,13 @@ class LineReader {
     if (this.bufferBytes > limit) this.#overLimit()
   }
 
+  /** D21: dispatch (handler) errors are app bugs, not wire faults — log honestly and keep the
+   *  socket. electron-log when available (main process), console.error otherwise (pure tests). */
+  #logDispatchError(err) {
+    const line = `[LanSync] message handler threw (connection kept): ${err && err.stack ? err.stack : err}`
+    try { require('electron-log').error(line) } catch { console.error(line) }
+  }
+
   #overLimit() {
     this.#account()
     this.onError(new ProtocolError(`line exceeds ${this.limit} byte cap`))
@@ -120,13 +127,25 @@ class LineReader {
         return
       }
       if (line.length === 0) continue
+      // D21 (P2 2026-10-02): only JSON parsing belongs in the sever-on-failure path. The old
+      // single try wrapped onMessage too, so a HANDLER bug threw → mislabeled 'bad JSON line'
+      // ProtocolError → socket destroyed with the wireConnection no-op onError = a silent
+      // disconnect indistinguishable from a peer protocol fault (and it killed every remaining
+      // buffered line in the same feed). Now: torn JSON severs (protocol fault, as before); a
+      // dispatch error is logged loudly and the connection survives — the peer is not at fault.
+      let msg
       try {
-        this.onMessage(JSON.parse(line))
+        msg = JSON.parse(line)
       } catch (err) {
         this.#account()
         this.onError(new ProtocolError(`bad JSON line: ${err.message}`))
         this.socket.destroy()
         return
+      }
+      try {
+        this.onMessage(msg)
+      } catch (err) {
+        this.#logDispatchError(err)
       }
     }
     this.#enforceLimits()

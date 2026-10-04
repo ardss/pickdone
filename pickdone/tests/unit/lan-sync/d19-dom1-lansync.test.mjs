@@ -137,9 +137,11 @@ test('preAuthMaxLifeMs <= 0 disables the cap (legacy behavior)', async () => {
 test('att-transfer writeAtomic: quota precheck runs BEFORE the tmp spool write', () => {
   const src = fs.readFileSync(require.resolve('../../../src/main/lan-sync/att-transfer.js'), 'utf8')
   const pre = src.indexOf('assertWriteAllowed({ incomingBytes: buf.length')
-  const spool = src.indexOf('fs.writeFileSync(tmp, buf)')
+  // D21 (2026-10-02): the spool moved to writeFileDurable (fsync before rename) — the ordering
+  // anchor follows the new call site.
+  const spool = src.indexOf('writeFileDurable(tmp, buf')
   assert.ok(pre > -1 && spool > -1, 'both sites present')
-  assert.ok(pre < spool, 'assertWriteAllowed must appear before writeFileSync(tmp, buf)')
+  assert.ok(pre < spool, 'assertWriteAllowed must appear before the durable spool write')
   // The dedup no-op check moved BEFORE the quota gate too (identical content stays quota-exempt).
   const dedup = src.indexOf('let same = false')
   assert.ok(dedup > -1 && dedup < pre, 'identical-content dedup check must precede the quota gate')

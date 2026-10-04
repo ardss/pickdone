@@ -365,13 +365,23 @@ function flushNow () {
   })))
 }
 
+// D21 (P3 2026-10-02): sustained IO failure used to drop chunks in complete silence — the
+// "fire-and-forget" contract covered one chunk, not an endless black hole. Count drops and
+// console.error one line every 10 (same one-line-per-N style as att-transfer's budgetSkipped
+// reporting) so an operator can see the trail is hemorrhaging without spamming per chunk.
+let droppedChunks = 0
 /** Append chunks to the audit file synchronously, in order, rotation-checked per chunk.
  *  Failure is per-chunk: the chunk is dropped (fire-and-forget contract) and the drain continues. */
 function writeChunksSync (chunks) {
   for (const chunk of chunks) {
     try { rotateIfNeeded() } catch (e) { warnRotationFailure(e) } // 2026-09-25: never silent — one-time warn
     for (let attempt = 0; attempt < 2; attempt++) {
-      try { fs.appendFileSync(auditFile(), chunk.text); break } catch (e) { if (attempt > 0) break /* drop this chunk alone, keep draining */ }
+      try { fs.appendFileSync(auditFile(), chunk.text); break } catch (e) {
+        if (attempt > 0) { // drop this chunk alone, keep draining — but never silently again
+          droppedChunks += 1
+          if (droppedChunks % 10 === 0) console.error(`[audit] ${droppedChunks} audit chunks dropped to IO failure (trail is incomplete)`)
+        }
+      }
     }
   }
 }

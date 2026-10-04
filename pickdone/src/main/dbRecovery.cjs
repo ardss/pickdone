@@ -197,7 +197,10 @@ function cleanInitReplayDecision (ud) {
 function markRecoveryPending (ud, info) {
   try {
     fs.mkdirSync(ud, { recursive: true })
-    fs.writeFileSync(recoveryPendingPath(ud), JSON.stringify({
+    // D21 (P3 2026-10-02): durable write (tmp → fsync → rename) — this sentinel is the LAST line
+    // of defense before a corrupt db is renamed away; if the rename-past-it ordering inverted
+    // (plain writeFileSync vs OS cache), recovery could silently never replay.
+    require('./durable-fs').writeFileDurable(recoveryPendingPath(ud), JSON.stringify({
       reason: String((info && info.reason) || 'json-restore-unconsumed'),
       at: Date.now()
     }))

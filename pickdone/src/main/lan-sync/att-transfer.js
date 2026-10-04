@@ -202,7 +202,11 @@ function defaultDeps () {
       const tmp = `${dst}.att-tmp-${Date.now()}-${Math.floor(Math.random() * 1e6)}`
       let finalDst = dst
       try {
-        fs.writeFileSync(tmp, buf)
+        // D21 (P2 2026-10-02): route the spool through writeFileDurable (tmp → fsync → rename)
+        // instead of a bare writeFileSync — without the file-data fsync the final rename could hit
+        // disk before the received bytes, leaving a truncated/hash-mismatched attachment after a
+        // power cut. The .att-tmp name is kept so the D19 residue sweep still matches crash trash.
+        require('../durable-fs').writeFileDurable(tmp, buf, fs)
         if (fs.existsSync(dst)) {
           // Non-dedup conflict: same-name DIFFERENT content (the identical case returned above).
           const ext = path.extname(dst)

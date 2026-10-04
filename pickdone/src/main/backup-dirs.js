@@ -60,7 +60,7 @@ function migrateLegacyBackups (legacyDir, root) {
       }
       try { fs.renameSync(src, dst); moved++ } catch {}
     }
-    if (moved) log.info('[Backup] 已将旧默认备份目录快照迁移至新默认根:', legacy, '->', root, `(${moved} 个文件)`)
+    if (moved) log.info('[Backup] migrated legacy default backup-dir snapshot to the new default root:', legacy, '->', root, `(${moved} files)`)
   } catch (e) { log.warn('[Backup] 旧备份目录迁移跳过:', e && e.message) }
 }
 function loadAllowedBackupDirs () {
@@ -79,7 +79,9 @@ function loadAllowedBackupDirs () {
 // success — a user-picked directory silently unregistered itself on the next launch. The
 // structured result lets handlers/backup.js propagate the failure to the renderer instead.
 function saveAllowedBackupDirs () {
-  try { fs.writeFileSync(allowedBackupDirsFile(), JSON.stringify([...allowedBackupDirs])); return { ok: true } } catch (e) {
+  // D21 (P3 2026-10-02): bare writeFileSync ordered nothing against the OS cache — route through
+  // writeFileDurable (tmp → fsync → rename) so the whitelist survives a power cut consistently.
+  try { require('./durable-fs').writeFileDurable(allowedBackupDirsFile(), JSON.stringify([...allowedBackupDirs])); return { ok: true } } catch (e) {
     log.warn('[Backup] allowed-backup-dirs 持久化失败:', e && e.message)
     return { ok: false, error: (e && e.message) || String(e) }
   }

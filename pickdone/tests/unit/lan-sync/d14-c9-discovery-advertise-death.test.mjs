@@ -17,6 +17,9 @@ function loadUdpFallbackDiscovery () {
     if (request === 'bonjour-service') throw new Error('simulated offline install')
     return origLoad.call(this, request, parent, isMain)
   }
+  // D21 flake-hardening: pin a fast test cadence so the 3-sweep deadline cannot be outrun by
+  // pool-load timer lag (the production default 2000ms made the 9s budget load-sensitive).
+  process.env.LAN_SYNC_UDP_FALLBACK_INTERVAL_MS = '200'
   const resolved = require_.resolve(path.join(import.meta.dirname, '../../../src/main/lan-sync/discovery.js'))
   delete require_.cache[resolved]
   try { return require_(resolved) } finally { Module._load = origLoad }
