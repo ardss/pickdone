@@ -208,8 +208,11 @@ function loadState (voidExpired = true) {
         merged.status = 'default'; merged.startedAt = 0
       }
       // Today's tomato count resets across days (window.dayjs is globally available in the renderer)
+      // [d21-A17] the reset is STARTUP-only: gate it on the same voidExpired condition the phase
+      // voiding above uses. The cross-window re-read (voidExpired=false) must not zero the count
+      // just because the blob was written yesterday — the owning window rolls the count itself.
       const today = window.dayjs().format(FMT.date)
-      if (merged._countDate !== today) { merged.todayTomatoCount = 0; merged._countDate = today }
+      if (voidExpired && merged._countDate !== today) { merged.todayTomatoCount = 0; merged._countDate = today }
       // 账本已迁行表:blob 里的历史记录字段直接忽略(内存副本由 recordsLoad 从 DB 装载)
       if (Array.isArray(merged.tomatoRecordList)) merged.tomatoRecordList = []
       delete merged.unSyncTomatoRecordList

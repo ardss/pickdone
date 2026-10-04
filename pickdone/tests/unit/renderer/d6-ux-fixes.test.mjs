@@ -291,7 +291,7 @@ test('[F12] QuickAddPage persists the draft on Esc and restores it on reopen', (
   // Review P3 2026-09-22: persistence extracted into persistDraft(); Esc still persists before hiding
   assert.ok(iEsc > -1 && iEsc < src.indexOf('window.todoAPI.quickAddHide()') && /persistDraft \(\) \{/.test(src), 'Esc persists the draft before hiding')
   assert.ok(/getItem\(DRAFT_KEY\)[\s\S]{0,200}qa\.text = draft/.test(src), 'reopen restores the draft into the input')
-  assert.ok(/onQuickAddFocus[\s\S]{0,300}restoreDraft\(\)/.test(src), 'focus callback restores the draft (window is hidden-not-destroyed)')
+  assert.ok(/onQuickAddFocus[\s\S]{0,450}restoreDraft\(\)/.test(src), 'focus callback restores the draft (window is hidden-not-destroyed; D21 added the auto-hide cancel between)')
   assert.ok(/addEventListener\('blur', this\.persistDraft\)/.test(src), 'blur-hide also persists the draft')
   assert.ok(/onCreated[\s\S]{0,200}removeItem\(DRAFT_KEY\)/.test(src), 'a successful creation consumes the draft')
 })

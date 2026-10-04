@@ -301,7 +301,8 @@ export default {
       this._offTodosChanged = window.todoAPI.onTodosChanged(() => { try { this._onPlansChanged() } catch {} })
     }
     // Expired day-bucket cleanup (db atomic op, idempotent): [-7d,+31d] window; planning the future is a finalized feature, so only expired buckets are pruned, never future ones
-    setTimeout(() => { try { this.prune() } catch {} }, 5000)
+    // [d21-A15] handle stored so beforeUnmount can clear it (an unmount <5s after mount used to fire prune into a dead component)
+    this._pruneTimer = setTimeout(() => { try { this.prune() } catch {} }, 5000)
     // 渐进折叠(2026-09-03 用户定稿): minWidth 放开到 750 的代价——窗口 <1140 时自动折叠抽屉
     // (日期条视图切换行单行需要 614px,抽屉展开时最坏组合 1140 才放得下);加宽回 ≥1140 恢复进入前的偏好。
     // 侧栏 <920 有自己的折叠断点,两级递进:先折抽屉、再折侧栏。手动收起的(_railAutoFolded=false)加宽后不弹开。
@@ -320,6 +321,7 @@ export default {
   },
   beforeUnmount () {
     clearInterval(this._tick)
+    if (this._pruneTimer) { clearTimeout(this._pruneTimer); this._pruneTimer = null } // [d21-A15]
     window.removeEventListener('resize', this._onResize)
     // round3-ux-perf-4: drop a pending coalesced resize frame
     if (this._resizeRaf) cancelAnimationFrame(this._resizeRaf)

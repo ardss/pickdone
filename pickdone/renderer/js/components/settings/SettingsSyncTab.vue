@@ -609,8 +609,10 @@ export default {
       this.dismissIncomingPair()
       try {
         const r = (await syncPairRespond({ accept: !!accept })) as { ok?: boolean } | null
-        // ok:false = the 60s window already elapsed in main — say so instead of faking success
-        if (accept) (r && r.ok === false) ? this.$message.warning(this.$t('sync.pairExpiredMsg')) : this.$message.success(this.$t('sync.pairOkMsg'))
+        // [d21-A6] ok:false = the 60s window already elapsed in main — say so instead of faking
+        // success. A null/undefined response (IPC produced nothing) is NOT a success either: only
+        // a truthy r.ok confirms the pairing, everything else falls to the expired/failure branch.
+        if (accept) (r && r.ok) ? this.$message.success(this.$t('sync.pairOkMsg')) : this.$message.warning(this.$t('sync.pairExpiredMsg'))
       } catch (e) { this.$message.error(this.$t('sync.pairFailMsg')) }
       if (req) this.refresh()
     },
@@ -740,8 +742,7 @@ export default {
       this.pairingLeftSec = Math.max(0, Math.floor((this.pairingExpiresAt - Date.now()) / 1000)) // r6: floor caliber
       if (this.pairingLeftSec === 0) { this.pairingCode = ''; clearInterval(this._pairTimer); this._pairTimer = null }
     },
-    /** 30s ticker: relative times ("3 分钟前") are computed from Date.now() at render time, so a
-     *  light tick (bumps _relTick, a render dependency) refreshes them without a status round-trip. */
+    /** 30s ticker: relative times ("3 分钟前") are computed from Date.now() at render time, so a  light tick (bumps _relTick, a render dependency) refreshes them without a status round-trip. */
     startRelTicker () {
       if (this._relTimer) return
       // Instance-field timer (not data — vue/no-reserved-keys; timers need no reactivity)

@@ -135,10 +135,32 @@ store.registerModule('_rt', {
 installGlobalErrorCapture()
 
 // Reminder sound: the main process sends the audio file path, played here via Audio (Electron allows playback without a user gesture by default)
+// [d21-A10] a missing/unplayable file (deleted asset, codec gap) used to be muted silently — the
+// catch now falls back to a short self-contained WebAudio beep so the reminder is still audible.
 if (window.todoAPI && window.todoAPI.onPlaySound) {
   window.todoAPI.onPlaySound(file => {
-    try { new Audio(file).play().catch(() => {}) } catch (e) { /* empty */ }
+    try { new Audio(file).play().catch(() => playFallbackBeep()) } catch (e) { playFallbackBeep() }
   })
+}
+// [d21-A10] fallback chime: two quick oscillator blips, fully local (no new IPC, no assets)
+function playFallbackBeep () {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext
+    if (!Ctx) return
+    const ctx = new Ctx()
+    const t0 = ctx.currentTime
+    ;[880, 660].forEach((freq, i) => {
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.frequency.value = freq
+      gain.gain.setValueAtTime(0.08, t0 + i * 0.15)
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + i * 0.15 + 0.12)
+      osc.connect(gain).connect(ctx.destination)
+      osc.start(t0 + i * 0.15)
+      osc.stop(t0 + i * 0.15 + 0.13)
+    })
+    setTimeout(() => { try { ctx.close() } catch { /* already closed */ } }, 500)
+  } catch (e) { /* no audio available — nothing further to do */ }
 }
 
 /** Global a11y: fills in click activation for Space on role="button"/"checkbox"/"switch"/"menuitem"

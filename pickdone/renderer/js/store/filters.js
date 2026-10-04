@@ -19,11 +19,17 @@ export default {
     async load ({ commit }) {
       try { commit('setList', await window.todoAPI.dbCall('filterList')) } catch (e) { console.error('[filters] load', e) }
     },
-    /** Backfill the list after create/update; returns the id for routing */
+    /** Backfill the list after create/update; returns the id for another-wise-successful write */
     async save ({ commit }, f) {
       const id = await commitCommand("filter", "put", f)
-      const list = await window.todoAPI.dbCall('filterList')
-      commit('setList', list)
+      // [d21-A7] the refetch runs in its OWN try: a successful commit followed by a failed
+      // filterList read used to reject the whole action — callers reported total failure while
+      // the write had landed, and a user retry then hit the duplicate-name guard. On refetch
+      // failure keep the optimistic list and still resolve with the id (success).
+      try {
+        const list = await window.todoAPI.dbCall('filterList')
+        commit('setList', list)
+      } catch (e) { console.error('[filters] post-save refetch failed (write stands):', e) }
       return id
     },
     async remove ({ commit }, id) {

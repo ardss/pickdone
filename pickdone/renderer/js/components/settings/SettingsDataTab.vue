@@ -266,7 +266,15 @@ export default {
         const def = await window.todoAPI.getDefaultBackupDir()
         this.backupDirDefault = def
         this.backupDirShown = this.st.backupDir || def
-      } catch {}
+      } catch (e) {
+        // [d21-A13] a failed lookup used to leave the display blank/stale silently. Fall back to
+        // the stored setting value (so a configured dir still shows) and surface the failure with
+        // the shared actionFailedMsg pattern — no silent blank state.
+        console.error('[settings] getDefaultBackupDir failed:', e)
+        this.backupDirDefault = ''
+        this.backupDirShown = this.st.backupDir || ''
+        this.$message.warning(this.$t('statsH.main.actionFailedMsg') + ((e && e.message) || ''))
+      }
     },
     async runAutoBackupNow () {
       // D14-A13: the busy-flag guard every sibling has (writeBackupNow/importFromCsv/purgeRecycle) —

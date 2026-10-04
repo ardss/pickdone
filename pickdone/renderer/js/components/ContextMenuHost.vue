@@ -25,24 +25,14 @@ export default {
     m () { return this.$store.state.ui.contextMenu }
   },
   watch: {
+    // [d21-A3] watch the menu object by IDENTITY, not just 'm.visible': ui/openMenu REPLACES the
+    // object wholesale, so a reopen-while-open (visible stays true) used to skip re-clamping,
+    // refocusing, and left a stale _lastTrigger. Identity change fires on replacement; the
+    // 'm.visible' watcher below still owns the close path (closeMenu mutates visible in place).
+    m (v) { if (v && v.visible) this.onMenuOpen() },
     'm.visible' (v) {
       if (v) {
-        // Focus restore (a11y): remember the trigger so keyboard focus can return here on close
-        const ae = document.activeElement as HTMLElement | null
-        this._lastTrigger = ae && typeof ae.focus === 'function' ? ae : null
-        // Place at the original coordinates first, then clamp back into the viewport once the menu's real size is measured: otherwise menus near the bottom/right edge would overflow the screen and become unselectable
-        this.pos = { x: this.m.x, y: this.m.y }
-        this.$nextTick(() => {
-          const el = this.$el && this.$el.querySelector ? this.$el.querySelector('.ctx-menu') || this.$el : null
-          if (!el) return
-          const w = el.offsetWidth
-          const h = el.offsetHeight
-          const x = Math.max(8, Math.min(this.m.x, window.innerWidth - w - 8))
-          const y = Math.max(8, Math.min(this.m.y, window.innerHeight - h - 8))
-          this.pos = { x, y }
-          const first = el.querySelector('.ctx-item[tabindex="0"]')
-          if (first) first.focus()
-        })
+        this.onMenuOpen()
       } else {
         this.restoreFocus()
       }
@@ -67,7 +57,30 @@ export default {
     window.removeEventListener('wheel', this._onScroll, { capture: true, passive: true } as any)
   },
   methods: {
-    exec (it) { it.fn && it.fn(); this.$store.commit('ui/closeMenu') },
+    // [d21-A3] shared open path (used by both the m-identity watcher and the 'm.visible' watcher):
+    // record the trigger, place at raw coords, then clamp into the viewport and focus the first item
+    onMenuOpen () {
+      // Focus restore (a11y): remember the trigger so keyboard focus can return here on close
+      const ae = document.activeElement as HTMLElement | null
+      this._lastTrigger = ae && typeof ae.focus === 'function' ? ae : null
+      // Place at the original coordinates first, then clamp back into the viewport once the menu's real size is measured: otherwise menus near the bottom/right edge would overflow the screen and become unselectable
+      this.pos = { x: this.m.x, y: this.m.y }
+      this.$nextTick(() => {
+        const el = this.$el && this.$el.querySelector ? this.$el.querySelector('.ctx-menu') || this.$el : null
+        if (!el) return
+        const w = el.offsetWidth
+        const h = el.offsetHeight
+        const x = Math.max(8, Math.min(this.m.x, window.innerWidth - w - 8))
+        const y = Math.max(8, Math.min(this.m.y, window.innerHeight - h - 8))
+        this.pos = { x, y }
+        const first = el.querySelector('.ctx-item[tabindex="0"]')
+        if (first) first.focus()
+      })
+    },
+    // [d21-A5] a throwing menu handler must not leave the menu wedged open: close runs in finally
+    exec (it) {
+      try { it.fn && it.fn() } finally { this.$store.commit('ui/closeMenu') }
+    },
     // Return keyboard focus to the element that opened the menu (no-op if it was removed from the DOM)
     restoreFocus () {
       const t = this._lastTrigger

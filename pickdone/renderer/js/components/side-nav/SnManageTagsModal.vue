@@ -184,9 +184,13 @@ export default defineComponent({
         this.$message.error(this.$t('statsG.SideNav.syncFailMsg'))
         return
       }
+      // [d21-A9] a placeholder-only tag (zero todo content) restores NOTHING via the content
+      // rewrite — remember that fact at delete time so the undo can reinstate the placeholder
+      // name via the same ui/commitUserTags single-writer path removeUserTag used.
+      const wasPlaceholderOnly = targets.length === 0
       // Undo restores every rewritten content/description verbatim (the tag naturally reappears
-      // in the sidebar via the content-derived tagCounts getter; only the zero-count placeholder
-      // entry stays removed — re-adding it would require a store-layer action, out of this domain)
+      // in the sidebar via the content-derived tagCounts getter); a placeholder-only tag is
+      // reinstated in the 'userTags' meta below so it is visible again too.
       showUndoToast(this.$message.bind(this), [
         this.$t('statsG.SideNav.tagDeleted', { name: t.name }) + '　',
         window.Vue.h('a', {
@@ -197,7 +201,20 @@ export default defineComponent({
               if (snap.taskContent != null) patch.taskContent = snap.taskContent
               if (snap.taskDescribe != null) patch.taskDescribe = snap.taskDescribe
               return this.$store.dispatch('todo/updateTodoFields', { taskId: snap.taskId, patch })
-            })).then(() => this.$message.closeAll()).catch(e => {
+            })).then(() => {
+              if (wasPlaceholderOnly) {
+                const cur = this.$store.state.ui.userTags || []
+                if (!cur.includes(t.name)) {
+                  return this.$store.dispatch('ui/commitUserTags', [...cur, t.name])
+                    .then(() => this.$message.closeAll())
+                    .catch(e => {
+                      console.error('[sn-tags] tag-delete undo (placeholder reinstate) failed:', e)
+                      this.$message.error(this.$t('statsG.SideNav.syncFailMsg'))
+                    })
+                }
+              }
+              this.$message.closeAll()
+            }).catch(e => {
               console.error('[sn-tags] tag-delete undo failed:', e)
               this.$message.error(this.$t('statsG.SideNav.syncFailMsg'))
             })

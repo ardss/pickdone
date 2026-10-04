@@ -34,15 +34,21 @@ function releaseKeyListeners () {
 export function showUndoToast (messageFn, children, { type = 'success', onDismiss } = {}) {
   const h = window.Vue.h
   let timer = null
-  const arm = () => {
+  // [d21-A16] track the arm DEADLINE, not just the timer: keyup resume() used to re-arm a FULL
+  // 5s, so continuous typing postponed the undo toast indefinitely. resume now schedules only
+  // the REMAINING time (500ms floor keeps the toast observable on rapid pause/resume cycles).
+  let deadline = 0
+  const arm = (ms) => {
+    const wait = ms == null ? UNDO_TOAST_MS : ms
+    deadline = Date.now() + wait
     timer = setTimeout(() => {
       timer = null
       try { msg.close() } catch { /* already gone */ }
-    }, UNDO_TOAST_MS)
+    }, wait)
   }
   const controller = {
     pause: () => { if (timer) { clearTimeout(timer); timer = null } },
-    resume: () => { if (!timer) arm() }
+    resume: () => { if (!timer) arm(Math.max(500, deadline - Date.now())) }
   }
   /** Single idempotent unregister path: patched close (auto-dismiss / ✕ / programmatic) AND the
    *  Element Plus Message onClose callback both land here. onClose matters because a route change
@@ -85,7 +91,7 @@ export function showUndoToast (messageFn, children, { type = 'success', onDismis
     const el = msg && msg.$el
     if (el) {
       el.addEventListener('mouseenter', () => { if (timer) { clearTimeout(timer); timer = null } })
-      el.addEventListener('mouseleave', () => { if (!timer) arm() })
+      el.addEventListener('mouseleave', () => { if (!timer) arm(Math.max(500, deadline - Date.now())) })
       // Keyboard/screen-reader parity (2026-09-12): hover alone could not pause the timer, so keyboard users
       // never got the full 5s to reach the Undo button. Any key held/pressed pauses; keyup resumes. The toast
       // is also announced politely via role="status" (live region). No visual change.

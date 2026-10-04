@@ -413,6 +413,12 @@ export default {
         estimate: renewalEstimate,
         repeatId: carry.repeatId,
         todoSublist: t.subtasks ? (function(){try{return JSON.parse(t.subtasks)}catch{return[]}})().map(x => ({ ...x, checked: false })) : null,
+        // B1-P1 (2026-10-02): the renewal used to drop attachments even though renewalCarryFields
+        // provides them (CLI twin spreads image/files) — a repeated task's image/files silently
+        // vanished on completion-renewal. Map carry.image/carry.files onto addTodo's todoImage/
+        // fileList argument names (addTodo writes image/files at the same call site).
+        todoImage: carry.image,
+        fileList: carry.files,
         addToTop: false
       })
       // U-1 (2026-09-20): the estimate column on the new row is write-once at the DB layer (the upsert
@@ -753,15 +759,9 @@ export default {
 function root_getCompleteWithSub (rootState) { return rootState && rootState.settings ? rootState.settings.isCompleteWithSubtasks !== false : true }
 
 /** D15 (TL-5): durable-store existence authority for renderer write actions — ONE choke point.
- *  Previously every write action treated the in-memory table as the existence authority: on a
- *  memory miss (the window between a peer/CLI write and the todos-changed broadcast reload —
- *  docs/sync-matrix.md:60) updateTodoFields/deleteTodo/reorderTodos/deleteTodosMany silently
- *  returned fake success and the user's edit vanished with no rejection and no queue entry,
- *  violating op-feedback (a write either lands or rejects). Resolution: memory hit → row; else
- *  one getById on the durable store (the same allowlisted read door the CLI uses) — a DB hit is
- *  upserted into memory and handed to the caller to merge; a DB miss is a structured not-found
- *  the caller surfaces. Class-complete: every renderer write action routes through this one
- *  helper instead of re-declaring its own memory-miss behavior. */
+ *  Previously every write action treated the in-memory table as the existence authority: on a  memory miss (the window between a peer/CLI write and the todos-changed broadcast reload —  docs/sync-matrix.md:60) updateTodoFields/deleteTodo/reorderTodos/deleteTodosMany silently
+ *  returned fake success and the user's edit vanished with no rejection and no queue entry,  violating op-feedback (a write either lands or rejects). Resolution: memory hit → row; else  one getById on the durable store (the same allowlisted read door the CLI uses) — a DB hit is
+ *  upserted into memory and handed to the caller to merge; a DB miss is a structured not-found  the caller surfaces. Class-complete: every renderer write action routes through this one  helper instead of re-declaring its own memory-miss behavior. */
 async function resolveForEdit (state, taskId) {
   const hit = [...(state.todoList || []), ...(state.recycleList || [])].find(t => t.taskId === taskId)
   if (hit) return hit
