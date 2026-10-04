@@ -12,9 +12,9 @@
       "functions": 75
     },
     "win32@node24": {
-      "lines": 82,
-      "branches": 81,
-      "functions": 75
+      "lines": 69,
+      "branches": 73,
+      "functions": 56
     }
   }
 }

@@ -151,6 +151,9 @@ export default {
         ? t.minute(30).second(0).millisecond(0)
         : t.add(1, 'hour').minute(0).second(0).millisecond(0)
       const val = slot.valueOf()
+      // late-night hole (D20): after 23:00 the +1h slot rolls past midnight onto the NEXT day
+      // while the row is still dated today — clamp back to the last minute of today.
+      if (!slot.isSame(t, 'day')) return '23:59'
       return val <= t.valueOf() ? '23:59' : slot.format(FMT.time)
     },
     commitReminders () {
