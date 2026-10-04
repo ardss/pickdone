@@ -100,9 +100,35 @@ function send(socket, msg) {
   }
 }
 
-/** Send one message as an encrypted frame under an explicit key (pair-accept handshake). */
+/** Send one message as an encrypted frame under an explicit key (pair-accept handshake).
+ *  D17 P1: now returns TRUE when the frame was handed to the socket and FALSE on a dead or
+ *  non-writable socket, mirroring send() — the pair flows must not report success (onPaired +
+ *  per-pair persist) for a frame that never went out. */
 function sendEnc(socket, key, msg) {
-  if (!socket.destroyed && socket.writable) socket.write(cipher.encryptFrame(key, msg) + '\n')
+  if (!socket || socket.destroyed || !socket.writable) return false
+  try { return socket.write(cipher.encryptFrame(key, msg) + '\n') !== false } catch { return false }
+}
+
+/** D17 P1: destroy the socket only after its buffered outbound frames are flushed. The pairing
+ *  flows used to destroy() immediately after writing pair-accept / pair-reject, DISCARDING frames
+ *  still sitting in the user-space/kernel write buffer — the requester never saw the accept and
+ *  the pairing dead-locked (acceptor had persisted, requester had nothing). Same flush discipline
+ *  as connect()'s em.close (end() flushes buffered frames + FIN; destroy after 'close', a dead
+ *  socket, or a 1s cap so a stalled peer can never hold the flow open). */
+function flushThenDestroy(socket) {
+  if (!socket || socket.destroyed || !socket.writable) { try { socket.destroy() } catch { /* already dead */ } return }
+  let settled = false
+  const finish = () => {
+    if (settled) return
+    settled = true
+    try { socket.destroy() } catch { /* already dead */ }
+  }
+  const cap = setTimeout(finish, 1000)
+  cap.unref?.()
+  socket.once('close', () => { clearTimeout(cap); finish() })
+  try {
+    socket.end(() => { /* flushed: 'close' fires right after */ })
+  } catch { finish() }
 }
 
 /** Decrypt an inbound encrypted frame under the connection's key (session key when
@@ -252,12 +278,17 @@ function wireConnection(socket, { deviceId, pairingSecret, secretFor, getHandler
             // F1 (2026-09-28 drill): mint a FRESH per-pair secret instead of handing out the
             // global pairingSecret — a second pairing no longer invalidates earlier pairs.
             const freshSecret = randomBytes(32).toString('hex') // same shape as generatePairingSecret (isValidPairingSecret)
-            sendEnc(socket, hsKey, { type: 'pair-accept', secret: freshSecret, deviceId })
-            if (onPaired) onPaired({ deviceId: typeof msg.deviceId === 'string' ? msg.deviceId : '', host: socket.remoteAddress, secret: freshSecret,
+            // D17 P1: the accept frame must actually leave before we record the pair. The old code
+            // fired onPaired (persisting the per-pair record) and destroyed the socket
+            // unconditionally — a dropped accept left the acceptor with a per-pair secret the
+            // requester NEVER received: a permanently auth-dead pairing. Only a successfully
+            // handed-off frame records the pair; the socket is destroyed AFTER the flush.
+            const acceptSent = sendEnc(socket, hsKey, { type: 'pair-accept', secret: freshSecret, deviceId })
+            if (acceptSent && onPaired) onPaired({ deviceId: typeof msg.deviceId === 'string' ? msg.deviceId : '', host: socket.remoteAddress, secret: freshSecret,
               // Per-instance-port fix: the requester's LISTEN port from the pair-request, so the
               // acceptor persists a dialable address (null on legacy requesters — node-events falls back).
               port: Number.isInteger(msg.listenPort) && msg.listenPort > 0 && msg.listenPort <= 65535 ? msg.listenPort : null })
-            socket.destroy()
+            flushThenDestroy(socket)
             return
           }
           // Two-way confirmed pairing: an unpaired client asks {type:'pair-request', deviceName,
@@ -297,8 +328,13 @@ function wireConnection(socket, { deviceId, pairingSecret, secretFor, getHandler
               }
               // F1: fresh per-pair secret here too (minted at accept time, not request time).
               const freshSecret = randomBytes(32).toString('hex')
-              sendEnc(socket, hsKey, { type: 'pair-accept', secret: freshSecret, deviceId })
-              if (onPaired) onPaired({
+              // D17 P1/P2: same lost-frame discipline as the manual path — if the accept cannot be
+              // handed to the socket (requester walked away mid-window, socket already destroyed),
+              // onPaired must NOT fire: persisting a per-pair secret the requester never received
+              // would create a half-pairing that can never authenticate. The reject path flushes
+              // too: destroy() after send() used to discard the buffered pair-reject.
+              const acceptSent = sendEnc(socket, hsKey, { type: 'pair-accept', secret: freshSecret, deviceId })
+              if (acceptSent && onPaired) onPaired({
                 deviceId: typeof msg.deviceId === 'string' ? msg.deviceId : '',
                 deviceName: cleanDeviceName(msg.deviceName),
                 host: socket.remoteAddress,
@@ -307,8 +343,10 @@ function wireConnection(socket, { deviceId, pairingSecret, secretFor, getHandler
                 // Per-instance-port fix: same as the manual-code path above.
                 port: Number.isInteger(msg.listenPort) && msg.listenPort > 0 && msg.listenPort <= 65535 ? msg.listenPort : null,
               })
+              if (acceptSent) { flushThenDestroy(socket); return }
             } else {
-              send(socket, { type: 'pair-reject', error: 'rejected' })
+              const rejectSent = send(socket, { type: 'pair-reject', error: 'rejected' })
+              if (rejectSent) { flushThenDestroy(socket); return }
             }
             socket.destroy()
           }
@@ -506,7 +544,11 @@ function createLanServer(opts) {
     // peers, firewall rules, existing saved peers all target the fixed port), so a second app
     // instance or a foreign squatter must surface as a visible sync error, not a silent
     // half-working node. Port 0 (explicitly ephemeral config) can never hit EADDRINUSE.
-    if (err && err.code === 'EADDRINUSE' && em.port === null && port !== 0) {
+    // D17 P3: the old `em.port === null` clause was vacuous — this handler can only fire while
+    // listen() is still binding (em.port stays null until the listen callback), so it was always
+    // true and added nothing. The `port !== 0` guard is the real condition (an explicitly
+    // ephemeral config can never hit EADDRINUSE).
+    if (err && err.code === 'EADDRINUSE' && port !== 0) {
       try { require('electron-log').error(`[LanSync] fixed sync port ${port} is in use — sync is NOT discoverable (EADDRINUSE)`) } catch { /* electron-log unavailable in pure-node contexts */ }
       require('../log-isolation') // test isolation: redirect electron-log file transport into TODO_DB_DIR/TODO_USER_DATA_DIR
     }
@@ -595,12 +637,17 @@ function connect(host, port, opts) {
     if (pairOpen) { send(socket, { type: 'pair-request', deviceId, deviceName: deviceName || '', nonce: pairNonce, pub: pairEph.pub, ...(listenPort ? { listenPort } : {}) }); return }
     send(socket, { type: 'hello', deviceId, protoVer, authCode, enc: cipher.ENC_VER, salt, ...(listenPort ? { listenPort } : {}) })
   })
+  // D17 P3: dial 'close' must emit exactly ONCE per dial. The timeout path used to emit 'close'
+  // manually AND socket.destroy() then fired the socket 'close' handler which emitted it AGAIN —
+  // callers treating the second close as a second lifecycle event mis-counted dials.
+  let closeEmitted = false
+  const emitCloseOnce = () => { if (closeEmitted) return; closeEmitted = true; em.emit('close') }
   socket.on('timeout', () => {
     const err = new Error(`connect timeout to ${host}:${port}`)
     // A caller without an 'error' listener must not turn the deadline into an uncaught
     // exception — the close signal is the contract every caller already handles.
     if (em.listenerCount('error') > 0) em.emit('error', err)
-    else em.emit('close')
+    else emitCloseOnce()
     socket.destroy()
   })
   socket.on('error', (err) => {
@@ -616,7 +663,7 @@ function connect(host, port, opts) {
     conn.sessionKey = null
     conn.hsKey = null
     em.ready = false
-    em.emit('close')
+    emitCloseOnce()
   })
 
   const reader = new LineReader(

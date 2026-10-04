@@ -46,15 +46,19 @@ function createPairingClient({ peers, deviceId, name, em, getListenPort }) {
     if (!peer || !peer.host || !peer.port) return Promise.reject(new Error('pairWith: no discovered peer'))
     return new Promise((resolve, reject) => {
       const client = connect(peer.host, peer.port, { deviceId, pairCode: String(code), protoVer: PROTO_VER, timeoutMs: 5000, listenPort: advertiseListenPort() })
-      // 6s fallback deadline: cleared+unref'd so a settled pair neither leaks the timer
-      // nor keeps the process alive for it.
-      const deadline = setTimeout(() => done(reject, new Error('pairing timeout')), 6000)
-      deadline.unref?.()
+      // D17: declare done BEFORE the timer registration — the deadline closure references done,
+      // and the old declaration order only worked because timers never fire synchronously
+      // (TDZ-by-luck: any future synchronous-deadline refactor would throw ReferenceError).
+      let deadline = null
       const done = (fn, v) => {
-        clearTimeout(deadline)
+        if (deadline) clearTimeout(deadline)
         try { client.close() } catch { /* noop */ }
         fn(v)
       }
+      // 6s fallback deadline: cleared+unref'd so a settled pair neither leaks the timer
+      // nor keeps the process alive for it.
+      deadline = setTimeout(() => done(reject, new Error('pairing timeout')), 6000)
+      deadline.unref?.()
       const closeGuard = wireCloseGuard(done, reject, 'peer closed the connection before the pairing code was answered')
       client.on('paired', (r) => { em.emit('paired-outbound', { peer: peer.deviceId }); closeGuard.doneG(resolve, { secret: r.secret, peer }) })
       client.on('rejected', () => closeGuard.doneG(reject, new Error('pairing code rejected by peer')))
@@ -79,13 +83,15 @@ function createPairingClient({ peers, deviceId, name, em, getListenPort }) {
         // The peer holds the request open for its own 60s confirm window; outlast it slightly.
         timeoutMs: PAIR_CONFIRM_TIMEOUT_CLIENT_MS,
       })
-      const deadline = setTimeout(() => done(reject, new Error('pairing request timed out')), PAIR_CONFIRM_TIMEOUT_CLIENT_MS)
-      deadline.unref?.()
+      // D17: done declared before the deadline timer (see pairWith) — no TDZ-by-luck.
+      let deadline = null
       const done = (fn, v) => {
-        clearTimeout(deadline)
+        if (deadline) clearTimeout(deadline)
         try { client.close() } catch { /* noop */ }
         fn(v)
       }
+      deadline = setTimeout(() => done(reject, new Error('pairing request timed out')), PAIR_CONFIRM_TIMEOUT_CLIENT_MS)
+      deadline.unref?.()
       const closeGuard = wireCloseGuard(done, reject, 'peer closed the connection before the pairing request was answered')
       client.on('paired', (r) => {
         em.emit('pair-accepted', { host, port: targetPort })

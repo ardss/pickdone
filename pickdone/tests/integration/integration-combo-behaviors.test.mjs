@@ -37,10 +37,10 @@ test('integration: addTodo trims content and keeps desc verbatim', () => {
   assert.equal(t.taskDescribe, '保留 描述')
 })
 
-test('integration: addTodo priority=3 infers important=1 (Eisenhower default)', () => {
+test('integration: addTodo keeps important independent of priority at create (App addTodo parity, coupling is edit-only)', () => {
   const t = lib.addTodo({ content: content('重要推断'), date: 'tomorrow', priority: 3 })
   assert.equal(t.priority, 3)
-  assert.equal(t.important, 1)
+  assert.equal(t.important, 0)
   const t2 = lib.addTodo({ content: content('普通'), date: 'tomorrow', priority: 1 })
   assert.equal(t2.important, 0)
 })

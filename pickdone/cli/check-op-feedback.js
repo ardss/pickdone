@@ -38,7 +38,6 @@ const UPDATE_FIELDS_ALLOWLIST = [
   'DayDeck.vue', // card-stack drag to change day (moveWithUndo)
   'CalendarView.vue', // event drag / page-flip compensation / time-block drag (all moveWithUndo or drag exemption + toast)
   'calendarOptions.js', // extracted from CalendarView.vue (pure move, aaf510c5): eventDrop / page-flip writes all inside moveWithUndo (drag gesture)
-  'EditPanel.vue', // edit panel autosave (queued debounce, save echoes back)
   'TodoBoxView.vue', // batch move-to-today / recategorize (batchMoveWithUndo) + restore (confirm-box context)
   'categoryDelete.js', // D6: shared category-delete exit — reassignment writes run inside the undo-toast flow (whole delete is one undoable step)
   'CategoryView.vue', // expired move-to-today (rescheduleExpired+batchMoveWithUndo; only the revertOf callback here)

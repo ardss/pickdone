@@ -18,28 +18,17 @@ const log = require('electron-log')
 require('./log-isolation') // test isolation: redirect electron-log file transport into TODO_DB_DIR/TODO_USER_DATA_DIR
 const mergeCore = require('../../shared/sync-core/merge.mjs')
 // Phase-3 (docs/refactor-command-bus.md): buffer drain routes read their op from the manifest
-// so the engine's bulk surfaces stay census-tied to the single command table. The engine still
-// applies rows DIRECTLY (peer-carried LWW stamps — see the gate's sync-ingress exemption for
-// this file); the manifest is used for dispatch naming only, never for stamping.
+// so the engine's bulk surfaces stay census-tied to the single command table. The engine still // applies rows DIRECTLY (peer-carried LWW stamps — see the gate's sync-ingress exemption for // this file); the manifest is used for dispatch naming only, never for stamping.
 const manifest = require('./command-manifest')
-// Arch review 2026-09-22 rec #3: the ingress clamp window is the SHARED constant — the same
-// window/semantics as the command-bus explicit-stamp clamp (see stamp-clamp.js).
+// Arch review 2026-09-22 rec #3: the ingress clamp window is the SHARED constant — the same // window/semantics as the command-bus explicit-stamp clamp (see stamp-clamp.js).
 const { STAMP_CLAMP_MS } = require('./stamp-clamp')
 const { SYNC_OPLOG_KEEP, oplogKeepLimit } = require('./db-oplog') // D3 2026-09-24: oplog page size derives from the ring retention (was bare 10000s)
-// Arch review 2026-09-22 rec #1 (twin-door convergence): flush/ingress WRITE sites route
-// through an injected bus built on top of THIS state's db surface (createBus is exported for
-// exactly this). The bus's dbCall is state.db.call, so mock-driven unit suites keep their
-// recording surface; the hookless instance preserves the ingress contract (no ls-mirror kick,
-// no local re-stamping — every write passes { preserveStamp: true }, which means the bus never
-// MINTS a stamp; an explicit stamp beyond the shared skew window is still clamped, mirroring
-// clampSkew's ingress normalization — see command-bus.js stampPayload).
+// Arch review 2026-09-22 rec #1 (twin-door convergence): flush/ingress WRITE sites route // through an injected bus built on top of THIS state's db surface (createBus is exported for // exactly this). The bus's dbCall is state.db.call, so mock-driven unit suites keep their
+// recording surface; the hookless instance preserves the ingress contract (no ls-mirror kick, // no local re-stamping — every write passes { preserveStamp: true }, which means the bus never // MINTS a stamp; an explicit stamp beyond the shared skew window is still clamped, mirroring // clampSkew's ingress normalization — see command-bus.js stampPayload).
 const { createBus } = require('./command-bus')
 
-// Manifest keys of the buffered bulk commands, in exact flush order (order is load-bearing:
-// todos first so a same-round todo+plan move lands coherently, tombstone-heavy buffers early).
-// opOf() throws on a manifest drift instead of silently skipping a buffer.
-const FLUSH_ROUTE_COMMANDS = [
-  ['todos', 'todo.putMany'],
+// Manifest keys of the buffered bulk commands, in exact flush order (order is load-bearing: // todos first so a same-round todo+plan move lands coherently, tombstone-heavy buffers early). // opOf() throws on a manifest drift instead of silently skipping a buffer.
+const FLUSH_ROUTE_COMMANDS = [ ['todos', 'todo.putMany'],
   ['settings', 'setting.putMany'],
   ['tomatoes', 'tomato.appendMany'],
   ['categories', 'category.putMany'],
@@ -52,9 +41,7 @@ const flushRoutes = FLUSH_ROUTE_COMMANDS.map(([buf, cmd]) => {
   return { buf, op: row.op, cmd }
 })
 
-// Hydration layer (entity classification + per-pass caches + hydrateRow) lives in
-// sync-apply-hydrate.js (structure-size ratchet, verbatim move) — re-exported below so the
-// bootstrap and the test harness keep their single require surface.
+// Hydration layer (entity classification + per-pass caches + hydrateRow) lives in // sync-apply-hydrate.js (structure-size ratchet, verbatim move) — re-exported below so the // bootstrap and the test harness keep their single require surface.
 const {
   SYNCABLE_ENTITIES,
   SECURITY_LOCK_KEY,
@@ -89,9 +76,7 @@ function busWrite (state, op, payload) {
 }
 
 const META_CONFLICT_BACKUP_CAP = 20
-// MS-collision fix (2026-09-26): process-lifetime monotonic counter mixed into backup-key /
-// conflict-copy-id suffixes so two mints within the same millisecond can never collide
-// (Date.now() alone did). Monotonic per process: preserves sort order for the count-based prune.
+// MS-collision fix (2026-09-26): process-lifetime monotonic counter mixed into backup-key / // conflict-copy-id suffixes so two mints within the same millisecond can never collide // (Date.now() alone did). Monotonic per process: preserves sort order for the count-based prune.
 let backupSeq = 0
 // rowContentDiffers lives in sync-apply-content.js (structure-size ratchet, verbatim move):
 const { rowContentDiffers } = require('./sync-apply-content')
@@ -104,9 +89,7 @@ const { rowContentDiffers } = require('./sync-apply-content')
  * account never changes while the node runs.
  */
 // D11 finding 16: durable memo for the discovered account id. The in-memory `state.localUserId`
-// dies with the process — an empty todos table on the NEXT session (user deleted every task, or a
-// restore landed before the first sync round) used to fall back to the 840001 offline default even
-// though this device's real account id was known before. 'sync.*' is machine-local
+// dies with the process — an empty todos table on the NEXT session (user deleted every task, or a // restore landed before the first sync round) used to fall back to the 840001 offline default even // though this device's real account id was known before. 'sync.*' is machine-local
 // (shared/machine-local-keys.mjs), so the memo never egresses.
 const LOCAL_USER_ID_META_KEY = 'sync.localUserId'
 
@@ -151,13 +134,9 @@ function persistLocalUserId (state, id) {
  * payload" rule holds only on the non-skew path (row returned verbatim).
  */
 const SKEW_CLAMP_MS = STAMP_CLAMP_MS
-// P3 (wave-A, 2026-09-21): a non-numeric/garbage stamp (NaN, strings that don't parse) reads as
-// epoch 0 for comparison so a poisoned payload can never propagate NaN into the LWW comparisons
-// (NaN > limit is false, which used to let a NaN stamp sail through untouched).
+// P3 (wave-A, 2026-09-21): a non-numeric/garbage stamp (NaN, strings that don't parse) reads as // epoch 0 for comparison so a poisoned payload can never propagate NaN into the LWW comparisons // (NaN > limit is false, which used to let a NaN stamp sail through untouched).
 const stampNum = v => { const n = Number(v); return Number.isFinite(n) ? n : 0 }
-// P1-1 (wave-A, 2026-09-21): the future detection now includes the PAYLOAD stamps too — a
-// skewed/malicious peer could push a category/tomato/plan row whose top-level comparison keys
-// look sane while `data.updatedAt` carried a year-2100 stamp; the row would land with that
+// P1-1 (wave-A, 2026-09-21): the future detection now includes the PAYLOAD stamps too — a // skewed/malicious peer could push a category/tomato/plan row whose top-level comparison keys // look sane while `data.updatedAt` carried a year-2100 stamp; the row would land with that
 // future age baked in and win LWW against every honest edit forever.
 function clampSkew (row) {
   if (!row || typeof row !== 'object') return row
@@ -176,12 +155,8 @@ function clampSkew (row) {
     const dd = { ...d }
     if (stampNum(dd.updateTime) > limit) dd.updateTime = now
     if (stampNum(dd.deletedAt) > limit) dd.deletedAt = now
-    // Bus-stamps fix (2026-09-22): tomato/plan/filter/category hydrate their data as the RAW
-    // ROW, which carries the SAME `updatedAt` column the comparison key was taken from — the
-    // flush write path persists that data stamp verbatim (tomatoAppendMany / planAddMany keep
-    // an explicit positive updatedAt; the category branch prefers d.updatedAt). Clamping only
-    // the top-level keys used to let the winner land with a future data.updatedAt, which the
-    // next egress hydrate then pushed to every peer as the row's age.
+    // Bus-stamps fix (2026-09-22): tomato/plan/filter/category hydrate their data as the RAW // ROW, which carries the SAME `updatedAt` column the comparison key was taken from — the // flush write path persists that data stamp verbatim (tomatoAppendMany / planAddMany keep
+    // an explicit positive updatedAt; the category branch prefers d.updatedAt). Clamping only // the top-level keys used to let the winner land with a future data.updatedAt, which the // next egress hydrate then pushed to every peer as the row's age.
     if (stampNum(dd.updatedAt) > limit) dd.updatedAt = now
     // P3: normalize present-but-garbage stamp fields on the clamp path (the non-skew path
     // still returns the row verbatim — see the contract comment above).
@@ -235,20 +210,42 @@ function hasEquivalentConflictCopy (state, baseId, loserData) {
  * the apply (the LWW winner still lands). Backup keys are machine-local (see the
  * isMachineLocalMetaKey filter) so they never sync back to the peer.
  */
+/** D17: age order for meta-conflict-backup keys of one base key — by PARSED (ts36, seq36), not
+ *  raw string order. Within a single millisecond the base-36 counter crosses a digit boundary
+ *  (...'y','z','10','11'...) and lexicographic sort ranks '10' BELOW 'z', so the NEWEST backup
+ *  sorted as if oldest and the prune deleted the freshest loser. Unparsable/legacy keys sort
+ *  oldest (string order among themselves) so they are pruned first, never the parsed newest. */
+function compareMetaBackupKeys (a, b) {
+  const pa = parseMetaBackupKeySuffix(a)
+  const pb = parseMetaBackupKeySuffix(b)
+  if (pa && pb) return (pa.ts - pb.ts) || (pa.seq - pb.seq)
+  if (pa !== pb) return pa ? 1 : -1 // parsed keys are always newer than unparsable ones
+  return String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0
+}
+/** `<prefix><key>.<ts36>-<seq36>` → { ts, seq } (numeric), or null when the suffix does not parse. */
+function parseMetaBackupKeySuffix (k) {
+  const m = /\.([0-9a-z]+)-([0-9a-z]+)$/.exec(String(k))
+  if (!m) return null
+  const ts = parseInt(m[1], 36)
+  const seq = parseInt(m[2], 36)
+  return (Number.isFinite(ts) && Number.isFinite(seq)) ? { ts, seq } : null
+}
+
 function writeMetaConflictBackup (state, key, value) {
   try {
     // MS-collision fix (2026-09-26): the key used to be `.<ts36>` alone — two conflict backups
     // of the SAME base key minted within one millisecond (bulk apply loop) produced identical
     // keys and the second setMeta silently OVERWROTE the first (the earlier losing value was
-    // lost). A module-level monotonic counter appended after the ts keeps the lexicographic
-    // prune order (ts36 dominates across milliseconds; the counter orders within one) while
-    // making every key unique.
+    // lost). A module-level monotonic counter appended after the ts keeps the mint order
+    // (ts36 dominates across milliseconds; the counter orders within one) while making every
+    // key unique. Prune order itself is the PARSED numeric compare above (D17) — the raw string
+    // sort broke at the base-36 counter digit rollover.
     const ts36 = `${Date.now().toString(36)}-${(backupSeq++).toString(36)}`
     const backupKey = `${META_CONFLICT_BACKUP_PREFIX}${key}.${ts36}`
     busWrite(state, 'setMeta', [backupKey, JSON.stringify({ key, value, lostAt: Date.now() })])
     // Prune: keep only the latest META_CONFLICT_BACKUP_CAP backups per base key.
     const prefix = `${META_CONFLICT_BACKUP_PREFIX}${key}.`
-    const keys = (state.db.call('listMetaKeys') || []).filter(k => String(k).startsWith(prefix)).sort()
+    const keys = (state.db.call('listMetaKeys') || []).filter(k => String(k).startsWith(prefix)).sort(compareMetaBackupKeys)
     for (const old of keys.slice(0, Math.max(0, keys.length - META_CONFLICT_BACKUP_CAP))) {
       try { busWrite(state, 'deleteMeta', old) } catch { /* prune is best-effort */ }
     }
@@ -862,6 +859,8 @@ module.exports = {
   SECURITY_LOCK_KEY,
   META_CONFLICT_BACKUP_PREFIX,
   META_CONFLICT_BACKUP_CAP,
+  compareMetaBackupKeys, // D17: exported for unit tests (prune age order)
+  parseMetaBackupKeySuffix,
   // 2026-09-26 poison-row quarantine: where a failed flush parks its dropped rows.
   META_FLUSH_QUARANTINE_PREFIX,
   // Exported (2026-09-19): lan-sync-bootstrap destructures this for allRows()/hydration skips —
