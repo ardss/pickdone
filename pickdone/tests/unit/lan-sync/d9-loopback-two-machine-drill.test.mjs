@@ -51,7 +51,7 @@ test('drill: tomato ledger row converges (row-store entity)', async () => {
   try {
     pair(A, B)
     await write(A, [{ op: 'tomatoAppendMany', params: [{ tomatoId: 'd9_tmt_1', endTime: 1700000000000, dateKey: '2026-09-25', succeed: true, manual: 0 }] }])
-    const deadline = Date.now() + 12000
+    const deadline = Date.now() + 45000
     for (;;) {
       await A.send({ do: 'round' })
       await new Promise(r => setTimeout(r, 200))

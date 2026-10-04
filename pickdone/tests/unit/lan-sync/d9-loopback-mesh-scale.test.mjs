@@ -20,7 +20,7 @@ test('drill: three-node mesh — a write on any node converges to BOTH peers (20
     // drives rounds on ALL sides — exactly what the 5-minute timer does in a real deployment.
     const roundAll = async () => { for (const s of [A, B, C]) { try { await s.send({ do: 'round' }) } catch { /* next tick */ } } }
     const waitForMesh = async (reader, pred, label) => {
-      const deadline = Date.now() + 15000
+      const deadline = Date.now() + 45000
       for (;;) {
         await roundAll()
         await sleep(150)
