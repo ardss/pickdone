@@ -5,19 +5,17 @@
  * sync-round state machine.
  *
  * Round protocol (both directions, over transport.js after auth):
- *   A -> B: segments-chunk* {segments, final}    push my pending segments (bounded chunks;
- *                                                the last chunk carries final:true and the
- *                                                receiver acks ONCE at final)
+ *   A -> B: segments-chunk* {segments, final}    push my pending segments (bounded chunks; the
+ *                                                last chunk carries final:true; receiver acks once)
  *   B -> A: segments-chunk* {segments, final}    B's own segments (pull, same chunking)
  *   B -> A: ack {applied, rejected, appliedToSeq?, oldestSeq?}
  *   A -> B: ack {applied, rejected, appliedToSeq?}   acks B's response chunks
  *   A -> B: snapshot-request {requesterMaxSeq?} when B pruned past A's watermark
- *   B -> A: snapshot-chunk* {index, totalChunks, rows} + snapshot-end {totalChunks, totalRows, cursor}
+ *   B -> A: snapshot-chunk* + snapshot-end {totalChunks, totalRows, cursor}
  *           (snapshot-end with totalChunks:0/totalRows:0 is a VALID terminal: empty live state)
  *   B -> A: snapshot-busy {}    server role is already serving this peer's snapshot — retry later
- *   B -> A: snapshot-error {reason}  the snapshot could not be built (e.g. a single row exceeds
- *           the chunk budget) — a clean terminal for the requesting round, never re-armed this
- *           session unless the peer's increments start applying again
+ *   B -> A: snapshot-error {reason}  the snapshot could not be built — a clean terminal for the
+ *           requesting round, never re-armed this session unless the peer's increments apply again
  *
  * Merge semantics are NOT implemented here — ingestSegment/ingestSnapshot are
  * caller callbacks that feed shared/sync-core (merge.mjs / segment.mjs), per
@@ -165,17 +163,12 @@ function createLanSyncNode(opts) {
   // pull response starts past them. Unknown peer -> full window (the old behavior).
   const serverPullAck = new Map()
 
-  // Snapshot-request bookkeeping (all in-memory, per peer):
-  //   pullWatermarkBy — highest seq I have definitively received from that peer (advanced to the
-  //     sender's cursor only after a COMPLETE snapshot; increments carry it via trigger checks).
-  //   needSnapshot — the trigger fired (peer pruned past my watermark and my state is not
-  //     progressing): the NEXT round opens with a snapshot-request instead of failing silently.
-  //   clientSnapshotBusy / serverSnapshotBusy — one snapshot transfer in flight per peer PER
-  //     ROLE (never overlap within a role). Deliberately separate sets: a single shared set made
-  //     the client's finish() cancel the server role's invariant, and made a same-pair mutual
-  //     snapshot exchange deadlock until the 120s round deadline.
-  //   snapshotFatal — the peer answered snapshot-error (e.g. oversized row): do NOT re-arm the
-  //     trigger this session unless the peer's increments start applying again (state changed).
+  // Snapshot-request bookkeeping (all in-memory, per peer): pullWatermarkBy (highest seq
+  // definitively received; advanced only after a COMPLETE snapshot), needSnapshot (trigger fired:
+  // next round opens with a snapshot-request), clientSnapshotBusy / serverSnapshotBusy (one
+  // transfer per peer PER ROLE — a shared set deadlocked mutual exchanges), snapshotFatalCount /
+  // snapshotErrorCooldown (snapshot-error bookkeeping: do NOT re-arm the trigger this session
+  // unless the peer's increments start applying again).
   const pullWatermarkBy = new Map() // deviceId -> seq
   const needSnapshot = new Set()
   // Wave-B P1: FORCE-armed snapshot triggers. A flush-failed segment (receiver dropped rows it
@@ -210,6 +203,9 @@ function createLanSyncNode(opts) {
       return null
     }
   let server = null
+  // D20-C5: start() is idempotent — a second start() used to orphan the first listening server
+  // (it kept the port open with nobody left to close it, and the replacement could EADDRINUSE).
+  let serverStarted = false
   let stopped = false
   let lastRoundAt = null
   let lastError = null
@@ -434,12 +430,11 @@ function createLanSyncNode(opts) {
     retryTimers.set(peerId, t)
   }
 
-  /** Fix-round (2026-09-22, lan-sync-7): shared discovery re-resolution (extracted from finish's
-   *  error path so the invalid host/port EARLY-EXIT dial path gets the same self-healing). A
+  /** Fix-round (2026-09-22, lan-sync-7): discovery re-resolution on the dial failure paths. A
    *  fresh, DIFFERENT, dialable discovery record replaces the stored one, budgeted per
    *  REFIX_WINDOW_MS so a flapping dead peer still reaches hibernate. On success the retry timer
-   *  is rearmed at base backoff (fast retry) WITHOUT touching the failure streak — only a
-   *  SUCCESSFUL round on the new address resets the budget. Returns true when a re-fix happened. */
+   *  is rearmed at base backoff WITHOUT touching the failure streak — only a SUCCESSFUL round on
+   *  the new address resets the budget. Returns true when a re-fix happened. */
   function tryRefixAddress (peerId) {
     try {
       const again = typeof resolvePeerFn === 'function' ? resolvePeerFn(peerId) : null
@@ -468,6 +463,8 @@ function createLanSyncNode(opts) {
   }
 
   function startServer() {
+    if (serverStarted) return // D20-C5: already live — never orphan the first server
+    serverStarted = true
     server = createLanServer({
       port,
       host,
@@ -601,6 +598,10 @@ function createLanSyncNode(opts) {
       const now = Date.now()
       const targets = Array.from(peers.values()).filter(p => {
         if (unpairedBy.has(p.deviceId)) return false
+        // D20-C15: a peer with NO dialable host has never been addressable — dialing it would
+        // early-exit into the failure path and bill failStreak every round until hibernate.
+        // Treat it as awaiting-discovery (a re-announcement / re-fix fills the host), not a failure.
+        if (!isDialableHost(p.host)) return false
         if ((dialNotBefore.get(p.deviceId) || 0) > now) {
           // Backoff/hibernate window still open: the retry timer dials the peer when it opens.
           // Re-arm a timer when none is pending (e.g. timers were cleared) so the peer is not
@@ -659,12 +660,9 @@ function createLanSyncNode(opts) {
             // P1-3: earliest ms epoch this peer will be dialed again (backoff/hibernate window);
             // null = dialable now. Device Center can render "retrying in Xs" from it.
             nextDialAt: dialNotBefore.get(p.deviceId) || null,
-            // Push-side watermark (deviceId -> highest seq this peer acked). NOTE: the
-            // stalled-push finding report cited this line as 1142 — line numbers drift;
-            // reference getStatus().peers[].watermark by name instead.
+            // Push-side watermark (deviceId -> highest seq this peer acked); the pull-side one
+            // (last COMPLETE snapshot cursor) follows. Reference by name — line numbers drift.
             watermark: wm,
-            // Pull-side watermark: the sender cursor I recorded after my last COMPLETE snapshot
-            // from this peer (increments carry it forward between snapshots via the trigger).
             pullWatermark: pullWatermarkBy.get(p.deviceId) ?? null,
             // How many of my oplog rows this peer has NOT confirmed yet (null when unknown:
             // no getMaxSeq injector means no honest local max seq to diff against).
@@ -694,6 +692,7 @@ function createLanSyncNode(opts) {
       retryTimers.clear()
       try { discovery.stop() } catch { /* noop */ }
       if (server) await server.close()
+      serverStarted = false // D20-C5: stop() may be followed by a fresh start()
       em.emit('stopped')
     },
   }

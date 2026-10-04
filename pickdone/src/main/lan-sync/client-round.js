@@ -367,24 +367,24 @@ function createClientRound(ctx) {
           ? 'self-connection: peer entry pointed at this device and was removed'
           : 'auth rejected by peer'))
       })
-      // A socket death before the round settled must fail the round PROMPTLY (previously only a
-      // close MID-snapshot failed early — a clean FIN after our push left the round hanging for
-      // the full 120s deadline). Post-finish closes are no-ops: snapshot transfers legitimately
-      // end via snapshot-end -> finish(null) (settled) BEFORE the peer's FIN arrives, so the
-      // ordering guard keeps clean terminal paths intact.
+      // A socket death before the round settled must fail the round PROMPTLY (only a close
+      // MID-snapshot failed early before). Post-finish closes are no-ops: snapshot transfers
+      // legitimately end via snapshot-end -> finish(null) BEFORE the peer's FIN arrives.
       client.on('close', () => { if (!settled) finish(new Error('connection closed before the round completed')) })
       client.on('ready', () => {
         try {
           // push only what this peer has not confirmed yet (per-peer watermark; 0 = first contact).
-          // The backlog travels as bounded segments-chunk messages: one huge `segments` line blew
-          // past the 32MB wire cap on first sync and the round retried forever (segments-chunk.js).
+          // The backlog travels as bounded segments-chunk messages: one huge `segments` line
+          // blew past the 32MB wire cap on first sync (segments-chunk.js).
           const mine = buildSegments ? buildSegments(peerProgress.get(peer.deviceId) || 0) : []
+          // D20-C7: per-round push generation id — the receiver starts a FRESH _segPush
+          // accumulator when it changes (a previous push left unterminated must not blend).
+          const pushId = 'push_' + Math.random().toString(36).slice(2, 10)
           for (const chunk of packSegmentChunks(mine)) {
-            client.send({ type: 'segments-chunk', segments: chunk.segments, final: chunk.final })
+            client.send({ type: 'segments-chunk', segments: chunk.segments, final: chunk.final, pushId })
           }
           // Deterministic trigger from the previous round: my increments are gone on the peer —
-          // request a full snapshot INSTEAD of another futile incremental round. One transfer per
-          // peer at a time (clientSnapshotBusy); the round now ends at snapshot-end, not at the ack.
+          // request a full snapshot INSTEAD of a futile incremental round (one per peer at a time).
           if (needSnapshot.has(peer.deviceId) && !clientSnapshotBusy.has(peer.deviceId)) {
             needSnapshot.delete(peer.deviceId)
             // Wave-B P1: the request actually going out is what consumes the force-arm — a round

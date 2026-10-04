@@ -3,12 +3,9 @@
 /**
  * LAN sync discovery: mDNS advertise + browse for pickdone-sync._tcp peers.
  *
- * Primary path uses the pure-JS `bonjour-service` package. If the package is
- * unavailable (offline install), this module transparently falls back to a
- * minimal UDP broadcast discovery on port 58471 (same payload shape).
- *
- * Peers are deduped by deviceId; re-seeing a known deviceId refreshes its
- * host/port/lastSeen instead of emitting a duplicate onFound.
+ * Primary path uses the pure-JS `bonjour-service` package; if unavailable (offline install)
+ * it falls back to a minimal UDP broadcast discovery (same payload shape). Peers are deduped
+ * by deviceId; re-seeing a known id refreshes host/port/lastSeen instead of re-emitting found.
  *
  * Pure Node (dgram + optional bonjour-service), no Electron imports. CommonJS.
  */
@@ -22,12 +19,8 @@ const SERVICE_TYPE = 'pickdone-sync'
 // enforced, but stays consistent with transport.js PROTO_VER semantics.
 const PROTO_VER = 2
 // UDP fallback port. WinNAT reserved ranges DRIFT BETWEEN REBOOTS and can swallow 58471 whole
-// (bind EACCES; 2026-09-23 verified live: excluded range 58439-58538) — same environment failure
-// class as the pickFreePort fix (c2e17f57). Candidates therefore span four discontiguous spans and
-// the first BINDABLE port wins (bind-failure -> next candidate, never a silent dead channel).
-// LAN_SYNC_UDP_FALLBACK_PORT pins a specific port as a manual escape hatch for fragmented networks
-// (all peers on a LAN must broadcast on the same port; the deterministic candidate order makes
-// healthy hosts converge on 58471 anyway).
+// (bind EACCES) — candidates therefore span four discontiguous spans and the first BINDABLE port
+// wins. LAN_SYNC_UDP_FALLBACK_PORT pins a specific port as a manual escape hatch.
 const FALLBACK_PORT = 58471 // canonical port; first candidate (kept exported for compat)
 const FALLBACK_PORT_CANDIDATES = [
   ...(Number(process.env.LAN_SYNC_UDP_FALLBACK_PORT) > 0 ? [Number(process.env.LAN_SYNC_UDP_FALLBACK_PORT)] : []),
@@ -36,7 +29,10 @@ const FALLBACK_PORT_CANDIDATES = [
   44071,
   20071,
 ]
-const FALLBACK_INTERVAL_MS = 2000
+// Injectable for tests (LAN_SYNC_UDP_FALLBACK_INTERVAL_MS); production stays 2000ms.
+const FALLBACK_INTERVAL_MS = Number(process.env.LAN_SYNC_UDP_FALLBACK_INTERVAL_MS) > 0
+  ? Number(process.env.LAN_SYNC_UDP_FALLBACK_INTERVAL_MS)
+  : 2000
 // Bounded bookkeeping (round-3 review): a UDP/mDNS flood of forged deviceIds must not grow the
 // peer map without limit. Beyond MAX_PEERS the least-recently-seen peer is evicted.
 const MAX_PEERS = 64
@@ -56,17 +52,12 @@ try {
 }
 
 /* ---------- Round-1 P0 (2026-09-21): dialable-address selection ----------
- * mDNS/UDP advertisements carry EVERY interface address of the advertising machine. Picking
- * addresses[0] live-dialed a temporary IPv6, a scope-less link-local, or a VMware NAT IP — all
- * timing out while the peer sat reachable one hop away. Selection rules:
- *   - drop link-local IPv6 (fe80::) WITHOUT a %scope id (unroutable) and IPv4 link-local 169.254.*;
- *   - Round-2 P1 (2026-09-21): the hardcoded 192.168.111.* "virtual range" was site-specific
- *     (this dev machine's VMware NAT) and wrongly hard-rejected real peers on other LANs using
- *     that range. Removed: scoring is now purely topological — an IPv4 sharing a /24 prefix with
- *     an active non-internal local interface scores highest; everything else stays ALLOWED at the
- *     lowest positive score (rememberPeer's dialability check + dial-failure budget still guard).
- *   - a scoped link-local IPv6 (fe80::x%if) has its %scope stripped for comparison: the scope id
- *     is the ADVERTISER's interface index, meaningless for dialing from here — score lowest. */
+ * Advertisements carry EVERY interface address; picking addresses[0] live-dialed temp IPv6 /
+ * link-local / NAT IPs. Rules: drop link-local IPv4 169.254.* and scope-less fe80:: (unroutable);
+ * scoring is purely topological — an IPv4 sharing a /24 prefix with an active local interface
+ * scores highest, everything else stays ALLOWED at the lowest positive score (rememberPeer's
+ * dialability check + dial-failure budget still guard). A scoped fe80::x%if has its %scope
+ * stripped (the scope id is the ADVERTISER's interface index) and scores lowest. */
 function hostScore(host) {
   let s = String(host || '')
   if (!s) return -1
@@ -113,10 +104,9 @@ function pickAdvertisedAddress(addresses, fallbackHost) {
 /** True when a single host string is dialable (used to sanitize stored peer records). */
 function isDialableHost(host) { return hostScore(host) >= 0 }
 
-/** Round-5 P1: stricter gate for MANUAL peer entry. hostScore alone treats every non-IP string
- *  as a hostname (score 2), so "..." or "a..b" passed as "dialable" and got persisted, failing
- *  every dial forever. A manual entry must be syntactically real — dotted IPv4, IPv6 literal,
- *  or RFC-1123-style hostname labels — AND dialable per the discovery layer's own rules. */
+/** Round-5 P1: stricter gate for MANUAL peer entry — hostScore alone treats every non-IP string
+ *  as a hostname, so junk like "..." got persisted and failed every dial forever. Must be
+ *  syntactically real (IPv4 / IPv6 literal / RFC-1123 hostname) AND dialable. */
 function isPlausibleHost(host) {
   const s = String(host || '').trim()
   if (!s) return false
@@ -168,12 +158,10 @@ function createDiscovery() {
       lastSeen: Date.now(),
     }
     if (!peer.host || !isDialableHost(peer.host)) return null
-    // Wave-B P2-3: route EVERY address change through the same scoring as mDNS. The UDP fallback
-    // announces only rinfo.address (no addresses list), so a multi-NIC peer's UDP sightings used
-    // to OVERWRITE the better-scored mDNS address with a worse one (and vice versa) every few
-    // seconds — address flapping that burned rememberPeer's dial-failure/re-pair budget. A newly
-    // scored candidate now only replaces the stored host when it scores STRICTLY higher — ties
-    // keep the incumbent so alternating equal-class announcements cannot flap the address.
+    // Wave-B P2-3: route EVERY address change through the same scoring as mDNS — the UDP
+    // fallback announces only rinfo.address, so multi-NIC peers flapped their address (and
+    // burned the dial-failure budget) every few seconds. A new candidate replaces the stored
+    // host only when it scores STRICTLY higher; ties keep the incumbent.
     if (existing && existing.host && isDialableHost(existing.host) && hostScore(peer.host) <= hostScore(existing.host)) {
       peer.host = existing.host
     }
@@ -214,22 +202,20 @@ function createDiscovery() {
   function startUdpFallback({ deviceId, name, port }) {
     candidateIdx = 0
     udpBound = false
+    // D20-C4: set by the post-bind 'error' handler; one failed sweep per next sweep.
+    let sweepError = false
     const payload = Buffer.from(JSON.stringify({ deviceId, name: name || deviceId, port, protoVer: PROTO_VER }))
     // A fresh socket per attempt: a socket whose bind failed is closed and cannot be re-bound.
     const tryBind = () => {
       if (udp) { try { udp.close() } catch { /* noop */ } }
       // NO reuseAddr: on Windows SO_REUSEADDR lets a later bind SILENTLY succeed over an
-      // existing socket, which defeats the whole candidate-walk contract — two instances (or a
-      // test's port blocker) co-bind one candidate, no EADDRINUSE ever fires, and the
-      // close-on-total-bind-failure path (D15 C5) becomes unreachable while both channels
-      // broadcast on the same port. UDP has no TIME_WAIT, so unicast rebinding after a crash
-      // needs no reuseAddr either. A taken port must be a REAL EADDRINUSE.
+      // existing socket, defeating the candidate-walk contract and D15 C5's close-on-total-
+      // failure path. A taken port must be a REAL EADDRINUSE (UDP has no TIME_WAIT).
       udp = dgram.createSocket({ type: 'udp4' })
       attachUdpHandlers()
-      // 2026-09-28: renamed (was `port`, shadowing the destructured TCP port argument) — the
-      // fallback used to broadcast ONLY to its own bound candidate port, so a host whose
-      // candidate index landed on 39071 while its peer listened on 58471 never heard anything:
-      // silent discovery partition. Fan out to EVERY candidate port + the advertised TCP port.
+      // 2026-09-28 (was `port`, shadowing the destructured TCP arg): the fallback used to
+      // broadcast ONLY to its own bound candidate port — a silent discovery partition. Fan
+      // out to EVERY candidate port + the advertised TCP port.
       const bindPort = FALLBACK_PORT_CANDIDATES[candidateIdx++]
       udp.bind(bindPort, () => {
         udpBound = true
@@ -237,32 +223,49 @@ function createDiscovery() {
         udp.setBroadcast(true)
         const targets = [...new Set(FALLBACK_PORT_CANDIDATES
           .concat(Number.isInteger(port) && port > 0 ? [port] : []))]
-        // D14 C9 (2026-10-02): a socket that dies AFTER bind (OS removed the interface, handle
-        // reclaimed) used to leave this interval sending into the closed socket — every 2s a sync
-        // throw + warn for the rest of the process lifetime. Count consecutive failed sweeps;
-        // after 3 in a row, declare the advertise channel dead: clear the interval and warn ONCE
-        // with an explicit surface (re-startAdvertising recreates the socket + interval).
+        // D14 C9 dead-channel guard: 3 consecutive failed sweeps declare the channel dead
+        // (clear interval, close socket — D15 C5). D20-C4: ASYNC send errors (callback err,
+        // dropped by the old `() => {}`) AND post-bind socket 'error' events (sweepError,
+        // set in attachUdpHandlers) count as failed sweeps too.
         let failedSweeps = 0
+        const killChannel = () => {
+          if (udpTimer) { clearInterval(udpTimer); udpTimer = null }
+          udpBound = false
+          // D15 C5: a declared-dead channel must not leak the socket — close it too. Restarting
+          // advertising (startAdvertising) recreates socket + interval from scratch.
+          try { udp.close() } catch { /* noop */ }
+          udp = null
+          try { require('electron-log').warn('[LanSync] UDP fallback advertise channel dead (3 consecutive failed sweeps) — socket closed, advertise interval stopped; restart advertising to recreate it') } catch { /* noop */ }
+        }
         udpTimer = setInterval(() => {
+          let pending = 0
           let failed = false
-          for (const target of targets) {
-            try { udp.send(payload, target, '255.255.255.255', () => {}) } catch (e) {
-              failed = true
+          let settled = false
+          const settle = () => {
+            if (settled || pending > 0) return
+            settled = true
+            failedSweeps = (failed || sweepError) ? failedSweeps + 1 : 0
+            sweepError = false
+            if (failedSweeps >= 3) killChannel()
+          }
+          const sendAd = (target) => {
+            pending++
+            try {
+              udp.send(payload, target, '255.255.255.255', (err) => {
+                if (err) failed = true // D20-C4: async send failure counts as a failed sweep
+                pending--
+                settle()
+              })
+            } catch (e) {
+              failed = true // sync throw (socket already dead) — the original D14 C9 path
               try { require('electron-log').warn('[LanSync] UDP fallback send failed:', e && e.message) } catch { /* noop */ }
               require('../log-isolation') // test isolation: redirect electron-log file transport into TODO_DB_DIR/TODO_USER_DATA_DIR
+              pending--
+              settle()
             }
           }
-          failedSweeps = failed ? failedSweeps + 1 : 0
-          if (failedSweeps >= 3) {
-            if (udpTimer) { clearInterval(udpTimer); udpTimer = null }
-            udpBound = false
-            // D15 C5 (2026-10-03): a declared-dead channel must not leak the socket — close it
-            // too (stop() is not guaranteed to run after an in-place channel death). restart
-            // advertising (startAdvertising) recreates socket + interval from scratch.
-            try { udp.close() } catch { /* noop */ }
-            udp = null
-            try { require('electron-log').warn('[LanSync] UDP fallback advertise channel dead (3 consecutive failed sweeps) — socket closed, advertise interval stopped; restart advertising to recreate it') } catch { /* noop */ }
-          }
+          for (const target of targets) sendAd(target)
+          settle()
         }, FALLBACK_INTERVAL_MS)
         udpTimer.unref?.()
       })
@@ -282,13 +285,10 @@ function createDiscovery() {
         // evicts the LEAST recently active sources first.
         if (lastUpsertByIp.has(ip)) lastUpsertByIp.delete(ip)
         lastUpsertByIp.set(ip, now)
-        // D6 P2 (2026-09-21): the old `size >= 1024 → clear()` was self-destructing under exactly
-        // the flood it guarded against — a spoofed-source cycler filled the map, the bulk clear
-        // reset EVERY legitimate peer's rate limit, and the next real announcement wave all
-        // passed the gate at once (burst amplification). Replace with a bounded LRU sweep:
-        // first drop entries older than the interval window (they are no longer rate-limiting
-        // anything), then evict least-recently-active entries one by one until under the cap.
-        // A bulk clear never happens; honest peers keep their limits and spoofed entries age out.
+        // D6 P2 (2026-09-21): the old `size >= 1024 → clear()` reset EVERY legitimate rate
+        // limit under a spoofed-source flood (burst amplification). Bounded LRU sweep instead:
+        // drop entries older than the interval window, then evict least-recently-active one by
+        // one until under the cap — honest peers keep their limits, spoofed entries age out.
         if (lastUpsertByIp.size >= UDP_IP_TRACK_MAX) {
           for (const [k, t] of lastUpsertByIp) {
             if (now - t >= UDP_UPSERT_MIN_INTERVAL_MS) lastUpsertByIp.delete(k)
@@ -299,9 +299,8 @@ function createDiscovery() {
             lastUpsertByIp.delete(oldest)
           }
         }
-        // Round-2 P1: the UDP fallback payload carries NO addresses — the sender's real IP is
-        // rinfo.address, so pass it as the candidate host. (It used to fall through to the
-        // '127.0.0.1' placeholder and every UDP-discovered peer was dialed on loopback.)
+        // Round-2 P1: the UDP fallback carries NO addresses — the sender's real IP is
+        // rinfo.address; pass it as the candidate host (never the loopback placeholder).
         upsertPeer({ ...JSON.parse(buf.toString('utf8')), host: (rinfo && rinfo.address) || undefined })
       } catch { /* malformed broadcast */ }
     })
@@ -333,6 +332,7 @@ function createDiscovery() {
         }
         return
       }
+      if (udpBound) sweepError = true // D20-C4: post-bind errors feed the sweep budget
       // Best-effort fallback, but never silent: an unlogged bind/send failure made the whole
       // discovery channel look healthy while discovering nothing. Keep the socket alive (a later
       // EADDRINUSE from a second instance must not kill the app); just leave a trace.

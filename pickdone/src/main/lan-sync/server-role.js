@@ -4,12 +4,10 @@
  * Server-role message handler (extracted from lan-sync/index.js, round-3 review line ratchet).
  *
  * Handles the messages a CONNECTED PEER sends to OUR server role after auth:
- *   segments-chunk*  the peer's push: ingest per chunk, ack once at final (with appliedToSeq in
- *                    the SENDER's seq space + oldestSeq advertisement), then stream our own
- *                    response pull — starting past what the peer already acked (serverPullAck),
- *                    full window for unknown peers
- *   ack              the peer acking OUR push: record appliedToSeq (OUR seq space) so the NEXT
- *                    round's pull response is incremental
+ *   segments-chunk*  the peer's push: ingest per chunk, ack once at final (appliedToSeq in the
+ *                    SENDER's seq space + oldestSeq advertisement), then stream our own response
+ *                    pull — starting past what the peer already acked (serverPullAck)
+ *   ack              the peer acking OUR push: record appliedToSeq (OUR seq space)
  *   snapshot-request stream the live state as bounded snapshot-chunks + snapshot-end trailer,
  *                    with a per-peer busy invariant (snapshot-busy) and a transfer ceiling
  *                    (snapshot-error 'too-large')
@@ -53,44 +51,45 @@ function createServerRoleHandler(deps) {
   return function handleServerMessage(peer, msg, socket, sendVia) {
     try {
       if (msg.type === 'segments-chunk' && Array.isArray(msg.segments)) {
-        // Push receiver: ingest per chunk (idempotent under the merge rules) and ack ONCE at
-        // the final chunk. appliedToSeq is expressed in the SENDER's seq space: the max seq
-        // among the rows the sender pushed across ALL chunks of this connection (segment rows
-        // carry the sender's oplog seq — engine buildSegments contract). The sender feeds it
-        // into buildSegments(fromSeq) against ITS OWN oplog, so reporting OUR local max seq
-        // here (the old behavior) overshot the sender's cursor whenever our oplog ran ahead
-        // of theirs — their fresh rows were then skipped every round (permanent hole with
-        // >=3 devices, watermark persisted). Empty push -> omit the field: the sender keeps
-        // its cursor (monotonic guard). oldestSeq advertises the oldest oplog seq we still
-        // RETAIN (our space): a peer whose pull watermark is below it knows its increments
-        // are pruned here and must request a snapshot (see the client trigger).
-        if (!socket._segPush) socket._segPush = { maxSeq: 0, segments: 0, flushFailedFrom: null }
+        // Push receiver: ingest per chunk (idempotent under the merge rules), ack ONCE at the
+        // final chunk. appliedToSeq is in the SENDER's seq space (the max seq among the rows
+        // pushed across ALL chunks — the sender feeds it into buildSegments(fromSeq) against
+        // ITS OWN oplog; reporting OUR local max seq overshot the sender's cursor with >=3
+        // devices — permanent holes). Empty push -> omit the field: the sender keeps its cursor.
+        // oldestSeq advertises the oldest oplog seq we RETAIN: a peer whose pull watermark is
+        // below it must request a snapshot (see the client trigger).
+        if (!socket._segPush) socket._segPush = { maxSeq: 0, segments: 0, flushFailedFrom: null, pushId: null }
+        // D20-C7: key the accumulator per PUSH GENERATION. A push whose final chunk never arrived
+        // used to merge the NEXT push's rows on the same connection into it — the eventual ack
+        // reported a BLENDED count/seq. Senders carrying a `pushId` (our client-round mints one
+        // per round) get a fresh accumulator when it changes; legacy senders (no pushId) keep
+        // the historical single-accumulator behavior.
+        const pushId = typeof msg.pushId === 'string' && msg.pushId ? msg.pushId : null
+        if (pushId && socket._segPush.pushId && socket._segPush.pushId !== pushId) {
+          socket._segPush = { maxSeq: 0, segments: 0, flushFailedFrom: null, pushId }
+        } else if (pushId) {
+          socket._segPush.pushId = pushId
+        }
         const acc = socket._segPush
         for (const seg of msg.segments) {
           const ing = ingestSegment(seg)
           // P0-1 (2026-09-19 data-safety round): a segment whose bulk flush failed must NOT count
           // as applied — its rows were dropped locally. Keep the acked appliedToSeq BELOW the
-          // failed segment's fromSeq (the sender keeps its watermark and re-pushes) and flag the
-          // ack so the sender force-arms its snapshot trigger (recovery path).
+          // failed segment's fromSeq (the sender re-pushes) and flag the ack so the sender
+          // force-arms its snapshot trigger. Layer-2: arm the engine's recovery trigger toward
+          // THIS peer too (previously only the sender's force-arm existed).
           if (ing && ing.flushFailed) {
             // S7: the cap comes from the engine-returned span (the rows it actually saw), not
             // the outer envelope — same versioned contract as the client role below.
             const fFrom = (ing && Number.isFinite(Number(ing.fromSeq))) ? Number(ing.fromSeq) : null
             if (fFrom != null && (acc.flushFailedFrom == null || fFrom < acc.flushFailedFrom)) acc.flushFailedFrom = fFrom
-            // Layer-2: arm the engine's recovery trigger toward THIS peer, too (previously the
-            // server role armed nothing here — the sender's force-armed snapshot was the only
-            // recovery path).
             if (typeof onIngestFlushFailed === 'function') { try { onIngestFlushFailed(peer) } catch { /* recovery hook must not break ingest */ } }
             continue
           }
           acc.segments += 1
-          // S7 (2026-10-03): appliedToSeq is derived from the engine-returned span — the seq
-          // range ingestSegment actually validated and applied from the UNPACKED body — never
-          // from the outer envelope's fromSeq/toSeq wire fields (independent pack-time values a
-          // corrupt/mismatched peer build can desynchronize from the body). Invariant:
-          // 'the pull watermark never exceeds the highest seq actually applied'
-          // (docs/sync-matrix.md §5.3). An ingest that predates the span fields yields NO
-          // advance (no fallback to unvalidated envelope values).
+          // S7 (2026-10-03): appliedToSeq derives from the engine-returned span — the seq range
+          // ingestSegment actually validated/applied — never from the envelope's wire fields
+          // (invariant: the pull watermark never exceeds the highest seq actually applied).
           const to = (ing && Number.isFinite(Number(ing.toSeq))) ? Number(ing.toSeq) : null
           if (to != null && to > acc.maxSeq) acc.maxSeq = to
         }
@@ -119,10 +118,8 @@ function createServerRoleHandler(deps) {
             socket._segPush = null // the acked push round is complete; a new push re-accumulates
           }
       } else if (msg.type === 'ack') {
-        // The peer is acking OUR push (client role's pull response): appliedToSeq is the max
-        // seq among our rows the peer applied — OUR seq space (see the segments-chunk branch
-        // above). Recorded per peer so the NEXT round's pull response starts past what the
-        // peer already has instead of re-sending the whole oplog window every round.
+        // The peer is acking OUR push: appliedToSeq is OUR seq space (see the segments-chunk
+        // branch). Recorded per peer so the NEXT pull response starts past it (incremental).
         const seq = Number(msg.appliedToSeq) || 0
         if (seq > (serverPullAck.get(peer.deviceId) || 0)) serverPullAck.set(peer.deviceId, seq)
       } else if (msg.type === 'snapshot-request') {
@@ -145,12 +142,9 @@ function createServerRoleHandler(deps) {
           return
         }
         serverSnapshotBusy.add(peer.deviceId)
-        // D19-DOM1 (2026-10-02) dead-peer abort: the chunk loops used to ignore sendVia's
-        // boolean delivery report and stream the ENTIRE snapshot into a destroyed socket,
-        // then report onSnapshotSync 'sent'. Mirror att-transfer.js's established abort
-        // pattern (send() false => the peer's socket is dead): stop on the FIRST failed
-        // frame, log the abort, and skip the success report — the requester's connection-
-        // error handler surfaces the round failure promptly instead of its 120s deadline.
+        // D19-DOM1 (2026-10-02) dead-peer abort: the chunk loops honor sendVia's boolean report
+        // (mirrors att-transfer.js): stop on the FIRST failed frame, log, skip the success
+        // report — the requester's connection-error handler surfaces the round promptly.
         const emit = (m) => {
           try { return sendVia(socket, m) !== false } catch { return false }
         }
@@ -161,14 +155,20 @@ function createServerRoleHandler(deps) {
           let sent = 0
           if (buildSnapshotRows) {
             // Memory-bounded sender path (2026-09-18): chunk DIRECTLY from the rows array —
-            // the old buildSnapshot() string -> JSON.parse -> re-stringify round-trip held
-            // ~3x the whole dataset in the main process during a snapshot send.
+            // the old string -> JSON.parse -> re-stringify round-trip held ~3x the dataset.
             const rows = buildSnapshotRows()
             rows.sort((a, b) => String(a.id).localeCompare(String(b.id)))
             totalRows = rows.length
             // Row-count ceiling: refuse the transfer before streaming anything.
+            // D20-C6: this refusal used the THROWING sendVia — a dead socket threw into the
+            // outer catch (onServerError fan-out) instead of using the abort-aware emit()
+            // wrapper like every other send below. On failed delivery, skip the refusal
+            // bookkeeping too: the peer never received it.
             if (totalRows > maxSnapshotRows) {
-              sendVia(socket, { type: 'snapshot-error', reason: 'too-large' })
+              if (!emit({ type: 'snapshot-error', reason: 'too-large' })) {
+                try { require('electron-log').warn('[LanSync] snapshot too-large refusal undeliverable, aborting serve for', peer.deviceId) } catch { /* noop */ }
+                return
+              }
               pushRecent({ at: Date.now(), kind: 'error', peer: peer.deviceId, detail: { error: `snapshot too large: ${totalRows} rows` } })
               onSnapshotError({ peer: peer.deviceId, reason: 'too-large' })
               return

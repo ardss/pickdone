@@ -8,13 +8,10 @@ const fs = require('fs')
 const { crashRelaunchDecision, CRASH_RELAUNCH_CAP, openExternalSafely } = require('./handlers/shared')
 
 /* ---- D10 (2026-09-27): persisted renderer-crash relaunch counter ----
- * crashReloadCount is in-memory and resets on did-finish-load AND on every app.relaunch() (fresh
- * process ⇒ 0 again), so a renderer crashing deterministically at startup looped
- * crash→3 reloads→relaunch forever. A small marker file in userData persists how many consecutive
- * RELAUNCHES the crash policy already burned; the health window (60s alive after did-finish-load)
- * clears it. Past CRASH_RELAUNCH_CAP the app gives up and shows a fatal-error dialog instead of
- * spawning relaunch after relaunch (decision unit-tested: crashRelaunchDecision in handlers/shared;
- * the marker round-trip itself is unit-tested via the __crashCounter export below). */
+ * crashReloadCount is in-memory and resets on did-finish-load AND on every app.relaunch(), so a
+ * deterministic startup crash looped crash→3 reloads→relaunch forever. A marker file in userData
+ * persists consecutive RELAUNCHES; the health window (60s alive after did-finish-load) clears it.
+ * Past CRASH_RELAUNCH_CAP the app gives up with a fatal-error dialog instead. */
 const CRASH_MARKER_FILE = 'renderer-crash-relaunch-count.json'
 const CRASH_HEALTH_WINDOW_MS = 60_000
 function crashMarkerPath () { return path.join(app.getPath('userData'), CRASH_MARKER_FILE) }
@@ -125,7 +122,7 @@ function createWindowManager (ctx) {  const {
     let loadRetryCount = 0
     win.webContents.on('did-finish-load', () => { loadRetryCount = 0 })
     win.webContents.on('did-fail-load', (_e, code, desc, url, isMainFrame) => {
-      log.error('[Window] 加载失败:', code, desc, url)
+      log.error('[Window] load failed:', code, desc, url)
       if (!isMainFrame || code === -3 || isQuitting()) return
       // P2 2026-09-11: the startup lock (enableSecurityLock) used to hook ONLY did-finish-load — if the
       // load chain failed completely (retries exhausted), the app came up unlocked and silent. Prefer the
@@ -134,7 +131,7 @@ function createWindowManager (ctx) {  const {
       if (loadRetryCount >= 3) {
         if (readConfig().enableSecurityLock && !isLocked()) {
           log.warn('[SecurityLock] 主窗加载彻底失败,按锁定态兜底')
-          try { lockAppNow() } catch (e) { log.error('[SecurityLock] 兜底锁定失败', e) }
+          try { lockAppNow() } catch (e) { log.error('[SecurityLock] fallback lock failed', e) }
         }
         return
       }
@@ -196,7 +193,7 @@ function createWindowManager (ctx) {  const {
           } catch { /* no dialog available */ }
           return
         }
-        log.error('[Crash] 重载超限,relaunch 应用 (relaunch #' + (relaunchCount + 1) + ')')
+        log.error('[Crash] reload limit hit, relaunching app (relaunch #' + (relaunchCount + 1) + ')')
         writeCrashRelaunchCount(relaunchCount + 1)
         try { shortcuts.unregisterAll() } catch {}
         // Best-effort dedup-ledger persist so the relaunch doesn't re-fire reminders from the last 60s
@@ -245,7 +242,10 @@ function createWindowManager (ctx) {  const {
         _resizeTimer = null
       }, 400)
     })
-    win.on('closed', () => { clearTimeout(_resizeTimer); _resizeTimer = null })
+    // D20-C12: the crash-relaunch health timer must die with the window — an armed 60s
+    // writeCrashRelaunchCount(0) surviving a close-then-tray recreation would clear the
+    // persisted relaunch counter before the crash streak was actually confirmed stable.
+    win.on('closed', () => { clearTimeout(_resizeTimer); _resizeTimer = null; if (crashHealthTimer) { clearTimeout(crashHealthTimer); crashHealthTimer = null } })
     // Clamp the window back onto a visible screen on restore/show (fixes the "disappeared" window after multi-monitor changes/power loss)
     const clampIntoView = () => {
       try {
@@ -262,7 +262,7 @@ function createWindowManager (ctx) {  const {
           const w = Math.min(b.width, wa.width - 40)
           const h = Math.min(b.height, wa.height - 40)
           win.setBounds({ x: wa.x + (wa.width - w) / 2, y: wa.y + (wa.height - h) / 3, width: w, height: h })
-          log.info('[Window] 窗口位置越界，已钳制回主屏')
+          log.info('[Window] window position out of bounds, clamped back to primary screen')
         }
       } catch (e) { /* ignore */ }
     }

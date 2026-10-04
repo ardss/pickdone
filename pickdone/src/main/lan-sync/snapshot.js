@@ -63,11 +63,10 @@ function chunkSnapshot (body, opts = {}) {
 }
 
 /**
- * Stream bounded chunks directly from a ROWS ARRAY without ever materializing the full
- * snapshot JSON (2026-09-18): buildSnapshot() string -> JSON.parse -> re-stringify held
- * ~3x the whole dataset in memory on the sender. The LAN-sync sender path uses this
- * generator over the allRows() array (sorted by entity/id like buildSnapshot) — peak
- * memory is one copy of the rows array plus one chunk.
+ * Stream bounded chunks directly from a ROWS ARRAY without materializing the full snapshot
+ * JSON (2026-09-18): peak memory is one copy of the rows array plus one chunk. The LAN-sync
+ * sender path uses this generator over the allRows() array (sorted by entity/id like
+ * engine.buildSnapshot).
  * @param {Array} rows merge rows (already sorted by the caller, mirroring engine.buildSnapshot)
  * @param {{ maxChunkBytes?: number }} opts
  * @yields {{ rows: Array }} successive bounded batches
@@ -80,13 +79,14 @@ function* rowChunks (rows, opts = {}) {
   for (const row of rows) {
     const rowBytes = Buffer.byteLength(JSON.stringify(row), 'utf8')
     if (rowBytes > maxChunkBytes) throw new Error('rowChunks: single row exceeds chunk budget')
-    if (batch.length && batchBytes + rowBytes > maxChunkBytes) {
+    // D20-B13: budget by the ENVELOPE the receiver parses (same reserve chunkSnapshot applies).
+    if (batch.length && batchBytes + rowBytes + 1 > maxChunkBytes - 12) {
       yield { rows: batch }
       batch = []
       batchBytes = 0
     }
     batch.push(row)
-    batchBytes += rowBytes
+    batchBytes += rowBytes + 1
   }
   if (batch.length) yield { rows: batch }
 }
