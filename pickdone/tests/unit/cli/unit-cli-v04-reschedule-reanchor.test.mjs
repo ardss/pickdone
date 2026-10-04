@@ -122,7 +122,7 @@ test('`edit --date ""` takes the FULL clear cascade (same shape as none|clear), 
   assert.equal(row.todoTime, 0)
   assert.equal(row.dayStart, 0, 'dayStart cleared consistently with todoTime')
   assert.equal(row.reminderTime, 0, 'main reminder drops with the date — the partial path never did this')
-  assert.deepEqual(row.reminderExtra, [extraTs], 'extras kept as-is, same as the App')
+  assert.deepEqual(row.reminderExtra, [], 'D17 re-anchor: extras die with the date (EditPanel applyDate(0) offsetsCleared)')
   assert.equal(chipsOf(t.taskId).length, 0, 'schedule chips cascade away (they have no day to live on)')
   const snap = JSON.parse(db.call('getMeta', 'planChipsSnapshot:' + t.taskId) || '[]')
   assert.equal(snap.length, 1, 'chip snapshot kept in meta for a later restore')

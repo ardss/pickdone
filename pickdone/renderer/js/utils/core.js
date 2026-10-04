@@ -64,17 +64,9 @@ export function firstImageOfList (jsonText) {
     return arr.find(x => x && x.name && isImageName(x.name)) || arr[0] || null
   } catch { return null }
 }
-/** Whether all subtasks are complete (an empty list does not count as all complete) — shared by TodoItem and EditPanel */
-export function allSubsDone (subs) {
-  return Array.isArray(subs) && subs.length > 0 && subs.every(x => x && x.checked)
-}
-/** Whether the parent task's completion state should toggle in sync with subtask completion: returns the completion state the parent should have, or null if no change needed */
-export function subsCompleteTarget (subs, curComplete) {
-  const all = allSubsDone(subs)
-  if (all && !curComplete) return true
-  if (!all && curComplete) return false
-  return null
-}
+/** Subtask completion rule moved to shared/subs-core.mjs (D17: single source with cli/lib-subs.cjs,
+ *  which consumes the same module via require(esm)); re-exported so TodoItem / EditPanel keep their import paths */
+export { allSubsDone, subsCompleteTarget } from '../../../shared/subs-core.mjs'
 /** Milliseconds in a day (named constant for 86400000, used uniformly across the project) */
 export const DAY_MS = 86400000
 /** Global error reporting: unified exit for store/utility layers without component context (currently console.error, may hook into toast later) */

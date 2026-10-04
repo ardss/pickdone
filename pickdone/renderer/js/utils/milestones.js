@@ -77,7 +77,11 @@ export function scrubMilestoneTaskIds (list, purgedIds) {
 /** Round-3 P1 (2026-09-21): milestone scrub shared by purgeIds AND purgeAllRecycle (the bulk
  *  "empty bin" path used to skip it, leaving phantom taskIds in `projectMilestones:<catId>` —
  *  the D5 bug on the bulk path). Removes purgedIds from every category's milestone taskIds.
- *  (Relocated verbatim from store/todo.js — structural size ratchet; no behavior change.) */
+ *  D17: callers pass ALL live category ids, not just the purged rows' own ones — a milestone of
+ *  ANOTHER project category may link the purged id (the CLI purge scans every projectMilestones:
+ *  key; the renderer bridge has no listMetaKeys, so the live category list is the equivalent).
+ *  Unaffected blobs are skipped by scrubMilestoneTaskIds' same-reference shortcut.
+ *  (Relocated verbatim from store/todo.js — structural size ratchet.) */
 export async function scrubMilestonesForPurged (catIds, purgedIds) {
   for (const cid of catIds || []) {
     try {

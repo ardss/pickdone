@@ -1,6 +1,8 @@
 /* Subtasks sub-module extracted from cli/lib.js (2026-09-27 size-ratchet split).
  * Factory-injected deps keep it decoupled from lib.js (no circular require), same pattern as lib-settings.cjs.
  * Subtasks (subtasks JSON: [{text, checked}], structure aligned with EditPanel). */
+// D17: the parent-toggle rule is shared with the renderer (utils/core.js re-exports shared/subs-core.mjs)
+const { subsCompleteTarget } = require('../shared/subs-core.mjs')
 module.exports = ({ resolveTask, liveTasks, patchTodo, CliError }) => {
   /* ================= Subtasks (subtasks JSON: [{text, checked}], structure aligned with EditPanel) ================= */
   function parseSubs (t) {
@@ -33,7 +35,21 @@ module.exports = ({ resolveTask, liveTasks, patchTodo, CliError }) => {
     if (!text || !String(text).trim()) throw new CliError('subtask content required', 'EMPTY_CONTENT')
     return mutateSubs(input, subs => subs.push({ text: String(text).trim(), checked: false }), { note: 'subtask added: ' + String(text).trim() })
   }
-  const checkSubtask = (input, key, checked = true) => mutateSubs(input, subs => { subs[findSub(subs, key)].checked = !!checked }, { note: (checked ? 'check' : 'uncheck') + ' subtask: ' + key })
+  /** Check/uncheck one subtask + parent completion sync (App parity: TodoItem._applySubCheck /
+   *  EditPanel via subsCompleteTarget). Checking the last unchecked sub completes the parent
+   *  (completedAt = now, same shape as toggleComplete); unchecking any sub of a complete parent
+   *  un-completes it (completedAt = 0). No subtasks / partial state → parent untouched (null target). */
+  const checkSubtask = (input, key, checked = true) => {
+    const t = resolveTask(input)
+    const subs = parseSubs(t)
+    subs[findSub(subs, key)].checked = !!checked
+    const patch = { subtasks: JSON.stringify(subs) }
+    const target = subsCompleteTarget(subs, !!t.complete)
+    if (target === true) { patch.complete = true; patch.completedAt = Date.now() } else if (target === false) { patch.complete = false; patch.completedAt = 0 }
+    const note = (checked ? 'check' : 'uncheck') + ' subtask: ' + key +
+      (target != null ? ` (parent ${target ? 'completed' : 'un-completed'} in sync)` : '')
+    return patchTodo(t.taskId, patch, { action: 'subtask', note })
+  }
   const removeSubtask = (input, key) => mutateSubs(input, subs => subs.splice(findSub(subs, key), 1), { note: 'subtask removed: ' + key })
 
   /** Reorder subtasks (subtasks array order — same storage as EditPanel drag) */
