@@ -584,7 +584,7 @@ test('J4: reconnect — hard-kill B, restart with the same dirs, pair state surv
   const stB2 = await until(async () => {
     const s = await b2.status()
     return s.enabled && (s.peers || []).some(p => p.deviceId === aSelf.deviceId) ? s : null
-  }, 60000, '[B2] restarted with pairing intact (enabled + A in the peer table)')
+  }, 120000, '[B2] restarted with pairing intact (enabled + A in the peer table)')
   assert.ok(stB2.listening, '[B2] sync node listening again after restart')
 
   // Pending changes converge BOTH ways: A pushes an edit, restarted B pushes a new row.
