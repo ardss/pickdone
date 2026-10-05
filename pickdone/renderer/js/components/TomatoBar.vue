@@ -62,6 +62,7 @@ import { formatMMSS } from '../utils/tomatoShared.js'
 import { remainingSecOfState } from '../store/tomato.js'
 import store from '../store/index.js'
 import { roleButtonActivate } from '../utils/roleButtonKey.js' // [D18-DOM3] Space+Enter button activation
+import { observeDispatch } from '../utils/dispatchObserved.js' // [maint/d23 FIX-3b] dispatches must be observed, not fire-and-forget
 
 // The noise list/files/prefix have been consolidated into utils/mediaRegistry.js (single source of truth); only the "labelKey tail segment" is adapted here
 
@@ -88,7 +89,10 @@ export default {
       return this.attachName ? this.$t('statsE.TomatoBar.readyPrefix') + this.attachName : this.$t('statsH.TomatoBar.notStarted')
     },
     todayDone () {
-      const key = dayjs().format(FMT.date)
+      // [maint/d23 FIX-3b] the day key must derive from a REACTIVE timestamp (the 1s tick data
+      // field `ts`), not a bare dayjs() call with zero reactive dependencies — after midnight the
+      // harvest kept yesterday's bucket until an unrelated store mutation re-rendered.
+      const key = dayjs(this.ts || Date.now()).format(FMT.date)
       return (this.s.tomatoRecordList || []).filter(r => r.succeed !== false && r.dateKey === key).length
     },
     /* The ledger-dot spotlight triggers only at the instant the first pomodoro lands (0→1 jump);
@@ -164,6 +168,11 @@ export default {
       }).catch(() => {})
     },
     fmt (n) { return formatMMSS(n) },
+    /* [maint/d23 FIX-3b] shared failure toast for observed tomato dispatches (same shape as
+       TomatoFloatPage.confirmAbandon / pickNoise: existing actionFailedMsg key + error detail) */
+    reportDispatchFail (e) {
+      if (this.$message) this.$message.error(this.$t('statsH.main.actionFailedMsg') + ((e && e.message) || ''))
+    },
     /** Remaining seconds (same source as clock: derived from startedAt while running, full amount when idle); shared by the taskbar signature and push */
     remainSecNow () {
       return remainingSecOfState(this.s, this.ts || Date.now())
@@ -186,13 +195,18 @@ export default {
     },
     async onPlayClick () {
       if (this.status === 'default') {
-        store.dispatch('tomato/startFocus') // white noise is played automatically by the global dispatcher per focus state
+        // [maint/d23 FIX-3b] observed: a failed startFocus surfaces a toast instead of idling silently
+        observeDispatch(store, 'tomato/startFocus').catch(this.reportDispatchFail) // white noise is played automatically by the global dispatcher per focus state
         return
       }
       // Abandoning (focus or break) needs a second confirmation to prevent accidental clicks; when abandoning focus a reason may optionally be filled in (for retrospective; may be left empty)
       if (this.isRest) {
         try { await this.$confirm(this.$t('statsE.TomatoBar.giveUpBreakConfirm'), this.$t('statsH.TomatoBar.tip'), { type: 'warning', confirmButtonText: this.$t('statsH.TomatoBar.giveUp'), cancelButtonText: this.$t('statsH.TomatoBar.continueText') }) } catch (e) { return }
-        this.$store.dispatch('tomato/giveUp', { record: false }) // noise stop is handled by the global dispatcher
+        // [maint/d23 FIX-3b] the dispatch is awaited (same fix as D22's float confirmAbandon): a
+        // failed rest-abandon used to leave the countdown silently running with no feedback
+        try {
+          await observeDispatch(store, 'tomato/giveUp', { record: false }) // noise stop is handled by the global dispatcher
+        } catch (e) { this.reportDispatchFail(e) }
         return
       }
       // The modal is rendered independently at the layout level (nested inside the tomato bar it gets squeezed into a tiny box by the small container; verified by the user)

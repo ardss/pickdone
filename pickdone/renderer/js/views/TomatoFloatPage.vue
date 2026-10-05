@@ -118,6 +118,7 @@ import { remainingSecOfState } from '../store/tomato.js'
 import { pruneRemoteAnnounces } from '../store/tomatoAnnounce.js'
 // Drag/dblclick methods (pure relocation — spread into `methods` below)
 import { tomatoFloatDragMethods } from './tomatoFloatDrag.js'
+import { observeDispatch } from '../utils/dispatchObserved.js' // [maint/d23 FIX-3b] dispatches must be observed, not fire-and-forget
 
 /** The browser debug host shim's todoAPI carries a version stamp; the real preload does not */
 function isPreviewHost () {
@@ -282,7 +283,8 @@ export default {
     btnMain () {
       const s = this.st
       if (!s) return
-      if (s.status === 'default') { this.$store.dispatch('tomato/startFocus'); return }
+      // [maint/d23 FIX-3b] observed: a failed startFocus surfaces a toast instead of idling silently
+      if (s.status === 'default') { observeDispatch(this.$store, 'tomato/startFocus').catch(this.reportDispatchFail); return }
       // Click while running/resting = abandon confirm (no pause for the pomodoro — user-finalized)
       this.reset()
     },
@@ -291,7 +293,9 @@ export default {
       if (!s) return
       if (s.status === 'default') { this.persist({ status: 'default', startedAt: 0, remainSec: (s.tomatoTime || 25) * 60 }); return }
       // Abandoning during rest shows no confirm (user-finalized): nothing is logged, no cost, return straight to ready; the confirm dialog is only for focus
-      if (s.status === 'startRestTime') { this.$store.dispatch('tomato/giveUp', { record: false }); return }
+      // [maint/d23 FIX-3b] the dispatch is observed (same fix as confirmAbandon below): a failed
+      // rest-abandon used to leave the countdown silently running with no feedback
+      if (s.status === 'startRestTime') { observeDispatch(this.$store, 'tomato/giveUp', { record: false }).catch(this.reportDispatchFail); return }
       this.abandonReason = ''
       this.abandoning = true
     },
@@ -349,6 +353,11 @@ export default {
     },
     cancelAttach () {
       this.$store.dispatch('tomato/attach', null)
+    },
+    /* [maint/d23 FIX-3b] shared failure toast for observed tomato dispatches (same shape as
+       confirmAbandon / pickNoise: existing actionFailedMsg key + error detail) */
+    reportDispatchFail (e) {
+      if (this.$message) this.$message.error(this.$t('statsH.main.actionFailedMsg') + ((e && e.message) || ''))
     },
     footerAction () {
       /* The footer button is always "detach": only clears the selection, never binds a start (focus belongs solely to the ring knob) */

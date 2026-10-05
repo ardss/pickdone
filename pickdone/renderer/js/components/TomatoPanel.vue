@@ -77,7 +77,10 @@ export default {
       return formatMMSS(n)
     },
     todayRecords () {
-      const key = dayjs().format(FMT.date)
+      // [maint/d23 FIX-3b] the day key must derive from a REACTIVE timestamp (the 500ms tick data
+      // field `nowTs`), not a bare dayjs() call with zero reactive dependencies — after midnight
+      // the panel kept listing yesterday's records until an unrelated re-render.
+      const key = dayjs(this.nowTs || Date.now()).format(FMT.date)
       return this.$store.getters['tomato/recordsByDate'].get(key) || []
     },
     /* [A14 fix → A15] the rendered window stays capped at 6 rows, but the header count now uses
