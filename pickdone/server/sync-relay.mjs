@@ -74,12 +74,19 @@ export function memoryStore() {
       return Math.min(...active.map(d => d.lastAck || 0))
     },
     /** Snapshot-safe GC (spec §28): only below the floor AND below the latest
-     *  snapshot's coversSeq, so a recovery path always exists. */
+     *  snapshot's coversSeq, so a recovery path always exists. Snapshot-less
+     *  deployments (GC floor fix, 2026-10-06): without a snapshot the floor used
+     *  to be 0 forever → unbounded envelope growth. An ACK-ALONE floor with a
+     *  sequence-horizon margin now bounds it: acked envelopes beyond the margin
+     *  are removable even with no snapshot, while the margin keeps a recovery
+     *  replay window for a device that lost its local state but not its ack. */
     gc: account => {
       const snap = state.snapshots.get(account)
       const active = [...state.devices.values()].filter(d => d.account === account && d.status === 'active')
       const ackFloor = active.length ? Math.min(...active.map(d => d.lastAck || 0)) : 0
-      const floor = Math.min(ackFloor, snap ? snap.coversSeq : 0)
+      const GC_ACK_ALONE_MARGIN = 100000 // seq-margin kept when no snapshot exists yet
+      let floor = Math.min(ackFloor, snap ? snap.coversSeq : 0)
+      if (floor <= 0 && ackFloor > GC_ACK_ALONE_MARGIN) floor = ackFloor - GC_ACK_ALONE_MARGIN
       if (floor <= 0) return 0
       let removed = 0
       for (const [seq, e] of state.envelopes) {
@@ -96,10 +103,22 @@ export function memoryStore() {
       snapshots: [...state.snapshots.entries()],
     }),
     __load: dump => {
+      // Corrupt-but-parseable dump hardening (2026-10-06): a torn-but-valid JSON file used to
+      // load wholesale — an envelope entry missing serverSeq collapsed onto the undefined Map
+      // key and the next persist() RE-PERSISTED the corruption. Validate every row's shape;
+      // any malformed entry throws so fileStore quarantines the whole file (fresh boot),
+      // exactly like an unparseable dump. seq loss is recoverable (clients re-push unacked).
+      const envOk = e => e && Number.isInteger(e.serverSeq) && typeof e.opId === 'string' && typeof e.envelopeJson === 'string'
+      const devOk = d => d && typeof d.account === 'string' && typeof d.deviceId === 'string'
+      if (!dump || typeof dump !== 'object' || !Array.isArray(dump.envelopes) || !Array.isArray(dump.devices)) {
+        throw new Error('malformed relay dump: envelopes/devices arrays required')
+      }
+      if (!dump.envelopes.every(envOk)) throw new Error('malformed relay dump: bad envelope entry (integer serverSeq, string opId/envelopeJson required)')
+      if (!dump.devices.every(devOk)) throw new Error('malformed relay dump: bad device entry (string account/deviceId required)')
       state.seq = dump.seq || 0
       state.envelopes = new Map(dump.envelopes.map(e => [e.serverSeq, e]))
       state.devices = new Map(dump.devices.map(d => [`${d.account}~${d.deviceId}`, d]))
-      state.snapshots = new Map(dump.snapshots)
+      state.snapshots = new Map(Array.isArray(dump.snapshots) ? dump.snapshots : [])
     },
   }
 }
@@ -148,8 +167,26 @@ export function fileStore(dir) {
 export function createRelay(store) {
   return {
     store,
-    registerDevice(account, deviceId) {
-      // per-device bearer secret: minted fresh on every register, shown once
+    /**
+     * Device registration. First-time registration is open (the register response is the only
+     * channel that mints a bearer secret). Re-registration of a device whose row ALREADY holds
+     * a populated deviceSecret requires PROOF: the caller must present the current secret
+     * (bearer header or body `deviceSecret`) and only then is it rotated. Without proof the
+     * request is rejected with 409 — otherwise anyone who knew account+deviceId could overwrite
+     * the victim's secret, locking the victim out (401s) and gaining full pull/push access.
+     */
+    registerDevice(account, deviceId, { bearerSecret, bodySecret } = {}) {
+      const prev = store.getDevice(account, deviceId)
+      const existing = prev && typeof prev.deviceSecret === 'string' ? prev.deviceSecret : ''
+      if (existing) {
+        const ok = [bearerSecret, bodySecret].some(s =>
+          typeof s === 'string' && s.length > 0 && (() => {
+            const a = Buffer.from(s); const b = Buffer.from(existing)
+            return a.length === b.length && timingSafeEqual(a, b)
+          })())
+        if (!ok) throw err(409, 'device already registered: present the current deviceSecret (bearer or body) to rotate it')
+      }
+      // per-device bearer secret: minted fresh on every (proven) register, shown once
       const deviceSecret = randomBytes(32).toString('hex')
       return store.upsertDevice(account, deviceId, { lastSeen: Date.now(), deviceSecret })
     },
@@ -189,13 +226,24 @@ export function createRelay(store) {
       // server-side clamp: a client sending maxBytes:null previously bypassed the cap
       if (!Number.isFinite(maxBytes) || maxBytes <= 0) maxBytes = 4 * 1024 * 1024
       maxBytes = Math.min(maxBytes, 32 * 1024 * 1024)
+      // Paged materialization (2026-10-06): getSince(account, after, 100000) used to build the
+      // WHOLE remaining history in memory before the byte clamp discarded most of it. Page in
+      // batches of 500 and stop at the first batch boundary once the byte budget is hit —
+      // memory is O(page + response), not O(history).
       const items = []
       let bytes = 0
-      for (const e of store.getSince(account, afterSeq, 100000)) {
-        const size = Buffer.byteLength(e.envelopeJson)
-        if (bytes + size > maxBytes) break
-        items.push({ serverSeq: e.serverSeq, envelope: e.envelopeJson })
-        bytes += size
+      let cursor = afterSeq
+      for (;;) {
+        const page = store.getSince(account, cursor, 500)
+        if (!page.length) break
+        for (const e of page) {
+          const size = Buffer.byteLength(e.envelopeJson)
+          if (bytes + size > maxBytes) return { fromSeq: afterSeq + 1, toSeq: items.length ? items[items.length - 1].serverSeq : afterSeq, items }
+          items.push({ serverSeq: e.serverSeq, envelope: e.envelopeJson })
+          bytes += size
+        }
+        if (page.length < 500) break
+        cursor = page[page.length - 1].serverSeq
       }
       return { fromSeq: afterSeq + 1, toSeq: items.length ? items[items.length - 1].serverSeq : afterSeq, items }
     },
@@ -224,17 +272,28 @@ export function startRelayServer(relay, { port = 0, host = '127.0.0.1' } = {}) {
   const server = createServer((req, res) => {
     const chunks = []
     let total = 0
+    const respondTooLarge = () => {
+      // Header guard (2026-10-06): req.destroy() is async — a buffered chunk can re-enter this
+      // handler after the 413 was already written, and a second writeHead threw
+      // ERR_HTTP_HEADERS_SENT. `responded` + res.headersSent make the branch idempotent.
+      if (responded || res.headersSent) return
+      responded = true
+      res.writeHead(413, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ error: 'request body too large' }))
+      // No req.destroy() here: resetting the socket races the client's read of the 413
+      // (ECONNRESET on the caller side). The remaining body is drained and ignored — the
+      // responded/headersSent guards make both later handlers no-ops.
+    }
+    let responded = false
     req.on('data', c => {
       total += c.length
-      if (total > MAX_BODY_BYTES) {
-        res.writeHead(413, { 'content-type': 'application/json' })
-        res.end(JSON.stringify({ error: 'request body too large' }))
-        req.destroy()
-        return
-      }
+      if (total > MAX_BODY_BYTES) { respondTooLarge(); return }
+      if (responded || res.headersSent) return
       chunks.push(c)
     })
     req.on('end', () => {
+      if (responded || res.headersSent) return
+      responded = true
       let body = {}
       try {
         if (chunks.length) body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
@@ -251,7 +310,16 @@ export function startRelayServer(relay, { port = 0, host = '127.0.0.1' } = {}) {
       }
     })
   })
-  return new Promise(resolve => server.listen(port, host, () => resolve(server)))
+  // Coded listen failure (2026-10-06): EADDRINUSE used to reject with the raw Node error (or,
+  // before the promise existed at all, hang). Surface a readable coded error; other listen
+  // errors reject with their original cause.
+  return new Promise((resolve, reject) => {
+    server.once('error', e => {
+      if (e && e.code === 'EADDRINUSE') reject(err(503, `listen failed: port ${port} already in use (EADDRINUSE) on ${host}`))
+      else reject(e)
+    })
+    server.listen(port, host, () => resolve(server))
+  })
 }
 
 /** Data routes all require the per-device bearer secret (register is the only
@@ -293,9 +361,9 @@ function route(relay, method, url, body, authz) {
       return relay.ack(account, device, ackSeq)
     }
     case '/v1/device/register': {
-      const { account, device } = post()
+      const { account, device, deviceSecret } = post()
       need(account && device, 'account, device required')
-      return { device: relay.registerDevice(account, device) }
+      return { device: relay.registerDevice(account, device, { bodySecret: deviceSecret, bearerSecret: parseBearer(authz) }) }
     }
     case '/v1/device/state': {
       const { account, device, status } = post()
@@ -319,6 +387,7 @@ function route(relay, method, url, body, authz) {
 
 const err = (status, message) => Object.assign(new Error(message), { status })
 const need = (ok, message) => { if (!ok) throw err(400, message) }
+const parseBearer = authz => { const m = /^Bearer\s+(\S+)$/i.exec(authz || ''); return m ? m[1] : null }
 
 // ---------- CLI entry (self-host, spec §54) ----------
 

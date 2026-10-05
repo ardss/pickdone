@@ -694,6 +694,20 @@ function preflightMigrateResidue (ud, log) {
       copyFileAtomicRestore(bak, mainDb)
       warn('todos.db missing but a plaintext backup exists: restored from plain-bak, old db.key moved aside as db.key.superseded-*')
     }
+    // Orphaned migration tmp sweep (fix 2026-10-06): a crash between migratePlainToEncrypted's
+    // two renames leaves a fully-written todos-encrypted.tmp forever — it was never swept nor
+    // used by recovery. After the plain-bak restore put the DB back, rename the tmp aside
+    // (best-effort, timestamped so repeated interrupted migrations cannot collide); leaving it
+    // in place would only confuse later boots and accumulate stale encrypted snapshots.
+    const encTmp = path.join(ud, 'todos-encrypted.tmp')
+    if (fs.existsSync(encTmp)) {
+      try {
+        fs.renameSync(encTmp, encTmp + '.stale-' + new Date().toISOString().replace(/[:.]/g, '-'))
+        warn('迁移中断残留:todos-encrypted.tmp 已改名保存(不再占用正式文件名)')
+      } catch (e2) {
+        warn('todos-encrypted.tmp 改名失败(占用中,留待下次启动重试):', (e2 && e2.message) || e2)
+      }
+    }
     return true
   } catch (e) {
     warn('plain-bak 预检失败', (e && e.message) || e)
