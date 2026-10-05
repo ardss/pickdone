@@ -92,14 +92,22 @@ import { SCHEMA_V, describeDegradedSegments } from '../../store/helpers/todoBack
 import { repeatRuleMetaKeys, ruleMapFromMetaRows, repeatRuleCell } from '../../utils/exportRepeatRules.js'
 import { invalidateEstimateCache } from '../../utils/tomatoEstimate.js'
 
-/** Restore = the user wants the backup's data to win. Backup rows carry their backup-time
+/** Restore = the user wants the backup's data to win. Live rows carry their backup-time
  *  updateTime + status:'sync', so LAN LWW instantly reverts the restore against any peer
- *  holding newer rows, and the cloud dirty filter skips status:'sync' rows. Stamping each
- *  restored row dirty ('update') with a fresh updateTime preserves "old data wins".
+ *  holding newer rows — LIVE rows are stamped dirty ('update') with a fresh updateTime so
+ *  restored data wins. TOMBSTONES follow the Sync-14 doctrine implemented by the startup
+ *  recovery path (src/main/dbRecovery.cjs restoreTodoRowsFromCriticalBackup): a restored
+ *  tombstone KEEPS its backup deletedAt (epoch-oldest 1 when absent) and gets updateTime:1,
+ *  so a peer that legitimately re-created the task after the backup wins the next LWW round.
+ *  Stamping tombstones fresh (updateTime:now) used to make the UI restore win LWW and flip
+ *  the peer's re-created task back to deleted — cross-device data loss.
  *  (Only todo rows carry the sync ledger; settings/category/habits restore via store commits.) */
 function restoreStampRow (row, now = null) {
   if (!row || typeof row !== 'object') return row
-  return { ...row, status: 'update', updateTime: now || Date.now() }
+  const deleted = !!(row.delete || row.deleted)
+  return deleted
+    ? { ...row, delete: 1, deletedAt: row.deletedAt || 1, updateTime: 1 }
+    : { ...row, status: 'update', updateTime: now || Date.now() }
 }
 
 /** B2 (2026-09-26): filter/plan rows keep their backup-time updatedAt in the DB, and filterUpsert/
@@ -508,21 +516,39 @@ export default {
     async applyEvtPurgeDump (b, failed) {
       let n = 0
       try {
+        // liveRows come back ACTIVE; purgedRows stay tombstoned (bin, never revived)
         const live = (b.liveRows || []).filter(r => r && r.taskId).map(r => restoreStampRow({ ...r, delete: false }))
         const purged = (b.purgedRows || []).filter(r => r && r.taskId).map(r => restoreStampRow({ ...r, delete: true, deletedAt: r.deletedAt || Date.now() }))
-        const rows = [...live, ...purged]
+        // B5 parity: demote dangling repeatIds pre-put
+        const dangling = await this.danglingRepeatIds(live)
+        const rows = [...live.map(r => (r.repeatId && dangling.has(r.repeatId) ? { ...r, repeatId: null } : r)), ...purged]
         if (rows.length) await commitCommand('todo', 'putMany', rows)
         n = rows.length
-      } catch (e) { console.error('[settings] restore segment failed: evtRows', e); failed.push('evtRows') }
+        if (dangling.size) failed.push('repeatIdDemoted x' + dangling.size)
+      } catch (e) { console.error('[settings] evtRows restore failed:', e); failed.push('evtRows') }
+      this.$store.dispatch('_rt/refreshFromDb')
+      this.$store.dispatch('tomato/recordsReload').catch(e => console.error('[settings] evt tomato reload failed:', e))
+      let entries = []
       try {
-        const entries = (b.metaEntries || []).filter(e =>
+        entries = (b.metaEntries || []).filter(e =>
           e && typeof e.key === 'string' && e.value != null && e.value !== '' &&
           META_RESTORE_PREFIXES.some(p => e.key.startsWith(p)))
         for (const e of entries) await commitCommand('meta', 'put', [e.key, e.value])
-      } catch (e) { console.error('[settings] restore segment failed: evtMeta', e); failed.push('evtMeta') }
-      this.$store.dispatch('_rt/refreshFromDb')
-      this.$store.dispatch('tomato/recordsReload').catch(e => console.error('[settings] tomato/recordsReload after evt restore failed:', e))
+      } catch (e) { console.error('[settings] evtMeta restore failed:', e); failed.push('evtMeta') }
       this.reportRestoreResult(n, failed)
+      // restoreMetaState parity: the estimate cache is memoized — invalidate after the re-put
+      if (entries.some(e => e.key.startsWith('tomatoEstimateState:'))) { try { invalidateEstimateCache() } catch { /* degraded host */ } }
+    },
+    /** B5 parity helper: repeatIds among the given rows whose `repeatRule:<rid>` meta is gone
+     *  (startup meta GC legitimately purges rules referenced only by recycle-bin rows). */
+    async danglingRepeatIds (rows) {
+      const dead = new Set()
+      for (const rid of [...new Set(rows.filter(r => r.repeatId).map(r => r.repeatId))]) {
+        let rule = null
+        try { rule = JSON.parse(await window.todoAPI.dbCall('getMeta', 'repeatRule:' + rid) || 'null') } catch { /* treated as gone */ }
+        if (!rule) dead.add(rid)
+      }
+      return dead
     },
     // D6-F14: saved filters 回灌——按 id 幂等 re-put(filter.putMany upsert),随后以 DB 行表为准刷新内存列表
     // B2 (2026-09-26): rows are re-stamped fresh (restoreStampLww) so LAN LWW cannot self-revert the restore.
