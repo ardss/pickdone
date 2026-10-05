@@ -16,7 +16,11 @@ const read = p => fs.readFileSync(path.join(ROOT, p), 'utf8')
 
 test('J1 P3: quick-add input binds Esc to a cancel handler that clears and blurs', () => {
   const src = read('renderer/js/components/QuickAdd.vue')
-  assert.match(src, /@keyup\.esc="onCancel"/, 'Esc binding on the qa input')
-  assert.match(src, /onCancel \(\) \{[\s\S]*?this\.text = ''/, 'clears the draft')
-  assert.match(src, /onCancel \(\) \{[\s\S]*?inp\.blur\(\)/, 'blurs the field')
+  assert.match(src, /@keyup\.esc="onCancel"/, 'Esc binding on the qa input (event passed implicitly)')
+  // maint/d23: Esc now also carries the IME guard — dismissing a candidate window fires keyup
+  // mid-composition and must not wipe the draft (same contract as the Enter binding).
+  assert.match(src, /onCancel \(e\) \{[\s\S]*?if \(e && \(e\.isComposing \|\| e\.keyCode === 229\)\) return/,
+    'IME composition guard at the top of onCancel')
+  assert.match(src, /onCancel \(e\) \{[\s\S]*?this\.text = ''/, 'clears the draft')
+  assert.match(src, /onCancel \(e\) \{[\s\S]*?inp\.blur\(\)/, 'blurs the field')
 })

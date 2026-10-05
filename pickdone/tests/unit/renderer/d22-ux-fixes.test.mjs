@@ -38,7 +38,7 @@ test('[F1] createLines leaves only the unsent remainder in the input on a mid-ba
 
 test('[F2] onCancel (Esc) resets pickedDate so the next quick-add cannot inherit the stale chip', () => {
   const src = read('renderer/js/components/QuickAdd.vue')
-  const i = src.indexOf('onCancel () {')
+  const i = src.indexOf('onCancel (e) {') // maint/d23: signature gained the event param for the IME guard
   assert.ok(i > -1, 'onCancel found')
   const body = src.slice(i, i + 400)
   const iFail = body.indexOf('this.failed = false')

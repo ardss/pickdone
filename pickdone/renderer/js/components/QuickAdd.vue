@@ -114,11 +114,12 @@ export default {
     onClearDateKey: roleButtonActivate(function () { this.clearDate() }),
     /* [uiux-2026-10-01 J1 P3] Esc is the universal cancel key: clear the draft (and the failure
        mark); a non-empty draft is also left so the field blurs — an empty draft only blurs. */
-    onCancel () {
+    onCancel (e) {
+      // d23 IME guard (same as Enter)
+      if (e && (e.isComposing || e.keyCode === 229)) return
       this.failed = false
       if (this.text) this.text = ''
-      // [D22 P3] Esc also clears the date chip: the chip used to survive the cancel and the
-      // next quick-add silently inherited the stale date (cancel = cancel everything).
+      // [D22 P3] Esc also clears the date chip (stale-date carry-over)
       this.pickedDate = null
       const inp = this.$refs.inp
       if (inp && inp.blur) inp.blur()
