@@ -127,7 +127,12 @@ async function saveAttachment ({ taskId, name, dataBase64 }) {
   // a crash mid-write now leaves only .att-tmp residue, which the D19 startup sweep ages out.
   const tmp = `${dest}.att-tmp-${Date.now()}-${Math.floor(Math.random() * 1e6)}`
   try {
-    fs.writeFileSync(tmp, raw)
+    // D22 (P2 2026-10-02): the upload twin of the LAN-receive writeAtomic (att-transfer.js D21)
+    // — route the spool through writeFileDurable (tmp -> fsync -> rename) so the final rename
+    // cannot hit disk before the uploaded bytes after a power cut. The bare writeFileSync left
+    // the two doors with DIFFERENT durability. The .att-tmp name is kept so the D19 startup
+    // residue sweep still matches crash trash from either door.
+    require('./durable-fs').writeFileDurable(tmp, raw, fs)
     fs.renameSync(tmp, dest)
   } finally {
     try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp) } catch { /* best-effort cleanup */ }

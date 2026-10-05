@@ -30,11 +30,19 @@ function createExporter ({ getMainWindow, i18n, log }) {
     // been shown a save dialog (and the failure landed as a generic { error } result).
     const head = parseExportColumns(i18n.mt('exportCols'))
     const win = getMainWindow()
-    const { canceled, filePath } = await dialog.showSaveDialog(win, {
+    // D22 (P3) renderer-less invocation guard: getMainWindow() can legitimately be falsy (or a
+    // destroyed stub) — export was invocable before the main window exists or after it was torn
+    // down. dialog.showSaveDialog(undefined, opts) used to throw a bare Electron argument
+    // TypeError. Fall back to the parentless dialog form.
+    const opts = {
       title: i18n.mt('exportTitle'),
       defaultPath: path.join(app.getPath('downloads'), fileName),
       filters: [{ name: 'Excel', extensions: ['xlsx'] }]
-    })
+    }
+    const dialogResult = (win && typeof win.isDestroyed === 'function' && !win.isDestroyed())
+      ? await dialog.showSaveDialog(win, opts)
+      : await dialog.showSaveDialog(opts)
+    const { canceled, filePath } = dialogResult
     if (canceled || !filePath) return { canceled: true }
     try {
       const ExcelJS = require('exceljs')
