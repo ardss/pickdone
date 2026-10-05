@@ -64,6 +64,24 @@ const SWEEP_INTERVAL_MS = 30 * 1000
 const RECENT_CAP = 50
 const SECURITY_CAP = 20
 
+/** Two-stage eviction pick (fix 2026-10-06, parity with discovery.js). Stage 1: the
+ *  least-recently-seen id from lastSeenBy. Stage 2 (diverged maps — a peers entry with no
+ *  lastSeenBy twin): the first peer Map key that is not the incoming peer. Returns null when
+ *  there is nothing to evict. Pure; exported for unit tests. */
+function pickEvictPeerId (peers, lastSeenBy, incomingId) {
+  let oldestId = null
+  let oldestAt = Infinity
+  for (const [id, seen] of lastSeenBy) {
+    if (seen < oldestAt) { oldestAt = seen; oldestId = id }
+  }
+  if (!oldestId) {
+    for (const id of peers.keys()) {
+      if (id !== incomingId) { oldestId = id; break }
+    }
+  }
+  return oldestId
+}
+
 /**
  * @param {object} opts
  *   deviceId, name, pairingSecret, port?, host?,
@@ -370,11 +388,7 @@ function createLanSyncNode(opts) {
     // the peer/lastSeen maps without limit. Beyond MAX_PEERS, expel the LEAST-recently-seen
     // peer (never the incoming one) from every per-peer map.
     if (!peers.has(peer.deviceId) && peers.size >= MAX_PEERS) {
-      let oldestId = null
-      let oldestAt = Infinity
-      for (const [id, seen] of lastSeenBy) {
-        if (seen < oldestAt) { oldestAt = seen; oldestId = id }
-      }
+      const oldestId = pickEvictPeerId(peers, lastSeenBy, peer.deviceId)
       if (oldestId) forgetPeer(oldestId)
     }
     const prev = peers.get(peer.deviceId)
@@ -710,4 +724,4 @@ function adoptLiveSocket (map, deviceId, socket) {
   return true
 }
 
-module.exports = { createLanSyncNode, adoptLiveSocket, BACKOFF_BASE_MS, BACKOFF_MAX_MS, DIAL_FAILURE_BUDGET_DEFAULT, HIBERNATE_BACKOFF_MS_DEFAULT }
+module.exports = { createLanSyncNode, adoptLiveSocket, pickEvictPeerId, BACKOFF_BASE_MS, BACKOFF_MAX_MS, DIAL_FAILURE_BUDGET_DEFAULT, HIBERNATE_BACKOFF_MS_DEFAULT }
