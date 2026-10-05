@@ -83,6 +83,11 @@ class LineReader {
    *  socket. electron-log when available (main process), console.error otherwise (pure tests). */
   #logDispatchError(err) {
     const line = `[LanSync] message handler threw (connection kept): ${err && err.stack ? err.stack : err}`
+    // D22 (P3): this was the only lan-sync electron-log write site that did NOT pull in
+    // ../log-isolation first — under TODO_DB_DIR/TODO_USER_DATA_DIR a handler throw used to
+    // land in the REAL user log (%APPDATA%/pickdone/logs/main.log) instead of the isolation
+    // dir. Same idempotent redirect every sibling module applies at its log sites.
+    try { require('../log-isolation') } catch { /* standalone test context */ }
     try { require('electron-log').error(line) } catch { console.error(line) }
   }
 

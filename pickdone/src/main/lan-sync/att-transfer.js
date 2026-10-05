@@ -530,7 +530,18 @@ function createAttachmentPuller (opts = {}) {
         markFailed(String(current.id))
         return true
       }
-      current.chunks.set(Number(msg.index) || 0, buf)
+      // D22 (P3) index coercion hardening: `Number(msg.index) || 0` used to accept ANY junk
+      // key (negative, fractional, garbage-string folded to a number anyway) — a non-contiguous
+      // key silently truncated the final assembly, surfacing only as a downstream hash mismatch
+      // instead of a clear protocol error. Coerce explicitly and reject anything that is not a
+      // sane chunk ordinal (fail-closed, same terminal as the ceiling above).
+      const idx = Number(msg.index)
+      if (!Number.isInteger(idx) || idx < 0 || idx >= 65536) {
+        try { require('electron-log').warn('[LanSync] att-chunk invalid index, protocol error:', current.id, msg.index) } catch { /* noop */ }
+        markFailed(String(current.id))
+        return true
+      }
+      current.chunks.set(idx, buf)
       current.received += buf.length
       if (msg.final) {
         const assembled = []
