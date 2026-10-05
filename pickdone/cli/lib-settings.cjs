@@ -4,7 +4,7 @@
 module.exports = ({ open, commit, audit, CliError }) => {
   // F-B9 manifest single source: SETTINGS_MANIFEST lives verbatim in shared/settings-manifest.mjs
   // (dw wave 3) so the renderer's sanitize path can consume the same surface; re-exported below.
-  const { SETTINGS_MANIFEST } = require('../shared/settings-manifest.mjs') // require(esm)
+  const { SETTINGS_MANIFEST, SECRET_KEYS } = require('../shared/settings-manifest.mjs') // require(esm)
   const { stripHabitsFamily } = require('../shared/settings-families.mjs') // require(esm)
   // F-A1 CLI-side fix: the deny predicate is DERIVED from the shared machine-local-keys module
   // (same module src/main/sync-apply.js + command-manifest.js consume) instead of a second
@@ -145,6 +145,15 @@ module.exports = ({ open, commit, audit, CliError }) => {
       ...SETTINGS_MANIFEST.boolean, ...SETTINGS_MANIFEST.number,
       ...Object.keys(SETTINGS_MANIFEST.enum), ...SETTINGS_MANIFEST.string,
       ...(SETTINGS_MANIFEST.blobOnly || []),
+      // maint/d23 P1: the whitelist rebuild used to drop keys outside the manifest — the
+      // security-lock secrets (SECRET_KEYS, shared/settings-manifest.mjs single source with the
+      // renderer) and the doneGroupsFoldMigrated migration marker. ANY `settings set` therefore
+      // wiped the secret from the blob while enableSecurityLock stayed true (App boot re-seated
+      // DEFAULT_SETTINGS with the lock flag on but no secret = the lock silently vanished) and
+      // re-folded user-unfolded done groups. Secrets stay machine-local (never synced) — they
+      // only need to SURVIVE the blob rebuild, not egress.
+      ...SECRET_KEYS,
+      'doneGroupsFoldMigrated',
       'shortcutKeySettings', 'foldedTodoList', // intentionally local-only (manifest header) but still DEFAULT_SETTINGS blob keys
       '_savedAt', 'schemaV', '_lsAt'
     ])
