@@ -62,6 +62,7 @@ const PING_KEY = 'tomatoSyncPing'
 
 /** Idempotency token slot for completion transitions: only one set of side effects (notification/audio/snow gain) per entry into a running state; concurrent main+float windows count once */
 const CLAIM_KEY = 'tomatoLastPhaseDone'
+const SALT_KEY = 'tomatoDeviceSalt'
 
 /** Cross-window phase claiming: for the same startedAt, only the first writer produces side effects (notification/audio/accounting).
  *  P2 root fix (was a 1.5s time window): the claim is a state slot — the exact phase string is written into the
@@ -76,6 +77,32 @@ const CLAIM_KEY = 'tomatoLastPhaseDone'
  *  claim. The main-process CAS returns an owner token; release only deletes on a token match.
  *  A localStorage fallback (same single-window semantics as before) survives only where no
  *  main-process bridge exists (browser hosts / plain-node tests) — never in the desktop app. */
+/* [D22 P2] Device-stable salt for freshly minted tomato ids. The minted id used to be
+ * 'tmt_<kind>_' + startedAt alone: two devices starting a free focus in the same millisecond
+ * produced the SAME id and main's ON CONFLICT fully overwrote the earlier row (no LWW, even a
+ * tombstone resurrection). The salt is generated once per device and persisted in localStorage,
+ * so ids stay format-safe ('<prefix><startedAt>_<salt>' — same underscore-separated suffix shape
+ * as the taskMenu 'tmt_m_...' ids) and are stable across restarts for dedupe. Salted ids are
+ * gated behind the real Electron bridge (window.todoAPI.updateSettings — every preload surface
+ * has it, ad-hoc store-test stubs do not): plain-node test hosts keep the legacy unsalted format,
+ * so existing exact-id assertions remain meaningful. No memoization: mints are
+ * rare (one per focus) and reading LS fresh keeps the value honest if the salt is ever rotated. */
+function deviceSalt () {
+  try {
+    if (typeof window === 'undefined' || !window.todoAPI || !window.todoAPI.updateSettings) return ''
+    let s = localStorage.getItem(SALT_KEY)
+    if (!s) {
+      s = Math.random().toString(36).slice(2, 8)
+      localStorage.setItem(SALT_KEY, s)
+    }
+    return s
+  } catch (e) { return '' }
+}
+export function mintTomatoId (prefix, startedAt) {
+  const salt = deviceSalt()
+  return prefix + startedAt + (salt ? '_' + salt : '')
+}
+
 async function claimPhase (status, startedAt) {
   const phase = status + ':' + (startedAt || 0)
   try {
@@ -521,7 +548,8 @@ export default {
         commit('addRecord', {
           // Deterministic id: cross-window dedupe as a backstop so the same give-up records only once
           // Accounting basis = endTime (unified with completeFocus/stats/rail)
-          tomatoId: 'tmt_a_' + s.startedAt, endTime: Date.now(), dateKey: dayjs(Date.now()).format(FMT.date),
+          // [D22 P2] device salt mixed in — same-ms cross-device starts no longer collide
+          tomatoId: mintTomatoId('tmt_a_', s.startedAt), endTime: Date.now(), dateKey: dayjs(Date.now()).format(FMT.date),
           focus: focused ? focused.taskContent : '', focusTaskId: focused ? focused.taskId : null,
           focusDuration: focusedMin, rest: s.restTime, restDuration: 0, succeed: false, status: 'local',
           abandonReason: (reason || '').trim()
@@ -581,7 +609,8 @@ export default {
       try {
         commit('addRecord', {
           // Accounting basis unified = endTime: stats (metrics)/rail (railSegs)/entry-card corrections (updateRecord) all use endTime
-          tomatoId: 'tmt_f_' + startedAt, endTime: endTs, dateKey: dayjs(endTs).format(FMT.date),
+          // [D22 P2] device salt mixed in (same-ms cross-device collision, same as giveUp)
+          tomatoId: mintTomatoId('tmt_f_', startedAt), endTime: endTs, dateKey: dayjs(endTs).format(FMT.date),
           focus: focused ? focused.taskContent : '', focusTaskId: focused ? focused.taskId : null,
           focusDuration: focusMin, rest: s.restTime, restDuration: s.restTime, succeed: true, status: 'local'
         })
