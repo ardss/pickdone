@@ -452,6 +452,13 @@ export default {
     async applyRestoreDump (dump) {
       const b = (dump && dump.backup) || {}
       const failed = []
+      // [D22 P2] CLI evt-purge snapshots (cli/lib-eventbackup.cjs shape) carry ONLY
+      // backup.{purgedRows, liveRows, metaEntries} — none of the stamped segments below — so the
+      // old path recognized nothing, restored zero rows and still toasted "restored". Route these
+      // dumps through a dedicated branch instead of falling through to a fake success.
+      if (!b.todoState && (Array.isArray(b.liveRows) || Array.isArray(b.purgedRows))) {
+        return this.applyEvtPurgeDump(b, failed)
+      }
       const seg = (name, fn) => { try { fn() } catch (e) { console.error('[settings] restore segment failed: ' + name, e); failed.push(name) } }
       if (b.settingsState) seg('settings', () => this.$store.commit('settings/restore', JSON.parse(b.settingsState)))
       // setListRestore: backup-time tombstones must not win category LWW and re-delete peer-recovered
@@ -492,6 +499,30 @@ export default {
       this.$store.dispatch('_rt/refreshFromDb')
       this.$store.dispatch('tomato/recordsReload').catch(e => console.error('[settings] tomato/recordsReload after restore failed:', e))
       this.reportRestoreResult(rows.length + habitCount, failed) // F6: habits counted honestly
+    },
+    // [D22 P2] CLI evt-purge snapshot restore: liveRows come back as ACTIVE todo rows, purgedRows
+    // stay tombstoned (delete:true — they were permanently purged; like the app snapshot's
+    // recycleList they land in the recycle bin, never silently revived as active tasks).
+    // metaEntries re-put through the same whitelist as metaState. The report reflects the real
+    // row count instead of a constant zero "success".
+    async applyEvtPurgeDump (b, failed) {
+      let n = 0
+      try {
+        const live = (b.liveRows || []).filter(r => r && r.taskId).map(r => restoreStampRow({ ...r, delete: false }))
+        const purged = (b.purgedRows || []).filter(r => r && r.taskId).map(r => restoreStampRow({ ...r, delete: true, deletedAt: r.deletedAt || Date.now() }))
+        const rows = [...live, ...purged]
+        if (rows.length) await commitCommand('todo', 'putMany', rows)
+        n = rows.length
+      } catch (e) { console.error('[settings] restore segment failed: evtRows', e); failed.push('evtRows') }
+      try {
+        const entries = (b.metaEntries || []).filter(e =>
+          e && typeof e.key === 'string' && e.value != null && e.value !== '' &&
+          META_RESTORE_PREFIXES.some(p => e.key.startsWith(p)))
+        for (const e of entries) await commitCommand('meta', 'put', [e.key, e.value])
+      } catch (e) { console.error('[settings] restore segment failed: evtMeta', e); failed.push('evtMeta') }
+      this.$store.dispatch('_rt/refreshFromDb')
+      this.$store.dispatch('tomato/recordsReload').catch(e => console.error('[settings] tomato/recordsReload after evt restore failed:', e))
+      this.reportRestoreResult(n, failed)
     },
     // D6-F14: saved filters 回灌——按 id 幂等 re-put(filter.putMany upsert),随后以 DB 行表为准刷新内存列表
     // B2 (2026-09-26): rows are re-stamped fresh (restoreStampLww) so LAN LWW cannot self-revert the restore.

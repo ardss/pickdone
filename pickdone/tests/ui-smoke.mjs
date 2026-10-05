@@ -361,7 +361,8 @@ const PUMP_TICK = `(${STORE_Q}).dispatch('tomato/tick').catch(()=>{}); true`
 const pumpFor = async (expr, tries, gap = 600) => { for (let i = 0; i < tries; i++) { await evalJson(PUMP_TICK); const v = await evalJson(expr); if (v) return v; await sleep(gap) } return null }
 const tickState = await pumpFor(`(()=>{const st=(${STORE_Q});if(!st)return false;const s=st.state.tomato;if(s.status!=='startRestTime')return false;const last=(s.tomatoRecordList||[])[0]||{};return {status:s.status,count:s.todayTomatoCount,recId:last.tomatoId,recOk:last.succeed,recs:(s.tomatoRecordList||[]).length}})()`, 60)
 ok('expired focus auto-flips into rest', tickState && tickState.status === 'startRestTime', JSON.stringify(tickState))
-ok('auto-books a succeed record', tickState && tickState.recOk === true && tickState.recId === 'tmt_f_' + tStart, JSON.stringify(tickState))
+// D22: tomatoId mints carry a device-stable salt suffix after the timestamp — prefix-match, not exact equality
+ok('auto-books a succeed record', tickState && tickState.recOk === true && typeof tickState.recId === 'string' && tickState.recId.startsWith('tmt_f_' + tStart + '_'), JSON.stringify(tickState))
 const recsAfterFlip = tickState ? tickState.recs : -1
 // Wait two more beats with explicit tick pumps: the idempotency token + dedup must prevent double
 // booking even when ticks are re-delivered (which is exactly what pumping here forces).

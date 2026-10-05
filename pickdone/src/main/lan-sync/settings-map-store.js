@@ -30,8 +30,15 @@ module.exports = function createJsonSettingStore ({ settingGet, settingPut, log,
       degraded = true
       throw new Error(name + ' read failed (refusing to derive a write from it): ' + (e && e.message))
     }
+    // D22 (P2 2026-10-03) latch-clear fix: the read+decode SUCCEEDED here, so the earlier
+    // failure latch must be cleared regardless of what validate() says next. The old order ran
+    // the validate early-return BEFORE the clear, so once degraded (e.g. one transient read
+    // throw) a subsequent readable-but-invalid value kept the store latched forever — the
+    // validate-fail path never re-entered normal mode. Clearing on decode success matches the
+    // documented malformed-but-readable policy: that value may yield the default, and writes
+    // re-arm (the write is derived from a SUCCESSFUL read, never from the failed one).
+    degraded = false
     if (validate && !validate(v)) return JSON.parse(defaultValue)
-    degraded = false // a successful read re-arms persistence
     return v
   }
   /** False while the live value was derived from a FAILED read — writers must abort. */

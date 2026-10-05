@@ -380,8 +380,25 @@ function createClientRound(ctx) {
           // D20-C7: per-round push generation id — the receiver starts a FRESH _segPush
           // accumulator when it changes (a previous push left unterminated must not blend).
           const pushId = 'push_' + Math.random().toString(36).slice(2, 10)
+          // D22 (P2 2026-10-02): honor send()'s boolean report — the client-side twin of the
+          // D19 server-side dead-peer abort (server-role.js emit()). The return used to be
+          // discarded, so a dead socket silently dropped every push frame while the round
+          // still "ran" until the 120s deadline. IMPORTANT distinction the server twin does not
+          // need: transport.send() also returns false on ORDINARY kernel-buffer backpressure
+          // (socket.write() reports false once the highWaterMark is exceeded, but the frame IS
+          // queued and TCP will deliver it). Only a genuinely DEAD socket (destroyed /
+          // non-writable at the moment of the report) aborts the round; backpressure on a live
+          // socket keeps the push loop going — aborting on it broke the >32MB backlog push
+          // (segments-chunk.test.mjs regression).
+          const sendOrAbort = (msg, what) => {
+            if (client.send(msg) !== false) return true
+            const sock = client._socket
+            if (sock && !sock.destroyed && sock.writable) return true // backpressure: frame queued
+            finish(new Error(what + ' send failed: peer socket dead'))
+            return false
+          }
           for (const chunk of packSegmentChunks(mine)) {
-            client.send({ type: 'segments-chunk', segments: chunk.segments, final: chunk.final, pushId })
+            if (!sendOrAbort({ type: 'segments-chunk', segments: chunk.segments, final: chunk.final, pushId }, 'segments-chunk')) return
           }
           // Deterministic trigger from the previous round: my increments are gone on the peer —
           // request a full snapshot INSTEAD of a futile incremental round (one per peer at a time).
@@ -394,7 +411,11 @@ function createClientRound(ctx) {
             ownsSnapshotBusy = true
             awaitingSnapshot = true
             chunkBuf.clear()
-            client.send({ type: 'snapshot-request' })
+            // Same D22 abort contract as the push loop above: an undeliverable snapshot-request
+            // must fail the round (the trigger was already consumed above; a round failure with
+            // awaitingSnapshot=true re-arms it via finish()). Live-socket backpressure still
+            // counts as delivered (frame queued; TCP guarantees the stream).
+            if (!sendOrAbort({ type: 'snapshot-request' }, 'snapshot-request')) return
           }
         } catch (err) {
           // A throw inside 'ready' used to propagate into the transport's line reader and leave

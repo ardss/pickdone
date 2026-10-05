@@ -318,7 +318,7 @@ if (!app.requestSingleInstanceLock(...__multiLockArgs)) {
     try {
       dbm.init(app.getPath('userData'))
     } catch (e0) {
-      log.error('[Init] DB 初始化失败：', e0)
+      log.error('[Init] DB init failed:', e0)
       // D18 (2026-10-02): a transiently locked db.key (AV/indexer EPERM/EBUSY) fails init with
       // code DB_KEY_TRANSIENT_UNREADABLE while the DATABASE itself is healthy. Never enter the
       // recovery flow (rename/reset) for it: wait the lock out with a bounded sync backoff and
@@ -436,8 +436,8 @@ if (!app.requestSingleInstanceLock(...__multiLockArgs)) {
         const pb = path.join(ud, 'todos.db.plain-bak')
         if (jsonRestoreProved) {
           try {
-            if (fs.existsSync(pb)) { fs.rmSync(pb, { force: true }); log.info('[Init] 恢复成功重启前清除明文残留 todos.db.plain-bak') }
-          } catch (e0) { log.warn('[Init] plain-bak 清理失败(relaunch 前)', e0) }
+            if (fs.existsSync(pb)) { fs.rmSync(pb, { force: true }); log.info('[Init] recovery OK: removed plaintext leftover todos.db.plain-bak before relaunch') }
+          } catch (e0) { log.warn('[Init] plain-bak cleanup failed (pre-relaunch)', e0) }
         } else if (fs.existsSync(pb)) {
           log.warn('[Init] plain-bak 保留:恢复未证实导入任何数据行 (source=' + recoveredFrom.source + ', restoredN=' + restoredN + '),最后的备份不可删除')
         }
@@ -511,11 +511,11 @@ if (!app.requestSingleInstanceLock(...__multiLockArgs)) {
       const pb = path.join(__ud, 'todos.db.plain-bak')
       const replayBlocking = replayDecision.replay && !replayProved
       if (fs.existsSync(pb) && replayBlocking) {
-        log.warn('[Init] plain-bak 保留:recovery replay 未证实消费快照,最后的备份不可删除')
+        log.warn('[Init] plain-bak kept: recovery replay did not prove snapshot consumption, last-resort backup is not removable')
       } else if (fs.existsSync(pb)) {
-        fs.rmSync(pb, { force: true }); log.info('[Init] 加密库启动正常,已清除明文残留 todos.db.plain-bak')
+        fs.rmSync(pb, { force: true }); log.info('[Init] encrypted DB healthy, removed plaintext leftover todos.db.plain-bak')
       }
-    } catch (e0) { log.warn('[Init] plain-bak 清理失败', e0) }
+    } catch (e0) { log.warn('[Init] plain-bak cleanup failed', e0) }
     // A clean init with NO replayable state means any sentinel is stale (either the replay already
     // ran or there is nothing left to replay) — clear it. With a replay pending, the block above
     // owns the lifecycle (clear on proved, keep on unproved).
@@ -552,18 +552,18 @@ if (!app.requestSingleInstanceLock(...__multiLockArgs)) {
     try {
       // P1 2026-09-19: getAll({deleted:null}) included recycle-bin rows, so a repeatId referenced
       // only by a deleted task kept its repeatRule: meta forever (never GC'd). Only LIVE rows keep
-      // a rule alive — deleted:0. Decision logic extracted to handlers/shared.computeMetaGc for tests.
+      // a rule alive — D22 (2026-10-02): ALL rows (tombstones included) are passed; computeMetaGc
+      // keeps repeatRule keys live-only but treats restorable recycle-bin rows as live for the
+      // per-TASK meta families (deleted:0 read wiped a binned row's estimate; restore never reseeds).
       const { computeMetaGc } = require('./handlers/shared')
       // D19-DOM1: tomatoRunAnnounce family rule inputs — the paired-device set (from the LAN sync
-      // bootstrap's peer table) plus OUR own id (our announce row is never GC-able). On any read
-      // failure the option stays undefined and the family rule is inert (nothing deleted).
       let pairedDeviceIds, ownDeviceId
       try {
         const lanSync = require('./lan-sync-bootstrap')
         pairedDeviceIds = new Set(lanSync.loadPairedPeers().map(p => String((p && p.deviceId) || '')))
         ownDeviceId = lanSync.ensureIdentity().deviceId
       } catch { /* sync module/settings read unavailable: family rule inert */ }
-      for (const k of computeMetaGc(dbm.call('listMetaKeys'), dbm.call('getAllCategories'), dbm.call('getAll', { deleted: 0 }), { pairedDeviceIds, ownDeviceId })) {
+      for (const k of computeMetaGc(dbm.call('listMetaKeys'), dbm.call('getAllCategories'), dbm.call('getAll', {}), { pairedDeviceIds, ownDeviceId })) {
         require('./command-bus').commit('meta', 'delete', k, { preserveStamp: true }) // Phase-2: GC via the bus
       }
       // D6 P2 (2026-09-21): historical note — the GC loop used to run BEFORE registerIpc wired the
@@ -596,14 +596,14 @@ if (!app.requestSingleInstanceLock(...__multiLockArgs)) {
     // Security lock: when enabled the main process takes over — hide the main window and pop a standalone lock screen (aligned with the reference enableSecurityLock)
     if (readConfig().enableSecurityLock) {
       win.webContents.once('did-finish-load', () => {
-        try { lockAppNow() } catch (e) { log.error('[SecurityLock] 锁定失败', e) }
+        try { lockAppNow() } catch (e) { log.error('[SecurityLock] lock failed', e) }
       })
     }
-    log.info('[App] 初始化完成。userData=', app.getPath('userData'))
+    log.info('[App] init done. userData=', app.getPath('userData'))
   }).catch(e => {
     // Uncaught exceptions inside the whenReady chain (createTray/registerIpc/applyShortcuts etc.): Electron by default only logs and does not exit,
     // leaving a zombie process with no window and no tray (from the user's view, "double-click does nothing"). Explicitly log + dialog + exit.
-    log.error('[App] 启动初始化失败:', e)
+    log.error('[App] startup init failed:', e)
     try {
       dialog.showErrorBox('PickDone — ' + i18nM.mt('startupFailed'), String((e && e.stack) || e))
     } catch (_) { /* no dialog available */ }

@@ -79,6 +79,10 @@
     "authority": "local-only",
     "note": "相位完成防重放令牌(跨窗口tick协调),单会话生命周期"
   },
+  "renderer/js/store/tomato.js::tomatoDeviceSalt": {
+    "authority": "local-only",
+    "note": "Device-stable random salt mixed into freshly minted tomato ids (D22 P2 same-ms cross-device collision fix); never synced, idempotent per device, regenerated only if the user clears LS"
+  },
   "renderer/js/store/tomato.js::tomatoState": {
     "authority": "sqlite",
     "note": "番茄计时瞬态+偏好;账本(专注记录)权威=SQLite tomato_records 行表(2026-09-04根修),LS blob 已剔除记录只存计时瞬态,跨窗口同步层"

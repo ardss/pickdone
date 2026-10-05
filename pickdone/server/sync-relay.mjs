@@ -27,8 +27,11 @@
 
 import { createServer } from 'node:http'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
+import { readFileSync, renameSync, mkdirSync, existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+// D22 (P2 2026-10-02): the shared durable atomic-write helper (tmp -> fsync -> rename).
+// Plain Node, no electron — importable from this ESM module.
+import { writeFileDurable } from '../src/main/durable-fs.js'
 
 // ---------- storage backends ----------
 
@@ -101,13 +104,30 @@ export function memoryStore() {
   }
 }
 
-/** JSON-file write-through store: same contract, fsync-on-mutation via atomic rename. */
+/** JSON-file write-through store: same contract, fsync-on-mutation via atomic rename.
+ *
+ *  D22 (P2 2026-10-02): the comment above used to be a LIE — persist() was a bare
+ *  writeFileSync (no tmp, no fsync, no rename), so a crash mid-write could leave a TORN
+ *  relay-state.json; and the startup load was an unguarded JSON.parse, so that torn file
+ *  crashed the relay at boot. Worse, a partially-written file that still parsed could
+ *  REGRESS `seq`, making the relay re-issue serverSeqs and clients replay whole histories.
+ *  Writes now go through writeFileDurable (tmp + fsync + rename), and a corrupt load is
+ *  quarantined to relay-state.json.bad with a FRESH state instead of crashing (seq loss is
+ *  recoverable: clients re-push unacked envelopes; a replayed seq is not). */
 export function fileStore(dir) {
   mkdirSync(dir, { recursive: true })
   const file = join(dir, 'relay-state.json')
   const mem = memoryStore()
-  const persist = () => writeFileSync(file, JSON.stringify(mem.__dump(), null, 0))
-  if (existsSync(file)) mem.__load(JSON.parse(readFileSync(file, 'utf8')))
+  const persist = () => writeFileDurable(file, JSON.stringify(mem.__dump(), null, 0))
+  if (existsSync(file)) {
+    try {
+      mem.__load(JSON.parse(readFileSync(file, 'utf8')))
+    } catch (err) {
+      const bad = file + '.bad'
+      try { renameSync(file, bad) } catch { /* unreadable AND unmovable: leave it, start fresh */ }
+      console.error(`[relay] relay-state unreadable (${err && err.message}) — quarantined to ${bad}, starting fresh`)
+    }
+  }
   return {
     // kind AFTER the spread: Object.entries(mem) carries kind:'memory' and would
     // otherwise overwrite the file marker (drill log said "storage: memory @ .")

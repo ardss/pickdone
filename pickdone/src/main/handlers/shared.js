@@ -134,7 +134,15 @@ function computeMetaGc (metaKeys, categories, todos, opts = {}) {
   const now = Number(opts.now) || Date.now()
   const retentionMs = Number(opts.catFiltersBakRetentionMs) || CAT_FILTERS_BAK_RETENTION_MS
   const live = new Set((categories || []).map(c => String(c.id || c.categoryId)))
-  const liveRids = new Set((todos || []).map(t => t.repeatId).filter(Boolean))
+  // D22 (P3): repeatRule keys stay keyed to LIVE rows only (deliberate P1 decision 2026-09-19 —
+  // a rule referenced only by recycle-bin rows is dead) — hence the deleted filter here.
+  const liveRids = new Set((todos || []).filter(t => !t.deleted).map(t => t.repeatId).filter(Boolean))
+  // D22 (P3): per-TASK meta families (tomatoEstimateState / planChipsSnapshot / snowDedup) must
+  // survive while the row is still restorable from the recycle bin: a tombstoned row is one
+  // restore click away from being live again, and restore never reseeds its estimate. The old
+  // caller fed getAll({deleted: 0}) only, so every startup wiped the estimate of every binned
+  // row. Tombstoned ids therefore join liveTaskIds (they physically die — and their keys with
+  // them — only at purgeRecycleBin/hardDelete, which now cascade these keys).
   const liveTaskIds = new Set((todos || []).map(t => String(t.taskId)))
   const dead = []
   for (const k of metaKeys || []) {

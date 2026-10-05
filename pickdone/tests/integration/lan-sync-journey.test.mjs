@@ -28,7 +28,7 @@
 // and is excluded from the run-all default pool; it is a dedicated gate.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { spawn } from 'node:child_process'
+import { spawn, execSync } from 'node:child_process'
 import net from 'node:net'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -200,6 +200,18 @@ class Instance {
         this.cdp = await Cdp.connect(this.cdpPort, { targetTimeoutMs: Math.min(15000, deadline - Date.now()) })
         break
       } catch (e) {
+        if (this.exitCode === 0) {
+          // D22: a CLEAN exit during boot is the documented bounded lock-loss relaunch
+          // (multi-instance.js: a same-dir lock request denied right after a hard kill
+          // relaunches the app with a pre-lock delay; the successor INHERITS this CDP
+          // port). Keep polling — the successor's endpoint lands on the same port. A
+          // non-zero exit stays a real crash and throws below.
+          if (Date.now() > deadline) {
+            throw new Error(`[${this.name}] electron exited code=0 (lock-loss relaunch) and no successor CDP came up on port ${this.cdpPort}`)
+          }
+          await sleep(300)
+          continue
+        }
         if (this.exitCode !== undefined) {
           throw new Error(`[${this.name}] electron exited code=${this.exitCode} before CDP came up on port ${this.cdpPort}`)
         }
@@ -207,6 +219,17 @@ class Instance {
         await sleep(300)
       }
     }
+    // Adopt the real listener: after a lock-loss relaunch the surviving process is a
+    // successor, not this.pid — later killHard/stop must target the live tree.
+    try {
+      const out = execSync(`netstat -ano | findstr :${this.cdpPort}`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+      const m = out.split('\n').map((l) => l.trim().split(/\s+/)).find((p) => p[3] === 'LISTENING')
+      const listenerPid = m && Number(m[4])
+      if (listenerPid && listenerPid !== this.pid) {
+        trace(`[${this.name}] adopting successor pid ${listenerPid} (original ${this.pid} relaunched away)`)
+        this.pid = listenerPid
+      }
+    } catch { /* best-effort: pid stays the original */ }
     // Wait for the production preload surface before any journey step.
     await until(async () => {
       const ready = await this.cdp.evalExpr(
@@ -561,7 +584,7 @@ test('J4: reconnect — hard-kill B, restart with the same dirs, pair state surv
   const stB2 = await until(async () => {
     const s = await b2.status()
     return s.enabled && (s.peers || []).some(p => p.deviceId === aSelf.deviceId) ? s : null
-  }, 60000, '[B2] restarted with pairing intact (enabled + A in the peer table)')
+  }, 120000, '[B2] restarted with pairing intact (enabled + A in the peer table)')
   assert.ok(stB2.listening, '[B2] sync node listening again after restart')
 
   // Pending changes converge BOTH ways: A pushes an edit, restarted B pushes a new row.

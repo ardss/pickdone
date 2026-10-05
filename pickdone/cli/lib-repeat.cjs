@@ -8,9 +8,12 @@ module.exports = ({ open, commit, audit, CliError, dayjs, core, resolveTask, liv
    *  behavior change; the done path keeps its live getEstimateOf readback). Sort keeps the legacy
    *  length-keyed bottom-insert convention (min-512 / empty-day 1024; see the inline note for why
    *  nextSort's own empty check is not used here). */
-  function buildRenewalInstance (t, next, { estimate = 0, todoTime = next.todoTime, reminderTime, extra = {} } = {}) {
+  function buildRenewalInstance (t, next, { estimate = 0, todoTime = next.todoTime, reminderTime, extra = {}, allRows = null } = {}) {
     const now = Date.now()
-    const sameDay = open().call('queryTodos', { deleted: 0 }).filter(x => x.dayStart === dayStartOf(todoTime))
+    // D22 (P3 perf, 2026-10-02): callers minting MANY instances in one pass (repeatOn's expansion
+    // loop) pass a pre-fetched allRows — the per-call full queryTodos({deleted:0}) scan used to
+    // run once per constructed instance.
+    const sameDay = (allRows || open().call('queryTodos', { deleted: 0 })).filter(x => x.dayStart === dayStartOf(todoTime))
     const sameSorts = sameDay.map(x => x.taskSort).filter(v => v != null)
     // P2 2026-09-20 convention (renderer renewal: store/todo.js addToTop:false → nextSort): bottom-insert
     // min-512, empty day 1024. The EMPTY-day case is keyed on sameSorts.length, NOT nextSort's internal
@@ -136,6 +139,21 @@ module.exports = ({ open, commit, audit, CliError, dayjs, core, resolveTask, liv
       rule.repeatYearMonth = anchor.month() + 1
       rule.repeatYearMonthDay = anchor.date()
     }
+    // D22 (P3, 2026-10-02, App parity): weekly/monthly anchors derive from the task's date too —
+    // only the yearly rule did, so `repeat on --type monthly` without --monthday minted every
+    // instance on the 1st and weekly without --weekdays landed Mon-Fri, regardless of the task's
+    // own day (the App's RepeatModal seeds both anchors from the selected task). Same policy as
+    // the yearly anchor above: derive only while the rule still carries the engine defaults
+    // (an explicit flag that happens to equal a default is the accepted ambiguity, unchanged).
+    if (t.todoTime && rule.repeatType === 'week' &&
+        JSON.stringify(rule.repeatWeekDays) === JSON.stringify(core.REPEAT_DEFAULTS.repeatWeekDays)) {
+      const dow = dayjs(t.todoTime).day()
+      rule.repeatWeekDays = [dow === 0 ? 7 : dow] // engine convention: Monday=1 … Sunday=7
+    }
+    if (t.todoTime && rule.repeatType === 'month' &&
+        JSON.stringify(rule.repeatMonthDays) === JSON.stringify(core.REPEAT_DEFAULTS.repeatMonthDays)) {
+      rule.repeatMonthDays = [dayjs(t.todoTime).date()]
+    }
     commit('meta', 'put', ['repeatRule:' + rid, JSON.stringify(rule)])
     commit('todo', 'put', Object.assign({}, t, { repeatId: rid, updateTime: Date.now(), status: 'update' }))
     // Generate subsequent instances (the first day is the current task itself), reusing the todo-core engine's expansion
@@ -149,6 +167,9 @@ module.exports = ({ open, commit, audit, CliError, dayjs, core, resolveTask, liv
     // passes its holidayList here; the CLI complete-renewal path below already does). Mirrors
     // cli/lib.js:655.
     const holidayList = require('../shared/holidays.mjs').getHolidayList()
+    // D22 (P3 perf): one all-rows read for the whole expansion loop (buildRenewalInstance re-scanned
+    // queryTodos({deleted:0}) per instance otherwise).
+    const allRows = open().call('queryTodos', { deleted: 0 })
     for (const ts of core.expandRepeatDates(base, rule, holidayList).map(d => +d).filter(ts => ts > base).slice(0, cap)) {
       // F-B4: shared renewal-instance constructor (done-path parity). reminderTime keeps the template's
       // wall-clock time on each instance (dayjs re-derive per instance, same as RepeatModal — copying
@@ -158,7 +179,8 @@ module.exports = ({ open, commit, audit, CliError, dayjs, core, resolveTask, liv
       commit('todo', 'put', buildRenewalInstance(t, { todoTime: ts, reminderTime: 0 }, {
         todoTime: ts,
         reminderTime: tplRem,
-        extra: { repeatId: rid }
+        extra: { repeatId: rid },
+        allRows
       }))
       made++
     }
@@ -175,6 +197,25 @@ module.exports = ({ open, commit, audit, CliError, dayjs, core, resolveTask, liv
     if (hits.length) return hits[0]
     return resolveTask(input, list)
   }
+  /* D22 (P3 perf, 2026-10-02): batched chip-snapshot cascade for repeatOff --all. The per-task
+   *  chipsSnapshotForDelete did a FULL planAll scan PER instance; here one scan feeds every
+   *  snapshot, then the per-task cascade ops (meta put only when chips exist + plan deleteTask)
+   *  run unchanged — same ops and key shapes, N scans → 1. Same loud-not-silent failure policy. */
+  function chipsSnapshotBatchForDelete (taskIds) {
+    let rows = []
+    try { rows = open().call('planAll', []) } catch (e) {
+      console.error('warning: chip snapshot scan failed — schedule chips may be orphaned (' + (e && e.message ? e.message : e) + ')')
+    }
+    for (const id of taskIds) {
+      try {
+        const chips = rows.filter(r => r.taskId === id)
+        if (chips.length) commit('meta', 'put', ['planChipsSnapshot:' + id, JSON.stringify(chips)])
+        commit('plan', 'deleteTask', id)
+      } catch (e) {
+        console.error(`warning: chip snapshot/cascade failed for task ${id} (${e && e.message ? e.message : e}) — schedule chips may be orphaned`)
+      }
+    }
+  }
   function repeatOff (input, all) {
     const t = resolveRepeatEntry(input)
     const rid = t.repeatId
@@ -182,21 +223,26 @@ module.exports = ({ open, commit, audit, CliError, dayjs, core, resolveTask, liv
     let removed = 0
     if (all) {
       const now = Date.now()
+      // D22 (P3 perf): hoist the all-rows read out of the loop (was one queryTodos per instance
+      // via the per-task chipsSnapshotForDelete).
+      const allRows = open().call('queryTodos', { deleted: 0 })
       // D18-DOM2 (#3, App parity RepeatDeleteModal.vue 'all' scope): EVERY live instance of the
       // group dies — completed ones included (the App's mode==='all' branch collects the whole
       // group regardless of completion, then cleanupOrphanRule GCs the rule). The old
       // `!x.complete` filter left finished instances in the recycle bin's alive-but-binned
       // siblings while the rule was already gone.
-      for (const x of open().call('queryTodos', { deleted: 0 })) {
+      const doomed = []
+      for (const x of allRows) {
         if (x.repeatId === rid) {
           // version: 0 (deleteTodo parity, 2026-09-12 P3): syncTodos excludes delete rows already acked
           // with version > 0, so keeping the old version meant the soft-deleted repeat instances never
           // re-entered the sync snapshot and the deletion silently never propagated.
           commit('todo', 'put', Object.assign({}, x, { delete: true, deletedAt: now, updateTime: now, version: 0, status: 'delete' }))
-          chipsSnapshotForDelete(x.taskId) // same snapshot→clear cascade as deleteTodo: soft-deleted instances must not leave orphan chips
+          doomed.push(x.taskId)
           removed++
         }
       }
+      chipsSnapshotBatchForDelete(doomed) // same snapshot→clear cascade as deleteTodo, batched (D22)
       // Fix (2026-09-19): '' → deleteMeta (file-wide convention) so the rule row is actually removed.
       commit('meta', 'delete', 'repeatRule:' + rid)
     } else {

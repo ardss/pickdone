@@ -3,7 +3,7 @@
  * Subtasks (subtasks JSON: [{text, checked}], structure aligned with EditPanel). */
 // D17: the parent-toggle rule is shared with the renderer (utils/core.js re-exports shared/subs-core.mjs)
 const { subsCompleteTarget } = require('../shared/subs-core.mjs')
-module.exports = ({ resolveTask, liveTasks, patchTodo, CliError, open, renewRepeatAfterComplete }) => {
+module.exports = ({ resolveTask, liveTasks, patchTodo, CliError, open, renewRepeatAfterComplete, commit, chipsSnapshotForDelete }) => {
   /* ================= Subtasks (subtasks JSON: [{text, checked}], structure aligned with EditPanel) ================= */
   function parseSubs (t) {
     try { const a = JSON.parse(t.subtasks || '[]'); return Array.isArray(a) ? a : [] } catch { return [] }
@@ -61,7 +61,33 @@ module.exports = ({ resolveTask, liveTasks, patchTodo, CliError, open, renewRepe
     if (target === true && after && t.repeatId) {
       renewed = renewRepeatAfterComplete(open(), t, after)
     }
-    return after && typeof after === 'object' ? Object.assign(after, { renewed }) : after
+    // D22 (P2, 2026-10-02): un-completing the parent through a sub-uncheck must also remove the
+    // phantom auto-renewed next instance — the App's undo path removes it (renderer/js/store/
+    // todo.js toggleComplete) and the CLI `done --undo` cleanup does the same (cli/lib.js), but
+    // this branch only reset complete:false/completedAt:0, leaving a seeded future instance that
+    // only a manual delete would clear. Same selection rule as the undo cleanup: same rid,
+    // nearest later dayStart, still the group's LAST live instance, and not itself completed.
+    let removedRenewal = null
+    if (target === false && after && t.repeatId && t.dayStart) {
+      try {
+        const group = open().call('queryTodos', { deleted: 0, repeatId: t.repeatId })
+          .filter(x => x.taskId !== t.taskId && x.dayStart > 0)
+          .sort((a, b) => a.dayStart - b.dayStart)
+        const lastDay = group.length ? group[group.length - 1].dayStart : 0
+        const renewedNext = group.find(x => x.dayStart > t.dayStart)
+        if (renewedNext && !renewedNext.complete && renewedNext.dayStart === lastDay) {
+          const now = Date.now()
+          // version: 0 (deleteTodo parity) so the soft delete re-enters the sync snapshot
+          commit('todo', 'put', Object.assign({}, renewedNext, { delete: true, deletedAt: now, updateTime: now, version: 0, status: 'delete' }))
+          chipsSnapshotForDelete(renewedNext.taskId) // same snapshot→clear cascade as deleteTodo
+          removedRenewal = renewedNext.taskId
+        }
+      } catch (e) {
+        // Best-effort: the uncheck itself must succeed even if the cleanup hits a snag — but loud
+        console.error(`warning: subtask uncheck could not remove the auto-renewed instance for task ${t.taskId} (${e && e.message ? e.message : e})`)
+      }
+    }
+    return after && typeof after === 'object' ? Object.assign(after, { renewed, removedRenewal }) : after
   }
   const removeSubtask = (input, key) => mutateSubs(input, subs => subs.splice(findSub(subs, key), 1), { note: 'subtask removed: ' + key })
 

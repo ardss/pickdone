@@ -66,8 +66,10 @@ export default {
       pickedDate: null as any
     }
   },
-  // pickedDate is intentionally NOT reset when text is cleared: the chip stays until the user
-  // explicitly clears it via the chip ✕ (pickedDate = 0) or submits (onEnter resets both)
+  // pickedDate is NOT reset by ordinary text edits: the chip stays until the user explicitly
+  // clears it via the chip ✕ (pickedDate = 0) or submits (onEnter resets both). Esc (onCancel)
+  // is a full cancel: it resets the chip too, so the next quick-add cannot silently inherit a
+  // stale date the user believed they cancelled.
   computed: {
     parsed () {
       const r = parseNaturalDate(this.text)
@@ -115,6 +117,9 @@ export default {
     onCancel () {
       this.failed = false
       if (this.text) this.text = ''
+      // [D22 P3] Esc also clears the date chip: the chip used to survive the cancel and the
+      // next quick-add silently inherited the stale date (cancel = cancel everything).
+      this.pickedDate = null
       const inp = this.$refs.inp
       if (inp && inp.blur) inp.blur()
     },
@@ -148,6 +153,7 @@ export default {
       this._submitting = true
       const tag = this.routeTag
       const catId = this.routeCategoryId
+      let done = 0 // lines already dispatched successfully (read by the catch below)
       try {
         for (const raw of lines) {
           const content = ensureTagSuffix(raw, tag)
@@ -160,6 +166,7 @@ export default {
           }
           if (catId != null) payload.categoryId = catId
           await this.$store.dispatch('todo/addTodo', payload)
+          done++
         }
         const n = lines.length
         // [P2 fix] the bulk toast omitted WHERE the lines landed — with a date chip active every
@@ -179,6 +186,11 @@ export default {
         this.$emit('created', { content: lines.join('\n'), date: d })
       } catch (err) {
         console.error('[quick-add] multi-line paste failed:', err)
+        // [D22 P2] partial-failure retry contract: lines already created must NOT be re-created
+        // on the user's retry (they duplicated). Leave only the unsent remainder in the input,
+        // so Enter/paste resubmits exactly what is still missing. done counts successful lines.
+        const rest = lines.slice(done).join('\n')
+        if (rest) this.text = rest
         if (this.quiet) this.failed = true
         else this.$message.error(this.$t('statsD.QuickAdd.createFailed'))
       } finally { this._submitting = false }

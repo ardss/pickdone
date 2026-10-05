@@ -85,9 +85,12 @@ test('d4 meta GC: a repeatId held only by a DELETED task no longer anchors its r
     'only the live task keeps its rule; the deleted-only rule is collected')
 })
 
-test('d4 meta GC: index.js query uses deleted:0 (source assertion — the actual P1 fix site)', () => {
+test('d4 meta GC: index.js feeds ALL rows to computeMetaGc (D22 2026-10-02: restorable recycle-bin rows keep their per-task meta; repeatRule stays live-only INSIDE computeMetaGc)', () => {
   const s = readSrc('index.js')
-  assert.match(s, /getAll', \{ deleted: 0 \}/, 'getAll must filter deleted:0')
+  // D22: the old deleted:0 read wiped a binned row's tomatoEstimateState/planChipsSnapshot at
+  // every startup (restore never reseeds them). The live-only repeatRule policy (the original P1)
+  // moved into computeMetaGc itself (handlers/shared.js) — index.js now passes tombstones too.
+  assert.match(s, /getAll', \{ ?\}/, 'index.js must pass ALL rows (tombstones included) to computeMetaGc')
   assert.doesNotMatch(s, /getAll', \{ deleted: null \}/, 'the deleted:null bug must be gone')
 })
 

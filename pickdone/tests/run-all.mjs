@@ -110,11 +110,17 @@ if (suites.length) console.error(`[run-all] suite filter: ${suites.join(',')} ->
 // measured 139s under load — the margin note below used to claim 6.5x when the slowest was
 // ~18s. 5min still names a hang well inside the CI job budget instead of the 30min sit.
 const TEST_TIMEOUT_MS = 300000
+// D22: optional file-concurrency knob (TEST_CONCURRENCY env, default = node's own default).
+// The electron-booting integration specs are the flake surface under a loaded box — a lower
+// ceiling (e.g. TEST_CONCURRENCY=4) trades wall time for boot stability without touching
+// what runs. Unset behavior is byte-identical to before.
+const TEST_CONCURRENCY = process.env.TEST_CONCURRENCY
 // --test-force-exit: a test that passes but leaks a handle (listening server, open socket,
 // watcher) would otherwise keep the per-file child process alive forever — the runner then waits
 // with ZERO results (0 failures, budget kill, unattributable). Force-exit makes the child leave
 // once tests finish; --test-timeout above covers the in-test hang case.
 const r = spawnSync(process.execPath, ['--test', '--test-force-exit', `--test-timeout=${TEST_TIMEOUT_MS}`,
+  ...(TEST_CONCURRENCY ? [`--test-concurrency=${TEST_CONCURRENCY}`] : []),
   // Pin the TAP reporter: check-test-summary.cjs anchors its fail/skip parsing on the TAP plan
   // (`1..N` + `# fail` lines), but Node >= 24 defaults the reporter to 'spec' even for non-TTY
   // stdout — the summary gate then read fail=undefined and red'd every run (2026-09-24).

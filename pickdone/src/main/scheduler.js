@@ -223,11 +223,13 @@ function fire (todo, offset) {
     // Notification sound
     const { sound } = require('./notify-sound')
     if (sound && dingFile) sound(dingFile)
-    // F-B8 (dw wave 3): task titles no longer go to main.log (plaintext旁路 — same nature as the
-    // index.js plain-bak cleanup); the taskId is enough to correlate a reminder with its task.
-    log.info('[Reminder] 已触发提醒:', todo.taskId, offset || 0)
+    // F-B8 (dw wave 3): task titles no longer go to main.log (plaintext side channel — same nature
+    // as the index.js plain-bak cleanup); the taskId is enough to correlate a reminder with its task.
+    log.info('[Reminder] fired:', todo.taskId, offset || 0)
+    return true // D22: fire result gates the watermark (see the call sites in scheduleTask/reloadAll)
   } catch (e) {
-    log.error('[Reminder] 触发失败', e)
+    log.error('[Reminder] fire failed', e)
+    return false // D22: a failed fire must NOT consume the catch-up watermark — the next reloadAll retries
   }
 }
 
@@ -253,7 +255,9 @@ function scheduleTask (todo, offset, remindTs) {
     jobs.delete(key)
     if (remindTs > Date.now()) scheduleTask(todo, offset, remindTs) // overflow segmentation: reschedule the remaining interval
     // Timer-triggered firings also enter the dedup set: otherwise the next write-triggered reloadAll would re-notify since the reminder satisfies the catch-up window (ts>lastSeen and unrecorded)
-    else { markFired(key); fireImpl(todo, offset) }
+    // D22 (P3): the watermark is written only after fire SUCCEEDED (fireImpl !== false) — a failed
+    // notification used to be watermarked first and never retried (the catch only logged).
+    else { if (fireImpl(todo, offset) !== false) markFired(key) }
   }, Math.min(delay, MAX_TIMEOUT))
   if (h.unref) h.unref() // do not keep the process alive
   jobs.set(key, h)
@@ -281,7 +285,11 @@ function reminderInstances (t) {
  *  wrote reminderLastSeenAt, which touched the DB again, feeding the watcher back — flooding
  *  the log ~800x with "0 future reminders"). When the reminder inputs are unchanged since the
  *  last rebuild, the live timers are still exactly right (runtime-due reminders fire via their
- *  own scheduled timers and are deduped by firedReminders), so a rebuild is a no-op. */
+ *  own scheduled timers and are deduped by firedReminders), so a rebuild is a no-op.
+ *  D22 (P1 pin): completion state is encoded BY PRESENCE — a task flipping complete drops its part
+ *  (and an un-completed task regains it), so either direction of a complete flip changes the
+ *  fingerprint and forces the teardown/rebuild that clears (or restores) the live timers. Exported
+ *  for regression tests; do not weaken the `|| t.complete` skip. */
 let lastRebuildFingerprint = null
 function rebuildFingerprint (todos) {
   const parts = []
@@ -330,6 +338,11 @@ function reloadAll (db) {
   if (firstRun) { try { db.setMeta(['reminderLastSeenAt', String(now)]) } catch {} }
   let future = 0
   let missed = 0
+  // D22 (P3): a failed catch-up fire must not be swallowed by the rebuild watermark either —
+  // lastSeen normally advances to `now`, which puts the reminder behind the catch-up window
+  // forever. On any failure, roll the watermark back to just before the EARLIEST failed reminder
+  // (already-fired ones stay deduped by firedReminders, so the retry cannot double-fire them).
+  let earliestFailedTs = Infinity
   for (const t of todos) {
     if ((!t.reminderTime && !(t.reminderExtra || []).length) || t.complete) continue
     for (const [offset, ts] of reminderInstances(t)) {
@@ -338,13 +351,15 @@ function reloadAll (db) {
         scheduleTask(t, offset, ts)
         future++
       } else if (!firstRun && ts > lastSeen && !firedReminders.has(key)) {
-        markFired(key)
-        fireImpl(t, offset) // reminder that came due while the app was closed: fire immediately (each one only once)
+        // D22 (P3): fire first, watermark only on success — a throwing notification path left the
+        // old order (markFired before fire) permanently swallowing the reminder (no catch-up retry).
+        if (fireImpl(t, offset) !== false) markFired(key)
+        else if (ts < earliestFailedTs) earliestFailedTs = ts
         missed++
       }
     }
   }
-  try { db.setMeta(['reminderLastSeenAt', String(now)]) } catch { /* watermark write failure only affects catch-up dedup */ }
+  try { db.setMeta(['reminderLastSeenAt', String(earliestFailedTs < Infinity ? Math.min(now, earliestFailedTs - 1) : now)]) } catch { /* watermark write failure only affects catch-up dedup */ }
   log.info('[Reminder] scheduler rebuild done: %d future reminders, %d missed reminders re-fired', future, missed)
 }
 
@@ -373,6 +388,7 @@ module.exports = {
   init: () => {}, reloadAll, scheduleOne, fire, setSoundFile, flushFiredNow,
   setShowMainEntry, focusMainFromNotification,
   reminderInstances, needsCatchUp, clipText, notifyTimeoutOpts, notifyTimeoutOptsForApp, timeoutFromInterval,
+  rebuildFingerprint, // D22 2026-10-02 test surface: a complete flip must change the fingerprint
   setFireForTest,
   loadFiredFromMeta, // r3 2026-09-28 test surface: corrupt watermark entries are dropped, not faked fresh
   packFiredEntries, parseFiredEntries, // D18 2026-10-02 test surface: separator-safe watermark wire format

@@ -19,7 +19,11 @@ function readCrashRelaunchCount () {
   try { return Number(JSON.parse(fs.readFileSync(crashMarkerPath(), 'utf8')).count) || 0 } catch { return 0 }
 }
 function writeCrashRelaunchCount (n) {
-  try { fs.writeFileSync(crashMarkerPath(), JSON.stringify({ count: n, at: Date.now() }), 'utf8') } catch { /* best-effort: a failed persist degrades to the old in-memory-only behavior */ }
+  // D22 (P3): bare writeFileSync could tear under a crash/power cut (half a JSON blob → the read
+  // side silently resets the counter to 0 and a deterministic crash loop can restart its relaunch
+  // budget). durable-fs writeFileDurable (tmp → fsync → rename, same convention as config-store.js)
+  // makes the marker atomic.
+  try { require('./durable-fs').writeFileDurable(crashMarkerPath(), JSON.stringify({ count: n, at: Date.now() }), fs) } catch { /* best-effort: a failed persist degrades to the old in-memory-only behavior */ }
 }
 
 function createWindowManager (ctx) {  const {

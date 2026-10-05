@@ -131,6 +131,7 @@ export default {
       st: this.read(),
       remaining: null as any,
       abandoning: false,
+      abandonBusy: false, // re-entrancy guard for confirmAbandon while the giveUp dispatch is in flight (D22 P2)
       abandonReason: '',
       menuOpen: false,
       noiseOpen: false,
@@ -296,9 +297,18 @@ export default {
     },
     persist (patch) { this.$store.commit('tomato/patch', patch); this.st = this.$store.state.tomato },
     minimize () { if (window.todoAPI) window.todoAPI.hideTomatoFloat() },
-    confirmAbandon () {
-      this.$store.dispatch('tomato/giveUp', { record: this.working, reason: this.abandonReason })
-      this.abandoning = false
+    // [D22 P2] giveUp is awaited (same fix as TomatoAbandonModal): the confirm layer used to collapse
+    // BEFORE the dispatch resolved, so a failed abandon was silent — it closes only on success.
+    async confirmAbandon () {
+      if (this.abandonBusy) return
+      this.abandonBusy = true
+      try {
+        await this.$store.dispatch('tomato/giveUp', { record: this.working, reason: this.abandonReason })
+        this.abandoning = false
+      } catch (e) {
+        console.error('[tomato] giveUp failed:', e)
+        if (this.$message) this.$message.error(this.$t('statsH.main.actionFailedMsg') + ((e && e.message) || ''))
+      } finally { this.abandonBusy = false }
     },
     cancelAbandon () {
       this.abandoning = false
@@ -323,11 +333,19 @@ export default {
       this.$store.dispatch('tomato/attach', taskId)
       this.menuOpen = false
     },
-    /* White noise switch: only writes the sound choice; play/stop is followed automatically by the global dispatcher per focus state; collapse back to the card on selection */
-    pickNoise (id) {
-      // Use the action, not the mutation: only the update action calls todoAPI.updateSettings → config.json; the original mutation keeps the sound choice out of the recovery channel
-      this.$store.dispatch('settings/update', { whiteNoiseAudio: id })
-      this.noiseOpen = false
+    /* White noise switch: writes only the sound choice; play/stop follows automatically per focus state; collapse to the card on selection */
+    async pickNoise (id) {
+      // Use the action, not the mutation: only the update action persists via todoAPI.updateSettings → config.json (the raw mutation keeps the choice out of the recovery channel)
+      // [D22 P3] the action's result is honored: settings/update RESOLVES with { ok:false } (not rejects)
+      // on config.json IPC failure — the panel stays open at the previous choice (nothing to roll back).
+      try {
+        const r = await this.$store.dispatch('settings/update', { whiteNoiseAudio: id })
+        if (r && r.ok === false) throw (r.error || new Error('updateSettings failed'))
+        this.noiseOpen = false
+      } catch (e) {
+        console.error('[tomato] white noise settings write failed:', e)
+        if (this.$message) this.$message.error(this.$t('statsH.main.actionFailedMsg') + ((e && e.message) || ''))
+      }
     },
     cancelAttach () {
       this.$store.dispatch('tomato/attach', null)
