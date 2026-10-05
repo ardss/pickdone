@@ -7,6 +7,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createRequire } from 'module'
+import os from 'node:os'
+import path from 'node:path'
+import { spawn } from 'node:child_process'
 
 const mi = createRequire(import.meta.url)('../../../src/main/multi-instance.js')
 
@@ -42,11 +45,14 @@ test('titleSuffix: empty by default, [#hash] only in multi mode', () => {
 test('lockRetryCount parses the retry flag; relaunchArgv bumps it and resolves the app path', () => {
   assert.equal(mi.lockRetryCount(['electron', '.', mi.LOCK_RETRY_FLAG + '2']), 2)
   assert.equal(mi.lockRetryCount(['electron', '.']), 0)
-  const next = mi.relaunchArgv(['electron.exe', '.', '--remote-debugging-port=1234', mi.LOCK_RETRY_FLAG + '1'], 2, 'K:/app')
+  // cwd must be a REAL absolute dir for the resolution assertion to mean the same thing on
+  // every platform ('K:/app' is only absolute on win32).
+  const cwd = os.tmpdir()
+  const next = mi.relaunchArgv(['electron.exe', '.', '--remote-debugging-port=1234', mi.LOCK_RETRY_FLAG + '1'], 2, cwd)
   assert.ok(next.includes(mi.LOCK_RETRY_FLAG + '2'), 'retry counter bumped')
   assert.ok(next.includes('--remote-debugging-port=1234'), 'other argv preserved')
   assert.ok(!next.some(a => String(a).startsWith(mi.LOCK_RETRY_FLAG + '1')), 'old counter dropped')
-  assert.equal(next[0].replace(/\\/g, '/'), 'K:/app', 'app path resolved against cwd (relaunch cwd-loss guard)')
+  assert.equal(next[0], path.join(cwd, '.'), 'app path resolved against cwd (relaunch cwd-loss guard)')
 })
 
 test('shouldRelaunchOnLockLoss: multi mode below the cap only', () => {
@@ -61,9 +67,13 @@ test('preLockDelayMs: only retry launches sleep before the lock request', () => 
   assert.equal(mi.preLockDelayMs(['e', '.', mi.LOCK_RETRY_FLAG + '1']), mi.LOCK_RETRY_DELAY_MS)
 })
 
-test('lockfileHolderPid reads the trailing pid out of a lockfile blob; pidAlive rejects dead pids', () => {
+test('lockfileHolderPid reads the trailing pid out of a lockfile blob; pidAlive rejects dead pids', async () => {
   assert.equal(mi.lockfileHolderPid('pid C:\\Users\\u\\app-1337'), 1337, 'trailing -<pid> token')
   assert.equal(mi.lockfileHolderPid('no pid here'), null)
-  assert.equal(mi.pidAlive(-1), false, 'negative pid is not alive')
+  // A reaped child's pid is guaranteed free — kill(-1,0) is "every process" on POSIX, so a
+  // negative pid is NOT a portable not-alive probe.
+  const dead = spawn(process.execPath, ['-e', 'process.exit(0)'])
+  await new Promise(resolve => dead.on('exit', resolve))
+  assert.equal(mi.pidAlive(dead.pid), false, 'reaped pid is not alive')
   assert.equal(mi.pidAlive(process.pid), true, 'own pid is alive')
 })
