@@ -137,7 +137,9 @@ function runMilestone ({ opts, lib, emit }) {
   if (!op || op === 'list') {
     const { milestones } = lib.getMilestones(name)
     const pid = lib.resolveCategory(name)
-    const tasks = lib.listTodos({ category: pid, limit: 500, done: null }).filter(t => !t.delete)
+    // maint/d23 P3 (D19 parity): the view/project listings were raised to 5000 for App parity but
+    // the milestone task fetch was missed — milestone progress silently ignored tasks past row 500.
+    const tasks = lib.listTodos({ category: pid, limit: 5000, done: null }).filter(t => !t.delete)
     if (opts.json) return emit(milestones.map(m => ({ ...m, progress: lib.msProgress(m, tasks) })))
     if (!milestones.length) return console.log('(no milestones)')
     const t0 = +dayjs().startOf('day')

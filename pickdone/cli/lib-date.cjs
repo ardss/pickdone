@@ -101,10 +101,12 @@ module.exports = ({ CliError, dayjs, nlDate }) => {
     const patch = {}
     if (!newTodoTime || !before) return patch
     if (before.reminderTime) {
-      // EditPanel.applyDate takes hour/minute from the OLD reminder; seconds/millis too, so relative date
-      // parses (which carry the current clock's seconds) stay deterministic
+      // EditPanel.applyDate takes hour/minute from the OLD reminder and keeps the NEW timestamp's
+      // base (seconds/millis — 0 for explicit dates). maint/d23 P3: the CLI used to also copy the
+      // OLD reminder's second/millisecond, so an old reminder carrying :07 seconds produced a
+      // sub-minute divergence from the App's reminder for the same edit.
       const r = dayjs(before.reminderTime)
-      patch.reminderTime = +dayjs(newTodoTime).hour(r.hour()).minute(r.minute()).second(r.second()).millisecond(r.millisecond())
+      patch.reminderTime = +dayjs(newTodoTime).hour(r.hour()).minute(r.minute())
     }
     const extras = Array.isArray(before.reminderExtra) ? before.reminderExtra : []
     const oldDay = before.todoTime ? +dayjs(before.todoTime).startOf('day') : 0

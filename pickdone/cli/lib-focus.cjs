@@ -10,7 +10,10 @@ module.exports = ({ open, commit, audit, CliError, dayjs, resolveTask, liveTasks
   }
 
   /** Backfill one manual focus record: CLI 直写账本行(不再经 App 命令通道,App 关闭也可用)。
-   *  tomatoId 与渲染端手动补录同形(幂等:重复导入同槽位不产生第二条)。 */
+   *  tomatoId 与渲染端手动补录同形(幂等:重复导入同槽位不产生第二条)。maint/d23 P4: the id
+   *  mixes the FULL taskId (format-safe: tid_<uid><alnum>_<ms>, same charset as the tail) — the
+   *  old slice(-8) tail collided across tasks sharing a last-8, and db-tomato-ops has no LWW, so
+   *  a same-slot second backfill silently ON CONFLICT-overwrote the first task's row. */
   function backfillRecord ({ taskId = null, content = '', date, at = '20:00', minutes = 25 }) {
     // B10: strict parse (db-tomato-ops contract: lower bound is 0, a bad value must NOT be inflated
     // into a phantom 1-minute ledger row). Non-numeric / 0 / negative → USAGE error, no row written.
@@ -27,7 +30,7 @@ module.exports = ({ open, commit, audit, CliError, dayjs, resolveTask, liveTasks
     const endTime = endAt.valueOf()
     const startTs = endTime - min * 60000
     const rec = {
-      tomatoId: 'tmt_m_' + startTs + '_' + min + '_' + String(taskId || 'free').slice(-8),
+      tomatoId: 'tmt_m_' + startTs + '_' + min + '_' + String(taskId || 'free'),
       endTime, dateKey: endAt.format('YYYY-MM-DD'),
       focus: content || '', focusTaskId: taskId || null,
       focusDuration: min, rest: 0, restDuration: 0,
@@ -121,7 +124,14 @@ module.exports = ({ open, commit, audit, CliError, dayjs, resolveTask, liveTasks
     }
     // restDuration clamp = REST_MAX_MINUTES, the same cap the db layer applies (_recToRow); the old CLI-only
     // 120 clamp silently rewrote a legitimate 300-min rest to 120 while a direct db append kept 600.
-    if (rest != null) patch.restDuration = Math.max(0, Math.min(REST_MAX_MINUTES, parseInt(rest, 10) || 0))
+    // maint/d23 P3 (D17/B10 parity): `--rest <garbage|negative>` used to `parseInt||0` into a silently
+    // zeroed restDuration — same strict-parse contract as --minutes above: bad input is a USAGE error.
+    if (rest != null) {
+      const r = /^\d+$/.test(String(rest).trim()) ? parseInt(rest, 10) : NaN
+      if (!Number.isFinite(r) || r < 1) throw new CliError('rest duration must be a positive integer; got ' + JSON.stringify(rest), 'USAGE')
+      if (r > REST_MAX_MINUTES) throw new CliError('rest duration max is ' + REST_MAX_MINUTES + ' minutes (DB-layer clamp); got ' + r, 'USAGE')
+      patch.restDuration = r
+    }
     // B11: strict boolean enum — `--succeed <anything>` used to coerce to true, silently flipping an
     // abandoned record to succeeded. Only true|false|yes|no|1|0 accepted; anything else → USAGE.
     if (succeed != null && succeed !== true) {
