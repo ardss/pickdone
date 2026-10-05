@@ -123,24 +123,25 @@ test('B11: a successful save leaves the final file and NO .att-tmp residue', asy
 })
 
 test('B11: a crash mid-write (spool throws) leaves NO final file and no residue', async () => {
-  const realWrite = fs.writeFileSync
-  let usedTmp = null
-  fs.writeFileSync = (p, data, ...rest) => {
-    if (String(p).includes('.att-tmp-')) { usedTmp = String(p); throw new Error('simulated crash mid-write') }
-    return realWrite(p, data, ...rest)
+  // D22 update: the spool now routes through durable-fs writeFileDurable (tmp -> fsync ->
+  // rename), so the crash is injected at the RENAME step (a real mid-publish crash point).
+  // The invariant is unchanged: no final file, no tmp residue, and the error propagates.
+  const realRename = fs.renameSync
+  fs.renameSync = (from, to, ...rest) => {
+    if (String(to).split(path.sep).pop().startsWith('t2_')) throw new Error('simulated crash mid-write')
+    return realRename(from, to, ...rest)
   }
   try {
     await assert.rejects(attachments.saveAttachment({ taskId: 't2', name: 'b.png', dataBase64: b64(Buffer.from('x')) }),
       /simulated crash mid-write/)
   } finally {
-    fs.writeFileSync = realWrite
+    fs.renameSync = realRename
   }
   const filesDir = path.join(TMPDIR, 'files')
   const b = fs.readdirSync(filesDir).filter((f) => f.startsWith('t2_'))
   assert.equal(b.length, 0, 'red before the fix: the bare writeFileSync could leave a torn healthy-looking final file')
   const residue = fs.readdirSync(filesDir).filter((f) => /\.att-tmp-\d+-\d+$/.test(f))
   assert.equal(residue.length, 0, 'the finally-cleanup removed the spool tmp')
-  void usedTmp
 })
 
 process.on('exit', () => { Module._load = origLoad })

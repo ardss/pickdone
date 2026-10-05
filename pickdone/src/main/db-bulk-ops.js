@@ -25,6 +25,7 @@ module.exports = (getDb, getOps) => ({
     const tr = getDb().transaction(() => {
       getDb().prepare('DELETE FROM plan_chips WHERE taskId=?').run(String(id))
       gc.deleteSnowDedupKeysFor([id]); gc.deleteChipsSnapshotKeysFor([id]); gc.deleteEstimateKeysFor([id])
+      pruneFiredReminderKeysFor(getDb, [id])
       if (getDb().prepare('DELETE FROM todos WHERE id = ?').run(id).changes > 0) ids = [String(id)]
     })
     tr(); return ids
@@ -35,6 +36,7 @@ module.exports = (getDb, getOps) => ({
     const tr = getDb().transaction(() => ids.forEach(i => {
       getDb().prepare('DELETE FROM plan_chips WHERE taskId=?').run(String(i))
       gc.deleteSnowDedupKeysFor([i]); gc.deleteChipsSnapshotKeysFor([i]); gc.deleteEstimateKeysFor([i])
+      pruneFiredReminderKeysFor(getDb, [i])
       if (getDb().prepare('DELETE FROM todos WHERE id = ?').run(i).changes > 0) deleted.push(String(i))
     }))
     tr(); return deleted
@@ -59,4 +61,36 @@ module.exports = (getDb, getOps) => ({
   // settings/tomato tombstone, otherwise ANY older peer live row resurrects it.
   planTombstones: () => getDb().prepare('SELECT id, updatedAt, deletedAt FROM plan_chips WHERE deleted = 1').all(),
   filterTombstones: () => getDb().prepare('SELECT id, updatedAt, deletedAt FROM filters WHERE deleted = 1').all(),
+  // D22 (P3, 2026-10-02): drop fired-reminder watermark entries for physically deleted taskIds —
+  // hardDelete/hardDeleteMany/purgeRecycleBin cascade snowDedup/chips/estimate families but never
+  // touched the scheduler's `firedReminders:` meta blob, whose entries outlived their tasks
+  // forever. Chosen option: prune the blob HERE at delete time (the in-process LRU in scheduler.js
+  // keeps its stale entry harmlessly — it only dedupes; reloadAll re-loads from meta). Blob format
+  // owned by scheduler.js: JSON array of [key, ts], keys `taskId:offset`. Legacy non-JSON blobs
+  // are left untouched rather than mis-parsed. Runs inside the caller's transaction; a prune
+  // failure must never fail the delete (the watermark is advisory).
+  pruneFiredReminderKeysFor: ids => pruneFiredReminderKeysFor(getDb, ids),
 })
+
+// D22 (P3, 2026-10-02): drop fired-reminder watermark entries for physically deleted taskIds —
+// hardDelete/hardDeleteMany cascade snowDedup/chips/estimate families but never touched the
+// scheduler's `firedReminders:` meta blob, whose entries then outlived their tasks forever.
+// Minimal duplicate of db.js pruneFiredReminderKeysFor (db-meta-gc.cjs is outside this module's
+// ratchet boundary): JSON-array blob only (legacy packed blobs are left untouched), runs inside
+// the caller's transaction, and a prune failure must never fail the delete.
+function pruneFiredReminderKeysFor (getDb, ids) {
+  try {
+    const list = (Array.isArray(ids) ? ids : [ids]).map(String)
+    if (!list.length) return
+    const row = getDb().prepare("SELECT value FROM meta WHERE key = 'firedReminders:'").get()
+    const raw = row && row.value
+    if (typeof raw !== 'string' || !raw.startsWith('[')) return
+    const arr = JSON.parse(raw)
+    if (!Array.isArray(arr)) return
+    const kept = arr.filter(entry => {
+      const k = String((Array.isArray(entry) && entry[0]) || '')
+      return !list.some(id => k.startsWith(id + ':'))
+    })
+    if (kept.length !== arr.length) getDb().prepare("UPDATE meta SET value = ? WHERE key = 'firedReminders:'").run(JSON.stringify(kept))
+  } catch { /* the watermark is advisory */ }
+}

@@ -654,7 +654,7 @@ const OPS = {
       db.prepare('DELETE FROM plan_chips WHERE taskId IN (SELECT id FROM todos WHERE deleted = 1)').run()
       deleteSnowDedupKeysFor(ids) // main-ipc-3 (2026-09-22): the rows die here — their focus-session dedup fences must not outlive them
       deleteChipsSnapshotKeysFor(ids) // snapshot meta dies with the rows (same lifecycle rule)
-      deleteEstimateKeysFor(ids) // D10 (2026-09-27): same lifecycle rule — the purge path bypasses the renderer's setEstimate(id,0)
+      deleteEstimateKeysFor(ids); makeBulkOps.pruneFiredReminderKeysFor(ids) // D10 + D22 (2026-10-02): estimate meta AND the fired-reminder watermark die with the rows (helper in db-bulk-ops.js)
       db.prepare('DELETE FROM todos WHERE deleted = 1').run()
     }); tr(); return ids
   },
@@ -667,7 +667,7 @@ const OPS = {
       db.prepare("DELETE FROM plan_chips WHERE taskId IN (SELECT id FROM todos WHERE substr(id, 1, 5) = 'seed_')").run()
       deleteSnowDedupKeysFor(ids) // main-ipc-3 (2026-09-22): same lifecycle rule as purgeRecycleBin
       deleteChipsSnapshotKeysFor(ids) // same lifecycle rule
-      deleteEstimateKeysFor(ids) // D10 (2026-09-27): same lifecycle rule
+      deleteEstimateKeysFor(ids); makeBulkOps.pruneFiredReminderKeysFor(ids) // D10 + D22 (2026-10-02): same lifecycle rule
       db.prepare("DELETE FROM todos WHERE substr(id, 1, 5) = 'seed_'").run()
     }); tr(); return ids
   },

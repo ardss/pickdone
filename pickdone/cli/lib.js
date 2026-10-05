@@ -688,7 +688,7 @@ const { eventFocusMinutes, eventEnd } = evu
    shared renewRepeatAfterComplete helper (D18-DOM2 #1); see the note at lib-env above. */
 const {
   parseSubs, addSubtask, checkSubtask, removeSubtask, moveSubtask,
-} = require('./lib-subs.cjs')({ resolveTask, liveTasks, patchTodo, CliError, open, renewRepeatAfterComplete })
+} = require('./lib-subs.cjs')({ resolveTask, liveTasks, patchTodo, CliError, open, renewRepeatAfterComplete, commit, chipsSnapshotForDelete })
 
 /* ---------------- Events import: rebuild a whole day's schedule from a structured event list (backfill/reconstruction scenarios) ----------------
    Event shape: { date, start, end|24:00, title, category, important, urgent, tags, estimate }
