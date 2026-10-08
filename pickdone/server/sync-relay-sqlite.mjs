@@ -11,6 +11,9 @@
  */
 
 import { createRequire } from 'node:module'
+// D26: the GC cut comes from the SHARED helper in sync-relay.mjs (same file the memory/file
+// backends use) so the two backends cannot drift — parity is pinned by d26-relay-gc-parity.
+import { gcCutFloor } from './sync-relay.mjs'
 
 export function sqliteStore(dbPath, { Database } = {}) {
   const require = createRequire(import.meta.url)
@@ -71,7 +74,18 @@ export function sqliteStore(dbPath, { Database } = {}) {
 
   return {
     kind: 'sqlite',
-    lastSeq: () => db.prepare('SELECT COALESCE(MAX(serverSeq), 0) AS s FROM envelopes').get().s,
+    // Monotonic high-water mark of ISSUED seqs (D26): memoryStore's counter never regresses,
+    // but MAX(serverSeq) of surviving rows shrinks when GC removes the tail — the snapshot
+    // coversSeq guard (route /v1/snapshot/put) compares against issued history, so a GC'd
+    // tail must not make a legitimate snapshot look "beyond history". sqlite_sequence
+    // (AUTOINCREMENT bookkeeping) keeps the max-ever even after deletes, and resets to 0 on
+    // a fresh/rebuilt DB — exactly matching memoryStore semantics (D25 reset still fires).
+    lastSeq: () => {
+      const m = db.prepare('SELECT COALESCE(MAX(serverSeq), 0) AS s FROM envelopes').get().s
+      if (m) return m
+      const r = db.prepare("SELECT seq FROM sqlite_sequence WHERE name = 'envelopes'").get()
+      return r ? Number(r.seq) : 0
+    },
     appendEnvelope: (account, opId, envelopeJson) => {
       const dup = byOp.get(account, opId)
       if (dup) return { duplicate: true, serverSeq: dup.serverSeq }
@@ -104,9 +118,12 @@ export function sqliteStore(dbPath, { Database } = {}) {
       return r ? JSON.parse(r.data) : null
     },
     gcFloor: account => activeFloor(account),
+    // Same cut as memoryStore via the SHARED gcCutFloor() helper (D26): the snapshot-less
+    // ACK-ALONE margin used to be missing here, so self-hosted sqlite relays accumulated
+    // envelopes forever. See sync-relay.mjs gcCutFloor for the semantics.
     gc: account => {
       const snap = db.prepare('SELECT coversSeq FROM snapshots WHERE account = ?').get(account)
-      const cut = Math.min(activeFloor(account), snap ? snap.coversSeq : 0)
+      const cut = gcCutFloor({ ackFloor: activeFloor(account), coversSeq: snap ? snap.coversSeq : 0 })
       if (cut <= 0) return 0
       return Number(db.prepare('DELETE FROM envelopes WHERE account = ? AND serverSeq <= ?').run(account, cut).changes)
     },

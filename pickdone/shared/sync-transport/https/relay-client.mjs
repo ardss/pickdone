@@ -91,7 +91,12 @@ export function createRelayClient({ nodeId, account, baseUrl, fetchImpl = fetch,
       // mark ONLY after the relay accepted the batch: marking before made a transient
       // push failure orphan the revisions forever (never re-pushed, silent divergence)
       if (items.length) { await post('/v1/sync/push', { account, device: nodeId, items }); for (const id of batch) cursorState.pushed.add(id) }
-      const pull = await post('/v1/sync/pull', { account, afterSeq: cursorState.cursor })
+      // D26: pin the byte budget explicitly (8MB, the relay's push body cap) instead of riding
+      // the server default — an envelope up to that size is deliverable by construction, so a
+      // pull can only report `skipped` for frames that are oversized-by-policy, never by a
+      // budget this client chose implicitly.
+      const PULL_MAX_BYTES = 8 * 1024 * 1024
+      const pull = await post('/v1/sync/pull', { account, afterSeq: cursorState.cursor, maxBytes: PULL_MAX_BYTES })
       // D25 drill-2 (torn relay-state quarantine reboot): the relay's seq restarts at 1 while a
       // client's durable cursor sits above the new head — that client pulls nothing forever and
       // fresh writes silently never reach peers. headSeq (relay's live max seq) below the local
@@ -105,6 +110,14 @@ export function createRelayClient({ nodeId, account, baseUrl, fetchImpl = fetch,
       }
       let applied = cursorState.cursor
       let quarantined = 0
+      // D26: `skipped` frames (relay-declared oversize — it can never deliver them) are
+      // undeliverable by construction; quarantine semantics (spec §68): advance past them
+      // and ack, or the cursor pins below the skip forever and every later envelope
+      // deadlocks behind it.
+      for (const sk of pull.skipped || []) {
+        applied = Math.max(applied, sk.serverSeq)
+        quarantined++
+      }
       for (const item of pull.items) {
         let env
         try {

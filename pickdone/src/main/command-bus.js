@@ -119,8 +119,21 @@ function createBus (dbCall, manifestMod = manifest) {
       if (Object.keys(pc).length) clamped.patch = Object.assign({}, patch, pc)
     }
     if (Object.keys(clamped).length) return Object.assign({}, p, clamped)
-    if ((p[f] != null && Number(p[f]) > 0) || (patch && patch[f] != null && Number(patch[f]) > 0)) return p
-    if (opts.preserveStamp) return p
+    // D26 (2026-10-08): judge a present stamp NUMERICALLY (same pattern as sync-apply.js
+    // stampNum — non-numeric is 0). A poisoned non-numeric stamp ('abc') used to fall through
+    // the preserveStamp early-return untouched and then read epoch-oldest forever in
+    // compareRecency; preserveStamp now shields only a genuinely numeric age.
+    const stampNum = v => { const n = Number(v); return Number.isFinite(n) ? n : 0 }
+    const hasTop = p[f] != null
+    const hasPatch = !!(patch && patch[f] != null)
+    if ((hasTop && stampNum(p[f]) > 0) || (hasPatch && stampNum(patch[f]) > 0)) return p
+    if (opts.preserveStamp) {
+      if (!hasTop && !hasPatch) return p // nothing to preserve — never MINT under preserveStamp
+      const normalized = {}
+      if (hasTop) normalized[f] = 0
+      if (hasPatch) normalized.patch = Object.assign({}, patch, { [f]: 0 })
+      return Object.assign({}, p, normalized)
+    }
     return Object.assign({}, p, { [f]: Date.now() })
   }
 
