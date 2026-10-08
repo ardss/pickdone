@@ -598,7 +598,7 @@ const {
 /* Categories write: extracted verbatim to lib-categories.cjs (2026-09-27 size-ratchet split) */
 const {
   addCategory, renameCategory, deleteCategory, moveCategory, categoryRows, categoryHierarchy, cleanupEmptyCategories,
-} = require('./lib-categories.cjs')({ open, commit, audit, CliError, resolveCategory, userDataDir, projectFlagKey, projectStatusKey, MS_KEY, PROJECT_IDS_KEY })
+} = require('./lib-categories.cjs')({ open, commit, audit, CliError, resolveCategory, userDataDir, projectFlagKey, projectStatusKey, MS_KEY, PROJECT_IDS_KEY, normKey })
 
 /* Tags + batch operations: extracted verbatim to lib-tags.cjs (2026-09-27 size-ratchet split) */
 const {

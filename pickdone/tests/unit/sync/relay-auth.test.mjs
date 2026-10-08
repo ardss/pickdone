@@ -92,6 +92,13 @@ test('P1: unauthenticated ack + snapshot/put must not GC envelopes (destroy prim
 test('P1: unauthenticated snapshot/put alone does not replace the owner snapshot', async t => {
   const { baseUrl } = await withRelay(t)
   const secret = await register(baseUrl, 'acc-d', 'dev-d')
+  // D26 coversSeq cap: a snapshot can only cover envelopes the relay has issued — seed 3
+  // so the owner snapshot (coversSeq 3) stays within history and keeps testing the AUTH
+  // boundary (the cap itself is pinned by d26-snapshot-coversseq-cap.test.mjs).
+  await post(baseUrl, '/v1/sync/push', {
+    account: 'acc-d', device: 'dev-d',
+    items: [1, 2, 3].map(i => ({ opId: `op-${i}`, envelope: JSON.stringify({ i }) })),
+  }, `Bearer ${secret}`)
   const owner = { generation: 7, coversSeq: 3, data: '{"owner":true}' }
   const put = await post(baseUrl, '/v1/snapshot/put',
     { account: 'acc-d', snapshot: owner }, `Bearer ${secret}`)

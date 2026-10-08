@@ -458,7 +458,9 @@ async function main () {
         // D17 dry-run mirror: the priority⇔important coupling below is part of the real write — the preview must equal it
         if (opts.priority != null && opts.important == null) patch.important = parseInt(opts.priority, 10) === 3 ? 1 : 0
         if (opts.important != null && opts.priority == null) patch.priority = parseInt(opts.important, 10) ? 3 : 1
-        if (opts.deadline) patch.deadlineTs = opts.deadline === 'none' ? 0 : lib.parseDate(opts.deadline)
+        // --deadline accepts the same clear words as --date/--reminder (isReminderClear: none|clear):
+        // `--deadline clear` used to fall through to parseDate and throw a raw parse error.
+        if (opts.deadline) patch.deadlineTs = isReminderClear(opts.deadline) ? 0 : lib.parseDate(opts.deadline)
         // D19-DOM2 (#3) dry-run mirror: the dateless-task reminder backfill is part of the real write
         lib.reminderDateBackfill(lib.resolveTask(opts._[0]), patch)
         return emitNext({ dryRun: true, taskId: lib.resolveTask(opts._[0]).taskId, patch }, ['remove --dry-run to actually run'])
@@ -491,7 +493,9 @@ async function main () {
       // high(3)↔important=1, low/none↔important=0; whichever is explicitly specified wins
       if (opts.priority != null && opts.important == null) patch.important = parseInt(opts.priority, 10) === 3 ? 1 : 0
       if (opts.important != null && opts.priority == null) patch.priority = parseInt(opts.important, 10) ? 3 : 1
-      if (opts.deadline) patch.deadlineTs = opts.deadline === 'none' ? 0 : lib.parseDate(opts.deadline)
+      // --deadline accepts the same clear words as --date/--reminder (isReminderClear: none|clear):
+      // `--deadline clear` used to fall through to parseDate and throw a raw parse error.
+      if (opts.deadline) patch.deadlineTs = isReminderClear(opts.deadline) ? 0 : lib.parseDate(opts.deadline)
       if (opts.difficulty != null && opts.difficulty !== true) patch.difficulty = range3(opts.difficulty, 'difficulty')
       if (!Object.keys(patch).length && !dateClear && opts.estimate == null && opts['remind-offset'] == null && opts['remind-extra'] == null) throw new lib.CliError('edit requires at least one field')
       // Apply the main patch before reminder/tomato branches: with --reminder + --remind-offset in one command, the main reminder must be written first (offsets anchor to it)

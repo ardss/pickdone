@@ -1,7 +1,10 @@
 /* Categories sub-module extracted from cli/lib.js (2026-09-27 size-ratchet split).
  * Factory-injected deps keep it decoupled from lib.js (no circular require), same pattern as lib-settings.cjs.
  * Categories write (same SQLite categories table as the UI; camelCase row mapping mirrors store/category.js toRow). */
-module.exports = ({ open, commit, audit, CliError, resolveCategory, userDataDir, projectFlagKey, projectStatusKey, MS_KEY, PROJECT_IDS_KEY }) => {
+module.exports = ({ open, commit, audit, CliError, resolveCategory, userDataDir, projectFlagKey, projectStatusKey, MS_KEY, PROJECT_IDS_KEY, normKey }) => {
+  // normKey is the lib.js single source (NFKC + lowercase + whitespace-stripped); partial dep
+  // sets (test harnesses that stub the factory) fall back to the same normalization inline.
+  const norm = normKey || (v => String(v).normalize('NFKC').toLowerCase().replace(/[\s\u00A0\u3000\u200B\u2003]/g, ''))
   const CAT_COLORS = ['#0f9d8f', '#f76e6e', '#f2a63b', '#7ac74f', '#5aa9e6', '#9d8df1', '#eb96c3', '#98a4ae']
   function catToRow (c) {
     return {
@@ -19,7 +22,11 @@ module.exports = ({ open, commit, audit, CliError, resolveCategory, userDataDir,
   function addCategory (name, { color, parent, folder } = {}) {
     const db = open()
     const cats = db.call('getAllCategories')
-    if (cats.some(c => c.categoryName === name)) throw new CliError('category "' + name + '" already exists (names must stay unique so the CLI can address them)', 'CATEGORY_EXISTS')
+    // Existence is judged with the SAME normalization resolveCategory addresses categories with
+    // (lib.js normKey: NFKC + lowercase + whitespace-stripped) — an exact-case-only guard let
+    // `category add Work` land next to "work", and the resolver then threw AMBIGUOUS_MATCH on
+    // every later --category use, bricking both names.
+    if (cats.some(c => norm(c.categoryName || '') === norm(name))) throw new CliError('category "' + name + '" already exists (names must stay unique so the CLI can address them)', 'CATEGORY_EXISTS')
     let parentId = 0
     if (parent != null && parent !== true) {
       // resolveCategory returns the bare id — look the row back up before the folder check
@@ -62,7 +69,8 @@ module.exports = ({ open, commit, audit, CliError, resolveCategory, userDataDir,
     const db = open()
     const id = resolveCategory(input)
     const cat = db.call('getAllCategories').find(c => c.categoryId === id)
-    if (db.call('getAllCategories').some(c => c.categoryId !== id && c.categoryName === nextName)) throw new CliError('category "' + nextName + '" already exists', 'CATEGORY_EXISTS')
+    // Same normalized-uniqueness rule as addCategory (resolver addressing parity)
+    if (db.call('getAllCategories').some(c => c.categoryId !== id && norm(c.categoryName || '') === norm(nextName))) throw new CliError('category "' + nextName + '" already exists', 'CATEGORY_EXISTS')
     const updated = Object.assign({}, cat, { categoryName: nextName })
     commit('category', 'put', catToRow(updated))
     audit.record({ action: 'category.rename', targets: [], changes: [{ before: { name: cat.categoryName }, after: { name: nextName } }], note: 'category renamed' })

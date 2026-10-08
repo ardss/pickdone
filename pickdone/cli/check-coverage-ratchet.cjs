@@ -15,6 +15,11 @@
  *   --experimental-test-coverage --suite=unit):lines 76.40 / branch 72.30 / funcs 62.80,
  *   向下取整为保守值(76/72/62)。linux CI 实测更高(86.65/81.68/77.83)只会向上棘轮,
  *   不会因平台文件集差异误红。
+ * 口径漂移修正(2026-10-08):check:all 的单测 stage 以 run-all 默认全量(无 --suite)跑,其
+ *   coverage-summary.json 曾被本门禁无差别复用并据以自动上调——基线自此从 unit 口径漂移到
+ *   全量口径(win32@node22 已被抬到 82/82/75,远超上文的 unit 校准值)。修正后:summary 带
+ *   suite 标签(run-all 写入),仅当 suite === 'unit'(校准口径)时才自动上调;口径不匹配时
+ *   仍按阈值红/绿判,但打印警告并跳过本轮上调——不再让另一仪器的数字悄悄抬高基线。
  * 注:package.json 提供 check:coverage-ratchet script;挂入 check-all.js ①池由 D2/人工
  *   在 cli/check-all.js GROUPS 加一行(本域不碰 check-all.js)。
  */
@@ -36,6 +41,21 @@ const METRICS = [
 // ratchet key is platform@nodeMajor. A combo with no baseline yet calibrates on its first
 // full-green run (loud note) instead of comparing against another instrument's number.
 const PLATFORM = `${process.platform}@node${process.versions.node.split('.')[0]}`
+
+// The suite this gate's baseline was calibrated on (see header + runCoverage()). Coverage
+// differs per suite — unit under-loads the file set relative to the full run — so a summary
+// from another suite is a DIFFERENT INSTRUMENT: compare-only, never auto-raise from it.
+const CALIBRATION_SUITE = 'unit'
+
+// Suite label of a coverage summary, or null for a legacy/unknown one (pre-suite-tag files).
+function summarySuite (j) {
+  return typeof j?.suite === 'string' ? j.suite : null
+}
+
+// True when a summary was produced by the calibration suite and may feed the auto-raise.
+function suiteMatchesCalibration (j) {
+  return summarySuite(j) === CALIBRATION_SUITE
+}
 
 function loadBaseline () {
   let base = { lines: 0, branches: 0, functions: 0 }
@@ -94,7 +114,7 @@ function parseAllFiles (out) {
   return null
 }
 
-module.exports = { parseAllFiles, loadBaseline, writeBaseline }
+module.exports = { parseAllFiles, loadBaseline, writeBaseline, summarySuite, suiteMatchesCalibration }
 
 if (require.main !== module) return
 
@@ -153,9 +173,14 @@ const measuredFromSummary = preflight && (preflight.generatedAt && startedAt - D
   : (process.argv.includes('--await-summary') ? waitForFreshSummary(startedAt) : null)
 
 let measured
+let reuseSuiteMatches = true // own runCoverage() is always the calibration suite
 if (measuredFromSummary) {
   measured = { lines: measuredFromSummary.lines, branches: measuredFromSummary.branches, functions: measuredFromSummary.functions }
-  console.log(`[check-coverage-ratchet] reused coverage summary from the unit gate (${measured.lines}/${measured.branches}/${measured.functions})`)
+  console.log(`[check-coverage-ratchet] reused coverage summary (suite=${summarySuite(measuredFromSummary) || 'unknown/legacy'}) from the unit gate (${measured.lines}/${measured.branches}/${measured.functions})`)
+  reuseSuiteMatches = suiteMatchesCalibration(measuredFromSummary)
+  if (!reuseSuiteMatches) {
+    console.error(`[check-coverage-ratchet] warning: summary suite is "${summarySuite(measuredFromSummary) || 'unknown/legacy'}", not "${CALIBRATION_SUITE}" — coverage differs per suite, so this comparison is instrument-mismatched; gating by threshold only and SKIPPING the auto-raise (baseline must only move on ${CALIBRATION_SUITE}-suite evidence)`)
+  }
 } else {
   const { out, code } = runCoverage()
   if (code !== 0) {
@@ -183,6 +208,9 @@ if (!hasBaseline) {
   // against another instrument's numbers is exactly the 2026-09-29 86-vs-73 failure mode.
   writeBaseline(measured)
   console.log(`✓ [check-coverage-ratchet] no baseline for ${PLATFORM} yet — calibrated from this full-green run: ${JSON.stringify(measured)}`)
+  if (!reuseSuiteMatches) {
+    console.error(`[check-coverage-ratchet] warning: baseline was calibrated from suite "${summarySuite(measuredFromSummary) || 'unknown/legacy'}", not "${CALIBRATION_SUITE}" — recalibrate with node cli/check-coverage-ratchet.cjs (its own run is --suite=${CALIBRATION_SUITE})`)
+  }
   process.exit(0)
 }
 
@@ -198,11 +226,14 @@ if (regressions.length) {
   process.exit(1)
 }
 
-// 棘轮回写:实测(取整)高于基线的指标上调
+// 棘轮回写:实测(取整)高于基线的指标上调——仅当本轮实测与基线校准同口径(同一 suite)时;
+// 口径不匹配的实测抬基线 = 另一台仪器的读数混入(见头注的口径漂移修正)
 const raised = []
-for (const { key, label } of METRICS) {
-  const m = Math.floor(measured[key])
-  if (m > baseline[key]) { baseline[key] = m; raised.push(`${label} → ${m}%`) }
+if (reuseSuiteMatches) {
+  for (const { key, label } of METRICS) {
+    const m = Math.floor(measured[key])
+    if (m > baseline[key]) { baseline[key] = m; raised.push(`${label} → ${m}%`) }
+  }
 }
 if (raised.length) {
   writeBaseline(baseline)

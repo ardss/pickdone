@@ -35,6 +35,20 @@ import { writeFileDurable } from '../src/main/durable-fs.js'
 
 // ---------- storage backends ----------
 
+/** Shared GC cut used by BOTH backends (memory/file and sqlite) so they cannot drift.
+ *  Snapshot-safe GC (spec §28): floor = min(durable-ack floor, snapshot coversSeq).
+ *  Snapshot-less deployments (GC floor fix, 2026-10-06): without a snapshot the floor used
+ *  to be 0 forever → unbounded envelope growth. An ACK-ALONE floor with a sequence-horizon
+ *  margin now bounds it: acked envelopes beyond the margin are removable even with no
+ *  snapshot, while the margin keeps a recovery replay window for a device that lost its
+ *  local state but not its ack. Returns 0 when nothing is removable. */
+export const GC_ACK_ALONE_MARGIN = 100000 // seq-margin kept when no snapshot exists yet
+export function gcCutFloor({ ackFloor, coversSeq }) {
+  let floor = Math.min(ackFloor || 0, coversSeq || 0)
+  if (floor <= 0 && (ackFloor || 0) > GC_ACK_ALONE_MARGIN) floor = ackFloor - GC_ACK_ALONE_MARGIN
+  return floor > 0 ? floor : 0
+}
+
 export function memoryStore() {
   const state = { seq: 0, envelopes: new Map(), devices: new Map(), snapshots: new Map() }
   return {
@@ -73,20 +87,13 @@ export function memoryStore() {
       if (!active.length) return 0
       return Math.min(...active.map(d => d.lastAck || 0))
     },
-    /** Snapshot-safe GC (spec §28): only below the floor AND below the latest
-     *  snapshot's coversSeq, so a recovery path always exists. Snapshot-less
-     *  deployments (GC floor fix, 2026-10-06): without a snapshot the floor used
-     *  to be 0 forever → unbounded envelope growth. An ACK-ALONE floor with a
-     *  sequence-horizon margin now bounds it: acked envelopes beyond the margin
-     *  are removable even with no snapshot, while the margin keeps a recovery
-     *  replay window for a device that lost its local state but not its ack. */
+    /** Snapshot-safe GC (spec §28) — the cut comes from the SHARED gcCutFloor() helper
+     *  (same semantics as sqliteStore, enforced by the GC-parity test). */
     gc: account => {
       const snap = state.snapshots.get(account)
       const active = [...state.devices.values()].filter(d => d.account === account && d.status === 'active')
       const ackFloor = active.length ? Math.min(...active.map(d => d.lastAck || 0)) : 0
-      const GC_ACK_ALONE_MARGIN = 100000 // seq-margin kept when no snapshot exists yet
-      let floor = Math.min(ackFloor, snap ? snap.coversSeq : 0)
-      if (floor <= 0 && ackFloor > GC_ACK_ALONE_MARGIN) floor = ackFloor - GC_ACK_ALONE_MARGIN
+      const floor = gcCutFloor({ ackFloor, coversSeq: snap ? snap.coversSeq : 0 })
       if (floor <= 0) return 0
       let removed = 0
       for (const [seq, e] of state.envelopes) {
@@ -230,22 +237,32 @@ export function createRelay(store) {
       // WHOLE remaining history in memory before the byte clamp discarded most of it. Page in
       // batches of 500 and stop at the first batch boundary once the byte budget is hit —
       // memory is O(page + response), not O(history).
+      //
+      // D26 oversize guard: a SINGLE envelope larger than the whole byte budget used to stop
+      // the page at its own seq with items empty — toSeq stayed at the cursor while headSeq
+      // sat above it, so every pull below that envelope deadlocked forever (the D25
+      // headSeq<cursor reset never fires). Pull can never deliver such a frame, so it is
+      // reported as `skipped` — the same quarantine semantics as a corrupt frame (spec §68):
+      // undeliverable/unverifiable, the client advances its cursor past it.
       const items = []
+      const skipped = []
       let bytes = 0
       let cursor = afterSeq
+      const result = () => ({ fromSeq: afterSeq + 1, toSeq: items.length ? items[items.length - 1].serverSeq : afterSeq, headSeq: store.lastSeq(), items, skipped })
       for (;;) {
         const page = store.getSince(account, cursor, 500)
         if (!page.length) break
         for (const e of page) {
           const size = Buffer.byteLength(e.envelopeJson)
-          if (bytes + size > maxBytes) return { fromSeq: afterSeq + 1, toSeq: items.length ? items[items.length - 1].serverSeq : afterSeq, headSeq: store.lastSeq(), items }
+          if (size > maxBytes) { skipped.push({ serverSeq: e.serverSeq }); continue }
+          if (bytes + size > maxBytes) return result()
           items.push({ serverSeq: e.serverSeq, envelope: e.envelopeJson })
           bytes += size
         }
         if (page.length < 500) break
         cursor = page[page.length - 1].serverSeq
       }
-      return { fromSeq: afterSeq + 1, toSeq: items.length ? items[items.length - 1].serverSeq : afterSeq, headSeq: store.lastSeq(), items }
+      return result()
     },
     ack(account, deviceId, ackSeq) {
       const dev = store.getDevice(account, deviceId)
@@ -373,6 +390,11 @@ function route(relay, method, url, body, authz) {
     case '/v1/snapshot/put': {
       const { account, snapshot } = post()
       need(account && snapshot && Number.isInteger(snapshot.coversSeq) && Number.isInteger(snapshot.generation), 'account + snapshot{generation, coversSeq} required')
+      // D26 coversSeq cap: gc() deletes everything at or below the snapshot's coversSeq, so an
+      // unchecked coversSeq (a buggy or hostile device posting 2**53) would wipe the account's
+      // whole envelope history — every other device would lose its replay tail. The snapshot
+      // can only ever cover envelopes the relay has already issued.
+      need(snapshot.coversSeq >= 0 && snapshot.coversSeq <= relay.store.lastSeq(), `snapshot coversSeq ${snapshot.coversSeq} beyond relay history (lastSeq ${relay.store.lastSeq()})`)
       return relay.putSnapshot(account, snapshot)
     }
     case '/v1/snapshot/latest': {

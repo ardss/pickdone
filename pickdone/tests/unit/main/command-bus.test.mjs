@@ -61,6 +61,27 @@ test('stamp normalization: bus stamps lwwField; explicit age and preserveStamp s
   assert.equal(calls[4].params, 't1')
 })
 
+test('preserveStamp guard: poisoned non-numeric stamp normalized (D26), numeric ages preserved', () => {
+  const { bus, calls } = makeBus()
+  // pre-fix, preserveStamp returned the row verbatim when Number('abc') > 0 was false — a
+  // poisoned stamp read epoch-oldest forever in compareRecency. Same stampNum pattern as
+  // sync-apply.js: non-numeric is 0.
+  bus.commit('todo', 'put', { taskId: 't1', updateTime: 'abc' }, { preserveStamp: true })
+  assert.equal(calls[0].params.updateTime, 0, 'non-numeric stamp normalized to 0 even under preserveStamp')
+  // a genuine numeric peer age still survives verbatim (the sync-apply internal path)
+  const peerAge = Date.now() - 60000
+  bus.commit('todo', 'put', { taskId: 't2', updateTime: peerAge }, { preserveStamp: true })
+  assert.equal(calls[1].params.updateTime, peerAge, 'numeric peer age preserved under preserveStamp')
+  bus.commit('todo', 'put', { taskId: 't3' }, { preserveStamp: true })
+  assert.equal(calls[2].params.updateTime, undefined, 'absent stamp stays absent (preserveStamp never mints)')
+  // without preserveStamp a garbage stamp was already replaced by a fresh stamp — unchanged
+  bus.commit('todo', 'put', { taskId: 't4', updateTime: 'abc' })
+  assert.ok(Number(calls[3].params.updateTime) > 0, 'garbage stamp minted fresh without preserveStamp')
+  // nested-patch shape (tomato.updateById carries the age in .patch, lwwField updatedAt)
+  bus.commit('tomato', 'updateById', { id: 'tm1', patch: { updatedAt: 'abc' } }, { preserveStamp: true })
+  assert.equal(calls[4].params.patch.updatedAt, 0, 'garbage stamp inside .patch normalized too')
+})
+
 test('local-key filter: meta/settings rows classify machine-local keys, user keys stay syncable', () => {
   const { bus } = makeBus()
   const metaRow = bus.resolve('meta', 'put')
