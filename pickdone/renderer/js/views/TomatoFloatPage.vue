@@ -68,7 +68,7 @@
         <div v-if="menuOpen" class="tf-menu" @pointerdown.stop>
         <div class="tf-menu__head">
           <span class="tf-menu__title">{{ $t('statsB.TomatoFloatPage.menuTitle') }}</span>
-          <button type="button" class="tf-menu__x close-x close-x--sm" :aria-label="$t('statsB.TomatoFloatPage.close')" @click="closeMenu"></button>
+          <button type="button" class="tf-menu__x close-x close-x--sm" :aria-label="$t('statsB.TomatoFloatPage.close')" @click="closeMenu()"></button>
         </div>
         <div class="tf-menu__list" role="listbox" :aria-label="$t('statsB.TomatoFloatPage.menuTitle')">
           <button v-for="t in tasks" :key="t.taskId" type="button" class="tf-menu__item"
