@@ -11,7 +11,7 @@
     <!-- Remote running focus (LAN sync announce, display-only): click opens the linked todo -->
     <div v-if="remoteRun" class="tp-remote" role="button" tabindex="0"
          :title="$t('statsD.TomatoPanel.remoteRunningTip')"
-         @click="openRemoteTodo" @keydown.enter.prevent="openRemoteTodo">
+         @click="openRemoteTodo" @keydown="onRemoteKey">
       <i class="ico" style="--ico:url('app://app/assets/img/icon-tomato-timer2.svg');width:12px;height:12px"></i>
       {{ $t('statsD.TomatoPanel.remoteRunning', { name: remoteRun.deviceName || remoteRun.deviceId, time: remoteClock }) }}
     </div>
@@ -56,6 +56,7 @@ import { remainSecOfAnnounce } from '../store/helpers/tomatoAnnounceShared.js'
 import { remainingSecOfState } from '../store/tomato.js'
 import { pruneRemoteAnnounces } from '../store/tomatoAnnounce.js'
 import store from '../store/index.js'
+import { roleButtonActivate } from '../utils/roleButtonKey.js' // [maint/d23 FIX-3b a11y sweep] Space joins Enter
 
 export default {
   name: 'TomatoPanel',
@@ -97,6 +98,8 @@ export default {
   beforeUnmount () { clearInterval(this._iv) },
   methods: {
     dfmt (ts) { return dayjs(ts).format(FMT.time) },
+    /* [maint/d23 FIX-3b a11y sweep] remote chip is role="button": Space joins Enter */
+    onRemoteKey: roleButtonActivate(function () { this.openRemoteTodo() }),
     commitPatch (p) { store.commit('tomato/patch', p) },
     /** Open the remote focus's linked todo (display-only: never starts/stops anything).
      *  P2 (2026-09-19 UX review): an absent/deleted (tombstoned) todo must not click-fail

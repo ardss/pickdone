@@ -8,7 +8,7 @@
         <div v-else class="ctx-item" :class="{danger:it.danger}"
              role="menuitem" tabindex="0"
              @click.stop="exec(it)"
-             @keydown.enter.prevent="exec(it)">
+             @keydown="onItemKey(it, $event)">
           <app-icon v-if="it.icon" :name="it.icon" :size="13" class="ctx-ico"/>{{it.label}}</div>
       </template>
     </div>
@@ -17,6 +17,8 @@
 
 <script lang="ts">
 /** Global context menu host */
+import { roleButtonActivate } from '../utils/roleButtonKey.js' // [maint/d23 FIX-3b a11y sweep] Space joins Enter
+
 export default {
   name: 'ContextMenuHost',
   components: { AppIcon: window.AppIcon },
@@ -57,6 +59,12 @@ export default {
     window.removeEventListener('wheel', this._onScroll, { capture: true, passive: true } as any)
   },
   methods: {
+    // [maint/d23 FIX-3b a11y sweep] ARIA menuitem pattern: BOTH Enter and Space activate
+    // (Space was dead before and just sat on a non-interactive div). App-wide contract
+    // handler from utils/roleButtonKey.js.
+    onItemKey (it, e) {
+      roleButtonActivate(() => this.exec(it), { stop: true }).call(this, e)
+    },
     // [d21-A3] shared open path (used by both the m-identity watcher and the 'm.visible' watcher):
     // record the trigger, place at raw coords, then clamp into the viewport and focus the first item
     onMenuOpen () {
@@ -90,7 +98,9 @@ export default {
       }
     },
     onKeydown (e) {
-      const items = [...this.$el.querySelectorAll('.ctx-item[tabindex="0"]')]
+      // [maint/d23 FIX-3b a11y sweep] role-pin the roving list: separators carry .ctx-item too
+      // (class .sep), so select real menuitems only — a separator must never take roving focus
+      const items = [...this.$el.querySelectorAll('.ctx-item[role="menuitem"]')]
       const idx = items.indexOf(document.activeElement)
       // D14-A10: Tab used to walk focus out of the open menu — intercept it as roving (Shift
       // reverses), and add Home/End jumps, matching the dialogA11y keyboard contract elsewhere

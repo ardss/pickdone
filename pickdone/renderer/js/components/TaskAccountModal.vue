@@ -15,7 +15,7 @@
         <div class="task-account__list">
           <div v-if="!records.length" class="task-account__empty">{{ $t('statsK.TomatoAccount.emptyDesc') }}</div>
           <div v-for="r in records" :key="r.tomatoId" class="ta-row">
-            <div class="ta-row__main" role="button" tabindex="0" @click="toggleEdit(r)" @keydown.enter.prevent="toggleEdit(r)">
+            <div class="ta-row__main" role="button" tabindex="0" @click="toggleEdit(r)" @keydown="onRowKey(r, $event)">
               <span class="ta-row__date">{{ fmtDate(r) }}</span>
               <span class="ta-row__time">{{ fmtRange(r) }}</span>
               <span v-if="r.manual" class="ta-badge manual">{{ $t('statsK.TomatoAccount.manual') }}</span>
@@ -68,6 +68,7 @@ import { FMT, dayjs } from '../utils/core.js'
 import { splitRecordStart } from '../utils/recordAnchor.js'
 import { FOCUS_MAX_MINUTES } from '../utils/limits.js'
 import dialogA11y from '../utils/dialogA11y.js'
+import { roleButtonActivate } from '../utils/roleButtonKey.js' // [maint/d23 FIX-3b a11y sweep] Space joins Enter
 
 const CSS = `
 .task-account { background: var(--panel, #fff); border: 1px solid var(--line, #f3f3f3); border-radius: var(--radius-lg, 10px); width: 460px; max-width: 92vw; max-height: 80vh; display: flex; flex-direction: column; box-shadow: 0 12px 32px rgba(0,0,0,.18); overflow: hidden; }
@@ -152,17 +153,39 @@ export default {
     },
     toggleEdit (r) {
       if (this.editingId === r.tomatoId) { this.editingId = null; this.draft = null; return }
+      // [maint/d23 FIX-3b] switching rows must not silently discard the previous row's unsaved
+      // draft: if it differs from its record, commit it through the SAME save path as the
+      // editor's confirm (saveEdit) before moving on.
+      this.commitDraftIfDirty()
       this.editingId = r.tomatoId
       this.draft = { tomatoId: r.tomatoId, day0: r.day0, startMin: Math.round(r.startMin), dur: r.dur, rest: r.rest, abandoned: r.abandoned }
+    },
+    // [maint/d23 FIX-3b a11y sweep] ledger rows are role="button": Space joins Enter
+    onRowKey (r, e) {
+      roleButtonActivate(() => this.toggleEdit(r)).call(this, e)
+    },
+    // [maint/d23 FIX-3b] dirty check against the record's live values (same rounding the draft
+    // was seeded with); a manual-add draft (create) has no record to compare and is left alone
+    commitDraftIfDirty () {
+      const d = this.draft
+      if (!d || d.create) return
+      const orig = this.records.find(x => x.tomatoId === d.tomatoId)
+      if (!orig) return
+      if (Math.round(orig.startMin) === d.startMin && orig.dur === d.dur && orig.rest === d.rest && orig.abandoned === d.abandoned) return
+      this.saveEdit()
     },
     saveEdit () {
       const d = this.draft
       if (!d) return
+      this.commitDraft(d)
+      this.editingId = null
+      this.draft = null
+    },
+    // Shared persistence step of the editor confirm (used by saveEdit and the switch auto-commit)
+    commitDraft (d) {
       const startTs = d.day0 + d.startMin * 60000
       this.$store.commit('tomato/updateRecord', { tomatoId: d.tomatoId, patch: { endTime: startTs + d.dur * 60000, focusDuration: d.dur, restDuration: d.abandoned ? 0 : d.rest, succeed: !d.abandoned } })
       this.$message.success(this.$t('statsK.TomatoAccount.saved'))
-      this.editingId = null
-      this.draft = null
     },
     delRecord (r) {
       this.$confirm(this.$t('statsK.TomatoAccount.deleteConfirm'), this.$t('statsK.TomatoAccount.delete'), { type: 'warning' })
