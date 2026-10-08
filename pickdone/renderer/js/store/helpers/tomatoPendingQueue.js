@@ -250,8 +250,27 @@ function settleLedgerEntry (entry, res) {
   }
   if (entry.op === 'tomatoRemoveByIds') purgePendingAppends(entry.params)
 }
+/** TQ-2 cross-window gap fix: both same-origin renderer processes (main + float window)
+ *  hydrate the queue into a private array, but settle/purge only mutate the settling
+ *  process's array + its LS delete-own-key. The OTHER window keeps a stale entry, and its
+ *  next replay re-sends it — for ledger appends the db layer's ON CONFLICT DO UPDATE SET
+ *  deleted=0 then RESURRECTS a row a peer's remove already deleted. At replay time the LS
+ *  mirror is the shared source of truth: an entry whose per-entry key is gone was settled
+ *  or purged by a peer, so the local copy is dropped without re-sending. (A mirror write
+ *  that failed loudly at enqueue time already surfaced its error to the enqueueing caller —
+ *  post-TQ-2 the durability asset is the LS mirror, never the private array.) */
+function peerSettled (entry, prefix) {
+  let present = null
+  try { present = localStorage.getItem(prefix + entry.uid) } catch (e) { present = null }
+  return present == null
+}
 function replayPendingLedger () {
   for (const entry of [..._pendingLedger]) {
+    if (peerSettled(entry, PENDING_LEDGER_PREFIX)) {
+      const i = _pendingLedger.indexOf(entry)
+      if (i >= 0) _pendingLedger.splice(i, 1)
+      continue
+    }
     Promise.resolve(window.todoAPI && window.todoAPI.dbCall(entry.op, entry.params))
       .then(res => settleLedgerEntry(entry, res))
       .catch(e => console.error('[tomato] ledger DB write failed (queued for retry):', entry.op, e))
@@ -273,6 +292,11 @@ function flushPendingLedger () {
   // failure permanently dropped the ledger write. Replaying an entry that actually landed is safe:
   // ledger ops are idempotent upserts.
   for (const entry of [..._pendingLedger]) {
+    if (peerSettled(entry, PENDING_LEDGER_PREFIX)) { // peer settled/purged it — drop, don't re-send
+      const i = _pendingLedger.indexOf(entry)
+      if (i >= 0) _pendingLedger.splice(i, 1)
+      continue
+    }
     Promise.resolve(window.todoAPI && window.todoAPI.dbCall(entry.op, entry.params))
       .then(res => settleLedgerEntry(entry, res))
       .catch(e => console.error('[tomato] ledger flush failed at quit (kept for retry):', entry.op, e))
@@ -334,6 +358,11 @@ function settleSnowEntry (entry, res) {
 }
 function replayPendingSnow () {
   for (const entry of [..._pendingSnow]) {
+    if (peerSettled(entry, PENDING_SNOW_PREFIX)) {
+      const i = _pendingSnow.indexOf(entry)
+      if (i >= 0) _pendingSnow.splice(i, 1)
+      continue
+    }
     Promise.resolve(window.todoAPI && commitCommand("todo", "bump", entry.params))
       .then(res => settleSnowEntry(entry, res))
       .catch(e => console.error('[tomato] bumpSnow failed (queued for retry):', entry.params, e))
@@ -351,6 +380,11 @@ function flushPendingSnow () {
   // queue, so a quit-flush failure cannot permanently drop the task-side focus credit (bumpSnow is
   // idempotent and every replay carries the same dedupKey, so a double-send cannot double-credit).
   for (const entry of [..._pendingSnow]) {
+    if (peerSettled(entry, PENDING_SNOW_PREFIX)) { // peer settled it — drop, don't re-send
+      const i = _pendingSnow.indexOf(entry)
+      if (i >= 0) _pendingSnow.splice(i, 1)
+      continue
+    }
     Promise.resolve(window.todoAPI && commitCommand("todo", "bump", entry.params))
       .then(res => settleSnowEntry(entry, res))
       .catch(e => console.error('[tomato] bumpSnow flush failed at quit (kept for retry):', entry.params, e))

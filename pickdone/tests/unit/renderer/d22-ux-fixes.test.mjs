@@ -38,7 +38,7 @@ test('[F1] createLines leaves only the unsent remainder in the input on a mid-ba
 
 test('[F2] onCancel (Esc) resets pickedDate so the next quick-add cannot inherit the stale chip', () => {
   const src = read('renderer/js/components/QuickAdd.vue')
-  const i = src.indexOf('onCancel () {')
+  const i = src.indexOf('onCancel (e) {') // maint/d23: signature gained the event param for the IME guard
   assert.ok(i > -1, 'onCancel found')
   const body = src.slice(i, i + 400)
   const iFail = body.indexOf('this.failed = false')
@@ -66,7 +66,7 @@ test('[F3] TomatoFloatPage.confirmAbandon awaits giveUp; the abandon layer close
   assert.ok(i > -1, 'confirmAbandon is async')
   const body = src.slice(i, i + 900)
   assert.ok(body.includes("await this.$store.dispatch('tomato/giveUp'"), 'giveUp is awaited')
-  assert.ok(body.indexOf('this.abandoning = false') > body.indexOf('await this.$store.dispatch'), 'layer collapse happens after the await (inside try)')
+  assert.ok(body.indexOf('this.closeAbandon()') > body.indexOf('await this.$store.dispatch'), 'layer collapse happens after the await (inside try; [maint/d23 FIX-3b] routes through closeAbandon for focus restore)')
   assert.ok(/if \(this\.abandonBusy\) return/.test(body), 're-entry guard on the busy flag')
   assert.ok(body.includes('statsH.main.actionFailedMsg'), 'failure surfaces an error toast')
 })
@@ -80,7 +80,9 @@ test('[F4] pickNoise awaits settings/update and does not collapse the panel on a
   const body = src.slice(i, i + 1200)
   assert.ok(body.includes("await this.$store.dispatch('settings/update'"), 'the settings action is awaited')
   assert.ok(body.includes('r.ok === false'), "the action's {ok:false} resolution is honored (it RESOLVES, not rejects)")
-  assert.ok(body.indexOf('this.noiseOpen = false') > body.indexOf('await this.$store.dispatch'), 'panel collapses only after a successful write')
+  // [maint/d23 FIX-3b] the collapse goes through closeNoisePanel() (adds focus restore to the
+  // ♪ toggle) but the ordering contract is unchanged: collapse only after a successful write
+  assert.ok(body.indexOf('this.closeNoisePanel()') > body.indexOf('await this.$store.dispatch'), 'panel collapses only after a successful write')
   assert.ok(body.includes('statsH.main.actionFailedMsg'), 'failure is surfaced, not silent')
 })
 

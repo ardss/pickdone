@@ -1,5 +1,4 @@
 <template>
-
   <div class="floating" @pointerdown="startDrag" @pointerup="stopDrag" @pointercancel="stopDrag" @lostpointercapture="stopDrag" @dblclick="onCardDblClick">
     <div class="tomato"
          :class="{'tomato--work': working, 'tomato--rest': resting, 'tomato--abandoning': abandoning,
@@ -12,11 +11,10 @@
                   @pointerdown.stop @click.stop="cancelAttach"></button>
         </div>
         <div v-else class="tomato__task">{{ $t('statsB.TomatoFloatPage.attachLabel') }}<b class="tomato__task-none">{{ $t('statsB.TomatoFloatPage.noAttach') }}</b></div>
-        <!-- Remote running focus (LAN sync announce, display-only): click opens the linked todo
-             (P2 2026-09-19 UX review: same behavior as the TomatoPanel chip — absent/deleted todo
-             toasts instead of a silent no-op; pointerdown.stop keeps the chip from dragging) -->
+        <!-- Remote running focus (LAN announce, display-only; opens the linked todo, toasts if absent;
+             pointerdown.stop keeps the chip from dragging) -->
         <div v-if="remoteRun" class="tomato__remote" role="button" tabindex="0" :title="$t('statsD.TomatoPanel.remoteRunningTip')"
-             @pointerdown.stop @click.stop="openRemoteTodo" @keydown.enter.prevent.stop="openRemoteTodo">
+             @pointerdown.stop @click.stop="openRemoteTodo" @keydown="onRemoteKey">
           {{ $t('statsD.TomatoPanel.remoteRunning', { name: remoteRun.deviceName || remoteRun.deviceId, time: remoteClock }) }}
         </div>
         <div class="tomato__beads" :aria-label="$t('statsB.TomatoFloatPage.beadsAria')">
@@ -27,11 +25,11 @@
       <div class="tomato__corner">
         <button type="button" class="corner-btn" :title="$t('statsP.TomatoFloatPage.titleMin')" @click="minimize"><i class="btn-min"></i></button>
         <button type="button" class="corner-btn corner-btn--muted" :title="abandoning ? $t('statsB.TomatoFloatPage.close') : $t('statsP.TomatoFloatPage.titleReset')" @click="abandoning ? cancelAbandon() : reset()"><i class="btn-close"></i></button>
-        <button type="button" class="corner-btn" :class="{'corner-btn--on': menuOpen, 'corner-btn--off': abandoning}"
+        <button ref="menuBtn" type="button" class="corner-btn" :class="{'corner-btn--on': menuOpen, 'corner-btn--off': abandoning}"
                 :title="$t('statsP.TomatoFloatPage.titleMenu')"
                 :aria-expanded="menuOpen ? 'true' : 'false'"
                 @click="toggleMenu"><i class="btn-dots"></i></button>
-        <button type="button" class="corner-btn corner-btn--note" :class="{'corner-btn--on': noiseOpen}"
+        <button ref="noiseBtn" type="button" class="corner-btn corner-btn--note" :class="{'corner-btn--on': noiseOpen}"
                 :title="$t('statsB.TomatoFloatPage.noiseSection')"
                 :aria-expanded="noiseOpen ? 'true' : 'false'"
                 @click="toggleNoisePanel"><i class="btn-note"></i></button>
@@ -52,9 +50,9 @@
       </transition>
 
       <!-- Ring knob: the only progress element; start / abandon confirm -->
-      <div class="tomato__knob" role="button" tabindex="0"
+      <div ref="knobEl" class="tomato__knob" role="button" tabindex="0"
            :title="working ? $t('statsE.TomatoBar.giveUpFocusBtn') : (resting ? $t('statsE.TomatoBar.giveUpBreakBtn') : $t('statsP.TomatoFloatPage.titleStart'))"
-           @click="btnMain" @keydown.enter.prevent="btnMain">
+           @click="btnMain" @keydown="onKnobKey">
         <svg viewBox="0 0 36 36" aria-hidden="true">
           <circle class="tomato__ring-bg" cx="18" cy="18" r="16" pathLength="100"/>
           <circle class="tomato__ring-fg" cx="18" cy="18" r="16" pathLength="100" :stroke-dasharray="ringPct + ' 100'"/>
@@ -70,7 +68,7 @@
         <div v-if="menuOpen" class="tf-menu" @pointerdown.stop>
         <div class="tf-menu__head">
           <span class="tf-menu__title">{{ $t('statsB.TomatoFloatPage.menuTitle') }}</span>
-          <button type="button" class="tf-menu__x close-x close-x--sm" :aria-label="$t('statsB.TomatoFloatPage.close')" @click="closeMenu"></button>
+          <button type="button" class="tf-menu__x close-x close-x--sm" :aria-label="$t('statsB.TomatoFloatPage.close')" @click="closeMenu()"></button>
         </div>
         <div class="tf-menu__list" role="listbox" :aria-label="$t('statsB.TomatoFloatPage.menuTitle')">
           <button v-for="t in tasks" :key="t.taskId" type="button" class="tf-menu__item"
@@ -103,14 +101,12 @@
 </template>
 
 <script lang="ts">
-/** Standalone pomodoro float window page — final form (finalized 2026-08-31: "ultra-light gray outline + ring knob"):
- *  Pure white card face (interior never changes color by phase) + 1px ultra-light gray outline; the only progress element = the ring knob at bottom-right
- *  (arc = remaining ratio, cyan for focus / orange for rest, ring center ▶/❚❚, click = start / abandon confirm); large time digits + small phase label,
- *  attached task row (✕ to detach), today's pomodoro beads (settings.dailyTomatoTarget is the total).
- *  No white flash on completion (user-finalized); during rest the badge pops out from the left of the ring.
- *  Top-right mini buttons: minimize / close (abandon + reset) / ⋮ task menu (picking a task only attaches it without starting; can rebind at any phase).
- *  The ⋮ menu and abandon dialog share the "temporarily enlarged window" mechanism; the browser debug host uses widget-preview (class-name enlargement).
- *  Note: never pop a native dialog on a transparent frameless window — Windows will paint a system title bar onto the host window. */
+/** Standalone pomodoro float window page — final form (2026-08-31: ultra-light gray outline + ring knob).
+ *  Pure white card face; the only progress element = the bottom-right ring knob (arc = remaining ratio;
+ *  click = start / abandon confirm); large digits + phase label; attach row (✕ detach); today's beads;
+ *  minimize / close(abandon+reset) / ⋮ task menu / ♪ noise (menus share the temp window-enlargement
+ *  mechanism; browser debug host: widget-preview). Never pop a native dialog on a transparent frameless
+ *  window — Windows paints a system title bar onto the host. */
 import { formatMMSS, focusedElapsedSec, focusedMinutesText } from '../utils/tomatoShared.js'
 import { NOISES } from '../utils/mediaRegistry.js'
 import { remainSecOfAnnounce } from '../store/helpers/tomatoAnnounceShared.js'
@@ -118,12 +114,13 @@ import { remainingSecOfState } from '../store/tomato.js'
 import { pruneRemoteAnnounces } from '../store/tomatoAnnounce.js'
 // Drag/dblclick methods (pure relocation — spread into `methods` below)
 import { tomatoFloatDragMethods } from './tomatoFloatDrag.js'
+import { observeDispatch } from '../utils/dispatchObserved.js' // [maint/d23 FIX-3b] dispatches must be observed, not fire-and-forget
+import { roleButtonActivate } from '../utils/roleButtonKey.js' // [maint/d23 FIX-3b a11y sweep] Space joins Enter
 
 /** The browser debug host shim's todoAPI carries a version stamp; the real preload does not */
 function isPreviewHost () {
   return !window.todoAPI || window.todoAPI.version === '0.1.0-browser-shim'
 }
-
 export default {
   name: 'TomatoFloatPage',
   data () {
@@ -135,8 +132,7 @@ export default {
       abandonReason: '',
       menuOpen: false,
       noiseOpen: false,
-      // Wall-clock tick refreshed by the 500ms loop; Date.now() inside a computed is not reactive,
-      // so displayClock needs a data field to re-derive the "focused for" forward count
+      // Wall-clock tick for the 500ms loop (Date.now() in a computed is not reactive)
       now: Date.now(),
       preview: isPreviewHost()
     }
@@ -149,8 +145,7 @@ export default {
   computed: {
     working () { return !!(this.st && this.st.status === 'startTomatoTime') },
     resting () { return !!(this.st && this.st.status === 'startRestTime') },
-    /** Remote running focus (live cross-device announce) — display-only chip source.
-     *  Touches this.st so the 1s refresh loop re-derives the countdown. */
+    /** Remote running focus (live announce) — touches this.st so the 1s refresh re-derives it. */
     remoteRun () { void this.st; return this.$store.getters['tomatoAnnounce/primaryRunning'] },
     remoteClock () { void this.st; return formatMMSS(remainSecOfAnnounce(this.$store.getters['tomatoAnnounce/primaryRunning'])) },
     clock () {
@@ -158,15 +153,14 @@ export default {
       return formatMMSS(this.remaining)
     },
     knobIcon () { return this.working ? '❚❚' : '▶' },
-    // A13 (2026-10-02): formula moved to utils/tomatoShared.js focusedMinutesText (single source)
+    // A13: formula single-sourced in utils/tomatoShared.js focusedMinutesText
     focusedMinText () {
       const s = this.st
       if (!this.working || !s || !s.startedAt) return '0'
       return focusedMinutesText(s.startedAt)
     },
-    /* During abandon confirm: another presentation of the same info — the big digits switch
-       from countdown to a forward-counting "focused for", showing the user's decision
-       quantity (this focus session) as live data instead of repeating it in static small text */
+    /* During abandon confirm the big digits switch to a forward-counting "focused for" —
+       the user's decision quantity shown as live data instead of static small text */
     displayClock () {
       if (this.abandoning && this.working && this.st && this.st.startedAt) {
         return formatMMSS(focusedElapsedSec(this.st.startedAt, this.now))
@@ -207,15 +201,13 @@ export default {
         .concat(NOISES.map(n => ({ id: n.id, label: this.$t(n.labelKey) })))
     },
     noiseCurrent () { return (this.$store.state.settings.whiteNoiseAudio || '') },
-    /* Today's todo candidates: same criteria as the main window's tomato bar attachCandidates; computed as fallback when views aren't ready */
-    /* D14-A7: shared candidate-pool builder (the slice cap and the truncation notice must read the same pool) */
+    /* Today's todo candidates (same pool as TomatoBar.attachCandidates). D14-A7: shared builder so
+    the slice cap and the truncation notice read the same pool */
     taskPool () {
       const root = this.$store.state.todo || {}
       let list = (root.views && root.views.todayTodoList) || []
       if (!list.length) {
-        // F4 (2026-09-24): the fallback must compare against t.dayStart (a midnight timestamp, store/todo.js
-        // caliber). The old `+dayjs().format('YYYYMMDD')` (an 8-digit date) never equaled it (~10^5 apart),
-        // so the ⋮ menu permanently showed "no tasks today" whenever views.todayTodoList lagged.
+      // F4: compare against t.dayStart (store/todo.js caliber); the old 8-digit `YYYYMMDD` never equaled it.
         const today = window.dayjs ? +window.dayjs().startOf('day') : 0
         list = (root.todoList || []).filter(t => t && !t.delete && t.dayStart === today)
       }
@@ -231,10 +223,8 @@ export default {
   },
   methods: {
     read () { return this.$store.state.tomato },
-    /** P2 (2026-09-19 UX review): the remote chip now behaves like the TomatoPanel chip. The float
-     *  window cannot mount the main-window edit panel, so a LIVE linked todo summons the main
-     *  window (existing showMainFromFloat path); an absent/tombstoned one toasts instead of the
-     *  old tooltip-only fake affordance. */
+    /** P2 (2026-09-19 UX review): same behavior as the TomatoPanel chip — a LIVE linked todo
+     *  summons the main window (showMainFromFloat); an absent/tombstoned one toasts. */
     openRemoteTodo () {
       const id = this.remoteRun && this.remoteRun.attachTodoId
       const root = this.$store.state.todo || {}
@@ -249,32 +239,25 @@ export default {
     refresh () {
       this.now = Date.now()
       this.st = this.read()
-      // P1-6 (2026-09-19 UX review): the announce getter caches on store state and Date.now() is
-      // not reactive — dispatch the store prune on this 500ms tick so a peer that crashed
-      // mid-focus drops its ghost chip by TTL instead of sticking forever.
-      // Round-3 perf: skip the commit while no peer announce exists — pruning an empty map is a
-      // no-op, so an idle window stops issuing 2Hz Vuex commits.
+      // P1-6: prune announces on this tick so a crashed peer's ghost chip drops by TTL
+      // (skipped while no announce exists: an idle window stops issuing 2Hz Vuex commits).
       try { pruneRemoteAnnounces(this.$store) } catch (e) { /* store not ready */ }
-      // maint/d11-r4: single-source remaining seconds (was a character-twin of TomatoPanel's inline copy)
+      // maint/d11-r4: single-source remaining seconds
       this.remaining = remainingSecOfState(this.st, this.now)
       // If the dialog is open but focus has already ended elsewhere (finished/ended elsewhere), auto-collapse — otherwise title and body desync
       if (this.abandoning && this.st.status !== 'startTomatoTime') this.abandoning = false
     },
-    /* Window height decision log (second pass, 2026-09-02): constant 240×320; expanding/collapsing the ⋮ menu / ♪ noise / abandon confirm
-       are all pure CSS animations inside the window (GPU-composited = buttery), the OS never resizes. Idle transparent empty areas are
-       handled by main-process polled click-through (click-through whenever the cursor is outside interactive areas, never blocking the desktop);
-       the DWM ghost title is cut off at the root by clearing the window title.
-       (The content-fit approach — 86 idle / 320 expanded — was rejected: every expand/collapse needs an OS-level setBounds,
-       the fade-out gets hard-clipped and races the CSS animation, losing all smoothness — user decided to return to constant height.)
-       syncPanel only reports "an expandable layer exists" so the hit area extends to the full window. */
+    /* Window height decision log (2026-09-02): constant 240×320; ⋮/♪/abandon expansion is pure in-window
+       CSS animation (OS never resizes); idle areas are main-process polled click-through; content-fit
+       86/320 was rejected (per-toggle setBounds hard-clips the fade-out). syncPanel only reports "an
+       expandable layer exists" so the hit area extends to the full window. */
     syncPanel () {
       if (this.preview) return
       if (!window.todoAPI || !window.todoAPI.tomatoFloatPanel) return
       window.todoAPI.tomatoFloatPanel(!!(this.menuOpen || this.noiseOpen))
     },
-    /* Abandon layer open/close = full-window recomposite, which brings DWM right-angle rectangle ghost repaints
-       (confirmed by user screenshots; even after roundedCorners:false removed the native right-angle layer,
-       residue may remain) — wipe once in place after the transition ends (most reliable erasure method tested in this project) */
+    /* Abandon open/close = full-window recomposite → DWM right-angle ghost repaints may linger;
+       wipe once in place after the transition ends (most reliable erasure method tested here) */
     flushGhost () {
       if (this.preview) return
       if (window.todoAPI && window.todoAPI.flushTomatoFloat) window.todoAPI.flushTomatoFloat()
@@ -282,7 +265,8 @@ export default {
     btnMain () {
       const s = this.st
       if (!s) return
-      if (s.status === 'default') { this.$store.dispatch('tomato/startFocus'); return }
+      // [maint/d23 FIX-3b] observed: a failed startFocus surfaces a toast instead of idling silently
+      if (s.status === 'default') { observeDispatch(this.$store, 'tomato/startFocus').catch(this.reportDispatchFail); return }
       // Click while running/resting = abandon confirm (no pause for the pomodoro — user-finalized)
       this.reset()
     },
@@ -291,57 +275,79 @@ export default {
       if (!s) return
       if (s.status === 'default') { this.persist({ status: 'default', startedAt: 0, remainSec: (s.tomatoTime || 25) * 60 }); return }
       // Abandoning during rest shows no confirm (user-finalized): nothing is logged, no cost, return straight to ready; the confirm dialog is only for focus
-      if (s.status === 'startRestTime') { this.$store.dispatch('tomato/giveUp', { record: false }); return }
+      // [maint/d23 FIX-3b] observed (same fix as confirmAbandon below): a failed rest-abandon
+      // used to leave the countdown silently running with no feedback
+      if (s.status === 'startRestTime') { observeDispatch(this.$store, 'tomato/giveUp', { record: false }).catch(this.reportDispatchFail); return }
       this.abandonReason = ''
       this.abandoning = true
     },
     persist (patch) { this.$store.commit('tomato/patch', patch); this.st = this.$store.state.tomato },
     minimize () { if (window.todoAPI) window.todoAPI.hideTomatoFloat() },
-    // [D22 P2] giveUp is awaited (same fix as TomatoAbandonModal): the confirm layer used to collapse
-    // BEFORE the dispatch resolved, so a failed abandon was silent — it closes only on success.
+    // [D22 P2] giveUp is awaited (same fix as TomatoAbandonModal): the layer collapses only on success.
     async confirmAbandon () {
       if (this.abandonBusy) return
       this.abandonBusy = true
       try {
         await this.$store.dispatch('tomato/giveUp', { record: this.working, reason: this.abandonReason })
-        this.abandoning = false
+        this.closeAbandon()
       } catch (e) {
         console.error('[tomato] giveUp failed:', e)
         if (this.$message) this.$message.error(this.$t('statsH.main.actionFailedMsg') + ((e && e.message) || ''))
       } finally { this.abandonBusy = false }
     },
     cancelAbandon () {
-      this.abandoning = false
+      this.closeAbandon()
     },
     /* ⋮ task menu: openable at any phase (running = switch attachment); mutually exclusive with the ♪ noise panel */
     toggleMenu () {
       if (this.abandoning) return
-      this.menuOpen = !this.menuOpen
-      if (this.menuOpen) this.noiseOpen = false
+      if (this.menuOpen) { this.closeMenu(); return }
+      this.menuOpen = true
+      this.noiseOpen = false
     },
     /* White noise selector bar: never expands during abandon confirm (avoid stacked states), otherwise openable anytime; mutually exclusive with the task menu */
     toggleNoisePanel () {
       if (this.abandoning) return
-      this.noiseOpen = !this.noiseOpen
-      if (this.noiseOpen) this.menuOpen = false
-    },
-    closeMenu () {
+      if (this.noiseOpen) { this.closeNoisePanel(); return }
+      this.noiseOpen = true
       this.menuOpen = false
     },
+    /* [maint/d23 FIX-3b] closing a v-if panel must not strand keyboard focus on the removed
+       nodes (falls to body; only 15px corner buttons). Same contract as ViewMoreMenu.closeMenu. */
+    refocusToggle (ref) {
+      this.$nextTick(() => {
+        const el = this.$refs[ref]
+        if (el && el.focus) { try { el.focus() } catch (e) { /* unfocusable host */ } }
+      })
+    },
+    closeMenu (refocus = true) {
+      this.menuOpen = false
+      if (refocus) this.refocusToggle('menuBtn')
+    },
+    closeNoisePanel (refocus = true) {
+      this.noiseOpen = false
+      if (refocus) this.refocusToggle('noiseBtn')
+    },
+    closeAbandon (refocus = true) {
+      this.abandoning = false
+      if (refocus) this.refocusToggle('knobEl')
+    },
+    /* [maint/d23 FIX-3b a11y sweep] role="button" ring knob / remote chip: Space joins Enter */
+    onKnobKey: roleButtonActivate(function () { this.btnMain() }),
+    onRemoteKey: roleButtonActivate(function () { this.openRemoteTodo() }, { stop: true }),
     /* Picked task: attach only, never start (starting is up to the user via the main knob) */
     pickTask (taskId) {
       this.$store.dispatch('tomato/attach', taskId)
-      this.menuOpen = false
+      this.closeMenu()
     },
     /* White noise switch: writes only the sound choice; play/stop follows automatically per focus state; collapse to the card on selection */
     async pickNoise (id) {
-      // Use the action, not the mutation: only the update action persists via todoAPI.updateSettings → config.json (the raw mutation keeps the choice out of the recovery channel)
-      // [D22 P3] the action's result is honored: settings/update RESOLVES with { ok:false } (not rejects)
-      // on config.json IPC failure — the panel stays open at the previous choice (nothing to roll back).
+      // Action, not mutation: only the action persists via todoAPI.updateSettings → config.json.
+      // [D22 P3] the action RESOLVES with {ok:false} on IPC failure — the panel stays open.
       try {
         const r = await this.$store.dispatch('settings/update', { whiteNoiseAudio: id })
         if (r && r.ok === false) throw (r.error || new Error('updateSettings failed'))
-        this.noiseOpen = false
+        this.closeNoisePanel()
       } catch (e) {
         console.error('[tomato] white noise settings write failed:', e)
         if (this.$message) this.$message.error(this.$t('statsH.main.actionFailedMsg') + ((e && e.message) || ''))
@@ -350,13 +356,16 @@ export default {
     cancelAttach () {
       this.$store.dispatch('tomato/attach', null)
     },
+    /* [maint/d23 FIX-3b] failure toast for observed dispatches (actionFailedMsg key + detail) */
+    reportDispatchFail (e) {
+      if (this.$message) this.$message.error(this.$t('statsH.main.actionFailedMsg') + ((e && e.message) || ''))
+    },
     footerAction () {
       /* The footer button is always "detach": only clears the selection, never binds a start (focus belongs solely to the ring knob) */
       this.cancelAttach()
-      this.menuOpen = false
+      this.closeMenu()
     },
-    // Whole-card drag + double-click summon: implementations live verbatim in views/tomatoFloatDrag.js
-    // (size ratchet); these thin delegates keep the component's method surface identical.
+    // Whole-card drag/dblclick summon: verbatim in views/tomatoFloatDrag.js (size ratchet)
     startDrag (e) { return tomatoFloatDragMethods.startDrag.call(this, e) },
     _isCardInteractive (t) { return tomatoFloatDragMethods._isCardInteractive.call(this, t) },
     onCardDblClick (e) { return tomatoFloatDragMethods.onCardDblClick.call(this, e) },
@@ -367,25 +376,19 @@ export default {
       document.documentElement.classList.add('widget-preview')
     } else {
       document.documentElement.classList.add('widget-transparent')
-      // The window title gets overridden by document.title (BrowserWindow's title:'' is only the pre-load default),
-      // and that title text is exactly what DWM ghost repaints draw — the float page must clear it itself to cut it off at the root (2026-09-02)
+      // document.title is what DWM ghost repaints draw — clear it to cut the ghost off at the root
       document.title = ''
       if (window.todoAPI) window.todoAPI.setTomatoFloatBounds()
     }
     this.refresh()
     this._onStorage = () => this.refresh()
     window.addEventListener('storage', this._onStorage)
-    // F22 (2026-09-24): currently UNREACHABLE on the float window — tomato-float.js creates it with
-    // focusable:false (Electron 35-37 DWM ghost workaround, see the create() comment block), so the
-    // window never holds keyboard focus and keydown never fires here. Kept on purpose: menus already
-    // have ✕/re-click close paths, and after the Electron v39 upgrade (fix #47386) focusable can be
-    // re-enabled — at which point this Escape path becomes live again. TEST GAP: no float-window
-    // keydown test exists (tests/ Escape coverage is main-window only); add one when the window is
-    // made focusable again.
+    // F22: UNREACHABLE while the window is focusable:false (Electron DWM workaround); kept for the
+    // post-v39 re-enable. TEST GAP: no float-window Escape test yet.
     this._onKey = e => {
       if (e.key !== 'Escape') return
       if (this.menuOpen) this.closeMenu()
-      this.noiseOpen = false
+      if (this.noiseOpen) this.closeNoisePanel()
     }
     window.addEventListener('keydown', this._onKey)
     this._iv = setInterval(() => this.refresh(), 500)
@@ -406,8 +409,7 @@ export default {
     this.stopDrag()
     document.documentElement.classList.remove('widget-transparent')
     document.documentElement.classList.remove('widget-preview')
-  },
-
+  }
 }
 </script>
 <style>
@@ -501,12 +503,10 @@ html[data-theme="dark"] .tf-menu__bare:hover { border-color: var(--brand-bright,
 .tf-menu__noise-label { font-size: 9px; color: var(--text-3, #9aa0a6); margin-bottom: 4px; }
 .tf-menu__noise .tf-menu__item { font-size: 10px; padding: 4px 8px; }
 .tf-menu__noise .tf-menu__item--on, .tf-menu__noise .tf-menu__item--on:hover { background: rgba(15, 157, 143, .12); }
-/* 放弃面板内容精简后：卡片 86 → 100px 容纳三行 */
 /* 放弃面板精简后 86px 原尺寸即可容纳：卡片不再生长（用户实测「空间够就不用变大」） */
 
-/* ==================== 浮窗角钮图标 · mask+currentColor（深浅主题自适应） ====================
-   旧版图标=固定灰色背景图：深色卡面上对比度不足（用户实测"三个钮看不到"）。
-   mask 用形状 alpha，颜色走 currentColor 跟随主题；作用域限定浮窗角钮，不波及他处同名类。 */
+/* 浮窗角钮图标 · mask+currentColor（旧固定灰底图在深色卡面对比不足；mask 走形状 alpha、
+   颜色跟随主题；作用域限浮窗角钮） */
 .corner-btn { color: #8a9096; }
 html[data-theme="dark"] .corner-btn { color: rgba(232, 237, 241, .78); }
 .tomato .corner-btn .btn-min,

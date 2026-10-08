@@ -2,7 +2,7 @@
 
   <aside class="side-nav" :class="{'side-nav--collapsed': collapsed}">
     <div class="sn-fixed">
-    <div class="sn-brand" role="button" tabindex="0" :title="collapsed ? $t('statsG.SideNav.expandSidebar') : $t('statsG.SideNav.collapseSidebar')" :aria-label="collapsed ? $t('statsG.SideNav.expandSidebar') : $t('statsG.SideNav.collapseSidebar')" @click="toggleCollapse" @keydown.enter.prevent="toggleCollapse">
+    <div class="sn-brand" role="button" tabindex="0" :title="collapsed ? $t('statsG.SideNav.expandSidebar') : $t('statsG.SideNav.collapseSidebar')" :aria-label="collapsed ? $t('statsG.SideNav.expandSidebar') : $t('statsG.SideNav.collapseSidebar')" @click="toggleCollapse" @keydown="onBrandKey">
       <div class="sn-brand__mark"><svg viewBox="0 0 64 64" aria-hidden="true">
   <rect x="13" y="6" width="40" height="30" rx="10" fill="#b5ded9" transform="rotate(-5 33 21)"/>
   <rect x="11" y="19" width="43" height="36" rx="11" fill="#0f9d8f"/>
@@ -29,7 +29,7 @@
              @input="onSearchInputEvt"
              @keydown.esc.prevent="onSearchEsc"/>
       <div v-if="String($store.state.todo.search||'').trim()" class="main-nav-search__clear close-x close-x--sm" role="button" tabindex="0"
-           :aria-label="$t('statsG.SideNav.clearSearchAria')" @click="clearSearch" @keydown.enter.prevent="clearSearch">
+           :aria-label="$t('statsG.SideNav.clearSearchAria')" @click="clearSearch" @keydown="onSearchClearKey">
       </div>
     </div>
 
@@ -187,6 +187,7 @@ import { navKeyOfRoute } from '../views/registry.js'
 import { NAV_ICON, NAV_LABEL, NAV_ORDER } from './side-nav/navConfig.js'
 import * as handlers from './side-nav/sideNavHandlers.js'
 import { deleteCategoryWithUndo } from './side-nav/categoryDelete.js'
+import { roleButtonActivate } from '../utils/roleButtonKey.js' // [maint/d23 FIX-3b a11y sweep] Space joins Enter
 // [uiux-2026-10-01 J1/J5 P1] FilterModal was registered as a bare arrow `() => import(...)`:
 // Vue treats that as a functional component whose render returns a Promise, coercing to the
 // literal text '[object Promise]' in the sidebar — the new-filter dialog never mounted.
@@ -302,6 +303,10 @@ export default {
     }
   },
   methods: {
+    /* [maint/d23 FIX-3b a11y sweep] role="button" brand/search-clear join Space with Enter
+       (ARIA button pattern, app-wide contract via utils/roleButtonKey.js) */
+    onBrandKey: roleButtonActivate(function () { this.toggleCollapse() }),
+    onSearchClearKey: roleButtonActivate(function () { this.clearSearch() }),
     onFilterSaved (id) {
       this.filterEditVisible = false
       if (id) this.$router.push({ name: 'todo-list-filter', params: { id: String(id) } }).catch(() => {})

@@ -58,11 +58,13 @@ test('fix1 focusedElapsedSec: valid startedAt yields the focused-seconds string 
 
 test('fix1 TomatoFloatPage.displayClock: uses the ticked this.now field, not a nonexistent one', async () => {
   const shared = await import('../../../renderer/js/utils/tomatoShared.js')
+  const { roleButtonActivate } = await import('../../../renderer/js/utils/roleButtonKey.js')
   const Comp = loadSFC('renderer/js/views/TomatoFloatPage.vue', {
     formatMMSS: shared.formatMMSS,
     focusedElapsedSec: shared.focusedElapsedSec,
     NOISES: [],
-    remainSecOfAnnounce: () => 0
+    remainSecOfAnnounce: () => 0,
+    roleButtonActivate // d23 a11y sweep: the SFC now references this from its injected imports
   })
   const now = Date.now()
   const displayClock = Comp.computed.displayClock.call({

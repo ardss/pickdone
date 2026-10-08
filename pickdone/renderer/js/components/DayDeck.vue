@@ -27,7 +27,7 @@
           <div v-if="c.overdue.length" class="pd-day-deck__overdue-label">{{ $t('statsE.TodayView.deckOverdue', { n: c.overdue.length }) }}</div>
           <ul v-if="c.overdue.length" class="pd-day-deck__list pd-day-deck__list--overdue">
             <li v-for="t in c.overdue" :key="t.taskId" class="overdue"
-                tabindex="0" @dragstart="onDragStart(t, $event)"
+                tabindex="0" draggable="true" @dragstart="onDragStart(t, $event)"
                 @contextmenu="taskContextMenu(t, $event)"
                 @keydown.shift.delete.prevent.stop="del(t)">
               <span class="pd-day-deck__chk td-check" :class="{on: t.complete}" :style="chkStyleOf(t)" role="checkbox" :aria-checked="t.complete ? 'true' : 'false'"

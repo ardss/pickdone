@@ -511,11 +511,10 @@ function purgeRecycleBin () {
     const liveRows = db.call('queryTodos', { deleted: 0 })
     const metaEntries = []
     for (const r of rows) {
-      for (const k of ['planChipsSnapshot:' + r.taskId, ESTIMATE_KEY_PREFIX + r.taskId]) {
-        try { const v = db.call('getMeta', k); if (v != null && v !== '') metaEntries.push({ key: k, value: v }) } catch { /* absent is fine */ }
-      }
+      const keys = ['planChipsSnapshot:' + r.taskId, ESTIMATE_KEY_PREFIX + r.taskId]; if (r.repeatId) keys.push('repeatRule:' + r.repeatId) // maint/d23 P3: also capture repeatRule meta — the D22 App restore needs the rule (closes the B5 dangling chain)
+      for (const k of keys) { try { const v = db.call('getMeta', k); if (v != null && v !== '') metaEntries.push({ key: k, value: v }) } catch { /* absent is fine */ } }
     }
-    const backupDir = String(settingsDoc().backupDir || '') || path.join(userDataDir(), 'backups')
+    const backupDir = resolveCliBackupDir(String(settingsDoc().backupDir || ''), userDataDir()) // maint/d23 P3: resolveBackupDir semantics (read-only twin, lib-restore-backup.cjs) — a relative/non-whitelisted backupDir used to split the CLI's evt-* snapshots from the App's
     const snap = writePurgeEventSnapshot({ dir: backupDir, rows, liveRows, metaEntries, reason: 'purge' })
     if (!snap.ok) console.error(`warning: purge proceeded WITHOUT its pre-purge event snapshot (${snap.error}) — no evt-purge-*.json was written to ${backupDir}`)
   }
@@ -671,6 +670,7 @@ const { settingsDoc, setSettingsRaceHookForTests, settingsKnown, settingsList, s
 
 /* D18-DOM2 #9: pre-purge event snapshot port (best-effort, loud on failure) — see lib-eventbackup.cjs */
 const { writePurgeEventSnapshot } = require('./lib-eventbackup.cjs')
+const { resolveBackupDir: resolveCliBackupDir } = require('./lib-restore-backup.cjs') // maint/d23 P3: evt-snapshot dir = resolveBackupDir semantics (App parity, read-only twin)
 
 const {
   buildRenewalInstance, buildRepeatRule, repeatOn, renewRepeatAfterComplete, repeatOff, repeatRuleInfo,

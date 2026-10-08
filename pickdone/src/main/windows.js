@@ -188,7 +188,18 @@ function createWindowManager (ctx) {  const {
       if (crashReloadCount < 3) {
         crashReloadCount++
         log.warn('[Crash] 渲染进程崩溃,自动重载', crashReloadCount, '/3')
-        setTimeout(() => { const w = getMainWindow(); if (w) { try { w.webContents.reload() } catch (e2) { log.warn('[Crash] reload failed', e2) } } }, 300)
+        // Stale-window parity with did-fail-load (fix 2026-10-06): the timer used to resolve
+        // getMainWindow() at FIRE time, so a window destroyed and recreated inside the 300ms
+        // delay reloaded the WRONG (new) window mid-load. Capture the exact webContents and
+        // reload only if it is still the live one of the still-current window.
+        const wcAtCrash = win.webContents
+        setTimeout(() => {
+          try {
+            if (win && !win.isDestroyed() && win.webContents === wcAtCrash && !wcAtCrash.isDestroyed()) {
+              wcAtCrash.reload()
+            }
+          } catch (e2) { log.warn('[Crash] reload failed', e2) }
+        }, 300)
       } else {
         // D10 (2026-09-27): gate the relaunch on the PERSISTED counter. The in-memory counter
         // resets on every relaunch, so the old code looped forever on a deterministic startup

@@ -66,8 +66,12 @@ test('reschedule re-anchors the main reminder to the new date at its original ti
   const newDay0 = day0Of(row.todoTime)
   const shift = dayjs(newDay0).diff(day0Of(t.todoTime), 'day')
   assert.equal(shift, 2, 'sanity: +5d on a +3d task is a 2-day shift')
-  assert.equal(row.reminderTime, +dayjs(newDay0).hour(8).minute(0).second(0).millisecond(0),
+  // maint/d23: the re-anchor keeps the NEW todoTime's sub-minute part (EditPanel.applyDate parity),
+  // so compare at minute precision and pin the sub-minute part to the new todoTime's.
+  assert.equal(dayjs(row.reminderTime).format('YYYY-MM-DD HH:mm'), dayjs(newDay0).hour(8).minute(0).format('YYYY-MM-DD HH:mm'),
     'main reminder lands on the new date at its original 08:00 (stayed on the old day before the fix)')
+  assert.equal(row.reminderTime % 60000, row.todoTime % 60000,
+    'the re-anchored reminder keeps the new todoTime sub-minute part (the old copy of the OLD reminder seconds was dropped in maint/d23)')
   assert.deepEqual(row.reminderExtra, [at(6, 10, 0), at(7, 14, 30)],
     'extra reminders shift by the same day-diff, keeping their own time-of-day (EditPanel.applyDate parity)')
   assert.equal(row.dayStart, newDay0, 'dayStart follows todoTime as usual')

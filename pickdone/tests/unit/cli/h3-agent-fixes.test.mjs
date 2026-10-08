@@ -154,10 +154,13 @@ test('h3-8: --range week is the ISO week; next7d keeps the rolling 7-day window'
 })
 
 /* ---- fix 9: restDuration clamp ---- */
-test('h3-9: recordFix rest clamp is 600 (db-layer parity), not 120', () => {
+// maint/d23: --rest is strict-parsed like --minutes — an over-limit value is a loud USAGE error
+// (same contract as backfill/FOCUS_MAX) instead of the old silent clamp-to-600.
+test('h3-9: recordFix rest keeps 400 and rejects 700 with USAGE (strict parse, db-parity cap named)', () => {
   const rec = lib.backfillRecord({ content: 'h3rest', date: ymdOf(-1), at: '20:00', minutes: 25 })
   const fixed = lib.recordFix(rec.tomatoId, { rest: 400 })
   assert.equal(fixed.rec.restDuration, 400, 'a legitimate 400-min rest must not be clamped to 120')
-  const clamped = lib.recordFix(rec.tomatoId, { rest: 700 })
-  assert.equal(clamped.rec.restDuration, 600, 'over-limit rest clamps to the same 600 the db layer enforces')
+  assert.throws(() => lib.recordFix(rec.tomatoId, { rest: 700 }),
+    e => e.code === 'USAGE' && /rest duration max is 600/.test(e.message),
+    'over-limit rest is a loud USAGE error naming the 600 DB-layer clamp, not a silent rewrite')
 })

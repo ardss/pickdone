@@ -3,7 +3,7 @@
   <transition name="slide-right" appear>
   <aside v-if="e" class="edit-panel" @click.stop>
     <div class="ep-inner">
-        <div v-if="saveFailed" class="ep-save-failed" role="alert">{{ $t('statsJ.EditPanel.saveFailed') }}<span class="ep-save-retry" role="button" tabindex="0" :aria-label="$t('statsJ.EditPanel.saveRetry')" @click="retrySave" @keydown.enter.prevent="retrySave">{{ $t('statsJ.EditPanel.saveRetry') }}</span></div>
+        <div v-if="saveFailed" class="ep-save-failed" role="alert">{{ $t('statsJ.EditPanel.saveFailed') }}<span class="ep-save-retry" role="button" tabindex="0" :aria-label="$t('statsJ.EditPanel.saveRetry')" @click="retrySave" @keydown="onSaveRetryKey">{{ $t('statsJ.EditPanel.saveRetry') }}</span></div>
         <!-- F3 (2026-09-20): a peer updated the open task while the panel holds UNSAVED user edits —
              never auto-overwrite user input; offer an explicit re-hydrate instead -->
         <div v-if="remoteStale" class="ep-remote-updated" role="status">
@@ -32,14 +32,14 @@
 
       <div class="ep-date-chips">
         <span class="ep-date-chip" role="button" tabindex="0" :class="{on: dateChip===todayLabel}"
-              @click="setDate('today')" @keydown.enter.prevent="setDate('today')"><app-icon name="sun" :size="12"/>{{ $t('statsJ.EditPanel.todayOption') }}</span>
+              @click="setDate('today')" @keydown="onDateChipKey('today', $event)"><app-icon name="sun" :size="12"/>{{ $t('statsJ.EditPanel.todayOption') }}</span>
         <span class="ep-date-chip" role="button" tabindex="0" :class="{on: dateChip===tomorrowLabel}"
-              @click="setDate('tomorrow')" @keydown.enter.prevent="setDate('tomorrow')"><app-icon name="calendar" :size="12"/>{{ $t('statsJ.EditPanel.tomorrowOption') }}</span>
+              @click="setDate('tomorrow')" @keydown="onDateChipKey('tomorrow', $event)"><app-icon name="calendar" :size="12"/>{{ $t('statsJ.EditPanel.tomorrowOption') }}</span>
         <span class="ep-date-chip" role="button" tabindex="0" :class="{on: dateChip && dateChip!==todayLabel && dateChip!==tomorrowLabel}"
-              @click="setDate('pick')" @keydown.enter.prevent="setDate('pick')"><app-icon name="calendar" :size="12"/>
+              @click="setDate('pick')" @keydown="onDateChipKey('pick', $event)"><app-icon name="calendar" :size="12"/>
           {{dateChip && dateChip!==todayLabel && dateChip!==tomorrowLabel ? dateChip : $t('statsJ.EditPanel.pickDate')}} ▾</span>
         <span class="ep-date-chip" role="button" tabindex="0" :class="{on: !e.dateTs}"
-              @click="setDate('none')" @keydown.enter.prevent="setDate('none')">{{ $t('statsJ.EditPanel.noDateOption') }}</span>
+              @click="setDate('none')" @keydown="onDateChipKey('none', $event)">{{ $t('statsJ.EditPanel.noDateOption') }}</span>
         <!-- The picker sits outside the chip, avoiding ARIA nesting of an input inside a button -->
         <el-date-picker ref="datePick" size="small" value-format="x" type="date"
                         style="width:0;height:0;border:0;padding:0;position:absolute;opacity:0" class="ep-date-pick"
@@ -49,7 +49,7 @@
 
       <div class="ep-cat-wrap">
         <div class="ep-row ep-cat-row" role="button" tabindex="0" :aria-expanded="catOpen ? 'true' : 'false'"
-             @click="catOpen=!catOpen" @keydown.enter.prevent="catOpen=!catOpen">
+             @click="catOpen=!catOpen" @keydown="onCatRowKey">
           <span class="ep-field-label ep-field-ico" :title="$t('statsJ.EditPanel.categoryLabel')"><app-icon name="tag" :size="13"/></span>
           <span v-if="curCat" class="ep-cat-dot" :style="{background: curCat.categoryColor}"></span>
           <span class="ep-cat-name" :class="{'is-placeholder': !curCat}">{{ curCat ? curCat.categoryName : $t('statsJ.EditPanel.uncategorized') }}</span>
@@ -82,7 +82,7 @@
       </div>
 
       <div v-if="!inRecycle" class="ep-row ep-done-row" role="checkbox" :aria-checked="(task&&task.complete)?'true':'false'" tabindex="0"
-           @click="toggleComplete" @keydown.enter.prevent="toggleComplete">
+           @click="toggleComplete" @keydown="onDoneRowKey">
         <span class="ep-field-label ep-field-ico" :title="$t('statsJ.EditPanel.doneBtn')"><app-icon name="check" :size="13"/></span>
         <span class="ep-done-label">{{ $t('statsJ.EditPanel.doneBtn') }}</span>
         <span class="ml-auto"></span>
@@ -93,7 +93,7 @@
 
       <div v-if="!inRecycle" class="ep-row ep-repeat-row" role="button" tabindex="0"
            :aria-label="isRepeat ? $t('statsJ.EditPanel.editRepeatRule') : $t('statsJ.EditPanel.setRepeat')"
-           @click="askRepeatEdit" @keydown.enter.prevent="askRepeatEdit">
+           @click="askRepeatEdit" @keydown="onRepeatRowKey">
         <span class="ep-field-label ep-field-ico" :title="$t('statsE.TodoItem.repeatLabel')"><app-icon name="repeat" :size="13"/></span>
         <span class="ep-remind-label" :class="{'ep-remind-label--active': isRepeat}">{{ isRepeat ? $t('statsJ.EditPanel.repeatPrefix') + $t('statsJ.EditPanel.repeatN', { n: repeatCount == null ? '—' : repeatCount }) : $t('statsJ.EditPanel.setRepeat') }}</span>
         <span class="ml-auto"></span>
@@ -116,7 +116,7 @@
 
       <!-- Whole row clickable to summon the calendar (user-finalized: not just the right pill); the clear ✕ carries its own stop and is unaffected -->
       <div class="ep-row ep-deadline" role="button" tabindex="0" :aria-label="$t('statsJ.EditPanel.setDeadline')"
-           @click="openDeadlinePick" @keydown.enter.prevent="openDeadlinePick">
+           @click="openDeadlinePick" @keydown="onDeadlineRowKey">
         <img class="ep-ico" src="app://app/assets/img/icon-clock.svg" style="opacity:.6">
         <span class="ep-remind-label" :class="{'ep-remind-label--active': !!(e&&e.deadlineTs)}">{{ e&&e.deadlineTs ? $t('statsJ.EditPanel.dueOn', { d: dayjs(e.deadlineTs).format(FMT.cnDate) }) : $t('statsJ.EditPanel.setDeadline') }}</span>
         <span class="ml-auto"></span>
@@ -141,7 +141,7 @@
       <div class="ep-tools">
         <span class="ml-auto"></span>
         <!-- [maint-0925 A5] delete is a no-op on a recycle-state row and purge belongs to RecycleBinView — hide, same rule as the complete/repeat rows -->
-        <span v-if="!inRecycle" class="ep-tool danger" role="button" tabindex="0" :title="$t('statsJ.EditPanel.deleteBtn')" :aria-label="$t('statsJ.EditPanel.deleteTask')" @click="delTask" @keydown.enter.prevent="delTask">
+        <span v-if="!inRecycle" class="ep-tool danger" role="button" tabindex="0" :title="$t('statsJ.EditPanel.deleteBtn')" :aria-label="$t('statsJ.EditPanel.deleteTask')" @click="delTask" @keydown="onDelTaskKey">
           <i class="ico" style="--ico:url('app://app/assets/img/delete_black_48dp.svg');width:16px;height:16px"></i>
         </span>
       </div>
@@ -176,7 +176,7 @@ import { contentFingerprint, shouldRefreshRemote, taskAbsentIn } from '../utils/
 import { buildEditSnapshot } from '../store/ui.js'
 import { findTaskRowEl } from '../utils/todoRowEl.js'
 import { $elOf } from '../utils/el.js'
-import { roleButtonActivate } from '../utils/roleButtonKey.js' // [A9] Space+Enter button activation
+import { roleButtonActivate, roleCheckboxActivate } from '../utils/roleButtonKey.js' // [A9] Space+Enter button/checkbox activation
 import EpReminders from './edit-panel/EpReminders.vue'
 import EpSubtasks from './edit-panel/EpSubtasks.vue'
 import EpAttachments from './edit-panel/EpAttachments.vue'
@@ -277,10 +277,9 @@ export default {
           this.hydrate()
           this.$nextTick(() => {
             const t = this.$el && this.$el.querySelector('.ep-title textarea')
-            // F-D5 (maint/dw 2026-09-23): opening via keyboard (Enter on a .td-item row) leaves
-            // activeElement on the row — the BODY-only guard skipped focusing and keyboard/screen-
-            // reader users got no "panel is open" feedback. Also take focus when activation came
-            // from inside a todo row; plain mouse focus elsewhere is left untouched.
+            // F-D5 (2026-09-23): keyboard open leaves activeElement on the row — the BODY-only guard
+            // skipped focusing, so keyboard/SR users got no "panel is open" feedback. Also focus on
+            // activation from inside a todo row; plain mouse focus elsewhere is left untouched.
             const ae = document.activeElement
             const fromRow = !!ae && !!ae.closest && !!ae.closest('.td-item')
             if (t && (!ae || ae.tagName === 'BODY' || fromRow)) t.focus()
@@ -294,11 +293,9 @@ export default {
     },
     // The task was fully deleted by another window/sync/auto-cleanup (in neither the active nor the recycle list): close the panel automatically. Otherwise it becomes a "zombie editor" -- displaying the hydrated snapshot while all saves are silently lost (updateTodoFields is a no-op for a nonexistent id)
     task (t) {
-      // P1 (2026-10-01): a full reload (todosChanged → todo/init#setAllRows) transiently
-      // evaluates `task` to null while the row array is swapped; the old immediate closeEdit
-      // turned every edit made in that window (say, picking a deadline) into "task deleted by
-      // another window" — panel slammed shut, picked value silently lost. Verify absence in the
-      // post-reload lists instead of trusting the transient; a reappearing row cancels the close.
+      // P1 (2026-10-01): a full reload transiently evaluates `task` to null while the row array is
+      // swapped; the old immediate closeEdit slammed the panel shut and silently lost that window's
+      // edits. Verify absence in the post-reload lists instead; a reappearing row cancels the close.
       if (t && this._closeVerifyTimer) { clearTimeout(this._closeVerifyTimer); this._closeVerifyTimer = null }
       if (!t && !this.inRecycle && this.$store.state.ui.rightSidebarTodoEdit.visible) {
         if (this._closeVerifyTimer) clearTimeout(this._closeVerifyTimer)
@@ -310,12 +307,11 @@ export default {
           this.$store.commit('ui/closeEdit')
         }, 500)
       }
-      // F3 (2026-09-20): inbound sync/CLI changed the open task while the panel is open. Without
-      // this the next autosave clobbers the peer edit with the stale open-time snapshot.
+      // F3 (2026-09-20): without this, an inbound peer edit while the panel is open gets clobbered
+      // by the next autosave (stale open-time snapshot).
       this.checkRemoteUpdate(t)
-      // Y8 (sync-coverage-2): the repeat-group count stales while the panel is open — an inbound
-      // round touching sibling instances changes the store row without re-hydration; piggyback the
-      // existing remote-update watcher (throttled).
+      // Y8: the repeat-group count stales while the panel is open (inbound round touches siblings
+      // without re-hydration); piggyback the existing remote-update watcher (throttled).
       if (t && this.e && this.isRepeat && t.repeatId === this.e.repeatId) {
         const now = Date.now()
         if (!this._rgRefreshAt || now - this._rgRefreshAt > 1500) {
@@ -393,6 +389,17 @@ export default {
      *  undefined re-opened the 60ms race against the 350ms debounce (fast-typed title orphan-deleted). */
     flushSave () { return this._save ? this._save.flushSave() : undefined },
     retrySave () { this.saveFailed = false; this.flushSave() }, // D6-F9: banner Retry — onFail re-flags on failure
+    /* [maint/d23 FIX-3b a11y sweep] role="button" rows/chips join Space with Enter (ARIA patterns,
+       app-wide contract via utils/roleButtonKey.js); the done row uses the checkbox variant */
+    onSaveRetryKey: roleButtonActivate(function () { this.retrySave() }),
+    onDateChipKey (which, e) {
+      roleButtonActivate(function () { this.setDate(which) }).call(this, e)
+    },
+    onCatRowKey: roleButtonActivate(function () { this.catOpen = !this.catOpen }),
+    onDoneRowKey: roleCheckboxActivate(function () { this.toggleComplete() }),
+    onRepeatRowKey: roleButtonActivate(function () { this.askRepeatEdit() }),
+    onDeadlineRowKey: roleButtonActivate(function () { this.openDeadlinePick() }),
+    onDelTaskKey: roleButtonActivate(function () { this.delTask() }),
     markDirty (k) { if (this._save) this._save.markDirty(k) },
     /** Subtask drag sorting (sortablejs library; Up/Down buttons kept as a keyboard-accessible fallback).
         The panel body is under v-if="e", so the nodes do not exist at mounted time -- called after hydrate; old instances become invalid when nodes are replaced, destroy before rebuilding */

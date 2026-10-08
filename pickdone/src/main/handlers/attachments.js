@@ -50,7 +50,11 @@ module.exports = function attachmentHandlers (ctx) {
           return { ok: false, error: String((err && err.message) || err), name: path.basename(p) }
         }
       }
-      if (isSafeExternal(url)) return shell.openExternal(url)
+      // D11 finding 12-windows parity (fix 2026-10-06): this used to fire-and-forget
+      // shell.openExternal — a rejected promise was an UNHANDLED REJECTION in the main
+      // process and the channel still returned the pending promise (false success). Route
+      // through the shared openExternalSafely helper and return its boolean result.
+      if (isSafeExternal(url)) return require('./shared').openExternalSafely(shell, url)
       return false
     },
     // r3 dead-channel removal (2026-09-28): 'download-file-and-open' and

@@ -127,37 +127,48 @@ function sha256FileChunked (fs, fp) {
   } finally { fs.closeSync(fd) }
 }
 
-/** Default disk layer over the user-data attachments dir. Injectable for tests. */
-function defaultDeps () {
+/** Default disk layer over the user-data attachments dir. Injectable for tests.
+ *  depsOverride.attachmentsMod lets unit tests stub the electron-side attachments module
+ *  (attachDir / readAliases / setAlias) without Electron; production passes nothing. */
+function makeDeps (depsOverride = {}) {
   const fs = require('node:fs')
   const path = require('node:path')
+  const attachmentsMod = depsOverride.attachmentsMod || require('../attachments')
   let dir = null
   const attachDir = () => {
     if (dir) return dir
-    try { dir = require('../attachments').attachDir() } catch { dir = process.cwd() }
+    // Fail closed on WRITE (fix 2026-10-06): a single attachDir() failure used to be answered
+    // with process.cwd() AND CACHED — every later attachment write silently landed outside the
+    // managed dir (unmanaged files, quota bypass, no cleanup). writeAtomic calls attachDir()
+    // directly so the failure THROWS into the puller's failed-set; read-side helpers use
+    // tryDir() and degrade to "missing" instead (an unreadable dir has nothing to serve).
+    dir = attachmentsMod.attachDir()
     return dir
   }
+  const tryDir = () => { try { return attachDir() } catch { return null } }
   // att-transfer-rename-ref-mismatch fix: a LAN pull that hit a same-name-different-content
   // conflict was renamed to `name-1` on disk, but the synced row still references the ORIGINAL
   // key — every local resolution (serving, missing-detection, open/read) must translate through
   // the device-local alias map (attachments.readAliases) FIRST. Never synced; peers resolve
   // through their own map.
-  const resolveKey = key => {
+  const resolveKey = (key, baseDir) => {
     const base = path.basename(String(key))
     try {
-      const alias = require('../attachments').readAliases()[base]
-      if (alias) return path.join(attachDir(), path.basename(alias))
+      const alias = attachmentsMod.readAliases()[base]
+      if (alias) return path.join(baseDir, path.basename(alias))
     } catch { /* electron-free unit context: no alias map */ }
-    return path.join(attachDir(), base)
+    return path.join(baseDir, base)
   }
   return {
-    exists: key => fs.existsSync(resolveKey(key)),
-    size: key => { try { return fs.statSync(resolveKey(key)).size } catch { return 0 } },
+    exists: key => { const d = tryDir(); return d != null && fs.existsSync(resolveKey(key, d)) },
+    size: key => { const d = tryDir(); if (d == null) return 0; try { return fs.statSync(resolveKey(key, d)).size } catch { return 0 } },
     // C8 (daily 2026-09-24): positional chunked read — reads ONLY the requested [start..end]
     // byte range via fs.readSync. The old default readFileSync'd the WHOLE file (up to 50MB)
     // and sliced it, so every serve pass kept the full file resident and blocked the main process.
     read: (key, start, end) => {
-      const fp = resolveKey(key)
+      const d = tryDir()
+      if (d == null) return Buffer.alloc(0)
+      const fp = resolveKey(key, d)
       const len = Math.max(0, end - start + 1)
       const buf = Buffer.alloc(len)
       const fd = fs.openSync(fp, 'r')
@@ -219,9 +230,15 @@ function defaultDeps () {
         // between the precheck and the rename — the rename still only happens inside quota).
         fs.renameSync(tmp, finalDst)
         if (finalDst !== dst) {
-          // conflict rename landed: alias the original key to the new on-disk name so the
+          // Conflict rename landed: alias the original key to the new on-disk name so the
           // synced row's local://original-key resolves to the incoming bytes on THIS device.
-          try { require('../attachments').setAlias(path.basename(String(key)), path.basename(finalDst)) } catch { /* best-effort; resolution falls back to the base name */ }
+          // Phantom-success guard (fix 2026-10-06): a swallowed setAlias failure left the row's
+          // key resolving to the OLD file's basename while the bytes live under `name-N` — the
+          // missing-file guard kept re-pulling forever. Fail the write instead (the puller
+          // records a failed-set entry); the renamed file stays on disk for forensics.
+          let aliased = false
+          try { attachmentsMod.setAlias(path.basename(String(key)), path.basename(finalDst)); aliased = true } catch { aliased = false }
+          if (!aliased) throw new Error('attachment: conflict rename landed (' + path.basename(finalDst) + ') but alias registration failed — refusing phantom success')
         }
         return path.basename(finalDst)
       } finally {
@@ -230,6 +247,7 @@ function defaultDeps () {
     },
   }
 }
+function defaultDeps () { return makeDeps() }
 
 /* ---------- sender (server role) ---------- */
 
@@ -618,4 +636,5 @@ module.exports = {
   createAttachmentServer,
   createAttachmentPuller,
   defaultDeps, // test hook (C14-cross): lets unit tests reach the real disk layer directly
+  makeDeps, // test hook (2026-10-06): deps factory with a stubbable attachments module (attachDir/setAlias injection)
 }

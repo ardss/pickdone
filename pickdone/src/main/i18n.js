@@ -13,19 +13,35 @@ let cachedLocale = null
 // to system detection, and any junk value ('fr-FR' from a hostile/buggy renderer) flipped the
 // app to the system default on the next launch. Both sides now go through this normalizer.
 function normalizeLocale (v) { return (v === 'en-US' || v === 'zh-CN') ? v : null }
+function systemLocale () {
+  try { return (app.getLocale() || '').toLowerCase().startsWith('en') ? 'en-US' : 'zh-CN' } catch { return 'zh-CN' }
+}
 function currentLocale () {
   if (cachedLocale) return cachedLocale
   try {
     const fs = require('fs')
     const path = require('path')
-    const c = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'config.json'), 'utf8'))
-    const stored = normalizeLocale(c.appLocale)
+    let raw = null
+    try {
+      raw = fs.readFileSync(path.join(app.getPath('userData'), 'config.json'), 'utf8')
+    } catch (readErr) {
+      // Fix (2026-10-06): a TRANSIENT config read failure (Windows AV/indexer EPERM/EBUSY)
+      // used to fall into the same branch as "no config yet" and cache the system default
+      // for the whole session — the user's stored locale never applied until restart.
+      // Genuinely absent (ENOENT, first launch) is a stable state: cache the system default.
+      // Anything else is transient: return the fallback WITHOUT caching so the next call retries.
+      if (readErr && readErr.code === 'ENOENT') { cachedLocale = systemLocale(); return cachedLocale }
+      return systemLocale()
+    }
+    const stored = normalizeLocale(JSON.parse(raw).appLocale)
     if (stored) { cachedLocale = stored; return cachedLocale }
-  } catch (e) { /* no config file (first launch) — fall back to system language */ }
-  try {
-    cachedLocale = (app.getLocale() || '').toLowerCase().startsWith('en') ? 'en-US' : 'zh-CN'
-  } catch (e) { cachedLocale = 'zh-CN' }
-  return cachedLocale
+    // Config read fine but no/invalid appLocale: the system default is deterministic here — cache it.
+    cachedLocale = systemLocale()
+    return cachedLocale
+  } catch (e) {
+    // unreadable/corrupt config: retry on the next call instead of locking the locale in
+    return systemLocale()
+  }
 }
 function setLocale (locale) { cachedLocale = normalizeLocale(locale) || 'zh-CN' }
 

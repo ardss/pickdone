@@ -43,6 +43,7 @@ function createExternalDbWatch (deps) {
   } = deps
   let resyncDbWatch = null // set by watchDbForExternalWrites: re-baselines lastMtime after OUR OWN db writes (P1 2026-09-11)
   let stopDbWatch = null // set by watchDbForExternalWrites: unwatchFile both files on the quit chain (P2 2026-09-11)
+  let pollTickHook = null // set by watchDbForExternalWrites: manual poll-tick drive for unit tests (settings seed contract)
   function watchDbForExternalWrites () {
     const ud = app.getPath('userData')
     const dbFile = path.join(ud, 'todos.db')
@@ -86,9 +87,23 @@ function createExternalDbWatch (deps) {
     // advanced. Now the warn fires once per distinct poisoned payload and the tick is skipped;
     // when the CLI rewrites the blob (raw changes), parsing resumes normally.
     let lastSettingsPoisonRaw = null
+    // Corrupt boot-seed marker (fix 2026-10-06): an unparseable db.settingsState blob at boot
+    // used to leave the baseline at 0/null. See the catch below for the pre-boot baseline contract.
+    let settingsSeedPoisoned = false
     try {
       const rawS = dbm.call('getMeta', 'db.settingsState')
-      if (rawS) { const d = JSON.parse(rawS); lastSettingsSavedAt = (d && d._savedAt) || 0; lastSettingsDoc = d }
+      if (rawS) {
+        try {
+          const d = JSON.parse(rawS); lastSettingsSavedAt = (d && d._savedAt) || 0; lastSettingsDoc = d
+        } catch {
+          // Pre-boot baseline contract: a corrupt blob must NOT yield a zero baseline (the first
+          // valid read would treat every pre-boot row as new). Seed the watermark from the
+          // field-write truth (settings_rows max updatedAt) and mark poisoned — the first
+          // successful parse absorbs a baseline instead of pushing a full-settings hot-apply.
+          settingsSeedPoisoned = true
+          try { lastSettingsSavedAt = Number(dbm.call('settingsRowsMaxUpdated')) || 0 } catch { /* legacy lib: watermark stays 0 */ }
+        }
+      }
     } catch {}
     let debounce = null
     // CLI sync command channel (feat/cli-sync-pair): same polling surface as cliTomatoCmd — the CLI
@@ -186,9 +201,17 @@ function createExternalDbWatch (deps) {
           if (maxRow > at) at = maxRow
         } catch { /* rows unavailable (legacy lib) → fall back to the _savedAt-only watermark */ }
         if (doc && at > lastSettingsSavedAt) {
-          const prev = lastSettingsDoc
-          lastSettingsSavedAt = at
-          lastSettingsDoc = doc
+          // Poisoned-boot absorption (fix 2026-10-06): the FIRST successful parse after a corrupt
+          // boot seed is a baseline, not a change — absorb doc + watermark without pushing
+          // (pre-boot rows must not fire a full-settings hot-apply broadcast).
+          if (settingsSeedPoisoned) {
+            settingsSeedPoisoned = false
+            lastSettingsSavedAt = at
+            lastSettingsDoc = doc
+          } else {
+            const prev = lastSettingsDoc
+            lastSettingsSavedAt = at
+            lastSettingsDoc = doc
           const win = getMainWindow()
           if (prev && win) {
             // Diff moved to settings-hot-sync.js (testable): machine-local stamps (_lsAt included —
@@ -202,6 +225,7 @@ function createExternalDbWatch (deps) {
               }
               log.info('[CLI] 设置变更热同步:', Object.keys(patch).join(','))
             }
+          }
           }
         }
       } catch (e) { log.warn('[CLI] 设置热同步失败', e) }
@@ -264,6 +288,7 @@ function createExternalDbWatch (deps) {
     // renderer's 1.5s suppression window cannot cover the 2-3s watcher latency). Re-baseline immediately
     // after every write-type todo-db:call so the next poll sees mtime === baseline.
     resyncDbWatch = () => { lastMtime = nextWatchBaseline(lastMtime, readWatchMtime) }
+    pollTickHook = () => forwardTomatoCmd() // test seam: one manual poll tick without fs.watchFile
     // P2 2026-09-11: fs.watchFile never unwatched — poll timers kept the quit chain alive/lint-y; release them on quit
     stopDbWatch = () => {
       // Round-3 stability (2026-09-26): a pending debounce kick survived the unwatch and fired against the closed DB handle. Clear it first.
@@ -280,7 +305,9 @@ function createExternalDbWatch (deps) {
     // lan-sync init hook (was: try { if (resyncDbWatch) resyncDbWatch() } catch {})
     resyncExternalWatch: () => { try { if (resyncDbWatch) resyncDbWatch() } catch { /* best-effort */ } },
     // quit chain hook (was: try { if (stopDbWatch) stopDbWatch() } catch {})
-    stopForQuit: () => { try { if (stopDbWatch) stopDbWatch() } catch {} }
+    stopForQuit: () => { try { if (stopDbWatch) stopDbWatch() } catch {} },
+    // unit-test seam: drive one poll tick (settings hot-sync branch) without fs.watchFile
+    __pollTickForTests: () => { try { if (pollTickHook) pollTickHook() } catch { /* guarded like onChange */ } }
   }
 }
 

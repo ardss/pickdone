@@ -149,6 +149,10 @@ async function setEnv (theme) {
   let boot = ''
   for (let i = 0; i < 3 && (!boot || boot === 'undefined'); i++) {
     ab(['--session', SESSION, 'open', url])
+    // D23: pin the viewport to the baseline geometry — the daemon otherwise inherits whatever
+    // window size the ambient environment last used (a 1254x564 -> 1262x568 drift failed all 14
+    // scenes on SIZE alone, masking the pixel compare entirely). Idempotent per scene.
+    ab(['--session', SESSION, 'set', 'viewport', '1254', '564'])
     for (let t = 0; t < 15000; t += 400) {
       await new Promise(r => setTimeout(r, 400))
       try { boot = readBoot(); if (boot && boot !== 'undefined') break } catch (e) { /* retry */ }
@@ -269,6 +273,8 @@ async function runAll () {
       try {
         // 绘制栅栏:高负载下 DOM 就绪但合成滞后,截图会拿到陈旧帧(空白/上一场景残影实锤)。
         // 双 rAF 等一次真实出帧;5s 兜底防止 rAF 被节流时挂死。
+        // D23: 视口钉死在截图前重申一次(幂等)——守门截面=视口,任何环境漂移直接坏 14 场景。
+        ab(['--session', SESSION, 'set', 'viewport', '1254', '564'])
         ab(['--session', SESSION, 'eval', `new Promise(r => { const t = setTimeout(() => r('timeout'), 5000); requestAnimationFrame(() => requestAnimationFrame(() => { clearTimeout(t); r('painted') })) })`])
         ab(['--session', SESSION, 'screenshot', shotPath])
           const b = fs.readFileSync(shotPath)

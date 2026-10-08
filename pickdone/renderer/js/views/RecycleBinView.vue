@@ -139,6 +139,10 @@ export default {
         ])
     },
     async restore (t, patchToToday) {
+      // Re-entrancy guard: a double-click fired restoreFromRecycle twice — the second run
+      // re-derived dayStart from the already-restored row and double-toasted (or false-failed).
+      if (!t || !t.taskId || this._restoringId === t.taskId) return
+      this._restoringId = t.taskId
       const today = +dayjs().startOf('day')
       try {
         // dispatch 必须等待成功再报喜:异步恢复可能失败(db 写入错误),失败走 catch 提示而非假成功
@@ -156,7 +160,7 @@ export default {
         this.$message.success(this.$t(patchToToday ? 'statsC.RecycleBin.restoredToToday' : 'statsC.RecycleBin.restored', { name: t.taskContent || this.$t('statsJ.TodoItem.untitled') }))
       } catch (e) {
         this.$message.error(this.$t('statsC.RecycleBin.restoreFailedMsg') + (e && e.message ? e.message : e))
-      }
+      } finally { this._restoringId = null }
     },
     /** Earlier-version "pick date": a transparent date picker embedded in the button; picking restores to that date */
     async pickDate (t, ts) {

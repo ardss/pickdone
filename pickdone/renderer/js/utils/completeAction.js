@@ -23,13 +23,25 @@ export function toggleCompleteWithUndo ({ store, message, todo, announce, fromEl
     } catch { /* skip animation if position is unavailable */ }
   }
   const p = store.dispatch('todo/toggleComplete', raw)
-  // dependency unlock feedback: when completion makes dependents ready, surface them once (advisory; dep feature is devMode-gated)
+  // [d23 P2] failure honesty: the completion announce used to fire SYNCHRONOUSLY while
+  // `.catch(() => {})` swallowed rejections — the user heard "completed" (and got the undo
+  // toast) for a write that never landed, with the checkbox still unchecked. The announce
+  // (and the dependency-unlock feedback) now fire only AFTER the dispatch resolves; a
+  // rejection surfaces the shared actionFailedMsg toast (same shape as the undo path's
+  // d21-A2 rejection handler below). The undo toast stays synchronous on purpose: it is the
+  // immediate click affordance (hover-pause owns its lifetime), not a success report —
+  // moving it post-resolve broke perceived responsiveness without fixing any state.
   Promise.resolve(p).then((merged) => {
+    if (announce) announce(tt('statsA.core.' + (wasComplete ? 'undoneAnnounce' : 'doneAnnounce'), { c: content }))
+    // dependency unlock feedback: when completion makes dependents ready, surface them once (advisory; dep feature is devMode-gated)
     const names = merged && merged._unlocked
-    if (!names || !names.length || !message) return
-    message({ type: 'success', message: tt('statsA.core.unlocked', { list: names.join('、') }), duration: 4000 })
-  }).catch(() => {})
-  if (announce) announce(tt('statsA.core.' + (wasComplete ? 'undoneAnnounce' : 'doneAnnounce'), { c: content }))
+    if (names && names.length && message) message({ type: 'success', message: tt('statsA.core.unlocked', { list: names.join('、') }), duration: 4000 })
+  }, (e) => {
+    try { console.error('[completeAction] completion failed:', e) } catch { /* console may be gone */ }
+    if (message) {
+      try { message({ type: 'error', message: tt('statsH.main.actionFailedMsg') + ((e && e.message) || ''), duration: 3000 }) } catch { /* toast must not throw */ }
+    }
+  })
   // Paper plane: after completion, fly from the original row position to the sidebar "Achieved" entry (can be disabled via settings/reduced-motion)
   if (fromPoint) Promise.resolve(p).then(() => flyPaperPlane(fromPoint, tt('statsJ.DoneEntry.label'))).catch(() => {})
   if (message) {
