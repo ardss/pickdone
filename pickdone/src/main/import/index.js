@@ -152,6 +152,10 @@ function rowsToItems (text, format) {
         subs.push({ text: content, checked })
         continue
       }
+      // [P3 2026-10-08] An INDENT 2 row BEFORE any parent (e.g. after an empty content row) has
+      // nothing to attach to. Do NOT invent parenting heuristics — import it as the top-level
+      // task it structurally becomes, but flag it so the preview report can say so honestly.
+      if (indent >= 2) item.orphanSub = true
       items.push(item)
       lastTask = item
     }
@@ -298,7 +302,13 @@ function importItems (items, { dryRun = false, format, category = null, useLists
       : useLists && it.list ? resolveCat(it.list) : 0
     pending.push({ it, title, content, dayStart, categoryId })
     report.wouldImport++
-    report.tasks.push({ title, action: 'create', list: it.list || null, due: dayStart ? dayjs(dayStart).format('YYYY-MM-DD') : null, subtasks: (it.subs || []).length })
+    report.tasks.push({
+      title, action: 'create', list: it.list || null,
+      due: dayStart ? dayjs(dayStart).format('YYYY-MM-DD') : null,
+      subtasks: (it.subs || []).length,
+      // P3 2026-10-08: surfaced instead of silently flattening (see the parse-side orphanSub flag)
+      reason: it.orphanSub ? 'indent-2 row with no parent — imported as a top-level task' : undefined
+    })
   }
 
   if (dryRun || !pending.length) return report

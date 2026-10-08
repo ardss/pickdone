@@ -107,7 +107,8 @@ module.exports = async function runTomato ({ opts, lib, emit, emitNext }) {
         if (opts.json) return emit({ ...st, remainSec: remain, stale, status: tag })
         console.log(`${tag}${stale ? ' (stale)' : ''}` +
           (running0 ? `  ${Math.max(0, Math.round(remain / 60))} min left` : '') +
-          `  ${st.todayTomatoCount} today` + (st.attach ? `  attached: ${st.attach.content}` : ''))
+          // P3 2026-10-08: legacy state blobs (App never wrote these fields) printed a raw "undefined today"
+          `  ${st.todayTomatoCount || 0} today` + (st.attach && st.attach.content ? `  attached: ${st.attach.content}` : ''))
         return
       }
       if (op === 'start') {

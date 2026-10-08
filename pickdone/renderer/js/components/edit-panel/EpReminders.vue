@@ -193,10 +193,14 @@ export default {
       this.remindOpen = false
       this.$emit('clear')
     },
-    /* Multiple reminders: offsets are relative to the main reminder (negative = earlier), inherited automatically on recurrence renewal */
+    /* Multiple reminders: offsets are relative to the main reminder (negative = earlier), inherited automatically on recurrence renewal.
+     * [P2 2026-10-08] The {v: 0, "on time"} preset is GONE, deliberately: an offset of 0 means
+     * "same instant as the main reminder", which is exactly what the main reminder row already
+     * expresses — and src/main/db-rows.js normOffsets/packReminders strip 0 on persist, so the
+     * chip used to highlight, "persist", and silently flip back off on reload (a dead toggle).
+     * "On time" is the absence of offsets, not a stored 0. */
     offsetPresetsList (): Array<{ v: number, l: string }> {
       return [
-        { v: 0, l: this.$t('statsJ.EditPanel.remindOnTime') },
         { v: -10, l: this.$t('statsJ.EditPanel.remindMin10') },
         { v: -30, l: this.$t('statsJ.EditPanel.remindMin30') },
         { v: -60, l: this.$t('statsJ.EditPanel.remindHour1') },

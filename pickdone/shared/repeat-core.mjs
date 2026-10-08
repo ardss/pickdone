@@ -128,8 +128,23 @@ export function nextRepeatInstance (completedTodo, group, rule, holidayList = []
   const { dayjs } = deps
   const valid = group.filter(t => t.dayStart > 0)
   const lastDay = Math.max(...valid.map(t => t.dayStart))
-  const dates = expandRepeatDates(lastDay || completedTodo.todoTime, rule, holidayList, deps)
-  const next = dates.map(d => +d).find(ts => ts > (completedTodo.dayStart || 0))
+  // [P1 2026-10-08] lastDay is a local midnight (isLastRepeatInstance keys on dayStart), so a TIMED
+  // instance (14:30) renewed on completion used to expand from 00:00 — the new instance dropped to
+  // all-day and STAYED all-day for every subsequent generation, diverging from RepeatModal's
+  // generation (RepeatModal expands from the timed todoTime). Anchor at the completed instance's
+  // full todoTime: expandRepeatDates reads its time-of-day (hour/minute) while the day branches
+  // only compare startOf('day'), so a timed instance renews at the same time-of-day and an
+  // all-day instance (todoTime === dayStart midnight) stays all-day. Both consumers (renderer
+  // store/todo.js ensureNextRepeatInstance and CLI cli/lib-repeat.cjs renewRepeatAfterComplete)
+  // go through this single source.
+  const dates = expandRepeatDates(completedTodo.todoTime || lastDay, rule, holidayList, deps)
+  // Next occurrence must be on a day AFTER the completed day (strictly), matching the old
+  // midnight-base semantics: with the old `ts > completedTodo.dayStart` filter a midnight base
+  // excluded the base day by equality, but a timed base makes the base day's own occurrence
+  // (e.g. today 14:30 > today 00:00) pass that filter — re-minting today's already-completed
+  // instance. Compare start-of-day instead, so day/week/month branches keep excluding the
+  // completed day while time-of-day now survives the expansion.
+  const next = dates.map(d => +d).find(ts => +deps.dayjs(ts).startOf('day') > (completedTodo.dayStart || 0))
   if (!next) return null
   let remind = 0
   if (completedTodo.reminderTime > 0 && completedTodo.dayStart) {
