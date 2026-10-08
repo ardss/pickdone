@@ -117,6 +117,27 @@ test('English invalid input: unknown words -> date=null, restText preserved as-i
   assert.equal(r.restText, 'banana')
 })
 
+test('English restText: the date words are stripped from the content (shared contract with the Chinese core)', () => {
+  // d26 fix: the pure-date path used to return the whole raw text as restText, so QuickAdd
+  // saved the content "friday meeting" WITH the Friday chip set (duplicate phrase)
+  assert.equal(parseNaturalDate('friday meeting', base).restText, 'meeting')
+  assert.equal(parseNaturalDate('meeting friday', base).restText, 'meeting friday', 'a trailing date phrase does not match (patterns anchor at ^) — no chip, text untouched')
+  assert.equal(parseNaturalDate('pay rent on monday', base).restText, 'pay rent on monday')
+  assert.equal(parseNaturalDate('on monday pay rent', base).restText, 'pay rent')
+  assert.equal(parseNaturalDate('finish report in 3 days', base).restText, 'finish report in 3 days')
+  assert.equal(parseNaturalDate('in 3 days finish report', base).restText, 'finish report')
+  assert.equal(parseNaturalDate('+3d', base).restText, '', '+Nd is only recognized as the whole text (anchored patterns)')
+  assert.equal(parseNaturalDate('Jan 15 ship it', base).restText, 'ship it')
+  assert.equal(parseNaturalDate('2026-01-15 launch', base).restText, 'launch')
+  // junction whitespace/punctuation is trimmed
+  assert.equal(parseNaturalDate('next friday, demo day', base).restText, 'demo day')
+  // pure date input yields '' (same as the Chinese core; QuickAdd falls back to the raw text)
+  assert.equal(parseNaturalDate('tomorrow', base).restText, '')
+  assert.equal(parseNaturalDate('next friday', base).restText, '')
+  // the time-strip path keeps its existing behavior (time words removed, date phrase intact for step 2)
+  assert.equal(parseNaturalDate('tomorrow 3pm', base).restText, 'tomorrow')
+})
+
 test('English casing: Today / TOMORROW / monday', () => {
   assert.equal(d('Today').format('YYYY-MM-DD'), '2026-09-15')
   assert.equal(d('TOMORROW').format('YYYY-MM-DD'), '2026-09-16')

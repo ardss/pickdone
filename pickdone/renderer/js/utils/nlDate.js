@@ -29,6 +29,7 @@ function parseEnglishDate (text, base) {
   // This lets later "date + time" combos (e.g. tomorrow 3pm) reuse the same logic
   let h = 0, min = 0, hasTime = false
   let datePart = text
+  let dateLen = 0 // length of the matched date phrase (a prefix of datePart — every step-2 pattern anchors at ^)
   const m12a = text.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i)
   if (m12a) {
     h = parseInt(m12a[1], 10)
@@ -53,9 +54,10 @@ function parseEnglishDate (text, base) {
   // Step 2: parse the date from datePart (time already stripped)
   const lc = datePart.toLowerCase()
   // Relative days (before week, avoiding conflict between today and thursday)
-  if (/^today$|^\btonight\b/.test(lc)) { date = base.startOf('day'); label = 'today' }
-  else if (/^tomorrow$/.test(lc)) { date = base.add(1, 'day').startOf('day'); label = 'tomorrow' }
-  else if (/^yesterday$/.test(lc)) { date = base.subtract(1, 'day').startOf('day'); label = 'yesterday' }
+  let m
+  if ((m = lc.match(/^today$|^\btonight\b/))) { date = base.startOf('day'); label = 'today'; dateLen = m[0].length }
+  else if ((m = lc.match(/^tomorrow$/))) { date = base.add(1, 'day').startOf('day'); label = 'tomorrow'; dateLen = m[0].length }
+  else if ((m = lc.match(/^yesterday$/))) { date = base.subtract(1, 'day').startOf('day'); label = 'yesterday'; dateLen = m[0].length }
   // +Nd compact syntax (CLI-friendly)
   else if (/^[+-]\d+[dwm]$/.test(lc)) {
     const sign = lc[0] === '-' ? -1 : 1
@@ -66,6 +68,7 @@ function parseEnglishDate (text, base) {
     else if (u === 'w') date = base.add(n, 'week').startOf('day')
     else if (u === 'm') date = base.add(n, 'month').startOf('day')
     label = lc
+    dateLen = lc.length
   }
   // in N days/weeks/months/years
   else {
@@ -76,6 +79,7 @@ function parseEnglishDate (text, base) {
       const unit = u.startsWith('day') ? 'day' : u.startsWith('week') ? 'week' : u.startsWith('month') ? 'month' : 'year'
       date = base.add(n, unit).startOf('day')
       label = m[0]
+      dateLen = m[0].length
     } else {
       // Full numeric dates YYYY-MM-DD / YYYY/M/D / YYYY.M.D
       m = text.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?=\b|$)/)
@@ -84,6 +88,7 @@ function parseEnglishDate (text, base) {
         if (mo >= 1 && mo <= 12 && d >= 1 && d <= base.year(y).month(mo - 1).daysInMonth()) {
           date = base.year(y).month(mo - 1).date(d).startOf('day')
           label = `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+          dateLen = m[0].length
         }
       } else {
         // Jan 15 / January 15 / Jan 15 2026 / Jan 15, 2026
@@ -99,6 +104,7 @@ function parseEnglishDate (text, base) {
             // same as the Chinese core's M月D日 rule
             if (!explicitYear && date.isBefore(base, 'day')) date = date.add(1, 'year')
             label = `${m[1]} ${d}${m[3] ? ' ' + m[3] : ''}`
+            dateLen = m[0].length
           }
         } else {
           // on/this/next <weekday>
@@ -123,16 +129,28 @@ function parseEnglishDate (text, base) {
             }
             date = base.add(diff, 'day').startOf('day')
             label = m[0]
-          } else if (/^this\s+weekend$|^weekend$/.test(lc)) {
+            dateLen = m[0].length
+          } else if ((m = lc.match(/^this\s+weekend$|^weekend$/))) {
             // This Saturday (0-6 days from now)
             const baseDow = base.day()
             const diff = (6 - baseDow + 7) % 7
             date = base.add(diff || 7, 'day').startOf('day')
             label = 'weekend'
+            dateLen = m[0].length
           }
         }
       }
     }
+  }
+
+  // Shared contract (shared/nl-date-core.mjs): restText = the input with the date words removed.
+  // The step-1 time-strip branches already build restText; the pure-date path used to leave the
+  // whole raw text, so "meeting friday" saved the content "meeting friday" WITH the Friday chip
+  // set (duplicate phrase). Strip the matched date phrase (a prefix of datePart) and trim the
+  // junction whitespace/punctuation. Pure-date input yields '' — same as the Chinese core
+  // (QuickAdd falls back to the raw text when restText is empty).
+  if (date && restText === text && dateLen) {
+    restText = datePart.slice(dateLen).replace(/^[\s,、.]+/, '').trim()
   }
 
   // Time was already extracted in step 1; below only applies h/min onto date.
@@ -155,7 +173,9 @@ function parseEnglishDate (text, base) {
     date = d
     label = (label ? label + ' ' : '') + mmToHHmm(h * 60 + min)
   }
-  return { date, label, restText: restText || text }
+  // restText is the input minus the consumed date/time words; '' is a valid result for
+  // pure-date input (callers fall back to the raw text) — no `|| text` fallback here.
+  return { date, label, restText }
 }
 
 /**

@@ -98,6 +98,21 @@ function runPlan ({ opts, lib, emit, okMsg }) {
     for (const t of r.tasks) console.log(`${t.chips.join(' + ')}  [${t.complete ? 'x' : ' '}] ${t.content}`)
     return
   }
+  // `plan <date>` read form (advertised in cli-help/pickdone usage): a single positional that is
+  // not a sub-operation is a date — route it through the same planList path `plan list <date>`
+  // uses. Un-parseable input still falls through to the UNKNOWN_ARG error below (the single-
+  // positional shortcut form doesn't exist, so there is nothing else it could mean).
+  if (a == null && !['set', 'list', 'rm', 'remove'].includes(op)) {
+    let ok = true
+    try { lib.parseDate(op) } catch { ok = false }
+    if (ok) {
+      const r = lib.planList(op)
+      if (opts.json) return emit(r)
+      if (!r.tasks.length) return console.log('(no chips on ' + r.day + ')')
+      for (const t of r.tasks) console.log(`${t.chips.join(' + ')}  [${t.complete ? 'x' : ' '}] ${t.content}`)
+      return
+    }
+  }
   if (op === 'set') {
     if (!a || !b) throw new lib.CliError('usage: plan set <taskId|keyword> <HH:mm> [--date D] [--replace]', 'USAGE')
     const p = lib.planSet(a, b, { date: opts.date, replace: !!opts.replace })
@@ -128,6 +143,9 @@ function runRepeat ({ opts, lib, emit, emitNext }) {
     return
   }
   if (op === 'off') {
+    // Usage guard: without a task argument repeatOff used to receive undefined and fail as
+    // `task not found: "undefined"` — report the usage line instead.
+    if (!task) throw new lib.CliError('usage: repeat off <taskId|keyword> [--all]   (--all dissolves the whole repeat group)', 'USAGE')
     const r = lib.repeatOff(task, opts.all)
     if (opts.json) return emitNext(r, ['list --json to read back'])
     // D18-DOM2 #2/#3: both scopes now DELETE (App RepeatDeleteModal parity) — the single scope
