@@ -14,6 +14,7 @@ const { SYNC_OPLOG_KEEP, oplogKeepLimit } = require('./db-oplog') // D3 2026-09-
 // Domain-1 F-A1 (2026-09-23): the machine-local setting predicate lives in
 // shared/machine-local-keys.mjs — single source; the manifest imports the same module.
 const { isMachineLocalSettingKey } = require('../../shared/machine-local-keys.mjs')
+const mergeCore = require('../../shared/sync-core/merge.mjs') // 2026-10-08: isSameTodoContent payload fingerprints
 
 // Entities whose local-counterpart lookup shares the live-row-then-tombstone-fallback shape
 // (cache key names into createHydrationCache). todo/setting/meta/category stay hand-rolled in
@@ -191,6 +192,39 @@ function hydrateRow (state, ptr, cache) {
   }
 }
 
+/** Tombstone-vs-live resurrection guard (2026-10-08, no-silent-loss): do the two row payloads
+ *  carry the same USER-VISIBLE content? State/bookkeeping stamps (deleted/delete/deletedAt/
+ *  updateTime and the per-device userId/syncAuthor stamps) are stripped before the fingerprint,
+ *  mirroring merge.mjs's contentDiffers shape — a peer edit that only re-stamps bookkeeping over
+ *  the deleted content loses nothing, so no conflict copy. */
+function isSameTodoContent (a, b) {
+  const strip = d => {
+    const c = { ...(d || {}) }
+    delete c.updateTime; delete c.delete; delete c.deleted; delete c.deletedAt
+    return c
+  }
+  try {
+    return mergeCore.contentFingerprint(strip(a)) === mergeCore.contentFingerprint(strip(b))
+  } catch { return false }
+}
+
+/** P1 2026-10-08 no-silent-loss: an inbound LIVE edit strictly newer than a local TOMBSTONE wins
+ *  LWW and resurrects the row, silently destroying the user's deletion (merge.mjs never copies a
+ *  tombstone LOSER — correct for live-vs-live stale-base noise; LWW winner adjudication is
+ *  by-design and untouched). For tombstone-vs-live the loser IS the last local content: return a
+ *  merge.mjs-shaped conflictCopy so sync-apply's existing minting path materializes it as a
+ *  terminal recycle-bin copy (deduped, counted via markConflict for the round toast). Null when
+ *  the case does not apply: not a todo live-over-tombstone win, copy rows are terminal, or the
+ *  peer payload carries the same user-visible content (isSameTodoContent: bookkeeping stamps
+ *  stripped) so the resurrection itself preserves everything. */
+function tombstoneResurrectCopy (localRow, incoming, winner) {
+  if (!localRow || !localRow.deleted || !localRow.data) return null
+  if (incoming == null || incoming.deleted || winner !== incoming) return null
+  if (String(incoming.id).includes('-conflict-')) return null // copies are terminal
+  if (isSameTodoContent(localRow.data, incoming.data)) return null // nothing was lost
+  return { data: localRow.data, author: localRow.author }
+}
+
 module.exports = {
   SYNCABLE_ENTITIES,
   SECURITY_LOCK_KEY,
@@ -203,4 +237,6 @@ module.exports = {
   isMachineLocalSettingKey,
   createHydrationCache,
   hydrateRow,
+  isSameTodoContent, // 2026-10-08 tombstone-vs-live payload-content compare (sync-apply re-exports)
+  tombstoneResurrectCopy, // 2026-10-08 resurrect-guard conflictCopy bridge (sync-apply re-exports)
 }

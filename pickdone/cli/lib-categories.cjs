@@ -1,7 +1,7 @@
 /* Categories sub-module extracted from cli/lib.js (2026-09-27 size-ratchet split).
  * Factory-injected deps keep it decoupled from lib.js (no circular require), same pattern as lib-settings.cjs.
  * Categories write (same SQLite categories table as the UI; camelCase row mapping mirrors store/category.js toRow). */
-module.exports = ({ open, commit, audit, CliError, resolveCategory, projectFlagKey, projectStatusKey, MS_KEY, PROJECT_IDS_KEY }) => {
+module.exports = ({ open, commit, audit, CliError, resolveCategory, userDataDir, projectFlagKey, projectStatusKey, MS_KEY, PROJECT_IDS_KEY }) => {
   const CAT_COLORS = ['#0f9d8f', '#f76e6e', '#f2a63b', '#7ac74f', '#5aa9e6', '#9d8df1', '#eb96c3', '#98a4ae']
   function catToRow (c) {
     return {
@@ -38,9 +38,19 @@ module.exports = ({ open, commit, audit, CliError, resolveCategory, projectFlagK
     for (let i = 0; taken.has(cid) && i < 16; i++) {
       cid = Date.now() * 1000 + Math.floor(Math.random() * 1000000)
     }
+    // maint/d24 P3: `--color` used to be silently ignored for any non-palette value while the help
+    // advertised `[--color hex]` and the App stores categoryColor as free text. Any valid #rrggbb is
+    // now accepted as-is (non-palette values warn, not silently drop); invalid input is a USAGE error.
+    let categoryColor = CAT_COLORS[cats.length % CAT_COLORS.length]
+    if (color) {
+      if (!/^#[0-9a-fA-F]{6}$/.test(String(color).trim())) throw new CliError('--color accepts a hex value like #0f9d8f (6 hex digits); got ' + JSON.stringify(color), 'USAGE')
+      const hex = String(color).trim().toLowerCase()
+      if (CAT_COLORS.includes(hex)) categoryColor = hex
+      else { categoryColor = hex; console.error('warning: --color ' + hex + ' is not one of the palette colors; storing it as-is (free-text color, same as the App)') }
+    }
     const cat = {
       categoryId: cid, userId: 840001,
-      categoryName: String(name), categoryColor: color && CAT_COLORS.includes(color) ? color : CAT_COLORS[cats.length % CAT_COLORS.length],
+      categoryName: String(name), categoryColor,
       createTime: Date.now(), listSort: Math.max(0, ...cats.map(c => c.listSort)) + 100,
       folderIs: !!folder, folderId: parentId, delete: false
     }
@@ -218,5 +228,49 @@ module.exports = ({ open, commit, audit, CliError, resolveCategory, projectFlagK
     return out
   }
 
-  return { addCategory, renameCategory, deleteCategory, moveCategory, categoryRows, categoryHierarchy }
+  /* ---------------- maint/d24 NEW: `category cleanup-empty` (dry-run by default) ----------------
+     Live categories whose names are empty/whitespace are unaddressable junk (resolveCategory can
+     even substring-match them when input normalizes to ''). Dry-run lists the plan; --yes re-points
+     every live task filed under them (--repoint <name|id>, default 0 = unfiled), tombstones the
+     junk rows, and writes a JSON backup of the victims first — same backup-dir resolution as the
+     evt purge snapshots (resolveBackupDir twin; lazily required, this module is loaded before
+     settingsDoc/resolveCliBackupDir exist in lib.js). */
+  function cleanupEmptyCategories ({ repoint, yes } = {}) {
+    const db = open()
+    const all = db.call('getAllCategories')
+    const junk = all.filter(c => !c.delete && !String(c.categoryName || '').trim())
+    const junkIds = new Set(junk.map(c => c.categoryId))
+    let targetId = 0
+    let targetName = null
+    if (repoint != null && repoint !== true && String(repoint).trim() !== '') {
+      targetId = resolveCategory(String(repoint).trim()) || 0
+      const t = all.find(c => c.categoryId === targetId)
+      targetName = t ? t.categoryName : null
+    }
+    const tasks = db.call('queryTodos', { deleted: 0 }).filter(t => junkIds.has(t.categoryId))
+    const plan = { junk: junk.map(c => ({ id: c.categoryId, name: c.categoryName })), taskCount: tasks.length, targetId, targetName }
+    if (!yes) return { ...plan, dryRun: true }
+    if (!junk.length) return { ...plan, done: true, note: 'no empty-named categories — nothing to clean' }
+    // Pre-run backup of the victim rows + affected task ids (JSON, next to the DB via the standard backup-dir resolution)
+    const fs = require('fs')
+    const path = require('path')
+    const { resolveBackupDir } = require('./lib-restore-backup.cjs')
+    const settingsDoc = () => require('./lib-settings.cjs')({ open, commit, audit, CliError }).settingsDoc()
+    const backupDir = resolveBackupDir(String(settingsDoc().backupDir || ''), userDataDir())
+    fs.mkdirSync(backupDir, { recursive: true })
+    const backupFile = path.join(backupDir, 'cat-cleanup-empty-' + Date.now() + '.json')
+    fs.writeFileSync(backupFile, JSON.stringify({ reason: 'category cleanup-empty', repointedTo: targetId, victims: junk, tasks: tasks.map(t => ({ taskId: t.taskId, fromCategoryId: t.categoryId })) }, null, 2))
+    // Re-point the live tasks FIRST, then tombstone the junk rows (deletedAt stamp, deleteCategory shape)
+    const now = Date.now()
+    for (const t of tasks) commit('todo', 'put', { ...t, categoryId: targetId, updateTime: now, status: 'update' })
+    for (const c of junk) commit('category', 'put', catToRow({ ...c, delete: true, deletedAt: now }))
+    audit.record({
+      action: 'category.cleanup-empty', targets: [],
+      changes: [{ before: { names: junk.map(c => c.categoryName) }, after: { repointedTo: targetId } }],
+      note: 're-pointed ' + tasks.length + ' task(s), tombstoned ' + junk.length + ' empty category row(s); backup ' + path.basename(backupFile)
+    })
+    return { ...plan, done: true, backupFile }
+  }
+
+  return { addCategory, renameCategory, deleteCategory, moveCategory, categoryRows, categoryHierarchy, cleanupEmptyCategories }
 }

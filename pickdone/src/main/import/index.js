@@ -240,6 +240,14 @@ function importItems (items, { dryRun = false, format, category = null, useLists
   const catCache = new Map()
   const createdCats = []
   const resolveCat = name => {
+    // P2 2026-10-08 (defense in depth behind the upsertCategory empty-name choke point): the
+    // upstream list-name derivation can hand through whitespace/zero-width-only strings; the
+    // choke point silently no-ops those, so the import would report a category that never
+    // landed. Fail LOUD here instead: trim (zero-width stripped for the emptiness probe), and
+    // reject a name that is empty after trim with a coded ImportError.
+    const probe = String(name == null ? '' : name).replace(/[\u200B-\u200D\uFEFF]/g, '').trim()
+    if (!probe) throw new ImportError(`empty category name from import source: ${JSON.stringify(name)}`, 'IMPORT_CAT_NAME_EMPTY')
+    name = String(name).trim()
     if (catCache.has(name)) return catCache.get(name)
     const hit = db.call('getAllCategories').find(c => (c.categoryName || '') === name)
     if (hit) { catCache.set(name, hit.categoryId); return hit.categoryId }

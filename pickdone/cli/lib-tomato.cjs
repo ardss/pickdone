@@ -19,6 +19,19 @@ module.exports = async function runTomato ({ opts, lib, emit, emitNext }) {
         }
         return ack
       }
+      /* maint/d24 P3: a failed `tomato start` (App not running / expired command) used to keep the
+       * audit entry writeTomatoCmd had optimistically landed — it carried no outcome and read as
+       * executed. Start now writes the audit itself (writeTomatoCmd silent:true) AFTER the receipt,
+       * carrying the real outcome; the audit must never block the error path. */
+      const auditStart = (taskId, seq, ok, detail) => {
+        try {
+          if (!lib.audit || typeof lib.audit.record !== 'function') return
+          lib.audit.record({
+            action: 'tomato.start', targets: taskId ? [{ taskId }] : [], changes: [],
+            note: (ok ? 'acknowledged by the App' : 'FAILED (' + detail + ') — no focus started') + ' (seq ' + seq + ')'
+          })
+        } catch { /* audit failure never affects business writes */ }
+      }
       /* ---- tomato list: read-only query of the focus ledger (SQLite tomato_records row table; same source as the statistics page, works without the App) ---- */
       if (op === 'list') {
         let recs = lib.tomatoRecords().sort((a, b) => (b.endTime || 0) - (a.endTime || 0))
@@ -105,10 +118,15 @@ module.exports = async function runTomato ({ opts, lib, emit, emitNext }) {
           taskId = t.taskId
         }
         const minutes = parseInt(opts.minutes, 10)
-        const seq = lib.writeTomatoCmd({ action: 'start', taskId, minutes: minutes > 0 ? minutes : null })
+        const seq = lib.writeTomatoCmd({ action: 'start', taskId, minutes: minutes > 0 ? minutes : null }, { silent: true })
         // HELP contract: error out when the App is not running instead of faking success. Wait for the receipt to catch up; timeout = command not consumed
-        const ack = assertLiveAck(await lib.waitForTomatoAck(seq), 'start')
-        if (!ack) throw new lib.CliError('tomato start failed: App is not running or did not consume the command (launch with: open)', 'APP_NOT_RUNNING')
+        let ack = null
+        try { ack = assertLiveAck(await lib.waitForTomatoAck(seq), 'start') } catch (e) { auditStart(taskId, seq, false, (e && e.code) || 'CMD_EXPIRED'); throw e }
+        if (!ack) {
+          auditStart(taskId, seq, false, 'App is not running or did not consume the command')
+          throw new lib.CliError('tomato start failed: App is not running or did not consume the command (launch with: open)', 'APP_NOT_RUNNING')
+        }
+        auditStart(taskId, seq, true)
         if (opts.json) return emitNext({ seq, taskId, minutes: minutes > 0 ? minutes : null, acknowledged: true }, ['tomato status --json for countdown', 'tomato stop to stop'])
         console.log('✓ focus started' + (taskId ? ' (attached task ' + taskId + ')' : '') + (minutes > 0 ? ' for ' + minutes + ' min' : ''))
         return

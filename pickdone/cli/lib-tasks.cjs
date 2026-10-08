@@ -46,6 +46,14 @@ function resolveCategory (input) {
   if (byId) return byId.categoryId
   // F-B5: normalization injected from cli/lib.js (NFKC + casefold + whitespace strip, single source)
   const kw = normKey(input)
+  // maint/d24 P3: an empty normalized keyword substring-matches EVERY empty-named category — wild
+  // junk rows could hijack resolution (or force AMBIGUOUS_MATCH). Empty keyword = never a name match.
+  if (!kw) throw new CliError(`category not found: "${input}" (available: ${cats.map(c => c.categoryName).join(", ")})`, 'CATEGORY_NOT_FOUND')
+  // Exact normalized name wins first (an exact 'work' must not become ambiguous with 'network'),
+  // then the unique-substring fallback.
+  const exact = cats.filter(c => normKey(c.categoryName || '') === kw)
+  if (exact.length === 1) return exact[0].categoryId
+  if (exact.length > 1) throw new CliError(`category "${input}" is ambiguous: ${exact.map(c => c.categoryName).join(", ")}`, 'AMBIGUOUS_MATCH')
   const hits = cats.filter(c => normKey(c.categoryName || '').includes(kw))
   if (hits.length === 1) return hits[0].categoryId
   if (hits.length > 1) throw new CliError(`category "${input}" is ambiguous: ${hits.map(c => c.categoryName).join(", ")}`, 'AMBIGUOUS_MATCH')

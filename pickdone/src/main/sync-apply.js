@@ -55,6 +55,7 @@ const {
   isMachineLocalSettingKey,
   createHydrationCache,
   hydrateRow,
+  tombstoneResurrectCopy, // 2026-10-08 tombstone-vs-live resurrection bridge (payload compare lives in hydrate)
 } = require('./sync-apply-hydrate')
 
 /**
@@ -238,7 +239,6 @@ function writeMetaConflictBackup (state, key, value) {
     log.warn('[LanSync] meta LWW conflict on', key, '— loser backed up as', backupKey)
   } catch (e) { log.warn('[LanSync] meta conflict backup failed for', key, e.message) }
 }
-
 function applyRowInner (state, incoming) {
   if (!incoming || !SYNCABLE_ENTITIES.has(incoming.entity)) return false
   // Defensive: a '*gc*' oplog marker must never surface as an appliable row id (see hydrateRow).
@@ -371,6 +371,7 @@ function applyRowInner (state, incoming) {
     log.warn('[LanSync] same-stamp echo on todo', incoming.id, '— local row stands (an echo is never strictly newer)')
     return false
   }
+  if (entity === 'todo' && conflictCopy == null) conflictCopy = tombstoneResurrectCopy(localRow, incoming, winner) // P1 2026-10-08 no-silent-loss: a newer inbound LIVE edit resurrecting a local TOMBSTONE used to silently destroy the deletion — tombstoneResurrectCopy (hydrate) bridges the deleted content into the minting path below
   if (conflictCopy) {
     // Surface the losing edit (merge.mjs contract: the loser is never silently dropped).
     // Round-3 review: materialize it as a TOMBSTONED todo row so the recycle bin can restore

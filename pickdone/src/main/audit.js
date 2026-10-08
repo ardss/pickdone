@@ -462,6 +462,13 @@ function recordAppOp (op, params, opts) {
     if (!shouldAudit(op, params)) return
     const before = opts && opts.before
     const result = opts && opts.result
+    // P3 2026-10-08 no-op noise fix: upsertCategory returns false when the upsert changed nothing
+    // (identical row, or refused empty-name insert). The renderer's whole-list re-upsert used to
+    // record one category.upsert line per unchanged row per save (wild evidence: 16,318 no-op
+    // lines by actor app on 09-25) even after the identical-line fold — a genuinely unchanged row
+    // now records NOTHING, mirroring the "failed ops never leave a line" doctrine (no change =
+    // no line).
+    if (op === 'upsertCategory' && result === false) return
     appendEntry({
       ts: Date.now(),
       time: dayjs().format('YYYY-MM-DD HH:mm:ss'),

@@ -63,6 +63,24 @@ function fail (e, command) {
   process.exit(1)
 }
 
+/* ---- maint/d24 NEW: `category cleanup-empty` — hygiene tool for empty/whitespace-named categories.
+   Dry-run (default) lists the plan; --yes executes the re-point + tombstone after a JSON backup. ---- */
+function runCategoryCleanupEmpty ({ opts, lib, emit }) {
+  const repoint = opts.repoint != null && opts.repoint !== true ? String(opts.repoint) : undefined
+  const r = lib.cleanupEmptyCategories({ repoint, yes: !!opts.yes })
+  if (opts.json) return emit(r)
+  if (!r.junk.length) return console.log('no empty/whitespace-named categories — nothing to clean')
+  console.log('empty/whitespace-named categories:')
+  for (const c of r.junk) console.log('  ' + c.id + '\t"' + (c.name == null ? '' : c.name) + '"')
+  if (r.dryRun) {
+    console.log(`= dry run: would re-point ${r.taskCount} task(s) → ${r.targetId || '0 (unfiled)'} and tombstone ${r.junk.length} category row(s). Re-run with --yes to execute.`)
+    return
+  }
+  console.log(`✓ re-pointed ${r.taskCount} task(s) → ${r.targetId || '0 (unfiled)'}, tombstoned ${r.junk.length} empty category row(s)`)
+  if (r.backupFile) console.log('  backup: ' + r.backupFile)
+  return
+}
+
 /* ================= command dispatch ================= */
 async function main () {
   const argv = process.argv.slice(2)
@@ -90,7 +108,7 @@ async function main () {
   // residue) and used to run its destructive pass with no gate and no confirmation at all.
   const GATED_WRITE = new Set([...WRITE_CMDS, 'import', 'purge', 'sort', 'clean'])
   const GATED_WRITE_SUBOPS = {
-    category: ['add', 'rename', 'move', 'rm', 'delete'],
+    category: ['add', 'rename', 'move', 'rm', 'delete', 'cleanup-empty'],
     tag: ['rename', 'rm', 'delete'],
     view: ['add', 'rm', 'delete'],
     plan: ['set', 'rm', 'remove'],
@@ -248,7 +266,9 @@ async function main () {
       }).join('\n'))
       return
     }
-    case 'category': return runCategory({ opts, lib, emit })
+    case 'category':
+      if (opts._[0] === 'cleanup-empty') return runCategoryCleanupEmpty({ opts, lib, emit })
+      return runCategory({ opts, lib, emit })
     case 'tag': return runTag({ opts, lib, emit })
     case 'projects': return runProjects({ opts, lib, emit })
     case 'project': return runProject({ opts, lib, emit })
