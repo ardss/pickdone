@@ -77,9 +77,12 @@ export function buildTaskMenu (vm, t, caps = {}, extra = []) {
       const min2 = Math.max(1, Math.min(FOCUS_MAX_MINUTES, min))
       const startTs = Math.max(+dayjs().startOf('day'), Date.now() - min2 * 60000)
       const endTime = startTs + min2 * 60000
-      // Idempotent id shape unified with CLI lib.js backfillRecord: same slot never mints a second row
+      // Idempotent id shape unified with the CLI twin (lib-focus.cjs backfillRecord): the FULL
+      // taskId is mixed into the id — the old last-8 tail minted IDENTICAL tomatoIds for two
+      // same-suffix tasks backfilled in the same minute, and tomatoAppendMany's ON CONFLICT
+      // silently overwrote one ledger row.
       vm.$store.commit('tomato/addRecord', {
-        tomatoId: 'tmt_m_' + startTs + '_' + min2 + '_' + String(cur.taskId || 'free').slice(-8),
+        tomatoId: 'tmt_m_' + startTs + '_' + min2 + '_' + String(cur.taskId || 'free'),
         endTime,
         // dateKey derives from endTime: the DB layer unconditionally re-derives it from endTime (tomatoAppendMany /
         // tomatoUpdateById), so deriving from startTs here split the two across midnight backfills

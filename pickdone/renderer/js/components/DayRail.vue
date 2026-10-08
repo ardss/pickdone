@@ -107,7 +107,7 @@
 /** Today time rail (V2 timeline-style today page) -- left column vertical hour track:
  *  (1) Completed pomodoros/breaks land on the rail at their real times (data = tomato store records)
  *  (2) Pre-planning: dragging a todo from the right list onto the rail = "planned for around this time"; temporary, draggable to adjust, deletable
- *  Plan data lives in SQLite plan_chips rows (2026-09-03 root fix), all writes via utils/dayPlans.js atomic ops; bucketed by date, pruned outside [-7d,+31d] */
+ *  Plan data lives in SQLite plan_chips rows (2026-09-03 root fix), all writes via utils/dayPlans.js atomic ops; bucketed by date, pruned outside [-7d,+366d] */
 import { FMT, dayjs } from '../utils/core.js'
 import { FOCUS_INPUT_MAX_MINUTES } from '../../../shared/limits.mjs'
 import { localDayKey } from '../../../shared/date-key.mjs'
@@ -169,6 +169,9 @@ const V1_CSS = `
 .day-rail.collapsed .dr-mini { display: block; cursor: pointer; }
 .dr-mini { position: relative; flex: 1 1 auto; min-height: 480px; display: none; pointer-events: none; }
 .dr-mini-rail { position: absolute; left: 24px; right: 8px; top: 0; bottom: 0; border-radius: 5px; background: var(--gray-bg, #f8f8f8); }
+/* Mini segments: .dr-seg is position:absolute with left/right:0 and its positioned ancestor is
+   .dr-mini-rail (not .dr-mini), so the 24/8 mini-rail inset already applies to segments — do NOT
+   add left/right offsets here or segments would double-inset past the rail edge. */
 .dr-mini .dr-seg { min-height: 2px; }
 /* Reference ticks: only 00/06/12/18/24 are labeled; other times are read against the current-time line and focus segments */
 .dr-mini-t { position: absolute; left: 0; width: 17px; text-align: right; font-style: normal; font-size: 8.5px; line-height: 1; color: var(--text-3, #6d7278); font-variant-numeric: tabular-nums; transform: translateY(-50%); }
@@ -300,7 +303,7 @@ export default {
     if (window.todoAPI.onTodosChanged) {
       this._offTodosChanged = window.todoAPI.onTodosChanged(() => { try { this._onPlansChanged() } catch {} })
     }
-    // Expired day-bucket cleanup (db atomic op, idempotent): [-7d,+31d] window; planning the future is a finalized feature, so only expired buckets are pruned, never future ones
+    // Expired day-bucket cleanup (db atomic op, idempotent): [-7d,+366d] window; planning the future is a finalized feature, so only expired buckets are pruned, never future ones (future bound covers the reachable planning horizon — see prune)
     // [d21-A15] handle stored so beforeUnmount can clear it (an unmount <5s after mount used to fire prune into a dead component)
     this._pruneTimer = setTimeout(() => { try { this.prune() } catch {} }, 5000)
     // 渐进折叠(2026-09-03 用户定稿): minWidth 放开到 750 的代价——窗口 <1140 时自动折叠抽屉
@@ -558,7 +561,7 @@ export default {
       const move = this._dragPlan
       this._dragPlan = null
       // On write failure (lock screen/library busy), read back with the library as source of truth, eliminating drift between optimistic UI and the library (async errors can't be caught by sync try/catch)
-      const resync = () => this._onPlansChanged()
+      const resync = () => { this.reportPlanFail(); this._onPlansChanged() }
       if (move && move.taskId === taskId && Array.isArray(day[taskId])) {
         day[taskId].splice(move.idx, 1, { mm, id: move.planId }) /* In-rail chip drag = move that instance (id unchanged) */
         dayPlans.updateChip(move.planId, this.today, mm).catch(resync)
@@ -599,13 +602,13 @@ export default {
           const j = d[p.taskId].findIndex(e => e.id === p.planId)
           if (j >= 0) d[p.taskId].splice(j, 1)
           if (!d[p.taskId].length) delete d[p.taskId]
-          dayPlans.removeChips([p.planId]).catch(() => this._onPlansChanged())
+          dayPlans.removeChips([p.planId]).catch(e => { this.reportPlanFail(e); this._onPlansChanged() })
         },
         () => {
           const d = this.plans[this.today] || (this.plans[this.today] = {})
           if (!Array.isArray(d[p.taskId])) d[p.taskId] = []
           d[p.taskId].push(entry)
-          dayPlans.addChips([{ taskId: p.taskId, day: this.today, mm: entry.mm, id: entry.id }]).catch(() => this._onPlansChanged())
+          dayPlans.addChips([{ taskId: p.taskId, day: this.today, mm: entry.mm, id: entry.id }]).catch(e => { this.reportPlanFail(e); this._onPlansChanged() })
         })
     },
     /* Consistent plan-chip interactions: check to complete (reusing the undo chain) / select to start (tomato attach) / click the name to open the edit panel */
@@ -614,6 +617,12 @@ export default {
       if (!t) { this.removePlan(p); return }
       // After completion the plan stays on the rail (completed style, still draggable) — it's the receipt that "a user-planned task was completed"; it shouldn't vanish (user-finalized)
       toggleCompleteWithUndo({ store: this.$store, message: this.$message, todo: t, announce: this.$announce })
+    },
+    /* [maint/d26] Plan-chip write failures must be visible (D22/D23 "failure must be visible"
+       contract, same shape as TomatoBar.reportDispatchFail): every .catch rolls the optimistic
+       state back via _onPlansChanged, but silent rollback read as "the chip never existed" */
+    reportPlanFail (e) {
+      if (this.$message) this.$message.error(this.$t('statsH.main.actionFailedMsg') + ((e && e.message) || ''))
     },
     /* Selection anchored to a specific instance: focus started from this chip lights up this one; when attach came from elsewhere (e.g. a list row), fall back to lighting the first one */
     isActivePlan (p) {
@@ -680,7 +689,10 @@ export default {
         this.$store.commit('tomato/addRecord', {
           // 随机尾:同分钟同时长补两条(合法场景)不再被幂等去重静默吞(与 TaskAccountModal 同款修复,dateKey 由 update/append 层按 endTime 重导)
           tomatoId: 'tmt_m_' + startTs + '_' + d.dur + '_' + Math.random().toString(36).slice(2, 7), endTime: endTs,
-          dateKey: dayjs(startTs).format(FMT.date),
+          // dateKey derives from endTime: the DB layer unconditionally re-derives it from endTime
+          // (tomatoAppendMany/tomatoUpdateById), so a 23:50+25min card used to land on different
+          // days in memory vs DB
+          dateKey: dayjs(endTs).format(FMT.date),
           focus: '', focusTaskId: d.taskId || null, focusDuration: d.dur,
           rest: d.succeed ? d.rest : 0, restDuration: d.succeed ? d.rest : 0,
           succeed: d.succeed, status: 'local', manual: true
@@ -719,14 +731,19 @@ export default {
       this.$message.success(this.$t('statsG.DayRail.relinked', { n: t.taskContent || this.$t('statsE.TodayView.untitled') }))
     },
     prune () {
-      // Keep plan buckets in the window [today-7d, today+31d]: planning the future is a finalized feature; only prune expired, never delete future
+      // Keep plan buckets in the window [today-7d, today+366d]: planning the future is a finalized feature; only prune expired, never delete future
+      // [maint/d26] future bound widened 31d -> 366d: the old +31d bound PHYSICALLY DELETED buckets
+      // the contract above promised to keep (pruneDays DELETEs everything outside the window). The UI
+      // only ever creates chips for today, but cross-window/CLI writes can date buckets arbitrarily
+      // far out, so the keep-window must cover the reachable horizon; ~1 year is the pragmatic cap
+      // (near-term GC still runs, yet no user-reachable future plan gets silently destroyed).
       // 2026-10-03: keep-window keys via the shared localDayKey with calendar day stepping —
       // was an un-routed window.dayjs() now-read (day-caliber domain: one day-key definition).
       // Day stepping routes through the single sanctioned primitive dayShift (todayBounds) —
       // NOT a second Date#setDate stepper and NOT n*86400000 ms arithmetic.
       const keep = new Set()
       const now = Date.now()
-      for (let i = -31; i <= 7; i++) keep.add(localDayKey(dayShift(now, -i)))
+      for (let i = -366; i <= 7; i++) keep.add(localDayKey(dayShift(now, -i)))
       let dirty = false
       for (const k of Object.keys(this.plans)) {
         if (!keep.has(k)) { delete this.plans[k]; dirty = true }

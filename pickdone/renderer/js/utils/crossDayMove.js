@@ -12,6 +12,11 @@
 /** Build the patch for moving `dragged` to the new day `newDay`.
  *  - todoTime: follows the new day only when anchored to the old day, keeping its time-of-day
  *    (a 14:30 schedule stays 14:30 on the new day; a pure midnight day marker stays a marker).
+ *    A NO-TIME task (todoTime=0) is anchored to `newDay` itself (todoTime = newDay, the all-day
+ *    marker shape): a dayStart-only patch used to diverge from the DB, whose scheduledDay
+ *    derivation (db-rows.js todoToRow: `scheduledDay: todoTime ? ... : 0`) unconditionally wrote
+ *    0 for todoTime=0 — after a restart the task fell back to the inbox while memory said it
+ *    lived on the new day. Day-anchored rows keep both surfaces in agreement.
  *  - reminderTime / reminderExtra: same rule — reminders cannot be orphaned on the old day, and
  *    extra reminders keep their own times of day when their day matches the old day.
  *  Fields not anchored to the old day are omitted from the patch (left untouched). */
@@ -20,6 +25,10 @@ export function crossDayMovePatch (dragged, newDay, startOfDay) {
   const origDay = (dragged && dragged.dayStart) || 0
   if (dragged.todoTime && startOfDay(dragged.todoTime) === startOfDay(origDay)) {
     patch.todoTime = newDay + (dragged.todoTime - startOfDay(dragged.todoTime))
+  } else if (!dragged.todoTime) {
+    // No-time task: anchor to the new day (all-day marker) so the DB's scheduledDay derivation
+    // agrees with memory — a dayStart-only patch silently reverted on the next re-hydration.
+    patch.todoTime = newDay
   }
   if (dragged.reminderTime && startOfDay(dragged.reminderTime) === startOfDay(origDay)) {
     patch.reminderTime = newDay + (dragged.reminderTime - startOfDay(dragged.reminderTime))

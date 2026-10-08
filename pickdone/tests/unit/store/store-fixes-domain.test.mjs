@@ -257,7 +257,8 @@ test('#8 backfill id shape matches the CLI contract; at-cap 600 accepted', async
   const commits = await backfillCommit('600')
   const rec = commits.find(c => c[0] === 'tomato/addRecord')[1]
   assert.equal(rec.focusDuration, 600, 'the cap itself is accepted')
-  assert.match(rec.tomatoId, /^tmt_m_\d+_600_12345678$/, 'id = tmt_m_<startTs>_<minutes>_<taskId slice(-8)>')
+  // D27: full taskId (the slice(-8) twin-mint collision is fixed in taskMenu.js, matching the CLI)
+  assert.match(rec.tomatoId, /^tmt_m_\d+_600_task-12345678$/, 'id = tmt_m_<startTs>_<minutes>_<full taskId>')
 })
 
 test('#8b backfill input above FOCUS_MAX_MINUTES is rejected with a hint, no record minted', async () => {

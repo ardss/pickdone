@@ -154,8 +154,16 @@ module.exports = ({ open, commit, audit, CliError, dayjs, resolveTask, liveTasks
       patch.endTime = dayjs(endBase).hour(+m[1]).minute(+m[2]).second(0).millisecond(0).valueOf()
       patch.dateKey = dayjs(patch.endTime).format('YYYY-MM-DD')
     }
-    if (free === true) patch.focusTaskId = null
-    else if (task) patch.focusTaskId = resolveTask(task, liveTasks()).taskId
+    // D15-B14 parity (renderer twin: renderer/js/store/tomato.js updateRecordTask): the ledger row
+    // carries a DENORMALIZED name text (`focus`) — the old rebind left the previous task's name
+    // stale in the row and on every display surface that reads rec.focus. Rebind the name in the
+    // SAME write (missing/blank target name → '' = the free-focus display convention).
+    if (free === true) { patch.focusTaskId = null; patch.focus = '' }
+    else if (task) {
+      const target = resolveTask(task, liveTasks())
+      patch.focusTaskId = target.taskId
+      patch.focus = target.taskContent != null ? target.taskContent : ''
+    }
     const ok = commit('tomato', 'updateById', { tomatoId: rec.tomatoId, patch })
     if (!ok) throw new CliError('record vanished from ledger: ' + rec.tomatoId, 'RECORD_NOT_FOUND')
     audit.record({ action: 'tomato.record-fix', targets: [], changes: [{ before: rec, after: Object.assign({}, rec, patch) }], note: 'CLI record fix (ledger row direct)' })

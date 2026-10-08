@@ -58,6 +58,12 @@ function rowToTodo (r) {
   // Parse r.reminders once per row (perf-rowtotodo-double-reminders-parse): parseOffsets
   // itself called parseReminders, so non-null reminder rows paid two JSON.parse calls.
   const rm = parseReminders(r.reminders)
+  // [P2 edge 2026-10-08] normAbs dedupes only WITHIN the extras — an extra entry equal to the
+  // main reminderTime survived here, and scheduler.js reminderInstances schedules main + extras
+  // independently (separate job keys), so both fired. Data-layer fix: drop extras equal to the
+  // main reminderTime at read time (packReminders is shape-agnostic and stays so).
+  const reminderTime = r.remindAt || 0
+  const reminderExtra = reminderTime ? rm.x.filter(ts => ts !== reminderTime) : rm.x
   return {
     taskId: r.id,
     userId: r.userId,
@@ -72,9 +78,9 @@ function rowToTodo (r) {
     syncTime: r.syncTime,
     todoTime: r.scheduledAt,
     dayStart: r.scheduledDay,
-    reminderTime: r.remindAt || 0,
+    reminderTime,
     reminderOffsets: rm.o,
-    reminderExtra: rm.x,
+    reminderExtra,
     taskSort: r.sort,
     estimate: r.focusMinutes,
     difficulty: r.difficulty,
