@@ -597,13 +597,13 @@ const {
 
 /* Categories write: extracted verbatim to lib-categories.cjs (2026-09-27 size-ratchet split) */
 const {
-  addCategory, renameCategory, deleteCategory, moveCategory, categoryRows, categoryHierarchy,
-} = require('./lib-categories.cjs')({ open, commit, audit, CliError, resolveCategory, projectFlagKey, projectStatusKey, MS_KEY, PROJECT_IDS_KEY })
+  addCategory, renameCategory, deleteCategory, moveCategory, categoryRows, categoryHierarchy, cleanupEmptyCategories,
+} = require('./lib-categories.cjs')({ open, commit, audit, CliError, resolveCategory, userDataDir, projectFlagKey, projectStatusKey, MS_KEY, PROJECT_IDS_KEY })
 
 /* Tags + batch operations: extracted verbatim to lib-tags.cjs (2026-09-27 size-ratchet split) */
 const {
   listTags, rewriteTag, resolveTaskExact, batchTagOne, batchRun,
-} = require('./lib-tags.cjs')({ liveTasks, CliError, patchTodo, toggleComplete, dateChangeReminderPatch, migrateChipsOnDayChange, parseDate, resolveCategory })
+} = require('./lib-tags.cjs')({ liveTasks, recycleTasks, CliError, patchTodo, toggleComplete, dateChangeReminderPatch, migrateChipsOnDayChange, parseDate, resolveCategory })
 
 /* Saved views (smart lists): extracted verbatim to lib-views.cjs (2026-09-27 size-ratchet split) */
 const {
@@ -804,7 +804,7 @@ module.exports = {
   writeTomatoCmd, readTomatoState, waitForTomatoAck, tomatoLiveRemainSec, backfillRecord,
   writeSyncCmd, readSyncState, waitForSyncAck,
   buildRepeatRule, repeatOn, repeatOff, repeatRuleInfo,
-  addCategory, renameCategory, deleteCategory, moveCategory, categoryRows, categoryHierarchy, listTags, rewriteTag, tomatoRecords,
+  addCategory, renameCategory, deleteCategory, moveCategory, categoryRows, categoryHierarchy, cleanupEmptyCategories, listTags, rewriteTag, tomatoRecords,
   resolveTaskExact, batchRun, batchTagOne, migrateChipsOnDayChange,
   viewsList, resolveView, viewAdd, viewRm, applyViewConds, viewFetchOpts, viewCondsSummary,
   lunarOf, lunarAnnotate,

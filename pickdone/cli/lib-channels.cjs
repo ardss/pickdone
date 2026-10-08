@@ -4,13 +4,16 @@
 module.exports = ({ open, commit, audit }) => {
   /* ---------------- Pomodoro command channel (CLI writes a meta command → the running App dispatches the existing tomato action → writes state back)
      State machine/idempotency/ledger all live in the App renderer's store/tomato.js; the CLI never writes pomodoro state in parallel. When the App is not running, status is marked pending. */
-  function writeTomatoCmd (cmd) {
+  function writeTomatoCmd (cmd, { silent } = {}) {
     // Monotonically increasing sequence: the App drops stale commands via cmd.seq > lastTomatoSeq; two commands fired in the same millisecond via Date.now() would silently lose the second one
     // (common in scripted AI scenarios), so a persisted counter in meta is read-modify-written instead
     // Atomic increment (+1 inside SQL): two concurrent CLI processes writing the same seq would make the App's seq dedup silently drop the second command (audit H4)
     const seq = open().call('nextCliTomatoSeq')
     commit('meta', 'put', ['cliTomatoCmd', JSON.stringify({ seq, at: Date.now(), ...cmd })])
-    audit.record({ action: 'tomato.' + cmd.action, targets: cmd.taskId ? [{ taskId: cmd.taskId }] : [], changes: [], note: 'CLI tomato command (App executes and writes back cliTomatoState)' })
+    // maint/d24 P3: silent:true defers the audit to the caller — `tomato start` records the entry
+    // only once the real outcome is known (a failed start used to land an audit entry with no
+    // outcome and read as executed).
+    if (!silent) audit.record({ action: 'tomato.' + cmd.action, targets: cmd.taskId ? [{ taskId: cmd.taskId }] : [], changes: [], note: 'CLI tomato command (App executes and writes back cliTomatoState)' })
     return seq
   }
   function readTomatoState () {

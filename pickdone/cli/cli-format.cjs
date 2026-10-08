@@ -30,6 +30,9 @@ function fmtTodoLine (t, lunarOf) {
 /** audit changes summary: list changed semantic fields (before→after) */
 const FIELD_LABEL = { taskContent: 'title', taskDescribe: 'desc', complete: 'complete', completedAt: 'completedAt', todoTime: 'date', reminderTime: 'reminder', categoryId: 'category', repeatId: 'repeatGroup', subtasks: 'subtasks', delete: 'delete', status: 'status', estimate: 'estimate', tomatoEstimate: 'tomatoEstimate', deadlineTs: 'deadline', priority: 'priority', important: 'important', urgent: 'urgent' }
 const ts = v => (typeof v === 'number' && v > 1e11) ? dayjs(v).format('MM-DD HH:mm') : v
+// maint/d24 P3: categoryIds are minted Date.now()*1000 (+rand) — the generic ts() date formatter
+// read them as timestamps ("category: 02-02 06:14 → ∅"). Render them as the bare `cat <id>` token.
+const valOf = (k, v) => k === 'categoryId' && v != null ? 'cat ' + String(v) : ts(v)
 function summarizeChanges (changes) {
   const parts = []
   for (const c of changes || []) {
@@ -38,7 +41,7 @@ function summarizeChanges (changes) {
     for (const k of keys) {
       const b = c.before ? c.before[k] : undefined
       const a = c.after ? c.after[k] : undefined
-      if (JSON.stringify(b) !== JSON.stringify(a)) diffs.push(`${FIELD_LABEL[k] || k}: ${ts(b) ?? '∅'} → ${ts(a) ?? '∅'}`)
+      if (JSON.stringify(b) !== JSON.stringify(a)) diffs.push(`${FIELD_LABEL[k] || k}: ${valOf(k, b) ?? '∅'} → ${valOf(k, a) ?? '∅'}`)
     }
     if (diffs.length) parts.push(diffs.join(', '))
     else if (!c.before && c.after) parts.push('created')

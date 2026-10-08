@@ -2,7 +2,7 @@
  * Factory-injected deps keep it decoupled from lib.js (no circular require), same pattern as lib-settings.cjs.
  * Tags (derived from #tag in content/description; rename/remove rewrite text across tasks — same regex semantics as SideNav)
  * + explicit-id batch operations. */
-module.exports = ({ liveTasks, CliError, patchTodo, toggleComplete, dateChangeReminderPatch, migrateChipsOnDayChange, parseDate, resolveCategory }) => {
+module.exports = ({ liveTasks, recycleTasks, CliError, patchTodo, toggleComplete, dateChangeReminderPatch, migrateChipsOnDayChange, parseDate, resolveCategory }) => {
   // Character-for-character identical to renderer/js/utils/search.js TAG_RE (tags are derived from body text, no separate storage)
   const TAG_RE = /#([^\s#,，。.!?！？]+)/g
   function extractTagsCli (...texts) {
@@ -27,7 +27,11 @@ module.exports = ({ liveTasks, CliError, patchTodo, toggleComplete, dateChangeRe
     // rename: #old(?=\s|$) → #new ; remove: leading whitespace swallowed too (\s*#old(?=\s|$) → '')
     const re = remove ? new RegExp('\\s*#' + esc + '(?=\\s|$)', 'g') : new RegExp('#' + esc + '(?=\\s|$)', 'g')
     let touched = 0
-    for (const todo of liveTasks()) {
+    // maint/d24 P2: the App (SnManageTagsModal.vue tagTodos) rewrites tags in RECYCLE rows too — the
+    // CLI iterating live rows only missed the tombstones, so restore-after-rename resurrected the old
+    // tag (ghost tags). Rewrite across live ∪ recycled rows; the tag LIST derivation stays live-only.
+    const rows = liveTasks().concat(recycleTasks())
+    for (const todo of rows) {
       const patch = {}
       if (todo.taskContent) {
         const v = remove ? todo.taskContent.replace(re, '').trim() : todo.taskContent.replace(re, '#' + next)
