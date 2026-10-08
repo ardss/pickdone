@@ -332,6 +332,15 @@ function applyRowInner (state, incoming) {
   // on insertion order (loop fix 2026-09-18; inbound rows are stamped with the sender's id
   // at the transport boundary in lan-sync-bootstrap).
   if (localRow && localRow.deviceId == null && state.deviceId) localRow.deviceId = state.deviceId
+  // 2026-10-08 tombstone-vs-live (plan/filter twin of the todo tombstoneResurrectCopy guard, D24):
+  // plan/filter tombstones hydrate with data:null (no content to copy), so the todo-style
+  // conflict-copy minting path cannot apply — and planAddMany's `ON CONFLICT ... SET deleted=0`
+  // upsert then SILENTLY resurrected the deleted chip/filter whenever a peer live row won LWW.
+  // When the local delete is FRESHER than the inbound live edit (deletedAt > updatedAt — the peer
+  // authored its edit before our deletion and simply had not seen it), delete-wins keeps the
+  // tombstone instead of resurrecting.
+  if ((entity === 'plan' || entity === 'filter') && localRow && localRow.deleted &&
+      incoming && !incoming.deleted && stampNum(localRow.deletedAt) > stampNum(incoming.updatedAt)) return false
   // Provenance normalization (protocol v3): increment rows carry author top-level (hydrateRow);
   // SNAPSHOT rows carry it in the payload (allRows data = the full todo payload). Missing = ''.
   if (entity === 'todo' && incoming.author == null) incoming.author = (incoming.data && incoming.data.syncAuthor) || ''

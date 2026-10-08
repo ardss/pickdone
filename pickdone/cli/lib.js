@@ -456,13 +456,17 @@ function migrateChipsOnDayChange (taskId, oldDay, newDay) {
   } catch { return 0 }
 }
 
-/** Restore a task: backfill the schedule chips snapshotted before deletion */
+/** Restore a task: backfill the schedule chips snapshotted before deletion.
+ *  LWW re-stamp on restore (renderer twin: renderer/js/utils/dayPlans.js restoreSnapshot): the
+ *  snapshot rows carry their PRE-DELETE updatedAt (planAddMany preserves explicit stamps) while
+ *  the delete stamped a FRESH tombstone — over LAN the restored chips lost every LWW round
+ *  against newer peer chip-tombstones and were silently re-deleted; re-stamp fresh instead. */
 function chipsRestoreSnapshot (taskId) {
   try {
     const raw = open().call('getMeta', 'planChipsSnapshot:' + taskId)
     if (!raw) return 0
     const rows = JSON.parse(raw)
-    if (Array.isArray(rows) && rows.length) commit('plan', 'putMany', rows)
+    if (Array.isArray(rows) && rows.length) commit('plan', 'putMany', rows.map(r => ({ ...r, updatedAt: Date.now() })))
     // Round-3 P1: '' → deleteMeta (file-wide convention, renderer clearSnapshot parity) — a ''
     // value is NOT a tombstone here, it is a stale meta row a later task-id collision could
     // misread as an (empty) snapshot; deleteMeta propagates the removal to peers too.
