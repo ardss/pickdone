@@ -624,7 +624,14 @@ function restoreCategoriesFromCriticalBackup (raw, upsertCategory) {
     if (catState === null) return 0 // schemaV too high: skip the category segment (no import, no throw)
     const cats = ((catState && catState.list) || []).filter(c => c && c.categoryId != null)
     let n = 0
+    let dropped = 0
     for (const c of cats) {
+      // P2 2026-10-08 (pollution root cause): a null/empty/whitespace categoryName used to be
+      // mapped to String('') and written as a real row — this restore path cemented the wild
+      // `name=''` pollution behind the empty-category choke-point fix. Skip such rows (drop,
+      // count, log) instead of writing them. Tombstones are NOT exempt here: a backup segment
+      // row without a usable name carries no recoverable content to preserve.
+      if (!String(c.categoryName == null ? '' : c.categoryName).trim()) { dropped++; continue }
       try {
         const deleted = (c.deleted != null ? !!c.deleted : !!c.delete)
         upsertCategory({
@@ -642,6 +649,7 @@ function restoreCategoriesFromCriticalBackup (raw, upsertCategory) {
         n++
       } catch {}
     }
+    if (dropped) logWarn(`[dbRecovery] categoryState restore: skipped ${dropped} row(s) with empty/whitespace name (junk-row pollution guard)`)
     return n
   } catch { return 0 }
 }

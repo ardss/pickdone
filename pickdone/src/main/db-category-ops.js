@@ -23,12 +23,28 @@ exports.upsertCategory = (db, c) => {
   // and an already-stamped row keeps its original value.
   const deleted = (c && (c.deleted != null ? c.deleted : c.delete)) ? 1 : 0
   const deletedAt = (c && c.deletedAt) || (deleted ? ((cur && cur.deletedAt) || now) : 0)
+  // P1 2026-10-08 (empty-category choke point; wild forensics: 150 junk rows with name='' and
+  // createTime=0, cemented by a recovery restore): the full-field ON CONFLICT DO UPDATE below let
+  // a degraded writer blank an existing row's name/color/createdAt while keeping its id. Guarded
+  // here — the single choke point every category write (renderer, CLI, sync apply, import,
+  // recovery restore) passes through:
+  //   (a) an INSERT (no existing row) whose trimmed name is empty is refused: no-op returning
+  //       false, no row written (house no-op convention, same contract as the identical-upsert
+  //       no-op above; bulk/sync loops stay intact).
+  //   (b) an UPDATE never writes an empty/whitespace name over a non-empty one — the existing
+  //       name is kept for that field.
+  //   (c) a patch carrying color=''/createdAt=0 falls back to the existing row's values instead
+  //       of blanking them.
+  // Tombstones are exempt from (a)/(b): an inbound sync tombstone may legitimately arrive with
+  // stripped fields and must still land (gate on !deleted).
+  const trimmedName = (c && c.name != null) ? String(c.name).trim() : ''
+  if (!cur && !deleted && !trimmedName) return false
   const row = {
     id: c && c.id,
     userId: c && c.userId,
-    name: c && c.name,
-    color: c && c.color,
-    createdAt: c && c.createdAt,
+    name: (!deleted && !trimmedName && cur) ? cur.name : (c && c.name),
+    color: !(c && c.color) && cur ? cur.color : (c && c.color),
+    createdAt: !(c && c.createdAt) && cur ? cur.createdAt : (c && c.createdAt),
     sort: c && c.sort,
     isFolder: (c && c.isFolder) ? 1 : 0,
     parentId: c && c.parentId,
