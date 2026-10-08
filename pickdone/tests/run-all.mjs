@@ -177,8 +177,12 @@ if (forwardArgs.includes('--experimental-test-coverage')) {
     // throws — the throw used to abort the whole summary write (first CI run after the edit).
     const stdoutText = String(r.stdout || '')
     const failCount = (stdoutText.match(/^not ok /gm) || []).length
+    // suite tag: the coverage ratchet only auto-raises its baseline from the suite it was
+    // calibrated on ('unit'); a full-suite summary must be visibly labeled so the ratchet
+    // can tell the instruments apart instead of silently mixing them.
+    const suiteTag = suites.length ? suites.join('+') : 'all'
     fs.writeFileSync(path.join(artifacts, 'coverage-summary.json'),
-      JSON.stringify({ ...all, failCount, generatedAt: new Date().toISOString() }, null, 2) + '\n')
+      JSON.stringify({ ...all, failCount, suite: suiteTag, generatedAt: new Date().toISOString() }, null, 2) + '\n')
     if (all) console.error(`[run-all] coverage summary written: ${all.lines}/${all.branches}/${all.functions}`)
     else console.error('[run-all] coverage requested but no all-files summary found — ratchet will fall back to its own run')
   } catch (e) { console.error(`[run-all] coverage summary write failed: ${e.message}`) }

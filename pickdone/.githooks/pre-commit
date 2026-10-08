@@ -5,13 +5,18 @@
 # CWD 归一：git 从仓库根调用钩子，而门禁命令（eslint/单测）的路径都按 pickdone 写
 cd "$(git rev-parse --show-toplevel)/pickdone" || { echo "  ✗ 找不到 pickdone 目录"; exit 1; }
 
-echo "[pre-commit] 1/4 语法校验（node --check 变更的 .js）"
+echo "[pre-commit] 1/4 语法校验（node --check 变更的 .js/.mjs/.cjs）"
 fail=0
-for f in $(git diff --cached --name-only --diff-filter=ACM | grep -E '\.m?js$'); do
-  if [ -f "$f" ]; then
-    node --check "$f" 2>/tmp/hook-check.err || { echo "  ✗ 语法错误: $f"; cat /tmp/hook-check.err; fail=1; }
+# while-read 逐行处理而非 for 循环分词:for 会按空白切分,路径带空格的变更文件被静默跳过。
+# 过滤器 .[cm]?js 覆盖 .js/.cjs/.mjs(旧 '\.m?js$' 漏 .cjs);tr -d '\r' 容忍 CRLF 名单行。
+git diff --cached --name-only --diff-filter=ACM | grep -E '\.[cm]?js$' | tr -d '\r' | while IFS= read -r f; do
+  [ -f "$f" ] || continue
+  if ! node --check "$f" 2>/tmp/hook-check.err; then
+    echo "  ✗ 语法错误: $f"
+    cat /tmp/hook-check.err
+    exit 1
   fi
-done
+done || fail=1
 [ $fail -eq 1 ] && exit 1
 echo "  ✓ 通过"
 

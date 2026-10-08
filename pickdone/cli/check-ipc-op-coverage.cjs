@@ -9,6 +9,22 @@ const fs = require('fs')
 const path = require('path')
 
 const root = path.join(__dirname, '..')
+
+// Op identifier class MUST match db.js's own OPS-key extraction ([A-Za-z_][A-Za-z0-9_]*).
+// The three scan patterns previously captured [A-Za-z]+ only, so an op containing an
+// underscore or digit (e.g. export_v2) was invisible to BOTH the used-scan and the whitelist
+// extraction — a whole feature could drop out of the whitelist and this gate would stay green,
+// voiding the threat model in the header (silent whole-feature breakage).
+const OP_ID = '([A-Za-z_][A-Za-z0-9_]*)'
+const PATTERNS = {
+  whitelist: new RegExp(`'${OP_ID}'`, 'g'),
+  call: new RegExp(`(?:dbCall(?:\\?\\.)?|ledgerWrite)\\(\\s*'${OP_ID}'`, 'g'),
+  opLiteral: new RegExp(`\\{\\s*op:\\s*'${OP_ID}'`, 'g')
+}
+
+module.exports = { PATTERNS }
+if (require.main !== module) return
+
 let failed = 0
 const bad = m => { console.error('  ✗ ' + m); failed++ }
 const ok = m => console.log('  ✓ ' + m)
@@ -28,7 +44,7 @@ const idxSrc = fs.existsSync(path.join(root, 'src/main/handlers/todo.js'))
   : fs.readFileSync(path.join(root, 'src/main/index.js'), 'utf8')
 const wlMatch = idxSrc.match(/ALLOWED_RENDERER_OPS = new Set\(\[([\s\S]*?)\]\)/)
 if (!wlMatch) { bad('handlers/todo.js 中找不到 ALLOWED_RENDERER_OPS'); process.exit(1) }
-const allowed = new Set([...wlMatch[1].matchAll(/'([A-Za-z]+)'/g)].map(x => x[1]))
+const allowed = new Set([...wlMatch[1].matchAll(PATTERNS.whitelist)].map(x => x[1]))
 
 // Renderer call surface: both dbCall('op' and dbCall?.('op' forms must be captured (the optional-chain form was once missed).
 // ledgerWrite('op' 必须同扫:账本写全走 store/tomato.js 的 ledgerWrite 变量包装,只扫 dbCall 会令账本写面对门禁整体隐身
@@ -45,11 +61,11 @@ const allowed = new Set([...wlMatch[1].matchAll(/'([A-Za-z]+)'/g)].map(x => x[1]
 const used = new Map() // op -> first file it appears in
 for (const f of walk(path.join(root, 'renderer/js'), [])) {
   const src = fs.readFileSync(f, 'utf8')
-  for (const m of src.matchAll(/(?:dbCall(?:\?\.)?|ledgerWrite)\(\s*'([A-Za-z]+)'/g)) {
+  for (const m of src.matchAll(PATTERNS.call)) {
     if (!used.has(m[1])) used.set(m[1], path.relative(root, f))
   }
   if (/dbCall(?:\?\.)?\(\s*[A-Za-z_$][\w$]*\.op\b/.test(src)) {
-    for (const m of src.matchAll(/\{\s*op:\s*'([A-Za-z]+)'/g)) {
+    for (const m of src.matchAll(PATTERNS.opLiteral)) {
       if (!used.has(m[1])) used.set(m[1], path.relative(root, f))
     }
   }

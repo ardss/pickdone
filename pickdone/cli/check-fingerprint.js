@@ -35,7 +35,11 @@ function walk (dir) {
     const st = fs.statSync(p)
     if (st.isDirectory()) { if (f !== 'node_modules' && f !== 'vendor' && f !== 'dist') walk(p); continue }
     if (!EXT.has(path.extname(f))) continue
-    if (/check-fingerprint|SOURCES\.md/.test(f)) continue
+    // Exempt only the gate file itself and SOURCES.md by EXACT basename: the old substring
+    // match (/check-fingerprint|SOURCES\.md/.test(f)) silently skipped ANY file whose name
+    // merely contained those strings (e.g. check-fingerprint-notes.js, SOURCES.md.bak) —
+    // a whole fingerprint blind spot with the gate staying green.
+    if (f === 'check-fingerprint.js' || f === 'SOURCES.md') continue
     const text = fs.readFileSync(p, 'utf8')
     for (const [re, label] of RULES) {
       const m = text.match(re)

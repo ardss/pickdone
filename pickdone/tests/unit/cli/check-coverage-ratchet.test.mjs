@@ -12,7 +12,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 const require_ = createRequire(import.meta.url)
-const mod = require_('../../../cli/check-coverage-ratchet.cjs')
+const { parseAllFiles, summarySuite, suiteMatchesCalibration } = require_('../../../cli/check-coverage-ratchet.cjs')
 
 test('parseAllFiles: picks the LAST all-files summary (forged earlier lines cannot override)', () => {
   const out = [
@@ -24,27 +24,46 @@ test('parseAllFiles: picks the LAST all-files summary (forged earlier lines cann
     '# all files                           |  76.40 |    72.30 |   62.80 | ',
     '# end of coverage report'
   ].join('\n')
-  assert.deepEqual(mod.parseAllFiles(out), { lines: 76.4, branches: 72.3, functions: 62.8 })
+  assert.deepEqual(parseAllFiles(out), { lines: 76.4, branches: 72.3, functions: 62.8 })
 })
 
 test('parseAllFiles: node 22 (CI linux) spec-reporter total row (ℹ glyph, no #) — must still parse', () => {
   const out = 'ℹ end of coverage report\nℹ all files    | 100.00 |   86.65 |   77.83 | \n'
-  assert.deepEqual(mod.parseAllFiles(out), { lines: 100, branches: 86.65, functions: 77.83 })
+  assert.deepEqual(parseAllFiles(out), { lines: 100, branches: 86.65, functions: 77.83 })
 })
 
 test('parseAllFiles: node 22 (CI linux) plain total row WITHOUT the leading # — must still parse', () => {
   const out = '# end of coverage report\nall files                           |  86.65 |    81.68 |   77.83 | \n'
-  assert.deepEqual(mod.parseAllFiles(out), { lines: 86.65, branches: 81.68, functions: 77.83 })
+  assert.deepEqual(parseAllFiles(out), { lines: 86.65, branches: 81.68, functions: 77.83 })
 })
 
 test('parseAllFiles: returns null when no summary line exists (fail-closed, not 0/0/0 equal-baseline green)', () => {
-  assert.equal(mod.parseAllFiles('# foo | 100.00 | 100.00 | 100.00\n# all files?'), null)
-  assert.equal(mod.parseAllFiles(''), null)
+  assert.equal(parseAllFiles('# foo | 100.00 | 100.00 | 100.00\n# all files?'), null)
+  assert.equal(parseAllFiles(''), null)
 })
 
 test('parseAllFiles: real node coverage-report shape parses (win32 CRLF tolerated)', () => {
   const out = '# end of coverage report\r\n# all files                           |  86.65 |    81.68 |   77.83 | \r\n'
-  assert.deepEqual(mod.parseAllFiles(out), { lines: 86.65, branches: 81.68, functions: 77.83 })
+  assert.deepEqual(parseAllFiles(out), { lines: 86.65, branches: 81.68, functions: 77.83 })
+})
+
+test('summarySuite/suiteMatchesCalibration: only the calibration suite ("unit") may feed the auto-raise', () => {
+  // 2026-10-08 instrument-mismatch fix: check:all runs run-all with NO --suite (full run), so
+  // its summaries are a DIFFERENT instrument than the unit-calibrated baseline. They may still
+  // be gated by threshold, but must never raise the baseline.
+  assert.equal(summarySuite({ lines: 1, failCount: 0, suite: 'all' }), 'all')
+  assert.equal(summarySuite({ lines: 1, failCount: 0 }), null, 'legacy summary (pre-suite-tag) reads as unknown')
+  assert.equal(suiteMatchesCalibration({ suite: 'unit' }), true)
+  assert.equal(suiteMatchesCalibration({ suite: 'all' }), false)
+  assert.equal(suiteMatchesCalibration({ suite: 'unit,integration' }), false)
+  assert.equal(suiteMatchesCalibration({}), false, 'missing suite (legacy file) must not count as a match')
+  assert.equal(suiteMatchesCalibration(null), false)
+})
+
+test('run-all tags coverage-summary.json with its suite label (source pin)', () => {
+  const src = fs.readFileSync(new URL('../../run-all.mjs', import.meta.url), 'utf8')
+  assert.match(src, /suite:\s*suiteTag/, 'coverage-summary.json write must carry the suite tag')
+  assert.match(src, /suites\.join\('\+'\)\s*:\s*'all'/, "default (no --suite) run must be labeled 'all', not silently unlabeled")
 })
 
 test('writeBaseline/loadBaseline: JSON round-trips via the real file', () => {
