@@ -135,8 +135,11 @@ const r = spawnSync(process.execPath, ['--test', '--test-force-exit', `--test-ti
   // Windows caps a spawned command line at ~32k chars: with ~350 discovered files, ABSOLUTE
   // paths (K:\...\pickdone\tests\...) blow past it and spawnSync fails with ENAMETOOLONG —
   // exit 1 with ZERO TAP output, which the summary gate could only read as a mystery red
-  // (2026-09-26 check:fast round-2). Anchor the spawn at the app root and pass repo-relative
-  // paths so the argv stays an order of magnitude under the cap regardless of checkout depth.
+  // (2026-09-26 check:fast round-2). Anchor STAYS at the app root: a D25 experiment moving the
+  // cwd to tests/ to shave the argv broke ~20 cwd-anchored specs (build-whitelist, CI-workflow,
+  // structure pins) for a ~4k-char saving — not worth it. The argv-cap guard margin instead
+  // tracks reality: repo-relative argv measured 28702 chars at 3860+ tests, still ~4k under
+  // the true 32767 cap; run-all-argv-limit.test.mjs asserts against that measured headroom.
   { cwd: appRoot, stdio: ['inherit', 'pipe', 'pipe'], maxBuffer: 1 << 28 })
 // Fail closed and LOUD on spawn errors: r.status is null when the child never ran, so the
 // old `r.status ?? 1` fell through to exit 1 with empty output — indistinguishable from a
