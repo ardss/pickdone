@@ -16,6 +16,33 @@ const { defaultBackupRootCandidates } = require('../src/main/backup-dirs.js')
 // no electron at top level, so this pure-Node CLI can require it.
 const dbRecovery = require('../src/main/dbRecovery.cjs')
 
+/** maint/d23 P3: CLI-local twin of src/main/backup-dirs.js resolveBackupDir (that module cannot be
+ *  required from pure Node — its getApp()/electron-log surface is main-process-only, and this file
+ *  already reaches into it only for the dependency-free backup-roots.cjs derivation). Deliberate
+ *  twin, documented: same semantics, read-only —
+ *   - empty/absent backupDir → the ACTIVE default root (TODO_BACKUP_DIR-aware, backup-roots.cjs [0]);
+ *   - a configured dir NOT registered in userData/allowed-backup-dirs.json (only the App's
+ *     pick-backup-dir dialog ever appends there) falls back to the default root;
+ *   - a symlinked backup dir falls back (the App's symlink-bypass guard, backup-dirs.js:98-107).
+ *  Shared by evt-snapshot writing (cli/lib.js) and restore discovery (this module) so the CLI's
+ *  snapshot dir can no longer split from the App's. */
+function resolveCliBackupDir (configured, userDataDirPath) {
+  const fallback = path.resolve(defaultBackupRootCandidates(userDataDirPath)[0])
+  const raw = String(configured || '').trim()
+  if (!raw) return fallback
+  const resolved = path.resolve(raw)
+  if (resolved === fallback) return fallback
+  let allowed = new Set()
+  try {
+    allowed = new Set((JSON.parse(fs.readFileSync(path.join(userDataDirPath, 'allowed-backup-dirs.json'), 'utf8')) || []).map(d => path.resolve(d)))
+  } catch { /* unreadable whitelist = nothing registered (first-run state) */ }
+  if (!allowed.has(resolved)) return fallback
+  try {
+    if (fs.lstatSync(resolved).isSymbolicLink()) return fallback
+  } catch { /* not created yet — the App's resolveBackupDir mkdirs it; keep the choice */ }
+  return resolved
+}
+
 module.exports = function restoreBackup ({ opts, lib, emit }) {
   // D20-DOMB6 (2026-10-02): discovery used to match only auto-* while the App restores BOTH
   // families (handlers/backup.js accepts /^(auto|evt)-/) — evt-* pre-delete event snapshots were
@@ -39,7 +66,11 @@ module.exports = function restoreBackup ({ opts, lib, emit }) {
     // user backup dir worth discovering anyway and degrades to the default candidates.
     if (fs.existsSync(path.join(lib.userDataDir(), 'todos.db'))) userDir = String(lib.settingsDoc().backupDir || '').trim()
   } catch { /* closed/locked DB → defaults only */ }
-  const candidateDirs = [...new Set([...defaultRoots, userDir && path.resolve(userDir)].filter(Boolean))]
+  // maint/d23 P3: route the user dir through the resolveBackupDir twin — a non-whitelisted or
+  // relative backupDir used to be probed raw here while the App wrote to the resolved default
+  // root, so discovery missed snapshots. (The default roots already cover the fallback target.)
+  const resolvedUser = resolveCliBackupDir(userDir, lib.userDataDir())
+  const candidateDirs = [...new Set([...defaultRoots, resolvedUser].filter(Boolean))]
   const listSnapshots = root => {
     try {
       return fs.existsSync(root)
@@ -126,3 +157,7 @@ module.exports = function restoreBackup ({ opts, lib, emit }) {
   console.log('To restore: open the App -> Settings -> Backup -> Restore from snapshot, and select this file.')
   return
 }
+
+// Attached AFTER the function assignment (a property set before it would be lost when
+// module.exports is replaced). Consumed by cli/lib.js (evt-snapshot dir) and this module's discovery.
+module.exports.resolveBackupDir = resolveCliBackupDir

@@ -88,6 +88,10 @@ test('F15: discovery lists snapshots from the user-chosen settings.backupDir', (
   const userDir = isolatedTmpDir('dw6-user-backupdir-')
   try {
     fs.writeFileSync(path.join(userDir, 'auto-20260924-120000.json'), realDump({ todos: 1, cats: 0 }))
+    // maint/d23: discovery routes through resolveBackupDir semantics — only dialog-registered
+    // dirs are honored, so register userDir the same way the App's pick-backup-dir dialog
+    // persists its choice (userData/allowed-backup-dirs.json).
+    fs.writeFileSync(path.join(process.env.TODO_DB_DIR, 'allowed-backup-dirs.json'), JSON.stringify([userDir]))
     // Point settings.backupDir at it (blob only; settings_rows overlay absent → doc = blob)
     dbm.call('setMeta', ['db.settingsState', JSON.stringify({ schemaV: 1, backupDir: userDir })])
     const out = runCli(['restore-backup', '--json'])

@@ -52,9 +52,11 @@ test('[F2] createAt and the container keydown proxy both carry the tbCreate-styl
   // createAt: .then chain ends with a .catch (return keeps the promise chain for callers)
   assert.match(src, /createAt \(ts\) \{[\s\S]*?\.catch\(e => \{ console\.error\('\[calendar\] createAt addTodo failed:', e\); this\.\$message\.error\(this\.\$t\('statsD\.QuickAdd\.createFailed'\)\) \}\)/,
     'createAt addTodo failure shows the createFailed toast')
-  // mounted() container keydown proxy: same guard
-  assert.match(src, /todoDate: \+dayjs\(cell\.dataset\.date\) \}\)[\s\S]*?\.catch\(e => \{ console\.error\('\[calendar\] cell keydown addTodo failed:', e\); this\.\$message\.error\(this\.\$t\('statsD\.QuickAdd\.createFailed'\)\) \}\)/,
-    'cell keydown addTodo failure shows the createFailed toast')
+  // [maint/d23 FIX-3b] the mounted() container keydown proxy DELEGATES to createAt (identical
+  // payload + it inherits the shared double-submit guard), so the failure toast contract is
+  // carried by createAt on its behalf
+  assert.match(src, /this\.createAt\(\+dayjs\(cell\.dataset\.date\)\)/,
+    'cell keydown delegates to createAt, which owns the createFailed toast')
 })
 
 test('[F2] createAt behavior: rejected addTodo surfaces $message.error and does not reject unhandled', async () => {

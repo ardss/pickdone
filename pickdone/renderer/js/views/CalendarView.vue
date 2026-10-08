@@ -190,13 +190,20 @@ export default {
     taskContextMenu (t, e) { taskContextMenu(this, t, e) },
     wd (d) { return this.$t('statsJ.CalendarView.wd' + ((d + 6) % 7)) },
     /** 直接在该日创建「未命名」事件并打开编辑(格子角标 + / 键盘 Enter 共用) */
+    /* [maint/d23 FIX-3b] shared double-submit guard across all three inline-create paths
+       (createAt / tbCreate / the container keydown proxy, which now delegates to createAt):
+       a double click / double Enter used to mint multiple empty tasks while markInlineCreate
+       only ever stored ONE id — every orphan became a permanent "(untitled)" row. */
     createAt (ts) {
+      if (this._createBusy) return Promise.resolve(null)
+      this._createBusy = true
       // D6-F1: mark the panel task as inline-created so an empty close (Esc/outside click) cleans it up
       // [A9 fix] IPC failure must surface a toast instead of dying as a silent no-op
       // (same guard as the sibling tbCreate inline-create path)
       return this.$store.dispatch('todo/addTodo', { todoContent: '', todoDate: ts })
         .then(t => { this.$store.commit('ui/openEdit', t); this.$store.commit('ui/markInlineCreate', t && t.taskId) })
         .catch(e => { console.error('[calendar] createAt addTodo failed:', e); this.$message.error(this.$t('statsD.QuickAdd.createFailed')) })
+        .finally(() => { this._createBusy = false })
     },
     catColor (t) {
       const c = this.$store.getters['category/byId'](t.categoryId)
@@ -330,6 +337,9 @@ export default {
       })
     },
     tbCreate (dayTs, hour) {
+      // [maint/d23 FIX-3b] same shared double-submit guard as createAt (see its comment)
+      if (this._createBusy) return
+      this._createBusy = true
       const ts = dayTs + hour * 3600000
       // D6-F1: same inline-create marking as createAt
       this.$store.dispatch('todo/addTodo', { todoContent: '', todoDate: dayTs, todoTime: ts })
@@ -337,6 +347,7 @@ export default {
       // [A9 fix] IPC failure must surface a toast instead of dying as an unhandled rejection
       // (same guard as the QuickAdd inline-create path)
         .catch(e => { console.error('[calendar] tbCreate addTodo failed:', e); this.$message.error(this.$t('statsD.QuickAdd.createFailed')) })
+        .finally(() => { this._createBusy = false })
     },
     nav (dir) {
       if (this.view === 'timeblock') {
@@ -365,7 +376,13 @@ export default {
       this.popYear = d.year()
       this.monthPop = true
     },
-    popNav (dir) { this.popYear += dir },
+    // [maint/d23 FIX-3b] clamp to currentYear±20 (mirrors HabitView's CAL_MIN_OFFSET precedent):
+    // the unbounded popYear could reach year 1, where the month grid blanks out
+    popNav (dir) {
+      const min = this.thisYear - 20
+      const max = this.thisYear + 20
+      this.popYear = Math.min(Math.max(this.popYear + dir, min), max)
+    },
     pickMonth (m) {
       this.monthPop = false
       if (this.cal) this.cal.gotoDate(`${this.popYear}-${String(m).padStart(2, '0')}-01`)
@@ -428,12 +445,9 @@ export default {
       const cell = e.target.closest && e.target.closest('.fc-daygrid-day')
       if (!cell || !cell.dataset.date) return
       e.preventDefault()
-      // D6-F1: same inline-create marking as createAt
-      this.$store.dispatch('todo/addTodo', { todoContent: '', todoDate: +dayjs(cell.dataset.date) })
-        .then(t => { this.$store.commit('ui/openEdit', t); this.$store.commit('ui/markInlineCreate', t && t.taskId) })
-      // [A9 fix] IPC failure must surface a toast instead of dying as a silent no-op
-      // (same guard as the sibling tbCreate inline-create path)
-        .catch(e => { console.error('[calendar] cell keydown addTodo failed:', e); this.$message.error(this.$t('statsD.QuickAdd.createFailed')) })
+      // [maint/d23 FIX-3b] delegate to createAt: identical payload, and it inherits the shared
+      // double-submit guard (double Enter used to mint duplicate orphan "(untitled)" tasks)
+      this.createAt(+dayjs(cell.dataset.date))
     }
     if (this.$refs.fcEl) this.$refs.fcEl.addEventListener('keydown', this._onKey)
     // 格子右上角展开钮:FC 动态重绘格子,事件委托到容器;挡住冒泡防触发 dateClick 建任务
