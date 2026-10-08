@@ -63,19 +63,18 @@ test('A3: same-day record is unchanged by the re-anchoring', () => {
   assert.equal(startMin, 14 * 60 + 5)
 })
 
-/* ===== A13: ARIA button pattern — Enter AND Space ===== */
+/* ===== A13: ARIA button pattern — Enter in the helper; Space owned by the main.js capture handler ===== */
 
-test('A13: roleButtonActivate fires on Enter and Space, ignores other keys', () => {
+test('A13: roleButtonActivate fires on Enter ONLY (Space moved to the main.js capture handler)', () => {
   let calls = 0
   const handler = roleButtonActivate(function () { calls++; assert.equal(this.ctxMarker, 'self') })
-  const evts = []
   const mk = key => { const e = { key, preventDefault: () => { e.pd = true } }; return e }
   const ctx = { ctxMarker: 'self' }
   handler.call(ctx, mk('Enter')); assert.equal(calls, 1)
-  handler.call(ctx, mk(' ')); assert.equal(calls, 2)
-  assert.equal(evts.length, 0)
+  // [maint/d26] Space in the helper canceled the capture handler's click() (double-toggle net zero)
+  handler.call(ctx, mk(' ')); assert.equal(calls, 1, 'Space must NOT activate in the helper')
   for (const k of ['a', 'Escape', 'Tab', 'ArrowDown']) handler.call(ctx, mk(k))
-  assert.equal(calls, 2, 'no activation for non-activation keys')
+  assert.equal(calls, 1, 'no activation for non-activation keys')
 })
 
 /* ===== Source-anchor locks (template-level fixes) ===== */

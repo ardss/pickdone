@@ -66,8 +66,7 @@ export function buildCalendarOptions (self, initialDateTs) {
       if (!origTs || ts === origTs) return
       const raw = self.taskById.get(info.event.id)
       if (!raw) return
-      const startOf = x => +dayjs(x).startOf('day')
-      const patch = crossDayMovePatch(raw, ts, startOf)
+      const patch = crossDayMovePatch(raw, ts, dayStart)
       // Day-grid drop targets the day, not an hour: a pure midnight marker stays a marker via
       // crossDayMovePatch; anything without an old-day-anchored todoTime still lands on the day.
       if (patch.todoTime === undefined) patch.todoTime = ts
@@ -117,12 +116,24 @@ export function buildCalendarOptions (self, initialDateTs) {
         const t = self.taskById.get(self._dragInfo.taskId)
         if (t && t.dayStart) {
           const ts = +dayjs(t.dayStart).add(auto > 0 ? 1 : -1, 'month').startOf('day')
-          const origTs = t.todoTime
+          // [P2 2026-10-08] This used to dispatch a bare `patch: { todoTime: ts }` — ts is local
+          // midnight, so a 14:30 schedule silently became all-day AND its reminderTime/extra
+          // stayed anchored to the OLD month (the exact orphan class crossDayMovePatch exists to
+          // prevent; the eventDrop path already routes through it). Same invariant as eventDrop:
+          // time-of-day and old-day-anchored reminders follow the move.
+          const patch = crossDayMovePatch(t, ts, dayStart)
+          // Edge-flip targets the day, not an hour: a task without an old-day-anchored todoTime
+          // still lands on the new day (same fallback rule as eventDrop).
+          if (patch.todoTime === undefined) patch.todoTime = ts
+          const revert = crossDayRevertPatch(t, patch)
           // Part of the drag gesture, but a whole-month silent shift is too easy to miss: same moveWithUndo as eventDrop
           moveWithUndo(self, {
             label: self.$t('statsJ.TodoItem.movedTo', { d: dayjs(ts).format(FMT.cnDate) }),
-            apply: () => self.$store.dispatch('todo/updateTodoFields', { taskId: t.taskId, patch: { todoTime: ts } }),
-            revert: () => self.$store.dispatch('todo/updateTodoFields', { taskId: t.taskId, patch: { todoTime: origTs } })
+            apply: () => self.$store.dispatch('todo/updateTodoFields', { taskId: t.taskId, patch }),
+            revert: () => {
+              const cur = self.taskById.get(t.taskId)
+              if (cur) self.$store.dispatch('todo/updateTodoFields', { taskId: t.taskId, patch: revert })
+            }
           })
         }
       }

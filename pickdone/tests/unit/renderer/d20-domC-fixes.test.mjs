@@ -135,13 +135,16 @@ test('[A4] category.updateCategory returns persist() success; ProjectView gates 
 
 /* ---------- [A5] QuickAdd calendar keyboard surrogate ---------- */
 
-test('[A5] QuickAdd .qa-cal shell is a button-like control with Enter/Space synthesis', () => {
+test('[A5] QuickAdd .qa-cal shell is a button-like control with Enter synthesis (Space owned by capture handler)', () => {
   const src = read('renderer/js/components/QuickAdd.vue')
   assert.match(src, /class="qa-cal" role="button" tabindex="0"/)
-  assert.match(src, /@keydown\.enter\.prevent="openCal"/)
-  assert.match(src, /@keydown\.space\.prevent="openCal"/)
+  assert.match(src, /@keydown.enter.prevent="openCal"/)
+  // D27: the local Space binding was REMOVED — role-bearing elements get Space from the main.js
+  // capture handler; keeping both made openCal fire twice (popup open->instant close)
+  assert.ok(!src.includes('@keydown.space.prevent="openCal"'), 'no local Space binding (capture handler owns Space)')
   assert.match(src, /openCal \(\) \{[\s\S]*?querySelector\('input'\)[\s\S]*?inp\.click\(\)/)
 })
+
 
 /* ---------- [A6] HabitView undo snapshot ---------- */
 

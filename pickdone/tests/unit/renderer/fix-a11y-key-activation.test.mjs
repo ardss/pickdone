@@ -1,9 +1,12 @@
 /**
- * A11Y keyboard-activation helpers (maint/deep-r2 wave, 2026-10-02).
+ * A11Y keyboard-activation helpers (maint/deep-r2 wave, 2026-10-02; maint/d26 Space-contract update).
  * Unit coverage for the shared handler factories in renderer/js/utils/roleButtonKey.js:
- *   - roleButtonActivate  (A9: role=button spans accept Space AND Enter)
- *   - roleCheckboxActivate (A8: role=checkbox spans accept Space AND Enter, stop propagation)
- *   - roleRadioActivate    (A2/A6: roving-tabindex radiogroup arrows + Space/Enter)
+ *   - roleButtonActivate  (role=button spans accept Enter; Space is owned by the main.js
+ *                          document-level capture handler — see the ownership contract comment
+ *                          in roleButtonKey.js for why the helper must NOT also activate on Space)
+ *   - roleCheckboxActivate (role=checkbox spans accept Enter + stopPropagation; Space ditto)
+ *   - roleRadioActivate    (A2/A6: roving-tabindex radiogroup arrows + Space/Enter — the radio
+ *                          role is NOT covered by the main.js capture handler, so Space stays here)
  * Template migrations are locked by source-anchor assertions at the bottom.
  * Run: node --test tests/unit/renderer/fix-a11y-key-activation.test.mjs
  */
@@ -33,7 +36,7 @@ function mkKey (key) {
 
 /* ===== roleButtonActivate ===== */
 
-test('roleButtonActivate: fires on Enter and Space, honors preventDefault, ignores other keys', () => {
+test('roleButtonActivate: fires on Enter ONLY, honors preventDefault, ignores other keys', () => {
   let calls = 0
   const handler = roleButtonActivate(function () { calls++; assert.equal(this.marker, 'ctx') })
   const ctx = { marker: 'ctx' }
@@ -41,12 +44,14 @@ test('roleButtonActivate: fires on Enter and Space, honors preventDefault, ignor
   handler.call(ctx, enter)
   assert.equal(calls, 1)
   assert.equal(enter.prevented, true, 'Enter must preventDefault (default scroll/submit suppression)')
+  // [maint/d26] Space is owned by the main.js document-level capture handler (t.click()); the
+  // helper must NOT also activate, or the two toggles cancel out (double-activation regression)
   const space = mkKey(' ')
   handler.call(ctx, space)
-  assert.equal(calls, 2)
-  assert.equal(space.prevented, true)
+  assert.equal(calls, 1, 'Space must NOT activate here (main.js capture handler owns it)')
+  assert.equal(space.prevented, false, 'Space must not be consumed by the helper')
   for (const k of ['a', 'Escape', 'Tab', 'ArrowDown', 'EnterShift']) handler.call(ctx, mkKey(k))
-  assert.equal(calls, 2, 'no activation for non-activation keys')
+  assert.equal(calls, 1, 'no activation for non-activation keys')
 })
 
 test('roleButtonActivate: default does NOT stop propagation; { stop: true } does', () => {
@@ -65,25 +70,30 @@ test('roleButtonActivate: default does NOT stop propagation; { stop: true } does
 
 /* ===== roleCheckboxActivate ===== */
 
-test('roleCheckboxActivate: Space and Enter both toggle, other keys do nothing', () => {
+test('roleCheckboxActivate: Enter toggles ONLY, other keys (incl. Space) do nothing', () => {
   let calls = 0
   const handler = roleCheckboxActivate(function () { calls++; assert.equal(this.marker, 'self') })
   const ctx = { marker: 'self' }
-  handler.call(ctx, mkKey(' '))
   handler.call(ctx, mkKey('Enter'))
-  assert.equal(calls, 2, 'Space is the primary checkbox activation key alongside Enter')
+  assert.equal(calls, 1)
+  // [maint/d26] Space toggling here canceled the main.js capture handler's click() (net zero);
+  // Space stays with the capture handler, the helper handles Enter only
+  handler.call(ctx, mkKey(' '))
+  assert.equal(calls, 1, 'Space must NOT toggle here (main.js capture handler owns it)')
   for (const k of ['a', 'Escape', 'Tab', 'ArrowUp']) handler.call(ctx, mkKey(k))
-  assert.equal(calls, 2)
+  assert.equal(calls, 1)
 })
 
-test('roleCheckboxActivate: always prevents default and stops propagation (nested-in-row toggles)', () => {
+test('roleCheckboxActivate: Enter prevents default and stops propagation (nested-in-row toggles)', () => {
   const handler = roleCheckboxActivate(function () {})
-  for (const key of ['Enter', ' ']) {
-    const e = mkKey(key)
-    handler.call({}, e)
-    assert.equal(e.prevented, true, `${key === ' ' ? 'Space' : key} must not scroll the page`)
-    assert.equal(e.stopped, true, `${key === ' ' ? 'Space' : key} must not reach the wrapping row's activation`)
-  }
+  const e = mkKey('Enter')
+  handler.call({}, e)
+  assert.equal(e.prevented, true, 'Enter must be consumed')
+  assert.equal(e.stopped, true, 'Enter must not reach the wrapping row\'s activation')
+  const space = mkKey(' ')
+  handler.call({}, space)
+  assert.equal(space.prevented, false, 'Space must not be consumed by the helper')
+  assert.equal(space.stopped, false, 'Space must keep propagating (the capture handler listens on document)')
 })
 
 /* ===== roleRadioActivate ===== */

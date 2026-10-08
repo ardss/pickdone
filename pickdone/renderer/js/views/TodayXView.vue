@@ -73,6 +73,7 @@ import { getEstimate } from '../utils/tomatoEstimate.js'
 import { formatMMSS } from '../utils/tomatoShared.js'
 import { hiddenCount } from '../utils/limits.js' // [A11] "+N" chip overflow count
 import { remainingSecOfState } from '../store/tomato.js'
+import { observeDispatch } from '../utils/dispatchObserved.js' // [maint/d26] startFocus must be observed, not fire-and-forget
 import DayDateStrip from '../components/DayDateStrip.vue'
 import DayRail from '../components/DayRail.vue'
 import TodoGroups from '../components/TodoGroups.vue'
@@ -221,7 +222,13 @@ export default {
     /* Give up focus = first pop the global abandon confirm (reason can be filled in, same flow as the tomato bar/float window); previously this was wrongly wired to detach (only detaches, doesn't abandon, no confirm) */
     askGiveUp () { this.$store.commit('ui/openTomatoAbandon') },
     /* Start selected pomodoro (same semantics as the in-row tomato button in lists: click again to cancel); selecting lights up the "Now" highlight */
-    startSelected () { this.$store.dispatch('tomato/startFocus') },
+    /* [maint/d26] observed dispatch (same fix as TomatoBar.onPlayClick): a failed startFocus
+       surfaces a toast instead of idling silently */
+    startSelected () {
+      observeDispatch(this.$store, 'tomato/startFocus').catch(e => {
+        if (this.$message) this.$message.error(this.$t('statsH.main.actionFailedMsg') + ((e && e.message) || ''))
+      })
+    },
     toggleDrawer () { this.drawerOpen = !this.drawerOpen }
   },
 
