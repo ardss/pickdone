@@ -4,6 +4,7 @@
  * otherwise re-import the task list from the disaster-backup JSON (critical-state-backup.json).
  */
 const fs = require('fs')
+const { isBlankishName } = require('./blankish-name.cjs')
 const path = require('path')
 
 /** Blob format versions recognizable by the recovery path: corresponds to the schemaV written by each renderer store.
@@ -631,7 +632,7 @@ function restoreCategoriesFromCriticalBackup (raw, upsertCategory) {
       // `name=''` pollution behind the empty-category choke-point fix. Skip such rows (drop,
       // count, log) instead of writing them. Tombstones are NOT exempt here: a backup segment
       // row without a usable name carries no recoverable content to preserve.
-      if (!String(c.categoryName == null ? '' : c.categoryName).trim()) { dropped++; continue }
+      if (isBlankishName(c.categoryName)) { dropped++; continue } // D25 W1: zero-width spellings count as blank too
       try {
         const deleted = (c.deleted != null ? !!c.deleted : !!c.delete)
         upsertCategory({
@@ -711,14 +712,14 @@ function preflightMigrateResidue (ud, log) {
     if (fs.existsSync(encTmp)) {
       try {
         fs.renameSync(encTmp, encTmp + '.stale-' + new Date().toISOString().replace(/[:.]/g, '-'))
-        warn('迁移中断残留:todos-encrypted.tmp 已改名保存(不再占用正式文件名)')
+        warn('interrupted-migration residue: todos-encrypted.tmp renamed aside (no longer occupies the real filename)')
       } catch (e2) {
-        warn('todos-encrypted.tmp 改名失败(占用中,留待下次启动重试):', (e2 && e2.message) || e2)
+        warn('todos-encrypted.tmp rename failed (locked, left for next-launch retry):', (e2 && e2.message) || e2)
       }
     }
     return true
   } catch (e) {
-    warn('plain-bak 预检失败', (e && e.message) || e)
+    warn('plain-bak preflight failed', (e && e.message) || e)
     return false
   }
 }

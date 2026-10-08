@@ -238,7 +238,8 @@ module.exports = ({ open, commit, audit, CliError, resolveCategory, userDataDir,
   function cleanupEmptyCategories ({ repoint, yes } = {}) {
     const db = open()
     const all = db.call('getAllCategories')
-    const junk = all.filter(c => !c.delete && !String(c.categoryName || '').trim())
+    const { isBlankishName } = require('../src/main/blankish-name.cjs') // D25 W1: zero-width spellings count as blank too
+    const junk = all.filter(c => !c.delete && isBlankishName(c.categoryName))
     const junkIds = new Set(junk.map(c => c.categoryId))
     let targetId = 0
     let targetName = null

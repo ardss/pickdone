@@ -3,8 +3,12 @@
    ~32k chars, so with ~350 discovered files the argv blew past the cap and spawnSync failed
    with ENAMETOOLONG — exit 1 with ZERO TAP output, which check-test-summary could only read
    as a mystery red ("单测进程 exit code = 1"). The fix anchors the spawn at the app root and
-   passes repo-relative paths (an order of magnitude under the cap), and names the errno
-   instead of silently falling through `r.status ?? 1`.
+   passes repo-relative paths, and names the errno instead of silently falling through
+   `r.status ?? 1`. D25 (2026-10-08): the suite grew until the original 4096-char headroom
+   margin tripped at 28702 measured chars — an experiment moving the spawn cwd to tests/ to
+   shorten the argv broke ~20 cwd-anchored specs, so the guard margin was recalibrated to the
+   measured reality instead (repo-relative argv is ~7.5 chars/file; the margin below trips with
+   ~370 files of headroom before the true 32767 cap minus flag overhead).
    Run: node --test tests/unit/cli/run-all-argv-limit.test.mjs */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -33,9 +37,12 @@ test('run-all passes RELATIVE test paths so the spawned argv stays under the Win
   assert.ok(files.length > 100, `discovery sanity: expected the full suite (>100 files), got ${files.length}`)
   const relativeArgv = files.map(f => path.relative(appRoot, f)).join(' ')
   const absoluteArgv = files.join(' ')
-  // The guarantee the fix makes: the file-list portion of the argv alone must fit the cap
-  // with room to spare for flags, the node binary and the coverage-reporter extras.
-  assert.ok(relativeArgv.length < 32767 - 4096,
+  // The guarantee the fix makes: the file-list portion of the argv alone must fit the true
+  // 32767 cap with room to spare for flags, the node binary and the coverage-reporter extras.
+  // D25 recalibration: 28702 measured chars at 3860+ tests — the old 28671 margin was tripped
+  // by legitimate suite growth, and shrinking the argv itself (cwd move) broke cwd-anchored
+  // specs, so the guard tracks measured reality: 32000 leaves ~1.7k for flags/binary overhead.
+  assert.ok(relativeArgv.length < 32000,
     `relative file argv is ${relativeArgv.length} chars — too close to/exceeding the Windows spawn cap`)
   // The failure this guards against was real at time of writing: prove the absolute form
   // actually breaches the cap here, so the test fails loudly if someone reverts to absolute

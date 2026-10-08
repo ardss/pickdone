@@ -222,13 +222,18 @@ for (const [k, params, file] of usedCalls) {
 const MAIN_ALLOW = [/console\./, /log\.(info|warn|error)/, /broadcastTodosChanged/, /^\s*(\/\/|\*|\/\*)/, / \/\//]
 const mainHardcoded = []
 const MAIN_DIRS = [path.join(ROOT, '../../src/main'), path.join(ROOT, '../../src/preload')]
+// D25 audit fix: this scan used to be readdirSync (non-recursive) and skipped .cjs — the blankish-name
+// / lib-* extraction waves left whole subdirectories (db-*.js, *.cjs) unscanned. Walk recursively, all JS extensions.
 for (const d of MAIN_DIRS) {
   if (!fs.existsSync(d)) continue
-  for (const f of fs.readdirSync(d)) {
-    if (!f.endsWith('.js')) continue
-    const rel = path.relative(ROOT, path.join(d, f)).split(path.sep).join('/')
-    const lines = fs.readFileSync(path.join(d, f), 'utf8').split('\n')
-    lines.forEach((line, i) => {
+  const walkMain = (sub) => {
+    for (const f of fs.readdirSync(sub)) {
+      const p = path.join(sub, f)
+      if (fs.statSync(p).isDirectory()) { walkMain(p); continue }
+      if (!(f.endsWith('.js') || f.endsWith('.cjs') || f.endsWith('.mjs')) || f.endsWith('.min.js')) continue
+      const rel = path.relative(ROOT, p).split(path.sep).join('/')
+      const lines = fs.readFileSync(p, 'utf8').split('\n')
+      lines.forEach((line, i) => {
       if (!CJK.test(line)) return
       let code = line.includes(' // ') ? line.slice(0, line.indexOf(' // ')) : line
       code = code.replace(/\/\*[^*]*\*\//g, '') // inline block comment (e.g. } catch (e) { /* empty */ })
@@ -238,8 +243,10 @@ for (const d of MAIN_DIRS) {
       // Only care about copy assigned to user-visible outlets; pure comments/logs are already exempt
       if (!/(label|title|message|body|detail|buttons|setToolTip|value\s*=|c1\.value|filters)/.test(code)) return
       mainHardcoded.push(`[MAIN-HARDCODED] ${rel}:${i + 1}  ${code.trim().slice(0, 80)}`)
-    })
+      })
+    }
   }
+  walkMain(d)
 }
 
 // —— Output ——

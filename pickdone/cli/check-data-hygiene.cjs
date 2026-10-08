@@ -31,7 +31,8 @@ function collectFindings (cats, liveTasks) {
   const findings = []
   const flag = (check, detail) => findings.push({ check, detail })
 
-  const emptyNamed = cats.filter(c => !String(c.categoryName || '').trim())
+  const { isBlankishName } = require('../src/main/blankish-name.cjs') // D25 W1
+  const emptyNamed = cats.filter(c => isBlankishName(c.categoryName))
   for (const c of emptyNamed) flag('empty-category-name', `category id ${c.categoryId} has an empty/whitespace name`)
 
   const byNorm = new Map()

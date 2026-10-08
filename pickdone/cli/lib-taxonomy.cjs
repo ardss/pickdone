@@ -62,7 +62,12 @@ function runTag ({ opts, lib, emit }) {
   if (op === 'rename') {
     const [oldName, next] = rest
     if (!oldName || !next) throw new lib.CliError('usage: tag rename <old> <new>  (rewrites #old → #new across all task titles/descriptions)', 'USAGE')
-    const touched = lib.rewriteTag(String(oldName).replace(/^#/, ''), String(next).replace(/^#/, ''))
+    const oldTag = String(oldName).replace(/^#/, '').trim()
+    const nextTag = String(next).replace(/^#/, '').trim()
+    if (!oldTag) throw new lib.CliError('usage: tag rename <old> <new>', 'USAGE')
+    // D25 W2: an empty/whitespace new name used to leak a bare "# " fragment into task text; strip cleanly instead
+    if (!nextTag) return lib.rewriteTag(oldTag, null, { remove: true })
+    const touched = lib.rewriteTag(oldTag, nextTag)
     if (opts.json) return emit({ from: oldName, to: next, tasks: touched })
     return console.log(`✓ #${String(oldName).replace(/^#/, '')} → #${String(next).replace(/^#/, '')} in ${touched} task(s)`)
   }

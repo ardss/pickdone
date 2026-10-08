@@ -4,6 +4,7 @@
  * so every caller (db.call, db-bulk-ops getOps) keeps the same surface and behavior.
  */
 const { rowToCategory } = require('./db-rows')
+const { isBlankishName } = require('./blankish-name.cjs')
 
 exports.upsertCategory = (db, c) => {
   const now = Date.now()
@@ -38,11 +39,13 @@ exports.upsertCategory = (db, c) => {
   // Tombstones are exempt from (a)/(b): an inbound sync tombstone may legitimately arrive with
   // stripped fields and must still land (gate on !deleted).
   const trimmedName = (c && c.name != null) ? String(c.name).trim() : ''
-  if (!cur && !deleted && !trimmedName) return false
+  // D25 W1: zero-width spellings ('\u200B') count as blank too — trim() alone let them through.
+  const blankName = !trimmedName || isBlankishName(c && c.name)
+  if (!cur && !deleted && blankName) return false
   const row = {
     id: c && c.id,
     userId: c && c.userId,
-    name: (!deleted && !trimmedName && cur) ? cur.name : (c && c.name),
+    name: (!deleted && blankName && cur) ? cur.name : (c && c.name),
     color: !(c && c.color) && cur ? cur.color : (c && c.color),
     createdAt: !(c && c.createdAt) && cur ? cur.createdAt : (c && c.createdAt),
     sort: c && c.sort,
