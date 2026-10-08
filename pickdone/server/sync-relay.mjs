@@ -238,14 +238,14 @@ export function createRelay(store) {
         if (!page.length) break
         for (const e of page) {
           const size = Buffer.byteLength(e.envelopeJson)
-          if (bytes + size > maxBytes) return { fromSeq: afterSeq + 1, toSeq: items.length ? items[items.length - 1].serverSeq : afterSeq, items }
+          if (bytes + size > maxBytes) return { fromSeq: afterSeq + 1, toSeq: items.length ? items[items.length - 1].serverSeq : afterSeq, headSeq: store.lastSeq(), items }
           items.push({ serverSeq: e.serverSeq, envelope: e.envelopeJson })
           bytes += size
         }
         if (page.length < 500) break
         cursor = page[page.length - 1].serverSeq
       }
-      return { fromSeq: afterSeq + 1, toSeq: items.length ? items[items.length - 1].serverSeq : afterSeq, items }
+      return { fromSeq: afterSeq + 1, toSeq: items.length ? items[items.length - 1].serverSeq : afterSeq, headSeq: store.lastSeq(), items }
     },
     ack(account, deviceId, ackSeq) {
       const dev = store.getDevice(account, deviceId)

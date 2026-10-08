@@ -35,10 +35,35 @@ export function createRelayClient({ nodeId, account, baseUrl, fetchImpl = fetch,
   // first pull) — the auth feature was shipped server-only.
   let deviceSecret = null
 
-  async function post(path, body) {
+  // register logic hoisted to a closure so post()'s 401-recovery can share it (D25 drill-2)
+  async function doRegister() {
+    const res = await post('/v1/device/register', { account, device: nodeId })
+    const secret = res && res.device && res.device.deviceSecret
+    if (typeof secret === 'string' && secret) {
+      deviceSecret = secret
+      // D25 drill-2: re-registration only happens when the relay lost its device registry —
+      // i.e. its whole store (seq included) may have restarted. A cursor/pushed-set minted
+      // against the OLD store would suppress re-push (everything looks acked) and skip pulls
+      // (cursor above the new head): the silent-loss drill scenario. Reset both so the next
+      // round re-pushes every revision and re-pulls from 0 — replays are duplicates/ignored,
+      // and LWW makes the convergence safe.
+      cursorState.cursor = 0
+      cursorState.pushed.clear()
+    }
+    return res
+  }
+
+  async function post(path, body, retried = false) {
     const headers = { 'content-type': 'application/json' }
     if (deviceSecret) headers.authorization = `Bearer ${deviceSecret}`
     const res = await fetchImpl(baseUrl + path, { method: 'POST', body: JSON.stringify(body), headers })
+    if (res.status === 401 && !retried && path !== '/v1/device/register') {
+      // D25 drill-2: a relay that rebooted from torn state wiped its device registry — every
+      // data route 401s forever until re-registration. One bounded re-auth + retry through the
+      // same register() that also resets the stale cursor/pushed-set (see register()).
+      await doRegister()
+      return post(path, body, true)
+    }
     if (!res.ok) throw new Error(`relay ${path} -> ${res.status}`)
     return res.json()
   }
@@ -67,6 +92,17 @@ export function createRelayClient({ nodeId, account, baseUrl, fetchImpl = fetch,
       // push failure orphan the revisions forever (never re-pushed, silent divergence)
       if (items.length) { await post('/v1/sync/push', { account, device: nodeId, items }); for (const id of batch) cursorState.pushed.add(id) }
       const pull = await post('/v1/sync/pull', { account, afterSeq: cursorState.cursor })
+      // D25 drill-2 (torn relay-state quarantine reboot): the relay's seq restarts at 1 while a
+      // client's durable cursor sits above the new head — that client pulls nothing forever and
+      // fresh writes silently never reach peers. headSeq (relay's live max seq) below the local
+      // cursor is the fingerprint of a lost relay store: reset the local sync state (cursor and
+      // pushed-set) and bail; the next round re-pushes every revision and re-pulls from 0 —
+      // applyEnvelope treats the replays as duplicates/ignored, so convergence is LWW-safe.
+      if (Number.isFinite(pull.headSeq) && pull.headSeq < cursorState.cursor) {
+        cursorState.cursor = 0
+        cursorState.pushed.clear()
+        return { pushed: 0, pulled: pull.items.length, quarantined: 0, cursor: 0, regressionReset: true }
+      }
       let applied = cursorState.cursor
       let quarantined = 0
       for (const item of pull.items) {
@@ -92,12 +128,7 @@ export function createRelayClient({ nodeId, account, baseUrl, fetchImpl = fetch,
       if (applied > 0) ackInfo = await post('/v1/sync/ack', { account, device: nodeId, ackSeq: applied })
       return { pushed: items.length, pulled: pull.items.length, quarantined, cursor: cursorState.cursor, ack: ackInfo }
     },
-    async register() {
-      const res = await post('/v1/device/register', { account, device: nodeId })
-      const secret = res && res.device && res.device.deviceSecret
-      if (typeof secret === 'string' && secret) deviceSecret = secret
-      return res
-    },
+    register: doRegister,
     materialized() { return materializedAll(s) },
 
     /**
