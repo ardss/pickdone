@@ -510,7 +510,10 @@
       case 'syncGetStatus': {
         let on = false
         try { on = localStorage.getItem('appBrowserShim.syncEnabled') === '1' } catch {}
-        return { enabled: on, deviceId: 'browser-shim', deviceName: '浏览器调试设备', listening: on, port: on ? 58471 : 0, peers: [], lastRoundAt: 0, lastError: null }
+        // 模拟对端:LS 里放 JSON 数组即可在 5175 审查设备卡片的全部状态(待同步/错误/未配对等)
+        let peers = []
+        try { peers = JSON.parse(localStorage.getItem('appBrowserShim.syncPeers') || '[]') || [] } catch {}
+        return { enabled: on, deviceId: 'browser-shim', deviceName: '浏览器调试设备', listening: on, port: on ? 58471 : 0, peers, lastRoundAt: on ? Date.now() - 65_000 : 0, lastError: null }
       }
       case 'syncPairRequest':
         // D2 drill support: record exactly what the renderer parsed and dial "main" — a

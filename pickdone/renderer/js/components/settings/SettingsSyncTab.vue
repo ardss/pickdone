@@ -7,12 +7,10 @@
          gates this component with v-if on local tab state, so the default settings DOM (visual
          baseline) is pixel-identical. A leading comment BEFORE the root div would make the component
          root a Fragment and Vue could not apply the parent's v-show directive. -->
+    <!-- free-forever tip lives on the section header line: a dedicated empty-label .form card
+         rendered as a near-blank box (user feedback: page reads as clutter) -->
     <div class="form">
-      <div class="form-item"><span class="form-item__label"></span>
-        <div class="form-item__control"><span class="tip sync-free-tip">{{ $t('sync.freeForever') }}</span></div></div>
-    </div>
-    <div class="form">
-      <div class="form-label">{{ $t('sync.section') }}</div>
+      <div class="form-label sync-section-head">{{ $t('sync.section') }}<span class="tip sync-free-tip">{{ $t('sync.freeForever') }}</span></div>
       <div class="form-item"><span class="form-item__label">{{ $t('sync.enableLabel') }}</span>
         <div class="form-item__control">
           <el-switch :model-value="enabled" :disabled="busy" @change="onToggle"/>
@@ -33,7 +31,7 @@
           <span class="sync-dot sync-dot--ok" :aria-label="$t('sync.onlineTip')"></span>
           <span class="sync-device-name">{{ selfName }}</span>
           <span class="tip sync-device-meta">{{ $t('sync.thisDevice') }}</span>
-          <span class="tip sync-device-meta">{{ $t('sync.deviceIdShort', { id: shortId }) }} · {{ $t('sync.portLabel') }} {{ port }}</span>
+          <span class="tip sync-device-meta" :title="String(selfInfo.deviceId || deviceId || '')">{{ $t('sync.deviceIdShort', { id: shortId }) }} · {{ $t('sync.portLabel') }} {{ port }}</span>
         </div>
         <div v-for="p in peers" :key="p.deviceId" class="sync-device-card" :data-device-id="p.deviceId">
           <span class="sync-dot" :class="dotClass(p)" :title="dotTip(p)" :aria-label="dotTip(p)"></span>
@@ -79,10 +77,11 @@
          Defensive: if the main process does not expose the ops yet (agent X not merged), the whole
          section stays hidden. -->
     <div class="form" v-if="conflictBackups !== null">
-      <div class="form-item"><span class="form-item__label"></span>
-        <div class="form-item__control">
-          <button class="mini sync-collapse-toggle" @click="conflictOpen = !conflictOpen">{{ conflictOpen ? '▾' : '▸' }} {{ $t('sync.conflictSection') }} ({{ conflictBackups.length }})</button>
-        </div></div>
+      <div class="sync-collapse-head">
+        <button class="sync-collapse-toggle" @click="conflictOpen = !conflictOpen">
+          <span>{{ $t('sync.conflictSection') }} ({{ conflictBackups.length }})</span><span class="sync-collapse-caret">{{ conflictOpen ? '▾' : '▸' }}</span>
+        </button>
+      </div>
       <div v-if="conflictOpen" class="sync-conflict-list">
         <div class="tip" v-if="!conflictBackups.length">{{ $t('sync.conflictEmpty') }}</div>
         <div v-for="b in conflictBackups" :key="b.key" class="sync-conflict-item">
@@ -99,10 +98,11 @@
          count + op names + last error; the re-apply action is a registered follow-up. Hidden
          entirely when main does not expose status.flushQuarantine (older main / CLI test host). -->
     <div class="form" v-if="enabled && flushQuarantine.length">
-      <div class="form-item"><span class="form-item__label"></span>
-        <div class="form-item__control">
-          <button class="mini sync-collapse-toggle" @click="quarantineOpen = !quarantineOpen">{{ quarantineOpen ? '▾' : '▸' }} {{ $t('sync.quarantineSection') }} ({{ quarantineCount }})</button>
-        </div></div>
+      <div class="sync-collapse-head">
+        <button class="sync-collapse-toggle" @click="quarantineOpen = !quarantineOpen">
+          <span>{{ $t('sync.quarantineSection') }} ({{ quarantineCount }})</span><span class="sync-collapse-caret">{{ quarantineOpen ? '▾' : '▸' }}</span>
+        </button>
+      </div>
       <div v-if="quarantineOpen" class="sync-conflict-list">
         <div v-for="q in flushQuarantine" :key="q.key" class="sync-conflict-item">
           <span class="tip sync-conflict-key">{{ q.op }}</span>
@@ -117,17 +117,19 @@
     <!-- Outbound pairing: add device by host -->
     <div class="form" v-if="enabled">
       <div class="form-label">{{ $t('sync.addDeviceLabel') }}</div>
-      <div class="form-item"><span class="form-item__label">{{ $t('sync.addPeerLabel') }}</span>
+      <div class="form-item sync-addpeer-row"><span class="form-item__label">{{ $t('sync.addPeerLabel') }}</span>
         <div class="form-item__control">
           <el-input size="small" class="ctl-sm" :placeholder="$t('sync.addPeerHostPh')" :aria-label="$t('sync.addPeerLabel')" v-model="connectHost"/>
           <button class="mini" :class="{ 'sync-connecting': connecting }" :disabled="busy || connecting || !connectHost" @click="connectPeer">{{ $t('sync.connectBtn') }}</button>
           <span class="tip" v-if="connecting">{{ $t('sync.pairWaiting') }}</span>
-          <span class="tip" v-else>{{ $t('sync.addPeerTip') }}</span>
         </div></div>
-      <div class="form-item"><span class="form-item__label"></span>
-        <div class="form-item__control">
-          <button class="mini sync-collapse-toggle" @click="manualOpen = !manualOpen">{{ manualOpen ? '▾' : '▸' }} {{ $t('sync.manualPairLabel') }}</button>
-        </div></div>
+      <!-- helper hint on its own line: inline next to the button it squeezed the input to ~90px -->
+      <div class="tip sync-addpeer-tip" v-if="!connecting">{{ $t('sync.addPeerTip') }}</div>
+      <div class="sync-collapse-head">
+        <button class="sync-collapse-toggle" @click="manualOpen = !manualOpen">
+          <span>{{ $t('sync.manualPairLabel') }}</span><span class="sync-collapse-caret">{{ manualOpen ? '▾' : '▸' }}</span>
+        </button>
+      </div>
       <div v-if="manualOpen">
         <div class="form-item"><span class="form-item__label">{{ $t('sync.pairingLabel') }}</span>
           <div class="form-item__control">
@@ -148,8 +150,10 @@
 
     <!-- Activity feed -->
     <div class="form" v-if="enabled">
-      <div class="form-label">
-        <button class="mini sync-collapse-toggle" @click="feedOpen = !feedOpen">{{ feedOpen ? '▾' : '▸' }} {{ $t('sync.activitySection') }}</button>
+      <div class="sync-collapse-head">
+        <button class="sync-collapse-toggle" @click="feedOpen = !feedOpen">
+          <span>{{ $t('sync.activitySection') }}</span><span class="sync-collapse-caret">{{ feedOpen ? '▾' : '▸' }}</span>
+        </button>
       </div>
       <div class="sync-feed" v-if="feedOpen">
         <div class="tip" v-if="!feedDisplay.length">{{ $t('sync.feedEmpty') }}</div>
@@ -767,13 +771,22 @@ export default {
 </script>
 
 <style>
-.sync-free-tip { color: var(--brand, #008d8e); font-weight: 500; }
+.sync-free-tip { color: var(--text-3); font-weight: 400; margin-left: 10px; }
+.sync-section-head { display: flex; align-items: baseline; }
 .sync-devices { display: flex; flex-direction: column; gap: 6px; width: 100%; }
 .sync-device-card { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 10px;
   background: var(--hover-bg); border-radius: 6px; }
 .sync-device-card--self { border: 1px solid var(--brand); }
 .sync-device-name { color: var(--text-0); font-weight: 500; }
 .sync-device-meta { color: var(--text-2); }
+/* collapse sections read as one intentional header row (title left, caret right, full-width
+   click target) instead of a near-blank card with a tiny caret (user feedback: clutter) */
+.sync-collapse-head { display: flex; margin: 2px 0; }
+.sync-collapse-toggle { flex: 1; display: flex; align-items: center; justify-content: space-between;
+  background: none; border: none; cursor: pointer; color: var(--text-0); padding: 6px 2px;
+  font-size: var(--fs-base, 14px); }
+.sync-collapse-toggle:hover { color: var(--brand); }
+.sync-collapse-caret { color: var(--text-3); font-size: 12px; }
 .sync-device-error { color: var(--danger, var(--text-2)); width: 100%; }
 .sync-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--text-3); }
 .sync-dot--ok { background: var(--success, var(--brand)); }
@@ -800,7 +813,9 @@ export default {
 .sync-connecting { opacity: 0.6; cursor: wait; }
 .sync-feed-hint { color: var(--text-3); }
 .sync-pair-expired { color: var(--danger, var(--text-2)); }
-.sync-unpair-btn { color: var(--danger, var(--text-2)); }
+/* destructive action anchored right so the card scans name → meta → action */
+.sync-unpair-btn { color: var(--danger, var(--text-2)); margin-left: auto; }
+.sync-addpeer-tip { margin: -8px 0 6px; }
 .sync-alias-btn { background: none; border: none; cursor: pointer; color: var(--text-3); padding: 0 2px; }
 .sync-alias-btn:hover { color: var(--brand); }
 .sync-alias-input { width: 160px; }
