@@ -15,7 +15,12 @@ const { memoryStore, createRelay, startRelayServer } = await import(pathToFileUR
 
 const register = (url, account, enrollment, header) => fetch(url + '/v1/device/register', {
   method: 'POST',
-  headers: { 'content-type': 'application/json', ...(header ? { 'x-enrollment': header } : {}) },
+  // Connection: close (2026-10-10 R2b): undici's pooled keep-alive teardown hits a libuv
+  // assertion (`!(handle->flags & UV_HANDLE_CLOSING)`, src/win/async.c) when the server
+  // closes under concurrent suite load — a native 0xC0000409 process abort that failed
+  // ~half of all full-suite runs. Per-request sockets drain and close server-side, no
+  // pooling, so the crash class (and the closeAllConnections workaround) disappears.
+  headers: { 'content-type': 'application/json', connection: 'close', ...(header ? { 'x-enrollment': header } : {}) },
   body: JSON.stringify({ account, device: 'dev-guard', ...(enrollment ? { enrollment } : {}) }),
 })
 
@@ -61,8 +66,8 @@ async function boot ({ enrollment }) {
   return { server, url: `http://127.0.0.1:${port}` }
 }
 async function shutdown (server) {
-  // kill keep-alive sockets FIRST: undici's pooled fetch connections hold server.close()
-  // open forever otherwise (the d26 libuv lesson, undici flavor)
+  // with connection:close requests the server drains naturally; the belt-and-suspenders
+  // socket kill stays for any stray keep-alive (see the register() note on the libuv crash)
   if (server.closeAllConnections) server.closeAllConnections()
   await new Promise(r => server.close(r))
 }

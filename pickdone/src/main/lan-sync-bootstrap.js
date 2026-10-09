@@ -1,6 +1,7 @@
 /* P3a LAN sync bootstrap (2026-09-16, docs/sync/同步整体方案-2026-09-15.md §9).
  * Extracted from index.js for the size ratchet: index.js keeps one thin require+call after db init. * * Responsibilities: *   - Device identity: deviceId (UUID, persisted in settings_rows 'sync.deviceId' on first run),
- *     deviceName (default os.hostname(), user-renamable), pairingSecret (32-byte hex, generated on
+ *     deviceName (default 'PickDone-<id4>', user-renamable — NOT os.hostname(): the name is
+ *     advertised pre-auth on the LAN), pairingSecret (32-byte hex, generated on
  *     FIRST ENABLE only — never auto-enable; the app must boot with sync off by default).
  *   - Engine adapter: implements the shared/sync-core engine.mjs localStore contract against the
  *     db.call() surface (syncOplogSince cursor reads + per-entity hydration; application through
@@ -24,7 +25,6 @@
  *     the round protocol never sends snapshot-request in P3a; a true destructive reset is deferred.
  */
 const { randomUUID, timingSafeEqual } = require('node:crypto')
-const os = require('node:os')
 const log = require('electron-log')
 require('./log-isolation') // test isolation: redirect electron-log file transport into TODO_DB_DIR/TODO_USER_DATA_DIR
 const { createEngine } = require('../../shared/sync-core/engine.mjs')
@@ -85,7 +85,8 @@ function ensureIdentity () {
   try { require('./db-rows').setSyncAuthor(deviceId) } catch { /* stamping is best-effort */ }
   let deviceName = settingGet(K_DEVICE_NAME)
   if (!deviceName || typeof deviceName !== 'string' || !deviceName.trim()) {
-    deviceName = os.hostname() || 'pickdone-device'
+    // 2026-10-10 (CTO sweep B#7): NOT os.hostname() — the name is advertised pre-auth via mDNS/UDP to the whole LAN; an opaque PickDone-<id4> leaks nothing and users rename it in Device Center anyway.
+    deviceName = 'PickDone-' + String(deviceId).slice(0, 4)
     settingPut(K_DEVICE_NAME, deviceName)
   }
   return { deviceId, deviceName }

@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url'
 
 if (process.env.CSS_FREEZE_OFF === '1') { console.log('  (css-freeze) CSS_FREEZE_OFF=1 跳过本次'); process.exit(0) }
 
-const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
+const ROOT = process.env.GATE_ROOT || path.join(path.dirname(fileURLToPath(import.meta.url)), '..') // GATE_ROOT: golden-fixture self-tests point the gate at a temp tree
 const FILES = ['theme-dark.css'].map(f => 'pickdone/assets/css/' + f)
 
 const ruleCount = css => (css.replace(/\/\*[\s\S]*?\*\//g, '').match(/\{/g) || []).length

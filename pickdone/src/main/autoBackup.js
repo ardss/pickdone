@@ -85,4 +85,20 @@ function selectStaleTmp (entries, { now = Date.now(), maxAgeMs = 60 * 60 * 1000 
     .map(e => e.name)
 }
 
-module.exports = { selectPrunes, selectStaleTmp, nameToTs, RE_AUTO, RE_EVT }
+/** Retention floor for renderer-supplied tier numbers (2026-10-10 backup audit): the `= default`
+ *  destructure in selectPrunes only fires on ABSENT fields — a caller passing {recent:0} (renderer
+ *  bug or hostile IPC) used to classify the ENTIRE snapshot dir as prunable in one pass. Retention
+ *  is trust-boundary input: applied at the IPC handler door. Only the COUNTING tiers (recent,
+ *  eventKeep) floor at 1 — dailyDays/weeklyWeeks 0 legitimately disables those anchor tiers, and
+ *  "keep the newest 1 recent" alone already makes a full wipe impossible. */
+function floorRetention (o) {
+  for (const k of ['recent', 'eventKeep']) {
+    if (o[k] != null) o[k] = Math.max(1, Number(o[k]) || 0)
+  }
+  for (const k of ['dailyDays', 'weeklyWeeks']) {
+    if (o[k] != null) o[k] = Math.max(0, Number(o[k]) || 0)
+  }
+  return o
+}
+
+module.exports = { selectPrunes, selectStaleTmp, nameToTs, floorRetention, RE_AUTO, RE_EVT }

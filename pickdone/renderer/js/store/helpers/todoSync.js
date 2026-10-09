@@ -76,7 +76,14 @@ export async function syncTodosCore ({ state, commit, dispatch }) {
     // [Fault-2] the new batch supersedes any older queued batch copies (same version retries queue
     // twice otherwise, and an older-version copy would replay doomed forever)
     if (!staleBatch && snapshot.length) {
-      try { supersedePendingBatch(serverV); queuePendingUpsert({ op: 'commitSyncBatch', params: { rows: deproxyRows(snapshot), version: serverV } }) } catch { /* keep the UI flow alive */ }
+      try { supersedePendingBatch(serverV); queuePendingUpsert({ op: 'commitSyncBatch', params: { rows: deproxyRows(snapshot), version: serverV } }) } catch (queueErr) {
+        // R7 sweep (2026-10-10): a failed compensation enqueue (localStorage quota/private mode) used
+        // to be fully silent — rows stayed dirty in memory only, and a quit before the next periodic
+        // sync lost them with no trace beyond a devtools line. Escalate through the same channel the
+        // outer failure uses so the failure is user-visible, while keeping the UI flow alive.
+        console.error('[todoSync] quit-flush compensation enqueue failed — unsynced rows at risk:', queueErr)
+        try { reportError('syncTodos', queueErr) } catch { /* surface is best-effort */ }
+      }
     }
   } finally {
     commit('setSyncing', false)

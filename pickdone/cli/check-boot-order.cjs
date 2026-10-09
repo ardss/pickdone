@@ -25,7 +25,7 @@ const fs = require('fs')
 const path = require('path')
 const acorn = require('acorn')
 
-const ROOT = path.join(__dirname, '..')
+const ROOT = process.env.GATE_ROOT || path.join(__dirname, '..') // GATE_ROOT: golden-fixture self-tests point the gate at a temp tree
 const TARGET = path.join(ROOT, 'src', 'main')
 
 // shared walker (lib-filescan.cjs): skip-list now includes renderer-dist like the other gates

@@ -104,7 +104,15 @@ function createExternalDbWatch (deps) {
           try { lastSettingsSavedAt = Number(dbm.call('settingsRowsMaxUpdated')) || 0 } catch { /* legacy lib: watermark stays 0 */ }
         }
       }
-    } catch {}
+    } catch {
+      // Same zero-baseline hazard as the corrupt-blob branch above (2026-10-10 R7 sweep): a thrown
+      // getMeta at boot (DB busy/closed init race) silently yielded baseline 0 — the first valid
+      // read then classified every pre-boot settings row as new and hot-applied a full-settings
+      // broadcast over not-yet-persisted local edits. Mirror the corrupt-blob contract: seed from
+      // the field-write truth and mark poisoned.
+      settingsSeedPoisoned = true
+      try { lastSettingsSavedAt = Number(dbm.call('settingsRowsMaxUpdated')) || 0 } catch { /* legacy lib: watermark stays 0 */ }
+    }
     let debounce = null
     // CLI sync command channel (feat/cli-sync-pair): same polling surface as cliTomatoCmd — the CLI
     // writes meta cliSyncCmd, we dispatch into db-sync-ops (the Device Center's own registry) and
@@ -274,10 +282,21 @@ function createExternalDbWatch (deps) {
           forwardTomatoCmd(); forwardSyncCmd(); return
         }
         if (m === lastMtime) { forwardTomatoCmd(); forwardSyncCmd(); return } // check commands even when mtime is unchanged (guards against watchFile dropping events)
-        lastMtime = m
-        kick()
-        forwardTomatoCmd()
-        forwardSyncCmd()
+        // R7 sweep (2026-10-10): the baseline must NOT advance past a change whose forwarding
+        // failed — the old `lastMtime = m` before kick/forwards let any throw here CONSUME the
+        // external write (next poll sees m === lastMtime and returns: silent missed change, no
+        // log). Roll the baseline back on failure so the next tick re-processes; kick()'s own
+        // internal re-baseline still absorbs the self-write echo on the success path.
+        const prevMtime = lastMtime
+        try {
+          lastMtime = m
+          kick()
+          forwardTomatoCmd()
+          forwardSyncCmd()
+        } catch (e) {
+          lastMtime = prevMtime
+          try { log.warn('[TodoDB] 外部写轮询处理失败,基线已回滚待下轮重处理:', e && e.message) } catch { /* logging must never throw */ }
+        }
       } catch {}
     }
     fs.watchFile(dbFile, { interval: 500 }, onChange)

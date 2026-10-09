@@ -187,6 +187,10 @@ module.exports = function backupHandlers (ctx) {
       assertIngressSize(jsonText, 'run-auto-backup')
       try {
         const o = typeof opts === 'number' ? { recent: opts } : (opts || {})
+        // Retention floor at the trust boundary (2026-10-10 backup audit — see autoBackup.floorRetention):
+        // a renderer bug / hostile call with {recent:0,dailyDays:0,...} used to classify the ENTIRE
+        // snapshot dir as prunable in one pass.
+        autoBackup.floorRetention(o)
         const dir = resolveBackupDir(o.backupDir)
         fs.mkdirSync(dir, { recursive: true })
         const d = new Date()
