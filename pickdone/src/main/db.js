@@ -57,7 +57,11 @@ function stmtsClearAll () { for (const k of Object.keys(stmts)) delete stmts[k];
 
 /** Database encryption key (stored at userData/db.key, same directory as the DB so it travels with migrations).
  *  Threat model: prevents the single todos.db file from being read directly by sync drives/copies/forensic tools;
- *  the key lives on the same machine, so scenarios where "the entire userData is readable" are not covered (stronger protection would need DPAPI; evaluate post-release). */
+ *  the key lives on the same machine, so scenarios where "the entire userData is readable" are not covered.
+ *  DECISION RECORD (2026-10-10, CTO sweep R1 — safeStorage/DPAPI wrap REJECTED): (a) DPAPI/safeStorage
+ *  encrypts at USER scope — any same-user process (the audit's actual threat: same-user malware) decrypts
+ *  it just as easily; (b) the headless CLI runs plain node and cannot call Electron safeStorage, so a
+ *  wrapped key breaks the entire CLI surface for zero real gain. Re-evaluate only if the threat model changes (multi-user hosts / documented stolen-disk incident). */
 /** One-time migration of an existing plaintext DB to an encrypted DB: ATTACH the encrypted target + create tables per the existing SCHEMA + copy rows table by table,
  *  keeping the original file as a .plain-bak fallback (the driver lacks sqlcipher_export, so migration is manual) */
 function migratePlainToEncrypted (dir, file, key) {
