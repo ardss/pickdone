@@ -8,7 +8,7 @@
 const { execFileSync } = require('child_process')
 const path = require('path')
 
-const ROOT = path.join(__dirname, '..')
+const ROOT = process.env.GATE_ROOT || path.join(__dirname, '..') // GATE_ROOT: golden-fixture self-tests point the gate at a temp tree
 const CN_RE = /[\u4e00-\u9fff]/
 // User-visible API surface (extend on false negatives): messages/popups/placeholders/label/title/aria
 // Known debt: list of legacy hardcoded copy, to be moved out one by one once absorbed by an i18n migration batch.

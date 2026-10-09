@@ -13,7 +13,7 @@ const path = require('path')
 const acorn = require('acorn')
 const ts = require('typescript')
 
-const ROOT = path.resolve(__dirname, '..')
+const ROOT = process.env.GATE_ROOT || path.resolve(__dirname, '..') // GATE_ROOT: golden-fixture self-tests point the gate at a temp tree
 const SRC = path.join(ROOT, 'renderer', 'js')
 const ENTRY = path.join(SRC, 'main.js')
 // Dynamic imports may escape renderer/js only to these targets (runtime dependencies, not part of the source module graph)

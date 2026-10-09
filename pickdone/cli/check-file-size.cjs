@@ -18,7 +18,7 @@
 const fs = require('fs')
 const path = require('path')
 
-const ROOT = path.join(__dirname, '..')
+const ROOT = process.env.GATE_ROOT || path.join(__dirname, '..') // GATE_ROOT: golden-fixture self-tests point the gate at a temp tree
 const BASELINE = path.join(__dirname, 'structure-baseline.json')
 
 // 行数上限（warn, error），按目录/类型分级。error 才判红；warn 打印但不阻塞。

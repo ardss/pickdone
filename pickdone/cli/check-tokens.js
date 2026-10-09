@@ -13,7 +13,7 @@
 const fs = require('fs')
 const path = require('path')
 
-const ROOT = path.join(__dirname, '..')
+const ROOT = process.env.GATE_ROOT || path.join(__dirname, '..') // GATE_ROOT: golden-fixture self-tests point the gate at a temp tree
 const FILES = ['assets/css/base.css', 'assets/css/theme-dark.css']
 
 // Exemptions: white that is intentional by design (does not flip with the theme). Substring matching.
