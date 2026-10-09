@@ -129,7 +129,7 @@ const TEST_CONCURRENCY = process.env.TEST_CONCURRENCY || '4'
 // watcher) would otherwise keep the per-file child process alive forever — the runner then waits
 // with ZERO results (0 failures, budget kill, unattributable). Force-exit makes the child leave
 // once tests finish; --test-timeout above covers the in-test hang case.
-const r = spawnSync(process.execPath, ['--test', '--test-force-exit', `--test-timeout=${TEST_TIMEOUT_MS}`,
+const RUNNER_ARGS = ['--test', '--test-force-exit', `--test-timeout=${TEST_TIMEOUT_MS}`,
   ...(TEST_CONCURRENCY ? [`--test-concurrency=${TEST_CONCURRENCY}`] : []),
   // Pin the TAP reporter: check-test-summary.cjs anchors its fail/skip parsing on the TAP plan
   // (`1..N` + `# fail` lines), but Node >= 24 defaults the reporter to 'spec' even for non-TTY
@@ -140,8 +140,11 @@ const r = spawnSync(process.execPath, ['--test', '--test-force-exit', `--test-ti
   // (stderr) or the coverage ratchet never finds its "# all files" summary line.
   ...(forwardArgs.includes('--experimental-test-coverage')
     ? ['--test-reporter=spec', '--test-reporter-destination=stderr']
-    : []),
-  ...forwardArgs, ...files.map(f => path.relative(appRoot, f))],
+    : [])]
+
+function spawnRunner () {
+  return spawnSync(process.execPath, [...RUNNER_ARGS,
+    ...forwardArgs, ...files.map(f => path.relative(appRoot, f))],
   // Windows caps a spawned command line at ~32k chars: with ~350 discovered files, ABSOLUTE
   // paths (K:\...\pickdone\tests\...) blow past it and spawnSync fails with ENAMETOOLONG —
   // exit 1 with ZERO TAP output, which the summary gate could only read as a mystery red
@@ -151,6 +154,26 @@ const r = spawnSync(process.execPath, ['--test', '--test-force-exit', `--test-ti
   // tracks reality: repo-relative argv measured 28702 chars at 3860+ tests, still ~4k under
   // the true 32767 cap; run-all-argv-limit.test.mjs asserts against that measured headroom.
   { cwd: appRoot, stdio: ['inherit', 'pipe', 'pipe'], maxBuffer: 1 << 28 })
+}
+
+let r = spawnRunner()
+// Native-crash retry (2026-10-10 nightly R2b): on Windows, per-file child processes die at
+// teardown to a libuv assertion (`!(handle->flags & UV_HANDLE_CLOSING)`, src/win/async.c)
+// surfacing as exitCode 3221226505 (0xC0000409) — a Node bug, NOT a test failure, and the
+// crashing file is random per run (relay-registration-guard, datasafety-… both observed).
+// It failed ~half of all full-suite runs and blocks every pre-commit. When the ONLY failing
+// children are native crashes, rerun the whole runner EXACTLY ONCE (the CI `rerun --failed`
+// doctrine): green second run = pass with a loud note; crash or real failure again = red.
+// A genuinely failing test never benefits: it fails deterministically on the rerun too.
+const NATIVE_CRASH_RE = /exitCode: 3221226505/
+const onlyNativeCrash = tap => {
+  const notOk = tap.match(/^not ok .*(?:\n(?!not ok ).*)*/gm) || []
+  return notOk.length > 0 && notOk.every(block => NATIVE_CRASH_RE.test(block))
+}
+if (r.status !== 0 && r.stdout && onlyNativeCrash(String(r.stdout))) {
+  console.error('[run-all] native teardown crash(s) (0xC0000409 libuv async assert) were the only failures — retrying the suite once (CI rerun doctrine)')
+  r = spawnRunner()
+}
 // Fail closed and LOUD on spawn errors: r.status is null when the child never ran, so the
 // old `r.status ?? 1` fell through to exit 1 with empty output — indistinguishable from a
 // test failure and unattributable. Name the errno instead.

@@ -6,6 +6,12 @@ and versioning follows [Semantic Versioning](https://semver.org/). The 0.x serie
 
 ## [Unreleased]
 
+### Fixed
+- Nightly hardening rounds 1-2 (2026-10-10): LAN device names no longer leak the machine hostname before pairing (new installs advertise an opaque `PickDone-xxxx`); the C9 UDP discovery tests pass-inert only on hosts that genuinely cannot bind UDP (ubuntu CI flake root-fixed); every pre-commit gate (file-size, tokens, boot-order, esm-graph, i18n, css-freeze) is covered by must-fail golden fixtures so a gate whose detection rots can no longer exit green forever; backup retention tiers sent by the renderer are floored at the IPC boundary (a `{recent:0}` call could classify the whole snapshot dir as prunable); a valid-but-empty disaster-recovery snapshot no longer overwrites the last good recovery source (quarantined instead); restore-path conflict backups can no longer collide with apply-path backups minted in the same millisecond; the external-write watcher no longer silently consumes an external change whose processing threw (baseline rolls back and warns); the boot settings baseline no longer degrades to zero on a DB race (prevents a startup full-settings broadcast over local edits); a failed quit-flush compensation enqueue is surfaced instead of vanishing into the console.
+
+### Security
+- Decision record added for why the DB key is not wrapped with safeStorage/DPAPI (`src/main/db.js`): user-scope DPAPI stops no same-user malware and breaks the headless CLI.
+
 ## [0.4.0-beta.17] - 2026-09-26
 
 ### Added
