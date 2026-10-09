@@ -31,8 +31,12 @@ test('F4a: a stamp just past the skew boundary is clamped; just inside is preser
   const b = busMod.createBus(() => ({}))
   const over = b.stampPayload(META_ROW, { key: 'k', updatedAt: Date.now() + SKEW + 1000 })
   assert.ok(over.updatedAt <= Date.now() + 5000, 'beyond skew → clamped')
-  const under = b.stampPayload(META_ROW, { key: 'k', updatedAt: Date.now() + SKEW - 60000 })
-  assert.equal(under.updatedAt, Date.now() + SKEW - 60000, 'within skew (legit clock drift) → verbatim')
+  // Flake fix (2026-10-09): Date.now() was evaluated twice — the stamp input frozen at T1
+  // was compared against an expectation computed at T2; a 1ms tick between the lines reds
+  // the strict equality. Freeze ONE t and build both the input and the expectation from it.
+  const t = Date.now()
+  const under = b.stampPayload(META_ROW, { key: 'k', updatedAt: t + SKEW - 60000 })
+  assert.equal(under.updatedAt, t + SKEW - 60000, 'within skew (legit clock drift) → verbatim')
 })
 
 test('F4c: preserveStamp stays verbatim for field-less payloads (main-process sync-apply path)', () => {

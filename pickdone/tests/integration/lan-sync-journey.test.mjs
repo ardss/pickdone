@@ -42,11 +42,15 @@ const ELECTRON_BIN = process.platform === 'win32'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-// Journey runtime bound (<180s per the gate contract). Every await in this file is
-// individually timeout-bounded; this is the last-resort watchdog so a wedged CDP
-// socket or child-runner glitch can never hang the gate past the budget. Prefer a
-// loud failure over a silent hang.
-const WATCHDOG_MS = 175_000
+// Journey runtime bound. Every await in this file is individually timeout-bounded; this is
+// the last-resort watchdog so a wedged CDP socket or child-runner glitch can never hang the
+// gate past the budget. Prefer a loud failure over a silent hang.
+// Budget arithmetic (2026-10-09): worst case is roughly J1's two 60s boot budgets + ~150s
+// of bounded pairing waits, plus J4's restart — whose connectCdp now gets a FRESH 60s boot
+// budget per lock-loss relaunch (deadline renewal fix) — then 120s pairing-intact + 60s
+// convergence. The old 175s ceiling could be outrun by exactly the legit relaunch path
+// this suite is designed to survive, so it is raised to 300s to cover the sum.
+const WATCHDOG_MS = 300_000
 const watchdog = setTimeout(() => {
   console.error(`[lan-sync-journey] GLOBAL WATCHDOG (${WATCHDOG_MS}ms) fired — force-exiting (1)`)
   if (process.env.JOURNEY_DIAG && process.report) {
@@ -194,7 +198,12 @@ class Instance {
     // Poll in bounded slices so a process that DIES during boot is detected
     // immediately (with its exit code) instead of burning the whole budget on
     // 'fetch failed' against an endpoint that will never exist.
-    const deadline = Date.now() + bootTimeoutMs
+    // J4 deadline renewal (2026-10-09): the budget is recomputed when a lock-loss
+    // relaunch is first detected — the old single deadline computed before the loop was
+    // shared between the original boot and the successor, so a slow relaunch could red
+    // purely on spent wall-clock. One renewal per spawned process (exitCode is set once).
+    let deadline = Date.now() + bootTimeoutMs
+    let renewed = false
     for (;;) {
       try {
         this.cdp = await Cdp.connect(this.cdpPort, { targetTimeoutMs: Math.min(15000, deadline - Date.now()) })
@@ -206,6 +215,7 @@ class Instance {
           // relaunches the app with a pre-lock delay; the successor INHERITS this CDP
           // port). Keep polling — the successor's endpoint lands on the same port. A
           // non-zero exit stays a real crash and throws below.
+          if (!renewed) { renewed = true; deadline = Date.now() + bootTimeoutMs }
           if (Date.now() > deadline) {
             throw new Error(`[${this.name}] electron exited code=0 (lock-loss relaunch) and no successor CDP came up on port ${this.cdpPort}`)
           }

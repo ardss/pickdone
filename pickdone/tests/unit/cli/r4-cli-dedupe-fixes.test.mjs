@@ -106,8 +106,13 @@ test('r4-6: lib-cdp-client getJSON parses a JSON body (regression on the shared 
 test('r4-7: killSpawnedChild is a no-op with no adopted child (never throws on bare exit)', () => {
   assert.doesNotThrow(() => killSpawnedChild())
   assert.equal(typeof sleep(1).then, 'function')
-  // cdpConnect signature sanity: returns the four members the scripts destructure
+  // cdpConnect signature sanity: returns the four members the scripts destructure.
+  // Flake fix (2026-10-09): cdpConnect's `open` Promise rejects when the connection is
+  // refused; nobody awaits it here, so if the refusal lands before close() the unhandled
+  // rejection kills the whole file. Drain it explicitly (the ws 'error' event itself is
+  // already handled inside lib-cdp-client.cjs via ws.onerror).
   const client = cdpConnect('ws://127.0.0.1:1/nope')
+  client.open.catch(() => { /* expected: port 1 refuses */ })
   for (const k of ['ws', 'open', 'send', 'evalJS']) assert.ok(client[k] != null, 'client has ' + k)
   client.ws.close?.()
 })

@@ -42,13 +42,74 @@ function installExitHooks () {
   }
 }
 
+/* ---------------- Preflight sweeper (2026-10-09) ----------------
+ * Context: exit-only cleanup is bypassed whenever a test child is SIGKILLed / taskkilled
+ * (watchdog kill, boot-stall kill, CI job timeout) — %TEMP% accumulated ~14k dirs / ~9.2GB
+ * of orphaned test dirs that no exit hook would ever reclaim. The sweeper runs ONCE at the
+ * top of tests/run-all.mjs, before any child is spawned, and only deletes dirs that are
+ * provably orphaned. Double-guard semantics: a FRESH mtime or a LIVE owning pid means the
+ * entry is NEVER deleted, no matter what else matches. */
+
+// Age beyond which a test temp dir is considered abandoned (a full suite run is minutes;
+// anything older than half a day cannot belong to a run in progress).
+const STALE_MS = 12 * 60 * 60 * 1000
+
+// The test suite's temp-dir prefix family (audit 2026-10-09): every direct
+// mkdtempSync(path.join(os.tmpdir(), '<prefix>...')) call in tests/ + pickdone/test/ uses
+// one of these families. Anything OUTSIDE the family is never touched.
+const FAMILY = /^(todo-|d\d{1,3}-|lan-sync-|pd-|journey-|relay-|pickdone-|r\d+-)/
+// Directory names carry the owning pid as `<prefix>...pid<pid>-<mkdtemp-random>` so the
+// sweeper can prove the owner is dead before deleting.
+const PID_RE = /pid(\d+)-/
+
+/** True when the pid encoded in a dir name is provably not running on this machine. */
+function pidDead (name) {
+  const m = PID_RE.exec(name)
+  if (!m) return true // no pid encoding: only deletable via the 12h age guard below
+  try {
+    process.kill(Number(m[1]), 0)
+    return false // signal 0 = existence probe; success ⇒ alive
+  } catch (e) {
+    return e.code === 'ESRCH' // ESRCH = no such process; EPERM = alive (owned by someone else)
+  }
+}
+
+/**
+ * Delete orphaned test temp dirs from os.tmpdir(): an entry is removed only when it
+ * (a) matches the suite's prefix family, (b) has an mtime older than 12h, AND
+ * (c) carries no live owning pid. Fresh mtime OR live pid ⇒ never deleted.
+ * @returns {{ scanned: number, removed: number }} best-effort counts for logging
+ */
+export function sweepStaleTmpDirs () {
+  let scanned = 0
+  let removed = 0
+  let entries = []
+  try { entries = fs.readdirSync(os.tmpdir(), { withFileTypes: true }) } catch { return { scanned, removed } }
+  const now = Date.now()
+  for (const e of entries) {
+    if (!e.isDirectory() || !FAMILY.test(e.name)) continue
+    scanned++
+    const full = path.join(os.tmpdir(), e.name)
+    let st = null
+    try { st = fs.statSync(full) } catch { continue }
+    if (now - st.mtimeMs < STALE_MS) continue // guard 1: fresh — maybe an in-flight run
+    if (!pidDead(e.name)) continue // guard 2: owning pid alive — never delete
+    try {
+      fs.rmSync(full, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
+      removed++
+    } catch { /* locked by another process — leave it for the next sweep */ }
+  }
+  return { scanned, removed }
+}
+
 /**
  * 创建隔离临时目录并注册自动清理(测试结束/进程退出兜底 rmSync)。
+ * 目录名编码 owning pid(`<prefix>...pid<pid>-<随机>`)供 sweepStaleTmpDirs 判活。
  * @param {string} prefix mkdtemp 前缀
  * @returns {string} 目录绝对路径
  */
 export function isolatedTmpDir (prefix = 'todo-tmp-') {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix))
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix + 'pid' + process.pid + '-'))
   created.add(dir)
   installExitHooks()
   return dir
@@ -62,7 +123,7 @@ export function isolatedTmpDir (prefix = 'todo-tmp-') {
  * @returns {Promise<T>|T}
  */
 export async function withTmpDir (prefix, fn) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix))
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix + 'pid' + process.pid + '-'))
   try {
     return await fn(dir)
   } finally {

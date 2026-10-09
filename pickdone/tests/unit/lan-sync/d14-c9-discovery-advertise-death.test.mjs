@@ -5,10 +5,25 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import net from 'node:net'
 import { createRequire } from 'node:module'
 
 const require_ = createRequire(import.meta.url)
 const Module = require_('module')
+
+/** Grab a free TCP port from the OS (bind 0, read, close) — used as the ADVERTISED service
+ *  port only (the UDP bind walks FALLBACK_PORT_CANDIDATES internally). Flake fix (2026-10-09):
+ *  both tests used to hard-code 58999, colliding with anything else that claimed the port. */
+function freePort () {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer()
+    srv.listen(0, '127.0.0.1', () => {
+      const { port } = srv.address()
+      srv.close(() => resolve(port))
+    })
+    srv.on('error', reject)
+  })
+}
 
 /** Load discovery.js fresh with bonjour-service unavailable → UDP fallback path. */
 function loadUdpFallbackDiscovery () {
@@ -29,7 +44,7 @@ const path = require_('node:path')
 test('C9: post-bind socket death stops the advertise interval (no warn-forever loop)', async () => {
   const discovery = loadUdpFallbackDiscovery()
   const disc = discovery.createDiscovery()
-  disc.startAdvertising({ deviceId: 'd14c9', name: 'd14c9', port: 58999 })
+  disc.startAdvertising({ deviceId: 'd14c9', name: 'd14c9', port: await freePort() })
   const t0 = Date.now()
   while (!disc.udpFallbackPort() && Date.now() - t0 < 15000) await new Promise(r => setTimeout(r, 50))
   assert.ok(disc.udpFallbackPort() > 0, 'UDP fallback bound')
@@ -45,7 +60,7 @@ test('C9: post-bind socket death stops the advertise interval (no warn-forever l
 test('C9: three consecutive failed send sweeps declare the channel dead and stop advertising', async () => {
   const discovery = loadUdpFallbackDiscovery()
   const disc = discovery.createDiscovery()
-  disc.startAdvertising({ deviceId: 'd14c9b', name: 'd14c9b', port: 58999 })
+  disc.startAdvertising({ deviceId: 'd14c9b', name: 'd14c9b', port: await freePort() })
   const t0 = Date.now()
   while (!disc.udpFallbackPort() && Date.now() - t0 < 15000) await new Promise(r => setTimeout(r, 50))
   assert.ok(disc.udpFallbackPort() > 0)
