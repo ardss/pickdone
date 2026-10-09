@@ -569,9 +569,18 @@ function createClientRound(ctx) {
             // snapshot trigger (only deleting the watermarks on BOTH ends recovered).
             const incoming = Number(msg.cursor) || 0
             const prev = pullWatermarkBy.get(peer.deviceId) || 0
-            const cursor = incoming > 0 && incoming < prev ? incoming : Math.max(prev, incoming)
+            // Epoch reset (2026-10-09): a VALIDATED EMPTY snapshot (totalRows === 0, cursor 0)
+            // IS the peer's full state — treating it as "no signal" (old max(prev, 0)) pinned the
+            // watermark at its old value while the peer had wiped everything (re-pair flow can
+            // re-issue the SAME deviceId on a fresh oplog), so our watermark sat above the peer's
+            // new epoch and its fresh low-seq rows could neither advance it nor fire the
+            // snapshot trigger. A zero-row snapshot can never carry data we'd skip over, so
+            // adopting 0 is safe.
+            const cursor = (totalRows === 0 && incoming === 0)
+              ? 0
+              : (incoming > 0 && incoming < prev ? incoming : Math.max(prev, incoming))
             pullWatermarkBy.set(peer.deviceId, cursor) // watermark advances ONLY here
-            if (incoming > 0 && incoming < prev) {
+            if (cursor < prev) {
               // New epoch: the old session's snapshot-error budget is meaningless now.
               snapshotFatalCount.delete(peer.deviceId)
               snapshotErrorCooldown.delete(peer.deviceId)

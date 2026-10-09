@@ -43,6 +43,15 @@ import { writeFileDurable } from '../src/main/durable-fs.js'
  *  snapshot, while the margin keeps a recovery replay window for a device that lost its
  *  local state but not its ack. Returns 0 when nothing is removable. */
 export const GC_ACK_ALONE_MARGIN = 100000 // seq-margin kept when no snapshot exists yet
+
+/** 2026-10-09 (P2): device-status whitelist. The codebase uses exactly two device statuses:
+ *  'active' (the default at registration; gc() only counts active devices toward the ack floor)
+ *  and 'retired' (the semantic counterpart — a device leaving the account). Any OTHER status a
+ *  caller sends used to be persisted verbatim: a non-'active' status permanently excluded that
+ *  device from the gc floor, and on an account with only such devices the floor pinned to 0 →
+ *  unbounded envelope growth. Enforced on the /v1/device/state route (the single choke point
+ *  shared by BOTH storage backends — memory/file and sqlite — so they cannot drift). */
+export const DEVICE_STATUSES = new Set(['active', 'retired'])
 export function gcCutFloor({ ackFloor, coversSeq }) {
   let floor = Math.min(ackFloor || 0, coversSeq || 0)
   if (floor <= 0 && (ackFloor || 0) > GC_ACK_ALONE_MARGIN) floor = ackFloor - GC_ACK_ALONE_MARGIN
@@ -223,8 +232,7 @@ export function createRelay(store, { enrollment = '' } = {}) {
       })
       if (!ok) throw err(401, 'unauthorized: missing or invalid device bearer secret')
     },
-    setDeviceState(account, deviceId, patch) { return store.upsertDevice(account, deviceId, patch) },
-    push(account, deviceId, items) {
+    setDeviceState(account, deviceId, patch) { return store.upsertDevice(account, deviceId, patch) },    push(account, deviceId, items) {
       const acked = {}
       for (const item of items) {
         const r = store.appendEnvelope(account, item.opId, item.envelope)
@@ -270,6 +278,13 @@ export function createRelay(store, { enrollment = '' } = {}) {
     },
     ack(account, deviceId, ackSeq) {
       const dev = store.getDevice(account, deviceId)
+      // 2026-10-09 ack clamp (P1): an unvalidated ackSeq used to flow into lastAck = max(prev, ackSeq)
+      // and then drive gcCutFloor (ackFloor - margin) — a hostile/buggy ackSeq=1e12 made gc() delete
+      // EVERY envelope with seq <= that for the whole account (cross-device data loss, logged as
+      // success). The clamp mirrors the snapshot coversSeq gate on /v1/snapshot/put (same root cause:
+      // "the client may only reference seqs the relay has issued") and is enforced here so both the
+      // HTTP route and direct createRelay() callers are covered.
+      ackSeq = Math.max(0, Math.min(ackSeq, store.lastSeq()))
       const lastAck = Math.max(dev ? dev.lastAck : 0, ackSeq)
       store.upsertDevice(account, deviceId, { lastAck, lastSeen: Date.now() })
       const removed = store.gc(account)
@@ -288,6 +303,31 @@ export function createRelay(store, { enrollment = '' } = {}) {
 
 const PROTOCOL_VERSION = 1
 
+/** 2026-10-09 (P2): register rate-limit state with a FIFO IP cap. One-time/spoofed source IPs
+ *  used to accumulate in the Map forever (unbounded memory on an internet-exposed relay). The
+ *  cap mirrors the transport.js PAIR_IP_KEY_CAP pattern: Map iteration order is insertion
+ *  order, so the oldest IP entries are evicted first when over budget. Exported so the cap is
+ *  directly unit-testable and startRelayServer stays a thin wrapper. */
+export const REGISTER_IP_CAP = 8192
+export function createRegisterLimiter({ limit = 10, windowMs = 60_000, cap = REGISTER_IP_CAP } = {}) {
+  const hitsByIp = new Map() // ip -> [timestamps inside window]
+  return {
+    allow(ip) {
+      const now = Date.now()
+      const hits = (hitsByIp.get(ip) || []).filter(t => now - t < windowMs)
+      const ok = hits.length < limit
+      if (ok) hits.push(now)
+      hitsByIp.set(ip, hits)
+      while (hitsByIp.size > cap) {
+        const oldest = hitsByIp.keys().next().value
+        hitsByIp.delete(oldest)
+      }
+      return ok
+    },
+    size: () => hitsByIp.size,
+  }
+}
+
 export function startRelayServer(relay, { port = 0, host = '127.0.0.1' } = {}) {
   const MAX_BODY_BYTES = 8 * 1024 * 1024
   // 2026-10-10 (CTO sweep B#1/B#5): the open-registration door gets two cheap guards.
@@ -297,15 +337,8 @@ export function startRelayServer(relay, { port = 0, host = '127.0.0.1' } = {}) {
   //     closing the guess-an-account takeover path. Clients are unaffected when unset.
   const REGISTER_LIMIT = 10
   const REGISTER_WINDOW_MS = 60_000
-  const registerHits = new Map() // ip -> [timestamps in window]
-  const registrationAllowed = (ip) => {
-    const now = Date.now()
-    const hits = (registerHits.get(ip) || []).filter(t => now - t < REGISTER_WINDOW_MS)
-    if (hits.length >= REGISTER_LIMIT) { registerHits.set(ip, hits); return false }
-    hits.push(now)
-    registerHits.set(ip, hits)
-    return true
-  }
+  const registerHits = createRegisterLimiter({})
+  const registrationAllowed = ip => registerHits.allow(ip)
   const enrollmentOk = (body, header) => {
     if (!relay.enrollment) return true
     const given = String((body && body.enrollment) || header || '')
@@ -368,6 +401,10 @@ export function startRelayServer(relay, { port = 0, host = '127.0.0.1' } = {}) {
       }
     })
   })
+  // 2026-10-09 (P2 connection budget): cap concurrent TCP connections — a relay reachable from
+  // the internet must not let a socket flood exhaust fds/memory. 64 comfortably exceeds the
+  // device count of any real account (LAN pairs + a handful of peers).
+  server.maxConnections = 64
   // Coded listen failure (2026-10-06): EADDRINUSE used to reject with the raw Node error (or,
   // before the promise existed at all, hang). Surface a readable coded error; other listen
   // errors reject with their original cause.
@@ -416,6 +453,10 @@ function route(relay, method, url, body, authz) {
     case '/v1/sync/ack': {
       const { account, device, ackSeq } = post()
       need(account && device && Number.isInteger(ackSeq), 'account, device, ackSeq required')
+      // 2026-10-09 ack clamp (P1): deny ackSeq beyond issued history with a coded 4xx — mirrors the
+      // snapshot coversSeq gate below (same root cause: a client may only reference seqs the relay
+      // has issued). relay.ack clamps too, so direct createRelay() callers are covered as well.
+      need(ackSeq >= 0 && ackSeq <= relay.store.lastSeq(), `ackSeq ${ackSeq} beyond relay history (lastSeq ${relay.store.lastSeq()})`)
       return relay.ack(account, device, ackSeq)
     }
     case '/v1/device/register': {
@@ -426,6 +467,8 @@ function route(relay, method, url, body, authz) {
     case '/v1/device/state': {
       const { account, device, status } = post()
       need(account && device, 'account, device required')
+      // 2026-10-09 (P2): whitelist — see DEVICE_STATUSES above for the why.
+      if (status) need(DEVICE_STATUSES.has(status), `unknown device status ${JSON.stringify(status)} (allowed: ${[...DEVICE_STATUSES].join(', ')})`)
       return { device: relay.setDeviceState(account, device, status ? { status } : {}) }
     }
     case '/v1/snapshot/put': {
