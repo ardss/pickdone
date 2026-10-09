@@ -56,6 +56,18 @@
           <span class="tip sync-device-error" v-else-if="p.lastError">{{ $t('sync.errorPrefix', { msg: String(p.lastError).slice(0, 60) }) }}</span>
           <button class="mini sync-unpair-btn" v-if="!isUnpairedByRemote(p)" :disabled="busy || connecting" @click="askUnpair(p)">{{ $t('sync.unpairBtn') }}</button>
         </div>
+        <!-- auto-discovery surfacing (2026-10-09 UX rework): the discovery layer always saw these
+             devices; the tab never showed them, so users thought discovery didn't exist and typed
+             IPs by hand. One click dials the advertised host/port (same repair-confirm as IP add). -->
+        <template v-if="discovered.length">
+          <div class="sync-group-label">{{ $t('sync.discoveredSection') }}<span class="tip sync-group-hint">{{ $t('sync.discoveredHint') }}</span></div>
+          <div v-for="d in discovered" :key="d.deviceId" class="sync-device-card" :data-device-id="d.deviceId">
+            <span class="sync-dot sync-dot--ok" :title="$t('sync.onlineTip')"></span>
+            <span class="sync-device-name">{{ d.deviceName || d.deviceId }}</span>
+            <span class="tip sync-device-meta">{{ d.host }} · {{ $t('sync.portLabel') }} {{ d.port }}</span>
+            <button class="mini" :disabled="busy || connecting" @click="pairDiscovered(d)">{{ $t('sync.discoverPairBtn') }}</button>
+          </div>
+        </template>
       </div>
     </div>
 
@@ -76,14 +88,16 @@
          contract: syncConflictBackupsList -> [{key, lostAt, preview}], syncConflictBackupRestore({key})).
          Defensive: if the main process does not expose the ops yet (agent X not merged), the whole
          section stays hidden. -->
-    <div class="form" v-if="conflictBackups !== null">
+    <!-- conflict backups: hidden entirely at 0 (an empty collapsible row read as clutter);
+         when present, the plain-language hint explains what this even is (user feedback) -->
+    <div class="form" v-if="conflictBackups && conflictBackups.length">
       <div class="sync-collapse-head">
         <button class="sync-collapse-toggle" @click="conflictOpen = !conflictOpen">
           <span>{{ $t('sync.conflictSection') }} ({{ conflictBackups.length }})</span><span class="sync-collapse-caret">{{ conflictOpen ? '▾' : '▸' }}</span>
         </button>
       </div>
       <div v-if="conflictOpen" class="sync-conflict-list">
-        <div class="tip" v-if="!conflictBackups.length">{{ $t('sync.conflictEmpty') }}</div>
+        <div class="tip sync-conflict-hint">{{ $t('sync.conflictHint') }}</div>
         <div v-for="b in conflictBackups" :key="b.key" class="sync-conflict-item">
           <span class="tip sync-conflict-key">{{ b.originalKey || b.key }}</span>
           <span class="tip" v-if="b.lostAt">{{ $t('sync.conflictLostAt', { time: fmtFull(b.lostAt) }) }}</span>
@@ -342,6 +356,8 @@ export default {
   },
   computed: {
     peers () { return (this.status && this.status.peers) || [] },
+    /** mDNS/UDP-announced devices not paired yet — one-click pair targets (main getStatus.discovered). */
+    discovered () { return (this.status && this.status.discovered) || [] },
     selfInfo () { return (this.status && this.status.self) || {} },
     selfName () { return this.selfInfo.deviceName || this.nameDraft || this.$t('sync.thisDevice') },
     shortId () { return String(this.selfInfo.deviceId || this.deviceId || '').slice(0, 8) },
@@ -620,8 +636,24 @@ export default {
       } catch (e) { this.$message.error(this.$t('sync.pairFailMsg')) }
       if (req) this.refresh()
     },
-    async connectPeer () {
-      // D2-b: accept "host:port" (and bare host, which main defaults to 58471) — the combined
+    /** One-click pair a discovered (mDNS/UDP-announced) device: dials its advertised host/port.
+     *  Same shared-secret repair warning as the IP path — pairing rotates the secret. */
+    pairDiscovered (d) {
+      if (!d || !d.host || this.busy || this.connecting) return
+      const proceed = () => {
+        this.busy = true
+        this.connecting = true
+        syncPairRequest(d.host, d.port).then(() => {
+          this.$message.success(this.$t('sync.connectSent'))
+        }).catch(e => {
+          const key = pairFailureKey(e)
+          this.$message.error(this.$t(key || 'sync.pairFailGenericMsg'))
+        }).finally(() => { this.busy = false; this.connecting = false; this.refresh() })
+      }
+      if (this.peers.length) this.askConfirm('sync.repairTitle', 'sync.repairWarning', {}, proceed)
+      else proceed()
+    },
+    async connectPeer () {      // D2-b: accept "host:port" (and bare host, which main defaults to 58471) — the combined
       // string used to be dialed verbatim as the hostname (getaddrinfo ENOTFOUND '127.0.0.1:59801').
       const parsed = parseConnectAddress(this.connectHost)
       // P1-4: ONE in-flight guard for both pairing flows — submitPairing used `busy` while
@@ -787,6 +819,10 @@ export default {
   font-size: var(--fs-base, 14px); }
 .sync-collapse-toggle:hover { color: var(--brand); }
 .sync-collapse-caret { color: var(--text-3); font-size: 12px; }
+.sync-group-label { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-top: 8px;
+  color: var(--text-1); font-weight: 500; font-size: var(--fs-sm, 13px); }
+.sync-group-hint { font-weight: 400; font-size: var(--fs-sm, 12px); color: var(--text-3); }
+.sync-conflict-hint { color: var(--text-3); margin-bottom: 4px; }
 .sync-device-error { color: var(--danger, var(--text-2)); width: 100%; }
 .sync-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--text-3); }
 .sync-dot--ok { background: var(--success, var(--brand)); }

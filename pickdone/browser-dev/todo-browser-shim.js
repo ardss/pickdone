@@ -524,7 +524,15 @@
             { deviceId: 'dev-lap-mock', deviceName: 'MacBook', host: '192.168.31.35', port: 58471, online: false, lastRoundAt: Date.now() - 86_400_000, pendingCount: 0, lastError: null, lastErrorAt: 0, alias: '出门用的' },
           ] : []
         }
-        return { enabled: on, deviceId: 'browser-shim', deviceName: '浏览器调试设备', listening: on, port: on ? 58471 : 0, peers, lastRoundAt: on ? Date.now() - 65_000 : 0, lastError: null }
+        // 附近设备(自动发现):开启且尚未配对时给两台"正在广播"的模拟设备,展示一键配对入口;
+        // 配对完成后它们"变成"预置对端,发现列表清空——与真实 mDNS 语义一致
+        let manualPeers = null
+        try { manualPeers = JSON.parse(localStorage.getItem('appBrowserShim.syncPeers') || 'null') } catch {}
+        const discovered = (on && !paired && !Array.isArray(manualPeers)) ? [
+          { deviceId: 'dev-near-a-mock', deviceName: '客厅笔记本', host: '192.168.31.42', port: 58471, lastSeen: Date.now() - 5_000 },
+          { deviceId: 'dev-near-b-mock', deviceName: 'NAS 工作机', host: '192.168.31.50', port: 58471, lastSeen: Date.now() - 12_000 },
+        ] : []
+        return { enabled: on, deviceId: 'browser-shim', deviceName: '浏览器调试设备', listening: on, port: on ? 58471 : 0, peers, discovered, lastRoundAt: on ? Date.now() - 65_000 : 0, lastError: null }
       }
       case 'syncSetEnabled': {
         try { localStorage.setItem('appBrowserShim.syncEnabled', params && params.enabled ? '1' : '0') } catch {}
@@ -563,11 +571,11 @@
       case 'syncConflictBackupRestore':
         return { ok: true }
       case 'syncPairRequest':
-        // D2 drill support: record exactly what the renderer parsed and dial "main" — a
-        // non-resolvable host fails with the same DNS error the real main process throws
-        // (getaddrinfo ENOTFOUND), so the UI error-mapping path is exercised end to end.
+        // 模拟出站配对:记录拨号参数(调试口)并以成功收尾——标记已配对,下次 getStatus 给出
+        // 预置设备、发现列表清空。真实语义(对端 60s 确认窗)不在此复刻,但 UI 全流程可走通。
         window.__lastPairRequest = { host: params && params.host, port: params && params.port }
-        throw new Error('getaddrinfo ENOTFOUND ' + String((params && params.host) || ''))
+        try { localStorage.setItem('appBrowserShim.syncPaired', '1') } catch {}
+        return { ok: true }
       case 'syncSetName':
         try { localStorage.setItem('appBrowserShim.syncDeviceName', String((params && params.name) || '')) } catch {}
         return { deviceName: String((params && params.name) || '') }

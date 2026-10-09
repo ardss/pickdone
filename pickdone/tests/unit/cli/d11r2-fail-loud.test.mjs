@@ -142,10 +142,13 @@ test('d11r2: shim sync* ops degrade locally â€” Device Center no longer throws æ
   // drivable end to end at 5175 so the Device Center UI is supervisable without the desktop main.
   const on = await api.dbCall('syncSetEnabled', { enabled: true })
   assert.equal(on.enabled, true, 'toggle resolves (mock node starts)')
+  const beforePair = await api.dbCall('syncGetStatus')
+  assert.equal(beforePair.discovered.length, 2, 'sync on + unpaired -> two nearby devices advertised (auto-discovery UI)')
   assert.equal(await api.dbCall('syncGetPairingCode').then(r => (r.code || '').length), 6, 'sync on -> mock 6-digit pairing code with TTL')
-  assert.equal((await api.dbCall('syncPairWithCode', { code: '482913' })).ok, true, 'mock pair-by-code succeeds')
+  assert.equal((await api.dbCall('syncPairRequest', { host: '192.168.31.42', port: 58471 })).ok, true, 'mock outbound pair succeeds')
   const peers = (await api.dbCall('syncGetStatus')).peers
   assert.equal(peers.length, 2, 'paired state materializes the two preset mock devices')
+  assert.equal((await api.dbCall('syncGetStatus')).discovered.length, 0, 'paired -> discovery list drains (devices became peers)')
   await api.dbCall('syncUnpairPeer', { deviceId: peers[0].deviceId })
   assert.equal((await api.dbCall('syncGetStatus')).peers.length, 1, 'unpair removes exactly the unpaired peer')
 })
