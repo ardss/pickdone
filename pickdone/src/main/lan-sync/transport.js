@@ -39,6 +39,8 @@
 const { EventEmitter } = require('node:events')
 const net = require('node:net')
 const { randomBytes } = require('node:crypto')
+// C8 (2026-10-10 daily sweep): log-isolation at MODULE LOAD — the old inline require ran AFTER the warn it accompanied, so under TODO_DB_DIR/TODO_USER_DATA_DIR the first line leaked into the REAL user log.
+require('../log-isolation')
 const { verifyAuthCode } = require('./pairing')
 const cipher = require('./cipher')
 const { MAX_LINE_BYTES, PRE_AUTH_LINE_BYTES, LINE_BUFFER_BUDGET_BYTES, __setLineBufferBudget, ProtocolError, cleanDeviceName, LineReader } = require('./line-reader')
@@ -579,7 +581,7 @@ function createLanServer(opts) {
     // ephemeral config can never hit EADDRINUSE).
     if (err && err.code === 'EADDRINUSE' && port !== 0) {
       try { require('electron-log').error(`[LanSync] fixed sync port ${port} is in use — sync is NOT discoverable (EADDRINUSE)`) } catch { /* electron-log unavailable in pure-node contexts */ }
-      require('../log-isolation') // test isolation: redirect electron-log file transport into TODO_DB_DIR/TODO_USER_DATA_DIR
+      // (log-isolation now loads at module top — C8 2026-10-10)
     }
     em.emit('error', err)
   })
