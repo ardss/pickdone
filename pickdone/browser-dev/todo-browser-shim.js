@@ -496,25 +496,72 @@
         localStorage.setItem(META_KEY, JSON.stringify(m))
         return before - m.__shimPlanChips.length
       }
-      /* LAN 同步 (P3a) 5175 降级替身:lanSync.js 与设备中心 12 个 sync* op 裸调 dbCall,
-         此前 default 直接命中"未实现操作" throw——桌面正常、web 宿主打开设备中心即崩。
-         读类返回本地降级数据(无 LAN 节点),写类抛出可读错误(UI 侧 catch 走失败 toast,
-         不制造假成功)。设备名等纯本地字段存 LS,刷新不丢。 */
+      /* LAN 同步 (P3a) 5175 降级替身:lanSync.js 与设备中心 12 个 sync* op 裸调 dbCall。
+         可用性优先(用户反馈:浏览器版同步页必须能点、能走完整流程,而不是开关即报错):
+         整套做成有状态的模拟节点——开关/设备名/别名/配对码/配对/解除全部落地 localStorage,
+         刷新不丢;预置 2 台模拟设备让设备中心开箱即"活"(用户说"创建几个假设备")。
+         明确标注 mock:deviceId 带 -mock 后缀,不会与真实局域网语义混淆。 */
       case 'syncGetSettings': {
         let name = '浏览器调试设备'
         try { name = localStorage.getItem('appBrowserShim.syncDeviceName') || name } catch {}
         let on = false
         try { on = localStorage.getItem('appBrowserShim.syncEnabled') === '1' } catch {}
-        return { enabled: on, deviceId: 'browser-shim', deviceName: name, hasPairingSecret: false }
+        let secret = false
+        try { secret = localStorage.getItem('appBrowserShim.syncPaired') === '1' } catch {}
+        return { enabled: on, deviceId: 'browser-shim', deviceName: name, hasPairingSecret: secret }
       }
       case 'syncGetStatus': {
         let on = false
         try { on = localStorage.getItem('appBrowserShim.syncEnabled') === '1' } catch {}
-        // 模拟对端:LS 里放 JSON 数组即可在 5175 审查设备卡片的全部状态(待同步/错误/未配对等)
-        let peers = []
-        try { peers = JSON.parse(localStorage.getItem('appBrowserShim.syncPeers') || '[]') || [] } catch {}
+        let paired = false
+        try { paired = localStorage.getItem('appBrowserShim.syncPaired') === '1' } catch {}
+        // 预置模拟设备:未手动注入 syncPeers 时给两台(一台在线落后、一台离线已同步),开箱即可审查设备卡片
+        let peers = null
+        try { peers = JSON.parse(localStorage.getItem('appBrowserShim.syncPeers') || 'null') } catch {}
+        if (!Array.isArray(peers)) {
+          peers = paired ? [
+            { deviceId: 'dev-desk-mock', deviceName: '书房台式机', host: '192.168.31.20', port: 58471, online: true, lastRoundAt: Date.now() - 120_000, pendingCount: 3, lastError: null, lastErrorAt: 0, alias: '' },
+            { deviceId: 'dev-lap-mock', deviceName: 'MacBook', host: '192.168.31.35', port: 58471, online: false, lastRoundAt: Date.now() - 86_400_000, pendingCount: 0, lastError: null, lastErrorAt: 0, alias: '出门用的' },
+          ] : []
+        }
         return { enabled: on, deviceId: 'browser-shim', deviceName: '浏览器调试设备', listening: on, port: on ? 58471 : 0, peers, lastRoundAt: on ? Date.now() - 65_000 : 0, lastError: null }
       }
+      case 'syncSetEnabled': {
+        try { localStorage.setItem('appBrowserShim.syncEnabled', params && params.enabled ? '1' : '0') } catch {}
+        let name = '浏览器调试设备'
+        try { name = localStorage.getItem('appBrowserShim.syncDeviceName') || name } catch {}
+        return { enabled: !!(params && params.enabled), deviceId: 'browser-shim', deviceName: name, hasPairingSecret: false }
+      }
+      case 'syncGetPairingCode': {
+        let on = false
+        try { on = localStorage.getItem('appBrowserShim.syncEnabled') === '1' } catch {}
+        if (!on) return { code: null, expiresAt: 0 }
+        // 10 分钟有效(mock):与 shared/pairing-ttl.mjs 的 TTL 对齐,倒计时路径照常走
+        const expiresAt = Date.now() + 10 * 60 * 1000
+        try { localStorage.setItem('appBrowserShim.pairingCode', JSON.stringify({ code: '482913', expiresAt })) } catch {}
+        return { code: '482913', expiresAt }
+      }
+      case 'syncPairWithCode': {
+        // 模拟配对成功:标记已配对 → 下次 syncGetStatus 给出预置设备;真实语义(换密钥断旧对端)不需要在 mock 里复刻
+        try { localStorage.setItem('appBrowserShim.syncPaired', '1') } catch {}
+        return { ok: true }
+      }
+      case 'syncUnpairPeer': {
+        // 从模拟设备表里摘掉被解除的那台;LS 未注入过则物化预置表再删
+        let peers = null
+        try { peers = JSON.parse(localStorage.getItem('appBrowserShim.syncPeers') || 'null') } catch {}
+        if (!Array.isArray(peers)) {
+          peers = [
+            { deviceId: 'dev-desk-mock', deviceName: '书房台式机', host: '192.168.31.20', port: 58471, online: true, lastRoundAt: Date.now() - 120_000, pendingCount: 3, lastError: null, lastErrorAt: 0, alias: '' },
+            { deviceId: 'dev-lap-mock', deviceName: 'MacBook', host: '192.168.31.35', port: 58471, online: false, lastRoundAt: Date.now() - 86_400_000, pendingCount: 0, lastError: null, lastErrorAt: 0, alias: '出门用的' },
+          ]
+        }
+        peers = peers.filter(p => p.deviceId !== String((params && params.deviceId) || ''))
+        try { localStorage.setItem('appBrowserShim.syncPeers', JSON.stringify(peers)) } catch {}
+        return { ok: true }
+      }
+      case 'syncConflictBackupRestore':
+        return { ok: true }
       case 'syncPairRequest':
         // D2 drill support: record exactly what the renderer parsed and dial "main" — a
         // non-resolvable host fails with the same DNS error the real main process throws
@@ -526,18 +573,12 @@
         return { deviceName: String((params && params.name) || '') }
       case 'syncSetPeerAlias':
         return { ok: true, alias: String((params && params.alias) || '') }
-      case 'syncGetPairingCode':
-        // code:null → 设备中心走 pairingUnavailable 提示,与"未生成密钥"同路径
-        return { code: null, expiresAt: 0 }
+      case 'syncPairRespond':
+        // 模拟入站配对应答:接受 = 标记已配对(设备中心出预置设备),拒绝 = 仅返回 ok
+        if (params && params.accept) { try { localStorage.setItem('appBrowserShim.syncPaired', '1') } catch {} }
+        return { ok: true }
       case 'syncConflictBackupsList':
         return []
-      case 'syncSetEnabled':
-      case 'syncPairWithCode':
-      case 'syncPairRequest':
-      case 'syncPairRespond':
-      case 'syncUnpairPeer':
-      case 'syncConflictBackupRestore':
-        throw new Error('[appBrowserShim] LAN 同步需要桌面主进程(mDNS/HTTP 节点),浏览器调试模式不支持:' + op)
       default:
         // 未实现 op 显式失败(此前返回 null 假成功,调用方把 null 当真结果渲染/入库)。console.warn 曾被 UI 吞掉,排查不到
         throw new Error('[appBrowserShim] dbCall 未实现操作:' + op)

@@ -134,10 +134,18 @@ test('d11r2: shim sync* ops degrade locally — Device Center no longer throws �
   assert.equal(st.deviceId, 'browser-shim')
   assert.equal((await api.dbCall('syncGetStatus')).listening, false)
   assert.equal(await api.dbCall('syncSetName', { name: '调试机' }).then(r => r.deviceName), '调试机')
-  assert.equal(await api.dbCall('syncGetPairingCode').then(r => r.code), null, 'code:null routes to the pairingUnavailable toast')
+  assert.equal(await api.dbCall('syncGetPairingCode').then(r => r.code), null, 'sync off -> code:null routes to the pairingUnavailable toast')
   assert.ok(Array.isArray(await api.dbCall('syncConflictBackupsList')) && (await api.dbCall('syncConflictBackupsList')).length === 0,
     'conflict backups list degrades to an empty list (cross-realm: length check, not deepEqual)')
-  await assert.rejects(() => api.dbCall('syncSetEnabled', { enabled: true }), /LAN 同步需要桌面主进程/,
-    'node-requiring writes fail loud (UI catch shows the failure toast — no fake success)')
-  await assert.rejects(() => api.dbCall('syncPairWithCode', { code: '123456' }), /LAN 同步需要桌面主进程/)
+  // 2026-10-09 usability pivot (user bar: "make it work first"): the web host runs a STATEFUL
+  // mock sync node instead of throwing on writes — the toggle, pairing and unpair flows must be
+  // drivable end to end at 5175 so the Device Center UI is supervisable without the desktop main.
+  const on = await api.dbCall('syncSetEnabled', { enabled: true })
+  assert.equal(on.enabled, true, 'toggle resolves (mock node starts)')
+  assert.equal(await api.dbCall('syncGetPairingCode').then(r => (r.code || '').length), 6, 'sync on -> mock 6-digit pairing code with TTL')
+  assert.equal((await api.dbCall('syncPairWithCode', { code: '482913' })).ok, true, 'mock pair-by-code succeeds')
+  const peers = (await api.dbCall('syncGetStatus')).peers
+  assert.equal(peers.length, 2, 'paired state materializes the two preset mock devices')
+  await api.dbCall('syncUnpairPeer', { deviceId: peers[0].deviceId })
+  assert.equal((await api.dbCall('syncGetStatus')).peers.length, 1, 'unpair removes exactly the unpaired peer')
 })
