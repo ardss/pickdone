@@ -71,8 +71,10 @@ function migratePlainToEncrypted (dir, file, key) {
     // ATTACH 的 KEY 是 SQL 字面量(参数化不支持),必须双写单引号——加密 key 是唯一触碰 SQL 字符串的敏感值
     const keyLiteral = String(key).replace(/'/g, "''")
     db.exec(`ATTACH DATABASE '${encFile.replace(/'/g, "''")}' AS enc KEY '${keyLiteral}'`)
-    const encSchema = SCHEMA.replace(/CREATE TABLE IF NOT EXISTS /g, 'CREATE TABLE IF NOT EXISTS enc.')
-      .replace(/CREATE INDEX IF NOT EXISTS /g, 'CREATE INDEX IF NOT EXISTS enc.')
+    // 2026-10-10: line-anchored rewrite (an unanchored replace mangled comments containing the substring).
+    const encSchema = SCHEMA
+      .replace(/^[ \t]*CREATE TABLE IF NOT EXISTS /gm, 'CREATE TABLE IF NOT EXISTS enc.')
+      .replace(/^[ \t]*CREATE INDEX IF NOT EXISTS /gm, 'CREATE INDEX IF NOT EXISTS enc.')
     db.exec(encSchema)
     // 表清单动态枚举,禁手工维护:2026-09-04 深审实锤硬编码四表漏了 plan_chips/tomato_records,行表化用户的账本会在迁移中被清空(P0)
     const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all().map(r => r.name)
@@ -294,12 +296,6 @@ function initInner (userDataPath) {
     hadKeyFile = false
   }
   // C1 (P0 2026-09-24) 加密迁移崩溃中间态降级探测:migratePlainToEncrypted 的"写 db.key →
-  // rename(明文→.plain-bak) → rename(密→todos.db)"序列若在两步 rename 之间掉电,会留下
-  // "明文 todos.db + 有效 db.key"的组合。旧路径三条自愈链全部失效:带钥打开在首次读页即抛
-  // dbEncMismatch;dbRecovery 见 SQLite 头完好判 transient 拒绝改名恢复;重启即死循环。
-  // 探测:db.key 存在且 todos.db 头部仍是明文 SQLite magic(multiple-ciphers 加密库首页为
-  // 密文,不含该 magic)→ 库实际未加密,key 已作废 → 把 db.key 移为 db.key.superseded-<ts>,
-  // 按无钥明文库路径继续(init 末段会用新钥走 migratePlainToEncrypted 重加密),数据零丢失。
   if (hadKeyFile && fs.existsSync(file) && require('./dbRecovery.cjs').sqliteHeaderOk(file)) {
     const superseded = keyFile + '.superseded-' + new Date().toISOString().replace(/[:.]/g, '-')
     try {

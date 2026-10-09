@@ -85,7 +85,17 @@ function main () {
   if (args.includes('--staged')) {
     const { execFileSync } = require('child_process')
     const out = execFileSync('git', ['diff', '--cached', '--name-only', '--diff-filter=ACM'], { cwd: ROOT, encoding: 'utf8' })
-    files = out.split('\n').filter(Boolean).map(f => path.join(ROOT, f)).filter(f => fs.existsSync(f))
+    // git prints paths relative to the REPO toplevel, which is NOT this dir (pickdone/ nests
+    // inside the repo root): resolving them against ROOT silently matched nothing and the
+    // staged gate checked ZERO files for its whole life (the 2026-10-10 ratchet-red-on-main
+    // root cause). Resolve against the toplevel and refuse to fake-green on a mismatch.
+    const top = execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: ROOT, encoding: 'utf8' }).trim()
+    const names = out.split('\n').filter(Boolean)
+    files = names.map(f => path.join(top, f)).filter(f => fs.existsSync(f))
+    if (!files.length && names.length) {
+      console.error('✗ [file-size] staged names resolved to zero existing files (toplevel mismatch) — refusing to pass blindly')
+      process.exit(1)
+    }
   } else {
     files = listFiles(ROOT)
   }
