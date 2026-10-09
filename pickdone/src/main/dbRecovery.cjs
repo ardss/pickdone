@@ -655,13 +655,33 @@ function restoreCategoriesFromCriticalBackup (raw, upsertCategory) {
   } catch { return 0 }
 }
 
+/** Task-count of a critical-backup JSON ({backup:{todoState:{todoList,recycleList}}}); 0 when
+ *  anything is missing. Used by the destroy-guard below — plausibility ("parses to an object")
+ *  stops garbage bytes but NOT an empty snapshot. */
+function criticalBackupRowCount (jsonText) {
+  try {
+    const t = (JSON.parse(jsonText).backup || {}).todoState || {}
+    return (t.todoList || []).length + (t.recycleList || []).length
+  } catch { return 0 }
+}
+
 /** Atomic disaster-backup write: temp file + rename within the same directory, preventing an interruption from corrupting the backup file itself.
  *  dest is decided by the caller (the main process currently passes the external default root pickdone-backups); the directory is created first if missing.
  *  main-ipc-2 fsync fix (2026-09-22): writeFileDurable fsyncs the data before the rename — this
- *  JSON is the disaster-recovery SOURCE; a power cut between OS cache and rename left it torn. */
+ *  JSON is the disaster-recovery SOURCE; a power cut between OS cache and rename left it torn.
+ *  Destroy-guard (2026-10-10 backup audit): a syntactically valid but EMPTY snapshot (renderer
+ *  boots with a blank in-memory store and dutifully persists it) must not atomically destroy the
+ *  last good recovery source — that file is the only recovery left. When the existing backup
+ *  holds rows and the incoming one holds none, the empty one is quarantined to a side file and
+ *  the fresh snapshot is NOT overwritten. */
 function writeCriticalStateBackupAtomic (ud, jsonText) {
   fs.mkdirSync(ud, { recursive: true })
   const dest = path.join(ud, 'critical-state-backup.json')
+  if (criticalBackupRowCount(jsonText) === 0 && fs.existsSync(dest) && criticalBackupRowCount(fs.readFileSync(dest, 'utf8')) > 0) {
+    const side = path.join(ud, 'critical-state-backup.empty-' + Date.now() + '.json')
+    require('./durable-fs').writeFileDurable(side, jsonText)
+    return side
+  }
   require('./durable-fs').writeFileDurable(dest, jsonText)
   return dest
 }

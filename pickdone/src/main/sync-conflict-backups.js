@@ -106,7 +106,13 @@ function pruneBackups (call, originalKey) {
 let snapSeq = 0
 function snapKeyFor (originalKey) {
   snapSeq = (snapSeq + 1) % Number.MAX_SAFE_INTEGER
-  return META_CONFLICT_BACKUP_PREFIX + originalKey + '.' + Date.now().toString(36) + '-' + snapSeq.toString(36)
+  // The `r` prefix keeps this namespace disjoint from sync-apply's apply-path counter (2026-10-10
+  // backup audit): both counters start at 0, so same-key snapshots landing in the SAME millisecond
+  // (apply-path conflict backup + restore winner re-backup right after boot) minted IDENTICAL keys
+  // and the second setMeta silently overwrote the first. `r<seq36>` still parses base-36 in
+  // compareMetaBackupKeys, so prune ordering is unaffected (it just sorts restore copies later
+  // within the same millisecond, which is their true mint order anyway).
+  return META_CONFLICT_BACKUP_PREFIX + originalKey + '.' + Date.now().toString(36) + '-r' + snapSeq.toString(36)
 }
 
 module.exports = {
