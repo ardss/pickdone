@@ -171,9 +171,13 @@ export function fileStore(dir) {
 
 // ---------- relay logic (transport-agnostic, directly unit-testable) ----------
 
-export function createRelay(store) {
+export function createRelay(store, { enrollment = '' } = {}) {
   return {
     store,
+    // 2026-10-10: when set, /v1/device/register must present this secret (body `enrollment`
+    // or `x-enrollment` header) — closes the guess-an-account open-registration takeover path
+    // (CTO sweep B#1). Unset keeps the historical open registration.
+    enrollment,
     /**
      * Device registration. First-time registration is open (the register response is the only
      * channel that mints a bearer secret). Re-registration of a device whose row ALREADY holds
@@ -286,6 +290,28 @@ const PROTOCOL_VERSION = 1
 
 export function startRelayServer(relay, { port = 0, host = '127.0.0.1' } = {}) {
   const MAX_BODY_BYTES = 8 * 1024 * 1024
+  // 2026-10-10 (CTO sweep B#1/B#5): the open-registration door gets two cheap guards.
+  // (a) per-IP register rate limit — an unauthenticated flood previously grew the device
+  //     map without bound; (b) optional enrollment secret — when the operator sets one
+  //     (createRelay {enrollment}), /v1/device/register must present it (timing-safe),
+  //     closing the guess-an-account takeover path. Clients are unaffected when unset.
+  const REGISTER_LIMIT = 10
+  const REGISTER_WINDOW_MS = 60_000
+  const registerHits = new Map() // ip -> [timestamps in window]
+  const registrationAllowed = (ip) => {
+    const now = Date.now()
+    const hits = (registerHits.get(ip) || []).filter(t => now - t < REGISTER_WINDOW_MS)
+    if (hits.length >= REGISTER_LIMIT) { registerHits.set(ip, hits); return false }
+    hits.push(now)
+    registerHits.set(ip, hits)
+    return true
+  }
+  const enrollmentOk = (body, header) => {
+    if (!relay.enrollment) return true
+    const given = String((body && body.enrollment) || header || '')
+    const a = Buffer.from(given); const b = Buffer.from(String(relay.enrollment))
+    return a.length === b.length && timingSafeEqual(a, b)
+  }
   const server = createServer((req, res) => {
     const chunks = []
     let total = 0
@@ -314,6 +340,21 @@ export function startRelayServer(relay, { port = 0, host = '127.0.0.1' } = {}) {
       let body = {}
       try {
         if (chunks.length) body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+        if ((req.url || '').split('?')[0] === '/v1/device/register') {
+          const ip = req.socket.remoteAddress || 'unknown'
+          if (!registrationAllowed(ip)) {
+            res.writeHead(429, { 'content-type': 'application/json' })
+            res.end(JSON.stringify({ error: 'too many registrations from this address' }))
+            responded = true
+            return
+          }
+          if (!enrollmentOk(body, req.headers['x-enrollment'])) {
+            res.writeHead(403, { 'content-type': 'application/json' })
+            res.end(JSON.stringify({ error: 'enrollment secret required (see relay operator)' }))
+            responded = true
+            return
+          }
+        }
         const out = route(relay, req.method, req.url, body, req.headers.authorization)
         res.writeHead(200, { 'content-type': 'application/json', 'x-protocol-version': String(PROTOCOL_VERSION) })
         res.end(JSON.stringify({ protocolVersion: PROTOCOL_VERSION, ...out }))
@@ -428,7 +469,15 @@ export async function main(argv = process.argv.slice(2)) {
     const { sqliteStore } = await import('./sync-relay-sqlite.mjs')
     store = sqliteStore(join(data || '.', 'relay.db'))
   } else store = data ? fileStore(data) : memoryStore()
-  const relay = createRelay(store)
+  const relay = createRelay(store, { enrollment: arg('enrollment', process.env.RELAY_ENROLLMENT_SECRET || '') })
+  if (!relay.enrollment && !/^127\.|^\[::1\]|^localhost/.test(host)) {
+    // CTO sweep B#1/B#2: non-loopback + open registration = anyone who guesses an account
+    // string owns that account's sync stream. Refuse to be silent about it.
+    console.warn('[pickdone-sync-relay] WARNING: binding non-loopback with OPEN registration —\n' +
+      '  anyone who learns/guesses an account name can register into it. Set --enrollment <secret>\n' +
+      '  (or RELAY_ENROLLMENT_SECRET env) and configure it on every device to close that door,\n' +
+      '  and terminate TLS in front for anything beyond a trusted LAN.')
+  }
   return startRelayServer(relay, { port, host }).then(server => {
     console.log(`[pickdone-sync-relay] listening on :${server.address().port} (storage: ${store.kind}${data ? ` @ ${dirname(data)}` : ''})`)
     return server

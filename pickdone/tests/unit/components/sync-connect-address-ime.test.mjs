@@ -23,13 +23,16 @@ import { fileURLToPath } from 'node:url'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const SYNC_TAB = 'renderer/js/components/settings/SettingsSyncTab.vue'
+// 2026-10-10: the pure block moved verbatim to its own module (size ratchet) — markers intact
+const SYNC_TAB_PURE = 'renderer/js/components/settings/sync-tab-helpers.js'
 const SETTINGS_MODAL = 'renderer/js/components/SettingsModal.vue'
 const read = p => fs.readFileSync(path.join(ROOT, p), 'utf8')
 const syncSrc = read(SYNC_TAB)
+const pureSrc = read(SYNC_TAB_PURE)
 
 function pureFns (names) {
-  const m = syncSrc.match(/\/\/ \[component-fixes\] pure-start[^\n]*\n([\s\S]*?)\/\/ \[component-fixes\] pure-end/)
-  assert.ok(m, `${SYNC_TAB}: pure block markers missing`)
+  const m = pureSrc.match(/\/\/ \[component-fixes\] pure-start[^\n]*\n([\s\S]*?)\/\/ \[component-fixes\] pure-end/)
+  assert.ok(m, `${SYNC_TAB_PURE}: pure block markers missing`)
   const fn = new Function(m[1] + `\nreturn { ${names.join(', ')} }`)
   return fn()
 }

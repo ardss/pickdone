@@ -28,3 +28,4 @@
 
 - `npm run check:all`（全维度）是唯一合入门槛；a11y 加 `--a11y`；UI 实测用隔离实例（`TODO_USER_DATA_DIR`）。
 - **CLI 写命令必须带隔离**（2026-09-25 结构性门禁）：CLI 的 add/edit/done/delete 等一切写命令在无 `TODO_DB_DIR`/`TODO_USER_DATA_DIR` 时直接拒绝（默认落 `%APPDATA%\pickdone` 真库）；确要写真实库须显式 `--yes-i-know`。开发/测试一律 `TODO_DB_DIR=<隔离目录>`；勿裸 `electron .`（用 `scripts/app-dev.mjs`）。
+- **旅程审计（第 4 路挖掘，2026-10-10）**：代码级审查发现不了"每层都对、拼起来不成立"的断裂（discovered[] 丢失事故）。动了某个功能，就按 `docs/journey-audit.md` 的清单走一遍该功能的用户旅程；有自动化的一定要跑——同步是 `node cli/journey-sync.cjs`（需先 `npm run pack`，双真实实例 8 步全流程）+ `tests/unit/lan-sync/status-payload-contract.test.mjs`（状态载荷三层交接契约，UI/CLI 新读的字段载荷没提供会直接红灯）。

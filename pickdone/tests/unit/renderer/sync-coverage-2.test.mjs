@@ -310,7 +310,9 @@ test('Y9: SettingsSyncTab consumes exactly the contract ops and hides when absen
   assert.ok(src.includes("dbCallLoose('syncConflictBackupsList')"), 'list op')
   assert.ok(src.includes("dbCallLoose('syncConflictBackupRestore', { key: b.key })"), 'restore op with the {key} payload object (U6)')
   assert.ok(src.includes('conflictBackups = null'), 'ops absent -> section hidden')
-  assert.ok(src.includes("v-if=\"conflictBackups !== null\""), 'defensive section gate')
+  // 2026-10-09 UX rework: gate also hides the section at 0 (an empty collapsible row read as
+  // clutter) — null and [] are both falsy, so the defensive ops-absent behavior is preserved.
+  assert.ok(src.includes("v-if=\"conflictBackups && conflictBackups.length\""), 'defensive section gate (null ops AND empty list both hide)')
 })
 
 test('Y9: conflict backup i18n keys exist in BOTH locales', () => {

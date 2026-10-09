@@ -120,7 +120,7 @@ test('sync unpair: missing device â†’ USAGE; ok paths plain + json; unknown op â
   await runSync({ opts: { _: ['unpair'], device: 'd9', json: true }, lib: lib3, emit: v => emitted.push(v) })
   assert.deepEqual(emitted[0], { unpaired: 'd9', result: { ok: 1 } })
   await assert.rejects(() => runSync({ opts: { _: ['nonsense'] }, lib: makeLib(), emit: null }),
-    e => e.code === 'USAGE' && /status\|pair/.test(e.message))
+    e => e.code === 'USAGE' && /status\|enable.*pair/.test(e.message))
 })
 
 /* ---------- renderer/js/views/statistics/csv.js ---------- */

@@ -99,7 +99,8 @@ test('P2b: conflict toast path reuses one instance and rate-limits to 30s', () =
 /* ---------------- P2c: unpaired-by-remote peer card ---------------- */
 
 test('P2c: peerUnpairedByRemote maps lastError markers to the dedicated state', () => {
-  const src = read('renderer/js/components/settings/SettingsSyncTab.vue')
+  // 2026-10-10: the pure helpers moved verbatim to their own module (size ratchet)
+  const src = read('renderer/js/components/settings/sync-tab-helpers.js')
   const m = src.match(/function peerUnpairedByRemote[\s\S]*?\n\}/)
   assert.ok(m, 'pure helper present')
   // eslint-disable-next-line no-new-func

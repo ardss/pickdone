@@ -238,3 +238,18 @@ test('channel e2e: pair command on node A + pair-respond command on node B compl
   await clientNode.stop()
   await serverNode.stop()
 })
+
+test('channel: set-enabled dispatches syncSetEnabled and returns the refreshed status', async () => {
+  let enabledArg = null
+  const { ch, receipts } = fakeChannel({
+    syncSetEnabled: (p) => { enabledArg = p; return { enabled: p.enabled, deviceId: 'node-x' } },
+    syncGetStatus: () => ({ enabled: enabledArg && enabledArg.enabled, listening: enabledArg && enabledArg.enabled, peers: [] }),
+  })
+  ch.forward(JSON.stringify({ seq: 21, action: 'set-enabled', enabled: true }))
+  await new Promise(r => setTimeout(r, 20))
+  assert.deepEqual(enabledArg, { enabled: true }, 'the toggle payload reaches syncSetEnabled verbatim')
+  assert.equal(receipts.length, 1)
+  assert.equal(receipts[0].ok, true, 'receipt ok')
+  assert.equal(receipts[0].status.listening, true, 'receipt carries the refreshed status for the CLI line')
+  assert.equal(receipts[0].action, 'set-enabled')
+})

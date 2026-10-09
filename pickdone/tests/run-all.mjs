@@ -120,11 +120,11 @@ if (suites.length) console.error(`[run-all] suite filter: ${suites.join(',')} ->
 // measured 139s under load — the margin note below used to claim 6.5x when the slowest was
 // ~18s. 5min still names a hang well inside the CI job budget instead of the 30min sit.
 const TEST_TIMEOUT_MS = 300000
-// D22: optional file-concurrency knob (TEST_CONCURRENCY env, default = node's own default).
-// The electron-booting integration specs are the flake surface under a loaded box — a lower
-// ceiling (e.g. TEST_CONCURRENCY=4) trades wall time for boot stability without touching
-// what runs. Unset behavior is byte-identical to before.
-const TEST_CONCURRENCY = process.env.TEST_CONCURRENCY
+// D22 file-concurrency knob. 2026-10-10 (CTO sweep C#6): default changed from "node's own
+// default" (= cores, observed 8-12 here) to 4 — the electron-booting integration specs are the
+// flake surface under a loaded box, and the boot flakes (J4/F4a family) reproduce only at high
+// concurrency. 4 trades wall time for boot stability; TEST_CONCURRENCY env still overrides.
+const TEST_CONCURRENCY = process.env.TEST_CONCURRENCY || '4'
 // --test-force-exit: a test that passes but leaks a handle (listening server, open socket,
 // watcher) would otherwise keep the per-file child process alive forever — the runner then waits
 // with ZERO results (0 failures, budget kill, unattributable). Force-exit makes the child leave

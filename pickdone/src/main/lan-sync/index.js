@@ -683,6 +683,12 @@ function createLanSyncNode(opts) {
             pendingCount: getMaxSeq && wm != null ? Math.max(0, currentMaxSeq() - wm) : null,
           }
         }),
+        // 2026-10-09 UX rework: surface the mDNS/UDP discovery layer's live sightings —
+        // announced-but-NOT-yet-paired devices the user can pair with one click. Excluding
+        // self + already-paired ids keeps the list to actionable rows only.
+        discovered: (discovery.getPeers() || [])
+          .filter((p) => p && p.deviceId !== deviceId && !peers.has(p.deviceId))
+          .map((p) => ({ deviceId: p.deviceId, deviceName: p.name, host: p.host, port: p.port, lastSeen: p.lastSeen })),
         recent: recent.slice(),
         security: security.slice(),
         lastRoundAt,
