@@ -41,8 +41,9 @@ test('applyRestoreDump consumes the marker: warning is surfaced in addition to r
   // 1. the dump's degradedSegments field reaches the shared renderer,
   assert.match(dataTab, /describeDegradedSegments\(b\.degradedSegments\)/,
     'red before the fix: nothing in the component read b.degradedSegments')
-  // 2. it produces a non-blocking $message.warning,
-  assert.match(dataTab, /\$message\.warning\('Backup missing segments/, 'the warning is non-blocking and names the missing segments')
+  // 2. it produces a non-blocking $message.warning (now via the backupDegradedWarn i18n key,
+  //    maint 2026-10-09: the hardcoded English string broke the zh locale),
+  assert.match(dataTab, /\$message\.warning\(this\.\$t\('statsE\.SettingsModal\.backupDegradedWarn'/, 'the warning is non-blocking and names the missing segments')
   // 3. it sits INSIDE applyRestoreDump and never pushes into `failed` (honesty surface, not a gate).
   const fn = dataTab.match(/async applyRestoreDump \(dump\) \{[\s\S]*?\n {4}\},/)
   assert.ok(fn, 'applyRestoreDump found')
