@@ -358,8 +358,8 @@ export default {
           }
         } catch { /* skip the cascade when subtask JSON is malformed */ }
       }
-      if (target && todo.repeatId) dispatch('ensureNextRepeatInstance', { ...todo, complete: true })
       const r = await dispatch('updateTodoFields', { taskId: todo.taskId, patch })
+      if (target && todo.repeatId && r && !r.notFound) /* M: renewal only after the completion write landed; the old pre-await order minted a ghost instance on notFound */ dispatch('ensureNextRepeatInstance', { ...todo, complete: true })
       if (!target) {
         await removeRenewedInstance({ todo, state, commit, dispatch, safeUpsert, snapshotForDelete })
       }

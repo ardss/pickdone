@@ -14,6 +14,37 @@ import { createRevisionStore, commitLocal, applyEnvelope, materializedAll } from
 import { packEnvelope, unpackEnvelope, hashPayload } from '../../sync-core/revision/envelope.mjs'
 import { seal, open } from '../../sync-crypto/e2e.mjs'
 
+/** Per-POST push budget (~4MB serialized envelope bytes). The relay rejects bodies over its
+ *  8MB cap with 413 — and the old single-POST push meant one oversized batch was rejected
+ *  FOREVER, rebuilt identically every round: a permanent sync break. 4MB per POST keeps a
+ *  healthy margin under the relay cap while still batching efficiently. */
+export const PUSH_CHUNK_BYTES = 4 * 1024 * 1024
+
+/**
+ * Pure chunking helper (unit-testable): split push items into consecutive chunks whose
+ * serialized-envelope bytes fit `budget`. A single item larger than the budget always gets
+ * its own chunk — it is sent alone so the relay's per-item oversize handling (pull `skipped`,
+ * spec §68) is the only failure mode, never a whole-batch 413.
+ * @param {{opId: string, envelope: string}[]} items
+ * @param {number} [budget] serialized byte budget per chunk (default PUSH_CHUNK_BYTES)
+ * @returns {{items: {opId: string, envelope: string}[], ids: string[], bytes: number}[]}
+ */
+export function chunkPushItems(items, budget = PUSH_CHUNK_BYTES) {
+  const chunks = []
+  let cur = null
+  for (const item of items) {
+    const size = Buffer.byteLength(item.envelope)
+    if (!cur || (cur.bytes + size > budget && cur.items.length > 0)) {
+      cur = { items: [], ids: [], bytes: 0 }
+      chunks.push(cur)
+    }
+    cur.items.push(item)
+    cur.ids.push(item.opId)
+    cur.bytes += size
+  }
+  return chunks
+}
+
 /**
  * @param {object} opts
  * @param {string} opts.nodeId stable device id
@@ -79,18 +110,25 @@ export function createRelayClient({ nodeId, account, baseUrl, fetchImpl = fetch,
     /** One sync round. Idempotent; safe to call from any scheduler cadence. */
     async round() {
       const items = []
-      const batch = []
       for (const env of s.revisions.values()) {
         if (!cursorState.pushed.has(env.revisionId)) {
           // E2E: the relay stores opaque ciphertext when a data key is present —
           // same schema, same endpoints (spec §3: payload stays opaque to the relay)
           items.push({ opId: env.revisionId, envelope: dataKey ? seal(dataKey, env) : packEnvelope(env) })
-          batch.push(env.revisionId)
         }
       }
-      // mark ONLY after the relay accepted the batch: marking before made a transient
-      // push failure orphan the revisions forever (never re-pushed, silent divergence)
-      if (items.length) { await post('/v1/sync/push', { account, device: nodeId, items }); for (const id of batch) cursorState.pushed.add(id) }
+      // mark ONLY after the relay accepted each chunk: marking before made a transient push
+      // failure orphan the revisions forever (never re-pushed, silent divergence). Chunked
+      // pushes (2026-10-09 P1): one POST per ~4MB chunk — the old single POST 413'd forever on
+      // an oversized batch (the same batch rebuilt identically every round = permanent break).
+      // Per-chunk marking keeps the same invariant per chunk: only the accepted chunk's ids
+      // enter the pushed-set; a failed chunk's revisions re-push next round.
+      if (items.length) {
+        for (const chunk of chunkPushItems(items)) {
+          await post('/v1/sync/push', { account, device: nodeId, items: chunk.items })
+          for (const id of chunk.ids) cursorState.pushed.add(id)
+        }
+      }
       // D26: pin the byte budget explicitly (8MB, the relay's push body cap) instead of riding
       // the server default — an envelope up to that size is deliverable by construction, so a
       // pull can only report `skipped` for frames that are oversized-by-policy, never by a

@@ -221,3 +221,50 @@ test('A14: daysDiffFromToday derives the diff from the injected today timestamp'
   assert.equal(daysDiffFromToday('2026-10-02', null), daysDiffFromToday('2026-10-02', Date.now()),
     'missing today falls back to the wall clock (helper-level default only)')
 })
+
+/* ---------------- [P1 2026-10-09] undo must NOT delete a PRE-GENERATED next instance ----------------
+ * The 2026-10-08 timed-renewal change was not the only producer of future instances: RepeatModal
+ * slices dates up-front and the CLI's repeatOn pre-generates too. findRenewedNextInstance's
+ * day-based heuristic could not tell a renewal-created instance (minted AT completion time) from
+ * a pre-generated one (created BEFORE the completion), so un-completing soft-deleted a legitimate
+ * pre-generated sibling and cascaded its chips. Fix: require candidate.createTime >= completedAt. */
+test('P1 2026-10-09: findRenewedNextInstance keeps a PRE-GENERATED instance (created before the completion)', () => {
+  const completedAt = 5000
+  const undone = row('a', { dayStart: 10, repeatId: 'r1', complete: true, completedAt })
+  // Pre-generated future instance: last in the group, later dayStart, incomplete — everything the
+  // old heuristic wanted — but created BEFORE the completion, so it is not a renewal artifact.
+  const preGenerated = row('b', { dayStart: 17, repeatId: 'r1', createTime: 1000 })
+  assert.equal(findRenewedNextInstance(undone, [preGenerated]), null,
+    'a pre-generated future instance (createTime < completedAt) must survive the undo')
+  // Renewal-created instance: minted at completion time → still the removal target
+  const renewed = row('c', { dayStart: 17, repeatId: 'r1', createTime: completedAt + 10 })
+  assert.equal(findRenewedNextInstance(undone, [renewed]), renewed,
+    'a renewal-created instance (createTime >= completedAt) is still removed on undo')
+})
+
+test('P1 2026-10-09: undoing a completion whose group was PRE-GENERATED leaves the sibling untouched', async () => {
+  const undone = row('a', { dayStart: 10, repeatId: 'r1', complete: true, completedAt: 5000 })
+  const preGenerated = row('b', { dayStart: 17, repeatId: 'r1', createTime: 1000 })
+  const { ctx, commits } = undoCtx([undone, preGenerated], [])
+  await todoActions.toggleComplete.call({}, ctx, undone)
+  assert.equal(commits.some(c => c[0] === 'upsertLocal' && c[1].taskId === 'b'), false,
+    'the pre-generated next instance is NOT soft-deleted by the undo (no chip cascade either)')
+})
+
+test('P1 2026-10-09: renewal is NOT minted when the completion write resolves notFound (ghost guard)', async () => {
+  const done = row('a', { dayStart: 10, repeatId: 'r1' })
+  const ctx = {
+    state: { todoList: [done] },
+    commit: () => {},
+    dispatch: async (type) => {
+      if (type === 'updateTodoFields') return { notFound: true, taskId: done.taskId } // structured not-found (TL-5)
+      dispatched.push(type)
+      return {}
+    },
+    rootState: { settings: {}, auth: { user: { userId: 'u' } } }
+  }
+  const dispatched = []
+  await todoActions.toggleComplete.call({}, ctx, done)
+  assert.equal(dispatched.includes('ensureNextRepeatInstance'), false,
+    'red before the fix: the renewal dispatched before the completion write landed — a failed/notFound completion minted a ghost future instance')
+})

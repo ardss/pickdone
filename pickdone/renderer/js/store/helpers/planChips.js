@@ -42,6 +42,14 @@ export async function rowChipSync (taskId, prevDayStart, nextRow) {
     const toDay = nextRow.delete === true ? null : (nextRow.dayStart ? fmtChipDay(nextRow.dayStart) : null)
     if (toDay === null) { await snapshotForDelete(taskId); await clearTaskChips(taskId); return }
     const fromDay = prevDayStart ? fmtChipDay(prevDayStart) : null
+    if (!fromDay) {
+      // Date (re-)added on an un-dated row: a prior date-removal left 'planChipsSnapshot:<id>'
+      // in meta with the chips cleared, and moveTaskChips(null, toDay) early-returns — the
+      // snapshot could never be consumed. Restore it, re-dated onto the NEW day (restoreSnapshot's
+      // D14-B4 toDay parameter); when no snapshot meta exists this is a harmless no-op.
+      await restoreSnapshot(taskId, toDay)
+      return
+    }
     await moveTaskChips(taskId, fromDay, toDay)
   } catch (e) { console.warn('[todo] schedule chip sync failed (task updated, chip will converge on next op):', e) }
 }
@@ -72,6 +80,15 @@ export function planSnapshotRowSync (before, after) {
     // date-clear had no snapshot meta to restore and the schedule chips were lost permanently — rowChipSync's
     // same-scenario path already snapshotted via updateTodoFields' delete-branch parity)
     if (!after.dayStart) return [{ op: 'snapshotForDelete', taskId }, { op: 'clearTaskChips', taskId }]
+    if (!before.dayStart) {
+      // date (re-)added on an un-dated row (undo of a date-clear, or the user re-sets a date):
+      // the 2026-09-12 snapshot+clear above left 'planChipsSnapshot:<id>' in meta with the chips
+      // cleared. The old planner emitted moveTaskChips(fromTs: 0) which moveTaskChips early-returns
+      // on, so the snapshot was never consumed/restored — chips were permanently orphaned in meta
+      // and the timeline lost them. Restore the snapshot instead (verbatim for the undo path — the
+      // undone row carries its original dayStart again; the executor ignores toTs by contract).
+      return [{ op: 'restoreSnapshot', taskId, toTs: after.dayStart }]
+    }
     return [{ op: 'moveTaskChips', taskId, fromTs: before.dayStart || 0, toTs: after.dayStart }] // date change → migrate like updateTodoFields
   }
   if (!before && !after.delete && after.dayStart) {

@@ -16,7 +16,7 @@
             <app-icon name="search" :size="14"/>
             <input type="text" class="settings-search__input" :placeholder="$t('statsH.SettingsModal.searchSettings')"
                    :aria-label="$t('statsH.SettingsModal.searchSettings')" v-model="searchQ" @input="applySearchFilter"/>
-            <button v-if="searchQ" type="button" class="settings-search__clear close-x close-x--sm" :aria-label="$t('statsE.SettingsModal.closeBtn')" @click="clearSearch"></button>
+            <button v-if="searchQ" type="button" class="settings-search__clear close-x close-x--sm" :aria-label="$t('statsE.SettingsModal.clearSearch')" @click="clearSearch"></button>
           </div>
           <div v-if="searchEmpty" class="settings-search-empty">{{ $t('statsH.SettingsModal.searchEmpty') }}</div>
 
@@ -128,10 +128,10 @@
             </div>
             <div class="form">
               <div class="form-label">{{ $t('statsE.SettingsModal.securityPrivacySection') }}</div>
-              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.securityLockLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.enableSecurityLock" @change="v=>set({enableSecurityLock:v})"/></div></div>
+              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.securityLockLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.enableSecurityLock" @change="onLockToggle"/></div></div>
               <div class="form-item" v-if="st.enableSecurityLock"><span class="form-item__label">{{ $t('statsE.SettingsModal.lockPasswordLabel') }}</span>
                 <div class="form-item__control">
-                  <el-input size="small" class="ctl-md" show-password :aria-label="$t('statsE.SettingsModal.lockPasswordLabel')" :model-value="st.securityLockPassword" @change="saveLockPassword"/>
+                  <el-input size="small" class="ctl-md" show-password :aria-label="$t('statsE.SettingsModal.lockPasswordLabel')" :model-value="lockPwDraft" @change="saveLockPassword($event)"/>
                   <button class="mini" @click="setLockTest">{{ $t('statsE.SettingsModal.lockNowBtn') }}</button>
                 </div></div>
             </div>
@@ -343,7 +343,7 @@ export default {
       updActive: true,
       updPercent: 0,
       updNewVersion: '',
-      updInfo: null
+      updInfo: null, lockPwDraft: '' // password input binds a LOCAL draft, never st.securityLockPassword (the stored value is enc1:… ciphertext)
     }
   },
   watch: {
@@ -435,7 +435,7 @@ export default {
       this.renameUser(this.nameDraft)
     },
     set (patch) {
-      this.$store.dispatch('settings/update', patch) // goes through the action to sync to the main process config.json (otherwise toggles like launch-at-startup/hardware acceleration would not take effect)
+      this.$store.dispatch('settings/update', patch).then(r => { if (r && r.ok === false) this.$message.error(this.$t('statsE.SettingsModal.settingsSaveFailed')) }) // goes through the action to sync to config.json (launch-at-startup/hardware accel etc.); ok:false = config write failed — honest error toast, never silent
       // Thin call (P1-1, maint/dw 2026-09-23): the tomato-duration mirror moved INTO the
       // settings/update action (store/settings.js tomatoLedgerPatch) — the action is now the single
       // bridge every inbound path (settings page / CLI / LAN sync / DB restore) converges through.
@@ -506,14 +506,14 @@ export default {
     onCityPick (v) {
       this.set({ weatherCity: Array.isArray(v) ? v[v.length - 1] : '' })
     },
-    async saveLockPassword (v) {
-      // When encryption is unavailable the main process refuses — never fall back to storing plaintext (the old catch once wrote plaintext into config.json); the feature stays off
-      try { const enc = await window.todoAPI.encryptSecret(v); this.set({ securityLockPassword: enc }) }
+    onLockToggle (v) { // security-lock.js: no stored password accepts ANY lock-screen input (`if (!expected) return true`) — enabling without one is false protection
+      if (v && !this.st.securityLockPassword) { this.$message.warning(this.$t('statsE.SettingsModal.lockNeedsPassword')); return } this.set({ enableSecurityLock: v })
+    },
+    async saveLockPassword (v) { // empty v = untouched/cleared field: never overwrite the stored ciphertext with '' or enc('') (silent wipe) — changing = type a NEW password
+      try { if (!v) return; const enc = await window.todoAPI.encryptSecret(v); this.set({ securityLockPassword: enc }); this.lockPwDraft = '' } // encryption-unavailable refusal must surface, never a plaintext fallback
     catch (e) {
-      // 加密服务不可用时主进程拒绝 —— 功能保持关闭,但不能静默:必须告知用户密码未保存
-      console.error('[Settings] secure encryption unavailable, lock password not saved', e)
-      this.$message.error(this.$t('statsE.SettingsModal.lockPasswordSaveFailed'))
-    }
+      console.error('[Settings] secure encryption unavailable, lock password not saved', e) // 加密服务不可用,密码未保存,必须告知用户
+      this.$message.error(this.$t('statsE.SettingsModal.lockPasswordSaveFailed')); }
     },
     setLockTest () {
       // Real lock: the main process hides the main window and shows the lock screen (validation happens in the main process)
@@ -549,9 +549,8 @@ export default {
     },
     previewCompleteSound () {
       const st = this.$store.state.settings
-      // Preview sound = the actual completion sound (settings.completeSound); the previously hardcoded, nonexistent tomato_ok.mp3 was always silent
-      let src = confirmUrl(st.completeSound)
-      if (st.whiteNoiseAudio && st.whiteNoiseAudio.startsWith('file:')) src = st.whiteNoiseAudio
+      // Preview sound = the actual completion sound (settings.completeSound), always — the old white-noise override made the button play the wrong file
+      const src = confirmUrl(st.completeSound)
       try { new Audio(src).play().catch(() => {}) } catch (e) { /* no-op */ }
     },
     feedback () {

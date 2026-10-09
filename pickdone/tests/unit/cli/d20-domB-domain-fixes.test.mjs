@@ -210,3 +210,51 @@ test('B9: addMilestone with a duplicate title+date echoes the NEW row (id-stampe
   assert.ok(r.milestones.some(m => m.id === r.added.id), 'the echoed id is the one stored')
   assert.equal(writes.length, 1, 'one meta put for the milestone blob')
 })
+
+/* ---------------- [P1 2026-10-09] timed-renewal propagation miss: CLI idempotency pre-check ----------------
+ * The 2026-10-08 change re-anchored the renewal base at the completed instance's TIMED todoTime
+ * (14:30), but renewRepeatAfterComplete still queried dayStartFrom/To = next.todoTime — comparing
+ * midnight scheduledDay against a timed instant, so the idempotency pre-check was dead for timed
+ * repeats: done twice minted once via the UNIQUE violation path and RETHREW past the done path
+ * (the completion had already persisted). Fix: normalize to local midnight before both queries. */
+test('B2b: timed repeat done twice — midnight-normalized idempotency pre-check, no throw, no double-mint', () => {
+  const D = +dayjs().startOf('day')
+  const AT1430 = 14 * 3600000 + 30 * 60000
+  const t = { taskId: 'src3', repeatId: 'r3', dayStart: D, todoTime: D + AT1430, reminderTime: 0, userId: 840001, estimate: 0, taskContent: 'x' }
+  const nextDay = D + DAY
+  const twin = { taskId: 'twin3', repeatId: 'r3', dayStart: nextDay, complete: false }
+  const seenQueries = []
+  let inserts = 0
+  const db = {
+    call: (op, args) => {
+      if (op === 'queryTodos') {
+        if (args && args.dayStartFrom != null) {
+          seenQueries.push(args.dayStartFrom)
+          // the pre-check MUST be queried with the local midnight, not the timed todoTime
+          assert.equal(args.dayStartFrom, nextDay, 'idempotency query uses the midnight-normalized day')
+          return seenQueries.length === 1 ? [] : [twin] // first run: pre-check empty; twin read after the UNIQUE violation
+        }
+        return [{ taskId: t.taskId, dayStart: t.dayStart }] // the completed instance is the group's last
+      }
+      if (op === 'getMeta') return JSON.stringify({ repeatType: 'day', repeatInterval: 1, repeatDayCount: 5 })
+      return null
+    }
+  }
+  const { renewRepeatAfterComplete } = requireP('cli/lib-repeat.cjs')({
+    open: () => db,
+    commit: (ent, verb, payload) => { inserts++; throw new Error('UNIQUE constraint failed: todos.recurGroupId, todos.scheduledDay') },
+    audit: { record: () => {} }, CliError, dayjs,
+    core: requireP('src/main/core/todo-core.js'),
+    resolveTask: () => t, liveTasks: () => [t], normKey: k => k, settingsDoc: () => ({}),
+    chipsSnapshotForDelete: () => {}, dayStartOf: ts => +dayjs(ts).startOf('day'),
+    clampEstimate: v => v, getEstimateOf: () => 0, estimateKey: id => 'tomatoEstimateState:' + id
+  })
+  // First done: pre-check empty -> insert hits UNIQUE -> twin read resolves instead of throwing
+  const r1 = renewRepeatAfterComplete(db, t, { ...t, complete: true })
+  assert.equal(r1, twin, 'UNIQUE violation resolves to the existing timed-repeat twin')
+  assert.equal(inserts, 1, 'one insert attempt on the first done')
+  // Second done: the pre-check now FINDS the twin -> idempotent early return, no second insert
+  const r2 = renewRepeatAfterComplete(db, t, { ...t, complete: true })
+  assert.equal(r2, twin, 'done twice is idempotent — the twin is returned without re-minting')
+  assert.equal(inserts, 1, 'no double-mint on the second done')
+})

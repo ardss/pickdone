@@ -258,8 +258,17 @@ function settleLedgerEntry (entry, res) {
  *  mirror is the shared source of truth: an entry whose per-entry key is gone was settled
  *  or purged by a peer, so the local copy is dropped without re-sending. (A mirror write
  *  that failed loudly at enqueue time already surfaced its error to the enqueueing caller —
- *  post-TQ-2 the durability asset is the LS mirror, never the private array.) */
+ *  post-TQ-2 the durability asset is the LS mirror, never the private array.)
+ *  Mirror-failed exemption (2026-10-09): the inference "LS key absent ⇒ peer settled it" has a
+ *  second cause — OUR OWN savePendingEntry mirror write THREW at enqueue time, so the key never
+ *  existed and no peer could have settled it. Treating that absence as settlement made
+ *  peerSettled (and every replay/flush path's splice) drop the entry BEFORE any DB send, so an
+ *  entry that existed only in the private array was lost permanently — a TQ-4/TQ-5 violation.
+ *  Such entries are marked `mirrorFailed = true` at the enqueue catch and are EXEMPT from the
+ *  drop: always dispatch. DB ledger/snow ops are idempotent (deterministic tomatoId / dedupKey),
+ *  so the worst case of re-sending is a converged duplicate-free upsert, never data loss. */
 function peerSettled (entry, prefix) {
+  if (entry && entry.mirrorFailed) return false
   let present = null
   try { present = localStorage.getItem(prefix + entry.uid) } catch (e) { present = null }
   return present == null
@@ -279,7 +288,13 @@ function replayPendingLedger () {
 function ledgerWrite (op, params) {
   const entry = { op, params, seq: nextPendingSeq(), ts: Date.now(), uid: newPendingUid() }
   _pendingLedger.push(entry)
-  savePendingEntry(entry, PENDING_LEDGER_PREFIX, packLedgerEntry) // TQ-2: put-own-key mirror
+  // TQ-2: put-own-key mirror. A throwing mirror write is loud (propagates) but the entry must
+  // stay replayable: peerSettled infers "LS key absent ⇒ peer settled it", which would drop this
+  // mirror-failed entry BEFORE any DB send. Mark it so the replay paths dispatch it anyway.
+  try { savePendingEntry(entry, PENDING_LEDGER_PREFIX, packLedgerEntry) } catch (e) {
+    entry.mirrorFailed = true
+    throw e
+  }
   // Retry queue: replay any still-pending entries (incl. this one) before/with the new write
   replayPendingLedger()
   hookQuitFlush()
@@ -371,7 +386,12 @@ function replayPendingSnow () {
 function snowWrite (params) {
   const entry = { params, seq: nextPendingSeq(), ts: Date.now(), uid: newPendingUid() }
   _pendingSnow.push(entry)
-  savePendingEntry(entry, PENDING_SNOW_PREFIX, packSnowEntry) // TQ-2: put-own-key mirror
+  // Mirror-failed marking: same contract as ledgerWrite above (peerSettled must not drop an
+  // entry whose mirror key never existed because OUR write threw — dispatch is idempotent).
+  try { savePendingEntry(entry, PENDING_SNOW_PREFIX, packSnowEntry) } catch (e) { // TQ-2: put-own-key mirror
+    entry.mirrorFailed = true
+    throw e
+  }
   replayPendingSnow()
   hookQuitFlush()
 }

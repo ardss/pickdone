@@ -81,7 +81,14 @@ export function computeViewsCore (store, { commit, rootState, dispatch }) {
     // a no-date completion inside the window lands in recentExpiredCompleted (dayStart 0 sorts it
     // first; consumers render it like any row in the group) instead of vanishing outside the
     // uncapped global completed list.
-    if (t.complete && (!t.dayStart || t.dayStart < today) && doneTs >= completedCutoff && !todayDoneIds.has(t.taskId)) {
+    // Due-today fix (2026-10-09): the strict `t.dayStart < today` also dropped a task DUE TODAY
+    // whose completedAt is already yesterday — loop 1 files it in todayDoneList by completion time
+    // only when completedAt >= today, then returns, and loop 2's strict bound excluded its due
+    // date, so the row vanished from every grouped surface. Relax to `<= today` (root cause: the
+    // due-date bound mirrored loop 1's completion-time window instead of "expired or due-today
+    // completions outside todayDoneList"). No double-listing: todayDoneIds still excludes anything
+    // loop 1 kept, and a due-today task completed TODAY goes to todayDoneList via loop 1.
+    if (t.complete && (!t.dayStart || t.dayStart <= today) && doneTs >= completedCutoff && !todayDoneIds.has(t.taskId)) {
       recentExpiredCompleted.push(t)
     }
   })

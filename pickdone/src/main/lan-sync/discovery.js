@@ -13,6 +13,11 @@
 const { EventEmitter } = require('node:events')
 const dgram = require('node:dgram')
 const os = require('node:os')
+// C8 (2026-10-10 daily sweep): log-isolation at MODULE LOAD — the old inline requires ran
+// AFTER the electron-log warn they accompanied, so under TODO_DB_DIR/TODO_USER_DATA_DIR the
+// UDP-channel warnings leaked into the REAL user log. Idempotent redirect (line-reader.js
+// contract); standalone pure-node test contexts tolerate the require.
+try { require('../log-isolation') } catch { /* standalone test context */ }
 
 const SERVICE_TYPE = 'pickdone-sync'
 // Bumped 1 -> 2 with the encrypted transport (cipher.js): protoVer is advertised, not
@@ -259,7 +264,6 @@ function createDiscovery() {
             } catch (e) {
               failed = true // sync throw (socket already dead) — the original D14 C9 path
               try { require('electron-log').warn('[LanSync] UDP fallback send failed:', e && e.message) } catch { /* noop */ }
-              require('../log-isolation') // test isolation: redirect electron-log file transport into TODO_DB_DIR/TODO_USER_DATA_DIR
               pending--
               settle()
             }

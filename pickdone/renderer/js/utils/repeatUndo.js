@@ -19,7 +19,21 @@ export function findRenewedNextInstance (undoneTodo, group) {
   if (!undoneTodo || !(undoneTodo.dayStart > 0) || !group || !group.length) return null
   const last = group[group.length - 1]
   const renewedNext = group.find(x => x.dayStart > undoneTodo.dayStart)
-  if (renewedNext && !renewedNext.complete && renewedNext.dayStart === last.dayStart) return renewedNext
+  if (renewedNext && !renewedNext.complete && renewedNext.dayStart === last.dayStart) {
+    // [P1 2026-10-09, ROOT fix of the 2026-10-08 timed-renewal propagation miss] the day-based
+    // heuristic above cannot distinguish a renewal-created instance from a legitimate
+    // PRE-GENERATED future instance (RepeatModal slices dates up-front and the CLI's repeatOn
+    // pre-generates too), so un-completing soft-deleted a pre-generated sibling and cascaded its
+    // chips. Sound discriminator: a renewal instance is minted AT completion time (createTime on
+    // the row, db-rows.js rowToTodo), while a pre-generated instance was created BEFORE the
+    // completion (undoneTodo.completedAt). Require createTime >= completedAt.
+    if (!(renewedNext.createTime > 0) || !(undoneTodo.completedAt > 0)) {
+      // Limitation: legacy rows without createTime/completedAt fall back to the old day-only
+      // heuristic (removal preserved) rather than skipping the cleanup for all old data.
+      return renewedNext
+    }
+    if (renewedNext.createTime >= undoneTodo.completedAt) return renewedNext
+  }
   return null
 }
 

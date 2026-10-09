@@ -178,7 +178,7 @@ document.addEventListener('keydown', (e) => {
   // [fix 2026-10-09] menuitemradio/menuitemcheckbox added: ViewMoreMenu's sort/toggle items keep
   // those roles (they carry aria-checked state semantics a plain menuitem would lose), so the
   // capture handler must cover their Space activation too.
-  if (role === 'button' || role === 'checkbox' || role === 'switch' || role === 'menuitem' || role === 'menuitemradio' || role === 'menuitemcheckbox' || role === 'option' || role === 'tab') {
+  if (role === 'button' || role === 'checkbox' || role === 'switch' || role === 'menuitem' || role === 'menuitemradio' || role === 'menuitemcheckbox' || role === 'option' || role === 'tab' || role === 'link') {
     // checkbox/switch still need click to trigger; aria-disabled treated as disabled
     if (t.getAttribute('aria-disabled') === 'true') { e.preventDefault(); return }
     e.preventDefault()

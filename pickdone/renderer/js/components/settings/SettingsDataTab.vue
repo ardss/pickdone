@@ -187,7 +187,7 @@ export default {
   methods: {
     dfmt (ts) { return dayjs(ts).format(FMT.dateTime) },
     set (patch) {
-      this.$store.dispatch('settings/update', patch) // goes through the action to sync to the main process config.json (same ledger as the parent's set())
+      this.$store.dispatch('settings/update', patch).then(r => { if (r && r.ok === false) this.$message.error(this.$t('statsE.SettingsModal.settingsSaveFailed')) }) // goes through the action to sync to config.json (same ledger as the parent's set()); ok:false = config write failed — honest error toast
     },
     /** Unified double confirmation for dangerous operations: a regular confirm first, then an irreversible final confirm */
     async confirmDanger (msg, title, type) {
@@ -408,7 +408,7 @@ export default {
         // 主进程区分了「目录不存在(正常空态)」与「读取失败」:失败时不再静默清空,一行提示告知用户
         if (r && r.ok === false) this.$message.error(this.$t('statsH.SettingsModal.backupFailed') + ': ' + (r.error || ''))
         if (!this.autoBackupPick && this.autoBackupFiles.length) this.autoBackupPick = this.autoBackupFiles[0]
-      } catch { this.autoBackupFiles = [] }
+      } catch (e) { this.autoBackupFiles = []; this.$message.error(this.$t('statsH.SettingsModal.backupFailed') + ((e && e.message) || '')) } // IPC rejection must not silently empty the list
     },
     async restoreFromAutoBackup () {
       // round3-ux-perf-finding-3: busy flag blocks double-click re-entry (same contract as importFromCsv)
@@ -502,7 +502,7 @@ export default {
       const degraded = describeDegradedSegments(b.degradedSegments)
       if (degraded) {
         console.warn('[settings] restore: backup was written with degraded collection — missing segments:', degraded)
-        this.$message.warning('Backup missing segments (failed to collect when the backup was written): ' + degraded)
+        this.$message.warning(this.$t('statsE.SettingsModal.backupDegradedWarn', { s: degraded }))
       }
       this.$store.dispatch('_rt/refreshFromDb')
       this.$store.dispatch('tomato/recordsReload').catch(e => console.error('[settings] tomato/recordsReload after restore failed:', e))

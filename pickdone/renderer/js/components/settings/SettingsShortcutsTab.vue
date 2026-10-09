@@ -21,7 +21,7 @@
       </template>
       <div class="form-item" v-if="capturing"><span class="form-item__hint">{{ $t('statsE.SettingsModal.scCaptureHint') }}</span></div>
       <div class="form-item"><span class="form-item__label"></span>
-        <div class="form-item__control"><button class="primary mini-lg" @click="saveShortcuts">{{ $t('statsE.SettingsModal.saveShortcutBtn') }}</button></div></div>
+        <div class="form-item__control"><button class="primary mini-lg" :disabled="!shortcutsLoaded" @click="saveShortcuts">{{ $t('statsE.SettingsModal.saveShortcutBtn') }}</button></div></div>
       <div class="form-item"><span class="form-item__label"></span>
         <div class="form-item__control"><button class="mini" @click="resetShortcuts">{{ $t('statsE.SettingsModal.resetDefaultBtn') }}</button></div></div>
     </div>
@@ -118,7 +118,7 @@ export default {
       this.shortcutForm = Object.assign({ sync: '', toggleMainWindow: '', quickAddGlobal: '', addEvent: '', deleteEvent: '' }, c.shortcutKeySettings)
       this._shortcutSnapshot = JSON.stringify(this.shortcutForm)
       this.shortcutsLoaded = true
-    }).catch(e => { this.shortcutsLoaded = true; console.error('[SettingsModal] getSettings', e) })
+    }).catch(e => { console.error('[SettingsModal] getSettings', e) }) // keep shortcutsLoaded=false: flipping it true here used to render the empty skeleton as real bindings, and Save then wiped them
   },
   beforeUnmount () {
     this.stopCapture()
