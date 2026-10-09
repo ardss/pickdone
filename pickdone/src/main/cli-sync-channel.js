@@ -94,6 +94,14 @@ function createSyncCmdHandler ({ dispatch, setMeta, log, getMeta, deleteMeta }) 
         const result = dispatch('syncUnpairPeer', { deviceId: cmd.deviceId })
         return respond(seq, { ok: true, action, result })
       }
+      // 2026-10-09 real-device drill: enable/disable the LAN-sync node headlessly — the only
+      // pre-existing paths were the settings UI (needs the window driven) and nothing at all
+      // for SSH/CLI hosts. Same dispatch the settings toggle uses, so lifecycle (start/stop
+      // listening, mDNS advertise) is owned by the bootstrap exactly as in the UI path.
+      if (action === 'set-enabled') {
+        const result = await dispatch('syncSetEnabled', { enabled: cmd.enabled !== false })
+        return respond(seq, { ok: true, action, result, status: dispatch('syncGetStatus') })
+      }
       return respond(seq, { ok: false, action, error: 'unknown cliSyncCmd action: ' + action })
     } catch (e) {
       respond(seq, { ok: false, action, error: String((e && e.message) || e) })

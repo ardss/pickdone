@@ -658,7 +658,7 @@ function getStatusPayload () {
   const flushQuarantine = flushQuarantineSummary(state.db)
   if (!state.node) {
     return {
-      ...s, listening: false, port: null, peers: [], recent: [], security: [],
+      ...s, listening: false, port: null, peers: [], recent: [], security: [], discovered: [],
       lastRoundAt: null, lastError: null, pendingPair, flushQuarantine,
       self: { deviceId: s.deviceId, deviceName: s.deviceName, port: null },
     }
@@ -670,6 +670,10 @@ function getStatusPayload () {
     // the alias is set from this device's Device Center only and never syncs ('sync.' namespace
     // is machine-local), and it wins over the advertised device name in the renderer.
     peers: (st.peers || []).map(p => ({ ...p, deviceName: p.deviceName || p.name, alias: peerAliasOf(p && p.deviceId) })),
+    // 2026-10-09 UX rework: discovery-layer sightings (announced, not-yet-paired devices) —
+    // this field-by-field reassembly silently dropped the node's discovered[] (caught in the
+    // real-device drill: node.getStatus() had it, the IPC payload never did).
+    discovered: st.discovered || [],
     recent: st.recent, security: st.security,
     // Read-only flush-quarantine summary (Device Center; re-apply op is a registered follow-up).
     flushQuarantine,

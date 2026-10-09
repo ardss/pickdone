@@ -78,6 +78,20 @@ module.exports = async function runSync ({ opts, lib, emit }) {
         if (opts.json) return emit({ unpaired: device, result: ack.result || null })
         return console.log(`✓ unpaired ${device} — shared secret rotated, remaining peers must re-pair`)
       }
+      if (op === 'enable' || op === 'disable') {
+        // 2026-10-09 real-device drill: headless node toggle over the command bus — the same
+        // syncSetEnabled dispatch the settings switch uses, so mDNS advertise/listen lifecycle
+        // is owned by the bootstrap exactly as in the UI path (the only previous toggle path
+        // was the settings window; SSH/CLI hosts had nothing).
+        const enabled = op === 'enable'
+        const seq = lib.writeSyncCmd({ action: 'set-enabled', enabled })
+        const ack = await lib.waitForSyncAck(seq)
+        if (!ack) throw new lib.CliError(`sync ${op} failed: App is not running or did not consume the command`, 'APP_NOT_RUNNING')
+        if (!ack.ok) throw new lib.CliError(`sync ${op} failed: ` + (ack.error || 'unknown'), 'SYNC_ERROR')
+        if (opts.json) return emit({ enabled, status: ack.status })
+        const st = ack.status || {}
+        return console.log(`✓ LAN sync ${enabled ? 'enabled' : 'disabled'} — listening: ${st.listening ? 'yes' : 'no'}${st.port ? ' :' + st.port : ''}`)
+      }
       if (op === 'v2') {
         // Sync v2 write-path flag (machine-local by design — sync.* keys are denied
         // on the settings surface, so this gets its own verb on the direct-DB path).
@@ -92,5 +106,5 @@ module.exports = async function runSync ({ opts, lib, emit }) {
         }
         throw new lib.CliError('usage: sync v2 <on|off|state>', 'USAGE')
       }
-      throw new lib.CliError('usage: sync <status|pair|pair-respond|unpair|v2>  (pair needs --host; pair-respond accepts --code NNNNNN or answers a pending request; unpair needs --device; v2 flips revision recording)', 'USAGE')
+      throw new lib.CliError('usage: sync <status|enable|disable|pair|pair-respond|unpair|v2>  (pair needs --host; pair-respond accepts --code NNNNNN or answers a pending request; unpair needs --device; v2 flips revision recording)', 'USAGE')
 }

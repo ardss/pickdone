@@ -81,7 +81,8 @@ Write commands:
   tomato record fix <tomatoId|prefix> [--minutes N] [--date D --at HH:mm] [--rest N] [--succeed yes|no] [--task <kw|--free>]
                                   fix an existing focus record (wrong duration/time/task; works without the App)
   tomato record rm <tomatoId|prefix>   delete an erroneous focus record (irrecoverable; tomato list to browse ids; works without the App)
-  sync status                    LAN sync status (enabled/listening, peers with online state/pending count/last round, pending pair requests)
+  sync status                    LAN sync status (enabled/listening, peers with online state/pending count/last round, discovered nearby devices, pending pair requests)
+  sync enable | disable          headless node toggle (same path as the settings switch: starts/stops listening + mDNS advertise)
   sync pair --host <ip> [--port N] [--timeout S]   initiate two-way pairing with a peer (prints our 6-digit code too; waits for the peer to accept)
   sync pair-respond [--code NNNNNN] [--reject]     accept a pending pair request; with no pending request, pair via the peer's 6-digit code
   sync unpair --device <id>      unpair a peer (rotates the shared secret — every remaining peer must re-pair)
