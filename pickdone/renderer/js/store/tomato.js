@@ -428,16 +428,26 @@ export default {
       lastAppliedPing = ping
       const records = s.tomatoRecordList
       const fresh = loadState(false)
+      // Per-window keys excluded from the cross-window merge (2026-10-09): todayTomatoCount /
+      // _countDate / _countedFocus are derived from THIS window's ledger copy + its idempotent
+      // count guards — every window recomputes them itself (recordsReload, recountToday,
+      // todayCountPatch), so carrying a stale peer blob's counter over reset the main window's
+      // ring count until the next tick/reload. attachTodo is a per-window UI choice: it is set
+      // only by this window's attachTask mutation (:670) and is never announced/broadcast to
+      // peers — excluding it keeps the float window's attach from clobbering the main window's
+      // (and vice versa); resolveFocusedTask re-validates at accounting time anyway.
+      const LOCAL_KEYS = ['todayTomatoCount', '_countDate', '_countedFocus', 'attachTodo']
+      const withoutLocal = blob => Object.fromEntries(Object.entries(blob).filter(([k]) => !LOCAL_KEYS.includes(k)))
       if ((fresh.phaseTs || 0) < (s.phaseTs || 0)) {
         // Stale-peer guard: the peer's blob describes a phase OLDER than one this window already
         // transitioned past (throttled float writing mid-focus state after the main window flipped).
         // Applying it would roll the phase back; and with the phase claim already recorded, every
         // retry tick would no-op — a permanent wedge. Preferences still sync; the phase stays local.
         const PHASE_KEYS = ['status', 'startedAt', 'remainSec', 'phaseTs']
-        const prefs = Object.fromEntries(Object.entries(fresh).filter(([k]) => !PHASE_KEYS.includes(k)))
+        const prefs = Object.fromEntries(Object.entries(withoutLocal(fresh)).filter(([k]) => !PHASE_KEYS.includes(k)))
         Object.assign(s, prefs)
       } else {
-        Object.assign(s, fresh)
+        Object.assign(s, withoutLocal(fresh))
       }
       s.tomatoRecordList = records
     }
@@ -543,7 +553,16 @@ export default {
         // duration change used to cap the booked minutes at the NEW smaller setting, skewing the ledger
         // Rounding unified with completeFocus (Math.round): floor vs round disagreed at the sub-minute
         // boundary so a 25:40 focus booked 25 min on abandon but 26 min on complete. Both clamp FOCUS_MAX_MINUTES.
-        const focusedMin = Math.max(1, Math.min(FOCUS_MAX_MINUTES, Math.round((Date.now() - s.startedAt) / 60000)))
+        // Sub-minute clamp fix (2026-10-09): a 2-second misclick used to book Math.max(1, ...) = a
+        // phantom focus MINUTE. Task-side counters already exclude succeed===false rows, but the DAY
+        // stats sum focusDuration unconditionally, so every instant-abandon inflated the day's focus
+        // total by 1. Book sub-minute abandons (rounded below 1) as focusDuration: 0 — the db layer's
+        // _recToRow lower bound is 0 by design (P3 2026-09-17: "a bad value must not be inflated into
+        // a phantom focus minute"), so the row still lands with its abandonReason audit trail; choosing
+        // 0 over filtering succeed===false in the stats keeps the ledger row and the day totals
+        // consistent (row-sum == stats-sum for every date).
+        const rawMin = Math.round((Date.now() - s.startedAt) / 60000)
+        const focusedMin = Math.min(FOCUS_MAX_MINUTES, Math.max(0, rawMin))
         const focused = resolveFocusedTask(s.attachTodo, focusTodoPool(this))
         commit('addRecord', {
           // Deterministic id: cross-window dedupe as a backstop so the same give-up records only once

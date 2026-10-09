@@ -26,7 +26,11 @@ const relayUrl = pathToFileURL(path.join(ROOT, 'server/sync-relay.mjs')).href
 const { memoryStore, createRelay, startRelayServer, createRegisterLimiter, REGISTER_IP_CAP } = await import(relayUrl)
 
 async function post (url, body, headers = {}) {
-  const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) })
+  // connection:close — undici's pooled keep-alive teardown hits the libuv async.c assert
+  // (0xC0000409 process abort) when the relay server closes under concurrent suite load;
+  // per-request sockets drain server-side so there is no pool to tear down (same fix as
+  // relay-registration-guard.test.mjs).
+  const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', connection: 'close', ...headers }, body: JSON.stringify(body) })
   return { status: res.status, json: await res.json().catch(() => null) }
 }
 
