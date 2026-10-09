@@ -18,7 +18,10 @@ import path from 'node:path'
 const CLI = path.join(import.meta.dirname, '../../../cli')
 
 function mkTree (name) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-golden-' + name + '-'))
+  // realpath first (2026-10-10 CI fix): the esm-graph gate's caseMatches() checks each path
+  // segment against real directory entries — CI tmpdirs contain 8.3 short names (RUNNER~1)
+  // that do not literally exist in readdir, so every import got flagged as a case mismatch.
+  const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'gate-golden-' + name + '-'))
   const write = (rel, content) => {
     const p = path.join(root, rel)
     fs.mkdirSync(path.dirname(p), { recursive: true })
