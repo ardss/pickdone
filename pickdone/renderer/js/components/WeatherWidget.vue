@@ -88,6 +88,19 @@ function pruneShapeCache () {
     for (const key of planShapeCacheEviction(entries)) {
       try { localStorage.removeItem(key) } catch {}
     }
+    // [fix 2026-10-09] sweep EXPIRED geoShapeMiss-<name> negative-cache entries too — they were
+    // only read against SHAPE_MISS_TTL_MS but never removed, so every never-resolving city
+    // leaked one key into localStorage forever. Backward iteration: removing key i cannot
+    // shift indices below it. Value is a plain ms timestamp (see loadShape's miss write).
+    const nowMs = Date.now()
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const key = localStorage.key(i)
+      if (!key || !key.startsWith('geoShapeMiss-')) continue
+      const missAt = +localStorage.getItem(key)
+      if (missAt && nowMs - missAt >= SHAPE_MISS_TTL_MS) {
+        try { localStorage.removeItem(key) } catch {}
+      }
+    }
   } catch { /* localStorage unavailable — nothing to prune */ }
 }
 

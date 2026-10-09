@@ -731,7 +731,8 @@ export default {
       this.$message.success(this.$t('statsG.DayRail.relinked', { n: t.taskContent || this.$t('statsE.TodayView.untitled') }))
     },
     prune () {
-      // Keep plan buckets in the window [today-7d, today+366d]: planning the future is a finalized feature; only prune expired, never delete future
+      // Keep plan buckets in the window [today-7d, today+366d]: prune EVERYTHING outside the window —
+      // buckets past +366d ARE deleted (a ~1-year pragmatic cap; the UI cannot reach beyond it)
       // [maint/d26] future bound widened 31d -> 366d: the old +31d bound PHYSICALLY DELETED buckets
       // the contract above promised to keep (pruneDays DELETEs everything outside the window). The UI
       // only ever creates chips for today, but cross-window/CLI writes can date buckets arbitrarily

@@ -8,8 +8,11 @@
     <div v-if="open" ref="pop" class="view-more-pop" role="menu" :aria-label="$t('viewMore.titleMenu')"
          @keydown="onMenuKeydown">
       <!-- [D17-DOM4] mutually-exclusive sort entries are menuitemradio inside a role=group (was
-           menuitemcheckbox, which promises independent check state); Space joins Enter per the
-           ARIA menu button contract. Non-sort toggles stay menuitemcheckbox. -->
+           menuitemcheckbox, which promises independent check state). [fix 2026-10-09] Space
+           activation is owned by main.js's document capture handler (roles allowlisted in
+           maint/d26 contract; in-file keydown helpers are Enter-only since D27) — these roles
+           were added to that allowlist so Space still activates them. Non-sort toggles stay
+           menuitemcheckbox. -->
       <div v-if="sortItems.length" role="group" :aria-label="$t('viewMore.sortGroup')">
         <div v-for="(it,i) in sortItems" :key="'s'+i" class="vm-item" role="menuitemradio" tabindex="0"
              :class="{active:isActive(it)}" :aria-checked="isActive(it)&&!it.info ? 'true' : 'false'"
@@ -35,7 +38,7 @@
  * Menu items differ per route and all map to real settings/actions (no decoration)
  */
 import { clampPopPosition } from '../utils/popPos.js' // [A1] viewport clamp (left AND top)
-import { roleButtonActivate } from '../utils/roleButtonKey.js' // [D17-DOM4] Enter+Space menu item activation
+import { roleButtonActivate } from '../utils/roleButtonKey.js' // [D17-DOM4] Enter activation; Space comes from main.js's capture handler (roles allowlisted)
 
 const SORT_VALUE = {
   'viewMore.sortCustom': 'custom',
@@ -119,7 +122,9 @@ export default {
         if (btn) btn.focus()
       })
     },
-    /* [D17-DOM4] menu item activation: Space joins Enter (same .prevent/.stop semantics as the old Enter-only binding) */
+    /* [D17-DOM4] menu item activation: Enter here; Space is owned by main.js's document capture
+       handler (menuitemradio/menuitemcheckbox are allowlisted there — a second Space layer here
+       would double-activate and cancel out, see the maint/d26 ownership contract). */
     onItemKey (it, e) { roleButtonActivate(() => { this.click(it) }, { stop: true }).call(this, e) },
     onMenuKeydown (e) {
       const items = [...this.$el.querySelectorAll('.vm-item[tabindex="0"]')]
