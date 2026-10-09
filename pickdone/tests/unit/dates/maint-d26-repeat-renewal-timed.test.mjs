@@ -68,3 +68,41 @@ test('reminder time-of-day follows the renewed instance', () => {
   const next = nextRepeatInstance(completed(), group, { repeatType: 'day', repeatInterval: 1 }, [], deps)
   assert.equal(next.reminderTime, DAY0 + DAY + 9 * 3600000, '09:00 reminder re-anchored to the renewed day')
 })
+
+/* ---------------- [P1 2026-10-09] reminderExtra drift on timed repeats (propagation miss) ----------------
+ * Since the renewal base re-anchored to the completed instance's TIMED todoTime (2026-10-08),
+ * renewalCarryFields' dayDiff = next.todoTime - t.dayStart included the time-of-day offset, so
+ * every reminderExtra timestamp drifted FORWARD by the instance's time-of-day on EVERY generation
+ * (a 14:30 task drifted +14.5h per generation). Root fix: dayDiff is a pure day diff
+ * (startOf('day') of next.todoTime minus t.dayStart). */
+const { renewalCarryFields } = await import('../../../shared/repeat-core.mjs')
+
+test('reminderExtra keep their clock time on the renewed day when todoTime is timed (14:30)', () => {
+  const extra09 = DAY0 + 9 * 3600000 // 09:00 reminder on the source day
+  const src = completed({ reminderExtra: [extra09] })
+  const next = { todoTime: DAY0 + DAY + AT1430, reminderTime: 0 }
+  const out = renewalCarryFields(src, next)
+  // RED before the fix: extra09 + (DAY + AT1430) -> the 09:00 reminder landed at 23:30 next day
+  assert.equal(out.reminderExtra[0], DAY0 + DAY + 9 * 3600000,
+    'the reminder stays at 09:00 on the new day — the time-of-day offset must not leak into the shift')
+})
+
+test('reminderExtra drift is stable across GENERATIONS (no per-generation accumulation)', () => {
+  const extra09 = DAY0 + 9 * 3600000
+  let carry = [extra09]
+  let dayStart = DAY0
+  for (let gen = 0; gen < 3; gen++) {
+    const next = { todoTime: dayStart + DAY + AT1430, reminderTime: 0 }
+    const out = renewalCarryFields({ dayStart, reminderExtra: carry }, next)
+    carry = out.reminderExtra
+    dayStart += DAY
+  }
+  assert.deepEqual(carry, [DAY0 + 3 * DAY + 9 * 3600000],
+    'after 3 generations the extra is exactly 3 days later at 09:00 — zero accumulated drift')
+})
+
+test('all-day renewal (todoTime === dayStart) still shifts extras by whole days', () => {
+  const extra09 = DAY0 + 9 * 3600000
+  const out = renewalCarryFields({ dayStart: DAY0, reminderExtra: [extra09] }, { todoTime: DAY0 + 2 * DAY, reminderTime: 0 })
+  assert.deepEqual(out.reminderExtra, [extra09 + 2 * DAY], 'pure 2-day shift, unchanged semantics')
+})

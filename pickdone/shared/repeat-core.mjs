@@ -100,7 +100,16 @@ export function renewalCarryFields (t, next) {
   // re-anchor semantic as cli/lib-date.cjs dateChangeReminderPatch (edit --date) and the
   // EditPanel date change. When the anchor is unknown (no dayStart on either side) the extras
   // are DROPPED rather than carried at a wrong day; non-finite/non-positive junk is filtered.
-  const dayDiff = (next && next.todoTime > 0 && t.dayStart > 0) ? next.todoTime - t.dayStart : null
+  // [P1 2026-10-09, ROOT fix of the 2026-10-08 timed-renewal propagation miss] dayDiff must be a
+  // PURE day diff: since nextRepeatInstance re-anchored the renewal base from midnight to the
+  // completed instance's full todoTime (line ~140), next.todoTime carries a time-of-day offset.
+  // `next.todoTime - t.dayStart` used to include that offset, so every reminderExtra timestamp
+  // drifted FORWARD by the instance's time-of-day on every generation (14:30 → +14.5h per gen).
+  // Normalize next.todoTime to its LOCAL midnight (the same primitive dayjs startOf('day') uses;
+  // this module has no dayjs import, Date#setHours is the equivalent) before subtracting t.dayStart
+  // (t.dayStart is local midnight by contract).
+  const nextDayStart = next && next.todoTime > 0 ? new Date(next.todoTime).setHours(0, 0, 0, 0) : 0
+  const dayDiff = (nextDayStart > 0 && t.dayStart > 0) ? nextDayStart - t.dayStart : null
   const extras = Array.isArray(t.reminderExtra) ? t.reminderExtra : []
   return {
     reminderTime: next.reminderTime,

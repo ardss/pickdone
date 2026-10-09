@@ -60,7 +60,15 @@ module.exports = ({ open, commit, audit, CliError, dayjs, core, resolveTask, liv
     const next = core.nextRepeatInstance(completed, group, rule, require('../shared/holidays.mjs').getHolidayList())
     if (!next) return null
     // Renewal-instance idempotency: skip when an instance with the same rid + same dayStart exists (prevents duplicate CLI runs + concurrent multi-window generation creating two)
-    const existing = db.call('queryTodos', { deleted: 0, repeatId: rid, dayStartFrom: next.todoTime, dayStartTo: next.todoTime })
+    // [P1 2026-10-09, ROOT fix of the 2026-10-08 timed-renewal propagation miss — mirrored from
+    // renderer store/todo.js addTodo's idempotency query] the 2026-10-08 change re-anchored the
+    // renewal base at the completed instance's TIMED todoTime (e.g. 14:30), so querying with
+    // dayStartFrom/To = next.todoTime compared midnight scheduledDay against a timed instant —
+    // the pre-check found nothing (dead for timed repeats), the UNIQUE index then rejected the
+    // insert, and the catch-side re-query missed too and rethrew AFTER the completion write had
+    // persisted. Normalize to the instance's local midnight for both queries.
+    const nextDayStart = +dayjs(next.todoTime).startOf('day')
+    const existing = db.call('queryTodos', { deleted: 0, repeatId: rid, dayStartFrom: nextDayStart, dayStartTo: nextDayStart })
     if (Array.isArray(existing) && existing.length) return existing[0]
     // F3 P2 (D5 renderer parity): carry the LIVE meta estimate of the instance being renewed
     // (getEstimateOf) — the row's estimate COLUMN is dead post-X2 (bumpSnow writes accumulated
@@ -79,7 +87,9 @@ module.exports = ({ open, commit, audit, CliError, dayjs, core, resolveTask, liv
       // path. The SQLite message names the COLUMNS ("UNIQUE constraint failed: todos.
       // recurGroupId, todos.scheduledDay"), not the index — match both spellings.
       if (!/repeat_day|scheduledDay|UNIQUE/i.test(String((e && e.message) || e))) throw e
-      const twin = db.call('queryTodos', { deleted: 0, repeatId: rid, dayStartFrom: next.todoTime, dayStartTo: next.todoTime })
+      // [P1 2026-10-09, root-fix propagation] same midnight normalization as the pre-check above —
+      // the post-violation twin lookup must find the timed-repeat twin too.
+      const twin = db.call('queryTodos', { deleted: 0, repeatId: rid, dayStartFrom: nextDayStart, dayStartTo: nextDayStart })
       if (Array.isArray(twin) && twin.length) return twin[0]
       throw e // index says it exists but the read disagrees — surface the real error
     }
