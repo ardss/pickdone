@@ -163,7 +163,7 @@ function playFallbackBeep () {
   } catch (e) { /* no audio available — nothing further to do */ }
 }
 
-/** Global a11y: fills in click activation for Space on role="button"/"checkbox"/"switch"/"menuitem"
+/** Global a11y: fills in click activation for Space on role="button"/"checkbox"/"switch"/"menuitem"/"menuitemradio"/"menuitemcheckbox"
  *  (the HTML spec requires both Enter and Space to activate; the project uses roles instead of <button> in many places, so adding @keydown.space one by one is unmaintainable.
  *  A single document listener covers the whole site, excluding INPUT/TEXTAREA/select/native button and other natively supported elements.) */
 document.addEventListener('keydown', (e) => {
@@ -175,7 +175,10 @@ document.addEventListener('keydown', (e) => {
   const tag = t.tagName
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'BUTTON' || tag === 'A' || t.isContentEditable) return
   const role = t.getAttribute('role')
-  if (role === 'button' || role === 'checkbox' || role === 'switch' || role === 'menuitem' || role === 'option' || role === 'tab') {
+  // [fix 2026-10-09] menuitemradio/menuitemcheckbox added: ViewMoreMenu's sort/toggle items keep
+  // those roles (they carry aria-checked state semantics a plain menuitem would lose), so the
+  // capture handler must cover their Space activation too.
+  if (role === 'button' || role === 'checkbox' || role === 'switch' || role === 'menuitem' || role === 'menuitemradio' || role === 'menuitemcheckbox' || role === 'option' || role === 'tab') {
     // checkbox/switch still need click to trigger; aria-disabled treated as disabled
     if (t.getAttribute('aria-disabled') === 'true') { e.preventDefault(); return }
     e.preventDefault()

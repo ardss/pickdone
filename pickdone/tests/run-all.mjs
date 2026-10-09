@@ -13,8 +13,18 @@ import { readdirSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+// 2026-10-09 preflight sweep: exit-only cleanup is bypassed when a test child is SIGKILLed
+// (watchdog / boot-stall kill / CI timeout), so %TEMP% accumulated thousands of orphaned
+// test dirs. Sweep ONCE here, BEFORE spawning children — only provably orphaned entries
+// (family prefix + mtime > 12h + dead owning pid) are removed; fresh or live-owned dirs
+// are never touched (double-guard inside sweepStaleTmpDirs).
+import { sweepStaleTmpDirs } from './lib/tmp-dir.mjs'
 
 const dir = path.dirname(fileURLToPath(import.meta.url))
+{
+  const { scanned, removed } = sweepStaleTmpDirs()
+  if (removed > 0) console.error(`[run-all] preflight temp sweep: removed ${removed} orphaned dir(s) of ${scanned} scanned in %TEMP%`)
+}
 // App root (pickdone/): the runner anchors its child spawn here and passes repo-relative
 // test paths — see the argv-length comment at the spawnSync call below.
 const appRoot = path.join(dir, '..')

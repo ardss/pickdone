@@ -5,6 +5,9 @@
 module.exports = ({ liveTasks, recycleTasks, CliError, patchTodo, toggleComplete, dateChangeReminderPatch, migrateChipsOnDayChange, parseDate, resolveCategory }) => {
   // Character-for-character identical to renderer/js/utils/search.js TAG_RE (tags are derived from body text, no separate storage)
   const TAG_RE = /#([^\s#,，。.!?！？]+)/g
+  // Rewrite-terminator class — must equal SnManageTagsModal.vue tagRewriteRe's lookahead class
+  // (parity-pinned by tests; the old \s|-only boundary missed punctuation-suffixed tags like `#milk.`)
+  const TAG_BOUNDARY = '[\\s#,，。.!?！？]'
   function extractTagsCli (...texts) {
     const set = new Set()
     texts.forEach(t => {
@@ -24,8 +27,10 @@ module.exports = ({ liveTasks, recycleTasks, CliError, patchTodo, toggleComplete
   }
   function rewriteTag (name, next, { remove } = {}) {
     const esc = tagEsc(name)
-    // rename: #old(?=\s|$) → #new ; remove: leading whitespace swallowed too (\s*#old(?=\s|$) → '')
-    const re = remove ? new RegExp('\\s*#' + esc + '(?=\\s|$)', 'g') : new RegExp('#' + esc + '(?=\\s|$)', 'g')
+    // rename: #old(?=[\s#,，。.!?！？]|$) → #new ; remove: leading whitespace swallowed too (\s*#old(…) → '')
+    // Same terminator class as the App's SnManageTagsModal.tagRewriteRe — `buy #milk.` renames to
+    // `buy #dairy.` on BOTH channels (the old \s|-only lookahead touched 0 rows on the CLI).
+    const re = remove ? new RegExp('\\s*#' + esc + '(?=' + TAG_BOUNDARY + '|$)', 'g') : new RegExp('#' + esc + '(?=' + TAG_BOUNDARY + '|$)', 'g')
     let touched = 0
     // maint/d24 P2: the App (SnManageTagsModal.vue tagTodos) rewrites tags in RECYCLE rows too — the
     // CLI iterating live rows only missed the tombstones, so restore-after-rename resurrected the old
@@ -59,14 +64,14 @@ module.exports = ({ liveTasks, recycleTasks, CliError, patchTodo, toggleComplete
   function batchTagOne (t, name, remove) {
     const esc = tagEsc(name)
     if (remove) {
-      const re = new RegExp('\\s*#' + esc + '(?=\\s|$)', 'g')
+      const re = new RegExp('\\s*#' + esc + '(?=' + TAG_BOUNDARY + '|$)', 'g')
       const patch = {}
       if (t.taskContent) { const v = t.taskContent.replace(re, '').trim(); if (v !== t.taskContent) patch.taskContent = v }
       if (t.taskDescribe) { const v = t.taskDescribe.replace(re, '').trim(); if (v !== t.taskDescribe) patch.taskDescribe = v }
       if (!Object.keys(patch).length) throw new CliError(`tag #${name} not present on this task`, 'TAG_NOT_PRESENT')
       return patchTodo(t.taskId, patch, { action: 'tag.remove' })
     }
-    if (new RegExp('#' + esc + '(?=\\s|$)').test(t.taskContent || '')) throw new CliError(`tag #${name} already on this task`, 'TAG_PRESENT')
+    if (new RegExp('#' + esc + '(?=' + TAG_BOUNDARY + '|$)').test(t.taskContent || '')) throw new CliError(`tag #${name} already on this task`, 'TAG_PRESENT')
     return patchTodo(t.taskId, { taskContent: (t.taskContent || '').replace(/\s+$/, '') + ' #' + name }, { action: 'tag.add' })
   }
 
@@ -145,5 +150,5 @@ module.exports = ({ liveTasks, recycleTasks, CliError, patchTodo, toggleComplete
     return { op, matched: entries.length, changed, failures, outcomes }
   }
 
-  return { extractTagsCli, tagEsc, listTags, rewriteTag, resolveTaskExact, batchTagOne, batchRun }
+  return { extractTagsCli, tagEsc, TAG_BOUNDARY, listTags, rewriteTag, resolveTaskExact, batchTagOne, batchRun }
 }

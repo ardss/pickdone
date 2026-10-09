@@ -717,23 +717,24 @@ app.on('before-quit', () => {
   // allAcked() (quit-ack P2 2026-09-19).
   quitAck.beginRound(liveWindows, roundToken)
 })
+// P3 (2026-10-09): Windows shutdown/logoff fires Electron's `session-end` and kills the process WITHOUT running the before-quit/will-quit chain (preventDefault is not honored),
+// so the scheduler's reminder-dedupe watermark (flushFiredNow, 60s debounce) was silently lost on every plain OS shutdown. Sync best-effort ONLY (session-end cannot do async work reliably);
+// the renderer's debounced dbMirror writes (≤2s) live in renderer memory with no sync channel, so they CANNOT be flushed from main — main persists only its own state; the rest is a known limit.
+app.on('session-end', () => { try { scheduler.flushFiredNow() } catch { /* scheduler not initialized / flush failed — best-effort */ } })
 app.on('window-all-closed', e => { /* stay resident in the tray, do not quit */ })
 app.on('will-quit', (event) => {
   /* P0 quit-flush race (2026-09-09): before-quit only fire-and-forgets 'app-quitting-flush' while the
      old will-quit closed the DB immediately — renderer invokes still inside the dbMirror 2s debounce
-     (pending edits / pomodoro ledger) arrived after dbm.close() and were silently dropped.
-     Fix: first will-quit preventDefaults and holds the quit open for a bounded flush window; when done it
+     (pending edits / pomodoro ledger) arrived after dbm.close() and were silently dropped. Fix: the
+     first will-quit preventDefaults and holds the quit open for a bounded flush window; when done it
      flushes scheduler state and closes the DB, then re-issues app.quit() with flushDone=true so the
      second will-quit is NOT prevented — the native `quit` event must fire because electron-updater's
-     autoInstallOnAppQuit installs on quit, and app.exit() would skip it entirely (2026-09-09 review).
+     autoInstallOnAppQuit installs on quit, and app.exit() would skip it entirely (2026-09-09 review);
      app.exit(0) below is only a hang fallback if the re-issued quit is somehow swallowed again.
-     2026-09-11 P1: the window is no longer a fixed 500ms — we wait for the renderer's flush ack
-     ('app-quitting-flush-ack', sent after its flush invokes are dispatched) from every live window,
-     capped at 2s total so a hung renderer cannot block quitting. 500ms remains the floor (renderer
-     needs a beat to dispatch the debounced writes at all).
-     Verification path: tray → quit and window-X → quit both run before-quit → will-quit(preventDefault) →
-     flush window → flush+close → app.quit() → will-quit(passthrough) → quit event; process must exit
-     exactly once with no lingering tray icon. */
+     2026-09-11 P1: no longer a fixed 500ms — we wait for the renderer's flush ack ('app-quitting-flush-ack',
+     sent after its flush invokes are dispatched) from every live window, capped at 2s so a hung renderer
+     cannot block quitting; 500ms remains the floor (the renderer needs a beat to dispatch the writes).
+     Verification path: tray → quit / window-X → quit both run before-quit → will-quit(preventDefault) → flush window → flush+close → app.quit() → will-quit(passthrough) → quit; exit exactly once, no lingering tray icon. */
   if (flushDone) return // passthrough: let the native quit (and updater install) proceed
   // D10 (2026-09-27): a second-instance (singleton-lock loser) has no DB, no windows, nothing to
   // flush — pass the quit straight through instead of running the full preventDefault + quitAck +

@@ -35,8 +35,12 @@ const dayjs = require_('dayjs')
 db.init(process.env.TODO_DB_DIR)
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../..')
-const runCli = args => JSON.parse(execFileSync(process.execPath, [path.join(ROOT, 'cli', 'pickdone.js'), ...args], { encoding: 'utf8' }))
-const runCliRaw = args => spawnSync(process.execPath, [path.join(ROOT, 'cli', 'pickdone.js'), ...args], { encoding: 'utf8' })
+// Flake fix (2026-10-09, C4): every child spawn carries a hard 60s SIGKILL ceiling so a
+// stalled CLI becomes a NAMED timeout failure inside run-all's 300s budget instead of an
+// unnamed kill at the runner ceiling (which burned the whole budget with zero diagnostics).
+const SPAWN_CAPS = { timeout: 60000, killSignal: 'SIGKILL' }
+const runCli = args => JSON.parse(execFileSync(process.execPath, [path.join(ROOT, 'cli', 'pickdone.js'), ...args], { encoding: 'utf8', ...SPAWN_CAPS }))
+const runCliRaw = args => spawnSync(process.execPath, [path.join(ROOT, 'cli', 'pickdone.js'), ...args], { encoding: 'utf8', ...SPAWN_CAPS })
 
 let _seq = 0
 function seed (over = {}) {

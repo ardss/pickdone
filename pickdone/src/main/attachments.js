@@ -103,6 +103,17 @@ async function saveAttachment ({ taskId, name, dataBase64 }) {
   const cleanName = String(name || '').replace(/[. ]+$/, '')
   const ext = path.extname(cleanName).slice(1).toLowerCase()
   if (!ext || !ALLOWED_EXT.has(ext)) throw new Error('attachment: extension not allowed')
+  // P3 (2026-10-09): Windows reserved device names (CON, PRN, AUX, NUL, COM1-9, LPT1-9) fail
+  // CreateFile outright even with an extension ('con.png'), and a very long basename can push the
+  // full userData/files path past MAX_PATH (ENAMETOOLONG). Fix both here, before the name is
+  // joined into the final filename: prefix a reserved basename with '_' (case-insensitive, base
+  // before the extension) and cap the whole basename at ~120 chars preserving the extension —
+  // the taskId + timestamp prefix in `safe` below adds overhead on top of this.
+  const extPart = cleanName.slice(cleanName.length - ext.length - 1) // original-case '.<ext>'
+  let stem = cleanName.slice(0, cleanName.length - ext.length - 1)
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(stem)) stem = '_' + stem
+  if (stem.length + extPart.length > 120) stem = stem.slice(0, 120 - extPart.length)
+  const displayName = stem + extPart
   // Strict base64 validation (2026-09-09 P2): Buffer.from(b64) is lenient — it decodes whatever prefix is
   // valid and never throws, so corrupted/truncated payloads used to land on disk silently. Require the
   // canonical charset/length AND a decode→re-encode roundtrip match before accepting.
@@ -117,7 +128,7 @@ async function saveAttachment ({ taskId, name, dataBase64 }) {
   // guards.assertWriteAllowed enforces the SAME caps). Lazy require: guards itself requires
   // this module for the exported pure gates, so the cycle must stay call-time only.
   require('./attachments-guards').assertWriteAllowed({ incomingBytes: raw.length, dir: attachDir() })
-  const safe = `${String(taskId).replace(/[\\/:*?"<>|]/g, '_').replace(/\.\./g, '_')}_${Date.now()}_${cleanName.replace(/[\\/:*?"<>|]/g, '_')}`
+  const safe = `${String(taskId).replace(/[\\/:*?"<>|]/g, '_').replace(/\.\./g, '_')}_${Date.now()}_${displayName.replace(/[\\/:*?"<>|]/g, '_')}`
   // P2 2026-09-12: two uploads in the same millisecond with the same task/name produced the same
   // Date.now() filename and writeFileSync silently overwrote the first attachment. Suffix -1/-2…
   // (pure helper in fix-util, testable) so every upload lands on its own file.

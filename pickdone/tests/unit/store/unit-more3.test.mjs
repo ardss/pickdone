@@ -99,14 +99,15 @@ test('lib: categories round trip + addTodo resolving by category name', () => {
   assert.equal(typeof added.categoryId, 'number')
 })
 
-test('lib: parseDate formats (today = current moment, +Nd offsets, date strings at 00:00)', () => {
-  const now = Date.now()
-  assert.ok(Math.abs(lib.parseDate('today') - now) < 5000, 'today returns the current moment')
-  assert.ok(Math.abs(lib.parseDate('明天') - (now + 86400000)) < 5000)
+test('lib: parseDate formats (bare relative forms at local midnight per D28 parity, date strings at 00:00)', () => {
+  // D28: bare relative forms now normalize to local midnight like the renderer's nlDate
+  // (time-suffixed forms keep their clock time)
+  assert.equal(lib.parseDate('today'), +dayjs().startOf('day'), 'today = local midnight')
+  assert.equal(lib.parseDate('明天'), +dayjs().add(1, 'day').startOf('day'))
   assert.equal(lib.parseDate(''), 0)
   assert.equal(lib.parseDate(null), 0)
   const d3 = lib.parseDate('+3d')
-  assert.ok(Math.abs(d3 - (now + 3 * 86400000)) < 5000)
+  assert.equal(d3, +dayjs().add(3, 'day').startOf('day'))
   const d4 = lib.parseDate('2030-01-05')
   assert.equal(d4, +dayjs('2030-01-05').startOf('day'))
   // 13-digit timestamps returned as-is

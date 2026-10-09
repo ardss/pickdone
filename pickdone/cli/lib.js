@@ -606,7 +606,7 @@ const {
 
 /* Tags + batch operations: extracted verbatim to lib-tags.cjs (2026-09-27 size-ratchet split) */
 const {
-  listTags, rewriteTag, resolveTaskExact, batchTagOne, batchRun,
+  listTags, rewriteTag, resolveTaskExact, batchTagOne, batchRun, TAG_BOUNDARY,
 } = require('./lib-tags.cjs')({ liveTasks, recycleTasks, CliError, patchTodo, toggleComplete, dateChangeReminderPatch, migrateChipsOnDayChange, parseDate, resolveCategory })
 
 /* Saved views (smart lists): extracted verbatim to lib-views.cjs (2026-09-27 size-ratchet split) */
@@ -808,7 +808,7 @@ module.exports = {
   writeTomatoCmd, readTomatoState, waitForTomatoAck, tomatoLiveRemainSec, backfillRecord,
   writeSyncCmd, readSyncState, waitForSyncAck,
   buildRepeatRule, repeatOn, repeatOff, repeatRuleInfo,
-  addCategory, renameCategory, deleteCategory, moveCategory, categoryRows, categoryHierarchy, cleanupEmptyCategories, listTags, rewriteTag, tomatoRecords,
+  addCategory, renameCategory, deleteCategory, moveCategory, categoryRows, categoryHierarchy, cleanupEmptyCategories, listTags, rewriteTag, TAG_BOUNDARY, tomatoRecords,
   resolveTaskExact, batchRun, batchTagOne, migrateChipsOnDayChange,
   viewsList, resolveView, viewAdd, viewRm, applyViewConds, viewFetchOpts, viewCondsSummary,
   lunarOf, lunarAnnotate,

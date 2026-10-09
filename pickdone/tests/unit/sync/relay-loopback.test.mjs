@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { memoryStore, fileStore, createRelay, startRelayServer } from '../../../server/sync-relay.mjs'
 import { createRelayClient } from '../../../shared/sync-transport/https/relay-client.mjs'
+import { isolatedTmpDir } from '../../lib/tmp-dir.mjs'
 
 const ACCOUNT = 'acc1'
 
@@ -78,7 +79,10 @@ test('relay: stale device does not block GC floor; re-adding restores it', async
 })
 
 test('relay: file store round-trips state (self-host durability)', async t => {
-  const tmp = `./.tmp-relay-test-${process.pid}-${Date.now()}`
+  // Flake fix (2026-10-09): the old cwd-relative `./.tmp-relay-test-<pid>-<ts>` leaked into
+  // the repo on a crash and collided across parallel runs. isolatedTmpDir anchors at %TEMP%
+  // with exit-hook cleanup instead.
+  const tmp = isolatedTmpDir('relay-loopback-')
   {
     const s = fileStore(tmp)
     const relay = createRelay(s)

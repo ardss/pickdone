@@ -80,7 +80,45 @@ test('d24 P2: tag rename rewrites recycled rows; tag rm strips them; the list st
   assert.ok(!urgent || urgent.tasks === 1, 'list counts live rows only')
 })
 
-/* ---------- P3: --color accepts free hex ---------- */
+/* ---------- P2: punctuation-suffixed tags — rewrite boundary parity with SnManageTagsModal ---------- */
+test('d24 P2: tag rename/rm terminate on the punctuation class — `buy #milk.` renames on the CLI too', () => {
+  const t = lib.addTodo({ content: 'buy #milk.' })
+  const touched = lib.rewriteTag('milk', 'dairy')
+  assert.equal(touched, 1, 'red before the fix: the \\s|-only lookahead matched nothing after the period')
+  assert.equal(lib.open().call('getById', t.taskId).taskContent, 'buy #dairy.', 'byte-identical with the App rewrite (#milk. → #dairy.)')
+
+  // remove branch: consume semantics byte-identical with the App (leading \s* swallowed, terminator
+  // class stops at the comma) — compute the App result inline with the modal's own regex shape
+  const appRemove = (content, name) => content.replace(new RegExp('\\s*#' + name + '(?=[\\s#,，。.!?！？]|$)', 'g'), '').trim()
+  const t2 = lib.addTodo({ content: 'task #a, #b' })
+  const removed = lib.rewriteTag('a', null, { remove: true })
+  assert.equal(removed, 1)
+  assert.equal(lib.open().call('getById', t2.taskId).taskContent, appRemove('task #a, #b', 'a'), 'rm result is byte-identical with the App remove path')
+  // whitespace junction: `task #a #b` → `task #b` with a clean single space
+  const t2b = lib.addTodo({ content: 'task #a #b' })
+  lib.rewriteTag('a', null, { remove: true })
+  assert.equal(lib.open().call('getById', t2b.taskId).taskContent, 'task #b', 'whitespace junction stays clean (leading \\s* consumed)')
+
+  // batchTagOne shares the boundary: a punctuation-suffixed tag is "present", not a duplicate add
+  // (batchRun never throws per-task — failures come back in r.failures)
+  const t3 = lib.addTodo({ content: 'note #x.' })
+  const r = lib.batchRun('tag', t3.taskId, { add: 'x' })
+  assert.equal(r.failures.length, 1, 'red before the fix: batch add saw #x as absent and appended a duplicate')
+  assert.match(r.failures[0].error, /already on this task/)
+  assert.equal(lib.open().call('getById', t3.taskId).taskContent, 'note #x.', 'no duplicate tag appended')
+})
+
+test('d24 P2: CLI rewrite boundary class is pinned to the SnManageTagsModal tagRewriteRe source', () => {
+  // Parity pin (anti-drift): read the App component's regex source and compare character classes
+  const modal = fs.readFileSync(path.join(APP_ROOT, 'renderer', 'js', 'components', 'side-nav', 'SnManageTagsModal.vue'), 'utf8')
+  const m = modal.match(/'\(\?=\[([^\]]+)\]\|\$\)'/)
+  assert.ok(m, 'setup: tagRewriteRe lookahead found in the modal source')
+  // the .vue source stores the class inside a JS string literal (backslash doubled in the text);
+  // unescape it, then compare with the CLI constant's runtime value (same bracket-to-bracket span)
+  assert.equal('[' + m[1].replace(/\\\\/g, '\\') + ']', lib.TAG_BOUNDARY, 'CLI TAG_BOUNDARY must equal the modal lookahead class exactly')
+})
+
+
 test('d24 P3: category add --color accepts non-palette hex, warns; invalid hex = USAGE', () => {
   const c1 = lib.addCategory('HexCat', { color: '#aa00aa' })
   assert.equal(c1.categoryColor, '#aa00aa', 'red before the fix: non-palette hex silently fell back to the palette default')
