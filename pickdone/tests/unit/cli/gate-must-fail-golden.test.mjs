@@ -8,20 +8,24 @@
  * clean fixture (MUST exit 0, proving the red was detection, not ambient breakage).
  * Run: node --test tests/unit/cli/gate-must-fail-golden.test.mjs
  */
-import { test } from 'node:test'
+import { test, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync, execSync } from 'node:child_process'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 
 const CLI = path.join(import.meta.dirname, '../../../cli')
+// Fixture anchor: inside the checkout, NOT os.tmpdir(). The esm-graph gate's caseMatches()
+// verifies every path segment against real directory entries, and Node's realpathSync does
+// NOT expand Windows 8.3 short names (it only resolves symlinks) — CI's TEMP is
+// C:\Users\RUNNER~1\..., so fixtures there fail the case check. Checkout paths are long and
+// clean on every platform (GitHub runners: D:\a\pickdone\pickdone\...). .tmp-* is gitignored.
+const FIX_ROOT = path.join(import.meta.dirname, '../../../.tmp-gate-golden')
+const madeDirs = []
 
 function mkTree (name) {
-  // realpath first (2026-10-10 CI fix): the esm-graph gate's caseMatches() checks each path
-  // segment against real directory entries — CI tmpdirs contain 8.3 short names (RUNNER~1)
-  // that do not literally exist in readdir, so every import got flagged as a case mismatch.
-  const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'gate-golden-' + name + '-'))
+  const root = fs.mkdtempSync(FIX_ROOT + '-' + name + '-')
+  madeDirs.push(root)
   const write = (rel, content) => {
     const p = path.join(root, rel)
     fs.mkdirSync(path.dirname(p), { recursive: true })
@@ -37,6 +41,10 @@ function runGate (script, root, args = [], extraEnv = {}) {
   const r = spawnSync(process.execPath, [path.join(CLI, script), ...args], { env, encoding: 'utf8' })
   return { code: r.status, out: (r.stdout || '') + (r.stderr || '') }
 }
+
+afterEach(() => {
+  for (const d of madeDirs.splice(0)) { try { fs.rmSync(d, { recursive: true, force: true }) } catch { /* next run cleans via .tmp-* */ } }
+})
 
 test('GOLDEN file-size: a file past its per-dir error cap is red; within it is green', () => {
   // NOTE: baseline entries RAISE the cap (grandfather clause), they do not lower it — so the
