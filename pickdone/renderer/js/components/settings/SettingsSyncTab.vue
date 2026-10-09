@@ -3,12 +3,8 @@
     <!-- The root must stay a single element (no comment before the root div): a comment sibling
          before the root makes the component root a Fragment and Vue cannot apply the parent's
          v-show directive in dev builds (dev compiler keeps comments; prod strips them). -->
-    <!-- LAN sync tab (P3a, 2026-09-16; Device Center rework 2026-09-17). Rendered lazily: the parent
-         gates this component with v-if on local tab state, so the default settings DOM (visual
-         baseline) is pixel-identical. A leading comment BEFORE the root div would make the component
-         root a Fragment and Vue could not apply the parent's v-show directive. -->
-    <!-- free-forever tip lives on the section header line: a dedicated empty-label .form card
-         rendered as a near-blank box (user feedback: page reads as clutter) -->
+    <!-- LAN sync tab (P3a); lazily gated by the parent's v-if on local tab state. -->
+    <!-- free-forever tip on the header line: a dedicated empty-label card read as clutter -->
     <div class="form">
       <div class="form-label sync-section-head">{{ $t('sync.section') }}<span class="tip sync-free-tip">{{ $t('sync.freeForever') }}</span></div>
       <div class="form-item"><span class="form-item__label">{{ $t('sync.enableLabel') }}</span>
@@ -56,9 +52,7 @@
           <span class="tip sync-device-error" v-else-if="p.lastError">{{ $t('sync.errorPrefix', { msg: String(p.lastError).slice(0, 60) }) }}</span>
           <button class="mini sync-unpair-btn" v-if="!isUnpairedByRemote(p)" :disabled="busy || connecting" @click="askUnpair(p)">{{ $t('sync.unpairBtn') }}</button>
         </div>
-        <!-- auto-discovery surfacing (2026-10-09 UX rework): the discovery layer always saw these
-             devices; the tab never showed them, so users thought discovery didn't exist and typed
-             IPs by hand. One click dials the advertised host/port (same repair-confirm as IP add). -->
+        <!-- discovery always ran; the tab never showed sightings, so users typed IPs by hand -->
         <template v-if="discovered.length">
           <div class="sync-group-label">{{ $t('sync.discoveredSection') }}<span class="tip sync-group-hint">{{ $t('sync.discoveredHint') }}</span></div>
           <div v-for="d in discovered" :key="d.deviceId" class="sync-device-card" :data-device-id="d.deviceId">
@@ -88,8 +82,7 @@
          contract: syncConflictBackupsList -> [{key, lostAt, preview}], syncConflictBackupRestore({key})).
          Defensive: if the main process does not expose the ops yet (agent X not merged), the whole
          section stays hidden. -->
-    <!-- conflict backups: hidden entirely at 0 (an empty collapsible row read as clutter);
-         when present, the plain-language hint explains what this even is (user feedback) -->
+    <!-- hidden at 0 (an empty collapsible row read as clutter); hint explains the jargon -->
     <div class="form" v-if="conflictBackups && conflictBackups.length">
       <div class="sync-collapse-head">
         <button class="sync-collapse-toggle" @click="conflictOpen = !conflictOpen">
@@ -137,7 +130,7 @@
           <button class="mini" :class="{ 'sync-connecting': connecting }" :disabled="busy || connecting || !connectHost" @click="connectPeer">{{ $t('sync.connectBtn') }}</button>
           <span class="tip" v-if="connecting">{{ $t('sync.pairWaiting') }}</span>
         </div></div>
-      <!-- helper hint on its own line: inline next to the button it squeezed the input to ~90px -->
+      <!-- own line: inline beside the button it squeezed the host input to ~90px -->
       <div class="tip sync-addpeer-tip" v-if="!connecting">{{ $t('sync.addPeerTip') }}</div>
       <div class="sync-collapse-head">
         <button class="sync-collapse-toggle" @click="manualOpen = !manualOpen">
@@ -226,97 +219,7 @@ const dbCallLoose = (op: string, params?: unknown) => (window.todoAPI.dbCall as 
 const syncPairRespond = (opts: { accept: boolean }) => dbCallLoose('syncPairRespond', opts)
 const syncPairRequest = (host, port) => dbCallLoose('syncPairRequest', { host, port })
 
-// [component-fixes] pure-start (extracted verbatim by tests/unit/components) — keep pure & framework-free
-/** Online/offline/error dot class for a peer card: red when lastError is fresh (< 5min),
- *  green when online, gray otherwise. */
-function peerDotClass (peer, now = null) {
-  const nowMs = now || Date.now()
-  // 2026-09-27 sync wave: a 'flush-stalled' peer is a persistent fault (budget of consecutive // flush-failed rounds, not a transient lastError) — the dot stays red until main clears the // state; it must NOT age out via the 5min lastError window.
-  if (peer && peer.peerState === 'flush-stalled') return 'sync-dot--err'
-  if (peer && peer.lastError && peer.lastErrorAt && (nowMs - peer.lastErrorAt) < 5 * 60 * 1000) return 'sync-dot--err'
-  return peer && peer.online ? 'sync-dot--ok' : 'sync-dot--off'
-}
-/** Pending badge text decision: 'behind' when pendingCount > 0, 'synced' when exactly 0,
- *  null when unknown (hide the badge entirely). */
-function peerPendingKind (pendingCount) {
-  if (pendingCount == null) return null
-  return pendingCount > 0 ? 'behind' : 'synced'
-}
-/** Cap a status.recent list (already newest-first from main) for display. */
-function capFeed (recent, cap) {
-  return (Array.isArray(recent) ? recent : []).slice(0, cap || 20)
-}
-/** Map a feed kind to a display icon (plain symbols, no emoji, token-colorable). */
-function feedIcon (kind) {
-  return { push: '↑', pull: '↓', error: '!', pair: '∞', snapshot: '⇄' }[kind] || '·'
-}
-/** D2-b/c (pair-by-IP fallback): parse the add-device field — accepts a bare host OR
- *  "host:port" (TODO_SYNC_PORT legitimately moves peers off 58471; the old code sent the
- *  combined string verbatim as the hostname → getaddrinfo ENOTFOUND). Returns
- *  { host, port } where port is null for a bare host (main then applies DEFAULT_PORT).
- *  Only ONE colon is treated as a separator, so raw IPv6 literals pass through untouched. */
-function parseConnectAddress (input) {
-  const s = String(input || '').trim()
-  if (!s) return null
-  const m = s.match(/^([^:]+):(\d{1,5})$/)
-  if (m) {
-    const port = Number(m[2])
-    if (port >= 1 && port <= 65535) return { host: m[1], port }
-    return null
-  }
-  // A colon that is NOT a valid host:port separator (e.g. "1.2.3.4:abc") must not be dialed // verbatim — that is the old bug shape (ENOTFOUND '1.2.3.4:abc'). Only multi-colon IPv6
-  // literals pass through untouched.
-  if ((s.match(/:/g) || []).length === 1) return null
-  return { host: s, port: null }
-}
-/** Map a pairing failure (err.reason/err.message from the main process) to an i18n key;
- *  '' means "no specific reason known" → the caller shows the generic confirm-flow message. */
-function pairFailureKey (err) {
-  const r = String((err && (err.reason || err.message)) || '')
-  if (/reject/i.test(r)) return 'sync.pairRejectedMsg'
-  if (/time[- ]?out|timed/i.test(r)) return 'sync.pairTimeoutMsg'
-  if (/throttl/i.test(r)) return 'sync.pairThrottledMsg'
-  // D2-c: DNS lookup failure on the dialed address — say the FORMAT is wrong instead of the
-  // generic retry toast (the old host:port-verbatim bug surfaced exactly here).
-  if (/getaddrinfo|ENOTFOUND|EAI_AGAIN/i.test(r)) return 'sync.pairBadAddrMsg'
-  return ''
-}
-/** Relative-time bucketing shared by peer cards and the feed: {n, unit} with unit in
- *  'now'|'min'|'hour'|'day'. */
-function relTimeParts (ts, now = null) {
-  const nowMs = now || Date.now()
-  const diff = Math.max(0, nowMs - ts)
-  if (diff < 60 * 1000) return { n: 0, unit: 'now' }
-  if (diff < 3600 * 1000) return { n: Math.floor(diff / 60000), unit: 'min' }
-  if (diff < 86400 * 1000) return { n: Math.floor(diff / 3600000), unit: 'hour' }
-  return { n: Math.floor(diff / 86400000), unit: 'day' }
-}
-/** Security strip visibility: shown when any blocked attempt or a live throttled event exists. */
-function securityVisible (list, throttled) {
-  return !!(throttled || (Array.isArray(list) && list.length > 0))
-}
-/** P2c (2026-09-19 UX review round 2): a peer whose pairing secret was REVOKED on this side (or
- *  that unpaired us) fails authenticated hello forever — it shows as a zombie card. Map such
- *  lastError markers (agent-A field: `lastError`; defensive patterns incl. 'unpaired',
- *  'peer-unauthorized', auth-rejected, and the Chinese notice) to the dedicated "unpaired by the
- *  other device — pair again" state instead of a transient-looking red error. */
-function peerUnpairedByRemote (lastError) {
-  if (!lastError) return false
-  return /unpair|peer-unauthorized|unauthorized|auth[^.]{0,16}reject/i.test(String(lastError))
-}
-/** 2026-09-27 sync wave: main stamps peerState 'flush-stalled' after FLUSH_STALL_BUDGET
- *  consecutive flush-failed rounds (lan-sync/index.js getStatus). Pure helper keeps the
- *  template line and the dot class in agreement. */
-function peerFlushStalled (peer) {
-  return !!(peer && peer.peerState === 'flush-stalled')
-}
-/** F1 (round-2 P1 2026-09-21): peer display name — machine-local alias wins, then the advertised
- *  deviceName (main now carries it on the status payload), then the raw record name/deviceId. */
-function peerDisplayName (peer) {
-  if (!peer) return ''
-  return peer.alias || peer.deviceName || peer.name || peer.deviceId || ''
-}
-// [component-fixes] pure-end
+import { peerDotClass, peerPendingKind, capFeed, feedIcon, parseConnectAddress, pairFailureKey, relTimeParts, securityVisible, peerUnpairedByRemote, peerFlushStalled, peerDisplayName } from './sync-tab-helpers.js'
 
 export default {
   name: 'SettingsSyncTab',
@@ -491,8 +394,6 @@ export default {
         this.feedLive = [{ at: Date.now(), kind, peer: evt.deviceName || evt.deviceId || '', detail: evt.detail || evt.error || '' }].concat(this.feedLive).slice(0, 50)
       }
       // r3 fix (2026-09-28): one-way data-loss alerts used to be emit-only — the event type had
-      // no renderer consumer, so lost changes were visible only in main-process logs. Surface
-      // both as a live-feed error entry + a persistent warning toast (refresh happens below).
       else if (evt.type === 'egress-hydration-failed') {
         const n = evt.count || (Array.isArray(evt.failures) ? evt.failures.length : 0)
         this.feedLive = [{ at: Date.now(), kind: 'error', peer: '', detail: this.$t('sync.egressHydrationFailed', { n }) }].concat(this.feedLive).slice(0, 50)
@@ -502,9 +403,6 @@ export default {
         this.$message.warning(this.$t('sync.oplogAppendFailed'))
       }
       // r5 fix (2026-09-28): four more emit-only syncEvent types had zero renderer consumers —
-      // a peer rejected our auth / unpaired us / a snapshot round ran / the server errored, all
-      // invisible in the UI (main logs only). Each surfaces as a live-feed entry; auth-rejection
-      // and server errors additionally toast (they need user action / explain a sync outage).
       else if (evt.type === 'peer-unauthorized') {
         const who = evt.deviceName || evt.deviceId || ''
         this.feedLive = [{ at: Date.now(), kind: 'error', peer: who, detail: this.$t('sync.peerUnauthorizedNotice') }].concat(this.feedLive).slice(0, 50)
@@ -522,8 +420,6 @@ export default {
         this.$message.error(this.$t('sync.serverErrorNotice'))
       }
       // r6 fix (2026-09-28): the last four emit-only syncEvent types — the r5 gate only proved
-      // emit↔doc, not emit↔consumer, so these had zero renderer branches (a peer dropping offline
-      // or quarantined rows being parked were visible in main logs only).
       else if (evt.type === 'peer-online') {
         const who = evt.deviceName || evt.deviceId || ''
         this.feedLive = [{ at: Date.now(), kind: 'pair', peer: who, detail: this.$t('sync.peerOnlineNotice', { name: who }) }].concat(this.feedLive).slice(0, 50)
@@ -563,8 +459,6 @@ export default {
     showIncomingPair (evt) {
       this.pairExpired = false
       // A7: the real 60s window is owned by the main-process transport, which stamps the
-      // arrival time (`at`) on status.pendingPair. Derive the remaining countdown from it so
-      // reopening the settings tab mid-request shows the true remaining seconds.
       const expiresAt = (evt.at || Date.now()) + 60 * 1000
       const leftSec = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000)) // r6: floor — repo-wide remaining-seconds caliber
       this.incomingPair = {
@@ -630,8 +524,6 @@ export default {
       try {
         const r = (await syncPairRespond({ accept: !!accept })) as { ok?: boolean } | null
         // [d21-A6] ok:false = the 60s window already elapsed in main — say so instead of faking
-        // success. A null/undefined response (IPC produced nothing) is NOT a success either: only
-        // a truthy r.ok confirms the pairing, everything else falls to the expired/failure branch.
         if (accept) (r && r.ok) ? this.$message.success(this.$t('sync.pairOkMsg')) : this.$message.warning(this.$t('sync.pairExpiredMsg'))
       } catch (e) { this.$message.error(this.$t('sync.pairFailMsg')) }
       if (req) this.refresh()
@@ -654,18 +546,12 @@ export default {
       else proceed()
     },
     async connectPeer () {      // D2-b: accept "host:port" (and bare host, which main defaults to 58471) — the combined
-      // string used to be dialed verbatim as the hostname (getaddrinfo ENOTFOUND '127.0.0.1:59801').
       const parsed = parseConnectAddress(this.connectHost)
       // P1-4: ONE in-flight guard for both pairing flows — submitPairing used `busy` while
-      // connectPeer used `connecting`, so both could run concurrently and interleave the two
-      // secret rotations. connectPeer now holds `busy` too.
       if (this.busy || this.connecting) return
       // [P2 fix] a malformed address used to return SILENTLY — the button appeared dead.
-      // Inline warning (same $message idiom as the sibling toasts in this tab); the
-      // button-enabled logic stays unchanged.
       if (!parsed || !parsed.host) { this.$message.warning(this.$t('sync.connectInvalidAddress')); return }
       // P1-4: pairing adopts a NEW single shared secret — existing peers are disconnected and
-      // must re-pair. Say so before the user pulls the trigger.
       const proceed = () => {
         this.busy = true
         this.connecting = true // immediate feedback: the 63s await must not leave the user staring at a dead button
@@ -691,8 +577,6 @@ export default {
           this.pairDraft = ''
           this.status = await getSyncStatus()
         // Map the failure through pairFailureKey like connectPeer — the main process rejects
-        // with distinguishable reasons (rejected / timeout / throttled / not discovered) that
-        // the old blanket catch swallowed into the generic "code expired or wrong" toast.
         }).catch(e => {
           const key = pairFailureKey(e)
           this.$message.error(this.$t(key || 'sync.pairFailMsg'))
@@ -705,8 +589,6 @@ export default {
     askConfirm (titleKey, textKey, params, onOk) {
       this.confirmBox = { titleKey, textKey, params: params || {}, onOk }
       // P2d (2026-09-19 UX review round 2): the overlay @keydown never fired because nothing inside
-      // held focus — Escape was unreachable. Focus the safe default (取消) on open, mirroring the
-      // pair-request dialog; the overlay keydown handler then receives Escape/Tab. Restore focus on close.
       if (typeof document !== 'undefined') this._confirmPrevFocus = document.activeElement
       this.$nextTick(() => {
         const btn = this.$refs.confirmCancelBtn as HTMLButtonElement | undefined
@@ -811,8 +693,7 @@ export default {
 .sync-device-card--self { border: 1px solid var(--brand); }
 .sync-device-name { color: var(--text-0); font-weight: 500; }
 .sync-device-meta { color: var(--text-2); }
-/* collapse sections read as one intentional header row (title left, caret right, full-width
-   click target) instead of a near-blank card with a tiny caret (user feedback: clutter) */
+/* collapse sections read as one intentional header row, not a near-blank card + tiny caret */
 .sync-collapse-head { display: flex; margin: 2px 0; }
 .sync-collapse-toggle { flex: 1; display: flex; align-items: center; justify-content: space-between;
   background: none; border: none; cursor: pointer; color: var(--text-0); padding: 6px 2px;

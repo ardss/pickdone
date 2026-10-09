@@ -30,9 +30,6 @@ require('./log-isolation') // test isolation: redirect electron-log file transpo
 const { createEngine } = require('../../shared/sync-core/engine.mjs')
 const { SYNC_SCHEMA_VERSION } = require('../../shared/sync-core/merge.mjs')
 // B3 (daily 2026-09-24): the habits-blob field set is the SHARED family contract
-// (shared/settings-families.mjs — the same module cli/lib.js stripHabitsFamily and the
-// renderer whitelist consume). The hand-copied literal here could drift from the shared
-// set and route an applied row into the WRONG blob on fold.
 const { HABITS_BLOB_FIELDS } = require('../../shared/settings-families.mjs')
 const { generatePairingSecret } = require('../../shared/sync-core/pairing.mjs') // derivePairingCode moved with syncGetPairingCode to lan-sync/pair-ops.js
 const { createLanSyncNode } = require('./lan-sync/index')
@@ -671,7 +668,6 @@ function getStatusPayload () {
     // is machine-local), and it wins over the advertised device name in the renderer.
     peers: (st.peers || []).map(p => ({ ...p, deviceName: p.deviceName || p.name, alias: peerAliasOf(p && p.deviceId) })),
     // 2026-10-09 UX rework: discovery-layer sightings (announced, not-yet-paired devices) —
-    // this field-by-field reassembly silently dropped the node's discovered[] (caught in the
     // real-device drill: node.getStatus() had it, the IPC payload never did).
     discovered: st.discovered || [],
     recent: st.recent, security: st.security,

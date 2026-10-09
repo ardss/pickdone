@@ -14,12 +14,15 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const SFC = 'renderer/js/components/settings/SettingsSyncTab.vue'
+// 2026-10-10: the pure block moved verbatim to its own module (size ratchet) — markers intact
+const PURE = 'renderer/js/components/settings/sync-tab-helpers.js'
 const read = p => fs.readFileSync(path.join(ROOT, p), 'utf8')
 const src = read(SFC)
+const pureSrc = read(PURE)
 
 function pureFns (names) {
-  const m = src.match(/\/\/ \[component-fixes\] pure-start[^\n]*\n([\s\S]*?)\/\/ \[component-fixes\] pure-end/)
-  assert.ok(m, `${SFC}: pure block markers missing`)
+  const m = pureSrc.match(/\/\/ \[component-fixes\] pure-start[^\n]*\n([\s\S]*?)\/\/ \[component-fixes\] pure-end/)
+  assert.ok(m, `${PURE}: pure block markers missing`)
   const fn = new Function(m[1] + `\nreturn { ${names.join(', ')} }`)
   return fn()
 }
