@@ -95,3 +95,35 @@ test('cli parseDate: existing explicit forms unaffected', () => {
   assert.throws(() => lib.parseDate('2026-02-30'), /invalid date/)
   assert.throws(() => lib.parseDate('nope-date'), /cannot parse date/)
 })
+
+/* ---------- P2: bare relative forms normalize to midnight (parity with renderer nlDate) ---------- */
+// The renderer's nlDate applies .startOf('day') to today/tomorrow/yesterday/+Nd; the CLI used to
+// keep wall-clock h:m:s.ms, so EditPanel showed a time chip the user never picked and (via the
+// D27 renewal anchor) repeat instances minted at 14:37 instead of 00:00.
+const { parseNaturalDate } = await import('../../../renderer/js/utils/nlDate.js')
+const appMidnight = input => { const nl = parseNaturalDate(input); return nl && nl.date ? +nl.date : null }
+
+test('cli parseDate: bare relative forms land on local midnight, matching the renderer nlDate', () => {
+  for (const s of ['today', '今天', 'tomorrow', '明天', 'yesterday', '昨天', '+3d', '-1w', '+2m']) {
+    const ts = lib.parseDate(s)
+    const d = dayjs(ts)
+    assert.equal(d.format('HH:mm:ss.SSS'), '00:00:00.000', `${s} must normalize to midnight, got ${d.format()}`)
+  }
+  // cross-channel byte parity: the App's nlDate handles the English + offset forms directly
+  // (the renderer file routes Chinese words through the shared core, so parity there is pinned
+  // by the midnight assertion above + tests/unit/dates/unit-nl-en.test.mjs)
+  for (const s of ['today', 'tomorrow', 'yesterday', '+3d', '-1w', '+2m']) {
+    const app = appMidnight(s)
+    assert.ok(app != null, `setup: nlDate parses ${s}`)
+    assert.equal(lib.parseDate(s), app, `${s}: CLI and App must produce identical bytes`)
+  }
+})
+
+test('cli parseDate: time-suffixed offsets keep their explicit time (offTime branch untouched)', () => {
+  const d = dayjs(lib.parseDate('+3d 14:30'))
+  assert.equal(d.format('HH:mm'), '14:30', 'explicit time must survive the normalization')
+  assert.equal(+d.startOf('day'), +dayjs().add(3, 'day').startOf('day'), 'day part is still D+3')
+  const kw = dayjs(lib.parseDate('tomorrow 09:15'))
+  assert.equal(kw.format('HH:mm'), '09:15', 'keyword+time combos keep their time')
+  assert.equal(+kw.startOf('day'), +dayjs().add(1, 'day').startOf('day'))
+})

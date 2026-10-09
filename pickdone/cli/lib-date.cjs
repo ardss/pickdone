@@ -19,11 +19,13 @@ module.exports = ({ CliError, dayjs, nlDate }) => {
       const unit = { d: 'day', w: 'week', m: 'month' }[(offTime || offMatch)[3]]
       const base = now.add(n, unit)
       if (offTime) return +base.hour(+offTime[4]).minute(+offTime[5]).second(0).millisecond(0)
-      return +base
+      // Time-less offsets normalize to local midnight — parity with the renderer's nlDate
+      // (.startOf('day')): `--date +3d` must not mint a time chip or a 14:37 repeat anchor.
+      return +base.startOf('day')
     }
-    if (str === 'today' || str === '今天') return +now
-    if (str === 'tomorrow' || str === '明天') return +now.add(1, 'day')
-    if (str === 'yesterday' || str === '昨天') return +now.subtract(1, 'day')
+    if (str === 'today' || str === '今天') return +now.startOf('day')
+    if (str === 'tomorrow' || str === '明天') return +now.add(1, 'day').startOf('day')
+    if (str === 'yesterday' || str === '昨天') return +now.subtract(1, 'day').startOf('day')
     // Keyword+time combos (tomorrow 09:00 / 明天11点) resolve deterministically before nlDate: "tomorrow" said in the small hours would
     // colloquially land on today's daytime per Chinese usage, but for the CLI's AI users tomorrow must be unambiguous (+1 day)
     const kw = str.match(/^(today|tomorrow|yesterday)\s+(\d{1,2}):(\d{2})$/)
