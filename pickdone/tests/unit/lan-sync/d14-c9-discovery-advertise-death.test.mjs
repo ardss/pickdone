@@ -25,8 +25,21 @@ function freePort () {
   })
 }
 
+/** Grab a free UDP port (bind 0, read, close) — pinned via LAN_SYNC_UDP_FALLBACK_PORT so the
+ *  test never competes for the fixed 58471-family candidates. Root fix (2026-10-10 R2): the
+ *  fallback walks its candidate list ONCE and gives up PERMANENTLY on exhaustion, so a runner
+ *  where a fixed port is transiently busy/denied (ubuntu CI, the C9 flake family) meant 15s
+ *  of never binding although the host can bind UDP fine. */
+function freeUdpPort () {
+  return new Promise((resolve, reject) => {
+    const s = require_('node:dgram').createSocket('udp4')
+    s.once('error', reject)
+    s.bind(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => resolve(port)) })
+  })
+}
+
 /** Load discovery.js fresh with bonjour-service unavailable → UDP fallback path. */
-function loadUdpFallbackDiscovery () {
+function loadUdpFallbackDiscovery (port) {
   const origLoad = Module._load
   Module._load = function (request, parent, isMain) {
     if (request === 'bonjour-service') throw new Error('simulated offline install')
@@ -35,6 +48,7 @@ function loadUdpFallbackDiscovery () {
   // D21 flake-hardening: pin a fast test cadence so the 3-sweep deadline cannot be outrun by
   // pool-load timer lag (the production default 2000ms made the 9s budget load-sensitive).
   process.env.LAN_SYNC_UDP_FALLBACK_INTERVAL_MS = '200'
+  if (port) process.env.LAN_SYNC_UDP_FALLBACK_PORT = String(port)
   const resolved = require_.resolve(path.join(import.meta.dirname, '../../../src/main/lan-sync/discovery.js'))
   delete require_.cache[resolved]
   try { return require_(resolved) } finally { Module._load = origLoad }
@@ -54,7 +68,7 @@ function canBindUdp () {
 }
 
 test('C9: post-bind socket death stops the advertise interval (no warn-forever loop)', async () => {
-  const discovery = loadUdpFallbackDiscovery()
+  const discovery = loadUdpFallbackDiscovery(await freeUdpPort())
   const disc = discovery.createDiscovery()
   disc.startAdvertising({ deviceId: 'd14c9', name: 'd14c9', port: await freePort() })
   const t0 = Date.now()
@@ -76,7 +90,7 @@ test('C9: post-bind socket death stops the advertise interval (no warn-forever l
 })
 
 test('C9: three consecutive failed send sweeps declare the channel dead and stop advertising', async () => {
-  const discovery = loadUdpFallbackDiscovery()
+  const discovery = loadUdpFallbackDiscovery(await freeUdpPort())
   const disc = discovery.createDiscovery()
   disc.startAdvertising({ deviceId: 'd14c9b', name: 'd14c9b', port: await freePort() })
   const t0 = Date.now()
