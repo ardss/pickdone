@@ -25,7 +25,8 @@
  * host) and restrict direct 0.0.0.0 exposure to trusted networks.
  */
 
-import { createServer } from 'node:http'
+import { createServer as createHttpServer } from 'node:http'
+import { createServer as createHttpsServer } from 'node:https'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { readFileSync, renameSync, mkdirSync, existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -355,7 +356,7 @@ export function createRegisterLimiter({ limit = 10, windowMs = 60_000, cap = REG
   }
 }
 
-export function startRelayServer(relay, { port = 0, host = '127.0.0.1' } = {}) {
+export function startRelayServer(relay, { port = 0, host = '127.0.0.1', tls = null } = {}) {
   const MAX_BODY_BYTES = 8 * 1024 * 1024
   // 2026-10-10 (CTO sweep B#1/B#5): the open-registration door gets two cheap guards.
   // (a) per-IP register rate limit — an unauthenticated flood previously grew the device
@@ -372,7 +373,13 @@ export function startRelayServer(relay, { port = 0, host = '127.0.0.1' } = {}) {
     const a = Buffer.from(given); const b = Buffer.from(String(relay.enrollment))
     return a.length === b.length && timingSafeEqual(a, b)
   }
-  const server = createServer((req, res) => {
+  // 2026-10-11 (production gap: TLS): the relay used to speak plain HTTP only,
+  // pushing TLS termination to an external reverse proxy. Operators who want a
+  // single-binary deployment now pass `tls: { cert, key }` (PEM strings) and
+  // the exact same request handler serves HTTPS — the routes, guards, rate
+  // limits and entitlement gate are byte-identical on both schemes. Bearer
+  // secrets on the wire stay confidential end-to-end without a proxy hop.
+  const handler = (req, res) => {
     const chunks = []
     let total = 0
     let responded = false
@@ -433,7 +440,8 @@ export function startRelayServer(relay, { port = 0, host = '127.0.0.1' } = {}) {
         if (!err.status) console.error('[relay] internal error:', err)
       }
     })
-  })
+  }
+  const server = tls ? createHttpsServer({ cert: String(tls.cert), key: String(tls.key) }, handler) : createHttpServer(handler)
   // 2026-10-09 (P2 connection budget): cap concurrent TCP connections — a relay reachable from
   // the internet must not let a socket flood exhaust fds/memory. 64 comfortably exceeds the
   // device count of any real account (LAN pairs + a handful of peers).
@@ -551,7 +559,27 @@ export async function main(argv = process.argv.slice(2)) {
     const { sqliteStore } = await import('./sync-relay-sqlite.mjs')
     store = sqliteStore(join(data || '.', 'relay.db'))
   } else store = data ? fileStore(data) : memoryStore()
-  const relay = createRelay(store, { enrollment: arg('enrollment', process.env.RELAY_ENROLLMENT_SECRET || '') })
+  const enrollment = arg('enrollment', process.env.RELAY_ENROLLMENT_SECRET || '')
+
+  // 2026-10-11 (production gap closure): `--hosted <billingDataDir>` wires the
+  // DEFAULT-OFF entitlement gate onto a DURABLE billing store, with operator
+  // bindings and usage metering persisted beside it (relay restarts keep both).
+  // The gate is fail-closed for writes and open for reads; sandbox trust bridge
+  // remains single-process by design (PRODUCTION_NO_GO #3 — service-to-service
+  // identity is still a prerequisite for real customers).
+  let entitlements = null
+  const hostedDir = arg('hosted', null)
+  if (hostedDir) {
+    const [{ createBillingStore }, { createEntitlementGate, createSandboxTrustBridge }] = await Promise.all([
+      import('./billing/store.mjs'), import('./sync-relay-entitlement.mjs'),
+    ])
+    const billingStore = createBillingStore({ dataDir: hostedDir })
+    const bridge = createSandboxTrustBridge({ billingStore, bindingsPath: join(hostedDir, 'relay-bindings.json') })
+    entitlements = createEntitlementGate({ trustResolver: bridge, usagePath: join(hostedDir, 'relay-usage.json') })
+    console.log(`[pickdone-sync-relay] HOSTED mode: billing store @ ${hostedDir} (bindings + usage persisted, writes fail-closed, reads open)`)
+  }
+
+  const relay = createRelay(store, { enrollment, entitlements })
   if (!relay.enrollment && !/^127\.|^\[::1\]|^localhost/.test(host)) {
     // CTO sweep B#1/B#2: non-loopback + open registration = anyone who guesses an account
     // string owns that account's sync stream. Refuse to be silent about it.
@@ -560,8 +588,18 @@ export async function main(argv = process.argv.slice(2)) {
       '  (or RELAY_ENROLLMENT_SECRET env) and configure it on every device to close that door,\n' +
       '  and terminate TLS in front for anything beyond a trusted LAN.')
   }
-  return startRelayServer(relay, { port, host }).then(server => {
-    console.log(`[pickdone-sync-relay] listening on :${server.address().port} (storage: ${store.kind}${data ? ` @ ${dirname(data)}` : ''})`)
+  // 2026-10-11 (TLS): PEM file pair → native HTTPS on the same handler.
+  let tls = null
+  const tlsCert = arg('tls-cert', null)
+  const tlsKey = arg('tls-key', null)
+  if (tlsCert || tlsKey) {
+    if (!tlsCert || !tlsKey) throw new Error('--tls-cert and --tls-key must be given together')
+    const { readFileSync } = await import('node:fs')
+    tls = { cert: readFileSync(tlsCert, 'utf8'), key: readFileSync(tlsKey, 'utf8') }
+  }
+  const scheme = tls ? 'https' : 'http'
+  return startRelayServer(relay, { port, host, tls }).then(server => {
+    console.log(`[pickdone-sync-relay] listening on ${scheme}://${host}:${server.address().port} (storage: ${store.kind}${data ? ` @ ${dirname(data)}` : ''})`)
     return server
   })
 }

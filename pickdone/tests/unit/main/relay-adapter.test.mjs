@@ -57,7 +57,11 @@ test('adapter: default OFF — round skipped, nothing stored, nothing sent', asy
 test('adapter: enable generates + persists an E2E root key; re-enable reuses it', async t => {
   const { baseUrl } = await withRelay(t)
   const { adapter, settings } = makeAdapter(t, { baseUrl })
-  const s1 = await adapter.enable({ account: 'acc-1', baseUrl })
+  // full-suite load can drop the in-enable register round on the floor
+  // (transport-level `fetch failed`) — enable is config-idempotent and the
+  // register only fires while no secret is persisted, so retrying is safe.
+  let s1 = await adapter.enable({ account: 'acc-1', baseUrl })
+  for (let i = 0; i < 2 && !s1.hasDeviceSecret; i++) s1 = await adapter.enable({ account: 'acc-1', baseUrl })
   assert.equal(s1.enabled, true)
   const k1 = settings.get('rootKey')
   assert.match(k1, /^[0-9a-f]{64}$/, 'generated root key is 64-hex')

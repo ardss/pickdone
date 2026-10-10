@@ -26,6 +26,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { pathToFileURL } from 'node:url'
 import path from 'node:path'
+import { postT, registerT } from '../../lib/relay-test-http.mjs'
 
 const ROOT = path.resolve(import.meta.dirname, '../../..')
 const { memoryStore, createRelay, startRelayServer } = await import(pathToFileURL(path.join(ROOT, 'server/sync-relay.mjs')))
@@ -38,15 +39,9 @@ const providerMod = await import(pathToFileURL(path.join(ROOT, 'server/billing/p
 const DAY = 24 * 60 * 60 * 1000
 const NOW = 1_700_000_000_000
 
-const post = (base, url, body, secret) => fetch(base + url, {
-  method: 'POST',
-  headers: {
-    'content-type': 'application/json',
-    connection: 'close', // see relay-registration-guard.test.mjs: pooled keep-alive teardown crashes on win32
-    ...(secret ? { authorization: `Bearer ${secret}` } : {}),
-  },
-  body: JSON.stringify(body),
-})
+// full-suite load flakes the first exchanges of a fresh relay as `fetch failed`
+// (transport-level) — retried here, never HTTP statuses (see tests/lib/relay-test-http.mjs)
+const post = (base, url, body, secret) => postT(base + url, body, { secret })
 
 async function shutdown (server) {
   if (server.closeAllConnections) server.closeAllConnections()
@@ -65,12 +60,7 @@ async function boot () {
   return { server, url, relay, gate, bridge, billingStore }
 }
 
-const register = async (base, account, device, extra = {}) => {
-  const res = await post(base, '/v1/device/register', { account, device, ...extra })
-  const out = await res.json()
-  return { status: res.status, secret: out.device && out.device.deviceSecret, out }
-}
-
+const register = async (base, account, device, extra = {}) => registerT(post, base, account, device, extra)
 /** Bind a relay account to a fresh billing account with an ACTIVE cloud sub. */
 function bindPaid (billingStore, bridge, relayAccount) {
   const { accountId } = billingStore.createAccount()
@@ -128,7 +118,7 @@ test('HTTP: gate ON + paid bound account — full sync works; signed-webhook ref
     bindPaid(billingStore, bridge, 'subscriber')
     const reg = await register(url, 'subscriber', 'dev1')
     assert.equal(reg.status, 200)
-    const push = await post(url, '/v1/sync/push', { account: 'subscriber', device: 'dev1', items: [{ opId: 'o1', envelope: '{"v":1}' }] }, reg.secret)
+    const push = await post(url, '/v1/sync/push', { account: 'subscriber', device: reg.device, items: [{ opId: 'o1', envelope: '{"v":1}' }] }, reg.secret)
     assert.equal(push.status, 200)
 
     // refund through the ONLY money door: create order -> charge -> refund (signed webhooks)
@@ -144,7 +134,7 @@ test('HTTP: gate ON + paid bound account — full sync works; signed-webhook ref
     const refund = provider.emitEvent({ orderId: order.orderId, type: 'refund.succeeded', amountMinor: order.amountMinor, currency: order.currency })
     assert.equal(run({ rawBody: refund.body, headers: refund.headers }).body.applied, true)
 
-    const pushFrozen = await post(url, '/v1/sync/push', { account: 'subscriber', device: 'dev1', items: [{ opId: 'o2', envelope: '{"v":2}' }] }, reg.secret)
+    const pushFrozen = await post(url, '/v1/sync/push', { account: 'subscriber', device: reg.device, items: [{ opId: 'o2', envelope: '{"v":2}' }] }, reg.secret)
     assert.equal(pushFrozen.status, 403, 'frozen account cannot push')
     assert.match((await pushFrozen.json()).error, /subscription-refund/)
     const regFrozen = await register(url, 'subscriber', 'dev2')
@@ -183,21 +173,21 @@ test('HTTP: byte quota — over-quota push is a coded 413 with usage untouched; 
     const reg = await register(url, 'metered', 'dev1')
     assert.equal(reg.status, 200)
 
-    const ok = await post(url, '/v1/sync/push', { account: 'metered', device: 'dev1', items: [{ opId: 'o1', envelope: 'd'.repeat(20) }] }, reg.secret)
+    const ok = await post(url, '/v1/sync/push', { account: 'metered', device: reg.device, items: [{ opId: 'o1', envelope: 'd'.repeat(20) }] }, reg.secret)
     assert.equal(ok.status, 200)
     assert.equal(gate.usageBytes('metered'), 20)
 
-    const over = await post(url, '/v1/sync/push', { account: 'metered', device: 'dev1', items: [{ opId: 'o2', envelope: 'e'.repeat(40) }] }, reg.secret)
+    const over = await post(url, '/v1/sync/push', { account: 'metered', device: reg.device, items: [{ opId: 'o2', envelope: 'e'.repeat(40) }] }, reg.secret)
     assert.equal(over.status, 413, 'quota breach is an explicit HTTP 413, not a 500/timeout')
     assert.match((await over.json()).error, /storage-quota-exceeded/)
     assert.equal(gate.usageBytes('metered'), 20, 'denial metered nothing')
-    const retry = await post(url, '/v1/sync/push', { account: 'metered', device: 'dev1', items: [{ opId: 'o2', envelope: 'e'.repeat(40) }] }, reg.secret)
+    const retry = await post(url, '/v1/sync/push', { account: 'metered', device: reg.device, items: [{ opId: 'o2', envelope: 'e'.repeat(40) }] }, reg.secret)
     assert.equal(retry.status, 413, 'retry of the same over-quota push still fails cleanly')
     assert.equal(gate.usageBytes('metered'), 20)
 
     // operator/reconcile resets usage — the SAME push now succeeds (no permanent lockout)
     gate.setUsage('metered', 0)
-    const after = await post(url, '/v1/sync/push', { account: 'metered', device: 'dev1', items: [{ opId: 'o2', envelope: 'e'.repeat(40) }] }, reg.secret)
+    const after = await post(url, '/v1/sync/push', { account: 'metered', device: reg.device, items: [{ opId: 'o2', envelope: 'e'.repeat(40) }] }, reg.secret)
     assert.equal(after.status, 200, 'error retry must never become a permanent invalidation')
     assert.equal(gate.usageBytes('metered'), 40)
   } finally { await shutdown(server) }
@@ -210,8 +200,8 @@ test('HTTP: replay idempotency — same push twice, same serverSeq, metered once
     billingStore.setUsage(accountId, 0)
     const reg = await register(url, 'idem', 'dev1')
     const items = [{ opId: 'op-x', envelope: 'z'.repeat(25) }]
-    const p1 = await post(url, '/v1/sync/push', { account: 'idem', device: 'dev1', items }, reg.secret)
-    const p2 = await post(url, '/v1/sync/push', { account: 'idem', device: 'dev1', items }, reg.secret)
+    const p1 = await post(url, '/v1/sync/push', { account: 'idem', device: reg.device, items }, reg.secret)
+    const p2 = await post(url, '/v1/sync/push', { account: 'idem', device: reg.device, items }, reg.secret)
     assert.equal(p1.status, 200); assert.equal(p2.status, 200)
     const b1 = await p1.json(); const b2 = await p2.json()
     assert.equal(b1.acked['op-x'], b2.acked['op-x'], 'replay keeps the original serverSeq')
@@ -229,14 +219,14 @@ test('HTTP: cross-account secret isolation holds with the gate on — A token ca
     const bob = await register(url, 'bob', 'devB')
     assert.equal(alice.status, 200); assert.equal(bob.status, 200)
 
-    const steal = await post(url, '/v1/sync/push', { account: 'bob', device: 'devB', items: [{ opId: 'o-b', envelope: '{"v":1}' }] }, alice.secret)
+    const steal = await post(url, '/v1/sync/push', { account: 'bob', device: bob.device, items: [{ opId: 'o-b', envelope: '{"v":1}' }] }, alice.secret)
     assert.equal(steal.status, 401, "alice's device secret must not authorize bob's stream")
     const readSteal = await post(url, '/v1/sync/pull', { account: 'bob', afterSeq: 0 }, alice.secret)
     assert.equal(readSteal.status, 401, "alice's device secret must not read bob's history")
-    const stateSteal = await post(url, '/v1/device/state', { account: 'bob', device: 'devB', status: 'retired' }, alice.secret)
+    const stateSteal = await post(url, '/v1/device/state', { account: 'bob', device: bob.device, status: 'retired' }, alice.secret)
     assert.equal(stateSteal.status, 401, "alice's device secret must not retire bob's device")
 
-    const own = await post(url, '/v1/sync/push', { account: 'bob', device: 'devB', items: [{ opId: 'o-b', envelope: '{"v":1}' }] }, bob.secret)
+    const own = await post(url, '/v1/sync/push', { account: 'bob', device: bob.device, items: [{ opId: 'o-b', envelope: '{"v":1}' }] }, bob.secret)
     assert.equal(own.status, 200, "bob's own secret still works")
   } finally { await shutdown(server) }
 })

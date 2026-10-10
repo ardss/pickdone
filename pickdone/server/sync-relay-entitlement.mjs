@@ -77,7 +77,28 @@
  */
 
 import { Buffer } from 'node:buffer'
+import { existsSync, readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { dirname } from 'node:path'
 import { computeEntitlements, GRACE_MS } from './billing/entitlements.mjs'
+
+// Durable persistence for the hosted relay's OPERATOR plane (bindings + usage
+// metering). writeFileDurable comes from the app tree (tmp → fsync → rename);
+// standalone deployments without it get a plain atomic-enough fallback, the
+// same trade billing/store.mjs already makes.
+const requireCjs = createRequire(import.meta.url)
+let writeFileDurable
+try {
+  ({ writeFileDurable } = requireCjs('../../src/main/durable-fs.js'))
+} catch {
+  writeFileDurable = (file, data) => {
+    const fs = requireCjs('node:fs')
+    fs.mkdirSync(dirname(file), { recursive: true })
+    const tmp = `${file}.${process.pid}.tmp`
+    fs.writeFileSync(tmp, data)
+    fs.renameSync(tmp, file)
+  }
+}
 
 /** Explicit, operator-visible enforcement policy. Frozen; override per gate. */
 export const DEFAULT_ENTITLEMENT_POLICY = Object.freeze({
@@ -137,12 +158,55 @@ const gateError = (status, code, message) =>
  *  duplicate by the store and never re-metered. */
 export const USAGE_OPS_CAP_PER_ACCOUNT = 200_000
 
-function createUsageLedger () {
+/**
+ * File-backed persistence for the usage ledger (PRODUCTION_NO_GO #4 fix).
+ *
+ * The in-memory ledger used to die with the process: a relay restart silently
+ * reset metering to zero, so a quota could be bypassed by bouncing the relay
+ * and drift was invisible. With `path` set, the ledger write-throughs a JSON
+ * snapshot (tmp → fsync → rename, same primitive as relay-state.json) on every
+ * mutation and reloads it at construction. Corrupt/unreadable snapshots are
+ * quarantined to `<path>.bad` and reset to empty — metering loss is the SAFE
+ * failure direction (replays are deduped by the store, and an operator resync
+ * via setUsage remains authoritative).
+ */
+function createUsageLedger (path = null) {
   const byAccount = new Map() // account -> { total, ops: Map<opId, bytes> }
   const acct = a => {
     let e = byAccount.get(a)
     if (!e) { e = { total: 0, ops: new Map() }; byAccount.set(a, e) }
     return e
+  }
+  const snapshot = () => ({
+    version: 1,
+    accounts: Object.fromEntries([...byAccount.entries()].map(([a, e]) => [a, {
+      total: e.total,
+      ops: [...e.ops.entries()].slice(-USAGE_OPS_CAP_PER_ACCOUNT),
+    }])),
+  })
+  const persist = () => {
+    if (!path) return
+    try { writeFileDurable(path, JSON.stringify(snapshot())) } catch { /* metering must never take a push down */ }
+  }
+  if (path && existsSync(path)) {
+    try {
+      const dump = JSON.parse(readFileSync(path, 'utf8'))
+      if (!dump || typeof dump !== 'object' || typeof dump.accounts !== 'object' || dump.accounts === null) {
+        throw new Error('malformed usage dump: accounts object required')
+      }
+      for (const [a, e] of Object.entries(dump.accounts)) {
+        if (!e || typeof e !== 'object' || !Number.isFinite(e.total) || !Array.isArray(e.ops)) continue
+        const entry = { total: e.total, ops: new Map() }
+        for (const op of e.ops) {
+          if (Array.isArray(op) && typeof op[0] === 'string' && Number.isFinite(op[1])) entry.ops.set(op[0], op[1])
+        }
+        byAccount.set(String(a), entry)
+      }
+    } catch (err) {
+      const bad = path + '.bad'
+      try { requireCjs('node:fs').renameSync(path, bad) } catch { /* unreadable AND unmovable */ }
+      console.error(`[relay-entitlement] usage ledger unreadable (${err && err.message}) — quarantined to ${bad}, metering restarts at zero`)
+    }
   }
   return {
     has: a => byAccount.has(a),
@@ -155,15 +219,18 @@ function createUsageLedger () {
       e.ops.set(opId, bytes)
       if (e.ops.size > USAGE_OPS_CAP_PER_ACCOUNT) e.ops.delete(e.ops.keys().next().value)
       e.total += bytes
+      persist()
       return true
     },
     /** First-seen seed from the server-reported usage (trusted reporter). */
     seed (a, bytes) {
-      if (!byAccount.has(a)) byAccount.set(a, { total: bytes, ops: new Map() })
+      if (!byAccount.has(a)) { byAccount.set(a, { total: bytes, ops: new Map() }); persist() }
     },
     /** Authoritative resync (operator/reconcile). Clears opId memory too —
      *  a stale ledger must never outvote the reconciled truth. */
-    reset (a, bytes = 0) { byAccount.set(a, { total: bytes, ops: new Map() }) },
+    reset (a, bytes = 0) { byAccount.set(a, { total: bytes, ops: new Map() }); persist() },
+    /** Test/ops introspection: the durable snapshot shape. */
+    __snapshot: snapshot,
   }
 }
 
@@ -173,9 +240,11 @@ function createUsageLedger () {
  * @param {object} opts
  * @param {Function|object} opts.trustResolver  resolveTrust fn or { resolveTrust }
  * @param {object} [opts.policy]   overrides on DEFAULT_ENTITLEMENT_POLICY
+ * @param {string} [opts.usagePath] durable usage-ledger file (relay restarts keep
+ *   metering/quota; see createUsageLedger). Absent = in-memory only (tests).
  * @param {Function} [opts.now]    clock
  */
-export function createEntitlementGate ({ trustResolver, policy = null, now = Date.now } = {}) {
+export function createEntitlementGate ({ trustResolver, policy = null, usagePath = null, now = Date.now } = {}) {
   if (!trustResolver) throw new Error('createEntitlementGate: trustResolver is required')
   if (typeof trustResolver !== 'function' && typeof trustResolver.resolveTrust !== 'function') {
     throw new Error('createEntitlementGate: trustResolver must be a function or expose resolveTrust()')
@@ -184,7 +253,7 @@ export function createEntitlementGate ({ trustResolver, policy = null, now = Dat
     ? trustResolver
     : trustResolver.resolveTrust.bind(trustResolver)
   const mergedPolicy = Object.freeze({ ...DEFAULT_ENTITLEMENT_POLICY, ...(policy || {}) })
-  const ledger = createUsageLedger()
+  const ledger = createUsageLedger(usagePath)
 
   /** Resolve + validate one decision; throws coded denials for writes. */
   async function decide ({ account, device, action, graceKnob }) {
@@ -311,11 +380,49 @@ export function attachEntitlementGate (relay, gate) {
  * The binding is operator provisioning (bridge.bind) — never a client claim:
  * nothing on the wire can create or move a binding. SANDBOX ONLY; see
  * PRODUCTION_NO_GO #1/#3 before ever pointing this at real customers.
+ *
+ * `bindingsPath` (2026-10-11): durable operator bindings (JSON snapshot,
+ * write-through on every bind). Without it, a relay restart forgot every
+ * binding and ALL accounts fell back to untrusted/free — an operator had to
+ * re-run provisioning after every deploy. With it, bindings survive restarts;
+ * a corrupt file quarantines to `.bad` and starts empty (the fail-safe
+ * direction: nobody gains trust from a damaged file).
  */
-export function createSandboxTrustBridge ({ billingStore, graceMs = GRACE_MS, now = Date.now } = {}) {
+export function createSandboxTrustBridge ({ billingStore, bindingsPath = null, graceMs = GRACE_MS, now = Date.now } = {}) {
   if (!billingStore) throw new Error('createSandboxTrustBridge: billingStore required')
   const bindings = new Map() // relay account -> billing accountId
   const overrides = new Map() // relay account -> { maxDevices?, storageQuotaBytes? }
+  /** Durable operator state: bindings AND per-account plan overrides — a relay
+   *  restart used to silently forget overrides, so a support-granted quota cap
+   *  evaporated on every deploy. One JSON file, write-through on mutation. */
+  const persistOperatorState = () => {
+    if (!bindingsPath) return
+    try {
+      writeFileDurable(bindingsPath, JSON.stringify({
+        version: 1,
+        bindings: [...bindings.entries()],
+        overrides: [...overrides.entries()],
+      }))
+    } catch { /* a persist failure must not fail the bind itself */ }
+  }
+  if (bindingsPath && existsSync(bindingsPath)) {
+    try {
+      const dump = JSON.parse(readFileSync(bindingsPath, 'utf8'))
+      if (!dump || typeof dump !== 'object' || !Array.isArray(dump.bindings)) {
+        throw new Error('malformed bindings dump: bindings array required')
+      }
+      for (const b of dump.bindings) {
+        if (Array.isArray(b) && typeof b[0] === 'string' && typeof b[1] === 'string') bindings.set(b[0], b[1])
+      }
+      for (const o of (Array.isArray(dump.overrides) ? dump.overrides : [])) {
+        if (Array.isArray(o) && typeof o[0] === 'string' && o[1] && typeof o[1] === 'object') overrides.set(o[0], o[1])
+      }
+    } catch (err) {
+      const bad = bindingsPath + '.bad'
+      try { requireCjs('node:fs').renameSync(bindingsPath, bad) } catch { /* unreadable AND unmovable */ }
+      console.error(`[relay-entitlement] bindings unreadable (${err && err.message}) — quarantined to ${bad}, no accounts trusted until re-bound`)
+    }
+  }
   const untrusted = () => ({
     trusted: false,
     reason: 'no-server-binding',
@@ -337,6 +444,7 @@ export function createSandboxTrustBridge ({ billingStore, graceMs = GRACE_MS, no
       if (typeof account !== 'string' || !account) throw new Error('bind: relay account string required')
       if (typeof billingAccountId !== 'string' || !billingAccountId) throw new Error('bind: billing accountId required')
       bindings.set(account, billingAccountId)
+      persistOperatorState()
     },
     bindingOf: account => (bindings.has(account) ? { accountId: bindings.get(account) } : null),
     /** Operator-side per-account plan overrides (support/enterprise limits). */
@@ -346,7 +454,10 @@ export function createSandboxTrustBridge ({ billingStore, graceMs = GRACE_MS, no
         maxDevices: 'maxDevices' in patch ? patch.maxDevices : prev.maxDevices,
         storageQuotaBytes: 'storageQuotaBytes' in patch ? patch.storageQuotaBytes : prev.storageQuotaBytes,
       })
+      persistOperatorState()
     },
+    /** Test/ops introspection: durable overrides survive restarts. */
+    planOverrideOf: account => (overrides.has(account) ? { ...overrides.get(account) } : null),
     async resolveTrust ({ account } = {}) {
       const billingAccountId = bindings.get(account)
       if (!billingAccountId || !billingStore.getAccount(billingAccountId)) return untrusted()
