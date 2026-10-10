@@ -105,6 +105,14 @@ function applyEvent ({ store, order, event, ledger, provider }) {
  * returns { httpStatus, body } so the transport stays thin and testable.
  */
 export function processWebhook ({ store, provider, ledger, rawBody, headers, now = Date.now }) {
+  // 0. fail closed: while the store is unhealthy (isolated damaged ledger or
+  //    state), NOTHING may be recorded and NO money state may move — the
+  //    provider redelivers after operator recovery. Nothing was recorded, so
+  //    dedup will not swallow that future redelivery.
+  if (typeof store.isWritable === 'function' && !store.isWritable()) {
+    const h = typeof store.getLedgerHealth === 'function' ? store.getLedgerHealth() : {}
+    return { httpStatus: 503, body: { error: 'billing-ledger-unhealthy', reason: h.reason || 'unhealthy' } }
+  }
   // 1. auth — unsigned / wrong-signed / stale: hard reject, nothing recorded
   if (!provider.verify(rawBody, headers, { now })) {
     return { httpStatus: 401, body: { error: 'invalid-signature' } }

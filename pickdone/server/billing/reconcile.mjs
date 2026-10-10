@@ -53,6 +53,12 @@ export function reconcileReport ({ store, now = Date.now, statement = [], maxPen
   const t = now()
   return {
     generatedAt: new Date(t).toISOString(),
+    // fail-closed boot health: while unhealthy, `ledger` above is only the
+    // cryptographically-intact PREFIX loaded read-only — every consumer must
+    // check this before trusting chainOk/totals.
+    ledgerHealth: typeof store.getLedgerHealth === 'function'
+      ? store.getLedgerHealth()
+      : { healthy: true, reason: null, detail: null },
     chainOk: chain.ok,
     chainBrokenAt: chain.ok ? null : chain.brokenAt,
     ledgerTotals: totals(ledger),

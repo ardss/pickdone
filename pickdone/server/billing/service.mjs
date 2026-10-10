@@ -58,6 +58,17 @@ export function createBillingService (config = {}) {
     return a.length === b.length && a.equals(b) // same-length compare; tokens are random
   }
 
+  // Fail-closed gate (billing-hardening): an unhealthy store (isolated
+  // damaged ledger/state) answers 503 on every door that grants entitlements
+  // or mutates state — BEFORE credential checks, so a degraded service never
+  // trades on money history it cannot vouch for. Read-only admin/report +
+  // /v1/healthz stay available for manual reconciliation.
+  const health = () => (typeof store.getLedgerHealth === 'function'
+    ? store.getLedgerHealth()
+    : { healthy: true, reason: null, detail: null })
+  const writable = () => (typeof store.isWritable === 'function' ? store.isWritable() : true)
+  const unhealthy = res => json(res, 503, { error: 'billing-unhealthy', reason: health().reason || 'unhealthy' })
+
   // Drain-then-judge: an oversize body is fully consumed (discarded) so the
   // socket stays healthy, and the caller gets a clean 413 JSON response —
   // destroying the socket mid-upload turns the error into a transport failure
@@ -90,8 +101,15 @@ export function createBillingService (config = {}) {
     const url = new URL(req.url, 'http://x')
     const path = url.pathname
     try {
+      // ---- liveness/explicit health (orchestrators stop routing on 503) ---
+      if (path === '/v1/healthz' && req.method === 'GET') {
+        const h = health()
+        return json(res, h.healthy ? 200 : 503, { ok: h.healthy, reason: h.reason ?? null })
+      }
+
       // ---- open: mock identity -------------------------------------------
       if (req.method === 'POST' && path === '/v1/accounts') {
+        if (!writable()) return unhealthy(res)
         const { accountId, apiKey } = store.createAccount()
         return json(res, 201, { accountId, apiKey, note: 'sandbox mock identity — shown once' })
       }
@@ -100,13 +118,17 @@ export function createBillingService (config = {}) {
       if (req.method === 'POST' && path.startsWith('/v1/webhooks/')) {
         const name = path.slice('/v1/webhooks/'.length)
         if (name !== provider.name) return json(res, 404, { error: 'unknown-provider' })
-        const rawBody = await readRaw(req)
+        const rawBody = await readRaw(req) // drain first: keep the socket healthy
+        if (!writable()) return unhealthy(res)
         const out = processWebhook({ store, provider, ledger, rawBody, headers: req.headers, now })
         return json(res, out.httpStatus, out.body)
       }
 
       // ---- account-key authed --------------------------------------------
       if (path === '/v1/entitlements' && req.method === 'GET') {
+        // refuse to grant entitlements on untrusted money history — before
+        // auth, fail-closed beats credential handling
+        if (!writable()) return unhealthy(res)
         const account = store.accountByApiKey(bearer(req))
         if (!account) return json(res, 401, { error: 'unauthorized' })
         const ent = computeEntitlements({ store, accountId: account.accountId, now: () => now(), graceMs })
@@ -114,6 +136,7 @@ export function createBillingService (config = {}) {
       }
 
       if (path === '/v1/orders' && req.method === 'POST') {
+        if (!writable()) return unhealthy(res)
         const account = store.accountByApiKey(bearer(req))
         if (!account) return json(res, 401, { error: 'unauthorized' })
         let body
@@ -146,6 +169,7 @@ export function createBillingService (config = {}) {
 
       // ---- internal trusted reporter --------------------------------------
       if (path === '/v1/usage' && req.method === 'POST') {
+        if (!writable()) return unhealthy(res)
         if (!guard(req, internalToken)) return json(res, 401, { error: 'unauthorized' })
         let body
         try { body = JSON.parse(await readRaw(req)) } catch { return json(res, 400, { error: 'malformed-json' }) }
@@ -160,10 +184,13 @@ export function createBillingService (config = {}) {
       // ---- admin -----------------------------------------------------------
       if (path === '/v1/reconcile/report' && req.method === 'GET') {
         if (!guard(req, adminToken)) return json(res, 401, { error: 'unauthorized' })
-        sweepExpiredOrders(store, { maxPendingAgeMs })
+        // read-only manual-reconciliation entry: available while unhealthy,
+        // but the sweep is a mutation — only when writable
+        if (writable()) sweepExpiredOrders(store, { maxPendingAgeMs })
         return json(res, 200, reconcileReport({ store, now: () => now(), maxPendingAgeMs }))
       }
       if (path === '/v1/reconcile' && req.method === 'POST') {
+        if (!writable()) return unhealthy(res)
         if (!guard(req, adminToken)) return json(res, 401, { error: 'unauthorized' })
         let body
         try { body = JSON.parse(await readRaw(req)) } catch { return json(res, 400, { error: 'malformed-json' }) }
@@ -171,6 +198,23 @@ export function createBillingService (config = {}) {
         if (!statement) return json(res, 400, { error: 'statement-array-required' })
         sweepExpiredOrders(store, { maxPendingAgeMs })
         return json(res, 200, reconcileReport({ store, now: () => now(), statement, maxPendingAgeMs }))
+      }
+      // explicit operator recovery — the only write path while unhealthy;
+      // offered ONLY for a torn tail (never for tampering)
+      if (path === '/v1/reconcile/ledger/recover' && req.method === 'POST') {
+        if (!guard(req, adminToken)) return json(res, 401, { error: 'unauthorized' })
+        if (!writable()) {
+          let body
+          try { body = JSON.parse(await readRaw(req)) } catch { return json(res, 400, { error: 'malformed-json' }) }
+          if (!body || body.confirm !== true) return json(res, 400, { error: 'confirm-required', hint: 'POST {confirm:true} — archives every original byte before rewriting' })
+          const r = store.recoverLedger()
+          if (r.recovered) return json(res, 200, r)
+          if (r.reason === 'manual-reconciliation-required') {
+            return json(res, 409, { error: 'manual-reconciliation-required', detail: r.detail || null })
+          }
+          return json(res, 409, { error: r.reason, detail: r.detail || null })
+        }
+        return json(res, 409, { error: 'already-healthy' })
       }
 
       if (path === '/v1/plans' && req.method === 'GET') return json(res, 200, { plans: PLANS })
@@ -180,7 +224,7 @@ export function createBillingService (config = {}) {
     }
   }
 
-  return { handle, store, ledger, provider, config: { adminToken, internalToken, graceMs, maxPendingAgeMs } }
+  return { handle, store, ledger, provider, health, config: { adminToken, internalToken, graceMs, maxPendingAgeMs } }
 }
 
 export async function startBillingServer (service, { port = 0, host = '127.0.0.1' } = {}) {

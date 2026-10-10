@@ -32,6 +32,11 @@ import { dirname, join } from 'node:path'
 // D22 (P2 2026-10-02): the shared durable atomic-write helper (tmp -> fsync -> rename).
 // Plain Node, no electron — importable from this ESM module.
 import { writeFileDurable } from '../src/main/durable-fs.js'
+// 2026-10-10 (feature/syncv2-relay-entitlement): DEFAULT-OFF server-authoritative
+// entitlement hooks (subscription freeze / device limit / byte quota 413).
+// Passing `entitlements` (a gate from ./sync-relay-entitlement.mjs) to
+// createRelay() flips the relay into HOSTED mode; absent, semantics are untouched.
+import { attachEntitlementGate } from './sync-relay-entitlement.mjs'
 
 // ---------- storage backends ----------
 
@@ -180,8 +185,8 @@ export function fileStore(dir) {
 
 // ---------- relay logic (transport-agnostic, directly unit-testable) ----------
 
-export function createRelay(store, { enrollment = '' } = {}) {
-  return {
+export function createRelay(store, { enrollment = '', entitlements = null } = {}) {
+  const relay = {
     store,
     // 2026-10-10: when set, /v1/device/register must present this secret (body `enrollment`
     // or `x-enrollment` header) — closes the guess-an-account open-registration takeover path
@@ -234,12 +239,17 @@ export function createRelay(store, { enrollment = '' } = {}) {
     },
     setDeviceState(account, deviceId, patch) { return store.upsertDevice(account, deviceId, patch) },    push(account, deviceId, items) {
       const acked = {}
+      const duplicates = []
       for (const item of items) {
         const r = store.appendEnvelope(account, item.opId, item.envelope)
         acked[item.opId] = r.serverSeq
+        // 2026-10-10: report store-level opId dedup so the entitlement gate can
+        // meter only NEWLY stored bytes (replay/concurrent idempotency).
+        // Additive field — existing clients/tests only read acked/serverSeq.
+        if (r.duplicate) duplicates.push(item.opId)
       }
       store.upsertDevice(account, deviceId, { lastSeen: Date.now() })
-      return { acked, serverSeq: store.lastSeq() }
+      return { acked, serverSeq: store.lastSeq(), duplicates }
     },
     pull(account, afterSeq, maxBytes) {
       // server-side clamp: a client sending maxBytes:null previously bypassed the cap
@@ -297,6 +307,11 @@ export function createRelay(store, { enrollment = '' } = {}) {
     },
     latestSnapshot: account => store.latestSnapshot(account),
   }
+  // 2026-10-10: DEFAULT-OFF hosted entitlement gate — wraps the WRITE seams only
+  // (registerDevice/push become async); no gate = the relay is byte-for-byte
+  // the historical self-host relay.
+  if (entitlements) attachEntitlementGate(relay, entitlements)
+  return relay
 }
 
 // ---------- HTTP surface (spec §16/§17/§57) ----------
@@ -367,7 +382,10 @@ export function startRelayServer(relay, { port = 0, host = '127.0.0.1' } = {}) {
       if (total > MAX_BODY_BYTES) { respondTooLarge(); return }
       chunks.push(c)
     })
-    req.on('end', () => {
+    // 2026-10-10: async end-handler so the (default-off) entitlement gate can
+    // await trust resolution inside the route; error mapping is unchanged —
+    // a rejected promise lands in the same catch as a synchronous throw.
+    req.on('end', async () => {
       if (responded || res.headersSent) return
       responded = true
       if (tooLarge) {
@@ -383,17 +401,15 @@ export function startRelayServer(relay, { port = 0, host = '127.0.0.1' } = {}) {
           if (!registrationAllowed(ip)) {
             res.writeHead(429, { 'content-type': 'application/json' })
             res.end(JSON.stringify({ error: 'too many registrations from this address' }))
-            responded = true
             return
           }
           if (!enrollmentOk(body, req.headers['x-enrollment'])) {
             res.writeHead(403, { 'content-type': 'application/json' })
             res.end(JSON.stringify({ error: 'enrollment secret required (see relay operator)' }))
-            responded = true
             return
           }
         }
-        const out = route(relay, req.method, req.url, body, req.headers.authorization)
+        const out = await route(relay, req.method, req.url, body, req.headers.authorization)
         res.writeHead(200, { 'content-type': 'application/json', 'x-protocol-version': String(PROTOCOL_VERSION) })
         res.end(JSON.stringify({ protocolVersion: PROTOCOL_VERSION, ...out }))
       } catch (err) {
@@ -433,7 +449,10 @@ const PROTECTED_ROUTES = new Set([
   '/v1/snapshot/latest',
 ])
 
-function route(relay, method, url, body, authz) {
+// 2026-10-10: async so a DEFAULT-OFF entitlement gate (registerDevice/push
+// wrapping resolves trust asynchronously) can await inside the same route;
+// without a gate every seam is still synchronous and this adds one microtask.
+async function route(relay, method, url, body, authz) {
   const path = url.split('?')[0]
   const post = () => { if (method !== 'POST') throw err(405, 'POST only'); return body }
   if (PROTECTED_ROUTES.has(path)) {
@@ -450,6 +469,14 @@ function route(relay, method, url, body, authz) {
       need(items.every(it => it && typeof it.opId === 'string' && typeof it.envelope === 'string'), 'each item needs string opId + string envelope')
       return relay.push(account, device, items)
     }
+    case '/v1/device/register': {
+      const { account, device, deviceSecret } = post()
+      need(account && device, 'account, device required')
+      // 2026-10-10: registerDevice is async under the (default-off) entitlement
+      // gate — await INSIDE the object literal so rejections map to coded HTTP
+      // errors and the response carries the real device row, not a Promise.
+      return { device: await relay.registerDevice(account, device, { bodySecret: deviceSecret, bearerSecret: parseBearer(authz) }) }
+    }
     case '/v1/sync/pull': {
       const { account, afterSeq = 0, maxBytes } = post()
       need(account, 'account required')
@@ -463,11 +490,6 @@ function route(relay, method, url, body, authz) {
       // has issued). relay.ack clamps too, so direct createRelay() callers are covered as well.
       need(ackSeq >= 0 && ackSeq <= relay.store.lastSeq(), `ackSeq ${ackSeq} beyond relay history (lastSeq ${relay.store.lastSeq()})`)
       return relay.ack(account, device, ackSeq)
-    }
-    case '/v1/device/register': {
-      const { account, device, deviceSecret } = post()
-      need(account && device, 'account, device required')
-      return { device: relay.registerDevice(account, device, { bodySecret: deviceSecret, bearerSecret: parseBearer(authz) }) }
     }
     case '/v1/device/state': {
       const { account, device, status } = post()

@@ -168,7 +168,7 @@ test('ledger: appends are rejected for zero/negative/float amounts at the entry 
   assert.throws(() => store.ledger.append({ type: 'wallet-topup' }), /unknown entry type/)
 })
 
-test('store file mode: state + ledger survive restart; chain-verified boot', t => {
+test('store file mode: state + ledger survive restart; tampered boot is FAIL-CLOSED (read-only, evidence untouched)', t => {
   const dir = mkdtempSync(join(tmpdir(), 'pd-billing-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const buy = () => {
@@ -191,13 +191,22 @@ test('store file mode: state + ledger survive restart; chain-verified boot', t =
   assert.equal(s2.ledger.verify().ok, true)
   s2.close()
 
-  // tamper one byte of money history on disk �?boot QUARANTINES and refuses
+  // tamper one byte of money history on disk → boot REFUSES to serve: the
+  // store comes up read-only unhealthy (no entitlements, no webhooks), the
+  // evidence file stays EXACTLY as found — no quarantine rename, no fresh
+  // empty ledger, no silent rebuild (the old behavior lost every payment
+  // fact and kept accepting new money on a genesis chain).
   const ledgerPath = join(dir, 'ledger.jsonl')
   const lines = readFileSync(ledgerPath, 'utf8').split('\n').filter(Boolean)
   const evil = lines.map(l => l.replace('"amountMinor":499', '"amountMinor":1'))
   writeFileSync(ledgerPath, evil.join('\n') + '\n')
   const s3 = createBillingStore({ dataDir: dir, now: () => T0 })
-  assert.equal(s3.ledger.all().length, 0, 'tampered chain never boots into service')
-  assert.equal(existsSync(ledgerPath + '.bad'), true, 'original quarantined for investigation')
+  assert.equal(s3.getLedgerHealth().healthy, false, 'tampered chain never boots writable')
+  assert.equal(s3.getLedgerHealth().reason, 'ledger-chain-broken')
+  assert.equal(s3.isWritable(), false)
+  assert.equal(s3.ledger.all().length, 0, 'tampered entry and everything after it is not trusted')
+  assert.throws(() => s3.ledger.append({ type: 'charge', amountMinor: 499, currency: 'USD' }), /READ-ONLY/)
+  assert.equal(existsSync(ledgerPath + '.bad'), false, 'no silent quarantine rename')
+  assert.equal(readFileSync(ledgerPath, 'utf8'), evil.join('\n') + '\n', 'evidence file untouched')
   s3.close()
 })

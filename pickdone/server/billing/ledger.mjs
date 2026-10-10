@@ -71,14 +71,26 @@ export function verifyChain (entries) {
 /** Append-only view over an in-memory array + optional JSONL write-through.
  *  The array is the source of truth in-process; when `ledgerPath` is given,
  *  every append is fsynced to disk (JSONL, one entry per line) BEFORE the
- *  in-memory append resolves — a crash can lose nothing already acked. */
+ *  in-memory append resolves — a crash can lose nothing already acked.
+ *
+ *  Fail-closed isolation: after boot loads a damaged-ledger VERIFIED PREFIX
+ *  via loadReadOnly(), the ledger flips read-only and EVERY append is
+ *  refused — money history must never silently continue on a fresh chain
+ *  while the broken segment sits unexplained. */
 export function createLedger ({ ledgerPath = null, appendLine = null } = {}) {
   const entries = []
+  let readOnly = false
   return {
     kind: appendLine ? 'file' : 'memory',
+    isReadOnly: () => readOnly,
     tail: () => (entries.length ? entries[entries.length - 1] : null),
     all: () => entries.slice(),
     append (fields) {
+      if (readOnly) {
+        const err = new Error('billing ledger is READ-ONLY (unhealthy isolation) — append refused')
+        err.code = 'LEDGER_READONLY'
+        throw err
+      }
       const entry = buildEntry(this.tail(), fields)
       if (appendLine) appendLine(entry) // throws → nothing enters memory (fail closed)
       entries.push(entry)
@@ -86,7 +98,7 @@ export function createLedger ({ ledgerPath = null, appendLine = null } = {}) {
     },
     verify: () => verifyChain(entries),
     /** Restore from a JSONL boot scan; verifies BEFORE accepting (quarantine
-     *  is the caller's job — see store.mjs file boot). */
+     *  is the caller's job — see store.mjs file boot). Returns read-write. */
     loadVerified (scanned) {
       const v = verifyChain(scanned)
       if (!v.ok) {
@@ -96,6 +108,22 @@ export function createLedger ({ ledgerPath = null, appendLine = null } = {}) {
       }
       entries.length = 0
       entries.push(...scanned)
+      readOnly = false
+      return entries.length
+    },
+    /** Read-only isolation boot: load the cryptographically-intact PREFIX of
+     *  a damaged ledger so operators can reconcile what is provably theirs,
+     *  while appends stay refused until an operator resolves the damage. */
+    loadReadOnly (prefix) {
+      const v = verifyChain(prefix)
+      if (!v.ok) {
+        const err = new Error(`billing ledger: read-only prefix fails verification at seq ${v.brokenAt}`)
+        err.code = 'LEDGER_CHAIN_BROKEN'
+        throw err
+      }
+      entries.length = 0
+      entries.push(...prefix)
+      readOnly = true
       return entries.length
     },
   }
