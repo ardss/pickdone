@@ -32,7 +32,15 @@ function attachLoadGuard (win, opts) {
   const maxRetries = opts.retries != null ? opts.retries : 5
   const backoffMs = opts.backoffMs != null ? opts.backoffMs : 400
   let retries = 0
-  win.webContents.on('did-finish-load', () => { retries = 0 })
+  // QC 2026-10-09 (D21 timer-lifecycle parity with windows.js): the backoff retry timer used to be
+  // untracked — a timer armed just before the window closed fired against a destroyed window
+  // (guarded by isDestroyed, but the timer itself leaked across destroy-then-recreate) and a
+  // successful load left a stale pending retry that could double-fire loadURL. Track it and clear
+  // on 'closed' and on 'did-finish-load'.
+  let retryTimer = null
+  const clearRetryTimer = () => { if (retryTimer) { clearTimeout(retryTimer); retryTimer = null } }
+  win.on('closed', clearRetryTimer)
+  win.webContents.on('did-finish-load', () => { clearRetryTimer(); retries = 0 })
   win.webContents.on('did-fail-load', (e, code, desc, failUrl, isMain) => {
     if (!isMain) return // subframe/redirect noise never counts
     if (!String(failUrl).includes(routeMark)) return
@@ -40,7 +48,9 @@ function attachLoadGuard (win, opts) {
       retries++
       if (opts.onRetry) { try { opts.onRetry() } catch (err) { /* cleanup must not break the retry chain */ } }
       log.warn(`[${tag}] 页面加载失败，重试`, retries, code, desc)
-      setTimeout(() => {
+      clearRetryTimer()
+      retryTimer = setTimeout(() => {
+        retryTimer = null
         if (win && !win.isDestroyed()) win.loadURL(url).catch(() => {})
       }, backoffMs * retries)
       return

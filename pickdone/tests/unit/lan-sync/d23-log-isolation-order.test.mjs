@@ -27,3 +27,29 @@ for (const file of ['transport.js', 'discovery.js']) {
       'inline after-the-write isolation requires are the bug shape — removed')
   })
 }
+
+/* QC 2026-10-09 sweep: tomato-announce.js (src/main) and lan-sync/att-transfer.js had the same
+ * AFTER-the-write inline require shape. Same order contract, hoisted to module load. */
+const readMain = rel => fs.readFileSync(path.join(import.meta.dirname, '../../../src/main', rel), 'utf8')
+
+test('C8/QC: tomato-announce.js loads log-isolation at module top, before any electron-log write', () => {
+  const src = readMain('tomato-announce.js')
+  const firstLogWrite = src.indexOf("require('electron-log')")
+  const firstIsolation = src.indexOf("require('./log-isolation')")
+  assert.ok(firstIsolation !== -1, 'module must pull in log-isolation')
+  assert.ok(firstIsolation < firstLogWrite,
+    `log-isolation (${firstIsolation}) must precede the first electron-log write (${firstLogWrite})`)
+  assert.ok(!/require\('\.\/log-isolation'\)\s*\/\/\s*test isolation/.test(src),
+    'inline after-the-write isolation requires are the bug shape — removed')
+})
+
+test('C8/QC: lan-sync/att-transfer.js loads log-isolation at module top, before any electron-log write', () => {
+  const src = read('att-transfer.js')
+  const firstLogWrite = src.indexOf("require('electron-log')")
+  const firstIsolation = src.indexOf("require('../log-isolation')")
+  assert.ok(firstIsolation !== -1, 'module must pull in log-isolation')
+  assert.ok(firstIsolation < firstLogWrite,
+    `log-isolation (${firstIsolation}) must precede the first electron-log write (${firstLogWrite})`)
+  assert.ok(!/require\('\.\.\/log-isolation'\)\s*\/\/\s*test isolation/.test(src),
+    'inline after-the-write isolation requires are the bug shape — removed')
+})

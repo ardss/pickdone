@@ -66,8 +66,14 @@ function createBus (dbCall, manifestMod = manifest) {
     // Fire-and-forget like every other post-write notice: a failing subscriber must never
     // turn a landed DB write into a rejected IPC promise.
     for (const h of hooks) {
-      try { h.fn(ctx) } catch (e) { try { require('electron-log').warn('[command-bus] fanout hook failed:', h.name, e) } catch { /* headless test env */ } }
-      require('./log-isolation') // test isolation: redirect electron-log file transport into TODO_DB_DIR/TODO_USER_DATA_DIR
+      // QC 2026-10-09: the log-isolation require used to run on EVERY hook of EVERY commit —
+      // a per-write hot-path cost with zero effect on the happy path. Warn-path only, like
+      // every sibling module (the module-load hoist convention is C8; the bus keeps the
+      // require local because its module graph must stay loadable without the redirect).
+      try { h.fn(ctx) } catch (e) {
+        require('./log-isolation') // test isolation: redirect electron-log file transport into TODO_DB_DIR/TODO_USER_DATA_DIR
+        try { require('electron-log').warn('[command-bus] fanout hook failed:', h.name, e) } catch { /* headless test env */ }
+      }
     }
   }
 

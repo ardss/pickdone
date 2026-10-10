@@ -386,7 +386,11 @@ async function bootstrap () {
             store.commit('tomato/patch', { tomatoTime: cmd.minutes })
           }
           if (t.status === 'startTomatoTime' || t.status === 'startRestTime') {
-            store.dispatch('tomato/giveUp', { record: true, reason: 'cli' }) // Already running: record the previous segment first (per account-keeping closeout, never discard focused time without record) then start a new one
+            // QC 2026-10-09: the giveUp dispatch must complete BEFORE startFocus — un-awaited, the
+            // status was still 'startTomatoTime' when startFocus hit its phase guard and refused,
+            // so a CLI `tomato start` over a running focus silently started nothing (the 150ms
+            // receipt then reported the still-idle state as success). Await the closeout first.
+            await store.dispatch('tomato/giveUp', { record: true, reason: 'cli' }) // Already running: record the previous segment first (per account-keeping closeout, never discard focused time without record) then start a new one
           }
           store.dispatch('tomato/startFocus')
           if (cmd.taskId) store.dispatch('tomato/attach', cmd.taskId)
@@ -439,7 +443,11 @@ async function bootstrap () {
         const next = JSON.parse(e.newValue)
         const cur = store.state.settings
         // Drop out-of-order stale packets: both sides write whole-package + 150ms debounce to LS; a late-arriving older packet once rolled new settings back (root cause of the white-noise selection regressing by chance)
-        if (next._lsAt && cur._lsAt && next._lsAt <= cur._lsAt) return
+        // QC 2026-10-09: only STRICTLY older stamps are dropped — the old `<=` dropped EQUAL
+        // stamps too, so two windows writing in the same millisecond silently lost the second
+        // writer's packet. Equal stamps fall through to the per-key content diff below, which
+        // still no-ops when the payloads really are identical.
+        if (next._lsAt && cur._lsAt && next._lsAt < cur._lsAt) return
         const patch = {}
         // Apply a diff across all keys instead of picking only 4: any commit the float window makes to settingsState triggers a whole-package persist write-back to LS,
         // syncing only 4 keys would let stale copies of the other keys roll back settings the main window just wrote (only catching up on the next event)
