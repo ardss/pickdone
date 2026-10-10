@@ -348,28 +348,33 @@ export function startRelayServer(relay, { port = 0, host = '127.0.0.1' } = {}) {
   const server = createServer((req, res) => {
     const chunks = []
     let total = 0
-    const respondTooLarge = () => {
-      // Header guard (2026-10-06): req.destroy() is async — a buffered chunk can re-enter this
-      // handler after the 413 was already written, and a second writeHead threw
-      // ERR_HTTP_HEADERS_SENT. `responded` + res.headersSent make the branch idempotent.
-      if (responded || res.headersSent) return
-      responded = true
-      res.writeHead(413, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ error: 'request body too large' }))
-      // No req.destroy() here: resetting the socket races the client's read of the 413
-      // (ECONNRESET on the caller side). The remaining body is drained and ignored — the
-      // responded/headersSent guards make both later handlers no-ops.
-    }
     let responded = false
+    let tooLarge = false
+    const respondTooLarge = () => {
+      // 2026-10-10 (integration loopback): a 9MB upload used to get its 413 written from inside
+      // req.on('data') while the client was still uploading. Writing mid-upload without
+      // consuming the rest backs up the socket and Node resets the connection — the client's
+      // fetch surfaced ECONNRESET, never the 413. Fix: only FLAG the over-limit here; keep
+      // reading and DISCARDING the body (chunks are dropped so memory stays O(1), the stream
+      // keeps flowing so the socket never backs up) and send exactly one 413 from req 'end',
+      // when the client is done uploading and can reliably read it.
+      tooLarge = true
+      chunks.length = 0 // free the buffered prefix; the rest is discarded on arrival
+    }
     req.on('data', c => {
+      if (tooLarge || responded || res.headersSent) return // drain: consume without buffering
       total += c.length
       if (total > MAX_BODY_BYTES) { respondTooLarge(); return }
-      if (responded || res.headersSent) return
       chunks.push(c)
     })
     req.on('end', () => {
       if (responded || res.headersSent) return
       responded = true
+      if (tooLarge) {
+        res.writeHead(413, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ error: 'request body too large' }))
+        return
+      }
       let body = {}
       try {
         if (chunks.length) body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
