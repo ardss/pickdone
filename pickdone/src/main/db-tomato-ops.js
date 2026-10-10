@@ -75,12 +75,16 @@ exports.tomatoTombstones = db => db.prepare('SELECT tomatoId, updatedAt, deleted
 exports.tomatoAppendMany = (db, rows) => {
   const list = Array.isArray(rows) ? rows : [rows]
   const now = Date.now()
+  // 2026-10-11 CI fix: `>=` not `>` in the arbiter below — on fast machines (linux CI) a
+  // remove + immediate re-append land in the SAME millisecond; strict `>` made the legit
+  // re-record lose to the tombstone (unit-db-ledger 删除-再补录 contract). Ties resolve to
+  // resurrection; a stale in-flight append (updatedAt strictly older) stays blocked.
   const ins = db.prepare(`INSERT INTO tomato_records (tomatoId, endTime, dateKey, focus, focusTaskId, focusDuration, rest, restDuration, succeed, manual, status, abandonReason, extra, deleted, deletedAt, updatedAt)
     VALUES (@tomatoId, @endTime, @dateKey, @focus, @focusTaskId, @focusDuration, @rest, @restDuration, @succeed, @manual, @status, @abandonReason, @extra, 0, 0, @updatedAt)
     ON CONFLICT(tomatoId) DO UPDATE SET endTime=excluded.endTime, dateKey=excluded.dateKey, focus=excluded.focus, focusTaskId=excluded.focusTaskId,
       focusDuration=excluded.focusDuration, rest=excluded.rest, restDuration=excluded.restDuration, succeed=excluded.succeed, manual=excluded.manual,
       status=excluded.status, abandonReason=excluded.abandonReason, extra=excluded.extra, deleted=0, deletedAt=0, updatedAt=excluded.updatedAt
-    WHERE tomato_records.deleted = 0 OR excluded.updatedAt > tomato_records.deletedAt`)
+    WHERE tomato_records.deleted = 0 OR excluded.updatedAt >= tomato_records.deletedAt`)
   // F2 2026-09-15 行级容错(架构根因:批量接口的失败粒度应是"行级"而非"批级"):
   // 此前任一行缺 tomatoId/endTime 抛错回滚整批 → 渲染端 pending 队列被一条坏行劫持无限重试,
   // 同批合法账本行永不落库。现改为事务内跳过无效行并记入返回值 rejected,合法行照常落库;
