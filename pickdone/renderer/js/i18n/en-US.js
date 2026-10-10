@@ -186,6 +186,8 @@ export default {
     "flushStalledNotice": "Sync push stalled — repeated flush failures to this peer; snapshot recovery has not converged",
     "quarantineSection": "Flush quarantine (parked rows)",
     "quarantineRows": "{n} rows parked",
-    "quarantineHint": "Rows a failed sync flush dropped are parked machine-locally and recover via a full snapshot (read-only view)."
+    "quarantineHint": "Rows a failed sync flush dropped are parked machine-locally and recover via a full snapshot (read-only view).",
+    "oversizedSegmentNotice": "Transfer exceeded the single-sync size cap (oversized segment) — upgrade the peer's app version or split the data, then pair again",
+    "hibernatingNotice": "Repeated connection failures — regular dialing is paused, auto-retry in about {n}s"
   }
 }

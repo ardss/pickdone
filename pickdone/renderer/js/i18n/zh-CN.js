@@ -186,6 +186,8 @@ export default {
     "flushStalledNotice": "同步推送已停滞——向该设备写入连续失败，快照恢复尚未收敛",
     "quarantineSection": "写入隔离区（已暂存行）",
     "quarantineRows": "已暂存 {n} 行",
-    "quarantineHint": "同步落库失败的行已暂存于本机，等待快照恢复（只读展示）。"
+    "quarantineHint": "同步落库失败的行已暂存于本机，等待快照恢复（只读展示）。",
+    "oversizedSegmentNotice": "传输数据超过单次同步上限（超长分段），需要升级对端版本或拆分数据后重新配对",
+    "hibernatingNotice": "连接失败次数较多，已暂停常规拨号，约 {n} 秒后自动重试"
   }
 }

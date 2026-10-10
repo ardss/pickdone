@@ -309,12 +309,15 @@ test('peerFlushStalled: pure helper matches peerState flush-stalled only', () =>
   assert.equal(peerFlushStalled(null), false)
 })
 
-test('flush-stalled notice renders distinctly on the peer card, before the generic lastError line', () => {
-  assert.match(src, /v-else-if="isFlushStalled\(p\)"/, 'peer card must have a dedicated flush-stalled line')
-  assert.match(src, /\$t\('sync\.flushStalledNotice'\)/)
-  const order = src.indexOf('isFlushStalled(p)')
-  const generic = src.indexOf("v-else-if=\"p.lastError\"")
-  assert.ok(order > -1 && generic > -1 && order < generic, 'flush-stalled line must win over generic lastError')
+test('flush-stalled notice renders distinctly on the peer card (2026-10-10: via the structured mapper)', () => {
+  // work-package C replaced the isUnpairedByRemote/isFlushStalled/lastError template chain
+  // with one peerStatusLabel(p) line reading peerState — the mapper must still give
+  // flush-stalled its dedicated copy and dot.
+  const { peerStatusInfo } = pureFns(['peerStatusInfo'])
+  assert.equal(peerStatusInfo({ peerState: 'flush-stalled' }).labelKey, 'sync.flushStalledNotice')
+  assert.equal(peerStatusInfo({ peerState: 'flush-stalled' }).dot, 'sync-dot--err')
+  assert.match(src, /peerStatusLabel\(p\)/, 'peer card renders the structured status line')
+  assert.ok(pureSrc.includes("'sync.flushStalledNotice'"), 'flush-stalled copy remains wired in the mapper')
 })
 
 test('flush quarantine section: read-only, count + op names, no re-apply action', () => {
