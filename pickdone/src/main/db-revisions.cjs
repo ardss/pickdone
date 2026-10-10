@@ -380,6 +380,65 @@ module.exports = function createRevisionRecorder ({ getDb, log }) {
     return store
   }
 
+  /**
+   * Pull-side causal receive (2026-10-10): persist VERIFIED remote envelopes into the local
+   * DAG so a relay pull survives restart and future local edits parent onto the remote head
+   * (spec §6 rule 2). Mirrors the engine's in-round merge decisions 1:1:
+   *   - immutable INSERT OR IGNORE by revisionId PK → replays/echoes are no-ops (idempotent);
+   *   - payloads ride along (prune policy applies to them like any other payload);
+   *   - dvv rows attach only when the side table already exists (zero-footprint when the
+   *     DVV sub-flag was never on);
+   *   - the current pointer advances ONLY where the caller pinned the envelope as the
+   *     engine's materialized current, and never REGRESSES past a locally newer revision
+   *     (a concurrent local write may have landed mid-round).
+   * Unlike record(), a failure here MUST throw into the caller: the relay round's cursor
+   * may only commit past frames that are durably ingested (spec §18 cursor-commit rule) —
+   * swallowing the error would re-create the silent-loss gap this seam closes.
+   * @param {{envelope: object, isCurrent?: boolean}[]} items
+   */
+  function ingestRemote (items) {
+    if (!items || !items.length) return { ingested: 0 }
+    const d = getDb()
+    if (!d || !d.open) return { ingested: 0 }
+    const insertRev = d.prepare(`INSERT OR IGNORE INTO sync_revisions
+      (revisionId, entity, entityId, authorDeviceId, hlcPhysical, hlcLogical, parents, payloadHash, status, createdAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`)
+    const insertPayload = d.prepare('INSERT OR IGNORE INTO sync_revision_payloads (revisionId, payload) VALUES (?, ?)')
+    // DVV side rows only when the lazily-created table exists (flag-off databases keep
+    // zero DVV footprint — the statement itself must not even be prepared).
+    const hasDvv = dvvTableExists(d)
+    const insertDvv = hasDvv ? d.prepare(`INSERT OR IGNORE INTO ${DVV_TABLE} (revisionId, dvv) VALUES (?, ?)`) : null
+    const bumpCurrent = d.prepare('INSERT INTO sync_revision_current (entityId, revisionId) VALUES (?, ?) ON CONFLICT(entityId) DO UPDATE SET revisionId = excluded.revisionId')
+    const getCurrent = d.prepare('SELECT s.* FROM sync_revision_current c JOIN sync_revisions s ON s.revisionId = c.revisionId WHERE c.entityId = ?')
+    let ingested = 0
+    const run = d.transaction(() => {
+      for (const item of items) {
+        const env = item && item.envelope
+        if (!env || !env.revisionId || !env.entity || env.entityId == null) continue
+        // Spec §68 no-wedge: a malformed (yet authentically sealed) frame must not throw
+        // the round into a permanent retry — degrade to an epoch-oldest ancestry row.
+        const hlc = (env.hlc && Number.isFinite(env.hlc.physical))
+          ? env.hlc
+          : { physical: 0, logical: 0, nodeId: env.authorDeviceId || '' }
+        const res = insertRev.run(
+          env.revisionId, env.entity, String(env.entityId), env.authorDeviceId || '',
+          hlc.physical, hlc.logical, JSON.stringify(env.parents || []), env.payloadHash, Date.now())
+        if (res.changes) ingested++
+        if (env.payload != null) insertPayload.run(env.revisionId, JSON.stringify(env.payload))
+        if (env.dvv && insertDvv) insertDvv.run(env.revisionId, JSON.stringify(env.dvv))
+        if (!item.isCurrent) continue
+        // Never regress: an envelope the engine pinned as current still loses to a LOCAL
+        // revision that landed after the round's store snapshot (concurrent user write).
+        const cur = getCurrent.get(String(env.entityId))
+        if (!cur || cmpHlc(hlc, { physical: cur.hlcPhysical, logical: cur.hlcLogical, nodeId: cur.authorDeviceId }) >= 0) {
+          bumpCurrent.run(String(env.entityId), env.revisionId)
+        }
+      }
+    })
+    run()
+    return { ingested }
+  }
+
   /** No-arg store snapshot over the REAL sync-core store engine (main-internal read seam,
    *  exposed as the read-only `revisionsStoreSnapshot` db op). This is the unified causal
    *  read entry: the receiver classifies inbound envelopes against THIS snapshot via
@@ -420,7 +479,7 @@ module.exports = function createRevisionRecorder ({ getDb, log }) {
   }
 
   return {
-    record, list, exportToStore, exportStore, verifyHash,
+    record, list, exportToStore, exportStore, verifyHash, ingestRemote,
     flagEnabled, dvvFlagEnabled, adjudicateFlagEnabled, ensureDvvTable, dvvTableExists, dvvState,
     FLAG_KEY, DVV_FLAG_KEY, ADJUDICATE_FLAG_KEY, DVV_TABLE,
     cmpHlc, prunePayloads, payloadKeep,

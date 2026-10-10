@@ -170,6 +170,12 @@ export function createRelayClient({ nodeId, account, baseUrl, fetchImpl = fetch,
       }
       let applied = cursorState.cursor
       let quarantined = 0
+      // Pull-side materialization seam (2026-10-10): every successfully decrypted,
+      // non-duplicate frame is reported to the caller so a durable host can ingest it
+      // into its local DAG + business tables. Without this the merge lived only in the
+      // ephemeral store while the cursor advanced past the frames — silent loss on
+      // restart. Purely additive result field; bare-transport callers may ignore it.
+      const received = []
       // D26: `skipped` frames (relay-declared oversize — it can never deliver them) are
       // undeliverable by construction; quarantine semantics (spec §68): advance past them
       // and ack, or the cursor pins below the skip forever and every later envelope
@@ -191,6 +197,12 @@ export function createRelayClient({ nodeId, account, baseUrl, fetchImpl = fetch,
           continue
         }
         const r = applyEnvelope(s, env)
+        // The relay demonstrably holds this frame (we just pulled it): mark it pushed so a
+        // durable host that ingested the revision into its store never re-pushes it (the
+        // relay dedupes by opId anyway — this only spares the bytes). Durable persistence
+        // of the marking stays the adapter's commit point, so a failed round replays.
+        cursorState.pushed.add(env.revisionId)
+        if (r.status !== 'duplicate') received.push({ envelope: env, status: r.status, action: r.action })
         // ack advances past applied/merged frames AND duplicates (own frames come back
         // on every pull — without this the cursor never moved and GC was pinned at 0)
         // but NOT past frames that failed to merge for other reasons (spec §18/§67)
@@ -199,7 +211,7 @@ export function createRelayClient({ nodeId, account, baseUrl, fetchImpl = fetch,
       cursorState.cursor = applied
       let ackInfo = null
       if (applied > 0) ackInfo = await post('/v1/sync/ack', { account, device: nodeId, ackSeq: applied })
-      return { pushed: items.length, pulled: pull.items.length, quarantined, cursor: cursorState.cursor, ack: ackInfo }
+      return { pushed: items.length, pulled: pull.items.length, quarantined, cursor: cursorState.cursor, ack: ackInfo, received }
     },
     register: doRegister,
     materialized() { return materializedAll(s) },

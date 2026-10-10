@@ -101,6 +101,12 @@ function isRetryable (e) {
  * @param {(key: string, value: string) => void} deps.settingsPut machine-local door write
  * @param {() => Promise<object>} deps.loadStore async bridge → a sync-core revision store
  *   (createRevisionStore shape) holding the app's recorded revisions for this round
+ * @param {(received: Array<{envelope: object, status: string}>, store: object, nodeId: string) => Promise<object>|object} [deps.applyPulled]
+ *   pull-side materialization bridge (relay-sync-apply via the bootstrap): ingest the
+ *   round's received envelopes into the local DAG + business tables. OPTIONAL — absent
+ *   (or a bare-transport host) the adapter stays the pre-materialization transport-only
+ *   slice. Runs strictly BEFORE the durable cursor commit: a throw fails the round and
+ *   the cursor replays (spec §18 — never ack what did not land).
  * @param {{info?:Function,warn?:Function,error?:Function}} [deps.log]
  * @param {typeof fetch} [deps.fetchImpl]
  * @param {() => number} [deps.now]
@@ -113,7 +119,7 @@ function isRetryable (e) {
  * @param {number} [deps.roundIntervalMs] polling cadence override (tests)
  */
 function createRelayAdapter ({
-  nodeId, settingsGet, settingsPut, loadStore,
+  nodeId, settingsGet, settingsPut, loadStore, applyPulled,
   log = {}, fetchImpl = global.fetch, now = Date.now,
   env = process.env, importModules = defaultImportModules,
   sleep = defaultSleep, retryMax = RETRY_MAX, retryBaseMs = RETRY_BASE_MS,
@@ -123,7 +129,7 @@ function createRelayAdapter ({
   if (typeof settingsGet !== 'function' || typeof settingsPut !== 'function') throw new Error('relay-adapter: settingsGet/settingsPut required')
   if (typeof loadStore !== 'function') throw new Error('relay-adapter: loadStore bridge required')
 
-  const metrics = { lastRoundAt: null, lastError: null, lastResult: null, rounds: 0, pushedTotal: 0, pulledTotal: 0, quarantinedTotal: 0 }
+  const metrics = { lastRoundAt: null, lastError: null, lastResult: null, rounds: 0, pushedTotal: 0, pulledTotal: 0, quarantinedTotal: 0, appliedTotal: 0 }
   let polling = false
   let timers = []
   let inFlight = null // coalesce: timer tick + write-kick + manual op share one round
@@ -238,6 +244,15 @@ function createRelayAdapter ({
         })
         if (!savedSecret) await step('register', () => client.register())
         const r = await step('round', () => client.round())
+        // Pull-side materialization (relay-sync-apply via the bootstrap) BEFORE the commit
+        // point: pulled envelopes land in the local DAG + business tables, or the round
+        // fails and the durable state replays (never ack what did not land, spec §18).
+        let businessApplied = 0
+        if (typeof applyPulled === 'function' && Array.isArray(r.received) && r.received.length) {
+          const outcome = await applyPulled(r.received, client.store, nodeId)
+          businessApplied = (outcome && outcome.businessApplied) || 0
+          metrics.appliedTotal += businessApplied
+        }
         // commit point (spec §18): persist ONLY past a fully successful round — a crash
         // before this line replays from the previous snapshot, which is duplicate-safe.
         persistState(client.state())
@@ -247,7 +262,7 @@ function createRelayAdapter ({
         metrics.pushedTotal += r.pushed || 0
         metrics.pulledTotal += r.pulled || 0
         metrics.quarantinedTotal += r.quarantined || 0
-        metrics.lastResult = { pushed: r.pushed || 0, pulled: r.pulled || 0, quarantined: r.quarantined || 0, cursor: r.cursor, regressionReset: !!r.regressionReset }
+        metrics.lastResult = { pushed: r.pushed || 0, pulled: r.pulled || 0, quarantined: r.quarantined || 0, cursor: r.cursor, regressionReset: !!r.regressionReset, businessApplied }
         return { ok: true, ...metrics.lastResult }
       } catch (e) {
         metrics.lastError = (e && e.message) || String(e)

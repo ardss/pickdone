@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { Hlc } from '../../../shared/sync-core/clock/hlc.mjs'
 import { createEnvelope, packEnvelope, unpackEnvelope } from '../../../shared/sync-core/revision/envelope.mjs'
-import { createRevisionStore, commitLocal, applyEnvelope, materialized, materializedAll } from '../../../shared/sync-core/causality/merge.mjs'
+import { createRevisionStore, commitLocal, applyEnvelope, materialized } from '../../../shared/sync-core/causality/merge.mjs'
 
 /**
  * Wave-1 delivery tests for the v2 causal merge (spec §9-§12):

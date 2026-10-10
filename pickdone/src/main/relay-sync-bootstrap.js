@@ -79,6 +79,13 @@ async function loadStore () {
   return rev.exportToStore(merge.createRevisionStore, merge.applyEnvelope)
 }
 
+/** Pull-side materialization bridge (relay-sync-apply.js): received envelopes → local
+ *  DAG + business todos, BEFORE the adapter commits its durable cursor. Throwing fails
+ *  the round so the cursor replays — never ack what did not land (spec §18). */
+function applyPulled (received, store, nodeId) {
+  return require('./relay-sync-apply').applyPulledEnvelopes(received, store, nodeId)
+}
+
 /* ---------- IPC op handlers (registered into db.OPS via db-sync-ops) ---------- */
 
 function registerOps (adapter) {
@@ -112,6 +119,7 @@ function initRelaySync () {
     settingsGet,
     settingsPut,
     loadStore,
+    applyPulled,
     log,
   })
   registerOps(adapter)
