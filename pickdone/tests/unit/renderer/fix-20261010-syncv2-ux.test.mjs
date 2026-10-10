@@ -65,9 +65,12 @@ test('refresh: does not prefill connectHost from peers[0].host (禁止用已配�
 })
 
 test('connect input stays user-owned: no other write of a peer host into connectHost', () => {
-  // connectHost is only ever reset to '' or bound to the input via v-model
-  const writes = [...src.matchAll(/this\.connectHost\s*=/g)]
-  assert.ok(writes.length === 0 || writes.every(m => /this\.connectHost\s*=\s*''/.test(m[0])),
+  // connectHost is only ever reset to '' or bound to the input via v-model.
+  // Wave-2 regex fix: capture the VALUE with the write — m[0] previously stopped at '=',
+  // so the every() clear-check tested a value-less fragment and could never pass once any
+  // real write existed (the wave-2 success reset exposed this latent test bug).
+  const writes = [...src.matchAll(/this\.connectHost\s*=[^\n]*/g)]
+  assert.ok(writes.length === 0 || writes.every(m => /^this\.connectHost\s*=\s*''/.test(m[0])),
     'connectHost must only be cleared, never populated from stored peers')
 })
 

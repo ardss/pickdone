@@ -458,6 +458,11 @@ export default {
       if (pp && !this.incomingPair) this.showIncomingPair({ deviceName: pp.deviceName, deviceId: pp.deviceId, host: pp.host, at: pp.at })
     },
     showIncomingPair (evt) {
+      // 2026-10-10 sync-ui state machine: a second pair-request while the EXPIRED first one is
+      // inside its 2.5s auto-dismiss grace used to inherit the first request's _pairExpiryTimer
+      // — 2.5s later dismissIncomingPair() closed the NEW dialog before the user could answer.
+      // Each incoming request starts its own lifecycle: clear the stale expiry timer first.
+      if (this._pairExpiryTimer) { clearTimeout(this._pairExpiryTimer); this._pairExpiryTimer = null }
       this.pairExpired = false
       // A7: the real 60s window is owned by the main-process transport, which stamps the
       const expiresAt = (evt.at || Date.now()) + 60 * 1000
@@ -561,6 +566,10 @@ export default {
           syncPairRequest(parsed.host, parsed.port).then(() => {
             // resolve = pairing accepted by peer — success, not "sent, awaiting" (was a race with the real await window)
             this.$message.success(this.$t('sync.pairOkMsg'))
+            // 2026-10-10 sync-ui state machine: reset the input on success — a leftover host
+            // made one more click re-dial the just-paired address straight into the secret-
+            // rotation (repair) flow. Cleared to '' only, never populated from stored peers.
+            this.connectHost = ''
           }).catch(e => {
             const key = pairFailureKey(e)
             this.$message.error(this.$t(key || 'sync.pairFailGenericMsg'))
