@@ -22,6 +22,10 @@
  */
 
 const KEY_PREFIX = 'tomatoRunAnnounce.'
+// C8 (2026-10-09): log-isolation at MODULE LOAD — the old inline requires ran AFTER the warn they
+// accompanied, so under TODO_DB_DIR/TODO_USER_DATA_DIR the first warn leaked into the REAL user
+// log (see lan-sync/transport.js for the exact pattern).
+require('./log-isolation')
 // F-A4: shared text sanitizer (pure Node, no Electron) — see buildAnnounceValue.
 const { SYNC_OPLOG_KEEP, oplogKeepLimit } = require('./db-oplog') // D3 2026-09-24: oplog page size derives from the ring retention (was bare 10000s)
 const { sanitizeText } = require('./sanitize')
@@ -87,7 +91,6 @@ function writeAnnounce (value) {
     return true
   } catch (e) {
     try { require('electron-log').warn('[TomatoAnnounce] write failed:', e && e.message) } catch { /* noop */ }
-    require('./log-isolation') // test isolation: redirect electron-log file transport into TODO_DB_DIR/TODO_USER_DATA_DIR
     return false
   }
 }

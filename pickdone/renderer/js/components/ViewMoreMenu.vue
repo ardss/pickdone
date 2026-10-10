@@ -66,8 +66,9 @@ const MENUS = {
   'todo-list-calendar': [
     // U-13: no leading separator — the menu used to open with a stray line above the first item
     { labelKey: 'statsE.ViewMoreMenu.showCompletedMenuItem', toggle: 'isShowCalendarCompleted' },
-    { labelKey: 'statsE.ViewMoreMenu.privacyBlurMenuItem', toggle: 'isShowCalendarPrivacyMode' },
-    { labelKey: 'statsE.ViewMoreMenu.holidayBadgesMenuItem', toggle: 'showHolidayMarkers' }
+    { labelKey: 'statsE.ViewMoreMenu.privacyBlurMenuItem', toggle: 'isShowCalendarPrivacyMode' }
+    // [fix 2026-10-09] removed the dead "holiday badges" toggle: no consumer of showHolidayMarkers
+    // exists (rendering was never implemented; the setting was removed from SettingsModal 2026-09-25)
   ]
   // The todo box has no menu: sorting/order/categories are already provided by the header toolbar dropdown, another copy in the menu would be pure duplication
 }

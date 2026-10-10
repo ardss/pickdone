@@ -220,9 +220,8 @@ export default {
         // Sort-jitter mitigation (P2, root cause documented): same-day taskSort is computed from each
         // window's possibly-stale in-memory min/max, so two windows adding to the same day can derive the
         // IDENTICAL sort value; with equal keys the list order then flips depending on which row the DB
-        // returns first. A real fix needs an atomic DB-side next-sort channel (cross-module design, main
-        // process) -- recorded on the skip list. Low-risk mitigation here: a jitter well below the
-        // nextSort step (100) so ordinary single-window inserts can never overtake an adjacent row;
+        // returns first. A real fix needs an atomic DB-side next-sort channel (main process, cross-module
+        // design) -- recorded on the skip list. Mitigation: jitter well below the nextSort step (100), so
         // it only keeps collision-identical values distinct, ordered by actual arrival.
         taskId: genTaskId(userId), taskSort: Math.fround(sort + (Math.random() - 0.5) * 64),
         todoTime: Number(todoTime) || Number(todoDate) || 0,
@@ -535,6 +534,11 @@ export default {
       for (const merged of rows) commit('upsertLocal', merged)
       // deleting is a local-dialect UI flag, not a schema column: strip before persisting (deleteTodo)
       const clean = rows.map(m => { const r = { ...m }; delete r.deleting; return r })
+      // Chip cascade per task: ONE shared planAll read (snapshotForDeleteMany, D14-C15) instead of a
+      // scan + 3 IPC round-trips per id, and the snapshot lands BEFORE the row commit (putMany) —
+      // a crash after putMany left tombstoned rows + live chips + NO snapshot (ghost chips). Safe
+      // to re-run: the snapshot put is idempotent and planDeleteTask only tombstones deleted=0 rows.
+      try { await snapshotForDeleteMany(ids) } catch (e) { console.warn('[todo] failed to batch-snapshot chips for deleted tasks:', e) }
       // Same pending-queue guarantee as reorderTodos: a transient IPC/db failure stays queued for the
       // quit-flush replay instead of silently dropping the batch
       try {
@@ -543,10 +547,6 @@ export default {
         reportError('upsertMany', err)
         try { queuePendingUpsert({ op: 'upsertMany', params: deproxyRows(clean) }) } catch { /* keep the UI flow alive */ }
       }
-      // Chip cascade per task, snapshot to meta first (same as deleteTodo).
-      // D14-C15: ONE shared planAll read for the whole batch (snapshotForDeleteMany) instead of a
-      // full-table scan + 3 IPC round-trips per id — a large batch used to stall for seconds.
-      try { await snapshotForDeleteMany(ids) } catch (e) { console.warn('[todo] failed to batch-snapshot chips for deleted tasks:', e) }
       dispatch('computeViews')
       dispatch('writeCriticalBackup')
       if (notFoundIds.length) console.warn('[todo] deleteTodosMany: ids absent from both memory and the durable store:', notFoundIds) // [TL-5] surfaced, not silently skipped

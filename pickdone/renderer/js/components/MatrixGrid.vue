@@ -3,7 +3,7 @@
   <div class="matrix-wrap">
     <div class="matrix-grid">
     <div v-for="q in quadrants" :key="q.key" class="matrix-quadrant" :class="[q.cls, { 'over': overKey===q.key }]"
-         @dragover.prevent="overKey=q.key" @dragleave="overKey===q.key&&(overKey=null)" @drop.prevent="dropOn(q)">
+         @dragover.prevent="overKey=q.key" @dragleave="overKey===q.key&&(overKey=null)" @drop.prevent="dropOn(q, $event)">
       <div class="matrix-quadrant__head">
         <span class="matrix-quadrant__title">{{ q.title }}</span>
         <em class="matrix-quadrant__count">{{ q.tasks.length }}</em>
@@ -143,11 +143,18 @@ export default {
       this.dragId = null
       this.overKey = null
     },
-    dropOn (q) {
+    dropOn (q, e) {
       const id = this.dragId
       this.dragId = null
       this.overKey = null
-      const t = this.tasks.find(x => x.taskId === id)
+      let t = this.tasks.find(x => x.taskId === id)
+      // [fix 2026-10-09] cross-view drops: TodoItem drags set text/plain = taskId and the calendar
+      // time-blocks already accept them, so a drop with no internal dragId must resolve the task
+      // from the store (mirrors DayRail.onDrop) instead of silently no-oping
+      if (!t && !id && e && e.dataTransfer) {
+        const droppedId = e.dataTransfer.getData('text/plain')
+        if (droppedId) t = this.$store.state.todo.todoList.find(x => String(x.taskId) === droppedId)
+      }
       if (!t || ((t.important || 0) === q.important && (t.urgent || 0) === q.urgent)) return
       this.moveQuadrant(t, q)
     },

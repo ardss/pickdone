@@ -219,7 +219,8 @@ export default {
     /* [D18-DOM3] records button: Space joins Enter (ARIA button pattern) */
     onRecordsKey: roleButtonActivate(function () { this.showRecordList() }),
     showRecordList () {
-      if (!(this.s.tomatoRecordList || []).length) { this.$message.info(this.$t('statsE.TomatoBar.noHarvestMsg')); return }
+      // [fix 2026-10-09] always open the records modal: the tfr-empty state (with its manual-add
+      // entry) is the teaching surface — an info toast dead-ended the ledger button on first use
       store.commit('ui/toggleTomatoFocusRecord', true)
     },
     onAttachChange (id) {

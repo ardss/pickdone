@@ -188,10 +188,10 @@ test('[A13] loadBackupDirDisplay falls back to the stored setting and surfaces t
 
 /* ---------- [A14] HabitView empty-name create warns ---------- */
 
-test('[A14] addHabit warns on an empty name (same key addMoment uses)', () => {
+test('[A14] addHabit warns on an empty name (dedicated key)', () => {
   const src = read('renderer/js/views/HabitView.vue').replace(/\r/g, '')
   const fn = methodSrc(src, 'addHabit')
-  assert.match(fn, /statsB\.HabitView\.nameAndDateRequired/, 'visible warning instead of a dead button')
+  assert.match(fn, /statsB\.HabitView\.habitNameRequired/, 'visible warning instead of a dead button')
 })
 
 /* ---------- [A15] DayRail prune timer cleanup ---------- */

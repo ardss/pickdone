@@ -235,3 +235,57 @@ test('F-C4: initFromDb on a read error neither restores nor writes the mirror ba
   const writes = dbOps.filter(([op]) => op === 'put')
   assert.equal(writes.length, 0, 'the newer DB copy must not be drowned by in-memory defaults')
 })
+
+/* ---- Ordering fix: snapshot chips BEFORE the row commit ----
+ * Root cause vs symptom: deleteTodosMany used to run putMany first and snapshotForDeleteMany after;
+ * a crash between the two left tombstoned rows + live chips + NO snapshot meta (restore found
+ * nothing; ghost chips haunted the timeline until planPrune GC). Verified preconditions in
+ * dayPlans.js / db-plan-ops.js: the snapshot meta put is idempotent (whole-key overwrite with the
+ * same content) and planDeleteTask is result-aware (only tombstones deleted=0 rows), so snapshotting
+ * first is safe even when the delete re-runs. */
+
+test('F-C1b: deleteTodosMany snapshots chips BEFORE the putMany row commit', async () => {
+  const todoState = { todoList: [row('a'), row('b')], recycleList: [], undoStack: [], redoStack: [], search: '' }
+  const { ctx } = mkCtx(todoState, [])
+  // chips exist for task 'a': planAll feeds snapshotForDeleteMany, everything else resolves
+  globalThis.window.todoAPI.dbCall = (op, ...a) => {
+    dbOps.push([op, a])
+    if (op === 'planAll') return Promise.resolve([{ id: 'c1', taskId: 'a', day: '2026-10-01', mm: '09:00', sort: 0 }])
+    return Promise.resolve(null)
+  }
+  try {
+    await todoActions.deleteTodosMany.call({ state: { todo: todoState } }, ctx, [row('a'), row('b')])
+    const iPlanAll = dbOps.findIndex(([op]) => op === 'planAll')
+    const iPutMany = dbOps.findIndex(([op]) => op === 'upsertMany')
+    assert.ok(iPlanAll >= 0 && iPutMany >= 0, 'both the chip read and the row write ran')
+    assert.ok(iPlanAll < iPutMany, 'snapshotForDeleteMany (planAll read) must precede putMany — crash-window closes')
+  } finally {
+    // restore the file-level stub for any later test
+    globalThis.window.todoAPI.dbCall = (op, ...a) => { dbOps.push([op, a]); if (op === 'getMeta') return getMetaImpl(...a); return Promise.resolve(null) }
+  }
+})
+
+test('F-C1c: a putMany failure still leaves the chip snapshot meta written (no snapshot lost)', async () => {
+  const todoState = { todoList: [row('a'), row('b')], recycleList: [], undoStack: [], redoStack: [], search: '' }
+  const { ctx } = mkCtx(todoState, [])
+  const metaWrites = []
+  globalThis.window.todoAPI.dbCall = (op, ...a) => {
+    dbOps.push([op, a])
+    if (op === 'upsertMany') return Promise.reject(new Error('simulated crash between commit and snapshot'))
+    if (op === 'planAll') return Promise.resolve([{ id: 'c1', taskId: 'a', day: '2026-10-01', mm: '09:00', sort: 0 }])
+    // commandBus passes ONE params arg: dbCall(op, [key, value]) for meta.put
+    if (op === 'setMeta') { metaWrites.push(Array.isArray(a[0]) ? a[0][0] : a[0]); return Promise.resolve(true) }
+    return Promise.resolve(null)
+  }
+  try {
+    const ids = await todoActions.deleteTodosMany.call({ state: { todo: todoState } }, ctx, [row('a'), row('b')])
+    assert.deepEqual(ids, ['a', 'b'], 'the batch action still completes (putMany failure is queued, not fatal)')
+    assert.ok(metaWrites.includes('planChipsSnapshot:a'), 'chip snapshot meta exists even though putMany threw')
+    // the snapshot happened before the failed commit, so there is nothing to lose to the crash window
+    const iPlanAll = dbOps.findIndex(([op]) => op === 'planAll')
+    const iPutMany = dbOps.findIndex(([op]) => op === 'upsertMany')
+    assert.ok(iPlanAll < iPutMany)
+  } finally {
+    globalThis.window.todoAPI.dbCall = (op, ...a) => { dbOps.push([op, a]); if (op === 'getMeta') return getMetaImpl(...a); return Promise.resolve(null) }
+  }
+})

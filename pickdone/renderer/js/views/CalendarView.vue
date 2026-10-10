@@ -14,7 +14,7 @@
         <!-- Year-month direct-jump panel anchored to the nav group itself (was a hardcoded left:251px from
              the page edge, which drifted right whenever sidebar width/page padding differed) -->
         <transition name="fade">
-          <div v-if="monthPop" v-click-outside="() => monthPop = false" class="cal-month-pop" role="dialog" :aria-label="$t('statsE.CalendarView.pickMonthBtn')" @click.stop>
+          <div v-if="monthPop" v-click-outside="() => monthPop = false" class="cal-month-pop" role="dialog" tabindex="-1" ref="monthPopEl" :aria-label="$t('statsE.CalendarView.pickMonthBtn')" @click.stop @keydown.esc.stop="monthPop = false">
             <div class="ds-cal-head">
               <button @click="popNav(-1)" :aria-label="$t('statsE.CalendarView.prevYearBtn')">‹</button>
               <b>{{ $t('statsJ.CalendarView.yearN', { y: popYear }) }}</b>
@@ -375,6 +375,9 @@ export default {
       const d = dayjs(this.cal ? this.cal.getDate() : Date.now())
       this.popYear = d.year()
       this.monthPop = true
+      // [fix 2026-10-09] the pop is a role=dialog: move focus into it on open (same as morePop),
+      // so Esc — bound on the container itself — is reachable from the keyboard
+      this.$nextTick(() => { const el = this.$refs.monthPopEl; if (el && el.focus) el.focus() })
     },
     // [maint/d23 FIX-3b] clamp to currentYear±20 (mirrors HabitView's CAL_MIN_OFFSET precedent):
     // the unbounded popYear could reach year 1, where the month grid blanks out

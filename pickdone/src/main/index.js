@@ -224,7 +224,15 @@ async function quitFromTrayInner () {
         noLink: true,
       })
       if (response !== 0) { state.quitByUser = false; return } // cancelled: restore quit intent
-    } catch (e) { log.warn('[Tray] quit confirm dialog failed, proceeding with quit', e) }
+    } catch (e) {
+      // QC 2026-10-09: the confirm dialog failed to OPEN (native dialog error) — quitByUser was
+      // already committed above the await, so the old catch fell through to app.quit() and killed
+      // a live pomodoro with no confirmation (and later cleared its durable row). A dialog failure
+      // must carry the same semantics as a cancel: abort the quit, restore quit intent.
+      state.quitByUser = false
+      log.warn('[Tray] quit confirm dialog failed, aborting quit', e)
+      return
+    }
   }
   // win can be a DESTROYED instance here (closeActionMinimize=false destroys the window on X but only // createMainWindow reassigns the module var) — getBounds on it throws "Object has been destroyed" and // kills the whole quit chain. Route through the live-window guard.
   const qw = getMainWindow()
@@ -378,14 +386,12 @@ if (!app.requestSingleInstanceLock(...__multiLockArgs)) {
         // while the sync node is not initialized.
         try { require('./lan-sync-bootstrap').kickSyncRound('db-recovery') } catch { /* sync lazy-not-init */ }
       }
-      // Sync-4/Sync-17 (D12): recovery-pending sentinel lifecycle. When a parseable critical
-      // backup is still on disk but the restore could NOT consume it (re-init failed → the
-      // jsonRestoreAllowed gate blocked the restore = Sync-17; or segments failed/stayed
-      // unconsumed = Sync-4's crash twin), mark the sentinel so the NEXT boot's attemptDbRecovery
-      // treats the resulting healthy-header empty shell as re-coverable instead of answering
-      // 'transient' forever. A proved restore (or any non-replayable state) clears it — no loop.
-      // This MUST sit outside the jsonRestoreAllowed gate: the gate is exactly what blocks the
-      // restore on reinitErr (Sync-17), and that is one of the two states the sentinel exists for.
+      // Sync-4/Sync-17 (D12): recovery-pending sentinel lifecycle. A parseable critical backup on
+      // disk whose restore could NOT be consumed (re-init failed → jsonRestoreAllowed gate =
+      // Sync-17; or segments failed/stayed unconsumed = Sync-4's crash twin) marks the sentinel so
+      // the NEXT boot treats the healthy-header empty shell as re-coverable instead of answering
+      // 'transient' forever; a proved restore clears it. This MUST sit outside the gate: the gate
+      // is exactly what blocks the restore on reinitErr — one of the two states the sentinel is for.
       const jsonSnapshotUsable = !!(recoveredFrom && recoveredFrom.source === 'json' &&
         dbRecovery.backupJsonParseable(dbRecovery.criticalBackupPath(ud)))
       const snapshotConsumed = jsonSnapshotUsable && !reinitErr && restoreFullyConsumed
@@ -475,18 +481,14 @@ if (!app.requestSingleInstanceLock(...__multiLockArgs)) {
       return
       } // if (e) — D18: the transient db.key retry path above skips this whole recovery block
     }
-    // init 成功(加密库正常打开)=迁移自愈窗口已关闭:立刻删除 .plain-bak 明文残留,否则用户的
-    // 全部任务/账本永远留一份明文拷贝在 userData,at-rest 加密被整体架空(2026-09-05 二轮深审 P1-1)
-    // mig-restore-sentinel-cleared-before-consumer (P2, symptom of "sentinel lifecycle keyed to
-    // init-failure instead of to DB emptiness"): the sentinel used to be cleared unconditionally
-    // here while the replay it stands for only ever ran inside the init-failure catch — a crash in
-    // that window left a parseable critical backup stranded behind a cleared sentinel. Now the
-    // success path re-evaluates the replay gate BEFORE clearing, runs the replay in the same boot
-    // (before createMainWindow/scheduler reload), and mirrors the catch-path follow-ups (sync kick
-    // + watermark invalidation) so restored rows reach peers. The plain-bak cleanup below is
-    // skipped while an unproved replay leaves the snapshot unconsumed (keep the last copy).
-    // Known unrecoverable window (stated, follow-up for crash-atomicity): a hard crash between the
-    // re-init inside the catch block and the markRecoveryPending write still strands the state.
+    // mig-restore-sentinel-cleared-before-consumer (P2): the sentinel used to be cleared
+    // unconditionally here while the replay it stands for only ran inside the init-failure catch —
+    // a crash in that window stranded a parseable critical backup behind a cleared sentinel. Now
+    // the success path re-evaluates the replay gate BEFORE clearing, runs the replay in the same
+    // boot (before createMainWindow/scheduler reload), and mirrors the catch-path follow-ups (sync
+    // kick + watermark invalidation). The plain-bak cleanup below is skipped while an unproved
+    // replay leaves the snapshot unconsumed. Known unrecoverable window (stated): a hard crash
+    // between the catch-block re-init and the markRecoveryPending write still strands the state.
     const __ud = app.getPath('userData')
     const replayDecision = dbRecovery.cleanInitReplayDecision(__ud)
     let replayProved = true
@@ -673,14 +675,8 @@ app.on('before-quit', () => {
   try { require('./lan-sync-bootstrap').shipQuitRound() } catch { /* sync never initialized */ }
   // Stop the LAN sync node (round timers + TCP server + retry timers) BEFORE the quit-flush window
   // closes the DB. Fire-and-forget: stopSync kicks the async server close off immediately and the
-  // bootstrap's settings persists (peer watermarks / security log) run synchronously via db.call,
-  // so nothing of sync's outlives the will-quit DB close (2026-09-18 P2 lifecycle fix).
-  // Before quitting, broadcast the renderer flush of debounced mirrors (the last write within dbMirror's 2s / disaster-snapshot 800ms window would be silently lost)
-  // 2026-09-10 P1: previously only the main window was notified — the float window's pending pomodoro
-  // ledger (and the whole broadcast when the main window was already destroyed, e.g. X-close→tray→quit)
-  // was silently lost. Broadcast to every live window with an isDestroyed guard.
-  // P2 2026-09-19: this is now the exact expected-set (webContents ids) rather than a count —
-  // beginRound takes the array so only these senders' acks can satisfy allAcked().
+  // bootstrap's settings persists run synchronously via db.call, so nothing of sync's outlives
+  // the will-quit DB close (2026-09-18 P2 lifecycle fix).
   const liveWindows = []
   // P2 2026-09-12: Date.now() tokens collide within the same millisecond — a stale ack from a previous
   // round could then satisfy (token !== prevToken no longer holds) and cut the flush window short.

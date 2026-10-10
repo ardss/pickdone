@@ -171,6 +171,10 @@ function createWindowManager (ctx) {  const {
     // a relaunched instance is strictly better than a zombie window the user must kill by hand.
     let crashReloadCount = 0
     let crashHealthTimer = null
+    // QC 2026-10-09 (D21 parity): the crash-reload timer below was the last untracked window
+    // timer — track it so the 'closed' handler can clear it like _resizeTimer/crashHealthTimer/
+    // loadRetryTimer (a timer armed by a window must die with that window).
+    let crashReloadTimer = null
     win.webContents.on('did-finish-load', () => {
       crashReloadCount = 0
       // D10 (2026-09-27): health window — if the renderer stays alive 60s past a successful load,
@@ -193,7 +197,9 @@ function createWindowManager (ctx) {  const {
         // delay reloaded the WRONG (new) window mid-load. Capture the exact webContents and
         // reload only if it is still the live one of the still-current window.
         const wcAtCrash = win.webContents
-        setTimeout(() => {
+        if (crashReloadTimer) clearTimeout(crashReloadTimer)
+        crashReloadTimer = setTimeout(() => {
+          crashReloadTimer = null
           try {
             if (win && !win.isDestroyed() && win.webContents === wcAtCrash && !wcAtCrash.isDestroyed()) {
               wcAtCrash.reload()
@@ -267,7 +273,8 @@ function createWindowManager (ctx) {  const {
     // writeCrashRelaunchCount(0) surviving a close-then-tray recreation would clear the
     // persisted relaunch counter before the crash streak was actually confirmed stable.
     // D21: the did-fail-load backoff retry timer (loadRetryTimer) clears here too.
-    win.on('closed', () => { clearTimeout(_resizeTimer); _resizeTimer = null; if (crashHealthTimer) { clearTimeout(crashHealthTimer); crashHealthTimer = null } if (loadRetryTimer) { clearTimeout(loadRetryTimer); loadRetryTimer = null } })
+    // QC 2026-10-09: and the render-process-gone crash-reload timer (crashReloadTimer).
+    win.on('closed', () => { clearTimeout(_resizeTimer); _resizeTimer = null; if (crashHealthTimer) { clearTimeout(crashHealthTimer); crashHealthTimer = null } if (loadRetryTimer) { clearTimeout(loadRetryTimer); loadRetryTimer = null } if (crashReloadTimer) { clearTimeout(crashReloadTimer); crashReloadTimer = null } })
     // Clamp the window back onto a visible screen on restore/show (fixes the "disappeared" window after multi-monitor changes/power loss)
     const clampIntoView = () => {
       try {

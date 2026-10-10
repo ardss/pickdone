@@ -172,20 +172,24 @@ export default {
       const orig = this.records.find(x => x.tomatoId === d.tomatoId)
       if (!orig) return
       if (Math.round(orig.startMin) === d.startMin && orig.dur === d.dur && orig.rest === d.rest && orig.abandoned === d.abandoned) return
-      this.saveEdit()
+      this.saveEdit(true)
     },
-    saveEdit () {
+    // auto=true marks the row-switch auto-commit path (vs. the editor's explicit 保存 button)
+    saveEdit (auto) {
       const d = this.draft
       if (!d) return
-      this.commitDraft(d)
+      this.commitDraft(d, auto)
       this.editingId = null
       this.draft = null
     },
     // Shared persistence step of the editor confirm (used by saveEdit and the switch auto-commit)
-    commitDraft (d) {
+    commitDraft (d, auto) {
       const startTs = d.day0 + d.startMin * 60000
       this.$store.commit('tomato/updateRecord', { tomatoId: d.tomatoId, patch: { endTime: startTs + d.dur * 60000, focusDuration: d.dur, restDuration: d.abandoned ? 0 : d.rest, succeed: !d.abandoned } })
-      this.$message.success(this.$t('statsK.TomatoAccount.saved'))
+      // [fix 2026-10-09] the row-switch auto-commit announces more quietly ("已自动保存") than the
+      // explicit save button — a mere row click used to fire the full "记录已更新" toast
+      if (auto) this.$message.info(this.$t('statsK.TomatoAccount.autoSaved'))
+      else this.$message.success(this.$t('statsK.TomatoAccount.saved'))
     },
     delRecord (r) {
       this.$confirm(this.$t('statsK.TomatoAccount.deleteConfirm'), this.$t('statsK.TomatoAccount.delete'), { type: 'warning' })

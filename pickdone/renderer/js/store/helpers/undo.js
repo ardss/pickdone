@@ -268,7 +268,12 @@ export async function persistSnapshotDiffCore ({ commit }, { from, to, allowDele
     enqueueChipSync(eff.taskId, async () => {
       try {
         if (eff.op === 'snapshotForDelete') await snapshotForDelete(eff.taskId)
-        else if (eff.op === 'restoreSnapshot') await restoreSnapshot(eff.taskId)
+        // Root cause fix: planSnapshotRowSync emits {op:'restoreSnapshot', toTs} for the date-(re-)added
+        // transition (undo of a date-clear re-dates the row onto its ORIGINAL day). Passing toDay here
+        // (same YYYY-MM-DD formatting as rowChipSync in planChips.js) re-homes the snapshot chips onto
+        // that day; verbatim restore used to land the chips on the OLD day (ghost blocks there, missing
+        // chips on the row's actual day, until planPrune GC). No toTs → verbatim (soft-delete undo path).
+        else if (eff.op === 'restoreSnapshot') await restoreSnapshot(eff.taskId, eff.toTs ? fmtChipDay(eff.toTs) : undefined)
         else if (eff.op === 'clearTaskChips') await clearTaskChips(eff.taskId)
         else if (eff.op === 'moveTaskChips') await moveTaskChips(eff.taskId, eff.fromTs ? fmtChipDay(eff.fromTs) : null, fmtChipDay(eff.toTs))
       } catch (e) { console.warn('[todo] snapshot-replay chip sync failed (will converge on next op):', e) }

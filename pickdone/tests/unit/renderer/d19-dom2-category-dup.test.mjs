@@ -59,3 +59,41 @@ test('seed sanity: init from an LS blob with the duplicate already present still
     assert.throws(() => store.commit('category/addCategory', { categoryName: 'Same' }), e => e.code === 'CATEGORY_EXISTS')
   })
 })
+
+/* ---- normKey parity: the guard must judge duplicates the way the CLI addresses them ----
+ * Root cause vs symptom: the original raw-string compare treated the SYMPTOM (exact dupes) but not
+ * the cause (the CLI resolves categories through normKey = NFKC → lowercase → strip whitespace
+ * variants). 'Work' next to 'work'/'Ｗｏｒｋ' passed the raw compare and then AMBIGUOUS_MATCH-locked
+ * every CLI category addressing — the exact lockout CATEGORY_EXISTS exists to prevent. */
+
+test('addCategory rejects a case/width/whitespace-variant duplicate (normKey parity with the CLI)', () => {
+  const store = makeStore()
+  store.commit('category/addCategory', { categoryName: 'Work' })
+  assert.throws(() => store.commit('category/addCategory', { categoryName: 'work' }),
+    e => e.code === 'CATEGORY_EXISTS', 'lowercase variant must collide')
+  assert.throws(() => store.commit('category/addCategory', { categoryName: 'Ｗｏｒｋ' }),
+    e => e.code === 'CATEGORY_EXISTS', 'full-width variant (NFKC) must collide')
+  assert.throws(() => store.commit('category/addCategory', { categoryName: ' W o r k ' }),
+    e => e.code === 'CATEGORY_EXISTS', 'interleaved-space variant must collide')
+  // a genuinely distinct name still passes
+  store.commit('category/addCategory', { categoryName: 'Works' })
+  assert.ok(store.state.category.list.some(c => c.categoryName === 'Works'))
+})
+
+test('updateCategory rejects a rename onto a normalized duplicate; a distinct rename passes; self-rename passes', async () => {
+  const store = makeStore()
+  store.commit('category/addCategory', { categoryName: 'Alpha' })
+  store.commit('category/addCategory', { categoryName: 'Beta' })
+  const alpha = store.state.category.list.find(c => c.categoryName === 'Alpha')
+  // rename Alpha → 'ｂｅｔａ' (NFKC-collides with Beta): must throw, list unchanged
+  assert.throws(() => store.commit('category/updateCategory', { categoryId: alpha.categoryId, categoryName: 'ｂｅｔａ' }),
+    e => e.code === 'CATEGORY_EXISTS', 'rename onto a normalized duplicate must throw CATEGORY_EXISTS')
+  assert.equal(store.state.category.list.find(c => c.categoryId === alpha.categoryId).categoryName, 'Alpha',
+    'failed rename must not mutate the row')
+  // distinct rename passes
+  store.commit('category/updateCategory', { categoryId: alpha.categoryId, categoryName: 'Gamma' })
+  assert.equal(store.state.category.list.find(c => c.categoryId === alpha.categoryId).categoryName, 'Gamma')
+  // renaming a row to its own (case-variant) name must not false-positive on itself
+  store.commit('category/updateCategory', { categoryId: alpha.categoryId, categoryName: 'gamma' })
+  assert.equal(store.state.category.list.find(c => c.categoryId === alpha.categoryId).categoryName, 'gamma')
+})

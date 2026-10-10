@@ -20,6 +20,7 @@ export default {
       deleted: '记录已删除',
       deleteFailed: '删除失败，请重试',
       saved: '记录已更新',
+      autoSaved: '已自动保存',
       addBtn: '+ 补一条番茄',
       addSave: '入账',
       cancel: '取消',

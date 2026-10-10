@@ -332,15 +332,21 @@ function applyRowInner (state, incoming) {
   // on insertion order (loop fix 2026-09-18; inbound rows are stamped with the sender's id
   // at the transport boundary in lan-sync-bootstrap).
   if (localRow && localRow.deviceId == null && state.deviceId) localRow.deviceId = state.deviceId
-  // 2026-10-08 tombstone-vs-live (plan/filter twin of the todo tombstoneResurrectCopy guard, D24):
-  // plan/filter tombstones hydrate with data:null (no content to copy), so the todo-style
-  // conflict-copy minting path cannot apply — and planAddMany's `ON CONFLICT ... SET deleted=0`
-  // upsert then SILENTLY resurrected the deleted chip/filter whenever a peer live row won LWW.
-  // When the local delete is FRESHER than the inbound live edit (deletedAt > updatedAt — the peer
-  // authored its edit before our deletion and simply had not seen it), delete-wins keeps the
-  // tombstone instead of resurrecting.
+  // 2026-10-08/09 tombstone-vs-live (plan/filter twin of the todo tombstoneResurrectCopy guard, D24):
+  // a locally deleted chip/filter used to be SILENTLY resurrected — plan/filter tombstones hydrate
+  // with data:null (no content to copy) and planAddMany's upsert re-materialized the row whenever
+  // a peer live edit won LWW (peer authored it before our delete). Fix (2026-10-09): delete-wins
+  // early-returned BEFORE mergeCore, so the losing live edit had NO conflict backup / markConflict
+  // (the loser-never-silently-dropped contract held only in the B16 else-branch). Materialize it
+  // via the SAME writeMetaConflictBackup + markConflict pair, then keep the tombstone.
   if ((entity === 'plan' || entity === 'filter') && localRow && localRow.deleted &&
-      incoming && !incoming.deleted && stampNum(localRow.deletedAt) > stampNum(incoming.updatedAt)) return false
+      incoming && !incoming.deleted && stampNum(localRow.deletedAt) > stampNum(incoming.updatedAt)) {
+    if (incoming.data !== undefined && incoming.data !== null) {
+      writeMetaConflictBackup(state, `${entity}:${incoming.id}`, incoming.data)
+      markConflict(state, entity, incoming.id, false)
+    }
+    return false
+  }
   // Provenance normalization (protocol v3): increment rows carry author top-level (hydrateRow);
   // SNAPSHOT rows carry it in the payload (allRows data = the full todo payload). Missing = ''.
   if (entity === 'todo' && incoming.author == null) incoming.author = (incoming.data && incoming.data.syncAuthor) || ''
@@ -382,20 +388,7 @@ function applyRowInner (state, incoming) {
   }
   if (entity === 'todo' && conflictCopy == null) conflictCopy = tombstoneResurrectCopy(localRow, incoming, winner) // P1 2026-10-08 no-silent-loss: a newer inbound LIVE edit resurrecting a local TOMBSTONE used to silently destroy the deletion — tombstoneResurrectCopy (hydrate) bridges the deleted content into the minting path below
   if (conflictCopy) {
-    // Surface the losing edit (merge.mjs contract: the loser is never silently dropped).
-    // Round-3 review: materialize it as a TOMBSTONED todo row so the recycle bin can restore
-    // the user's losing content. Skips are built into merge.mjs: no copy when content is
-    // identical or when the loser is already a pure tombstone. The copy gets a suffixed id so
-    // it cannot clobber the winning row; delete-wins keeps it out of the live list.
-    //
-    // Loop-fix guards (2026-09-18 live incident — recycle bins ballooned one copy per row per
-    // round per machine):
-    //   1. Copies are TERMINAL: a row whose id already carries the `-conflict-` marker never
-    //      spawns another copy — a copy that loses LWW here is simply dropped. Otherwise the
-    //      peer's copy-of-the-copy arrives as an independent row and re-participates forever.
-    //   2. Materialization is IDEMPOTENT: if an equivalent copy of the same base row already
-    //      sits in the recycle bin (same `-conflict-` prefix, same content fingerprint), do
-    //      not mint a second one.
+    // Surface the losing edit (merge.mjs: the loser is never silently dropped) as a TOMBSTONED,    // todo row with a suffixed id so the recycle bin can restore the losing content (skips built,    // into merge.mjs: identical content / pure-tombstone loser). Loop-fix guards (2026-09-18,    // recycle-bin ballooning): copies are TERMINAL — an id already carrying the '-conflict-',    // marker never spawns another copy (a losing copy is simply dropped), and materialization is,    // IDEMPOTENT — an equivalent copy already in the bin (same prefix, same content fingerprint),    // is not minted a second time.
     const baseId = String(incoming.id)
     if (baseId.includes('-conflict-')) {
       log.warn('[LanSync] conflict on copy row', baseId, '— dropped (copies are terminal)')
@@ -427,23 +420,7 @@ function applyRowInner (state, incoming) {
       // P1-5: the user-facing toast is driven by the round summary (one per round, see markConflict)
       markConflict(state, 'todo', (conflictCopy.data && conflictCopy.data.taskContent) || baseId, false)
     } else if (entity === 'meta' && conflictCopy && conflictCopy.data) {
-      // P1-5 (2026-09-19 data-safety round): a content-differing LWW loss on a meta key used to
-      // be silently dropped (whole-document KV, no recycle-bin shape). Materialize the loser as
-      // a dated backup key `metaConflictBackup.<key>.<ts36>` (self-healing: capped at the latest
-      // 20 per implementation cap) so the losing value stays recoverable, and include it in the
-      // per-round conflict summary (the existing toast fires via consumeAppliedRound). Announce
-      // keys (tomatoRunAnnounce.*) are ephemeral runtime state — no backup for those. A null
-      // loser value means the key was ABSENT locally (mergeTodoRows fabricates a data=null
-      // localRow) — nothing was lost, no backup.
-      // M5 (2026-09-20): gamification.* keys are per-device COUNTERS/bookkeeping (delta indexes,
-      // streak caches), not user documents — a losing overwrite is routine bookkeeping churn, so
-      // minting metaConflictBackup.* copies (and toasting about it) for them was pure noise. The
-      // whole namespace is exempt from BOTH backup and conflict toast; it is already invisible to
-      // the backup-recovery list because the backups are simply never written.
-      // R7 P1-3: a null loser value means the key was ABSENT locally (mergeTodoRows fabricates a
-      // data=null localRow on first application) — nothing was lost, so no backup AND no toast:
-      // the fabricated null always content-differs, and the old unconditional markConflict burned
-      // the per-round conflict toast on every brand-new meta key, training users to ignore it.
+      // P1-5 (2026-09-19): a content-differing LWW loss on a meta key used to be silently dropped.,      // Materialize the loser as metaConflictBackup.<key>.<ts36> (capped at the latest 20) so it,      // stays recoverable and joins the per-round conflict summary. Announce keys are ephemeral —,      // no backup for them. M5: the gamification.* namespace is per-device bookkeeping — exempt,      // from BOTH backup and toast (marking every brand-new meta key trained users to ignore it).,      // R7 P1-3: a null loser = the key was ABSENT locally — no backup AND no toast.
       const bk = String(incoming.id)
       const firstLanding = conflictCopy.data.value == null
       const isBookkeeping = bk.startsWith('gamification')
@@ -699,6 +676,11 @@ const META_FLUSH_QUARANTINE_PREFIX = 'sync.flushQuarantine.'
 // Cap parked entries per op: quarantine is a crash-inspection surface, not a data store; the
 // oplog/snapshot remains the authoritative recovery for large segments.
 const META_FLUSH_QUARANTINE_CAP = 50
+// Fix (2026-10-09, unbounded quarantine bytes): each entry used to store the FULL dropped row
+// set — one failed first-sync flush blew the meta blob up to megabytes. Store a bounded SAMPLE
+// (first QUARANTINE_ROW_SAMPLE rows + a truncated marker); `count` still reports the true total,
+// and the oplog/snapshot remains the authoritative recovery for the full set.
+const QUARANTINE_ROW_SAMPLE = 20
 
 /** Safely encode one buffered row for the quarantine blob (a poison row may itself be
  *  un-JSON-able — BigInt, circular — so fall back to a string rendering). */
@@ -722,7 +704,12 @@ function quarantineFlushRows (state, op, list, err) {
       const cur = state.db.call('getMeta', key)
       if (cur != null) { const p = JSON.parse(cur); if (Array.isArray(p)) parked = p }
     } catch { /* unreadable prior blob: start a fresh list rather than failing the quarantine */ }
-    parked.push({ at: Date.now(), count: list.length, error: (err && err.message) || String(err), rows: list.map(quarantineEncodeRow) })
+    const encodedRows = list.map(quarantineEncodeRow)
+    // Truncate the stored sample (QUARANTINE_ROW_SAMPLE): the blob stays bounded; `count` still reports the true total.
+    const rows = encodedRows.length > QUARANTINE_ROW_SAMPLE
+      ? [...encodedRows.slice(0, QUARANTINE_ROW_SAMPLE), { truncated: true, omitted: encodedRows.length - QUARANTINE_ROW_SAMPLE }]
+      : encodedRows
+    parked.push({ at: Date.now(), count: list.length, error: (err && err.message) || String(err), rows })
     while (parked.length > META_FLUSH_QUARANTINE_CAP) parked.shift()
     // Route through the bus facade like every other sync write (single-write-gate): the
     // quarantine meta blob is machine-local, but the write must still be manifest-validated.
@@ -873,8 +860,9 @@ module.exports = {
   parseMetaBackupKeySuffix,
   hasEquivalentConflictCopy, // D18: exported for unit tests (scan-failure = indeterminate)
   scrubMilestoneBlobsFor, // D20-DOMB1: exported for unit tests (sync tombstone milestone scrub)
-  // 2026-09-26 poison-row quarantine: where a failed flush parks its dropped rows.
+  // 2026-10-09 poison-row quarantine: where a failed flush parks its dropped rows.
   META_FLUSH_QUARANTINE_PREFIX,
+  QUARANTINE_ROW_SAMPLE, // 2026-10-09 bounded per-entry row sample (exported for unit tests)
   // Exported (2026-09-19): lan-sync-bootstrap destructures this for allRows()/hydration skips —
   // the missing export made every allRows() call (legacy seed, snapshot serving) throw TypeError.
   isMachineLocalSettingKey,

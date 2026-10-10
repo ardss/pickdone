@@ -201,8 +201,9 @@ export default {
     },
     addHabit () {
       const n = this.newHabit.trim()
-      // [d21-A14] an empty name used to be a silent dead button — warn (same key addMoment uses)
-      if (!n) { this.$message.warning(this.$t('statsB.HabitView.nameAndDateRequired')); return }
+      // [d21-A14] an empty name used to be a silent dead button — warn; [fix 2026-10-09] copy now
+      // names the actual missing field (the name — habits have no date field)
+      if (!n) { this.$message.warning(this.$t('statsB.HabitView.habitNameRequired')); return }
       // Validate the frequency form before committing: an empty weekday set or an out-of-range interval (keyboard can type 0/99) must not become a habit config
       if (this.freqType === 'weekdays' && !this.freqWeekdays.length) {
         this.$message.warning(this.$t('statsE.HabitView.freqWeekdaysRequired'))

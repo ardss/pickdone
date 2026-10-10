@@ -25,13 +25,30 @@ function nameToTs (name) {
 }
 
 /**
+ * Fix (2026-10-09, D17 dup contract inside selectPrunes): the tiers used to rank names by a
+ * raw lexicographic sort, so a same-second collision burst (`auto-...-dup<n>.json`, minted by
+ * handlers/backup.js uniqueSnapshotName) sorted AFTER its base name and filled the recent-N
+ * tier, evicting REAL snapshots that share the base stamp. D17's contract says a dup name
+ * parses as ts=0 — a collision suffix is bookkeeping, never a fresher snapshot. Ranking uses
+ * rankTs: dup names → 0 (sort last, pruned first), everything else → nameToTs. Kept
+ * self-contained inside selectPrunes (rather than trusting the caller's pre-sorted order)
+ * because selectPrunes is exported and independently callable — its tiering must not depend
+ * on an undocumented caller-side ordering invariant; rankTs reuses nameToTs so the local-time
+ * parse fix stays single-sourced.
+ */
+const RE_DUP_SUFFIX = /-dup\d+\.json$/
+function rankTs (name) {
+  return RE_DUP_SUFFIX.test(String(name)) ? 0 : nameToTs(name)
+}
+
+/**
  * @param {string[]} names all backup file names
  * @param {object} o { recent=24, dailyDays=14, weeklyWeeks=8, eventKeep=10 }
  * @returns {string[]} file names to delete
  */
 function selectPrunes (names, o = {}) {
   const { recent = 24, dailyDays = 14, weeklyWeeks = 8, eventKeep = 10 } = o
-  const autos = names.filter(n => RE_AUTO.test(n)).sort().reverse() // new → old
+  const autos = names.filter(n => RE_AUTO.test(n)).sort((a, b) => rankTs(b) - rankTs(a)) // new → old (dup suffixes rank oldest)
   const evts = names.filter(n => RE_EVT.test(n)).sort().reverse()
   const keep = new Set()
   const prunes = []

@@ -125,7 +125,16 @@ module.exports = Object.assign(({ getDb, log, getPurgeChips, onAppendFailure }) 
       // never existed), so re-logging the pointer would churn the ring and falsify delete order.
       case 'settingsRowDelete': return result === false ? [] : [one('setting', params && typeof params === 'object' ? params.key : params)]
       case 'tomatoAppendMany': {
-        const ids = (Array.isArray(params) ? params : [params]).map(r => r && r.tomatoId).filter(Boolean)
+        // Fix (2026-10-09): the op RETURNS {accepted, rejected} — the old params-side id
+        // expansion emitted a delta pointer even for a LOCALLY REJECTED row (bad endTime,
+        // missing id). The peer hydrated that pointer as a ghost tombstone and DELETED its
+        // live copy of a perfectly good record. Result-aware like planAddMany/
+        // settingsRowPutMany: drop every id that the op itself rejected.
+        const rows = Array.isArray(params) ? params : [params]
+        const rejectedIds = new Set(((result && Array.isArray(result.rejected)) ? result.rejected : [])
+          .map(r => (r && r.tomatoId != null) ? String(r.tomatoId) : null)
+          .filter(Boolean))
+        const ids = rows.map(r => r && r.tomatoId).filter(Boolean).map(String).filter(id => !rejectedIds.has(id))
         return arr('tomato', ids)
       }
       // P2-5 (R4 2026-09-21): both ops return changes > 0 as a boolean — false means the UPDATE

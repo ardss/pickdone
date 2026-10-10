@@ -23,6 +23,15 @@ const BLOB_MIGRATION_ESCALATE_AT = 5
 // Belt and braces (2026-09-19): pre-rename installs wrote the habits blob under the bare 'habitsState'
 // meta key; normalize either spelling to the canonical db.* key so migrateV6/bridge migrate both.
 const canonBlobKey = k => k === 'habitsState' ? 'db.habitsState' : k
+// Blob-family ownership (2026-10-11): the two mirrored blobs partition settings_rows — the
+// habits writer only ever persists {habits, moments} (store/habits.js persist), the settings
+// mirror everything else. Without scoping, tombstoneAbsentRows treats EVERY live row as the
+// doc's family: once the habits doc's `savedAt` stamp is accepted as a causal watermark, an
+// empty-habits mirror tombstones every older settings-family row (themeMode etc.) — the exact
+// cross-family destruction Sync-10b was pinned against. Each blob may only tombstone rows it owns.
+const HABITS_BLOB_OWNED = new Set(['habits', 'moments'])
+const blobOwnsRow = (blobKey, rowKey) =>
+  blobKey === 'db.habitsState' ? HABITS_BLOB_OWNED.has(rowKey) : !HABITS_BLOB_OWNED.has(rowKey)
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS settings_rows (
@@ -125,7 +134,7 @@ module.exports = ({ getDb, log }) => {
   // removal → tombstone (Sync-10's resurrection-loop fix). Without a finite stamp the doc's
   // freshness is unknown and absence proves nothing: tombstone nothing. Returns the
   // tombstoned keys (oplog deltas).
-  function tombstoneAbsentRows (docKeys, gateTs) {
+  function tombstoneAbsentRows (docKeys, gateTs, blobKey) {
     // Machine-local rows (sync.deviceId, securityLock*, sync.revisions.v2 flag — shared/
     // machine-local-keys.mjs) never come from the blob doc but must NEVER be tombstoned off it:
     // the blob mirror is not their writer.
@@ -137,6 +146,7 @@ module.exports = ({ getDb, log }) => {
     const removed = []
     for (const r of rows) {
       if (present.has(r.key) || isMachineLocalSettingKey(r.key)) continue
+      if (!blobOwnsRow(blobKey, r.key)) continue
       if (Math.min(Number(r.updatedAt) || 0, now) >= gateTs) continue // written at/after the snapshot stamp: not authored-over, keep
       // D13 finding 4: stamp the tombstone with the doc's causal watermark (gateTs), not local
       // wall-clock now — the same stamp-awareness the rowDelete path carries (D11). A
@@ -239,16 +249,23 @@ module.exports = ({ getDb, log }) => {
       if (SYNC_BLOB_KEYS.includes(blobKey)) {
         let doc = null
         try { doc = JSON.parse(v) } catch (e) { /* bridge mirrors parseable docs only */ }
-        // Round-3 P1: the renderer's whole-blob mirror carries `_savedAt` (settings.js
-        // mirrorBlob stamps it at persist time). Gate the diff-merge by it: a pending mirror
-        // queued BEFORE a sync-apply landed (its _savedAt older than the applied row's
+        // Round-3 P1: the renderer's whole-blob mirror carries a persist-time stamp (settings.js
+        // mirrorBlob stamps `_savedAt`). Gate the diff-merge by it: a pending mirror
+        // queued BEFORE a sync-apply landed (its stamp older than the applied row's
         // updatedAt) must not re-stamp the pre-edit value over the applied row — that stale
         // echo used to win LWW on the peer and revert the local user's edit seconds later.
-        const gateTs = doc && Number.isFinite(Number(doc._savedAt)) ? Number(doc._savedAt) : undefined
+        // Fix (2026-10-09): the HABITS blob writer (renderer store habits.js persist) stamps
+        // `savedAt` — no underscore — so every habits mirror write reached mergeDoc/
+        // tombstoneAbsentRows with gateTs=undefined and BOTH Round-3/Sync-10 guards went dead
+        // for that blob (stale-echo LWW revert loop; removed fields never tombstoned →
+        // resurrection loop). ROOT fix at the bridge: accept either spelling. (Symptom-side
+        // fixes in the habits writer were rejected — that file is not the contract owner.)
+        const rawGate = doc ? (doc._savedAt ?? doc.savedAt) : undefined
+        const gateTs = doc && Number.isFinite(Number(rawGate)) ? Number(rawGate) : undefined
         const changed = doc ? mergeDoc(doc, gateTs) : []
         // Sync-10: fields removed from the whole-blob mirror are deletions — tombstone their
         // rows too (gated like putRow, so sync-applied newer rows survive a stale echo).
-        const removed = doc ? tombstoneAbsentRows(Object.keys(doc), gateTs) : []
+        const removed = doc ? tombstoneAbsentRows(Object.keys(doc), gateTs, blobKey) : []
         const snapKey = 'settingsRows.src.' + blobKey
         // P1 2026-09-17: only stamp the snapshot for PARSEABLE docs — stamping an unparseable blob
         // made migrateV6's "already migrated in this exact shape" guard skip the corruption retry.

@@ -20,6 +20,7 @@ export default {
       deleted: 'Record deleted',
       deleteFailed: 'Delete failed, please retry',
       saved: 'Record updated',
+      autoSaved: 'Saved automatically',
       addBtn: '+ Log a pomodoro',
       addSave: 'Add',
       cancel: 'Cancel',

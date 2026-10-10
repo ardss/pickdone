@@ -22,6 +22,10 @@
 const ENTRY_CHUNK_BYTES = 1024 * 1024
 const path = require('node:path')
 const { createHash } = require('node:crypto')
+// C8 (2026-10-09): log-isolation at MODULE LOAD — the old inline require ran AFTER the warn it
+// accompanied, so under TODO_DB_DIR/TODO_USER_DATA_DIR the first warn leaked into the REAL user
+// log (same pattern as transport.js/lan-sync siblings).
+require('../log-isolation')
 
 // Domain-1 F-A2 (2026-09-23): extension whitelist on RECEIVED files. The upload door
 // (attachments.js saveAttachment) enforces ALLOWED_EXT, but the LAN pull used to land ANY
@@ -281,7 +285,7 @@ function createAttachmentServer (deps = {}) {
     const count = requestsByPeer.get(peerId) || 0
     if (count >= perPeerCap) {
       try { require('electron-log').warn('[LanSync] att-req rate-capped for', peerId) } catch { /* noop */ }
-      require('../log-isolation') // test isolation: redirect electron-log file transport into TODO_DB_DIR/TODO_USER_DATA_DIR
+      // (log-isolation now loads at module top — C8 2026-10-09)
       emit({ type: 'att-end', sent: 0, missing: ids.length })
       return { sent: 0, missing: ids.length, capped: true }
     }
@@ -293,15 +297,14 @@ function createAttachmentServer (deps = {}) {
     for (const rawId of ids) {
       const id = String(rawId || '')
       if (!id || /[\\/]|\.\./.test(id)) { missing += 1; if (!emit({ type: 'att-missing', id, reason: 'bad-id' })) return { sent, missing, aborted: true }; continue }
-      if (!d.exists(id)) { missing += 1; if (!emit({ type: 'att-missing', id, reason: 'not-found' })) return { sent, missing, aborted: true }; continue }
-      // D14 C8 (2026-10-02): everything below (size stat, chunked reads, hashing) is wrapped
-      // per-file — d.read/fs.openSync used to throw straight out of serve() on a file that
-      // vanished or became unreadable between the exists() precheck and the read, breaking the
-      // documented never-throws contract AND aborting the batch WITHOUT att-end, so the
-      // requester burned its full 120s round deadline. A per-file failure now answers with the
-      // att-missing error shape so the requester's puller settles the id fast and the batch
-      // still terminates with att-end.
+      // Fix (2026-10-09): the exists() precheck used to sit OUTSIDE the per-file try below —
+      // a vanished/fs-error file threw straight out of serve() and aborted the WHOLE batch
+      // with no att-end, so the requester burned its full 120s round deadline. ROOT cause:
+      // the D14 C8 per-file try only covered the read path, not the precheck that consults
+      // the same disk state. Moved inside: any precheck/read throw now answers the
+      // att-missing error shape (read-error) and the batch still terminates with att-end.
       try {
+      if (!d.exists(id)) { missing += 1; if (!emit({ type: 'att-missing', id, reason: 'not-found' })) return { sent, missing, aborted: true }; continue }
       const size = d.size(id)
       if (size > maxFileBytes) {
         missing += 1
@@ -459,6 +462,13 @@ function createAttachmentPuller (opts = {}) {
   function finishOk () {
     if (settled) return
     settled = true
+    // Fix (2026-10-09): att-end arriving mid-transfer used to discard an open `current`
+    // without bookkeeping — its reserved byte budget stayed held for the rest of the round
+    // and the id never entered the failed-set (a peer that truncates a batch could leave the
+    // half-received file silently re-requestable forever). Settle it like a failure:
+    // markFailed refunds the reserved size and adds the failed-set entry (the in-flight file
+    // is incomplete, keeping it pullable-in-this-session is wrong).
+    if (current) markFailed(current.id)
     busy = false
     if (onDone) { const cb = onDone; onDone = null; cb() }
   }
@@ -524,6 +534,14 @@ function createAttachmentPuller (opts = {}) {
       }
       receivedBytes += size
       reservedIds.add(idStr)
+      // Fix (2026-10-09): a meta for a DIFFERENT id while a transfer is open used to silently
+      // overwrite `current` — the in-flight file was destroyed (chunks dropped) while its
+      // reserved byte budget stayed held for the rest of the round, and the id never entered
+      // the failed-set (the batch's next round re-requested a file the peer clearly cannot
+      // deliver coherently). Settle the in-flight transfer FIRST: markFailed refunds its
+      // reserved size (M-8 refund applies because id === current.id) and adds the failed-set
+      // entry — same policy as an explicit att-missing for that id.
+      if (current && current.id !== idStr) markFailed(current.id)
       current = { id: idStr, size, hash: String(msg.hash || ''), chunks: new Map(), received: 0 }
       return true
     }
