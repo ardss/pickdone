@@ -187,6 +187,13 @@ module.exports = {
           // metaConflictBackup key advertising a "recoverable" copy of a row that was never
           // touched. The ORIGINAL backup key stays on any failure (refuse-to-lose).
           try {
+            // 2026-10-09: the tomato append arbiter (db-tomato-ops.js) LWW-gates tombstone
+            // resurrection on `excluded.updatedAt > deletedAt`. A restored row carries its
+            // ORIGINAL pre-conflict stamp and would lose to any newer tombstone — the restore
+            // gets silently refused right after we told the user it succeeded. Re-stamp per
+            // the restore-wins doctrine: a restore is an explicit user-initiated recovery
+            // and must beat the tombstone.
+            if (entity === 'tomato') row.updatedAt = Date.now()
             call(restoreOp, [row])
             // Read-back before consuming: the bulk op may have SILENTLY skipped the row (see
             // ENTITY_READBACK). If it never landed, keep the backup key — the restore is
