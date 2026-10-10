@@ -378,7 +378,8 @@ export default {
         if (!this.nameDraft) this.nameDraft = s.deviceName || ''
         if (this.enabled) {
           this.status = await getSyncStatus()
-          if (!this.connectHost && this.peers.length && this.peers[0].host) this.connectHost = this.peers[0].host
+          // [UX r7] do NOT prefill connectHost from peers[0].host — auto-dialing a stale
+          // paired host on the next click silently rotates the shared secret (repair flow).
         }
       } catch (e) { /* main process without LAN sync (CLI/test host) — leave defaults */ }
     },
@@ -536,7 +537,8 @@ export default {
         this.busy = true
         this.connecting = true
         syncPairRequest(d.host, d.port).then(() => {
-          this.$message.success(this.$t('sync.connectSent'))
+          // resolve = pairing accepted by peer — success, not "sent, awaiting" (was a race with the real await window)
+          this.$message.success(this.$t('sync.pairOkMsg'))
         }).catch(e => {
           const key = pairFailureKey(e)
           this.$message.error(this.$t(key || 'sync.pairFailGenericMsg'))
@@ -557,7 +559,8 @@ export default {
         this.connecting = true // immediate feedback: the 63s await must not leave the user staring at a dead button
         try {
           syncPairRequest(parsed.host, parsed.port).then(() => {
-            this.$message.success(this.$t('sync.connectSent'))
+            // resolve = pairing accepted by peer — success, not "sent, awaiting" (was a race with the real await window)
+            this.$message.success(this.$t('sync.pairOkMsg'))
           }).catch(e => {
             const key = pairFailureKey(e)
             this.$message.error(this.$t(key || 'sync.pairFailGenericMsg'))
