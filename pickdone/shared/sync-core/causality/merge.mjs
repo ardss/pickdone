@@ -126,6 +126,8 @@ export function applyEnvelope(store, envelope) {
   }
 
   if (isAncestor(store, revisionId, currentId)) {
+    // A late ancestor can complete a previously missing causal chain.
+    pruneSuperseded(store, entityId, currentId)
     return { status: 'ignored', action: 'ancestor' }
   }
   if (isAncestor(store, currentId, revisionId)) {
