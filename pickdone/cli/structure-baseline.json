@@ -1,10 +1,8 @@
 {
-  "src/main/sync-apply.js": 899,
   "cli/lib.js": 821,
   "src/main/lan-sync-bootstrap.js": 832,
-  "renderer/js/components/settings/SettingsSyncTab.vue": 809,
-  "renderer/js/store/category.js": 734,
+  "renderer/js/store/category.js": 733,
   "renderer/js/store/todo.js": 777,
-  "src/main/db.js": 822,
+  "src/main/db.js": 813,
   "src/main/index.js": 854
 }

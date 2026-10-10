@@ -320,9 +320,9 @@ test('sandbox bridge: refund freeze / grace / expiry map through computeEntitlem
   const refundId = mk('refund')
   seedSub(billingStore, refundId, { status: 'frozen', frozenReason: 'refund' })
   const graceId = mk('grace')
-  seedSub(billingStore, graceId, { currentPeriodEnd: NOW - 1 * DAY }) // inside 3d grace
+  seedSub(billingStore, graceId, { currentPeriodEnd: NOW - Number(DAY) }) // inside 3d grace
   const expiredId = mk('expired')
-  seedSub(billingStore, expiredId, { currentPeriodEnd: NOW - 5 * DAY }) // beyond grace
+  seedSub(billingStore, expiredId, { currentPeriodEnd: NOW - 5 * Number(DAY) }) // beyond grace
 
   const refund = await bridge.resolveTrust({ account: 'refund' })
   assert.equal(refund.frozen, true)

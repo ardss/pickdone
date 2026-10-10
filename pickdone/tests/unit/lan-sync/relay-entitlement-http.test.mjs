@@ -83,7 +83,6 @@ function bindPaid (billingStore, bridge, relayAccount) {
 }
 
 test('HTTP: gate OFF (default) — historical semantics untouched, no billing required', async () => {
-  const billingStore = billingMod.createBillingStore({ now: () => NOW })
   const relay = createRelay(memoryStore()) // DEFAULT: no entitlements option at all
   const server = await startRelayServer(relay, { port: 0, host: '127.0.0.1' })
   const url = `http://127.0.0.1:${server.address().port}`
@@ -124,7 +123,7 @@ test('HTTP: gate ON + unbound account — self-reported paid flags in the body a
 })
 
 test('HTTP: gate ON + paid bound account — full sync works; signed-webhook refund freezes writes, reads stay open', async () => {
-  const { server, url, gate, bridge, billingStore } = await boot()
+  const { server, url, bridge, billingStore } = await boot()
   try {
     bindPaid(billingStore, bridge, 'subscriber')
     const reg = await register(url, 'subscriber', 'dev1')

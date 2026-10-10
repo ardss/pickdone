@@ -19,33 +19,13 @@ require('./log-isolation') // test isolation: redirect electron-log file transpo
 const mergeCore = require('../../shared/sync-core/merge.mjs')
 // D20-DOMB1: pure milestone-blob scrub shared with the CLI purge (shared/milestone-gc.mjs).
 const { scrubMilestoneBlob } = require('../../shared/milestone-gc.mjs')
-// Phase-3 (docs/refactor-command-bus.md): buffer drain routes read their op from the manifest
-// so the engine's bulk surfaces stay census-tied to the single command table. The engine still // applies rows DIRECTLY (peer-carried LWW stamps — see the gate's sync-ingress exemption for // this file); the manifest is used for dispatch naming only, never for stamping.
-const manifest = require('./command-manifest')
 // Arch review 2026-09-22 rec #3: the ingress clamp window is the SHARED constant — the same // window/semantics as the command-bus explicit-stamp clamp (see stamp-clamp.js).
 const { STAMP_CLAMP_MS } = require('./stamp-clamp')
 const { SYNC_OPLOG_KEEP, oplogKeepLimit } = require('./db-oplog') // D3 2026-09-24: oplog page size derives from the ring retention (was bare 10000s)
-// Arch review 2026-09-22 rec #1 (twin-door convergence): flush/ingress WRITE sites route // through an injected bus built on top of THIS state's db surface (createBus is exported for // exactly this). The bus's dbCall is state.db.call, so mock-driven unit suites keep their
-// recording surface; the hookless instance preserves the ingress contract (no ls-mirror kick, // no local re-stamping — every write passes { preserveStamp: true }, which means the bus never // MINTS a stamp; an explicit stamp beyond the shared skew window is still clamped, mirroring // clampSkew's ingress normalization — see command-bus.js stampPayload).
-const { createBus } = require('./command-bus')
 // S4 adjudication layer (delete-vs-edit user-visible rulings) + the conflict-surfacing
 // helpers moved out of this file (meta conflict backup trio, S2 causal receive seam) to
 // honor the structure-size ratchet (only-split-never-grow).
 const adjudicate = require('./sync-adjudicate')
-
-// Manifest keys of the buffered bulk commands, in exact flush order (order is load-bearing: // todos first so a same-round todo+plan move lands coherently, tombstone-heavy buffers early). // opOf() throws on a manifest drift instead of silently skipping a buffer.
-const FLUSH_ROUTE_COMMANDS = [ ['todos', 'todo.putMany'],
-  ['settings', 'setting.putMany'],
-  ['tomatoes', 'tomato.appendMany'],
-  ['categories', 'category.putMany'],
-  ['plans', 'plan.putMany'],
-  ['filters', 'filter.putMany']
-]
-const flushRoutes = FLUSH_ROUTE_COMMANDS.map(([buf, cmd]) => {
-  const row = manifest.COMMANDS[cmd]
-  if (!row) throw new Error('[sync-apply] flush route missing from manifest: ' + cmd)
-  return { buf, op: row.op, cmd }
-})
 
 // Hydration layer (entity classification + per-pass caches + hydrateRow) lives in // sync-apply-hydrate.js (structure-size ratchet, verbatim move) — re-exported below so the // bootstrap and the test harness keep their single require surface.
 const {
@@ -63,24 +43,12 @@ const {
 } = require('./sync-apply-hydrate')
 
 /**
- * Arch review 2026-09-22 rec #1 (twin-door convergence): the per-state write door for this
- * file's flush/ingress writes. Builds a hookless bus on top of state.db.call (lazily, cached
- * on the state object — tests swap whole state objects) and routes every WRITE through
- * bus.commitOp(op, payload, { preserveStamp: true }): the manifest validates the op name,
- * the payload passes through with its wire-carried ages intact (preserveStamp never mints a
- * stamp; the bus's future-stamp clamp still guards the door — see stampPayload), and
- * no fanout hooks fire (ingress must not kick local sync rounds — this is peer data landing,
- * not a local user edit). Reads stay on state.db.call.
+ * The twin-door write door (busFor/busWrite) + the buffered bulk-write drain
+ * (flushPendingWrites, poison-row quarantine) moved VERBATIM to ./sync-apply-flush.js
+ * (structure-size ratchet, same doctrine as the hydrate/content/adjudicate splits) —
+ * destructured here so every internal call site and the re-exported surface is unchanged.
  */
-function busFor (state) {
-  if (!state.__bus) state.__bus = createBus((op, p) => state.db.call(op, p))
-  return state.__bus
-}
-
-/** The one write helper for sync ingress: manifest-validated dispatch, payload untouched. */
-function busWrite (state, op, payload) {
-  return busFor(state).commitOp(op, payload, { preserveStamp: true })
-}
+const { busWrite } = require('./sync-apply-flush')
 
 // S4/META-BACKUP: META_CONFLICT_BACKUP_CAP + the meta conflict backup trio now live in
 // ./sync-adjudicate.js (size ratchet move); re-exported below for the existing import surface.
@@ -685,134 +653,7 @@ function consumeAppliedRound (state) {
   return { kinds: [...a.kinds], settingsPatch: a.settingsPatch, conflicts: a.conflicts, adjudicationFailed: a.adjudicationFailed || 0 }
 }
 
-/**
- * Flush the buffered bulk writes. Called after every ingested segment, after buildSnapshot-driven
- * replaceAll, and before the transport sends its round ack — a peer's push cursor may only advance
- * over rows that are already committed here (crash mid-buffer = rows unapplied, cursor stays, the
- * next round re-pushes; same crash semantics as commitSyncBatch §4.1).
- *
- * P0-1 (2026-09-19 data-safety round): the flush now REPORTS failure ({ ok: false }) instead of
- * only logging — the bootstrap propagates it as `flushFailed` on the ingestSegment result so the
- * receiver's ack stays BELOW the failed segment (the sender keeps its push watermark, re-pushes)
- * and the snapshot trigger force-arms. A dropped buffer must never be acked as applied.
- */
-// 2026-09-26 poison-row quarantine: meta key prefix for rows a failed bulk flush had to drop.
-// 'sync.*' is machine-local (isMachineLocalMetaKey), so quarantined copies never sync back to
-// the peer — they are a LOCAL recovery surface, not a replay channel.
-const META_FLUSH_QUARANTINE_PREFIX = 'sync.flushQuarantine.'
-// Cap parked entries per op: quarantine is a crash-inspection surface, not a data store; the
-// oplog/snapshot remains the authoritative recovery for large segments.
-const META_FLUSH_QUARANTINE_CAP = 50
-
-/** Safely encode one buffered row for the quarantine blob (a poison row may itself be
- *  un-JSON-able — BigInt, circular — so fall back to a string rendering). */
-function quarantineEncodeRow (row) {
-  try { return JSON.parse(JSON.stringify(row)) } catch {
-    try { return String(row) } catch { return '[unrenderable row]' }
-  }
-}
-
-/**
- * Park rows dropped by a failed bulk flush into a machine-local meta key
- * (`sync.flushQuarantine.<op>`): append to the existing list (cap-trimmed, newest kept) and
- * stamp each entry with the error and time. Best-effort: any failure here degrades to the old
- * log-only behavior (the original flush error is already reported by the caller).
- */
-function quarantineFlushRows (state, op, list, err) {
-  try {
-    const key = META_FLUSH_QUARANTINE_PREFIX + op
-    let parked = []
-    try {
-      const cur = state.db.call('getMeta', key)
-      if (cur != null) { const p = JSON.parse(cur); if (Array.isArray(p)) parked = p }
-    } catch { /* unreadable prior blob: start a fresh list rather than failing the quarantine */ }
-    parked.push({ at: Date.now(), count: list.length, error: (err && err.message) || String(err), rows: list.map(quarantineEncodeRow) })
-    while (parked.length > META_FLUSH_QUARANTINE_CAP) parked.shift()
-    // Route through the bus facade like every other sync write (single-write-gate): the
-    // quarantine meta blob is machine-local, but the write must still be manifest-validated.
-    busWrite(state, 'setMeta', [key, JSON.stringify(parked)])
-    return { op, key, count: list.length }
-  } catch (e) {
-    log.warn('[LanSync] flush quarantine parking failed (log-only drop):', e && e.message)
-    return null
-  }
-}
-
-function flushPendingWrites (state) {
-  const buf = state.pendingWrites
-  let ok = true
-  const quarantined = []
-  // Per-buffer-op isolation (round-3 review): ONE malformed row used to throw out of a single
-  // bulk op and leave every buffer dirty — the throw re-fired on every later flush, wedging
-  // apply AND flush forever (poison-pill row). Now each op gets its own try/catch: a failing op
-  // drops only ITS buffer segment with log.error (the data stays in the oplog, so it remains
-  // recoverable via a later snapshot), the buffers clear either way, and the other ops proceed.
-  // Manifest-driven drain (Phase-3): buffer → bulk op mapping lives in flushRoutes (derived from
-  // command-manifest.js at module load), so a buffer cannot silently lose its manifest census row.
-  // 2026-09-26 stalled-watermark fix (Layer 1): a failing op whose rows were SUCCESSFULLY
-  // quarantined no longer sets ok=false. Previously ok=false made ingestSegment stamp
-  // flushFailed, the ack stayed below the segment, the sender kept its push watermark and
-  // re-pushed the SAME segment — including the same poison row — every round: a permanent
-  // stall (watermark pinned forever, appliedToSeq never advanced in the sender's seq space).
-  // That is safe only while the drop is unrecoverable. With poison-row quarantine the dropped
-  // rows are parked under sync.flushQuarantine.<op> (machine-local meta, user-surfaced via
-  // Device Center), so the recovery invariant holds WITHOUT blocking the ack: remaining ops
-  // commit, the round acks with appliedToSeq, and the peer's watermark advances past the
-  // poison row. ok=false is reserved for the case where QUARANTINE PARKING ITSELF failed
-  // (rows truly dropped log-only) — that degrades to the old fail-closed behavior.
-  const flushOne = (list, op) => {
-    if (!list || !list.length) return
-    let result = null
-    try { result = busWrite(state, op, list) } catch (e) {
-      log.error(`[LanSync] flush ${op} failed — dropping ${list.length} buffered rows (quarantined under ${META_FLUSH_QUARANTINE_PREFIX}${op}, recoverable via snapshot):`, e && e.message)
-      // 2026-09-26 poison-row quarantine: a dropped buffer used to be log-only ("recoverable via
-      // snapshot" = the ONLY recovery, and only if a snapshot actually re-fires). Park the rows in
-      // a machine-local meta key (sync.* never syncs — isMachineLocalMetaKey) so they stay
-      // inspectable/recoverable, and surface the quarantine on the flush result so the bootstrap
-      // can raise a Device Center syncEvent instead of failing silently.
-      const entry = quarantineFlushRows(state, op, list, e)
-      if (entry) quarantined.push(entry)
-      else { ok = false; return false } // D18: parking failed — caller RETAINS the buffer segment
-    }
-    // D13 finding 3 (per-row rejection quarantine): the bulk ops no longer drop rows silently —
-    // settingsRowPutMany / planAddMany / tomatoAppendMany surface their skipped rows as a
-    // `rejected` list (settingsRowPutMany/planAddMany attach it to the returned accepted array
-    // non-enumerably; tomatoAppendMany returns {accepted, rejected}). The old code discarded the
-    // result: rejected rows vanished, the buffer segment still cleared and the segment acked
-    // ok=true — the sender's watermark advanced past rows that never landed, permanently lost
-    // with zero user-visible trace. Park the rejected rows in the same machine-local quarantine
-    // the throw path uses and surface them on the flush result (flush-quarantined syncEvent).
-    const rejected = result && Array.isArray(result.rejected) ? result.rejected : []
-    if (rejected.length) {
-      log.error(`[LanSync] flush ${op}: ${rejected.length} of ${list.length} rows rejected by the bulk op — quarantined under ${META_FLUSH_QUARANTINE_PREFIX}${op}`)
-      const err = new Error('per-row rejection: ' + rejected.map(r => (r && r.reason) || 'unknown').join('; ').slice(0, 300))
-      const entry = quarantineFlushRows(state, op, rejected.map((r, i) => ({ ...list[r && r.index != null ? r.index : i], __rejectReason: (r && r.reason) || 'unknown' })), err)
-      if (entry) quarantined.push(entry)
-      else { ok = false; return false } // D18: parking failed — caller RETAINS the buffer segment
-    }
-    return true
-  }
-  for (const r of flushRoutes) {
-    // D18 (2026-10-02): the buffer segment used to clear UNCONDITIONALLY — when BOTH the bulk
-    // write AND quarantine parking failed, the rows were silently destroyed (silent row loss
-    // behind a flushFailed ack). Retain the segment for the next flush attempt instead; the
-    // throw path already logged loudly, so keep one explicit retain trace here.
-    if (flushOne(buf[r.buf], r.op) !== false) buf[r.buf] = []
-    else log.error(`[LanSync] flush ${r.op}: quarantine parking failed — ${buf[r.buf].length} buffered rows RETAINED for retry (silent drop avoided)`)
-  }
-  // Coalesced remote-announce fan-out (P2 2026-09-20): one emit per committed ingest pass
-  // instead of one per announce row. Runs even when a bulk flush failed above — the meta rows
-  // were already committed via setMeta before buffering.
-  if (state.pendingAnnounces && state.pendingAnnounces.size) {
-    const ta = require('./tomato-announce')
-    for (const [key, value] of state.pendingAnnounces) {
-      try { ta.emitRemoteAnnounce(key, value) } catch (e) { log.warn('[LanSync] announce emit failed:', e.message) }
-    }
-    state.pendingAnnounces = null
-  }
-  return { ok, quarantined } // P0-1: false = at least one bulk op threw; the segment must not be acked
-}
-
+// Flush/quarantine layer (busFor/busWrite/flushPendingWrites) moved verbatim to ./sync-apply-flush.js (size ratchet).
 /**
  * Local max oplog seq — reported to peers as `ack.appliedToSeq` so their per-peer push watermarks
  * can advance and rounds ship deltas instead of re-pushing the full backlog every time.
@@ -880,8 +721,9 @@ module.exports = {
   parseMetaBackupKeySuffix: adjudicate.parseMetaBackupKeySuffix,
   hasEquivalentConflictCopy, // D18: exported for unit tests (scan-failure = indeterminate)
   scrubMilestoneBlobsFor, // D20-DOMB1: exported for unit tests (sync tombstone milestone scrub)
-  // 2026-09-26 poison-row quarantine: where a failed flush parks its dropped rows.
-  META_FLUSH_QUARANTINE_PREFIX,
+  // 2026-09-26 poison-row quarantine: where a failed flush parks its dropped rows
+  // (moved to ./sync-apply-flush.js, size ratchet — re-exported below for compatibility).
+  ...require('./sync-apply-flush'),
   // Exported (2026-09-19): lan-sync-bootstrap destructures this for allRows()/hydration skips —
   // the missing export made every allRows() call (legacy seed, snapshot serving) throw TypeError.
   isMachineLocalSettingKey,
@@ -896,12 +738,8 @@ module.exports = {
   clampSkew,
   applyRowSafe,
   consumeAppliedRound,
-  flushPendingWrites,
   readMaxOplogSeq,
   writeMetaConflictBackup,
-  // Arch review 2026-09-22 rec #1: the injected-ingress write door (lan-sync-bootstrap routes its manifest-op writes through the same helper so the engine stays one bus-routed surface).
-  busFor,
-  busWrite,
   // S2 causal receive seam (moved to ./sync-adjudicate.js, re-exported) + S4 surface.
   causalInboundRelation: adjudicate.causalInboundRelation,
 }

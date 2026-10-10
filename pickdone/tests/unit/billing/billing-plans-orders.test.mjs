@@ -22,7 +22,7 @@ test('plans: catalog shape �?local free, cloud sellable, selfhost not sellable
   assert.equal(PLANS.cloud.sellable, true)
   assert.equal(PLANS.cloud.hostedSync, true)
   assert.equal(PLANS.cloud.maxDevices, 5)
-  assert.equal(PLANS.cloud.storageQuotaBytes, 1 * GIB)
+  assert.equal(PLANS.cloud.storageQuotaBytes, Number(GIB))
   assert.equal(priceFor('cloud', 'monthly').amountMinor, 499)
   assert.equal(priceFor('cloud', 'annual').amountMinor, 4999)
   assert.equal(priceFor('cloud', 'monthly').currency, 'USD')
