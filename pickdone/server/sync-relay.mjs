@@ -222,6 +222,17 @@ export function createRelay(store, { enrollment = '', entitlements = null } = {}
      * account (snapshot-put/snapshot-latest) accept any of the account's
      * devices' secrets — the secret still proves possession of a registered
      * device for that account.
+     *
+     * 2026-10-10 revocation (P0): 'retired' is the leave-the-account status, but
+     * a retired device's bearer secret used to keep full pull/push/ack/snapshot
+     * access forever — and there is NO admin path to rotate a lost device's
+     * secret (the rotation proof IS that secret), so a stolen device could read
+     * and write the account's stream indefinitely. Retired rows are dead
+     * credentials: filtered here so BOTH candidate paths (per-device and
+     * account-wide, e.g. the snapshot routes) refuse them. Rotation with
+     * proof-of-possession intentionally keeps the retired status, so a thief
+     * holding the secret cannot self-revive; re-joining requires a fresh
+     * register (new deviceId or a future operator re-activation path).
      */
     authorize(account, deviceId, authz) {
       const m = /^Bearer\s+(\S+)$/i.exec(authz || '')
@@ -229,7 +240,8 @@ export function createRelay(store, { enrollment = '', entitlements = null } = {}
       const candidates = (account && deviceId)
         ? [store.getDevice(account, deviceId)].filter(Boolean)
         : (account ? store.listDevices(account) : [])
-      const ok = supplied && candidates.some(row => {
+      const live = candidates.filter(row => row.status !== 'retired')
+      const ok = supplied && live.some(row => {
         const expected = typeof row.deviceSecret === 'string' ? row.deviceSecret : ''
         if (!expected) return false
         const b = Buffer.from(expected)
