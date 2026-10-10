@@ -331,7 +331,14 @@ function applyRowInner (state, incoming) {
   // rules; the remaining entities use the generic LWW shape.
   let winner
   let conflictCopy = null
-  if (entity === 'tomato') winner = mergeCore.mergeTomatoRows(localRow, incoming).row
+  // S1 (Sync v2, relay pull path only): `causalCurrent` is stamped by relay-sync-apply when the
+  // revision DAG has ALREADY ruled the envelope the entity's causal current (a descendant of the
+  // local head). The business LWW must not overrule that verdict with a wall-clock stamp — a
+  // slow-clock causal successor beats a fast-clock ancestor. Live-vs-live only: delete-vs-edit
+  // stays with the S4 adjudication surface. LAN sync never stamps the field → byte-identical.
+  if (entity === 'todo' && incoming.causalCurrent && localRow && !localRow.deleted && !incoming.deleted) {
+    winner = incoming
+  } else if (entity === 'tomato') winner = mergeCore.mergeTomatoRows(localRow, incoming).row
   else {
     const m = mergeCore.mergeTodoRows(localRow, incoming)
     winner = m.row
@@ -362,9 +369,11 @@ function applyRowInner (state, incoming) {
   // (it could not: todoToRow re-derived scheduledDay in the writer's timezone). A live row that
   // is NOT strictly newer than the local live row must never replace it nor spawn a conflict
   // copy of it — refuse and keep local. Real peer edits (strictly newer stamps) still win on
-  // updatedAt before any tiebreak; live-vs-tombstone merges are left to the delete-wins rules.
+  //   updatedAt before any tiebreak; live-vs-tombstone merges are left to the delete-wins rules.
+  //   S1: a causalCurrent envelope is NOT an echo — the revision DAG ruled it the causal
+  //   successor, so the same-stamp refusal does not apply to it.
   if (entity === 'todo' && localRow && !localRow.deleted && !incoming.deleted &&
-      winner === incoming && stampNum(incoming.updatedAt) <= stampNum(localRow.updatedAt)) {
+      winner === incoming && stampNum(incoming.updatedAt) <= stampNum(localRow.updatedAt) && !incoming.causalCurrent) {
     log.warn('[LanSync] same-stamp echo on todo', incoming.id, '— local row stands (an echo is never strictly newer)')
     return false
   }

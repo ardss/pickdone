@@ -107,6 +107,13 @@ function applyPulledEnvelopes (received, store, deviceId) {
   const dag = revisions.ingestRemote(items.map(r => ({ envelope: r.envelope, isCurrent: isCurrent(r.envelope) })))
 
   // 2) Business materialization (todos this slice) through the v1 pipeline.
+  //    S1 (Sync v2): envelopes the revision DAG has ALREADY ruled causally current (a
+  //    descendant of the local head) carry `causalCurrent` into the apply pipeline — the
+  //    business LWW must not overrule the DAG's causal verdict with a wall-clock stamp
+  //    (a slow-clock successor beats a fast-clock ancestor). Opt-in by construction:
+  //    ONLY this relay pull path stamps it; LAN sync and the v1 default path never do.
+  //    Re-evaluated HERE per row — the mapped array above is a throwaway argument to
+  //    ingestRemote and never mutates `items`.
   const state = createState(deviceId)
   state.applyCache = syncApply.createHydrationCache(state)
   let businessApplied = 0
@@ -114,6 +121,7 @@ function applyPulledEnvelopes (received, store, deviceId) {
   for (const r of items) {
     const row = envelopeToWireRow(r.envelope)
     if (!row) { businessSkipped++; continue }
+    if (isCurrent(r.envelope)) row.causalCurrent = true
     if (syncApply.applyRowSafe(state, row)) businessApplied++
     else businessSkipped++
   }
