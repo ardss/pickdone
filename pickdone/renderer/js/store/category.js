@@ -3,6 +3,10 @@ import { loadMilestones } from '../utils/milestones.js'
 import { normalizeStatus } from '../utils/projectStatus.js'
 import { commit as commitCommand } from "../utils/commandBus.js"
 import { today0, dayStart, dayShift } from '../utils/todayBounds.js'
+// CLI name-normalization single source (shared/norm-key.mjs): the category-uniqueness guard must
+// judge duplicates the way cli/lib.js resolveCategory addresses them, otherwise UI-created
+// near-duplicates lock the CLI out.
+import { normKey } from '../../../shared/norm-key.mjs'
 /** Category module (offline persistence via localStorage; cloud APIs like getCategoryList reserved) */
 const LS_KEY = 'categoryState'
 export const COLOR_PALETTE = ['#0f9d8f', '#f76e6e', '#f2a63b', '#7ac74f', '#5aa9e6', '#9d8df1', '#eb96c3', '#98a4ae']
@@ -394,25 +398,14 @@ function purgeFiltersForVictims (victims) {
  *  `if (rows.length)` gate dropped in-retention tombstones from memory and the recover entry went
  *  blind exactly when it was needed most. */
 function mergeableLsTombstones (rows, recycleBinAutoDeleteDays) {
-  // G1 tombstone expiry: a tombstone whose category was already PURGED (hard-deleted from the
-  // recycle bin) is invisible to the live-rows check and used to be re-merged forever —
-  // the "permanently deleted" category resurrected as a ghost on every restart. Only re-attach
-  // tombstones inside the recycle-bin retention window; old tombstones without deletedAt are
-  // conservatively kept (pre-dates the stamp, may still be within an unknown window).
-  // [tombstone-zero fix] 0 is the shipped 'never purge' option (SettingsDataTab radio): the
-  // old `Number(...) || 30` read it as 30, so a 'never' user still lost the category
-  // recovery entry after a month — diverging from the todo-row purge, which honors 0 via
-  // `if (!days) return` (store/todo.js). 0 now keeps tombstones unconditionally; junk/NaN
-  // still falls back to 30.
+  // G1 tombstone expiry: a tombstone whose category was already PURGED is invisible to the
+  // live-rows check and used to re-merge forever (ghost resurrection every restart). Only
+  // re-attach tombstones inside the recycle-bin retention window; old tombstones without
+  // deletedAt are conservatively kept. [tombstone-zero fix] 0 is the shipped 'never purge' option:
+  // the old `Number(...) || 30` read it as 30, so a 'never' user still lost the recovery entry
+  // after a month. 0 keeps tombstones unconditionally; junk/NaN still falls back to 30.
   const rawDays = Number(recycleBinAutoDeleteDays)
   const retentionDays = rawDays === 0 ? 0 : (rawDays > 0 ? rawDays : 30)
-  // P3-6 (maint/dw 2026-09-23) + day-caliber (2026-10-03): same calendar-day cutoff as the
-  // todo-row purge (store/todo.js: startOf('day').subtract(days,'day') = local midnight minus
-  // N CALENDAR days) — computed via todayBounds.dayShift so this path stays independent of the
-  // window.dayjs UMD global while keeping calendar semantics. The former
-  // `_localMidnight - retentionDays * day-in-ms` arithmetic diverged from the purge cutoff by
-  // 1h on DST-affected days: on such a day the recovery entry could expire while the rows it
-  // would recover were still inside the retention window.
   const cutoff = retentionDays === 0 ? 0 : dayShift(dayStart(Date.now()), -retentionDays)
   return deletedFromLs().filter(d =>
     !rows.some(r => r.categoryId === d.categoryId) &&
@@ -473,11 +466,9 @@ export default {
       for (const c of list) lastPersistedRows.set(c.categoryId, JSON.stringify(toRow(c)))
     },
     addCategory (state, { categoryName = 'New Category', categoryColor = COLOR_PALETTE[state.list.length % COLOR_PALETTE.length], folderIs = false, folderId = 0 }) {
-      // D19-DOM2 (#9, CLI parity CATEGORY_EXISTS): duplicate LIVE names are rejected — the CLI's
-      // whole addressing model (resolve by name) needs uniqueness; duplicates produced
-      // AMBIGUOUS_MATCH and locked the CLI out. Same contract as cli/lib-categories.cjs addCategory.
-      // Component callers catch this and surface catNameExistsWarn via $message.warning.
-      if (state.list.some(c => !c.delete && c.categoryName === categoryName)) {
+      // D19-DOM2 (#9, CLI parity CATEGORY_EXISTS): duplicate LIVE names are rejected — the CLI,      // resolves categories by name, so duplicates produced AMBIGUOUS_MATCH and locked it out,      // (same contract as cli/lib-categories.cjs addCategory; component callers surface,      // catNameExistsWarn via $message.warning). Uniqueness is judged on the CLI's normKey,,      // not the raw string: the raw compare let 'Work' be created next to 'work'/'Ｗｏｒｋ'.
+      const newKey = normKey(categoryName)
+      if (state.list.some(c => !c.delete && normKey(c.categoryName) === newKey)) {
         const e = new Error('category "' + categoryName + '" already exists (names must stay unique so the CLI can address them)')
         e.code = 'CATEGORY_EXISTS'
         throw e
@@ -488,6 +479,18 @@ export default {
     // [A4 fix] returns persist()'s Promise<boolean>: true = the SQLite write confirmed, false =
     // the durable write failed (fire-and-forget callers just ignore the return value)
     updateCategory (state, patch) {
+      // Same normKey uniqueness contract as addCategory: a rename to a name normalizing to an
+      // existing live row's key is rejected (updateCategory previously had no name check, so the
+      // rename channel re-introduced the CLI AMBIGUOUS_MATCH lockout addCategory guards against).
+      if ('categoryName' in patch) {
+        const newKey = normKey(patch.categoryName)
+        const clash = state.list.some(c => !c.delete && c.categoryId !== patch.categoryId && normKey(c.categoryName) === newKey)
+        if (clash) {
+          const e = new Error('category "' + patch.categoryName + '" already exists (names must stay unique so the CLI can address them)')
+          e.code = 'CATEGORY_EXISTS'
+          throw e
+        }
+      }
       const i = state.list.findIndex(c => c.categoryId === patch.categoryId)
       if (i >= 0) { state.list[i] = { ...state.list[i], ...patch }; return persist(state.list) }
       return Promise.resolve(true)
@@ -601,11 +604,9 @@ export default {
         .then(() => waitOutPendingMetaBak(id))
         .then(() => restoreProjectMetaBackup(id))
         // D14-B9: restore the saved filters the delete-time purge backed up (symmetric reversibility).
-        // D15-B6: pass the tombstone's deletedAt so the stamped backup key (`catFiltersBak.<deletedAt>.<id>`)
-        // can be read directly (legacy-shape keys remain the fallback).
-        // The filter restore must NOT swallow the flagRestored result of the previous link — a flat
-        // `.then(() => restoreFiltersBackup(...))` made the next link see `undefined` and the
-        // recovered project id stopped re-entering projectIds.
+        // D15-B6: pass the tombstone's deletedAt so the stamped backup key can be read directly
+        // (legacy-shape keys remain the fallback). The restore must NOT swallow the flagRestored
+        // result — a flat .then(() => restoreFiltersBackup(...)) broke the projectIds re-entry link.
         .then(flagRestored => restoreFiltersBackup(id, (m, p) => this.commit(m, p), tombstoneDeletedAt).then(() => flagRestored))
         .then(flagRestored => {
           if (flagRestored && !state.projectIds.includes(id)) {
@@ -678,12 +679,10 @@ export default {
     async init ({ commit, rootState }) {
       let rows = []
       // [LS-migration DB-fail fix] distinguish "DB genuinely empty" from "DB read FAILED": a
-      // transient getAllCategories failure used to fall through into the LS→DB migration path
-      // below, and loadList() re-seeded the FIXED default ids (100001-100003) which were then
-      // committed via category.put — overwriting the real rows living under those same ids in
-      // SQLite (rename a default category, hit one transient read failure, it reverts). On a read
-      // failure the migration is skipped entirely: memory keeps the LS cache (setListFromDb never
-      // persists), nothing is written to the DB, and the next init retries.
+      // transient getAllCategories failure used to fall into the LS→DB migration and re-seed the
+      // FIXED default ids (100001-100003), overwriting the real rows under those ids (a rename
+      // reverted on the next transient failure). On a read failure the migration is skipped:
+      // memory keeps the LS cache, nothing is written, the next init retries.
       let dbReadFailed = false
       try { rows = (await window.todoAPI.dbCall('getAllCategories')) || [] } catch (e) { dbReadFailed = true; console.warn('[category] SQLite read failed, using local cache', e) }
       try {

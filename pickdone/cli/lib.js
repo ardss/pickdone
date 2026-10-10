@@ -95,7 +95,8 @@ const { parseDate, dayStartOf, lunarOf, lunarAnnotate, dateChangeReminderPatch }
 /* ================= Task resolution ================= */
 // F-B5 (dw wave 3): single keyword normalization — was 3 verbatim copies (resolveTask, resolveRepeatEntry, // lib-tasks.cjs resolveCategory; the last now receives it via the existing deps injection). NFKC aligns
 // the CLI with the renderer's search normalization (utils/search.js normalize('NFKC')) — full-width // input ('Ａ１') used to match in the App but not in the CLI. BEHAVIOR CHANGE (NFKC alignment), noted.
-const normKey = v => String(v).normalize('NFKC').toLowerCase().replace(/[\s\u00A0\u3000\u200B\u2003]/g, '')
+// renderer's category-uniqueness guard normalizes identically; CLI behavior is unchanged.
+const { normKey } = require('../shared/norm-key.mjs')
 // D19-DOM2 (#4): CLI listing is APP DISPLAY order — taskSort DESC within a day (shared/sort-core.mjs
 // documents the contract: sortMode.js custom mode renders `b.taskSort - a.taskSort`). The old ASC
 // orderBy printed every day's list upside-down; db.js stays generic, the contract lives at this read layer.
@@ -365,17 +366,14 @@ function toggleComplete (input, target, { withSubtasks, completedAt } = {}) {
     }
     const undone = patchTodo(t.taskId, undoPatch, { action: 'undo' })
     // F3 P2 (2026-09-21): undoing an auto-renewed completion used to leave the renewed next instance
-    // behind (the App's undo path removes it), so an accidental `done` on the group's last instance
-    // permanently seeded a phantom tomorrow/future instance that only a manual delete would clear.
-    // The renewal below only fires when the completed row is the group's LAST live instance — so on
-    // undo, remove the instance that renewal created: same rid, nearest later dayStart, still the
-    // group's last, and not itself completed. Any earlier sibling (a genuine older instance the user
-    // un-did) is left alone.
-    // D18-DOM2 (#12): row shape aligned with the renderer's deleteTodo/deleteTodosMany — `delete: true`
-    // (not the numeric `delete: 1`), version 0. `deleting` is a renderer UI-dialect flag that the App
-    // strips before persisting, so the CLI simply never sets it. Known CLI-side differences (not ported):
-    // no critical-backup/writeEventBackup and no view recompute on this channel (the CLI has no
-    // renderer views to recompute; backups land via the purge event snapshot, cli/lib-eventbackup.cjs).
+    // behind — an accidental `done` on the group's last instance permanently seeded a phantom
+    // future instance. The renewal below only fires when the completed row is the group's LAST live
+    // instance, so on undo remove the instance renewal created (same rid, nearest later dayStart,
+    // still last, not itself completed); any earlier sibling is left alone. D18-DOM2 (#12): row
+    // shape aligned with the renderer's deleteTodo/deleteTodosMany — `delete: true` (not 1),
+    // version 0; `deleting` is a UI-dialect flag the App strips, so the CLI never sets it. Known
+    // CLI-side differences (not ported): no critical/writeEvent backup and no view recompute on
+    // this channel (backups land via the purge event snapshot, cli/lib-eventbackup.cjs).
     try {
       if (t.repeatId && t.dayStart) {
         const group = db.call('queryTodos', { deleted: 0, repeatId: t.repeatId })
