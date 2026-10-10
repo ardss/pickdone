@@ -11,6 +11,21 @@ import os from 'node:os'
 import path from 'node:path'
 import readline from 'node:readline'
 import { createRequire } from 'node:module'
+import Module from 'node:module'
+
+// Electron-free harness (d4-c14 pattern, same as att-transfer.test.mjs): the only hard
+// electron dependency on this side's require chain is attachments.js `app.getPath('userData')`
+// (att-transfer's electron-log uses are all try/catch soft deps). This child runs plain Node,
+// so a minimal stub is installed BEFORE any production module loads. userData resolves into the
+// side's OWN isolated data dir (set by `start`) — never the real %APPDATA%.
+let userDataRoot = path.join(os.tmpdir(), 'd9-side-userdata-default')
+const origModuleLoad = Module._load
+Module._load = function (request, parent, isMain) {
+  if (request === 'electron') {
+    return { app: { getPath: k => (k === 'userData' ? userDataRoot : path.join(userDataRoot, k)), isPackaged: false } }
+  }
+  return origModuleLoad.call(this, request, parent, isMain)
+}
 
 const require = createRequire(import.meta.url)
 const db = require('../../../src/main/db.js')
@@ -25,6 +40,7 @@ let node = null
 
 function setup ({ dir, deviceId }) {
   fs.mkdirSync(dir, { recursive: true })
+  userDataRoot = path.join(dir, 'userdata') // electron stub target: isolated per side, never %APPDATA%
   db.init(dir)
   state = {
     db: { call: (op, params) => db.call(op, params) },

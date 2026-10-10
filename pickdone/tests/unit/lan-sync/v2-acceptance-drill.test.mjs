@@ -48,7 +48,12 @@ test('S1 clock skew: a far-future clock on A silently beats a LATER offline edit
     await waitFor(A, B, rows => rows.some(t => t.taskId === 'v2_s1'), 's1 initial row on B')
     // B (correct clock) edits the SAME row genuinely LATER in real time.
     await write(B, [task('v2_s1', 'edited later on B, correct clock', T1)])
-    await waitFor(B, A, rows => rows.some(t => t.taskId === 'v2_s1' && t.taskContent === 'edited later on B, correct clock'), 'B edit back on A')
+    // The edit arrives as a CONFLICT COPY (v1: the skewed live row keeps the id, the loser
+    // is materialized to the recycle bin as <id>-conflict-*), so convergence must be matched
+    // on content across any v2_s1-family row. Matching the live id alone would contradict the
+    // baseline assert below and could never pass on any implementation — fixture bug, not a
+    // semantic relaxation (the skewed-write-wins red light below is unchanged).
+    await waitFor(B, A, rows => rows.some(t => /v2_s1/.test(t.taskId) && t.taskContent === 'edited later on B, correct clock'), 'B edit back on A (live or conflict copy)')
     const rowsA = await readAll(A)
     const row = rowsA.find(t => t.taskId === 'v2_s1')
     // v1 baseline: LWW by updateTime means the year-future stale write wins and the
