@@ -14,15 +14,27 @@
 
 import { cmpHlc } from '../clock/hlc.mjs'
 import { createEnvelope, hashPayload } from '../revision/envelope.mjs'
+import { dvvRelation, localDvv, observeDvv } from './dvv.mjs'
 
 /** Depth bound for ancestry walks: beyond this, classify conservative-concurrent
- *  (same outcome as v1 for ancient rows; payload pruning makes deeper walks moot). */
-const MAX_ANCESTRY_DEPTH = 32
+ *  (same outcome as v1 for ancient rows; payload pruning makes deeper walks moot).
+ *
+ *  S1 (2026-10-10): the old bound of 32 was NOT a safe "ancient rows" cutoff — a
+ *  fully-linked 40-revision chain is an ordinary slow-device edit history, and past
+ *  the bound a PROVABLE late-arriving ancestor degraded to "concurrent", letting a
+ *  skewed fast-clock stamp (physical 9e9) beat the causally-newer slow-clock tip and
+ *  silently demote the true descendant to a conflict copy. Stamp comparison is only
+ *  legitimate for TRUE concurrent revisions, so the walk cap must sit far above any
+ *  realistic per-entity chain (sync retention prunes generations long before 512).
+ *  The walk still stops at unknown parents and at the cap, so cost stays bounded. */
+const MAX_ANCESTRY_DEPTH = 512
 
-export function createRevisionStore(nodeId) {
+export function createRevisionStore(nodeId, { useDvv = false } = {}) {
   if (!nodeId) throw new Error('revision-store: nodeId required')
   return {
     nodeId,
+    useDvv,
+    localDvvCounter: 0,
     /** revisionId -> envelope. Includes foreign revisions received from peers. */
     revisions: new Map(),
     /** entityId -> revisionId of the materialized current state. */
@@ -81,7 +93,8 @@ export function commitLocal(store, { entity, entityId, clock, payload }) {
     const parent = store.revisions.get(pid)
     if (parent) clock.receive(parent.hlc)
   }
-  const envelope = createEnvelope({ entity, entityId, hlc: clock.tick(), parents: parentIds, payload })
+  const dvv = store.useDvv ? localDvv(store, parentIds) : undefined
+  const envelope = createEnvelope({ entity, entityId, hlc: clock.tick(), parents: parentIds, payload, dvv })
   applyEnvelope(store, envelope)
   headsOf(store, entityId).clear()
   pruneSuperseded(store, entityId, envelope.revisionId)
@@ -92,15 +105,20 @@ export function commitLocal(store, { entity, entityId, clock, payload }) {
  *  heads that are superseded stop polluting future multi-parent commits, and
  *  conflict copies of causally-resolved branches stop surfacing in materialized()
  *  (both contracts were stated but unimplemented — adversarial review caught it). */
+function causallyBefore(store, olderId, newerId) {
+  if (isAncestor(store, olderId, newerId)) return true
+  if (!store.useDvv) return false
+  return dvvRelation(store.revisions.get(olderId), store.revisions.get(newerId)) === 'ancestor'
+}
 function pruneSuperseded(store, entityId, currentId) {
   const heads = headsOf(store, entityId)
   for (const h of [...heads]) {
-    if (isAncestor(store, h, currentId)) heads.delete(h)
+    if (causallyBefore(store, h, currentId)) heads.delete(h)
   }
   const conflicts = store.conflictsByEntity.get(entityId)
   if (conflicts) {
     for (const id of [...conflicts.keys()]) {
-      if (isAncestor(store, id, currentId)) conflicts.delete(id)
+      if (causallyBefore(store, id, currentId)) conflicts.delete(id)
     }
   }
 }
@@ -117,6 +135,7 @@ function pruneSuperseded(store, entityId, currentId) {
 export function applyEnvelope(store, envelope) {
   const { entityId, revisionId } = envelope
   if (store.revisions.has(revisionId)) return { status: 'duplicate' }
+  if (store.useDvv) observeDvv(store, envelope)
   store.revisions.set(revisionId, envelope) // immutable insert only (spec §8)
 
   const currentId = store.currentByEntity.get(entityId)
@@ -125,12 +144,14 @@ export function applyEnvelope(store, envelope) {
     return { status: 'applied', action: 'descendant' }
   }
 
-  if (isAncestor(store, revisionId, currentId)) {
+  const current = store.revisions.get(currentId)
+  const order = store.useDvv ? dvvRelation(envelope, current) : 'unknown'
+  if (order === 'ancestor' || (order === 'unknown' && isAncestor(store, revisionId, currentId))) {
     // A late ancestor can complete a previously missing causal chain.
     pruneSuperseded(store, entityId, currentId)
     return { status: 'ignored', action: 'ancestor' }
   }
-  if (isAncestor(store, currentId, revisionId)) {
+  if (order === 'descendant' || (order === 'unknown' && isAncestor(store, currentId, revisionId))) {
     store.currentByEntity.set(entityId, revisionId)
     headsOf(store, entityId).delete(currentId)
     pruneSuperseded(store, entityId, revisionId)
@@ -138,7 +159,6 @@ export function applyEnvelope(store, envelope) {
   }
 
   // Concurrent (case 4): deterministic winner, loser preserved.
-  const current = store.revisions.get(currentId)
   const winner = cmpHlc(envelope.hlc, current.hlc) >= 0 ? envelope : current
   const loser = winner === envelope ? current : envelope
   store.currentByEntity.set(entityId, winner.revisionId)
