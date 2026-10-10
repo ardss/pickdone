@@ -28,6 +28,9 @@ const { SYNC_OPLOG_KEEP, oplogKeepLimit } = require('./db-oplog') // D3 2026-09-
 // Arch review 2026-09-22 rec #1 (twin-door convergence): flush/ingress WRITE sites route // through an injected bus built on top of THIS state's db surface (createBus is exported for // exactly this). The bus's dbCall is state.db.call, so mock-driven unit suites keep their
 // recording surface; the hookless instance preserves the ingress contract (no ls-mirror kick, // no local re-stamping — every write passes { preserveStamp: true }, which means the bus never // MINTS a stamp; an explicit stamp beyond the shared skew window is still clamped, mirroring // clampSkew's ingress normalization — see command-bus.js stampPayload).
 const { createBus } = require('./command-bus')
+// S2 (dvv read seam): pure dotted-version-vector relation from sync-core — CJS require of an
+// .mjs module, the proven pattern this file already uses for sync-core/merge.mjs.
+const { dvvRelation } = require('../../shared/sync-core/causality/dvv.mjs')
 
 // Manifest keys of the buffered bulk commands, in exact flush order (order is load-bearing: // todos first so a same-round todo+plan move lands coherently, tombstone-heavy buffers early). // opOf() throws on a manifest drift instead of silently skipping a buffer.
 const FLUSH_ROUTE_COMMANDS = [ ['todos', 'todo.putMany'],
@@ -864,6 +867,42 @@ function metaSnapshotRows (state) {
   return out
 }
 
+/**
+ * S2 — unified causal RECEIVE seam (classification only, default OFF, zero v1 impact).
+ *
+ * How the causal entries are wired (write AND receive):
+ *   WRITE (already unified): every local business write AND every applied inbound row
+ *   funnels through db.call → db-revisions record() — with the `sync.revisions.v2.dvv`
+ *   sub-flag on, each minted revision carries a persisted dotted version vector. Nothing
+ *   in this file needed to change for the write side.
+ *   RECEIVE (this seam): the future v2 transport receiver classifies an inbound envelope
+ *   against the persisted local DAG via causalInboundRelation(state, envelope) BEFORE
+ *   applying:
+ *     'descendant' → applyRowSafe (fast-forward, v1 pipeline lands it)
+ *     'ancestor'   → skip (stale; watermark may advance)
+ *     'equal'      → skip (duplicate content)
+ *     'unknown'    → fall back to the existing LWW merge (legacy peer / pre-DVV data)
+ *     'concurrent' → applyRowSafe (LWW + conflict copy, the losing branch is preserved)
+ *   Default OFF (sub-flag off): returns { enabled: false, relation: 'unknown' } and the
+ *   v1 LWW pipeline behaves exactly as before. This function is READ-ONLY — it never
+ *   writes, never mutates state, and never touches the transport or the v1 switches.
+ */
+function causalInboundRelation (state, envelope) {
+  try {
+    const st = (state && state.db && state.db.call) ? state.db.call('revisionsFlagState', {}) : null
+    if (!st || !st.on || !st.dvv) return { enabled: false, relation: 'unknown' }
+    const store = state.db.call('revisionsStoreSnapshot', {})
+    if (!store || !store.currentByEntity || !store.revisions) return { enabled: true, relation: 'unknown' }
+    const currentId = envelope && envelope.entityId != null ? store.currentByEntity.get(String(envelope.entityId)) : null
+    const current = currentId ? store.revisions.get(currentId) : null
+    return { enabled: true, relation: dvvRelation(envelope, current) }
+  } catch (e) {
+    // Read-only seam: any failure degrades to 'unknown' (the v1 fallback), never throws.
+    log.warn('[LanSync] causalInboundRelation failed (falling back to LWW):', e && e.message)
+    return { enabled: false, relation: 'unknown' }
+  }
+}
+
 module.exports = {
   SYNCABLE_ENTITIES,
   SECURITY_LOCK_KEY,
@@ -895,4 +934,6 @@ module.exports = {
   // Arch review 2026-09-22 rec #1: the injected-ingress write door (lan-sync-bootstrap routes its manifest-op writes through the same helper so the engine stays one bus-routed surface).
   busFor,
   busWrite,
+  // S2: unified causal receive seam (read-only classification, default-off)
+  causalInboundRelation,
 }

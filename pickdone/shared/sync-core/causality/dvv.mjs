@@ -36,17 +36,41 @@ export function dvvRelation(candidate, current) {
   if (ba && !ab) return 'ancestor'
   return ab && ba ? 'equal' : 'concurrent'
 }
+/** Merge raw DVV contexts (plain objects) into one covering context: max per device.
+ *  Malformed entries are skipped (same tolerance as expand()). Pure: shared by the
+ *  in-memory store (localDvv) and the DB-backed recorder (db-revisions.cjs) so both
+ *  mint dots with IDENTICAL semantics. */
+export function mergeContexts(list) {
+  const context = Object.create(null)
+  for (const c of list) {
+    if (!c || Array.isArray(c) || typeof c !== 'object') continue
+    for (const [device, counter] of Object.entries(c)) {
+      if (!device || !Number.isSafeInteger(counter) || counter < 0) continue
+      context[device] = Math.max(context[device] || 0, counter)
+    }
+  }
+  return context
+}
+
+/** Mint the next dot for `nodeId`: strictly beyond `prevCounter` and every counter the
+ *  context already carries for this device. Pure: the caller owns counter durability. */
+export function nextDvv(nodeId, prevCounter, context) {
+  const merged = mergeContexts([context])
+  const count = Math.max(Number(prevCounter) || 0, merged[nodeId] || 0) + 1
+  return { dot: { deviceId: nodeId, counter: count }, context: { ...merged } }
+}
+
 /** Mint a local context covering all known parent dots (conflict heads included). */
 export function localDvv(store, parentIds) {
-  const context = Object.create(null)
+  const contexts = []
   for (const id of parentIds) {
     const v = expand(store.revisions.get(id))
     if (!v) continue
-    for (const [device, counter] of v) context[device] = Math.max(context[device] || 0, counter)
+    contexts.push(Object.fromEntries(v))
   }
-  const count = Math.max(store.localDvvCounter || 0, context[store.nodeId] || 0) + 1
-  store.localDvvCounter = count
-  return { dot: { deviceId: store.nodeId, counter: count }, context: { ...context } }
+  const dvv = nextDvv(store.nodeId, store.localDvvCounter || 0, mergeContexts(contexts))
+  store.localDvvCounter = dvv.dot.counter
+  return dvv
 }
 /** Never reuse a dot already observed for this device after importing snapshots. */
 export function observeDvv(store, envelope) {
