@@ -22,7 +22,7 @@ async function withRelay (t) {
   const relay = createRelay(memoryStore())
   const server = await startRelayServer(relay, { port: 0 })
   t.after(() => new Promise(r => server.close(r)))
-  return { relay, baseUrl: `http://127.0.0.1:${server.address().port}` }
+  return { relay, baseUrl: `http://127.0.0.1:${server.address().port}`, server }
 }
 
 /** Adapter over a synthetic revision store (no app db — unit scope). */
@@ -86,6 +86,26 @@ test('adapter: enable input validation — account shape, baseUrl scheme, creden
   await assert.rejects(() => adapter.enable({ account: 'a', baseUrl: 'not-a-url' }), /URL/)
   await assert.rejects(() => adapter.enable({ account: 'a', baseUrl: 'ftp://127.0.0.1:1' }), /http/)
   await assert.rejects(() => adapter.enable({ account: 'a', baseUrl: 'http://u:p@127.0.0.1:1' }), /bare origin/)
+})
+
+test('adapter: enrollment secret persists and reaches the client register (closed-registration relays)', async t => {
+  const bodies = []
+  const recordingFetch = async (url, opts) => {
+    if (String(url).endsWith('/v1/device/register')) bodies.push(JSON.parse(opts.body))
+    return global.fetch(url, opts)
+  }
+  const { baseUrl } = await withRelay(t)
+  const { adapter, settings } = makeAdapter(t, { baseUrl, fetchImpl: recordingFetch })
+  const s = await adapter.enable({ account: 'acc-enr', baseUrl, enrollment: 'enr-secret-01' })
+  assert.equal(s.enabled, true)
+  assert.equal(s.hasEnrollment, true, 'enrollment persisted in the machine-local settings door')
+  assert.equal(settings.get('enrollment'), 'enr-secret-01')
+  assert.ok(bodies.length >= 1, 'register captured')
+  assert.equal(bodies[0].enrollment, 'enr-secret-01', 'the register body presents the enrollment secret')
+  // a later enable WITHOUT --enrollment keeps the configured one (re-enable continuity)
+  await adapter.disable()
+  const s2 = await adapter.enable({ account: 'acc-enr', baseUrl })
+  assert.equal(s2.hasEnrollment, true, 're-enable keeps the previously configured enrollment')
 })
 
 test('adapter: remote relay refused unless the env gate is set (production gate)', async t => {

@@ -16,8 +16,10 @@
  */
 
 /** POST JSON with connection:close (win32 keep-alive teardown) + bounded
- *  transport retries. Returns the raw fetch Response. */
-export async function postT (url, body, { secret = null, tries = 3, backoffMs = 60 } = {}) {
+ *  transport retries. Returns the raw fetch Response. tries/backoff tuned to
+ *  outlast the multi-second CPU-saturation windows observed under the full
+ *  suite (concurrency 4 still spikes loopback connects into ECONNRESET). */
+export async function postT (url, body, { secret = null, tries = 5, backoffMs = 150 } = {}) {
   let last = null
   for (let i = 1; i <= tries; i++) {
     try {

@@ -64,9 +64,13 @@ export function chunkPushItems(items, budget = PUSH_CHUNK_BYTES) {
  * @param {{cursor?: number, pushed?: string[]}} [opts.state] durable resume state (ACK/cursor
  *   persistence, spec §18): cursor + already-pushed revisionIds survive process restarts.
  * @param {number} [opts.pushChunkBytes] per-POST serialized budget override (tests / adapters).
+ * @param {string|null} [opts.enrollment] operator-issued enrollment secret (relay CTO sweep B#1):
+ *   relays that set one reject open registration with 403 — the client presents it (timing-safe
+ *   compare server-side) on the register body. Data routes are unaffected.
  */
 export function createRelayClient({ nodeId, account, baseUrl, fetchImpl = fetch, store, dataKey,
-  deviceSecret: initialSecret = null, onDeviceSecret = null, state = null, pushChunkBytes = PUSH_CHUNK_BYTES } = {}) {
+  deviceSecret: initialSecret = null, onDeviceSecret = null, state = null, pushChunkBytes = PUSH_CHUNK_BYTES,
+  enrollment = null } = {}) {
   if (!nodeId || !account || !baseUrl) throw new Error('relay-client: nodeId, account, baseUrl required')
   const s = store || createRevisionStore(nodeId)
   const clock = new Hlc(nodeId)
@@ -82,7 +86,9 @@ export function createRelayClient({ nodeId, account, baseUrl, fetchImpl = fetch,
 
   // register logic hoisted to a closure so post()'s 401-recovery can share it (D25 drill-2)
   async function doRegister() {
-    const res = await post('/v1/device/register', { account, device: nodeId })
+    const body = { account, device: nodeId }
+    if (enrollment) body.enrollment = String(enrollment)
+    const res = await post('/v1/device/register', body)
     const secret = res && res.device && res.device.deviceSecret
     if (typeof secret === 'string' && secret) {
       deviceSecret = secret

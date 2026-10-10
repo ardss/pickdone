@@ -48,6 +48,7 @@ const K = {
   ACCOUNT: 'account',        // relay account id (user-chosen, opaque to the relay schema)
   BASE_URL: 'baseUrl',       // relay origin
   ROOT_KEY: 'rootKey',       // 64-hex account root key → HKDF data key (NEVER leaves the device)
+  ENROLLMENT: 'enrollment',  // operator-issued registration secret (relays with enrollment set reject open registration)
   DEVICE_SECRET: 'deviceSecret', // per-device bearer credential from /v1/device/register
   STATE: 'state',            // JSON {cursor, pushed:[revisionId]} — durable ACK/cursor (spec §18)
 }
@@ -180,6 +181,7 @@ function createRelayAdapter ({
       account: get('ACCOUNT'),
       baseUrl: get('BASE_URL'),
       hasRootKey: !!get('ROOT_KEY'),
+      hasEnrollment: !!get('ENROLLMENT'),
       hasDeviceSecret: !!get('DEVICE_SECRET'),
       registered: !!get('DEVICE_SECRET'),
       cursor: loadPersistedState().cursor,
@@ -238,6 +240,7 @@ function createRelayAdapter ({
         const client = createRelayClient({
           nodeId, account, baseUrl, store, dataKey, fetchImpl,
           deviceSecret: savedSecret,
+          enrollment: get('ENROLLMENT') || null,
           pushChunkBytes,
           state: loadPersistedState(),
           onDeviceSecret: secret => { try { put('DEVICE_SECRET', secret) } catch (e) { if (log.warn) log.warn('[RelaySync] device secret persist failed: ' + (e && e.message)) } },
@@ -313,11 +316,13 @@ function createRelayAdapter ({
 
   /**
    * Enable relay sync for {account, baseUrl} with an E2E root key (generated on first
-   * enable, or injected to simulate a shared-account pairing across devices in tests).
-   * Fail-open on first-round connectivity (a relay that is temporarily down must not block
-   * configuration) but strict on configuration validity — bad input never persists.
+   * enable, or injected to simulate a shared-account pairing across devices in tests)
+   * and an optional operator-issued enrollment secret (required by relays that closed
+   * open registration). Fail-open on first-round connectivity (a relay that is
+   * temporarily down must not block configuration) but strict on configuration
+   * validity — bad input never persists.
    */
-  async function enable ({ account, baseUrl, rootKey } = {}) {
+  async function enable ({ account, baseUrl, rootKey, enrollment } = {}) {
     account = String(account || '').trim()
     baseUrl = String(baseUrl || '').trim()
     if (!ACCOUNT_RE.test(account)) throw new Error('relay-adapter: account must match ' + ACCOUNT_RE.source)
@@ -330,9 +335,11 @@ function createRelayAdapter ({
       throw new Error(`relay-adapter: non-loopback relay refused (${REMOTE_GATE_ENV}=1 unlocks; production gates: TLS + enrollment + key-pairing service are not built yet)`)
     }
     if (rootKey != null && !ROOT_KEY_RE.test(String(rootKey))) throw new Error('relay-adapter: rootKey must be 64 hex chars')
+    if (enrollment != null && String(enrollment).length > 512) throw new Error('relay-adapter: enrollment too long (max 512)')
     const key = rootKey != null ? String(rootKey) : (get('ROOT_KEY') || randomBytes(32).toString('hex'))
     put('ACCOUNT', account)
     put('BASE_URL', baseUrl)
+    if (enrollment != null) put('ENROLLMENT', String(enrollment)) // absent = keep the previously configured one
     put('ROOT_KEY', key)
     put('ENABLED', '1')
     // ensure the v2 revision recorder is recording: the relay transport's payload IS the
