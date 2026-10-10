@@ -28,9 +28,10 @@ const { SYNC_OPLOG_KEEP, oplogKeepLimit } = require('./db-oplog') // D3 2026-09-
 // Arch review 2026-09-22 rec #1 (twin-door convergence): flush/ingress WRITE sites route // through an injected bus built on top of THIS state's db surface (createBus is exported for // exactly this). The bus's dbCall is state.db.call, so mock-driven unit suites keep their
 // recording surface; the hookless instance preserves the ingress contract (no ls-mirror kick, // no local re-stamping — every write passes { preserveStamp: true }, which means the bus never // MINTS a stamp; an explicit stamp beyond the shared skew window is still clamped, mirroring // clampSkew's ingress normalization — see command-bus.js stampPayload).
 const { createBus } = require('./command-bus')
-// S2 (dvv read seam): pure dotted-version-vector relation from sync-core — CJS require of an
-// .mjs module, the proven pattern this file already uses for sync-core/merge.mjs.
-const { dvvRelation } = require('../../shared/sync-core/causality/dvv.mjs')
+// S4 adjudication layer (delete-vs-edit user-visible rulings) + the conflict-surfacing
+// helpers moved out of this file (meta conflict backup trio, S2 causal receive seam) to
+// honor the structure-size ratchet (only-split-never-grow).
+const adjudicate = require('./sync-adjudicate')
 
 // Manifest keys of the buffered bulk commands, in exact flush order (order is load-bearing: // todos first so a same-round todo+plan move lands coherently, tombstone-heavy buffers early). // opOf() throws on a manifest drift instead of silently skipping a buffer.
 const FLUSH_ROUTE_COMMANDS = [ ['todos', 'todo.putMany'],
@@ -81,8 +82,12 @@ function busWrite (state, op, payload) {
   return busFor(state).commitOp(op, payload, { preserveStamp: true })
 }
 
-const META_CONFLICT_BACKUP_CAP = 20
-// MS-collision fix (2026-09-26): process-lifetime monotonic counter mixed into backup-key / // conflict-copy-id suffixes so two mints within the same millisecond can never collide // (Date.now() alone did). Monotonic per process: preserves sort order for the count-based prune.
+// S4/META-BACKUP: META_CONFLICT_BACKUP_CAP + the meta conflict backup trio now live in
+// ./sync-adjudicate.js (size ratchet move); re-exported below for the existing import surface.
+const META_CONFLICT_BACKUP_CAP = adjudicate.META_CONFLICT_BACKUP_CAP
+// MS-collision fix (2026-09-26): process-lifetime monotonic counter for THIS file's
+// conflict-copy-id suffixes (the meta-backup key counter moved with writeMetaConflictBackup;
+// uniqueness is per key namespace, so two counters are equivalent).
 let backupSeq = 0
 // rowContentDiffers lives in sync-apply-content.js (structure-size ratchet, verbatim move):
 const { rowContentDiffers } = require('./sync-apply-content')
@@ -195,52 +200,21 @@ function clampSkew (row) {
 const { hasEquivalentConflictCopy } = require('./sync-apply-content')
 
 /**
- * P1-5: persist one losing meta value under a dated backup key and prune older backups for the
- * same base key beyond META_CONFLICT_BACKUP_CAP. Best-effort: a backup failure must never fail
- * the apply (the LWW winner still lands). Backup keys are machine-local (see the
- * isMachineLocalMetaKey filter) so they never sync back to the peer.
+ * S4: user-visible delete-vs-edit adjudication — thin delegate into ./sync-adjudicate.js.
+ * Flag-gated (double opt-in, default OFF), records the ruling without ever changing the v1
+ * outcome; failures are counted into the round summary, never swallowed, never fatal.
  */
-/** D17: age order for meta-conflict-backup keys of one base key — by PARSED (ts36, seq36), not
- *  raw string order. Within a single millisecond the base-36 counter crosses a digit boundary
- *  (...'y','z','10','11'...) and lexicographic sort ranks '10' BELOW 'z', so the NEWEST backup
- *  sorted as if oldest and the prune deleted the freshest loser. Unparsable/legacy keys sort
- *  oldest (string order among themselves) so they are pruned first, never the parsed newest. */
-function compareMetaBackupKeys (a, b) {
-  const pa = parseMetaBackupKeySuffix(a)
-  const pb = parseMetaBackupKeySuffix(b)
-  if (pa && pb) return (pa.ts - pb.ts) || (pa.seq - pb.seq)
-  if (pa !== pb) return pa ? 1 : -1 // parsed keys are always newer than unparsable ones
-  return String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0
-}
-/** `<prefix><key>.<ts36>-<seq36>` → { ts, seq } (numeric), or null when the suffix does not parse. */
-function parseMetaBackupKeySuffix (k) {
-  const m = /\.([0-9a-z]+)-([0-9a-z]+)$/.exec(String(k))
-  if (!m) return null
-  const ts = parseInt(m[1], 36)
-  const seq = parseInt(m[2], 36)
-  return (Number.isFinite(ts) && Number.isFinite(seq)) ? { ts, seq } : null
+function adjudicateDeleteEditS4 (state, payload) {
+  adjudicate.adjudicateDeleteEditOutcome(state, payload, busWrite)
 }
 
+/**
+ * P1-5: persist one losing meta value under a dated backup key — implementation moved to
+ * ./sync-adjudicate.js (size ratchet, verbatim logic + D17 prune order); shim keeps the
+ * in-file call surface unchanged.
+ */
 function writeMetaConflictBackup (state, key, value) {
-  try {
-    // MS-collision fix (2026-09-26): the key used to be `.<ts36>` alone — two conflict backups
-    // of the SAME base key minted within one millisecond (bulk apply loop) produced identical
-    // keys and the second setMeta silently OVERWROTE the first (the earlier losing value was
-    // lost). A module-level monotonic counter appended after the ts keeps the mint order
-    // (ts36 dominates across milliseconds; the counter orders within one) while making every
-    // key unique. Prune order itself is the PARSED numeric compare above (D17) — the raw string
-    // sort broke at the base-36 counter digit rollover.
-    const ts36 = `${Date.now().toString(36)}-${(backupSeq++).toString(36)}`
-    const backupKey = `${META_CONFLICT_BACKUP_PREFIX}${key}.${ts36}`
-    busWrite(state, 'setMeta', [backupKey, JSON.stringify({ key, value, lostAt: Date.now() })])
-    // Prune: keep only the latest META_CONFLICT_BACKUP_CAP backups per base key.
-    const prefix = `${META_CONFLICT_BACKUP_PREFIX}${key}.`
-    const keys = (state.db.call('listMetaKeys') || []).filter(k => String(k).startsWith(prefix)).sort(compareMetaBackupKeys)
-    for (const old of keys.slice(0, Math.max(0, keys.length - META_CONFLICT_BACKUP_CAP))) {
-      try { busWrite(state, 'deleteMeta', old) } catch { /* prune is best-effort */ }
-    }
-    log.warn('[LanSync] meta LWW conflict on', key, '— loser backed up as', backupKey)
-  } catch (e) { log.warn('[LanSync] meta conflict backup failed for', key, e.message) }
+  adjudicate.writeMetaConflictBackup(state, key, value, busWrite)
 }
 function applyRowInner (state, incoming) {
   if (!incoming || !SYNCABLE_ENTITIES.has(incoming.entity)) return false
@@ -342,8 +316,13 @@ function applyRowInner (state, incoming) {
   // When the local delete is FRESHER than the inbound live edit (deletedAt > updatedAt — the peer
   // authored its edit before our deletion and simply had not seen it), delete-wins keeps the
   // tombstone instead of resurrecting.
+  // S4: this keep used to be completely silent — record the explicit ruling + surface it
+  // (flag-gated; flag off → byte-identical silence).
   if ((entity === 'plan' || entity === 'filter') && localRow && localRow.deleted &&
-      incoming && !incoming.deleted && stampNum(localRow.deletedAt) > stampNum(incoming.updatedAt)) return false
+      incoming && !incoming.deleted && stampNum(localRow.deletedAt) > stampNum(incoming.updatedAt)) {
+    adjudicateDeleteEditS4(state, { entity, incoming, localRow, winner: localRow, source: 'tombstone-keep-guard' })
+    return false
+  }
   // Provenance normalization (protocol v3): increment rows carry author top-level (hydrateRow);
   // SNAPSHOT rows carry it in the payload (allRows data = the full todo payload). Missing = ''.
   if (entity === 'todo' && incoming.author == null) incoming.author = (incoming.data && incoming.data.syncAuthor) || ''
@@ -358,7 +337,13 @@ function applyRowInner (state, incoming) {
     winner = m.row
     conflictCopy = m.conflictCopy
   }
-  if (localRow && winner !== incoming) return false // local version stands
+  // S4: the local version standing over an inbound edit of the OPPOSITE shape (our tombstone
+  // beat their live edit) used to be a silent `return false` — record the ruling first
+  // (flag-gated; same-shape skips are not delete-vs-edit and stay silent).
+  if (localRow && winner !== incoming) {
+    adjudicateDeleteEditS4(state, { entity, incoming, localRow, winner: localRow, source: 'local-stands' })
+    return false // local version stands
+  }
   // Identical-content no-op (prevents apply/push ping-pong):
   //   - LIVE rows: identical content (userId-insensitive) is a no-op.
   //   - BOTH-DEAD rows (2026-09-19 live storm): the local row is already a tombstone, so the
@@ -471,6 +456,11 @@ function applyRowInner (state, incoming) {
       markConflict(state, entity, incoming.id, true)
     }
   }
+  // S4 landing choke: an inbound DELETE landing over our live edit, or an inbound EDIT landing
+  // over our tombstone, used to land silently (where no conflict copy existed). Record the
+  // explicit ruling here — conflictCopySurfaced prevents double-toasting collisions the block
+  // above already surfaced (the durable adjudication record is still written either way).
+  adjudicateDeleteEditS4(state, { entity, incoming, localRow, winner, source: 'landing', conflictCopySurfaced: !!conflictCopy })
   // Write the winner through the regular write ops (re-captured into the local oplog, which is what
   // propagates the acknowledged state back to the peer — idempotent under the same merge rules).
   // Todos/settings/tomato go through the per-segment write buffer: a first sync applies thousands of
@@ -680,8 +670,10 @@ function applyRowSafe (state, incoming) {
 function consumeAppliedRound (state) {
   const a = state.applied
   state.applied = null
-  if (!a || (!a.kinds.size && !a.conflicts.length && !Object.keys(a.settingsPatch).length)) return null
-  return { kinds: [...a.kinds], settingsPatch: a.settingsPatch, conflicts: a.conflicts }
+  if (!a || (!a.kinds.size && !a.conflicts.length && !Object.keys(a.settingsPatch).length && !a.adjudicationFailed)) return null
+  // S4: adjudicationFailed counts adjudication-record write failures this round — the failure
+  // rides the SAME per-round summary as the conflicts (never swallowed, never applied-fatal).
+  return { kinds: [...a.kinds], settingsPatch: a.settingsPatch, conflicts: a.conflicts, adjudicationFailed: a.adjudicationFailed || 0 }
 }
 
 /**
@@ -867,49 +859,16 @@ function metaSnapshotRows (state) {
   return out
 }
 
-/**
- * S2 — unified causal RECEIVE seam (classification only, default OFF, zero v1 impact).
- *
- * How the causal entries are wired (write AND receive):
- *   WRITE (already unified): every local business write AND every applied inbound row
- *   funnels through db.call → db-revisions record() — with the `sync.revisions.v2.dvv`
- *   sub-flag on, each minted revision carries a persisted dotted version vector. Nothing
- *   in this file needed to change for the write side.
- *   RECEIVE (this seam): the future v2 transport receiver classifies an inbound envelope
- *   against the persisted local DAG via causalInboundRelation(state, envelope) BEFORE
- *   applying:
- *     'descendant' → applyRowSafe (fast-forward, v1 pipeline lands it)
- *     'ancestor'   → skip (stale; watermark may advance)
- *     'equal'      → skip (duplicate content)
- *     'unknown'    → fall back to the existing LWW merge (legacy peer / pre-DVV data)
- *     'concurrent' → applyRowSafe (LWW + conflict copy, the losing branch is preserved)
- *   Default OFF (sub-flag off): returns { enabled: false, relation: 'unknown' } and the
- *   v1 LWW pipeline behaves exactly as before. This function is READ-ONLY — it never
- *   writes, never mutates state, and never touches the transport or the v1 switches.
- */
-function causalInboundRelation (state, envelope) {
-  try {
-    const st = (state && state.db && state.db.call) ? state.db.call('revisionsFlagState', {}) : null
-    if (!st || !st.on || !st.dvv) return { enabled: false, relation: 'unknown' }
-    const store = state.db.call('revisionsStoreSnapshot', {})
-    if (!store || !store.currentByEntity || !store.revisions) return { enabled: true, relation: 'unknown' }
-    const currentId = envelope && envelope.entityId != null ? store.currentByEntity.get(String(envelope.entityId)) : null
-    const current = currentId ? store.revisions.get(currentId) : null
-    return { enabled: true, relation: dvvRelation(envelope, current) }
-  } catch (e) {
-    // Read-only seam: any failure degrades to 'unknown' (the v1 fallback), never throws.
-    log.warn('[LanSync] causalInboundRelation failed (falling back to LWW):', e && e.message)
-    return { enabled: false, relation: 'unknown' }
-  }
-}
+// S2 causal receive seam: moved verbatim to ./sync-adjudicate.js (size ratchet) — re-exported
+// below so the bootstrap/test import surface is unchanged.
 
 module.exports = {
   SYNCABLE_ENTITIES,
   SECURITY_LOCK_KEY,
   META_CONFLICT_BACKUP_PREFIX,
   META_CONFLICT_BACKUP_CAP,
-  compareMetaBackupKeys, // D17: exported for unit tests (prune age order)
-  parseMetaBackupKeySuffix,
+  compareMetaBackupKeys: adjudicate.compareMetaBackupKeys, // D17: prune age order (moved, re-exported)
+  parseMetaBackupKeySuffix: adjudicate.parseMetaBackupKeySuffix,
   hasEquivalentConflictCopy, // D18: exported for unit tests (scan-failure = indeterminate)
   scrubMilestoneBlobsFor, // D20-DOMB1: exported for unit tests (sync tombstone milestone scrub)
   // 2026-09-26 poison-row quarantine: where a failed flush parks its dropped rows.
@@ -934,6 +893,6 @@ module.exports = {
   // Arch review 2026-09-22 rec #1: the injected-ingress write door (lan-sync-bootstrap routes its manifest-op writes through the same helper so the engine stays one bus-routed surface).
   busFor,
   busWrite,
-  // S2: unified causal receive seam (read-only classification, default-off)
-  causalInboundRelation,
+  // S2 causal receive seam (moved to ./sync-adjudicate.js, re-exported) + S4 surface.
+  causalInboundRelation: adjudicate.causalInboundRelation,
 }

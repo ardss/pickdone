@@ -37,6 +37,8 @@ const HLC_KEY = 'sync.hlc'
 // S2 DVV sub-flag + persistence surfaces. All DVV state lives behind the base flag:
 // the sub-flag alone never turns anything on.
 const DVV_FLAG_KEY = 'sync.revisions.v2.dvv'
+// S4: delete-vs-edit adjudication sub-flag (user-visible rulings; consumed by sync-adjudicate.js).
+const ADJUDICATE_FLAG_KEY = 'sync.revisions.v2.adjudicate'
 const DVV_COUNTER_KEY = 'sync.dvvCounter'
 const DVV_TABLE = 'sync_revision_dvv'
 
@@ -79,6 +81,11 @@ module.exports = function createRevisionRecorder ({ getDb, log }) {
 
   function dvvFlagEnabled (d) {
     const row = d.prepare('SELECT value FROM settings_rows WHERE key = ?').get(DVV_FLAG_KEY)
+    return !!(row && String(row.value) === '1')
+  }
+
+  function adjudicateFlagEnabled (d) {
+    const row = d.prepare('SELECT value FROM settings_rows WHERE key = ?').get(ADJUDICATE_FLAG_KEY)
     return !!(row && String(row.value) === '1')
   }
 
@@ -414,8 +421,8 @@ module.exports = function createRevisionRecorder ({ getDb, log }) {
 
   return {
     record, list, exportToStore, exportStore, verifyHash,
-    flagEnabled, dvvFlagEnabled, ensureDvvTable, dvvTableExists, dvvState,
-    FLAG_KEY, DVV_FLAG_KEY, DVV_TABLE,
+    flagEnabled, dvvFlagEnabled, adjudicateFlagEnabled, ensureDvvTable, dvvTableExists, dvvState,
+    FLAG_KEY, DVV_FLAG_KEY, ADJUDICATE_FLAG_KEY, DVV_TABLE,
     cmpHlc, prunePayloads, payloadKeep,
   }
 }

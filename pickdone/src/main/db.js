@@ -789,34 +789,9 @@ function call (op, params) {
   return r
 }
 
-// Sync v2 introspection + flag ops (machine-local: deliberately NOT in WRITE_OPS,
-// so flipping the flag is never oplog-captured or synced to peers).
-OPS.revisionsList = p => revisions.list(p && p.entityId, p && p.limit)
-OPS.revisionsFlag = p => {
-  const d = db
-  if (!d || !d.open) throw new Error('db closed')
-  const on = !!(p && p.on)
-  d.prepare('INSERT INTO settings_rows (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
-    .run(revisions.FLAG_KEY, on ? '1' : '0')
-  return { on }
-}
-// S2 DVV: `dvv` is the opt-in sub-flag state (default false) — additive introspection field.
-OPS.revisionsFlagState = () => ({ on: revisions.flagEnabled(db), dvv: revisions.dvvFlagEnabled(db) })
-// S2 DVV sub-flag flip (machine-local like revisionsFlag — sync.* keys never sync to peers).
-// Only meaningful while the base flag is on; flipping it back restores byte-identical legacy
-// recording (dvv data stays on disk but is never attached or consulted).
-OPS.revisionsFlagDvv = p => {
-  const d = db
-  if (!d || !d.open) throw new Error('db closed')
-  const on = !!(p && p.on)
-  d.prepare('INSERT INTO settings_rows (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
-    .run(revisions.DVV_FLAG_KEY, on ? '1' : '0')
-  return { on }
-}
-// S2 unified causal READ seam (main-internal like revisionsList, deliberately NOT in the
-// renderer whitelist): the real sync-core store over the persisted DAG, dvv attached when
-// the sub-flag is on. Read-only — never in WRITE_OPS, so it can never be oplog-captured.
-OPS.revisionsStoreSnapshot = () => revisions.exportStore()
+// Sync v2 revision/DVV/adjudicate introspection + flag ops — cluster moved to
+// db-revisions-ops.js (structure-size ratchet, S2/S4); machine-local, never in WRITE_OPS.
+require('./db-revisions-ops')(OPS, revisions, () => db)
 
 const { WRITE_OPS, isWriteOp } = require('./db-write-ops.cjs')
 syncSchema.registerOps(OPS, WRITE_OPS, oplog)
