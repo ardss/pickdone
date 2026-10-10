@@ -25,7 +25,7 @@
            (RecycleBinView rc-pick-btn precedent) -->
       <span class="qa-cal" role="button" tabindex="0" :title="$t('statsD.QuickAdd.selectDate')"
             :aria-label="$t('statsD.QuickAdd.selectDate')"
-            @keydown.enter.prevent="openCal">
+            @keydown.enter.prevent="openCal" @click.stop="openCal">
         <span class="todo-input-add__calender"></span>
         <el-date-picker ref="calPick" class="qa-cal-picker" size="small" value-format="x" type="date"
                         :aria-label="$t('statsD.QuickAdd.selectDate')"

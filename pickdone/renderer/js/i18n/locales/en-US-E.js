@@ -95,6 +95,7 @@ export default {
       "closeToTrayLabel": "Close button minimizes to tray:",
       "closeToTrayHint": "On: × minimizes to tray (reminders keep running). Off: × quits the app",
       "hardwareAccelLabel": "Hardware acceleration (restart required):",
+      "hwAccelRestartTip": "Takes effect after restarting the app",
       "parentChecksSubtasksLabel": "Completing parent checks subtasks:",
       "languageLabel": "Language:",
       "accountSection": "Account",

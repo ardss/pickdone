@@ -95,6 +95,7 @@ export default {
       "closeToTrayLabel": "关闭按钮最小化到托盘：",
       "closeToTrayHint": "开启：点 × 最小化到托盘（提醒照常）；关闭：点 × 直接退出应用",
       "hardwareAccelLabel": "硬件加速（重启生效）：",
+      "hwAccelRestartTip": "生效需重启应用",
       "parentChecksSubtasksLabel": "完成父任务时连带勾选子任务：",
       "languageLabel": "界面语言：",
       "accountSection": "账户",

@@ -36,7 +36,7 @@
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.launchAtStartupLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.runWhenComputerStart" @change="v=>set({runWhenComputerStart:v})"/></div></div>
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.hideOnLaunchLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.hideMainWindowOnStartup" @change="v=>set({hideMainWindowOnStartup:v})"/></div></div>
               <div class="form-item"><span class="form-item__label" :title="$t('statsE.SettingsModal.closeToTrayHint')">{{ $t('statsE.SettingsModal.closeToTrayLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.closeActionMinimize !== false" :aria-label="$t('statsE.SettingsModal.closeToTrayLabel')" @change="v=>set({closeActionMinimize:v})"/></div></div>
-              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.hardwareAccelLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.enableHardwareAcceleration" @change="v=>set({enableHardwareAcceleration:v})"/></div></div>
+              <div class="form-item"><span class="form-item__label" :title="$t('statsE.SettingsModal.hwAccelRestartTip')">{{ $t('statsE.SettingsModal.hardwareAccelLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.enableHardwareAcceleration" @change="v=>set({enableHardwareAcceleration:v})"/></div></div>
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.parentChecksSubtasksLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.isCompleteWithSubtasks" @change="v=>set({isCompleteWithSubtasks:v})"/></div></div>
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.languageLabel') }}</span>
                 <div class="form-item__control">
@@ -500,6 +500,10 @@ export default {
     renameUser (v) {
       const name = String(v || '').trim()
       if (!name) return
+      // [fix 2026-10-09] blur on an untouched field must not toast "updated" — same-value renames
+      // are a no-op (the watcher also re-echoes nameDraft from the store)
+      const u = this.$store.state.auth.user || {}
+      if (name === String(u.userName || '')) return
       this.$store.commit('auth/patchUser', { userName: name, userNameDefault: false, userRenamed: true })
       this.$message.success(this.$t('statsE.SettingsModal.usernameUpdatedMsg'))
     },

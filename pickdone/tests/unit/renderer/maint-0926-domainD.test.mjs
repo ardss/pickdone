@@ -150,8 +150,8 @@ test('[D-toasts] batch-delete failure shows an error toast (was console-only)', 
 
 test('[A3] date-less template: Generate disabled, generate() guards before persisting, preview shows -', async () => {
   const src = read('renderer/js/components/RepeatModal.vue')
-  assert.match(src, /:disabled="!templateTodo \|\| !templateTodo\.todoTime"/,
-    'the Generate button is disabled when the template has no date')
+  assert.match(src, /:disabled="!templateTodo \|\| !templateTodo\.todoTime \|\| previewCount === 0"/,
+    'the Generate button is disabled when the template has no date (or expands to zero instances)')
   const gen = src.match(/async generate \(\) \{[\s\S]*?\n {2}\},/)
   assert.ok(gen, 'generate method found')
   const guardIdx = gen[0].indexOf('noBaseDate')

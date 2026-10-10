@@ -93,8 +93,8 @@
             <div class="tfr-form-row">
               <label class="tfr-form-label">{{ $t('statsD.TomatoFocusRecord.restMinutes') }}</label>
               <div style="display:flex;gap:12px;align-items:center">
-                <el-slider v-model="addForm.resetTime" :min="1" :max="30" style="flex:1"/>
-                <el-input-number v-model="addForm.resetTime" :min="1" :max="30" size="small" style="width:110px"/>
+                <el-slider v-model="addForm.resetTime" :min="0" :max="30" style="flex:1"/>
+                <el-input-number v-model="addForm.resetTime" :min="0" :max="30" size="small" style="width:110px"/>
               </div>
             </div>
             <div class="tfr-form-row">
@@ -289,6 +289,19 @@ export default {
       if (!validManualStartTs(this.addForm.startTs)) {
         this.$message.error(this.$t('statsD.TomatoFocusRecord.invalidStartTime'))
         return
+      }
+      // [fix 2026-10-09] a backfilled record for TODAY may not end in the future (DayRail's guard
+      // already enforces this for its own path): the whole interval (start + focus) must be in
+      // the past, otherwise the ledger books focus time that has not happened yet
+      {
+        const f = this.addForm
+        const end = f.startTs + f.focusTime * 60000
+        const now = Date.now()
+        const sameDay = dayjs(f.startTs).format(FMT.date) === dayjs().format(FMT.date)
+        if (sameDay && end > now) {
+          this.$message.error(this.$t('statsD.TomatoFocusRecord.invalidStartTime'))
+          return
+        }
       }
       this.addSaving = true
       try {

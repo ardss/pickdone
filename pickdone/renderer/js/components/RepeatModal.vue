@@ -93,8 +93,10 @@
           <!-- [D15-A6] an undated base event keeps 生成 dead with no explanation — surface the same
                reason generate() would reject with, BEFORE the click (the old hint only fired on click) -->
           <span v-if="!templateTodo || !templateTodo.todoTime" class="rm-base-warn">{{ $t('statsD.RepeatModal.noBaseDate') }}</span>
+          <!-- [fix 2026-10-09] a rule that expands to zero instances (all weekdays unchecked / no monthly dates) keeps Generate dead with an inline reason, instead of toasting 已生成 0 个 and overwriting the saved defaults -->
+          <span v-else-if="effectiveDates.length === 0" class="rm-base-warn">{{ $t('statsD.RepeatModal.noDates') }}</span>
           <el-button size="small" :disabled="generating" @click="close">{{ $t('statsD.RepeatModal.cancel') }}</el-button>
-          <el-button size="small" type="primary" :loading="generating" :disabled="!templateTodo || !templateTodo.todoTime" @click="generate">{{ generating && genCancelled ? $t('statsD.RepeatModal.cancelling') : $t('statsD.RepeatModal.generate') }}</el-button>
+          <el-button size="small" type="primary" :loading="generating" :disabled="!templateTodo || !templateTodo.todoTime || previewCount === 0" @click="generate">{{ generating && genCancelled ? $t('statsD.RepeatModal.cancelling') : $t('statsD.RepeatModal.generate') }}</el-button>
         </div>
       </div>
     </div>
@@ -191,6 +193,10 @@ export default {
         this.$message.warning(this.$t('statsD.RepeatModal.noBaseDate'))
         return
       }
+      // [fix 2026-10-09] zero-instance rules (no weekdays / no monthly dates) must not persist the
+      // rule and toast "generated 0" — block before any persistence (defence in depth vs. the
+      // disabled Generate button)
+      if (this.effectiveDates.length === 0) return
       this.generating = true
       this.genCancelled = false
       let dates = [] // hoisted: the catch below reports against it even when the try body throws early

@@ -133,7 +133,7 @@ test('[A2] toggleEdit commits the previous dirty draft through the same save pat
   const iCommit = body.indexOf('this.commitDraftIfDirty()')
   const iAssign = body.indexOf('this.editingId = r.tomatoId')
   assert.ok(iCommit > -1 && iCommit < iAssign, 'the dirty-draft commit runs BEFORE the switch')
-  assert.ok(/commitDraftIfDirty \(\) \{[\s\S]{0,900}this\.saveEdit\(\)/.test(src), 'the dirty draft is committed via saveEdit (the editor-confirm save path)')
+  assert.ok(/commitDraftIfDirty \(\) \{[\s\S]{0,900}this\.saveEdit\(true\)/.test(src), 'the dirty draft is committed via saveEdit(auto) (the editor-confirm save path, quiet autoSaved toast)')
   assert.ok(/Math\.round\(orig\.startMin\) === d\.startMin && orig\.dur === d\.dur && orig\.rest === d\.rest && orig\.abandoned === d\.abandoned/.test(src),
     'dirty check compares all four editable fields against the record')
   assert.ok(/if \(!d \|\| d\.create\) return[\s\S]{0,200}const orig = this\.records\.find/.test(src.replace(/\r/g, '')) || /commitDraftIfDirty \(\) \{[\s\S]{0,200}d\.create[\s\S]{0,200}records\.find/.test(src),

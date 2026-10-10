@@ -209,7 +209,8 @@ export default {
       "previewSuffix": "",
       "generated": "Repeat instances generated",
       "truncated": "(partial)",
-      "noBaseDate": "This task has no date — set a date on the task before generating a repeat series"
+      "noBaseDate": "This task has no date — set a date on the task before generating a repeat series",
+      "noDates": "This rule creates no instances — pick weekdays or dates first"
 
     },
     "RepeatDeleteModal": {

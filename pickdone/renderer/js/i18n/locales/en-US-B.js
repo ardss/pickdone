@@ -65,6 +65,7 @@ export default {
       "memorial": "Anniversary",
       "add": "Add",
       "nameAndDateRequired": "Please fill in the name and date",
+      "habitNameRequired": "Please enter a habit name",
       "addedToast": "Habit \"{n}\" created",
       "momentAddedToast": "Moment \"{n}\" added",
       "daysAgo": "{n} days ago",

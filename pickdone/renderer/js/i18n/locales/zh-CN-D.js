@@ -209,7 +209,8 @@ export default {
       "previewSuffix": "",
       "generated": "已生成重复实例",
       "truncated": "（仅展示部分）",
-      "noBaseDate": "该任务没有日期——请先为任务设置日期，再生成重复系列"
+      "noBaseDate": "该任务没有日期——请先为任务设置日期，再生成重复系列",
+      "noDates": "当前规则不会生成任何实例，请先选择周几或日期"
 
     },
     "RepeatDeleteModal": {

@@ -64,6 +64,7 @@ export default {
       memorial: '纪念日',
       add: '添加',
       nameAndDateRequired: '填写名称和日期',
+      habitNameRequired: '请填写习惯名称',
       addedToast: '已创建习惯「{n}」',
       momentAddedToast: '已添加时刻「{n}」',
       daysAgo: '{n} 天前',

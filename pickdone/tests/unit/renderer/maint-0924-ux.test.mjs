@@ -32,7 +32,7 @@ test('A3 MatrixGrid: Ctrl+1..4 keyboard quadrant moves reuse the moveQuadrant mo
   const src = read('renderer/js/components/MatrixGrid.vue')
   for (const n of [1, 2, 3, 4]) assert.match(src, new RegExp(`@keydown\\.ctrl\\.${n}\\.prevent="kbdQuadrant\\(t, ${n - 1}\\)"`))
   assert.match(src, /kbdQuadrant \(t, qi\) \{[\s\S]*?QUADRANTS\[qi\]/, 'kbd path resolves the same QUADRANTS table')
-  assert.match(src, /dropOn \(q\) \{[\s\S]*?this\.moveQuadrant\(t, q\)/, 'drag path funnels into moveQuadrant')
+  assert.match(src, /dropOn \(q, e\) \{[\s\S]*?this\.moveQuadrant\(t, q\)/, 'drag path funnels into moveQuadrant (cross-view drops resolve the task from dataTransfer)')
   assert.match(src, /moveQuadrant \(t, q\) \{[\s\S]*?moveWithUndo\(this/, 'both paths share the moveWithUndo exit')
   assert.match(src, /aria-keyshortcuts="Control\+1 Control\+2 Control\+3 Control\+4"/, 'shortcuts announced to AT')
   assert.match(src, /kbdHint/, 'title carries the keyboard hint key')
