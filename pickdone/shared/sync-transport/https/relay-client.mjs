@@ -52,12 +52,25 @@ export function chunkPushItems(items, budget = PUSH_CHUNK_BYTES) {
  * @param {string} opts.baseUrl relay origin, e.g. http://127.0.0.1:58480
  * @param {typeof fetch} [opts.fetchImpl] injectable for tests
  * @param {object} [opts.store] existing revision store (attach mode); created when omitted
+ * @param {string|null} [opts.deviceSecret] previously-minted bearer credential to ATTACH (durable
+ *   restart path): the client presents it on every post WITHOUT re-registering — a blind
+ *   re-register against a relay that still holds the device row is a 409 (secret-rotation
+ *   guard, sync-relay registerDevice), which would lock the device out. Only a 401 (relay
+ *   lost its registry) falls back to re-registration below.
+ * @param {(secret: string) => void} [opts.onDeviceSecret] called on EVERY secret capture
+ *   (initial register + 401 recovery re-register) so a durable host can persist it — the
+ *   401-recovery mint used to be invisible to callers, so the rotated secret died with the
+ *   process and every restart re-registered (409 against the still-populated row).
+ * @param {{cursor?: number, pushed?: string[]}} [opts.state] durable resume state (ACK/cursor
+ *   persistence, spec §18): cursor + already-pushed revisionIds survive process restarts.
+ * @param {number} [opts.pushChunkBytes] per-POST serialized budget override (tests / adapters).
  */
-export function createRelayClient({ nodeId, account, baseUrl, fetchImpl = fetch, store, dataKey } = {}) {
+export function createRelayClient({ nodeId, account, baseUrl, fetchImpl = fetch, store, dataKey,
+  deviceSecret: initialSecret = null, onDeviceSecret = null, state = null, pushChunkBytes = PUSH_CHUNK_BYTES } = {}) {
   if (!nodeId || !account || !baseUrl) throw new Error('relay-client: nodeId, account, baseUrl required')
   const s = store || createRevisionStore(nodeId)
   const clock = new Hlc(nodeId)
-  const cursorState = { cursor: 0, pushed: new Set() }
+  const cursorState = { cursor: Number(state && state.cursor) || 0, pushed: new Set((state && state.pushed) || []) }
 
   // Per-device bearer credential (server: register is the only unauthenticated route; every data
   // route demands 'Authorization: Bearer <deviceSecret>' — b962d54c). The client half of the same
@@ -65,6 +78,7 @@ export function createRelayClient({ nodeId, account, baseUrl, fetchImpl = fetch,
   // presents it. A client that registered but stayed header-less could never sync (401 on the
   // first pull) — the auth feature was shipped server-only.
   let deviceSecret = null
+  if (initialSecret) deviceSecret = String(initialSecret)
 
   // register logic hoisted to a closure so post()'s 401-recovery can share it (D25 drill-2)
   async function doRegister() {
@@ -72,6 +86,7 @@ export function createRelayClient({ nodeId, account, baseUrl, fetchImpl = fetch,
     const secret = res && res.device && res.device.deviceSecret
     if (typeof secret === 'string' && secret) {
       deviceSecret = secret
+      if (typeof onDeviceSecret === 'function') { try { onDeviceSecret(secret) } catch { /* a persist hook must never break the wire path */ } }
       // D25 drill-2: re-registration only happens when the relay lost its device registry —
       // i.e. its whole store (seq included) may have restarted. A cursor/pushed-set minted
       // against the OLD store would suppress re-push (everything looks acked) and skip pulls
@@ -95,7 +110,14 @@ export function createRelayClient({ nodeId, account, baseUrl, fetchImpl = fetch,
       await doRegister()
       return post(path, body, true)
     }
-    if (!res.ok) throw new Error(`relay ${path} -> ${res.status}`)
+    if (!res.ok) {
+      // status-bearing errors let durable hosts classify retryable (5xx/429/network-throw)
+      // vs permanent (4xx: 409 secret-rotation guard, 413 oversize...) failures — a caller
+      // that cannot distinguish them either retries forever on a 409 or gives up on a blip.
+      const e = new Error(`relay ${path} -> ${res.status}`)
+      e.status = res.status
+      throw e
+    }
     return res.json()
   }
 
@@ -124,7 +146,7 @@ export function createRelayClient({ nodeId, account, baseUrl, fetchImpl = fetch,
       // Per-chunk marking keeps the same invariant per chunk: only the accepted chunk's ids
       // enter the pushed-set; a failed chunk's revisions re-push next round.
       if (items.length) {
-        for (const chunk of chunkPushItems(items)) {
+        for (const chunk of chunkPushItems(items, pushChunkBytes)) {
           await post('/v1/sync/push', { account, device: nodeId, items: chunk.items })
           for (const id of chunk.ids) cursorState.pushed.add(id)
         }
@@ -181,6 +203,9 @@ export function createRelayClient({ nodeId, account, baseUrl, fetchImpl = fetch,
     },
     register: doRegister,
     materialized() { return materializedAll(s) },
+    /** Durable-state introspection for ACK/cursor persistence (spec §18): the host snapshots
+     *  this AFTER a successful round and seeds it back via the `state` option on restart. */
+    state() { return { cursor: cursorState.cursor, pushed: [...cursorState.pushed] } },
 
     /**
      * Snapshot upload (spec §22/§23): the entity's CURRENT revision envelope per

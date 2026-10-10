@@ -31,6 +31,22 @@ handlers.getMetaMany = (keys) => {
   })
 }
 
+/* Relay sync lifecycle ops (2026-10-10, src/main/relay-sync-adapter.js via
+ * relay-sync-bootstrap.initRelaySync): registered DYNAMICALLY at init; these STATIC
+ * redirectors exist so db-sync-ops.dispatch stays the single op surface for main/CLI
+ * callers (db.js carries no relay delegates this slice — its size ratchet is full, and
+ * the renderer whitelist rows come with the Device Center UI follow-up). dispatch()
+ * checks `handlers` first, so these MUST redirect to the dynamic layer, never shadow it:
+ * before initRelaySync every dispatch throws — relay is OFF by default, same contract as
+ * the LAN sync ops above. */
+for (const op of ['relayGetSettings', 'relaySetEnabled', 'relayGetStatus', 'relaySyncNow', 'relayForget']) {
+  handlers[op] = p => {
+    const fn = dynamicHandlers[op]
+    if (!fn) throw new Error('[db-sync-ops] relay op unavailable (relay sync not initialized): ' + op)
+    return fn(p)
+  }
+}
+
 module.exports = {
   /** Register/override the sync op handlers (called once from lan-sync-bootstrap.initLanSync). */
   register (map) { Object.assign(dynamicHandlers, map) },

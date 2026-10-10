@@ -84,12 +84,23 @@ function main () {
   let files
   if (args.includes('--staged')) {
     const { execFileSync } = require('child_process')
-    const out = execFileSync('git', ['diff', '--cached', '--name-only', '--diff-filter=ACM'], { cwd: ROOT, encoding: 'utf8' })
+    // git executes hooks with GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE injected; with GIT_DIR set,
+    // `rev-parse --show-toplevel` resolves against the hook's cwd (relay/pickdone) instead of
+    // the real worktree root, so every joined path missed and the gate refused (caught live in
+    // the relay worktree, 2026-10-10). Strip the injected git env for BOTH calls: git then
+    // discovers the repo upward from cwd (pickdone → worktree .git), toplevel stays truthful.
+    const gitEnv = () => {
+      const e = { ...process.env }
+      delete e.GIT_DIR; delete e.GIT_WORK_TREE; delete e.GIT_INDEX_FILE
+      return e
+    }
+    const git = args2 => execFileSync('git', args2, { cwd: ROOT, encoding: 'utf8', env: gitEnv() })
+    const out = git(['diff', '--cached', '--name-only', '--diff-filter=ACM'])
     // git prints paths relative to the REPO toplevel, which is NOT this dir (pickdone/ nests
     // inside the repo root): resolving them against ROOT silently matched nothing and the
     // staged gate checked ZERO files for its whole life (the 2026-10-10 ratchet-red-on-main
     // root cause). Resolve against the toplevel and refuse to fake-green on a mismatch.
-    const top = execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: ROOT, encoding: 'utf8' }).trim()
+    const top = git(['rev-parse', '--show-toplevel']).trim()
     const names = out.split('\n').filter(Boolean)
     files = names.map(f => path.join(top, f)).filter(f => fs.existsSync(f))
     if (!files.length && names.length) {
