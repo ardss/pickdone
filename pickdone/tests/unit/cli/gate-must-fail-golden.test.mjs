@@ -23,6 +23,18 @@ const CLI = path.join(import.meta.dirname, '../../../cli')
 const FIX_ROOT = path.join(import.meta.dirname, '../../../.tmp-gate-golden')
 const madeDirs = []
 
+// Git never leaks between the real checkout and a fixture (2026-10-11 incident): git runs
+// pre-commit HOOKS with GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE pointing at the REAL repo.
+// A fixture `git init` under that inherited env re-initializes the REAL gitdir regardless of
+// cwd, and its `git add -A && git commit -qm init` then lands a tree-wiping "init" commit on
+// the real branch — this shipped two of them today. Scrub EVERY git pointer for all child
+// processes (fixture commits AND spawned gates) so fixtures are always their own repo.
+const GIT_SAFE_ENV = (() => {
+  const e = { ...process.env }
+  for (const k of Object.keys(e)) { if (/^GIT_/i.test(k)) delete e[k] }
+  return e
+})()
+
 function mkTree (name) {
   const root = fs.mkdtempSync(FIX_ROOT + '-' + name + '-')
   madeDirs.push(root)
@@ -36,14 +48,32 @@ function mkTree (name) {
 }
 
 function runGate (script, root, args = [], extraEnv = {}) {
-  const env = { ...process.env, GATE_ROOT: root, ...extraEnv }
+  const env = { ...GIT_SAFE_ENV, GATE_ROOT: root, ...extraEnv }
   delete env.CSS_FREEZE_OFF // freeze-gate self-test needs the gate live
   const r = spawnSync(process.execPath, [path.join(CLI, script), ...args], { env, encoding: 'utf8' })
   return { code: r.status, out: (r.stdout || '') + (r.stderr || '') }
 }
 
 afterEach(() => {
-  for (const d of madeDirs.splice(0)) { try { fs.rmSync(d, { recursive: true, force: true }) } catch { /* next run cleans via .tmp-* */ } }
+  for (const d of madeDirs.splice(0)) { try { fs.rmSync(d, { recursive: true, force: true }) } catch { /* next run cleans via .tmp-* */ }
+  }
+})
+
+test('GOLDEN harness hygiene: the fixture env carries NO git pointers (hook GIT_DIR leak pin)', () => {
+  // Pin for the 2026-10-11 double "init" tree-wipe: under a pre-commit hook the
+  // inherited env points GIT_* at the REAL repo; one leaked key turned a fixture
+  // `git init` into a re-init of the real gitdir. If this ever goes red, a new
+  // GIT_* leak slipped back into the child-process env.
+  const poisoned = { ...process.env, GIT_DIR: 'D:/definitely/not/a/repo/.git', GIT_WORK_TREE: 'D:/definitely/not/a/repo', GIT_INDEX_FILE: 'D:/definitely/not/a/repo/index' }
+  const keys = Object.keys(poisoned).filter(k => /^GIT_/i.test(k))
+  assert.ok(keys.length >= 3, 'sanity: the poisoned env actually carries GIT_* keys')
+  const scrubbed = (() => {
+    const e = { ...poisoned }
+    for (const k of Object.keys(e)) { if (/^GIT_/i.test(k)) delete e[k] }
+    return e
+  })()
+  assert.deepEqual(Object.keys(scrubbed).filter(k => /^GIT_/i.test(k)), [], 'scrubbed env must carry zero GIT_* keys')
+  assert.equal(scrubbed.PATH, process.env.PATH, 'scrubbing only removes git pointers, not the rest of the env')
 })
 
 test('GOLDEN file-size: a file past its per-dir error cap is red; within it is green', () => {
@@ -123,12 +153,12 @@ test('GOLDEN css-freeze: a grown frozen global css is red; a shrunk/equal one is
   const mk = (name) => {
     const { root, write } = mkTree(name)
     write('pickdone/assets/css/theme-dark.css', '.a { color: red; }\n')
-    execSync('git init -q && git config user.email t@t && git config user.name t && git add -A && git commit -qm init', { cwd: root, stdio: 'ignore' })
+    execSync('git init -q && git config user.email t@t && git config user.name t && git add -A && git commit -qm init', { cwd: root, env: GIT_SAFE_ENV, stdio: 'ignore' })
     return root
   }
   const bad = mk('cf-bad')
   fs.appendFileSync(path.join(bad, 'pickdone/assets/css/theme-dark.css'), '.b { color: red; }\n')
-  execSync('git add -A', { cwd: bad, stdio: 'ignore' }) // gate compares the STAGED version first — growth must be staged to be seen
+  execSync('git add -A', { cwd: bad, env: GIT_SAFE_ENV, stdio: 'ignore' }) // gate compares the STAGED version first — growth must be staged to be seen
   const rb = runGate('check-css-freeze.mjs', bad)
   assert.equal(rb.code, 1, 'must fail on frozen-file growth: ' + rb.out)
 

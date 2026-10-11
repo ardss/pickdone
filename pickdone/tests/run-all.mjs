@@ -142,9 +142,35 @@ const RUNNER_ARGS = ['--test', '--test-force-exit', `--test-timeout=${TEST_TIMEO
     ? ['--test-reporter=spec', '--test-reporter-destination=stderr']
     : [])]
 
+
+// Exact-set glob compaction for Windows' 32k spawn argv ceiling.
+// Only collapse a directory/extension group when the glob matches exactly the discovered files;
+// excluded fixtures and suite-filtered files must never slip into the runner.
+function runnerFileArgs () {
+  const groups = new Map()
+  for (const file of files) {
+    const ext = TEST_EXTS.find(e => file.endsWith(e))
+    const folder = path.dirname(file)
+    const key = folder + '\0' + ext
+    if (!groups.has(key)) groups.set(key, { folder, ext, entries: [] })
+    groups.get(key).entries.push(file)
+  }
+  const args = []
+  for (const { folder, ext, entries } of groups.values()) {
+    const matches = readdirSync(folder).filter(n => n.endsWith(ext))
+    const expected = new Set(entries.map(f => path.basename(f)))
+    if (entries.length >= 2 && matches.length === expected.size && matches.every(n => expected.has(n))) {
+      args.push(path.relative(appRoot, folder).split(path.sep).join('/') + '/*' + ext)
+    } else {
+      args.push(...entries.map(f => path.relative(appRoot, f)))
+    }
+  }
+  return args
+}
+
 function spawnRunner () {
   return spawnSync(process.execPath, [...RUNNER_ARGS,
-    ...forwardArgs, ...files.map(f => path.relative(appRoot, f))],
+    ...forwardArgs, ...runnerFileArgs()],
   // Windows caps a spawned command line at ~32k chars: with ~350 discovered files, ABSOLUTE
   // paths (K:\...\pickdone\tests\...) blow past it and spawnSync fails with ENAMETOOLONG —
   // exit 1 with ZERO TAP output, which the summary gate could only read as a mystery red

@@ -115,7 +115,10 @@ test('P2c: peerUnpairedByRemote maps lastError markers to the dedicated state', 
 
 test('P2c: unpaired card renders dedicated copy and hides the Unpair button (both locales)', () => {
   const vue = read('renderer/js/components/settings/SettingsSyncTab.vue')
-  assert.match(vue, /v-if="isUnpairedByRemote\(p\)"/)
+  // 2026-10-10 work-package C: the card now goes through the structured peerStatusInfo mapper;
+  // isUnpairedByRemote(p) stays the gating method but reads peerState instead of lastError regex.
+  assert.match(vue, /v-if="peerStatusInfo\(p\)\.labelKey === 'sync\.unpairedByRemote'"/, 'dedicated unpaired status line')
+  assert.match(vue, /isUnpairedByRemote \(p\) \{ return this\.peerStatusInfo\(p\)\.labelKey === 'sync\.unpairedByRemote' \}/)
   assert.match(vue, /v-if="!isUnpairedByRemote\(p\)".*askUnpair/, 'unpair button hidden for zombie peer')
   for (const loc of ['renderer/js/i18n/zh-CN.js', 'renderer/js/i18n/en-US.js']) {
     const s = read(loc)

@@ -50,7 +50,7 @@ export function hashPayload(payload, ignore = CONTENT_IGNORE) {
  * Mint a revision envelope. `hlc` is the author's stamp for this event; parents
  * are the revisionIds this revision supersedes ([] for an entity's first revision).
  */
-export function createEnvelope({ entity, entityId, hlc, parents = [], payload }) {
+export function createEnvelope({ entity, entityId, hlc, parents = [], payload, dvv }) {
   if (!entity || !entityId) throw new Error('envelope: entity and entityId required')
   if (!hlc || typeof hlc.physical !== 'number' || !hlc.nodeId) throw new Error('envelope: hlc stamp required')
   const payloadHash = hashPayload(payload)
@@ -70,6 +70,7 @@ export function createEnvelope({ entity, entityId, hlc, parents = [], payload })
     parents: [...parents],
     payloadHash,
     payload,
+    ...(dvv ? { dvv } : {}),
   }
 }
 

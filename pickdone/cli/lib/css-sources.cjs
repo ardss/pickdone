@@ -2,7 +2,7 @@
  * 共享 CSS 源收集器(2026-09-07 反模式审查收敛:此前 token 门禁/hover 门禁/structure 测试各自
  * 手写 .vue <style> 提取,行为分叉——行扫描版遇 </style> 同行即错,regex 版不识注释)。
  * 唯一实现:全局 assets/css 两件 + renderer/js 全部 .vue 的 <style> 块(非 scoped 契约由 structure 测试把守)。
- * 用法(CJS): const { cssSources } = require('./lib/css-sources.cjs')
+ * Imported by the CLI library; avoid an in-file self-require example.
  *   cssSources() -> [{ rel, css }]  // css 为该文件全部样式 CSS 的拼接(全局文件原样)
  */
 const fs = require('fs')

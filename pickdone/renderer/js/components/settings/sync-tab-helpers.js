@@ -10,7 +10,11 @@
 function peerDotClass (peer, now = null) {
   const nowMs = now || Date.now()
   // 2026-09-27 sync wave: a 'flush-stalled' peer is a persistent fault (budget of consecutive // flush-failed rounds, not a transient lastError) — the dot stays red until main clears the // state; it must NOT age out via the 5min lastError window.
-  if (peer && peer.peerState === 'flush-stalled') return 'sync-dot--err'
+  // 2026-10-10 work-package C: structured peerState wins where it exists (see peerStatusInfo).
+  if (peer && peer.peerState) {
+    const s = String(peer.peerState)
+    if (s === 'unpaired' || s === 'oversized-segment' || s === 'hibernating' || s === 'flush-stalled') return 'sync-dot--err'
+  }
   if (peer && peer.lastError && peer.lastErrorAt && (nowMs - peer.lastErrorAt) < 5 * 60 * 1000) return 'sync-dot--err'
   return peer && peer.online ? 'sync-dot--ok' : 'sync-dot--off'
 }
@@ -94,8 +98,45 @@ function peerDisplayName (peer) {
   if (!peer) return ''
   return peer.alias || peer.deviceName || peer.name || peer.deviceId || ''
 }
+/** 2026-10-10 work-package C (device/conflict visibility): ONE structured state mapper for
+ *  the Device Center peer card. Main stamps `peerState` ∈
+ *  'unpaired'|'oversized-segment'|'flush-stalled'|'hibernating'|'error'|'ok' plus `nextDialAt`
+ *  (earliest redial epoch, null = dialable now) — the card MUST read those fields, not
+ *  reverse-engineer state from lastError text. The regex fallback below only covers older
+ *  main builds without peerState (CLI test host) and can only DOWNGRADE to unpaired-looking
+ *  copy, never invent a success state.
+ *  Returns { dot, labelKey, retryInSec } — labelKey null = no status line (healthy peer). */
+function peerStatusInfo (peer, now = null) {
+  const nowMs = now || Date.now()
+  const state = peer && peer.peerState ? String(peer.peerState) : null
+  const retryInSec = (peer && peer.nextDialAt && peer.nextDialAt > nowMs)
+    ? Math.ceil((peer.nextDialAt - nowMs) / 1000)
+    : null
+  if (state === 'unpaired') return { dot: 'sync-dot--err', labelKey: 'sync.unpairedByRemote', retryInSec }
+  if (state === 'oversized-segment') return { dot: 'sync-dot--err', labelKey: 'sync.oversizedSegmentNotice', retryInSec }
+  if (state === 'flush-stalled') return { dot: 'sync-dot--err', labelKey: 'sync.flushStalledNotice', retryInSec }
+  // hibernating = past the dial-failure budget: FAILED, not offline-idle. Show the red dot plus
+  // the honest backoff countdown derived from nextDialAt (main-owned, never a UI guess).
+  if (state === 'hibernating') return { dot: 'sync-dot--err', labelKey: 'sync.hibernatingNotice', retryInSec }
+  if (state === 'error') {
+    // fresh structured error beats the legacy 5-min window: main already decayed it to 'error'
+    // only while it is live. Legacy (no peerState) keeps the timestamp-window semantics.
+    if (peer.lastErrorAt == null || (nowMs - peer.lastErrorAt) < 5 * 60 * 1000) {
+      return { dot: 'sync-dot--err', labelKey: 'sync.errorPrefix', retryInSec }
+    }
+    return { dot: peer.online ? 'sync-dot--ok' : 'sync-dot--off', labelKey: null, retryInSec: null }
+  }
+  // legacy fallback: older main without peerState whose lastError markers read as unpaired
+  if (!state && peerUnpairedByRemote(peer && peer.lastError)) return { dot: 'sync-dot--err', labelKey: 'sync.unpairedByRemote', retryInSec }
+  // legacy fallback: older main without peerState — keep the old fresh-lastError status line
+  if (!state && peer && peer.lastError && peer.lastErrorAt && (nowMs - peer.lastErrorAt) < 5 * 60 * 1000) {
+    return { dot: 'sync-dot--err', labelKey: 'sync.errorPrefix', retryInSec }
+  }
+  return { dot: peerDotClass(peer, nowMs), labelKey: null, retryInSec }
+}
 // [component-fixes] pure-end
 export {
+  peerStatusInfo,
   peerDotClass,
   peerPendingKind,
   capFeed,

@@ -1,0 +1,44 @@
+PickDone cloud cost model — Neutral — as configured
+currency: USD | prices are PUBLIC LIST transcriptions + flagged assumptions; see provenance below
+
+MAU 5,000 (paid 400 / free 4600) | devices 12500 | peak conn 625 -> 1 instance(s)
+storage: db 43.1 GB | object 27.5 GB | cold 63.9 GB | backup 91.4 GB
+relay egress 0.8 GB/mo vs included quota 1000.0 GB
+
+Per-user per-month:
+  free  devices=1 changes=880 fanout=0
+        pure variable 0.0012 USD (storage 0.0012 USD + network 0.0000 USD)
+  paid  devices=2.5 changes=2200 fanout=1.5
+        pure variable 0.0039 USD (storage 0.0037 USD + network 0.0001 USD)
+  compute amortized 0.0020 USD/user
+
+Revenue per paid user per month:
+  [creem] gross 4.70 USD -> net 4.61 USD | fee 0.4696 USD | contribution 4.13 USD (margin 89.7%)
+  [paddle] gross 4.70 USD -> net 4.61 USD | fee 0.5928 USD | contribution 4.01 USD (margin 87.0%)
+
+Totals/month: variable 7.27 USD + compute 10.00 USD + fixed 0.0000 USD = 17.27 USD
+Break-even paid users (primary adapter): 4
+
+Growth (full steady-state storage at target MAU = conservative upper bound):
+  month 12: MAU 8,979 -> 23.05 USD/mo (1.33x today)
+  month 36: MAU 28,959 -> 52.10 USD/mo (3.02x today)
+
+Sensitivity (x0.5 .. x2.0 of the input price):
+  db storage price         total 15.12 USD .. 21.57 USD | break-even 4 .. 5
+  object storage price     total 15.90 USD .. 20.01 USD | break-even 4 .. 5
+  relay egress price       total 17.25 USD .. 17.31 USD | break-even 4 .. 4
+  compute instance price   total 12.27 USD .. 27.27 USD | break-even 3 .. 7
+  payment % fee            total 17.27 USD .. 17.27 USD | break-even 4 .. 4
+
+Scenarios:
+  neutral      total 17.27 USD/mo | contribution/payer 4.13 USD | break-even 4
+  pessimistic  total 23.04 USD/mo | contribution/payer 4.13 USD | break-even 6
+  heavy        total 46.62 USD/mo | contribution/payer 4.11 USD | break-even 10
+
+NOT MODELED / ASSUMED (totals are NOT complete until resolved):
+  ! db.pricePerMillionReads: NOT MODELED: D1 rows_read billing is not applicable to the SQLite volume MVP; required before any D1-based plan can claim complete totals
+  ! db.pricePerMillionWrites: NOT MODELED: D1 rows_written billing is not applicable to the SQLite volume MVP; required before any D1-based plan can claim complete totals
+  ! fixed cost "monitoring + alerting" is an unsourced assumption
+  ! compute.instanceMonthly is an unsourced assumption (USD per month for ONE VPS/container sized for the Node relay (pick a real plan + sourced quote))
+  ! relayEgress.pricePerGb is an unsourced assumption (USD per GB relay egress (VPS traffic beyond any included quota — check the chosen VPS plan))
+  ! db.pricePerGbMonth is an unsourced assumption (USD per GB-month (attached SSD block volume; 0 if the VPS disk already covers it))

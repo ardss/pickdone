@@ -54,6 +54,7 @@
     "sortablejs": "^1.15.7"
   },
   "devDependencies": {
+    "@dodopayments/opencode-plugin": "^0.6.5",
     "@fullcalendar/core": "^6.1.15",
     "@fullcalendar/daygrid": "^6.1.21",
     "@fullcalendar/interaction": "^6.1.21",
@@ -112,6 +113,18 @@
       {
         "from": "node_modules/solarlunar",
         "to": "node_modules/solarlunar"
+      },
+      {
+        "from": "node_modules/electron-log",
+        "to": "node_modules/electron-log"
+      },
+      {
+        "from": "node_modules/electron",
+        "to": "node_modules/electron",
+        "filter": [
+          "index.js",
+          "package.json"
+        ]
       },
       {
         "from": "assets/vendor-lib/dayjs-plugin-isoWeek.js",
