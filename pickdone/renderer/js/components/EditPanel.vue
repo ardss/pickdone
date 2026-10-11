@@ -344,6 +344,10 @@ export default {
       if (ui.contextMenu && ui.contextMenu.visible) return
       // [maint-0925 A2] showFilterModal joins the whitelist (hoisted out of FilterView local data): Esc over the filter modal no longer closes the edit sidebar
       if (ui.showSettingsModal || ui.showRepeatModalFor || ui.showFeedbackModal || ui.showFilterModal || ui.showRepeatDeleteConfirm || ui.accountTaskId || ui.tomatoAbandonVisible || ui.tomatoFocusRecordVisible || ui.tomatoRecordAddVisible) return
+      // [fix 2026-10-09] an open date/time picker overlay (.el-picker-panel, append-to-body) owns
+      // the Esc press — it closes the panel itself. Without this check the same keypress fell
+      // through to closeEditCleanup and took the whole edit sidebar down with the panel.
+      if (document.querySelector('.el-picker-panel')) return
       const st = this.$store.state.ui.rightSidebarTodoEdit
       if (st && st.visible) {
         this.$store.dispatch('ui/closeEditCleanup') // D6-F1: empty inline-created task is cleaned up
