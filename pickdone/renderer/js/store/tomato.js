@@ -436,7 +436,10 @@ export default {
       // only by this window's attachTask mutation (:670) and is never announced/broadcast to
       // peers — excluding it keeps the float window's attach from clobbering the main window's
       // (and vice versa); resolveFocusedTask re-validates at accounting time anyway.
-      const LOCAL_KEYS = ['todayTomatoCount', '_countDate', '_countedFocus', 'attachTodo']
+      // _syncSeq (2026-10-09 P3) is THIS window's per-persist write counter (persistState increments
+      // it before every ping token) — Object.assign used to overwrite it with the peer blob's
+      // smaller value, so the local sequence regressed and ping tokens became non-monotonic.
+      const LOCAL_KEYS = ['todayTomatoCount', '_countDate', '_countedFocus', 'attachTodo', '_syncSeq']
       const withoutLocal = blob => Object.fromEntries(Object.entries(blob).filter(([k]) => !LOCAL_KEYS.includes(k)))
       if ((fresh.phaseTs || 0) < (s.phaseTs || 0)) {
         // Stale-peer guard: the peer's blob describes a phase OLDER than one this window already
@@ -548,6 +551,8 @@ export default {
         commit('patch', { status: fresh.status, startedAt: fresh.startedAt, remainSec: fresh.remainSec })
         return
       }
+      // Owner-checked release for the booking guard below (no-op when the claim slot is the {} placeholder)
+      const releaseClaim = () => releasePhaseClaim(claim)
       if (running && record) {
         // Measured duration, not the current setting (unified with completeFocus): a mid-focus
         // duration change used to cap the booked minutes at the NEW smaller setting, skewing the ledger
@@ -564,7 +569,13 @@ export default {
         const rawMin = Math.round((Date.now() - s.startedAt) / 60000)
         const focusedMin = Math.min(FOCUS_MAX_MINUTES, Math.max(0, rawMin))
         const focused = resolveFocusedTask(s.attachTodo, focusTodoPool(this))
-        commit('addRecord', {
+        // G1 (2026-10-09 P2): the booking stretch is fallible (addRecord → ledgerWrite's mirror
+        // write throws on storage quota failure). Without a release-on-failure guard the phase
+        // claim leaked; the ~30s lease then let completeFocus record the user's ABANDON as a
+        // full succeed tomato. Same owner-checked release contract as completeFocus: only OUR
+        // claim is touched, and the error propagates to the caller (loud, not silent).
+        try {
+          commit('addRecord', {
           // Deterministic id: cross-window dedupe as a backstop so the same give-up records only once
           // Accounting basis = endTime (unified with completeFocus/stats/rail)
           // [D22 P2] device salt mixed in — same-ms cross-device starts no longer collide
@@ -573,6 +584,11 @@ export default {
           focusDuration: focusedMin, rest: s.restTime, restDuration: 0, succeed: false, status: 'local',
           abandonReason: (reason || '').trim()
         })
+        } catch (e) {
+          releaseClaim()
+          console.error('[tomato] giveUp booking failed after claiming; claim released (no phantom succeed tomato):', e)
+          throw e
+        }
         dispatch('todo/writeCriticalBackup', null, { root: true })
       }
       commit('patch', { status: 'default', startedAt: 0, remainSec: s.tomatoTime * 60 })
@@ -613,18 +629,19 @@ export default {
           const live = await window.todoAPI.dbCall('getById', focused.taskId)
           if (!live || live.delete === true) focused = null
         } catch (e) { /* empty */ }
-        try {
-        // G1 (R2-4): the await window lets a concurrent giveUp(record=false) flip the shared phase back to
-        // default. Re-verify against the shared transient before booking; if this window no longer owns the
-        // phase, abandon the completion (release the claim, follow the give-up side — no rest, no points).
+      }
+      // G1 (R2-4, 2026-10-09 P2): the await window lets a concurrent giveUp(record=false) flip the shared
+      // phase back to default. Re-verify against the shared transient before booking — for FREE focuses
+      // too: the whole check used to sit inside `if (focused && ...)`, so an unattached focus skipped the
+      // re-verification and booked a succeed tomato for a phase another window had just given up.
+      try {
         const fresh = loadState(false)
         if (!fresh || fresh.status !== 'startTomatoTime' || fresh.startedAt !== startedAt) {
           releaseClaim()
           console.info('[tomato] completeFocus aborted after verify await: phase was given up concurrently (startedAt', startedAt + ')')
           return
         }
-        } catch (e) { releaseClaim(); throw e }
-      }
+      } catch (e) { releaseClaim(); throw e }
       try {
         commit('addRecord', {
           // Accounting basis unified = endTime: stats (metrics)/rail (railSegs)/entry-card corrections (updateRecord) all use endTime
