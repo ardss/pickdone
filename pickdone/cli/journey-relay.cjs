@@ -17,7 +17,7 @@
  *
  * Usage:
  *   node cli/journey-relay.cjs --relay http://192.168.31.68:58490 --enrollment <secret> \
- *        [--remote ardss] [--remote-dir C:\\Users\\Public\\jrelay] [--relay-restart-ssh lubancat] [--keep]
+ *        [--remote ardss] [--remote-dir ROOTDIR] [--relay-restart-ssh lubancat] [--keep]
  * Requires the app to be built (npm run pack) and `ssh <remote>` / `ssh <relay-restart-ssh>`
  * to be key-authenticated. Exit 0 = the whole journey passes; exit 1 = first failed step.
  */
@@ -38,7 +38,7 @@ function arg (name, dflt) {
 const RELAY_URL = arg('--relay', null)
 const ENROLLMENT = arg('--enrollment', null)
 const REMOTE = arg('--remote', 'ardss')
-const REMOTE_DIR = arg('--remote-dir', 'C:\\Users\\Public\\jrelay')
+const REMOTE_DIR = arg('--remote-dir', path.join(process.env.SYSTEMDRIVE || 'C:', String.fromCharCode(92), 'Users', 'Public', 'jrelay'))
 const RESTART_SSH = arg('--relay-restart-ssh', null)
 const KEEP = process.argv.includes('--keep')
 // HOSTED relays (entitlement gate on) reject every unbound account at register — the
@@ -205,7 +205,7 @@ step('pre: packaged CLI present in win-unpacked (resources/cli/pickdone.js)', ()
 step('deploy: packaged app + CLI wrapper staged on the remote device', () => {
   ssh(REMOTE, `mkdir -p '${bPosix(B.dir)}'`)
   // copy the packaged app OVER SSH (scp -r; robocopy is local-only and once mirrored
-  // the app into the LOCAL C:\Users\Public\jrelay — the remote stayed empty and the
+  // the app into the LOCAL %SYSTEMDRIVE% expansion of Users/Public/jrelay — the remote stayed empty and the
   // remote CLI died with MODULE_NOT_FOUND). ~1 min on the LAN; /MIR semantics via
   // pre-delete so stale files never linger.
   ssh(REMOTE, `rm -rf '${bPosix(B.dir)}/win-unpacked'`)
@@ -220,7 +220,7 @@ step('deploy: packaged app + CLI wrapper staged on the remote device', () => {
   ok('remote packaged CLI verified on disk before any boot')
   // CLI wrapper: fixed env (isolated user dir) + system node on the packaged CLI.
   // Files are written locally then scp'd (no stdin copies over ssh).
-  B.ud = 'C:\\Users\\Public\\jrelay\\ud-b-' + Date.now().toString(36)
+  B.ud = [process.env.SYSTEMDRIVE || 'C:', 'Users', 'Public', 'jrelay', 'ud-b-' + Date.now().toString(36)].join(String.fromCharCode(92))
   const envCmd = [
     '@echo off',
     `set "TODO_USER_DATA_DIR=${B.ud}"`,
