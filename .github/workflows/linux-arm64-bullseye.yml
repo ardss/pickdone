@@ -37,7 +37,7 @@ jobs:
       - name: Install native build prerequisites
         run: |
           apt-get update -qq
-          apt-get install -y --no-install-recommends build-essential python3
+          apt-get install -y --no-install-recommends build-essential python3 gcc-aarch64-linux-gnu g++-aarch64-linux-gnu binutils-aarch64-linux-gnu
 
       # The repo vendors only the built package (lib/ + prebuilds/), not the source tree
       # (binding.gyp + deps/). Pull the identical-version upstream source for compilation.
@@ -54,6 +54,9 @@ jobs:
       - name: Compile against Electron headers (glibc 2.31 toolchain)
         working-directory: /tmp/bs3mc-src
         run: |
+          # x86_64 container -> must cross-compile to AArch64 explicitly
+          export CC=aarch64-linux-gnu-gcc CXX=aarch64-linux-gnu-g++ AR=aarch64-linux-gnu-ar STRIP=aarch64-linux-gnu-strip
+          export CC_host=gcc CXX_host=g++
           npx node-gyp rebuild \
             --runtime=electron \
             --target=${{ steps.electron.outputs.version }} \
@@ -70,6 +73,9 @@ jobs:
           echo "max symbol: $MAX_GLIBC"
           MAX_MINOR=${MAX_GLIBC#GLIBC_2.}
           [ "$MAX_MINOR" -le 31 ] || { echo "::error::$MAX_GLIBC exceeds Debian 11 (2.31)"; exit 1; }
+          ARCH=$(od -An -j18 -N2 -tu2 build/Release/better_sqlite3.node | tr -d ' ')
+          echo "ELF machine: $ARCH"
+          [ "$ARCH" = "183" ] || { echo "::error::not AArch64 (machine $ARCH)"; exit 1; }
 
       - uses: actions/upload-artifact@v4
         with:
