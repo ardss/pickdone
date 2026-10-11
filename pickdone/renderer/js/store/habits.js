@@ -69,6 +69,7 @@ import { isAuxWindow } from '../utils/auxWindow.js'
 // mirror": a transient getMeta rejection at startup left the stale LS blob in place and the
 // NEXT persist() drowned the (newer) durable DB copy under it.
 import { restoreFromDb, DB_MIRROR_ERROR, consumeUnflushed } from '../utils/dbMirror.js'
+import { preserveCorrupt } from '../utils/corrupt-quarantine.js'
 // F-C7 (maint/dw wave3): local day-key from the shared module — was hand-rolled twice below
 import { localDayKey } from '../../../shared/date-key.mjs'
 
@@ -103,9 +104,22 @@ export function onExternalHabitBlob (fn) { externalApplier = typeof fn === 'func
 export const _testInternals = { relayAuxBlob }
 
 function relayAuxBlob () {
+  // 2026-10-09 P3: distinguish "no blob at all" (consume the ping — nothing to relay) from "blob
+  // present but corrupt" (KEEP the ping). The old `if (!d) removeItem(SYNC_KEY)` collapsed both:
+  // a corrupt LS blob (quota-corrupt JSON / shape junk) silently consumed every aux check-in ping
+  // — the float window's check-ins were dropped forever with no trace. Corrupt bytes go through
+  // the codebase's quarantine-first contract (preserveCorrupt) so they can be recovered, the
+  // error is loud, and the ping stays on its retry channel.
+  let raw = null
+  try { raw = localStorage.getItem(LS_KEY) } catch (e) { raw = null }
+  if (raw == null) { try { localStorage.removeItem(SYNC_KEY) } catch (e) { /* empty */ } return }
+  const d = readLs()
+  if (!d) {
+    console.error('[habits] relay: LS blob corrupt — ping KEPT for retry (aux check-in not dropped)')
+    try { preserveCorrupt('habits.relay', LS_KEY, raw) } catch (e) { console.error('[habits] relay: corrupt-blob quarantine failed:', e) }
+    return
+  }
   try {
-    const d = readLs()
-    if (!d) { try { localStorage.removeItem(SYNC_KEY) } catch (e) { /* empty */ } return }
     // U-10 (2026-09-20): the durable DB write only happens when applyExternal ACCEPTED the blob.
     // The applier's savedAt guard rejects stale rounds; writing the rejected (stale) blob to the DB
     // anyway clobbered the newer DB state with older data. No applier registered (headless/test) →
@@ -227,7 +241,11 @@ export default {
       s.habits = blob.habits
       s.moments = blob.moments || []
       s.savedAt = blob.savedAt || 0
-      try { localStorage.setItem(LS_KEY, JSON.stringify(blob)) } catch {}
+      // 2026-10-09 P3: `force` is an INTERNAL control flag (restore-backup override), not blob
+      // content — strip it from the persisted copy so it never reaches LS/DB or the sync fan-out
+      // (same internal-field discipline as todo.js's deleting flag strip).
+      const clean = Object.assign({}, blob); delete clean.force
+      try { localStorage.setItem(LS_KEY, JSON.stringify(clean)) } catch {}
       if (force) persist(s) // dual-write: durable DB meta row (single writer discipline kept — persist() IS the store's writer)
     },
     /** G1: an aux window's habits edit relayed through the main window — update the main window's Vuex
