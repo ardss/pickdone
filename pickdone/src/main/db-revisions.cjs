@@ -259,6 +259,39 @@ module.exports = function createRevisionRecorder ({ getDb, log }) {
     return { recorded }
   }
 
+  /** One-time v1→v2 backfill: record every live row of `entity` that has NO revision current
+   *  yet. Called from relaySetEnabled after the recorder flag flips — recording is
+   *  record-only-forward, so a v1-era row would otherwise NEVER enter the push DAG (peer never
+   *  sees it) AND would carry no head, making the first pulled remote envelope trivially claim
+   *  the causal-current pin over a concurrent untracked local edit. Idempotent: only rows
+   *  missing a current are re-recorded; record() itself parents onto an existing head. */
+  function backfillUnrecorded (entity) {
+    const e = entity || 'todo'
+    const d = getDb()
+    if (!d || !d.open) return { backfilled: 0, disabled: !flagEnabled(d) }
+    if (!flagEnabled(d)) return { backfilled: 0, disabled: true }
+    const reader = READERS[e]
+    if (!reader) return { backfilled: 0 }
+    let ids
+    try {
+      // Compare as strings in JS: entity ids are stored TEXT in the revision tables while
+      // todos.id is INTEGER — a SQL NOT IN across the affinity boundary silently never matches.
+      // sync_revision_current has no entity column (entityId is globally unique by id convention).
+      const recorded = new Set([
+        ...d.prepare('SELECT entityId FROM sync_revision_current').all().map(r => String(r.entityId)),
+        ...d.prepare('SELECT DISTINCT entityId FROM sync_revisions WHERE entity = ?').all(e).map(r => String(r.entityId)),
+      ])
+      ids = d.prepare(`SELECT ${reader.id} AS id FROM ${reader.table}`).all().filter(r => !recorded.has(String(r.id)))
+    } catch (err) {
+      log.warn('[db-revisions] backfill probe failed:', err && err.message)
+      return { backfilled: 0 }
+    }
+    if (!ids.length) return { backfilled: 0 }
+    const now = Date.now()
+    const res = record(ids.map(r => ({ entity: e, entityId: String(r.id), ts: now })))
+    return { backfilled: res.recorded || 0 }
+  }
+
   /** Retention GC: drop payloads of non-current revisions outside the recent-keep window.
    *  Never throws into the write path — a failed prune only means one more cycle of growth. */
   const PRUNE_CHUNK = 2000
@@ -482,6 +515,6 @@ module.exports = function createRevisionRecorder ({ getDb, log }) {
     record, list, exportToStore, exportStore, verifyHash, ingestRemote,
     flagEnabled, dvvFlagEnabled, adjudicateFlagEnabled, ensureDvvTable, dvvTableExists, dvvState,
     FLAG_KEY, DVV_FLAG_KEY, ADJUDICATE_FLAG_KEY, DVV_TABLE,
-    cmpHlc, prunePayloads, payloadKeep,
+    cmpHlc, prunePayloads, payloadKeep, backfillUnrecorded,
   }
 }

@@ -99,6 +99,15 @@ function registerOps (adapter) {
         // disable() leaves it on deliberately: recording without a transport is inert, and
         // keeping history makes a re-enable continuity-preserving.
         try { require('./db').call('revisionsFlag', { on: true }) } catch (e) { log.warn('[RelaySync] revisionsFlag flip failed:', e && e.message) }
+        // P1 backfill (2026-10-11 delivery audit): recording is record-only-forward, so a
+        // v1-era row (predating the flag) had no revision — it never entered the push DAG AND
+        // its missing head let the first pulled remote envelope claim causalCurrent over a
+        // concurrent untracked local edit (silent newer-local loss). Record every live row
+        // that has no revision once, right after the flag is on. Idempotent by construction.
+        try {
+          const bf = require('./db').call('revisionsBackfillUnrecorded', { entity: 'todo' })
+          if (bf && bf.backfilled) log.info(`[RelaySync] backfilled ${bf.backfilled} v1-era todo row(s) into the revision DAG`)
+        } catch (e) { log.warn('[RelaySync] v1 revision backfill failed:', e && e.message) }
         return adapter.enable({ account: p.account, baseUrl: p.baseUrl, rootKey: p.rootKey })
       }
       return adapter.disable()

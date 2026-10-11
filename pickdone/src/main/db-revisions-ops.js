@@ -16,6 +16,8 @@
  */
 module.exports = function registerRevisionsOps (OPS, revisions, getDb) {
   OPS.revisionsList = p => revisions.list(p && p.entityId, p && p.limit)
+  // Main-internal (relaySetEnabled): one-time v1→v2 backfill of live rows with no revision.
+  OPS.revisionsBackfillUnrecorded = p => revisions.backfillUnrecorded(p && p.entity)
   OPS.revisionsFlag = p => {
     const d = getDb()
     if (!d || !d.open) throw new Error('db closed')
