@@ -136,6 +136,23 @@ function createTomatoSession ({ call, log = { warn: () => {}, info: () => {} }, 
         } catch (e) { log.warn('[TomatoSession] attach resolution failed; booking as free focus:', e && e.message) }
       }
       const endTime = t
+      // P2 2026-10-09: the renderer salts its abandon ids (mintTomatoId → `tmt_a_<startedAt>_<salt>`,
+      // salt lives only in renderer localStorage), while the main-side compensation used the bare
+      // `tmt_a_<startedAt>`. If the renderer managed to book before dying (or a prior boot booked
+      // with a different id), the two ids never collide and the SAME focus landed as TWO abandon
+      // rows. The salt source is unreachable from main, so dedup by PREFIX: any live abandon row
+      // minted from this startedAt (`tmt_a_<startedAt>%`) means the phase is already recorded —
+      // clear the durable row and skip the append. A failed dedup query falls through to the append
+      // (availability: a rare double row beats a silently dropped focus).
+      try {
+        const prefix = 'tmt_a_' + d.startedAt
+        const existing = call('tomatoAll') || []
+        if (existing.some(r => r && typeof r.tomatoId === 'string' && r.tomatoId.startsWith(prefix))) {
+          clearRow()
+          log.info('[TomatoSession] startup: abandon record for startedAt=' + d.startedAt + ' already booked, skipping duplicate append')
+          return d
+        }
+      } catch (e) { log.warn('[TomatoSession] startup dedup query failed; proceeding with append:', e && e.message) }
       const record = {
         tomatoId: 'tmt_a_' + d.startedAt,
         endTime,
