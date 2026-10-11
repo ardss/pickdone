@@ -105,6 +105,13 @@ export function historyBreakMerge (s) { s._histLastPushAt = 0 }
 export function historyUndoPop (s) {
   const popped = s.undoStack.pop()
   if (popped) s._histBytes = Math.max(0, (s._histBytes || 0) - popped.length)
+  // 2026-10-09 P2: an edit made within 400ms AFTER an undo must start a FRESH undo step, not merge
+  // into the remaining stack top. _histLastPushAt still held the popped entry's push time, so the
+  // next historyPush took the merge branch and REPLACED the older snapshot the undo had just
+  // revealed: the second undo then popped that overwritten snapshot (= the current state) — undo
+  // became a no-op and the redo chain was wiped. Same zeroing discipline historyPushKeepRedo (:76)
+  // and historyBarrierCore already apply for their post-restore pushes.
+  s._histLastPushAt = 0
 }
 
 export function historyRedoPop (s) {
