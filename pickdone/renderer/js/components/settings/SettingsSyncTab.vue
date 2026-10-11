@@ -30,7 +30,7 @@
           <span class="tip sync-device-meta" :title="String(selfInfo.deviceId || deviceId || '')">{{ $t('sync.deviceIdShort', { id: shortId }) }} · {{ $t('sync.portLabel') }} {{ port }}</span>
         </div>
         <div v-for="p in peers" :key="p.deviceId" class="sync-device-card" :data-device-id="p.deviceId">
-          <span class="sync-dot" :class="dotClass(p)" :title="dotTip(p)" :aria-label="dotTip(p)"></span>
+          <span class="sync-dot" :class="peerStatusInfo(p).dot" :title="dotTip(p)" :aria-label="dotTip(p)"></span>
           <!-- F1 (round-2 P1): alias wins display order, then the advertised deviceName (main now
                carries it — the payload used to only have `name`, so raw UUIDs were shown), then
                the raw record fields. Pencil icon = inline machine-local alias editor. -->
@@ -45,11 +45,10 @@
           <span class="tip sync-device-meta" v-if="p.lastRoundAt">{{ $t('sync.lastRound', { time: relTime(p.lastRoundAt) }) }}</span>
           <span class="tip sync-device-meta" v-else>{{ $t('sync.neverRan') }}</span>
           <span class="sync-pending" v-if="pendingBadge(p)">{{ pendingBadge(p) }}</span>
-          <span class="tip sync-device-error" v-if="isUnpairedByRemote(p)">{{ $t('sync.unpairedByRemote') }}</span>
-          <!-- 2026-09-27 sync wave: 'flush-stalled' peerState (main: FLUSH_STALL_BUDGET consecutive
-               flush-failed rounds) rendered distinctly — it wins over the generic lastError line. -->
-          <span class="tip sync-device-error" v-else-if="isFlushStalled(p)">{{ $t('sync.flushStalledNotice') }}</span>
-          <span class="tip sync-device-error" v-else-if="p.lastError">{{ $t('sync.errorPrefix', { msg: String(p.lastError).slice(0, 60) }) }}</span>
+          <!-- 2026-10-10 work-package C: ONE structured status line per peer card — the mapper reads
+               peerState/nextDialAt (main-owned truth), never error-text regex alone. -->
+          <span class="tip sync-device-error" v-if="peerStatusInfo(p).labelKey === 'sync.unpairedByRemote'">{{ $t('sync.unpairedByRemote') }}</span>
+          <span class="tip sync-device-error" v-else-if="peerStatusInfo(p).labelKey">{{ peerStatusLabel(p) }}</span>
           <button class="mini sync-unpair-btn" v-if="!isUnpairedByRemote(p)" :disabled="busy || connecting" @click="askUnpair(p)">{{ $t('sync.unpairBtn') }}</button>
         </div>
         <!-- discovery always ran; the tab never showed sightings, so users typed IPs by hand -->
@@ -219,7 +218,7 @@ const dbCallLoose = (op: string, params?: unknown) => (window.todoAPI.dbCall as 
 const syncPairRespond = (opts: { accept: boolean }) => dbCallLoose('syncPairRespond', opts)
 const syncPairRequest = (host, port) => dbCallLoose('syncPairRequest', { host, port })
 
-import { peerDotClass, peerPendingKind, capFeed, feedIcon, parseConnectAddress, pairFailureKey, relTimeParts, securityVisible, peerUnpairedByRemote, peerFlushStalled, peerDisplayName } from './sync-tab-helpers.js'
+import { peerDotClass, peerPendingKind, capFeed, feedIcon, parseConnectAddress, pairFailureKey, relTimeParts, securityVisible, peerFlushStalled, peerDisplayName, peerStatusInfo } from './sync-tab-helpers.js'
 
 export default {
   name: 'SettingsSyncTab',
@@ -338,9 +337,24 @@ export default {
     },
     feedIcon (k) { return feedIcon(k) },
     /** P2c: peer card in the "unpaired by the other device" state — dedicated copy + no Unpair button. */
-    isUnpairedByRemote (p) { return peerUnpairedByRemote(p && p.lastError) },
+    isUnpairedByRemote (p) { return this.peerStatusInfo(p).labelKey === 'sync.unpairedByRemote' },
     /** 2026-09-27: peer card in the persistent 'flush-stalled' state (see peerFlushStalled). */
     isFlushStalled (p) { return peerFlushStalled(p) },
+    /** 2026-10-10 work-package C: structured peer status line. Renders the mapper's i18n key with
+     *  its real params — errorPrefix gets the sliced lastError, hibernatingNotice the backoff
+     *  countdown from nextDialAt. relTick is a dependency so the retry countdown stays fresh. */
+    peerStatusLabel (p) {
+      void this.relTick
+      const info = this.peerStatusInfo(p)
+      if (!info || !info.labelKey) return ''
+      if (info.labelKey === 'sync.errorPrefix') return this.$t('sync.errorPrefix', { msg: String(p.lastError || '').slice(0, 60) })
+      if (info.labelKey === 'sync.hibernatingNotice') return this.$t('sync.hibernatingNotice', { n: info.retryInSec != null ? info.retryInSec : 0 })
+      return this.$t(info.labelKey)
+    },
+    peerStatusInfo (p) {
+      void this.relTick
+      return peerStatusInfo(p)
+    },
     dotTip (p) {
       void this.relTick // 30s ticker dependency: tooltip stays in sync with the dot's error window
       if (p && p.lastError && p.lastErrorAt && (Date.now() - p.lastErrorAt) < 5 * 60 * 1000) return this.$t('sync.errTip')
@@ -378,7 +392,8 @@ export default {
         if (!this.nameDraft) this.nameDraft = s.deviceName || ''
         if (this.enabled) {
           this.status = await getSyncStatus()
-          if (!this.connectHost && this.peers.length && this.peers[0].host) this.connectHost = this.peers[0].host
+          // [UX r7] do NOT prefill connectHost from peers[0].host — auto-dialing a stale
+          // paired host on the next click silently rotates the shared secret (repair flow).
         }
       } catch (e) { /* main process without LAN sync (CLI/test host) — leave defaults */ }
     },
@@ -457,6 +472,11 @@ export default {
       if (pp && !this.incomingPair) this.showIncomingPair({ deviceName: pp.deviceName, deviceId: pp.deviceId, host: pp.host, at: pp.at })
     },
     showIncomingPair (evt) {
+      // 2026-10-10 sync-ui state machine: a second pair-request while the EXPIRED first one is
+      // inside its 2.5s auto-dismiss grace used to inherit the first request's _pairExpiryTimer
+      // — 2.5s later dismissIncomingPair() closed the NEW dialog before the user could answer.
+      // Each incoming request starts its own lifecycle: clear the stale expiry timer first.
+      if (this._pairExpiryTimer) { clearTimeout(this._pairExpiryTimer); this._pairExpiryTimer = null }
       this.pairExpired = false
       // A7: the real 60s window is owned by the main-process transport, which stamps the
       const expiresAt = (evt.at || Date.now()) + 60 * 1000
@@ -536,7 +556,8 @@ export default {
         this.busy = true
         this.connecting = true
         syncPairRequest(d.host, d.port).then(() => {
-          this.$message.success(this.$t('sync.connectSent'))
+          // resolve = pairing accepted by peer — success, not "sent, awaiting" (was a race with the real await window)
+          this.$message.success(this.$t('sync.pairOkMsg'))
         }).catch(e => {
           const key = pairFailureKey(e)
           this.$message.error(this.$t(key || 'sync.pairFailGenericMsg'))
@@ -557,7 +578,12 @@ export default {
         this.connecting = true // immediate feedback: the 63s await must not leave the user staring at a dead button
         try {
           syncPairRequest(parsed.host, parsed.port).then(() => {
-            this.$message.success(this.$t('sync.connectSent'))
+            // resolve = pairing accepted by peer — success, not "sent, awaiting" (was a race with the real await window)
+            this.$message.success(this.$t('sync.pairOkMsg'))
+            // 2026-10-10 sync-ui state machine: reset the input on success — a leftover host
+            // made one more click re-dial the just-paired address straight into the secret-
+            // rotation (repair) flow. Cleared to '' only, never populated from stored peers.
+            this.connectHost = ''
           }).catch(e => {
             const key = pairFailureKey(e)
             this.$message.error(this.$t(key || 'sync.pairFailGenericMsg'))

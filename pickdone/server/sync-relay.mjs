@@ -25,13 +25,19 @@
  * host) and restrict direct 0.0.0.0 exposure to trusted networks.
  */
 
-import { createServer } from 'node:http'
+import { createServer as createHttpServer } from 'node:http'
+import { createServer as createHttpsServer } from 'node:https'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { readFileSync, renameSync, mkdirSync, existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 // D22 (P2 2026-10-02): the shared durable atomic-write helper (tmp -> fsync -> rename).
 // Plain Node, no electron — importable from this ESM module.
 import { writeFileDurable } from '../src/main/durable-fs.js'
+// 2026-10-10 (feature/syncv2-relay-entitlement): DEFAULT-OFF server-authoritative
+// entitlement hooks (subscription freeze / device limit / byte quota 413).
+// Passing `entitlements` (a gate from ./sync-relay-entitlement.mjs) to
+// createRelay() flips the relay into HOSTED mode; absent, semantics are untouched.
+import { attachEntitlementGate } from './sync-relay-entitlement.mjs'
 
 // ---------- storage backends ----------
 
@@ -180,8 +186,8 @@ export function fileStore(dir) {
 
 // ---------- relay logic (transport-agnostic, directly unit-testable) ----------
 
-export function createRelay(store, { enrollment = '' } = {}) {
-  return {
+export function createRelay(store, { enrollment = '', entitlements = null } = {}) {
+  const relay = {
     store,
     // 2026-10-10: when set, /v1/device/register must present this secret (body `enrollment`
     // or `x-enrollment` header) — closes the guess-an-account open-registration takeover path
@@ -217,6 +223,17 @@ export function createRelay(store, { enrollment = '' } = {}) {
      * account (snapshot-put/snapshot-latest) accept any of the account's
      * devices' secrets — the secret still proves possession of a registered
      * device for that account.
+     *
+     * 2026-10-10 revocation (P0): 'retired' is the leave-the-account status, but
+     * a retired device's bearer secret used to keep full pull/push/ack/snapshot
+     * access forever — and there is NO admin path to rotate a lost device's
+     * secret (the rotation proof IS that secret), so a stolen device could read
+     * and write the account's stream indefinitely. Retired rows are dead
+     * credentials: filtered here so BOTH candidate paths (per-device and
+     * account-wide, e.g. the snapshot routes) refuse them. Rotation with
+     * proof-of-possession intentionally keeps the retired status, so a thief
+     * holding the secret cannot self-revive; re-joining requires a fresh
+     * register (new deviceId or a future operator re-activation path).
      */
     authorize(account, deviceId, authz) {
       const m = /^Bearer\s+(\S+)$/i.exec(authz || '')
@@ -224,7 +241,8 @@ export function createRelay(store, { enrollment = '' } = {}) {
       const candidates = (account && deviceId)
         ? [store.getDevice(account, deviceId)].filter(Boolean)
         : (account ? store.listDevices(account) : [])
-      const ok = supplied && candidates.some(row => {
+      const live = candidates.filter(row => row.status !== 'retired')
+      const ok = supplied && live.some(row => {
         const expected = typeof row.deviceSecret === 'string' ? row.deviceSecret : ''
         if (!expected) return false
         const b = Buffer.from(expected)
@@ -234,12 +252,17 @@ export function createRelay(store, { enrollment = '' } = {}) {
     },
     setDeviceState(account, deviceId, patch) { return store.upsertDevice(account, deviceId, patch) },    push(account, deviceId, items) {
       const acked = {}
+      const duplicates = []
       for (const item of items) {
         const r = store.appendEnvelope(account, item.opId, item.envelope)
         acked[item.opId] = r.serverSeq
+        // 2026-10-10: report store-level opId dedup so the entitlement gate can
+        // meter only NEWLY stored bytes (replay/concurrent idempotency).
+        // Additive field — existing clients/tests only read acked/serverSeq.
+        if (r.duplicate) duplicates.push(item.opId)
       }
       store.upsertDevice(account, deviceId, { lastSeen: Date.now() })
-      return { acked, serverSeq: store.lastSeq() }
+      return { acked, serverSeq: store.lastSeq(), duplicates }
     },
     pull(account, afterSeq, maxBytes) {
       // server-side clamp: a client sending maxBytes:null previously bypassed the cap
@@ -297,6 +320,11 @@ export function createRelay(store, { enrollment = '' } = {}) {
     },
     latestSnapshot: account => store.latestSnapshot(account),
   }
+  // 2026-10-10: DEFAULT-OFF hosted entitlement gate — wraps the WRITE seams only
+  // (registerDevice/push become async); no gate = the relay is byte-for-byte
+  // the historical self-host relay.
+  if (entitlements) attachEntitlementGate(relay, entitlements)
+  return relay
 }
 
 // ---------- HTTP surface (spec §16/§17/§57) ----------
@@ -328,7 +356,7 @@ export function createRegisterLimiter({ limit = 10, windowMs = 60_000, cap = REG
   }
 }
 
-export function startRelayServer(relay, { port = 0, host = '127.0.0.1' } = {}) {
+export function startRelayServer(relay, { port = 0, host = '127.0.0.1', tls = null } = {}) {
   const MAX_BODY_BYTES = 8 * 1024 * 1024
   // 2026-10-10 (CTO sweep B#1/B#5): the open-registration door gets two cheap guards.
   // (a) per-IP register rate limit — an unauthenticated flood previously grew the device
@@ -345,31 +373,45 @@ export function startRelayServer(relay, { port = 0, host = '127.0.0.1' } = {}) {
     const a = Buffer.from(given); const b = Buffer.from(String(relay.enrollment))
     return a.length === b.length && timingSafeEqual(a, b)
   }
-  const server = createServer((req, res) => {
+  // 2026-10-11 (production gap: TLS): the relay used to speak plain HTTP only,
+  // pushing TLS termination to an external reverse proxy. Operators who want a
+  // single-binary deployment now pass `tls: { cert, key }` (PEM strings) and
+  // the exact same request handler serves HTTPS — the routes, guards, rate
+  // limits and entitlement gate are byte-identical on both schemes. Bearer
+  // secrets on the wire stay confidential end-to-end without a proxy hop.
+  const handler = (req, res) => {
     const chunks = []
     let total = 0
-    const respondTooLarge = () => {
-      // Header guard (2026-10-06): req.destroy() is async — a buffered chunk can re-enter this
-      // handler after the 413 was already written, and a second writeHead threw
-      // ERR_HTTP_HEADERS_SENT. `responded` + res.headersSent make the branch idempotent.
-      if (responded || res.headersSent) return
-      responded = true
-      res.writeHead(413, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ error: 'request body too large' }))
-      // No req.destroy() here: resetting the socket races the client's read of the 413
-      // (ECONNRESET on the caller side). The remaining body is drained and ignored — the
-      // responded/headersSent guards make both later handlers no-ops.
-    }
     let responded = false
+    let tooLarge = false
+    const respondTooLarge = () => {
+      // 2026-10-10 (integration loopback): a 9MB upload used to get its 413 written from inside
+      // req.on('data') while the client was still uploading. Writing mid-upload without
+      // consuming the rest backs up the socket and Node resets the connection — the client's
+      // fetch surfaced ECONNRESET, never the 413. Fix: only FLAG the over-limit here; keep
+      // reading and DISCARDING the body (chunks are dropped so memory stays O(1), the stream
+      // keeps flowing so the socket never backs up) and send exactly one 413 from req 'end',
+      // when the client is done uploading and can reliably read it.
+      tooLarge = true
+      chunks.length = 0 // free the buffered prefix; the rest is discarded on arrival
+    }
     req.on('data', c => {
+      if (tooLarge || responded || res.headersSent) return // drain: consume without buffering
       total += c.length
       if (total > MAX_BODY_BYTES) { respondTooLarge(); return }
-      if (responded || res.headersSent) return
       chunks.push(c)
     })
-    req.on('end', () => {
+    // 2026-10-10: async end-handler so the (default-off) entitlement gate can
+    // await trust resolution inside the route; error mapping is unchanged —
+    // a rejected promise lands in the same catch as a synchronous throw.
+    req.on('end', async () => {
       if (responded || res.headersSent) return
       responded = true
+      if (tooLarge) {
+        res.writeHead(413, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ error: 'request body too large' }))
+        return
+      }
       let body = {}
       try {
         if (chunks.length) body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
@@ -378,17 +420,15 @@ export function startRelayServer(relay, { port = 0, host = '127.0.0.1' } = {}) {
           if (!registrationAllowed(ip)) {
             res.writeHead(429, { 'content-type': 'application/json' })
             res.end(JSON.stringify({ error: 'too many registrations from this address' }))
-            responded = true
             return
           }
           if (!enrollmentOk(body, req.headers['x-enrollment'])) {
             res.writeHead(403, { 'content-type': 'application/json' })
             res.end(JSON.stringify({ error: 'enrollment secret required (see relay operator)' }))
-            responded = true
             return
           }
         }
-        const out = route(relay, req.method, req.url, body, req.headers.authorization)
+        const out = await route(relay, req.method, req.url, body, req.headers.authorization)
         res.writeHead(200, { 'content-type': 'application/json', 'x-protocol-version': String(PROTOCOL_VERSION) })
         res.end(JSON.stringify({ protocolVersion: PROTOCOL_VERSION, ...out }))
       } catch (err) {
@@ -400,7 +440,8 @@ export function startRelayServer(relay, { port = 0, host = '127.0.0.1' } = {}) {
         if (!err.status) console.error('[relay] internal error:', err)
       }
     })
-  })
+  }
+  const server = tls ? createHttpsServer({ cert: String(tls.cert), key: String(tls.key) }, handler) : createHttpServer(handler)
   // 2026-10-09 (P2 connection budget): cap concurrent TCP connections — a relay reachable from
   // the internet must not let a socket flood exhaust fds/memory. 64 comfortably exceeds the
   // device count of any real account (LAN pairs + a handful of peers).
@@ -428,7 +469,10 @@ const PROTECTED_ROUTES = new Set([
   '/v1/snapshot/latest',
 ])
 
-function route(relay, method, url, body, authz) {
+// 2026-10-10: async so a DEFAULT-OFF entitlement gate (registerDevice/push
+// wrapping resolves trust asynchronously) can await inside the same route;
+// without a gate every seam is still synchronous and this adds one microtask.
+async function route(relay, method, url, body, authz) {
   const path = url.split('?')[0]
   const post = () => { if (method !== 'POST') throw err(405, 'POST only'); return body }
   if (PROTECTED_ROUTES.has(path)) {
@@ -445,6 +489,14 @@ function route(relay, method, url, body, authz) {
       need(items.every(it => it && typeof it.opId === 'string' && typeof it.envelope === 'string'), 'each item needs string opId + string envelope')
       return relay.push(account, device, items)
     }
+    case '/v1/device/register': {
+      const { account, device, deviceSecret } = post()
+      need(account && device, 'account, device required')
+      // 2026-10-10: registerDevice is async under the (default-off) entitlement
+      // gate — await INSIDE the object literal so rejections map to coded HTTP
+      // errors and the response carries the real device row, not a Promise.
+      return { device: await relay.registerDevice(account, device, { bodySecret: deviceSecret, bearerSecret: parseBearer(authz) }) }
+    }
     case '/v1/sync/pull': {
       const { account, afterSeq = 0, maxBytes } = post()
       need(account, 'account required')
@@ -458,11 +510,6 @@ function route(relay, method, url, body, authz) {
       // has issued). relay.ack clamps too, so direct createRelay() callers are covered as well.
       need(ackSeq >= 0 && ackSeq <= relay.store.lastSeq(), `ackSeq ${ackSeq} beyond relay history (lastSeq ${relay.store.lastSeq()})`)
       return relay.ack(account, device, ackSeq)
-    }
-    case '/v1/device/register': {
-      const { account, device, deviceSecret } = post()
-      need(account && device, 'account, device required')
-      return { device: relay.registerDevice(account, device, { bodySecret: deviceSecret, bearerSecret: parseBearer(authz) }) }
     }
     case '/v1/device/state': {
       const { account, device, status } = post()
@@ -512,7 +559,27 @@ export async function main(argv = process.argv.slice(2)) {
     const { sqliteStore } = await import('./sync-relay-sqlite.mjs')
     store = sqliteStore(join(data || '.', 'relay.db'))
   } else store = data ? fileStore(data) : memoryStore()
-  const relay = createRelay(store, { enrollment: arg('enrollment', process.env.RELAY_ENROLLMENT_SECRET || '') })
+  const enrollment = arg('enrollment', process.env.RELAY_ENROLLMENT_SECRET || '')
+
+  // 2026-10-11 (production gap closure): `--hosted <billingDataDir>` wires the
+  // DEFAULT-OFF entitlement gate onto a DURABLE billing store, with operator
+  // bindings and usage metering persisted beside it (relay restarts keep both).
+  // The gate is fail-closed for writes and open for reads; sandbox trust bridge
+  // remains single-process by design (PRODUCTION_NO_GO #3 — service-to-service
+  // identity is still a prerequisite for real customers).
+  let entitlements = null
+  const hostedDir = arg('hosted', null)
+  if (hostedDir) {
+    const [{ createBillingStore }, { createEntitlementGate, createSandboxTrustBridge }] = await Promise.all([
+      import('./billing/store.mjs'), import('./sync-relay-entitlement.mjs'),
+    ])
+    const billingStore = createBillingStore({ dataDir: hostedDir })
+    const bridge = createSandboxTrustBridge({ billingStore, bindingsPath: join(hostedDir, 'relay-bindings.json') })
+    entitlements = createEntitlementGate({ trustResolver: bridge, usagePath: join(hostedDir, 'relay-usage.json') })
+    console.log(`[pickdone-sync-relay] HOSTED mode: billing store @ ${hostedDir} (bindings + usage persisted, writes fail-closed, reads open)`)
+  }
+
+  const relay = createRelay(store, { enrollment, entitlements })
   if (!relay.enrollment && !/^127\.|^\[::1\]|^localhost/.test(host)) {
     // CTO sweep B#1/B#2: non-loopback + open registration = anyone who guesses an account
     // string owns that account's sync stream. Refuse to be silent about it.
@@ -521,8 +588,18 @@ export async function main(argv = process.argv.slice(2)) {
       '  (or RELAY_ENROLLMENT_SECRET env) and configure it on every device to close that door,\n' +
       '  and terminate TLS in front for anything beyond a trusted LAN.')
   }
-  return startRelayServer(relay, { port, host }).then(server => {
-    console.log(`[pickdone-sync-relay] listening on :${server.address().port} (storage: ${store.kind}${data ? ` @ ${dirname(data)}` : ''})`)
+  // 2026-10-11 (TLS): PEM file pair → native HTTPS on the same handler.
+  let tls = null
+  const tlsCert = arg('tls-cert', null)
+  const tlsKey = arg('tls-key', null)
+  if (tlsCert || tlsKey) {
+    if (!tlsCert || !tlsKey) throw new Error('--tls-cert and --tls-key must be given together')
+    const { readFileSync } = await import('node:fs')
+    tls = { cert: readFileSync(tlsCert, 'utf8'), key: readFileSync(tlsKey, 'utf8') }
+  }
+  const scheme = tls ? 'https' : 'http'
+  return startRelayServer(relay, { port, host, tls }).then(server => {
+    console.log(`[pickdone-sync-relay] listening on ${scheme}://${host}:${server.address().port} (storage: ${store.kind}${data ? ` @ ${dirname(data)}` : ''})`)
     return server
   })
 }

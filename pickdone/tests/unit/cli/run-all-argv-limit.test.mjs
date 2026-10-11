@@ -32,25 +32,26 @@ function discover(root, acc = []) {
   return acc
 }
 
-test('run-all passes RELATIVE test paths so the spawned argv stays under the Windows ~32k cap', () => {
+test('run-all compacts exact relative test paths below the Windows argv cap', () => {
   const files = discover(testsDir)
-  assert.ok(files.length > 100, `discovery sanity: expected the full suite (>100 files), got ${files.length}`)
-  const relativeArgv = files.map(f => path.relative(appRoot, f)).join(' ')
-  const absoluteArgv = files.join(' ')
-  // The guarantee the fix makes: the file-list portion of the argv alone must fit the true
-  // 32767 cap with room to spare for flags, the node binary and the coverage-reporter extras.
-  // D25 recalibration: 28702 measured chars at 3860+ tests — the old 28671 margin was tripped
-  // by legitimate suite growth, and shrinking the argv itself (cwd move) broke cwd-anchored
-  // specs, so the guard tracks measured reality: 32000 leaves ~1.7k for flags/binary overhead.
-  assert.ok(relativeArgv.length < 32000,
-    `relative file argv is ${relativeArgv.length} chars — too close to/exceeding the Windows spawn cap`)
-  // The failure this guards against was real at time of writing: prove the absolute form
-  // actually breaches the cap here, so the test fails loudly if someone reverts to absolute
-  // paths. (On an implausibly short checkout path this assert would be vacuous, but the
-  // source anchors below still pin the mechanism.)
-  if (absoluteArgv.length > 32767) {
-    assert.ok(relativeArgv.length < absoluteArgv.length, 'relative argv must be strictly smaller than the absolute one that breached the cap')
-  }
+  assert.ok(files.length > 100, 'discovery must cover the full suite')
+  const source = RUN_ALL.match(/function runnerFileArgs \(\) \{[\s\S]*?\n\}/)?.[0]
+  assert.ok(source, 'runnerFileArgs must exist in the real runner')
+  const build = new Function('files', 'TEST_EXTS', 'readdirSync', 'path', 'appRoot',
+    source + '; return runnerFileArgs()')
+  const args = build(files, ['.test.mjs', '.test.js'], fs.readdirSync, path, appRoot)
+  assert.ok(args.every(x => !path.isAbsolute(x)), 'every argument is app-root-relative')
+  const expanded = args.flatMap(arg => {
+    const norm = arg.replace(/\\/g, '/')
+    const wildcard = /^(.*)\/\*(\.test\.(?:mjs|js))$/.exec(norm)
+    if (!wildcard) return [path.resolve(appRoot, arg)]
+    const dir = path.resolve(appRoot, wildcard[1])
+    return fs.readdirSync(dir).filter(n => n.endsWith(wildcard[2])).map(n => path.join(dir, n))
+  })
+  assert.deepEqual(expanded.map(f => path.normalize(f)).sort(), files.map(f => path.normalize(f)).sort(),
+    'safe globs must resolve to EXACTLY the discovered test files, with none omitted or added')
+  assert.ok(args.join(' ').length < 32000,
+    'compacted runner argv must leave space under the Windows 32k command-line ceiling')
 })
 
 test('run-all anchors the spawn at the app root and fails loudly on spawn errors (no silent status-??-1)', () => {

@@ -19,29 +19,13 @@ require('./log-isolation') // test isolation: redirect electron-log file transpo
 const mergeCore = require('../../shared/sync-core/merge.mjs')
 // D20-DOMB1: pure milestone-blob scrub shared with the CLI purge (shared/milestone-gc.mjs).
 const { scrubMilestoneBlob } = require('../../shared/milestone-gc.mjs')
-// Phase-3 (docs/refactor-command-bus.md): buffer drain routes read their op from the manifest
-// so the engine's bulk surfaces stay census-tied to the single command table. The engine still // applies rows DIRECTLY (peer-carried LWW stamps — see the gate's sync-ingress exemption for // this file); the manifest is used for dispatch naming only, never for stamping.
-const manifest = require('./command-manifest')
 // Arch review 2026-09-22 rec #3: the ingress clamp window is the SHARED constant — the same // window/semantics as the command-bus explicit-stamp clamp (see stamp-clamp.js).
 const { STAMP_CLAMP_MS } = require('./stamp-clamp')
 const { SYNC_OPLOG_KEEP, oplogKeepLimit } = require('./db-oplog') // D3 2026-09-24: oplog page size derives from the ring retention (was bare 10000s)
-// Arch review 2026-09-22 rec #1 (twin-door convergence): flush/ingress WRITE sites route // through an injected bus built on top of THIS state's db surface (createBus is exported for // exactly this). The bus's dbCall is state.db.call, so mock-driven unit suites keep their
-// recording surface; the hookless instance preserves the ingress contract (no ls-mirror kick, // no local re-stamping — every write passes { preserveStamp: true }, which means the bus never // MINTS a stamp; an explicit stamp beyond the shared skew window is still clamped, mirroring // clampSkew's ingress normalization — see command-bus.js stampPayload).
-const { createBus } = require('./command-bus')
-
-// Manifest keys of the buffered bulk commands, in exact flush order (order is load-bearing: // todos first so a same-round todo+plan move lands coherently, tombstone-heavy buffers early). // opOf() throws on a manifest drift instead of silently skipping a buffer.
-const FLUSH_ROUTE_COMMANDS = [ ['todos', 'todo.putMany'],
-  ['settings', 'setting.putMany'],
-  ['tomatoes', 'tomato.appendMany'],
-  ['categories', 'category.putMany'],
-  ['plans', 'plan.putMany'],
-  ['filters', 'filter.putMany']
-]
-const flushRoutes = FLUSH_ROUTE_COMMANDS.map(([buf, cmd]) => {
-  const row = manifest.COMMANDS[cmd]
-  if (!row) throw new Error('[sync-apply] flush route missing from manifest: ' + cmd)
-  return { buf, op: row.op, cmd }
-})
+// S4 adjudication layer (delete-vs-edit user-visible rulings) + the conflict-surfacing
+// helpers moved out of this file (meta conflict backup trio, S2 causal receive seam) to
+// honor the structure-size ratchet (only-split-never-grow).
+const adjudicate = require('./sync-adjudicate')
 
 // Hydration layer (entity classification + per-pass caches + hydrateRow) lives in // sync-apply-hydrate.js (structure-size ratchet, verbatim move) — re-exported below so the // bootstrap and the test harness keep their single require surface.
 const {
@@ -59,27 +43,19 @@ const {
 } = require('./sync-apply-hydrate')
 
 /**
- * Arch review 2026-09-22 rec #1 (twin-door convergence): the per-state write door for this
- * file's flush/ingress writes. Builds a hookless bus on top of state.db.call (lazily, cached
- * on the state object — tests swap whole state objects) and routes every WRITE through
- * bus.commitOp(op, payload, { preserveStamp: true }): the manifest validates the op name,
- * the payload passes through with its wire-carried ages intact (preserveStamp never mints a
- * stamp; the bus's future-stamp clamp still guards the door — see stampPayload), and
- * no fanout hooks fire (ingress must not kick local sync rounds — this is peer data landing,
- * not a local user edit). Reads stay on state.db.call.
+ * The twin-door write door (busFor/busWrite) + the buffered bulk-write drain
+ * (flushPendingWrites, poison-row quarantine) moved VERBATIM to ./sync-apply-flush.js
+ * (structure-size ratchet, same doctrine as the hydrate/content/adjudicate splits) —
+ * destructured here so every internal call site and the re-exported surface is unchanged.
  */
-function busFor (state) {
-  if (!state.__bus) state.__bus = createBus((op, p) => state.db.call(op, p))
-  return state.__bus
-}
+const { busWrite } = require('./sync-apply-flush')
 
-/** The one write helper for sync ingress: manifest-validated dispatch, payload untouched. */
-function busWrite (state, op, payload) {
-  return busFor(state).commitOp(op, payload, { preserveStamp: true })
-}
-
-const META_CONFLICT_BACKUP_CAP = 20
-// MS-collision fix (2026-09-26): process-lifetime monotonic counter mixed into backup-key / // conflict-copy-id suffixes so two mints within the same millisecond can never collide // (Date.now() alone did). Monotonic per process: preserves sort order for the count-based prune.
+// S4/META-BACKUP: META_CONFLICT_BACKUP_CAP + the meta conflict backup trio now live in
+// ./sync-adjudicate.js (size ratchet move); re-exported below for the existing import surface.
+const META_CONFLICT_BACKUP_CAP = adjudicate.META_CONFLICT_BACKUP_CAP
+// MS-collision fix (2026-09-26): process-lifetime monotonic counter for THIS file's
+// conflict-copy-id suffixes (the meta-backup key counter moved with writeMetaConflictBackup;
+// uniqueness is per key namespace, so two counters are equivalent).
 let backupSeq = 0
 // rowContentDiffers lives in sync-apply-content.js (structure-size ratchet, verbatim move):
 const { rowContentDiffers } = require('./sync-apply-content')
@@ -192,52 +168,21 @@ function clampSkew (row) {
 const { hasEquivalentConflictCopy } = require('./sync-apply-content')
 
 /**
- * P1-5: persist one losing meta value under a dated backup key and prune older backups for the
- * same base key beyond META_CONFLICT_BACKUP_CAP. Best-effort: a backup failure must never fail
- * the apply (the LWW winner still lands). Backup keys are machine-local (see the
- * isMachineLocalMetaKey filter) so they never sync back to the peer.
+ * S4: user-visible delete-vs-edit adjudication — thin delegate into ./sync-adjudicate.js.
+ * Flag-gated (double opt-in, default OFF), records the ruling without ever changing the v1
+ * outcome; failures are counted into the round summary, never swallowed, never fatal.
  */
-/** D17: age order for meta-conflict-backup keys of one base key — by PARSED (ts36, seq36), not
- *  raw string order. Within a single millisecond the base-36 counter crosses a digit boundary
- *  (...'y','z','10','11'...) and lexicographic sort ranks '10' BELOW 'z', so the NEWEST backup
- *  sorted as if oldest and the prune deleted the freshest loser. Unparsable/legacy keys sort
- *  oldest (string order among themselves) so they are pruned first, never the parsed newest. */
-function compareMetaBackupKeys (a, b) {
-  const pa = parseMetaBackupKeySuffix(a)
-  const pb = parseMetaBackupKeySuffix(b)
-  if (pa && pb) return (pa.ts - pb.ts) || (pa.seq - pb.seq)
-  if (pa !== pb) return pa ? 1 : -1 // parsed keys are always newer than unparsable ones
-  return String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0
-}
-/** `<prefix><key>.<ts36>-<seq36>` → { ts, seq } (numeric), or null when the suffix does not parse. */
-function parseMetaBackupKeySuffix (k) {
-  const m = /\.([0-9a-z]+)-([0-9a-z]+)$/.exec(String(k))
-  if (!m) return null
-  const ts = parseInt(m[1], 36)
-  const seq = parseInt(m[2], 36)
-  return (Number.isFinite(ts) && Number.isFinite(seq)) ? { ts, seq } : null
+function adjudicateDeleteEditS4 (state, payload) {
+  adjudicate.adjudicateDeleteEditOutcome(state, payload, busWrite)
 }
 
+/**
+ * P1-5: persist one losing meta value under a dated backup key — implementation moved to
+ * ./sync-adjudicate.js (size ratchet, verbatim logic + D17 prune order); shim keeps the
+ * in-file call surface unchanged.
+ */
 function writeMetaConflictBackup (state, key, value) {
-  try {
-    // MS-collision fix (2026-09-26): the key used to be `.<ts36>` alone — two conflict backups
-    // of the SAME base key minted within one millisecond (bulk apply loop) produced identical
-    // keys and the second setMeta silently OVERWROTE the first (the earlier losing value was
-    // lost). A module-level monotonic counter appended after the ts keeps the mint order
-    // (ts36 dominates across milliseconds; the counter orders within one) while making every
-    // key unique. Prune order itself is the PARSED numeric compare above (D17) — the raw string
-    // sort broke at the base-36 counter digit rollover.
-    const ts36 = `${Date.now().toString(36)}-${(backupSeq++).toString(36)}`
-    const backupKey = `${META_CONFLICT_BACKUP_PREFIX}${key}.${ts36}`
-    busWrite(state, 'setMeta', [backupKey, JSON.stringify({ key, value, lostAt: Date.now() })])
-    // Prune: keep only the latest META_CONFLICT_BACKUP_CAP backups per base key.
-    const prefix = `${META_CONFLICT_BACKUP_PREFIX}${key}.`
-    const keys = (state.db.call('listMetaKeys') || []).filter(k => String(k).startsWith(prefix)).sort(compareMetaBackupKeys)
-    for (const old of keys.slice(0, Math.max(0, keys.length - META_CONFLICT_BACKUP_CAP))) {
-      try { busWrite(state, 'deleteMeta', old) } catch { /* prune is best-effort */ }
-    }
-    log.warn('[LanSync] meta LWW conflict on', key, '— loser backed up as', backupKey)
-  } catch (e) { log.warn('[LanSync] meta conflict backup failed for', key, e.message) }
+  adjudicate.writeMetaConflictBackup(state, key, value, busWrite)
 }
 function applyRowInner (state, incoming) {
   if (!incoming || !SYNCABLE_ENTITIES.has(incoming.entity)) return false
@@ -332,19 +277,22 @@ function applyRowInner (state, incoming) {
   // on insertion order (loop fix 2026-09-18; inbound rows are stamped with the sender's id
   // at the transport boundary in lan-sync-bootstrap).
   if (localRow && localRow.deviceId == null && state.deviceId) localRow.deviceId = state.deviceId
-  // 2026-10-08/09 tombstone-vs-live (plan/filter twin of the todo tombstoneResurrectCopy guard, D24):
-  // a locally deleted chip/filter used to be SILENTLY resurrected — plan/filter tombstones hydrate
-  // with data:null (no content to copy) and planAddMany's upsert re-materialized the row whenever
-  // a peer live edit won LWW (peer authored it before our delete). Fix (2026-10-09): delete-wins
-  // early-returned BEFORE mergeCore, so the losing live edit had NO conflict backup / markConflict
-  // (the loser-never-silently-dropped contract held only in the B16 else-branch). Materialize it
-  // via the SAME writeMetaConflictBackup + markConflict pair, then keep the tombstone.
+  // 2026-10-08 tombstone-vs-live (plan/filter twin of the todo tombstoneResurrectCopy guard, D24):
+  // plan/filter tombstones hydrate with data:null (no content to copy), so the todo-style
+  // conflict-copy minting path cannot apply — and planAddMany's `ON CONFLICT ... SET deleted=0`
+  // upsert then SILENTLY resurrected the deleted chip/filter whenever a peer live row won LWW.
+  // When the local delete is FRESHER than the inbound live edit (deletedAt > updatedAt — the peer
+  // authored its edit before our deletion and simply had not seen it), delete-wins keeps the
+  // tombstone instead of resurrecting.
+  // S4: this keep used to be completely silent — record the explicit ruling + surface it
+  // (flag-gated; flag off → byte-identical silence).
   if ((entity === 'plan' || entity === 'filter') && localRow && localRow.deleted &&
       incoming && !incoming.deleted && stampNum(localRow.deletedAt) > stampNum(incoming.updatedAt)) {
-    if (incoming.data !== undefined && incoming.data !== null) {
+    if (incoming.data != null) {
       writeMetaConflictBackup(state, `${entity}:${incoming.id}`, incoming.data)
       markConflict(state, entity, incoming.id, false)
     }
+    adjudicateDeleteEditS4(state, { entity, incoming, localRow, winner: localRow, source: 'tombstone-keep-guard' })
     return false
   }
   // Provenance normalization (protocol v3): increment rows carry author top-level (hydrateRow);
@@ -355,13 +303,26 @@ function applyRowInner (state, incoming) {
   // rules; the remaining entities use the generic LWW shape.
   let winner
   let conflictCopy = null
-  if (entity === 'tomato') winner = mergeCore.mergeTomatoRows(localRow, incoming).row
+  // S1 (Sync v2, relay pull path only): `causalCurrent` is stamped by relay-sync-apply when the
+  // revision DAG has ALREADY ruled the envelope the entity's causal current (a descendant of the
+  // local head). The business LWW must not overrule that verdict with a wall-clock stamp — a
+  // slow-clock causal successor beats a fast-clock ancestor. Live-vs-live only: delete-vs-edit
+  // stays with the S4 adjudication surface. LAN sync never stamps the field → byte-identical.
+  if (entity === 'todo' && incoming.causalCurrent && localRow && !localRow.deleted && !incoming.deleted) {
+    winner = incoming
+  } else if (entity === 'tomato') winner = mergeCore.mergeTomatoRows(localRow, incoming).row
   else {
     const m = mergeCore.mergeTodoRows(localRow, incoming)
     winner = m.row
     conflictCopy = m.conflictCopy
   }
-  if (localRow && winner !== incoming) return false // local version stands
+  // S4: the local version standing over an inbound edit of the OPPOSITE shape (our tombstone
+  // beat their live edit) used to be a silent `return false` — record the ruling first
+  // (flag-gated; same-shape skips are not delete-vs-edit and stay silent).
+  if (localRow && winner !== incoming) {
+    adjudicateDeleteEditS4(state, { entity, incoming, localRow, winner: localRow, source: 'local-stands' })
+    return false // local version stands
+  }
   // Identical-content no-op (prevents apply/push ping-pong):
   //   - LIVE rows: identical content (userId-insensitive) is a no-op.
   //   - BOTH-DEAD rows (2026-09-19 live storm): the local row is already a tombstone, so the
@@ -380,15 +341,30 @@ function applyRowInner (state, incoming) {
   // (it could not: todoToRow re-derived scheduledDay in the writer's timezone). A live row that
   // is NOT strictly newer than the local live row must never replace it nor spawn a conflict
   // copy of it — refuse and keep local. Real peer edits (strictly newer stamps) still win on
-  // updatedAt before any tiebreak; live-vs-tombstone merges are left to the delete-wins rules.
+  //   updatedAt before any tiebreak; live-vs-tombstone merges are left to the delete-wins rules.
+  //   S1: a causalCurrent envelope is NOT an echo — the revision DAG ruled it the causal
+  //   successor, so the same-stamp refusal does not apply to it.
   if (entity === 'todo' && localRow && !localRow.deleted && !incoming.deleted &&
-      winner === incoming && stampNum(incoming.updatedAt) <= stampNum(localRow.updatedAt)) {
+      winner === incoming && stampNum(incoming.updatedAt) <= stampNum(localRow.updatedAt) && !incoming.causalCurrent) {
     log.warn('[LanSync] same-stamp echo on todo', incoming.id, '— local row stands (an echo is never strictly newer)')
     return false
   }
   if (entity === 'todo' && conflictCopy == null) conflictCopy = tombstoneResurrectCopy(localRow, incoming, winner) // P1 2026-10-08 no-silent-loss: a newer inbound LIVE edit resurrecting a local TOMBSTONE used to silently destroy the deletion — tombstoneResurrectCopy (hydrate) bridges the deleted content into the minting path below
   if (conflictCopy) {
-    // Surface the losing edit (merge.mjs: the loser is never silently dropped) as a TOMBSTONED,    // todo row with a suffixed id so the recycle bin can restore the losing content (skips built,    // into merge.mjs: identical content / pure-tombstone loser). Loop-fix guards (2026-09-18,    // recycle-bin ballooning): copies are TERMINAL — an id already carrying the '-conflict-',    // marker never spawns another copy (a losing copy is simply dropped), and materialization is,    // IDEMPOTENT — an equivalent copy already in the bin (same prefix, same content fingerprint),    // is not minted a second time.
+    // Surface the losing edit (merge.mjs contract: the loser is never silently dropped).
+    // Round-3 review: materialize it as a TOMBSTONED todo row so the recycle bin can restore
+    // the user's losing content. Skips are built into merge.mjs: no copy when content is
+    // identical or when the loser is already a pure tombstone. The copy gets a suffixed id so
+    // it cannot clobber the winning row; delete-wins keeps it out of the live list.
+    //
+    // Loop-fix guards (2026-09-18 live incident — recycle bins ballooned one copy per row per
+    // round per machine):
+    //   1. Copies are TERMINAL: a row whose id already carries the `-conflict-` marker never
+    //      spawns another copy — a copy that loses LWW here is simply dropped. Otherwise the
+    //      peer's copy-of-the-copy arrives as an independent row and re-participates forever.
+    //   2. Materialization is IDEMPOTENT: if an equivalent copy of the same base row already
+    //      sits in the recycle bin (same `-conflict-` prefix, same content fingerprint), do
+    //      not mint a second one.
     const baseId = String(incoming.id)
     if (baseId.includes('-conflict-')) {
       log.warn('[LanSync] conflict on copy row', baseId, '— dropped (copies are terminal)')
@@ -420,7 +396,23 @@ function applyRowInner (state, incoming) {
       // P1-5: the user-facing toast is driven by the round summary (one per round, see markConflict)
       markConflict(state, 'todo', (conflictCopy.data && conflictCopy.data.taskContent) || baseId, false)
     } else if (entity === 'meta' && conflictCopy && conflictCopy.data) {
-      // P1-5 (2026-09-19): a content-differing LWW loss on a meta key used to be silently dropped.,      // Materialize the loser as metaConflictBackup.<key>.<ts36> (capped at the latest 20) so it,      // stays recoverable and joins the per-round conflict summary. Announce keys are ephemeral —,      // no backup for them. M5: the gamification.* namespace is per-device bookkeeping — exempt,      // from BOTH backup and toast (marking every brand-new meta key trained users to ignore it).,      // R7 P1-3: a null loser = the key was ABSENT locally — no backup AND no toast.
+      // P1-5 (2026-09-19 data-safety round): a content-differing LWW loss on a meta key used to
+      // be silently dropped (whole-document KV, no recycle-bin shape). Materialize the loser as
+      // a dated backup key `metaConflictBackup.<key>.<ts36>` (self-healing: capped at the latest
+      // 20 per implementation cap) so the losing value stays recoverable, and include it in the
+      // per-round conflict summary (the existing toast fires via consumeAppliedRound). Announce
+      // keys (tomatoRunAnnounce.*) are ephemeral runtime state — no backup for those. A null
+      // loser value means the key was ABSENT locally (mergeTodoRows fabricates a data=null
+      // localRow) — nothing was lost, no backup.
+      // M5 (2026-09-20): gamification.* keys are per-device COUNTERS/bookkeeping (delta indexes,
+      // streak caches), not user documents — a losing overwrite is routine bookkeeping churn, so
+      // minting metaConflictBackup.* copies (and toasting about it) for them was pure noise. The
+      // whole namespace is exempt from BOTH backup and conflict toast; it is already invisible to
+      // the backup-recovery list because the backups are simply never written.
+      // R7 P1-3: a null loser value means the key was ABSENT locally (mergeTodoRows fabricates a
+      // data=null localRow on first application) — nothing was lost, so no backup AND no toast:
+      // the fabricated null always content-differs, and the old unconditional markConflict burned
+      // the per-round conflict toast on every brand-new meta key, training users to ignore it.
       const bk = String(incoming.id)
       const firstLanding = conflictCopy.data.value == null
       const isBookkeeping = bk.startsWith('gamification')
@@ -445,6 +437,11 @@ function applyRowInner (state, incoming) {
       markConflict(state, entity, incoming.id, true)
     }
   }
+  // S4 landing choke: an inbound DELETE landing over our live edit, or an inbound EDIT landing
+  // over our tombstone, used to land silently (where no conflict copy existed). Record the
+  // explicit ruling here — conflictCopySurfaced prevents double-toasting collisions the block
+  // above already surfaced (the durable adjudication record is still written either way).
+  adjudicateDeleteEditS4(state, { entity, incoming, localRow, winner, source: 'landing', conflictCopySurfaced: !!conflictCopy })
   // Write the winner through the regular write ops (re-captured into the local oplog, which is what
   // propagates the acknowledged state back to the peer — idempotent under the same merge rules).
   // Todos/settings/tomato go through the per-segment write buffer: a first sync applies thousands of
@@ -654,148 +651,13 @@ function applyRowSafe (state, incoming) {
 function consumeAppliedRound (state) {
   const a = state.applied
   state.applied = null
-  if (!a || (!a.kinds.size && !a.conflicts.length && !Object.keys(a.settingsPatch).length)) return null
-  return { kinds: [...a.kinds], settingsPatch: a.settingsPatch, conflicts: a.conflicts }
+  if (!a || (!a.kinds.size && !a.conflicts.length && !Object.keys(a.settingsPatch).length && !a.adjudicationFailed)) return null
+  // S4: adjudicationFailed counts adjudication-record write failures this round — the failure
+  // rides the SAME per-round summary as the conflicts (never swallowed, never applied-fatal).
+  return { kinds: [...a.kinds], settingsPatch: a.settingsPatch, conflicts: a.conflicts, adjudicationFailed: a.adjudicationFailed || 0 }
 }
 
-/**
- * Flush the buffered bulk writes. Called after every ingested segment, after buildSnapshot-driven
- * replaceAll, and before the transport sends its round ack — a peer's push cursor may only advance
- * over rows that are already committed here (crash mid-buffer = rows unapplied, cursor stays, the
- * next round re-pushes; same crash semantics as commitSyncBatch §4.1).
- *
- * P0-1 (2026-09-19 data-safety round): the flush now REPORTS failure ({ ok: false }) instead of
- * only logging — the bootstrap propagates it as `flushFailed` on the ingestSegment result so the
- * receiver's ack stays BELOW the failed segment (the sender keeps its push watermark, re-pushes)
- * and the snapshot trigger force-arms. A dropped buffer must never be acked as applied.
- */
-// 2026-09-26 poison-row quarantine: meta key prefix for rows a failed bulk flush had to drop.
-// 'sync.*' is machine-local (isMachineLocalMetaKey), so quarantined copies never sync back to
-// the peer — they are a LOCAL recovery surface, not a replay channel.
-const META_FLUSH_QUARANTINE_PREFIX = 'sync.flushQuarantine.'
-// Cap parked entries per op: quarantine is a crash-inspection surface, not a data store; the
-// oplog/snapshot remains the authoritative recovery for large segments.
-const META_FLUSH_QUARANTINE_CAP = 50
-// Fix (2026-10-09, unbounded quarantine bytes): each entry used to store the FULL dropped row
-// set — one failed first-sync flush blew the meta blob up to megabytes. Store a bounded SAMPLE
-// (first QUARANTINE_ROW_SAMPLE rows + a truncated marker); `count` still reports the true total,
-// and the oplog/snapshot remains the authoritative recovery for the full set.
-const QUARANTINE_ROW_SAMPLE = 20
-
-/** Safely encode one buffered row for the quarantine blob (a poison row may itself be
- *  un-JSON-able — BigInt, circular — so fall back to a string rendering). */
-function quarantineEncodeRow (row) {
-  try { return JSON.parse(JSON.stringify(row)) } catch {
-    try { return String(row) } catch { return '[unrenderable row]' }
-  }
-}
-
-/**
- * Park rows dropped by a failed bulk flush into a machine-local meta key
- * (`sync.flushQuarantine.<op>`): append to the existing list (cap-trimmed, newest kept) and
- * stamp each entry with the error and time. Best-effort: any failure here degrades to the old
- * log-only behavior (the original flush error is already reported by the caller).
- */
-function quarantineFlushRows (state, op, list, err) {
-  try {
-    const key = META_FLUSH_QUARANTINE_PREFIX + op
-    let parked = []
-    try {
-      const cur = state.db.call('getMeta', key)
-      if (cur != null) { const p = JSON.parse(cur); if (Array.isArray(p)) parked = p }
-    } catch { /* unreadable prior blob: start a fresh list rather than failing the quarantine */ }
-    const encodedRows = list.map(quarantineEncodeRow)
-    // Truncate the stored sample (QUARANTINE_ROW_SAMPLE): the blob stays bounded; `count` still reports the true total.
-    const rows = encodedRows.length > QUARANTINE_ROW_SAMPLE
-      ? [...encodedRows.slice(0, QUARANTINE_ROW_SAMPLE), { truncated: true, omitted: encodedRows.length - QUARANTINE_ROW_SAMPLE }]
-      : encodedRows
-    parked.push({ at: Date.now(), count: list.length, error: (err && err.message) || String(err), rows })
-    while (parked.length > META_FLUSH_QUARANTINE_CAP) parked.shift()
-    // Route through the bus facade like every other sync write (single-write-gate): the
-    // quarantine meta blob is machine-local, but the write must still be manifest-validated.
-    busWrite(state, 'setMeta', [key, JSON.stringify(parked)])
-    return { op, key, count: list.length }
-  } catch (e) {
-    log.warn('[LanSync] flush quarantine parking failed (log-only drop):', e && e.message)
-    return null
-  }
-}
-
-function flushPendingWrites (state) {
-  const buf = state.pendingWrites
-  let ok = true
-  const quarantined = []
-  // Per-buffer-op isolation (round-3 review): ONE malformed row used to throw out of a single
-  // bulk op and leave every buffer dirty — the throw re-fired on every later flush, wedging
-  // apply AND flush forever (poison-pill row). Now each op gets its own try/catch: a failing op
-  // drops only ITS buffer segment with log.error (the data stays in the oplog, so it remains
-  // recoverable via a later snapshot), the buffers clear either way, and the other ops proceed.
-  // Manifest-driven drain (Phase-3): buffer → bulk op mapping lives in flushRoutes (derived from
-  // command-manifest.js at module load), so a buffer cannot silently lose its manifest census row.
-  // 2026-09-26 stalled-watermark fix (Layer 1): a failing op whose rows were SUCCESSFULLY
-  // quarantined no longer sets ok=false. Previously ok=false made ingestSegment stamp
-  // flushFailed, the ack stayed below the segment, the sender kept its push watermark and
-  // re-pushed the SAME segment — including the same poison row — every round: a permanent
-  // stall (watermark pinned forever, appliedToSeq never advanced in the sender's seq space).
-  // That is safe only while the drop is unrecoverable. With poison-row quarantine the dropped
-  // rows are parked under sync.flushQuarantine.<op> (machine-local meta, user-surfaced via
-  // Device Center), so the recovery invariant holds WITHOUT blocking the ack: remaining ops
-  // commit, the round acks with appliedToSeq, and the peer's watermark advances past the
-  // poison row. ok=false is reserved for the case where QUARANTINE PARKING ITSELF failed
-  // (rows truly dropped log-only) — that degrades to the old fail-closed behavior.
-  const flushOne = (list, op) => {
-    if (!list || !list.length) return
-    let result = null
-    try { result = busWrite(state, op, list) } catch (e) {
-      log.error(`[LanSync] flush ${op} failed — dropping ${list.length} buffered rows (quarantined under ${META_FLUSH_QUARANTINE_PREFIX}${op}, recoverable via snapshot):`, e && e.message)
-      // 2026-09-26 poison-row quarantine: a dropped buffer used to be log-only ("recoverable via
-      // snapshot" = the ONLY recovery, and only if a snapshot actually re-fires). Park the rows in
-      // a machine-local meta key (sync.* never syncs — isMachineLocalMetaKey) so they stay
-      // inspectable/recoverable, and surface the quarantine on the flush result so the bootstrap
-      // can raise a Device Center syncEvent instead of failing silently.
-      const entry = quarantineFlushRows(state, op, list, e)
-      if (entry) quarantined.push(entry)
-      else { ok = false; return false } // D18: parking failed — caller RETAINS the buffer segment
-    }
-    // D13 finding 3 (per-row rejection quarantine): the bulk ops no longer drop rows silently —
-    // settingsRowPutMany / planAddMany / tomatoAppendMany surface their skipped rows as a
-    // `rejected` list (settingsRowPutMany/planAddMany attach it to the returned accepted array
-    // non-enumerably; tomatoAppendMany returns {accepted, rejected}). The old code discarded the
-    // result: rejected rows vanished, the buffer segment still cleared and the segment acked
-    // ok=true — the sender's watermark advanced past rows that never landed, permanently lost
-    // with zero user-visible trace. Park the rejected rows in the same machine-local quarantine
-    // the throw path uses and surface them on the flush result (flush-quarantined syncEvent).
-    const rejected = result && Array.isArray(result.rejected) ? result.rejected : []
-    if (rejected.length) {
-      log.error(`[LanSync] flush ${op}: ${rejected.length} of ${list.length} rows rejected by the bulk op — quarantined under ${META_FLUSH_QUARANTINE_PREFIX}${op}`)
-      const err = new Error('per-row rejection: ' + rejected.map(r => (r && r.reason) || 'unknown').join('; ').slice(0, 300))
-      const entry = quarantineFlushRows(state, op, rejected.map((r, i) => ({ ...list[r && r.index != null ? r.index : i], __rejectReason: (r && r.reason) || 'unknown' })), err)
-      if (entry) quarantined.push(entry)
-      else { ok = false; return false } // D18: parking failed — caller RETAINS the buffer segment
-    }
-    return true
-  }
-  for (const r of flushRoutes) {
-    // D18 (2026-10-02): the buffer segment used to clear UNCONDITIONALLY — when BOTH the bulk
-    // write AND quarantine parking failed, the rows were silently destroyed (silent row loss
-    // behind a flushFailed ack). Retain the segment for the next flush attempt instead; the
-    // throw path already logged loudly, so keep one explicit retain trace here.
-    if (flushOne(buf[r.buf], r.op) !== false) buf[r.buf] = []
-    else log.error(`[LanSync] flush ${r.op}: quarantine parking failed — ${buf[r.buf].length} buffered rows RETAINED for retry (silent drop avoided)`)
-  }
-  // Coalesced remote-announce fan-out (P2 2026-09-20): one emit per committed ingest pass
-  // instead of one per announce row. Runs even when a bulk flush failed above — the meta rows
-  // were already committed via setMeta before buffering.
-  if (state.pendingAnnounces && state.pendingAnnounces.size) {
-    const ta = require('./tomato-announce')
-    for (const [key, value] of state.pendingAnnounces) {
-      try { ta.emitRemoteAnnounce(key, value) } catch (e) { log.warn('[LanSync] announce emit failed:', e.message) }
-    }
-    state.pendingAnnounces = null
-  }
-  return { ok, quarantined } // P0-1: false = at least one bulk op threw; the segment must not be acked
-}
-
+// Flush/quarantine layer (busFor/busWrite/flushPendingWrites) moved verbatim to ./sync-apply-flush.js (size ratchet).
 /**
  * Local max oplog seq — reported to peers as `ack.appliedToSeq` so their per-peer push watermarks
  * can advance and rounds ship deltas instead of re-pushing the full backlog every time.
@@ -851,18 +713,21 @@ function metaSnapshotRows (state) {
   return out
 }
 
+// S2 causal receive seam: moved verbatim to ./sync-adjudicate.js (size ratchet) — re-exported
+// below so the bootstrap/test import surface is unchanged.
+
 module.exports = {
   SYNCABLE_ENTITIES,
   SECURITY_LOCK_KEY,
   META_CONFLICT_BACKUP_PREFIX,
   META_CONFLICT_BACKUP_CAP,
-  compareMetaBackupKeys, // D17: exported for unit tests (prune age order)
-  parseMetaBackupKeySuffix,
+  compareMetaBackupKeys: adjudicate.compareMetaBackupKeys, // D17: prune age order (moved, re-exported)
+  parseMetaBackupKeySuffix: adjudicate.parseMetaBackupKeySuffix,
   hasEquivalentConflictCopy, // D18: exported for unit tests (scan-failure = indeterminate)
   scrubMilestoneBlobsFor, // D20-DOMB1: exported for unit tests (sync tombstone milestone scrub)
-  // 2026-10-09 poison-row quarantine: where a failed flush parks its dropped rows.
-  META_FLUSH_QUARANTINE_PREFIX,
-  QUARANTINE_ROW_SAMPLE, // 2026-10-09 bounded per-entry row sample (exported for unit tests)
+  // 2026-09-26 poison-row quarantine: where a failed flush parks its dropped rows
+  // (moved to ./sync-apply-flush.js, size ratchet — re-exported below for compatibility).
+  ...require('./sync-apply-flush'),
   // Exported (2026-09-19): lan-sync-bootstrap destructures this for allRows()/hydration skips —
   // the missing export made every allRows() call (legacy seed, snapshot serving) throw TypeError.
   isMachineLocalSettingKey,
@@ -877,10 +742,8 @@ module.exports = {
   clampSkew,
   applyRowSafe,
   consumeAppliedRound,
-  flushPendingWrites,
   readMaxOplogSeq,
   writeMetaConflictBackup,
-  // Arch review 2026-09-22 rec #1: the injected-ingress write door (lan-sync-bootstrap routes its manifest-op writes through the same helper so the engine stays one bus-routed surface).
-  busFor,
-  busWrite,
+  // S2 causal receive seam (moved to ./sync-adjudicate.js, re-exported) + S4 surface.
+  causalInboundRelation: adjudicate.causalInboundRelation,
 }

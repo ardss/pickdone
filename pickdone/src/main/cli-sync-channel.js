@@ -102,6 +102,34 @@ function createSyncCmdHandler ({ dispatch, setMeta, log, getMeta, deleteMeta }) 
         const result = await dispatch('syncSetEnabled', { enabled: cmd.enabled !== false })
         return respond(seq, { ok: true, action, result, status: dispatch('syncGetStatus') })
       }
+      // 2026-10-11 (journey-relay): OPTIONAL relay transport over the SAME registry —
+      // relayGetStatus/relaySetEnabled/relaySyncNow/relayForget are registered by
+      // relay-sync-bootstrap next to the LAN-sync ops, so the CLI can drive the remote
+      // transport headlessly exactly like the LAN node (SSH hosts, three-machine drills).
+      // The E2E root key may be injected (--root-key) to simulate shared-account pairing;
+      // when omitted the adapter generates one on first enable (single-device posture).
+      if (action === 'relay-status') {
+        return respond(seq, { ok: true, action, status: dispatch('relayGetStatus') })
+      }
+      if (action === 'relay-enable') {
+        const payload = { enabled: true, account: cmd.account, baseUrl: cmd.baseUrl }
+        if (cmd.rootKey) payload.rootKey = cmd.rootKey // absent = the adapter generates one
+        if (cmd.enrollment) payload.enrollment = cmd.enrollment // operator-issued registration secret
+        const result = await dispatch('relaySetEnabled', payload)
+        return respond(seq, { ok: true, action, result })
+      }
+      if (action === 'relay-disable') {
+        const result = await dispatch('relaySetEnabled', { enabled: false })
+        return respond(seq, { ok: true, action, result })
+      }
+      if (action === 'relay-sync') {
+        const result = await dispatch('relaySyncNow')
+        return respond(seq, { ok: true, action, result })
+      }
+      if (action === 'relay-forget') {
+        const result = await dispatch('relayForget')
+        return respond(seq, { ok: true, action, result })
+      }
       return respond(seq, { ok: false, action, error: 'unknown cliSyncCmd action: ' + action })
     } catch (e) {
       respond(seq, { ok: false, action, error: String((e && e.message) || e) })

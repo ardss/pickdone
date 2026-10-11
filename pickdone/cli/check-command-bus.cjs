@@ -250,7 +250,7 @@ function run () {
   const DYNAMIC_ANCHORS = [
     { file: 'src/main/lan-sync-bootstrap.js', frags: ["require('./sync-conflict-backups').ops(() => (op, p) => state.db.call(op, p))"] },
     { file: 'src/main/lan-sync-bootstrap.js', frags: ['dbCall: (op, p) => state.db.call(op, p)'] },
-    { file: 'src/main/sync-apply.js', frags: ['createBus((op, p) => state.db.call(op, p))'] },
+    { file: 'src/main/sync-apply-flush.js', frags: ['createBus((op, p) => state.db.call(op, p))'] },
     { file: 'src/main/sync-apply-hydrate.js', frags: ['new Map((state.db.call(op, {}) || [])'] }
   ]
   let p2sites = 0

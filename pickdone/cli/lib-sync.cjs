@@ -106,5 +106,64 @@ module.exports = async function runSync ({ opts, lib, emit }) {
         }
         throw new lib.CliError('usage: sync v2 <on|off|state>', 'USAGE')
       }
-      throw new lib.CliError('usage: sync <status|enable|disable|pair|pair-respond|unpair|v2>  (pair needs --host; pair-respond accepts --code NNNNNN or answers a pending request; unpair needs --device; v2 flips revision recording)', 'USAGE')
+      if (op === 'relay') {
+        // 2026-10-11 (journey-relay): OPTIONAL remote relay transport, headless — same
+        // db-sync-ops surface the Device Center will use; main/CLI only by design
+        // (not renderer-whitelisted yet). Non-loopback relays need TODO_RELAY_ALLOW_REMOTE=1.
+        const sub = opts._[1]
+        if (sub === 'status' || sub == null) {
+          const seq = lib.writeSyncCmd({ action: 'relay-status' })
+          const ack = await lib.waitForSyncAck(seq)
+          if (!ack) throw new lib.CliError('sync relay status failed: App is not running or did not consume the command', 'APP_NOT_RUNNING')
+          // NOTE: deliberately NOT `st` — the status-payload contract test scans every
+          // `st.<field>` read in this file against the LAN-sync payload contract; the
+          // relay status is a DIFFERENT payload (relayGetStatus) with its own fields.
+          const rs = ack.status
+          if (opts.json) return emit(rs)
+          return console.log([
+            `relay: ${rs.enabled ? 'enabled' : 'disabled'}  account: ${rs.account || '-'}  baseUrl: ${rs.baseUrl || '-'}`,
+            `registered: ${rs.registered ? 'yes' : 'no'}  cursor: ${rs.cursor}  polling: ${rs.polling ? 'yes' : 'no'}`,
+            `rounds: ${rs.rounds}  pushed: ${rs.pushedTotal}  pulled: ${rs.pulledTotal}  quarantined: ${rs.quarantinedTotal}  applied: ${rs.appliedTotal}`,
+            rs.lastError ? `lastError: ${rs.lastError}` : 'lastError: none',
+          ].join('\n'))
+        }
+        if (sub === 'enable') {
+          const account = opts.account != null && opts.account !== true ? String(opts.account) : null
+          const baseUrl = opts['base-url'] != null && opts['base-url'] !== true ? String(opts['base-url']) : null
+          const rootKey = opts['root-key'] != null && opts['root-key'] !== true ? String(opts['root-key']) : null
+          const enrollment = opts.enrollment != null && opts.enrollment !== true ? String(opts.enrollment) : null
+          if (!account || !baseUrl) throw new lib.CliError('usage: sync relay enable --account <id> --base-url <origin> [--root-key <64hex>] [--enrollment <secret>]  (remote relay also needs TODO_RELAY_ALLOW_REMOTE=1)', 'USAGE')
+          const seq = lib.writeSyncCmd({ action: 'relay-enable', account, baseUrl, rootKey, enrollment })
+          const ack = await lib.waitForSyncAck(seq)
+          if (!ack) throw new lib.CliError('sync relay enable failed: App is not running or did not consume the command', 'APP_NOT_RUNNING')
+          if (!ack.ok) throw new lib.CliError('sync relay enable failed: ' + (ack.error || 'unknown'), 'SYNC_ERROR')
+          if (opts.json) return emit(ack.result)
+          return console.log(`✓ relay enabled for ${account} @ ${baseUrl}${ack.result && ack.result.firstRound ? ` (first round: ${JSON.stringify(ack.result.firstRound)})` : ''}`)
+        }
+        if (sub === 'sync') {
+          const seq = lib.writeSyncCmd({ action: 'relay-sync' })
+          const ack = await lib.waitForSyncAck(seq)
+          if (!ack) throw new lib.CliError('sync relay sync failed: App is not running or did not consume the command', 'APP_NOT_RUNNING')
+          if (opts.json) return emit(ack.result)
+          const r = ack.result || {}
+          if (!r.ok) return console.log(`✗ relay round failed: ${r.error || r.skipped || 'unknown'}`)
+          return console.log(`✓ relay round ok — pushed ${r.pushed}  pulled ${r.pulled}  quarantined ${r.quarantined}  applied ${r.businessApplied}  cursor ${r.cursor}`)
+        }
+        if (sub === 'disable') {
+          const seq = lib.writeSyncCmd({ action: 'relay-disable' })
+          const ack = await lib.waitForSyncAck(seq)
+          if (!ack) throw new lib.CliError('sync relay disable failed: App is not running or did not consume the command', 'APP_NOT_RUNNING')
+          if (opts.json) return emit(ack.result)
+          return console.log('✓ relay disabled (config + secrets retained)')
+        }
+        if (sub === 'forget') {
+          const seq = lib.writeSyncCmd({ action: 'relay-forget' })
+          const ack = await lib.waitForSyncAck(seq)
+          if (!ack) throw new lib.CliError('sync relay forget failed: App is not running or did not consume the command', 'APP_NOT_RUNNING')
+          if (opts.json) return emit(ack.result)
+          return console.log('✓ relay identity forgotten (secrets + durable state cleared)')
+        }
+        throw new lib.CliError('usage: sync relay <status|enable|sync|disable|forget>  (enable needs --account + --base-url; remote relay also needs TODO_RELAY_ALLOW_REMOTE=1)', 'USAGE')
+      }
+      throw new lib.CliError('usage: sync <status|enable|disable|pair|pair-respond|unpair|v2|relay>  (pair needs --host; pair-respond accepts --code NNNNNN or answers a pending request; unpair needs --device; v2 flips revision recording; relay drives the remote transport)', 'USAGE')
 }

@@ -582,7 +582,7 @@ if (!app.requestSingleInstanceLock(...__multiLockArgs)) {
       // second, undo-stack-wiping full reload on top of the targeted lan-sync-apply broadcast.
       resyncExternalWatch: () => extWatch.resyncExternalWatch(),
     })
-
+    try { require('./relay-sync-bootstrap').initRelaySync() } catch (e) { log.warn('[RelaySync] init failed:', e && e.message) } // Sync v2 optional transport: lazy + default OFF, shares the sync-init boundary (relay-sync-bootstrap.js)
     // Auto-update: init the event bridge + delayed silent check (does not compete with startup; degrades automatically in non-update environments)
     updater.init(win)
     setTimeout(() => { updater.check().then(r => { if (r.active) log.info('[Updater]', r.status) }).catch(() => {}) }, 8000)
@@ -754,7 +754,7 @@ app.on('will-quit', (event) => {
     // Round-3 stability (2026-09-26): AWAIT the stop — the settle-point persists (security ring +
     // peer watermarks) run via db.call and must beat dbm.close(); fire-and-forget lost the
     // in-flight round's watermark confirmations.
-    try { await require('./lan-sync-bootstrap').stopSyncForQuit() } catch { /* sync never initialized */ }
+    try { await require('./lan-sync-bootstrap').stopSyncForQuit() } catch { /* sync never initialized */ }  try { await require('./relay-sync-bootstrap').stopForQuit() } catch { /* relay never initialized */ } // relay: halt poller + let an in-flight round's persist beat dbm.close()
     // TQ-1 (2026-10-03): the quit is now committed (confirm resolved / will-quit teardown) — clear
     // the durable running-session row before the DB closes, so the next boot does not reconcile a
     // phase the user explicitly ended. A phase that survives only because a crash skipped this
@@ -801,7 +801,7 @@ function registerIpc () {
     isLocked, isLockWindow, lockAppNow, unlockAppNow, verifyLockPassword, allowWithinRate,
     isSafeExternal, attachDir,
     resyncDbWatch: () => extWatch.currentResyncDbWatch(),
-    notifySyncChange: op => { try { require('./lan-sync-bootstrap').kickSyncRound('local-write:' + op) } catch { /* sync lazy-not-init */ } },
+    notifySyncChange: op => { try { require('./lan-sync-bootstrap').kickSyncRound('local-write:' + op) } catch { /* sync lazy-not-init */ }  try { require('./relay-sync-bootstrap').kickRelayRound('local-write:' + op) } catch { /* relay lazy-not-init */ } },
     broadcastTomatoRecordsChanged, broadcastTodosChanged, broadcastWhiteNoiseUpdated,
     rebuildTrayMenu, getTray: () => tray, updateTomatoTray,
     applyShortcuts
