@@ -49,7 +49,7 @@ jobs:
           git clone --depth 1 --branch "v$VENDOR_VERSION" \
             https://github.com/m4heshd/better-sqlite3-multiple-ciphers.git /tmp/bs3mc-src
           cd /tmp/bs3mc-src
-          npm ci --ignore-scripts
+          npm ci --ignore-scripts || npm install --ignore-scripts --no-audit --no-fund
 
       - name: Compile against Electron headers (glibc 2.31 toolchain)
         working-directory: /tmp/bs3mc-src
