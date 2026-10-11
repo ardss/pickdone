@@ -354,6 +354,17 @@ module.exports = function todoHandlers (ctx) {
       // the 'ls-mirror' hook fires the sync kick, 'undo-barrier' re-baselines the external-write
       // watcher (our own WAL write must not surface as an external CLI write).
       const r = bus.commit('todo', 'purgeBin')
+      // M2 P3 (2026-10-09): collect→commit race sweep — a task soft-deleted between the ids
+      // collection above and the purgeBin commit WAS purged by the commit but its attachment
+      // files were never in `ids`. bus.commit returns the ACTUALLY purged ids (db.purgeRecycleBin's
+      // row-granular result); sweep the difference post-commit. A failed unlink here stays
+      // warn-only (the files-before-rows doctrine already ran for the pre-collected set).
+      try {
+        const purged = Array.isArray(r) ? r.map(String) : []
+        const seen = new Set(ids.map(String))
+        const missed = purged.filter(id => !seen.has(id))
+        if (missed.length) purgeAttachmentFiles(attachDir, missed)
+      } catch (err) { log.warn('[Purge] commit-race attachment sweep failed (files may be orphaned):', err) }
       // M-4 (2026-09-20): mirror the GAP-B pattern — purge is a write; without the kick peers only
       // saw emptied recycle bins at the next 5-min periodic round.
       // M2 P2 (2026-10-09, same caliber as csv-import settleAfterImport): the purge has already
