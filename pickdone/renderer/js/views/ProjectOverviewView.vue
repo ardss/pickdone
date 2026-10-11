@@ -171,8 +171,15 @@ export default {
     },
     fmtDate (ts) { return ts ? dayjs(ts).format(FMT.date) : '—' },
     deadlineText (ts) {
-      const d = Math.ceil((ts - Date.now()) / 864e5)
+      // Wall-clock caliber: the day count must run against the store's todayTimestamp (the same
+      // day-start anchor ProjectView.daysLeft uses), not a raw Date.now(). A deadline anchored
+      // at today's 00:00 counted `ceil((0 - nowMs)/864e5)` = 0 or -1 depending on the wall time
+      // of the visit — the card flipped between "overdue" and "0 days left" across midnight
+      // while the project page (todayTs-based) correctly said "due today".
+      const base = this.$store.state.todo.todayTimestamp || dayjs().startOf('day').valueOf()
+      const d = Math.ceil((ts - base) / 864e5)
       if (d < 0) return this.$t('statsB.ProjectsView.overdue')
+      if (d === 0) return this.$t('statsB.ProjectView.dueToday')
       return d <= 3 ? this.$t('statsB.ProjectsView.dueInDays3', { n: d }) : this.$t('statsB.ProjectsView.dueInDays', { n: d })
     },
     deadlineClass (ts) {

@@ -161,6 +161,10 @@ export default {
     /* D14-A6: full list first — the badge must show the TRUE count (the visible list is capped
        below; the badge used to read the sliced array and showed "6" for 11 sessions) */
     settledTotal () {
+      // Wall-clock reactivity: the "today" cut is `dayjs()`-based with no reactive dependency, so
+      // across midnight the computed kept serving yesterday's frozen slice until some unrelated
+      // store change re-evaluated it (same wall-clock family as remainSec's `void this.tick`).
+      void this.tick
       let n = 0
       for (const r of (this.tomato.tomatoRecordList || [])) {
         if (r.succeed === false || !r.endTime) continue
@@ -170,6 +174,9 @@ export default {
       return n
     },
     settled () {
+      // Same tick dependency as settledTotal: the view is long-lived and must re-cut the ledger
+      // at midnight without waiting for an unrelated store mutation.
+      void this.tick
       const out = []
       for (const r of (this.tomato.tomatoRecordList || [])) {
         if (r.succeed === false || !r.endTime) continue
