@@ -591,7 +591,18 @@ export default {
       //     drown the peer's edit with gateTs=now, which skips nothing).
       const priorStamp = (db && typeof db === 'object') ? Number(db._savedAt) : NaN
       if (!db || typeof db !== 'object' || (db._savedAt || 0) < lsAt) {
-        const gateStamp = Number.isFinite(priorStamp) && priorStamp > 0 ? priorStamp : Date.now()
+        // 2026-10-09 P3: the write-back's stamp must advance WITH its content. This branch writes
+        // the NEWER LS values (snapshot age = lsAt) but used to stamp them with the OLD db._savedAt
+        // — content newer than its own watermark, so a peer blob arriving in the gap between
+        // priorStamp and the write-back could arbitrate "newer than the doc" and compress over the
+        // local settings. Gate on the content's ACTUAL age (lsAt; the LS persist stamp the branch
+        // is conditioned on): stamp >= every peer row the LS snapshot already supersedes, while
+        // rows written AFTER that snapshot still win putRow's gate — the anti-re-age semantics
+        // finding 15 protects are preserved (we no longer fake a now() stamp, we use the real
+        // snapshot time). Only a machine with no LS stamp at all falls back to now().
+        const gateStamp = lsAt > 0
+          ? lsAt
+          : (Number.isFinite(priorStamp) && priorStamp > 0 ? priorStamp : Date.now())
         mirrorToDb('db.settingsState', { ...state, _savedAt: gateStamp, schemaV: SETTINGS_SCHEMA_V })
         return
       }
