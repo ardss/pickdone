@@ -71,7 +71,7 @@ module.exports = function systemHandlers (ctx) {
     },
 
     // --- External links ---
-    'open-external-url': (e, url) => {
+    'open-external-url': async (e, url) => {
       // D7 (2026-09-22, main-ipc-5): locked-state gate — this was the last data-plane channel in the
       // family without it (notification/open-file/download/save-upload all gate). While locked, any
       // surviving renderer window could still launch the browser at an arbitrary https URL (fishing
@@ -82,8 +82,13 @@ module.exports = function systemHandlers (ctx) {
       // renderer could not distinguish "opened" from "rejected by the scheme guard". Symmetric
       // throw (like the isLocked guard above) + explicit true on the open path.
       if (!isSafeExternal(url)) throw new Error('unsafe external url')
-      shell.openExternal(url)
-      return true
+      // M2 P3 (2026-10-09, D11 precedent — handlers/attachments.js openExternalSafely): the open
+      // used to be fire-and-forget — a rejected shell.openExternal became an UNHANDLED REJECTION
+      // in the main process while the channel still reported success. Await and surface the
+      // failure honestly ({ok:false,error}); ipcRenderer.invoke is promise-based, so the async
+      // handler shape is transparent to the renderer.
+      try { await shell.openExternal(url); return true }
+      catch (err) { return { ok: false, error: String((err && err.message) || err) } }
     },
     // [IPC dead channels cleaned] download-file/open-file-in-viewer/goto-main-window-and-select-todo/
     // show-todo-list/focus-main-window/open-settings-modal/user-logout/get-memory-metrics/
