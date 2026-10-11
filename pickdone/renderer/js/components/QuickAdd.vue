@@ -221,6 +221,15 @@ export default {
       const raw = this.text.trim()
       if (!raw) return
       this._submitting = true
+      // Input that parses to PURE date words ("明天", "10月1日"…) has an empty restText: the old
+      // `restText || raw` fallback re-created the date string itself as a junk task titled "明天".
+      // A date-only input schedules nothing to do — refuse creation and say so (reuse the
+      // existing generic "name cannot be empty" key; no new i18n key was allowed here).
+      if (this.parsed && this.parsed.restText === '') {
+        this._submitting = false
+        if (!this.quiet) this.$message.warning(this.$t('statsB.ProjectView.nameRequired'))
+        return
+      }
       let content = raw
       if (this.parsed) content = this.parsed.restText || raw
       // Tag page context: tags are embedded in the content (#tag); appending it is required to land under the current tag.

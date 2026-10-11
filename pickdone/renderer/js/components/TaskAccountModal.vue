@@ -178,18 +178,38 @@ export default {
     saveEdit (auto) {
       const d = this.draft
       if (!d) return
-      this.commitDraft(d, auto)
+      // When the persistence step rejects a future-ending interval, keep the editor open
+      // (editingId + draft intact) so the user can correct the time — same keep-edit contract
+      // as the category rename channels.
+      if (!this.commitDraft(d, auto)) return
       this.editingId = null
       this.draft = null
     },
-    // Shared persistence step of the editor confirm (used by saveEdit and the switch auto-commit)
+    // [fix 2026-10-09] shared future-booking guard (same doctrine as TomatoFocusRecordModal's
+    // save path): today's backfilled record may not end in the future — the whole interval
+    // (start + focus) must lie in the past, otherwise the ledger books focus time that has not
+    // happened yet. Returns true when the draft is bookable, false after surfacing the error.
+    draftEndsInFuture (d) {
+      const endTs = d.day0 + d.startMin * 60000 + d.dur * 60000
+      return endTs > Date.now()
+    },
+    // Shared persistence step of the editor confirm (used by saveEdit and the switch auto-commit).
+    // Returns false (after an error toast) when the edited interval ends in the future — the
+    // caller must NOT clear the editor so the user can correct the time.
     commitDraft (d, auto) {
+      if (this.draftEndsInFuture(d)) {
+        // Reuse the sibling modal's existing "start time invalid" key: same user-facing fact
+        // (a ledger record ending in the future is not a bookable record).
+        this.$message.error(this.$t('statsD.TomatoFocusRecord.invalidStartTime'))
+        return false
+      }
       const startTs = d.day0 + d.startMin * 60000
       this.$store.commit('tomato/updateRecord', { tomatoId: d.tomatoId, patch: { endTime: startTs + d.dur * 60000, focusDuration: d.dur, restDuration: d.abandoned ? 0 : d.rest, succeed: !d.abandoned } })
       // [fix 2026-10-09] the row-switch auto-commit announces more quietly ("已自动保存") than the
       // explicit save button — a mere row click used to fire the full "记录已更新" toast
       if (auto) this.$message.info(this.$t('statsK.TomatoAccount.autoSaved'))
       else this.$message.success(this.$t('statsK.TomatoAccount.saved'))
+      return true
     },
     delRecord (r) {
       this.$confirm(this.$t('statsK.TomatoAccount.deleteConfirm'), this.$t('statsK.TomatoAccount.delete'), { type: 'warning' })
@@ -224,6 +244,12 @@ export default {
       // re-derives dateKey from endTime (see taskMenu.js's backfill), so a record straddling
       // midnight (endTime past 00:00) landed on the PREVIOUS day here and diverged from the DB.
       const endTime = startTs + d.dur * 60000
+      // [fix 2026-10-09] same future-booking guard as the edit channel: a manually added record
+      // may not end in the future (was: silently bookable). Keep the form open for correction.
+      if (endTime > Date.now()) {
+        this.$message.error(this.$t('statsD.TomatoFocusRecord.invalidStartTime'))
+        return
+      }
       this.$store.commit('tomato/addRecord', {
         // Manually added records get a random tail: two backfills with the same minute and duration are no longer silently swallowed by deterministic-id idempotent dedup
         tomatoId: 'tmt_a2_' + startTs + '_' + d.dur + '_' + Math.random().toString(36).slice(2, 7), endTime,
