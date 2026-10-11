@@ -117,15 +117,15 @@
       {
         "from": "node_modules/electron-log",
         "to": "node_modules/electron-log"
-    },
+      },
       {
         "from": "node_modules/electron",
         "to": "node_modules/electron",
-      "filter": [
-        "index.js",
-        "package.json"
-      ]
-    },
+        "filter": [
+          "index.js",
+          "package.json"
+        ]
+      },
       {
         "from": "assets/vendor-lib/dayjs-plugin-isoWeek.js",
         "to": "assets/vendor-lib/dayjs-plugin-isoWeek.js"

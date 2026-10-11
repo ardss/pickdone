@@ -22,7 +22,7 @@
  * to be key-authenticated. Exit 0 = the whole journey passes; exit 1 = first failed step.
  */
 
-const { spawn, execFileSync } = require('node:child_process')
+const { spawn, spawnSync, execFileSync } = require('node:child_process')
 const crypto = require('node:crypto')
 const fs = require('node:fs')
 const os = require('node:os')
@@ -41,7 +41,10 @@ const REMOTE = arg('--remote', 'ardss')
 const REMOTE_DIR = arg('--remote-dir', 'C:\\Users\\Public\\jrelay')
 const RESTART_SSH = arg('--relay-restart-ssh', null)
 const KEEP = process.argv.includes('--keep')
-const ACCOUNT = 'journey-relay-' + Date.now().toString(36)
+// HOSTED relays (entitlement gate on) reject every unbound account at register — the
+// operator provisions the binding BEFORE the journey (provision.cjs on the relay host,
+// same durable billing store) and pins the account name here so both sides match.
+const ACCOUNT = arg('--account', null) || ('journey-relay-' + Date.now().toString(36))
 
 const APP_DIR = path.resolve(arg('--app', path.join(ROOT, 'dist', 'win-unpacked')))
 const EXE = path.join(APP_DIR, 'PickDone.exe')
@@ -78,30 +81,49 @@ const ssh = (alias, remoteCmd, opts = {}) => run('ssh', ['-o', 'BatchMode=yes', 
 
 /** Parse the LAST JSON object found in output (CLI prints human lines before --json payloads). */
 function lastJson (out) {
-  const lines = String(out).split(/\r?\n/).filter(l => l.trim().startsWith('{'))
-  if (!lines.length) throw new Error('no JSON line in output: ' + String(out).slice(0, 400))
-  return JSON.parse(lines[lines.length - 1])
+  const raw = String(out).trim()
+  const start = raw.indexOf(String.fromCharCode(123))
+  const end = raw.lastIndexOf(String.fromCharCode(125))
+  if (start < 0 || end <= start) throw new Error(String(raw).slice(0, 400))
+  return JSON.parse(raw.slice(start, end + 1))
 }
 
 /* ---------------- device A (local) ---------------- */
 
 const A = { ud: fs.mkdtempSync(path.join(os.tmpdir(), 'jrelay-a-')) }
 
-/* Local CLI needs TODO_USER_DATA_DIR/TODO_DB_DIR — spawn through cmd so env sticks per call. */
+/* Local CLI: child_process.spawnSync(node, [CLI, ...args], { env }) DIRECTLY with the
+ * isolation env (the journey-sync.cjs pattern). A cmd.exe set-chain detour was tried and
+ * is BROKEN: node's Windows argv quoting escapes the inner quotes when the /c string
+ * contains spaces, and cmd then tries to execute the quoted node path as a command name
+ * (`'"C:\...\node.exe"' is not recognized...`). Direct argv passing needs no quoting at all. */
 function cliLocalEnv (args, timeoutMs = 120000) {
-  const envLine = `set "TODO_USER_DATA_DIR=${A.ud}"&& set "TODO_DB_DIR=${A.ud}"&& `
-  return tryRun('cmd.exe', ['/d', '/s', '/c', `${envLine}"${process.execPath}" "${LOCAL_CLI}" ${args.join(' ')}`], { timeout: timeoutMs })
+  const r = spawnSync(process.execPath, [LOCAL_CLI, ...args], {
+    timeout: timeoutMs,
+    env: { ...process.env, TODO_USER_DATA_DIR: A.ud, TODO_DB_DIR: A.ud },
+    encoding: 'utf8',
+    windowsHide: true,
+  })
+  // status is null on spawn error / timeout kill — normalize to -1 (same as tryRun)
+  return { code: r.status != null ? r.status : -1, out: (r.stdout || '') + (r.stderr || '') }
 }
 
 /* ---------------- device B (remote, over SSH) ---------------- */
+/* The remote's default SSH shell is bash (Git for Windows sshd): remote commands are
+ * bash-syntax with /c/... paths; .cmd wrappers execute through cmd interop. */
 
 const B = { ud: null, dir: REMOTE_DIR }
 const B_ENV_FILE = path.join(B.dir, 'jrelay-env.cmd')
 const B_CLI_CMD = path.join(B.dir, 'jrelay-cli.cmd')
+/** bash path for REMOTE invocation (C:\Users\... -> /c/Users/...). */
+const bPosix = p => '/' + p.replace(/\\/g, '/').replace(/^([A-Za-z]):/, m => m[0].toLowerCase())
+const B_UD_POSIX = () => bPosix(B.ud)
+const B_CLI_POSIX = () => bPosix(B_CLI_CMD)
+const B_EXE_WIN = () => B.dir + '\\win-unpacked\\PickDone.exe'
 
 function cliRemote (args, timeoutMs = 180000) {
-  const quoted = args.map(a => /^--/.test(a) || /^[A-Za-z0-9_.:-]+$/.test(a) ? a : `"${a}"`).join(' ')
-  return tryRun('ssh', ['-o', 'BatchMode=yes', REMOTE, `"${B_CLI_CMD}" ${quoted}`], { timeout: timeoutMs })
+  const quoted = args.map(a => /^--/.test(a) || /^[A-Za-z0-9_.:@=-]+$/.test(a) ? a : `'${a}'`).join(' ')
+  return tryRun('ssh', ['-o', 'BatchMode=yes', REMOTE, `${B_CLI_POSIX()} ${quoted}`], { timeout: timeoutMs })
 }
 
 async function poll (budgetMs, fn) {
@@ -144,8 +166,21 @@ async function killInstances () {
   tryRun('powershell.exe', ['-NoProfile', '-Command',
     `Get-Process PickDone -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq '${EXE.replace(/'/g, "''")}' } | Stop-Process -Force`])
   tryRun('ssh', ['-o', 'BatchMode=yes', REMOTE,
-    `powershell -NoProfile -Command "Get-Process PickDone -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq '${(B.dir + '\\\\PickDone.exe').replace(/'/g, "''")}' } | Stop-Process -Force"`])
+    `powershell -NoProfile -Command "Get-Process PickDone -ErrorAction SilentlyContinue | Where-Object { \\$_.Path -eq '${B_EXE_WIN().replace(/'/g, "''")}' } | Stop-Process -Force"`])
 }
+
+/* Interrupt hardening: Ctrl+C / SIGTERM mid-journey must still run the path-scoped cleanup —
+ * an interrupted run otherwise leaks device A's spawned instance holding the temp dir
+ * (observed leak class). Terminal-close on Windows remains an uncatchable hard kill. */
+let interrupted = false
+function interruptCleanup (code) {
+  if (interrupted) return
+  interrupted = true
+  try { killInstances() } catch { /* best effort */ }
+  process.exit(code)
+}
+process.on('SIGINT', () => interruptCleanup(130))
+process.on('SIGTERM', () => interruptCleanup(143))
 
 /* ---------------- the journey ---------------- */
 
@@ -159,11 +194,30 @@ step('pre: relay reachable + enrollment door SHUT for unenrolled registrations',
   ok(`relay answers at ${RELAY_URL}; open registration rejected (403)`)
 })
 
+step('pre: packaged CLI present in win-unpacked (resources/cli/pickdone.js)', () => {
+  // the 2nd Windows box once shipped WITHOUT the packaged CLI (remote wrapper died with
+  // MODULE_NOT_FOUND mid-journey) — assert the artifact shape HERE, before any deploy
+  const PACKAGED_CLI = path.join(APP_DIR, 'resources', 'cli', 'pickdone.js')
+  if (!fs.existsSync(PACKAGED_CLI)) throw new Error(`packaged CLI missing: ${PACKAGED_CLI} — run: npm run pack`)
+  ok(`packaged CLI present: ${PACKAGED_CLI}`)
+})
+
 step('deploy: packaged app + CLI wrapper staged on the remote device', () => {
-  ssh(REMOTE, `if not exist "${B.dir}" mkdir "${B.dir}"`)
-  // copy the packaged app (robocopy /MIR is idempotent; ~1-2 min over LAN)
-  const r = tryRun('robocopy.exe', [APP_DIR, B.dir + '\\win-unpacked', '/MIR', '/NFL', '/NDL', '/NJH', '/NJS', '/NP'])
-  if (r.code > 7) throw new Error('robocopy failed code ' + r.code + ': ' + r.out.slice(0, 300))
+  ssh(REMOTE, `mkdir -p '${bPosix(B.dir)}'`)
+  // copy the packaged app OVER SSH (scp -r; robocopy is local-only and once mirrored
+  // the app into the LOCAL C:\Users\Public\jrelay — the remote stayed empty and the
+  // remote CLI died with MODULE_NOT_FOUND). ~1 min on the LAN; /MIR semantics via
+  // pre-delete so stale files never linger.
+  ssh(REMOTE, `rm -rf '${bPosix(B.dir)}/win-unpacked'`)
+  const r = tryRun('scp', ['-o', 'BatchMode=yes', '-r', path.join(APP_DIR), `${REMOTE}:${B.dir}/win-unpacked`], { timeout: 600000 })
+  if (r.code !== 0) throw new Error('scp -r failed: ' + r.out.slice(0, 300))
+  // assert the REMOTE packaged CLI landed — scp -r "succeeding" is not proof the tree is intact
+  const pkgCliPosix = bPosix(path.join(B.dir, 'win-unpacked', 'resources', 'cli', 'pickdone.js'))
+  const chk = tryRun('ssh', ['-o', 'BatchMode=yes', REMOTE, `test -f '${pkgCliPosix}' && echo present`], { timeout: 30000 })
+  if (chk.code !== 0 || !chk.out.includes('present')) {
+    throw new Error(`remote packaged CLI missing (${pkgCliPosix}) — scp tree incomplete (the MODULE_NOT_FOUND shape)`)
+  }
+  ok('remote packaged CLI verified on disk before any boot')
   // CLI wrapper: fixed env (isolated user dir) + system node on the packaged CLI.
   // Files are written locally then scp'd (no stdin copies over ssh).
   B.ud = 'C:\\Users\\Public\\jrelay\\ud-b-' + Date.now().toString(36)
@@ -185,40 +239,71 @@ step('deploy: packaged app + CLI wrapper staged on the remote device', () => {
   const tmpCli = path.join(os.tmpdir(), 'jrelay-cli.cmd')
   fs.writeFileSync(tmpEnv, envCmd)
   fs.writeFileSync(tmpCli, cliCmd)
-  run('scp', ['-o', 'BatchMode=yes', tmpEnv, `${REMOTE}:${B_ENV_FILE}`])
-  run('scp', ['-o', 'BatchMode=yes', tmpCli, `${REMOTE}:${B_CLI_CMD}`])
+  run('scp', ['-o', 'BatchMode=yes', tmpEnv, `${REMOTE}:${B.dir}/jrelay-env.cmd`])
+  run('scp', ['-o', 'BatchMode=yes', tmpCli, `${REMOTE}:${B.dir}/jrelay-cli.cmd`])
   fs.rmSync(tmpEnv, { force: true }); fs.rmSync(tmpCli, { force: true })
   ok(`app mirrored to ${REMOTE}:${B.dir}\\win-unpacked; wrappers staged (ud=${B.ud})`)
 })
 
 step('boot: both devices reach a live command bus', async () => {
-  // A: spawn the real exe with isolated env, detached
-  spawn(EXE, [], {
-    cwd: APP_DIR, detached: true, stdio: 'ignore',
+  // A: spawn the real exe with isolated env; stdout/stderr captured for post-mortem
+  const aLog = path.join(A.ud, 'app-out.log')
+  fs.writeFileSync(aLog, '')
+  const aChild = spawn(EXE, [], {
+    cwd: APP_DIR, detached: true, stdio: ['ignore', fs.openSync(aLog, 'a'), fs.openSync(aLog, 'a')],
     env: { ...process.env, TODO_USER_DATA_DIR: A.ud, TODO_DB_DIR: A.ud, PICKDONE_MULTI: '1', TODO_RELAY_ALLOW_REMOTE: '1' },
-  }).unref()
-  // B: remote boot through a one-shot wrapper (env from jrelay-env.cmd)
-  const bootCmd = path.join(B.dir, 'jrelay-boot.cmd')
-  const tmpBoot = path.join(os.tmpdir(), 'jrelay-boot.cmd')
+  })
+  aChild.unref()
+  // B: remote boot through a PowerShell wrapper — cmd `start` keeps the ssh pipe
+  // handles inherited (the session hangs until the app exits); Start-Process detaches.
+
+  const tmpBoot = path.join(os.tmpdir(), 'jrelay-boot.ps1')
   fs.writeFileSync(tmpBoot, [
-    '@echo off',
-    `call "${B_ENV_FILE}"`,
-    `start "" "${B.dir}\\win-unpacked\\PickDone.exe"`,
+    `$env:TODO_USER_DATA_DIR = '${B.ud}'`,
+    `$env:TODO_DB_DIR = '${B.ud}'`,
+    '$env:PICKDONE_MULTI = "1"',
+    '$env:TODO_RELAY_ALLOW_REMOTE = "1"',
+    `Start-Process -FilePath '${B_EXE_WIN()}' -WorkingDirectory '${B.dir}\\win-unpacked'`,
     '',
   ].join('\r\n'))
-  run('scp', ['-o', 'BatchMode=yes', tmpBoot, `${REMOTE}:${bootCmd}`])
+  run('scp', ['-o', 'BatchMode=yes', tmpBoot, `${REMOTE}:${B.dir}/jrelay-boot.ps1`])
   fs.rmSync(tmpBoot, { force: true })
-  ssh(REMOTE, `"${bootCmd}"`)
+  ssh(REMOTE, `powershell -NoProfile -ExecutionPolicy Bypass -File '${B.dir}\\jrelay-boot.ps1'`)
+  // bus-up ASSERTION: a full status payload, not merely exit 0 — ok:true + data.status.deviceId
+  const busUp = j => j && j.ok === true && !!(j.data && (j.data.status || j.data).deviceId)
+  const tBoot = Date.now()
   const upA = await poll(120000, async () => {
+    // gate on the app-owned DB file FIRST: a CLI poll fired before the exe's DB init would
+    // CREATE a plaintext todos.db, forcing the exe down the plaintext->encrypted migration
+    // path (db.key superseded) — after which the bus stays unreachable (APP_NOT_RUNNING).
+    if (!fs.existsSync(path.join(A.ud, 'todos.db'))) return null
     const r = cliLocalEnv(['sync', 'status', '--json'], 30000)
-    return r.code === 0 ? lastJson(r.out) : null
+    const j = r.code === 0 ? lastJson(r.out) : null
+    return busUp(j) ? j : null
   })
   const upB = await poll(120000, async () => {
+    // same gate on the remote side (the remote wrapper spawns the same CLI)
+    const rd = tryRun('ssh', ['-o', 'BatchMode=yes', REMOTE, `test -f '${B_UD_POSIX()}/todos.db' && echo ready`], { timeout: 30000 })
+    if (!rd.out.includes('ready')) return null
     const r = cliRemote(['sync', 'status', '--json'], 60000)
-    return r.code === 0 ? lastJson(r.out) : null
+    const j = r.code === 0 ? lastJson(r.out) : null
+    return busUp(j) ? j : null
   })
+  if (!upA || !upB) {
+    // post-mortem: process liveness + captured logs + the raw CLI answer
+    const ps = tryRun('powershell.exe', ['-NoProfile', '-Command', `Get-Process PickDone -ErrorAction SilentlyContinue | Select-Object Id,Path | Format-Table -AutoSize | Out-String`])
+    console.error('  [diag] PickDone processes:\n' + String(ps.out || '').trim().split('\n').map(l => '    ' + l).join('\n'))
+    console.error('  [diag] A app log tail:\n' + fs.readFileSync(aLog, 'utf8').split(/\r?\n/).slice(-12).map(l => '    ' + l).join('\n'))
+    const rA = cliLocalEnv(['sync', 'status', '--json'], 30000)
+    console.error(`  [diag] A CLI raw: exit=${rA.code} out=${String(rA.out).slice(0, 400)}`)
+    const rB = cliRemote(['sync', 'status', '--json'], 60000)
+    console.error(`  [diag] B CLI raw: exit=${rB.code} out=${String(rB.out).slice(0, 400)}`)
+    const rBud = tryRun('ssh', ['-o', 'BatchMode=yes', REMOTE, `powershell -NoProfile -Command "Get-ChildItem '${B.ud}' -ErrorAction SilentlyContinue | Select-Object Name | Out-String"`])
+    console.error('  [diag] B ud listing:\n' + String(rBud.out || '').trim())
+  }
   if (!upA || !upB) throw new Error(`command bus not reachable (A=${!!upA} B=${!!upB})`)
-  ok(`A up (${(upA.data && upA.data.status && upA.data.status.deviceName) || 'local'}) / B up (${(upB.data && upB.data.status && upB.data.status.deviceName) || 'remote'})`)
+  const nameOf = up => (up.data && (up.data.status || up.data).deviceName) || 'local'
+  ok(`A up (${nameOf(upA)}) / B up (${nameOf(upB)}) — full status payloads asserted, ${Date.now() - tBoot}ms to dual bus`)
 })
 
 step('enable: relay transport on BOTH devices (shared root key = manual account pairing)', async () => {
@@ -295,7 +380,7 @@ step('cleanup: forget relay identity on both, stop instances, remove temp data',
   await sleep(1500)
   if (!KEEP) {
     try { fs.rmSync(A.ud, { recursive: true, force: true }) } catch { /* locked handle — best effort */ }
-    tryRun('ssh', ['-o', 'BatchMode=yes', REMOTE, `cmd /c "if exist "${B.ud}" rd /s /q "${B.ud}""`], { timeout: 60000 })
+    tryRun('ssh', ['-o', 'BatchMode=yes', REMOTE, `rm -rf '${B_UD_POSIX()}'`], { timeout: 60000 })
   }
   ok(`instances stopped${KEEP ? ' (temp dirs KEPT via --keep: ' + A.ud + ' / ' + B.ud + ')' : ', temp data removed (isolation held — no real data touched)'}`)
 })
