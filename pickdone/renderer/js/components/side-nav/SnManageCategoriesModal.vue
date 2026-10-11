@@ -103,12 +103,37 @@ export default defineComponent({
     saveMgrEdit (c) {
       if (this.mgrEditing !== c.categoryId) return
       // D14-A12: a blank name used to silently restore the old name — warn instead (same
-      // inline-rename convention as HabitView's renameEmpty) and keep the editor open for a fix
+      // inline-rename convention as HabitView's renameEmpty) and keep the editor open for a fix.
+      // Blur has already fired by the time we get here, so "keep the editor open" is only real
+      // if we re-focus the (now-blurred) input — same $nextTick refocus patch as
+      // sideNavHandlers.saveCatEdit [D13 A12]; without it the warning leaves a zombie editor
+      // the keyboard cannot reach.
       if (!this.mgrName.trim()) {
         this.$message.warning(this.$t('statsG.SideNav.catNameEmptyWarn'))
+        this.$nextTick(() => {
+          const inp = document.querySelector('.cat-mgr-dialog input.sn-cat-edit')
+          if (inp) inp.focus()
+        })
         return
       }
-      this.$store.commit('category/updateCategory', { categoryId: c.categoryId, categoryName: this.mgrName.trim() })
+      // Duplicate live names are rejected by the store (CATEGORY_EXISTS). Previously the throw
+      // escaped the method: mgrEditing stayed set but the input was blurred/unfocused (zombie
+      // editor, no feedback). Same contract as sideNavHandlers.addCategory: warn, keep the edit
+      // state, re-focus so the user can pick another name (dialog is append-to-body: query at
+      // document level, per startMgrEdit).
+      try {
+        this.$store.commit('category/updateCategory', { categoryId: c.categoryId, categoryName: this.mgrName.trim() })
+      } catch (e) {
+        if (e && e.code === 'CATEGORY_EXISTS') {
+          this.$message.warning(this.$t('statsG.SideNav.catNameExistsWarn'))
+          this.$nextTick(() => {
+            const inp = document.querySelector('.cat-mgr-dialog input.sn-cat-edit')
+            if (inp) inp.focus()
+          })
+          return
+        }
+        throw e
+      }
       this.mgrEditing = null
     },
     /** [D19] Esc cancels an abandoned rename instead of committing it via blur-save

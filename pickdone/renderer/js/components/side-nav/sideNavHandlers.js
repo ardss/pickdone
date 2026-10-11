@@ -138,7 +138,10 @@ export async function createTag (vm) {
     const prev = vm.$store.state.ui.userTags.slice()
     const list = prev.slice()
     if (!list.includes(name) && !vm.tags.some(t => t.name === name)) list.push(name)
-    if (list.length === prev.length) return
+    // P3: a duplicate tag used to return silently — the prompt just vanished with no feedback.
+    // Surface it with the same warning idiom the category rename channels use (the message is
+    // "name already exists", accurate for tags too — no new i18n key needed).
+    if (list.length === prev.length) { vm.$message.warning(vm.$t('statsG.SideNav.catNameExistsWarn')); return }
     // D15 single-writer (KV-USERTAGS-TRIPLE-WRITER): creation goes through the ONE owner action
     // ui/commitUserTags (same revert + surface policy as rename/remove); the toast here is just
     // this call site's surface for the rethrown failure.
@@ -180,7 +183,23 @@ export function saveCatEdit (vm, c) {
     })
     return
   }
-  vm.$store.commit('category/updateCategory', { categoryId: c.categoryId, categoryName: n })
+  // Duplicate live names are rejected by the store (CATEGORY_EXISTS): the uncaught throw left
+  // catEditing set while the blurred input became a zombie the keyboard could not reach.
+  // Same contract as addCategory above: warn, keep the edit state, re-focus (same $nextTick
+  // refocus patch as the empty-name branch).
+  try {
+    vm.$store.commit('category/updateCategory', { categoryId: c.categoryId, categoryName: n })
+  } catch (e) {
+    if (e && e.code === 'CATEGORY_EXISTS') {
+      vm.$message.warning(vm.$t('statsG.SideNav.catNameExistsWarn'))
+      vm.$nextTick(() => {
+        const inp = vm.$el.querySelector('.sn-cat-edit')
+        if (inp) inp.focus()
+      })
+      return
+    }
+    throw e
+  }
   vm.catEditing = null
 }
 

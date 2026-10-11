@@ -457,9 +457,18 @@ export default {
         if (!name || name === this.cat.categoryName) return
         // [A4 fix] the store persist is async: only toast success once the SQLite write confirmed;
         // on failure keep the in-memory rename but say so (was: unconditional success toast).
-        const ok = await this.$store.commit('category/updateCategory', { categoryId: this.catId, categoryName: name })
-        if (ok === false) return this.$message.error(this.$t('statsH.main.actionFailedMsg'))
-        this.$message.success(this.$t('statsB.ProjectView.renamed'))
+        // Duplicate live names are rejected by the store with CATEGORY_EXISTS — that must NOT fall
+        // into the cancel-swallowing catch below (it silently ate the rename as "user cancelled",
+        // same fix family as ProjectOverviewView.createProject): surface the warning and keep the
+        // prompt-dialog semantics (the dialog is already closed at this point, nothing to keep).
+        try {
+          const ok = await this.$store.commit('category/updateCategory', { categoryId: this.catId, categoryName: name })
+          if (ok === false) return this.$message.error(this.$t('statsH.main.actionFailedMsg'))
+          this.$message.success(this.$t('statsB.ProjectView.renamed'))
+        } catch (e) {
+          if (e && e.code === 'CATEGORY_EXISTS') { this.$message.warning(this.$t('statsG.SideNav.catNameExistsWarn')); return }
+          throw e
+        }
       } catch { /* cancelled */ }
     },
     async setColor (color) {
