@@ -99,6 +99,13 @@ async function main () {
       fail('child: unknown op ' + op)
   }
   try { db.close() } catch { /* child exit releases the handle anyway */ }
+  // The enable/sync ops re-arm the relay poll loop; process.exit() while its timers/agent
+  // socket are live trips libuv's teardown assert (win async.c UV_HANDLE_CLOSING) and the
+  // child exits non-zero AFTER printing a valid result. Stop the machinery first.
+  try {
+    const st2 = bootstrap.__test.getState()
+    if (st2 && st2.adapter) st2.adapter.stop()
+  } catch { /* best-effort: exit must not depend on teardown */ }
   process.stdout.write(JSON.stringify({ ok: true, op, result }) + '\n')
   process.exit(0)
 }

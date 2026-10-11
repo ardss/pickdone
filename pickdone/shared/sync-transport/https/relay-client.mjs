@@ -108,7 +108,11 @@ export function createRelayClient({ nodeId, account, baseUrl, fetchImpl = fetch,
   async function post(path, body, retried = false) {
     const headers = { 'content-type': 'application/json' }
     if (deviceSecret) headers.authorization = `Bearer ${deviceSecret}`
-    const res = await fetchImpl(baseUrl + path, { method: 'POST', body: JSON.stringify(body), headers })
+    // connection:'close' — pooled keep-alive sockets keep libuv handles alive across
+    // process exit and trip the win32 teardown assert (async.c UV_HANDLE_CLOSING) in
+    // short-lived CLI/test processes; a sync client does ~1 round/sec, so a per-round
+    // TCP handshake is negligible (same doctrine as the unit-suite fetch fixes).
+    const res = await fetchImpl(baseUrl + path, { method: 'POST', body: JSON.stringify(body), headers, connection: 'close' })
     if (res.status === 401 && !retried && path !== '/v1/device/register') {
       // D25 drill-2: a relay that rebooted from torn state wiped its device registry — every
       // data route 401s forever until re-registration. One bounded re-auth + retry through the

@@ -18,7 +18,13 @@ async function device(dir, op, payload = {}) {
   try {
     output = await exec(process.execPath, args, { cwd: process.cwd(), timeout: 30000, maxBuffer: 1048576, windowsHide: true })
   } catch (e) {
-    throw new Error('device ' + op + ' failed: ' + (e.stdout || '') + (e.stderr || '') + e.message)
+    // Known libuv teardown class (win32 async.c UV_HANDLE_CLOSING): the child can print its
+    // final JSON line successfully and STILL die non-zero while native modules unwind. The
+    // result line is the contract; judge the op by it, not by the exit code — but only when
+    // a parseable final line actually exists.
+    const lines = String(e.stdout || '').trim().split(/\r?\n/).filter(Boolean)
+    const last = lines.at(-1)
+    if (last && last.startsWith('{') && /"ok":/.test(last)) { output = { stdout: e.stdout } } else { throw new Error('device ' + op + ' failed: ' + (e.stdout || '') + (e.stderr || '') + e.message) }
   }
   const line = output.stdout.trim().split(/\r?\n/).at(-1)
   const result = JSON.parse(line)
