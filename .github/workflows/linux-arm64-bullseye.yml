@@ -1,0 +1,139 @@
+# Reproducible Linux ARM64 build for Debian 11 (bullseye, glibc 2.31) targets — e.g. LubanCat
+# RK3588 boards. The upstream better-sqlite3-multiple-ciphers prebuilds require GLIBC_2.33
+# (found 2026-10-12: "[Init] DB init failed: version `GLIBC_2.33' not found" on Debian 11.11),
+# so this pipeline compiles the native module from the pinned full source tree against the
+# Electron headers inside a glibc-2.31 container, then packages AppImage + deb with that module
+# swapped in. Manual dispatch only; artifacts only — never touches Releases or the updater feed
+# (same contract as linux-build-test.yml).
+#
+# Recipe proven on real hardware 2026-10-12 (LubanCat, Debian 11.11 / glibc 2.31):
+#   node-gyp rebuild --runtime=electron --target=<electron> --arch=arm64 --force_build
+#   → better_sqlite3.node 2,412,504 B, max GLIBC_2.29, DB init + LAN sync OK on device.
+name: Linux ARM64 (Debian 11 compatible)
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: linux-arm64-bullseye-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-module:
+    name: Compile better_sqlite3 (glibc 2.31, arm64, Electron ABI)
+    runs-on: ubuntu-latest
+    container:
+      image: node:20-bullseye # glibc 2.31 + build-essential + python3 (matches Debian 11 targets)
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+
+      # Electron headers need the exact version the packaged app uses. Read from the lockfile —
+      # node_modules isn't installed in this (compile-only) job.
+      - name: Resolve Electron version
+        id: electron
+        run: echo "version=$(node -p "require('./pickdone/package-lock.json').packages['node_modules/electron'].version")" >> "$GITHUB_OUTPUT"
+
+      - name: Install native build prerequisites
+        run: |
+          apt-get update -qq
+          apt-get install -y --no-install-recommends build-essential python3
+
+      # The repo vendors only the built package (lib/ + prebuilds/), not the source tree
+      # (binding.gyp + deps/). Pull the identical-version upstream source for compilation.
+      - name: Fetch upstream source (better-sqlite3-multiple-ciphers)
+        working-directory: pickdone
+        run: |
+          VENDOR_VERSION=$(node -p "require('./vendor/better-sqlite3-multiple-ciphers/package.json').version")
+          echo "vendor version: $VENDOR_VERSION"
+          git clone --depth 1 --branch "v$VENDOR_VERSION" \
+            https://github.com/m4heshd/better-sqlite3-multiple-ciphers.git /tmp/bs3mc-src
+          cd /tmp/bs3mc-src
+          npm ci --ignore-scripts
+
+      - name: Compile against Electron headers (glibc 2.31 toolchain)
+        working-directory: /tmp/bs3mc-src
+        run: |
+          npx node-gyp rebuild \
+            --runtime=electron \
+            --target=${{ steps.electron.outputs.version }} \
+            --dist-url=https://electronjs.org/headers \
+            --arch=arm64 \
+            -- -Dforce_build=1
+          # guard: the gyp file no-ops when a prebuild exists — a missing binary must fail the job
+          test -f build/Release/better_sqlite3.node || { echo "::error::native module not produced"; exit 1; }
+
+      - name: Verify GLIBC ceiling ≤ 2.31 (hard gate, mirrors the on-device failure)
+        working-directory: /tmp/bs3mc-src
+        run: |
+          MAX_GLIBC=$(strings build/Release/better_sqlite3.node | grep -o 'GLIBC_2\.[0-9]*' | sort -uV | tail -1)
+          echo "max symbol: $MAX_GLIBC"
+          MAX_MINOR=${MAX_GLIBC#GLIBC_2.}
+          [ "$MAX_MINOR" -le 31 ] || { echo "::error::$MAX_GLIBC exceeds Debian 11 (2.31)"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: better_sqlite3-linux-arm64-electron
+          path: /tmp/bs3mc-src/build/Release/better_sqlite3.node
+          if-no-files-found: error
+
+  package:
+    name: Package arm64 AppImage + deb with bullseye module
+    needs: native-module
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: pickdone/package-lock.json
+
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-builder
+          key: electron-${{ runner.os }}-${{ hashFiles('pickdone/package-lock.json') }}
+          restore-keys: electron-${{ runner.os }}-
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: better_sqlite3-linux-arm64-electron
+          path: artifact
+
+      - name: Swap in the bullseye-compatible prebuild
+        run: |
+          TARGET=pickdone/vendor/better-sqlite3-multiple-ciphers/prebuilds/linux-arm64.node
+          cp "$TARGET" "${TARGET}.upstream-glibc233.bak"
+          cp artifact/better_sqlite3.node "$TARGET"
+          # sanity: ELF AArch64 (machine 183) and not the upstream binary
+          python3 - <<'EOF'
+          import struct
+          b = open('pickdone/vendor/better-sqlite3-multiple-ciphers/prebuilds/linux-arm64.node','rb').read()
+          assert b[:4] == b'\x7fELF', 'not an ELF'
+          assert struct.unpack('<H', b[0x12:0x14])[0] == 183, 'not AArch64'
+          print('OK: AArch64 ELF,', len(b), 'bytes')
+          EOF
+
+      - name: Install
+        working-directory: pickdone
+        run: npm ci
+
+      - name: Build renderer
+        working-directory: pickdone
+        run: npm run build:renderer
+
+      - name: Package AppImage + deb (arm64)
+        working-directory: pickdone
+        run: npx electron-builder --linux AppImage deb --arm64 --publish never
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pickdone-linux-arm64-debian11
+          path: |
+            pickdone/dist/*.AppImage
+            pickdone/dist/*.deb
+          if-no-files-found: error
