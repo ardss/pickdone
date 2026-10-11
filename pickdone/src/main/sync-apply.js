@@ -308,7 +308,14 @@ function applyRowInner (state, incoming) {
   // local head). The business LWW must not overrule that verdict with a wall-clock stamp — a
   // slow-clock causal successor beats a fast-clock ancestor. Live-vs-live only: delete-vs-edit
   // stays with the S4 adjudication surface. LAN sync never stamps the field → byte-identical.
-  if (entity === 'todo' && incoming.causalCurrent && localRow && !localRow.deleted && !incoming.deleted) {
+  // P1 fix (2026-10-11 delivery audit): the ancestry verdict is only meaningful when the local
+  // row HAS a revision head to be a descendant of. A v1-era row that was never revision-recorded
+  // has no head — the sender's "current" pin proves nothing about a concurrent untracked local
+  // line, so the unconditional override let a STALE remote edit silently clobber a NEWER local
+  // edit with no conflict copy and no toast (v1 rows × first relay pull). No local head →
+  // fall through to mergeTodoRows LWW, which keeps the never-silently-dropped conflict copy.
+  if (entity === 'todo' && incoming.causalCurrent && localRow && !localRow.deleted && !incoming.deleted &&
+      (state.db.call('revisionsList', { entityId: String(incoming.id), limit: 1 }) || []).length > 0) {
     winner = incoming
   } else if (entity === 'tomato') winner = mergeCore.mergeTomatoRows(localRow, incoming).row
   else {
