@@ -25,7 +25,7 @@ function allowWithinRate (timestamps, now, { limit = 10, windowMs = 10000 } = {}
   return true
 }
 
-function createSecurityLock ({ getMainWindow, showMainOrLock, readConfig, writeConfig, i18n, log, configVersion = () => { try { return require('./config-store').configWriteVersion() } catch { return null } } }) {
+function createSecurityLock ({ getMainWindow, showMainOrLock, readConfig, writeConfig, i18n, log, isQuitting = null, configVersion = () => { try { return require('./config-store').configWriteVersion() } catch { return null } } }) {
   let lockWin = null
   let lockCrashRebuilds = 0 // rebuild counter since the last successful load; caps the crash→rebuild loop
   // P2 2026-09-19: locking intent is held INDEPENDENTLY of the lock window's liveness. The crash
@@ -152,12 +152,22 @@ function createSecurityLock ({ getMainWindow, showMainOrLock, readConfig, writeC
     lockWin.webContents.on('render-process-gone', (_e, details) => {
       const act = crashSelfHealAction({ reason: details && details.reason, rebuilds: lockCrashRebuilds })
       if (act === 'ignore') return
+      // P1 2026-10-09: during app quit the teardown kills renderers as a side effect — a 'rebuild'
+      // armed here fires 300ms later into a dead app; the data: URL load then fails and
+      // lockLoadFailedFallback PERMANENTLY wiped the user's lock password (availability fallback
+      // firing on a non-failure). Same guard as windows.js:189's `if (isQuitting()) return`.
+      if (typeof isQuitting === 'function' && isQuitting()) {
+        log.warn('[SecurityLock] 锁屏窗渲染进程退出期销毁,跳过自愈:', details && details.reason)
+        return
+      }
       log.error('[SecurityLock] 锁屏窗渲染进程崩溃:', details && details.reason, '→', act)
       try { if (lockWin && !lockWin.isDestroyed()) lockWin.destroy() } catch { /* already gone */ }
       lockWin = null
       if (act === 'rebuild') {
         lockCrashRebuilds++
         setTimeout(() => {
+          // double-check: the quit may have started during the 300ms arm window
+          if (typeof isQuitting === 'function' && isQuitting()) { log.warn('[SecurityLock] 重建定时器命中退出期,放弃重建'); return }
           try { lockAppNow() } catch (e) { log.error('[SecurityLock] 锁窗重建失败', e) }
         }, 300)
       } else {
