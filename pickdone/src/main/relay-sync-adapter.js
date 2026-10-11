@@ -132,7 +132,11 @@ function createRelayAdapter ({
 
   const metrics = { lastRoundAt: null, lastError: null, lastResult: null, rounds: 0, pushedTotal: 0, pulledTotal: 0, quarantinedTotal: 0, appliedTotal: 0 }
   let polling = false
-  let timers = []
+  // M2 P2 (2026-10-09): the timer registry used to be an append-only array — every schedule()
+  // pushed the dead setTimeout handle and nothing ever removed it, so a long-lived process
+  // accumulated hundreds of dead handles per day (poll tick + write-kicks). A Set with
+  // fire-time self-removal keeps the registry equal to the LIVE pending timers only.
+  const timers = new Set() // live pending timers only (fire-time self-removal; M2 2026-10-09)
   let inFlight = null // coalesce: timer tick + write-kick + manual op share one round
   let mods = null // cached { createRelayClient, deriveDataKey }
 
@@ -280,15 +284,17 @@ function createRelayAdapter ({
   }
 
   function schedule (fn, ms) {
-    const t = setTimeout(fn, ms)
+    // Self-removing: the handle leaves the registry the moment it fires (before fn runs), so
+    // the registry tracks only live/pending timers (M2 2026-10-09 — see the timers declaration).
+    const t = setTimeout(() => { timers.delete(t); fn() }, ms)
     if (typeof t.unref === 'function') t.unref() // never hold the process/test runner open
-    timers.push(t)
+    timers.add(t)
     return t
   }
 
   function clearTimers () {
     for (const t of timers) clearTimeout(t)
-    timers = []
+    timers.clear()
   }
 
   function start () {
@@ -371,7 +377,9 @@ function createRelayAdapter ({
     /** Resolves when no round is in flight (quit path: persist must beat the db close). */
     whenIdle: () => (inFlight || Promise.resolve()).then(() => {}),
     // test/introspection surface
-    __test: { K, loadPersistedState, persistState, metrics, MAX_PERSISTED_PUSHED } }
+    __test: { K, loadPersistedState, persistState, metrics, MAX_PERSISTED_PUSHED,
+      // M2 2026-10-09: bounded-timer-registry regression seam — live pending timers only.
+      timers, schedule, clearTimers } }
 }
 
 module.exports = { createRelayAdapter, isLoopbackBaseUrl, SETTINGS_KEYS: K, REMOTE_GATE_ENV, MAX_PERSISTED_PUSHED }
