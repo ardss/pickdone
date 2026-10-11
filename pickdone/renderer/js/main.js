@@ -392,8 +392,12 @@ async function bootstrap () {
             // receipt then reported the still-idle state as success). Await the closeout first.
             await store.dispatch('tomato/giveUp', { record: true, reason: 'cli' }) // Already running: record the previous segment first (per account-keeping closeout, never discard focused time without record) then start a new one
           }
-          store.dispatch('tomato/startFocus')
-          if (cmd.taskId) store.dispatch('tomato/attach', cmd.taskId)
+          // 2026-10-09 P3: await the transitions — startFocus/attach are dispatched as promises, and
+          // an un-awaited slow dispatch let the 150ms receipt setTimeout read the STILL-IDLE state
+          // and report success for a focus that had not started (CLI status showed idle after
+          // `tomato start`). Awaiting serializes the receipt's read after the phase flip.
+          await store.dispatch('tomato/startFocus')
+          if (cmd.taskId) await store.dispatch('tomato/attach', cmd.taskId)
         } else if (cmd.action === 'stop') {
           const stopP = t.status !== 'default'
             ? store.dispatch('tomato/giveUp', { record: cmd.record !== false, reason: cmd.reason || 'cli' }) /* Stable marker, translated at the display layer */
