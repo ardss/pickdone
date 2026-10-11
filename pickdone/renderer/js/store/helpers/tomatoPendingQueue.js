@@ -167,6 +167,19 @@ function hydratePendingQueues () {
   hydratePendingQueue(PENDING_LEDGER_PREFIX, LEGACY_LEDGER_KEY, raw => {
     if (!raw || typeof raw !== 'object' || typeof raw.op !== 'string' || !raw.params) return null
     if (typeof raw.seq === 'number' && raw.seq > _pendingSeq) _pendingSeq = raw.seq // seq stays monotonic across restarts
+    // 2026-10-09 P2 (tombstone arbitration, same contract as ledgerWrite's enqueue stamp): a
+    // replayed append must carry its ORIGINAL authoring stamp (the entry's enqueue ts), not be
+    // re-stamped with db-now — otherwise the replay's `updatedAt >= deletedAt` arbiter always
+    // wins and resurrects a record a peer deleted while this entry was pending.
+    if (raw.op === 'tomatoAppendMany') {
+      const recs = Array.isArray(raw.params) ? raw.params : [raw.params]
+      for (const rec of recs) {
+        if (rec && typeof rec === 'object' && !(Number(rec.updatedAt) > 0)) {
+          const stamp = typeof raw.ts === 'number' && raw.ts > 0 ? raw.ts : Date.now()
+          rec.updatedAt = stamp
+        }
+      }
+    }
     _pendingLedger.push({ op: raw.op, params: raw.params, seq: typeof raw.seq === 'number' ? raw.seq : nextPendingSeq(), ts: typeof raw.ts === 'number' ? raw.ts : Date.now(), uid: typeof raw.uid === 'string' && raw.uid ? raw.uid : newPendingUid() })
     return _pendingLedger[_pendingLedger.length - 1]
   }, packLedgerEntry)
@@ -287,6 +300,21 @@ function replayPendingLedger () {
 }
 function ledgerWrite (op, params) {
   const entry = { op, params, seq: nextPendingSeq(), ts: Date.now(), uid: newPendingUid() }
+  // 2026-10-09 P2 (tombstone arbitration): a tomatoAppendMany entry replayed AFTER a peer tombstoned
+  // the same tomatoId used to arrive with NO explicit updatedAt — the main process's
+  // tomatoAppendMany then re-stamped it with ITS now, and the arbiter's
+  // `excluded.updatedAt >= deletedAt` was always true, silently resurrecting the deleted record.
+  // Stamp the row at ENQUEUE time (the moment the record was authored) and carry that stamp
+  // through every replay (LS mirror round-trips it via params): a replay older than the
+  // tombstone's deletedAt now loses the arbitration and stays deleted, while appends without a
+  // conflicting tombstone book normally (db layer accepts an explicit positive updatedAt —
+  // main-ipc-9 stamp passthrough).
+  if (op === 'tomatoAppendMany') {
+    const recs = Array.isArray(params) ? params : [params]
+    for (const rec of recs) {
+      if (rec && typeof rec === 'object' && !(Number(rec.updatedAt) > 0)) rec.updatedAt = entry.ts
+    }
+  }
   _pendingLedger.push(entry)
   // TQ-2: put-own-key mirror. A throwing mirror write is loud (propagates) but the entry must
   // stay replayable: peerSettled infers "LS key absent ⇒ peer settled it", which would drop this
