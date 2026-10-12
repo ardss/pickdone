@@ -112,6 +112,11 @@ function runImportParse (text, format = 'auto') {
       if (timedOut) leakedWorkers.delete(worker)
       _lastWorkerRun = { timedOut, exitCode: code } // D18 test seam: success exits naturally (code 0, no terminate)
       if (code !== 0) finish(reject, new Error('import: parse worker exited with code ' + code))
+      // c-wave fix (2026-10-13): a clean exit (code 0) that settled NOTHING (no message, no error)
+      // used to leave the promise hanging until the 30s timeout instead of failing fast — the
+      // renderer froze on a spinner for a parse that had already died. Reject immediately with a
+      // coded error; finish() clears the timeout timer.
+      else if (!timedOut) finish(reject, Object.assign(new Error('[WORKER_EXITED] import: parse worker exited without result'), { code: 'WORKER_EXITED' }))
     })
   })
 }

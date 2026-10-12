@@ -94,17 +94,20 @@ module.exports = function settingsHandlers (ctx) {
       // again). Same for shortcutKeySettings (re-registering global hotkeys) and the other
       // main-consumed keys. Main-window senders keep the full surface; float senders get the
       // forbidden set stripped (their white-noise choice still passes).
+      const fromFloat = tomatoFloat.isSelfSender(e.sender)
       const clean = stripForbiddenSettingsKeys(patch, { float: !(getMainWindow() && e.sender === getMainWindow().webContents) })
       // note: an own '__proto__' key on the patch is left as inert data here (spread defined it
       // safely); writeConfig's mergeConfig filters it before any merge, and a direct
       // `delete clean.__proto__` is banned by eslint no-proto.
       const c = writeConfig(clean)
-      // P2 2026-09-12 defensive check on the writeConfig contract: config-store.js writeConfig returns
-      // Object.assign(readConfig(), patch) — the full merged config — so c.shortcutKeySettings is
-      // normally present. But if that contract ever drifts (e.g. a patch-only return, or readConfig's
-      // config.json.bad quarantine path returning a bare object), blindly feeding undefined into
-      // applyShortcuts would silently unregister every shortcut. Guard instead.
-      if (c && c.shortcutKeySettings) applyShortcuts(c.shortcutKeySettings)
+      // c-wave fix (2026-10-13): a float-window write is white-noise-only (the float's entire
+      // legitimate write surface; everything main-consumed was stripped above). Re-applying the
+      // whole shortcut set on every white-noise toggle re-registered every global hotkey — a
+      // visible churn window where shortcuts were unregistered, plus avoidable main-process work
+      // on each selection change. Main-window senders keep the re-apply; float senders skip it.
+      if (fromFloat) {
+        log.info('[IPC] 浮窗白噪音写入,跳过快捷键重注册')
+      } else if (c && c.shortcutKeySettings) applyShortcuts(c.shortcutKeySettings)
       else log.warn('[IPC] writeConfig 返回缺少 shortcutKeySettings,跳过快捷键重注册')
       // Make launch-at-login actually take effect (aligned with the reference runWhenComputerStart)
       if ('runWhenComputerStart' in clean) {

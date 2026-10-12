@@ -129,7 +129,8 @@ test('d4 tomato-float: retry exhaustion destroys the dead window for lazy recrea
 /* ---------------- item 14: quick-add ignoreBlur cannot latch ---------------- */
 test('d4 quick-add: ignoreBlur is time-boxed and reset on did-finish-load (source assertion)', () => {
   const s = readSrc('quick-add.js')
-  assert.match(s, /setTimeout\(\(\) => \{ ignoreBlur = false \}/, 'the latch is time-boxed in toggle()')
+  // c-wave 2026-10-13: the latch timer is tracked (ignoreBlurTimer) and cleared before re-arming
+  assert.match(s, /setTimeout\(\(\) => \{ ignoreBlur = false; ignoreBlurTimer = null \}/, 'the latch is time-boxed in toggle()')
   const finishIdx = s.indexOf("'did-finish-load'")
   assert.ok(s.indexOf('ignoreBlur = false', finishIdx) > finishIdx && finishIdx > -1,
     'did-finish-load resets the latch (covers --no-focus summons that never blur)')

@@ -76,13 +76,21 @@ function createSecurityLock ({ getMainWindow, showMainOrLock, readConfig, writeC
   }
 
   function lockAppNow () {
-    lockingIntent = true // engaged BEFORE the window exists: no unlock gate opens during the build/rebuild gap
-    const win = getMainWindow()
-    if (win) win.hide()
-    // Broadcast the locked state to the renderer (ui.isLocked) — this was never sent before; the renderer's subscription was a dead channel
-    if (win) win.webContents.send('security-lock-on')
-    if (lockWin && !lockWin.isDestroyed()) { lockWin.focus(); return }
-    lockWin = new BrowserWindow({
+    // c-wave fix (2026-10-13): the intent set + main-window hide + lock-window build now share
+    // one try. Previously a throw between `lockingIntent = true` and the lockWin build (e.g.
+    // hide() on a main window that a racing quit had already destroyed) left the intent latched
+    // with NO lock window — isLocked() stuck true, main window hidden, no unlock surface: the
+    // whole app was wedged. Any throw on this path now takes the same availability-beats-the-lock
+    // fallback as a failed load (rolls the intent back, restores the main window).
+    try {
+      lockingIntent = true // engaged BEFORE the window exists: no unlock gate opens during the build/rebuild gap
+      const win = getMainWindow()
+      // a dying/destroyed main window must not abort the lock build — skip hide/send, keep going
+      if (win && !win.isDestroyed()) win.hide()
+      // Broadcast the locked state to the renderer (ui.isLocked) — this was never sent before; the renderer's subscription was a dead channel
+      if (win && !win.isDestroyed()) win.webContents.send('security-lock-on')
+      if (lockWin && !lockWin.isDestroyed()) { lockWin.focus(); return }
+      lockWin = new BrowserWindow({
       width: 400, height: 260, frame: false, resizable: false, closable: false,
       alwaysOnTop: true, skipTaskbar: false,
       webPreferences: {
@@ -176,6 +184,11 @@ function createSecurityLock ({ getMainWindow, showMainOrLock, readConfig, writeC
       }
     })
     lockWin.on('closed', () => { lockWin = null })
+    } catch (e) {
+      // A throw between the intent latch and a usable lockWin must never wedge the app: roll the
+      // intent back and restore the main window via the existing availability fallback.
+      lockLoadFailedFallback('lockAppNow build threw: ' + (e && (e.message || e)))
+    }
   }
 
   function unlockAppNow () {

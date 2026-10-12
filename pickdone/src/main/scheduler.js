@@ -219,6 +219,21 @@ function fire (todo, offset) {
       // by clicking a reminder notification (see focusMainFromNotification above).
       focusMainFromNotification()
     })
+    // D22 symmetry (c-wave 2026-10-13, mirrors handlers/system.js:64-69): an OS-level delivery
+    // failure surfaces as an UNHANDLED 'failed' event on the Notification object — under
+    // Electron's unhandled-event policy that can crash the main process. Attach the listener
+    // BEFORE show(); the failure is logged (warn, not error — a missed toast is degraded, not
+    // fatal) and flips the local result so a synchronously-detected failure returns false and
+    // does not consume the catch-up watermark. (Electron fires 'failed' asynchronously in
+    // production — there the listener's job is crash prevention; the watermark stays optimistic,
+    // same contract as the IPC notification channel.)
+    let deliveryFailed = false
+    if (typeof n.on === 'function') {
+      n.on('failed', (err) => {
+        deliveryFailed = true
+        try { log.warn('[Reminder] delivery failed:', todo.taskId, err && (err.message || err)) } catch { /* logging is best-effort */ }
+      })
+    }
     n.show()
     // Notification sound
     const { sound } = require('./notify-sound')
@@ -226,7 +241,10 @@ function fire (todo, offset) {
     // F-B8 (dw wave 3): task titles no longer go to main.log (plaintext side channel — same nature
     // as the index.js plain-bak cleanup); the taskId is enough to correlate a reminder with its task.
     log.info('[Reminder] fired:', todo.taskId, offset || 0)
-    return true // D22: fire result gates the watermark (see the call sites in scheduleTask/reloadAll)
+    // D22: fire result gates the watermark (see the call sites in scheduleTask/reloadAll);
+    // a 'failed' event observed before this point reports false so the reminder stays
+    // catch-up-eligible and retries on the next reloadAll.
+    return !deliveryFailed
   } catch (e) {
     log.error('[Reminder] fire failed', e)
     return false // D22: a failed fire must NOT consume the catch-up watermark — the next reloadAll retries

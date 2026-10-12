@@ -62,6 +62,13 @@ function selectPrunes (names, o = {}) {
   const seenWeeks = new Set()
   const DAY = 86400000
   for (const n of rest) {
+    // c-wave fix (2026-10-13): rankTs only fixed the ORDERING — the day/week ANCHOR tiers below
+    // still consumed dup names. A dup whose base stamp sits in the recent-N keep never marks its
+    // own day/week, so the dup itself could take the anchor slot for that day/week and evict the
+    // REAL snapshot sharing the stamp (nameToTs parses the base stamp for dup names, so
+    // dayKey/weekKey collide exactly). A collision suffix is bookkeeping, never a tier anchor:
+    // dup names that fall out of recent-N are always pruned.
+    if (RE_DUP_SUFFIX.test(n)) { prunes.push(n); continue }
     const ts = nameToTs(n)
     const d = new Date(ts)
     const dayKey = n.slice(5, 13) // YYYYMMDD

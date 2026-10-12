@@ -108,6 +108,10 @@ exports.planRemoveIds = (db, ids, opts = {}) => {
 exports.planMoveTask = (db, { taskId, fromDay, toDay }) => {
   const okDay = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v))
   if (!okDay(fromDay) || !okDay(toDay)) return 0 // reject malformed day keys outright, preventing chips from landing in invisible buckets
+  // c-wave fix (2026-10-13): same-day "moves" used to fall through to an unconditional UPDATE
+  // that re-stamped updatedAt with a fresh now() — every todoTime patch re-anchoring the chips'
+  // LWW age and minting a fresh sync delta for rows that did not change. Same-day is a no-op.
+  if (String(fromDay) === String(toDay)) return 0
   const r = db.prepare('UPDATE plan_chips SET day=?, updatedAt=? WHERE taskId=? AND day=? AND deleted=0').run(String(toDay), Date.now(), String(taskId), String(fromDay))
   return r.changes
 }
