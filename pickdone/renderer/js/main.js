@@ -99,6 +99,22 @@ const epLocaleCfg = Vue.computed(() => ({ locale: EP_LOCALES[i18n.global.locale]
 ElementPlus.provideGlobalConfig(epLocaleCfg, app, true)
 Vue.watch(() => i18n.global.locale, () => { ElementPlus.provideGlobalConfig(epLocaleCfg, app, true) })
 
+// UX walk 2026-10-12: default toasts (top:16) covered the quick-add bar and the search filter row —
+// the undo toast even hid the filters while a search was active. Drop every toast 64px by default
+// so it lands below the chrome; callers passing an explicit offset still win.
+const _epMessage = ElementPlus.ElMessage
+function toastBelowChrome (opts, ctx) {
+  const o = typeof opts === 'string' ? { message: opts } : { ...(opts || {}) }
+  if (o.offset == null) o.offset = 64
+  return _epMessage(o, ctx)
+}
+for (const k of ['success', 'warning', 'info', 'error']) {
+  toastBelowChrome[k] = (opts, ctx) =>
+    toastBelowChrome(typeof opts === 'string' ? { message: opts, type: k } : { ...(opts || {}), type: k }, ctx)
+}
+toastBelowChrome.closeAll = _epMessage.closeAll
+app.config.globalProperties.$message = toastBelowChrome
+
 // v-click-outside="fn": callback when clicking outside the element (unified capture, auto cleanup, replacing hand-written document listeners in each component)
 app.directive('click-outside', {
   mounted (el, binding) {
@@ -332,7 +348,7 @@ async function bootstrap () {
         if (Date.now() - _conflictShownAt < 30 * 1000) return // rate-limit: one conflict notice per 30s window
         if (_conflictToast) { try { _conflictToast.close() } catch (e) { /* already gone */ } _conflictToast = null }
         const key = evt.applied ? 'sync.conflictApplied' : 'sync.conflictKept'
-        _conflictToast = EP.ElMessage({ type: 'warning', message: i18n.global.t(key, { name: evt.name || '' }), duration: 6000, showClose: true })
+        _conflictToast = toastBelowChrome({ type: 'warning', message: i18n.global.t(key, { name: evt.name || '' }), duration: 6000, showClose: true })
         _conflictShownAt = Date.now()
       } catch (e) { console.warn('[lan-sync] conflict toast failed', e) }
     })
@@ -539,7 +555,7 @@ async function bootstrap () {
   if (typeof window.todoAPI.onShortcutConflict === 'function') {
     const offConflict = window.todoAPI.onShortcutConflict(({ msg }) => {
       try {
-        window.ElementPlus.ElMessage({ type: 'warning', message: msg, duration: 6000, showClose: true })
+        toastBelowChrome({ type: 'warning', message: msg, duration: 6000, showClose: true })
       } catch { /* Silent if toast fails; don't add errors on top of the notice */ }
     })
     // Browser shim fallback Proxy may return a non-function: nothing was really subscribed then, and nuking the API property wouldn't unsubscribe — just leave it
@@ -559,13 +575,13 @@ async function bootstrap () {
         // settings never heard about the new version. Same long-lived toast shape as the ready toast.
         _availableToasted = true
         try {
-          window.ElementPlus.ElMessage({ type: 'info', message: i18n.global.t('statsH.update.availableToast'), duration: 12000, showClose: true })
+          toastBelowChrome({ type: 'info', message: i18n.global.t('statsH.update.availableToast'), duration: 12000, showClose: true })
         } catch { /* Silent if toast fails; Settings→About still offers the download */ }
       }
       if (d && d.status === 'ready' && !_readyToasted) {
         _readyToasted = true
         try {
-          window.ElementPlus.ElMessage({ type: 'success', message: i18n.global.t('update.readyToast'), duration: 12000, showClose: true })
+          toastBelowChrome({ type: 'success', message: i18n.global.t('update.readyToast'), duration: 12000, showClose: true })
         } catch { /* Silent if toast fails; the update still installs on quit */ }
       }
     })

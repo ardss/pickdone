@@ -95,7 +95,7 @@
               @click.stop.prevent="quickDelete">
         <app-icon name="trash" :size="14"/>
       </button>
-      <div class="td-datetime" :style="{color:badgeColor}">{{dateLabel}}</div>
+      <div class="td-datetime" :style="{color:badgeColor}">{{dateLabel}}<span v-if="timeLabel" class="td-datetime__time">{{ timeLabel }}</span></div>
       <!-- Quick delete: appears on hover/keyboard focus (Microsoft To Do pattern), soft delete + undoable, no confirmation dialog -->
     </div>
   </div>
@@ -182,6 +182,15 @@ export default {
     },
     checkboxColor () { return chkColor(this.$store, this.todo) },
     dateLabel () { return formatDayLabel(this.todo.dayStart || this.todo.todoTime, Date.now(), this.$t.bind(this)) },
+    // UX walk 2026-10-12: NL quick-add stores a clock time ("周四下午3点" → todoTime 15:00) but the
+    // row only showed the date, so the time looked silently dropped. Surface the time-of-day when
+    // the timestamp carries one (all-day tasks are midnight → no label).
+    timeLabel () {
+      const t = this.todo && this.todo.todoTime
+      if (!t) return ''
+      const d = dayjs(t)
+      return (d.hour() || d.minute()) ? d.format('HH:mm') : ''
+    },
 
     badgeColor () { return dateBadgeColor(this.todo, this.$store) },
     subtasks () { return parseSubtasks(this.todo.subtasks) },
@@ -433,6 +442,8 @@ export default {
 </script>
 <style>/* 11. 待办 meta 徽章（日期/标签）hover 色过渡 */
 .td-meta .td-ico, .td-datetime, .sn-badge { transition: color var(--dur-fast), background-color var(--dur-fast); }
+/* 行内时刻（NL 快捷输入带入的 todoTime 时刻）：与日期同排、稍加字重区分 */
+.td-datetime__time { margin-left: 4px; font-weight: 600; }
 /* ==================== 3. TodoItem 条目微交互 ==================== */
 /* 整行选中高亮：设计稿 .todo-list-item--selected{background-color:#f5fafb}
    （base.css 用的是 brand-light，这里对齐设计稿） */

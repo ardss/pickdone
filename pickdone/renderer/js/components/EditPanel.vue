@@ -37,7 +37,7 @@
               @click="setDate('tomorrow')" @keydown="onDateChipKey('tomorrow', $event)"><app-icon name="calendar" :size="12"/>{{ $t('statsJ.EditPanel.tomorrowOption') }}</span>
         <span class="ep-date-chip" role="button" tabindex="0" :class="{on: dateChip && dateChip!==todayLabel && dateChip!==tomorrowLabel}"
               @click="setDate('pick')" @keydown="onDateChipKey('pick', $event)"><app-icon name="calendar" :size="12"/>
-          {{dateChip && dateChip!==todayLabel && dateChip!==tomorrowLabel ? dateChip : $t('statsJ.EditPanel.pickDate')}} ▾</span>
+          {{dateChip && dateChip!==todayLabel && dateChip!==tomorrowLabel ? dateChip : $t('statsJ.EditPanel.pickDate')}}<span v-if="dateChipTime" class="ep-date-chip__time">{{ dateChipTime }}</span> ▾</span>
         <span class="ep-date-chip" role="button" tabindex="0" :class="{on: !e.dateTs}"
               @click="setDate('none')" @keydown="onDateChipKey('none', $event)">{{ $t('statsJ.EditPanel.noDateOption') }}</span>
         <!-- The picker sits outside the chip, avoiding ARIA nesting of an input inside a button -->
@@ -259,13 +259,13 @@ export default {
     todayLabel () { return this.$t('statsJ.EditPanel.today') },
     tomorrowLabel () { return this.$t('statsJ.EditPanel.tomorrow') },
     dateChip () {
-      if (!this.e) return ''
-      if (!this.e.dateTs) return ''
+      if (!this.e || !this.e.dateTs) return ''
       const d = dayjs(this.e.dateTs).startOf('day').valueOf()
       if (d === this.today0) return this.todayLabel
       if (d === dayShift(this.today0, 1)) return this.tomorrowLabel
       return dayjs(this.e.dateTs).format(FMT.cnDate)
-    }
+    },
+    dateChipTime () { const d = this.e && this.e.dateTs ? dayjs(this.e.dateTs) : null; return d && (d.hour() || d.minute()) ? d.format(FMT.time) : '' } // UX walk 2026-10-12: echo the clock time NL quick-add stored
   },
   watch: {
     previewImg (v) { if (v) this.$nextTick(() => { const el = this.$refs.previewMask; if (el) el.focus() }) },
