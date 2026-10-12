@@ -20,13 +20,17 @@
 const fs = require('fs')
 const path = require('path')
 
-/** C3 (P1 2026-09-24): the tmp name used to be a shared constant `file + '.dtmp'` — the App main
+/** C3 (P2 2026-09-24): the tmp name used to be a shared constant `file + '.dtmp'` — the App main
  *  process and a concurrent CLI process writing the SAME target file raced on one tmp path
  *  (open 'w' truncates the other writer's in-flight tmp; rename then publishes a hybrid or a
  *  foreign file). Now each write gets `<file>.<pid>.<ms>.dtmp` — unique per process per call.
  *  The name still ENDS with '.dtmp' so autoBackup.selectStaleTmp's /\.dtmp$/ residue sweep keeps
- *  matching crash residue. Exported so handlers/backup.js computes the SAME tmp path for its
- *  failure-cleanup check without duplicating the format. */
+ *  matching crash residue. CONTRACT UPDATE (M2, 2026-10-09): writeFileDurable RETURNS the actual
+ *  tmp path it used (and attaches it to a thrown error as err.dtmpPath) — callers must use THAT
+ *  value for failure-cleanup checks. An earlier comment told handlers/backup.js to pre-compute
+ *  the path with dtmpPath(): a separate call mints a different seq, i.e. a DIFFERENT path — the
+ *  handler's cleanup check could never have matched. Exported dtmpPath stays for legacy
+ *  callers/tests only; do NOT use it to predict writeFileDurable's internal path. */
 function dtmpPath (file) {
   // seq disambiguates two calls within the same millisecond (writeFileDurable is synchronous, so
   // in-process calls never overlap, but the name stays collision-free regardless).
@@ -34,6 +38,9 @@ function dtmpPath (file) {
 }
 let dtmpSeq = 0
 
+/** Returns the actual tmp path on success. On failure: removes the tmp residue (best-effort),
+ *  attaches the tmp path to the error as err.dtmpPath, and rethrows — so a caller that wants a
+ *  second-chance cleanup targets the REAL path, not a re-minted guess. */
 function writeFileDurable (file, data, fsMod = fs) {
   const tmp = dtmpPath(file)
   let fd = null
@@ -52,6 +59,7 @@ function writeFileDurable (file, data, fsMod = fs) {
     fsMod.renameSync(tmp, file)
   } catch (err) {
     try { (fsMod.rmSync || fs.rmSync)(tmp, { force: true }) } catch { /* best-effort */ }
+    try { if (err && typeof err === 'object') err.dtmpPath = tmp } catch { /* best-effort */ }
     throw err
   } finally {
     if (fd !== null) { try { fsMod.closeSync(fd) } catch { /* already closed */ } }
@@ -62,6 +70,7 @@ function writeFileDurable (file, data, fsMod = fs) {
     const dirFd = fs.openSync(path.dirname(file), 'r')
     try { fs.fsyncSync(dirFd) } finally { fs.closeSync(dirFd) }
   } catch { /* platform without directory fsync */ }
+  return tmp // M2 (2026-10-09): the ACTUAL tmp path, for caller-side failure-cleanup contracts
 }
 
 module.exports = { writeFileDurable, dtmpPath }

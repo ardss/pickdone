@@ -240,8 +240,14 @@ module.exports = function todoHandlers (ctx) {
         // task whose reminders already fired no longer forces a full reloadAll on every edit (P1 2026-09-19).
         const tid = (params || {}).taskId
         const t = (op === 'upsert' || op === 'bumpSnow') && tid != null ? dbm.call('getById', String(tid)) : null
-        if (t && !scheduler.needsCatchUp(t)) scheduler.scheduleOne(t)
-        else scheduler.reloadAll(dbApi())
+        // M2 P2 (2026-10-09, same caliber as csv-import settleAfterImport): the write has ALREADY
+        // landed above (bus.commit/dbm.call returned) — a transient scheduler error (a throwing
+        // timer rebuild, a torn meta read inside reloadAll) must not punch through ipcMain.handle
+        // and make the renderer misread a landed write as failed (optimistic rollback + replay).
+        try {
+          if (t && !scheduler.needsCatchUp(t)) scheduler.scheduleOne(t)
+          else scheduler.reloadAll(dbApi())
+        } catch (err) { log.warn('[IPC] scheduler reload failed (write already landed):', op, err) }
         // P2-2 (R4 2026-09-21): reloadAll itself writes reminderLastSeenAt (a meta write that
         // touches the -wal) AFTER the earlier re-baseline in this function, so the external-write
         // watcher misclassified our own scheduler write as another external CLI write → spurious
@@ -348,9 +354,24 @@ module.exports = function todoHandlers (ctx) {
       // the 'ls-mirror' hook fires the sync kick, 'undo-barrier' re-baselines the external-write
       // watcher (our own WAL write must not surface as an external CLI write).
       const r = bus.commit('todo', 'purgeBin')
+      // M2 P3 (2026-10-09): collect→commit race sweep — a task soft-deleted between the ids
+      // collection above and the purgeBin commit WAS purged by the commit but its attachment
+      // files were never in `ids`. bus.commit returns the ACTUALLY purged ids (db.purgeRecycleBin's
+      // row-granular result); sweep the difference post-commit. A failed unlink here stays
+      // warn-only (the files-before-rows doctrine already ran for the pre-collected set).
+      try {
+        const purged = Array.isArray(r) ? r.map(String) : []
+        const seen = new Set(ids.map(String))
+        const missed = purged.filter(id => !seen.has(id))
+        if (missed.length) purgeAttachmentFiles(attachDir, missed)
+      } catch (err) { log.warn('[Purge] commit-race attachment sweep failed (files may be orphaned):', err) }
       // M-4 (2026-09-20): mirror the GAP-B pattern — purge is a write; without the kick peers only
       // saw emptied recycle bins at the next 5-min periodic round.
-      scheduler.reloadAll(dbApi()); broadcastTodosChanged('purgeRecycleBin', e.sender)
+      // M2 P2 (2026-10-09, same caliber as csv-import settleAfterImport): the purge has already
+      // committed — a transient scheduler error must not reject the invoke and make the renderer
+      // believe the purge failed.
+      try { scheduler.reloadAll(dbApi()) } catch (err) { log.warn('[Purge] reloadAll failed (purge already committed):', err) }
+      broadcastTodosChanged('purgeRecycleBin', e.sender)
       return r
     },
     'db:purge-seed-todos': (e) => {
@@ -373,7 +394,9 @@ module.exports = function todoHandlers (ctx) {
       const r = bus.commit('todo', 'purgeSeed')
       // Symmetric with purge-recycle-bin: purging demo data also refreshes the scheduler + broadcasts (once missing → other windows kept stale seed records and scheduled reminders still fired)
       // M-4: same sync kick parity as purge-recycle-bin (GAP-B pattern, via the 'ls-mirror' hook).
-      scheduler.reloadAll(dbApi()); broadcastTodosChanged('purgeSeedTodos', e.sender)
+      // M2 P2 (2026-10-09): same landed-write guard as purge-recycle-bin above.
+      try { scheduler.reloadAll(dbApi()) } catch (err) { log.warn('[Purge] reloadAll failed (purge already committed):', err) }
+      broadcastTodosChanged('purgeSeedTodos', e.sender)
       return r
     }
   }

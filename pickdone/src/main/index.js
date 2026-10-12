@@ -80,7 +80,7 @@ function showMainOrLock () {
 
 const { createSecurityLock } = require('./security-lock')
 const { createShortcuts } = require('./shortcuts')
-const securityLock = createSecurityLock({ getMainWindow, showMainOrLock, readConfig, writeConfig, i18n: i18nM, log })
+const securityLock = createSecurityLock({ getMainWindow, showMainOrLock, readConfig, writeConfig, i18n: i18nM, log, isQuitting: () => quitting })
 const { isLocked, lockAppNow, unlockAppNow, verifyLockPassword, isLockWindow } = securityLock
 const { allowWithinRate } = require('./security-lock') // pure sliding-window limiter for the notification channel
 const { nextWatchBaseline } = require('./watch-baseline') // pure baseline update for the external-write watcher resync
@@ -549,7 +549,10 @@ if (!app.requestSingleInstanceLock(...__multiLockArgs)) {
     // behavior change: registerIpc is synchronous wiring, reloadAll's fingerprint gate
     // (scheduler.js) makes re-entry safe, and the bus fanout hooks are wired by the time the GC
     // commits run (strictly better peer propagation).
-    scheduler.reloadAll(dbApi())
+    // P2 2026-10-09: boot-time belt-and-braces around reloadAll — any residual throw (unexpected
+    // failure mode beyond the in-module queryTodos guard) must not escalate to showErrorBox+exit;
+    // reminders degrade until the next write/watch-triggered rebuild instead.
+    try { scheduler.reloadAll(dbApi()) } catch (e) { log.warn('[Init] scheduler.reloadAll failed at boot; reminders degraded until next rebuild:', e && e.message) }
     // Meta GC: clean up orphan keys (residue after a repeat rule is deleted / project deadline & milestones become permanent orphans after a category is deleted)
     try {
       // P1 2026-09-19: getAll({deleted:null}) included recycle-bin rows, so a repeatId referenced

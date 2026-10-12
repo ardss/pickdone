@@ -60,8 +60,9 @@ test('G1 tomato [3]: a giveUp during the getById await window wins — no record
   const { ctx } = makeCtx(state)
   ctx.rootState = rootState
   globalThis.window.todoAPI = { dbCall: async () => {
-    // concurrent giveUp(record=false) flips the shared transient to default while we await
-    globalThis.localStorage.setItem(LS_KEY, JSON.stringify({ schemaV: 1, status: 'default', startedAt: 0, tomatoTime: 25, restTime: 5 }))
+    // concurrent giveUp(record=false) flips the shared transient to default while we await —
+    // a real give-up goes through persistState, so the blob carries its write stamp
+    globalThis.localStorage.setItem(LS_KEY, JSON.stringify({ schemaV: 1, status: 'default', startedAt: 0, tomatoTime: 25, restTime: 5, _persistTs: Date.now() }))
     await new Promise(r => setTimeout(r, 10))
     return { taskId: 7, delete: false }
   } }

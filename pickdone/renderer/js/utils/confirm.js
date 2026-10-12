@@ -55,7 +55,18 @@ export function deleteWithUndo (vm, store, task) {
  */
 export function restoreAndToast (vm, store, task) {
   const cur = store.state.todo.recycleList.find(t => t.taskId === task.taskId)
-  if (!cur) return
+  // [P3 fix 2026-10-09] the task may have left the bin while the undo toast was up (purged,
+  // bin cleared, peer sync). The old bare `return` left a dead undo link: clicking it did
+  // nothing AND the stale toast kept promising a restore that can no longer happen. Now:
+  // dismiss the toast first (closeAll before the new message so the warning survives), then
+  // say why. Reuses the recycle-bin "restore failed" key — no new i18n key was allowed here.
+  if (!cur) {
+    try {
+      if (vm && vm.$message && vm.$message.closeAll) vm.$message.closeAll()
+      if (vm && vm.$message) vm.$message.warning(tt('statsC.RecycleBin.restoreFailedMsg'))
+    } catch { /* toast must never become the new failure */ }
+    return
+  }
   store.dispatch('todo/restoreFromRecycle', { taskId: task.taskId, repeatId: isRepeatTask(cur) ? cur.repeatId : undefined })
     .then(
       () => { if (vm && vm.$message) vm.$message.success(tt('statsJ.Confirm.restored')) },

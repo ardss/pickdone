@@ -28,6 +28,12 @@ let dragTimer = null
 let dragCtx = null
 let dockedToTray = false // docked to tray: window hidden but the instance kept; the tray icon carries the state
 let screenHooksOn = false
+// M2 P3 (2026-10-09): the reopen-during-load path used to append a fresh did-finish-load once
+// listener on EVERY reopen call while the frame was still loading — N wakes during one load
+// queued N closures and all of them fired (N redundant showInactive+flushPaint rounds) when the
+// load finished. Bound single-handler pattern (same shape as windows.js's replayed shortcuts):
+// mount removes the previous handler first, so at most one is ever attached.
+let pendingLoadShow = null
 
 /* ---- C10 (2026-09-25): crash-rebuild cap (aligned with windows.js crashReloadCount<3) ----
  * 3 consecutive auto-rebuilds per health window; the counter resets when a rebuilt window
@@ -427,7 +433,16 @@ module.exports = {
     let w = win
     if (!w || w.isDestroyed()) w = create()
     if (!w.webContents.isLoadingMainFrame()) { w.showInactive(); flushPaint(w) }
-    else w.webContents.once('did-finish-load', () => { if (w && !w.isDestroyed()) { w.showInactive(); flushPaint(w) } })
+    else {
+      // M2 P3 (2026-10-09): bound single handler — remove the previous did-finish-load closure
+      // before appending the new one, so N reopens during one load fire the show exactly once.
+      try { if (pendingLoadShow) w.webContents.removeListener('did-finish-load', pendingLoadShow) } catch { /* stale handler already gone */ }
+      pendingLoadShow = () => {
+        pendingLoadShow = null
+        if (w && !w.isDestroyed()) { w.showInactive(); flushPaint(w) }
+      }
+      w.webContents.once('did-finish-load', pendingLoadShow)
+    }
     startHitPoll()
     return true
   },

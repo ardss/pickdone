@@ -295,7 +295,7 @@ test('actions.completeFocus: guard returns without a running focus; dead task â†
   const startedAt = Date.now() - 25 * 60_000
   const b = makeCtx({ status: 'startTomatoTime', startedAt, attachTodo: { taskId: 't1', taskContent: 'w' }, restTime: 5 },
     { rootState: { todo: { todoList: [{ taskId: 't1', taskContent: 'w' }], recycleList: [] }, settings: {} } })
-  globalThis.localStorage.setItem('tomatoState', JSON.stringify({ status: 'startTomatoTime', startedAt, tomatoTime: 25, restTime: 5, schemaV: 1, phaseTs: Date.now() }))
+  globalThis.localStorage.setItem('tomatoState', JSON.stringify({ status: 'startTomatoTime', startedAt, tomatoTime: 25, restTime: 5, schemaV: 1, phaseTs: Date.now() , _persistTs: Date.now() }))
   await tomato.actions.completeFocus.call({ rootState: b.ctx.rootState }, b.ctx)
   const rec = b.state.tomatoRecordList[0]
   assert.equal(rec.tomatoId, 'tmt_f_' + startedAt)
@@ -352,7 +352,7 @@ test('actions.completeFocus: a concurrent give-up during the verify await aborts
   globalThis.localStorage.setItem('tomatoState', JSON.stringify({ status: 'startTomatoTime', startedAt, tomatoTime: 25, restTime: 5, schemaV: 1, phaseTs: Date.now() }))
   const pending = tomato.actions.completeFocus.call({ rootState: a.ctx.rootState }, a.ctx)
   // meanwhile: the user gave up in the float window â†’ shared phase back to default
-  globalThis.localStorage.setItem('tomatoState', JSON.stringify({ status: 'default', startedAt: 0, tomatoTime: 25, restTime: 5, schemaV: 1, phaseTs: Date.now() }))
+  globalThis.localStorage.setItem('tomatoState', JSON.stringify({ status: 'default', startedAt: 0, tomatoTime: 25, restTime: 5, schemaV: 1, phaseTs: Date.now() , _persistTs: Date.now() }))
   releaseGetById()
   await pending
   assert.equal(a.state.tomatoRecordList.length, 0, 'completion abandoned after concurrent give-up')

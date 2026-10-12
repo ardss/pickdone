@@ -140,9 +140,12 @@ export default {
 /* [R2] inline rename editor: same metrics as the row text so the swap is visually seamless */
 .ep-sub-rename-input { flex: 1; min-width: 0; border: 0; border-bottom: 1px solid var(--brand); background: none; font-size: var(--fs-md); color: var(--text-1); padding: 0 2px; }
 /* 子任务 ✕ 与 ≡ hover 该行才显示
-   （设计稿 .todo-sublist-editor__delete(青灰叉)/__move(bars,#9b9b9b)） */
+   （设计稿 .todo-sublist-editor__delete(青灰叉)/__move(bars,#9b9b9b)）
+   键盘路径：焦点在行内(重命名输入框)时也必须可见 — 同 .ep-sub-move 的 :focus-within 先例，
+   否则 Tab 进入行的键盘用户看不到删除键 */
 .ep-sub-x, .ep-sub-drag { opacity: 0; transition: opacity var(--dur-mid); }
-.ep-sub:hover .ep-sub-x, .ep-sub:hover .ep-sub-drag { opacity: 1; }
+.ep-sub:hover .ep-sub-x, .ep-sub:hover .ep-sub-drag,
+.ep-sub:focus-within .ep-sub-x, .ep-sub:focus-within .ep-sub-drag { opacity: 1; }
 .ep-sub-x { color: #a8b2f7; }
 .ep-sub-x:hover { color: var(--danger); }
 .ep-sub-drag { color: var(--text-3); cursor: grab; }

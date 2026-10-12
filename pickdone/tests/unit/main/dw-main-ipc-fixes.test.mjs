@@ -275,18 +275,22 @@ test('F9: tomatoAppendMany with an explicit updatedAt keeps the stamp on the col
 
 // ---- F5: open-external-url locked gate ----
 const systemHandlers = require_('../../../src/main/handlers/system.js')
-test('F5: open-external-url is locked-gated and single-validates', () => {
+test('F5: open-external-url is locked-gated and single-validates', async () => {
   const api = systemHandlers(ctxBase)
   locked = true
-  try { assert.throws(() => api['open-external-url'](eMain, 'https://example.com'), /locked/) } finally { locked = false }
+  // m2 2026-10-09: the handler is async (awaits shell.openExternal) — the locked guard and the
+  // unsafe-scheme guard now reject via the promise; ipcRenderer.invoke callers see the same
+  // rejection shape as before.
+  await assert.rejects(() => api['open-external-url'](eMain, 'https://example.com'), /locked/)
+  locked = false
   calls.openExternal.length = 0
-  // D10 (2026-09-27): honest result — a safe URL returns true, an unsafe scheme THROWS (was a
+  // D10 (2026-09-27): honest result — a safe URL resolves true, an unsafe scheme REJECTS (was a
   // silent success-shaped undefined on every path).
-  assert.equal(api['open-external-url'](eMain, 'https://example.com'), true)
+  assert.equal(await api['open-external-url'](eMain, 'https://example.com'), true)
   assert.deepEqual(calls.openExternal, ['https://example.com'], 'exactly one openExternal for a safe URL')
   calls.openExternal.length = 0
-  assert.throws(() => api['open-external-url'](eMain, 'file:///C:/Windows/System32/calc.exe'), /unsafe external url/)
-  assert.throws(() => api['open-external-url'](eMain, 'javascript:alert(1)'), /unsafe external url/)
+  await assert.rejects(() => api['open-external-url'](eMain, 'file:///C:/Windows/System32/calc.exe'), /unsafe external url/)
+  await assert.rejects(() => api['open-external-url'](eMain, 'javascript:alert(1)'), /unsafe external url/)
   assert.deepEqual(calls.openExternal, [], 'non-http(s) URLs stay blocked')
 })
 

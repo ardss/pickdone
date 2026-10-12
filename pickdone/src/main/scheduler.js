@@ -323,7 +323,18 @@ function reloadAll (db) {
     // past `lastSeen=0` look catchable and re-fire all at once. Actually set the flag.
     firstRun = true /* read failure treated as first run */
   }
-  const todos = db.queryTodos({ deleted: 0, orderBy: 'remindAt ASC' })
+  let todos
+  try {
+    todos = db.queryTodos({ deleted: 0, orderBy: 'remindAt ASC' })
+  } catch (e) {
+    // P2 2026-10-09: a transient DB read failure (e.g. SQLITE_BUSY at boot) used to propagate out
+    // of reloadAll and, via index.js's whenReady chain, escalate to showErrorBox + process exit —
+    // a reminder-rebuild read must never take the app down. Degrade to a warn and keep the
+    // existing timers (teardown happens only below, after this point): the fingerprint is not
+    // advanced, so the next write/watch tick retries the rebuild.
+    log.warn('[Reminder] reloadAll: queryTodos failed; keeping existing timers this round:', e && e.message)
+    return
+  }
   // Edge-trigger: unchanged reminder inputs -> the current timers are still correct; skip the
   // teardown AND the watermark write (the write is what re-touches the DB and fed the watcher
   // loop on DESKTOP). First run always rebuilds (lastRebuildFingerprint === null).
@@ -366,8 +377,16 @@ function reloadAll (db) {
 function scheduleOne (todo) {
   cancel(todo.taskId)
   if ((!todo.reminderTime && !(todo.reminderExtra || []).length) || todo.delete || todo.complete) return
-  if (todo.reminderTime && todo.reminderTime <= Date.now() && !(todo.reminderExtra || []).length) return
-  for (const [offset, ts] of reminderInstances(todo)) scheduleTask(todo, offset, ts)
+  // P2 2026-10-09: the old guard returned when the MAIN reminder was past and there were no
+  // reminderExtra entries — but a reminderTime+offsets task with a PAST main anchor and a FUTURE
+  // offset instance hit the return and the write-triggered fast path (handlers/todo.js upsert,
+  // after cancel()) silently dropped every future offset reminder. Return only when EVERY
+  // instance (main + offsets + extras, all expanded by reminderInstances) is already past;
+  // scheduleTask itself no-ops past instances (delay <= 0), so scheduling them is harmless.
+  const now = Date.now()
+  const instances = reminderInstances(todo)
+  if (instances.length && instances.every(([, ts]) => ts <= now)) return
+  for (const [offset, ts] of instances) scheduleTask(todo, offset, ts)
 }
 
 /** P1 2026-09-19 (fast-path gate for handlers/todo.js): true only when the task has a PAST reminder

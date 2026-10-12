@@ -388,6 +388,15 @@ export default {
     },
     pickMonth (m) {
       this.monthPop = false
+      // Time block is not a FullCalendar view (setView destroys the instance): without this branch
+      // this.cal is null here and the jump died silently. Align the week grid to the first grid
+      // cell of the target month's first week (same calibers as today()/nav() in timeblock).
+      if (this.view === 'timeblock') {
+        const weekFromSun = this.settings.weekStartDay === 'sun'
+        const firstOfMonth = dayjs(`${this.popYear}-${String(m).padStart(2, '0')}-01`)
+        this.tbWeekStart = weekGridStart(+firstOfMonth, weekFromSun)
+        return
+      }
       if (this.cal) this.cal.gotoDate(`${this.popYear}-${String(m).padStart(2, '0')}-01`)
     },
     rangeText () {

@@ -19,16 +19,21 @@ require('../log-isolation') // test isolation: redirect electron-log file transp
  *  main-ipc-2 fsync fix (2026-09-22): the write goes through writeFileDurable (data fsync before
  *  the rename + best-effort dir fsync) — this JSON is the disaster-recovery source, and a power
  *  cut between the OS cache and the rename used to leave a torn file. The fsMod injection is kept
- *  for the residue-cleanup contract; the durable path always uses the real fs. */
+ *  for the residue-cleanup contract; the durable path always uses the real fs.
+ *  M2 P3 (2026-10-09): the failure-cleanup used to pre-mint a tmp path with a SECOND dtmpPath()
+ *  call — its seq differs from the one writeFileDurable minted internally, so the cleanup checked
+ *  a path that never existed (dead code). writeFileDurable now RETURNS the actual tmp path and
+ *  attaches it to a thrown error as err.dtmpPath; cleanup targets that value. */
 function atomicWriteJson (fsMod, dir, name, text) {
-  // C3 (2026-09-24): tmp names are unique per call (<file>.<pid>.<ms>.dtmp, see durable-fs.dtmpPath);
-  // the failure-cleanup check must target the SAME path the durable writer used.
-  const tmp = require('../durable-fs').dtmpPath(path.join(dir, name))
+  let tmp = null
   try {
-    require('../durable-fs').writeFileDurable(path.join(dir, name), text, fsMod)
+    tmp = require('../durable-fs').writeFileDurable(path.join(dir, name), text, fsMod)
     return { ok: true, file: name }
   } catch (err) {
-    try { if (fsMod.existsSync(tmp)) fsMod.unlinkSync(tmp) } catch (e2) { log.warn('[Backup] tmp cleanup failed:', tmp, e2 && e2.message) }
+    const dead = (err && err.dtmpPath) || tmp
+    if (dead) {
+      try { if (fsMod.existsSync(dead)) fsMod.unlinkSync(dead) } catch (e2) { log.warn('[Backup] tmp cleanup failed:', dead, e2 && e2.message) }
+    }
     log.warn('[Backup] auto backup write failed:', err && err.message || err)
     return { ok: false, error: String(err && err.message || err) }
   }
