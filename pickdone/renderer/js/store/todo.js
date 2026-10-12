@@ -195,13 +195,14 @@ export default {
           } catch (e) { /* a DB error doesn't block renewal; let addTodo continue its main flow */ }
         }
       }
+      // [F2 2026-10-13] sort pool follows the EFFECTIVE day: a todoTime-only add lands in the todoTime-derived day group, not the no-date pool
+      const effectiveDay = todoDate ? +dayjs(todoDate).startOf('day') : (Number(todoTime) > 0 ? +dayjs(Number(todoTime)).startOf('day') : 0)
       const sameDay = state.todoList.filter(t =>
-        !t.delete && t.dayStart && dayjs(t.dayStart).isSame(dayjs(todoDate).startOf('day'), 'ms'))
+        !t.delete && t.dayStart && effectiveDay && dayjs(t.dayStart).isSame(dayjs(effectiveDay).startOf('day'), 'ms'))
       let sort
       if (sameDay.length) {
-        const mins = sameDay.map(t => t.taskSort)
-        sort = nextSort(addToTop, Math.min(...mins), Math.max(...mins))
-      } else if (!todoDate) {
+        const mins = sameDay.map(t => t.taskSort); sort = nextSort(addToTop, Math.min(...mins), Math.max(...mins))
+      } else if (!effectiveDay) {
         // No-date tasks (todo box): previously a constant 1024, making addToTop ineffective; take min/max within the same pool
         const pool = state.todoList.filter(t => !t.delete && !t.dayStart).map(t => t.taskSort)
         sort = pool.length ? nextSort(addToTop, Math.min(...pool), Math.max(...pool)) : nextSort(addToTop, 0, 0)
@@ -230,7 +231,7 @@ export default {
         // todoTime is given (time-block cell without an explicit date), todoTime>0 while todoDate is missing —
         // deriving dayStart from todoDate alone split memory (dayStart=0 → todo box) from DB (scheduled day),
         // and the task switched groups after restart
-        dayStart: dayOverride != null ? dayOverride : (todoDate ? +dayjs(todoDate).startOf('day') : (Number(todoTime) > 0 ? +dayjs(Number(todoTime)).startOf('day') : 0))
+        dayStart: dayOverride != null ? dayOverride : effectiveDay
       }
       commit('upsertLocal', t)
       commit('setRecentlyAdded', t.taskId)
@@ -377,8 +378,8 @@ export default {
       // Only the group's last (latest) instance renews; no-date instances never renew (a bogus 1970 chain)
       if (!isLastRepeatInstance(completedTodo, group)) return
       // The rule's single source of truth is meta (same source as the CLI); the historical LS fallback has been dismantled (all hosts have the meta channel)
-      let rule = null
-      try { rule = JSON.parse(await window.todoAPI.dbCall('getMeta', 'repeatRule:' + rid) || 'null') } catch { /* empty */ }
+      let rule = null // [F2 2026-10-13] null = rule really absent; throw = IPC jitter — a failed read skips this round, never severs the chain
+      try { rule = JSON.parse(await window.todoAPI.dbCall('getMeta', 'repeatRule:' + rid) || 'null') } catch (e) { console.warn('[todo] repeat renewal: repeatRule meta read failed, skipping this round (rid=' + rid + '):', e); return }
       if (!rule) return
       // Single source: next occurrence + reminder time (same computation the CLI twin uses via todo-core.js)
       const next = nextRepeatInstance(completedTodo, group, rule, this.state.todo.holidayList || [])
@@ -483,12 +484,10 @@ export default {
       // excludes delete rows already acked with version > 0 — P3 2026-09-12)
       const merged = { ...raw, delete: true, deleting: true, deletedAt: Date.now(), updateTime: Date.now(), status: 'delete', version: 0 }
       commit('upsertLocal', merged)
-      // Cleanup of related attachments is left to manual action (on permanent deletion from the recycle bin)
-      // deleting is a local-dialect UI flag, not a schema column: strip it before persisting, otherwise the dirty field spreads forever via undo snapshots/sync
+      try { await snapshotForDelete(todo.taskId) } catch (e) { console.warn('[todo] failed to snapshot chips for deleted task:', e) } // [F2 2026-10-13] snapshot BEFORE row commit (deleteTodosMany's order): crash-safe — snapshot is idempotent; row-first left ghost chips
+      // Cleanup of related attachments is left to manual action; deleting is a local-dialect UI flag, not a schema column: strip before persisting (else it spreads forever via undo snapshots/sync)
       const row = { ...merged }; delete row.deleting
       safeUpsert(row)
-      // Schedule chip cascade: snapshot to meta first (written back when the task is restored), then clear rows (2026-09-03 P0 review: the original soft-delete path bypassed chip cleanup)
-      try { await snapshotForDelete(todo.taskId) } catch (e) { console.warn('[todo] failed to snapshot chips for deleted task:', e) }
       dispatch('computeViews')
       dispatch('writeCriticalBackup')
     },
@@ -578,9 +577,10 @@ export default {
       // and the chain just died. If the rule meta is gone, restore the task as a plain non-repeating task
       // (the rule data is gone; fabricating one would invent UX).
       if (r && todo.repeatId) {
-        let rule = null
-        try { rule = JSON.parse(await window.todoAPI.dbCall('getMeta', 'repeatRule:' + todo.repeatId) || 'null') } catch { /* treated as gone */ }
-        if (!rule) {
+        // [F2 2026-10-13] a FAILED repeatRule read ≠ "rule GCed": only a real absent meta strips repeatId (dangling guard), a read error keeps the chain
+        let rule = null, readFailed = false
+        try { rule = JSON.parse(await window.todoAPI.dbCall('getMeta', 'repeatRule:' + todo.repeatId) || 'null') } catch (e) { readFailed = true; console.warn('[todo] repeatRule meta read failed for restored task', todo.taskId, '— keeping repeatId this round:', e) }
+        if (!rule && !readFailed) {
           await dispatch('updateTodoFields', { taskId: todo.taskId, patch: { repeatId: null, status: 'update' } })
           console.warn('[todo] restored task', todo.taskId, 'had a dangling repeatId (rule meta GCed) — restored as a non-repeating task')
         }

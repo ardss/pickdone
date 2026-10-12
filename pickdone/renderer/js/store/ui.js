@@ -1,6 +1,7 @@
 import { parseSubtasks, parseJSONSafe, tt } from '../utils/core.js'
 import { commit as commitCommand } from "../utils/commandBus.js"
 import { showUndoToast } from '../utils/undoToast.js'
+import { undoLink } from '../utils/confirm.js'
 import { PANEL_FIELD_MAP } from '../utils/editPanelRemoteSync.js'
 /** ui module — right-side editor/dialog control (mirrors the reference ui module semantics) */
 
@@ -78,7 +79,7 @@ async function cleanupInlineCreated ({ state, rootState, dispatch }, createdId) 
     if (h && msg && window.Vue) {
       showUndoToast(msg, [
         tt('statsJ.Confirm.deleted') + '：' + tt('statsJ.TodoItem.untitled') + '　',
-        h('a', { style: { color: 'var(--brand)', cursor: 'pointer' }, onClick: undo }, tt('statsJ.Confirm.undo'))
+        undoLink(h, tt('statsJ.Confirm.undo'), undo)
       ])
     }
   } catch (e) { /* orphan cleanup is best-effort: never block the close flow */ }

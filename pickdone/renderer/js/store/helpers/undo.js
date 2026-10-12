@@ -241,9 +241,13 @@ export async function persistSnapshotDiffCore ({ commit }, { from, to, allowDele
         commit('removeLocal', row.taskId)
         continue
       }
-      commit('upsertLocal', row)
-      safeUpsert({ ...row, status: 'update' })
-      changedRows.push(row)
+      // [F2 wave 2026-10-13] single serialization choke point: strip the local-dialect `deleting`
+      // UI flag at snapshot replay, otherwise a delete row inside a snapshot re-writes it back into
+      // memory AND the durable store — the dirty field spreads forever via undo snapshots/sync.
+      const clean = { ...row, status: 'update' }; delete clean.deleting
+      commit('upsertLocal', clean)
+      safeUpsert(clean)
+      changedRows.push(clean)
       // Snapshot replay bypasses updateTodoFields' chip-sync/snapshot-restore chain — plan the equivalent side effects
       for (const eff of planSnapshotRowSync(before || null, row)) effects.push(eff)
     }

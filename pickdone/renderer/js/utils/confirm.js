@@ -9,6 +9,25 @@ export function isRepeatTask (t) {
   return !!(t && t.repeatId && t.repeatId !== 'null')
 }
 
+/** [F2 wave 2026-10-13] Shared undo-link vnode for the 5s undo toasts. The old bare styled <a>
+ *  (color+cursor only) was unreachable by keyboard — no role/tabindex/keydown, so within the 5s
+ *  window a keyboard user could never activate undo. One helper, all call sites (deleteWithUndo /
+ *  removeWithUndo / moveWithUndo / batchMoveWithUndo here + ui.js's orphan cleanup). */
+export function undoLink (h, label, onClick) {
+  return h('a', {
+    style: { color: 'var(--brand)', cursor: 'pointer' },
+    role: 'button',
+    tabindex: '0',
+    onClick,
+    onKeydown: e => {
+      if (e && (e.key === 'Enter' || e.key === ' ')) {
+        if (e.preventDefault) e.preventDefault()
+        onClick(e)
+      }
+    }
+  }, label)
+}
+
 /**
  * Delete to recycle bin (undoable): low-friction path — no confirmation dialog; after deletion shows a 5-second undo toast.
  * Repeating tasks automatically go through the dedicated confirmation modal (this one only / entire series); all entries are unified, must not bypass it.
@@ -29,7 +48,7 @@ export function deleteWithUndo (vm, store, task) {
     if (vm.$message && window.Vue) {
       showUndoToast(vm.$message.bind(vm), [
         tt('statsJ.Confirm.deleted') + '：' + (task.taskContent || tt('statsJ.TodoItem.untitled')) + '　',
-        window.Vue.h('a', { style: { color: 'var(--brand)', cursor: 'pointer' }, onClick: undo }, tt('statsJ.Confirm.undo'))
+        undoLink(window.Vue.h, tt('statsJ.Confirm.undo'), undo)
       ])
     }
     // [maint-0925 A4] the bare .catch(() => false) below swallowed write failures silently — the
@@ -85,7 +104,7 @@ export function removeWithUndo (vm, doRemove, undo, opts = {}) {
   // toast actually closes (hover-pause aware) instead of a fixed setTimeout racing the undo.
   showUndoToast(vm.$message.bind(vm), [
     tt('statsJ.Confirm.removed') + '　',
-    window.Vue.h('a', { style: { color: 'var(--brand)', cursor: 'pointer' }, onClick: undo }, tt('statsJ.Confirm.undo'))
+    undoLink(window.Vue.h, tt('statsJ.Confirm.undo'), undo)
   ], opts)
   return true
 }
@@ -120,12 +139,12 @@ function observeMove (vm, step) {
 export function moveWithUndo (vm, { label, apply, revert }) {
   observeMove(vm, apply)
   if (!vm.$message || !window.Vue) return
-  showUndoToast(vm.$message.bind(vm), [
+  // [F2 wave 2026-10-13] close only THIS toast: the old closeAll() also killed any concurrent
+  // undo toast (e.g. a second deletion still inside its own 5s window). showUndoToast returns
+  // the message handle; the undo link closes exactly its own.
+  const msg = showUndoToast(vm.$message.bind(vm), [
     label + '　',
-    window.Vue.h('a', {
-      style: { color: 'var(--brand)', cursor: 'pointer' },
-      onClick: () => { observeMove(vm, revert); vm.$message.closeAll() }
-    }, tt('statsJ.TodoItem.undoMove'))
+    undoLink(window.Vue.h, tt('statsJ.TodoItem.undoMove'), () => { observeMove(vm, revert); try { msg.close() } catch { /* already gone */ } })
   ])
 }
 
@@ -133,12 +152,10 @@ export function moveWithUndo (vm, { label, apply, revert }) {
  *  One-click revert restores the whole group (same undo layer as batch delete); label is the success text. */
 export function batchMoveWithUndo (vm, { label, snap, revertOf }) {
   if (!vm.$message || !window.Vue || !snap.length) return
-  showUndoToast(vm.$message.bind(vm), [
+  // [F2 wave 2026-10-13] own-toast close only (same as moveWithUndo above)
+  const msg = showUndoToast(vm.$message.bind(vm), [
     label + '　',
-    window.Vue.h('a', {
-      style: { color: 'var(--brand)', cursor: 'pointer' },
-      onClick: () => { for (const s of snap) observeMove(vm, () => revertOf(s)); vm.$message.closeAll() }
-    }, tt('statsJ.TodoItem.undoMove'))
+    undoLink(window.Vue.h, tt('statsJ.TodoItem.undoMove'), () => { for (const s of snap) observeMove(vm, () => revertOf(s)); try { msg.close() } catch { /* already gone */ } })
   ])
 }
 
