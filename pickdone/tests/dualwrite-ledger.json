@@ -206,5 +206,9 @@
   "renderer/js/store/helpers/tomatoPendingQueue.js::#legacyKey": {
     "authority": "sqlite",
     "note": "One-time migration of the legacy whole-blob queue mirrors (tomatoPendingLedger / tomatoPendingSnow, authority migrated with them = SQLite): read blob, split into per-entry keys under prefix, then removeItem the blob key. Idempotent (absent key = already migrated); corrupt blob quarantined under ::#key before the degrade."
+  },
+  "renderer/js/utils/onboardingTours.js::onboardingJourneySeedTaskId": {
+    "authority": "sqlite",
+    "note": "旅程示例任务清理指针;权威源是sqlite里的todo行(taskContent===种子文本),LS只存taskId指针,finishAll时校验内容/完成态/回收站后软删并消费,不跨端同步"
   }
 }
