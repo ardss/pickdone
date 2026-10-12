@@ -564,14 +564,10 @@ const OPS = {
   bumpSnow: ({ taskId, minutes, dedupKey } = {}) => {
     // Server-side clamping: arbitrary/negative values from the renderer (including the float window) must not tamper with the focus ledger (a single focus session capped at 600 minutes)
     const m = Math.max(0, Math.min(LIMITS.FOCUS_MAX_MINUTES, Math.floor(Number(minutes) || 0)))
-    // P3 2026-10-09: minutes clamped to 0 = a NO-OP credit. The old path still ran the UPDATE
-    // (touching updatedAt/status/syncAuthor), which appended an oplog entry and kicked a sync
-    // round for zero content change — write amplification on every 0-minute bump. Short-circuit
-    // before any row touch (both the dedupKey and legacy paths).
+    // P3 2026-10-09: m===0 is a zero-content no-op (the old path still touched updatedAt/status/oplog/sync) — short-circuit before any row touch.
     if (m === 0) return { ok: true, minutes: 0 }
     // P1 2026-09-20 idempotency contract: the renderer replays bumpSnow on an AMBIGUOUS failure
-    // (timeout / IPC drop where the write may or may not have landed). Without a dedup fence the
-    // replay re-runs the blind `+=` and double-credits the focus ledger. Optional `dedupKey`
+    // (timeout / IPC drop where the write may or may not have landed): without a dedup fence the replay re-runs the blind `+=` and double-credits the ledger. Optional `dedupKey`
     // (string, e.g. the focus session id) installs a once-guard under the meta key
     // `snowDedup:<taskId>:<dedupKey>`: the check + increment + stamp run in ONE transaction, so
     // two concurrent replays cannot both pass the check. The first call credits and stamps; any
@@ -593,8 +589,7 @@ const OPS = {
         return { ok: true, minutes: m }
       })
       const out = tr()
-      // Prune outside the bump transaction: the COUNT runs on every dedup'd bump but the DELETE
-      // only fires past the cap. Legacy keys stamped '1' cast to epoch 0 and age out immediately.
+      // Prune outside the bump transaction (COUNT per dedup bump, DELETE past the cap); legacy '1' stamps cast to epoch 0 and age out.
       try {
         const n = db.prepare("SELECT COUNT(*) n FROM meta WHERE key LIKE 'snowDedup:%'").get().n
         if (n > SNOW_DEDUP_CAP) {

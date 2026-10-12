@@ -112,7 +112,8 @@ export default defineComponent({
         this.$message.warning(this.$t('statsG.SideNav.catNameEmptyWarn'))
         this.$nextTick(() => {
           const inp = document.querySelector('.cat-mgr-dialog input.sn-cat-edit')
-          if (inp) inp.focus()
+          if (inp) { /* @ts-ignore duck-typed focus (tests stub a plain object) */
+            inp.focus() }
         })
         return
       }
@@ -128,7 +129,8 @@ export default defineComponent({
           this.$message.warning(this.$t('statsG.SideNav.catNameExistsWarn'))
           this.$nextTick(() => {
             const inp = document.querySelector('.cat-mgr-dialog input.sn-cat-edit')
-            if (inp) inp.focus()
+            if (inp) { /* @ts-ignore duck-typed focus (tests stub a plain object) */
+            inp.focus() }
           })
           return
         }

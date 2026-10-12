@@ -91,7 +91,7 @@ test('m1[1a]: render-process-gone during quit does NOT rebuild and does NOT wipe
 test('m1[1b]: crash while NOT quitting still rebuilds (guard does not over-block)', async () => {
   const constructed = []
   const configWrites = []
-  let quitting = false
+  const quitting = false
   const lock = createLockFresh(makeElectronStub(constructed), {
     configWrites,
     isQuitting: () => quitting
@@ -215,7 +215,7 @@ test('m1[4c]: bumpSnow m>0 behavior unchanged', () => {
 })
 
 /* ================= fix 5 (P2): startup compensation dedups salted renderer abandon ids ================= */
-const { createTomatoSession, reconcileDecision } = require('../../../src/main/tomato-session.js')
+const { createTomatoSession } = require('../../../src/main/tomato-session.js')
 
 function makeDb () {
   const meta = new Map()

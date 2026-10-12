@@ -83,7 +83,7 @@ test('fix 15a: an equal stamp (tie) no longer writes the stale LS blob back — 
     'red before the fix: the tie took the write-back branch and stamped _savedAt ≈ now (gateTs=now drowns newer rows)')
 })
 
-test('fix 15b: the write-back branch (db older than LS) mirrors the PRIOR db._savedAt as the bridge gate', async () => {
+test('fix 15b: the write-back branch (db older than LS) stamps the LS content\'s own age (r-fix 2026-10-09)', async () => {
   const { default: settings } = await importSrc('renderer/js/store/settings.js')
   const Told = Date.now() - 5000
   const Tls = Date.now() - 1000 // LS is newer → write-back branch runs
@@ -92,14 +92,20 @@ test('fix 15b: the write-back branch (db older than LS) mirrors the PRIOR db._sa
     baseState(settings),
     Tls)
   assert.ok(mirrored.length >= 1, 'the write-back mirrored the blob')
-  assert.equal(mirrored[mirrored.length - 1]._savedAt, Told,
-    'red before the fix: the write-back stamped _savedAt: Date.now() — with gateTs=now the bridge putRow guard can skip nothing')
+  // r-fix 2026-10-09: the write-back content IS the LS value, so the stamp must be the LS age —
+  // mirroring the PRIOR db._savedAt paired new content with an old stamp and let an intermediate-
+  // timestamp peer blob overwrite the just-recovered local settings on the LWW gate.
+  assert.equal(mirrored[mirrored.length - 1]._savedAt, Tls,
+    'red before the fix: the write-back kept the PRIOR db._savedAt — new content + old stamp = LWW drift')
 })
 
-test('fix 15: a boot with NO db mirror still stamps fresh now (unchanged behavior)', async () => {
+test('fix 15: a boot with NO db mirror stamps the LS age; fresh now only without any LS stamp (r-fix 2026-10-09)', async () => {
   const { default: settings } = await importSrc('renderer/js/store/settings.js')
   const before = Date.now()
-  const mirrored = await bootWithBlob(null, baseState(settings), before - 1000)
+  const Tls = before - 1000
+  const mirrored = await bootWithBlob(null, baseState(settings), Tls)
   assert.ok(mirrored.length >= 1)
-  assert.ok(mirrored[mirrored.length - 1]._savedAt >= before, 'no prior stamp exists → fresh now is honest')
+  // r-fix 2026-10-09: with an LS stamp present the write-back stamps the LS content's own age —
+  // only a stamp-less LS falls back to now().
+  assert.equal(mirrored[mirrored.length - 1]._savedAt, Tls, 'LS age is the honest stamp for LS content')
 })

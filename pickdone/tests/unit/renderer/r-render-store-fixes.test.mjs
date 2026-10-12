@@ -99,8 +99,10 @@ test('R2b: completeFocus re-verifies the shared phase for FREE focuses (abort wh
     tomatoRecordList: [], _countDate: new Date().toISOString().slice(0, 10), phaseTs: startedAt
   }
   LS.removeItem(CLAIM_KEY)
-  // concurrent giveUp(record=false) in another window flipped the shared transient to default
-  LS.setItem(TOMATO_LS, JSON.stringify({ status: 'default', startedAt: 0, tomatoTime: 25, restTime: 5, remainSec: 1500 }))
+  // concurrent giveUp(record=false) in another window flipped the shared transient to default —
+  // a real give-up goes through persistState, so the blob carries a write stamp DURING our phase
+  // (r-fix: the stamp is the evidence; a stale pre-phase mirror without a stamp must not abort)
+  LS.setItem(TOMATO_LS, JSON.stringify({ status: 'default', startedAt: 0, tomatoTime: 25, restTime: 5, remainSec: 1500, _persistTs: Date.now() }))
   const ctx = tomatoCtx(state)
   await tomato.actions.completeFocus.call(ctx, ctx)
   assert.ok(!state.tomatoRecordList.some(r => r && r.succeed === true), 'a free focus whose phase was concurrently given up must NOT be booked as succeed')

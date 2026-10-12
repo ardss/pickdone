@@ -18,12 +18,15 @@ const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'd10-handlers-'))
 // electron is a path string under plain node, and electron-updater reads require('electron').app at
 // REQUIRE time (system.js → ../updater → electron-updater) — the stub must be installed before the
 // handler modules load, for the whole file. The shell spy is swapped per test via SHELL_SPY.
-let SHELL_SPY = { opened: [] }
+let SHELL_SPY = { opened: [], openExternalImpl: null }
 const ELECTRON_STUB = {
   app: { getPath: () => TMP, getVersion: () => '0.0.0-test' },
   Notification: class { show () {} },
   shell: {
-    openExternal: u => SHELL_SPY.opened.push(u),
+    openExternal: async u => {
+      if (SHELL_SPY.openExternalImpl) return SHELL_SPY.openExternalImpl(u)
+      SHELL_SPY.opened.push(u)
+    },
     openPath: async () => ''
   }
 }
@@ -67,14 +70,22 @@ test('d10: read-critical-state-backup — ENOENT returns null, EACCES throws a r
   } finally { fs.readFileSync = origRead }
 })
 
-test('d10: open-external-url — unsafe scheme throws, https returns true and opens', () => {
-  SHELL_SPY = { opened: [] }
+test('d10: open-external-url — unsafe scheme rejects, https resolves true, shell rejection resolves {ok:false}', async () => {
+  SHELL_SPY = { opened: [], openExternalImpl: null }
   const handlers = systemHandlers({ ...ctxBase })
-  assert.throws(() => handlers['open-external-url'](eMain, 'javascript:alert(1)'), /unsafe external url/,
+  // handler is async (m2 2026-10-09): guard rejections surface via the promise, ipcRenderer.invoke
+  // callers see the same rejection they always did — but it can no longer escape synchronously.
+  await assert.rejects(() => handlers['open-external-url'](eMain, 'javascript:alert(1)'), /unsafe external url/,
     'red before the fix: unsafe scheme silently returned undefined')
-  assert.throws(() => handlers['open-external-url'](eMain, undefined), /unsafe external url/)
+  await assert.rejects(() => handlers['open-external-url'](eMain, undefined), /unsafe external url/)
   assert.equal(SHELL_SPY.opened.length, 0, 'unsafe scheme never reaches the OS shell')
-  const r = handlers['open-external-url'](eMain, 'https://example.com/release-notes')
+  const r = await handlers['open-external-url'](eMain, 'https://example.com/release-notes')
   assert.equal(r, true, 'opened URL returns an honest true (was undefined)')
   assert.deepEqual(SHELL_SPY.opened, ['https://example.com/release-notes'])
+  // m2 2026-10-09: the handler awaits shell.openExternal — an OS-level rejection (no protocol
+  // handler, group policy) must resolve {ok:false,error}, not fire unhandledRejection while
+  // the renderer was told the open succeeded.
+  SHELL_SPY.openExternalImpl = async () => { throw new Error('no protocol handler') }
+  const bad = await handlers['open-external-url'](eMain, 'https://example.com/blocked')
+  assert.deepEqual(bad, { ok: false, error: 'no protocol handler' }, 'shell rejection becomes an honest failure result')
 })

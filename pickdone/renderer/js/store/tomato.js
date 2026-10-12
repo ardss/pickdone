@@ -267,6 +267,7 @@ export function tomatoMirrorDegraded () { return _mirrorDegraded }
 function persistState (state) {
   // Write sequence number: increments once per real disk flush; the ping carries only the sequence, and receivers skip the full re-read when the sequence matches
   state._syncSeq = (state._syncSeq || 0) + 1
+  state._persistTs = Date.now() // write-time evidence for the post-claim phase re-verify (completeFocus G1)
   state.schemaV = SCHEMA_V
   // 账本字段从 blob 中剔除(唯一源=DB 行表),blob 只承载计时瞬态与偏好
   const blob = Object.assign({}, state, { tomatoRecordList: [], _recordsInDb: true })
@@ -436,9 +437,7 @@ export default {
       // only by this window's attachTask mutation (:670) and is never announced/broadcast to
       // peers — excluding it keeps the float window's attach from clobbering the main window's
       // (and vice versa); resolveFocusedTask re-validates at accounting time anyway.
-      // _syncSeq (2026-10-09 P3) is THIS window's per-persist write counter (persistState increments
-      // it before every ping token) — Object.assign used to overwrite it with the peer blob's
-      // smaller value, so the local sequence regressed and ping tokens became non-monotonic.
+      // _syncSeq (2026-10-09 P3): this window's per-persist counter — a peer blob's smaller value used to regress it (non-monotonic ping tokens).
       const LOCAL_KEYS = ['todayTomatoCount', '_countDate', '_countedFocus', 'attachTodo', '_syncSeq']
       const withoutLocal = blob => Object.fromEntries(Object.entries(blob).filter(([k]) => !LOCAL_KEYS.includes(k)))
       if ((fresh.phaseTs || 0) < (s.phaseTs || 0)) {
@@ -551,7 +550,6 @@ export default {
         commit('patch', { status: fresh.status, startedAt: fresh.startedAt, remainSec: fresh.remainSec })
         return
       }
-      // Owner-checked release for the booking guard below (no-op when the claim slot is the {} placeholder)
       const releaseClaim = () => releasePhaseClaim(claim)
       if (running && record) {
         // Measured duration, not the current setting (unified with completeFocus): a mid-focus
@@ -569,11 +567,7 @@ export default {
         const rawMin = Math.round((Date.now() - s.startedAt) / 60000)
         const focusedMin = Math.min(FOCUS_MAX_MINUTES, Math.max(0, rawMin))
         const focused = resolveFocusedTask(s.attachTodo, focusTodoPool(this))
-        // G1 (2026-10-09 P2): the booking stretch is fallible (addRecord → ledgerWrite's mirror
-        // write throws on storage quota failure). Without a release-on-failure guard the phase
-        // claim leaked; the ~30s lease then let completeFocus record the user's ABANDON as a
-        // full succeed tomato. Same owner-checked release contract as completeFocus: only OUR
-        // claim is touched, and the error propagates to the caller (loud, not silent).
+        // G1 (2026-10-09 P2): booking is fallible (ledgerWrite mirror throws on quota) — without release-on-failure the leaked claim's 30s lease let completeFocus record the ABANDON as a full succeed. Owner-checked release; the error propagates loud.
         try {
           commit('addRecord', {
           // Deterministic id: cross-window dedupe as a backstop so the same give-up records only once
@@ -584,11 +578,7 @@ export default {
           focusDuration: focusedMin, rest: s.restTime, restDuration: 0, succeed: false, status: 'local',
           abandonReason: (reason || '').trim()
         })
-        } catch (e) {
-          releaseClaim()
-          console.error('[tomato] giveUp booking failed after claiming; claim released (no phantom succeed tomato):', e)
-          throw e
-        }
+        } catch (e) { releaseClaim(); console.error('[tomato] giveUp booking failed after claiming; claim released:', e); throw e }
         dispatch('todo/writeCriticalBackup', null, { root: true })
       }
       commit('patch', { status: 'default', startedAt: 0, remainSec: s.tomatoTime * 60 })
@@ -599,7 +589,6 @@ export default {
       const s = state
       // State precheck (mirrors startFocus): an anomalous call with no running focus must not mint a free tomato
       if (s.status !== 'startTomatoTime' || !s.startedAt) return
-      // Idempotency token: only one set of side effects per focus. Cross-window claim (including the give-up side) + deterministic id as double insurance
       const claim = await claimPhase('startTomatoTime', s.startedAt)
       if (!claim) return
       // G1: once claimed, any failure between here and addRecord/saveSnowGain would otherwise leave the
@@ -630,17 +619,15 @@ export default {
           if (!live || live.delete === true) focused = null
         } catch (e) { /* empty */ }
       }
-      // G1 (R2-4, 2026-10-09 P2): the await window lets a concurrent giveUp(record=false) flip the shared
-      // phase back to default. Re-verify against the shared transient before booking — for FREE focuses
-      // too: the whole check used to sit inside `if (focused && ...)`, so an unattached focus skipped the
-      // re-verification and booked a succeed tomato for a phase another window had just given up.
+      // G1 (R2-4 2026-10-09 P2): the await window lets a concurrent giveUp(record=false) flip the shared phase
+      // to default — re-verify before booking, FREE focuses too. Evidence = the write stamp: a blob written DURING our phase that contradicts it is a real give-up; an absent/stale mirror never aborts.
       try {
         const fresh = loadState(false)
-        if (!fresh || fresh.status !== 'startTomatoTime' || fresh.startedAt !== startedAt) {
-          releaseClaim()
-          console.info('[tomato] completeFocus aborted after verify await: phase was given up concurrently (startedAt', startedAt + ')')
-          return
-        }
+        if (fresh && fresh._persistTs >= startedAt && (fresh.status !== 'startTomatoTime' || (fresh.startedAt && fresh.startedAt > startedAt))) {
+            releaseClaim()
+            console.info('[tomato] completeFocus aborted: the shared mirror shows the phase was given up concurrently (startedAt', startedAt + ')')
+            return
+          }
       } catch (e) { releaseClaim(); throw e }
       try {
         commit('addRecord', {
