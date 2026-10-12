@@ -79,10 +79,10 @@
         <span v-if="cat && showDateBadge===false" class="td-cat" :style="{color:cat.categoryColor}">{{cat.categoryName}}</span>
       </div>
     </div>
-    <!-- [c-wave 20261013] v-if 只守 td-right 里"有东西可显"的部分:容器恒渲染,否则无日期任务
-         (formatDayLabel 对空 dayStart 返回 '')在 SearchView(无条件 show-date-badge)整列
-         番茄胶囊/快捷删除一起蒸发。td-datetime 自身再守 dateLabel||timeLabel(2026-10-12
-         行内时刻:全日任务 dateLabel 可为空但 timeLabel 仍要显)。 -->
+    <!-- [c-wave 20261013] v-if guards only the date badge: the td-right container always renders, or undated
+         rows (empty dateLabel in SearchView which passes show-date-badge unconditionally) lose the
+         tomato capsule and quick-delete too. td-datetime itself guards dateLabel||timeLabel. -->
+
     <div v-if="showDateBadge" class="td-right">
       <!-- Integrated pomodoro control (user-finalized 2026-09-03): start segment + ledger segment in one capsule; clicking the capsule = select this task and arm start
            (setTomatoTimer's attach semantics, clicking again on the same task cancels); ledger detail lives in the edit panel/context menu, one single action per capsule -->
