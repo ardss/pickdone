@@ -30,7 +30,9 @@ export function buildTaskMenu (vm, t, caps = {}, extra = []) {
       fn: () => toggleCompleteWithUndo({ store: vm.$store, message: vm.$message, todo: raw(), announce: m => vm.$announce && vm.$announce(m) })
     })
   }
-  if (c.move) {
+  // [c-wave 20261013] 已完成任务不再提供"移到今天/推迟到明天":与番茄项的 !t.complete 守卫、
+  // TodoItem 行内 moveUp/moveDown 的 !complete 守卫同型——对完成态行移动日期语义上无意义
+  if (c.move && !t.complete) {
     // Same semantics as TodoItem.moveDay: the target day lands on todoTime (dayStart derived by updateTodoFields);
     // [maint-0925 A1] the patch itself comes from crossDayMovePatch — the same single source as the
     // drag path — so a 14:30 schedule keeps its 14:30 and reminderTime/reminderExtra follow the new

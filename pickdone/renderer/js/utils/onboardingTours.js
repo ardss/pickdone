@@ -57,7 +57,9 @@ const TOURS = {
   /* Task-row tomato pips: first lesson of the ledger concept after the first tomato is recorded */
   pips: () => ({
     steps: [
-      { element: '.td-tomcount', popover: { title: tt(T('pipsTitle')), description: tt(T('pipsDesc')), side: 'top', align: 'center' } }
+      /* 2026-09-03 一体胶囊重构: td-tomcount 已被 .td-tom 取代(TodoItem.vue)——旧选择器是死链,
+         runTour 对空 steps 静默 return false,pips tour(含设置页重看)因此从未弹出过 */
+      { element: '.td-tom', popover: { title: tt(T('pipsTitle')), description: tt(T('pipsDesc')), side: 'top', align: 'center' } }
     ]
   }),
   /* Edit panel: the description area's image/attachment toolbar (tour of Plan B's unified entry) */
@@ -127,6 +129,35 @@ export function tourSeenState () { return seenMap() }
    Each completed action auto-advances to the next step; skip and next are always available, never trapping the user.
    No mask during the drag stage (the driver spotlight only lets through the highlighted element; dragging needs both ends interactive) — replaced by a persistent banner. */
 const J_SEED_TEXT = () => tt(T('jSeedTask'))
+/* ============ 引导示例任务的清理账本 ============
+ * 种子经真实输入链落库(拿不到同步返回值),落库后按内容回查 taskId 记入 localStorage;
+ * 旅程任何出口(finishAll 覆盖 ✕/跳过/超时安全出口/完成页)回收:任务仍是种子原文且未完成
+ * 才静默软删——用户改过内容或已勾选的,视为已"收养",绝不动。 */
+const J_SEED_LS = 'onboardingJourneySeedTaskId'
+function rememberSeed () {
+  try {
+    const st = window.appUI && window.appUI.$store
+    if (!st) return
+    const row = st.state.todo.todoList.find(t => t.taskContent === J_SEED_TEXT() && !t.delete)
+    if (row) localStorage.setItem(J_SEED_LS, String(row.taskId))
+  } catch (e) { /* store not mounted / stub host */ }
+}
+/* Exported for the regression suite; production calls it only from finishAll. */
+export function cleanupJourneySeed () {
+  let id = null
+  try { id = localStorage.getItem(J_SEED_LS) } catch (e) { return false }
+  try { localStorage.removeItem(J_SEED_LS) } catch (e) { /* ignore */ }
+  if (!id) return false
+  try {
+    const st = window.appUI && window.appUI.$store
+    if (!st) return false
+    const row = st.state.todo.todoList.find(t => String(t.taskId) === String(id))
+    // 守卫三连:仍是种子原文、未完成、不在回收站,三者都成立才回收
+    if (!row || row.complete || row.delete || row.taskContent !== J_SEED_TEXT()) return false
+    Promise.resolve(st.dispatch('todo/deleteTodo', row)).catch(() => {}) // 静默:旅程收场不追加撤销 toast
+    return true
+  } catch (e) { return false }
+}
 /** Poll until test() passes. With maxMs > 0 the poll self-terminates once the budget is spent
  *  and calls onTimeout (safe exit) instead of ticking forever when the awaited element never renders. */
 const poll = (test, cb, interval = 400, maxMs = 0, onTimeout = null) => {
@@ -176,6 +207,7 @@ export function runJourney (force = false) {
     seedOnce()
     watch = pollCapped(() => !!document.querySelector('.td-item'), () => {
       clearWatch()
+      rememberSeed() // 种子已渲染:按内容回查 taskId 记入清理账本(finishAll 据此回收)
       stageCreate()
     })
     // Sample task not landed within 2.4s = creation failed (input chain busy/view abnormal); retry once
@@ -212,6 +244,8 @@ export function runJourney (force = false) {
     if (drv) { try { drv.destroy() } catch (e) { /* empty */ } drv = null }
     const b = document.querySelector('.tour-journey-banner')
     if (b) b.remove()
+    // ✕/跳过/超时安全出口/完成页全部汇聚于此:回收用户没收养的示例任务
+    cleanupJourneySeed()
   }
   // Stage E: completion page (re-view entry)
   const stageDone = () => {

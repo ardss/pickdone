@@ -79,7 +79,11 @@
         <span v-if="cat && showDateBadge===false" class="td-cat" :style="{color:cat.categoryColor}">{{cat.categoryName}}</span>
       </div>
     </div>
-    <div v-if="showDateBadge && dateLabel" class="td-right">
+    <!-- [c-wave 20261013] v-if 只守 td-right 里"有东西可显"的部分:容器恒渲染,否则无日期任务
+         (formatDayLabel 对空 dayStart 返回 '')在 SearchView(无条件 show-date-badge)整列
+         番茄胶囊/快捷删除一起蒸发。td-datetime 自身再守 dateLabel||timeLabel(2026-10-12
+         行内时刻:全日任务 dateLabel 可为空但 timeLabel 仍要显)。 -->
+    <div v-if="showDateBadge" class="td-right">
       <!-- Integrated pomodoro control (user-finalized 2026-09-03): start segment + ledger segment in one capsule; clicking the capsule = select this task and arm start
            (setTomatoTimer's attach semantics, clicking again on the same task cancels); ledger detail lives in the edit panel/context menu, one single action per capsule -->
       <span class="td-tom" role="button" tabindex="0"
@@ -95,7 +99,7 @@
               @click.stop.prevent="quickDelete">
         <app-icon name="trash" :size="14"/>
       </button>
-      <div class="td-datetime" :style="{color:badgeColor}">{{dateLabel}}<span v-if="timeLabel" class="td-datetime__time">{{ timeLabel }}</span></div>
+      <div v-if="dateLabel || timeLabel" class="td-datetime" :style="{color:badgeColor}">{{dateLabel}}<span v-if="timeLabel" class="td-datetime__time">{{ timeLabel }}</span></div>
       <!-- Quick delete: appears on hover/keyboard focus (Microsoft To Do pattern), soft delete + undoable, no confirmation dialog -->
     </div>
   </div>
@@ -451,6 +455,10 @@ export default {
 .td-meta .td-ico, .td-meta .td-snow {
   opacity: 0; transition: opacity var(--dur-mid) cubic-bezier(.4, 0, .2, 1);
 }
+/* [c-wave 20261013] td-meta 元信息显影契约与 base.css 的 .td-remind .td-ico/.td-quick-del 对齐:
+   重复/附件图标与专注分钟胶囊原本 opacity:0 且 hover/键盘焦点都不显影(永久隐身) */
+.td-item:hover .td-meta .td-ico, .td-item:focus-within .td-meta .td-ico,
+.td-item:hover .td-meta .td-snow, .td-item:focus-within .td-meta .td-snow { opacity: 1; }
 /* —— 4. 主列表条目：设计稿 .todo-list-item[scoped]
       padding:10px 15px 10px 28px transition all .3s cubic-bezier(.23,1,.32,1) —— */
 .td-item { padding: 10px 15px 10px 28px; transition: all var(--dur-slow) cubic-bezier(.23, 1, .32, 1); }
