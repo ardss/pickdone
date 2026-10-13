@@ -119,6 +119,8 @@ export default {
       if (e && (e.isComposing || e.keyCode === 229)) return
       this.failed = false
       if (this.text) this.text = ''
+      // [d-wave 2026-10-14] Esc is a full cancel: drop the pending multi-line retry queue too
+      this._pendingLines = null
       // [D22 P3] Esc also clears the date chip (stale-date carry-over)
       this.pickedDate = null
       const inp = this.$refs.inp
@@ -132,10 +134,14 @@ export default {
     async onPaste (e) {
       const lines = splitPasteLines(e.clipboardData && e.clipboardData.getData('text'))
       if (lines.length <= 1) return
-      // [A9 fix] the _submitting check must come BEFORE preventDefault: while a submit is in
-      // flight the multi-line paste used to be swallowed silently. Return WITHOUT preventing so
-      // the native paste lands in the input (draft preserved) when busy.
-      if (this._submitting) return
+      if (this._submitting) {
+        // [d-wave 2026-10-14] busy: the old early-return WITHOUT preventDefault let the
+        // native paste fold the multi-line text into the single-line draft. Prevent it and
+        // queue the lines instead — they are submitted by the next onEnter via createLines.
+        e.preventDefault()
+        this._pendingLines = (this._pendingLines || []).concat(lines)
+        return
+      }
       e.preventDefault()
       await this.createLines(lines)
     },
@@ -188,10 +194,16 @@ export default {
       } catch (err) {
         console.error('[quick-add] multi-line paste failed:', err)
         // [D22 P2] partial-failure retry contract: lines already created must NOT be re-created
-        // on the user's retry (they duplicated). Leave only the unsent remainder in the input,
-        // so Enter/paste resubmits exactly what is still missing. done counts successful lines.
-        const rest = lines.slice(done).join('\n')
-        if (rest) this.text = rest
+        // on the user's retry (they duplicated). [d-wave 2026-10-14] the remainder now lives in
+        // the _pendingLines queue with its per-line shape: the old `lines.slice(done).join('\n')`
+        // landed in the single-line input where the next Enter folded the \n-joined text into
+        // one space-concatenated junk task. The queue is drained by onEnter (bulk path); the
+        // input shows the first pending line as the visible draft.
+        const rest = lines.slice(done)
+        if (rest.length) {
+          this._pendingLines = rest.concat(this._pendingLines || [])
+          this.text = rest[0]
+        }
         if (this.quiet) this.failed = true
         else this.$message.error(this.$t('statsD.QuickAdd.createFailed'))
       } finally { this._submitting = false }
@@ -218,6 +230,15 @@ export default {
     },
     async onEnter () {
       if (this._submitting) return // pressing Enter repeatedly within the await window would create duplicate tasks
+      // [d-wave 2026-10-14] pending retry queue (partial multi-line failure / busy paste):
+      // drain it through the bulk createLines path BEFORE touching the single-line draft —
+      // submitting the folded draft instead would create one space-joined junk task.
+      if (this._pendingLines && this._pendingLines.length) {
+        const pending = this._pendingLines
+        this._pendingLines = null
+        await this.createLines(pending)
+        return
+      }
       const raw = this.text.trim()
       if (!raw) return
       this._submitting = true
@@ -227,7 +248,11 @@ export default {
       // existing generic "name cannot be empty" key; no new i18n key was allowed here).
       if (this.parsed && this.parsed.restText === '') {
         this._submitting = false
-        if (!this.quiet) this.$message.warning(this.$t('statsB.ProjectView.nameRequired'))
+        // [d-wave 2026-10-14] quiet mode used to return with ZERO feedback: no toast, no
+        // qa-error — the standalone-window user thought the shortcut was broken. Quiet mode
+        // surfaces failures inline (failed + qa-error), same as the dispatch-failure paths.
+        if (this.quiet) this.failed = true
+        else this.$message.warning(this.$t('statsB.ProjectView.nameRequired'))
         return
       }
       let content = raw

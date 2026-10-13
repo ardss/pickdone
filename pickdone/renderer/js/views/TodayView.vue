@@ -19,8 +19,8 @@
             <div v-if="settings.showProjectsModule && projects.length" class="dropdown-select pd-proj-filter" :class="{ 'is-open': openDd === 'proj' }">
               <el-popover placement="bottom-end" width="180" trigger="click" :hide-after="0" popper-class="dd-pop" @show="openDd = 'proj'" @hide="openDd = null">
                 <ul class="dd-menu">
-                  <li :class="{ on: !projFilter }" tabindex="0" @click="setProjFilter(0)" @keydown.enter.prevent="setProjFilter(0)">{{ $t('todayT.filterAll') }}</li>
-                  <li v-for="p in projects" :key="p.categoryId" tabindex="0"
+                  <li role="button" :class="{ on: !projFilter }" tabindex="0" @click="setProjFilter(0)" @keydown.enter.prevent="setProjFilter(0)">{{ $t('todayT.filterAll') }}</li>
+                  <li v-for="p in projects" :key="p.categoryId" role="button" tabindex="0"
                       :class="{ on: p.categoryId === projFilter }" @click="setProjFilter(p.categoryId)" @keydown.enter.prevent="setProjFilter(p.categoryId)">
                     <i class="pd-proj-opt-dot" :style="{ background: p.categoryColor }" aria-hidden="true"></i>{{ p.categoryName }}
                   </li>

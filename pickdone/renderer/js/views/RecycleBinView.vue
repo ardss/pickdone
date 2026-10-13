@@ -29,7 +29,7 @@
               </svg>
             </span>
             <div class="todo-box-list-item__content rc-editable" :title="$t('statsC.RecycleBin.clickEdit')" :class="{ 'rc-done': t.complete }"
-                 role="button" tabindex="0" @click.stop="openEdit(t)" @keydown="onEditKey"> {{ t.taskContent }} </div>
+                 role="button" tabindex="0" @click.stop="openEdit(t)" @keydown="onEditKey(t, $event)"> {{ t.taskContent }} </div>
             <div class="todo-box-list-item__tools">
               <div class="btn-group">
                 <button class="btn" @click.stop="restore(t, false)"> {{ $t('statsC.RecycleBin.btnRestoreDate') }} </button>
@@ -98,8 +98,12 @@ export default {
     onCheckKey (t, e) {
       roleCheckboxActivate(function () { this.toggleComplete(t) }).call(this, e)
     },
-    /* [A9] row edit button: Space joins Enter */
-    onEditKey: roleButtonActivate(function (e) { this.openEdit(e) }, { stop: true }),
+    /* [A9] row edit button: Space joins Enter. The row task is captured per binding
+       (d-wave 2026-10-14): the old openEdit(e) passed the KeyboardEvent itself as the
+       task, so keyboard users opened an empty edit panel (taskId: undefined). */
+    onEditKey (t, e) {
+      roleButtonActivate(() => this.openEdit(t), { stop: true }).call(this, e)
+    },
     pinPickTabindex () {
       this.$nextTick(() => {
         if (!this.$el || typeof this.$el.querySelectorAll !== 'function') return
@@ -165,6 +169,10 @@ export default {
     /** Earlier-version "pick date": a transparent date picker embedded in the button; picking restores to that date */
     async pickDate (t, ts) {
       if (!ts) return
+      // Same re-entrancy guard as restore() (d-wave 2026-10-14): a double-fire from the
+      // calendar overlay dispatched restoreFromRecycle twice and double-toasted.
+      if (!t || !t.taskId || this._restoringId === t.taskId) return
+      this._restoringId = t.taskId
       const day = +dayjs(ts).startOf('day')
         // Same semantics as restore(): await the dispatch, success toast only on success, error toast on failure
         // [dw-wave6 F1] pick-date restore also via crossDayMovePatch (as dayPatch): scheduled/reminder
@@ -178,10 +186,13 @@ export default {
         this.$message.success(this.$t('statsC.RecycleBin.restoredToDate', { name: t.taskContent || this.$t('statsJ.TodoItem.untitled') }))
       } catch (e) {
         this.$message.error(this.$t('statsC.RecycleBin.restoreFailedMsg') + (e && e.message ? e.message : e))
-      }
+      } finally { this._restoringId = null }
     },
     /** Clicking the item content = open the right-side edit panel (consistent with the app-wide "click row to edit"); field changes auto-save while keeping the deleted state */
     openEdit (t) {
+      // Type guard (d-wave 2026-10-14): a caller passing a non-task (e.g. the raw key
+      // event) must be a no-op, never an edit panel with taskId: undefined
+      if (!t || !t.taskId) return
       this.$store.commit('ui/openEdit', t)
     },
     /** Check complete directly inside the recycle bin (keeps the deleted state, avoiding the three steps restore -> back to list -> check) — goes through the unified completion layer: subtask cascade/recurring renewal/undo toast share the same semantics as other pages */
