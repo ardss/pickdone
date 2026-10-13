@@ -308,8 +308,8 @@ if (!app.requestSingleInstanceLock(...__multiLockArgs)) {
   // (the duplicate's app.quit() has no DB and no windows; see shouldRunQuitFlush in will-quit).
   ranFullInit = true
   // Round-3 stability (2026-09-26): show() deferred until whenReady during cold-start init — a
-  // BrowserWindow before ready hard-throws (see second-instance-gate.js).
-  require('./second-instance-gate').wireSecondInstance(app, () => { showMainOrLock() })
+  // BrowserWindow before ready hard-throws (see second-instance-gate.js); d-wave 2026-10-14 adds the quitting guard.
+  require('./second-instance-gate').wireSecondInstance(app, () => { showMainOrLock() }, () => quitting)
 
   app.whenReady().then(() => {
     Menu.setApplicationMenu(null) // project baseline has no menu bar

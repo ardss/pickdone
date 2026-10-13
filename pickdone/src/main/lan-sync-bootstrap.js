@@ -373,7 +373,7 @@ async function startSync () {
           silent: false,
           ...require('./scheduler').notifyTimeoutOptsForApp() // B4: honor notificationTimeoutInterval on the pairing notification too
         })
-        n.on('click', () => { try { notifyRenderers('pair-request-focus') } catch { /* noop */ } })
+        n.on('failed', e => { try { log.warn('[LanSync] pair-request notification failed:', e && (e.message || e)) } catch { /* noop */ } }); n.on('click', () => { try { notifyRenderers('pair-request-focus') } catch { /* noop */ } }) // D22 (d-wave 2026-10-14): 'failed' attached before show — unhandled, it can crash the main process
         n.show()
       }
     } catch (e) { log.warn('[LanSync] pair-request notification failed:', e.message) }

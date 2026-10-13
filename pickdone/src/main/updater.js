@@ -122,11 +122,17 @@ function init (mainWin) {
     // status to 'available' and replace state.info, so the settings gate read the wrong state and a
     // second downloadUpdate double-called autoUpdater.downloadUpdate. While a manual download is
     // in flight, status/info are owned by it.
-    if (_manualDownload) return
+    // d-wave fix (2026-10-14): a LATER check() firing update-available after update-downloaded
+    // reset status off 'ready', breaking the "restart and install" path (quitAndInstall requires
+    // status==='ready'). A downloaded update is already on disk — later availability events are
+    // stale; keep 'ready' and the stored info.
+    if (_manualDownload || state.status === 'ready') return
     state.status = autoUpdater.autoDownload ? 'downloading' : 'available'; state.info = i; broadcast()
   })
   autoUpdater.on('update-not-available', i => { state.status = 'uptodate'; state.info = i; broadcast() })
-  autoUpdater.on('download-progress', p => { state.status = 'downloading'; state.info = { percent: Math.round(p.percent || 0) }; broadcast() })
+  // d-wave fix (2026-10-14): same 'ready' guard — a stray progress event after download completed
+  // must not flip the settled 'ready' state back to 'downloading'.
+  autoUpdater.on('download-progress', p => { if (state.status === 'ready') return; state.status = 'downloading'; state.info = { percent: Math.round(p.percent || 0) }; broadcast() })
   autoUpdater.on('update-downloaded', i => { state.status = 'ready'; state.info = i; broadcast(); flushOnceOnReady() })
   // Error handling: besides broadcasting, schedule a single backoff retry (checkForUpdates after 30s).
   // Only one retry: transient network/proxy jitter self-heals; persistent failures (e.g. 404, certificate issues) are not retried, avoiding a request storm every 30s. During the retry window, a new error overwrites the state directly without queuing.

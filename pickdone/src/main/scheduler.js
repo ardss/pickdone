@@ -358,7 +358,6 @@ function reloadAll (db) {
   // loop on DESKTOP). First run always rebuilds (lastRebuildFingerprint === null).
   const fingerprint = rebuildFingerprint(todos)
   if (lastRebuildFingerprint !== null && fingerprint === lastRebuildFingerprint) return
-  lastRebuildFingerprint = fingerprint
   for (const h of jobs.values()) clearTimeout(h)
   jobs.clear()
   // Restore firedReminders from meta (prevents "already-fired reminders being re-fired by the catch-up path after restart")
@@ -390,6 +389,12 @@ function reloadAll (db) {
   }
   try { db.setMeta(['reminderLastSeenAt', String(earliestFailedTs < Infinity ? Math.min(now, earliestFailedTs - 1) : now)]) } catch { /* watermark write failure only affects catch-up dedup */ }
   log.info('[Reminder] scheduler rebuild done: %d future reminders, %d missed reminders re-fired', future, missed)
+  // d-wave fix (2026-10-14): advance the fingerprint ONLY on a fully-successful round. Pre-fix it
+  // advanced before the catch-up loop, so a failed fire stranded the reminder: the next reloadAll
+  // saw unchanged inputs and early-returned, retrying never. Keeping the OLD fingerprint on
+  // failure forces the next rebuild to run again; firedReminders dedups the already-fired
+  // instances, so the retry cannot double-fire (markFired semantics unchanged).
+  if (earliestFailedTs === Infinity) lastRebuildFingerprint = fingerprint
 }
 
 function scheduleOne (todo) {

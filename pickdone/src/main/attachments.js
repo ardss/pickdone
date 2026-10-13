@@ -118,6 +118,13 @@ async function saveAttachment ({ taskId, name, dataBase64 }) {
   // valid and never throws, so corrupted/truncated payloads used to land on disk silently. Require the
   // canonical charset/length AND a decode→re-encode roundtrip match before accepting.
   const { strictBase64 } = require('./fix-util')
+  // d-wave fix (2026-10-14): the strictBase64 decode + roundtrip re-encode below operate on the
+  // FULL string, so a 1GB base64 payload peaked at 4-5GB of process memory before the 50MB gate
+  // rejected it. Cheap length precheck first: decoded bytes ≈ len*3/4 — if that alone exceeds the
+  // per-file cap, reject before touching a Buffer. (MAX_BYTES import must stay lazy/call-time to
+  // mirror the attachments-guards cycle note below.)
+  const lenBytes = Math.floor((dataBase64 ? String(dataBase64).length : 0) * 3 / 4)
+  if (lenBytes > MAX_BYTES) throw new Error('attachment: too large (max 50MB)')
   const stripped = strictBase64(dataBase64)
   if (!stripped) throw new Error('attachment: invalid base64 payload')
   const raw = Buffer.from(stripped, 'base64')

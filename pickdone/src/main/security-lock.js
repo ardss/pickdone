@@ -89,6 +89,11 @@ function createSecurityLock ({ getMainWindow, showMainOrLock, readConfig, writeC
       if (win && !win.isDestroyed()) win.hide()
       // Broadcast the locked state to the renderer (ui.isLocked) — this was never sent before; the renderer's subscription was a dead channel
       if (win && !win.isDestroyed()) win.webContents.send('security-lock-on')
+      // d-wave fix (2026-10-14): hide the quick-add window too — it stayed visible while locked,
+      // so typed input kept flowing into it and the submit path was silently rejected by the
+      // lock gate (input loss with zero feedback). Same precedence index.js:88 already applies
+      // to summoning: the quick-add surface must not exist while locked.
+      try { require('./quick-add').hide() } catch { /* best-effort: lock must not depend on quick-add */ }
       if (lockWin && !lockWin.isDestroyed()) { lockWin.focus(); return }
       lockWin = new BrowserWindow({
       width: 400, height: 260, frame: false, resizable: false, closable: false,
