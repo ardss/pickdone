@@ -113,12 +113,21 @@ test('relay client: a hung relay POST fails fast via AbortSignal.timeout and is 
     nodeId: 'devT', account: 'acc', baseUrl: 'http://127.0.0.1:1', // unreachable by construction
     fetchImpl: hangingFetch, fetchTimeoutMs: TIMEOUT_MS,
   })
+  // AbortSignal.timeout uses an unref'd timer in Node. A synthetic fetch that
+  // never opens a socket leaves no ref'd handles, so node:test cancels the test
+  // before the timeout can fire. Keep a socket-equivalent handle alive only
+  // while exercising the hung request; real fetch sockets provide this handle.
+  const keepAlive = setTimeout(() => {}, TIMEOUT_MS + 3000)
   const started = Date.now()
-  await assert.rejects(client.register(), e => {
-    assert.equal(e.code, 'RELAY_FETCH_TIMEOUT', 'timeout failure must carry the coded marker')
-    assert.equal(e.status, undefined, 'no HTTP status → transport-level uncertainty')
-    return true
-  })
+  try {
+    await assert.rejects(client.register(), e => {
+      assert.equal(e.code, 'RELAY_FETCH_TIMEOUT', 'timeout failure must carry the coded marker')
+      assert.equal(e.status, undefined, 'no HTTP status → transport-level uncertainty')
+      return true
+    })
+  } finally {
+    clearTimeout(keepAlive)
+  }
   const elapsed = Date.now() - started
   assert.ok(elapsed < TIMEOUT_MS + 2000, `hung request must fail fast (~${TIMEOUT_MS}ms), took ${elapsed}ms`)
   // and the adapter classifies the coded timeout as retryable (network-throw bucket)
