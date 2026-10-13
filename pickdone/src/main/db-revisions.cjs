@@ -430,9 +430,9 @@ module.exports = function createRevisionRecorder ({ getDb, log }) {
    * @param {{envelope: object, isCurrent?: boolean}[]} items
    */
   function ingestRemote (items) {
-    if (!items || !items.length) return { ingested: 0 }
+    if (!items || !items.length) return { ingested: 0, knownIds: [] }
     const d = getDb()
-    if (!d || !d.open) return { ingested: 0 }
+    if (!d || !d.open) return { ingested: 0, knownIds: [] }
     const insertRev = d.prepare(`INSERT OR IGNORE INTO sync_revisions
       (revisionId, entity, entityId, authorDeviceId, hlcPhysical, hlcLogical, parents, payloadHash, status, createdAt)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`)
@@ -444,6 +444,11 @@ module.exports = function createRevisionRecorder ({ getDb, log }) {
     const bumpCurrent = d.prepare('INSERT INTO sync_revision_current (entityId, revisionId) VALUES (?, ?) ON CONFLICT(entityId) DO UPDATE SET revisionId = excluded.revisionId')
     const getCurrent = d.prepare('SELECT s.* FROM sync_revision_current c JOIN sync_revisions s ON s.revisionId = c.revisionId WHERE c.entityId = ?')
     let ingested = 0
+    // d-wave 2026-10-14: ids that ALREADY existed (INSERT OR IGNORE lost) — the relay pull
+    // path uses this to recognize a REPLAY (cursor held below a blocked envelope re-pulls
+    // applied envelopes every round) and skip the business re-fold, whose LWW/conflict
+    // machinery must not re-run over content the local tables already hold.
+    const knownIds = []
     const run = d.transaction(() => {
       for (const item of items) {
         const env = item && item.envelope
@@ -457,6 +462,7 @@ module.exports = function createRevisionRecorder ({ getDb, log }) {
           env.revisionId, env.entity, String(env.entityId), env.authorDeviceId || '',
           hlc.physical, hlc.logical, JSON.stringify(env.parents || []), env.payloadHash, Date.now())
         if (res.changes) ingested++
+        else knownIds.push(env.revisionId)
         if (env.payload != null) insertPayload.run(env.revisionId, JSON.stringify(env.payload))
         if (env.dvv && insertDvv) insertDvv.run(env.revisionId, JSON.stringify(env.dvv))
         if (!item.isCurrent) continue
@@ -469,7 +475,7 @@ module.exports = function createRevisionRecorder ({ getDb, log }) {
       }
     })
     run()
-    return { ingested }
+    return { ingested, knownIds }
   }
 
   /** No-arg store snapshot over the REAL sync-core store engine (main-internal read seam,

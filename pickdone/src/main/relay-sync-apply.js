@@ -141,9 +141,23 @@ function applyPulledEnvelopes (received, store, deviceId) {
       // Non-todo entities (settings/tomato/category/plan/filter/meta) stay DAG-only in
       // this slice: report 'blocked' for peer frames so the durable host holds the relay
       // cursor BELOW this envelope instead of acking it into relay GC (silent-loss fix,
-      // 2026-10-14). Own frames advance (see ownFrame above).
+      // 2026-10-14). Own frames advance (see ownFrame above). NOTE: this check must stay
+      // BEFORE the replay skip — the blocked envelope is ingested into the DAG on its
+      // first round, so a naive "known ⇒ skip" would flip it to 'ok' on round 2 and
+      // reopen the ack+GC loss hole.
       businessSkipped++
       if (vid) verdicts.set(vid, ownFrame(r.envelope) ? 'ok' : 'blocked')
+      continue
+    }
+    // Replay skip (2026-10-14 regression fix): with the cursor held below a blocked
+    // envelope, every round re-pulls ALREADY-APPLIED todo envelopes. Their DAG row
+    // already exists (INSERT OR IGNORE lost ⇒ knownIds), and re-running the business
+    // fold over them re-arms the LWW/conflict machinery against the since-advanced
+    // local head — S1 v2 regression: a second spurious conflict copy per replay. The
+    // previous round's fold committed durably; the replay is a no-op by construction.
+    if (vid && dag.knownIds && dag.knownIds.includes(vid)) {
+      businessSkipped++
+      verdicts.set(vid, 'ok')
       continue
     }
     if (isCurrent(r.envelope)) row.causalCurrent = true
