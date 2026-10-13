@@ -41,6 +41,37 @@ export function isStaleExternalRound (incomingSavedAt, currentSavedAt) {
   return (Number(incomingSavedAt) || 0) <= (Number(currentSavedAt) || 0)
 }
 
+/** D-wave (2026-10-14): union-max merge of two check-in records maps. Check-ins are monotonically
+ *  INCREASING events, so for each day key we keep the LARGER value (a boolean `true` counts as 1).
+ *  This is the semantics trade-off: a count-up style habit that was corrected DOWN on one device
+ *  can be resurrected by an older peer copy — we accept losing a decrement rather than silently
+ *  losing the other device's check-in, which the previous whole-array LWW replace did on EVERY
+ *  concurrent check-in (the LAN fold channel is one blob, unlike settings' per-field rows). */
+export function unionMaxRecords (incoming, local) {
+  const out = Object.assign({}, incoming || {})
+  for (const day of Object.keys(local || {})) {
+    const l = Number(local[day]) || 0
+    const cur = Number(out[day]) || 0
+    if (l > cur) out[day] = local[day]
+  }
+  return out
+}
+
+/** Match incoming habits against the local array by id and fold the LOCAL check-ins that the
+ *  incoming blob never saw into the incoming records (union-max). Config fields (name/color/
+ *  frequency/deletion) still follow the blob-level savedAt LWW: habits absent from the incoming
+ *  array stay absent, incoming config values win — only the records map is conservatively merged. */
+function mergeHabitRecords (incomingHabits, localHabits) {
+  const localById = new Map((localHabits || []).filter(h => h && h.id != null).map(h => [h.id, h]))
+  for (const h of incomingHabits) {
+    const local = h && h.id != null ? localById.get(h.id) : null
+    if (local && local.records && typeof local.records === 'object') {
+      h.records = unionMaxRecords(h.records, local.records)
+    }
+  }
+  return incomingHabits
+}
+
 function readLs () {
   try {
     const d = JSON.parse(localStorage.getItem(LS_KEY))
@@ -260,9 +291,12 @@ export default {
       if (!blob || !Array.isArray(blob.habits)) return
       if (isStaleExternalRound(blob.savedAt, s.savedAt)) return
       normalizeHabitRecords(blob.habits)
-      s.habits = blob.habits
+      // D-wave (2026-10-14): the blob still wins as a whole (config LWW), but its records maps are
+      // union-max merged with the local ones first — two devices checking in different days must
+      // not lose either side just because the newer blob replaced the whole array.
+      s.habits = mergeHabitRecords(blob.habits, s.habits)
       s.moments = blob.moments || []
-      s.savedAt = blob.savedAt || 0
+      s.savedAt = Math.max(blob.savedAt || 0, s.savedAt || 0)
     },
     /** F2 (2026-09-20): LAN-sync habits fold channel — S1's main process emits
      *  'external-habits-changed' with { fields: { habits?, moments? }, savedAt }. Merge the peer
@@ -282,7 +316,10 @@ export default {
       // tied patch is stale — drop it (ties previously slipped through `<`).
       if (isStaleExternalRound(savedAt, s.savedAt)) return // stale/tied peer round — already superseded
       let changed = false
-      if (Array.isArray(fields.habits)) { normalizeHabitRecords(fields.habits); s.habits = fields.habits; changed = true }
+      // D-wave (2026-10-14): same conservative records merge as applyExternal — the LAN fold
+      // channel used to swap the whole habits array, silently dropping the other device's
+      // concurrent check-in whenever the incoming savedAt was newer.
+      if (Array.isArray(fields.habits)) { normalizeHabitRecords(fields.habits); s.habits = mergeHabitRecords(fields.habits, s.habits); changed = true }
       if (Array.isArray(fields.moments)) { s.moments = fields.moments; changed = true }
       if (!changed) return // nothing applicable: no state change, no savedAt bump
       s.savedAt = savedAt || s.savedAt

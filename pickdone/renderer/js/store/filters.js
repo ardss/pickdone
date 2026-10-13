@@ -32,9 +32,18 @@ export default {
       } catch (e) { console.error('[filters] post-save refetch failed (write stands):', e) }
       return id
     },
-    async remove ({ commit }, id) {
+    async remove ({ commit, state }, id) {
       await commitCommand("filter", "delete", id)
-      commit('setList', await window.todoAPI.dbCall('filterList'))
+      // [d-wave 2026-10-14] Same discipline as the save() refetch (d21-A7): the delete has landed,
+      // so a failed filterList read must NOT reject the whole action — callers saw a spurious
+      // failure while a stale (still-containing) list lingered in the sidebar. On refetch failure
+      // keep the local removal optimistic and still resolve.
+      try {
+        commit('setList', await window.todoAPI.dbCall('filterList'))
+      } catch (e) {
+        console.error('[filters] post-remove refetch failed (delete stands, keeping local removal):', e)
+        commit('setList', (state.list || []).filter(f => f && f.id !== id))
+      }
     }
   }
 }
