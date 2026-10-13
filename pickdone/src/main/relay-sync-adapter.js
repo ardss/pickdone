@@ -88,9 +88,12 @@ async function defaultImportModules () {
 
 /** Retryable = transport-level uncertainty. 4xx answers are DECISIONS (auth, rotation guard,
  *  validation) — retrying them verbatim would hammer a policy rejection; replaying them is
- *  still safe, just pointless. Network throws carry no status → retryable. */
+ *  still safe, just pointless. Network throws carry no status → retryable. A pull-side
+ *  business apply failure is DETERMINISTIC local state (the client flags it noRetry) —
+ *  re-running the identical failing apply under backoff would just burn 3 rounds. */
 function isRetryable (e) {
   if (!e) return false
+  if (e.noRetry) return false
   if (e.status == null) return true
   return e.status >= 500 || e.status === 429
 }
@@ -118,13 +121,15 @@ function isRetryable (e) {
  * @param {number} [deps.retryBaseMs] backoff base (default 500, doubles per attempt)
  * @param {number} [deps.pushChunkBytes] relay-client per-POST budget override (tests)
  * @param {number} [deps.roundIntervalMs] polling cadence override (tests)
+ * @param {number} [deps.fetchTimeoutMs] per-request abort budget forwarded to the relay client
+ *   (default 30000; a half-dead relay used to hang each POST on undici's ~300s default)
  */
 function createRelayAdapter ({
   nodeId, settingsGet, settingsPut, loadStore, applyPulled,
   log = {}, fetchImpl = global.fetch, now = Date.now,
   env = process.env, importModules = defaultImportModules,
   sleep = defaultSleep, retryMax = RETRY_MAX, retryBaseMs = RETRY_BASE_MS,
-  pushChunkBytes, roundIntervalMs = ROUND_INTERVAL_MS,
+  pushChunkBytes, roundIntervalMs = ROUND_INTERVAL_MS, fetchTimeoutMs = 30_000,
 } = {}) {
   if (!nodeId || typeof nodeId !== 'string') throw new Error('relay-adapter: nodeId required')
   if (typeof settingsGet !== 'function' || typeof settingsPut !== 'function') throw new Error('relay-adapter: settingsGet/settingsPut required')
@@ -241,25 +246,63 @@ function createRelayAdapter ({
         const store = await loadStore()
         if (!store) throw new Error('relay-adapter: loadStore returned no revision store')
         const savedSecret = get('DEVICE_SECRET') || null
+        // Pull-side materialization (relay-sync-apply via the bootstrap) now runs INSIDE
+        // the client's cursor gate (2026-10-14): the gate fires after the pull frames are
+        // decrypted+merged but BEFORE the ack/cursor commit, so a batch the business
+        // layer could not fully materialize is never acked into relay GC. The old
+        // post-round ordering let the client ack the full cursor first — relay gc()
+        // then deleted the unmaterialized envelopes (settings/tomato/...) and their
+        // remote changes were silently lost forever (LAN channel unaffected).
+        let businessApplied = 0
+        let businessSkipped = 0
+        let warning = null
         const client = createRelayClient({
           nodeId, account, baseUrl, store, dataKey, fetchImpl,
           deviceSecret: savedSecret,
           enrollment: get('ENROLLMENT') || null,
           pushChunkBytes,
+          fetchTimeoutMs,
           state: loadPersistedState(),
           onDeviceSecret: secret => { try { put('DEVICE_SECRET', secret) } catch (e) { if (log.warn) log.warn('[RelaySync] device secret persist failed: ' + (e && e.message)) } },
+          // Cursor gate: walk the batch's decrypted frames in serverSeq order; advance
+          // the cursor through frames the business layer vouches for ('ok' = materialized
+          // or no-op) and STOP at the first 'blocked' frame (entity this slice cannot
+          // materialize). Everything behind the stop is re-pulled next round — duplicate
+          // pulls are idempotent (revisionId dedup + LWW no-ops); silent loss is not
+          // recoverable. A missing/absent verdict map keeps the legacy advance-all
+          // behavior (bare stub hosts in tests).
+          onBeforeAck: typeof applyPulled === 'function'
+            ? async ({ applied, fromSeq, items, ownIds }) => {
+                const outcome = await applyPulled(items, client.store, nodeId)
+                businessApplied = (outcome && outcome.businessApplied) || 0
+                businessSkipped = (outcome && outcome.businessSkipped) || 0
+                metrics.appliedTotal += businessApplied
+                const verdicts = outcome && outcome.verdicts
+                if (!(verdicts instanceof Map)) return applied // legacy stub: no per-frame verdicts → historical semantics
+                const isOwn = id => !!(ownIds && ownIds.has(id))
+                let safe = Math.max(0, (Number.isFinite(fromSeq) ? fromSeq : 1) - 1)
+                let blocked = false
+                for (const it of (Array.isArray(items) ? items : [])) {
+                  const id = it.envelope && it.envelope.revisionId
+                  // Own-device frames (this device pushed them) never hold the cursor:
+                  // their content already lives in the local business tables + DAG, and
+                  // the v2 recorder mints non-todo bookkeeping revisions on every write —
+                  // holding on those would pin the cursor at the relay head forever.
+                  if (verdicts.get(id) === 'blocked' && !isOwn(id)) { blocked = true; continue }
+                  if (!blocked && Number.isFinite(it.serverSeq)) safe = Math.max(safe, it.serverSeq)
+                }
+                if (blocked) {
+                  warning = `cursor held at seq ${safe} (relay head ${applied}): ` +
+                    `${businessSkipped} pulled envelope(s) not yet materializable by this build ` +
+                    `(non-todo entities) — re-pulled each round until per-entity materialization lands (re-pull is idempotent)`
+                  if (log.warn) log.warn('[RelaySync] ' + warning)
+                }
+                return blocked ? safe : applied
+              }
+            : undefined,
         })
         if (!savedSecret) await step('register', () => client.register())
         const r = await step('round', () => client.round())
-        // Pull-side materialization (relay-sync-apply via the bootstrap) BEFORE the commit
-        // point: pulled envelopes land in the local DAG + business tables, or the round
-        // fails and the durable state replays (never ack what did not land, spec §18).
-        let businessApplied = 0
-        if (typeof applyPulled === 'function' && Array.isArray(r.received) && r.received.length) {
-          const outcome = await applyPulled(r.received, client.store, nodeId)
-          businessApplied = (outcome && outcome.businessApplied) || 0
-          metrics.appliedTotal += businessApplied
-        }
         // commit point (spec §18): persist ONLY past a fully successful round — a crash
         // before this line replays from the previous snapshot, which is duplicate-safe.
         persistState(client.state())
@@ -269,7 +312,7 @@ function createRelayAdapter ({
         metrics.pushedTotal += r.pushed || 0
         metrics.pulledTotal += r.pulled || 0
         metrics.quarantinedTotal += r.quarantined || 0
-        metrics.lastResult = { pushed: r.pushed || 0, pulled: r.pulled || 0, quarantined: r.quarantined || 0, cursor: r.cursor, regressionReset: !!r.regressionReset, businessApplied }
+        metrics.lastResult = { pushed: r.pushed || 0, pulled: r.pulled || 0, quarantined: r.quarantined || 0, cursor: r.cursor, regressionReset: !!r.regressionReset, businessApplied, businessSkipped, ...(warning ? { warning } : {}) }
         return { ok: true, ...metrics.lastResult }
       } catch (e) {
         metrics.lastError = (e && e.message) || String(e)
@@ -394,4 +437,4 @@ function createRelayAdapter ({
       timers, schedule, clearTimers } }
 }
 
-module.exports = { createRelayAdapter, isLoopbackBaseUrl, SETTINGS_KEYS: K, REMOTE_GATE_ENV, MAX_PERSISTED_PUSHED }
+module.exports = { createRelayAdapter, isLoopbackBaseUrl, isRetryable, SETTINGS_KEYS: K, REMOTE_GATE_ENV, MAX_PERSISTED_PUSHED }

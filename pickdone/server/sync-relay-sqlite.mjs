@@ -103,9 +103,14 @@ export function sqliteStore(dbPath, { Database } = {}) {
     getDevice: (account, deviceId) => getDeviceStmt.get(account, deviceId) || null,
     listDevices: account => db.prepare('SELECT * FROM devices WHERE account = ?').all(account),
     putSnapshot: (account, snapshot) => {
-      // clamp generation monotonically like memoryStore: a stale/lower-generation
-      // snapshot must not silently regress (backend divergence found in review)
+      // 2026-10-14 (P2): refuse a LOWER-generation PUT instead of clamping — the old
+      // max() kept the highest generation but let the incoming coversSeq/data overwrite
+      // it, rebranding stale snapshot content as newest (same fix as memoryStore, so the
+      // backends cannot drift). Equal generation is accepted (idempotent re-put).
       const prev = db.prepare('SELECT generation FROM snapshots WHERE account = ?').get(account)
+      if (prev && (snapshot.generation || 0) < prev.generation) {
+        throw Object.assign(new Error(`snapshot generation regression: incoming ${snapshot.generation || 0} < current ${prev.generation}`), { status: 409 })
+      }
       snapshot = { ...snapshot, generation: Math.max(prev ? prev.generation : 0, snapshot.generation || 0) }
       db.prepare(`
         INSERT INTO snapshots (account, generation, coversSeq, data) VALUES (?, ?, ?, ?)
