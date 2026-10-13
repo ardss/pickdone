@@ -128,11 +128,15 @@ function cliRemote (args, timeoutMs = 180000) {
 
 async function poll (budgetMs, fn) {
   const end = Date.now() + budgetMs
+  let lastError = null
   for (;;) {
     let v = null
-    try { v = await fn() } catch { /* transient — keep polling */ }
+    try { v = await fn() } catch (e) { lastError = e /* transient — keep polling */ }
     if (v) return v
-    if (Date.now() > end) return null
+    if (Date.now() > end) {
+      if (lastError) console.error('[jrelay] last poll error: ' + (lastError.stack || lastError.message || lastError))
+      return null
+    }
     await sleep(2500)
   }
 }
@@ -145,8 +149,10 @@ const relayStatus = async which => {
 }
 const relaySync = async which => {
   const r = which === 'a' ? cliLocalEnv(['sync', 'relay', 'sync', '--json']) : cliRemote(['sync', 'relay', 'sync', '--json'])
-  if (r.code !== 0) return { ok: false, error: 'CLI exit ' + r.code + ': ' + r.out.slice(0, 300) }
-  return lastJson(r.out)
+  if (r.code !== 0) throw new Error(`device ${which} relay sync CLI exit ${r.code}: ${r.out.slice(0, 400)}`)
+  const parsed = lastJson(r.out)
+  if (parsed.ok !== true) throw new Error(`device ${which} relay sync returned ok=${JSON.stringify(parsed.ok)}: ${JSON.stringify(parsed).slice(0, 400)}`)
+  return parsed
 }
 const getAll = async which => {
   const r = which === 'a' ? cliLocalEnv(['list', '--all', '--json']) : cliRemote(['list', '--all', '--json'])

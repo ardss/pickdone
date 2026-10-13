@@ -108,7 +108,7 @@ function registerOps (adapter) {
           const bf = require('./db').call('revisionsBackfillUnrecorded', { entity: 'todo' })
           if (bf && bf.backfilled) log.info(`[RelaySync] backfilled ${bf.backfilled} v1-era todo row(s) into the revision DAG`)
         } catch (e) { log.warn('[RelaySync] v1 revision backfill failed:', e && e.message) }
-        return adapter.enable({ account: p.account, baseUrl: p.baseUrl, rootKey: p.rootKey })
+        return adapter.enable({ account: p.account, baseUrl: p.baseUrl, rootKey: p.rootKey, enrollment: p.enrollment })
       }
       return adapter.disable()
     },

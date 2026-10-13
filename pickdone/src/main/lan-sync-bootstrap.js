@@ -746,8 +746,11 @@ function registerOps () {
  *  opts.resyncExternalWatch (P0-1): re-baseline hook for the external-write watcher — sync's own
  *  main-process writes touch the WAL and must not surface as "external CLI writes". */
 function initLanSync ({ db, getWindowSenders, resyncExternalWatch } = {}) {
-  const peerWatermarks = createTrackedWatermarks()
+  // The tracked watermark store reads settingGet() -> state.db immediately.
+  // Set state first so cold boot can load the persisted peer progress safely.
+  const peerWatermarks = null
   state = { db, getWindowSenders, node: null, engine: null, timers: [], pendingToSeq: 0, peerWatermarks, localUserId: null, pendingWrites: { todos: [], settings: [], tomatoes: [], categories: [], plans: [], filters: [] }, pendingPair: null, applied: null, resyncExternalWatch: typeof resyncExternalWatch === 'function' ? resyncExternalWatch : null }
+  state.peerWatermarks = createTrackedWatermarks()
   registerOps()
   // Running-tomato announcements (feature): wire the announce module to the db + identity,
   // and relay remotely-applied announces to the renderer as 'tomato-announce' syncEvents.

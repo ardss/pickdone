@@ -24,15 +24,15 @@ const ACCOUNT = 'e2e-relay-acc'
 // adapter's production-gate header.
 const ROOT_KEY = generateAccountRootKey()
 
-async function withRelay (t) {
-  const relay = createRelay(memoryStore())
+async function withRelay (t, { enrollment = '' } = {}) {
+  const relay = createRelay(memoryStore(), { enrollment })
   const server = await startRelayServer(relay, { port: 0 })
   t.after(() => new Promise(r => server.close(r)))
   return { relay, baseUrl: `http://127.0.0.1:${server.address().port}` }
 }
 
 test('e2e: app writes → relay ops → loopback relay → peer device converges; relay never sees plaintext', async t => {
-  const { relay, baseUrl } = await withRelay(t)
+  const { relay, baseUrl } = await withRelay(t, { enrollment: 'synthetic-e2e-enrollment' })
   relayBootstrap.initRelaySync()
 
   // before enable: the op surface answers with default-off status
@@ -40,8 +40,10 @@ test('e2e: app writes → relay ops → loopback relay → peer device converges
   assert.equal(off.enabled, false, 'relay ops available but default OFF after init')
 
   // enable through the app op surface (dispatch path): flips the v2 revision flag + registers
-  const enabled = await dbSyncOps.dispatch('relaySetEnabled', { enabled: true, account: ACCOUNT, baseUrl, rootKey: ROOT_KEY })
+  const enabled = await dbSyncOps.dispatch('relaySetEnabled', { enabled: true, account: ACCOUNT, baseUrl, rootKey: ROOT_KEY, enrollment: 'synthetic-e2e-enrollment' })
   assert.equal(enabled.enabled, true)
+  assert.equal(enabled.hasEnrollment, true, 'the app bootstrap must forward the CLI enrollment to the adapter')
+  assert.equal(db.call('getMeta', 'sync.relay.enrollment'), 'synthetic-e2e-enrollment', 'the isolated device must persist its enrollment for registration')
   assert.equal(enabled.hasDeviceSecret, true, 'device registered against the relay')
   assert.equal(enabled.account, ACCOUNT)
   assert.equal(db.call('revisionsFlagState').on, true, 'enable turns on the v2 revision recorder')
@@ -67,7 +69,7 @@ test('e2e: app writes → relay ops → loopback relay → peer device converges
 
   // second desktop (peer) joins with the shared root key: pulls, decrypts, converges exactly
   const { createRevisionStore, applyEnvelope, materializedAll } = await import('../../../shared/sync-core/causality/merge.mjs')
-  const peer = createRelayClient({ nodeId: 'peer-device', account: ACCOUNT, baseUrl, dataKey: deriveDataKey(ROOT_KEY) })
+  const peer = createRelayClient({ nodeId: 'peer-device', account: ACCOUNT, baseUrl, dataKey: deriveDataKey(ROOT_KEY), enrollment: 'synthetic-e2e-enrollment' })
   await peer.register()
   const pr = await peer.round()
   assert.ok(pr.pulled >= 3, 'peer pulled the app revisions')

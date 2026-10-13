@@ -144,6 +144,7 @@ module.exports = async function runSync ({ opts, lib, emit }) {
           const seq = lib.writeSyncCmd({ action: 'relay-sync' })
           const ack = await lib.waitForSyncAck(seq)
           if (!ack) throw new lib.CliError('sync relay sync failed: App is not running or did not consume the command', 'APP_NOT_RUNNING')
+          if (!ack.ok || !ack.result || ack.result.ok !== true) throw new lib.CliError('relay round failed: ' + (ack.error || (ack.result && (ack.result.error || ack.result.skipped)) || 'unknown'), 'SYNC_ERROR')
           if (opts.json) return emit(ack.result)
           const r = ack.result || {}
           if (!r.ok) return console.log(`✗ relay round failed: ${r.error || r.skipped || 'unknown'}`)

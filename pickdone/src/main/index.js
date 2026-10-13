@@ -617,10 +617,17 @@ if (!app.requestSingleInstanceLock(...__multiLockArgs)) {
 }
 
 function proxyDb () {
-  return new Proxy({}, { get (_, op) { return (p) => dbm.call(op, p) } })
+  const methods = { call: (...args) => dbm.call(...args), queryTodos: p => dbm.call('queryTodos', p) }
+  // Proxy methods must stay on the returned facade. Spreading an empty
+  // Proxy into {} dropped call/getMeta/setMeta on every actual cold start.
+  return new Proxy(methods, { get (target, op) {
+    if (Object.prototype.hasOwnProperty.call(target, op)) return target[op]
+    if (typeof op !== 'string' || op === 'then') return undefined
+    return p => dbm.call(op, p)
+  } })
 }
 
-function dbApi () { return { queryTodos: p => dbm.call('queryTodos', p), ...proxyDb() } }
+function dbApi () { return proxyDb() }
 
 let quitting = false // re-entrancy guard for the will-quit flush window (see below)
 let flushDone = false // flush window finished; second will-quit passes through so the native quit event (updater autoInstallOnAppQuit) fires

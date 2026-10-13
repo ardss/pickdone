@@ -7,7 +7,7 @@
  * 需要新增共享样式时,唯一出口是 base.css(token/骨架)或组件自身的 <style> 块。
  * 临时豁免: 环境变量 CSS_FREEZE_OFF=1(仅限当次命令,台账须注明理由)。
  */
-import { execSync } from 'node:child_process'
+import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -22,12 +22,12 @@ const ruleCount = css => (css.replace(/\/\*[\s\S]*?\*\//g, '').match(/\{/g) || [
 let failed = false
 let compared = 0
 const existsInHead = f => {
-  try { execSync(`git cat-file -e HEAD:${f}`, { cwd: ROOT, stdio: 'ignore' }); return true } catch { return false }
+  try { execFileSync('git', ['cat-file', '-e', `HEAD:${f}`], { cwd: ROOT, stdio: 'ignore' }); return true } catch { return false }
 }
 for (const f of FILES) {
   let head = null, work = null
   try {
-    head = execSync(`git show HEAD:${f}`, { cwd: ROOT, encoding: 'utf8' })
+    head = execFileSync('git', ['show', `HEAD:${f}`], { cwd: ROOT, encoding: 'utf8' })
   } catch (e) {
     // Fail closed: a registered file missing from HEAD is a red, and any other git error is a red too —
     // never let the scan surface collapse to zero and still print green (same policy as cli/check-tokens.js).
@@ -37,7 +37,7 @@ for (const f of FILES) {
     continue
   }
   try {
-    work = execSync(`git show :${f}`, { cwd: ROOT, encoding: 'utf8' })
+    work = execFileSync('git', ['show', `:${f}`], { cwd: ROOT, encoding: 'utf8' })
   } catch { /* unstaged: fall through to worktree */ }
   if (work == null) {
     try {

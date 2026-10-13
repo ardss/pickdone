@@ -342,7 +342,19 @@ function createRelayAdapter ({
     }
     if (rootKey != null && !ROOT_KEY_RE.test(String(rootKey))) throw new Error('relay-adapter: rootKey must be 64 hex chars')
     if (enrollment != null && String(enrollment).length > 512) throw new Error('relay-adapter: enrollment too long (max 512)')
-    const key = rootKey != null ? String(rootKey) : (get('ROOT_KEY') || randomBytes(32).toString('hex'))
+    // An existing deviceSecret and durable cursor belong to one relay account/origin.
+    // A silent rebind can reuse a wrong bearer token or skip remote history. Fail
+    // BEFORE any settings writes; explicit forget/key migration requires review.
+    const priorAccount = get('ACCOUNT')
+    const priorBaseUrl = get('BASE_URL')
+    const priorRootKey = get('ROOT_KEY')
+    if (priorAccount && (priorAccount !== account || (priorBaseUrl && priorBaseUrl !== baseUrl))) {
+      throw new Error('relay-adapter: different account or relay origin requires explicit forget; refusing to rebind existing identity')
+    }
+    if (rootKey != null && priorRootKey && String(rootKey) !== priorRootKey) {
+      throw new Error('relay-adapter: different root key requires explicit key migration; refusing silent key rotation')
+    }
+    const key = rootKey != null ? String(rootKey) : (priorRootKey || randomBytes(32).toString('hex'))
     put('ACCOUNT', account)
     put('BASE_URL', baseUrl)
     if (enrollment != null) put('ENROLLMENT', String(enrollment)) // absent = keep the previously configured one

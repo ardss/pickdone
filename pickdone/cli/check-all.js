@@ -64,7 +64,7 @@ const GROUPS = [
       // 直接用 node 起 eslint bin：npx 在部分环境（bash 无 npm 全局 PATH）spawn ENOENT 被误判为门禁红（2026-09-04 实锤）
       // --cache:热跑只 lint 变更文件,2.2min→秒级(缓存文件 .eslintcache 已 gitignore)
       ['ESLint', 'node', ['node_modules/eslint/bin/eslint.js', 'renderer/js', 'cli', 'src', 'tests', '--quiet', '--cache']],
-      ['vue-tsc 类型检查(SFC script lang=ts + 全局契约)', 'npm', ['run', 'typecheck']],
+      ['vue-tsc 类型检查(SFC script lang=ts + 全局契约)', 'node', ['node_modules/vue-tsc/bin/vue-tsc.js', '--noEmit', '--incremental']],
       // 经 check-test-summary.cjs 跑同一套 fail=0 + skip 棘轮校验(与 pre-commit 单一实现,防两处分叉)
       // --with-coverage: run-all also writes tests/.artifacts/coverage-summary.json on this pass
       // 15min budget (was 10): the D10 wave's new suites (loopback/quarantine regression tests
@@ -123,9 +123,15 @@ function runStage (stage) {
   const [name, cmd, args, extraEnv, timeoutMin] = stage
   return new Promise(resolve => {
     const t0 = Date.now()
-    const child = spawn(cmd, args, {
+    // Windows cmd.exe cannot use a UNC current working directory: shell:true
+    // previously redirected every gate to C:\\Windows (24 false failures).
+    // npm.cmd is a shell shim; invoke its JS CLI with Node instead.
+    const npmCli = path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js')
+    const binary = cmd === 'npm' && process.platform === 'win32' ? process.execPath : cmd
+    const argv = cmd === 'npm' && process.platform === 'win32' ? [npmCli, ...args] : args
+    const child = spawn(binary, argv, {
       cwd: ROOT, encoding: 'utf8',
-      shell: process.platform === 'win32',
+      shell: false,
       env: { ...process.env, ...(extraEnv || {}) },
       stdio: ['ignore', 'pipe', 'pipe']
     })
