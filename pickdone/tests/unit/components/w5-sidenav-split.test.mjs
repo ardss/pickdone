@@ -105,7 +105,9 @@ test('w5 SideNav split: i18n keys stay in their original shards (no key moves or
   for (const src of [sideNav, catModal, tagModal, tagPanel]) {
     const keys = [...src.matchAll(/\$t\('(stats[A-Z]\.[\w.]+)'/g)].map(m => m[1])
     for (const k of keys) {
-      assert.match(k, /^stats[A-Z]\.SideNav\.|^stats[A-Z]\.(core|tipTitle)/, k + ' stays in its original i18n shard')
+      // [2026-10-15] statsH.main.actionFailedMsg allowed: the F3 confirmed-write gate reuses the
+      // app-wide failure-toast key (same as ProjectView's A4 fix) — not a SideNav shard move
+      assert.match(k, /^stats[A-Z]\.SideNav\.|^stats[A-Z]\.(core|tipTitle)|^statsH\.main\.actionFailedMsg$/, k + ' stays in its original i18n shard')
     }
   }
   // expandSidebar was migrated to statsG by G1 — both usages keep pointing at statsG.SideNav.expandSidebar
