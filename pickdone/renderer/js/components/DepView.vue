@@ -592,7 +592,17 @@ export default {
         announce: function (m) { if (this.$announce) this.$announce(m) }.bind(this)
       })
     },
-    quickDelete (t) { deleteWithUndo(this, this.$store, this.rawOf(t)) },
+    /* [P2 2026-10-15] Recurring tasks must not bypass the scope-confirm contract: TodoItem's delete
+       entry routes repeatId tasks through the RepeatDeleteModal (ui/askRepeatDelete) so the user
+       picks this-event / this-and-after / whole-group; DepView's quickDelete used to call
+       deleteWithUndo directly, silently deleting a single instance of a series. The modal is
+       globally mounted in layout.vue, so committing the same ui mutation reuses the whole flow
+       (group query, scope choice, batch delete, orphan-rule cleanup) with no new plumbing. */
+    quickDelete (t) {
+      const todo = this.rawOf(t)
+      if (todo && todo.repeatId) { this.$store.commit('ui/askRepeatDelete', todo.taskId); return }
+      deleteWithUndo(this, this.$store, todo)
+    },
     toggleTomato (t) { toggleTomatoAttach(this.$store, t) },
     dueLabel (t) { return t.dayStart ? dayjs(t.dayStart).format(FMT.cnDate) : '' },
     // —— 拖拽建依赖:落到目标卡左半 = 拖的卡成为前置(指向右);落到右半 = 目标卡成为拖卡的前置。
