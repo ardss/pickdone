@@ -13,7 +13,6 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createRequire } from 'module'
-import { isolatedTmpDir } from '../../lib/tmp-dir.mjs'
 
 const require_ = createRequire(import.meta.url)
 

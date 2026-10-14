@@ -592,12 +592,9 @@ export default {
         announce: function (m) { if (this.$announce) this.$announce(m) }.bind(this)
       })
     },
-    /* [P2 2026-10-15] Recurring tasks must not bypass the scope-confirm contract: TodoItem's delete
-       entry routes repeatId tasks through the RepeatDeleteModal (ui/askRepeatDelete) so the user
-       picks this-event / this-and-after / whole-group; DepView's quickDelete used to call
-       deleteWithUndo directly, silently deleting a single instance of a series. The modal is
-       globally mounted in layout.vue, so committing the same ui mutation reuses the whole flow
-       (group query, scope choice, batch delete, orphan-rule cleanup) with no new plumbing. */
+    /* [P2 2026-10-15] repeatId deletes route through the globally-mounted RepeatDeleteModal
+       (ui/askRepeatDelete — same scope-confirm contract as TodoItem) instead of silently
+       deleting a single series instance via deleteWithUndo. */
     quickDelete (t) {
       const todo = this.rawOf(t)
       if (todo && todo.repeatId) { this.$store.commit('ui/askRepeatDelete', todo.taskId); return }

@@ -12,7 +12,6 @@ import os from 'node:os'
 import path from 'node:path'
 import fs from 'node:fs'
 import { execFile } from 'node:child_process'
-import { isolatedTmpDir } from '../../lib/tmp-dir.mjs'
 
 const CLI = new URL('../../../cli/pickdone.js', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
 

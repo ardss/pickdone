@@ -183,8 +183,7 @@ test('CLI addAttachment: spools through writeFileDurable (fsync+rename) and land
   let durableCalls = 0
   const orig = durableFs.writeFileDurable
   durableFs.writeFileDurable = (f, d, fsMod) => { durableCalls++; return orig(f, d, fsMod) }
-  let out
-  try { out = api.addAttachment(t.taskId, src) } finally { durableFs.writeFileDurable = orig }
+  try { api.addAttachment(t.taskId, src) } finally { durableFs.writeFileDurable = orig }
   assert.equal(durableCalls, 1, 'add path must route through writeFileDurable (tmp -> fsync -> rename)')
   // the physical file: complete bytes, no spool residue
   const row = db.call('getById', t.taskId)
