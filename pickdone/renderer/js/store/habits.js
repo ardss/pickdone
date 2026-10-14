@@ -72,6 +72,34 @@ function mergeHabitRecords (incomingHabits, localHabits) {
   return incomingHabits
 }
 
+/** [F3 fix] delete tombstones: delHabit records `{ id, deletedAt }` in the blob's `deleted` array,
+ *  so a peer blob that still carries the habit (its savedAt may even be newer) can no longer
+ *  resurrect it through mergeHabitRecords/applyExternal/applyExternalPatch. Backward compatible:
+ *  blobs without a `deleted` field behave exactly as before (field optional, old readers ignore it,
+ *  old blobs merge to an empty list).
+ *  Cross-device caliber (minimal correct version): a tombstone WINS regardless of savedAt —
+ *  deletion is sticky. Rationale: a habit id is `Date.now() + random suffix`, so a "re-created"
+ *  habit with the same id is impossible by construction; any id reappearing in an inbound blob is
+ *  a stale peer copy, and re-adding through addHabit mints a fresh id that no tombstone shadows.
+ *  Records maps of surviving habits keep the d846a3e3 union-max merge — untouched. */
+export function mergeHabitTombstones (local, incoming) {
+  const out = new Map((local || []).filter(t => t && t.id != null).map(t => [t.id, Number(t.deletedAt) || 0]))
+  for (const t of (incoming || [])) {
+    if (!t || t.id == null) continue
+    const at = Number(t.deletedAt) || 0
+    if (!out.has(t.id) || at > (out.get(t.id) || 0)) out.set(t.id, at)
+  }
+  return Array.from(out, ([id, deletedAt]) => ({ id, deletedAt }))
+}
+
+/** Drop tombstoned ids from an inbound habits array (returns the array unchanged when nothing is
+ *  tombstoned). Applied at every inbound boundary so a peer blob can never resurrect a deletion. */
+export function applyHabitTombstones (habits, tombstones) {
+  const dead = new Set((tombstones || []).filter(t => t && t.id != null).map(t => t.id))
+  if (!dead.size) return habits
+  return habits.filter(h => !(h && h.id != null && dead.has(h.id)))
+}
+
 function readLs () {
   try {
     const d = JSON.parse(localStorage.getItem(LS_KEY))
@@ -84,8 +112,8 @@ function readLs () {
 /** First-paint state: localStorage takes precedence (synchronously available); newer values from the main DB are merged by initFromDb at startup */
 function load () {
   const d = readLs()
-  if (d) return { habits: d.habits, moments: d.moments || [], savedAt: d.savedAt || 0 }
-  return { habits: [], moments: [], savedAt: 0 }
+  if (d) return { habits: d.habits, moments: d.moments || [], savedAt: d.savedAt || 0, deleted: d.deleted || [] }
+  return { habits: [], moments: [], savedAt: 0, deleted: [] }
 }
 
 /** Aux-window detection: same judgment as dbMirror's writeNow (float / quick-add hashes).
@@ -107,7 +135,9 @@ import { localDayKey } from '../../../shared/date-key.mjs'
 /** Dual write: localStorage (synchronous fallback) + main DB meta table (source of truth, included in auto backup).
  *  Aux windows: LS write + relay ping only — the main window's storage listener persists to the DB on their behalf. */
 function persist (state) {
-  const blob = { schemaV: SCHEMA_V, habits: state.habits, moments: state.moments || [], savedAt: Date.now() }
+  // [F3 fix] the blob now carries the deletion tombstones (additive field — old readers/blobs
+  // without it behave unchanged)
+  const blob = { schemaV: SCHEMA_V, habits: state.habits, moments: state.moments || [], savedAt: Date.now(), deleted: state.deleted || [] }
   state.savedAt = blob.savedAt
   try { localStorage.setItem(LS_KEY, JSON.stringify(blob)) } catch {}
   try {
@@ -269,13 +299,18 @@ export default {
       const force = blob.force === true
       if (!force && (blob.savedAt || 0) < (s.savedAt || 0)) return
       normalizeHabitRecords(blob.habits) // DB archive is the restore path for old backups — same missing-records guard as readLs
-      s.habits = blob.habits
+      // [F3 fix] deletion is sticky across restores too: merge the blob's tombstones with the
+      // local ones, then drop tombstoned ids from the incoming array (an old backup without the
+      // `deleted` field cannot resurrect a habit deleted after it was taken).
+      s.deleted = mergeHabitTombstones(s.deleted, blob.deleted)
+      s.habits = applyHabitTombstones(blob.habits, s.deleted)
       s.moments = blob.moments || []
       s.savedAt = blob.savedAt || 0
       // 2026-10-09 P3: `force` is an INTERNAL control flag (restore-backup override), not blob
       // content — strip it from the persisted copy so it never reaches LS/DB or the sync fan-out
       // (same internal-field discipline as todo.js's deleting flag strip).
       const clean = Object.assign({}, blob); delete clean.force
+      clean.deleted = s.deleted // tombstones survive the LS rewrite (see persist()'s blob shape)
       try { localStorage.setItem(LS_KEY, JSON.stringify(clean)) } catch {}
       if (force) persist(s) // dual-write: durable DB meta row (single writer discipline kept — persist() IS the store's writer)
     },
@@ -294,7 +329,10 @@ export default {
       // D-wave (2026-10-14): the blob still wins as a whole (config LWW), but its records maps are
       // union-max merged with the local ones first — two devices checking in different days must
       // not lose either side just because the newer blob replaced the whole array.
-      s.habits = mergeHabitRecords(blob.habits, s.habits)
+      // [F3 fix] tombstones first (merged from the peer blob AND local), then filter the inbound
+      // array — a peer blob that still carries a deleted habit can no longer resurrect it.
+      s.deleted = mergeHabitTombstones(s.deleted, blob.deleted)
+      s.habits = mergeHabitRecords(applyHabitTombstones(blob.habits, s.deleted), s.habits)
       s.moments = blob.moments || []
       s.savedAt = Math.max(blob.savedAt || 0, s.savedAt || 0)
     },
@@ -319,7 +357,16 @@ export default {
       // D-wave (2026-10-14): same conservative records merge as applyExternal — the LAN fold
       // channel used to swap the whole habits array, silently dropping the other device's
       // concurrent check-in whenever the incoming savedAt was newer.
-      if (Array.isArray(fields.habits)) { normalizeHabitRecords(fields.habits); s.habits = mergeHabitRecords(fields.habits, s.habits); changed = true }
+      // [F3 fix] the peer round may also carry deletion tombstones (fields.deleted, or top-level
+      // on the bare-blob shape): merge them first, then filter the inbound array so a peer copy
+      // still holding a deleted habit cannot resurrect it.
+      const tombs = Array.isArray(fields.deleted) ? fields.deleted : (Array.isArray(payload.deleted) ? payload.deleted : null)
+      if (tombs) { s.deleted = mergeHabitTombstones(s.deleted, tombs); changed = true }
+      if (Array.isArray(fields.habits)) {
+        normalizeHabitRecords(fields.habits)
+        s.habits = mergeHabitRecords(applyHabitTombstones(fields.habits, s.deleted), s.habits)
+        changed = true
+      }
       if (Array.isArray(fields.moments)) { s.moments = fields.moments; changed = true }
       if (!changed) return // nothing applicable: no state change, no savedAt bump
       s.savedAt = savedAt || s.savedAt
@@ -336,6 +383,9 @@ export default {
         frequency: frequency || { type: 'daily' },
         records: {}
       })
+      // [F3 fix] defensive: a deliberately re-added id (import/restore with a fixed id) clears its
+      // tombstone — addHabit always mints a fresh id in practice, so this is a no-op normally
+      s.deleted = (s.deleted || []).filter(t => t.id !== id)
       persist(s)
     },
     renameHabit (s, { id, name }) {
@@ -344,6 +394,9 @@ export default {
     },
     delHabit (s, id) {
       s.habits = s.habits.filter(x => x.id !== id)
+      // [F3 fix] record a delete tombstone so any peer blob (or older backup) that still carries
+      // this habit id can no longer resurrect it via applyExternal/applyExternalPatch/replaceAll.
+      s.deleted = mergeHabitTombstones(s.deleted, [{ id, deletedAt: Date.now() }])
       persist(s)
     },
     toggleCheck (s, { id, day }) {
