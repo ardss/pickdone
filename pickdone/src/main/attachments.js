@@ -159,6 +159,41 @@ async function saveAttachment ({ taskId, name, dataBase64 }) {
   const url = `local://${encodeURIComponent(finalName)}`
   return { url, key: finalName, name, size: fs.statSync(dest).size, ext }
 }
+/** F2 (2026-10-15): resolve the on-disk key a `local://` url refers to — percent-decode + basename,
+ *  with attachmentPath's same malformed-encoding fallback (raw key). Non-local:// urls → null.
+ *  Pure (no IO), so both the App delete-file handler and the CLI remove path count references
+ *  through the SAME resolution rules the unlink itself uses. */
+function attachmentKeyOfUrl (url) {
+  if (typeof url !== 'string' || !url.startsWith('local://')) return null
+  let k = url.slice(8)
+  try { k = decodeURIComponent(k) } catch { /* malformed encoding: raw key, matches attachmentPath */ }
+  return path.basename(k)
+}
+
+/** F2 (2026-10-15): scan todo rows' image/files metadata for references to a local:// attachment
+ *  key. Deleting a single attachment used to unlink by key alone — task B's only physical copy
+ *  died when task A deleted its entry for the same local:// key (shared after copy/paste or a
+ *  repeat template). Pure (rows in, hits out): callers pass db.getAll rows (App) or liveTasks()
+ *  (CLI); `excludeTaskId` drops one row (the task whose own entry was already spliced out in
+ *  memory — its UPDATED list is scanned by the caller as a pseudo-row). Returns [{taskId, field}];
+ *  empty array = no other row references the key = safe to unlink. */
+function findKeyRefs (key, rows, { excludeTaskId = null } = {}) {
+  const target = path.basename(String(key || ''))
+  if (!target) return []
+  const hits = []
+  for (const row of (rows || [])) {
+    if (!row || (excludeTaskId != null && String(row.taskId) === String(excludeTaskId))) continue
+    for (const field of ['image', 'files']) {
+      let list
+      try { list = JSON.parse(row[field] || '[]'); if (!Array.isArray(list)) continue } catch { continue }
+      for (const item of list) {
+        if (attachmentKeyOfUrl(item && item.url) === target) hits.push({ taskId: row.taskId, field })
+      }
+    }
+  }
+  return hits
+}
+
 function attachmentPath (key) {
   // Malformed percent-encoding (e.g. 'a%zz.png') made decodeURIComponent throw URIError; protocol.js
   // already maps the handler-level throw to a 404 — fall back to the raw key so both layers agree and
@@ -227,6 +262,8 @@ function pruneMissingAliases (exists = p => fs.existsSync(p)) {
 module.exports = { attachDir, saveAttachment, attachmentPath, withinStorageQuota, dirTotalBytes, MAX_TOTAL_BYTES, __setTotalQuota,
   // Alias map (LAN same-name conflict resolution): read/set/delete + list for tests/consumers.
   readAliases, setAlias, deleteAlias, aliasesPath, pruneMissingAliases,
+  // F2: shared-reference counting for single-key deletes (App delete-file + CLI attachment rm).
+  attachmentKeyOfUrl, findKeyRefs,
   // C5/C14 (2026-09-25): MAX_BYTES/MAX_FILES and the noise-slot classifier are exported so
   // attachments-guards.js is the shared gate for every write entry without duplicating caps.
   MAX_BYTES, MAX_FILES, isUnownedNoiseFile, dirUsage,

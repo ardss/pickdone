@@ -60,7 +60,7 @@ module.exports = function attachmentHandlers (ctx) {
     // r3 dead-channel removal (2026-09-28): 'download-file-and-open' and
     // 'save-upload-file-to-download' deleted — todoAPI.downloadAndOpen/saveToDownloads had
     // zero renderer callers (open-file serves the live attachment path).
-    'delete-file': (e, url) => {
+    'delete-file': (e, url, opts) => {
       assertMainWindow(e) // D6 P2 (2026-09-21): destructive channel, main-window-only like backup write
       if (isLocked()) throw new Error('locked')
       if (typeof url !== 'string') return false // F2 2026-09-15: 同 open-file/download-file 的 typeof 守卫(此前 startsWith TypeError)
@@ -77,6 +77,30 @@ module.exports = function attachmentHandlers (ctx) {
       // double-decode names that legitimately contain '%'), with attachmentPath's same fallback
       // (malformed encoding falls back to the raw key).
       const key = url.slice(8)
+      // F2 (2026-10-15): shared-reference guard BEFORE any unlink — deleting task A's attachment
+      // entry used to unlink the physical file by key alone, but the same `local://` key can be
+      // referenced by OTHER todo rows (copy/paste of an entry, repeat templates, a hand-edited
+      // row): task B's only copy died silently. Scan every live row's image/files metadata; if
+      // another row still references the key, refuse with a structured message (the file stays).
+      // `opts.force` bypasses (parity with the CLI's `--force`). The renderer already re-checks
+      // its own store row before calling (EditPanel deleteFromDisk), and the row flush lands
+      // during the undo-toast window, so by the time this runs a surviving reference is a REAL
+      // other-task reference. A db scan failure keeps the old behavior (fail-open) rather than
+      // bricking every delete on a transient read error. The alias map is keyed by the DECODED
+      // name (B5), so the reference scan uses the decoded key too.
+      let aliasKey = key
+      try { aliasKey = decodeURIComponent(key) } catch { /* malformed encoding: use raw (matches attachmentPath) */ }
+      if (!(opts && opts.force)) {
+        let rows = null
+        try { rows = ctx.dbm.call('getAll', { deleted: null }) || [] } catch { rows = null }
+        if (rows) {
+          const refs = attachments.findKeyRefs(aliasKey, rows)
+          if (refs.length) {
+            const tasks = [...new Set(refs.map(r => String(r.taskId)))]
+            throw new Error('delete-file refused: "' + path.basename(aliasKey) + '" is still referenced by ' + tasks.length + ' other task row(s) (' + tasks.join(', ') + ')')
+          }
+        }
+      }
       try { fs.unlinkSync(attachmentPath(key)) } catch (err) {
         // Already-gone is success (idempotent delete); anything else is a real failure
         if ((err && err.code) !== 'ENOENT') throw new Error('delete-file failed: ' + String((err && err.message) || err))
@@ -85,8 +109,6 @@ module.exports = function attachmentHandlers (ctx) {
       // target (aliased from the row's original local://key), drop the alias too — otherwise
       // the stale entry keeps resolving the dead key to the now-missing renamed file and the
       // missing-file guard can never re-pull the original key.
-      let aliasKey = key
-      try { aliasKey = decodeURIComponent(key) } catch { /* malformed encoding: use raw (matches attachmentPath) */ }
       try { require('../attachments').deleteAlias(aliasKey) } catch { /* best-effort */ }
       return true
     },
