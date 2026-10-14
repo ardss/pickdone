@@ -157,7 +157,9 @@ test('#6 renewalCarryFields carries attachments AND quadrant/extra attributes (c
   const carry = renewalCarryFields(tpl, { todoTime: D + 864e5, reminderTime: 2 })
   // quadrant/extra (the CLI half)
   assert.equal(carry.priority, 3)
-  assert.equal(carry.deadlineTs, 12345)
+  // [2026-10-15] deadlineTs is now SHIFTED by the renewal day-diff (F1 fix: verbatim carry
+  // made every renewed instance natively overdue), same dayDiff as the reminderExtra shift above
+  assert.equal(carry.deadlineTs, 12345 + 864e5)
   assert.equal(carry.important, 1)
   assert.equal(carry.urgent, 1)
   // D20-DOMB3: extras are SHIFTED by the renewal day-diff (never carried verbatim onto a
@@ -176,7 +178,8 @@ test('#6 renewalCarryFields carries attachments AND quadrant/extra attributes (c
     image: 'x.png', files: JSON.stringify([{ name: 'f.bin' }])
   })
   const nt = lib.buildRenewalInstance(t, { todoTime: base + 864e5, reminderTime: 0 }, {})
-  assert.equal(nt.priority, 2); assert.equal(nt.deadlineTs, 999)
+  assert.equal(nt.priority, 2)
+  assert.equal(nt.deadlineTs, 999 + 864e5, 'deadline shifts with the renewal day-diff')
   assert.equal(nt.important, 1); assert.equal(nt.urgent, 1)
   assert.equal(nt.image, 'x.png', 'renewed instance keeps the template image')
   assert.equal(nt.files, JSON.stringify([{ name: 'f.bin' }]), 'renewed instance keeps the template files')

@@ -51,7 +51,8 @@ test('P2-4: renewalCarryFields — D5 parity set with `t.x || 0` fallbacks', () 
   assert.deepEqual(out, {
     reminderTime: 999,
     reminderOffsets: [5], reminderExtra: [D + 1500 + 86400000],
-    difficulty: 2, priority: 3, deadlineTs: 12345, important: 1, urgent: 0,
+    // [2026-10-15] deadlineTs shifts by the renewal day-diff too (F1 fix), same as reminderExtra
+    difficulty: 2, priority: 3, deadlineTs: 12345 + 86400000, important: 1, urgent: 0,
     image: null, files: null,
     repeatId: 'r1'
   })
