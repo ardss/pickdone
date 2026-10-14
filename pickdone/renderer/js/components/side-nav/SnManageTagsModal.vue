@@ -128,6 +128,11 @@ export default defineComponent({
       this.tagMgrEditing = null
       if (!next || next === t.name) return
       if (this.tags.some(x => x.name === next)) return this.$message.warning(this.$t('statsG.SideNav.tagExists', { name: next }))
+      // [F3 fix] snapshot BEFORE the bulk rewrite (same contract as removeTag's [D15-A8] snapshot):
+      // a rename rewrites N task titles/descriptions across live AND recycle rows and was
+      // previously unrecoverable — the undo link restores every rewritten field verbatim and
+      // renames the userTags bookkeeping back.
+      const snapshot = this.tagTodos(t.name).map(todo => ({ taskId: todo.taskId, taskContent: todo.taskContent, taskDescribe: todo.taskDescribe }))
       const re = this.tagRewriteRe(t.name)
       const r = await this.rewriteTagTodos(t, todo => {
         const patch: any = {}
@@ -152,7 +157,31 @@ export default defineComponent({
         this.$message.error(this.$t('statsG.SideNav.syncFailMsg'))
         return
       }
-      this.$message.success(this.$t('statsG.SideNav.tagRenamed', { name: next }))
+      // [F3 fix] undo toast instead of a bare success (same showUndoToast shape as removeTag):
+      // restore the snapshot fields, then rename the meta bookkeeping back to the old name.
+      // Cross-device caliber: the undo is a local restore of THIS window's rewrite — a peer that
+      // already folded the renamed text keeps it (no sync channel for the undo).
+      showUndoToast(this.$message.bind(this), [
+        this.$t('statsG.SideNav.tagRenamed', { name: next }) + '　',
+        window.Vue.h('a', {
+          style: { color: 'var(--brand)', cursor: 'pointer' },
+          onClick: () => {
+            Promise.all(snapshot.map(snap => {
+              const patch: any = {}
+              if (snap.taskContent != null) patch.taskContent = snap.taskContent
+              if (snap.taskDescribe != null) patch.taskDescribe = snap.taskDescribe
+              return this.$store.dispatch('todo/updateTodoFields', { taskId: snap.taskId, patch })
+            })).then(() => {
+              return this.$store.dispatch('ui/renameUserTag', { from: next, to: t.name })
+            }).then(() => {
+              this.$message.closeAll()
+            }).catch(e => {
+              console.error('[sn-tags] tag-rename undo failed:', e)
+              this.$message.error(this.$t('statsG.SideNav.syncFailMsg'))
+            })
+          }
+        }, this.$t('statsA.core.undo'))
+      ])
     },
     async removeTag (t) {
       const targets = this.tagTodos(t.name)

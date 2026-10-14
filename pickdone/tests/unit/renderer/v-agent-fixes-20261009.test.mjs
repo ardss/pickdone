@@ -72,16 +72,21 @@ test('[V1] behavior: weekGridStart aligns any first-of-month to the week grid ho
 
 /* ===== [V2] ProjectView renameProject CATEGORY_EXISTS ===== */
 
-test('[V2] renameProject catches CATEGORY_EXISTS around the updateCategory commit, before the cancel-catch', () => {
+test('[V2] renameProject catches CATEGORY_EXISTS around the updateCategory commit; cancel-catch scoped to the dialog (F3)', () => {
   const i = src.proj.indexOf('async renameProject () {')
   assert.ok(i > -1, 'renameProject found')
   const body = src.proj.slice(i, src.proj.indexOf('async setColor', i))
   assert.ok(body.includes("e.code === 'CATEGORY_EXISTS'"), 'a dedicated catch branch checks CATEGORY_EXISTS')
   assert.ok(body.includes('catNameExistsWarn'), 'it surfaces the same warning key as ProjectOverviewView.createProject')
-  const iCatchAll = body.indexOf("catch { /* cancelled */ }")
+  // [F3 fix] contract updated: the old OUTER `catch { /* cancelled */ }` around prompt AND persist
+  // swallowed real persistence errors as user cancels. Cancel handling is now scoped to the
+  // $prompt await ONLY; the CATEGORY_EXISTS guard lives in the persist try, and any other
+  // rejection surfaces via actionFailedMsg instead of dying as a "cancel".
+  const iPromptCancel = body.indexOf('catch { return } // user cancelled the dialog')
   const iGuard = body.indexOf('CATEGORY_EXISTS')
-  assert.ok(iGuard > -1 && iGuard < iCatchAll,
-    'the guard runs before the outer cancelled-swallowing catch could see the throw')
+  assert.ok(iPromptCancel > -1, 'cancel handling is scoped to the dialog await')
+  assert.ok(iGuard > -1 && iGuard > iPromptCancel, 'the guard lives in the persist try AFTER the cancel-only catch')
+  assert.ok(body.includes('statsH.main.actionFailedMsg'), 'non-duplicate persistence rejections surface (no cancel swallow)')
   // the updateCategory commit now sits inside its OWN try (the inner guard), not bare in the
   // cancel-only try scope: the line right before `const ok = await ...updateCategory` must be a try opener
   const iCommit = body.indexOf("const ok = await this.$store.commit('category/updateCategory'")
@@ -102,12 +107,14 @@ function extractMethod (srcText, name) {
   let depth = 0
   for (let j = open; j < srcText.length; j++) {
     if (srcText[j] === '{') depth++
-    else if (srcText[j] === '}') { depth--; if (!depth) return new Function('c', srcText.slice(open + 1, j)) }
+    else if (srcText[j] === '}') { depth--; if (!depth) return new Function('c', 'return (async () => {' + srcText.slice(open + 1, j) + '})()') }
   }
   throw new Error('unbalanced braces in ' + name)
 }
 
-test('[V3] saveMgrEdit: duplicate-name commit keeps the edit state, warns and refocuses', () => {
+test('[V3] saveMgrEdit: duplicate-name commit keeps the edit state, warns and refocuses', async () => {
+  // [F3 fix] saveMgrEdit is now async (it awaits the updateCategory persist result for the
+  // confirmed-write gate) — extractMethod wraps the body in an async IIFE so `await` compiles.
   const saveMgrEdit = extractMethod(src.mgrModal, 'saveMgrEdit')
   const warnings = []
   const focusCalls = []
@@ -125,7 +132,7 @@ test('[V3] saveMgrEdit: duplicate-name commit keeps the edit state, warns and re
     $store: { commit: () => { const e = new Error('already exists'); e.code = 'CATEGORY_EXISTS'; throw e } }
   }
   try {
-    saveMgrEdit.call(vm, { categoryId: 7 })
+    await saveMgrEdit.call(vm, { categoryId: 7 })
   } catch (e) { threw = true } finally {
     globalThis.document.querySelector = prevQuery
   }
