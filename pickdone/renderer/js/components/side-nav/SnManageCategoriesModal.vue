@@ -109,7 +109,7 @@ export default defineComponent({
         if (inp) { inp.focus(); inp.select() }
       })
     },
-    saveMgrEdit (c) {
+    async saveMgrEdit (c) {
       if (this.mgrEditing !== c.categoryId) return
       // D14-A12: a blank name used to silently restore the old name — warn instead (same
       // inline-rename convention as HabitView's renameEmpty) and keep the editor open for a fix.
