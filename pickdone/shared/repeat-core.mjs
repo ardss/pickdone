@@ -111,13 +111,20 @@ export function renewalCarryFields (t, next) {
   const nextDayStart = next && next.todoTime > 0 ? new Date(next.todoTime).setHours(0, 0, 0, 0) : 0
   const dayDiff = (nextDayStart > 0 && t.dayStart > 0) ? nextDayStart - t.dayStart : null
   const extras = Array.isArray(t.reminderExtra) ? t.reminderExtra : []
+  // [P2 2026-10-15] deadlineTs is ALSO an absolute timestamp anchored to the instance's day — the
+  // old `t.deadlineTs || 0` verbatim carry kept the deadline on the OLD instance's date while the
+  // renewed instance moved dayDiff days later: the new instance was born overdue and the stale
+  // deadline accumulated generation after generation. Shift it by the same pure dayDiff used for
+  // reminderExtra above; when the anchor is unknown (dayDiff == null) there is no correct target
+  // day, so fall back to the historical verbatim carry rather than silently zeroing a real deadline.
+  const deadlineTs = (dayDiff != null && t.deadlineTs > 0) ? t.deadlineTs + dayDiff : (t.deadlineTs || 0)
   return {
     reminderTime: next.reminderTime,
     reminderOffsets: Array.isArray(t.reminderOffsets) ? t.reminderOffsets : [],
     reminderExtra: dayDiff == null ? [] : extras.filter(v => Number.isFinite(v) && v > 0).map(v => v + dayDiff),
     difficulty: t.difficulty || 0,
     priority: t.priority || 0,
-    deadlineTs: t.deadlineTs || 0,
+    deadlineTs,
     important: t.important || 0,
     urgent: t.urgent || 0,
     image: t.image || null,
