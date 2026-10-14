@@ -100,7 +100,7 @@ function createState (deviceId) {
  *   ghost tombstone — the local state already holds at-least-as-new content).
  * @throws when the DAG ingest or the business flush fails durably (round must not commit its cursor)
  */
-function applyPulledEnvelopes (received, store, deviceId) {
+function applyPulledEnvelopesCore (received, store, deviceId) {
   const log = logger()
   const items = (Array.isArray(received) ? received : [])
     .map(r => r && r.envelope ? r : null).filter(Boolean)
@@ -180,6 +180,14 @@ function applyPulledEnvelopes (received, store, deviceId) {
     log.info(`[RelaySync] materialized ${businessApplied} pulled todo row(s) into the business table (dag +${dag.ingested})`)
   }
   return { dagIngested: dag.ingested, businessApplied, businessSkipped, verdicts }
+}
+
+// Commit DAG ingestion and business writes atomically. A failed flush must roll
+// back both; otherwise the replay's knownIds optimization hides unfinished rows.
+// The existing ingestRemote and bulk-write transactions become SQLite savepoints.
+function applyPulledEnvelopes (received, store, deviceId) {
+  const revisions = require('./db').__revisionsForTests
+  return revisions.withTransaction(() => applyPulledEnvelopesCore(received, store, deviceId))
 }
 
 module.exports = { envelopeToWireRow, applyPulledEnvelopes }

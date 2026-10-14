@@ -255,7 +255,12 @@ module.exports = function createRevisionRecorder ({ getDb, log }) {
     // stalling every write behind maintenance work. It already runs strictly AFTER the commit, and
     // exportToStore tolerates pruned payloads (ancestry-only rows are skipped), so deferring it to
     // setImmediate keeps the write hot path clean without changing retention semantics.
-    setImmediate(() => prunePayloads(d))
+    // The deferred maintenance can run after the app has closed or switched DBs.
+    // A closed SQLite handle must never be used or logged against removed userData.
+    setImmediate(() => {
+      if (!d.open) return
+      prunePayloads(d)
+    })
     return { recorded }
   }
 
@@ -429,6 +434,15 @@ module.exports = function createRevisionRecorder ({ getDb, log }) {
    * swallowing the error would re-create the silent-loss gap this seam closes.
    * @param {{envelope: object, isCurrent?: boolean}[]} items
    */
+  // The inbound revision DAG and its business-row materialization must share one
+  // SQLite commit. Otherwise a crash after ingestRemote but before the business
+  // flush makes the revision look known on retry while the todo is still absent.
+  function withTransaction (fn) {
+    const d = getDb()
+    if (!d || !d.open) throw new Error('revision transaction requires an open database')
+    return d.transaction(fn)()
+  }
+
   function ingestRemote (items) {
     if (!items || !items.length) return { ingested: 0, knownIds: [] }
     const d = getDb()
@@ -518,7 +532,7 @@ module.exports = function createRevisionRecorder ({ getDb, log }) {
   }
 
   return {
-    record, list, exportToStore, exportStore, verifyHash, ingestRemote,
+    record, list, exportToStore, exportStore, verifyHash, ingestRemote, withTransaction,
     flagEnabled, dvvFlagEnabled, adjudicateFlagEnabled, ensureDvvTable, dvvTableExists, dvvState,
     FLAG_KEY, DVV_FLAG_KEY, ADJUDICATE_FLAG_KEY, DVV_TABLE,
     cmpHlc, prunePayloads, payloadKeep, backfillUnrecorded,
