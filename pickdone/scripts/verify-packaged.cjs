@@ -47,7 +47,13 @@ if (!fs.existsSync(resPkg)) { console.error('FAIL: 缺 resources/package.json（
 // （D:\backups 曾烂成 D:+0x08+ackups，2026-09-03 实锤）；.cmd shim 必须 CRLF+纯 ASCII+无 BOM，否则 cmd.exe 解析炸（LF/中文注释实锤过）
 const resCli = path.join(unpacked, 'resources', 'cli')
 if (fs.existsSync(resCli)) {
-  const skillBuf = fs.readFileSync(path.join(resCli, 'SKILL.md'))
+  // F4 fix (2026-10-15): the SKILL.md read had no existence guard (unlike the .cmd shim below) —
+  // a package that shipped resources/cli without SKILL.md crashed the gate with a raw ENOENT
+  // stack instead of a semantic FAIL. Missing SKILL.md is itself a packaging gap: skill install
+  // cannot work from the packaged app.
+  const skillPath = path.join(resCli, 'SKILL.md')
+  if (!fs.existsSync(skillPath)) { console.error('FAIL: SKILL.md missing'); process.exit(1) }
+  const skillBuf = fs.readFileSync(skillPath)
   const ctrl = [...skillBuf].filter(b => b < 9 || (b > 13 && b < 32))
   if (ctrl.length) { console.error(`FAIL: resources/cli/SKILL.md 含 ${ctrl.length} 个 C0 控制字符（skill install 会原样扩散）`); process.exit(1) }
   // 2026-09-19: guard the .cmd shim checks on the file existing — the Linux AppImage/deb jobs run

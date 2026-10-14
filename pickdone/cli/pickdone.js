@@ -657,6 +657,11 @@ async function main () {
       const file = typeof opts.file === 'string' ? opts.file : null
       if (!file || !require('fs').existsSync(file)) throw new lib.CliError('bad --file "' + opts.file + '" (JSON array of events)', 'USAGE')
       const events = JSON.parse(require('fs').readFileSync(file, 'utf8'))
+      // F4 fix (2026-10-15): a non-array JSON file (object, string, number) hit the dry-run preview
+      // with a raw TypeError (events.length of undefined) → INTERNAL, while the REAL path threw the
+      // structured EMPTY_EVENTS CliError from lib.importEvents. Validate BEFORE the dry-run split so
+      // both paths report the same structured error.
+      if (!Array.isArray(events) || !events.length) throw new lib.CliError('events file must be a non-empty JSON array', 'EMPTY_EVENTS')
       if (dry) return emitNext({ dryRun: true, total: events.length, sample: events.slice(0, 3) }, ['events import --file <events.json> to actually run'])
       const result = await lib.importEvents(events, { onProgress: p => {
         if (!opts.json) process.stdout.write((p.status === 'failed' ? '✗ ' : p.status === 'created' ? '✓ ' : '· ') + p.label + '\n')
@@ -711,6 +716,10 @@ async function main () {
       if (!fs.existsSync(src)) throw new lib.CliError('SKILL.md not found next to pickdone.js', 'NOT_FOUND')
       const content = fs.readFileSync(src, 'utf8')
       const home = process.env.USERPROFILE || process.env.HOME
+      // F4 fix (2026-10-15): an empty/undefined home (both env vars unset — stripped-service
+      // contexts, sandboxed schedulers) hit path.join(undefined, ...) → raw TypeError → INTERNAL.
+      // Fail with a readable structured error instead.
+      if (!home || !String(home).trim()) throw new lib.CliError('cannot determine the home directory (USERPROFILE and HOME are both unset) — set one of them and retry skill install', 'NO_HOME')
       const targets = [
         path.join(home, '.zcode', 'skills', 'pickdone', 'SKILL.md'),
         path.join(home, '.claude', 'skills', 'pickdone', 'SKILL.md'),

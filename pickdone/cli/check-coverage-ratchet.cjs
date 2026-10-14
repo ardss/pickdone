@@ -29,7 +29,9 @@ const os = require('node:os')
 const path = require('node:path')
 
 const ROOT = path.join(__dirname, '..')
-const BASELINE_FILE = path.join(__dirname, '.coverage-baseline.json')
+// F4 fix: env-overridable so the regression suite can point loadBaseline/writeBaseline at a
+// scratch file instead of the real ratchet baseline (which must never be touched by tests).
+const BASELINE_FILE = process.env.PICKDONE_COV_RATCHET_BASELINE_FILE || path.join(__dirname, '.coverage-baseline.json')
 const METRICS = [
   { key: 'lines', label: 'lines', column: 1 },
   { key: 'branches', label: 'branch', column: 2 },
@@ -57,31 +59,59 @@ function suiteMatchesCalibration (j) {
   return summarySuite(j) === CALIBRATION_SUITE
 }
 
-function loadBaseline () {
-  let base = { lines: 0, branches: 0, functions: 0 }
-  if (fs.existsSync(BASELINE_FILE)) {
-    const baselines = JSON.parse(fs.readFileSync(BASELINE_FILE, 'utf8')).baselines || {}
-    base = { ...base, ...(baselines[PLATFORM] || {}) }
+// F4 fix (2026-10-15): the baseline read used to be a bare JSON.parse — a corrupted file (crash
+// mid-write, hand edit) crashed the gate with a raw SyntaxError. Now: a clear report, exit non-zero,
+// and NO silent rebuild — a rebuilt baseline would erase the ratchet history (only-upward floor)
+// and instantly re-green a regression; a human must fix or delete the file deliberately.
+function readBaselineDoc () {
+  if (!fs.existsSync(BASELINE_FILE)) return null
+  let doc
+  try {
+    doc = JSON.parse(fs.readFileSync(BASELINE_FILE, 'utf8'))
+  } catch (e) {
+    throw new Error(`coverage baseline file is corrupted (${BASELINE_FILE}): ${e.message} — fix or delete it BY HAND; the ratchet must not silently rebuild it (a rebuilt baseline loses its history)`)
   }
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc) ||
+      (doc.baselines !== undefined && (typeof doc.baselines !== 'object' || Array.isArray(doc.baselines)))) {
+    throw new Error(`coverage baseline file has an unexpected shape (${BASELINE_FILE}): expected {"baselines":{platform:{lines,branches,functions}}} — fix it BY HAND; the ratchet must not silently rebuild it`)
+  }
+  return doc
+}
+
+function loadBaseline () {
+  const doc = readBaselineDoc()
+  let base = { lines: 0, branches: 0, functions: 0 }
+  if (doc) base = { ...base, ...((doc.baselines || {})[PLATFORM] || {}) }
   return base
 }
 
 function writeBaseline (measured) {
-  let baselines = {}
-  if (fs.existsSync(BASELINE_FILE)) {
-    baselines = JSON.parse(fs.readFileSync(BASELINE_FILE, 'utf8')).baselines || {}
-  }
+  // F4 fix: the read-modify-write used a bare JSON.parse (crash on corrupt existing file) and a
+  // bare writeFileSync (tear under crash/power-cut → the NEXT run hits the corrupt-file path
+  // above and the gate reds). Parse with the same clear-error guard, and persist atomically:
+  // tmp file → fsync → rename (same D22 convention as windows.js's durable marker write).
+  const doc = readBaselineDoc()
+  const baselines = (doc && doc.baselines) || {}
   // Floor to whole percent, matching the comparison (which floors the measured value too):
   // the coverage table reports at 0.1 granularity, so a float baseline like 73.32 can never be
   // reached by a 73.3 reading — the gate would red forever on its own calibration (2026-09-29).
   baselines[PLATFORM] = Object.fromEntries(
     Object.entries(measured).map(([k, v]) => [k, Math.floor(v)])
   )
-  fs.writeFileSync(BASELINE_FILE, JSON.stringify({
+  const data = JSON.stringify({
     // 覆盖率棘轮基线 - 由 check-coverage-ratchet.cjs 通过时自动回写,请勿手工下调
     _comment: 'ratchet baseline per platform (win32/linux/darwin file sets differ ~10pt): each metric = last passing run on that platform, floored to whole percent',
     baselines
-  }, null, 2) + '\n')
+  }, null, 2) + '\n'
+  const tmp = `${BASELINE_FILE}.tmp-${process.pid}`
+  const fd = fs.openSync(tmp, 'w')
+  try {
+    fs.writeSync(fd, data)
+    fs.fsyncSync(fd)
+  } finally {
+    fs.closeSync(fd)
+  }
+  fs.renameSync(tmp, BASELINE_FILE)
 }
 
 function runCoverage () {
@@ -114,7 +144,7 @@ function parseAllFiles (out) {
   return null
 }
 
-module.exports = { parseAllFiles, loadBaseline, writeBaseline, summarySuite, suiteMatchesCalibration }
+module.exports = { parseAllFiles, loadBaseline, writeBaseline, readBaselineDoc, BASELINE_FILE, summarySuite, suiteMatchesCalibration }
 
 if (require.main !== module) return
 
@@ -196,7 +226,15 @@ if (!measured) {
   process.exit(1)
 }
 
-const baseline = loadBaseline()
+let baseline
+try {
+  baseline = loadBaseline()
+} catch (e) {
+  // F4 fix: a corrupted baseline is a HUMAN problem (ratchet history at stake) — report clearly
+  // and exit non-zero; never silently rebuild, never crash with a raw SyntaxError.
+  console.error('✗ [check-coverage-ratchet] ' + (e && e.message))
+  process.exit(1)
+}
 const hasBaseline = baseline.lines > 0 || baseline.branches > 0 || baseline.functions > 0
 if (force) {
   writeBaseline(measured)
