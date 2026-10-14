@@ -124,7 +124,11 @@ export default {
       generating: false,
       /* [A8 fix] set by close()/overlay/Esc while a generation is in flight; the addTodo loop
          checks it between instances so closing mid-run no longer leaves a background series */
-      genCancelled: false
+      genCancelled: false,
+      /* [P2 2026-10-15] true when the form was hydrated from an EXISTING series' persisted rule
+         (hydrateSeries). Editing a series must not write that series' rule back into the global
+         default repeat settings — see generate(). */
+      editingSeries: false
     }
   },
   computed: {
@@ -180,7 +184,13 @@ export default {
       try {
         const raw = await window.todoAPI.dbCall('getMeta', 'repeatRule:' + tpl.repeatId)
         const rule = typeof raw === 'string' ? JSON.parse(raw) : (raw || null)
-        if (rule && typeof rule === 'object' && this.form) Object.assign(this.form, rule)
+        if (rule && typeof rule === 'object' && this.form) {
+          Object.assign(this.form, rule)
+          // [P2 2026-10-15] mark the edit-existing-series path: generate() must then keep its hands
+          // off the global default repeat settings (the form now holds the SERIES' rule, merged
+          // over the defaults — persisting it would clobber the user's saved defaults)
+          this.editingSeries = true
+        }
       } catch { /* unreadable rule: keep the default-seeded form */ }
     },
     patch (p) { Object.assign(this.form, p) },
@@ -202,8 +212,13 @@ export default {
       let dates = [] // hoisted: the catch below reports against it even when the try body throws early
       try {
         const tpl = this.templateTodo
-        // Persist the current rule as the default
-        this.$store.commit('repeatSettings/updateSettings', JSON.parse(JSON.stringify(this.form)))
+        // [P2 2026-10-15] Persist the current rule as the global default ONLY when creating a
+        // brand-new series. On the edit-existing-series path (hydrateSeries seeded this form from
+        // the series' persisted rule, merged over the defaults) writing this.form back would
+        // overwrite the user's saved default repeat settings with one series' specifics.
+        if (!this.editingSeries) {
+          this.$store.commit('repeatSettings/updateSettings', JSON.parse(JSON.stringify(this.form)))
+        }
         if (tpl.todoTime) dates = this.effectiveDates
         // Respect the "max recurring task group count" setting
         let truncated = false
