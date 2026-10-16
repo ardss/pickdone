@@ -405,7 +405,8 @@ html[data-theme="dark"] .tomato-record--open { background: #2a3038; }
 .tomato-record__title__interval { flex-shrink: 0; margin-left: 15px; }
 .tomato-record__description { display: flex; align-items: center; margin-top: 10px; }
 .tomato-record__description__icon { display: flex; flex-shrink: 0; width: 14px; height: 14px; margin-right: 10px; background: url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22><circle cx=%228%22 cy=%228%22 r=%226%22 fill=%22%23ccc%22/></svg>') no-repeat 50%/100% 100%; }
-.tomato-record__description__text { display: -webkit-box; overflow: hidden; color: #666; font-size: var(--fs-base); line-height: 20px; text-overflow: ellipsis; word-break: break-all; -webkit-line-clamp: 1; -webkit-box-orient: vertical; }
+/* [F3-UX] was hardcoded #666 with no dark override -> near-unreadable in dark mode; now token-driven */
+.tomato-record__description__text { display: -webkit-box; overflow: hidden; color: var(--text-2); font-size: var(--fs-base); line-height: 20px; text-overflow: ellipsis; word-break: break-all; -webkit-line-clamp: 1; -webkit-box-orient: vertical; }
 /* 添加记录表单行 */
 .tfr-form-row { margin-bottom: 16px; }
 .tfr-form-label { display: block; margin-bottom: 6px; color: var(--text-2); font-size: var(--fs-md); }
