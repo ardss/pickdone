@@ -144,7 +144,12 @@ function restoreFromCriticalBackup (ud) {
       planPutMany: chips => busCommit('plan', 'putMany', chips),
       habitsPut: pair => busCommit('meta', 'put', pair),
       // metaState (2026-09-26, meta-keys-omitted): repeat rules / tomato estimates / project // deadline+status+flag+milestones live only in the meta table — re-put them like habits.
-      metaPut: pair => busCommit('meta', 'put', pair)
+      metaPut: pair => busCommit('meta', 'put', pair),
+      // F1 (2026-10-17) sync-identity restore: sync.deviceId / sync.pairingSecret live in
+      // settings_rows (lan-sync-bootstrap reads settingsRowsAll), NOT the meta table — without
+      // this door the whitelist-preserved identity keys would land in the wrong table (inert)
+      // and a JSON restore would mint a fresh deviceId while every peer paired the dead one.
+      settingsPut: pair => busCommit('setting', 'put', { key: pair[0], value: pair[1] })
     })
   // [Sync-13 reader, restore-degraded-segments-marker-never-consumed] the only main-process caller // logs the marker: a degraded dump's missing segments must be visible in the recovery trail.
   if (r && Array.isArray(r.degradedSegments) && r.degradedSegments.length) {
@@ -458,20 +463,11 @@ if (!app.requestSingleInstanceLock(...__multiLockArgs)) {
         // startup), and any residual failure is reported to the user instead of silently "succeeding".
         try { dbm.close() } catch {}
         const ts = Date.now()
-        const failures = []
-        for (const f of ['todos.db', 'todos.db-wal', 'todos.db-shm', 'db.key', 'todos.db.plain-bak']) {
-          const p = path.join(ud, f)
-          try {
-            fs.unlinkSync(p)
-          } catch (err) {
-            try {
-              fs.renameSync(p, path.join(ud, fixUtil.pendingDeleteName(f, ts)))
-              log.warn('[Reset] 文件被占用无法直接删除,已改名挂起(下次启动清理):', f, err.message)
-            } catch (err2) {
-              failures.push(f + ': ' + (err2 && err2.message || err2))
-            }
-          }
-        }
+        // F1 (2026-10-17): deletion moved to reset-data-fs.deleteResetTargets — the list now
+        // covers the replay sentinels (recovery-pending.json + critical-state-backup.json, incl.
+        // the ACTIVE default root via criticalBackupPath). The old list let cleanInitReplayDecision
+        // resurrect just-destroyed data on the next boot. Failures are reported, not swallowed.
+        const failures = require('./reset-data-fs').deleteResetTargets(ud, ts, (name, err) => log.warn('[Reset] 文件被占用无法直接删除,已改名挂起(下次启动清理):', name, err))
         if (failures.length) {
           // Never claim success when files survived: hand the list back to the dialog flow
           dialog.showErrorBox(i18nM.mt('appName'), i18nM.mt('dbFailMessage') + '\n\n' + failures.join('\n'))

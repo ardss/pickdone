@@ -5,6 +5,7 @@
  */
 const fs = require('fs')
 const { isBlankishName } = require('./blankish-name.cjs')
+const { pruneCorruptScenes } = require('./corrupt-scene.cjs') // F1 size-cap trim: pure fs helper extracted (2026-10-17)
 const path = require('path')
 
 /** Blob format versions recognizable by the recovery path: corresponds to the schemaV written by each renderer store.
@@ -342,7 +343,13 @@ function attemptDbRecovery (ud, retryInit) {
   }
   pruneCorruptScenes(ud)
   if (jsonExists) return { source: 'json', label: 'disaster-backup JSON (fresh)' }
-  copyFileAtomicRestore(path.join(ud, 'todos.db.plain-bak'), path.join(ud, 'todos.db'))
+  // F1 (2026-10-17): bare call before — a disk-full/EPERM failure propagated OUT and crashed
+  // startup though the corrupt DB was already quarantined. Structured source:'error' like the
+  // failures above, so the dialog explains it instead of crashing.
+  try { copyFileAtomicRestore(path.join(ud, 'todos.db.plain-bak'), path.join(ud, 'todos.db')) } catch (e) {
+    logWarn('[dbRecovery] plain-bak restore copy failed:', e && e.message, '— corrupt DB preserved in .corrupt-*')
+    return { source: 'error', label: 'plain-bak restore copy failed: ' + String(e && e.message || e) + ' (corrupt DB preserved in .corrupt-*)' }
+  }
   // Truthful label: when the JSON existed but failed the parseability gate, the caller's dialog
   // must say the restore came from the (possibly stale) plain-bak, not from the JSON.
   if (jsonFileExists) return { source: 'plain-bak', label: 'disaster-backup JSON unparseable, restored from plain-bak (todos.db.plain-bak, possibly stale)' }
@@ -357,24 +364,6 @@ function attemptDbRecovery (ud, retryInit) {
  *  the backup, never a hybrid. Exported so the restore contract is unit-testable. */
 function copyFileAtomicRestore (src, dest) {
   return require('./durable-fs').writeFileDurable(dest, fs.readFileSync(src))
-}
-
-/** 只保留最近 3 套 .corrupt-<stamp> 现场文件,按 stamp 分组,更早的删除 */
-function pruneCorruptScenes (ud, keep = 3) {
-  try {
-    const byStamp = new Map()
-    for (const f of fs.readdirSync(ud)) {
-      const i = f.indexOf('.corrupt-')
-      if (i < 0) continue
-      const stamp = f.slice(i + '.corrupt-'.length)
-      if (!byStamp.has(stamp)) byStamp.set(stamp, [])
-      byStamp.get(stamp).push(f)
-    }
-    const stamps = [...byStamp.keys()].sort()
-    for (const s of stamps.slice(0, Math.max(0, stamps.length - keep))) {
-      for (const f of byStamp.get(s)) { try { fs.rmSync(path.join(ud, f), { force: true }) } catch {} }
-    }
-  } catch { /* 清理失败不阻断恢复 */ }
 }
 
 /** F11 + registry refactor (dw wave6 2026-09-24): the single RESTORE-SEGMENT REGISTRY — segment
@@ -395,7 +384,7 @@ const RESTORE_SEGMENTS = [
   { seg: 'filterState', enable: c => c.filterPutMany, restore: (raw, cb) => restoreFilterRowsFromCriticalBackup(raw, cb) },
   { seg: 'planState', enable: c => c.planPutMany, restore: (raw, cb) => restorePlanChipsFromCriticalBackup(raw, cb) },
   { seg: 'habitsState', enable: c => c.habitsPut, restore: (raw, cb) => restoreHabitsBlobFromCriticalBackup(raw, cb) },
-  { seg: 'metaState', enable: c => c.metaPut, restore: (raw, cb) => restoreMetaEntriesFromCriticalBackup(raw, cb) }
+  { seg: 'metaState', enable: c => c.metaPut, restore: (raw, cb, cbs) => restoreMetaEntriesFromCriticalBackup(raw, cb, cbs && cbs.settingsPut) }
 ]
 
 /** Derived (not hand-copied) segment-name list — the CLI's restore-backup validator consumes
@@ -421,13 +410,20 @@ const META_RESTORE_PREFIXES = [
   'projectMilestones:',
   'projectDocs:',
   'projectCategoryIds',
-  'userTags'
+  'userTags',
+  // F1 (2026-10-17) sync-identity: without these a JSON restore mints a FRESH sync.deviceId
+  // (authority = settings_rows, lan-sync-bootstrap.js:40) while every peer pairs the dead one.
+  // EXCLUDED (machine-local, not identity): sync.deviceName, sync.enabled/port/*.
+  'sync.deviceId',
+  'sync.pairingSecret'
 ]
 
 /** metaState restore: entries are {key,value} pairs read from the meta table at dump time
  *  (todoBackup.collectMetaState). Idempotent whole-key puts; keys outside the whitelist and
- *  entries without a value are skipped; a single bad entry never drags down the batch. */
-function restoreMetaEntriesFromCriticalBackup (raw, metaPut) {
+ *  entries without a value are skipped; a single bad entry never drags down the batch.
+ *  F1 (2026-10-17) identity routing: sync.deviceId/sync.pairingSecret live in settings_rows —
+ *  a metaPut is silently inert; they route through optional settingsPut (extraCbs → setting.put). */
+function restoreMetaEntriesFromCriticalBackup (raw, metaPut, settingsPut) {
   if (typeof metaPut !== 'function') return 0
   try {
     const seg = parseSegment(raw.backup && raw.backup.metaState, 'metaState')
@@ -438,7 +434,14 @@ function restoreMetaEntriesFromCriticalBackup (raw, metaPut) {
     if (!entries.length) return 0
     let n = 0
     for (const e of entries) {
-      try { metaPut([e.key, e.value]); n++ } catch { /* one bad entry must not drag the batch */ }
+      try {
+        const identity = e.key === 'sync.deviceId' || e.key === 'sync.pairingSecret'
+        // identity keys go to settings_rows via settingsPut; without that callback settingsPut is
+        // undefined → the call throws → caught below: an honest skip (a meta-table write would be
+        // silently inert)
+        ;(identity ? settingsPut : metaPut)([e.key, e.value])
+        n++
+      } catch { /* one bad entry (or absent settingsPut) must not drag the batch */ }
     }
     return n
   } catch { return 0 }
@@ -461,7 +464,18 @@ function restoreTodoRowsFromCriticalBackup (raw, upsertMany) {
   // while some old drill data is an object. Previously only objects were accepted — real disaster backups would silently import 0 rows (confirmed by the round-trip test 2026-09-01).
   const todoState = parseSegment(raw.backup && raw.backup.todoState, 'todoState')
   if (todoState === null) return 0 // schemaV too high: skip the task segment, process the rest as usual
-  const list = ((todoState.todoList || []).concat(todoState.recycleList || [])).filter(t => t && t.taskId)
+  let list = ((todoState.todoList || []).concat(todoState.recycleList || [])).filter(t => t && t.taskId)
+  // F1 (2026-10-17) dangling-repeatId demotion, parity with the UI restore path
+  // (SettingsDataTab.vue:522-552): a row whose repeatRule:<rid> meta is absent from the backup
+  // must be demoted pre-import or it references a rule that does not exist (the UI path already
+  // fixed this; the startup path split the contract). Rules come from the BACKUP's own metaState
+  // so the decision matches post-restore reality; absent/refused metaState skips conservatively.
+  const knownRules = backupRepeatRuleIds(raw)
+  if (knownRules) {
+    let demoted = 0
+    list = list.map(t => (t.repeatId && !knownRules.has(t.repeatId) ? (demoted++, { ...t, repeatId: null }) : t))
+    if (demoted) logWarn(`[dbRecovery] todoState restore: demoted ${demoted} row(s) with dangling repeatId (no repeatRule in the backup's metaState)`)
+  }
   if (typeof upsertMany !== 'function') return 0 // cannot import → never claim the count
   if (list.length) {
     const now = Date.now()
@@ -473,6 +487,16 @@ function restoreTodoRowsFromCriticalBackup (raw, upsertMany) {
     }))
   }
   return list.length
+}
+
+/** F1 (2026-10-17): repeat-rule ids in THIS backup's metaState segment; null when absent/refused
+ *  ("cannot judge" — skip the demotion). Mirrors UI danglingRepeatIds: a miss is gone. */
+function backupRepeatRuleIds (raw) {
+  if (raw == null || raw.backup == null || raw.backup.metaState == null) return null
+  const seg = parseSegment(raw.backup.metaState, 'metaState')
+  if (seg === null) return null // schemaV refused → cannot judge which rules will exist
+  return new Set((((seg && seg.entries) || []).filter(e => e && typeof e.key === 'string' && e.key.startsWith('repeatRule:')))
+    .map(e => e.key.slice('repeatRule:'.length)))
 }
 
 /** Saved-filters restore: filterState rows are the renderer app shape ({id,name,conds,sort,updatedAt}) that
@@ -573,7 +597,7 @@ function restoreSegmentsFromCriticalBackup (ud, upsertTasks, upsertCategory, app
     if (typeof cb !== 'function') continue
     const hadPayload = !!(raw && raw.backup && raw.backup[entry.seg] != null)
     try {
-      const n = entry.restore(raw, cb) || 0
+      const n = entry.restore(raw, cb, cbs) || 0 // cbs passed through so metaState can route identity keys to settingsPut
       result.perSegment[entry.seg] = n
       result.imported += n
       if (entry.seg === 'todoState') result.tasks = Math.max(0, n) // legacy contract: the TASK count
@@ -657,11 +681,15 @@ function restoreCategoriesFromCriticalBackup (raw, upsertCategory) {
 
 /** Task-count of a critical-backup JSON ({backup:{todoState:{todoList,recycleList}}}); 0 when
  *  anything is missing. Used by the destroy-guard below — plausibility ("parses to an object")
- *  stops garbage bytes but NOT an empty snapshot. */
+ *  stops garbage bytes but NOT an empty snapshot.
+ *  F1 (2026-10-17) shape fix: the REAL dump stores todoState as a NESTED JSON STRING
+ *  (todoBackup.buildBackupDump) — the counter always answered 0 on real dumps, making BOTH
+ *  empty-snapshot guards silently inert. String segments are parsed before counting. */
 function criticalBackupRowCount (jsonText) {
   try {
-    const t = (JSON.parse(jsonText).backup || {}).todoState || {}
-    return (t.todoList || []).length + (t.recycleList || []).length
+    let t = (JSON.parse(jsonText).backup || {}).todoState || {}
+    if (typeof t === 'string') t = JSON.parse(t)
+    return ((t && t.todoList) || []).length + ((t && t.recycleList) || []).length
   } catch { return 0 }
 }
 
@@ -767,4 +795,4 @@ function jsonRestoreAllowed (recoveredFrom, reinitErr) {
   return !!(recoveredFrom && recoveredFrom.source === 'json' && !reinitErr)
 }
 
-module.exports = { attemptDbRecovery, cleanInitReplayDecision, SUPPORTED_SCHEMA_V, restoreTasksFromCriticalBackup, restoreSegmentsFromCriticalBackup, writeCriticalStateBackupAtomic, criticalBackupPath, backupJsonParseable, restoreCategoriesFromCriticalBackup, restoreTomatoRecordsFromCriticalBackup, restoreMetaEntriesFromCriticalBackup, quarantineKey, sqliteHeaderOk, encryptedProbe, preflightMigrateResidue, sweepPendingDeletes, recoveryDialogAction, jsonRestoreAllowed, loadVendorDriver, RESTORE_SEGMENT_NAMES, META_RESTORE_PREFIXES, recoveryPendingPath, markRecoveryPending, clearRecoveryPending, hasRecoveryPending, copyFileAtomicRestore }
+module.exports = { attemptDbRecovery, cleanInitReplayDecision, SUPPORTED_SCHEMA_V, restoreTasksFromCriticalBackup, restoreSegmentsFromCriticalBackup, writeCriticalStateBackupAtomic, criticalBackupPath, criticalBackupRowCount, backupJsonParseable, restoreCategoriesFromCriticalBackup, restoreTomatoRecordsFromCriticalBackup, restoreMetaEntriesFromCriticalBackup, quarantineKey, sqliteHeaderOk, encryptedProbe, preflightMigrateResidue, sweepPendingDeletes, recoveryDialogAction, jsonRestoreAllowed, loadVendorDriver, RESTORE_SEGMENT_NAMES, META_RESTORE_PREFIXES, recoveryPendingPath, markRecoveryPending, clearRecoveryPending, hasRecoveryPending, copyFileAtomicRestore }
