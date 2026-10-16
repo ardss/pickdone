@@ -245,6 +245,11 @@ function addTodo ({ content, desc, date, reminder, category, difficulty, priorit
     const targetDay = +dayjs(todoTime).startOf('day')
     const existing = db.call('queryTodos', { deleted: 0, repeatId, dayStartFrom: targetDay, dayStartTo: targetDay })
     if (Array.isArray(existing) && existing.length) return existing[0]
+    // [F2 2026-10-17 renewal dedupe includes the recycle bin, renderer parity: store/todo.js addTodo
+    // pre-check] a twin the user soft-deleted on the SAME rid+day blocks the generation — the
+    // deleted:0 pre-check alone re-minted a deliberately removed day.
+    const binned = db.call('queryTodos', { deleted: 1, repeatId, dayStartFrom: targetDay, dayStartTo: targetDay })
+    if (Array.isArray(binned) && binned.length) return null
   }
   // Insert sort unified on renderer nextSort semantics (F3 2026-09-21, shared nextSort): the side (top/bottom) follows newTodoDefaultSort; the ±32 jitter keeps concurrently identical sorts distinct.
   const targetDay = todoTime ? +dayjs(todoTime).startOf('day') : 0
@@ -417,12 +422,52 @@ function toggleComplete (input, target, { withSubtasks, completedAt } = {}) {
 
 /** Soft delete → recycle bin (deletedAt drives the 30-day auto hard-delete and recycle-bin ordering, aligned with the renderer) */
 function deleteTodo (input) {
+  // [F2 2026-10-17 focus detach, renderer parity: store/todo.js deleteTodo] the App detaches a
+  // focus-bound task BEFORE the delete so the completion record never books to a taskId now in the
+  // recycle bin (renderer twin: dispatch('tomato/attach', null)). The CLI has no in-process store:
+  // the equivalent door is the tomato command channel — writeTomatoCmd({action:'attach', taskId:null})
+  // makes the running App dispatch the SAME tomato/attach(null) action (renderer main.js consume
+  // branch). Fire-and-forget (deleteTodo stays synchronous for the dispatch table); the durable
+  // running-session row (tomatoRunningSession, TQ-1) plus the last cliTomatoState receipt detect
+  // the binding, so a quit/dead App's stale row never triggers a phantom detach write.
+  detachFocusedTomato(resolveTask(input).taskId)
   // version reset to 0 (renderer parity: store/todo.js deleteTodo, P3 2026-09-12): syncTodos excludes
   // delete rows already acked with version > 0, so keeping the old version meant a re-delete after
   // restore never re-entered the sync snapshot and the deletion silently never propagated.
   const after = patchTodo(input, { delete: true, deletedAt: Date.now(), version: 0 }, { action: 'delete' })
   chipsSnapshotForDelete(after.taskId) // snapshot chips → meta before clearing rows: prevents orphan chips while keeping restore backfill capability
   return after
+}
+
+/** [F2 2026-10-17] Is a RUNNING focus currently bound to this taskId (durable session row first,
+ *  last command receipt as fallback)? Only a FRESH receipt counts — cliTomatoState is a single
+ *  slot that survives App death, so without the freshness bound a long-gone session would still
+ *  trigger the detach write. 15s mirrors the renderer's receipt write cadence (150ms post-command)
+ *  with generous slack for a throttled/background window. */
+function focusBoundTo (taskId) {
+  try {
+    const sess = JSON.parse(open().call('getMeta', 'tomatoRunningSession') || 'null')
+    if (sess && sess.status === 'startTomatoTime' && sess.attachTaskId === taskId) return 'session'
+  } catch { /* absent/corrupt row: fall through to the receipt */ }
+  try {
+    const st = readTomatoState()
+    if (st && st.status === 'startTomatoTime' && st.attach && st.attach.taskId === taskId &&
+        st.at && (Date.now() - st.at) < 15000) return 'receipt'
+  } catch { /* unreadable receipt: not bound */ }
+  return null
+}
+
+/** Renderer parity detach: write the attach-null command slot so the running App drops the focus
+ *  binding before the row lands in the recycle bin. Loud-not-silent on a channel failure, same
+ *  policy as chipsSnapshotForDelete. */
+function detachFocusedTomato (taskId) {
+  if (!taskId || !focusBoundTo(taskId)) return
+  try {
+    writeTomatoCmd({ action: 'attach', taskId: null }, { silent: true })
+    console.error(`note: an active focus was attached to ${taskId} — a detach command was written so the completion record does not book to a recycle-bin task`)
+  } catch (e) {
+    console.error(`warning: could not write the tomato detach command for focused task ${taskId} (${e && e.message ? e.message : e}) — the running focus may stay bound to a recycle-bin task`)
+  }
 }
 
 /** Snapshot all of a task's chips into meta (planChipsSnapshot:<taskId>) before clearing its rows.
@@ -481,6 +526,20 @@ function restoreTodo (input) {
   // lost the snapshot. The row update alone is harmless to retry; only after it succeeds do we spend it.
   const db = open()
   const t = resolveTask(input, recycleTasks())
+  // [F2 2026-10-17 restore twin guard, renderer parity: store/todo.js restoreFromRecycle] the
+  // schema-v9 partial UNIQUE index idx_todos_repeat_day (recurGroupId + scheduledDay, live rows)
+  // rejects a restore whose repeat group already has a LIVE instance on the same day (the chain
+  // was renewed while this instance sat in the bin) — the raw put used to surface a bare UNIQUE
+  // stack. Pre-check and refuse with a structured error; the row stays in the recycle bin (the
+  // user's delete decision is preserved; a later `repeat off`/manual repeatId edit is the exit).
+  if (t.repeatId && t.dayStart > 0) {
+    const twins = db.call('queryTodos', { deleted: 0, repeatId: t.repeatId, dayStartFrom: t.dayStart, dayStartTo: t.dayStart })
+    if (Array.isArray(twins) && twins.some(x => x && x.taskId !== t.taskId)) {
+      throw new CliError(
+        `cannot restore ${t.taskId}: repeat group ${t.repeatId} already has a live instance on the same scheduled day (${t.dayStart}) — restore refused to avoid a duplicate-scheduled-day collision (idx_todos_repeat_day)`,
+        'REPEAT_TWIN_EXISTS')
+    }
+  }
   const merged = { ...t, delete: false, deletedAt: 0, updateTime: Date.now(), status: 'update' }
   // B5 guard (renderer parity: store/todo.js restoreFromRecycle): startup meta GC may have purged
   // `repeatRule:<rid>` while the row sat in the bin — restoring the dangling repeatId used to let
