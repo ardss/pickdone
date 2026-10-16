@@ -234,6 +234,26 @@ module.exports = function backupHandlers (ctx) {
         // its tag) always survives.
         const pruneList = existing
         const pruneNow = () => { for (const dead of autoBackup.selectPrunes(pruneList, o)) { try { fs.unlinkSync(path.join(dir, dead)) } catch {} } }
+        // F1 (2026-10-17) empty-snapshot guard — semantic parity with the critical channel's
+        // destroy-guard (dbRecovery.writeCriticalStateBackupAtomic / criticalBackupRowCount===0):
+        // a renderer hydration failure that persists a blank in-memory store must not become the
+        // newest auto/evt backup point, which the restore entry in SettingsDataTab defaults to
+        // selecting. When the incoming snapshot holds ZERO rows while the newest existing point
+        // still holds rows, the empty dump is quarantined to a side file OUTSIDE the ^(auto|evt)-
+        // restore namespace (list-auto-backups filters it out) and the freshest good point is
+        // preserved untouched; no prune runs (D18: an unproven write must not thin the tier).
+        if (dbRecovery.criticalBackupRowCount(jsonText) === 0 && existing.length) {
+          const [newestName] = existing // newest of both tiers (sorted newest-first)
+          let newestRows = -1 // unreadable newest → cannot prove it is good; quarantine conservatively
+          try { newestRows = dbRecovery.criticalBackupRowCount(fs.readFileSync(path.join(dir, newestName), 'utf8')) } catch {}
+          if (newestRows !== 0) {
+            const side = 'empty-quarantine-' + stamp + '-' + d.getTime() + '.json'
+            const wq = atomicWriteJson(fs, dir, side, jsonText)
+            if (!wq.ok) return { ok: false, error: wq.error }
+            log.warn('[Backup] empty snapshot quarantined (newest backup', newestName, 'still holds', newestRows, 'rows):', side)
+            return { ok: true, file: side, emptyQuarantined: true }
+          }
+        }
         // Content dedup: only compare against the newest file OF THE SAME TAG (D11 finding 17 —
         // see newestSameTag). (The original implementation compared against any old file — when the data was changed back to its original state
         // it would return dedup without writing the new snapshot, yet prune would delete that old snapshot → that point in time ends up with no backup)
