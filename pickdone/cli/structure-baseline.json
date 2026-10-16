@@ -1,8 +1,8 @@
 {
-  "cli/lib.js": 821,
+  "cli/lib.js": 878,
   "src/main/lan-sync-bootstrap.js": 835,
   "renderer/js/store/category.js": 763,
-  "renderer/js/store/todo.js": 777,
+  "renderer/js/store/todo.js": 829,
   "src/main/db.js": 813,
   "src/main/index.js": 860
 }

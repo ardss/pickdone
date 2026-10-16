@@ -29,7 +29,6 @@
       <span class="depv-proj__ms" :class="'depv-proj__ms--' + projectInfo.msState" v-if="projectInfo.msTitle">
         M{{ projectInfo.msIndex + 1 }} · {{ projectInfo.msTitle }} · {{ projectInfo.msDateLabel }}
       </span>
-      <!-- [F3-UX] load failure is no longer disguised as "no milestone": explicit error state + retry -->
       <span class="depv-proj__noms" v-else-if="msError">{{ $t('statsB.DepView.msError') }}
         <a role="button" tabindex="0" @click="loadMs" @keydown.enter.prevent="loadMs">{{ $t('statsB.DepView.msRetry') }}</a></span>
       <span class="depv-proj__noms" v-else>{{ msLoaded ? $t('statsA.DepView.noMilestone') : $t('statsA.DepView.msLoading') }}</span>
@@ -150,9 +149,8 @@ export default {
   },
   data () {
     return { projectId: this.fixedProjectId != null ? this.fixedProjectId : null, wires: [], trackW: 0, trackH: 0, dragTid: '', dropTid: '', msList: [], msLoaded: true,
-      posMap: {}, movingTid: '', dropSide: '', msError: false, // [F3-UX] milestone load failure flag
-    // Connect mode (keyboard dependency wiring): source card id + index into connectTargets()
-    connectSrc: '', connectTargetIdx: 0 }
+      posMap: {}, movingTid: '', dropSide: '', msError: false,
+      connectSrc: '', connectTargetIdx: 0 }
   },
   computed: {
     projects () { return this.$store.getters['category/projects'] || [] },
@@ -550,14 +548,13 @@ export default {
       if (p) this.$store.commit('ui/openEdit', p)
     },
     loadMs () {
-      this.msList = []
-      this.msError = false // [F3-UX]
+      this.msList = []
+      this.msError = false
       // 加载中与空态区分:避免异步里程碑未返回时闪"未设里程碑"假态
       this.msLoaded = this.projectId == null
       if (this.projectId == null) return
       var pid = this.projectId
-      // [F3-UX] catch no longer fakes a clean "no milestone": it surfaces msError so the header shows the failure + retry instead
-      loadMilestones(pid).then(ms => { if (this.projectId === pid) { this.msList = ms || []; this.msLoaded = true } }).catch(() => { if (this.projectId === pid) { this.msLoaded = true; this.msError = true } })
+            loadMilestones(pid).then(ms => { if (this.projectId === pid) { this.msList = ms || []; this.msLoaded = true } }).catch(() => { if (this.projectId === pid) { this.msLoaded = true; this.msError = true } })
     },
     /** 阻塞/ready 判定的任务表:必须用全量未删任务(含 scope 外/跨项目前置),
      *  否则前置在别的项目时 byId 查不到,依赖卡会被误判为 ready */
@@ -597,9 +594,7 @@ export default {
         announce: function (m) { if (this.$announce) this.$announce(m) }.bind(this)
       })
     },
-    /* [P2 2026-10-15] repeatId deletes route through the globally-mounted RepeatDeleteModal
-       (ui/askRepeatDelete — same scope-confirm contract as TodoItem) instead of silently
-       deleting a single series instance via deleteWithUndo. */
+    // repeatId deletes: route through the globally-mounted RepeatDeleteModal (TodoItem scope contract)
     quickDelete (t) {
       const todo = this.rawOf(t)
       if (todo && todo.repeatId) { this.$store.commit('ui/askRepeatDelete', todo.taskId); return }
