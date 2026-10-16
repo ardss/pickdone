@@ -26,6 +26,10 @@ const { SYNC_OPLOG_KEEP, oplogKeepLimit } = require('./db-oplog') // D3 2026-09-
 // helpers moved out of this file (meta conflict backup trio, S2 causal receive seam) to
 // honor the structure-size ratchet (only-split-never-grow).
 const adjudicate = require('./sync-adjudicate')
+// F4 (2026-10-17): remote category tombstones must cascade saved filters like a local delete does
+// (renderer purgeFiltersForVictims / CLI deleteCategory P1-3) — the doomed-filter selection plus
+// the stamped catFiltersBak backup core lives in db-category-ops (store-free main-process core).
+const categoryOps = require('./db-category-ops')
 
 // Hydration layer (entity classification + per-pass caches + hydrateRow) lives in // sync-apply-hydrate.js (structure-size ratchet, verbatim move) — re-exported below so the // bootstrap and the test harness keep their single require surface.
 const {
@@ -530,6 +534,21 @@ function applyRowInner (state, incoming) {
       deletedAt: winner.deletedAt || incoming.deletedAt || 0,
       updatedAt: winner.updatedAt || incoming.updatedAt || 0,
     })
+    // F4 (2026-10-17): a LOCAL delete purges saved filters referencing the victim
+    // (renderer purgeFiltersForVictims: catFiltersBak backup + filterDelete), but a REMOTE
+    // tombstone landing used to skip the cascade — a filter whose conds.catId referenced the
+    // deleted category kept haunting the sidebar on this device while the peer had purged it
+    // (two-device divergence). Same core, store-free (sync-apply has no Vuex): doomed filters are
+    // selected from the DB, backed up under the stamped `catFiltersBak.<deletedAt>.<victim>` key,
+    // and tombstoned through the bus (audit + oplog) exactly like renderer/CLI deletes. The
+    // cascade runs at apply time while the tombstone row itself flushes from the buffer; filters
+    // must never block a category tombstone, so failures are logged, not fatal (best-effort
+    // contract, same rule as renderer softDelete). Re-landed tombstones are idempotent: the
+    // doomed set is empty the second time.
+    try {
+      const tombStamp = winner.deletedAt || incoming.deletedAt || 0
+      categoryOps.purgeFiltersForCategoryVictims(state.db, [incoming.id], tombStamp, (op, p) => busWrite(state, op, p))
+    } catch (e) { log.warn('[LanSync] category tombstone filter cascade failed for', incoming.id, e.message) }
     return true
   } else if (entity === 'category' && winner.data) {
     // Bulk-buffered (2026-09-18): a first-sync snapshot can carry hundreds of categories —
