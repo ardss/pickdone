@@ -321,6 +321,11 @@ export default {
     if (this._railNarrowMql.matches && !this.railCollapsed) { this._railAutoFolded = true; this.setRailCollapsed(true) }
     if (this._railNarrowMql.addEventListener) this._railNarrowMql.addEventListener('change', this._onRailNarrow)
     else this._railNarrowMql.addListener(this._onRailNarrow)
+    // [F3-UX] Esc during a drag cancels the drop: the drop-target highlight (dragOverHour) used to
+    // survive until another dragover because only the success path (onDrop) cleared it
+    window.addEventListener('keydown', this._onDragEsc = e => {
+      if (e.key === 'Escape') { this.dragOverHour = -1; this._dragPlan = null }
+    })
   },
   beforeUnmount () {
     clearInterval(this._tick)
@@ -329,6 +334,7 @@ export default {
     // round3-ux-perf-4: drop a pending coalesced resize frame
     if (this._resizeRaf) cancelAnimationFrame(this._resizeRaf)
     window.removeEventListener('day-plans-changed', this._onPlansChanged)
+    window.removeEventListener('keydown', this._onDragEsc) // [F3-UX]
     if (this._offTodosChanged) this._offTodosChanged()
     if (this._railNarrowMql) {
       if (this._railNarrowMql.removeEventListener) this._railNarrowMql.removeEventListener('change', this._onRailNarrow)
@@ -587,7 +593,8 @@ export default {
          dropping onto an existing chip only determines the time — never mistake the dropped-on chip for the dragged item (otherwise same-task in-place replacement = looks like nothing was added) */
       this.onDrop(h, e)
     },
-    onChipDragEnd () { this._dragPlan = null },
+    // [F3-UX] dragend fires on cancel/drop-outside too: clear the highlight there, not just the plan
+    onChipDragEnd () { this._dragPlan = null; this.dragOverHour = -1 },
     removePlan (p) {
       const day = this.plans[this.today]
       if (!day || !Array.isArray(day[p.taskId])) return
