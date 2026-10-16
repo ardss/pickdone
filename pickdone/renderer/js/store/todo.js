@@ -192,6 +192,14 @@ export default {
             if (Array.isArray(existing) && existing.length) {
               return existing[0] // return the existing renewal instance, transparent to the caller
             }
+            // [F2 2026-10-17 renewal dedupe includes the recycle bin] the deleted:0 pre-check above
+            // missed a twin the user soft-deleted on the SAME rid+day, so the renewal re-minted the
+            // very day the user had deliberately removed (CLI twin: cli/lib-repeat.cjs, same caliber).
+            // A recycled twin on the target day skips the generation (return null, not the binned row —
+            // ensureNextRepeatInstance already guards a null result; RepeatModal counts it as generated
+            // either way). Deliberate deletion wins over renewal.
+            const binned = await window.todoAPI.dbCall('queryTodos', { deleted: 1, repeatId, dayStartFrom: targetDay, dayStartTo: targetDay })
+            if (Array.isArray(binned) && binned.length) return null
           } catch (e) { /* a DB error doesn't block renewal; let addTodo continue its main flow */ }
         }
       }
@@ -553,6 +561,33 @@ export default {
     },
 
     async restoreFromRecycle ({ commit, dispatch }, todo) {
+      // [F2 2026-10-17 restore twin guard] the schema-v9 partial UNIQUE index idx_todos_repeat_day
+      // (recurGroupId + scheduledDay, live rows only) rejects a restore whose repeat group ALREADY
+      // has a live instance on the same day (peer/CLI renewed the chain while this instance sat in
+      // the bin) — the raw put used to hard-fail with a bare UNIQUE stack. Pre-check BEFORE the
+      // restore write: a live sibling on the same rid+day cancels the restore with a structured
+      // REPEAT_TWIN_EXISTS error. Chosen CANCEL over "restore without repeatId": cancellation keeps
+      // the user's own delete-decision intact (the day already lives in the surviving instance) and
+      // every restore caller (RecycleBinView / confirm.js undo link) already toasts on a rejection,
+      // so no new toast plumbing is needed — demoting silently would resurrect a THIRD visible task
+      // where the user sees one. A twin-query READ failure does not block the restore: the UNIQUE
+      // index remains the backstop and restore is the user's explicit intent.
+      if (todo && todo.repeatId) {
+        const raw = await resolveForEdit(this.state.todo, todo.taskId)
+        if (raw && !raw.notFound && raw.dayStart > 0) {
+          try {
+            const twins = await window.todoAPI.dbCall('queryTodos', { deleted: 0, repeatId: todo.repeatId, dayStartFrom: raw.dayStart, dayStartTo: raw.dayStart })
+            if (Array.isArray(twins) && twins.some(x => x && x.taskId !== todo.taskId)) {
+              const e = new Error('a live instance of this repeat group already exists on the same day — restore cancelled to avoid a duplicate scheduled day')
+              e.code = 'REPEAT_TWIN_EXISTS'
+              throw e
+            }
+          } catch (e) {
+            if (e && e.code === 'REPEAT_TWIN_EXISTS') throw e
+            console.warn('[todo] repeat twin pre-check failed, restoring anyway (UNIQUE index backstops):', e)
+          }
+        }
+      }
       // Row first, snapshot second (verify-then-commit): restoreSnapshot empties the snapshot meta as a side
       // effect, so consuming it before the row update was confirmed meant a mid-way failure (row missing,
       // updateTodoFields throwing) left the snapshot permanently lost and/or a ghost chip on the timeline.
@@ -585,9 +620,26 @@ export default {
           console.warn('[todo] restored task', todo.taskId, 'had a dangling repeatId (rule meta GCed) — restored as a non-repeating task')
         }
       }
+      // [F2 2026-10-17 post-restore dependency-cycle re-validation] the write-time guard in
+      // updateTodoFields (wouldCycle) only sees LIVE rows — while this task sat in the recycle bin
+      // a peer could close a cycle through it (x → t1 → x), and restoring then produced a live
+      // cycle the guard would have rejected at write time. Re-validate the restored row once and
+      // strip its predecessors when they now close a loop; the restore itself is NOT rolled back
+      // (stripping a dep edge is the least destructive resolution and the row content is intact).
+      let depCycleStripped = false
+      if (r && !r.notFound) {
+        try {
+          const preds = parsePredecessors(r.predecessors)
+          if (preds.length && wouldCycle(this.state.todo.todoList, todo.taskId, preds)) {
+            await dispatch('updateTodoFields', { taskId: todo.taskId, patch: { predecessors: null, status: 'update' } })
+            depCycleStripped = true
+            console.warn('[todo] restored task', todo.taskId, 'closed a dependency cycle — predecessors stripped (the recycled row was invisible to the write-time guard)')
+          }
+        } catch (e) { console.warn('[todo] dependency re-validation failed after restore:', e) }
+      }
       // Discrete op: break the 400ms undo merge so a following edit doesn't fuse into the restore step
       commit('historyBreakMerge')
-      return r
+      return depCycleStripped ? Object.assign({}, r, { _depCycleStripped: true }) : r
     },
 
     async purgeIds ({ commit, dispatch, rootState, state }, ids) {

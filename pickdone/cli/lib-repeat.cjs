@@ -70,6 +70,12 @@ module.exports = ({ open, commit, audit, CliError, dayjs, core, resolveTask, liv
     const nextDayStart = +dayjs(next.todoTime).startOf('day')
     const existing = db.call('queryTodos', { deleted: 0, repeatId: rid, dayStartFrom: nextDayStart, dayStartTo: nextDayStart })
     if (Array.isArray(existing) && existing.length) return existing[0]
+    // [F2 2026-10-17 renewal dedupe includes the recycle bin, renderer parity: store/todo.js addTodo
+    // pre-check] an instance the user soft-deleted on the SAME rid+day must block the regeneration —
+    // the deleted:0 pre-check alone kept re-minting a day the user had deliberately removed from the
+    // chain. A recycled twin skips the generation (return null, same as a no-rule/no-next outcome).
+    const binned = db.call('queryTodos', { deleted: 1, repeatId: rid, dayStartFrom: nextDayStart, dayStartTo: nextDayStart })
+    if (Array.isArray(binned) && binned.length) return null
     // F3 P2 (D5 renderer parity): carry the LIVE meta estimate of the instance being renewed
     // (getEstimateOf) — the row's estimate COLUMN is dead post-X2 (bumpSnow writes accumulated
     // focus minutes into it), so clamping it 0-20 turned "focused 150 min" into "20 tomatoes".
