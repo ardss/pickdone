@@ -276,7 +276,8 @@ export default {
         const d1 = dayShift(d0, 1)
         days.push({
           n: this.inCat.filter(t => t.complete && t.completedAt >= d0 && t.completedAt < d1).length,
-          label: i === 0 ? this.$t('statsB.ProjectView.today') : dayjs(d0).format('MM-DD')
+          // [FMT contract] was hardcoded 'MM-DD', bypassing the locale-aware FMT system (cf. DayDeck fmtMd)
+          label: i === 0 ? this.$t('statsB.ProjectView.today') : dayjs(d0).format(FMT.cnDate)
         })
       }
       return days

@@ -149,7 +149,9 @@ export default {
     fmtDate (r) {
       const d = dayjs(Number(r.endTime))
       if (FMT.date !== 'YYYY-MM-DD') return d.format(FMT.date)
-      return d.year() === dayjs().year() ? d.format('MM-DD') : d.format('YYYY-MM-DD')
+      // [FMT contract] current-year rows use the locale-aware FMT.cnDate (MMM D in en-US),
+      // matching DayDeck/EditPanel fmtMd instead of a hardcoded MM-DD
+      return d.year() === dayjs().year() ? d.format(FMT.cnDate) : d.format(FMT.date)
     },
     toggleEdit (r) {
       if (this.editingId === r.tomatoId) { this.editingId = null; this.draft = null; return }
