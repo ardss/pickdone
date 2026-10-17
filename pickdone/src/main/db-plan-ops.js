@@ -35,7 +35,10 @@ exports.planAddMany = (db, chips) => {
   // MOVED an unrelated chip onto the colliding id. Re-mint in a bounded loop until the id is free
   // (wider jitter space when the fast path keeps colliding).
   const seenBatch = new Set() // same-batch mints collide too (DB check cannot see unsent rows)
-  const taken = id => seenBatch.has(id) || !!db.prepare('SELECT 1 FROM plan_chips WHERE id = ?').get(id)
+  // F4 P3 (2026-10-18): the collision-path lookup re-ran db.prepare inside `taken` for every
+  // mint/retry iteration — hoisted OUT of the loop: one statement, prepared once.
+  const idTakenStmt = db.prepare('SELECT 1 FROM plan_chips WHERE id = ?')
+  const taken = id => seenBatch.has(id) || !!idTakenStmt.get(id)
   const mintId = () => {
     let id = 'pl_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7)
     for (let i = 0; taken(id) && i < 16; i++) id = 'pl_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 9)

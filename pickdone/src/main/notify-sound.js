@@ -25,11 +25,19 @@ function sound (file) {
   try {
     if (file) {
       const win = require('./window-ref').getMainWindow()
-      if (win) {
+      // F4 P3 (2026-10-18): the send point only truthy-checked the window — during teardown
+      // (closed but not yet GC'd, or a destroyed webContents) win.webContents.send threw
+      // "Object has been destroyed", the outer catch swallowed it, and the reminder played
+      // muted with NO beep fallback (the early-return was never reached). Guard both the
+      // window and its webContents; a guarded-out window FALLS THROUGH to the system beep so
+      // notifications are never silent (the module's own contract).
+      const wc = win && !win.isDestroyed() ? win.webContents : null
+      if (file && wc && !wc.isDestroyed()) {
         const path = require('path')
         const appRoot = path.join(__dirname, '..', '..')
-        win.webContents.send('play-sound', toSoundUrl(file, appRoot))
-        return
+        // A send that still throws at the last moment (mid-teardown race) falls through to the
+        // beep fallback instead of dying in the outer catch with no sound at all.
+        try { wc.send('play-sound', toSoundUrl(file, appRoot)); return } catch { /* fall through */ }
       }
     }
     const { spawn } = require('child_process')

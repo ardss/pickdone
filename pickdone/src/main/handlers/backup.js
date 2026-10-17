@@ -112,6 +112,57 @@ function assertCriticalJsonPlausible (jsonText) {
   }
 }
 
+// F4 P2 (2026-10-18) attachment-loss visibility (DEGRADED manifest scope — see the report):
+// attachments live as local:// keys into userData/files while todo rows travel in the backup
+// JSON; a JSON restore on a machine without the files dir left every attachment dangling with
+// zero diagnostics. Full payload-embedding was rejected twice over: attachment bytes are capped
+// at 64MB aggregate / 50MB per file (embedding would blow every snapshot's size), AND the
+// renderer owns dump building (out of this fix's file scope). Even a manifest inside the JSON
+// was rejected after evaluation: the C7 content-dedup twin compares the incoming payload
+// against the RAW bytes already on disk — injecting a manifest into the payload would break
+// every dedup against pre-existing snapshots (verified red on backup-ingress-cap-dedup-compare
+// and d12-backup-prune-dedup). Degraded closure instead: a SIDECAR manifest
+// `<snapshot>.attachments.json` rides every snapshot (key+size per file, deterministic sort,
+// no timestamps so a re-run stays byte-stable), swept with its snapshot, and the restore side
+// (dbRecovery.missingAttachmentsAfterRestore) reports — never blocks on — missing files.
+// Pure helpers, exported for unit tests.
+const ATT_MANIFEST_SKIP_RE = /^(aliases\.json$|noise-custom\.)/
+const ATT_MANIFEST_TMP_RE = /\.att-tmp-\d+-\d+$/ // D19 crash-residue classifier parity
+// Sidecar naming: 'att-manifest-<snapshot-name>' — MUST stay OUTSIDE the ^(auto|evt)- restore
+// namespace (list-auto-backups / the GFS selection / the restore-read whitelist all gate on that
+// prefix, and the sidecar is bookkeeping, never a restore point).
+const ATT_SIDECAR_PREFIX = 'att-manifest-'
+function attachmentSidecarNameFor (snapshotName) { return ATT_SIDECAR_PREFIX + String(snapshotName || '') }
+function isManifestSkip (f) { return ATT_MANIFEST_SKIP_RE.test(f) || ATT_MANIFEST_TMP_RE.test(f) }
+function buildAttachmentManifest (filesDir, fsMod) {
+  const m = fsMod || fs
+  try {
+    const entries = m.readdirSync(filesDir)
+      .filter(f => !isManifestSkip(f))
+      .map(f => { try { return { key: f, size: m.statSync(path.join(filesDir, f)).size } } catch { return null } })
+      .filter(Boolean)
+      .sort((a, b) => String(a.key).localeCompare(String(b.key)))
+    return { entries }
+  } catch { return null }
+}
+/** Best-effort sidecar write next to a snapshot; NEVER fails the snapshot itself. */
+function writeAttachmentSidecar (fsMod, dir, snapshotName, filesDir) {
+  try {
+    const manifest = buildAttachmentManifest(filesDir, fsMod)
+    if (!manifest) return false
+    const w = atomicWriteJson(fsMod, dir, attachmentSidecarNameFor(snapshotName), JSON.stringify(manifest))
+    return !!w.ok
+  } catch { return false }
+}
+// attachDir() requires the Electron app (userData path); unit-test/CLI callers without a live
+// app skip the manifest instead of crashing the handler (never blocks the JSON write).
+function safeAttachDir () {
+  try { return require('../attachments').attachDir() } catch (e) {
+    log.warn('[Backup] attachment manifest skipped (attachDir unavailable):', e && e.message)
+    return null
+  }
+}
+
 // C7 (2026-10-02): the dedup twin compare used a full readFileSync + whole-string equality on
 // the main thread — two allocations of the entire snapshot per run. Now: (1) size short-circuit —
 // different byte length can never be equal (one statSync, zero content reads); (2) chunked
@@ -155,7 +206,12 @@ module.exports = function backupHandlers (ctx) {
       // disaster-recovery snapshot — coded rejection, same convention as the size gate above.
       assertCriticalJsonPlausible(jsonText)
       // External default root (userData parent dir / pickdone-backups): separated from todos.db, so disaster backup remains recoverable even if userData is wiped
-      dbRecovery.writeCriticalStateBackupAtomic(defaultBackupRoot(), String(jsonText))
+      const dest = dbRecovery.writeCriticalStateBackupAtomic(defaultBackupRoot(), String(jsonText))
+      // F4 P2: the attachment manifest rides the critical snapshot as a SIDECAR (best-effort;
+      // a sidecar failure never blocks the critical JSON write — see writeAttachmentSidecar).
+      if (typeof dest === 'string' && dest.endsWith('.json')) {
+        writeAttachmentSidecar(fs, path.dirname(dest), path.basename(dest), safeAttachDir())
+      }
       return true
     },
     'get-default-backup-dir': () => defaultBackupRoot(),
@@ -224,6 +280,15 @@ module.exports = function backupHandlers (ctx) {
           }))
           for (const dead of stale) { try { fs.rmSync(path.join(dir, dead), { force: true }) } catch {} }
         } catch { /* sweep is best-effort */ }
+        // F4 P2 hygiene: sidecar manifests whose snapshot was pruned/vanished are orphans — swept
+        // with the stale-tmp housekeeping so they cannot accumulate across rotations.
+        try {
+          for (const f of fs.readdirSync(dir)) {
+            if (!f.startsWith(ATT_SIDECAR_PREFIX)) continue
+            const base = f.slice(ATT_SIDECAR_PREFIX.length)
+            if (!fs.existsSync(path.join(dir, base))) { try { fs.unlinkSync(path.join(dir, f)) } catch {} }
+          }
+        } catch { /* sweep is best-effort */ }
         // Both tiers, regardless of this run's tag — the two tiers age on ONE shared directory.
         // D18 (2026-10-02) write-then-prune: the prune UNLINKS used to run BEFORE the new
         // snapshot write, so a failed write left the tier strictly thinner with nothing added.
@@ -267,6 +332,10 @@ module.exports = function backupHandlers (ctx) {
           try {
             if (twinMatches(fs, path.join(dir, twin), jsonText)) {
               pruneNow() // D18 write-then-prune: aging continues on a dedup hit (D12 invariant), twin survives as newest-of-tier
+              // F4 P2: refresh the twin's sidecar manifest — the payload didn't change but the
+              // files dir may have since the twin was written (deterministic manifest keeps
+              // the payload dedup-stable either way).
+              writeAttachmentSidecar(fs, dir, twin, safeAttachDir())
               return { ok: true, file: twin, dedup: true }
             }
           } catch {}
@@ -275,6 +344,7 @@ module.exports = function backupHandlers (ctx) {
         // file is cleaned up inline (P2 2026-09-17) and the structured error is returned
         const w = atomicWriteJson(fs, dir, name, jsonText)
         if (!w.ok) return { ok: false, error: w.error } // D18: a failed write must NOT thin the tier
+        writeAttachmentSidecar(fs, dir, name, safeAttachDir()) // F4 P2: manifest sidecar rides the new snapshot
         pruneNow() // D18 write-then-prune: prune only AFTER the new snapshot landed
         return { ok: true, file: name }
       } catch (err) { return { ok: false, error: String(err && err.message || err) } }
@@ -344,3 +414,7 @@ module.exports.assertIngressSize = assertIngressSize
 module.exports.INGRESS_MAX_BYTES = INGRESS_MAX_BYTES
 module.exports.twinMatches = twinMatches
 module.exports.criticalJsonPlausible = criticalJsonPlausible // D17: unit-test seam
+module.exports.buildAttachmentManifest = buildAttachmentManifest // F4: attachment-loss visibility seam
+module.exports.writeAttachmentSidecar = writeAttachmentSidecar // F4: unit-test seam
+module.exports.ATT_SIDECAR_PREFIX = ATT_SIDECAR_PREFIX
+module.exports.attachmentSidecarNameFor = attachmentSidecarNameFor

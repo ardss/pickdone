@@ -137,7 +137,12 @@ function toggle () {
       win.show()
       win.focus()
     }
-    win.webContents.send('quick-add-focus')
+    // F4 P3 (2026-10-18): the toggle's send-back had no isDestroyed recheck — a window torn
+    // down between show() and here (or one still inside the aux-load-guard failure window,
+    // parked on an error page) silently dropped the send and with it the user's typed input
+    // path. Same guard caliber as the did-finish-load re-send above (:95-96): destroy/visibility
+    // recheck + try/catch, so a dying window can never wedge the toggle.
+    try { if (win && !win.isDestroyed() && win.isVisible()) win.webContents.send('quick-add-focus') } catch (e2) { try { log.warn('[QuickAdd] focus re-send skipped:', e2 && e2.message) } catch {} }
   } catch (e) {
     log.error('[QuickAdd] 唤起失败', e)
   }

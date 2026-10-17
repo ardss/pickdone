@@ -55,12 +55,24 @@ const { isDateClear, isReminderClear, fmtTodoLine, summarizeChanges } = require(
 function fail (e, command) {
   // The error envelope mirrors the success side {ok:true,command,data}: AI parsers need one judgment path, not two
   const base = { ok: false, command: command || null }
-  if (e instanceof lib.CliError) {
-    console.error(JSON.stringify({ ...base, error: e.code, message: e.message }))
-  } else {
-    console.error(JSON.stringify({ ...base, error: 'INTERNAL', message: String(e && e.message || e) }))
+  const envelope = e instanceof lib.CliError
+    ? { ...base, error: e.code, message: e.message }
+    : { ...base, error: 'INTERNAL', message: String(e && e.message || e) }
+  // F4 P3 (2026-10-18): console.error followed by a synchronous process.exit(1) could truncate
+  // the JSON envelope under a piped consumer (stderr buffered, process torn down before the
+  // flush) — the AI side then saw a half-envelope and misparsed it as success/silence. Write
+  // through stderr with a completion callback and exit only after the write drained; a safety
+  // timer covers a never-firing callback (closed fd).
+  const text = JSON.stringify(envelope) + '\n'
+  let exited = false
+  const exitOnce = () => { if (exited) return; exited = true; process.exit(1) }
+  try {
+    process.stderr.write(text, () => exitOnce())
+    const guard = setTimeout(exitOnce, 1000)
+    guard.unref?.()
+  } catch {
+    exitOnce()
   }
-  process.exit(1)
 }
 
 /* ---- maint/d24 NEW: `category cleanup-empty` — hygiene tool for empty/whitespace-named categories.

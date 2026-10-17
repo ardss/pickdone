@@ -5,7 +5,7 @@
  */
 const fs = require('fs')
 const { isBlankishName } = require('./blankish-name.cjs')
-const { pruneCorruptScenes } = require('./corrupt-scene.cjs') // F1 size-cap trim: pure fs helper extracted (2026-10-17)
+const { pruneCorruptScenes } = require('./corrupt-scene.cjs') // F1 size-cap trim: pure fs helper extracted (2026-10-17); F4 attLoss wired below (db-recovery-attachments.cjs)
 const path = require('path')
 
 /** Blob format versions recognizable by the recovery path: corresponds to the schemaV written by each renderer store.
@@ -20,6 +20,7 @@ function logWarn (...args) {
   } catch { /* electron-log unavailable (unit tests) */ }
   console.warn(...args)
 }
+const attLoss = require('./db-recovery-attachments.cjs')({ parseSegment, logWarn, criticalBackupPath }) // F4 P2 attachment-loss visibility (see that module)
 
 /** Parse a segment of the backup JSON (two shapes: string/object); reject and return null when schemaV exceeds the supported version */
 function parseSegment (seg, label) {
@@ -610,7 +611,7 @@ function restoreSegmentsFromCriticalBackup (ud, upsertTasks, upsertCategory, app
       logWarn('[dbRecovery] segment', entry.seg, 'restore failed:', e && e.message)
     }
   }
-  result.proved = result.imported > 0 && result.failedSegments.length === 0 && result.unconsumedSegments.length === 0
+  attLoss.reportMissingAfterRestore(result, raw, ud, cbs && cbs.filesDir); result.proved = result.imported > 0 && result.failedSegments.length === 0 && result.unconsumedSegments.length === 0 // F4 P2: attachment report never blocks the proved gate
   return result
 }
 
@@ -795,4 +796,4 @@ function jsonRestoreAllowed (recoveredFrom, reinitErr) {
   return !!(recoveredFrom && recoveredFrom.source === 'json' && !reinitErr)
 }
 
-module.exports = { attemptDbRecovery, cleanInitReplayDecision, SUPPORTED_SCHEMA_V, restoreTasksFromCriticalBackup, restoreSegmentsFromCriticalBackup, writeCriticalStateBackupAtomic, criticalBackupPath, criticalBackupRowCount, backupJsonParseable, restoreCategoriesFromCriticalBackup, restoreTomatoRecordsFromCriticalBackup, restoreMetaEntriesFromCriticalBackup, quarantineKey, sqliteHeaderOk, encryptedProbe, preflightMigrateResidue, sweepPendingDeletes, recoveryDialogAction, jsonRestoreAllowed, loadVendorDriver, RESTORE_SEGMENT_NAMES, META_RESTORE_PREFIXES, recoveryPendingPath, markRecoveryPending, clearRecoveryPending, hasRecoveryPending, copyFileAtomicRestore }
+module.exports = { attemptDbRecovery, cleanInitReplayDecision, SUPPORTED_SCHEMA_V, restoreTasksFromCriticalBackup, restoreSegmentsFromCriticalBackup, writeCriticalStateBackupAtomic, criticalBackupPath, criticalBackupRowCount, backupJsonParseable, restoreCategoriesFromCriticalBackup, restoreTomatoRecordsFromCriticalBackup, restoreMetaEntriesFromCriticalBackup, quarantineKey, sqliteHeaderOk, encryptedProbe, preflightMigrateResidue, sweepPendingDeletes, recoveryDialogAction, jsonRestoreAllowed, loadVendorDriver, RESTORE_SEGMENT_NAMES, META_RESTORE_PREFIXES, recoveryPendingPath, markRecoveryPending, clearRecoveryPending, hasRecoveryPending, copyFileAtomicRestore, ...attLoss }

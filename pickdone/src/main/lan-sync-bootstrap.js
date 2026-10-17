@@ -191,7 +191,7 @@ function kickSyncRound (reason) {
   }, delay)
   kickTimer.unref?.()
 }
-async function runRound () {
+async function runRoundBody () {
   if (!state || !state.node) return null
   try {
     const t0 = Date.now()
@@ -206,6 +206,7 @@ async function runRound () {
     return r
   } catch (e) { log.warn('[LanSync] round failed:', e.message); return null }
 }
+const runRound = require('./lan-sync/run-round-guard')(runRoundBody, { log }) // runRoundBody hoisted; F4 guard: overlap -> no-op + one queued follow-up
 
 function manualPeers () {
   try { return JSON.parse(settingGet(K_MANUAL_PEERS) || '[]') || [] } catch { return [] }
@@ -829,6 +830,5 @@ module.exports.__test = {
   registerOps,
   missingAttachmentKeys,
   // d12 schemaVersion gate test surface: the snapshot receivers with the gate applied.
-  ingestSnapshotAssembled,
-  ingestSnapshotChunked,
+  ingestSnapshotAssembled, ingestSnapshotChunked, runRound, // F4 test surface: concurrent interval/kick rounds must serialize
 }

@@ -45,6 +45,8 @@ function migrateLegacyBackups (legacyDir, root) {
     const files = fs.readdirSync(legacy).filter(f => f.endsWith('.json'))
     if (!files.length) return
     fs.mkdirSync(root, { recursive: true })
+    // F4 hygiene: sweep crash-residue tmp copies a previous interrupted replace may have left (best-effort)
+    try { for (const t of fs.readdirSync(root)) if (/\.migrate-tmp-\d+-\d+$/.test(t)) fs.unlinkSync(path.join(root, t)) } catch { /* sweep is best-effort */ }
     let moved = 0
     for (const f of files) {
       const src = path.join(legacy, f)
@@ -54,11 +56,33 @@ function migrateLegacyBackups (legacyDir, root) {
         try {
           const sm = fs.statSync(src).mtimeMs
           const dm = fs.statSync(dst).mtimeMs
-          if (sm > dm) { fs.unlinkSync(dst); fs.renameSync(src, dst); moved++ } else { try { fs.unlinkSync(src) } catch {} }
-        } catch { try { fs.unlinkSync(src) } catch {} }
+          // F4 P2 (2026-10-18, safer newer-wins replace): the old path unlinked dst BEFORE
+          // renameSync(src, dst) — a rename failure in that window (EXDEV cross-volume, AV/backup
+          // lock on dst, disk full) left the replacement on the floor with the surviving copy
+          // already deleted: BOTH snapshots lost. Copy-then-atomic-replace instead: copy src to a
+          // temp name INSIDE root (same-volume rename), rename over dst (atomic; a failed rename
+          // leaves the old dst intact), and only then unlink the consumed legacy src. Any failure
+          // keeps BOTH original files and logs.
+          if (sm > dm) {
+            const tmp = path.join(root, f + '.migrate-tmp-' + Date.now() + '-' + Math.floor(Math.random() * 1e6))
+            try {
+              fs.copyFileSync(src, tmp)
+              fs.renameSync(tmp, dst)
+              try { fs.unlinkSync(src) } catch { /* legacy copy consumption is best-effort */ }
+              moved++
+            } catch (e) {
+              log.warn('[Backup] 旧备份目录迁移替换失败（两侧原文件均保留）:', f, e && e.message)
+              try { fs.unlinkSync(tmp) } catch { /* tmp residue: next migration sweeps it */ }
+            }
+          } else { try { fs.unlinkSync(src) } catch {} }
+        } catch (e) { log.warn('[Backup] 旧备份目录迁移比较失败（两侧原文件均保留）:', f, e && e.message) }
         continue
       }
-      try { fs.renameSync(src, dst); moved++ } catch {}
+      try { fs.renameSync(src, dst); moved++ } catch (e) {
+        // F4 P2: the old bare catch{} silently reported moved=0 on a locked/exdev rename —
+        // the legacy file stays behind and the skip must be visible.
+        log.warn('[Backup] 旧备份目录迁移改名失败（legacy 原件保留）:', f, e && e.message)
+      }
     }
     if (moved) log.info('[Backup] migrated legacy default backup-dir snapshot to the new default root:', legacy, '->', root, `(${moved} files)`)
   } catch (e) { log.warn('[Backup] 旧备份目录迁移跳过:', e && e.message) }
