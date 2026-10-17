@@ -29,6 +29,13 @@ export function crossDayMovePatch (dragged, newDay, startOfDay) {
     // No-time task: anchor to the new day (all-day marker) so the DB's scheduledDay derivation
     // agrees with memory — a dayStart-only patch silently reverted on the next re-hydration.
     patch.todoTime = newDay
+  } else {
+    // F2-P3 (2026-10-18, same A1/A2 root cause): a todoTime anchored to a THIRD day (dayStart and
+    // todoTime already drifted apart on the old row) used to be left untouched — only dayStart
+    // moved, so the DB's scheduledDay (derived from todoTime, db-rows.js todoToRow) kept the row
+    // on the old day and the move reverted on the next re-hydration. Keep the time-of-day and
+    // re-anchor to the new day so memory and DB agree after restart.
+    patch.todoTime = newDay + (dragged.todoTime - startOfDay(dragged.todoTime))
   }
   if (dragged.reminderTime && startOfDay(dragged.reminderTime) === startOfDay(origDay)) {
     patch.reminderTime = newDay + (dragged.reminderTime - startOfDay(dragged.reminderTime))
