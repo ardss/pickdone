@@ -32,6 +32,7 @@ export default {
       renameCatTitle: '重命名',
       catNameEmptyWarn: '分类名称不能为空',
       catNameExistsWarn: '同名分类已存在',
+      tagNameExistsWarn: '同名标签已存在',
       tagSectionAria: '标签（点击折叠/展开）',
       tagSection: '标签',
       newTagBtnTitle: '新建标签',

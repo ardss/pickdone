@@ -126,7 +126,8 @@ export default {
       "movedToInbox": ", moved to inbox",
       "created": "Task added: {c}",
       "createdBulk": "Added {n} tasks from pasted lines",
-      "createFailed": "Failed to create task, please retry"
+      "createFailed": "Failed to create task, please retry",
+      "dateOnlyRefused": "Only a date was recognized and no task content — add what you want to do"
 
     },
     "DayDateStrip": {

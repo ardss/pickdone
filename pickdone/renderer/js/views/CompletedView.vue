@@ -29,7 +29,11 @@
       </div>
     </div>
     <div class="page__main page__main--flow-top">
-      <empty-state v-if="!groups.length"><template #text>{{ $t('statsC.Completed.empty') }}</template></empty-state>
+      <!-- [F3 2026-10-18] init failure used to render as a permanent empty list: distinguish the error state (retry offered) from a genuinely empty completed view -->
+      <empty-state v-if="!groups.length">
+        <template #text>{{ initError ? $t('statsC.Completed.initFailed') : $t('statsC.Completed.empty') }}</template>
+        <template v-if="initError" #action><button type="button" class="mini primary" @click="retryInit">{{ $t('statsC.Completed.retryInit') }}</button></template>
+      </empty-state>
       <div v-for="g in groups" :key="g.key" class="todo-list-item-group" :class="{'todo-list-item-group--collapsed': isCol(g.key)}">
         <div class="todo-list-item-group__header-container">
           <div class="todo-list-item-group__header" role="button" tabindex="0"
@@ -84,12 +88,15 @@ export default {
   },
   computed: {
     list () { return this.$store.state.todo.views.completed },
+    initError () { return this.$store.state.todo.initError },
     // D14-B5: honor settings.expiredCompletedTodoRange (was a dead hard 30-day cap here, while
     // category/project pages already followed the setting via buildExpiryGroups)
     groups () { return buildCompletedBuckets(this.list, undefined, this.$store.state.settings.expiredCompletedTodoRange) },
     anyCollapsed () { return this.groups.some(g => this.collapsedMap[g.key]) }
   },
   methods: {
+    // [F3 2026-10-18] retry after a failed todo/init — reruns the full load (getAll + computeViews)
+    retryInit () { this.$store.dispatch('todo/init', {}) },
     isCol (key) { return !!this.collapsedMap[key] },
     // TS cast lives here: the structure guard rejects `as` expressions inside templates
     triggerTip (e) { (e.currentTarget as HTMLElement).click() },

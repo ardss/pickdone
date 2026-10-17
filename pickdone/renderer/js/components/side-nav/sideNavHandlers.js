@@ -139,9 +139,9 @@ export async function createTag (vm) {
     const list = prev.slice()
     if (!list.includes(name) && !vm.tags.some(t => t.name === name)) list.push(name)
     // P3: a duplicate tag used to return silently — the prompt just vanished with no feedback.
-    // Surface it with the same warning idiom the category rename channels use (the message is
-    // "name already exists", accurate for tags too — no new i18n key needed).
-    if (list.length === prev.length) { vm.$message.warning(vm.$t('statsG.SideNav.catNameExistsWarn')); return }
+    // F3 (2026-10-18): say "tag", not the borrowed "category with this name" text — dedicated
+    // tagNameExistsWarn key, same warning idiom.
+    if (list.length === prev.length) { vm.$message.warning(vm.$t('statsG.SideNav.tagNameExistsWarn')); return }
     // D15 single-writer (KV-USERTAGS-TRIPLE-WRITER): creation goes through the ONE owner action
     // ui/commitUserTags (same revert + surface policy as rename/remove); the toast here is just
     // this call site's surface for the rethrown failure.

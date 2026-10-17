@@ -48,7 +48,11 @@
       </div>
     </div>
     <div class="page__main page__main--flow-top">
-      <empty-state v-if="!list.length"><template #text>{{ $t('statsC.TodoBox.empty') }}</template></empty-state>
+      <!-- [F3 2026-10-18] init failure used to render as a permanent empty list: distinguish the error state (retry offered) from a genuinely empty todo box -->
+      <empty-state v-if="!list.length">
+        <template #text>{{ initError ? $t('statsC.TodoBox.initFailed') : $t('statsC.TodoBox.empty') }}</template>
+        <template v-if="initError" #action><button type="button" class="mini primary" @click="retryInit">{{ $t('statsC.TodoBox.retryInit') }}</button></template>
+      </empty-state>
       <div v-else class="todo-box-list">
         <!-- [A7] role=button demoted from the row to the content (same TodoItem pattern): a button
              role wrapping role=checkbox children is broken ARIA nesting; the row stays a focusable
@@ -145,6 +149,7 @@ export default {
   },
   computed: {
     settings () { return this.$store.state.settings },
+    initError () { return this.$store.state.todo.initError },
     // value is the persisted stable key; label is the display text resolved via $t
     sortMethodOptions () {
       return [
@@ -166,6 +171,8 @@ export default {
     selectedId () { const ed = this.$store.state.ui.rightSidebarTodoEdit; return ed.visible ? ed.taskId : null }
   },
   methods: {
+    // [F3 2026-10-18] retry after a failed todo/init — reruns the full load (getAll + computeViews)
+    retryInit () { this.$store.dispatch('todo/init', {}) },
     // keyboard activation for the sort/filter dropdown triggers; the cast lives here because the
     // structure guard rejects TS `as` expressions inside templates (silent-undefined identifier scan)
     tbTriggerKey (e) { (e.currentTarget as HTMLElement).click() },

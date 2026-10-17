@@ -31,7 +31,7 @@ export { planSnapshotRowSync }
 export default {
   namespaced: true,
   state: () => ({
-    loaded: false,
+    loaded: false, initError: null, // [F3 2026-10-18] set when init:getAll fails — views show an error + retry instead of a fake empty list
     search: '',
     todoList: [],            // all active tasks (deleted=0)
     recycleList: [],         // recycle bin (deleted=1)
@@ -69,7 +69,7 @@ export default {
     byCategory: s => id => s.todoList.filter(t => t.categoryId === id)
   },
   mutations: {
-    setLoaded: (s, v) => { s.loaded = v },
+    setLoaded: (s, v) => { s.loaded = v; if (v) s.initError = null }, setInitError: (s, v) => { s.initError = v },
     setSearch: (s, v) => { s.search = v },
     setAllRows (s, rows) {
       s.todoList = rows.filter(r => !r.delete)
@@ -136,7 +136,7 @@ export default {
       let rows
       try {
         rows = await window.todoAPI.dbCall('getAll', {})
-      } catch (err) { reportError('init:getAll', err); rows = [] }
+      } catch (err) { reportError('init:getAll', err); commit('setInitError', (err && err.message) || String(err)); return } // [F3 2026-10-18] was rows=[] + setLoaded(true) — permanent empty list; now an observable error (loaded stays false) so views can offer a retry
       commit('setAllRows', rows)
       let v = 0
       try { v = parseInt(await window.todoAPI.dbCall('getMeta', 'todosVersion') || '0', 10) } catch (err) { reportError('init:getMeta', err) }

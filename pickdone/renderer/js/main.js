@@ -601,6 +601,22 @@ async function bootstrap () {
       setTimeout(() => window.dispatchEvent(new CustomEvent('todo:focus-quickadd')), 120)
     }).catch(() => {})
   }
+  // F3 (2026-10-18): modal guard for the global shortcut pipeline. The main process's
+  // before-input-event table cannot see renderer overlays, so Ctrl+D used to delete the task
+  // behind an open settings/filter dialog, Ctrl+T started a focus behind the tomato ledger,
+  // view-switch shortcuts silently changed the route under a modal, and Ctrl+N/Z/Y edited
+  // behind one too. Every shortcut entry point short-circuits while any overlay is open.
+  const modalOpen = () => {
+    const ui = store.state.ui
+    if (ui.isLocked || ui.showSettingsModal || ui.showFilterModal || ui.showFeedbackModal ||
+        ui.showRepeatModalFor || ui.showRepeatDeleteConfirm || ui.accountTaskId ||
+        ui.tomatoAbandonVisible || ui.tomatoFocusRecordVisible || ui.tomatoRecordAddVisible ||
+        (ui.contextMenu && ui.contextMenu.visible)) return true
+    // Component-local dialogs (SideNav tag/category managers, milestone editor, el-dialog family)
+    // are invisible to the store — sweep the DOM. el-overlay carries display:none via v-show when
+    // closed; el-message-box mounts/removes per open.
+    return !!document.querySelector('.el-overlay:not([style*="display: none"]), .el-message-box, .modal-container:not([style*="display: none"])')
+  }
   if (window.todoAPI.onShortcutAction) window.todoAPI.onShortcutAction(action => {
     const selectedTaskId = () => {
       const el = document.querySelector('.td-item.selected')
@@ -618,6 +634,8 @@ async function bootstrap () {
         const ae = document.activeElement
         const inEditor = !!ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)
         if (inEditor) break
+        // F3: an open dialog owns Ctrl+D — never delete the task behind it
+        if (modalOpen()) break
         const id = store.state.ui.rightSidebarTodoEdit.taskId || selectedTaskId()
         const t = id && store.state.todo.todoList.find(x => x.taskId === id)
         if (t) deleteWithUndo(window.appUI, store, t).then(ok => { if (ok) store.dispatch('todo/computeViews').catch(e => console.warn('[todo] undo-refresh computeViews failed:', e)) })
@@ -647,6 +665,8 @@ async function bootstrap () {
         break
       }
       case 'startPomodoro': {
+        // F3: same overlay ownership — no focus start behind a dialog
+        if (modalOpen()) break
         store.commit('ui/toggleTomatoPanel', true)
         store.dispatch('tomato/startFocus')
         break
@@ -656,21 +676,24 @@ async function bootstrap () {
         store.commit('settings/updateSettings', { isShowSubTask: !store.state.settings.isShowSubTask })
         break
       }
-      case 'switchToDaytodo': router.push({ name: 'todo-list-today' }).catch(() => {}); break
+      // F3: view-switch shortcuts stay silent under an open dialog — the route must not change
+      // behind the overlay the user is interacting with.
+      case 'switchToDaytodo': if (!modalOpen()) router.push({ name: 'todo-list-today' }).catch(() => {}); break
       // D6-F6: "Recent todos" was hard-wired to todo-list-today-x, which nav-gate hides for non-dev
       // users — the shortcut teleported to a page the sidebar refuses to show. Only route to the
       // experimental view under the same two-layer gate; everyone else lands on Today.
       case 'switchToRecentTodos': {
+        if (modalOpen()) break
         const s = store.state.settings
         router.push({ name: (s.developerMode && s.showTodayXModule === true) ? 'todo-list-today-x' : 'todo-list-today' }).catch(() => {})
         break
       }
-      case 'switchToSchedule': router.push({ name: 'todo-list-calendar' }).catch(() => {}); break
-      case 'switchToInbox': router.push({ name: 'todo-list-todo-box' }).catch(() => {}); break
+      case 'switchToSchedule': if (!modalOpen()) router.push({ name: 'todo-list-calendar' }).catch(() => {}); break
+      case 'switchToInbox': if (!modalOpen()) router.push({ name: 'todo-list-todo-box' }).catch(() => {}); break
       // D6-F3: 'addEvent' was registered in the binding table (src/main/shortcuts.js) but never
       // dispatched — the shortcut did nothing at all. Implement as "start inline create here":
       // focus the quick-add bar (the current view's inline-create entry point).
-      case 'addEvent': focusQuickAdd(); break
+      case 'addEvent': if (!modalOpen()) focusQuickAdd(); break
       // F-D1 (maint/dw 2026-09-23): sync is now a first-class in-app shortcut dispatched by the
       // main process's before-input-event table (the old Ctrl+S was a hardcoded keydown branch
       // below that ignored shortcutKeySettings.sync). Same feedback surface and in-flight guard.
@@ -698,10 +721,12 @@ async function bootstrap () {
     // Inside inputs/textareas, leave Ctrl+Z to text-level undo; don't steal it
     const ae = document.activeElement
     const inEditor = !!ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)
-    if (e.ctrlKey && e.key.toLowerCase() === 'n') {
+    // F3: an open dialog owns these keys too — no quick-add focus / undo / redo behind an overlay
+    const modal = modalOpen()
+    if (e.ctrlKey && !modal && e.key.toLowerCase() === 'n') {
       e.preventDefault()
       focusQuickAdd()
-    } else if (!inEditor && e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === 'z') {
+    } else if (!inEditor && !modal && e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === 'z') {
       e.preventDefault()
       store.dispatch('todo/undo').then(r => {
         const ok = r && r.ok
@@ -713,7 +738,7 @@ async function bootstrap () {
         console.error('[todo] undo failed:', e)
         window.appUI && window.appUI.$message && window.appUI.$message.error(i18n.global.t('statsH.main.actionFailedMsg') + ((e && e.message) || ''))
       })
-    } else if (!inEditor && ((e.ctrlKey && e.key.toLowerCase() === 'y') || (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'z'))) {
+    } else if (!inEditor && !modal && ((e.ctrlKey && e.key.toLowerCase() === 'y') || (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'z'))) {
       e.preventDefault()
       store.dispatch('todo/redo').then(r => {
         const ok = r && r.ok

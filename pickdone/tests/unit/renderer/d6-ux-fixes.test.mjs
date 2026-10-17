@@ -153,7 +153,7 @@ test('[F2/F3] Ctrl+N and addEvent route through focusQuickAdd with an unmounted-
   assert.ok(/if \(document\.querySelector\('\.qa-wrap'\)\)/.test(src), 'mounted-bar probe present')
   assert.ok(src.includes("router.push({ name: 'todo-list-today' }).then("), 'fallback routes to Today when the bar is unmounted')
   assert.ok(src.includes('focusQuickAdd()'), 'keydown handler delegates to the helper')
-  assert.ok(src.includes("case 'addEvent': focusQuickAdd(); break"), 'addEvent shortcut is dispatched (was a dead binding)')
+  assert.ok(src.includes("case 'addEvent': if (!modalOpen()) focusQuickAdd(); break"), 'addEvent shortcut is dispatched (was a dead binding); F3: modal-guarded')
 })
 
 test('[F5] pin/unpin announces state and refuses silently no-op when sort is not custom', () => {

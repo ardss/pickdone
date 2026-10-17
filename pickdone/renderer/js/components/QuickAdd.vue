@@ -244,15 +244,15 @@ export default {
       this._submitting = true
       // Input that parses to PURE date words ("明天", "10月1日"…) has an empty restText: the old
       // `restText || raw` fallback re-created the date string itself as a junk task titled "明天".
-      // A date-only input schedules nothing to do — refuse creation and say so (reuse the
-      // existing generic "name cannot be empty" key; no new i18n key was allowed here).
+      // A date-only input schedules nothing to do — refuse creation and say so with a dedicated
+      // message (F3 2026-10-18: was the generic "project name cannot be empty" key, misleading).
       if (this.parsed && this.parsed.restText === '') {
         this._submitting = false
         // [d-wave 2026-10-14] quiet mode used to return with ZERO feedback: no toast, no
         // qa-error — the standalone-window user thought the shortcut was broken. Quiet mode
         // surfaces failures inline (failed + qa-error), same as the dispatch-failure paths.
         if (this.quiet) this.failed = true
-        else this.$message.warning(this.$t('statsB.ProjectView.nameRequired'))
+        else this.$message.warning(this.$t('statsD.QuickAdd.dateOnlyRefused'))
         return
       }
       let content = raw

@@ -344,6 +344,12 @@ export default {
       if (ui.showSettingsModal || ui.showRepeatModalFor || ui.showFeedbackModal || ui.showFilterModal || ui.showRepeatDeleteConfirm || ui.accountTaskId || ui.tomatoAbandonVisible || ui.tomatoFocusRecordVisible || ui.tomatoRecordAddVisible) return
       // [fix 2026-10-09] an open date/time picker overlay (.el-picker-panel, append-to-body) owns the Esc press — it closes the panel itself; without this the same keypress fell through to closeEditCleanup
       if (document.querySelector('.el-picker-panel')) return
+      // [F3 2026-10-18] a component-local overlay owns the Esc press too: SideNav's tag/category
+      // managers (el-dialog kept mounted with v-show), ProjectView's milestone editor (local
+      // .modal-container) and any other el-dialog family dialog. The store whitelist above cannot
+      // see these local flags — without this sweep Esc closed the edit sidebar AND ran
+      // closeEditCleanup, deleting the inline-created task behind the open dialog.
+      if (document.querySelector('.el-overlay:not([style*="display: none"]), .el-message-box, .modal-container:not([style*="display: none"])')) return
       const st = this.$store.state.ui.rightSidebarTodoEdit
       if (st && st.visible) {
         this.$store.dispatch('ui/closeEditCleanup') // D6-F1: empty inline-created task is cleaned up

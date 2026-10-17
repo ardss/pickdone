@@ -32,6 +32,7 @@ export default {
       renameCatTitle: 'Rename',
       catNameEmptyWarn: 'Category name cannot be empty',
       catNameExistsWarn: 'A category with this name already exists',
+      tagNameExistsWarn: 'A tag with this name already exists',
       tagSectionAria: 'Tags (click to collapse/expand)',
       tagSection: 'Tags',
       newTagBtnTitle: 'New Tag',
