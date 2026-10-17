@@ -101,7 +101,10 @@ export default {
       const win = { today0: today0(), weekEnd: isoWeekEnd(Date.now()) }
       return this.$store.state.todo.todoList
         .filter(t => matchesViewConds(t, f.conds || {}, win))
-        .sort((a, b) => (b.taskSort || 0) - (a.taskSort || 0)) // B8 (2026-09-24): display order is taskSort DESCENDING (sortMode.js custom mode) — the old ascending readout put pinned tasks at the bottom
+        // F2-P3: createTime ASC tiebreaker per sortMode.js's custom spec — import-path ties
+        // (sort=0) used to fall back to Array.sort's unstable input order and diverged from the Today page.
+        // B8 (2026-09-24): display order is taskSort DESCENDING (sortMode.js custom mode) — the old ascending readout put pinned tasks at the bottom
+        .sort((a, b) => ((b.taskSort || 0) - (a.taskSort || 0)) || ((a.createTime || 0) - (b.createTime || 0)))
     },
     selectedId () { return this.$store.state.ui.rightSidebarTodoEdit.taskId }
   },
