@@ -213,6 +213,11 @@ function loadState (voidExpired = true) {
     const v = JSON.parse(localStorage.getItem(LS_KEY))
     if (v && typeof v === 'object') {
       const merged = Object.assign({}, DEF, v)
+      // F2-P3 (2026-10-18): the LS blob bypasses patch()'s clampNumericSettings — a hand-edited or
+      // legacy blob carrying tomatoTime: 9999 loaded straight into the RUNNING countdown and was
+      // re-persisted on the next write. Same clamp caliber as settings.js F-C3 (the shared
+      // SETTINGS_MANIFEST ranges, already imported here), applied at load so every reader agrees.
+      clampNumericSettings(merged)
       // 版本守卫真正接线(此前只写不读=仪式代码):未来版本 blob 拒载回退默认,防降级读取错语义
       if ((merged.schemaV || 1) > SCHEMA_V) return Object.assign({}, DEF)
       const statusMap = { focusing: 'startTomatoTime', resting: 'startRestTime', paused: 'default' }
@@ -264,6 +269,31 @@ function newPingToken (seq) {
  *  invisible. The degraded flag latches for the process lifetime: one look, one surface. */
 let _mirrorDegraded = false
 export function tomatoMirrorDegraded () { return _mirrorDegraded }
+
+// F2-P3 (2026-10-18): completeFocus books the row with the PLANNED rest (restDuration = s.restTime
+// — the rest hasn't happened yet at booking time). finishRest / a rest-phase giveUp settle the row
+// to the MEASURED duration afterwards, same caliber as giveUp's measured-focus bookkeeping. This
+// window-local pointer finds the just-booked row cheaply; the fallback scan covers the
+// cross-window case (focus completed in window A, rest finished in window B).
+let _lastBookedFocus = null // { tomatoId }
+function resolvePendingRestRow (s, restStartedAt) {
+  const list = s.tomatoRecordList || []
+  const byId = _lastBookedFocus && list.find(r => r && r.tomatoId === _lastBookedFocus.tomatoId)
+  if (byId && byId.succeed) return byId
+  // The booked row's endTime IS the rest start (completeFocus flips to rest right after booking),
+  // so the succeed row whose endTime sits at restStartedAt (±2s) is the pending one.
+  return list.find(r => r && r.succeed && typeof r.endTime === 'number' && Math.abs(r.endTime - restStartedAt) <= 2000) || null
+}
+function settleRestDuration (commit, s, restStartedAt) {
+  const rec = resolvePendingRestRow(s, restStartedAt)
+  if (!rec) return
+  // Sub-minute rest books 0 (no phantom rest minute) — mirrors giveUp's sub-minute focus caliber.
+  const measured = Math.round((Date.now() - restStartedAt) / 60000)
+  const settled = Math.max(0, Math.min(REST_MAX_MINUTES, measured))
+  _lastBookedFocus = null
+  if (rec.restDuration === settled) return
+  commit('updateRecord', { tomatoId: rec.tomatoId, patch: { restDuration: settled } })
+}
 function persistState (state) {
   // Write sequence number: increments once per real disk flush; the ping carries only the sequence, and receivers skip the full re-read when the sequence matches
   state._syncSeq = (state._syncSeq || 0) + 1
@@ -551,6 +581,12 @@ export default {
         return
       }
       const releaseClaim = () => releasePhaseClaim(claim)
+      if (s.status === 'startRestTime' && s.startedAt) {
+        // F2-P3: abandoning the rest settles the just-booked row's restDuration to the MEASURED
+        // value (completeFocus booked the planned restTime; same caliber as the measured-focus
+        // bookkeeping below), then the flow falls through to the normal default/idle write.
+        settleRestDuration(commit, s, s.startedAt)
+      }
       if (running && record) {
         // Measured duration, not the current setting (unified with completeFocus): a mid-focus
         // duration change used to cap the booked minutes at the NEW smaller setting, skewing the ledger
@@ -630,13 +666,17 @@ export default {
           }
       } catch (e) { releaseClaim(); throw e }
       try {
+        // F2-P3: mint the id first so this window can settle the row's restDuration to the
+        // MEASURED rest when the rest phase ends (finishRest) or is abandoned (giveUp).
+        const focusTomatoId = mintTomatoId('tmt_f_', startedAt)
         commit('addRecord', {
           // Accounting basis unified = endTime: stats (metrics)/rail (railSegs)/entry-card corrections (updateRecord) all use endTime
           // [D22 P2] device salt mixed in (same-ms cross-device collision, same as giveUp)
-          tomatoId: mintTomatoId('tmt_f_', startedAt), endTime: endTs, dateKey: dayjs(endTs).format(FMT.date),
+          tomatoId: focusTomatoId, endTime: endTs, dateKey: dayjs(endTs).format(FMT.date),
           focus: focused ? focused.taskContent : '', focusTaskId: focused ? focused.taskId : null,
           focusDuration: focusMin, rest: s.restTime, restDuration: s.restTime, succeed: true, status: 'local'
         })
+        _lastBookedFocus = { tomatoId: focusTomatoId }
         {
           // 计入完成时刻所在日,与 stats/时间轴的 endTime 口径一致(2026-09-04 清理:原跨午夜判断是 endTs 与自身比较的恒真式,已删)
           // U-11: idempotent per startedAt — the retry path (claim released after a mid-way failure)
@@ -682,6 +722,9 @@ export default {
     async finishRest ({ state, commit }) {
       const claim = await claimPhase('startRestTime', state.startedAt)
       if (!claim) return
+      // F2-P3: the rest is over — settle the just-booked row's restDuration to the MEASURED rest
+      // (completeFocus booked the planned restTime; parity with the measured-focus caliber).
+      settleRestDuration(commit, state, state.startedAt)
       if (state.enableNotification !== false) { try { window.todoAPI.notification({ title: tt('statsA.core.restOverTitle'), body: tt('statsA.core.restOverBody') }) } catch (e) { /* locked screen rejects the channel — fire-and-forget */ } }
       commit('patch', { status: 'default', startedAt: 0, remainSec: state.tomatoTime * 60 })
       reportRunningTransition('clear', state) // TQ-1: rest finished — release the durable row
