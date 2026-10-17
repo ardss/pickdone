@@ -601,20 +601,16 @@ async function bootstrap () {
       setTimeout(() => window.dispatchEvent(new CustomEvent('todo:focus-quickadd')), 120)
     }).catch(() => {})
   }
-  // F3 (2026-10-18): modal guard for the global shortcut pipeline. The main process's
-  // before-input-event table cannot see renderer overlays, so Ctrl+D used to delete the task
-  // behind an open settings/filter dialog, Ctrl+T started a focus behind the tomato ledger,
-  // view-switch shortcuts silently changed the route under a modal, and Ctrl+N/Z/Y edited
-  // behind one too. Every shortcut entry point short-circuits while any overlay is open.
+  // F3 (2026-10-18): modal guard — before-input-event cannot see renderer overlays, so every
+  // shortcut entry point short-circuits while any overlay is open.
   const modalOpen = () => {
     const ui = store.state.ui
     if (ui.isLocked || ui.showSettingsModal || ui.showFilterModal || ui.showFeedbackModal ||
         ui.showRepeatModalFor || ui.showRepeatDeleteConfirm || ui.accountTaskId ||
         ui.tomatoAbandonVisible || ui.tomatoFocusRecordVisible || ui.tomatoRecordAddVisible ||
         (ui.contextMenu && ui.contextMenu.visible)) return true
-    // Component-local dialogs (SideNav tag/category managers, milestone editor, el-dialog family)
-    // are invisible to the store — sweep the DOM. el-overlay carries display:none via v-show when
-    // closed; el-message-box mounts/removes per open.
+    // Component-local dialogs (tag/category managers, milestone editor) are store-invisible:
+    // sweep the DOM (el-overlay v-show carries display:none; el-message-box mounts per open)
     return !!document.querySelector('.el-overlay:not([style*="display: none"]), .el-message-box, .modal-container:not([style*="display: none"])')
   }
   if (window.todoAPI.onShortcutAction) window.todoAPI.onShortcutAction(action => {
@@ -628,13 +624,11 @@ async function bootstrap () {
     }
     switch (action) {
       case 'deleteEvent': {
-        // F-D2 (maint/dw 2026-09-23): the main-process before-input-event does not know about
-        // input focus, so typing Ctrl+D inside an input used to delete the selected/edited task
-        // outright. Same inEditor exemption the Ctrl+Z/Y branches below already honor.
+        // F-D2 (maint/dw 2026-09-23): before-input-event is input-focus-blind — the inEditor
+        // exemption keeps Ctrl+D in inputs local; F3: an open dialog owns Ctrl+D too
         const ae = document.activeElement
         const inEditor = !!ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)
         if (inEditor) break
-        // F3: an open dialog owns Ctrl+D — never delete the task behind it
         if (modalOpen()) break
         const id = store.state.ui.rightSidebarTodoEdit.taskId || selectedTaskId()
         const t = id && store.state.todo.todoList.find(x => x.taskId === id)
@@ -676,8 +670,7 @@ async function bootstrap () {
         store.commit('settings/updateSettings', { isShowSubTask: !store.state.settings.isShowSubTask })
         break
       }
-      // F3: view-switch shortcuts stay silent under an open dialog — the route must not change
-      // behind the overlay the user is interacting with.
+      // F3: view-switch shortcuts stay silent under an open dialog
       case 'switchToDaytodo': if (!modalOpen()) router.push({ name: 'todo-list-today' }).catch(() => {}); break
       // D6-F6: "Recent todos" was hard-wired to todo-list-today-x, which nav-gate hides for non-dev
       // users — the shortcut teleported to a page the sidebar refuses to show. Only route to the

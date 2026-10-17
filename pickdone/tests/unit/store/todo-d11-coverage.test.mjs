@@ -68,7 +68,10 @@ test('actions.init: loads rows + meta, computes views; getAll failure degrades t
 
   const b = makeStore({ _rootState: {}, _fail: true }, { dbCall: async (op) => { if (op === 'getAll') throw new Error('db gone'); return null } })
   await todoMod.actions.init.call(b.storeThis, b.ctx)
-  assert.equal(b.state.loaded, true, 'init survives a getAll failure (empty table, loud log)')
+  // F3 2026-10-18: a failed init no longer pretends to be an empty list — it parks in an
+  // observable error state so the views can show "load failed + retry" instead of "no todos"
+  assert.equal(b.state.loaded, false, 'failed init must not claim loaded (that rendered a fake empty table)')
+  assert.ok(b.state.initError, 'failed init exposes initError for the view-level retry entry')
 })
 
 test('actions.addTodo: renewal idempotency returns the existing instance instead of double-creating', async () => {

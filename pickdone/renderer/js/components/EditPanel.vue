@@ -338,17 +338,12 @@ export default {
       if (dep && dep.depOpen) { dep.depOpen = false; return }
       if (this.previewImg) { this.previewImg = null; return }
       const ui = this.$store.state.ui
-      // [editpanel-esc-ignores-context-menu fix] an open task context menu owns the Esc press (it closes the menu); the edit sidebar behind it must not also close. Same whitelist shape as the other overlays below.
-      if (ui.contextMenu && ui.contextMenu.visible) return
-      // [maint-0925 A2] showFilterModal joins the whitelist (hoisted out of FilterView local data): Esc over the filter modal no longer closes the edit sidebar
+      if (ui.contextMenu && ui.contextMenu.visible) return // [editpanel-esc-ignores-context-menu] an open context menu owns Esc
+      // [maint-0925 A2] store-level overlay whitelist (filter modal hoisted out of FilterView local data)
       if (ui.showSettingsModal || ui.showRepeatModalFor || ui.showFeedbackModal || ui.showFilterModal || ui.showRepeatDeleteConfirm || ui.accountTaskId || ui.tomatoAbandonVisible || ui.tomatoFocusRecordVisible || ui.tomatoRecordAddVisible) return
-      // [fix 2026-10-09] an open date/time picker overlay (.el-picker-panel, append-to-body) owns the Esc press — it closes the panel itself; without this the same keypress fell through to closeEditCleanup
+      // [fix 2026-10-09] a date/time picker (.el-picker-panel, append-to-body) owns Esc (else the keypress fell through to closeEditCleanup)
       if (document.querySelector('.el-picker-panel')) return
-      // [F3 2026-10-18] a component-local overlay owns the Esc press too: SideNav's tag/category
-      // managers (el-dialog kept mounted with v-show), ProjectView's milestone editor (local
-      // .modal-container) and any other el-dialog family dialog. The store whitelist above cannot
-      // see these local flags — without this sweep Esc closed the edit sidebar AND ran
-      // closeEditCleanup, deleting the inline-created task behind the open dialog.
+      // [F3 2026-10-18] store-invisible local overlays (else Esc deleted the inline task behind the dialog)
       if (document.querySelector('.el-overlay:not([style*="display: none"]), .el-message-box, .modal-container:not([style*="display: none"])')) return
       const st = this.$store.state.ui.rightSidebarTodoEdit
       if (st && st.visible) {
@@ -456,10 +451,9 @@ export default {
       const snap = JSON.parse(JSON.stringify(src))
       snap.visible = s.visible; snap.collapsed = s.collapsed; snap.taskId = s.taskId
       this.e = snap
-      // F3: record the hydration baseline (live-row updateTime + core-field fingerprint) so
-      // checkRemoteUpdate can tell inbound peer edits from the panel's own save echoes.
-      // (renamed live->liveRow: `live` is taken above by the P1 live-row snapshot lookup —
-      // duplicate declaration was a 500 on the vite SFC compile, dead-ending the whole dev host)
+      // F3: hydration baseline (updateTime + core-field fingerprint) so checkRemoteUpdate can tell
+      // inbound peer edits from the panel's own save echoes. (renamed live->liveRow: `live` is taken above —
+      // duplicate declaration was a 500 on the vite SFC compile)
       const liveRow = this.task
       this._remoteUpdateTime = liveRow ? liveRow.updateTime : s.updateTime
       this._remoteFingerprint = contentFingerprint(this.e)

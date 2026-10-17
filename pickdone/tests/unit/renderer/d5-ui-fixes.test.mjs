@@ -43,9 +43,10 @@ test('TodoItem crossDayMovePatch: time-of-day survives the move, day markers fol
   // pure midnight day markers -> follow the new day (DayDeck parity)
   const markers = crossDayMovePatch({ dayStart: oldDay, todoTime: oldDay, reminderTime: oldDay }, newDay, startOfDay)
   assert.deepEqual(markers, { dayStart: newDay, todoTime: newDay, reminderTime: newDay })
-  // todoTime on a different day than dayStart -> untouched
+  // todoTime on a third day -> re-anchored to the new day (keeps time-of-day; F2-P3 2026-10-18:
+  // leaving it untouched let the DB's derived scheduledDay snap the move back on restart)
   const misaligned = crossDayMovePatch({ dayStart: oldDay, todoTime: at(5, 0) }, newDay, startOfDay)
-  assert.deepEqual(misaligned, { dayStart: newDay })
+  assert.deepEqual(misaligned, { dayStart: newDay, todoTime: newDay })
 })
 
 test('TodoItem: cross-day drop uses the patch builder and reverts the touched fields only', () => {

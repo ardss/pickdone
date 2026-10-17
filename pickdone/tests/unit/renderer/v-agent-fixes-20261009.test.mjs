@@ -227,8 +227,8 @@ test('[V6] createTag warns (instead of silent return) when the tag already exist
     tags: []
   }
   await handlers.createTag(vm)
-  assert.deepEqual(warnings, ['statsG.SideNav.catNameExistsWarn'],
-    'the duplicate tag path fires the existing name-exists warning key')
+  assert.deepEqual(warnings, ['statsG.SideNav.tagNameExistsWarn'],
+    'the duplicate tag path fires the tag-specific name-exists warning key (F3 2026-10-18)')
 })
 
 /* ===== [V7] QuickAdd pure date-word guard ===== */
@@ -239,8 +239,8 @@ test('[V7] onEnter refuses creation when parsed.restText is empty (date-only inp
   const body = src.quick.slice(i, src.quick.indexOf("content = this.parsed.restText || raw", i))
   assert.ok(body.includes('this.parsed.restText === \'\''),
     'a parsed input with empty restText (pure date words) is intercepted')
-  assert.ok(body.includes('statsB.ProjectView.nameRequired'),
-    'the refusal reuses the existing empty-name warning key (no new i18n key)')
+  assert.ok(body.includes('statsD.QuickAdd.dateOnlyRefused'),
+    'the refusal uses the dedicated date-only message key (F3 2026-10-18, no longer the borrowed project-name text)')
   assert.ok(body.includes('this._submitting = false'),
     'the guard releases the submit lock before returning (a follow-up Enter must still work)')
 })

@@ -3,6 +3,7 @@
   "src/main/lan-sync-bootstrap.js": 835,
   "renderer/js/store/category.js": 763,
   "renderer/js/store/todo.js": 829,
+  "renderer/js/store/tomato.js": 743,
   "src/main/db.js": 813,
   "src/main/index.js": 860
 }
