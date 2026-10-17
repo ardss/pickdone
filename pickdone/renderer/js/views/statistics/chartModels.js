@@ -51,11 +51,10 @@ export function periodBounds (period, customRange, nowTick, t) {
  * same trailing-done streak semantics (a gap at the very last cell does not break the streak).
  */
 export function buildHeatmap ({ todos, records, weeks, nowTick }) {
-  const day = DAY_MS
   // 用响应式时钟 nowTick 而非 dayjs():跨零点停留时热力图窗口不冻结(同 periodBounds)
   const today = dayjs(nowTick).startOf('day')
   const end = +today.add(6 - calGridOffset(today.day(), false), 'day') // same Monday-start math as isoWeek, via the shared weekGrid helper
-  const start = +dayjs(end).subtract(weeks * 7 - 1, 'day')
+  const start = +dayShift(end, -(weeks * 7 - 1)) // calendar-day step (day-caliber red line, see todayBounds.dayShift)
   const doneByDay = new Map(); const focusByDay = new Map()
   todos.forEach(todo => {
     if (!todo.complete || todo.delete) return
@@ -71,7 +70,8 @@ export function buildHeatmap ({ todos, records, weeks, nowTick }) {
   })
   const maxDone = Math.max(1, ...doneByDay.values())
   const cells = []
-  for (let ts = start; ts <= end; ts += day) {
+  let ts = start
+  for (let i = 0; ts <= end; i++, ts = +dayShift(ts, 1)) { // calendar-day step: DST-safe (ms stepping lands 23:00 on fall-back days)
     const d = dayjs(ts)
     const k = d.format(FMT.date)
     const done = doneByDay.get(k) || 0
@@ -82,12 +82,21 @@ export function buildHeatmap ({ todos, records, weeks, nowTick }) {
     if (done >= maxDone * 0.67 || (done > 0 && focus >= 50)) level = 3
     if (done >= maxDone || (done > 0 && focus >= 100)) level = 4
     cells.push({ key: k, date: d.format(FMT.cnFull), done, focus, level,
-      col: Math.floor((ts - start) / day / 7), dow: (d.day() + 6) % 7 })
+      col: Math.floor(i / 7), dow: (d.day() + 6) % 7 })
   }
   const totalDone = cells.reduce((s, c) => s + c.done, 0)
   const streak = (() => {
+    // Trailing streak: scan stops at today — future cells (rest of the current week) are skipped,
+    // never counted and never break the streak. Today being unfinished doesn't break it either.
+    const todayKey = today.format(FMT.date)
+    const idx = cells.findIndex(c => c.key === todayKey)
+    if (idx < 0) return 0
     let n = 0
-    for (let i = cells.length - 1; i >= 0; i--) { if (cells[i].done > 0) n++; else if (i !== cells.length - 1) break }
+    for (let i = idx; i >= 0; i--) {
+      if (cells[i].done > 0) n++
+      else if (i === idx) continue // today unfinished doesn't break the streak
+      else break
+    }
     return n
   })()
   return { cells, weeks, totalDone, streak }
@@ -195,7 +204,7 @@ export function buildTimelineRows ({ records, todos, t, now = Date.now() }) {
       // Round-4 P1: dedup BEFORE the minutes/count increments — a duplicate record used to
       // inflate both the session count and the focus-minutes total even though only one
       // visual band is rendered for it.
-      const dupKey = fStart + '|' + end + '|' + (r.focusDuration || 0) + '|' + (r.focus || '')
+      const dupKey = fStart + '|' + end + '|' + (r.focusDuration || 0) + '|' + (r.focus || '') + '|' + (r.tomatoId || '')
       if (seen.has(dupKey)) continue
       seen.add(dupKey)
       if (r.succeed !== false) { minutes += Number(r.focusDuration) || 0; count++ }

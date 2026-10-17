@@ -152,7 +152,7 @@ test('buildTimelineRows: 7 rows, per-day done counts, duplicate records deduped,
     { tomatoId: 'p1', endTime: String(noon), focusDuration: 25, restDuration: 5, succeed: true, focus: 'TaskA' },
     { tomatoId: 'p2', endTime: String(noon + 30 * 60000), focusDuration: 25, restDuration: 5, succeed: true, focus: 'TaskA' },
     // exact duplicate of p1 -> drawn once
-    { tomatoId: 'p3', endTime: String(noon), focusDuration: 25, restDuration: 5, succeed: true, focus: 'TaskA' }
+    { tomatoId: 'p1', endTime: String(noon), focusDuration: 25, restDuration: 5, succeed: true, focus: 'TaskA' } // fully identical to p1 (same id) -> deduped
   ]
   const todos = [todo('x', { ts: noon }), todo('y', { ts: noon }), todo('gone', { complete: false, ts: noon })]
   const rows = buildTimelineRows({ records, todos, t, now: NOW })
