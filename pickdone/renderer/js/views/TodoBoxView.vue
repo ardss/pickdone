@@ -425,6 +425,12 @@ html[data-theme="dark"] .dropdown-select.is-open .dropdown-select__label { backg
 .todo-box-list .todo-box-list-item__tools .btn--dark:focus{outline:0}
 .todo-box-list .todo-box-list-item__tools .btn--dark:hover{color:#474747}
 .todo-box-list .todo-box-list-item__tools .btn--dark:active{color:#3b3b3b}
+/* [F4] dark-mode override: #4f4f4f/#474747/#3b3b3b sit below 3:1 on the dark panel (same
+   gap as the .dropdown-select__label dark branch above); resolve to the theme-mutating
+   muted-text tokens instead */
+html[data-theme="dark"] .todo-box-list .todo-box-list-item__tools .btn--dark{color:var(--text-2)}
+html[data-theme="dark"] .todo-box-list .todo-box-list-item__tools .btn--dark:hover{color:var(--text-1)}
+html[data-theme="dark"] .todo-box-list .todo-box-list-item__tools .btn--dark:active{color:var(--text-1)}
 /* 工具栏下拉菜单（原 DropdownSelect 的弹出层无独立样式文件，按设计稿设计语言补齐：白底/分隔/主色高亮） */
 .dd-menu{list-style:none;margin:0 -4px;padding:0;font-size: var(--fs-sm);color:var(--text-1)}
 .dd-menu li{padding:7px 16px;cursor:pointer;white-space:nowrap;border-radius: var(--radius-md)}

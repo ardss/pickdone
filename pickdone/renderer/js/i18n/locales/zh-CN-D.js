@@ -116,7 +116,7 @@ export default {
 
     },
     "QuickAdd": {
-      "placeholder": "在此添加内容，按回车创建事件",
+      "placeholder": "试试「明天下午3点 交报告 #工作」",
       "ariaLabel": "快捷添加任务",
       "clearDateAria": "清除日期 {d}",
       "selectDate": "选择日期",

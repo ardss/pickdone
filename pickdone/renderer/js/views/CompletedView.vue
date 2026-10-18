@@ -84,7 +84,9 @@ export default {
   name: 'CompletedView',
   components: { TodoItem, EmptyState },
   data () {
-    return { collapsedMap: {} }
+    // [F4] fold state moved to the shared settings ledger (foldedTodoList, same key TodoGroups
+    // uses) — the old component-local map was lost on every view switch.
+    return { }
   },
   computed: {
     list () { return this.$store.state.todo.views.completed },
@@ -92,22 +94,36 @@ export default {
     // D14-B5: honor settings.expiredCompletedTodoRange (was a dead hard 30-day cap here, while
     // category/project pages already followed the setting via buildExpiryGroups)
     groups () { return buildCompletedBuckets(this.list, undefined, this.$store.state.settings.expiredCompletedTodoRange) },
-    anyCollapsed () { return this.groups.some(g => this.collapsedMap[g.key]) }
+    // [F4] completed buckets use stable keys ('done-today'/'done-yesterday'/…, no drifting
+    // expired-<ts> prefix) so no TodoGroups-style pruning is needed; defaults keep every
+    // group expanded (unchanged behavior)
+    folded () { return this.$store.state.settings.foldedTodoList },
+    anyCollapsed () { return this.groups.some(g => this.folded.includes(g.key)) }
   },
   methods: {
     // [F3 2026-10-18] retry after a failed todo/init — reruns the full load (getAll + computeViews)
     retryInit () { this.$store.dispatch('todo/init', {}) },
-    isCol (key) { return !!this.collapsedMap[key] },
+    isCol (key) { return this.folded.includes(key) },
     // TS cast lives here: the structure guard rejects `as` expressions inside templates
     triggerTip (e) { (e.currentTarget as HTMLElement).click() },
     // [D15-A13] ARIA button pattern on the tip widget: Space activates too (was Enter-only)
     onTipKey: roleButtonActivate(function (e) { this.triggerTip(e) }),
     /* [D17-DOM4] ARIA button pattern on group headers: Space joins Enter as activation keys */
     onHeadKey (key, e) { roleButtonActivate(() => { this.toggleCol(key) }).call(this, e) },
-    toggleCol (key) { this.collapsedMap = { ...this.collapsedMap, [key]: !this.collapsedMap[key] } },
+    // [F4] persist through the shared settings commit (same double-write ledger as TodoGroups)
+    toggleCol (key) {
+      const next = this.folded.includes(key) ? this.folded.filter(k => k !== key) : [...this.folded, key]
+      this.$store.commit('settings/updateSettings', { foldedTodoList: next })
+    },
     toggleAllGroups () {
       const expand = this.anyCollapsed
-      const next = { ...this.collapsedMap }; for (const g of this.groups) next[g.key] = !expand; this.collapsedMap = next
+      const next = [...this.folded]
+      for (const g of this.groups) {
+        const i = next.indexOf(g.key)
+        if (expand && i !== -1) next.splice(i, 1)
+        else if (!expand && i === -1) next.push(g.key)
+      }
+      this.$store.commit('settings/updateSettings', { foldedTodoList: next })
     },
     undo (t) {
       // Uniformly go through toggleCompleteWithUndo: bidirectional undo toast shared with the whole app (2026-08-31 consistency consolidation)
@@ -129,8 +145,11 @@ export default {
 /* 已达成页提示气泡文案列表（原 TipCompleted 内容，样式按设计稿 tip 12px 灰字） */
 .tip-completed-list{list-style:none;margin:0;padding:0;font-size: var(--fs-sm);color:var(--text-2);line-height:20px}
 .tip-completed-list li{padding:2px 0}
-/* 条目右侧悬停操作按钮的显示时机：悬停所在行时出现；键盘聚焦到按钮时同样可见（对照 RecycleBinView .row-btn:focus-visible） */
-.done-row-orig:hover .row-btn,.todo-box-list-item__tools{opacity:1}
+/* 条目右侧悬停操作按钮的显示时机：悬停所在行时出现；键盘聚焦到按钮时同样可见（对照 RecycleBinView .row-btn:focus-visible）
+   [F4] the bare `.__tools` opacity selector was removed: it was a global (non-scoped) rule
+   that leaked out of this view onto TodoBoxView/RecycleBin rows. This view itself only uses
+   .row-btn (revealed by the hover/focus rules below), so the visible behavior is unchanged. */
+.done-row-orig:hover .row-btn{opacity:1}
 .done-row-orig:focus-within .row-btn{opacity:1}
 .done-row-orig .row-btn:focus-visible{opacity:1;outline:2px solid var(--brand);outline-offset:2px}
 </style>

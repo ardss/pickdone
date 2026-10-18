@@ -121,7 +121,7 @@ export default {
       "selectDate": "Pick a date",
       "scheduledAt": ", scheduled for ",
       "today": "today",
-      "placeholder": "Type a task, press Enter to create",
+      "placeholder": "Try \"tomorrow 3pm send report #work\"",
       "noDate": "no date",
       "movedToInbox": ", moved to inbox",
       "created": "Task added: {c}",

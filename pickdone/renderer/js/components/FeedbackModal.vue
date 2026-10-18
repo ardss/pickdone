@@ -146,6 +146,11 @@ export default {
         this.close()
       } catch (e) {
         this.$message.error(this.$t('feedback.submitFailed'))
+      } finally {
+        // [F4] the flag must reset on the failure path too — a rejected submit used to leave
+        // submitting=true and the button disabled forever (the success path closes the modal,
+        // so only failures were stuck).
+        this.submitting = false
       }
     }
   },

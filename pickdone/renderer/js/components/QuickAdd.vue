@@ -160,6 +160,10 @@ export default {
       this._submitting = true
       const tag = this.routeTag
       const catId = this.routeCategoryId
+      // [F4] snapshot the effective date BEFORE the loop (same pattern as the tag/catId
+      // snapshots above): re-reading the live computed per line meant a mid-loop change (or
+      // the cleared chip below) could land later lines on a different day than the toast claims.
+      const effDate = this.effDate
       let done = 0 // lines already dispatched successfully (read by the catch below)
       try {
         for (const raw of lines) {
@@ -167,7 +171,7 @@ export default {
           const payload: any = {
             todoContent: content,
             todoDescription: '',
-            todoDate: resolveQuickAddDate({ pickedDate: this.effDate, parsedTs: null, inTodoBox: this.inTodoBox, todayTs: dayjs().startOf('day').valueOf() }),
+            todoDate: resolveQuickAddDate({ pickedDate: effDate, parsedTs: null, inTodoBox: this.inTodoBox, todayTs: dayjs().startOf('day').valueOf() }),
             todoReminderTime: 0,
             todoDifficultyLevel: 0
           }
@@ -179,8 +183,9 @@ export default {
         // [P2 fix] the bulk toast omitted WHERE the lines landed — with a date chip active every
         // created task went to that day, and the toast said only "Added N tasks". Same date
         // suffix idiom as onEnter's single-line toast (reuses scheduledAt/today/movedToInbox).
-        // Read the effective date BEFORE clearing it (the computed goes stale once reset).
-        let d = this.effDate
+        // Report the SAME pre-loop snapshot the lines were created with (the computed goes
+        // stale once reset).
+        let d = effDate
         this.text = ''
         this.pickedDate = null
         // Mirror onEnter's default-date semantics: other pages default to today, the todo box stays undated

@@ -90,6 +90,14 @@ export default {
   },
 
   watch: {
+    // [F4] .main-scroll is a persistent container shared by all routes — without a reset, a
+    // view left scrolled carries its scroll position into the next view. Zero it on every
+    // navigation (the paper-plane animation only READS .main-scroll at play time, so the
+    // read path is untouched).
+    $route () {
+      const sc = this.$el && this.$el.querySelector ? this.$el.querySelector('.main-scroll') : null
+      if (sc) sc.scrollTop = 0
+    },
     // When the edit panel opens, ensure the window is wide enough for sidebar 250 + edit 335 + content 640 (auto-widen)
     '$store.state.ui.rightSidebarTodoEdit.visible' (v) {
       if (!window.todoAPI) return

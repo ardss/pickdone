@@ -262,7 +262,9 @@ function injectV1Style () {
 
 export default {
   name: 'DayRail',
-  data: () => ({ plans: {}, dragOverHour: -1, dragOverSeg: null, axisPx: null, entryDraft: null, activePlanId: null, nowH: new Date().getHours(), nowTs: Date.now(), railCollapsed: localStorage.getItem('dayRailCollapsed') === '1', focusInputMax: FOCUS_INPUT_MAX_MINUTES }),
+  // [F4] LS read is try-wrapped (repo convention: stub hosts / blocked storage fall back to
+  // the default false instead of throwing inside data())
+  data: () => ({ plans: {}, dragOverHour: -1, dragOverSeg: null, axisPx: null, entryDraft: null, activePlanId: null, nowH: new Date().getHours(), nowTs: Date.now(), railCollapsed: (() => { try { return localStorage.getItem('dayRailCollapsed') === '1' } catch (e) { return false } })(), focusInputMax: FOCUS_INPUT_MAX_MINUTES }),
   async mounted () {
     injectV1Style()
     // Storage-layer root fix (2026-09-03): chips = SQLite plan_chips rows, reads = planAll atomic read, writes = atomic ops (see dayPlans.js).

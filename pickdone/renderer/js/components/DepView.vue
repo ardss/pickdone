@@ -752,12 +752,12 @@ export default {
 .depv-track { position: relative;
   background-image: radial-gradient(var(--line, #e6e8eb) 1px, transparent 1px);
   background-size: 24px 24px; background-position: 12px 12px; }
-.depv-task { position: absolute; width: 236px; border: 1px solid var(--line, #e6e8eb); border-radius: 8px;
-  padding: 6px 8px 6px 6px; cursor: pointer; background: var(--panel, #fff); z-index: 2; }
+.depv-task { position: absolute; width: 236px; border: 1px solid var(--line, #e6e8eb); border-radius: 8px; padding: 6px 8px 6px 6px; cursor: pointer; background: var(--panel, #fff); z-index: 2; }
 .depv-task:hover { border-color: var(--brand); box-shadow: 0 2px 8px rgba(0, 0, 0, .08); }
-.depv-task__grip { position: absolute; left: 2px; top: 2px; width: 14px; height: 14px; padding: 0;
-  border: 0; background: none; color: var(--text-3, #999); cursor: grab; opacity: 0; transition: opacity .15s; }
+.depv-task__grip { position: absolute; left: 2px; top: 2px; width: 14px; height: 14px; padding: 0; border: 0; background: none; color: var(--text-3, #999); cursor: grab; opacity: 0; transition: opacity .15s; }
 .depv-task:hover .depv-task__grip, .depv-task--moving .depv-task__grip { opacity: 1; }
+/* [F4] keyboard parity: reveal the grip when focus is anywhere inside the card — same contract as base.css .td-item:focus-within */
+.depv-task:focus-within .depv-task__grip { opacity: 1; }
 .depv-task__grip:hover { color: var(--brand); }
 .depv-task--moving { cursor: grabbing; box-shadow: 0 8px 20px rgba(0, 0, 0, .22);
   border-color: var(--brand); z-index: 10; }
