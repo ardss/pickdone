@@ -72,6 +72,23 @@ function mergeHabitRecords (incomingHabits, localHabits) {
   return incomingHabits
 }
 
+/** [F2 2026-10-19 P2] moments union-merge (same family as unionMaxRecords): an inbound blob only
+ *  carries the moments its author KNOWS about, so the previous whole-array LWW replace silently
+ *  deleted the other device's countdowns/anniversaries on every concurrent edit. Merge by id:
+ *  ids present on either side survive; for an id on both sides the incoming copy wins, and
+ *  undefined fields backfill from the local copy (records' per-key union-max analog). */
+export function unionMoments (incoming, local) {
+  const out = (incoming || []).filter(m => m && m.id != null).map(m => ({ ...m }))
+  const byId = new Map(out.map(m => [m.id, m]))
+  for (const m of (local || [])) {
+    if (!m || m.id == null) continue
+    const cur = byId.get(m.id)
+    if (!cur) { out.push({ ...m }); byId.set(m.id, out[out.length - 1]) }
+    else for (const k of Object.keys(m)) if (cur[k] === undefined) cur[k] = m[k]
+  }
+  return out
+}
+
 /** [F3 fix] delete tombstones: delHabit records `{ id, deletedAt }` in the blob's `deleted` array,
  *  so a peer blob that still carries the habit (its savedAt may even be newer) can no longer
  *  resurrect it through mergeHabitRecords/applyExternal/applyExternalPatch. Backward compatible:
@@ -333,7 +350,9 @@ export default {
       // array — a peer blob that still carries a deleted habit can no longer resurrect it.
       s.deleted = mergeHabitTombstones(s.deleted, blob.deleted)
       s.habits = mergeHabitRecords(applyHabitTombstones(blob.habits, s.deleted), s.habits)
-      s.moments = blob.moments || []
+      // F2 2026-10-19: same union-merge as records — a newer peer blob must not erase this
+      // device's moments (countdowns/anniversaries) it never saw.
+      s.moments = unionMoments(blob.moments, s.moments)
       s.savedAt = Math.max(blob.savedAt || 0, s.savedAt || 0)
     },
     /** F2 (2026-09-20): LAN-sync habits fold channel — S1's main process emits
@@ -367,7 +386,8 @@ export default {
         s.habits = mergeHabitRecords(applyHabitTombstones(fields.habits, s.deleted), s.habits)
         changed = true
       }
-      if (Array.isArray(fields.moments)) { s.moments = fields.moments; changed = true }
+      // F2 2026-10-19: union-merge, same caliber as applyExternal above
+      if (Array.isArray(fields.moments)) { s.moments = unionMoments(fields.moments, s.moments); changed = true }
       if (!changed) return // nothing applicable: no state change, no savedAt bump
       s.savedAt = savedAt || s.savedAt
       // Deliberately NO persist() here — same no-echo contract as applyExternal above.

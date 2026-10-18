@@ -645,22 +645,15 @@ export default {
     async purgeIds ({ commit, dispatch, rootState, state }, ids) {
       // Discrete op: break the 400ms undo merge so following edits don't fuse into the purge step
       commit('historyBreakMerge')
-      // F3 (dw wave6 2026-09-24): the snapshot result is no longer swallowed — a failed pre-purge
-      // snapshot (IPC error / {ok:false}) is logged loudly here and stamped into runtimeState
-      // (eventBackupLastFailAt/eventBackupLastError, surfaced via the Settings→Data status line)
-      // instead of purging silently with no evt-*.json on disk. The purge itself still proceeds:
-      // blocking the user's explicit destructive command on a backup IO failure trades one bug
-      // for a worse one (a purge that can never finish).
+      // F3 (dw wave6 2026-09-24): a failed pre-purge snapshot is logged + stamped into runtimeState
+      // instead of vanishing; the purge itself still proceeds (never block a destructive command on backup IO).
       if (ids.length && !(await dispatch('writeEventBackup', 'purge'))) console.error('[todo] purge proceeded WITHOUT its pre-delete event snapshot (see eventBackupLastError)') // snapshot before permanent deletion
       // Permanently deleted tasks still bound by focus: detach (same as deleteTodo)
       const at = rootState.tomato && rootState.tomato.attachTodo
       if (at && ids.includes(at.taskId)) dispatch('tomato/attach', null, { root: true })
-      // Delete per id and remove locally only the successful ones: Promise.all swallowing errors then hardRemove-ing the whole batch once let failed ids "revive" back into the recycle bin after restart.
-      // Perf (purge batch): one hardDeleteMany commit replaces the per-id hardDelete loop — the
-      // server-side bulk op already GCs chips/snow/estimate meta keys per id and returns only the
-      // PHYSICALLY deleted ids (absent ids excluded, same per-id honesty as the old loop). If the
-      // bulk op rejects wholesale (older host / bus error), fall back to the per-id loop so the
-      // failure isolation is preserved.
+      // Delete per id and remove locally only the successful ones (failed ids used to "revive" after restart).
+      // Perf (purge batch): one hardDeleteMany commit — bulk op returns only the PHYSICALLY deleted ids;
+      // on a wholesale rejection fall back to the per-id loop to keep the failure isolation.
       let done = []
       try {
         const deleted = await commitCommand("todo", "hardDeleteMany", ids)
@@ -673,28 +666,22 @@ export default {
           try { await commitCommand("todo", "hardDelete", id); done.push(id); clearSnapshot(id) } catch (e) { reportError('hardDelete', e) }
         }
       }
-      // [C15 fix] the empty catch here silently orphaned attachment files on disk when cleanup failed
-      // (main throws a structured per-file failure list). Log it like the adjacent hardDelete failures;
-      // rows are already hard-deleted, so the purge (and the historyBarrier re-baseline below) still proceeds.
-      // Perf (purge batch): ONE delete-todo-files-many IPC for the whole batch instead of a per-id
-      // readdir+unlink IPC each.
+      // [C15 fix] attachment-cleanup failures are logged like the adjacent hardDelete failures (rows are gone either way).
+      // Perf (purge batch): ONE delete-todo-files-many IPC for the whole batch instead of a per-id readdir+unlink IPC each.
       try { if (done.length && window.todoAPI.deleteTodoFilesMany) await window.todoAPI.deleteTodoFilesMany(done) } catch (err) { reportError('deleteTodoFilesMany', err) }
-      // Drop the purged tasks' pomodoro-estimate meta keys from the renderer mirror: hardDeleteMany
-      // already deleted the DB keys server-side (deleteEstimateKeysFor per id, incl. the legacy
-      // per-id fallback) — MetaGC/DB owns the DB side; the id-based prune drops the local mirror
-      // entries so a recycled numeric id cannot resurrect a stale estimate (review M-C5).
+      // Drop the purged tasks' pomodoro-estimate meta keys from the renderer mirror: hardDeleteMany owns the DB keys
+      // server-side; the id-based prune drops the local mirror so a recycled numeric id cannot resurrect a stale estimate (review M-C5).
       try { if (done.length) pruneEstimatesForPurged(done) } catch {}
       if (done.length) {
         // D17: scrub across ALL live categories, not just the purged rows' own ones — a milestone of
-        // ANOTHER project category may link the purged id (CLI parity: cli/lib.js scans every key);
-        // unaffected blobs are skipped by scrubMilestoneTaskIds' same-reference shortcut.
+        // ANOTHER project category may link the purged id (CLI parity: cli/lib.js scans every key).
         const purgedCatIds = [...new Set((((rootState && rootState.category) || {}).list || []).filter(c => c && !c.delete).map(c => c.categoryId))]
         commit('hardRemove', done)
-        // D5 (2026-09-20): scrub the purged ids from `projectMilestones:<catId>` taskIds — a past
-        // milestone whose last link was purged otherwise kept a phantom taskId set (milestoneState
-        // fell through to the date-driven 'done' branch, flipping an UNMET milestone to done).
-        // (Round-3 P1: shared with purgeAllRecycle — see scrubMilestonesForPurged below.)
+        // D5 (2026-09-20): scrub the purged ids from `projectMilestones:<catId>` taskIds (shared with purgeAllRecycle).
         await scrubMilestonesForPurged(purgedCatIds, done)
+        // F2 2026-10-19: purge must not leave dangling predecessors — surviving rows (incl. bin rows,
+        // which restore verbatim) referencing a purged id get that entry stripped via updateTodoFields.
+        await stripPurgedPredecessors({ dispatch, state }, done)
         // Rows are physically gone (hardDelete + attachment files + chip snapshot meta): undo must not
         // resurrect them. [TL-6] historyBarrier instead of historyClear: the barrier bumps the reload
         // epoch and re-baselines the post-purge table, which invalidates exactly the stale pre-purge
@@ -713,16 +700,13 @@ export default {
       if (!ids.length) return true // QC r3: empty bin = nothing to purge = success (a falsy return read as "purge failed" in SettingsDataTab when the bin drained during the confirm dialogs)
       // Discrete op: break the 400ms undo merge so following edits don't fuse into the purge step
       commit('historyBreakMerge')
-      // F3 (dw wave6 2026-09-24): same honest-failure handling as purgeIds above — a failed
-      // pre-purge snapshot is logged + stamped into runtimeState instead of vanishing
+      // F3 (dw wave6): same honest-failure handling as purgeIds — a failed pre-purge snapshot is logged + stamped, not swallowed
       if (!(await dispatch('writeEventBackup', 'purge-all'))) console.error('[todo] purge-all proceeded WITHOUT its pre-delete event snapshot (see eventBackupLastError)') // snapshot before emptying the recycle bin
       // Round-3 P1 (parity with purgeIds): permanently deleted tasks still bound by focus detach first
       const at = rootState && rootState.tomato && rootState.tomato.attachTodo
       if (at && ids.includes(at.taskId)) dispatch('tomato/attach', null, { root: true })
-      // DB rows first, then attachment files: the other order leaves rows pointing at deleted files if the file purge fails.
-      // Converge only on success (aligned with purgeIds' per-id guard): when the purge IPC fails we keep the local
-      // rows untouched — the old flow hardRemoved locally + cleared the undo stack anyway, so the rows "revived"
-      // back into the recycle bin after restart while the user had been told they were gone for good
+      // DB rows first, then attachment files; converge only on success — a failed purge IPC keeps the local rows
+      // (the old flow hardRemoved anyway, so purged rows "revived" after restart)
       let purged = false
       try { purged = await window.todoAPI.purgeRecycleBin() === true } catch (err) { reportError('purgeRecycleBin', err) }
       if (!purged) { dispatch('computeViews'); return false }
@@ -732,17 +716,14 @@ export default {
       try { if (window.todoAPI.deleteTodoFilesMany) await window.todoAPI.deleteTodoFilesMany(ids) } catch (err) { reportError('deleteTodoFilesMany', err) }
       // Drop the pre-delete chip snapshot meta too (rows are gone, the snapshot can never be restored)
       for (const id of ids) clearSnapshot(id)
-      // maint-d7: drop the purged tasks' pomodoro-estimate meta keys too — parity with purgeIds
-      // (review M-C5) and the CLI purge path (cli/lib.js deletes ESTIMATE_KEY_PREFIX per row); a
-      // recycled numeric taskId used to resurrect a stale estimate on the bulk "empty bin" path.
-      // DB keys are purged server-side per row; this prunes the local mirror (id-based prune).
+      // maint-d7: parity with purgeIds/review M-C5/CLI purge — drop the purged rows' estimate meta keys (local mirror; DB keys are purged server-side per row).
       try { pruneEstimatesForPurged(ids) } catch {}
-      // Round-3 P1: the bulk path used to SKIP the milestone scrub (phantom taskIds → unmet
-      // milestone flipping to 'done'). D17: same widening as purgeIds — ALL live categories
-      // (cross-category links), CLI parity.
+      // Round-3 P1/D17: the bulk path once skipped the milestone scrub — ALL live categories (cross-category links), CLI parity.
       const purgedCatIds = [...new Set((((rootState && rootState.category) || {}).list || []).filter(c => c && !c.delete).map(c => c.categoryId))]
       commit('hardRemove', ids)
       await scrubMilestonesForPurged(purgedCatIds, ids)
+      // F2 2026-10-19: same dangling-predecessor strip as purgeIds (survivors = live rows only here).
+      await stripPurgedPredecessors({ dispatch, state }, ids)
       // Same resurrect guard as purgeIds: rows + files + snapshots are gone, undo must not cross this
       // generation. [TL-6] historyBarrier (see purgeIds): targeted re-baseline instead of a whole-stack wipe.
       commit('historyBarrier')
@@ -750,7 +731,7 @@ export default {
       dispatch('writeCriticalBackup')
       return true // QC r1: boolean success flag — RecycleBinView.clearAll toasts error instead of false success
     },
-    /** Recycle bin auto-expiry purge: deleted rows past N days by deletion time (updateTime) are permanently deleted (N=0 never).
+    /** Recycle bin auto-expiry purge: deleted rows past N days by their deletedAt are permanently deleted (N=0 never).
         Clock sanity check: when the system clock jumps back/forward more than 48h (BIOS battery loss, manual change), skip this round of auto purge,
         preventing the accident of "clock set to the future → startup hard-deletes the whole recycle bin" (finalized in the 2026-08-29 release review). */
     async purgeExpiredRecycle ({ state, rootState, dispatch }, { force = false } = {}) {
@@ -770,8 +751,10 @@ export default {
       // semantic (not a 24h interval); `force` bypasses it for tests/manual triggers.
       if (!force && lastPurgeAt && dayjs(lastPurgeAt).isSame(dayjs(), 'day')) return
       // Calendar-day basis: roll back N days from today at midnight, avoiding boundary drift from "deleted at an arbitrary moment"
+      // [F2 2026-10-19] cutoff trusts ONLY deletedAt: legacy rows without it (fallback updateTime)
+      // were indefinitely renewed by bin auto-save bumps — such rows now opt OUT of auto-purge.
       const cutoff = +dayjs().startOf('day').subtract(days, 'day')
-      const ids = state.recycleList.filter(t => (t.deletedAt || t.updateTime || 0) < cutoff).map(t => t.taskId)
+      const ids = state.recycleList.filter(t => (Number(t.deletedAt) || 0) > 0 && t.deletedAt < cutoff).map(t => t.taskId)
       try {
         if (ids.length) await dispatch('purgeIds', ids)
       } finally {
@@ -809,6 +792,21 @@ export default {
 
 /* Small helper for reading root settings (module-internal access) */
 function root_getCompleteWithSub (rootState) { return rootState && rootState.settings ? rootState.settings.isCompleteWithSubtasks !== false : true }
+
+/** [F2 2026-10-19 purge-preds fix] strip purged ids from survivors' predecessors via the normal update
+ *  channel (updateTodoFields — durable write + views/reminders follow). Removing edges can never close a
+ *  cycle (the write-time wouldCycle guard stays silent); bin rows are covered too — a restore hands their
+ *  predecessors back to the live table verbatim. */
+async function stripPurgedPredecessors (ctx, done) {
+  const dead = new Set(done)
+  const st = ctx.state || {}
+  for (const t of [...(st.todoList || []), ...(st.recycleList || [])]) {
+    let preds
+    try { preds = parsePredecessors(t.predecessors) } catch { continue }
+    if (!preds.some(p => dead.has(p))) continue
+    try { await ctx.dispatch('updateTodoFields', { taskId: t.taskId, patch: { predecessors: preds.filter(p => !dead.has(p)), status: 'update' } }) } catch (e) { reportError('purge:stripPredecessors', e) }
+  }
+}
 
 /** D15 (TL-5): durable-store existence authority for renderer write actions — ONE choke point.
  *  Previously every write action treated the in-memory table as the existence authority: on a  memory miss (the window between a peer/CLI write and the todos-changed broadcast reload —  docs/sync-matrix.md:60) updateTodoFields/deleteTodo/reorderTodos/deleteTodosMany silently
