@@ -32,7 +32,10 @@ const CN_NUM = { '零': 0, '〇': 0, '一': 1, '二': 2, '两': 2, '三': 3, '�
 function cnToNum (t) {
   if (t == null || t === '') return NaN
   if (/^\d+$/.test(t)) return parseInt(t, 10)
-  const chars = t.split('')
+  // 廿/卅 are compact forms of 二十/三十: normalizing first lets the 十-based path handle
+  // both the bare forms ("廿"→20, "卅"→30) and the compounds ("廿三"→23, "卅一"→31)
+  const norm = t.replace(/廿/g, '二十').replace(/卅/g, '三十')
+  const chars = norm.split('')
   const tenIdx = chars.indexOf('十')
   if (tenIdx === -1) {
     let acc = NaN
@@ -43,14 +46,14 @@ function cnToNum (t) {
     }
     return acc
   }
-  const before = t.slice(0, tenIdx); const after = t.slice(tenIdx + 1)
+  const before = norm.slice(0, tenIdx); const after = norm.slice(tenIdx + 1)
   const b = before === '' ? 1 : CN_NUM[before]
   const a = after === '' ? 0 : CN_NUM[after]
   if (b === undefined || a === undefined) return NaN
   return 10 * b + a
 }
 
-const NUM_RE = '(\\d{1,4}|[零〇一二两三四五六七八九十]{1,3})'
+const NUM_RE = '(\\d{1,4}|[零〇一两三四五六七八九十廿卅]{1,3})'
 const WEEK_CN = { '一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '日': 7, '天': 7 }
 
 /**
@@ -109,7 +112,12 @@ function parseDateCore (text, base, cnFullFormat = 'YYYY年M月D日') {
   if (m) {
     const n = cnToNum(m[1])
     if (!Number.isNaN(n)) {
-      return { date: base.add(n, 'month').startOf('day'), label: `${n}个月后`, restText: trimmed.slice(m[0].length).trim() }
+      // End-of-month clamp (same convention as the repeat engine's month branch): Jan 31 + "1个月"
+      // used to carry over into Mar 2/3; it must land on the target month's last day (Feb 28/29)
+      const t0 = base.add(n, 'month')
+      const dim = t0.daysInMonth()
+      const effDay = Math.min(base.date(), dim)
+      return { date: t0.date(effDay).startOf('day'), label: `${n}个月后`, restText: trimmed.slice(m[0].length).trim() }
     }
   }
 
@@ -152,7 +160,14 @@ function parseDateCore (text, base, cnFullFormat = 'YYYY年M月D日') {
     // Only hits when the text starts with "今年/明年..." or the phrase stands alone
     const mo = cnToNum(m[1]); const da = cnToNum(m[2])
     if (!Number.isNaN(mo) && !Number.isNaN(da)) {
-      const target = base.year(base.year() + yOff).month(mo - 1).date(da)
+      // Calendar validity: same reject as the standalone M月D日 branch below — dayjs setters carry
+      // "今年2月30日" into Mar 2 and "今年13月5日" into next Jan; reject the branch (falls back to
+      // no-date) instead of silently carrying the invalid date
+      const yy = base.year() + yOff
+      if (mo < 1 || mo > 12) return { date: null, label: '', restText: trimmed }
+      const dim = base.year(yy).month(Math.max(0, mo - 1)).daysInMonth()
+      if (da < 1 || da > dim) return { date: null, label: '', restText: trimmed }
+      const target = base.year(yy).month(mo - 1).date(da)
       return {
         date: target.startOf('day'),
         label: (yearWord || '') + `${mo}月${da}日`,
@@ -208,6 +223,9 @@ function parseChineseNaturalDate (text, base, cnFullFormat = 'YYYY年M月D日') 
   if (Number.isNaN(h) || h > 23 || Number.isNaN(min) || min > 59) return core
   const period = m[1]
   if ((period === '下午' || period === '午后' || period === '晚上' || period === '晚' || period === '今晚') && h < 12) h += 12
+  // 晚上12点 = midnight 00:00 (Chinese convention), NOT 12:00 noon — "晚上12点" anchored to a date
+  // must land on that day's midnight; 晚上11点 etc. keep the +12 mapping above
+  if ((period === '晚上' || period === '晚' || period === '今晚') && h === 12) h = 0
   // 中午1点 = 13:00 (not forced to 12:00); 中午11/12点 keep the original hour
   if (period === '中午' && h >= 1 && h <= 3) h += 12
   const date = core.date ? core.date.hour(h).minute(min).second(0) : (function () {
